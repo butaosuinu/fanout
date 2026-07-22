@@ -138,13 +138,11 @@ herdr が起動した agent は同じ UID で動き、`HERDR_SOCKET_PATH` を継
 server 停止後に同じ path の server へ置換する ABA も原子的には検出できない。
 
 owned runtime directory の `owner.json` は協調する fanout process 間の ownership、封じ込め、crash recovery、誤操作防止に使う。
-marker bytes の唯一の schema は `fanout.herdr-owner.v1` とし、UTF-8 の RFC 8785 canonical JSON、BOM と trailing LF なしで符号化する。
-decoder は missing / unknown / duplicate field を拒否し、読み取った raw bytes と canonical reserialization の exact match を要求する。
-raw path と config bytes は unpadded base64url で保存し、opened identity は本文の private namespace gate が保存する device / inode / type / UID / mode / mount identity の canonical tuple を使う。
-identity の integer component は先頭ゼロなし ASCII 十進の JSON string、type は schema 固定 enum で符号化し、platform が提供しない required component がある場合は marker を作らない。
-required field は schema ID、physical canonical common-directory の raw path / opened identity、bootstrap nonce、session-bundle build nonce、stable epoch owner nonce、behavior profile ID とする。
+marker bytes の決定済み範囲は schema ID `fanout.herdr-owner.v1`、UTF-8 の RFC 8785 canonical JSON、BOM と trailing LF なしの符号化とする。
+#526 が確定する decoder は missing / unknown / duplicate field を拒否し、読み取った raw bytes と canonical reserialization の exact match を要求する。
+logical required value は physical canonical common-directory の raw path / opened identity、bootstrap nonce、session-bundle build nonce、stable epoch owner nonce、behavior profile ID とする。
 続けて `HERDR_SESSION`、server / client socket の expected raw path / opened parent identity / expected-absence receipt、session bundle digest / root identity、Herdr version、bundle 内の Herdr / fanout relative entry path / opened identity / executable digest を必須とする。
-さらに detection fixture ID / declared version / `manifest_set_digest` / no-refresh policy ID、manifest realization key / generation / final root identity、owned config の raw path / opened identity / exact bytes / SHA-256、`CONFIG` / `STATE` / `DATA` / `CACHE` の固定順に並べた四つの XDG raw path / opened root identity を必須とする。
+detection fixture ID / declared version / `manifest_set_digest` / no-refresh policy ID、manifest realization key / generation / final root identity、owned config の raw path / opened identity / exact bytes / SHA-256、四つの XDG raw path / opened root identity も必須とする。
 socket leaf は marker create 後に作られるため marker に含めず、live socket identity、server PID / start token、可変 active-supervisor owner tuple / server tuple / admission は registry にだけ保存する。
 `owner-marker-create-planned` と registry は exact marker bytes の SHA-256 を lowercase hex で保存するが、自己参照を避けるため marker 自身にその digest を含めない。
 marker byte は private namespace gate が parent の inheritable ACL を拒否し、fresh file の non-owner allow ACE 不在、owner-only / deny ACL の除去、同一 FD の再検査を完了した後に書く。
@@ -153,6 +151,17 @@ marker は journal の canonical bytes / digest / opened identity、socket は r
 この marker を mutation authority として扱わない。
 `owner.json` は active epoch を外部から照合する marker であり、bundle reference、bootstrap phase、active epoch の正典ではない。
 対応する registry の session-bootstrap journal または active epoch がない marker は自動採用も自動削除もしない。
+
+### 未確定事項
+
+次の二点はユーザー決定（2026-07-22）による明示的 deferral とし、この spike では具体形を確定しない。
+
+| 未確定事項 | 確定 owner | 確定前の fail-closed 契約 |
+|---|---|---|
+| `session-ready` CAS で bootstrap journal の marker canonical bytes / digest / opened identity を active epoch へ移し、shutdown terminal CAS まで保持する exact field / CAS shape | #527 の worktree / state machine 実装 | #527 が reviewed contract を確定するまで `session-ready` CAS を拒否し、bootstrap journal / operation lock / reference を保持して operation を admit しない |
+| `fanout.herdr-owner.v1` の property 名、nesting、array / object shape、identity tuple の具体形、canonical golden bytes | #526 の gate 実装 | #526 が reviewed schema と golden bytes を確定するまで marker create / reuse と marker-dependent な bootstrap / restart / shutdown を拒否する |
+
+この二点は owner と拒否境界を固定した契約上の明示的 deferral であり、この spike では仕様を追加しない。
 
 Herdr control state は physical canonical git common directory 配下の `fanout/herdr-control.json` を唯一の正典とし、同じ directory の `herdr-control.json.lock` で直列化する。
 **private namespace gate** は physical common-directory FD を anchor とする `fanout` control namespace と、owned runtime root の create 前はその parent FD、create 後は exclusive create 済み root FD を anchor とする XDG / config / marker / socket namespace に適用する。
@@ -171,7 +180,8 @@ symlink、anchor 配下の mount boundary、ACL 読取不能、entry と FD の 
 `fanout` directory は 0700、registry と lock は 0600 とし、private namespace gate または physical common-directory identity の照合に失敗した場合は Herdr backend を開始しない。
 registry の repo-scoped header は schema version、full common-directory identity、単調増加 revision を持ち、branch lineage、cleaned tombstone、launch bundle reference / build / publish / GC journal、agent-manifest override realization / retirement tombstone / build journal、session-bootstrap journal を supervisor epoch を越えて保持する。
 registry / journal / final row は raw workload env、capsule MAC key、capsule payload を保持しない。
-active epoch は stable epoch owner nonce、可変 active-supervisor owner tuple、session / socket / server identity、active bundle / manifest override realization key / generation / final root identity、console、intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal、admission state `ready` / `restarting` / `manifest-invalid` / `draining` を別に持ち、owner marker の stable epoch-bound field と完全一致する場合だけ再利用する。
+active epoch は stable epoch owner nonce、可変 active-supervisor owner tuple、session / socket / server identity、owner marker の canonical bytes / digest / opened identity record、active bundle / manifest override realization key / generation / final root identity、console、intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal、admission state `ready` / `restarting` / `manifest-invalid` / `draining` を別に持つ。
+owner marker record の exact field / CAS shape は「未確定事項」の #527 owner とし、確定後は marker の stable epoch-bound field と完全一致する場合だけ active epoch を再利用する。
 active intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal がない場合だけ新しい owner epoch へ切り替え、repo-scoped lineage と tombstone は保持する。
 writer は private namespace gate 済みの同一 inode の lock を no-follow で保持し、expected revision を確認する。
 0600 temporary file は parent の inheritable ACL を拒否してから exclusive create し、fresh file の non-owner allow ACE を拒否する。
@@ -225,7 +235,7 @@ fresh bootstrap は後述する journal で sealed fixture から owned config �
 restart は保存済み realization を read-only に再検査し、override file を作成、更新、置換しない。
 server env の `FANOUT_HERDR_PANE_LAUNCHER=1` は no-arg TUI より先に non-shell launcher mode へ dispatch する。
 server env の `FANOUT_HERDR_LAUNCHER_MAX_WAIT_MS` も `300000` に固定する。
-owner marker は `fanout.herdr-owner.v1` の canonical payload だけを保存し、その bundle / executable / fixture / realization / config / XDG field のいずれかが対応する registry、bundle manifest、detection fixture、filesystem、live launcher process と一致しなければ server 起動前または operation token 前に fail closed にする。
+owner marker は #526 が確定した `fanout.herdr-owner.v1` canonical payload だけを保存し、その bundle / executable / fixture / realization / config / XDG field のいずれかが対応する registry、bundle manifest、detection fixture、filesystem、live launcher process と一致しなければ server 起動前または operation token 前に fail closed にする。
 #427 の hook emitter も bundled fanout path を使い、launcher control env は operation child env から除く。
 launcher は checkout 内 file または source installation を実行せず、config / bundle の drift または Herdr が別 root process を起動した場合は launch 前に fail closed にする。
 
@@ -269,7 +279,7 @@ exact な published realization は normal shutdown と bootstrap abort 後も r
 retired generation は再利用せず、fresh bootstrap は terminal retirement CAS が予約した next generation の expected-absent namespace にだけ新しい realization を publish できる。
 未完成 staging、`manifest-override-entry-starting`、publish の発行結果不明は自動 quarantine、GC、unlink、再発行の対象にせず、exact build journal / path / identity / expected entry set を bootstrap-abort fence の下で `manual_cleanup_required` として保持する。
 外部の明示 cleanup 後に shared registry lock 下の read-only reconciliation が final / staging path、全 expected / unknown entry、marker / server / socket の不在と parent identity の不変を確認した場合だけ override absence receipt を保存し、bootstrap abort terminal CAS へ進める。
-phase `owner-marker-create-planned` は exact marker path / parent identity、expected absence、0600 `fanout.herdr-owner.v1` canonical bytes / SHA-256、`O_EXCL` / `O_NOFOLLOW` request を保存する。
+phase `owner-marker-create-planned` は #526 が schema を確定した後、exact marker path / parent identity、expected absence、0600 `fanout.herdr-owner.v1` canonical bytes / SHA-256、`O_EXCL` / `O_NOFOLLOW` request を保存する。
 planned marker bytes の全 required field は同じ state save が照合した bootstrap / bundle / manifest realization / config / XDG record から写し、別節の field list から再構成しない。
 phase `owner-marker-create-starting` を保存してから create を一回だけ発行し、file と parent directory の fsync 後に opened file identity を phase `owner-marker-created` へ保存する。
 `owner-marker-create-planned` の recovery は pre-state が完全一致する場合だけ未発行 request を一回発行できる。
@@ -281,7 +291,8 @@ phase `server-bootstrap-starting` を保存してから foreground server child 
 spawn 成功後の PID / start token、bundle executable identity、private namespace gate 済みの socket leaf identity、connected status、capability gate、active manifest proof を phase `server-bootstrap-realized` へ保存する。
 `server-bootstrap-starting` で PID / start token を保存できなかった crash は server を再起動せず、観測した process / socket を採用も停止もしない。
 `server-bootstrap-realized` だけが exact PID / start token、bundle-bound process、marker、socket を再照合して recovery できる。
-全照合後の phase `session-ready` は provisional bundle / manifest override realization reference を active epoch の reference へ移し、bootstrap owner tuple を active-supervisor owner tuple へ generation increment 付き CAS で移譲して bootstrap journal を同じ state save で除去し、reference がゼロになる瞬間を作らない。
+全照合後の phase `session-ready` は provisional bundle / manifest override realization reference、owner marker の canonical bytes / digest / opened identity record を active epoch へ移し、bootstrap owner tuple を active-supervisor owner tuple へ generation increment 付き CAS で移譲して bootstrap journal を同じ state save で除去する必要がある。
+exact field / CAS shape は「未確定事項」の #527 owner とし、確定まで `session-ready` CAS は bootstrap journal / operation lock / reference を除去せず fail closed にする。
 active-supervisor owner tuple は `supervisor_owner_nonce`、`owner_generation`、supervisor PID / start token、`lease_expires_unix_ms` を持つ。
 active server tuple は saved server PID / start token、bundled executable identity、socket identity、fanout-local `server_instance_generation` を持つ。
 capability admission は `admission_id`、state、active server tuple、behavior profile ID、Herdr source provenance、platform、executable digest、agent-detection fixture ID / declared version / `manifest_set_digest`、no-refresh policy ID、manifest realization key / generation / final root identity、session bundle digest、status / schema / snapshot / active manifest proof、optional invalidation receipt を束縛する。
@@ -1215,8 +1226,8 @@ workspace-level `agent start` の各条項は次のように移す。
 
 | issue | 担当契約 |
 |---|---|
-| #526 | owned 0.7.5 XDG / socket、25-method structural capability gate、code-owned behavior profile / exact agent-detection fixture / no-refresh allowlist、journaled manifest override realization / read-only reuse / retirement tombstone / generation-specific republish / fail-closed absence reconciliation、physical common directory 配下の shared Herdr registry / lock、global plugin preflight、session / operation bundle store、Herdr / fanout / detection fixture の session bundle、bundle reference / GC、private env-capsule store / disposal journal、secret-free control env、`incomplete-pre-realized` bundle quarantine と bootstrap / intent abort terminal CAS、active-supervisor heartbeat / same-owner renewal / dead-owner takeover、`ready` / `restarting` / `manifest-invalid` / `draining` admission、server-restart operation lock と success / abort terminal state machine、cache なし capability / active manifest re-gate |
-| #527 | short registry CAS と launch operation lock / lease、shared registry 上の console の `console-planned` から `console-ready`、coordinator の `workspace-*`、child の `branch-planned` から `worktree-ready`、workload env policy snapshot と env capsule lifecycle intent、automatic child remove の fail-closed gate、workspace-only close / retained checkout / manual absence reconciliation、branch lineage / cleaned tombstone / explicit continue / tombstone forget、operation 固有の root identity の保存 |
+| #526 | owned 0.7.5 XDG / socket、25-method structural capability gate、code-owned behavior profile / exact agent-detection fixture / no-refresh allowlist、`fanout.herdr-owner.v1` の property / nesting / shape / identity tuple / canonical golden bytes の確定、journaled manifest override realization / read-only reuse / retirement tombstone / generation-specific republish / fail-closed absence reconciliation、physical common directory 配下の shared Herdr registry / lock、global plugin preflight、session / operation bundle store、Herdr / fanout / detection fixture の session bundle、bundle reference / GC、private env-capsule store / disposal journal、secret-free control env、`incomplete-pre-realized` bundle quarantine と bootstrap / intent abort terminal CAS、active-supervisor heartbeat / same-owner renewal / dead-owner takeover、`ready` / `restarting` / `manifest-invalid` / `draining` admission、server-restart operation lock と success / abort terminal state machine、cache なし capability / active manifest re-gate |
+| #527 | short registry CAS と launch operation lock / lease、`session-ready` の owner marker canonical bytes / digest / opened identity の journal-to-epoch 移譲、shared registry 上の console の `console-planned` から `console-ready`、coordinator の `workspace-*`、child の `branch-planned` から `worktree-ready`、workload env policy snapshot と env capsule lifecycle intent、automatic child remove の fail-closed gate、workspace-only close / retained checkout / manual absence reconciliation、branch lineage / cleaned tombstone / explicit continue / tombstone forget、operation 固有の root identity の保存 |
 | #528 | non-shell launcher、console / provider operation bundle、exact token、env capsule claim / consume / empty-base exec、bundle-bound provider matcher、agent detection / rename、`observed_process_chain`、final row |
 | #529 | provider hook adapter、fresh signal、pending emitter telemetry、`state_refinement` |
 | #532 | 0.7.5 direct launch の cold restart resume 再実測。解禁までは `terminal_id` 変化を `stale` にする |
@@ -1865,7 +1876,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 
 | 機能 | wave 2 | tmux-parity tier の条件 | proof-grade tier への格上げ条件 |
 |---|---|---|---|
-| owned bootstrap / launch | Go | FD-relative private namespace gate 済みの owned XDG / socket / marker、short registry CAS、launch operation lock / lease、sealed session / operation bundle、secret-free control env、versioned workload env policy / one-shot capsule、0.7.5 structural gate / code-owned behavior profile / exact detection fixture / no-refresh policy、console / agent intent、non-shell launcher readiness と exact token、bundle-bound runtime matcher、agent detection / rename。#526 の fixture / no-refresh proof 完了までは fail closed | request-bound direct spawn、controller capability、別 UID の bundle owner、または server / agent の UID 分離。setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
+| owned bootstrap / launch | Go | FD-relative private namespace gate 済みの owned XDG / socket / marker、short registry CAS、launch operation lock / lease、sealed session / operation bundle、secret-free control env、versioned workload env policy / one-shot capsule、0.7.5 structural gate / code-owned behavior profile / exact detection fixture / no-refresh policy、console / agent intent、non-shell launcher readiness と exact token、bundle-bound runtime matcher、agent detection / rename を要求し、#526 の fixture / no-refresh proof / owner marker schema と #527 の journal-to-epoch 移譲の確定までは fail closed | request-bound direct spawn、controller capability、別 UID の bundle owner、または server / agent の UID 分離とし、setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
 | owned server restart | Go | active-supervisor lease / takeover CAS、`ready -> restarting -> ready / manifest-invalid`、restart operation lock、success / abort terminal phase、single spawn、cache なしの三段 capability gate / active manifest gate、candidate stop / absence reconciliation、bundle reference continuity | authenticated server generation と request-bound conditional restart |
 | launch bundle build / GC | Go | FD-relative private namespace gate、build lock / lease / owner CAS、root identity、expected entry set、incomplete root の quarantine-only recovery、detached inventory、no-follow subset deletion、session bootstrap abort terminal CAS | verified FD spawn または別 UID の bundle owner |
 | console / coordinator close | Go | checkout を持たない exact owned workspace / pane を送信直前に再照合し、response loss では blind retry しない | close が authoritative server generation と target resource generation を原子的に検査する |
@@ -1889,7 +1900,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - backend は per-repo supervisor が owned XDG / socket / marker を exclusive create して foreground `herdr server` child を bootstrap する。
   supervisor は呼び出し元から継承した Herdr routing env の値に依存せず、`status` と bootstrap を含む各 Herdr CLI call 用の env を構築し、owned XDG、`HERDR_CONFIG_PATH`、`HERDR_SESSION`、`HERDR_SOCKET_PATH`、`HERDR_CLIENT_SOCKET_PATH` を fanout-owned 値で上書きする。
   `FANOUT_HERDR_CONTROL_PATH` も physical common directory から supervisor が導出して上書きし、repo config、呼び出し元 env、agent workload からの指定を受け付けない。
-  owner marker は `fanout.herdr-owner.v1` の stable epoch field だけを持ち、可変 active-supervisor owner tuple と server tuple は共有 registry に置く。
+  owner marker は #526 が確定する `fanout.herdr-owner.v1` の stable epoch field だけを持ち、可変 active-supervisor owner tuple と server tuple は共有 registry に置く。
+  property / shape / identity tuple / canonical golden bytes の確定前は marker create / reuse と marker-dependent path を拒否する。
   active supervisor は 10 秒以下の heartbeat で PID / start token、generation を照合し、expiry を最大 launch 300 秒 + grace 30 秒 + cadence 10 秒後へ単調更新する。
   launch caller は active lease を延長せず、intent CAS で launch deadline + grace までの runway を検証し、不足時は mutation 前に明確な error を返す。
   expiry 後も同じ live owner は exact tuple の same-owner renewal CAS で回復でき、takeover は旧 PID / start token の不在と generation increment CAS を証明した process に限る。
@@ -1939,7 +1951,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   create 前の parent ACL に non-owner allow の child inheritance flag があれば発行せず、fresh object に non-owner allow ACE が現れた場合も ACL を除去して再利用しない。
   fanout-owned object は extended ACL が空であることを要求し、fresh exclusive-create directory / regular file に owner-only / deny ACL だけが残る場合に限り、secret byte または child 作成前に同じ FD 上で ACL を除去して再検査できる。
   repo-scoped header は schema / common-directory identity / revision と branch lineage、cleaned tombstone、bundle reference / build / publish / GC journal、manifest override realization / retirement tombstone / build journal、session-bootstrap journal を保持し、supervisor epoch を越えて存続する。
-  active epoch は stable epoch owner nonce、可変 active-supervisor owner tuple、server tuple、active bundle / manifest override realization key / generation / final root identity、admission ID / state `ready` / `restarting` / `manifest-invalid` / `draining`、console、intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal を保持し、これらの active resource がない場合だけ切り替える。
+  active epoch は stable epoch owner nonce、可変 active-supervisor owner tuple、server tuple、owner marker canonical bytes / digest / opened identity record、active bundle / manifest override realization key / generation / final root identity、admission ID / state `ready` / `restarting` / `manifest-invalid` / `draining`、console、intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal を保持し、これらの active resource がない場合だけ切り替える。
   通常 mutation は shared registry lock 下で current owner、expected revision、`ready`、restart / shutdown journal 不在を照合し、最初の intent / journal と同じ save で admission を確定する。
   `restarting` は同じ restart owner / nonce の phase、capability / active manifest re-gate、gate 失敗後の exact candidate stop / absence reconciliation / `manifest-invalid` terminal CAS だけを許可する。
   `manifest-invalid` は current owner lease / dead-owner takeover、invalidation receipt、mutation-free absence reconciliation、空 inventory の明示 shutdown、`draining` は同じ shutdown owner / nonce の phase と terminal save だけを許可する。
@@ -1995,9 +2007,10 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   child intent は reservation mutation の非発生と receipt / ref 不在を証明した場合だけ `launch-aborted`、成功済み reservation がある場合は branch ref を残した cleaned tombstone へ移し、mutation 不明では intent / reservation を保持する。
   server / socket がすでに不在の manifest-invalid shutdown は保存済み absence を draining CAS と stop phase で再照合し、stop request を発行せず `server-stop-realized` へ進む。
   server env の `FANOUT_HERDR_LAUNCHER_MAX_WAIT_MS` は `300000` に固定する。
-  owner marker は詳細契約の `fanout.herdr-owner.v1` canonical schema をそのまま使い、bundle manifest、active manifest、filesystem、live process identity を直前 gate で照合する。
+  owner marker は #526 が確定する `fanout.herdr-owner.v1` canonical schema を使い、bundle manifest、active manifest、filesystem、live process identity を直前 gate で照合する。
+  #526 の schema / golden bytes と #527 の marker record 移譲はユーザー決定（2026-07-22）による明示的 deferral とし、確定まで marker-dependent path と `session-ready` CAS を fail closed にする。
   owner marker は registry の session-bootstrap journal / active epoch を外部から照合する marker であり、bundle reference、bootstrap phase、active epoch の正典にはしない。
-  fresh session は registry の provisional bootstrap owner、session bundle の正式 reference、exclusive marker create、foreground server spawn、active epoch への reference 移譲を journal phase と CAS で直列化する。
+  fresh session は registry の provisional bootstrap owner、session bundle の正式 reference、exclusive marker create、foreground server spawn、active epoch への reference / marker record 移譲を journal phase と CAS で直列化する。
   ready CAS 後の bootstrap owner は operation lock と renewable lease を持ち、expired owner は旧 PID / start token の不在、phase / resource identity、generation を照合した CAS に成功した process だけが引き継ぐ。
   server spawn の発行有無が不明な場合は再発行、process 採用、自動停止を行わず、marker、journal、reference、bootstrap operation lock path / file identity を残す。
   bootstrap abort は active epoch / `draining` / shutdown owner を要求せず、引き継いだ bootstrap operation lock と bootstrap-abort owner / fence を使う。
