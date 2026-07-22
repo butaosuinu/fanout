@@ -39,7 +39,7 @@ request-bound generation と conditional mutation、server-authenticated control
 |---|---|---|
 | owned server | Go（#526 の未確定 gate 完了後） | FD-relative private namespace gate 済みの XDG / control namespace と private socket、owner marker で別 UID と session 外への影響を封じ込める |
 | server 起動 | Go（#526 の behavior / log proof 完了後） | per-repo supervisor が caller routing env を fanout-owned XDG / config / socket / session で上書きし、foreground server child を bootstrap する |
-| owned server restart | Go | active-supervisor lease と restart journal で single spawn を直列化し、cache なし gate 成功の terminal CAS だけが再解禁する。gate 失敗は exact candidate absence 後に `manifest-invalid` へ閉じる |
+| owned server restart | Go（#526 の旧 admission quiescence proof 完了後） | 旧 admission の active intent と `*-starting` CLI process の不在を preflight / terminal CAS で証明し、active-supervisor lease と restart journal で single spawn を直列化する。gate 失敗は exact candidate absence 後に `manifest-invalid` へ閉じる |
 | 集約読み | `herdr api snapshot` を使う | workspace、tab、pane、layout、agent、focus を 1 回で取得できる |
 | content read / peek | Go | exact PaneRef と `terminal_id` を直前・直後に再照合し、不一致は結果を破棄する |
 | raw Socket API | 不採用 | wave 2 で必要な操作は CLI wrapper で足りる |
@@ -59,8 +59,8 @@ request-bound generation と conditional mutation、server-authenticated control
 | live identity | Go | routing、checkout、terminal、会話、process を別々に照合する |
 | 0.7.5 direct launch の cold restart resume | 保留 | real Codex の direct launch から restart / attach / resume まで未実測のため、`terminal_id` 変化時は `stale` にする |
 | console / coordinator close | Go | checkout を持たない exact owned workspace / pane だけを送信直前に再照合し、response loss では blind retry しない |
-| child final-row cleanup | workspace-only close + manual reconciliation | automatic remove は拒否し、checkout / lineage を `checkout-retained` として保全する。外部 cleanup 後に process / FD と resource の完全な absence を証明した reconciliation だけが tombstone を作る |
-| child launch rollback | 拒否（manual reconciliation のみ） | workspace を含む観測資源、provisional intent、branch reservation を保持し、automatic close / remove を発行しない |
+| child final-row cleanup | workspace-only close + manual reconciliation | automatic remove は拒否し、checkout / lineage と active bundle reference を `checkout-retained` final row に保全する。外部 cleanup 後に process / FD と resource の完全な absence を証明した tombstone CAS だけが reference を外す |
+| child launch rollback | 拒否（manual reconciliation のみ） | workspace を含む観測資源、provisional intent、branch reservation を保持し、automatic close / remove を発行しない。runtime-capable phase は process / FD absence を要求し、reservation-only failure だけを例外にする |
 | dirty automatic `--force` | 拒否 | child automatic remove の共通条件に加え、exact fingerprint とユーザー確認 receipt も必要になる |
 | emitter | Go | cooperative telemetry と nudge gate に限り、completion / cleanup authority にしない |
 | metadata | Go | exact target を直前・直後に照合し、表示専用 token だけを報告する |
@@ -164,6 +164,7 @@ marker は journal の canonical bytes / digest / opened identity、socket は r
 | shared registry の exact schema / codec / canonical golden bytes、pre-bundle bootstrap writer admission、session-bundled fanout writer への journaled handoff と compatibility record の具体形 | #526 の shared registry gate 実装 | #526 が reviewed contract を確定するまで fresh bootstrap、registry save、Herdr mutation を拒否し、確定後も admitted bootstrap phase 外の writer、handoff 未完了、session bundle と不一致、未対応 schema を mutation 前に拒否する |
 | `herdr-wave2-behavior-v1` の exact detection fixture bytes / digest / declared version、`manifest_set_digest`、no-refresh policy / 実機 proof / golden | #526 の capability gate 実装 | #526 が同じ reviewed profile entry を確定するまで read-only preflight を除く fresh bootstrap と、それに伴う registry / filesystem / Herdr mutation を拒否する |
 | production server log を同一の 0600、ACL-free file として作成、維持、照合する exact 0.7.5 protocol | #526 の owned server bootstrap 実装 | #526 が実機検証済み protocol を確定するまで read-only preflight を除く fresh bootstrap と、それに伴う registry / filesystem / Herdr mutation を拒否し、pre-create / mode 修復を推測しない |
+| 旧 admission に束縛された active intent が 0 件で、保存済み `*-starting` call に対応する Herdr CLI process が不在であることを restart preflight / recovery / terminal CAS で証明する exact record / CAS shape | #526 の owned server restart 実装 | #526 が reviewed quiescence proof を確定するまで owned server restart を拒否し、旧 intent を新しい admission へ retag しない |
 
 これらは owner と拒否境界を固定した契約上の明示的 deferral であり、この spike では仕様を追加しない。
 
@@ -320,7 +321,7 @@ terminal intent は recorded launch operation lock と存在する env-capsule d
 branch lineage を持たない terminal console / coordinator intent と stale row は workspace / pane / process の不在を要求し、同じ terminal CAS で intent / row、active capsule / disposal journal、対応する runtime / bundle reference を除去する。
 terminal child intent で reservation call の未発行または構造化 error が ref mutation の非発生を証明し、reservation receipt / owned ref が不在の場合は、capsule terminal receipt と active capsule inventory / disposal journal の不在を再照合した同じ CAS だけが `launch-aborted` receipt へ移して intent / bundle reference を除去する。
 terminal child intent / stale child row の reconciliation は先に同じ invalidation receipt、lineage / reservation、current branch tip を `cleanup_head_sha` へ束縛し、保存済み値がある場合は exact match を要求する。
-terminal child intent と stale child row は workspace / pane / process / checkout / Git registration / marker の不在、完全な Git worktree inventory、同じ full branch ref を checkout する linked worktree の不在、branch tip と保存済み `cleanup_head_sha` の一致を要求する。
+runtime request が発行され得る terminal child intent と stale child row は、保存済み launcher / agent / descendant / process group と cwd / FD / writable mapping の完全な不在に加え、workspace / pane / checkout / Git registration / marker の不在、完全な Git worktree inventory、同じ full branch ref を checkout する linked worktree の不在、branch tip と保存済み `cleanup_head_sha` の一致を要求する。
 同じ child terminal CAS は provisional intent または stale row、registry reservation、active capsule / disposal journal、対応する runtime / bundle reference を除去し、active lineage を branch-retained cleaned tombstone へ移すが、branch ref は削除しない。
 各 operation lock file は対応する terminal CAS 後にだけ exact identity の unlink / parent fsync と FD close を行う。
 resource 残存、identity / branch drift、inventory 取得不能、operation owner 生存では state を変更せず human reconciliation を要求する。
@@ -338,19 +339,20 @@ takeover は expired tuple の snapshot 後に global lock を解放して旧 su
 live owner、PID / start token の取得不能、identity 不一致、CAS loss では active ownership を引き継がない。
 
 server loss の自動 restart は current active-supervisor owner だけが開始する。
-saved server PID / start token と socket path の不在、stable owner marker の bytes / opened identity、session bundle / manifest realization key / generation / final root identity / executable、保存済み active manifest proof、sealed agent-detection fixture、local override / remote cache bytes、no-refresh config、XDG の完全一致、bootstrap / restart / shutdown journal の不在を証明できる場合だけ deterministic restart operation lock を global lock の外で no-follow / exclusive に取得する。
-server 不在の restart preflight は live active manifest を再取得したと扱わず、保存済み proof と filesystem identity だけを照合する。
+saved server PID / start token と socket path の不在、旧 admission に束縛された `operation_state:active` intent が 0 件であること、保存済み `*-starting` call に対応する Herdr CLI process の不在、stable owner marker の bytes / opened identity、session bundle / manifest realization key / generation / final root identity / executable、保存済み active manifest proof、sealed agent-detection fixture、local override / remote cache bytes、no-refresh config、XDG の完全一致、bootstrap / restart / shutdown journal の不在を証明できる場合だけ deterministic restart operation lock を global lock の外で no-follow / exclusive に取得する。
+active intent、対応 process の残存、または完全な process inventory の取得不能が一件でもあれば restart lock / spawn を拒否し、旧 intent を新しい admission へ retag しない。
+server 不在の restart preflight は live active manifest を再取得したと扱わず、保存済み proof、filesystem identity、旧 admission quiescence proof だけを照合する。
 lock 順序は restart operation lock、shared registry lock、必要なら store lock とし、global lock を保持したまま restart operation lock を取得しない。
-同じ CAS save は active owner tuple / epoch / expected revision と不在 pre-state を再照合し、`admission_state` を `ready` から `restarting` へ変えて phase `server-restart-planned` を作り、lifecycle authority を active-supervisor owner から restart owner へ移す。
-`server-restart-planned` は restart nonce、restart owner lease の PID / start token / nonce / generation / lock path / file identity / expiry、旧 server tupleと不在 pre-state、exact marker、bundle / manifest realization key / generation / final root identity / executable、agent-detection fixture ID / `manifest_set_digest`、no-refresh config / XDG、exact argv、versioned secret-free `control_env_spec` / fingerprint、exact spawn request、expected socket absence を保存する。
+同じ CAS save は active owner tuple / epoch / expected revision、旧 admission ID、quiescence proof と不在 pre-state を再照合し、`admission_state` を `ready` から `restarting` へ変えて phase `server-restart-planned` を作り、lifecycle authority を active-supervisor owner から restart owner へ移す。
+`server-restart-planned` は restart nonce、restart owner lease の PID / start token / nonce / generation / lock path / file identity / expiry、旧 admission ID / server tupleと quiescence / 不在 pre-state、exact marker、bundle / manifest realization key / generation / final root identity / executable、agent-detection fixture ID / `manifest_set_digest`、no-refresh config / XDG、exact argv、versioned secret-free `control_env_spec` / fingerprint、exact spawn request、expected socket absence を保存する。
 `restarting` 中は active-supervisor lease を別に更新または takeover せず、restart owner が operation lock と shared registry lock の下で lease を更新する。
-expired restart recovery は global lock の外で recorded operation lock を non-blocking 取得して旧 PID / start token の不在を証明し、shared registry lock 下で restart nonce / generation / phase、active epoch、旧 owner / server tuple、marker、bundle reference、namespace identity を再照合した owner CAS に勝った process だけが続ける。
+expired restart recovery は global lock の外で recorded operation lock を non-blocking 取得して旧 PID / start token の不在を証明し、shared registry lock 下で restart nonce / generation / phase、active epoch、旧 owner / admission / server tuple、quiescence proof、marker、bundle reference、namespace identity を再照合した owner CAS に勝った process だけが続ける。
 phase `server-restart-starting` を保存してから spawn を一回だけ発行し、成功応答の新 PID / start token / executable / private namespace gate 済み socket leaf identity を phase `server-restart-realized` へ直ちに保存するが、admission はまだ無効のままにする。
-`server-restart-planned` の recovery は pre-state と restart owner lease が完全一致する場合だけ未発行 request を一回発行できる。
+`server-restart-planned` の recovery は旧 admission quiescence proof、pre-state、restart owner lease が完全一致する場合だけ未発行 request を一回発行できる。
 `server-restart-starting` の結果が不明な場合は spawn の再発行、観測 process の採用 / 自動停止、socket unlink を行わず、`restarting`、journal、bundle reference、operation lock identity を保持する。
 `server-restart-realized` の recovery は保存済み process / socket だけを再照合して三段 capability gate と active manifest gate を cache なしで最初から再実行できる。
 foreign / mismatched process、残存または stale socket、identity の取得不能では stop / unlink / adopt / restart を行わず `manual_cleanup_required` にする。
-gate 成功後の terminal CAS だけが restart owner を新しい active-supervisor owner tuple / lease へ移し、新 server tuple、incremented `server_instance_generation`、新しい `admission_id`、`admission_state:ready` を確定して restart journal を除去する。
+gate 成功後に旧 admission quiescence proof を再照合した terminal CAS だけが restart owner を新しい active-supervisor owner tuple / lease へ移し、新 server tuple、incremented `server_instance_generation`、新しい `admission_id`、`admission_state:ready` を確定して restart journal を除去する。
 同じ terminal CAS は snapshot の旧 `terminal_id` と current value を比較し、変化した direct-launch row を `stale` にするが、自動 resume は行わない。
 candidate re-gate が失敗した場合、restart owner は exact candidate PID / start token / executable / socket identity、restart nonce / owner generation、旧 admission ID / server tuple、gate failure proof、marker / bundle / manifest realization identity を再照合した CAS だけで phase `server-restart-admission-failed` へ進む。
 この phase は candidate failure receipt を restart journal に保存し、`admission_state:restarting` と restart owner / operation lock / lease を保持したまま exact candidate の `server-stop-planned` / `server-stop-starting` / `server-stop-realized` へ進む。
@@ -359,7 +361,7 @@ stop の response loss または外部 cleanup 後も同じ exact absence を証
 `server-stop-realized` 後の restart-abort terminal CAS は同じ restart nonce / owner / generation / lock、candidate failure / absence receipt、旧 active epoch / owner / server tuple、marker / bundle / manifest realization reference を再照合する。
 成功する CAS は restart owner を active-supervisor owner tuple / lease へ戻し、旧 admission ID を invalid のまま `admission_state:manifest-invalid` へ移し、candidate tuple / gate failure / absence proof を active invalidation receipt へ移し、active intent を `manual_cleanup_required`、direct-launch row を `stale` にして restart journal を除去する。
 失敗側 terminal CAS は candidate server tuple を active tuple に採用せず、`server_instance_generation` を増やず、新しい admission ID を作らず、marker、active epoch、session bundle / manifest realization reference、row を保持する。
-active epoch、stable marker、intent / final row、session bundle reference は restart で作り直しも削除もしない。
+active epoch、stable marker、final row、session bundle reference は restart で作り直しも削除もしない。旧 admission の intent を新しい admission へ retag しない。
 normal operation は admission proof の server tuple が current server tuple と一致し、restart journal がないことを要求する。
 success または restart-abort terminal CAS 後にだけ restart operation lock file の exact identity を再照合して unlink と parent fsync を行い、FD を閉じる。
 supervisor loss後に saved server または socket が残る場合、通常 operation / restart は foreground child を暗黙に採用または停止せず、保存済み active-owner takeover 契約に勝てない process は fail closed にする。
@@ -520,9 +522,9 @@ fanout-owned session は console / coordinator / child の intent-backed workspa
 server process は per-repo supervisor が所有する foreground `herdr server` child とし、attached console process の子にはしない。
 これにより console の detach または終了後も server を存続させる。
 wave 2 は owner marker、socket、capability gate を満たす owned server の bootstrap を実行する。
-server loss 後は current active-supervisor owner が saved process / socket の不在と stable marker / bundle / config の完全一致を証明した場合だけ restart journal を開始する。
+server loss 後は current active-supervisor owner が saved process / socket の不在、旧 admission の active intent 0 件と `*-starting` CLI process の不在、stable marker / bundle / config の完全一致を証明した場合だけ restart journal を開始する。
 `server-restart-starting` 後の spawn は一回に限り、結果不明、残存 process / socket、identity 不一致では再発行、採用、停止、unlink を行わず fail closed にする。
-新 server の exact identity を保存して三段 capability gate を cache なしで通した terminal CAS だけが通常 operation を再解禁する。
+新 server の exact identity を保存して三段 capability gate を cache なしで通し、同じ旧 admission quiescence proof を再照合した terminal CAS だけが通常 operation を再解禁する。
 re-gate 失敗は candidate failure receipt を保存し、exact candidate の stop または read-only absence reconciliation の後にだけ restart journal を閉じて `manifest-invalid` へ移す。
 0.7.5 direct-launch row は provider にかかわらず `terminal_id` が変われば `stale` とし、自動 resume しない。
 最後の child close では server を止めず、active intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal、foreign resource がない場合の明示的な repo-session shutdown だけを teardown とする。
@@ -612,8 +614,8 @@ generic pane の exact focus が必要になった場合、Socket API の `pane.
 同名 session の再作成で session 名、socket、public ID は再利用されるため、照合と mutation の間の TOCTOU は CLI では閉じられない。
 force なしの server rejection も clean 判定後から unlink 完了までの tracked / untracked / ignored write を阻止せず、automatic child removal の保全境界に使えない。
 wave 2 は child checkout が存在する場合、automatic remove 用の `cleanup-planned`、process stop、cleanup 用 `worktree open`、filesystem mutation より前に `worktree_remove_requires_write_exclusion` で拒否する。
-明示的な workspace-only close だけは別の detach phase として許可し、checkout / lineage を `checkout-retained` として保全する。
-console / coordinator の exact owned workspace / pane close は checkout を削除しないため維持するが、child の workspace-only close は cleanup 成功または tombstone authority にしない。
+明示的な workspace-only close だけは別の detach phase として許可し、checkout / lineage と active bundle reference を `checkout-retained` final row に保全する。
+console / coordinator の exact owned workspace / pane close は checkout を削除しないため維持するが、child の workspace-only close は cleanup 成功、bundle reference release、tombstone authority のいずれにも使わない。
 response loss または mutation の有無が不明な場合は blind retry せず fail closed にする。
 
 herdr backend は root coordinator の intent を保存してから `workspace create` を実行する。
@@ -680,14 +682,14 @@ flowchart TD
   H -->|conditional remove / fence available| I["cleanup-planned"]
   H -->|0.7.5 explicit detach| DP["cleanup-detach-planned"]
   DP --> DS["cleanup-detach-starting"]
-  DS -->|saved success + checkout retained| R["checkout-retained / manual_cleanup_required"]
+  DS -->|saved success + checkout / bundle ref retained| R["checkout-retained / manual_cleanup_required"]
   H -->|workspace already absent + checkout retained| R
   I --> J["cleanup-starting"]
   J -->|資源不在と branch ref を再確認| K["cleaned tombstone"]
-  R -->|explicit manual cleanup 後の absence reconciliation| K
-  X -->|worktree mutation 済み + cleanup absence + capsule terminal| K
+  R -->|process / FD / resource absence + bundle ref release の同一 CAS| K
+  X -->|runtime-capable + process / FD / resource absence + capsule terminal| K
   C -->|reservation mutation 非発生 + receipt / owned ref 不在 + capsule terminal| LA["launch-aborted"]
-  X -->|worktree mutation 非発生 + branch retained + explicit reconciliation + capsule terminal| K
+  X -->|reservation-only mutation 非発生 + branch retained + explicit reconciliation + capsule terminal| K
   K -->|explicit continue: lineage だけ継承| CA["current session bundle を再照合し、新しい launch 世代の operation bundle / launch spec を準備"]
   CA --> CP["tombstone reservation + operation bundle reference / launch spec + worktree-planned + env-capsule-planned"]
   CP --> CC["env-capsule-starting / created / sealed"]
@@ -804,7 +806,7 @@ herdr backend は tmux-parity trust、owned session、capability gate を確認�
   launcher の bootstrap deadline は exact token の受理までに限り、起動済み operation child の実行時間を制限しない。
   launcher は console shell または agent child の foreground process group と controlling terminal を管理し、child 終了後は別の shell へ落ちず、次の intent または入力を受理せずに終了する。
   pane 消滅後は operation final row を `stale` にし、同じ checkout の自動再 launch も console の暗黙再作成も行わない。
-  明示 cleanup は console / coordinator では旧 workspace の不在を再観測して旧 row を削除し、established child では workspace-only close 後の外部 cleanup と explicit manual reconciliation が保存済み process / process group、cwd / FD / writable mapping、旧 workspace / checkout / registration / marker の不在と branch tip を証明した場合だけ active row を cleaned tombstone へ置き換える。
+  明示 cleanup は console / coordinator では旧 workspace の不在を再観測して旧 row を削除し、established child では workspace-only close 後の外部 cleanup と explicit manual reconciliation が保存済み process / process group、cwd / FD / writable mapping、旧 workspace / checkout / registration / marker の不在と branch tip を証明した場合だけ active row を cleaned tombstone へ置き換え、同じ CAS で active bundle reference を外す。
   cleaned tombstone は watcher、background fanout、通常 fanout の idempotency hit とし、自動 launch を行わない。
   後続の明示 continue は branch lineage だけを引き継ぐ新規 launch 世代であり、旧 workspace、checkout、nonce、marker、row、launcher を再利用する runtime relaunch または cold resume ではない。
   source workspace の env は新しい root pane へ継承されないため、launcher は claimed env capsule の workload env を一回だけ明示し、PATH 上の bare shell / agent 名を実行しない。
@@ -879,7 +881,8 @@ child worktree は full branch ref、deterministic path、checkout git-dir marke
 この current commit を `cleanup_head_sha` として保存し、`launch_head_sha` との差は commit または rebase の結果として許可する。
 ancestry だけでは ownership を証明せず、nonce、marker、path、full ref の不一致を ancestry で救済しない。
 exact child workspace が存在する場合は state lock 下で workspace-only close の exact request と pre-state を phase `cleanup-detach-planned` へ保存し、送信直前の再照合後に `cleanup-detach-starting` を保存してから一回だけ発行できる。
-成功応答後に workspace / pane の不在、checkout path / Git worktree registration / marker の継続、branch ref と `cleanup_head_sha` の一致を再観測した場合だけ final row を `checkout-retained` / `manual_cleanup_required` にし、runtime resource と active bundle reference を外す。
+成功応答後に workspace / pane の不在、checkout path / Git worktree registration / marker の継続、branch ref と `cleanup_head_sha` の一致を再観測した場合だけ final row を `checkout-retained` / `manual_cleanup_required` にして workspace / pane の不在 receipt を記録する。
+保存済み runtime identity、`observed_process_chain`、対応する active bundle reference は final row に保持し、後述の cleaned tombstone CAS まで外さない。
 checkout、registration、marker のいずれかが消えた場合、branch ref が動いた場合、または close の response を失った場合は filesystem cleanup の出所を推測せず、final row / intent と全観測結果を残して request を再発行しない。
 この workspace-only close は cleanup 成功、cleaned tombstone、continue authority にせず、checkout path、full branch ref、`cleanup_head_sha`、marker identity を retained resource として保持する。
 workspace が存在しない child も checkout が残る限り `checkout-retained` とし、cleanup 用 `worktree open` または `worktree remove` を発行しない。
@@ -914,17 +917,21 @@ Herdr が expected generation を原子的に比較できず、platform も subt
 Herdr snapshot と OS process inventory の両方で、保存済み `observed_process_chain` の launcher / agent / 全 descendant に対応する PID / start token の process と、保存済み process group に属する process の不在を証明する。
 全 process を列挙し、worktree、git-dir、shared index、submodule root / git-dir に対する cwd、directory FD、writable FD、shared writable mapping が一件もないことも要求する。
 そのうえで、保存済み workspace の不在、checkout path と Git worktree registration の不在、旧 marker の不在、branch ref が保存済み `cleanup_head_sha` を指すことを read-only に再観測する。
-process / FD absence、workspace / checkout / registration / marker の不在、branch tip、完全な inventory のいずれかを証明できない場合は `checkout-retained` / `manual_cleanup_required` の final row と lineage を残し、cleaned tombstone を作らない。
-manual reconciliation receipt は外部の明示 cleanup 後、または reservation 成功後に worktree mutation の非発生を証明した failure で absence を観測した事実だけを記録し、fanout が remove の clean 判定または削除を証明したものとして扱わない。
-safe automatic remove または manual absence reconciliation の全条件を満たした同じ state save だけが active final row を `cleaned` branch tombstone へ置き換え、lineage の `last_owned_head_sha` を `cleanup_head_sha`、state を `cleaned` にする。
+process / FD absence、workspace / checkout / registration / marker の不在、branch tip、完全な inventory のいずれかを証明できない場合は `checkout-retained` / `manual_cleanup_required` の final row、lineage、active bundle reference を残し、cleaned tombstone を作らない。
+manual reconciliation receipt は外部の明示 cleanup 後、または reservation 成功後に worktree mutation の非発生を証明した reservation-only failure で absence を観測した事実だけを記録し、fanout が remove の clean 判定または削除を証明したものとして扱わない。
+safe automatic remove または manual absence reconciliation の全条件を満たした同じ state save だけが active final row を `cleaned` branch tombstone へ置き換え、対応する runtime / active bundle reference を外し、lineage の `last_owned_head_sha` を `cleanup_head_sha`、state を `cleaned` にする。
 provisional launch intent の explicit manual reconciliation は filesystem mutation を発行せず、shared registry lock 下で保存済み operation / lineage / branch reservation と full branch ref を照合し、current branch tip を `cleanup_head_sha` として reconciliation receipt へ先に保存する。
 checkout が残る場合は checkout HEAD と branch ref の一致も要求し、不一致または tip の取得不能では receipt を作らない。
-外部 cleanup 後、または worktree mutation の非発生を証明した reservation-only failure では、workspace / checkout / marker の最終観測、branch ref と保存済み `cleanup_head_sha` を再照合する。
-workspace、checkout path、Git worktree registration、旧 marker が不在で branch ref が `cleanup_head_sha` のままであり、env capsule の terminal receipt と同 operation の active capsule inventory / disposal journal 不在も一致する場合だけ、同じ CAS save が provisional intent と reservation を削除し、lineage の `last_owned_head_sha=cleanup_head_sha` を持つ `cleaned` tombstone を作る。
+保存済み phase が `worktree-planned` 以前、または `worktree-starting` でも request の未発行か構造化結果による `worktree create/open` mutation の非発生を証明できる場合だけ reservation-only lane とする。
+reservation-only lane は workspace / checkout / marker の最終観測、branch ref と保存済み `cleanup_head_sha`、env capsule の terminal receipt と同 operation の active capsule inventory / disposal journal 不在を再照合する。
+`worktree-starting` で request が発行済みまたは発行有無が不明で、mutation の非発生も証明できない場合、`worktree-realized` 以後、または phase / receipt を一意に分類できない場合は runtime-capable lane とする。
+runtime-capable lane は外部 cleanup 後に、保存済み launcher / agent / 全 descendant の PID / start token / process group と、worktree / git-dir / shared index / submodule root / git-dir を参照する cwd / directory FD / writable FD / shared writable mapping の不在を完全な process inventory から証明する。
+保存済み runtime identity が不足する場合、または完全な absence を証明できない場合は provisional intent / reservation / lineage / active bundle reference を残す。
+各 lane の追加条件に加え、workspace、checkout path、Git worktree registration、旧 marker が不在で branch ref が `cleanup_head_sha` のままであり、env capsule の terminal receipt と同 operation の active capsule inventory / disposal journal 不在も一致する場合だけ、同じ CAS save が provisional intent、reservation、対応する runtime / active bundle reference を削除し、lineage の `last_owned_head_sha=cleanup_head_sha` を持つ `cleaned` tombstone を作る。
 reservation 成功済みかつ worktree mutation の非発生を証明できる launch も、branch ref を残した explicit manual reconciliation だけが terminal 化できる。
 同 reconciliation は workspace、checkout path、Git worktree registration、marker の不在、完全な Git worktree inventory と同じ full branch ref を checkout する linked worktree の不在、branch ref と保存済み `cleanup_head_sha` の一致、env capsule の terminal receipt と active inventory / disposal journal 不在を再照合し、provisional intent / registry reservation を削除して active lineage を branch-retained の cleaned tombstone へ同じ state save で移す。
 この経路は `launch-aborted` を使わず、fanout 自身は branch ref を削除しない。
-mutation の有無、absence、branch tip、reservation ownership のいずれかを証明できない場合は provisional intent / reservation を保持する。
+mutation の有無、phase lane、process / FD absence、resource absence、branch tip、reservation ownership のいずれかを証明できない場合は provisional intent / reservation / active bundle reference を保持する。
 tombstone は canonical typed row key とその構成 identity、backend、lineage identity、repo / branch / path、`resolved_base_ref`、`resolved_base_name`、`effective_base_branch`、optional `pr_base_name`、`lineage_base_sha`、`last_owned_head_sha`、cleanup receipt、旧 marker identity を履歴として保持し、workspace、pane、checkout、active bundle reference を持たない。
 不一致、重複、response loss、mutation の有無が不明な場合、または postcondition 中に branch ref が動いた場合は final row と intent を残し、tombstone を作らず fail closed にする。
 
@@ -1088,7 +1095,8 @@ runtime matcher は bundle から expected provider chain が起動したこと�
 foreground native child と source entrypoint が異なること自体は失敗ではなく、保存済み matcher が許可する一意な bundle chain だけを成功とする。
 intent と final row は `entrypoint_spec`、`launch_bundle_spec`、matcher ID / version、実測した `observed_process_chain` を別々に保持し、resume、emitter、nudge も bundle digest と同じ chain identity を再観測する。
 
-active intent、final row、registry の session-bootstrap owner / active epoch が bundle reference を保持し、external owner marker は単独で reference を保持しない。
+active intent、`checkout-retained` / `manual_cleanup_required` を含む final row、registry の session-bootstrap owner / active epoch が bundle reference を保持し、external owner marker は単独で reference を保持しない。
+workspace-only close は reference を外さず、process / FD / resource absence を証明した cleaned tombstone CAS だけが final-row reference を除去する。
 ready digest は active reference、session-bootstrap / server-restart journal、bootstrap / restart operation lock、bundle-bound live process がすべてない場合だけ GC candidate になる。
 incomplete build / publish は build owner lease の takeover CAS を完了した recovery だけが GC candidate にできる。
 ready digest の GC は shared registry lock と store lock 下で candidate snapshot と新しい GC nonce / deterministic lock path を選んで global lock を解放し、`fanout/launch-bundles/.locks/gc-<gc-nonce>.lock` を no-follow / exclusive create して排他 GC operation lock を取得する。
@@ -1244,8 +1252,8 @@ workspace-level `agent start` の各条項は次のように移す。
 
 | issue | 担当契約 |
 |---|---|
-| #526 | owned 0.7.5 XDG / socket、25-method structural capability gate、code-owned behavior profile / exact agent-detection fixture / `manifest_set_digest` / no-refresh policy / 実機 proof / golden の確定、production server log の 0600 / ACL-free creation / maintenance / verification protocol、`fanout.herdr-owner.v1` の property / nesting / shape / identity tuple / canonical golden bytes の確定、shared registry の exact schema / codec / canonical golden bytes、pre-bundle bootstrap writer admission、session-bundled fanout writer への journaled handoff / compatibility gate、journaled manifest override realization / read-only reuse / retirement tombstone / generation-specific republish / fail-closed absence reconciliation、physical common directory 配下の shared Herdr registry / lock、global plugin preflight、session / operation bundle store、空の launch-bundle xattr allowlist、Herdr / fanout / detection fixture の session bundle、bundle reference / GC、private env-capsule store / disposal journal、secret-free control env、`incomplete-pre-realized` bundle quarantine と bootstrap / intent abort terminal CAS、active-supervisor heartbeat / same-owner renewal / dead-owner takeover、`ready` / `restarting` / `manifest-invalid` / `draining` admission、server-restart operation lock と success / abort terminal state machine、cache なし capability / active manifest re-gate |
-| #527 | short registry CAS と launch operation lock / lease、`session-ready` の owner marker canonical bytes / digest / opened identity の journal-to-epoch 移譲、shared registry 上の console の `console-planned` から `console-ready`、coordinator の `workspace-*`、child の `branch-planned` から `worktree-ready`、workload env policy snapshot と env capsule lifecycle intent、automatic child remove の fail-closed gate、workspace-only close / retained checkout / process / FD absence fence 付き established-row manual reconciliation、branch lineage / cleaned tombstone / explicit continue / tombstone forget、operation 固有の root identity の保存 |
+| #526 | owned 0.7.5 XDG / socket、25-method structural capability gate、code-owned behavior profile / exact agent-detection fixture / `manifest_set_digest` / no-refresh policy / 実機 proof / golden の確定、production server log の 0600 / ACL-free creation / maintenance / verification protocol、`fanout.herdr-owner.v1` の property / nesting / shape / identity tuple / canonical golden bytes の確定、shared registry の exact schema / codec / canonical golden bytes、pre-bundle bootstrap writer admission、session-bundled fanout writer への journaled handoff / compatibility gate、journaled manifest override realization / read-only reuse / retirement tombstone / generation-specific republish / fail-closed absence reconciliation、physical common directory 配下の shared Herdr registry / lock、global plugin preflight、session / operation bundle store、空の launch-bundle xattr allowlist、Herdr / fanout / detection fixture の session bundle、bundle reference / GC、private env-capsule store / disposal journal、secret-free control env、`incomplete-pre-realized` bundle quarantine と bootstrap / intent abort terminal CAS、active-supervisor heartbeat / same-owner renewal / dead-owner takeover、旧 admission quiescence fence、`ready` / `restarting` / `manifest-invalid` / `draining` admission、server-restart operation lock と success / abort terminal state machine、cache なし capability / active manifest re-gate |
+| #527 | short registry CAS と launch operation lock / lease、`session-ready` の owner marker canonical bytes / digest / opened identity の journal-to-epoch 移譲、shared registry 上の console の `console-planned` から `console-ready`、coordinator の `workspace-*`、child の `branch-planned` から `worktree-ready`、workload env policy snapshot と env capsule lifecycle intent、automatic child remove の fail-closed gate、workspace-only close / retained checkout / final-row bundle reference の tombstone CAS までの保持、process / FD absence fence 付き established-row と phase-split provisional manual reconciliation、branch lineage / cleaned tombstone / explicit continue / tombstone forget、operation 固有の root identity の保存 |
 | #528 | non-shell launcher、console / provider operation bundle、sealed provider config view と path / content 固定、`OPENCODE_CONFIG_CONTENT` の config / secret 分離契約と再評価、closure 外の可変 auth / config mode の fail-closed gate、exact token、env capsule claim / consume / empty-base exec、bundle-bound provider matcher、agent detection / rename、`observed_process_chain`、final row |
 | #529 | provider hook adapter、fresh signal、pending emitter telemetry、`state_refinement` |
 | #532 | 0.7.5 direct launch の cold restart resume 再実測。解禁までは `terminal_id` 変化を `stale` にする |
@@ -1279,7 +1287,7 @@ server log は exit status を記録するが public API 契約ではないた�
 0.7.5 の direct launch probe へ `agent send-keys <name> ctrl+c` を送ると agent record が消え、同じ root pane は shell に戻った。
 wave 2 の production launcher は single-shot の operation child parent として pane に残り、console shell または agent child の終了後は別の shell を起動せず、次の intent または入力を受理せずに終了する。
 pane 消滅後は final row を `stale` にし、同じ launcher process または同じ final row key を自動再利用しない。
-established child の explicit manual reconciliation は、保存済み launcher / agent / 全 descendant の PID / start token / process group と、worktree / git-dir / shared index / submodule root / git-dir を参照する cwd / directory FD / writable FD / shared writable mapping の不在を含む完全な inventory から、保存済み workspace、checkout path、Git worktree registration、旧 marker の不在を read-only に再観測し、branch ref が保存済み `cleanup_head_sha` を指し続ける場合だけ active row を cleaned tombstone へ置き換え、自動再 launch は行わない。
+established child の explicit manual reconciliation は、保存済み launcher / agent / 全 descendant の PID / start token / process group と、worktree / git-dir / shared index / submodule root / git-dir を参照する cwd / directory FD / writable FD / shared writable mapping の不在を含む完全な inventory から、保存済み workspace、checkout path、Git worktree registration、旧 marker の不在を read-only に再観測し、branch ref が保存済み `cleanup_head_sha` を指し続ける場合だけ active row を cleaned tombstone へ置き換え、同じ CAS で active bundle reference を外し、自動再 launch は行わない。
 launcher が得た child exit status は診断に使えるが、fanout task の完了または cleanup authority にはしない。
 #427 は fanout CLI を呼ぶ runtime 非依存の telemetry emitter として agent の報告状態を backend 固有 state へ記録する。
 Claude は direct launch の argv へ `--settings` lifecycle hook を注入する。
@@ -1841,7 +1849,7 @@ mutation matrix は `workspace.create` / `workspace.focus` / `workspace.report_m
 non-shell launcher の readiness / env / process-info、plugin / setup-hook、fresh bootstrap と遅延後 / restart 後の active manifest source / version / digest、remote refresh 拒否、override / cache drift 検出も同じ profile の必須 probe とし、matrix の一部だけに成功した release を wave 2 profile へ追加しない。
 再検証が成功した platform だけを behavior profile entry、fixture、この契約の同じ reviewed change で追加し、挙動が変わる release は state machine を先に改訂する。
 0.7.5 は比較可能な server generation を返さないため、connection loss、restart、binary / active manifest drift、refresh attempt、`restart_needed:true`、その他の不一致を検出した場合は admission を失効させる。
-`ready` 中の connection loss で server / socket の不在を証明した経路だけが owned server restart へ進み、三段 capability gate と active manifest gate を最初から再実行する。
+`ready` 中の connection loss で server / socket の不在と旧 admission quiescence proof を証明した経路だけが owned server restart へ進み、三段 capability gate と active manifest gate を最初から再実行する。
 restart candidate の re-gate 失敗は candidate の exact absence を証明した terminal CAS で `manifest-invalid` へ移し、spawn を再発行しない。
 binary / active manifest / override / cache drift、refresh attempt、`restart_needed:true`、restart re-gate 失敗、その他の live admission 不一致は `manifest-invalid` へ移し、mutation-free reconciliation、明示 shutdown、fresh bootstrap を通すまで通常操作へ戻さない。
 shutdown 後に retained manifest realization が欠落または drift している場合、fresh bootstrap は registry-only retirement CAS 後の next generation namespace にだけ新しい realization を publish する。
@@ -1895,11 +1903,11 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | 機能 | wave 2 | tmux-parity tier の条件 | proof-grade tier への格上げ条件 |
 |---|---|---|---|
 | owned bootstrap / launch | Go（#526 / #527 gate 完了後） | FD-relative private namespace gate 済みの owned XDG / socket / marker、short registry CAS、launch operation lock / lease、sealed session / operation bundle、secret-free control env、versioned workload env policy / one-shot capsule、0.7.5 structural gate / code-owned behavior profile / exact detection fixture / no-refresh policy、0600 / ACL-free server log creation / maintenance / verification proof、console / agent intent、non-shell launcher readiness と exact token、bundle-bound runtime matcher、agent detection / rename を要求し、#526 の fixture / no-refresh proof / log protocol / owner marker schema / registry writer gate と #527 の journal-to-epoch 移譲の確定までは fail closed | request-bound direct spawn、controller capability、別 UID の bundle owner、または server / agent の UID 分離とし、setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
-| owned server restart | Go | active-supervisor lease / takeover CAS、`ready -> restarting -> ready / manifest-invalid`、restart operation lock、success / abort terminal phase、single spawn、cache なしの三段 capability gate / active manifest gate、candidate stop / absence reconciliation、bundle reference continuity | authenticated server generation と request-bound conditional restart |
+| owned server restart | Go（#526 の旧 admission quiescence proof 完了後） | active intent 0 件と `*-starting` CLI process 不在の preflight / terminal fence、active-supervisor lease / takeover CAS、`ready -> restarting -> ready / manifest-invalid`、restart operation lock、single spawn、cache なしの三段 capability gate / active manifest gate、candidate stop / absence reconciliation、bundle reference continuity | authenticated server generation と request-bound conditional restart |
 | launch bundle build / GC | Go | FD-relative private namespace gate、空の xattr allowlist、build lock / lease / owner CAS、root identity、expected entry set、incomplete root の quarantine-only recovery、detached inventory、no-follow subset deletion、session bootstrap abort terminal CAS | verified FD spawn または別 UID の bundle owner |
 | console / coordinator close | Go | checkout を持たない exact owned workspace / pane を送信直前に再照合し、response loss では blind retry しない | close が authoritative server generation と target resource generation を原子的に検査する |
-| child final-row cleanup | workspace-only close + manual reconciliation | automatic `worktree remove` は拒否し、checkout / lineage を `checkout-retained` として保全する。外部の明示 cleanup 後に saved process / process group と cwd / FD / writable mapping、resource、branch tip の完全な absence / 一致を read-only に証明した場合だけ tombstone にする | tracked / untracked / ignored subtree generation を remove と原子的に条件化する server-side conditional remove、または remove postcondition まで保持する kernel-enforced fence |
-| child launch rollback | 拒否（manual reconciliation のみ） | workspace を含む全観測資源、provisional intent、branch reservation を保持し、automatic close / remove を発行しない。外部 cleanup 後、または worktree mutation の非発生を証明した reservation-only failure の absence reconciliation が intent / reservation を terminal state へ移す | final-row cleanup と同じ conditional remove または fence |
+| child final-row cleanup | workspace-only close + manual reconciliation | automatic `worktree remove` は拒否し、checkout / lineage と active bundle reference を `checkout-retained` final row に保全する。外部の明示 cleanup 後に saved process / process group と cwd / FD / writable mapping、resource、branch tip の完全な absence / 一致を read-only に証明した tombstone CAS だけが reference を外す | tracked / untracked / ignored subtree generation を remove と原子的に条件化する server-side conditional remove、または remove postcondition まで保持する kernel-enforced fence |
+| child launch rollback | 拒否（manual reconciliation のみ） | workspace を含む全観測資源、provisional intent、branch reservation を保持し、automatic close / remove を発行しない。runtime-capable phase は process / FD absence fence を要求し、worktree mutation の非発生を証明した reservation-only failure だけを例外にする | final-row cleanup と同じ conditional remove または fence |
 | dirty automatic `--force` | 拒否 | child remove の共通条件に加えて exact removal fingerprint とユーザー確認 receipt を要求する | 共通の conditional remove / fence と fingerprint-bound receipt |
 | #427 emitter | Go | cooperative telemetry と `shouldNudge` gate に限り、completion / cleanup authority にしない | agent process から分離した event provenance |
 | 0.7.5 direct launch の cold restart resume | 保留 | `terminal_id` 変化時は `stale`。#532 が real direct launch / restart / attach / resume の実機連鎖を証明した後に再判定する | authoritative server generation と launch provenance の原子的な束縛 |
@@ -1924,8 +1932,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   active supervisor は 10 秒以下の heartbeat で PID / start token、generation を照合し、expiry を最大 launch 300 秒 + grace 30 秒 + cadence 10 秒後へ単調更新する。
   launch caller は active lease を延長せず、intent CAS で launch deadline + grace までの runway を検証し、不足時は mutation 前に明確な error を返す。
   expiry 後も同じ live owner は exact tuple の same-owner renewal CAS で回復でき、takeover は旧 PID / start token の不在と generation increment CAS を証明した process に限る。
-  server loss は current active owner が process / socket の不在を証明した場合だけ restart operation lock と planned / starting / realized / terminal phase で処理し、starting 後の spawn を再発行しない。
-  成功側 terminal CAS は新 server tuple と admission ID を束縛した三段 capability gate / active manifest gate、変化した `terminal_id` の `stale` 化、restart journal の削除を一度に確定する。
+  server loss は current active owner が process / socket の不在と旧 admission の active intent 0 件 / `*-starting` CLI process 不在を証明した場合だけ restart operation lock と planned / starting / realized / terminal phase で処理し、starting 後の spawn を再発行しない。
+  成功側 terminal CAS は同じ旧 admission quiescence proof、新 server tuple と admission ID を束縛した三段 capability gate / active manifest gate、変化した `terminal_id` の `stale` 化、restart journal の削除を一度に確定し、旧 intent を retag しない。
   gate 失敗側は exact candidate stop / absence を確定した terminal CAS だけが failure receipt を `manifest-invalid` へ移し、candidate を採用せず restart journal を削除する。
   不一致、foreign、残存、または検証不能な socket / marker / process は停止、採用、unlink せず fail closed にする。
   console detach 後も server を存続させ、最後の child close では止めず、active intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal、foreign resource のない明示 repo-session shutdown だけを teardown とする。
@@ -1945,10 +1953,10 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   0.7.4 以下は floor 未満として拒否する。
   prerelease、解釈不能または floor 未満の version、client / server 不一致、protocol / schema 不一致、session / socket 不一致、`restart_needed:true`、使用 method、必須 field、参照される type / enum / const の欠落または不一致は fail closed にする。
   full schema gate は behavior profile ID、Herdr executable digest、detection fixture ID / `manifest_set_digest`、no-refresh policy ID、admitted session bundle digest の組ごとに一回 cache でき、connected status / snapshot / active manifest gate は attach ごとに一回実行する。
-  owned server restart は `ready` で server / socket の不在を証明した経路だけが開始し、同じ bundle digest でも cached proof を使わず、新 server tuple に三段 capability gate と active manifest gate を最初から実行する。
+  owned server restart は `ready` で server / socket の不在、旧 admission の active intent 0 件、`*-starting` CLI process の不在を証明した経路だけが開始し、同じ bundle digest でも cached proof を使わず、新 server tuple に三段 capability gate と active manifest gate を最初から実行する。
   各 CLI call は behavior profile ID、bundled Herdr identity / digest、detection fixture / `manifest_set_digest`、no-refresh config、session bundle digest、response の必須 field を再検査し、version と protocol を持つ response ではその値も再検査する。
   agent observation、rename、focus、nudge は発行直前に fresh active manifest proof と同じ saved admission ID も要求する。
-  `ready` 中の connection loss は server / socket の不在を証明できた場合だけ restart machine へ進み、新 server の gate が成功した場合だけ通常 operation へ戻る。
+  `ready` 中の connection loss は server / socket の不在と旧 admission quiescence proof を証明できた場合だけ restart machine へ進み、新 server の gate と同じ quiescence 再照合が成功した場合だけ通常 operation へ戻る。
   binary / active manifest / override / cache drift、refresh attempt、`restart_needed:true`、その他の live admission 不一致は `manifest-invalid` へ移し、自動 restart で回復しない。
   これらは mutation-free reconciliation、明示 shutdown、fresh bootstrap を通し、新しい admission ID を得るまで通常 operation を拒否する。
   restart または fresh bootstrap 後も 0.7.5 direct-launch row の resume は実行しない。
@@ -1975,7 +1983,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   handoff 後の writer executable identity / digest の不一致、未対応 schema、unknown / duplicate / non-canonical field を mutation 前に拒否し、自動 migration または field drop を行わない。
   active epoch は stable epoch owner nonce、可変 active-supervisor owner tuple、server tuple、owner marker canonical bytes / digest / opened identity record、active bundle / manifest override realization key / generation / final root identity、admission ID / state `ready` / `restarting` / `manifest-invalid` / `draining`、console、intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal を保持し、これらの active resource がない場合だけ切り替える。
   通常 mutation は shared registry lock 下で current owner、expected revision、`ready`、restart / shutdown journal 不在を照合し、最初の intent / journal と同じ save で admission を確定する。
-  `restarting` は同じ restart owner / nonce の phase、capability / active manifest re-gate、gate 失敗後の exact candidate stop / absence reconciliation / `manifest-invalid` terminal CAS だけを許可する。
+  `restarting` は保存済み旧 admission quiescence proof と同じ restart owner / nonce の phase、capability / active manifest re-gate、gate 失敗後の exact candidate stop / absence reconciliation / `manifest-invalid` terminal CAS だけを許可する。
   `manifest-invalid` は current owner lease / dead-owner takeover、invalidation receipt、mutation-free absence reconciliation、空 inventory の明示 shutdown、`draining` は同じ shutdown owner / nonce の phase と terminal save だけを許可する。
   shared registry lock は一回の snapshot / atomic save に限り、external process、polling、sleep、bundle I/O、filesystem mutation の間は保持しない。
   launch は deterministic operation lock と owner lease を terminal save まで保持し、operation lock、shared registry lock、必要なら store lock の順に各 phase を CAS する。
@@ -2109,7 +2117,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   operation bundle は phase `ready` と最初の intent reference、session bundle は phase `ready` と provisional session-bootstrap owner の正式 reference を同じ state save で確定した後だけ既存 digest の再利用を許可する。
   seal の部分適用は exact manifest / identity の entry に限って idempotent に補い、完成不能な journaled root は deterministic quarantine を先行保存して GC namespace protocol へ移す。
   journal のない final path、unexpected entry、identity 不一致は自動操作しない。
-  active intent、final row、registry の session-bootstrap owner / active epoch が ready bundle reference を保持し、external owner marker は単独で reference を保持しない。
+  active intent、`checkout-retained` / `manual_cleanup_required` を含む final row、registry の session-bootstrap owner / active epoch が ready bundle reference を保持し、external owner marker は単独で reference を保持しない。
+  child workspace-only close は reference を外さず、process / FD / resource absence を証明した cleaned tombstone CAS だけが final-row reference を除去する。
   env capsule は bundle reference / GC から独立した active inventory と disposal journal を持ち、active capsule を bundle GC の可否または bundle content に数えない。
   GC は active reference、session-bootstrap / server-restart journal、bootstrap / restart operation lock、bundle-bound live process のない ready digest、または build owner takeover CAS を完了した incomplete build / publish だけを処理する。
   ready GC は専用 GC operation lock を取得してから registry / store lock 下で `gc-planned` と PID / start token / owner nonce / generation / lock identity / expiry を保存し、incomplete GC は takeover 済み build lock と owner tuple を同じ save で GC へ移譲する。
@@ -2168,7 +2177,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   launcher は single-shot とし、operation child 終了後は別の shell、次の intent、入力を受理せず終了する。
   pane 消滅後は operation final row を `stale` にし、同じ launcher process または row key の自動再利用を禁止する。
   明示 cleanup は console / coordinator では旧 workspace の不在を再観測して旧 row を削除する。
-  established child の explicit manual reconciliation は、保存済み launcher / agent / 全 descendant の PID / start token / process group と、worktree / git-dir / shared index / submodule root / git-dir を参照する cwd / directory FD / writable FD / shared writable mapping の不在を含む完全な inventory から、保存済み workspace、checkout path、Git worktree registration、旧 marker の不在を read-only に再観測し、branch ref が保存済み `cleanup_head_sha` を指し続ける場合だけ active row を同じ state save で cleaned tombstone へ置き換える。
+  established child の explicit manual reconciliation は、保存済み launcher / agent / 全 descendant の PID / start token / process group と、worktree / git-dir / shared index / submodule root / git-dir を参照する cwd / directory FD / writable FD / shared writable mapping の不在を含む完全な inventory から、保存済み workspace、checkout path、Git worktree registration、旧 marker の不在を read-only に再観測し、branch ref が保存済み `cleanup_head_sha` を指し続ける場合だけ active row を同じ state save で cleaned tombstone へ置き換え、active bundle reference を外す。
   cleaned tombstone は watcher、background fanout、通常 fanout の idempotency hit とし、自動 launch を行わない。
   後続の explicit continue は branch lineage だけを新しい launch 世代へ渡し、旧 workspace、checkout、nonce、marker、row、launcher を再利用する relaunch または cold resume として扱わない。
   console は active operation、starting `main_phase`、`token_substep:launch-token-issued`、saved `pane run` 成功応答、consumed receipt、active capsule / disposal journal の不在、saved PaneRef / `terminal_id` 上の shell process identity が一致した場合だけ `console-started` と final row へ進む。
@@ -2278,7 +2287,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   launch rollback は workspace-only close も発行せず、workspace を含む全観測資源、provisional intent、branch reservation を保持する。
   child は workspace label、worktree nonce、git-dir marker、full branch ref、path を再照合し、checkout HEAD と branch ref が一致する current tip を `cleanup_head_sha` として保存する。
   `cleanup_head_sha` は commit または rebase により `launch_head_sha` と異なってよく、ancestry を ownership proof に使わない。
-  exact child workspace が存在する場合だけ `cleanup-detach-planned` / `cleanup-detach-starting` から workspace-only close を一回発行し、workspace / pane の不在と checkout / registration / marker / branch の継続を確認して `checkout-retained` / `manual_cleanup_required` にする。
+  exact child workspace が存在する場合だけ `cleanup-detach-planned` / `cleanup-detach-starting` から workspace-only close を一回発行し、workspace / pane の不在と checkout / registration / marker / branch の継続を確認して `checkout-retained` / `manual_cleanup_required` にするが、保存済み runtime identity と active bundle reference は final row に保持する。
   workspace-only close の response loss、checkout の消失、branch drift では retry または tombstone 化せず、final row / intent と観測結果を残す。
   automatic child remove の再解禁には exact owned launcher / agent / descendant の identity-bound stop と reap、external writer の完全な不在、tracked / untracked / ignored subtree generation を原子的に条件化する server-side remove、または最終 scan から remove postcondition まで kernel-enforced subtree write-exclusion fence を要求する。
   dirty remove は共通条件に exact removal fingerprint とユーザー確認 receipt を追加する。
@@ -2287,12 +2296,13 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   process / FD inventory、recursive watch、advisory lock、chmod、同一 UID が解除できる immutable flag は fence の代用にしない。
   0.7.5 は conditional remove と fence を持たないため automatic `worktree remove` を一切発行しない。
   established final-row の explicit manual reconciliation は filesystem mutation を行わず、保存済み launcher / agent / 全 descendant の PID / start token / process group と、worktree / git-dir / shared index / submodule root / git-dir を参照する cwd / directory FD / writable FD / shared writable mapping の不在を含む完全な inventory を要求する。
-  同じ read-only reconciliation が保存済み workspace、checkout path、Git worktree registration、旧 marker の不在と branch ref が `cleanup_head_sha` のままであることも証明した場合だけ、active row を cleaned tombstone へ置き換える。
-  provisional intent の reconciliation は先に lineage / reservation と current branch tip を `cleanup_head_sha` へ束縛し、外部 cleanup 後、または worktree mutation の非発生を証明した reservation-only failure で同じ absence 条件、env capsule terminal receipt、active capsule inventory / disposal journal 不在を満たす CAS だけが intent / reservation を削除して cleaned tombstone を作る。
+  同じ read-only reconciliation が保存済み workspace、checkout path、Git worktree registration、旧 marker の不在と branch ref が `cleanup_head_sha` のままであることも証明した場合だけ、active row を cleaned tombstone へ置き換え、同じ CAS で active bundle reference を外す。
+  provisional intent の reconciliation は先に lineage / reservation と current branch tip を `cleanup_head_sha` へ束縛し、保存済み phase から reservation-only lane と runtime-capable lane を分ける。
+  `worktree-planned` 以前、または request 未発行か構造化結果が worktree mutation の非発生を証明した `worktree-starting` だけを reservation-only lane とし、それ以外と分類不能な intent は保存済み launcher / agent / descendant / process group と cwd / FD / writable mapping の完全な absence を要求する。
   reservation 成功後に worktree mutation の非発生を証明できる launch も branch ref を削除せず、capsule terminal receipt と inventory / journal 不在を含む explicit manual reconciliation だけが terminal 化する。
-  workspace、checkout path、Git worktree registration、marker の不在、完全な Git worktree inventory と同じ full branch ref を checkout する linked worktree の不在、branch ref と `cleanup_head_sha` の一致を read-only に再照合した CAS は、reservation / intent を削除して active lineage を branch-retained の cleaned tombstone へ移す。
+  各 lane の条件、workspace、checkout path、Git worktree registration、marker の不在、完全な Git worktree inventory と同じ full branch ref を checkout する linked worktree の不在、branch ref と `cleanup_head_sha` の一致、env capsule terminal receipt と active inventory / disposal journal の不在を read-only に再照合した CAS は、reservation / intent / 対応する runtime / active bundle reference を削除して active lineage を branch-retained の cleaned tombstone へ移す。
   tombstone は canonical typed row key と構成 identity、backend、lineage / repo / branch / path、`resolved_base_ref`、`resolved_base_name`、`effective_base_branch`、optional `pr_base_name`、`lineage_base_sha`、`last_owned_head_sha=cleanup_head_sha`、cleanup receipt、旧 marker identity を保持し、active runtime resource と bundle reference を持たない。
-  manual reconciliation receipt は外部 cleanup 後、または worktree mutation の非発生を証明した reservation-only failure の absence 観測だけを表し、established row の process / FD absence fence 不成立、response loss、identity 不一致、branch ref drift、残存 resource、inventory 取得不能では final row / intent を残して tombstone を作らない。
+  manual reconciliation receipt は外部 cleanup 後、または worktree mutation の非発生を証明した reservation-only failure の absence 観測だけを表し、established row または runtime-capable provisional intent の process / FD absence fence 不成立、response loss、identity 不一致、branch ref drift、残存 resource、inventory 取得不能では final row / intent / active bundle reference を残して tombstone を作らない。
   explicit continue は shared lock 下で同じ task / lineage の tombstone、branch tip、deterministic path と他 checkout の不在を再照合し、tip が `last_owned_head_sha` と一致する場合だけ新しい workspace / checkout / nonce / marker / launch 世代を作る。
   tombstone のない branch、tip が動いた branch、別 checkout にある branch は採用しない。
   wave 2 は branch tip の compare-and-delete と linked worktree の checkout 保護を一操作へ束縛できないため、cleaned branch と fresh reservation branch のどちらも自動削除しない。
