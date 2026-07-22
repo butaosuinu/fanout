@@ -68,11 +68,8 @@ type TeamContext struct {
 // Render produces the brief body. Live mode writes it to Path(); dry-run uses
 // len(Render()) to compute the goldened "briefing size" without touching disk.
 // team is nil unless the run opted in with --team.
-func Render(num int, title, body, agentName, baseBranch string, s settings.Settings, codexPlanMode bool, team *TeamContext) string {
-	if codexPlanMode {
-		return renderCodexPlanBriefing(num, title, body)
-	}
-	return renderWorkBriefing(workBriefing{
+func Render(num int, title, body, agentName, baseBranch string, s settings.Settings, planMode bool, team *TeamContext) string {
+	work := workBriefing{
 		header:                     fmt.Sprintf("You are assigned GitHub issue #%d in this repository.", num),
 		title:                      title,
 		body:                       body,
@@ -85,7 +82,18 @@ func Render(num int, title, body, agentName, baseBranch string, s settings.Setti
 		settings:                   s,
 		team:                       team,
 		teamIssueNum:               num,
-	})
+	}
+	if !planMode {
+		return renderWorkBriefing(work)
+	}
+	if agentName == "codex" {
+		// The Codex plan TUI keeps its exact approval contract. Team messaging is
+		// deliberately unavailable in that first turn, but completion duties must
+		// still survive after the user approves implementation.
+		work.team = nil
+		return renderCodexPlanBriefing(num, title, body) + "\nImplementation requirements after plan approval:\n\n" + renderWorkBriefing(work)
+	}
+	return renderNativePlanBriefing(agentName) + renderWorkBriefing(work)
 }
 
 // RenderManualPlan produces the brief for a TUI-created manual Codex Plan Mode
@@ -305,6 +313,17 @@ func renderCodexPlanBriefing(num int, title, body string) string {
 		body,
 		"- Before presenting a plan, follow normal Codex planning behavior: inspect the issue, relevant repository files, docs, and use web/search when the task calls for current external information.",
 	)
+}
+
+func renderNativePlanBriefing(agentName string) string {
+	return fmt.Sprintf(`You are starting this issue in %s plan mode through fanout.
+
+Before implementation:
+- Inspect the issue and relevant repository files and docs.
+- Present a plan and wait for the agent's normal plan approval flow.
+- After approval, follow the complete work contract below.
+
+`, agentName)
 }
 
 func renderCodexPlanBriefingWithHeader(header, title, body, inspectRequirement string) string {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
@@ -48,7 +49,7 @@ func NewIssueRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Iss
 		ShortTitle:   ShortIssueTitle(issue.Title),
 		Slug:         slug,
 		Agent:        agentName,
-		PlanMode:     cfg.PlanModeEnabled(),
+		LaunchMode:   issueLaunchMode(cfg),
 		Hooks:        hookConfig,
 	}
 	if name := cfg.FindName(issue.Number); name != nil {
@@ -70,11 +71,13 @@ func NewIssueRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Iss
 		BaseBranch:  cfg.BaseBranch,
 		NoRefresh:   cfg.NoRefresh,
 	})
-	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, agentName, req.Worktree.BaseBranch, resolvedSettings, req.PlanMode, teamCtx)
+	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, agentName, req.Worktree.BaseBranch, resolvedSettings, req.PlanMode(), teamCtx)
 	req.Prompt = oneLinePrompt(req.ParentRef, req)
-	if req.PlanMode {
+	if req.CodexPlanMode() {
 		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, issue.Number, cfg.DryRun)
-	} else if teamCtx != nil && agentName == "codex" {
+	}
+	req.CodexTeamRequested = teamCtx != nil && agentName == "codex"
+	if req.CodexTeamRequested && !req.PlanMode() {
 		req.CodexTeamMode = true
 		req.CodexTeamStatusPath = codexapp.TeamStatusPath(projectRoot, strconv.Itoa(issue.Number), cfg.DryRun)
 	}
@@ -88,7 +91,11 @@ func NewWatchRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Iss
 	watchCfg := *cfg
 	watchCfg.ParentRef = WatchParentRef
 	watchCfg.PlanMode = nil
-	return NewIssueRequest(&watchCfg, projectRoot, issue, resolvedSettings, hookConfig, false, nil)
+	req := NewIssueRequest(&watchCfg, projectRoot, issue, resolvedSettings, hookConfig, false, nil)
+	// Watch does not consume the child Plan Mode setting until its dedicated
+	// migration. Keep the legacy flag-free launch instead of injecting build.
+	req.LaunchMode = ""
+	return req
 }
 
 // NewTaskRequest builds the pane request for one issue-less plan task.
@@ -124,7 +131,8 @@ func NewTaskRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec
 	}
 	req.BriefingBody = briefing.RenderTask(spec.Plan.Slug, spec.Plan.Title, task.ID, task.Title, task.Briefing, agentName, req.Worktree.BaseBranch, resolvedSettings, teamCtx)
 	req.Prompt = taskOneLinePrompt(spec.Plan.Slug, req)
-	if teamCtx != nil && agentName == "codex" && !req.PlanMode {
+	req.CodexTeamRequested = teamCtx != nil && agentName == "codex"
+	if req.CodexTeamRequested && !req.PlanMode() {
 		req.CodexTeamMode = true
 		req.CodexTeamStatusPath = codexapp.TeamStatusPath(projectRoot, task.ID, cfg.DryRun)
 	}
@@ -163,8 +171,8 @@ func NewManualRequest(cfg *cliflags.Config, projectRoot string, store state.Stor
 	}
 	briefingPath := ""
 	briefingBody := ""
-	codexPlanMode := cfg.PlanModeEnabled()
-	if codexPlanMode {
+	launchMode := launchModeFromPlanFlag(cfg)
+	if launchMode == agent.ModePlan {
 		body := opts.Body
 		if strings.TrimSpace(body) == "" {
 			body = prompt
@@ -195,10 +203,10 @@ func NewManualRequest(cfg *cliflags.Config, projectRoot string, store state.Stor
 		Hooks:        hookConfig,
 		BriefingPath: briefingPath,
 		BriefingBody: briefingBody,
-		PlanMode:     codexPlanMode,
+		LaunchMode:   launchMode,
 		Worktree:     worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh, AllowMissingOrigin: true, RefreshBestEffort: true}),
 	}
-	if req.PlanMode {
+	if req.CodexPlanMode() {
 		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
 	}
 	return req
@@ -238,8 +246,9 @@ func NewAttachedRequest(cfg *cliflags.Config, projectRoot string, store state.St
 	}
 	briefingPath := ""
 	briefingBody := ""
+	launchMode := launchModeFromPlanFlag(cfg)
 	switch {
-	case cfg.PlanModeEnabled():
+	case launchMode == agent.ModePlan:
 		planPrompt := briefing.RenderManualPlan(title, body)
 		if oversized {
 			briefingPath = attachedBriefingPath(projectRoot, parentRef, target, number)
@@ -273,9 +282,9 @@ func NewAttachedRequest(cfg *cliflags.Config, projectRoot string, store state.St
 		Hooks:               hookConfig,
 		BriefingPath:        briefingPath,
 		BriefingBody:        briefingBody,
-		PlanMode:            cfg.PlanModeEnabled(),
+		LaunchMode:          launchMode,
 	}
-	if req.PlanMode {
+	if req.CodexPlanMode() {
 		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
 	}
 	return req
@@ -431,10 +440,28 @@ func FirstPromptLine(prompt string) string {
 
 func oneLinePrompt(parentRef string, req Request) string {
 	action := "begin"
-	if req.PlanMode {
+	if req.PlanMode() {
 		action = "investigate, then propose a plan"
 	}
 	return fmt.Sprintf("%s%d of #%s] %s: %s. read %s and %s.", fanoutTagPrefix, req.Number, parentRef, req.Slug, req.ShortTitle, req.BriefingPath, action)
+}
+
+// issueLaunchMode makes both postures explicit only for issue children. Other
+// lanes opt into a mode when their owning setting migration lands.
+func issueLaunchMode(cfg *cliflags.Config) agent.LaunchMode {
+	if cfg.PlanModeEnabled() {
+		return agent.ModePlan
+	}
+	return agent.ModeBuild
+}
+
+// launchModeFromPlanFlag preserves the existing Codex Plan Mode manual and
+// attach paths without making their non-plan launches explicit yet.
+func launchModeFromPlanFlag(cfg *cliflags.Config) agent.LaunchMode {
+	if cfg.PlanModeEnabled() {
+		return agent.ModePlan
+	}
+	return ""
 }
 
 func taskOneLinePrompt(planSlug string, req Request) string {

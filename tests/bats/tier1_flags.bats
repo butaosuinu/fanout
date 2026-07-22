@@ -670,41 +670,49 @@ JSON
   [[ "$output" != *"agent is required"* ]]
 }
 
-@test "--codex-plan-mode requires --agent codex: exit 1" {
-  use_fixture scenario-sub-issue-only
-  run_fanout 100 --agent claude --codex-plan-mode --dry-run
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"codex plan mode requires every selected child to use agent codex"* ]]
+@test "--codex-plan-mode starts claude children with permission plan" {
+	use_fixture scenario-sub-issue-only
+	run_fanout 100 --agent claude --codex-plan-mode --dry-run
+	assert_success
+	[[ "$output" == *"claude --settings"* ]]
+	[[ "$output" == *"--permission-mode plan"* ]]
 }
 
-@test "--codex-plan-mode rejects non-codex per-issue override: exit 1" {
-  use_fixture scenario-sub-issue-only
-  run_fanout 100 --agent codex --agent 101=claude --codex-plan-mode --dry-run
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"codex plan mode requires every selected child to use agent codex"* ]]
+@test "--codex-plan-mode supports a non-codex per-issue override" {
+	use_fixture scenario-sub-issue-only
+	run_fanout 100 --agent codex --agent 101=claude --codex-plan-mode --dry-run
+	assert_success
+	[[ "$output" == *"--permission-mode plan"* ]]
+	[[ "$output" == *"__codex-plan-tui"* ]]
 }
 
-@test "FANOUT_CODEX_PLAN_MODE rejects a non-codex child before launch" {
-  use_fixture scenario-sub-issue-only
-  export FANOUT_CODEX_PLAN_MODE=1
-  run_fanout 100 --agent codex --agent 101=claude --dry-run
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"codex plan mode requires every selected child to use agent codex"* ]]
-  [[ "$output" == *"#101 resolves to claude"* ]]
+@test "FANOUT_CODEX_PLAN_MODE applies plan mode to a non-codex child" {
+	use_fixture scenario-sub-issue-only
+	export FANOUT_CODEX_PLAN_MODE=1
+	run_fanout 100 --agent opencode --dry-run
+	assert_success
+	[[ "$output" == *"opencode --agent plan --prompt"* ]]
 }
 
 @test "--agent opencode accepted: dry-run routes the prompt through --prompt" {
   use_fixture scenario-sub-issue-only
-  run_fanout 100 --agent opencode --dry-run --sleep 0
-  assert_success
-  [[ "$output" == *"opencode --prompt"* ]]
+	run_fanout 100 --agent opencode --dry-run --sleep 0
+	assert_success
+	[[ "$output" == *"opencode --agent build --prompt"* ]]
+}
+
+@test "non-plan claude issue children use explicit auto permission mode" {
+	use_fixture scenario-sub-issue-only
+	run_fanout 100 --agent claude --dry-run --sleep 0
+	assert_success
+	[[ "$output" == *"--permission-mode auto"* ]]
 }
 
 @test "--agent opencode per-issue override accepted: exit 0" {
   use_fixture scenario-sub-issue-only
-  run_fanout 100 --agent claude --agent 101=opencode --dry-run --sleep 0
-  assert_success
-  [[ "$output" == *"opencode --prompt"* ]]
+	run_fanout 100 --agent claude --agent 101=opencode --dry-run --sleep 0
+	assert_success
+	[[ "$output" == *"opencode --agent build --prompt"* ]]
 }
 
 @test "plan --agent task-id=opencode override accepted: exit 0" {

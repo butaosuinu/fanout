@@ -150,6 +150,7 @@ func launchParentIssueFanout(projectRoot, session, commandName string, cfg *clif
 type parentIssueFanoutResult struct {
 	Watch          watch.ParentLaunchResult
 	CreatedPaneIDs []string
+	Notice         string
 	runtimeBackend backend.Backend
 }
 
@@ -179,7 +180,11 @@ func launchParentIssueFanoutWithResult(projectRoot, session, commandName string,
 		}
 	}
 	execution, code := run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, runReady)
-	result := parentIssueFanoutResult{CreatedPaneIDs: execution.CreatedPaneIDs, runtimeBackend: rt.Backend}
+	result := parentIssueFanoutResult{
+		CreatedPaneIDs: execution.CreatedPaneIDs,
+		Notice:         bufferedLaunchNotice(stderr),
+		runtimeBackend: rt.Backend,
+	}
 	if code != exitcode.OK {
 		return result, bufferedLaunchError(stdout, stderr, "launch parent")
 	}

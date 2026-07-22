@@ -146,7 +146,7 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 		Agent:               "codex",
 		ShellKey:            "shell-state-pane",
 		Wave:                "wave5",
-		PlanMode:            true,
+		LaunchMode:          agent.ModePlan,
 		Worktree:            worktree.Plan{BaseBranch: "main"},
 	}
 
@@ -275,6 +275,9 @@ func TestCreatePaneAcceptsManualRequestWithoutParentIssue(t *testing.T) {
 	if req.Agent != "codex" || !strings.Contains(req.Prompt, "inspect the workspace") {
 		t.Fatalf("manual launch = prompt %q agent %q", req.Prompt, req.Agent)
 	}
+	if req.LaunchMode != "" {
+		t.Fatalf("manual LaunchMode = %q, want flag-free non-plan launch", req.LaunchMode)
+	}
 	wantBriefingPath := briefing.Path("/repo", -2)
 	if req.BriefingPath != wantBriefingPath || req.BriefingBody != "extra context" {
 		t.Fatalf("manual briefing = path %q body %q", req.BriefingPath, req.BriefingBody)
@@ -340,7 +343,7 @@ func TestNewManualRequestPlanModeUsesPlanControllerAndPlanPrompt(t *testing.T) {
 		Prompt: "Inspect API",
 	})
 
-	if !req.PlanMode {
+	if !req.PlanMode() {
 		t.Fatal("PlanMode = false, want true")
 	}
 	if req.BriefingPath != "" || req.BriefingBody != "" {
@@ -459,6 +462,9 @@ func TestNewAttachedRequestRoutesOversizedPromptThroughBriefing(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := NewAttachedRequest(tc.cfg, t.TempDir(), state.Store{}, hooks.EmptyConfig(), prompt, "/repo/worktree", target)
+			if got := req.PlanMode(); got != tc.wantPlanPrompt {
+				t.Fatalf("attached PlanMode = %t, want %t (launch mode %q)", got, tc.wantPlanPrompt, req.LaunchMode)
+			}
 			if req.BriefingPath == "" || !strings.Contains(req.BriefingBody, prompt) {
 				t.Fatalf("briefing = path %q body length %d, want path containing full %d-byte prompt", req.BriefingPath, len(req.BriefingBody), len(prompt))
 			}
@@ -478,6 +484,9 @@ func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "Do it"}
 
 	taskReq := NewTaskRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	if taskReq.LaunchMode != "" {
+		t.Fatalf("task pane LaunchMode = %q, want flag-free launch", taskReq.LaunchMode)
+	}
 	if !taskReq.Worktree.AllowMissingOrigin {
 		t.Fatal("task pane AllowMissingOrigin = false, want true")
 	}
@@ -486,6 +495,9 @@ func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
 	}
 
 	manualReq := NewManualRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), ManualOptions{Title: "Manual diagnostics"})
+	if manualReq.LaunchMode != "" {
+		t.Fatalf("manual pane LaunchMode = %q, want flag-free launch", manualReq.LaunchMode)
+	}
 	if !manualReq.Worktree.AllowMissingOrigin {
 		t.Fatal("manual pane AllowMissingOrigin = false, want true")
 	}
@@ -498,6 +510,9 @@ func TestCreatePaneIssueDryRunDoesNotWriteBriefing(t *testing.T) {
 	projectRoot := t.TempDir()
 	cfg := &cliflags.Config{ParentRef: "100", Agent: "claude", BaseBranch: "main", DryRun: true, NoRefresh: true}
 	req := NewIssueRequest(cfg, projectRoot, ghissue.Issue{Number: 101, Title: "First child", Body: "body"}, settings.Defaults(), hooks.EmptyConfig(), false, nil)
+	if req.LaunchMode != agent.ModeBuild {
+		t.Fatalf("issue LaunchMode = %q, want build", req.LaunchMode)
+	}
 
 	assertCreatePaneDryRunDoesNotWriteBriefing(t, cfg, projectRoot, req)
 }
@@ -687,7 +702,7 @@ func TestAttachRecordsRecoveryRowWhenCodexStartupAndCloseFail(t *testing.T) {
 		Slug:                "codex-plan",
 		Prompt:              "plan",
 		Agent:               "codex",
-		PlanMode:            true,
+		LaunchMode:          agent.ModePlan,
 		CodexPlanStatusPath: statusPath,
 		Hooks:               hooks.EmptyConfig(),
 	}
@@ -1029,8 +1044,8 @@ func TestNewWatchRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
 	if got.Prompt != wantPrompt {
 		t.Fatalf("prompt = %q, want %q", got.Prompt, wantPrompt)
 	}
-	if got.PlanMode || got.CodexPlanStatusPath != "" {
-		t.Fatalf("codex plan mode = %t status %q, want disabled for watch work pane", got.PlanMode, got.CodexPlanStatusPath)
+	if got.PlanMode() || got.LaunchMode != "" || got.CodexPlanStatusPath != "" {
+		t.Fatalf("plan mode = %t launch mode %q status %q, want flag-free watch work pane", got.PlanMode(), got.LaunchMode, got.CodexPlanStatusPath)
 	}
 	for _, want := range []string{
 		"You are assigned GitHub issue #223",
@@ -1117,11 +1132,11 @@ func TestNewIssueRequestPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 
 	got := NewIssueRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, teamCtx)
 
-	if !got.PlanMode {
+	if !got.PlanMode() {
 		t.Fatal("PlanMode = false, want true")
 	}
-	if got.CodexTeamMode || got.CodexTeamStatusPath != "" {
-		t.Fatalf("Codex team bridge = %t status %q, want Plan Mode precedence", got.CodexTeamMode, got.CodexTeamStatusPath)
+	if !got.CodexTeamRequested || got.CodexTeamMode || got.CodexTeamStatusPath != "" {
+		t.Fatalf("Codex team request/bridge = %t/%t status %q, want Plan Mode precedence", got.CodexTeamRequested, got.CodexTeamMode, got.CodexTeamStatusPath)
 	}
 	if !strings.Contains(got.Prompt, "read "+briefing.Path("/repo", 501)+" and investigate, then propose a plan.") {
 		t.Fatalf("prompt = %q, want plan action", got.Prompt)
@@ -1132,7 +1147,7 @@ func TestNewIssueRequestPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
 	if !strings.Contains(got.BriefingBody, "<proposed_plan>...</proposed_plan>") {
 		t.Fatalf("briefing did not require proposed_plan wrapper:\n%s", got.BriefingBody)
 	}
-	for _, unexpected := range []string{"commit and push", "Open a pull request", "Your first response must"} {
+	for _, unexpected := range []string{"Your first response must"} {
 		if strings.Contains(got.BriefingBody, unexpected) {
 			t.Fatalf("plan briefing contains implementation instruction %q:\n%s", unexpected, got.BriefingBody)
 		}
@@ -1155,6 +1170,18 @@ func TestNewTaskRequestCodexTeamUsesTaskIdentityAndStatusPath(t *testing.T) {
 	}
 	if member := codexTeamMember(got); member != "api-client" {
 		t.Fatalf("codexTeamMember() = %q, want api-client", member)
+	}
+}
+
+func TestNewTaskRequestDoesNotConsumeLegacyPlanFlag(t *testing.T) {
+	cfg := &cliflags.Config{Agent: "claude", PlanMode: new(true)}
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
+	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "body"}
+
+	got := NewTaskRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+
+	if got.LaunchMode != "" {
+		t.Fatalf("LaunchMode = %q, want flag-free plan task launch", got.LaunchMode)
 	}
 }
 
@@ -1259,7 +1286,7 @@ func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testin
 		Number:              1,
 		Prompt:              "[fanout #1] plan",
 		Agent:               "codex",
-		PlanMode:            true,
+		LaunchMode:          agent.ModePlan,
 		CodexPlanStatusPath: "/tmp/fanout-codex-plan-repo-1.json",
 	}
 
@@ -1274,14 +1301,97 @@ func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testin
 	}
 }
 
-func TestBuildAgentCommandRejectsPlanModeRequestForNonCodexAgent(t *testing.T) {
-	_, err := buildAgentCommand(
-		&cliflags.Config{DryRun: true},
-		Request{Agent: "claude", PlanMode: true},
-		"fanout-go",
-	)
-	if err == nil || !strings.Contains(err.Error(), "codex plan mode requires agent codex; pane resolves to claude") {
-		t.Fatalf("buildAgentCommand() error = %v, want resolved-agent rejection", err)
+func TestBuildAgentCommandInjectsPlanModeForNonCodexAgents(t *testing.T) {
+	for _, tc := range []struct {
+		agent string
+		want  string
+	}{
+		{agent: "claude", want: "--permission-mode plan"},
+		{agent: "opencode", want: "--agent plan"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			got, err := buildAgentCommand(
+				&cliflags.Config{DryRun: true},
+				Request{Agent: tc.agent, Prompt: "plan", LaunchMode: agent.ModePlan},
+				"fanout-go",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("buildAgentCommand() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildAgentCommandInjectsBuildModeForIssueAgents(t *testing.T) {
+	for _, tc := range []struct {
+		agent string
+		want  string
+	}{
+		{agent: "claude", want: "--permission-mode auto"},
+		{agent: "opencode", want: "--agent build"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			got, err := buildAgentCommand(
+				&cliflags.Config{DryRun: true},
+				Request{Agent: tc.agent, Prompt: "work", LaunchMode: agent.ModeBuild},
+				"fanout-go",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("buildAgentCommand() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPreflightClaudeLaunchModeOmitsFlagsBelowMinimum(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		version     string
+		wantMode    agent.LaunchMode
+		wantWarning bool
+	}{
+		{name: "minimum", version: "2.1.207 (Claude Code)", wantMode: agent.ModePlan},
+		{name: "newer", version: "2.2.0 (Claude Code)", wantMode: agent.ModePlan},
+		{name: "older", version: "2.1.206 (Claude Code)", wantWarning: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installClaudeVersionExecutable(t, tc.version)
+			var stderr bytes.Buffer
+			launcher := &Launcher{Cfg: &cliflags.Config{}, Log: log.NewWith(io.Discard, &stderr, false)}
+			req := Request{ParentRef: "100", Number: 101, Agent: "claude", LaunchMode: agent.ModePlan}
+
+			launcher.preflightClaudeLaunchMode(&req)
+
+			if req.LaunchMode != tc.wantMode {
+				t.Fatalf("LaunchMode = %q, want %q", req.LaunchMode, tc.wantMode)
+			}
+			gotWarning := strings.Contains(stderr.String(), "Claude Code 2.1.207+ is required")
+			if gotWarning != tc.wantWarning {
+				t.Fatalf("warning = %q, want warning=%t", stderr.String(), tc.wantWarning)
+			}
+		})
+	}
+}
+
+func TestLogPaneRequestWarnsOnceWhenPlanDisablesCodexTeamBridge(t *testing.T) {
+	var stderr bytes.Buffer
+	logPaneRequest(Request{
+		ParentRef:          "100",
+		Number:             101,
+		Agent:              "codex",
+		LaunchMode:         agent.ModePlan,
+		CodexTeamRequested: true,
+	}, log.NewWith(io.Discard, &stderr, false))
+
+	want := "plan mode takes precedence over --team; Codex team bridge is disabled for this pane"
+	if count := strings.Count(stderr.String(), want); count != 1 {
+		t.Fatalf("warning count = %d, want 1:\n%s", count, stderr.String())
 	}
 }
 
@@ -1323,7 +1433,7 @@ func TestBuildAgentCommandLeavesStartGateToBackend(t *testing.T) {
 func TestBuildAgentCommandRejectsStartGateInPlanMode(t *testing.T) {
 	_, err := buildAgentCommand(
 		&cliflags.Config{Agent: "codex", DryRun: true, PlanMode: new(true)},
-		Request{Agent: "codex", PlanMode: true, AgentStartGate: "gate"},
+		Request{Agent: "codex", LaunchMode: agent.ModePlan, AgentStartGate: "gate"},
 		"fanout-go",
 	)
 	if err == nil || !strings.Contains(err.Error(), "agent start gate is not supported in Codex Plan Mode") {
@@ -1354,7 +1464,7 @@ func TestBuildAgentCommandPinsFanoutBinaryForLiveModes(t *testing.T) {
 			req: Request{
 				Agent:               "codex",
 				Prompt:              "plan",
-				PlanMode:            true,
+				LaunchMode:          agent.ModePlan,
 				CodexPlanStatusPath: "/tmp/status.json",
 			},
 		},
@@ -1448,7 +1558,18 @@ func installFakeExecutable(t *testing.T, name string) {
 	t.Helper()
 	binDir := t.TempDir()
 	path := filepath.Join(binDir, name)
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ]; then printf '2.1.207 (Claude Code)\\n'; fi\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func installClaudeVersionExecutable(t *testing.T, version string) {
+	t.Helper()
+	binDir := t.TempDir()
+	path := filepath.Join(binDir, "claude")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' %s\n", agent.ShellQuote(version))
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))

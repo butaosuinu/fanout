@@ -1093,6 +1093,38 @@ func TestRestoreAgentCommandUsesSavedCodexPlanThread(t *testing.T) {
 	}
 }
 
+func TestRestoreAgentCommandUsesGenericResumeForNonCodexPlanPane(t *testing.T) {
+	for _, tc := range []struct {
+		agent string
+		want  string
+	}{
+		{agent: "claude", want: "--continue"},
+		{agent: "opencode", want: "--continue"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			installRestoreAgentScript(t, tc.agent)
+			command, statusPath, err := restoreAgentCommand(state.Pane{
+				Agent:    tc.agent,
+				PlanMode: true,
+			}, t.TempDir(), "fanout")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if statusPath != "" {
+				t.Fatalf("statusPath = %q, want empty generic resume path", statusPath)
+			}
+			if !strings.Contains(command, tc.want) {
+				t.Fatalf("command = %q, want %q", command, tc.want)
+			}
+			for _, unwanted := range []string{"__codex-plan-tui", "--permission-mode", "--agent plan"} {
+				if strings.Contains(command, unwanted) {
+					t.Fatalf("command = %q, unexpectedly contains %q", command, unwanted)
+				}
+			}
+		})
+	}
+}
+
 func TestRestoreAgentCommandPinsFanoutBinaryForNormalAgent(t *testing.T) {
 	installRestoreAgentScript(t, "claude")
 	command, statusPath, err := restoreAgentCommand(state.Pane{Agent: "claude"}, t.TempDir(), "fanout")

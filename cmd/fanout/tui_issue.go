@@ -254,6 +254,9 @@ func finishTUIIssueParentLaunch(issueNum int, orchestratorPaneID string, result 
 	if result.Watch.Deferred {
 		notice += "; blocked/deferred children remain - re-select the issue later"
 	}
+	if result.Notice != "" {
+		notice += "; " + result.Notice
+	}
 	return fanouttui.LaunchResult{Notice: notice, CreatedPaneIDs: createdPaneIDs}, nil
 }
 
