@@ -174,6 +174,10 @@ type pathIdentity struct {
 	inode  uint64
 }
 
+func normalizeStatDevice[T ~int32 | ~uint32 | ~uint64](device T) uint64 {
+	return uint64(device)
+}
+
 type supervisorStarter func(markerPath, nonce, startToken string) (int, error)
 
 func EnsureOwned(ctx context.Context, opts OwnedOptions) (*OwnedSession, error) {
@@ -439,7 +443,7 @@ func openCanonicalGitCommonDir(raw string) (string, pathIdentity, error) {
 	if !ok || stat.Dev == 0 || stat.Ino == 0 {
 		return "", pathIdentity{}, fmt.Errorf("git common directory %s has no physical identity", resolved)
 	}
-	return resolved, pathIdentity{device: uint64(stat.Dev), inode: stat.Ino}, nil
+	return resolved, pathIdentity{device: normalizeStatDevice(stat.Dev), inode: stat.Ino}, nil
 }
 
 func prepareOwnedLayout(runtimeBase, session string) (ownedLayout, error) {

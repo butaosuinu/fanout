@@ -43,6 +43,15 @@ type fakeOwnedSupervisor struct {
 	listeners []net.Listener
 }
 
+func TestNormalizeStatDeviceSupportsDarwinAndLinuxWidths(t *testing.T) {
+	if got := normalizeStatDevice(int32(42)); got != 42 {
+		t.Fatalf("normalizeStatDevice(int32) = %d, want 42", got)
+	}
+	if got := normalizeStatDevice(uint64(81)); got != 81 {
+		t.Fatalf("normalizeStatDevice(uint64) = %d, want 81", got)
+	}
+}
+
 func testBehaviorProfile(binarySHA256, schemaSHA256 string) behaviorProfile {
 	profile := productionBehaviorProfile()
 	profile.source = "test-fixture"
