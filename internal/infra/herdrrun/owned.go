@@ -1174,19 +1174,27 @@ func RunSupervisor(args []string, errw io.Writer) int {
 		}
 	}
 	reaped = true
-	if err := cleanupOwnedSockets(markerPath, marker, lock); err != nil {
-		fmt.Fprintf(errw, "fanout herdr supervisor: socket cleanup: %v\n", err)
+	if err := retireOwnedSession(layout, marker, lock); err != nil {
+		fmt.Fprintf(errw, "fanout herdr supervisor: retire owned session: %v\n", err)
 		return 1
 	}
 	return code
 }
 
-func cleanupOwnedSockets(markerPath string, marker ownerMarker, lock *os.File) error {
-	current, found, err := readOwnerMarker(markerPath)
+func retireOwnedSession(layout ownedLayout, marker ownerMarker, supervisorLock *os.File) error {
+	ctx, cancel := context.WithTimeout(context.Background(), ownedReadyTimeout)
+	defer cancel()
+	lifecycleLock, err := lockPrivateFileContext(ctx, layout.lifecycleLock)
+	if err != nil {
+		return fmt.Errorf("lock lifecycle for retirement: %w", err)
+	}
+	defer unlockPrivateFile(lifecycleLock)
+
+	current, found, err := readOwnerMarker(layout.markerPath)
 	if err != nil || !found || current != marker {
 		return fmt.Errorf("ownership marker changed before socket cleanup")
 	}
-	lease, err := readLeaseFromFile(lock)
+	lease, err := readLeaseFromFile(supervisorLock)
 	if err != nil || lease.PID != marker.SupervisorPID || lease.OwnerNonce != marker.OwnerNonce || lease.StartToken != marker.SupervisorStartToken {
 		return fmt.Errorf("supervisor lease changed before socket cleanup")
 	}
@@ -1203,6 +1211,15 @@ func cleanupOwnedSockets(markerPath string, marker ownerMarker, lock *os.File) e
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("herdr owned socket %s still exists after cleanup", path)
 		}
+	}
+	if err := os.Remove(layout.markerPath); err != nil {
+		return fmt.Errorf("retire herdr ownership marker: %w", err)
+	}
+	if _, err := os.Lstat(layout.markerPath); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return fmt.Errorf("verify retired herdr ownership marker: %w", err)
+		}
+		return fmt.Errorf("herdr ownership marker still exists after retirement")
 	}
 	return nil
 }

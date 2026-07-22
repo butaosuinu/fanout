@@ -16,7 +16,7 @@ type commandSurface struct {
 var requiredCommandSurfaces = []commandSurface{
 	{args: []string{"pane", "read"}, required: []string{"Usage: herdr pane read", "--source", "--lines", "--format"}},
 	{args: []string{"agent", "prompt"}, required: []string{"Usage: herdr agent prompt <TARGET> <TEXT>", "--wait", "--until", "--timeout"}},
-	{args: []string{"workspace", "focus"}, required: []string{"Usage: herdr workspace focus <workspace_id>"}},
+	{args: []string{"agent", "focus"}, required: []string{"Usage: herdr agent focus <target>"}},
 	{args: []string{"pane", "close"}, required: []string{"Usage: herdr pane close <pane_id>"}},
 	{args: []string{"workspace", "close"}, required: []string{"Usage: herdr workspace close <workspace_id>"}},
 }

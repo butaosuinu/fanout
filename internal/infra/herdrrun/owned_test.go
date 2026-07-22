@@ -96,13 +96,19 @@ func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (int, 
 }
 
 func (s *fakeOwnedSupervisor) close() {
-	for _, listener := range s.listeners {
-		_ = listener.Close()
-	}
+	s.closeSockets()
 	if s.lock != nil {
 		_ = syscall.Flock(int(s.lock.Fd()), syscall.LOCK_UN)
 		_ = s.lock.Close()
+		s.lock = nil
 	}
+}
+
+func (s *fakeOwnedSupervisor) closeSockets() {
+	for _, listener := range s.listeners {
+		_ = listener.Close()
+	}
+	s.listeners = nil
 }
 
 func newOwnedHarness(t *testing.T) *ownedHarness {
@@ -361,6 +367,26 @@ func TestEnsureOwnedFailsClosedAfterDeadSupervisor(t *testing.T) {
 	}
 }
 
+func TestVerifiedSupervisorShutdownRetiresMarkerAndAllowsRestart(t *testing.T) {
+	h := newOwnedHarness(t)
+	marker, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("readOwnerMarker() = %+v, %v, %v", marker, found, err)
+	}
+	h.supervisor.closeSockets()
+	if err := retireOwnedSession(h.layout, marker, h.supervisor.lock); err != nil {
+		t.Fatal(err)
+	}
+	h.supervisor.close()
+	if _, found, err := readOwnerMarker(h.layout.markerPath); err != nil || found {
+		t.Fatalf("retired owner marker found=%t err=%v", found, err)
+	}
+	restarted := h.ensure()
+	if restarted.Session != h.session.Session || h.supervisor.starts != 2 {
+		t.Fatalf("restarted session = %+v; starts=%d", restarted, h.supervisor.starts)
+	}
+}
+
 func TestStageExecutablePinsOpenedBytesBeforeCommands(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
@@ -594,11 +620,15 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 			return []byte("one\ntwo\n"), nil
 		case slices.Equal(args, []string{"agent", "prompt", "w2:p1", "hello"}):
 			return agentPromptResponse(target, nil), nil
-		case slices.Equal(args, []string{"workspace", "focus", "w2"}):
+		case slices.Equal(args, []string{"agent", "focus", target.AgentID}):
 			h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
-				for i := range *snapshot.Workspaces {
-					focused := (*snapshot.Workspaces)[i].WorkspaceID == "w2"
-					(*snapshot.Workspaces)[i].Focused = &focused
+				for i := range *snapshot.Panes {
+					focused := (*snapshot.Panes)[i].PaneID == target.Ref.Pane
+					(*snapshot.Panes)[i].Focused = &focused
+				}
+				for i := range *snapshot.Agents {
+					focused := (*snapshot.Agents)[i].PaneID == target.Ref.Pane
+					(*snapshot.Agents)[i].Focused = &focused
 				}
 			})
 			return nil, nil
@@ -629,6 +659,49 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 	}
 	if err := bound.Close(target.Ref); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBoundOwnedBackendRejectsAgentFocusWithoutTargetPaneFocus(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if !slices.Equal(args, []string{"agent", "focus", target.AgentID}) {
+			return nil, fmt.Errorf("unexpected mutation args %v", args)
+		}
+		return nil, nil
+	}
+	bound, err := h.session.Backend().BindOwnedTarget(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bound.Focus(target.Ref); !errors.Is(err, ErrOwnedIdentityMismatch) {
+		t.Fatalf("Focus() unfocused target error = %v", err)
+	}
+}
+
+func TestBoundOwnedBackendRejectsFocusWithoutLiveAgentIdentity(t *testing.T) {
+	h := newOwnedHarness(t)
+	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+		for i := range *snapshot.Panes {
+			if (*snapshot.Panes)[i].PaneID == "w2:p1" {
+				(*snapshot.Panes)[i].AgentSession = nil
+			}
+		}
+		agents := slices.DeleteFunc(*snapshot.Agents, func(agent agentJSON) bool { return agent.PaneID == "w2:p1" })
+		snapshot.Agents = &agents
+	})
+	target := h.target()
+	bound, err := h.session.Backend().BindOwnedTarget(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := len(h.fake.commands)
+	if err := bound.Focus(target.Ref); !errors.Is(err, ErrOwnedIdentityMismatch) {
+		t.Fatalf("Focus() without live agent error = %v", err)
+	}
+	if len(h.fake.commands) != baseline {
+		t.Fatalf("focus without live agent invoked herdr: before=%d after=%d", baseline, len(h.fake.commands))
 	}
 }
 

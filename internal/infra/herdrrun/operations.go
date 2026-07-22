@@ -237,6 +237,9 @@ func (b *Backend) focusCore(ref corebackend.PaneRef) error {
 }
 
 func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) error {
+	if target.AgentID == "" || target.AgentSession == nil {
+		return fmt.Errorf("%w: focus requires a saved live-agent identity", ErrOwnedIdentityMismatch)
+	}
 	admission, lock, err := b.acquireOwnedOperation(ctx)
 	if err != nil {
 		return err
@@ -246,17 +249,17 @@ func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) erro
 	if err != nil {
 		return err
 	}
-	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "focus", target.Ref.Workspace)
+	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "agent", "focus", target.AgentID)
 	if err != nil {
-		return fmt.Errorf("herdr workspace focus (not retried): %w", err)
+		return fmt.Errorf("herdr agent focus (not retried): %w", err)
 	}
 	view, err := b.ownedSnapshotView(ctx, admission)
 	if err != nil {
 		return err
 	}
 	current, ok := view.find(target.Ref)
-	if !ok || !ownedPaneMatches(target, current) || !current.workspaceFocused {
-		return fmt.Errorf("%w: workspace focus did not preserve the admitted target", ErrOwnedIdentityMismatch)
+	if !ok || !ownedPaneMatches(target, current) || !current.paneFocused {
+		return fmt.Errorf("%w: agent focus did not focus the admitted pane", ErrOwnedIdentityMismatch)
 	}
 	return nil
 }
@@ -353,14 +356,13 @@ type ownedSnapshotView struct {
 
 type ownedWorkspaceView struct {
 	label        string
-	focused      bool
 	repoKey      string
 	worktreePath string
 }
 
 type ownedPaneView struct {
-	identity         OwnedPaneIdentity
-	workspaceFocused bool
+	identity    OwnedPaneIdentity
+	paneFocused bool
 }
 
 func (b *Backend) ownedSnapshotView(ctx context.Context, admission ownedAdmission) (ownedSnapshotView, error) {
@@ -387,7 +389,7 @@ func (b *Backend) ownedSnapshotView(ctx context.Context, admission ownedAdmissio
 		if workspace.Worktree != nil {
 			worktreePath, repoKey = workspace.Worktree.CheckoutPath, workspace.Worktree.RepoKey
 		}
-		view.workspaces[workspace.WorkspaceID] = ownedWorkspaceView{label: workspace.Label, focused: workspace.Focused != nil && *workspace.Focused, repoKey: repoKey, worktreePath: worktreePath}
+		view.workspaces[workspace.WorkspaceID] = ownedWorkspaceView{label: workspace.Label, repoKey: repoKey, worktreePath: worktreePath}
 	}
 	for _, pane := range panes {
 		workspace := view.workspaces[pane.Ref.Workspace]
@@ -397,7 +399,7 @@ func (b *Backend) ownedSnapshotView(ctx context.Context, admission ownedAdmissio
 			WorktreePath: pane.WorktreePath, CurrentPath: pane.CurrentPath, AgentID: pane.AgentID,
 			AgentSession: cloneAgentSession(pane.AgentSession),
 		}
-		view.panes[pane.Ref] = ownedPaneView{identity: identity, workspaceFocused: workspace.focused}
+		view.panes[pane.Ref] = ownedPaneView{identity: identity, paneFocused: pane.FocusKnown && pane.Focused}
 	}
 	return view, nil
 }
