@@ -110,15 +110,16 @@ herdr status --json   # server and session state
 
 ## "unsupported herdr CLI version ..." / "unsupported herdr API tuple ..."
 
-fanout pins the verified herdr tuple — CLI and server 0.7.3, protocol 16, API schema version 1 — and anything else fails closed, including newer versions. `herdr 0.7.3 is required: ...` means the `herdr` binary was not found on `PATH`. Check what is actually installed:
+fanout requires stable herdr 0.7.5 or newer, protocol 17, and API schema version 1. The CLI and server versions must match. Prerelease or malformed versions fail closed, and a newer stable version is accepted only when the schema and CLI help still contain every capability fanout uses. `herdr stable >=0.7.5 is required: ...` means the `herdr` binary was not found on `PATH`. Check what is actually installed:
 
 ```bash
-herdr --version          # must print: herdr 0.7.3
-herdr status --json      # server tuple: version, protocol, compatible
-herdr api schema --json  # API tuple: protocol 16, schema_version 1
+herdr --version          # stable 0.7.5 or newer
+herdr status --json      # matching client/server version, protocol 17, compatible
+herdr api schema --json  # protocol 17, schema_version 1, required methods and fields
+herdr pane read --help   # required CLI surface; repeat for the command named in the error
 ```
 
-Install herdr 0.7.3 to match. If the message is `requires a client/server restart`, restart the herdr server and client so both run the same build.
+Install or upgrade to stable herdr 0.7.5 or newer. If the message is `requires a client/server restart`, restart the herdr server and client so both run the same build.
 
 ## "herdr backend v1 is observation-only; ... is unavailable"
 

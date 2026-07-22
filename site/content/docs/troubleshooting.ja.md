@@ -132,17 +132,19 @@ TUI 版のエラー `run fanout inside an existing herdr pane (HERDR_ENV=1)` は
 
 ## "unsupported herdr CLI version ..." / "unsupported herdr API tuple ..."
 
-fanout は検証済みの herdr の組 — CLI と server 0.7.3、protocol 16、API schema version 1 — に固定し、それ以外は新しい version でも fail closed します。
-`herdr 0.7.3 is required: ...` は、`PATH` に `herdr` バイナリが見つからないという意味です。
+fanout は stable herdr 0.7.5 以上、protocol 17、API schema version 1 を要求します。CLI と server の version は一致させてください。
+prerelease と解釈できない version は fail closed します。新しい stable version は、fanout が使う capability が schema と CLI help にすべて残っている場合だけ使えます。
+`herdr stable >=0.7.5 is required: ...` は、`PATH` に `herdr` バイナリが見つからないという意味です。
 実際に入っているものを確認してください。
 
 ```bash
-herdr --version          # herdr 0.7.3 と出ること
-herdr status --json      # server の組: version、protocol、compatible
-herdr api schema --json  # API の組: protocol 16、schema_version 1
+herdr --version          # stable 0.7.5 以上
+herdr status --json      # client/server の version 一致、protocol 17、compatible
+herdr api schema --json  # protocol 17、schema_version 1、必要な method と field
+herdr pane read --help   # 必要な CLI surface。エラーに出た command でも確認する
 ```
 
-herdr 0.7.3 を入れて合わせてください。`requires a client/server restart` が出る場合は、herdr の server と client を再起動して同じビルドに揃えます。
+stable herdr 0.7.5 以上へ更新してください。`requires a client/server restart` が出る場合は、herdr の server と client を再起動して同じビルドに揃えます。
 
 ## "herdr backend v1 is observation-only; ... is unavailable"
 
