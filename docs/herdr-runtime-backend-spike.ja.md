@@ -594,10 +594,21 @@ current Go / Darwin には検証済み FD をそのまま実行する portable �
 `entrypoint_spec` は source provenance と監査情報だけを持ち、実行 authority には使わない。
 
 - `entrypoint_spec` は provider、requested command、lexical absolute path、全 symlink hop の path / raw target / lstat identity、physical terminal target の device / inode / owner / mode / size / SHA-256、workload `PATH` fingerprint を持つ。
-- `launch_bundle_spec` は schema version、operation kind、provider、matcher ID / version、platform、architecture、bundle digest、bundle root device / inode、entry relative path、正規化済み argv、全 file record、platform runtime binding を持つ。
-  file record は relative path、type、mode、size、SHA-256、実行に影響する xattr を持つ。
-  manifest payload は publish 後に決まる bundle digest と root device / inode を含めず、残る各 field を length-prefix した canonical bytes にする。
+- `launch_bundle_spec` は schema version、operation kind、provider、matcher ID / version、platform、architecture、bundle digest、bundle root device / inode、entry relative path、正規化済み argv、runtime entry record、platform runtime binding を持つ。
+  runtime entry record は bundle root と予約 path `manifest` 以外の全 filesystem entry を一回ずつ列挙し、共通 field の relative path、type、mode と type 別 field を持つ。
+  regular file record は exact byte size と SHA-256、directory record は追加 field なし、symlink record は lstat した raw target bytes を持つ。
+  directory の filesystem size / hash は記録せず、record の path 集合と実 tree の完全一致で child topology を固定する。
+  symlink target は non-empty relative raw bytes だけを admit し、leading `/` と absolute target を拒否する。
+  target は symlink parent の列挙済み relative path から lexical に解決し、bundle root からの escape、cycle、未列挙 entry を拒否する。
+  final bundle root pathname と directory digest は解決入力に使わず、他の file type と hard link も拒否する。
+  実行に影響する xattr は type ごとの record に含め、name の raw byte 列順で並べた name / value をそれぞれ length-prefix し、duplicate name と allowlist 外の xattr を拒否する。
+  record は正規化した relative path の UTF-8 byte 列順に並べ、空 path、重複、絶対 path、`.` / `..` segment、予約 path との衝突を拒否する。
+  `bundle_payload` は ASCII bytes `fanout.launch-bundle.payload.v1` を length-prefix した domain separator から始め、publish 後に決まる bundle digest、root device / inode、outer manifest の bytes と record を含めず、残る各 field と runtime entry record を length-prefix した canonical bytes にする。
   payload の SHA-256 を `launch_bundle_spec.bundle_digest` と directory 名 `sha256-<digest>` に使い、publish 後の root device / inode は同じ spec の runtime identity として別に保存する。
+  bundle root の予約 path `manifest` は schema 固定 field 順の length-prefix encoding で schema version、hash algorithm、exact `bundle_payload`、bundle digest を持つ deterministic outer manifest とし、自身の size / SHA-256 を payload へ戻さない。
+  parser は unknown field と duplicate key を拒否し、manifest の raw bytes が parsed value の canonical re-encode と一致することを要求する。
+  builder は outer manifest の identity / size / SHA-256 を `bundle-build-realized` journal へ保存する。
+  verifier は outer manifest を no-follow FD から読み、canonical encoding、payload digest、directory 名の digest、実 tree が `manifest` と runtime entry record の集合に完全一致すること、journal に保存した outer manifest identity / size / SHA-256 を順に照合する。
 - closure は launcher から provider-native foreground process までに実行または load する全 user-mutable byte を含む。
   native executable、helper、provider child、非 system dynamic library、script interpreter、script、package tree、module、native child を同じ bundle に入れる。
   Codex の Node wrapper は pinned Node、package-relative layout、native Codex child を含め、Claude の symlink entrypoint は terminal Mach-O と非 system dependency を含める。
@@ -608,14 +619,29 @@ current Go / Darwin には検証済み FD をそのまま実行する portable �
 
 bundle builder は source を no-follow FD で開き、同じ FD から hash と copy を行う。
 staging directory は physical git common directory 配下の `fanout/launch-bundles/.staging-<nonce>` とし、directory を 0700、各 file を `O_EXCL` / `O_NOFOLLOW` で作る。
-staging 作成前に build nonce、deterministic staging / quarantine path、source FD identity、expected relative path / type / mode、namespace pre-state を phase `bundle-build-planned` へ保存する。
+全 linked worktree は同じ common directory の 0600 regular file `fanout/launch-bundles/.store.lock` を no-follow FD で開き、file identity を検査して store lock に使う。
+builder は staging mutation 前に `fanout/launch-bundles/.locks/<build-nonce>.lock` を no-follow / exclusive create し、その FD の排他 build lock を取得する。
+build lock を保持したまま shared registry lock、store lock の順に取得し、build nonce、deterministic staging / quarantine path、source FD identity、expected relative path / type / mode、namespace pre-state と build owner lease を phase `bundle-build-planned` へ保存する。
+build owner lease は owner nonce、lease generation、builder PID、OS が返す process start token、lock path / file identity、`lease_expires_unix_ms` を持つ。
+builder は `lease_expires_unix_ms` 前に build lock と shared registry lock の下で lease を更新し、更新を確定できない場合は新しい filesystem mutation を止めて fail closed にする。
+builder と recovery は各 filesystem mutation 前に同じ lock FD と owner nonce / lease generation / PID / start token / phase を再照合し、takeover CAS で owner tuple を失った process は再開しない。
+build lock は `bundle-build-planned` の save 前から `ready` と最初の bundle reference を同じ registry save で確定するまで、または quarantine の terminal save まで保持する。
 phase `bundle-build-starting` に exact root-create request を保存し、成功後の root identity を child file 作成前に同じ journal へ加える。
 executable は 0500、data / script / manifest は 0400 とし、setuid、setgid、ACL、group / other write を拒否する。
 directory は build 中だけ 0700 とし、全 child の作成と fsync 後に bottom-up で 0500 へ変える。
 package-relative layout と必要な xattr を保存し、destination FD の bytes を再 hash して各 file と directory を fsync する。
 全 entry の identity / hash と manifest / digest を phase `bundle-build-realized` へ保存してから publish へ進む。
-build crash 後は reference がないこと、staging root identity、unexpected entry の不在、残る entry が expected path / type の subset であることを確認し、先行保存した quarantine path から同じ GC namespace protocol で回収する。
+build crash 後の lease expiry だけでは回収できない。
+recovery は `lease_expires_unix_ms` を過ぎた候補の registry snapshot を取得して全 global lock を解放し、recorded build lock を non-blocking で取得でき、recorded PID / process start token の process が存在しないか token 不一致であることを OS 情報から証明できた場合だけ takeover を試みる。
+その build lock を保持して shared registry lock、store lock の順に再取得し、owner nonce、lease generation、phase、lock identity、staging / final / quarantine identity の完全一致を再照合してから、owner を recovery PID / start token / nonce、新しい `lease_expires_unix_ms`、incremented generation へ替える CAS を行う。
+CAS 失敗、live owner、process identity の取得不能、lock identity 不一致では回収しない。
+takeover に成功した recovery だけが reference の不在、staging root identity、unexpected entry の不在、残る entry が expected path / type の subset であることを確認し、先行保存した quarantine path から同じ GC namespace protocol で回収する。
+recovery は quarantine の terminal save まで同じ build lock を保持する。
 root identity または entry set を証明できない staging は自動再開または削除を行わない。
+lock 順序は build lock、shared registry lock、store lock に固定し、shared registry lock または store lock を保持したまま build lock を取得しない。
+GC は incomplete build の候補 snapshot 後に global lock を解放してからこの順序で取り直す。
+terminal state save 後は build lock の file identity を再照合して lock file を unlink し、`.locks` parent を fsync してから FD を閉じる。
+crash で残った lock file は一 lease interval 以上 identity が変わらず、対応する journal / inventory がなく、path lstat と opened FD の identity が一致する lock を non-blocking で取得できる場合だけ同じ手順で削除する。
 publish は shared registry lock と store lock の下で repo-scoped bundle journal を使う。
 rename 前に digest、manifest、staging path / root identity、deterministic final path、両 namespace の pre-state、exact exclusive-rename request を phase `bundle-publish-starting` へ保存する。
 `ready` 以外の digest は新しい intent、final row、session owner marker から参照できない。
@@ -623,9 +649,9 @@ recovery は staging が exact identity で final がない場合だけ rename �
 両方がある場合、両方がない場合、final identity または manifest が違う場合は自動採用しない。
 rename 後は bundle store parent を fsync し、final path / root identity を phase `bundle-publish-realized` へ保存する。
 続いて phase `bundle-seal-starting` を保存し、tree 全体へ `UF_IMMUTABLE` を設定する。
-seal は exact manifest と file identity が一致する entry へ idempotent に再適用でき、crash 後は不足する flag だけを補う。
-全 flag、mode、owner、manifest、bundle digest を no-follow FD で再読した場合だけ phase `ready` を保存し、同じ state save 後に reference acquisition を許可する。
-既存 digest は `ready` journal と manifest、全 file、root identity、seal が完全一致する場合だけ再利用する。
+seal は exact outer manifest と runtime entry identity が一致する entry へ idempotent に再適用でき、crash 後は不足する flag だけを補う。
+全 flag、mode、owner、outer manifest、bundle digest を no-follow FD で再読した場合だけ phase `ready` を保存し、同じ state save で originating intent または session owner marker の最初の reference を取得する。
+既存 digest は `ready` journal と outer manifest、全 runtime entry、root identity、seal が完全一致する場合だけ再利用する。
 publish 中の exact root を完成できない場合は reference がないことを再確認し、deterministic destination を先行保存する `bundle-quarantine-planned` から後述の GC namespace protocol へ移す。
 journal のない final path、unexpected entry、identity 不一致は自動 seal / quarantine / 削除を行わず fail closed にする。
 exclusive publish、immutable flag、bundle filesystem 上の executable 起動のいずれかを platform が提供しない場合は workspace mutation 前に fail closed にする。
@@ -640,8 +666,16 @@ runtime matcher は bundle から expected provider chain が起動したこと�
 foreground native child と source entrypoint が異なること自体は失敗ではなく、保存済み matcher が許可する一意な bundle chain だけを成功とする。
 intent と final row は `entrypoint_spec`、`launch_bundle_spec`、matcher ID / version、実測した `observed_process_chain` を別々に保持し、resume、emitter、nudge も bundle digest と同じ chain identity を再観測する。
 
-active intent、final row、session owner marker が bundle reference を保持し、GC は active reference と live process がない digest だけを処理する。
-GC は shared registry lock と store lock 下で digest または build nonce を `gc-planned` にし、source bundle path / root identity、得られている manifest または expected entry set、deterministic `.garbage/<identity>-<gc-nonce>` path、source / destination pre-state を rename 前に保存して新しい reference を拒否する。
+active intent、final row、session owner marker が bundle reference を保持し、ready digest は active reference と bundle-bound live process がない場合だけ GC candidate になる。
+incomplete build / publish は build owner lease の takeover CAS を完了した recovery だけが GC candidate にできる。
+ready digest の GC は shared registry lock と store lock 下で candidate snapshot と新しい GC nonce / deterministic lock path を選んで global lock を解放し、`fanout/launch-bundles/.locks/gc-<gc-nonce>.lock` を no-follow / exclusive create して排他 GC operation lock を取得する。
+その lock を保持して shared registry lock、store lock の順に再取得し、candidate と namespace pre-state を再照合してから `gc-planned` と GC owner lease を同じ state save で作る。
+incomplete build / publish の GC は takeover 済み build lock を保持したまま、build owner tuple を GC owner tuple へ替える `gc-planned` を同じ state save で作り、その lock を GC operation lock として引き継ぐ。
+GC owner lease は owner nonce、lease generation、GC PID / process start token、operation lock path / file identity、`lease_expires_unix_ms` を持つ。
+`gc-planned` は digest または build nonce、source bundle path / root identity、得られている outer manifest または expected entry set、deterministic `.garbage/<identity>-<gc-nonce>` path、source / destination pre-state を rename 前に保存して新しい reference、旧 owner の lease renewal、builder recovery を拒否する。
+GC recovery は expired lease の candidate snapshot 後に global lock を解放し、recorded operation lock を non-blocking で取得して recorded PID / start token の不在を証明し、operation lock、shared registry lock、store lock の順に取り直す。
+owner nonce / generation、phase、lock identity、source / destination identity の完全一致を再照合して GC owner tuple を新しい PID / start token / nonce、deadline、incremented generation へ替える CAS に成功した場合だけ recovery を続ける。
+最初の GC と recovery は operation lock を terminal state save まで保持し、shared registry lock または store lock を保持したまま operation lock を取得しない。
 phase `gc-unseal-starting` を保存して source root の immutable flag があれば解除し、phase `gc-move-starting` に exact exclusive-rename request を保存して一回発行する。
 recovery は source が exact identity で destination がない場合だけ move 非発生を証明して request を発行でき、source がなく destination が同じ root identity の場合は move 済みとして続行する。
 両方がある場合、両方がない場合、identity が違う場合は自動操作を止める。
@@ -651,6 +685,7 @@ crash recovery は同じ root identity の下に unexpected entry がなく、�
 残る directory は同じ identity で 0700 + unsealed、0500 + unsealed、0500 + sealed のいずれか、file は同じ identity / hash で sealed または unsealed の状態だけを受理する。
 child を bottom-up で unlink して各 parent directory を fsync し、最後に detached root を削除して `.garbage` parent を fsync する。
 source と destination の不在を再確認した terminal state save で GC journal と bundle inventory を削除する。
+続いて operation lock の file identity を再照合して lock file を unlink し、`.locks` parent を fsync してから FD を閉じる。
 crash が detached root の削除後かつ terminal save 前に起きた場合は、両 namespace の不在を確認して parent を再 fsync してから同じ terminal save を行う。
 session launcher bundle は server stop が完了するまで保持する。
 同じ UID の悪意ある process は immutable flag を解除できるため、この seal は tmux-parity tier の同一ユーザー信頼を越えない。
@@ -1422,20 +1457,33 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   branch reservation は保存済み成功応答で ownership を確定し、worktree mutation が起きていないことも証明できる場合だけ compare-and-delete で解放する。
 - launch bundle は physical common directory 配下の `fanout/launch-bundles` に置く。
   builder は source の no-follow FD から hash と copy を行い、`O_EXCL` / `O_NOFOLLOW` の staging、destination FD の再 hash、fsync、store lock 下の exclusive publish を通す。
-  staging mutation 前に nonce、deterministic staging / quarantine path、source FD identity、expected entry set、namespace pre-state を `bundle-build-planned` へ保存し、`bundle-build-starting` の root identity 保存後だけ child file を作る。
+  staging mutation 前から build nonce 固有の no-follow / exclusive build lock を保持し、owner nonce / lease generation / PID / process start token / lock identity / `lease_expires_unix_ms` を deterministic path と expected entry set とともに `bundle-build-planned` へ保存する。
+  lock 順序は operation lock、shared registry lock、store lock に固定し、builder は build operation lock と lease を `ready` と最初の reference の atomic save または quarantine の terminal save まで保持する。
+  各 filesystem mutation 前に lock FD と owner tuple / phase を再照合し、takeover CAS で owner tuple を失った process は再開しない。
+  recovery は全 global lock を解放してから expired lease の build lock を non-blocking で取得し、recorded PID / start token の不在、owner / generation / phase / staging / final / quarantine identity の一致を再照合して recovery PID / start token / nonce、新しい `lease_expires_unix_ms`、incremented generation へ移す CAS に成功した場合だけ quarantine と GC を引き継ぐ。
+  lock または process identity を証明できない incomplete build は回収しない。
+  `bundle-build-starting` の root identity 保存後だけ child file を作る。
   directory は build 中だけ 0700 とし、全 child の fsync 後に bottom-up で 0500 へ変え、全 entry / manifest / digest を `bundle-build-realized` へ保存してから publish へ進む。
   incomplete staging は reference 不在、exact root identity、unexpected entry 不在、expected subset を確認した場合だけ先行保存した quarantine path から GC protocol で回収する。
-  manifest payload は operation / provider / platform、entry path / argv、dependency closure の file record、platform runtime binding を canonical bytes へ固定する。
-  bundle digest は payload の SHA-256、root identity は publish 後の runtime identity として別に保存する。
+  runtime entry record は共通の path / type / mode に加え、regular file では byte size / SHA-256、symlink では non-empty relative raw target bytes を持ち、directory では filesystem size / hash を持たない。
+  symlink は parent relative path から lexical に解決し、absolute target、root escape、cycle、未列挙 target を拒否して final root pathname / digest を解決入力に使わない。
+  他の file type と hard link を拒否し、xattr name / value は name の raw byte 列順で length-prefix する。
+  `bundle_payload` は length-prefix した `fanout.launch-bundle.payload.v1` domain separator、operation / provider / platform、entry path / argv、dependency closure の runtime entry record、platform runtime binding を relative path の UTF-8 byte 列順で canonical bytes へ固定し、bundle root、予約 path `manifest`、manifest bytes / record を含めない。
+  bundle digest は payload の SHA-256 とし、outer manifest は exact payload と digest を deterministic encoding で保持するが、自身の size / SHA-256 を payload へ戻さない。
+  verifier は unknown field / duplicate key / non-canonical encoding を拒否し、outer manifest、runtime entry の全 record、実 tree の完全一致を調べる。
+  outer manifest の identity / size / SHA-256 と root identity は payload 外の journal / runtime identity として保存する。
   executable は 0500、data / script / manifest は 0400、directory は 0500 とし、publish 後の tree 全体へ `UF_IMMUTABLE` を設定して再検査する。
   Herdr / fanout / hook emitter は session bundle、console / agent / controller と依存 closure は operation bundle に入れる。
   platform が exclusive publish、immutable seal、bundle filesystem 上の executable 起動を満たさない場合は mutation 前に fail closed にする。
   shared registry / store lock 下で rename 前に digest、manifest、staging path / root identity、deterministic final path、両 namespace pre-state、exact request を `bundle-publish-starting` へ保存する。
   staging exact / final absent は rename 非発生、staging absent / final exact は rename 済みとして回復し、他の namespace / identity 状態は fail closed にする。
-  rename 後の store parent fsync と `bundle-publish-realized`、`bundle-seal-starting`、全 entry の seal 再検査を順に通し、phase `ready` の state save 後だけ reference acquisition と既存 digest の再利用を許可する。
+  rename 後の store parent fsync と `bundle-publish-realized`、`bundle-seal-starting`、全 entry の seal 再検査を順に通し、phase `ready` と originating reference の同じ state save 後だけ既存 digest の再利用を許可する。
   seal の部分適用は exact manifest / identity の entry に限って idempotent に補い、完成不能な journaled root は deterministic quarantine を先行保存して GC namespace protocol へ移す。
   journal のない final path、unexpected entry、identity 不一致は自動操作しない。
-  active intent、final row、session owner marker が ready bundle reference を保持し、GC は reference / live process のない digest または reference 未許可の incomplete build / publish だけを処理する。
+  active intent、final row、session owner marker が ready bundle reference を保持し、GC は reference / bundle-bound live process のない ready digest、または build owner takeover CAS を完了した incomplete build / publish だけを処理する。
+  ready GC は専用 GC operation lock を取得してから registry / store lock 下で `gc-planned` と PID / start token / owner nonce / generation / lock identity / expiry を保存し、incomplete GC は takeover 済み build lock と owner tuple を同じ save で GC へ移譲する。
+  GC recovery は expired owner の operation lock、PID / start token の不在、owner generation と namespace identity の CAS を通し、terminal save まで同じ lock を保持する。
+  `gc-planned` 後は旧 lease の renewal、builder recovery、新しい reference を拒否する。
   rename 前の `gc-planned` に digest または build nonce、source path / root identity、manifest または expected entry set、deterministic `.garbage` destination、両 namespace pre-state を保存して新しい reference を拒否する。
   `gc-unseal-starting` で source root の seal があれば解除し、exact request を持つ `gc-move-starting` から namespace の source exact / destination absent または source absent / destination exact を照合して move を実行または回復する。
   両 parent の fsync 後に digest または build nonce、private path、root identity、manifest または expected entry set を `gc-detached` へ保存し、`gc-delete-starting` から directory を pre-order で 0700 + unsealed に戻して file も unseal する。
