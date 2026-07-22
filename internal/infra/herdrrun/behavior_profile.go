@@ -22,8 +22,9 @@ const (
 	ownedBehaviorGOOS          = "darwin"
 	ownedBehaviorGOARCH        = "arm64"
 	ownedBehaviorBinarySHA256  = "37350546b0012555943b92eaf962665de4e264395baeb44227b8015e8ff5b0d6"
+	ownedBehaviorSchemaSHA256  = "1ef4eb9ec655cb0c89726895f437d8654bdde13a22e591fda06a9015d03d88c7"
 	ownedDetectionFixtureID    = "herdr-0.7.5-darwin-arm64-bundled-agent-manifests-v1"
-	ownedManifestSetDigest     = "318fc8238afce65d6b4fea0bc39f6b6edf4a2eb405e1174c86c3863645b31a32"
+	ownedManifestSetDigest     = "71e6a97c86625960aa0ca86a018998bfa9679387c7586b5564ffddd83c5c0784"
 	ownedNoRefreshPolicyID     = "herdr-manifest-check-disabled-v1"
 	manifestDigestDomain       = "fanout.herdr-agent-manifest-set.v1\n"
 	agentManifestResponseID    = "cli:server:agent-manifests"
@@ -43,6 +44,7 @@ type behaviorProfile struct {
 	goos              string
 	goarch            string
 	binarySHA256      string
+	schemaSHA256      string
 	detectionFixture  string
 	manifestSetDigest string
 	noRefreshPolicy   string
@@ -79,6 +81,7 @@ func productionBehaviorProfile() behaviorProfile {
 	return behaviorProfile{
 		id: ownedBehaviorProfileID, source: ownedBehaviorSource, version: ownedBehaviorVersion,
 		goos: ownedBehaviorGOOS, goarch: ownedBehaviorGOARCH, binarySHA256: ownedBehaviorBinarySHA256,
+		schemaSHA256:     ownedBehaviorSchemaSHA256,
 		detectionFixture: ownedDetectionFixtureID, manifestSetDigest: ownedManifestSetDigest,
 		noRefreshPolicy: ownedNoRefreshPolicyID, manifests: slices.Clone(ownedManifestFixture),
 	}
@@ -97,16 +100,16 @@ func (b *Backend) admitOwnedBehavior(admitted binaryAdmission) (behaviorAdmissio
 
 func validateBehaviorProfile(profile behaviorProfile, admitted binaryAdmission) error {
 	if profile.id == "" || profile.source == "" || profile.detectionFixture == "" || profile.noRefreshPolicy == "" ||
-		!validHexToken(profile.binarySHA256) || !validHexToken(profile.manifestSetDigest) {
+		!validHexToken(profile.binarySHA256) || !validHexToken(profile.schemaSHA256) || !validHexToken(profile.manifestSetDigest) {
 		return fmt.Errorf("herdr owned behavior profile is incomplete")
 	}
 	if profile.goos != runtime.GOOS || profile.goarch != runtime.GOARCH {
 		return fmt.Errorf("unsupported herdr owned behavior platform %s/%s (profile requires %s/%s)", runtime.GOOS, runtime.GOARCH, profile.goos, profile.goarch)
 	}
-	if admitted.version != profile.version || admitted.sha256 != profile.binarySHA256 {
+	if admitted.version != profile.version || admitted.sha256 != profile.binarySHA256 || admitted.schemaSHA256 != profile.schemaSHA256 {
 		return fmt.Errorf("herdr binary is outside owned behavior profile %s", profile.id)
 	}
-	if got := manifestFixtureDigest(profile.manifests); got != profile.manifestSetDigest {
+	if got := manifestFixtureDigest(profile.manifests, profile.binarySHA256); got != profile.manifestSetDigest {
 		return fmt.Errorf("herdr owned behavior profile manifest digest is %s, want %s", got, profile.manifestSetDigest)
 	}
 	if ownedConfigContents != "[update]\nmanifest_check = false\n" {
@@ -126,8 +129,8 @@ func behaviorAdmissionID(
 	parts := []string{
 		"fanout.herdr-behavior-admission.v1", profile.id, profile.source, profile.version,
 		profile.goos, profile.goarch, profile.binarySHA256, profile.detectionFixture,
-		profile.manifestSetDigest, profile.noRefreshPolicy, admitted.path, admitted.sha256,
-		admitted.version, fmt.Sprintf("%d", admitted.protocol), commonDir,
+		profile.schemaSHA256, profile.manifestSetDigest, profile.noRefreshPolicy, admitted.path, admitted.sha256,
+		admitted.schemaSHA256, admitted.version, fmt.Sprintf("%d", admitted.protocol), commonDir,
 		fmt.Sprintf("%d", commonIdentity.device), fmt.Sprintf("%d", commonIdentity.inode),
 		layout.runtimeDir, filepath.Base(layout.runtimeDir), layout.socketPath, layout.clientSocketPath,
 		layout.configPath, ownerNonce,
@@ -136,11 +139,16 @@ func behaviorAdmissionID(
 	return hex.EncodeToString(sum[:])
 }
 
-func manifestFixtureDigest(entries []manifestFixtureEntry) string {
+func manifestFixtureDigest(entries []manifestFixtureEntry, binarySHA256 string) string {
+	// The reviewed manifests are bundled inside the exact official executable.
+	// Binding its digest fixes their raw bytes; the normalized active set below
+	// proves that the connected server selected that bundled fixture without an
+	// override or cached remote replacement.
 	ordered := slices.Clone(entries)
 	slices.SortFunc(ordered, func(left, right manifestFixtureEntry) int { return strings.Compare(left.agent, right.agent) })
 	var payload strings.Builder
 	payload.WriteString(manifestDigestDomain)
+	fmt.Fprintf(&payload, "binary_sha256\t%s\n", binarySHA256)
 	for _, entry := range ordered {
 		fmt.Fprintf(&payload, "%s\t%s\t%s\t%s\tfalse\n", entry.agent, entry.version, agentManifestBundledSource, agentManifestBundledSource)
 	}
@@ -214,7 +222,7 @@ func (b *Backend) validateActiveManifestProfile(ctx context.Context, probed prob
 		}
 		observed = append(observed, manifestFixtureEntry{agent: manifest.Agent, version: version})
 	}
-	if len(observed) != len(profile.manifests) || manifestFixtureDigest(observed) != profile.manifestSetDigest {
+	if len(observed) != len(profile.manifests) || manifestFixtureDigest(observed, profile.binarySHA256) != profile.manifestSetDigest {
 		return fmt.Errorf("herdr active manifest set does not match fixture %s", profile.detectionFixture)
 	}
 	return nil

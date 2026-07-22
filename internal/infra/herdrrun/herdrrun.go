@@ -4,6 +4,8 @@ package herdrrun
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,18 +73,20 @@ type route struct {
 }
 
 type probeResult struct {
-	binary   string
-	sha256   string
-	version  string
-	protocol int
-	route    route
+	binary       string
+	sha256       string
+	version      string
+	protocol     int
+	schemaSHA256 string
+	route        route
 }
 
 type binaryAdmission struct {
-	path     string
-	sha256   string
-	version  string
-	protocol int
+	path         string
+	sha256       string
+	version      string
+	protocol     int
+	schemaSHA256 string
 }
 
 // WaitStatus is the terminal outcome of a bounded snapshot wait.
@@ -422,11 +426,12 @@ func (b *Backend) probeContext(ctx context.Context) (probeResult, error) {
 		b.socketPath = verified.socketPath
 	}
 	return probeResult{
-		binary:   admitted.path,
-		sha256:   admitted.sha256,
-		version:  admitted.version,
-		protocol: admitted.protocol,
-		route:    verified,
+		binary:       admitted.path,
+		sha256:       admitted.sha256,
+		version:      admitted.version,
+		protocol:     admitted.protocol,
+		schemaSHA256: admitted.schemaSHA256,
+		route:        verified,
 	}, nil
 }
 
@@ -456,7 +461,7 @@ func (b *Backend) admitBinaryContext(ctx context.Context, target route) (binaryA
 	admitted := binaryAdmission{path: binary, sha256: hash, version: version, protocol: supportedProtocol}
 	key := binary + "\x00" + hash
 	if cached, ok := b.admitted[key]; ok {
-		if cached != admitted {
+		if cached.path != admitted.path || cached.sha256 != admitted.sha256 || cached.version != admitted.version || cached.protocol != admitted.protocol {
 			return binaryAdmission{}, fmt.Errorf("herdr admitted binary identity changed")
 		}
 		return cached, nil
@@ -468,6 +473,8 @@ func (b *Backend) admitBinaryContext(ctx context.Context, target route) (binaryA
 	if err := validateCapabilitySchema(schemaOut); err != nil {
 		return binaryAdmission{}, err
 	}
+	schemaHash := sha256.Sum256(schemaOut)
+	admitted.schemaSHA256 = hex.EncodeToString(schemaHash[:])
 	if err := b.validateCommandSurfaces(ctx, binary, target); err != nil {
 		return binaryAdmission{}, err
 	}

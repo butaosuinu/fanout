@@ -47,6 +47,13 @@ func TestValidateCapabilitySchemaRejectsUsedMethodAndFieldRemoval(t *testing.T) 
 			wantErr: "method server.agent_manifests",
 		},
 		{
+			name: "full wave method",
+			mutate: func(schema string) string {
+				return strings.Replace(schema, `"method":{"const":"plugin.list"}`, `"method":{"const":"plugin.future"}`, 1)
+			},
+			wantErr: "method plugin.list",
+		},
+		{
 			name: "active manifest field",
 			mutate: func(schema string) string {
 				return strings.Replace(schema, `"active_version":{},"cached_remote_version":{}`, `"cached_remote_version":{}`, 1)

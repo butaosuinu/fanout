@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -45,6 +46,8 @@ const (
 	xdgDataEnv              = "XDG_DATA_HOME"
 	xdgCacheEnv             = "XDG_CACHE_HOME"
 )
+
+var errOwnedSupervisorNotRunning = errors.New("herdr owned supervisor is not running")
 
 type OwnedOptions struct {
 	GitCommonDir string
@@ -120,6 +123,7 @@ type ownerMarker struct {
 	BinaryPath           string `json:"binary_path"`
 	BinarySHA256         string `json:"binary_sha256"`
 	BinaryVersion        string `json:"binary_version"`
+	SchemaSHA256         string `json:"schema_sha256"`
 	BehaviorProfileID    string `json:"behavior_profile_id"`
 	BehaviorSource       string `json:"behavior_source"`
 	BehaviorPlatform     string `json:"behavior_platform"`
@@ -162,6 +166,7 @@ type ownedLayout struct {
 	xdgDataHome      string
 	xdgCacheHome     string
 	configPath       string
+	binaryDir        string
 }
 
 type pathIdentity struct {
@@ -223,6 +228,11 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 	if err != nil {
 		return nil, err
 	}
+	admitted, err = pinOwnedBinary(layout, admitted)
+	if err != nil {
+		return nil, err
+	}
+	backend.lookPath = func(string) (string, error) { return admitted.path, nil }
 	marker, found, err := readOwnerMarker(layout.markerPath)
 	if err != nil {
 		return nil, err
@@ -233,6 +243,9 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 		err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted, behavior)
 		if err == nil {
 			err = verifyLiveSupervisor(layout.supervisorLock, marker)
+			if errors.Is(err, errOwnedSupervisorNotRunning) {
+				marker, err = restartDeadOwnedSession(layout, marker, commonDir, commonIdentity, session, admitted, behavior, start)
+			}
 		}
 	}
 	if err != nil {
@@ -243,6 +256,48 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 		return nil, err
 	}
 	return &OwnedSession{Session: session, SocketPath: layout.socketPath, ClientSocketPath: layout.clientSocketPath, backend: backend}, nil
+}
+
+func restartDeadOwnedSession(
+	layout ownedLayout,
+	previous ownerMarker,
+	commonDir string,
+	commonIdentity pathIdentity,
+	session string,
+	admitted binaryAdmission,
+	behavior behaviorAdmission,
+	start supervisorStarter,
+) (ownerMarker, error) {
+	if _, running, err := inspectSupervisorLease(layout.supervisorLock); err != nil {
+		return ownerMarker{}, err
+	} else if running {
+		return ownerMarker{}, fmt.Errorf("refusing to restart a herdr session with a live supervisor")
+	}
+	for _, path := range []string{layout.socketPath, layout.clientSocketPath} {
+		if _, err := os.Lstat(path); err == nil {
+			return ownerMarker{}, fmt.Errorf("refusing to restart a herdr session while socket %s remains", path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return ownerMarker{}, err
+		}
+	}
+	current, found, err := readOwnerMarker(layout.markerPath)
+	if err != nil || !found || current != previous {
+		return ownerMarker{}, fmt.Errorf("herdr ownership marker changed before restart")
+	}
+	err = os.Remove(layout.markerPath)
+	if err != nil {
+		return ownerMarker{}, fmt.Errorf("retire dead herdr ownership marker: %w", err)
+	}
+	dir, err := os.OpenFile(layout.runtimeDir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return ownerMarker{}, err
+	}
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	if err := errors.Join(syncErr, closeErr); err != nil {
+		return ownerMarker{}, fmt.Errorf("sync retired herdr ownership marker: %w", err)
+	}
+	return claimOwnedSession(layout, commonDir, commonIdentity, session, admitted, behavior, start)
 }
 
 func claimOwnedSession(
@@ -283,7 +338,7 @@ func claimOwnedSession(
 		GitCommonDevice: commonIdentity.device, GitCommonInode: commonIdentity.inode, OwnerNonce: nonce,
 		Session: session, RuntimeDir: layout.runtimeDir, SocketPath: layout.socketPath,
 		ClientSocketPath: layout.clientSocketPath, BinaryPath: admitted.path,
-		BinarySHA256: admitted.sha256, BinaryVersion: admitted.version,
+		BinarySHA256: admitted.sha256, BinaryVersion: admitted.version, SchemaSHA256: admitted.schemaSHA256,
 		BehaviorProfileID: behavior.profile.id, BehaviorSource: behavior.profile.source,
 		BehaviorPlatform:   behavior.profile.goos + "/" + behavior.profile.goarch,
 		DetectionFixtureID: behavior.profile.detectionFixture, ManifestSetDigest: behavior.profile.manifestSetDigest,
@@ -350,7 +405,10 @@ func (b *Backend) acquireOwnedOperation(ctx context.Context) (ownedAdmission, *o
 		layout, err = prepareOwnedLayout(filepath.Dir(marker.RuntimeDir), marker.Session)
 	}
 	if err == nil {
-		admitted := binaryAdmission{path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion, protocol: supportedProtocol}
+		admitted := binaryAdmission{
+			path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion,
+			protocol: supportedProtocol, schemaSHA256: marker.SchemaSHA256,
+		}
 		var behavior behaviorAdmission
 		behavior, err = b.admitOwnedBehavior(admitted)
 		if err == nil {
@@ -381,7 +439,8 @@ func (b *Backend) probeOwned(ctx context.Context, admission ownedAdmission) (pro
 	if err != nil {
 		return probeResult{}, err
 	}
-	if probed.binary != admission.marker.BinaryPath || probed.sha256 != admission.marker.BinarySHA256 || probed.version != admission.marker.BinaryVersion {
+	if probed.binary != admission.marker.BinaryPath || probed.sha256 != admission.marker.BinarySHA256 ||
+		probed.version != admission.marker.BinaryVersion || probed.schemaSHA256 != admission.marker.SchemaSHA256 {
 		return probeResult{}, fmt.Errorf("herdr binary identity changed after owned admission")
 	}
 	if err := b.validateActiveManifestProfile(ctx, probed, b.behavior); err != nil {
@@ -415,6 +474,9 @@ func openCanonicalGitCommonDir(raw string) (string, pathIdentity, error) {
 	if err := validateOwnerUID(resolved, info); err != nil {
 		return "", pathIdentity{}, err
 	}
+	if err := validateNoExtendedACL(resolved); err != nil {
+		return "", pathIdentity{}, err
+	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || stat.Dev == 0 || stat.Ino == 0 {
 		return "", pathIdentity{}, fmt.Errorf("git common directory %s has no physical identity", resolved)
@@ -427,12 +489,17 @@ func prepareOwnedLayout(runtimeBase, session string) (ownedLayout, error) {
 		return ownedLayout{}, err
 	}
 	if runtimeBase == "" {
-		runtimeBase = filepath.Join(defaultRuntimeParent, "fanout-herdr-"+strconv.Itoa(os.Getuid()))
+		runtimeBase = filepath.Join(defaultRuntimeParent, "fhr-"+strconv.Itoa(os.Getuid()))
 	}
 	abs, err := filepath.Abs(runtimeBase)
 	if err != nil {
 		return ownedLayout{}, err
 	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	if err != nil {
+		return ownedLayout{}, fmt.Errorf("canonicalize herdr runtime parent: %w", err)
+	}
+	abs = filepath.Join(parent, filepath.Base(abs))
 	runtimeDir := filepath.Join(filepath.Clean(abs), session)
 	configHome := filepath.Join(runtimeDir, "xdg-config")
 	layout := ownedLayout{
@@ -442,6 +509,7 @@ func prepareOwnedLayout(runtimeBase, session string) (ownedLayout, error) {
 		clientSocketPath: filepath.Join(runtimeDir, "herdr-client.sock"), xdgConfigHome: configHome,
 		xdgStateHome: filepath.Join(runtimeDir, "xdg-state"), xdgDataHome: filepath.Join(runtimeDir, "xdg-data"),
 		xdgCacheHome: filepath.Join(runtimeDir, "xdg-cache"), configPath: filepath.Join(configHome, "herdr", "config.toml"),
+		binaryDir: filepath.Join(runtimeDir, "binary"),
 	}
 	for _, path := range []string{layout.socketPath, layout.clientSocketPath} {
 		if len(path) > maxUnixSocketPathBytes {
@@ -452,7 +520,7 @@ func prepareOwnedLayout(runtimeBase, session string) (ownedLayout, error) {
 }
 
 func ensureOwnedLayout(layout ownedLayout) error {
-	for _, dir := range []string{layout.runtimeDir, layout.xdgConfigHome, layout.xdgStateHome, layout.xdgDataHome, layout.xdgCacheHome, filepath.Dir(layout.configPath)} {
+	for _, dir := range []string{layout.runtimeDir, layout.xdgConfigHome, layout.xdgStateHome, layout.xdgDataHome, layout.xdgCacheHome, filepath.Dir(layout.configPath), layout.binaryDir} {
 		if err := ensurePrivateDir(dir); err != nil {
 			return fmt.Errorf("prepare herdr owned directory: %w", err)
 		}
@@ -468,7 +536,7 @@ func ensureOwnedLayout(layout ownedLayout) error {
 }
 
 func validateOwnedLayout(layout ownedLayout) error {
-	for _, dir := range []string{layout.runtimeDir, layout.xdgConfigHome, layout.xdgStateHome, layout.xdgDataHome, layout.xdgCacheHome, filepath.Dir(layout.configPath)} {
+	for _, dir := range []string{layout.runtimeDir, layout.xdgConfigHome, layout.xdgStateHome, layout.xdgDataHome, layout.xdgCacheHome, filepath.Dir(layout.configPath), layout.binaryDir} {
 		if err := validatePrivateDir(dir); err != nil {
 			return err
 		}
@@ -483,6 +551,100 @@ func validateOwnedLayout(layout ownedLayout) error {
 	return validatePrivateRegular(filepath.Join(layout.runtimeDir, ownedSupervisorLogName), info)
 }
 
+func pinOwnedBinary(layout ownedLayout, admitted binaryAdmission) (binaryAdmission, error) {
+	target := filepath.Join(layout.binaryDir, "herdr-"+admitted.sha256)
+	if err := validatePinnedBinary(target, admitted.sha256, layout); err == nil {
+		admitted.path = target
+		return admitted, nil
+	} else if _, statErr := os.Lstat(target); statErr == nil || !errors.Is(statErr, os.ErrNotExist) {
+		return binaryAdmission{}, fmt.Errorf("validate existing herdr binary bundle: %w", err)
+	}
+	sourcePath, err := filepath.EvalSymlinks(admitted.path)
+	if err != nil {
+		return binaryAdmission{}, fmt.Errorf("canonicalize admitted herdr binary: %w", err)
+	}
+	if !filepath.IsAbs(sourcePath) || filepath.Clean(sourcePath) != sourcePath {
+		return binaryAdmission{}, fmt.Errorf("admitted herdr binary did not resolve to a canonical path")
+	}
+	source, err := os.OpenFile(sourcePath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return binaryAdmission{}, fmt.Errorf("open admitted herdr binary without following links: %w", err)
+	}
+	defer func() { _ = source.Close() }()
+	sourceInfo, err := source.Stat()
+	if err != nil || !sourceInfo.Mode().IsRegular() || sourceInfo.Mode().Perm()&0o111 == 0 {
+		return binaryAdmission{}, fmt.Errorf("admitted herdr binary is not a regular executable")
+	}
+	err = validateOwnerUID(sourcePath, sourceInfo)
+	if err != nil {
+		return binaryAdmission{}, err
+	}
+	bundled, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o500)
+	if err != nil {
+		return binaryAdmission{}, fmt.Errorf("create herdr binary bundle: %w", err)
+	}
+	complete := false
+	defer func() {
+		_ = bundled.Close()
+		if !complete {
+			_ = os.Remove(target)
+		}
+	}()
+	hash := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(bundled, hash), source); err != nil {
+		return binaryAdmission{}, fmt.Errorf("copy admitted herdr binary: %w", err)
+	}
+	if got := hex.EncodeToString(hash.Sum(nil)); got != admitted.sha256 {
+		return binaryAdmission{}, fmt.Errorf("admitted herdr binary changed while bundling")
+	}
+	if err := bundled.Sync(); err != nil {
+		return binaryAdmission{}, fmt.Errorf("sync herdr binary bundle: %w", err)
+	}
+	if err := bundled.Close(); err != nil {
+		return binaryAdmission{}, fmt.Errorf("close herdr binary bundle: %w", err)
+	}
+	if err := validatePinnedBinary(target, admitted.sha256, layout); err != nil {
+		return binaryAdmission{}, err
+	}
+	complete = true
+	admitted.path = target
+	return admitted, nil
+}
+
+func validatePinnedBinary(path, wantHash string, layout ownedLayout) error {
+	wantPath := filepath.Join(layout.binaryDir, "herdr-"+wantHash)
+	if path != wantPath || !validHexToken(wantHash) {
+		return fmt.Errorf("herdr binary bundle path does not match its content identity")
+	}
+	bundled, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = bundled.Close() }()
+	info, err := bundled.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o500 {
+		return fmt.Errorf("herdr binary bundle is not a private read-only executable")
+	}
+	if err := validateOwnerUID(path, info); err != nil {
+		return err
+	}
+	if err := validateNoExtendedACL(path); err != nil {
+		return err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 {
+		return fmt.Errorf("herdr binary bundle has an invalid physical identity")
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, bundled); err != nil {
+		return err
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != wantHash {
+		return fmt.Errorf("herdr binary bundle content changed")
+	}
+	return nil
+}
+
 func ensurePrivateDir(path string) error {
 	if err := os.Mkdir(path, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
@@ -495,7 +657,10 @@ func validatePrivateDir(path string) error {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 {
 		return fmt.Errorf("herdr owned directory %s is not an owner-only real directory", path)
 	}
-	return validateOwnerUID(path, info)
+	if err := validateOwnerUID(path, info); err != nil {
+		return err
+	}
+	return validateNoExtendedACL(path)
 }
 
 func ensurePrivateContents(path string, expected []byte) error {
@@ -553,7 +718,14 @@ func validatePrivateRegular(path string, info os.FileInfo) error {
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 {
 		return fmt.Errorf("herdr owned file %s is not an owner-only regular file", path)
 	}
-	return validateOwnerUID(path, info)
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 {
+		return fmt.Errorf("herdr owned file %s has an invalid link identity", path)
+	}
+	if err := validateOwnerUID(path, info); err != nil {
+		return err
+	}
+	return validateNoExtendedACL(path)
 }
 
 func validatePrivateSocket(path string) error {
@@ -561,12 +733,37 @@ func validatePrivateSocket(path string) error {
 	if err != nil || info.Mode()&os.ModeSocket == 0 || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 {
 		return fmt.Errorf("herdr owned socket %s is not an owner-only Unix socket", path)
 	}
-	return validateOwnerUID(path, info)
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 {
+		return fmt.Errorf("herdr owned socket %s has an invalid link identity", path)
+	}
+	if err := validateOwnerUID(path, info); err != nil {
+		return err
+	}
+	return validateNoExtendedACL(path)
 }
 
 func validateOwnerUID(path string, info os.FileInfo) error {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok && int(stat.Uid) != os.Getuid() {
 		return fmt.Errorf("herdr owned path %s belongs to uid %d, want %d", path, stat.Uid, os.Getuid())
+	}
+	return nil
+}
+
+func validateNoExtendedACL(path string) error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	cmd := exec.Command("/bin/ls", "-lde", path)
+	cmd.Env = []string{}
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("inspect ACL on herdr owned path %s: %w", path, err)
+	}
+	first, _, _ := strings.Cut(string(out), "\n")
+	mode, _, ok := strings.Cut(first, " ")
+	if !ok || strings.Contains(mode, "+") {
+		return fmt.Errorf("herdr owned path %s has an extended ACL", path)
 	}
 	return nil
 }
@@ -651,7 +848,7 @@ func verifyLiveSupervisor(path string, marker ownerMarker) error {
 		return err
 	}
 	if !running {
-		return fmt.Errorf("herdr owned supervisor is not running; automatic restart is not safe")
+		return errOwnedSupervisorNotRunning
 	}
 	if lease.SchemaID != ownedMarkerSchemaID || lease.OwnerNonce != marker.OwnerNonce || lease.StartToken != marker.SupervisorStartToken || lease.PID != marker.SupervisorPID {
 		return fmt.Errorf("herdr supervisor lease does not match ownership marker")
@@ -735,7 +932,11 @@ func writeOwnerMarkerExclusive(path string, marker ownerMarker) error {
 		return err
 	}
 	temporaryPath := temporary.Name()
-	defer func() { _ = os.Remove(temporaryPath) }()
+	defer func() {
+		if temporaryPath != "" {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
 	_, err = temporary.Write(data)
 	if err != nil {
 		_ = temporary.Close()
@@ -754,6 +955,12 @@ func writeOwnerMarkerExclusive(path string, marker ownerMarker) error {
 	if err != nil {
 		return fmt.Errorf("claim herdr ownership marker: %w", err)
 	}
+	err = os.Remove(temporaryPath)
+	if err != nil {
+		_ = os.Remove(path)
+		return fmt.Errorf("seal herdr ownership marker link identity: %w", err)
+	}
+	temporaryPath = ""
 	stored, found, err := readOwnerMarker(path)
 	if err != nil || !found || stored != marker {
 		if err != nil {
@@ -780,19 +987,21 @@ func validateOwnedMarker(
 		return fmt.Errorf("herdr ownership marker does not match this repository and runtime layout")
 	}
 	if marker.BinaryPath != admitted.path || marker.BinarySHA256 != admitted.sha256 || marker.BinaryVersion != admitted.version ||
+		marker.SchemaSHA256 != admitted.schemaSHA256 ||
 		marker.BehaviorProfileID != behavior.profile.id || marker.BehaviorSource != behavior.profile.source ||
 		marker.BehaviorPlatform != behavior.profile.goos+"/"+behavior.profile.goarch ||
 		marker.DetectionFixtureID != behavior.profile.detectionFixture || marker.ManifestSetDigest != behavior.profile.manifestSetDigest ||
 		marker.NoRefreshPolicyID != behavior.profile.noRefreshPolicy ||
 		marker.BehaviorAdmissionID != behaviorAdmissionID(behavior.profile, admitted, commonDir, commonIdentity, layout, marker.OwnerNonce) ||
-		!filepath.IsAbs(marker.BinaryPath) || filepath.Clean(marker.BinaryPath) != marker.BinaryPath || !validHexToken(marker.BinarySHA256) ||
+		!filepath.IsAbs(marker.BinaryPath) || filepath.Clean(marker.BinaryPath) != marker.BinaryPath ||
+		!validHexToken(marker.BinarySHA256) || !validHexToken(marker.SchemaSHA256) ||
 		validateAdmittedVersion(marker.BinaryVersion) != nil ||
 		!validHexToken(marker.ManifestSetDigest) || !validHexToken(marker.BehaviorAdmissionID) ||
 		!validHexToken(marker.OwnerNonce) || !validHexToken(marker.SupervisorStartToken) || marker.SupervisorPID <= 1 {
 		return fmt.Errorf("herdr ownership marker identity does not match admitted binary and supervisor")
 	}
-	if hash, err := sha256File(marker.BinaryPath); err != nil || hash != marker.BinarySHA256 {
-		return fmt.Errorf("herdr owned binary identity changed")
+	if err := validatePinnedBinary(marker.BinaryPath, marker.BinarySHA256, layout); err != nil {
+		return fmt.Errorf("herdr owned binary identity changed: %w", err)
 	}
 	return validateOwnedLayout(layout)
 }
@@ -966,7 +1175,10 @@ func RunSupervisor(args []string, errw io.Writer) int {
 		fmt.Fprintln(errw, "fanout herdr supervisor: git common directory identity mismatch")
 		return 1
 	}
-	admitted := binaryAdmission{path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion, protocol: supportedProtocol}
+	admitted := binaryAdmission{
+		path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion,
+		protocol: supportedProtocol, schemaSHA256: marker.SchemaSHA256,
+	}
 	profile := productionBehaviorProfile()
 	if err = validateBehaviorProfile(profile, admitted); err != nil {
 		fmt.Fprintf(errw, "fanout herdr supervisor: behavior profile: %v\n", err)

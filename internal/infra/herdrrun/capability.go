@@ -70,13 +70,31 @@ type methodRequirement struct {
 }
 
 var requiredMethodCapabilities = []methodRequirement{
-	{name: "session.snapshot"},
+	{name: "server.stop"},
 	{name: "server.agent_manifests"},
+	{name: "session.snapshot"},
+	{name: "workspace.create", properties: []string{"cwd", "env", "focus", "label"}},
 	{name: "workspace.focus", required: []string{"workspace_id"}},
+	{name: "workspace.report_metadata", required: []string{"workspace_id", "source", "tokens"}, properties: []string{"seq", "ttl_ms"}},
 	{name: "workspace.close", required: []string{"workspace_id"}},
-	{name: "agent.prompt", required: []string{"target", "text"}},
-	{name: "pane.read", required: []string{"pane_id", "source"}, properties: []string{"lines", "format"}},
+	{name: "worktree.list", properties: []string{"cwd", "workspace_id"}},
+	{name: "worktree.create", properties: []string{"base", "branch", "cwd", "focus", "label", "path", "workspace_id"}},
+	{name: "worktree.open", properties: []string{"branch", "cwd", "focus", "label", "path", "workspace_id"}},
+	{name: "worktree.remove", required: []string{"workspace_id"}, properties: []string{"force"}},
+	{name: "agent.list"},
+	{name: "agent.read", required: []string{"target", "source"}, properties: []string{"format", "lines", "strip_ansi"}},
+	{name: "agent.rename", required: []string{"target"}, properties: []string{"name"}},
+	{name: "agent.focus", required: []string{"target"}},
+	{name: "agent.prompt", required: []string{"target", "text"}, properties: []string{"wait"}},
+	{name: "agent.wait", required: []string{"target"}, properties: []string{"timeout_ms", "until"}},
+	{name: "pane.get", required: []string{"pane_id"}},
+	{name: "pane.process_info", properties: []string{"pane_id"}},
+	{name: "pane.read", required: []string{"pane_id", "source"}, properties: []string{"lines", "format", "strip_ansi"}},
+	{name: "pane.send_input", required: []string{"pane_id"}, properties: []string{"keys", "text"}},
+	{name: "pane.report_metadata", required: []string{"pane_id", "source"}, properties: []string{"tokens", "seq", "ttl_ms"}},
 	{name: "pane.close", required: []string{"pane_id"}},
+	{name: "pane.wait_for_output", required: []string{"pane_id", "source", "match"}, properties: []string{"lines", "strip_ansi", "timeout_ms"}},
+	{name: "plugin.list", properties: []string{"plugin_id"}},
 }
 
 func validateCapabilitySchema(data []byte) error {
@@ -121,9 +139,22 @@ func validateCapabilitySchema(data []byte) error {
 	}
 	for name, required := range map[string][]string{
 		"session_snapshot":      {"snapshot"},
+		"workspace_info":        {"workspace"},
+		"workspace_created":     {"workspace", "tab", "root_pane"},
+		"worktree_list":         {"source", "worktrees"},
+		"worktree_created":      {"workspace", "tab", "root_pane", "worktree"},
+		"worktree_opened":       {"workspace", "tab", "root_pane", "worktree", "already_open"},
+		"worktree_removed":      {"workspace_id", "path", "forced"},
+		"agent_list":            {"agents"},
+		"agent_info":            {"agent"},
 		"agent_manifest_status": {"manifests"},
 		"agent_prompted":        {"agent"},
+		"wait_matched":          {"event"},
+		"pane_info":             {"pane"},
+		"pane_process_info":     {"process_info"},
 		"pane_read":             {"read"},
+		"output_matched":        {"pane_id", "revision", "read"},
+		"plugin_list":           {"plugins"},
 		"ok":                    nil,
 	} {
 		variant, findErr := findVariant(&document, result, "type", name)
@@ -149,18 +180,34 @@ func validateCapabilitySchema(data []byte) error {
 		return fmt.Errorf("unsupported herdr response schema: session snapshot: %w", err)
 	}
 	for name, required := range map[string][]string{
-		"WorkspaceInfo":         {"workspace_id", "label", "focused", "active_tab_id", "agent_status"},
-		"WorkspaceWorktreeInfo": {"repo_key", "repo_root", "checkout_path", "is_linked_worktree"},
-		"PaneInfo":              {"pane_id", "terminal_id", "workspace_id", "tab_id", "focused", "agent_status", "revision"},
-		"AgentInfo":             {"terminal_id", "workspace_id", "tab_id", "pane_id", "focused", "agent_status", "revision"},
-		"AgentSessionInfo":      {"source", "agent", "kind", "value"},
-		"AgentManifestInfo":     {"agent", "source", "source_kind", "local_override_shadowing_remote"},
+		"WorkspaceInfo":          {"workspace_id", "number", "label", "focused", "pane_count", "tab_count", "active_tab_id", "agent_status"},
+		"TabInfo":                {"tab_id", "workspace_id", "number", "label", "focused", "pane_count", "agent_status"},
+		"WorkspaceWorktreeInfo":  {"repo_key", "repo_name", "repo_root", "checkout_path", "is_linked_worktree"},
+		"WorktreeInfo":           {"path", "is_bare", "is_detached", "is_prunable", "is_linked_worktree", "label"},
+		"PaneInfo":               {"pane_id", "terminal_id", "workspace_id", "tab_id", "focused", "agent_status", "revision"},
+		"AgentInfo":              {"terminal_id", "workspace_id", "tab_id", "pane_id", "focused", "agent_status", "revision"},
+		"PaneProcessInfo":        {"pane_id"},
+		"PaneProcessInfoProcess": {"pid", "name"},
+		"AgentSessionInfo":       {"source", "agent", "kind", "value"},
+		"PaneReadResult":         {"pane_id", "workspace_id", "tab_id", "source", "format", "text", "revision", "truncated"},
+		"AgentManifestInfo":      {"agent", "source", "source_kind", "local_override_shadowing_remote"},
 	} {
 		node := success.Defs[name]
 		if node == nil {
 			return fmt.Errorf("unsupported herdr response schema: missing %s", name)
 		}
 		if err := requireFields(node, required, nil); err != nil {
+			return fmt.Errorf("unsupported herdr response schema: %s: %w", name, err)
+		}
+	}
+	for name, properties := range map[string][]string{
+		"WorktreeInfo":           {"branch", "open_workspace_id"},
+		"PaneInfo":               {"agent", "cwd", "foreground_cwd", "agent_session"},
+		"AgentInfo":              {"agent", "name", "cwd", "foreground_cwd", "agent_session", "interactive_ready", "launch_pending", "state_change_seq"},
+		"PaneProcessInfo":        {"shell_pid", "foreground_process_group_id", "foreground_processes"},
+		"PaneProcessInfoProcess": {"argv", "argv0", "cwd"},
+	} {
+		if err := requireFields(success.Defs[name], nil, properties); err != nil {
 			return fmt.Errorf("unsupported herdr response schema: %s: %w", name, err)
 		}
 	}

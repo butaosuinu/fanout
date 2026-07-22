@@ -2,6 +2,8 @@ package herdrrun
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,12 +42,14 @@ type fakeOwnedSupervisor struct {
 	listeners []net.Listener
 }
 
-func testBehaviorProfile(binarySHA256 string) behaviorProfile {
+func testBehaviorProfile(binarySHA256, schemaSHA256 string) behaviorProfile {
 	profile := productionBehaviorProfile()
 	profile.source = "test-fixture"
 	profile.goos = runtime.GOOS
 	profile.goarch = runtime.GOARCH
 	profile.binarySHA256 = binarySHA256
+	profile.schemaSHA256 = schemaSHA256
+	profile.manifestSetDigest = manifestFixtureDigest(profile.manifests, binarySHA256)
 	return profile
 }
 
@@ -158,7 +162,11 @@ func TestPrepareOwnedLayoutUsesShortDefaultWithLongTMPDIR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantBase := filepath.Join(defaultRuntimeParent, "fanout-herdr-"+strconv.Itoa(os.Getuid()))
+	runtimeParent, err := filepath.EvalSymlinks(defaultRuntimeParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBase := filepath.Join(runtimeParent, "fhr-"+strconv.Itoa(os.Getuid()))
 	if layout.runtimeBase != wantBase {
 		t.Fatalf("runtime base = %q, want %q", layout.runtimeBase, wantBase)
 	}
@@ -186,7 +194,8 @@ func (h *ownedHarness) tryEnsure() (*OwnedSession, error) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	b.behavior = testBehaviorProfile(binaryHash)
+	schemaHash := sha256.Sum256([]byte(h.fake.schema))
+	b.behavior = testBehaviorProfile(binaryHash, hex.EncodeToString(schemaHash[:]))
 	b.output = h.fake.output
 	b.helpOutput = func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
 		for _, surface := range requiredCommandSurfaces {
@@ -274,8 +283,49 @@ func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(command, "session attach") || !strings.Contains(command, socketEnv+"='") || !strings.Contains(command, h.binary) {
+	if strings.Contains(command, "session attach") || !strings.Contains(command, socketEnv+"='") || !strings.Contains(command, h.layout.binaryDir) {
 		t.Fatalf("AttachCommand() = %q", command)
+	}
+}
+
+func TestEnsureOwnedRestartsOnlyAfterDeadSupervisorAndSocketAbsence(t *testing.T) {
+	h := newOwnedHarness(t)
+	previous, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("readOwnerMarker() = %+v, %v, %v", previous, found, err)
+	}
+	h.supervisor.close()
+	restarted, err := h.tryEnsure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted.Session != h.session.Session || h.supervisor.starts != 2 {
+		t.Fatalf("restart = %+v, starts=%d", restarted, h.supervisor.starts)
+	}
+	current, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found || current.OwnerNonce == previous.OwnerNonce || current.SupervisorStartToken == previous.SupervisorStartToken {
+		t.Fatalf("restarted owner marker = %+v, %v, %v", current, found, err)
+	}
+}
+
+func TestOwnedOperationRejectsPinnedBinaryTampering(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	marker, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("readOwnerMarker() = %+v, %v, %v", marker, found, err)
+	}
+	if marker.BinaryPath == h.binary || !strings.HasPrefix(marker.BinaryPath, h.layout.binaryDir+string(os.PathSeparator)) {
+		t.Fatalf("owned binary path = %q, want content-addressed bundle", marker.BinaryPath)
+	}
+	if err := os.Chmod(marker.BinaryPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker.BinaryPath, []byte("tampered"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.session.Backend().BindOwnedTarget(target); err == nil || !strings.Contains(err.Error(), "binary identity changed") {
+		t.Fatalf("BindOwnedTarget() pinned binary error = %v", err)
 	}
 }
 
@@ -314,7 +364,8 @@ func TestEnsureOwnedRejectsBehaviorProfileBeforeRuntimeCreation(t *testing.T) {
 	}
 	fake := newFakeHerdr(session, layout.socketPath)
 	b := newTestBackend(t, session, layout.socketPath, fake)
-	b.behavior = testBehaviorProfile(strings.Repeat("b", 64))
+	schemaHash := sha256.Sum256([]byte(fake.schema))
+	b.behavior = testBehaviorProfile(strings.Repeat("b", 64), hex.EncodeToString(schemaHash[:]))
 	if _, err := ensureOwned(context.Background(), OwnedOptions{GitCommonDir: commonDir, RuntimeBase: runtimeBase}, b, func(string, string, string) (int, error) {
 		t.Fatal("supervisor started before behavior admission")
 		return 0, nil
