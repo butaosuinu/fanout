@@ -102,7 +102,7 @@ var prefixRules = []struct {
 	{"internal/infra/selfupdate/", Rule{ID: "infra-selfupdate", Class: ClassH, Source: SourceDocTable, Note: "自己アップデート"}},
 	{"internal/infra/team/", Rule{ID: "infra-team", Class: ClassH, Source: SourceDocTable, Note: "team SQLite バス"}},
 	{"internal/infra/settings/", Rule{ID: "infra-settings", Class: ClassH, Source: SourceDocTable, Note: "設定解決の安全ゲート"}},
-	{"internal/infra/herdrrun/", Rule{ID: "infra-herdrrun", Class: ClassH, Source: SourceDocTable, Note: "herdr named session・socket・API tuple 検証と read-only snapshot 投影"}},
+	{"internal/infra/herdrrun/", Rule{ID: "infra-herdrrun", Class: ClassH, Source: SourceDocTable, Note: "herdr capability gate、owned session lifecycle、owned mutation、snapshot 投影"}},
 
 	// infra M.
 	{"internal/infra/ghissue/", Rule{ID: "infra-ghissue", Class: ClassM, Source: SourceDocTable, Note: "GitHub issue/PR 読み書き"}},

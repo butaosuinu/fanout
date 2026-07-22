@@ -1,9 +1,35 @@
 package naming
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
+
+func TestHerdrSessionNameUsesGitCommonDirectoryIdentity(t *testing.T) {
+	const commonDir = "/Users/alice/src/fanout/.git"
+	got := HerdrSessionName(commonDir)
+	if got != HerdrSessionName(commonDir) {
+		t.Fatal("HerdrSessionName is not deterministic")
+	}
+	if got == HerdrSessionName("/Users/alice/tmp/fanout/.git") {
+		t.Fatalf("independent clones share session name %q", got)
+	}
+	if len(got) > MaxHerdrSessionNameLength || !regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(got) {
+		t.Fatalf("invalid herdr session name %q", got)
+	}
+}
+
+func TestHerdrSessionNameBoundsAndFallsBackRepoToken(t *testing.T) {
+	long := HerdrSessionName("/private/tmp/" + strings.Repeat("long repo name ", 20) + "/.git")
+	if len(long) > MaxHerdrSessionNameLength || !strings.HasPrefix(long, "fanout-long-repo-name-") {
+		t.Fatalf("long HerdrSessionName = %q", long)
+	}
+	fallback := HerdrSessionName("/private/tmp/ファンアウト/.git")
+	if !strings.HasPrefix(fallback, "fanout-repo-") {
+		t.Fatalf("fallback HerdrSessionName = %q", fallback)
+	}
+}
 
 func TestSlugIsDeterministicKebabWithIssueNumber(t *testing.T) {
 	if got, want := Slug("Fix auth timeout", 123), "fix-auth-timeout-123"; got != want {

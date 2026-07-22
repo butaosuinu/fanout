@@ -39,6 +39,7 @@ type fakeHerdr struct {
 	snapshotResults []fakeSnapshotResult
 	snapshotCall    int
 	intercept       func(context.Context, string) error
+	respond         func([]string) ([]byte, error)
 }
 
 func (f *fakeHerdr) output(ctx context.Context, _ string, env []string, args ...string) ([]byte, error) {
@@ -75,6 +76,9 @@ func (f *fakeHerdr) output(ctx context.Context, _ string, env []string, args ...
 	case "snapshot":
 		return []byte(f.snapshot), nil
 	default:
+		if f.respond != nil {
+			return f.respond(args)
+		}
 		return nil, fmt.Errorf("unexpected herdr args: %v", args)
 	}
 }
@@ -100,9 +104,9 @@ func hasSuffix(got []string, want ...string) bool {
 
 func newFakeHerdr(session, socket string) *fakeHerdr {
 	return &fakeHerdr{
-		version:  "herdr 0.7.3\n",
+		version:  "herdr 0.7.5\n",
 		status:   validStatus(session, socket),
-		schema:   `{"protocol":16,"schema_version":1}` + "\n",
+		schema:   validCapabilitySchema(),
 		snapshot: validSnapshot(),
 		errors:   map[string]error{},
 	}
@@ -115,7 +119,16 @@ func newTestBackend(t *testing.T, session, socket string, fake *fakeHerdr) *Back
 		if name != commandName {
 			t.Fatalf("LookPath(%q), want %q", name, commandName)
 		}
-		return "/private/tmp/herdr-0.7.3", nil
+		return "/private/tmp/herdr-0.7.5", nil
+	}
+	b.hashFile = func(string) (string, error) { return strings.Repeat("a", 64), nil }
+	b.helpOutput = func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
+		for _, surface := range requiredCommandSurfaces {
+			if len(args) == len(surface.args)+1 && slices.Equal(args[:len(surface.args)], surface.args) && args[len(args)-1] == "--help" {
+				return []byte(strings.Join(surface.required, "\n")), nil
+			}
+		}
+		return nil, fmt.Errorf("unexpected herdr help args: %v", args)
 	}
 	b.output = fake.output
 	return b
@@ -277,8 +290,8 @@ func killRunCommandHelper(pids runCommandHelperPIDs) error {
 
 func validStatus(session, socket string) string {
 	return fmt.Sprintf(`{
-  "client":{"version":"0.7.3","channel":"stable","protocol":16,"binary":"/private/tmp/herdr-0.7.3","session":%s},
-  "server":{"status":"running","running":true,"version":"0.7.3","protocol":16,"capabilities":{"live_handoff":true,"detached_server_daemon":true},"compatible":true,"socket":%s,"session":%s,"restart_needed":false},
+	  "client":{"version":"0.7.5","channel":"stable","protocol":17,"binary":"/private/tmp/herdr-0.7.5","session":%s},
+	  "server":{"status":"running","running":true,"version":"0.7.5","protocol":17,"capabilities":{"live_handoff":true,"detached_server_daemon":true},"compatible":true,"socket":%s,"session":%s,"restart_needed":false},
   "update":{"restart_needed":false}
 }`+"\n", strconv.Quote(session), strconv.Quote(socket), strconv.Quote(session))
 }
@@ -289,8 +302,8 @@ func validSnapshot() string {
   "result":{
     "type":"session_snapshot",
     "snapshot":{
-      "version":"0.7.3",
-      "protocol":16,
+	      "version":"0.7.5",
+	      "protocol":17,
       "workspaces":[
         {"workspace_id":"w1","number":1,"label":"root","focused":true,"pane_count":1,"tab_count":1,"active_tab_id":"w1:t1","agent_status":"unknown"},
         {"workspace_id":"w2","number":2,"label":"child","focused":false,"pane_count":1,"tab_count":1,"active_tab_id":"w2:t1","agent_status":"working","worktree":{"repo_key":"/repo/.git","repo_name":"repo","repo_root":"/repo","checkout_path":"/repo/.fanout/worktrees/child","is_linked_worktree":true}}
@@ -304,6 +317,52 @@ func validSnapshot() string {
       "agents":[
         {"terminal_id":"term-child","name":"fanout-child","agent":"codex","agent_status":"working","workspace_id":"w2","tab_id":"w2:t1","pane_id":"w2:p1","focused":false,"cwd":"/wrong-saved-cwd","foreground_cwd":"/tmp/other-foreground","revision":2,"agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"session-a"}}
       ]
+    }
+  }
+}` + "\n"
+}
+
+func validCapabilitySchema() string {
+	return `{
+  "protocol":17,
+  "schema_version":1,
+  "schemas":{
+    "request":{
+      "oneOf":[
+        {"properties":{"method":{"const":"session.snapshot"},"params":{"$ref":"#/schemas/request/$defs/EmptyParams"}}},
+        {"properties":{"method":{"const":"workspace.focus"},"params":{"$ref":"#/schemas/request/$defs/WorkspaceTarget"}}},
+        {"properties":{"method":{"const":"workspace.close"},"params":{"$ref":"#/schemas/request/$defs/WorkspaceTarget"}}},
+        {"properties":{"method":{"const":"worktree.remove"},"params":{"$ref":"#/schemas/request/$defs/WorktreeRemoveParams"}}},
+        {"properties":{"method":{"const":"agent.prompt"},"params":{"$ref":"#/schemas/request/$defs/AgentPromptParams"}}},
+        {"properties":{"method":{"const":"pane.read"},"params":{"$ref":"#/schemas/request/$defs/PaneReadParams"}}},
+        {"properties":{"method":{"const":"pane.close"},"params":{"$ref":"#/schemas/request/$defs/PaneTarget"}}}
+      ],
+      "$defs":{
+        "EmptyParams":{"properties":{},"required":[]},
+        "WorkspaceTarget":{"properties":{"workspace_id":{}},"required":["workspace_id"]},
+        "WorktreeRemoveParams":{"properties":{"workspace_id":{},"force":{}},"required":["workspace_id"]},
+        "AgentPromptParams":{"properties":{"target":{},"text":{},"wait":{}},"required":["target","text"]},
+        "PaneReadParams":{"properties":{"pane_id":{},"source":{},"lines":{},"format":{}},"required":["pane_id","source"]},
+        "PaneTarget":{"properties":{"pane_id":{}},"required":["pane_id"]}
+      }
+    },
+    "success_response":{
+      "properties":{"result":{"$ref":"#/schemas/success_response/$defs/ResponseResult"}},
+      "$defs":{
+        "ResponseResult":{"oneOf":[
+          {"properties":{"type":{"const":"session_snapshot"},"snapshot":{"$ref":"#/schemas/success_response/$defs/SessionSnapshot"}},"required":["type","snapshot"]},
+          {"properties":{"type":{"const":"worktree_removed"},"workspace_id":{},"path":{},"forced":{}},"required":["type","workspace_id","path","forced"]},
+          {"properties":{"type":{"const":"agent_prompted"},"agent":{}},"required":["type","agent"]},
+          {"properties":{"type":{"const":"pane_read"},"read":{}},"required":["type","read"]},
+          {"properties":{"type":{"const":"ok"}},"required":["type"]}
+        ]},
+        "SessionSnapshot":{"properties":{"version":{},"protocol":{},"workspaces":{},"tabs":{},"panes":{},"layouts":{},"agents":{}},"required":["version","protocol","workspaces","tabs","panes","layouts","agents"]},
+        "WorkspaceInfo":{"properties":{"workspace_id":{},"label":{},"focused":{},"active_tab_id":{},"agent_status":{},"worktree":{}},"required":["workspace_id","label","focused","active_tab_id","agent_status"]},
+        "WorkspaceWorktreeInfo":{"properties":{"repo_key":{},"repo_root":{},"checkout_path":{},"is_linked_worktree":{}},"required":["repo_key","repo_root","checkout_path","is_linked_worktree"]},
+        "PaneInfo":{"properties":{"pane_id":{},"terminal_id":{},"workspace_id":{},"tab_id":{},"focused":{},"agent_status":{},"revision":{},"cwd":{},"agent_session":{}},"required":["pane_id","terminal_id","workspace_id","tab_id","focused","agent_status","revision"]},
+        "AgentInfo":{"properties":{"terminal_id":{},"workspace_id":{},"tab_id":{},"pane_id":{},"focused":{},"agent_status":{},"revision":{},"name":{},"agent":{},"agent_session":{}},"required":["terminal_id","workspace_id","tab_id","pane_id","focused","agent_status","revision"]},
+        "AgentSessionInfo":{"properties":{"source":{},"agent":{},"kind":{},"value":{}},"required":["source","agent","kind","value"]}
+      }
     }
   }
 }` + "\n"
@@ -346,8 +405,8 @@ func TestCheckAvailablePinsVerifiedSocketAndExactTuple(t *testing.T) {
 		commandKey(fake.commands[0].args),
 		commandKey(fake.commands[1].args),
 		commandKey(fake.commands[2].args),
-	}; !slices.Equal(got, []string{"version", "status", "schema"}) {
-		t.Fatalf("commands = %v, want version/status/schema", got)
+	}; !slices.Equal(got, []string{"version", "schema", "status"}) {
+		t.Fatalf("commands = %v, want version/schema/status", got)
 	}
 	for _, call := range fake.commands {
 		if slices.Contains(call.args, "--session") {
@@ -373,19 +432,19 @@ func TestCheckAvailableResolvesNamedSessionThenPinsReturnedSocket(t *testing.T) 
 	if err := b.CheckAvailable(); err != nil {
 		t.Fatalf("CheckAvailable() error = %v", err)
 	}
-	status := fake.commands[1]
+	status := fake.commands[2]
 	if !slices.Equal(status.args, []string{"--session", session, "status", "--json"}) {
 		t.Fatalf("status args = %v", status.args)
 	}
 	if _, ok := envValue(status.env, socketEnv); ok {
 		t.Fatalf("initial status env contains %s", socketEnv)
 	}
-	schema := fake.commands[2]
+	schema := fake.commands[1]
 	if slices.Contains(schema.args, "--session") {
 		t.Fatalf("schema args unexpectedly use --session: %v", schema.args)
 	}
-	if got, ok := envValue(schema.env, socketEnv); !ok || got != socket {
-		t.Fatalf("schema %s = %q (present=%v), want %q", socketEnv, got, ok, socket)
+	if _, ok := envValue(schema.env, socketEnv); ok {
+		t.Fatalf("offline schema env unexpectedly contains %s", socketEnv)
 	}
 
 	if err := b.CheckAvailable(); err != nil {
@@ -411,11 +470,27 @@ func TestCheckAvailableFailsClosed(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "future CLI version",
+			name: "version below floor",
 			mutate: func(fake *fakeHerdr) {
 				fake.version = "herdr 0.7.4\n"
 			},
-			wantErr: "unsupported herdr CLI version",
+			wantErr: "below floor 0.7.5",
+		},
+		{
+			name: "prerelease version",
+			mutate: func(fake *fakeHerdr) {
+				fake.version = "herdr 0.7.6-preview.1\n"
+			},
+			wantErr: "required: stable >=0.7.5",
+		},
+		{
+			name: "higher version missing capability",
+			mutate: func(fake *fakeHerdr) {
+				fake.version = "herdr 0.8.0\n"
+				fake.status = strings.ReplaceAll(fake.status, "0.7.5", "0.8.0")
+				fake.schema = strings.Replace(fake.schema, `"method":{"const":"pane.close"}`, `"method":{"const":"pane.future"}`, 1)
+			},
+			wantErr: `method pane.close: missing method "pane.close"`,
 		},
 		{
 			name: "preview channel",
@@ -427,7 +502,7 @@ func TestCheckAvailableFailsClosed(t *testing.T) {
 		{
 			name: "future server with same protocol",
 			mutate: func(fake *fakeHerdr) {
-				fake.status = strings.Replace(fake.status, `"server":{"status":"running","running":true,"version":"0.7.3"`, `"server":{"status":"running","running":true,"version":"0.7.4"`, 1)
+				fake.status = strings.Replace(fake.status, `"server":{"status":"running","running":true,"version":"0.7.5"`, `"server":{"status":"running","running":true,"version":"0.7.6"`, 1)
 			},
 			wantErr: "unsupported herdr server tuple",
 		},
@@ -462,7 +537,7 @@ func TestCheckAvailableFailsClosed(t *testing.T) {
 		{
 			name: "future schema",
 			mutate: func(fake *fakeHerdr) {
-				fake.schema = `{"protocol":16,"schema_version":2}`
+				fake.schema = `{"protocol":17,"schema_version":2}`
 			},
 			wantErr: "unsupported herdr API tuple",
 		},
@@ -567,7 +642,7 @@ func TestListLiveRejectsMalformedOrIncompatibleSnapshot(t *testing.T) {
 		{
 			name: "future version",
 			mutate: func(snapshot string) string {
-				return strings.Replace(snapshot, `"version":"0.7.3"`, `"version":"0.7.4"`, 1)
+				return strings.Replace(snapshot, `"version":"0.7.5"`, `"version":"0.7.6"`, 1)
 			},
 			wantErr: "unsupported herdr snapshot tuple",
 		},
@@ -776,7 +851,7 @@ func TestWaitImmediateMatchUsesVerifiedSocket(t *testing.T) {
 	if len(clock.sleeps) != 0 {
 		t.Fatalf("immediate match sleeps = %v, want none", clock.sleeps)
 	}
-	wantCommands := []string{"version", "status", "schema", "snapshot"}
+	wantCommands := []string{"version", "schema", "status", "snapshot"}
 	if len(fake.commands) != len(wantCommands) {
 		t.Fatalf("command count = %d, want %d", len(fake.commands), len(wantCommands))
 	}
@@ -837,7 +912,7 @@ func TestWaitSnapshotCallLimitsIntervalsAndCommandTimeouts(t *testing.T) {
 			if len(fake.commands) != 3+tt.wantSnapshots {
 				t.Fatalf("command count = %d, want %d", len(fake.commands), 3+tt.wantSnapshots)
 			}
-			for i, wantKey := range []string{"version", "status", "schema"} {
+			for i, wantKey := range []string{"version", "schema", "status"} {
 				if key := commandKey(fake.commands[i].args); key != wantKey {
 					t.Fatalf("probe command %d = %q, want %q", i, key, wantKey)
 				}
@@ -930,7 +1005,7 @@ func TestWaitPermanentCommandErrorFailsWithoutRetry(t *testing.T) {
 		session = "fanout-test"
 		socket  = "/private/tmp/fanout-test/herdr.sock"
 	)
-	permanent := &os.PathError{Op: "fork/exec", Path: "/private/tmp/herdr-0.7.3", Err: syscall.ENOENT}
+	permanent := &os.PathError{Op: "fork/exec", Path: "/private/tmp/herdr-0.7.5", Err: syscall.ENOENT}
 	fake := newFakeHerdr(session, socket)
 	fake.snapshotResults = []fakeSnapshotResult{{err: permanent}}
 	b := newTestBackend(t, session, socket, fake)
@@ -1021,7 +1096,7 @@ func TestWaitIncompatibleSnapshotFailsImmediately(t *testing.T) {
 		socket  = "/private/tmp/fanout-test/herdr.sock"
 	)
 	fake := newFakeHerdr(session, socket)
-	incompatible := strings.Replace(validSnapshot(), `"protocol":16`, `"protocol":17`, 1)
+	incompatible := strings.Replace(validSnapshot(), `"protocol":17`, `"protocol":18`, 1)
 	fake.snapshotResults = []fakeSnapshotResult{{output: incompatible}}
 	b := newTestBackend(t, session, socket, fake)
 	clock := installFakeWaitClock(b)
@@ -1202,7 +1277,7 @@ func TestWaitCancellationStopsProbeOrSnapshotImmediately(t *testing.T) {
 		wantCommands []string
 	}{
 		{name: "during probe", cancelOn: "version", wantCommands: []string{"version"}},
-		{name: "during snapshot", cancelOn: "snapshot", wantCommands: []string{"version", "status", "schema", "snapshot"}},
+		{name: "during snapshot", cancelOn: "snapshot", wantCommands: []string{"version", "schema", "status", "snapshot"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1277,6 +1352,8 @@ func TestUnsupportedOperationsNeverInvokeHerdr(t *testing.T) {
 	errs = append(errs, b.SendLine(ref, "text"))
 	errs = append(errs, b.Focus(ref))
 	errs = append(errs, b.Close(ref))
+	_, err = b.CloseOwned(corebackend.CloseRequest{Ref: ref})
+	errs = append(errs, err)
 
 	for i, err := range errs {
 		if !errors.Is(err, corebackend.ErrUnsupported) || !corebackend.IsUnsupported(err) {

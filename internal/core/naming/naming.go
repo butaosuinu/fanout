@@ -3,16 +3,47 @@ package naming
 
 import (
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"unicode"
 )
 
 const (
-	DefaultBranchPrefix = "fanout/"
-	MaxSlugLength       = 80
+	DefaultBranchPrefix       = "fanout/"
+	MaxSlugLength             = 80
+	MaxHerdrSessionNameLength = 56
+	herdrSessionPrefix        = "fanout-"
+	herdrSessionHashLength    = 16
 )
+
+// HerdrSessionName returns the stable per-repository name for a fanout-owned
+// herdr session. gitCommonDir must be the canonical git common directory so
+// linked worktrees share a session while independent clones stay separate.
+func HerdrSessionName(gitCommonDir string) string {
+	repo := filepath.Base(filepath.Clean(gitCommonDir))
+	if repo == ".git" {
+		repo = filepath.Base(filepath.Dir(filepath.Clean(gitCommonDir)))
+	} else {
+		repo = strings.TrimSuffix(repo, ".git")
+	}
+	repo = Slugify(repo)
+	if repo == "" {
+		repo = "repo"
+	}
+	sum := sha256.Sum256([]byte(gitCommonDir))
+	hash := hex.EncodeToString(sum[:])[:herdrSessionHashLength]
+	maxRepo := MaxHerdrSessionNameLength - len(herdrSessionPrefix) - 1 - len(hash)
+	if len(repo) > maxRepo {
+		repo = strings.Trim(repo[:maxRepo], "-")
+		if repo == "" {
+			repo = "repo"
+		}
+	}
+	return herdrSessionPrefix + repo + "-" + hash
+}
 
 // Slug returns a deterministic slug for an issue title and number.
 func Slug(title string, num int) string {

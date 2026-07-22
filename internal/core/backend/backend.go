@@ -66,7 +66,7 @@ type AgentSessionRef struct {
 }
 
 // Valid reports whether every identity component is present and the ref kind
-// is one herdr 0.7.3 exposes. Validation does not normalize the tuple because
+// is one admitted herdr version exposes. Validation does not normalize the tuple because
 // liveness comparison is exact.
 func (r AgentSessionRef) Valid() bool {
 	if strings.TrimSpace(r.Source) == "" || strings.TrimSpace(r.Agent) == "" || strings.TrimSpace(r.Value) == "" {
