@@ -286,6 +286,17 @@ func TestFinishTUIIssueParentLaunchPrependsOrchestrator(t *testing.T) {
 			wantPaneIDs:        []string{"%90", "%91"},
 		},
 		{
+			name:               "orchestrator warning survives partial child failure",
+			orchestratorPaneID: "%90",
+			result: parentIssueFanoutResult{
+				CreatedPaneIDs: []string{"%91"},
+				Notice:         codexOrchestratorPlanFallbackNotice,
+			},
+			launchErr:   partialErr,
+			wantNotice:  "started orchestrator + 1 child pane(s), then failed: launch child #502: boom; " + codexOrchestratorPlanFallbackNotice,
+			wantPaneIDs: []string{"%90", "%91"},
+		},
+		{
 			name:               "orchestrator-only cleanup failure remains partial success",
 			orchestratorPaneID: "%90",
 			launchErr:          partialErr,
@@ -380,6 +391,9 @@ func TestLaunchIssueSessionFromTUIParentLaunchesOrchestratorFirst(t *testing.T) 
 	if orchestrator.PaneID != "%91" || orchestrator.WorktreePath != repo || !orchestrator.IsAttachedAgent() {
 		t.Fatalf("orchestrator state = %+v, want pane %%91 attached at project root", orchestrator)
 	}
+	if !orchestrator.PlanMode {
+		t.Fatalf("orchestrator state = %+v, want plan mode from default settings", orchestrator)
+	}
 	child, ok := store.Find("500", 501)
 	if !ok || child.PaneID != "%92" {
 		t.Fatalf("child state = %+v/%v, want #501 pane %%92", child, ok)
@@ -398,6 +412,69 @@ func TestLaunchIssueSessionFromTUIParentLaunchesOrchestratorFirst(t *testing.T) 
 	}
 	if !strings.Contains(tmuxLog, "tmux wait-for -L") {
 		t.Fatalf("orchestrator split command does not wait on the start gate:\n%s", tmuxLog)
+	}
+	if !strings.Contains(tmuxLog, "--permission-mode plan") {
+		t.Fatalf("orchestrator split command does not start Claude in plan mode:\n%s", tmuxLog)
+	}
+}
+
+func TestLaunchIssueSessionFromTUICodexOrchestratorFallsBackFromPlanMode(t *testing.T) {
+	repo := prepareTUIParentLaunchRepo(t)
+	tmuxLogPath := installTUISequentialTmuxShim(t, repo)
+	installTUIParentLaunchGHScript(t)
+	installFakeExecutable(t, "codex")
+
+	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), 500, "codex", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Notice, codexOrchestratorPlanFallbackNotice) {
+		t.Fatalf("notice = %q, want Codex Plan Mode fallback", result.Notice)
+	}
+	tmuxLog := readTUITmuxLog(t, tmuxLogPath)
+	if strings.Contains(tmuxLog, "__codex-plan-tui") {
+		t.Fatalf("tmux log starts the gated orchestrator through Codex Plan Mode:\n%s", tmuxLog)
+	}
+
+	store, loadErr := state.LoadProject(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	orchestrator, ok := store.Find(panelaunch.ManualParentRef, -1)
+	if !ok || orchestrator.Agent != "codex" || orchestrator.PlanMode {
+		t.Fatalf("orchestrator state = %+v/%v, want normal codex", orchestrator, ok)
+	}
+}
+
+func TestLaunchIssueSessionFromTUIReportsClaudeModeFallback(t *testing.T) {
+	repo := prepareTUIParentLaunchRepo(t)
+	tmuxLogPath := installTUISequentialTmuxShim(t, repo)
+	installTUIParentLaunchGHScript(t)
+	binDir := t.TempDir()
+	claudePath := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(claudePath, []byte("#!/bin/sh\nprintf '2.1.206 (Claude Code)\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), 500, "claude", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWarning := "#-1: Claude Code 2.1.207+ is required for explicit plan mode"
+	if !strings.Contains(result.Notice, wantWarning) {
+		t.Fatalf("notice = %q, want orchestrator mode fallback %q", result.Notice, wantWarning)
+	}
+	if tmuxLog := readTUITmuxLog(t, tmuxLogPath); strings.Contains(tmuxLog, "--permission-mode plan") {
+		t.Fatalf("tmux log keeps unsupported Claude plan flags:\n%s", tmuxLog)
+	}
+	store, loadErr := state.LoadProject(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	orchestrator, ok := store.Find(panelaunch.ManualParentRef, -1)
+	if !ok || orchestrator.PlanMode {
+		t.Fatalf("orchestrator state = %+v/%v, want effective non-plan fallback", orchestrator, ok)
 	}
 }
 

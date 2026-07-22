@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -21,7 +22,7 @@ func TestNewIssueOrchestratorPaneRequest(t *testing.T) {
 		Title:  "Coordinate child changes",
 		Body:   "Keep the parent task list current.",
 	}
-	req := newIssueOrchestratorPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), issue, "codex", "shell-orchestrator-key")
+	req, notice := newIssueOrchestratorPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), issue, "codex", false, "shell-orchestrator-key")
 
 	if req.Slug != "orchestrator-issue-500-1" {
 		t.Fatalf("req.Slug = %q, want orchestrator-issue-500-1", req.Slug)
@@ -54,8 +55,11 @@ func TestNewIssueOrchestratorPaneRequest(t *testing.T) {
 	if wantTitle := "orchestrator: #500 Coordinate child changes"; req.Title != wantTitle || req.DisplayNameOverride != wantTitle {
 		t.Fatalf("request title/display = %q/%q, want %q", req.Title, req.DisplayNameOverride, wantTitle)
 	}
-	if req.PlanMode() || req.LaunchMode != "" {
-		t.Fatalf("req.LaunchMode = %q, want flag-free issue orchestrator", req.LaunchMode)
+	if req.PlanMode() || req.LaunchMode != agent.ModeBuild {
+		t.Fatalf("req.LaunchMode = %q, want explicit build mode", req.LaunchMode)
+	}
+	if notice != "" {
+		t.Fatalf("notice = %q, want none with orchestrator plan mode disabled", notice)
 	}
 	if req.Worktree.WorktreePath != "" {
 		t.Fatalf("req.Worktree.WorktreePath = %q, want project-root attach without a worktree", req.Worktree.WorktreePath)
@@ -65,6 +69,39 @@ func TestNewIssueOrchestratorPaneRequest(t *testing.T) {
 	}
 	if !strings.Contains(req.BriefingBody, "`fanout 500 --status`") {
 		t.Fatalf("req.BriefingBody = %q, want parent status instructions", req.BriefingBody)
+	}
+}
+
+func TestNewIssueOrchestratorPaneRequestLaunchMode(t *testing.T) {
+	issue := ghissue.Issue{Number: 500, Title: "Coordinate child changes"}
+	tests := []struct {
+		name       string
+		agentName  string
+		planMode   bool
+		wantMode   agent.LaunchMode
+		wantNotice string
+	}{
+		{name: "claude plan", agentName: "claude", planMode: true, wantMode: agent.ModePlan},
+		{name: "opencode plan", agentName: "opencode", planMode: true, wantMode: agent.ModePlan},
+		{name: "codex plan falls back", agentName: "codex", planMode: true, wantMode: agent.ModeBuild, wantNotice: codexOrchestratorPlanFallbackNotice},
+		{name: "claude build", agentName: "claude", wantMode: agent.ModeBuild},
+		{name: "opencode build", agentName: "opencode", wantMode: agent.ModeBuild},
+		{name: "codex build", agentName: "codex", wantMode: agent.ModeBuild},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, notice := newIssueOrchestratorPaneRequest("/repo", state.Store{}, hooks.EmptyConfig(), issue, tt.agentName, tt.planMode, "shell-orchestrator-key")
+			if req.AgentStartGate == "" {
+				t.Fatal("req.AgentStartGate is empty, want gated orchestrator launch")
+			}
+			if req.LaunchMode != tt.wantMode {
+				t.Fatalf("req.LaunchMode = %q, want %q", req.LaunchMode, tt.wantMode)
+			}
+			if notice != tt.wantNotice {
+				t.Fatalf("notice = %q, want %q", notice, tt.wantNotice)
+			}
+		})
 	}
 }
 

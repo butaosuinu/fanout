@@ -173,24 +173,26 @@ func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentNa
 			return panelaunch.Request{}, "", fmt.Errorf("runtime backend: %w", err)
 		}
 	}
-	return launchPlanCoordinatorLocked(projectRoot, session, commandName, rt.Backend, agentName, recorder.Store, recorder, guard, buildReq)
+	req, paneID, _, launchErr := launchPlanCoordinatorLocked(projectRoot, session, commandName, rt.Backend, agentName, recorder.Store, recorder, guard, buildReq)
+	return req, paneID, launchErr
 }
 
 // launchPlanCoordinatorLocked is the state-lock-held half of
 // launchPlanCoordinator. The issue parent lane already owns the child fan-out
 // lock when its validated plan becomes ready, so it reuses that recorder
 // instead of attempting a nested lock.
-func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, agentName string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, error) {
+func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, agentName string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, string, error) {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	if guard != nil {
 		if guardErr := guard(store); guardErr != nil {
-			return panelaunch.Request{}, "", guardErr
+			return panelaunch.Request{}, "", "", guardErr
 		}
 	}
 
-	// A plain agent config: the coordinator runs fanout plan itself, so it must
-	// not launch in Codex Plan Mode even when the agent is codex.
+	// The built request owns the initial launch mode. Keep the launcher config
+	// plain so it cannot override the plan coordinator or issue orchestrator
+	// lane's decision.
 	cfg := &cliflags.Config{Agent: agentName}
 	info := &fanoutruntime.Info{
 		Session:     "",
@@ -199,15 +201,15 @@ func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runti
 	}
 	livenessKey, err := panelaunch.NewShellPaneKey()
 	if err != nil {
-		return panelaunch.Request{}, "", err
+		return panelaunch.Request{}, "", "", err
 	}
 	paneReq := buildReq(store, livenessKey)
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Backend: runtimeBackend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.AttachWithResult(paneReq, projectRoot)
 	if !ok {
-		return panelaunch.Request{}, "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
+		return panelaunch.Request{}, "", "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
 	}
-	return paneReq, result.PaneID, nil
+	return paneReq, result.PaneID, bufferedLaunchNotice(stderr), nil
 }
 
 // launchIssuePlanFromTUI launches one plan coordinator pane that decomposes a
