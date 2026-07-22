@@ -36,7 +36,7 @@ What launches depends on the issue's children:
 - An issue with OPEN children fans out the equivalent of `--unblocked-only` — a parent fan-out that creates one pane per unblocked child.
 - An issue with no OPEN children — including one whose children are all CLOSED — launches as a standalone pane under the reserved `@watch` parent.
 
-Watcher launches follow `childPlanMode`, off by default. Turning it on stalls every launched Session at the agent's plan approval prompt — the watcher is unattended, so leave the key off unless someone is around to approve the plans. See [Settings]({{< relref "/docs/settings" >}}).
+Watcher launches follow `childPlanMode`, off by default. Turning it on stalls launched Sessions at the agent's plan approval prompt — the watcher is unattended, so leave the key off unless someone is around to approve the plans. A claude Session below the v2.1.207 floor is the exception: fanout warns and omits the mode flags, so that Session runs without the plan stop. See [Settings]({{< relref "/docs/settings" >}}).
 
 ## Session budget
 

@@ -38,8 +38,9 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
   [モニタリングのドキュメント](https://butaosuinu.github.io/fanout/ja/docs/monitoring/)
   を参照してください。
 - **Plan 先行の起動** — 新規 Session と issue の orchestrator は既定で agent の
-  plan mode で始まり、子は `childPlanMode` を on にしたときだけ plan mode に
-  なります。レーン別の 3 設定と agent ごとの挙動は
+  plan mode で始まり(codex の orchestrator は start gate と両立しないため、
+  警告して素の codex で起動)、子は `childPlanMode` を on にしたときだけ
+  plan mode になります。レーン別の 3 設定と agent ごとの挙動は
   [設定のドキュメント](https://butaosuinu.github.io/fanout/ja/docs/settings/)
   を参照してください。
 - **ラベル watcher** — opt-in すると、TUI 常駐中に信頼できる `fanout:auto`

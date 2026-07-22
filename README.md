@@ -37,9 +37,11 @@ English and 日本語.
   full key map and popup behavior are in the
   [monitoring docs](https://butaosuinu.github.io/fanout/docs/monitoring/).
 - **Plan-first launches** — new Sessions and issue orchestrators start in the
-  agent's plan mode by default; children stay in build mode unless
-  `childPlanMode` is on. The three per-lane settings and per-agent behavior
-  are in the [settings docs](https://butaosuinu.github.io/fanout/docs/settings/).
+  agent's plan mode by default (a codex orchestrator conflicts with its start
+  gate, so fanout warns and starts plain codex); children stay in build mode
+  unless `childPlanMode` is on. The three per-lane settings and per-agent
+  behavior are in the
+  [settings docs](https://butaosuinu.github.io/fanout/docs/settings/).
 - **Label watcher** — opt in to a TUI-resident watcher that turns trusted
   `fanout:auto` issues into one-shot fanout sessions.
 - **Web dashboard** — a read-only localhost dashboard with live updates; pop it
