@@ -94,8 +94,9 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   issue-mode popup, `tui_launch.go` manual/plan/attach/shell launch — the
   plan fan-out (prompt mode's checkbox, and issue mode's for a single issue)
   launches one coordinator pane at the project root running the fanout-plan
-  skill so `fanout plan`'s git root stays at the repo, never Codex Plan
-  Mode), and `tui_popup.go` (self-exec popup subcommands).
+  skill so `fanout plan`'s git root stays at the repo; claude/codex
+  coordinators follow `newSessionPlanMode`), and `tui_popup.go` (self-exec
+  popup subcommands).
   `main.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` /
   `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` /
   `tui_watch.go` are class H; the

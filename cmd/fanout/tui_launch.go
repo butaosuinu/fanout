@@ -16,10 +16,12 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
+	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
@@ -62,7 +64,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	}
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
-	cfg := manualPaneConfigForTUIAgent(agentNames[0])
+	cfg := newSessionConfigForTUIAgent(projectRoot, agentNames[0], launchLogger.Warn)
 	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
 	if err != nil {
 		return fanouttui.LaunchResult{}, err
@@ -83,7 +85,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	}
 	createdPaneIDs := make([]string, 0, len(agentNames))
 	for _, agentName := range agentNames {
-		cfg = manualPaneConfigForTUIAgent(agentName)
+		cfg = newSessionConfigForTUIAgent(projectRoot, agentName, launchLogger.Warn)
 		launchStore := store
 		if recorder != nil {
 			launchStore = recorder.Store
@@ -125,8 +127,8 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 	}
 	agentName := agentNames[0]
 	paneReq, paneID, err := launchPlanCoordinator(projectRoot, session, commandName, panelaunch.ManualParentRef, agentName, nil,
-		func(store state.Store, livenessKey string) panelaunch.Request {
-			return newPlanPromptPaneRequest(projectRoot, store, hookConfig, prompt, agentName, livenessKey)
+		func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request {
+			return newPlanPromptPaneRequest(projectRoot, store, hookConfig, prompt, cfg, livenessKey)
 		})
 	if err != nil {
 		return fanouttui.LaunchResult{}, err
@@ -141,18 +143,19 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 // attaches one project-root coordinator pane built by buildReq. guard, when
 // non-nil, runs on the locked store before any pane is created, so callers can
 // reject duplicate launches without a lock race. The coordinator decomposes its
-// source and fans the tasks out itself, so it runs as a normal agent (never
-// Codex Plan Mode) directly on the project root: running `fanout plan` inside a
-// worktree would resolve the git root there and nest state under the
-// coordinator's worktree.
-func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentName string, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, error) {
+// source and fans the tasks out itself, so it runs directly on the project root:
+// running `fanout plan` inside a worktree would resolve the git root there and
+// nest state under the coordinator's worktree. Its initial posture follows
+// newSessionPlanMode.
+func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentName string, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, error) {
 	if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
 		return panelaunch.Request{}, "", validateErr
 	}
 	if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
 		return panelaunch.Request{}, "", validateErr
 	}
-	cfg := &cliflags.Config{ParentRef: parentRef, Agent: agentName}
+	cfg := newSessionConfigForTUIAgent(projectRoot, agentName, nil)
+	cfg.ParentRef = parentRef
 	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
 	if err != nil {
 		return panelaunch.Request{}, "", err
@@ -173,15 +176,25 @@ func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentNa
 			return panelaunch.Request{}, "", fmt.Errorf("runtime backend: %w", err)
 		}
 	}
-	req, paneID, _, launchErr := launchPlanCoordinatorLocked(projectRoot, session, commandName, rt.Backend, agentName, recorder.Store, recorder, guard, buildReq)
+	req, paneID, _, launchErr := launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, rt.Backend, cfg, recorder.Store, recorder, guard, buildReq)
 	return req, paneID, launchErr
 }
 
-// launchPlanCoordinatorLocked is the state-lock-held half of
-// launchPlanCoordinator. The issue parent lane already owns the child fan-out
-// lock when its validated plan becomes ready, so it reuses that recorder
-// instead of attempting a nested lock.
+// launchPlanCoordinatorLocked is the state-lock-held entry for the issue
+// parent lane. That lane already owns the child fan-out lock when its validated
+// plan becomes ready, so it reuses that recorder instead of taking a nested
+// lock.
 func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, agentName string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, string, error) {
+	cfg := &cliflags.Config{Agent: agentName}
+	return launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, runtimeBackend, cfg, store, recorder, guard,
+		func(store state.Store, livenessKey string, _ *cliflags.Config) panelaunch.Request {
+			return buildReq(store, livenessKey)
+		})
+}
+
+// launchPlanCoordinatorLockedWithConfig carries a lane-specific launch mode
+// through the shared coordinator attach path.
+func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName string, runtimeBackend backend.Backend, cfg *cliflags.Config, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, string, error) {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	if guard != nil {
@@ -190,10 +203,6 @@ func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runti
 		}
 	}
 
-	// The built request owns the initial launch mode. Keep the launcher config
-	// plain so it cannot override the plan coordinator or issue orchestrator
-	// lane's decision.
-	cfg := &cliflags.Config{Agent: agentName}
 	info := &fanoutruntime.Info{
 		Session:     "",
 		Target:      tuiLaunchTarget(session),
@@ -203,7 +212,7 @@ func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runti
 	if err != nil {
 		return panelaunch.Request{}, "", "", err
 	}
-	paneReq := buildReq(store, livenessKey)
+	paneReq := buildReq(store, livenessKey, cfg)
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Backend: runtimeBackend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.AttachWithResult(paneReq, projectRoot)
 	if !ok {
@@ -246,8 +255,8 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 	}
 	paneReq, paneID, err := launchPlanCoordinator(projectRoot, session, commandName, strconv.Itoa(issueNum), coordinatorAgent,
 		func(store state.Store) error { return guardIssuePlanCoordinator(projectRoot, store, issueNum) },
-		func(store state.Store, livenessKey string) panelaunch.Request {
-			return newIssuePlanPaneRequest(projectRoot, store, hookConfig, detail, coordinatorAgent, workerAgent, livenessKey)
+		func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request {
+			return newIssuePlanPaneRequest(projectRoot, store, hookConfig, detail, cfg, workerAgent, livenessKey)
 		})
 	if err != nil {
 		return fanouttui.LaunchResult{}, err
@@ -285,11 +294,11 @@ func issuePlanRecorded(projectRoot string, store state.Store, issueNum int) bool
 // on the raw prompt written to BriefingPath. livenessKey becomes the pane's
 // @fanout_shell_key: with the repo root as WorktreePath, path containment is
 // too broad to detect tmux pane id reuse, so liveness matches on the key.
-func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, prompt, agentName, livenessKey string) panelaunch.Request {
+func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, prompt string, cfg *cliflags.Config, livenessKey string) panelaunch.Request {
 	number := panelaunch.NextSyntheticPaneNumber(store, panelaunch.ManualParentRef)
 	title := panelaunch.ShortIssueTitle("plan: " + panelaunch.FirstPromptLine(prompt))
 	briefingPath := planPromptPath(projectRoot, number)
-	return panelaunch.Request{
+	req := panelaunch.Request{
 		ParentRef:           panelaunch.ManualParentRef,
 		Number:              number,
 		Title:               title,
@@ -297,25 +306,30 @@ func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig 
 		ShortTitle:          panelaunch.ShortIssueTitle(title),
 		Slug:                planPromptSlug(number),
 		DisplayNameOverride: title,
-		Prompt:              planSkillPrompt(agentName, briefingPath),
-		Agent:               agentName,
+		Prompt:              planSkillPrompt(cfg.Agent, briefingPath),
+		Agent:               cfg.Agent,
+		LaunchMode:          newSessionLaunchMode(cfg.PlanModeEnabled()),
 		ShellKey:            livenessKey,
 		Hooks:               hookConfig,
 		BriefingPath:        briefingPath,
 		BriefingBody:        prompt,
 	}
+	if req.CodexPlanMode() {
+		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
+	}
+	return req
 }
 
 // newIssuePlanPaneRequest builds the issue-sourced plan coordinator's pane
 // request: a project-root pane (no worktree) whose prompt invokes the
 // fanout-plan skill on the issue-derived coordinator brief written to
 // BriefingPath. It mirrors newPlanPromptPaneRequest but sources the title,
-// body, and briefing from the GitHub issue and never sets Source*/PlanMode.
-func newIssuePlanPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, issue ghissue.Issue, coordinatorAgent, workerAgent, livenessKey string) panelaunch.Request {
+// body, and briefing from the GitHub issue. It never sets Source*.
+func newIssuePlanPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, issue ghissue.Issue, cfg *cliflags.Config, workerAgent, livenessKey string) panelaunch.Request {
 	number := panelaunch.NextSyntheticPaneNumber(store, panelaunch.ManualParentRef)
 	title := fmt.Sprintf("plan: #%d %s", issue.Number, issue.Title)
 	briefingPath := planIssuePromptPath(projectRoot, issue.Number, number)
-	return panelaunch.Request{
+	req := panelaunch.Request{
 		ParentRef:           panelaunch.ManualParentRef,
 		Number:              number,
 		Title:               title,
@@ -323,13 +337,25 @@ func newIssuePlanPaneRequest(projectRoot string, store state.Store, hookConfig h
 		ShortTitle:          panelaunch.ShortIssueTitle(title),
 		Slug:                panelaunch.PlanIssueSlug(issue.Number, number),
 		DisplayNameOverride: title,
-		Prompt:              planSkillPrompt(coordinatorAgent, briefingPath),
-		Agent:               coordinatorAgent,
+		Prompt:              planSkillPrompt(cfg.Agent, briefingPath),
+		Agent:               cfg.Agent,
+		LaunchMode:          newSessionLaunchMode(cfg.PlanModeEnabled()),
 		ShellKey:            livenessKey,
 		Hooks:               hookConfig,
 		BriefingPath:        briefingPath,
 		BriefingBody:        briefing.RenderIssuePlanCoordinator(issue.Number, issue.Title, issue.Body, workerAgent),
 	}
+	if req.CodexPlanMode() {
+		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
+	}
+	return req
+}
+
+func newSessionLaunchMode(planMode bool) agent.LaunchMode {
+	if planMode {
+		return agent.ModePlan
+	}
+	return agent.ModeBuild
 }
 
 // planSkillPrompt points the coordinator agent at the raw prompt file and
@@ -399,7 +425,9 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 		Parent:  resolverParent,
 		Backend: backend.NormalizeName(req.Target.Backend),
 	}}
-	cfg := manualPaneConfigForTUIAgent(agentNames[0])
+	var stdout, stderr bytes.Buffer
+	launchLogger := log.NewWith(&stdout, &stderr, false)
+	cfg := newSessionConfigForTUIAgent(projectRoot, agentNames[0], launchLogger.Warn)
 	cfg.ParentRef = resolverParent
 	rt, err := resolveTUILaunchRuntimeForTarget(projectRoot, "", target, cfg, provisional)
 	if err != nil {
@@ -409,8 +437,6 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 		return "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
 
-	var stdout, stderr bytes.Buffer
-	launchLogger := log.NewWith(&stdout, &stderr, false)
 	recorder, err := state.LockProject(projectRoot)
 	if err != nil {
 		return "", err
@@ -425,7 +451,7 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 	}
 	createdCount := 0
 	for _, agentName := range agentNames {
-		cfg := manualPaneConfigForTUIAgent(agentName)
+		cfg := newSessionConfigForTUIAgent(projectRoot, agentName, launchLogger.Warn)
 		cfg.ParentRef = resolverParent
 		paneReq := newAttachedPaneRequest(cfg, projectRoot, recorder.Store, hookConfig, prompt, targetPath, resolvedTarget)
 		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
@@ -540,13 +566,15 @@ func appendUniqueNotice(notices []string, notice string) []string {
 	return append(notices, notice)
 }
 
-func manualPaneConfigForTUIAgent(agentName string) *cliflags.Config {
-	cfg := &cliflags.Config{ParentRef: panelaunch.ManualParentRef, Agent: agentName}
-	if agentName == "codex" {
-		codexPlanMode := true
-		cfg.PlanMode = &codexPlanMode
+// newSessionConfigForTUIAgent resolves settings at launch time so a value saved
+// from the running TUI applies to the next manual, attach, or plan coordinator.
+func newSessionConfigForTUIAgent(projectRoot, agentName string, warnf settings.WarnFunc) *cliflags.Config {
+	planMode := settings.Resolve(projectRoot, settings.CLIOverrides{}, warnf).NewSessionPlanMode
+	return &cliflags.Config{
+		ParentRef: panelaunch.ManualParentRef,
+		Agent:     agentName,
+		PlanMode:  &planMode,
 	}
-	return cfg
 }
 
 func newTUILaunchShellFunc(projectRoot, session string) fanouttui.ShellLaunchFunc {

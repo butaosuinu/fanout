@@ -1072,6 +1072,7 @@ func TestManualPaneOptionsForTUIMultilinePromptUsesBriefingBody(t *testing.T) {
 }
 
 func TestManualPaneOptionsForTUILongSingleLineUsesBriefingBody(t *testing.T) {
+	t.Setenv("FANOUT_NEW_SESSION_PLAN_MODE", "1")
 	prompt := strings.Repeat("x", panelaunch.MaxInlineManualPromptBytes+1)
 	opts := manualPaneOptionsForTUI(prompt, "codex")
 	wantTitle := strings.Repeat("x", 60)
@@ -1083,7 +1084,7 @@ func TestManualPaneOptionsForTUILongSingleLineUsesBriefingBody(t *testing.T) {
 		t.Fatalf("long prompt body length = %d, want %d", len(opts.Body), len(prompt))
 	}
 
-	cfg := manualPaneConfigForTUIAgent("codex")
+	cfg := newSessionConfigForTUIAgent(t.TempDir(), "codex", nil)
 	cfg.DryRun = true
 	req := panelaunch.NewManualRequest(cfg, t.TempDir(), state.Store{}, hooks.EmptyConfig(), opts)
 	if req.BriefingPath == "" || !strings.Contains(req.BriefingBody, prompt) {
@@ -1094,15 +1095,32 @@ func TestManualPaneOptionsForTUILongSingleLineUsesBriefingBody(t *testing.T) {
 	}
 }
 
-func TestManualPaneConfigForTUIAgentEnablesPlanMode(t *testing.T) {
-	codex := manualPaneConfigForTUIAgent("codex")
-	if codex.Agent != "codex" || !codex.PlanModeEnabled() {
-		t.Fatalf("codex config = %+v, want codex Plan Mode", codex)
+func TestNewSessionConfigForTUIAgentReloadsPlanMode(t *testing.T) {
+	root := t.TempDir()
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	t.Setenv("FANOUT_NEW_SESSION_PLAN_MODE", "")
+	configPath := filepath.Join(xdg, "fanout", "config.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"newSessionPlanMode":false}`), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	claude := manualPaneConfigForTUIAgent("claude")
-	if claude.Agent != "claude" || claude.PlanMode != nil {
-		t.Fatalf("claude config = %+v, want no Codex Plan Mode override", claude)
+	codex := newSessionConfigForTUIAgent(root, "codex", nil)
+	if codex.Agent != "codex" || codex.PlanMode == nil || codex.PlanModeEnabled() {
+		t.Fatalf("codex config = %+v, want explicit non-plan mode", codex)
+	}
+
+	if err := os.WriteFile(configPath, []byte(`{"newSessionPlanMode":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, agentName := range []string{"claude", "codex", "opencode"} {
+		cfg := newSessionConfigForTUIAgent(root, agentName, nil)
+		if cfg.Agent != agentName || !cfg.PlanModeEnabled() {
+			t.Fatalf("%s config = %+v, want reloaded plan mode", agentName, cfg)
+		}
 	}
 }
 
@@ -1416,7 +1434,7 @@ func TestLaunchAttachedAgentFromTUIRecordsStateInSourceRoot(t *testing.T) {
 
 func TestNewAttachedPaneRequestUsesParentScopedBriefingPath(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "repo")
-	cfg := manualPaneConfigForTUIAgent("claude")
+	cfg := newSessionConfigForTUIAgent(repo, "claude", nil)
 	prompt := "inspect this worktree\nthen report"
 
 	first := newAttachedPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), prompt, filepath.Join(repo, ".fanout", "worktrees", "child"), fanouttui.AttachTarget{
@@ -1449,7 +1467,7 @@ func TestNewAttachedPaneRequestUsesParentScopedBriefingPath(t *testing.T) {
 
 func TestNewAttachedPaneRequestKeepsSourceTaskOutOfStateIdentity(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "repo")
-	cfg := manualPaneConfigForTUIAgent("claude")
+	cfg := newSessionConfigForTUIAgent(repo, "claude", nil)
 
 	got := newAttachedPaneRequest(cfg, repo, state.Store{}, hooks.EmptyConfig(), "inspect", filepath.Join(repo, ".fanout", "worktrees", "task"), fanouttui.AttachTarget{
 		TargetPath:       filepath.Join(repo, ".fanout", "worktrees", "task"),
