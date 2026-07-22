@@ -58,6 +58,8 @@ func TestResolvePriorityCLIEnvRepoUserBuiltin(t *testing.T) {
 		PRReviewGate:           false,
 		BriefingCodeReview:     false,
 		AgentTeamsHint:         true,
+		NewSessionPlanMode:     true,
+		OrchestratorPlanMode:   true,
 		PRVisualization:        false,
 		DashboardKeybind:       true,
 		ConsoleKeybind:         true,
@@ -145,6 +147,91 @@ func TestResolveCodexPlanModePriority(t *testing.T) {
 	got = Resolve(repo, CLIOverrides{}, t.Fatalf)
 	if got.CodexPlanMode {
 		t.Fatal("CodexPlanMode = true, want built-in default false")
+	}
+}
+
+func TestResolvePlanModeSettingsPriority(t *testing.T) {
+	repo := t.TempDir()
+	xdg := setEmptyUserConfig(t)
+	clearEnv(t)
+	userPath := filepath.Join(xdg, "fanout", "config.json")
+	writeConfig(t, userPath, `{
+  "newSessionPlanMode": false,
+  "orchestratorPlanMode": false,
+  "childPlanMode": true
+}`)
+	writeConfig(t, RepoConfigPath(repo), `{
+  "newSessionPlanMode": true,
+  "orchestratorPlanMode": true,
+  "childPlanMode": false
+}`)
+	t.Setenv("FANOUT_NEW_SESSION_PLAN_MODE", "on")
+	t.Setenv("FANOUT_CHILD_PLAN_MODE", "off")
+
+	got := Resolve(repo, CLIOverrides{}, nil)
+	if !got.NewSessionPlanMode || got.OrchestratorPlanMode || got.ChildPlanMode {
+		t.Fatalf("plan mode settings = new:%t orchestrator:%t child:%t, want env/user/env true/false/false",
+			got.NewSessionPlanMode, got.OrchestratorPlanMode, got.ChildPlanMode)
+	}
+
+	if err := os.Unsetenv("FANOUT_NEW_SESSION_PLAN_MODE"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Unsetenv("FANOUT_CHILD_PLAN_MODE"); err != nil {
+		t.Fatal(err)
+	}
+	got = Resolve(repo, CLIOverrides{}, nil)
+	if got.NewSessionPlanMode || got.OrchestratorPlanMode || !got.ChildPlanMode {
+		t.Fatalf("plan mode settings = new:%t orchestrator:%t child:%t, want user false/false/true",
+			got.NewSessionPlanMode, got.OrchestratorPlanMode, got.ChildPlanMode)
+	}
+
+	if err := os.Remove(userPath); err != nil {
+		t.Fatal(err)
+	}
+	got = Resolve(repo, CLIOverrides{}, nil)
+	if !got.NewSessionPlanMode || !got.OrchestratorPlanMode || got.ChildPlanMode {
+		t.Fatalf("plan mode settings = new:%t orchestrator:%t child:%t, want defaults true/true/false",
+			got.NewSessionPlanMode, got.OrchestratorPlanMode, got.ChildPlanMode)
+	}
+}
+
+func TestRepoConfigCannotOverridePlanModeSettings(t *testing.T) {
+	repo := t.TempDir()
+	xdg := setEmptyUserConfig(t)
+	clearEnv(t)
+	writeConfig(t, filepath.Join(xdg, "fanout", "config.json"), `{
+  "newSessionPlanMode": false,
+  "orchestratorPlanMode": false,
+  "childPlanMode": true
+}`)
+	path := RepoConfigPath(repo)
+	writeConfig(t, path, `{
+  "newSessionPlanMode": true,
+  "orchestratorPlanMode": true,
+  "childPlanMode": false
+}`)
+
+	var warnings []string
+	got := Resolve(repo, CLIOverrides{}, func(format string, a ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, a...))
+	})
+	if got.NewSessionPlanMode || got.OrchestratorPlanMode || !got.ChildPlanMode {
+		t.Fatalf("plan mode settings = new:%t orchestrator:%t child:%t, want user values false/false/true",
+			got.NewSessionPlanMode, got.OrchestratorPlanMode, got.ChildPlanMode)
+	}
+	wantWarnings := []string{
+		fmt.Sprintf("settings %s: newSessionPlanMode is ignored in repo config; use user config or FANOUT_NEW_SESSION_PLAN_MODE", path),
+		fmt.Sprintf("settings %s: orchestratorPlanMode is ignored in repo config; use user config or FANOUT_ORCHESTRATOR_PLAN_MODE", path),
+		fmt.Sprintf("settings %s: childPlanMode is ignored in repo config; use user config or FANOUT_CHILD_PLAN_MODE", path),
+	}
+	if len(warnings) != len(wantWarnings) {
+		t.Fatalf("warnings = %#v, want %#v", warnings, wantWarnings)
+	}
+	for i, want := range wantWarnings {
+		if warnings[i] != want {
+			t.Fatalf("warnings[%d] = %q, want %q", i, warnings[i], want)
+		}
 	}
 }
 
@@ -716,6 +803,52 @@ func TestCodexPlanModeConfigMetadataAndRepoRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPlanModeConfigMetadataAndUserRoundTrip(t *testing.T) {
+	repo := t.TempDir()
+	setEmptyUserConfig(t)
+	clearEnv(t)
+
+	keys := ConfigKeys()
+	runtimeBackendIndex := -1
+	for i, spec := range keys {
+		if spec.Key == "runtimeBackend" {
+			runtimeBackendIndex = i
+			break
+		}
+	}
+	if runtimeBackendIndex < 3 {
+		t.Fatalf("runtimeBackend index = %d, want room for three preceding Plan Mode keys", runtimeBackendIndex)
+	}
+	wantSpecs := []ConfigKey{
+		{Key: "newSessionPlanMode", Group: "Launch", Label: "New session Plan Mode", Kind: ValueBool, Env: "FANOUT_NEW_SESSION_PLAN_MODE", Default: "true", RepoEditable: false},
+		{Key: "orchestratorPlanMode", Group: "Launch", Label: "Orchestrator Plan Mode", Kind: ValueBool, Env: "FANOUT_ORCHESTRATOR_PLAN_MODE", Default: "true", RepoEditable: false},
+		{Key: "childPlanMode", Group: "Launch", Label: "Child Plan Mode", Kind: ValueBool, Env: "FANOUT_CHILD_PLAN_MODE", Default: "false", RepoEditable: false},
+	}
+	for i, want := range wantSpecs {
+		got := keys[runtimeBackendIndex-len(wantSpecs)+i]
+		if got != want {
+			t.Fatalf("Plan Mode ConfigKeys()[%d] = %#v, want %#v", runtimeBackendIndex-len(wantSpecs)+i, got, want)
+		}
+	}
+
+	path, err := SaveEditable(repo, ConfigScopeUser, map[string]ConfigValue{
+		"newSessionPlanMode":   BoolValue(false),
+		"orchestratorPlanMode": BoolValue(false),
+		"childPlanMode":        BoolValue(true),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != UserConfigPath() {
+		t.Fatalf("SaveEditable path = %q, want %q", path, UserConfigPath())
+	}
+	got := Resolve(repo, CLIOverrides{}, t.Fatalf)
+	if got.NewSessionPlanMode || got.OrchestratorPlanMode || !got.ChildPlanMode {
+		t.Fatalf("saved plan mode settings = new:%t orchestrator:%t child:%t, want false/false/true",
+			got.NewSessionPlanMode, got.OrchestratorPlanMode, got.ChildPlanMode)
+	}
+}
+
 func TestSaveEditableRejectsUnsafeRepoSettingsWithoutChangingFile(t *testing.T) {
 	repo := t.TempDir()
 	setEmptyUserConfig(t)
@@ -768,6 +901,9 @@ func clearEnv(t *testing.T) {
 		"FANOUT_BRIEFING_CODE_REVIEW",
 		"FANOUT_AGENT_TEAMS_HINT",
 		"FANOUT_CODEX_PLAN_MODE",
+		"FANOUT_NEW_SESSION_PLAN_MODE",
+		"FANOUT_ORCHESTRATOR_PLAN_MODE",
+		"FANOUT_CHILD_PLAN_MODE",
 		"FANOUT_PR_VISUALIZATION",
 		"FANOUT_DASHBOARD_KEYBIND",
 		"FANOUT_CONSOLE_KEYBIND",
