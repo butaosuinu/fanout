@@ -190,10 +190,11 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	var orchestratorReq panelaunch.Request
 	var orchestratorPaneID string
 	var orchestratorCreated bool
+	var orchestratorNotice string
 	ready := func(store state.Store, recorder panelaunch.StateRecorder, runtimeBackend backend.Backend) error {
 		var launchErr error
-		orchestratorReq, orchestratorPaneID, orchestratorCreated, launchErr = launchIssueOrchestratorPrepared(
-			projectRoot, session, commandName, runtimeBackend, store, recorder, hookConfig, detail, defaultAgent,
+		orchestratorReq, orchestratorPaneID, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
+			projectRoot, session, commandName, runtimeBackend, store, recorder, hookConfig, detail, defaultAgent, resolvedSettings.OrchestratorPlanMode,
 		)
 		return launchErr
 	}
@@ -218,6 +219,13 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			}
 		}
 	}
+	if orchestratorPaneID != "" && orchestratorNotice != "" {
+		if result.Notice == "" {
+			result.Notice = orchestratorNotice
+		} else {
+			result.Notice = orchestratorNotice + "; " + result.Notice
+		}
+	}
 	return finishTUIIssueParentLaunch(issueNum, orchestratorPaneID, result, err)
 }
 
@@ -237,6 +245,9 @@ func finishTUIIssueParentLaunch(issueNum int, orchestratorPaneID string, result 
 				notice = fmt.Sprintf("started orchestrator + %d child pane(s), then failed: %v", created, err)
 			} else if orchestratorPaneID != "" {
 				notice = fmt.Sprintf("started orchestrator, then failed: %v", err)
+			}
+			if result.Notice != "" {
+				notice += "; " + result.Notice
 			}
 			return fanouttui.LaunchResult{Notice: notice, CreatedPaneIDs: createdPaneIDs}, nil
 		}

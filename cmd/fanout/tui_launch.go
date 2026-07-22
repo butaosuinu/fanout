@@ -189,8 +189,9 @@ func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runti
 		}
 	}
 
-	// A plain agent config: the coordinator runs fanout plan itself, so it must
-	// not launch in Codex Plan Mode even when the agent is codex.
+	// The built request owns the initial launch mode. Keep the launcher config
+	// plain so it cannot override the plan coordinator or issue orchestrator
+	// lane's decision.
 	cfg := &cliflags.Config{Agent: agentName}
 	info := &fanoutruntime.Info{
 		Session:     "",
