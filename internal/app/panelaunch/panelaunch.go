@@ -96,6 +96,7 @@ func (r Request) CodexPlanMode() bool {
 // empty for successful dry runs because no pane is created.
 type Result struct {
 	PaneID string
+	Notice string
 }
 
 // ManualOptions parameterizes NewManualRequest.
@@ -271,7 +272,7 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 		return Result{}, false
 	}
 	l.Log.Ok("%s: pane %s created in %s", paneLogLabel(req), paneID, prepared.WorktreePath)
-	return Result{PaneID: paneID}, true
+	return Result{PaneID: paneID, Notice: launchNotice(req)}, true
 }
 
 // writeBriefing creates the briefing directory and writes req.BriefingBody to
@@ -363,7 +364,7 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		}
 	}
 	l.Log.Ok("%s: pane %s attached to %s", paneLogLabel(req), paneID, targetPath)
-	return Result{PaneID: paneID}, true
+	return Result{PaneID: paneID, Notice: launchNotice(req)}, true
 }
 
 // decorateOpts selects the strictness of splitAndDecorate's post-split steps.
@@ -710,6 +711,13 @@ func logPaneRequest(req Request, lg *log.Logger) {
 	if req.CodexTeamMode && !req.PlanMode() {
 		lg.Dim("  codex-team -> app-server TUI + idle-turn message bridge")
 	}
+}
+
+func launchNotice(req Request) string {
+	if req.PlanMode() && (req.CodexTeamRequested || req.CodexTeamMode) {
+		return fmt.Sprintf("%s: plan mode takes precedence over --team; Codex team bridge is disabled for this pane", paneLogLabel(req))
+	}
+	return ""
 }
 
 func logPlanMode(req Request, lg *log.Logger) {

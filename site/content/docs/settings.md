@@ -1,13 +1,13 @@
 ---
 title: Settings
 linkTitle: Settings
-description: "Child-launch and briefing toggles, watcher controls, TUI notification channels, and the flag > env > repo > user > default resolution order behind them."
+description: "Briefing toggles, watcher controls, TUI notification channels, and their settings resolution order."
 weight: 70
 kanji: 整
 yomi: settings
 ---
 
-A few of fanout's behaviors are ones a team will want to change: whether normal Codex children start in Plan Mode, whether children open PRs automatically, whether to run the watcher, and where to send state transitions. These live as child-launch and briefing toggles, tmux keybindings, watcher controls, and TUI notification channels — all resolved from the same settings stack. Codex Plan Mode and the watcher default to off, the briefing and keybinding booleans default to `true`, and notifications default to `bell`.
+fanout settings control child briefing instructions, the watcher, tmux keybindings, and notifications. The watcher defaults to off, the briefing and keybinding booleans default to `true`, and notifications default to `bell`.
 
 ## Resolution order
 
@@ -20,17 +20,16 @@ When the same setting is given on both the CLI and a config file, which one wins
 
 Press `s` in the persistent TUI console to edit either config file in a popup. The Target row switches between user config and repo config. Each key can be set to a value or returned to `inherit`, which removes that key from the selected JSON file.
 
-The popup edits only config files. CLI flags and `FANOUT_*` environment variables still override what you save. `codexPlanMode` is editable in both user and repo config. Repo config keeps the same safety restrictions described below: it cannot enable the watcher, cannot set HTTP notification URLs, cannot set `runtimeBackend`, and can only choose `bell`, `tmux`, or `none` for `notifications`.
+The popup edits only config files. CLI flags and `FANOUT_*` environment variables still override what you save. Repo config keeps the same safety restrictions described below: it cannot enable the watcher, set HTTP notification URLs, or set `runtimeBackend`, and it can only choose `bell`, `tmux`, or `none` for `notifications`.
 
 ## What each toggle is for
 
-The behavior toggles control child launch mode, briefing instructions, and tmux keybindings.
+The behavior toggles control briefing instructions and tmux keybindings.
 
 - `autoPullRequest`: tells children to open a PR once their work is done. Turn it off if your team opens PRs by hand.
 - `prReviewGate`: on by default, it keeps the PR-review-gate expectation. Turn it off and the Claude child briefing instead gets a note permitting `FANOUT_SKIP_PR_REVIEW=1 gh pr create` when the creation hook blocks (see below).
 - `briefingCodeReview`: tells Claude children to run the `/code-review` slash command on their changes before committing.
 - `agentTeamsHint`: tells Claude children that Claude Code Agent Teams is available. It has no effect on non-Claude children.
-- `codexPlanMode`: starts normal issue / Project fan-out children as interactive Codex Plan Mode sessions. Every selected child must resolve to `codex`; a mixed-agent run fails before any pane is created. Which launch paths the setting covers — and which ignore it — is in [Agent Integrations]({{< relref "/docs/agents#codex-plan-mode" >}}).
 - `prVisualization`: asks children to structure the PR body they open and, conditionally, include a Mermaid diagram (see below).
 - `dashboardKeybind`: registers the `F12` / `prefix + D` dashboard keys and `prefix + M` same-worktree action key in tmux.
 - `consoleKeybind`: registers the `F11` / `prefix + T` console-return keys in tmux when the TUI console starts.
@@ -55,7 +54,6 @@ Notification channels pick where TUI state transitions go.
 | PR review gate note | `prReviewGate` | `FANOUT_PR_REVIEW_GATE` | `--pr-review-gate` / `--no-pr-review-gate` | `true` |
 | Claude `/code-review` instruction | `briefingCodeReview` | `FANOUT_BRIEFING_CODE_REVIEW` | `--briefing-code-review` / `--no-briefing-code-review` | `true` |
 | Claude Agent Teams hint | `agentTeamsHint` | `FANOUT_AGENT_TEAMS_HINT` | `--agent-teams-hint` / `--no-agent-teams-hint` | `true` |
-| Codex Plan Mode for issue / Project children | `codexPlanMode` | `FANOUT_CODEX_PLAN_MODE` | `--codex-plan-mode` / `--no-codex-plan-mode` | `false` |
 | Structured PR body and gated Mermaid briefing guidance | `prVisualization` | `FANOUT_PR_VISUALIZATION` | `--pr-visualization` / `--no-pr-visualization` | `true` |
 | Dashboard/action tmux keybindings | `dashboardKeybind` | `FANOUT_DASHBOARD_KEYBIND` | `--dashboard-keybind` / `--no-dashboard-keybind` | `true` |
 | Console-return tmux keybindings | `consoleKeybind` | `FANOUT_CONSOLE_KEYBIND` | n/a | `true` |
@@ -70,7 +68,7 @@ Notification channels pick where TUI state transitions go.
 | ntfy POST URL | `ntfyURL` | `FANOUT_NTFY_URL` | n/a | unset |
 | Slack webhook POST URL | `slackWebhookURL` | `FANOUT_SLACK_WEBHOOK_URL` | n/a | unset |
 
-These flag pairs are also listed in the [CLI Reference]({{< relref "/docs/cli" >}}); the watcher and notification settings have no CLI flag.
+The flag pairs are also listed in the [CLI Reference]({{< relref "/docs/cli" >}}). The watcher and notification settings have no CLI flag.
 
 ## Sample config.json
 
@@ -82,7 +80,6 @@ Both config files share the same shape: a flat JSON object of booleans, strings,
   "prReviewGate": true,
   "briefingCodeReview": true,
   "agentTeamsHint": false,
-  "codexPlanMode": false,
   "prVisualization": true,
   "dashboardKeybind": true,
   "consoleKeybind": true,

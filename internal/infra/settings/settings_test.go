@@ -100,46 +100,6 @@ func TestResolvePriorityCLIEnvRepoUserBuiltin(t *testing.T) {
 	}
 }
 
-func TestResolveCodexPlanModePriority(t *testing.T) {
-	repo := t.TempDir()
-	xdg := setEmptyUserConfig(t)
-	clearEnv(t)
-	userPath := filepath.Join(xdg, "fanout", "config.json")
-	writeConfig(t, userPath, `{"codexPlanMode": true}`)
-	t.Setenv("FANOUT_CODEX_PLAN_MODE", "on")
-
-	got := Resolve(repo, CLIOverrides{CodexPlanMode: new(false)}, t.Fatalf)
-	if got.CodexPlanMode {
-		t.Fatal("CodexPlanMode = true, want CLI override false")
-	}
-
-	got = Resolve(repo, CLIOverrides{}, t.Fatalf)
-	if !got.CodexPlanMode {
-		t.Fatal("CodexPlanMode = false, want environment override true")
-	}
-
-	if err := os.Unsetenv("FANOUT_CODEX_PLAN_MODE"); err != nil {
-		t.Fatalf("Unsetenv(FANOUT_CODEX_PLAN_MODE): %v", err)
-	}
-	got = Resolve(repo, CLIOverrides{CodexPlanMode: new(true)}, t.Fatalf)
-	if !got.CodexPlanMode {
-		t.Fatal("CodexPlanMode = false, want CLI override true over repo false")
-	}
-
-	got = Resolve(repo, CLIOverrides{}, t.Fatalf)
-	if !got.CodexPlanMode {
-		t.Fatal("CodexPlanMode = false, want user override true")
-	}
-
-	if err := os.Remove(userPath); err != nil {
-		t.Fatalf("Remove(%q): %v", userPath, err)
-	}
-	got = Resolve(repo, CLIOverrides{}, t.Fatalf)
-	if got.CodexPlanMode {
-		t.Fatal("CodexPlanMode = true, want built-in default false")
-	}
-}
-
 func TestResolvePlanModeSettingsPriority(t *testing.T) {
 	repo := t.TempDir()
 	xdg := setEmptyUserConfig(t)
@@ -191,7 +151,6 @@ func TestRepoConfigCannotOverridePlanModeSettings(t *testing.T) {
 	xdg := setEmptyUserConfig(t)
 	clearEnv(t)
 	writeConfig(t, filepath.Join(xdg, "fanout", "config.json"), `{
-  "codexPlanMode": true,
   "newSessionPlanMode": false,
   "orchestratorPlanMode": false,
   "childPlanMode": true
@@ -208,12 +167,12 @@ func TestRepoConfigCannotOverridePlanModeSettings(t *testing.T) {
 	got := Resolve(repo, CLIOverrides{}, func(format string, a ...any) {
 		warnings = append(warnings, fmt.Sprintf(format, a...))
 	})
-	if !got.CodexPlanMode || got.NewSessionPlanMode || got.OrchestratorPlanMode || !got.ChildPlanMode {
-		t.Fatalf("plan mode settings = codex:%t new:%t orchestrator:%t child:%t, want user values true/false/false/true",
-			got.CodexPlanMode, got.NewSessionPlanMode, got.OrchestratorPlanMode, got.ChildPlanMode)
+	if got.NewSessionPlanMode || got.OrchestratorPlanMode || !got.ChildPlanMode {
+		t.Fatalf("plan mode settings = new:%t orchestrator:%t child:%t, want user values false/false/true",
+			got.NewSessionPlanMode, got.OrchestratorPlanMode, got.ChildPlanMode)
 	}
 	wantWarnings := []string{
-		fmt.Sprintf("settings %s: codexPlanMode is ignored in repo config; use user config, FANOUT_CODEX_PLAN_MODE, or --codex-plan-mode", path),
+		fmt.Sprintf("settings %s: codexPlanMode is deprecated and ignored; use newSessionPlanMode, orchestratorPlanMode, and childPlanMode", path),
 		fmt.Sprintf("settings %s: newSessionPlanMode is ignored in repo config; use user config or FANOUT_NEW_SESSION_PLAN_MODE", path),
 		fmt.Sprintf("settings %s: orchestratorPlanMode is ignored in repo config; use user config or FANOUT_ORCHESTRATOR_PLAN_MODE", path),
 		fmt.Sprintf("settings %s: childPlanMode is ignored in repo config; use user config or FANOUT_CHILD_PLAN_MODE", path),
@@ -499,7 +458,7 @@ func TestResolveWarnsAndIgnoresInvalidInputs(t *testing.T) {
 	assertWarningContains(t, warnings, "settings env FANOUT_AGENT_TEAMS_HINT: invalid boolean \"sometimes\"")
 }
 
-func TestResolveWarnsAndIgnoresInvalidCodexPlanMode(t *testing.T) {
+func TestResolveWarnsAndIgnoresLegacyCodexPlanMode(t *testing.T) {
 	repo := t.TempDir()
 	setEmptyUserConfig(t)
 	clearEnv(t)
@@ -511,11 +470,11 @@ func TestResolveWarnsAndIgnoresInvalidCodexPlanMode(t *testing.T) {
 		warnings = append(warnings, fmt.Sprintf(format, a...))
 	})
 
-	if got.CodexPlanMode {
-		t.Fatal("CodexPlanMode = true, want invalid inputs ignored")
+	if got != Defaults() {
+		t.Fatalf("Resolve() = %#v, want defaults", got)
 	}
-	assertWarningContains(t, warnings, "codexPlanMode must be a boolean")
-	assertWarningContains(t, warnings, "settings env FANOUT_CODEX_PLAN_MODE: invalid boolean \"sometimes\"")
+	assertWarningContains(t, warnings, "codexPlanMode is deprecated and ignored; use newSessionPlanMode, orchestratorPlanMode, and childPlanMode")
+	assertWarningContains(t, warnings, "FANOUT_CODEX_PLAN_MODE is deprecated and ignored; use FANOUT_NEW_SESSION_PLAN_MODE, FANOUT_ORCHESTRATOR_PLAN_MODE, and FANOUT_CHILD_PLAN_MODE")
 }
 
 func TestResolveWarnsAndIgnoresInvalidWatcherInts(t *testing.T) {
@@ -729,75 +688,30 @@ func TestRuntimeBackendConfigMetadataAndUserValidation(t *testing.T) {
 	}
 }
 
-func TestCodexPlanModeConfigMetadataAndUserRoundTrip(t *testing.T) {
+func TestLegacyCodexPlanModeIsNotEditable(t *testing.T) {
 	repo := t.TempDir()
-	setEmptyUserConfig(t)
+	xdg := setEmptyUserConfig(t)
 	clearEnv(t)
 
-	var (
-		gotSpec ConfigKey
-		found   bool
-	)
 	for _, spec := range ConfigKeys() {
 		if spec.Key == "codexPlanMode" {
-			gotSpec = spec
-			found = true
-			break
+			t.Fatal("ConfigKeys() still contains codexPlanMode")
 		}
 	}
-	if !found {
-		t.Fatal("ConfigKeys() does not contain codexPlanMode")
-	}
-	wantSpec := ConfigKey{
-		Key:          "codexPlanMode",
-		Group:        "Launch",
-		Label:        "Codex child Plan Mode",
-		Kind:         ValueBool,
-		Env:          "FANOUT_CODEX_PLAN_MODE",
-		Default:      "false",
-		RepoEditable: false,
-	}
-	if gotSpec != wantSpec {
-		t.Fatalf("codexPlanMode ConfigKey = %#v, want %#v", gotSpec, wantSpec)
-	}
-	if _, err := SaveEditable(repo, ConfigScopeRepo, map[string]ConfigValue{
+	if _, err := SaveEditable(repo, ConfigScopeUser, map[string]ConfigValue{
 		"codexPlanMode": BoolValue(true),
-	}); err == nil {
-		t.Fatal("SaveEditable(repo codexPlanMode) = nil, want unsafe-setting rejection")
+	}); err == nil || !strings.Contains(err.Error(), "unknown settings key") {
+		t.Fatalf("SaveEditable(user codexPlanMode) error = %v, want unknown setting key", err)
 	}
 
-	path, err := SaveEditable(repo, ConfigScopeUser, map[string]ConfigValue{
-		"codexPlanMode": BoolValue(true),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if path != UserConfigPath() {
-		t.Fatalf("SaveEditable path = %q, want %q", path, UserConfigPath())
-	}
+	path := filepath.Join(xdg, "fanout", "config.json")
+	writeConfig(t, path, `{"codexPlanMode":true}`)
 	loaded, err := LoadEditable(repo, ConfigScopeUser)
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, ok := loaded.Values["codexPlanMode"]
-	if !ok || value.Bool == nil || !*value.Bool {
-		t.Fatalf("loaded codexPlanMode = %#v (found=%v), want true", value, ok)
-	}
-	if got := Resolve(repo, CLIOverrides{}, t.Fatalf); !got.CodexPlanMode {
-		t.Fatal("resolved CodexPlanMode = false, want saved repo value true")
-	}
-
-	if _, err = SaveEditable(repo, ConfigScopeUser, map[string]ConfigValue{
-		"codexPlanMode": {},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err = LoadEditable(repo, ConfigScopeUser)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok = loaded.Values["codexPlanMode"]; ok {
-		t.Fatal("codexPlanMode remains after saving inherit")
+	if _, ok := loaded.Values["codexPlanMode"]; ok {
+		t.Fatal("LoadEditable() exposes legacy codexPlanMode")
 	}
 }
 

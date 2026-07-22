@@ -191,7 +191,7 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 	if cfg.Team {
 		teamCtx = buildTaskTeamContext(rt.Info.ProjectRoot, parentRef, plan.Targets)
 	}
-	codexTeamPreseeded := cfg.Team && !cfg.DryRun && planHasCodexTeamBridge(cliCfg, plan.Targets)
+	codexTeamPreseeded := cfg.Team && !cfg.DryRun && !resolvedSettings.ChildPlanMode && planHasCodexTeamBridge(cliCfg, plan.Targets)
 	if codexTeamPreseeded {
 		if err := preseedTaskTeamRegistry(teamCtx.DBPath, parentRef, plan.Targets, cliCfg); err != nil {
 			lg.Err("team: %v", err)

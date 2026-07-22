@@ -108,7 +108,8 @@ fanout plan launch-plan --cleanup
 並列で動く兄弟ペインが同じ interface を触っていると、互いの進捗や決め事を伝え合いたくなります。
 ところが親を複数ペインにファンアウトすると、各子は自分のペインで動く独立した agent セッションになり、既定ではペイン同士は互いを認識できません。
 run ごとに `--team` で opt-in すると、fanout が(best-effort で)各子の通常 briefing に「Coordinating with your sibling panes」節を注入し、per-parent の peer レジストリに seed するので、兄弟がお互いを把握できます。
-`--codex-plan-mode` の子はレジストリには seed されますが最小限の Plan-Mode briefing を受け取るため、協調節は付きません。
+Plan Mode の Codex 子もレジストリに seed されますが、最小限の Plan-Mode briefing を受け取ります。
+Plan Mode が優先され、Codex team bridge は無効になります。
 
 ファンアウトしたペイン内では、`fanout msg` が自分が今どの子(または親)かを自動検出し、per-parent のバス上でやり取りします。
 

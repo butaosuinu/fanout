@@ -165,8 +165,8 @@ codex 子: 次のチェックポイントで inbox を読み、助言を適用�
   `fanout msg` 以外の Bash・副作用ツール。`--permission-mode plan` 等での強制
   可否は spike で検証し、無理なら briefing の指示に留める(未決点 3)
 - 相談の規律は briefing で契約化する(「未決点と推奨」の 3 を参照)。ただし
-  issue lane の codex 子を `--codex-plan-mode` で起動する場合、
-  `internal/app/briefing.Render` は codexPlanMode で `renderCodexPlanBriefing`
+  issue lane の codex 子を child Plan Mode で起動する場合、
+  `internal/app/briefing.Render` は plan mode で `renderCodexPlanBriefing`
   を即返すため、標準 work briefing に足した相談プロトコルは executor に届かない。
   この経路で B を使うなら Codex Plan Mode の初期プロンプト側に契約を注入する
   必要がある。当面は「codex 子は素起動(非 Plan Mode)で advisor と組む」を

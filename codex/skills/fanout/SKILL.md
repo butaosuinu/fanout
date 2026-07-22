@@ -64,8 +64,8 @@ run.
 5. Use a per-target `--agent NUM=name` override only when the user supplied
    it or a provider-specific requirement makes it necessary. Supported agents
    are `claude`, `codex`, and `opencode`.
-6. Pass `--codex-plan-mode` only when every selected target resolves to
-   `codex` after overrides.
+6. Let fanout resolve Child Plan Mode from user config or
+   `FANOUT_CHILD_PLAN_MODE`; do not synthesize a per-run plan flag.
 
 Rely on the CLI's prerequisite errors for `gh`, `git`, `tmux 3.3+`, and agent
 installation.

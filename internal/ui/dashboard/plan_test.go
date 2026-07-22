@@ -183,7 +183,7 @@ func TestPlanHerdrPaneIs404AndSkipsCapture(t *testing.T) {
 }
 
 // TestPlanNonPlanModePaneIs404 locks in the plan-specific gate: a live,
-// verifiable pane that was NOT launched with --codex-plan-mode must 404
+// verifiable pane that was not launched in Plan Mode must 404
 // without ever capturing — /api/plan never widens into a second generic
 // capture endpoint.
 func TestPlanNonPlanModePaneIs404(t *testing.T) {

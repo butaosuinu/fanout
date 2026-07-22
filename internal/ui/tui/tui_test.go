@@ -1441,6 +1441,18 @@ func TestWatchTickRunsCycleAndRefreshesStateAndGH(t *testing.T) {
 	}
 }
 
+func TestWatchDoneSurfacesLaunchNotices(t *testing.T) {
+	m := newModel(Options{ProjectRoot: "/repo", Watcher: &fakeWatcherRunner{}})
+	want := "child #101: plan mode takes precedence over --team; Codex team bridge is disabled for this pane"
+
+	updated, _ := m.Update(watchDoneMsg{report: watch.Report{Notices: []string{want}}, at: time.Unix(1, 0)})
+	m = updated.(model)
+
+	if m.notice != want {
+		t.Fatalf("notice = %q, want %q", m.notice, want)
+	}
+}
+
 func TestWatchLaunchFailureRendersFooter(t *testing.T) {
 	m := newModel(Options{
 		ProjectRoot: "/repo",
@@ -4109,7 +4121,7 @@ func TestSettingsViewIncludesPlanModeRowsAndDisablesRepoEdits(t *testing.T) {
 	m.openSettingsForm(fanoutsettings.ConfigScopeUser)
 
 	view := m.settingsView()
-	for _, want := range []string{"Launch", "codexPlanMode", "newSessionPlanMode", "orchestratorPlanMode", "childPlanMode"} {
+	for _, want := range []string{"Launch", "newSessionPlanMode", "orchestratorPlanMode", "childPlanMode"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("settings view missing %q:\n%s", want, view)
 		}

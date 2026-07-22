@@ -12,14 +12,14 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 )
 
-func TestNewWatchLaunchConfigDisablesResolvedPlanMode(t *testing.T) {
+func TestNewWatchLaunchConfigUsesResolvedChildPlanMode(t *testing.T) {
 	resolved := settings.Defaults()
-	resolved.CodexPlanMode = true
+	resolved.ChildPlanMode = true
 
 	cfg := newWatchLaunchConfig(resolved, 123, 2)
 
-	if cfg.PlanMode == nil || *cfg.PlanMode {
-		t.Fatalf("PlanMode = %v, want explicit false watcher override", cfg.PlanMode)
+	if cfg.PlanMode == nil || !*cfg.PlanMode {
+		t.Fatalf("PlanMode = %v, want child Plan Mode watcher override", cfg.PlanMode)
 	}
 }
 

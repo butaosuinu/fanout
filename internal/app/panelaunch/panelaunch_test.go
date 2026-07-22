@@ -552,8 +552,8 @@ func TestPlanAndManualPaneRequestsAllowMissingOrigin(t *testing.T) {
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "Do it"}
 
 	taskReq := NewTaskRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
-	if taskReq.LaunchMode != "" {
-		t.Fatalf("task pane LaunchMode = %q, want flag-free launch", taskReq.LaunchMode)
+	if taskReq.LaunchMode != agent.ModeBuild {
+		t.Fatalf("task pane LaunchMode = %q, want explicit build launch", taskReq.LaunchMode)
 	}
 	if !taskReq.Worktree.AllowMissingOrigin {
 		t.Fatal("task pane AllowMissingOrigin = false, want true")
@@ -1083,17 +1083,18 @@ func TestNewIssueRequestUsesIssueAgentOverride(t *testing.T) {
 }
 
 func TestNewWatchRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
-	codexPlanMode := true
 	cfg := &cliflags.Config{
 		ParentRef:    "220",
 		Agent:        "codex",
 		BaseBranch:   "main",
 		BranchPrefix: "watch/",
-		PlanMode:     &codexPlanMode,
+		PlanMode:     new(false),
 	}
 	issue := ghissue.Issue{Number: 223, Title: "Watch runtime helper", Body: "body"}
+	resolved := settings.Defaults()
+	resolved.ChildPlanMode = true
 
-	got := NewWatchRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig())
+	got := NewWatchRequest(cfg, "/repo", issue, resolved, hooks.EmptyConfig())
 
 	if got.ParentRef != WatchParentRef || got.Number != 223 || got.TaskID != "" {
 		t.Fatalf("watch identity = parent %q number %d task %q, want %q/223 with no task", got.ParentRef, got.Number, got.TaskID, WatchParentRef)
@@ -1108,12 +1109,12 @@ func TestNewWatchRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
 	if got.BriefingPath != wantBriefingPath {
 		t.Fatalf("briefing path = %q", got.BriefingPath)
 	}
-	wantPrompt := "[fanout #223 of #@watch] watch-runtime-helper-223: Watch runtime helper. read " + wantBriefingPath + " and begin."
+	wantPrompt := "[fanout #223 of #@watch] watch-runtime-helper-223: Watch runtime helper. read " + wantBriefingPath + " and investigate, then propose a plan."
 	if got.Prompt != wantPrompt {
 		t.Fatalf("prompt = %q, want %q", got.Prompt, wantPrompt)
 	}
-	if got.PlanMode() || got.LaunchMode != "" || got.CodexPlanStatusPath != "" {
-		t.Fatalf("plan mode = %t launch mode %q status %q, want flag-free watch work pane", got.PlanMode(), got.LaunchMode, got.CodexPlanStatusPath)
+	if !got.PlanMode() || got.LaunchMode != agent.ModePlan || got.CodexPlanStatusPath == "" {
+		t.Fatalf("plan mode = %t launch mode %q status %q, want child Plan Mode watch pane", got.PlanMode(), got.LaunchMode, got.CodexPlanStatusPath)
 	}
 	for _, want := range []string{
 		"You are assigned GitHub issue #223",
@@ -1124,13 +1125,43 @@ func TestNewWatchRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
 			t.Fatalf("briefing missing %q:\n%s", want, got.BriefingBody)
 		}
 	}
-	if strings.Contains(got.BriefingBody, "<proposed_plan>") {
-		t.Fatalf("watch briefing used Codex Plan Mode body:\n%s", got.BriefingBody)
+	if !strings.Contains(got.BriefingBody, "<proposed_plan>") {
+		t.Fatalf("watch briefing does not use Codex Plan Mode body:\n%s", got.BriefingBody)
 	}
 
 	pane := statePane(got, "%42", got.Worktree.WorktreePath, time.Date(2026, 6, 20, 1, 2, 3, 0, time.UTC), codexapp.Status{})
 	if pane.Parent != WatchParentRef || pane.IssueNum != 223 {
 		t.Fatalf("state key = %q/%d, want %q/223", pane.Parent, pane.IssueNum, WatchParentRef)
+	}
+}
+
+func TestNewWatchRequestUsesExplicitBuildModeWhenChildPlanModeIsDisabled(t *testing.T) {
+	cfg := &cliflags.Config{ParentRef: "220", Agent: "opencode", PlanMode: new(true)}
+	issue := ghissue.Issue{Number: 223, Title: "Watch runtime helper", Body: "body"}
+	resolved := settings.Defaults()
+	resolved.ChildPlanMode = false
+
+	got := NewWatchRequest(cfg, "/repo", issue, resolved, hooks.EmptyConfig())
+
+	if got.LaunchMode != agent.ModeBuild || got.PlanMode() {
+		t.Fatalf("LaunchMode/PlanMode = %q/%t, want explicit build mode", got.LaunchMode, got.PlanMode())
+	}
+}
+
+func TestNewWatchRequestConsumesChildPlanModeForEveryAgent(t *testing.T) {
+	issue := ghissue.Issue{Number: 223, Title: "Watch runtime helper", Body: "body"}
+	resolved := settings.Defaults()
+	resolved.ChildPlanMode = true
+
+	for _, agentName := range []string{"claude", "codex", "opencode"} {
+		t.Run(agentName, func(t *testing.T) {
+			cfg := &cliflags.Config{ParentRef: "220", Agent: agentName, DryRun: true}
+			got := NewWatchRequest(cfg, "/repo", issue, resolved, hooks.EmptyConfig())
+
+			if got.LaunchMode != agent.ModePlan || !got.PlanMode() {
+				t.Fatalf("LaunchMode/PlanMode = %q/%t, want child Plan Mode", got.LaunchMode, got.PlanMode())
+			}
+		})
 	}
 }
 
@@ -1241,15 +1272,52 @@ func TestNewTaskRequestCodexTeamUsesTaskIdentityAndStatusPath(t *testing.T) {
 	}
 }
 
-func TestNewTaskRequestDoesNotConsumeLegacyPlanFlag(t *testing.T) {
-	cfg := &cliflags.Config{Agent: "claude", PlanMode: new(true)}
+func TestNewTaskRequestConsumesChildPlanMode(t *testing.T) {
 	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
 	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "body"}
+	resolved := settings.Defaults()
+	resolved.ChildPlanMode = true
 
-	got := NewTaskRequest(cfg, "/repo", spec, task, settings.Defaults(), hooks.EmptyConfig(), nil)
+	for _, agentName := range []string{"claude", "codex", "opencode"} {
+		t.Run(agentName, func(t *testing.T) {
+			cfg := &cliflags.Config{Agent: agentName, DryRun: true, PlanMode: new(false)}
+			got := NewTaskRequest(cfg, "/repo", spec, task, resolved, hooks.EmptyConfig(), nil)
 
-	if got.LaunchMode != "" {
-		t.Fatalf("LaunchMode = %q, want flag-free plan task launch", got.LaunchMode)
+			if got.LaunchMode != agent.ModePlan || !strings.Contains(got.Prompt, "investigate, then propose a plan") {
+				t.Fatalf("LaunchMode/prompt = %q/%q, want child Plan Mode task launch", got.LaunchMode, got.Prompt)
+			}
+			if agentName == "codex" {
+				if !strings.Contains(got.BriefingBody, "<proposed_plan>...</proposed_plan>") {
+					t.Fatalf("Codex briefing does not include proposed_plan contract:\n%s", got.BriefingBody)
+				}
+			} else if !strings.Contains(got.BriefingBody, "Before implementation:") {
+				t.Fatalf("briefing does not include native plan instructions:\n%s", got.BriefingBody)
+			}
+		})
+	}
+}
+
+func TestNewTaskRequestCodexPlanModeDisablesTeamBridge(t *testing.T) {
+	cfg := &cliflags.Config{Agent: "codex", DryRun: true}
+	spec := planspec.Spec{Plan: planspec.Plan{Slug: "launch-plan", Title: "Launch plan"}}
+	task := planspec.Task{ID: "api-client", Title: "Extract API client", Briefing: "body"}
+	resolved := settings.Defaults()
+	resolved.ChildPlanMode = true
+	teamCtx := &briefing.TeamContext{ParentLabel: "plan:launch-plan", DBPath: "/tmp/team.db"}
+
+	got := NewTaskRequest(cfg, "/repo", spec, task, resolved, hooks.EmptyConfig(), teamCtx)
+
+	if got.LaunchMode != agent.ModePlan || !got.CodexPlanMode() {
+		t.Fatalf("LaunchMode/CodexPlanMode = %q/%t, want Codex Plan Mode", got.LaunchMode, got.CodexPlanMode())
+	}
+	if got.CodexPlanStatusPath != "/tmp/fanout-codex-plan-repo-launch-plan-api-client.json" {
+		t.Fatalf("CodexPlanStatusPath = %q", got.CodexPlanStatusPath)
+	}
+	if !got.CodexTeamRequested || got.CodexTeamMode || got.CodexTeamStatusPath != "" {
+		t.Fatalf("Codex team request/bridge = %t/%t status %q, want Plan Mode precedence", got.CodexTeamRequested, got.CodexTeamMode, got.CodexTeamStatusPath)
+	}
+	if notice := launchNotice(got); !strings.Contains(notice, "plan mode takes precedence over --team; Codex team bridge is disabled for this pane") {
+		t.Fatalf("launchNotice() = %q, want Plan Mode precedence warning", notice)
 	}
 }
 

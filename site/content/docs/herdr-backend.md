@@ -64,7 +64,7 @@ A parent that already has recorded panes keeps its recorded backend. A conflicti
 | Automatic nudge (`fanout msg nudge`) | Delivered when the peer can take input | Disabled for every agent kind |
 | tmux keybindings (dashboard, console return) | Registered | Not registered |
 | Notifications | bell / tmux / ntfy / slack channels | bell / ntfy / slack work; the tmux channel and herdr's `notification show` do not fire |
-| Codex Plan Mode | Opt-in via `codexPlanMode` | Unavailable |
+| Plan Mode launch | Supported | Unavailable |
 | TUI forms (settings, help) | tmux popups | Inline in-process forms |
 | Session resume | fanout's restore flow | Left to herdr (see below) |
 

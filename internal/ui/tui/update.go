@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -274,6 +275,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.watchLaunched = len(msg.report.Launched)
 		m.watchDisabled = watchReportDisabled(msg.report)
 		m.watchErr = summarizeWatchError(msg.report, msg.err)
+		if len(msg.report.Notices) > 0 {
+			m.notice = strings.Join(msg.report.Notices, "; ")
+		}
 		return m, tea.Batch(m.loadStateCmd(false), m.loadGHCmd(false))
 	case launchPaneMsg:
 		m.newPane.launching = false

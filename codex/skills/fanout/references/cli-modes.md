@@ -120,11 +120,10 @@ Briefing toggles default on: auto-PR, PR review gate, Claude code review,
 Claude Agent Teams hint, and PR visualization. Keep lifecycle hooks sourced
 from user `hooks.json`.
 
-Use `--codex-plan-mode` only when every selected target resolves to Codex.
-fanout records the launch after the TUI accepts the initial Plan turn; slow
-plan generation or approval waiting does not trigger startup cleanup. Failures
-before app-server startup, TUI attachment, thread setup, or initial-turn
-acceptance fail the launch and clean up the pane/worktree for a retry.
+Child Plan Mode comes from the user-level `childPlanMode` setting or
+`FANOUT_CHILD_PLAN_MODE`. It applies to every supported agent and is resolved
+independently from agent selection. Codex uses the app-server Plan Mode
+controller; Claude and opencode use their native plan launch modes.
 
 Action reruns are idempotent for the same `(parent, issueNum)`. Let fanout
 parent-qualify default slugs and branches when the same issue belongs to

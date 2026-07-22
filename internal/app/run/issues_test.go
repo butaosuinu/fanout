@@ -66,7 +66,7 @@ func TestEffectiveIssueLaunchConfigUsesResolvedPlanModeWithoutMutatingParsedConf
 		AgentOverrides: []cliflags.AgentOverride{{Target: "102", Name: "codex"}},
 	}
 	resolved := settings.Defaults()
-	resolved.CodexPlanMode = true
+	resolved.ChildPlanMode = true
 
 	got := effectiveIssueLaunchConfig(cfg, resolved)
 

@@ -37,7 +37,6 @@ type Settings struct {
 	PRReviewGate           bool
 	BriefingCodeReview     bool
 	AgentTeamsHint         bool
-	CodexPlanMode          bool
 	NewSessionPlanMode     bool
 	OrchestratorPlanMode   bool
 	ChildPlanMode          bool
@@ -107,7 +106,6 @@ type CLIOverrides struct {
 	PRReviewGate       *bool
 	BriefingCodeReview *bool
 	AgentTeamsHint     *bool
-	CodexPlanMode      *bool
 	PRVisualization    *bool
 	DashboardKeybind   *bool
 	RuntimeBackend     *backend.Name
@@ -118,7 +116,6 @@ type overrides struct {
 	PRReviewGate           *bool
 	BriefingCodeReview     *bool
 	AgentTeamsHint         *bool
-	CodexPlanMode          *bool
 	NewSessionPlanMode     *bool
 	OrchestratorPlanMode   *bool
 	ChildPlanMode          *bool
@@ -143,7 +140,6 @@ var configKeys = []ConfigKey{
 	{Key: "briefingCodeReview", Group: "Briefing", Label: "Claude code review", Kind: ValueBool, Env: "FANOUT_BRIEFING_CODE_REVIEW", Default: "true", RepoEditable: true},
 	{Key: "agentTeamsHint", Group: "Briefing", Label: "Agent Teams hint", Kind: ValueBool, Env: "FANOUT_AGENT_TEAMS_HINT", Default: "true", RepoEditable: true},
 	{Key: "prVisualization", Group: "Briefing", Label: "PR visualization", Kind: ValueBool, Env: "FANOUT_PR_VISUALIZATION", Default: "true", RepoEditable: true},
-	{Key: "codexPlanMode", Group: "Launch", Label: "Codex child Plan Mode", Kind: ValueBool, Env: "FANOUT_CODEX_PLAN_MODE", Default: "false", RepoEditable: false},
 	{Key: "newSessionPlanMode", Group: "Launch", Label: "New session Plan Mode", Kind: ValueBool, Env: "FANOUT_NEW_SESSION_PLAN_MODE", Default: "true", RepoEditable: false},
 	{Key: "orchestratorPlanMode", Group: "Launch", Label: "Orchestrator Plan Mode", Kind: ValueBool, Env: "FANOUT_ORCHESTRATOR_PLAN_MODE", Default: "true", RepoEditable: false},
 	{Key: "childPlanMode", Group: "Launch", Label: "Child Plan Mode", Kind: ValueBool, Env: "FANOUT_CHILD_PLAN_MODE", Default: "false", RepoEditable: false},
@@ -324,9 +320,6 @@ func apply(s *Settings, o overrides, runtimeBackendSource RuntimeBackendSource) 
 	if o.AgentTeamsHint != nil {
 		s.AgentTeamsHint = *o.AgentTeamsHint
 	}
-	if o.CodexPlanMode != nil {
-		s.CodexPlanMode = *o.CodexPlanMode
-	}
 	if o.NewSessionPlanMode != nil {
 		s.NewSessionPlanMode = *o.NewSessionPlanMode
 	}
@@ -386,7 +379,6 @@ func cliOverrides(cli CLIOverrides, warnf WarnFunc) overrides {
 		PRReviewGate:       cli.PRReviewGate,
 		BriefingCodeReview: cli.BriefingCodeReview,
 		AgentTeamsHint:     cli.AgentTeamsHint,
-		CodexPlanMode:      cli.CodexPlanMode,
 		PRVisualization:    cli.PRVisualization,
 		DashboardKeybind:   cli.DashboardKeybind,
 	}
@@ -400,10 +392,6 @@ func cliOverrides(cli CLIOverrides, warnf WarnFunc) overrides {
 
 func repoOverrides(path string, warnf WarnFunc) overrides {
 	out := loadFile(path, warnf)
-	if out.CodexPlanMode != nil {
-		warn(warnf, "settings %s: codexPlanMode is ignored in repo config; use user config, FANOUT_CODEX_PLAN_MODE, or --codex-plan-mode", path)
-		out.CodexPlanMode = nil
-	}
 	if out.NewSessionPlanMode != nil {
 		warn(warnf, "settings %s: newSessionPlanMode is ignored in repo config; use user config or FANOUT_NEW_SESSION_PLAN_MODE", path)
 		out.NewSessionPlanMode = nil
@@ -644,12 +632,15 @@ func loadFile(path string, warnf WarnFunc) overrides {
 	}
 
 	var out overrides
+	if _, ok := root["codexPlanMode"]; ok {
+		warn(warnf, "settings %s: codexPlanMode is deprecated and ignored; use newSessionPlanMode, orchestratorPlanMode, and childPlanMode", path)
+		delete(root, "codexPlanMode")
+	}
 	boolKeys := map[string]func(*bool){
 		"autoPullRequest":    func(v *bool) { out.AutoPullRequest = v },
 		"prReviewGate":       func(v *bool) { out.PRReviewGate = v },
 		"briefingCodeReview": func(v *bool) { out.BriefingCodeReview = v },
 		"agentTeamsHint":     func(v *bool) { out.AgentTeamsHint = v },
-		"codexPlanMode":      func(v *bool) { out.CodexPlanMode = v },
 		"newSessionPlanMode": func(v *bool) { out.NewSessionPlanMode = v },
 		"orchestratorPlanMode": func(v *bool) {
 			out.OrchestratorPlanMode = v
@@ -724,6 +715,9 @@ func loadFile(path string, warnf WarnFunc) overrides {
 
 func envOverrides(warnf WarnFunc) overrides {
 	var out overrides
+	if _, ok := os.LookupEnv("FANOUT_CODEX_PLAN_MODE"); ok {
+		warn(warnf, "settings env FANOUT_CODEX_PLAN_MODE is deprecated and ignored; use FANOUT_NEW_SESSION_PLAN_MODE, FANOUT_ORCHESTRATOR_PLAN_MODE, and FANOUT_CHILD_PLAN_MODE")
+	}
 	read := func(name string, set func(*bool)) {
 		raw, ok := os.LookupEnv(name)
 		if !ok {
@@ -740,7 +734,6 @@ func envOverrides(warnf WarnFunc) overrides {
 	read("FANOUT_PR_REVIEW_GATE", func(v *bool) { out.PRReviewGate = v })
 	read("FANOUT_BRIEFING_CODE_REVIEW", func(v *bool) { out.BriefingCodeReview = v })
 	read("FANOUT_AGENT_TEAMS_HINT", func(v *bool) { out.AgentTeamsHint = v })
-	read("FANOUT_CODEX_PLAN_MODE", func(v *bool) { out.CodexPlanMode = v })
 	read("FANOUT_NEW_SESSION_PLAN_MODE", func(v *bool) { out.NewSessionPlanMode = v })
 	read("FANOUT_ORCHESTRATOR_PLAN_MODE", func(v *bool) { out.OrchestratorPlanMode = v })
 	read("FANOUT_CHILD_PLAN_MODE", func(v *bool) { out.ChildPlanMode = v })

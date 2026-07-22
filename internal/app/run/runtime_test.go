@@ -7,21 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 )
-
-func TestSettingsOverridesIncludesPlanMode(t *testing.T) {
-	enabled := true
-	cfg := &cliflags.Config{PlanMode: &enabled}
-
-	got := settingsOverrides(cfg)
-
-	if got.CodexPlanMode == nil || !*got.CodexPlanMode {
-		t.Fatalf("CodexPlanMode = %v, want true override", got.CodexPlanMode)
-	}
-}
 
 func TestLoadStateIgnoresLockFileWhenNoWorktreeIsPrepared(t *testing.T) {
 	repo := t.TempDir()

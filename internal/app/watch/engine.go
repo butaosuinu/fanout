@@ -138,6 +138,7 @@ func NewEngine(cfg Config, io IO) *Engine {
 // children for a later watcher cycle.
 type ParentLaunchResult struct {
 	Deferred bool
+	Notice   string
 }
 
 // Action is one launch the watcher should perform after acquiring the running
@@ -193,6 +194,7 @@ type Report struct {
 	Skipped           []Skip
 	Deferred          []Deferred
 	Failures          []Failure
+	Notices           []string
 }
 
 // PlanCycle reads candidates and state, then returns the launch actions for one

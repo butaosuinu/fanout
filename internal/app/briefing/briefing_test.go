@@ -154,7 +154,7 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 			},
 		},
 	} {
-		got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", tc.agent, "release/v1", defaults, nil)
+		got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", tc.agent, "release/v1", defaults, false, nil)
 		commonWants := []string{
 			`You are assigned task "task-001" of plan "Launch Plan" (plan:plan-alpha) in this repository.`,
 			"Title: Task title",
@@ -187,6 +187,28 @@ func TestRenderTaskDefaultsUsePlanTaskFooterAndSharedAgentSections(t *testing.T)
 			}
 		}
 		assertIssueLessTaskBriefing(t, got)
+	}
+}
+
+func TestRenderTaskCodexPlanModeUsesMinimalPlanBriefingAndWorkContract(t *testing.T) {
+	teamCtx := &TeamContext{ParentLabel: "plan:launch-plan", DBPath: "/tmp/team.db"}
+	got := RenderTask("launch-plan", "Launch plan", "api-client", "Extract API client", "body", "codex", "main", settings.Defaults(), true, teamCtx)
+
+	for _, want := range []string{
+		"You are starting in interactive Codex Plan Mode through fanout",
+		"Before presenting a plan, inspect the task, relevant repository files, and documentation",
+		"<proposed_plan>...</proposed_plan>",
+		"Implementation requirements after plan approval:",
+		"Plan: launch-plan / Task: api-client",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RenderTask(..., planMode=true) missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"## Coordinating with your sibling panes", "Optional: Agent Teams"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("RenderTask(..., planMode=true) contains %q:\n%s", unwanted, got)
+		}
 	}
 }
 
@@ -223,7 +245,7 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 
 	noAutoPR := defaults
 	noAutoPR.AutoPullRequest = false
-	got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "codex", "release/v1", noAutoPR, nil)
+	got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "codex", "release/v1", noAutoPR, false, nil)
 	for _, unwanted := range []string{
 		"Open a pull request",
 		"structure the PR body",
@@ -259,7 +281,7 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 
 	noVisualization := defaults
 	noVisualization.PRVisualization = false
-	got = RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "claude", "release/v1", noVisualization, nil)
+	got = RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "claude", "release/v1", noVisualization, false, nil)
 	if !strings.Contains(got, `Open a pull request and end the PR body with "Plan: plan-alpha / Task: task-001"`) {
 		t.Fatalf("RenderTask(..., PRVisualization=false) missing auto-PR task requirement:\n%s", got)
 	}
@@ -274,7 +296,7 @@ func TestRenderTaskSettingsToggleCombinations(t *testing.T) {
 	claudeToggles.PRReviewGate = false
 	claudeToggles.BriefingCodeReview = false
 	claudeToggles.AgentTeamsHint = false
-	got = RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "claude", "release/v1", claudeToggles, nil)
+	got = RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "claude", "release/v1", claudeToggles, false, nil)
 	if !strings.Contains(got, "The PR review gate is disabled for this fanout run") {
 		t.Fatalf("RenderTask(..., PRReviewGate=false) missing bypass notice:\n%s", got)
 	}
@@ -336,7 +358,7 @@ func TestCodexReviewFixFlowRestartsBroadReview(t *testing.T) {
 }
 
 func TestRenderTaskPRVisualizationQuotesBaseBranch(t *testing.T) {
-	got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "codex", "foo;bar", settings.Defaults(), nil)
+	got := RenderTask("plan-alpha", "Launch Plan", "task-001", "Task title", "Task body", "codex", "foo;bar", settings.Defaults(), false, nil)
 	want := "git diff --name-only 'foo;bar'...HEAD"
 	if !strings.Contains(got, want) {
 		t.Fatalf("RenderTask(...) missing shell-quoted base branch command %q:\n%s", want, got)
@@ -451,7 +473,7 @@ func testTaskTeamContext() *TeamContext {
 
 func TestTaskTeamSectionAddressesSiblingsByTaskID(t *testing.T) {
 	team := testTaskTeamContext()
-	got := RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", "claude", "main", settings.Defaults(), team)
+	got := RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", "claude", "main", settings.Defaults(), false, team)
 	for _, want := range []string{
 		"## Coordinating with your sibling panes",
 		"You are the pane for task base-types (parent plan:launch-plan)",
@@ -478,7 +500,7 @@ func TestTaskTeamSectionAddressesSiblingsByTaskID(t *testing.T) {
 }
 
 func TestTaskTeamSectionAbsentWithoutTeamContext(t *testing.T) {
-	got := RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", "claude", "main", settings.Defaults(), nil)
+	got := RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", "claude", "main", settings.Defaults(), false, nil)
 	if strings.Contains(got, "Coordinating with your sibling panes") {
 		t.Fatalf("RenderTask(..., team=nil) contains the team section:\n%s", got)
 	}
@@ -494,7 +516,7 @@ func TestTeamWatchSectionFollowsTeamSectionForClaude(t *testing.T) {
 	}
 
 	taskTeam := testTaskTeamContext()
-	taskGot := RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", "claude", "main", settings.Defaults(), taskTeam)
+	taskGot := RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", "claude", "main", settings.Defaults(), false, taskTeam)
 	if !strings.Contains(taskGot, taskTeamSection("base-types", taskTeam)+teamWatchSection) {
 		t.Fatalf("RenderTask(..., \"claude\", team) does not append the watch section directly after the team section:\n%s", taskGot)
 	}
@@ -570,8 +592,8 @@ func TestTeamBriefingAddsOnlyTeamSectionForNonClaudeAgents(t *testing.T) {
 				{
 					name:    "task",
 					section: taskTeamSection("base-types", taskTeam),
-					got:     RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", tt.agent, "main", settings.Defaults(), taskTeam),
-					want:    RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", tt.agent, "main", settings.Defaults(), nil),
+					got:     RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", tt.agent, "main", settings.Defaults(), false, taskTeam),
+					want:    RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", tt.agent, "main", settings.Defaults(), false, nil),
 				},
 			}
 			for _, lane := range lanes {
@@ -831,7 +853,7 @@ func TestCodexPlanModeComposesPlanningAndCompletionBriefings(t *testing.T) {
 func TestNativePlanModePrefixesNormalWorkBriefing(t *testing.T) {
 	for _, agentName := range []string{"claude", "opencode"} {
 		got := Render(122, "Plan mode", "Issue body", agentName, "main", settings.Defaults(), true, testTeamContext())
-		prefix := "You are starting this issue in " + agentName + " plan mode through fanout."
+		prefix := "You are starting this work item in " + agentName + " plan mode through fanout."
 		if !strings.HasPrefix(got, prefix) {
 			t.Fatalf("Render(..., %q) does not begin with plan prefix:\n%s", agentName, got)
 		}

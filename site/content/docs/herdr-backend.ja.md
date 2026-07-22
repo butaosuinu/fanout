@@ -72,7 +72,7 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 | 自動 nudge(`fanout msg nudge`) | 相手が入力を受けられる状態なら配送 | agent の種類にかかわらず無効 |
 | tmux keybind(ダッシュボード、コンソール復帰) | 登録する | 登録しない |
 | 通知 | bell / tmux / ntfy / slack の channel | bell / ntfy / slack は動く。tmux channel と herdr の `notification show` は発火しない |
-| Codex Plan Mode | `codexPlanMode` で opt-in | 非対応 |
+| Plan Mode launch | 対応 | 非対応 |
 | TUI フォーム(設定、ヘルプ) | tmux popup | インラインの in-process フォーム |
 | session resume | fanout の restore フロー | herdr 任せ(後述) |
 
