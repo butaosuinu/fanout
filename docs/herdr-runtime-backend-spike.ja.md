@@ -547,8 +547,10 @@ shared registry lock 下で tombstone、full branch ref、current tip、determin
 予約後は既存 branch tip を `launch_head_sha` にして新しい workspace、checkout、worktree ownership nonce、git-dir marker、agent launch nonce、launcher process を作り、lineage だけを継続する。
 watcher、background fanout、通常 fanout は cleaned tombstone を idempotency hit として扱い、continue を暗黙に開始しない。
 tip が変わった branch、tombstone のない branch、別 checkout にある branch は自動採用せず、手動の branch reconciliation を要求する。
-branch を破棄する明示操作は ref が `last_owned_head_sha` を指す場合だけ exact compare-and-delete request を phase `branch-discard-starting` へ保存し、一回だけ発行する。
-保存済み成功応答がある場合だけ次の state save で tombstone を削除し、response loss または ref mutation の不明では tombstone を残して手動確認を要求する。
+wave 2 は branch tip の compare-and-delete と linked worktree の checkout 保護を一操作へ束縛できないため、cleaned branch を自動削除しない。
+branch を破棄するユーザーは fanout 外の Git 操作で全 linked worktree を確認して ref を削除する。
+その後の明示 tombstone forget は shared registry lock 下で branch ref、deterministic path、同じ full branch ref を指す linked worktree、active intent / final row / reservation がすべてないことを再照合した場合だけ tombstone を削除する。
+ref または checkout が残る場合、active state がある場合、Git worktree inventory を完全に取得できない場合は tombstone を残して fail closed にする。
 
 ### plugin event
 
@@ -624,7 +626,10 @@ intent と final row は `entrypoint_spec`、`launch_bundle_spec`、matcher ID /
 
 active intent、final row、session owner marker が bundle reference を保持し、GC は active reference と live process がない digest だけを処理する。
 GC は store lock 下で digest を `gc-planned` にして新しい reference を拒否し、published root の immutable flag だけを解除してから exact root identity の directory を private staging name へ移す。
-移動後に state を `gc-detached` へ保存し、descendant の immutable flag を解除して削除する。
+移動後は bundle store parent を fsync し、digest、private path、root identity を state `gc-detached` へ保存する。
+detached tree の root identity と manifest を再照合し、全 directory を pre-order で immutable flag 解除後に 0700 へ戻し、file の immutable flag も解除する。
+その後に child を bottom-up で unlink して各 parent directory を fsync し、最後に detached root を削除して private staging parent を fsync する。
+crash 後は `gc-detached` と exact root identity が一致する tree だけを同じ手順で再開する。
 session launcher bundle は server stop が完了するまで保持する。
 同じ UID の悪意ある process は immutable flag を解除できるため、この seal は tmux-parity tier の同一ユーザー信頼を越えない。
 proof-grade tier は別 UID の bundle owner または server が保持する verified FD からの spawn を必要とする。
@@ -690,7 +695,7 @@ workspace-level `agent start` の各条項は次のように移す。
 | issue | 担当契約 |
 |---|---|
 | #526 | owned 0.7.5 XDG / socket、24-method capability gate、physical common directory 配下の shared Herdr registry / lock、global plugin preflight、session / operation bundle store、Herdr / fanout session bundle、bundle reference と GC |
-| #527 | shared registry 上の console の `console-planned` から `console-ready`、coordinator の `workspace-*`、child の `branch-planned` から `worktree-ready`、branch lineage / cleaned tombstone / explicit continue、operation 固有の root identity の保存 |
+| #527 | shared registry 上の console の `console-planned` から `console-ready`、coordinator の `workspace-*`、child の `branch-planned` から `worktree-ready`、branch lineage / cleaned tombstone / explicit continue / tombstone forget、operation 固有の root identity の保存 |
 | #528 | non-shell launcher、console / provider operation bundle、exact token、bundle-bound provider matcher、agent detection / rename、`observed_process_chain`、final row |
 | #529 | provider hook adapter、fresh signal、pending emitter telemetry、`state_refinement` |
 | #532 | 0.7.5 direct launch の cold restart resume 再実測。解禁までは `terminal_id` 変化を `stale` にする |
@@ -1308,7 +1313,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | owned launcher が sealed controller bundle の `fanout __codex-plan-tui` を起動し、working / plan は emitter lane で報告する | 依存する launch / emitter lane の格上げ条件に従う |
 
 request-bound generation / conditional mutation、controller capability、UID 分離は削除せず、herdr 上流へ別 issue で提案する proof-grade 強化として保持する。
-response loss 時の no-blind-retry、provisional intent と phase machine、workspace label と git-dir marker、branch lineage / cleaned tombstone / compare-and-delete、sealed bundle / runtime process chain と exact pane cwd / workload env、identity の分離、bounded wait、metadata の表示専用性は維持する。
+response loss 時の no-blind-retry、provisional intent と phase machine、workspace label と git-dir marker、branch lineage / cleaned tombstone、fresh reservation rollback の compare-and-delete、sealed bundle / runtime process chain と exact pane cwd / workload env、identity の分離、bounded wait、metadata の表示専用性は維持する。
 0.7.4 Codex integration v6 exact matcher は #532 の再解禁条件として残すが、current 0.7.5 row には適用しない。
 emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完了判定または cleanup の証明には使わない。
 
@@ -1401,7 +1406,10 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   Herdr / fanout / hook emitter は session bundle、console / agent / controller と依存 closure は operation bundle に入れる。
   platform が exclusive publish、immutable seal、bundle filesystem 上の executable 起動を満たさない場合は mutation 前に fail closed にする。
   active intent、final row、session owner marker が bundle reference を保持し、GC は reference と live process がない exact digest だけを処理する。
-  store lock 下で digest を `gc-planned` にして新しい reference を拒否し、published root の seal だけを解除して exact root identity の directory を private staging name へ移し、`gc-detached` の state save 後に descendant の seal を解除して削除する。
+  store lock 下で digest を `gc-planned` にして新しい reference を拒否し、published root の seal だけを解除して exact root identity の directory を private staging name へ移す。
+  bundle store parent を fsync し、digest / private path / root identity を `gc-detached` へ保存した後、root identity / manifest を再照合して全 directory を pre-order で seal 解除後に 0700 へ戻し、file の seal も解除する。
+  child を bottom-up で unlink して各 parent を fsync し、detached root の削除後に private staging parent を fsync する。
+  crash recovery は `gc-detached` と exact root identity が一致する tree だけを再開する。
   同じ UID は seal を解除できるため tmux-parity tier の同一ユーザー信頼に留まり、proof-grade tier は別 UID の bundle owner または verified FD spawn を必要とする。
 - Herdr control-plane env と operation child workload env を分離する。
   supervisor の owned XDG を設定する前に、呼び出し元の `HOME` / `PATH` と effective XDG 4 変数を workload env として保存し、未設定値は XDG の `$HOME` 基準の default path に解決する。
@@ -1533,8 +1541,10 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   response loss、mutation 不明、identity 不一致、branch ref drift、setup hook のある削除用再登録は final row / intent を残して fail closed にし、tombstone を作らない。
   explicit continue は shared lock 下で同じ task / lineage の tombstone、branch tip、deterministic path と他 checkout の不在を再照合し、tip が `last_owned_head_sha` と一致する場合だけ新しい workspace / checkout / nonce / marker / launch 世代を作る。
   tombstone のない branch、tip が動いた branch、別 checkout にある branch は採用しない。
-  branch discard は ref が `last_owned_head_sha` の場合だけ exact compare-and-delete request を phase `branch-discard-starting` へ保存し、一回だけ発行する。
-  保存済み成功応答がある場合だけ次の state save で tombstone を削除し、response loss または ref mutation の不明では tombstone を残して手動確認を要求する。
+  wave 2 は branch tip の compare-and-delete と linked worktree の checkout 保護を一操作へ束縛できないため、cleaned branch を自動削除しない。
+  branch を破棄するユーザーは fanout 外の Git 操作で全 linked worktree を確認して ref を削除する。
+  明示 tombstone forget は shared lock 下で branch ref、deterministic path、同じ full branch ref を指す linked worktree、active intent / final row / reservation がすべてないことを再照合した場合だけ tombstone を削除する。
+  ref / checkout / active state が残る場合、または Git worktree inventory を完全に取得できない場合は tombstone を残して fail closed にする。
 - wave 2 は初回の live identity 確定後に `report-metadata` を発行する。
   metadata は backend state、liveness、nudge authority、完了判定に使わない。
   token の欠落自体は state transition に使わず、cold restart 後は `terminal_id` の変化で current direct-launch row を `stale` にする。
