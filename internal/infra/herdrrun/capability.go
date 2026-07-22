@@ -73,7 +73,6 @@ var requiredMethodCapabilities = []methodRequirement{
 	{name: "session.snapshot"},
 	{name: "workspace.focus", required: []string{"workspace_id"}},
 	{name: "workspace.close", required: []string{"workspace_id"}},
-	{name: "worktree.remove", required: []string{"workspace_id"}, properties: []string{"force"}},
 	{name: "agent.prompt", required: []string{"target", "text"}},
 	{name: "pane.read", required: []string{"pane_id", "source"}, properties: []string{"lines", "format"}},
 	{name: "pane.close", required: []string{"pane_id"}},
@@ -121,7 +120,6 @@ func validateCapabilitySchema(data []byte) error {
 	}
 	for name, required := range map[string][]string{
 		"session_snapshot": {"snapshot"},
-		"worktree_removed": {"workspace_id", "path", "forced"},
 		"agent_prompted":   {"agent"},
 		"pane_read":        {"read"},
 		"ok":               nil,

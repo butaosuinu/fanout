@@ -490,20 +490,7 @@ func routeEnvironment(target route, controls ...*controlPlaneEnvironment) []stri
 	if len(controls) > 0 {
 		control = controls[0]
 	}
-	ownedKeys := map[string]bool{sessionEnv: true, socketEnv: true}
-	if control != nil {
-		for _, key := range []string{xdgConfigEnv, xdgStateEnv, xdgDataEnv, xdgCacheEnv, configEnv, clientSocketEnv} {
-			ownedKeys[key] = true
-		}
-	}
 	env := make([]string, 0, len(os.Environ())+8)
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if ownedKeys[key] {
-			continue
-		}
-		env = append(env, entry)
-	}
 	if control != nil {
 		env = append(env,
 			xdgConfigEnv+"="+control.xdgConfigHome,
@@ -513,6 +500,14 @@ func routeEnvironment(target route, controls ...*controlPlaneEnvironment) []stri
 			configEnv+"="+control.configPath,
 			clientSocketEnv+"="+control.clientSocketPath,
 		)
+	} else {
+		for _, entry := range os.Environ() {
+			key, _, _ := strings.Cut(entry, "=")
+			if key == sessionEnv || key == socketEnv {
+				continue
+			}
+			env = append(env, entry)
+		}
 	}
 	env = append(env, sessionEnv+"="+target.session)
 	if target.socketPath != "" {

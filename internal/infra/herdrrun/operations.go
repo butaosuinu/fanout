@@ -15,7 +15,10 @@ import (
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
-var ErrOwnedIdentityMismatch = errors.New("herdr owned pane identity mismatch")
+var (
+	ErrOwnedIdentityMismatch = errors.New("herdr owned pane identity mismatch")
+	ErrOwnedCheckoutRetained = errors.New("herdr owned checkout retained for manual reconciliation")
+)
 
 type OwnedPaneIdentity struct {
 	Ref            corebackend.PaneRef
@@ -52,7 +55,6 @@ type OwnedCloseRequest struct {
 	Target                 OwnedPaneIdentity
 	WorktreeOwnershipNonce string
 	WorktreeGitDir         string
-	Force                  bool
 }
 
 type ownedTargetAdmission struct {
@@ -66,9 +68,6 @@ func (b *Backend) BindOwnedTarget(target OwnedPaneIdentity) (*Backend, error) {
 }
 
 func (b *Backend) BindOwnedClose(req OwnedCloseRequest) (*Backend, error) {
-	if req.Force {
-		return nil, fmt.Errorf("herdr core owned-close admission cannot bind force")
-	}
 	copy := cloneOwnedCloseRequest(req)
 	return b.bindOwnedTarget(copy.Target, &copy)
 }
@@ -323,47 +322,20 @@ func (b *Backend) closeOwnedSession(ctx context.Context, req OwnedCloseRequest) 
 	if err := verifyWorktreeOwnership(req); err != nil {
 		return failed, err
 	}
-	args := []string{"worktree", "remove", "--workspace", target.Ref.Workspace}
-	if req.Force {
-		args = append(args, "--force")
-	}
-	args = append(args, "--json")
-	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, args...)
-	if err != nil {
-		return failed, fmt.Errorf("herdr worktree remove (not retried): %w", err)
-	}
-	if err := validateWorktreeRemoved(out, target, req.Force); err != nil {
-		return failed, err
-	}
-	if _, err := os.Lstat(target.WorktreePath); !errors.Is(err, os.ErrNotExist) {
-		return failed, fmt.Errorf("herdr worktree remove returned success but checkout still exists")
-	}
-	view, err := b.ownedSnapshotView(ctx, admission)
-	if err != nil {
-		return failed, err
-	}
-	if !view.workspacePresent(target.Ref.Workspace) {
-		return corebackend.CloseResult{Status: corebackend.CloseConfirmed}, nil
-	}
-	workspace := view.workspaces[target.Ref.Workspace]
-	if workspace.label != target.WorkspaceLabel || workspace.worktreePath != "" {
-		return failed, fmt.Errorf("%w: residual workspace changed after worktree removal", ErrOwnedIdentityMismatch)
-	}
-	probed, err = b.probeOwned(ctx, admission)
-	if err != nil {
-		return failed, err
-	}
 	if _, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "close", target.Ref.Workspace); err != nil {
 		return failed, fmt.Errorf("herdr workspace close (not retried): %w", err)
 	}
-	view, err = b.ownedSnapshotView(ctx, admission)
+	view, err := b.ownedSnapshotView(ctx, admission)
 	if err != nil {
 		return failed, err
 	}
 	if view.workspacePresent(target.Ref.Workspace) {
 		return failed, fmt.Errorf("herdr workspace close returned success but workspace remains live")
 	}
-	return corebackend.CloseResult{Status: corebackend.CloseConfirmed}, nil
+	if err := verifyWorktreeOwnership(req); err != nil {
+		return failed, fmt.Errorf("verify retained checkout after workspace close: %w", err)
+	}
+	return failed, fmt.Errorf("%w: workspace %s is closed but checkout %s was not removed", ErrOwnedCheckoutRetained, target.Ref.Workspace, target.WorktreePath)
 }
 
 type ownedSnapshotView struct {
@@ -572,25 +544,6 @@ func verifyWorktreeOwnership(req OwnedCloseRequest) error {
 	want := worktreeOwnershipMarker{Nonce: req.WorktreeOwnershipNonce, WorkspaceID: target.Ref.Workspace, RepoKey: target.RepoKey, CheckoutPath: target.WorktreePath, GitDir: req.WorktreeGitDir}
 	if marker != want {
 		return fmt.Errorf("%w: worktree ownership marker does not match saved identity", ErrOwnedIdentityMismatch)
-	}
-	return nil
-}
-
-func validateWorktreeRemoved(data []byte, target OwnedPaneIdentity, force bool) error {
-	var response struct {
-		ID     string `json:"id"`
-		Result *struct {
-			Type        string `json:"type"`
-			WorkspaceID string `json:"workspace_id"`
-			Path        string `json:"path"`
-			Forced      bool   `json:"forced"`
-		} `json:"result"`
-	}
-	if err := decodeOne(data, &response); err != nil {
-		return fmt.Errorf("parse herdr worktree remove response: %w", err)
-	}
-	if response.ID != "cli:worktree:remove" || response.Result == nil || response.Result.Type != "worktree_removed" || response.Result.WorkspaceID != target.Ref.Workspace || response.Result.Path != target.WorktreePath || response.Result.Forced != force {
-		return fmt.Errorf("herdr worktree remove response does not match admitted target")
 	}
 	return nil
 }

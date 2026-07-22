@@ -763,6 +763,7 @@ func startOwnedSupervisor(markerPath, nonce, startToken string) (int, error) {
 	}
 	defer func() { _ = reader.Close() }()
 	cmd := exec.Command(exe, ownedSupervisorCommand, markerPath, nonce, startToken, strconv.Itoa(ownedSupervisorReadyFD))
+	cmd.Env = []string{}
 	cmd.ExtraFiles = []*os.File{writer}
 	cmd.Dir = filepath.Dir(markerPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}

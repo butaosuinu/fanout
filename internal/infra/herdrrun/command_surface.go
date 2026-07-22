@@ -19,7 +19,6 @@ var requiredCommandSurfaces = []commandSurface{
 	{args: []string{"agent", "prompt"}, required: []string{"Usage: herdr agent prompt <TARGET> <TEXT>", "--wait", "--until", "--timeout"}},
 	{args: []string{"workspace", "focus"}, required: []string{"Usage: herdr workspace focus <workspace_id>"}},
 	{args: []string{"pane", "close"}, required: []string{"Usage: herdr pane close <pane_id>"}},
-	{args: []string{"worktree", "remove"}, required: []string{"Usage: herdr worktree remove", "--workspace", "--force", "--json"}},
 	{args: []string{"workspace", "close"}, required: []string{"Usage: herdr workspace close <workspace_id>"}},
 }
 

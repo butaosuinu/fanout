@@ -318,24 +318,12 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 	}
 }
 
-func TestBoundOwnedCloserRemovesWorktreeThenClosesResidualWorkspace(t *testing.T) {
+func TestBoundOwnedCloserClosesWorkspaceButRetainsCheckoutForManualReconciliation(t *testing.T) {
 	h := newOwnedHarness(t)
 	target := h.target()
 	request := h.closeRequest(target)
 	h.fake.respond = func(args []string) ([]byte, error) {
 		switch {
-		case slices.Equal(args, []string{"worktree", "remove", "--workspace", "w2", "--json"}):
-			if err := os.RemoveAll(h.checkout); err != nil {
-				return nil, err
-			}
-			h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
-				for i := range *snapshot.Workspaces {
-					if (*snapshot.Workspaces)[i].WorkspaceID == "w2" {
-						(*snapshot.Workspaces)[i].Worktree = nil
-					}
-				}
-			})
-			return []byte(fmt.Sprintf(`{"id":"cli:worktree:remove","result":{"type":"worktree_removed","workspace_id":"w2","path":%s,"forced":false}}`, strconvQuote(h.checkout))), nil
 		case slices.Equal(args, []string{"workspace", "close", "w2"}):
 			h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
 				workspaces := slices.DeleteFunc(*snapshot.Workspaces, func(w workspaceJSON) bool { return w.WorkspaceID == "w2" })
@@ -353,8 +341,14 @@ func TestBoundOwnedCloserRemovesWorktreeThenClosesResidualWorkspace(t *testing.T
 		t.Fatal(err)
 	}
 	result, err := bound.CloseOwned(corebackend.CloseRequest{Ref: target.Ref, WorktreePath: target.WorktreePath, ShellKey: target.TerminalID})
-	if err != nil || result.Status != corebackend.CloseConfirmed {
+	if !errors.Is(err, ErrOwnedCheckoutRetained) || result.Status != corebackend.CloseFailed {
 		t.Fatalf("CloseOwned() = %+v, %v", result, err)
+	}
+	if _, err := os.Stat(h.checkout); err != nil {
+		t.Fatalf("retained checkout: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.worktreeGitDir, worktreeOwnershipMarkerName)); err != nil {
+		t.Fatalf("retained worktree marker: %v", err)
 	}
 }
 

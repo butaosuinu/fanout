@@ -421,6 +421,31 @@ func TestCheckAvailablePinsVerifiedSocketAndExactTuple(t *testing.T) {
 	}
 }
 
+func TestOwnedRouteEnvironmentDoesNotInheritAmbientSecrets(t *testing.T) {
+	t.Setenv("FANOUT_TEST_SECRET", "must-not-leak")
+	t.Setenv("PATH", "/ambient/path")
+	control := &controlPlaneEnvironment{
+		xdgConfigHome: "/owned/config", xdgStateHome: "/owned/state",
+		xdgDataHome: "/owned/data", xdgCacheHome: "/owned/cache",
+		configPath: "/owned/config/herdr/config.toml", clientSocketPath: "/owned/client.sock",
+	}
+	env := routeEnvironment(route{session: "fanout-test", socketPath: "/owned/server.sock"}, control)
+	for _, key := range []string{"FANOUT_TEST_SECRET", "PATH", "HOME"} {
+		if _, ok := envValue(env, key); ok {
+			t.Fatalf("owned environment inherited %s: %v", key, env)
+		}
+	}
+	for key, want := range map[string]string{
+		sessionEnv: "fanout-test", socketEnv: "/owned/server.sock", clientSocketEnv: "/owned/client.sock",
+		xdgConfigEnv: "/owned/config", xdgStateEnv: "/owned/state", xdgDataEnv: "/owned/data", xdgCacheEnv: "/owned/cache",
+		configEnv: "/owned/config/herdr/config.toml",
+	} {
+		if got, ok := envValue(env, key); !ok || got != want {
+			t.Fatalf("owned environment %s = %q (present=%t), want %q", key, got, ok, want)
+		}
+	}
+}
+
 func TestCheckAvailableResolvesNamedSessionThenPinsReturnedSocket(t *testing.T) {
 	const (
 		session = "fanout-test"
