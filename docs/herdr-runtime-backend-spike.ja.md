@@ -47,7 +47,7 @@ request-bound generation と conditional mutation、server-authenticated control
 | cleanup 後の branch 継続 | Go（ユーザー明示操作に限る） | cleaned tombstone と current branch tip を照合し、branch lineage だけを新しい launch 世代へ移す |
 | console workspace | Go | dedicated console intent と exact token で sealed user-shell bundle を起動し、agent / nudge lane から分離する |
 | agent 起動 | Go（admitted bundle / matcher に限る） | owned config の `terminal.default_shell` を bundled non-shell launcher に固定し、sealed provider bundle と検証済み runtime process chain を operation-bound token で起動する |
-| workload env | Go（versioned policy + one-shot capsule） | auth / socket / proxy / locale / provider config を維持し、Herdr / tmux routing と injection env を拒否し、raw value を registry / journal / log / bundle に保存しない |
+| workload env | Go（versioned policy + one-shot capsule） | auth / socket / proxy / locale を維持し、provider config は sealed view へ固定する。Herdr / tmux routing と injection env を拒否し、raw value を registry / journal / log / bundle に保存しない |
 | plain shell への `pane run` | 自動 launch には不採用 | text と Enter の配送時に shell readiness と空入力を条件化できない |
 | `agent start` | 自動 launch には不採用 | canonical agent executable を bare name で解決するため、fanout が選んだ絶対 executable を pin できない |
 | capability gate | structural gate と code-owned behavior profile を検査する | stable `>=0.7.5`、protocol `17` / schema `1`、接続先 status に加え、公式 v0.7.5 darwin/arm64 binary、exact agent-detection fixture、no-refresh policy を同時に許可する。fixture 未確定時は拒否し、owned server restart では cache を使わない |
@@ -1155,7 +1155,10 @@ built-in allowlist は `HOME`、`PATH`、`SHELL`、effective `XDG_CONFIG_HOME` /
 operation admission record は console shell または agent provider の auth / config に必要な env name を operation kind、optional provider、bundle digest ごとの required / optional exact-name list として保持する。
 v1 の Claude list は `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`、`CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR`、Codex list は `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_ORGANIZATION`、`OPENAI_PROJECT`、`OPENAI_ORG_ID`、`OPENAI_PROJECT_ID`、`CODEX_HOME`、`CODEX_DIR`、opencode config list は `OPENCODE_CONFIG`、`OPENCODE_CONFIG_DIR`、`OPENCODE_CONFIG_CONTENT` とする。
 opencode の selected model provider credential は #528 の adapter policy が exact name を列挙した provider だけを admit し、prefix または glob で `ANTHROPIC_*`、`OPENAI_*`、`OPENCODE_*` 全体を許可しない。
-各 exact name は snapshot に存在する場合に value を保持し、selected auth mode が required とした name の欠落は mutation 前に拒否する。
+credential / endpoint の exact name は snapshot に存在する場合に value を保持し、selected auth mode が required とした name の欠落は mutation 前に拒否する。
+agent provider operation の `HOME`、effective XDG、provider config path / content は caller value の pass-through を許可しない。
+#528 adapter は provider が load / execute する config、hook、plugin とその参照先を operation bundle の sealed config view に含め、path / content entry をその view へ固定する。
+外部の可変 config、writable auth / session state、または closure 外の参照を必要とし、この分離と固定を証明できない auth / config mode は Herdr mutation と token 発行前に fail closed にする。
 追加の user allowlist も user config の exact name に限り、repo config、prefix、glob、正規表現では拡張できない。
 unknown name は child env から落とし、provider policy が必須とする name の欠落は Herdr mutation 前に fail closed にする。
 non-overridable deny rule は exact-name set と prefix set に分ける。
@@ -1228,7 +1231,7 @@ workspace-level `agent start` の各条項は次のように移す。
 |---|---|
 | #526 | owned 0.7.5 XDG / socket、25-method structural capability gate、code-owned behavior profile / exact agent-detection fixture / no-refresh allowlist、`fanout.herdr-owner.v1` の property / nesting / shape / identity tuple / canonical golden bytes の確定、journaled manifest override realization / read-only reuse / retirement tombstone / generation-specific republish / fail-closed absence reconciliation、physical common directory 配下の shared Herdr registry / lock、global plugin preflight、session / operation bundle store、Herdr / fanout / detection fixture の session bundle、bundle reference / GC、private env-capsule store / disposal journal、secret-free control env、`incomplete-pre-realized` bundle quarantine と bootstrap / intent abort terminal CAS、active-supervisor heartbeat / same-owner renewal / dead-owner takeover、`ready` / `restarting` / `manifest-invalid` / `draining` admission、server-restart operation lock と success / abort terminal state machine、cache なし capability / active manifest re-gate |
 | #527 | short registry CAS と launch operation lock / lease、`session-ready` の owner marker canonical bytes / digest / opened identity の journal-to-epoch 移譲、shared registry 上の console の `console-planned` から `console-ready`、coordinator の `workspace-*`、child の `branch-planned` から `worktree-ready`、workload env policy snapshot と env capsule lifecycle intent、automatic child remove の fail-closed gate、workspace-only close / retained checkout / manual absence reconciliation、branch lineage / cleaned tombstone / explicit continue / tombstone forget、operation 固有の root identity の保存 |
-| #528 | non-shell launcher、console / provider operation bundle、exact token、env capsule claim / consume / empty-base exec、bundle-bound provider matcher、agent detection / rename、`observed_process_chain`、final row |
+| #528 | non-shell launcher、console / provider operation bundle、sealed provider config view と path / content 固定、closure 外の可変 auth / config mode の fail-closed gate、exact token、env capsule claim / consume / empty-base exec、bundle-bound provider matcher、agent detection / rename、`observed_process_chain`、final row |
 | #529 | provider hook adapter、fresh signal、pending emitter telemetry、`state_refinement` |
 | #532 | 0.7.5 direct launch の cold restart resume 再実測。解禁までは `terminal_id` 変化を `stale` にする |
 | #552 | #568 の registry-backed peer 登録 / 自己識別 / 宛先解決を前提に、live `pane process-info` / OS process identity と final state を送信直前に再照合した exact pane ID へ no-wait の `agent prompt` nudge を発行し、移行前は Herdr row に `state.json` 依存経路を適用しない |
@@ -2105,7 +2108,9 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - Herdr control-plane env と operation child workload env を分離する。
   supervisor / server / control-plane runner は空の base から versioned secret-free `control_env_spec` を作り、owned XDG / config / socket / session、absolute bundle entry、固定 control value だけを持つ。
   caller env は owned env を設定する前に一回だけ snapshot し、`fanout.workload-env.v1` の built-in exact allowlist、provider / bundle admission の exact-name list、user config の exact-name list だけを child 候補にする。
-  auth / config、`SSH_AUTH_SOCK`、proxy、terminal / locale、`HOME` / `PATH` / `SHELL`、effective workload XDG を保持し、Herdr / tmux routing と loader / runtime injection env は non-overridable denylist で除く。
+  auth、`SSH_AUTH_SOCK`、proxy、terminal / locale、`PATH` / `SHELL` を保持し、Herdr / tmux routing と loader / runtime injection env は non-overridable denylist で除く。
+  agent provider operation では caller の `HOME`、effective workload XDG、provider config path / content を pass-through せず、#528 adapter が provider の config / hook / plugin closure を operation bundle の sealed config view へ固定する。
+  closure 外の可変 config または writable auth / session state が必要で、この分離と固定を証明できない mode は Herdr mutation と token 発行前に拒否する。
   provider 必須値の欠落、invalid / duplicate name、size / count 超過は mutation 前に拒否し、repo config、prefix、glob では allowlist を拡張しない。
   workload env の raw value と one-time MAC key は private 0600、ACL-free、no-follow / exclusive env capsule にだけ保存する。
   registry / journal は policy ID、capsule identity / state、expiry、name-set digest / count、keyed fingerprint、final row は policy ID、name-set digest / count、keyed fingerprint、consumed receipt だけを保持し、log / bundle / manifest / argv はいずれの capsule field も保持しない。
