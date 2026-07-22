@@ -339,7 +339,7 @@ func TestSourceProjectRootNeverPersists(t *testing.T) {
 	}
 }
 
-func TestCodexPlanModeRoundTripsAndOmitsWhenFalse(t *testing.T) {
+func TestPlanModeRoundTripsAndOmitsWhenFalse(t *testing.T) {
 	root := t.TempDir()
 	locked, err := LockProject(root)
 	if err != nil {
@@ -347,7 +347,7 @@ func TestCodexPlanModeRoundTripsAndOmitsWhenFalse(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = locked.Unlock() })
 
-	if err = locked.RecordPane(Pane{Parent: "81", IssueNum: 83, CodexPlanMode: true}); err != nil {
+	if err = locked.RecordPane(Pane{Parent: "81", IssueNum: 83, PlanMode: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err = locked.RecordPane(Pane{Parent: "81", IssueNum: 84}); err != nil {
@@ -359,8 +359,8 @@ func TestCodexPlanModeRoundTripsAndOmitsWhenFalse(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, ok := loaded.Find("81", 83)
-	if !ok || !got.CodexPlanMode {
-		t.Fatalf("codexPlanMode = %v (found=%v), want true", got.CodexPlanMode, ok)
+	if !ok || !got.PlanMode {
+		t.Fatalf("codexPlanMode = %v (found=%v), want true", got.PlanMode, ok)
 	}
 	data, err := os.ReadFile(Path(root))
 	if err != nil {

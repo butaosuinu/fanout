@@ -132,10 +132,10 @@ func boolFlag(flagWithLeadSpace string, on bool) string {
 }
 
 func codexPlanModeFlag(cfg *cliflags.Config) string {
-	if cfg.CodexPlanMode == nil {
+	if cfg.PlanMode == nil {
 		return ""
 	}
-	if *cfg.CodexPlanMode {
+	if *cfg.PlanMode {
 		return " --codex-plan-mode"
 	}
 	return " --no-codex-plan-mode"

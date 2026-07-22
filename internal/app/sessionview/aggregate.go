@@ -268,7 +268,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				WorktreeErr:        worktreeErr,
 				RuntimeState:       runtimeState,
 				TmuxState:          compatibilityTmuxState(runtimeState),
-				PlanMode:           p.CodexPlanMode,
+				PlanMode:           p.PlanMode,
 				Prompt:             p.Prompt,
 				CIStatus:           strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
 				Wave:               wi.Wave,

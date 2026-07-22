@@ -49,7 +49,7 @@ func TestValidateIssueAgentsReportsNonCodexTargetInPlanMode(t *testing.T) {
 	cfg := &cliflags.Config{
 		Agent:          "codex",
 		AgentOverrides: []cliflags.AgentOverride{{Target: "102", Name: "claude"}},
-		CodexPlanMode:  new(true),
+		PlanMode:       new(true),
 		DryRun:         true,
 	}
 

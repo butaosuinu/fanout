@@ -146,7 +146,7 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 		Agent:               "codex",
 		ShellKey:            "shell-state-pane",
 		Wave:                "wave5",
-		CodexPlanMode:       true,
+		PlanMode:            true,
 		Worktree:            worktree.Plan{BaseBranch: "main"},
 	}
 
@@ -176,8 +176,8 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 	if got.AgentStatus != "running" {
 		t.Fatalf("agentStatus = %q, want running (起動時記録)", got.AgentStatus)
 	}
-	if !got.CodexPlanMode {
-		t.Fatal("codexPlanMode = false, want passthrough of req.CodexPlanMode")
+	if !got.PlanMode {
+		t.Fatal("codexPlanMode = false, want passthrough of req.PlanMode")
 	}
 	if got.CodexThreadID != "thread-1" || got.CodexSessionID != "session-1" {
 		t.Fatalf("codex session ids = %q/%q, want thread-1/session-1", got.CodexThreadID, got.CodexSessionID)
@@ -326,13 +326,13 @@ func TestNewManualRequestSkipsOrphanedWorktreeSlug(t *testing.T) {
 	}
 }
 
-func TestNewManualRequestCodexPlanModeUsesPlanControllerAndPlanPrompt(t *testing.T) {
+func TestNewManualRequestPlanModeUsesPlanControllerAndPlanPrompt(t *testing.T) {
 	codexPlanMode := true
 	cfg := &cliflags.Config{
-		Agent:         "codex",
-		DryRun:        true,
-		NoRefresh:     true,
-		CodexPlanMode: &codexPlanMode,
+		Agent:     "codex",
+		DryRun:    true,
+		NoRefresh: true,
+		PlanMode:  &codexPlanMode,
 	}
 	req := NewManualRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), ManualOptions{
 		Title:  "Inspect API",
@@ -340,8 +340,8 @@ func TestNewManualRequestCodexPlanModeUsesPlanControllerAndPlanPrompt(t *testing
 		Prompt: "Inspect API",
 	})
 
-	if !req.CodexPlanMode {
-		t.Fatal("CodexPlanMode = false, want true")
+	if !req.PlanMode {
+		t.Fatal("PlanMode = false, want true")
 	}
 	if req.BriefingPath != "" || req.BriefingBody != "" {
 		t.Fatalf("manual Codex Plan Mode should not use briefing file: path %q body %q", req.BriefingPath, req.BriefingBody)
@@ -390,9 +390,9 @@ func TestNewManualRequestCodexPlanModeUsesPlanControllerAndPlanPrompt(t *testing
 	}
 }
 
-func TestNewManualRequestCodexPlanModePreservesMultilinePrompt(t *testing.T) {
+func TestNewManualRequestPlanModePreservesMultilinePrompt(t *testing.T) {
 	codexPlanMode := true
-	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: &codexPlanMode}
+	cfg := &cliflags.Config{Agent: "codex", DryRun: true, PlanMode: &codexPlanMode}
 	req := NewManualRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), ManualOptions{
 		Title:  "Inspect API",
 		Body:   "Inspect API\n\nCheck handlers",
@@ -420,7 +420,7 @@ func TestNewManualRequestCodexPlanModePreservesMultilinePrompt(t *testing.T) {
 
 func TestMaxInlineManualPromptFitsLinuxSingleArgumentBudget(t *testing.T) {
 	codexPlanMode := true
-	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: &codexPlanMode}
+	cfg := &cliflags.Config{Agent: "codex", DryRun: true, PlanMode: &codexPlanMode}
 	prompt := strings.Repeat("'", MaxInlineManualPromptBytes)
 	req := NewManualRequest(cfg, "/repo", state.Store{}, hooks.EmptyConfig(), ManualOptions{
 		Title:  prompt,
@@ -454,7 +454,7 @@ func TestNewAttachedRequestRoutesOversizedPromptThroughBriefing(t *testing.T) {
 		{name: "claude", cfg: &cliflags.Config{Agent: "claude", DryRun: true}},
 		{name: "codex plan mode", cfg: func() *cliflags.Config {
 			planMode := true
-			return &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: &planMode}
+			return &cliflags.Config{Agent: "codex", DryRun: true, PlanMode: &planMode}
 		}(), wantPlanPrompt: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -687,7 +687,7 @@ func TestAttachRecordsRecoveryRowWhenCodexStartupAndCloseFail(t *testing.T) {
 		Slug:                "codex-plan",
 		Prompt:              "plan",
 		Agent:               "codex",
-		CodexPlanMode:       true,
+		PlanMode:            true,
 		CodexPlanStatusPath: statusPath,
 		Hooks:               hooks.EmptyConfig(),
 	}
@@ -1002,11 +1002,11 @@ func TestNewIssueRequestUsesIssueAgentOverride(t *testing.T) {
 func TestNewWatchRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
 	codexPlanMode := true
 	cfg := &cliflags.Config{
-		ParentRef:     "220",
-		Agent:         "codex",
-		BaseBranch:    "main",
-		BranchPrefix:  "watch/",
-		CodexPlanMode: &codexPlanMode,
+		ParentRef:    "220",
+		Agent:        "codex",
+		BaseBranch:   "main",
+		BranchPrefix: "watch/",
+		PlanMode:     &codexPlanMode,
 	}
 	issue := ghissue.Issue{Number: 223, Title: "Watch runtime helper", Body: "body"}
 
@@ -1029,8 +1029,8 @@ func TestNewWatchRequestUsesReservedParentAndIssueBriefing(t *testing.T) {
 	if got.Prompt != wantPrompt {
 		t.Fatalf("prompt = %q, want %q", got.Prompt, wantPrompt)
 	}
-	if got.CodexPlanMode || got.CodexPlanStatusPath != "" {
-		t.Fatalf("codex plan mode = %t status %q, want disabled for watch work pane", got.CodexPlanMode, got.CodexPlanStatusPath)
+	if got.PlanMode || got.CodexPlanStatusPath != "" {
+		t.Fatalf("codex plan mode = %t status %q, want disabled for watch work pane", got.PlanMode, got.CodexPlanStatusPath)
 	}
 	for _, want := range []string{
 		"You are assigned GitHub issue #223",
@@ -1110,15 +1110,15 @@ func TestNewIssueRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.
 	}
 }
 
-func TestNewIssueRequestCodexPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
-	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", CodexPlanMode: new(true)}
+func TestNewIssueRequestPlanModeUsesPlanPromptAndBriefing(t *testing.T) {
+	cfg := &cliflags.Config{ParentRef: "200", Agent: "codex", PlanMode: new(true)}
 	issue := ghissue.Issue{Number: 501, Title: "Plan child", Body: "body"}
 	teamCtx := &briefing.TeamContext{ParentLabel: "#200", DBPath: "/tmp/team.db"}
 
 	got := NewIssueRequest(cfg, "/repo", issue, settings.Defaults(), hooks.EmptyConfig(), false, teamCtx)
 
-	if !got.CodexPlanMode {
-		t.Fatal("CodexPlanMode = false, want true")
+	if !got.PlanMode {
+		t.Fatal("PlanMode = false, want true")
 	}
 	if got.CodexTeamMode || got.CodexTeamStatusPath != "" {
 		t.Fatalf("Codex team bridge = %t status %q, want Plan Mode precedence", got.CodexTeamMode, got.CodexTeamStatusPath)
@@ -1254,12 +1254,12 @@ func TestNewTaskRequestQualifiesDefaultSlugByPlan(t *testing.T) {
 }
 
 func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testing.T) {
-	cfg := &cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: new(true)}
+	cfg := &cliflags.Config{Agent: "codex", DryRun: true, PlanMode: new(true)}
 	req := Request{
 		Number:              1,
 		Prompt:              "[fanout #1] plan",
 		Agent:               "codex",
-		CodexPlanMode:       true,
+		PlanMode:            true,
 		CodexPlanStatusPath: "/tmp/fanout-codex-plan-repo-1.json",
 	}
 
@@ -1274,10 +1274,10 @@ func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testin
 	}
 }
 
-func TestBuildAgentCommandRejectsNonCodexPlanModeRequest(t *testing.T) {
+func TestBuildAgentCommandRejectsPlanModeRequestForNonCodexAgent(t *testing.T) {
 	_, err := buildAgentCommand(
 		&cliflags.Config{DryRun: true},
-		Request{Agent: "claude", CodexPlanMode: true},
+		Request{Agent: "claude", PlanMode: true},
 		"fanout-go",
 	)
 	if err == nil || !strings.Contains(err.Error(), "codex plan mode requires agent codex; pane resolves to claude") {
@@ -1320,10 +1320,10 @@ func TestBuildAgentCommandLeavesStartGateToBackend(t *testing.T) {
 	}
 }
 
-func TestBuildAgentCommandRejectsStartGateInCodexPlanMode(t *testing.T) {
+func TestBuildAgentCommandRejectsStartGateInPlanMode(t *testing.T) {
 	_, err := buildAgentCommand(
-		&cliflags.Config{Agent: "codex", DryRun: true, CodexPlanMode: new(true)},
-		Request{Agent: "codex", CodexPlanMode: true, AgentStartGate: "gate"},
+		&cliflags.Config{Agent: "codex", DryRun: true, PlanMode: new(true)},
+		Request{Agent: "codex", PlanMode: true, AgentStartGate: "gate"},
 		"fanout-go",
 	)
 	if err == nil || !strings.Contains(err.Error(), "agent start gate is not supported in Codex Plan Mode") {
@@ -1350,11 +1350,11 @@ func TestBuildAgentCommandPinsFanoutBinaryForLiveModes(t *testing.T) {
 		},
 		{
 			name: "Codex Plan Mode",
-			cfg:  &cliflags.Config{Agent: "codex", CodexPlanMode: new(true)},
+			cfg:  &cliflags.Config{Agent: "codex", PlanMode: new(true)},
 			req: Request{
 				Agent:               "codex",
 				Prompt:              "plan",
-				CodexPlanMode:       true,
+				PlanMode:            true,
 				CodexPlanStatusPath: "/tmp/status.json",
 			},
 		},

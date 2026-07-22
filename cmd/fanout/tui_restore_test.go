@@ -343,7 +343,7 @@ func TestRestoreRecordedPanesAdoptsLegacyLivePaneKey(t *testing.T) {
 		{
 			name: "legacy manual worktree row gets a key",
 			pane: func(_, wt string) state.Pane {
-				return state.Pane{Parent: "@manual", IssueNum: -8, Slug: "manual-8-main-pane", DisplayName: "manual-8-main-pane", PaneID: "%live", Agent: "codex", CodexPlanMode: true, WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
+				return state.Pane{Parent: "@manual", IssueNum: -8, Slug: "manual-8-main-pane", DisplayName: "manual-8-main-pane", PaneID: "%live", Agent: "codex", PlanMode: true, WorktreePath: wt, CreatedAt: restoreAdoptCreatedAfter}
 			},
 			live: func(_, wt string) tmuxrun.LivePane {
 				return tmuxrun.LivePane{ID: "%live", CurrentPath: wt, Title: "manual-8-main-pane", WorktreePath: wt, Label: "@manual · manual-8-main-pane"}
@@ -1041,7 +1041,7 @@ func TestRestoreTracksPaneWhenCodexStartupAndOwnedCloseFail(t *testing.T) {
 		ShellKey:      "key-plan",
 		Agent:         "codex",
 		WorktreePath:  wt,
-		CodexPlanMode: true,
+		PlanMode:      true,
 		CodexThreadID: "thread-104",
 	}})
 
@@ -1068,7 +1068,7 @@ func TestRestoreAgentCommandUsesSavedCodexPlanThread(t *testing.T) {
 	command, statusPath, err := restoreAgentCommand(state.Pane{
 		IssueNum:       7,
 		Agent:          "codex",
-		CodexPlanMode:  true,
+		PlanMode:       true,
 		CodexThreadID:  "thread-7",
 		CodexSessionID: "session-7",
 	}, root, "fanout")
@@ -1113,9 +1113,9 @@ func TestRestoreAgentCommandPinsFanoutBinaryForNormalAgent(t *testing.T) {
 
 func TestRestoreAgentCommandRejectsCodexPlanWithoutThread(t *testing.T) {
 	_, _, err := restoreAgentCommand(state.Pane{
-		Agent:         "codex",
-		CodexPlanMode: true,
-		DisplayName:   "Plan pane",
+		Agent:       "codex",
+		PlanMode:    true,
+		DisplayName: "Plan pane",
 	}, t.TempDir(), "fanout")
 
 	if err == nil || !strings.Contains(err.Error(), "missing codex thread id") {

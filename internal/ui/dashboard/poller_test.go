@@ -448,7 +448,7 @@ func TestDistinctIssueLessBranchesUsesBranchOwners(t *testing.T) {
 	got := distinctIssueLessBranches(state.Store{Panes: []state.Pane{
 		{Parent: "plan:a", IssueNum: 0, TaskID: "task-a", BranchName: " fanout/task-a "},
 		{Parent: "plan:a", IssueNum: 0, TaskID: "task-b", BranchName: "fanout/task-a"},
-		{Parent: "@manual", IssueNum: -1, BranchName: " fanout/manual ", CodexPlanMode: true},
+		{Parent: "@manual", IssueNum: -1, BranchName: " fanout/manual ", PlanMode: true},
 		{Parent: "@manual", IssueNum: -2, BranchName: "fanout/manual"}, // duplicate
 		{Parent: "100", IssueNum: 101, TaskID: "task-issue", BranchName: "fanout/issue"},
 		{Parent: "@manual", IssueNum: -3, BranchName: ""},

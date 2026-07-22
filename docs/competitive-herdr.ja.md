@@ -112,7 +112,7 @@ skill 層の待機との住み分け: ScheduleWakeup は分〜時間単位の gh
 
 - Claude Code: 起動時に fanout が UUID を生成して `claude --session-id <uuid>` で起動し、`state.Pane` に `SessionID`(additive フィールド)として記録する。hooks もログ走査も不要で決定論。記録が stale な場合のみ `~/.claude/projects/<worktree のエスケープ名>/` の最新 jsonl にフォールバックする
 - Codex: 起動時の id 事前指定ができないため、resume は worktree で `codex resume --last` を使う(`--last` は cwd スコープが公式仕様: https://developers.openai.com/codex/cli/reference)。`~/.codex/sessions/**/rollout-*.jsonl` の走査は内部レイアウト(非公式仕様)依存なので、`--last` で足りないケースの明示的フォールバックに留める
-- `fanout resume <N>`: agent がまだ動いていれば no-op。`@fanout_agent_state` が done(起動ラッパーは agent 終了後もシェルを exec してペインを生かすため、ペイン生存では判定しない)またはペイン消滅なら、同じ worktree で `claude --resume <id>` / `codex resume <id>` を新ペインとして起動する(既存の起動ラッパーと split 後デコレーションを再利用)。`CodexPlanMode` 行はペイン内 app-server の thread に紐づく別プロトコルで、ペインが死ぬと thread への経路も失われるため、v1 では明示的に拒否する
+- `fanout resume <N>`: agent がまだ動いていれば no-op。`@fanout_agent_state` が done(起動ラッパーは agent 終了後もシェルを exec してペインを生かすため、ペイン生存では判定しない)またはペイン消滅なら、同じ worktree で `claude --resume <id>` / `codex resume <id>` を新ペインとして起動する(既存の起動ラッパーと split 後デコレーションを再利用)。`PlanMode` 行はペイン内 app-server の thread に紐づく別プロトコルで、ペインが死ぬと thread への経路も失われるため、v1 では明示的に拒否する
 - dry-run にも live と同じ `--session-id` の形を出す(`--dry-run` は実際の launch command を表示する契約で、live だけに付けると注入の破損を dry-run / golden で検出できない)。UUID は dry-run では決定論プレースホルダにし、Tier 2 golden を更新する
 
 tmux server 再起動やペイン事故からの復帰手段で、#59 の多波・長時間運用と組み合わさって効く。A / B と依存が無く並行実装できる。

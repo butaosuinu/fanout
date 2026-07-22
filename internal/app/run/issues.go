@@ -217,7 +217,7 @@ func callIssueReady(ready IssueReadyFunc, store state.Store, recorder *state.Loc
 // launch paths and intentionally do not pass through this helper.
 func effectiveIssueLaunchConfig(cfg *cliflags.Config, resolvedSettings settings.Settings) *cliflags.Config {
 	launchCfg := *cfg
-	launchCfg.CodexPlanMode = new(resolvedSettings.CodexPlanMode)
+	launchCfg.PlanMode = new(resolvedSettings.CodexPlanMode)
 	return &launchCfg
 }
 

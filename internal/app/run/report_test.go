@@ -61,16 +61,16 @@ func TestPrintSummaryPreservesSettingsFlagsInLimitRerunHint(t *testing.T) {
 	}
 }
 
-func TestPrintSummaryPreservesCodexPlanModeInLimitRerunHint(t *testing.T) {
+func TestPrintSummaryPreservesPlanModeInLimitRerunHint(t *testing.T) {
 	var out, err bytes.Buffer
 	lg := log.NewWith(&out, &err, false)
 	plan := Plan{
 		LimitDeferred: []ghissue.Issue{{Number: 702}},
 	}
 	cfg := &cliflags.Config{
-		ParentRef:     "700",
-		Agent:         "codex",
-		CodexPlanMode: new(true),
+		ParentRef: "700",
+		Agent:     "codex",
+		PlanMode:  new(true),
 	}
 
 	printSummary(plan, executionResult{}, cfg, lg, log.Palette{}, "fanout-go")

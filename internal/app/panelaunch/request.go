@@ -39,17 +39,17 @@ func NewIssueRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Iss
 	branchOverride := ""
 	agentName := cfg.EffectiveAgentForIssue(issue.Number)
 	req := Request{
-		ParentRef:     cfg.ParentRef,
-		Number:        issue.Number,
-		Title:         issue.Title,
-		Body:          issue.Body,
-		Wave:          issue.Wave,
-		BriefingPath:  briefing.Path(projectRoot, issue.Number),
-		ShortTitle:    ShortIssueTitle(issue.Title),
-		Slug:          slug,
-		Agent:         agentName,
-		CodexPlanMode: cfg.CodexPlanModeEnabled(),
-		Hooks:         hookConfig,
+		ParentRef:    cfg.ParentRef,
+		Number:       issue.Number,
+		Title:        issue.Title,
+		Body:         issue.Body,
+		Wave:         issue.Wave,
+		BriefingPath: briefing.Path(projectRoot, issue.Number),
+		ShortTitle:   ShortIssueTitle(issue.Title),
+		Slug:         slug,
+		Agent:        agentName,
+		PlanMode:     cfg.PlanModeEnabled(),
+		Hooks:        hookConfig,
 	}
 	if name := cfg.FindName(issue.Number); name != nil {
 		if name.SlugHint != "" {
@@ -70,9 +70,9 @@ func NewIssueRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Iss
 		BaseBranch:  cfg.BaseBranch,
 		NoRefresh:   cfg.NoRefresh,
 	})
-	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, agentName, req.Worktree.BaseBranch, resolvedSettings, req.CodexPlanMode, teamCtx)
+	req.BriefingBody = briefing.Render(issue.Number, issue.Title, issue.Body, agentName, req.Worktree.BaseBranch, resolvedSettings, req.PlanMode, teamCtx)
 	req.Prompt = oneLinePrompt(req.ParentRef, req)
-	if req.CodexPlanMode {
+	if req.PlanMode {
 		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, issue.Number, cfg.DryRun)
 	} else if teamCtx != nil && agentName == "codex" {
 		req.CodexTeamMode = true
@@ -87,7 +87,7 @@ func NewIssueRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Iss
 func NewWatchRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config) Request {
 	watchCfg := *cfg
 	watchCfg.ParentRef = WatchParentRef
-	watchCfg.CodexPlanMode = nil
+	watchCfg.PlanMode = nil
 	return NewIssueRequest(&watchCfg, projectRoot, issue, resolvedSettings, hookConfig, false, nil)
 }
 
@@ -124,7 +124,7 @@ func NewTaskRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec
 	}
 	req.BriefingBody = briefing.RenderTask(spec.Plan.Slug, spec.Plan.Title, task.ID, task.Title, task.Briefing, agentName, req.Worktree.BaseBranch, resolvedSettings, teamCtx)
 	req.Prompt = taskOneLinePrompt(spec.Plan.Slug, req)
-	if teamCtx != nil && agentName == "codex" && !req.CodexPlanMode {
+	if teamCtx != nil && agentName == "codex" && !req.PlanMode {
 		req.CodexTeamMode = true
 		req.CodexTeamStatusPath = codexapp.TeamStatusPath(projectRoot, task.ID, cfg.DryRun)
 	}
@@ -163,7 +163,7 @@ func NewManualRequest(cfg *cliflags.Config, projectRoot string, store state.Stor
 	}
 	briefingPath := ""
 	briefingBody := ""
-	codexPlanMode := cfg.CodexPlanModeEnabled()
+	codexPlanMode := cfg.PlanModeEnabled()
 	if codexPlanMode {
 		body := opts.Body
 		if strings.TrimSpace(body) == "" {
@@ -183,22 +183,22 @@ func NewManualRequest(cfg *cliflags.Config, projectRoot string, store state.Stor
 		prompt = manualPromptWithBriefing(prompt, briefingPath)
 	}
 	req := Request{
-		ParentRef:     ManualParentRef,
-		Number:        number,
-		Title:         title,
-		Body:          opts.Body,
-		ShortTitle:    ShortIssueTitle(title),
-		Slug:          slug,
-		BranchName:    branchName,
-		Prompt:        prompt,
-		Agent:         agentName,
-		Hooks:         hookConfig,
-		BriefingPath:  briefingPath,
-		BriefingBody:  briefingBody,
-		CodexPlanMode: codexPlanMode,
-		Worktree:      worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh, AllowMissingOrigin: true, RefreshBestEffort: true}),
+		ParentRef:    ManualParentRef,
+		Number:       number,
+		Title:        title,
+		Body:         opts.Body,
+		ShortTitle:   ShortIssueTitle(title),
+		Slug:         slug,
+		BranchName:   branchName,
+		Prompt:       prompt,
+		Agent:        agentName,
+		Hooks:        hookConfig,
+		BriefingPath: briefingPath,
+		BriefingBody: briefingBody,
+		PlanMode:     codexPlanMode,
+		Worktree:     worktree.BuildPlan(worktree.Options{ProjectRoot: projectRoot, Slug: slug, BranchName: branchName, BaseBranch: cfg.BaseBranch, NoRefresh: cfg.NoRefresh, AllowMissingOrigin: true, RefreshBestEffort: true}),
 	}
-	if req.CodexPlanMode {
+	if req.PlanMode {
 		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
 	}
 	return req
@@ -239,7 +239,7 @@ func NewAttachedRequest(cfg *cliflags.Config, projectRoot string, store state.St
 	briefingPath := ""
 	briefingBody := ""
 	switch {
-	case cfg.CodexPlanModeEnabled():
+	case cfg.PlanModeEnabled():
 		planPrompt := briefing.RenderManualPlan(title, body)
 		if oversized {
 			briefingPath = attachedBriefingPath(projectRoot, parentRef, target, number)
@@ -273,9 +273,9 @@ func NewAttachedRequest(cfg *cliflags.Config, projectRoot string, store state.St
 		Hooks:               hookConfig,
 		BriefingPath:        briefingPath,
 		BriefingBody:        briefingBody,
-		CodexPlanMode:       cfg.CodexPlanModeEnabled(),
+		PlanMode:            cfg.PlanModeEnabled(),
 	}
-	if req.CodexPlanMode {
+	if req.PlanMode {
 		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
 	}
 	return req
@@ -431,7 +431,7 @@ func FirstPromptLine(prompt string) string {
 
 func oneLinePrompt(parentRef string, req Request) string {
 	action := "begin"
-	if req.CodexPlanMode {
+	if req.PlanMode {
 		action = "investigate, then propose a plan"
 	}
 	return fmt.Sprintf("%s%d of #%s] %s: %s. read %s and %s.", fanoutTagPrefix, req.Number, parentRef, req.Slug, req.ShortTitle, req.BriefingPath, action)

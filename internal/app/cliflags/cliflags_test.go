@@ -44,15 +44,15 @@ func TestParseSettingsBoolFlagsLastWins(t *testing.T) {
 	assertBoolPtr(t, "PRReviewGate", cfg.PRReviewGate, false)
 	assertBoolPtr(t, "BriefingCodeReview", cfg.BriefingCodeReview, true)
 	assertBoolPtr(t, "AgentTeamsHint", cfg.AgentTeamsHint, false)
-	assertBoolPtr(t, "CodexPlanMode", cfg.CodexPlanMode, false)
+	assertBoolPtr(t, "PlanMode", cfg.PlanMode, false)
 	assertBoolPtr(t, "PRVisualization", cfg.PRVisualization, true)
 }
 
-func TestParseCodexPlanModeFlag(t *testing.T) {
+func TestParsePlanModeFlag(t *testing.T) {
 	cfg := parseOK(t, "100", "--agent", "codex", "--codex-plan-mode")
 
-	if !cfg.CodexPlanModeEnabled() {
-		t.Fatal("CodexPlanModeEnabled() = false, want true")
+	if !cfg.PlanModeEnabled() {
+		t.Fatal("PlanModeEnabled() = false, want true")
 	}
 }
 

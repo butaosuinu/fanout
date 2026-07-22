@@ -194,7 +194,7 @@ func newWatchLaunchConfig(resolvedSettings settings.Settings, parent, limit int)
 		ParentRef:       strconv.Itoa(parent),
 		ParentMode:      cliflags.ModeIssue,
 		Agent:           watcherAgent(resolvedSettings),
-		CodexPlanMode:   &codexPlanMode,
+		PlanMode:        &codexPlanMode,
 		Limit:           limit,
 		SleepBetween:    cliflags.DefaultSleepBetween,
 		PopupTimeoutSec: cliflags.DefaultPopupTimeout,

@@ -807,7 +807,7 @@ func TestRenderIssueOrchestratorEndsWithTrailingNewline(t *testing.T) {
 	}
 }
 
-func TestCodexPlanModeUsesPlanningBriefing(t *testing.T) {
+func TestPlanModeUsesPlanningBriefing(t *testing.T) {
 	got := Render(122, "Plan mode", "Issue body", "codex", "release/v1", settings.Defaults(), true, nil)
 	if !strings.Contains(got, "<proposed_plan>...</proposed_plan>") {
 		t.Fatalf("plan briefing missing proposed_plan requirement:\n%s", got)

@@ -58,8 +58,8 @@ func TestNewPlanPromptPaneRequestWritesSkillInvocation(t *testing.T) {
 	if !strings.HasPrefix(req.BriefingPath, wantPrefix) {
 		t.Fatalf("req.BriefingPath = %q, want %q prefix", req.BriefingPath, wantPrefix)
 	}
-	if req.CodexPlanMode {
-		t.Fatal("req.CodexPlanMode = true, want false for a plan coordinator")
+	if req.PlanMode {
+		t.Fatal("req.PlanMode = true, want false for a plan coordinator")
 	}
 	if req.ParentRef != panelaunch.ManualParentRef {
 		t.Fatalf("req.ParentRef = %q, want %q", req.ParentRef, panelaunch.ManualParentRef)
@@ -133,8 +133,8 @@ func TestNewIssuePlanPaneRequestWritesIssueCoordinatorBrief(t *testing.T) {
 			if !strings.Contains(req.BriefingBody, "Refs #123") {
 				t.Fatalf("req.BriefingBody = %q, want a Refs #123 requirement", req.BriefingBody)
 			}
-			if req.CodexPlanMode {
-				t.Fatal("req.CodexPlanMode = true, want false for a plan coordinator")
+			if req.PlanMode {
+				t.Fatal("req.PlanMode = true, want false for a plan coordinator")
 			}
 			if req.ParentRef != panelaunch.ManualParentRef {
 				t.Fatalf("req.ParentRef = %q, want %q", req.ParentRef, panelaunch.ManualParentRef)
