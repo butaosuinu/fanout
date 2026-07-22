@@ -3,6 +3,7 @@ title: Agent Integrations
 linkTitle: Agent Integrations
 description: "The supported agents compared, bundled skills for Claude Code and Codex, the /fanout slash command, and OpenCode."
 weight: 80
+slug: agents
 kanji: 連
 yomi: agents
 ---

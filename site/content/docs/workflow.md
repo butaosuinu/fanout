@@ -11,7 +11,7 @@ yomi: workflow
 
 fanout's day-to-day shape is a loop, not a one-shot command. You grow a parent issue with OPEN children, fan them out into parallel panes, watch the panes work, fold the finished ones away, and rerun for the next batch. Rather than finishing everything at once, you advance the children whose blockers have cleared, batch by batch:
 
-1. **Grow the issue tree.** Create a parent issue plus linked child issues. The bundled `fanout-issues` skill turns a plan into this fanout-ready shape for you — see [Agent Integrations]({{< relref "/docs/agents" >}}).
+1. **Grow the issue tree.** Create a parent issue plus linked child issues. The bundled `fanout-issues` skill turns a plan into this fanout-ready shape for you — see [Agent Integrations]({{< relref "/docs/agent-integrations" >}}).
 2. **Fan out.** `fanout <parent>` creates one tmux pane + git worktree per OPEN child and launches the agent CLI in each.
 3. **Monitor.** Follow issue and PR state across the panes — see [Monitoring]({{< relref "/docs/monitoring" >}}).
 4. **Merge.** Take a finished child branch in with `--merge <NUM>`.

@@ -3,6 +3,7 @@ title: エージェント連携
 linkTitle: エージェント連携
 description: "対応エージェントの比較、Claude Code と Codex 向けの同梱 skill、/fanout スラッシュコマンド、OpenCode。"
 weight: 80
+slug: agents
 kanji: 連
 yomi: agents
 ---

@@ -61,7 +61,7 @@ fanout は、ペインの `@fanout_agent_state` tmux option から構造化さ�
 | `n` | 新規 Session の tmux popup を開く。Mode 行で Prompt / Issue を切り替える。詳細は[新規 Session のモード](#新規-session-のモード)を参照。 |
 | `s` | 設定の tmux popup を開く。user config / repo config を選び、`config.json` と同じキーを編集し、`Ctrl+S` で保存する。 |
 | `Ctrl+O` | 新規 Session の Issue 一覧で、選択中の issue を既定ブラウザで開く。 |
-| `a` | 選択中の行に記録された worktree に、agent ペインを 1 つ以上追加する。git worktree は作らない。追加行は選択元の worktree と branch を共有し、focus と peek はできるが merge 進捗には数えない。`codex` は [Codex Plan Mode]({{< relref "/docs/agents#codex-plan-mode" >}}) で起動する。 |
+| `a` | 選択中の行に記録された worktree に、agent ペインを 1 つ以上追加する。git worktree は作らない。追加行は選択元の worktree と branch を共有し、focus と peek はできるが merge 進捗には数えない。`codex` は [Codex Plan Mode]({{< relref "/docs/agent-integrations#codex-plan-mode" >}}) で起動する。 |
 | `A` | 選択中の行に記録された worktree で shell terminal を開く。shell 行は `@manual` entry として記録され、focus と peek はできるが merge 進捗には数えない。 |
 | `t` | project root で shell terminal を開く。close は tmux ペインと state 行だけを消し、git worktree は削除しない。 |
 | `Enter` / `o` | 選択中の live 行のペインにフォーカスする。 |

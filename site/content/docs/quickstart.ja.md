@@ -15,7 +15,7 @@ yomi: quickstart
 
 {{< diagram "overview" >}}
 
-issue ツリーがまだ無い場合は、同梱の `fanout-issues` skill が計画を親 issue とリンク済みの子 issue に変換します([エージェント連携]({{< relref "/docs/agents" >}})を参照)。
+issue ツリーがまだ無い場合は、同梱の `fanout-issues` skill が計画を親 issue とリンク済みの子 issue に変換します([エージェント連携]({{< relref "/docs/agent-integrations" >}})を参照)。
 
 tmux セッションを開始(または attach)します。
 
@@ -81,7 +81,7 @@ export FANOUT_AGENT=claude   # applies to every following run in this shell
 ```
 
 3 つのエージェントは同梱 skill、Codex Plan Mode、メッセージングが異なります。
-違いは[エージェント連携]({{< relref "/docs/agents" >}})のマトリクスで比較できます。
+違いは[エージェント連携]({{< relref "/docs/agent-integrations" >}})のマトリクスで比較できます。
 
 未知のエージェントはペイン作成前に失敗し、live 実行では選択したエージェント CLI がインストール済みかも確認します。
 fanout は tmux セッション内から実行してください。
