@@ -12,6 +12,14 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
+// LaunchMode selects the agent's initial permission posture.
+type LaunchMode string
+
+const (
+	ModeBuild LaunchMode = "build"
+	ModePlan  LaunchMode = "plan"
+)
+
 type Definition struct {
 	Name    string
 	Command string
@@ -21,6 +29,9 @@ type Definition struct {
 	// Claude's tmux entry carries the @fanout_agent_state hook settings;
 	// non-tmux runtimes must not receive commands that target tmux pane state.
 	BackendLaunchArgs map[backend.Name][]string
+	// ModeArgs are flags injected only into launches with an explicit mode.
+	// Resume commands leave the restored agent's current posture unchanged.
+	ModeArgs map[LaunchMode][]string
 	// PromptFlag, when non-empty, passes the launch prompt as this flag's value
 	// instead of a positional argument (opencode's positional is a project
 	// path). Emitted only when a prompt is present, so resume commands never
@@ -34,12 +45,20 @@ var registry = map[string]Definition{
 		Name:              "claude",
 		Command:           "claude",
 		BackendLaunchArgs: map[backend.Name][]string{backend.Tmux: {"--settings", claudeHookSettingsJSON}},
-		ResumeArgs:        []string{"--continue"},
+		ModeArgs: map[LaunchMode][]string{
+			ModeBuild: {"--permission-mode", "auto"},
+			ModePlan:  {"--permission-mode", "plan"},
+		},
+		ResumeArgs: []string{"--continue"},
 	},
 	"codex": {Name: "codex", Command: "codex", ResumeArgs: []string{"resume", "--last"}},
 	"opencode": {
-		Name:       "opencode",
-		Command:    "opencode",
+		Name:    "opencode",
+		Command: "opencode",
+		ModeArgs: map[LaunchMode][]string{
+			ModeBuild: {"--agent", "build"},
+			ModePlan:  {"--agent", "plan"},
+		},
 		PromptFlag: "--prompt",
 		ResumeArgs: []string{"--continue"},
 	},
@@ -85,13 +104,25 @@ func BuildCommand(name, prompt string) (string, error) {
 	return BuildCommandForBackend(name, prompt, backend.Tmux)
 }
 
+// BuildCommandWithMode returns the shell command sent to a tmux child pane
+// with the agent's initial launch mode made explicit.
+func BuildCommandWithMode(name, prompt string, mode LaunchMode) (string, error) {
+	return BuildCommandForBackendWithMode(name, prompt, backend.Tmux, mode)
+}
+
 // BuildCommandForBackend returns the shell command for the selected runtime.
 func BuildCommandForBackend(name, prompt string, runtimeBackend backend.Name) (string, error) {
+	return BuildCommandForBackendWithMode(name, prompt, runtimeBackend, "")
+}
+
+// BuildCommandForBackendWithMode returns the shell command for the selected
+// runtime with the agent's initial launch mode made explicit.
+func BuildCommandForBackendWithMode(name, prompt string, runtimeBackend backend.Name, mode LaunchMode) (string, error) {
 	def, ok := registry[name]
 	if !ok {
 		return "", ValidateKnown(name)
 	}
-	args, err := launchArgsForBackend(def, runtimeBackend)
+	args, err := launchArgsForBackend(def, runtimeBackend, mode)
 	if err != nil {
 		return "", err
 	}
@@ -104,15 +135,28 @@ func BuildResolvedCommand(name, prompt string) (string, error) {
 	return BuildResolvedCommandForBackend(name, prompt, backend.Tmux)
 }
 
+// BuildResolvedCommandWithMode returns the live-launch command using the
+// resolved executable path with the agent's initial launch mode made explicit.
+func BuildResolvedCommandWithMode(name, prompt string, mode LaunchMode) (string, error) {
+	return BuildResolvedCommandForBackendWithMode(name, prompt, backend.Tmux, mode)
+}
+
 // BuildResolvedCommandForBackend returns the live-launch command for the
 // selected runtime using the resolved executable path from the caller's
 // environment.
 func BuildResolvedCommandForBackend(name, prompt string, runtimeBackend backend.Name) (string, error) {
+	return BuildResolvedCommandForBackendWithMode(name, prompt, runtimeBackend, "")
+}
+
+// BuildResolvedCommandForBackendWithMode returns the live-launch command for
+// the selected runtime using the resolved executable path with the agent's
+// initial launch mode made explicit.
+func BuildResolvedCommandForBackendWithMode(name, prompt string, runtimeBackend backend.Name, mode LaunchMode) (string, error) {
 	def, ok := registry[name]
 	if !ok {
 		return "", ValidateKnown(name)
 	}
-	args, err := launchArgsForBackend(def, runtimeBackend)
+	args, err := launchArgsForBackend(def, runtimeBackend, mode)
 	if err != nil {
 		return "", err
 	}
@@ -135,7 +179,7 @@ func BuildResumeCommandForBackend(name string, runtimeBackend backend.Name) (str
 	if !ok {
 		return "", ValidateKnown(name)
 	}
-	args, err := launchArgsForBackend(def, runtimeBackend)
+	args, err := launchArgsForBackend(def, runtimeBackend, "")
 	if err != nil {
 		return "", err
 	}
@@ -156,7 +200,7 @@ func BuildResolvedResumeCommandForBackend(name string, runtimeBackend backend.Na
 	if !ok {
 		return "", ValidateKnown(name)
 	}
-	args, err := launchArgsForBackend(def, runtimeBackend)
+	args, err := launchArgsForBackend(def, runtimeBackend, "")
 	if err != nil {
 		return "", err
 	}
@@ -167,12 +211,12 @@ func BuildResolvedResumeCommandForBackend(name string, runtimeBackend backend.Na
 	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, slices.Concat(args, def.ResumeArgs), def.PromptFlag, ""), nil
 }
 
-func launchArgsForBackend(def Definition, runtimeBackend backend.Name) ([]string, error) {
+func launchArgsForBackend(def Definition, runtimeBackend backend.Name, mode LaunchMode) ([]string, error) {
 	name, err := backend.ParseName(string(runtimeBackend))
 	if err != nil {
 		return nil, err
 	}
-	return slices.Concat(def.LaunchArgs, def.BackendLaunchArgs[name]), nil
+	return slices.Concat(def.LaunchArgs, def.BackendLaunchArgs[name], def.ModeArgs[mode]), nil
 }
 
 // WithFanoutBin pins helper calls made by the launched agent to the same fanout
