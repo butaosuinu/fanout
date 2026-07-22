@@ -422,7 +422,7 @@ func stopRestoredPane(paneID, shellKey string) error {
 }
 
 func restoreAgentCommand(pane state.Pane, root, commandName string) (string, string, error) {
-	if pane.PlanMode {
+	if pane.PlanMode && pane.Agent == "codex" {
 		if strings.TrimSpace(pane.CodexThreadID) == "" {
 			return "", "", fmt.Errorf("cannot restore Codex Plan Mode pane %q: missing codex thread id", restorePaneTitle(pane))
 		}

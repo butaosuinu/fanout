@@ -807,21 +807,38 @@ func TestRenderIssueOrchestratorEndsWithTrailingNewline(t *testing.T) {
 	}
 }
 
-func TestPlanModeUsesPlanningBriefing(t *testing.T) {
+func TestCodexPlanModeComposesPlanningAndCompletionBriefings(t *testing.T) {
 	got := Render(122, "Plan mode", "Issue body", "codex", "release/v1", settings.Defaults(), true, nil)
-	if !strings.Contains(got, "<proposed_plan>...</proposed_plan>") {
-		t.Fatalf("plan briefing missing proposed_plan requirement:\n%s", got)
-	}
-	for _, unwanted := range []string{
-		"commit and push",
-		"Open a pull request",
-		"structure the PR body",
-		"Diagram gate",
+	ordered := []string{
+		"<proposed_plan>...</proposed_plan>",
+		"Implementation requirements after plan approval:",
+		`Open a pull request with "Closes #122"`,
 		"$post-work-review",
-		"codex review --uncommitted",
-	} {
-		if strings.Contains(got, unwanted) {
-			t.Fatalf("plan briefing contains implementation guidance %q:\n%s", unwanted, got)
+	}
+	previous := -1
+	for _, want := range ordered {
+		index := strings.Index(got, want)
+		if index <= previous {
+			t.Fatalf("plan briefing missing or misorders %q:\n%s", want, got)
+		}
+		previous = index
+	}
+	if strings.Contains(got, "Coordinating with your sibling panes") {
+		t.Fatalf("Codex plan briefing unexpectedly contains team protocol:\n%s", got)
+	}
+}
+
+func TestNativePlanModePrefixesNormalWorkBriefing(t *testing.T) {
+	for _, agentName := range []string{"claude", "opencode"} {
+		got := Render(122, "Plan mode", "Issue body", agentName, "main", settings.Defaults(), true, testTeamContext())
+		prefix := "You are starting this issue in " + agentName + " plan mode through fanout."
+		if !strings.HasPrefix(got, prefix) {
+			t.Fatalf("Render(..., %q) does not begin with plan prefix:\n%s", agentName, got)
+		}
+		for _, want := range []string{"Present a plan", `Open a pull request with "Closes #122"`, "Coordinating with your sibling panes"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("Render(..., %q) missing %q:\n%s", agentName, want, got)
+			}
 		}
 	}
 }

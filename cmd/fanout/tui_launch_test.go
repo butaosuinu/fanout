@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,14 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
+
+func TestBufferedLaunchNoticeCollectsAndDeduplicatesWarnings(t *testing.T) {
+	stderr := bytes.NewBufferString("[warn] child #501: bridge disabled\n[warn] child #501: bridge disabled\n[warn] child #502: base branch refresh skipped: offline\n")
+	want := "child #501: bridge disabled; base branch refresh skipped: offline"
+	if got := bufferedLaunchNotice(*stderr); got != want {
+		t.Fatalf("bufferedLaunchNotice() = %q, want %q", got, want)
+	}
+}
 
 func TestPlanSkillPromptPerAgent(t *testing.T) {
 	path := planPromptPath("/repo", 1)
@@ -58,8 +67,8 @@ func TestNewPlanPromptPaneRequestWritesSkillInvocation(t *testing.T) {
 	if !strings.HasPrefix(req.BriefingPath, wantPrefix) {
 		t.Fatalf("req.BriefingPath = %q, want %q prefix", req.BriefingPath, wantPrefix)
 	}
-	if req.PlanMode {
-		t.Fatal("req.PlanMode = true, want false for a plan coordinator")
+	if req.PlanMode() || req.LaunchMode != "" {
+		t.Fatalf("req.LaunchMode = %q, want flag-free plan coordinator", req.LaunchMode)
 	}
 	if req.ParentRef != panelaunch.ManualParentRef {
 		t.Fatalf("req.ParentRef = %q, want %q", req.ParentRef, panelaunch.ManualParentRef)
@@ -133,8 +142,8 @@ func TestNewIssuePlanPaneRequestWritesIssueCoordinatorBrief(t *testing.T) {
 			if !strings.Contains(req.BriefingBody, "Refs #123") {
 				t.Fatalf("req.BriefingBody = %q, want a Refs #123 requirement", req.BriefingBody)
 			}
-			if req.PlanMode {
-				t.Fatal("req.PlanMode = true, want false for a plan coordinator")
+			if req.PlanMode() || req.LaunchMode != "" {
+				t.Fatalf("req.LaunchMode = %q, want flag-free plan coordinator", req.LaunchMode)
 			}
 			if req.ParentRef != panelaunch.ManualParentRef {
 				t.Fatalf("req.ParentRef = %q, want %q", req.ParentRef, panelaunch.ManualParentRef)

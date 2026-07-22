@@ -146,6 +146,29 @@ load helpers
   assert_golden scenario-sub-issue-only-codex-plan
 }
 
+@test "codex plan mode takes precedence over the team bridge" {
+	use_fixture scenario-sub-issue-only
+	run_fanout_dry 100 --agent codex --codex-plan-mode --team
+	assert_success
+	[[ "$output" == *"plan mode takes precedence over --team; Codex team bridge is disabled for this pane"* ]]
+	[[ "$output" == *"__codex-plan-tui"* ]]
+	[[ "$output" != *"__codex-team-tui"* ]]
+}
+
+@test "agent-claude plan mode variant of scenario-sub-issue-only: native plan launch" {
+	use_fixture scenario-sub-issue-only
+	run_fanout_dry 100 --agent claude --codex-plan-mode
+	assert_success
+	assert_golden scenario-sub-issue-only-claude-plan
+}
+
+@test "agent-opencode plan mode variant of scenario-sub-issue-only: native plan launch" {
+	use_fixture scenario-sub-issue-only
+	run_fanout_dry 100 --agent opencode --codex-plan-mode
+	assert_success
+	assert_golden scenario-sub-issue-only-opencode-plan
+}
+
 @test "codexPlanMode user setting starts Codex children in Plan Mode" {
   use_fixture scenario-sub-issue-only
   mkdir -p "$XDG_CONFIG_HOME/fanout"

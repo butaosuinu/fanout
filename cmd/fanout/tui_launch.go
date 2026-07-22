@@ -514,15 +514,28 @@ func compactLaunchError(s string) string {
 	return s
 }
 
-// bufferedLaunchNotice extracts the tolerated base-refresh skip line, if any,
-// from a successful launch's buffered log so the TUI can show it on success.
+// bufferedLaunchNotice extracts warnings from a successful launch's buffered
+// log so the TUI can show them on success. Base-refresh warnings keep their
+// concise historical wording.
 func bufferedLaunchNotice(stderr bytes.Buffer) string {
+	var notices []string
 	for line := range strings.SplitSeq(stderr.String(), "\n") {
 		if i := strings.Index(line, panelaunch.BaseRefreshSkippedNotice); i >= 0 {
-			return strings.TrimSpace(line[i:])
+			notices = appendUniqueNotice(notices, strings.TrimSpace(line[i:]))
+			continue
+		}
+		if i := strings.Index(line, "[warn]"); i >= 0 {
+			notices = appendUniqueNotice(notices, strings.TrimSpace(line[i+len("[warn]"):]))
 		}
 	}
-	return ""
+	return strings.Join(notices, "; ")
+}
+
+func appendUniqueNotice(notices []string, notice string) []string {
+	if notice == "" || slices.Contains(notices, notice) {
+		return notices
+	}
+	return append(notices, notice)
 }
 
 func manualPaneConfigForTUIAgent(agentName string) *cliflags.Config {

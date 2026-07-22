@@ -8,6 +8,7 @@ package panelaunch
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -63,8 +64,9 @@ type Request struct {
 	SourceTaskID        string
 	Agent               string
 	AgentCommand        string
-	PlanMode            bool
+	LaunchMode          agent.LaunchMode
 	CodexPlanStatusPath string
+	CodexTeamRequested  bool
 	CodexTeamMode       bool
 	CodexTeamStatusPath string
 	// ShellKey is the unique @fanout_shell_key token that binds a state row to
@@ -76,6 +78,18 @@ type Request struct {
 	AgentStartGate string
 	Hooks          hooks.Config
 	Worktree       worktree.Plan
+}
+
+// PlanMode reports whether the pane was requested in plan mode. State keeps
+// this as a bool even though launch command generation uses three values.
+func (r Request) PlanMode() bool {
+	return r.LaunchMode == agent.ModePlan
+}
+
+// CodexPlanMode reports whether this request needs the Codex plan TUI
+// controller rather than an ordinary mode-aware agent command.
+func (r Request) CodexPlanMode() bool {
+	return r.PlanMode() && r.Agent == "codex"
 }
 
 // Result identifies the runtime pane created by a successful launch. PaneID is
@@ -132,6 +146,7 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 		l.Log.Err("%s: runtime backend is not configured", paneLogLabel(req))
 		return Result{}, false
 	}
+	l.preflightClaudeLaunchMode(&req)
 	agentCmd, cmdErr := buildAgentCommandForBackend(l.Cfg, req, l.CommandName, l.Backend.Name())
 	if cmdErr != nil {
 		l.Log.Err("%s: %v", paneLogLabel(req), cmdErr)
@@ -291,6 +306,7 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		l.Log.Err("%s: %v", paneLogLabel(req), keyErr)
 		return Result{}, false
 	}
+	l.preflightClaudeLaunchMode(&req)
 	agentCmd, err := buildAgentCommandForBackend(l.Cfg, req, l.CommandName, l.Backend.Name())
 	if err != nil {
 		l.Log.Err("%s: %v", paneLogLabel(req), err)
@@ -304,8 +320,8 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 	l.Log.Info("%s: attach %s to %s", paneLogLabel(req), req.Agent, targetPath)
 	l.Log.Dim("  slug -> %s", req.Slug)
 	l.Log.Dim("  worktree -> %s", targetPath)
-	if req.PlanMode {
-		l.Log.Dim("  codex-plan-mode -> app-server Plan Mode thread + interactive Codex TUI approval UI")
+	if req.PlanMode() {
+		logPlanMode(req, l.Log)
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, l.Info.ProjectRoot, targetPath, ""), req.Hooks, l.Log)
 
@@ -317,7 +333,7 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		return Result{}, false
 	}
 	codexPlanStatus := codexapp.Status{}
-	if req.PlanMode {
+	if req.CodexPlanMode() {
 		var planErr error
 		codexPlanStatus, planErr = codexapp.WaitReady(req.CodexPlanStatusPath, CodexPlanTUIStartupTimeout)
 		if planErr != nil {
@@ -450,7 +466,7 @@ func statePaneForBackend(req Request, paneID, worktreePath string, now time.Time
 		SourceTaskID:   req.SourceTaskID,
 		Agent:          req.Agent,
 		ShellKey:       req.ShellKey,
-		PlanMode:       req.PlanMode,
+		PlanMode:       req.PlanMode(),
 		CodexThreadID:  codexTUIStatus.ThreadID,
 		CodexSessionID: codexTUIStatus.SessionID,
 		DisplayName:    paneTitle(req),
@@ -480,6 +496,75 @@ func ensurePaneLivenessKey(req *Request) error {
 	return nil
 }
 
+const claudeExplicitModeMinimum = "2.1.207"
+
+func (l *Launcher) preflightClaudeLaunchMode(req *Request) {
+	if l.Cfg.DryRun || req.Agent != "claude" || req.LaunchMode == "" {
+		return
+	}
+	path, err := agent.ResolveExecutable("claude")
+	if err != nil {
+		return
+	}
+	out, err := exec.Command(path, "--version").CombinedOutput()
+	version, ok := parseClaudeVersion(string(out))
+	if err == nil && ok && compareVersion(version, [3]int{2, 1, 207}) >= 0 {
+		return
+	}
+
+	detail := strings.Join(strings.Fields(string(out)), " ")
+	switch {
+	case err != nil && detail != "":
+		detail = fmt.Sprintf("%s (%v)", detail, err)
+	case err != nil:
+		detail = err.Error()
+	case detail == "":
+		detail = "unknown version"
+	}
+	l.Log.Warn("%s: Claude Code %s+ is required for explicit %s mode; detected %s; omitting mode flags", paneLogLabel(*req), claudeExplicitModeMinimum, req.LaunchMode, detail)
+	req.LaunchMode = ""
+}
+
+func parseClaudeVersion(output string) ([3]int, bool) {
+	for _, field := range strings.Fields(output) {
+		candidate := strings.Trim(strings.TrimPrefix(field, "v"), "(),;[]")
+		parts := strings.Split(candidate, ".")
+		if len(parts) < 3 {
+			continue
+		}
+		var version [3]int
+		valid := true
+		for i := range version {
+			part := parts[i]
+			if i == len(version)-1 {
+				part = strings.TrimRightFunc(part, func(r rune) bool { return r < '0' || r > '9' })
+			}
+			value, err := strconv.Atoi(part)
+			if err != nil || value < 0 {
+				valid = false
+				break
+			}
+			version[i] = value
+		}
+		if valid {
+			return version, true
+		}
+	}
+	return [3]int{}, false
+}
+
+func compareVersion(left, right [3]int) int {
+	for i := range left {
+		switch {
+		case left[i] < right[i]:
+			return -1
+		case left[i] > right[i]:
+			return 1
+		}
+	}
+	return 0
+}
+
 func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (string, error) {
 	return buildAgentCommandForRuntime(cfg, req, commandName, backend.Tmux)
 }
@@ -492,12 +577,9 @@ func buildAgentCommandForBackend(cfg *cliflags.Config, req Request, commandName 
 }
 
 func buildAgentCommandForRuntime(cfg *cliflags.Config, req Request, commandName string, runtimeBackend backend.Name) (string, error) {
-	if req.PlanMode {
+	if req.CodexPlanMode() {
 		if strings.TrimSpace(req.AgentStartGate) != "" {
 			return "", fmt.Errorf("agent start gate is not supported in Codex Plan Mode")
-		}
-		if req.Agent != "codex" {
-			return "", fmt.Errorf("codex plan mode requires agent codex; pane resolves to %s", req.Agent)
 		}
 		if cfg.DryRun {
 			return codexapp.LaunchCommand(commandName, "codex", req.Prompt, req.CodexPlanStatusPath), nil
@@ -536,13 +618,13 @@ func buildAgentCommandForRuntime(cfg *cliflags.Config, req Request, commandName 
 		return agent.WithFanoutBin(command, fanoutPath), nil
 	}
 	if cfg.DryRun {
-		command, err := agent.BuildCommandForBackend(req.Agent, req.Prompt, runtimeBackend)
+		command, err := agent.BuildCommandForBackendWithMode(req.Agent, req.Prompt, runtimeBackend, req.LaunchMode)
 		if err != nil {
 			return "", err
 		}
 		return command, nil
 	}
-	command, err := agent.BuildResolvedCommandForBackend(req.Agent, req.Prompt, runtimeBackend)
+	command, err := agent.BuildResolvedCommandForBackendWithMode(req.Agent, req.Prompt, runtimeBackend, req.LaunchMode)
 	if err != nil {
 		return "", err
 	}
@@ -562,7 +644,7 @@ func codexTeamMember(req Request) string {
 
 func codexTUIStatusPath(req Request) string {
 	switch {
-	case req.PlanMode:
+	case req.CodexPlanMode():
 		return req.CodexPlanStatusPath
 	case req.CodexTeamMode:
 		return req.CodexTeamStatusPath
@@ -572,7 +654,7 @@ func codexTUIStatusPath(req Request) string {
 }
 
 func codexTUILabel(req Request) string {
-	if req.PlanMode {
+	if req.CodexPlanMode() {
 		return "Codex Plan Mode TUI"
 	}
 	return "Codex team TUI"
@@ -619,11 +701,31 @@ func logPaneRequest(req Request, lg *log.Logger) {
 	if req.DisplayNameOverride != "" {
 		lg.Dim("  display-name -> %s", req.DisplayNameOverride)
 	}
-	if req.PlanMode {
-		lg.Dim("  codex-plan-mode -> app-server Plan Mode thread + interactive Codex TUI approval UI")
+	if req.PlanMode() {
+		logPlanMode(req, lg)
 	}
-	if req.CodexTeamMode {
+	if req.PlanMode() && (req.CodexTeamRequested || req.CodexTeamMode) {
+		lg.Warn("%s: plan mode takes precedence over --team; Codex team bridge is disabled for this pane", paneLogLabel(req))
+	}
+	if req.CodexTeamMode && !req.PlanMode() {
 		lg.Dim("  codex-team -> app-server TUI + idle-turn message bridge")
+	}
+}
+
+func logPlanMode(req Request, lg *log.Logger) {
+	lg.Dim("  plan-mode -> %s", planModeDescription(req.Agent))
+}
+
+func planModeDescription(agentName string) string {
+	switch agentName {
+	case "codex":
+		return "app-server Plan Mode thread + interactive Codex TUI approval UI"
+	case "claude":
+		return "claude --permission-mode plan"
+	case "opencode":
+		return "opencode --agent plan"
+	default:
+		return agentName
 	}
 }
 
@@ -631,10 +733,10 @@ func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) 
 	if req.BriefingPath != "" || req.BriefingBody != "" {
 		fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(req.BriefingBody))
 	}
-	if req.PlanMode {
-		fmt.Fprintf(lg.Stdout(), "  %scodex plan mode%s: app-server Plan Mode thread + interactive Codex TUI approval UI\n", c.Dim, c.Reset)
+	if req.PlanMode() {
+		fmt.Fprintf(lg.Stdout(), "  %splan-mode -> %s%s\n", c.Dim, planModeDescription(req.Agent), c.Reset)
 	}
-	if req.CodexTeamMode {
+	if req.CodexTeamMode && !req.PlanMode() {
 		fmt.Fprintf(lg.Stdout(), "  %scodex team%s: app-server TUI + idle-turn message bridge\n", c.Dim, c.Reset)
 	}
 	if req.Worktree.Refresh {
@@ -670,11 +772,11 @@ func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) 
 	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -w -t <pane_id> pane-border-style %s%s\n", c.Dim, shellQuote(tmuxrun.PaneBorderStyle()), c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s# would re-layout the window: fanout grid (sidebar + comfortable-width grid),%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s#   falling back to main-vertical then tiled%s\n", c.Dim, c.Reset)
-	if req.PlanMode {
+	if req.CodexPlanMode() {
 		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for Codex TUI attach and initial Plan turn acceptance before recording state%s\n", c.Dim, c.Reset)
 		fmt.Fprintf(lg.Stdout(), "    %s# status file: %s%s\n", c.Dim, shellQuote(req.CodexPlanStatusPath), c.Reset)
 	}
-	if req.CodexTeamMode {
+	if req.CodexTeamMode && !req.PlanMode() {
 		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for Codex TUI attach and initial turn acceptance before recording state%s\n", c.Dim, c.Reset)
 		fmt.Fprintf(lg.Stdout(), "    %s# status file: %s%s\n", c.Dim, shellQuote(req.CodexTeamStatusPath), c.Reset)
 	}

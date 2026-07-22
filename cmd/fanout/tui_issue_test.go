@@ -309,6 +309,15 @@ func TestFinishTUIIssueParentLaunchPrependsOrchestrator(t *testing.T) {
 			wantPaneIDs: []string{"%91"},
 		},
 		{
+			name: "launch warning is appended to success notice",
+			result: parentIssueFanoutResult{
+				CreatedPaneIDs: []string{"%91"},
+				Notice:         "child #501: plan mode takes precedence over --team; Codex team bridge is disabled for this pane",
+			},
+			wantNotice:  "fanned out #500: created 1 pane(s); child #501: plan mode takes precedence over --team; Codex team bridge is disabled for this pane",
+			wantPaneIDs: []string{"%91"},
+		},
+		{
 			name:       "empty orchestrator id preserves the legacy no-op notice",
 			wantNotice: "#500: no new panes (children already have one)",
 		},
@@ -543,7 +552,7 @@ func TestLaunchIssueSessionFromTUISkipsOrchestratorWhenEveryChildBlocked(t *test
 	}
 }
 
-func TestLaunchIssueSessionFromTUIPreflightsChildAgentsBeforeOrchestrator(t *testing.T) {
+func TestLaunchIssueSessionFromTUIAllowsNonCodexPlanChild(t *testing.T) {
 	repo := prepareTUIParentLaunchRepo(t)
 	tmuxLogPath := installTUISequentialTmuxShim(t, repo)
 	installTUIParentLaunchGHScript(t)
@@ -553,28 +562,22 @@ func TestLaunchIssueSessionFromTUIPreflightsChildAgentsBeforeOrchestrator(t *tes
 	resolved.CodexPlanMode = true
 
 	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", resolved, hooks.EmptyConfig(), 500, "codex", map[string]string{"501": "claude"})
-	if err == nil || !strings.Contains(err.Error(), "codex plan mode requires every selected child to use agent codex") {
-		t.Fatalf("launchIssueSessionFromTUI() = %#v, %v; want child-agent validation error", result, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(result, fanouttui.LaunchResult{}) {
-		t.Fatalf("result = %#v, want empty result", result)
+	if len(result.CreatedPaneIDs) != 2 {
+		t.Fatalf("created pane ids = %#v, want orchestrator and child", result.CreatedPaneIDs)
 	}
-	if body, readErr := os.ReadFile(tmuxLogPath); readErr == nil {
-		if strings.Contains(string(body), "split-window") {
-			t.Fatalf("tmux split ran before child-agent validation:\n%s", body)
-		}
-	} else if !os.IsNotExist(readErr) {
-		t.Fatal(readErr)
+	tmuxLog := readTUITmuxLog(t, tmuxLogPath)
+	if !strings.Contains(tmuxLog, "claude --settings") || !strings.Contains(tmuxLog, "--permission-mode plan") {
+		t.Fatalf("tmux log = %q, want Claude plan launch", tmuxLog)
 	}
 	store, loadErr := state.LoadProject(repo)
 	if loadErr != nil {
 		t.Fatal(loadErr)
 	}
-	if len(store.Panes) != 0 {
-		t.Fatalf("state panes = %+v, want no launch side effects", store.Panes)
-	}
-	if _, statErr := os.Stat(orchestratorIssueBriefingPath(repo, 500, -1)); !os.IsNotExist(statErr) {
-		t.Fatalf("orchestrator briefing exists before validation: %v", statErr)
+	if len(store.Panes) != 2 || store.Panes[1].Agent != "claude" || !store.Panes[1].PlanMode {
+		t.Fatalf("state panes = %+v, want Claude plan child", store.Panes)
 	}
 }
 
