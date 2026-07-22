@@ -53,7 +53,7 @@ watcher は `watcherIntervalSeconds` ごとに巡回します。
 watcher の起動は `childPlanMode`(既定 off)に従います。
 on にすると、起動した Session は agent の plan 承認待ちで止まります。
 watcher は無人運用なので、plan を承認する人がいる場合を除き off のままにしてください。
-例外は v2.1.207 未満の claude です。fanout は警告して mode フラグを省くため、その Session は plan で止まらずに動きます。
+例外は v2.1.207 未満、または version を判定できない claude です。fanout は警告して mode フラグを省くため、その Session は plan で止まらずに動きます。
 [Settings]({{< relref "/docs/settings" >}}) を参照してください。
 
 ## session 予算

@@ -46,7 +46,7 @@ repo config から watcher は変更できず、launch posture の 3 キー(`new
 
 - `newSessionPlanMode`(既定 `true`): TUI の新規 Session — 手動プロンプトペイン、plan fan-out coordinator(claude / codex のみ)、`a` で attach する agent ペイン。
 - `orchestratorPlanMode`(既定 `true`): issue fan-out のプロジェクトルートに立つオーケストレーターペイン。codex のオーケストレーターは Plan Mode と start gate を両立できないため、fanout は警告して素の codex で起動します。
-- `childPlanMode`(既定 `false`): issue / Project の子、OPEN 子なし issue の単独 Session、`fanout plan` のタスク、watcher 起動。on にすると無人の [watcher]({{< relref "/docs/watcher" >}}) Session が plan 承認待ちで止まります(v2.1.207 未満の claude は警告つきで mode フラグが省かれ、止まりません)。
+- `childPlanMode`(既定 `false`): issue / Project の子、OPEN 子なし issue の単独 Session、`fanout plan` のタスク、watcher 起動。on にすると無人の [watcher]({{< relref "/docs/watcher" >}}) Session が plan 承認待ちで止まります(v2.1.207 未満または version 判定不能の claude は警告つきで mode フラグが省かれ、止まりません)。
 
 3 キーとも user 専用です。変更できるのは user config、環境変数、TUI 設定フォーム(`s`)だけで、repo config の値は警告して無視され、CLI flag もありません。Plan Mode は `--team` より優先されます — codex の plan 子は最小の Plan briefing のまま team bridge を失います。agent ごとのフラグと版要件は [Agent Integrations]({{< relref "/docs/agent-integrations" >}}) を参照してください。廃止された codex 専用の `codexPlanMode` キーと `FANOUT_CODEX_PLAN_MODE` は、3 キーへの置き換えを促す警告つきで無視されます。
 
