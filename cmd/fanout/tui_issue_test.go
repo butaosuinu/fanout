@@ -446,6 +446,38 @@ func TestLaunchIssueSessionFromTUICodexOrchestratorFallsBackFromPlanMode(t *test
 	}
 }
 
+func TestLaunchIssueSessionFromTUIReportsClaudeModeFallback(t *testing.T) {
+	repo := prepareTUIParentLaunchRepo(t)
+	tmuxLogPath := installTUISequentialTmuxShim(t, repo)
+	installTUIParentLaunchGHScript(t)
+	binDir := t.TempDir()
+	claudePath := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(claudePath, []byte("#!/bin/sh\nprintf '2.1.206 (Claude Code)\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	result, err := launchIssueSessionFromTUI(repo, "fanout-test", "fanout", settings.Defaults(), hooks.EmptyConfig(), 500, "claude", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWarning := "#-1: Claude Code 2.1.207+ is required for explicit plan mode"
+	if !strings.Contains(result.Notice, wantWarning) {
+		t.Fatalf("notice = %q, want orchestrator mode fallback %q", result.Notice, wantWarning)
+	}
+	if tmuxLog := readTUITmuxLog(t, tmuxLogPath); strings.Contains(tmuxLog, "--permission-mode plan") {
+		t.Fatalf("tmux log keeps unsupported Claude plan flags:\n%s", tmuxLog)
+	}
+	store, loadErr := state.LoadProject(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	orchestrator, ok := store.Find(panelaunch.ManualParentRef, -1)
+	if !ok || orchestrator.PlanMode {
+		t.Fatalf("orchestrator state = %+v/%v, want effective non-plan fallback", orchestrator, ok)
+	}
+}
+
 func TestLaunchIssueSessionFromTUISkipsSecondOrchestrator(t *testing.T) {
 	repo := prepareTUIParentLaunchRepo(t)
 	locked, err := state.LockProject(repo)
