@@ -2,6 +2,7 @@ package herdrrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -35,6 +36,7 @@ type fakeHerdr struct {
 	status          string
 	schema          string
 	snapshot        string
+	manifests       string
 	errors          map[string]error
 	snapshotResults []fakeSnapshotResult
 	snapshotCall    int
@@ -75,6 +77,8 @@ func (f *fakeHerdr) output(ctx context.Context, _ string, env []string, args ...
 		return []byte(f.schema), nil
 	case "snapshot":
 		return []byte(f.snapshot), nil
+	case "manifests":
+		return []byte(f.manifests), nil
 	default:
 		if f.respond != nil {
 			return f.respond(args)
@@ -93,6 +97,8 @@ func commandKey(args []string) string {
 		return "schema"
 	case hasSuffix(args, "api", "snapshot"):
 		return "snapshot"
+	case hasSuffix(args, "server", "agent-manifests", "--json"):
+		return "manifests"
 	default:
 		return ""
 	}
@@ -104,12 +110,32 @@ func hasSuffix(got []string, want ...string) bool {
 
 func newFakeHerdr(session, socket string) *fakeHerdr {
 	return &fakeHerdr{
-		version:  "herdr 0.7.5\n",
-		status:   validStatus(session, socket),
-		schema:   validCapabilitySchema(),
-		snapshot: validSnapshot(),
-		errors:   map[string]error{},
+		version:   "herdr 0.7.5\n",
+		status:    validStatus(session, socket),
+		schema:    validCapabilitySchema(),
+		snapshot:  validSnapshot(),
+		manifests: validAgentManifestFixture(),
+		errors:    map[string]error{},
 	}
+}
+
+func validAgentManifestFixture() string {
+	manifests := make([]agentManifestInfo, 0, len(ownedManifestFixture))
+	for _, fixture := range ownedManifestFixture {
+		shadow := false
+		version, _ := json.Marshal(fixture.version)
+		manifests = append(manifests, agentManifestInfo{
+			Agent: fixture.agent, Source: agentManifestBundledSource, SourceKind: agentManifestBundledSource,
+			LocalOverrideShadowingRemote: &shadow, ActiveVersion: version,
+		})
+	}
+	payload, err := json.Marshal(agentManifestEnvelope{
+		ID: agentManifestResponseID, Result: &agentManifestResult{Type: agentManifestResponseType, Manifests: manifests},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(payload)
 }
 
 func newTestBackend(t *testing.T, session, socket string, fake *fakeHerdr) *Backend {
@@ -330,6 +356,7 @@ func validCapabilitySchema() string {
     "request":{
       "oneOf":[
         {"properties":{"method":{"const":"session.snapshot"},"params":{"$ref":"#/schemas/request/$defs/EmptyParams"}}},
+        {"properties":{"method":{"const":"server.agent_manifests"},"params":{"$ref":"#/schemas/request/$defs/EmptyParams"}}},
         {"properties":{"method":{"const":"workspace.focus"},"params":{"$ref":"#/schemas/request/$defs/WorkspaceTarget"}}},
         {"properties":{"method":{"const":"workspace.close"},"params":{"$ref":"#/schemas/request/$defs/WorkspaceTarget"}}},
         {"properties":{"method":{"const":"worktree.remove"},"params":{"$ref":"#/schemas/request/$defs/WorktreeRemoveParams"}}},
@@ -351,6 +378,7 @@ func validCapabilitySchema() string {
       "$defs":{
         "ResponseResult":{"oneOf":[
           {"properties":{"type":{"const":"session_snapshot"},"snapshot":{"$ref":"#/schemas/success_response/$defs/SessionSnapshot"}},"required":["type","snapshot"]},
+          {"properties":{"type":{"const":"agent_manifest_status"},"manifests":{},"last_check_unix":{},"last_result":{}},"required":["type","manifests"]},
           {"properties":{"type":{"const":"worktree_removed"},"workspace_id":{},"path":{},"forced":{}},"required":["type","workspace_id","path","forced"]},
           {"properties":{"type":{"const":"agent_prompted"},"agent":{}},"required":["type","agent"]},
           {"properties":{"type":{"const":"pane_read"},"read":{}},"required":["type","read"]},
@@ -361,7 +389,8 @@ func validCapabilitySchema() string {
         "WorkspaceWorktreeInfo":{"properties":{"repo_key":{},"repo_root":{},"checkout_path":{},"is_linked_worktree":{}},"required":["repo_key","repo_root","checkout_path","is_linked_worktree"]},
         "PaneInfo":{"properties":{"pane_id":{},"terminal_id":{},"workspace_id":{},"tab_id":{},"focused":{},"agent_status":{},"revision":{},"cwd":{},"agent_session":{}},"required":["pane_id","terminal_id","workspace_id","tab_id","focused","agent_status","revision"]},
         "AgentInfo":{"properties":{"terminal_id":{},"workspace_id":{},"tab_id":{},"pane_id":{},"focused":{},"agent_status":{},"revision":{},"name":{},"agent":{},"agent_session":{}},"required":["terminal_id","workspace_id","tab_id","pane_id","focused","agent_status","revision"]},
-        "AgentSessionInfo":{"properties":{"source":{},"agent":{},"kind":{},"value":{}},"required":["source","agent","kind","value"]}
+        "AgentSessionInfo":{"properties":{"source":{},"agent":{},"kind":{},"value":{}},"required":["source","agent","kind","value"]},
+        "AgentManifestInfo":{"properties":{"agent":{},"source":{},"source_kind":{},"local_override_shadowing_remote":{},"active_version":{},"cached_remote_version":{},"remote_last_checked_unix":{},"remote_update_error":{},"remote_update_result":{},"warning":{}},"required":["agent","source","source_kind","local_override_shadowing_remote"]}
       }
     }
   }

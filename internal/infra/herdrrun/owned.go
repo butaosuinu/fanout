@@ -110,6 +110,8 @@ type controlPlaneEnvironment struct {
 type ownerMarker struct {
 	SchemaID             string `json:"schema_id"`
 	GitCommonDir         string `json:"git_common_dir"`
+	GitCommonDevice      uint64 `json:"git_common_device"`
+	GitCommonInode       uint64 `json:"git_common_inode"`
 	OwnerNonce           string `json:"owner_nonce"`
 	Session              string `json:"session"`
 	RuntimeDir           string `json:"runtime_dir"`
@@ -118,6 +120,13 @@ type ownerMarker struct {
 	BinaryPath           string `json:"binary_path"`
 	BinarySHA256         string `json:"binary_sha256"`
 	BinaryVersion        string `json:"binary_version"`
+	BehaviorProfileID    string `json:"behavior_profile_id"`
+	BehaviorSource       string `json:"behavior_source"`
+	BehaviorPlatform     string `json:"behavior_platform"`
+	DetectionFixtureID   string `json:"detection_fixture_id"`
+	ManifestSetDigest    string `json:"manifest_set_digest"`
+	NoRefreshPolicyID    string `json:"no_refresh_policy_id"`
+	BehaviorAdmissionID  string `json:"behavior_admission_id"`
 	SupervisorPID        int    `json:"supervisor_pid"`
 	SupervisorStartToken string `json:"supervisor_start_token"`
 	XDGConfigHome        string `json:"xdg_config_home"`
@@ -155,6 +164,11 @@ type ownedLayout struct {
 	configPath       string
 }
 
+type pathIdentity struct {
+	device uint64
+	inode  uint64
+}
+
 type supervisorStarter func(markerPath, nonce, startToken string) (int, error)
 
 func EnsureOwned(ctx context.Context, opts OwnedOptions) (*OwnedSession, error) {
@@ -165,12 +179,30 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 	if ctx == nil {
 		return nil, fmt.Errorf("ensure owned herdr session requires a context")
 	}
-	commonDir, err := canonicalGitCommonDir(opts.GitCommonDir)
+	commonDir, commonIdentity, err := openCanonicalGitCommonDir(opts.GitCommonDir)
 	if err != nil {
 		return nil, err
 	}
 	session := naming.HerdrSessionName(commonDir)
 	layout, err := prepareOwnedLayout(opts.RuntimeBase, session)
+	if err != nil {
+		return nil, err
+	}
+	if backend == nil {
+		backend = New(session, layout.socketPath)
+	}
+	backend.session = session
+	backend.socketPath = layout.socketPath
+	backend.control = &controlPlaneEnvironment{
+		xdgConfigHome: layout.xdgConfigHome, xdgStateHome: layout.xdgStateHome,
+		xdgDataHome: layout.xdgDataHome, xdgCacheHome: layout.xdgCacheHome,
+		configPath: layout.configPath, clientSocketPath: layout.clientSocketPath,
+	}
+	admitted, err := backend.admitBinaryContext(ctx, route{session: session, socketPath: layout.socketPath})
+	if err != nil {
+		return nil, err
+	}
+	behavior, err := backend.admitOwnedBehavior(admitted)
 	if err != nil {
 		return nil, err
 	}
@@ -191,28 +223,14 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 	if err != nil {
 		return nil, err
 	}
-	if backend == nil {
-		backend = New(session, layout.socketPath)
-	}
-	backend.session = session
-	backend.socketPath = layout.socketPath
-	backend.control = &controlPlaneEnvironment{
-		xdgConfigHome: layout.xdgConfigHome, xdgStateHome: layout.xdgStateHome,
-		xdgDataHome: layout.xdgDataHome, xdgCacheHome: layout.xdgCacheHome,
-		configPath: layout.configPath, clientSocketPath: layout.clientSocketPath,
-	}
-	admitted, err := backend.admitBinaryContext(ctx, route{session: session, socketPath: layout.socketPath})
-	if err != nil {
-		return nil, err
-	}
 	marker, found, err := readOwnerMarker(layout.markerPath)
 	if err != nil {
 		return nil, err
 	}
 	if !found {
-		marker, err = claimOwnedSession(layout, commonDir, session, admitted, start)
+		marker, err = claimOwnedSession(layout, commonDir, commonIdentity, session, admitted, behavior, start)
 	} else {
-		err = validateOwnedMarker(marker, layout, commonDir, admitted)
+		err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted, behavior)
 		if err == nil {
 			err = verifyLiveSupervisor(layout.supervisorLock, marker)
 		}
@@ -227,7 +245,15 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 	return &OwnedSession{Session: session, SocketPath: layout.socketPath, ClientSocketPath: layout.clientSocketPath, backend: backend}, nil
 }
 
-func claimOwnedSession(layout ownedLayout, commonDir, session string, admitted binaryAdmission, start supervisorStarter) (ownerMarker, error) {
+func claimOwnedSession(
+	layout ownedLayout,
+	commonDir string,
+	commonIdentity pathIdentity,
+	session string,
+	admitted binaryAdmission,
+	behavior behaviorAdmission,
+	start supervisorStarter,
+) (ownerMarker, error) {
 	if _, running, err := inspectSupervisorLease(layout.supervisorLock); err != nil {
 		return ownerMarker{}, err
 	} else if running {
@@ -253,11 +279,17 @@ func claimOwnedSession(layout ownedLayout, commonDir, session string, admitted b
 		return ownerMarker{}, err
 	}
 	marker := ownerMarker{
-		SchemaID: ownedMarkerSchemaID, GitCommonDir: commonDir, OwnerNonce: nonce,
+		SchemaID: ownedMarkerSchemaID, GitCommonDir: commonDir,
+		GitCommonDevice: commonIdentity.device, GitCommonInode: commonIdentity.inode, OwnerNonce: nonce,
 		Session: session, RuntimeDir: layout.runtimeDir, SocketPath: layout.socketPath,
 		ClientSocketPath: layout.clientSocketPath, BinaryPath: admitted.path,
 		BinarySHA256: admitted.sha256, BinaryVersion: admitted.version,
-		SupervisorPID: pid, SupervisorStartToken: startToken,
+		BehaviorProfileID: behavior.profile.id, BehaviorSource: behavior.profile.source,
+		BehaviorPlatform:   behavior.profile.goos + "/" + behavior.profile.goarch,
+		DetectionFixtureID: behavior.profile.detectionFixture, ManifestSetDigest: behavior.profile.manifestSetDigest,
+		NoRefreshPolicyID:   behavior.profile.noRefreshPolicy,
+		BehaviorAdmissionID: behaviorAdmissionID(behavior.profile, admitted, commonDir, commonIdentity, layout, nonce),
+		SupervisorPID:       pid, SupervisorStartToken: startToken,
 		XDGConfigHome: layout.xdgConfigHome, XDGStateHome: layout.xdgStateHome,
 		XDGDataHome: layout.xdgDataHome, XDGCacheHome: layout.xdgCacheHome,
 		ConfigPath: layout.configPath,
@@ -276,7 +308,7 @@ func waitForOwnedReady(ctx context.Context, backend *Backend) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		_, probeErr := backend.probeContext(ctx)
+		_, probeErr := backend.probeOwned(ctx, *backend.owner)
 		if probeErr == nil {
 			return nil
 		}
@@ -309,7 +341,7 @@ func (b *Backend) acquireOwnedOperation(ctx context.Context) (ownedAdmission, *o
 		}
 		return ownedAdmission{}, nil, fmt.Errorf("herdr ownership marker changed")
 	}
-	commonDir, err := canonicalGitCommonDir(marker.GitCommonDir)
+	commonDir, commonIdentity, err := openCanonicalGitCommonDir(marker.GitCommonDir)
 	if err == nil && commonDir != marker.GitCommonDir {
 		err = fmt.Errorf("herdr ownership marker git common directory is not canonical")
 	}
@@ -318,9 +350,12 @@ func (b *Backend) acquireOwnedOperation(ctx context.Context) (ownedAdmission, *o
 		layout, err = prepareOwnedLayout(filepath.Dir(marker.RuntimeDir), marker.Session)
 	}
 	if err == nil {
-		err = validateOwnedMarker(marker, layout, commonDir, binaryAdmission{
-			path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion, protocol: supportedProtocol,
-		})
+		admitted := binaryAdmission{path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion, protocol: supportedProtocol}
+		var behavior behaviorAdmission
+		behavior, err = b.admitOwnedBehavior(admitted)
+		if err == nil {
+			err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted, behavior)
+		}
 	}
 	if err == nil {
 		err = verifyLiveSupervisor(layout.supervisorLock, marker)
@@ -349,26 +384,42 @@ func (b *Backend) probeOwned(ctx context.Context, admission ownedAdmission) (pro
 	if probed.binary != admission.marker.BinaryPath || probed.sha256 != admission.marker.BinarySHA256 || probed.version != admission.marker.BinaryVersion {
 		return probeResult{}, fmt.Errorf("herdr binary identity changed after owned admission")
 	}
+	if err := b.validateActiveManifestProfile(ctx, probed, b.behavior); err != nil {
+		return probeResult{}, err
+	}
 	return probed, nil
 }
 
-func canonicalGitCommonDir(raw string) (string, error) {
+func openCanonicalGitCommonDir(raw string) (string, pathIdentity, error) {
 	if raw == "" || strings.TrimSpace(raw) != raw {
-		return "", fmt.Errorf("herdr owned session requires a git common directory")
+		return "", pathIdentity{}, fmt.Errorf("herdr owned session requires a git common directory")
 	}
 	abs, err := filepath.Abs(raw)
 	if err != nil {
-		return "", err
+		return "", pathIdentity{}, err
 	}
 	resolved, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return "", fmt.Errorf("canonicalize git common directory: %w", err)
+		return "", pathIdentity{}, fmt.Errorf("canonicalize git common directory: %w", err)
 	}
-	info, err := os.Stat(resolved)
+	resolved = filepath.Clean(resolved)
+	dir, err := os.OpenFile(resolved, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return "", pathIdentity{}, fmt.Errorf("open git common directory without following links: %w", err)
+	}
+	defer func() { _ = dir.Close() }()
+	info, err := dir.Stat()
 	if err != nil || !info.IsDir() {
-		return "", fmt.Errorf("git common directory %s is not a directory", resolved)
+		return "", pathIdentity{}, fmt.Errorf("git common directory %s is not a directory", resolved)
 	}
-	return filepath.Clean(resolved), nil
+	if err := validateOwnerUID(resolved, info); err != nil {
+		return "", pathIdentity{}, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Dev == 0 || stat.Ino == 0 {
+		return "", pathIdentity{}, fmt.Errorf("git common directory %s has no physical identity", resolved)
+	}
+	return resolved, pathIdentity{device: uint64(stat.Dev), inode: stat.Ino}, nil
 }
 
 func prepareOwnedLayout(runtimeBase, session string) (ownedLayout, error) {
@@ -713,16 +764,30 @@ func writeOwnerMarkerExclusive(path string, marker ownerMarker) error {
 	return nil
 }
 
-func validateOwnedMarker(marker ownerMarker, layout ownedLayout, commonDir string, admitted binaryAdmission) error {
+func validateOwnedMarker(
+	marker ownerMarker,
+	layout ownedLayout,
+	commonDir string,
+	commonIdentity pathIdentity,
+	admitted binaryAdmission,
+	behavior behaviorAdmission,
+) error {
 	if marker.SchemaID != ownedMarkerSchemaID || marker.GitCommonDir != commonDir || marker.Session != filepath.Base(layout.runtimeDir) ||
+		marker.GitCommonDevice != commonIdentity.device || marker.GitCommonInode != commonIdentity.inode ||
 		marker.RuntimeDir != layout.runtimeDir || marker.SocketPath != layout.socketPath || marker.ClientSocketPath != layout.clientSocketPath ||
 		marker.XDGConfigHome != layout.xdgConfigHome || marker.XDGStateHome != layout.xdgStateHome || marker.XDGDataHome != layout.xdgDataHome ||
 		marker.XDGCacheHome != layout.xdgCacheHome || marker.ConfigPath != layout.configPath {
 		return fmt.Errorf("herdr ownership marker does not match this repository and runtime layout")
 	}
 	if marker.BinaryPath != admitted.path || marker.BinarySHA256 != admitted.sha256 || marker.BinaryVersion != admitted.version ||
+		marker.BehaviorProfileID != behavior.profile.id || marker.BehaviorSource != behavior.profile.source ||
+		marker.BehaviorPlatform != behavior.profile.goos+"/"+behavior.profile.goarch ||
+		marker.DetectionFixtureID != behavior.profile.detectionFixture || marker.ManifestSetDigest != behavior.profile.manifestSetDigest ||
+		marker.NoRefreshPolicyID != behavior.profile.noRefreshPolicy ||
+		marker.BehaviorAdmissionID != behaviorAdmissionID(behavior.profile, admitted, commonDir, commonIdentity, layout, marker.OwnerNonce) ||
 		!filepath.IsAbs(marker.BinaryPath) || filepath.Clean(marker.BinaryPath) != marker.BinaryPath || !validHexToken(marker.BinarySHA256) ||
 		validateAdmittedVersion(marker.BinaryVersion) != nil ||
+		!validHexToken(marker.ManifestSetDigest) || !validHexToken(marker.BehaviorAdmissionID) ||
 		!validHexToken(marker.OwnerNonce) || !validHexToken(marker.SupervisorStartToken) || marker.SupervisorPID <= 1 {
 		return fmt.Errorf("herdr ownership marker identity does not match admitted binary and supervisor")
 	}
@@ -896,14 +961,19 @@ func RunSupervisor(args []string, errw io.Writer) int {
 		fmt.Fprintf(errw, "fanout herdr supervisor: layout: %v\n", err)
 		return 1
 	}
-	commonDir, err := canonicalGitCommonDir(marker.GitCommonDir)
+	commonDir, commonIdentity, err := openCanonicalGitCommonDir(marker.GitCommonDir)
 	if err != nil || commonDir != marker.GitCommonDir {
 		fmt.Fprintln(errw, "fanout herdr supervisor: git common directory identity mismatch")
 		return 1
 	}
-	err = validateOwnedMarker(marker, layout, commonDir, binaryAdmission{
-		path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion, protocol: supportedProtocol,
-	})
+	admitted := binaryAdmission{path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion, protocol: supportedProtocol}
+	profile := productionBehaviorProfile()
+	if err = validateBehaviorProfile(profile, admitted); err != nil {
+		fmt.Fprintf(errw, "fanout herdr supervisor: behavior profile: %v\n", err)
+		return 1
+	}
+	behavior := behaviorAdmission{profile: profile}
+	err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted, behavior)
 	if err != nil {
 		fmt.Fprintf(errw, "fanout herdr supervisor: marker identity: %v\n", err)
 		return 1

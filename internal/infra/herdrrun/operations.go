@@ -33,24 +33,6 @@ type OwnedPaneIdentity struct {
 	AgentSession   *corebackend.AgentSessionRef
 }
 
-type ReadRequest struct {
-	Target OwnedPaneIdentity
-	Lines  int
-}
-
-type SendLineRequest struct {
-	Target OwnedPaneIdentity
-	Line   string
-}
-
-type FocusRequest struct {
-	Target OwnedPaneIdentity
-}
-
-type ClosePaneRequest struct {
-	Target OwnedPaneIdentity
-}
-
 type OwnedCloseRequest struct {
 	Target                 OwnedPaneIdentity
 	WorktreeOwnershipNonce string
@@ -103,7 +85,7 @@ func (b *Backend) cloneWithTarget(target *ownedTargetAdmission) *Backend {
 	clone := &Backend{
 		session: b.session, socketPath: b.socketPath, probeGate: make(chan struct{}, 1),
 		lookPath: b.lookPath, hashFile: b.hashFile, output: b.output, helpOutput: b.helpOutput,
-		now: b.now, sleep: b.sleep, admitted: map[string]binaryAdmission{}, target: target,
+		now: b.now, sleep: b.sleep, admitted: map[string]binaryAdmission{}, behavior: b.behavior, target: target,
 	}
 	maps.Copy(clone.admitted, b.admitted)
 	if b.control != nil {
@@ -125,10 +107,6 @@ func (b *Backend) boundOwnedTarget(ref corebackend.PaneRef, operation string) (O
 		return OwnedPaneIdentity{}, fmt.Errorf("%w: %s reference does not match immutable admission", ErrOwnedIdentityMismatch, operation)
 	}
 	return cloneOwnedPaneIdentity(b.target.target), nil
-}
-
-func (b *Backend) ReadOwned(ctx context.Context, req ReadRequest) (string, error) {
-	return b.readOwned(ctx, cloneOwnedPaneIdentity(req.Target), req.Lines)
 }
 
 func (b *Backend) readCore(ref corebackend.PaneRef, lines int) (string, error) {
@@ -171,10 +149,6 @@ func (b *Backend) readOwned(ctx context.Context, target OwnedPaneIdentity, lines
 	return string(out), nil
 }
 
-func (b *Backend) SendLineOwned(ctx context.Context, req SendLineRequest) error {
-	return b.sendLineOwned(ctx, cloneOwnedPaneIdentity(req.Target), req.Line)
-}
-
 func (b *Backend) sendLineCore(ref corebackend.PaneRef, line string) error {
 	target, err := b.boundOwnedTarget(ref, "send line")
 	if err != nil {
@@ -210,10 +184,6 @@ func (b *Backend) sendLineOwned(ctx context.Context, target OwnedPaneIdentity, l
 	return nil
 }
 
-func (b *Backend) FocusOwned(ctx context.Context, req FocusRequest) error {
-	return b.focusOwned(ctx, cloneOwnedPaneIdentity(req.Target))
-}
-
 func (b *Backend) focusCore(ref corebackend.PaneRef) error {
 	target, err := b.boundOwnedTarget(ref, "focus")
 	if err != nil {
@@ -247,10 +217,6 @@ func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) erro
 		return fmt.Errorf("%w: workspace focus did not preserve the admitted target", ErrOwnedIdentityMismatch)
 	}
 	return nil
-}
-
-func (b *Backend) ClosePaneOwned(ctx context.Context, req ClosePaneRequest) error {
-	return b.closePaneOwned(ctx, cloneOwnedPaneIdentity(req.Target))
 }
 
 func (b *Backend) closeCore(ref corebackend.PaneRef) error {
@@ -301,10 +267,6 @@ func (b *Backend) CloseOwned(req corebackend.CloseRequest) (corebackend.CloseRes
 	ctx, cancel := context.WithTimeout(context.Background(), 8*commandTimeout)
 	defer cancel()
 	return b.closeOwnedSession(ctx, cloneOwnedCloseRequest(*b.target.closeRequest))
-}
-
-func (b *Backend) CloseOwnedSession(ctx context.Context, req OwnedCloseRequest) (corebackend.CloseResult, error) {
-	return b.closeOwnedSession(ctx, cloneOwnedCloseRequest(req))
 }
 
 func (b *Backend) closeOwnedSession(ctx context.Context, req OwnedCloseRequest) (corebackend.CloseResult, error) {

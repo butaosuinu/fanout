@@ -55,6 +55,7 @@ type Backend struct {
 	now        func() time.Time
 	sleep      waitSleep
 	admitted   map[string]binaryAdmission
+	behavior   behaviorProfile
 	control    *controlPlaneEnvironment
 	owner      *ownedAdmission
 	target     *ownedTargetAdmission
@@ -117,6 +118,7 @@ func New(session, socketPath string) *Backend {
 		now:        time.Now,
 		sleep:      sleepContext,
 		admitted:   map[string]binaryAdmission{},
+		behavior:   productionBehaviorProfile(),
 	}
 }
 

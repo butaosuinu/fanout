@@ -40,6 +40,20 @@ func TestValidateCapabilitySchemaRejectsUsedMethodAndFieldRemoval(t *testing.T) 
 			wantErr: `missing required field "text"`,
 		},
 		{
+			name: "active manifest method",
+			mutate: func(schema string) string {
+				return strings.Replace(schema, `"method":{"const":"server.agent_manifests"}`, `"method":{"const":"server.future"}`, 1)
+			},
+			wantErr: "method server.agent_manifests",
+		},
+		{
+			name: "active manifest field",
+			mutate: func(schema string) string {
+				return strings.Replace(schema, `"active_version":{},"cached_remote_version":{}`, `"cached_remote_version":{}`, 1)
+			},
+			wantErr: `AgentManifestInfo: missing field "active_version"`,
+		},
+		{
 			name: "snapshot identity field",
 			mutate: func(schema string) string {
 				return strings.Replace(schema, `"pane_id":{},"terminal_id":{},"workspace_id":{}`, `"pane_id":{},"workspace_id":{}`, 1)

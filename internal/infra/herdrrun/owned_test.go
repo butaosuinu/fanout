@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -37,6 +38,15 @@ type fakeOwnedSupervisor struct {
 	starts    int
 	lock      *os.File
 	listeners []net.Listener
+}
+
+func testBehaviorProfile(binarySHA256 string) behaviorProfile {
+	profile := productionBehaviorProfile()
+	profile.source = "test-fixture"
+	profile.goos = runtime.GOOS
+	profile.goarch = runtime.GOARCH
+	profile.binarySHA256 = binarySHA256
+	return profile
 }
 
 func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (int, error) {
@@ -161,8 +171,22 @@ func TestPrepareOwnedLayoutUsesShortDefaultWithLongTMPDIR(t *testing.T) {
 
 func (h *ownedHarness) ensure() *OwnedSession {
 	h.t.Helper()
+	session, err := h.tryEnsure()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return session
+}
+
+func (h *ownedHarness) tryEnsure() (*OwnedSession, error) {
+	h.t.Helper()
 	b := New(h.layout.runtimeDir[strings.LastIndex(h.layout.runtimeDir, string(os.PathSeparator))+1:], h.layout.socketPath)
 	b.lookPath = func(string) (string, error) { return h.binary, nil }
+	binaryHash, err := sha256File(h.binary)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	b.behavior = testBehaviorProfile(binaryHash)
 	b.output = h.fake.output
 	b.helpOutput = func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
 		for _, surface := range requiredCommandSurfaces {
@@ -172,11 +196,7 @@ func (h *ownedHarness) ensure() *OwnedSession {
 		}
 		return nil, fmt.Errorf("unexpected help args %v", args)
 	}
-	session, err := ensureOwned(context.Background(), OwnedOptions{GitCommonDir: h.commonDir, RuntimeBase: h.runtimeBase}, b, h.supervisor.start)
-	if err != nil {
-		h.t.Fatal(err)
-	}
-	return session
+	return ensureOwned(context.Background(), OwnedOptions{GitCommonDir: h.commonDir, RuntimeBase: h.runtimeBase}, b, h.supervisor.start)
 }
 
 func (h *ownedHarness) target() OwnedPaneIdentity {
@@ -259,40 +279,145 @@ func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
 	}
 }
 
-func TestOwnedOperationsRejectForeignRouteBeforeMutation(t *testing.T) {
+func TestEnsureOwnedRejectsRecreatedGitCommonDirectory(t *testing.T) {
+	h := newOwnedHarness(t)
+	displaced := h.commonDir + "-displaced"
+	renameErr := os.Rename(h.commonDir, displaced)
+	if renameErr != nil {
+		t.Fatal(renameErr)
+	}
+	mkdirErr := os.Mkdir(h.commonDir, 0o700)
+	if mkdirErr != nil {
+		t.Fatal(mkdirErr)
+	}
+	if _, err := h.tryEnsure(); err == nil || !strings.Contains(err.Error(), "runtime layout") {
+		t.Fatalf("ensure after git common directory replacement error = %v", err)
+	}
+}
+
+func TestEnsureOwnedRejectsBehaviorProfileBeforeRuntimeCreation(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "fho-profile-") //nolint:usetesting // Keep Darwin Unix socket paths below the kernel limit.
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	commonDir := filepath.Join(root, "repo.git")
+	err = os.Mkdir(commonDir, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeBase := filepath.Join(root, "runtime")
+	session := naming.HerdrSessionName(commonDir)
+	layout, err := prepareOwnedLayout(runtimeBase, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeHerdr(session, layout.socketPath)
+	b := newTestBackend(t, session, layout.socketPath, fake)
+	b.behavior = testBehaviorProfile(strings.Repeat("b", 64))
+	if _, err := ensureOwned(context.Background(), OwnedOptions{GitCommonDir: commonDir, RuntimeBase: runtimeBase}, b, func(string, string, string) (int, error) {
+		t.Fatal("supervisor started before behavior admission")
+		return 0, nil
+	}); err == nil || !strings.Contains(err.Error(), "outside owned behavior profile") {
+		t.Fatalf("EnsureOwned() behavior error = %v", err)
+	}
+	if _, err := os.Stat(runtimeBase); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("runtime base exists before behavior admission: %v", err)
+	}
+}
+
+func TestOwnedPrimitivesRejectActiveManifestDrift(t *testing.T) {
+	for _, operation := range []string{"read", "send", "focus", "close", "owned close"} {
+		t.Run(operation, func(t *testing.T) {
+			h := newOwnedHarness(t)
+			target := h.target()
+			var call func() error
+			if operation == "owned close" {
+				bound, err := h.session.Backend().BindOwnedClose(h.closeRequest(target))
+				if err != nil {
+					t.Fatal(err)
+				}
+				call = func() error {
+					_, closeErr := bound.CloseOwned(corebackend.CloseRequest{Ref: target.Ref, WorktreePath: target.WorktreePath, ShellKey: target.TerminalID})
+					return closeErr
+				}
+			} else {
+				bound, err := h.session.Backend().BindOwnedTarget(target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch operation {
+				case "read":
+					call = func() error { _, readErr := bound.Read(target.Ref, 1); return readErr }
+				case "send":
+					call = func() error { return bound.SendLine(target.Ref, "hello") }
+				case "focus":
+					call = func() error { return bound.Focus(target.Ref) }
+				case "close":
+					call = func() error { return bound.Close(target.Ref) }
+				}
+			}
+			h.fake.manifests = strings.Replace(h.fake.manifests, "2026.07.18.1", "2099.01.01.1", 1)
+			baseline := len(h.fake.commands)
+			if err := call(); err == nil || !strings.Contains(err.Error(), "active manifest set") {
+				t.Fatalf("%s manifest drift error = %v", operation, err)
+			}
+			for _, command := range h.fake.commands[baseline:] {
+				if commandKey(command.args) == "" {
+					t.Fatalf("manifest drift allowed %s command: %v", operation, command.args)
+				}
+			}
+		})
+	}
+}
+
+func TestOwnedBindingsRejectForeignRouteAndImmutableTargetReplacement(t *testing.T) {
 	h := newOwnedHarness(t)
 	target := h.target()
 	closeRequest := h.closeRequest(target)
 	baseline := len(h.fake.commands)
 	foreign := target
 	foreign.SocketPath = filepath.Join(h.root, "foreign.sock")
+	if _, err := h.session.Backend().BindOwnedTarget(foreign); !errors.Is(err, ErrOwnedIdentityMismatch) {
+		t.Fatalf("BindOwnedTarget(foreign) error = %v", err)
+	}
+	foreignClose := closeRequest
+	foreignClose.Target = foreign
+	if _, err := h.session.Backend().BindOwnedClose(foreignClose); !errors.Is(err, ErrOwnedIdentityMismatch) {
+		t.Fatalf("BindOwnedClose(foreign) error = %v", err)
+	}
+	if len(h.fake.commands) != baseline {
+		t.Fatalf("foreign bindings invoked herdr: before=%d after=%d", baseline, len(h.fake.commands))
+	}
+
+	bound, err := h.session.Backend().BindOwnedTarget(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundClose, err := h.session.Backend().BindOwnedClose(closeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline = len(h.fake.commands)
+	foreignRef := target.Ref
+	foreignRef.Pane = "w2:p-foreign"
 	calls := []func() error{
+		func() error { _, err := bound.Read(foreignRef, 1); return err },
+		func() error { return bound.SendLine(foreignRef, "hello") },
+		func() error { return bound.Focus(foreignRef) },
+		func() error { return bound.Close(foreignRef) },
 		func() error {
-			_, err := h.session.Backend().ReadOwned(context.Background(), ReadRequest{Target: foreign, Lines: 1})
-			return err
-		},
-		func() error {
-			return h.session.Backend().SendLineOwned(context.Background(), SendLineRequest{Target: foreign, Line: "hello"})
-		},
-		func() error {
-			return h.session.Backend().FocusOwned(context.Background(), FocusRequest{Target: foreign})
-		},
-		func() error {
-			return h.session.Backend().ClosePaneOwned(context.Background(), ClosePaneRequest{Target: foreign})
-		},
-		func() error {
-			closeRequest.Target = foreign
-			_, err := h.session.Backend().CloseOwnedSession(context.Background(), closeRequest)
+			_, err := boundClose.CloseOwned(corebackend.CloseRequest{Ref: foreignRef, WorktreePath: target.WorktreePath, ShellKey: target.TerminalID})
 			return err
 		},
 	}
-	for i, call := range calls {
-		if err := call(); !errors.Is(err, ErrOwnedIdentityMismatch) {
-			t.Errorf("foreign operation %d error = %v", i, err)
+	for index, call := range calls {
+		if callErr := call(); !errors.Is(callErr, ErrOwnedIdentityMismatch) {
+			t.Errorf("immutable operation %d error = %v", index, callErr)
 		}
 	}
 	if len(h.fake.commands) != baseline {
-		t.Fatalf("foreign operations invoked herdr: before=%d after=%d", baseline, len(h.fake.commands))
+		t.Fatalf("immutable target replacement invoked herdr: before=%d after=%d", baseline, len(h.fake.commands))
 	}
 }
 

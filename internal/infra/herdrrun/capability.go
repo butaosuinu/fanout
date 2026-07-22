@@ -71,6 +71,7 @@ type methodRequirement struct {
 
 var requiredMethodCapabilities = []methodRequirement{
 	{name: "session.snapshot"},
+	{name: "server.agent_manifests"},
 	{name: "workspace.focus", required: []string{"workspace_id"}},
 	{name: "workspace.close", required: []string{"workspace_id"}},
 	{name: "agent.prompt", required: []string{"target", "text"}},
@@ -119,10 +120,11 @@ func validateCapabilitySchema(data []byte) error {
 		return fmt.Errorf("unsupported herdr response schema: result: %w", err)
 	}
 	for name, required := range map[string][]string{
-		"session_snapshot": {"snapshot"},
-		"agent_prompted":   {"agent"},
-		"pane_read":        {"read"},
-		"ok":               nil,
+		"session_snapshot":      {"snapshot"},
+		"agent_manifest_status": {"manifests"},
+		"agent_prompted":        {"agent"},
+		"pane_read":             {"read"},
+		"ok":                    nil,
 	} {
 		variant, findErr := findVariant(&document, result, "type", name)
 		if findErr != nil {
@@ -131,6 +133,11 @@ func validateCapabilitySchema(data []byte) error {
 		if fieldErr := requireFields(variant, append([]string{"type"}, required...), nil); fieldErr != nil {
 			return fmt.Errorf("unsupported herdr response schema: result %s: %w", name, fieldErr)
 		}
+	}
+	manifestVariant, _ := findVariant(&document, result, "type", "agent_manifest_status")
+	err = requireFields(manifestVariant, []string{"type", "manifests"}, []string{"last_check_unix", "last_result"})
+	if err != nil {
+		return fmt.Errorf("unsupported herdr response schema: result agent_manifest_status: %w", err)
 	}
 
 	snapshotVariant, _ := findVariant(&document, result, "type", "session_snapshot")
@@ -147,6 +154,7 @@ func validateCapabilitySchema(data []byte) error {
 		"PaneInfo":              {"pane_id", "terminal_id", "workspace_id", "tab_id", "focused", "agent_status", "revision"},
 		"AgentInfo":             {"terminal_id", "workspace_id", "tab_id", "pane_id", "focused", "agent_status", "revision"},
 		"AgentSessionInfo":      {"source", "agent", "kind", "value"},
+		"AgentManifestInfo":     {"agent", "source", "source_kind", "local_override_shadowing_remote"},
 	} {
 		node := success.Defs[name]
 		if node == nil {
@@ -155,6 +163,12 @@ func validateCapabilitySchema(data []byte) error {
 		if err := requireFields(node, required, nil); err != nil {
 			return fmt.Errorf("unsupported herdr response schema: %s: %w", name, err)
 		}
+	}
+	manifestInfo := success.Defs["AgentManifestInfo"]
+	if err := requireFields(manifestInfo, nil, []string{
+		"active_version", "cached_remote_version", "remote_last_checked_unix", "remote_update_error", "remote_update_result", "warning",
+	}); err != nil {
+		return fmt.Errorf("unsupported herdr response schema: AgentManifestInfo: %w", err)
 	}
 	return nil
 }
