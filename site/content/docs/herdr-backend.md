@@ -24,7 +24,7 @@ The TUI header always shows the selected backend and why it was selected, such a
 
 ## Prerequisites
 
-- **stable herdr 0.7.5 or newer** — the CLI and server must run the same version with protocol 17 and API schema version 1. Prerelease and malformed versions fail closed. A newer stable version is accepted only when the schema still contains every method and field fanout uses and the required CLI help surfaces still match.
+- **stable herdr 0.7.5 or newer** — the CLI and server must run the same version with protocol 17 and API schema version 1. Prerelease and malformed versions fail closed. A newer stable version is accepted only when the schema still contains every method and field fanout uses and the required CLI help surfaces still match. The internal fanout-owned mutation profile is narrower: it currently admits only the exact official herdr 0.7.5 `darwin/arm64` release asset and matching schema digest.
 - A running herdr session with an explicit name (`default` is rejected). fanout never starts a herdr server and never creates or attaches a session.
 - The `herdr` binary on your `PATH`, installed separately.
 

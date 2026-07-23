@@ -138,9 +138,6 @@ func validateAdmissionSourceOwner(path string, info os.FileInfo) error {
 		return fmt.Errorf("inspect herdr executable owner for %s", path)
 	}
 	ownerUID := int(stat.Uid)
-	if ownerUID == os.Getuid() {
-		return nil
-	}
 	if !isTrustedAdmissionSourceOwner(ownerUID, os.Getuid(), info.Mode()) {
 		return fmt.Errorf("herdr executable %s belongs to untrusted uid %d or is group/world writable", path, stat.Uid)
 	}
@@ -148,5 +145,5 @@ func validateAdmissionSourceOwner(path string, info os.FileInfo) error {
 }
 
 func isTrustedAdmissionSourceOwner(ownerUID, currentUID int, mode os.FileMode) bool {
-	return ownerUID == currentUID || ownerUID == 0 && mode.Perm()&0o022 == 0
+	return (ownerUID == currentUID || ownerUID == 0) && mode.Perm()&0o022 == 0
 }

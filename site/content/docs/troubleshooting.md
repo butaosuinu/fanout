@@ -121,6 +121,8 @@ herdr pane read --help   # required CLI surface; repeat for the command named in
 
 Install or upgrade to stable herdr 0.7.5 or newer. If the message is `requires a client/server restart`, restart the herdr server and client so both run the same build.
 
+The internal fanout-owned mutation profile currently admits only the exact official herdr 0.7.5 `darwin/arm64` release asset and matching schema digest. Other platforms and versions can pass the read-only capability gate but fail closed before owned mutation.
+
 ## "herdr backend v1 is observation-only; ... is unavailable"
 
 Not a fault. herdr backend v1 deliberately fails closed on anything that would mutate a herdr session; `runtime backend herdr does not support ...` is the same family (launch, focus, send, close, restore, peek, plan capture, cleanup). Use the tmux backend for new launches. On an existing herdr row, `--merge` still works — it only merges the branch — while `--close` / `--cleanup` are refused; fold the workspace away in herdr instead. Related: a conflicting `--backend` on a parent with recorded panes fails with `explicit migration is required` — there is no migration command in v1. See [herdr backend]({{< relref "/docs/herdr-backend" >}}) for the full capability table.

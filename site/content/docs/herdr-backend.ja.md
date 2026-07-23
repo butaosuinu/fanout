@@ -29,7 +29,7 @@ TUI のヘッダには、選択された backend とその理由が常に表示�
 
 ## 前提条件
 
-- **stable herdr 0.7.5 以上** — CLI と server は同じ version、protocol 17、API schema version 1 で動かしてください。prerelease と解釈できない version は fail closed します。新しい stable version は、fanout が使う method と field が schema にすべてあり、必要な CLI help surface も一致する場合だけ使えます。
+- **stable herdr 0.7.5 以上** — CLI と server は同じ version、protocol 17、API schema version 1 で動かしてください。prerelease と解釈できない version は fail closed します。新しい stable version は、fanout が使う method と field が schema にすべてあり、必要な CLI help surface も一致する場合だけ使えます。内部の fanout-owned mutation profile は範囲が狭く、現在は公式 herdr 0.7.5 の `darwin/arm64` release asset と一致する schema digest だけを許可します。
 - 明示的な名前を付けた herdr session が稼働していること(`default` は拒否されます)。fanout は herdr server を起動せず、session の作成も attach もしません。
 - `PATH` 上の `herdr` バイナリ。別途インストールしてください。
 

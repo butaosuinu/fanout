@@ -249,7 +249,7 @@ func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) erro
 	if err != nil {
 		return err
 	}
-	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "agent", "focus", target.AgentID)
+	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "agent", "focus", target.Ref.Pane)
 	if err != nil {
 		return fmt.Errorf("herdr agent focus (not retried): %w", err)
 	}

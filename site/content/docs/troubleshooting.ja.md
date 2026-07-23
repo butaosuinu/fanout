@@ -146,6 +146,8 @@ herdr pane read --help   # 必要な CLI surface。エラーに出た command �
 
 stable herdr 0.7.5 以上へ更新してください。`requires a client/server restart` が出る場合は、herdr の server と client を再起動して同じビルドに揃えます。
 
+内部の fanout-owned mutation profile が現在許可するのは、公式 herdr 0.7.5 の `darwin/arm64` release asset と一致する schema digest だけです。他の platform と version は read-only capability gate を通過しても、owned mutation の前に fail closed します。
+
 ## "herdr backend v1 is observation-only; ... is unavailable"
 
 故障ではありません。herdr backend v1 は、herdr session を変更しうる操作を意図的に fail closed します。`runtime backend herdr does not support ...` も同じ系統です(launch・focus・send・close・restore・peek・plan capture・cleanup)。

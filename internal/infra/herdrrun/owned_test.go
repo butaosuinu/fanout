@@ -448,6 +448,8 @@ func TestAdmissionSourceOwnerPolicy(t *testing.T) {
 		want       bool
 	}{
 		{name: "current user", ownerUID: 501, currentUID: 501, mode: 0o700, want: true},
+		{name: "current user group writable", ownerUID: 501, currentUID: 501, mode: 0o770, want: false},
+		{name: "current user world writable", ownerUID: 501, currentUID: 501, mode: 0o707, want: false},
 		{name: "root installed", ownerUID: 0, currentUID: 501, mode: 0o755, want: true},
 		{name: "root group writable", ownerUID: 0, currentUID: 501, mode: 0o775, want: false},
 		{name: "other user", ownerUID: 502, currentUID: 501, mode: 0o755, want: false},
@@ -668,7 +670,7 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 			return []byte("one\ntwo\n"), nil
 		case slices.Equal(args, []string{"agent", "prompt", "w2:p1", "hello"}):
 			return agentPromptResponse(target, nil), nil
-		case slices.Equal(args, []string{"agent", "focus", target.AgentID}):
+		case slices.Equal(args, []string{"agent", "focus", target.Ref.Pane}):
 			h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
 				for i := range *snapshot.Panes {
 					focused := (*snapshot.Panes)[i].PaneID == target.Ref.Pane
@@ -714,7 +716,7 @@ func TestBoundOwnedBackendRejectsAgentFocusWithoutTargetPaneFocus(t *testing.T) 
 	h := newOwnedHarness(t)
 	target := h.target()
 	h.fake.respond = func(args []string) ([]byte, error) {
-		if !slices.Equal(args, []string{"agent", "focus", target.AgentID}) {
+		if !slices.Equal(args, []string{"agent", "focus", target.Ref.Pane}) {
 			return nil, fmt.Errorf("unexpected mutation args %v", args)
 		}
 		return nil, nil
