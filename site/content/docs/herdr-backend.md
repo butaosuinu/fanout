@@ -11,7 +11,7 @@ The herdr backend lets fanout run inside [herdr](https://herdr.dev/) — a tmux-
 
 ## What v1 does
 
-Run fanout inside a named herdr session and the read-only surfaces — the persistent TUI console, `--status`, and the web dashboard — show the repository's recorded sessions, including each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and the web dashboard match rows recorded with the herdr backend against `herdr api snapshot` for liveness and agent state; `--status` reads recorded state and GitHub only. Before reading a session, fanout checks `herdr --version`, `herdr api schema --json`, and the `--help` output for `pane read`, `agent prompt`, `workspace focus`, `pane close`, and `workspace close`. It then uses `herdr status --json` and `herdr api snapshot` for observation.
+Run fanout inside a named herdr session and the read-only surfaces — the persistent TUI console, `--status`, and the web dashboard — show the repository's recorded sessions, including each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and the web dashboard match rows recorded with the herdr backend against `herdr api snapshot` for liveness and agent state; `--status` reads recorded state and GitHub only. Before reading a session, fanout checks `herdr --version`, `herdr api schema --json`, and the `--help` output for `pane read`, `agent prompt`, `agent focus`, `pane close`, and `workspace close`. It then uses `herdr status --json` and `herdr api snapshot` for observation.
 
 Everything that would mutate a herdr session fails closed with a clear error instead of degrading:
 

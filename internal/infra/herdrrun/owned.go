@@ -648,7 +648,7 @@ func validatePrivateRegular(path string, info os.FileInfo) error {
 
 func validatePrivateSocket(path string) error {
 	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSocket == 0 || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 {
+	if err != nil || info.Mode()&os.ModeSocket == 0 || info.Mode()&os.ModeSymlink != 0 || !isOwnerOnlySocketMode(info.Mode()) {
 		return fmt.Errorf("herdr owned socket %s is not an owner-only Unix socket", path)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
@@ -659,6 +659,11 @@ func validatePrivateSocket(path string) error {
 		return err
 	}
 	return validateNoExtendedACL(path)
+}
+
+func isOwnerOnlySocketMode(mode os.FileMode) bool {
+	permissions := mode.Perm()
+	return permissions == 0o600 || permissions == 0o700
 }
 
 func validateOwnerUID(path string, info os.FileInfo) error {

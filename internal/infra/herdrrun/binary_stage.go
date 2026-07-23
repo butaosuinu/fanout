@@ -52,7 +52,7 @@ func stageExecutable(sourcePath, binaryDir string) (string, string, error) {
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 		return "", "", fmt.Errorf("herdr executable is not a regular executable")
 	}
-	err = validateOwnerUID(resolved, info)
+	err = validateAdmissionSourceOwner(resolved, info)
 	if err != nil {
 		return "", "", err
 	}
@@ -130,4 +130,23 @@ func stageExecutable(sourcePath, binaryDir string) (string, string, error) {
 		return "", "", err
 	}
 	return target, digest, nil
+}
+
+func validateAdmissionSourceOwner(path string, info os.FileInfo) error {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("inspect herdr executable owner for %s", path)
+	}
+	ownerUID := int(stat.Uid)
+	if ownerUID == os.Getuid() {
+		return nil
+	}
+	if !isTrustedAdmissionSourceOwner(ownerUID, os.Getuid(), info.Mode()) {
+		return fmt.Errorf("herdr executable %s belongs to untrusted uid %d or is group/world writable", path, stat.Uid)
+	}
+	return validateNoExtendedACL(path)
+}
+
+func isTrustedAdmissionSourceOwner(ownerUID, currentUID int, mode os.FileMode) bool {
+	return ownerUID == currentUID || ownerUID == 0 && mode.Perm()&0o022 == 0
 }

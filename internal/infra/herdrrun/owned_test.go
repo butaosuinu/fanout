@@ -94,7 +94,7 @@ func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (int, 
 		if err != nil {
 			return 0, err
 		}
-		err = os.Chmod(path, 0o600)
+		err = os.Chmod(path, 0o700)
 		if err != nil {
 			_ = listener.Close()
 			return 0, err
@@ -436,6 +436,45 @@ func TestStageExecutablePinsOpenedBytesBeforeCommands(t *testing.T) {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || info.Mode().Perm() != 0o500 || stat.Nlink != 1 {
 		t.Fatalf("pinned executable identity = mode %v, stat %#v", info.Mode(), info.Sys())
+	}
+}
+
+func TestAdmissionSourceOwnerPolicy(t *testing.T) {
+	tests := []struct {
+		name       string
+		ownerUID   int
+		currentUID int
+		mode       os.FileMode
+		want       bool
+	}{
+		{name: "current user", ownerUID: 501, currentUID: 501, mode: 0o700, want: true},
+		{name: "root installed", ownerUID: 0, currentUID: 501, mode: 0o755, want: true},
+		{name: "root group writable", ownerUID: 0, currentUID: 501, mode: 0o775, want: false},
+		{name: "other user", ownerUID: 502, currentUID: 501, mode: 0o755, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isTrustedAdmissionSourceOwner(tt.ownerUID, tt.currentUID, tt.mode)
+			if got != tt.want {
+				t.Fatalf("admission source policy = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOwnerOnlySocketModes(t *testing.T) {
+	for _, tt := range []struct {
+		mode os.FileMode
+		want bool
+	}{
+		{mode: 0o600, want: true},
+		{mode: 0o700, want: true},
+		{mode: 0o660, want: false},
+		{mode: 0o707, want: false},
+	} {
+		if got := isOwnerOnlySocketMode(tt.mode); got != tt.want {
+			t.Errorf("isOwnerOnlySocketMode(%#o) = %t, want %t", tt.mode, got, tt.want)
+		}
 	}
 }
 

@@ -16,7 +16,7 @@ fanout は herdr を同梱しません。herdr は AGPL ライセンスで、別
 
 名前付きの herdr session の中で fanout を起動すると、read-only な画面 — 常駐 TUI コンソール、`--status`、web ダッシュボード — にリポジトリの記録済み session が、各 pane の runtime backend と identity 付きで表示されます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
 TUI コンソールと web ダッシュボードは、herdr backend で記録された行を `herdr api snapshot` と照合して生死と agent state を反映します。`--status` が読むのは記録済みの state と GitHub だけです。
-fanout は session を読む前に `herdr --version`、`herdr api schema --json` と、`pane read`、`agent prompt`、`workspace focus`、`pane close`、`workspace close` の `--help` 出力を検査します。その後、観測に `herdr status --json` と `herdr api snapshot` を使います。
+fanout は session を読む前に `herdr --version`、`herdr api schema --json` と、`pane read`、`agent prompt`、`agent focus`、`pane close`、`workspace close` の `--help` 出力を検査します。その後、観測に `herdr status --json` と `herdr api snapshot` を使います。
 
 herdr session を変更しうる操作は、劣化動作ではなく明確なエラーで fail closed します。
 
