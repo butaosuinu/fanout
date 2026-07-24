@@ -422,7 +422,16 @@ func TestOwnedReadinessRequiresPrivateServerAndClientSockets(t *testing.T) {
 	}
 }
 
-func TestFreshReadinessFailureGracefullyStopsServerProcessGroup(t *testing.T) {
+type processOwnedHarness struct {
+	commonDir   string
+	runtimeBase string
+	layout      ownedLayout
+	backend     *Backend
+	pidPath     string
+}
+
+func newProcessOwnedHarness(t *testing.T) processOwnedHarness {
+	t.Helper()
 	root, err := os.MkdirTemp("/tmp", "fho-stop-") //nolint:usetesting // Darwin Unix socket paths are limited to 103 bytes.
 	if err != nil {
 		t.Fatal(err)
@@ -460,46 +469,92 @@ func TestFreshReadinessFailureGracefullyStopsServerProcessGroup(t *testing.T) {
 	}
 	backend := New(session, layout.socketPath)
 	backend.lookPath = func(string) (string, error) { return herdr, nil }
+	return processOwnedHarness{
+		commonDir: commonDir, runtimeBase: runtimeBase, layout: layout, backend: backend,
+		pidPath: filepath.Join(layout.xdgStateHome, "test-server.pid"),
+	}
+}
 
+func waitForTestServerPID(path string, timeout time.Duration) (int, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return strconv.Atoi(strings.TrimSpace(string(data)))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return 0, fmt.Errorf("test herdr server did not publish its pid")
+}
+
+func assertProcessOwnedRetired(t *testing.T, harness processOwnedHarness, serverPID int, ensureErr error) {
+	t.Helper()
+	if err := syscall.Kill(serverPID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("test herdr server pid %d still exists: %v", serverPID, err)
+	}
+	if err := validateRetiredOwnedSession(harness.layout); err != nil {
+		t.Fatalf("retired owned session validation: %v; ensure error: %v", err, ensureErr)
+	}
+}
+
+func TestFreshReadinessFailureGracefullyStopsServerProcessGroup(t *testing.T) {
+	harness := newProcessOwnedHarness(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	pidPath := filepath.Join(layout.xdgStateHome, "test-server.pid")
-	ready := make(chan error, 1)
+	type readyResult struct {
+		pid int
+		err error
+	}
+	ready := make(chan readyResult, 1)
 	go func() {
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			if _, err := os.Stat(pidPath); err == nil {
-				cancel()
-				ready <- nil
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
+		pid, err := waitForTestServerPID(harness.pidPath, 3*time.Second)
 		cancel()
-		ready <- fmt.Errorf("test herdr server did not publish its pid")
+		ready <- readyResult{pid: pid, err: err}
 	}()
 
-	_, ensureErr := ensureOwned(ctx, OwnedOptions{GitCommonDir: commonDir, RuntimeBase: runtimeBase}, backend, startOwnedSupervisor)
-	if readyErr := <-ready; readyErr != nil {
-		t.Fatal(readyErr)
+	_, ensureErr := ensureOwned(
+		ctx,
+		OwnedOptions{GitCommonDir: harness.commonDir, RuntimeBase: harness.runtimeBase},
+		harness.backend,
+		startOwnedSupervisor,
+	)
+	result := <-ready
+	if result.err != nil {
+		t.Fatal(result.err)
 	}
 	if !errors.Is(ensureErr, context.Canceled) {
 		t.Fatalf("ensureOwned() error = %v, want context cancellation after server start", ensureErr)
 	}
-	pidBytes, err := os.ReadFile(pidPath)
-	if err != nil {
-		t.Fatal(err)
+	assertProcessOwnedRetired(t, harness, result.pid, ensureErr)
+}
+
+func TestPublishedMarkerFailureGracefullyStopsObservedServer(t *testing.T) {
+	harness := newProcessOwnedHarness(t)
+	injectedErr := errors.New("injected post-link owner marker verification failure")
+	serverPID := 0
+	writeMarker := func(path string, marker ownerMarker) error {
+		if err := writeOwnerMarkerExclusive(path, marker); err != nil {
+			return err
+		}
+		pid, err := waitForTestServerPID(harness.pidPath, 3*time.Second)
+		if err != nil {
+			return err
+		}
+		serverPID = pid
+		return injectedErr
 	}
-	serverPID, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
-	if err != nil {
-		t.Fatal(err)
+
+	_, ensureErr := ensureOwned(
+		context.Background(),
+		OwnedOptions{GitCommonDir: harness.commonDir, RuntimeBase: harness.runtimeBase},
+		harness.backend,
+		startOwnedSupervisor,
+		writeMarker,
+	)
+	if !errors.Is(ensureErr, injectedErr) {
+		t.Fatalf("ensureOwned() error = %v, want injected marker failure", ensureErr)
 	}
-	if err := syscall.Kill(serverPID, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("test herdr server pid %d still exists: %v", serverPID, err)
-	}
-	if err := validateRetiredOwnedSession(layout); err != nil {
-		t.Fatalf("retired owned session validation: %v; ensure error: %v", err, ensureErr)
-	}
+	assertProcessOwnedRetired(t, harness, serverPID, ensureErr)
 }
 
 func TestEnsureOwnedFailsClosedAfterDeadSupervisor(t *testing.T) {

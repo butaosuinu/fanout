@@ -189,15 +189,31 @@ func (s *startedSupervisor) reapAsync() {
 	}()
 }
 
-type supervisorStarter func(markerPath, nonce, startToken string) (*startedSupervisor, error)
+type (
+	supervisorStarter func(markerPath, nonce, startToken string) (*startedSupervisor, error)
+	ownerMarkerWriter func(path string, marker ownerMarker) error
+)
 
 func EnsureOwned(ctx context.Context, opts OwnedOptions) (*OwnedSession, error) {
 	return ensureOwned(ctx, opts, nil, startOwnedSupervisor)
 }
 
-func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start supervisorStarter) (*OwnedSession, error) {
+func ensureOwned(
+	ctx context.Context,
+	opts OwnedOptions,
+	backend *Backend,
+	start supervisorStarter,
+	writers ...ownerMarkerWriter,
+) (*OwnedSession, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("ensure owned herdr session requires a context")
+	}
+	writeMarker := writeOwnerMarkerExclusive
+	if len(writers) > 0 {
+		if len(writers) != 1 || writers[0] == nil {
+			return nil, fmt.Errorf("ensure owned herdr session received an invalid marker writer")
+		}
+		writeMarker = writers[0]
 	}
 	commonDir, commonIdentity, err := openCanonicalGitCommonDir(opts.GitCommonDir)
 	if err != nil {
@@ -253,7 +269,7 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 	}
 	var started *startedSupervisor
 	if !found {
-		marker, started, err = claimOwnedSession(layout, commonDir, commonIdentity, session, admitted, start)
+		marker, started, err = claimOwnedSession(layout, commonDir, commonIdentity, session, admitted, start, writeMarker)
 	} else {
 		err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted)
 		if err == nil {
@@ -261,6 +277,13 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 		}
 	}
 	if err != nil {
+		if started != nil {
+			unlockPrivateFile(lock)
+			lock = nil
+			if stopErr := stopFailedOwnedClaim(layout, started); stopErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("stop failed herdr ownership claim: %w", stopErr))
+			}
+		}
 		return nil, err
 	}
 	backend.owner = &ownedAdmission{marker: marker, markerPath: layout.markerPath, lockPath: layout.lifecycleLock}
@@ -285,6 +308,7 @@ func claimOwnedSession(
 	session string,
 	admitted binaryAdmission,
 	start supervisorStarter,
+	writeMarker ownerMarkerWriter,
 ) (ownerMarker, *startedSupervisor, error) {
 	if _, running, err := inspectSupervisorLease(layout.supervisorLock); err != nil {
 		return ownerMarker{}, nil, err
@@ -324,33 +348,15 @@ func claimOwnedSession(
 		XDGDataHome: layout.xdgDataHome, XDGCacheHome: layout.xdgCacheHome,
 		ConfigPath: layout.configPath,
 	}
-	if err := writeOwnerMarkerExclusive(layout.markerPath, marker); err != nil {
-		stopErr := stopUnclaimedSupervisor(started)
-		return ownerMarker{}, nil, errors.Join(err, stopErr)
+	if err := writeMarker(layout.markerPath, marker); err != nil {
+		return marker, started, err
 	}
 	return marker, started, nil
 }
 
-func stopUnclaimedSupervisor(started *startedSupervisor) error {
-	if started == nil || started.signal == nil || started.wait == nil {
-		return fmt.Errorf("unclaimed herdr supervisor has no child handle")
-	}
-	signalErr := started.signal(os.Kill)
-	waitErr := started.wait()
-	if signalErr != nil && !errors.Is(signalErr, os.ErrProcessDone) {
-		signalErr = fmt.Errorf("kill unclaimed herdr supervisor: %w", signalErr)
-	} else {
-		signalErr = nil
-	}
-	if waitErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) {
-			waitErr = nil
-		} else {
-			waitErr = fmt.Errorf("reap unclaimed herdr supervisor: %w", waitErr)
-		}
-	}
-	return errors.Join(signalErr, waitErr)
+func stopFailedOwnedClaim(layout ownedLayout, started *startedSupervisor) error {
+	stopErr := stopStartedSupervisorGracefully(started)
+	return errors.Join(stopErr, validateRetiredOwnedSession(layout))
 }
 
 func stopFreshOwnedSupervisor(layout ownedLayout, marker ownerMarker, started *startedSupervisor) error {
@@ -365,6 +371,14 @@ func stopFreshOwnedSupervisor(layout ownedLayout, marker ownerMarker, started *s
 	if verifyErr != nil {
 		return verifyErr
 	}
+	stopErr := stopStartedSupervisorGracefully(started)
+	return errors.Join(stopErr, validateRetiredOwnedSession(layout))
+}
+
+func stopStartedSupervisorGracefully(started *startedSupervisor) error {
+	if started == nil || started.pid <= 1 || started.signal == nil || started.wait == nil {
+		return fmt.Errorf("herdr supervisor has no valid direct child handle")
+	}
 	signalErr := started.signal(syscall.SIGTERM)
 	if signalErr != nil && !errors.Is(signalErr, os.ErrProcessDone) {
 		return fmt.Errorf("signal unready herdr supervisor: %w", signalErr)
@@ -375,13 +389,16 @@ func stopFreshOwnedSupervisor(layout ownedLayout, marker ownerMarker, started *s
 	defer timer.Stop()
 	select {
 	case waitErr := <-waited:
-		retiredErr := validateRetiredOwnedSession(layout)
 		if waitErr != nil {
-			waitErr = fmt.Errorf("reap unready herdr supervisor: %w", waitErr)
+			var exitErr *exec.ExitError
+			if errors.As(waitErr, &exitErr) {
+				return nil
+			}
+			return fmt.Errorf("reap herdr supervisor: %w", waitErr)
 		}
-		return errors.Join(waitErr, retiredErr)
+		return nil
 	case <-timer.C:
-		return fmt.Errorf("timed out waiting for unready herdr supervisor shutdown")
+		return fmt.Errorf("timed out waiting for herdr supervisor shutdown")
 	}
 }
 
