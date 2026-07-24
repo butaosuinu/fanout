@@ -437,7 +437,8 @@ func newProcessOwnedHarness(t *testing.T) processOwnedHarness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	if err := os.Chmod(root, 0o700); err != nil {
+	err = os.Chmod(root, 0o700)
+	if err != nil {
 		t.Fatal(err)
 	}
 	root, err = filepath.EvalSymlinks(root)
@@ -445,7 +446,8 @@ func newProcessOwnedHarness(t *testing.T) processOwnedHarness {
 		t.Fatal(err)
 	}
 	commonDir := filepath.Join(root, "repo.git")
-	if err := os.Mkdir(commonDir, 0o700); err != nil {
+	err = os.Mkdir(commonDir, 0o700)
+	if err != nil {
 		t.Fatal(err)
 	}
 	runtimeBase := filepath.Join(root, "runtime")
