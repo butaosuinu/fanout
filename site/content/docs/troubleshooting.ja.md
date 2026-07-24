@@ -130,23 +130,21 @@ herdr status --json   # server と session の状態
 `HERDR_SOCKET_PATH` は `HERDR_SESSION` より優先されるため、古い socket path が残っていると fanout が別の server を見に行きます。`status` の結果が想定と合わないときは unset してください。
 TUI 版のエラー `run fanout inside an existing herdr pane (HERDR_ENV=1)` は文字どおりの意味です。herdr backend でのコンソールは、herdr session 内の pane から起動したときだけ立ち上がります。
 
-## "unsupported herdr CLI version ..." / "unsupported herdr API tuple ..."
+## "unsupported herdr CLI version ..."
 
-fanout は stable herdr 0.7.5 以上、protocol 17、API schema version 1 を要求します。CLI と server の version は一致させてください。
-prerelease と解釈できない version は fail closed します。新しい stable version は、fanout が使う capability が schema と CLI help にすべて残っている場合だけ使えます。
+fanout は stable herdr 0.7.5 以上を要求します。CLI と server の version は一致させてください。
+prerelease と解釈できない version は fail closed します。
 `herdr stable >=0.7.5 is required: ...` は、`PATH` に `herdr` バイナリが見つからないという意味です。
 実際に入っているものを確認してください。
 
 ```bash
-herdr --version          # stable 0.7.5 以上
-herdr status --json      # client/server の version 一致、protocol 17、compatible
-herdr api schema --json  # protocol 17、schema_version 1、必要な method と field
-herdr pane read --help   # 必要な CLI surface。エラーに出た command でも確認する
+herdr --version      # stable 0.7.5 以上
+herdr status --json  # client/server の version 一致
 ```
 
 stable herdr 0.7.5 以上へ更新してください。`requires a client/server restart` が出る場合は、herdr の server と client を再起動して同じビルドに揃えます。
 
-内部の fanout-owned mutation profile が現在許可するのは、公式 herdr 0.7.5 の `darwin/arm64` release asset と一致する schema digest だけです。他の platform と version は read-only capability gate を通過しても、owned mutation の前に fail closed します。
+fanout は method と response field を事前検査しません。`herdr method "<name>" is unavailable` は、その method call が失敗したことを示します。インストール済みの herdr がその method を提供するか確認してください。
 
 ## "herdr backend v1 is observation-only; ... is unavailable"
 

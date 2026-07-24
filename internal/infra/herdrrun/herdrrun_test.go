@@ -2,7 +2,6 @@ package herdrrun
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -34,9 +33,7 @@ type fakeHerdr struct {
 	commands        []recordedCommand
 	version         string
 	status          string
-	schema          string
 	snapshot        string
-	manifests       string
 	errors          map[string]error
 	snapshotResults []fakeSnapshotResult
 	snapshotCall    int
@@ -73,12 +70,8 @@ func (f *fakeHerdr) output(ctx context.Context, _ string, env []string, args ...
 		return []byte(f.version), nil
 	case "status":
 		return []byte(f.status), nil
-	case "schema":
-		return []byte(f.schema), nil
 	case "snapshot":
 		return []byte(f.snapshot), nil
-	case "manifests":
-		return []byte(f.manifests), nil
 	default:
 		if f.respond != nil {
 			return f.respond(args)
@@ -93,12 +86,8 @@ func commandKey(args []string) string {
 		return "version"
 	case hasSuffix(args, "status", "--json"):
 		return "status"
-	case hasSuffix(args, "api", "schema", "--json"):
-		return "schema"
 	case hasSuffix(args, "api", "snapshot"):
 		return "snapshot"
-	case hasSuffix(args, "server", "agent-manifests", "--json"):
-		return "manifests"
 	default:
 		return ""
 	}
@@ -110,32 +99,11 @@ func hasSuffix(got []string, want ...string) bool {
 
 func newFakeHerdr(session, socket string) *fakeHerdr {
 	return &fakeHerdr{
-		version:   "herdr 0.7.5\n",
-		status:    validStatus(session, socket),
-		schema:    validCapabilitySchema(),
-		snapshot:  validSnapshot(),
-		manifests: validAgentManifestFixture(),
-		errors:    map[string]error{},
+		version:  "herdr 0.7.5\n",
+		status:   validStatus(session, socket),
+		snapshot: validSnapshot(),
+		errors:   map[string]error{},
 	}
-}
-
-func validAgentManifestFixture() string {
-	manifests := make([]agentManifestInfo, 0, len(ownedManifestFixture))
-	for _, fixture := range ownedManifestFixture {
-		shadow := false
-		version, _ := json.Marshal(fixture.version)
-		manifests = append(manifests, agentManifestInfo{
-			Agent: fixture.agent, Source: agentManifestBundledSource, SourceKind: agentManifestBundledSource,
-			LocalOverrideShadowingRemote: &shadow, ActiveVersion: version,
-		})
-	}
-	payload, err := json.Marshal(agentManifestEnvelope{
-		ID: agentManifestResponseID, Result: &agentManifestResult{Type: agentManifestResponseType, Manifests: manifests},
-	})
-	if err != nil {
-		panic(err)
-	}
-	return string(payload)
 }
 
 func newTestBackend(t *testing.T, session, socket string, fake *fakeHerdr) *Backend {
@@ -149,14 +117,6 @@ func newTestBackend(t *testing.T, session, socket string, fake *fakeHerdr) *Back
 	}
 	b.stageBinary = func(path string) (string, string, error) {
 		return path, strings.Repeat("a", 64), nil
-	}
-	b.helpOutput = func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
-		for _, surface := range requiredCommandSurfaces {
-			if len(args) == len(surface.args)+1 && slices.Equal(args[:len(surface.args)], surface.args) && args[len(args)-1] == "--help" {
-				return []byte(strings.Join(surface.required, "\n")), nil
-			}
-		}
-		return nil, fmt.Errorf("unexpected herdr help args: %v", args)
 	}
 	b.output = fake.output
 	return b
@@ -350,110 +310,6 @@ func validSnapshot() string {
 }` + "\n"
 }
 
-func legacyCapabilitySchema() string {
-	return `{
-  "protocol":17,
-  "schema_version":1,
-  "schemas":{
-    "request":{
-      "oneOf":[
-        {"properties":{"method":{"const":"server.stop"},"params":{"$ref":"#/schemas/request/$defs/EmptyParams"}}},
-        {"properties":{"method":{"const":"server.agent_manifests"},"params":{"$ref":"#/schemas/request/$defs/EmptyParams"}}},
-        {"properties":{"method":{"const":"session.snapshot"},"params":{"$ref":"#/schemas/request/$defs/EmptyParams"}}},
-        {"properties":{"method":{"const":"workspace.create"},"params":{"$ref":"#/schemas/request/$defs/WorkspaceCreateParams"}}},
-        {"properties":{"method":{"const":"workspace.focus"},"params":{"$ref":"#/schemas/request/$defs/WorkspaceTarget"}}},
-        {"properties":{"method":{"const":"workspace.report_metadata"},"params":{"$ref":"#/schemas/request/$defs/WorkspaceReportMetadataParams"}}},
-        {"properties":{"method":{"const":"workspace.close"},"params":{"$ref":"#/schemas/request/$defs/WorkspaceTarget"}}},
-        {"properties":{"method":{"const":"worktree.list"},"params":{"$ref":"#/schemas/request/$defs/WorktreeListParams"}}},
-        {"properties":{"method":{"const":"worktree.create"},"params":{"$ref":"#/schemas/request/$defs/WorktreeCreateParams"}}},
-        {"properties":{"method":{"const":"worktree.open"},"params":{"$ref":"#/schemas/request/$defs/WorktreeOpenParams"}}},
-        {"properties":{"method":{"const":"worktree.remove"},"params":{"$ref":"#/schemas/request/$defs/WorktreeRemoveParams"}}},
-        {"properties":{"method":{"const":"agent.list"},"params":{"$ref":"#/schemas/request/$defs/EmptyParams"}}},
-        {"properties":{"method":{"const":"agent.read"},"params":{"$ref":"#/schemas/request/$defs/AgentReadParams"}}},
-        {"properties":{"method":{"const":"agent.rename"},"params":{"$ref":"#/schemas/request/$defs/AgentRenameParams"}}},
-        {"properties":{"method":{"const":"agent.focus"},"params":{"$ref":"#/schemas/request/$defs/AgentTarget"}}},
-        {"properties":{"method":{"const":"agent.prompt"},"params":{"$ref":"#/schemas/request/$defs/AgentPromptParams"}}},
-        {"properties":{"method":{"const":"agent.wait"},"params":{"$ref":"#/schemas/request/$defs/AgentWaitParams"}}},
-        {"properties":{"method":{"const":"pane.get"},"params":{"$ref":"#/schemas/request/$defs/PaneTarget"}}},
-        {"properties":{"method":{"const":"pane.process_info"},"params":{"$ref":"#/schemas/request/$defs/PaneProcessInfoParams"}}},
-        {"properties":{"method":{"const":"pane.read"},"params":{"$ref":"#/schemas/request/$defs/PaneReadParams"}}},
-        {"properties":{"method":{"const":"pane.send_input"},"params":{"$ref":"#/schemas/request/$defs/PaneSendInputParams"}}},
-        {"properties":{"method":{"const":"pane.report_metadata"},"params":{"$ref":"#/schemas/request/$defs/PaneReportMetadataParams"}}},
-        {"properties":{"method":{"const":"pane.close"},"params":{"$ref":"#/schemas/request/$defs/PaneTarget"}}},
-        {"properties":{"method":{"const":"pane.wait_for_output"},"params":{"$ref":"#/schemas/request/$defs/PaneWaitForOutputParams"}}},
-        {"properties":{"method":{"const":"plugin.list"},"params":{"$ref":"#/schemas/request/$defs/PluginListParams"}}}
-      ],
-      "$defs":{
-        "EmptyParams":{"properties":{},"required":[]},
-        "WorkspaceCreateParams":{"properties":{"cwd":{},"env":{},"focus":{},"label":{}},"required":[]},
-        "WorkspaceTarget":{"properties":{"workspace_id":{}},"required":["workspace_id"]},
-        "WorkspaceReportMetadataParams":{"properties":{"workspace_id":{},"source":{},"tokens":{},"seq":{},"ttl_ms":{}},"required":["workspace_id","source","tokens"]},
-        "WorktreeListParams":{"properties":{"cwd":{},"workspace_id":{}},"required":[]},
-        "WorktreeCreateParams":{"properties":{"base":{},"branch":{},"cwd":{},"focus":{},"label":{},"path":{},"workspace_id":{}},"required":[]},
-        "WorktreeOpenParams":{"properties":{"branch":{},"cwd":{},"focus":{},"label":{},"path":{},"workspace_id":{}},"required":[]},
-        "WorktreeRemoveParams":{"properties":{"workspace_id":{},"force":{}},"required":["workspace_id"]},
-        "AgentReadParams":{"properties":{"target":{},"source":{},"format":{},"lines":{},"strip_ansi":{}},"required":["target","source"]},
-        "AgentRenameParams":{"properties":{"target":{},"name":{}},"required":["target"]},
-        "AgentTarget":{"properties":{"target":{}},"required":["target"]},
-        "AgentPromptParams":{"properties":{"target":{},"text":{},"wait":{}},"required":["target","text"]},
-        "AgentWaitParams":{"properties":{"target":{},"timeout_ms":{},"until":{}},"required":["target"]},
-        "PaneProcessInfoParams":{"properties":{"pane_id":{}},"required":[]},
-        "PaneReadParams":{"properties":{"pane_id":{},"source":{},"lines":{},"format":{},"strip_ansi":{}},"required":["pane_id","source"]},
-        "PaneSendInputParams":{"properties":{"pane_id":{},"keys":{},"text":{}},"required":["pane_id"]},
-        "PaneReportMetadataParams":{"properties":{"pane_id":{},"source":{},"tokens":{},"seq":{},"ttl_ms":{}},"required":["pane_id","source"]},
-        "PaneTarget":{"properties":{"pane_id":{}},"required":["pane_id"]},
-        "PaneWaitForOutputParams":{"properties":{"pane_id":{},"source":{},"match":{},"lines":{},"strip_ansi":{},"timeout_ms":{}},"required":["pane_id","source","match"]},
-        "PluginListParams":{"properties":{"plugin_id":{}},"required":[]}
-      }
-    },
-    "success_response":{
-      "properties":{"result":{"$ref":"#/schemas/success_response/$defs/ResponseResult"}},
-      "$defs":{
-        "ResponseResult":{"oneOf":[
-          {"properties":{"type":{"const":"session_snapshot"},"snapshot":{"$ref":"#/schemas/success_response/$defs/SessionSnapshot"}},"required":["type","snapshot"]},
-          {"properties":{"type":{"const":"workspace_info"},"workspace":{}},"required":["type","workspace"]},
-          {"properties":{"type":{"const":"workspace_created"},"workspace":{},"tab":{},"root_pane":{}},"required":["type","workspace","tab","root_pane"]},
-          {"properties":{"type":{"const":"worktree_list"},"source":{},"worktrees":{}},"required":["type","source","worktrees"]},
-          {"properties":{"type":{"const":"worktree_created"},"workspace":{},"tab":{},"root_pane":{},"worktree":{}},"required":["type","workspace","tab","root_pane","worktree"]},
-          {"properties":{"type":{"const":"worktree_opened"},"workspace":{},"tab":{},"root_pane":{},"worktree":{},"already_open":{}},"required":["type","workspace","tab","root_pane","worktree","already_open"]},
-          {"properties":{"type":{"const":"agent_manifest_status"},"manifests":{},"last_check_unix":{},"last_result":{}},"required":["type","manifests"]},
-          {"properties":{"type":{"const":"worktree_removed"},"workspace_id":{},"path":{},"forced":{}},"required":["type","workspace_id","path","forced"]},
-          {"properties":{"type":{"const":"agent_list"},"agents":{}},"required":["type","agents"]},
-          {"properties":{"type":{"const":"agent_info"},"agent":{}},"required":["type","agent"]},
-          {"properties":{"type":{"const":"agent_prompted"},"agent":{}},"required":["type","agent"]},
-          {"properties":{"type":{"const":"wait_matched"},"event":{}},"required":["type","event"]},
-          {"properties":{"type":{"const":"pane_info"},"pane":{}},"required":["type","pane"]},
-          {"properties":{"type":{"const":"pane_process_info"},"process_info":{}},"required":["type","process_info"]},
-          {"properties":{"type":{"const":"pane_read"},"read":{}},"required":["type","read"]},
-          {"properties":{"type":{"const":"output_matched"},"pane_id":{},"revision":{},"read":{}},"required":["type","pane_id","revision","read"]},
-          {"properties":{"type":{"const":"plugin_list"},"plugins":{}},"required":["type","plugins"]},
-          {"properties":{"type":{"const":"ok"}},"required":["type"]}
-        ]},
-        "SessionSnapshot":{"properties":{"version":{},"protocol":{},"workspaces":{},"tabs":{},"panes":{},"layouts":{},"agents":{}},"required":["version","protocol","workspaces","tabs","panes","layouts","agents"]},
-        "WorkspaceInfo":{"properties":{"workspace_id":{},"number":{},"label":{},"focused":{},"pane_count":{},"tab_count":{},"active_tab_id":{},"agent_status":{},"worktree":{}},"required":["workspace_id","number","label","focused","pane_count","tab_count","active_tab_id","agent_status"]},
-        "TabInfo":{"properties":{"tab_id":{},"workspace_id":{},"number":{},"label":{},"focused":{},"pane_count":{},"agent_status":{}},"required":["tab_id","workspace_id","number","label","focused","pane_count","agent_status"]},
-        "WorkspaceWorktreeInfo":{"properties":{"repo_key":{},"repo_name":{},"repo_root":{},"checkout_path":{},"is_linked_worktree":{}},"required":["repo_key","repo_name","repo_root","checkout_path","is_linked_worktree"]},
-        "WorktreeInfo":{"properties":{"path":{},"branch":{},"is_bare":{},"is_detached":{},"is_prunable":{},"is_linked_worktree":{},"open_workspace_id":{},"label":{}},"required":["path","is_bare","is_detached","is_prunable","is_linked_worktree","label"]},
-        "PaneInfo":{"properties":{"pane_id":{},"terminal_id":{},"workspace_id":{},"tab_id":{},"focused":{},"agent_status":{},"revision":{},"agent":{},"cwd":{},"foreground_cwd":{},"agent_session":{}},"required":["pane_id","terminal_id","workspace_id","tab_id","focused","agent_status","revision"]},
-        "AgentInfo":{"properties":{"terminal_id":{},"workspace_id":{},"tab_id":{},"pane_id":{},"focused":{},"agent_status":{},"revision":{},"name":{},"agent":{},"cwd":{},"foreground_cwd":{},"agent_session":{},"interactive_ready":{},"launch_pending":{},"state_change_seq":{}},"required":["terminal_id","workspace_id","tab_id","pane_id","focused","agent_status","revision"]},
-        "PaneProcessInfo":{"properties":{"pane_id":{},"shell_pid":{},"foreground_process_group_id":{},"foreground_processes":{}},"required":["pane_id"]},
-        "PaneProcessInfoProcess":{"properties":{"pid":{},"name":{},"argv":{},"argv0":{},"cwd":{}},"required":["pid","name"]},
-        "AgentSessionInfo":{"properties":{"source":{},"agent":{},"kind":{},"value":{}},"required":["source","agent","kind","value"]},
-        "PaneReadResult":{"properties":{"pane_id":{},"workspace_id":{},"tab_id":{},"source":{},"format":{},"text":{},"revision":{},"truncated":{}},"required":["pane_id","workspace_id","tab_id","source","format","text","revision","truncated"]},
-        "AgentManifestInfo":{"properties":{"agent":{},"source":{},"source_kind":{},"local_override_shadowing_remote":{},"active_version":{},"cached_remote_version":{},"remote_last_checked_unix":{},"remote_update_error":{},"remote_update_result":{},"warning":{}},"required":["agent","source","source_kind","local_override_shadowing_remote"]}
-      }
-    }
-  }
-}` + "\n"
-}
-
-func TestValidateCapabilitySchemaRejectsLegacyLooseSchema(t *testing.T) {
-	err := validateCapabilitySchema([]byte(legacyCapabilitySchema()))
-	if err == nil {
-		t.Fatal("validateCapabilitySchema() accepted a schema without field types and envelope requirements")
-	}
-}
-
 func envValue(env []string, key string) (string, bool) {
 	prefix := key + "="
 	for _, entry := range env {
@@ -471,7 +327,7 @@ func TestName(t *testing.T) {
 	}
 }
 
-func TestCheckAvailablePinsVerifiedSocketAndExactTuple(t *testing.T) {
+func TestCheckAvailablePinsVerifiedSocketAndVersion(t *testing.T) {
 	t.Setenv(sessionEnv, "ambient-wrong-session")
 	t.Setenv(socketEnv, "/tmp/ambient-wrong.sock")
 	const (
@@ -484,15 +340,14 @@ func TestCheckAvailablePinsVerifiedSocketAndExactTuple(t *testing.T) {
 	if err := b.CheckAvailable(); err != nil {
 		t.Fatalf("CheckAvailable() error = %v", err)
 	}
-	if len(fake.commands) != 3 {
-		t.Fatalf("command count = %d, want 3", len(fake.commands))
+	if len(fake.commands) != 2 {
+		t.Fatalf("command count = %d, want 2", len(fake.commands))
 	}
 	if got := []string{
 		commandKey(fake.commands[0].args),
 		commandKey(fake.commands[1].args),
-		commandKey(fake.commands[2].args),
-	}; !slices.Equal(got, []string{"version", "schema", "status"}) {
-		t.Fatalf("commands = %v, want version/schema/status", got)
+	}; !slices.Equal(got, []string{"version", "status"}) {
+		t.Fatalf("commands = %v, want version/status", got)
 	}
 	for _, call := range fake.commands {
 		if slices.Contains(call.args, "--session") {
@@ -543,25 +398,17 @@ func TestCheckAvailableResolvesNamedSessionThenPinsReturnedSocket(t *testing.T) 
 	if err := b.CheckAvailable(); err != nil {
 		t.Fatalf("CheckAvailable() error = %v", err)
 	}
-	status := fake.commands[2]
+	status := fake.commands[1]
 	if !slices.Equal(status.args, []string{"--session", session, "status", "--json"}) {
 		t.Fatalf("status args = %v", status.args)
 	}
 	if _, ok := envValue(status.env, socketEnv); ok {
 		t.Fatalf("initial status env contains %s", socketEnv)
 	}
-	schema := fake.commands[1]
-	if slices.Contains(schema.args, "--session") {
-		t.Fatalf("schema args unexpectedly use --session: %v", schema.args)
-	}
-	if _, ok := envValue(schema.env, socketEnv); ok {
-		t.Fatalf("offline schema env unexpectedly contains %s", socketEnv)
-	}
-
 	if err := b.CheckAvailable(); err != nil {
 		t.Fatalf("second CheckAvailable() error = %v", err)
 	}
-	secondStatus := fake.commands[4]
+	secondStatus := fake.commands[3]
 	if slices.Contains(secondStatus.args, "--session") {
 		t.Fatalf("second status args unexpectedly use --session: %v", secondStatus.args)
 	}
@@ -595,37 +442,18 @@ func TestCheckAvailableFailsClosed(t *testing.T) {
 			wantErr: "required: stable >=0.7.5",
 		},
 		{
-			name: "higher version missing capability",
-			mutate: func(fake *fakeHerdr) {
-				fake.version = "herdr 0.8.0\n"
-				fake.status = strings.ReplaceAll(fake.status, "0.7.5", "0.8.0")
-				var document capabilityDocument
-				if err := json.Unmarshal([]byte(fake.schema), &document); err != nil {
-					panic(err)
-				}
-				variant := testSchemaVariant(document.Schemas["request"], "method", "pane.close")
-				variant.Properties["method"].Const = json.RawMessage(`"pane.future"`)
-				data, err := json.Marshal(document)
-				if err != nil {
-					panic(err)
-				}
-				fake.schema = string(data)
-			},
-			wantErr: `method pane.close: missing method "pane.close"`,
-		},
-		{
 			name: "preview channel",
 			mutate: func(fake *fakeHerdr) {
 				fake.status = strings.Replace(fake.status, `"channel":"stable"`, `"channel":"preview"`, 1)
 			},
-			wantErr: "unsupported herdr client tuple",
+			wantErr: "unsupported herdr client version",
 		},
 		{
-			name: "future server with same protocol",
+			name: "server version mismatch",
 			mutate: func(fake *fakeHerdr) {
 				fake.status = strings.Replace(fake.status, `"server":{"status":"running","running":true,"version":"0.7.5"`, `"server":{"status":"running","running":true,"version":"0.7.6"`, 1)
 			},
-			wantErr: "unsupported herdr server tuple",
+			wantErr: "unsupported herdr server version",
 		},
 		{
 			name: "server not running",
@@ -656,13 +484,6 @@ func TestCheckAvailableFailsClosed(t *testing.T) {
 			wantErr: "requires a client/server restart",
 		},
 		{
-			name: "future schema",
-			mutate: func(fake *fakeHerdr) {
-				fake.schema = `{"protocol":17,"schema_version":2}`
-			},
-			wantErr: "unsupported herdr API tuple",
-		},
-		{
 			name: "trailing status document",
 			mutate: func(fake *fakeHerdr) {
 				fake.status += `{}`
@@ -680,6 +501,26 @@ func TestCheckAvailableFailsClosed(t *testing.T) {
 				t.Fatalf("CheckAvailable() error = %v, want substring %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestCheckAvailableAcceptsHigherStableVersionWithoutCapabilityPreflight(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	fake.version = "herdr 0.8.0\n"
+	fake.status = strings.ReplaceAll(fake.status, "0.7.5", "0.8.0")
+	b := newTestBackend(t, session, socket, fake)
+
+	if err := b.CheckAvailable(); err != nil {
+		t.Fatalf("CheckAvailable() error = %v", err)
+	}
+	if len(fake.commands) != 2 ||
+		commandKey(fake.commands[0].args) != "version" ||
+		commandKey(fake.commands[1].args) != "status" {
+		t.Fatalf("CheckAvailable() commands = %#v, want version/status only", fake.commands)
 	}
 }
 
@@ -738,7 +579,7 @@ func TestListLiveProjectsSnapshotWithoutUsingForegroundCWD(t *testing.T) {
 	if child.AgentSession == nil || *child.AgentSession != wantSession {
 		t.Fatalf("child agent session = %#v, want %#v", child.AgentSession, wantSession)
 	}
-	if gotCalls := len(fake.commands); gotCalls != 4 || commandKey(fake.commands[3].args) != "snapshot" {
+	if gotCalls := len(fake.commands); gotCalls != 3 || commandKey(fake.commands[2].args) != "snapshot" {
 		t.Fatalf("ListLive() calls = %#v", fake.commands)
 	}
 }
@@ -860,8 +701,8 @@ func TestListLiveRejectsMalformedOrIncompatibleSnapshot(t *testing.T) {
 			fake.snapshot = tt.mutate(fake.snapshot)
 			b := newTestBackend(t, session, socket, fake)
 			_, err := b.ListLive()
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("ListLive() error = %v, want substring %q", err, tt.wantErr)
+			if err == nil || err.Error() != methodUnavailable("session.snapshot").Error() {
+				t.Fatalf("ListLive() error = %v, want generic unavailable error after %q", err, tt.wantErr)
 			}
 		})
 	}
@@ -972,7 +813,7 @@ func TestWaitImmediateMatchUsesVerifiedSocket(t *testing.T) {
 	if len(clock.sleeps) != 0 {
 		t.Fatalf("immediate match sleeps = %v, want none", clock.sleeps)
 	}
-	wantCommands := []string{"version", "schema", "status", "snapshot"}
+	wantCommands := []string{"version", "status", "snapshot"}
 	if len(fake.commands) != len(wantCommands) {
 		t.Fatalf("command count = %d, want %d", len(fake.commands), len(wantCommands))
 	}
@@ -1030,16 +871,16 @@ func TestWaitSnapshotCallLimitsIntervalsAndCommandTimeouts(t *testing.T) {
 			if matchCalls != tt.wantSnapshots {
 				t.Fatalf("predicate calls = %d, want %d", matchCalls, tt.wantSnapshots)
 			}
-			if len(fake.commands) != 3+tt.wantSnapshots {
-				t.Fatalf("command count = %d, want %d", len(fake.commands), 3+tt.wantSnapshots)
+			if len(fake.commands) != 2+tt.wantSnapshots {
+				t.Fatalf("command count = %d, want %d", len(fake.commands), 2+tt.wantSnapshots)
 			}
-			for i, wantKey := range []string{"version", "schema", "status"} {
+			for i, wantKey := range []string{"version", "status"} {
 				if key := commandKey(fake.commands[i].args); key != wantKey {
 					t.Fatalf("probe command %d = %q, want %q", i, key, wantKey)
 				}
 				assertCommandTimeout(t, fake.commands[i], commandTimeout)
 			}
-			for i, call := range fake.commands[3:] {
+			for i, call := range fake.commands[2:] {
 				if key := commandKey(call.args); key != "snapshot" {
 					t.Fatalf("poll command %d = %q (%v), want snapshot", i, key, call.args)
 				}
@@ -1086,8 +927,8 @@ func TestWaitRetryableSnapshotErrorThenValidSnapshotTimesOut(t *testing.T) {
 	if matchCalls != 1 {
 		t.Fatalf("predicate calls = %d, want 1", matchCalls)
 	}
-	if len(fake.commands) != 5 || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
-		t.Fatalf("commands = %d sleeps = %v, want 5 commands and one interval", len(fake.commands), clock.sleeps)
+	if len(fake.commands) != 4 || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
+		t.Fatalf("commands = %d sleeps = %v, want 4 commands and one interval", len(fake.commands), clock.sleeps)
 	}
 }
 
@@ -1110,14 +951,14 @@ func TestWaitValidSnapshotThenFinalRetryableErrorFails(t *testing.T) {
 		return false
 	})
 
-	if got.Status != WaitFailed || !errors.Is(got.Err, context.DeadlineExceeded) || got.Panes != nil {
-		t.Fatalf("Wait() = %#v, want failed with final snapshot error and nil panes", got)
+	if got.Status != WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
+		t.Fatalf("Wait() = %#v, want generic unavailable error and nil panes", got)
 	}
 	if matchCalls != 1 {
 		t.Fatalf("predicate calls = %d, want 1", matchCalls)
 	}
-	if len(fake.commands) != 5 || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
-		t.Fatalf("commands = %d sleeps = %v, want 5 commands and one interval", len(fake.commands), clock.sleeps)
+	if len(fake.commands) != 4 || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
+		t.Fatalf("commands = %d sleeps = %v, want 4 commands and one interval", len(fake.commands), clock.sleeps)
 	}
 }
 
@@ -1138,11 +979,11 @@ func TestWaitPermanentCommandErrorFailsWithoutRetry(t *testing.T) {
 		return false
 	})
 
-	if got.Status != WaitFailed || !errors.Is(got.Err, syscall.ENOENT) || got.Panes != nil {
-		t.Fatalf("Wait() = %#v, want immediate failed result preserving ENOENT", got)
+	if got.Status != WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
+		t.Fatalf("Wait() = %#v, want immediate generic unavailable error", got)
 	}
-	if matchCalls != 0 || len(fake.commands) != 4 || len(clock.sleeps) != 0 {
-		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/4/none", matchCalls, len(fake.commands), clock.sleeps)
+	if matchCalls != 0 || len(fake.commands) != 3 || len(clock.sleeps) != 0 {
+		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/3/none", matchCalls, len(fake.commands), clock.sleeps)
 	}
 }
 
@@ -1177,11 +1018,11 @@ func TestWaitCommandCleanupFailureOverridesRetryableCommandErrors(t *testing.T) 
 				return false
 			})
 
-			if got.Status != WaitFailed || !errors.Is(got.Err, syscall.EPERM) || got.Panes != nil {
-				t.Fatalf("Wait() = %#v, want immediate cleanup failure preserving EPERM", got)
+			if got.Status != WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
+				t.Fatalf("Wait() = %#v, want immediate generic unavailable error", got)
 			}
-			if matchCalls != 0 || len(fake.commands) != 4 || len(clock.sleeps) != 0 {
-				t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/4/none", matchCalls, len(fake.commands), clock.sleeps)
+			if matchCalls != 0 || len(fake.commands) != 3 || len(clock.sleeps) != 0 {
+				t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/3/none", matchCalls, len(fake.commands), clock.sleeps)
 			}
 		})
 	}
@@ -1203,15 +1044,15 @@ func TestWaitMalformedSnapshotFailsImmediately(t *testing.T) {
 		return false
 	})
 
-	if got.Status != WaitFailed || got.Err == nil || !strings.Contains(got.Err.Error(), "parse herdr api snapshot") || got.Panes != nil {
-		t.Fatalf("Wait() = %#v, want immediate parse failure with nil panes", got)
+	if got.Status != WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
+		t.Fatalf("Wait() = %#v, want immediate generic unavailable error with nil panes", got)
 	}
-	if matchCalls != 0 || len(fake.commands) != 4 || len(clock.sleeps) != 0 {
-		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/4/none", matchCalls, len(fake.commands), clock.sleeps)
+	if matchCalls != 0 || len(fake.commands) != 3 || len(clock.sleeps) != 0 {
+		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/3/none", matchCalls, len(fake.commands), clock.sleeps)
 	}
 }
 
-func TestWaitIncompatibleSnapshotFailsImmediately(t *testing.T) {
+func TestWaitDoesNotPreflightSnapshotProtocol(t *testing.T) {
 	const (
 		session = "fanout-test"
 		socket  = "/private/tmp/fanout-test/herdr.sock"
@@ -1220,19 +1061,14 @@ func TestWaitIncompatibleSnapshotFailsImmediately(t *testing.T) {
 	incompatible := strings.Replace(validSnapshot(), `"protocol":17`, `"protocol":18`, 1)
 	fake.snapshotResults = []fakeSnapshotResult{{output: incompatible}}
 	b := newTestBackend(t, session, socket, fake)
-	clock := installFakeWaitClock(b)
-	matchCalls := 0
+	installFakeWaitClock(b)
 
 	got := b.Wait(context.Background(), 5*time.Second, func([]corebackend.LivePane) bool {
-		matchCalls++
-		return false
+		return true
 	})
 
-	if got.Status != WaitFailed || got.Err == nil || !strings.Contains(got.Err.Error(), "unsupported herdr snapshot tuple") || got.Panes != nil {
-		t.Fatalf("Wait() = %#v, want immediate compatibility failure with nil panes", got)
-	}
-	if matchCalls != 0 || len(fake.commands) != 4 || len(clock.sleeps) != 0 {
-		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/4/none", matchCalls, len(fake.commands), clock.sleeps)
+	if got.Status != WaitMatched || got.Err != nil || len(got.Panes) != 2 {
+		t.Fatalf("Wait() = %#v, want matched without protocol preflight", got)
 	}
 }
 
@@ -1287,8 +1123,8 @@ func TestWaitCancellationDuringSleepStopsBeforeNextSnapshot(t *testing.T) {
 	if got.Status != WaitCancelled || !errors.Is(got.Err, context.Canceled) || got.Panes != nil {
 		t.Fatalf("Wait() = %#v, want canceled with context.Canceled and nil panes", got)
 	}
-	if matchCalls != 1 || len(fake.commands) != 4 || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
-		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 1/4/one interval", matchCalls, len(fake.commands), clock.sleeps)
+	if matchCalls != 1 || len(fake.commands) != 3 || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
+		t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 1/3/one interval", matchCalls, len(fake.commands), clock.sleeps)
 	}
 }
 
@@ -1333,8 +1169,8 @@ func TestWaitCancellationAfterSnapshotOrPredicateCannotMatch(t *testing.T) {
 			if got.Status != WaitCancelled || !errors.Is(got.Err, context.Canceled) || got.Panes != nil {
 				t.Fatalf("Wait() = %#v, want canceled result instead of matched", got)
 			}
-			if matchCalls != tt.wantMatchCalls || len(fake.commands) != 4 {
-				t.Fatalf("predicate calls = %d commands = %d, want %d/4", matchCalls, len(fake.commands), tt.wantMatchCalls)
+			if matchCalls != tt.wantMatchCalls || len(fake.commands) != 3 {
+				t.Fatalf("predicate calls = %d commands = %d, want %d/3", matchCalls, len(fake.commands), tt.wantMatchCalls)
 			}
 		})
 	}
@@ -1380,8 +1216,8 @@ func TestWaitDeadlineCrossingAfterSnapshotOrPredicateCannotMatch(t *testing.T) {
 			if got.Status != WaitTimedOut || got.Err != nil || len(got.Panes) != 2 {
 				t.Fatalf("Wait() = %#v, want timed_out with the last compatible snapshot", got)
 			}
-			if matchCalls != tt.wantMatchCalls || len(fake.commands) != 4 {
-				t.Fatalf("predicate calls = %d commands = %d, want %d/4", matchCalls, len(fake.commands), tt.wantMatchCalls)
+			if matchCalls != tt.wantMatchCalls || len(fake.commands) != 3 {
+				t.Fatalf("predicate calls = %d commands = %d, want %d/3", matchCalls, len(fake.commands), tt.wantMatchCalls)
 			}
 		})
 	}
@@ -1398,7 +1234,7 @@ func TestWaitCancellationStopsProbeOrSnapshotImmediately(t *testing.T) {
 		wantCommands []string
 	}{
 		{name: "during probe", cancelOn: "version", wantCommands: []string{"version"}},
-		{name: "during snapshot", cancelOn: "snapshot", wantCommands: []string{"version", "schema", "status", "snapshot"}},
+		{name: "during snapshot", cancelOn: "snapshot", wantCommands: []string{"version", "status", "snapshot"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

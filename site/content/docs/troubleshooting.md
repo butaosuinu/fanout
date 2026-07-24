@@ -108,20 +108,18 @@ herdr status --json   # server and session state
 
 `HERDR_SOCKET_PATH` takes precedence over `HERDR_SESSION`, so a stale socket path can point fanout at the wrong server — unset it if `status` disagrees with what you expect. The TUI variant `run fanout inside an existing herdr pane (HERDR_ENV=1)` means what it says: the console only starts under the herdr backend when launched from a pane inside the herdr session.
 
-## "unsupported herdr CLI version ..." / "unsupported herdr API tuple ..."
+## "unsupported herdr CLI version ..."
 
-fanout requires stable herdr 0.7.5 or newer, protocol 17, and API schema version 1. The CLI and server versions must match. Prerelease or malformed versions fail closed, and a newer stable version is accepted only when the schema and CLI help still contain every capability fanout uses. `herdr stable >=0.7.5 is required: ...` means the `herdr` binary was not found on `PATH`. Check what is actually installed:
+fanout requires stable herdr 0.7.5 or newer. The CLI and server versions must match. Prerelease or malformed versions fail closed. `herdr stable >=0.7.5 is required: ...` means the `herdr` binary was not found on `PATH`. Check what is actually installed:
 
 ```bash
-herdr --version          # stable 0.7.5 or newer
-herdr status --json      # matching client/server version, protocol 17, compatible
-herdr api schema --json  # protocol 17, schema_version 1, required methods and fields
-herdr pane read --help   # required CLI surface; repeat for the command named in the error
+herdr --version      # stable 0.7.5 or newer
+herdr status --json  # matching client/server version
 ```
 
 Install or upgrade to stable herdr 0.7.5 or newer. If the message is `requires a client/server restart`, restart the herdr server and client so both run the same build.
 
-The internal fanout-owned mutation profile currently admits only the exact official herdr 0.7.5 `darwin/arm64` release asset and matching schema digest. Other platforms and versions can pass the read-only capability gate but fail closed before owned mutation.
+fanout does not preflight methods or response fields. `herdr method "<name>" is unavailable` means that the named call failed; check that the installed herdr version provides it.
 
 ## "herdr backend v1 is observation-only; ... is unavailable"
 

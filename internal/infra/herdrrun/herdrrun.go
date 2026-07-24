@@ -4,8 +4,6 @@ package herdrrun
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,8 +21,6 @@ import (
 
 const (
 	commandName         = "herdr"
-	supportedProtocol   = 17
-	supportedSchema     = 1
 	commandTimeout      = 5 * time.Second
 	commandCleanupDelay = 100 * time.Millisecond
 	minimumWaitTimeout  = 3 * time.Second
@@ -53,11 +49,9 @@ type Backend struct {
 	lookPath    func(string) (string, error)
 	stageBinary func(string) (string, string, error)
 	output      commandOutput
-	helpOutput  commandHelpOutput
 	now         func() time.Time
 	sleep       waitSleep
 	admitted    map[string]binaryAdmission
-	behavior    behaviorProfile
 	control     *controlPlaneEnvironment
 	owner       *ownedAdmission
 	target      *ownedTargetAdmission
@@ -73,20 +67,16 @@ type route struct {
 }
 
 type probeResult struct {
-	binary       string
-	sha256       string
-	version      string
-	protocol     int
-	schemaSHA256 string
-	route        route
+	binary  string
+	sha256  string
+	version string
+	route   route
 }
 
 type binaryAdmission struct {
-	path         string
-	sha256       string
-	version      string
-	protocol     int
-	schemaSHA256 string
+	path    string
+	sha256  string
+	version string
 }
 
 // WaitStatus is the terminal outcome of a bounded snapshot wait.
@@ -118,25 +108,23 @@ func New(session, socketPath string) *Backend {
 		lookPath:    exec.LookPath,
 		stageBinary: stageAdmissionBinary,
 		output:      runCommand,
-		helpOutput:  runCommandHelp,
 		now:         time.Now,
 		sleep:       sleepContext,
 		admitted:    map[string]binaryAdmission{},
-		behavior:    productionBehaviorProfile(),
 	}
 }
 
 func (b *Backend) Name() corebackend.Name { return corebackend.Herdr }
 
-// CheckAvailable verifies the stable version floor, structural capabilities,
-// command surface, and connected server identity. It never starts a server.
+// CheckAvailable verifies the stable version floor and connected server
+// identity. It never starts a server.
 func (b *Backend) CheckAvailable() error {
 	_, err := b.probe()
 	return err
 }
 
 // ListLive returns the aggregate session.snapshot projection. Connected status
-// is rechecked for each call; binary capability admission is digest-cached.
+// is rechecked for each call; binary version admission is digest-cached.
 func (b *Backend) ListLive() ([]corebackend.LivePane, error) {
 	probed, err := b.probe()
 	if err != nil {
@@ -366,17 +354,21 @@ func (e commandCleanupError) Unwrap() error { return e.err }
 func (b *Backend) snapshot(ctx context.Context, timeout time.Duration, probed probeResult) ([]corebackend.LivePane, error) {
 	out, err := b.runContext(ctx, timeout, probed.binary, probed.route, "api", "snapshot")
 	if err != nil {
-		wrapped := fmt.Errorf("herdr api snapshot: %w", err)
+		wrapped := methodUnavailable("session.snapshot")
 		if retryableCommandError(err) {
 			return nil, retryableSnapshotError{err: wrapped}
 		}
 		return nil, wrapped
 	}
 	var envelope snapshotEnvelope
-	if err := decodeOne(out, &envelope); err != nil {
-		return nil, fmt.Errorf("parse herdr api snapshot: %w", err)
+	if parseErr := decodeOne(out, &envelope); parseErr != nil {
+		return nil, methodUnavailable("session.snapshot")
 	}
-	return projectSnapshot(envelope, probed)
+	panes, err := projectSnapshot(envelope, probed)
+	if err != nil {
+		return nil, methodUnavailable("session.snapshot")
+	}
+	return panes, nil
 }
 
 func (b *Backend) probe() (probeResult, error) {
@@ -426,12 +418,10 @@ func (b *Backend) probeContext(ctx context.Context) (probeResult, error) {
 		b.socketPath = verified.socketPath
 	}
 	return probeResult{
-		binary:       admitted.path,
-		sha256:       admitted.sha256,
-		version:      admitted.version,
-		protocol:     admitted.protocol,
-		schemaSHA256: admitted.schemaSHA256,
-		route:        verified,
+		binary:  admitted.path,
+		sha256:  admitted.sha256,
+		version: admitted.version,
+		route:   verified,
 	}, nil
 }
 
@@ -461,28 +451,20 @@ func (b *Backend) admitBinaryContext(ctx context.Context, target route) (binaryA
 	if err != nil {
 		return binaryAdmission{}, err
 	}
-	admitted := binaryAdmission{path: binary, sha256: hash, version: version, protocol: supportedProtocol}
+	admitted := binaryAdmission{path: binary, sha256: hash, version: version}
 	key := binary + "\x00" + hash
 	if cached, ok := b.admitted[key]; ok {
-		if cached.path != admitted.path || cached.sha256 != admitted.sha256 || cached.version != admitted.version || cached.protocol != admitted.protocol {
+		if cached != admitted {
 			return binaryAdmission{}, fmt.Errorf("herdr admitted binary identity changed")
 		}
 		return cached, nil
 	}
-	schemaOut, err := b.runContext(ctx, commandTimeout, binary, target, "api", "schema", "--json")
-	if err != nil {
-		return binaryAdmission{}, fmt.Errorf("herdr api schema --json: %w", err)
-	}
-	if err := validateCapabilitySchema(schemaOut); err != nil {
-		return binaryAdmission{}, err
-	}
-	schemaHash := sha256.Sum256(schemaOut)
-	admitted.schemaSHA256 = hex.EncodeToString(schemaHash[:])
-	if err := b.validateCommandSurfaces(ctx, binary, target); err != nil {
-		return binaryAdmission{}, err
-	}
 	b.admitted[key] = admitted
 	return admitted, nil
+}
+
+func methodUnavailable(method string) error {
+	return fmt.Errorf("herdr method %q is unavailable", method)
 }
 
 func (b *Backend) runContext(ctx context.Context, timeout time.Duration, binary string, target route, args ...string) ([]byte, error) {
@@ -674,17 +656,14 @@ func validateSessionName(session string) error {
 
 type statusJSON struct {
 	Client struct {
-		Version  string  `json:"version"`
-		Channel  string  `json:"channel"`
-		Protocol int     `json:"protocol"`
-		Session  *string `json:"session"`
+		Version string  `json:"version"`
+		Channel string  `json:"channel"`
+		Session *string `json:"session"`
 	} `json:"client"`
 	Server struct {
 		Status        string  `json:"status"`
 		Running       bool    `json:"running"`
 		Version       *string `json:"version"`
-		Protocol      *int    `json:"protocol"`
-		Compatible    *bool   `json:"compatible"`
 		Socket        string  `json:"socket"`
 		Session       *string `json:"session"`
 		RestartNeeded *bool   `json:"restart_needed"`
@@ -695,14 +674,12 @@ type statusJSON struct {
 }
 
 func validateStatus(status statusJSON, requested route, admitted binaryAdmission) (route, error) {
-	if validateAdmittedVersion(status.Client.Version) != nil || status.Client.Version != admitted.version || status.Client.Channel != "stable" || status.Client.Protocol != admitted.protocol {
+	if validateAdmittedVersion(status.Client.Version) != nil || status.Client.Version != admitted.version || status.Client.Channel != "stable" {
 		return route{}, fmt.Errorf(
-			"unsupported herdr client tuple version=%q channel=%q protocol=%d (required: version=%s channel=stable protocol=%d)",
+			"unsupported herdr client version=%q channel=%q (required: version=%s channel=stable)",
 			status.Client.Version,
 			status.Client.Channel,
-			status.Client.Protocol,
 			admitted.version,
-			admitted.protocol,
 		)
 	}
 	if status.Client.Session == nil || *status.Client.Session != requested.session {
@@ -711,16 +688,11 @@ func validateStatus(status statusJSON, requested route, admitted binaryAdmission
 	if status.Server.Status != "running" || !status.Server.Running {
 		return route{}, fmt.Errorf("herdr named session %q is not running", requested.session)
 	}
-	if status.Server.Version == nil || validateAdmittedVersion(optionalString(status.Server.Version)) != nil || *status.Server.Version != admitted.version ||
-		status.Server.Protocol == nil || *status.Server.Protocol != admitted.protocol ||
-		status.Server.Compatible == nil || !*status.Server.Compatible {
+	if status.Server.Version == nil || validateAdmittedVersion(optionalString(status.Server.Version)) != nil || *status.Server.Version != admitted.version {
 		return route{}, fmt.Errorf(
-			"unsupported herdr server tuple version=%q protocol=%s compatible=%s (required: version=%s protocol=%d compatible=true)",
+			"unsupported herdr server version=%q (required: version=%s)",
 			optionalString(status.Server.Version),
-			optionalInt(status.Server.Protocol),
-			optionalBool(status.Server.Compatible),
 			admitted.version,
-			admitted.protocol,
 		)
 	}
 	if status.Server.Session == nil || *status.Server.Session != requested.session {
@@ -751,7 +723,6 @@ type snapshotResult struct {
 
 type snapshotJSON struct {
 	Version    string             `json:"version"`
-	Protocol   int                `json:"protocol"`
 	Workspaces *[]workspaceJSON   `json:"workspaces"`
 	Tabs       *[]json.RawMessage `json:"tabs"`
 	Panes      *[]paneJSON        `json:"panes"`
@@ -817,13 +788,11 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 		return nil, fmt.Errorf("unexpected herdr snapshot envelope")
 	}
 	snapshot := envelope.Result.Snapshot
-	if snapshot.Version != probed.version || snapshot.Protocol != probed.protocol {
+	if snapshot.Version != probed.version {
 		return nil, fmt.Errorf(
-			"unsupported herdr snapshot tuple version=%q protocol=%d (required: version=%s protocol=%d)",
+			"unsupported herdr snapshot version=%q (required: version=%s)",
 			snapshot.Version,
-			snapshot.Protocol,
 			probed.version,
-			probed.protocol,
 		)
 	}
 	if snapshot.Workspaces == nil || snapshot.Tabs == nil || snapshot.Panes == nil || snapshot.Layouts == nil || snapshot.Agents == nil {
@@ -1017,18 +986,4 @@ func optionalString(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func optionalInt(value *int) string {
-	if value == nil {
-		return "null"
-	}
-	return fmt.Sprintf("%d", *value)
-}
-
-func optionalBool(value *bool) string {
-	if value == nil {
-		return "null"
-	}
-	return fmt.Sprintf("%t", *value)
 }

@@ -16,7 +16,7 @@ fanout は herdr を同梱しません。herdr は AGPL ライセンスで、別
 
 名前付きの herdr session の中で fanout を起動すると、read-only な画面 — 常駐 TUI コンソール、`--status`、web ダッシュボード — にリポジトリの記録済み session が、各 pane の runtime backend と identity 付きで表示されます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
 TUI コンソールと web ダッシュボードは、herdr backend で記録された行を `herdr api snapshot` と照合して生死と agent state を反映します。`--status` が読むのは記録済みの state と GitHub だけです。
-fanout は session を読む前に `herdr --version`、`herdr api schema --json` と、`pane read`、`agent prompt`、`agent focus`、`pane close`、`workspace close` の `--help` 出力を検査します。その後、観測に `herdr status --json` と `herdr api snapshot` を使います。
+fanout は session を読む前に `herdr --version` を検査します。その後、観測に `herdr status --json` と `herdr api snapshot` を使います。method と field の事前検査は行いません。method call が失敗した場合は `herdr method "<name>" is unavailable` を返します。
 
 herdr session を変更しうる操作は、劣化動作ではなく明確なエラーで fail closed します。
 
@@ -29,7 +29,7 @@ TUI のヘッダには、選択された backend とその理由が常に表示�
 
 ## 前提条件
 
-- **stable herdr 0.7.5 以上** — CLI と server は同じ version、protocol 17、API schema version 1 で動かしてください。prerelease と解釈できない version は fail closed します。新しい stable version は、fanout が使う method と field が schema にすべてあり、必要な CLI help surface も一致する場合だけ使えます。内部の fanout-owned mutation profile は範囲が狭く、現在は公式 herdr 0.7.5 の `darwin/arm64` release asset と一致する schema digest だけを許可します。
+- **stable herdr 0.7.5 以上** — CLI と server は同じ stable version で動かしてください。prerelease と解釈できない version は fail closed します。新しい stable version を protocol、API schema、CLI help、platform、release digest では拒否しません。
 - 明示的な名前を付けた herdr session が稼働していること(`default` は拒否されます)。fanout は herdr server を起動せず、session の作成も attach もしません。
 - `PATH` 上の `herdr` バイナリ。別途インストールしてください。
 

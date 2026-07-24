@@ -94,8 +94,8 @@ func (b *Backend) bindOwnedTarget(target OwnedPaneIdentity, closeRequest *OwnedC
 func (b *Backend) cloneWithTarget(target *ownedTargetAdmission) *Backend {
 	clone := &Backend{
 		session: b.session, socketPath: b.socketPath, probeGate: make(chan struct{}, 1),
-		lookPath: b.lookPath, stageBinary: b.stageBinary, output: b.output, helpOutput: b.helpOutput,
-		now: b.now, sleep: b.sleep, admitted: map[string]binaryAdmission{}, behavior: b.behavior, target: target,
+		lookPath: b.lookPath, stageBinary: b.stageBinary, output: b.output,
+		now: b.now, sleep: b.sleep, admitted: map[string]binaryAdmission{}, target: target,
 	}
 	maps.Copy(clone.admitted, b.admitted)
 	if b.control != nil {
@@ -151,7 +151,7 @@ func (b *Backend) readOwned(ctx context.Context, target OwnedPaneIdentity, lines
 	args = append(args, "--format", "text")
 	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, args...)
 	if err != nil {
-		return "", fmt.Errorf("herdr pane read: %w", err)
+		return "", methodUnavailable("pane.read")
 	}
 	if err := b.verifyOwnedTargetAfter(ctx, admission, target); err != nil {
 		return "", fmt.Errorf("discard herdr pane read result: %w", err)
@@ -187,10 +187,10 @@ func (b *Backend) sendLineOwned(ctx context.Context, target OwnedPaneIdentity, l
 	}
 	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "agent", "prompt", target.Ref.Pane, line)
 	if err != nil {
-		return fmt.Errorf("herdr agent prompt (not retried): %w", err)
+		return methodUnavailable("agent.prompt")
 	}
 	if err := validateAgentPromptResponse(out, target); err != nil {
-		return fmt.Errorf("discard herdr agent prompt response: %w", err)
+		return methodUnavailable("agent.prompt")
 	}
 	if err := b.verifyOwnedTargetAfter(ctx, admission, target); err != nil {
 		return fmt.Errorf("verify herdr pane after prompt: %w", err)
@@ -251,7 +251,7 @@ func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) erro
 	}
 	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "agent", "focus", target.Ref.Pane)
 	if err != nil {
-		return fmt.Errorf("herdr agent focus (not retried): %w", err)
+		return methodUnavailable("agent.focus")
 	}
 	view, err := b.ownedSnapshotView(ctx, admission)
 	if err != nil {
@@ -286,7 +286,7 @@ func (b *Backend) closePaneOwned(ctx context.Context, target OwnedPaneIdentity) 
 	}
 	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "pane", "close", target.Ref.Pane)
 	if err != nil {
-		return fmt.Errorf("herdr pane close (not retried): %w", err)
+		return methodUnavailable("pane.close")
 	}
 	view, err := b.ownedSnapshotView(ctx, admission)
 	if err != nil {
@@ -334,7 +334,7 @@ func (b *Backend) closeOwnedSession(ctx context.Context, req OwnedCloseRequest) 
 	}
 	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "close", target.Ref.Workspace)
 	if err != nil {
-		return failed, fmt.Errorf("herdr workspace close (not retried): %w", err)
+		return failed, methodUnavailable("workspace.close")
 	}
 	view, err := b.ownedSnapshotView(ctx, admission)
 	if err != nil {
@@ -372,16 +372,16 @@ func (b *Backend) ownedSnapshotView(ctx context.Context, admission ownedAdmissio
 	}
 	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "api", "snapshot")
 	if err != nil {
-		return ownedSnapshotView{}, err
+		return ownedSnapshotView{}, methodUnavailable("session.snapshot")
 	}
 	var envelope snapshotEnvelope
 	err = decodeOne(out, &envelope)
 	if err != nil {
-		return ownedSnapshotView{}, err
+		return ownedSnapshotView{}, methodUnavailable("session.snapshot")
 	}
 	panes, err := projectSnapshot(envelope, probed)
 	if err != nil {
-		return ownedSnapshotView{}, err
+		return ownedSnapshotView{}, methodUnavailable("session.snapshot")
 	}
 	view := ownedSnapshotView{panes: map[corebackend.PaneRef]ownedPaneView{}, workspaces: map[string]ownedWorkspaceView{}}
 	for _, workspace := range *envelope.Result.Snapshot.Workspaces {

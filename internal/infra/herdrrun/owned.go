@@ -47,7 +47,10 @@ const (
 	xdgCacheEnv             = "XDG_CACHE_HOME"
 )
 
-var errOwnedSupervisorNotRunning = errors.New("herdr owned supervisor is not running; refusing automatic recovery without proof that prior operations are quiescent")
+var (
+	errOwnedSupervisorNotRunning    = errors.New("herdr owned supervisor is not running; refusing automatic recovery without proof that prior operations are quiescent")
+	errPinnedBinaryPhysicalIdentity = errors.New("herdr binary bundle has an invalid physical identity")
+)
 
 type OwnedOptions struct {
 	GitCommonDir string
@@ -123,14 +126,6 @@ type ownerMarker struct {
 	BinaryPath           string `json:"binary_path"`
 	BinarySHA256         string `json:"binary_sha256"`
 	BinaryVersion        string `json:"binary_version"`
-	SchemaSHA256         string `json:"schema_sha256"`
-	BehaviorProfileID    string `json:"behavior_profile_id"`
-	BehaviorSource       string `json:"behavior_source"`
-	BehaviorPlatform     string `json:"behavior_platform"`
-	DetectionFixtureID   string `json:"detection_fixture_id"`
-	ManifestSetDigest    string `json:"manifest_set_digest"`
-	NoRefreshPolicyID    string `json:"no_refresh_policy_id"`
-	BehaviorAdmissionID  string `json:"behavior_admission_id"`
 	SupervisorPID        int    `json:"supervisor_pid"`
 	SupervisorStartToken string `json:"supervisor_start_token"`
 	XDGConfigHome        string `json:"xdg_config_home"`
@@ -211,10 +206,6 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 	if err != nil {
 		return nil, err
 	}
-	behavior, err := backend.admitOwnedBehavior(admitted)
-	if err != nil {
-		return nil, err
-	}
 	err = ensurePrivateDir(layout.runtimeBase)
 	if err != nil {
 		return nil, fmt.Errorf("prepare herdr runtime base: %w", err)
@@ -245,9 +236,9 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 		return nil, err
 	}
 	if !found {
-		marker, err = claimOwnedSession(layout, commonDir, commonIdentity, session, admitted, behavior, start)
+		marker, err = claimOwnedSession(layout, commonDir, commonIdentity, session, admitted, start)
 	} else {
-		err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted, behavior)
+		err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted)
 		if err == nil {
 			err = verifyLiveSupervisor(layout.supervisorLock, marker)
 		}
@@ -268,7 +259,6 @@ func claimOwnedSession(
 	commonIdentity pathIdentity,
 	session string,
 	admitted binaryAdmission,
-	behavior behaviorAdmission,
 	start supervisorStarter,
 ) (ownerMarker, error) {
 	if _, running, err := inspectSupervisorLease(layout.supervisorLock); err != nil {
@@ -300,13 +290,8 @@ func claimOwnedSession(
 		GitCommonDevice: commonIdentity.device, GitCommonInode: commonIdentity.inode, OwnerNonce: nonce,
 		Session: session, RuntimeDir: layout.runtimeDir, SocketPath: layout.socketPath,
 		ClientSocketPath: layout.clientSocketPath, BinaryPath: admitted.path,
-		BinarySHA256: admitted.sha256, BinaryVersion: admitted.version, SchemaSHA256: admitted.schemaSHA256,
-		BehaviorProfileID: behavior.profile.id, BehaviorSource: behavior.profile.source,
-		BehaviorPlatform:   behavior.profile.goos + "/" + behavior.profile.goarch,
-		DetectionFixtureID: behavior.profile.detectionFixture, ManifestSetDigest: behavior.profile.manifestSetDigest,
-		NoRefreshPolicyID:   behavior.profile.noRefreshPolicy,
-		BehaviorAdmissionID: behaviorAdmissionID(behavior.profile, admitted, commonDir, commonIdentity, layout, nonce),
-		SupervisorPID:       pid, SupervisorStartToken: startToken,
+		BinarySHA256: admitted.sha256, BinaryVersion: admitted.version,
+		SupervisorPID: pid, SupervisorStartToken: startToken,
 		XDGConfigHome: layout.xdgConfigHome, XDGStateHome: layout.xdgStateHome,
 		XDGDataHome: layout.xdgDataHome, XDGCacheHome: layout.xdgCacheHome,
 		ConfigPath: layout.configPath,
@@ -369,13 +354,8 @@ func (b *Backend) acquireOwnedOperation(ctx context.Context) (ownedAdmission, *o
 	if err == nil {
 		admitted := binaryAdmission{
 			path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion,
-			protocol: supportedProtocol, schemaSHA256: marker.SchemaSHA256,
 		}
-		var behavior behaviorAdmission
-		behavior, err = b.admitOwnedBehavior(admitted)
-		if err == nil {
-			err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted, behavior)
-		}
+		err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted)
 	}
 	if err == nil {
 		err = verifyLiveSupervisor(layout.supervisorLock, marker)
@@ -402,11 +382,8 @@ func (b *Backend) probeOwned(ctx context.Context, admission ownedAdmission) (pro
 		return probeResult{}, err
 	}
 	if probed.binary != admission.marker.BinaryPath || probed.sha256 != admission.marker.BinarySHA256 ||
-		probed.version != admission.marker.BinaryVersion || probed.schemaSHA256 != admission.marker.SchemaSHA256 {
+		probed.version != admission.marker.BinaryVersion {
 		return probeResult{}, fmt.Errorf("herdr binary identity changed after owned admission")
-	}
-	if err := b.validateActiveManifestProfile(ctx, probed, b.behavior); err != nil {
-		return probeResult{}, err
 	}
 	return probed, nil
 }
@@ -551,7 +528,7 @@ func validatePinnedBinaryInDir(path, wantHash, binaryDir string) error {
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || stat.Nlink != 1 {
-		return fmt.Errorf("herdr binary bundle has an invalid physical identity")
+		return errPinnedBinaryPhysicalIdentity
 	}
 	hash := sha256.New()
 	if _, err := io.Copy(hash, bundled); err != nil {
@@ -900,7 +877,6 @@ func validateOwnedMarker(
 	commonDir string,
 	commonIdentity pathIdentity,
 	admitted binaryAdmission,
-	behavior behaviorAdmission,
 ) error {
 	if marker.SchemaID != ownedMarkerSchemaID || marker.GitCommonDir != commonDir || marker.Session != filepath.Base(layout.runtimeDir) ||
 		marker.GitCommonDevice != commonIdentity.device || marker.GitCommonInode != commonIdentity.inode ||
@@ -910,16 +886,9 @@ func validateOwnedMarker(
 		return fmt.Errorf("herdr ownership marker does not match this repository and runtime layout")
 	}
 	if marker.BinaryPath != admitted.path || marker.BinarySHA256 != admitted.sha256 || marker.BinaryVersion != admitted.version ||
-		marker.SchemaSHA256 != admitted.schemaSHA256 ||
-		marker.BehaviorProfileID != behavior.profile.id || marker.BehaviorSource != behavior.profile.source ||
-		marker.BehaviorPlatform != behavior.profile.goos+"/"+behavior.profile.goarch ||
-		marker.DetectionFixtureID != behavior.profile.detectionFixture || marker.ManifestSetDigest != behavior.profile.manifestSetDigest ||
-		marker.NoRefreshPolicyID != behavior.profile.noRefreshPolicy ||
-		marker.BehaviorAdmissionID != behaviorAdmissionID(behavior.profile, admitted, commonDir, commonIdentity, layout, marker.OwnerNonce) ||
 		!filepath.IsAbs(marker.BinaryPath) || filepath.Clean(marker.BinaryPath) != marker.BinaryPath ||
-		!validHexToken(marker.BinarySHA256) || !validHexToken(marker.SchemaSHA256) ||
+		!validHexToken(marker.BinarySHA256) ||
 		validateAdmittedVersion(marker.BinaryVersion) != nil ||
-		!validHexToken(marker.ManifestSetDigest) || !validHexToken(marker.BehaviorAdmissionID) ||
 		!validHexToken(marker.OwnerNonce) || !validHexToken(marker.SupervisorStartToken) || marker.SupervisorPID <= 1 {
 		return fmt.Errorf("herdr ownership marker identity does not match admitted binary and supervisor")
 	}
@@ -943,19 +912,6 @@ func validHexToken(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil
-}
-
-func sha256File(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = f.Close() }()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func shellQuote(value string) string {
@@ -1100,15 +1056,8 @@ func RunSupervisor(args []string, errw io.Writer) int {
 	}
 	admitted := binaryAdmission{
 		path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion,
-		protocol: supportedProtocol, schemaSHA256: marker.SchemaSHA256,
 	}
-	profile := productionBehaviorProfile()
-	if err = validateBehaviorProfile(profile, admitted); err != nil {
-		fmt.Fprintf(errw, "fanout herdr supervisor: behavior profile: %v\n", err)
-		return 1
-	}
-	behavior := behaviorAdmission{profile: profile}
-	err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted, behavior)
+	err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted)
 	if err != nil {
 		fmt.Fprintf(errw, "fanout herdr supervisor: marker identity: %v\n", err)
 		return 1

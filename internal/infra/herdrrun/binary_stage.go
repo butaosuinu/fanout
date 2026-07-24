@@ -10,9 +10,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 )
 
-const admissionBinaryDirName = "admission-binaries"
+const (
+	admissionBinaryDirName              = "admission-binaries"
+	concurrentStageValidationAttempts   = 21
+	concurrentStageValidationRetryDelay = 5 * time.Millisecond
+)
 
 // stageAdmissionBinary fixes the executable bytes before the first admission
 // command. No pathname discovered through PATH is ever executed directly.
@@ -92,7 +97,7 @@ func stageExecutable(sourcePath, binaryDir string) (string, string, error) {
 	}
 
 	target := filepath.Join(binaryDir, "herdr-"+digest)
-	validationErr := validatePinnedBinaryInDir(target, digest, binaryDir)
+	validationErr := validatePublishedPinnedBinary(target, digest, binaryDir)
 	if validationErr == nil {
 		return target, digest, nil
 	}
@@ -101,10 +106,11 @@ func stageExecutable(sourcePath, binaryDir string) (string, string, error) {
 	}
 	err = os.Link(temporaryPath, target)
 	if errors.Is(err, os.ErrExist) {
-		validationErr = validatePinnedBinaryInDir(target, digest, binaryDir)
+		validationErr = validatePublishedPinnedBinary(target, digest, binaryDir)
 		if validationErr == nil {
 			return target, digest, nil
 		}
+		return "", "", fmt.Errorf("validate existing herdr executable stage: %w", validationErr)
 	}
 	if err != nil {
 		return "", "", fmt.Errorf("publish herdr executable stage: %w", err)
@@ -130,6 +136,42 @@ func stageExecutable(sourcePath, binaryDir string) (string, string, error) {
 		return "", "", err
 	}
 	return target, digest, nil
+}
+
+func validatePublishedPinnedBinary(target, digest, binaryDir string) error {
+	return validatePublishedPinnedBinaryWithWait(target, digest, binaryDir, time.Sleep)
+}
+
+func validatePublishedPinnedBinaryWithWait(
+	target string,
+	digest string,
+	binaryDir string,
+	wait func(time.Duration),
+) error {
+	for attempt := range concurrentStageValidationAttempts {
+		err := validatePinnedBinaryInDir(target, digest, binaryDir)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errPinnedBinaryPhysicalIdentity) {
+			return err
+		}
+		info, statErr := os.Lstat(target)
+		if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o500 {
+			return err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Nlink < 1 || stat.Nlink > 2 {
+			return err
+		}
+		if attempt+1 == concurrentStageValidationAttempts {
+			return err
+		}
+		if stat.Nlink == 2 {
+			wait(concurrentStageValidationRetryDelay)
+		}
+	}
+	panic("unreachable")
 }
 
 func validateAdmissionSourceOwner(path string, info os.FileInfo) error {

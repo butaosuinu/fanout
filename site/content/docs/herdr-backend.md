@@ -11,7 +11,7 @@ The herdr backend lets fanout run inside [herdr](https://herdr.dev/) — a tmux-
 
 ## What v1 does
 
-Run fanout inside a named herdr session and the read-only surfaces — the persistent TUI console, `--status`, and the web dashboard — show the repository's recorded sessions, including each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and the web dashboard match rows recorded with the herdr backend against `herdr api snapshot` for liveness and agent state; `--status` reads recorded state and GitHub only. Before reading a session, fanout checks `herdr --version`, `herdr api schema --json`, and the `--help` output for `pane read`, `agent prompt`, `agent focus`, `pane close`, and `workspace close`. It then uses `herdr status --json` and `herdr api snapshot` for observation.
+Run fanout inside a named herdr session and the read-only surfaces — the persistent TUI console, `--status`, and the web dashboard — show the repository's recorded sessions, including each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and the web dashboard match rows recorded with the herdr backend against `herdr api snapshot` for liveness and agent state; `--status` reads recorded state and GitHub only. Before reading a session, fanout checks `herdr --version`. It then uses `herdr status --json` and `herdr api snapshot` for observation. fanout does not preflight methods or fields; a failed method call returns `herdr method "<name>" is unavailable`.
 
 Everything that would mutate a herdr session fails closed with a clear error instead of degrading:
 
@@ -24,7 +24,7 @@ The TUI header always shows the selected backend and why it was selected, such a
 
 ## Prerequisites
 
-- **stable herdr 0.7.5 or newer** — the CLI and server must run the same version with protocol 17 and API schema version 1. Prerelease and malformed versions fail closed. A newer stable version is accepted only when the schema still contains every method and field fanout uses and the required CLI help surfaces still match. The internal fanout-owned mutation profile is narrower: it currently admits only the exact official herdr 0.7.5 `darwin/arm64` release asset and matching schema digest.
+- **stable herdr 0.7.5 or newer** — the CLI and server must run the same stable version. Prerelease and malformed versions fail closed. fanout does not reject newer stable versions based on protocol, API schema, CLI help, platform, or an exact release digest.
 - A running herdr session with an explicit name (`default` is rejected). fanout never starts a herdr server and never creates or attaches a session.
 - The `herdr` binary on your `PATH`, installed separately.
 

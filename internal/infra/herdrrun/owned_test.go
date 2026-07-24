@@ -11,12 +11,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/naming"
@@ -50,17 +50,6 @@ func TestNormalizeStatDeviceSupportsDarwinAndLinuxWidths(t *testing.T) {
 	if got := normalizeStatDevice(uint64(81)); got != 81 {
 		t.Fatalf("normalizeStatDevice(uint64) = %d, want 81", got)
 	}
-}
-
-func testBehaviorProfile(binarySHA256, schemaSHA256 string) behaviorProfile {
-	profile := productionBehaviorProfile()
-	profile.source = "test-fixture"
-	profile.goos = runtime.GOOS
-	profile.goarch = runtime.GOARCH
-	profile.binarySHA256 = binarySHA256
-	profile.schemaSHA256 = schemaSHA256
-	profile.manifestSetDigest = manifestFixtureDigest(profile.manifests, binarySHA256)
-	return profile
 }
 
 func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (int, error) {
@@ -235,21 +224,7 @@ func (h *ownedHarness) tryEnsure() (*OwnedSession, error) {
 	h.t.Helper()
 	b := New(h.layout.runtimeDir[strings.LastIndex(h.layout.runtimeDir, string(os.PathSeparator))+1:], h.layout.socketPath)
 	b.lookPath = func(string) (string, error) { return h.binary, nil }
-	binaryHash, err := sha256File(h.binary)
-	if err != nil {
-		h.t.Fatal(err)
-	}
-	schemaHash := sha256.Sum256([]byte(h.fake.schema))
-	b.behavior = testBehaviorProfile(binaryHash, hex.EncodeToString(schemaHash[:]))
 	b.output = h.fake.output
-	b.helpOutput = func(_ context.Context, _ string, _ []string, args ...string) ([]byte, error) {
-		for _, surface := range requiredCommandSurfaces {
-			if len(args) == len(surface.args)+1 && slices.Equal(args[:len(surface.args)], surface.args) {
-				return []byte(strings.Join(surface.required, "\n")), nil
-			}
-		}
-		return nil, fmt.Errorf("unexpected help args %v", args)
-	}
 	return ensureOwned(context.Background(), OwnedOptions{GitCommonDir: h.commonDir, RuntimeBase: h.runtimeBase}, b, h.supervisor.start)
 }
 
@@ -439,6 +414,69 @@ func TestStageExecutablePinsOpenedBytesBeforeCommands(t *testing.T) {
 	}
 }
 
+func TestValidatePublishedPinnedBinaryWaitsForConcurrentLinkToSettle(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("#!/bin/sh\nexit 0\n")
+	hash := sha256.Sum256(content)
+	digest := hex.EncodeToString(hash[:])
+	target := filepath.Join(root, "herdr-"+digest)
+	if err := os.WriteFile(target, content, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	temporary := filepath.Join(root, ".herdr-stage-concurrent.tmp")
+	if err := os.Link(target, temporary); err != nil {
+		t.Fatal(err)
+	}
+
+	waits := 0
+	err := validatePublishedPinnedBinaryWithWait(target, digest, root, func(delay time.Duration) {
+		waits++
+		if delay != concurrentStageValidationRetryDelay {
+			t.Errorf("retry delay = %v, want %v", delay, concurrentStageValidationRetryDelay)
+		}
+		if err := os.Remove(temporary); err != nil {
+			t.Errorf("remove concurrent stage link: %v", err)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waits != 1 {
+		t.Fatalf("retry waits = %d, want 1", waits)
+	}
+}
+
+func TestValidatePublishedPinnedBinaryRejectsPersistentExtraLink(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("#!/bin/sh\nexit 0\n")
+	hash := sha256.Sum256(content)
+	digest := hex.EncodeToString(hash[:])
+	target := filepath.Join(root, "herdr-"+digest)
+	if err := os.WriteFile(target, content, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(target, filepath.Join(root, ".herdr-stage-stale.tmp")); err != nil {
+		t.Fatal(err)
+	}
+
+	waits := 0
+	err := validatePublishedPinnedBinaryWithWait(target, digest, root, func(time.Duration) {
+		waits++
+	})
+	if !errors.Is(err, errPinnedBinaryPhysicalIdentity) {
+		t.Fatalf("persistent extra link error = %v", err)
+	}
+	if waits != concurrentStageValidationAttempts-1 {
+		t.Fatalf("retry waits = %d, want %d", waits, concurrentStageValidationAttempts-1)
+	}
+}
+
 func TestAdmissionSourceOwnerPolicy(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -527,87 +565,6 @@ func TestEnsureOwnedRejectsRecreatedGitCommonDirectory(t *testing.T) {
 	current, found, err := readOwnerMarker(h.layout.markerPath)
 	if err != nil || !found || current != previous {
 		t.Fatalf("old repository marker changed = %+v, %v, %v", current, found, err)
-	}
-}
-
-func TestEnsureOwnedRejectsBehaviorProfileBeforeRuntimeCreation(t *testing.T) {
-	root, err := os.MkdirTemp("/tmp", "fho-profile-") //nolint:usetesting // Keep Darwin Unix socket paths below the kernel limit.
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	commonDir := filepath.Join(root, "repo.git")
-	err = os.Mkdir(commonDir, 0o700)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtimeBase := filepath.Join(root, "runtime")
-	_, commonIdentity, err := openCanonicalGitCommonDir(commonDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	session := naming.HerdrSessionName(commonIdentity.device, commonIdentity.inode)
-	layout, err := prepareOwnedLayout(runtimeBase, session)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fake := newFakeHerdr(session, layout.socketPath)
-	b := newTestBackend(t, session, layout.socketPath, fake)
-	schemaHash := sha256.Sum256([]byte(fake.schema))
-	b.behavior = testBehaviorProfile(strings.Repeat("b", 64), hex.EncodeToString(schemaHash[:]))
-	if _, err := ensureOwned(context.Background(), OwnedOptions{GitCommonDir: commonDir, RuntimeBase: runtimeBase}, b, func(string, string, string) (int, error) {
-		t.Fatal("supervisor started before behavior admission")
-		return 0, nil
-	}); err == nil || !strings.Contains(err.Error(), "outside owned behavior profile") {
-		t.Fatalf("EnsureOwned() behavior error = %v", err)
-	}
-	if _, err := os.Stat(runtimeBase); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("runtime base exists before behavior admission: %v", err)
-	}
-}
-
-func TestOwnedPrimitivesRejectActiveManifestDrift(t *testing.T) {
-	for _, operation := range []string{"read", "send", "focus", "close", "owned close"} {
-		t.Run(operation, func(t *testing.T) {
-			h := newOwnedHarness(t)
-			target := h.target()
-			var call func() error
-			if operation == "owned close" {
-				bound, err := h.session.Backend().BindOwnedClose(h.closeRequest(target))
-				if err != nil {
-					t.Fatal(err)
-				}
-				call = func() error {
-					_, closeErr := bound.CloseOwned(corebackend.CloseRequest{Ref: target.Ref, WorktreePath: target.WorktreePath, ShellKey: target.TerminalID})
-					return closeErr
-				}
-			} else {
-				bound, err := h.session.Backend().BindOwnedTarget(target)
-				if err != nil {
-					t.Fatal(err)
-				}
-				switch operation {
-				case "read":
-					call = func() error { _, readErr := bound.Read(target.Ref, 1); return readErr }
-				case "send":
-					call = func() error { return bound.SendLine(target.Ref, "hello") }
-				case "focus":
-					call = func() error { return bound.Focus(target.Ref) }
-				case "close":
-					call = func() error { return bound.Close(target.Ref) }
-				}
-			}
-			h.fake.manifests = strings.Replace(h.fake.manifests, "2026.07.18.1", "2099.01.01.1", 1)
-			baseline := len(h.fake.commands)
-			if err := call(); err == nil || !strings.Contains(err.Error(), "active manifest set") {
-				t.Fatalf("%s manifest drift error = %v", operation, err)
-			}
-			for _, command := range h.fake.commands[baseline:] {
-				if commandKey(command.args) == "" {
-					t.Fatalf("manifest drift allowed %s command: %v", operation, command.args)
-				}
-			}
-		})
 	}
 }
 
@@ -712,6 +669,47 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 	}
 }
 
+func TestBoundOwnedBackendReportsGenericUnavailableMethodErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		call   func(*Backend, OwnedPaneIdentity) error
+	}{
+		{
+			name: "read", method: "pane.read",
+			call: func(bound *Backend, target OwnedPaneIdentity) error {
+				_, err := bound.Read(target.Ref, 1)
+				return err
+			},
+		},
+		{name: "send", method: "agent.prompt", call: func(bound *Backend, target OwnedPaneIdentity) error {
+			return bound.SendLine(target.Ref, "hello")
+		}},
+		{name: "focus", method: "agent.focus", call: func(bound *Backend, target OwnedPaneIdentity) error {
+			return bound.Focus(target.Ref)
+		}},
+		{name: "close", method: "pane.close", call: func(bound *Backend, target OwnedPaneIdentity) error {
+			return bound.Close(target.Ref)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newOwnedHarness(t)
+			target := h.target()
+			bound, err := h.session.Backend().BindOwnedTarget(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.fake.respond = func([]string) ([]byte, error) {
+				return nil, errors.New("unknown command")
+			}
+			if err := test.call(bound, target); err == nil || err.Error() != methodUnavailable(test.method).Error() {
+				t.Fatalf("%s error = %v", test.name, err)
+			}
+		})
+	}
+}
+
 func TestBoundOwnedBackendRejectsAgentFocusWithoutTargetPaneFocus(t *testing.T) {
 	h := newOwnedHarness(t)
 	target := h.target()
@@ -768,7 +766,7 @@ func TestBoundOwnedBackendRejectsMismatchedAgentPromptResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bound.SendLine(target.Ref, "hello"); !errors.Is(err, ErrOwnedIdentityMismatch) {
+	if err := bound.SendLine(target.Ref, "hello"); err == nil || err.Error() != methodUnavailable("agent.prompt").Error() {
 		t.Fatalf("SendLine() mismatched prompt response error = %v", err)
 	}
 }
@@ -804,6 +802,22 @@ func TestBoundOwnedCloserClosesWorkspaceButRetainsCheckoutForManualReconciliatio
 	}
 	if _, err := os.Stat(filepath.Join(h.worktreeGitDir, worktreeOwnershipMarkerName)); err != nil {
 		t.Fatalf("retained worktree marker: %v", err)
+	}
+}
+
+func TestBoundOwnedCloserReportsGenericUnavailableMethodError(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	bound, err := h.session.Backend().BindOwnedClose(h.closeRequest(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.fake.respond = func([]string) ([]byte, error) {
+		return nil, errors.New("unknown command")
+	}
+	_, err = bound.CloseOwned(corebackend.CloseRequest{Ref: target.Ref, WorktreePath: target.WorktreePath, ShellKey: target.TerminalID})
+	if err == nil || err.Error() != methodUnavailable("workspace.close").Error() {
+		t.Fatalf("CloseOwned() error = %v", err)
 	}
 }
 
