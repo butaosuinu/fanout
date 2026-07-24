@@ -173,7 +173,23 @@ func normalizeStatDevice[T ~int32 | ~uint32 | ~uint64](device T) uint64 {
 	return uint64(device)
 }
 
-type supervisorStarter func(markerPath, nonce, startToken string) (int, error)
+type startedSupervisor struct {
+	pid    int
+	signal func(os.Signal) error
+	wait   func() error
+}
+
+func (s *startedSupervisor) reapAsync() {
+	if s == nil || s.wait == nil {
+		return
+	}
+	go func() {
+		// Successful readiness hands terminal cleanup to the supervisor lifecycle.
+		_ = s.wait()
+	}()
+}
+
+type supervisorStarter func(markerPath, nonce, startToken string) (*startedSupervisor, error)
 
 func EnsureOwned(ctx context.Context, opts OwnedOptions) (*OwnedSession, error) {
 	return ensureOwned(ctx, opts, nil, startOwnedSupervisor)
@@ -218,7 +234,7 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 	if err != nil {
 		return nil, fmt.Errorf("lock herdr owned lifecycle: %w", err)
 	}
-	defer unlockPrivateFile(lock)
+	defer func() { unlockPrivateFile(lock) }()
 	err = ensureOwnedLayout(layout)
 	if err != nil {
 		return nil, err
@@ -235,8 +251,9 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 	if err != nil {
 		return nil, err
 	}
+	var started *startedSupervisor
 	if !found {
-		marker, err = claimOwnedSession(layout, commonDir, commonIdentity, session, admitted, start)
+		marker, started, err = claimOwnedSession(layout, commonDir, commonIdentity, session, admitted, start)
 	} else {
 		err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted)
 		if err == nil {
@@ -246,16 +263,18 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 	if err != nil {
 		return nil, err
 	}
-	claimed := !found
 	backend.owner = &ownedAdmission{marker: marker, markerPath: layout.markerPath, lockPath: layout.lifecycleLock}
 	if err := waitForOwnedReady(ctx, backend); err != nil {
-		if claimed {
-			if stopErr := stopFreshOwnedSupervisor(layout, marker); stopErr != nil {
+		if started != nil {
+			unlockPrivateFile(lock)
+			lock = nil
+			if stopErr := stopFreshOwnedSupervisor(layout, marker, started); stopErr != nil {
 				return nil, errors.Join(err, fmt.Errorf("stop unready herdr supervisor: %w", stopErr))
 			}
 		}
 		return nil, err
 	}
+	started.reapAsync()
 	return &OwnedSession{Session: session, SocketPath: layout.socketPath, ClientSocketPath: layout.clientSocketPath, backend: backend}, nil
 }
 
@@ -266,30 +285,33 @@ func claimOwnedSession(
 	session string,
 	admitted binaryAdmission,
 	start supervisorStarter,
-) (ownerMarker, error) {
+) (ownerMarker, *startedSupervisor, error) {
 	if _, running, err := inspectSupervisorLease(layout.supervisorLock); err != nil {
-		return ownerMarker{}, err
+		return ownerMarker{}, nil, err
 	} else if running {
-		return ownerMarker{}, fmt.Errorf("refusing to claim herdr session with a foreign supervisor")
+		return ownerMarker{}, nil, fmt.Errorf("refusing to claim herdr session with a foreign supervisor")
 	}
 	for _, path := range []string{layout.socketPath, layout.clientSocketPath} {
 		if _, err := os.Lstat(path); err == nil {
-			return ownerMarker{}, fmt.Errorf("refusing to claim herdr session with foreign socket %s", path)
+			return ownerMarker{}, nil, fmt.Errorf("refusing to claim herdr session with foreign socket %s", path)
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return ownerMarker{}, fmt.Errorf("inspect herdr socket %s: %w", path, err)
+			return ownerMarker{}, nil, fmt.Errorf("inspect herdr socket %s: %w", path, err)
 		}
 	}
 	nonce, err := randomToken()
 	if err != nil {
-		return ownerMarker{}, err
+		return ownerMarker{}, nil, err
 	}
 	startToken, err := randomToken()
 	if err != nil {
-		return ownerMarker{}, err
+		return ownerMarker{}, nil, err
 	}
-	pid, err := start(layout.markerPath, nonce, startToken)
+	started, err := start(layout.markerPath, nonce, startToken)
 	if err != nil {
-		return ownerMarker{}, err
+		return ownerMarker{}, nil, err
+	}
+	if started == nil || started.pid <= 1 || started.signal == nil || started.wait == nil {
+		return ownerMarker{}, nil, fmt.Errorf("herdr supervisor starter returned an invalid child handle")
 	}
 	marker := ownerMarker{
 		SchemaID: ownedMarkerSchemaID, GitCommonDir: commonDir,
@@ -297,27 +319,92 @@ func claimOwnedSession(
 		Session: session, RuntimeDir: layout.runtimeDir, SocketPath: layout.socketPath,
 		ClientSocketPath: layout.clientSocketPath, BinaryPath: admitted.path,
 		BinarySHA256: admitted.sha256, BinaryVersion: admitted.version,
-		SupervisorPID: pid, SupervisorStartToken: startToken,
+		SupervisorPID: started.pid, SupervisorStartToken: startToken,
 		XDGConfigHome: layout.xdgConfigHome, XDGStateHome: layout.xdgStateHome,
 		XDGDataHome: layout.xdgDataHome, XDGCacheHome: layout.xdgCacheHome,
 		ConfigPath: layout.configPath,
 	}
 	if err := writeOwnerMarkerExclusive(layout.markerPath, marker); err != nil {
-		stopStartedOwnedSupervisor(pid)
-		return ownerMarker{}, err
+		stopErr := stopUnclaimedSupervisor(started)
+		return ownerMarker{}, nil, errors.Join(err, stopErr)
 	}
-	return marker, nil
+	return marker, started, nil
 }
 
-func stopFreshOwnedSupervisor(layout ownedLayout, marker ownerMarker) error {
+func stopUnclaimedSupervisor(started *startedSupervisor) error {
+	if started == nil || started.signal == nil || started.wait == nil {
+		return fmt.Errorf("unclaimed herdr supervisor has no child handle")
+	}
+	signalErr := started.signal(os.Kill)
+	waitErr := started.wait()
+	if signalErr != nil && !errors.Is(signalErr, os.ErrProcessDone) {
+		signalErr = fmt.Errorf("kill unclaimed herdr supervisor: %w", signalErr)
+	} else {
+		signalErr = nil
+	}
+	if waitErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(waitErr, &exitErr) {
+			waitErr = nil
+		} else {
+			waitErr = fmt.Errorf("reap unclaimed herdr supervisor: %w", waitErr)
+		}
+	}
+	return errors.Join(signalErr, waitErr)
+}
+
+func stopFreshOwnedSupervisor(layout ownedLayout, marker ownerMarker, started *startedSupervisor) error {
+	if started == nil || started.pid != marker.SupervisorPID || started.signal == nil || started.wait == nil {
+		return fmt.Errorf("unready herdr supervisor child handle does not match ownership marker")
+	}
 	current, found, err := readOwnerMarker(layout.markerPath)
 	if err != nil || !found || current != marker {
 		return fmt.Errorf("ownership marker changed before stopping unready supervisor")
 	}
-	if err := verifyLiveSupervisor(layout.supervisorLock, marker); err != nil {
-		return err
+	verifyErr := verifyLiveSupervisor(layout.supervisorLock, marker)
+	if verifyErr != nil {
+		return verifyErr
 	}
-	stopStartedOwnedSupervisor(marker.SupervisorPID)
+	signalErr := started.signal(syscall.SIGTERM)
+	if signalErr != nil && !errors.Is(signalErr, os.ErrProcessDone) {
+		return fmt.Errorf("signal unready herdr supervisor: %w", signalErr)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- started.wait() }()
+	timer := time.NewTimer(ownedShutdownGrace + ownedReadyTimeout)
+	defer timer.Stop()
+	select {
+	case waitErr := <-waited:
+		retiredErr := validateRetiredOwnedSession(layout)
+		if waitErr != nil {
+			waitErr = fmt.Errorf("reap unready herdr supervisor: %w", waitErr)
+		}
+		return errors.Join(waitErr, retiredErr)
+	case <-timer.C:
+		return fmt.Errorf("timed out waiting for unready herdr supervisor shutdown")
+	}
+}
+
+func validateRetiredOwnedSession(layout ownedLayout) error {
+	if _, found, err := readOwnerMarker(layout.markerPath); err != nil || found {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("herdr ownership marker remains after supervisor shutdown")
+	}
+	for _, path := range []string{layout.socketPath, layout.clientSocketPath} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("herdr owned socket %s remains after supervisor shutdown", path)
+		}
+	}
+	if _, running, err := inspectSupervisorLease(layout.supervisorLock); err != nil {
+		return err
+	} else if running {
+		return fmt.Errorf("herdr supervisor remains live after shutdown")
+	}
 	return nil
 }
 
@@ -954,14 +1041,14 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-func startOwnedSupervisor(markerPath, nonce, startToken string) (int, error) {
+func startOwnedSupervisor(markerPath, nonce, startToken string) (*startedSupervisor, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	reader, writer, err := os.Pipe()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer func() { _ = reader.Close() }()
 	cmd := exec.Command(exe, ownedSupervisorCommand, markerPath, nonce, startToken, strconv.Itoa(ownedSupervisorReadyFD))
@@ -972,44 +1059,39 @@ func startOwnedSupervisor(markerPath, nonce, startToken string) (int, error) {
 	logFile, err := openPrivateAppendFile(filepath.Join(filepath.Dir(markerPath), ownedSupervisorLogName))
 	if err != nil {
 		_ = writer.Close()
-		return 0, err
+		return nil, err
 	}
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	if err := cmd.Start(); err != nil {
 		_ = writer.Close()
 		_ = logFile.Close()
-		return 0, err
+		return nil, err
 	}
 	_ = writer.Close()
 	_ = logFile.Close()
 	if err := reader.SetReadDeadline(time.Now().Add(ownedReadyTimeout)); err != nil {
 		stopStartedOwnedCommand(cmd)
-		return 0, err
+		return nil, err
 	}
 	one := []byte{0}
 	if _, err := io.ReadFull(reader, one); err != nil || string(one) != ownedSupervisorReadyACK {
 		stopStartedOwnedCommand(cmd)
-		return 0, fmt.Errorf("herdr supervisor readiness handshake failed")
+		return nil, fmt.Errorf("herdr supervisor readiness handshake failed")
 	}
-	go func() { _ = cmd.Wait() }()
-	return cmd.Process.Pid, nil
+	return &startedSupervisor{
+		pid:    cmd.Process.Pid,
+		signal: cmd.Process.Signal,
+		wait:   cmd.Wait,
+	}, nil
 }
 
 func stopStartedOwnedCommand(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	stopStartedOwnedSupervisor(cmd.Process.Pid)
+	// Wait below observes the definitive process state after this best-effort kill.
+	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
-}
-
-func stopStartedOwnedSupervisor(pid int) {
-	if pid <= 1 || pid == os.Getpid() {
-		return
-	}
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
-		_ = syscall.Kill(pid, syscall.SIGKILL)
-	}
 }
 
 func IsSupervisorRequest(args []string) bool {

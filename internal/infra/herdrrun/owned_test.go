@@ -43,6 +43,64 @@ type fakeOwnedSupervisor struct {
 	listeners []net.Listener
 }
 
+const ownedSupervisorTestHerdrCommand = "__herdr-test-herdr"
+
+func TestMain(m *testing.M) {
+	switch {
+	case IsSupervisorRequest(os.Args[1:]):
+		os.Exit(RunSupervisor(os.Args[2:], os.Stderr))
+	case len(os.Args) > 1 && os.Args[1] == ownedSupervisorTestHerdrCommand:
+		os.Exit(runOwnedSupervisorTestHerdr(os.Args[2:]))
+	default:
+		os.Exit(m.Run())
+	}
+}
+
+func runOwnedSupervisorTestHerdr(args []string) int {
+	switch {
+	case slices.Equal(args, []string{"--version"}):
+		_, _ = fmt.Fprintln(os.Stdout, "herdr 0.7.5")
+		return 0
+	case len(args) >= 2 && slices.Equal(args[len(args)-2:], []string{"status", "--json"}):
+		return 1
+	case slices.Equal(args, []string{"server"}):
+		return runOwnedSupervisorTestServer()
+	default:
+		_, _ = fmt.Fprintf(os.Stderr, "unexpected test herdr args: %q\n", args)
+		return 2
+	}
+}
+
+func runOwnedSupervisorTestServer() int {
+	var listeners []net.Listener
+	for _, path := range []string{os.Getenv(socketEnv), os.Getenv(clientSocketEnv)} {
+		listener, err := net.Listen("unix", path)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "listen test herdr socket %s: %v\n", path, err)
+			return 1
+		}
+		if err := os.Chmod(path, 0o700); err != nil {
+			_ = listener.Close()
+			_, _ = fmt.Fprintf(os.Stderr, "chmod test herdr socket %s: %v\n", path, err)
+			return 1
+		}
+		listeners = append(listeners, listener)
+	}
+	defer func() {
+		for _, listener := range listeners {
+			_ = listener.Close()
+		}
+	}()
+	pidPath := filepath.Join(os.Getenv(xdgStateEnv), "test-server.pid")
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "write test herdr pid: %v\n", err)
+		return 1
+	}
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
 func TestNormalizeStatDeviceSupportsDarwinAndLinuxWidths(t *testing.T) {
 	if got := normalizeStatDevice(int32(42)); got != 42 {
 		t.Fatalf("normalizeStatDevice(int32) = %d, want 42", got)
@@ -52,45 +110,52 @@ func TestNormalizeStatDeviceSupportsDarwinAndLinuxWidths(t *testing.T) {
 	}
 }
 
-func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (int, error) {
+func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (*startedSupervisor, error) {
 	s.starts++
 	runtimeDir := filepath.Dir(markerPath)
 	lock, err := os.OpenFile(filepath.Join(runtimeDir, ownedSupervisorLockName), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if err != nil {
 		_ = lock.Close()
-		return 0, err
+		return nil, err
 	}
 	lease := supervisorLease{SchemaID: ownedMarkerSchemaID, OwnerNonce: nonce, StartToken: startToken, PID: os.Getpid()}
 	data, err := json.Marshal(lease)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	_, err = lock.WriteAt(data, 0)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	err = lock.Sync()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	s.lock = lock
 	for _, path := range []string{filepath.Join(runtimeDir, "herdr.sock"), filepath.Join(runtimeDir, "herdr-client.sock")} {
 		listener, err := net.Listen("unix", path)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		err = os.Chmod(path, 0o700)
 		if err != nil {
 			_ = listener.Close()
-			return 0, err
+			return nil, err
 		}
 		s.listeners = append(s.listeners, listener)
 	}
-	return os.Getpid(), nil
+	return &startedSupervisor{
+		pid: os.Getpid(),
+		signal: func(os.Signal) error {
+			s.close()
+			return nil
+		},
+		wait: func() error { return nil },
+	}, nil
 }
 
 func (s *fakeOwnedSupervisor) close() {
@@ -354,6 +419,86 @@ func TestOwnedReadinessRequiresPrivateServerAndClientSockets(t *testing.T) {
 				t.Fatalf("validateOwnedReady() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestFreshReadinessFailureGracefullyStopsServerProcessGroup(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "fho-stop-") //nolint:usetesting // Darwin Unix socket paths are limited to 103 bytes.
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commonDir := filepath.Join(root, "repo.git")
+	if err := os.Mkdir(commonDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtimeBase := filepath.Join(root, "runtime")
+	_, identity, err := openCanonicalGitCommonDir(commonDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := naming.HerdrSessionName(identity.device, identity.inode)
+	layout, err := prepareOwnedLayout(runtimeBase, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	herdr := filepath.Join(root, "herdr")
+	script := "#!/bin/sh\nexec " + shellQuote(executable) + " " + ownedSupervisorTestHerdrCommand + " \"$@\"\n"
+	if err := os.WriteFile(herdr, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	backend := New(session, layout.socketPath)
+	backend.lookPath = func(string) (string, error) { return herdr, nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pidPath := filepath.Join(layout.xdgStateHome, "test-server.pid")
+	ready := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(pidPath); err == nil {
+				cancel()
+				ready <- nil
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+		ready <- fmt.Errorf("test herdr server did not publish its pid")
+	}()
+
+	_, ensureErr := ensureOwned(ctx, OwnedOptions{GitCommonDir: commonDir, RuntimeBase: runtimeBase}, backend, startOwnedSupervisor)
+	if readyErr := <-ready; readyErr != nil {
+		t.Fatal(readyErr)
+	}
+	if !errors.Is(ensureErr, context.Canceled) {
+		t.Fatalf("ensureOwned() error = %v, want context cancellation after server start", ensureErr)
+	}
+	pidBytes, err := os.ReadFile(pidPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverPID, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(serverPID, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("test herdr server pid %d still exists: %v", serverPID, err)
+	}
+	if err := validateRetiredOwnedSession(layout); err != nil {
+		t.Fatalf("retired owned session validation: %v; ensure error: %v", err, ensureErr)
 	}
 }
 
