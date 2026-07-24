@@ -334,6 +334,29 @@ func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
 	}
 }
 
+func TestOwnedReadinessRequiresPrivateServerAndClientSockets(t *testing.T) {
+	tests := []struct {
+		name string
+		path func(ownedLayout) string
+	}{
+		{name: "server", path: func(layout ownedLayout) string { return layout.socketPath }},
+		{name: "client", path: func(layout ownedLayout) string { return layout.clientSocketPath }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newOwnedHarness(t)
+			path := test.path(h.layout)
+			if err := os.Chmod(path, 0o660); err != nil {
+				t.Fatal(err)
+			}
+			err := validateOwnedReady(context.Background(), h.session.Backend())
+			if err == nil || !strings.Contains(err.Error(), "not an owner-only Unix socket") {
+				t.Fatalf("validateOwnedReady() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestEnsureOwnedFailsClosedAfterDeadSupervisor(t *testing.T) {
 	h := newOwnedHarness(t)
 	previous, found, err := readOwnerMarker(h.layout.markerPath)

@@ -246,8 +246,14 @@ func ensureOwned(ctx context.Context, opts OwnedOptions, backend *Backend, start
 	if err != nil {
 		return nil, err
 	}
+	claimed := !found
 	backend.owner = &ownedAdmission{marker: marker, markerPath: layout.markerPath, lockPath: layout.lifecycleLock}
 	if err := waitForOwnedReady(ctx, backend); err != nil {
+		if claimed {
+			if stopErr := stopFreshOwnedSupervisor(layout, marker); stopErr != nil {
+				return nil, errors.Join(err, fmt.Errorf("stop unready herdr supervisor: %w", stopErr))
+			}
+		}
 		return nil, err
 	}
 	return &OwnedSession{Session: session, SocketPath: layout.socketPath, ClientSocketPath: layout.clientSocketPath, backend: backend}, nil
@@ -303,6 +309,18 @@ func claimOwnedSession(
 	return marker, nil
 }
 
+func stopFreshOwnedSupervisor(layout ownedLayout, marker ownerMarker) error {
+	current, found, err := readOwnerMarker(layout.markerPath)
+	if err != nil || !found || current != marker {
+		return fmt.Errorf("ownership marker changed before stopping unready supervisor")
+	}
+	if err := verifyLiveSupervisor(layout.supervisorLock, marker); err != nil {
+		return err
+	}
+	stopStartedOwnedSupervisor(marker.SupervisorPID)
+	return nil
+}
+
 func waitForOwnedReady(ctx context.Context, backend *Backend) error {
 	deadline := time.Now().Add(ownedReadyTimeout)
 	var lastErr error
@@ -310,11 +328,11 @@ func waitForOwnedReady(ctx context.Context, backend *Backend) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		_, probeErr := backend.probeOwned(ctx, *backend.owner)
-		if probeErr == nil {
+		readyErr := validateOwnedReady(ctx, backend)
+		if readyErr == nil {
 			return nil
 		}
-		lastErr = probeErr
+		lastErr = readyErr
 		timer := time.NewTimer(ownedReadyInterval)
 		select {
 		case <-ctx.Done():
@@ -324,6 +342,24 @@ func waitForOwnedReady(ctx context.Context, backend *Backend) error {
 		}
 	}
 	return fmt.Errorf("herdr owned session did not become ready: %w", lastErr)
+}
+
+func validateOwnedReady(ctx context.Context, backend *Backend) error {
+	if backend == nil || backend.owner == nil {
+		return fmt.Errorf("herdr owned readiness requires an ownership admission")
+	}
+	admission := *backend.owner
+	if _, err := backend.probeOwned(ctx, admission); err != nil {
+		return err
+	}
+	marker := admission.marker
+	if err := verifyLiveSupervisor(filepath.Join(marker.RuntimeDir, ownedSupervisorLockName), marker); err != nil {
+		return err
+	}
+	if err := validatePrivateSocket(marker.SocketPath); err != nil {
+		return err
+	}
+	return validatePrivateSocket(marker.ClientSocketPath)
 }
 
 func (b *Backend) acquireOwnedOperation(ctx context.Context) (ownedAdmission, *os.File, error) {
