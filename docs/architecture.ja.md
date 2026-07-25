@@ -54,18 +54,18 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | 層 | パッケージ | 責務 | Class |
 |---|---|---|---|
 | meta | `arch` | 層ルールの CI 強制(唯一のガード)。緩和・allowlist 追加は要精査 | H |
-| infra | `state` | `.fanout/state.json` と lock の読み書き | H |
-| infra | `worktree` | base branch 解決・refresh・`git worktree add` | H |
+| infra | `state` | `.fanout/state.json` と Git common directory 配下の Herdr control registry、各 lock の読み書き | H |
+| infra | `worktree` | base branch 解決・refresh・`git worktree add`、Herdr 用 branch atomic ref 予約と checkout ownership marker | H |
 | infra | `hooks` | ライフサイクルフック実行 | H |
 | infra | `selfupdate` | 自己アップデート | H |
 | infra | `team` | `--team` / `fanout msg` の SQLite バス | H |
 | infra | `settings` | 設定解決。repo config からの watcher・runtime backend 有効化と通知先設定を遮断する安全ゲート | H |
-| infra | `herdrrun` | herdr stable 0.7.5 以上の version gate、fanout-owned session lifecycle と owned mutation、snapshot 投影 | H |
+| infra | `herdrrun` | herdr stable 0.7.5 以上の version gate、fanout-owned session lifecycle と owned mutation、workspace/worktree 実体化、snapshot 投影 | H |
 | core | `backend` | runtime backend 契約・親 stickiness・選択優先順位・矛盾時の fail-closed 判定 | H |
 | app | `watch` | ラベル watcher の 1 サイクル | H |
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
-| app | `panelaunch` | pane 生成オーケストレーション | H |
+| app | `panelaunch` | pane 生成と Herdr workspace/worktree intent phase machine のオーケストレーション | H |
 | ui | `dashboard`(`server.go`) | localhost web サーバの mux・token 検証 | H |
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
 | ui | `dashboard`(`peek.go` / `plan.go`) | capture-pane 前の検証チェーン(記録済み pane のみ。`plan.go` は plan mode かつ codex に限定) | H |

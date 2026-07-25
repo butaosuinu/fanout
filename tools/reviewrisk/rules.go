@@ -96,13 +96,13 @@ var prefixRules = []struct {
 	{"internal/arch/", Rule{ID: "arch", Class: ClassH, Source: SourceDocTable, Note: "層ルールの CI 強制(唯一のガード)"}},
 
 	// infra H.
-	{"internal/infra/state/", Rule{ID: "infra-state", Class: ClassH, Source: SourceDocTable, Note: "state.json と lock の読み書き"}},
-	{"internal/infra/worktree/", Rule{ID: "infra-worktree", Class: ClassH, Source: SourceDocTable, Note: "base branch 解決・refresh・worktree add"}},
+	{"internal/infra/state/", Rule{ID: "infra-state", Class: ClassH, Source: SourceDocTable, Note: "state.json・Herdr control registry と lock の読み書き"}},
+	{"internal/infra/worktree/", Rule{ID: "infra-worktree", Class: ClassH, Source: SourceDocTable, Note: "base branch 解決・refresh・worktree add・Herdr branch 予約"}},
 	{"internal/infra/hooks/", Rule{ID: "infra-hooks", Class: ClassH, Source: SourceDocTable, Note: "ライフサイクルフック実行"}},
 	{"internal/infra/selfupdate/", Rule{ID: "infra-selfupdate", Class: ClassH, Source: SourceDocTable, Note: "自己アップデート"}},
 	{"internal/infra/team/", Rule{ID: "infra-team", Class: ClassH, Source: SourceDocTable, Note: "team SQLite バス"}},
 	{"internal/infra/settings/", Rule{ID: "infra-settings", Class: ClassH, Source: SourceDocTable, Note: "設定解決の安全ゲート"}},
-	{"internal/infra/herdrrun/", Rule{ID: "infra-herdrrun", Class: ClassH, Source: SourceDocTable, Note: "herdr version gate、owned session lifecycle、owned mutation、snapshot 投影"}},
+	{"internal/infra/herdrrun/", Rule{ID: "infra-herdrrun", Class: ClassH, Source: SourceDocTable, Note: "herdr version gate、owned session lifecycle、owned mutation、workspace/worktree 実体化、snapshot 投影"}},
 
 	// infra M.
 	{"internal/infra/ghissue/", Rule{ID: "infra-ghissue", Class: ClassM, Source: SourceDocTable, Note: "GitHub issue/PR 読み書き"}},
@@ -127,7 +127,7 @@ var prefixRules = []struct {
 	{"internal/app/watch/", Rule{ID: "app-watch", Class: ClassH, Source: SourceDocTable, Note: "ラベル watcher の 1 サイクル"}},
 	{"internal/app/briefing/", Rule{ID: "app-briefing", Class: ClassH, Source: SourceDocTable, Note: "エージェントに注入するプロンプト本文"}},
 	{"internal/app/lifecycle/", Rule{ID: "app-lifecycle", Class: ClassH, Source: SourceDocTable, Note: "close/merge/cleanup"}},
-	{"internal/app/panelaunch/", Rule{ID: "app-panelaunch", Class: ClassH, Source: SourceDocTable, Note: "pane 生成オーケストレーション"}},
+	{"internal/app/panelaunch/", Rule{ID: "app-panelaunch", Class: ClassH, Source: SourceDocTable, Note: "pane 生成・Herdr intent phase machine のオーケストレーション"}},
 
 	// app M.
 	{"internal/app/panelayout/", Rule{ID: "app-panelayout", Class: ClassM, Source: SourceDocTable, Note: "ペインレイアウト計算"}},

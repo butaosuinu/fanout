@@ -34,6 +34,7 @@ type runtimeBackendInputs struct {
 	userDefault        backend.Name
 	rows               []backend.Binding
 	provisionalIntents []backend.Binding
+	suppliedIntents    []backend.Binding
 
 	herdrSession    string
 	herdrSocketPath string
@@ -123,7 +124,10 @@ func resolveTUILaunchRuntimeForTarget(projectRoot, session, target string, cfg *
 // worktree. verify repeats parent stickiness against the store held under the
 // launch lock.
 func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) (launchBackendResolution, error) {
-	inputs := loadRuntimeBackendInputs(cfg, projectRoot, store, provisionalIntents)
+	inputs, err := loadLaunchRuntimeBackendInputs(cfg, projectRoot, store, provisionalIntents)
+	if err != nil {
+		return launchBackendResolution{}, err
+	}
 	rows, err := runtimeBackendBindings(projectRoot, store)
 	if err != nil {
 		return launchBackendResolution{}, err
@@ -159,6 +163,9 @@ func backendSelectionVerifier(selection backend.Selection, inputs runtimeBackend
 			return err
 		}
 		recheck.rows = rows
+		if err := refreshHerdrIntentBindings(&recheck); err != nil {
+			return err
+		}
 		got, resolveErr := resolveBackendSelection(parent, recheck)
 		if resolveErr != nil {
 			return resolveErr
@@ -253,9 +260,41 @@ func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store st
 		userDefault:        userDefault,
 		rows:               backendBindings(projectRoot, store),
 		provisionalIntents: append([]backend.Binding(nil), provisionalIntents...),
+		suppliedIntents:    append([]backend.Binding(nil), provisionalIntents...),
 		herdrSession:       os.Getenv("HERDR_SESSION"),
 		herdrSocketPath:    os.Getenv("HERDR_SOCKET_PATH"),
 	}
+}
+
+func loadLaunchRuntimeBackendInputs(
+	cfg *cliflags.Config,
+	projectRoot string,
+	store state.Store,
+	provisionalIntents []backend.Binding,
+) (runtimeBackendInputs, error) {
+	inputs := loadRuntimeBackendInputs(cfg, projectRoot, store, provisionalIntents)
+	if err := refreshHerdrIntentBindings(&inputs); err != nil {
+		return runtimeBackendInputs{}, err
+	}
+	return inputs, nil
+}
+
+func refreshHerdrIntentBindings(inputs *runtimeBackendInputs) error {
+	if strings.TrimSpace(inputs.projectRoot) == "" {
+		if inputs.suppliedIntents != nil {
+			inputs.provisionalIntents = append([]backend.Binding(nil), inputs.suppliedIntents...)
+		}
+		return nil
+	}
+	control, err := state.LoadHerdrControl(inputs.projectRoot)
+	if err != nil {
+		return fmt.Errorf("load provisional herdr launch intents: %w", err)
+	}
+	inputs.provisionalIntents = append(
+		append([]backend.Binding(nil), inputs.suppliedIntents...),
+		control.ProvisionalBindings()...,
+	)
+	return nil
 }
 
 func resolveBackendSelection(parent string, inputs runtimeBackendInputs) (backend.Selection, error) {

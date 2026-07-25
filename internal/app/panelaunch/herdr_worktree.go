@@ -1,0 +1,903 @@
+package panelaunch
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
+	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
+)
+
+const (
+	minHerdrWorktreeTimeout = 3 * time.Second
+	maxHerdrWorktreeTimeout = 300 * time.Second
+)
+
+var (
+	ErrHerdrManualCleanupRequired     = errors.New("herdr launch requires manual cleanup")
+	ErrHerdrLauncherReadinessDeferred = errors.New("herdr launcher readiness is deferred to issue #528")
+)
+
+type HerdrWorktreeRuntime interface {
+	VerifyWorktreeSetupPolicy(context.Context) error
+	ObserveWorkspaces(context.Context) ([]herdrrun.WorkspaceObservation, error)
+	MutateWorktree(context.Context, herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error)
+}
+
+type HerdrWorktreeRequest struct {
+	Parent       string
+	IssueNum     int
+	TaskID       string
+	ProjectRoot  string
+	SourceRoot   string
+	Slug         string
+	BranchName   string
+	BaseBranch   string
+	NoRefresh    bool
+	WorktreePath string
+
+	CoordinatorWorkspaceID string
+	HerdrSession           string
+	HerdrSocketPath        string
+	TotalTimeout           time.Duration
+}
+
+type HerdrWorktreeResult struct {
+	Intent state.HerdrLaunchIntent
+	Pane   backend.PaneRef
+}
+
+// HerdrWorktreeHooks is an internal seam for deterministic tests and future
+// operation-lease wiring. Production callers normally leave it zero-valued.
+type HerdrWorktreeHooks struct {
+	Now        func() time.Time
+	Random     func() (string, error)
+	PhaseSaved func(state.HerdrLaunchPhase) error
+}
+
+// RealizeHerdrWorktree advances through worktree-realized. It deliberately
+// fails closed at the launcher boundary: issue #528 owns launcher readiness,
+// token issuance, agent start, and the transition to worktree-ready.
+func RealizeHerdrWorktree(
+	ctx context.Context,
+	req HerdrWorktreeRequest,
+	runtime HerdrWorktreeRuntime,
+	hooks HerdrWorktreeHooks,
+) (HerdrWorktreeResult, error) {
+	if ctx == nil {
+		return HerdrWorktreeResult{}, fmt.Errorf("realize herdr worktree requires a context")
+	}
+	if runtime == nil {
+		return HerdrWorktreeResult{}, fmt.Errorf("realize herdr worktree requires a runtime")
+	}
+	if err := validateHerdrWorktreeRequest(req); err != nil {
+		return HerdrWorktreeResult{}, err
+	}
+	hooks = normalizeHerdrWorktreeHooks(hooks)
+
+	intentID, err := state.HerdrIntentID(req.Parent, req.IssueNum, req.TaskID)
+	if err != nil {
+		return HerdrWorktreeResult{}, err
+	}
+	control, err := state.LoadHerdrControl(req.ProjectRoot)
+	if err != nil {
+		return HerdrWorktreeResult{}, err
+	}
+	intent, found := control.FindIntent(intentID)
+	if found {
+		if validateErr := validateSavedHerdrWorktreeIntent(req, intent); validateErr != nil {
+			return HerdrWorktreeResult{}, validateErr
+		}
+	} else {
+		intent, err = planFreshHerdrWorktree(req, intentID, hooks)
+		if err != nil {
+			return HerdrWorktreeResult{}, err
+		}
+		if err := notifyHerdrPhase(hooks, intent.Phase); err != nil {
+			return HerdrWorktreeResult{}, err
+		}
+	}
+	return advanceHerdrWorktree(ctx, req, runtime, hooks, intent)
+}
+
+// ReleaseHerdrReservationBeforeMutation is the only automatic reservation
+// release lane. It requires a still-unissued worktree request plus exact Git
+// and runtime absence, then compare-and-deletes the owned ref. Once the intent
+// reaches worktree-starting this function refuses to touch the branch.
+func ReleaseHerdrReservationBeforeMutation(
+	ctx context.Context,
+	projectRoot, intentID string,
+	runtime HerdrWorktreeRuntime,
+	reason string,
+) error {
+	if ctx == nil || runtime == nil {
+		return fmt.Errorf("release herdr reservation requires context and runtime")
+	}
+	control, err := state.LoadHerdrControl(projectRoot)
+	if err != nil {
+		return err
+	}
+	intent, found := control.FindIntent(intentID)
+	if !found {
+		return fmt.Errorf("herdr intent %s does not exist", intentID)
+	}
+	if intent.OperationState != state.HerdrOperationActive ||
+		intent.Phase != state.HerdrPhaseWorktreePlanned ||
+		intent.BranchReceipt == nil ||
+		intent.MutationRequest != nil ||
+		intent.MutationReceipt != nil {
+		return fmt.Errorf("herdr intent %s is not a reservation-only launch", intentID)
+	}
+	pathAbsent, registered, _, err := worktree.CheckoutGitState(projectRoot, intent.WorktreePath, intent.FullBranchRef)
+	if err != nil {
+		return err
+	}
+	if !pathAbsent || registered {
+		return fmt.Errorf("herdr reservation release cannot prove checkout absence")
+	}
+	releasing, err := transitionHerdrIntent(projectRoot, intent, state.HerdrPhaseWorktreePlanned, func(next *state.HerdrLaunchIntent) {
+		next.Phase = state.HerdrPhaseBranchReleaseStarting
+		next.FailureReason = reason
+	})
+	if err != nil {
+		return err
+	}
+	pathAbsent, registered, _, err = worktree.CheckoutGitState(projectRoot, releasing.WorktreePath, releasing.FullBranchRef)
+	if err != nil {
+		return failHerdrIntent(projectRoot, releasing, "recheck checkout absence before reservation release: "+err.Error())
+	}
+	if !pathAbsent || registered {
+		return failHerdrIntent(projectRoot, releasing, "herdr reservation release lost checkout absence")
+	}
+	workspaces, err := runtime.ObserveWorkspaces(ctx)
+	if err != nil {
+		return failHerdrIntent(projectRoot, releasing, "herdr reservation release cannot prove runtime absence: "+err.Error())
+	}
+	for _, workspace := range workspaces {
+		if workspace.Label == releasing.WorktreeOwnershipNonce ||
+			(workspace.Path != "" && filepath.Clean(workspace.Path) == filepath.Clean(releasing.WorktreePath)) {
+			return failHerdrIntent(projectRoot, releasing, "herdr reservation release found a matching runtime workspace")
+		}
+	}
+	if err := worktree.ReleaseReservedBranch(projectRoot, releasing.FullBranchRef, releasing.LineageBaseSHA); err != nil {
+		return failHerdrIntent(projectRoot, releasing, "compare-delete herdr reservation: "+err.Error())
+	}
+	return completeHerdrReservationRelease(projectRoot, releasing, reason)
+}
+
+func planFreshHerdrWorktree(
+	req HerdrWorktreeRequest,
+	intentID string,
+	hooks HerdrWorktreeHooks,
+) (state.HerdrLaunchIntent, error) {
+	if err := worktree.EnsureLocalExclude(req.ProjectRoot); err != nil {
+		return state.HerdrLaunchIntent{}, err
+	}
+	base, err := worktree.ResolveHerdrBase(req.ProjectRoot, req.BaseBranch, req.NoRefresh)
+	if err != nil {
+		return state.HerdrLaunchIntent{}, err
+	}
+	fullBranchRef, err := worktree.HerdrBranchRef(req.ProjectRoot, req.BranchName)
+	if err != nil {
+		return state.HerdrLaunchIntent{}, err
+	}
+	if oid, found, observeErr := worktree.ObserveBranch(req.ProjectRoot, fullBranchRef); observeErr != nil {
+		return state.HerdrLaunchIntent{}, observeErr
+	} else if found {
+		return state.HerdrLaunchIntent{}, fmt.Errorf("herdr branch %s already exists at %s", fullBranchRef, oid)
+	}
+	pathAbsent, registered, headSHA, err := worktree.CheckoutGitState(req.ProjectRoot, req.WorktreePath, fullBranchRef)
+	if err != nil {
+		return state.HerdrLaunchIntent{}, err
+	}
+	if !pathAbsent || registered {
+		return state.HerdrLaunchIntent{}, fmt.Errorf("herdr worktree path %s already exists or is registered", req.WorktreePath)
+	}
+	sourceRoot, err := physicalPath(req.SourceRoot)
+	if err != nil {
+		return state.HerdrLaunchIntent{}, fmt.Errorf("canonicalize herdr source root: %w", err)
+	}
+	launchNonce, err := hooks.Random()
+	if err != nil {
+		return state.HerdrLaunchIntent{}, fmt.Errorf("create herdr launch nonce: %w", err)
+	}
+	ownershipNonce, err := hooks.Random()
+	if err != nil {
+		return state.HerdrLaunchIntent{}, fmt.Errorf("create herdr worktree ownership nonce: %w", err)
+	}
+	lineageID := herdrLineageID(intentID, launchNonce)
+	now := hooks.Now().UTC()
+	intent := state.HerdrLaunchIntent{
+		IntentID:       intentID,
+		Parent:         req.Parent,
+		IssueNum:       req.IssueNum,
+		TaskID:         req.TaskID,
+		Backend:        backend.Herdr,
+		Operation:      "child-worktree",
+		OperationState: state.HerdrOperationActive,
+		Phase:          state.HerdrPhaseBranchPlanned,
+
+		SourceRootPhysical: sourceRoot,
+		Slug:               req.Slug,
+		BranchName:         req.BranchName,
+		FullBranchRef:      fullBranchRef,
+		WorktreePath:       filepath.Clean(req.WorktreePath),
+		LineageID:          lineageID,
+
+		ResolvedBaseRef:     base.ResolvedRef,
+		ResolvedBaseName:    base.ResolvedName,
+		EffectiveBaseBranch: base.EffectiveBase,
+		PRBaseName:          base.PRBaseName,
+		LineageBaseSHA:      base.SHA,
+		LaunchHeadSHA:       base.SHA,
+
+		HerdrSession:           req.HerdrSession,
+		HerdrSocketPath:        req.HerdrSocketPath,
+		WorktreeOwnershipNonce: ownershipNonce,
+		LaunchNonce:            launchNonce,
+		TotalTimeoutMS:         req.TotalTimeout.Milliseconds(),
+		LaunchStartedUnixMS:    now.UnixMilli(),
+		LaunchExpiresUnixMS:    now.Add(req.TotalTimeout).UnixMilli(),
+		BranchRequest: &state.HerdrBranchRequest{
+			FullRef: fullBranchRef,
+			NewOID:  base.SHA,
+			OldOID:  "",
+		},
+		BranchPreState: &state.HerdrGitPreState{
+			BranchAbsent:       true,
+			PathAbsent:         pathAbsent,
+			CheckoutRegistered: registered,
+			ObservedHeadSHA:    headSHA,
+		},
+	}
+
+	locked, err := state.LockHerdrControl(req.ProjectRoot)
+	if err != nil {
+		return state.HerdrLaunchIntent{}, err
+	}
+	defer func() {
+		// The state mutation result is authoritative; an unlock error cannot be
+		// repaired here and the process still closes the descriptor on return.
+		_ = locked.Unlock()
+	}()
+	if _, exists := locked.FindIntent(intentID); exists {
+		return state.HerdrLaunchIntent{}, fmt.Errorf("herdr intent %s appeared while planning", intentID)
+	}
+	for _, lineage := range locked.Lineages {
+		if lineage.FullBranchRef == fullBranchRef || filepath.Clean(lineage.WorktreePath) == filepath.Clean(req.WorktreePath) {
+			return state.HerdrLaunchIntent{}, fmt.Errorf("herdr branch/path is already owned by lineage %s", lineage.LineageID)
+		}
+	}
+	locked.UpsertIntent(intent)
+	if err := locked.Save(); err != nil {
+		return state.HerdrLaunchIntent{}, err
+	}
+	return intent, nil
+}
+
+func advanceHerdrWorktree(
+	ctx context.Context,
+	req HerdrWorktreeRequest,
+	runtime HerdrWorktreeRuntime,
+	hooks HerdrWorktreeHooks,
+	intent state.HerdrLaunchIntent,
+) (HerdrWorktreeResult, error) {
+	for {
+		if intent.OperationState == state.HerdrOperationManualCleanupRequired {
+			return HerdrWorktreeResult{}, fmt.Errorf("%w: %s", ErrHerdrManualCleanupRequired, intent.FailureReason)
+		}
+		if intent.OperationState != state.HerdrOperationActive {
+			return HerdrWorktreeResult{}, fmt.Errorf("herdr intent %s is terminal: %s", intent.IntentID, intent.OperationState)
+		}
+		if intent.Phase != state.HerdrPhaseWorktreeReady && hooks.Now().UTC().UnixMilli() >= intent.LaunchExpiresUnixMS {
+			return HerdrWorktreeResult{}, failHerdrIntent(req.ProjectRoot, intent, "herdr worktree launch deadline expired")
+		}
+		switch intent.Phase {
+		case state.HerdrPhaseBranchPlanned:
+			var err error
+			intent, err = reserveHerdrBranch(req, hooks, intent)
+			if err != nil {
+				return HerdrWorktreeResult{}, err
+			}
+		case state.HerdrPhaseBranchStarting:
+			return HerdrWorktreeResult{}, failHerdrIntent(
+				req.ProjectRoot,
+				intent,
+				"branch reservation request may have been issued; refusing blind retry",
+			)
+		case state.HerdrPhaseWorktreePlanned:
+			var err error
+			intent, err = realizeHerdrMutation(ctx, req, runtime, hooks, intent)
+			if err != nil {
+				return HerdrWorktreeResult{}, err
+			}
+		case state.HerdrPhaseWorktreeStarting:
+			return HerdrWorktreeResult{}, failHerdrIntent(
+				req.ProjectRoot,
+				intent,
+				"worktree create/open request may have been issued; refusing blind retry",
+			)
+		case state.HerdrPhaseWorktreeRealized:
+			if err := verifyHerdrWorktreeRealized(ctx, req, runtime, hooks, intent); err != nil {
+				return HerdrWorktreeResult{}, err
+			}
+			return herdrWorktreeDeferredResult(intent), ErrHerdrLauncherReadinessDeferred
+		case state.HerdrPhaseWorktreeReady:
+			if intent.MutationReceipt == nil {
+				return HerdrWorktreeResult{}, failHerdrIntent(req.ProjectRoot, intent, "worktree-ready intent has no mutation receipt")
+			}
+			return HerdrWorktreeResult{
+				Intent: intent,
+				Pane: backend.PaneRef{
+					Backend:   backend.Herdr,
+					Workspace: intent.MutationReceipt.WorkspaceID,
+					Pane:      intent.MutationReceipt.PaneID,
+				},
+			}, nil
+		case state.HerdrPhaseBranchReleaseStarting:
+			return HerdrWorktreeResult{}, failHerdrIntent(
+				req.ProjectRoot,
+				intent,
+				"branch reservation release may have been issued; refusing blind retry",
+			)
+		default:
+			return HerdrWorktreeResult{}, failHerdrIntent(req.ProjectRoot, intent, "unsupported child worktree phase "+string(intent.Phase))
+		}
+	}
+}
+
+func reserveHerdrBranch(
+	req HerdrWorktreeRequest,
+	hooks HerdrWorktreeHooks,
+	intent state.HerdrLaunchIntent,
+) (state.HerdrLaunchIntent, error) {
+	if err := worktree.VerifyReservedBranchBase(req.ProjectRoot, intent.ResolvedBaseRef, intent.LineageBaseSHA); err != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	}
+	if oid, found, err := worktree.ObserveBranch(req.ProjectRoot, intent.FullBranchRef); err != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	} else if found {
+		return intent, failHerdrIntent(
+			req.ProjectRoot,
+			intent,
+			fmt.Sprintf("herdr branch %s appeared at %s before reservation", intent.FullBranchRef, oid),
+		)
+	}
+	starting, err := transitionHerdrIntent(req.ProjectRoot, intent, state.HerdrPhaseBranchPlanned, func(next *state.HerdrLaunchIntent) {
+		next.Phase = state.HerdrPhaseBranchStarting
+	})
+	if err != nil {
+		return intent, err
+	}
+	if notifyErr := notifyHerdrPhase(hooks, starting.Phase); notifyErr != nil {
+		return starting, notifyErr
+	}
+	if reserveErr := worktree.ReserveBranch(req.ProjectRoot, starting.FullBranchRef, starting.LineageBaseSHA); reserveErr != nil {
+		oid, found, observeErr := worktree.ObserveBranch(req.ProjectRoot, starting.FullBranchRef)
+		reason := fmt.Sprintf("branch reservation failed: %v", reserveErr)
+		if observeErr != nil || found {
+			if observeErr != nil {
+				reason += fmt.Sprintf("; observe reservation: %v", observeErr)
+			} else {
+				reason += fmt.Sprintf("; observed ref %s", oid)
+			}
+			return starting, failHerdrIntent(req.ProjectRoot, starting, reason)
+		}
+		aborted, saveErr := transitionHerdrIntent(req.ProjectRoot, starting, state.HerdrPhaseBranchStarting, func(next *state.HerdrLaunchIntent) {
+			next.OperationState = state.HerdrOperationLaunchAborted
+			next.FailureReason = reason
+		})
+		if saveErr != nil {
+			return starting, saveErr
+		}
+		return aborted, reserveErr
+	}
+
+	planned, err := completeHerdrBranchReservation(req.ProjectRoot, starting)
+	if err != nil {
+		return starting, err
+	}
+	if err := notifyHerdrPhase(hooks, planned.Phase); err != nil {
+		return planned, err
+	}
+	return planned, nil
+}
+
+func realizeHerdrMutation(
+	ctx context.Context,
+	req HerdrWorktreeRequest,
+	runtime HerdrWorktreeRuntime,
+	hooks HerdrWorktreeHooks,
+	intent state.HerdrLaunchIntent,
+) (state.HerdrLaunchIntent, error) {
+	callCtx, cancel, err := boundedHerdrCallContext(ctx, intent, hooks.Now())
+	if err != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	}
+	defer cancel()
+	if intent.BranchReceipt == nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, "worktree-planned intent has no branch reservation receipt")
+	}
+	if verifyErr := worktree.VerifyReservedBranch(req.ProjectRoot, intent.ResolvedBaseRef, intent.LineageBaseSHA, intent.FullBranchRef); verifyErr != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, verifyErr.Error())
+	}
+	pathAbsent, registered, headSHA, err := worktree.CheckoutGitState(req.ProjectRoot, intent.WorktreePath, intent.FullBranchRef)
+	if err != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	}
+	if !pathAbsent || registered {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, "fresh herdr worktree path already exists or is registered")
+	}
+	observed, err := runtime.ObserveWorkspaces(callCtx)
+	if err != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, "observe worktree pre-state: "+err.Error())
+	}
+	for _, workspace := range observed {
+		if workspace.Label == intent.WorktreeOwnershipNonce || filepath.Clean(workspace.Path) == filepath.Clean(intent.WorktreePath) {
+			return intent, failHerdrIntent(req.ProjectRoot, intent, "worktree pre-state contains a conflicting workspace")
+		}
+	}
+	if policyErr := runtime.VerifyWorktreeSetupPolicy(callCtx); policyErr != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, "verify herdr setup-hook policy: "+policyErr.Error())
+	}
+	preState := mutationPreState(observed, state.HerdrGitPreState{
+		PathAbsent:         pathAbsent,
+		CheckoutRegistered: registered,
+		ObservedHeadSHA:    headSHA,
+	})
+	request := state.HerdrMutationRequest{
+		Kind:        state.HerdrMutationWorktreeCreate,
+		WorkspaceID: req.CoordinatorWorkspaceID,
+		Branch:      intent.BranchName,
+		Base:        intent.LineageBaseSHA,
+		Path:        intent.WorktreePath,
+		Label:       intent.WorktreeOwnershipNonce,
+		NoFocus:     true,
+	}
+	starting, err := transitionHerdrIntent(req.ProjectRoot, intent, state.HerdrPhaseWorktreePlanned, func(next *state.HerdrLaunchIntent) {
+		next.MutationPreState = &preState
+		next.MutationRequest = &request
+		next.Phase = state.HerdrPhaseWorktreeStarting
+	})
+	if err != nil {
+		return intent, err
+	}
+	if notifyErr := notifyHerdrPhase(hooks, starting.Phase); notifyErr != nil {
+		return starting, notifyErr
+	}
+
+	result, err := runtime.MutateWorktree(callCtx, toHerdrMutationRequest(request))
+	if err != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, "worktree mutation failed or response was incomplete: "+err.Error())
+	}
+	if validateErr := validateAlreadyOpen(starting, result); validateErr != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, validateErr.Error())
+	}
+	markerPath, err := worktree.WriteHerdrOwnershipMarker(starting.WorktreePath, starting.WorktreeOwnershipNonce)
+	if err != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, err.Error())
+	}
+	receipt := mutationReceipt(result, markerPath)
+	if verifyErr := verifyHerdrWorktreePostState(req.ProjectRoot, starting, receipt); verifyErr != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, verifyErr.Error())
+	}
+	realized, err := transitionHerdrIntent(req.ProjectRoot, starting, state.HerdrPhaseWorktreeStarting, func(next *state.HerdrLaunchIntent) {
+		next.MutationReceipt = &receipt
+		next.Phase = state.HerdrPhaseWorktreeRealized
+	})
+	if err != nil {
+		return starting, err
+	}
+	if err := notifyHerdrPhase(hooks, realized.Phase); err != nil {
+		return realized, err
+	}
+	return realized, nil
+}
+
+func verifyHerdrWorktreeRealized(
+	ctx context.Context,
+	req HerdrWorktreeRequest,
+	runtime HerdrWorktreeRuntime,
+	hooks HerdrWorktreeHooks,
+	intent state.HerdrLaunchIntent,
+) error {
+	callCtx, cancel, err := boundedHerdrCallContext(ctx, intent, hooks.Now())
+	if err != nil {
+		return failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	}
+	defer cancel()
+	if intent.MutationReceipt == nil {
+		return failHerdrIntent(req.ProjectRoot, intent, "worktree-realized intent has no mutation receipt")
+	}
+	if verifyErr := verifyHerdrWorktreePostState(req.ProjectRoot, intent, *intent.MutationReceipt); verifyErr != nil {
+		return failHerdrIntent(req.ProjectRoot, intent, verifyErr.Error())
+	}
+	observed, err := runtime.ObserveWorkspaces(callCtx)
+	if err != nil {
+		return failHerdrIntent(req.ProjectRoot, intent, "observe realized worktree: "+err.Error())
+	}
+	matches := 0
+	for _, workspace := range observed {
+		if workspace.WorkspaceID != intent.MutationReceipt.WorkspaceID {
+			continue
+		}
+		matches++
+		if workspace.Label != intent.WorktreeOwnershipNonce ||
+			filepath.Clean(workspace.Path) != filepath.Clean(intent.WorktreePath) ||
+			workspace.Pane.Pane != intent.MutationReceipt.PaneID ||
+			workspace.TerminalID != intent.MutationReceipt.TerminalID ||
+			filepath.Clean(workspace.CWD) != filepath.Clean(intent.WorktreePath) {
+			return failHerdrIntent(req.ProjectRoot, intent, "realized herdr workspace identity changed before launcher handoff")
+		}
+	}
+	if matches != 1 {
+		return failHerdrIntent(req.ProjectRoot, intent, fmt.Sprintf("realized herdr workspace has %d matching observations", matches))
+	}
+	return nil
+}
+
+func herdrWorktreeDeferredResult(intent state.HerdrLaunchIntent) HerdrWorktreeResult {
+	return HerdrWorktreeResult{
+		Intent: intent,
+		Pane: backend.PaneRef{
+			Backend:   backend.Herdr,
+			Workspace: intent.MutationReceipt.WorkspaceID,
+			Pane:      intent.MutationReceipt.PaneID,
+		},
+	}
+}
+
+func verifyHerdrWorktreePostState(projectRoot string, intent state.HerdrLaunchIntent, receipt state.HerdrMutationReceipt) error {
+	if receipt.WorkspaceID == "" || receipt.WorkspaceLabel != intent.WorktreeOwnershipNonce ||
+		receipt.PaneID == "" || receipt.TerminalID == "" ||
+		filepath.Clean(receipt.Path) != filepath.Clean(intent.WorktreePath) ||
+		filepath.Clean(receipt.CWD) != filepath.Clean(intent.WorktreePath) ||
+		receipt.RepoKey == "" {
+		return fmt.Errorf("herdr worktree mutation receipt does not match intent")
+	}
+	if err := worktree.VerifyHerdrOwnershipMarker(intent.WorktreePath, receipt.GitDirMarkerPath, intent.WorktreeOwnershipNonce); err != nil {
+		return err
+	}
+	pathAbsent, registered, headSHA, err := worktree.CheckoutGitState(projectRoot, intent.WorktreePath, intent.FullBranchRef)
+	if err != nil {
+		return err
+	}
+	if pathAbsent || !registered || headSHA != intent.LaunchHeadSHA {
+		return fmt.Errorf(
+			"herdr checkout post-state = absent:%t registered:%t head:%s, want present/registered/%s",
+			pathAbsent,
+			registered,
+			headSHA,
+			intent.LaunchHeadSHA,
+		)
+	}
+	branchOID, found, err := worktree.ObserveBranch(projectRoot, intent.FullBranchRef)
+	if err != nil {
+		return err
+	}
+	if !found || branchOID != headSHA {
+		return fmt.Errorf("herdr checkout HEAD and reserved branch disagree")
+	}
+	return nil
+}
+
+func validateAlreadyOpen(intent state.HerdrLaunchIntent, result herdrrun.WorktreeMutationResult) error {
+	if intent.MutationRequest == nil || intent.MutationPreState == nil {
+		return fmt.Errorf("herdr worktree mutation is missing saved request/pre-state")
+	}
+	wasPresent := false
+	wasBound := false
+	for _, workspace := range intent.MutationPreState.Workspaces {
+		if workspace.WorkspaceID != result.WorkspaceID {
+			continue
+		}
+		wasPresent = true
+		if workspace.WorkspaceID == intent.MutationPreState.ExpectedAlreadyOpenID &&
+			workspace.Label == intent.MutationPreState.ExpectedAlreadyOpenLabel &&
+			workspace.Label == intent.WorktreeOwnershipNonce &&
+			filepath.Clean(workspace.Path) == filepath.Clean(intent.WorktreePath) &&
+			workspace.RepoKey != "" {
+			wasBound = true
+		}
+	}
+	switch intent.MutationRequest.Kind {
+	case state.HerdrMutationWorktreeCreate:
+		if result.AlreadyOpen {
+			return fmt.Errorf("worktree create returned already_open")
+		}
+		if wasPresent {
+			return fmt.Errorf("worktree create response reused a pre-state workspace id")
+		}
+	case state.HerdrMutationWorktreeOpen:
+		if result.AlreadyOpen && !wasBound {
+			return fmt.Errorf("worktree open already_open identity was not bound in pre-state")
+		}
+		if !result.AlreadyOpen && wasPresent {
+			return fmt.Errorf("worktree open response reused a pre-state workspace id without already_open")
+		}
+	default:
+		return fmt.Errorf("unsupported saved herdr worktree mutation %q", intent.MutationRequest.Kind)
+	}
+	return nil
+}
+
+func transitionHerdrIntent(
+	projectRoot string,
+	previous state.HerdrLaunchIntent,
+	expectedPhase state.HerdrLaunchPhase,
+	mutate func(*state.HerdrLaunchIntent),
+) (state.HerdrLaunchIntent, error) {
+	locked, err := state.LockHerdrControl(projectRoot)
+	if err != nil {
+		return previous, err
+	}
+	defer func() {
+		// Preserve the transition error; Unlock still closes the descriptor.
+		_ = locked.Unlock()
+	}()
+	current, found := locked.FindIntent(previous.IntentID)
+	if !found {
+		return previous, fmt.Errorf("herdr intent %s disappeared", previous.IntentID)
+	}
+	if current.OperationState != state.HerdrOperationActive || current.Phase != expectedPhase || !reflect.DeepEqual(current, previous) {
+		return previous, fmt.Errorf("herdr intent %s changed concurrently at phase %s", previous.IntentID, expectedPhase)
+	}
+	mutate(&current)
+	locked.UpsertIntent(current)
+	if err := locked.Save(); err != nil {
+		return previous, err
+	}
+	return current, nil
+}
+
+func failHerdrIntent(projectRoot string, previous state.HerdrLaunchIntent, reason string) error {
+	if previous.OperationState == state.HerdrOperationManualCleanupRequired {
+		return fmt.Errorf("%w: %s", ErrHerdrManualCleanupRequired, previous.FailureReason)
+	}
+	_, err := transitionHerdrIntent(projectRoot, previous, previous.Phase, func(next *state.HerdrLaunchIntent) {
+		next.OperationState = state.HerdrOperationManualCleanupRequired
+		next.FailureReason = reason
+	})
+	if err != nil {
+		return errors.Join(fmt.Errorf("%w: %s", ErrHerdrManualCleanupRequired, reason), err)
+	}
+	return fmt.Errorf("%w: %s", ErrHerdrManualCleanupRequired, reason)
+}
+
+func completeHerdrBranchReservation(
+	projectRoot string,
+	starting state.HerdrLaunchIntent,
+) (state.HerdrLaunchIntent, error) {
+	locked, err := state.LockHerdrControl(projectRoot)
+	if err != nil {
+		return starting, err
+	}
+	defer func() {
+		// Preserve the receipt-save error; Unlock still closes the descriptor.
+		_ = locked.Unlock()
+	}()
+	current, found := locked.FindIntent(starting.IntentID)
+	if !found || current.OperationState != state.HerdrOperationActive ||
+		current.Phase != state.HerdrPhaseBranchStarting ||
+		!reflect.DeepEqual(current, starting) {
+		return starting, fmt.Errorf("herdr intent %s changed before branch receipt save", starting.IntentID)
+	}
+	current.BranchReceipt = &state.HerdrBranchReceipt{
+		FullRef: current.FullBranchRef,
+		NewOID:  current.LineageBaseSHA,
+		OldOID:  "",
+	}
+	current.Phase = state.HerdrPhaseWorktreePlanned
+	locked.UpsertIntent(current)
+	locked.UpsertLineage(state.HerdrBranchLineage{
+		LineageID:           current.LineageID,
+		IntentID:            current.IntentID,
+		Parent:              current.Parent,
+		IssueNum:            current.IssueNum,
+		TaskID:              current.TaskID,
+		FullBranchRef:       current.FullBranchRef,
+		WorktreePath:        current.WorktreePath,
+		ResolvedBaseRef:     current.ResolvedBaseRef,
+		ResolvedBaseName:    current.ResolvedBaseName,
+		EffectiveBaseBranch: current.EffectiveBaseBranch,
+		PRBaseName:          current.PRBaseName,
+		LineageBaseSHA:      current.LineageBaseSHA,
+		LastOwnedHeadSHA:    current.LaunchHeadSHA,
+		State:               "active",
+	})
+	if err := locked.Save(); err != nil {
+		return starting, err
+	}
+	return current, nil
+}
+
+func completeHerdrReservationRelease(
+	projectRoot string,
+	releasing state.HerdrLaunchIntent,
+	reason string,
+) error {
+	locked, err := state.LockHerdrControl(projectRoot)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Preserve the terminal-save result; Unlock still closes the descriptor.
+		_ = locked.Unlock()
+	}()
+	current, found := locked.FindIntent(releasing.IntentID)
+	if !found || current.OperationState != state.HerdrOperationActive ||
+		current.Phase != state.HerdrPhaseBranchReleaseStarting ||
+		!reflect.DeepEqual(current, releasing) {
+		return fmt.Errorf("herdr intent %s changed before reservation release receipt", releasing.IntentID)
+	}
+	current.OperationState = state.HerdrOperationLaunchAborted
+	current.FailureReason = reason
+	locked.UpsertIntent(current)
+	lineageFound := false
+	for i := range locked.Lineages {
+		if locked.Lineages[i].LineageID != releasing.LineageID {
+			continue
+		}
+		lineageFound = true
+		locked.Lineages[i].State = "aborted"
+	}
+	if !lineageFound {
+		return fmt.Errorf("herdr lineage %s disappeared before reservation release receipt", releasing.LineageID)
+	}
+	return locked.Save()
+}
+
+func validateHerdrWorktreeRequest(req HerdrWorktreeRequest) error {
+	if req.TotalTimeout < minHerdrWorktreeTimeout || req.TotalTimeout > maxHerdrWorktreeTimeout ||
+		req.TotalTimeout%time.Millisecond != 0 {
+		return fmt.Errorf("herdr worktree total timeout must be 3s..300s at millisecond precision")
+	}
+	if req.ProjectRoot == "" || req.SourceRoot == "" || req.Slug == "" || req.BranchName == "" ||
+		req.BaseBranch == "" || req.WorktreePath == "" || req.CoordinatorWorkspaceID == "" ||
+		req.HerdrSession == "" || req.HerdrSocketPath == "" {
+		return fmt.Errorf("herdr worktree request is incomplete")
+	}
+	expectedPath := filepath.Join(req.ProjectRoot, ".fanout", "worktrees", req.Slug)
+	if filepath.Clean(req.WorktreePath) != filepath.Clean(expectedPath) {
+		return fmt.Errorf("herdr worktree path %s is not deterministic path %s", req.WorktreePath, expectedPath)
+	}
+	return nil
+}
+
+func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.HerdrLaunchIntent) error {
+	sourceRoot, err := physicalPath(req.SourceRoot)
+	if err != nil {
+		return err
+	}
+	fullBranchRef, err := worktree.HerdrBranchRef(req.ProjectRoot, req.BranchName)
+	if err != nil {
+		return err
+	}
+	if intent.Backend != backend.Herdr ||
+		intent.Operation != "child-worktree" ||
+		intent.Parent != req.Parent ||
+		intent.IssueNum != req.IssueNum ||
+		intent.TaskID != req.TaskID ||
+		intent.SourceRootPhysical != sourceRoot ||
+		intent.Slug != req.Slug ||
+		intent.BranchName != req.BranchName ||
+		intent.FullBranchRef != fullBranchRef ||
+		filepath.Clean(intent.WorktreePath) != filepath.Clean(req.WorktreePath) ||
+		intent.EffectiveBaseBranch != strings.TrimSpace(req.BaseBranch) ||
+		intent.HerdrSession != req.HerdrSession ||
+		intent.HerdrSocketPath != req.HerdrSocketPath ||
+		intent.TotalTimeoutMS != req.TotalTimeout.Milliseconds() {
+		return fmt.Errorf("saved herdr intent %s contradicts the exact launch request", intent.IntentID)
+	}
+	return nil
+}
+
+func mutationPreState(observed []herdrrun.WorkspaceObservation, git state.HerdrGitPreState) state.HerdrMutationPreState {
+	workspaces := make([]state.HerdrWorkspaceBinding, 0, len(observed))
+	for _, workspace := range observed {
+		workspaces = append(workspaces, state.HerdrWorkspaceBinding{
+			WorkspaceID: workspace.WorkspaceID,
+			Label:       workspace.Label,
+			Path:        workspace.Path,
+			RepoKey:     workspace.RepoKey,
+		})
+	}
+	slices.SortFunc(workspaces, func(a, b state.HerdrWorkspaceBinding) int {
+		return strings.Compare(a.WorkspaceID, b.WorkspaceID)
+	})
+	return state.HerdrMutationPreState{Workspaces: workspaces, Git: git}
+}
+
+func mutationReceipt(result herdrrun.WorktreeMutationResult, markerPath string) state.HerdrMutationReceipt {
+	return state.HerdrMutationReceipt{
+		WorkspaceID:      result.WorkspaceID,
+		WorkspaceLabel:   result.Label,
+		PaneID:           result.Pane.Pane,
+		TerminalID:       result.TerminalID,
+		CWD:              result.CWD,
+		Path:             result.Path,
+		RepoKey:          result.RepoKey,
+		AlreadyOpen:      result.AlreadyOpen,
+		GitDirMarkerPath: markerPath,
+	}
+}
+
+func toHerdrMutationRequest(req state.HerdrMutationRequest) herdrrun.WorktreeMutationRequest {
+	kind := herdrrun.WorktreeMutationKind(req.Kind)
+	return herdrrun.WorktreeMutationRequest{
+		Kind:        kind,
+		WorkspaceID: req.WorkspaceID,
+		CWD:         req.CWD,
+		Branch:      req.Branch,
+		Base:        req.Base,
+		Path:        req.Path,
+		Label:       req.Label,
+		NoFocus:     req.NoFocus,
+	}
+}
+
+func normalizeHerdrWorktreeHooks(hooks HerdrWorktreeHooks) HerdrWorktreeHooks {
+	if hooks.Now == nil {
+		hooks.Now = time.Now
+	}
+	if hooks.Random == nil {
+		hooks.Random = randomHerdrToken
+	}
+	return hooks
+}
+
+func notifyHerdrPhase(hooks HerdrWorktreeHooks, phase state.HerdrLaunchPhase) error {
+	if hooks.PhaseSaved == nil {
+		return nil
+	}
+	return hooks.PhaseSaved(phase)
+}
+
+func randomHerdrToken() (string, error) {
+	var raw [24]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
+func herdrLineageID(intentID, nonce string) string {
+	sum := sha256.Sum256([]byte("fanout.herdr-lineage.v1\x00" + intentID + "\x00" + nonce))
+	return hex.EncodeToString(sum[:])
+}
+
+func physicalPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolved), nil
+}
+
+func boundedHerdrCallContext(
+	parent context.Context,
+	intent state.HerdrLaunchIntent,
+	now time.Time,
+) (context.Context, context.CancelFunc, error) {
+	remaining := time.UnixMilli(intent.LaunchExpiresUnixMS).Sub(now.UTC())
+	if remaining <= 0 {
+		return nil, nil, fmt.Errorf("herdr launch deadline expired")
+	}
+	callCtx, cancel := context.WithTimeout(parent, min(5*time.Second, remaining))
+	return callCtx, cancel, nil
+}

@@ -79,6 +79,48 @@ func TestResolveBackendSelectionCarriesProvisionalIntents(t *testing.T) {
 	}
 }
 
+func TestResolveLaunchBackendLoadsPersistedHerdrIntent(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init", "-b", "main")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("FANOUT_BACKEND", "")
+
+	locked, err := state.LockHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked.UpsertIntent(state.HerdrLaunchIntent{
+		IntentID:       "issue:3:425:426",
+		Parent:         "425",
+		IssueNum:       426,
+		Backend:        backend.Herdr,
+		OperationState: state.HerdrOperationManualCleanupRequired,
+		Phase:          state.HerdrPhaseWorktreeStarting,
+	})
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resolveLaunchBackend(&cliflags.Config{ParentRef: "425", Backend: backend.Tmux}, repo, store, nil)
+	if err == nil || !strings.Contains(err.Error(), "runtime backend for parent 425 is herdr; --backend requests tmux") {
+		t.Fatalf("persisted intent contradiction error = %v", err)
+	}
+
+	_, err = resolveLaunchBackend(&cliflags.Config{ParentRef: "425"}, repo, store, nil)
+	if !errors.Is(err, backend.ErrUnsupported) {
+		t.Fatalf("persisted intent selection error = %v, want herdr launch unsupported", err)
+	}
+}
+
 func TestBackendSelectionVerifierRejectsRowCreatedAfterPreflight(t *testing.T) {
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init", "-b", "main")
@@ -112,6 +154,48 @@ func TestBackendSelectionVerifierRejectsRowCreatedAfterPreflight(t *testing.T) {
 	err = resolved.verify("425", locked.Store)
 	if err == nil || !strings.Contains(err.Error(), "selection changed from tmux to herdr while acquiring the launch lock") {
 		t.Fatalf("locked recheck error = %v, want racing row rejection", err)
+	}
+}
+
+func TestBackendSelectionVerifierRejectsHerdrIntentCreatedAfterPreflight(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init", "-b", "main")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("FANOUT_BACKEND", "")
+	cfg := &cliflags.Config{ParentRef: "425"}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolveLaunchBackend(cfg, repo, store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	locked, err := state.LockHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked.UpsertIntent(state.HerdrLaunchIntent{
+		IntentID:       "issue:3:425:426",
+		Parent:         "425",
+		IssueNum:       426,
+		Backend:        backend.Herdr,
+		OperationState: state.HerdrOperationActive,
+		Phase:          state.HerdrPhaseWorktreePlanned,
+	})
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+
+	if err := resolved.verify("425", store); err == nil ||
+		!strings.Contains(err.Error(), "selection changed from tmux to herdr while acquiring the launch lock") {
+		t.Fatalf("locked recheck error = %v, want racing intent rejection", err)
 	}
 }
 
