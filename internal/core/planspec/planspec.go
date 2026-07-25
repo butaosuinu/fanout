@@ -2,6 +2,7 @@
 package planspec
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,11 +53,30 @@ func LoadWithoutResolvedNameChecks(path string) (Spec, error) {
 	return load(path, ValidateWithoutResolvedNameChecks)
 }
 
+// LoadWithoutResolvedNameChecksWithIdentity returns the exact loaded byte
+// identity used to scope issue-less plan launch ownership.
+func LoadWithoutResolvedNameChecksWithIdentity(path string) (Spec, string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Spec{}, "", fmt.Errorf("read plan spec %s: %w", path, err)
+	}
+	spec, err := decode(path, data, ValidateWithoutResolvedNameChecks)
+	if err != nil {
+		return Spec{}, "", err
+	}
+	sum := sha256.Sum256(data)
+	return spec, fmt.Sprintf("%x", sum[:]), nil
+}
+
 func load(path string, validate func(Spec) error) (Spec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Spec{}, fmt.Errorf("read plan spec %s: %w", path, err)
 	}
+	return decode(path, data, validate)
+}
+
+func decode(path string, data []byte, validate func(Spec) error) (Spec, error) {
 	var spec Spec
 	if err := json.Unmarshal(data, &spec); err != nil {
 		return Spec{}, fmt.Errorf("parse plan spec %s: %w", path, err)

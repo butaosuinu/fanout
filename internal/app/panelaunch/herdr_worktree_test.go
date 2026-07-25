@@ -115,7 +115,7 @@ func TestRealizeHerdrWorktreePersistsPhasesAndStopsAtLauncherBoundary(t *testing
 		mutation.CoordinatorWorkspaceLabel != "coordinator-nonce" ||
 		mutation.CoordinatorPaneID != "w-coordinator:p1" ||
 		mutation.CoordinatorTerminalID != "terminal-coordinator" ||
-		mutation.CoordinatorWorkspaceCWD != repo ||
+		mutation.CoordinatorWorkspaceCWD != result.Intent.Coordinator.CWD ||
 		mutation.ExpectedRepoKey != result.Intent.HerdrRepoKey ||
 		mutation.ExpectedRepoRoot != result.Intent.HerdrRepoRoot ||
 		mutation.Branch != req.BranchName || mutation.Path != req.WorktreePath ||
@@ -226,6 +226,46 @@ func TestHerdrChildRejectsLiveCoordinatorDriftAndRetainsReservation(t *testing.T
 	}
 }
 
+func TestHerdrRealizationRejectsCrossRepositoryRootsBeforeMutation(t *testing.T) {
+	repo := newHerdrLaunchRepo(t)
+	foreign := newHerdrLaunchRepo(t)
+	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
+	req := newHerdrWorktreeRequest(t, repo, runtime)
+	req.SourceRoot = foreign
+	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if err == nil || !strings.Contains(err.Error(), "belong to different repositories") {
+		t.Fatalf("cross-repository child error = %v", err)
+	}
+	if len(runtime.mutations) != 0 {
+		t.Fatalf("cross-repository child issued %d mutations", len(runtime.mutations))
+	}
+	if _, found, observeErr := worktree.ObserveBranch(repo, "refs/heads/"+req.BranchName); observeErr != nil || found {
+		t.Fatalf("cross-repository child reserved branch: found=%t err=%v", found, observeErr)
+	}
+
+	coordinatorReq := HerdrCoordinatorRequest{
+		Parent:          "524",
+		ProjectRoot:     repo,
+		SourceRoot:      repo,
+		RootCWD:         foreign,
+		HerdrSession:    "fanout-owned",
+		HerdrSocketPath: "/tmp/fanout-owned.sock",
+		TotalTimeout:    30 * time.Second,
+	}
+	_, err = RealizeHerdrCoordinator(
+		context.Background(),
+		coordinatorReq,
+		runtime,
+		deterministicHerdrHooks(nil, ""),
+	)
+	if err == nil || !strings.Contains(err.Error(), "do not identify one source repository root") {
+		t.Fatalf("cross-repository coordinator error = %v", err)
+	}
+	if len(runtime.mutations) != 0 {
+		t.Fatalf("cross-repository coordinator issued %d mutations", len(runtime.mutations))
+	}
+}
+
 func TestHerdrWorktreeResponseLossPreservesResourcesAndDoesNotRetry(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo, responseLoss: true}
@@ -294,7 +334,14 @@ func TestHerdrWorktreeDeadlineDoesNotExtendOnRecovery(t *testing.T) {
 	if loadErr != nil {
 		t.Fatal(loadErr)
 	}
-	intentID, _ := state.HerdrIntentID(req.Parent, req.IssueNum, req.TaskID)
+	sourceRoot, _ := physicalPath(req.SourceRoot)
+	intentID, _ := state.HerdrIntentID(
+		req.Parent,
+		req.IssueNum,
+		req.TaskID,
+		sourceRoot,
+		req.PlanSpecIdentity,
+	)
 	intent, _ := control.FindIntent(intentID)
 	if intent.LaunchExpiresUnixMS != start.Add(req.TotalTimeout).UnixMilli() {
 		t.Fatalf("saved expiry = %d, want fixed %d", intent.LaunchExpiresUnixMS, start.Add(req.TotalTimeout).UnixMilli())
@@ -366,7 +413,6 @@ func TestRealizeHerdrCoordinatorPersistsWorkspacePhases(t *testing.T) {
 	var phases []state.HerdrLaunchPhase
 	result, err := RealizeHerdrCoordinator(context.Background(), HerdrCoordinatorRequest{
 		Parent:          "524",
-		IssueNum:        527,
 		ProjectRoot:     repo,
 		SourceRoot:      repo,
 		RootCWD:         repo,
@@ -385,6 +431,17 @@ func TestRealizeHerdrCoordinatorPersistsWorkspacePhases(t *testing.T) {
 	if !slices.Equal(phases, want) || result.Intent.Phase != state.HerdrPhaseWorkspaceRealized || len(runtime.mutations) != 1 {
 		t.Fatalf("phases=%v result=%+v mutations=%d", phases, result, len(runtime.mutations))
 	}
+	sourceIdentity, identityErr := worktree.ResolveHerdrRepoIdentity(repo)
+	if identityErr != nil {
+		t.Fatal(identityErr)
+	}
+	wantID, identityErr := state.HerdrCoordinatorIntentID("524", sourceIdentity.RepoRoot, "")
+	if identityErr != nil {
+		t.Fatal(identityErr)
+	}
+	if result.Intent.IntentID != wantID || result.Intent.IssueNum != 0 || result.Intent.TaskID != "" {
+		t.Fatalf("coordinator owner = id:%q issue:%d task:%q", result.Intent.IntentID, result.Intent.IssueNum, result.Intent.TaskID)
+	}
 }
 
 func TestHerdrCoordinatorResponseLossDoesNotRetry(t *testing.T) {
@@ -392,7 +449,6 @@ func TestHerdrCoordinatorResponseLossDoesNotRetry(t *testing.T) {
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo, responseLoss: true}
 	req := HerdrCoordinatorRequest{
 		Parent:          "524",
-		IssueNum:        527,
 		ProjectRoot:     repo,
 		SourceRoot:      repo,
 		RootCWD:         repo,
@@ -438,11 +494,15 @@ func seedHerdrCoordinator(
 	req HerdrWorktreeRequest,
 ) {
 	t.Helper()
-	baseID, err := state.HerdrIntentID(req.Parent, req.IssueNum, req.TaskID)
+	sourceIdentity, err := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sourceRoot, err := physicalPath(req.SourceRoot)
+	coordinatorID, err := state.HerdrCoordinatorIntentID(
+		req.Parent,
+		sourceIdentity.RepoRoot,
+		req.PlanSpecIdentity,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,16 +517,17 @@ func seedHerdrCoordinator(
 		t.Fatal(err)
 	}
 	locked.UpsertIntent(state.HerdrLaunchIntent{
-		IntentID:               baseID + ":coordinator",
+		IntentID:               coordinatorID,
 		Parent:                 req.Parent,
-		IssueNum:               req.IssueNum,
-		TaskID:                 req.TaskID,
 		Backend:                backend.Herdr,
 		Operation:              "coordinator-workspace",
 		OperationState:         state.HerdrOperationActive,
 		Phase:                  state.HerdrPhaseWorkspaceRealized,
-		SourceRootPhysical:     sourceRoot,
-		WorktreePath:           repo,
+		SourceRootPhysical:     sourceIdentity.RepoRoot,
+		PlanSpecIdentity:       req.PlanSpecIdentity,
+		WorktreePath:           sourceIdentity.RepoRoot,
+		HerdrRepoKey:           sourceIdentity.RepoKey,
+		HerdrRepoRoot:          sourceIdentity.RepoRoot,
 		HerdrSession:           req.HerdrSession,
 		HerdrSocketPath:        req.HerdrSocketPath,
 		WorktreeOwnershipNonce: label,
@@ -475,7 +536,7 @@ func seedHerdrCoordinator(
 			WorkspaceLabel: label,
 			PaneID:         paneID,
 			TerminalID:     terminalID,
-			CWD:            repo,
+			CWD:            sourceIdentity.RepoRoot,
 		},
 	})
 	if err := locked.Save(); err != nil {
@@ -494,7 +555,7 @@ func seedHerdrCoordinator(
 			Pane:      paneID,
 		},
 		TerminalID: terminalID,
-		CWD:        repo,
+		CWD:        sourceIdentity.RepoRoot,
 	})
 }
 

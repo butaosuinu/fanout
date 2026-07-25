@@ -30,6 +30,7 @@ const (
 type Config struct {
 	Parent             int
 	ParentRef          string
+	PlanSpecIdentity   string
 	ParentMode         string
 	ProjectOwnerType   string
 	ProjectOwner       string

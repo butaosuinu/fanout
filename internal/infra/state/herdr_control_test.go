@@ -31,12 +31,13 @@ func TestHerdrControlIsSharedAcrossLinkedWorktrees(t *testing.T) {
 		t.Fatal(err)
 	}
 	intent := HerdrLaunchIntent{
-		IntentID:       "issue:3:527:528",
-		Parent:         "0524",
-		IssueNum:       527,
-		Backend:        backend.Herdr,
-		OperationState: HerdrOperationActive,
-		Phase:          HerdrPhaseWorktreePlanned,
+		IntentID:           "issue:3:527:528",
+		Parent:             "0524",
+		IssueNum:           527,
+		Backend:            backend.Herdr,
+		OperationState:     HerdrOperationActive,
+		Phase:              HerdrPhaseWorktreePlanned,
+		SourceRootPhysical: repo,
 	}
 	locked.UpsertIntent(intent)
 	if saveErr := locked.Save(); saveErr != nil {
@@ -56,7 +57,7 @@ func TestHerdrControlIsSharedAcrossLinkedWorktrees(t *testing.T) {
 	if saved, ok := got.FindIntent(intent.IntentID); !ok || saved.Parent != intent.Parent {
 		t.Fatalf("saved intent = %+v, %t", saved, ok)
 	}
-	bindings := got.ProvisionalBindings()
+	bindings := got.ProvisionalBindings(HerdrBindingScope{})
 	if len(bindings) != 1 || bindings[0].Parent != "0524" || bindings[0].Backend != backend.Herdr {
 		t.Fatalf("provisional bindings = %+v", bindings)
 	}
@@ -87,7 +88,7 @@ func TestHerdrControlProvisionalBindingsKeepManualCleanupSticky(t *testing.T) {
 		{Parent: "525", Backend: backend.Herdr, OperationState: HerdrOperationLaunchAborted},
 		{Parent: "", Backend: backend.Herdr, OperationState: HerdrOperationActive},
 	}
-	got := store.ProvisionalBindings()
+	got := store.ProvisionalBindings(HerdrBindingScope{})
 	if len(got) != 1 || got[0] != (backend.Binding{Parent: "524", Backend: backend.Herdr}) {
 		t.Fatalf("bindings = %+v, want only manual-cleanup parent", got)
 	}
@@ -124,16 +125,83 @@ func TestHerdrControlRejectsSymlinkRegistryAndLock(t *testing.T) {
 }
 
 func TestHerdrIntentIDCanonicalizesNumericParent(t *testing.T) {
-	a, err := HerdrIntentID("0524", 527, "")
+	a, err := HerdrIntentID("0524", 527, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := HerdrIntentID("524", 527, "")
+	b, err := HerdrIntentID("524", 527, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a != b {
 		t.Fatalf("canonical intent ids differ: %q != %q", a, b)
+	}
+}
+
+func TestHerdrIssueLessPlanIdentityAndBindingsAreWorktreeAndSpecScoped(t *testing.T) {
+	const (
+		specA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		specB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	idA, err := HerdrIntentID("plan:alpha", 0, "task-a", "/repo/a", specA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idB, err := HerdrIntentID("plan:alpha", 0, "task-a", "/repo/b", specB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idA == idB {
+		t.Fatalf("scoped task ids collide: %q", idA)
+	}
+	store := emptyHerdrControl()
+	store.Intents = []HerdrLaunchIntent{
+		{
+			IntentID: idA, Parent: "plan:alpha", TaskID: "task-a",
+			SourceRootPhysical: "/repo/a", PlanSpecIdentity: specA,
+			Backend: backend.Herdr, OperationState: HerdrOperationActive,
+		},
+		{
+			IntentID: idB, Parent: "plan:alpha", TaskID: "task-a",
+			SourceRootPhysical: "/repo/b", PlanSpecIdentity: specB,
+			Backend: backend.Herdr, OperationState: HerdrOperationActive,
+		},
+	}
+	got := store.ProvisionalBindings(HerdrBindingScope{
+		SourceRootPhysical: "/repo/a",
+		PlanSpecIdentity:   specA,
+	})
+	if len(got) != 1 || got[0] != (backend.Binding{Parent: "plan:alpha", Backend: backend.Herdr}) {
+		t.Fatalf("scoped bindings = %+v", got)
+	}
+}
+
+func TestHerdrCoordinatorIntentIDIsParentSingleton(t *testing.T) {
+	a, err := HerdrCoordinatorIntentID("0524", "/repo/a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := HerdrCoordinatorIntentID("524", "/repo/b", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Fatalf("parent coordinator ids differ: %q != %q", a, b)
+	}
+	const (
+		specA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		specB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	planA, err := HerdrCoordinatorIntentID("plan:alpha", "/repo/a", specA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planB, err := HerdrCoordinatorIntentID("plan:alpha", "/repo/b", specB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planA == planB {
+		t.Fatalf("issue-less plan coordinator ids collide: %q", planA)
 	}
 }
 

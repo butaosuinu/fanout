@@ -144,9 +144,10 @@ func TestResolvePlanLaunchParentUsesDeclaredIssueSource(t *testing.T) {
 	if resolveErr != nil {
 		t.Fatal(resolveErr)
 	}
-	if got != "425" {
-		t.Fatalf("resolvePlanLaunchParent(issue source) = %q, want 425", got)
+	if got.Parent != "425" || len(got.PlanSpecIdentity) != 64 {
+		t.Fatalf("resolvePlanLaunchParent(issue source) = %+v, want parent 425 with SHA-256 identity", got)
 	}
+	issueIdentity := got.PlanSpecIdentity
 
 	ordinarySpec := filepath.Join(repo, "ordinary-plan.json")
 	if err := os.WriteFile(ordinarySpec, []byte(`{"version":1,"plan":{"slug":"issue-425-migration","title":"Migration","source":"path-or-conversation-label"},"tasks":[{"id":"base","title":"Base","briefing":"Build it"}]}`), 0o600); err != nil {
@@ -156,8 +157,10 @@ func TestResolvePlanLaunchParentUsesDeclaredIssueSource(t *testing.T) {
 	if resolveErr != nil {
 		t.Fatal(resolveErr)
 	}
-	if got != "plan:issue-425-migration" {
-		t.Fatalf("resolvePlanLaunchParent(non-issue source) = %q, want plan:issue-425-migration", got)
+	if got.Parent != "plan:issue-425-migration" ||
+		len(got.PlanSpecIdentity) != 64 ||
+		got.PlanSpecIdentity == issueIdentity {
+		t.Fatalf("resolvePlanLaunchParent(non-issue source) = %+v", got)
 	}
 }
 

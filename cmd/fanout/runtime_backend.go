@@ -32,6 +32,7 @@ type runtimeBackendInputs struct {
 	herdrEnvironment   bool
 	tmuxEnvironment    bool
 	userDefault        backend.Name
+	planSpecIdentity   string
 	rows               []backend.Binding
 	provisionalIntents []backend.Binding
 	suppliedIntents    []backend.Binding
@@ -258,6 +259,7 @@ func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store st
 		herdrEnvironment:   os.Getenv("HERDR_ENV") == "1",
 		tmuxEnvironment:    os.Getenv("TMUX") != "",
 		userDefault:        userDefault,
+		planSpecIdentity:   cfg.PlanSpecIdentity,
 		rows:               backendBindings(projectRoot, store),
 		provisionalIntents: append([]backend.Binding(nil), provisionalIntents...),
 		suppliedIntents:    append([]backend.Binding(nil), provisionalIntents...),
@@ -290,9 +292,16 @@ func refreshHerdrIntentBindings(inputs *runtimeBackendInputs) error {
 	if err != nil {
 		return fmt.Errorf("load provisional herdr launch intents: %w", err)
 	}
+	repoIdentity, err := worktree.ResolveHerdrRepoIdentity(inputs.projectRoot)
+	if err != nil {
+		return fmt.Errorf("resolve provisional herdr binding scope: %w", err)
+	}
 	inputs.provisionalIntents = append(
 		append([]backend.Binding(nil), inputs.suppliedIntents...),
-		control.ProvisionalBindings()...,
+		control.ProvisionalBindings(state.HerdrBindingScope{
+			SourceRootPhysical: repoIdentity.RepoRoot,
+			PlanSpecIdentity:   inputs.planSpecIdentity,
+		})...,
 	)
 	return nil
 }

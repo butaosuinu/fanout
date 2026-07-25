@@ -65,12 +65,13 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	}
 
 	cliCfg := cfg.CLIConfig()
-	parentRef, err := resolvePlanLaunchParent(cfg)
+	launchIdentity, err := resolvePlanLaunchParent(cfg)
 	if err != nil {
 		lg.Err("plan: %v", err)
 		return exitcode.Env
 	}
-	cliCfg.ParentRef = parentRef
+	cliCfg.ParentRef = launchIdentity.Parent
+	cliCfg.PlanSpecIdentity = launchIdentity.PlanSpecIdentity
 	rt, code := resolveLaunchRuntime(cliCfg, nil, lg)
 	if code != exitcode.OK {
 		return code
@@ -86,17 +87,25 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 // their numeric issue parent; every other plan resolves to plan:<slug>. The
 // read is deliberately mutation-free: a herdr-owned plan must fail before
 // state locking, local git exclude setup, plan copying, or worktree preparation.
-func resolvePlanLaunchParent(cfg run.PlanCommandConfig) (string, error) {
+type planLaunchIdentity struct {
+	Parent           string
+	PlanSpecIdentity string
+}
+
+func resolvePlanLaunchParent(cfg run.PlanCommandConfig) (planLaunchIdentity, error) {
 	projectRoot, err := gitroot.Toplevel("")
 	if err != nil {
-		return "", err
+		return planLaunchIdentity{}, err
 	}
 	specPath := run.ResolvePlanSpecPath(projectRoot, cfg.SpecArg)
-	spec, err := planspec.LoadWithoutResolvedNameChecks(specPath)
+	spec, identity, err := planspec.LoadWithoutResolvedNameChecksWithIdentity(specPath)
 	if err != nil {
-		return "", err
+		return planLaunchIdentity{}, err
 	}
-	return panelaunch.PlanRuntimeParentRef(spec.Plan.Slug, spec.Plan.Source), nil
+	return planLaunchIdentity{
+		Parent:           panelaunch.PlanRuntimeParentRef(spec.Plan.Slug, spec.Plan.Source),
+		PlanSpecIdentity: identity,
+	}, nil
 }
 
 func parsePlanCommand(args []string, lg *log.Logger) (run.PlanCommandConfig, exitcode.Code) {

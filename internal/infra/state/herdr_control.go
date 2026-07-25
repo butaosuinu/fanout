@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/parentref"
 	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 )
+
+var herdrSHA256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 const (
 	HerdrControlSchemaID = "fanout.herdr-control.v1"
@@ -70,6 +73,7 @@ type HerdrLaunchIntent struct {
 	Phase          HerdrLaunchPhase    `json:"phase"`
 
 	SourceRootPhysical string `json:"source_root_physical"`
+	PlanSpecIdentity   string `json:"plan_spec_identity,omitempty"`
 	Slug               string `json:"slug"`
 	BranchName         string `json:"branch_name"`
 	FullBranchRef      string `json:"full_branch_ref"`
@@ -326,7 +330,12 @@ func (s *HerdrControlStore) UpsertLineage(lineage HerdrBranchLineage) {
 	s.Lineages = append(s.Lineages, lineage)
 }
 
-func (s HerdrControlStore) ProvisionalBindings() []backend.Binding {
+type HerdrBindingScope struct {
+	SourceRootPhysical string
+	PlanSpecIdentity   string
+}
+
+func (s HerdrControlStore) ProvisionalBindings(scope HerdrBindingScope) []backend.Binding {
 	out := make([]backend.Binding, 0, len(s.Intents))
 	for _, intent := range s.Intents {
 		if intent.OperationState != HerdrOperationActive &&
@@ -336,23 +345,60 @@ func (s HerdrControlStore) ProvisionalBindings() []backend.Binding {
 		if strings.TrimSpace(intent.Parent) == "" {
 			continue
 		}
+		if strings.HasPrefix(parentref.Canon(intent.Parent), "plan:") &&
+			(intent.SourceRootPhysical != scope.SourceRootPhysical ||
+				intent.PlanSpecIdentity != scope.PlanSpecIdentity) {
+			continue
+		}
 		out = append(out, backend.Binding{Parent: intent.Parent, Backend: intent.Backend})
 	}
 	return out
 }
 
-func HerdrIntentID(parent string, issueNum int, taskID string) (string, error) {
+func HerdrIntentID(
+	parent string,
+	issueNum int,
+	taskID, sourceRootPhysical, planSpecIdentity string,
+) (string, error) {
 	parent = parentref.Canon(parent)
 	switch {
 	case parent == "":
 		return "", fmt.Errorf("herdr intent requires a parent")
 	case taskID != "":
-		return "task:" + strconv.Itoa(len(parent)) + ":" + parent + ":" + strconv.Itoa(len(taskID)) + ":" + taskID, nil
+		if strings.TrimSpace(sourceRootPhysical) == "" || !herdrSHA256Hex.MatchString(planSpecIdentity) {
+			return "", fmt.Errorf("herdr task intent requires source root and lowercase SHA-256 planspec identity")
+		}
+		return "task:" +
+			tuplePart(parent) + ":" +
+			tuplePart(sourceRootPhysical) + ":" +
+			planSpecIdentity + ":" +
+			tuplePart(taskID), nil
 	case issueNum > 0:
 		return "issue:" + strconv.Itoa(len(parent)) + ":" + parent + ":" + strconv.Itoa(issueNum), nil
 	default:
 		return "", fmt.Errorf("herdr intent requires an issue number or task id")
 	}
+}
+
+func HerdrCoordinatorIntentID(parent, sourceRootPhysical, planSpecIdentity string) (string, error) {
+	parent = parentref.Canon(parent)
+	if parent == "" {
+		return "", fmt.Errorf("herdr coordinator requires a parent")
+	}
+	if !strings.HasPrefix(parent, "plan:") {
+		return "coordinator-parent:" + tuplePart(parent), nil
+	}
+	if strings.TrimSpace(sourceRootPhysical) == "" || !herdrSHA256Hex.MatchString(planSpecIdentity) {
+		return "", fmt.Errorf("herdr plan coordinator requires source root and lowercase SHA-256 planspec identity")
+	}
+	return "coordinator-plan:" +
+		tuplePart(parent) + ":" +
+		tuplePart(sourceRootPhysical) + ":" +
+		planSpecIdentity, nil
+}
+
+func tuplePart(value string) string {
+	return strconv.Itoa(len(value)) + ":" + value
 }
 
 func loadHerdrControl(path string) (HerdrControlStore, error) {
@@ -496,6 +542,13 @@ func validateHerdrControlStore(store HerdrControlStore) error {
 		intentIDs[intent.IntentID] = true
 		if intent.Backend != backend.Herdr {
 			return fmt.Errorf("intent %s has backend %q, want herdr", intent.IntentID, intent.Backend)
+		}
+		if strings.TrimSpace(intent.SourceRootPhysical) == "" {
+			return fmt.Errorf("intent %s has no physical source root", intent.IntentID)
+		}
+		if (intent.TaskID != "" || strings.HasPrefix(parentref.Canon(intent.Parent), "plan:")) &&
+			!herdrSHA256Hex.MatchString(intent.PlanSpecIdentity) {
+			return fmt.Errorf("intent %s has no lowercase SHA-256 planspec identity", intent.IntentID)
 		}
 		switch intent.OperationState {
 		case HerdrOperationActive, HerdrOperationManualCleanupRequired, HerdrOperationLaunchAborted:

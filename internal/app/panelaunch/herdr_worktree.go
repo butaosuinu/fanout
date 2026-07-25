@@ -36,16 +36,17 @@ type HerdrWorktreeRuntime interface {
 }
 
 type HerdrWorktreeRequest struct {
-	Parent       string
-	IssueNum     int
-	TaskID       string
-	ProjectRoot  string
-	SourceRoot   string
-	Slug         string
-	BranchName   string
-	BaseBranch   string
-	NoRefresh    bool
-	WorktreePath string
+	Parent           string
+	IssueNum         int
+	TaskID           string
+	ProjectRoot      string
+	SourceRoot       string
+	PlanSpecIdentity string
+	Slug             string
+	BranchName       string
+	BaseBranch       string
+	NoRefresh        bool
+	WorktreePath     string
 
 	CoordinatorWorkspaceID string
 	HerdrSession           string
@@ -86,7 +87,17 @@ func RealizeHerdrWorktree(
 	}
 	hooks = normalizeHerdrWorktreeHooks(hooks)
 
-	intentID, err := state.HerdrIntentID(req.Parent, req.IssueNum, req.TaskID)
+	sourceRoot, err := physicalPath(req.SourceRoot)
+	if err != nil {
+		return HerdrWorktreeResult{}, err
+	}
+	intentID, err := state.HerdrIntentID(
+		req.Parent,
+		req.IssueNum,
+		req.TaskID,
+		sourceRoot,
+		req.PlanSpecIdentity,
+	)
 	if err != nil {
 		return HerdrWorktreeResult{}, err
 	}
@@ -116,8 +127,19 @@ func planFreshHerdrWorktree(
 	intentID string,
 	hooks HerdrWorktreeHooks,
 ) (state.HerdrLaunchIntent, error) {
-	if err := worktree.EnsureLocalExclude(req.ProjectRoot); err != nil {
+	projectIdentity, err := worktree.ResolveHerdrRepoIdentity(req.ProjectRoot)
+	if err != nil {
 		return state.HerdrLaunchIntent{}, err
+	}
+	repoIdentity, err := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
+	if err != nil {
+		return state.HerdrLaunchIntent{}, err
+	}
+	if projectIdentity.RepoKey != repoIdentity.RepoKey {
+		return state.HerdrLaunchIntent{}, fmt.Errorf("herdr project root and source root belong to different repositories")
+	}
+	if ensureErr := worktree.EnsureLocalExclude(req.ProjectRoot); ensureErr != nil {
+		return state.HerdrLaunchIntent{}, ensureErr
 	}
 	base, err := worktree.ResolveHerdrBase(req.ProjectRoot, req.BaseBranch, req.NoRefresh)
 	if err != nil {
@@ -139,14 +161,6 @@ func planFreshHerdrWorktree(
 	if !pathAbsent || registered {
 		return state.HerdrLaunchIntent{}, fmt.Errorf("herdr worktree path %s already exists or is registered", req.WorktreePath)
 	}
-	sourceRoot, err := physicalPath(req.SourceRoot)
-	if err != nil {
-		return state.HerdrLaunchIntent{}, fmt.Errorf("canonicalize herdr source root: %w", err)
-	}
-	repoIdentity, err := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
-	if err != nil {
-		return state.HerdrLaunchIntent{}, err
-	}
 	launchNonce, err := hooks.Random()
 	if err != nil {
 		return state.HerdrLaunchIntent{}, fmt.Errorf("create herdr launch nonce: %w", err)
@@ -167,7 +181,8 @@ func planFreshHerdrWorktree(
 		OperationState: state.HerdrOperationActive,
 		Phase:          state.HerdrPhaseBranchPlanned,
 
-		SourceRootPhysical: sourceRoot,
+		SourceRootPhysical: repoIdentity.RepoRoot,
+		PlanSpecIdentity:   req.PlanSpecIdentity,
 		Slug:               req.Slug,
 		BranchName:         req.BranchName,
 		FullBranchRef:      fullBranchRef,
@@ -215,16 +230,24 @@ func planFreshHerdrWorktree(
 	if _, exists := locked.FindIntent(intentID); exists {
 		return state.HerdrLaunchIntent{}, fmt.Errorf("herdr intent %s appeared while planning", intentID)
 	}
-	coordinatorID := intentID + ":coordinator"
+	coordinatorID, err := state.HerdrCoordinatorIntentID(
+		req.Parent,
+		repoIdentity.RepoRoot,
+		req.PlanSpecIdentity,
+	)
+	if err != nil {
+		return state.HerdrLaunchIntent{}, err
+	}
 	coordinator, exists := locked.FindIntent(coordinatorID)
 	if !exists {
 		return state.HerdrLaunchIntent{}, fmt.Errorf("herdr coordinator intent %s does not exist", coordinatorID)
 	}
 	binding, err := coordinatorBindingForChild(
 		req.Parent,
-		req.IssueNum,
-		req.TaskID,
-		sourceRoot,
+		repoIdentity.RepoRoot,
+		req.PlanSpecIdentity,
+		repoIdentity.RepoKey,
+		repoIdentity.RepoRoot,
 		req.HerdrSession,
 		req.HerdrSocketPath,
 		coordinatorID,
@@ -708,11 +731,7 @@ func validateHerdrWorktreeRequest(req HerdrWorktreeRequest) error {
 }
 
 func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.HerdrLaunchIntent) error {
-	sourceRoot, err := physicalPath(req.SourceRoot)
-	if err != nil {
-		return err
-	}
-	fullBranchRef, err := worktree.HerdrBranchRef(req.ProjectRoot, req.BranchName)
+	projectIdentity, err := worktree.ResolveHerdrRepoIdentity(req.ProjectRoot)
 	if err != nil {
 		return err
 	}
@@ -720,16 +739,39 @@ func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.Her
 	if err != nil {
 		return err
 	}
-	intentID, err := state.HerdrIntentID(req.Parent, req.IssueNum, req.TaskID)
+	if projectIdentity.RepoKey != repoIdentity.RepoKey {
+		return fmt.Errorf("herdr project root and source root belong to different repositories")
+	}
+	fullBranchRef, err := worktree.HerdrBranchRef(req.ProjectRoot, req.BranchName)
+	if err != nil {
+		return err
+	}
+	intentID, err := state.HerdrIntentID(
+		req.Parent,
+		req.IssueNum,
+		req.TaskID,
+		repoIdentity.RepoRoot,
+		req.PlanSpecIdentity,
+	)
+	if err != nil {
+		return err
+	}
+	coordinatorID, err := state.HerdrCoordinatorIntentID(
+		req.Parent,
+		repoIdentity.RepoRoot,
+		req.PlanSpecIdentity,
+	)
 	if err != nil {
 		return err
 	}
 	if intent.Backend != backend.Herdr ||
+		intent.IntentID != intentID ||
 		intent.Operation != "child-worktree" ||
 		intent.Parent != req.Parent ||
 		intent.IssueNum != req.IssueNum ||
 		intent.TaskID != req.TaskID ||
-		intent.SourceRootPhysical != sourceRoot ||
+		intent.SourceRootPhysical != repoIdentity.RepoRoot ||
+		intent.PlanSpecIdentity != req.PlanSpecIdentity ||
 		intent.Slug != req.Slug ||
 		intent.BranchName != req.BranchName ||
 		intent.FullBranchRef != fullBranchRef ||
@@ -740,7 +782,7 @@ func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.Her
 		intent.HerdrRepoKey != repoIdentity.RepoKey ||
 		intent.HerdrRepoRoot != repoIdentity.RepoRoot ||
 		intent.Coordinator == nil ||
-		intent.Coordinator.IntentID != intentID+":coordinator" ||
+		intent.Coordinator.IntentID != coordinatorID ||
 		intent.Coordinator.WorkspaceID != req.CoordinatorWorkspaceID ||
 		intent.TotalTimeoutMS != req.TotalTimeout.Milliseconds() {
 		return fmt.Errorf("saved herdr intent %s contradicts the exact launch request", intent.IntentID)
@@ -755,9 +797,10 @@ func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.Her
 	}
 	binding, err := coordinatorBindingForChild(
 		req.Parent,
-		req.IssueNum,
-		req.TaskID,
-		sourceRoot,
+		repoIdentity.RepoRoot,
+		req.PlanSpecIdentity,
+		repoIdentity.RepoKey,
+		repoIdentity.RepoRoot,
 		req.HerdrSession,
 		req.HerdrSocketPath,
 		intent.Coordinator.IntentID,
@@ -775,8 +818,8 @@ func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.Her
 
 func coordinatorBindingForChild(
 	parent string,
-	issueNum int,
-	taskID, sourceRoot, herdrSession, herdrSocketPath, intentID, workspaceID string,
+	sourceRoot, planSpecIdentity, repoKey, repoRoot string,
+	herdrSession, herdrSocketPath, intentID, workspaceID string,
 	coordinator state.HerdrLaunchIntent,
 ) (state.HerdrCoordinatorBinding, error) {
 	if coordinator.Backend != backend.Herdr ||
@@ -786,9 +829,12 @@ func coordinatorBindingForChild(
 			coordinator.Phase != state.HerdrPhaseWorkspaceReady) ||
 		coordinator.IntentID != intentID ||
 		coordinator.Parent != parent ||
-		coordinator.IssueNum != issueNum ||
-		coordinator.TaskID != taskID ||
+		coordinator.IssueNum != 0 ||
+		coordinator.TaskID != "" ||
 		coordinator.SourceRootPhysical != sourceRoot ||
+		coordinator.PlanSpecIdentity != planSpecIdentity ||
+		coordinator.HerdrRepoKey != repoKey ||
+		coordinator.HerdrRepoRoot != repoRoot ||
 		coordinator.HerdrSession != herdrSession ||
 		coordinator.HerdrSocketPath != herdrSocketPath ||
 		coordinator.MutationReceipt == nil {
@@ -833,9 +879,10 @@ func verifyHerdrCoordinatorBinding(
 	}
 	binding, err := coordinatorBindingForChild(
 		child.Parent,
-		child.IssueNum,
-		child.TaskID,
 		child.SourceRootPhysical,
+		child.PlanSpecIdentity,
+		child.HerdrRepoKey,
+		child.HerdrRepoRoot,
 		child.HerdrSession,
 		child.HerdrSocketPath,
 		child.Coordinator.IntentID,

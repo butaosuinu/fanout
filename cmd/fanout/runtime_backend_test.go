@@ -16,6 +16,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 func TestResolveBackendSelectionCarriesParentStickiness(t *testing.T) {
@@ -86,18 +87,23 @@ func TestResolveLaunchBackendLoadsPersistedHerdrIntent(t *testing.T) {
 	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
 	t.Setenv("HERDR_ENV", "")
 	t.Setenv("FANOUT_BACKEND", "")
+	repoIdentity, err := worktree.ResolveHerdrRepoIdentity(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	locked, err := state.LockHerdrControl(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
 	locked.UpsertIntent(state.HerdrLaunchIntent{
-		IntentID:       "issue:3:425:426",
-		Parent:         "425",
-		IssueNum:       426,
-		Backend:        backend.Herdr,
-		OperationState: state.HerdrOperationManualCleanupRequired,
-		Phase:          state.HerdrPhaseWorktreeStarting,
+		IntentID:           "issue:3:425:426",
+		Parent:             "425",
+		IssueNum:           426,
+		Backend:            backend.Herdr,
+		OperationState:     state.HerdrOperationManualCleanupRequired,
+		Phase:              state.HerdrPhaseWorktreeStarting,
+		SourceRootPhysical: repoIdentity.RepoRoot,
 	})
 	if saveErr := locked.Save(); saveErr != nil {
 		t.Fatal(saveErr)
@@ -164,6 +170,10 @@ func TestBackendSelectionVerifierRejectsHerdrIntentCreatedAfterPreflight(t *test
 	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
 	t.Setenv("HERDR_ENV", "")
 	t.Setenv("FANOUT_BACKEND", "")
+	repoIdentity, err := worktree.ResolveHerdrRepoIdentity(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := &cliflags.Config{ParentRef: "425"}
 	store, err := state.LoadProject(repo)
 	if err != nil {
@@ -179,12 +189,13 @@ func TestBackendSelectionVerifierRejectsHerdrIntentCreatedAfterPreflight(t *test
 		t.Fatal(err)
 	}
 	locked.UpsertIntent(state.HerdrLaunchIntent{
-		IntentID:       "issue:3:425:426",
-		Parent:         "425",
-		IssueNum:       426,
-		Backend:        backend.Herdr,
-		OperationState: state.HerdrOperationActive,
-		Phase:          state.HerdrPhaseWorktreePlanned,
+		IntentID:           "issue:3:425:426",
+		Parent:             "425",
+		IssueNum:           426,
+		Backend:            backend.Herdr,
+		OperationState:     state.HerdrOperationActive,
+		Phase:              state.HerdrPhaseWorktreePlanned,
+		SourceRootPhysical: repoIdentity.RepoRoot,
 	})
 	if saveErr := locked.Save(); saveErr != nil {
 		t.Fatal(saveErr)
@@ -275,6 +286,80 @@ func TestRuntimeBackendBindingsKeepNonIssuePlansWorktreeLocal(t *testing.T) {
 				t.Fatalf("selection = %+v, want sticky %s in this worktree", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPersistedHerdrPlanIntentBindingsStayWorktreeLocal(t *testing.T) {
+	const specIdentity = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	repo := initLifecycleRepo(t)
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "plan-intent-sibling", sibling, "HEAD")
+	siblingIdentity, err := worktree.ResolveHerdrRepoIdentity(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrIntentID(
+		"plan:shared",
+		0,
+		"task-a",
+		siblingIdentity.RepoRoot,
+		specIdentity,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked.UpsertIntent(state.HerdrLaunchIntent{
+		IntentID:           intentID,
+		Parent:             "plan:shared",
+		TaskID:             "task-a",
+		SourceRootPhysical: siblingIdentity.RepoRoot,
+		PlanSpecIdentity:   specIdentity,
+		Backend:            backend.Herdr,
+		OperationState:     state.HerdrOperationActive,
+		Phase:              state.HerdrPhaseWorktreePlanned,
+	})
+	if saveErr := locked.Save(); saveErr != nil {
+		_ = locked.Unlock()
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("FANOUT_BACKEND", "")
+
+	mainStore, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolveLaunchBackend(&cliflags.Config{
+		ParentRef:        "plan:shared",
+		PlanSpecIdentity: specIdentity,
+		Backend:          backend.Tmux,
+	}, repo, mainStore, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.selection.Name != backend.Tmux {
+		t.Fatalf("main worktree selection = %+v, want tmux", resolved.selection)
+	}
+
+	siblingStore, err := state.LoadProject(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resolveLaunchBackend(&cliflags.Config{
+		ParentRef:        "plan:shared",
+		PlanSpecIdentity: specIdentity,
+	}, sibling, siblingStore, nil)
+	if !errors.Is(err, backend.ErrUnsupported) {
+		t.Fatalf("sibling worktree selection error = %v, want sticky herdr unsupported", err)
 	}
 }
 

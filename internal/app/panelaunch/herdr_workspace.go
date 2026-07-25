@@ -8,18 +8,18 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 type HerdrCoordinatorRequest struct {
-	Parent          string
-	IssueNum        int
-	TaskID          string
-	ProjectRoot     string
-	SourceRoot      string
-	RootCWD         string
-	HerdrSession    string
-	HerdrSocketPath string
-	TotalTimeout    time.Duration
+	Parent           string
+	ProjectRoot      string
+	SourceRoot       string
+	RootCWD          string
+	PlanSpecIdentity string
+	HerdrSession     string
+	HerdrSocketPath  string
+	TotalTimeout     time.Duration
 }
 
 type HerdrCoordinatorResult struct {
@@ -44,11 +44,18 @@ func RealizeHerdrCoordinator(
 		return HerdrCoordinatorResult{}, err
 	}
 	hooks = normalizeHerdrWorktreeHooks(hooks)
-	baseID, err := state.HerdrIntentID(req.Parent, req.IssueNum, req.TaskID)
+	sourceIdentity, err := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
 	if err != nil {
 		return HerdrCoordinatorResult{}, err
 	}
-	intentID := baseID + ":coordinator"
+	intentID, err := state.HerdrCoordinatorIntentID(
+		req.Parent,
+		sourceIdentity.RepoRoot,
+		req.PlanSpecIdentity,
+	)
+	if err != nil {
+		return HerdrCoordinatorResult{}, err
+	}
 	control, err := state.LoadHerdrControl(req.ProjectRoot)
 	if err != nil {
 		return HerdrCoordinatorResult{}, err
@@ -118,13 +125,26 @@ func planHerdrCoordinator(
 	intentID string,
 	hooks HerdrWorktreeHooks,
 ) (state.HerdrLaunchIntent, error) {
-	sourceRoot, err := physicalPath(req.SourceRoot)
+	projectIdentity, err := worktree.ResolveHerdrRepoIdentity(req.ProjectRoot)
+	if err != nil {
+		return state.HerdrLaunchIntent{}, err
+	}
+	sourceIdentity, err := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
+	if err != nil {
+		return state.HerdrLaunchIntent{}, err
+	}
+	rootIdentity, err := worktree.ResolveHerdrRepoIdentity(req.RootCWD)
 	if err != nil {
 		return state.HerdrLaunchIntent{}, err
 	}
 	rootCWD, err := physicalPath(req.RootCWD)
 	if err != nil {
 		return state.HerdrLaunchIntent{}, err
+	}
+	if projectIdentity.RepoKey != sourceIdentity.RepoKey ||
+		rootIdentity.RepoKey != sourceIdentity.RepoKey ||
+		rootCWD != sourceIdentity.RepoRoot {
+		return state.HerdrLaunchIntent{}, fmt.Errorf("herdr coordinator roots do not identify one source repository root")
 	}
 	launchNonce, err := hooks.Random()
 	if err != nil {
@@ -138,14 +158,15 @@ func planHerdrCoordinator(
 	intent := state.HerdrLaunchIntent{
 		IntentID:               intentID,
 		Parent:                 req.Parent,
-		IssueNum:               req.IssueNum,
-		TaskID:                 req.TaskID,
 		Backend:                backend.Herdr,
 		Operation:              "coordinator-workspace",
 		OperationState:         state.HerdrOperationActive,
 		Phase:                  state.HerdrPhaseWorkspacePlanned,
-		SourceRootPhysical:     sourceRoot,
+		SourceRootPhysical:     sourceIdentity.RepoRoot,
+		PlanSpecIdentity:       req.PlanSpecIdentity,
 		WorktreePath:           rootCWD,
+		HerdrRepoKey:           sourceIdentity.RepoKey,
+		HerdrRepoRoot:          sourceIdentity.RepoRoot,
 		HerdrSession:           req.HerdrSession,
 		HerdrSocketPath:        req.HerdrSocketPath,
 		WorktreeOwnershipNonce: label,
@@ -306,7 +327,15 @@ func validateHerdrCoordinatorRequest(req HerdrCoordinatorRequest) error {
 }
 
 func validateSavedHerdrCoordinatorIntent(req HerdrCoordinatorRequest, intent state.HerdrLaunchIntent) error {
-	sourceRoot, err := physicalPath(req.SourceRoot)
+	projectIdentity, err := worktree.ResolveHerdrRepoIdentity(req.ProjectRoot)
+	if err != nil {
+		return err
+	}
+	sourceIdentity, err := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
+	if err != nil {
+		return err
+	}
+	rootIdentity, err := worktree.ResolveHerdrRepoIdentity(req.RootCWD)
 	if err != nil {
 		return err
 	}
@@ -314,12 +343,29 @@ func validateSavedHerdrCoordinatorIntent(req HerdrCoordinatorRequest, intent sta
 	if err != nil {
 		return err
 	}
-	if intent.Backend != backend.Herdr ||
+	if projectIdentity.RepoKey != sourceIdentity.RepoKey ||
+		rootIdentity.RepoKey != sourceIdentity.RepoKey ||
+		rootCWD != sourceIdentity.RepoRoot {
+		return fmt.Errorf("herdr coordinator roots do not identify one source repository root")
+	}
+	intentID, err := state.HerdrCoordinatorIntentID(
+		req.Parent,
+		sourceIdentity.RepoRoot,
+		req.PlanSpecIdentity,
+	)
+	if err != nil {
+		return err
+	}
+	if intent.IntentID != intentID ||
+		intent.Backend != backend.Herdr ||
 		intent.Operation != "coordinator-workspace" ||
 		intent.Parent != req.Parent ||
-		intent.IssueNum != req.IssueNum ||
-		intent.TaskID != req.TaskID ||
-		intent.SourceRootPhysical != sourceRoot ||
+		intent.IssueNum != 0 ||
+		intent.TaskID != "" ||
+		intent.SourceRootPhysical != sourceIdentity.RepoRoot ||
+		intent.PlanSpecIdentity != req.PlanSpecIdentity ||
+		intent.HerdrRepoKey != sourceIdentity.RepoKey ||
+		intent.HerdrRepoRoot != sourceIdentity.RepoRoot ||
 		filepath.Clean(intent.WorktreePath) != rootCWD ||
 		intent.HerdrSession != req.HerdrSession ||
 		intent.HerdrSocketPath != req.HerdrSocketPath ||
