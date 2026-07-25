@@ -24,6 +24,33 @@ type HerdrBaseResolution struct {
 	SHA           string
 }
 
+type HerdrRepoIdentity struct {
+	RepoKey  string
+	RepoRoot string
+}
+
+// ResolveHerdrRepoIdentity returns the physical Git common directory and
+// source worktree root expected in Herdr worktree provenance.
+func ResolveHerdrRepoIdentity(root string) (HerdrRepoIdentity, error) {
+	repoKey, err := gitTrim(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return HerdrRepoIdentity{}, fmt.Errorf("resolve herdr repo key: %w", err)
+	}
+	repoRoot, err := gitTrim(root, "rev-parse", "--path-format=absolute", "--show-toplevel")
+	if err != nil {
+		return HerdrRepoIdentity{}, fmt.Errorf("resolve herdr repo root: %w", err)
+	}
+	repoKey, err = physicalHerdrPath(repoKey)
+	if err != nil {
+		return HerdrRepoIdentity{}, fmt.Errorf("canonicalize herdr repo key: %w", err)
+	}
+	repoRoot, err = physicalHerdrPath(repoRoot)
+	if err != nil {
+		return HerdrRepoIdentity{}, fmt.Errorf("canonicalize herdr repo root: %w", err)
+	}
+	return HerdrRepoIdentity{RepoKey: repoKey, RepoRoot: repoRoot}, nil
+}
+
 // ResolveHerdrBase performs fanout's base refresh/safety gate and resolves the
 // selector once. Callers persist the returned tuple and must not re-resolve it
 // during recovery.
@@ -148,19 +175,6 @@ func ReserveBranch(root, fullRef, baseSHA string) error {
 	return nil
 }
 
-// ReleaseReservedBranch compare-and-deletes the ref only when it still points
-// at expectedSHA. The state machine calls this solely after proving that no
-// Herdr worktree mutation could have happened.
-func ReleaseReservedBranch(root, fullRef, expectedSHA string) error {
-	if !strings.HasPrefix(fullRef, "refs/heads/") || !fullCommitSHA.MatchString(expectedSHA) {
-		return fmt.Errorf("invalid branch release %s at %s", fullRef, expectedSHA)
-	}
-	if _, err := git(root, "update-ref", "-d", fullRef, expectedSHA); err != nil {
-		return fmt.Errorf("release branch %s at %s: %w", fullRef, expectedSHA, err)
-	}
-	return nil
-}
-
 // VerifyReservedBranch checks both the saved immutable base and the current
 // reserved tip. It is used immediately before Herdr worktree mutation.
 func VerifyReservedBranch(root, resolvedBaseRef, baseSHA, fullRef string) error {
@@ -252,6 +266,18 @@ func checkoutRegistered(root, checkoutPath string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func physicalHerdrPath(path string) (string, error) {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "" || !filepath.IsAbs(path) {
+		return "", fmt.Errorf("path %q is not absolute", path)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolved), nil
 }
 
 // WriteHerdrOwnershipMarker exclusively creates the checkout-side half of the

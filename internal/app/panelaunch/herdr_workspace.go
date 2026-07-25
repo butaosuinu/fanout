@@ -219,7 +219,7 @@ func createHerdrCoordinator(
 		return starting, failHerdrIntent(req.ProjectRoot, starting, "coordinator workspace mutation failed or response was incomplete: "+err.Error())
 	}
 	if result.AlreadyOpen || result.WorkspaceID == "" || result.Label != intent.WorktreeOwnershipNonce ||
-		result.Path != "" || result.RepoKey != "" ||
+		result.Path != "" || result.RepoKey != "" || result.RepoRoot != "" ||
 		filepath.Clean(result.CWD) != filepath.Clean(intent.WorktreePath) ||
 		result.Pane.Pane == "" || result.TerminalID == "" {
 		return starting, failHerdrIntent(req.ProjectRoot, starting, "coordinator workspace response does not match intent")
@@ -269,7 +269,7 @@ func verifyHerdrCoordinatorRealized(
 		}
 		matches++
 		if workspace.Label != intent.WorktreeOwnershipNonce ||
-			workspace.Path != "" || workspace.RepoKey != "" ||
+			workspace.Path != "" || workspace.RepoKey != "" || workspace.RepoRoot != "" ||
 			workspace.Pane.Pane != intent.MutationReceipt.PaneID ||
 			workspace.TerminalID != intent.MutationReceipt.TerminalID ||
 			filepath.Clean(workspace.CWD) != filepath.Clean(intent.WorktreePath) {

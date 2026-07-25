@@ -3,6 +3,8 @@ package herdrrun
 import (
 	"reflect"
 	"testing"
+
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 func TestWorktreeMutationArgsPinExact075CLI(t *testing.T) {
@@ -26,7 +28,11 @@ func TestWorktreeMutationArgsPinExact075CLI(t *testing.T) {
 			name: "worktree create",
 			req: WorktreeMutationRequest{
 				Kind: WorktreeCreate, WorkspaceID: "w1", Branch: "fanout/child",
-				Base: "0123456789012345678901234567890123456789", Path: "/repo/child", Label: "nonce", NoFocus: true,
+				CoordinatorWorkspaceLabel: "coordinator", CoordinatorPaneID: "w1:p1",
+				CoordinatorTerminalID: "terminal-1", CoordinatorWorkspaceCWD: "/repo",
+				ExpectedRepoKey: "/repo/.git", ExpectedRepoRoot: "/repo",
+				Base: "0123456789012345678901234567890123456789", Path: "/repo/child",
+				Label: "nonce", NoFocus: true,
 			},
 			wantArgs: []string{
 				"worktree", "create", "--workspace", "w1", "--branch", "fanout/child",
@@ -39,7 +45,11 @@ func TestWorktreeMutationArgsPinExact075CLI(t *testing.T) {
 		{
 			name: "worktree open",
 			req: WorktreeMutationRequest{
-				Kind: WorktreeOpen, WorkspaceID: "w1", Path: "/repo/child", Label: "nonce", NoFocus: true,
+				Kind: WorktreeOpen, WorkspaceID: "w1",
+				CoordinatorWorkspaceLabel: "coordinator", CoordinatorPaneID: "w1:p1",
+				CoordinatorTerminalID: "terminal-1", CoordinatorWorkspaceCWD: "/repo",
+				ExpectedRepoKey: "/repo/.git", ExpectedRepoRoot: "/repo",
+				Path: "/repo/child", Label: "nonce", NoFocus: true,
 			},
 			wantArgs: []string{
 				"worktree", "open", "--workspace", "w1", "--path", "/repo/child",
@@ -59,6 +69,62 @@ func TestWorktreeMutationArgsPinExact075CLI(t *testing.T) {
 				t.Fatalf("got (%v,%q,%q), want (%v,%q,%q)", args, id, result, tt.wantArgs, tt.wantID, tt.wantResult)
 			}
 		})
+	}
+}
+
+func TestValidateBoundCoordinatorRequiresExactPersistedIdentity(t *testing.T) {
+	req := WorktreeMutationRequest{
+		Kind: WorktreeCreate, WorkspaceID: "w1",
+		CoordinatorWorkspaceLabel: "coordinator", CoordinatorPaneID: "w1:p1",
+		CoordinatorTerminalID: "terminal-1", CoordinatorWorkspaceCWD: "/repo",
+		ExpectedRepoKey: "/repo/.git", ExpectedRepoRoot: "/repo",
+		Branch: "fanout/child", Base: "0123456789012345678901234567890123456789",
+		Path: "/repo/child", Label: "nonce", NoFocus: true,
+	}
+	observed := []WorkspaceObservation{{
+		WorkspaceID: "w1",
+		Label:       "coordinator",
+		Pane: corebackend.PaneRef{
+			Backend:   corebackend.Herdr,
+			Workspace: "w1",
+			Pane:      "w1:p1",
+		},
+		TerminalID: "terminal-1",
+		CWD:        "/repo",
+	}}
+	if err := validateBoundCoordinator(req, observed); err != nil {
+		t.Fatal(err)
+	}
+	observed[0].Label = "foreign"
+	if err := validateBoundCoordinator(req, observed); err == nil {
+		t.Fatal("foreign coordinator label unexpectedly accepted")
+	}
+}
+
+func TestValidateMutationResultProvenancePinsRepoKeyAndRoot(t *testing.T) {
+	req := WorktreeMutationRequest{
+		Kind:             WorktreeCreate,
+		Path:             "/repo/child",
+		ExpectedRepoKey:  "/repo/.git",
+		ExpectedRepoRoot: "/repo",
+	}
+	got := WorkspaceObservation{
+		Path:     "/repo/child",
+		RepoKey:  "/repo/.git",
+		RepoRoot: "/repo",
+		CWD:      "/repo/child",
+	}
+	if err := validateMutationResultProvenance(req, got); err != nil {
+		t.Fatal(err)
+	}
+	got.RepoRoot = "/foreign"
+	if err := validateMutationResultProvenance(req, got); err == nil {
+		t.Fatal("foreign repo root unexpectedly accepted")
+	}
+	got.RepoRoot = "/repo"
+	got.RepoKey = "/foreign/.git"
+	if err := validateMutationResultProvenance(req, got); err == nil {
+		t.Fatal("foreign repo key unexpectedly accepted")
 	}
 }
 

@@ -41,17 +41,17 @@ request-bound generation と conditional mutation、server-authenticated control
 
 | 対象 | wave 2 の判断 | 理由 |
 |---|---|---|
-| owned server | Go（#526 の未確定 gate と #527 の journal-to-epoch 移譲契約確定後） | FD-relative private namespace gate 済みの XDG / control namespace と private socket、owner marker で別 UID と session 外への影響を封じ込める |
-| server 起動 | Go（#526 の behavior / log proof と #527 の journal-to-epoch 移譲契約確定後） | per-repo supervisor が caller routing env を fanout-owned XDG / config / socket / session で上書きし、foreground server child を bootstrap する |
+| owned server | Go（#526 の未確定 gate と #528 の journal-to-epoch 移譲契約確定後） | FD-relative private namespace gate 済みの XDG / control namespace と private socket、owner marker で別 UID と session 外への影響を封じ込める |
+| server 起動 | Go（#526 の behavior / log proof と #528 の journal-to-epoch 移譲契約確定後） | per-repo supervisor が caller routing env を fanout-owned XDG / config / socket / session で上書きし、foreground server child を bootstrap する |
 | owned server restart | Go（#526 の旧 admission quiescence proof 完了後） | 旧 admission の active intent と `*-starting` CLI process の不在を preflight / terminal CAS で証明し、active-supervisor lease と restart journal で single spawn を直列化する。gate 失敗は exact candidate absence 後に `manifest-invalid` へ閉じる |
 | 集約読み | `herdr api snapshot` を使う | workspace、tab、pane、layout、agent、focus を 1 回で取得できる |
 | content read / peek | Go | exact PaneRef と `terminal_id` を直前・直後に再照合し、不一致は結果を破棄する |
 | raw Socket API | 不採用 | wave 2 で必要な操作は CLI wrapper で足りる |
 | worktree | Go | intent / phase、workspace label と git-dir marker の nonce、Git 事後条件で誤採用を防ぐ |
 | cleanup 後の branch 継続 | Go（ユーザー明示操作に限る） | cleaned tombstone と current branch tip を照合し、branch lineage だけを新しい launch 世代へ移す |
-| console workspace | Go（#526 / #527 の gate と #528 の direct-launch 契約完了後） | dedicated console intent と exact token で sealed user-shell bundle を起動し、agent / nudge lane から分離する |
+| console workspace | Go（#526 / #527 / #528 の gate と #530 の lifecycle 完了後） | dedicated console intent と exact token で sealed user-shell bundle を起動し、agent / nudge lane から分離する |
 | agent 起動 | Go（#526 / #527 の gate 完了後、#528 が admit した bundle / matcher に限る） | owned config の `terminal.default_shell` を bundled non-shell launcher に固定し、sealed provider bundle と検証済み runtime process chain を operation-bound token で起動する |
-| workload env | Go（#526 / #527 の gate 完了後。provider operation は #528 adapter 完了後） | auth / socket / proxy / locale を維持し、provider config は sealed view へ固定する。`OPENCODE_CONFIG_CONTENT`、Herdr / tmux routing、injection env を拒否し、raw value を registry / journal / log / bundle に保存しない |
+| workload env | Go（#526 / #527 / #528 の gate 完了後） | auth / socket / proxy / locale を維持し、provider config は sealed view へ固定する。`OPENCODE_CONFIG_CONTENT`、Herdr / tmux routing、injection env を拒否し、raw value を registry / journal / log / bundle に保存しない |
 | plain shell への `pane run` | 自動 launch には不採用 | text と Enter の配送時に shell readiness と空入力を条件化できない |
 | `agent start` | 自動 launch には不採用 | canonical agent executable を bare name で解決するため、fanout が選んだ絶対 executable を pin できない |
 | compatibility gate | version だけを検査する | stable `>=0.7.5` を許可する。schema、method、field、CLI help、protocol、behavior profile、active manifest は事前検査しない |
@@ -163,7 +163,7 @@ marker は journal の canonical bytes / digest / opened identity、socket は r
 
 | 未確定事項 | 確定 owner | 確定前の fail-closed 契約 |
 |---|---|---|
-| `session-ready` CAS で bootstrap journal の marker canonical bytes / digest / opened identity を active epoch へ移し、shutdown terminal CAS まで保持する exact field / CAS shape | #527 の worktree / state machine 実装 | #527 が reviewed contract を確定するまで `session-ready` CAS を拒否し、bootstrap journal / operation lock / reference を保持して operation を admit しない |
+| `session-ready` CAS で bootstrap journal の marker canonical bytes / digest / opened identity を active epoch へ移し、shutdown terminal CAS まで保持する exact field / CAS shape | #528 の launcher / registry 実装 | #528 が reviewed contract を確定するまで `session-ready` CAS を拒否し、bootstrap journal / operation lock / reference を保持して operation を admit しない |
 | `fanout.herdr-owner.v1` の property 名、nesting、array / object shape、identity tuple の具体形、canonical golden bytes | #526 の gate 実装 | #526 が reviewed schema と golden bytes を確定するまで marker create / reuse と marker-dependent な bootstrap / restart / shutdown を拒否する |
 | shared registry の exact schema / codec / canonical golden bytes、pre-bundle bootstrap writer admission、session-bundled fanout writer への journaled handoff と compatibility record の具体形 | #526 の shared registry gate 実装 | #526 が reviewed contract を確定するまで fresh bootstrap、registry save、Herdr mutation を拒否し、確定後も admitted bootstrap phase 外の writer、handoff 未完了、session bundle と不一致、未対応 schema を mutation 前に拒否する |
 | `herdr-wave2-behavior-v1` の exact detection fixture bytes / digest / declared version、`manifest_set_digest`、no-refresh policy / 実機 proof / golden | #526 の capability gate 実装 | #526 が同じ reviewed profile entry を確定するまで read-only preflight を除く fresh bootstrap と、それに伴う registry / filesystem / Herdr mutation を拒否する |
@@ -190,7 +190,7 @@ symlink、anchor 配下の mount boundary、ACL 読取不能、entry と FD の 
 registry の repo-scoped header は schema version、full common-directory identity、単調増加 revision を持ち、branch lineage、cleaned tombstone、launch bundle reference / build / publish / GC journal、agent-manifest override realization / retirement tombstone / build journal、session-bootstrap journal を supervisor epoch を越えて保持する。
 registry / journal / final row は raw workload env、capsule MAC key、capsule payload を保持しない。
 active epoch は stable epoch owner nonce、可変 active-supervisor owner tuple、session / socket / server identity、owner marker の canonical bytes / digest / opened identity record、active bundle / manifest override realization key / generation / final root identity、console、intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal、admission state `ready` / `restarting` / `manifest-invalid` / `draining` を別に持つ。
-owner marker record の exact field / CAS shape は「未確定事項」の #527 owner とし、確定後は marker の stable epoch-bound field と完全一致する場合だけ active epoch を再利用する。
+owner marker record の exact field / CAS shape は「未確定事項」の #528 owner とし、確定後は marker の stable epoch-bound field と完全一致する場合だけ active epoch を再利用する。
 active intent、final row、runtime resource、active env-capsule inventory、capsule disposal journal がない場合だけ新しい owner epoch へ切り替え、repo-scoped lineage と tombstone は保持する。
 registry schema / codec、canonical golden bytes、pre-bundle bootstrap writer admission、session-bundled writer への journaled handoff の確定 owner は #526 とし、確定までは fresh bootstrap と shared registry を伴う Herdr mutation を開始しない。
 確定後、session bundle の `ready` reference を得るまでの save は bootstrap preflight が固定した writer executable identity / SHA-256 と同じ process による session-bootstrap / bundle-build phase だけに限る。
@@ -307,7 +307,7 @@ spawn 成功後の PID / start token、bundle executable identity、private name
 `server-bootstrap-starting` で PID / start token を保存できなかった crash は server を再起動せず、観測した process / socket を採用も停止もしない。
 `server-bootstrap-realized` だけが exact PID / start token、bundle-bound process、marker、socket を再照合して recovery できる。
 全照合後の phase `session-ready` は provisional bundle / manifest override realization reference、owner marker の canonical bytes / digest / opened identity record を active epoch へ移し、bootstrap owner tuple を active-supervisor owner tuple へ generation increment 付き CAS で移譲して bootstrap journal を同じ state save で除去する必要がある。
-exact field / CAS shape は「未確定事項」の #527 owner とし、確定まで `session-ready` CAS は bootstrap journal / operation lock / reference を除去せず fail closed にする。
+exact field / CAS shape は「未確定事項」の #528 owner とし、確定まで `session-ready` CAS は bootstrap journal / operation lock / reference を除去せず fail closed にする。
 active-supervisor owner tuple は `supervisor_owner_nonce`、`owner_generation`、supervisor PID / start token、`lease_expires_unix_ms` を持つ。
 active server tuple は saved server PID / start token、bundled executable identity、socket identity、fanout-local `server_instance_generation` を持つ。
 capability admission は `admission_id`、state、active server tuple、behavior profile ID、Herdr source provenance、platform、executable digest、agent-detection fixture ID / declared version / `manifest_set_digest`、no-refresh policy ID、manifest realization key / generation / final root identity、session bundle digest、status / schema / snapshot / active manifest proof、optional invalidation receipt を束縛する。
@@ -1908,7 +1908,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 
 | 機能 | wave 2 | tmux-parity tier の条件 | proof-grade tier への格上げ条件 |
 |---|---|---|---|
-| owned bootstrap / launch | Go（bootstrap は #526 / #527 の gate 完了後、launch は加えて #528 の direct-launch 契約完了後） | bootstrap は FD-relative private namespace gate 済みの owned XDG / socket / marker、short registry CAS、sealed session bundle、0.7.5 structural gate / code-owned behavior profile / exact detection fixture / no-refresh policy、0600 / ACL-free server log creation / maintenance / verification proof を要求し、#526 の fixture / no-refresh proof / log protocol / owner marker schema / registry writer gate と #527 の journal-to-epoch 移譲の確定までは fail closed にする。console / coordinator / agent launch はさらに launch operation lock / lease、sealed operation bundle、secret-free control env、versioned workload env policy / one-shot capsule、対応する intent、non-shell launcher readiness と exact token、bundle-bound runtime matcher を要求する。coordinator / agent launch は加えて agent detection / rename と provider admission を要求し、#528 完了まで fail closed にする | request-bound direct spawn、controller capability、別 UID の bundle owner、または server / agent の UID 分離とし、setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
+| owned bootstrap / launch | Go（bootstrap は #526 / #527 の gate 完了後、launch は加えて #528 の direct-launch 契約完了後） | bootstrap は FD-relative private namespace gate 済みの owned XDG / socket / marker、short registry CAS、sealed session bundle、0.7.5 structural gate / code-owned behavior profile / exact detection fixture / no-refresh policy、0600 / ACL-free server log creation / maintenance / verification proof を要求し、#526 の fixture / no-refresh proof / log protocol / owner marker schema / registry writer gate と #528 の journal-to-epoch 移譲の確定までは fail closed にする。console / coordinator / agent launch はさらに launch operation lock / lease、sealed operation bundle、secret-free control env、versioned workload env policy / one-shot capsule、対応する intent、non-shell launcher readiness と exact token、bundle-bound runtime matcher を要求する。coordinator / agent launch は加えて agent detection / rename と provider admission を要求し、#528 完了まで fail closed にする | request-bound direct spawn、controller capability、別 UID の bundle owner、または server / agent の UID 分離とし、setup hook を使う場合は suppression / registry generation / operation-scoped receipt |
 | owned server restart | Go（#526 の旧 admission quiescence proof 完了後） | active intent 0 件と `*-starting` CLI process 不在の preflight / terminal fence、active-supervisor lease / takeover CAS、`ready -> restarting -> ready / manifest-invalid`、restart operation lock、single spawn、cache なしの三段 capability gate / active manifest gate、candidate stop / absence reconciliation、bundle reference continuity | authenticated server generation と request-bound conditional restart |
 | launch bundle build / GC | Go | FD-relative private namespace gate、空の xattr allowlist、build lock / lease / owner CAS、root identity、expected entry set、incomplete root の quarantine-only recovery、detached inventory、no-follow subset deletion、session bootstrap abort terminal CAS | verified FD spawn または別 UID の bundle owner |
 | console / coordinator close | Go | checkout を持たない exact owned workspace / pane を送信直前に再照合し、response loss では blind retry しない | close が authoritative server generation と target resource generation を原子的に検査する |
@@ -2045,7 +2045,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   server / socket がすでに不在の manifest-invalid shutdown は保存済み absence を draining CAS と stop phase で再照合し、stop request を発行せず `server-stop-realized` へ進む。
   server env の `FANOUT_HERDR_LAUNCHER_MAX_WAIT_MS` は `300000` に固定する。
   owner marker は #526 が確定する `fanout.herdr-owner.v1` canonical schema を使い、bundle manifest、active manifest、filesystem、live process identity を直前 gate で照合する。
-  #526 の schema / golden bytes と #527 の marker record 移譲はユーザー決定（2026-07-22）による明示的 deferral とし、確定まで marker-dependent path と `session-ready` CAS を fail closed にする。
+  #526 の schema / golden bytes と #528 の marker record 移譲はユーザー決定（2026-07-22）による明示的 deferral とし、確定まで marker-dependent path と `session-ready` CAS を fail closed にする。
   owner marker は registry の session-bootstrap journal / active epoch を外部から照合する marker であり、bundle reference、bootstrap phase、active epoch の正典にはしない。
   fresh session は registry の provisional bootstrap owner、session bundle の正式 reference、exclusive marker create、foreground server spawn、active epoch への reference / marker record 移譲を journal phase と CAS で直列化する。
   ready CAS 後の bootstrap owner は operation lock と renewable lease を持ち、expired owner は旧 PID / start token の不在、phase / resource identity、generation を照合した CAS に成功した process だけが引き継ぐ。

@@ -38,6 +38,10 @@ func (f *fakeHerdrWorktreeRuntime) MutateWorktree(_ context.Context, req herdrru
 	f.mutations = append(f.mutations, req)
 	switch req.Kind {
 	case herdrrun.WorktreeCreate:
+		repoIdentity, err := worktree.ResolveHerdrRepoIdentity(f.repo)
+		if err != nil {
+			f.t.Fatal(err)
+		}
 		if err := os.MkdirAll(filepath.Dir(req.Path), 0o755); err != nil {
 			f.t.Fatal(err)
 		}
@@ -46,7 +50,8 @@ func (f *fakeHerdrWorktreeRuntime) MutateWorktree(_ context.Context, req herdrru
 			WorkspaceID: "w-child",
 			Label:       req.Label,
 			Path:        req.Path,
-			RepoKey:     filepath.Join(f.repo, ".git"),
+			RepoKey:     repoIdentity.RepoKey,
+			RepoRoot:    repoIdentity.RepoRoot,
 			Pane: backend.PaneRef{
 				Backend:   backend.Herdr,
 				Workspace: "w-child",
@@ -86,7 +91,7 @@ func (f *fakeHerdrWorktreeRuntime) MutateWorktree(_ context.Context, req herdrru
 func TestRealizeHerdrWorktreePersistsPhasesAndStopsAtLauncherBoundary(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
-	req := newHerdrWorktreeRequest(repo)
+	req := newHerdrWorktreeRequest(t, repo, runtime)
 	var phases []state.HerdrLaunchPhase
 	result, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(&phases, ""))
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
@@ -107,6 +112,12 @@ func TestRealizeHerdrWorktreePersistsPhasesAndStopsAtLauncherBoundary(t *testing
 	}
 	mutation := runtime.mutations[0]
 	if mutation.Kind != herdrrun.WorktreeCreate || mutation.WorkspaceID != "w-coordinator" ||
+		mutation.CoordinatorWorkspaceLabel != "coordinator-nonce" ||
+		mutation.CoordinatorPaneID != "w-coordinator:p1" ||
+		mutation.CoordinatorTerminalID != "terminal-coordinator" ||
+		mutation.CoordinatorWorkspaceCWD != repo ||
+		mutation.ExpectedRepoKey != result.Intent.HerdrRepoKey ||
+		mutation.ExpectedRepoRoot != result.Intent.HerdrRepoRoot ||
 		mutation.Branch != req.BranchName || mutation.Path != req.WorktreePath ||
 		mutation.Label == "" || !mutation.NoFocus {
 		t.Fatalf("mutation = %+v", mutation)
@@ -150,7 +161,7 @@ func TestHerdrStartingPhasesNeverBlindRetry(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := newHerdrLaunchRepo(t)
 			runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
-			req := newHerdrWorktreeRequest(repo)
+			req := newHerdrWorktreeRequest(t, repo, runtime)
 			_, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, tt.crashPhase))
 			if err == nil || !strings.Contains(err.Error(), "injected crash") {
 				t.Fatalf("first error = %v", err)
@@ -174,10 +185,51 @@ func TestHerdrStartingPhasesNeverBlindRetry(t *testing.T) {
 	}
 }
 
+func TestHerdrChildRejectsCoordinatorRequestDriftOnReplay(t *testing.T) {
+	repo := newHerdrLaunchRepo(t)
+	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
+	req := newHerdrWorktreeRequest(t, repo, runtime)
+	_, err := RealizeHerdrWorktree(
+		context.Background(),
+		req,
+		runtime,
+		deterministicHerdrHooks(nil, state.HerdrPhaseBranchPlanned),
+	)
+	if err == nil || !strings.Contains(err.Error(), "injected crash") {
+		t.Fatalf("first error = %v", err)
+	}
+	req.CoordinatorWorkspaceID = "w-foreign"
+	_, err = RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if err == nil || !strings.Contains(err.Error(), "contradicts the exact launch request") {
+		t.Fatalf("coordinator drift error = %v", err)
+	}
+	if len(runtime.mutations) != 0 {
+		t.Fatalf("coordinator drift issued %d mutations", len(runtime.mutations))
+	}
+}
+
+func TestHerdrChildRejectsLiveCoordinatorDriftAndRetainsReservation(t *testing.T) {
+	repo := newHerdrLaunchRepo(t)
+	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
+	req := newHerdrWorktreeRequest(t, repo, runtime)
+	runtime.observations[0].Label = "foreign"
+	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) ||
+		!strings.Contains(err.Error(), "live herdr coordinator identity changed") {
+		t.Fatalf("coordinator drift error = %v", err)
+	}
+	if len(runtime.mutations) != 0 {
+		t.Fatalf("coordinator drift issued %d mutations", len(runtime.mutations))
+	}
+	if _, found, observeErr := worktree.ObserveBranch(repo, "refs/heads/"+req.BranchName); observeErr != nil || !found {
+		t.Fatalf("reservation was not retained: found=%t err=%v", found, observeErr)
+	}
+}
+
 func TestHerdrWorktreeResponseLossPreservesResourcesAndDoesNotRetry(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo, responseLoss: true}
-	req := newHerdrWorktreeRequest(repo)
+	req := newHerdrWorktreeRequest(t, repo, runtime)
 	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("response-loss error = %v", err)
@@ -201,7 +253,7 @@ func TestHerdrWorktreeSetupPolicyFailsBeforeMutation(t *testing.T) {
 		repo:      repo,
 		policyErr: errors.New("plugin registry is not empty"),
 	}
-	req := newHerdrWorktreeRequest(repo)
+	req := newHerdrWorktreeRequest(t, repo, runtime)
 	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) || !strings.Contains(err.Error(), "setup-hook policy") {
 		t.Fatalf("policy error = %v", err)
@@ -214,7 +266,7 @@ func TestHerdrWorktreeSetupPolicyFailsBeforeMutation(t *testing.T) {
 func TestHerdrWorktreeDeadlineDoesNotExtendOnRecovery(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
-	req := newHerdrWorktreeRequest(repo)
+	req := newHerdrWorktreeRequest(t, repo, runtime)
 	start := time.Unix(1_700_000_000, 0)
 	now := start
 	counter := 0
@@ -252,7 +304,7 @@ func TestHerdrWorktreeDeadlineDoesNotExtendOnRecovery(t *testing.T) {
 func TestHerdrWorktreeRealizedRecoveryDoesNotReissueMutation(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
-	req := newHerdrWorktreeRequest(repo)
+	req := newHerdrWorktreeRequest(t, repo, runtime)
 	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, state.HerdrPhaseWorktreeRealized))
 	if err == nil || !strings.Contains(err.Error(), "injected crash") {
 		t.Fatalf("first error = %v", err)
@@ -266,37 +318,11 @@ func TestHerdrWorktreeRealizedRecoveryDoesNotReissueMutation(t *testing.T) {
 	}
 }
 
-func TestReleaseHerdrReservationRequiresProvenMutationAbsence(t *testing.T) {
-	repo := newHerdrLaunchRepo(t)
-	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
-	req := newHerdrWorktreeRequest(repo)
-	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, state.HerdrPhaseWorktreePlanned))
-	if err == nil {
-		t.Fatal("expected injected stop after reservation")
-	}
-	intentID, err := state.HerdrIntentID(req.Parent, req.IssueNum, req.TaskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if releaseErr := ReleaseHerdrReservationBeforeMutation(context.Background(), repo, intentID, runtime, "test abort"); releaseErr != nil {
-		t.Fatal(releaseErr)
-	}
-	if _, found, observeErr := worktree.ObserveBranch(repo, "refs/heads/"+req.BranchName); observeErr != nil || found {
-		t.Fatalf("reservation remains: found=%t err=%v", found, observeErr)
-	}
-	control, err := state.LoadHerdrControl(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, _ := control.FindIntent(intentID)
-	if intent.OperationState != state.HerdrOperationLaunchAborted {
-		t.Fatalf("operation state = %s", intent.OperationState)
-	}
-}
-
 func TestValidateAlreadyOpenPinsPreStateBinding(t *testing.T) {
 	intent := state.HerdrLaunchIntent{
 		WorktreeOwnershipNonce: "nonce",
+		HerdrRepoKey:           "repo",
+		HerdrRepoRoot:          "/repo",
 		MutationRequest:        &state.HerdrMutationRequest{Kind: state.HerdrMutationWorktreeOpen},
 		MutationPreState: &state.HerdrMutationPreState{
 			ExpectedAlreadyOpenID:    "w1",
@@ -306,6 +332,7 @@ func TestValidateAlreadyOpenPinsPreStateBinding(t *testing.T) {
 				Label:       "nonce",
 				Path:        "/repo/child",
 				RepoKey:     "repo",
+				RepoRoot:    "/repo",
 			}},
 		},
 		WorktreePath: "/repo/child",
@@ -383,8 +410,9 @@ func TestHerdrCoordinatorResponseLossDoesNotRetry(t *testing.T) {
 	}
 }
 
-func newHerdrWorktreeRequest(repo string) HerdrWorktreeRequest {
-	return HerdrWorktreeRequest{
+func newHerdrWorktreeRequest(t *testing.T, repo string, runtime *fakeHerdrWorktreeRuntime) HerdrWorktreeRequest {
+	t.Helper()
+	req := HerdrWorktreeRequest{
 		Parent:                 "524",
 		IssueNum:               527,
 		ProjectRoot:            repo,
@@ -399,6 +427,75 @@ func newHerdrWorktreeRequest(repo string) HerdrWorktreeRequest {
 		HerdrSocketPath:        "/tmp/fanout-owned.sock",
 		TotalTimeout:           30 * time.Second,
 	}
+	seedHerdrCoordinator(t, repo, runtime, req)
+	return req
+}
+
+func seedHerdrCoordinator(
+	t *testing.T,
+	repo string,
+	runtime *fakeHerdrWorktreeRuntime,
+	req HerdrWorktreeRequest,
+) {
+	t.Helper()
+	baseID, err := state.HerdrIntentID(req.Parent, req.IssueNum, req.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceRoot, err := physicalPath(req.SourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		workspaceID = "w-coordinator"
+		label       = "coordinator-nonce"
+		paneID      = "w-coordinator:p1"
+		terminalID  = "terminal-coordinator"
+	)
+	locked, err := state.LockHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked.UpsertIntent(state.HerdrLaunchIntent{
+		IntentID:               baseID + ":coordinator",
+		Parent:                 req.Parent,
+		IssueNum:               req.IssueNum,
+		TaskID:                 req.TaskID,
+		Backend:                backend.Herdr,
+		Operation:              "coordinator-workspace",
+		OperationState:         state.HerdrOperationActive,
+		Phase:                  state.HerdrPhaseWorkspaceRealized,
+		SourceRootPhysical:     sourceRoot,
+		WorktreePath:           repo,
+		HerdrSession:           req.HerdrSession,
+		HerdrSocketPath:        req.HerdrSocketPath,
+		WorktreeOwnershipNonce: label,
+		MutationReceipt: &state.HerdrMutationReceipt{
+			WorkspaceID:    workspaceID,
+			WorkspaceLabel: label,
+			PaneID:         paneID,
+			TerminalID:     terminalID,
+			CWD:            repo,
+		},
+	})
+	if err := locked.Save(); err != nil {
+		_ = locked.Unlock()
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	runtime.observations = append(runtime.observations, herdrrun.WorkspaceObservation{
+		WorkspaceID: workspaceID,
+		Label:       label,
+		Pane: backend.PaneRef{
+			Backend:   backend.Herdr,
+			Workspace: workspaceID,
+			Pane:      paneID,
+		},
+		TerminalID: terminalID,
+		CWD:        repo,
+	})
 }
 
 func deterministicHerdrHooks(phases *[]state.HerdrLaunchPhase, crash state.HerdrLaunchPhase) HerdrWorktreeHooks {

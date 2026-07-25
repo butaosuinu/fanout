@@ -18,14 +18,20 @@ const (
 )
 
 type WorktreeMutationRequest struct {
-	Kind        WorktreeMutationKind
-	WorkspaceID string
-	CWD         string
-	Branch      string
-	Base        string
-	Path        string
-	Label       string
-	NoFocus     bool
+	Kind                      WorktreeMutationKind
+	WorkspaceID               string
+	CoordinatorWorkspaceLabel string
+	CoordinatorPaneID         string
+	CoordinatorTerminalID     string
+	CoordinatorWorkspaceCWD   string
+	ExpectedRepoKey           string
+	ExpectedRepoRoot          string
+	CWD                       string
+	Branch                    string
+	Base                      string
+	Path                      string
+	Label                     string
+	NoFocus                   bool
 }
 
 type WorkspaceObservation struct {
@@ -33,6 +39,7 @@ type WorkspaceObservation struct {
 	Label       string
 	Path        string
 	RepoKey     string
+	RepoRoot    string
 	Pane        corebackend.PaneRef
 	TerminalID  string
 	CWD         string
@@ -135,6 +142,15 @@ func (s *OwnedSession) MutateWorktree(ctx context.Context, req WorktreeMutationR
 	if err != nil {
 		return WorktreeMutationResult{}, err
 	}
+	if req.Kind == WorktreeCreate || req.Kind == WorktreeOpen {
+		coordinatorObserved, observeErr := s.backend.observeOwnedWorkspaces(ctx, admission)
+		if observeErr != nil {
+			return WorktreeMutationResult{}, fmt.Errorf("observe bound herdr coordinator: %w", observeErr)
+		}
+		if validateErr := validateBoundCoordinator(req, coordinatorObserved); validateErr != nil {
+			return WorktreeMutationResult{}, validateErr
+		}
+	}
 
 	args, envelopeID, resultType := worktreeMutationArgs(req)
 	out, err := s.backend.runContext(ctx, commandTimeout, probed.binary, probed.route, args...)
@@ -165,21 +181,56 @@ func (s *OwnedSession) MutateWorktree(ctx context.Context, req WorktreeMutationR
 	if *response.Workspace.Focused {
 		return WorktreeMutationResult{}, fmt.Errorf("herdr mutation focused a no-focus workspace")
 	}
-	switch req.Kind {
-	case WorkspaceCreate:
-		if got.Path != "" || got.RepoKey != "" || got.CWD != req.CWD {
-			return WorktreeMutationResult{}, fmt.Errorf("herdr coordinator workspace provenance does not match request")
-		}
-	case WorktreeCreate, WorktreeOpen:
-		if got.Path != req.Path || got.RepoKey == "" || got.CWD != req.Path {
-			return WorktreeMutationResult{}, fmt.Errorf("herdr worktree workspace provenance does not match request")
-		}
+	if err := validateMutationResultProvenance(req, got); err != nil {
+		return WorktreeMutationResult{}, err
 	}
 	alreadyOpen := response.AlreadyOpen != nil && *response.AlreadyOpen
 	if req.Kind != WorktreeOpen && alreadyOpen {
 		return WorktreeMutationResult{}, fmt.Errorf("herdr %s unexpectedly returned already_open", req.Kind)
 	}
 	return WorktreeMutationResult{WorkspaceObservation: got, AlreadyOpen: alreadyOpen}, nil
+}
+
+func validateMutationResultProvenance(req WorktreeMutationRequest, got WorkspaceObservation) error {
+	switch req.Kind {
+	case WorkspaceCreate:
+		if got.Path != "" || got.RepoKey != "" || got.RepoRoot != "" || got.CWD != req.CWD {
+			return fmt.Errorf("herdr coordinator workspace provenance does not match request")
+		}
+	case WorktreeCreate, WorktreeOpen:
+		if got.Path != req.Path ||
+			got.RepoKey != req.ExpectedRepoKey ||
+			got.RepoRoot != req.ExpectedRepoRoot ||
+			got.CWD != req.Path {
+			return fmt.Errorf("herdr worktree workspace provenance does not match request")
+		}
+	default:
+		return fmt.Errorf("unknown herdr worktree mutation %q", req.Kind)
+	}
+	return nil
+}
+
+func validateBoundCoordinator(req WorktreeMutationRequest, observed []WorkspaceObservation) error {
+	matches := 0
+	for _, workspace := range observed {
+		if workspace.WorkspaceID != req.WorkspaceID {
+			continue
+		}
+		matches++
+		if workspace.Label != req.CoordinatorWorkspaceLabel ||
+			workspace.Path != "" ||
+			workspace.RepoKey != "" ||
+			workspace.RepoRoot != "" ||
+			workspace.Pane.Pane != req.CoordinatorPaneID ||
+			workspace.TerminalID != req.CoordinatorTerminalID ||
+			workspace.CWD != req.CoordinatorWorkspaceCWD {
+			return fmt.Errorf("herdr coordinator workspace identity does not match saved child request")
+		}
+	}
+	if matches != 1 {
+		return fmt.Errorf("herdr coordinator workspace %q has %d matching live observations", req.WorkspaceID, matches)
+	}
+	return nil
 }
 
 func validateWorktreeMutationRequest(req WorktreeMutationRequest) error {
@@ -191,15 +242,27 @@ func validateWorktreeMutationRequest(req WorktreeMutationRequest) error {
 	}
 	switch req.Kind {
 	case WorkspaceCreate:
-		if req.CWD == "" || req.WorkspaceID != "" || req.Branch != "" || req.Base != "" || req.Path != "" {
+		if req.CWD == "" || req.WorkspaceID != "" ||
+			req.CoordinatorWorkspaceLabel != "" || req.CoordinatorPaneID != "" ||
+			req.CoordinatorTerminalID != "" || req.CoordinatorWorkspaceCWD != "" ||
+			req.ExpectedRepoKey != "" || req.ExpectedRepoRoot != "" ||
+			req.Branch != "" || req.Base != "" || req.Path != "" {
 			return fmt.Errorf("invalid herdr workspace create request")
 		}
 	case WorktreeCreate:
-		if req.WorkspaceID == "" || req.Branch == "" || req.Base == "" || req.Path == "" || req.CWD != "" {
+		if req.WorkspaceID == "" || req.CoordinatorWorkspaceLabel == "" ||
+			req.CoordinatorPaneID == "" || req.CoordinatorTerminalID == "" ||
+			req.CoordinatorWorkspaceCWD == "" ||
+			req.ExpectedRepoKey == "" || req.ExpectedRepoRoot == "" ||
+			req.Branch == "" || req.Base == "" || req.Path == "" || req.CWD != "" {
 			return fmt.Errorf("invalid herdr worktree create request")
 		}
 	case WorktreeOpen:
-		if req.WorkspaceID == "" || req.Path == "" || req.CWD != "" || req.Branch != "" || req.Base != "" {
+		if req.WorkspaceID == "" || req.CoordinatorWorkspaceLabel == "" ||
+			req.CoordinatorPaneID == "" || req.CoordinatorTerminalID == "" ||
+			req.CoordinatorWorkspaceCWD == "" ||
+			req.ExpectedRepoKey == "" || req.ExpectedRepoRoot == "" ||
+			req.Path == "" || req.CWD != "" || req.Branch != "" || req.Base != "" {
 			return fmt.Errorf("invalid herdr worktree open request")
 		}
 	default:
@@ -299,6 +362,7 @@ func workspaceObservation(workspace workspaceJSON, panes []paneJSON) (WorkspaceO
 	if workspace.Worktree != nil {
 		observation.Path = workspace.Worktree.CheckoutPath
 		observation.RepoKey = workspace.Worktree.RepoKey
+		observation.RepoRoot = workspace.Worktree.RepoRoot
 	}
 	switch len(panes) {
 	case 0:

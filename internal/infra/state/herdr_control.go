@@ -23,17 +23,16 @@ const (
 	HerdrOperationManualCleanupRequired HerdrOperationState = "manual_cleanup_required"
 	HerdrOperationLaunchAborted         HerdrOperationState = "launch-aborted"
 
-	HerdrPhaseBranchPlanned         HerdrLaunchPhase = "branch-planned"
-	HerdrPhaseBranchStarting        HerdrLaunchPhase = "branch-starting"
-	HerdrPhaseWorktreePlanned       HerdrLaunchPhase = "worktree-planned"
-	HerdrPhaseWorktreeStarting      HerdrLaunchPhase = "worktree-starting"
-	HerdrPhaseWorktreeRealized      HerdrLaunchPhase = "worktree-realized"
-	HerdrPhaseWorktreeReady         HerdrLaunchPhase = "worktree-ready"
-	HerdrPhaseBranchReleaseStarting HerdrLaunchPhase = "branch-release-starting"
-	HerdrPhaseWorkspacePlanned      HerdrLaunchPhase = "workspace-planned"
-	HerdrPhaseWorkspaceStarting     HerdrLaunchPhase = "workspace-starting"
-	HerdrPhaseWorkspaceRealized     HerdrLaunchPhase = "workspace-realized"
-	HerdrPhaseWorkspaceReady        HerdrLaunchPhase = "workspace-ready"
+	HerdrPhaseBranchPlanned     HerdrLaunchPhase = "branch-planned"
+	HerdrPhaseBranchStarting    HerdrLaunchPhase = "branch-starting"
+	HerdrPhaseWorktreePlanned   HerdrLaunchPhase = "worktree-planned"
+	HerdrPhaseWorktreeStarting  HerdrLaunchPhase = "worktree-starting"
+	HerdrPhaseWorktreeRealized  HerdrLaunchPhase = "worktree-realized"
+	HerdrPhaseWorktreeReady     HerdrLaunchPhase = "worktree-ready"
+	HerdrPhaseWorkspacePlanned  HerdrLaunchPhase = "workspace-planned"
+	HerdrPhaseWorkspaceStarting HerdrLaunchPhase = "workspace-starting"
+	HerdrPhaseWorkspaceRealized HerdrLaunchPhase = "workspace-realized"
+	HerdrPhaseWorkspaceReady    HerdrLaunchPhase = "workspace-ready"
 
 	HerdrMutationWorkspaceCreate HerdrMutationKind = "workspace-create"
 	HerdrMutationWorktreeCreate  HerdrMutationKind = "worktree-create"
@@ -86,11 +85,15 @@ type HerdrLaunchIntent struct {
 
 	HerdrSession           string `json:"herdr_session"`
 	HerdrSocketPath        string `json:"herdr_socket_path"`
+	HerdrRepoKey           string `json:"herdr_repo_key,omitempty"`
+	HerdrRepoRoot          string `json:"herdr_repo_root,omitempty"`
 	WorktreeOwnershipNonce string `json:"worktree_ownership_nonce"`
 	LaunchNonce            string `json:"launch_nonce"`
 	TotalTimeoutMS         int64  `json:"total_timeout_ms"`
 	LaunchStartedUnixMS    int64  `json:"launch_started_unix_ms"`
 	LaunchExpiresUnixMS    int64  `json:"launch_expires_unix_ms"`
+
+	Coordinator *HerdrCoordinatorBinding `json:"coordinator,omitempty"`
 
 	BranchRequest  *HerdrBranchRequest `json:"branch_request,omitempty"`
 	BranchPreState *HerdrGitPreState   `json:"branch_pre_state,omitempty"`
@@ -120,6 +123,15 @@ type HerdrBranchLineage struct {
 	State               string `json:"state"`
 }
 
+type HerdrCoordinatorBinding struct {
+	IntentID       string `json:"intent_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	WorkspaceLabel string `json:"workspace_label"`
+	PaneID         string `json:"pane_id"`
+	TerminalID     string `json:"terminal_id"`
+	CWD            string `json:"cwd"`
+}
+
 type HerdrBranchRequest struct {
 	FullRef string `json:"full_ref"`
 	NewOID  string `json:"new_oid"`
@@ -141,14 +153,20 @@ type HerdrBranchReceipt struct {
 }
 
 type HerdrMutationRequest struct {
-	Kind        HerdrMutationKind `json:"kind"`
-	WorkspaceID string            `json:"workspace_id,omitempty"`
-	CWD         string            `json:"cwd,omitempty"`
-	Branch      string            `json:"branch,omitempty"`
-	Base        string            `json:"base,omitempty"`
-	Path        string            `json:"path,omitempty"`
-	Label       string            `json:"label"`
-	NoFocus     bool              `json:"no_focus"`
+	Kind                      HerdrMutationKind `json:"kind"`
+	WorkspaceID               string            `json:"workspace_id,omitempty"`
+	CoordinatorWorkspaceLabel string            `json:"coordinator_workspace_label,omitempty"`
+	CoordinatorPaneID         string            `json:"coordinator_pane_id,omitempty"`
+	CoordinatorTerminalID     string            `json:"coordinator_terminal_id,omitempty"`
+	CoordinatorWorkspaceCWD   string            `json:"coordinator_workspace_cwd,omitempty"`
+	ExpectedRepoKey           string            `json:"expected_repo_key,omitempty"`
+	ExpectedRepoRoot          string            `json:"expected_repo_root,omitempty"`
+	CWD                       string            `json:"cwd,omitempty"`
+	Branch                    string            `json:"branch,omitempty"`
+	Base                      string            `json:"base,omitempty"`
+	Path                      string            `json:"path,omitempty"`
+	Label                     string            `json:"label"`
+	NoFocus                   bool              `json:"no_focus"`
 }
 
 type HerdrWorkspaceBinding struct {
@@ -156,6 +174,7 @@ type HerdrWorkspaceBinding struct {
 	Label       string `json:"label"`
 	Path        string `json:"path,omitempty"`
 	RepoKey     string `json:"repo_key,omitempty"`
+	RepoRoot    string `json:"repo_root,omitempty"`
 }
 
 type HerdrMutationPreState struct {
@@ -173,6 +192,7 @@ type HerdrMutationReceipt struct {
 	CWD              string `json:"cwd"`
 	Path             string `json:"path,omitempty"`
 	RepoKey          string `json:"repo_key,omitempty"`
+	RepoRoot         string `json:"repo_root,omitempty"`
 	AlreadyOpen      bool   `json:"already_open,omitempty"`
 	GitDirMarkerPath string `json:"git_dir_marker_path,omitempty"`
 }
@@ -489,7 +509,6 @@ func validateHerdrControlStore(store HerdrControlStore) error {
 			HerdrPhaseWorktreeStarting,
 			HerdrPhaseWorktreeRealized,
 			HerdrPhaseWorktreeReady,
-			HerdrPhaseBranchReleaseStarting,
 			HerdrPhaseWorkspacePlanned,
 			HerdrPhaseWorkspaceStarting,
 			HerdrPhaseWorkspaceRealized,

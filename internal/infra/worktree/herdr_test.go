@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestHerdrBranchReservationIsAtomicAndCompareDeleted(t *testing.T) {
+func TestHerdrBranchReservationIsAtomic(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	base := gitOutput(t, repo, "rev-parse", "HEAD")
 	fullRef, err := HerdrBranchRef(repo, "fanout/herdr-527")
@@ -23,21 +23,24 @@ func TestHerdrBranchReservationIsAtomicAndCompareDeleted(t *testing.T) {
 	if got, found, err := ObserveBranch(repo, fullRef); err != nil || !found || got != base {
 		t.Fatalf("reserved branch = (%q,%t,%v), want %s", got, found, err, base)
 	}
+}
 
-	gitTest(t, repo, "commit", "--allow-empty", "-m", "other")
-	other := gitOutput(t, repo, "rev-parse", "HEAD")
-	gitTest(t, repo, "update-ref", fullRef, other, base)
-	if err := ReleaseReservedBranch(repo, fullRef, base); err == nil {
-		t.Fatal("compare-delete unexpectedly removed a moved branch")
-	}
-	if got, found, err := ObserveBranch(repo, fullRef); err != nil || !found || got != other {
-		t.Fatalf("moved branch after failed release = (%q,%t,%v)", got, found, err)
-	}
-	if err := ReleaseReservedBranch(repo, fullRef, other); err != nil {
+func TestResolveHerdrRepoIdentityReturnsPhysicalGitTuple(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	got, err := ResolveHerdrRepoIdentity(repo)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := ObserveBranch(repo, fullRef); err != nil || found {
-		t.Fatalf("branch remains after compare-delete: found=%t err=%v", found, err)
+	wantKey, err := physicalHerdrPath(filepath.Join(repo, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoot, err := physicalHerdrPath(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RepoKey != wantKey || got.RepoRoot != wantRoot {
+		t.Fatalf("repo identity = %+v", got)
 	}
 }
 
