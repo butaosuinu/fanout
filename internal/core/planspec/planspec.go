@@ -41,6 +41,42 @@ type Task struct {
 	Wave        string   `json:"wave,omitempty"`
 }
 
+// Snapshot is one validated plan-spec read. Callers that select a runtime
+// backend before executing the plan must carry this value through both steps
+// so the ownership identity, executed tasks, and persisted plan bytes cannot
+// come from different file contents.
+type Snapshot struct {
+	path     string
+	spec     Spec
+	data     []byte
+	identity string
+}
+
+// Path returns the source path used for the snapshot.
+func (s Snapshot) Path() string {
+	return s.path
+}
+
+// Spec returns the parsed plan from the captured bytes.
+func (s Snapshot) Spec() Spec {
+	spec := s.spec
+	spec.Tasks = append([]Task(nil), s.spec.Tasks...)
+	for i := range spec.Tasks {
+		spec.Tasks[i].BlockedBy = append([]string(nil), s.spec.Tasks[i].BlockedBy...)
+	}
+	return spec
+}
+
+// Bytes returns a copy of the exact captured file contents.
+func (s Snapshot) Bytes() []byte {
+	return append([]byte(nil), s.data...)
+}
+
+// Identity returns the lowercase SHA-256 digest of the captured bytes.
+func (s Snapshot) Identity() string {
+	return s.identity
+}
+
 // Load reads, parses, and validates a plan spec JSON file.
 func Load(path string) (Spec, error) {
 	return load(path, Validate)
@@ -53,19 +89,24 @@ func LoadWithoutResolvedNameChecks(path string) (Spec, error) {
 	return load(path, ValidateWithoutResolvedNameChecks)
 }
 
-// LoadWithoutResolvedNameChecksWithIdentity returns the exact loaded byte
-// identity used to scope issue-less plan launch ownership.
-func LoadWithoutResolvedNameChecksWithIdentity(path string) (Spec, string, error) {
+// LoadWithoutResolvedNameChecksSnapshot captures one validated plan-spec read
+// for backend selection and execution.
+func LoadWithoutResolvedNameChecksSnapshot(path string) (Snapshot, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Spec{}, "", fmt.Errorf("read plan spec %s: %w", path, err)
+		return Snapshot{}, fmt.Errorf("read plan spec %s: %w", path, err)
 	}
 	spec, err := decode(path, data, ValidateWithoutResolvedNameChecks)
 	if err != nil {
-		return Spec{}, "", err
+		return Snapshot{}, err
 	}
 	sum := sha256.Sum256(data)
-	return spec, fmt.Sprintf("%x", sum[:]), nil
+	return Snapshot{
+		path:     path,
+		spec:     spec,
+		data:     append([]byte(nil), data...),
+		identity: fmt.Sprintf("%x", sum[:]),
+	}, nil
 }
 
 func load(path string, validate func(Spec) error) (Spec, error) {

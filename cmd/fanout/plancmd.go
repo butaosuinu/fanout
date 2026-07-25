@@ -64,14 +64,15 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 		return exitcode.Env
 	}
 
-	cliCfg := cfg.CLIConfig()
 	launchIdentity, err := resolvePlanLaunchParent(cfg)
 	if err != nil {
 		lg.Err("plan: %v", err)
 		return exitcode.Env
 	}
+	cfg.SpecPath = launchIdentity.SpecPath
+	cfg.SpecSnapshot = &launchIdentity.SpecSnapshot
+	cliCfg := cfg.CLIConfig()
 	cliCfg.ParentRef = launchIdentity.Parent
-	cliCfg.PlanSpecIdentity = launchIdentity.PlanSpecIdentity
 	rt, code := resolveLaunchRuntime(cliCfg, nil, lg)
 	if code != exitcode.OK {
 		return code
@@ -90,6 +91,8 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 type planLaunchIdentity struct {
 	Parent           string
 	PlanSpecIdentity string
+	SpecPath         string
+	SpecSnapshot     planspec.Snapshot
 }
 
 func resolvePlanLaunchParent(cfg run.PlanCommandConfig) (planLaunchIdentity, error) {
@@ -98,13 +101,16 @@ func resolvePlanLaunchParent(cfg run.PlanCommandConfig) (planLaunchIdentity, err
 		return planLaunchIdentity{}, err
 	}
 	specPath := run.ResolvePlanSpecPath(projectRoot, cfg.SpecArg)
-	spec, identity, err := planspec.LoadWithoutResolvedNameChecksWithIdentity(specPath)
+	snapshot, err := planspec.LoadWithoutResolvedNameChecksSnapshot(specPath)
 	if err != nil {
 		return planLaunchIdentity{}, err
 	}
+	spec := snapshot.Spec()
 	return planLaunchIdentity{
 		Parent:           panelaunch.PlanRuntimeParentRef(spec.Plan.Slug, spec.Plan.Source),
-		PlanSpecIdentity: identity,
+		PlanSpecIdentity: snapshot.Identity(),
+		SpecPath:         specPath,
+		SpecSnapshot:     snapshot,
 	}, nil
 }
 

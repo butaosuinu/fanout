@@ -98,6 +98,69 @@ func TestPlanRerunSpecArgUsesCopiedPlanSlugForLiveRuns(t *testing.T) {
 	}
 }
 
+func TestPreparedPlanSpecSnapshotOwnsExecutionAndCopiedBytes(t *testing.T) {
+	repo := t.TempDir()
+	sourcePath := filepath.Join(repo, "incoming.json")
+	original := []byte(`{"version":1,"plan":{"slug":"launch-plan","title":"Original"},"tasks":[{"id":"base","title":"Base","briefing":"Build it"}]}`)
+	if err := os.WriteFile(sourcePath, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := planspec.LoadWithoutResolvedNameChecksSnapshot(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := PlanCommandConfig{SpecArg: sourcePath, SpecSnapshot: &snapshot}
+
+	replacement := []byte(`{"version":1,"plan":{"slug":"changed-plan","title":"Changed"},"tasks":[{"id":"other","title":"Other","briefing":"Replace it"}]}`)
+	err = os.WriteFile(sourcePath, replacement, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := resolvePlanSpecSnapshot(cfg, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved.Spec().Plan.Slug; got != "launch-plan" {
+		t.Fatalf("resolved plan slug = %q, want launch-plan", got)
+	}
+	cfg.SpecSnapshot = &resolved
+	if got := cfg.CLIConfig().PlanSpecIdentity; got != snapshot.Identity() {
+		t.Fatalf("CLI plan identity = %q, want %q", got, snapshot.Identity())
+	}
+	err = copyPlanSpec(resolved.Bytes(), repo, resolved.Spec().Plan.Slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, err := os.ReadFile(filepath.Join(repo, ".fanout", "plans", "launch-plan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(copied) != string(original) {
+		t.Fatalf("copied plan bytes = %q, want captured bytes %q", copied, original)
+	}
+}
+
+func TestPreparedPlanSpecSnapshotRejectsDifferentResolvedPath(t *testing.T) {
+	repo := t.TempDir()
+	firstPath := filepath.Join(repo, "first.json")
+	if err := os.WriteFile(firstPath, []byte(`{"version":1,"plan":{"slug":"launch-plan","title":"Plan"},"tasks":[{"id":"base","title":"Base","briefing":"Build it"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := planspec.LoadWithoutResolvedNameChecksSnapshot(firstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = resolvePlanSpecSnapshot(PlanCommandConfig{
+		SpecArg:      filepath.Join(repo, "second.json"),
+		SpecSnapshot: &snapshot,
+	}, repo)
+	if err == nil || !strings.Contains(err.Error(), "does not match resolved path") {
+		t.Fatalf("resolvePlanSpecSnapshot() error = %v, want path mismatch", err)
+	}
+}
+
 func TestSplitPlanBlockedKeepsSameRunDependenciesOpen(t *testing.T) {
 	tasks := []planspec.Task{
 		{ID: "base-types", Title: "Define base types"},

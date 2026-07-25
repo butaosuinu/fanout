@@ -196,6 +196,39 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+func TestLoadWithoutResolvedNameChecksSnapshotKeepsOneRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plan.json")
+	original := []byte(`{"version":1,"plan":{"slug":"launch-plan","title":"Original"},"tasks":[{"id":"base","title":"Base","briefing":"Build it"}]}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := LoadWithoutResolvedNameChecksSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":1,"plan":{"slug":"changed-plan","title":"Changed"},"tasks":[{"id":"other","title":"Other","briefing":"Replace it"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := snapshot.Spec().Plan.Slug; got != "launch-plan" {
+		t.Fatalf("snapshot plan slug = %q, want launch-plan", got)
+	}
+	parsed := snapshot.Spec()
+	parsed.Tasks[0].ID = "changed"
+	if got := snapshot.Spec().Tasks[0].ID; got != "base" {
+		t.Fatalf("snapshot task ID changed through caller mutation: %q", got)
+	}
+	first := snapshot.Bytes()
+	first[0] = ' '
+	if got := snapshot.Bytes(); string(got) != string(original) {
+		t.Fatalf("snapshot bytes changed through caller mutation:\n%s", got)
+	}
+	if got := snapshot.Identity(); len(got) != 64 {
+		t.Fatalf("snapshot identity length = %d, want 64", len(got))
+	}
+}
+
 func TestValidateWithoutResolvedNameChecksDefersSlugAndBranchDuplicates(t *testing.T) {
 	spec := validSpec()
 	spec.Tasks = []Task{

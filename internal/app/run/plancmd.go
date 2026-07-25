@@ -32,6 +32,7 @@ const planSubcommand = "plan"
 type PlanCommandConfig struct {
 	SpecArg            string
 	SpecPath           string
+	SpecSnapshot       *planspec.Snapshot
 	Agent              string
 	Backend            backend.Name
 	AgentOverrides     []cliflags.AgentOverride
@@ -96,12 +97,14 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 	resolvedSettings := settings.Resolve(rt.Info.ProjectRoot, settingsOverrides(cfg.CLIConfig()), lg.Warn)
 	hookConfig := hooks.LoadUserConfig(lg)
 
-	cfg.SpecPath = ResolvePlanSpecPath(rt.Info.ProjectRoot, cfg.SpecArg)
-	spec, err := planspec.LoadWithoutResolvedNameChecks(cfg.SpecPath)
+	snapshot, err := resolvePlanSpecSnapshot(cfg, rt.Info.ProjectRoot)
 	if err != nil {
 		lg.Err("%v", err)
 		return TaskExecutionResult{}, exitcode.Env
 	}
+	cfg.SpecPath = snapshot.Path()
+	cfg.SpecSnapshot = &snapshot
+	spec := snapshot.Spec()
 	cfg.BaseBranch, err = resolvePlanBaseBranch(cfg, spec, rt.Info.ProjectRoot)
 	if err != nil {
 		lg.Err("%v", err)
@@ -136,7 +139,7 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 		if cfg.DryRun {
 			return exitcode.OK
 		}
-		if err := copyPlanSpec(cfg.SpecPath, rt.Info.ProjectRoot, spec.Plan.Slug); err != nil {
+		if err := copyPlanSpec(snapshot.Bytes(), rt.Info.ProjectRoot, spec.Plan.Slug); err != nil {
 			lg.Err("copy plan spec: %v", err)
 			return exitcode.Env
 		}
@@ -233,6 +236,7 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 func (cfg PlanCommandConfig) CLIConfig() *cliflags.Config {
 	return &cliflags.Config{
 		ParentRef:          planSubcommand,
+		PlanSpecIdentity:   planSpecIdentity(cfg),
 		Agent:              cfg.Agent,
 		Backend:            cfg.Backend,
 		AgentOverrides:     cfg.AgentOverrides,
@@ -252,6 +256,28 @@ func (cfg PlanCommandConfig) CLIConfig() *cliflags.Config {
 		PRVisualization:    cfg.PRVisualization,
 		DashboardKeybind:   cfg.DashboardKeybind,
 	}
+}
+
+func resolvePlanSpecSnapshot(cfg PlanCommandConfig, projectRoot string) (planspec.Snapshot, error) {
+	specPath := ResolvePlanSpecPath(projectRoot, cfg.SpecArg)
+	if cfg.SpecSnapshot == nil {
+		return planspec.LoadWithoutResolvedNameChecksSnapshot(specPath)
+	}
+	if cfg.SpecSnapshot.Path() != specPath {
+		return planspec.Snapshot{}, fmt.Errorf(
+			"prepared plan spec path %s does not match resolved path %s",
+			cfg.SpecSnapshot.Path(),
+			specPath,
+		)
+	}
+	return *cfg.SpecSnapshot, nil
+}
+
+func planSpecIdentity(cfg PlanCommandConfig) string {
+	if cfg.SpecSnapshot == nil {
+		return ""
+	}
+	return cfg.SpecSnapshot.Identity()
 }
 
 // ActionMode reports whether the plan invocation is a status / lifecycle
@@ -298,17 +324,8 @@ func planRerunSpecArg(cfg PlanCommandConfig, spec planspec.Spec) string {
 	return spec.Plan.Slug
 }
 
-func copyPlanSpec(src, projectRoot, slug string) error {
+func copyPlanSpec(data []byte, projectRoot, slug string) error {
 	dst := filepath.Join(projectRoot, ".fanout", "plans", slug+".json")
-	srcAbs, srcErr := filepath.Abs(src)
-	dstAbs, dstErr := filepath.Abs(dst)
-	if srcErr == nil && dstErr == nil && srcAbs == dstAbs {
-		return nil
-	}
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
