@@ -559,7 +559,13 @@ func completeHerdrWorktreeMutation(
 	starting state.HerdrLaunchIntent,
 	result herdrrun.WorktreeMutationResult,
 ) (state.HerdrLaunchIntent, error) {
-	markerPath, err := worktree.EnsureHerdrOwnershipMarker(starting.WorktreePath, starting.WorktreeOwnershipNonce)
+	markerPath, err := worktree.EnsureHerdrOwnershipMarker(
+		req.ProjectRoot,
+		starting.WorktreePath,
+		starting.FullBranchRef,
+		starting.LaunchHeadSHA,
+		starting.WorktreeOwnershipNonce,
+	)
 	if err != nil {
 		return starting, failHerdrIntent(req.ProjectRoot, starting, err.Error())
 	}
@@ -646,7 +652,14 @@ func verifyHerdrWorktreePostState(projectRoot string, intent state.HerdrLaunchIn
 		receipt.RepoRoot != intent.HerdrRepoRoot {
 		return fmt.Errorf("herdr worktree mutation receipt does not match intent")
 	}
-	if err := worktree.VerifyHerdrOwnershipMarker(intent.WorktreePath, receipt.GitDirMarkerPath, intent.WorktreeOwnershipNonce); err != nil {
+	if err := worktree.VerifyHerdrOwnershipMarker(
+		projectRoot,
+		intent.WorktreePath,
+		intent.FullBranchRef,
+		intent.LaunchHeadSHA,
+		receipt.GitDirMarkerPath,
+		intent.WorktreeOwnershipNonce,
+	); err != nil {
 		return err
 	}
 	pathAbsent, registered, headSHA, err := worktree.CheckoutGitState(projectRoot, intent.WorktreePath, intent.FullBranchRef)

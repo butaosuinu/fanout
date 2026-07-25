@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,33 +85,88 @@ func TestHerdrOwnershipMarkerIsExclusiveAndExact(t *testing.T) {
 		t.Fatal(mkdirErr)
 	}
 	gitTest(t, repo, "worktree", "add", checkout, "fanout/herdr-marker")
+	gitDir := gitOutput(t, checkout, "rev-parse", "--path-format=absolute", "--git-dir")
+	markerPath := filepath.Join(gitDir, herdrOwnershipMarkerName)
 
-	marker, err := WriteHerdrOwnershipMarker(checkout, "nonce-527")
+	if _, proofErr := EnsureHerdrOwnershipMarker(
+		repo,
+		checkout,
+		"refs/heads/fanout/wrong-marker-branch",
+		base,
+		"nonce-527",
+	); proofErr == nil {
+		t.Fatal("mismatched checkout branch unexpectedly accepted")
+	}
+	if _, proofErr := EnsureHerdrOwnershipMarker(
+		repo,
+		checkout,
+		fullRef,
+		strings.Repeat("0", 40),
+		"nonce-527",
+	); proofErr == nil {
+		t.Fatal("mismatched checkout HEAD unexpectedly accepted")
+	}
+	if _, markerErr := os.Lstat(markerPath); !errors.Is(markerErr, os.ErrNotExist) {
+		t.Fatalf("invalid checkout proof wrote marker: %v", markerErr)
+	}
+
+	marker, err := EnsureHerdrOwnershipMarker(repo, checkout, fullRef, base, "nonce-527")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = VerifyHerdrOwnershipMarker(checkout, marker, "nonce-527")
+	if marker != markerPath {
+		t.Fatalf("marker = %q, want %q", marker, markerPath)
+	}
+	err = VerifyHerdrOwnershipMarker(repo, checkout, fullRef, base, marker, "nonce-527")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = WriteHerdrOwnershipMarker(checkout, "nonce-527")
-	if err == nil {
-		t.Fatal("exclusive marker create unexpectedly succeeded twice")
+	ensured, err := EnsureHerdrOwnershipMarker(repo, checkout, fullRef, base, "nonce-527")
+	if err != nil || ensured != marker {
+		t.Fatalf("ensure exact marker = %q, %v; want %q", ensured, err, marker)
 	}
-	err = VerifyHerdrOwnershipMarker(checkout, marker, "foreign")
+	err = VerifyHerdrOwnershipMarker(repo, checkout, fullRef, base, marker, "foreign")
 	if err == nil {
 		t.Fatal("foreign nonce unexpectedly verified")
 	}
-	ensured, err := EnsureHerdrOwnershipMarker(checkout, "nonce-527")
-	if err != nil {
-		t.Fatalf("ensure exact existing marker: %v", err)
-	}
-	if ensured != marker {
-		t.Fatalf("ensured marker = %q, want %q", ensured, marker)
-	}
-	_, err = EnsureHerdrOwnershipMarker(checkout, "foreign")
+	_, err = EnsureHerdrOwnershipMarker(repo, checkout, fullRef, base, "foreign")
 	if err == nil {
 		t.Fatal("foreign existing marker unexpectedly adopted")
+	}
+}
+
+func TestHerdrOwnershipMarkerRejectsUnregisteredAndSymlinkCheckoutRoots(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	base := gitOutput(t, repo, "rev-parse", "HEAD")
+	fullRef, err := HerdrBranchRef(repo, "fanout/herdr-marker-race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ReserveBranch(repo, fullRef, base); err != nil {
+		t.Fatal(err)
+	}
+	sourceMarker := filepath.Join(repo, ".git", herdrOwnershipMarkerName)
+
+	plain := filepath.Join(repo, ".fanout", "worktrees", "plain")
+	if err := os.MkdirAll(plain, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureHerdrOwnershipMarker(repo, plain, fullRef, base, "plain-nonce"); err == nil {
+		t.Fatal("unregistered nested directory unexpectedly accepted")
+	}
+	if _, err := os.Lstat(sourceMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unregistered directory wrote source marker: %v", err)
+	}
+
+	alias := filepath.Join(repo, ".fanout", "worktrees", "source-link")
+	if err := os.Symlink(repo, alias); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureHerdrOwnershipMarker(repo, alias, fullRef, base, "link-nonce"); err == nil {
+		t.Fatal("symlink checkout root unexpectedly accepted")
+	}
+	if _, err := os.Lstat(sourceMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("symlink checkout wrote source marker: %v", err)
 	}
 }
 

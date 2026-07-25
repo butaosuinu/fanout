@@ -128,7 +128,14 @@ func TestRealizeHerdrWorktreePersistsPhasesAndStopsAtLauncherBoundary(t *testing
 		t.Fatalf("result = %+v", result)
 	}
 	if result.Intent.MutationReceipt == nil ||
-		worktree.VerifyHerdrOwnershipMarker(req.WorktreePath, result.Intent.MutationReceipt.GitDirMarkerPath, result.Intent.WorktreeOwnershipNonce) != nil {
+		worktree.VerifyHerdrOwnershipMarker(
+			repo,
+			req.WorktreePath,
+			result.Intent.FullBranchRef,
+			result.Intent.LaunchHeadSHA,
+			result.Intent.MutationReceipt.GitDirMarkerPath,
+			result.Intent.WorktreeOwnershipNonce,
+		) != nil {
 		t.Fatalf("missing or invalid ownership marker: %+v", result.Intent.MutationReceipt)
 	}
 

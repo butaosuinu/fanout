@@ -3,11 +3,13 @@ package worktree
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 const herdrOwnershipMarkerName = "fanout-herdr-owner"
@@ -280,20 +282,43 @@ func physicalHerdrPath(path string) (string, error) {
 	return filepath.Clean(resolved), nil
 }
 
-// WriteHerdrOwnershipMarker exclusively creates the checkout-side half of the
-// nonce proof inside the checkout's git dir.
-func WriteHerdrOwnershipMarker(checkoutPath, nonce string) (string, error) {
+type herdrCheckoutProof struct {
+	checkoutRoot *os.Root
+	gitDirRoot   *os.Root
+	gitDirPath   string
+}
+
+func (p *herdrCheckoutProof) close() {
+	if p == nil {
+		return
+	}
+	if p.gitDirRoot != nil {
+		_ = p.gitDirRoot.Close()
+	}
+	if p.checkoutRoot != nil {
+		_ = p.checkoutRoot.Close()
+	}
+}
+
+// EnsureHerdrOwnershipMarker creates the checkout-side nonce proof or adopts
+// the exact existing proof during response-loss reconciliation. The checkout
+// and its linked-worktree Git dir are opened and pinned before marker I/O.
+func EnsureHerdrOwnershipMarker(projectRoot, checkoutPath, fullRef, headSHA, nonce string) (string, error) {
 	if strings.TrimSpace(nonce) == "" || strings.ContainsAny(nonce, "\r\n\x00") {
 		return "", fmt.Errorf("invalid herdr worktree ownership nonce")
 	}
-	gitDir, err := gitTrim(checkoutPath, "rev-parse", "--path-format=absolute", "--git-dir")
+	proof, err := openHerdrCheckoutProof(projectRoot, checkoutPath, fullRef, headSHA)
 	if err != nil {
-		return "", fmt.Errorf("resolve checkout git dir: %w", err)
+		return "", err
 	}
-	markerPath := filepath.Join(gitDir, herdrOwnershipMarkerName)
-	f, err := os.OpenFile(markerPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	defer proof.close()
+	markerPath := filepath.Join(proof.gitDirPath, herdrOwnershipMarkerName)
+	f, err := proof.gitDirRoot.OpenFile(herdrOwnershipMarkerName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return "", fmt.Errorf("create herdr ownership marker: %w", err)
+		if verifyErr := verifyHerdrOwnershipMarkerFile(proof.gitDirRoot, nonce); verifyErr != nil {
+			return "", errors.Join(fmt.Errorf("create herdr ownership marker: %w", err), verifyErr)
+		}
+		return markerPath, nil
 	}
 	if _, err := f.WriteString(nonce + "\n"); err != nil {
 		// The write error is the actionable failure; Close cannot make the
@@ -301,50 +326,228 @@ func WriteHerdrOwnershipMarker(checkoutPath, nonce string) (string, error) {
 		_ = f.Close()
 		return "", fmt.Errorf("write herdr ownership marker: %w", err)
 	}
+	if err := f.Sync(); err != nil {
+		// The sync error is actionable; Close cannot make durability proven.
+		_ = f.Close()
+		return "", fmt.Errorf("sync herdr ownership marker: %w", err)
+	}
 	if err := f.Close(); err != nil {
 		return "", fmt.Errorf("close herdr ownership marker: %w", err)
 	}
-	return markerPath, nil
-}
-
-// EnsureHerdrOwnershipMarker creates the marker once or adopts the exact
-// existing marker after a response-loss/crash reconciliation. A foreign or
-// incomplete marker remains a hard failure.
-func EnsureHerdrOwnershipMarker(checkoutPath, nonce string) (string, error) {
-	markerPath, err := WriteHerdrOwnershipMarker(checkoutPath, nonce)
-	if err == nil {
-		return markerPath, nil
-	}
-	gitDir, gitErr := gitTrim(checkoutPath, "rev-parse", "--path-format=absolute", "--git-dir")
-	if gitErr != nil {
-		return "", errors.Join(err, fmt.Errorf("resolve existing ownership marker git dir: %w", gitErr))
-	}
-	markerPath = filepath.Join(gitDir, herdrOwnershipMarkerName)
-	if verifyErr := VerifyHerdrOwnershipMarker(checkoutPath, markerPath, nonce); verifyErr != nil {
-		return "", errors.Join(err, verifyErr)
+	if err := verifyHerdrOwnershipMarkerFile(proof.gitDirRoot, nonce); err != nil {
+		return "", err
 	}
 	return markerPath, nil
 }
 
-func VerifyHerdrOwnershipMarker(checkoutPath, markerPath, nonce string) error {
-	gitDir, err := gitTrim(checkoutPath, "rev-parse", "--path-format=absolute", "--git-dir")
+func VerifyHerdrOwnershipMarker(projectRoot, checkoutPath, fullRef, headSHA, markerPath, nonce string) error {
+	proof, err := openHerdrCheckoutProof(projectRoot, checkoutPath, fullRef, headSHA)
 	if err != nil {
-		return fmt.Errorf("resolve checkout git dir: %w", err)
+		return err
 	}
-	wantPath := filepath.Join(gitDir, herdrOwnershipMarkerName)
+	defer proof.close()
+	wantPath := filepath.Join(proof.gitDirPath, herdrOwnershipMarkerName)
 	if filepath.Clean(markerPath) != filepath.Clean(wantPath) {
 		return fmt.Errorf("herdr ownership marker path changed: got %s want %s", markerPath, wantPath)
 	}
-	info, err := os.Lstat(markerPath)
+	return verifyHerdrOwnershipMarkerFile(proof.gitDirRoot, nonce)
+}
+
+func openHerdrCheckoutProof(projectRoot, checkoutPath, fullRef, headSHA string) (*herdrCheckoutProof, error) {
+	if !strings.HasPrefix(fullRef, "refs/heads/") || !fullCommitSHA.MatchString(headSHA) {
+		return nil, fmt.Errorf("invalid herdr checkout proof request")
+	}
+	pathInfo, err := os.Lstat(checkoutPath)
+	if err != nil {
+		return nil, fmt.Errorf("inspect herdr checkout root: %w", err)
+	}
+	if !pathInfo.IsDir() || pathInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("herdr checkout root is not a non-symlink directory")
+	}
+	checkoutRoot, err := os.OpenRoot(checkoutPath)
+	if err != nil {
+		return nil, fmt.Errorf("open herdr checkout root: %w", err)
+	}
+	proof := &herdrCheckoutProof{checkoutRoot: checkoutRoot}
+	fail := func(err error) (*herdrCheckoutProof, error) {
+		proof.close()
+		return nil, err
+	}
+	openedCheckoutInfo, err := checkoutRoot.Stat(".")
+	if err != nil || !os.SameFile(pathInfo, openedCheckoutInfo) {
+		return fail(fmt.Errorf("herdr checkout root identity changed while opening"))
+	}
+	registered, err := checkoutRegistered(projectRoot, checkoutPath)
+	if err != nil {
+		return fail(err)
+	}
+	if !registered {
+		return fail(fmt.Errorf("herdr checkout is not registered"))
+	}
+
+	dotGitInfo, err := checkoutRoot.Lstat(".git")
+	if err != nil || !dotGitInfo.Mode().IsRegular() {
+		return fail(fmt.Errorf("herdr checkout .git is not a regular file"))
+	}
+	dotGit, err := checkoutRoot.Open(".git")
+	if err != nil {
+		return fail(fmt.Errorf("open herdr checkout .git: %w", err))
+	}
+	openedDotGitInfo, statErr := dotGit.Stat()
+	if statErr != nil || !os.SameFile(dotGitInfo, openedDotGitInfo) {
+		_ = dotGit.Close()
+		return fail(fmt.Errorf("herdr checkout .git identity changed while opening"))
+	}
+	dotGitData, readErr := readSmallHerdrMetadata(dotGit)
+	closeErr := dotGit.Close()
+	if readErr != nil {
+		return fail(fmt.Errorf("read herdr checkout .git: %w", readErr))
+	}
+	if closeErr != nil {
+		return fail(fmt.Errorf("close herdr checkout .git: %w", closeErr))
+	}
+	gitDirPath, err := parseHerdrGitDirFile(dotGitData)
+	if err != nil {
+		return fail(err)
+	}
+
+	commonDir, err := gitTrim(projectRoot, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return fail(fmt.Errorf("resolve herdr common git dir: %w", err))
+	}
+	commonDir, err = physicalHerdrPath(commonDir)
+	if err != nil {
+		return fail(fmt.Errorf("canonicalize herdr common git dir: %w", err))
+	}
+	gitDirPath = filepath.Clean(gitDirPath)
+	physicalGitDir, err := filepath.EvalSymlinks(gitDirPath)
+	if err != nil || filepath.Clean(physicalGitDir) != gitDirPath {
+		return fail(fmt.Errorf("herdr linked-worktree git dir is not a canonical non-symlink path"))
+	}
+	if filepath.Dir(gitDirPath) != filepath.Join(commonDir, "worktrees") {
+		return fail(fmt.Errorf("herdr linked-worktree git dir is outside the repository worktrees directory"))
+	}
+	gitDirInfo, err := os.Lstat(gitDirPath)
+	if err != nil || !gitDirInfo.IsDir() || gitDirInfo.Mode()&os.ModeSymlink != 0 {
+		return fail(fmt.Errorf("herdr linked-worktree git dir is not a non-symlink directory"))
+	}
+	gitDirRoot, err := os.OpenRoot(gitDirPath)
+	if err != nil {
+		return fail(fmt.Errorf("open herdr linked-worktree git dir: %w", err))
+	}
+	proof.gitDirRoot = gitDirRoot
+	proof.gitDirPath = gitDirPath
+	openedGitDirInfo, err := gitDirRoot.Stat(".")
+	if err != nil || !os.SameFile(gitDirInfo, openedGitDirInfo) {
+		return fail(fmt.Errorf("herdr linked-worktree git dir identity changed while opening"))
+	}
+	backlinkData, err := readHerdrRootMetadata(gitDirRoot, "gitdir")
+	if err != nil {
+		return fail(err)
+	}
+	backlinkPath := filepath.Clean(strings.TrimSpace(string(backlinkData)))
+	if !filepath.IsAbs(backlinkPath) {
+		return fail(fmt.Errorf("herdr linked-worktree backlink is not absolute"))
+	}
+	backlinkInfo, err := os.Stat(backlinkPath)
+	if err != nil || !os.SameFile(dotGitInfo, backlinkInfo) {
+		return fail(fmt.Errorf("herdr linked-worktree backlink does not identify the checkout .git file"))
+	}
+	headData, err := readHerdrRootMetadata(gitDirRoot, "HEAD")
+	if err != nil {
+		return fail(err)
+	}
+	if string(headData) != "ref: "+fullRef+"\n" {
+		return fail(fmt.Errorf("herdr linked-worktree HEAD does not match %s", fullRef))
+	}
+	branchOID, found, err := ObserveBranch(projectRoot, fullRef)
+	if err != nil {
+		return fail(err)
+	}
+	if !found || branchOID != headSHA {
+		return fail(fmt.Errorf("herdr checkout branch %s does not point at %s", fullRef, headSHA))
+	}
+	currentPathInfo, err := os.Lstat(checkoutPath)
+	if err != nil || !os.SameFile(pathInfo, currentPathInfo) {
+		return fail(fmt.Errorf("herdr checkout root identity changed during proof"))
+	}
+	return proof, nil
+}
+
+func parseHerdrGitDirFile(data []byte) (string, error) {
+	line := strings.TrimSuffix(string(data), "\n")
+	if strings.ContainsAny(line, "\x00\r\n") {
+		return "", fmt.Errorf("herdr checkout .git has invalid contents")
+	}
+	path, ok := strings.CutPrefix(line, "gitdir: ")
+	if !ok || !filepath.IsAbs(path) {
+		return "", fmt.Errorf("herdr checkout .git has no absolute gitdir")
+	}
+	return path, nil
+}
+
+func readHerdrRootMetadata(root *os.Root, name string) ([]byte, error) {
+	info, err := root.Lstat(name)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("herdr linked-worktree %s is not a regular file", name)
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open herdr linked-worktree %s: %w", name, err)
+	}
+	openedInfo, statErr := file.Stat()
+	if statErr != nil || !os.SameFile(info, openedInfo) {
+		_ = file.Close()
+		return nil, fmt.Errorf("herdr linked-worktree %s identity changed while opening", name)
+	}
+	data, readErr := readSmallHerdrMetadata(file)
+	closeErr := file.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read herdr linked-worktree %s: %w", name, readErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close herdr linked-worktree %s: %w", name, closeErr)
+	}
+	return data, nil
+}
+
+func readSmallHerdrMetadata(file *os.File) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(file, 4097))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 4096 {
+		return nil, fmt.Errorf("metadata exceeds 4096 bytes")
+	}
+	return data, nil
+}
+
+func verifyHerdrOwnershipMarkerFile(gitDirRoot *os.Root, nonce string) error {
+	info, err := gitDirRoot.Lstat(herdrOwnershipMarkerName)
 	if err != nil {
 		return fmt.Errorf("inspect herdr ownership marker: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 ||
+		int(stat.Uid) != os.Getuid() || stat.Nlink != 1 {
 		return fmt.Errorf("herdr ownership marker has unsafe mode %s", info.Mode())
 	}
-	body, err := os.ReadFile(markerPath)
+	file, err := gitDirRoot.Open(herdrOwnershipMarkerName)
 	if err != nil {
-		return fmt.Errorf("read herdr ownership marker: %w", err)
+		return fmt.Errorf("open herdr ownership marker: %w", err)
+	}
+	openedInfo, statErr := file.Stat()
+	if statErr != nil || !os.SameFile(info, openedInfo) {
+		_ = file.Close()
+		return fmt.Errorf("herdr ownership marker identity changed while opening")
+	}
+	body, readErr := readSmallHerdrMetadata(file)
+	closeErr := file.Close()
+	if readErr != nil {
+		return fmt.Errorf("read herdr ownership marker: %w", readErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close herdr ownership marker: %w", closeErr)
 	}
 	if string(body) != nonce+"\n" {
 		return fmt.Errorf("herdr ownership marker nonce mismatch")
