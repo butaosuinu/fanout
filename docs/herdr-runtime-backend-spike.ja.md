@@ -9,10 +9,13 @@ core runtime の検証日は 2026-07-16、2026-07-21、2026-07-22、metadata tok
 0.7.3 と 0.7.4 は protocol `16`、0.7.5 は protocol `17` であり、schema version はすべて `1` である。
 関連分析の「0.7.4 wave 2」は 2026-07-21 の旧判断を時系列で残した段落であり、その直後に記録された 0.7.5 breaking change と floor 改訂が優先する。
 後続実装が従う current contract はこの文書である。
+2026-07-24 のユーザー判断により、#526 の compatibility admission は stable `>=0.7.5` の version gate だけとする。
+schema、method、field、CLI help、protocol、behavior profile、active manifest は事前検査せず、実際の method call が失敗した場合は共通の unavailable error を返す。
+以下に残る structural gate、三段 gate、behavior profile、active manifest gate の記述は実測と旧判断の履歴であり、#526 の実装条件には使わない。
 
 fanout の herdr backend wave 2 は CLI-first とし、集約読みには CLI wrapper の `herdr api snapshot` を使う。
 raw Socket client は実装しない。
-version / session / schema / behavior profile の検査と各操作に対応する本文の owner gate 完了後、snapshot / list / wait、targeted read、owned server の bootstrap、launch、cleanup、focus、emitter、metadata、自動 nudge の送信契約を後続実装へ解禁する。
+version / session の検査と各操作に対応する本文の owner gate 完了後、snapshot / list / wait、targeted read、owned server の bootstrap、launch、cleanup、focus、emitter、metadata、自動 nudge の送信契約を後続実装へ解禁する。
 console / coordinator / agent launch は加えて #528 の direct-launch 契約完了を要求する。
 自動 mutation は provisional intent と phase machine、nonce の二重照合、branch の atomic reservation、事後条件検査、no-blind-retry を通す。
 linked worktree 間の intent、console、final row、telemetry routing は canonical git common directory 配下の単一 Herdr control registry を正典とし、worktree-local `state.json` へ分散しない。
@@ -51,7 +54,7 @@ request-bound generation と conditional mutation、server-authenticated control
 | workload env | Go（#526 / #527 の gate 完了後。provider operation は #528 adapter 完了後） | auth / socket / proxy / locale を維持し、provider config は sealed view へ固定する。`OPENCODE_CONFIG_CONTENT`、Herdr / tmux routing、injection env を拒否し、raw value を registry / journal / log / bundle に保存しない |
 | plain shell への `pane run` | 自動 launch には不採用 | text と Enter の配送時に shell readiness と空入力を条件化できない |
 | `agent start` | 自動 launch には不採用 | canonical agent executable を bare name で解決するため、fanout が選んだ絶対 executable を pin できない |
-| capability gate | structural gate と code-owned behavior profile を検査する | stable `>=0.7.5`、protocol `17` / schema `1`、接続先 status に加え、公式 v0.7.5 darwin/arm64 binary、exact agent-detection fixture、no-refresh policy を同時に許可する。fixture / no-refresh proof 未確定時は fresh bootstrap を拒否し、owned server restart では cache を使わない |
+| compatibility gate | version だけを検査する | stable `>=0.7.5` を許可する。schema、method、field、CLI help、protocol、behavior profile、active manifest は事前検査しない |
 | attach | custom socket を選ぶ bare `herdr` command を提示する | `session attach <name>` は別 daemon を自動起動し得るため実行しない |
 | focus | Go | TUI の明示操作だけが送信直前再照合後に focus する |
 | `--team` | 拒否（#568 の registry-backed peer 解決まで。暫定 gate は #528） | `--dry-run` を含む backend / flag validation で明確な invocation error を返し、tmux backend の既存経路は変更しない |

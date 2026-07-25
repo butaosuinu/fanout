@@ -3,6 +3,7 @@ package naming
 
 import (
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -10,9 +11,22 @@ import (
 )
 
 const (
-	DefaultBranchPrefix = "fanout/"
-	MaxSlugLength       = 80
+	DefaultBranchPrefix       = "fanout/"
+	MaxSlugLength             = 80
+	MaxHerdrSessionNameLength = 56
+	herdrSessionPrefix        = "fanout-"
+	herdrSessionHashLength    = 16
 )
+
+// HerdrSessionName returns the stable per-repository name for a fanout-owned
+// herdr session. The physical identity makes path aliases coordinate on one
+// supervisor and socket namespace.
+func HerdrSessionName(device, inode uint64) string {
+	identity := fmt.Sprintf("%d:%d", device, inode)
+	sum := sha256.Sum256([]byte(identity))
+	hash := hex.EncodeToString(sum[:])[:herdrSessionHashLength]
+	return herdrSessionPrefix + "repo-" + hash
+}
 
 // Slug returns a deterministic slug for an issue title and number.
 func Slug(title string, num int) string {

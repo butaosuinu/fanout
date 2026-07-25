@@ -16,7 +16,7 @@ fanout は herdr を同梱しません。herdr は AGPL ライセンスで、別
 
 名前付きの herdr session の中で fanout を起動すると、read-only な画面 — 常駐 TUI コンソール、`--status`、web ダッシュボード — にリポジトリの記録済み session が、各 pane の runtime backend と identity 付きで表示されます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
 TUI コンソールと web ダッシュボードは、herdr backend で記録された行を `herdr api snapshot` と照合して生死と agent state を反映します。`--status` が読むのは記録済みの state と GitHub だけです。
-fanout が herdr を読むのは 4 つの CLI コマンドだけです: `herdr --version`、`herdr status --json`、`herdr api schema --json`、`herdr api snapshot`。
+fanout は session を読む前に `herdr --version` を検査します。その後、観測に `herdr status --json` と `herdr api snapshot` を使います。method と field の事前検査は行いません。method call が失敗した場合は `herdr method "<name>" is unavailable` を返します。
 
 herdr session を変更しうる操作は、劣化動作ではなく明確なエラーで fail closed します。
 
@@ -29,7 +29,7 @@ TUI のヘッダには、選択された backend とその理由が常に表示�
 
 ## 前提条件
 
-- **herdr 0.7.3 ちょうど** — CLI と server の両方。protocol 16、API schema version 1。それ以外の version は新しくても fail closed します。fanout は semver の互換性を仮定せず、検証済みの組だけを許可します。
+- **stable herdr 0.7.5 以上** — CLI と server は同じ stable version で動かしてください。prerelease と解釈できない version は fail closed します。新しい stable version を protocol、API schema、CLI help、platform、release digest では拒否しません。
 - 明示的な名前を付けた herdr session が稼働していること(`default` は拒否されます)。fanout は herdr server を起動せず、session の作成も attach もしません。
 - `PATH` 上の `herdr` バイナリ。別途インストールしてください。
 

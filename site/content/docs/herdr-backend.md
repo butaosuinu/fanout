@@ -11,7 +11,7 @@ The herdr backend lets fanout run inside [herdr](https://herdr.dev/) — a tmux-
 
 ## What v1 does
 
-Run fanout inside a named herdr session and the read-only surfaces — the persistent TUI console, `--status`, and the web dashboard — show the repository's recorded sessions, including each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and the web dashboard match rows recorded with the herdr backend against `herdr api snapshot` for liveness and agent state; `--status` reads recorded state and GitHub only. fanout reads herdr through four CLI commands only: `herdr --version`, `herdr status --json`, `herdr api schema --json`, and `herdr api snapshot`.
+Run fanout inside a named herdr session and the read-only surfaces — the persistent TUI console, `--status`, and the web dashboard — show the repository's recorded sessions, including each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and the web dashboard match rows recorded with the herdr backend against `herdr api snapshot` for liveness and agent state; `--status` reads recorded state and GitHub only. Before reading a session, fanout checks `herdr --version`. It then uses `herdr status --json` and `herdr api snapshot` for observation. fanout does not preflight methods or fields; a failed method call returns `herdr method "<name>" is unavailable`.
 
 Everything that would mutate a herdr session fails closed with a clear error instead of degrading:
 
@@ -24,7 +24,7 @@ The TUI header always shows the selected backend and why it was selected, such a
 
 ## Prerequisites
 
-- **herdr 0.7.3 exactly** — CLI and server, with protocol 16 and API schema version 1. Any other version fails closed, including newer ones: fanout pins the verified tuple instead of assuming semver compatibility.
+- **stable herdr 0.7.5 or newer** — the CLI and server must run the same stable version. Prerelease and malformed versions fail closed. fanout does not reject newer stable versions based on protocol, API schema, CLI help, platform, or an exact release digest.
 - A running herdr session with an explicit name (`default` is rejected). fanout never starts a herdr server and never creates or attaches a session.
 - The `herdr` binary on your `PATH`, installed separately.
 

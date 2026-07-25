@@ -108,17 +108,18 @@ herdr status --json   # server and session state
 
 `HERDR_SOCKET_PATH` takes precedence over `HERDR_SESSION`, so a stale socket path can point fanout at the wrong server — unset it if `status` disagrees with what you expect. The TUI variant `run fanout inside an existing herdr pane (HERDR_ENV=1)` means what it says: the console only starts under the herdr backend when launched from a pane inside the herdr session.
 
-## "unsupported herdr CLI version ..." / "unsupported herdr API tuple ..."
+## "unsupported herdr CLI version ..."
 
-fanout pins the verified herdr tuple — CLI and server 0.7.3, protocol 16, API schema version 1 — and anything else fails closed, including newer versions. `herdr 0.7.3 is required: ...` means the `herdr` binary was not found on `PATH`. Check what is actually installed:
+fanout requires stable herdr 0.7.5 or newer. The CLI and server versions must match. Prerelease or malformed versions fail closed. `herdr stable >=0.7.5 is required: ...` means the `herdr` binary was not found on `PATH`. Check what is actually installed:
 
 ```bash
-herdr --version          # must print: herdr 0.7.3
-herdr status --json      # server tuple: version, protocol, compatible
-herdr api schema --json  # API tuple: protocol 16, schema_version 1
+herdr --version      # stable 0.7.5 or newer
+herdr status --json  # matching client/server version
 ```
 
-Install herdr 0.7.3 to match. If the message is `requires a client/server restart`, restart the herdr server and client so both run the same build.
+Install or upgrade to stable herdr 0.7.5 or newer. If the message is `requires a client/server restart`, restart the herdr server and client so both run the same build.
+
+fanout does not preflight methods or response fields. `herdr method "<name>" is unavailable` means that the named call failed; check that the installed herdr version provides it.
 
 ## "herdr backend v1 is observation-only; ... is unavailable"
 

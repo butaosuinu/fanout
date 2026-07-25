@@ -1,9 +1,31 @@
 package naming
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
+
+func TestHerdrSessionNameUsesPhysicalGitCommonDirectoryIdentity(t *testing.T) {
+	got := HerdrSessionName(42, 81)
+	if got != HerdrSessionName(42, 81) {
+		t.Fatal("HerdrSessionName is not deterministic")
+	}
+	if got == HerdrSessionName(42, 82) || got == HerdrSessionName(43, 81) {
+		t.Fatalf("independent clones share session name %q", got)
+	}
+	if len(got) > MaxHerdrSessionNameLength || !regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(got) {
+		t.Fatalf("invalid herdr session name %q", got)
+	}
+}
+
+func TestHerdrSessionNameIgnoresPathAliasesForSameIdentity(t *testing.T) {
+	first := HerdrSessionName(42, 81)
+	second := HerdrSessionName(42, 81)
+	if first != second || len(first) > MaxHerdrSessionNameLength {
+		t.Fatalf("physical identity aliases = %q, %q", first, second)
+	}
+}
 
 func TestSlugIsDeterministicKebabWithIssueNumber(t *testing.T) {
 	if got, want := Slug("Fix auth timeout", 123), "fix-auth-timeout-123"; got != want {

@@ -1,4 +1,4 @@
-// Package herdrrun implements fanout's read-only herdr runtime backend.
+// Package herdrrun implements fanout's herdr runtime backend.
 package herdrrun
 
 import (
@@ -21,9 +21,6 @@ import (
 
 const (
 	commandName         = "herdr"
-	supportedVersion    = "0.7.3"
-	supportedProtocol   = 16
-	supportedSchema     = 1
 	commandTimeout      = 5 * time.Second
 	commandCleanupDelay = 100 * time.Millisecond
 	minimumWaitTimeout  = 3 * time.Second
@@ -37,19 +34,27 @@ const (
 	socketEnv  = "HERDR_SOCKET_PATH"
 )
 
-var _ corebackend.Backend = (*Backend)(nil)
+var (
+	_ corebackend.Backend     = (*Backend)(nil)
+	_ corebackend.OwnedCloser = (*Backend)(nil)
+)
 
-// Backend observes one already-running named herdr session. Herdr v1 is
-// deliberately read-only: every targeted read and mutation method returns an
-// unsupported-operation error without invoking the CLI.
+// Backend observes one named herdr session. New returns an unowned handle, so
+// targeted reads and mutations remain disabled until EnsureOwned and an
+// immutable target admission explicitly bind them.
 type Backend struct {
-	session    string
-	socketPath string
-	probeGate  chan struct{}
-	lookPath   func(string) (string, error)
-	output     commandOutput
-	now        func() time.Time
-	sleep      waitSleep
+	session     string
+	socketPath  string
+	probeGate   chan struct{}
+	lookPath    func(string) (string, error)
+	stageBinary func(string) (string, string, error)
+	output      commandOutput
+	now         func() time.Time
+	sleep       waitSleep
+	admitted    map[string]binaryAdmission
+	control     *controlPlaneEnvironment
+	owner       *ownedAdmission
+	target      *ownedTargetAdmission
 }
 
 type commandOutput func(context.Context, string, []string, ...string) ([]byte, error)
@@ -62,8 +67,16 @@ type route struct {
 }
 
 type probeResult struct {
-	binary string
-	route  route
+	binary  string
+	sha256  string
+	version string
+	route   route
+}
+
+type binaryAdmission struct {
+	path    string
+	sha256  string
+	version string
 }
 
 // WaitStatus is the terminal outcome of a bounded snapshot wait.
@@ -89,28 +102,29 @@ type WaitResult struct {
 // --session status call, then pins subsequent probes to the returned path.
 func New(session, socketPath string) *Backend {
 	return &Backend{
-		session:    strings.TrimSpace(session),
-		socketPath: socketPath,
-		probeGate:  make(chan struct{}, 1),
-		lookPath:   exec.LookPath,
-		output:     runCommand,
-		now:        time.Now,
-		sleep:      sleepContext,
+		session:     strings.TrimSpace(session),
+		socketPath:  socketPath,
+		probeGate:   make(chan struct{}, 1),
+		lookPath:    exec.LookPath,
+		stageBinary: stageAdmissionBinary,
+		output:      runCommand,
+		now:         time.Now,
+		sleep:       sleepContext,
+		admitted:    map[string]binaryAdmission{},
 	}
 }
 
 func (b *Backend) Name() corebackend.Name { return corebackend.Herdr }
 
-// CheckAvailable verifies the exact CLI/server/schema tuple accepted by the
-// v1 backend. It never starts or attaches a herdr server.
+// CheckAvailable verifies the stable version floor and connected server
+// identity. It never starts a server.
 func (b *Backend) CheckAvailable() error {
 	_, err := b.probe()
 	return err
 }
 
-// ListLive returns the aggregate session.snapshot projection. The probe is
-// repeated for each call so a client/server upgrade cannot silently widen the
-// exact v1 compatibility allowlist.
+// ListLive returns the aggregate session.snapshot projection. Connected status
+// is rechecked for each call; binary version admission is digest-cached.
 func (b *Backend) ListLive() ([]corebackend.LivePane, error) {
 	probed, err := b.probe()
 	if err != nil {
@@ -220,20 +234,20 @@ func (b *Backend) ReleaseStartGate(string) error {
 	return corebackend.Unsupported(corebackend.Herdr, "release start gate")
 }
 
-func (b *Backend) Read(corebackend.PaneRef, int) (string, error) {
-	return "", corebackend.Unsupported(corebackend.Herdr, "read")
+func (b *Backend) Read(ref corebackend.PaneRef, lines int) (string, error) {
+	return b.readCore(ref, lines)
 }
 
-func (b *Backend) SendLine(corebackend.PaneRef, string) error {
-	return corebackend.Unsupported(corebackend.Herdr, "send line")
+func (b *Backend) SendLine(ref corebackend.PaneRef, line string) error {
+	return b.sendLineCore(ref, line)
 }
 
-func (b *Backend) Focus(corebackend.PaneRef) error {
-	return corebackend.Unsupported(corebackend.Herdr, "focus")
+func (b *Backend) Focus(ref corebackend.PaneRef) error {
+	return b.focusCore(ref)
 }
 
-func (b *Backend) Close(corebackend.PaneRef) error {
-	return corebackend.Unsupported(corebackend.Herdr, "close")
+func (b *Backend) Close(ref corebackend.PaneRef) error {
+	return b.closeCore(ref)
 }
 
 func normalizeWaitTimeout(totalTimeout time.Duration) (time.Duration, error) {
@@ -340,17 +354,21 @@ func (e commandCleanupError) Unwrap() error { return e.err }
 func (b *Backend) snapshot(ctx context.Context, timeout time.Duration, probed probeResult) ([]corebackend.LivePane, error) {
 	out, err := b.runContext(ctx, timeout, probed.binary, probed.route, "api", "snapshot")
 	if err != nil {
-		wrapped := fmt.Errorf("herdr api snapshot: %w", err)
+		wrapped := methodUnavailable("session.snapshot")
 		if retryableCommandError(err) {
 			return nil, retryableSnapshotError{err: wrapped}
 		}
 		return nil, wrapped
 	}
 	var envelope snapshotEnvelope
-	if err := decodeOne(out, &envelope); err != nil {
-		return nil, fmt.Errorf("parse herdr api snapshot: %w", err)
+	if parseErr := decodeOne(out, &envelope); parseErr != nil {
+		return nil, methodUnavailable("session.snapshot")
 	}
-	return projectSnapshot(envelope, probed.route)
+	panes, err := projectSnapshot(envelope, probed)
+	if err != nil {
+		return nil, methodUnavailable("session.snapshot")
+	}
+	return panes, nil
 }
 
 func (b *Backend) probe() (probeResult, error) {
@@ -371,34 +389,20 @@ func (b *Backend) probeContext(ctx context.Context) (probeResult, error) {
 	if err := validateSessionName(b.session); err != nil {
 		return probeResult{}, err
 	}
-	binary, err := b.lookPath(commandName)
-	if err != nil {
-		return probeResult{}, fmt.Errorf("herdr 0.7.3 is required: %w", err)
-	}
-	if !filepath.IsAbs(binary) {
-		binary, err = filepath.Abs(binary)
-		if err != nil {
-			return probeResult{}, fmt.Errorf("resolve herdr executable: %w", err)
-		}
-	}
-
 	initial := route{session: b.session, socketPath: b.socketPath}
-	versionOut, err := b.runContext(ctx, commandTimeout, binary, initial, "--version")
+	admitted, err := b.admitBinaryContext(ctx, initial)
 	if err != nil {
-		return probeResult{}, fmt.Errorf("herdr --version: %w", err)
-	}
-	if got := strings.TrimSpace(string(versionOut)); got != "herdr "+supportedVersion {
-		return probeResult{}, fmt.Errorf("unsupported herdr CLI version %q (required: %s)", got, supportedVersion)
+		return probeResult{}, err
 	}
 
 	statusArgs := []string{"status", "--json"}
-	// In herdr 0.7.3 an explicit --session intentionally wins over
-	// HERDR_SOCKET_PATH. Use it only to resolve the initial named-session socket;
-	// an already verified socket is selected through the environment instead.
+	// Use --session only to discover an observation-only named session. Once a
+	// socket is known, every call selects it explicitly because HERDR_SOCKET_PATH
+	// takes precedence over HERDR_SESSION.
 	if initial.socketPath == "" {
 		statusArgs = append([]string{"--session", initial.session}, statusArgs...)
 	}
-	statusOut, err := b.runContext(ctx, commandTimeout, binary, initial, statusArgs...)
+	statusOut, err := b.runContext(ctx, commandTimeout, admitted.path, initial, statusArgs...)
 	if err != nil {
 		return probeResult{}, fmt.Errorf("herdr status --json: %w", err)
 	}
@@ -406,30 +410,61 @@ func (b *Backend) probeContext(ctx context.Context) (probeResult, error) {
 	if decodeErr := decodeOne(statusOut, &status); decodeErr != nil {
 		return probeResult{}, fmt.Errorf("parse herdr status --json: %w", decodeErr)
 	}
-	verified, err := validateStatus(status, initial)
+	verified, err := validateStatus(status, initial, admitted)
 	if err != nil {
 		return probeResult{}, err
 	}
+	if b.socketPath == "" {
+		b.socketPath = verified.socketPath
+	}
+	return probeResult{
+		binary:  admitted.path,
+		sha256:  admitted.sha256,
+		version: admitted.version,
+		route:   verified,
+	}, nil
+}
 
-	schemaOut, err := b.runContext(ctx, commandTimeout, binary, verified, "api", "schema", "--json")
+func (b *Backend) admitBinaryContext(ctx context.Context, target route) (binaryAdmission, error) {
+	binary, err := b.lookPath(commandName)
 	if err != nil {
-		return probeResult{}, fmt.Errorf("herdr api schema --json: %w", err)
+		return binaryAdmission{}, fmt.Errorf("herdr stable >=%s is required: %w", minimumVersion, err)
 	}
-	var schema schemaJSON
-	if err := decodeOne(schemaOut, &schema); err != nil {
-		return probeResult{}, fmt.Errorf("parse herdr api schema --json: %w", err)
+	if !filepath.IsAbs(binary) {
+		binary, err = filepath.Abs(binary)
+		if err != nil {
+			return binaryAdmission{}, fmt.Errorf("resolve herdr executable: %w", err)
+		}
 	}
-	if schema.Protocol != supportedProtocol || schema.SchemaVersion != supportedSchema {
-		return probeResult{}, fmt.Errorf(
-			"unsupported herdr API tuple protocol=%d schema_version=%d (required: protocol=%d schema_version=%d)",
-			schema.Protocol,
-			schema.SchemaVersion,
-			supportedProtocol,
-			supportedSchema,
-		)
+	binary, hash, err := b.stageBinary(binary)
+	if err != nil {
+		return binaryAdmission{}, fmt.Errorf("stage herdr executable before admission: %w", err)
 	}
-	b.socketPath = verified.socketPath
-	return probeResult{binary: binary, route: verified}, nil
+	if !filepath.IsAbs(binary) || filepath.Clean(binary) != binary || !validHexToken(hash) {
+		return binaryAdmission{}, fmt.Errorf("staged herdr executable has an invalid content identity")
+	}
+	versionOut, err := b.runContext(ctx, commandTimeout, binary, target, "--version")
+	if err != nil {
+		return binaryAdmission{}, fmt.Errorf("herdr --version: %w", err)
+	}
+	version, err := parseAdmittedVersion(versionOut)
+	if err != nil {
+		return binaryAdmission{}, err
+	}
+	admitted := binaryAdmission{path: binary, sha256: hash, version: version}
+	key := binary + "\x00" + hash
+	if cached, ok := b.admitted[key]; ok {
+		if cached != admitted {
+			return binaryAdmission{}, fmt.Errorf("herdr admitted binary identity changed")
+		}
+		return cached, nil
+	}
+	b.admitted[key] = admitted
+	return admitted, nil
+}
+
+func methodUnavailable(method string) error {
+	return fmt.Errorf("herdr method %q is unavailable", method)
 }
 
 func (b *Backend) runContext(ctx context.Context, timeout time.Duration, binary string, target route, args ...string) ([]byte, error) {
@@ -441,17 +476,32 @@ func (b *Backend) runContext(ctx context.Context, timeout time.Duration, binary 
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return b.output(callCtx, binary, routeEnvironment(target), args...)
+	return b.output(callCtx, binary, routeEnvironment(target, b.control), args...)
 }
 
-func routeEnvironment(target route) []string {
-	env := make([]string, 0, len(os.Environ())+2)
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if key == sessionEnv || key == socketEnv {
-			continue
+func routeEnvironment(target route, controls ...*controlPlaneEnvironment) []string {
+	var control *controlPlaneEnvironment
+	if len(controls) > 0 {
+		control = controls[0]
+	}
+	env := make([]string, 0, len(os.Environ())+8)
+	if control != nil {
+		env = append(env,
+			xdgConfigEnv+"="+control.xdgConfigHome,
+			xdgStateEnv+"="+control.xdgStateHome,
+			xdgDataEnv+"="+control.xdgDataHome,
+			xdgCacheEnv+"="+control.xdgCacheHome,
+			configEnv+"="+control.configPath,
+			clientSocketEnv+"="+control.clientSocketPath,
+		)
+	} else {
+		for _, entry := range os.Environ() {
+			key, _, _ := strings.Cut(entry, "=")
+			if key == sessionEnv || key == socketEnv {
+				continue
+			}
+			env = append(env, entry)
 		}
-		env = append(env, entry)
 	}
 	env = append(env, sessionEnv+"="+target.session)
 	if target.socketPath != "" {
@@ -461,6 +511,14 @@ func routeEnvironment(target route) []string {
 }
 
 func runCommand(ctx context.Context, binary string, env []string, args ...string) ([]byte, error) {
+	return runBoundedCommand(ctx, binary, env, false, args...)
+}
+
+func runCommandCombined(ctx context.Context, binary string, env []string, args ...string) ([]byte, error) {
+	return runBoundedCommand(ctx, binary, env, true, args...)
+}
+
+func runBoundedCommand(ctx context.Context, binary string, env []string, combined bool, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -476,7 +534,13 @@ func runCommand(ctx context.Context, binary string, env []string, args ...string
 		return cleanupErr
 	}
 	cmd.WaitDelay = commandCleanupDelay
-	out, err := cmd.Output()
+	var out []byte
+	var err error
+	if combined {
+		out, err = cmd.CombinedOutput()
+	} else {
+		out, err = cmd.Output()
+	}
 	var cleanupErrors []error
 	select {
 	case cleanupErr := <-cancelCleanup:
@@ -493,10 +557,15 @@ func runCommand(ctx context.Context, binary string, env []string, args ...string
 		return out, nil
 	}
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if !combined && errors.As(err, &exitErr) {
 		stderr := strings.TrimSpace(string(exitErr.Stderr))
 		if stderr != "" {
 			return out, fmt.Errorf("%w: %s", err, stderr)
+		}
+	}
+	if combined {
+		if message := strings.TrimSpace(string(out)); message != "" {
+			return out, fmt.Errorf("%w: %s", err, message)
 		}
 	}
 	return out, err
@@ -587,17 +656,14 @@ func validateSessionName(session string) error {
 
 type statusJSON struct {
 	Client struct {
-		Version  string  `json:"version"`
-		Channel  string  `json:"channel"`
-		Protocol int     `json:"protocol"`
-		Session  *string `json:"session"`
+		Version string  `json:"version"`
+		Channel string  `json:"channel"`
+		Session *string `json:"session"`
 	} `json:"client"`
 	Server struct {
 		Status        string  `json:"status"`
 		Running       bool    `json:"running"`
 		Version       *string `json:"version"`
-		Protocol      *int    `json:"protocol"`
-		Compatible    *bool   `json:"compatible"`
 		Socket        string  `json:"socket"`
 		Session       *string `json:"session"`
 		RestartNeeded *bool   `json:"restart_needed"`
@@ -607,15 +673,13 @@ type statusJSON struct {
 	} `json:"update"`
 }
 
-func validateStatus(status statusJSON, requested route) (route, error) {
-	if status.Client.Version != supportedVersion || status.Client.Channel != "stable" || status.Client.Protocol != supportedProtocol {
+func validateStatus(status statusJSON, requested route, admitted binaryAdmission) (route, error) {
+	if validateAdmittedVersion(status.Client.Version) != nil || status.Client.Version != admitted.version || status.Client.Channel != "stable" {
 		return route{}, fmt.Errorf(
-			"unsupported herdr client tuple version=%q channel=%q protocol=%d (required: version=%s channel=stable protocol=%d)",
+			"unsupported herdr client version=%q channel=%q (required: version=%s channel=stable)",
 			status.Client.Version,
 			status.Client.Channel,
-			status.Client.Protocol,
-			supportedVersion,
-			supportedProtocol,
+			admitted.version,
 		)
 	}
 	if status.Client.Session == nil || *status.Client.Session != requested.session {
@@ -624,16 +688,11 @@ func validateStatus(status statusJSON, requested route) (route, error) {
 	if status.Server.Status != "running" || !status.Server.Running {
 		return route{}, fmt.Errorf("herdr named session %q is not running", requested.session)
 	}
-	if status.Server.Version == nil || *status.Server.Version != supportedVersion ||
-		status.Server.Protocol == nil || *status.Server.Protocol != supportedProtocol ||
-		status.Server.Compatible == nil || !*status.Server.Compatible {
+	if status.Server.Version == nil || validateAdmittedVersion(optionalString(status.Server.Version)) != nil || *status.Server.Version != admitted.version {
 		return route{}, fmt.Errorf(
-			"unsupported herdr server tuple version=%q protocol=%s compatible=%s (required: version=%s protocol=%d compatible=true)",
+			"unsupported herdr server version=%q (required: version=%s)",
 			optionalString(status.Server.Version),
-			optionalInt(status.Server.Protocol),
-			optionalBool(status.Server.Compatible),
-			supportedVersion,
-			supportedProtocol,
+			admitted.version,
 		)
 	}
 	if status.Server.Session == nil || *status.Server.Session != requested.session {
@@ -652,11 +711,6 @@ func validateStatus(status statusJSON, requested route) (route, error) {
 	return route{session: requested.session, socketPath: status.Server.Socket}, nil
 }
 
-type schemaJSON struct {
-	Protocol      int `json:"protocol"`
-	SchemaVersion int `json:"schema_version"`
-}
-
 type snapshotEnvelope struct {
 	ID     string          `json:"id"`
 	Result *snapshotResult `json:"result"`
@@ -669,7 +723,6 @@ type snapshotResult struct {
 
 type snapshotJSON struct {
 	Version    string             `json:"version"`
-	Protocol   int                `json:"protocol"`
 	Workspaces *[]workspaceJSON   `json:"workspaces"`
 	Tabs       *[]json.RawMessage `json:"tabs"`
 	Panes      *[]paneJSON        `json:"panes"`
@@ -679,6 +732,8 @@ type snapshotJSON struct {
 
 type workspaceJSON struct {
 	WorkspaceID string            `json:"workspace_id"`
+	Label       string            `json:"label"`
+	Focused     *bool             `json:"focused"`
 	Worktree    *worktreeInfoJSON `json:"worktree"`
 }
 
@@ -728,18 +783,16 @@ type agentSessionKey struct {
 	value  string
 }
 
-func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.LivePane, error) {
+func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebackend.LivePane, error) {
 	if envelope.ID != "cli:api:snapshot" || envelope.Result == nil || envelope.Result.Type != "session_snapshot" {
 		return nil, fmt.Errorf("unexpected herdr snapshot envelope")
 	}
 	snapshot := envelope.Result.Snapshot
-	if snapshot.Version != supportedVersion || snapshot.Protocol != supportedProtocol {
+	if snapshot.Version != probed.version {
 		return nil, fmt.Errorf(
-			"unsupported herdr snapshot tuple version=%q protocol=%d (required: version=%s protocol=%d)",
+			"unsupported herdr snapshot version=%q (required: version=%s)",
 			snapshot.Version,
-			snapshot.Protocol,
-			supportedVersion,
-			supportedProtocol,
+			probed.version,
 		)
 	}
 	if snapshot.Workspaces == nil || snapshot.Tabs == nil || snapshot.Panes == nil || snapshot.Layouts == nil || snapshot.Agents == nil {
@@ -748,7 +801,7 @@ func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.Liv
 
 	workspaces := make(map[string]workspaceJSON, len(*snapshot.Workspaces))
 	for _, workspace := range *snapshot.Workspaces {
-		if strings.TrimSpace(workspace.WorkspaceID) == "" {
+		if strings.TrimSpace(workspace.WorkspaceID) == "" || strings.TrimSpace(workspace.Label) == "" || workspace.Focused == nil {
 			return nil, fmt.Errorf("herdr snapshot contains an empty workspace id")
 		}
 		if workspace.Worktree != nil &&
@@ -878,8 +931,8 @@ func projectSnapshot(envelope snapshotEnvelope, target route) ([]corebackend.Liv
 			RepoKey:          repoKey,
 			ProjectRoot:      projectRoot,
 			WorktreePath:     worktreePath,
-			SessionID:        target.session,
-			SocketPath:       target.socketPath,
+			SessionID:        probed.route.session,
+			SocketPath:       probed.route.socketPath,
 		})
 	}
 	return live, nil
@@ -933,18 +986,4 @@ func optionalString(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func optionalInt(value *int) string {
-	if value == nil {
-		return "null"
-	}
-	return fmt.Sprintf("%d", *value)
-}
-
-func optionalBool(value *bool) string {
-	if value == nil {
-		return "null"
-	}
-	return fmt.Sprintf("%t", *value)
 }
