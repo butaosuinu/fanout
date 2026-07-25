@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -91,6 +92,24 @@ func TestHerdrControlProvisionalBindingsKeepManualCleanupSticky(t *testing.T) {
 	got := store.ProvisionalBindings(HerdrBindingScope{})
 	if len(got) != 1 || got[0] != (backend.Binding{Parent: "524", Backend: backend.Herdr}) {
 		t.Fatalf("bindings = %+v, want only manual-cleanup parent", got)
+	}
+}
+
+func TestHerdrControlRejectsLauncherReadyPhasesUntilIssue528(t *testing.T) {
+	for _, phase := range []HerdrLaunchPhase{HerdrPhaseWorkspaceReady, HerdrPhaseWorktreeReady} {
+		store := emptyHerdrControl()
+		store.Intents = []HerdrLaunchIntent{{
+			IntentID:           "ready-is-deferred",
+			Parent:             "524",
+			Backend:            backend.Herdr,
+			OperationState:     HerdrOperationActive,
+			Phase:              phase,
+			SourceRootPhysical: "/repo",
+		}}
+		err := validateHerdrControlStore(store)
+		if err == nil || !strings.Contains(err.Error(), "deferred to launcher readiness issue #528") {
+			t.Fatalf("phase %q validation error = %v, want deferred readiness", phase, err)
+		}
 	}
 }
 

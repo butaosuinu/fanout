@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -82,7 +84,7 @@ func RealizeHerdrCoordinator(
 		if intent.OperationState != state.HerdrOperationActive {
 			return HerdrCoordinatorResult{}, fmt.Errorf("herdr coordinator intent is terminal: %s", intent.OperationState)
 		}
-		if intent.Phase != state.HerdrPhaseWorkspaceReady && hooks.Now().UTC().UnixMilli() >= intent.LaunchExpiresUnixMS {
+		if hooks.Now().UTC().UnixMilli() >= intent.LaunchExpiresUnixMS {
 			return HerdrCoordinatorResult{}, failHerdrIntent(req.ProjectRoot, intent, "herdr coordinator launch deadline expired")
 		}
 		switch intent.Phase {
@@ -92,28 +94,22 @@ func RealizeHerdrCoordinator(
 				return HerdrCoordinatorResult{}, err
 			}
 		case state.HerdrPhaseWorkspaceStarting:
-			return HerdrCoordinatorResult{}, failHerdrIntent(
-				req.ProjectRoot,
-				intent,
-				"coordinator workspace create may have been issued; refusing blind retry",
-			)
+			var err error
+			intent, err = reconcileHerdrCoordinatorMutation(ctx, req, runtime, hooks, intent)
+			if err != nil {
+				return HerdrCoordinatorResult{}, failHerdrIntent(
+					req.ProjectRoot,
+					intent,
+					"coordinator workspace result is not provable without retry: "+err.Error(),
+				)
+			}
 		case state.HerdrPhaseWorkspaceRealized:
 			if err := verifyHerdrCoordinatorRealized(ctx, req, runtime, hooks, intent); err != nil {
 				return HerdrCoordinatorResult{}, err
 			}
 			return herdrCoordinatorDeferredResult(intent), ErrHerdrLauncherReadinessDeferred
 		case state.HerdrPhaseWorkspaceReady:
-			if intent.MutationReceipt == nil {
-				return HerdrCoordinatorResult{}, failHerdrIntent(req.ProjectRoot, intent, "workspace-ready coordinator has no receipt")
-			}
-			return HerdrCoordinatorResult{
-				Intent: intent,
-				Pane: backend.PaneRef{
-					Backend:   backend.Herdr,
-					Workspace: intent.MutationReceipt.WorkspaceID,
-					Pane:      intent.MutationReceipt.PaneID,
-				},
-			}, nil
+			return HerdrCoordinatorResult{Intent: intent}, ErrHerdrLauncherReadinessDeferred
 		default:
 			return HerdrCoordinatorResult{}, failHerdrIntent(req.ProjectRoot, intent, "unsupported coordinator phase "+string(intent.Phase))
 		}
@@ -218,12 +214,7 @@ func createHerdrCoordinator(
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "verify herdr setup-hook policy: "+policyErr.Error())
 	}
 	preState := mutationPreState(observed, state.HerdrGitPreState{})
-	request := state.HerdrMutationRequest{
-		Kind:    state.HerdrMutationWorkspaceCreate,
-		CWD:     intent.WorktreePath,
-		Label:   intent.WorktreeOwnershipNonce,
-		NoFocus: true,
-	}
+	request := expectedHerdrCoordinatorMutationRequest(intent)
 	starting, err := transitionHerdrIntent(req.ProjectRoot, intent, state.HerdrPhaseWorkspacePlanned, func(next *state.HerdrLaunchIntent) {
 		next.MutationRequest = &request
 		next.MutationPreState = &preState
@@ -237,19 +228,108 @@ func createHerdrCoordinator(
 	}
 	result, err := runtime.MutateWorktree(callCtx, toHerdrMutationRequest(request))
 	if err != nil {
-		return starting, failHerdrIntent(req.ProjectRoot, starting, "coordinator workspace mutation failed or response was incomplete: "+err.Error())
+		reconciled, reconcileErr := reconcileHerdrCoordinatorMutation(ctx, req, runtime, hooks, starting)
+		if reconcileErr != nil {
+			reason := fmt.Sprintf(
+				"coordinator workspace mutation failed or response was incomplete: %v; exact post-state reconciliation failed: %v",
+				err,
+				reconcileErr,
+			)
+			return starting, failHerdrIntent(req.ProjectRoot, starting, reason)
+		}
+		return reconciled, nil
 	}
-	if result.AlreadyOpen || result.WorkspaceID == "" || result.Label != intent.WorktreeOwnershipNonce ||
-		result.Path != "" || result.RepoKey != "" || result.RepoRoot != "" ||
-		filepath.Clean(result.CWD) != filepath.Clean(intent.WorktreePath) ||
-		result.Pane.Pane == "" || result.TerminalID == "" {
-		return starting, failHerdrIntent(req.ProjectRoot, starting, "coordinator workspace response does not match intent")
+	if validateErr := validateHerdrCoordinatorMutationResult(starting, result); validateErr != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, validateErr.Error())
 	}
-	for _, workspace := range preState.Workspaces {
-		if workspace.WorkspaceID == result.WorkspaceID {
-			return starting, failHerdrIntent(req.ProjectRoot, starting, "coordinator workspace response reused a pre-state workspace id")
+	return completeHerdrCoordinatorMutation(req, hooks, starting, result)
+}
+
+func reconcileHerdrCoordinatorMutation(
+	ctx context.Context,
+	req HerdrCoordinatorRequest,
+	runtime HerdrWorktreeRuntime,
+	hooks HerdrWorktreeHooks,
+	starting state.HerdrLaunchIntent,
+) (state.HerdrLaunchIntent, error) {
+	callCtx, cancel, err := boundedHerdrCallContext(ctx, starting, hooks.Now())
+	if err != nil {
+		return starting, err
+	}
+	defer cancel()
+	observed, err := runtime.ObserveWorkspaces(callCtx)
+	if err != nil {
+		return starting, fmt.Errorf("observe uncertain coordinator mutation: %w", err)
+	}
+	result, err := proveHerdrCoordinatorMutationResult(starting, observed)
+	if err != nil {
+		return starting, err
+	}
+	return completeHerdrCoordinatorMutation(req, hooks, starting, result)
+}
+
+func proveHerdrCoordinatorMutationResult(
+	intent state.HerdrLaunchIntent,
+	observed []herdrrun.WorkspaceObservation,
+) (herdrrun.WorktreeMutationResult, error) {
+	if intent.MutationRequest == nil || intent.MutationPreState == nil {
+		return herdrrun.WorktreeMutationResult{}, fmt.Errorf("saved coordinator mutation request/pre-state is missing")
+	}
+	var candidates []herdrrun.WorkspaceObservation
+	for _, workspace := range observed {
+		if workspace.Label == intent.MutationRequest.Label {
+			candidates = append(candidates, workspace)
 		}
 	}
+	if len(candidates) != 1 {
+		return herdrrun.WorktreeMutationResult{}, fmt.Errorf(
+			"uncertain coordinator mutation has %d nonce candidates",
+			len(candidates),
+		)
+	}
+	result := herdrrun.WorktreeMutationResult{WorkspaceObservation: candidates[0]}
+	if err := validateHerdrCoordinatorMutationResult(intent, result); err != nil {
+		return herdrrun.WorktreeMutationResult{}, err
+	}
+	return result, nil
+}
+
+func validateHerdrCoordinatorMutationResult(
+	intent state.HerdrLaunchIntent,
+	result herdrrun.WorktreeMutationResult,
+) error {
+	if intent.MutationRequest == nil || intent.MutationPreState == nil {
+		return fmt.Errorf("saved coordinator mutation request/pre-state is missing")
+	}
+	request := intent.MutationRequest
+	if request.Kind != state.HerdrMutationWorkspaceCreate ||
+		result.AlreadyOpen ||
+		result.WorkspaceID == "" ||
+		result.Label != request.Label ||
+		result.Path != "" ||
+		result.RepoKey != "" ||
+		result.RepoRoot != "" ||
+		filepath.Clean(result.CWD) != filepath.Clean(request.CWD) ||
+		result.Pane.Backend != backend.Herdr ||
+		result.Pane.Workspace != result.WorkspaceID ||
+		result.Pane.Pane == "" ||
+		result.TerminalID == "" {
+		return fmt.Errorf("coordinator workspace mutation result does not match saved exact request")
+	}
+	for _, workspace := range intent.MutationPreState.Workspaces {
+		if workspace.WorkspaceID == result.WorkspaceID {
+			return fmt.Errorf("coordinator workspace mutation reused a pre-state workspace id")
+		}
+	}
+	return nil
+}
+
+func completeHerdrCoordinatorMutation(
+	req HerdrCoordinatorRequest,
+	hooks HerdrWorktreeHooks,
+	starting state.HerdrLaunchIntent,
+	result herdrrun.WorktreeMutationResult,
+) (state.HerdrLaunchIntent, error) {
 	receipt := mutationReceipt(result, "")
 	realized, err := transitionHerdrIntent(req.ProjectRoot, starting, state.HerdrPhaseWorkspaceStarting, func(next *state.HerdrLaunchIntent) {
 		next.MutationReceipt = &receipt
@@ -291,6 +371,8 @@ func verifyHerdrCoordinatorRealized(
 		matches++
 		if workspace.Label != intent.WorktreeOwnershipNonce ||
 			workspace.Path != "" || workspace.RepoKey != "" || workspace.RepoRoot != "" ||
+			workspace.Pane.Backend != backend.Herdr ||
+			workspace.Pane.Workspace != workspace.WorkspaceID ||
 			workspace.Pane.Pane != intent.MutationReceipt.PaneID ||
 			workspace.TerminalID != intent.MutationReceipt.TerminalID ||
 			filepath.Clean(workspace.CWD) != filepath.Clean(intent.WorktreePath) {
@@ -372,5 +454,47 @@ func validateSavedHerdrCoordinatorIntent(req HerdrCoordinatorRequest, intent sta
 		intent.TotalTimeoutMS != req.TotalTimeout.Milliseconds() {
 		return fmt.Errorf("saved herdr coordinator intent contradicts the exact launch request")
 	}
+	if err := validateSavedHerdrCoordinatorMutationEvidence(intent); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateSavedHerdrCoordinatorMutationEvidence(intent state.HerdrLaunchIntent) error {
+	switch intent.Phase {
+	case state.HerdrPhaseWorkspaceStarting, state.HerdrPhaseWorkspaceRealized:
+		expected := expectedHerdrCoordinatorMutationRequest(intent)
+		if intent.MutationRequest == nil ||
+			intent.MutationPreState == nil ||
+			!reflect.DeepEqual(*intent.MutationRequest, expected) {
+			return fmt.Errorf("saved herdr coordinator mutation evidence contradicts the exact intent")
+		}
+		if intent.Phase == state.HerdrPhaseWorkspaceStarting && intent.MutationReceipt != nil {
+			return fmt.Errorf("workspace-starting coordinator already has a mutation receipt")
+		}
+		if intent.Phase == state.HerdrPhaseWorkspaceRealized && intent.MutationReceipt == nil {
+			return fmt.Errorf("workspace-realized coordinator has no mutation receipt")
+		}
+	case state.HerdrPhaseWorkspacePlanned:
+		return nil
+	case state.HerdrPhaseWorkspaceReady:
+		return ErrHerdrLauncherReadinessDeferred
+	case state.HerdrPhaseBranchPlanned,
+		state.HerdrPhaseBranchStarting,
+		state.HerdrPhaseWorktreePlanned,
+		state.HerdrPhaseWorktreeStarting,
+		state.HerdrPhaseWorktreeRealized,
+		state.HerdrPhaseWorktreeReady:
+		return fmt.Errorf("coordinator intent has child worktree phase %q", intent.Phase)
+	}
+	return nil
+}
+
+func expectedHerdrCoordinatorMutationRequest(intent state.HerdrLaunchIntent) state.HerdrMutationRequest {
+	return state.HerdrMutationRequest{
+		Kind:    state.HerdrMutationWorkspaceCreate,
+		CWD:     intent.WorktreePath,
+		Label:   intent.WorktreeOwnershipNonce,
+		NoFocus: true,
+	}
 }

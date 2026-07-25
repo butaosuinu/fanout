@@ -60,8 +60,9 @@ type HerdrControlStore struct {
 }
 
 // HerdrLaunchIntent records enough exact request and pre-state evidence to
-// decide whether a crashed mutation may proceed. A starting phase is never
-// retried; a caller can only reconcile it to a fail-closed terminal state.
+// decide whether a crashed mutation completed. A starting phase is never
+// retried; exact post-state can reconcile it to realized, while ambiguous
+// state fails closed.
 type HerdrLaunchIntent struct {
 	IntentID       string              `json:"intent_id"`
 	Parent         string              `json:"parent"`
@@ -561,11 +562,11 @@ func validateHerdrControlStore(store HerdrControlStore) error {
 			HerdrPhaseWorktreePlanned,
 			HerdrPhaseWorktreeStarting,
 			HerdrPhaseWorktreeRealized,
-			HerdrPhaseWorktreeReady,
 			HerdrPhaseWorkspacePlanned,
 			HerdrPhaseWorkspaceStarting,
-			HerdrPhaseWorkspaceRealized,
-			HerdrPhaseWorkspaceReady:
+			HerdrPhaseWorkspaceRealized:
+		case HerdrPhaseWorktreeReady, HerdrPhaseWorkspaceReady:
+			return fmt.Errorf("intent %s phase %q is deferred to launcher readiness issue #528", intent.IntentID, intent.Phase)
 		default:
 			return fmt.Errorf("intent %s has unknown phase %q", intent.IntentID, intent.Phase)
 		}

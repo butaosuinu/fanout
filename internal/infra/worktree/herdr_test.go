@@ -89,14 +89,28 @@ func TestHerdrOwnershipMarkerIsExclusiveAndExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyHerdrOwnershipMarker(checkout, marker, "nonce-527"); err != nil {
+	err = VerifyHerdrOwnershipMarker(checkout, marker, "nonce-527")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := WriteHerdrOwnershipMarker(checkout, "nonce-527"); err == nil {
+	_, err = WriteHerdrOwnershipMarker(checkout, "nonce-527")
+	if err == nil {
 		t.Fatal("exclusive marker create unexpectedly succeeded twice")
 	}
-	if err := VerifyHerdrOwnershipMarker(checkout, marker, "foreign"); err == nil {
+	err = VerifyHerdrOwnershipMarker(checkout, marker, "foreign")
+	if err == nil {
 		t.Fatal("foreign nonce unexpectedly verified")
+	}
+	ensured, err := EnsureHerdrOwnershipMarker(checkout, "nonce-527")
+	if err != nil {
+		t.Fatalf("ensure exact existing marker: %v", err)
+	}
+	if ensured != marker {
+		t.Fatalf("ensured marker = %q, want %q", ensured, marker)
+	}
+	_, err = EnsureHerdrOwnershipMarker(checkout, "foreign")
+	if err == nil {
+		t.Fatal("foreign existing marker unexpectedly adopted")
 	}
 }
 

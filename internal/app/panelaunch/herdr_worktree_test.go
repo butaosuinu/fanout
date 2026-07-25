@@ -185,6 +185,48 @@ func TestHerdrStartingPhasesNeverBlindRetry(t *testing.T) {
 	}
 }
 
+func TestHerdrWorktreeStartingReconcilesCrashAfterExactMutation(t *testing.T) {
+	repo := newHerdrLaunchRepo(t)
+	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
+	req := newHerdrWorktreeRequest(t, repo, runtime)
+	_, err := RealizeHerdrWorktree(
+		context.Background(),
+		req,
+		runtime,
+		deterministicHerdrHooks(nil, state.HerdrPhaseWorktreeStarting),
+	)
+	if err == nil || !strings.Contains(err.Error(), "injected crash") {
+		t.Fatalf("starting crash error = %v", err)
+	}
+	sourceRoot, err := physicalPath(req.SourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrIntentID(req.Parent, req.IssueNum, req.TaskID, sourceRoot, req.PlanSpecIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	starting, found := control.FindIntent(intentID)
+	if !found || starting.Phase != state.HerdrPhaseWorktreeStarting || starting.MutationRequest == nil {
+		t.Fatalf("saved starting intent = %+v, found=%t", starting, found)
+	}
+	_, err = runtime.MutateWorktree(context.Background(), toHerdrMutationRequest(*starting.MutationRequest))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		result.Intent.Phase != state.HerdrPhaseWorktreeRealized ||
+		len(runtime.mutations) != 1 {
+		t.Fatalf("starting recovery = result:%+v err:%v mutations:%d", result, err, len(runtime.mutations))
+	}
+}
+
 func TestHerdrChildRejectsCoordinatorRequestDriftOnReplay(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
@@ -266,22 +308,27 @@ func TestHerdrRealizationRejectsCrossRepositoryRootsBeforeMutation(t *testing.T)
 	}
 }
 
-func TestHerdrWorktreeResponseLossPreservesResourcesAndDoesNotRetry(t *testing.T) {
+func TestHerdrWorktreeResponseLossReconcilesExactPostStateWithoutRetry(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo, responseLoss: true}
 	req := newHerdrWorktreeRequest(t, repo, runtime)
-	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
-	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
+	result, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("response-loss error = %v", err)
 	}
 	if len(runtime.mutations) != 1 {
 		t.Fatalf("mutations = %d, want 1", len(runtime.mutations))
 	}
+	if result.Intent.Phase != state.HerdrPhaseWorktreeRealized || result.Intent.MutationReceipt == nil {
+		t.Fatalf("response-loss result = %+v, want realized receipt", result)
+	}
 	if _, statErr := os.Stat(req.WorktreePath); statErr != nil {
 		t.Fatalf("response-loss checkout was not preserved: %v", statErr)
 	}
-	_, err = RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
-	if !errors.Is(err, ErrHerdrManualCleanupRequired) || len(runtime.mutations) != 1 {
+	result, err = RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		result.Intent.Phase != state.HerdrPhaseWorktreeRealized ||
+		len(runtime.mutations) != 1 {
 		t.Fatalf("replay = err:%v mutations:%d", err, len(runtime.mutations))
 	}
 }
@@ -444,7 +491,7 @@ func TestRealizeHerdrCoordinatorPersistsWorkspacePhases(t *testing.T) {
 	}
 }
 
-func TestHerdrCoordinatorResponseLossDoesNotRetry(t *testing.T) {
+func TestHerdrCoordinatorResponseLossReconcilesExactPostStateWithoutRetry(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo, responseLoss: true}
 	req := HerdrCoordinatorRequest{
@@ -456,13 +503,68 @@ func TestHerdrCoordinatorResponseLossDoesNotRetry(t *testing.T) {
 		HerdrSocketPath: "/tmp/fanout-owned.sock",
 		TotalTimeout:    30 * time.Second,
 	}
-	_, err := RealizeHerdrCoordinator(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
-	if !errors.Is(err, ErrHerdrManualCleanupRequired) || len(runtime.mutations) != 1 {
+	result, err := RealizeHerdrCoordinator(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		result.Intent.Phase != state.HerdrPhaseWorkspaceRealized ||
+		result.Intent.MutationReceipt == nil ||
+		len(runtime.mutations) != 1 {
 		t.Fatalf("first coordinator response loss = err:%v mutations:%d", err, len(runtime.mutations))
 	}
-	_, err = RealizeHerdrCoordinator(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
-	if !errors.Is(err, ErrHerdrManualCleanupRequired) || len(runtime.mutations) != 1 {
+	result, err = RealizeHerdrCoordinator(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		result.Intent.Phase != state.HerdrPhaseWorkspaceRealized ||
+		len(runtime.mutations) != 1 {
 		t.Fatalf("coordinator replay = err:%v mutations:%d", err, len(runtime.mutations))
+	}
+}
+
+func TestHerdrCoordinatorStartingReconcilesCrashAfterExactMutation(t *testing.T) {
+	repo := newHerdrLaunchRepo(t)
+	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
+	req := HerdrCoordinatorRequest{
+		Parent:          "524",
+		ProjectRoot:     repo,
+		SourceRoot:      repo,
+		RootCWD:         repo,
+		HerdrSession:    "fanout-owned",
+		HerdrSocketPath: "/tmp/fanout-owned.sock",
+		TotalTimeout:    30 * time.Second,
+	}
+	_, err := RealizeHerdrCoordinator(
+		context.Background(),
+		req,
+		runtime,
+		deterministicHerdrHooks(nil, state.HerdrPhaseWorkspaceStarting),
+	)
+	if err == nil || !strings.Contains(err.Error(), "injected crash") {
+		t.Fatalf("coordinator starting crash error = %v", err)
+	}
+	sourceIdentity, err := worktree.ResolveHerdrRepoIdentity(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrCoordinatorIntentID(req.Parent, sourceIdentity.RepoRoot, req.PlanSpecIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	starting, found := control.FindIntent(intentID)
+	if !found || starting.Phase != state.HerdrPhaseWorkspaceStarting || starting.MutationRequest == nil {
+		t.Fatalf("saved coordinator starting intent = %+v, found=%t", starting, found)
+	}
+	_, err = runtime.MutateWorktree(context.Background(), toHerdrMutationRequest(*starting.MutationRequest))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := RealizeHerdrCoordinator(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		result.Intent.Phase != state.HerdrPhaseWorkspaceRealized ||
+		len(runtime.mutations) != 1 {
+		t.Fatalf("coordinator starting recovery = result:%+v err:%v mutations:%d", result, err, len(runtime.mutations))
 	}
 }
 
@@ -531,6 +633,15 @@ func seedHerdrCoordinator(
 		HerdrSession:           req.HerdrSession,
 		HerdrSocketPath:        req.HerdrSocketPath,
 		WorktreeOwnershipNonce: label,
+		MutationRequest: &state.HerdrMutationRequest{
+			Kind:    state.HerdrMutationWorkspaceCreate,
+			CWD:     sourceIdentity.RepoRoot,
+			Label:   label,
+			NoFocus: true,
+		},
+		MutationPreState: &state.HerdrMutationPreState{
+			Workspaces: []state.HerdrWorkspaceBinding{},
+		},
 		MutationReceipt: &state.HerdrMutationReceipt{
 			WorkspaceID:    workspaceID,
 			WorkspaceLabel: label,

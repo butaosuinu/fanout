@@ -307,6 +307,25 @@ func WriteHerdrOwnershipMarker(checkoutPath, nonce string) (string, error) {
 	return markerPath, nil
 }
 
+// EnsureHerdrOwnershipMarker creates the marker once or adopts the exact
+// existing marker after a response-loss/crash reconciliation. A foreign or
+// incomplete marker remains a hard failure.
+func EnsureHerdrOwnershipMarker(checkoutPath, nonce string) (string, error) {
+	markerPath, err := WriteHerdrOwnershipMarker(checkoutPath, nonce)
+	if err == nil {
+		return markerPath, nil
+	}
+	gitDir, gitErr := gitTrim(checkoutPath, "rev-parse", "--path-format=absolute", "--git-dir")
+	if gitErr != nil {
+		return "", errors.Join(err, fmt.Errorf("resolve existing ownership marker git dir: %w", gitErr))
+	}
+	markerPath = filepath.Join(gitDir, herdrOwnershipMarkerName)
+	if verifyErr := VerifyHerdrOwnershipMarker(checkoutPath, markerPath, nonce); verifyErr != nil {
+		return "", errors.Join(err, verifyErr)
+	}
+	return markerPath, nil
+}
+
 func VerifyHerdrOwnershipMarker(checkoutPath, markerPath, nonce string) error {
 	gitDir, err := gitTrim(checkoutPath, "rev-parse", "--path-format=absolute", "--git-dir")
 	if err != nil {
