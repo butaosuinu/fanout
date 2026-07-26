@@ -18,23 +18,37 @@ import (
 )
 
 type fakeHerdrWorktreeRuntime struct {
-	t            *testing.T
-	repo         string
-	observations []herdrrun.WorkspaceObservation
-	mutations    []herdrrun.WorktreeMutationRequest
-	responseLoss bool
-	policyErr    error
+	t                *testing.T
+	repo             string
+	observations     []herdrrun.WorkspaceObservation
+	mutations        []herdrrun.WorktreeMutationRequest
+	observeTimeouts  []time.Duration
+	policyTimeouts   []time.Duration
+	mutationTimeouts []time.Duration
+	afterObserve     func()
+	afterPolicy      func()
+	responseLoss     bool
+	policyErr        error
 }
 
-func (f *fakeHerdrWorktreeRuntime) VerifyWorktreeSetupPolicy(context.Context) error {
+func (f *fakeHerdrWorktreeRuntime) VerifyWorktreeSetupPolicy(ctx context.Context) error {
+	f.policyTimeouts = append(f.policyTimeouts, contextTimeout(ctx))
+	if f.afterPolicy != nil {
+		f.afterPolicy()
+	}
 	return f.policyErr
 }
 
-func (f *fakeHerdrWorktreeRuntime) ObserveWorkspaces(context.Context) ([]herdrrun.WorkspaceObservation, error) {
+func (f *fakeHerdrWorktreeRuntime) ObserveWorkspaces(ctx context.Context) ([]herdrrun.WorkspaceObservation, error) {
+	f.observeTimeouts = append(f.observeTimeouts, contextTimeout(ctx))
+	if f.afterObserve != nil {
+		f.afterObserve()
+	}
 	return slices.Clone(f.observations), nil
 }
 
-func (f *fakeHerdrWorktreeRuntime) MutateWorktree(_ context.Context, req herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error) {
+func (f *fakeHerdrWorktreeRuntime) MutateWorktree(ctx context.Context, req herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error) {
+	f.mutationTimeouts = append(f.mutationTimeouts, contextTimeout(ctx))
 	f.mutations = append(f.mutations, req)
 	switch req.Kind {
 	case herdrrun.WorktreeCreate:
@@ -86,6 +100,14 @@ func (f *fakeHerdrWorktreeRuntime) MutateWorktree(_ context.Context, req herdrru
 		f.t.Fatalf("unexpected mutation kind %s", req.Kind)
 		return herdrrun.WorktreeMutationResult{}, nil
 	}
+}
+
+func contextTimeout(ctx context.Context) time.Duration {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	return time.Until(deadline)
 }
 
 func TestRealizeHerdrWorktreePersistsPhasesAndStopsAtLauncherBoundary(t *testing.T) {
@@ -399,6 +421,111 @@ func TestHerdrWorktreeDeadlineDoesNotExtendOnRecovery(t *testing.T) {
 	intent, _ := control.FindIntent(intentID)
 	if intent.LaunchExpiresUnixMS != start.Add(req.TotalTimeout).UnixMilli() {
 		t.Fatalf("saved expiry = %d, want fixed %d", intent.LaunchExpiresUnixMS, start.Add(req.TotalTimeout).UnixMilli())
+	}
+}
+
+func TestHerdrSingleShotMutationsUseRemainingLaunchDeadline(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(t *testing.T, repo string, runtime *fakeHerdrWorktreeRuntime, hooks HerdrWorktreeHooks) error
+	}{
+		{
+			name: "child worktree",
+			run: func(t *testing.T, repo string, runtime *fakeHerdrWorktreeRuntime, hooks HerdrWorktreeHooks) error {
+				t.Helper()
+				req := newHerdrWorktreeRequest(t, repo, runtime)
+				_, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+				return err
+			},
+		},
+		{
+			name: "coordinator workspace",
+			run: func(t *testing.T, repo string, runtime *fakeHerdrWorktreeRuntime, hooks HerdrWorktreeHooks) error {
+				t.Helper()
+				_, err := RealizeHerdrCoordinator(context.Background(), HerdrCoordinatorRequest{
+					Parent:          "524",
+					ProjectRoot:     repo,
+					SourceRoot:      repo,
+					RootCWD:         repo,
+					HerdrSession:    "fanout-owned",
+					HerdrSocketPath: "/tmp/fanout-owned.sock",
+					TotalTimeout:    30 * time.Second,
+				}, runtime, hooks)
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newHerdrLaunchRepo(t)
+			now := time.Unix(1_700_000_000, 0)
+			runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
+			runtime.afterObserve = func() { now = now.Add(3 * time.Second) }
+			runtime.afterPolicy = func() { now = now.Add(4 * time.Second) }
+			hooks := deterministicHerdrHooks(nil, "")
+			hooks.Now = func() time.Time { return now }
+
+			if err := tt.run(t, repo, runtime, hooks); !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+				t.Fatalf("realization error = %v, want deferred launcher readiness", err)
+			}
+			if len(runtime.mutationTimeouts) != 1 {
+				t.Fatalf("mutation timeout samples = %v, want one", runtime.mutationTimeouts)
+			}
+			if got := runtime.mutationTimeouts[0]; got <= 20*time.Second || got > 24*time.Second {
+				t.Fatalf("mutation timeout = %v, want saved deadline remainder near 23s", got)
+			}
+			for _, got := range append(slices.Clone(runtime.observeTimeouts), runtime.policyTimeouts...) {
+				if got <= 0 || got > 5*time.Second {
+					t.Fatalf("read-only timeout = %v, want 0s..5s", got)
+				}
+			}
+		})
+	}
+}
+
+func TestHerdrUnissuedBranchReservationFailureCanRetry(t *testing.T) {
+	repo := newHerdrLaunchRepo(t)
+	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
+	req := newHerdrWorktreeRequest(t, repo, runtime)
+	lockPath := filepath.Join(repo, ".git", "refs", "heads", "fanout", "herdr-child.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, []byte("held\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if err == nil || !strings.Contains(err.Error(), "reserve branch") {
+		t.Fatalf("reservation error = %v, want update-ref failure", err)
+	}
+	sourceRoot, err := physicalPath(req.SourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrIntentID(req.Parent, req.IssueNum, req.TaskID, sourceRoot, req.PlanSpecIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := control.FindIntent(intentID); found {
+		t.Fatal("non-issued branch reservation retained a terminal intent")
+	}
+	if len(control.Lineages) != 0 {
+		t.Fatalf("non-issued reservation persisted lineages: %+v", control.Lineages)
+	}
+	if removeErr := os.Remove(lockPath); removeErr != nil {
+		t.Fatal(removeErr)
+	}
+
+	result, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		result.Intent.Phase != state.HerdrPhaseWorktreeRealized ||
+		len(runtime.mutations) != 1 {
+		t.Fatalf("retry result = %+v, err=%v, mutations=%d", result, err, len(runtime.mutations))
 	}
 }
 

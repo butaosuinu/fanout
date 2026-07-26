@@ -187,6 +187,41 @@ func TestHerdrControlRejectsMissingRequiredFields(t *testing.T) {
 	}
 }
 
+func TestHerdrControlRejectsUnknownFieldsAtEveryStructLevel(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "top level",
+			body: `{"schema_id":"fanout.herdr-control.v1","revision":0,"intents":[],"branch_lineages":[],"future":true}`,
+		},
+		{
+			name: "nested intent",
+			body: `{"schema_id":"fanout.herdr-control.v1","revision":0,"intents":[{"future":true}],"branch_lineages":[]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initHerdrControlRepo(t)
+			path, err := HerdrControlPath(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadHerdrControl(repo); err == nil ||
+				!strings.Contains(err.Error(), "unknown field") {
+				t.Fatalf("LoadHerdrControl() error = %v, want unknown field rejection", err)
+			}
+		})
+	}
+}
+
 func TestEnsureHerdrControlDirReadoptsConcurrentCreation(t *testing.T) {
 	parent := t.TempDir()
 	path := filepath.Join(parent, "fanout")

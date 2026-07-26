@@ -318,6 +318,9 @@ func EnsureHerdrOwnershipMarker(projectRoot, checkoutPath, fullRef, headSHA, non
 		if verifyErr := verifyHerdrOwnershipMarkerFile(proof.gitDirRoot, nonce); verifyErr != nil {
 			return "", errors.Join(fmt.Errorf("create herdr ownership marker: %w", err), verifyErr)
 		}
+		if syncErr := syncHerdrOwnershipMarkerDirectory(proof.gitDirRoot); syncErr != nil {
+			return "", fmt.Errorf("sync existing herdr ownership marker directory: %w", syncErr)
+		}
 		return markerPath, nil
 	}
 	if _, err := f.WriteString(nonce + "\n"); err != nil {
@@ -334,10 +337,23 @@ func EnsureHerdrOwnershipMarker(projectRoot, checkoutPath, fullRef, headSHA, non
 	if err := f.Close(); err != nil {
 		return "", fmt.Errorf("close herdr ownership marker: %w", err)
 	}
+	if err := syncHerdrOwnershipMarkerDirectory(proof.gitDirRoot); err != nil {
+		return "", fmt.Errorf("sync herdr ownership marker directory: %w", err)
+	}
 	if err := verifyHerdrOwnershipMarkerFile(proof.gitDirRoot, nonce); err != nil {
 		return "", err
 	}
 	return markerPath, nil
+}
+
+func syncHerdrOwnershipMarkerDirectory(root *os.Root) error {
+	dir, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	return errors.Join(syncErr, closeErr)
 }
 
 func VerifyHerdrOwnershipMarker(projectRoot, checkoutPath, fullRef, headSHA, markerPath, nonce string) error {

@@ -196,12 +196,12 @@ func createHerdrCoordinator(
 	hooks HerdrWorktreeHooks,
 	intent state.HerdrLaunchIntent,
 ) (state.HerdrLaunchIntent, error) {
-	callCtx, cancel, err := boundedHerdrCallContext(ctx, intent, hooks.Now())
+	readCtx, readCancel, err := boundedHerdrReadContext(ctx, intent, hooks.Now())
 	if err != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
 	}
-	defer cancel()
-	observed, err := runtime.ObserveWorkspaces(callCtx)
+	observed, err := runtime.ObserveWorkspaces(readCtx)
+	readCancel()
 	if err != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "observe coordinator pre-state: "+err.Error())
 	}
@@ -210,11 +210,22 @@ func createHerdrCoordinator(
 			return intent, failHerdrIntent(req.ProjectRoot, intent, "coordinator ownership label already exists")
 		}
 	}
-	if policyErr := runtime.VerifyWorktreeSetupPolicy(callCtx); policyErr != nil {
+	policyCtx, policyCancel, err := boundedHerdrReadContext(ctx, intent, hooks.Now())
+	if err != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	}
+	policyErr := runtime.VerifyWorktreeSetupPolicy(policyCtx)
+	policyCancel()
+	if policyErr != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "verify herdr setup-hook policy: "+policyErr.Error())
 	}
 	preState := mutationPreState(observed, state.HerdrGitPreState{})
 	request := expectedHerdrCoordinatorMutationRequest(intent)
+	mutationCtx, mutationCancel, err := remainingHerdrMutationContext(ctx, intent, hooks.Now())
+	if err != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	}
+	defer mutationCancel()
 	starting, err := transitionHerdrIntent(req.ProjectRoot, intent, state.HerdrPhaseWorkspacePlanned, func(next *state.HerdrLaunchIntent) {
 		next.MutationRequest = &request
 		next.MutationPreState = &preState
@@ -226,7 +237,7 @@ func createHerdrCoordinator(
 	if notifyErr := notifyHerdrPhase(hooks, starting.Phase); notifyErr != nil {
 		return starting, notifyErr
 	}
-	result, err := runtime.MutateWorktree(callCtx, toHerdrMutationRequest(request))
+	result, err := runtime.MutateWorktree(mutationCtx, toHerdrMutationRequest(request))
 	if err != nil {
 		reconciled, reconcileErr := reconcileHerdrCoordinatorMutation(ctx, req, runtime, hooks, starting)
 		if reconcileErr != nil {
@@ -252,7 +263,7 @@ func reconcileHerdrCoordinatorMutation(
 	hooks HerdrWorktreeHooks,
 	starting state.HerdrLaunchIntent,
 ) (state.HerdrLaunchIntent, error) {
-	callCtx, cancel, err := boundedHerdrCallContext(ctx, starting, hooks.Now())
+	callCtx, cancel, err := boundedHerdrReadContext(ctx, starting, hooks.Now())
 	if err != nil {
 		return starting, err
 	}
@@ -351,7 +362,7 @@ func verifyHerdrCoordinatorRealized(
 	hooks HerdrWorktreeHooks,
 	intent state.HerdrLaunchIntent,
 ) error {
-	callCtx, cancel, err := boundedHerdrCallContext(ctx, intent, hooks.Now())
+	callCtx, cancel, err := boundedHerdrReadContext(ctx, intent, hooks.Now())
 	if err != nil {
 		return failHerdrIntent(req.ProjectRoot, intent, err.Error())
 	}

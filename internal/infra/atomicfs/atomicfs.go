@@ -4,8 +4,10 @@
 package atomicfs
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -110,6 +112,17 @@ func writeJSON(path string, v any, perm os.FileMode, durable bool) error {
 // can wrap the two stages with distinct messages. Errors are returned
 // unwrapped.
 func ReadJSON(path string, v any) (found bool, err error) {
+	return readJSON(path, v, false)
+}
+
+// ReadJSONStrict reads path like ReadJSON but rejects unknown fields at every
+// decoded struct level. Callers use it when preserving unrecognized state
+// across a read-modify-write cycle cannot be proven safe.
+func ReadJSONStrict(path string, v any) (found bool, err error) {
+	return readJSON(path, v, true)
+}
+
+func readJSON(path string, v any, strict bool) (found bool, err error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -117,7 +130,21 @@ func ReadJSON(path string, v any) (found bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	if err := json.Unmarshal(data, v); err != nil {
+	if !strict {
+		if err := json.Unmarshal(data, v); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(v); err != nil {
+		return true, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return true, errors.New("JSON contains multiple values")
+		}
 		return true, err
 	}
 	return true, nil

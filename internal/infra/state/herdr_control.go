@@ -327,6 +327,16 @@ func (s *HerdrControlStore) UpsertIntent(intent HerdrLaunchIntent) {
 	s.Intents = append(s.Intents, intent)
 }
 
+func (s *HerdrControlStore) RemoveIntent(intentID string) bool {
+	for i := range s.Intents {
+		if s.Intents[i].IntentID == intentID {
+			s.Intents = slices.Delete(s.Intents, i, i+1)
+			return true
+		}
+	}
+	return false
+}
+
 func (s *HerdrControlStore) UpsertLineage(lineage HerdrBranchLineage) {
 	s.normalize()
 	for i := range s.Lineages {
@@ -417,7 +427,7 @@ func loadHerdrControl(path string) (HerdrControlStore, error) {
 		return HerdrControlStore{}, err
 	}
 	var document herdrControlDocument
-	found, err := atomicfs.ReadJSON(path, &document)
+	found, err := atomicfs.ReadJSONStrict(path, &document)
 	if err != nil {
 		if found {
 			return HerdrControlStore{}, fmt.Errorf("parse herdr control %s: %w", path, err)

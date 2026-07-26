@@ -369,14 +369,10 @@ func reserveHerdrBranch(
 			}
 			return starting, failHerdrIntent(req.ProjectRoot, starting, reason)
 		}
-		aborted, saveErr := transitionHerdrIntent(req.ProjectRoot, starting, state.HerdrPhaseBranchStarting, func(next *state.HerdrLaunchIntent) {
-			next.OperationState = state.HerdrOperationLaunchAborted
-			next.FailureReason = reason
-		})
-		if saveErr != nil {
-			return starting, saveErr
+		if removeErr := removeUnissuedHerdrIntent(req.ProjectRoot, starting); removeErr != nil {
+			return starting, errors.Join(reserveErr, removeErr)
 		}
-		return aborted, reserveErr
+		return starting, reserveErr
 	}
 
 	planned, err := completeHerdrBranchReservation(req.ProjectRoot, starting)
@@ -396,11 +392,6 @@ func realizeHerdrMutation(
 	hooks HerdrWorktreeHooks,
 	intent state.HerdrLaunchIntent,
 ) (state.HerdrLaunchIntent, error) {
-	callCtx, cancel, err := boundedHerdrCallContext(ctx, intent, hooks.Now())
-	if err != nil {
-		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
-	}
-	defer cancel()
 	if intent.BranchReceipt == nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "worktree-planned intent has no branch reservation receipt")
 	}
@@ -414,7 +405,12 @@ func realizeHerdrMutation(
 	if !pathAbsent || registered {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "fresh herdr worktree path already exists or is registered")
 	}
-	observed, err := runtime.ObserveWorkspaces(callCtx)
+	readCtx, readCancel, err := boundedHerdrReadContext(ctx, intent, hooks.Now())
+	if err != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	}
+	observed, err := runtime.ObserveWorkspaces(readCtx)
+	readCancel()
 	if err != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "observe worktree pre-state: "+err.Error())
 	}
@@ -426,7 +422,13 @@ func realizeHerdrMutation(
 			return intent, failHerdrIntent(req.ProjectRoot, intent, "worktree pre-state contains a conflicting workspace")
 		}
 	}
-	if policyErr := runtime.VerifyWorktreeSetupPolicy(callCtx); policyErr != nil {
+	policyCtx, policyCancel, err := boundedHerdrReadContext(ctx, intent, hooks.Now())
+	if err != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	}
+	policyErr := runtime.VerifyWorktreeSetupPolicy(policyCtx)
+	policyCancel()
+	if policyErr != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "verify herdr setup-hook policy: "+policyErr.Error())
 	}
 	preState := mutationPreState(observed, state.HerdrGitPreState{
@@ -435,6 +437,11 @@ func realizeHerdrMutation(
 		ObservedHeadSHA:    headSHA,
 	})
 	request := expectedHerdrWorktreeMutationRequest(intent)
+	mutationCtx, mutationCancel, err := remainingHerdrMutationContext(ctx, intent, hooks.Now())
+	if err != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	}
+	defer mutationCancel()
 	starting, err := transitionHerdrIntent(req.ProjectRoot, intent, state.HerdrPhaseWorktreePlanned, func(next *state.HerdrLaunchIntent) {
 		next.MutationPreState = &preState
 		next.MutationRequest = &request
@@ -447,7 +454,7 @@ func realizeHerdrMutation(
 		return starting, notifyErr
 	}
 
-	result, err := runtime.MutateWorktree(callCtx, toHerdrMutationRequest(request))
+	result, err := runtime.MutateWorktree(mutationCtx, toHerdrMutationRequest(request))
 	if err != nil {
 		reconciled, reconcileErr := reconcileHerdrWorktreeMutation(ctx, req, runtime, hooks, starting)
 		if reconcileErr != nil {
@@ -476,7 +483,7 @@ func reconcileHerdrWorktreeMutation(
 	hooks HerdrWorktreeHooks,
 	starting state.HerdrLaunchIntent,
 ) (state.HerdrLaunchIntent, error) {
-	callCtx, cancel, err := boundedHerdrCallContext(ctx, starting, hooks.Now())
+	callCtx, cancel, err := boundedHerdrReadContext(ctx, starting, hooks.Now())
 	if err != nil {
 		return starting, err
 	}
@@ -593,7 +600,7 @@ func verifyHerdrWorktreeRealized(
 	hooks HerdrWorktreeHooks,
 	intent state.HerdrLaunchIntent,
 ) error {
-	callCtx, cancel, err := boundedHerdrCallContext(ctx, intent, hooks.Now())
+	callCtx, cancel, err := boundedHerdrReadContext(ctx, intent, hooks.Now())
 	if err != nil {
 		return failHerdrIntent(req.ProjectRoot, intent, err.Error())
 	}
@@ -753,6 +760,30 @@ func transitionHerdrIntent(
 		return previous, err
 	}
 	return current, nil
+}
+
+func removeUnissuedHerdrIntent(projectRoot string, starting state.HerdrLaunchIntent) error {
+	locked, err := state.LockHerdrControl(projectRoot)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Preserve the removal error; Unlock still closes the descriptor.
+		_ = locked.Unlock()
+	}()
+	current, found := locked.FindIntent(starting.IntentID)
+	if !found || current.OperationState != state.HerdrOperationActive ||
+		current.Phase != state.HerdrPhaseBranchStarting ||
+		!reflect.DeepEqual(current, starting) {
+		return fmt.Errorf("herdr intent %s changed before non-issued reservation cleanup", starting.IntentID)
+	}
+	if !locked.RemoveIntent(starting.IntentID) {
+		return fmt.Errorf("herdr intent %s disappeared during non-issued reservation cleanup", starting.IntentID)
+	}
+	if err := locked.Save(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func failHerdrIntent(projectRoot string, previous state.HerdrLaunchIntent, reason string) error {
@@ -1169,15 +1200,35 @@ func physicalPath(path string) (string, error) {
 	return filepath.Clean(resolved), nil
 }
 
+func boundedHerdrReadContext(
+	parent context.Context,
+	intent state.HerdrLaunchIntent,
+	now time.Time,
+) (context.Context, context.CancelFunc, error) {
+	return boundedHerdrCallContext(parent, intent, now, 5*time.Second)
+}
+
+func remainingHerdrMutationContext(
+	parent context.Context,
+	intent state.HerdrLaunchIntent,
+	now time.Time,
+) (context.Context, context.CancelFunc, error) {
+	return boundedHerdrCallContext(parent, intent, now, 0)
+}
+
 func boundedHerdrCallContext(
 	parent context.Context,
 	intent state.HerdrLaunchIntent,
 	now time.Time,
+	maxDuration time.Duration,
 ) (context.Context, context.CancelFunc, error) {
 	remaining := time.UnixMilli(intent.LaunchExpiresUnixMS).Sub(now.UTC())
 	if remaining <= 0 {
 		return nil, nil, fmt.Errorf("herdr launch deadline expired")
 	}
-	callCtx, cancel := context.WithTimeout(parent, min(5*time.Second, remaining))
+	if maxDuration > 0 {
+		remaining = min(maxDuration, remaining)
+	}
+	callCtx, cancel := context.WithTimeout(parent, remaining)
 	return callCtx, cancel, nil
 }
