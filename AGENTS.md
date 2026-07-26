@@ -3,6 +3,19 @@
 This file provides guidance to Codex CLI when working with code in this
 repository.
 
+## Default Task Scope
+
+Unless the user explicitly requests a broader change, make the smallest complete
+change that fulfills the stated task. When multiple approaches fully satisfy the
+same requested outcome and scope, choose the least invasive one. Do not add any
+unrelated refactor, cleanup, feature, behavior change, abstraction, dependency,
+file, or deliverable. Preserve every explicit requirement. Do not skip
+investigation, validation, tests, generated artifacts, paired documentation, or
+repository gates required by correctness, safety, the changed contract, or
+another repository rule. If materially different valid scopes remain after
+inspecting the request and repository evidence, ask the user before making
+changes.
+
 ## Project Shape
 
 `fanout` is a Go CLI (`cmd/fanout` + `internal/`); `make install` builds it
