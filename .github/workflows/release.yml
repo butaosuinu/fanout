@@ -16,7 +16,7 @@ jobs:
     name: Build web assets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v5.0.0
@@ -62,7 +62,7 @@ jobs:
             runner: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
