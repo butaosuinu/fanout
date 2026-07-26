@@ -161,6 +161,9 @@ func (s *OwnedSession) MutateWorktree(ctx context.Context, req WorktreeMutationR
 	if err != nil {
 		return WorktreeMutationResult{}, err
 	}
+	if provenanceErr := validateMutationResponseProvenance(req, response.Workspace); provenanceErr != nil {
+		return WorktreeMutationResult{}, provenanceErr
+	}
 	observed, err := s.backend.observeOwnedWorkspaces(ctx, admission)
 	if err != nil {
 		return WorktreeMutationResult{}, fmt.Errorf("observe herdr worktree mutation result: %w", err)
@@ -203,6 +206,25 @@ func validateMutationResultProvenance(req WorktreeMutationRequest, got Workspace
 			got.RepoRoot != req.ExpectedRepoRoot ||
 			got.CWD != req.Path {
 			return fmt.Errorf("herdr worktree workspace provenance does not match request")
+		}
+	default:
+		return fmt.Errorf("unknown herdr worktree mutation %q", req.Kind)
+	}
+	return nil
+}
+
+func validateMutationResponseProvenance(req WorktreeMutationRequest, workspace workspaceJSON) error {
+	switch req.Kind {
+	case WorkspaceCreate:
+		if workspace.Worktree != nil {
+			return fmt.Errorf("herdr coordinator response unexpectedly has worktree provenance")
+		}
+	case WorktreeCreate, WorktreeOpen:
+		if workspace.Worktree == nil ||
+			workspace.Worktree.CheckoutPath != req.Path ||
+			workspace.Worktree.RepoKey != req.ExpectedRepoKey ||
+			workspace.Worktree.RepoRoot != req.ExpectedRepoRoot {
+			return fmt.Errorf("herdr worktree response provenance does not match request")
 		}
 	default:
 		return fmt.Errorf("unknown herdr worktree mutation %q", req.Kind)

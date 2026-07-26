@@ -128,6 +128,39 @@ func TestValidateMutationResultProvenancePinsRepoKeyAndRoot(t *testing.T) {
 	}
 }
 
+func TestValidateMutationResponseProvenanceRequiresExactWorktreeTuple(t *testing.T) {
+	req := WorktreeMutationRequest{
+		Kind:             WorktreeCreate,
+		Path:             "/repo/child",
+		ExpectedRepoKey:  "/repo/.git",
+		ExpectedRepoRoot: "/repo",
+	}
+	workspace := workspaceJSON{Worktree: &worktreeInfoJSON{
+		CheckoutPath: "/repo/child",
+		RepoKey:      "/repo/.git",
+		RepoRoot:     "/repo",
+	}}
+	if err := validateMutationResponseProvenance(req, workspace); err != nil {
+		t.Fatal(err)
+	}
+	workspace.Worktree = nil
+	if err := validateMutationResponseProvenance(req, workspace); err == nil {
+		t.Fatal("missing response worktree provenance unexpectedly accepted")
+	}
+	workspace.Worktree = &worktreeInfoJSON{
+		CheckoutPath: "/repo/child",
+		RepoKey:      "/foreign/.git",
+		RepoRoot:     "/repo",
+	}
+	if err := validateMutationResponseProvenance(req, workspace); err == nil {
+		t.Fatal("foreign response repo key unexpectedly accepted")
+	}
+	req.Kind = WorkspaceCreate
+	if err := validateMutationResponseProvenance(req, workspace); err == nil {
+		t.Fatal("coordinator response with worktree provenance unexpectedly accepted")
+	}
+}
+
 func TestDecodeWorktreeOpenRequiresAlreadyOpen(t *testing.T) {
 	const base = `{"id":"cli:worktree:open","result":{"type":"worktree_opened","workspace":{"workspace_id":"w2","label":"nonce","focused":false}`
 	if _, err := decodeWorktreeMutationResponse(

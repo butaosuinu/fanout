@@ -45,6 +45,22 @@ func TestResolveHerdrRepoIdentityReturnsPhysicalGitTuple(t *testing.T) {
 	}
 }
 
+func TestCheckoutRegisteredHandlesNewlineInWorktreePath(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	checkout := filepath.Join(repo, ".fanout", "worktrees", "line\nbreak")
+	if err := os.MkdirAll(filepath.Dir(checkout), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, repo, "worktree", "add", "-b", "fanout/herdr-newline", checkout, "HEAD")
+	registered, err := checkoutRegistered(repo, checkout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !registered {
+		t.Fatal("registered worktree with newline path was not found")
+	}
+}
+
 func TestResolveHerdrBasePinsCanonicalTupleAndRejectsDirtySource(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	baseBranch := gitOutput(t, repo, "branch", "--show-current")

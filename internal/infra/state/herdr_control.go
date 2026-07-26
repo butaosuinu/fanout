@@ -59,6 +59,13 @@ type HerdrControlStore struct {
 	Lineages []HerdrBranchLineage `json:"branch_lineages"`
 }
 
+type herdrControlDocument struct {
+	SchemaID *string               `json:"schema_id"`
+	Revision *uint64               `json:"revision"`
+	Intents  *[]HerdrLaunchIntent  `json:"intents"`
+	Lineages *[]HerdrBranchLineage `json:"branch_lineages"`
+}
+
 // HerdrLaunchIntent records enough exact request and pre-state evidence to
 // decide whether a crashed mutation completed. A starting phase is never
 // retried; exact post-state can reconcile it to realized, while ambiguous
@@ -277,7 +284,7 @@ func (l *LockedHerdrControl) Save() error {
 		return fmt.Errorf("validate herdr control before save: %w", err)
 	}
 	l.Revision++
-	if err := atomicfs.WriteJSON(l.path, l.HerdrControlStore, 0o600); err != nil {
+	if err := atomicfs.WriteJSONDurable(l.path, l.HerdrControlStore, 0o600); err != nil {
 		l.Revision--
 		return fmt.Errorf("write herdr control %s: %w", l.path, err)
 	}
@@ -409,13 +416,26 @@ func loadHerdrControl(path string) (HerdrControlStore, error) {
 	if err := validateHerdrControlFile(path); err != nil {
 		return HerdrControlStore{}, err
 	}
-	store := emptyHerdrControl()
-	found, err := atomicfs.ReadJSON(path, &store)
+	var document herdrControlDocument
+	found, err := atomicfs.ReadJSON(path, &document)
 	if err != nil {
 		if found {
 			return HerdrControlStore{}, fmt.Errorf("parse herdr control %s: %w", path, err)
 		}
 		return HerdrControlStore{}, fmt.Errorf("read herdr control %s: %w", path, err)
+	}
+	if !found {
+		return emptyHerdrControl(), nil
+	}
+	if document.SchemaID == nil || document.Revision == nil ||
+		document.Intents == nil || document.Lineages == nil {
+		return HerdrControlStore{}, fmt.Errorf("herdr control %s is missing required fields", path)
+	}
+	store := HerdrControlStore{
+		SchemaID: *document.SchemaID,
+		Revision: *document.Revision,
+		Intents:  append([]HerdrLaunchIntent(nil), (*document.Intents)...),
+		Lineages: append([]HerdrBranchLineage(nil), (*document.Lineages)...),
 	}
 	store.normalize()
 	if store.SchemaID != HerdrControlSchemaID {
@@ -428,20 +448,49 @@ func loadHerdrControl(path string) (HerdrControlStore, error) {
 }
 
 func ensureHerdrControlDir(path string) error {
-	info, err := os.Lstat(path)
+	return ensureHerdrControlDirWith(path, os.Lstat, os.Mkdir)
+}
+
+func ensureHerdrControlDirWith(
+	path string,
+	lstat func(string) (os.FileInfo, error),
+	mkdir func(string, os.FileMode) error,
+) error {
+	info, err := lstat(path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		if mkdirErr := os.Mkdir(path, 0o700); mkdirErr != nil {
+		if mkdirErr := mkdir(path, 0o700); mkdirErr != nil && !errors.Is(mkdirErr, os.ErrExist) {
 			return fmt.Errorf("create herdr control directory: %w", mkdirErr)
 		}
-		info, err = os.Lstat(path)
+		info, err = lstat(path)
 	case err != nil:
 		return fmt.Errorf("inspect herdr control directory: %w", err)
 	}
 	if err != nil {
 		return fmt.Errorf("inspect created herdr control directory: %w", err)
 	}
-	return validateHerdrControlDirInfo(path, info)
+	if err := validateHerdrControlDirInfo(path, info); err != nil {
+		return err
+	}
+	if err := syncHerdrDirectory(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("sync herdr control parent directory: %w", err)
+	}
+	return nil
+}
+
+func syncHerdrDirectory(path string) error {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	dir := os.NewFile(uintptr(fd), path)
+	if dir == nil {
+		_ = syscall.Close(fd)
+		return fmt.Errorf("open directory returned no file handle")
+	}
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	return errors.Join(syncErr, closeErr)
 }
 
 func validateExistingHerdrControlDir(path string) error {

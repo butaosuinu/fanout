@@ -238,7 +238,7 @@ func CheckoutGitState(root, checkoutPath, fullRef string) (pathAbsent, registere
 }
 
 func checkoutRegistered(root, checkoutPath string) (bool, error) {
-	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	cmd := exec.Command("git", "worktree", "list", "--porcelain", "-z")
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
@@ -251,8 +251,8 @@ func checkoutRegistered(root, checkoutPath string) (bool, error) {
 	if resolved, resolveErr := filepath.EvalSymlinks(want); resolveErr == nil {
 		want = resolved
 	}
-	for line := range strings.SplitSeq(string(out), "\n") {
-		path, ok := strings.CutPrefix(line, "worktree ")
+	for field := range strings.SplitSeq(string(out), "\x00") {
+		path, ok := strings.CutPrefix(field, "worktree ")
 		if !ok {
 			continue
 		}

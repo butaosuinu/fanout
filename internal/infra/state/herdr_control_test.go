@@ -143,6 +143,79 @@ func TestHerdrControlRejectsSymlinkRegistryAndLock(t *testing.T) {
 	}
 }
 
+func TestHerdrControlRejectsMissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "all fields", body: `{}`},
+		{
+			name: "revision",
+			body: `{"schema_id":"fanout.herdr-control.v1","intents":[],"branch_lineages":[]}`,
+		},
+		{
+			name: "intents",
+			body: `{"schema_id":"fanout.herdr-control.v1","revision":0,"branch_lineages":[]}`,
+		},
+		{
+			name: "branch lineages",
+			body: `{"schema_id":"fanout.herdr-control.v1","revision":0,"intents":[]}`,
+		},
+		{
+			name: "null intents",
+			body: `{"schema_id":"fanout.herdr-control.v1","revision":0,"intents":null,"branch_lineages":[]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initHerdrControlRepo(t)
+			path, err := HerdrControlPath(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadHerdrControl(repo); err == nil ||
+				!strings.Contains(err.Error(), "missing required fields") {
+				t.Fatalf("LoadHerdrControl() error = %v, want missing required fields", err)
+			}
+		})
+	}
+}
+
+func TestEnsureHerdrControlDirReadoptsConcurrentCreation(t *testing.T) {
+	parent := t.TempDir()
+	path := filepath.Join(parent, "fanout")
+	firstLstat := true
+	lstat := func(name string) (os.FileInfo, error) {
+		if firstLstat {
+			firstLstat = false
+			return nil, os.ErrNotExist
+		}
+		return os.Lstat(name)
+	}
+	mkdir := func(name string, mode os.FileMode) error {
+		if err := os.Mkdir(name, mode); err != nil {
+			return err
+		}
+		return os.ErrExist
+	}
+	if err := ensureHerdrControlDirWith(path, lstat, mkdir); err != nil {
+		t.Fatalf("ensureHerdrControlDirWith() = %v, want concurrent directory adoption", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateHerdrControlDirInfo(path, info); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHerdrIntentIDCanonicalizesNumericParent(t *testing.T) {
 	a, err := HerdrIntentID("0524", 527, "", "", "")
 	if err != nil {

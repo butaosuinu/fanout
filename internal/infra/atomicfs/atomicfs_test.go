@@ -21,6 +21,7 @@ func TestWriteJSON(t *testing.T) {
 		perm     os.FileMode
 		want     string
 		wantPerm os.FileMode
+		durable  bool
 	}{
 		{
 			name:     "struct is indented with trailing newline",
@@ -46,11 +47,24 @@ func TestWriteJSON(t *testing.T) {
 			want:     "{\n  \"name\": \"\",\n  \"n\": 0\n}\n",
 			wantPerm: 0o644,
 		},
+		{
+			name:     "durable replacement keeps exact bytes and mode",
+			relPath:  "durable.json",
+			v:        payload{Name: "durable", N: 1},
+			perm:     0o600,
+			want:     "{\n  \"name\": \"durable\",\n  \"n\": 1\n}\n",
+			wantPerm: 0o600,
+			durable:  true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), tt.relPath)
-			if err := WriteJSON(path, tt.v, tt.perm); err != nil {
+			write := WriteJSON
+			if tt.durable {
+				write = WriteJSONDurable
+			}
+			if err := write(path, tt.v, tt.perm); err != nil {
 				t.Fatalf("WriteJSON(%q) = %v, want nil", path, err)
 			}
 			data, err := os.ReadFile(path)
@@ -80,6 +94,16 @@ func TestWriteJSONUnmarshalableValue(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("Stat(%q) after failed WriteJSON = %v, want IsNotExist", path, err)
+	}
+}
+
+func TestWriteJSONDurableRequiresExistingDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "out.json")
+	if err := WriteJSONDurable(path, payload{}, 0o600); err == nil {
+		t.Fatal("WriteJSONDurable() created an unverified destination directory")
+	}
+	if _, err := os.Lstat(filepath.Dir(path)); !os.IsNotExist(err) {
+		t.Fatalf("durable write created destination directory: %v", err)
 	}
 }
 
