@@ -76,6 +76,12 @@ func RealizeHerdrCoordinator(
 			return HerdrCoordinatorResult{}, notifyErr
 		}
 	}
+	operationCtx, operationCancel, err := herdrOperationContext(ctx, intent, hooks.Now())
+	if err != nil {
+		return HerdrCoordinatorResult{}, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	}
+	defer operationCancel()
+	ctx = operationCtx
 
 	for {
 		if intent.OperationState == state.HerdrOperationManualCleanupRequired {
@@ -84,8 +90,8 @@ func RealizeHerdrCoordinator(
 		if intent.OperationState != state.HerdrOperationActive {
 			return HerdrCoordinatorResult{}, fmt.Errorf("herdr coordinator intent is terminal: %s", intent.OperationState)
 		}
-		if hooks.Now().UTC().UnixMilli() >= intent.LaunchExpiresUnixMS {
-			return HerdrCoordinatorResult{}, failHerdrIntent(req.ProjectRoot, intent, "herdr coordinator launch deadline expired")
+		if err := verifyHerdrOperationDeadline(ctx, intent, hooks.Now()); err != nil {
+			return HerdrCoordinatorResult{}, failHerdrIntent(req.ProjectRoot, intent, err.Error())
 		}
 		switch intent.Phase {
 		case state.HerdrPhaseWorkspacePlanned:
@@ -106,6 +112,9 @@ func RealizeHerdrCoordinator(
 		case state.HerdrPhaseWorkspaceRealized:
 			if err := verifyHerdrCoordinatorRealized(ctx, req, runtime, hooks, intent); err != nil {
 				return HerdrCoordinatorResult{}, err
+			}
+			if err := verifyHerdrOperationDeadline(ctx, intent, hooks.Now()); err != nil {
+				return HerdrCoordinatorResult{}, failHerdrIntent(req.ProjectRoot, intent, err.Error())
 			}
 			return herdrCoordinatorDeferredResult(intent), ErrHerdrLauncherReadinessDeferred
 		case state.HerdrPhaseWorkspaceReady:
@@ -211,11 +220,14 @@ func createHerdrCoordinator(
 	}
 	preState := mutationPreState(observed, state.HerdrGitPreState{})
 	request := expectedHerdrCoordinatorMutationRequest(intent)
-	mutationCtx, mutationCancel, err := remainingHerdrMutationContext(ctx, intent, hooks.Now())
+	mutationCtx, mutationCancel, err := remainingHerdrMutationContext(ctx)
 	if err != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
 	}
 	defer mutationCancel()
+	if err := verifyHerdrOperationDeadline(ctx, intent, hooks.Now()); err != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	}
 	starting, err := transitionHerdrIntent(req.ProjectRoot, intent, state.HerdrPhaseWorkspacePlanned, func(next *state.HerdrLaunchIntent) {
 		next.MutationRequest = &request
 		next.MutationPreState = &preState
@@ -226,6 +238,9 @@ func createHerdrCoordinator(
 	}
 	if notifyErr := notifyHerdrPhase(hooks, starting.Phase); notifyErr != nil {
 		return starting, notifyErr
+	}
+	if err := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); err != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, err.Error())
 	}
 	result, err := runtime.MutateWorktree(mutationCtx, toHerdrMutationRequest(request))
 	if err != nil {
@@ -243,7 +258,7 @@ func createHerdrCoordinator(
 	if validateErr := validateHerdrCoordinatorMutationResult(starting, result); validateErr != nil {
 		return starting, failHerdrIntent(req.ProjectRoot, starting, validateErr.Error())
 	}
-	return completeHerdrCoordinatorMutation(req, hooks, starting, result)
+	return completeHerdrCoordinatorMutation(ctx, req, hooks, starting, result)
 }
 
 func reconcileHerdrCoordinatorMutation(
@@ -261,7 +276,7 @@ func reconcileHerdrCoordinatorMutation(
 	if err != nil {
 		return starting, err
 	}
-	return completeHerdrCoordinatorMutation(req, hooks, starting, result)
+	return completeHerdrCoordinatorMutation(ctx, req, hooks, starting, result)
 }
 
 func proveHerdrCoordinatorMutationResult(
@@ -321,11 +336,15 @@ func validateHerdrCoordinatorMutationResult(
 }
 
 func completeHerdrCoordinatorMutation(
+	ctx context.Context,
 	req HerdrCoordinatorRequest,
 	hooks HerdrWorktreeHooks,
 	starting state.HerdrLaunchIntent,
 	result herdrrun.WorktreeMutationResult,
 ) (state.HerdrLaunchIntent, error) {
+	if err := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); err != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, err.Error())
+	}
 	receipt := mutationReceipt(result, "")
 	realized, err := transitionHerdrIntent(req.ProjectRoot, starting, state.HerdrPhaseWorkspaceStarting, func(next *state.HerdrLaunchIntent) {
 		next.MutationReceipt = &receipt
@@ -372,6 +391,9 @@ func verifyHerdrCoordinatorRealized(
 	}
 	if matches != 1 {
 		return failHerdrIntent(req.ProjectRoot, intent, fmt.Sprintf("coordinator has %d matching workspaces", matches))
+	}
+	if err := verifyHerdrOperationDeadline(ctx, intent, hooks.Now()); err != nil {
+		return failHerdrIntent(req.ProjectRoot, intent, err.Error())
 	}
 	return nil
 }
