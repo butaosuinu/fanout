@@ -361,6 +361,15 @@ func TestPersistedHerdrPlanIntentBindingsStayWorktreeLocal(t *testing.T) {
 	if !errors.Is(err, backend.ErrUnsupported) {
 		t.Fatalf("sibling worktree selection error = %v, want sticky herdr unsupported", err)
 	}
+
+	_, err = resolveLaunchBackend(&cliflags.Config{
+		ParentRef:        "plan:shared",
+		PlanSpecIdentity: strings.Repeat("b", 64),
+		Backend:          backend.Tmux,
+	}, sibling, siblingStore, nil)
+	if err == nil || !strings.Contains(err.Error(), "planspec identity drift") {
+		t.Fatalf("sibling worktree drift error = %v, want unresolved same-root plan rejection", err)
+	}
 }
 
 func TestRuntimeBackendBindingsKeepIssueSourcedPlansRepositoryWide(t *testing.T) {

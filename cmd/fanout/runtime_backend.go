@@ -164,7 +164,7 @@ func backendSelectionVerifier(selection backend.Selection, inputs runtimeBackend
 			return err
 		}
 		recheck.rows = rows
-		if err := refreshHerdrIntentBindings(&recheck); err != nil {
+		if err := refreshHerdrIntentBindings(&recheck, parent); err != nil {
 			return err
 		}
 		got, resolveErr := resolveBackendSelection(parent, recheck)
@@ -275,13 +275,13 @@ func loadLaunchRuntimeBackendInputs(
 	provisionalIntents []backend.Binding,
 ) (runtimeBackendInputs, error) {
 	inputs := loadRuntimeBackendInputs(cfg, projectRoot, store, provisionalIntents)
-	if err := refreshHerdrIntentBindings(&inputs); err != nil {
+	if err := refreshHerdrIntentBindings(&inputs, cfg.ParentRef); err != nil {
 		return runtimeBackendInputs{}, err
 	}
 	return inputs, nil
 }
 
-func refreshHerdrIntentBindings(inputs *runtimeBackendInputs) error {
+func refreshHerdrIntentBindings(inputs *runtimeBackendInputs, parent string) error {
 	if strings.TrimSpace(inputs.projectRoot) == "" {
 		if inputs.suppliedIntents != nil {
 			inputs.provisionalIntents = append([]backend.Binding(nil), inputs.suppliedIntents...)
@@ -296,12 +296,17 @@ func refreshHerdrIntentBindings(inputs *runtimeBackendInputs) error {
 	if err != nil {
 		return fmt.Errorf("resolve provisional herdr binding scope: %w", err)
 	}
+	persistedIntents, err := control.ProvisionalBindings(state.HerdrBindingScope{
+		Parent:             parent,
+		SourceRootPhysical: repoIdentity.RepoRoot,
+		PlanSpecIdentity:   inputs.planSpecIdentity,
+	})
+	if err != nil {
+		return fmt.Errorf("resolve provisional herdr launch intents: %w", err)
+	}
 	inputs.provisionalIntents = append(
 		append([]backend.Binding(nil), inputs.suppliedIntents...),
-		control.ProvisionalBindings(state.HerdrBindingScope{
-			SourceRootPhysical: repoIdentity.RepoRoot,
-			PlanSpecIdentity:   inputs.planSpecIdentity,
-		})...,
+		persistedIntents...,
 	)
 	return nil
 }

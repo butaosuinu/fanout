@@ -58,7 +58,10 @@ func TestHerdrControlIsSharedAcrossLinkedWorktrees(t *testing.T) {
 	if saved, ok := got.FindIntent(intent.IntentID); !ok || saved.Parent != intent.Parent {
 		t.Fatalf("saved intent = %+v, %t", saved, ok)
 	}
-	bindings := got.ProvisionalBindings(HerdrBindingScope{})
+	bindings, err := got.ProvisionalBindings(HerdrBindingScope{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(bindings) != 1 || bindings[0].Parent != "0524" || bindings[0].Backend != backend.Herdr {
 		t.Fatalf("provisional bindings = %+v", bindings)
 	}
@@ -89,7 +92,10 @@ func TestHerdrControlProvisionalBindingsKeepManualCleanupSticky(t *testing.T) {
 		{Parent: "525", Backend: backend.Herdr, OperationState: HerdrOperationLaunchAborted},
 		{Parent: "", Backend: backend.Herdr, OperationState: HerdrOperationActive},
 	}
-	got := store.ProvisionalBindings(HerdrBindingScope{})
+	got, err := store.ProvisionalBindings(HerdrBindingScope{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got) != 1 || got[0] != (backend.Binding{Parent: "524", Backend: backend.Herdr}) {
 		t.Fatalf("bindings = %+v, want only manual-cleanup parent", got)
 	}
@@ -294,12 +300,25 @@ func TestHerdrIssueLessPlanIdentityAndBindingsAreWorktreeAndSpecScoped(t *testin
 			Backend: backend.Herdr, OperationState: HerdrOperationActive,
 		},
 	}
-	got := store.ProvisionalBindings(HerdrBindingScope{
+	got, err := store.ProvisionalBindings(HerdrBindingScope{
+		Parent:             "plan:alpha",
 		SourceRootPhysical: "/repo/a",
 		PlanSpecIdentity:   specA,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got) != 1 || got[0] != (backend.Binding{Parent: "plan:alpha", Backend: backend.Herdr}) {
 		t.Fatalf("scoped bindings = %+v", got)
+	}
+
+	_, err = store.ProvisionalBindings(HerdrBindingScope{
+		Parent:             "plan:alpha",
+		SourceRootPhysical: "/repo/a",
+		PlanSpecIdentity:   specB,
+	})
+	if err == nil || !strings.Contains(err.Error(), "planspec identity drift") {
+		t.Fatalf("drift error = %v, want unresolved same-root plan rejection", err)
 	}
 }
 

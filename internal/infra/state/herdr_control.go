@@ -349,12 +349,14 @@ func (s *HerdrControlStore) UpsertLineage(lineage HerdrBranchLineage) {
 }
 
 type HerdrBindingScope struct {
+	Parent             string
 	SourceRootPhysical string
 	PlanSpecIdentity   string
 }
 
-func (s HerdrControlStore) ProvisionalBindings(scope HerdrBindingScope) []backend.Binding {
+func (s HerdrControlStore) ProvisionalBindings(scope HerdrBindingScope) ([]backend.Binding, error) {
 	out := make([]backend.Binding, 0, len(s.Intents))
+	scopeParent := parentref.Canon(scope.Parent)
 	for _, intent := range s.Intents {
 		if intent.OperationState != HerdrOperationActive &&
 			intent.OperationState != HerdrOperationManualCleanupRequired {
@@ -363,14 +365,27 @@ func (s HerdrControlStore) ProvisionalBindings(scope HerdrBindingScope) []backen
 		if strings.TrimSpace(intent.Parent) == "" {
 			continue
 		}
-		if strings.HasPrefix(parentref.Canon(intent.Parent), "plan:") &&
-			(intent.SourceRootPhysical != scope.SourceRootPhysical ||
-				intent.PlanSpecIdentity != scope.PlanSpecIdentity) {
-			continue
+		intentParent := parentref.Canon(intent.Parent)
+		if strings.HasPrefix(intentParent, "plan:") {
+			if intent.SourceRootPhysical != scope.SourceRootPhysical {
+				continue
+			}
+			if intentParent == scopeParent && intent.PlanSpecIdentity != scope.PlanSpecIdentity {
+				return nil, fmt.Errorf(
+					"herdr planspec identity drift for %s in source root %s: unresolved intent has %s, launch has %s",
+					intentParent,
+					scope.SourceRootPhysical,
+					intent.PlanSpecIdentity,
+					scope.PlanSpecIdentity,
+				)
+			}
+			if intent.PlanSpecIdentity != scope.PlanSpecIdentity {
+				continue
+			}
 		}
 		out = append(out, backend.Binding{Parent: intent.Parent, Backend: intent.Backend})
 	}
-	return out
+	return out, nil
 }
 
 func HerdrIntentID(
