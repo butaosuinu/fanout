@@ -3,11 +3,16 @@ package herdrrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
+
+// ErrRetryableRead marks a read-only Herdr CLI timeout or non-zero exit.
+// Callers may retry only these failures within their existing launch budget.
+var ErrRetryableRead = errors.New("retryable herdr read command failure")
 
 type WorktreeMutationKind string
 
@@ -85,11 +90,11 @@ func (s *OwnedSession) VerifyWorktreeSetupPolicy(ctx context.Context) error {
 	defer unlockPrivateFile(lock)
 	probed, err := s.backend.probeOwned(ctx, admission)
 	if err != nil {
-		return err
+		return markRetryableRead(err)
 	}
 	out, err := s.backend.runContext(ctx, commandTimeout, probed.binary, probed.route, "plugin", "list", "--json")
 	if err != nil {
-		return methodUnavailable("plugin.list")
+		return classifyReadCommandError("plugin.list", err)
 	}
 	return validateEmptyPluginList(out)
 }
@@ -153,7 +158,7 @@ func (s *OwnedSession) MutateWorktree(ctx context.Context, req WorktreeMutationR
 	}
 
 	args, envelopeID, resultType := worktreeMutationArgs(req)
-	out, err := s.backend.runContext(ctx, commandTimeout, probed.binary, probed.route, args...)
+	out, err := s.backend.runMutationContext(ctx, probed.binary, probed.route, args...)
 	if err != nil {
 		return WorktreeMutationResult{}, err
 	}
@@ -346,11 +351,11 @@ func decodeWorktreeMutationResponse(data []byte, envelopeID, resultType string) 
 func (b *Backend) observeOwnedWorkspaces(ctx context.Context, admission ownedAdmission) ([]WorkspaceObservation, error) {
 	probed, err := b.probeOwned(ctx, admission)
 	if err != nil {
-		return nil, err
+		return nil, markRetryableRead(err)
 	}
 	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "api", "snapshot")
 	if err != nil {
-		return nil, methodUnavailable("session.snapshot")
+		return nil, classifyReadCommandError("session.snapshot", err)
 	}
 	var envelope snapshotEnvelope
 	if err := decodeOne(out, &envelope); err != nil {
@@ -374,6 +379,36 @@ func (b *Backend) observeOwnedWorkspaces(ctx context.Context, admission ownedAdm
 		result = append(result, observation)
 	}
 	return result, nil
+}
+
+func (b *Backend) runMutationContext(
+	ctx context.Context,
+	binary string,
+	target route,
+	args ...string,
+) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return nil, fmt.Errorf("herdr mutation requires a caller deadline")
+	}
+	return b.output(ctx, binary, routeEnvironment(target, b.control), args...)
+}
+
+func markRetryableRead(err error) error {
+	if retryableCommandError(err) {
+		return fmt.Errorf("%w: %w", ErrRetryableRead, err)
+	}
+	return err
+}
+
+func classifyReadCommandError(method string, err error) error {
+	unavailable := methodUnavailable(method)
+	if retryableCommandError(err) {
+		return fmt.Errorf("%w: %w", ErrRetryableRead, unavailable)
+	}
+	return unavailable
 }
 
 func workspaceObservation(workspace workspaceJSON, panes []paneJSON) (WorkspaceObservation, error) {

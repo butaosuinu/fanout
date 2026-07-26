@@ -1,11 +1,52 @@
 package herdrrun
 
 import (
+	"context"
+	"errors"
+	"os/exec"
 	"reflect"
 	"testing"
+	"time"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
+
+func TestRunMutationContextUsesEntireCallerDeadline(t *testing.T) {
+	fake := newFakeHerdr("fanout-test", "/private/tmp/fanout-test/herdr.sock")
+	fake.respond = func([]string) ([]byte, error) {
+		return []byte(`{"ok":true}`), nil
+	}
+	backend := newTestBackend(t, "fanout-test", "/private/tmp/fanout-test/herdr.sock", fake)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := backend.runMutationContext(
+		ctx,
+		"/private/tmp/herdr-0.7.5",
+		route{session: "fanout-test", socketPath: "/private/tmp/fanout-test/herdr.sock"},
+		"workspace",
+		"create",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.commands) != 1 {
+		t.Fatalf("commands = %d, want 1", len(fake.commands))
+	}
+	if got := fake.commands[0].timeout; got <= commandTimeout || got > 30*time.Second {
+		t.Fatalf("mutation timeout = %v, want caller remainder above %v", got, commandTimeout)
+	}
+}
+
+func TestReadCommandRetryClassificationOnlyMarksTimeoutAndNonZeroExit(t *testing.T) {
+	for _, err := range []error{context.DeadlineExceeded, &exec.ExitError{}} {
+		if got := markRetryableRead(err); !errors.Is(got, ErrRetryableRead) {
+			t.Errorf("markRetryableRead(%T) = %v, want retryable", err, got)
+		}
+	}
+	if got := markRetryableRead(errors.New("malformed snapshot")); errors.Is(got, ErrRetryableRead) {
+		t.Fatalf("malformed response classified as retryable: %v", got)
+	}
+}
 
 func TestWorktreeMutationArgsPinExact075CLI(t *testing.T) {
 	tests := []struct {

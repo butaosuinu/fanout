@@ -3,6 +3,7 @@ package panelaunch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,21 +29,31 @@ type fakeHerdrWorktreeRuntime struct {
 	afterObserve     func()
 	afterPolicy      func()
 	responseLoss     bool
+	observeErrors    []error
+	policyErrors     []error
 	policyErr        error
 }
 
 func (f *fakeHerdrWorktreeRuntime) VerifyWorktreeSetupPolicy(ctx context.Context) error {
+	call := len(f.policyTimeouts)
 	f.policyTimeouts = append(f.policyTimeouts, contextTimeout(ctx))
 	if f.afterPolicy != nil {
 		f.afterPolicy()
+	}
+	if call < len(f.policyErrors) {
+		return f.policyErrors[call]
 	}
 	return f.policyErr
 }
 
 func (f *fakeHerdrWorktreeRuntime) ObserveWorkspaces(ctx context.Context) ([]herdrrun.WorkspaceObservation, error) {
+	call := len(f.observeTimeouts)
 	f.observeTimeouts = append(f.observeTimeouts, contextTimeout(ctx))
 	if f.afterObserve != nil {
 		f.afterObserve()
+	}
+	if call < len(f.observeErrors) {
+		return nil, f.observeErrors[call]
 	}
 	return slices.Clone(f.observations), nil
 }
@@ -421,6 +432,72 @@ func TestHerdrWorktreeDeadlineDoesNotExtendOnRecovery(t *testing.T) {
 	intent, _ := control.FindIntent(intentID)
 	if intent.LaunchExpiresUnixMS != start.Add(req.TotalTimeout).UnixMilli() {
 		t.Fatalf("saved expiry = %d, want fixed %d", intent.LaunchExpiresUnixMS, start.Add(req.TotalTimeout).UnixMilli())
+	}
+}
+
+func TestHerdrWorktreeRetriesTransientReadBeforeMutation(t *testing.T) {
+	repo := newHerdrLaunchRepo(t)
+	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
+	req := newHerdrWorktreeRequest(t, repo, runtime)
+	runtime.observeErrors = []error{
+		fmt.Errorf("%w: injected timeout", herdrrun.ErrRetryableRead),
+	}
+	start := time.Unix(1_700_000_000, 0)
+	now := start
+	var sleeps []time.Duration
+	hooks := deterministicHerdrHooks(nil, "")
+	hooks.Now = func() time.Time { return now }
+	hooks.Sleep = func(ctx context.Context, delay time.Duration) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		sleeps = append(sleeps, delay)
+		now = now.Add(delay)
+		return nil
+	}
+
+	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("error = %v, want deferred launcher readiness", err)
+	}
+	if len(runtime.mutations) != 1 {
+		t.Fatalf("transient read issued %d mutations, want 1", len(runtime.mutations))
+	}
+	if len(runtime.observeTimeouts) != 3 {
+		t.Fatalf("observe calls = %d, want retry plus realized verification", len(runtime.observeTimeouts))
+	}
+	if !slices.Equal(sleeps, []time.Duration{herdrReadStartInterval}) {
+		t.Fatalf("read retry sleeps = %v, want [%v]", sleeps, herdrReadStartInterval)
+	}
+}
+
+func TestHerdrWorktreeTransientReadStopsAtSavedCallLimit(t *testing.T) {
+	repo := newHerdrLaunchRepo(t)
+	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
+	req := newHerdrWorktreeRequest(t, repo, runtime)
+	req.TotalTimeout = 3 * time.Second
+	retryableErr := fmt.Errorf("%w: injected timeout", herdrrun.ErrRetryableRead)
+	runtime.observeErrors = []error{retryableErr, retryableErr}
+	now := time.Unix(1_700_000_000, 0)
+	hooks := deterministicHerdrHooks(nil, "")
+	hooks.Now = func() time.Time { return now }
+	hooks.Sleep = func(ctx context.Context, delay time.Duration) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		now = now.Add(delay)
+		return nil
+	}
+
+	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("error = %v, want terminal failure after retry budget", err)
+	}
+	if len(runtime.observeTimeouts) != 2 {
+		t.Fatalf("observe calls = %d, want ceil(3s/2s) = 2", len(runtime.observeTimeouts))
+	}
+	if len(runtime.mutations) != 0 {
+		t.Fatalf("exhausted read retries issued %d mutations", len(runtime.mutations))
 	}
 }
 

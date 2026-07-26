@@ -186,3 +186,72 @@ func TestReadJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestReadJSONStrictRejectsDuplicateFieldsAtEveryObjectLevel(t *testing.T) {
+	type nestedPayload struct {
+		Value int `json:"value"`
+	}
+	type strictPayload struct {
+		Name   string          `json:"name"`
+		Nested nestedPayload   `json:"nested"`
+		Items  []nestedPayload `json:"items"`
+	}
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "top level",
+			body: `{"name":"first","name":"second","nested":{"value":1},"items":[]}`,
+		},
+		{
+			name: "nested object",
+			body: `{"name":"ok","nested":{"value":1,"value":2},"items":[]}`,
+		},
+		{
+			name: "object inside array",
+			body: `{"name":"ok","nested":{"value":1},"items":[{"value":1,"\u0076alue":2}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "duplicate.json")
+			if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var got strictPayload
+			found, err := ReadJSONStrict(path, &got)
+			if !found || err == nil {
+				t.Fatalf("ReadJSONStrict() = found:%t err:%v, want duplicate-field error", found, err)
+			}
+		})
+	}
+}
+
+func TestReadJSONStrictAcceptsUniqueNestedFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "unique.json")
+	if err := os.WriteFile(
+		path,
+		[]byte(`{"name":"ok","nested":{"value":1},"items":[{"value":2}]}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Name   string `json:"name"`
+		Nested struct {
+			Value int `json:"value"`
+		} `json:"nested"`
+		Items []struct {
+			Value int `json:"value"`
+		} `json:"items"`
+	}
+	found, err := ReadJSONStrict(path, &got)
+	if !found || err != nil {
+		t.Fatalf("ReadJSONStrict() = found:%t err:%v", found, err)
+	}
+	if got.Name != "ok" || got.Nested.Value != 1 || len(got.Items) != 1 || got.Items[0].Value != 2 {
+		t.Fatalf("ReadJSONStrict() decoded %+v", got)
+	}
+}

@@ -196,12 +196,7 @@ func createHerdrCoordinator(
 	hooks HerdrWorktreeHooks,
 	intent state.HerdrLaunchIntent,
 ) (state.HerdrLaunchIntent, error) {
-	readCtx, readCancel, err := boundedHerdrReadContext(ctx, intent, hooks.Now())
-	if err != nil {
-		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
-	}
-	observed, err := runtime.ObserveWorkspaces(readCtx)
-	readCancel()
+	observed, err := observeHerdrWorkspacesWithRetry(ctx, runtime, hooks, intent)
 	if err != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "observe coordinator pre-state: "+err.Error())
 	}
@@ -210,12 +205,7 @@ func createHerdrCoordinator(
 			return intent, failHerdrIntent(req.ProjectRoot, intent, "coordinator ownership label already exists")
 		}
 	}
-	policyCtx, policyCancel, err := boundedHerdrReadContext(ctx, intent, hooks.Now())
-	if err != nil {
-		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
-	}
-	policyErr := runtime.VerifyWorktreeSetupPolicy(policyCtx)
-	policyCancel()
+	policyErr := retryHerdrRead(ctx, intent, hooks, runtime.VerifyWorktreeSetupPolicy)
 	if policyErr != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "verify herdr setup-hook policy: "+policyErr.Error())
 	}

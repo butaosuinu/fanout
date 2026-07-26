@@ -22,6 +22,7 @@ import (
 const (
 	minHerdrWorktreeTimeout = 3 * time.Second
 	maxHerdrWorktreeTimeout = 300 * time.Second
+	herdrReadStartInterval  = 2 * time.Second
 )
 
 var (
@@ -65,6 +66,7 @@ type HerdrWorktreeHooks struct {
 	Now        func() time.Time
 	Random     func() (string, error)
 	PhaseSaved func(state.HerdrLaunchPhase) error
+	Sleep      func(context.Context, time.Duration) error
 }
 
 // RealizeHerdrWorktree advances through worktree-realized. It deliberately
@@ -405,12 +407,7 @@ func realizeHerdrMutation(
 	if !pathAbsent || registered {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "fresh herdr worktree path already exists or is registered")
 	}
-	readCtx, readCancel, err := boundedHerdrReadContext(ctx, intent, hooks.Now())
-	if err != nil {
-		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
-	}
-	observed, err := runtime.ObserveWorkspaces(readCtx)
-	readCancel()
+	observed, err := observeHerdrWorkspacesWithRetry(ctx, runtime, hooks, intent)
 	if err != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "observe worktree pre-state: "+err.Error())
 	}
@@ -422,12 +419,7 @@ func realizeHerdrMutation(
 			return intent, failHerdrIntent(req.ProjectRoot, intent, "worktree pre-state contains a conflicting workspace")
 		}
 	}
-	policyCtx, policyCancel, err := boundedHerdrReadContext(ctx, intent, hooks.Now())
-	if err != nil {
-		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
-	}
-	policyErr := runtime.VerifyWorktreeSetupPolicy(policyCtx)
-	policyCancel()
+	policyErr := retryHerdrRead(ctx, intent, hooks, runtime.VerifyWorktreeSetupPolicy)
 	if policyErr != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "verify herdr setup-hook policy: "+policyErr.Error())
 	}
@@ -1165,6 +1157,9 @@ func normalizeHerdrWorktreeHooks(hooks HerdrWorktreeHooks) HerdrWorktreeHooks {
 	if hooks.Random == nil {
 		hooks.Random = randomHerdrToken
 	}
+	if hooks.Sleep == nil {
+		hooks.Sleep = sleepHerdrReadInterval
+	}
 	return hooks
 }
 
@@ -1231,4 +1226,73 @@ func boundedHerdrCallContext(
 	}
 	callCtx, cancel := context.WithTimeout(parent, remaining)
 	return callCtx, cancel, nil
+}
+
+func observeHerdrWorkspacesWithRetry(
+	ctx context.Context,
+	runtime HerdrWorktreeRuntime,
+	hooks HerdrWorktreeHooks,
+	intent state.HerdrLaunchIntent,
+) ([]herdrrun.WorkspaceObservation, error) {
+	var observed []herdrrun.WorkspaceObservation
+	err := retryHerdrRead(ctx, intent, hooks, func(callCtx context.Context) error {
+		var err error
+		observed, err = runtime.ObserveWorkspaces(callCtx)
+		return err
+	})
+	return observed, err
+}
+
+func retryHerdrRead(
+	ctx context.Context,
+	intent state.HerdrLaunchIntent,
+	hooks HerdrWorktreeHooks,
+	call func(context.Context) error,
+) error {
+	totalTimeout := time.Duration(intent.TotalTimeoutMS) * time.Millisecond
+	callLimit := max(1, int((totalTimeout+herdrReadStartInterval-1)/herdrReadStartInterval))
+	var lastErr error
+	for attempt := 0; attempt < callLimit; attempt++ {
+		started := hooks.Now().UTC()
+		callCtx, cancel, err := boundedHerdrReadContext(ctx, intent, started)
+		if err != nil {
+			if lastErr != nil {
+				return errors.Join(lastErr, err)
+			}
+			return err
+		}
+		lastErr = call(callCtx)
+		cancel()
+		if lastErr == nil || !errors.Is(lastErr, herdrrun.ErrRetryableRead) {
+			return lastErr
+		}
+		if attempt+1 == callLimit {
+			return lastErr
+		}
+		delay := started.Add(herdrReadStartInterval).Sub(hooks.Now().UTC())
+		if delay <= 0 {
+			continue
+		}
+		waitCtx, waitCancel, err := remainingHerdrMutationContext(ctx, intent, hooks.Now())
+		if err != nil {
+			return errors.Join(lastErr, err)
+		}
+		sleepErr := hooks.Sleep(waitCtx, delay)
+		waitCancel()
+		if sleepErr != nil {
+			return errors.Join(lastErr, sleepErr)
+		}
+	}
+	return lastErr
+}
+
+func sleepHerdrReadInterval(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
