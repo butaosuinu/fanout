@@ -1242,7 +1242,7 @@ func retryHerdrRead(
 	totalTimeout := time.Duration(intent.TotalTimeoutMS) * time.Millisecond
 	callLimit := max(1, int((totalTimeout+herdrReadStartInterval-1)/herdrReadStartInterval))
 	var lastErr error
-	for attempt := 0; attempt < callLimit; attempt++ {
+	for attempt := range callLimit {
 		started := hooks.Now().UTC()
 		callCtx, cancel, err := boundedHerdrReadContext(ctx, intent, started)
 		if err != nil {
