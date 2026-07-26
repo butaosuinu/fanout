@@ -253,12 +253,7 @@ func reconcileHerdrCoordinatorMutation(
 	hooks HerdrWorktreeHooks,
 	starting state.HerdrLaunchIntent,
 ) (state.HerdrLaunchIntent, error) {
-	callCtx, cancel, err := boundedHerdrReadContext(ctx, starting, hooks.Now())
-	if err != nil {
-		return starting, err
-	}
-	defer cancel()
-	observed, err := runtime.ObserveWorkspaces(callCtx)
+	observed, err := observeHerdrWorkspacesWithRetry(ctx, runtime, hooks, starting)
 	if err != nil {
 		return starting, fmt.Errorf("observe uncertain coordinator mutation: %w", err)
 	}
@@ -352,15 +347,10 @@ func verifyHerdrCoordinatorRealized(
 	hooks HerdrWorktreeHooks,
 	intent state.HerdrLaunchIntent,
 ) error {
-	callCtx, cancel, err := boundedHerdrReadContext(ctx, intent, hooks.Now())
-	if err != nil {
-		return failHerdrIntent(req.ProjectRoot, intent, err.Error())
-	}
-	defer cancel()
 	if intent.MutationReceipt == nil {
 		return failHerdrIntent(req.ProjectRoot, intent, "coordinator receipt is missing")
 	}
-	observed, err := runtime.ObserveWorkspaces(callCtx)
+	observed, err := observeHerdrWorkspacesWithRetry(ctx, runtime, hooks, intent)
 	if err != nil {
 		return failHerdrIntent(req.ProjectRoot, intent, "observe realized coordinator: "+err.Error())
 	}

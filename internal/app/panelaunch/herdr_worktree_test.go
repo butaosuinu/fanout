@@ -40,7 +40,7 @@ func (f *fakeHerdrWorktreeRuntime) VerifyWorktreeSetupPolicy(ctx context.Context
 	if f.afterPolicy != nil {
 		f.afterPolicy()
 	}
-	if call < len(f.policyErrors) {
+	if call < len(f.policyErrors) && f.policyErrors[call] != nil {
 		return f.policyErrors[call]
 	}
 	return f.policyErr
@@ -52,7 +52,7 @@ func (f *fakeHerdrWorktreeRuntime) ObserveWorkspaces(ctx context.Context) ([]her
 	if f.afterObserve != nil {
 		f.afterObserve()
 	}
-	if call < len(f.observeErrors) {
+	if call < len(f.observeErrors) && f.observeErrors[call] != nil {
 		return nil, f.observeErrors[call]
 	}
 	return slices.Clone(f.observations), nil
@@ -348,11 +348,16 @@ func TestHerdrRealizationRejectsCrossRepositoryRootsBeforeMutation(t *testing.T)
 	}
 }
 
-func TestHerdrWorktreeResponseLossReconcilesExactPostStateWithoutRetry(t *testing.T) {
+func TestHerdrWorktreeResponseLossRetriesReadWithoutMutationRetry(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo, responseLoss: true}
 	req := newHerdrWorktreeRequest(t, repo, runtime)
-	result, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	runtime.observeErrors = []error{
+		nil,
+		fmt.Errorf("%w: injected reconciliation timeout", herdrrun.ErrRetryableRead),
+	}
+	hooks := advancingHerdrRetryHooks()
+	result, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("response-loss error = %v", err)
 	}
@@ -365,7 +370,10 @@ func TestHerdrWorktreeResponseLossReconcilesExactPostStateWithoutRetry(t *testin
 	if _, statErr := os.Stat(req.WorktreePath); statErr != nil {
 		t.Fatalf("response-loss checkout was not preserved: %v", statErr)
 	}
-	result, err = RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if len(runtime.observeTimeouts) != 4 {
+		t.Fatalf("response-loss observe calls = %d, want preflight, retry, proof, realized verification", len(runtime.observeTimeouts))
+	}
+	result, err = RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
 		result.Intent.Phase != state.HerdrPhaseWorktreeRealized ||
 		len(runtime.mutations) != 1 {
@@ -610,16 +618,31 @@ func TestHerdrWorktreeRealizedRecoveryDoesNotReissueMutation(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
 	req := newHerdrWorktreeRequest(t, repo, runtime)
-	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, state.HerdrPhaseWorktreeRealized))
+	hooks := advancingHerdrRetryHooks()
+	hooks.PhaseSaved = func(phase state.HerdrLaunchPhase) error {
+		if phase == state.HerdrPhaseWorktreeRealized {
+			return errors.New("injected crash after " + string(phase))
+		}
+		return nil
+	}
+	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if err == nil || !strings.Contains(err.Error(), "injected crash") {
 		t.Fatalf("first error = %v", err)
 	}
-	result, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	runtime.observeErrors = []error{
+		nil,
+		fmt.Errorf("%w: injected realized timeout", herdrrun.ErrRetryableRead),
+	}
+	hooks.PhaseSaved = nil
+	result, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("error = %v, want deferred launcher readiness", err)
 	}
 	if result.Intent.Phase != state.HerdrPhaseWorktreeRealized || len(runtime.mutations) != 1 {
 		t.Fatalf("recovery result = %+v mutations=%d", result, len(runtime.mutations))
+	}
+	if len(runtime.observeTimeouts) != 3 {
+		t.Fatalf("realized observe calls = %d, want preflight plus verification retry", len(runtime.observeTimeouts))
 	}
 }
 
@@ -702,7 +725,7 @@ func TestRealizeHerdrCoordinatorPersistsWorkspacePhases(t *testing.T) {
 	}
 }
 
-func TestHerdrCoordinatorResponseLossReconcilesExactPostStateWithoutRetry(t *testing.T) {
+func TestHerdrCoordinatorResponseLossRetriesReadWithoutMutationRetry(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo, responseLoss: true}
 	req := HerdrCoordinatorRequest{
@@ -714,14 +737,22 @@ func TestHerdrCoordinatorResponseLossReconcilesExactPostStateWithoutRetry(t *tes
 		HerdrSocketPath: "/tmp/fanout-owned.sock",
 		TotalTimeout:    30 * time.Second,
 	}
-	result, err := RealizeHerdrCoordinator(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	runtime.observeErrors = []error{
+		nil,
+		fmt.Errorf("%w: injected reconciliation timeout", herdrrun.ErrRetryableRead),
+	}
+	hooks := advancingHerdrRetryHooks()
+	result, err := RealizeHerdrCoordinator(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
 		result.Intent.Phase != state.HerdrPhaseWorkspaceRealized ||
 		result.Intent.MutationReceipt == nil ||
 		len(runtime.mutations) != 1 {
 		t.Fatalf("first coordinator response loss = err:%v mutations:%d", err, len(runtime.mutations))
 	}
-	result, err = RealizeHerdrCoordinator(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if len(runtime.observeTimeouts) != 4 {
+		t.Fatalf("coordinator observe calls = %d, want preflight, retry, proof, realized verification", len(runtime.observeTimeouts))
+	}
+	result, err = RealizeHerdrCoordinator(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
 		result.Intent.Phase != state.HerdrPhaseWorkspaceRealized ||
 		len(runtime.mutations) != 1 {
@@ -899,6 +930,20 @@ func deterministicHerdrHooks(phases *[]state.HerdrLaunchPhase, crash state.Herdr
 			return nil
 		},
 	}
+}
+
+func advancingHerdrRetryHooks() HerdrWorktreeHooks {
+	now := time.Unix(1_700_000_000, 0)
+	hooks := deterministicHerdrHooks(nil, "")
+	hooks.Now = func() time.Time { return now }
+	hooks.Sleep = func(ctx context.Context, delay time.Duration) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		now = now.Add(delay)
+		return nil
+	}
+	return hooks
 }
 
 func newHerdrLaunchRepo(t *testing.T) string {

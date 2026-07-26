@@ -475,12 +475,7 @@ func reconcileHerdrWorktreeMutation(
 	hooks HerdrWorktreeHooks,
 	starting state.HerdrLaunchIntent,
 ) (state.HerdrLaunchIntent, error) {
-	callCtx, cancel, err := boundedHerdrReadContext(ctx, starting, hooks.Now())
-	if err != nil {
-		return starting, err
-	}
-	defer cancel()
-	observed, err := runtime.ObserveWorkspaces(callCtx)
+	observed, err := observeHerdrWorkspacesWithRetry(ctx, runtime, hooks, starting)
 	if err != nil {
 		return starting, fmt.Errorf("observe uncertain worktree mutation: %w", err)
 	}
@@ -592,18 +587,13 @@ func verifyHerdrWorktreeRealized(
 	hooks HerdrWorktreeHooks,
 	intent state.HerdrLaunchIntent,
 ) error {
-	callCtx, cancel, err := boundedHerdrReadContext(ctx, intent, hooks.Now())
-	if err != nil {
-		return failHerdrIntent(req.ProjectRoot, intent, err.Error())
-	}
-	defer cancel()
 	if intent.MutationReceipt == nil {
 		return failHerdrIntent(req.ProjectRoot, intent, "worktree-realized intent has no mutation receipt")
 	}
 	if verifyErr := verifyHerdrWorktreePostState(req.ProjectRoot, intent, *intent.MutationReceipt); verifyErr != nil {
 		return failHerdrIntent(req.ProjectRoot, intent, verifyErr.Error())
 	}
-	observed, err := runtime.ObserveWorkspaces(callCtx)
+	observed, err := observeHerdrWorkspacesWithRetry(ctx, runtime, hooks, intent)
 	if err != nil {
 		return failHerdrIntent(req.ProjectRoot, intent, "observe realized worktree: "+err.Error())
 	}
