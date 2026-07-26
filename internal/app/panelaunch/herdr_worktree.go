@@ -117,8 +117,8 @@ func RealizeHerdrWorktree(
 		if err != nil {
 			return HerdrWorktreeResult{}, err
 		}
-		if err := notifyHerdrPhase(hooks, intent.Phase); err != nil {
-			return HerdrWorktreeResult{}, err
+		if notifyErr := notifyHerdrPhase(hooks, intent.Phase); notifyErr != nil {
+			return HerdrWorktreeResult{}, notifyErr
 		}
 	}
 	operationCtx, operationCancel, err := herdrOperationContext(ctx, intent, hooks.Now())
@@ -372,8 +372,8 @@ func reserveHerdrBranch(
 	if notifyErr := notifyHerdrPhase(hooks, starting.Phase); notifyErr != nil {
 		return starting, notifyErr
 	}
-	if err := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); err != nil {
-		return starting, failHerdrIntent(req.ProjectRoot, starting, err.Error())
+	if deadlineErr := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); deadlineErr != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, deadlineErr.Error())
 	}
 	if reserveErr := worktree.ReserveBranch(req.ProjectRoot, starting.FullBranchRef, starting.LineageBaseSHA); reserveErr != nil {
 		oid, found, observeErr := worktree.ObserveBranch(req.ProjectRoot, starting.FullBranchRef)
@@ -392,8 +392,8 @@ func reserveHerdrBranch(
 		return starting, reserveErr
 	}
 
-	if err := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); err != nil {
-		return starting, failHerdrIntent(req.ProjectRoot, starting, err.Error())
+	if deadlineErr := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); deadlineErr != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, deadlineErr.Error())
 	}
 	planned, err := completeHerdrBranchReservation(req.ProjectRoot, starting)
 	if err != nil {
@@ -452,8 +452,8 @@ func realizeHerdrMutation(
 		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
 	}
 	defer mutationCancel()
-	if err := verifyHerdrOperationDeadline(ctx, intent, hooks.Now()); err != nil {
-		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	if deadlineErr := verifyHerdrOperationDeadline(ctx, intent, hooks.Now()); deadlineErr != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, deadlineErr.Error())
 	}
 	starting, err := transitionHerdrIntent(req.ProjectRoot, intent, state.HerdrPhaseWorktreePlanned, func(next *state.HerdrLaunchIntent) {
 		next.MutationPreState = &preState
@@ -466,8 +466,8 @@ func realizeHerdrMutation(
 	if notifyErr := notifyHerdrPhase(hooks, starting.Phase); notifyErr != nil {
 		return starting, notifyErr
 	}
-	if err := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); err != nil {
-		return starting, failHerdrIntent(req.ProjectRoot, starting, err.Error())
+	if deadlineErr := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); deadlineErr != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, deadlineErr.Error())
 	}
 
 	result, err := runtime.MutateWorktree(mutationCtx, toHerdrMutationRequest(request))
@@ -578,8 +578,8 @@ func completeHerdrWorktreeMutation(
 	starting state.HerdrLaunchIntent,
 	result herdrrun.WorktreeMutationResult,
 ) (state.HerdrLaunchIntent, error) {
-	if err := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); err != nil {
-		return starting, failHerdrIntent(req.ProjectRoot, starting, err.Error())
+	if deadlineErr := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); deadlineErr != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, deadlineErr.Error())
 	}
 	markerPath, err := worktree.EnsureHerdrOwnershipMarker(
 		req.ProjectRoot,
@@ -595,8 +595,8 @@ func completeHerdrWorktreeMutation(
 	if verifyErr := verifyHerdrWorktreePostState(req.ProjectRoot, starting, receipt); verifyErr != nil {
 		return starting, failHerdrIntent(req.ProjectRoot, starting, verifyErr.Error())
 	}
-	if err := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); err != nil {
-		return starting, failHerdrIntent(req.ProjectRoot, starting, err.Error())
+	if deadlineErr := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); deadlineErr != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, deadlineErr.Error())
 	}
 	realized, err := transitionHerdrIntent(req.ProjectRoot, starting, state.HerdrPhaseWorktreeStarting, func(next *state.HerdrLaunchIntent) {
 		next.MutationReceipt = &receipt
@@ -1259,7 +1259,7 @@ func herdrOperationContextError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("herdr launch deadline expired: %w", err)
 	}
-	return fmt.Errorf("herdr launch cancelled: %w", err)
+	return fmt.Errorf("herdr launch canceled: %w", err)
 }
 
 func boundedHerdrReadContext(parent context.Context) (context.Context, context.CancelFunc, error) {

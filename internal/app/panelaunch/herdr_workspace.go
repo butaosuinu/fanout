@@ -90,8 +90,8 @@ func RealizeHerdrCoordinator(
 		if intent.OperationState != state.HerdrOperationActive {
 			return HerdrCoordinatorResult{}, fmt.Errorf("herdr coordinator intent is terminal: %s", intent.OperationState)
 		}
-		if err := verifyHerdrOperationDeadline(ctx, intent, hooks.Now()); err != nil {
-			return HerdrCoordinatorResult{}, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+		if deadlineErr := verifyHerdrOperationDeadline(ctx, intent, hooks.Now()); deadlineErr != nil {
+			return HerdrCoordinatorResult{}, failHerdrIntent(req.ProjectRoot, intent, deadlineErr.Error())
 		}
 		switch intent.Phase {
 		case state.HerdrPhaseWorkspacePlanned:
@@ -225,8 +225,8 @@ func createHerdrCoordinator(
 		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
 	}
 	defer mutationCancel()
-	if err := verifyHerdrOperationDeadline(ctx, intent, hooks.Now()); err != nil {
-		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
+	if deadlineErr := verifyHerdrOperationDeadline(ctx, intent, hooks.Now()); deadlineErr != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, deadlineErr.Error())
 	}
 	starting, err := transitionHerdrIntent(req.ProjectRoot, intent, state.HerdrPhaseWorkspacePlanned, func(next *state.HerdrLaunchIntent) {
 		next.MutationRequest = &request
@@ -239,8 +239,8 @@ func createHerdrCoordinator(
 	if notifyErr := notifyHerdrPhase(hooks, starting.Phase); notifyErr != nil {
 		return starting, notifyErr
 	}
-	if err := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); err != nil {
-		return starting, failHerdrIntent(req.ProjectRoot, starting, err.Error())
+	if deadlineErr := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); deadlineErr != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, deadlineErr.Error())
 	}
 	result, err := runtime.MutateWorktree(mutationCtx, toHerdrMutationRequest(request))
 	if err != nil {
