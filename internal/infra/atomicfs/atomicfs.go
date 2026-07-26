@@ -21,6 +21,43 @@ func WriteFile(path string, data []byte, perm os.FileMode) error {
 	return writeFile(path, data, perm, false)
 }
 
+// WriteFileExclusive atomically publishes a complete file only when path does
+// not exist. The sibling tempfile and hard link keep an existing destination
+// from being replaced between a caller's preflight and publication.
+func WriteFileExclusive(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".fanout-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	// Cleanup errors below are discarded deliberately: the write/chmod/close/link
+	// error is actionable, and a stray tempfile is harmless.
+	cleanup := func() {
+		_ = os.Remove(tmpPath)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Link(tmpPath, path); err != nil {
+		cleanup()
+		return err
+	}
+	cleanup()
+	return nil
+}
+
 // WriteFileDurable performs the same atomic replacement as WriteFile and
 // returns only after syncing both the replacement file and destination
 // directory.

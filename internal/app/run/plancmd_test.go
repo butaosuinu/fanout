@@ -141,6 +141,52 @@ func TestPreparedPlanSpecSnapshotOwnsExecutionAndCopiedBytes(t *testing.T) {
 	}
 }
 
+func TestCopyPlanSpecPreservesMatchingDestinationMode(t *testing.T) {
+	repo := t.TempDir()
+	data := []byte(`{"version":1,"plan":{"slug":"launch-plan","title":"Plan"},"tasks":[]}`)
+	dst := filepath.Join(repo, ".fanout", "plans", "launch-plan.json")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyPlanSpec(data, repo, "launch-plan"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("matching destination mode = %o, want preserved 600", info.Mode().Perm())
+	}
+}
+
+func TestCopyPlanSpecRejectsChangedDestination(t *testing.T) {
+	repo := t.TempDir()
+	dst := filepath.Join(repo, ".fanout", "plans", "launch-plan.json")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, []byte("new user bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := copyPlanSpec([]byte("captured snapshot"), repo, "launch-plan")
+	if err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
+		t.Fatalf("copyPlanSpec() error = %v, want no-clobber rejection", err)
+	}
+	data, readErr := os.ReadFile(dst)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != "new user bytes" {
+		t.Fatalf("changed destination bytes = %q, want preserved user bytes", data)
+	}
+}
+
 func TestPreparedPlanSpecSnapshotRejectsDifferentResolvedPath(t *testing.T) {
 	repo := t.TempDir()
 	firstPath := filepath.Join(repo, "first.json")

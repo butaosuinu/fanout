@@ -1,6 +1,8 @@
 package run
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -329,7 +331,22 @@ func copyPlanSpec(data []byte, projectRoot, slug string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	return atomicfs.WriteFile(dst, data, 0o644)
+	current, err := os.ReadFile(dst)
+	switch {
+	case err == nil && bytes.Equal(current, data):
+		return nil
+	case err == nil:
+		return fmt.Errorf("plan spec destination %s has changed; refusing to overwrite it", dst)
+	case !errors.Is(err, os.ErrNotExist):
+		return err
+	}
+	if err := atomicfs.WriteFileExclusive(dst, data, 0o644); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("plan spec destination %s appeared after preflight; refusing to overwrite it", dst)
+		}
+		return err
+	}
+	return nil
 }
 
 // ValidatePlanExecutionNames rejects duplicate final slugs / branches across
