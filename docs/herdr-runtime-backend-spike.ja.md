@@ -464,7 +464,7 @@ herdr backend は tmux-parity trust、owned session、version gate を確認し�
 以下は wave 2 の自動 launch の契約であり、各条項は tmux 水準（基準 1）か応答喪失窓への最小追加対処（基準 2）のどちらかである。
 
 - base selector を解決済み commit SHA へ一回だけ解決し、source checkout の dirty と divergence を検査する既存の fail-closed 契約を保つ（tmux backend の refresh / safety gate と同一）。
-- state lock 下で row / intent を検査して分類する。final row は idempotency hit として skip し、intent 行だけが残る launch は後述の存在確認 recovery へ進む。row / intent が所有しない既存 checkout / branch は tmux backend の launch と同じく fail closed にする（`.fanout/worktrees/<slug>` の migration fallback は cleanup 系 action に限り、launch では適用しない）。
+- state lock 下で row / intent を検査して分類する。final row は idempotency hit として skip し、intent 行だけが残る launch は後述の存在確認 recovery へ進む。row / intent が所有しない既存 checkout / workspace は tmux backend の launch と同じく fail closed にする（`.fanout/worktrees/<slug>` の migration fallback は cleanup 系 action に限り、launch では適用しない）。既存 local branch は採用対象であり、この foreign 拒否には含めない（採用契約は後述）。
 - 最初の mutation（fresh branch の ref create を含む）より前に intent 行（row key、slug、branch、path、workspace label 用 launch nonce、branch の事前存在、agent の絶対 executable / 正規化済み argv / env file path、owner の PID / start token、`total_timeout` と絶対 expiry、発行時刻）を state save する。
 - fresh branch は fanout が atomic ref create（old OID を空とする `update-ref` 相当）で base SHA に作る。既存なら失敗し、tmux backend の `git worktree add -b` と同じ fail-fast にする。
 - 既存 local branch は tmux backend と同じく採用する。`--base` は fresh branch だけに渡し、採用時は事前に記録した branch tip を事後条件に使う。
@@ -512,7 +512,8 @@ cleanup の契約は次のとおりとする（#531 が実装する）。
 
 - state lock 下で保存済み row の workspace ID / label nonce、branch、path を現在値と照合し、live row では `terminal_id` も照合する。`stale` row（pane / terminal 消滅後）は現在の `terminal_id` を照合できないため、pane / terminal の不在の確認と workspace label / path / checkout の Git provenance の照合で代替する。不一致、非所有、または照合不能なら mutation せず fail closed にする。
 - dirty checkout は明示確認なしに force しない。確認後の force remove でも branch は herdr に削除させない。
-- 照合成功後は intent 行を保存してから `worktree remove` を発行する。実測どおり remove は checkout と child workspace の両方を削除するため、応答成功後に checkout / workspace の不在を確認して row と intent 行を削除し、workspace だけが残る場合に限り `workspace close` で整理する。
+- 照合成功後は intent 行を保存してから `worktree remove` を発行する。実測どおり remove は checkout と child workspace の両方を削除するため、応答成功後に checkout / workspace の不在を確認する。workspace だけが残る場合は `workspace close` で整理する。
+- row と cleanup intent 行の削除は、残存 workspace の close と branch の compare-and-delete（または保持の確定）まで遅らせ、全後処理の確定と同じ state save で行う（削除が先行すると後処理の crash / 応答喪失から再実行できず、owned workspace / branch が追跡不能になる）。
 - `workspace close` が先行して checkout が残った系は、owned registry の setup hook preflight を通過している場合に限り、`worktree open` で削除用 workspace を再登録してから同じ identity 照合を経て `worktree remove` を発行する。
 - branch 削除は fanout の compare-and-delete（「safety gate」節で定義。tip 照合と checked-out worktree 不在の確認後の削除）だけが行う。cleanup 経路は merge 確認後の current tip、launch rollback は記録済み base SHA を照合する。
 - 応答喪失または crash 後の再実行は存在確認で分類する。checkout / workspace が不在なら削除完了として row を整理し、残存または判定不能では旧 request の進行中を排除できないため再発行せず `manual_cleanup_required` にする。明示操作による解消も remove の再発行ではなく、外部 cleanup 後の不在確認で row / intent を整理する経路に限る。
@@ -1362,6 +1363,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - wave 2 は初回の live identity 確定後に `report-metadata` を発行する。
   metadata は backend state、liveness、nudge authority、完了判定に使わない。
   #494 の `report-metadata` call は対象 `pane_id` または `workspace_id`、固定 `source`、空でない token patch、必要な `seq` / `ttl_ms` だけで構成し、title、display agent、state label を書き換えない。
+  #494 は実装前に `fanout_issue`、`fanout_slug`、`fanout_parent`、`fanout_pr`、`fanout_ci` の pane / workspace 配置、固定 source、sequence の永続化、TTL、値欠落時の clear を一意に決める（token patch は未指定 key を維持するため、欠落値の clear を決めないと古い値が表示され続ける）。
   `rows`、`rows_by_agent`、`row_gap` と styling は herdr とユーザーが所有し、fanout は config を書き換えない。
 - in-app notification を配信保証のある channel として扱わず、fanout から自動呼び出しもしない。
 
