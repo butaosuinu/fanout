@@ -239,7 +239,9 @@ worktree path と base ref はクライアントから受け取らず、token ga
 一致した行の記録からサーバーが解決する。
 記録された base が `HEAD`、相対 rev、または対象 child branch 自身へ解決される
 場合は #516 の strict merge-base 解決に従って拒否し、フォールバックしない。
-成功時は `application/json` で次の全フィールドを返す。
+GET の成功時は `application/json` と `Cache-Control: no-store` を付けて
+次の全フィールドを返す。
+HEAD は同じ status と header を返し、body は返さない。
 
 ```ts
 type DiffResponse = {
@@ -503,7 +505,7 @@ repo-local `core.excludesFile` と `core.worktree` は 502 にし、
 replace ref は無視し、legacy graft は 502、shallow boundary の変更は snapshot の
 取り直しになることも固定する。
 
-エラー body は全 status で `{"error":"message"}` とし、
+handler が生成する次のエラー body は `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
 
 - `400 Bad Request`: identity query が欠落または不正で、`issue`/`task` の
@@ -514,6 +516,12 @@ replace ref は無視し、legacy graft は 502、shallow boundary の変更は 
   lazy fetch を使わない object 読み出し、snapshot の確定、unsupported file type、
   diff 収集 timeout、500 files/metadata 出力上限、metadata-only response 上限の
   超過、または diff engine の実行に失敗した
+
+共通 middleware が生成する token 不一致の `403 Forbidden` と GET/HEAD 以外の
+`405 Method Not Allowed` は既存どおり `text/plain` とし、上の JSON error
+contract には含めない。
+ただし `/api/diff` の全 response は middleware error を含めて
+`Cache-Control: no-store` を付ける。
 
 ### 実装委譲事項
 
