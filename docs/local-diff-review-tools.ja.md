@@ -284,8 +284,22 @@ server project root と path を symlink 解決して canonicalize し、project
 から取得した `git worktree list --porcelain -z` に exact top-level として
 含まれることと、両者の canonical git common dir が同じことを確認する。
 子 directory、symlink alias、同じ branch 名を持つ別 checkout は拒否する。
+project root の worktree registry と common dir 配下の admin record から、
+対象 top-level に対応する per-worktree gitdir を一意に決める。
+対象で得た `git rev-parse --absolute-git-dir` はその gitdir と exact match
+させ、index と `HEAD` は検証済み gitdir からだけ読む。
+worktree の `.git` file または directory と admin directory は symlink を拒否し、
+device、inode、`.git` file の digest を記録する。
 この検証は snapshot 収集の開始時と確定時に繰り返し、記録された
-`branchName` と worktree の現在 branch も一致させる。
+`branchName` と worktree の現在 branch、per-worktree gitdir の identity を
+一致させる。
+
+開始時に worktree の `HEAD` commit SHA と、strict に解決した base の full
+refname と commit SHA を記録し、この 2 SHA から merge-base を計算する。
+確定時に同じ gitdir の `HEAD` と同じ base ref を解決し直し、どちらかの SHA が
+変わっていたら snapshot を捨てて 1 回だけ取り直す。
+後述する changed-path の再取得と合わせて、同じ request で取り直す回数は
+1 回までとし、再び変化した場合は 502 にする。
 
 すべての Git 呼び出しは `LC_ALL=C`、`GIT_OPTIONAL_LOCKS=0`、
 `GIT_LITERAL_PATHSPECS=1`、`GIT_CONFIG_NOSYSTEM=1`、
@@ -297,8 +311,14 @@ server project root と path を symlink 解決して canonicalize し、project
 起動しない。
 `HOME` と `XDG_CONFIG_HOME` は server 所有の空 directory に向け、global
 config と global attributes を読ませない。
-backend は repository に触れる前に、Git が `GIT_NO_LAZY_FETCH` をサポートする
-version であることを確認する。
+common config と worktree config は raw file として no-follow で検査する。
+repo-local または worktree-local の `core.attributesFile` と、
+外部 config を読める `include`/`includeIf` が 1 件でもあれば 502 にし、
+指定先を開かない。
+section と key は Git と同じく ASCII case-insensitive に照合し、曖昧または
+parse できない config も 502 にする。
+backend は object database に触れる前に、Git が `GIT_NO_LAZY_FETCH` を
+サポートする version であることを確認する。
 未対応 version と missing object は remote fetch を試さず 502 にする。
 
 request ごとに mode `0700` の private snapshot directory を server の
@@ -336,8 +356,9 @@ tracked changed-path 集合を作り直す。
 index file の digest、tracked changed-path 集合、untracked path 集合、
 manifest に含めた worktree path と attribute source の fingerprint を開始時と
 比較する。
-開始時と一致しなければ private snapshot を捨てて 1 回だけ取り直し、再び
-変化した場合は 502 にする。
+開始時と一致しなければ private snapshot を捨て、前述の合計 1 回以内で
+取り直す。
+再び変化した場合は 502 にする。
 一致した時点で snapshot を確定して `capturedAt` を記録する。
 確定後は live worktree、live index、repository attributes を patch または
 numstat の入力に使わない。
@@ -357,6 +378,8 @@ tracked と untracked の patch は確定した snapshot から file ごとに�
 Git を diff engine に使う場合は repository の外にある request-private
 directory で `--no-index` を使い、live worktree、repository path、object
 database、index、attributes を渡さない。
+`--no-index` の exit status は `0` と「差分あり」の `1` を成功、`2` 以上を
+失敗として扱う。
 `--no-ext-diff`、`--no-textconv`、`--no-color`、`--no-renames`、`--text`、
 `--full-index`、`--unified=3`、`--inter-hunk-context=0`、
 `--diff-algorithm=myers`、`--no-indent-heuristic` を固定する。
@@ -453,6 +476,11 @@ partial clone の missing object で fetch または credential helper を起動
 502 にすることも固定する。
 FIFO、socket、device は blocking read の前に 502 とし、JSON escape と 500 files
 の metadata を含む成功 body が 1 MiB を超えないことを確認する。
+snapshot 収集中の `HEAD`/base ref 変更と per-worktree gitdir の差し替えを
+検出すること、repo-local `core.attributesFile` と config include は 502 に
+なることも固定する。
+変更のある regular file で `git diff --no-index` が exit 1 を返しても、
+handler は 200 と patch を返すことを確認する。
 
 エラー body は全 status で `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
