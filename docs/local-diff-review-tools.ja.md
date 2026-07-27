@@ -298,23 +298,33 @@ device、inode、`.git` file の digest を記録する。
 refname と commit SHA を記録し、この 2 SHA から merge-base を計算する。
 確定時に同じ gitdir の `HEAD` と同じ base ref を解決し直し、どちらかの SHA が
 変わっていたら snapshot を捨てて 1 回だけ取り直す。
+同じ 2 SHA から merge-base も再計算し、開始時の SHA と一致させる。
+common dir の `info/grafts` は存在すれば 502 とし、開かない。
+shallow file は no-follow で snapshot に複製し、開始時と確定時の
+device、inode、digest を一致させる。
+存在しない場合も absence を記録し、途中で作成されたら不一致とする。
 後述する changed-path の再取得と合わせて、同じ request で取り直す回数は
 1 回までとし、再び変化した場合は 502 にする。
 
 すべての Git 呼び出しは `LC_ALL=C`、`GIT_OPTIONAL_LOCKS=0`、
 `GIT_LITERAL_PATHSPECS=1`、`GIT_CONFIG_NOSYSTEM=1`、
 `GIT_CONFIG_GLOBAL=/dev/null`、`GIT_ATTR_NOSYSTEM=1`、
-`GIT_NO_LAZY_FETCH=1`、`GIT_TERMINAL_PROMPT=0` で実行する。
+`GIT_NO_LAZY_FETCH=1`、`GIT_NO_REPLACE_OBJECTS=1`、
+`GIT_TERMINAL_PROMPT=0` で実行する。
 継承した `GIT_*` は消去し、この allowlist と Git が返した repository path
 だけを設定し直す。
+repository-facing Git command の `GIT_DIR` は検証済み per-worktree gitdir、
+`GIT_WORK_TREE` は検証済み canonical top-level に固定する。
+request-private な `--no-index` diff engine では `GIT_DIR` と `GIT_WORK_TREE` を
+設定しない。
 `git --no-pager` と `-c core.fsmonitor=false` を使い、pager と fsmonitor を
 起動しない。
 `HOME` と `XDG_CONFIG_HOME` は server 所有の空 directory に向け、global
 config と global attributes を読ませない。
 common config と worktree config は raw file として no-follow で検査する。
-repo-local または worktree-local の `core.attributesFile` と、
-外部 config を読める `include`/`includeIf` が 1 件でもあれば 502 にし、
-指定先を開かない。
+repo-local または worktree-local の `core.attributesFile`、
+`core.excludesFile`、`core.worktree` と、外部 config を読める
+`include`/`includeIf` が 1 件でもあれば 502 にし、指定先を開かない。
 section と key は Git と同じく ASCII case-insensitive に照合し、曖昧または
 parse できない config も 502 にする。
 backend は object database に触れる前に、Git が `GIT_NO_LAZY_FETCH` を
@@ -341,10 +351,15 @@ symlink は `readlinkat` の後に `lstat` を取り直し、device、inode、mo
 worktree の path を content source として Git に渡さない。
 
 changed path は merge-base entry、複製した index entry、index stat と raw
-`lstat` の差、`ls-files --others --exclude-standard -z` の和から決める。
+`lstat` の差、`git ls-files --others -z` の和から決める。
 index stat と一致した tracked path は clean とみなし、racy な stat は changed
 として扱う。
 merge-base と index は mode と object ID で比較する。
+`ls-files` には exclude option を渡さず、live `.gitignore`、`info/exclude`、
+external excludes を読ませない。
+worktree 内の `.gitignore` と verified common dir の `info/exclude` は no-follow と
+256 KiB 上限で private snapshot に複製し、backend が同じ Git ignore semantics
+で untracked path 集合を絞り込む。
 `git add -N` を含む index/worktree 変更コマンドは呼ばない。
 
 snapshot manifest には各 side の logical path、mode、size、object ID または
@@ -354,8 +369,8 @@ byte 列として保存する。
 収集後は複製した index の全 tracked entry に同じ stat 判定を再適用し、
 tracked changed-path 集合を作り直す。
 index file の digest、tracked changed-path 集合、untracked path 集合、
-manifest に含めた worktree path と attribute source の fingerprint を開始時と
-比較する。
+manifest に含めた worktree path、attribute source、ignore source、shallow file の
+fingerprint を開始時と比較する。
 開始時と一致しなければ private snapshot を捨て、前述の合計 1 回以内で
 取り直す。
 再び変化した場合は 502 にする。
@@ -481,6 +496,10 @@ snapshot 収集中の `HEAD`/base ref 変更と per-worktree gitdir の差し替
 なることも固定する。
 変更のある regular file で `git diff --no-index` が exit 1 を返しても、
 handler は 200 と patch を返すことを確認する。
+repo-local `core.excludesFile` と `core.worktree` は 502 にし、
+`info/exclude` の変更は snapshot を取り直すことを確認する。
+replace ref は無視し、legacy graft は 502、shallow boundary の変更は snapshot の
+取り直しになることも固定する。
 
 エラー body は全 status で `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
