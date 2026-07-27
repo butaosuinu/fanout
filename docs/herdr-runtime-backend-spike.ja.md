@@ -608,6 +608,7 @@ launcher は exact checkout cwd、`HERDR_PANE_ID=w3:p1`、`HERDR_WORKSPACE_ID=w3
 wave 2 は Herdr control-plane env と agent workload env を分離する。
 supervisor / Herdr server / control-plane runner の env は空の base から組み立てた secret-free control env とし、owned XDG / config / socket / session、absolute fanout / Herdr entry、必要な固定 control value だけを持つ。
 workload env は呼び出し元 env を launch 時に一回 snapshot し、Herdr routing env（`HERDR_` prefix）、fanout の launcher control env（`FANOUT_HERDR_` prefix）、`TMUX` / `TMUX_PANE` / `TMUX_TMPDIR` を除いてそのまま child へ渡す。
+filter 後に fanout は operation-owned の backend context を child env へ固定する。caller の `FANOUT_BACKEND` を捨てて `FANOUT_BACKEND=herdr` を注入し、owned socket / session の routing 値は注入しない（`HERDR_ENV` の除去で child からの `fanout` 呼び出しが user default または tmux へ fallback する誤 routing の防止）。
 これは tmux backend の pane が呼び出し元 env を継承するのと同じ水準であり、versioned allow / deny policy は撤廃する。
 snapshot は owned XDG / routing env を設定する前に取るため、owned XDG は child へ渡らず、呼び出し元の XDG はそのまま通る。
 raw workload env value を control env、process argv、registry、intent、final row、log へ複製しない。
