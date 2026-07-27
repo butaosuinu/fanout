@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 // ErrRetryableRead marks a read-only Herdr CLI timeout or non-zero exit.
@@ -31,6 +33,14 @@ type WorktreeMutationRequest struct {
 	CoordinatorWorkspaceCWD   string
 	ExpectedRepoKey           string
 	ExpectedRepoRoot          string
+	SourceRootPhysical        string
+	SourceGitDirPhysical      string
+	SourceGitDirDevice        uint64
+	SourceGitDirInode         uint64
+	SourceRepoKey             string
+	ProjectRoot               string
+	ResolvedBaseRef           string
+	FullBranchRef             string
 	CWD                       string
 	Branch                    string
 	Base                      string
@@ -168,6 +178,12 @@ func (s *OwnedSession) MutateWorktree(ctx context.Context, req WorktreeMutationR
 	}
 
 	args, envelopeID, resultType := worktreeMutationArgs(req)
+	if admissionErr := validateMutationAdmission(req); admissionErr != nil {
+		return WorktreeMutationResult{}, fmt.Errorf(
+			"recheck herdr mutation admission under operation lock: %w",
+			admissionErr,
+		)
+	}
 	out, err := s.backend.runMutationContext(ctx, probed.binary, probed.route, args...)
 	if err != nil {
 		return WorktreeMutationResult{}, err
@@ -207,6 +223,71 @@ func (s *OwnedSession) MutateWorktree(ctx context.Context, req WorktreeMutationR
 		return WorktreeMutationResult{}, fmt.Errorf("herdr %s unexpectedly returned already_open", req.Kind)
 	}
 	return WorktreeMutationResult{WorkspaceObservation: got, AlreadyOpen: alreadyOpen}, nil
+}
+
+func validateMutationAdmission(req WorktreeMutationRequest) error {
+	sourceIdentity, err := worktree.ResolveHerdrRepoIdentity(req.SourceRootPhysical)
+	if err != nil {
+		return fmt.Errorf("resolve saved herdr source identity: %w", err)
+	}
+	if sourceIdentity.RepoRoot != req.SourceRootPhysical ||
+		sourceIdentity.GitDir != req.SourceGitDirPhysical ||
+		sourceIdentity.GitDirDevice != req.SourceGitDirDevice ||
+		sourceIdentity.GitDirInode != req.SourceGitDirInode ||
+		sourceIdentity.RepoKey != req.SourceRepoKey {
+		return fmt.Errorf("herdr source identity changed before mutation command")
+	}
+
+	switch req.Kind {
+	case WorkspaceCreate:
+		cwdIdentity, resolveErr := worktree.ResolveHerdrRepoIdentity(req.CWD)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve coordinator cwd identity: %w", resolveErr)
+		}
+		cwdPhysical, physicalErr := filepath.EvalSymlinks(req.CWD)
+		if physicalErr != nil {
+			return fmt.Errorf("canonicalize coordinator cwd: %w", physicalErr)
+		}
+		if filepath.Clean(cwdPhysical) != req.SourceRootPhysical ||
+			cwdIdentity.RepoRoot != req.SourceRootPhysical ||
+			cwdIdentity.GitDir != req.SourceGitDirPhysical ||
+			cwdIdentity.GitDirDevice != req.SourceGitDirDevice ||
+			cwdIdentity.GitDirInode != req.SourceGitDirInode ||
+			cwdIdentity.RepoKey != req.SourceRepoKey {
+			return fmt.Errorf("herdr coordinator cwd identity changed before mutation command")
+		}
+		return nil
+	case WorktreeCreate, WorktreeOpen:
+		if err := worktree.VerifyHerdrWorktreeParent(req.ProjectRoot, req.Path); err != nil {
+			return err
+		}
+		if err := worktree.VerifyReservedBranchGitDir(
+			req.SourceGitDirPhysical,
+			req.ResolvedBaseRef,
+			req.Base,
+			req.FullBranchRef,
+		); err != nil {
+			return err
+		}
+		pathAbsent, registered, headSHA, err := worktree.CheckoutGitStateGitDir(
+			req.SourceGitDirPhysical,
+			req.Path,
+			req.FullBranchRef,
+		)
+		if err != nil {
+			return err
+		}
+		if req.Kind == WorktreeCreate && (!pathAbsent || registered) {
+			return fmt.Errorf("fresh herdr worktree path exists or is registered before mutation command")
+		}
+		if req.Kind == WorktreeOpen &&
+			(pathAbsent || !registered || headSHA != req.Base) {
+			return fmt.Errorf("saved herdr worktree is not the exact registered checkout before open")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown herdr worktree mutation %q", req.Kind)
+	}
 }
 
 func validateMutationResultProvenance(req WorktreeMutationRequest, got WorkspaceObservation) error {
@@ -277,12 +358,21 @@ func validateWorktreeMutationRequest(req WorktreeMutationRequest) error {
 	if !req.NoFocus {
 		return fmt.Errorf("herdr worktree mutation must use no-focus")
 	}
+	if req.SourceRootPhysical == "" ||
+		req.SourceGitDirPhysical == "" ||
+		req.SourceGitDirDevice == 0 ||
+		req.SourceGitDirInode == 0 ||
+		req.SourceRepoKey == "" {
+		return fmt.Errorf("herdr worktree mutation requires saved source identity")
+	}
 	switch req.Kind {
 	case WorkspaceCreate:
 		if req.CWD == "" || req.WorkspaceID != "" ||
 			req.CoordinatorWorkspaceLabel != "" || req.CoordinatorPaneID != "" ||
 			req.CoordinatorTerminalID != "" || req.CoordinatorWorkspaceCWD != "" ||
 			req.ExpectedRepoKey != "" || req.ExpectedRepoRoot != "" ||
+			req.ProjectRoot != "" || req.ResolvedBaseRef != "" ||
+			req.FullBranchRef != "" ||
 			req.Branch != "" || req.Base != "" || req.Path != "" {
 			return fmt.Errorf("invalid herdr workspace create request")
 		}
@@ -291,6 +381,8 @@ func validateWorktreeMutationRequest(req WorktreeMutationRequest) error {
 			req.CoordinatorPaneID == "" || req.CoordinatorTerminalID == "" ||
 			req.CoordinatorWorkspaceCWD == "" ||
 			req.ExpectedRepoKey == "" || req.ExpectedRepoRoot == "" ||
+			req.ProjectRoot == "" || req.ResolvedBaseRef == "" ||
+			req.FullBranchRef == "" ||
 			req.Branch == "" || req.Base == "" || req.Path == "" || req.CWD != "" {
 			return fmt.Errorf("invalid herdr worktree create request")
 		}
@@ -299,7 +391,9 @@ func validateWorktreeMutationRequest(req WorktreeMutationRequest) error {
 			req.CoordinatorPaneID == "" || req.CoordinatorTerminalID == "" ||
 			req.CoordinatorWorkspaceCWD == "" ||
 			req.ExpectedRepoKey == "" || req.ExpectedRepoRoot == "" ||
-			req.Path == "" || req.CWD != "" || req.Branch != "" || req.Base != "" {
+			req.ProjectRoot == "" || req.ResolvedBaseRef == "" ||
+			req.FullBranchRef == "" ||
+			req.Path == "" || req.CWD != "" || req.Branch != "" || req.Base == "" {
 			return fmt.Errorf("invalid herdr worktree open request")
 		}
 	default:

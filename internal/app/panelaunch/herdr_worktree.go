@@ -527,7 +527,10 @@ func realizeHerdrMutation(
 		return starting, failHerdrIntent(req.ProjectRoot, starting, deadlineErr.Error())
 	}
 
-	result, err := runtime.MutateWorktree(mutationCtx, toHerdrMutationRequest(request))
+	result, err := runtime.MutateWorktree(
+		mutationCtx,
+		toHerdrMutationRequest(request, starting),
+	)
 	if err != nil {
 		return starting, failHerdrIntent(
 			req.ProjectRoot,
@@ -1188,9 +1191,12 @@ func expectedHerdrWorktreeMutationRequest(intent state.HerdrLaunchIntent) state.
 	}
 }
 
-func toHerdrMutationRequest(req state.HerdrMutationRequest) herdrrun.WorktreeMutationRequest {
+func toHerdrMutationRequest(
+	req state.HerdrMutationRequest,
+	intent state.HerdrLaunchIntent,
+) herdrrun.WorktreeMutationRequest {
 	kind := herdrrun.WorktreeMutationKind(req.Kind)
-	return herdrrun.WorktreeMutationRequest{
+	mutation := herdrrun.WorktreeMutationRequest{
 		Kind:                      kind,
 		WorkspaceID:               req.WorkspaceID,
 		CoordinatorWorkspaceLabel: req.CoordinatorWorkspaceLabel,
@@ -1199,6 +1205,11 @@ func toHerdrMutationRequest(req state.HerdrMutationRequest) herdrrun.WorktreeMut
 		CoordinatorWorkspaceCWD:   req.CoordinatorWorkspaceCWD,
 		ExpectedRepoKey:           req.ExpectedRepoKey,
 		ExpectedRepoRoot:          req.ExpectedRepoRoot,
+		SourceRootPhysical:        intent.SourceRootPhysical,
+		SourceGitDirPhysical:      intent.SourceGitDirPhysical,
+		SourceGitDirDevice:        intent.SourceGitDirDevice,
+		SourceGitDirInode:         intent.SourceGitDirInode,
+		SourceRepoKey:             intent.HerdrRepoKey,
 		CWD:                       req.CWD,
 		Branch:                    req.Branch,
 		Base:                      req.Base,
@@ -1206,6 +1217,14 @@ func toHerdrMutationRequest(req state.HerdrMutationRequest) herdrrun.WorktreeMut
 		Label:                     req.Label,
 		NoFocus:                   req.NoFocus,
 	}
+	if kind == herdrrun.WorktreeCreate || kind == herdrrun.WorktreeOpen {
+		mutation.ProjectRoot = filepath.Dir(
+			filepath.Dir(filepath.Dir(intent.WorktreePath)),
+		)
+		mutation.ResolvedBaseRef = intent.ResolvedBaseRef
+		mutation.FullBranchRef = intent.FullBranchRef
+	}
+	return mutation
 }
 
 func normalizeHerdrWorktreeHooks(hooks HerdrWorktreeHooks) HerdrWorktreeHooks {

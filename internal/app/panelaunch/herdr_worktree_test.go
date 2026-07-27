@@ -270,7 +270,10 @@ func TestHerdrWorktreeStartingFailsClosedAfterExactMutation(t *testing.T) {
 	if !found || starting.Phase != state.HerdrPhaseWorktreeStarting || starting.MutationRequest == nil {
 		t.Fatalf("saved starting intent = %+v, found=%t", starting, found)
 	}
-	_, err = runtime.MutateWorktree(context.Background(), toHerdrMutationRequest(*starting.MutationRequest))
+	_, err = runtime.MutateWorktree(
+		context.Background(),
+		toHerdrMutationRequest(*starting.MutationRequest, starting),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1081,7 +1084,10 @@ func TestHerdrCoordinatorStartingFailsClosedAfterExactMutation(t *testing.T) {
 	if !found || starting.Phase != state.HerdrPhaseWorkspaceStarting || starting.MutationRequest == nil {
 		t.Fatalf("saved coordinator starting intent = %+v, found=%t", starting, found)
 	}
-	_, err = runtime.MutateWorktree(context.Background(), toHerdrMutationRequest(*starting.MutationRequest))
+	_, err = runtime.MutateWorktree(
+		context.Background(),
+		toHerdrMutationRequest(*starting.MutationRequest, starting),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

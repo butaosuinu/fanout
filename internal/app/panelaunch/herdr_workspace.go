@@ -257,7 +257,10 @@ func createHerdrCoordinator(
 	if deadlineErr := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); deadlineErr != nil {
 		return starting, failHerdrIntent(req.ProjectRoot, starting, deadlineErr.Error())
 	}
-	result, err := runtime.MutateWorktree(mutationCtx, toHerdrMutationRequest(request))
+	result, err := runtime.MutateWorktree(
+		mutationCtx,
+		toHerdrMutationRequest(request, starting),
+	)
 	if err != nil {
 		return starting, failHerdrIntent(
 			req.ProjectRoot,

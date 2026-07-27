@@ -394,6 +394,22 @@ func VerifyReservedBranch(root, resolvedBaseRef, baseSHA, fullRef string) error 
 	return nil
 }
 
+// VerifyReservedBranchGitDir checks the immutable base and reserved tip
+// through the physical Git directory persisted in the launch intent.
+func VerifyReservedBranchGitDir(gitDir, resolvedBaseRef, baseSHA, fullRef string) error {
+	if err := VerifyReservedBranchBaseGitDir(gitDir, resolvedBaseRef, baseSHA); err != nil {
+		return err
+	}
+	branchOID, found, err := ObserveBranchGitDir(gitDir, fullRef)
+	if err != nil {
+		return err
+	}
+	if !found || branchOID != baseSHA {
+		return fmt.Errorf("reserved branch %s no longer points at %s", fullRef, baseSHA)
+	}
+	return nil
+}
+
 func VerifyReservedBranchBase(root, resolvedBaseRef, baseSHA string) error {
 	currentBase, err := gitTrim(root, "rev-parse", "--verify", resolvedBaseRef+"^{commit}")
 	if err != nil {
@@ -457,6 +473,43 @@ func CheckoutGitState(root, checkoutPath, fullRef string) (pathAbsent, registere
 	return pathAbsent, registered, headSHA, nil
 }
 
+// CheckoutGitStateGitDir observes checkout registration and HEAD through the
+// physical Git directory persisted in the launch intent.
+func CheckoutGitStateGitDir(
+	gitDir, checkoutPath, fullRef string,
+) (pathAbsent, registered bool, headSHA string, err error) {
+	info, statErr := os.Lstat(checkoutPath)
+	switch {
+	case errors.Is(statErr, os.ErrNotExist):
+		pathAbsent = true
+	case statErr != nil:
+		return false, false, "", fmt.Errorf("inspect checkout path %s: %w", checkoutPath, statErr)
+	case !info.IsDir():
+		return false, false, "", fmt.Errorf("checkout path %s is not a directory", checkoutPath)
+	}
+	registered, err = checkoutRegisteredGitDir(gitDir, checkoutPath)
+	if err != nil {
+		return pathAbsent, false, "", err
+	}
+	if !pathAbsent {
+		headSHA, err = gitTrim(checkoutPath, "rev-parse", "--verify", "HEAD")
+		if err != nil {
+			return pathAbsent, registered, "", fmt.Errorf("resolve checkout HEAD at %s: %w", checkoutPath, err)
+		}
+		headSHA = strings.ToLower(headSHA)
+	}
+	if registered {
+		branch, branchErr := gitTrim(checkoutPath, "symbolic-ref", "--quiet", "HEAD")
+		if branchErr != nil {
+			return pathAbsent, registered, headSHA, fmt.Errorf("resolve checkout branch at %s: %w", checkoutPath, branchErr)
+		}
+		if branch != fullRef {
+			return pathAbsent, registered, headSHA, fmt.Errorf("checkout branch %s does not match %s", branch, fullRef)
+		}
+	}
+	return pathAbsent, registered, headSHA, nil
+}
+
 func checkoutRegistered(root, checkoutPath string) (bool, error) {
 	cmd := exec.Command("git", "worktree", "list", "--porcelain", "-z")
 	cmd.Dir = root
@@ -464,6 +517,18 @@ func checkoutRegistered(root, checkoutPath string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("list git worktrees: %w", err)
 	}
+	return checkoutRegisteredInOutput(out, checkoutPath)
+}
+
+func checkoutRegisteredGitDir(gitDir, checkoutPath string) (bool, error) {
+	out, err := git(gitDir, "--git-dir=.", "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return false, fmt.Errorf("list git worktrees through saved git dir: %w", err)
+	}
+	return checkoutRegisteredInOutput(out, checkoutPath)
+}
+
+func checkoutRegisteredInOutput(out []byte, checkoutPath string) (bool, error) {
 	want, err := filepath.Abs(checkoutPath)
 	if err != nil {
 		return false, fmt.Errorf("resolve checkout path %s: %w", checkoutPath, err)
