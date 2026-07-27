@@ -82,13 +82,24 @@ func (r Runner) MergeBase(path, baseRef string) (string, error) {
 
 	var lastErr error
 	for _, candidate := range candidates {
-		out, err := r.git("-C", path, "merge-base", candidate, "HEAD")
+		out, err := r.git("-C", path, "rev-parse", "--verify", "--end-of-options", candidate+"^{commit}")
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		if sha := strings.TrimSpace(string(out)); sha != "" {
-			return sha, nil
+		baseSHA := strings.TrimSpace(string(out))
+		if baseSHA == "" {
+			lastErr = fmt.Errorf("git rev-parse %s returned an empty SHA", candidate)
+			continue
+		}
+
+		out, err = r.git("-C", path, "merge-base", baseSHA, "HEAD")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if mergeBaseSHA := strings.TrimSpace(string(out)); mergeBaseSHA != "" {
+			return mergeBaseSHA, nil
 		}
 		lastErr = fmt.Errorf("git merge-base %s HEAD returned an empty SHA", candidate)
 	}

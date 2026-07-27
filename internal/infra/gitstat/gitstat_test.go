@@ -176,6 +176,16 @@ func TestRunnerMergeBase(t *testing.T) {
 			wantErrContains: "no-such-branch",
 		},
 		{
+			name:            "fork point option is not a base",
+			baseRef:         "--fork-point",
+			wantErrContains: "--fork-point",
+		},
+		{
+			name:            "octopus option is not a base",
+			baseRef:         "--octopus",
+			wantErrContains: "--octopus",
+		},
+		{
 			name:            "missing origin HEAD",
 			wantErrContains: "origin/HEAD",
 		},
