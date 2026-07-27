@@ -173,7 +173,7 @@ marker は owned runtime directory の検査後に exclusive create で書き、
 ### 共有 registry と lifecycle 契約
 
 Herdr control state は physical canonical git common directory 配下の `fanout/herdr-control.json` を唯一の正典とし、同じ directory の `herdr-control.json.lock` で直列化する。
-lock、atomic replace（temporary file への書き込み、fsync、rename、parent fsync）、fail-fast の水準は tmux backend の `.fanout/state.json`（`internal/infra/state`）と同じにする。
+lock、atomic replace（temporary file への書き込みと rename）、fail-fast の水準は tmux backend の `.fanout/state.json`（`internal/infra/state` + `internal/infra/atomicfs`）と同じにし、実装にない durability 要件を追加しない。
 **private namespace gate** は fanout-owned path（`fanout` control directory、owned runtime root、XDG 四 root、config、marker、socket parent）に適用する簡素な owner-only 検査であり、owner UID、exact mode、空の extended ACL、symlink 不在を照合する。
 `fanout` directory は 0700、registry と lock は 0600 とし、private namespace gate または physical common-directory identity の照合に失敗した場合は Herdr backend を開始しない。
 pre-existing object の ACL / mode は自動修復せず fail closed にする。
@@ -213,7 +213,9 @@ supervisor が不在で marker / lease が残る場合は PR #572 の実装ど�
 marker / lease / socket の不一致、foreign resource、検証不能は自動採用も自動削除もせず fail closed にする。
 
 server loss 後の restart は herdr 固有の最小追加対処とする（簡素化方針の基準 2。未実装で、実装 owner は #530）。
-restart は明示操作だけが開始し、saved supervisor / server process と socket の不在、marker の一致を照合した場合だけ一回 spawn し、spawn の結果不明では再発行、採用、停止、unlink を行わず fail closed にする。
+restart は明示操作だけが開始し、restart の intent 行を state save してから、saved supervisor / server process と socket の不在と旧 marker の一致を照合する。
+照合成功後に旧 marker / lease を削除し、fresh bootstrap と同じ手順（新しい owner nonce での marker / lease の exclusive create、単一 spawn、status の session / socket 検査）で作り直して intent 行を消す。
+旧 process の残存、marker 不一致、spawn の結果不明では削除も再発行もせず、intent 行と旧 marker を残して fail closed にする。
 restart 後は version gate と status 検査を再実行し、旧 `terminal_id` の direct-launch row を `stale` にして自動 resume しない。
 
 通常 shutdown は明示操作だけとし（未実装で、実装 owner は #530）、state lock 下で active row / intent と foreign resource の不在を確認し、同じ save で shutdown の intent 行を保存してから server を停止し、marker を削除する。
@@ -297,7 +299,7 @@ focused child の close 後は exact live identity を再照合した同じ親�
 global `terminal.default_shell` は全 workspace の root process に適用されるため、console も launcher の明示 operation とする。
 console intent / row の key は `(canonical git common directory, operation:console)` とし、issue / task row、backend stickiness、nudge roster に含めない。
 console shell は user config、未指定なら fanout 起動時の `SHELL` から解決した絶対 path を使う。
-no-arg TUI の attach 準備は、workspace mutation 前に console の intent 行（row key、launch nonce、cwd、user shell の絶対 path、env file path、発行時刻）を state save し、launch nonce から workspace label と `FANOUT_READY:<launch-nonce>` / `FANOUT_EXEC:<launch-nonce>` を導出する。
+no-arg TUI の attach 準備は、workspace mutation 前に console の intent 行（row key、launch nonce、cwd、user shell の絶対 path、env file path、`total_timeout` と絶対 expiry、発行時刻）を state save し、launch nonce から workspace label と `FANOUT_READY:<launch-nonce>` / `FANOUT_EXEC:<launch-nonce>` を導出する。
 そのうえで `workspace create --cwd <repo-root> --label <launch-nonce> --no-focus` を一回発行し、応答の workspace ID、root PaneRef / `terminal_id` / cwd を照合して intent 行へ記録する。
 応答喪失または crash 後の再実行は存在確認で分類する。intent の nonce と一致する label の workspace が一つだけ存在して cwd が一致すれば採用して launcher readiness から続行し、不在なら intent 行を消して作り直し、判定できない場合は `manual_cleanup_required` にする。
 launcher marker と root identity を照合した後だけ exact token を一回発行し、launcher は intent の user shell を interactive child として起動する。
@@ -437,9 +439,12 @@ flowchart TD
   B --> C["mutation を一回発行(branch 作成 / worktree create / remove など)"]
   C -->|応答成功| D["事後条件を照合して operation を確定(launch は final row 確定、cleanup は row 削除)し、同じ save で intent 行を削除"]
   C -->|応答喪失 / crash| E["再実行時の存在確認"]
-  E -->|nonce / identity が一致する資源が一意に存在| D
-  E -->|資源が存在せず mutation 非発生| F["intent 行を削除して最初から"]
+  E -->|create 系: nonce / identity が一致する資源が一意に存在| R["採用して operation を続行"]
+  E -->|remove 系: 対象資源が不在| D
+  E -->|remove 系: identity 一致のまま残存| B
+  E -->|mutation 非発生(資源が事前状態のまま)| F["intent 行を削除して最初から"]
   E -->|判定不能 / 部分一致| G["fail-closed manual_cleanup_required"]
+  R --> D
 ```
 
 ### safety gate
@@ -452,15 +457,16 @@ herdr backend は tmux-parity trust、owned session、version gate を確認し�
 以下は wave 2 の自動 launch の契約であり、各条項は tmux 水準（基準 1）か応答喪失窓への最小追加対処（基準 2）のどちらかである。
 
 - base selector を解決済み commit SHA へ一回だけ解決し、source checkout の dirty と divergence を検査する既存の fail-closed 契約を保つ（tmux backend の refresh / safety gate と同一）。
-- state lock 下で row / intent の idempotency を検査する。既存 row / intent は idempotency hit として skip し、state row のない既存 checkout は tmux backend と同じ action-mode migration fallback の規則で扱う。
+- state lock 下で row / intent を検査して分類する。final row は idempotency hit として skip し、intent 行だけが残る launch は後述の存在確認 recovery へ進む。row / intent が所有しない既存 checkout / branch は tmux backend の launch と同じく fail closed にする（`.fanout/worktrees/<slug>` の migration fallback は cleanup 系 action に限り、launch では適用しない）。
+- 最初の mutation（fresh branch の ref create を含む）より前に intent 行（row key、slug、branch、path、workspace label 用 launch nonce、branch の事前存在、agent の絶対 executable / 正規化済み argv / env file path、`total_timeout` と絶対 expiry、発行時刻）を state save する。
 - fresh branch は fanout が atomic ref create（old OID を空とする `update-ref` 相当）で base SHA に作る。既存なら失敗し、tmux backend の `git worktree add -b` と同じ fail-fast にする。
 - 既存 local branch は tmux backend と同じく採用する。`--base` は fresh branch だけに渡し、採用時は事前に記録した branch tip を事後条件に使う。
-- mutation 直前に intent 行（row key、slug、branch、path、workspace label 用 launch nonce、branch の事前存在、agent の絶対 executable / 正規化済み argv / env file path、`total_timeout` と絶対 expiry、発行時刻）を state save してから `worktree create --branch --base --path --label <nonce> --no-focus` を一回発行する。
+- branch の準備後に `worktree create --branch --base --path --label <nonce> --no-focus` を一回発行する。
 - 応答成功時は workspace label と intent nonce の一致、branch、path、`HEAD` の事後条件を照合し、workspace ID / root PaneRef / `terminal_id` を intent 行へ記録して launcher readiness へ進む。
 - intent 行は launch finalization（agent 検出 / rename / process 照合の完了）まで保持し、final row の確定と同じ state save で削除する。launcher はこの intent から実行内容を読む。
 - 構造化 error が workspace / checkout の非作成を示す失敗では、今回 fanout が作った branch だけを記録済み base SHA の compare-and-delete で削除して fail-fast する（tmux backend の `git worktree add` 失敗時の branch 削除と同じ）。response loss では branch を削除しない。
 - `worktree create` 成功後の launch 失敗（launcher timeout / exit、token 失敗、agent 検出失敗）は tmux backend の `failCleanup` と同水準で rollback する。rollback は launch cycle と別の operation として新しい intent 行と budget で実行し、保存済み label nonce / branch / path / `terminal_id` を再照合してから force なしの `worktree remove` を一回発行し、workspace / checkout の不在を確認できた場合だけ自作 branch を記録済み base SHA の compare-and-delete で削除して両 intent 行を消す。照合不一致、dirty 拒否、response loss、mutation 不明では資源を残して `manual_cleanup_required` にする（tmux も close を確認できない場合は worktree を温存する）。
-- 応答喪失または crash 後の再実行は存在確認で分類する。intent の nonce と一致する label の workspace / checkout が一意に存在して branch / path / `HEAD` が一致すれば採用して launch を続行する。続行は現状から分岐し、pane の foreground が launcher なら readiness / token から、intent に一致する child process chain が既に動いているなら agent 検出 / rename / process 照合の finalization から再開する。workspace / checkout が存在せず branch も事前状態のままなら intent 行を削除して最初からやり直す。どちらとも判定できない場合は `manual_cleanup_required` にして自動では触らない。
+- 応答喪失または crash 後の再実行は存在確認で分類する。intent の nonce と一致する label の workspace / checkout が一意に存在して branch / path / `HEAD` が一致すれば採用して launch を続行する。続行は現状から分岐し、pane の foreground が launcher なら readiness / token から、intent に一致する child process chain が既に動いているなら agent 検出 / rename / process 照合の finalization から再開する。branch だけが存在する場合（workspace / checkout 不在）は、intent の事前存在が false で tip が記録済み base SHA と一致するなら自作 branch として `worktree create` から続行する。workspace / checkout が存在せず branch も事前状態のままなら intent 行を削除して最初からやり直す。どれとも判定できない場合は `manual_cleanup_required` にして自動では触らない。
 - 既存 checkout への `worktree open` は同じ intent の launch recovery と cleanup 前の再検証に限り、`already_open:true` は同じ workspace ID / label が row / intent に束縛済みの場合だけ受理する。
 - launch cycle は 3 秒以上 300 秒以下の `total_timeout`（既定 300 秒）を最初の mutation 前に確定し、retry で延長しない。
 - deterministic agent name は `fanout-` + SHA-256（canonical git common directory、row key、launch nonce の length-prefix 連結）の先頭 24 lowercase hex とし、0.7.5 の `[a-z][a-z0-9_-]{0,31}` を満たす。同名 agent が別 pane にある場合は fail closed にする。
