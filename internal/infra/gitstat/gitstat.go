@@ -63,13 +63,25 @@ func (r Runner) MergeBase(path, baseRef string) (string, error) {
 
 	baseRef = strings.TrimSpace(baseRef)
 	var candidates []string
-	if baseRef != "" {
-		candidates = append(candidates, baseRef)
-		if !strings.HasPrefix(baseRef, "origin/") && !strings.HasPrefix(baseRef, "refs/") {
-			candidates = append(candidates, "origin/"+baseRef)
+	switch {
+	case strings.HasPrefix(baseRef, "refs/"):
+		if _, err := r.git("-C", path, "check-ref-format", baseRef); err != nil {
+			return "", fmt.Errorf("validate base ref %q: %w", baseRef, err)
 		}
-	} else {
-		out, err := r.git("-C", path, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+		candidates = append(candidates, baseRef)
+	case strings.HasPrefix(baseRef, "origin/"):
+		candidate := "refs/remotes/" + baseRef
+		if _, err := r.git("-C", path, "check-ref-format", candidate); err != nil {
+			return "", fmt.Errorf("validate base ref %q: %w", baseRef, err)
+		}
+		candidates = append(candidates, candidate)
+	case baseRef != "":
+		if _, err := r.git("-C", path, "check-ref-format", "--branch", baseRef); err != nil {
+			return "", fmt.Errorf("validate base ref %q: %w", baseRef, err)
+		}
+		candidates = append(candidates, "refs/heads/"+baseRef, "refs/remotes/origin/"+baseRef)
+	default:
+		out, err := r.git("-C", path, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
 		if err != nil {
 			return "", fmt.Errorf("resolve origin/HEAD: %w", err)
 		}

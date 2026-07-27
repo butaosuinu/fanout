@@ -168,7 +168,26 @@ func TestRunnerMergeBase(t *testing.T) {
 		{
 			name:    "explicit base",
 			baseRef: "main",
-			wantRef: "main",
+			wantRef: "refs/heads/main",
+		},
+		{
+			name:    "short base ignores same name tag",
+			baseRef: "main",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				gitTest(t, repo, "tag", "main", "HEAD")
+			},
+			wantRef: "refs/heads/main",
+		},
+		{
+			name:    "short base falls back to origin branch",
+			baseRef: "main",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				gitTest(t, repo, "update-ref", "refs/remotes/origin/main", "refs/heads/main")
+				gitTest(t, repo, "branch", "-D", "main")
+			},
+			wantRef: "refs/remotes/origin/main",
 		},
 		{
 			name:            "missing base",
@@ -184,6 +203,15 @@ func TestRunnerMergeBase(t *testing.T) {
 			name:            "octopus option is not a base",
 			baseRef:         "--octopus",
 			wantErrContains: "--octopus",
+		},
+		{
+			name:    "detached HEAD ref fails closed",
+			baseRef: "HEAD",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				gitTest(t, repo, "checkout", "--detach", "HEAD")
+			},
+			wantErrContains: "HEAD",
 		},
 		{
 			name:            "missing origin HEAD",
