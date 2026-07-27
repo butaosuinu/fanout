@@ -249,6 +249,18 @@ func TestHerdrControlRejectsIncompleteRealizedIntent(t *testing.T) {
 	}
 }
 
+func TestHerdrControlAcceptsSHA256ObjectIDs(t *testing.T) {
+	repo := newHerdrControlRepo(t)
+	intent := testHerdrWorktreeIntent(repo, "425", 426, "sha256")
+	intent.BaseSHA = strings.Repeat("1", 64)
+	intent.ExpectedHead = strings.Repeat("2", 64)
+	store := emptyHerdrControl()
+	store.Intents = append(store.Intents, intent)
+	if err := validateHerdrControl(store); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, repo)
 	if err != nil {

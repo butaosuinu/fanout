@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-var herdrCommitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var herdrCommitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
 type HerdrBaseResolution struct {
 	BaseBranch string
@@ -133,7 +133,7 @@ func ReserveHerdrBranch(root, fullRef, baseSHA string) error {
 	if !strings.HasPrefix(fullRef, "refs/heads/") || !herdrCommitSHA.MatchString(baseSHA) {
 		return fmt.Errorf("invalid Herdr branch reservation %s -> %s", fullRef, baseSHA)
 	}
-	const emptyOID = "0000000000000000000000000000000000000000"
+	emptyOID := strings.Repeat("0", len(baseSHA))
 	if _, err := git(root, "update-ref", "--create-reflog", fullRef, baseSHA, emptyOID); err != nil {
 		return fmt.Errorf("reserve Herdr branch %s at %s: %w", fullRef, baseSHA, err)
 	}
@@ -273,6 +273,14 @@ func ObserveHerdrCheckout(root, checkoutPath string) (HerdrCheckoutObservation, 
 		}
 	}
 	for _, entry := range entries {
+		if filepath.Clean(entry.path) != cleanPath {
+			continue
+		}
+		if observation.PathAbsent {
+			observation.Registered = true
+			observation.BranchRef = entry.branch
+			break
+		}
 		entryPath, pathErr := physicalHerdrPath(entry.path)
 		if pathErr != nil {
 			return observation, fmt.Errorf("canonicalize registered Herdr worktree path: %w", pathErr)

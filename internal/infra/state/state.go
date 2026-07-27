@@ -2,6 +2,7 @@
 package state
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -162,7 +163,12 @@ func LockProjectForLaunch(projectRoot string) (*LockedStore, error) {
 	}
 	locked, err := Lock(Path(projectRoot))
 	if err != nil {
-		_ = unlockStateFile(herdrControlFile)
+		if unlockErr := unlockStateFile(herdrControlFile); unlockErr != nil {
+			return nil, errors.Join(
+				err,
+				fmt.Errorf("unlock Herdr control after state lock failure: %w", unlockErr),
+			)
+		}
 		return nil, err
 	}
 	locked.herdrControlPath = controlPath

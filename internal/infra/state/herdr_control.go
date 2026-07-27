@@ -17,7 +17,7 @@ import (
 
 const HerdrControlSchemaVersion = 1
 
-var herdrControlCommitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var herdrControlCommitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
 type HerdrIntentKind string
 

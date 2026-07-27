@@ -40,6 +40,41 @@ func TestHerdrBranchReservationIsAtomicAndCompareDeleted(t *testing.T) {
 	}
 }
 
+func TestHerdrBranchReservationSupportsSHA256ObjectIDs(t *testing.T) {
+	repo := t.TempDir()
+	gitTest(t, "", "init", "--object-format=sha256", "-b", "main", repo)
+	gitTest(t, repo, "config", "user.name", "Fanout Test")
+	gitTest(t, repo, "config", "user.email", "fanout@example.test")
+	writeFile(t, filepath.Join(repo, "file.txt"), "base\n")
+	gitTest(t, repo, "add", "file.txt")
+	gitTest(t, repo, "commit", "-m", "base")
+
+	base := gitOutput(t, repo, "rev-parse", "HEAD")
+	if len(base) != 64 {
+		t.Fatalf("SHA-256 repository HEAD length = %d, want 64", len(base))
+	}
+	resolved, err := ResolveHerdrBase(Options{
+		ProjectRoot: repo, Slug: "sha256", BranchName: "fanout/sha256",
+		AllowMissingOrigin: true,
+	})
+	if err != nil || resolved.SHA != base {
+		t.Fatalf("SHA-256 base = %+v, err=%v", resolved, err)
+	}
+	fullRef, err := HerdrBranchRef(repo, "fanout/sha256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ReserveHerdrBranch(repo, fullRef, base); err != nil {
+		t.Fatal(err)
+	}
+	if got, found, err := ObserveHerdrBranch(repo, fullRef); err != nil || !found || got != base {
+		t.Fatalf("SHA-256 branch = (%q,%t,%v), want %s", got, found, err, base)
+	}
+	if err := DeleteReservedHerdrBranch(repo, fullRef, base); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDeleteReservedHerdrBranchRejectsMovedTip(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	base := gitOutput(t, repo, "rev-parse", "HEAD")
@@ -102,6 +137,24 @@ func TestEnsureHerdrWorktreeParentRejectsSymlinkComponent(t *testing.T) {
 	if err := EnsureHerdrWorktreeParent(repo, checkout); err == nil ||
 		!strings.Contains(err.Error(), "not a real directory") {
 		t.Fatalf("symlink parent error = %v", err)
+	}
+}
+
+func TestObserveHerdrCheckoutIgnoresUnrelatedPrunableWorktree(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	stale := filepath.Join(t.TempDir(), "stale")
+	gitTest(t, repo, "worktree", "add", "-b", "fanout/stale", stale, "HEAD")
+	if err := os.RemoveAll(stale); err != nil {
+		t.Fatal(err)
+	}
+
+	target := filepath.Join(repo, ".fanout", "worktrees", "target")
+	got, err := ObserveHerdrCheckout(repo, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.PathAbsent || got.Registered {
+		t.Fatalf("target checkout observation = %+v", got)
 	}
 }
 

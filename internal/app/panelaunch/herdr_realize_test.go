@@ -232,6 +232,51 @@ func TestRealizeHerdrWorktreeAdoptsResponseLossPostcondition(t *testing.T) {
 	}
 }
 
+func TestRealizeHerdrWorktreeRecoversExpiredIssuedIntent(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	req := testHerdrWorktreeRequest(repo, "expired-issued", 432)
+	realized, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("initial realization error = %v", err)
+	}
+	locked, err := state.LockHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := locked.FindIntent(realized.Intent.ID)
+	if !found {
+		t.Fatalf("intent %s not found", realized.Intent.ID)
+	}
+	intent.Status = state.HerdrIntentIssued
+	intent.Resource = state.HerdrResource{}
+	intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
+	locked.UpsertIntent(intent)
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+
+	mutationsBefore := len(runtime.mutations)
+	recovered, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("expired issued recovery error = %v", err)
+	}
+	if recovered.Intent.Status != state.HerdrIntentRealized ||
+		recovered.Intent.Resource.WorkspaceID == "" {
+		t.Fatalf("expired issued recovery = %+v", recovered)
+	}
+	if len(runtime.mutations) != mutationsBefore {
+		t.Fatal("expired issued intent reissued the Herdr mutation")
+	}
+}
+
 func TestRealizeHerdrWorktreeFailsClosedOnAmbiguousResponseLoss(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}

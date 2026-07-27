@@ -1165,7 +1165,15 @@ func herdrIntentContext(
 ) (context.Context, context.CancelFunc, error) {
 	deadline := time.UnixMilli(intent.ExpiresUnixMS)
 	if !now.Before(deadline) {
-		return nil, nil, fmt.Errorf("herdr realization deadline expired")
+		switch intent.Status {
+		case state.HerdrIntentPlanned, state.HerdrIntentIssued, state.HerdrIntentRealized:
+			// The saved deadline bounded the interrupted mutation cycle. Re-entry
+			// gets one fresh bounded window to resume a proven-unissued plan or
+			// classify an existing resource; issued mutations are never reissued.
+			deadline = now.Add(time.Duration(intent.TimeoutMS) * time.Millisecond)
+		default:
+			return nil, nil, fmt.Errorf("herdr realization deadline expired")
+		}
 	}
 	ctx, cancel := context.WithDeadline(parent, deadline)
 	if err := ctx.Err(); err != nil {
