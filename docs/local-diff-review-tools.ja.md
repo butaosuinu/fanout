@@ -333,6 +333,10 @@ repo-local または worktree-local の `core.attributesFile`、
 `include`/`includeIf` が 1 件でもあれば 502 にし、指定先を開かない。
 section と key は Git と同じく ASCII case-insensitive に照合し、曖昧または
 parse できない config も 502 にする。
+検査に使った common/worktree config は immutable snapshot とし、
+repository-facing Git command は live config を再読込せず同じ snapshot だけを
+使う。
+固定方法は #577/#578 に委譲する。
 backend は object database に触れる前に、Git が `GIT_NO_LAZY_FETCH` を
 サポートする version であることを確認する。
 未対応 version と missing object は remote fetch を試さず 502 にする。
@@ -361,11 +365,18 @@ candidate path は merge-base entry、複製した index entry、index stat と 
 index stat と一致した tracked path は clean とみなし、racy な stat は changed
 として扱う。
 merge-base と index は mode と object ID で比較する。
+複製した index に skip-worktree または sparse-directory entry がある場合、
+worktree に path がないことを削除として扱わない。
+immutable index の content を最終 side に使うか、安全に判定できなければ 502 に
+する。
+選択は #577/#578 に委譲する。
 worktree 内の `.gitignore` と verified common dir の `info/exclude` は no-follow と
 256 KiB 上限で private snapshot に複製する。
 実装は immutable な ignore source で directory traversal を prune し、ignored
 path を列挙結果へ出さず、metadata 出力上限と対象 file 数に含めない。
 prune の実装方式は #577/#578 に委譲する。
+検証済み worktree root と traversal 中の各 directory にある `.git` entry は
+開かずに prune し、candidate path、対象 file 数、metadata、patch に含めない。
 `git add -N` を含む index/worktree 変更コマンドは呼ばない。
 
 snapshot manifest には各 side の logical path、mode、size、object ID または
@@ -396,6 +407,12 @@ attribute の判定は command 名を得るだけで、driver を起動しない
 pair と logical path だけを受け取る。
 この構造により、preflight 後に live worktree や `.gitattributes` が変わっても
 filter command は起動しない。
+同じ preflight で `core.autocrlf`、`core.eol` と、候補 path の `text`、`eol`、
+`working-tree-encoding`、`ident` attribute も immutable input から評価する。
+raw byte pair と通常の Git diff の内容が異なる変換は、外部 command を起動せず
+両 side に再現するか、502 にする。
+変換を無視した raw byte pair を成功 response に使ってはならない。
+再現と fail closed の選択は #577/#578 に委譲する。
 
 tracked と untracked の patch は確定した snapshot から file ごとに生成する。
 Git を diff engine に使う場合は repository の外にある request-private
@@ -518,6 +535,12 @@ standard ignore を適用しない raw path 集合が 10 MiB を超える worktr
 ignore 後の対象が上限内なら 200 と対象 file だけを返すことを確認する。
 `collectionLimit` の file は統計が `null` となり、1 MiB response 上限にも
 該当する場合は `omittedReason: "collectionLimit"` を保持することを確認する。
+config snapshot の確定後に live config を差し替えても Git command が再読込しない
+ことと、非実行型の改行/encoding 変換を無視した全行差分を返さないことを確認する。
+skip-worktree と sparse-directory entry は削除として返さず、安全に最終 side を
+決められない場合は 502 になることを確認する。
+root と nested repository の `.git` entry は候補、対象 file 数、metadata、patch の
+すべてから除外することを確認する。
 
 handler が生成する次のエラー body は `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
@@ -527,9 +550,10 @@ handler が生成する次のエラー body は `{"error":"message"}` とし、
 - `404 Not Found`: identity が snapshot の 1 行に定まらない、worktree 記録が
   ない、cleanup 済み、または同じ git common dir の worktree として検証できない
 - `502 Bad Gateway`: base/merge-base の strict 解決、filter attribute の検査、
-  lazy fetch を使わない object 読み出し、snapshot の確定、unsupported file type、
-  diff 収集 timeout、500 files/metadata 出力上限、metadata-only response 上限の
-  超過、または diff engine の実行に失敗した
+  config/attribute 由来の変換と sparse entry の安全な確定、lazy fetch を使わない
+  object 読み出し、snapshot の確定、unsupported file type、diff 収集 timeout、
+  500 files/metadata 出力上限、metadata-only response 上限の超過、または diff
+  engine の実行に失敗した
 
 共通 middleware が生成する token 不一致の `403 Forbidden` と GET/HEAD 以外の
 `405 Method Not Allowed` は既存どおり `text/plain` とし、上の JSON error
@@ -543,7 +567,9 @@ contract には含めない。
 次の実装方式と内部上限は #577/#578 で決める。
 
 - `GIT_INDEX_FILE` などで複製 index を live index から分離して読み出す方法
-- common/worktree config の immutable snapshot と fingerprint
+- common/worktree config の immutable snapshot、fingerprint、Git command への固定
+- skip-worktree/sparse-directory entry の最終 side を immutable index から作る方法
+- 非実行型の改行/encoding 変換を再現するか fail closed にするかの選択
 - request-private temporary directory を全終了経路で削除する方法
 - admin/metadata file の総 byte 数、source 数、file type の内部上限
 
