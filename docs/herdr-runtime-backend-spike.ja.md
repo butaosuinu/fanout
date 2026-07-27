@@ -308,7 +308,7 @@ console intent / row の key は `(canonical git common directory, operation:con
 console shell は user config、未指定なら fanout 起動時の `SHELL` から解決した絶対 path を使う。
 no-arg TUI の attach 準備は、workspace mutation 前に console の intent 行（row key、launch nonce、cwd、user shell の絶対 path、env file path、owner の PID / start token、`total_timeout` と絶対 expiry、発行時刻）を state save し、launch nonce から workspace label と `FANOUT_READY:<launch-nonce>` / `FANOUT_EXEC:<launch-nonce>` を導出する。
 そのうえで `workspace create --cwd <repo-root> --label <launch-nonce> --no-focus` を一回発行し、応答の workspace ID、root PaneRef / `terminal_id` / cwd を照合して intent 行へ記録する。
-応答喪失または crash 後の再実行は存在確認で分類する。intent の nonce と一致する label の workspace が一つだけ存在して cwd が一致すれば採用して続行する。続行は現状から分岐し、root pane の foreground が launcher なら fresh marker の再観測後に readiness / token から、intent の user shell が既に動いているなら process 照合の finalization から再開する。workspace が不在で create request の非発行を証明できる場合だけ intent 行を消して作り直し、それ以外は `manual_cleanup_required` にする。
+応答喪失または crash 後の再実行は存在確認で分類する。intent の nonce と一致する label の workspace が一つだけ存在して cwd が一致すれば採用して続行する。続行は現状から分岐し、root pane の foreground が launcher で token 発行済み flag がなければ fresh marker の再観測後に readiness / token から、intent の user shell が既に動いているなら process 照合の finalization から再開する。workspace が不在で create request の非発行を証明できる場合だけ intent 行を消して作り直し、それ以外は `manual_cleanup_required` にする。
 launcher marker と root identity を照合した後だけ exact token を一回発行し、launcher は intent の user shell を interactive child として起動する。
 parent は `pane process-info` と OS process 情報で shell の argv / cwd / ancestry を照合して final console row を確定し、同じ state save で intent 行を削除する。
 console は agent detection、rename、emitter、initial operation token 以外の automatic `pane run`、`agent prompt`、nudge の対象にせず、ユーザーが明示的に focus した後の入力だけを受ける。
@@ -473,12 +473,13 @@ herdr backend は tmux-parity trust、owned session、version gate を確認し�
 - 構造化 error が workspace / checkout の非作成を示す失敗では、今回 fanout が作った branch だけを compare-and-delete で削除して fail-fast する（tmux backend の `git worktree add` 失敗時の branch 削除と同じ）。response loss では branch を削除しない。
 - compare-and-delete は fanout の branch 削除手順であり、照合済み tip（launch rollback は記録済み base SHA、cleanup は merge 確認後の current tip）との一致と、同じ full branch ref を checkout する linked worktree の不在を確認してから削除する。cleanup の tip 照合は current tip が merged PR の head と一致するか merge 先 branch の ancestor であることも検証し、未マージ commit を持つ branch は残す。checkout を検査しない `update-ref -d` 単独では行わず、checked-out branch を拒否する tmux backend の `git branch -D` と同じ guard を保つ。
 - `worktree create` 成功後の launch 失敗（launcher timeout / exit、token 失敗、agent 検出失敗）は tmux backend の `failCleanup` と同水準で rollback する。rollback は launch cycle と別の operation として新しい intent 行と budget で実行し、保存済み label nonce / branch / path / `terminal_id` を再照合してから force なしの `worktree remove` を一回発行し、workspace / checkout の不在を確認できた場合だけ自作 branch を記録済み base SHA の compare-and-delete で削除して両 intent 行を消す。照合不一致と dirty 拒否では資源を残して `manual_cleanup_required` にする（tmux も close を確認できない場合は worktree を温存する）。remove の response loss は再実行時の存在確認で分類し、workspace / checkout の不在を確認できれば rollback 完了として branch 削除と intent 整理へ進み、残存または判定不能では旧 request の進行中を排除できないため再発行せず `manual_cleanup_required` にする。
-- 応答喪失または crash 後の再実行は存在確認で分類する。recovery は intent の owner process の不在を確認した場合だけ開始し、live owner の intent は expiry の超過にかかわらず in-progress として明確な error を返す。intent の nonce と一致する label の workspace / checkout が一意に存在して branch / path / `HEAD` が一致すれば採用して launch を続行する。続行は現状から分岐し、pane の foreground が launcher なら fresh marker を新たに観測して launcher が未 token であることを確認したうえで readiness / token から、intent に一致する child process chain が既に動いているなら agent 検出 / rename / process 照合の finalization から再開する。branch だけが存在する場合（workspace / checkout 不在）は、`worktree create` の発行有無を証明できないため `manual_cleanup_required` にする。
+- 応答喪失または crash 後の再実行は存在確認で分類する。recovery は intent の owner process の不在を確認した場合だけ開始し、live owner の intent は expiry の超過にかかわらず in-progress として明確な error を返す。intent の nonce と一致する label の workspace / checkout が一意に存在して branch / path / `HEAD` が一致すれば採用して launch を続行する。続行は現状から分岐し、pane の foreground が launcher で token 発行済み flag がなければ fresh marker の再観測後に readiness / token から、intent に一致する child process chain が既に動いているなら agent 検出 / rename / process 照合の finalization から再開する。branch だけが存在する場合（workspace / checkout 不在）は、`worktree create` の発行有無を証明できないため `manual_cleanup_required` にする。
 - socket mutation（`worktree create` / `worktree remove` など）の再発行と intent 削除は、request の非発行を証明できる場合に限る。対象資源の不在・残存の観測だけでは request が server 内で進行中の可能性を排除できないため、非発行を証明できない場合は `manual_cleanup_required` にする（自動 recovery は採用 or fail closed が基準 2 の全部であり、暗黙の作り直しも再発行もしない）。branch ref create など local git mutation は構造化結果で非発生を証明できる。fresh branch の launch では flow が branch 作成を `worktree create` より先に行うため、branch が未作成のままであることが create の未発行を証明し、この場合だけ intent 行を削除して最初からやり直せる。
 - 既存 checkout への `worktree open` は同じ intent の launch recovery と cleanup 前の再検証に限り、`already_open:true` は同じ workspace ID / label が row / intent に束縛済みの場合だけ受理する。
 - launch cycle は 3 秒以上 300 秒以下の `total_timeout`（既定 300 秒）を最初の mutation 前に確定し、retry で延長しない。
 - deterministic agent name は `fanout-` + SHA-256（canonical git common directory、row key、launch nonce の length-prefix 連結）の先頭 24 lowercase hex とし、0.7.5 の `[a-z][a-z0-9_-]{0,31}` を満たす。同名 agent が別 pane にある場合は fail closed にする。
 - 操作直前の共通再照合として、root pane の `cwd`、`terminal_id`、`HERDR_PANE_ID` / `HERDR_WORKSPACE_ID`、foreground launcher process を intent と照合してから token を発行する。
+- token の `pane run` も socket mutation として扱い、発行直前に intent 行へ token 発行済み flag を state save する。recovery で flag が立っている場合は token を再送せず、intent に一致する child process chain を観測できれば finalization から再開し、できなければ `manual_cleanup_required` にする（配送済み token の二重入力防止）。flag がない場合だけ fresh marker の再観測後に token を発行できる。
 - 失敗した child launch の後は次の child に進まず停止する（tmux backend の `executePlan` fail-fast と同じ）。rollback は前項の identity 照合と不在確認を満たした場合だけ行い、それ以外の削除は cleanup 経路が行う。
 - 照合と mutation の間の TOCTOU（同名 session の差し替え）は tmux と同種の受容済み残余リスクとする。
 - plugin registry は owned XDG の registry と config を launch 前に照合し、予期しない setup hook があれば fail closed にする。この preflight は協調プロセス前提の操作 gate であり atomic proof ではない。
@@ -508,12 +509,12 @@ tracked / untracked / ignored subtree generation を remove と原子的に条�
 
 cleanup の契約は次のとおりとする（#531 が実装する）。
 
-- state lock 下で保存済み row の workspace ID / label nonce、branch、path、`terminal_id` を現在値と照合し、不一致、非所有、または照合不能なら mutation せず fail closed にする。
+- state lock 下で保存済み row の workspace ID / label nonce、branch、path を現在値と照合し、live row では `terminal_id` も照合する。`stale` row（pane / terminal 消滅後）は現在の `terminal_id` を照合できないため、pane / terminal の不在の確認と workspace label / path / checkout の Git provenance の照合で代替する。不一致、非所有、または照合不能なら mutation せず fail closed にする。
 - dirty checkout は明示確認なしに force しない。確認後の force remove でも branch は herdr に削除させない。
 - 照合成功後は intent 行を保存してから `worktree remove` を発行する。実測どおり remove は checkout と child workspace の両方を削除するため、応答成功後に checkout / workspace の不在を確認して row と intent 行を削除し、workspace だけが残る場合に限り `workspace close` で整理する。
 - `workspace close` が先行して checkout が残った系は、owned registry の setup hook preflight を通過している場合に限り、`worktree open` で削除用 workspace を再登録してから同じ identity 照合を経て `worktree remove` を発行する。
 - branch 削除は fanout の compare-and-delete（「safety gate」節で定義。tip 照合と checked-out worktree 不在の確認後の削除）だけが行う。cleanup 経路は merge 確認後の current tip、launch rollback は記録済み base SHA を照合する。
-- 応答喪失または crash 後の再実行は存在確認で分類する。checkout / workspace が不在なら削除完了として row を整理し、残存または判定不能では旧 request の進行中を排除できないため自動では再発行せず `manual_cleanup_required` にする。ユーザーの明示的な再実行だけが新しい cleanup として最初の照合からやり直せる。
+- 応答喪失または crash 後の再実行は存在確認で分類する。checkout / workspace が不在なら削除完了として row を整理し、残存または判定不能では旧 request の進行中を排除できないため再発行せず `manual_cleanup_required` にする。明示操作による解消も remove の再発行ではなく、外部 cleanup 後の不在確認で row / intent を整理する経路に限る。
 - cleanup 済み row の再 launch は fresh launch として扱い、既存 branch があれば tmux backend と同じ規則で採用する。
 
 `workspace close` を先に実行すると checkout は残る。
@@ -621,6 +622,7 @@ matching intent がないまま deadline へ達した launcher は入力を受�
 token の byte 完全一致以外の入力、先行入力、別 nonce は拒否し、child を起動せず終了する。
 launcher は exact token の受理後に env file を読んで直ちに unlink し、intent に記録した cwd / 絶対 executable / argv と合わせて child を exec する。
 env file の欠落、識別不一致、読み取り失敗では child を起動せず fail closed にし、crash 後も current env から再生成しない。
+env file の寿命は intent 行に揃え、intent 行を削除する全経路（final row 確定、rollback 完了、fresh branch 未作成によるやり直し）は記録済み env file の unlink または不在確認を先に行う。
 crash 後に残った env file は、対応する intent の存在確認を経た cleanup だけが unlink する。
 旧正典の versioned allow / deny policy、MAC 付き env capsule、claim / consume CAS、disposal journal は撤廃し、必要になれば proof-grade tier で再評価する。
 
