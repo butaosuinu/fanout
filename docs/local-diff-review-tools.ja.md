@@ -217,9 +217,26 @@ patch 由来の HTML 文字列や `dangerouslySetInnerHTML` は使わない。
 
 ### `GET /api/diff` wire contract
 
-リクエストは `GET /api/diff?pane=%N` とする。
+リクエストは次のいずれかとし、値は URL encode する。
+
+```text
+GET /api/diff?parent=<parent>&issue=<issueNum>[&source=<sourceKey>]
+GET /api/diff?parent=<parent>&task=<taskId>[&source=<sourceKey>]
+```
+
+`issue` と `task` は片方だけを指定する。
+正の GitHub issue 行では `parent` + `issue`、plan task、`@manual`、負の
+synthetic issue 行では `parent` + `issue`/`task` + `source` を行 identity
+とする。
+`source` は `/api/snapshot` の `sourceKey` をそのまま使い、worktree-local な
+行では必須、GitHub issue 行では省略する。
+サーバーは最新 snapshot の全行と identity を完全一致させ、0 件または複数件なら
+diff を返さない。
+tmux の再起動後に再利用される `paneId` は検索キーに使わない。
+これにより tmux と Herdr のどちらも、pane の生死に関係なく記録済み
+worktree を選べる。
 worktree path と base ref はクライアントから受け取らず、token gate 通過後に
-最新 snapshot の pane 記録からサーバーが解決する。
+一致した行の記録からサーバーが解決する。
 成功時は `application/json` で次の全フィールドを返す。
 
 ```ts
@@ -243,12 +260,38 @@ type DiffResponse = {
 
 `capturedAt` は UTC の RFC 3339、`mergeBase` は strict に解決した commit SHA
 とする。
+`paneId` は一致した行の backend-native ID であり、tmux `%N` に限定しない。
 `files` は patch の切り詰めに関係なく全件を返し、空の場合も `null` ではなく
 `[]` を返す。
 バイナリの `additions` と `deletions` は `0`、`binary` は `true` とする。
 `patch` は `diff --git` で始まるファイルブロックを連結した git patch であり、
 HTML fragment として解釈しない。
 `totalBytes` はサーバー側で切り詰める前の `patch` の byte 数である。
+
+tracked patch は strict に解決した merge-base に対し、次の形で取得する。
+`--no-ext-diff` と `--no-textconv` で repository または user config 由来の
+外部プロセスを起動せず、`--no-color` で wire 表現を固定する。
+
+```text
+git -C <worktree> diff --no-ext-diff --no-textconv --no-color <mergeBase> --
+git -C <worktree> diff --numstat -z --no-ext-diff --no-textconv <mergeBase> --
+```
+
+untracked path は `git -C <worktree> ls-files --others --exclude-standard -z` で
+列挙し、各 path を次の `--no-index` diff で合成する。
+exit 1 は「差分あり」の成功として扱い、`git add -N` を含む index/worktree
+変更コマンドは呼ばない。
+
+```text
+git -C <worktree> diff --no-index --no-ext-diff --no-textconv --no-color -- /dev/null <path>
+```
+
+path と numstat は NUL 区切りで解析する。
+rename/copy は destination の repository-relative path を `files[].path` に置き、
+patch header の C-quoted 文字列を path 復元に使わない。
+untracked symlink は mode 120000 の link 自体を対象とし、link 先を読まない。
+バイナリと 256 KiB(262,144 bytes)を超える untracked file は `files` に含めるが、
+patch 合成から外す。
 
 サーバー側の固定上限は 1 MiB(1,048,576 bytes)とし、クエリによる変更は
 許さない。
@@ -261,9 +304,10 @@ HTML fragment として解釈しない。
 エラー body は全 status で `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
 
-- `400 Bad Request`: `pane` が空、または tmux pane ID(`%` + 数字)ではない
-- `404 Not Found`: pane が snapshot にない、worktree 記録がない、または
-  cleanup 済みで path が存在しない
+- `400 Bad Request`: identity query が欠落または不正で、`issue`/`task` の
+  排他指定や worktree-local 行の `source` 必須条件を満たさない
+- `404 Not Found`: identity が snapshot の 1 行に定まらない、worktree 記録が
+  ない、または cleanup 済みで path が存在しない
 - `502 Bad Gateway`: base/merge-base の strict 解決または git diff に失敗した
 
 ### レビューコメントの将来計画
