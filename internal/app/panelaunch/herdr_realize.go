@@ -18,13 +18,15 @@ import (
 )
 
 const (
-	minHerdrRealizeTimeout = 3 * time.Second
-	maxHerdrRealizeTimeout = 300 * time.Second
+	minHerdrRealizeTimeout                = 3 * time.Second
+	maxHerdrRealizeTimeout                = 300 * time.Second
+	maxHerdrRecoveryClassificationTimeout = 5 * time.Second
 )
 
 var (
 	ErrHerdrManualCleanupRequired     = errors.New("herdr launch requires manual cleanup")
 	ErrHerdrLauncherReadinessDeferred = errors.New("herdr launcher readiness is deferred to issue #528")
+	errHerdrIntentDeadlineExpired     = errors.New("herdr realization deadline expired")
 )
 
 type HerdrWorktreeRuntime interface {
@@ -193,6 +195,10 @@ func RealizeHerdrCoordinator(
 
 	operationCtx, cancel, contextErr := herdrIntentContext(realizeCtx, intent, hooks.Now())
 	if contextErr != nil {
+		if errors.Is(contextErr, errHerdrIntentDeadlineExpired) &&
+			intent.Status == state.HerdrIntentPlanned {
+			return result, rollbackUnissuedHerdrCoordinator(locked, intent, contextErr)
+		}
 		return result, markHerdrIntentManual(locked, intent, contextErr)
 	}
 	defer cancel()
@@ -200,6 +206,9 @@ func RealizeHerdrCoordinator(
 	switch intent.Status {
 	case state.HerdrIntentRealized:
 		if verifyErr := verifyRealizedCoordinator(operationCtx, runtime, intent); verifyErr != nil {
+			if operationErr := operationCtx.Err(); operationErr != nil {
+				return result, errors.Join(verifyErr, operationErr)
+			}
 			return result, markHerdrIntentManual(locked, intent, verifyErr)
 		}
 		return coordinatorDeferred(intent)
@@ -429,16 +438,17 @@ func RealizeHerdrWorktree(
 
 	operationCtx, cancel, contextErr := herdrIntentContext(realizeCtx, intent, hooks.Now())
 	if contextErr != nil {
+		if errors.Is(contextErr, errHerdrIntentDeadlineExpired) &&
+			intent.Status == state.HerdrIntentPlanned {
+			return result, rollbackUnissuedHerdrWorktree(locked, req, intent, contextErr)
+		}
 		return result, markHerdrIntentManual(locked, intent, contextErr)
 	}
 	defer cancel()
 
 	switch intent.Status {
 	case state.HerdrIntentRealized:
-		if verifyErr := verifyRealizedWorktree(operationCtx, runtime, req, source, intent); verifyErr != nil {
-			return result, markHerdrIntentManual(locked, intent, verifyErr)
-		}
-		return worktreeDeferred(intent)
+		return resumeRealizedHerdrWorktree(operationCtx, runtime, locked, req, source, intent)
 	case state.HerdrIntentIssued:
 		return recoverHerdrWorktree(operationCtx, runtime, locked, req, source, intent, nil)
 	case state.HerdrIntentManualCleanupRequired:
@@ -848,30 +858,112 @@ func verifyRealizedCoordinator(
 	return nil
 }
 
-func verifyRealizedWorktree(
+func resumeRealizedHerdrWorktree(
 	ctx context.Context,
 	runtime HerdrWorktreeRuntime,
+	locked *state.LockedHerdrControl,
 	req HerdrWorktreeRequest,
 	source worktree.HerdrRepoIdentity,
 	intent state.HerdrIntent,
-) error {
+) (HerdrWorktreeResult, error) {
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
-		return err
+		if contextErr := ctx.Err(); contextErr != nil {
+			return HerdrWorktreeResult{}, errors.Join(err, contextErr)
+		}
+		return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, err)
 	}
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
-	if len(matches) != 1 || !sameHerdrResource(intent.Resource, stateResource(matches[0])) {
-		return fmt.Errorf("realized Herdr worktree identity changed")
+	switch len(matches) {
+	case 1:
+		if !sameHerdrResource(intent.Resource, stateResource(matches[0])) {
+			return HerdrWorktreeResult{}, markHerdrIntentManual(
+				locked,
+				intent,
+				fmt.Errorf("realized Herdr worktree identity changed"),
+			)
+		}
+		if _, err := worktree.VerifyHerdrCheckout(
+			req.SourceRoot,
+			intent.WorktreePath,
+			intent.FullBranchRef,
+			intent.ExpectedHead,
+			source.RepoKey,
+			source.RepoRoot,
+		); err != nil {
+			return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, err)
+		}
+		return worktreeDeferred(intent)
+	case 0:
+	default:
+		return HerdrWorktreeResult{}, markHerdrIntentManual(
+			locked,
+			intent,
+			fmt.Errorf("realized Herdr worktree label has %d live matches", len(matches)),
+		)
 	}
-	_, err = worktree.VerifyHerdrCheckout(
+
+	if _, err := worktree.VerifyHerdrCheckout(
 		req.SourceRoot,
 		intent.WorktreePath,
 		intent.FullBranchRef,
 		intent.ExpectedHead,
 		source.RepoKey,
 		source.RepoRoot,
-	)
-	return err
+	); err != nil {
+		return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, err)
+	}
+	if coordinatorErr := verifyCoordinatorObservation(intent.Coordinator, workspaces); coordinatorErr != nil {
+		return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, coordinatorErr)
+	}
+	if policyErr := runtime.VerifyWorktreeSetupPolicy(ctx); policyErr != nil {
+		return HerdrWorktreeResult{}, policyErr
+	}
+
+	intent.Status = state.HerdrIntentIssued
+	locked.UpsertIntent(intent)
+	if saveErr := locked.Save(); saveErr != nil {
+		return HerdrWorktreeResult{}, saveErr
+	}
+	mutation, mutationErr := runtime.MutateWorktree(ctx, herdrrun.WorktreeMutationRequest{
+		Kind:                     herdrrun.WorktreeOpen,
+		Coordinator:              observationResource(intent.Coordinator),
+		SourceRoot:               source.RepoRoot,
+		SourceRepoKey:            source.RepoKey,
+		SourceRepoRoot:           source.RepoRoot,
+		ProjectRoot:              req.ProjectRoot,
+		FullBranchRef:            intent.FullBranchRef,
+		ExpectedHeadSHA:          intent.ExpectedHead,
+		Path:                     intent.WorktreePath,
+		Label:                    intent.WorkspaceLabel,
+		ExpectedAlreadyOpenID:    intent.Resource.WorkspaceID,
+		ExpectedAlreadyOpenLabel: intent.Resource.Label,
+		NoFocus:                  true,
+	})
+	if mutationErr != nil {
+		if errors.Is(mutationErr, herdrrun.ErrMutationNotIssued) {
+			intent.Status = state.HerdrIntentRealized
+			locked.UpsertIntent(intent)
+			if saveErr := locked.Save(); saveErr != nil {
+				return HerdrWorktreeResult{}, errors.Join(mutationErr, saveErr)
+			}
+			return HerdrWorktreeResult{}, mutationErr
+		}
+		if operationErr := ctx.Err(); operationErr != nil {
+			return HerdrWorktreeResult{}, errors.Join(mutationErr, operationErr)
+		}
+		return recoverHerdrWorktree(ctx, runtime, locked, req, source, intent, mutationErr)
+	}
+	if finalizeErr := finalizeHerdrWorktree(
+		locked,
+		req,
+		source,
+		&intent,
+		mutation.WorkspaceObservation,
+	); finalizeErr != nil {
+		return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, finalizeErr)
+	}
+	return worktreeDeferred(intent)
 }
 
 func verifyHerdrWorktreePreconditions(
@@ -969,7 +1061,7 @@ func validateSavedCoordinatorIntent(
 	if intent.ID != wantID || intent.Kind != state.HerdrIntentCoordinator ||
 		intent.Parent != canonicalHerdrParent(req.Parent) ||
 		intent.OwnerProjectRoot != ownerProjectRoot || intent.Backend != backend.Herdr ||
-		filepath.Clean(intent.WorktreePath) != cwd ||
+		!savedHerdrCoordinatorPathMatches(ownerProjectRoot, intent.WorktreePath, cwd) ||
 		intent.Session != req.HerdrSession || intent.SocketPath != req.SocketPath {
 		return fmt.Errorf("saved Herdr coordinator intent contradicts request")
 	}
@@ -1081,7 +1173,7 @@ func finalizedHerdrCoordinator(
 	if row.ID != wantID || row.Kind != state.HerdrIntentCoordinator ||
 		row.Parent != canonicalHerdrParent(req.Parent) ||
 		row.OwnerProjectRoot != ownerProjectRoot ||
-		filepath.Clean(row.WorktreePath) != cwd ||
+		!savedHerdrCoordinatorPathMatches(ownerProjectRoot, row.WorktreePath, cwd) ||
 		row.Session != req.HerdrSession || row.SocketPath != req.SocketPath {
 		return HerdrCoordinatorResult{}, fmt.Errorf("finalized herdr coordinator contradicts request")
 	}
@@ -1138,7 +1230,11 @@ func resolvedHerdrCoordinator(
 		if intent.Parent != canonicalHerdrParent(req.Parent) ||
 			intent.OwnerProjectRoot != ownerProjectRoot ||
 			intent.Session != req.HerdrSession || intent.SocketPath != req.SocketPath ||
-			filepath.Clean(intent.WorktreePath) != filepath.Clean(repoRoot) {
+			!savedHerdrCoordinatorPathMatches(
+				ownerProjectRoot,
+				intent.WorktreePath,
+				repoRoot,
+			) {
 			return state.HerdrResource{}, fmt.Errorf("herdr coordinator intent contradicts child request")
 		}
 		return intent.Resource, nil
@@ -1148,7 +1244,7 @@ func resolvedHerdrCoordinator(
 			row.Parent != canonicalHerdrParent(req.Parent) ||
 			row.OwnerProjectRoot != ownerProjectRoot ||
 			row.Session != req.HerdrSession || row.SocketPath != req.SocketPath ||
-			filepath.Clean(row.WorktreePath) != filepath.Clean(repoRoot) {
+			!savedHerdrCoordinatorPathMatches(ownerProjectRoot, row.WorktreePath, repoRoot) {
 			return state.HerdrResource{}, fmt.Errorf("herdr coordinator row contradicts child request")
 		}
 		return row.Resource, nil
@@ -1243,13 +1339,23 @@ func herdrIntentContext(
 	deadline := time.UnixMilli(intent.ExpiresUnixMS)
 	if !now.Before(deadline) {
 		switch intent.Status {
-		case state.HerdrIntentPlanned, state.HerdrIntentIssued, state.HerdrIntentRealized:
-			// The saved deadline bounded the interrupted mutation cycle. Re-entry
-			// gets one fresh bounded window to resume a proven-unissued plan or
-			// classify an existing resource; issued mutations are never reissued.
-			deadline = now.Add(time.Duration(intent.TimeoutMS) * time.Millisecond)
+		case state.HerdrIntentPlanned:
+			return nil, nil, errHerdrIntentDeadlineExpired
+		case state.HerdrIntentIssued, state.HerdrIntentRealized:
+			// An expired launch never receives another full total_timeout.
+			// Bound this invocation to a short existence classification.
+			timeout := min(
+				time.Duration(intent.TimeoutMS)*time.Millisecond,
+				maxHerdrRecoveryClassificationTimeout,
+			)
+			ctx, cancel := context.WithTimeout(parent, timeout)
+			if err := ctx.Err(); err != nil {
+				cancel()
+				return nil, nil, err
+			}
+			return ctx, cancel, nil
 		default:
-			return nil, nil, fmt.Errorf("herdr realization deadline expired")
+			return nil, nil, errHerdrIntentDeadlineExpired
 		}
 	}
 	ctx, cancel := context.WithDeadline(parent, deadline)
@@ -1258,6 +1364,14 @@ func herdrIntentContext(
 		return nil, nil, err
 	}
 	return ctx, cancel, nil
+}
+
+func savedHerdrCoordinatorPathMatches(ownerProjectRoot, savedPath, requestPath string) bool {
+	savedPath = filepath.Clean(savedPath)
+	if !filepath.IsAbs(savedPath) {
+		return false
+	}
+	return ownerProjectRoot == "" || savedPath == filepath.Clean(requestPath)
 }
 
 func newHerdrWorkspaceLabel(

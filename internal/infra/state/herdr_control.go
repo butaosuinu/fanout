@@ -548,9 +548,20 @@ func validateHerdrIntent(intent HerdrIntent) error {
 		return fmt.Errorf("herdr intent %s has inconsistent identity", intent.ID)
 	}
 	switch intent.Status {
-	case HerdrIntentPlanned, HerdrIntentIssued:
-		if intent.Resource.WorkspaceID != "" {
+	case HerdrIntentPlanned:
+		if intent.Resource != (HerdrResource{}) {
 			return fmt.Errorf("herdr intent %s has a resource before realization", intent.ID)
+		}
+	case HerdrIntentIssued:
+		if intent.Resource != (HerdrResource{}) {
+			// worktree open recovery retains the previously realized resource
+			// while the replacement workspace mutation is in flight.
+			if intent.Kind != HerdrIntentWorktree {
+				return fmt.Errorf("herdr intent %s has a resource before realization", intent.ID)
+			}
+			if err := validateHerdrResource(intent.Resource, true); err != nil {
+				return fmt.Errorf("herdr intent %s: %w", intent.ID, err)
+			}
 		}
 	case HerdrIntentRealized:
 		if err := validateHerdrResource(intent.Resource, intent.Kind == HerdrIntentWorktree); err != nil {

@@ -784,6 +784,38 @@ func TestRuntimeReadRoutesUseAmbientHerdrWithoutSavedRoute(t *testing.T) {
 	}
 }
 
+func TestRuntimeReadRoutesUseSharedHerdrControlRows(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	writeHerdrControlRouteRow(t, repo, "control", "/tmp/control.sock")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_SESSION", "")
+	t.Setenv("HERDR_SOCKET_PATH", "")
+	t.Setenv("TMUX", "host")
+
+	routes, err := runtimeReadRoutes(repo, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[runtimeReadRoute]bool{
+		{name: backend.Tmux}: true,
+		{
+			name:            backend.Herdr,
+			herdrSession:    "control",
+			herdrSocketPath: "/tmp/control.sock",
+		}: true,
+	}
+	if len(routes) != len(want) {
+		t.Fatalf("routes = %+v, want %d routes", routes, len(want))
+	}
+	for _, route := range routes {
+		if !want[route] {
+			t.Fatalf("unexpected route %+v; all routes=%+v", route, routes)
+		}
+	}
+}
+
 func TestRuntimeReadRoutesUseUserDefaultHerdrWithoutSavedRoute(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -807,6 +839,35 @@ func TestRuntimeReadRoutesUseUserDefaultHerdrWithoutSavedRoute(t *testing.T) {
 	want := runtimeReadRoute{name: backend.Herdr, herdrSession: "user-default", herdrSocketPath: "/tmp/user-default.sock"}
 	if len(routes) != 1 || routes[0] != want {
 		t.Fatalf("routes = %+v, want [%+v]", routes, want)
+	}
+}
+
+func writeHerdrControlRouteRow(t *testing.T, repo, session, socketPath string) {
+	t.Helper()
+	id, err := state.HerdrCoordinatorIntentID("425", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Errorf("unlock Herdr control: %v", unlockErr)
+		}
+	}()
+	locked.UpsertRow(state.HerdrRow{
+		ID: id, Kind: state.HerdrIntentCoordinator, Parent: "425",
+		Backend: backend.Herdr, WorktreePath: repo,
+		Resource: state.HerdrResource{
+			WorkspaceID: "w1", Label: "fanout-coordinator-route",
+			PaneID: "w1:p1", TerminalID: "term-1", CurrentPath: repo,
+		},
+		Session: session, SocketPath: socketPath,
+	})
+	if err := locked.Save(); err != nil {
+		t.Fatal(err)
 	}
 }
 

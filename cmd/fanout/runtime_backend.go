@@ -415,6 +415,32 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 		}
 	}
 
+	control, controlErr := state.LoadHerdrControl(projectRoot)
+	if controlErr != nil {
+		hasHerdrRow = true
+		routeErr = errors.Join(routeErr, fmt.Errorf("load Herdr control routes: %w", controlErr))
+	} else {
+		for i, row := range control.Rows {
+			hasHerdrRow = true
+			session := strings.TrimSpace(row.Session)
+			socketPath := strings.TrimSpace(row.SocketPath)
+			if session == "" || socketPath == "" {
+				routeErr = errors.Join(routeErr, backend.ObservationRouteUnavailable(
+					backend.ObservationRoute{
+						Backend: backend.Herdr, SessionID: session, SocketPath: socketPath,
+					},
+					fmt.Errorf("herdr control row %d requires session and socketPath", i),
+				))
+				continue
+			}
+			addRoute(runtimeReadRoute{
+				name:            backend.Herdr,
+				herdrSession:    session,
+				herdrSocketPath: socketPath,
+			})
+		}
+	}
+
 	inputs := loadRuntimeBackendInputs(&cliflags.Config{}, projectRoot, state.Store{}, nil)
 	selection, err := resolveBackendSelection("", inputs)
 	if err != nil {

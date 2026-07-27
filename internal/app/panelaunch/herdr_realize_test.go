@@ -22,12 +22,14 @@ type fakeHerdrRealizeRuntime struct {
 	route      herdrrun.OwnedWorktreeRoute
 	routeErr   error
 
-	routeDeadline    time.Time
-	routeHasDeadline bool
-	policyErr        error
-	observeErr       error
-	observeCalls     int
-	mutate           func(herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error)
+	routeDeadline      time.Time
+	routeHasDeadline   bool
+	observeDeadline    time.Time
+	observeHasDeadline bool
+	policyErr          error
+	observeErr         error
+	observeCalls       int
+	mutate             func(herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error)
 }
 
 func (f *fakeHerdrRealizeRuntime) WorktreeRoute(
@@ -43,6 +45,7 @@ func (f *fakeHerdrRealizeRuntime) VerifyWorktreeSetupPolicy(context.Context) err
 
 func (f *fakeHerdrRealizeRuntime) ObserveWorkspaces(ctx context.Context) ([]herdrrun.WorkspaceObservation, error) {
 	f.observeCalls++
+	f.observeDeadline, f.observeHasDeadline = ctx.Deadline()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -125,6 +128,36 @@ func TestRealizeHerdrWorktreePersistsIntentAndSkipsReplay(t *testing.T) {
 	_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if err == nil {
 		t.Fatal("foreign owned-session route unexpectedly accepted")
+	}
+}
+
+func TestRealizeHerdrWorktreeReopensVerifiedRealizedCheckout(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	req := testHerdrWorktreeRequest(repo, "reopen", 426)
+	realized, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("initial realization error = %v", err)
+	}
+	runtime.workspaces = runtime.workspaces[:1]
+	mutationsBefore := len(runtime.mutations)
+
+	reopened, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("reopen error = %v", err)
+	}
+	if len(runtime.mutations) != mutationsBefore+1 ||
+		runtime.mutations[len(runtime.mutations)-1].Kind != herdrrun.WorktreeOpen {
+		t.Fatalf("reopen mutations = %+v", runtime.mutations[mutationsBefore:])
+	}
+	if reopened.Intent.Status != state.HerdrIntentRealized ||
+		reopened.Intent.Resource.WorkspaceID == realized.Intent.Resource.WorkspaceID ||
+		reopened.Intent.Resource.Label != realized.Intent.Resource.Label {
+		t.Fatalf("reopened intent = %+v, original = %+v", reopened.Intent, realized.Intent)
 	}
 }
 
@@ -464,6 +497,79 @@ func TestRealizeHerdrWorktreeRecoversExpiredIssuedIntent(t *testing.T) {
 	if len(runtime.mutations) != mutationsBefore {
 		t.Fatal("expired issued intent reissued the Herdr mutation")
 	}
+	remaining := time.Until(runtime.observeDeadline)
+	if !runtime.observeHasDeadline || remaining <= 0 ||
+		remaining > maxHerdrRecoveryClassificationTimeout {
+		t.Fatalf(
+			"expired intent classification deadline = %v, %t (remaining %v)",
+			runtime.observeDeadline,
+			runtime.observeHasDeadline,
+			remaining,
+		)
+	}
+}
+
+func TestRealizeHerdrWorktreeRollsBackExpiredPlannedIntent(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	stop := errors.New("stop after branch reservation")
+	runtime.observeErr = stop
+	req := testHerdrWorktreeRequest(repo, "expired-planned", 434)
+	if _, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks); !errors.Is(err, stop) {
+		t.Fatalf("initial planned error = %v", err)
+	}
+	locked, err := state.LockHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := locked.FindIntent(intentID)
+	if !found || !intent.BranchCreated || intent.Status != state.HerdrIntentPlanned {
+		t.Fatalf("planned intent = (%+v,%t)", intent, found)
+	}
+	intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
+	locked.UpsertIntent(intent)
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	runtime.observeErr = nil
+
+	if _, realizeErr := realizeHerdrWorktree(
+		context.Background(),
+		req,
+		runtime,
+		hooks,
+	); !errors.Is(
+		realizeErr,
+		errHerdrIntentDeadlineExpired,
+	) {
+		t.Fatalf("expired planned error = %v", realizeErr)
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := control.FindIntent(intentID); found {
+		t.Fatalf("expired planned intent %s was not removed", intentID)
+	}
+	if head, found, err := worktree.ObserveHerdrBranch(
+		repo,
+		intent.FullBranchRef,
+	); err != nil {
+		t.Fatal(err)
+	} else if found {
+		t.Fatalf("expired planned branch remains at %s", head)
+	}
 }
 
 func TestRealizeHerdrWorktreePreservesIssuedIntentWhenMutationContextIsCanceled(t *testing.T) {
@@ -657,6 +763,51 @@ func TestRealizeHerdrCoordinatorAdoptsResponseLossAndNeverReissues(t *testing.T)
 	}
 }
 
+func TestRealizeHerdrReusesNumericParentCoordinatorAcrossLinkedWorktrees(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	coordinator := realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "linked-coordinator", sibling, "HEAD")
+	siblingCoordinatorReq := testHerdrCoordinatorRequest(sibling)
+	reused, err := realizeHerdrCoordinator(
+		context.Background(),
+		siblingCoordinatorReq,
+		runtime,
+		hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("linked coordinator reuse error = %v", err)
+	}
+	if reused.Intent.ID != coordinator.ID ||
+		reused.Intent.WorktreePath != coordinator.WorktreePath ||
+		len(runtime.mutations) != 1 {
+		t.Fatalf(
+			"linked coordinator = %+v, original = %+v, mutations = %d",
+			reused.Intent,
+			coordinator,
+			len(runtime.mutations),
+		)
+	}
+
+	childReq := testHerdrWorktreeRequest(sibling, "linked-child", 435)
+	child, err := realizeHerdrWorktree(context.Background(), childReq, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("linked child error = %v", err)
+	}
+	if child.Intent.Coordinator != coordinator.Resource || len(runtime.mutations) != 2 {
+		t.Fatalf(
+			"linked child coordinator = %+v, want %+v; mutations = %d",
+			child.Intent.Coordinator,
+			coordinator.Resource,
+			len(runtime.mutations),
+		)
+	}
+}
+
 func TestRealizeHerdrWorktreeRejectsForeignCoordinatorBeforeBranch(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
@@ -732,12 +883,14 @@ func installSuccessfulHerdrMutations(
 			runtime.workspaces = append(runtime.workspaces, observation)
 			return herdrrun.WorktreeMutationResult{WorkspaceObservation: observation}, nil
 		}
-		if req.Kind != herdrrun.WorktreeCreate {
+		if req.Kind != herdrrun.WorktreeCreate && req.Kind != herdrrun.WorktreeOpen {
 			return herdrrun.WorktreeMutationResult{}, errors.New("unsupported fake mutation")
 		}
 		workspaceID := "w" + strconv.Itoa(nextWorkspace)
 		nextWorkspace++
-		gitCmdTest(t, repo, "worktree", "add", req.Path, req.Branch)
+		if req.Kind == herdrrun.WorktreeCreate {
+			gitCmdTest(t, repo, "worktree", "add", req.Path, req.Branch)
+		}
 		observation := herdrrun.WorkspaceObservation{
 			WorkspaceID: workspaceID,
 			Label:       req.Label,
@@ -777,7 +930,7 @@ func testHerdrWorktreeRequest(repo, slug string, issueNum int) HerdrWorktreeRequ
 
 func deterministicHerdrRealizeHooks() HerdrRealizeHooks {
 	next := 0
-	now := time.Now().UTC().Add(time.Hour)
+	now := time.Now().UTC()
 	return HerdrRealizeHooks{
 		Now: func() time.Time {
 			return now

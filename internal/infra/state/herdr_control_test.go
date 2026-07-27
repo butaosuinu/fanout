@@ -326,6 +326,29 @@ func TestHerdrControlRowsPreserveBranchOwnership(t *testing.T) {
 	}
 }
 
+func TestHerdrControlIssuedWorktreeMayRetainRealizedResourceForOpenRecovery(t *testing.T) {
+	repo := newHerdrControlRepo(t)
+	intent := testHerdrWorktreeIntent(repo, "425", 426, "reopen")
+	intent.Status = HerdrIntentIssued
+	intent.Resource = HerdrResource{
+		WorkspaceID: "w2", Label: intent.WorkspaceLabel,
+		PaneID: "w2:p1", TerminalID: "term-2",
+		CurrentPath: intent.WorktreePath,
+		RepoKey:     filepath.Join(repo, ".git"), RepoRoot: repo,
+	}
+	if err := validateHerdrIntent(intent); err != nil {
+		t.Fatalf("issued worktree open intent: %v", err)
+	}
+
+	coordinator := testHerdrCoordinatorIntent(repo, "425")
+	coordinator.Status = HerdrIntentIssued
+	coordinator.Resource = testHerdrCoordinatorResource(repo)
+	if err := validateHerdrIntent(coordinator); err == nil ||
+		!strings.Contains(err.Error(), "resource before realization") {
+		t.Fatalf("issued coordinator resource error = %v", err)
+	}
+}
+
 func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, repo)
 	if err != nil {
