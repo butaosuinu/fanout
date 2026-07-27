@@ -1,11 +1,13 @@
 package state
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -48,6 +50,37 @@ func TestHerdrControlIsSharedAcrossLinkedWorktrees(t *testing.T) {
 	}
 	if repoPath != siblingPath {
 		t.Fatalf("control paths differ:\nrepo: %s\nsibling: %s", repoPath, siblingPath)
+	}
+}
+
+func TestProjectStateLockSerializesHerdrControlWriter(t *testing.T) {
+	repo := newHerdrControlRepo(t)
+	project, err := LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlPath, err := HerdrControlPath(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contender, err := os.OpenFile(controlPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = contender.Close() }()
+
+	err = syscall.Flock(int(contender.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+		t.Fatalf("Herdr control lock while project state is locked = %v, want would block", err)
+	}
+	if err := project.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(contender.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("Herdr control lock after project unlock: %v", err)
+	}
+	if err := syscall.Flock(int(contender.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatalf("unlock contender: %v", err)
 	}
 }
 

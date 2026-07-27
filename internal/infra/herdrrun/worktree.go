@@ -47,6 +47,12 @@ type WorkspaceObservation struct {
 	CWD         string
 }
 
+type OwnedWorktreeRoute struct {
+	GitCommonDir string
+	Session      string
+	SocketPath   string
+}
+
 type WorktreeMutationRequest struct {
 	Kind        WorktreeMutationKind
 	Coordinator WorkspaceObservation
@@ -156,6 +162,24 @@ func (s *OwnedSession) ObserveWorkspaces(ctx context.Context) ([]WorkspaceObserv
 	return s.backend.observeOwnedWorkspaces(ctx, admission)
 }
 
+// WorktreeRoute returns the repository and route sealed by the current owned
+// admission. Realization persists only this binding.
+func (s *OwnedSession) WorktreeRoute(ctx context.Context) (OwnedWorktreeRoute, error) {
+	if s == nil || s.backend == nil {
+		return OwnedWorktreeRoute{}, fmt.Errorf("herdr owned session is nil")
+	}
+	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	if err != nil {
+		return OwnedWorktreeRoute{}, err
+	}
+	defer unlockPrivateFile(lock)
+	return OwnedWorktreeRoute{
+		GitCommonDir: admission.marker.GitCommonDir,
+		Session:      admission.marker.Session,
+		SocketPath:   admission.marker.SocketPath,
+	}, nil
+}
+
 // MutateWorktree issues one workspace/worktree mutation after rechecking the
 // owned session, plugin policy, coordinator, Git ref, and checkout path under
 // the owned-operation lock.
@@ -174,6 +198,9 @@ func (s *OwnedSession) MutateWorktree(
 		return WorktreeMutationResult{}, admissionErr
 	}
 	defer unlockPrivateFile(lock)
+	if admission.marker.GitCommonDir != req.SourceRepoKey {
+		return WorktreeMutationResult{}, fmt.Errorf("herdr mutation source repository does not match owned session")
+	}
 	probed, probeErr := s.backend.probeOwned(ctx, admission)
 	if probeErr != nil {
 		return WorktreeMutationResult{}, probeErr

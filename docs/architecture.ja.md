@@ -117,8 +117,9 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 - **Herdr control registry は repository 共通**: linked worktree 間の Herdr
   row / intent は git common directory の `fanout/herdr-control.json` とその
   lock を使う。intent 保存から branch 予約、socket mutation、事後条件の確認
-  まで lock を保持する。発行済み mutation は再発行せず、label nonce と Git
-  事後条件を一意に確認できない場合は `manual_cleanup_required` にする。
+  まで lock を保持する。tmux agent launch も state 更新が終わるまで同じ lock
+  を保持する。発行済み mutation は再発行せず、label nonce と Git 事後条件を
+  一意に確認できない場合は `manual_cleanup_required` にする。
 - **worktree refresh は user work を壊さない**: base branch が dirty / ahead /
   diverged なら強制更新せず fail する。
 - **watch のトリガーラベルはプロンプトインジェクション境界**: issue 本文が

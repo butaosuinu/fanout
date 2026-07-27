@@ -147,6 +147,22 @@ func LockHerdrControl(projectRoot string) (*LockedHerdrControl, error) {
 	if pathErr != nil {
 		return nil, pathErr
 	}
+	file, openErr := lockHerdrControlPath(path)
+	if openErr != nil {
+		return nil, openErr
+	}
+	store, err := loadHerdrControl(path)
+	if err != nil {
+		// The load error is authoritative while the private lock is unwound.
+		_ = unlockStateFile(file)
+		return nil, err
+	}
+	return &LockedHerdrControl{path: path, file: file, HerdrControlStore: store}, nil
+}
+
+func lockHerdrControlPath(path string) (*os.File, error) {
+	// This Git-owned file is a cooperative state lock, not a mutation authority;
+	// Herdr's separate private namespace gate owns that security boundary.
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create Herdr control directory: %w", err)
 	}
@@ -159,27 +175,16 @@ func LockHerdrControl(projectRoot string) (*LockedHerdrControl, error) {
 		_ = file.Close() // The flock error is authoritative.
 		return nil, fmt.Errorf("lock Herdr control %s: %w", lockPath, err)
 	}
-	store, err := loadHerdrControl(path)
-	if err != nil {
-		// The load error is authoritative while the private lock is unwound.
-		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-		_ = file.Close()
-		return nil, err
-	}
-	return &LockedHerdrControl{path: path, file: file, HerdrControlStore: store}, nil
+	return file, nil
 }
 
 func (l *LockedHerdrControl) Unlock() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
-	unlockErr := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
-	closeErr := l.file.Close()
+	unlockErr := unlockStateFile(l.file)
 	l.file = nil
-	if unlockErr != nil {
-		return unlockErr
-	}
-	return closeErr
+	return unlockErr
 }
 
 func (l *LockedHerdrControl) Save() error {

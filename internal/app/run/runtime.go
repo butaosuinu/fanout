@@ -146,7 +146,7 @@ func LoadState(dryRun bool, projectRoot string, lg *log.Logger) (state.Store, *s
 		lg.Err("prepare local git exclude: %v", err)
 		return state.Store{}, nil, exitcode.Env
 	}
-	locked, err := state.LockProject(projectRoot)
+	locked, err := state.LockProjectForLaunch(projectRoot)
 	if err != nil {
 		lg.Err("%v", err)
 		return state.Store{}, nil, exitcode.Env

@@ -28,6 +28,7 @@ var (
 )
 
 type HerdrWorktreeRuntime interface {
+	WorktreeRoute(context.Context) (herdrrun.OwnedWorktreeRoute, error)
 	VerifyWorktreeSetupPolicy(context.Context) error
 	ObserveWorkspaces(context.Context) ([]herdrrun.WorkspaceObservation, error)
 	MutateWorktree(
@@ -112,6 +113,15 @@ func RealizeHerdrCoordinator(
 	}
 	if identity.RepoKey != projectIdentity.RepoKey {
 		return result, fmt.Errorf("herdr coordinator roots belong to different repositories")
+	}
+	if routeErr := verifyHerdrRealizeRoute(
+		ctx,
+		runtime,
+		identity.RepoKey,
+		req.HerdrSession,
+		req.SocketPath,
+	); routeErr != nil {
+		return result, routeErr
 	}
 	cwd, cwdErr := filepath.EvalSymlinks(req.CWD)
 	if cwdErr != nil {
@@ -259,6 +269,15 @@ func RealizeHerdrWorktree(
 	}
 	if source.RepoKey != project.RepoKey {
 		return result, fmt.Errorf("herdr project and source roots belong to different repositories")
+	}
+	if routeErr := verifyHerdrRealizeRoute(
+		ctx,
+		runtime,
+		source.RepoKey,
+		req.HerdrSession,
+		req.SocketPath,
+	); routeErr != nil {
+		return result, routeErr
 	}
 	intentID, intentIDErr := state.HerdrWorktreeIntentID(req.Parent, req.IssueNum, req.TaskID)
 	if intentIDErr != nil {
@@ -438,6 +457,21 @@ func RealizeHerdrWorktree(
 		return result, markHerdrIntentManual(locked, intent, finalizeErr)
 	}
 	return worktreeDeferred(intent)
+}
+
+func verifyHerdrRealizeRoute(
+	ctx context.Context,
+	runtime HerdrWorktreeRuntime,
+	repoKey, session, socketPath string,
+) error {
+	route, err := runtime.WorktreeRoute(ctx)
+	if err != nil {
+		return fmt.Errorf("verify Herdr owned worktree route: %w", err)
+	}
+	if route.GitCommonDir != repoKey || route.Session != session || route.SocketPath != socketPath {
+		return fmt.Errorf("herdr realization route does not match owned session")
+	}
+	return nil
 }
 
 func ensureHerdrBranchReservation(

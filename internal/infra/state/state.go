@@ -110,12 +110,15 @@ func (p Pane) IsAttachedAgent() bool {
 }
 
 // LockedStore holds .fanout/state.json.lock while fanout plans and launches.
-// The deliberately coarse lock serializes parallel fanout invocations so the
+// LockProjectForLaunch also holds the repository-common Herdr control lock,
+// keeping backend intent rechecks stable through the final state update. The
+// deliberately coarse locks serialize parallel fanout invocations so the
 // (parent, issueNum) idempotency check and state update happen in one critical
 // section instead of racing through independent read-modify-write cycles.
 type LockedStore struct {
-	path string
-	file *os.File
+	path             string
+	file             *os.File
+	herdrControlFile *os.File
 	Store
 }
 
@@ -147,6 +150,24 @@ func LockProject(projectRoot string) (*LockedStore, error) {
 	return Lock(Path(projectRoot))
 }
 
+func LockProjectForLaunch(projectRoot string) (*LockedStore, error) {
+	controlPath, err := HerdrControlPath(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	herdrControlFile, err := lockHerdrControlPath(controlPath)
+	if err != nil {
+		return nil, err
+	}
+	locked, err := Lock(Path(projectRoot))
+	if err != nil {
+		_ = unlockStateFile(herdrControlFile)
+		return nil, err
+	}
+	locked.herdrControlFile = herdrControlFile
+	return locked, nil
+}
+
 func Lock(path string) (*LockedStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create fanout state directory: %w", err)
@@ -175,9 +196,22 @@ func (l *LockedStore) Unlock() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
-	err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
-	closeErr := l.file.Close()
+	stateErr := unlockStateFile(l.file)
 	l.file = nil
+	controlErr := unlockStateFile(l.herdrControlFile)
+	l.herdrControlFile = nil
+	if stateErr != nil {
+		return stateErr
+	}
+	return controlErr
+}
+
+func unlockStateFile(file *os.File) error {
+	if file == nil {
+		return nil
+	}
+	err := syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	closeErr := file.Close()
 	if err != nil {
 		return err
 	}

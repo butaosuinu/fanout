@@ -18,9 +18,16 @@ import (
 type fakeHerdrRealizeRuntime struct {
 	workspaces []herdrrun.WorkspaceObservation
 	mutations  []herdrrun.WorktreeMutationRequest
+	route      herdrrun.OwnedWorktreeRoute
 	policyErr  error
 	observeErr error
 	mutate     func(herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error)
+}
+
+func (f *fakeHerdrRealizeRuntime) WorktreeRoute(
+	context.Context,
+) (herdrrun.OwnedWorktreeRoute, error) {
+	return f.route, nil
 }
 
 func (f *fakeHerdrRealizeRuntime) VerifyWorktreeSetupPolicy(context.Context) error {
@@ -74,6 +81,11 @@ func TestRealizeHerdrWorktreePersistsIntentAndSkipsReplay(t *testing.T) {
 	}
 	if replayed.Intent.ID != result.Intent.ID || len(runtime.mutations) != 2 {
 		t.Fatalf("replay = %+v, mutations = %d; request was reissued", replayed, len(runtime.mutations))
+	}
+	runtime.route.GitCommonDir = filepath.Join(repo, "foreign.git")
+	_, err = RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if err == nil {
+		t.Fatal("foreign owned-session route unexpectedly accepted")
 	}
 }
 
@@ -339,6 +351,15 @@ func installSuccessfulHerdrMutations(
 	runtime *fakeHerdrRealizeRuntime,
 ) {
 	t.Helper()
+	identity, err := worktree.ResolveHerdrRepoIdentity(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.route = herdrrun.OwnedWorktreeRoute{
+		GitCommonDir: identity.RepoKey,
+		Session:      "fanout-test",
+		SocketPath:   "/private/tmp/fanout-test/herdr.sock",
+	}
 	nextWorkspace := 2
 	runtime.mutate = func(req herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error) {
 		if req.Kind == herdrrun.WorkspaceCreate {
@@ -400,9 +421,10 @@ func testHerdrWorktreeRequest(repo, slug string, issueNum int) HerdrWorktreeRequ
 
 func deterministicHerdrRealizeHooks() HerdrRealizeHooks {
 	next := 0
+	now := time.Now().UTC().Add(time.Hour)
 	return HerdrRealizeHooks{
 		Now: func() time.Time {
-			return time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
+			return now
 		},
 		RandomToken: func() (string, error) {
 			next++
