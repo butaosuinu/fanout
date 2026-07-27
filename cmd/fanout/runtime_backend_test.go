@@ -343,6 +343,37 @@ func TestSharedHerdrPlanIntentsRemainOwnerWorktreeLocal(t *testing.T) {
 	}
 }
 
+func TestSharedHerdrIssueSourcedPlanIntentUsesActualParentAcrossWorktrees(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "issue-plan-herdr-sibling", sibling, "HEAD")
+	planDir := filepath.Join(repo, ".fanout", "plans")
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(planDir, "demo.json"),
+		[]byte(`{"version":1,"plan":{"slug":"demo","title":"Demo","source":"issue #425"},"tasks":[]}`),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	writeHerdrCoordinatorIntent(t, repo, "plan:demo")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("FANOUT_BACKEND", "")
+
+	store, err := state.LoadProject(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resolveLaunchBackend(&cliflags.Config{ParentRef: "425"}, sibling, store, nil)
+	if !errors.Is(err, backend.ErrUnsupported) {
+		t.Fatalf("issue-sourced Herdr plan binding error = %v, want Herdr ownership", err)
+	}
+}
+
 func TestBackendSelectionVerifierRechecksSharedHerdrProvisionalIntent(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

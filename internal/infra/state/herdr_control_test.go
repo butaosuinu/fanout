@@ -109,11 +109,11 @@ func TestHerdrControlBindingsIncludeRowsAndEveryIntentStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows := store.RowBindings(repo)
+	rows := store.RowBindings(repo, nil)
 	if len(rows) != 1 || rows[0] != (backend.Binding{Parent: "425", Backend: backend.Herdr}) {
 		t.Fatalf("row bindings = %#v", rows)
 	}
-	intents := store.ProvisionalBindings(repo)
+	intents := store.ProvisionalBindings(repo, nil)
 	if len(intents) != len(statuses) {
 		t.Fatalf("intent bindings = %#v, want %d", intents, len(statuses))
 	}
@@ -137,11 +137,11 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 	if err := validateHerdrControl(intents); err != nil {
 		t.Fatal(err)
 	}
-	if got := intents.ProvisionalBindings("/repo/one"); len(got) != 1 ||
+	if got := intents.ProvisionalBindings("/repo/one", nil); len(got) != 1 ||
 		got[0].Parent != "plan:demo" {
 		t.Fatalf("first plan intent bindings = %#v", got)
 	}
-	if got := intents.ProvisionalBindings("/repo/two"); len(got) != 1 ||
+	if got := intents.ProvisionalBindings("/repo/two", nil); len(got) != 1 ||
 		got[0].Parent != "plan:demo" {
 		t.Fatalf("second plan intent bindings = %#v", got)
 	}
@@ -160,13 +160,30 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 	if err := validateHerdrControl(rows); err != nil {
 		t.Fatal(err)
 	}
-	if got := rows.RowBindings("/repo/one"); len(got) != 1 ||
+	if got := rows.RowBindings("/repo/one", nil); len(got) != 1 ||
 		got[0].Parent != "plan:demo" {
 		t.Fatalf("first plan row bindings = %#v", got)
 	}
-	if got := rows.RowBindings("/repo/two"); len(got) != 1 ||
+	if got := rows.RowBindings("/repo/two", nil); len(got) != 1 ||
 		got[0].Parent != "plan:demo" {
 		t.Fatalf("second plan row bindings = %#v", got)
+	}
+}
+
+func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testing.T) {
+	intent := testHerdrCoordinatorIntent("/repo/one", "plan:demo")
+	store := emptyHerdrControl()
+	store.Intents = append(store.Intents, intent)
+	resolvePlan := func(ownerProjectRoot, planSlug string) string {
+		if ownerProjectRoot == "/repo/one" && planSlug == "demo" {
+			return "425"
+		}
+		return "plan:" + planSlug
+	}
+
+	got := store.ProvisionalBindings("/repo/two", resolvePlan)
+	if len(got) != 1 || got[0] != (backend.Binding{Parent: "425", Backend: backend.Herdr}) {
+		t.Fatalf("issue-sourced plan bindings = %#v", got)
 	}
 }
 

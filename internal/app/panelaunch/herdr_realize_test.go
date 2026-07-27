@@ -34,7 +34,10 @@ func (f *fakeHerdrRealizeRuntime) VerifyWorktreeSetupPolicy(context.Context) err
 	return f.policyErr
 }
 
-func (f *fakeHerdrRealizeRuntime) ObserveWorkspaces(context.Context) ([]herdrrun.WorkspaceObservation, error) {
+func (f *fakeHerdrRealizeRuntime) ObserveWorkspaces(ctx context.Context) ([]herdrrun.WorkspaceObservation, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return append([]herdrrun.WorkspaceObservation(nil), f.workspaces...), f.observeErr
 }
 
@@ -274,6 +277,56 @@ func TestRealizeHerdrWorktreeRecoversExpiredIssuedIntent(t *testing.T) {
 	}
 	if len(runtime.mutations) != mutationsBefore {
 		t.Fatal("expired issued intent reissued the Herdr mutation")
+	}
+}
+
+func TestRealizeHerdrWorktreePreservesIssuedIntentWhenRecoveryContextIsCanceled(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	successfulMutate := runtime.mutate
+	ctx, cancel := context.WithCancel(context.Background())
+	runtime.mutate = func(req herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error) {
+		result, err := successfulMutate(req)
+		if req.Kind == herdrrun.WorktreeCreate {
+			cancel()
+			return result, context.DeadlineExceeded
+		}
+		return result, err
+	}
+	req := testHerdrWorktreeRequest(repo, "canceled-recovery", 433)
+	result, err := realizeHerdrWorktree(ctx, req, runtime, hooks)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled recovery result = %+v, err=%v", result, err)
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := control.FindIntent(intentID)
+	if !found || intent.Status != state.HerdrIntentIssued {
+		t.Fatalf("canceled recovery intent = (%+v,%t)", intent, found)
+	}
+
+	runtime.mutate = successfulMutate
+	mutationsBefore := len(runtime.mutations)
+	recovered, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("fresh recovery error = %v", err)
+	}
+	if recovered.Intent.Status != state.HerdrIntentRealized ||
+		recovered.Intent.Resource.WorkspaceID == "" {
+		t.Fatalf("fresh recovery result = %+v", recovered)
+	}
+	if len(runtime.mutations) != mutationsBefore {
+		t.Fatal("fresh recovery reissued the Herdr mutation")
 	}
 }
 

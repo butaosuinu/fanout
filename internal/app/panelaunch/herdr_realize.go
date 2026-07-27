@@ -240,7 +240,9 @@ func RealizeHerdrCoordinator(
 		NoFocus:        true,
 	})
 	if mutationErr != nil {
-		return recoverHerdrCoordinator(operationCtx, runtime, locked, intent, mutationErr)
+		recoveryCtx, recoveryCancel := herdrRecoveryContext(ctx, operationCtx, intent)
+		defer recoveryCancel()
+		return recoverHerdrCoordinator(recoveryCtx, runtime, locked, intent, mutationErr)
 	}
 	if err := validateCoordinatorObservation(intent, mutation.WorkspaceObservation); err != nil {
 		return result, markHerdrIntentManual(locked, intent, err)
@@ -486,7 +488,9 @@ func RealizeHerdrWorktree(
 		NoFocus:         true,
 	})
 	if mutationErr != nil {
-		return recoverHerdrWorktree(operationCtx, runtime, locked, req, source, intent, mutationErr)
+		recoveryCtx, recoveryCancel := herdrRecoveryContext(ctx, operationCtx, intent)
+		defer recoveryCancel()
+		return recoverHerdrWorktree(recoveryCtx, runtime, locked, req, source, intent, mutationErr)
 	}
 	if finalizeErr := finalizeHerdrWorktree(locked, req, source, &intent, mutation.WorkspaceObservation); finalizeErr != nil {
 		return result, markHerdrIntentManual(locked, intent, finalizeErr)
@@ -623,6 +627,13 @@ func recoverHerdrCoordinator(
 ) (HerdrCoordinatorResult, error) {
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return HerdrCoordinatorResult{}, errors.Join(
+				mutationErr,
+				fmt.Errorf("observe Herdr coordinator recovery: %w", err),
+				contextErr,
+			)
+		}
 		return HerdrCoordinatorResult{}, markHerdrIntentManual(
 			locked,
 			intent,
@@ -671,6 +682,13 @@ func recoverHerdrWorktree(
 ) (HerdrWorktreeResult, error) {
 	workspaces, observeErr := runtime.ObserveWorkspaces(ctx)
 	if observeErr != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return HerdrWorktreeResult{}, errors.Join(
+				mutationErr,
+				fmt.Errorf("observe Herdr worktree recovery: %w", observeErr),
+				contextErr,
+			)
+		}
 		return HerdrWorktreeResult{}, markHerdrIntentManual(
 			locked,
 			intent,
@@ -1181,6 +1199,17 @@ func herdrIntentContext(
 		return nil, nil, err
 	}
 	return ctx, cancel, nil
+}
+
+func herdrRecoveryContext(
+	parent context.Context,
+	operation context.Context,
+	intent state.HerdrIntent,
+) (context.Context, context.CancelFunc) {
+	if operation.Err() == nil {
+		return operation, func() {}
+	}
+	return context.WithTimeout(parent, time.Duration(intent.TimeoutMS)*time.Millisecond)
 }
 
 func newHerdrWorkspaceLabel(

@@ -118,6 +118,8 @@ type LockedHerdrControl struct {
 	HerdrControlStore
 }
 
+type HerdrPlanBindingResolver func(ownerProjectRoot, planSlug string) string
+
 // HerdrControlPath returns the repository-common registry path shared by every
 // linked worktree.
 func HerdrControlPath(projectRoot string) (string, error) {
@@ -252,31 +254,62 @@ func (s *HerdrControlStore) UpsertRow(row HerdrRow) {
 	s.Rows = append(s.Rows, row)
 }
 
-func (s HerdrControlStore) RowBindings(ownerProjectRoot string) []backend.Binding {
+func (s HerdrControlStore) RowBindings(
+	ownerProjectRoot string,
+	resolvePlan HerdrPlanBindingResolver,
+) []backend.Binding {
 	bindings := make([]backend.Binding, 0, len(s.Rows))
 	for _, row := range s.Rows {
-		if !herdrBindingBelongsToProject(row.Parent, row.OwnerProjectRoot, ownerProjectRoot) {
+		parent, ok := herdrBindingParent(
+			row.Parent,
+			row.OwnerProjectRoot,
+			ownerProjectRoot,
+			resolvePlan,
+		)
+		if !ok {
 			continue
 		}
-		bindings = append(bindings, backend.Binding{Parent: row.Parent, Backend: row.Backend})
+		bindings = append(bindings, backend.Binding{Parent: parent, Backend: row.Backend})
 	}
 	return bindings
 }
 
-func (s HerdrControlStore) ProvisionalBindings(ownerProjectRoot string) []backend.Binding {
+func (s HerdrControlStore) ProvisionalBindings(
+	ownerProjectRoot string,
+	resolvePlan HerdrPlanBindingResolver,
+) []backend.Binding {
 	bindings := make([]backend.Binding, 0, len(s.Intents))
 	for _, intent := range s.Intents {
-		if !herdrBindingBelongsToProject(intent.Parent, intent.OwnerProjectRoot, ownerProjectRoot) {
+		parent, ok := herdrBindingParent(
+			intent.Parent,
+			intent.OwnerProjectRoot,
+			ownerProjectRoot,
+			resolvePlan,
+		)
+		if !ok {
 			continue
 		}
-		bindings = append(bindings, backend.Binding{Parent: intent.Parent, Backend: intent.Backend})
+		bindings = append(bindings, backend.Binding{Parent: parent, Backend: intent.Backend})
 	}
 	return bindings
 }
 
-func herdrBindingBelongsToProject(parent, storedRoot, projectRoot string) bool {
-	return !strings.HasPrefix(parentref.Canon(strings.TrimSpace(parent)), "plan:") ||
-		storedRoot == filepath.Clean(projectRoot)
+func herdrBindingParent(
+	parent, storedRoot, projectRoot string,
+	resolvePlan HerdrPlanBindingResolver,
+) (string, bool) {
+	parent = parentref.Canon(strings.TrimSpace(parent))
+	planSlug, isPlan := strings.CutPrefix(parent, "plan:")
+	if !isPlan {
+		return parent, true
+	}
+	if resolvePlan != nil {
+		resolved := parentref.Canon(strings.TrimSpace(resolvePlan(storedRoot, planSlug)))
+		if resolved != "" && !strings.HasPrefix(resolved, "plan:") {
+			return resolved, true
+		}
+	}
+	return parent, storedRoot == filepath.Clean(projectRoot)
 }
 
 func HerdrOwnerProjectRoot(parent, projectRoot string) (string, error) {
