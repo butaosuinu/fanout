@@ -107,6 +107,14 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 	cfg.SpecPath = snapshot.Path()
 	cfg.SpecSnapshot = &snapshot
 	spec := snapshot.Spec()
+	var specCopy planSpecCopyTarget
+	if !cfg.DryRun {
+		specCopy, err = preparePlanSpecCopy(snapshot, rt.Info.ProjectRoot, spec.Plan.Slug)
+		if err != nil {
+			lg.Err("prepare plan spec copy: %v", err)
+			return TaskExecutionResult{}, exitcode.Env
+		}
+	}
 	cfg.BaseBranch, err = resolvePlanBaseBranch(cfg, spec, rt.Info.ProjectRoot)
 	if err != nil {
 		lg.Err("%v", err)
@@ -141,7 +149,7 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 		if cfg.DryRun {
 			return exitcode.OK
 		}
-		if err := copyPlanSpec(snapshot.Bytes(), rt.Info.ProjectRoot, spec.Plan.Slug); err != nil {
+		if err := copyPlanSpec(snapshot.Bytes(), specCopy); err != nil {
 			lg.Err("copy plan spec: %v", err)
 			return exitcode.Env
 		}
@@ -326,27 +334,122 @@ func planRerunSpecArg(cfg PlanCommandConfig, spec planspec.Spec) string {
 	return spec.Plan.Slug
 }
 
-func copyPlanSpec(data []byte, projectRoot, slug string) error {
+type planSpecCopyTarget struct {
+	path  string
+	found bool
+	data  []byte
+	mode  os.FileMode
+}
+
+func preparePlanSpecCopy(
+	snapshot planspec.Snapshot,
+	projectRoot, slug string,
+) (planSpecCopyTarget, error) {
 	dst := filepath.Join(projectRoot, ".fanout", "plans", slug+".json")
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
+	target := planSpecCopyTarget{path: dst}
 	current, err := os.ReadFile(dst)
-	switch {
-	case err == nil && bytes.Equal(current, data):
-		return nil
-	case err == nil:
-		return fmt.Errorf("plan spec destination %s has changed; refusing to overwrite it", dst)
-	case !errors.Is(err, os.ErrNotExist):
+	if errors.Is(err, os.ErrNotExist) {
+		return target, nil
+	}
+	if err != nil {
+		return planSpecCopyTarget{}, err
+	}
+	info, err := os.Stat(dst)
+	if err != nil {
+		return planSpecCopyTarget{}, err
+	}
+	target.found = true
+	target.data = current
+	target.mode = info.Mode().Perm()
+	source, err := samePlanSpecFile(snapshot.Path(), dst)
+	if err != nil {
+		return planSpecCopyTarget{}, err
+	}
+	if source && !bytes.Equal(current, snapshot.Bytes()) {
+		return planSpecCopyTarget{}, fmt.Errorf(
+			"plan spec source %s changed after snapshot; refusing to publish stale bytes",
+			dst,
+		)
+	}
+	return target, nil
+}
+
+func copyPlanSpec(data []byte, target planSpecCopyTarget) error {
+	if err := os.MkdirAll(filepath.Dir(target.path), 0o755); err != nil {
 		return err
 	}
-	if err := atomicfs.WriteFileExclusive(dst, data, 0o644); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("plan spec destination %s appeared after preflight; refusing to overwrite it", dst)
+	current, err := os.ReadFile(target.path)
+	if !target.found {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+		case err != nil:
+			return err
+		default:
+			return fmt.Errorf(
+				"plan spec destination %s appeared after preflight; refusing to overwrite it",
+				target.path,
+			)
+		}
+		if err := atomicfs.WriteFileExclusive(target.path, data, 0o644); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return fmt.Errorf(
+					"plan spec destination %s appeared after preflight; refusing to overwrite it",
+					target.path,
+				)
+			}
+			return err
+		}
+		return nil
+	}
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf(
+				"plan spec destination %s disappeared after preflight; refusing to overwrite it",
+				target.path,
+			)
 		}
 		return err
 	}
-	return nil
+	info, err := os.Stat(target.path)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(current, target.data) || info.Mode().Perm() != target.mode {
+		return fmt.Errorf(
+			"plan spec destination %s changed after preflight; refusing to overwrite it",
+			target.path,
+		)
+	}
+	if bytes.Equal(current, data) {
+		return nil
+	}
+	return atomicfs.WriteFile(target.path, data, target.mode)
+}
+
+func samePlanSpecFile(a, b string) (bool, error) {
+	absA, err := filepath.Abs(a)
+	if err != nil {
+		return false, err
+	}
+	absB, err := filepath.Abs(b)
+	if err != nil {
+		return false, err
+	}
+	if filepath.Clean(absA) == filepath.Clean(absB) {
+		return true, nil
+	}
+	infoA, err := os.Stat(absA)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	infoB, err := os.Stat(absB)
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(infoA, infoB), nil
 }
 
 // ValidatePlanExecutionNames rejects duplicate final slugs / branches across

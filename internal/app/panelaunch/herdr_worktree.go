@@ -89,7 +89,7 @@ func RealizeHerdrWorktree(
 	}
 	hooks = normalizeHerdrWorktreeHooks(hooks)
 
-	sourceRoot, err := physicalPath(req.SourceRoot)
+	sourceIdentity, err := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
 	if err != nil {
 		return HerdrWorktreeResult{}, err
 	}
@@ -97,7 +97,10 @@ func RealizeHerdrWorktree(
 		req.Parent,
 		req.IssueNum,
 		req.TaskID,
-		sourceRoot,
+		sourceIdentity.RepoRoot,
+		sourceIdentity.GitDir,
+		sourceIdentity.GitDirDevice,
+		sourceIdentity.GitDirInode,
 		req.PlanSpecIdentity,
 	)
 	if err != nil {
@@ -188,13 +191,16 @@ func planFreshHerdrWorktree(
 		OperationState: state.HerdrOperationActive,
 		Phase:          state.HerdrPhaseBranchPlanned,
 
-		SourceRootPhysical: repoIdentity.RepoRoot,
-		PlanSpecIdentity:   req.PlanSpecIdentity,
-		Slug:               req.Slug,
-		BranchName:         req.BranchName,
-		FullBranchRef:      fullBranchRef,
-		WorktreePath:       filepath.Clean(req.WorktreePath),
-		LineageID:          lineageID,
+		SourceRootPhysical:   repoIdentity.RepoRoot,
+		SourceGitDirPhysical: repoIdentity.GitDir,
+		SourceGitDirDevice:   repoIdentity.GitDirDevice,
+		SourceGitDirInode:    repoIdentity.GitDirInode,
+		PlanSpecIdentity:     req.PlanSpecIdentity,
+		Slug:                 req.Slug,
+		BranchName:           req.BranchName,
+		FullBranchRef:        fullBranchRef,
+		WorktreePath:         filepath.Clean(req.WorktreePath),
+		LineageID:            lineageID,
 
 		ResolvedBaseRef:     base.ResolvedRef,
 		ResolvedBaseName:    base.ResolvedName,
@@ -240,6 +246,9 @@ func planFreshHerdrWorktree(
 	coordinatorID, err := state.HerdrCoordinatorIntentID(
 		req.Parent,
 		repoIdentity.RepoRoot,
+		repoIdentity.GitDir,
+		repoIdentity.GitDirDevice,
+		repoIdentity.GitDirInode,
 		req.PlanSpecIdentity,
 	)
 	if err != nil {
@@ -252,6 +261,9 @@ func planFreshHerdrWorktree(
 	binding, err := coordinatorBindingForChild(
 		req.Parent,
 		repoIdentity.RepoRoot,
+		repoIdentity.GitDir,
+		repoIdentity.GitDirDevice,
+		repoIdentity.GitDirInode,
 		req.PlanSpecIdentity,
 		repoIdentity.RepoKey,
 		repoIdentity.RepoRoot,
@@ -265,6 +277,20 @@ func planFreshHerdrWorktree(
 		return state.HerdrLaunchIntent{}, err
 	}
 	intent.Coordinator = &binding
+	for _, existing := range locked.Intents {
+		if existing.Operation != "child-worktree" ||
+			(existing.OperationState != state.HerdrOperationActive &&
+				existing.OperationState != state.HerdrOperationManualCleanupRequired) {
+			continue
+		}
+		if existing.FullBranchRef == fullBranchRef ||
+			filepath.Clean(existing.WorktreePath) == filepath.Clean(req.WorktreePath) {
+			return state.HerdrLaunchIntent{}, fmt.Errorf(
+				"herdr branch/path is already reserved by intent %s",
+				existing.IntentID,
+			)
+		}
+	}
 	for _, lineage := range locked.Lineages {
 		if lineage.FullBranchRef == fullBranchRef || filepath.Clean(lineage.WorktreePath) == filepath.Clean(req.WorktreePath) {
 			return state.HerdrLaunchIntent{}, fmt.Errorf("herdr branch/path is already owned by lineage %s", lineage.LineageID)
@@ -901,6 +927,9 @@ func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.Her
 		req.IssueNum,
 		req.TaskID,
 		repoIdentity.RepoRoot,
+		repoIdentity.GitDir,
+		repoIdentity.GitDirDevice,
+		repoIdentity.GitDirInode,
 		req.PlanSpecIdentity,
 	)
 	if err != nil {
@@ -909,6 +938,9 @@ func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.Her
 	coordinatorID, err := state.HerdrCoordinatorIntentID(
 		req.Parent,
 		repoIdentity.RepoRoot,
+		repoIdentity.GitDir,
+		repoIdentity.GitDirDevice,
+		repoIdentity.GitDirInode,
 		req.PlanSpecIdentity,
 	)
 	if err != nil {
@@ -921,6 +953,9 @@ func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.Her
 		intent.IssueNum != req.IssueNum ||
 		intent.TaskID != req.TaskID ||
 		intent.SourceRootPhysical != repoIdentity.RepoRoot ||
+		intent.SourceGitDirPhysical != repoIdentity.GitDir ||
+		intent.SourceGitDirDevice != repoIdentity.GitDirDevice ||
+		intent.SourceGitDirInode != repoIdentity.GitDirInode ||
 		intent.PlanSpecIdentity != req.PlanSpecIdentity ||
 		intent.Slug != req.Slug ||
 		intent.BranchName != req.BranchName ||
@@ -948,6 +983,9 @@ func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.Her
 	binding, err := coordinatorBindingForChild(
 		req.Parent,
 		repoIdentity.RepoRoot,
+		repoIdentity.GitDir,
+		repoIdentity.GitDirDevice,
+		repoIdentity.GitDirInode,
 		req.PlanSpecIdentity,
 		repoIdentity.RepoKey,
 		repoIdentity.RepoRoot,
@@ -1001,7 +1039,9 @@ func validateSavedHerdrWorktreeMutationEvidence(intent state.HerdrLaunchIntent) 
 
 func coordinatorBindingForChild(
 	parent string,
-	sourceRoot, planSpecIdentity, repoKey, repoRoot string,
+	sourceRoot, sourceGitDir string,
+	sourceGitDirDevice, sourceGitDirInode uint64,
+	planSpecIdentity, repoKey, repoRoot string,
 	herdrSession, herdrSocketPath, intentID, workspaceID string,
 	coordinator state.HerdrLaunchIntent,
 ) (state.HerdrCoordinatorBinding, error) {
@@ -1014,6 +1054,9 @@ func coordinatorBindingForChild(
 		coordinator.IssueNum != 0 ||
 		coordinator.TaskID != "" ||
 		coordinator.SourceRootPhysical != sourceRoot ||
+		coordinator.SourceGitDirPhysical != sourceGitDir ||
+		coordinator.SourceGitDirDevice != sourceGitDirDevice ||
+		coordinator.SourceGitDirInode != sourceGitDirInode ||
 		coordinator.PlanSpecIdentity != planSpecIdentity ||
 		coordinator.HerdrRepoKey != repoKey ||
 		coordinator.HerdrRepoRoot != repoRoot ||
@@ -1065,6 +1108,9 @@ func verifyHerdrCoordinatorBinding(
 	binding, err := coordinatorBindingForChild(
 		child.Parent,
 		child.SourceRootPhysical,
+		child.SourceGitDirPhysical,
+		child.SourceGitDirDevice,
+		child.SourceGitDirInode,
 		child.PlanSpecIdentity,
 		child.HerdrRepoKey,
 		child.HerdrRepoRoot,

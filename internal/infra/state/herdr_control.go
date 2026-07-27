@@ -80,13 +80,16 @@ type HerdrLaunchIntent struct {
 	OperationState HerdrOperationState `json:"operation_state"`
 	Phase          HerdrLaunchPhase    `json:"phase"`
 
-	SourceRootPhysical string `json:"source_root_physical"`
-	PlanSpecIdentity   string `json:"plan_spec_identity,omitempty"`
-	Slug               string `json:"slug"`
-	BranchName         string `json:"branch_name"`
-	FullBranchRef      string `json:"full_branch_ref"`
-	WorktreePath       string `json:"worktree_path"`
-	LineageID          string `json:"lineage_id"`
+	SourceRootPhysical   string `json:"source_root_physical"`
+	SourceGitDirPhysical string `json:"source_git_dir_physical"`
+	SourceGitDirDevice   uint64 `json:"source_git_dir_device"`
+	SourceGitDirInode    uint64 `json:"source_git_dir_inode"`
+	PlanSpecIdentity     string `json:"plan_spec_identity,omitempty"`
+	Slug                 string `json:"slug"`
+	BranchName           string `json:"branch_name"`
+	FullBranchRef        string `json:"full_branch_ref"`
+	WorktreePath         string `json:"worktree_path"`
+	LineageID            string `json:"lineage_id"`
 
 	ResolvedBaseRef     string `json:"resolved_base_ref"`
 	ResolvedBaseName    string `json:"resolved_base_name"`
@@ -349,9 +352,12 @@ func (s *HerdrControlStore) UpsertLineage(lineage HerdrBranchLineage) {
 }
 
 type HerdrBindingScope struct {
-	Parent             string
-	SourceRootPhysical string
-	PlanSpecIdentity   string
+	Parent               string
+	SourceRootPhysical   string
+	SourceGitDirPhysical string
+	SourceGitDirDevice   uint64
+	SourceGitDirInode    uint64
+	PlanSpecIdentity     string
 }
 
 func (s HerdrControlStore) ProvisionalBindings(scope HerdrBindingScope) ([]backend.Binding, error) {
@@ -366,6 +372,25 @@ func (s HerdrControlStore) ProvisionalBindings(scope HerdrBindingScope) ([]backe
 			continue
 		}
 		intentParent := parentref.Canon(intent.Parent)
+		if intentParent == scopeParent {
+			if strings.HasPrefix(intentParent, "plan:") {
+				if intent.SourceRootPhysical == scope.SourceRootPhysical &&
+					(intent.SourceGitDirPhysical != scope.SourceGitDirPhysical ||
+						intent.SourceGitDirDevice != scope.SourceGitDirDevice ||
+						intent.SourceGitDirInode != scope.SourceGitDirInode) {
+					return nil, fmt.Errorf(
+						"herdr source git-dir identity drift for %s in source root %s",
+						intentParent,
+						scope.SourceRootPhysical,
+					)
+				}
+			} else if intent.SourceRootPhysical != scope.SourceRootPhysical ||
+				intent.SourceGitDirPhysical != scope.SourceGitDirPhysical ||
+				intent.SourceGitDirDevice != scope.SourceGitDirDevice ||
+				intent.SourceGitDirInode != scope.SourceGitDirInode {
+				return nil, fmt.Errorf("herdr source checkout identity drift for %s", intentParent)
+			}
+		}
 		if strings.HasPrefix(intentParent, "plan:") {
 			if intent.SourceRootPhysical != scope.SourceRootPhysical {
 				continue
@@ -391,42 +416,81 @@ func (s HerdrControlStore) ProvisionalBindings(scope HerdrBindingScope) ([]backe
 func HerdrIntentID(
 	parent string,
 	issueNum int,
-	taskID, sourceRootPhysical, planSpecIdentity string,
+	taskID, sourceRootPhysical, sourceGitDirPhysical string,
+	sourceGitDirDevice, sourceGitDirInode uint64,
+	planSpecIdentity string,
 ) (string, error) {
 	parent = parentref.Canon(parent)
 	switch {
 	case parent == "":
 		return "", fmt.Errorf("herdr intent requires a parent")
 	case taskID != "":
-		if strings.TrimSpace(sourceRootPhysical) == "" || !herdrSHA256Hex.MatchString(planSpecIdentity) {
-			return "", fmt.Errorf("herdr task intent requires source root and lowercase SHA-256 planspec identity")
+		if strings.TrimSpace(sourceRootPhysical) == "" ||
+			strings.TrimSpace(sourceGitDirPhysical) == "" ||
+			sourceGitDirDevice == 0 ||
+			sourceGitDirInode == 0 ||
+			!herdrSHA256Hex.MatchString(planSpecIdentity) {
+			return "", fmt.Errorf("herdr task intent requires source root, source git dir, and lowercase SHA-256 planspec identity")
 		}
 		return "task:" +
 			tuplePart(parent) + ":" +
 			tuplePart(sourceRootPhysical) + ":" +
+			tuplePart(sourceGitDirPhysical) + ":" +
+			strconv.FormatUint(sourceGitDirDevice, 10) + ":" +
+			strconv.FormatUint(sourceGitDirInode, 10) + ":" +
 			planSpecIdentity + ":" +
 			tuplePart(taskID), nil
 	case issueNum > 0:
-		return "issue:" + strconv.Itoa(len(parent)) + ":" + parent + ":" + strconv.Itoa(issueNum), nil
+		if strings.TrimSpace(sourceRootPhysical) == "" ||
+			strings.TrimSpace(sourceGitDirPhysical) == "" ||
+			sourceGitDirDevice == 0 ||
+			sourceGitDirInode == 0 {
+			return "", fmt.Errorf("herdr issue intent requires source root and source git dir")
+		}
+		return "issue:" +
+			tuplePart(parent) + ":" +
+			strconv.Itoa(issueNum) + ":" +
+			tuplePart(sourceRootPhysical) + ":" +
+			tuplePart(sourceGitDirPhysical) + ":" +
+			strconv.FormatUint(sourceGitDirDevice, 10) + ":" +
+			strconv.FormatUint(sourceGitDirInode, 10), nil
 	default:
 		return "", fmt.Errorf("herdr intent requires an issue number or task id")
 	}
 }
 
-func HerdrCoordinatorIntentID(parent, sourceRootPhysical, planSpecIdentity string) (string, error) {
+func HerdrCoordinatorIntentID(
+	parent, sourceRootPhysical, sourceGitDirPhysical string,
+	sourceGitDirDevice, sourceGitDirInode uint64,
+	planSpecIdentity string,
+) (string, error) {
 	parent = parentref.Canon(parent)
 	if parent == "" {
 		return "", fmt.Errorf("herdr coordinator requires a parent")
 	}
-	if !strings.HasPrefix(parent, "plan:") {
-		return "coordinator-parent:" + tuplePart(parent), nil
+	if strings.TrimSpace(sourceRootPhysical) == "" ||
+		strings.TrimSpace(sourceGitDirPhysical) == "" ||
+		sourceGitDirDevice == 0 ||
+		sourceGitDirInode == 0 {
+		return "", fmt.Errorf("herdr coordinator requires source root and source git dir")
 	}
-	if strings.TrimSpace(sourceRootPhysical) == "" || !herdrSHA256Hex.MatchString(planSpecIdentity) {
-		return "", fmt.Errorf("herdr plan coordinator requires source root and lowercase SHA-256 planspec identity")
+	if !strings.HasPrefix(parent, "plan:") {
+		return "coordinator-parent:" +
+			tuplePart(parent) + ":" +
+			tuplePart(sourceRootPhysical) + ":" +
+			tuplePart(sourceGitDirPhysical) + ":" +
+			strconv.FormatUint(sourceGitDirDevice, 10) + ":" +
+			strconv.FormatUint(sourceGitDirInode, 10), nil
+	}
+	if !herdrSHA256Hex.MatchString(planSpecIdentity) {
+		return "", fmt.Errorf("herdr plan coordinator requires lowercase SHA-256 planspec identity")
 	}
 	return "coordinator-plan:" +
 		tuplePart(parent) + ":" +
 		tuplePart(sourceRootPhysical) + ":" +
+		tuplePart(sourceGitDirPhysical) + ":" +
+		strconv.FormatUint(sourceGitDirDevice, 10) + ":" +
+		strconv.FormatUint(sourceGitDirInode, 10) + ":" +
 		planSpecIdentity, nil
 }
 
@@ -610,6 +674,8 @@ func (s *HerdrControlStore) normalize() {
 
 func validateHerdrControlStore(store HerdrControlStore) error {
 	intentIDs := make(map[string]bool, len(store.Intents))
+	reservedBranches := make(map[string]string, len(store.Intents))
+	reservedPaths := make(map[string]string, len(store.Intents))
 	for _, intent := range store.Intents {
 		if intent.IntentID == "" || intentIDs[intent.IntentID] {
 			return fmt.Errorf("intent ids must be non-empty and unique")
@@ -620,6 +686,15 @@ func validateHerdrControlStore(store HerdrControlStore) error {
 		}
 		if strings.TrimSpace(intent.SourceRootPhysical) == "" {
 			return fmt.Errorf("intent %s has no physical source root", intent.IntentID)
+		}
+		if strings.TrimSpace(intent.SourceGitDirPhysical) == "" {
+			return fmt.Errorf("intent %s has no physical source git dir", intent.IntentID)
+		}
+		if intent.SourceGitDirDevice == 0 || intent.SourceGitDirInode == 0 {
+			return fmt.Errorf("intent %s has no physical source git dir identity", intent.IntentID)
+		}
+		if parentref.Canon(intent.Parent) == "" {
+			return fmt.Errorf("intent %s has no parent", intent.IntentID)
 		}
 		if (intent.TaskID != "" || strings.HasPrefix(parentref.Canon(intent.Parent), "plan:")) &&
 			!herdrSHA256Hex.MatchString(intent.PlanSpecIdentity) {
@@ -643,6 +718,32 @@ func validateHerdrControlStore(store HerdrControlStore) error {
 			return fmt.Errorf("intent %s phase %q is deferred to launcher readiness issue #528", intent.IntentID, intent.Phase)
 		default:
 			return fmt.Errorf("intent %s has unknown phase %q", intent.IntentID, intent.Phase)
+		}
+		if intent.Operation == "child-worktree" &&
+			(intent.OperationState == HerdrOperationActive ||
+				intent.OperationState == HerdrOperationManualCleanupRequired) {
+			if intent.FullBranchRef == "" || intent.WorktreePath == "" {
+				return fmt.Errorf("unresolved child intent %s has no branch/path reservation", intent.IntentID)
+			}
+			if owner := reservedBranches[intent.FullBranchRef]; owner != "" {
+				return fmt.Errorf(
+					"unresolved child intents %s and %s reserve branch %s",
+					owner,
+					intent.IntentID,
+					intent.FullBranchRef,
+				)
+			}
+			path := filepath.Clean(intent.WorktreePath)
+			if owner := reservedPaths[path]; owner != "" {
+				return fmt.Errorf(
+					"unresolved child intents %s and %s reserve path %s",
+					owner,
+					intent.IntentID,
+					path,
+				)
+			}
+			reservedBranches[intent.FullBranchRef] = intent.IntentID
+			reservedPaths[path] = intent.IntentID
 		}
 	}
 	lineageIDs := make(map[string]bool, len(store.Lineages))

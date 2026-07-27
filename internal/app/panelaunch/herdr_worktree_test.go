@@ -245,11 +245,20 @@ func TestHerdrWorktreeStartingReconcilesCrashAfterExactMutation(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "injected crash") {
 		t.Fatalf("starting crash error = %v", err)
 	}
-	sourceRoot, err := physicalPath(req.SourceRoot)
+	sourceIdentity, err := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intentID, err := state.HerdrIntentID(req.Parent, req.IssueNum, req.TaskID, sourceRoot, req.PlanSpecIdentity)
+	intentID, err := state.HerdrIntentID(
+		req.Parent,
+		req.IssueNum,
+		req.TaskID,
+		sourceIdentity.RepoRoot,
+		sourceIdentity.GitDir,
+		sourceIdentity.GitDirDevice,
+		sourceIdentity.GitDirInode,
+		req.PlanSpecIdentity,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,12 +445,15 @@ func TestHerdrWorktreeDeadlineDoesNotExtendOnRecovery(t *testing.T) {
 	if loadErr != nil {
 		t.Fatal(loadErr)
 	}
-	sourceRoot, _ := physicalPath(req.SourceRoot)
+	sourceIdentity, _ := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
 	intentID, _ := state.HerdrIntentID(
 		req.Parent,
 		req.IssueNum,
 		req.TaskID,
-		sourceRoot,
+		sourceIdentity.RepoRoot,
+		sourceIdentity.GitDir,
+		sourceIdentity.GitDirDevice,
+		sourceIdentity.GitDirInode,
 		req.PlanSpecIdentity,
 	)
 	intent, _ := control.FindIntent(intentID)
@@ -590,7 +602,7 @@ func TestHerdrMutationSuccessAfterDeadlineStaysStarting(t *testing.T) {
 		if !errors.Is(err, ErrHerdrManualCleanupRequired) || !strings.Contains(err.Error(), "deadline expired") {
 			t.Fatalf("post-deadline child result = %v", err)
 		}
-		sourceRoot, resolveErr := physicalPath(req.SourceRoot)
+		sourceIdentity, resolveErr := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
 		if resolveErr != nil {
 			t.Fatal(resolveErr)
 		}
@@ -598,7 +610,10 @@ func TestHerdrMutationSuccessAfterDeadlineStaysStarting(t *testing.T) {
 			req.Parent,
 			req.IssueNum,
 			req.TaskID,
-			sourceRoot,
+			sourceIdentity.RepoRoot,
+			sourceIdentity.GitDir,
+			sourceIdentity.GitDirDevice,
+			sourceIdentity.GitDirInode,
 			req.PlanSpecIdentity,
 		)
 		if idErr != nil {
@@ -633,7 +648,14 @@ func TestHerdrMutationSuccessAfterDeadlineStaysStarting(t *testing.T) {
 		if resolveErr != nil {
 			t.Fatal(resolveErr)
 		}
-		intentID, idErr := state.HerdrCoordinatorIntentID(req.Parent, sourceIdentity.RepoRoot, req.PlanSpecIdentity)
+		intentID, idErr := state.HerdrCoordinatorIntentID(
+			req.Parent,
+			sourceIdentity.RepoRoot,
+			sourceIdentity.GitDir,
+			sourceIdentity.GitDirDevice,
+			sourceIdentity.GitDirInode,
+			req.PlanSpecIdentity,
+		)
 		if idErr != nil {
 			t.Fatal(idErr)
 		}
@@ -676,11 +698,20 @@ func TestHerdrUnissuedBranchReservationFailureCanRetry(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "reserve branch") {
 		t.Fatalf("reservation error = %v, want update-ref failure", err)
 	}
-	sourceRoot, err := physicalPath(req.SourceRoot)
+	sourceIdentity, err := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intentID, err := state.HerdrIntentID(req.Parent, req.IssueNum, req.TaskID, sourceRoot, req.PlanSpecIdentity)
+	intentID, err := state.HerdrIntentID(
+		req.Parent,
+		req.IssueNum,
+		req.TaskID,
+		sourceIdentity.RepoRoot,
+		sourceIdentity.GitDir,
+		sourceIdentity.GitDirDevice,
+		sourceIdentity.GitDirInode,
+		req.PlanSpecIdentity,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -808,7 +839,14 @@ func TestRealizeHerdrCoordinatorPersistsWorkspacePhases(t *testing.T) {
 	if identityErr != nil {
 		t.Fatal(identityErr)
 	}
-	wantID, identityErr := state.HerdrCoordinatorIntentID("524", sourceIdentity.RepoRoot, "")
+	wantID, identityErr := state.HerdrCoordinatorIntentID(
+		"524",
+		sourceIdentity.RepoRoot,
+		sourceIdentity.GitDir,
+		sourceIdentity.GitDirDevice,
+		sourceIdentity.GitDirInode,
+		"",
+	)
 	if identityErr != nil {
 		t.Fatal(identityErr)
 	}
@@ -877,7 +915,14 @@ func TestHerdrCoordinatorStartingReconcilesCrashAfterExactMutation(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intentID, err := state.HerdrCoordinatorIntentID(req.Parent, sourceIdentity.RepoRoot, req.PlanSpecIdentity)
+	intentID, err := state.HerdrCoordinatorIntentID(
+		req.Parent,
+		sourceIdentity.RepoRoot,
+		sourceIdentity.GitDir,
+		sourceIdentity.GitDirDevice,
+		sourceIdentity.GitDirInode,
+		req.PlanSpecIdentity,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -937,6 +982,9 @@ func seedHerdrCoordinator(
 	coordinatorID, err := state.HerdrCoordinatorIntentID(
 		req.Parent,
 		sourceIdentity.RepoRoot,
+		sourceIdentity.GitDir,
+		sourceIdentity.GitDirDevice,
+		sourceIdentity.GitDirInode,
 		req.PlanSpecIdentity,
 	)
 	if err != nil {
@@ -960,6 +1008,9 @@ func seedHerdrCoordinator(
 		OperationState:         state.HerdrOperationActive,
 		Phase:                  state.HerdrPhaseWorkspaceRealized,
 		SourceRootPhysical:     sourceIdentity.RepoRoot,
+		SourceGitDirPhysical:   sourceIdentity.GitDir,
+		SourceGitDirDevice:     sourceIdentity.GitDirDevice,
+		SourceGitDirInode:      sourceIdentity.GitDirInode,
 		PlanSpecIdentity:       req.PlanSpecIdentity,
 		WorktreePath:           sourceIdentity.RepoRoot,
 		HerdrRepoKey:           sourceIdentity.RepoKey,

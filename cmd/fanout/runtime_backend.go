@@ -297,9 +297,12 @@ func refreshHerdrIntentBindings(inputs *runtimeBackendInputs, parent string) err
 		return fmt.Errorf("resolve provisional herdr binding scope: %w", err)
 	}
 	persistedIntents, err := control.ProvisionalBindings(state.HerdrBindingScope{
-		Parent:             parent,
-		SourceRootPhysical: repoIdentity.RepoRoot,
-		PlanSpecIdentity:   inputs.planSpecIdentity,
+		Parent:               parent,
+		SourceRootPhysical:   repoIdentity.RepoRoot,
+		SourceGitDirPhysical: repoIdentity.GitDir,
+		SourceGitDirDevice:   repoIdentity.GitDirDevice,
+		SourceGitDirInode:    repoIdentity.GitDirInode,
+		PlanSpecIdentity:     inputs.planSpecIdentity,
 	})
 	if err != nil {
 		return fmt.Errorf("resolve provisional herdr launch intents: %w", err)

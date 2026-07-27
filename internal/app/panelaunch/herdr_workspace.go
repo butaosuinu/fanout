@@ -53,6 +53,9 @@ func RealizeHerdrCoordinator(
 	intentID, err := state.HerdrCoordinatorIntentID(
 		req.Parent,
 		sourceIdentity.RepoRoot,
+		sourceIdentity.GitDir,
+		sourceIdentity.GitDirDevice,
+		sourceIdentity.GitDirInode,
 		req.PlanSpecIdentity,
 	)
 	if err != nil {
@@ -168,6 +171,9 @@ func planHerdrCoordinator(
 		OperationState:         state.HerdrOperationActive,
 		Phase:                  state.HerdrPhaseWorkspacePlanned,
 		SourceRootPhysical:     sourceIdentity.RepoRoot,
+		SourceGitDirPhysical:   sourceIdentity.GitDir,
+		SourceGitDirDevice:     sourceIdentity.GitDirDevice,
+		SourceGitDirInode:      sourceIdentity.GitDirInode,
 		PlanSpecIdentity:       req.PlanSpecIdentity,
 		WorktreePath:           rootCWD,
 		HerdrRepoKey:           sourceIdentity.RepoKey,
@@ -446,6 +452,9 @@ func validateSavedHerdrCoordinatorIntent(req HerdrCoordinatorRequest, intent sta
 	intentID, err := state.HerdrCoordinatorIntentID(
 		req.Parent,
 		sourceIdentity.RepoRoot,
+		sourceIdentity.GitDir,
+		sourceIdentity.GitDirDevice,
+		sourceIdentity.GitDirInode,
 		req.PlanSpecIdentity,
 	)
 	if err != nil {
@@ -458,6 +467,9 @@ func validateSavedHerdrCoordinatorIntent(req HerdrCoordinatorRequest, intent sta
 		intent.IssueNum != 0 ||
 		intent.TaskID != "" ||
 		intent.SourceRootPhysical != sourceIdentity.RepoRoot ||
+		intent.SourceGitDirPhysical != sourceIdentity.GitDir ||
+		intent.SourceGitDirDevice != sourceIdentity.GitDirDevice ||
+		intent.SourceGitDirInode != sourceIdentity.GitDirInode ||
 		intent.PlanSpecIdentity != req.PlanSpecIdentity ||
 		intent.HerdrRepoKey != sourceIdentity.RepoKey ||
 		intent.HerdrRepoRoot != sourceIdentity.RepoRoot ||

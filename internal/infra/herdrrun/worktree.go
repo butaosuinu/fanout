@@ -92,7 +92,11 @@ func (s *OwnedSession) VerifyWorktreeSetupPolicy(ctx context.Context) error {
 	if err != nil {
 		return markRetryableRead(err)
 	}
-	out, err := s.backend.runContext(ctx, commandTimeout, probed.binary, probed.route, "plugin", "list", "--json")
+	return s.backend.verifyEmptyPluginRegistry(ctx, probed)
+}
+
+func (b *Backend) verifyEmptyPluginRegistry(ctx context.Context, probed probeResult) error {
+	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "plugin", "list", "--json")
 	if err != nil {
 		return classifyReadCommandError("plugin.list", err)
 	}
@@ -155,6 +159,12 @@ func (s *OwnedSession) MutateWorktree(ctx context.Context, req WorktreeMutationR
 		if validateErr := validateBoundCoordinator(req, coordinatorObserved); validateErr != nil {
 			return WorktreeMutationResult{}, validateErr
 		}
+	}
+	if err := s.backend.verifyEmptyPluginRegistry(ctx, probed); err != nil {
+		return WorktreeMutationResult{}, fmt.Errorf(
+			"recheck herdr owned plugin registry before worktree mutation: %w",
+			err,
+		)
 	}
 
 	args, envelopeID, resultType := worktreeMutationArgs(req)

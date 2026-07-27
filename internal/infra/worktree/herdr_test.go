@@ -40,8 +40,27 @@ func TestResolveHerdrRepoIdentityReturnsPhysicalGitTuple(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.RepoKey != wantKey || got.RepoRoot != wantRoot {
+	wantGitDir, err := physicalHerdrPath(filepath.Join(repo, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RepoKey != wantKey || got.RepoRoot != wantRoot || got.GitDir != wantGitDir ||
+		got.GitDirDevice == 0 || got.GitDirInode == 0 {
 		t.Fatalf("repo identity = %+v", got)
+	}
+
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitTest(t, repo, "worktree", "add", "-b", "identity-sibling", sibling, "HEAD")
+	siblingIdentity, err := ResolveHerdrRepoIdentity(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if siblingIdentity.RepoKey != got.RepoKey ||
+		siblingIdentity.RepoRoot == got.RepoRoot ||
+		siblingIdentity.GitDir == got.GitDir ||
+		(siblingIdentity.GitDirDevice == got.GitDirDevice &&
+			siblingIdentity.GitDirInode == got.GitDirInode) {
+		t.Fatalf("linked worktree identity = %+v, root identity = %+v", siblingIdentity, got)
 	}
 }
 

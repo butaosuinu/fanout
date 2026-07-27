@@ -27,12 +27,16 @@ type HerdrBaseResolution struct {
 }
 
 type HerdrRepoIdentity struct {
-	RepoKey  string
-	RepoRoot string
+	RepoKey      string
+	RepoRoot     string
+	GitDir       string
+	GitDirDevice uint64
+	GitDirInode  uint64
 }
 
-// ResolveHerdrRepoIdentity returns the physical Git common directory and
-// source worktree root expected in Herdr worktree provenance.
+// ResolveHerdrRepoIdentity returns the physical Git common directory, source
+// worktree root, and worktree-specific git directory expected in Herdr
+// worktree provenance.
 func ResolveHerdrRepoIdentity(root string) (HerdrRepoIdentity, error) {
 	repoKey, err := gitTrim(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
@@ -42,6 +46,10 @@ func ResolveHerdrRepoIdentity(root string) (HerdrRepoIdentity, error) {
 	if err != nil {
 		return HerdrRepoIdentity{}, fmt.Errorf("resolve herdr repo root: %w", err)
 	}
+	gitDir, err := gitTrim(root, "rev-parse", "--path-format=absolute", "--git-dir")
+	if err != nil {
+		return HerdrRepoIdentity{}, fmt.Errorf("resolve herdr worktree git dir: %w", err)
+	}
 	repoKey, err = physicalHerdrPath(repoKey)
 	if err != nil {
 		return HerdrRepoIdentity{}, fmt.Errorf("canonicalize herdr repo key: %w", err)
@@ -50,7 +58,28 @@ func ResolveHerdrRepoIdentity(root string) (HerdrRepoIdentity, error) {
 	if err != nil {
 		return HerdrRepoIdentity{}, fmt.Errorf("canonicalize herdr repo root: %w", err)
 	}
-	return HerdrRepoIdentity{RepoKey: repoKey, RepoRoot: repoRoot}, nil
+	gitDir, err = physicalHerdrPath(gitDir)
+	if err != nil {
+		return HerdrRepoIdentity{}, fmt.Errorf("canonicalize herdr worktree git dir: %w", err)
+	}
+	info, err := os.Stat(gitDir)
+	if err != nil {
+		return HerdrRepoIdentity{}, fmt.Errorf("inspect herdr worktree git dir %s: %w", gitDir, err)
+	}
+	if !info.IsDir() {
+		return HerdrRepoIdentity{}, fmt.Errorf("herdr worktree git dir %s is not a directory", gitDir)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Dev == 0 || stat.Ino == 0 {
+		return HerdrRepoIdentity{}, fmt.Errorf("herdr worktree git dir %s has no physical identity", gitDir)
+	}
+	return HerdrRepoIdentity{
+		RepoKey:      repoKey,
+		RepoRoot:     repoRoot,
+		GitDir:       gitDir,
+		GitDirDevice: uint64(stat.Dev),
+		GitDirInode:  stat.Ino,
+	}, nil
 }
 
 // ResolveHerdrBase performs fanout's base refresh/safety gate and resolves the

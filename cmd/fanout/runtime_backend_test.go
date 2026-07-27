@@ -97,13 +97,16 @@ func TestResolveLaunchBackendLoadsPersistedHerdrIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	locked.UpsertIntent(state.HerdrLaunchIntent{
-		IntentID:           "issue:3:425:426",
-		Parent:             "425",
-		IssueNum:           426,
-		Backend:            backend.Herdr,
-		OperationState:     state.HerdrOperationManualCleanupRequired,
-		Phase:              state.HerdrPhaseWorktreeStarting,
-		SourceRootPhysical: repoIdentity.RepoRoot,
+		IntentID:             "issue:3:425:426",
+		Parent:               "425",
+		IssueNum:             426,
+		Backend:              backend.Herdr,
+		OperationState:       state.HerdrOperationManualCleanupRequired,
+		Phase:                state.HerdrPhaseWorktreeStarting,
+		SourceRootPhysical:   repoIdentity.RepoRoot,
+		SourceGitDirPhysical: repoIdentity.GitDir,
+		SourceGitDirDevice:   repoIdentity.GitDirDevice,
+		SourceGitDirInode:    repoIdentity.GitDirInode,
 	})
 	if saveErr := locked.Save(); saveErr != nil {
 		t.Fatal(saveErr)
@@ -189,13 +192,16 @@ func TestBackendSelectionVerifierRejectsHerdrIntentCreatedAfterPreflight(t *test
 		t.Fatal(err)
 	}
 	locked.UpsertIntent(state.HerdrLaunchIntent{
-		IntentID:           "issue:3:425:426",
-		Parent:             "425",
-		IssueNum:           426,
-		Backend:            backend.Herdr,
-		OperationState:     state.HerdrOperationActive,
-		Phase:              state.HerdrPhaseWorktreePlanned,
-		SourceRootPhysical: repoIdentity.RepoRoot,
+		IntentID:             "issue:3:425:426",
+		Parent:               "425",
+		IssueNum:             426,
+		Backend:              backend.Herdr,
+		OperationState:       state.HerdrOperationActive,
+		Phase:                state.HerdrPhaseWorktreePlanned,
+		SourceRootPhysical:   repoIdentity.RepoRoot,
+		SourceGitDirPhysical: repoIdentity.GitDir,
+		SourceGitDirDevice:   repoIdentity.GitDirDevice,
+		SourceGitDirInode:    repoIdentity.GitDirInode,
 	})
 	if saveErr := locked.Save(); saveErr != nil {
 		t.Fatal(saveErr)
@@ -303,6 +309,9 @@ func TestPersistedHerdrPlanIntentBindingsStayWorktreeLocal(t *testing.T) {
 		0,
 		"task-a",
 		siblingIdentity.RepoRoot,
+		siblingIdentity.GitDir,
+		siblingIdentity.GitDirDevice,
+		siblingIdentity.GitDirInode,
 		specIdentity,
 	)
 	if err != nil {
@@ -313,14 +322,17 @@ func TestPersistedHerdrPlanIntentBindingsStayWorktreeLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	locked.UpsertIntent(state.HerdrLaunchIntent{
-		IntentID:           intentID,
-		Parent:             "plan:shared",
-		TaskID:             "task-a",
-		SourceRootPhysical: siblingIdentity.RepoRoot,
-		PlanSpecIdentity:   specIdentity,
-		Backend:            backend.Herdr,
-		OperationState:     state.HerdrOperationActive,
-		Phase:              state.HerdrPhaseWorktreePlanned,
+		IntentID:             intentID,
+		Parent:               "plan:shared",
+		TaskID:               "task-a",
+		SourceRootPhysical:   siblingIdentity.RepoRoot,
+		SourceGitDirPhysical: siblingIdentity.GitDir,
+		SourceGitDirDevice:   siblingIdentity.GitDirDevice,
+		SourceGitDirInode:    siblingIdentity.GitDirInode,
+		PlanSpecIdentity:     specIdentity,
+		Backend:              backend.Herdr,
+		OperationState:       state.HerdrOperationActive,
+		Phase:                state.HerdrPhaseWorktreePlanned,
 	})
 	if saveErr := locked.Save(); saveErr != nil {
 		_ = locked.Unlock()

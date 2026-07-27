@@ -241,6 +241,33 @@ func TestValidateEmptyPluginListFailsClosed(t *testing.T) {
 	}
 }
 
+func TestVerifyEmptyPluginRegistryUsesFreshOwnedRouteRead(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	fake.respond = func(args []string) ([]byte, error) {
+		if !reflect.DeepEqual(args, []string{"plugin", "list", "--json"}) {
+			t.Fatalf("plugin registry args = %v", args)
+		}
+		return []byte(
+			`{"id":"cli:plugin:list","result":{"type":"plugin_list","plugins":[]}}`,
+		), nil
+	}
+	backend := newTestBackend(t, session, socket, fake)
+	err := backend.verifyEmptyPluginRegistry(context.Background(), probeResult{
+		binary: "/private/tmp/herdr-0.7.5",
+		route:  route{session: session, socketPath: socket},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.commands) != 1 {
+		t.Fatalf("plugin registry command count = %d, want 1", len(fake.commands))
+	}
+}
+
 func TestWorkspaceObservationAllowsUnrelatedMultiPaneWorkspaceButWithholdsRootIdentity(t *testing.T) {
 	focused := false
 	cwd := "/repo"

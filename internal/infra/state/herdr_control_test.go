@@ -32,13 +32,16 @@ func TestHerdrControlIsSharedAcrossLinkedWorktrees(t *testing.T) {
 		t.Fatal(err)
 	}
 	intent := HerdrLaunchIntent{
-		IntentID:           "issue:3:527:528",
-		Parent:             "0524",
-		IssueNum:           527,
-		Backend:            backend.Herdr,
-		OperationState:     HerdrOperationActive,
-		Phase:              HerdrPhaseWorktreePlanned,
-		SourceRootPhysical: repo,
+		IntentID:             "issue:3:527:528",
+		Parent:               "0524",
+		IssueNum:             527,
+		Backend:              backend.Herdr,
+		OperationState:       HerdrOperationActive,
+		Phase:                HerdrPhaseWorktreePlanned,
+		SourceRootPhysical:   repo,
+		SourceGitDirPhysical: filepath.Join(repo, ".git"),
+		SourceGitDirDevice:   1,
+		SourceGitDirInode:    2,
 	}
 	locked.UpsertIntent(intent)
 	if saveErr := locked.Save(); saveErr != nil {
@@ -105,12 +108,15 @@ func TestHerdrControlRejectsLauncherReadyPhasesUntilIssue528(t *testing.T) {
 	for _, phase := range []HerdrLaunchPhase{HerdrPhaseWorkspaceReady, HerdrPhaseWorktreeReady} {
 		store := emptyHerdrControl()
 		store.Intents = []HerdrLaunchIntent{{
-			IntentID:           "ready-is-deferred",
-			Parent:             "524",
-			Backend:            backend.Herdr,
-			OperationState:     HerdrOperationActive,
-			Phase:              phase,
-			SourceRootPhysical: "/repo",
+			IntentID:             "ready-is-deferred",
+			Parent:               "524",
+			Backend:              backend.Herdr,
+			OperationState:       HerdrOperationActive,
+			Phase:                phase,
+			SourceRootPhysical:   "/repo",
+			SourceGitDirPhysical: "/repo/.git",
+			SourceGitDirDevice:   1,
+			SourceGitDirInode:    2,
 		}}
 		err := validateHerdrControlStore(store)
 		if err == nil || !strings.Contains(err.Error(), "deferred to launcher readiness issue #528") {
@@ -193,6 +199,38 @@ func TestHerdrControlRejectsMissingRequiredFields(t *testing.T) {
 	}
 }
 
+func TestHerdrControlLoadRejectsIntentWithoutParent(t *testing.T) {
+	repo := initHerdrControlRepo(t)
+	path, err := HerdrControlPath(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{
+		"schema_id":"fanout.herdr-control.v1",
+		"revision":0,
+		"intents":[{
+			"intent_id":"missing-parent",
+			"backend":"herdr",
+			"operation_state":"active",
+			"phase":"worktree-planned",
+			"source_root_physical":"/repo",
+			"source_git_dir_physical":"/repo/.git",
+			"source_git_dir_device":1,
+			"source_git_dir_inode":2
+		}],
+		"branch_lineages":[]
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadHerdrControl(repo); err == nil || !strings.Contains(err.Error(), "has no parent") {
+		t.Fatalf("LoadHerdrControl() error = %v, want missing parent rejection", err)
+	}
+}
+
 func TestHerdrControlRejectsUnknownFieldsAtEveryStructLevel(t *testing.T) {
 	tests := []struct {
 		name string
@@ -258,16 +296,23 @@ func TestEnsureHerdrControlDirReadoptsConcurrentCreation(t *testing.T) {
 }
 
 func TestHerdrIntentIDCanonicalizesNumericParent(t *testing.T) {
-	a, err := HerdrIntentID("0524", 527, "", "", "")
+	a, err := HerdrIntentID("0524", 527, "", "/repo", "/repo/.git", 1, 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := HerdrIntentID("524", 527, "", "", "")
+	b, err := HerdrIntentID("524", 527, "", "/repo", "/repo/.git", 1, 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a != b {
 		t.Fatalf("canonical intent ids differ: %q != %q", a, b)
+	}
+	recreated, err := HerdrIntentID("524", 527, "", "/repo", "/repo/.git", 1, 3, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == recreated {
+		t.Fatalf("recreated source checkout reused issue intent id %q", a)
 	}
 }
 
@@ -276,11 +321,11 @@ func TestHerdrIssueLessPlanIdentityAndBindingsAreWorktreeAndSpecScoped(t *testin
 		specA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		specB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	)
-	idA, err := HerdrIntentID("plan:alpha", 0, "task-a", "/repo/a", specA)
+	idA, err := HerdrIntentID("plan:alpha", 0, "task-a", "/repo/a", "/git/a", 1, 2, specA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	idB, err := HerdrIntentID("plan:alpha", 0, "task-a", "/repo/b", specB)
+	idB, err := HerdrIntentID("plan:alpha", 0, "task-a", "/repo/b", "/git/b", 1, 3, specB)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,19 +336,24 @@ func TestHerdrIssueLessPlanIdentityAndBindingsAreWorktreeAndSpecScoped(t *testin
 	store.Intents = []HerdrLaunchIntent{
 		{
 			IntentID: idA, Parent: "plan:alpha", TaskID: "task-a",
-			SourceRootPhysical: "/repo/a", PlanSpecIdentity: specA,
+			SourceRootPhysical: "/repo/a", SourceGitDirPhysical: "/git/a",
+			SourceGitDirDevice: 1, SourceGitDirInode: 2, PlanSpecIdentity: specA,
 			Backend: backend.Herdr, OperationState: HerdrOperationActive,
 		},
 		{
 			IntentID: idB, Parent: "plan:alpha", TaskID: "task-a",
-			SourceRootPhysical: "/repo/b", PlanSpecIdentity: specB,
+			SourceRootPhysical: "/repo/b", SourceGitDirPhysical: "/git/b",
+			SourceGitDirDevice: 1, SourceGitDirInode: 3, PlanSpecIdentity: specB,
 			Backend: backend.Herdr, OperationState: HerdrOperationActive,
 		},
 	}
 	got, err := store.ProvisionalBindings(HerdrBindingScope{
-		Parent:             "plan:alpha",
-		SourceRootPhysical: "/repo/a",
-		PlanSpecIdentity:   specA,
+		Parent:               "plan:alpha",
+		SourceRootPhysical:   "/repo/a",
+		SourceGitDirPhysical: "/git/a",
+		SourceGitDirDevice:   1,
+		SourceGitDirInode:    2,
+		PlanSpecIdentity:     specA,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -311,43 +361,115 @@ func TestHerdrIssueLessPlanIdentityAndBindingsAreWorktreeAndSpecScoped(t *testin
 	if len(got) != 1 || got[0] != (backend.Binding{Parent: "plan:alpha", Backend: backend.Herdr}) {
 		t.Fatalf("scoped bindings = %+v", got)
 	}
+	_, err = store.ProvisionalBindings(HerdrBindingScope{
+		Parent:               "plan:alpha",
+		SourceRootPhysical:   "/repo/a",
+		SourceGitDirPhysical: "/git/a",
+		SourceGitDirDevice:   1,
+		SourceGitDirInode:    3,
+		PlanSpecIdentity:     specA,
+	})
+	if err == nil || !strings.Contains(err.Error(), "git-dir identity drift") {
+		t.Fatalf("recreated checkout error = %v, want git-dir identity drift", err)
+	}
 
 	_, err = store.ProvisionalBindings(HerdrBindingScope{
-		Parent:             "plan:alpha",
-		SourceRootPhysical: "/repo/a",
-		PlanSpecIdentity:   specB,
+		Parent:               "plan:alpha",
+		SourceRootPhysical:   "/repo/a",
+		SourceGitDirPhysical: "/git/a",
+		SourceGitDirDevice:   1,
+		SourceGitDirInode:    2,
+		PlanSpecIdentity:     specB,
 	})
 	if err == nil || !strings.Contains(err.Error(), "planspec identity drift") {
 		t.Fatalf("drift error = %v, want unresolved same-root plan rejection", err)
 	}
 }
 
-func TestHerdrCoordinatorIntentIDIsParentSingleton(t *testing.T) {
-	a, err := HerdrCoordinatorIntentID("0524", "/repo/a", "")
+func TestHerdrCoordinatorIntentIDIsSourceCheckoutScoped(t *testing.T) {
+	a, err := HerdrCoordinatorIntentID("0524", "/repo/a", "/git/a", 1, 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := HerdrCoordinatorIntentID("524", "/repo/b", "")
+	b, err := HerdrCoordinatorIntentID("524", "/repo/a", "/git/a", 1, 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a != b {
-		t.Fatalf("parent coordinator ids differ: %q != %q", a, b)
+		t.Fatalf("canonical parent coordinator ids differ: %q != %q", a, b)
+	}
+	recreated, err := HerdrCoordinatorIntentID("524", "/repo/a", "/git/a", 1, 3, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == recreated {
+		t.Fatalf("recreated source checkout reused coordinator id %q", a)
 	}
 	const (
 		specA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		specB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	)
-	planA, err := HerdrCoordinatorIntentID("plan:alpha", "/repo/a", specA)
+	planA, err := HerdrCoordinatorIntentID("plan:alpha", "/repo/a", "/git/a", 1, 2, specA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	planB, err := HerdrCoordinatorIntentID("plan:alpha", "/repo/b", specB)
+	planB, err := HerdrCoordinatorIntentID("plan:alpha", "/repo/b", "/git/b", 1, 3, specB)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if planA == planB {
 		t.Fatalf("issue-less plan coordinator ids collide: %q", planA)
+	}
+}
+
+func TestHerdrControlRejectsDuplicateUnresolvedChildReservations(t *testing.T) {
+	base := HerdrLaunchIntent{
+		IntentID:             "child-a",
+		Parent:               "524",
+		Backend:              backend.Herdr,
+		Operation:            "child-worktree",
+		OperationState:       HerdrOperationActive,
+		Phase:                HerdrPhaseWorktreePlanned,
+		SourceRootPhysical:   "/repo",
+		SourceGitDirPhysical: "/repo/.git",
+		SourceGitDirDevice:   1,
+		SourceGitDirInode:    2,
+		FullBranchRef:        "refs/heads/fanout/child-a",
+		WorktreePath:         "/repo/.fanout/worktrees/child-a",
+	}
+	tests := []struct {
+		name   string
+		mutate func(*HerdrLaunchIntent)
+		want   string
+	}{
+		{
+			name: "branch",
+			mutate: func(intent *HerdrLaunchIntent) {
+				intent.WorktreePath = "/repo/.fanout/worktrees/child-b"
+			},
+			want: "reserve branch",
+		},
+		{
+			name: "path",
+			mutate: func(intent *HerdrLaunchIntent) {
+				intent.FullBranchRef = "refs/heads/fanout/child-b"
+			},
+			want: "reserve path",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			other := base
+			other.IntentID = "child-b"
+			other.OperationState = HerdrOperationManualCleanupRequired
+			tt.mutate(&other)
+			store := emptyHerdrControl()
+			store.Intents = []HerdrLaunchIntent{base, other}
+			err := validateHerdrControlStore(store)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("validateHerdrControlStore() error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 
