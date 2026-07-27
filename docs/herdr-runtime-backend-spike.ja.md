@@ -445,7 +445,7 @@ child の launch と cleanup の crash 対処は次の一つの形に従う。
 flowchart TD
   A["state lock 下で row / intent / branch / path を検査"] --> B["intent 行を保存"]
   B --> C["mutation を一回発行(branch 作成 / worktree create / remove など)"]
-  C -->|応答成功| D["事後条件を照合して operation を確定(launch は final row 確定、cleanup は row 削除)し、同じ save で intent 行を削除"]
+  C -->|応答成功| D["事後条件を照合して operation を確定(launch は final row 確定、cleanup は残存 workspace close と branch 削除 / 保持の後処理確定後に row 削除)し、確定と同じ save で intent 行を削除"]
   C -->|応答喪失 / crash| E["再実行時の存在確認"]
   E -->|create 系: nonce / identity が一致する資源が一意に存在| R["採用して operation を続行"]
   E -->|remove 系: 対象資源が不在| D
@@ -475,7 +475,7 @@ herdr backend は tmux-parity trust、owned session、version gate を確認し�
 - compare-and-delete は fanout の branch 削除手順であり、照合済み tip（launch rollback は記録済み base SHA、cleanup は merge 確認後の current tip）との一致と、同じ full branch ref を checkout する linked worktree の不在を確認してから削除する。cleanup の tip 照合は current tip が merged PR の head と一致するか merge 先 branch の ancestor であることも検証し、未マージ commit を持つ branch は残す。checkout を検査しない `update-ref -d` 単独では行わず、checked-out branch を拒否する tmux backend の `git branch -D` と同じ guard を保つ。
 - `worktree create` 成功後の launch 失敗（launcher timeout / exit、token 失敗、agent 検出失敗）は tmux backend の `failCleanup` と同水準で rollback する。rollback は launch cycle と別の operation として新しい intent 行と budget で実行し、保存済み label nonce / branch / path / `terminal_id` を再照合してから force なしの `worktree remove` を一回発行し、workspace / checkout の不在を確認できた場合だけ自作 branch を記録済み base SHA の compare-and-delete で削除して両 intent 行を消す。照合不一致と dirty 拒否では資源を残して `manual_cleanup_required` にする（tmux も close を確認できない場合は worktree を温存する）。remove の response loss は再実行時の存在確認で分類し、workspace / checkout の不在を確認できれば rollback 完了として branch 削除と intent 整理へ進み、残存または判定不能では旧 request の進行中を排除できないため再発行せず `manual_cleanup_required` にする。
 - 応答喪失または crash 後の再実行は存在確認で分類する。recovery は intent の owner process の不在を確認した場合だけ開始し、live owner の intent は expiry の超過にかかわらず in-progress として明確な error を返す。intent の nonce と一致する label の workspace / checkout が一意に存在して branch / path / `HEAD` が一致すれば採用して launch を続行する。続行は現状から分岐し、pane の foreground が launcher で token 発行済み flag がなければ fresh marker の再観測後に readiness / token から、intent に一致する child process chain が既に動いているなら agent 検出 / rename / process 照合の finalization から再開する。branch だけが存在する場合（workspace / checkout 不在）は、`worktree create` の発行有無を証明できないため `manual_cleanup_required` にする。
-- socket mutation（`worktree create` / `worktree remove` など）の再発行と intent 削除は、request の非発行を証明できる場合に限る。対象資源の不在・残存の観測だけでは request が server 内で進行中の可能性を排除できないため、非発行を証明できない場合は `manual_cleanup_required` にする（自動 recovery は採用 or fail closed が基準 2 の全部であり、暗黙の作り直しも再発行もしない）。branch ref create など local git mutation は構造化結果で非発生を証明できる。fresh branch の launch では flow が branch 作成を `worktree create` より先に行うため、branch が未作成のままであることが create の未発行を証明し、この場合だけ intent 行を削除して最初からやり直せる。
+- socket mutation（`worktree create` / `worktree remove` など）の再発行と、最初からやり直すための intent 削除は、request の非発行を証明できる場合に限る。事後条件の成立を確認できた場合（create は nonce / identity が一致する資源の採用、remove は対象資源の不在）は operation 完了として intent を整理できる。どちらも証明・確認できない場合は request が server 内で進行中の可能性を排除できないため `manual_cleanup_required` にする（自動 recovery は採用・完了確認 or fail closed が基準 2 の全部であり、暗黙の作り直しも再発行もしない）。branch ref create など local git mutation は構造化結果で非発生を証明できる。fresh branch の launch では flow が branch 作成を `worktree create` より先に行うため、branch が未作成のままであることが create の未発行を証明し、この場合だけ intent 行を削除して最初からやり直せる。
 - 既存 checkout への `worktree open` は同じ intent の launch recovery と cleanup 前の再検証に限り、`already_open:true` は同じ workspace ID / label が row / intent に束縛済みの場合だけ受理する。
 - launch cycle は 3 秒以上 300 秒以下の `total_timeout`（既定 300 秒）を最初の mutation 前に確定し、retry で延長しない。
 - deterministic agent name は `fanout-` + SHA-256（canonical git common directory、row key、launch nonce の length-prefix 連結）の先頭 24 lowercase hex とし、0.7.5 の `[a-z][a-z0-9_-]{0,31}` を満たす。同名 agent が別 pane にある場合は fail closed にする。
@@ -510,7 +510,7 @@ tracked / untracked / ignored subtree generation を remove と原子的に条�
 
 cleanup の契約は次のとおりとする（#531 が実装する）。
 
-- state lock 下で保存済み row の workspace ID / label nonce、branch、path を現在値と照合し、live row では `terminal_id` も照合する。`stale` row（pane / terminal 消滅後）は現在の `terminal_id` を照合できないため、pane / terminal の不在の確認と workspace label / path / checkout の Git provenance の照合で代替する。不一致、非所有、または照合不能なら mutation せず fail closed にする。
+- state lock 下で保存済み row の workspace ID / label nonce、branch、path を現在値と照合し、live row では `terminal_id` も照合する。`stale` row は保存済み `terminal_id` を現在値と照合できない（pane 消滅、または cold restart による現在の `terminal_id` との不一致）ため、その失効の確認と workspace ID / label / path / checkout の Git provenance の照合で代替する。不一致、非所有、または照合不能なら mutation せず fail closed にする。
 - dirty checkout は明示確認なしに force しない。確認後の force remove でも branch は herdr に削除させない。
 - 照合成功後は intent 行を保存してから `worktree remove` を発行する。実測どおり remove は checkout と child workspace の両方を削除するため、応答成功後に checkout / workspace の不在を確認する。workspace だけが残る場合は `workspace close` で整理する。
 - row と cleanup intent 行の削除は、残存 workspace の close と branch の compare-and-delete（または保持の確定）まで遅らせ、全後処理の確定と同じ state save で行う（削除が先行すると後処理の crash / 応答喪失から再実行できず、owned workspace / branch が追跡不能になる）。
