@@ -237,6 +237,8 @@ tmux の再起動後に再利用される `paneId` は検索キーに使わな�
 worktree を選べる。
 worktree path と base ref はクライアントから受け取らず、token gate 通過後に
 一致した行の記録からサーバーが解決する。
+記録された base が `HEAD`、相対 rev、または対象 child branch 自身へ解決される
+場合は #516 の strict merge-base 解決に従って拒否し、フォールバックしない。
 成功時は `application/json` で次の全フィールドを返す。
 
 ```ts
@@ -512,6 +514,19 @@ replace ref は無視し、legacy graft は 502、shallow boundary の変更は 
   lazy fetch を使わない object 読み出し、snapshot の確定、unsupported file type、
   diff 収集 timeout、500 files/metadata 出力上限、metadata-only response 上限の
   超過、または diff engine の実行に失敗した
+
+### 実装委譲事項
+
+#576 は HTTP request/response の意味論、上限、エラーと dashboard の決定を固定する。
+次の実装方式と内部上限は #577/#578 で決める。
+
+- `GIT_INDEX_FILE` などで複製 index を live index から分離して読み出す方法
+- common/worktree config の immutable snapshot と fingerprint
+- request-private temporary directory を全終了経路で削除する方法
+- admin/metadata file の総 byte 数、source 数、file type の内部上限
+
+#577/#578 の実装判断が本書と食い違う場合は、同じ PR で本書、handler test、
+MSW fixture を更新して wire contract と実装を一致させる。
 
 ### レビューコメントの将来計画
 
