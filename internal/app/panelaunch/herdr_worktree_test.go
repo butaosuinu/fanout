@@ -364,6 +364,99 @@ func TestHerdrRealizationRejectsCrossRepositoryRootsBeforeMutation(t *testing.T)
 	}
 }
 
+func TestHerdrRealizationRejectsDirtyLinkedSourceBeforeReservation(t *testing.T) {
+	repo := newHerdrLaunchRepo(t)
+	source := filepath.Join(t.TempDir(), "linked-source")
+	runHerdrLaunchGit(t, repo, "worktree", "add", "-b", "linked-source-dirty", source, "HEAD")
+	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
+	req := newHerdrWorktreeRequest(t, repo, runtime)
+	req.SourceRoot = source
+	seedHerdrCoordinator(t, repo, runtime, req)
+	if err := os.WriteFile(filepath.Join(source, "untracked"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := RealizeHerdrWorktree(
+		context.Background(),
+		req,
+		runtime,
+		deterministicHerdrHooks(nil, ""),
+	)
+	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") ||
+		!strings.Contains(err.Error(), source) {
+		t.Fatalf("dirty linked source error = %v", err)
+	}
+	if len(runtime.mutations) != 0 {
+		t.Fatalf("dirty linked source issued %d mutations", len(runtime.mutations))
+	}
+	if _, found, observeErr := worktree.ObserveBranch(repo, "refs/heads/"+req.BranchName); observeErr != nil || found {
+		t.Fatalf("dirty linked source reserved branch: found=%t err=%v", found, observeErr)
+	}
+}
+
+func TestHerdrRealizationPinsBaseToLinkedSourceHEAD(t *testing.T) {
+	repo := newHerdrLaunchRepo(t)
+	source := filepath.Join(t.TempDir(), "linked-source")
+	runHerdrLaunchGit(t, repo, "worktree", "add", "-b", "linked-source-head", source, "HEAD")
+	if err := os.WriteFile(filepath.Join(source, "tracked"), []byte("linked head\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHerdrLaunchGit(t, source, "add", "tracked")
+	runHerdrLaunchGit(
+		t,
+		source,
+		"-c", "user.name=Fanout Test",
+		"-c", "user.email=fanout@example.test",
+		"commit", "-m", "linked head",
+	)
+	sourceHEAD := herdrLaunchGitOutput(t, source, "rev-parse", "HEAD")
+	projectHEAD := herdrLaunchGitOutput(t, repo, "rev-parse", "HEAD")
+	if sourceHEAD == projectHEAD {
+		t.Fatal("linked source HEAD unexpectedly matches project HEAD")
+	}
+
+	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
+	req := newHerdrWorktreeRequest(t, repo, runtime)
+	req.SourceRoot = source
+	req.BaseBranch = "HEAD"
+	seedHerdrCoordinator(t, repo, runtime, req)
+	_, err := RealizeHerdrWorktree(
+		context.Background(),
+		req,
+		runtime,
+		deterministicHerdrHooks(nil, state.HerdrPhaseBranchPlanned),
+	)
+	if err == nil || !strings.Contains(err.Error(), "injected crash") {
+		t.Fatalf("branch-planned crash error = %v", err)
+	}
+
+	sourceIdentity, err := worktree.ResolveHerdrRepoIdentity(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrIntentID(
+		req.Parent,
+		req.IssueNum,
+		req.TaskID,
+		sourceIdentity.RepoRoot,
+		sourceIdentity.GitDir,
+		sourceIdentity.GitDirDevice,
+		sourceIdentity.GitDirInode,
+		req.PlanSpecIdentity,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := control.FindIntent(intentID)
+	if !found || intent.LineageBaseSHA != sourceHEAD || intent.LaunchHeadSHA != sourceHEAD {
+		t.Fatalf("linked source intent = %+v, found=%t, want base/head %s", intent, found, sourceHEAD)
+	}
+}
+
 func TestHerdrWorktreeResponseLossRetriesReadWithoutMutationRetry(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo, responseLoss: true}
@@ -1108,4 +1201,15 @@ func runHerdrLaunchGit(t *testing.T, dir string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
+}
+
+func herdrLaunchGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
 }

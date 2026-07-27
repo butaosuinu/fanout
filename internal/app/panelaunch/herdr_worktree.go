@@ -148,23 +148,23 @@ func planFreshHerdrWorktree(
 	if projectIdentity.RepoKey != repoIdentity.RepoKey {
 		return state.HerdrLaunchIntent{}, fmt.Errorf("herdr project root and source root belong to different repositories")
 	}
-	if ensureErr := worktree.EnsureLocalExclude(req.ProjectRoot); ensureErr != nil {
+	if ensureErr := worktree.EnsureLocalExclude(req.SourceRoot); ensureErr != nil {
 		return state.HerdrLaunchIntent{}, ensureErr
 	}
-	base, err := worktree.ResolveHerdrBase(req.ProjectRoot, req.BaseBranch, req.NoRefresh)
+	base, err := worktree.ResolveHerdrBase(req.SourceRoot, req.BaseBranch, req.NoRefresh)
 	if err != nil {
 		return state.HerdrLaunchIntent{}, err
 	}
-	fullBranchRef, err := worktree.HerdrBranchRef(req.ProjectRoot, req.BranchName)
+	fullBranchRef, err := worktree.HerdrBranchRef(req.SourceRoot, req.BranchName)
 	if err != nil {
 		return state.HerdrLaunchIntent{}, err
 	}
-	if oid, found, observeErr := worktree.ObserveBranch(req.ProjectRoot, fullBranchRef); observeErr != nil {
+	if oid, found, observeErr := worktree.ObserveBranch(req.SourceRoot, fullBranchRef); observeErr != nil {
 		return state.HerdrLaunchIntent{}, observeErr
 	} else if found {
 		return state.HerdrLaunchIntent{}, fmt.Errorf("herdr branch %s already exists at %s", fullBranchRef, oid)
 	}
-	pathAbsent, registered, headSHA, err := worktree.CheckoutGitState(req.ProjectRoot, req.WorktreePath, fullBranchRef)
+	pathAbsent, registered, headSHA, err := worktree.CheckoutGitState(req.SourceRoot, req.WorktreePath, fullBranchRef)
 	if err != nil {
 		return state.HerdrLaunchIntent{}, err
 	}
@@ -374,10 +374,10 @@ func reserveHerdrBranch(
 	hooks HerdrWorktreeHooks,
 	intent state.HerdrLaunchIntent,
 ) (state.HerdrLaunchIntent, error) {
-	if err := worktree.VerifyReservedBranchBase(req.ProjectRoot, intent.ResolvedBaseRef, intent.LineageBaseSHA); err != nil {
+	if err := worktree.VerifyReservedBranchBase(req.SourceRoot, intent.ResolvedBaseRef, intent.LineageBaseSHA); err != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
 	}
-	if oid, found, err := worktree.ObserveBranch(req.ProjectRoot, intent.FullBranchRef); err != nil {
+	if oid, found, err := worktree.ObserveBranch(req.SourceRoot, intent.FullBranchRef); err != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
 	} else if found {
 		return intent, failHerdrIntent(
@@ -401,8 +401,8 @@ func reserveHerdrBranch(
 	if deadlineErr := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); deadlineErr != nil {
 		return starting, failHerdrIntent(req.ProjectRoot, starting, deadlineErr.Error())
 	}
-	if reserveErr := worktree.ReserveBranch(req.ProjectRoot, starting.FullBranchRef, starting.LineageBaseSHA); reserveErr != nil {
-		oid, found, observeErr := worktree.ObserveBranch(req.ProjectRoot, starting.FullBranchRef)
+	if reserveErr := worktree.ReserveBranch(req.SourceRoot, starting.FullBranchRef, starting.LineageBaseSHA); reserveErr != nil {
+		oid, found, observeErr := worktree.ObserveBranch(req.SourceRoot, starting.FullBranchRef)
 		reason := fmt.Sprintf("branch reservation failed: %v", reserveErr)
 		if observeErr != nil || found {
 			if observeErr != nil {
@@ -441,10 +441,10 @@ func realizeHerdrMutation(
 	if intent.BranchReceipt == nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "worktree-planned intent has no branch reservation receipt")
 	}
-	if verifyErr := worktree.VerifyReservedBranch(req.ProjectRoot, intent.ResolvedBaseRef, intent.LineageBaseSHA, intent.FullBranchRef); verifyErr != nil {
+	if verifyErr := worktree.VerifyReservedBranch(req.SourceRoot, intent.ResolvedBaseRef, intent.LineageBaseSHA, intent.FullBranchRef); verifyErr != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, verifyErr.Error())
 	}
-	pathAbsent, registered, headSHA, err := worktree.CheckoutGitState(req.ProjectRoot, intent.WorktreePath, intent.FullBranchRef)
+	pathAbsent, registered, headSHA, err := worktree.CheckoutGitState(req.SourceRoot, intent.WorktreePath, intent.FullBranchRef)
 	if err != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
 	}
@@ -918,7 +918,7 @@ func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.Her
 	if projectIdentity.RepoKey != repoIdentity.RepoKey {
 		return fmt.Errorf("herdr project root and source root belong to different repositories")
 	}
-	fullBranchRef, err := worktree.HerdrBranchRef(req.ProjectRoot, req.BranchName)
+	fullBranchRef, err := worktree.HerdrBranchRef(req.SourceRoot, req.BranchName)
 	if err != nil {
 		return err
 	}
