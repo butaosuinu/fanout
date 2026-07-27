@@ -178,8 +178,8 @@ lock、atomic replace（temporary file への書き込みと rename）、fail-fa
 `fanout` directory は 0700、registry と lock は 0600 とし、private namespace gate または physical common-directory identity の照合に失敗した場合は Herdr backend を開始しない。
 pre-existing object の ACL / mode は自動修復せず fail closed にする。
 registry は schema version、common-directory identity、console / coordinator / child の final row、最小意図記録（intent 行）、telemetry routing を保持する。
-intent 行は owner process の PID / start token と絶対 expiry を持ち、crash recovery は owner process の不在または expiry の超過を確認した場合だけ開始する。
-live owner の intent は in-progress として明確な error で扱い、削除も mutation の再発行もしない（並行 invocation が実行中 operation を crash と誤認する二重発行の防止）。
+intent 行は owner process の PID / start token と絶対 expiry を持ち、crash recovery は owner process の不在を確認した場合だけ開始する。
+live owner の intent は expiry の超過にかかわらず in-progress として明確な error で扱い、削除も mutation の再発行もしない（並行 invocation が実行中 operation を crash と誤認する二重発行の防止。expiry は launcher / token の deadline であり recovery の許可条件ではない）。
 registry / intent / final row は raw workload env value を保持しない。
 mutation は state lock 下で snapshot を読み、identity を照合してから同じ lock 下の atomic save で確定する。
 state lock は一回の snapshot / state save に限り、Herdr CLI call、polling、sleep、外部応答待ちをまたいで保持しない。
@@ -217,11 +217,12 @@ marker / lease / socket の不一致、foreign resource、検証不能は自動�
 server loss 後の restart は herdr 固有の最小追加対処とする（簡素化方針の基準 2。未実装で、実装 owner は #530）。
 restart は明示操作だけが開始し、restart の intent 行を state save してから、saved supervisor / server process と socket の不在と旧 marker の一致を照合する。
 restart intent 行がある間は shutdown と同じく、restart 自身と read-only 操作以外の mutation を明確な error で拒否する。
-照合成功後に旧 marker / lease を削除し、fresh bootstrap と同じ手順（新しい owner nonce での marker / lease の exclusive create、単一 spawn、status の session / socket 検査）で作り直して intent 行を消す。
+照合成功後に旧 marker / lease を削除し、fresh bootstrap と同じ手順（新しい owner nonce での marker / lease の exclusive create、単一 spawn、status の session / socket 検査）で作り直す。
 照合失敗（旧 process の残存、marker 不一致）では削除に進まず、intent 行と旧 marker を残して fail closed にする。
 旧 marker / lease の削除後に crash した場合は marker 不在と intent 行が残り、spawn の結果不明では新しい owner nonce の marker / lease と intent 行が残る。
-どちらも再実行時に intent 行と現存する marker 世代の存在確認から分類し、新 marker の supervisor が live で status 検査を満たす場合だけ bootstrap 完了として intent 行を消し、それ以外は fail closed のまま資源に触らない。
-restart 後は version gate と status 検査を再実行し、旧 `terminal_id` の direct-launch row を `stale` にして自動 resume しない。
+どちらも再実行時に intent 行と現存する marker 世代の存在確認から分類し、新 marker の supervisor が live で status 検査を満たす場合だけ完了へ進み、それ以外は fail closed のまま資源に触らない。
+restart intent 行の削除は、version gate と status 検査の再実行、旧 `terminal_id` の direct-launch row の `stale` 化を確定した同じ state save で行う（削除が先行すると re-gate 前に別 worktree の mutation が再開する）。
+自動 resume は行わない。
 
 通常 shutdown は明示操作だけとし（未実装で、実装 owner は #530）、state lock 下で active row / intent と foreign resource の不在を確認し、同じ save で shutdown の intent 行を保存してから server を停止し、marker を削除する。
 shutdown intent 行がある間、別 worktree を含む新しい launch / mutation は明確な error で拒否する（空状態確認と server 停止の間に intent が入り込む race の fence）。
@@ -306,7 +307,7 @@ console intent / row の key は `(canonical git common directory, operation:con
 console shell は user config、未指定なら fanout 起動時の `SHELL` から解決した絶対 path を使う。
 no-arg TUI の attach 準備は、workspace mutation 前に console の intent 行（row key、launch nonce、cwd、user shell の絶対 path、env file path、owner の PID / start token、`total_timeout` と絶対 expiry、発行時刻）を state save し、launch nonce から workspace label と `FANOUT_READY:<launch-nonce>` / `FANOUT_EXEC:<launch-nonce>` を導出する。
 そのうえで `workspace create --cwd <repo-root> --label <launch-nonce> --no-focus` を一回発行し、応答の workspace ID、root PaneRef / `terminal_id` / cwd を照合して intent 行へ記録する。
-応答喪失または crash 後の再実行は存在確認で分類する。intent の nonce と一致する label の workspace が一つだけ存在して cwd が一致すれば採用して launcher readiness から続行し、不在なら intent 行を消して作り直し、判定できない場合は `manual_cleanup_required` にする。
+応答喪失または crash 後の再実行は存在確認で分類する。intent の nonce と一致する label の workspace が一つだけ存在して cwd が一致すれば採用して続行する。続行は現状から分岐し、root pane の foreground が launcher なら readiness / token から、intent の user shell が既に動いているなら process 照合の finalization から再開する。workspace が不在なら intent 行を消して作り直し、判定できない場合は `manual_cleanup_required` にする。
 launcher marker と root identity を照合した後だけ exact token を一回発行し、launcher は intent の user shell を interactive child として起動する。
 parent は `pane process-info` と OS process 情報で shell の argv / cwd / ancestry を照合して final console row を確定し、同じ state save で intent 行を削除する。
 console は agent detection、rename、emitter、initial operation token 以外の automatic `pane run`、`agent prompt`、nudge の対象にせず、ユーザーが明示的に focus した後の入力だけを受ける。
@@ -471,8 +472,8 @@ herdr backend は tmux-parity trust、owned session、version gate を確認し�
 - intent 行は launch finalization（agent 検出 / rename / process 照合の完了）まで保持し、final row の確定と同じ state save で削除する。launcher はこの intent から実行内容を読む。
 - 構造化 error が workspace / checkout の非作成を示す失敗では、今回 fanout が作った branch だけを compare-and-delete で削除して fail-fast する（tmux backend の `git worktree add` 失敗時の branch 削除と同じ）。response loss では branch を削除しない。
 - compare-and-delete は fanout の branch 削除手順であり、照合済み tip（launch rollback は記録済み base SHA、cleanup は merge 確認後の current tip）との一致と、同じ full branch ref を checkout する linked worktree の不在を確認してから削除する。checkout を検査しない `update-ref -d` 単独では行わず、checked-out branch を拒否する tmux backend の `git branch -D` と同じ guard を保つ。
-- `worktree create` 成功後の launch 失敗（launcher timeout / exit、token 失敗、agent 検出失敗）は tmux backend の `failCleanup` と同水準で rollback する。rollback は launch cycle と別の operation として新しい intent 行と budget で実行し、保存済み label nonce / branch / path / `terminal_id` を再照合してから force なしの `worktree remove` を一回発行し、workspace / checkout の不在を確認できた場合だけ自作 branch を記録済み base SHA の compare-and-delete で削除して両 intent 行を消す。照合不一致、dirty 拒否、response loss、mutation 不明では資源を残して `manual_cleanup_required` にする（tmux も close を確認できない場合は worktree を温存する）。
-- 応答喪失または crash 後の再実行は存在確認で分類する。recovery は intent の owner process の不在または絶対 expiry の超過を確認した場合だけ開始し、live owner の intent は in-progress として明確な error を返す。intent の nonce と一致する label の workspace / checkout が一意に存在して branch / path / `HEAD` が一致すれば採用して launch を続行する。続行は現状から分岐し、pane の foreground が launcher なら readiness / token から、intent に一致する child process chain が既に動いているなら agent 検出 / rename / process 照合の finalization から再開する。branch だけが存在する場合（workspace / checkout 不在）は、intent の事前存在が false で tip が記録済み base SHA と一致するなら自作 branch として `worktree create` から続行する。workspace / checkout が存在せず branch も事前状態のままなら intent 行を削除して最初からやり直す。どれとも判定できない場合は `manual_cleanup_required` にして自動では触らない。
+- `worktree create` 成功後の launch 失敗（launcher timeout / exit、token 失敗、agent 検出失敗）は tmux backend の `failCleanup` と同水準で rollback する。rollback は launch cycle と別の operation として新しい intent 行と budget で実行し、保存済み label nonce / branch / path / `terminal_id` を再照合してから force なしの `worktree remove` を一回発行し、workspace / checkout の不在を確認できた場合だけ自作 branch を記録済み base SHA の compare-and-delete で削除して両 intent 行を消す。照合不一致と dirty 拒否では資源を残して `manual_cleanup_required` にする（tmux も close を確認できない場合は worktree を温存する）。remove の response loss は再実行時の存在確認で分類し、workspace / checkout の不在を確認できれば rollback 完了として branch 削除と intent 整理へ進み、identity 一致のまま残存していれば新しい rollback として再発行し、判定できない場合だけ `manual_cleanup_required` にする。
+- 応答喪失または crash 後の再実行は存在確認で分類する。recovery は intent の owner process の不在を確認した場合だけ開始し、live owner の intent は expiry の超過にかかわらず in-progress として明確な error を返す。intent の nonce と一致する label の workspace / checkout が一意に存在して branch / path / `HEAD` が一致すれば採用して launch を続行する。続行は現状から分岐し、pane の foreground が launcher なら readiness / token から、intent に一致する child process chain が既に動いているなら agent 検出 / rename / process 照合の finalization から再開する。branch だけが存在する場合（workspace / checkout 不在）は、intent の事前存在が false で tip が記録済み base SHA と一致するなら自作 branch として `worktree create` から続行する。workspace / checkout が存在せず branch も事前状態のままなら intent 行を削除して最初からやり直す。どれとも判定できない場合は `manual_cleanup_required` にして自動では触らない。
 - 既存 checkout への `worktree open` は同じ intent の launch recovery と cleanup 前の再検証に限り、`already_open:true` は同じ workspace ID / label が row / intent に束縛済みの場合だけ受理する。
 - launch cycle は 3 秒以上 300 秒以下の `total_timeout`（既定 300 秒）を最初の mutation 前に確定し、retry で延長しない。
 - deterministic agent name は `fanout-` + SHA-256（canonical git common directory、row key、launch nonce の length-prefix 連結）の先頭 24 lowercase hex とし、0.7.5 の `[a-z][a-z0-9_-]{0,31}` を満たす。同名 agent が別 pane にある場合は fail closed にする。
