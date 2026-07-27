@@ -289,13 +289,17 @@ server project root と path を symlink 解決して canonicalize し、project
 
 すべての Git 呼び出しは `LC_ALL=C`、`GIT_OPTIONAL_LOCKS=0`、
 `GIT_LITERAL_PATHSPECS=1`、`GIT_CONFIG_NOSYSTEM=1`、
-`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_ATTR_NOSYSTEM=1` で実行する。
+`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_ATTR_NOSYSTEM=1`、
+`GIT_NO_LAZY_FETCH=1`、`GIT_TERMINAL_PROMPT=0` で実行する。
 継承した `GIT_*` は消去し、この allowlist と Git が返した repository path
 だけを設定し直す。
 `git --no-pager` と `-c core.fsmonitor=false` を使い、pager と fsmonitor を
 起動しない。
 `HOME` と `XDG_CONFIG_HOME` は server 所有の空 directory に向け、global
 config と global attributes を読ませない。
+backend は repository に触れる前に、Git が `GIT_NO_LAZY_FETCH` をサポートする
+version であることを確認する。
+未対応 version と missing object は remote fetch を試さず 502 にする。
 
 request ごとに mode `0700` の private snapshot directory を server の
 temporary root に作る。
@@ -306,6 +310,14 @@ worktree content は `openat` と `readlinkat` で raw byte として読み、
 symlink をたどらない。
 各 path component は worktree root の directory file descriptor から
 `O_NOFOLLOW` でたどり、root 外へ出る path を拒否する。
+target entry は regular file、symlink、gitlink だけを許可する。
+gitlink は worktree を開かず commit pointer だけを使い、FIFO、socket、device、
+gitlink 以外の directory は content を読む前に 502 にする。
+regular file は `O_NONBLOCK|O_NOFOLLOW` を付けて `openat` し、直後の `fstat` で
+regular file のままであることと `lstat` の device、inode、mode が一致することを
+確認する。
+symlink は `readlinkat` の後に `lstat` を取り直し、device、inode、mode の一致を
+確認する。
 worktree の path を content source として Git に渡さない。
 
 changed path は merge-base entry、複製した index entry、index stat と raw
@@ -317,8 +329,13 @@ merge-base と index は mode と object ID で比較する。
 
 snapshot manifest には各 side の logical path、mode、size、object ID または
 raw content、worktree の `lstat` fingerprint を記録する。
-index file の digest、untracked path の NUL 区切り一覧、manifest に含めた
-worktree path と attribute source の fingerprint を収集後に再取得する。
+開始時の tracked changed-path 集合と untracked path 集合は、NUL 区切りの
+byte 列として保存する。
+収集後は複製した index の全 tracked entry に同じ stat 判定を再適用し、
+tracked changed-path 集合を作り直す。
+index file の digest、tracked changed-path 集合、untracked path 集合、
+manifest に含めた worktree path と attribute source の fingerprint を開始時と
+比較する。
 開始時と一致しなければ private snapshot を捨てて 1 回だけ取り直し、再び
 変化した場合は 502 にする。
 一致した時点で snapshot を確定して `capturedAt` を記録する。
@@ -406,14 +423,18 @@ patch buffer は 10 MiB + 1 byte を超えない。
 各 diff engine の regular-file 入力も before/after 各 256 KiB 以下であり、
 巨大 tracked file、巨大 untracked file、sparse file の content は渡さない。
 
-サーバー側の固定上限は 1 MiB(1,048,576 bytes)とし、クエリによる変更は
-許さない。
-上限を超える場合は、完全な `diff --git` ファイルブロックだけで構成される
-最大の先頭部分を `patch` に返し、`truncated` を `true` にする。
-ファイルブロックの途中では切らない。
-先頭の 1 ブロックだけで上限を超える場合は `patch` を空文字列にする。
-上限で除外したファイルは `omittedReason` を `responseLimit` にする。
-上限以下では patch をそのまま返し、10 MiB 収集上限で設定済みの
+成功 response の固定上限は、JSON serialization 後の body 全体で
+1 MiB(1,048,576 bytes)とし、クエリによる変更は許さない。
+`files` 全件、空の `patch`、その他の field を最終形で serialize した
+metadata-only body が上限を超える場合は、`files` を省略せず 502 にする。
+上限以下なら、収集済みの完全な `diff --git` file block を path 順に加えた
+各候補を JSON serialize し、body 全体が上限内に収まる最大の先頭部分を返す。
+この計算は改行、control character、quote の JSON escape 後の UTF-8 byte 数を
+使い、file block の途中では切らない。
+上限で除外した file と後続の patch 対象 file は `patchIncluded: false`、
+`omittedReason: "responseLimit"` とし、`truncated` を `true` にする。
+先頭の 1 block も収まらない場合は `patch` を空文字列にする。
+body 全体が上限以下なら patch をそのまま返し、10 MiB 収集上限で設定済みの
 `truncated` は保持する。
 SPA は `truncated` が `true`、またはいずれかの `patchIncluded` が `false` なら、
 review 対象が patch に揃っていないことを警告する。
@@ -427,6 +448,11 @@ command を一度も起動しないこと、非 UTF-8 path は 502、非 UTF-8 c
 preflight 後に live worktree と `.gitattributes` を変更しても filter command を
 起動しないこと、256 KiB を超える tracked file も `tooLarge` になることを
 同じ test で確認する。
+clean と判定した tracked file を収集中に変更した場合は snapshot を取り直すこと、
+partial clone の missing object で fetch または credential helper を起動せず
+502 にすることも固定する。
+FIFO、socket、device は blocking read の前に 502 とし、JSON escape と 500 files
+の metadata を含む成功 body が 1 MiB を超えないことを確認する。
 
 エラー body は全 status で `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
@@ -436,8 +462,9 @@ preflight 後に live worktree と `.gitattributes` を変更しても filter co
 - `404 Not Found`: identity が snapshot の 1 行に定まらない、worktree 記録が
   ない、cleanup 済み、または同じ git common dir の worktree として検証できない
 - `502 Bad Gateway`: base/merge-base の strict 解決、filter attribute の検査、
-  snapshot の確定、diff 収集 timeout、500 files/metadata 出力上限の超過、
-  または diff engine の実行に失敗した
+  lazy fetch を使わない object 読み出し、snapshot の確定、unsupported file type、
+  diff 収集 timeout、500 files/metadata 出力上限、metadata-only response 上限の
+  超過、または diff engine の実行に失敗した
 
 ### レビューコメントの将来計画
 
