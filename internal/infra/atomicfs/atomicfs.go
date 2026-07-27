@@ -96,26 +96,26 @@ func CompareAndSwapFile(
 			_ = os.Remove(tmpPath)
 		}
 	}()
-	if _, err := tmp.Write(replacement); err != nil {
+	if _, writeErr := tmp.Write(replacement); writeErr != nil {
 		// Preserve the write error; closing this temporary file is cleanup only.
 		_ = tmp.Close()
-		return err
+		return writeErr
 	}
-	if err := tmp.Chmod(perm); err != nil {
+	if chmodErr := tmp.Chmod(perm); chmodErr != nil {
 		// Preserve the chmod error; closing this temporary file is cleanup only.
 		_ = tmp.Close()
-		return err
+		return chmodErr
 	}
 	replacementInfo, err := tmp.Stat()
 	if err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
-		return err
+	if closeErr := tmp.Close(); closeErr != nil {
+		return closeErr
 	}
-	if err := exchangeFiles(tmpPath, path); err != nil {
-		return fmt.Errorf("exchange replacement with destination: %w", err)
+	if exchangeErr := exchangeFiles(tmpPath, path); exchangeErr != nil {
+		return fmt.Errorf("exchange replacement with destination: %w", exchangeErr)
 	}
 
 	displaced, displacedInfo, inspectErr := readFileSnapshot(tmpPath)
@@ -153,11 +153,11 @@ func rollbackCompareAndSwap(
 			tmpPath,
 		)
 	}
-	if err := exchangeFiles(tmpPath, path); err != nil {
+	if exchangeErr := exchangeFiles(tmpPath, path); exchangeErr != nil {
 		return false, fmt.Errorf(
 			"destination compare failed and rollback failed; displaced file remains at %s: %w",
 			tmpPath,
-			err,
+			exchangeErr,
 		)
 	}
 	rolledBack, rolledBackInfo, rollbackErr := readFileSnapshot(tmpPath)
@@ -195,8 +195,8 @@ func readFileSnapshot(path string) ([]byte, os.FileInfo, error) {
 	data, readErr := io.ReadAll(file)
 	info, statErr := file.Stat()
 	closeErr := file.Close()
-	if err := errors.Join(readErr, statErr, closeErr); err != nil {
-		return nil, nil, err
+	if snapshotErr := errors.Join(readErr, statErr, closeErr); snapshotErr != nil {
+		return nil, nil, snapshotErr
 	}
 	if info == nil {
 		return nil, nil, fmt.Errorf("inspect file snapshot %s: missing file info", path)
