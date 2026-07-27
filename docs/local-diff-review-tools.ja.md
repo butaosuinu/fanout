@@ -1,9 +1,10 @@
 # ローカル diff レビューツール統合の予備調査
 
-ステータス: 調査報告(予備調査)。実装なし。2026-07-20 実施。
+ステータス: 調査報告(予備調査) + dashboard diff ビューア決定記録。
+予備調査は 2026-07-20、dashboard の決定は 2026-07-27。実装なし。
 候補ツールのドキュメント調査に加え、有力 3 ツールを合成リポジトリの
 linked worktree + tmux 3.6a(macOS arm64、Node 24)で一時実行して検証した。
-実装に進む場合の計画案は本書末尾にあり、issue 化はユーザー判断待ち。
+外部ツール連携と dashboard diff ビューアの実装計画は本書末尾に記録する。
 
 ## 背景
 
@@ -15,9 +16,10 @@ fanout の子セッションは `.fanout/worktrees/<slug>/` の worktree で実�
 
 前提となる設計制約は [pr-review-visualization-v2.ja.md](pr-review-visualization-v2.ja.md)
 の横断原則から引き継ぐ: diff 描画は既存ツールへ委譲し fanout は配線に徹する、
-専用 Web ビューアは自作しない、必須依存は git/tmux/gh
-(+ live 実行時の agent CLI)から増やさない、外部コマンド起動は
-allowlist + opt-in なしに出荷しない。
+独立した専用 Web ビューアと mutation を伴うレビュー UI は作らない、
+外部コマンド起動は allowlist + opt-in なしに出荷しない。
+既存の read-only dashboard SPA に置く表示専用パネルは例外とし、diff 描画は
+既存ライブラリへ委譲する。
 
 ## 評価軸
 
@@ -172,7 +174,113 @@ repo config 読込を止められない点に注意(実装詳細は Phase 1 に�
 両立しない。未導入のツールはメニューに出さないかエラーで案内し、
 インストール自体はユーザーに委ねる(agent CLI と同じ扱い)。
 
-## 実装計画案(issue 化はユーザー判断待ち)
+## Dashboard diff ビューア
+
+#575 では既存の web dashboard SPA に、Session worktree の diff を読む
+表示専用パネルを追加する。
+Drawer から全幅パネルを開き、merge-base 基準の committed、uncommitted、
+untracked の変更を syntax highlight と light/dark テーマ付きで表示する。
+dashboard の 127.0.0.1 bind、起動ごとの token、GET-only、mutation なしという
+境界は変えない。
+
+これは独立した専用 Web ビューアを新設する判断ではない。
+CodeSee の教訓が退けるのは、コードベース全体の常設地図を別製品へ分離し、
+既存のレビュー面から利用者を移す設計である。
+既存 dashboard に worktree 単位の一時的な diff 表示を足す本件は該当しない。
+サーバーは patch を配信するだけとし、描画はライブラリへ委譲する。
+
+### 描画ライブラリ
+
+`@pierre/diffs` v1.2.x を採用する。
+Apache-2.0 で、git patch を直接入力でき、Shiki による syntax highlight と
+テーマを標準で扱い、1.x の安定版に達しているためである。
+patch 入力 API または Shadow DOM のテーマ連携が実装を阻む場合は、
+`@git-diff-view/react` v0.1.x へ切り替える。
+こちらは patch 入力と React 描画を満たすが、v0.1.x のため第 1 候補にはしない。
+
+次の候補は採らない。
+
+- `diff2html`: patch から HTML 文字列を生成するため、後述の敵性入力規約と
+  衝突する
+- `react-diff-view`: syntax highlight に refractor の自前配線が必要
+- `@codemirror/merge` と Monaco DiffEditor: old/new の全文を要求する
+  2 文書エディタであり、patch の閲覧には過剰
+
+### 敵性入力
+
+worktree 由来の path、hunk、patch と git のエラー文は敵性入力として扱う。
+従来の「テキストノードのみ」という規約を、React のテキストノードまたは
+入力のエスケープを構造的に保証する描画に限る規約へ広げる。
+patch 由来の HTML 文字列や `dangerouslySetInnerHTML` は使わない。
+描画ライブラリの更新時も、タグを含む patch が DOM 要素として注入されないことを
+テストで固定する。
+
+### `GET /api/diff` wire contract
+
+リクエストは `GET /api/diff?pane=%N` とする。
+worktree path と base ref はクライアントから受け取らず、token gate 通過後に
+最新 snapshot の pane 記録からサーバーが解決する。
+成功時は `application/json` で次の全フィールドを返す。
+
+```ts
+type DiffResponse = {
+  paneId: string;
+  branchName: string;
+  baseBranch: string;
+  mergeBase: string;
+  capturedAt: string;
+  files: Array<{
+    path: string;
+    additions: number;
+    deletions: number;
+    binary: boolean;
+  }>;
+  patch: string;
+  truncated: boolean;
+  totalBytes: number;
+};
+```
+
+`capturedAt` は UTC の RFC 3339、`mergeBase` は strict に解決した commit SHA
+とする。
+`files` は patch の切り詰めに関係なく全件を返し、空の場合も `null` ではなく
+`[]` を返す。
+バイナリの `additions` と `deletions` は `0`、`binary` は `true` とする。
+`patch` は `diff --git` で始まるファイルブロックを連結した git patch であり、
+HTML fragment として解釈しない。
+`totalBytes` はサーバー側で切り詰める前の `patch` の byte 数である。
+
+サーバー側の固定上限は 1 MiB(1,048,576 bytes)とし、クエリによる変更は
+許さない。
+上限を超える場合は、完全な `diff --git` ファイルブロックだけで構成される
+最大の先頭部分を `patch` に返し、`truncated` を `true` にする。
+ファイルブロックの途中では切らない。
+先頭の 1 ブロックだけで上限を超える場合は `patch` を空文字列にする。
+上限以下では patch をそのまま返し、`truncated` は `false` とする。
+
+エラー body は全 status で `{"error":"message"}` とし、
+`application/json` と `Cache-Control: no-store` を付ける。
+
+- `400 Bad Request`: `pane` が空、または tmux pane ID(`%` + 数字)ではない
+- `404 Not Found`: pane が snapshot にない、worktree 記録がない、または
+  cleanup 済みで path が存在しない
+- `502 Bad Gateway`: base/merge-base の strict 解決または git diff に失敗した
+
+### レビューコメントの将来計画
+
+表示専用の境界を保ったまま、指摘を返す導線は次の 3 択を残す。
+
+1. difit の認証または危険な endpoint の無効化が実現した後、保留を解除して
+   dashboard から difit URL へ移す
+2. TUI の還元ループ #518-521 に委譲する
+3. dashboard とは別プロセスの opt-in mutation サーバーを追加する
+
+2 を推奨する。
+dashboard で diff を読み、指摘は TUI または GitHub PR で付ける。
+1 は difit の保留条件を満たすまで採れず、3 は別の認証、寿命管理、mutation
+境界を増やすため当面採らない。
+
+## 実装計画
 
 ### Phase 1: 起動導線(MVP)
 
@@ -255,11 +363,13 @@ skill / briefing 側に置く(CLI は LLM を呼ばない鉄則の維持)。
 - v2 構想の案 4(Findings 裁可コンソール)が想定する「d = diff ビュアーへ
   パイプ」導線は、この Phase の自然な続きになる
 
-### Phase 3(任意): dashboard からの導線
+### Phase 3: dashboard diff ビューア(#575)
 
-difit を保留から戻した場合に、web dashboard へその URL リンクを出す程度に
-留める。dashboard の read-only 境界(GET のみ、mutation なし)は変えない。
-ビュアー起動のような副作用は TUI / tmux 側の導線に置いたままにする。
+既存の web dashboard SPA に表示専用パネルを追加し、上記の
+`GET /api/diff` から worktree の patch を読む。
+dashboard の read-only 境界(GET のみ、mutation なし)は変えない。
+difit URL への導線は前提にせず、difit の保留記録も変更しない。
+指摘の還元は TUI の #518-521 または GitHub PR に委譲する。
 
 ## 不採用の記録
 
