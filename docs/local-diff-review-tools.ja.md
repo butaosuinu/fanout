@@ -251,6 +251,8 @@ type DiffResponse = {
     additions: number;
     deletions: number;
     binary: boolean;
+    patchIncluded: boolean;
+    omittedReason: "" | "binary" | "tooLarge" | "responseLimit";
   }>;
   patch: string;
   truncated: boolean;
@@ -264,34 +266,78 @@ type DiffResponse = {
 `files` は patch の切り詰めに関係なく全件を返し、空の場合も `null` ではなく
 `[]` を返す。
 バイナリの `additions` と `deletions` は `0`、`binary` は `true` とする。
+完全なファイルブロックが応答の `patch` にある場合だけ `patchIncluded` を
+`true` にし、`omittedReason` は空文字列にする。
+含まれない場合は `patchIncluded` を `false` にし、理由を `binary`、
+`tooLarge`、`responseLimit` のいずれかで返す。
 `patch` は `diff --git` で始まるファイルブロックを連結した git patch であり、
 HTML fragment として解釈しない。
-`totalBytes` はサーバー側で切り詰める前の `patch` の byte 数である。
+`totalBytes` はバイナリと大きすぎる untracked file を除外した後、サーバー側の
+1 MiB 上限で切り詰める前の `patch` の byte 数である。
+
+一致した snapshot 行の `WorktreePath` はそのまま信用しない。
+server project root と path を symlink 解決して canonicalize し、project root
+から取得した `git worktree list --porcelain -z` に exact top-level として
+含まれることと、両者の canonical git common dir が同じことを確認する。
+子 directory、symlink alias、同じ branch 名を持つ別 checkout は拒否する。
+この検証は patch、stat、raw content を読む各 Git 呼び出しの直前に繰り返し、
+記録された `branchName` と worktree の現在 branch も一致させる。
+
+すべての Git 呼び出しは `LC_ALL=C`、`GIT_OPTIONAL_LOCKS=0`、
+`GIT_LITERAL_PATHSPECS=1`、`GIT_CONFIG_NOSYSTEM=1`、
+`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_ATTR_NOSYSTEM=1` で実行する。
+継承した `GIT_*` は消去し、この allowlist と Git が返した repository path
+だけを設定し直す。
+`git --no-pager` と `-c core.fsmonitor=false` を使い、pager と fsmonitor を
+起動しない。
+changed path の merge-base 側または worktree 側に `filter` attribute が
+設定されていたら、clean/process filter の設定有無にかかわらず 502 へ
+fail closed する。
 
 tracked patch は strict に解決した merge-base に対し、次の形で取得する。
-`--no-ext-diff` と `--no-textconv` で repository または user config 由来の
-外部プロセスを起動せず、`--no-color` で wire 表現を固定する。
+`--no-ext-diff` と `--no-textconv` で external diff と textconv を起動せず、
+`--no-color`、`--ignore-submodules=none`、`--no-renames`、`--text` で
+user config と `.gitattributes` による表示省略を防ぐ。
+patch の context、algorithm、prefix も CLI option で固定する。
 
 ```text
-git -C <worktree> diff --no-ext-diff --no-textconv --no-color <mergeBase> --
-git -C <worktree> diff --numstat -z --no-ext-diff --no-textconv <mergeBase> --
+git --no-pager -C <worktree> -c core.fsmonitor=false -c core.quotePath=true \
+  diff --no-ext-diff --no-textconv --no-color --ignore-submodules=none \
+  --no-renames --text --full-index --unified=3 --inter-hunk-context=0 \
+  --diff-algorithm=myers --no-indent-heuristic \
+  --src-prefix=a/ --dst-prefix=b/ <mergeBase> -- <text-path>
+git --no-pager -C <worktree> -c core.fsmonitor=false -c core.quotePath=true \
+  diff --numstat -z --no-ext-diff --no-textconv --ignore-submodules=none \
+  --no-renames --text \
+  <mergeBase> --
 ```
 
-untracked path は `git -C <worktree> ls-files --others --exclude-standard -z` で
-列挙し、各 path を次の `--no-index` diff で合成する。
+untracked path は次のコマンドで列挙し、各 path を `--no-index` diff で合成する。
 exit 1 は「差分あり」の成功として扱い、`git add -N` を含む index/worktree
 変更コマンドは呼ばない。
 
 ```text
-git -C <worktree> diff --no-index --no-ext-diff --no-textconv --no-color -- /dev/null <path>
+git --no-pager -C <worktree> -c core.fsmonitor=false ls-files \
+  --others --exclude-standard -z
+git --no-pager -C <worktree> -c core.fsmonitor=false diff \
+  --no-index --no-ext-diff --no-textconv --no-color --text \
+  -- /dev/null <path>
 ```
 
 path と numstat は NUL 区切りで解析する。
-rename/copy は destination の repository-relative path を `files[].path` に置き、
-patch header の C-quoted 文字列を path 復元に使わない。
+`--no-renames` により rename/copy は delete と add の 2 file として返す。
+repository-relative path は numstat から取得し、patch header の C-quoted 文字列を
+path 復元に使わない。
 untracked symlink は mode 120000 の link 自体を対象とし、link 先を読まない。
-バイナリと 256 KiB(262,144 bytes)を超える untracked file は `files` に含めるが、
-patch 合成から外す。
+binary 判定は Git attributes に任せず、merge-base と worktree 両側の raw
+content を filter なしで先に読み、先頭 8 KiB に NUL byte があるファイルを
+binary とする。
+tracked patch は binary でない path ごとに numstat の順で実行し、完全な
+ファイルブロックを連結する。
+symlink は mode 120000 の link 自体、gitlink は commit pointer だけを対象とし、
+どちらも参照先の file や nested worktree を読まない。
+バイナリと 256 KiB(262,144 bytes)を超える untracked file は `files` に含めるが
+patch 合成から外し、`omittedReason` に `binary` または `tooLarge` を返す。
 
 サーバー側の固定上限は 1 MiB(1,048,576 bytes)とし、クエリによる変更は
 許さない。
@@ -299,7 +345,10 @@ patch 合成から外す。
 最大の先頭部分を `patch` に返し、`truncated` を `true` にする。
 ファイルブロックの途中では切らない。
 先頭の 1 ブロックだけで上限を超える場合は `patch` を空文字列にする。
+上限で除外したファイルは `omittedReason` を `responseLimit` にする。
 上限以下では patch をそのまま返し、`truncated` は `false` とする。
+SPA は `truncated` が `true`、またはいずれかの `patchIncluded` が `false` なら、
+review 対象が patch に揃っていないことを警告する。
 
 エラー body は全 status で `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
@@ -307,8 +356,9 @@ patch 合成から外す。
 - `400 Bad Request`: identity query が欠落または不正で、`issue`/`task` の
   排他指定や worktree-local 行の `source` 必須条件を満たさない
 - `404 Not Found`: identity が snapshot の 1 行に定まらない、worktree 記録が
-  ない、または cleanup 済みで path が存在しない
-- `502 Bad Gateway`: base/merge-base の strict 解決または git diff に失敗した
+  ない、cleanup 済み、または同じ git common dir の worktree として検証できない
+- `502 Bad Gateway`: base/merge-base の strict 解決、filter attribute の検査、
+  または git diff に失敗した
 
 ### レビューコメントの将来計画
 
