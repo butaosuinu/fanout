@@ -175,6 +175,7 @@ marker は owned runtime directory の検査後に exclusive create で書き、
 Herdr control state は physical canonical git common directory 配下の `fanout/herdr-control.json` を唯一の正典とし、同じ directory の `herdr-control.json.lock` で直列化する。
 lock、atomic replace（temporary file への書き込みと rename）、fail-fast の水準は tmux backend の `.fanout/state.json`（`internal/infra/state` + `internal/infra/atomicfs`）と同じにし、実装にない durability 要件を追加しない。
 **private namespace gate** は fanout-owned path（`fanout` control directory、owned runtime root、XDG 四 root、config、marker、socket parent）に適用する簡素な owner-only 検査であり、owner UID、exact mode、空の extended ACL、symlink 不在を照合する。
+検査は対象 leaf に加えてその祖先（`fanout` control directory は physical common directory まで、owned runtime root は runtime base の parent まで）にも適用し、別 UID が書込み可能な祖先（sticky bit の rename 保護がない world-writable directory など）があれば fail closed にする（祖先の rename / 差し替えによる検査後の registry / lock 置換の防止）。
 `fanout` directory は 0700、registry と lock は 0600 とし、private namespace gate または physical common-directory identity の照合に失敗した場合は Herdr backend を開始しない。
 pre-existing object の ACL / mode は自動修復せず fail closed にする。
 registry は schema version、common-directory identity、console / coordinator / child の final row、最小意図記録（intent 行）、telemetry routing を保持する。
@@ -307,7 +308,7 @@ console intent / row の key は `(canonical git common directory, operation:con
 console shell は user config、未指定なら fanout 起動時の `SHELL` から解決した絶対 path を使う。
 no-arg TUI の attach 準備は、workspace mutation 前に console の intent 行（row key、launch nonce、cwd、user shell の絶対 path、env file path、owner の PID / start token、`total_timeout` と絶対 expiry、発行時刻）を state save し、launch nonce から workspace label と `FANOUT_READY:<launch-nonce>` / `FANOUT_EXEC:<launch-nonce>` を導出する。
 そのうえで `workspace create --cwd <repo-root> --label <launch-nonce> --no-focus` を一回発行し、応答の workspace ID、root PaneRef / `terminal_id` / cwd を照合して intent 行へ記録する。
-応答喪失または crash 後の再実行は存在確認で分類する。intent の nonce と一致する label の workspace が一つだけ存在して cwd が一致すれば採用して続行する。続行は現状から分岐し、root pane の foreground が launcher なら readiness / token から、intent の user shell が既に動いているなら process 照合の finalization から再開する。workspace が不在なら intent 行を消して作り直し、判定できない場合は `manual_cleanup_required` にする。
+応答喪失または crash 後の再実行は存在確認で分類する。intent の nonce と一致する label の workspace が一つだけ存在して cwd が一致すれば採用して続行する。続行は現状から分岐し、root pane の foreground が launcher なら fresh marker の再観測後に readiness / token から、intent の user shell が既に動いているなら process 照合の finalization から再開する。workspace が不在で create request の非発行を証明できる場合だけ intent 行を消して作り直し、それ以外は `manual_cleanup_required` にする。
 launcher marker と root identity を照合した後だけ exact token を一回発行し、launcher は intent の user shell を interactive child として起動する。
 parent は `pane process-info` と OS process 情報で shell の argv / cwd / ancestry を照合して final console row を確定し、同じ state save で intent 行を削除する。
 console は agent detection、rename、emitter、initial operation token 以外の automatic `pane run`、`agent prompt`、nudge の対象にせず、ユーザーが明示的に focus した後の入力だけを受ける。
@@ -448,7 +449,7 @@ flowchart TD
   E -->|create 系: nonce / identity が一致する資源が一意に存在| R["採用して operation を続行"]
   E -->|remove 系: 対象資源が不在| D
   E -->|remove 系: identity 一致のまま残存| B
-  E -->|mutation 非発生(資源が事前状態のまま)| F["intent 行を削除して最初から"]
+  E -->|mutation 非発生を証明できる(local git mutation など)| F["intent 行を削除して最初から"]
   E -->|判定不能 / 部分一致| G["fail-closed manual_cleanup_required"]
   R --> D
 ```
@@ -471,9 +472,10 @@ herdr backend は tmux-parity trust、owned session、version gate を確認し�
 - 応答成功時は workspace label と intent nonce の一致、branch、path、`HEAD` の事後条件を照合し、workspace ID / root PaneRef / `terminal_id` を intent 行へ記録して launcher readiness へ進む。
 - intent 行は launch finalization（agent 検出 / rename / process 照合の完了）まで保持し、final row の確定と同じ state save で削除する。launcher はこの intent から実行内容を読む。
 - 構造化 error が workspace / checkout の非作成を示す失敗では、今回 fanout が作った branch だけを compare-and-delete で削除して fail-fast する（tmux backend の `git worktree add` 失敗時の branch 削除と同じ）。response loss では branch を削除しない。
-- compare-and-delete は fanout の branch 削除手順であり、照合済み tip（launch rollback は記録済み base SHA、cleanup は merge 確認後の current tip）との一致と、同じ full branch ref を checkout する linked worktree の不在を確認してから削除する。checkout を検査しない `update-ref -d` 単独では行わず、checked-out branch を拒否する tmux backend の `git branch -D` と同じ guard を保つ。
+- compare-and-delete は fanout の branch 削除手順であり、照合済み tip（launch rollback は記録済み base SHA、cleanup は merge 確認後の current tip）との一致と、同じ full branch ref を checkout する linked worktree の不在を確認してから削除する。cleanup の tip 照合は current tip が merged PR の head と一致するか merge 先 branch の ancestor であることも検証し、未マージ commit を持つ branch は残す。checkout を検査しない `update-ref -d` 単独では行わず、checked-out branch を拒否する tmux backend の `git branch -D` と同じ guard を保つ。
 - `worktree create` 成功後の launch 失敗（launcher timeout / exit、token 失敗、agent 検出失敗）は tmux backend の `failCleanup` と同水準で rollback する。rollback は launch cycle と別の operation として新しい intent 行と budget で実行し、保存済み label nonce / branch / path / `terminal_id` を再照合してから force なしの `worktree remove` を一回発行し、workspace / checkout の不在を確認できた場合だけ自作 branch を記録済み base SHA の compare-and-delete で削除して両 intent 行を消す。照合不一致と dirty 拒否では資源を残して `manual_cleanup_required` にする（tmux も close を確認できない場合は worktree を温存する）。remove の response loss は再実行時の存在確認で分類し、workspace / checkout の不在を確認できれば rollback 完了として branch 削除と intent 整理へ進み、identity 一致のまま残存していれば新しい rollback として再発行し、判定できない場合だけ `manual_cleanup_required` にする。
-- 応答喪失または crash 後の再実行は存在確認で分類する。recovery は intent の owner process の不在を確認した場合だけ開始し、live owner の intent は expiry の超過にかかわらず in-progress として明確な error を返す。intent の nonce と一致する label の workspace / checkout が一意に存在して branch / path / `HEAD` が一致すれば採用して launch を続行する。続行は現状から分岐し、pane の foreground が launcher なら readiness / token から、intent に一致する child process chain が既に動いているなら agent 検出 / rename / process 照合の finalization から再開する。branch だけが存在する場合（workspace / checkout 不在）は、intent の事前存在が false で tip が記録済み base SHA と一致するなら自作 branch として `worktree create` から続行する。workspace / checkout が存在せず branch も事前状態のままなら intent 行を削除して最初からやり直す。どれとも判定できない場合は `manual_cleanup_required` にして自動では触らない。
+- 応答喪失または crash 後の再実行は存在確認で分類する。recovery は intent の owner process の不在を確認した場合だけ開始し、live owner の intent は expiry の超過にかかわらず in-progress として明確な error を返す。intent の nonce と一致する label の workspace / checkout が一意に存在して branch / path / `HEAD` が一致すれば採用して launch を続行する。続行は現状から分岐し、pane の foreground が launcher なら fresh marker を新たに観測して launcher が未 token であることを確認したうえで readiness / token から、intent に一致する child process chain が既に動いているなら agent 検出 / rename / process 照合の finalization から再開する。branch だけが存在する場合（workspace / checkout 不在）は、intent の事前存在が false で tip が記録済み base SHA と一致するなら自作 branch として `worktree create` から続行する。
+- socket mutation（`worktree create` など）の再発行と intent 削除は、request の非発行を証明できる場合に限る。workspace / checkout が不在でも request が server 内で進行中の可能性を排除できないため、非発行を証明できない場合は `manual_cleanup_required` にする（採用 or fail closed が基準 2 の全部であり、暗黙の作り直しをしない）。branch ref create など local git mutation は構造化結果で非発生を証明できるため、intent 行を削除して最初からやり直せる。
 - 既存 checkout への `worktree open` は同じ intent の launch recovery と cleanup 前の再検証に限り、`already_open:true` は同じ workspace ID / label が row / intent に束縛済みの場合だけ受理する。
 - launch cycle は 3 秒以上 300 秒以下の `total_timeout`（既定 300 秒）を最初の mutation 前に確定し、retry で延長しない。
 - deterministic agent name は `fanout-` + SHA-256（canonical git common directory、row key、launch nonce の length-prefix 連結）の先頭 24 lowercase hex とし、0.7.5 の `[a-z][a-z0-9_-]{0,31}` を満たす。同名 agent が別 pane にある場合は fail closed にする。
@@ -521,7 +523,7 @@ cleanup の契約は次のとおりとする（#531 が実装する）。
 
 branch lineage、cleaned tombstone、explicit continue、tombstone forget の機構は 2026-07-27 の簡素化で撤廃した（proof-grade tier の再導入候補）。
 cleanup 後の branch 継続は「既存 branch を採用する fresh launch」（tmux backend と同じ）で行う。
-branch の compare-and-delete が失敗した場合（tip が動いた、同じ branch を checkout する worktree が残る、確認不能）は branch を残して報告し、削除はユーザーの Git 操作に委ねる。
+branch の compare-and-delete が失敗した場合（tip が動いた、tip が merged PR head とも merge 先の ancestor とも一致しない、同じ branch を checkout する worktree が残る、確認不能）は branch を残して報告し、削除はユーザーの Git 操作に委ねる。
 
 ### plugin event
 
