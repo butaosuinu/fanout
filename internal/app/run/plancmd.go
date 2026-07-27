@@ -390,14 +390,14 @@ func copyPlanSpec(data []byte, target planSpecCopyTarget) error {
 				target.path,
 			)
 		}
-		if err := atomicfs.WriteFileExclusive(target.path, data, 0o644); err != nil {
-			if errors.Is(err, os.ErrExist) {
+		if writeErr := atomicfs.WriteFileExclusive(target.path, data, 0o644); writeErr != nil {
+			if errors.Is(writeErr, os.ErrExist) {
 				return fmt.Errorf(
 					"plan spec destination %s appeared after preflight; refusing to overwrite it",
 					target.path,
 				)
 			}
-			return err
+			return writeErr
 		}
 		return nil
 	}

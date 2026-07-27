@@ -555,107 +555,107 @@ func openHerdrCheckoutProof(projectRoot, checkoutPath, fullRef, headSHA string) 
 		return nil, fmt.Errorf("open herdr checkout root: %w", err)
 	}
 	proof := &herdrCheckoutProof{checkoutRoot: checkoutRoot}
-	fail := func(err error) (*herdrCheckoutProof, error) {
+	fail := func(err error) error {
 		proof.close()
-		return nil, err
+		return err
 	}
 	openedCheckoutInfo, err := checkoutRoot.Stat(".")
 	if err != nil || !os.SameFile(pathInfo, openedCheckoutInfo) {
-		return fail(fmt.Errorf("herdr checkout root identity changed while opening"))
+		return nil, fail(fmt.Errorf("herdr checkout root identity changed while opening"))
 	}
 	registered, err := checkoutRegistered(projectRoot, checkoutPath)
 	if err != nil {
-		return fail(err)
+		return nil, fail(err)
 	}
 	if !registered {
-		return fail(fmt.Errorf("herdr checkout is not registered"))
+		return nil, fail(fmt.Errorf("herdr checkout is not registered"))
 	}
 
 	dotGitInfo, err := checkoutRoot.Lstat(".git")
 	if err != nil || !dotGitInfo.Mode().IsRegular() {
-		return fail(fmt.Errorf("herdr checkout .git is not a regular file"))
+		return nil, fail(fmt.Errorf("herdr checkout .git is not a regular file"))
 	}
 	dotGit, err := checkoutRoot.Open(".git")
 	if err != nil {
-		return fail(fmt.Errorf("open herdr checkout .git: %w", err))
+		return nil, fail(fmt.Errorf("open herdr checkout .git: %w", err))
 	}
 	openedDotGitInfo, statErr := dotGit.Stat()
 	if statErr != nil || !os.SameFile(dotGitInfo, openedDotGitInfo) {
 		_ = dotGit.Close()
-		return fail(fmt.Errorf("herdr checkout .git identity changed while opening"))
+		return nil, fail(fmt.Errorf("herdr checkout .git identity changed while opening"))
 	}
 	dotGitData, readErr := readSmallHerdrMetadata(dotGit)
 	closeErr := dotGit.Close()
 	if readErr != nil {
-		return fail(fmt.Errorf("read herdr checkout .git: %w", readErr))
+		return nil, fail(fmt.Errorf("read herdr checkout .git: %w", readErr))
 	}
 	if closeErr != nil {
-		return fail(fmt.Errorf("close herdr checkout .git: %w", closeErr))
+		return nil, fail(fmt.Errorf("close herdr checkout .git: %w", closeErr))
 	}
 	gitDirPath, err := parseHerdrGitDirFile(dotGitData)
 	if err != nil {
-		return fail(err)
+		return nil, fail(err)
 	}
 
 	commonDir, err := gitTrim(projectRoot, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
-		return fail(fmt.Errorf("resolve herdr common git dir: %w", err))
+		return nil, fail(fmt.Errorf("resolve herdr common git dir: %w", err))
 	}
 	commonDir, err = physicalHerdrPath(commonDir)
 	if err != nil {
-		return fail(fmt.Errorf("canonicalize herdr common git dir: %w", err))
+		return nil, fail(fmt.Errorf("canonicalize herdr common git dir: %w", err))
 	}
 	gitDirPath = filepath.Clean(gitDirPath)
 	physicalGitDir, err := filepath.EvalSymlinks(gitDirPath)
 	if err != nil || filepath.Clean(physicalGitDir) != gitDirPath {
-		return fail(fmt.Errorf("herdr linked-worktree git dir is not a canonical non-symlink path"))
+		return nil, fail(fmt.Errorf("herdr linked-worktree git dir is not a canonical non-symlink path"))
 	}
 	if filepath.Dir(gitDirPath) != filepath.Join(commonDir, "worktrees") {
-		return fail(fmt.Errorf("herdr linked-worktree git dir is outside the repository worktrees directory"))
+		return nil, fail(fmt.Errorf("herdr linked-worktree git dir is outside the repository worktrees directory"))
 	}
 	gitDirInfo, err := os.Lstat(gitDirPath)
 	if err != nil || !gitDirInfo.IsDir() || gitDirInfo.Mode()&os.ModeSymlink != 0 {
-		return fail(fmt.Errorf("herdr linked-worktree git dir is not a non-symlink directory"))
+		return nil, fail(fmt.Errorf("herdr linked-worktree git dir is not a non-symlink directory"))
 	}
 	gitDirRoot, err := os.OpenRoot(gitDirPath)
 	if err != nil {
-		return fail(fmt.Errorf("open herdr linked-worktree git dir: %w", err))
+		return nil, fail(fmt.Errorf("open herdr linked-worktree git dir: %w", err))
 	}
 	proof.gitDirRoot = gitDirRoot
 	proof.gitDirPath = gitDirPath
 	openedGitDirInfo, err := gitDirRoot.Stat(".")
 	if err != nil || !os.SameFile(gitDirInfo, openedGitDirInfo) {
-		return fail(fmt.Errorf("herdr linked-worktree git dir identity changed while opening"))
+		return nil, fail(fmt.Errorf("herdr linked-worktree git dir identity changed while opening"))
 	}
 	backlinkData, err := readHerdrRootMetadata(gitDirRoot, "gitdir")
 	if err != nil {
-		return fail(err)
+		return nil, fail(err)
 	}
 	backlinkPath := filepath.Clean(strings.TrimSpace(string(backlinkData)))
 	if !filepath.IsAbs(backlinkPath) {
-		return fail(fmt.Errorf("herdr linked-worktree backlink is not absolute"))
+		return nil, fail(fmt.Errorf("herdr linked-worktree backlink is not absolute"))
 	}
 	backlinkInfo, err := os.Stat(backlinkPath)
 	if err != nil || !os.SameFile(dotGitInfo, backlinkInfo) {
-		return fail(fmt.Errorf("herdr linked-worktree backlink does not identify the checkout .git file"))
+		return nil, fail(fmt.Errorf("herdr linked-worktree backlink does not identify the checkout .git file"))
 	}
 	headData, err := readHerdrRootMetadata(gitDirRoot, "HEAD")
 	if err != nil {
-		return fail(err)
+		return nil, fail(err)
 	}
 	if string(headData) != "ref: "+fullRef+"\n" {
-		return fail(fmt.Errorf("herdr linked-worktree HEAD does not match %s", fullRef))
+		return nil, fail(fmt.Errorf("herdr linked-worktree HEAD does not match %s", fullRef))
 	}
 	branchOID, found, err := ObserveBranch(projectRoot, fullRef)
 	if err != nil {
-		return fail(err)
+		return nil, fail(err)
 	}
 	if !found || branchOID != headSHA {
-		return fail(fmt.Errorf("herdr checkout branch %s does not point at %s", fullRef, headSHA))
+		return nil, fail(fmt.Errorf("herdr checkout branch %s does not point at %s", fullRef, headSHA))
 	}
 	currentPathInfo, err := parentProof.worktreesRoot.Lstat(parentProof.leaf)
 	if err != nil || !os.SameFile(pathInfo, currentPathInfo) {
-		return fail(fmt.Errorf("herdr checkout root identity changed during proof"))
+		return nil, fail(fmt.Errorf("herdr checkout root identity changed during proof"))
 	}
 	return proof, nil
 }

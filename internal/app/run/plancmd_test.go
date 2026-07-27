@@ -168,8 +168,8 @@ func TestCopyPlanSpecPreservesMatchingDestinationMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := copyPlanSpec(data, target); err != nil {
-		t.Fatal(err)
+	if copyErr := copyPlanSpec(data, target); copyErr != nil {
+		t.Fatal(copyErr)
 	}
 	info, err := os.Stat(dst)
 	if err != nil {
@@ -196,8 +196,8 @@ func TestCopyPlanSpecUpdatesCapturedDestinationAndPreservesMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := copyPlanSpec(snapshot.Bytes(), target); err != nil {
-		t.Fatal(err)
+	if copyErr := copyPlanSpec(snapshot.Bytes(), target); copyErr != nil {
+		t.Fatal(copyErr)
 	}
 	data, readErr := os.ReadFile(dst)
 	if readErr != nil {
@@ -231,8 +231,8 @@ func TestCopyPlanSpecRejectsDestinationChangedAfterPreflight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(dst, []byte("concurrent user bytes"), 0o600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(dst, []byte("concurrent user bytes"), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	err = copyPlanSpec(snapshot.Bytes(), target)
@@ -264,10 +264,10 @@ func TestPreparePlanSpecCopyRejectsSavedSourceChangedAfterSnapshot(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(dst, []byte(
+	if writeErr := os.WriteFile(dst, []byte(
 		`{"version":1,"plan":{"slug":"launch-plan","title":"Changed"},"tasks":[{"id":"base","title":"Base","briefing":"Build it"}]}`,
-	), 0o600); err != nil {
-		t.Fatal(err)
+	), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	_, err = preparePlanSpecCopy(snapshot, repo, "launch-plan")

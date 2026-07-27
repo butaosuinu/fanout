@@ -148,8 +148,8 @@ func planFreshHerdrWorktree(
 	if projectIdentity.RepoKey != repoIdentity.RepoKey {
 		return state.HerdrLaunchIntent{}, fmt.Errorf("herdr project root and source root belong to different repositories")
 	}
-	if err := worktree.EnsureHerdrWorktreeParent(req.ProjectRoot, req.WorktreePath); err != nil {
-		return state.HerdrLaunchIntent{}, err
+	if parentErr := worktree.EnsureHerdrWorktreeParent(req.ProjectRoot, req.WorktreePath); parentErr != nil {
+		return state.HerdrLaunchIntent{}, parentErr
 	}
 	if ensureErr := worktree.EnsureLocalExclude(req.SourceRoot); ensureErr != nil {
 		return state.HerdrLaunchIntent{}, ensureErr
@@ -924,8 +924,8 @@ func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.Her
 	if projectIdentity.RepoKey != repoIdentity.RepoKey {
 		return fmt.Errorf("herdr project root and source root belong to different repositories")
 	}
-	if err := worktree.VerifyHerdrWorktreeParent(req.ProjectRoot, req.WorktreePath); err != nil {
-		return err
+	if parentErr := worktree.VerifyHerdrWorktreeParent(req.ProjectRoot, req.WorktreePath); parentErr != nil {
+		return parentErr
 	}
 	fullBranchRef, err := worktree.HerdrBranchRef(req.SourceRoot, req.BranchName)
 	if err != nil {

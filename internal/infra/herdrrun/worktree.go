@@ -160,10 +160,10 @@ func (s *OwnedSession) MutateWorktree(ctx context.Context, req WorktreeMutationR
 			return WorktreeMutationResult{}, validateErr
 		}
 	}
-	if err := s.backend.verifyEmptyPluginRegistry(ctx, probed); err != nil {
+	if policyErr := s.backend.verifyEmptyPluginRegistry(ctx, probed); policyErr != nil {
 		return WorktreeMutationResult{}, fmt.Errorf(
 			"recheck herdr owned plugin registry before worktree mutation: %w",
-			err,
+			policyErr,
 		)
 	}
 
