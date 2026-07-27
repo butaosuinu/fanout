@@ -252,8 +252,8 @@ type DiffResponse = {
   capturedAt: string;
   files: Array<{
     path: string;
-    additions: number;
-    deletions: number;
+    additions: number | null;
+    deletions: number | null;
     binary: boolean;
     patchIncluded: boolean;
     omittedReason: "" | "binary" | "tooLarge" | "collectionLimit" | "responseLimit";
@@ -270,6 +270,8 @@ type DiffResponse = {
 `files` は後述する 500 files 上限内の全件を返し、空の場合も `null` ではなく
 `[]` を返す。
 バイナリの `additions` と `deletions` は `0`、`binary` は `true` とする。
+`collectionLimit` で省略した file の `additions` と `deletions` は `null` とし、
+統計を計算しない。
 完全なファイルブロックが応答の `patch` にある場合だけ `patchIncluded` を
 `true` にし、`omittedReason` は空文字列にする。
 含まれない場合は `patchIncluded` を `false` にし、理由を `binary`、
@@ -462,6 +464,7 @@ patch の収集上限は 10 MiB(10,485,760 bytes)とする。
 `diff --git` block を加えると上限を超える場合はその block を加えない。
 その file と後続の patch 対象 file は `patchIncluded: false`、
 `omittedReason: "collectionLimit"` とし、`truncated` を `true` にする。
+同じ file の `additions` と `deletions` は `null` とする。
 以後の patch subprocess は起動しない。
 patch buffer は 10 MiB + 1 byte を超えない。
 各 diff engine の regular-file 入力も before/after 各 256 KiB 以下であり、
@@ -477,6 +480,9 @@ metadata-only body が上限を超える場合は、`files` を省略せず 502 
 使い、file block の途中では切らない。
 上限で除外した file と後続の patch 対象 file は `patchIncluded: false`、
 `omittedReason: "responseLimit"` とし、`truncated` を `true` にする。
+`responseLimit` は収集済みの完全な file block だけに適用し、`binary`、
+`tooLarge`、`collectionLimit` の既存理由を上書きしない。
+両上限に該当する file は、先に適用した `collectionLimit` を報告する。
 先頭の 1 block も収まらない場合は `patch` を空文字列にする。
 body 全体が上限以下なら patch をそのまま返し、10 MiB 収集上限で設定済みの
 `truncated` は保持する。
@@ -510,6 +516,8 @@ base=`A`、index=`B`、worktree=`A` と、staged add 後に worktree から削�
 path は最終変更なしとして `files` に含めないことを確認する。
 standard ignore を適用しない raw path 集合が 10 MiB を超える worktree でも、
 ignore 後の対象が上限内なら 200 と対象 file だけを返すことを確認する。
+`collectionLimit` の file は統計が `null` となり、1 MiB response 上限にも
+該当する場合は `omittedReason: "collectionLimit"` を保持することを確認する。
 
 handler が生成する次のエラー body は `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
