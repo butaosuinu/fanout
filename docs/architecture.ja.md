@@ -54,18 +54,18 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | 層 | パッケージ | 責務 | Class |
 |---|---|---|---|
 | meta | `arch` | 層ルールの CI 強制(唯一のガード)。緩和・allowlist 追加は要精査 | H |
-| infra | `state` | `.fanout/state.json` と lock の読み書き | H |
-| infra | `worktree` | base branch 解決・refresh・`git worktree add` | H |
+| infra | `state` | `.fanout/state.json` と git common directory の Herdr control registry、各 lock の読み書き | H |
+| infra | `worktree` | base branch 解決・refresh・`git worktree add`、Herdr branch の atomic ref 予約と checkout 検証 | H |
 | infra | `hooks` | ライフサイクルフック実行 | H |
 | infra | `selfupdate` | 自己アップデート | H |
 | infra | `team` | `--team` / `fanout msg` の SQLite バス | H |
 | infra | `settings` | 設定解決。repo config からの watcher・runtime backend 有効化と通知先設定を遮断する安全ゲート | H |
-| infra | `herdrrun` | herdr stable 0.7.5 以上の version gate、fanout-owned session lifecycle と owned mutation、snapshot 投影 | H |
+| infra | `herdrrun` | herdr stable 0.7.5 以上の version gate、fanout-owned session lifecycle、workspace/worktree mutation、snapshot 投影 | H |
 | core | `backend` | runtime backend 契約・親 stickiness・選択優先順位・矛盾時の fail-closed 判定 | H |
 | app | `watch` | ラベル watcher の 1 サイクル | H |
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
-| app | `panelaunch` | pane 生成オーケストレーション | H |
+| app | `panelaunch` | tmux pane 生成と Herdr coordinator/worktree 実体化のオーケストレーション | H |
 | ui | `dashboard`(`server.go`) | localhost web サーバの mux・token 検証 | H |
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
 | ui | `dashboard`(`peek.go` / `plan.go`) | capture-pane 前の検証チェーン(記録済み pane のみ。`plan.go` は plan mode かつ codex に限定) | H |
@@ -114,6 +114,11 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 - **state lock の順序と原子性**: `.fanout/state.json.lock` はプランニングと
   起動の両方をカバーする。ロック区間を狭めると `(parent, issueNum)` の
   idempotency が壊れる。
+- **Herdr control registry は repository 共通**: linked worktree 間の Herdr
+  row / intent は git common directory の `fanout/herdr-control.json` とその
+  lock を使う。intent 保存から branch 予約、socket mutation、事後条件の確認
+  まで lock を保持する。発行済み mutation は再発行せず、label nonce と Git
+  事後条件を一意に確認できない場合は `manual_cleanup_required` にする。
 - **worktree refresh は user work を壊さない**: base branch が dirty / ahead /
   diverged なら強制更新せず fail する。
 - **watch のトリガーラベルはプロンプトインジェクション境界**: issue 本文が

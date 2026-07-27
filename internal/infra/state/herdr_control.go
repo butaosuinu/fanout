@@ -1,0 +1,502 @@
+package state
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"syscall"
+
+	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/parentref"
+	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
+	"github.com/butaosuinu/fanout/internal/infra/execx"
+)
+
+const HerdrControlSchemaVersion = 1
+
+var herdrControlCommitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+type HerdrIntentKind string
+
+const (
+	HerdrIntentCoordinator HerdrIntentKind = "coordinator"
+	HerdrIntentWorktree    HerdrIntentKind = "worktree"
+)
+
+type HerdrIntentStatus string
+
+const (
+	HerdrIntentPlanned               HerdrIntentStatus = "planned"
+	HerdrIntentIssued                HerdrIntentStatus = "issued"
+	HerdrIntentRealized              HerdrIntentStatus = "realized"
+	HerdrIntentManualCleanupRequired HerdrIntentStatus = "manual_cleanup_required"
+)
+
+// HerdrResource is the runtime and Git identity established by one Herdr
+// workspace mutation. The workspace label is the ownership nonce.
+type HerdrResource struct {
+	WorkspaceID string `json:"workspaceId"`
+	Label       string `json:"label"`
+	PaneID      string `json:"paneId"`
+	TerminalID  string `json:"terminalId"`
+	CurrentPath string `json:"currentPath"`
+	RepoKey     string `json:"repoKey,omitempty"`
+	RepoRoot    string `json:"repoRoot,omitempty"`
+}
+
+// HerdrIntent is one minimal mutation journal row. Status records whether the
+// socket request may have been issued; recovery never reissues an issued
+// request and instead classifies the current workspace and checkout state.
+type HerdrIntent struct {
+	ID       string            `json:"id"`
+	Kind     HerdrIntentKind   `json:"kind"`
+	Status   HerdrIntentStatus `json:"status"`
+	Parent   string            `json:"parent"`
+	IssueNum int               `json:"issueNum,omitempty"`
+	TaskID   string            `json:"taskId,omitempty"`
+	Backend  backend.Name      `json:"backend"`
+
+	Slug          string `json:"slug,omitempty"`
+	BranchName    string `json:"branchName,omitempty"`
+	FullBranchRef string `json:"fullBranchRef,omitempty"`
+	BaseBranch    string `json:"baseBranch,omitempty"`
+	BaseSHA       string `json:"baseSha,omitempty"`
+	ExpectedHead  string `json:"expectedHead,omitempty"`
+	WorktreePath  string `json:"worktreePath"`
+	BranchExisted bool   `json:"branchExisted,omitempty"`
+	BranchCreated bool   `json:"branchCreated,omitempty"`
+
+	WorkspaceLabel string        `json:"workspaceLabel"`
+	Resource       HerdrResource `json:"resource"`
+	Coordinator    HerdrResource `json:"coordinator"`
+	Session        string        `json:"session"`
+	SocketPath     string        `json:"socketPath"`
+	TimeoutMS      int64         `json:"timeoutMs"`
+	ExpiresUnixMS  int64         `json:"expiresUnixMs"`
+
+	Failure string `json:"failure,omitempty"`
+}
+
+// HerdrRow is the final shared-registry record populated after launcher
+// finalization. Issue #527 provides its persistence and backend-binding shape;
+// issue #528 owns the transition from a realized intent to this row.
+type HerdrRow struct {
+	ID       string          `json:"id"`
+	Kind     HerdrIntentKind `json:"kind"`
+	Parent   string          `json:"parent"`
+	IssueNum int             `json:"issueNum,omitempty"`
+	TaskID   string          `json:"taskId,omitempty"`
+	Backend  backend.Name    `json:"backend"`
+
+	Slug          string `json:"slug,omitempty"`
+	BranchName    string `json:"branchName,omitempty"`
+	FullBranchRef string `json:"fullBranchRef,omitempty"`
+	BaseBranch    string `json:"baseBranch,omitempty"`
+	BaseSHA       string `json:"baseSha,omitempty"`
+	ExpectedHead  string `json:"expectedHead,omitempty"`
+	WorktreePath  string `json:"worktreePath"`
+
+	Resource   HerdrResource `json:"resource"`
+	Session    string        `json:"session"`
+	SocketPath string        `json:"socketPath"`
+}
+
+type HerdrControlStore struct {
+	SchemaVersion int           `json:"schemaVersion"`
+	Rows          []HerdrRow    `json:"rows"`
+	Intents       []HerdrIntent `json:"intents"`
+}
+
+type LockedHerdrControl struct {
+	path string
+	file *os.File
+	HerdrControlStore
+}
+
+// HerdrControlPath returns the repository-common registry path shared by every
+// linked worktree.
+func HerdrControlPath(projectRoot string) (string, error) {
+	out, err := execx.Combined(projectRoot, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return "", fmt.Errorf("resolve Herdr control git common directory: %w", err)
+	}
+	commonDir := strings.TrimSpace(string(out))
+	if commonDir == "" || !filepath.IsAbs(commonDir) {
+		return "", fmt.Errorf("resolve Herdr control git common directory: invalid path %q", commonDir)
+	}
+	commonDir, err = filepath.EvalSymlinks(commonDir)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize Herdr control git common directory: %w", err)
+	}
+	return filepath.Join(filepath.Clean(commonDir), "fanout", "herdr-control.json"), nil
+}
+
+func LoadHerdrControl(projectRoot string) (HerdrControlStore, error) {
+	path, err := HerdrControlPath(projectRoot)
+	if err != nil {
+		return HerdrControlStore{}, err
+	}
+	return loadHerdrControl(path)
+}
+
+func LockHerdrControl(projectRoot string) (*LockedHerdrControl, error) {
+	path, pathErr := HerdrControlPath(projectRoot)
+	if pathErr != nil {
+		return nil, pathErr
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("create Herdr control directory: %w", err)
+	}
+	lockPath := path + ".lock"
+	file, openErr := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if openErr != nil {
+		return nil, fmt.Errorf("open Herdr control lock %s: %w", lockPath, openErr)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close() // The flock error is authoritative.
+		return nil, fmt.Errorf("lock Herdr control %s: %w", lockPath, err)
+	}
+	store, err := loadHerdrControl(path)
+	if err != nil {
+		// The load error is authoritative while the private lock is unwound.
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+		return nil, err
+	}
+	return &LockedHerdrControl{path: path, file: file, HerdrControlStore: store}, nil
+}
+
+func (l *LockedHerdrControl) Unlock() error {
+	if l == nil || l.file == nil {
+		return nil
+	}
+	unlockErr := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	closeErr := l.file.Close()
+	l.file = nil
+	if unlockErr != nil {
+		return unlockErr
+	}
+	return closeErr
+}
+
+func (l *LockedHerdrControl) Save() error {
+	if l == nil || l.file == nil {
+		return fmt.Errorf("save Herdr control without a held lock")
+	}
+	l.normalize()
+	if err := validateHerdrControl(l.HerdrControlStore); err != nil {
+		return err
+	}
+	if err := atomicfs.WriteJSON(l.path, l.HerdrControlStore, 0o600); err != nil {
+		return fmt.Errorf("write Herdr control %s: %w", l.path, err)
+	}
+	return nil
+}
+
+func (s HerdrControlStore) FindIntent(id string) (HerdrIntent, bool) {
+	for _, intent := range s.Intents {
+		if intent.ID == id {
+			return intent, true
+		}
+	}
+	return HerdrIntent{}, false
+}
+
+func (s *HerdrControlStore) UpsertIntent(intent HerdrIntent) {
+	for i := range s.Intents {
+		if s.Intents[i].ID == intent.ID {
+			s.Intents[i] = intent
+			return
+		}
+	}
+	s.Intents = append(s.Intents, intent)
+}
+
+func (s *HerdrControlStore) RemoveIntent(id string) bool {
+	for i := range s.Intents {
+		if s.Intents[i].ID != id {
+			continue
+		}
+		s.Intents = append(s.Intents[:i], s.Intents[i+1:]...)
+		return true
+	}
+	return false
+}
+
+func (s HerdrControlStore) FindRow(id string) (HerdrRow, bool) {
+	for _, row := range s.Rows {
+		if row.ID == id {
+			return row, true
+		}
+	}
+	return HerdrRow{}, false
+}
+
+func (s *HerdrControlStore) UpsertRow(row HerdrRow) {
+	for i := range s.Rows {
+		if s.Rows[i].ID == row.ID {
+			s.Rows[i] = row
+			return
+		}
+	}
+	s.Rows = append(s.Rows, row)
+}
+
+func (s HerdrControlStore) RowBindings() []backend.Binding {
+	bindings := make([]backend.Binding, 0, len(s.Rows))
+	for _, row := range s.Rows {
+		bindings = append(bindings, backend.Binding{Parent: row.Parent, Backend: row.Backend})
+	}
+	return bindings
+}
+
+func (s HerdrControlStore) ProvisionalBindings() []backend.Binding {
+	bindings := make([]backend.Binding, 0, len(s.Intents))
+	for _, intent := range s.Intents {
+		bindings = append(bindings, backend.Binding{Parent: intent.Parent, Backend: intent.Backend})
+	}
+	return bindings
+}
+
+func HerdrCoordinatorIntentID(parent string) (string, error) {
+	parent = parentref.Canon(strings.TrimSpace(parent))
+	if parent == "" {
+		return "", fmt.Errorf("herdr coordinator intent requires a parent")
+	}
+	return "coordinator:" + tuplePart(parent), nil
+}
+
+// HerdrWorktreeIntentID uses the same issue/task key as the tmux state store:
+// (parent, issue number) or (plan parent, task id).
+func HerdrWorktreeIntentID(parent string, issueNum int, taskID string) (string, error) {
+	parent = parentref.Canon(strings.TrimSpace(parent))
+	taskID = strings.TrimSpace(taskID)
+	switch {
+	case parent == "":
+		return "", fmt.Errorf("herdr worktree intent requires a parent")
+	case taskID != "" && issueNum == 0:
+		return "task:" + tuplePart(parent) + ":" + tuplePart(taskID), nil
+	case taskID == "" && issueNum > 0:
+		return "issue:" + tuplePart(parent) + ":" + strconv.Itoa(issueNum), nil
+	default:
+		return "", fmt.Errorf("herdr worktree intent requires exactly one issue number or task id")
+	}
+}
+
+func loadHerdrControl(path string) (HerdrControlStore, error) {
+	var store HerdrControlStore
+	found, err := atomicfs.ReadJSON(path, &store)
+	if err != nil {
+		if found {
+			return HerdrControlStore{}, fmt.Errorf("parse Herdr control %s: %w", path, err)
+		}
+		return HerdrControlStore{}, fmt.Errorf("read Herdr control %s: %w", path, err)
+	}
+	if !found {
+		store = emptyHerdrControl()
+	}
+	store.normalize()
+	if err := validateHerdrControl(store); err != nil {
+		return HerdrControlStore{}, fmt.Errorf("validate Herdr control %s: %w", path, err)
+	}
+	return store, nil
+}
+
+func emptyHerdrControl() HerdrControlStore {
+	return HerdrControlStore{
+		SchemaVersion: HerdrControlSchemaVersion,
+		Rows:          []HerdrRow{},
+		Intents:       []HerdrIntent{},
+	}
+}
+
+func (s *HerdrControlStore) normalize() {
+	if s.SchemaVersion == 0 {
+		s.SchemaVersion = HerdrControlSchemaVersion
+	}
+	if s.Rows == nil {
+		s.Rows = []HerdrRow{}
+	}
+	if s.Intents == nil {
+		s.Intents = []HerdrIntent{}
+	}
+}
+
+func validateHerdrControl(store HerdrControlStore) error {
+	if store.SchemaVersion != HerdrControlSchemaVersion {
+		return fmt.Errorf("unsupported Herdr control schema version %d", store.SchemaVersion)
+	}
+	ids := map[string]string{}
+	reservations := map[string]string{}
+	for _, row := range store.Rows {
+		if err := validateHerdrRow(row); err != nil {
+			return err
+		}
+		if previous := ids[row.ID]; previous != "" {
+			return fmt.Errorf("duplicate Herdr control id %q in %s and row", row.ID, previous)
+		}
+		ids[row.ID] = "row"
+		if row.Kind == HerdrIntentWorktree {
+			if err := reserveHerdrControlIdentity(
+				reservations,
+				row.ID,
+				row.FullBranchRef,
+				row.WorktreePath,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	for _, intent := range store.Intents {
+		if err := validateHerdrIntent(intent); err != nil {
+			return err
+		}
+		if previous := ids[intent.ID]; previous != "" {
+			return fmt.Errorf("duplicate Herdr control id %q in %s and intent", intent.ID, previous)
+		}
+		ids[intent.ID] = "intent"
+		if intent.Kind != HerdrIntentWorktree {
+			continue
+		}
+		if err := reserveHerdrControlIdentity(
+			reservations,
+			intent.ID,
+			intent.FullBranchRef,
+			intent.WorktreePath,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateHerdrRow(row HerdrRow) error {
+	parent := parentref.Canon(strings.TrimSpace(row.Parent))
+	if row.ID == "" || parent == "" || row.Parent != parent ||
+		row.Backend != backend.Herdr || row.WorktreePath == "" ||
+		row.Session == "" || row.SocketPath == "" {
+		return fmt.Errorf("herdr control row %q is incomplete", row.ID)
+	}
+	var expectedID string
+	var err error
+	switch row.Kind {
+	case HerdrIntentCoordinator:
+		expectedID, err = HerdrCoordinatorIntentID(parent)
+		if row.IssueNum != 0 || row.TaskID != "" || row.Slug != "" ||
+			row.BranchName != "" || row.FullBranchRef != "" ||
+			row.BaseBranch != "" || row.BaseSHA != "" || row.ExpectedHead != "" {
+			return fmt.Errorf("herdr coordinator row %s contains child fields", row.ID)
+		}
+	case HerdrIntentWorktree:
+		expectedID, err = HerdrWorktreeIntentID(parent, row.IssueNum, row.TaskID)
+		if row.Slug == "" || row.BranchName == "" ||
+			row.FullBranchRef != "refs/heads/"+row.BranchName ||
+			row.BaseBranch == "" || !herdrControlCommitSHA.MatchString(row.BaseSHA) ||
+			!herdrControlCommitSHA.MatchString(row.ExpectedHead) {
+			return fmt.Errorf("herdr worktree row %s is incomplete", row.ID)
+		}
+	default:
+		return fmt.Errorf("herdr row %s has unknown kind %q", row.ID, row.Kind)
+	}
+	if err != nil || row.ID != expectedID {
+		return fmt.Errorf("herdr row %s has inconsistent identity", row.ID)
+	}
+	if err := validateHerdrResource(row.Resource, row.Kind == HerdrIntentWorktree); err != nil {
+		return fmt.Errorf("herdr row %s: %w", row.ID, err)
+	}
+	if filepath.Clean(row.Resource.CurrentPath) != filepath.Clean(row.WorktreePath) {
+		return fmt.Errorf("herdr row %s resource path does not match row", row.ID)
+	}
+	return nil
+}
+
+func validateHerdrIntent(intent HerdrIntent) error {
+	parent := parentref.Canon(strings.TrimSpace(intent.Parent))
+	if intent.ID == "" || parent == "" || intent.Parent != parent ||
+		intent.Backend != backend.Herdr || intent.WorkspaceLabel == "" ||
+		intent.WorktreePath == "" || intent.Session == "" || intent.SocketPath == "" ||
+		intent.TimeoutMS < 3000 || intent.TimeoutMS > 300000 || intent.ExpiresUnixMS <= 0 {
+		return fmt.Errorf("herdr intent %q is incomplete", intent.ID)
+	}
+	var expectedID string
+	var err error
+	switch intent.Kind {
+	case HerdrIntentCoordinator:
+		expectedID, err = HerdrCoordinatorIntentID(parent)
+		if intent.IssueNum != 0 || intent.TaskID != "" || intent.BranchName != "" ||
+			intent.FullBranchRef != "" || intent.BaseSHA != "" || intent.Coordinator.WorkspaceID != "" {
+			return fmt.Errorf("herdr coordinator intent %s contains child fields", intent.ID)
+		}
+	case HerdrIntentWorktree:
+		expectedID, err = HerdrWorktreeIntentID(parent, intent.IssueNum, intent.TaskID)
+		if intent.Slug == "" || intent.BranchName == "" || intent.FullBranchRef == "" ||
+			intent.FullBranchRef != "refs/heads/"+intent.BranchName ||
+			intent.BaseBranch == "" || !herdrControlCommitSHA.MatchString(intent.BaseSHA) ||
+			!herdrControlCommitSHA.MatchString(intent.ExpectedHead) ||
+			intent.Coordinator.WorkspaceID == "" {
+			return fmt.Errorf("herdr worktree intent %s is incomplete", intent.ID)
+		}
+	default:
+		return fmt.Errorf("herdr intent %s has unknown kind %q", intent.ID, intent.Kind)
+	}
+	if err != nil || intent.ID != expectedID {
+		return fmt.Errorf("herdr intent %s has inconsistent identity", intent.ID)
+	}
+	switch intent.Status {
+	case HerdrIntentPlanned, HerdrIntentIssued:
+		if intent.Resource.WorkspaceID != "" {
+			return fmt.Errorf("herdr intent %s has a resource before realization", intent.ID)
+		}
+	case HerdrIntentRealized:
+		if err := validateHerdrResource(intent.Resource, intent.Kind == HerdrIntentWorktree); err != nil {
+			return fmt.Errorf("herdr intent %s: %w", intent.ID, err)
+		}
+	case HerdrIntentManualCleanupRequired:
+		if strings.TrimSpace(intent.Failure) == "" {
+			return fmt.Errorf("herdr intent %s requires a failure reason", intent.ID)
+		}
+	default:
+		return fmt.Errorf("herdr intent %s has unknown status %q", intent.ID, intent.Status)
+	}
+	if intent.BranchCreated && (intent.Kind != HerdrIntentWorktree || intent.BranchExisted) {
+		return fmt.Errorf("herdr intent %s has an invalid branch ownership record", intent.ID)
+	}
+	return nil
+}
+
+func reserveHerdrControlIdentity(
+	reservations map[string]string,
+	id, fullBranchRef, worktreePath string,
+) error {
+	for _, reservation := range []string{
+		"branch:" + fullBranchRef,
+		"path:" + filepath.Clean(worktreePath),
+	} {
+		if previous := reservations[reservation]; previous != "" {
+			return fmt.Errorf("herdr entries %s and %s reserve the same %s", previous, id, reservation)
+		}
+		reservations[reservation] = id
+	}
+	return nil
+}
+
+func validateHerdrResource(resource HerdrResource, worktree bool) error {
+	if resource.WorkspaceID == "" || resource.Label == "" || resource.PaneID == "" ||
+		resource.TerminalID == "" || resource.CurrentPath == "" {
+		return fmt.Errorf("herdr resource is incomplete")
+	}
+	if worktree && (resource.RepoKey == "" || resource.RepoRoot == "") {
+		return fmt.Errorf("herdr worktree resource has incomplete Git provenance")
+	}
+	if !worktree && (resource.RepoKey != "" || resource.RepoRoot != "") {
+		return fmt.Errorf("herdr coordinator resource unexpectedly has Git provenance")
+	}
+	return nil
+}
+
+func tuplePart(value string) string {
+	return strconv.Itoa(len(value)) + ":" + value
+}

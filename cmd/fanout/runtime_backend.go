@@ -34,6 +34,7 @@ type runtimeBackendInputs struct {
 	userDefault        backend.Name
 	rows               []backend.Binding
 	provisionalIntents []backend.Binding
+	suppliedIntents    []backend.Binding
 
 	herdrSession    string
 	herdrSocketPath string
@@ -129,6 +130,9 @@ func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.
 		return launchBackendResolution{}, err
 	}
 	inputs.rows = rows
+	if refreshErr := refreshHerdrControlBindings(&inputs); refreshErr != nil {
+		return launchBackendResolution{}, refreshErr
+	}
 	selection, err := resolveBackendSelection(cfg.ParentRef, inputs)
 	if err != nil {
 		return launchBackendResolution{}, err
@@ -159,6 +163,9 @@ func backendSelectionVerifier(selection backend.Selection, inputs runtimeBackend
 			return err
 		}
 		recheck.rows = rows
+		if err := refreshHerdrControlBindings(&recheck); err != nil {
+			return err
+		}
 		got, resolveErr := resolveBackendSelection(parent, recheck)
 		if resolveErr != nil {
 			return resolveErr
@@ -253,9 +260,27 @@ func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store st
 		userDefault:        userDefault,
 		rows:               backendBindings(projectRoot, store),
 		provisionalIntents: append([]backend.Binding(nil), provisionalIntents...),
+		suppliedIntents:    append([]backend.Binding(nil), provisionalIntents...),
 		herdrSession:       os.Getenv("HERDR_SESSION"),
 		herdrSocketPath:    os.Getenv("HERDR_SOCKET_PATH"),
 	}
+}
+
+func refreshHerdrControlBindings(inputs *runtimeBackendInputs) error {
+	if strings.TrimSpace(inputs.projectRoot) == "" {
+		inputs.provisionalIntents = append([]backend.Binding(nil), inputs.suppliedIntents...)
+		return nil
+	}
+	control, err := state.LoadHerdrControl(inputs.projectRoot)
+	if err != nil {
+		return fmt.Errorf("load Herdr runtime bindings: %w", err)
+	}
+	inputs.rows = append(inputs.rows, control.RowBindings()...)
+	inputs.provisionalIntents = append(
+		append([]backend.Binding(nil), inputs.suppliedIntents...),
+		control.ProvisionalBindings()...,
+	)
+	return nil
 }
 
 func resolveBackendSelection(parent string, inputs runtimeBackendInputs) (backend.Selection, error) {
