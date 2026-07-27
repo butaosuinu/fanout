@@ -210,7 +210,7 @@ func ResolveHerdrRepoIdentity(root string) (HerdrRepoIdentity, error) {
 		RepoKey:      repoKey,
 		RepoRoot:     repoRoot,
 		GitDir:       gitDir,
-		GitDirDevice: uint64(stat.Dev),
+		GitDirDevice: uint64(int64(stat.Dev)),
 		GitDirInode:  stat.Ino,
 	}, nil
 }
