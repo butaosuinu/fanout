@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +121,42 @@ func TestRealizeHerdrWorktreePersistsIntentAndSkipsReplay(t *testing.T) {
 	}
 }
 
+func TestRealizeHerdrWorktreeChecksPolicyBeforeBranchReservation(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+	runtime.policyErr = errors.New("unexpected owned plugin")
+
+	req := testHerdrWorktreeRequest(repo, "policy-blocked", 426)
+	_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if err == nil || !strings.Contains(err.Error(), "unexpected owned plugin") {
+		t.Fatalf("policy error = %v", err)
+	}
+	fullRef, err := worktree.HerdrBranchRef(repo, req.BranchName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head, found, observeErr := worktree.ObserveHerdrBranch(repo, fullRef); observeErr != nil {
+		t.Fatal(observeErr)
+	} else if found {
+		t.Fatalf("policy-blocked branch = %s, want absent", head)
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := control.FindIntent(intentID)
+	if !found || intent.Status != state.HerdrIntentPlanned || intent.BranchCreated {
+		t.Fatalf("policy-blocked intent = %+v, found=%t", intent, found)
+	}
+}
+
 func TestRealizeHerdrRejectsTmuxBindingBeforeIntent(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	locked, err := state.LockProject(repo)
@@ -153,6 +190,41 @@ func TestRealizeHerdrRejectsTmuxBindingBeforeIntent(t *testing.T) {
 	}
 	if len(control.Intents) != 0 {
 		t.Fatalf("Herdr intents = %#v, want none", control.Intents)
+	}
+}
+
+func TestVerifyHerdrStateBindingsResolvesIssueSourcedPlanParent(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	planDir := filepath.Join(repo, ".fanout", "plans")
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(planDir, "demo.json"),
+		[]byte(`{"version":1,"plan":{"slug":"demo","title":"Demo","source":"issue #425"},"tasks":[]}`),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "sibling", sibling, "HEAD")
+	locked, err := state.LockProject(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked.Panes = append(locked.Panes, state.Pane{
+		Parent: "425", IssueNum: 426, Backend: backend.Tmux,
+	})
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+
+	err = verifyHerdrStateBindings(repo, "plan:demo", state.Store{})
+	if err == nil || !strings.Contains(err.Error(), "runtime backend for parent 425 became tmux") {
+		t.Fatalf("issue-sourced plan binding error = %v", err)
 	}
 }
 

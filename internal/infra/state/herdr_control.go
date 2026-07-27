@@ -377,6 +377,11 @@ func loadHerdrControl(path string) (HerdrControlStore, error) {
 	}
 	if !found {
 		store = emptyHerdrControl()
+	} else if store.SchemaVersion == 0 {
+		return HerdrControlStore{}, fmt.Errorf(
+			"validate Herdr control %s: unsupported Herdr control schema version 0",
+			path,
+		)
 	}
 	store.normalize()
 	if err := validateHerdrControl(store); err != nil {

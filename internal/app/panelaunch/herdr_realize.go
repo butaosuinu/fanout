@@ -438,12 +438,12 @@ func RealizeHerdrWorktree(
 		)
 	}
 
+	if policyErr := runtime.VerifyWorktreeSetupPolicy(operationCtx); policyErr != nil {
+		return result, policyErr
+	}
 	intent, reservationErr := ensureHerdrBranchReservation(locked, req, intent)
 	if reservationErr != nil {
 		return result, reservationErr
-	}
-	if policyErr := runtime.VerifyWorktreeSetupPolicy(operationCtx); policyErr != nil {
-		return result, policyErr
 	}
 	workspaces, observeErr := runtime.ObserveWorkspaces(operationCtx)
 	if observeErr != nil {
@@ -515,6 +515,9 @@ func verifyHerdrRealizeRoute(
 
 func verifyHerdrStateBindings(projectRoot, parent string, current state.Store) error {
 	parent = canonicalHerdrParent(parent)
+	if planSlug, ok := strings.CutPrefix(parent, "plan:"); ok && planSlug != "" {
+		parent = canonicalHerdrParent(SavedPlanRuntimeParentRef(projectRoot, planSlug))
+	}
 	currentRoot, err := filepath.EvalSymlinks(projectRoot)
 	if err != nil {
 		return fmt.Errorf("canonicalize Herdr state owner: %w", err)

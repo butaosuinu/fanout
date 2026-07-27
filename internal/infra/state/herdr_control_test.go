@@ -53,6 +53,28 @@ func TestHerdrControlIsSharedAcrossLinkedWorktrees(t *testing.T) {
 	}
 }
 
+func TestHerdrControlRejectsExistingRegistryWithoutSchemaVersion(t *testing.T) {
+	for _, contents := range []string{`{}`, `{"schemaVersion":0}`} {
+		t.Run(contents, func(t *testing.T) {
+			repo := newHerdrControlRepo(t)
+			path, err := HerdrControlPath(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadHerdrControl(repo); err == nil ||
+				!strings.Contains(err.Error(), "unsupported Herdr control schema version 0") {
+				t.Fatalf("schema-less registry error = %v", err)
+			}
+		})
+	}
+}
+
 func TestProjectStateLockSerializesHerdrControlWriter(t *testing.T) {
 	repo := newHerdrControlRepo(t)
 	project, err := LockProjectForLaunch(repo)
