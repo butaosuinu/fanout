@@ -294,24 +294,34 @@ server project root と path を symlink 解決して canonicalize し、project
 だけを設定し直す。
 `git --no-pager` と `-c core.fsmonitor=false` を使い、pager と fsmonitor を
 起動しない。
-changed path の merge-base 側または worktree 側に `filter` attribute が
-設定されていたら、clean/process filter の設定有無にかかわらず 502 へ
-fail closed する。
+`HOME` と `XDG_CONFIG_HOME` は server 所有の空 directory に向け、global
+config と global attributes を読ませない。
+
+changed path の候補は `git diff` より先に、filter を実行しない
+`git ls-tree -r -z <mergeBase>`、`git ls-files --stage -z`、
+`git ls-files -m -d -o --exclude-standard -z` と raw lstat/index stat の照合で
+集める。
+merge-base tree、index、worktree、`.git/info/attributes` の各 source について、
+候補 path の `filter` attribute を preflight する。
+1 source でも設定されていたら、clean/process filter の command 設定有無に
+かかわらず 502 へ fail closed する。
+この preflight が全件終わるまで `git diff`、`git diff-index`、
+`git status` は呼ばない。
 
 tracked patch は strict に解決した merge-base に対し、次の形で取得する。
 `--no-ext-diff` と `--no-textconv` で external diff と textconv を起動せず、
-`--no-color`、`--ignore-submodules=none`、`--no-renames`、`--text` で
+`--no-color`、`--ignore-submodules=dirty`、`--no-renames`、`--text` で
 user config と `.gitattributes` による表示省略を防ぐ。
 patch の context、algorithm、prefix も CLI option で固定する。
 
 ```text
 git --no-pager -C <worktree> -c core.fsmonitor=false -c core.quotePath=true \
-  diff --no-ext-diff --no-textconv --no-color --ignore-submodules=none \
+  diff --no-ext-diff --no-textconv --no-color --ignore-submodules=dirty \
   --no-renames --text --full-index --unified=3 --inter-hunk-context=0 \
   --diff-algorithm=myers --no-indent-heuristic \
   --src-prefix=a/ --dst-prefix=b/ <mergeBase> -- <text-path>
 git --no-pager -C <worktree> -c core.fsmonitor=false -c core.quotePath=true \
-  diff --numstat -z --no-ext-diff --no-textconv --ignore-submodules=none \
+  diff --numstat -z --no-ext-diff --no-textconv --ignore-submodules=dirty \
   --no-renames --text \
   <mergeBase> --
 ```
@@ -334,19 +344,29 @@ repository-relative path は numstat から取得し、patch header の C-quoted
 path 復元に使わない。
 untracked symlink は mode 120000 の link 自体を対象とし、link 先を読まない。
 binary 判定は Git attributes に任せず、merge-base と worktree 両側の raw
-content を filter なしで先に読み、先頭 8 KiB に NUL byte があるファイルを
-binary とする。
+content を filter なしで先頭 8 KiB だけ読む。
+その範囲に NUL byte がある file を binary とする。
 tracked patch は binary でない path ごとに numstat の順で実行し、完全な
 ファイルブロックを連結する。
 symlink は mode 120000 の link 自体、gitlink は commit pointer だけを対象とし、
 どちらも参照先の file や nested worktree を読まない。
+`--ignore-submodules=dirty` により submodule worktree の untracked/modified
+content は無視し、superproject が記録する gitlink commit の変更だけを表示する。
 バイナリと 256 KiB(262,144 bytes)を超える untracked file は `files` に含めるが
 patch 合成から外し、`omittedReason` に `binary` または `tooLarge` を返す。
 `tooLarge` の `additions` と `deletions` は `0` とする。
 
-1 request の Git 実行には共有の 10 秒 deadline を設定する。
-各 subprocess で 10 秒を取り直さず、検証、metadata 収集、patch 生成のすべてで
-残り時間を使う。
+repository-relative path は JSON 化の前に UTF-8 validity を検査する。
+不正な path は byte 列を置換して表示せず 502 にする。
+complete patch block も UTF-8 validity を検査し、不正なら該当 file を
+`binary: true`、`patchIncluded: false`、`omittedReason: "binary"` とする。
+Git のエラー出力が UTF-8 として不正な場合は、byte 列を置換せず固定の
+`git command failed` message を返す。
+
+1 request の diff 収集には共有の 10 秒 deadline を設定する。
+各 subprocess で 10 秒を取り直さず、worktree 検証、non-Git の stat/raw read、
+metadata 収集、patch 生成のすべてで残り時間を使う。
+non-Git の raw read は前述の 8 KiB/side を超えない。
 deadline 到達時は process group を停止し、partial response を返さず 502 にする。
 patch 以外の stdout とすべての stderr は 10 MiB + 1 byte を検出した時点で
 process group を停止して 502 にし、buffer も 10 MiB + 1 byte を超えない。
@@ -380,6 +400,9 @@ review 対象が patch に揃っていないことを警告する。
 10 秒、500 files、10 MiB、1 MiB、256 KiB は初期値である。
 #578 の実装で調整する場合は同じ PR で本書、handler test、MSW fixture を更新し、
 実装と wire contract を一致させる。
+同じ test で、dirty submodule は無視して gitlink 変更を含めること、filter
+command を一度も起動しないこと、非 UTF-8 path は 502、非 UTF-8 content は
+`binary` になることを固定する。
 
 エラー body は全 status で `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
@@ -389,7 +412,7 @@ review 対象が patch に揃っていないことを警告する。
 - `404 Not Found`: identity が snapshot の 1 行に定まらない、worktree 記録が
   ない、cleanup 済み、または同じ git common dir の worktree として検証できない
 - `502 Bad Gateway`: base/merge-base の strict 解決、filter attribute の検査、
-  Git timeout、500 files/metadata 出力上限の超過、または git diff に失敗した
+  diff 収集 timeout、500 files/metadata 出力上限の超過、または git diff に失敗した
 
 ### レビューコメントの将来計画
 
