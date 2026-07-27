@@ -121,6 +121,51 @@ func TestWriteFileExclusivePublishesOnceWithoutReplacing(t *testing.T) {
 	}
 }
 
+func TestCompareAndSwapFilePublishesOnlyExpectedPreimage(t *testing.T) {
+	t.Run("match", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "plan.json")
+		if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := CompareAndSwapFile(path, []byte("old"), []byte("new"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "new" {
+			t.Fatalf("CAS bytes = %q, want new", data)
+		}
+	})
+
+	t.Run("mismatch rolls back", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "plan.json")
+		if err := os.WriteFile(path, []byte("concurrent"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		err := CompareAndSwapFile(path, []byte("old"), []byte("new"), 0o600)
+		if err == nil {
+			t.Fatal("CompareAndSwapFile() accepted a mismatched preimage")
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if string(data) != "concurrent" {
+			t.Fatalf("rolled-back bytes = %q, want concurrent", data)
+		}
+		matches, globErr := filepath.Glob(filepath.Join(dir, ".fanout-cas-*.tmp"))
+		if globErr != nil {
+			t.Fatal(globErr)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("successful rollback left recovery files: %v", matches)
+		}
+	})
+}
+
 func TestWriteJSONDurableRequiresExistingDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing", "out.json")
 	if err := WriteJSONDurable(path, payload{}, 0o600); err == nil {

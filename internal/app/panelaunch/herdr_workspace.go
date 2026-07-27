@@ -194,6 +194,19 @@ func planHerdrCoordinator(
 		// Preserve the planning result; Unlock still closes the descriptor.
 		_ = locked.Unlock()
 	}()
+	if _, err := locked.ProvisionalBindings(state.HerdrBindingScope{
+		Parent:               req.Parent,
+		SourceRootPhysical:   sourceIdentity.RepoRoot,
+		SourceGitDirPhysical: sourceIdentity.GitDir,
+		SourceGitDirDevice:   sourceIdentity.GitDirDevice,
+		SourceGitDirInode:    sourceIdentity.GitDirInode,
+		PlanSpecIdentity:     req.PlanSpecIdentity,
+	}); err != nil {
+		return state.HerdrLaunchIntent{}, fmt.Errorf(
+			"reserve herdr coordinator ownership: %w",
+			err,
+		)
+	}
 	if _, found := locked.FindIntent(intentID); found {
 		return state.HerdrLaunchIntent{}, fmt.Errorf("herdr coordinator intent appeared while planning")
 	}

@@ -34,6 +34,139 @@ type HerdrRepoIdentity struct {
 	GitDirInode  uint64
 }
 
+type herdrWorktreeParentProof struct {
+	projectRoot   *os.Root
+	fanoutRoot    *os.Root
+	worktreesRoot *os.Root
+	leaf          string
+}
+
+// EnsureHerdrWorktreeParent creates and opens the deterministic checkout
+// parent one component at a time. Existing symlinks are never adopted.
+func EnsureHerdrWorktreeParent(projectRoot, checkoutPath string) error {
+	proof, err := openHerdrWorktreeParent(projectRoot, checkoutPath, true)
+	if err != nil {
+		return err
+	}
+	return proof.close()
+}
+
+// VerifyHerdrWorktreeParent proves that the deterministic checkout parent is
+// still the same no-follow directory chain immediately before mutation.
+func VerifyHerdrWorktreeParent(projectRoot, checkoutPath string) error {
+	proof, err := openHerdrWorktreeParent(projectRoot, checkoutPath, false)
+	if err != nil {
+		return err
+	}
+	return proof.close()
+}
+
+func openHerdrWorktreeParent(
+	projectRoot, checkoutPath string,
+	create bool,
+) (*herdrWorktreeParentProof, error) {
+	projectRoot, err := filepath.Abs(projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve herdr project root: %w", err)
+	}
+	projectRoot = filepath.Clean(projectRoot)
+	physicalRoot, err := physicalHerdrPath(projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize herdr project root: %w", err)
+	}
+	checkoutPath, err = filepath.Abs(checkoutPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve herdr checkout path: %w", err)
+	}
+	checkoutPath = filepath.Clean(checkoutPath)
+	leaf := filepath.Base(checkoutPath)
+	expectedLexical := filepath.Join(projectRoot, ".fanout", "worktrees", leaf)
+	if leaf == "." || leaf == string(os.PathSeparator) || checkoutPath != expectedLexical {
+		return nil, fmt.Errorf(
+			"herdr checkout path %s is outside deterministic physical parent %s",
+			checkoutPath,
+			filepath.Join(physicalRoot, ".fanout", "worktrees"),
+		)
+	}
+
+	projectInfo, err := os.Lstat(physicalRoot)
+	if err != nil || !projectInfo.IsDir() || projectInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("herdr project root is not a non-symlink directory")
+	}
+	root, err := os.OpenRoot(physicalRoot)
+	if err != nil {
+		return nil, fmt.Errorf("open herdr project root: %w", err)
+	}
+	proof := &herdrWorktreeParentProof{projectRoot: root, leaf: leaf}
+	fail := func(err error) (*herdrWorktreeParentProof, error) {
+		return nil, errors.Join(err, proof.close())
+	}
+	openedProjectInfo, err := root.Stat(".")
+	if err != nil || !os.SameFile(projectInfo, openedProjectInfo) {
+		return fail(fmt.Errorf("herdr project root identity changed while opening"))
+	}
+	proof.fanoutRoot, err = openHerdrChildDirectory(root, ".fanout", create)
+	if err != nil {
+		return fail(err)
+	}
+	proof.worktreesRoot, err = openHerdrChildDirectory(proof.fanoutRoot, "worktrees", create)
+	if err != nil {
+		return fail(err)
+	}
+	leafInfo, err := proof.worktreesRoot.Lstat(leaf)
+	if err == nil && leafInfo.Mode()&os.ModeSymlink != 0 {
+		return fail(fmt.Errorf("herdr checkout leaf %s is a symlink", checkoutPath))
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fail(fmt.Errorf("inspect herdr checkout leaf: %w", err))
+	}
+	return proof, nil
+}
+
+func openHerdrChildDirectory(root *os.Root, name string, create bool) (*os.Root, error) {
+	info, err := root.Lstat(name)
+	if errors.Is(err, os.ErrNotExist) && create {
+		if mkdirErr := root.Mkdir(name, 0o755); mkdirErr != nil &&
+			!errors.Is(mkdirErr, os.ErrExist) {
+			return nil, fmt.Errorf("create herdr directory %s: %w", name, mkdirErr)
+		}
+		info, err = root.Lstat(name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inspect herdr directory %s: %w", name, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("herdr directory %s is not a non-symlink directory", name)
+	}
+	child, err := root.OpenRoot(name)
+	if err != nil {
+		return nil, fmt.Errorf("open herdr directory %s: %w", name, err)
+	}
+	openedInfo, statErr := child.Stat(".")
+	currentInfo, currentErr := root.Lstat(name)
+	if statErr != nil || currentErr != nil ||
+		!os.SameFile(info, openedInfo) ||
+		!os.SameFile(info, currentInfo) {
+		// The identity failure is authoritative; closing this rejected handle is cleanup only.
+		_ = child.Close()
+		return nil, fmt.Errorf("herdr directory %s identity changed while opening", name)
+	}
+	return child, nil
+}
+
+func (p *herdrWorktreeParentProof) close() error {
+	if p == nil {
+		return nil
+	}
+	var errs []error
+	for _, root := range []*os.Root{p.worktreesRoot, p.fanoutRoot, p.projectRoot} {
+		if root != nil {
+			errs = append(errs, root.Close())
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // ResolveHerdrRepoIdentity returns the physical Git common directory, source
 // worktree root, and worktree-specific git directory expected in Herdr
 // worktree provenance.
@@ -402,14 +535,22 @@ func openHerdrCheckoutProof(projectRoot, checkoutPath, fullRef, headSHA string) 
 	if !strings.HasPrefix(fullRef, "refs/heads/") || !fullCommitSHA.MatchString(headSHA) {
 		return nil, fmt.Errorf("invalid herdr checkout proof request")
 	}
-	pathInfo, err := os.Lstat(checkoutPath)
+	parentProof, err := openHerdrWorktreeParent(projectRoot, checkoutPath, false)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		// The checkout proof result is authoritative; parent handle cleanup cannot change it.
+		_ = parentProof.close()
+	}()
+	pathInfo, err := parentProof.worktreesRoot.Lstat(parentProof.leaf)
 	if err != nil {
 		return nil, fmt.Errorf("inspect herdr checkout root: %w", err)
 	}
 	if !pathInfo.IsDir() || pathInfo.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("herdr checkout root is not a non-symlink directory")
 	}
-	checkoutRoot, err := os.OpenRoot(checkoutPath)
+	checkoutRoot, err := parentProof.worktreesRoot.OpenRoot(parentProof.leaf)
 	if err != nil {
 		return nil, fmt.Errorf("open herdr checkout root: %w", err)
 	}
@@ -512,7 +653,7 @@ func openHerdrCheckoutProof(projectRoot, checkoutPath, fullRef, headSHA string) 
 	if !found || branchOID != headSHA {
 		return fail(fmt.Errorf("herdr checkout branch %s does not point at %s", fullRef, headSHA))
 	}
-	currentPathInfo, err := os.Lstat(checkoutPath)
+	currentPathInfo, err := parentProof.worktreesRoot.Lstat(parentProof.leaf)
 	if err != nil || !os.SameFile(pathInfo, currentPathInfo) {
 		return fail(fmt.Errorf("herdr checkout root identity changed during proof"))
 	}

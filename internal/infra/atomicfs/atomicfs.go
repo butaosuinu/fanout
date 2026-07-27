@@ -58,6 +58,74 @@ func WriteFileExclusive(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+// CompareAndSwapFile atomically exchanges a prepared replacement with path,
+// then commits the exchange only when the displaced file still has the exact
+// expected bytes and mode. A failed comparison exchanges the files back.
+func CompareAndSwapFile(
+	path string,
+	expected, replacement []byte,
+	perm os.FileMode,
+) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".fanout-cas-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			// Best-effort cleanup must not replace the compare-and-swap result.
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(replacement); err != nil {
+		// Preserve the write error; closing this temporary file is cleanup only.
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		// Preserve the chmod error; closing this temporary file is cleanup only.
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := exchangeFiles(tmpPath, path); err != nil {
+		return fmt.Errorf("exchange replacement with destination: %w", err)
+	}
+
+	displaced, readErr := os.ReadFile(tmpPath)
+	displacedInfo, statErr := os.Stat(tmpPath)
+	if readErr == nil && statErr == nil &&
+		bytes.Equal(displaced, expected) &&
+		displacedInfo.Mode().Perm() == perm {
+		return nil
+	}
+
+	if err := exchangeFiles(tmpPath, path); err != nil {
+		cleanup = false
+		return fmt.Errorf(
+			"destination compare failed and rollback failed; displaced file remains at %s: %w",
+			tmpPath,
+			err,
+		)
+	}
+	rolledBack, rollbackReadErr := os.ReadFile(tmpPath)
+	rolledBackInfo, rollbackStatErr := os.Stat(tmpPath)
+	if rollbackReadErr != nil || rollbackStatErr != nil ||
+		!bytes.Equal(rolledBack, replacement) ||
+		rolledBackInfo.Mode().Perm() != perm {
+		cleanup = false
+		return fmt.Errorf(
+			"destination compare failed; concurrent file remains at %s",
+			tmpPath,
+		)
+	}
+	return fmt.Errorf("destination changed before atomic compare-and-swap")
+}
+
 // WriteFileDurable performs the same atomic replacement as WriteFile and
 // returns only after syncing both the replacement file and destination
 // directory.

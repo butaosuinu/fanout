@@ -369,7 +369,7 @@ func TestHerdrRealizationRejectsDirtyLinkedSourceBeforeReservation(t *testing.T)
 	source := filepath.Join(t.TempDir(), "linked-source")
 	runHerdrLaunchGit(t, repo, "worktree", "add", "-b", "linked-source-dirty", source, "HEAD")
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
-	req := newHerdrWorktreeRequest(t, repo, runtime)
+	req := herdrWorktreeRequest(repo)
 	req.SourceRoot = source
 	seedHerdrCoordinator(t, repo, runtime, req)
 	if err := os.WriteFile(filepath.Join(source, "untracked"), []byte("dirty\n"), 0o644); err != nil {
@@ -416,7 +416,7 @@ func TestHerdrRealizationPinsBaseToLinkedSourceHEAD(t *testing.T) {
 	}
 
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
-	req := newHerdrWorktreeRequest(t, repo, runtime)
+	req := herdrWorktreeRequest(repo)
 	req.SourceRoot = source
 	req.BaseBranch = "HEAD"
 	seedHerdrCoordinator(t, repo, runtime, req)
@@ -1042,7 +1042,13 @@ func TestHerdrCoordinatorStartingReconcilesCrashAfterExactMutation(t *testing.T)
 
 func newHerdrWorktreeRequest(t *testing.T, repo string, runtime *fakeHerdrWorktreeRuntime) HerdrWorktreeRequest {
 	t.Helper()
-	req := HerdrWorktreeRequest{
+	req := herdrWorktreeRequest(repo)
+	seedHerdrCoordinator(t, repo, runtime, req)
+	return req
+}
+
+func herdrWorktreeRequest(repo string) HerdrWorktreeRequest {
+	return HerdrWorktreeRequest{
 		Parent:                 "524",
 		IssueNum:               527,
 		ProjectRoot:            repo,
@@ -1057,8 +1063,6 @@ func newHerdrWorktreeRequest(t *testing.T, repo string, runtime *fakeHerdrWorktr
 		HerdrSocketPath:        "/tmp/fanout-owned.sock",
 		TotalTimeout:           30 * time.Second,
 	}
-	seedHerdrCoordinator(t, repo, runtime, req)
-	return req
 }
 
 func seedHerdrCoordinator(

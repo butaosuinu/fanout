@@ -64,6 +64,73 @@ func TestResolveHerdrRepoIdentityReturnsPhysicalGitTuple(t *testing.T) {
 	}
 }
 
+func TestEnsureHerdrWorktreeParentUsesNoFollowDirectoryChain(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	checkout := filepath.Join(repo, ".fanout", "worktrees", "child")
+	if err := EnsureHerdrWorktreeParent(repo, checkout); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyHerdrWorktreeParent(repo, checkout); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(repo, ".fanout"),
+		filepath.Join(repo, ".fanout", "worktrees"),
+	} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("herdr parent component %s mode = %s", path, info.Mode())
+		}
+	}
+}
+
+func TestEnsureHerdrWorktreeParentRejectsAncestorSymlinks(t *testing.T) {
+	tests := []struct {
+		name string
+		link func(t *testing.T, repo, external string)
+	}{
+		{
+			name: "fanout",
+			link: func(t *testing.T, repo, external string) {
+				t.Helper()
+				if err := os.Symlink(external, filepath.Join(repo, ".fanout")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "worktrees",
+			link: func(t *testing.T, repo, external string) {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(repo, ".fanout"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(external, filepath.Join(repo, ".fanout", "worktrees")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newCommittedRepoWithoutOrigin(t)
+			external := t.TempDir()
+			tt.link(t, repo, external)
+			checkout := filepath.Join(repo, ".fanout", "worktrees", "child")
+			err := EnsureHerdrWorktreeParent(repo, checkout)
+			if err == nil || !strings.Contains(err.Error(), "non-symlink directory") {
+				t.Fatalf("EnsureHerdrWorktreeParent() error = %v, want symlink rejection", err)
+			}
+			if _, err := os.Stat(filepath.Join(external, "child")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("external checkout leaf created: %v", err)
+			}
+		})
+	}
+}
+
 func TestCheckoutRegisteredHandlesNewlineInWorktreePath(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	checkout := filepath.Join(repo, ".fanout", "worktrees", "line\nbreak")

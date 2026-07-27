@@ -473,6 +473,54 @@ func TestHerdrControlRejectsDuplicateUnresolvedChildReservations(t *testing.T) {
 	}
 }
 
+func TestHerdrControlRejectsDuplicateUnresolvedCoordinatorReservations(t *testing.T) {
+	base := HerdrLaunchIntent{
+		IntentID:             "coordinator-a",
+		Parent:               "524",
+		Backend:              backend.Herdr,
+		Operation:            "coordinator-workspace",
+		OperationState:       HerdrOperationActive,
+		Phase:                HerdrPhaseWorkspacePlanned,
+		SourceRootPhysical:   "/repo/a",
+		SourceGitDirPhysical: "/git/a",
+		SourceGitDirDevice:   1,
+		SourceGitDirInode:    2,
+	}
+	other := base
+	other.IntentID = "coordinator-b"
+	other.SourceRootPhysical = "/repo/b"
+	other.SourceGitDirPhysical = "/git/b"
+	other.SourceGitDirInode = 3
+	store := emptyHerdrControl()
+	store.Intents = []HerdrLaunchIntent{base, other}
+	err := validateHerdrControlStore(store)
+	if err == nil || !strings.Contains(err.Error(), "reserve owner") {
+		t.Fatalf("validateHerdrControlStore() error = %v, want coordinator reservation rejection", err)
+	}
+
+	const planIdentity = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	base.Parent = "plan:alpha"
+	base.PlanSpecIdentity = planIdentity
+	other = base
+	other.IntentID = "coordinator-plan-b"
+	other.SourceGitDirPhysical = "/git/recreated"
+	other.SourceGitDirInode = 3
+	store.Intents = []HerdrLaunchIntent{base, other}
+	err = validateHerdrControlStore(store)
+	if err == nil || !strings.Contains(err.Error(), "reserve owner") {
+		t.Fatalf("validateHerdrControlStore() plan error = %v, want same-root reservation rejection", err)
+	}
+
+	other.SourceRootPhysical = "/repo/b"
+	if err := validateHerdrControlStore(HerdrControlStore{
+		SchemaID: HerdrControlSchemaID,
+		Intents:  []HerdrLaunchIntent{base, other},
+		Lineages: []HerdrBranchLineage{},
+	}); err != nil {
+		t.Fatalf("different-root plan coordinators rejected: %v", err)
+	}
+}
+
 func initHerdrControlRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

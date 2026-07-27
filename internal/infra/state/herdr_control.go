@@ -676,6 +676,7 @@ func validateHerdrControlStore(store HerdrControlStore) error {
 	intentIDs := make(map[string]bool, len(store.Intents))
 	reservedBranches := make(map[string]string, len(store.Intents))
 	reservedPaths := make(map[string]string, len(store.Intents))
+	reservedCoordinators := make(map[string]string, len(store.Intents))
 	for _, intent := range store.Intents {
 		if intent.IntentID == "" || intentIDs[intent.IntentID] {
 			return fmt.Errorf("intent ids must be non-empty and unique")
@@ -745,6 +746,20 @@ func validateHerdrControlStore(store HerdrControlStore) error {
 			reservedBranches[intent.FullBranchRef] = intent.IntentID
 			reservedPaths[path] = intent.IntentID
 		}
+		if intent.Operation == "coordinator-workspace" &&
+			(intent.OperationState == HerdrOperationActive ||
+				intent.OperationState == HerdrOperationManualCleanupRequired) {
+			key := herdrCoordinatorReservationKey(intent)
+			if owner := reservedCoordinators[key]; owner != "" {
+				return fmt.Errorf(
+					"unresolved coordinator intents %s and %s reserve owner %s",
+					owner,
+					intent.IntentID,
+					key,
+				)
+			}
+			reservedCoordinators[key] = intent.IntentID
+		}
 	}
 	lineageIDs := make(map[string]bool, len(store.Lineages))
 	for _, lineage := range store.Lineages {
@@ -757,6 +772,14 @@ func validateHerdrControlStore(store HerdrControlStore) error {
 		}
 	}
 	return nil
+}
+
+func herdrCoordinatorReservationKey(intent HerdrLaunchIntent) string {
+	parent := parentref.Canon(intent.Parent)
+	if strings.HasPrefix(parent, "plan:") {
+		return tuplePart(parent) + ":" + tuplePart(intent.SourceRootPhysical)
+	}
+	return tuplePart(parent)
 }
 
 func gitCommonDir(projectRoot string) (string, error) {

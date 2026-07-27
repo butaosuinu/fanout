@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.0.0
 	github.com/charmbracelet/x/ansi v0.8.0
 	github.com/charmbracelet/x/term v0.2.1
+	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.52.0
 )
 
@@ -30,7 +31,6 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260708182218-49f421fb7959 // indirect
 	golang.org/x/text v0.39.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect

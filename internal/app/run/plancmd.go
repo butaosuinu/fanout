@@ -423,7 +423,15 @@ func copyPlanSpec(data []byte, target planSpecCopyTarget) error {
 	if bytes.Equal(current, data) {
 		return nil
 	}
-	return atomicfs.WriteFile(target.path, data, target.mode)
+	if err := atomicfs.CompareAndSwapFile(
+		target.path,
+		target.data,
+		data,
+		target.mode,
+	); err != nil {
+		return fmt.Errorf("publish plan spec destination %s: %w", target.path, err)
+	}
+	return nil
 }
 
 func samePlanSpecFile(a, b string) (bool, error) {
