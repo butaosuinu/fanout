@@ -354,16 +354,16 @@ symlink は `readlinkat` の後に `lstat` を取り直し、device、inode、mo
 確認する。
 worktree の path を content source として Git に渡さない。
 
-changed path は merge-base entry、複製した index entry、index stat と raw
-`lstat` の差、`git ls-files --others -z` の和から決める。
+candidate path は merge-base entry、複製した index entry、index stat と raw
+`lstat` の差、standard ignore 適用後の untracked path の和から決める。
 index stat と一致した tracked path は clean とみなし、racy な stat は changed
 として扱う。
 merge-base と index は mode と object ID で比較する。
-`ls-files` には exclude option を渡さず、live `.gitignore`、`info/exclude`、
-external excludes を読ませない。
 worktree 内の `.gitignore` と verified common dir の `info/exclude` は no-follow と
-256 KiB 上限で private snapshot に複製し、backend が同じ Git ignore semantics
-で untracked path 集合を絞り込む。
+256 KiB 上限で private snapshot に複製する。
+実装は immutable な ignore source で directory traversal を prune し、ignored
+path を列挙結果へ出さず、metadata 出力上限と対象 file 数に含めない。
+prune の実装方式は #577/#578 に委譲する。
 `git add -N` を含む index/worktree 変更コマンドは呼ばない。
 
 snapshot manifest には各 side の logical path、mode、size、object ID または
@@ -379,6 +379,8 @@ fingerprint を開始時と比較する。
 取り直す。
 再び変化した場合は 502 にする。
 一致した時点で snapshot を確定して `capturedAt` を記録する。
+確定した merge-base side と最終 worktree side の mode と raw content が同じ
+candidate path は、`files`、500 files 上限、patch 収集から除外する。
 確定後は live worktree、live index、repository attributes を patch または
 numstat の入力に使わない。
 
@@ -504,6 +506,10 @@ repo-local `core.excludesFile` と `core.worktree` は 502 にし、
 `info/exclude` の変更は snapshot を取り直すことを確認する。
 replace ref は無視し、legacy graft は 502、shallow boundary の変更は snapshot の
 取り直しになることも固定する。
+base=`A`、index=`B`、worktree=`A` と、staged add 後に worktree から削除した
+path は最終変更なしとして `files` に含めないことを確認する。
+standard ignore を適用しない raw path 集合が 10 MiB を超える worktree でも、
+ignore 後の対象が上限内なら 200 と対象 file だけを返すことを確認する。
 
 handler が生成する次のエラー body は `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
