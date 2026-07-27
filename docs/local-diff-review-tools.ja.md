@@ -252,7 +252,7 @@ type DiffResponse = {
     deletions: number;
     binary: boolean;
     patchIncluded: boolean;
-    omittedReason: "" | "binary" | "tooLarge" | "responseLimit";
+    omittedReason: "" | "binary" | "tooLarge" | "collectionLimit" | "responseLimit";
   }>;
   patch: string;
   truncated: boolean;
@@ -263,17 +263,21 @@ type DiffResponse = {
 `capturedAt` は UTC の RFC 3339、`mergeBase` は strict に解決した commit SHA
 とする。
 `paneId` は一致した行の backend-native ID であり、tmux `%N` に限定しない。
-`files` は patch の切り詰めに関係なく全件を返し、空の場合も `null` ではなく
+`files` は後述する 500 files 上限内の全件を返し、空の場合も `null` ではなく
 `[]` を返す。
 バイナリの `additions` と `deletions` は `0`、`binary` は `true` とする。
 完全なファイルブロックが応答の `patch` にある場合だけ `patchIncluded` を
 `true` にし、`omittedReason` は空文字列にする。
 含まれない場合は `patchIncluded` を `false` にし、理由を `binary`、
-`tooLarge`、`responseLimit` のいずれかで返す。
+`tooLarge`、`collectionLimit`、`responseLimit` のいずれかで返す。
 `patch` は `diff --git` で始まるファイルブロックを連結した git patch であり、
 HTML fragment として解釈しない。
-`totalBytes` はバイナリと大きすぎる untracked file を除外した後、サーバー側の
-1 MiB 上限で切り詰める前の `patch` の byte 数である。
+`totalBytes` は 10 MiB 収集上限内で得た完全なファイルブロックの合計 byte 数で
+あり、後段の 1 MiB 応答上限を適用する前の値とする。
+`truncated` は 10 MiB 収集上限または 1 MiB 応答上限で 1 file 以上を省略した
+場合に `true` とする。
+`binary` または `tooLarge` だけで省略した場合は `false` のままとし、
+`files[].omittedReason` で欠落を示す。
 
 一致した snapshot 行の `WorktreePath` はそのまま信用しない。
 server project root と path を symlink 解決して canonicalize し、project root
@@ -338,6 +342,28 @@ symlink は mode 120000 の link 自体、gitlink は commit pointer だけを�
 どちらも参照先の file や nested worktree を読まない。
 バイナリと 256 KiB(262,144 bytes)を超える untracked file は `files` に含めるが
 patch 合成から外し、`omittedReason` に `binary` または `tooLarge` を返す。
+`tooLarge` の `additions` と `deletions` は `0` とする。
+
+1 request の Git 実行には共有の 10 秒 deadline を設定する。
+各 subprocess で 10 秒を取り直さず、検証、metadata 収集、patch 生成のすべてで
+残り時間を使う。
+deadline 到達時は process group を停止し、partial response を返さず 502 にする。
+patch 以外の stdout とすべての stderr は 10 MiB + 1 byte を検出した時点で
+process group を停止して 502 にし、buffer も 10 MiB + 1 byte を超えない。
+
+tracked と untracked を合わせた対象数は 500 files を上限とする。
+metadata 出力は stream で NUL 区切りを数え、501 file を検出した時点で Git を
+停止して 502 にする。
+成功 response の `files` は必ず対象全件を含む。
+
+patch の収集上限は 10 MiB(10,485,760 bytes)とする。
+各 file の Git stdout は残り byte 数 + 1 byte まで読み、完全な
+`diff --git` block を加えると上限を超える場合はその block を加えない。
+その file と後続の patch 対象 file は `patchIncluded: false`、
+`omittedReason: "collectionLimit"` とし、`truncated` を `true` にする。
+以後の patch subprocess は起動しない。
+この規則により、巨大 tracked file と sparse file でも Git stdout と memory を
+10 MiB + 1 byte 以内に止める。
 
 サーバー側の固定上限は 1 MiB(1,048,576 bytes)とし、クエリによる変更は
 許さない。
@@ -346,9 +372,14 @@ patch 合成から外し、`omittedReason` に `binary` または `tooLarge` を
 ファイルブロックの途中では切らない。
 先頭の 1 ブロックだけで上限を超える場合は `patch` を空文字列にする。
 上限で除外したファイルは `omittedReason` を `responseLimit` にする。
-上限以下では patch をそのまま返し、`truncated` は `false` とする。
+上限以下では patch をそのまま返し、10 MiB 収集上限で設定済みの
+`truncated` は保持する。
 SPA は `truncated` が `true`、またはいずれかの `patchIncluded` が `false` なら、
 review 対象が patch に揃っていないことを警告する。
+
+10 秒、500 files、10 MiB、1 MiB、256 KiB は初期値である。
+#578 の実装で調整する場合は同じ PR で本書、handler test、MSW fixture を更新し、
+実装と wire contract を一致させる。
 
 エラー body は全 status で `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
@@ -358,7 +389,7 @@ review 対象が patch に揃っていないことを警告する。
 - `404 Not Found`: identity が snapshot の 1 行に定まらない、worktree 記録が
   ない、cleanup 済み、または同じ git common dir の worktree として検証できない
 - `502 Bad Gateway`: base/merge-base の strict 解決、filter attribute の検査、
-  または git diff に失敗した
+  Git timeout、500 files/metadata 出力上限の超過、または git diff に失敗した
 
 ### レビューコメントの将来計画
 
