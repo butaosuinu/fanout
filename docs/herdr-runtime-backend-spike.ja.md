@@ -170,6 +170,14 @@ marker は owned runtime directory の検査後に exclusive create で書き、
 #526 は version gate と owned session lifecycle を PR #572 で実装済みであり、marker / lease / layout の具体形はその実装を正とする。
 撤廃した機構は「後続 issue への契約」の再評価条件表に proof-grade tier の再導入候補として残す。
 
+次はレビューで挙がったが、この正典では確定しない（ユーザー決定 2026-07-28: 簡素化方針に照らし、これ以上の詳細化は実装子が実装時に確定する）。
+確定までは該当経路を fail closed にする。
+
+| 未確定事項 | 確定 owner | 確定までの fail-closed 挙動 |
+|---|---|---|
+| 採用した既存 branch（intent の branch 事前存在 = true）を cleanup の compare-and-delete の自動削除対象に含めるか | #531 | 事前存在した branch は自動削除せず残し、fanout が作成した branch だけを削除候補にする |
+| crash recovery の分類・再開分岐で本文の分類に当てはまらない状態の扱い | #527 / #528 | `manual_cleanup_required` |
+
 ### 共有 registry と lifecycle 契約
 
 Herdr control state は physical canonical git common directory 配下の `fanout/herdr-control.json` を唯一の正典とし、同じ directory の `herdr-control.json.lock` で直列化する。
