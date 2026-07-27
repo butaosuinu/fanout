@@ -3,6 +3,7 @@ package atomicfs
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -145,7 +146,11 @@ func TestCompareAndSwapFilePublishesOnlyExpectedPreimage(t *testing.T) {
 		if err := os.WriteFile(path, []byte("concurrent"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		err := CompareAndSwapFile(path, []byte("old"), []byte("new"), 0o600)
+		before, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = CompareAndSwapFile(path, []byte("old"), []byte("new"), 0o600)
 		if err == nil {
 			t.Fatal("CompareAndSwapFile() accepted a mismatched preimage")
 		}
@@ -156,6 +161,13 @@ func TestCompareAndSwapFilePublishesOnlyExpectedPreimage(t *testing.T) {
 		if string(data) != "concurrent" {
 			t.Fatalf("rolled-back bytes = %q, want concurrent", data)
 		}
+		after, statErr := os.Stat(path)
+		if statErr != nil {
+			t.Fatal(statErr)
+		}
+		if !os.SameFile(before, after) {
+			t.Fatal("mismatched preimage was transiently replaced")
+		}
 		matches, globErr := filepath.Glob(filepath.Join(dir, ".fanout-cas-*.tmp"))
 		if globErr != nil {
 			t.Fatal(globErr)
@@ -164,6 +176,97 @@ func TestCompareAndSwapFilePublishesOnlyExpectedPreimage(t *testing.T) {
 			t.Fatalf("successful rollback left recovery files: %v", matches)
 		}
 	})
+}
+
+func TestCompareAndSwapFileSerializesDestinationWriters(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plan.json")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var writers sync.WaitGroup
+	for _, replacement := range [][]byte{[]byte("first"), []byte("second")} {
+		writers.Add(1)
+		go func(data []byte) {
+			defer writers.Done()
+			<-start
+			results <- CompareAndSwapFile(path, []byte("old"), data, 0o600)
+		}(replacement)
+	}
+	close(start)
+	writers.Wait()
+	close(results)
+
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful concurrent writers = %d, want 1", successes)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "first" && string(data) != "second" {
+		t.Fatalf("serialized destination bytes = %q", data)
+	}
+}
+
+func TestRollbackCompareAndSwapPreservesConcurrentDestination(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.json")
+	tmpPath := filepath.Join(dir, "displaced.tmp")
+	if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	replacementInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if writeErr := os.WriteFile(tmpPath, []byte("displaced"), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	displacedInfo, err := os.Stat(tmpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	concurrentPath := filepath.Join(dir, "concurrent.tmp")
+	if writeErr := os.WriteFile(concurrentPath, []byte("newest"), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if renameErr := os.Rename(concurrentPath, path); renameErr != nil {
+		t.Fatal(renameErr)
+	}
+
+	cleanup, rollbackErr := rollbackCompareAndSwap(
+		tmpPath,
+		path,
+		replacementInfo,
+		displacedInfo,
+		[]byte("replacement"),
+		0o600,
+	)
+	if rollbackErr == nil || cleanup {
+		t.Fatalf("rollback result = cleanup %t, error %v; want retained recovery file", cleanup, rollbackErr)
+	}
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != "newest" {
+		t.Fatalf("concurrent destination bytes = %q, want newest", current)
+	}
+	displaced, err := os.ReadFile(tmpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(displaced) != "displaced" {
+		t.Fatalf("displaced recovery bytes = %q, want displaced", displaced)
+	}
 }
 
 func TestWriteJSONDurableRequiresExistingDirectory(t *testing.T) {

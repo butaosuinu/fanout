@@ -58,14 +58,31 @@ func WriteFileExclusive(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
-// CompareAndSwapFile atomically exchanges a prepared replacement with path,
-// then commits the exchange only when the displaced file still has the exact
-// expected bytes and mode. A failed comparison exchanges the files back.
+// CompareAndSwapFile serializes cooperating writers per destination, validates
+// the exact preimage before publication, then atomically exchanges a prepared
+// replacement with path. A concurrent non-cooperating replacement is never
+// overwritten during rollback.
 func CompareAndSwapFile(
 	path string,
 	expected, replacement []byte,
 	perm os.FileMode,
-) error {
+) (resultErr error) {
+	lock, err := acquireCompareAndSwapLock(path)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, lock.release())
+	}()
+
+	preimage, preimageInfo, err := readFileSnapshot(path)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(preimage, expected) || preimageInfo.Mode().Perm() != perm {
+		return fmt.Errorf("destination changed before atomic compare-and-swap")
+	}
+
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".fanout-cas-*.tmp")
 	if err != nil {
@@ -89,6 +106,11 @@ func CompareAndSwapFile(
 		_ = tmp.Close()
 		return err
 	}
+	replacementInfo, err := tmp.Stat()
+	if err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
@@ -96,34 +118,90 @@ func CompareAndSwapFile(
 		return fmt.Errorf("exchange replacement with destination: %w", err)
 	}
 
-	displaced, readErr := os.ReadFile(tmpPath)
-	displacedInfo, statErr := os.Stat(tmpPath)
-	if readErr == nil && statErr == nil &&
+	displaced, displacedInfo, inspectErr := readFileSnapshot(tmpPath)
+	if inspectErr == nil &&
+		os.SameFile(preimageInfo, displacedInfo) &&
 		bytes.Equal(displaced, expected) &&
 		displacedInfo.Mode().Perm() == perm {
 		return nil
 	}
 
+	cleanup, err = rollbackCompareAndSwap(
+		tmpPath,
+		path,
+		replacementInfo,
+		displacedInfo,
+		replacement,
+		perm,
+	)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("destination changed before atomic compare-and-swap")
+}
+
+func rollbackCompareAndSwap(
+	tmpPath, path string,
+	replacementInfo, displacedInfo os.FileInfo,
+	replacement []byte,
+	perm os.FileMode,
+) (cleanup bool, err error) {
+	currentInfo, err := os.Stat(path)
+	if err != nil || !os.SameFile(currentInfo, replacementInfo) {
+		return false, fmt.Errorf(
+			"destination compare failed; concurrent destination preserved and displaced file remains at %s",
+			tmpPath,
+		)
+	}
 	if err := exchangeFiles(tmpPath, path); err != nil {
-		cleanup = false
-		return fmt.Errorf(
+		return false, fmt.Errorf(
 			"destination compare failed and rollback failed; displaced file remains at %s: %w",
 			tmpPath,
 			err,
 		)
 	}
-	rolledBack, rollbackReadErr := os.ReadFile(tmpPath)
-	rolledBackInfo, rollbackStatErr := os.Stat(tmpPath)
-	if rollbackReadErr != nil || rollbackStatErr != nil ||
-		!bytes.Equal(rolledBack, replacement) ||
-		rolledBackInfo.Mode().Perm() != perm {
-		cleanup = false
-		return fmt.Errorf(
-			"destination compare failed; concurrent file remains at %s",
+	rolledBack, rolledBackInfo, rollbackErr := readFileSnapshot(tmpPath)
+	if rollbackErr == nil &&
+		os.SameFile(rolledBackInfo, replacementInfo) &&
+		bytes.Equal(rolledBack, replacement) &&
+		rolledBackInfo.Mode().Perm() == perm {
+		return true, nil
+	}
+
+	// The destination changed after the identity check but before rollback.
+	// Restore that concurrent file when the destination still contains the
+	// displaced preimage; retain the latter at tmpPath for manual recovery.
+	pathInfo, pathErr := os.Stat(path)
+	if pathErr == nil &&
+		displacedInfo != nil &&
+		os.SameFile(pathInfo, displacedInfo) &&
+		exchangeFiles(tmpPath, path) == nil {
+		return false, fmt.Errorf(
+			"destination compare failed; concurrent destination restored and displaced file remains at %s",
 			tmpPath,
 		)
 	}
-	return fmt.Errorf("destination changed before atomic compare-and-swap")
+	return false, fmt.Errorf(
+		"destination compare failed; concurrent file remains at %s",
+		tmpPath,
+	)
+}
+
+func readFileSnapshot(path string) ([]byte, os.FileInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	data, readErr := io.ReadAll(file)
+	info, statErr := file.Stat()
+	closeErr := file.Close()
+	if err := errors.Join(readErr, statErr, closeErr); err != nil {
+		return nil, nil, err
+	}
+	if info == nil {
+		return nil, nil, fmt.Errorf("inspect file snapshot %s: missing file info", path)
+	}
+	return data, info, nil
 }
 
 // WriteFileDurable performs the same atomic replacement as WriteFile and
