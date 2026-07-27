@@ -1,6 +1,7 @@
 package herdrrun
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -96,6 +97,25 @@ func TestDecodeMutationRejectionRequiresExactEnvelope(t *testing.T) {
 		"cli:worktree:create",
 	); ok {
 		t.Fatal("incomplete error envelope unexpectedly accepted")
+	}
+}
+
+func TestMutationNotIssuedErrorPreservesClassificationAndCause(t *testing.T) {
+	cause := errors.New("owned admission failed")
+	err := mutationNotIssued(cause)
+	if !errors.Is(err, ErrMutationNotIssued) || !errors.Is(err, cause) {
+		t.Fatalf("mutation-not-issued error = %v", err)
+	}
+	var typed MutationNotIssuedError
+	if !errors.As(err, &typed) || !errors.Is(typed.Cause, cause) {
+		t.Fatalf("mutation-not-issued type = %#v", typed)
+	}
+	if _, err := (&Backend{}).runWorktreeMutation(
+		context.Background(),
+		"/unused/herdr",
+		route{},
+	); !errors.Is(err, ErrMutationNotIssued) {
+		t.Fatalf("deadline-less command error = %v", err)
 	}
 }
 

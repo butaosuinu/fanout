@@ -105,6 +105,12 @@ func RealizeHerdrCoordinator(
 	if validateErr := validateHerdrCoordinatorRequest(req); validateErr != nil {
 		return result, validateErr
 	}
+	realizeCtx, realizeCancel := context.WithTimeout(ctx, timeout)
+	defer realizeCancel()
+	if err := realizeCtx.Err(); err != nil {
+		return result, err
+	}
+	realizeDeadline, _ := realizeCtx.Deadline()
 	identity, identityErr := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
 	if identityErr != nil {
 		return result, identityErr
@@ -117,7 +123,7 @@ func RealizeHerdrCoordinator(
 		return result, fmt.Errorf("herdr coordinator roots belong to different repositories")
 	}
 	if routeErr := verifyHerdrRealizeRoute(
-		ctx,
+		realizeCtx,
 		runtime,
 		identity.RepoKey,
 		req.HerdrSession,
@@ -172,13 +178,12 @@ func RealizeHerdrCoordinator(
 		if labelErr != nil {
 			return result, labelErr
 		}
-		now := hooks.Now().UTC()
 		intent = state.HerdrIntent{
 			ID: intentID, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentPlanned,
 			Parent: canonicalHerdrParent(req.Parent), OwnerProjectRoot: ownerProjectRoot,
 			Backend: backend.Herdr, WorktreePath: cwd,
 			WorkspaceLabel: label, Session: req.HerdrSession, SocketPath: req.SocketPath,
-			TimeoutMS: timeout.Milliseconds(), ExpiresUnixMS: now.Add(timeout).UnixMilli(),
+			TimeoutMS: timeout.Milliseconds(), ExpiresUnixMS: realizeDeadline.UnixMilli(),
 		}
 		locked.UpsertIntent(intent)
 		if saveErr := locked.Save(); saveErr != nil {
@@ -186,7 +191,7 @@ func RealizeHerdrCoordinator(
 		}
 	}
 
-	operationCtx, cancel, contextErr := herdrIntentContext(ctx, intent, hooks.Now())
+	operationCtx, cancel, contextErr := herdrIntentContext(realizeCtx, intent, hooks.Now())
 	if contextErr != nil {
 		return result, markHerdrIntentManual(locked, intent, contextErr)
 	}
@@ -240,9 +245,13 @@ func RealizeHerdrCoordinator(
 		NoFocus:        true,
 	})
 	if mutationErr != nil {
-		recoveryCtx, recoveryCancel := herdrRecoveryContext(ctx, operationCtx, intent)
-		defer recoveryCancel()
-		return recoverHerdrCoordinator(recoveryCtx, runtime, locked, intent, mutationErr)
+		if errors.Is(mutationErr, herdrrun.ErrMutationNotIssued) {
+			return result, rollbackUnissuedHerdrCoordinator(locked, intent, mutationErr)
+		}
+		if operationErr := operationCtx.Err(); operationErr != nil {
+			return result, errors.Join(mutationErr, operationErr)
+		}
+		return recoverHerdrCoordinator(operationCtx, runtime, locked, intent, mutationErr)
 	}
 	if err := validateCoordinatorObservation(intent, mutation.WorkspaceObservation); err != nil {
 		return result, markHerdrIntentManual(locked, intent, err)
@@ -277,6 +286,12 @@ func RealizeHerdrWorktree(
 	if validateErr := validateHerdrWorktreeRequest(req); validateErr != nil {
 		return result, validateErr
 	}
+	realizeCtx, realizeCancel := context.WithTimeout(ctx, timeout)
+	defer realizeCancel()
+	if err := realizeCtx.Err(); err != nil {
+		return result, err
+	}
+	realizeDeadline, _ := realizeCtx.Deadline()
 	source, sourceErr := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
 	if sourceErr != nil {
 		return result, sourceErr
@@ -289,7 +304,7 @@ func RealizeHerdrWorktree(
 		return result, fmt.Errorf("herdr project and source roots belong to different repositories")
 	}
 	if routeErr := verifyHerdrRealizeRoute(
-		ctx,
+		realizeCtx,
 		runtime,
 		source.RepoKey,
 		req.HerdrSession,
@@ -394,7 +409,6 @@ func RealizeHerdrWorktree(
 		if labelErr != nil {
 			return result, labelErr
 		}
-		now := hooks.Now().UTC()
 		intent = state.HerdrIntent{
 			ID: intentID, Kind: state.HerdrIntentWorktree, Status: state.HerdrIntentPlanned,
 			Parent: canonicalHerdrParent(req.Parent), OwnerProjectRoot: ownerProjectRoot,
@@ -405,7 +419,7 @@ func RealizeHerdrWorktree(
 			WorktreePath: filepath.Clean(req.WorktreePath), BranchExisted: branchExisted,
 			WorkspaceLabel: label, Coordinator: coordinator,
 			Session: req.HerdrSession, SocketPath: req.SocketPath,
-			TimeoutMS: timeout.Milliseconds(), ExpiresUnixMS: now.Add(timeout).UnixMilli(),
+			TimeoutMS: timeout.Milliseconds(), ExpiresUnixMS: realizeDeadline.UnixMilli(),
 		}
 		locked.UpsertIntent(intent)
 		if saveErr := locked.Save(); saveErr != nil {
@@ -413,7 +427,7 @@ func RealizeHerdrWorktree(
 		}
 	}
 
-	operationCtx, cancel, contextErr := herdrIntentContext(ctx, intent, hooks.Now())
+	operationCtx, cancel, contextErr := herdrIntentContext(realizeCtx, intent, hooks.Now())
 	if contextErr != nil {
 		return result, markHerdrIntentManual(locked, intent, contextErr)
 	}
@@ -488,9 +502,13 @@ func RealizeHerdrWorktree(
 		NoFocus:         true,
 	})
 	if mutationErr != nil {
-		recoveryCtx, recoveryCancel := herdrRecoveryContext(ctx, operationCtx, intent)
-		defer recoveryCancel()
-		return recoverHerdrWorktree(recoveryCtx, runtime, locked, req, source, intent, mutationErr)
+		if errors.Is(mutationErr, herdrrun.ErrMutationNotIssued) {
+			return result, rollbackUnissuedHerdrWorktree(locked, req, intent, mutationErr)
+		}
+		if operationErr := operationCtx.Err(); operationErr != nil {
+			return result, errors.Join(mutationErr, operationErr)
+		}
+		return recoverHerdrWorktree(operationCtx, runtime, locked, req, source, intent, mutationErr)
 	}
 	if finalizeErr := finalizeHerdrWorktree(locked, req, source, &intent, mutation.WorkspaceObservation); finalizeErr != nil {
 		return result, markHerdrIntentManual(locked, intent, finalizeErr)
@@ -619,6 +637,44 @@ func ensureHerdrBranchReservation(
 		return intent, err
 	}
 	return intent, nil
+}
+
+func rollbackUnissuedHerdrCoordinator(
+	locked *state.LockedHerdrControl,
+	intent state.HerdrIntent,
+	mutationErr error,
+) error {
+	locked.RemoveIntent(intent.ID)
+	if err := locked.Save(); err != nil {
+		return errors.Join(mutationErr, err)
+	}
+	return mutationErr
+}
+
+func rollbackUnissuedHerdrWorktree(
+	locked *state.LockedHerdrControl,
+	req HerdrWorktreeRequest,
+	intent state.HerdrIntent,
+	mutationErr error,
+) error {
+	if intent.BranchCreated {
+		if err := worktree.DeleteReservedHerdrBranch(
+			req.SourceRoot,
+			intent.FullBranchRef,
+			intent.BaseSHA,
+		); err != nil {
+			return markHerdrIntentManual(
+				locked,
+				intent,
+				errors.Join(mutationErr, err),
+			)
+		}
+	}
+	locked.RemoveIntent(intent.ID)
+	if err := locked.Save(); err != nil {
+		return errors.Join(mutationErr, err)
+	}
+	return mutationErr
 }
 
 func recoverHerdrCoordinator(
@@ -1202,17 +1258,6 @@ func herdrIntentContext(
 		return nil, nil, err
 	}
 	return ctx, cancel, nil
-}
-
-func herdrRecoveryContext(
-	parent context.Context,
-	operation context.Context,
-	intent state.HerdrIntent,
-) (context.Context, context.CancelFunc) {
-	if operation.Err() == nil {
-		return operation, func() {}
-	}
-	return context.WithTimeout(parent, time.Duration(intent.TimeoutMS)*time.Millisecond)
 }
 
 func newHerdrWorkspaceLabel(

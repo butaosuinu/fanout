@@ -158,6 +158,23 @@ func TestObserveHerdrCheckoutIgnoresUnrelatedPrunableWorktree(t *testing.T) {
 	}
 }
 
+func TestObserveHerdrCheckoutRejectsRecreatedPrunableDirectory(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	checkout := filepath.Join(repo, ".fanout", "worktrees", "stale")
+	gitTest(t, repo, "worktree", "add", "-b", "fanout/stale", checkout, "HEAD")
+	if err := os.RemoveAll(checkout); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(checkout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ObserveHerdrCheckout(repo, checkout); err == nil ||
+		!strings.Contains(err.Error(), "does not resolve to its registered worktree root") {
+		t.Fatalf("recreated prunable checkout error = %v", err)
+	}
+}
+
 func TestVerifyHerdrCheckoutPinsBranchHeadAndRepository(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	base := gitOutput(t, repo, "rev-parse", "HEAD")

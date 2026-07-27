@@ -20,15 +20,21 @@ type fakeHerdrRealizeRuntime struct {
 	workspaces []herdrrun.WorkspaceObservation
 	mutations  []herdrrun.WorktreeMutationRequest
 	route      herdrrun.OwnedWorktreeRoute
-	policyErr  error
-	observeErr error
-	mutate     func(herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error)
+	routeErr   error
+
+	routeDeadline    time.Time
+	routeHasDeadline bool
+	policyErr        error
+	observeErr       error
+	observeCalls     int
+	mutate           func(herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error)
 }
 
 func (f *fakeHerdrRealizeRuntime) WorktreeRoute(
-	context.Context,
+	ctx context.Context,
 ) (herdrrun.OwnedWorktreeRoute, error) {
-	return f.route, nil
+	f.routeDeadline, f.routeHasDeadline = ctx.Deadline()
+	return f.route, f.routeErr
 }
 
 func (f *fakeHerdrRealizeRuntime) VerifyWorktreeSetupPolicy(context.Context) error {
@@ -36,6 +42,7 @@ func (f *fakeHerdrRealizeRuntime) VerifyWorktreeSetupPolicy(context.Context) err
 }
 
 func (f *fakeHerdrRealizeRuntime) ObserveWorkspaces(ctx context.Context) ([]herdrrun.WorkspaceObservation, error) {
+	f.observeCalls++
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -119,6 +126,113 @@ func TestRealizeHerdrWorktreePersistsIntentAndSkipsReplay(t *testing.T) {
 	if err == nil {
 		t.Fatal("foreign owned-session route unexpectedly accepted")
 	}
+}
+
+func TestRealizeHerdrRoutesUseTotalTimeout(t *testing.T) {
+	for _, kind := range []string{"coordinator", "worktree"} {
+		t.Run(kind, func(t *testing.T) {
+			repo := newHerdrRealizeRepo(t)
+			stop := errors.New("stop after route")
+			runtime := &fakeHerdrRealizeRuntime{routeErr: stop}
+			now := time.Now().UTC()
+			hooks := HerdrRealizeHooks{Now: func() time.Time { return now }}
+
+			var err error
+			switch kind {
+			case "coordinator":
+				req := testHerdrCoordinatorRequest(repo)
+				req.TotalTimeout = 3 * time.Second
+				_, err = realizeHerdrCoordinator(context.Background(), req, runtime, hooks)
+			case "worktree":
+				req := testHerdrWorktreeRequest(repo, "route-timeout", 426)
+				req.TotalTimeout = 3 * time.Second
+				_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+			}
+			if !errors.Is(err, stop) {
+				t.Fatalf("route error = %v", err)
+			}
+			if !runtime.routeHasDeadline ||
+				runtime.routeDeadline.Before(now.Add(2*time.Second)) ||
+				runtime.routeDeadline.After(now.Add(4*time.Second)) {
+				t.Fatalf(
+					"route deadline = %v, %t, want within total timeout from %v",
+					runtime.routeDeadline,
+					runtime.routeHasDeadline,
+					now,
+				)
+			}
+		})
+	}
+}
+
+func TestRealizeHerdrRollsBackMutationNotIssued(t *testing.T) {
+	t.Run("coordinator", func(t *testing.T) {
+		repo := newHerdrRealizeRepo(t)
+		runtime := &fakeHerdrRealizeRuntime{}
+		installSuccessfulHerdrMutations(t, repo, runtime)
+		runtime.mutate = func(
+			herdrrun.WorktreeMutationRequest,
+		) (herdrrun.WorktreeMutationResult, error) {
+			return herdrrun.WorktreeMutationResult{}, herdrrun.MutationNotIssuedError{
+				Cause: errors.New("owned admission failed"),
+			}
+		}
+
+		_, err := realizeHerdrCoordinator(
+			context.Background(),
+			testHerdrCoordinatorRequest(repo),
+			runtime,
+			deterministicHerdrRealizeHooks(),
+		)
+		if !errors.Is(err, herdrrun.ErrMutationNotIssued) {
+			t.Fatalf("coordinator error = %v", err)
+		}
+		control, err := state.LoadHerdrControl(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(control.Intents) != 0 {
+			t.Fatalf("coordinator intents = %#v, want rollback", control.Intents)
+		}
+	})
+
+	t.Run("worktree", func(t *testing.T) {
+		repo := newHerdrRealizeRepo(t)
+		runtime := &fakeHerdrRealizeRuntime{}
+		installSuccessfulHerdrMutations(t, repo, runtime)
+		hooks := deterministicHerdrRealizeHooks()
+		realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+		runtime.mutate = func(
+			herdrrun.WorktreeMutationRequest,
+		) (herdrrun.WorktreeMutationResult, error) {
+			return herdrrun.WorktreeMutationResult{}, herdrrun.MutationNotIssuedError{
+				Cause: errors.New("owned admission failed"),
+			}
+		}
+
+		req := testHerdrWorktreeRequest(repo, "not-issued", 426)
+		_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+		if !errors.Is(err, herdrrun.ErrMutationNotIssued) {
+			t.Fatalf("worktree error = %v", err)
+		}
+		fullRef, err := worktree.HerdrBranchRef(repo, req.BranchName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if head, found, observeErr := worktree.ObserveHerdrBranch(repo, fullRef); observeErr != nil {
+			t.Fatal(observeErr)
+		} else if found {
+			t.Fatalf("not-issued branch = %s, want rollback", head)
+		}
+		control, err := state.LoadHerdrControl(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(control.Intents) != 1 ||
+			control.Intents[0].Kind != state.HerdrIntentCoordinator {
+			t.Fatalf("worktree intents = %#v, want coordinator only", control.Intents)
+		}
+	})
 }
 
 func TestRealizeHerdrWorktreeChecksPolicyBeforeBranchReservation(t *testing.T) {
@@ -352,7 +466,7 @@ func TestRealizeHerdrWorktreeRecoversExpiredIssuedIntent(t *testing.T) {
 	}
 }
 
-func TestRealizeHerdrWorktreePreservesIssuedIntentWhenRecoveryContextIsCanceled(t *testing.T) {
+func TestRealizeHerdrWorktreePreservesIssuedIntentWhenMutationContextIsCanceled(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
 	installSuccessfulHerdrMutations(t, repo, runtime)
@@ -370,6 +484,7 @@ func TestRealizeHerdrWorktreePreservesIssuedIntentWhenRecoveryContextIsCanceled(
 		return result, err
 	}
 	req := testHerdrWorktreeRequest(repo, "canceled-recovery", 433)
+	observesBefore := runtime.observeCalls
 	result, err := realizeHerdrWorktree(ctx, req, runtime, hooks)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled recovery result = %+v, err=%v", result, err)
@@ -385,6 +500,13 @@ func TestRealizeHerdrWorktreePreservesIssuedIntentWhenRecoveryContextIsCanceled(
 	intent, found := control.FindIntent(intentID)
 	if !found || intent.Status != state.HerdrIntentIssued {
 		t.Fatalf("canceled recovery intent = (%+v,%t)", intent, found)
+	}
+	if runtime.observeCalls != observesBefore+1 {
+		t.Fatalf(
+			"canceled mutation observations = %d, want only pre-mutation observation %d",
+			runtime.observeCalls,
+			observesBefore+1,
+		)
 	}
 
 	runtime.mutate = successfulMutate
@@ -688,8 +810,10 @@ func finalizeHerdrTestIntent(t *testing.T, repo string, intent state.HerdrIntent
 		Slug: intent.Slug, BranchName: intent.BranchName,
 		FullBranchRef: intent.FullBranchRef, BaseBranch: intent.BaseBranch,
 		BaseSHA: intent.BaseSHA, ExpectedHead: intent.ExpectedHead,
-		WorktreePath: intent.WorktreePath, Resource: intent.Resource,
-		Session: intent.Session, SocketPath: intent.SocketPath,
+		WorktreePath:  intent.WorktreePath,
+		BranchExisted: intent.BranchExisted, BranchCreated: intent.BranchCreated,
+		Resource: intent.Resource,
+		Session:  intent.Session, SocketPath: intent.SocketPath,
 	}
 	locked.UpsertRow(row)
 	if err := locked.Save(); err != nil {

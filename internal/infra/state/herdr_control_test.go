@@ -172,9 +172,10 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 		return HerdrRow{
 			ID: intent.ID, Kind: intent.Kind, Parent: intent.Parent,
 			OwnerProjectRoot: intent.OwnerProjectRoot, Backend: intent.Backend,
-			WorktreePath: intent.WorktreePath,
-			Resource:     testHerdrCoordinatorResource(intent.WorktreePath),
-			Session:      intent.Session, SocketPath: intent.SocketPath,
+			WorktreePath:  intent.WorktreePath,
+			BranchExisted: intent.BranchExisted, BranchCreated: intent.BranchCreated,
+			Resource: testHerdrCoordinatorResource(intent.WorktreePath),
+			Session:  intent.Session, SocketPath: intent.SocketPath,
 		}
 	}
 	rows := emptyHerdrControl()
@@ -300,6 +301,31 @@ func TestHerdrControlAcceptsSHA256ObjectIDs(t *testing.T) {
 	}
 }
 
+func TestHerdrControlRowsPreserveBranchOwnership(t *testing.T) {
+	created := testHerdrRow("425")
+	if err := validateHerdrRow(created); err != nil {
+		t.Fatal(err)
+	}
+	existing := created
+	existing.BranchCreated = false
+	existing.BranchExisted = true
+	if err := validateHerdrRow(existing); err != nil {
+		t.Fatal(err)
+	}
+	missing := created
+	missing.BranchCreated = false
+	if err := validateHerdrRow(missing); err == nil ||
+		!strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("missing branch ownership error = %v", err)
+	}
+	contradictory := created
+	contradictory.BranchExisted = true
+	if err := validateHerdrRow(contradictory); err == nil ||
+		!strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("contradictory branch ownership error = %v", err)
+	}
+}
+
 func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, repo)
 	if err != nil {
@@ -364,6 +390,7 @@ func testHerdrRow(parent string) HerdrRow {
 		FullBranchRef: "refs/heads/fanout/child",
 		BaseBranch:    "main", BaseSHA: strings.Repeat("1", 40),
 		ExpectedHead: strings.Repeat("1", 40), WorktreePath: "/repo/child",
+		BranchCreated: true,
 		Resource: HerdrResource{
 			WorkspaceID: "w2", Label: "fanout-worktree-token",
 			PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: "/repo/child",

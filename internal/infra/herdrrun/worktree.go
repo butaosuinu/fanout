@@ -20,10 +20,12 @@ const (
 	WorktreeOpen    WorktreeMutationKind = "worktree-open"
 )
 
-// ErrMutationRejected identifies a complete Herdr error envelope. Callers
-// still verify that no workspace or checkout appeared before rolling back a
-// fanout-created branch.
-var ErrMutationRejected = errors.New("herdr mutation rejected")
+// Mutation errors distinguish a complete server rejection from a failure
+// before the socket command was dispatched.
+var (
+	ErrMutationRejected  = errors.New("herdr mutation rejected")
+	ErrMutationNotIssued = errors.New("herdr mutation was not issued")
+)
 
 type MutationRejectedError struct {
 	Code    string
@@ -35,6 +37,21 @@ func (e MutationRejectedError) Error() string {
 }
 
 func (e MutationRejectedError) Unwrap() error { return ErrMutationRejected }
+
+// MutationNotIssuedError identifies a failure before runWorktreeMutation.
+type MutationNotIssuedError struct {
+	Cause error
+}
+
+func (e MutationNotIssuedError) Error() string {
+	return fmt.Sprintf("herdr mutation was not issued: %v", e.Cause)
+}
+
+func (e MutationNotIssuedError) Unwrap() error { return e.Cause }
+
+func (e MutationNotIssuedError) Is(target error) bool {
+	return target == ErrMutationNotIssued
+}
 
 type WorkspaceObservation struct {
 	WorkspaceID string
@@ -188,39 +205,49 @@ func (s *OwnedSession) MutateWorktree(
 	req WorktreeMutationRequest,
 ) (WorktreeMutationResult, error) {
 	if s == nil || s.backend == nil {
-		return WorktreeMutationResult{}, fmt.Errorf("herdr owned session is nil")
+		return WorktreeMutationResult{}, mutationNotIssued(
+			fmt.Errorf("herdr owned session is nil"),
+		)
 	}
 	if requestErr := validateWorktreeMutationRequest(req); requestErr != nil {
-		return WorktreeMutationResult{}, requestErr
+		return WorktreeMutationResult{}, mutationNotIssued(requestErr)
 	}
 	admission, lock, admissionErr := s.backend.acquireOwnedOperation(ctx)
 	if admissionErr != nil {
-		return WorktreeMutationResult{}, admissionErr
+		return WorktreeMutationResult{}, mutationNotIssued(admissionErr)
 	}
 	defer unlockPrivateFile(lock)
 	if admission.marker.GitCommonDir != req.SourceRepoKey {
-		return WorktreeMutationResult{}, fmt.Errorf("herdr mutation source repository does not match owned session")
+		return WorktreeMutationResult{}, mutationNotIssued(
+			fmt.Errorf("herdr mutation source repository does not match owned session"),
+		)
 	}
 	probed, probeErr := s.backend.probeOwned(ctx, admission)
 	if probeErr != nil {
-		return WorktreeMutationResult{}, probeErr
+		return WorktreeMutationResult{}, mutationNotIssued(probeErr)
 	}
 	alreadyOpenPrebound := false
 	if req.Kind == WorktreeCreate || req.Kind == WorktreeOpen {
 		workspaces, observeErr := s.backend.observeOwnedWorkspaces(ctx, admission)
 		if observeErr != nil {
-			return WorktreeMutationResult{}, fmt.Errorf("observe bound Herdr coordinator: %w", observeErr)
+			return WorktreeMutationResult{}, mutationNotIssued(
+				fmt.Errorf("observe bound Herdr coordinator: %w", observeErr),
+			)
 		}
 		if coordinatorErr := validateBoundCoordinator(req.Coordinator, workspaces); coordinatorErr != nil {
-			return WorktreeMutationResult{}, coordinatorErr
+			return WorktreeMutationResult{}, mutationNotIssued(coordinatorErr)
 		}
 		alreadyOpenPrebound = hasExpectedAlreadyOpenBinding(req, workspaces)
 	}
 	if policyErr := s.backend.verifyEmptyPluginRegistry(ctx, probed); policyErr != nil {
-		return WorktreeMutationResult{}, fmt.Errorf("recheck Herdr plugin policy: %w", policyErr)
+		return WorktreeMutationResult{}, mutationNotIssued(
+			fmt.Errorf("recheck Herdr plugin policy: %w", policyErr),
+		)
 	}
 	if mutationAdmissionErr := validateMutationAdmission(req); mutationAdmissionErr != nil {
-		return WorktreeMutationResult{}, fmt.Errorf("recheck Herdr mutation admission: %w", mutationAdmissionErr)
+		return WorktreeMutationResult{}, mutationNotIssued(
+			fmt.Errorf("recheck Herdr mutation admission: %w", mutationAdmissionErr),
+		)
 	}
 
 	args, envelopeID, resultType := worktreeMutationArgs(req)
@@ -271,6 +298,10 @@ func (s *OwnedSession) MutateWorktree(
 		return WorktreeMutationResult{}, err
 	}
 	return WorktreeMutationResult{WorkspaceObservation: got, AlreadyOpen: alreadyOpen}, nil
+}
+
+func mutationNotIssued(err error) error {
+	return MutationNotIssuedError{Cause: err}
 }
 
 func validateAlreadyOpen(
@@ -623,10 +654,12 @@ func (b *Backend) runWorktreeMutation(
 	args ...string,
 ) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, mutationNotIssued(err)
 	}
 	if _, ok := ctx.Deadline(); !ok {
-		return nil, fmt.Errorf("herdr mutation requires a caller deadline")
+		return nil, mutationNotIssued(
+			fmt.Errorf("herdr mutation requires a caller deadline"),
+		)
 	}
 	return b.output(ctx, binary, routeEnvironment(target, b.control), args...)
 }

@@ -100,6 +100,8 @@ type HerdrRow struct {
 	BaseSHA       string `json:"baseSha,omitempty"`
 	ExpectedHead  string `json:"expectedHead,omitempty"`
 	WorktreePath  string `json:"worktreePath"`
+	BranchExisted bool   `json:"branchExisted,omitempty"`
+	BranchCreated bool   `json:"branchCreated,omitempty"`
 
 	Resource   HerdrResource `json:"resource"`
 	Session    string        `json:"session"`
@@ -476,7 +478,8 @@ func validateHerdrRow(row HerdrRow) error {
 		expectedID, err = HerdrCoordinatorIntentID(parent, ownerProjectRoot)
 		if row.IssueNum != 0 || row.TaskID != "" || row.Slug != "" ||
 			row.BranchName != "" || row.FullBranchRef != "" ||
-			row.BaseBranch != "" || row.BaseSHA != "" || row.ExpectedHead != "" {
+			row.BaseBranch != "" || row.BaseSHA != "" || row.ExpectedHead != "" ||
+			row.BranchExisted || row.BranchCreated {
 			return fmt.Errorf("herdr coordinator row %s contains child fields", row.ID)
 		}
 	case HerdrIntentWorktree:
@@ -484,7 +487,8 @@ func validateHerdrRow(row HerdrRow) error {
 		if row.Slug == "" || row.BranchName == "" ||
 			row.FullBranchRef != "refs/heads/"+row.BranchName ||
 			row.BaseBranch == "" || !herdrControlCommitSHA.MatchString(row.BaseSHA) ||
-			!herdrControlCommitSHA.MatchString(row.ExpectedHead) {
+			!herdrControlCommitSHA.MatchString(row.ExpectedHead) ||
+			row.BranchExisted == row.BranchCreated {
 			return fmt.Errorf("herdr worktree row %s is incomplete", row.ID)
 		}
 	default:

@@ -314,6 +314,12 @@ func ObserveHerdrCheckout(root, checkoutPath string) (HerdrCheckoutObservation, 
 	if checkoutIdentity.RepoKey != sourceIdentity.RepoKey {
 		return observation, fmt.Errorf("herdr checkout %s belongs to a different Git common directory", checkoutPath)
 	}
+	if filepath.Clean(checkoutIdentity.RepoRoot) != cleanPath {
+		return observation, fmt.Errorf(
+			"herdr checkout %s does not resolve to its registered worktree root",
+			checkoutPath,
+		)
+	}
 	observation.RepoKey = sourceIdentity.RepoKey
 	observation.RepoRoot = sourceIdentity.RepoRoot
 	return observation, nil
