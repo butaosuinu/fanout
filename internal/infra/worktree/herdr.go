@@ -326,6 +326,24 @@ func ObserveBranch(root, fullRef string) (oid string, found bool, err error) {
 	return oid, true, nil
 }
 
+// ObserveBranchGitDir reads a ref through a previously validated physical
+// worktree-specific Git directory instead of a mutable checkout path.
+func ObserveBranchGitDir(gitDir, fullRef string) (oid string, found bool, err error) {
+	out, err := git(gitDir, "--git-dir=.", "rev-parse", "--verify", "--quiet", fullRef)
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("observe branch %s through saved git dir: %w", fullRef, err)
+	}
+	oid = strings.ToLower(strings.TrimSpace(string(out)))
+	if !fullCommitSHA.MatchString(oid) {
+		return "", false, fmt.Errorf("observe branch %s: invalid object id %q", fullRef, oid)
+	}
+	return oid, true, nil
+}
+
 // ReserveBranch atomically creates fullRef at baseSHA with an empty old OID.
 // Herdr is never asked to create the branch.
 func ReserveBranch(root, fullRef, baseSHA string) error {
@@ -335,6 +353,27 @@ func ReserveBranch(root, fullRef, baseSHA string) error {
 	const emptyOID = "0000000000000000000000000000000000000000"
 	if _, err := git(root, "update-ref", "--create-reflog", fullRef, baseSHA, emptyOID); err != nil {
 		return fmt.Errorf("reserve branch %s at %s: %w", fullRef, baseSHA, err)
+	}
+	return nil
+}
+
+// ReserveBranchGitDir atomically creates fullRef through the physical Git
+// directory persisted in the launch intent.
+func ReserveBranchGitDir(gitDir, fullRef, baseSHA string) error {
+	if !strings.HasPrefix(fullRef, "refs/heads/") || !fullCommitSHA.MatchString(baseSHA) {
+		return fmt.Errorf("invalid atomic branch reservation %s -> %s", fullRef, baseSHA)
+	}
+	const emptyOID = "0000000000000000000000000000000000000000"
+	if _, err := git(
+		gitDir,
+		"--git-dir=.",
+		"update-ref",
+		"--create-reflog",
+		fullRef,
+		baseSHA,
+		emptyOID,
+	); err != nil {
+		return fmt.Errorf("reserve branch %s at %s through saved git dir: %w", fullRef, baseSHA, err)
 	}
 	return nil
 }
@@ -359,6 +398,25 @@ func VerifyReservedBranchBase(root, resolvedBaseRef, baseSHA string) error {
 	currentBase, err := gitTrim(root, "rev-parse", "--verify", resolvedBaseRef+"^{commit}")
 	if err != nil {
 		return fmt.Errorf("recheck resolved base %s: %w", resolvedBaseRef, err)
+	}
+	if strings.ToLower(currentBase) != baseSHA {
+		return fmt.Errorf("resolved base %s moved from %s to %s", resolvedBaseRef, baseSHA, strings.ToLower(currentBase))
+	}
+	return nil
+}
+
+// VerifyReservedBranchBaseGitDir rechecks the immutable base through the
+// physical Git directory persisted in the launch intent.
+func VerifyReservedBranchBaseGitDir(gitDir, resolvedBaseRef, baseSHA string) error {
+	currentBase, err := gitTrim(
+		gitDir,
+		"--git-dir=.",
+		"rev-parse",
+		"--verify",
+		resolvedBaseRef+"^{commit}",
+	)
+	if err != nil {
+		return fmt.Errorf("recheck resolved base %s through saved git dir: %w", resolvedBaseRef, err)
 	}
 	if strings.ToLower(currentBase) != baseSHA {
 		return fmt.Errorf("resolved base %s moved from %s to %s", resolvedBaseRef, baseSHA, strings.ToLower(currentBase))

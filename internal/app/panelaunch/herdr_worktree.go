@@ -397,8 +397,37 @@ func reserveHerdrBranch(
 	if deadlineErr := verifyHerdrOperationDeadline(ctx, starting, hooks.Now()); deadlineErr != nil {
 		return starting, failHerdrIntent(req.ProjectRoot, starting, deadlineErr.Error())
 	}
-	if reserveErr := worktree.ReserveBranch(req.SourceRoot, starting.FullBranchRef, starting.LineageBaseSHA); reserveErr != nil {
-		oid, found, observeErr := worktree.ObserveBranch(req.SourceRoot, starting.FullBranchRef)
+	if sourceErr := verifyHerdrSourceIdentity(req.SourceRoot, starting); sourceErr != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, sourceErr.Error())
+	}
+	if baseErr := worktree.VerifyReservedBranchBaseGitDir(
+		starting.SourceGitDirPhysical,
+		starting.ResolvedBaseRef,
+		starting.LineageBaseSHA,
+	); baseErr != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, baseErr.Error())
+	}
+	if oid, found, observeErr := worktree.ObserveBranchGitDir(
+		starting.SourceGitDirPhysical,
+		starting.FullBranchRef,
+	); observeErr != nil {
+		return starting, failHerdrIntent(req.ProjectRoot, starting, observeErr.Error())
+	} else if found {
+		return starting, failHerdrIntent(
+			req.ProjectRoot,
+			starting,
+			fmt.Sprintf("herdr branch %s appeared at %s before reservation", starting.FullBranchRef, oid),
+		)
+	}
+	if reserveErr := worktree.ReserveBranchGitDir(
+		starting.SourceGitDirPhysical,
+		starting.FullBranchRef,
+		starting.LineageBaseSHA,
+	); reserveErr != nil {
+		oid, found, observeErr := worktree.ObserveBranchGitDir(
+			starting.SourceGitDirPhysical,
+			starting.FullBranchRef,
+		)
 		reason := fmt.Sprintf("branch reservation failed: %v", reserveErr)
 		if observeErr != nil || found {
 			if observeErr != nil {
@@ -436,6 +465,9 @@ func realizeHerdrMutation(
 ) (state.HerdrLaunchIntent, error) {
 	if intent.BranchReceipt == nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, "worktree-planned intent has no branch reservation receipt")
+	}
+	if sourceErr := verifyHerdrSourceIdentity(req.SourceRoot, intent); sourceErr != nil {
+		return intent, failHerdrIntent(req.ProjectRoot, intent, sourceErr.Error())
 	}
 	if err := worktree.VerifyHerdrWorktreeParent(req.ProjectRoot, intent.WorktreePath); err != nil {
 		return intent, failHerdrIntent(req.ProjectRoot, intent, err.Error())
@@ -941,6 +973,24 @@ func validateSavedHerdrWorktreeIntent(req HerdrWorktreeRequest, intent state.Her
 	}
 	if err := validateSavedHerdrWorktreeMutationEvidence(intent); err != nil {
 		return err
+	}
+	return nil
+}
+
+func verifyHerdrSourceIdentity(
+	sourceRoot string,
+	intent state.HerdrLaunchIntent,
+) error {
+	identity, err := worktree.ResolveHerdrRepoIdentity(sourceRoot)
+	if err != nil {
+		return fmt.Errorf("revalidate herdr source identity: %w", err)
+	}
+	if identity.RepoRoot != intent.SourceRootPhysical ||
+		identity.GitDir != intent.SourceGitDirPhysical ||
+		identity.GitDirDevice != intent.SourceGitDirDevice ||
+		identity.GitDirInode != intent.SourceGitDirInode ||
+		identity.RepoKey != intent.HerdrRepoKey {
+		return fmt.Errorf("herdr source identity changed before mutation")
 	}
 	return nil
 }

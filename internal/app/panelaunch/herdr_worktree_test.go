@@ -465,6 +465,65 @@ func TestHerdrRealizationPinsBaseToLinkedSourceHEAD(t *testing.T) {
 	}
 }
 
+func TestHerdrBranchReservationRejectsReplacedLinkedSource(t *testing.T) {
+	repo := newHerdrLaunchRepo(t)
+	sourceParent := t.TempDir()
+	source := filepath.Join(sourceParent, "linked-source")
+	runHerdrLaunchGit(t, repo, "worktree", "add", "-b", "linked-source-replaced", source, "HEAD")
+	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
+	req := herdrWorktreeRequest(repo)
+	req.SourceRoot = source
+	seedHerdrCoordinator(t, repo, runtime, req)
+	sourceIdentity, err := worktree.ResolveHerdrRepoIdentity(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrIntentID(
+		req.Parent,
+		req.IssueNum,
+		req.TaskID,
+		sourceIdentity.RepoRoot,
+		sourceIdentity.GitDir,
+		sourceIdentity.GitDirDevice,
+		sourceIdentity.GitDirInode,
+		req.PlanSpecIdentity,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks := deterministicHerdrHooks(nil, "")
+	hooks.PhaseSaved = func(phase state.HerdrLaunchPhase) error {
+		if phase != state.HerdrPhaseBranchStarting {
+			return nil
+		}
+		runHerdrLaunchGit(t, repo, "worktree", "remove", "--force", source)
+		runHerdrLaunchGit(t, sourceParent, "clone", "--no-local", repo, source)
+		return nil
+	}
+
+	_, err = RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) ||
+		!strings.Contains(err.Error(), "source identity changed") {
+		t.Fatalf("replaced source error = %v, want manual cleanup identity rejection", err)
+	}
+	for _, root := range []string{repo, source} {
+		if oid, found, observeErr := worktree.ObserveBranch(root, "refs/heads/"+req.BranchName); observeErr != nil || found {
+			t.Fatalf("branch reserved through replaced source at %s: oid=%s found=%t err=%v", root, oid, found, observeErr)
+		}
+	}
+	if len(runtime.mutations) != 0 {
+		t.Fatalf("replaced source issued %d Herdr mutations", len(runtime.mutations))
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, found := control.FindIntent(intentID)
+	if !found || failed.OperationState != state.HerdrOperationManualCleanupRequired {
+		t.Fatalf("replaced source intent = %+v, found=%t", failed, found)
+	}
+}
+
 func TestHerdrWorktreeResponseLossRequiresManualCleanupWithoutMutationRetry(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo, responseLoss: true}
