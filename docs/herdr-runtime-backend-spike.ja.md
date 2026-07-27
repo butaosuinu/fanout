@@ -78,7 +78,7 @@ tmux-parity は信頼モデルだけでなく機構の密度にも適用し、�
 | live identity | Go | routing、checkout、terminal、会話、process を別々に照合する |
 | 0.7.5 direct launch の cold restart resume | 保留 | real Codex の direct launch から restart / attach / resume まで未実測のため、`terminal_id` 変化時は `stale` にする |
 | console / coordinator close | Go | checkout を持たない exact owned workspace / pane だけを送信直前に再照合し、応答喪失は再実行時の存在確認で確定する |
-| child launch rollback | tmux の `failCleanup` と同水準 | 今回作った資源だけを identity 照合後に削除し、照合不一致または response loss では資源を残して fail closed にする |
+| child launch rollback | tmux の `failCleanup` と同水準 | 今回作った資源だけを identity 照合後に削除し、照合不一致、残存または判定不能な response loss では資源を残して fail closed にする |
 | dirty `--force` | 明示確認後だけ許可 | dirty checkout はユーザーの明示確認なしに force しない。launch rollback の remove も force なしで発行する |
 | emitter | Go | cooperative telemetry と nudge gate に限り、completion / cleanup authority にしない |
 | metadata | Go | exact target を直前・直後に照合し、表示専用 token だけを報告する |
@@ -157,7 +157,7 @@ herdr が起動した agent は同じ UID で動き、`HERDR_SOCKET_PATH` を継
 server 停止後に同じ path の server へ置換する ABA も原子的には検出できない。
 
 owned runtime directory の `owner.json` は協調する fanout process 間の ownership、封じ込め、crash recovery、誤操作防止に使う。
-marker は schema ID `fanout.herdr-owner.v1` の JSON とし、decoder は missing / unknown field を拒否する。
+marker は schema ID `fanout.herdr-owner.v1` の JSON とし、decoder は missing / unknown field と非 canonical encoding を拒否する（PR #572 の strict canonical decode）。
 field は git common directory の path / device / inode、owner nonce、session 名、runtime directory、server / client socket path、pinned Herdr binary の path / SHA-256 / version、supervisor の PID / start token、owned XDG 四 path、config path とし、PR #572 の実装形を正とする。
 marker は owned runtime directory の検査後に exclusive create で書き、supervisor lease（owner nonce / PID / start token）を別 file で保持する。
 再利用は marker、lease、live supervisor process の照合が一致した場合だけ許可する。
@@ -310,6 +310,7 @@ no-arg TUI の attach 準備は、workspace mutation 前に console の intent �
 そのうえで `workspace create --cwd <repo-root> --label <launch-nonce> --no-focus` を一回発行し、応答の workspace ID、root PaneRef / `terminal_id` / cwd を照合して intent 行へ記録する。
 応答喪失または crash 後の再実行は存在確認で分類する。intent の nonce と一致する label の workspace が一つだけ存在して cwd が一致すれば採用して続行する。続行は現状から分岐し、root pane の foreground が launcher で token 発行済み flag がなければ fresh marker の再観測後に readiness / token から、intent の user shell が既に動いているなら process 照合の finalization から再開する。workspace が不在で create request の非発行を証明できる場合だけ intent 行を消して作り直し、それ以外は `manual_cleanup_required` にする。
 launcher marker と root identity を照合した後だけ exact token を一回発行し、launcher は intent の user shell を interactive child として起動する。
+token の発行は「safety gate」節の token 発行済み flag の契約に従う（発行直前に intent 行へ flag を state save し、flag ありの recovery では再送しない）。
 parent は `pane process-info` と OS process 情報で shell の argv / cwd / ancestry を照合して final console row を確定し、同じ state save で intent 行を削除する。
 console は agent detection、rename、emitter、initial operation token 以外の automatic `pane run`、`agent prompt`、nudge の対象にせず、ユーザーが明示的に focus した後の入力だけを受ける。
 attach 準備は exact live console row を再利用し、console が存在しない場合だけ作成する。
@@ -1282,7 +1283,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | owned server restart | Go（実装は #530） | 明示操作による marker / lease と saved process / socket 不在の照合後の単一 spawn、結果不明の fail closed、restart 後の version gate 再実行と direct-launch row の `stale` 化 | authenticated server generation と request-bound conditional restart |
 | console / coordinator close | Go | checkout を持たない exact owned workspace / pane を送信直前に再照合し、応答喪失は再実行時の存在確認で確定する | close が authoritative server generation と target resource generation を原子的に検査する |
 | child cleanup | Go（#531） | identity 照合後の `worktree remove`（checkout と workspace を削除）、dirty の明示確認、branch の compare-and-delete、存在確認による応答喪失処理 | tracked / untracked / ignored subtree generation を remove と原子的に条件化する server-side conditional remove、または remove postcondition まで保持する kernel-enforced write-exclusion fence |
-| child launch rollback | tmux の `failCleanup` と同水準 | 今回作った資源だけを identity 照合後に force なしで削除し、照合不一致、dirty 拒否、response loss では資源を残して fail closed にする | child cleanup と同じ conditional remove または fence |
+| child launch rollback | tmux の `failCleanup` と同水準 | 今回作った資源だけを identity 照合後に force なしで削除し、照合不一致、dirty 拒否、残存または判定不能な response loss では資源を残して fail closed にする（不在を確認できた response loss は完了扱い） | child cleanup と同じ conditional remove または fence |
 | dirty `--force` | 明示確認後だけ許可 | dirty checkout はユーザーの明示確認なしに force しない | conditional remove / fence と fingerprint-bound receipt |
 | #427 emitter | Go | cooperative telemetry と `shouldNudge` gate に限り、completion / cleanup authority にしない | agent process から分離した event provenance |
 | 0.7.5 direct launch の cold restart resume | 保留 | `terminal_id` 変化時は `stale`。#532 が real direct launch / restart / attach / resume の実機連鎖を証明した後に再判定する | authoritative server generation と launch provenance の原子的な束縛 |
@@ -1300,7 +1301,7 @@ herdr が対応する primitive を提供するか、proof-grade tier へ格上�
 |---|---|
 | フル phase machine（`branch-planned` / `worktree-starting` などの多段遷移）と exact request / pre-state の replay 契約 | 撤廃。intent 行 + 存在確認で置換し、request-bound conditional mutation が使える proof-grade tier で再評価する |
 | CAS provisional registry（revision CAS、owner lease / heartbeat / takeover、admission state machine、epoch） | 撤廃。state lock + atomic save で置換し、authoritative server generation が使える proof-grade tier で再評価する |
-| canonical bytes / digest / golden bytes（owner marker golden、registry codec golden、`manifest_set_digest`、removal fingerprint） | 撤廃。対応する機構の proof-grade 再導入と同時に再評価する |
+| canonical golden bytes fixture（owner marker golden、registry codec golden、`manifest_set_digest`、removal fingerprint） | 撤廃。対応する機構の proof-grade 再導入と同時に再評価する。PR #572 実装済みの owner marker / lease の strict canonical decode（missing / unknown field と非 canonical encoding の拒否）は実装どおり維持する |
 | content-addressed launch bundle と build / publish / GC journal、sealed bundle 起動 | 撤廃。fanout が解決した絶対 entrypoint の直接起動で置換し、verified FD spawn または別 UID の bundle owner が使える proof-grade tier で再評価する |
 | branch lineage / cleaned tombstone / explicit continue / tombstone forget | 撤廃。row 削除 + 既存 branch 採用の fresh launch で置換し、conditional remove / fence の格上げと同時に再評価する |
 | ownership nonce の二重照合（workspace label + checkout git-dir marker） | 格下げ。workspace label の単一照合を正とする |
