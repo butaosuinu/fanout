@@ -1,6 +1,7 @@
 package gitstat
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -157,6 +158,248 @@ func TestRunnerWorktreeUnresolvableBaseFallsBackToHEAD(t *testing.T) {
 	}
 }
 
+func TestRunnerWorktreePatch(t *testing.T) {
+	tests := []struct {
+		name            string
+		baseRef         string
+		prepare         func(*testing.T, string)
+		wantErrContains string
+		check           func(*testing.T, string, Patch)
+	}{
+		{
+			name:    "tracked committed and uncommitted changes",
+			baseRef: "main",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				writeGitstatFile(t, repo, "tracked.txt", []byte("one\ntwo\n"))
+				gitTest(t, repo, "add", "tracked.txt")
+				gitTest(t, repo, "commit", "-m", "committed work")
+				writeGitstatFile(t, repo, "tracked.txt", []byte("one\ntwo\nthree\n"))
+			},
+			check: func(t *testing.T, repo string, got Patch) {
+				t.Helper()
+				wantMergeBase := gitTestOutput(t, repo, "rev-parse", "main")
+				if got.MergeBase != wantMergeBase {
+					t.Fatalf("WorktreePatch().MergeBase = %q, want %q", got.MergeBase, wantMergeBase)
+				}
+				assertFileStat(t, got.Files, FileStat{
+					Path:          "tracked.txt",
+					Additions:     2,
+					PatchIncluded: true,
+				})
+				if !strings.Contains(got.Patch, "diff --git a/tracked.txt b/tracked.txt") ||
+					!strings.Contains(got.Patch, "+two") ||
+					!strings.Contains(got.Patch, "+three") {
+					t.Fatalf("WorktreePatch().Patch = %q, want tracked committed and uncommitted lines", got.Patch)
+				}
+			},
+		},
+		{
+			name:            "base resolution failure",
+			baseRef:         "no-such-branch",
+			wantErrContains: "no-such-branch",
+		},
+		{
+			name:    "untracked text file",
+			baseRef: "main",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				writeGitstatFile(t, repo, "untracked space.txt", []byte("first\nsecond\n"))
+			},
+			check: func(t *testing.T, _ string, got Patch) {
+				t.Helper()
+				assertFileStat(t, got.Files, FileStat{
+					Path:          "untracked space.txt",
+					Additions:     2,
+					PatchIncluded: true,
+				})
+				if !strings.Contains(got.Patch, "diff --git a/untracked space.txt b/untracked space.txt") ||
+					!strings.Contains(got.Patch, "+first") {
+					t.Fatalf("WorktreePatch().Patch = %q, want untracked file patch", got.Patch)
+				}
+			},
+		},
+		{
+			name:    "binary file is listed without patch",
+			baseRef: "main",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				writeGitstatFile(t, repo, "binary.dat", []byte{'a', 0, 'b'})
+			},
+			check: func(t *testing.T, _ string, got Patch) {
+				t.Helper()
+				assertFileStat(t, got.Files, FileStat{
+					Path:          "binary.dat",
+					Binary:        true,
+					OmittedReason: "binary",
+				})
+				if got.Patch != "" {
+					t.Fatalf("WorktreePatch().Patch = %q, want binary file omitted", got.Patch)
+				}
+			},
+		},
+		{
+			name:    "empty diff",
+			baseRef: "main",
+			check: func(t *testing.T, _ string, got Patch) {
+				t.Helper()
+				if got.Files == nil || len(got.Files) != 0 {
+					t.Fatalf("WorktreePatch().Files = %#v, want non-nil empty slice", got.Files)
+				}
+				if got.Patch != "" {
+					t.Fatalf("WorktreePatch().Patch = %q, want empty", got.Patch)
+				}
+			},
+		},
+		{
+			name:    "file over limit is listed without patch",
+			baseRef: "main",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				writeGitstatFile(t, repo, "large.txt", bytes.Repeat([]byte{'x'}, patchFileLimit+1))
+			},
+			check: func(t *testing.T, _ string, got Patch) {
+				t.Helper()
+				assertFileStat(t, got.Files, FileStat{
+					Path:          "large.txt",
+					OmittedReason: "tooLarge",
+				})
+				if got.Patch != "" {
+					t.Fatalf("WorktreePatch().Patch has %d bytes, want oversized file omitted", len(got.Patch))
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initPatchRepo(t)
+			if tt.prepare != nil {
+				tt.prepare(t, repo)
+			}
+
+			got, err := Runner{}.WorktreePatch(repo, tt.baseRef)
+			if tt.wantErrContains != "" {
+				if err == nil {
+					t.Fatalf("WorktreePatch() = %#v, want error containing %q", got, tt.wantErrContains)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Fatalf("WorktreePatch() error = %q, want it to contain %q", err, tt.wantErrContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.check(t, repo, got)
+		})
+	}
+}
+
+func TestRunnerWorktreePatchOnlyCallsReadOnlyGitSubcommands(t *testing.T) {
+	repo := initPatchRepo(t)
+	writeGitstatFile(t, repo, "tracked.txt", []byte("one\nstaged\n"))
+	gitTest(t, repo, "add", "tracked.txt")
+	writeGitstatFile(t, repo, "untracked.txt", []byte("new\n"))
+
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeIndex := gitBinaryOutput(t, realGit, repo, "diff", "--cached", "--binary")
+	beforeStatus := gitBinaryOutput(t, realGit, repo, "status", "--porcelain=v1", "-z")
+	beforeTracked, err := os.ReadFile(filepath.Join(repo, "tracked.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeUntracked, err := os.ReadFile(filepath.Join(repo, "untracked.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logPath := filepath.Join(t.TempDir(), "git-subcommands.log")
+	t.Setenv("FANOUT_GITSTAT_REAL_GIT", realGit)
+	t.Setenv("FANOUT_GITSTAT_LOG", logPath)
+	installGitstatShim(t, "git", `
+case "$1" in
+  -C) subcommand=$3 ;;
+  *) subcommand=$1 ;;
+esac
+printf '%s\n' "$subcommand" >> "$FANOUT_GITSTAT_LOG"
+exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
+`)
+
+	if _, patchErr := (Runner{}).WorktreePatch(repo, "main"); patchErr != nil {
+		t.Fatal(patchErr)
+	}
+
+	afterIndex := gitBinaryOutput(t, realGit, repo, "diff", "--cached", "--binary")
+	afterStatus := gitBinaryOutput(t, realGit, repo, "status", "--porcelain=v1", "-z")
+	afterTracked, err := os.ReadFile(filepath.Join(repo, "tracked.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterUntracked, err := os.ReadFile(filepath.Join(repo, "untracked.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterIndex, beforeIndex) ||
+		!bytes.Equal(afterStatus, beforeStatus) ||
+		!bytes.Equal(afterTracked, beforeTracked) ||
+		!bytes.Equal(afterUntracked, beforeUntracked) {
+		t.Fatal("WorktreePatch changed the index or worktree")
+	}
+
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readOnly := map[string]bool{
+		"check-ref-format": true,
+		"rev-parse":        true,
+		"merge-base":       true,
+		"diff":             true,
+		"ls-files":         true,
+		"ls-tree":          true,
+	}
+	for subcommand := range strings.FieldsSeq(string(logged)) {
+		if !readOnly[subcommand] {
+			t.Fatalf("WorktreePatch called non-read-only git subcommand %q; log:\n%s", subcommand, logged)
+		}
+	}
+}
+
+func initPatchRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	writeGitstatFile(t, repo, "tracked.txt", []byte("one\n"))
+	gitTest(t, repo, "add", "tracked.txt")
+	gitTest(t, repo, "commit", "-m", "initial")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	return repo
+}
+
+func writeGitstatFile(t *testing.T, repo, name string, content []byte) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, name), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertFileStat(t *testing.T, got []FileStat, want FileStat) {
+	t.Helper()
+	if len(got) != 1 {
+		t.Fatalf("WorktreePatch().Files = %#v, want one file", got)
+	}
+	if got[0] != want {
+		t.Fatalf("WorktreePatch().Files[0] = %#v, want %#v", got[0], want)
+	}
+}
+
 func TestRunnerMergeBase(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
@@ -273,6 +516,9 @@ func TestGitEnvDisablesOptionalLocks(t *testing.T) {
 	if env["GIT_OPTIONAL_LOCKS"] != "0" {
 		t.Fatalf("GIT_OPTIONAL_LOCKS = %q, want 0", env["GIT_OPTIONAL_LOCKS"])
 	}
+	if env["GIT_LITERAL_PATHSPECS"] != "1" {
+		t.Fatalf("GIT_LITERAL_PATHSPECS = %q, want 1", env["GIT_LITERAL_PATHSPECS"])
+	}
 }
 
 func gitTestOutput(t *testing.T, dir string, args ...string) string {
@@ -293,4 +539,25 @@ func gitTest(t *testing.T, dir string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
+}
+
+func gitBinaryOutput(t *testing.T, binary, dir string, args ...string) []byte {
+	t.Helper()
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("%s %v: %v", binary, args, err)
+	}
+	return out
+}
+
+func installGitstatShim(t *testing.T, name, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
