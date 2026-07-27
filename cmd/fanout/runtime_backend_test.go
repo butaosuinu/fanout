@@ -300,6 +300,49 @@ func TestResolveLaunchBackendLoadsSharedHerdrProvisionalIntent(t *testing.T) {
 	}
 }
 
+func TestSharedHerdrPlanIntentsRemainOwnerWorktreeLocal(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "same-plan-sibling", sibling, "HEAD")
+	writeHerdrCoordinatorIntent(t, repo, "plan:demo")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("FANOUT_BACKEND", "")
+
+	siblingStore, err := state.LoadProject(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolveLaunchBackend(
+		&cliflags.Config{ParentRef: "plan:demo"},
+		sibling,
+		siblingStore,
+		nil,
+	)
+	if err != nil || resolved.selection.Name != backend.Tmux {
+		t.Fatalf("foreign plan binding selected %+v, err=%v", resolved.selection, err)
+	}
+
+	writeHerdrCoordinatorIntent(t, sibling, "plan:demo")
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(control.Intents) != 2 || control.Intents[0].ID == control.Intents[1].ID {
+		t.Fatalf("same-slug plan intents = %#v", control.Intents)
+	}
+	_, err = resolveLaunchBackend(
+		&cliflags.Config{ParentRef: "plan:demo"},
+		sibling,
+		siblingStore,
+		nil,
+	)
+	if !errors.Is(err, backend.ErrUnsupported) {
+		t.Fatalf("owner plan binding error = %v, want Herdr ownership", err)
+	}
+}
+
 func TestBackendSelectionVerifierRechecksSharedHerdrProvisionalIntent(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -338,7 +381,11 @@ func TestValidateLaunchBackendRejectsHerdrV1(t *testing.T) {
 
 func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 	t.Helper()
-	id, err := state.HerdrCoordinatorIntentID(parent)
+	ownerProjectRoot, err := state.HerdrOwnerProjectRoot(parent, canonicalRuntimeRoot(repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := state.HerdrCoordinatorIntentID(parent, ownerProjectRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,17 +399,18 @@ func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 		}
 	})
 	locked.UpsertIntent(state.HerdrIntent{
-		ID:             id,
-		Kind:           state.HerdrIntentCoordinator,
-		Status:         state.HerdrIntentPlanned,
-		Parent:         parent,
-		Backend:        backend.Herdr,
-		WorktreePath:   repo,
-		WorkspaceLabel: "fanout-coordinator-test",
-		Session:        "fanout-test",
-		SocketPath:     "/private/tmp/fanout-test/herdr.sock",
-		TimeoutMS:      3000,
-		ExpiresUnixMS:  time.Now().Add(time.Minute).UnixMilli(),
+		ID:               id,
+		Kind:             state.HerdrIntentCoordinator,
+		Status:           state.HerdrIntentPlanned,
+		Parent:           parent,
+		OwnerProjectRoot: ownerProjectRoot,
+		Backend:          backend.Herdr,
+		WorktreePath:     repo,
+		WorkspaceLabel:   "fanout-coordinator-test",
+		Session:          "fanout-test",
+		SocketPath:       "/private/tmp/fanout-test/herdr.sock",
+		TimeoutMS:        3000,
+		ExpiresUnixMS:    time.Now().Add(time.Minute).UnixMilli(),
 	})
 	if err := locked.Save(); err != nil {
 		t.Fatal(err)

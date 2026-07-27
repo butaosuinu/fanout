@@ -119,7 +119,9 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   lock を使う。intent 保存から branch 予約、socket mutation、事後条件の確認
   まで lock を保持する。tmux agent launch も state 更新が終わるまで同じ lock
   を保持する。発行済み mutation は再発行せず、label nonce と Git 事後条件を
-  一意に確認できない場合は `manual_cleanup_required` にする。
+  一意に確認できない場合は `manual_cleanup_required` にする。issue-less plan
+  の row / intent は physical owner root を ID に含め、同じ slug を使う別の
+  linked worktree には backend binding として投影しない。
 - **worktree refresh は user work を壊さない**: base branch が dirty / ahead /
   diverged なら強制更新せず fail する。
 - **watch のトリガーラベルはプロンプトインジェクション境界**: issue 本文が

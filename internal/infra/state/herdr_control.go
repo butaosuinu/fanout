@@ -51,13 +51,14 @@ type HerdrResource struct {
 // socket request may have been issued; recovery never reissues an issued
 // request and instead classifies the current workspace and checkout state.
 type HerdrIntent struct {
-	ID       string            `json:"id"`
-	Kind     HerdrIntentKind   `json:"kind"`
-	Status   HerdrIntentStatus `json:"status"`
-	Parent   string            `json:"parent"`
-	IssueNum int               `json:"issueNum,omitempty"`
-	TaskID   string            `json:"taskId,omitempty"`
-	Backend  backend.Name      `json:"backend"`
+	ID               string            `json:"id"`
+	Kind             HerdrIntentKind   `json:"kind"`
+	Status           HerdrIntentStatus `json:"status"`
+	Parent           string            `json:"parent"`
+	OwnerProjectRoot string            `json:"ownerProjectRoot,omitempty"`
+	IssueNum         int               `json:"issueNum,omitempty"`
+	TaskID           string            `json:"taskId,omitempty"`
+	Backend          backend.Name      `json:"backend"`
 
 	Slug          string `json:"slug,omitempty"`
 	BranchName    string `json:"branchName,omitempty"`
@@ -84,12 +85,13 @@ type HerdrIntent struct {
 // finalization. Issue #527 provides its persistence and backend-binding shape;
 // issue #528 owns the transition from a realized intent to this row.
 type HerdrRow struct {
-	ID       string          `json:"id"`
-	Kind     HerdrIntentKind `json:"kind"`
-	Parent   string          `json:"parent"`
-	IssueNum int             `json:"issueNum,omitempty"`
-	TaskID   string          `json:"taskId,omitempty"`
-	Backend  backend.Name    `json:"backend"`
+	ID               string          `json:"id"`
+	Kind             HerdrIntentKind `json:"kind"`
+	Parent           string          `json:"parent"`
+	OwnerProjectRoot string          `json:"ownerProjectRoot,omitempty"`
+	IssueNum         int             `json:"issueNum,omitempty"`
+	TaskID           string          `json:"taskId,omitempty"`
+	Backend          backend.Name    `json:"backend"`
 
 	Slug          string `json:"slug,omitempty"`
 	BranchName    string `json:"branchName,omitempty"`
@@ -250,45 +252,85 @@ func (s *HerdrControlStore) UpsertRow(row HerdrRow) {
 	s.Rows = append(s.Rows, row)
 }
 
-func (s HerdrControlStore) RowBindings() []backend.Binding {
+func (s HerdrControlStore) RowBindings(ownerProjectRoot string) []backend.Binding {
 	bindings := make([]backend.Binding, 0, len(s.Rows))
 	for _, row := range s.Rows {
+		if !herdrBindingBelongsToProject(row.Parent, row.OwnerProjectRoot, ownerProjectRoot) {
+			continue
+		}
 		bindings = append(bindings, backend.Binding{Parent: row.Parent, Backend: row.Backend})
 	}
 	return bindings
 }
 
-func (s HerdrControlStore) ProvisionalBindings() []backend.Binding {
+func (s HerdrControlStore) ProvisionalBindings(ownerProjectRoot string) []backend.Binding {
 	bindings := make([]backend.Binding, 0, len(s.Intents))
 	for _, intent := range s.Intents {
+		if !herdrBindingBelongsToProject(intent.Parent, intent.OwnerProjectRoot, ownerProjectRoot) {
+			continue
+		}
 		bindings = append(bindings, backend.Binding{Parent: intent.Parent, Backend: intent.Backend})
 	}
 	return bindings
 }
 
-func HerdrCoordinatorIntentID(parent string) (string, error) {
+func herdrBindingBelongsToProject(parent, storedRoot, projectRoot string) bool {
+	return !strings.HasPrefix(parentref.Canon(strings.TrimSpace(parent)), "plan:") ||
+		storedRoot == filepath.Clean(projectRoot)
+}
+
+func HerdrOwnerProjectRoot(parent, projectRoot string) (string, error) {
+	parent = parentref.Canon(strings.TrimSpace(parent))
+	if !strings.HasPrefix(parent, "plan:") {
+		return "", nil
+	}
+	projectRoot = strings.TrimSpace(projectRoot)
+	if projectRoot == "" || !filepath.IsAbs(projectRoot) || filepath.Clean(projectRoot) != projectRoot {
+		return "", fmt.Errorf("herdr plan owner project root must be a canonical absolute path")
+	}
+	return projectRoot, nil
+}
+
+func HerdrCoordinatorIntentID(parent, ownerProjectRoot string) (string, error) {
 	parent = parentref.Canon(strings.TrimSpace(parent))
 	if parent == "" {
 		return "", fmt.Errorf("herdr coordinator intent requires a parent")
 	}
-	return "coordinator:" + tuplePart(parent), nil
+	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, ownerProjectRoot)
+	if err != nil {
+		return "", err
+	}
+	return "coordinator:" + herdrOwnerTuple(parent, ownerProjectRoot), nil
 }
 
 // HerdrWorktreeIntentID uses the same issue/task key as the tmux state store:
 // (parent, issue number) or (plan parent, task id).
-func HerdrWorktreeIntentID(parent string, issueNum int, taskID string) (string, error) {
+func HerdrWorktreeIntentID(parent, ownerProjectRoot string, issueNum int, taskID string) (string, error) {
 	parent = parentref.Canon(strings.TrimSpace(parent))
 	taskID = strings.TrimSpace(taskID)
+	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, ownerProjectRoot)
+	if err != nil {
+		return "", err
+	}
+	owner := herdrOwnerTuple(parent, ownerProjectRoot)
 	switch {
 	case parent == "":
 		return "", fmt.Errorf("herdr worktree intent requires a parent")
 	case taskID != "" && issueNum == 0:
-		return "task:" + tuplePart(parent) + ":" + tuplePart(taskID), nil
+		return "task:" + owner + ":" + tuplePart(taskID), nil
 	case taskID == "" && issueNum > 0:
-		return "issue:" + tuplePart(parent) + ":" + strconv.Itoa(issueNum), nil
+		return "issue:" + owner + ":" + strconv.Itoa(issueNum), nil
 	default:
 		return "", fmt.Errorf("herdr worktree intent requires exactly one issue number or task id")
 	}
+}
+
+func herdrOwnerTuple(parent, ownerProjectRoot string) string {
+	identity := tuplePart(parent)
+	if ownerProjectRoot != "" {
+		identity += ":" + tuplePart(ownerProjectRoot)
+	}
+	return identity
 }
 
 func loadHerdrControl(path string) (HerdrControlStore, error) {
@@ -385,18 +427,22 @@ func validateHerdrRow(row HerdrRow) error {
 		row.Session == "" || row.SocketPath == "" {
 		return fmt.Errorf("herdr control row %q is incomplete", row.ID)
 	}
+	ownerProjectRoot, ownerErr := HerdrOwnerProjectRoot(parent, row.OwnerProjectRoot)
+	if ownerErr != nil || row.OwnerProjectRoot != ownerProjectRoot {
+		return fmt.Errorf("herdr row %s has invalid owner project root", row.ID)
+	}
 	var expectedID string
 	var err error
 	switch row.Kind {
 	case HerdrIntentCoordinator:
-		expectedID, err = HerdrCoordinatorIntentID(parent)
+		expectedID, err = HerdrCoordinatorIntentID(parent, ownerProjectRoot)
 		if row.IssueNum != 0 || row.TaskID != "" || row.Slug != "" ||
 			row.BranchName != "" || row.FullBranchRef != "" ||
 			row.BaseBranch != "" || row.BaseSHA != "" || row.ExpectedHead != "" {
 			return fmt.Errorf("herdr coordinator row %s contains child fields", row.ID)
 		}
 	case HerdrIntentWorktree:
-		expectedID, err = HerdrWorktreeIntentID(parent, row.IssueNum, row.TaskID)
+		expectedID, err = HerdrWorktreeIntentID(parent, ownerProjectRoot, row.IssueNum, row.TaskID)
 		if row.Slug == "" || row.BranchName == "" ||
 			row.FullBranchRef != "refs/heads/"+row.BranchName ||
 			row.BaseBranch == "" || !herdrControlCommitSHA.MatchString(row.BaseSHA) ||
@@ -426,17 +472,26 @@ func validateHerdrIntent(intent HerdrIntent) error {
 		intent.TimeoutMS < 3000 || intent.TimeoutMS > 300000 || intent.ExpiresUnixMS <= 0 {
 		return fmt.Errorf("herdr intent %q is incomplete", intent.ID)
 	}
+	ownerProjectRoot, ownerErr := HerdrOwnerProjectRoot(parent, intent.OwnerProjectRoot)
+	if ownerErr != nil || intent.OwnerProjectRoot != ownerProjectRoot {
+		return fmt.Errorf("herdr intent %s has invalid owner project root", intent.ID)
+	}
 	var expectedID string
 	var err error
 	switch intent.Kind {
 	case HerdrIntentCoordinator:
-		expectedID, err = HerdrCoordinatorIntentID(parent)
+		expectedID, err = HerdrCoordinatorIntentID(parent, ownerProjectRoot)
 		if intent.IssueNum != 0 || intent.TaskID != "" || intent.BranchName != "" ||
 			intent.FullBranchRef != "" || intent.BaseSHA != "" || intent.Coordinator.WorkspaceID != "" {
 			return fmt.Errorf("herdr coordinator intent %s contains child fields", intent.ID)
 		}
 	case HerdrIntentWorktree:
-		expectedID, err = HerdrWorktreeIntentID(parent, intent.IssueNum, intent.TaskID)
+		expectedID, err = HerdrWorktreeIntentID(
+			parent,
+			ownerProjectRoot,
+			intent.IssueNum,
+			intent.TaskID,
+		)
 		if intent.Slug == "" || intent.BranchName == "" || intent.FullBranchRef == "" ||
 			intent.FullBranchRef != "refs/heads/"+intent.BranchName ||
 			intent.BaseBranch == "" || !herdrControlCommitSHA.MatchString(intent.BaseSHA) ||

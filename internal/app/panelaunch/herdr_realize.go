@@ -85,15 +85,17 @@ type HerdrWorktreeResult struct {
 }
 
 // RealizeHerdrCoordinator creates or recovers the actual-parent coordinator
-// workspace. It stops with a durable realized intent before launcher work.
+// workspace under the caller-held combined launch lock. It stops with a
+// durable realized intent before launcher work.
 func RealizeHerdrCoordinator(
 	ctx context.Context,
 	req HerdrCoordinatorRequest,
 	runtime HerdrWorktreeRuntime,
+	launchLock *state.LockedStore,
 	hooks HerdrRealizeHooks,
 ) (result HerdrCoordinatorResult, retErr error) {
-	if ctx == nil || runtime == nil {
-		return result, fmt.Errorf("realize Herdr coordinator requires context and runtime")
+	if ctx == nil || runtime == nil || launchLock == nil {
+		return result, fmt.Errorf("realize Herdr coordinator requires context, runtime, and launch lock")
 	}
 	timeout, timeoutErr := normalizeHerdrRealizeTimeout(req.TotalTimeout)
 	if timeoutErr != nil {
@@ -131,29 +133,40 @@ func RealizeHerdrCoordinator(
 	if cwd != identity.RepoRoot {
 		return result, fmt.Errorf("herdr coordinator cwd %s does not match source root %s", cwd, identity.RepoRoot)
 	}
-	intentID, intentIDErr := state.HerdrCoordinatorIntentID(req.Parent)
+	ownerProjectRoot, ownerErr := state.HerdrOwnerProjectRoot(req.Parent, projectIdentity.RepoRoot)
+	if ownerErr != nil {
+		return result, ownerErr
+	}
+	intentID, intentIDErr := state.HerdrCoordinatorIntentID(req.Parent, ownerProjectRoot)
 	if intentIDErr != nil {
 		return result, intentIDErr
 	}
 
-	locked, lockErr := state.LockHerdrControl(req.ProjectRoot)
-	if lockErr != nil {
-		return result, lockErr
+	if bindingErr := verifyHerdrStateBindings(
+		req.ProjectRoot,
+		req.Parent,
+		launchLock.Store,
+	); bindingErr != nil {
+		return result, bindingErr
 	}
-	defer func() {
-		if unlockErr := locked.Unlock(); unlockErr != nil && retErr == nil {
-			retErr = fmt.Errorf("unlock Herdr control: %w", unlockErr)
-		}
-	}()
+	locked, controlErr := launchLock.HerdrControl(req.ProjectRoot)
+	if controlErr != nil {
+		return result, controlErr
+	}
 
 	intent, found := locked.FindIntent(intentID)
 	if found {
-		if savedErr := validateSavedCoordinatorIntent(req, cwd, intent); savedErr != nil {
+		if savedErr := validateSavedCoordinatorIntent(
+			req,
+			cwd,
+			ownerProjectRoot,
+			intent,
+		); savedErr != nil {
 			return result, savedErr
 		}
 	} else {
 		if row, exists := locked.FindRow(intentID); exists {
-			return finalizedHerdrCoordinator(req, cwd, row)
+			return finalizedHerdrCoordinator(req, cwd, ownerProjectRoot, row)
 		}
 		label, labelErr := newHerdrWorkspaceLabel("coordinator", hooks.RandomToken)
 		if labelErr != nil {
@@ -162,7 +175,8 @@ func RealizeHerdrCoordinator(
 		now := hooks.Now().UTC()
 		intent = state.HerdrIntent{
 			ID: intentID, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentPlanned,
-			Parent: canonicalHerdrParent(req.Parent), Backend: backend.Herdr, WorktreePath: cwd,
+			Parent: canonicalHerdrParent(req.Parent), OwnerProjectRoot: ownerProjectRoot,
+			Backend: backend.Herdr, WorktreePath: cwd,
 			WorkspaceLabel: label, Session: req.HerdrSession, SocketPath: req.SocketPath,
 			TimeoutMS: timeout.Milliseconds(), ExpiresUnixMS: now.Add(timeout).UnixMilli(),
 		}
@@ -241,15 +255,17 @@ func RealizeHerdrCoordinator(
 }
 
 // RealizeHerdrWorktree reserves the child branch, creates or recovers the
-// Herdr checkout workspace, and stops before launcher readiness.
+// Herdr checkout workspace under the caller-held combined launch lock and
+// stops before launcher readiness.
 func RealizeHerdrWorktree(
 	ctx context.Context,
 	req HerdrWorktreeRequest,
 	runtime HerdrWorktreeRuntime,
+	launchLock *state.LockedStore,
 	hooks HerdrRealizeHooks,
 ) (result HerdrWorktreeResult, retErr error) {
-	if ctx == nil || runtime == nil {
-		return result, fmt.Errorf("realize Herdr worktree requires context and runtime")
+	if ctx == nil || runtime == nil || launchLock == nil {
+		return result, fmt.Errorf("realize Herdr worktree requires context, runtime, and launch lock")
 	}
 	timeout, timeoutErr := normalizeHerdrRealizeTimeout(req.TotalTimeout)
 	if timeoutErr != nil {
@@ -279,29 +295,40 @@ func RealizeHerdrWorktree(
 	); routeErr != nil {
 		return result, routeErr
 	}
-	intentID, intentIDErr := state.HerdrWorktreeIntentID(req.Parent, req.IssueNum, req.TaskID)
+	ownerProjectRoot, ownerErr := state.HerdrOwnerProjectRoot(req.Parent, project.RepoRoot)
+	if ownerErr != nil {
+		return result, ownerErr
+	}
+	intentID, intentIDErr := state.HerdrWorktreeIntentID(
+		req.Parent,
+		ownerProjectRoot,
+		req.IssueNum,
+		req.TaskID,
+	)
 	if intentIDErr != nil {
 		return result, intentIDErr
 	}
-	coordinatorID, coordinatorIDErr := state.HerdrCoordinatorIntentID(req.Parent)
+	coordinatorID, coordinatorIDErr := state.HerdrCoordinatorIntentID(req.Parent, ownerProjectRoot)
 	if coordinatorIDErr != nil {
 		return result, coordinatorIDErr
 	}
 
-	locked, lockErr := state.LockHerdrControl(req.ProjectRoot)
-	if lockErr != nil {
-		return result, lockErr
+	if bindingErr := verifyHerdrStateBindings(
+		req.ProjectRoot,
+		req.Parent,
+		launchLock.Store,
+	); bindingErr != nil {
+		return result, bindingErr
 	}
-	defer func() {
-		if unlockErr := locked.Unlock(); unlockErr != nil && retErr == nil {
-			retErr = fmt.Errorf("unlock Herdr control: %w", unlockErr)
-		}
-	}()
+	locked, controlErr := launchLock.HerdrControl(req.ProjectRoot)
+	if controlErr != nil {
+		return result, controlErr
+	}
 
 	intent, found := locked.FindIntent(intentID)
 	if !found {
 		if row, exists := locked.FindRow(intentID); exists {
-			return finalizedHerdrWorktree(req, source, row)
+			return finalizedHerdrWorktree(req, source, ownerProjectRoot, row)
 		}
 	}
 	coordinator, coordinatorErr := resolvedHerdrCoordinator(
@@ -309,12 +336,19 @@ func RealizeHerdrWorktree(
 		coordinatorID,
 		req,
 		source.RepoRoot,
+		ownerProjectRoot,
 	)
 	if coordinatorErr != nil {
 		return result, coordinatorErr
 	}
 	if found {
-		if savedErr := validateSavedWorktreeIntent(req, source, coordinator, intent); savedErr != nil {
+		if savedErr := validateSavedWorktreeIntent(
+			req,
+			source,
+			coordinator,
+			ownerProjectRoot,
+			intent,
+		); savedErr != nil {
 			return result, savedErr
 		}
 	} else {
@@ -361,8 +395,9 @@ func RealizeHerdrWorktree(
 		now := hooks.Now().UTC()
 		intent = state.HerdrIntent{
 			ID: intentID, Kind: state.HerdrIntentWorktree, Status: state.HerdrIntentPlanned,
-			Parent: canonicalHerdrParent(req.Parent), IssueNum: req.IssueNum,
-			TaskID: req.TaskID, Backend: backend.Herdr,
+			Parent: canonicalHerdrParent(req.Parent), OwnerProjectRoot: ownerProjectRoot,
+			IssueNum: req.IssueNum,
+			TaskID:   req.TaskID, Backend: backend.Herdr,
 			Slug: req.Slug, BranchName: req.BranchName, FullBranchRef: fullRef,
 			BaseBranch: base.BaseBranch, BaseSHA: base.SHA, ExpectedHead: head,
 			WorktreePath: filepath.Clean(req.WorktreePath), BranchExisted: branchExisted,
@@ -470,6 +505,46 @@ func verifyHerdrRealizeRoute(
 	}
 	if route.GitCommonDir != repoKey || route.Session != session || route.SocketPath != socketPath {
 		return fmt.Errorf("herdr realization route does not match owned session")
+	}
+	return nil
+}
+
+func verifyHerdrStateBindings(projectRoot, parent string, current state.Store) error {
+	parent = canonicalHerdrParent(parent)
+	currentRoot, err := filepath.EvalSymlinks(projectRoot)
+	if err != nil {
+		return fmt.Errorf("canonicalize Herdr state owner: %w", err)
+	}
+	roots, err := worktree.ListRoots(projectRoot)
+	if err != nil {
+		return fmt.Errorf("list Herdr backend binding roots: %w", err)
+	}
+	planLocal := strings.HasPrefix(parent, "plan:")
+	for _, root := range roots {
+		canonicalRoot, resolveErr := filepath.EvalSymlinks(root)
+		if resolveErr != nil {
+			return fmt.Errorf("canonicalize Herdr backend binding root %s: %w", root, resolveErr)
+		}
+		store := current
+		if filepath.Clean(canonicalRoot) != filepath.Clean(currentRoot) {
+			if planLocal {
+				continue
+			}
+			store, err = state.LoadProject(root)
+			if err != nil {
+				return fmt.Errorf("load Herdr backend bindings from %s: %w", root, err)
+			}
+		}
+		for _, binding := range RuntimeBackendBindings(root, store) {
+			if canonicalHerdrParent(binding.Parent) == parent &&
+				backend.NormalizeName(binding.Backend) != backend.Herdr {
+				return fmt.Errorf(
+					"runtime backend for parent %s became %s before Herdr realization",
+					parent,
+					backend.NormalizeName(binding.Backend),
+				)
+			}
+		}
 	}
 	return nil
 }
@@ -807,14 +882,16 @@ func verifyCoordinatorObservation(
 func validateSavedCoordinatorIntent(
 	req HerdrCoordinatorRequest,
 	cwd string,
+	ownerProjectRoot string,
 	intent state.HerdrIntent,
 ) error {
-	wantID, err := state.HerdrCoordinatorIntentID(req.Parent)
+	wantID, err := state.HerdrCoordinatorIntentID(req.Parent, ownerProjectRoot)
 	if err != nil {
 		return err
 	}
 	if intent.ID != wantID || intent.Kind != state.HerdrIntentCoordinator ||
-		intent.Parent != canonicalHerdrParent(req.Parent) || intent.Backend != backend.Herdr ||
+		intent.Parent != canonicalHerdrParent(req.Parent) ||
+		intent.OwnerProjectRoot != ownerProjectRoot || intent.Backend != backend.Herdr ||
 		filepath.Clean(intent.WorktreePath) != cwd ||
 		intent.Session != req.HerdrSession || intent.SocketPath != req.SocketPath {
 		return fmt.Errorf("saved Herdr coordinator intent contradicts request")
@@ -826,14 +903,21 @@ func validateSavedWorktreeIntent(
 	req HerdrWorktreeRequest,
 	source worktree.HerdrRepoIdentity,
 	coordinator state.HerdrResource,
+	ownerProjectRoot string,
 	intent state.HerdrIntent,
 ) error {
-	wantID, err := state.HerdrWorktreeIntentID(req.Parent, req.IssueNum, req.TaskID)
+	wantID, err := state.HerdrWorktreeIntentID(
+		req.Parent,
+		ownerProjectRoot,
+		req.IssueNum,
+		req.TaskID,
+	)
 	if err != nil {
 		return err
 	}
 	if intent.ID != wantID || intent.Kind != state.HerdrIntentWorktree ||
 		intent.Parent != canonicalHerdrParent(req.Parent) ||
+		intent.OwnerProjectRoot != ownerProjectRoot ||
 		intent.IssueNum != req.IssueNum || intent.TaskID != req.TaskID ||
 		intent.Backend != backend.Herdr || intent.Slug != req.Slug ||
 		intent.BranchName != req.BranchName ||
@@ -910,14 +994,16 @@ func coordinatorDeferred(intent state.HerdrIntent) (HerdrCoordinatorResult, erro
 func finalizedHerdrCoordinator(
 	req HerdrCoordinatorRequest,
 	cwd string,
+	ownerProjectRoot string,
 	row state.HerdrRow,
 ) (HerdrCoordinatorResult, error) {
-	wantID, err := state.HerdrCoordinatorIntentID(req.Parent)
+	wantID, err := state.HerdrCoordinatorIntentID(req.Parent, ownerProjectRoot)
 	if err != nil {
 		return HerdrCoordinatorResult{}, err
 	}
 	if row.ID != wantID || row.Kind != state.HerdrIntentCoordinator ||
 		row.Parent != canonicalHerdrParent(req.Parent) ||
+		row.OwnerProjectRoot != ownerProjectRoot ||
 		filepath.Clean(row.WorktreePath) != cwd ||
 		row.Session != req.HerdrSession || row.SocketPath != req.SocketPath {
 		return HerdrCoordinatorResult{}, fmt.Errorf("finalized herdr coordinator contradicts request")
@@ -932,14 +1018,21 @@ func finalizedHerdrCoordinator(
 func finalizedHerdrWorktree(
 	req HerdrWorktreeRequest,
 	source worktree.HerdrRepoIdentity,
+	ownerProjectRoot string,
 	row state.HerdrRow,
 ) (HerdrWorktreeResult, error) {
-	wantID, err := state.HerdrWorktreeIntentID(req.Parent, req.IssueNum, req.TaskID)
+	wantID, err := state.HerdrWorktreeIntentID(
+		req.Parent,
+		ownerProjectRoot,
+		req.IssueNum,
+		req.TaskID,
+	)
 	if err != nil {
 		return HerdrWorktreeResult{}, err
 	}
 	if row.ID != wantID || row.Kind != state.HerdrIntentWorktree ||
 		row.Parent != canonicalHerdrParent(req.Parent) ||
+		row.OwnerProjectRoot != ownerProjectRoot ||
 		row.IssueNum != req.IssueNum || row.TaskID != req.TaskID ||
 		row.Slug != req.Slug || row.BranchName != req.BranchName ||
 		filepath.Clean(row.WorktreePath) != filepath.Clean(req.WorktreePath) ||
@@ -959,12 +1052,14 @@ func resolvedHerdrCoordinator(
 	coordinatorID string,
 	req HerdrWorktreeRequest,
 	repoRoot string,
+	ownerProjectRoot string,
 ) (state.HerdrResource, error) {
 	if intent, found := locked.FindIntent(coordinatorID); found {
 		if intent.Status != state.HerdrIntentRealized {
 			return state.HerdrResource{}, fmt.Errorf("herdr coordinator %s is not realized", coordinatorID)
 		}
 		if intent.Parent != canonicalHerdrParent(req.Parent) ||
+			intent.OwnerProjectRoot != ownerProjectRoot ||
 			intent.Session != req.HerdrSession || intent.SocketPath != req.SocketPath ||
 			filepath.Clean(intent.WorktreePath) != filepath.Clean(repoRoot) {
 			return state.HerdrResource{}, fmt.Errorf("herdr coordinator intent contradicts child request")
@@ -974,6 +1069,7 @@ func resolvedHerdrCoordinator(
 	if row, found := locked.FindRow(coordinatorID); found {
 		if row.Kind != state.HerdrIntentCoordinator ||
 			row.Parent != canonicalHerdrParent(req.Parent) ||
+			row.OwnerProjectRoot != ownerProjectRoot ||
 			row.Session != req.HerdrSession || row.SocketPath != req.SocketPath ||
 			filepath.Clean(row.WorktreePath) != filepath.Clean(repoRoot) {
 			return state.HerdrResource{}, fmt.Errorf("herdr coordinator row contradicts child request")

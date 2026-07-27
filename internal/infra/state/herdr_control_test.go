@@ -109,11 +109,11 @@ func TestHerdrControlBindingsIncludeRowsAndEveryIntentStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows := store.RowBindings()
+	rows := store.RowBindings(repo)
 	if len(rows) != 1 || rows[0] != (backend.Binding{Parent: "425", Backend: backend.Herdr}) {
 		t.Fatalf("row bindings = %#v", rows)
 	}
-	intents := store.ProvisionalBindings()
+	intents := store.ProvisionalBindings(repo)
 	if len(intents) != len(statuses) {
 		t.Fatalf("intent bindings = %#v, want %d", intents, len(statuses))
 	}
@@ -123,6 +123,50 @@ func TestHerdrControlBindingsIncludeRowsAndEveryIntentStatus(t *testing.T) {
 			binding.Backend != backend.Herdr {
 			t.Fatalf("unexpected intent binding: %+v", binding)
 		}
+	}
+}
+
+func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
+	first := testHerdrCoordinatorIntent("/repo/one", "plan:demo")
+	second := testHerdrCoordinatorIntent("/repo/two", "plan:demo")
+	if first.ID == second.ID {
+		t.Fatalf("plan intent IDs collide across owner roots: %s", first.ID)
+	}
+	intents := emptyHerdrControl()
+	intents.Intents = []HerdrIntent{first, second}
+	if err := validateHerdrControl(intents); err != nil {
+		t.Fatal(err)
+	}
+	if got := intents.ProvisionalBindings("/repo/one"); len(got) != 1 ||
+		got[0].Parent != "plan:demo" {
+		t.Fatalf("first plan intent bindings = %#v", got)
+	}
+	if got := intents.ProvisionalBindings("/repo/two"); len(got) != 1 ||
+		got[0].Parent != "plan:demo" {
+		t.Fatalf("second plan intent bindings = %#v", got)
+	}
+
+	toRow := func(intent HerdrIntent) HerdrRow {
+		return HerdrRow{
+			ID: intent.ID, Kind: intent.Kind, Parent: intent.Parent,
+			OwnerProjectRoot: intent.OwnerProjectRoot, Backend: intent.Backend,
+			WorktreePath: intent.WorktreePath,
+			Resource:     testHerdrCoordinatorResource(intent.WorktreePath),
+			Session:      intent.Session, SocketPath: intent.SocketPath,
+		}
+	}
+	rows := emptyHerdrControl()
+	rows.Rows = []HerdrRow{toRow(first), toRow(second)}
+	if err := validateHerdrControl(rows); err != nil {
+		t.Fatal(err)
+	}
+	if got := rows.RowBindings("/repo/one"); len(got) != 1 ||
+		got[0].Parent != "plan:demo" {
+		t.Fatalf("first plan row bindings = %#v", got)
+	}
+	if got := rows.RowBindings("/repo/two"); len(got) != 1 ||
+		got[0].Parent != "plan:demo" {
+		t.Fatalf("second plan row bindings = %#v", got)
 	}
 }
 
@@ -171,25 +215,25 @@ func TestHerdrControlRejectsDuplicateBranchAndPathReservations(t *testing.T) {
 }
 
 func TestHerdrIntentIDsUseTmuxIssueAndTaskKeys(t *testing.T) {
-	issue, err := HerdrWorktreeIntentID("00425", 426, "")
+	issue, err := HerdrWorktreeIntentID("00425", "", 426, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	alias, err := HerdrWorktreeIntentID("425", 426, "")
+	alias, err := HerdrWorktreeIntentID("425", "", 426, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if issue != alias {
 		t.Fatalf("numeric parent aliases differ: %q != %q", issue, alias)
 	}
-	task, err := HerdrWorktreeIntentID("plan:demo", 0, "api:client")
+	task, err := HerdrWorktreeIntentID("plan:demo", "/repo/one", 0, "api:client")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(task, "plan:demo") || !strings.Contains(task, "api:client") {
 		t.Fatalf("task id = %q, want length-prefixed plan/task identity", task)
 	}
-	if _, err := HerdrWorktreeIntentID("plan:demo", 1, "task"); err == nil {
+	if _, err := HerdrWorktreeIntentID("plan:demo", "/repo/one", 1, "task"); err == nil {
 		t.Fatal("issue and task identity unexpectedly accepted together")
 	}
 }
@@ -206,14 +250,19 @@ func TestHerdrControlRejectsIncompleteRealizedIntent(t *testing.T) {
 }
 
 func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
-	id, err := HerdrCoordinatorIntentID(parent)
+	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, repo)
+	if err != nil {
+		panic(err)
+	}
+	id, err := HerdrCoordinatorIntentID(parent, ownerProjectRoot)
 	if err != nil {
 		panic(err)
 	}
 	return HerdrIntent{
 		ID: id, Kind: HerdrIntentCoordinator, Status: HerdrIntentPlanned,
-		Parent:  parentref.Canon(strings.TrimSpace(parent)),
-		Backend: backend.Herdr, WorktreePath: repo,
+		Parent:           parentref.Canon(strings.TrimSpace(parent)),
+		OwnerProjectRoot: ownerProjectRoot,
+		Backend:          backend.Herdr, WorktreePath: repo,
 		WorkspaceLabel: "fanout-coordinator-token", Session: "fanout-test",
 		SocketPath: "/private/tmp/fanout-test/herdr.sock",
 		TimeoutMS:  300000, ExpiresUnixMS: 2000000000000,
@@ -221,14 +270,19 @@ func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 }
 
 func testHerdrWorktreeIntent(repo, parent string, issue int, slug string) HerdrIntent {
-	id, err := HerdrWorktreeIntentID(parent, issue, "")
+	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, repo)
+	if err != nil {
+		panic(err)
+	}
+	id, err := HerdrWorktreeIntentID(parent, ownerProjectRoot, issue, "")
 	if err != nil {
 		panic(err)
 	}
 	return HerdrIntent{
 		ID: id, Kind: HerdrIntentWorktree, Status: HerdrIntentPlanned,
-		Parent:   parentref.Canon(strings.TrimSpace(parent)),
-		IssueNum: issue, Backend: backend.Herdr,
+		Parent:           parentref.Canon(strings.TrimSpace(parent)),
+		OwnerProjectRoot: ownerProjectRoot,
+		IssueNum:         issue, Backend: backend.Herdr,
 		Slug: slug, BranchName: "fanout/" + slug,
 		FullBranchRef: "refs/heads/fanout/" + slug,
 		BaseBranch:    "main", BaseSHA: strings.Repeat("1", 40), ExpectedHead: strings.Repeat("1", 40),
@@ -248,7 +302,7 @@ func testHerdrCoordinatorResource(repo string) HerdrResource {
 }
 
 func testHerdrRow(parent string) HerdrRow {
-	id, err := HerdrWorktreeIntentID(parent, 426, "")
+	id, err := HerdrWorktreeIntentID(parent, "", 426, "")
 	if err != nil {
 		panic(err)
 	}

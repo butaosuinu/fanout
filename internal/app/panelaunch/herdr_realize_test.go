@@ -49,6 +49,34 @@ func (f *fakeHerdrRealizeRuntime) MutateWorktree(
 	return f.mutate(req)
 }
 
+func realizeHerdrCoordinator(
+	ctx context.Context,
+	req HerdrCoordinatorRequest,
+	runtime HerdrWorktreeRuntime,
+	hooks HerdrRealizeHooks,
+) (HerdrCoordinatorResult, error) {
+	locked, err := state.LockProjectForLaunch(req.ProjectRoot)
+	if err != nil {
+		return HerdrCoordinatorResult{}, err
+	}
+	result, realizeErr := RealizeHerdrCoordinator(ctx, req, runtime, locked, hooks)
+	return result, errors.Join(realizeErr, locked.Unlock())
+}
+
+func realizeHerdrWorktree(
+	ctx context.Context,
+	req HerdrWorktreeRequest,
+	runtime HerdrWorktreeRuntime,
+	hooks HerdrRealizeHooks,
+) (HerdrWorktreeResult, error) {
+	locked, err := state.LockProjectForLaunch(req.ProjectRoot)
+	if err != nil {
+		return HerdrWorktreeResult{}, err
+	}
+	result, realizeErr := RealizeHerdrWorktree(ctx, req, runtime, locked, hooks)
+	return result, errors.Join(realizeErr, locked.Unlock())
+}
+
 func TestRealizeHerdrWorktreePersistsIntentAndSkipsReplay(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
@@ -57,7 +85,7 @@ func TestRealizeHerdrWorktreePersistsIntentAndSkipsReplay(t *testing.T) {
 	coordinator := realizeTestHerdrCoordinator(t, repo, runtime, hooks)
 
 	req := testHerdrWorktreeRequest(repo, "child", 426)
-	result, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	result, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("realize worktree error = %v", err)
 	}
@@ -75,7 +103,7 @@ func TestRealizeHerdrWorktreePersistsIntentAndSkipsReplay(t *testing.T) {
 		t.Fatal("fresh branch worktree create omitted immutable base")
 	}
 
-	replayed, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	replayed, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("replay error = %v", err)
 	}
@@ -83,9 +111,45 @@ func TestRealizeHerdrWorktreePersistsIntentAndSkipsReplay(t *testing.T) {
 		t.Fatalf("replay = %+v, mutations = %d; request was reissued", replayed, len(runtime.mutations))
 	}
 	runtime.route.GitCommonDir = filepath.Join(repo, "foreign.git")
-	_, err = RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if err == nil {
 		t.Fatal("foreign owned-session route unexpectedly accepted")
+	}
+}
+
+func TestRealizeHerdrRejectsTmuxBindingBeforeIntent(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	locked, err := state.LockProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked.Panes = append(locked.Panes, state.Pane{
+		Parent: "425", IssueNum: 999, Backend: backend.Tmux,
+	})
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	_, err = realizeHerdrCoordinator(
+		context.Background(),
+		testHerdrCoordinatorRequest(repo),
+		runtime,
+		deterministicHerdrRealizeHooks(),
+	)
+	if err == nil {
+		t.Fatal("tmux binding unexpectedly allowed a Herdr intent")
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(control.Intents) != 0 {
+		t.Fatalf("Herdr intents = %#v, want none", control.Intents)
 	}
 }
 
@@ -97,7 +161,7 @@ func TestRealizeHerdrUsesFinalRowsAsIdempotentBindings(t *testing.T) {
 	coordinator := realizeTestHerdrCoordinator(t, repo, runtime, hooks)
 	finalizeHerdrTestIntent(t, repo, coordinator)
 
-	coordinatorResult, err := RealizeHerdrCoordinator(
+	coordinatorResult, err := realizeHerdrCoordinator(
 		context.Background(),
 		testHerdrCoordinatorRequest(repo),
 		runtime,
@@ -114,7 +178,7 @@ func TestRealizeHerdrUsesFinalRowsAsIdempotentBindings(t *testing.T) {
 	}
 
 	req := testHerdrWorktreeRequest(repo, "final-row", 432)
-	child, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	child, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("child with finalized coordinator error = %v", err)
 	}
@@ -123,7 +187,7 @@ func TestRealizeHerdrUsesFinalRowsAsIdempotentBindings(t *testing.T) {
 	}
 	finalizeHerdrTestIntent(t, repo, child.Intent)
 
-	finalChild, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	finalChild, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if err != nil || !finalChild.AlreadyFinalized ||
 		finalChild.Row.ID != child.Intent.ID || finalChild.Pane != child.Pane ||
 		len(runtime.mutations) != 2 {
@@ -154,7 +218,7 @@ func TestRealizeHerdrWorktreeAdoptsResponseLossPostcondition(t *testing.T) {
 		}
 		return result, nil
 	}
-	result, err := RealizeHerdrWorktree(
+	result, err := realizeHerdrWorktree(
 		context.Background(),
 		testHerdrWorktreeRequest(repo, "response-loss", 427),
 		runtime,
@@ -182,7 +246,7 @@ func TestRealizeHerdrWorktreeFailsClosedOnAmbiguousResponseLoss(t *testing.T) {
 	}
 
 	req := testHerdrWorktreeRequest(repo, "ambiguous", 428)
-	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("ambiguous response error = %v", err)
 	}
@@ -197,14 +261,14 @@ func TestRealizeHerdrWorktreeFailsClosedOnAmbiguousResponseLoss(t *testing.T) {
 	if loadErr != nil {
 		t.Fatal(loadErr)
 	}
-	intentID, _ := state.HerdrWorktreeIntentID(req.Parent, req.IssueNum, req.TaskID)
+	intentID, _ := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
 	intent, found := control.FindIntent(intentID)
 	if !found || intent.Status != state.HerdrIntentManualCleanupRequired {
 		t.Fatalf("ambiguous intent = (%+v,%t)", intent, found)
 	}
 
 	mutationCount := len(runtime.mutations)
-	if _, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks); !errors.Is(err, ErrHerdrManualCleanupRequired) {
+	if _, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks); !errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("manual cleanup replay error = %v", err)
 	}
 	if len(runtime.mutations) != mutationCount {
@@ -228,7 +292,7 @@ func TestRealizeHerdrWorktreeDeletesBranchOnlyAfterStructuredRejection(t *testin
 	}
 
 	req := testHerdrWorktreeRequest(repo, "rejected", 429)
-	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, herdrrun.ErrMutationRejected) {
 		t.Fatalf("structured rejection error = %v", err)
 	}
@@ -243,7 +307,7 @@ func TestRealizeHerdrWorktreeDeletesBranchOnlyAfterStructuredRejection(t *testin
 	if loadErr != nil {
 		t.Fatal(loadErr)
 	}
-	intentID, _ := state.HerdrWorktreeIntentID(req.Parent, req.IssueNum, req.TaskID)
+	intentID, _ := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
 	if _, found := control.FindIntent(intentID); found {
 		t.Fatal("rejected non-mutation left a provisional intent")
 	}
@@ -258,7 +322,7 @@ func TestRealizeHerdrWorktreeAdoptsExistingBranchWithoutBaseArgument(t *testing.
 	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
 
 	req := testHerdrWorktreeRequest(repo, "existing", 430)
-	result, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	result, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("existing branch error = %v", err)
 	}
@@ -285,7 +349,7 @@ func TestRealizeHerdrCoordinatorAdoptsResponseLossAndNeverReissues(t *testing.T)
 	}
 	hooks := deterministicHerdrRealizeHooks()
 	req := testHerdrCoordinatorRequest(repo)
-	result, err := RealizeHerdrCoordinator(context.Background(), req, runtime, hooks)
+	result, err := realizeHerdrCoordinator(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
 		result.Intent.Status != state.HerdrIntentRealized {
 		t.Fatalf("coordinator response-loss result = %+v err=%v", result, err)
@@ -293,7 +357,7 @@ func TestRealizeHerdrCoordinatorAdoptsResponseLossAndNeverReissues(t *testing.T)
 	if len(runtime.mutations) != 1 {
 		t.Fatalf("coordinator mutations = %d, want 1", len(runtime.mutations))
 	}
-	if _, err := RealizeHerdrCoordinator(context.Background(), req, runtime, hooks); !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+	if _, err := realizeHerdrCoordinator(context.Background(), req, runtime, hooks); !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("coordinator replay error = %v", err)
 	}
 	if len(runtime.mutations) != 1 {
@@ -310,7 +374,7 @@ func TestRealizeHerdrWorktreeRejectsForeignCoordinatorBeforeBranch(t *testing.T)
 	runtime.workspaces[0].TerminalID = "foreign-terminal"
 
 	req := testHerdrWorktreeRequest(repo, "foreign-coordinator", 431)
-	_, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("foreign coordinator error = %v", err)
 	}
@@ -333,7 +397,7 @@ func realizeTestHerdrCoordinator(
 	hooks HerdrRealizeHooks,
 ) state.HerdrIntent {
 	t.Helper()
-	result, err := RealizeHerdrCoordinator(
+	result, err := realizeHerdrCoordinator(
 		context.Background(),
 		testHerdrCoordinatorRequest(repo),
 		runtime,
@@ -449,7 +513,8 @@ func finalizeHerdrTestIntent(t *testing.T, repo string, intent state.HerdrIntent
 	}
 	row := state.HerdrRow{
 		ID: intent.ID, Kind: intent.Kind, Parent: intent.Parent,
-		IssueNum: intent.IssueNum, TaskID: intent.TaskID, Backend: intent.Backend,
+		OwnerProjectRoot: intent.OwnerProjectRoot,
+		IssueNum:         intent.IssueNum, TaskID: intent.TaskID, Backend: intent.Backend,
 		Slug: intent.Slug, BranchName: intent.BranchName,
 		FullBranchRef: intent.FullBranchRef, BaseBranch: intent.BaseBranch,
 		BaseSHA: intent.BaseSHA, ExpectedHead: intent.ExpectedHead,

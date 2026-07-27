@@ -118,6 +118,7 @@ func (p Pane) IsAttachedAgent() bool {
 type LockedStore struct {
 	path             string
 	file             *os.File
+	herdrControlPath string
 	herdrControlFile *os.File
 	Store
 }
@@ -164,6 +165,7 @@ func LockProjectForLaunch(projectRoot string) (*LockedStore, error) {
 		_ = unlockStateFile(herdrControlFile)
 		return nil, err
 	}
+	locked.herdrControlPath = controlPath
 	locked.herdrControlFile = herdrControlFile
 	return locked, nil
 }
@@ -199,11 +201,37 @@ func (l *LockedStore) Unlock() error {
 	stateErr := unlockStateFile(l.file)
 	l.file = nil
 	controlErr := unlockStateFile(l.herdrControlFile)
+	l.herdrControlPath = ""
 	l.herdrControlFile = nil
 	if stateErr != nil {
 		return stateErr
 	}
 	return controlErr
+}
+
+// HerdrControl returns a control-store view backed by this project's launch
+// lock. The caller must keep LockedStore held and must not unlock the view.
+func (l *LockedStore) HerdrControl(projectRoot string) (*LockedHerdrControl, error) {
+	if l == nil || l.herdrControlFile == nil || l.herdrControlPath == "" {
+		return nil, fmt.Errorf("herdr control requires the combined launch lock")
+	}
+	controlPath, err := HerdrControlPath(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	if controlPath != l.herdrControlPath ||
+		filepath.Clean(l.path) != filepath.Clean(Path(projectRoot)) {
+		return nil, fmt.Errorf("herdr control launch lock belongs to a different project")
+	}
+	store, err := loadHerdrControl(l.herdrControlPath)
+	if err != nil {
+		return nil, err
+	}
+	return &LockedHerdrControl{
+		path:              l.herdrControlPath,
+		file:              l.herdrControlFile,
+		HerdrControlStore: store,
+	}, nil
 }
 
 func unlockStateFile(file *os.File) error {

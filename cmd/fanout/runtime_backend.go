@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -275,10 +274,11 @@ func refreshHerdrControlBindings(inputs *runtimeBackendInputs) error {
 	if err != nil {
 		return fmt.Errorf("load Herdr runtime bindings: %w", err)
 	}
-	inputs.rows = append(inputs.rows, control.RowBindings()...)
+	ownerProjectRoot := canonicalRuntimeRoot(inputs.projectRoot)
+	inputs.rows = append(inputs.rows, control.RowBindings(ownerProjectRoot)...)
 	inputs.provisionalIntents = append(
 		append([]backend.Binding(nil), inputs.suppliedIntents...),
-		control.ProvisionalBindings()...,
+		control.ProvisionalBindings(ownerProjectRoot)...,
 	)
 	return nil
 }
@@ -306,49 +306,7 @@ func resolveDisplayBackendSelection(projectRoot string) (backend.Selection, erro
 }
 
 func backendBindings(projectRoot string, store state.Store) []backend.Binding {
-	rows := make([]backend.Binding, 0, len(store.Panes)*2)
-	planParents := map[string]string{}
-	for _, pane := range store.Panes {
-		if pane.IsAttachedAgent() {
-			parent := strings.TrimSpace(pane.SourceParent)
-			if parent == "" {
-				parent = strings.TrimSpace(pane.Parent)
-			}
-			switch {
-			case pane.SourceIssueNum > 0 && (parent == panelaunch.ManualParentRef || parent == panelaunch.WatchParentRef || parent == ""):
-				parent = strconv.Itoa(pane.SourceIssueNum)
-			case strings.HasPrefix(parent, "plan:"):
-				planSlug := strings.TrimPrefix(parent, "plan:")
-				if planSlug != "" {
-					parent = panelaunch.SavedPlanRuntimeParentRef(projectRoot, planSlug)
-				}
-			}
-			if parent != "" && parent != panelaunch.ManualParentRef && parent != panelaunch.WatchParentRef {
-				rows = append(rows, backend.Binding{Parent: parent, Backend: pane.Backend})
-			}
-			continue
-		}
-		// @manual is a shared bucket for unrelated synthetic launches, so the raw
-		// parent cannot establish stickiness. Provenance-bearing coordinator rows
-		// below are instead attributed to their actual issue parent.
-		if issueNum, ok := panelaunch.PaneIssueParentNum(pane); ok {
-			rows = append(rows, backend.Binding{Parent: strconv.Itoa(issueNum), Backend: pane.Backend})
-			continue
-		}
-		if planSlug, ok := strings.CutPrefix(pane.Parent, "plan:"); ok && planSlug != "" {
-			parent, seen := planParents[planSlug]
-			if !seen {
-				parent = panelaunch.SavedPlanRuntimeParentRef(projectRoot, planSlug)
-				planParents[planSlug] = parent
-			}
-			rows = append(rows, backend.Binding{Parent: parent, Backend: pane.Backend})
-			continue
-		}
-		if pane.Parent != panelaunch.ManualParentRef && pane.Parent != panelaunch.WatchParentRef {
-			rows = append(rows, backend.Binding{Parent: pane.Parent, Backend: pane.Backend})
-		}
-	}
-	return rows
+	return panelaunch.RuntimeBackendBindings(projectRoot, store)
 }
 
 func constructRuntimeBackend(name backend.Name, inputs runtimeBackendInputs) (backend.Backend, error) {
