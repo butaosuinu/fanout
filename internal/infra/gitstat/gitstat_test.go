@@ -157,6 +157,108 @@ func TestRunnerWorktreeUnresolvableBaseFallsBackToHEAD(t *testing.T) {
 	}
 }
 
+func TestRunnerMergeBase(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		baseRef         string
+		prepare         func(*testing.T, string)
+		wantRef         string
+		wantErrContains string
+	}{
+		{
+			name:    "explicit base",
+			baseRef: "main",
+			wantRef: "refs/heads/main",
+		},
+		{
+			name:    "short base ignores same name tag",
+			baseRef: "main",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				gitTest(t, repo, "tag", "main", "HEAD")
+			},
+			wantRef: "refs/heads/main",
+		},
+		{
+			name:    "short base falls back to origin branch",
+			baseRef: "main",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				gitTest(t, repo, "update-ref", "refs/remotes/origin/main", "refs/heads/main")
+				gitTest(t, repo, "branch", "-D", "main")
+			},
+			wantRef: "refs/remotes/origin/main",
+		},
+		{
+			name:            "missing base",
+			baseRef:         "no-such-branch",
+			wantErrContains: "no-such-branch",
+		},
+		{
+			name:            "fork point option is not a base",
+			baseRef:         "--fork-point",
+			wantErrContains: "--fork-point",
+		},
+		{
+			name:            "octopus option is not a base",
+			baseRef:         "--octopus",
+			wantErrContains: "--octopus",
+		},
+		{
+			name:    "detached HEAD ref fails closed",
+			baseRef: "HEAD",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				gitTest(t, repo, "checkout", "--detach", "HEAD")
+			},
+			wantErrContains: "HEAD",
+		},
+		{
+			name:            "missing origin HEAD",
+			wantErrContains: "origin/HEAD",
+		},
+		{
+			name: "detached HEAD uses origin HEAD",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				gitTest(t, repo, "update-ref", "refs/remotes/origin/main", "main")
+				gitTest(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+				gitTest(t, repo, "checkout", "--detach", "HEAD")
+			},
+			wantRef: "main",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initBaseRepo(t)
+			if tc.prepare != nil {
+				tc.prepare(t, repo)
+			}
+
+			got, err := Runner{}.MergeBase(repo, tc.baseRef)
+			if tc.wantErrContains != "" {
+				if err == nil {
+					t.Fatalf("MergeBase() = %q, want error containing %q", got, tc.wantErrContains)
+				}
+				if !strings.Contains(err.Error(), tc.wantErrContains) {
+					t.Fatalf("MergeBase() error = %q, want it to contain %q", err, tc.wantErrContains)
+				}
+				if got != "" {
+					t.Fatalf("MergeBase() = %q on error, want empty SHA", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			want := gitTestOutput(t, repo, "rev-parse", tc.wantRef)
+			if got != want {
+				t.Fatalf("MergeBase() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestGitEnvDisablesOptionalLocks(t *testing.T) {
 	env := map[string]string{}
 	for _, item := range gitEnv() {
@@ -171,6 +273,17 @@ func TestGitEnvDisablesOptionalLocks(t *testing.T) {
 	if env["GIT_OPTIONAL_LOCKS"] != "0" {
 		t.Fatalf("GIT_OPTIONAL_LOCKS = %q, want 0", env["GIT_OPTIONAL_LOCKS"])
 	}
+}
+
+func gitTestOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func gitTest(t *testing.T, dir string, args ...string) {

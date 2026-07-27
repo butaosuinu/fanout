@@ -52,6 +52,72 @@ func (r Runner) Worktree(path, baseRef string) (Stat, error) {
 	return stat, nil
 }
 
+// MergeBase resolves the merge-base of HEAD and baseRef for review. An empty
+// baseRef resolves through origin/HEAD. Unlike diffBase, resolution failures
+// are returned instead of falling back to HEAD.
+func (r Runner) MergeBase(path, baseRef string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("worktree path is empty")
+	}
+
+	baseRef = strings.TrimSpace(baseRef)
+	var candidates []string
+	switch {
+	case strings.HasPrefix(baseRef, "refs/"):
+		if _, err := r.git("-C", path, "check-ref-format", baseRef); err != nil {
+			return "", fmt.Errorf("validate base ref %q: %w", baseRef, err)
+		}
+		candidates = append(candidates, baseRef)
+	case strings.HasPrefix(baseRef, "origin/"):
+		candidate := "refs/remotes/" + baseRef
+		if _, err := r.git("-C", path, "check-ref-format", candidate); err != nil {
+			return "", fmt.Errorf("validate base ref %q: %w", baseRef, err)
+		}
+		candidates = append(candidates, candidate)
+	case baseRef != "":
+		if _, err := r.git("-C", path, "check-ref-format", "--branch", baseRef); err != nil {
+			return "", fmt.Errorf("validate base ref %q: %w", baseRef, err)
+		}
+		candidates = append(candidates, "refs/heads/"+baseRef, "refs/remotes/origin/"+baseRef)
+	default:
+		out, err := r.git("-C", path, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
+		if err != nil {
+			return "", fmt.Errorf("resolve origin/HEAD: %w", err)
+		}
+		head := strings.TrimSpace(string(out))
+		if head == "" {
+			return "", fmt.Errorf("resolve origin/HEAD: empty ref")
+		}
+		candidates = append(candidates, head)
+	}
+
+	var lastErr error
+	for _, candidate := range candidates {
+		out, err := r.git("-C", path, "rev-parse", "--verify", "--end-of-options", candidate+"^{commit}")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		baseSHA := strings.TrimSpace(string(out))
+		if baseSHA == "" {
+			lastErr = fmt.Errorf("git rev-parse %s returned an empty SHA", candidate)
+			continue
+		}
+
+		out, err = r.git("-C", path, "merge-base", baseSHA, "HEAD")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if mergeBaseSHA := strings.TrimSpace(string(out)); mergeBaseSHA != "" {
+			return mergeBaseSHA, nil
+		}
+		lastErr = fmt.Errorf("git merge-base %s HEAD returned an empty SHA", candidate)
+	}
+	return "", fmt.Errorf("resolve merge-base for %q: %w", baseRef, lastErr)
+}
+
 // diffBase resolves the ref the diff is measured against: the merge-base of
 // HEAD and the recorded base branch (trying "origin/<base>" as well), or
 // origin/HEAD for legacy rows without a recorded base. Resolution failures
