@@ -343,18 +343,11 @@ func advanceHerdrWorktree(
 				return HerdrWorktreeResult{}, err
 			}
 		case state.HerdrPhaseWorktreeStarting:
-			var err error
-			intent, err = reconcileHerdrWorktreeMutation(ctx, req, runtime, hooks, intent)
-			if err != nil {
-				if errors.Is(err, ErrHerdrManualCleanupRequired) {
-					return HerdrWorktreeResult{}, err
-				}
-				return HerdrWorktreeResult{}, failHerdrIntent(
-					req.ProjectRoot,
-					intent,
-					"worktree create/open result is not provable without retry: "+err.Error(),
-				)
-			}
+			return HerdrWorktreeResult{}, failHerdrIntent(
+				req.ProjectRoot,
+				intent,
+				"worktree create/open request may have been issued; saved success response is unavailable",
+			)
 		case state.HerdrPhaseWorktreeRealized:
 			if err := verifyHerdrWorktreeRealized(ctx, req, runtime, hooks, intent); err != nil {
 				return HerdrWorktreeResult{}, err
@@ -504,80 +497,16 @@ func realizeHerdrMutation(
 
 	result, err := runtime.MutateWorktree(mutationCtx, toHerdrMutationRequest(request))
 	if err != nil {
-		reconciled, reconcileErr := reconcileHerdrWorktreeMutation(ctx, req, runtime, hooks, starting)
-		if reconcileErr != nil {
-			if errors.Is(reconcileErr, ErrHerdrManualCleanupRequired) {
-				return starting, reconcileErr
-			}
-			reason := fmt.Sprintf(
-				"worktree mutation failed or response was incomplete: %v; exact post-state reconciliation failed: %v",
-				err,
-				reconcileErr,
-			)
-			return starting, failHerdrIntent(req.ProjectRoot, starting, reason)
-		}
-		return reconciled, nil
+		return starting, failHerdrIntent(
+			req.ProjectRoot,
+			starting,
+			"worktree mutation failed or response was incomplete; saved success response is unavailable: "+err.Error(),
+		)
 	}
 	if validateErr := validateHerdrWorktreeMutationResult(starting, result); validateErr != nil {
 		return starting, failHerdrIntent(req.ProjectRoot, starting, validateErr.Error())
 	}
 	return completeHerdrWorktreeMutation(ctx, req, hooks, starting, result)
-}
-
-func reconcileHerdrWorktreeMutation(
-	ctx context.Context,
-	req HerdrWorktreeRequest,
-	runtime HerdrWorktreeRuntime,
-	hooks HerdrWorktreeHooks,
-	starting state.HerdrLaunchIntent,
-) (state.HerdrLaunchIntent, error) {
-	observed, err := observeHerdrWorkspacesWithRetry(ctx, runtime, hooks, starting)
-	if err != nil {
-		return starting, fmt.Errorf("observe uncertain worktree mutation: %w", err)
-	}
-	err = verifyHerdrCoordinatorBinding(req.ProjectRoot, starting, observed)
-	if err != nil {
-		return starting, fmt.Errorf("verify coordinator during worktree reconciliation: %w", err)
-	}
-	result, err := proveHerdrWorktreeMutationResult(starting, observed)
-	if err != nil {
-		return starting, err
-	}
-	return completeHerdrWorktreeMutation(ctx, req, hooks, starting, result)
-}
-
-func proveHerdrWorktreeMutationResult(
-	intent state.HerdrLaunchIntent,
-	observed []herdrrun.WorkspaceObservation,
-) (herdrrun.WorktreeMutationResult, error) {
-	if intent.MutationRequest == nil || intent.MutationPreState == nil {
-		return herdrrun.WorktreeMutationResult{}, fmt.Errorf("saved worktree mutation request/pre-state is missing")
-	}
-	request := intent.MutationRequest
-	var candidates []herdrrun.WorkspaceObservation
-	for _, workspace := range observed {
-		if workspace.Label == request.Label || filepath.Clean(workspace.Path) == filepath.Clean(request.Path) {
-			candidates = append(candidates, workspace)
-		}
-	}
-	if len(candidates) != 1 {
-		return herdrrun.WorktreeMutationResult{}, fmt.Errorf(
-			"uncertain worktree mutation has %d nonce/path candidates",
-			len(candidates),
-		)
-	}
-	candidate := candidates[0]
-	alreadyOpen := request.Kind == state.HerdrMutationWorktreeOpen &&
-		candidate.WorkspaceID == intent.MutationPreState.ExpectedAlreadyOpenID &&
-		candidate.Label == intent.MutationPreState.ExpectedAlreadyOpenLabel
-	result := herdrrun.WorktreeMutationResult{
-		WorkspaceObservation: candidate,
-		AlreadyOpen:          alreadyOpen,
-	}
-	if err := validateHerdrWorktreeMutationResult(intent, result); err != nil {
-		return herdrrun.WorktreeMutationResult{}, err
-	}
-	return result, nil
 }
 
 func validateHerdrWorktreeMutationResult(

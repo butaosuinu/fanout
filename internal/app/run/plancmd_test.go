@@ -105,11 +105,15 @@ func TestPreparedPlanSpecSnapshotOwnsExecutionAndCopiedBytes(t *testing.T) {
 	if err := os.WriteFile(sourcePath, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := planspec.LoadWithoutResolvedNameChecksSnapshot(sourcePath)
+	snapshot, copyTarget, err := PreparePlanSpecSnapshot(repo, sourcePath, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := PlanCommandConfig{SpecArg: sourcePath, SpecSnapshot: &snapshot}
+	cfg := PlanCommandConfig{
+		SpecArg:        sourcePath,
+		SpecSnapshot:   &snapshot,
+		SpecCopyTarget: copyTarget,
+	}
 
 	replacement := []byte(`{"version":1,"plan":{"slug":"changed-plan","title":"Changed"},"tasks":[{"id":"other","title":"Other","briefing":"Replace it"}]}`)
 	err = os.WriteFile(sourcePath, replacement, 0o600)
@@ -128,11 +132,7 @@ func TestPreparedPlanSpecSnapshotOwnsExecutionAndCopiedBytes(t *testing.T) {
 	if got := cfg.CLIConfig().PlanSpecIdentity; got != snapshot.Identity() {
 		t.Fatalf("CLI plan identity = %q, want %q", got, snapshot.Identity())
 	}
-	target, err := preparePlanSpecCopy(resolved, repo, resolved.Spec().Plan.Slug)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = copyPlanSpec(resolved.Bytes(), target)
+	err = copyPlanSpec(resolved.Bytes(), *copyTarget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestCopyPlanSpecPreservesMatchingDestinationMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := preparePlanSpecCopy(snapshot, repo, "launch-plan")
+	target, err := preparePlanSpecCopy(snapshot.Path(), repo, "launch-plan")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestCopyPlanSpecUpdatesCapturedDestinationAndPreservesMode(t *testing.T) {
 	snapshot := loadPlanCopySnapshot(t, repo, []byte(
 		`{"version":1,"plan":{"slug":"launch-plan","title":"Plan"},"tasks":[{"id":"base","title":"Base","briefing":"Build it"}]}`,
 	))
-	target, err := preparePlanSpecCopy(snapshot, repo, "launch-plan")
+	target, err := preparePlanSpecCopy(snapshot.Path(), repo, "launch-plan")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestCopyPlanSpecRejectsDestinationChangedAfterPreflight(t *testing.T) {
 	snapshot := loadPlanCopySnapshot(t, repo, []byte(
 		`{"version":1,"plan":{"slug":"launch-plan","title":"Plan"},"tasks":[{"id":"base","title":"Base","briefing":"Build it"}]}`,
 	))
-	target, err := preparePlanSpecCopy(snapshot, repo, "launch-plan")
+	target, err := preparePlanSpecCopy(snapshot.Path(), repo, "launch-plan")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestCopyPlanSpecRejectsDestinationChangedAfterPreflight(t *testing.T) {
 	}
 }
 
-func TestPreparePlanSpecCopyRejectsSavedSourceChangedAfterSnapshot(t *testing.T) {
+func TestCopyPlanSpecRejectsSavedSourceChangedAfterSnapshot(t *testing.T) {
 	repo := t.TempDir()
 	dst := filepath.Join(repo, ".fanout", "plans", "launch-plan.json")
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -260,7 +260,7 @@ func TestPreparePlanSpecCopyRejectsSavedSourceChangedAfterSnapshot(t *testing.T)
 	if err := os.WriteFile(dst, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := planspec.LoadWithoutResolvedNameChecksSnapshot(dst)
+	snapshot, target, err := PreparePlanSpecSnapshot(repo, dst, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,9 +270,9 @@ func TestPreparePlanSpecCopyRejectsSavedSourceChangedAfterSnapshot(t *testing.T)
 		t.Fatal(writeErr)
 	}
 
-	_, err = preparePlanSpecCopy(snapshot, repo, "launch-plan")
+	err = copyPlanSpec(snapshot.Bytes(), *target)
 	if err == nil || !strings.Contains(err.Error(), "changed after snapshot") {
-		t.Fatalf("preparePlanSpecCopy() error = %v, want stale-source rejection", err)
+		t.Fatalf("copyPlanSpec() error = %v, want stale-source rejection", err)
 	}
 }
 

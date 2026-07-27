@@ -71,6 +71,7 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	}
 	cfg.SpecPath = launchIdentity.SpecPath
 	cfg.SpecSnapshot = &launchIdentity.SpecSnapshot
+	cfg.SpecCopyTarget = launchIdentity.SpecCopyTarget
 	cliCfg := cfg.CLIConfig()
 	cliCfg.ParentRef = launchIdentity.Parent
 	rt, code := resolveLaunchRuntime(cliCfg, nil, lg)
@@ -93,6 +94,7 @@ type planLaunchIdentity struct {
 	PlanSpecIdentity string
 	SpecPath         string
 	SpecSnapshot     planspec.Snapshot
+	SpecCopyTarget   *run.PlanSpecCopyTarget
 }
 
 func resolvePlanLaunchParent(cfg run.PlanCommandConfig) (planLaunchIdentity, error) {
@@ -101,7 +103,11 @@ func resolvePlanLaunchParent(cfg run.PlanCommandConfig) (planLaunchIdentity, err
 		return planLaunchIdentity{}, err
 	}
 	specPath := run.ResolvePlanSpecPath(projectRoot, cfg.SpecArg)
-	snapshot, err := planspec.LoadWithoutResolvedNameChecksSnapshot(specPath)
+	snapshot, copyTarget, err := run.PreparePlanSpecSnapshot(
+		projectRoot,
+		cfg.SpecArg,
+		!cfg.DryRun,
+	)
 	if err != nil {
 		return planLaunchIdentity{}, err
 	}
@@ -111,6 +117,7 @@ func resolvePlanLaunchParent(cfg run.PlanCommandConfig) (planLaunchIdentity, err
 		PlanSpecIdentity: snapshot.Identity(),
 		SpecPath:         specPath,
 		SpecSnapshot:     snapshot,
+		SpecCopyTarget:   copyTarget,
 	}, nil
 }
 

@@ -103,15 +103,11 @@ func RealizeHerdrCoordinator(
 				return HerdrCoordinatorResult{}, err
 			}
 		case state.HerdrPhaseWorkspaceStarting:
-			var err error
-			intent, err = reconcileHerdrCoordinatorMutation(ctx, req, runtime, hooks, intent)
-			if err != nil {
-				return HerdrCoordinatorResult{}, failHerdrIntent(
-					req.ProjectRoot,
-					intent,
-					"coordinator workspace result is not provable without retry: "+err.Error(),
-				)
-			}
+			return HerdrCoordinatorResult{}, failHerdrIntent(
+				req.ProjectRoot,
+				intent,
+				"coordinator workspace request may have been issued; saved success response is unavailable",
+			)
 		case state.HerdrPhaseWorkspaceRealized:
 			if err := verifyHerdrCoordinatorRealized(ctx, req, runtime, hooks, intent); err != nil {
 				return HerdrCoordinatorResult{}, err
@@ -263,65 +259,16 @@ func createHerdrCoordinator(
 	}
 	result, err := runtime.MutateWorktree(mutationCtx, toHerdrMutationRequest(request))
 	if err != nil {
-		reconciled, reconcileErr := reconcileHerdrCoordinatorMutation(ctx, req, runtime, hooks, starting)
-		if reconcileErr != nil {
-			reason := fmt.Sprintf(
-				"coordinator workspace mutation failed or response was incomplete: %v; exact post-state reconciliation failed: %v",
-				err,
-				reconcileErr,
-			)
-			return starting, failHerdrIntent(req.ProjectRoot, starting, reason)
-		}
-		return reconciled, nil
+		return starting, failHerdrIntent(
+			req.ProjectRoot,
+			starting,
+			"coordinator workspace mutation failed or response was incomplete; saved success response is unavailable: "+err.Error(),
+		)
 	}
 	if validateErr := validateHerdrCoordinatorMutationResult(starting, result); validateErr != nil {
 		return starting, failHerdrIntent(req.ProjectRoot, starting, validateErr.Error())
 	}
 	return completeHerdrCoordinatorMutation(ctx, req, hooks, starting, result)
-}
-
-func reconcileHerdrCoordinatorMutation(
-	ctx context.Context,
-	req HerdrCoordinatorRequest,
-	runtime HerdrWorktreeRuntime,
-	hooks HerdrWorktreeHooks,
-	starting state.HerdrLaunchIntent,
-) (state.HerdrLaunchIntent, error) {
-	observed, err := observeHerdrWorkspacesWithRetry(ctx, runtime, hooks, starting)
-	if err != nil {
-		return starting, fmt.Errorf("observe uncertain coordinator mutation: %w", err)
-	}
-	result, err := proveHerdrCoordinatorMutationResult(starting, observed)
-	if err != nil {
-		return starting, err
-	}
-	return completeHerdrCoordinatorMutation(ctx, req, hooks, starting, result)
-}
-
-func proveHerdrCoordinatorMutationResult(
-	intent state.HerdrLaunchIntent,
-	observed []herdrrun.WorkspaceObservation,
-) (herdrrun.WorktreeMutationResult, error) {
-	if intent.MutationRequest == nil || intent.MutationPreState == nil {
-		return herdrrun.WorktreeMutationResult{}, fmt.Errorf("saved coordinator mutation request/pre-state is missing")
-	}
-	var candidates []herdrrun.WorkspaceObservation
-	for _, workspace := range observed {
-		if workspace.Label == intent.MutationRequest.Label {
-			candidates = append(candidates, workspace)
-		}
-	}
-	if len(candidates) != 1 {
-		return herdrrun.WorktreeMutationResult{}, fmt.Errorf(
-			"uncertain coordinator mutation has %d nonce candidates",
-			len(candidates),
-		)
-	}
-	result := herdrrun.WorktreeMutationResult{WorkspaceObservation: candidates[0]}
-	if err := validateHerdrCoordinatorMutationResult(intent, result); err != nil {
-		return herdrrun.WorktreeMutationResult{}, err
-	}
-	return result, nil
 }
 
 func validateHerdrCoordinatorMutationResult(

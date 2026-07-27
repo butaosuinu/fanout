@@ -35,6 +35,7 @@ type PlanCommandConfig struct {
 	SpecArg            string
 	SpecPath           string
 	SpecSnapshot       *planspec.Snapshot
+	SpecCopyTarget     *PlanSpecCopyTarget
 	Agent              string
 	Backend            backend.Name
 	AgentOverrides     []cliflags.AgentOverride
@@ -99,7 +100,7 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 	resolvedSettings := settings.Resolve(rt.Info.ProjectRoot, settingsOverrides(cfg.CLIConfig()), lg.Warn)
 	hookConfig := hooks.LoadUserConfig(lg)
 
-	snapshot, err := resolvePlanSpecSnapshot(cfg, rt.Info.ProjectRoot)
+	snapshot, specCopy, err := resolvePlanExecutionSnapshot(cfg, rt.Info.ProjectRoot)
 	if err != nil {
 		lg.Err("%v", err)
 		return TaskExecutionResult{}, exitcode.Env
@@ -107,14 +108,6 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 	cfg.SpecPath = snapshot.Path()
 	cfg.SpecSnapshot = &snapshot
 	spec := snapshot.Spec()
-	var specCopy planSpecCopyTarget
-	if !cfg.DryRun {
-		specCopy, err = preparePlanSpecCopy(snapshot, rt.Info.ProjectRoot, spec.Plan.Slug)
-		if err != nil {
-			lg.Err("prepare plan spec copy: %v", err)
-			return TaskExecutionResult{}, exitcode.Env
-		}
-	}
 	cfg.BaseBranch, err = resolvePlanBaseBranch(cfg, spec, rt.Info.ProjectRoot)
 	if err != nil {
 		lg.Err("%v", err)
@@ -268,6 +261,39 @@ func (cfg PlanCommandConfig) CLIConfig() *cliflags.Config {
 	}
 }
 
+func resolvePlanExecutionSnapshot(
+	cfg PlanCommandConfig,
+	projectRoot string,
+) (planspec.Snapshot, PlanSpecCopyTarget, error) {
+	if cfg.SpecSnapshot == nil {
+		snapshot, target, err := PreparePlanSpecSnapshot(
+			projectRoot,
+			cfg.SpecArg,
+			!cfg.DryRun,
+		)
+		if err != nil {
+			return planspec.Snapshot{}, PlanSpecCopyTarget{}, err
+		}
+		if target == nil {
+			return snapshot, PlanSpecCopyTarget{}, nil
+		}
+		return snapshot, *target, nil
+	}
+	snapshot, err := resolvePlanSpecSnapshot(cfg, projectRoot)
+	if err != nil {
+		return planspec.Snapshot{}, PlanSpecCopyTarget{}, err
+	}
+	if cfg.DryRun {
+		return snapshot, PlanSpecCopyTarget{}, nil
+	}
+	if cfg.SpecCopyTarget == nil {
+		return planspec.Snapshot{}, PlanSpecCopyTarget{}, fmt.Errorf(
+			"prepared live plan snapshot is missing its destination preimage",
+		)
+	}
+	return snapshot, *cfg.SpecCopyTarget, nil
+}
+
 func resolvePlanSpecSnapshot(cfg PlanCommandConfig, projectRoot string) (planspec.Snapshot, error) {
 	specPath := ResolvePlanSpecPath(projectRoot, cfg.SpecArg)
 	if cfg.SpecSnapshot == nil {
@@ -334,47 +360,78 @@ func planRerunSpecArg(cfg PlanCommandConfig, spec planspec.Spec) string {
 	return spec.Plan.Slug
 }
 
-type planSpecCopyTarget struct {
-	path  string
-	found bool
-	data  []byte
-	mode  os.FileMode
+// PlanSpecCopyTarget binds a live plan source snapshot to the destination
+// preimage captured before that authoritative source snapshot.
+type PlanSpecCopyTarget struct {
+	path       string
+	found      bool
+	sourcePath string
+	source     bool
+	data       []byte
+	mode       os.FileMode
+}
+
+// PreparePlanSpecSnapshot reads a preliminary slug, captures the saved-copy
+// preimage, then rereads the authoritative source snapshot. This order ensures
+// that a destination update after the authoritative read cannot be adopted as
+// the expected compare-and-swap preimage.
+func PreparePlanSpecSnapshot(
+	projectRoot, specArg string,
+	captureCopy bool,
+) (planspec.Snapshot, *PlanSpecCopyTarget, error) {
+	specPath := ResolvePlanSpecPath(projectRoot, specArg)
+	preliminary, err := planspec.LoadWithoutResolvedNameChecksSnapshot(specPath)
+	if err != nil {
+		return planspec.Snapshot{}, nil, err
+	}
+	if !captureCopy {
+		return preliminary, nil, nil
+	}
+	target, err := preparePlanSpecCopy(specPath, projectRoot, preliminary.Spec().Plan.Slug)
+	if err != nil {
+		return planspec.Snapshot{}, nil, err
+	}
+	snapshot, err := planspec.LoadWithoutResolvedNameChecksSnapshot(specPath)
+	if err != nil {
+		return planspec.Snapshot{}, nil, err
+	}
+	if snapshot.Spec().Plan.Slug != preliminary.Spec().Plan.Slug {
+		return planspec.Snapshot{}, nil, fmt.Errorf(
+			"plan spec slug changed while capturing launch snapshot: %s -> %s",
+			preliminary.Spec().Plan.Slug,
+			snapshot.Spec().Plan.Slug,
+		)
+	}
+	return snapshot, &target, nil
 }
 
 func preparePlanSpecCopy(
-	snapshot planspec.Snapshot,
-	projectRoot, slug string,
-) (planSpecCopyTarget, error) {
+	sourcePath, projectRoot, slug string,
+) (PlanSpecCopyTarget, error) {
 	dst := filepath.Join(projectRoot, ".fanout", "plans", slug+".json")
-	target := planSpecCopyTarget{path: dst}
+	target := PlanSpecCopyTarget{path: dst, sourcePath: sourcePath}
 	current, err := os.ReadFile(dst)
 	if errors.Is(err, os.ErrNotExist) {
 		return target, nil
 	}
 	if err != nil {
-		return planSpecCopyTarget{}, err
+		return PlanSpecCopyTarget{}, err
 	}
 	info, err := os.Stat(dst)
 	if err != nil {
-		return planSpecCopyTarget{}, err
+		return PlanSpecCopyTarget{}, err
 	}
 	target.found = true
 	target.data = current
 	target.mode = info.Mode().Perm()
-	source, err := samePlanSpecFile(snapshot.Path(), dst)
+	target.source, err = samePlanSpecFile(sourcePath, dst)
 	if err != nil {
-		return planSpecCopyTarget{}, err
-	}
-	if source && !bytes.Equal(current, snapshot.Bytes()) {
-		return planSpecCopyTarget{}, fmt.Errorf(
-			"plan spec source %s changed after snapshot; refusing to publish stale bytes",
-			dst,
-		)
+		return PlanSpecCopyTarget{}, err
 	}
 	return target, nil
 }
 
-func copyPlanSpec(data []byte, target planSpecCopyTarget) error {
+func copyPlanSpec(data []byte, target PlanSpecCopyTarget) error {
 	if err := os.MkdirAll(filepath.Dir(target.path), 0o755); err != nil {
 		return err
 	}
@@ -409,6 +466,15 @@ func copyPlanSpec(data []byte, target planSpecCopyTarget) error {
 			)
 		}
 		return err
+	}
+	if target.source {
+		if !bytes.Equal(current, data) {
+			return fmt.Errorf(
+				"plan spec source %s changed after snapshot; refusing to publish stale bytes",
+				target.sourcePath,
+			)
+		}
+		return nil
 	}
 	info, err := os.Stat(target.path)
 	if err != nil {

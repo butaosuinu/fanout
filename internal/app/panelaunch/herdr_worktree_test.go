@@ -232,7 +232,7 @@ func TestHerdrStartingPhasesNeverBlindRetry(t *testing.T) {
 	}
 }
 
-func TestHerdrWorktreeStartingReconcilesCrashAfterExactMutation(t *testing.T) {
+func TestHerdrWorktreeStartingFailsClosedAfterExactMutation(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
 	req := newHerdrWorktreeRequest(t, repo, runtime)
@@ -275,11 +275,19 @@ func TestHerdrWorktreeStartingReconcilesCrashAfterExactMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
-	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
-		result.Intent.Phase != state.HerdrPhaseWorktreeRealized ||
-		len(runtime.mutations) != 1 {
-		t.Fatalf("starting recovery = result:%+v err:%v mutations:%d", result, err, len(runtime.mutations))
+	_, err = RealizeHerdrWorktree(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) || len(runtime.mutations) != 1 {
+		t.Fatalf("starting recovery = err:%v mutations:%d, want manual cleanup without retry", err, len(runtime.mutations))
+	}
+	control, err = state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, found := control.FindIntent(intentID)
+	if !found ||
+		failed.OperationState != state.HerdrOperationManualCleanupRequired ||
+		failed.MutationReceipt != nil {
+		t.Fatalf("starting recovery intent = %+v, found=%t", failed, found)
 	}
 }
 
@@ -457,36 +465,30 @@ func TestHerdrRealizationPinsBaseToLinkedSourceHEAD(t *testing.T) {
 	}
 }
 
-func TestHerdrWorktreeResponseLossRetriesReadWithoutMutationRetry(t *testing.T) {
+func TestHerdrWorktreeResponseLossRequiresManualCleanupWithoutMutationRetry(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo, responseLoss: true}
 	req := newHerdrWorktreeRequest(t, repo, runtime)
-	runtime.observeErrors = []error{
-		nil,
-		fmt.Errorf("%w: injected reconciliation timeout", herdrrun.ErrRetryableRead),
-	}
 	hooks := advancingHerdrRetryHooks()
 	result, err := RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
-	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("response-loss error = %v", err)
 	}
 	if len(runtime.mutations) != 1 {
 		t.Fatalf("mutations = %d, want 1", len(runtime.mutations))
 	}
-	if result.Intent.Phase != state.HerdrPhaseWorktreeRealized || result.Intent.MutationReceipt == nil {
-		t.Fatalf("response-loss result = %+v, want realized receipt", result)
+	if result.Intent.IntentID != "" {
+		t.Fatalf("response-loss result = %+v, want no adopted result", result)
 	}
 	if _, statErr := os.Stat(req.WorktreePath); statErr != nil {
 		t.Fatalf("response-loss checkout was not preserved: %v", statErr)
 	}
-	if len(runtime.observeTimeouts) != 4 {
-		t.Fatalf("response-loss observe calls = %d, want preflight, retry, proof, realized verification", len(runtime.observeTimeouts))
+	if len(runtime.observeTimeouts) != 1 {
+		t.Fatalf("response-loss observe calls = %d, want preflight only", len(runtime.observeTimeouts))
 	}
-	result, err = RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
-	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
-		result.Intent.Phase != state.HerdrPhaseWorktreeRealized ||
-		len(runtime.mutations) != 1 {
-		t.Fatalf("replay = err:%v mutations:%d", err, len(runtime.mutations))
+	_, err = RealizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) || len(runtime.mutations) != 1 {
+		t.Fatalf("replay = err:%v mutations:%d, want retained manual cleanup", err, len(runtime.mutations))
 	}
 }
 
@@ -948,7 +950,7 @@ func TestRealizeHerdrCoordinatorPersistsWorkspacePhases(t *testing.T) {
 	}
 }
 
-func TestHerdrCoordinatorResponseLossRetriesReadWithoutMutationRetry(t *testing.T) {
+func TestHerdrCoordinatorResponseLossRequiresManualCleanupWithoutMutationRetry(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo, responseLoss: true}
 	req := HerdrCoordinatorRequest{
@@ -960,30 +962,23 @@ func TestHerdrCoordinatorResponseLossRetriesReadWithoutMutationRetry(t *testing.
 		HerdrSocketPath: "/tmp/fanout-owned.sock",
 		TotalTimeout:    30 * time.Second,
 	}
-	runtime.observeErrors = []error{
-		nil,
-		fmt.Errorf("%w: injected reconciliation timeout", herdrrun.ErrRetryableRead),
-	}
 	hooks := advancingHerdrRetryHooks()
 	result, err := RealizeHerdrCoordinator(context.Background(), req, runtime, hooks)
-	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
-		result.Intent.Phase != state.HerdrPhaseWorkspaceRealized ||
-		result.Intent.MutationReceipt == nil ||
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) ||
+		result.Intent.IntentID != "" ||
 		len(runtime.mutations) != 1 {
 		t.Fatalf("first coordinator response loss = err:%v mutations:%d", err, len(runtime.mutations))
 	}
-	if len(runtime.observeTimeouts) != 4 {
-		t.Fatalf("coordinator observe calls = %d, want preflight, retry, proof, realized verification", len(runtime.observeTimeouts))
+	if len(runtime.observeTimeouts) != 1 {
+		t.Fatalf("coordinator observe calls = %d, want preflight only", len(runtime.observeTimeouts))
 	}
-	result, err = RealizeHerdrCoordinator(context.Background(), req, runtime, hooks)
-	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
-		result.Intent.Phase != state.HerdrPhaseWorkspaceRealized ||
-		len(runtime.mutations) != 1 {
+	_, err = RealizeHerdrCoordinator(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) || len(runtime.mutations) != 1 {
 		t.Fatalf("coordinator replay = err:%v mutations:%d", err, len(runtime.mutations))
 	}
 }
 
-func TestHerdrCoordinatorStartingReconcilesCrashAfterExactMutation(t *testing.T) {
+func TestHerdrCoordinatorStartingFailsClosedAfterExactMutation(t *testing.T) {
 	repo := newHerdrLaunchRepo(t)
 	runtime := &fakeHerdrWorktreeRuntime{t: t, repo: repo}
 	req := HerdrCoordinatorRequest{
@@ -1032,11 +1027,19 @@ func TestHerdrCoordinatorStartingReconcilesCrashAfterExactMutation(t *testing.T)
 		t.Fatal(err)
 	}
 
-	result, err := RealizeHerdrCoordinator(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
-	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
-		result.Intent.Phase != state.HerdrPhaseWorkspaceRealized ||
-		len(runtime.mutations) != 1 {
-		t.Fatalf("coordinator starting recovery = result:%+v err:%v mutations:%d", result, err, len(runtime.mutations))
+	_, err = RealizeHerdrCoordinator(context.Background(), req, runtime, deterministicHerdrHooks(nil, ""))
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) || len(runtime.mutations) != 1 {
+		t.Fatalf("coordinator starting recovery = err:%v mutations:%d, want manual cleanup without retry", err, len(runtime.mutations))
+	}
+	control, err = state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, found := control.FindIntent(intentID)
+	if !found ||
+		failed.OperationState != state.HerdrOperationManualCleanupRequired ||
+		failed.MutationReceipt != nil {
+		t.Fatalf("coordinator starting recovery intent = %+v, found=%t", failed, found)
 	}
 }
 
