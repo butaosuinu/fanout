@@ -370,6 +370,8 @@ temporary root に作る。
 merge-base tree は strict に解決した commit の `ls-tree` と `cat-file`、
 index は private directory に複製した index file の `ls-files --stage -z` と
 `cat-file` から読む。
+複製した index に stage 0 以外の entry が 1 件でもあれば、stage 1/2/3 の
+いずれも選択せず manifest 作成前に 502 とする。
 複製した index に split-index の link extension がある場合は 502 とし、
 live `sharedindex.<hash>` を開かない。
 worktree content は `openat` と `readlinkat` で raw byte として読み、
@@ -630,6 +632,8 @@ protected scope の `safe.directory` が対象 path または `*` を信頼す�
 checkout は exact canonical path だけを Git command へ渡して処理でき、対象外の
 path は信頼しないことを確認する。
 split index は 502 となり、`sharedindex.<hash>` を開かないことを確認する。
+modify/delete と add/add の未解決 conflict は stage 1/2/3 の内容を選ばず 502 に
+なることを確認する。
 SHA-256 repository は 502 とし、SHA-1 repository の synthetic worktree side は
 Git blob と同じ 40 桁の object ID になることを確認する。
 
@@ -643,8 +647,9 @@ handler が生成する次のエラー body は `{"error":"message"}` とし、
 - `502 Bad Gateway`: base/merge-base の strict 解決、filter attribute の検査、
   system/global config/excludes/attributes、config/attribute 由来の変換、
   mode/case/path の正規化、`safe.directory` の限定、split/sparse index、
-  submodule、object format の安全な確定、lazy fetch を使わない object 読み出し、
-  snapshot の確定、unsupported file type、diff 収集 timeout、
+  未解決 conflict、submodule、object format の安全な確定、
+  lazy fetch を使わない object 読み出し、snapshot の確定、unsupported file type、
+  diff 収集 timeout、
   500 files/metadata 出力上限、metadata-only response 上限の超過、または
   diff engine の実行に失敗した
 
@@ -665,7 +670,7 @@ contract には含めない。
 - protected scope の `safe.directory` を exact canonical path に限定して渡す方法
 - `core.fileMode`、`core.symlinks`、`core.ignoreCase`、
   `core.precomposeUnicode` を manifest と path 照合へ反映する方法
-- split-index extension と repository object format の検出方法
+- unmerged entry、split-index extension、repository object format の検出方法
 - skip-worktree/sparse-directory entry の最終 side を immutable index から作る方法
 - 非実行型の改行/encoding 変換と canonical content を再現するか fail closed に
   するかの選択
