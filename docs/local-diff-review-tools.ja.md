@@ -555,8 +555,11 @@ unset の `-diff` は binary、値なしで set された `diff` は text とし
 `diff=<driver>` は driver を起動せず 502 にする。
 `diff` が unspecified の場合だけ、各 side の canonical content の先頭
 8000 bytes に NUL byte があるかで binary を判定する。
-patch は binary でない path ごとに repository-relative path の byte 順で生成し、
-完全なファイルブロックを連結する。
+patch は binary でない path ごとに repository-relative path の byte 順で生成する。
+以下では 1 path 分の patch を file group と呼ぶ。
+通常の file group は完全な `diff --git` block 1 個、file type change は前述の
+削除・追加 block 2 個で構成し、収集上限と response 上限では不可分に扱う。
+patch は完全な file group を path 順に連結する。
 symlink は mode 120000 の link 自体、gitlink は commit pointer だけを対象とし、
 どちらも参照先の file や nested worktree を読まない。
 未初期化の submodule は superproject index の gitlink commit だけを使う。
@@ -616,8 +619,8 @@ ignore、nested repository の prune、mode と canonical content の比較を�
 成功 response の `files` は必ず対象全件を含む。
 
 patch の収集上限は 10 MiB(10,485,760 bytes)とする。
-各 file の Git stdout は残り byte 数 + 1 byte まで読み、完全な
-`diff --git` block を加えると上限を超える場合はその block を加えない。
+各 file group の diff engine stdout は残り byte 数 + 1 byte まで読み、完全な
+file group を加えると上限を超える場合は、その group の block を 1 個も加えない。
 その file と後続の patch 対象 file は `patchIncluded: false`、
 `omittedReason: "collectionLimit"` とし、`truncated` を `true` にする。
 同じ file の `additions` と `deletions` は `null` とする。
@@ -630,16 +633,16 @@ patch buffer は 10 MiB + 1 byte を超えない。
 1 MiB(1,048,576 bytes)とし、クエリによる変更は許さない。
 `files` 全件、空の `patch`、その他の field を最終形で serialize した
 metadata-only body が上限を超える場合は、`files` を省略せず 502 にする。
-上限以下なら、収集済みの完全な `diff --git` file block を path 順に加えた
-各候補を JSON serialize し、body 全体が上限内に収まる最大の先頭部分を返す。
+上限以下なら、収集済みの完全な file group を path 順に 1 つずつ加えた各候補を
+JSON serialize し、body 全体が上限内に収まる最大の先頭部分を返す。
 この計算は改行、control character、quote の JSON escape 後の UTF-8 byte 数を
-使い、file block の途中では切らない。
+使い、file group とその中の block の途中では切らない。
 上限で除外した file と後続の patch 対象 file は `patchIncluded: false`、
 `omittedReason: "responseLimit"` とし、`truncated` を `true` にする。
-`responseLimit` は収集済みの完全な file block だけに適用し、`binary`、
+`responseLimit` は収集済みの完全な file group だけに適用し、`binary`、
 `tooLarge`、`collectionLimit` の既存理由を上書きしない。
 両上限に該当する file は、先に適用した `collectionLimit` を報告する。
-先頭の 1 block も収まらない場合は `patch` を空文字列にする。
+先頭の 1 file group も収まらない場合は `patch` を空文字列にする。
 body 全体が上限以下なら patch をそのまま返し、10 MiB 収集上限で設定済みの
 `truncated` は保持する。
 SPA は `truncated` が `true`、またはいずれかの `patchIncluded` が `false` なら、
@@ -733,6 +736,8 @@ gitlink patch は bare SHA ではなく
 regular file、symlink、gitlink 間の file type change は同じ path の
 deleted-file block と new-file block に分かれ、`files` は 1 件、統計は両 block の
 合計になることを確認する。
+その 2 block は 10 MiB 収集上限と 1 MiB response 上限の境界で分割せず、
+両方を含めるか両方を省略することを確認する。
 `core.fileMode=false` の chmod は差分にせず、executable bit のある untracked
 regular file は logical mode 100644 とすることを確認する。
 `core.symlinks=false` の symlink 表現は logical mode 120000 として扱うことを
