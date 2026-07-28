@@ -342,6 +342,10 @@ system/global config source を安全に確定または parse できない場合
 `include`/`includeIf` がある場合は 502 とし、include 先を開かない。
 system/global の `core.excludesFile` は参照先を no-follow、256 KiB 上限で同じ
 snapshot に複製し、安全に複製できなければ 502 にする。
+`core.excludesFile` が未指定の場合は、server 起動時の trusted `XDG_CONFIG_HOME`、
+またはその未設定時の `HOME/.config` から Git 既定の `git/ignore` を解決する。
+既定 file は同じ no-follow、256 KiB 上限で snapshot に複製し、absence も記録する。
+既定 path を安全に確定または複製できない場合は 502 にする。
 Git が system/global attribute source として解決する file は no-follow、
 256 KiB 上限で同じ snapshot に複製し、安全に確定または複製できなければ 502 にする。
 server 起動後は live system/global config、excludes file、attribute source を
@@ -487,8 +491,8 @@ server 起動時に複製した system/global attributes、current worktree の
 precedence で適用し、候補 path の `filter` attribute を preflight する。
 current worktree に必要な `.gitattributes` がない場合だけ複製 index の同じ path
 へ fallback し、merge-base tree の attribute source は適用しない。
-1 source でも設定されていたら、clean/process filter の command 設定有無に
-かかわらず 502 へ fail closed する。
+regular-file side で 1 source でも設定されていたら、clean/process filter の
+command 設定有無にかかわらず 502 へ fail closed する。
 attribute の判定は command 名を得るだけで、driver を起動しない。
 実際の diff engine は attributes を参照せず、private snapshot から後述の変換を
 適用した canonical byte pair と logical path だけを受け取る。
@@ -500,6 +504,11 @@ filter command は起動しない。
 legacy `crlf` は Git-compatible な `text`/`eol` の意味へ正規化する。
 raw byte pair と通常の Git diff の内容が異なる変換は、外部 command を起動せず
 各 side に Git と同じ方向で再現するか、502 にする。
+attribute と config による content 変換は logical mode が regular file の side
+だけに適用する。
+mode 120000 は merge-base blob または `readlinkat` の raw target、mode 160000 は
+commit pointer を canonical content とし、filter、改行、encoding、`ident` 変換を
+適用しない。
 変換後の byte pair を canonical content とし、diff engine、binary 判定、
 additions/deletions、synthetic object ID の共通入力にする。
 変換を安全に再現できない場合は binary 判定と object ID 計算の前に 502 とし、
@@ -530,7 +539,7 @@ repository-relative path は snapshot manifest から取得し、patch header �
 C-quoted 文字列を path 復元に使わない。
 untracked symlink は mode 120000 の link 自体を対象とし、link 先を読まない。
 binary 判定は Git attributes に任せず、各 side の canonical content の先頭
-8 KiB だけを読む。
+8000 bytes だけを読む。
 その範囲に NUL byte がある file を binary とする。
 patch は binary でない path ごとに repository-relative path の byte 順で生成し、
 完全なファイルブロックを連結する。
@@ -564,7 +573,7 @@ Git のエラー出力が UTF-8 として不正な場合は、byte 列を置換�
 各 subprocess で 10 秒を取り直さず、worktree 検証、private snapshot の収集と
 確定、non-Git の stat/raw read、metadata 収集、patch 生成のすべてで残り時間を
 使う。
-binary probe は 8 KiB/side、変換出力と diff engine 用の regular-file read は
+binary probe は 8000 bytes/side、変換出力と diff engine 用の regular-file read は
 256 KiB/side を超えない。
 1 request で raw side の読み出しと canonical side の変換出力に使う累積 byte
 budget は、全 file/side 合計で 32 MiB(33,554,432 bytes)とする。
@@ -674,6 +683,8 @@ tracked subtree に `.git` entry を追加した場合と、tracked file を `.g
 system または global だけに設定した `core.autocrlf` と `core.eol` も改行変換へ
 反映し、system/global excludes に一致する path は candidate path に含めないことを
 確認する。
+`core.excludesFile` 未指定時も既定の global `git/ignore` に一致する path は
+candidate path に含めないことを確認する。
 system/global config と excludes file を server 起動後に差し替えても再読込しない
 ことを確認する。
 system/global attributes だけに設定した `filter` は command を起動せず 502 とし、
@@ -685,8 +696,13 @@ legacy `crlf` による改行正規化を適用し、raw content の差だけで
 ことを確認する。
 `working-tree-encoding` で UTF-16 から変換できる file は raw NUL byte を理由に
 binary とせず、canonical content の text hunk を返すことを確認する。
+mode 120000 の symlink target は `text`、`eol`、`working-tree-encoding`、`ident`
+に一致しても raw bytes を canonical content とし、target の CRLF 差分を消さない
+ことを確認する。
 worktree side の synthetic object ID と additions/deletions は同じ canonical
 content から計算することを確認する。
+binary probe は 0-origin offset 7999 の NUL を binary、offset 8000 の NUL を
+text と判定することを確認する。
 `core.fileMode=false` の chmod は差分にせず、`core.symlinks=false` の symlink
 表現は logical mode 120000 として扱うことを確認する。
 `core.ignoreCase=true` では index path と case-fold 一致する traversal path を
