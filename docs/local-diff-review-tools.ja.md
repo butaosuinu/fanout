@@ -326,17 +326,20 @@ request-private な `--no-index` diff engine では `GIT_DIR` と `GIT_WORK_TREE
 `git --no-pager` と `-c core.fsmonitor=false` を使い、pager と fsmonitor を
 起動しない。
 `HOME` と `XDG_CONFIG_HOME` は server 所有の空 directory に向け、
-repository-facing Git command に live system/global config と global attributes を
-読ませない。
+repository-facing Git command に live system/global config と system/global
+attributes を読ませない。
 server 起動時に system-scoped config と user-scoped global config の relevant key を
 server 所有の immutable snapshot に固定する。
 対象は `core.autocrlf`、`core.eol`、`core.fileMode`、`core.symlinks`、
-`core.ignoreCase`、`core.excludesFile` とする。
+`core.ignoreCase`、`core.excludesFile`、`core.attributesFile` とする。
 system/global config source を安全に確定または parse できない場合と、
 `include`/`includeIf` がある場合は 502 とし、include 先を開かない。
 system/global の `core.excludesFile` は参照先を no-follow、256 KiB 上限で同じ
 snapshot に複製し、安全に複製できなければ 502 にする。
-server 起動後は live system/global config と live excludes file を再読込しない。
+Git が system/global attribute source として解決する file は no-follow、
+256 KiB 上限で同じ snapshot に複製し、安全に確定または複製できなければ 502 にする。
+server 起動後は live system/global config、excludes file、attribute source を
+再読込しない。
 common config と worktree config は raw file として no-follow で検査する。
 repo-local または worktree-local の `core.attributesFile`、
 `core.excludesFile`、`core.worktree` と、外部 config を読める
@@ -398,7 +401,7 @@ worktree に path がないことを削除として扱わない。
 immutable index の content を最終 side に使うか、安全に判定できなければ 502 に
 する。
 選択は #577/#578 に委譲する。
-server 起動時に複製した global excludes、worktree 内の `.gitignore`、
+server 起動時に複製した system/global excludes、worktree 内の `.gitignore`、
 verified common dir の `info/exclude` は Git の precedence で適用する。
 後者 2 source は no-follow と 256 KiB 上限で private snapshot に複製する。
 実装は immutable な ignore source で directory traversal を prune し、ignored
@@ -426,8 +429,9 @@ candidate path は、`files`、500 files 上限、patch 収集から除外する
 確定後は live worktree、live index、repository attributes を patch または
 numstat の入力に使わない。
 
-merge-base tree、複製した index、private snapshot の worktree attributes、
-収集時に複製した `.git/info/attributes` の各 source について、候補 path の
+server 起動時に複製した system/global attributes、merge-base tree、複製した index、
+private snapshot の worktree attributes、収集時に複製した
+`.git/info/attributes` の各 source を Git の precedence で適用し、候補 path の
 `filter` attribute を preflight する。
 1 source でも設定されていたら、clean/process filter の command 設定有無に
 かかわらず 502 へ fail closed する。
@@ -580,6 +584,9 @@ system または global だけに設定した `core.autocrlf` と `core.eol` も
 確認する。
 system/global config と excludes file を server 起動後に差し替えても再読込しない
 ことを確認する。
+system/global attributes だけに設定した `filter` は command を起動せず 502 とし、
+`text`、`eol`、`working-tree-encoding`、`ident` も変換または 502 になることを
+確認する。
 `core.fileMode=false` の chmod は差分にせず、`core.symlinks=false` の symlink
 表現は logical mode 120000 として扱うことを確認する。
 `core.ignoreCase=true` では index path と case-fold 一致する traversal path を
@@ -596,11 +603,11 @@ handler が生成する次のエラー body は `{"error":"message"}` とし、
 - `404 Not Found`: identity が snapshot の 1 行に定まらない、worktree 記録が
   ない、cleanup 済み、または同じ git common dir の worktree として検証できない
 - `502 Bad Gateway`: base/merge-base の strict 解決、filter attribute の検査、
-  system/global config/excludes、config/attribute 由来の変換、mode/case の正規化、
-  split/sparse index、submodule、object format の安全な確定、lazy fetch を使わない
-  object 読み出し、snapshot の確定、unsupported file type、diff 収集 timeout、
-  500 files/metadata 出力上限、metadata-only response 上限の超過、または diff
-  engine の実行に失敗した
+  system/global config/excludes/attributes、config/attribute 由来の変換、
+  mode/case の正規化、split/sparse index、submodule、object format の安全な確定、
+  lazy fetch を使わない object 読み出し、snapshot の確定、unsupported file type、
+  diff 収集 timeout、500 files/metadata 出力上限、metadata-only response 上限の
+  超過、または diff engine の実行に失敗した
 
 共通 middleware が生成する token 不一致の `403 Forbidden` と GET/HEAD 以外の
 `405 Method Not Allowed` は既存どおり `text/plain` とし、上の JSON error
@@ -615,7 +622,7 @@ contract には含めない。
 
 - `GIT_INDEX_FILE` などで複製 index を live index から分離して読み出す方法
 - common/worktree config の immutable snapshot、fingerprint、Git command への固定
-- system/global config と excludes の server-lifetime snapshot、fingerprint
+- system/global config、excludes、attributes の server-lifetime snapshot、fingerprint
 - `core.fileMode`、`core.symlinks`、`core.ignoreCase` を manifest に反映する方法
 - split-index extension と repository object format の検出方法
 - skip-worktree/sparse-directory entry の最終 side を immutable index から作る方法
