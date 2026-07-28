@@ -448,7 +448,12 @@ source の pattern 照合にも適用する。
 prune の実装方式は #577/#578 に委譲する。
 検証済み worktree root の `.git` entry は entry 自体だけを開かずに prune する。
 descendant directory に `.git` entry がある場合は、同じ directory の他 entry を
-収集する前に immutable な merge-base/index manifest と突合する。
+収集する前に immutable な merge-base/index manifest と突合し、marker が nested
+repository を表すか安全に検証する。
+検証は Git command を起動せず、nested config、object、worktree content を読まない
+範囲に限る。
+空の file/directory、unsupported file type、外部 path、内部上限超過などで
+nested repository と安全に確認できない marker は 502 とする。
 enclosing directory 自体または全 descendant に tracked entry がなく、tracked
 file/symlink から directory への置換でもない場合だけ、純粋な untracked nested
 repository として enclosing directory 全体を prune する。
@@ -561,6 +566,13 @@ Git のエラー出力が UTF-8 として不正な場合は、byte 列を置換�
 使う。
 binary probe は 8 KiB/side、変換出力と diff engine 用の regular-file read は
 256 KiB/side を超えない。
+1 request で raw side の読み出しと canonical side の変換出力に使う累積 byte
+budget は、全 file/side 合計で 32 MiB(33,554,432 bytes)とする。
+per-side 上限で `tooLarge` とした content は読まず、この budget に含めない。
+raw content を解放または deduplicate しても読み出した byte を差し引かず、
+canonical output も同じ budget へ加算する。
+既知の raw size 合計だけで budget を超える場合は content を保存する前に 502 とし、
+変換中に超える場合は binary 判定、diff、統計、OID 計算を止めて 502 にする。
 deadline 到達時は process group を停止し、partial response を返さず 502 にする。
 patch 以外の stdout とすべての stderr は 10 MiB + 1 byte を検出した時点で
 process group を停止して 502 にし、buffer も 10 MiB + 1 byte を超えない。
@@ -604,7 +616,7 @@ body 全体が上限以下なら patch をそのまま返し、10 MiB 収集上�
 SPA は `truncated` が `true`、またはいずれかの `patchIncluded` が `false` なら、
 review 対象が patch に揃っていないことを警告する。
 
-10 秒、500 files、10 MiB、1 MiB、256 KiB は初期値である。
+10 秒、500 files、10 MiB、1 MiB、256 KiB、32 MiB は初期値である。
 #578 の実装で調整する場合は同じ PR で本書、handler test、MSW fixture を更新し、
 実装と wire contract を一致させる。
 同じ test で、未初期化の submodule は gitlink 変更を含め、初期化済みの
@@ -617,6 +629,10 @@ preflight 後に live worktree と `.gitattributes` を変更しても filter co
 起動しないこと、raw content が 256 KiB 以下でも変換後の canonical content が
 256 KiB を超える tracked file は binary/OID を計算せず `tooLarge` になることを
 同じ test で確認する。
+全 file/side の raw read と canonical output の累積が 32 MiB を超える場合は、
+content の保存または変換を止めて 502 になることを確認する。
+per-side 上限で `tooLarge` とした content は読まず、累積 budget だけを理由に
+metadata-only 表示を 502 にしないことを確認する。
 clean と判定した tracked file を収集中に変更した場合は snapshot を取り直すこと、
 partial clone の missing object で fetch または credential helper を起動せず
 502 にすることも固定する。
@@ -651,6 +667,8 @@ skip-worktree と sparse-directory entry は削除として返さず、安全に
 root の `.git` entry と純粋な untracked nested repository は候補、対象 file 数、
 metadata、patch のすべてから除外し、nested repository は enclosing directory
 全体を prune することを確認する。
+空の `.git` file/directory など nested repository と確認できない marker は、
+enclosing directory を黙って prune せず 502 になることを確認する。
 tracked subtree に `.git` entry を追加した場合と、tracked file を `.git` entry の
 ある directory に置き換えた場合は、tracked 変更を隠さず 502 になることを確認する。
 system または global だけに設定した `core.autocrlf` と `core.eol` も改行変換へ
@@ -700,7 +718,7 @@ handler が生成する次のエラー body は `{"error":"message"}` とし、
   object format の安全な確定、
   object ID と content の不一致、live grafts/shallow を使わない ancestry、
   lazy fetch を使わない object 読み出し、snapshot の確定、unsupported file type、
-  diff 収集 timeout、
+  diff 収集 timeout、32 MiB snapshot input 上限、
   500 files/metadata 出力上限、metadata-only response 上限の超過、または
   diff engine の実行に失敗した
 
@@ -727,6 +745,7 @@ contract には含めない。
 - skip-worktree/sparse-directory entry の最終 side を immutable index から作る方法
 - current `.gitattributes` の複製と index fallback を固定する方法
 - file/symlink から directory への置換と nested repository を traversal で分ける方法
+- nested `.git` marker を command 実行なしに検証する方法
 - 非実行型の改行/encoding 変換と canonical content を再現するか fail closed に
   するかの選択
 - request-private temporary directory を全終了経路で削除する方法
