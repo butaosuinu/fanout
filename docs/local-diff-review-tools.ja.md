@@ -325,8 +325,18 @@ request-private な `--no-index` diff engine では `GIT_DIR` と `GIT_WORK_TREE
 設定しない。
 `git --no-pager` と `-c core.fsmonitor=false` を使い、pager と fsmonitor を
 起動しない。
-`HOME` と `XDG_CONFIG_HOME` は server 所有の空 directory に向け、global
-config と global attributes を読ませない。
+`HOME` と `XDG_CONFIG_HOME` は server 所有の空 directory に向け、
+repository-facing Git command に live global config と global attributes を
+読ませない。
+server 起動時に user-scoped global config の relevant key を server 所有の
+immutable snapshot に固定する。
+対象は `core.autocrlf`、`core.eol`、`core.fileMode`、`core.symlinks`、
+`core.ignoreCase`、`core.excludesFile` とする。
+global config source を安全に確定または parse できない場合と、
+`include`/`includeIf` がある場合は 502 とし、include 先を開かない。
+global の `core.excludesFile` は参照先を no-follow、256 KiB 上限で同じ snapshot に
+複製し、安全に複製できなければ 502 にする。
+server 起動後は live global config と live excludes file を再読込しない。
 common config と worktree config は raw file として no-follow で検査する。
 repo-local または worktree-local の `core.attributesFile`、
 `core.excludesFile`、`core.worktree` と、外部 config を読める
@@ -351,8 +361,12 @@ symlink をたどらない。
 各 path component は worktree root の directory file descriptor から
 `O_NOFOLLOW` でたどり、root 外へ出る path を拒否する。
 target entry は regular file、symlink、gitlink だけを許可する。
-gitlink は worktree を開かず commit pointer だけを使い、FIFO、socket、device、
-gitlink 以外の directory は content を読む前に 502 にする。
+worktree に entry がない gitlink は複製 index の commit pointer を最終 side に
+使う。
+gitlink path に directory がある場合は nested worktree を開かず 502 にする。
+これにより、unstaged の submodule `HEAD` 変更を index pointer だけで差分なしに
+しない。
+FIFO、socket、device、gitlink 以外の directory は content を読む前に 502 にする。
 regular file は `O_NONBLOCK|O_NOFOLLOW` を付けて `openat` し、直後の `fstat` で
 regular file のままであることと `lstat` の device、inode、mode が一致することを
 確認する。
@@ -365,13 +379,23 @@ candidate path は merge-base entry、複製した index entry、index stat と 
 index stat と一致した tracked path は clean とみなし、racy な stat は changed
 として扱う。
 merge-base と index は mode と object ID で比較する。
+manifest の logical mode は immutable config snapshot の effective value に従う。
+`core.fileMode=false` では tracked regular file の executable bit の差を index
+side に正規化し、mode-only change にしない。
+`core.symlinks=false` では index mode 120000 の symlink を表す worktree regular
+file を logical mode 120000 とし、その raw content を link target として扱う。
+安全に正規化できない entry は 502 にする。
+`core.ignoreCase=true` では untracked traversal path を index path set と
+Git-compatible に case-fold 比較し、一致する path を untracked として加えない。
+case-fold 後に複数の path が衝突する場合は 502 にする。
 複製した index に skip-worktree または sparse-directory entry がある場合、
 worktree に path がないことを削除として扱わない。
 immutable index の content を最終 side に使うか、安全に判定できなければ 502 に
 する。
 選択は #577/#578 に委譲する。
-worktree 内の `.gitignore` と verified common dir の `info/exclude` は no-follow と
-256 KiB 上限で private snapshot に複製する。
+server 起動時に複製した global excludes、worktree 内の `.gitignore`、
+verified common dir の `info/exclude` は Git の precedence で適用する。
+後者 2 source は no-follow と 256 KiB 上限で private snapshot に複製する。
 実装は immutable な ignore source で directory traversal を prune し、ignored
 path を列挙結果へ出さず、metadata 出力上限と対象 file 数に含めない。
 prune の実装方式は #577/#578 に委譲する。
@@ -407,8 +431,9 @@ attribute の判定は command 名を得るだけで、driver を起動しない
 pair と logical path だけを受け取る。
 この構造により、preflight 後に live worktree や `.gitattributes` が変わっても
 filter command は起動しない。
-同じ preflight で `core.autocrlf`、`core.eol` と、候補 path の `text`、`eol`、
-`working-tree-encoding`、`ident` attribute も immutable input から評価する。
+同じ preflight で、global、common、worktree の precedence を反映した
+`core.autocrlf`、`core.eol` と、候補 path の `text`、`eol`、
+`working-tree-encoding`、`ident` attribute を immutable input から評価する。
 raw byte pair と通常の Git diff の内容が異なる変換は、外部 command を起動せず
 両 side に再現するか、502 にする。
 変換を無視した raw byte pair を成功 response に使ってはならない。
@@ -442,8 +467,9 @@ patch は binary でない path ごとに repository-relative path の byte 順�
 完全なファイルブロックを連結する。
 symlink は mode 120000 の link 自体、gitlink は commit pointer だけを対象とし、
 どちらも参照先の file や nested worktree を読まない。
-submodule worktree の untracked/modified content は manifest に入れず、
-superproject が記録する gitlink commit の変更だけを表示する。
+未初期化の submodule は superproject index の gitlink commit だけを使う。
+初期化済みの submodule は nested `HEAD` や content を無視して成功させず、
+前述の 502 にする。
 バイナリと、いずれかの side が 256 KiB(262,144 bytes)を超える tracked または
 untracked file は `files` に含めるが diff engine へ渡さない。
 `omittedReason` は `binary` または `tooLarge` とする。
@@ -509,9 +535,10 @@ review 対象が patch に揃っていないことを警告する。
 10 秒、500 files、10 MiB、1 MiB、256 KiB は初期値である。
 #578 の実装で調整する場合は同じ PR で本書、handler test、MSW fixture を更新し、
 実装と wire contract を一致させる。
-同じ test で、dirty submodule は無視して gitlink 変更を含めること、filter
-command を一度も起動しないこと、非 UTF-8 path は 502、非 UTF-8 content は
-`binary` になることを固定する。
+同じ test で、未初期化の submodule は gitlink 変更を含め、初期化済みの
+submodule は nested `HEAD` の変更有無にかかわらず 502 になることを固定する。
+filter command を一度も起動しないこと、非 UTF-8 path は 502、非 UTF-8 content は
+`binary` になることも固定する。
 preflight 後に live worktree と `.gitattributes` を変更しても filter command を
 起動しないこと、256 KiB を超える tracked file も `tooLarge` になることを
 同じ test で確認する。
@@ -541,6 +568,14 @@ skip-worktree と sparse-directory entry は削除として返さず、安全に
 決められない場合は 502 になることを確認する。
 root と nested repository の `.git` entry は候補、対象 file 数、metadata、patch の
 すべてから除外することを確認する。
+global だけに設定した `core.autocrlf` と `core.eol` も改行変換へ反映し、
+global excludes に一致する path は candidate path に含めないことを確認する。
+global config と excludes file を server 起動後に差し替えても再読込しないことを
+確認する。
+`core.fileMode=false` の chmod は差分にせず、`core.symlinks=false` の symlink
+表現は logical mode 120000 として扱うことを確認する。
+`core.ignoreCase=true` では index path と case-fold 一致する traversal path を
+untracked add にせず、衝突時は 502 になることを確認する。
 
 handler が生成する次のエラー body は `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
@@ -550,10 +585,10 @@ handler が生成する次のエラー body は `{"error":"message"}` とし、
 - `404 Not Found`: identity が snapshot の 1 行に定まらない、worktree 記録が
   ない、cleanup 済み、または同じ git common dir の worktree として検証できない
 - `502 Bad Gateway`: base/merge-base の strict 解決、filter attribute の検査、
-  config/attribute 由来の変換と sparse entry の安全な確定、lazy fetch を使わない
-  object 読み出し、snapshot の確定、unsupported file type、diff 収集 timeout、
-  500 files/metadata 出力上限、metadata-only response 上限の超過、または diff
-  engine の実行に失敗した
+  global config/excludes、config/attribute 由来の変換、mode/case の正規化、
+  sparse entry、submodule の安全な確定、lazy fetch を使わない object 読み出し、
+  snapshot の確定、unsupported file type、diff 収集 timeout、500 files/metadata
+  出力上限、metadata-only response 上限の超過、または diff engine の実行に失敗した
 
 共通 middleware が生成する token 不一致の `403 Forbidden` と GET/HEAD 以外の
 `405 Method Not Allowed` は既存どおり `text/plain` とし、上の JSON error
@@ -568,6 +603,8 @@ contract には含めない。
 
 - `GIT_INDEX_FILE` などで複製 index を live index から分離して読み出す方法
 - common/worktree config の immutable snapshot、fingerprint、Git command への固定
+- global config と global excludes の server-lifetime snapshot、fingerprint
+- `core.fileMode`、`core.symlinks`、`core.ignoreCase` を manifest に反映する方法
 - skip-worktree/sparse-directory entry の最終 side を immutable index から作る方法
 - 非実行型の改行/encoding 変換を再現するか fail closed にするかの選択
 - request-private temporary directory を全終了経路で削除する方法
