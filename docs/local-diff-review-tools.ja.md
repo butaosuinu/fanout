@@ -404,10 +404,11 @@ file を logical mode 120000 とし、その raw content を link target とし�
 `core.ignoreCase=true` では untracked traversal path を index path set と
 Git-compatible に case-fold 比較し、一致する path を untracked として加えない。
 case-fold 後に複数の path が衝突する場合は 502 にする。
-`core.precomposeUnicode=true` では traversal path を Git-compatible に
-precompose してから index path との照合、candidate identity、ignore pattern
-照合に使う。
+macOS で `core.precomposeUnicode=true` の場合だけ、traversal path を
+Git-compatible に precompose してから index path との照合、candidate identity、
+ignore pattern 照合に使う。
 precompose 後に複数の path が衝突する場合は 502 にする。
+macOS 以外ではこの config 値にかかわらず path の byte identity を維持する。
 複製した index に skip-worktree または sparse-directory entry がある場合、
 worktree に path がないことを削除として扱わない。
 immutable index の content を最終 side に使うか、安全に判定できなければ 502 に
@@ -500,14 +501,18 @@ symlink は mode 120000 の link 自体、gitlink は commit pointer だけを�
 未初期化の submodule は superproject index の gitlink commit だけを使う。
 初期化済みの submodule は nested `HEAD` や content を無視して成功させず、
 前述の 502 にする。
-バイナリと、いずれかの side が 256 KiB(262,144 bytes)を超える tracked または
-untracked file は `files` に含めるが diff engine へ渡さない。
+バイナリと、いずれかの raw side または canonical side が
+256 KiB(262,144 bytes)を超える tracked または untracked file は `files` に
+含めるが diff engine へ渡さない。
 `omittedReason` は `binary` または `tooLarge` とする。
-`tooLarge` の `additions` と `deletions` は `0` とする。
+`tooLarge` は `binary: false` とし、`additions` と `deletions` は `0` とする。
 Git object の size は content を得る前に `cat-file --batch-check`、worktree
 regular file の size は `lstat` で確認する。
 上限を超えた side は content を読まず、上限以下の regular file だけを
 private snapshot に全量保存する。
+raw side が上限以下でも、各変換の出力は 262,144 bytes + 1 で打ち切る。
+canonical side が上限を超えた時点で `tooLarge` とし、binary 判定、diff、
+additions/deletions、synthetic object ID の計算を行わない。
 attribute source が 256 KiB を超えた場合は解析せず 502 にする。
 
 repository-relative path は JSON 化の前に UTF-8 validity を検査する。
@@ -521,7 +526,7 @@ Git のエラー出力が UTF-8 として不正な場合は、byte 列を置換�
 各 subprocess で 10 秒を取り直さず、worktree 検証、private snapshot の収集と
 確定、non-Git の stat/raw read、metadata 収集、patch 生成のすべてで残り時間を
 使う。
-binary probe は 8 KiB/side、diff engine 用の regular-file read は
+binary probe は 8 KiB/side、変換出力と diff engine 用の regular-file read は
 256 KiB/side を超えない。
 deadline 到達時は process group を停止し、partial response を返さず 502 にする。
 patch 以外の stdout とすべての stderr は 10 MiB + 1 byte を検出した時点で
@@ -570,7 +575,8 @@ submodule は nested `HEAD` の変更有無にかかわらず 502 になるこ�
 filter command を一度も起動しないこと、非 UTF-8 path は 502、非 UTF-8 content は
 `binary` になることも固定する。
 preflight 後に live worktree と `.gitattributes` を変更しても filter command を
-起動しないこと、256 KiB を超える tracked file も `tooLarge` になることを
+起動しないこと、raw content が 256 KiB 以下でも変換後の canonical content が
+256 KiB を超える tracked file は binary/OID を計算せず `tooLarge` になることを
 同じ test で確認する。
 clean と判定した tracked file を収集中に変更した場合は snapshot を取り直すこと、
 partial clone の missing object で fetch または credential helper を起動せず
@@ -617,8 +623,9 @@ content から計算することを確認する。
 `core.ignoreCase=true` では index path と case-fold 一致する traversal path を
 untracked add にせず、case だけが異なる ignore pattern も適用し、衝突時は 502 に
 なることを確認する。
-`core.precomposeUnicode=true` では NFC/NFD が異なる clean path を untracked add に
-せず、precompose 後の衝突は 502 になることを確認する。
+macOS で `core.precomposeUnicode=true` の場合は NFC/NFD が異なる clean path を
+untracked add にせず、precompose 後の衝突は 502 になることを確認する。
+macOS 以外では同じ config でも path の byte identity を維持することを確認する。
 protected scope の `safe.directory` が対象 path または `*` を信頼する shared
 checkout は exact canonical path だけを Git command へ渡して処理でき、対象外の
 path は信頼しないことを確認する。
