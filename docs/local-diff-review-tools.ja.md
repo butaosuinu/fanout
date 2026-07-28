@@ -391,7 +391,12 @@ symlink をたどらない。
 target entry は regular file、symlink、gitlink だけを許可する。
 worktree に entry がない gitlink は複製 index の commit pointer を最終 side に
 使う。
-gitlink path に directory がある場合は nested worktree を開かず 502 にする。
+gitlink path が no-follow で空かつ `.git` entry なしと確認できる directory の
+場合も、未初期化 submodule として複製 index の commit pointer を最終 side に使う。
+空判定と directory の `lstat` fingerprint は manifest に記録し、snapshot 確定時に
+同じ directory file descriptor から再検証する。
+directory に `.git` を含む entry がある場合、または空と安全に確認できない場合は
+nested worktree を開かず 502 にする。
 これにより、unstaged の submodule `HEAD` 変更を index pointer だけで差分なしに
 しない。
 merge-base で regular file か symlink だった path が worktree で directory の
@@ -604,6 +609,8 @@ review 対象が patch に揃っていないことを警告する。
 実装と wire contract を一致させる。
 同じ test で、未初期化の submodule は gitlink 変更を含め、初期化済みの
 submodule は nested `HEAD` の変更有無にかかわらず 502 になることを固定する。
+未初期化 submodule の path が欠落または空 directory の場合は index pointer を
+使い、空 directory に entry または `.git` marker が現れた場合は 502 にする。
 filter command を一度も起動しないこと、非 UTF-8 path は 502、非 UTF-8 content は
 `binary` になることも固定する。
 preflight 後に live worktree と `.gitattributes` を変更しても filter command を
