@@ -507,7 +507,7 @@ raw byte pair と通常の Git diff の内容が異なる変換は、外部 comm
 attribute と config による content 変換は logical mode が regular file の side
 だけに適用する。
 mode 120000 は merge-base blob または `readlinkat` の raw target、mode 160000 は
-commit pointer を canonical content とし、filter、改行、encoding、`ident` 変換を
+commit pointer を content identity とし、filter、改行、encoding、`ident` 変換を
 適用しない。
 変換後の byte pair を canonical content とし、diff engine、binary 判定、
 additions/deletions、synthetic object ID の共通入力にする。
@@ -528,6 +528,9 @@ backend は logical path から `diff --git`、`---`、`+++` header を組み立
 path を C-quote する。
 mode と object ID は manifest から `old mode`、`new mode`、
 `new file mode`、`deleted file mode`、`index` header に反映する。
+gitlink の object ID は commit pointer を使い、patch hunk の各 side は
+`Subproject commit <40-hex-oid>\n` という標準 pseudo-content から組み立てる。
+bare SHA を request-private `--no-index` の入力にしない。
 worktree canonical content の object ID は Git blob と同じ SHA-1 で計算し、
 request-private `--no-index` が出力した `index` header を信用しない。
 additions と deletions は同じ canonical byte pair の hunk から数え、repository-wide
@@ -538,9 +541,12 @@ path の列挙結果は NUL 区切りで解析する。
 repository-relative path は snapshot manifest から取得し、patch header の
 C-quoted 文字列を path 復元に使わない。
 untracked symlink は mode 120000 の link 自体を対象とし、link 先を読まない。
-binary 判定は Git attributes に任せず、各 side の canonical content の先頭
-8000 bytes だけを読む。
-その範囲に NUL byte がある file を binary とする。
+regular-file path の `diff` attribute は immutable source から binary probe より
+先に評価する。
+unset の `-diff` は binary、値なしで set された `diff` は text とし、
+`diff=<driver>` は driver を起動せず 502 にする。
+`diff` が unspecified の場合だけ、各 side の canonical content の先頭
+8000 bytes に NUL byte があるかで binary を判定する。
 patch は binary でない path ごとに repository-relative path の byte 順で生成し、
 完全なファイルブロックを連結する。
 symlink は mode 120000 の link 自体、gitlink は commit pointer だけを対象とし、
@@ -549,8 +555,14 @@ symlink は mode 120000 の link 自体、gitlink は commit pointer だけを�
 初期化済みの submodule は nested `HEAD` や content を無視して成功させず、
 前述の 502 にする。
 バイナリと、いずれかの raw side または canonical side が
-256 KiB(262,144 bytes)を超える tracked または untracked file は `files` に
-含めるが diff engine へ渡さない。
+256 KiB(262,144 bytes)を超える changed file は `files` に含めるが diff engine へ
+渡さない。
+untracked file、削除、mode change、または複製 index と一致する stat から
+merge-base と最終 side の差を content 読み出しなしに確定できる tracked file だけを
+`tooLarge` として成功 response に含める。
+tracked regular file の stat が複製 index と一致しないか racy で、上限内で
+content identity を確認できない場合は、stat-only candidate を変更として返さず
+502 にする。
 `omittedReason` は `binary` または `tooLarge` とする。
 `tooLarge` は `binary: false` とし、`additions` と `deletions` は `0` とする。
 Git object の size は content を得る前に `cat-file --batch-check`、worktree
@@ -703,6 +715,13 @@ worktree side の synthetic object ID と additions/deletions は同じ canonica
 content から計算することを確認する。
 binary probe は 0-origin offset 7999 の NUL を binary、offset 8000 の NUL を
 text と判定することを確認する。
+`-diff` は NUL のない regular file も binary、値なしの `diff` は NUL のある
+regular file も text とし、`diff=<driver>` は driver を起動せず 502 になることを
+確認する。
+tracked file が 256 KiB を超え、stat だけが複製 index と異なる場合は、
+変更と確定できないまま `tooLarge` にせず 502 になることを確認する。
+gitlink patch は bare SHA ではなく
+`Subproject commit <40-hex-oid>` の削除・追加 hunk を返すことを確認する。
 `core.fileMode=false` の chmod は差分にせず、`core.symlinks=false` の symlink
 表現は logical mode 120000 として扱うことを確認する。
 `core.ignoreCase=true` では index path と case-fold 一致する traversal path を
@@ -727,7 +746,7 @@ handler が生成する次のエラー body は `{"error":"message"}` とし、
   排他指定や worktree-local 行の `source` 必須条件を満たさない
 - `404 Not Found`: identity が snapshot の 1 行に定まらない、worktree 記録が
   ない、cleanup 済み、または同じ git common dir の worktree として検証できない
-- `502 Bad Gateway`: base/merge-base の strict 解決、filter attribute の検査、
+- `502 Bad Gateway`: base/merge-base の strict 解決、filter/diff attribute の検査、
   system/global config/excludes/attributes、config/attribute 由来の変換、
   mode/case/path の正規化、`safe.directory` の限定、split/sparse index、
   未解決 conflict、tracked subtree と重なる nested repository、submodule、
@@ -762,6 +781,7 @@ contract には含めない。
 - current `.gitattributes` の複製と index fallback を固定する方法
 - file/symlink から directory への置換と nested repository を traversal で分ける方法
 - nested `.git` marker を command 実行なしに検証する方法
+- `diff` attribute の binary override と gitlink pseudo-content を生成する方法
 - 非実行型の改行/encoding 変換と canonical content を再現するか fail closed に
   するかの選択
 - request-private temporary directory を全終了経路で削除する方法
