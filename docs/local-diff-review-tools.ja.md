@@ -309,6 +309,11 @@ common dir の `info/grafts` は存在すれば 502 とし、開かない。
 shallow file は no-follow で snapshot に複製し、開始時と確定時の
 device、inode、digest を一致させる。
 存在しない場合も absence を記録し、途中で作成されたら不一致とする。
+ancestry を読む Git command は request-private な grafts absence と shallow
+snapshot だけを使い、live common dir の `info/grafts` と shallow file を
+参照しない。
+shallow file が存在しない場合も immutable な空の shallow input を使う。
+この分離を安全に構成できない場合は merge-base 計算前に 502 とする。
 後述する changed-path の再取得と合わせて、同じ request で取り直す回数は
 1 回までとし、再び変化した場合は 502 にする。
 
@@ -364,6 +369,11 @@ repository object format は同じ immutable config snapshot に固定する。
 backend は object database に触れる前に、Git が `GIT_NO_LAZY_FETCH` を
 サポートする version であることを確認する。
 未対応 version と missing object は remote fetch を試さず 502 にする。
+strict ref 解決、merge-base、tree 列挙、content 読み出しで使う commit、tree、
+blob は、Git object header と content から SHA-1 を再計算して期待 object ID と
+一致させる。
+不一致 object の内容と、それをたどった Git command の結果は使わず 502 にする。
+object traversal を検証済み immutable input に固定できない場合も 502 にする。
 
 request ごとに mode `0700` の private snapshot directory を server の
 temporary root に作る。
@@ -384,7 +394,14 @@ worktree に entry がない gitlink は複製 index の commit pointer を最�
 gitlink path に directory がある場合は nested worktree を開かず 502 にする。
 これにより、unstaged の submodule `HEAD` 変更を index pointer だけで差分なしに
 しない。
-FIFO、socket、device、gitlink 以外の directory は content を読む前に 502 にする。
+merge-base で regular file か symlink だった path が worktree で directory の
+場合は、merge-base entry の削除と standard ignore 適用後の配下 untracked file の
+追加に分ける。
+複製 index だけに同名 entry がある場合は parent path の削除を生成せず、配下の
+最終 file だけを追加候補にする。
+directory 自体は content source、candidate、`files` に含めない。
+安全に分解できない directory と FIFO、socket、device は content を読む前に
+502 にする。
 regular file は `O_NONBLOCK|O_NOFOLLOW` を付けて `openat` し、直後の `fstat` で
 regular file のままであることと `lstat` の device、inode、mode が一致することを
 確認する。
@@ -424,8 +441,11 @@ path を列挙結果へ出さず、metadata 出力上限と対象 file 数に含
 `core.ignoreCase=true` では同じ Git-compatible な case-fold をすべての ignore
 source の pattern 照合にも適用する。
 prune の実装方式は #577/#578 に委譲する。
-検証済み worktree root と traversal 中の各 directory にある `.git` entry は
-開かずに prune し、candidate path、対象 file 数、metadata、patch に含めない。
+検証済み worktree root の `.git` entry は entry 自体だけを開かずに prune する。
+descendant directory に `.git` entry がある場合は、同じ directory の他 entry を
+収集する前に enclosing directory 全体を prune する。
+その directory と全 descendant は candidate path、対象 file 数、metadata、
+patch に含めない。
 `git add -N` を含む index/worktree 変更コマンドは呼ばない。
 
 snapshot manifest には各 side の logical path、mode、size、object ID または
@@ -447,10 +467,11 @@ canonical content を比較する。
 確定後は live worktree、live index、repository attributes を patch または
 numstat の入力に使わない。
 
-server 起動時に複製した system/global attributes、merge-base tree、複製した index、
-private snapshot の worktree attributes、収集時に複製した
-`.git/info/attributes` の各 source を Git の precedence で適用し、候補 path の
-`filter` attribute を preflight する。
+server 起動時に複製した system/global attributes、current worktree の
+`.gitattributes`、収集時に複製した `.git/info/attributes` の各 source を Git の
+precedence で適用し、候補 path の `filter` attribute を preflight する。
+current worktree に必要な `.gitattributes` がない場合だけ複製 index の同じ path
+へ fallback し、merge-base tree の attribute source は適用しない。
 1 source でも設定されていたら、clean/process filter の command 設定有無に
 かかわらず 502 へ fail closed する。
 attribute の判定は command 名を得るだけで、driver を起動しない。
@@ -535,8 +556,12 @@ patch 以外の stdout とすべての stderr は 10 MiB + 1 byte を検出し�
 process group を停止して 502 にし、buffer も 10 MiB + 1 byte を超えない。
 
 tracked と untracked を合わせた対象数は 500 files を上限とする。
-metadata 出力は stream で NUL 区切りを数え、501 file を検出した時点で Git を
-停止して 502 にする。
+merge-base tree と index の raw metadata entry 数にはこの上限を適用しない。
+raw metadata は共有 deadline と #577/#578 で決める内部 byte 上限の範囲で最後まで
+join する。
+ignore、nested repository の prune、mode と canonical content の比較を終え、
+成功 response の `files` に残る変更 path が 501 件になった時点で 502 にする。
+上限超過で canonical content を作らない `tooLarge` も変更 path として数える。
 成功 response の `files` は必ず対象全件を含む。
 
 patch の収集上限は 10 MiB(10,485,760 bytes)とする。
@@ -583,6 +608,8 @@ preflight 後に live worktree と `.gitattributes` を変更しても filter co
 clean と判定した tracked file を収集中に変更した場合は snapshot を取り直すこと、
 partial clone の missing object で fetch または credential helper を起動せず
 502 にすることも固定する。
+commit、tree、blob の content と期待 object ID が一致しない場合は 502 となり、
+不一致 content を patch に使わないことを確認する。
 FIFO、socket、device は blocking read の前に 502 とし、JSON escape と 500 files
 の metadata を含む成功 body が 1 MiB を超えないことを確認する。
 snapshot 収集中の `HEAD`/base ref 変更と per-worktree gitdir の差し替えを
@@ -593,11 +620,16 @@ handler は 200 と patch を返すことを確認する。
 repo-local `core.excludesFile` と `core.worktree` は 502 にし、
 `info/exclude` の変更は snapshot を取り直すことを確認する。
 replace ref は無視し、legacy graft は 502、shallow boundary の変更は snapshot の
-取り直しになることも固定する。
+取り直しになること、ancestry command は live grafts/shallow を読まないことも
+固定する。
 base=`A`、index=`B`、worktree=`A` と、staged add 後に worktree から削除した
 path は最終変更なしとして `files` に含めないことを確認する。
+tracked regular file または symlink を同名 directory と配下の untracked file に
+置き換えた場合は、旧 path の削除と新規 file の追加に分けることを確認する。
 standard ignore を適用しない raw path 集合が 10 MiB を超える worktree でも、
 ignore 後の対象が上限内なら 200 と対象 file だけを返すことを確認する。
+tracked entry が 500 件を超えても最終変更が 500 files 以下なら 200 とし、
+最終変更 path が 501 件なら 502 になることを確認する。
 `collectionLimit` の file は統計が `null` となり、1 MiB response 上限にも
 該当する場合は `omittedReason: "collectionLimit"` を保持することを確認する。
 config snapshot の確定後に live config を差し替えても Git command が再読込しない
@@ -605,7 +637,8 @@ config snapshot の確定後に live config を差し替えても Git command �
 skip-worktree と sparse-directory entry は削除として返さず、安全に最終 side を
 決められない場合は 502 になることを確認する。
 root と nested repository の `.git` entry は候補、対象 file 数、metadata、patch の
-すべてから除外することを確認する。
+すべてから除外し、nested repository は enclosing directory 全体を prune することを
+確認する。
 system または global だけに設定した `core.autocrlf` と `core.eol` も改行変換へ
 反映し、system/global excludes に一致する path は candidate path に含めないことを
 確認する。
@@ -614,6 +647,8 @@ system/global config と excludes file を server 起動後に差し替えても
 system/global attributes だけに設定した `filter` は command を起動せず 502 とし、
 `text`、legacy `crlf`、`eol`、`working-tree-encoding`、`ident` も変換または
 502 になることを確認する。
+merge-base にだけ残る `.gitattributes` は current worktree の判定へ混ぜず、
+current worktree で欠落する source だけ複製 index へ fallback することを確認する。
 legacy `crlf` による改行正規化を適用し、raw content の差だけで全行差分にしない
 ことを確認する。
 `working-tree-encoding` で UTF-16 から変換できる file は raw NUL byte を理由に
@@ -648,6 +683,7 @@ handler が生成する次のエラー body は `{"error":"message"}` とし、
   system/global config/excludes/attributes、config/attribute 由来の変換、
   mode/case/path の正規化、`safe.directory` の限定、split/sparse index、
   未解決 conflict、submodule、object format の安全な確定、
+  object ID と content の不一致、live grafts/shallow を使わない ancestry、
   lazy fetch を使わない object 読み出し、snapshot の確定、unsupported file type、
   diff 収集 timeout、
   500 files/metadata 出力上限、metadata-only response 上限の超過、または
@@ -667,11 +703,15 @@ contract には含めない。
 - `GIT_INDEX_FILE` などで複製 index を live index から分離して読み出す方法
 - common/worktree config の immutable snapshot、fingerprint、Git command への固定
 - system/global config、excludes、attributes の server-lifetime snapshot、fingerprint
+- ancestry command を private grafts/shallow input と検証済み object view に固定する方法
+- commit/tree/blob content の object ID を再検証する方法
 - protected scope の `safe.directory` を exact canonical path に限定して渡す方法
 - `core.fileMode`、`core.symlinks`、`core.ignoreCase`、
   `core.precomposeUnicode` を manifest と path 照合へ反映する方法
 - unmerged entry、split-index extension、repository object format の検出方法
 - skip-worktree/sparse-directory entry の最終 side を immutable index から作る方法
+- current `.gitattributes` の複製と index fallback を固定する方法
+- file/symlink から directory への置換と nested repository を traversal で分ける方法
 - 非実行型の改行/encoding 変換と canonical content を再現するか fail closed に
   するかの選択
 - request-private temporary directory を全終了経路で削除する方法
