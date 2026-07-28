@@ -425,7 +425,8 @@ index stat と一致した tracked path は clean とみなし、racy な stat �
 merge-base と index は mode と object ID で比較する。
 manifest の logical mode は immutable config snapshot の effective value に従う。
 `core.fileMode=false` では tracked regular file の executable bit の差を index
-side に正規化し、mode-only change にしない。
+side に正規化して mode-only change にせず、untracked regular file の logical
+mode も 100644 にする。
 `core.symlinks=false` では index mode 120000 の symlink を表す worktree regular
 file を logical mode 120000 とし、その raw content を link target として扱う。
 安全に正規化できない entry は 502 にする。
@@ -491,6 +492,8 @@ server 起動時に複製した system/global attributes、current worktree の
 precedence で適用し、候補 path の `filter` attribute を preflight する。
 current worktree に必要な `.gitattributes` がない場合だけ複製 index の同じ path
 へ fallback し、merge-base tree の attribute source は適用しない。
+`core.ignoreCase=true` では同じ Git-compatible な case-fold をすべての
+attribute source の pattern 照合にも適用する。
 regular-file side で 1 source でも設定されていたら、clean/process filter の
 command 設定有無にかかわらず 502 へ fail closed する。
 attribute の判定は command 名を得るだけで、driver を起動しない。
@@ -528,6 +531,11 @@ backend は logical path から `diff --git`、`---`、`+++` header を組み立
 path を C-quote する。
 mode と object ID は manifest から `old mode`、`new mode`、
 `new file mode`、`deleted file mode`、`index` header に反映する。
+regular file、symlink、gitlink の file type bits が変わる path は、単一 block の
+`old mode`/`new mode` にせず、同じ path の deleted-file block と new-file block
+に分ける。
+その path は `files` では 1 件とし、patch は 2 block を削除、追加の順に連結して、
+`additions` と `deletions` は両 block の合計とする。
 gitlink の object ID は commit pointer を使い、patch hunk の各 side は
 `Subproject commit <40-hex-oid>\n` という標準 pseudo-content から組み立てる。
 bare SHA を request-private `--no-index` の入力にしない。
@@ -722,11 +730,19 @@ tracked file が 256 KiB を超え、stat だけが複製 index と異なる場�
 変更と確定できないまま `tooLarge` にせず 502 になることを確認する。
 gitlink patch は bare SHA ではなく
 `Subproject commit <40-hex-oid>` の削除・追加 hunk を返すことを確認する。
-`core.fileMode=false` の chmod は差分にせず、`core.symlinks=false` の symlink
-表現は logical mode 120000 として扱うことを確認する。
+regular file、symlink、gitlink 間の file type change は同じ path の
+deleted-file block と new-file block に分かれ、`files` は 1 件、統計は両 block の
+合計になることを確認する。
+`core.fileMode=false` の chmod は差分にせず、executable bit のある untracked
+regular file は logical mode 100644 とすることを確認する。
+`core.symlinks=false` の symlink 表現は logical mode 120000 として扱うことを
+確認する。
 `core.ignoreCase=true` では index path と case-fold 一致する traversal path を
 untracked add にせず、case だけが異なる ignore pattern も適用し、衝突時は 502 に
 なることを確認する。
+同じ case-fold を system/global/current/index fallback の attribute pattern
+照合にも適用し、case だけが異なる `diff`、`text`、`working-tree-encoding`
+などを見落とさないことを確認する。
 macOS で `core.precomposeUnicode=true` の場合は NFC/NFD が異なる clean path を
 untracked add にせず、precompose 後の衝突は 502 になることを確認する。
 macOS 以外では同じ config でも path の byte identity を維持することを確認する。
@@ -778,10 +794,12 @@ contract には含めない。
   `core.precomposeUnicode` を manifest と path 照合へ反映する方法
 - unmerged entry、split-index extension、repository object format の検出方法
 - skip-worktree/sparse-directory entry の最終 side を immutable index から作る方法
-- current `.gitattributes` の複製と index fallback を固定する方法
+- current `.gitattributes` の複製、index fallback、`core.ignoreCase` の pattern
+  照合を固定する方法
 - file/symlink から directory への置換と nested repository を traversal で分ける方法
 - nested `.git` marker を command 実行なしに検証する方法
-- `diff` attribute の binary override と gitlink pseudo-content を生成する方法
+- `diff` attribute の binary override、file type change の 2 block 分解、
+  gitlink pseudo-content を生成する方法
 - 非実行型の改行/encoding 変換と canonical content を再現するか fail closed に
   するかの選択
 - request-private temporary directory を全終了経路で削除する方法
