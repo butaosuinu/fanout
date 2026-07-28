@@ -331,7 +331,8 @@ attributes を読ませない。
 server 起動時に system-scoped config と user-scoped global config の relevant key を
 server 所有の immutable snapshot に固定する。
 対象は `core.autocrlf`、`core.eol`、`core.fileMode`、`core.symlinks`、
-`core.ignoreCase`、`core.excludesFile`、`core.attributesFile` とする。
+`core.ignoreCase`、`core.precomposeUnicode`、`core.excludesFile`、
+`core.attributesFile`、`safe.directory` とする。
 system/global config source を安全に確定または parse できない場合と、
 `include`/`includeIf` がある場合は 502 とし、include 先を開かない。
 system/global の `core.excludesFile` は参照先を no-follow、256 KiB 上限で同じ
@@ -340,6 +341,13 @@ Git が system/global attribute source として解決する file は no-follow�
 256 KiB 上限で同じ snapshot に複製し、安全に確定または複製できなければ 502 にする。
 server 起動後は live system/global config、excludes file、attribute source を
 再読込しない。
+protected scope の `safe.directory` は複数値を保持して評価する。
+snapshot が `*` または対象 path を信頼していた場合も、repository-facing Git
+command へ渡す値は検証済み canonical project root と canonical worktree path
+だけに置き換え、`*` と対象外 path は渡さない。
+最初の repository-facing Git command に必要な project root は server が保持する
+dashboard の project identity から確定し、request の path は使わない。
+snapshot が対象 path を信頼していない場合は Git の ownership 拒否を維持する。
 common config と worktree config は raw file として no-follow で検査する。
 repo-local または worktree-local の `core.attributesFile`、
 `core.excludesFile`、`core.worktree` と、外部 config を読める
@@ -396,6 +404,10 @@ file を logical mode 120000 とし、その raw content を link target とし�
 `core.ignoreCase=true` では untracked traversal path を index path set と
 Git-compatible に case-fold 比較し、一致する path を untracked として加えない。
 case-fold 後に複数の path が衝突する場合は 502 にする。
+`core.precomposeUnicode=true` では traversal path を Git-compatible に
+precompose してから index path との照合、candidate identity、ignore pattern
+照合に使う。
+precompose 後に複数の path が衝突する場合は 502 にする。
 複製した index に skip-worktree または sparse-directory entry がある場合、
 worktree に path がないことを削除として扱わない。
 immutable index の content を最終 side に使うか、安全に判定できなければ 502 に
@@ -406,6 +418,8 @@ verified common dir の `info/exclude` は Git の precedence で適用する。
 後者 2 source は no-follow と 256 KiB 上限で private snapshot に複製する。
 実装は immutable な ignore source で directory traversal を prune し、ignored
 path を列挙結果へ出さず、metadata 出力上限と対象 file 数に含めない。
+`core.ignoreCase=true` では同じ Git-compatible な case-fold をすべての ignore
+source の pattern 照合にも適用する。
 prune の実装方式は #577/#578 に委譲する。
 検証済み worktree root と traversal 中の各 directory にある `.git` entry は
 開かずに prune し、candidate path、対象 file 数、metadata、patch に含めない。
@@ -424,8 +438,9 @@ fingerprint を開始時と比較する。
 取り直す。
 再び変化した場合は 502 にする。
 一致した時点で snapshot を確定して `capturedAt` を記録する。
-確定した merge-base side と最終 worktree side の mode と raw content が同じ
-candidate path は、`files`、500 files 上限、patch 収集から除外する。
+確定した merge-base side と最終 worktree side は後述の変換後に mode と
+canonical content を比較する。
+両方が同じ candidate path は `files`、500 files 上限、patch 収集から除外する。
 確定後は live worktree、live index、repository attributes を patch または
 numstat の入力に使わない。
 
@@ -436,16 +451,20 @@ private snapshot の worktree attributes、収集時に複製した
 1 source でも設定されていたら、clean/process filter の command 設定有無に
 かかわらず 502 へ fail closed する。
 attribute の判定は command 名を得るだけで、driver を起動しない。
-実際の diff engine は attributes を参照せず、private snapshot の raw byte
-pair と logical path だけを受け取る。
+実際の diff engine は attributes を参照せず、private snapshot から後述の変換を
+適用した canonical byte pair と logical path だけを受け取る。
 この構造により、preflight 後に live worktree や `.gitattributes` が変わっても
 filter command は起動しない。
 同じ preflight で、system、global、common、worktree の precedence を反映した
-`core.autocrlf`、`core.eol` と、候補 path の `text`、`eol`、
+`core.autocrlf`、`core.eol` と、候補 path の `text`、legacy `crlf`、`eol`、
 `working-tree-encoding`、`ident` attribute を immutable input から評価する。
+legacy `crlf` は Git-compatible な `text`/`eol` の意味へ正規化する。
 raw byte pair と通常の Git diff の内容が異なる変換は、外部 command を起動せず
-両 side に再現するか、502 にする。
-変換を無視した raw byte pair を成功 response に使ってはならない。
+各 side に Git と同じ方向で再現するか、502 にする。
+変換後の byte pair を canonical content とし、diff engine、binary 判定、
+additions/deletions、synthetic object ID の共通入力にする。
+変換を安全に再現できない場合は binary 判定と object ID 計算の前に 502 とし、
+raw byte pair を成功 response に使わない。
 再現と fail closed の選択は #577/#578 に委譲する。
 
 tracked と untracked の patch は確定した snapshot から file ごとに生成する。
@@ -461,9 +480,9 @@ backend は logical path から `diff --git`、`---`、`+++` header を組み立
 path を C-quote する。
 mode と object ID は manifest から `old mode`、`new mode`、
 `new file mode`、`deleted file mode`、`index` header に反映する。
-worktree raw content の object ID は Git blob と同じ SHA-1 で計算し、
+worktree canonical content の object ID は Git blob と同じ SHA-1 で計算し、
 request-private `--no-index` が出力した `index` header を信用しない。
-additions と deletions は同じ raw byte pair の hunk から数え、repository-wide
+additions と deletions は同じ canonical byte pair の hunk から数え、repository-wide
 の `git diff --numstat` は呼ばない。
 
 path の列挙結果は NUL 区切りで解析する。
@@ -471,8 +490,8 @@ path の列挙結果は NUL 区切りで解析する。
 repository-relative path は snapshot manifest から取得し、patch header の
 C-quoted 文字列を path 復元に使わない。
 untracked symlink は mode 120000 の link 自体を対象とし、link 先を読まない。
-binary 判定は Git attributes に任せず、各 side の raw content を filter なしで
-先頭 8 KiB だけ読む。
+binary 判定は Git attributes に任せず、各 side の canonical content の先頭
+8 KiB だけを読む。
 その範囲に NUL byte がある file を binary とする。
 patch は binary でない path ごとに repository-relative path の byte 順で生成し、
 完全なファイルブロックを連結する。
@@ -585,12 +604,24 @@ system または global だけに設定した `core.autocrlf` と `core.eol` も
 system/global config と excludes file を server 起動後に差し替えても再読込しない
 ことを確認する。
 system/global attributes だけに設定した `filter` は command を起動せず 502 とし、
-`text`、`eol`、`working-tree-encoding`、`ident` も変換または 502 になることを
-確認する。
+`text`、legacy `crlf`、`eol`、`working-tree-encoding`、`ident` も変換または
+502 になることを確認する。
+legacy `crlf` による改行正規化を適用し、raw content の差だけで全行差分にしない
+ことを確認する。
+`working-tree-encoding` で UTF-16 から変換できる file は raw NUL byte を理由に
+binary とせず、canonical content の text hunk を返すことを確認する。
+worktree side の synthetic object ID と additions/deletions は同じ canonical
+content から計算することを確認する。
 `core.fileMode=false` の chmod は差分にせず、`core.symlinks=false` の symlink
 表現は logical mode 120000 として扱うことを確認する。
 `core.ignoreCase=true` では index path と case-fold 一致する traversal path を
-untracked add にせず、衝突時は 502 になることを確認する。
+untracked add にせず、case だけが異なる ignore pattern も適用し、衝突時は 502 に
+なることを確認する。
+`core.precomposeUnicode=true` では NFC/NFD が異なる clean path を untracked add に
+せず、precompose 後の衝突は 502 になることを確認する。
+protected scope の `safe.directory` が対象 path または `*` を信頼する shared
+checkout は exact canonical path だけを Git command へ渡して処理でき、対象外の
+path は信頼しないことを確認する。
 split index は 502 となり、`sharedindex.<hash>` を開かないことを確認する。
 SHA-256 repository は 502 とし、SHA-1 repository の synthetic worktree side は
 Git blob と同じ 40 桁の object ID になることを確認する。
@@ -604,10 +635,11 @@ handler が生成する次のエラー body は `{"error":"message"}` とし、
   ない、cleanup 済み、または同じ git common dir の worktree として検証できない
 - `502 Bad Gateway`: base/merge-base の strict 解決、filter attribute の検査、
   system/global config/excludes/attributes、config/attribute 由来の変換、
-  mode/case の正規化、split/sparse index、submodule、object format の安全な確定、
-  lazy fetch を使わない object 読み出し、snapshot の確定、unsupported file type、
-  diff 収集 timeout、500 files/metadata 出力上限、metadata-only response 上限の
-  超過、または diff engine の実行に失敗した
+  mode/case/path の正規化、`safe.directory` の限定、split/sparse index、
+  submodule、object format の安全な確定、lazy fetch を使わない object 読み出し、
+  snapshot の確定、unsupported file type、diff 収集 timeout、
+  500 files/metadata 出力上限、metadata-only response 上限の超過、または
+  diff engine の実行に失敗した
 
 共通 middleware が生成する token 不一致の `403 Forbidden` と GET/HEAD 以外の
 `405 Method Not Allowed` は既存どおり `text/plain` とし、上の JSON error
@@ -623,10 +655,13 @@ contract には含めない。
 - `GIT_INDEX_FILE` などで複製 index を live index から分離して読み出す方法
 - common/worktree config の immutable snapshot、fingerprint、Git command への固定
 - system/global config、excludes、attributes の server-lifetime snapshot、fingerprint
-- `core.fileMode`、`core.symlinks`、`core.ignoreCase` を manifest に反映する方法
+- protected scope の `safe.directory` を exact canonical path に限定して渡す方法
+- `core.fileMode`、`core.symlinks`、`core.ignoreCase`、
+  `core.precomposeUnicode` を manifest と path 照合へ反映する方法
 - split-index extension と repository object format の検出方法
 - skip-worktree/sparse-directory entry の最終 side を immutable index から作る方法
-- 非実行型の改行/encoding 変換を再現するか fail closed にするかの選択
+- 非実行型の改行/encoding 変換と canonical content を再現するか fail closed に
+  するかの選択
 - request-private temporary directory を全終了経路で削除する方法
 - admin/metadata file の総 byte 数、source 数、file type の内部上限
 
