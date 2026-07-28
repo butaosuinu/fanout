@@ -443,8 +443,13 @@ source の pattern 照合にも適用する。
 prune の実装方式は #577/#578 に委譲する。
 検証済み worktree root の `.git` entry は entry 自体だけを開かずに prune する。
 descendant directory に `.git` entry がある場合は、同じ directory の他 entry を
-収集する前に enclosing directory 全体を prune する。
-その directory と全 descendant は candidate path、対象 file 数、metadata、
+収集する前に immutable な merge-base/index manifest と突合する。
+enclosing directory 自体または全 descendant に tracked entry がなく、tracked
+file/symlink から directory への置換でもない場合だけ、純粋な untracked nested
+repository として enclosing directory 全体を prune する。
+tracked entry または旧 path の削除が 1 件でも重なる場合は、変更を隠さず 502 に
+する。
+prune した directory と全 descendant は candidate path、対象 file 数、metadata、
 patch に含めない。
 `git add -N` を含む index/worktree 変更コマンドは呼ばない。
 
@@ -636,9 +641,11 @@ config snapshot の確定後に live config を差し替えても Git command �
 ことと、非実行型の改行/encoding 変換を無視した全行差分を返さないことを確認する。
 skip-worktree と sparse-directory entry は削除として返さず、安全に最終 side を
 決められない場合は 502 になることを確認する。
-root と nested repository の `.git` entry は候補、対象 file 数、metadata、patch の
-すべてから除外し、nested repository は enclosing directory 全体を prune することを
-確認する。
+root の `.git` entry と純粋な untracked nested repository は候補、対象 file 数、
+metadata、patch のすべてから除外し、nested repository は enclosing directory
+全体を prune することを確認する。
+tracked subtree に `.git` entry を追加した場合と、tracked file を `.git` entry の
+ある directory に置き換えた場合は、tracked 変更を隠さず 502 になることを確認する。
 system または global だけに設定した `core.autocrlf` と `core.eol` も改行変換へ
 反映し、system/global excludes に一致する path は candidate path に含めないことを
 確認する。
@@ -682,7 +689,8 @@ handler が生成する次のエラー body は `{"error":"message"}` とし、
 - `502 Bad Gateway`: base/merge-base の strict 解決、filter attribute の検査、
   system/global config/excludes/attributes、config/attribute 由来の変換、
   mode/case/path の正規化、`safe.directory` の限定、split/sparse index、
-  未解決 conflict、submodule、object format の安全な確定、
+  未解決 conflict、tracked subtree と重なる nested repository、submodule、
+  object format の安全な確定、
   object ID と content の不一致、live grafts/shallow を使わない ancestry、
   lazy fetch を使わない object 読み出し、snapshot の確定、unsupported file type、
   diff 収集 timeout、
