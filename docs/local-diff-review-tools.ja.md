@@ -326,17 +326,17 @@ request-private な `--no-index` diff engine では `GIT_DIR` と `GIT_WORK_TREE
 `git --no-pager` と `-c core.fsmonitor=false` を使い、pager と fsmonitor を
 起動しない。
 `HOME` と `XDG_CONFIG_HOME` は server 所有の空 directory に向け、
-repository-facing Git command に live global config と global attributes を
+repository-facing Git command に live system/global config と global attributes を
 読ませない。
-server 起動時に user-scoped global config の relevant key を server 所有の
-immutable snapshot に固定する。
+server 起動時に system-scoped config と user-scoped global config の relevant key を
+server 所有の immutable snapshot に固定する。
 対象は `core.autocrlf`、`core.eol`、`core.fileMode`、`core.symlinks`、
 `core.ignoreCase`、`core.excludesFile` とする。
-global config source を安全に確定または parse できない場合と、
+system/global config source を安全に確定または parse できない場合と、
 `include`/`includeIf` がある場合は 502 とし、include 先を開かない。
-global の `core.excludesFile` は参照先を no-follow、256 KiB 上限で同じ snapshot に
-複製し、安全に複製できなければ 502 にする。
-server 起動後は live global config と live excludes file を再読込しない。
+system/global の `core.excludesFile` は参照先を no-follow、256 KiB 上限で同じ
+snapshot に複製し、安全に複製できなければ 502 にする。
+server 起動後は live system/global config と live excludes file を再読込しない。
 common config と worktree config は raw file として no-follow で検査する。
 repo-local または worktree-local の `core.attributesFile`、
 `core.excludesFile`、`core.worktree` と、外部 config を読める
@@ -347,6 +347,9 @@ parse できない config も 502 にする。
 repository-facing Git command は live config を再読込せず同じ snapshot だけを
 使う。
 固定方法は #577/#578 に委譲する。
+repository object format は同じ immutable config snapshot に固定する。
+`sha1` だけを許可し、`sha256` と不明な format は object 読み出しと patch 生成の
+前に 502 にする。
 backend は object database に触れる前に、Git が `GIT_NO_LAZY_FETCH` を
 サポートする version であることを確認する。
 未対応 version と missing object は remote fetch を試さず 502 にする。
@@ -356,6 +359,8 @@ temporary root に作る。
 merge-base tree は strict に解決した commit の `ls-tree` と `cat-file`、
 index は private directory に複製した index file の `ls-files --stage -z` と
 `cat-file` から読む。
+複製した index に split-index の link extension がある場合は 502 とし、
+live `sharedindex.<hash>` を開かない。
 worktree content は `openat` と `readlinkat` で raw byte として読み、
 symlink をたどらない。
 各 path component は worktree root の directory file descriptor から
@@ -431,7 +436,7 @@ attribute の判定は command 名を得るだけで、driver を起動しない
 pair と logical path だけを受け取る。
 この構造により、preflight 後に live worktree や `.gitattributes` が変わっても
 filter command は起動しない。
-同じ preflight で、global、common、worktree の precedence を反映した
+同じ preflight で、system、global、common、worktree の precedence を反映した
 `core.autocrlf`、`core.eol` と、候補 path の `text`、`eol`、
 `working-tree-encoding`、`ident` attribute を immutable input から評価する。
 raw byte pair と通常の Git diff の内容が異なる変換は、外部 command を起動せず
@@ -452,6 +457,8 @@ backend は logical path から `diff --git`、`---`、`+++` header を組み立
 path を C-quote する。
 mode と object ID は manifest から `old mode`、`new mode`、
 `new file mode`、`deleted file mode`、`index` header に反映する。
+worktree raw content の object ID は Git blob と同じ SHA-1 で計算し、
+request-private `--no-index` が出力した `index` header を信用しない。
 additions と deletions は同じ raw byte pair の hunk から数え、repository-wide
 の `git diff --numstat` は呼ばない。
 
@@ -568,14 +575,18 @@ skip-worktree と sparse-directory entry は削除として返さず、安全に
 決められない場合は 502 になることを確認する。
 root と nested repository の `.git` entry は候補、対象 file 数、metadata、patch の
 すべてから除外することを確認する。
-global だけに設定した `core.autocrlf` と `core.eol` も改行変換へ反映し、
-global excludes に一致する path は candidate path に含めないことを確認する。
-global config と excludes file を server 起動後に差し替えても再読込しないことを
+system または global だけに設定した `core.autocrlf` と `core.eol` も改行変換へ
+反映し、system/global excludes に一致する path は candidate path に含めないことを
 確認する。
+system/global config と excludes file を server 起動後に差し替えても再読込しない
+ことを確認する。
 `core.fileMode=false` の chmod は差分にせず、`core.symlinks=false` の symlink
 表現は logical mode 120000 として扱うことを確認する。
 `core.ignoreCase=true` では index path と case-fold 一致する traversal path を
 untracked add にせず、衝突時は 502 になることを確認する。
+split index は 502 となり、`sharedindex.<hash>` を開かないことを確認する。
+SHA-256 repository は 502 とし、SHA-1 repository の synthetic worktree side は
+Git blob と同じ 40 桁の object ID になることを確認する。
 
 handler が生成する次のエラー body は `{"error":"message"}` とし、
 `application/json` と `Cache-Control: no-store` を付ける。
@@ -585,10 +596,11 @@ handler が生成する次のエラー body は `{"error":"message"}` とし、
 - `404 Not Found`: identity が snapshot の 1 行に定まらない、worktree 記録が
   ない、cleanup 済み、または同じ git common dir の worktree として検証できない
 - `502 Bad Gateway`: base/merge-base の strict 解決、filter attribute の検査、
-  global config/excludes、config/attribute 由来の変換、mode/case の正規化、
-  sparse entry、submodule の安全な確定、lazy fetch を使わない object 読み出し、
-  snapshot の確定、unsupported file type、diff 収集 timeout、500 files/metadata
-  出力上限、metadata-only response 上限の超過、または diff engine の実行に失敗した
+  system/global config/excludes、config/attribute 由来の変換、mode/case の正規化、
+  split/sparse index、submodule、object format の安全な確定、lazy fetch を使わない
+  object 読み出し、snapshot の確定、unsupported file type、diff 収集 timeout、
+  500 files/metadata 出力上限、metadata-only response 上限の超過、または diff
+  engine の実行に失敗した
 
 共通 middleware が生成する token 不一致の `403 Forbidden` と GET/HEAD 以外の
 `405 Method Not Allowed` は既存どおり `text/plain` とし、上の JSON error
@@ -603,8 +615,9 @@ contract には含めない。
 
 - `GIT_INDEX_FILE` などで複製 index を live index から分離して読み出す方法
 - common/worktree config の immutable snapshot、fingerprint、Git command への固定
-- global config と global excludes の server-lifetime snapshot、fingerprint
+- system/global config と excludes の server-lifetime snapshot、fingerprint
 - `core.fileMode`、`core.symlinks`、`core.ignoreCase` を manifest に反映する方法
+- split-index extension と repository object format の検出方法
 - skip-worktree/sparse-directory entry の最終 side を immutable index から作る方法
 - 非実行型の改行/encoding 変換を再現するか fail closed にするかの選択
 - request-private temporary directory を全終了経路で削除する方法
