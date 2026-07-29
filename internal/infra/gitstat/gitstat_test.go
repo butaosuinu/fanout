@@ -200,6 +200,11 @@ func TestRunnerWorktreePatch(t *testing.T) {
 			wantErrContains: "no-such-branch",
 		},
 		{
+			name:            "current branch is not a base",
+			baseRef:         "feature",
+			wantErrContains: "current branch",
+		},
+		{
 			name:    "untracked text file",
 			baseRef: "main",
 			prepare: func(t *testing.T, repo string) {
@@ -296,6 +301,45 @@ func TestRunnerWorktreePatch(t *testing.T) {
 	}
 }
 
+func TestRunnerWorktreePatchUsesExactTrackedPathspec(t *testing.T) {
+	repo := initPatchRepo(t)
+	if err := os.Remove(filepath.Join(repo, "tracked.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(repo, "tracked.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeGitstatFile(
+		t,
+		repo,
+		"tracked.txt/large.txt",
+		bytes.Repeat([]byte("x\n"), patchFileLimit/2+1),
+	)
+	gitTest(t, repo, "add", "-A")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 2 {
+		t.Fatalf("WorktreePatch().Files = %#v, want parent deletion and descendant addition", got.Files)
+	}
+	parent := findFileStat(t, got.Files, "tracked.txt")
+	if !parent.PatchIncluded {
+		t.Fatalf("parent FileStat = %#v, want patch included", parent)
+	}
+	child := findFileStat(t, got.Files, "tracked.txt/large.txt")
+	if child.PatchIncluded || child.OmittedReason != "tooLarge" {
+		t.Fatalf("child FileStat = %#v, want oversized patch omitted", child)
+	}
+	if blocks := strings.Count(got.Patch, "diff --git "); blocks != 1 {
+		t.Fatalf("WorktreePatch().Patch has %d file blocks, want only the parent deletion", blocks)
+	}
+	if strings.Contains(got.Patch, "tracked.txt/large.txt") {
+		t.Fatalf("WorktreePatch().Patch includes oversized descendant:\n%s", got.Patch)
+	}
+}
+
 func TestRunnerWorktreePatchOnlyCallsReadOnlyGitSubcommands(t *testing.T) {
 	repo := initPatchRepo(t)
 	writeGitstatFile(t, repo, "tracked.txt", []byte("one\nstaged\n"))
@@ -361,6 +405,7 @@ exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 		"diff":             true,
 		"ls-files":         true,
 		"ls-tree":          true,
+		"symbolic-ref":     true,
 	}
 	for subcommand := range strings.FieldsSeq(string(logged)) {
 		if !readOnly[subcommand] {
@@ -398,6 +443,17 @@ func assertFileStat(t *testing.T, got []FileStat, want FileStat) {
 	if got[0] != want {
 		t.Fatalf("WorktreePatch().Files[0] = %#v, want %#v", got[0], want)
 	}
+}
+
+func findFileStat(t *testing.T, stats []FileStat, path string) FileStat {
+	t.Helper()
+	for _, stat := range stats {
+		if stat.Path == path {
+			return stat
+		}
+	}
+	t.Fatalf("WorktreePatch().Files = %#v, want path %q", stats, path)
+	return FileStat{}
 }
 
 func TestRunnerMergeBase(t *testing.T) {

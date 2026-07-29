@@ -80,6 +80,12 @@ func (r Runner) Worktree(path, baseRef string) (Stat, error) {
 // 256 KiB remain in Files but are omitted from Patch.
 func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 	path = strings.TrimSpace(path)
+	if path == "" {
+		return Patch{}, fmt.Errorf("worktree path is empty")
+	}
+	if err := r.rejectCurrentBranchBase(path, baseRef); err != nil {
+		return Patch{}, err
+	}
 	mergeBase, err := r.MergeBase(path, baseRef)
 	if err != nil {
 		return Patch{}, err
@@ -144,10 +150,11 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 		if stat.OmittedReason == "" {
 			var out []byte
 			if file.tracked {
-				out, err = r.git(
+				out, err = r.gitExactPath(
+					stat.Path,
 					"-C", path,
 					"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
-					mergeBase, "--", stat.Path,
+					mergeBase,
 				)
 			} else {
 				var code int
@@ -170,6 +177,38 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 	}
 	result.Patch = patch.String()
 	return result, nil
+}
+
+func (r Runner) rejectCurrentBranchBase(path, baseRef string) error {
+	baseRef = strings.TrimSpace(baseRef)
+	if baseRef == "" {
+		return nil
+	}
+
+	out, code, err := r.gitExitCode("-C", path, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil {
+		if code == 1 {
+			return nil
+		}
+		return fmt.Errorf("resolve current branch: %w", err)
+	}
+	currentRef := strings.TrimSpace(string(out))
+	currentBranch := strings.TrimPrefix(currentRef, "refs/heads/")
+	if currentBranch == currentRef {
+		return fmt.Errorf("resolve current branch: unexpected ref %q", currentRef)
+	}
+
+	if baseRef == currentBranch ||
+		baseRef == "origin/"+currentBranch ||
+		baseRef == currentRef {
+		return fmt.Errorf("base ref %q is the current branch", baseRef)
+	}
+	if remoteRef, ok := strings.CutPrefix(baseRef, "refs/remotes/"); ok {
+		if _, remoteBranch, ok := strings.Cut(remoteRef, "/"); ok && remoteBranch == currentBranch {
+			return fmt.Errorf("base ref %q is the current branch", baseRef)
+		}
+	}
+	return nil
 }
 
 type patchFile struct {
@@ -459,6 +498,17 @@ func (r Runner) git(args ...string) ([]byte, error) {
 
 func (r Runner) gitExitCode(args ...string) ([]byte, int, error) {
 	return execx.OutputExitCode(r.Cwd, gitEnv(), "git", args...)
+}
+
+func (r Runner) gitExactPath(path string, args ...string) ([]byte, error) {
+	args = append(
+		args,
+		"--",
+		":(top,literal)"+path,
+		":(top,exclude,literal)"+path+"/",
+	)
+	env := append(gitEnv(), "GIT_LITERAL_PATHSPECS=0")
+	return execx.Output(r.Cwd, env, "git", args...)
 }
 
 // gitEnv returns the extra environment entries execx.Output appends to
