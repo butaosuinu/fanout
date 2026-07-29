@@ -1,7 +1,8 @@
-import { Fragment, useEffect, type CSSProperties } from "react";
+import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useDrawerWidth } from "../hooks/useDrawerWidth";
 import { usePeek } from "../hooks/usePeek";
 import { usePlan } from "../hooks/usePlan";
+import { diffQuery } from "../lib/diff";
 import { fmtCreated } from "../lib/format";
 import { issueUrl } from "../lib/github";
 import {
@@ -15,6 +16,7 @@ import {
   paneRuntimeTitle,
 } from "../lib/pane";
 import type { PaneView } from "../lib/types";
+import { DiffOverlay } from "./DiffOverlay";
 import {
   AgentStateTag,
   DirtyTag,
@@ -176,11 +178,13 @@ function CaptureDisabled({ kind, reason }: { kind: CaptureKind; reason: string }
 
 export function Drawer({
   pane,
+  parent,
   repo,
   token,
   onClose,
 }: {
   pane: PaneView;
+  parent: string;
   repo: string;
   token: string;
   onClose: () => void;
@@ -188,6 +192,11 @@ export function Drawer({
   const { width, gripProps } = useDrawerWidth();
   const runtimeBackend = paneBackend(pane);
   const captureReason = captureDisabledReason(pane);
+  /* diff オーバーレイは worktree の記録がある行だけ。pane の生死は問わない
+   * (/api/diff は state 記録から worktree を引くため、stale 行でも読める)。 */
+  const dq = diffQuery(parent, pane);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const diffBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -282,7 +291,19 @@ export function Drawer({
               <dt>branch</dt>
               <dd id="d-branch">{pane.branchName || "—"}</dd>
               <dt>diff</dt>
-              <dd id="d-diff">{pane.diffSummary || "—"}</dd>
+              <dd id="d-diff">
+                {pane.diffSummary || "—"}
+                {dq && (
+                  <button
+                    type="button"
+                    id="d-diff-open"
+                    ref={diffBtnRef}
+                    onClick={() => setDiffOpen(true)}
+                  >
+                    diff を開く
+                  </button>
+                )}
+              </dd>
               <dt>state</dt>
               <dd id="d-dirty">
                 <DirtyTag state={pane.dirtyState} unknownLabel="unknown" />
@@ -309,6 +330,17 @@ export function Drawer({
             <PeekPanel pane={pane} token={token} />
           )}
         </div>
+      )}
+      {diffOpen && dq && (
+        <DiffOverlay
+          title={`${paneLabel(pane)} ${pane.branchName || pane.slug || ""}`.trim()}
+          query={dq}
+          token={token}
+          onClose={() => {
+            setDiffOpen(false);
+            diffBtnRef.current?.focus(); // 起点のボタンへフォーカスを戻す
+          }}
+        />
       )}
     </aside>
   );

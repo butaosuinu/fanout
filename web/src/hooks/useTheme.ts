@@ -16,6 +16,15 @@ function currentTheme(): Theme {
 export function useTheme(): { theme: Theme; toggle: () => void } {
   const [theme, setTheme] = useState<Theme>(currentTheme);
 
+  /* 正は <html data-theme>。hook は複数箇所(Nav の toggle と diff オーバーレイ)
+   * で使われるため、他インスタンスの書き込みを attribute 監視で追従して全
+   * インスタンスの state を一致させる。 */
+  useEffect(() => {
+    const mo = new MutationObserver(() => setTheme(currentTheme()));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => mo.disconnect();
+  }, []);
+
   useEffect(() => {
     const mq = matchMedia("(prefers-color-scheme: dark)");
     const onChange = (e: MediaQueryListEvent) => {

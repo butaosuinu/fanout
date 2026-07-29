@@ -115,13 +115,23 @@ export function rowKey(parent: string, p: PaneView): string {
   return `${parent}#${p.issueNum}${suffix}`;
 }
 
-export function findPane(snap: Snapshot | null, key: string | null): PaneView | null {
+/* 行キーから pane と所属 session の parent を引く。parent は /api/diff の
+ * identity クエリに必要(rowKey から parent を逆パースしない — parent は
+ * Projects URL もあり得る自由文字列)。 */
+export function findPaneEntry(
+  snap: Snapshot | null,
+  key: string | null,
+): { parent: string; pane: PaneView } | null {
   if (!snap || !key) return null;
   for (const s of snap.sessions ?? []) {
     const parent = String(s.parent ?? "");
-    for (const p of s.panes ?? []) if (rowKey(parent, p) === key) return p;
+    for (const p of s.panes ?? []) if (rowKey(parent, p) === key) return { parent, pane: p };
   }
   return null;
+}
+
+export function findPane(snap: Snapshot | null, key: string | null): PaneView | null {
+  return findPaneEntry(snap, key)?.pane ?? null;
 }
 
 /* 未開始(synthetic)行の Drawer 状態説明文。キーは tmuxState。 */

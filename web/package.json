@@ -19,6 +19,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@pierre/diffs": "~1.2.12",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
