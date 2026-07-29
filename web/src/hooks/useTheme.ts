@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 export type Theme = "light" | "dark";
 
@@ -8,49 +8,56 @@ function currentTheme(): Theme {
   return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 }
 
-/* テーマの初期値は index.html の FOUC ブートストラップが first paint 前に
- * <html data-theme> へ書き込み済み — ここではそれを引き継ぐだけ。toggle は
- * localStorage に永続化し、OS テーマ変更(matchMedia)はユーザーが明示選択して
- * いない場合のみ追従する。localStorage は private mode で例外を投げるので
- * try/catch で握りつぶす。 */
-export function useTheme(): { theme: Theme; toggle: () => void } {
-  const [theme, setTheme] = useState<Theme>(currentTheme);
+/* 正は <html data-theme>。初期値は index.html の FOUC ブートストラップが
+ * first paint 前に書き込み済み。hook は複数箇所(Nav の toggle と diff
+ * オーバーレイ)で使われるため module-level store で全インスタンスを同期する。
+ * OS テーマ変更(matchMedia)はユーザーが明示選択していない場合のみ追従し、
+ * listener は購読者がいる間だけ 1 本張る。localStorage は private mode で
+ * 例外を投げるので try/catch で握りつぶす。 */
+const listeners = new Set<() => void>();
+let mq: MediaQueryList | null = null;
 
-  /* 正は <html data-theme>。hook は複数箇所(Nav の toggle と diff オーバーレイ)
-   * で使われるため、他インスタンスの書き込みを attribute 監視で追従して全
-   * インスタンスの state を一致させる。 */
-  useEffect(() => {
-    const mo = new MutationObserver(() => setTheme(currentTheme()));
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    return () => mo.disconnect();
-  }, []);
+function emit() {
+  for (const l of listeners) l();
+}
 
-  useEffect(() => {
-    const mq = matchMedia("(prefers-color-scheme: dark)");
-    const onChange = (e: MediaQueryListEvent) => {
-      try {
-        if (localStorage.getItem(STORAGE_KEY)) return;
-      } catch {
-        /* ignore */
-      }
-      const next: Theme = e.matches ? "dark" : "light";
-      document.documentElement.dataset.theme = next;
-      setTheme(next);
-    };
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
+function onSystemChange(e: MediaQueryListEvent) {
+  try {
+    if (localStorage.getItem(STORAGE_KEY)) return;
+  } catch {
+    /* ignore */
+  }
+  document.documentElement.dataset.theme = e.matches ? "dark" : "light";
+  emit();
+}
 
-  const toggle = () => {
-    const next: Theme = currentTheme() === "dark" ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    try {
-      localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      /* private mode */
+function subscribe(cb: () => void): () => void {
+  if (listeners.size === 0) {
+    mq = matchMedia("(prefers-color-scheme: dark)");
+    mq.addEventListener("change", onSystemChange);
+  }
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+    if (listeners.size === 0) {
+      mq?.removeEventListener("change", onSystemChange);
+      mq = null;
     }
-    setTheme(next);
   };
+}
 
+function toggle() {
+  const next: Theme = currentTheme() === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try {
+    localStorage.setItem(STORAGE_KEY, next);
+  } catch {
+    /* private mode */
+  }
+  emit();
+}
+
+export function useTheme(): { theme: Theme; toggle: () => void } {
+  const theme = useSyncExternalStore(subscribe, currentTheme);
   return { theme, toggle };
 }

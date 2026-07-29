@@ -1,33 +1,46 @@
-import { PatchDiff } from "@pierre/diffs/react";
-import { useEffect, useMemo, useRef } from "react";
+import { FileDiff } from "@pierre/diffs/react";
+import { memo, useEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useDiff } from "../hooks/useDiff";
-import { useTheme } from "../hooks/useTheme";
+import { useTheme, type Theme } from "../hooks/useTheme";
+import { apiUrl } from "../lib/api";
 import {
-  diffTotals,
+  diffMeta,
   diffWarning,
   omittedFiles,
   OMITTED_REASON_LABELS,
-  splitPatch,
+  parseDiffFiles,
 } from "../lib/diff";
-import { clock } from "../lib/format";
-import type { DiffResponse } from "../lib/types";
+import type { DiffFileEntry, DiffResponse } from "../lib/types";
 
 /* patch 本文と file path は敵性入力。@pierre/diffs はテキストをトークン分解して
  * DOM API で組み立てる(patch を HTML として解釈しない)前提で採用しており、
  * その性質は diffOverlay.test.tsx の敵性 patch テストで固定している。
  * こちら側でも patch 由来の文字列を dangerouslySetInnerHTML に渡さない。 */
 
-function DiffFiles({ diff, theme }: { diff: DiffResponse; theme: "light" | "dark" }) {
-  const blocks = useMemo(() => splitPatch(diff.patch), [diff.patch]);
-  /* themeType を渡すと library 側が light/dark の Shiki テーマを切り替える。
-   * worker pool は使わない(Provider 非設置 = メインスレッド描画)。 */
-  const options = useMemo(() => ({ themeType: theme }), [theme]);
-  const omitted = omittedFiles(diff.files);
+/* memo: Drawer は SSE snapshot tick(約 2s)ごとに再レンダーされるが、diff と
+ * theme は変わらないので file 列全体をスキップさせる(library の FileDiff は
+ * 非 memo で、素通しすると tick ごとに全 file の setOptions/render が走る)。 */
+const DiffFiles = memo(function DiffFiles({
+  diff,
+  omitted,
+  theme,
+}: {
+  diff: DiffResponse;
+  omitted: DiffFileEntry[];
+  theme: Theme;
+}) {
+  const files = useMemo(() => parseDiffFiles(diff.patch), [diff.patch]);
   return (
     <>
-      {blocks.map((block, i) => (
-        // block 順は path 順で response ごとに固定 — index key で安定
-        <PatchDiff key={i} patch={block} options={options} className="diff-file" />
+      {files.map((f, i) => (
+        // file type change は同 path が 2 entry になるため path 単独を key にしない
+        <FileDiff
+          key={`${i}:${f.name}`}
+          fileDiff={f}
+          options={{ themeType: theme }}
+          className="diff-file"
+        />
       ))}
       {omitted.length > 0 && (
         <section className="diff-omitted" aria-label="patch が省略されたファイル">
@@ -47,7 +60,7 @@ function DiffFiles({ diff, theme }: { diff: DiffResponse; theme: "light" | "dark
       )}
     </>
   );
-}
+});
 
 export function DiffOverlay({
   title,
@@ -61,11 +74,16 @@ export function DiffOverlay({
   onClose: () => void;
 }) {
   const { theme } = useTheme();
-  const { state, refetch } = useDiff(query, token);
+  const { state, refetch } = useDiff(apiUrl("/api/diff", token, query));
   const rootRef = useRef<HTMLDivElement>(null);
 
+  /* モーダル化: 初期フォーカスを移し、背面(#root 配下の Nav / テーブル /
+   * Drawer)を inert にしてフォーカスと操作を遮る。閉じたら解除。 */
   useEffect(() => {
     rootRef.current?.focus();
+    const root = document.getElementById("root");
+    root?.setAttribute("inert", "");
+    return () => root?.removeAttribute("inert");
   }, []);
 
   /* capture 段で preventDefault を立て、Drawer の document(bubble)listener に
@@ -82,16 +100,18 @@ export function DiffOverlay({
   }, [onClose]);
 
   const diff = state.phase === "ready" ? state.diff : null;
-  const warning = diff ? diffWarning(diff) : null;
-  let meta = "";
-  if (diff) {
-    const totals = diffTotals(diff.files);
-    meta =
-      `merge-base ${diff.mergeBase.slice(0, 10)} · captured ${clock(diff.capturedAt)}` +
-      ` · ${diff.files.length} files +${totals.additions}/-${totals.deletions}`;
-  }
+  /* snapshot tick ごとの再レンダーで files 全走査をやり直さない */
+  const view = useMemo(
+    () =>
+      diff
+        ? { warning: diffWarning(diff), meta: diffMeta(diff), omitted: omittedFiles(diff.files) }
+        : null,
+    [diff],
+  );
 
-  return (
+  /* #drawer(sticky/fixed)はスタッキングコンテキストを作るため、その子として
+   * 描くと z-index が閉じ込められ nav の下に潜る。portal で body 直下に出す。 */
+  return createPortal(
     <div
       className="diff-overlay"
       id="diff-overlay"
@@ -112,9 +132,8 @@ export function DiffOverlay({
           )}
         </h3>
         <span className="diff-meta" id="diff-meta">
-          {meta}
+          {view?.meta ?? ""}
         </span>
-        <span className="grow"></span>
         <button
           type="button"
           className="diff-reload"
@@ -127,9 +146,9 @@ export function DiffOverlay({
           ✕
         </button>
       </header>
-      {warning && (
+      {view?.warning && (
         <div className="diff-banner" role="status">
-          {warning}
+          {view.warning}
         </div>
       )}
       <div className="diff-body">
@@ -140,12 +159,14 @@ export function DiffOverlay({
           </div>
         )}
         {diff &&
+          view &&
           (diff.files.length === 0 ? (
             <div className="diff-note">merge-base からの変更はありません</div>
           ) : (
-            <DiffFiles diff={diff} theme={theme} />
+            <DiffFiles diff={diff} omitted={view.omitted} theme={theme} />
           ))}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

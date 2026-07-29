@@ -1,12 +1,21 @@
-import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  Fragment,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { useDrawerWidth } from "../hooks/useDrawerWidth";
 import { usePeek } from "../hooks/usePeek";
 import { usePlan } from "../hooks/usePlan";
-import { diffQuery } from "../lib/diff";
 import { fmtCreated } from "../lib/format";
 import { issueUrl } from "../lib/github";
 import {
   blockerLabel,
+  diffQuery,
   fmtWave,
   notStartedNote,
   paneBackend,
@@ -16,7 +25,6 @@ import {
   paneRuntimeTitle,
 } from "../lib/pane";
 import type { PaneView } from "../lib/types";
-import { DiffOverlay } from "./DiffOverlay";
 import {
   AgentStateTag,
   DirtyTag,
@@ -26,6 +34,10 @@ import {
   PrPill,
   Tag,
 } from "./ui";
+
+/* @pierre/diffs(Shiki 込み)は重いので遅延 chunk に隔離し、diff を開くまで
+ * 初回ロードのパスに乗せない。 */
+const DiffOverlay = lazy(() => import("./DiffOverlay").then((m) => ({ default: m.DiffOverlay })));
 
 function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {
   const plan = usePlan({ paneId: pane.paneId, alive: pane.alive }, token);
@@ -124,8 +136,10 @@ function PrsSection({ pane, repo }: { pane: PaneView; repo: string }) {
   );
 }
 
-function PeekPanel({ pane, token }: { pane: PaneView; token: string }) {
-  const peek = usePeek({ paneId: pane.paneId, alive: pane.alive }, token);
+function PeekPanel({ pane, token, paused }: { pane: PaneView; token: string; paused: boolean }) {
+  /* diff オーバーレイ(不透明・全面)が開いている間は 5s ポーリングを止める —
+   * 見えない出力のために tmux capture を回さない。閉じると即再取得される。 */
+  const peek = usePeek(paused ? null : { paneId: pane.paneId, alive: pane.alive }, token);
   return (
     <section className="d-sec">
       <h4>peek — 直近の出力</h4>
@@ -197,6 +211,12 @@ export function Drawer({
   const dq = diffQuery(parent, pane);
   const [diffOpen, setDiffOpen] = useState(false);
   const diffBtnRef = useRef<HTMLButtonElement>(null);
+  /* identity を安定させ、オーバーレイの Escape listener が snapshot tick ごとに
+   * 貼り直されるのを避ける */
+  const closeDiff = useCallback(() => {
+    setDiffOpen(false);
+    diffBtnRef.current?.focus(); // 起点のボタンへフォーカスを戻す
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -327,20 +347,14 @@ export function Drawer({
           {captureReason ? (
             <CaptureDisabled kind="peek" reason={captureReason} />
           ) : (
-            <PeekPanel pane={pane} token={token} />
+            <PeekPanel pane={pane} token={token} paused={diffOpen} />
           )}
         </div>
       )}
       {diffOpen && dq && (
-        <DiffOverlay
-          title={`${paneLabel(pane)} ${pane.branchName || pane.slug || ""}`.trim()}
-          query={dq}
-          token={token}
-          onClose={() => {
-            setDiffOpen(false);
-            diffBtnRef.current?.focus(); // 起点のボタンへフォーカスを戻す
-          }}
-        />
+        <Suspense fallback={null}>
+          <DiffOverlay title={paneLabel(pane)} query={dq} token={token} onClose={closeDiff} />
+        </Suspense>
       )}
     </aside>
   );

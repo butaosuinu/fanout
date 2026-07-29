@@ -3,8 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../components/App";
-import type { Snapshot } from "../lib/types";
-import { FakeEventSource, installFakeEventSource, removeEventSource } from "./fakeEventSource";
+import {
+  FakeEventSource,
+  installFakeEventSource,
+  removeEventSource,
+  streamSnapshot,
+} from "./fakeEventSource";
 import { makePane, makeQueuedPane, makeRollup, makeSession, makeSnapshot } from "./fixtures";
 import { server } from "./server";
 
@@ -23,14 +27,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
-
-function streamSnapshot(snap: Snapshot) {
-  const es = FakeEventSource.latest();
-  act(() => {
-    es.emitOpen();
-    es.emitSnapshot(snap);
-  });
-}
 
 /* 2 ペイン(claude / codex)1 セッションの定番 snapshot */
 function basicSnapshot() {

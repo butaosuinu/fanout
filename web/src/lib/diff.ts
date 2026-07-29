@@ -1,30 +1,13 @@
-import type { DiffFileEntry, DiffOmittedReason, DiffResponse, PaneView } from "./types";
+import { parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs";
+import type { DiffFileEntry, DiffOmittedReason, DiffResponse } from "./types";
+import { clock } from "./format";
 
-/* GET /api/diff の行 identity クエリ(正は docs/local-diff-review-tools.ja.md)。
- * GitHub issue 行(issueNum>0)は parent+issue、plan task 行は parent+task+source、
- * 負の synthetic issue 行(@manual / attached-agent)は parent+issue+source。
- * identity を組めない行(shell、未開始、worktree 記録なし、source 必須なのに
- * sourceKey 欠落)は null を返し、呼び出し側はボタンを出さない。 */
-export function diffQuery(parent: string, p: PaneView): Record<string, string> | null {
-  if (p.notStarted || p.kind === "shell" || !p.worktreePath) return null;
-  if (p.taskId) {
-    return p.sourceKey ? { parent, task: p.taskId, source: p.sourceKey } : null;
-  }
-  if (p.issueNum > 0) return { parent, issue: String(p.issueNum) };
-  if (p.issueNum < 0 && p.sourceKey) {
-    return { parent, issue: String(p.issueNum), source: p.sourceKey };
-  }
-  return null;
-}
-
-/* 連結 patch を file block 単位へ分割する。@pierre/diffs の PatchDiff は
- * 「1 patch = 1 file diff」入力しか受けないため、描画前にここで割る。
- * 分割規則はライブラリ内部の GIT_DIFF_FILE_BREAK_REGEX と同じ行頭一致。
- * patch の内容行は必ず ' '/'+'/'-' で始まるので、行頭 "diff --git " は
- * block 境界にしか現れない。 */
-export function splitPatch(patch: string): string[] {
+/* /api/diff の連結 patch を file 単位のパース済み metadata へ。分割・解釈は
+ * ライブラリ自身のパーサに委譲する(自前の分割規則を持つと lib 更新で drift
+ * する)。file type change は同 path の deleted/new 2 block = 2 entry になる。 */
+export function parseDiffFiles(patch: string): FileDiffMetadata[] {
   if (!patch) return [];
-  return patch.split(/(?=^diff --git )/m).filter((b) => b.startsWith("diff --git "));
+  return parsePatchFiles(patch).flatMap((p) => p.files);
 }
 
 export const OMITTED_REASON_LABELS: Record<Exclude<DiffOmittedReason, "">, string> = {
@@ -41,7 +24,8 @@ export function omittedFiles(files: DiffFileEntry[]): DiffFileEntry[] {
 /* contract の指示: truncated、またはいずれかの patchIncluded=false なら
  * 「review 対象が patch に揃っていない」ことを警告する。 */
 export function diffWarning(d: DiffResponse): string | null {
-  const omitted = omittedFiles(d.files).length;
+  let omitted = 0;
+  for (const f of d.files) if (!f.patchIncluded) omitted++;
   if (!d.truncated && omitted === 0) return null;
   const detail = omitted > 0 ? `${omitted} file の patch が省略されています` : "patch は不完全です";
   return `レビュー対象が patch に揃っていません — ${detail}`;
@@ -56,4 +40,33 @@ export function diffTotals(files: DiffFileEntry[]): { additions: number; deletio
     deletions += f.deletions ?? 0;
   }
   return { additions, deletions };
+}
+
+export function diffMeta(d: DiffResponse): string {
+  const totals = diffTotals(d.files);
+  return (
+    `merge-base ${d.mergeBase.slice(0, 10)} · captured ${clock(d.capturedAt)}` +
+    ` · ${d.files.length} files +${totals.additions}/-${totals.deletions}`
+  );
+}
+
+/* /api/diff のエラー body は {"error":"message"}(text は敵性入力 — 呼び出し側は
+ * テキストノードのみで描画)。token/405 の middleware エラーは text/plain。 */
+export async function diffErrorMessage(res: Response): Promise<string> {
+  let detail = "";
+  try {
+    const body: unknown = await res.json();
+    if (body && typeof body === "object" && "error" in body) {
+      detail = String((body as { error: unknown }).error);
+    }
+  } catch {
+    /* JSON でない body(middleware の text/plain 等)は詳細なし */
+  }
+  const head =
+    res.status === 404
+      ? "diff を取得できません — worktree の記録が見つかりません(cleanup 済みか、サーバーが /api/diff 未対応の可能性)"
+      : res.status === 502
+        ? "サーバーが diff を安全に生成できませんでした"
+        : `diff の取得に失敗しました (HTTP ${res.status})`;
+  return detail ? `${head}: ${detail}` : head;
 }

@@ -1,4 +1,11 @@
-import type { PaneView, Rollup, Session, Snapshot } from "../lib/types";
+import type {
+  DiffFileEntry,
+  DiffResponse,
+  PaneView,
+  Rollup,
+  Session,
+  Snapshot,
+} from "../lib/types";
 
 export function makeRollup(over: Partial<Rollup> = {}): Rollup {
   return {
@@ -81,6 +88,34 @@ export function makeSnapshot(sessions: Session[], over: Partial<Snapshot> = {}):
     sessions,
     rollup: makeRollup({ total }),
     degraded: { tmux: false, github: false },
+    ...over,
+  };
+}
+
+/* GET /api/diff の wire fixture(正は docs/local-diff-review-tools.ja.md) */
+export function makeDiffFile(over: Partial<DiffFileEntry> = {}): DiffFileEntry {
+  return {
+    path: "src/hello.ts",
+    additions: 1,
+    deletions: 1,
+    binary: false,
+    patchIncluded: true,
+    omittedReason: "",
+    ...over,
+  };
+}
+
+export function makeDiffResponse(over: Partial<DiffResponse> = {}): DiffResponse {
+  return {
+    paneId: "%1",
+    branchName: "fanout/fix-thing",
+    baseBranch: "main",
+    mergeBase: "0123456789abcdef0123456789abcdef01234567",
+    capturedAt: "2026-07-29T01:23:45Z",
+    files: [makeDiffFile()],
+    patch: "",
+    truncated: false,
+    totalBytes: 0,
     ...over,
   };
 }

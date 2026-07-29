@@ -1,11 +1,18 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
+import { http, HttpResponse, type RequestHandler } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "../components/App";
-import type { DiffResponse, Snapshot } from "../lib/types";
-import { FakeEventSource, installFakeEventSource } from "./fakeEventSource";
-import { makePane, makeQueuedPane, makeSession, makeSnapshot } from "./fixtures";
+import type { DiffResponse } from "../lib/types";
+import { installFakeEventSource, streamSnapshot } from "./fakeEventSource";
+import {
+  makeDiffFile,
+  makeDiffResponse,
+  makePane,
+  makeQueuedPane,
+  makeSession,
+  makeSnapshot,
+} from "./fixtures";
 import { server } from "./server";
 
 /* diff オーバーレイの統合テスト。モックはネットワーク境界(/api/diff)のみで、
@@ -30,15 +37,8 @@ beforeEach(() => {
   );
 });
 
-function streamSnapshot(snap: Snapshot) {
-  const es = FakeEventSource.latest();
-  act(() => {
-    es.emitOpen();
-    es.emitSnapshot(snap);
-  });
-}
-
-const SIMPLE_PATCH = [
+/* 2 file 分の連結 patch — 複数 file block の分解・描画も同時に固定する */
+const TWO_FILE_PATCH = [
   "diff --git a/src/hello.ts b/src/hello.ts",
   "index 0123456..89abcde 100644",
   "--- a/src/hello.ts",
@@ -48,31 +48,22 @@ const SIMPLE_PATCH = [
   '-  return "hi";',
   '+  return "hello_marker";',
   " }",
+  "diff --git a/src/util.ts b/src/util.ts",
+  "index 1111111..2222222 100644",
+  "--- a/src/util.ts",
+  "+++ b/src/util.ts",
+  "@@ -1 +1,2 @@",
+  " export const n = 1;",
+  "+export const util_marker = 2;",
   "",
 ].join("\n");
 
-function makeDiffResponse(over: Partial<DiffResponse> = {}): DiffResponse {
-  return {
-    paneId: "%1",
-    branchName: "fanout/fix-thing",
-    baseBranch: "main",
-    mergeBase: "0123456789abcdef0123456789abcdef01234567",
-    capturedAt: "2026-07-29T01:23:45Z",
-    files: [
-      {
-        path: "src/hello.ts",
-        additions: 1,
-        deletions: 1,
-        binary: false,
-        patchIncluded: true,
-        omittedReason: "",
-      },
-    ],
-    patch: SIMPLE_PATCH,
-    truncated: false,
-    totalBytes: SIMPLE_PATCH.length,
+function twoFileDiff(over: Partial<DiffResponse> = {}): DiffResponse {
+  return makeDiffResponse({
+    patch: TWO_FILE_PATCH,
+    files: [makeDiffFile(), makeDiffFile({ path: "src/util.ts", additions: 1, deletions: 0 })],
     ...over,
-  };
+  });
 }
 
 function issueSnapshot() {
@@ -81,6 +72,14 @@ function issueSnapshot() {
       makePane({ issueNum: 101, displayName: "Fix thing", branchName: "fanout/fix-thing" }),
     ]),
   ]);
+}
+
+/* 定番の前置き: handler 登録 → render → snapshot 流し込み */
+function setup(...handlers: RequestHandler[]) {
+  server.use(...handlers);
+  render(<App />);
+  streamSnapshot(issueSnapshot());
+  return userEvent.setup();
 }
 
 /* @pierre/diffs は open shadow root に描画する — 検証はそこを直接読む */
@@ -98,16 +97,13 @@ async function openOverlay(user: ReturnType<typeof userEvent.setup>) {
 
 describe("diff オーバーレイ", () => {
   it("GitHub issue 行は parent+issue で取得し patch を shadow DOM に描画する", async () => {
-    const user = userEvent.setup();
     let captured: URLSearchParams | null = null;
-    server.use(
+    const user = setup(
       http.get("/api/diff", ({ request }) => {
         captured = new URL(request.url).searchParams;
-        return HttpResponse.json(makeDiffResponse());
+        return HttpResponse.json(twoFileDiff());
       }),
     );
-    render(<App />);
-    streamSnapshot(issueSnapshot());
 
     const overlay = await openOverlay(user);
 
@@ -123,13 +119,15 @@ describe("diff オーバーレイ", () => {
     });
     expect(within(overlay).getByText("main")).toBeInTheDocument();
     expect(overlay.querySelector("#diff-meta")).toHaveTextContent(/merge-base 0123456789/);
-    expect(overlay.querySelector("#diff-meta")).toHaveTextContent(/1 files \+1\/-1/);
+    expect(overlay.querySelector("#diff-meta")).toHaveTextContent(/2 files \+2\/-1/);
 
-    // patch 本文はライブラリの shadow DOM 側に入る(ファイル名ヘッダ + 変更行)
+    // patch 本文は file block ごとにライブラリの shadow DOM 側に入る
     await waitFor(() => {
       expect(shadowText()).toContain("hello_marker");
+      expect(shadowText()).toContain("util_marker");
     });
     expect(shadowText()).toContain("src/hello.ts");
+    expect(shadowText()).toContain("src/util.ts");
     // 完全な patch では警告帯を出さない
     expect(overlay.querySelector(".diff-banner")).toBeNull();
 
@@ -146,23 +144,7 @@ describe("diff オーバーレイ", () => {
     });
   });
 
-  it("Nav のテーマ切替がオーバーレイを開いたまま反映される", async () => {
-    const user = userEvent.setup();
-    server.use(http.get("/api/diff", () => HttpResponse.json(makeDiffResponse())));
-    render(<App />);
-    streamSnapshot(issueSnapshot());
-
-    const overlay = await openOverlay(user);
-    expect(overlay).toHaveAttribute("data-theme", "light");
-
-    await user.click(screen.getByRole("button", { name: "ライト / ダーク切替" }));
-    await waitFor(() => {
-      expect(overlay).toHaveAttribute("data-theme", "dark");
-    });
-  });
-
   it("plan task 行は parent+task+source で取得する", async () => {
-    const user = userEvent.setup();
     let captured: URLSearchParams | null = null;
     server.use(
       http.get("/api/diff", ({ request }) => {
@@ -184,7 +166,7 @@ describe("diff オーバーレイ", () => {
       ]),
     );
 
-    await openOverlay(user);
+    await openOverlay(userEvent.setup());
 
     expect(captured).not.toBeNull();
     expect(captured!.get("parent")).toBe("plan:alpha");
@@ -194,7 +176,6 @@ describe("diff オーバーレイ", () => {
   });
 
   it("タグを含む patch を DOM 要素として注入しない(敵性入力規約)", async () => {
-    const user = userEvent.setup();
     const hostile = [
       'diff --git "a/<img src=x onerror=alert(1)>.ts" "b/<img src=x onerror=alert(1)>.ts"',
       '--- "a/<img src=x onerror=alert(1)>.ts"',
@@ -204,27 +185,16 @@ describe("diff オーバーレイ", () => {
       '+<script>window.__pwned = "yes"</script><img src=x onerror=alert(2)>',
       "",
     ].join("\n");
-    server.use(
+    const user = setup(
       http.get("/api/diff", () =>
         HttpResponse.json(
           makeDiffResponse({
-            files: [
-              {
-                path: "<img src=x onerror=alert(1)>.ts",
-                additions: 1,
-                deletions: 0,
-                binary: false,
-                patchIncluded: true,
-                omittedReason: "",
-              },
-            ],
+            files: [makeDiffFile({ path: "<img src=x onerror=alert(1)>.ts", deletions: 0 })],
             patch: hostile,
           }),
         ),
       ),
     );
-    render(<App />);
-    streamSnapshot(issueSnapshot());
 
     await openOverlay(user);
     await waitFor(() => {
@@ -242,44 +212,33 @@ describe("diff オーバーレイ", () => {
   });
 
   it("truncated / patch 省略 file は警告帯と省略一覧を出す", async () => {
-    const user = userEvent.setup();
-    server.use(
+    const user = setup(
       http.get("/api/diff", () =>
         HttpResponse.json(
           makeDiffResponse({
             truncated: true,
             files: [
-              {
-                path: "src/hello.ts",
-                additions: 1,
-                deletions: 1,
-                binary: false,
-                patchIncluded: true,
-                omittedReason: "",
-              },
-              {
+              makeDiffFile(),
+              makeDiffFile({
                 path: "assets/logo.png",
                 additions: 0,
                 deletions: 0,
                 binary: true,
                 patchIncluded: false,
                 omittedReason: "binary",
-              },
-              {
+              }),
+              makeDiffFile({
                 path: "huge.ts",
                 additions: null,
                 deletions: null,
-                binary: false,
                 patchIncluded: false,
                 omittedReason: "collectionLimit",
-              },
+              }),
             ],
           }),
         ),
       ),
     );
-    render(<App />);
-    streamSnapshot(issueSnapshot());
 
     const overlay = await openOverlay(user);
 
@@ -292,14 +251,11 @@ describe("diff オーバーレイ", () => {
   });
 
   it("404 は worktree 記録なしのエラーメッセージを出す", async () => {
-    const user = userEvent.setup();
-    server.use(
+    const user = setup(
       http.get("/api/diff", () =>
         HttpResponse.json({ error: "no recorded worktree" }, { status: 404 }),
       ),
     );
-    render(<App />);
-    streamSnapshot(issueSnapshot());
 
     const overlay = await openOverlay(user);
     const alert = await within(overlay).findByRole("alert");
@@ -308,14 +264,11 @@ describe("diff オーバーレイ", () => {
   });
 
   it("502 はサーバー拒否のエラーメッセージを出す", async () => {
-    const user = userEvent.setup();
-    server.use(
+    const user = setup(
       http.get("/api/diff", () =>
         HttpResponse.json({ error: "git command failed" }, { status: 502 }),
       ),
     );
-    render(<App />);
-    streamSnapshot(issueSnapshot());
 
     const overlay = await openOverlay(user);
     const alert = await within(overlay).findByRole("alert");
@@ -324,10 +277,7 @@ describe("diff オーバーレイ", () => {
   });
 
   it("Escape はオーバーレイだけを閉じ、下の Drawer は残す", async () => {
-    const user = userEvent.setup();
-    server.use(http.get("/api/diff", () => HttpResponse.json(makeDiffResponse())));
-    render(<App />);
-    streamSnapshot(issueSnapshot());
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(makeDiffResponse())));
 
     await openOverlay(user);
     await user.keyboard("{Escape}");
@@ -336,6 +286,18 @@ describe("diff オーバーレイ", () => {
     expect(screen.getByRole("complementary", { name: "ペイン詳細" })).toBeInTheDocument();
     // フォーカスは起点のボタンへ戻る
     expect(screen.getByRole("button", { name: "diff を開く" })).toHaveFocus();
+  });
+
+  it("Nav のテーマ切替がオーバーレイを開いたまま反映される", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(makeDiffResponse())));
+
+    const overlay = await openOverlay(user);
+    expect(overlay).toHaveAttribute("data-theme", "light");
+
+    await user.click(screen.getByRole("button", { name: "ライト / ダーク切替" }));
+    await waitFor(() => {
+      expect(overlay).toHaveAttribute("data-theme", "dark");
+    });
   });
 
   it("未開始(synthetic)行と shell 行には diff ボタンを出さない", async () => {
@@ -360,7 +322,6 @@ describe("diff オーバーレイ", () => {
     await screen.findByRole("complementary", { name: "ペイン詳細" });
     expect(screen.queryByRole("button", { name: "diff を開く" })).not.toBeInTheDocument();
 
-    await user.keyboard("{Escape}");
     await user.click(screen.getByText("Shell pane"));
     await screen.findByRole("complementary", { name: "ペイン詳細" });
     expect(screen.queryByRole("button", { name: "diff を開く" })).not.toBeInTheDocument();
