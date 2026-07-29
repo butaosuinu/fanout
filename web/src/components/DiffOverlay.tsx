@@ -11,6 +11,8 @@ import {
   OMITTED_REASON_LABELS,
   parseDiffFiles,
   planFileRendering,
+  TOKENIZE_MAX_LENGTH_PLAIN,
+  TOKENIZE_MAX_LINE_LENGTH,
 } from "../lib/diff";
 import type { DiffFileEntry, DiffResponse } from "../lib/types";
 
@@ -45,7 +47,14 @@ const DiffFiles = memo(function DiffFiles({
           <FileDiff
             key={`${i}:${file.name}`}
             fileDiff={file}
-            options={{ themeType: theme, collapsed }}
+            options={{
+              themeType: theme,
+              collapsed,
+              tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH,
+              /* 予算超過 file を展開したときは highlight を切って描画する
+               * (クリック後も固まらないように) */
+              ...(overBudget ? { tokenizeMaxLength: TOKENIZE_MAX_LENGTH_PLAIN } : {}),
+            }}
             className="diff-file"
             renderHeaderMetadata={
               collapsed
@@ -55,7 +64,7 @@ const DiffFiles = memo(function DiffFiles({
                       className="diff-expand"
                       onClick={() => setExpanded((prev) => new Set(prev).add(i))}
                     >
-                      {lines.toLocaleString()} 行 — 展開
+                      {lines.toLocaleString()} 行 — 展開(ハイライトなし)
                     </button>
                   )
                 : undefined

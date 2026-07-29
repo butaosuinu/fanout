@@ -5,10 +5,11 @@ import {
   diffMeta,
   diffTotals,
   diffWarning,
-  MAX_FILE_RENDER_CHARS,
-  MAX_FILE_RENDER_LINES,
-  MAX_TOTAL_RENDER_CHARS,
-  MAX_TOTAL_RENDER_LINES,
+  estimatedRenderNodes,
+  MAX_FILE_RENDER_NODES,
+  MAX_TOTAL_RENDER_NODES,
+  NODES_PER_CHAR,
+  NODES_PER_LINE,
   parseDiffFiles,
   planFileRendering,
   renderedLineCount,
@@ -82,8 +83,8 @@ describe("diffTotals", () => {
   });
 });
 
-/* 行数 + 文字数予算 — サーバーの byte 上限では防げない敵性 patch の DOM
- * 爆発対策。planFileRendering は name / hunks[].unifiedLineCount /
+/* 最悪ケース DOM node 予算 — サーバーの byte 上限では防げない敵性 patch の
+ * DOM 爆発対策。planFileRendering は name / hunks[].unifiedLineCount /
  * additionLines / deletionLines しか読まない。 */
 describe("planFileRendering", () => {
   const file = (name: string, hunkLines: number[], additionLines: string[] = []) =>
@@ -94,41 +95,47 @@ describe("planFileRendering", () => {
       deletionLines: [],
     }) as unknown as FileDiffMetadata;
 
-  it("per-file 行数上限を超える file だけを collapsed にする", () => {
+  /* 行数だけで per-file 予算を超える形(改行のみの巨大ファイル) */
+  it("行数由来のコストが per-file 予算を超える file だけを collapsed にする", () => {
+    const lines = MAX_FILE_RENDER_NODES / NODES_PER_LINE + 1;
     const plan = planFileRendering([
       file("small.ts", [10]),
-      file("bomb.txt", [MAX_FILE_RENDER_LINES + 1]),
+      file("bomb.txt", [lines]),
       file("small2.ts", [20]),
     ]);
     expect(plan.map((p) => p.overBudget)).toEqual([false, true, false]);
-    expect(plan[1]!.lines).toBe(MAX_FILE_RENDER_LINES + 1);
   });
 
-  it("行数が少なくても文字数上限を超える token 高密度 file は collapsed にする", () => {
-    const dense = file("dense.ts", [260], ["x".repeat(MAX_FILE_RENDER_CHARS + 1)]);
+  /* 文字数だけで per-file 予算を超える形(token 高密度・行数は少ない) */
+  it("行数が少なくても文字数由来のコストが予算を超える file は collapsed にする", () => {
+    const chars = MAX_FILE_RENDER_NODES / NODES_PER_CHAR + 1;
+    const dense = file("dense.ts", [260], ["x".repeat(chars)]);
     const plan = planFileRendering([file("small.ts", [10]), dense]);
     expect(plan.map((p) => p.overBudget)).toEqual([false, true]);
-    expect(plan[1]!.chars).toBe(MAX_FILE_RENDER_CHARS + 1);
+    expect(plan[1]!.nodes).toBeGreaterThan(MAX_FILE_RENDER_NODES);
   });
 
-  it("合計行数予算を使い切ったら以降の file を collapsed にする", () => {
-    const big = MAX_FILE_RENDER_LINES; // 上限ちょうどは展開可
-    const n = Math.floor(MAX_TOTAL_RENDER_LINES / big); // 予算を丁度使い切る本数
-    const files = Array.from({ length: n + 1 }, (_, i) => file(`f${i}.ts`, [big]));
-    files.push(file("tiny.ts", [1])); // 予算 0 では 1 行も超過
+  it("per-file 予算内でも合計予算の残りに収まらない file は collapsed にする", () => {
+    /* 1 file あたり per-file 予算いっぱい — 2 file 目は合計予算の残りに入らない。
+     * 予算は残量方式なので、超過 file の後でも残りに収まる小さい file は描画する
+     * (1 つ大きい file があるだけで以降すべてを畳まない)。 */
+    const chars = "x".repeat(MAX_FILE_RENDER_NODES / NODES_PER_CHAR);
+    const files = [file("a.ts", [], [chars]), file("b.ts", [], [chars]), file("c.ts", [], ["y"])];
     const plan = planFileRendering(files);
-    expect(plan.filter((p) => !p.overBudget)).toHaveLength(n);
-    expect(plan.slice(n).map((p) => p.overBudget)).toEqual([true, true]);
+    expect(plan.map((p) => p.overBudget)).toEqual([false, true, false]);
+    expect(MAX_FILE_RENDER_NODES * 2).toBeGreaterThan(MAX_TOTAL_RENDER_NODES);
   });
 
-  it("合計文字数予算を使い切ったら以降の file を collapsed にする", () => {
-    const half = "x".repeat(MAX_TOTAL_RENDER_CHARS / 2);
-    const files = [
-      file("a.ts", [10], [half]),
-      file("b.ts", [10], [half]),
-      file("c.ts", [10], ["y"]), // 文字数予算 0 では 1 文字も超過
-    ];
-    expect(planFileRendering(files).map((p) => p.overBudget)).toEqual([false, false, true]);
+  it("典型的なレビュー diff(300 行 × 60 文字)は展開したまま描画する", () => {
+    const f = file(
+      "normal.ts",
+      [300],
+      Array.from({ length: 300 }, () => "x".repeat(60)),
+    );
+    const plan = planFileRendering([f]);
+    expect(plan[0]!.overBudget).toBe(false);
+    // 実測 37,312 node — 見積りは同程度に収まる
+    expect(estimatedRenderNodes(f)).toBeLessThanOrEqual(MAX_FILE_RENDER_NODES);
   });
 });
 

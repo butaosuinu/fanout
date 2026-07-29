@@ -10,17 +10,32 @@ export function parseDiffFiles(patch: string): FileDiffMetadata[] {
   return parsePatchFiles(patch).flatMap((p) => p.files);
 }
 
-/* サーバーの byte 上限(1 MiB 応答)は DOM コストを制限しない — 契約内でも
- * (a) 改行だけの 256 KiB ファイルは約 26 万行に展開され、(b) token 高密度の
- * TypeScript なら約 1,000 行で 36 万 HAST 要素を生成し得る(worktree 由来の
- * patch は敵性入力)。初期 mount は行数と文字数の両予算内に抑え、超過 file は
- * collapsed(ヘッダのみ)で出して展開をユーザーのクリックに委ねる。実測で
- * 1 描画行 ≈ 8 要素、1 文字 ≈ 0.4 token 要素なので、予算いっぱいでも初期
- * mount は 5 万要素程度に収まる。 */
-export const MAX_FILE_RENDER_LINES = 1_500;
-export const MAX_TOTAL_RENDER_LINES = 6_000;
-export const MAX_FILE_RENDER_CHARS = 65_536; // 64 KiB
-export const MAX_TOTAL_RENDER_CHARS = 131_072; // 128 KiB
+/* サーバーの byte 上限(1 MiB 応答)は DOM コストを制限しない。worktree 由来の
+ * patch は敵性入力で、契約内でも次を作れる:
+ *   (a) 改行だけの 256 KiB ファイル → 約 26 万行
+ *   (b) 交互トークン(`a+1+`…)の高密度行 → Shiki が 1 文字 1 span まで出す
+ * 平均実測値で見積もると (b) に破られるため、コストは最悪ケースで数える:
+ * 1 文字あたり span + text node の 2 node、1 行あたり gutter/wrapper で 8 node。
+ * この見積りは実測と誤差 5% 以内(300 行 × 60 文字 = 予測 38,400 / 実測 37,312、
+ * 1,500 行 × 40 文字 = 予測 132,000 / 実測 126,112)。
+ *
+ * 予算超過 file は collapsed(ヘッダのみ)で mount し、展開はユーザーの
+ * クリックに委ねる。展開時は highlight を切って(TOKENIZE_MAX_LENGTH_PLAIN)
+ * 描画するので、クリック後も固まらない — 上記 (b) の 2 file 版は highlight
+ * ありで 262,112 node / 11.9 秒、highlight なしで 1,016 node / 113ms。 */
+export const NODES_PER_CHAR = 2;
+export const NODES_PER_LINE = 8;
+export const MAX_FILE_RENDER_NODES = 40_000;
+export const MAX_TOTAL_RENDER_NODES = 60_000;
+
+/* Shiki に長い 1 行を token 分解させない閾値。これを超える行は 1 span に
+ * 落ちるため、行長方向の span 爆発を根元で止める(上記 (b) の実測: 400 で
+ * 262,112 node → 1,016 node)。 */
+export const TOKENIZE_MAX_LINE_LENGTH = 400;
+
+/* isDiffMassive(行数 > tokenizeMaxLength)を必ず満たさせて plaintext 描画に
+ * 落とすための値。展開された予算超過 file に使う。 */
+export const TOKENIZE_MAX_LENGTH_PLAIN = 0;
 
 /* hunk 単位の描画行数の合計。file 単位の unifiedLineCount は hunk 前の
  * 折りたたみ済み context(collapsedBefore)を含む絶対位置ベースのため
@@ -43,29 +58,25 @@ export function renderedCharCount(f: FileDiffMetadata): number {
   return n;
 }
 
+/* highlight ありで初期 mount した場合の最悪ケース DOM node 数の見積り。 */
+export function estimatedRenderNodes(f: FileDiffMetadata): number {
+  return NODES_PER_CHAR * renderedCharCount(f) + NODES_PER_LINE * renderedLineCount(f);
+}
+
 export interface RenderPlanEntry {
   file: FileDiffMetadata;
   lines: number;
-  chars: number;
+  nodes: number;
   overBudget: boolean;
 }
 
 export function planFileRendering(files: FileDiffMetadata[]): RenderPlanEntry[] {
-  let lineBudget = MAX_TOTAL_RENDER_LINES;
-  let charBudget = MAX_TOTAL_RENDER_CHARS;
+  let budget = MAX_TOTAL_RENDER_NODES;
   return files.map((file) => {
-    const lines = renderedLineCount(file);
-    const chars = renderedCharCount(file);
-    const overBudget =
-      lines > MAX_FILE_RENDER_LINES ||
-      chars > MAX_FILE_RENDER_CHARS ||
-      lines > lineBudget ||
-      chars > charBudget;
-    if (!overBudget) {
-      lineBudget -= lines;
-      charBudget -= chars;
-    }
-    return { file, lines, chars, overBudget };
+    const nodes = estimatedRenderNodes(file);
+    const overBudget = nodes > MAX_FILE_RENDER_NODES || nodes > budget;
+    if (!overBudget) budget -= nodes;
+    return { file, lines: renderedLineCount(file), nodes, overBudget };
   });
 }
 
