@@ -10,6 +10,37 @@ export function parseDiffFiles(patch: string): FileDiffMetadata[] {
   return parsePatchFiles(patch).flatMap((p) => p.files);
 }
 
+/* サーバーの byte 上限(1 MiB 応答)は DOM 行数を制限しない — 契約内でも
+ * 改行だけの 256 KiB ファイルは約 26 万行に展開され、非仮想の FileDiff を
+ * メインスレッドで停止させ得る(worktree 由来の patch は敵性入力)。描画は
+ * 行数予算内の file に限り、超過分は省略として一覧に落とす。 */
+export const MAX_FILE_RENDER_LINES = 5_000;
+export const MAX_TOTAL_RENDER_LINES = 20_000;
+
+export interface SuppressedFile {
+  name: string;
+  lines: number;
+}
+
+export function partitionRenderableFiles(files: FileDiffMetadata[]): {
+  rendered: FileDiffMetadata[];
+  suppressed: SuppressedFile[];
+} {
+  const rendered: FileDiffMetadata[] = [];
+  const suppressed: SuppressedFile[] = [];
+  let budget = MAX_TOTAL_RENDER_LINES;
+  for (const f of files) {
+    const lines = f.unifiedLineCount;
+    if (lines > MAX_FILE_RENDER_LINES || lines > budget) {
+      suppressed.push({ name: f.name, lines });
+      continue;
+    }
+    budget -= lines;
+    rendered.push(f);
+  }
+  return { rendered, suppressed };
+}
+
 export const OMITTED_REASON_LABELS: Record<Exclude<DiffOmittedReason, "">, string> = {
   binary: "バイナリのため patch なし",
   tooLarge: "サイズ上限超過のため patch なし",

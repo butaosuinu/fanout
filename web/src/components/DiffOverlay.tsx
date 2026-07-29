@@ -7,9 +7,12 @@ import { apiUrl } from "../lib/api";
 import {
   diffMeta,
   diffWarning,
+  MAX_FILE_RENDER_LINES,
+  MAX_TOTAL_RENDER_LINES,
   omittedFiles,
   OMITTED_REASON_LABELS,
   parseDiffFiles,
+  partitionRenderableFiles,
 } from "../lib/diff";
 import type { DiffFileEntry, DiffResponse } from "../lib/types";
 
@@ -30,10 +33,13 @@ const DiffFiles = memo(function DiffFiles({
   omitted: DiffFileEntry[];
   theme: Theme;
 }) {
-  const files = useMemo(() => parseDiffFiles(diff.patch), [diff.patch]);
+  const { rendered, suppressed } = useMemo(
+    () => partitionRenderableFiles(parseDiffFiles(diff.patch)),
+    [diff.patch],
+  );
   return (
     <>
-      {files.map((f, i) => (
+      {rendered.map((f, i) => (
         // file type change は同 path が 2 entry になるため path 単独を key にしない
         <FileDiff
           key={`${i}:${f.name}`}
@@ -42,6 +48,23 @@ const DiffFiles = memo(function DiffFiles({
           className="diff-file"
         />
       ))}
+      {suppressed.length > 0 && (
+        <section className="diff-omitted" aria-label="表示行数上限で省略したファイル">
+          <h4>表示行数上限で省略したファイル</h4>
+          <ul>
+            {suppressed.map((f, i) => (
+              <li key={`${i}:${f.name}`}>
+                <code>{f.name}</code>
+                <span className="muted">
+                  {" — "}
+                  {f.lines.toLocaleString()} 行(上限 {MAX_FILE_RENDER_LINES.toLocaleString()}{" "}
+                  行/file、合計 {MAX_TOTAL_RENDER_LINES.toLocaleString()} 行)
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {omitted.length > 0 && (
         <section className="diff-omitted" aria-label="patch が省略されたファイル">
           <h4>patch が省略されたファイル</h4>
@@ -67,15 +90,23 @@ export function DiffOverlay({
   query,
   token,
   onClose,
+  onClosed,
 }: {
   title: string;
   query: Record<string, string>;
   token: string;
   onClose: () => void;
+  /* unmount 時、背面の inert 解除「後」に呼ぶ(起点ボタンへのフォーカス復帰用。
+   * inert な subtree への focus は実ブラウザで拒否されるため順序が本質)。 */
+  onClosed?: () => void;
 }) {
   const { theme } = useTheme();
   const { state, refetch } = useDiff(apiUrl("/api/diff", token, query));
   const rootRef = useRef<HTMLDivElement>(null);
+  /* ref 経由で最新を呼ぶ — effect を [] のまま保ち、再実行による inert の
+   * 瞬断を避ける */
+  const onClosedRef = useRef(onClosed);
+  onClosedRef.current = onClosed;
 
   /* モーダル化: 初期フォーカスを移し、背面(#root 配下の Nav / テーブル /
    * Drawer)を inert にしてフォーカスと操作を遮る。閉じたら解除。 */
@@ -83,7 +114,10 @@ export function DiffOverlay({
     rootRef.current?.focus();
     const root = document.getElementById("root");
     root?.setAttribute("inert", "");
-    return () => root?.removeAttribute("inert");
+    return () => {
+      root?.removeAttribute("inert");
+      onClosedRef.current?.();
+    };
   }, []);
 
   /* capture 段で preventDefault を立て、Drawer の document(bubble)listener に

@@ -212,9 +212,11 @@ export function Drawer({
   const [diffOpen, setDiffOpen] = useState(false);
   const diffBtnRef = useRef<HTMLButtonElement>(null);
   /* identity を安定させ、オーバーレイの Escape listener が snapshot tick ごとに
-   * 貼り直されるのを避ける */
-  const closeDiff = useCallback(() => {
-    setDiffOpen(false);
+   * 貼り直されるのを避ける。フォーカス復帰は onClosed(inert 解除後)で行う —
+   * close 直後は #root がまだ inert で、実ブラウザは inert subtree への focus を
+   * 拒否するため。 */
+  const closeDiff = useCallback(() => setDiffOpen(false), []);
+  const restoreDiffFocus = useCallback(() => {
     diffBtnRef.current?.focus(); // 起点のボタンへフォーカスを戻す
   }, []);
 
@@ -353,7 +355,13 @@ export function Drawer({
       )}
       {diffOpen && dq && (
         <Suspense fallback={null}>
-          <DiffOverlay title={paneLabel(pane)} query={dq} token={token} onClose={closeDiff} />
+          <DiffOverlay
+            title={paneLabel(pane)}
+            query={dq}
+            token={token}
+            onClose={closeDiff}
+            onClosed={restoreDiffFocus}
+          />
         </Suspense>
       )}
     </aside>

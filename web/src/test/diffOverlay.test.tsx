@@ -276,16 +276,71 @@ describe("diff オーバーレイ", () => {
     expect(alert).toHaveTextContent("git command failed");
   });
 
-  it("Escape はオーバーレイだけを閉じ、下の Drawer は残す", async () => {
-    const user = setup(http.get("/api/diff", () => HttpResponse.json(makeDiffResponse())));
+  it("行数上限を超える file は描画せず省略一覧に出す(敵性 patch の DOM 爆発対策)", async () => {
+    const bombBody = Array.from({ length: 6000 }, () => "+bomb").join("\n");
+    const bombPatch = [
+      "diff --git a/bomb.txt b/bomb.txt",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/bomb.txt",
+      "@@ -0,0 +1,6000 @@",
+      bombBody,
+      "",
+    ].join("\n");
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          twoFileDiff({
+            patch: TWO_FILE_PATCH + bombPatch,
+            files: [
+              makeDiffFile(),
+              makeDiffFile({ path: "src/util.ts", additions: 1, deletions: 0 }),
+              makeDiffFile({ path: "bomb.txt", additions: 6000, deletions: 0 }),
+            ],
+          }),
+        ),
+      ),
+    );
 
-    await openOverlay(user);
-    await user.keyboard("{Escape}");
+    const overlay = await openOverlay(user);
+    await waitFor(() => {
+      expect(shadowText()).toContain("hello_marker");
+    });
 
-    expect(screen.queryByRole("dialog", { name: "worktree diff" })).not.toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "ペイン詳細" })).toBeInTheDocument();
-    // フォーカスは起点のボタンへ戻る
-    expect(screen.getByRole("button", { name: "diff を開く" })).toHaveFocus();
+    const capped = within(overlay).getByRole("region", {
+      name: "表示行数上限で省略したファイル",
+    });
+    expect(within(capped).getByText("bomb.txt")).toBeInTheDocument();
+    expect(within(capped).getByText(/上限 5,000/)).toBeInTheDocument();
+    // bomb.txt の 6000 行は shadow DOM に展開されない
+    expect(shadowText()).not.toContain("bomb");
+  });
+
+  it("Escape はオーバーレイだけを閉じ、inert 解除後に起点へフォーカスを戻す", async () => {
+    /* 実アプリ同様 #root 配下に mount し、モーダル中の inert と解除順序を検証する
+     * (inert なままの focus 復帰は実ブラウザで拒否される — 順序が本質)。 */
+    const root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+    try {
+      server.use(http.get("/api/diff", () => HttpResponse.json(makeDiffResponse())));
+      const user = userEvent.setup();
+      render(<App />, { container: root });
+      streamSnapshot(issueSnapshot());
+
+      await openOverlay(user);
+      expect(root.hasAttribute("inert")).toBe(true); // モーダル中は背面が inert
+
+      await user.keyboard("{Escape}");
+
+      expect(screen.queryByRole("dialog", { name: "worktree diff" })).not.toBeInTheDocument();
+      expect(screen.getByRole("complementary", { name: "ペイン詳細" })).toBeInTheDocument();
+      // inert が解除された後に、フォーカスは起点のボタンへ戻る
+      expect(root.hasAttribute("inert")).toBe(false);
+      expect(screen.getByRole("button", { name: "diff を開く" })).toHaveFocus();
+    } finally {
+      root.remove();
+    }
   });
 
   it("Nav のテーマ切替がオーバーレイを開いたまま反映される", async () => {
