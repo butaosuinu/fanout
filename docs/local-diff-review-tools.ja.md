@@ -1,9 +1,10 @@
 # ローカル diff レビューツール統合の予備調査
 
-ステータス: 調査報告(予備調査)。実装なし。2026-07-20 実施。
+ステータス: 調査報告(予備調査) + dashboard diff ビューア決定記録。
+予備調査は 2026-07-20、dashboard の決定は 2026-07-27。実装なし。
 候補ツールのドキュメント調査に加え、有力 3 ツールを合成リポジトリの
 linked worktree + tmux 3.6a(macOS arm64、Node 24)で一時実行して検証した。
-実装に進む場合の計画案は本書末尾にあり、issue 化はユーザー判断待ち。
+外部ツール連携と dashboard diff ビューアの実装計画は本書末尾に記録する。
 
 ## 背景
 
@@ -15,9 +16,10 @@ fanout の子セッションは `.fanout/worktrees/<slug>/` の worktree で実�
 
 前提となる設計制約は [pr-review-visualization-v2.ja.md](pr-review-visualization-v2.ja.md)
 の横断原則から引き継ぐ: diff 描画は既存ツールへ委譲し fanout は配線に徹する、
-専用 Web ビューアは自作しない、必須依存は git/tmux/gh
-(+ live 実行時の agent CLI)から増やさない、外部コマンド起動は
-allowlist + opt-in なしに出荷しない。
+独立した専用 Web ビューアと mutation を伴うレビュー UI は作らない、
+外部コマンド起動は allowlist + opt-in なしに出荷しない。
+既存の read-only dashboard SPA に置く表示専用パネルは例外とし、diff 描画は
+既存ライブラリへ委譲する。
 
 ## 評価軸
 
@@ -172,7 +174,660 @@ repo config 読込を止められない点に注意(実装詳細は Phase 1 に�
 両立しない。未導入のツールはメニューに出さないかエラーで案内し、
 インストール自体はユーザーに委ねる(agent CLI と同じ扱い)。
 
-## 実装計画案(issue 化はユーザー判断待ち)
+## Dashboard diff ビューア
+
+#575 では既存の web dashboard SPA に、Session worktree の diff を読む
+表示専用パネルを追加する。
+Drawer から全幅パネルを開き、merge-base 基準の committed、uncommitted、
+untracked の変更を syntax highlight と light/dark テーマ付きで表示する。
+dashboard の 127.0.0.1 bind、起動ごとの token、GET-only、mutation なしという
+境界は変えない。
+
+これは独立した専用 Web ビューアを新設する判断ではない。
+CodeSee の教訓が退けるのは、コードベース全体の常設地図を別製品へ分離し、
+既存のレビュー面から利用者を移す設計である。
+既存 dashboard に worktree 単位の一時的な diff 表示を足す本件は該当しない。
+サーバーは patch を配信するだけとし、描画はライブラリへ委譲する。
+
+### 描画ライブラリ
+
+`@pierre/diffs` v1.2.x を採用する。
+Apache-2.0 で、git patch を直接入力でき、Shiki による syntax highlight と
+テーマを標準で扱い、1.x の安定版に達しているためである。
+patch 入力 API または Shadow DOM のテーマ連携が実装を阻む場合は、
+`@git-diff-view/react` v0.1.x へ切り替える。
+こちらは patch 入力と React 描画を満たすが、v0.1.x のため第 1 候補にはしない。
+
+次の候補は採らない。
+
+- `diff2html`: patch から HTML 文字列を生成するため、後述の敵性入力規約と
+  衝突する
+- `react-diff-view`: syntax highlight に refractor の自前配線が必要
+- `@codemirror/merge` と Monaco DiffEditor: old/new の全文を要求する
+  2 文書エディタであり、patch の閲覧には過剰
+
+### 敵性入力
+
+worktree 由来の path、hunk、patch と git のエラー文は敵性入力として扱う。
+従来の「テキストノードのみ」という規約を、React のテキストノードまたは
+入力のエスケープを構造的に保証する描画に限る規約へ広げる。
+patch 由来の HTML 文字列や `dangerouslySetInnerHTML` は使わない。
+描画ライブラリの更新時も、タグを含む patch が DOM 要素として注入されないことを
+テストで固定する。
+
+### `GET /api/diff` wire contract
+
+リクエストは次のいずれかとし、値は URL encode する。
+
+```text
+GET /api/diff?parent=<parent>&issue=<issueNum>[&source=<sourceKey>]
+GET /api/diff?parent=<parent>&task=<taskId>[&source=<sourceKey>]
+```
+
+`issue` と `task` は片方だけを指定する。
+正の GitHub issue 行では `parent` + `issue`、plan task、`@manual`、負の
+synthetic issue 行では `parent` + `issue`/`task` + `source` を行 identity
+とする。
+`source` は `/api/snapshot` の `sourceKey` をそのまま使い、worktree-local な
+行では必須、GitHub issue 行では省略する。
+サーバーは最新 snapshot の全行と identity を完全一致させ、0 件または複数件なら
+diff を返さない。
+tmux の再起動後に再利用される `paneId` は検索キーに使わない。
+これにより tmux と Herdr のどちらも、pane の生死に関係なく記録済み
+worktree を選べる。
+worktree path と base ref はクライアントから受け取らず、token gate 通過後に
+一致した行の記録からサーバーが解決する。
+記録された base が `HEAD`、相対 rev、または対象 child branch 自身へ解決される
+場合は #516 の strict merge-base 解決に従って拒否し、フォールバックしない。
+GET の成功時は `application/json` と `Cache-Control: no-store` を付けて
+次の全フィールドを返す。
+HEAD は同じ status と header を返し、body は返さない。
+
+```ts
+type DiffResponse = {
+  paneId: string;
+  branchName: string;
+  baseBranch: string;
+  mergeBase: string;
+  capturedAt: string;
+  files: Array<{
+    path: string;
+    additions: number | null;
+    deletions: number | null;
+    binary: boolean;
+    patchIncluded: boolean;
+    omittedReason: "" | "binary" | "tooLarge" | "collectionLimit" | "responseLimit";
+  }>;
+  patch: string;
+  truncated: boolean;
+  totalBytes: number;
+};
+```
+
+`capturedAt` は UTC の RFC 3339、`mergeBase` は strict に解決した commit SHA
+とする。
+`paneId` は一致した行の backend-native ID であり、tmux `%N` に限定しない。
+`files` は後述する 500 files 上限内の全件を返し、空の場合も `null` ではなく
+`[]` を返す。
+バイナリの `additions` と `deletions` は `0`、`binary` は `true` とする。
+`collectionLimit` で省略した file の `additions` と `deletions` は `null` とし、
+統計を計算しない。
+完全なファイルブロックが応答の `patch` にある場合だけ `patchIncluded` を
+`true` にし、`omittedReason` は空文字列にする。
+含まれない場合は `patchIncluded` を `false` にし、理由を `binary`、
+`tooLarge`、`collectionLimit`、`responseLimit` のいずれかで返す。
+`patch` は `diff --git` で始まるファイルブロックを連結した git patch であり、
+HTML fragment として解釈しない。
+`totalBytes` は 10 MiB 収集上限内で得た完全なファイルブロックの合計 byte 数で
+あり、後段の 1 MiB 応答上限を適用する前の値とする。
+`truncated` は 10 MiB 収集上限または 1 MiB 応答上限で 1 file 以上を省略した
+場合に `true` とする。
+`binary` または `tooLarge` だけで省略した場合は `false` のままとし、
+`files[].omittedReason` で欠落を示す。
+
+一致した snapshot 行の `WorktreePath` はそのまま信用しない。
+server project root と path を symlink 解決して canonicalize し、project root
+から取得した `git worktree list --porcelain -z` に exact top-level として
+含まれることと、両者の canonical git common dir が同じことを確認する。
+子 directory、symlink alias、同じ branch 名を持つ別 checkout は拒否する。
+project root の worktree registry と common dir 配下の admin record から、
+対象 top-level に対応する per-worktree gitdir を一意に決める。
+対象で得た `git rev-parse --absolute-git-dir` はその gitdir と exact match
+させ、index と `HEAD` は検証済み gitdir からだけ読む。
+worktree の `.git` file または directory と admin directory は symlink を拒否し、
+device、inode、`.git` file の digest を記録する。
+この検証は snapshot 収集の開始時と確定時に繰り返し、記録された
+`branchName` と worktree の現在 branch、per-worktree gitdir の identity を
+一致させる。
+
+開始時に worktree の `HEAD` commit SHA と、strict に解決した base の full
+refname と commit SHA を記録し、この 2 SHA から merge-base を計算する。
+確定時に同じ gitdir の `HEAD` と同じ base ref を解決し直し、どちらかの SHA が
+変わっていたら snapshot を捨てて 1 回だけ取り直す。
+同じ 2 SHA から merge-base も再計算し、開始時の SHA と一致させる。
+common dir の `info/grafts` は存在すれば 502 とし、開かない。
+shallow file は no-follow で snapshot に複製し、開始時と確定時の
+device、inode、digest を一致させる。
+存在しない場合も absence を記録し、途中で作成されたら不一致とする。
+ancestry を読む Git command は request-private な grafts absence と shallow
+snapshot だけを使い、live common dir の `info/grafts` と shallow file を
+参照しない。
+shallow file が存在しない場合も immutable な空の shallow input を使う。
+この分離を安全に構成できない場合は merge-base 計算前に 502 とする。
+後述する changed-path の再取得と合わせて、同じ request で取り直す回数は
+1 回までとし、再び変化した場合は 502 にする。
+
+すべての Git 呼び出しは `LC_ALL=C`、`GIT_OPTIONAL_LOCKS=0`、
+`GIT_LITERAL_PATHSPECS=1`、`GIT_CONFIG_NOSYSTEM=1`、
+`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_ATTR_NOSYSTEM=1`、
+`GIT_NO_LAZY_FETCH=1`、`GIT_NO_REPLACE_OBJECTS=1`、
+`GIT_TERMINAL_PROMPT=0` で実行する。
+継承した `GIT_*` は消去し、この allowlist と Git が返した repository path
+だけを設定し直す。
+repository-facing Git command の `GIT_DIR` は検証済み per-worktree gitdir、
+`GIT_WORK_TREE` は検証済み canonical top-level に固定する。
+request-private な `--no-index` diff engine では `GIT_DIR` と `GIT_WORK_TREE` を
+設定しない。
+`git --no-pager` と `-c core.fsmonitor=false` を使い、pager と fsmonitor を
+起動しない。
+`HOME` と `XDG_CONFIG_HOME` は server 所有の空 directory に向け、
+repository-facing Git command に live system/global config と system/global
+attributes を読ませない。
+server 起動時に system-scoped config と user-scoped global config の relevant key を
+server 所有の immutable snapshot に固定する。
+対象は `core.autocrlf`、`core.eol`、`core.fileMode`、`core.symlinks`、
+`core.ignoreCase`、`core.precomposeUnicode`、`core.excludesFile`、
+`core.attributesFile`、`safe.directory` とする。
+system/global config source を安全に確定または parse できない場合と、
+`include`/`includeIf` がある場合は 502 とし、include 先を開かない。
+system/global の `core.excludesFile` は参照先を no-follow、256 KiB 上限で同じ
+snapshot に複製し、安全に複製できなければ 502 にする。
+`core.excludesFile` が未指定の場合は、server 起動時の trusted `XDG_CONFIG_HOME`、
+またはその未設定時の `HOME/.config` から Git 既定の `git/ignore` を解決する。
+既定 file は同じ no-follow、256 KiB 上限で snapshot に複製し、absence も記録する。
+既定 path を安全に確定または複製できない場合は 502 にする。
+Git が system/global attribute source として解決する file は no-follow、
+256 KiB 上限で同じ snapshot に複製し、安全に確定または複製できなければ 502 にする。
+server 起動後は live system/global config、excludes file、attribute source を
+再読込しない。
+protected scope の `safe.directory` は複数値を保持して評価する。
+snapshot が `*` または対象 path を信頼していた場合も、repository-facing Git
+command へ渡す値は検証済み canonical project root と canonical worktree path
+だけに置き換え、`*` と対象外 path は渡さない。
+最初の repository-facing Git command に必要な project root は server が保持する
+dashboard の project identity から確定し、request の path は使わない。
+snapshot が対象 path を信頼していない場合は Git の ownership 拒否を維持する。
+common config と worktree config は raw file として no-follow で検査する。
+repo-local または worktree-local の `core.attributesFile`、
+`core.excludesFile`、`core.worktree` と、外部 config を読める
+`include`/`includeIf` が 1 件でもあれば 502 にし、指定先を開かない。
+section と key は Git と同じく ASCII case-insensitive に照合し、曖昧または
+parse できない config も 502 にする。
+検査に使った common/worktree config は immutable snapshot とし、
+repository-facing Git command は live config を再読込せず同じ snapshot だけを
+使う。
+固定方法は #577/#578 に委譲する。
+repository object format は同じ immutable config snapshot に固定する。
+`sha1` だけを許可し、`sha256` と不明な format は object 読み出しと patch 生成の
+前に 502 にする。
+backend は object database に触れる前に、Git が `GIT_NO_LAZY_FETCH` を
+サポートする version であることを確認する。
+未対応 version と missing object は remote fetch を試さず 502 にする。
+strict ref 解決、merge-base、tree 列挙、content 読み出しで使う commit、tree、
+blob は、Git object header と content から SHA-1 を再計算して期待 object ID と
+一致させる。
+不一致 object の内容と、それをたどった Git command の結果は使わず 502 にする。
+object traversal を検証済み immutable input に固定できない場合も 502 にする。
+
+request ごとに mode `0700` の private snapshot directory を server の
+temporary root に作る。
+merge-base tree は strict に解決した commit の `ls-tree` と `cat-file`、
+index は private directory に複製した index file の `ls-files --stage -z` と
+`cat-file` から読む。
+複製した index に stage 0 以外の entry が 1 件でもあれば、stage 1/2/3 の
+いずれも選択せず manifest 作成前に 502 とする。
+複製した index に split-index の link extension がある場合は 502 とし、
+live `sharedindex.<hash>` を開かない。
+worktree content は `openat` と `readlinkat` で raw byte として読み、
+symlink をたどらない。
+各 path component は worktree root の directory file descriptor から
+`O_NOFOLLOW` でたどり、root 外へ出る path を拒否する。
+target entry は regular file、symlink、gitlink だけを許可する。
+worktree に entry がない gitlink は複製 index の commit pointer を最終 side に
+使う。
+gitlink path が no-follow で空かつ `.git` entry なしと確認できる directory の
+場合も、未初期化 submodule として複製 index の commit pointer を最終 side に使う。
+空判定と directory の `lstat` fingerprint は manifest に記録し、snapshot 確定時に
+同じ directory file descriptor から再検証する。
+directory に `.git` を含む entry がある場合、または空と安全に確認できない場合は
+nested worktree を開かず 502 にする。
+これにより、unstaged の submodule `HEAD` 変更を index pointer だけで差分なしに
+しない。
+merge-base で regular file か symlink だった path が worktree で directory の
+場合は、merge-base entry の削除と standard ignore 適用後の配下 untracked file の
+追加に分ける。
+複製 index だけに同名 entry がある場合は parent path の削除を生成せず、配下の
+最終 file だけを追加候補にする。
+directory 自体は content source、candidate、`files` に含めない。
+安全に分解できない directory と FIFO、socket、device は content を読む前に
+502 にする。
+regular file は `O_NONBLOCK|O_NOFOLLOW` を付けて `openat` し、直後の `fstat` で
+regular file のままであることと `lstat` の device、inode、mode が一致することを
+確認する。
+symlink は `readlinkat` の後に `lstat` を取り直し、device、inode、mode の一致を
+確認する。
+worktree の path を content source として Git に渡さない。
+
+candidate path は merge-base entry、複製した index entry、index stat と raw
+`lstat` の差、standard ignore 適用後の untracked path の和から決める。
+index stat と一致した tracked path は clean とみなし、racy な stat は changed
+として扱う。
+merge-base と index は mode と object ID で比較する。
+manifest の logical mode は immutable config snapshot の effective value に従う。
+`core.fileMode=false` では tracked regular file の executable bit の差を index
+side に正規化して mode-only change にせず、untracked regular file の logical
+mode も 100644 にする。
+`core.symlinks=false` では index mode 120000 の symlink を表す worktree regular
+file を logical mode 120000 とし、その raw content を link target として扱う。
+安全に正規化できない entry は 502 にする。
+`core.ignoreCase=true` では untracked traversal path を index path set と
+Git-compatible に case-fold 比較し、一致する path を untracked として加えない。
+case-fold 後に複数の path が衝突する場合は 502 にする。
+macOS で `core.precomposeUnicode=true` の場合だけ、traversal path を
+Git-compatible に precompose してから index path との照合、candidate identity、
+ignore pattern 照合に使う。
+precompose 後に複数の path が衝突する場合は 502 にする。
+macOS 以外ではこの config 値にかかわらず path の byte identity を維持する。
+複製した index に skip-worktree または sparse-directory entry がある場合、
+worktree に path がないことを削除として扱わない。
+immutable index の content を最終 side に使うか、安全に判定できなければ 502 に
+する。
+選択は #577/#578 に委譲する。
+server 起動時に複製した system/global excludes、worktree 内の `.gitignore`、
+verified common dir の `info/exclude` は Git の precedence で適用する。
+後者 2 source は no-follow と 256 KiB 上限で private snapshot に複製する。
+実装は immutable な ignore source で directory traversal を prune し、ignored
+path を列挙結果へ出さず、metadata 出力上限と対象 file 数に含めない。
+`core.ignoreCase=true` では同じ Git-compatible な case-fold をすべての ignore
+source の pattern 照合にも適用する。
+prune の実装方式は #577/#578 に委譲する。
+検証済み worktree root の `.git` entry は entry 自体だけを開かずに prune する。
+descendant directory に `.git` entry がある場合は、同じ directory の他 entry を
+収集する前に immutable な merge-base/index manifest と突合し、marker が nested
+repository を表すか安全に検証する。
+検証は Git command を起動せず、nested config、object、worktree content を読まない
+範囲に限る。
+空の file/directory、unsupported file type、外部 path、内部上限超過などで
+nested repository と安全に確認できない marker は 502 とする。
+enclosing directory 自体または全 descendant に tracked entry がなく、tracked
+file/symlink から directory への置換でもない場合だけ、純粋な untracked nested
+repository として enclosing directory 全体を prune する。
+tracked entry または旧 path の削除が 1 件でも重なる場合は、変更を隠さず 502 に
+する。
+prune した directory と全 descendant は candidate path、対象 file 数、metadata、
+patch に含めない。
+`git add -N` を含む index/worktree 変更コマンドは呼ばない。
+
+snapshot manifest には各 side の logical path、mode、size、object ID または
+raw content、worktree の `lstat` fingerprint を記録する。
+開始時の tracked changed-path 集合と untracked path 集合は、NUL 区切りの
+byte 列として保存する。
+収集後は複製した index の全 tracked entry に同じ stat 判定を再適用し、
+tracked changed-path 集合を作り直す。
+index file の digest、tracked changed-path 集合、untracked path 集合、
+manifest に含めた worktree path、attribute source、ignore source、shallow file の
+fingerprint を開始時と比較する。
+開始時と一致しなければ private snapshot を捨て、前述の合計 1 回以内で
+取り直す。
+再び変化した場合は 502 にする。
+一致した時点で snapshot を確定して `capturedAt` を記録する。
+確定した merge-base side と最終 worktree side は後述の変換後に mode と
+canonical content を比較する。
+両方が同じ candidate path は `files`、500 files 上限、patch 収集から除外する。
+確定後は live worktree、live index、repository attributes を patch または
+numstat の入力に使わない。
+
+server 起動時に複製した system/global attributes、current worktree の
+`.gitattributes`、収集時に複製した `.git/info/attributes` の各 source を Git の
+precedence で適用し、候補 path の `filter` attribute を preflight する。
+current worktree に必要な `.gitattributes` がない場合だけ複製 index の同じ path
+へ fallback し、merge-base tree の attribute source は適用しない。
+`core.ignoreCase=true` では同じ Git-compatible な case-fold をすべての
+attribute source の pattern 照合にも適用する。
+regular-file side で 1 source でも設定されていたら、clean/process filter の
+command 設定有無にかかわらず 502 へ fail closed する。
+attribute の判定は command 名を得るだけで、driver を起動しない。
+実際の diff engine は attributes を参照せず、private snapshot から後述の変換を
+適用した canonical byte pair と logical path だけを受け取る。
+この構造により、preflight 後に live worktree や `.gitattributes` が変わっても
+filter command は起動しない。
+同じ preflight で、system、global、common、worktree の precedence を反映した
+`core.autocrlf`、`core.eol` と、候補 path の `text`、legacy `crlf`、`eol`、
+`working-tree-encoding`、`ident` attribute を immutable input から評価する。
+legacy `crlf` は Git-compatible な `text`/`eol` の意味へ正規化する。
+raw byte pair と通常の Git diff の内容が異なる変換は、外部 command を起動せず
+各 side に Git と同じ方向で再現するか、502 にする。
+attribute と config による content 変換は logical mode が regular file の side
+だけに適用する。
+mode 120000 は merge-base blob または `readlinkat` の raw target、mode 160000 は
+commit pointer を content identity とし、filter、改行、encoding、`ident` 変換を
+適用しない。
+変換後の byte pair を canonical content とし、diff engine、binary 判定、
+additions/deletions、synthetic object ID の共通入力にする。
+変換を安全に再現できない場合は binary 判定と object ID 計算の前に 502 とし、
+raw byte pair を成功 response に使わない。
+再現と fail closed の選択は #577/#578 に委譲する。
+
+tracked と untracked の patch は確定した snapshot から file ごとに生成する。
+Git を diff engine に使う場合は repository の外にある request-private
+directory で `--no-index` を使い、live worktree、repository path、object
+database、index、attributes を渡さない。
+`--no-index` の exit status は `0` と「差分あり」の `1` を成功、`2` 以上を
+失敗として扱う。
+`--no-ext-diff`、`--no-textconv`、`--no-color`、`--no-renames`、`--text`、
+`--full-index`、`--unified=3`、`--inter-hunk-context=0`、
+`--diff-algorithm=myers`、`--no-indent-heuristic` を固定する。
+backend は logical path から `diff --git`、`---`、`+++` header を組み立て、
+path を C-quote する。
+mode と object ID は manifest から `old mode`、`new mode`、
+`new file mode`、`deleted file mode`、`index` header に反映する。
+regular file、symlink、gitlink の file type bits が変わる path は、単一 block の
+`old mode`/`new mode` にせず、同じ path の deleted-file block と new-file block
+に分ける。
+その path は `files` では 1 件とし、patch は 2 block を削除、追加の順に連結して、
+`additions` と `deletions` は両 block の合計とする。
+gitlink の object ID は commit pointer を使い、patch hunk の各 side は
+`Subproject commit <40-hex-oid>\n` という標準 pseudo-content から組み立てる。
+bare SHA を request-private `--no-index` の入力にしない。
+worktree canonical content の object ID は Git blob と同じ SHA-1 で計算し、
+request-private `--no-index` が出力した `index` header を信用しない。
+additions と deletions は同じ canonical byte pair の hunk から数え、repository-wide
+の `git diff --numstat` は呼ばない。
+
+path の列挙結果は NUL 区切りで解析する。
+`--no-renames` により rename/copy は delete と add の 2 file として返す。
+repository-relative path は snapshot manifest から取得し、patch header の
+C-quoted 文字列を path 復元に使わない。
+untracked symlink は mode 120000 の link 自体を対象とし、link 先を読まない。
+regular-file path の `diff` attribute は immutable source から binary probe より
+先に評価する。
+unset の `-diff` は binary、値なしで set された `diff` は text とし、
+`diff=<driver>` は driver を起動せず 502 にする。
+`diff` が unspecified の場合だけ、各 side の canonical content の先頭
+8000 bytes に NUL byte があるかで binary を判定する。
+patch は binary でない path ごとに repository-relative path の byte 順で生成する。
+以下では 1 path 分の patch を file group と呼ぶ。
+通常の file group は完全な `diff --git` block 1 個、file type change は前述の
+削除・追加 block 2 個で構成し、収集上限と response 上限では不可分に扱う。
+patch は完全な file group を path 順に連結する。
+symlink は mode 120000 の link 自体、gitlink は commit pointer だけを対象とし、
+どちらも参照先の file や nested worktree を読まない。
+未初期化の submodule は superproject index の gitlink commit だけを使う。
+初期化済みの submodule は nested `HEAD` や content を無視して成功させず、
+前述の 502 にする。
+バイナリと、いずれかの raw side または canonical side が
+256 KiB(262,144 bytes)を超える changed file は `files` に含めるが diff engine へ
+渡さない。
+untracked file、削除、mode change、または複製 index と一致する stat から
+merge-base と最終 side の差を content 読み出しなしに確定できる tracked file だけを
+`tooLarge` として成功 response に含める。
+tracked regular file の stat が複製 index と一致しないか racy で、上限内で
+content identity を確認できない場合は、stat-only candidate を変更として返さず
+502 にする。
+`omittedReason` は `binary` または `tooLarge` とする。
+`tooLarge` は `binary: false` とし、`additions` と `deletions` は `0` とする。
+Git object の size は content を得る前に `cat-file --batch-check`、worktree
+regular file の size は `lstat` で確認する。
+上限を超えた side は content を読まず、上限以下の regular file だけを
+private snapshot に全量保存する。
+raw side が上限以下でも、各変換の出力は 262,144 bytes + 1 で打ち切る。
+canonical side が上限を超えた時点で `tooLarge` とし、binary 判定、diff、
+additions/deletions、synthetic object ID の計算を行わない。
+attribute source が 256 KiB を超えた場合は解析せず 502 にする。
+
+repository-relative path は JSON 化の前に UTF-8 validity を検査する。
+不正な path は byte 列を置換して表示せず 502 にする。
+complete patch block も UTF-8 validity を検査し、不正なら該当 file を
+`binary: true`、`patchIncluded: false`、`omittedReason: "binary"` とする。
+Git のエラー出力が UTF-8 として不正な場合は、byte 列を置換せず固定の
+`git command failed` message を返す。
+
+1 request の diff 収集には共有の 10 秒 deadline を設定する。
+各 subprocess で 10 秒を取り直さず、worktree 検証、private snapshot の収集と
+確定、non-Git の stat/raw read、metadata 収集、patch 生成のすべてで残り時間を
+使う。
+binary probe は 8000 bytes/side、変換出力と diff engine 用の regular-file read は
+256 KiB/side を超えない。
+1 request で raw side の読み出しと canonical side の変換出力に使う累積 byte
+budget は、全 file/side 合計で 32 MiB(33,554,432 bytes)とする。
+per-side 上限で `tooLarge` とした content は読まず、この budget に含めない。
+raw content を解放または deduplicate しても読み出した byte を差し引かず、
+canonical output も同じ budget へ加算する。
+既知の raw size 合計だけで budget を超える場合は content を保存する前に 502 とし、
+変換中に超える場合は binary 判定、diff、統計、OID 計算を止めて 502 にする。
+deadline 到達時は process group を停止し、partial response を返さず 502 にする。
+patch 以外の stdout とすべての stderr は 10 MiB + 1 byte を検出した時点で
+process group を停止して 502 にし、buffer も 10 MiB + 1 byte を超えない。
+
+tracked と untracked を合わせた対象数は 500 files を上限とする。
+merge-base tree と index の raw metadata entry 数にはこの上限を適用しない。
+raw metadata は共有 deadline と #577/#578 で決める内部 byte 上限の範囲で最後まで
+join する。
+ignore、nested repository の prune、mode と canonical content の比較を終え、
+成功 response の `files` に残る変更 path が 501 件になった時点で 502 にする。
+上限超過で canonical content を作らない `tooLarge` も変更 path として数える。
+成功 response の `files` は必ず対象全件を含む。
+
+patch の収集上限は 10 MiB(10,485,760 bytes)とする。
+各 file group の diff engine stdout は残り byte 数 + 1 byte まで読み、完全な
+file group を加えると上限を超える場合は、その group の block を 1 個も加えない。
+その file と後続の patch 対象 file は `patchIncluded: false`、
+`omittedReason: "collectionLimit"` とし、`truncated` を `true` にする。
+同じ file の `additions` と `deletions` は `null` とする。
+以後の patch subprocess は起動しない。
+patch buffer は 10 MiB + 1 byte を超えない。
+各 diff engine の regular-file 入力も before/after 各 256 KiB 以下であり、
+巨大 tracked file、巨大 untracked file、sparse file の content は渡さない。
+
+成功 response の固定上限は、JSON serialization 後の body 全体で
+1 MiB(1,048,576 bytes)とし、クエリによる変更は許さない。
+`files` 全件、空の `patch`、その他の field を最終形で serialize した
+metadata-only body が上限を超える場合は、`files` を省略せず 502 にする。
+上限以下なら、収集済みの完全な file group を path 順に 1 つずつ加えた各候補を
+JSON serialize し、body 全体が上限内に収まる最大の先頭部分を返す。
+この計算は改行、control character、quote の JSON escape 後の UTF-8 byte 数を
+使い、file group とその中の block の途中では切らない。
+上限で除外した file と後続の patch 対象 file は `patchIncluded: false`、
+`omittedReason: "responseLimit"` とし、`truncated` を `true` にする。
+`responseLimit` は収集済みの完全な file group だけに適用し、`binary`、
+`tooLarge`、`collectionLimit` の既存理由を上書きしない。
+両上限に該当する file は、先に適用した `collectionLimit` を報告する。
+先頭の 1 file group も収まらない場合は `patch` を空文字列にする。
+body 全体が上限以下なら patch をそのまま返し、10 MiB 収集上限で設定済みの
+`truncated` は保持する。
+SPA は `truncated` が `true`、またはいずれかの `patchIncluded` が `false` なら、
+review 対象が patch に揃っていないことを警告する。
+
+10 秒、500 files、10 MiB、1 MiB、256 KiB、32 MiB は初期値である。
+#578 の実装で調整する場合は同じ PR で本書、handler test、MSW fixture を更新し、
+実装と wire contract を一致させる。
+同じ test で、未初期化の submodule は gitlink 変更を含め、初期化済みの
+submodule は nested `HEAD` の変更有無にかかわらず 502 になることを固定する。
+未初期化 submodule の path が欠落または空 directory の場合は index pointer を
+使い、空 directory に entry または `.git` marker が現れた場合は 502 にする。
+filter command を一度も起動しないこと、非 UTF-8 path は 502、非 UTF-8 content は
+`binary` になることも固定する。
+preflight 後に live worktree と `.gitattributes` を変更しても filter command を
+起動しないこと、raw content が 256 KiB 以下でも変換後の canonical content が
+256 KiB を超える tracked file は binary/OID を計算せず `tooLarge` になることを
+同じ test で確認する。
+全 file/side の raw read と canonical output の累積が 32 MiB を超える場合は、
+content の保存または変換を止めて 502 になることを確認する。
+per-side 上限で `tooLarge` とした content は読まず、累積 budget だけを理由に
+metadata-only 表示を 502 にしないことを確認する。
+clean と判定した tracked file を収集中に変更した場合は snapshot を取り直すこと、
+partial clone の missing object で fetch または credential helper を起動せず
+502 にすることも固定する。
+commit、tree、blob の content と期待 object ID が一致しない場合は 502 となり、
+不一致 content を patch に使わないことを確認する。
+FIFO、socket、device は blocking read の前に 502 とし、JSON escape と 500 files
+の metadata を含む成功 body が 1 MiB を超えないことを確認する。
+snapshot 収集中の `HEAD`/base ref 変更と per-worktree gitdir の差し替えを
+検出すること、repo-local `core.attributesFile` と config include は 502 に
+なることも固定する。
+変更のある regular file で `git diff --no-index` が exit 1 を返しても、
+handler は 200 と patch を返すことを確認する。
+repo-local `core.excludesFile` と `core.worktree` は 502 にし、
+`info/exclude` の変更は snapshot を取り直すことを確認する。
+replace ref は無視し、legacy graft は 502、shallow boundary の変更は snapshot の
+取り直しになること、ancestry command は live grafts/shallow を読まないことも
+固定する。
+base=`A`、index=`B`、worktree=`A` と、staged add 後に worktree から削除した
+path は最終変更なしとして `files` に含めないことを確認する。
+tracked regular file または symlink を同名 directory と配下の untracked file に
+置き換えた場合は、旧 path の削除と新規 file の追加に分けることを確認する。
+standard ignore を適用しない raw path 集合が 10 MiB を超える worktree でも、
+ignore 後の対象が上限内なら 200 と対象 file だけを返すことを確認する。
+tracked entry が 500 件を超えても最終変更が 500 files 以下なら 200 とし、
+最終変更 path が 501 件なら 502 になることを確認する。
+`collectionLimit` の file は統計が `null` となり、1 MiB response 上限にも
+該当する場合は `omittedReason: "collectionLimit"` を保持することを確認する。
+config snapshot の確定後に live config を差し替えても Git command が再読込しない
+ことと、非実行型の改行/encoding 変換を無視した全行差分を返さないことを確認する。
+skip-worktree と sparse-directory entry は削除として返さず、安全に最終 side を
+決められない場合は 502 になることを確認する。
+root の `.git` entry と純粋な untracked nested repository は候補、対象 file 数、
+metadata、patch のすべてから除外し、nested repository は enclosing directory
+全体を prune することを確認する。
+空の `.git` file/directory など nested repository と確認できない marker は、
+enclosing directory を黙って prune せず 502 になることを確認する。
+tracked subtree に `.git` entry を追加した場合と、tracked file を `.git` entry の
+ある directory に置き換えた場合は、tracked 変更を隠さず 502 になることを確認する。
+system または global だけに設定した `core.autocrlf` と `core.eol` も改行変換へ
+反映し、system/global excludes に一致する path は candidate path に含めないことを
+確認する。
+`core.excludesFile` 未指定時も既定の global `git/ignore` に一致する path は
+candidate path に含めないことを確認する。
+system/global config と excludes file を server 起動後に差し替えても再読込しない
+ことを確認する。
+system/global attributes だけに設定した `filter` は command を起動せず 502 とし、
+`text`、legacy `crlf`、`eol`、`working-tree-encoding`、`ident` も変換または
+502 になることを確認する。
+merge-base にだけ残る `.gitattributes` は current worktree の判定へ混ぜず、
+current worktree で欠落する source だけ複製 index へ fallback することを確認する。
+legacy `crlf` による改行正規化を適用し、raw content の差だけで全行差分にしない
+ことを確認する。
+`working-tree-encoding` で UTF-16 から変換できる file は raw NUL byte を理由に
+binary とせず、canonical content の text hunk を返すことを確認する。
+mode 120000 の symlink target は `text`、`eol`、`working-tree-encoding`、`ident`
+に一致しても raw bytes を canonical content とし、target の CRLF 差分を消さない
+ことを確認する。
+worktree side の synthetic object ID と additions/deletions は同じ canonical
+content から計算することを確認する。
+binary probe は 0-origin offset 7999 の NUL を binary、offset 8000 の NUL を
+text と判定することを確認する。
+`-diff` は NUL のない regular file も binary、値なしの `diff` は NUL のある
+regular file も text とし、`diff=<driver>` は driver を起動せず 502 になることを
+確認する。
+tracked file が 256 KiB を超え、stat だけが複製 index と異なる場合は、
+変更と確定できないまま `tooLarge` にせず 502 になることを確認する。
+gitlink patch は bare SHA ではなく
+`Subproject commit <40-hex-oid>` の削除・追加 hunk を返すことを確認する。
+regular file、symlink、gitlink 間の file type change は同じ path の
+deleted-file block と new-file block に分かれ、`files` は 1 件、統計は両 block の
+合計になることを確認する。
+その 2 block は 10 MiB 収集上限と 1 MiB response 上限の境界で分割せず、
+両方を含めるか両方を省略することを確認する。
+`core.fileMode=false` の chmod は差分にせず、executable bit のある untracked
+regular file は logical mode 100644 とすることを確認する。
+`core.symlinks=false` の symlink 表現は logical mode 120000 として扱うことを
+確認する。
+`core.ignoreCase=true` では index path と case-fold 一致する traversal path を
+untracked add にせず、case だけが異なる ignore pattern も適用し、衝突時は 502 に
+なることを確認する。
+同じ case-fold を system/global/current/index fallback の attribute pattern
+照合にも適用し、case だけが異なる `diff`、`text`、`working-tree-encoding`
+などを見落とさないことを確認する。
+macOS で `core.precomposeUnicode=true` の場合は NFC/NFD が異なる clean path を
+untracked add にせず、precompose 後の衝突は 502 になることを確認する。
+macOS 以外では同じ config でも path の byte identity を維持することを確認する。
+protected scope の `safe.directory` が対象 path または `*` を信頼する shared
+checkout は exact canonical path だけを Git command へ渡して処理でき、対象外の
+path は信頼しないことを確認する。
+split index は 502 となり、`sharedindex.<hash>` を開かないことを確認する。
+modify/delete と add/add の未解決 conflict は stage 1/2/3 の内容を選ばず 502 に
+なることを確認する。
+SHA-256 repository は 502 とし、SHA-1 repository の synthetic worktree side は
+Git blob と同じ 40 桁の object ID になることを確認する。
+
+handler が生成する次のエラー body は `{"error":"message"}` とし、
+`application/json` と `Cache-Control: no-store` を付ける。
+
+- `400 Bad Request`: identity query が欠落または不正で、`issue`/`task` の
+  排他指定や worktree-local 行の `source` 必須条件を満たさない
+- `404 Not Found`: identity が snapshot の 1 行に定まらない、worktree 記録が
+  ない、cleanup 済み、または同じ git common dir の worktree として検証できない
+- `502 Bad Gateway`: base/merge-base の strict 解決、filter/diff attribute の検査、
+  system/global config/excludes/attributes、config/attribute 由来の変換、
+  mode/case/path の正規化、`safe.directory` の限定、split/sparse index、
+  未解決 conflict、tracked subtree と重なる nested repository、submodule、
+  object format の安全な確定、
+  object ID と content の不一致、live grafts/shallow を使わない ancestry、
+  lazy fetch を使わない object 読み出し、snapshot の確定、unsupported file type、
+  diff 収集 timeout、32 MiB snapshot input 上限、
+  500 files/metadata 出力上限、metadata-only response 上限の超過、または
+  diff engine の実行に失敗した
+
+共通 middleware が生成する token 不一致の `403 Forbidden` と GET/HEAD 以外の
+`405 Method Not Allowed` は既存どおり `text/plain` とし、上の JSON error
+contract には含めない。
+ただし `/api/diff` の全 response は middleware error を含めて
+`Cache-Control: no-store` を付ける。
+
+### 実装委譲事項
+
+#576 は HTTP request/response の意味論、上限、エラーと dashboard の決定を固定する。
+次の実装方式と内部上限は #577/#578 で決める。
+
+- `GIT_INDEX_FILE` などで複製 index を live index から分離して読み出す方法
+- common/worktree config の immutable snapshot、fingerprint、Git command への固定
+- system/global config、excludes、attributes の server-lifetime snapshot、fingerprint
+- ancestry command を private grafts/shallow input と検証済み object view に固定する方法
+- commit/tree/blob content の object ID を再検証する方法
+- protected scope の `safe.directory` を exact canonical path に限定して渡す方法
+- `core.fileMode`、`core.symlinks`、`core.ignoreCase`、
+  `core.precomposeUnicode` を manifest と path 照合へ反映する方法
+- unmerged entry、split-index extension、repository object format の検出方法
+- skip-worktree/sparse-directory entry の最終 side を immutable index から作る方法
+- current `.gitattributes` の複製、index fallback、`core.ignoreCase` の pattern
+  照合を固定する方法
+- file/symlink から directory への置換と nested repository を traversal で分ける方法
+- nested `.git` marker を command 実行なしに検証する方法
+- `diff` attribute の binary override、file type change の 2 block 分解、
+  gitlink pseudo-content を生成する方法
+- 非実行型の改行/encoding 変換と canonical content を再現するか fail closed に
+  するかの選択
+- request-private temporary directory を全終了経路で削除する方法
+- admin/metadata file の総 byte 数、source 数、file type の内部上限
+
+#577/#578 の実装判断が本書と食い違う場合は、同じ PR で本書、handler test、
+MSW fixture を更新して wire contract と実装を一致させる。
+
+### レビューコメントの将来計画
+
+表示専用の境界を保ったまま、指摘を返す導線は次の 3 択を残す。
+
+1. difit の認証または危険な endpoint の無効化が実現した後、保留を解除して
+   dashboard から difit URL へ移す
+2. TUI の還元ループ #518-521 に委譲する
+3. dashboard とは別プロセスの opt-in mutation サーバーを追加する
+
+2 を推奨する。
+dashboard で diff を読み、指摘は TUI または GitHub PR で付ける。
+1 は difit の保留条件を満たすまで採れず、3 は別の認証、寿命管理、mutation
+境界を増やすため当面採らない。
+
+## 実装計画
 
 ### Phase 1: 起動導線(MVP)
 
@@ -255,11 +910,13 @@ skill / briefing 側に置く(CLI は LLM を呼ばない鉄則の維持)。
 - v2 構想の案 4(Findings 裁可コンソール)が想定する「d = diff ビュアーへ
   パイプ」導線は、この Phase の自然な続きになる
 
-### Phase 3(任意): dashboard からの導線
+### Phase 3: dashboard diff ビューア(#575)
 
-difit を保留から戻した場合に、web dashboard へその URL リンクを出す程度に
-留める。dashboard の read-only 境界(GET のみ、mutation なし)は変えない。
-ビュアー起動のような副作用は TUI / tmux 側の導線に置いたままにする。
+既存の web dashboard SPA に表示専用パネルを追加し、上記の
+`GET /api/diff` から worktree の patch を読む。
+dashboard の read-only 境界(GET のみ、mutation なし)は変えない。
+difit URL への導線は前提にせず、difit の保留記録も変更しない。
+指摘の還元は TUI の #518-521 または GitHub PR に委譲する。
 
 ## 不採用の記録
 

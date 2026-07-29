@@ -116,8 +116,9 @@ Baz の Discussion Memory)。アーキテクチャはほぼ全社が agentic 設
 ### 可視化技術
 
 生き残った可視化と死んだ可視化の線引きは一貫している。生き残るのは「**PR/変更
-単位で、その瞬間のために生成され、既存のレビュー画面(GitHub コメント・端末)
-に内接する使い捨ての可視化**」(SemanticDiff・Difftastic・walkthrough 系)。
+単位で、その瞬間のために生成され、既存のレビュー画面(GitHub コメント、端末、
+fanout dashboard)に内接する使い捨ての可視化**」(SemanticDiff、Difftastic、
+walkthrough 系)。
 死ぬのは「コードベース全体の常設地図」(CodeSee、CodeViz への HN 批判)。
 GitHub 上の表現上限は事実上 Markdown 表 + Mermaid + `<details>` であり、専用
 ビューアへ誘導した CodeSee は敗れた — fanout の Mermaid 一択 diagram gate は
@@ -605,9 +606,12 @@ effort routing、OpenAI Codex AGENTS.md Review guidelines、arXiv 2603.25773
    られる。検証系の機能は「プローブ関連パスへの接触」を機械検出し、検証通過
    でも緑バッジを出さない。CI ゲーミング(テスト削除・skip 追加)は無条件で
    人間精読に落とす。
-5. **GitHub ネイティブ + 端末内で完結** — 専用 Web ビューアは作らない(CodeSee
-   の教訓)。表現は Markdown 表 + Mermaid + `<details>` と、TUI + delta 委譲の
-   範囲に収める。
+5. **既存のレビュー面に内接** — 独立した専用 Web ビューアと mutation を伴う
+   レビュー UI は作らない。既存の read-only dashboard SPA に置く表示専用
+   パネルは例外とする。CodeSee の教訓が批判するのはコードベース全体の常設地図を
+   専用製品へ分離する設計であり、既存 dashboard への worktree diff 表示は
+   該当しない。表現は Markdown 表 + Mermaid + `<details>`、TUI + delta 委譲、
+   dashboard の表示専用パネルの範囲に収める。
 6. **計測を最初から仕込む** — 指摘の良し悪しは修正行動で測る(resolution rate、
    Cursor Bugbot / Martian Bench の手法)。「レビュー時間半減」を主張する機能は
    その実測手段を同梱する。
