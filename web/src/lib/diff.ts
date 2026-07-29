@@ -10,14 +10,17 @@ export function parseDiffFiles(patch: string): FileDiffMetadata[] {
   return parsePatchFiles(patch).flatMap((p) => p.files);
 }
 
-/* サーバーの byte 上限(1 MiB 応答)は DOM 行数を制限しない — 契約内でも
- * 改行だけの 256 KiB ファイルは約 26 万行に展開され、非仮想の FileDiff を
- * メインスレッドで停止させ得る(worktree 由来の patch は敵性入力)。初期
- * mount は行数予算内に抑え、超過 file は collapsed(ヘッダのみ)で出して
- * 展開をユーザーのクリックに委ねる。1 描画行はおよそ 8 DOM 要素になる
- * (実測)ので、予算いっぱいでも 5 万要素程度に収まる。 */
+/* サーバーの byte 上限(1 MiB 応答)は DOM コストを制限しない — 契約内でも
+ * (a) 改行だけの 256 KiB ファイルは約 26 万行に展開され、(b) token 高密度の
+ * TypeScript なら約 1,000 行で 36 万 HAST 要素を生成し得る(worktree 由来の
+ * patch は敵性入力)。初期 mount は行数と文字数の両予算内に抑え、超過 file は
+ * collapsed(ヘッダのみ)で出して展開をユーザーのクリックに委ねる。実測で
+ * 1 描画行 ≈ 8 要素、1 文字 ≈ 0.4 token 要素なので、予算いっぱいでも初期
+ * mount は 5 万要素程度に収まる。 */
 export const MAX_FILE_RENDER_LINES = 1_500;
 export const MAX_TOTAL_RENDER_LINES = 6_000;
+export const MAX_FILE_RENDER_CHARS = 65_536; // 64 KiB
+export const MAX_TOTAL_RENDER_CHARS = 131_072; // 128 KiB
 
 /* hunk 単位の描画行数の合計。file 単位の unifiedLineCount は hunk 前の
  * 折りたたみ済み context(collapsedBefore)を含む絶対位置ベースのため
@@ -29,19 +32,40 @@ export function renderedLineCount(f: FileDiffMetadata): number {
   return n;
 }
 
+/* 描画される行テキストの総文字数。Shiki token(≒ DOM 要素)数は行数では
+ * なく内容量に比例するため、行数予算と別に拘束する。patch 由来の diff では
+ * additionLines / deletionLines が描画対象行そのもの(context は両側に
+ * 現れて二重に数えるが、予算として保守的な側に倒れるだけ)。 */
+export function renderedCharCount(f: FileDiffMetadata): number {
+  let n = 0;
+  for (const s of f.deletionLines) n += s.length;
+  for (const s of f.additionLines) n += s.length;
+  return n;
+}
+
 export interface RenderPlanEntry {
   file: FileDiffMetadata;
   lines: number;
+  chars: number;
   overBudget: boolean;
 }
 
 export function planFileRendering(files: FileDiffMetadata[]): RenderPlanEntry[] {
-  let budget = MAX_TOTAL_RENDER_LINES;
+  let lineBudget = MAX_TOTAL_RENDER_LINES;
+  let charBudget = MAX_TOTAL_RENDER_CHARS;
   return files.map((file) => {
     const lines = renderedLineCount(file);
-    const overBudget = lines > MAX_FILE_RENDER_LINES || lines > budget;
-    if (!overBudget) budget -= lines;
-    return { file, lines, overBudget };
+    const chars = renderedCharCount(file);
+    const overBudget =
+      lines > MAX_FILE_RENDER_LINES ||
+      chars > MAX_FILE_RENDER_CHARS ||
+      lines > lineBudget ||
+      chars > charBudget;
+    if (!overBudget) {
+      lineBudget -= lines;
+      charBudget -= chars;
+    }
+    return { file, lines, chars, overBudget };
   });
 }
 

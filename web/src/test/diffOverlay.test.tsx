@@ -323,6 +323,49 @@ describe("diff オーバーレイ", () => {
     });
   });
 
+  it("行数が少なくても token 高密度な契約内 patch は collapsed で mount する", async () => {
+    /* codex adversarial review の再現手順(各 side 236 KB・260 行の TS ×
+     * 4 file ≒ 36 万 HAST 要素)の縮小版 — 行数予算(6,000 行)は満たすが
+     * per-file 文字数上限(64 KiB)を超える 1 file。full-scale の合計予算は
+     * lib/diff.test.ts の planFileRendering ユニットテストが固定する
+     * (MSW 経由で 1 MiB 弱の JSON を流すとテストが数十秒かかるため縮小)。 */
+    const denseLine = `+${"const dense_token_marker=1;".repeat(32)}`; // 約 865 chars/行
+    const denseBody = Array.from({ length: 80 }, () => denseLine).join("\n"); // 約 69 KB
+    const densePatch = [
+      "diff --git a/dense.ts b/dense.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/dense.ts",
+      "@@ -0,0 +1,80 @@",
+      denseBody,
+      "",
+    ].join("\n");
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({
+            patch: densePatch,
+            files: [makeDiffFile({ path: "dense.ts", additions: 80, deletions: 0 })],
+          }),
+        ),
+      ),
+    );
+
+    const overlay = await openOverlay(user);
+    await waitFor(() => {
+      expect(shadowText()).toContain("dense.ts");
+    });
+
+    // collapsed(展開ボタンのみ)で、token は mount されない
+    expect(within(overlay).getByRole("button", { name: /80 行 — 展開/ })).toBeInTheDocument();
+    expect(shadowText()).not.toContain("dense_token_marker");
+    const mounted = [...document.querySelectorAll("diffs-container")].reduce(
+      (n, el) => n + el.shadowRoot!.querySelectorAll("*").length,
+      0,
+    );
+    expect(mounted).toBeLessThan(3000); // 初期 mount は有界(非 collapse なら数万要素)
+  });
+
   it("Escape はオーバーレイだけを閉じ、inert 解除後に起点へフォーカスを戻す", async () => {
     /* 実アプリ同様 #root 配下に mount し、モーダル中の inert と解除順序を検証する
      * (inert なままの focus 復帰は実ブラウザで拒否される — 順序が本質)。 */
