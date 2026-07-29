@@ -1,5 +1,5 @@
 import { FileDiff } from "@pierre/diffs/react";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useDiff } from "../hooks/useDiff";
 import { useTheme, type Theme } from "../hooks/useTheme";
@@ -7,12 +7,10 @@ import { apiUrl } from "../lib/api";
 import {
   diffMeta,
   diffWarning,
-  MAX_FILE_RENDER_LINES,
-  MAX_TOTAL_RENDER_LINES,
   omittedFiles,
   OMITTED_REASON_LABELS,
   parseDiffFiles,
-  partitionRenderableFiles,
+  planFileRendering,
 } from "../lib/diff";
 import type { DiffFileEntry, DiffResponse } from "../lib/types";
 
@@ -33,38 +31,38 @@ const DiffFiles = memo(function DiffFiles({
   omitted: DiffFileEntry[];
   theme: Theme;
 }) {
-  const { rendered, suppressed } = useMemo(
-    () => partitionRenderableFiles(parseDiffFiles(diff.patch)),
-    [diff.patch],
-  );
+  const plan = useMemo(() => planFileRendering(parseDiffFiles(diff.patch)), [diff.patch]);
+  /* 予算超過 file のうちユーザーが明示的に展開したもの(plan の index)。
+   * 再取得で patch が変われば index の意味が変わるのでリセットする。 */
+  const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
+  useEffect(() => setExpanded(new Set()), [diff.patch]);
   return (
     <>
-      {rendered.map((f, i) => (
-        // file type change は同 path が 2 entry になるため path 単独を key にしない
-        <FileDiff
-          key={`${i}:${f.name}`}
-          fileDiff={f}
-          options={{ themeType: theme }}
-          className="diff-file"
-        />
-      ))}
-      {suppressed.length > 0 && (
-        <section className="diff-omitted" aria-label="表示行数上限で省略したファイル">
-          <h4>表示行数上限で省略したファイル</h4>
-          <ul>
-            {suppressed.map((f, i) => (
-              <li key={`${i}:${f.name}`}>
-                <code>{f.name}</code>
-                <span className="muted">
-                  {" — "}
-                  {f.lines.toLocaleString()} 行(上限 {MAX_FILE_RENDER_LINES.toLocaleString()}{" "}
-                  行/file、合計 {MAX_TOTAL_RENDER_LINES.toLocaleString()} 行)
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {plan.map(({ file, lines, overBudget }, i) => {
+        const collapsed = overBudget && !expanded.has(i);
+        return (
+          // file type change は同 path が 2 entry になるため path 単独を key にしない
+          <FileDiff
+            key={`${i}:${file.name}`}
+            fileDiff={file}
+            options={{ themeType: theme, collapsed }}
+            className="diff-file"
+            renderHeaderMetadata={
+              collapsed
+                ? () => (
+                    <button
+                      type="button"
+                      className="diff-expand"
+                      onClick={() => setExpanded((prev) => new Set(prev).add(i))}
+                    >
+                      {lines.toLocaleString()} 行 — 展開
+                    </button>
+                  )
+                : undefined
+            }
+          />
+        );
+      })}
       {omitted.length > 0 && (
         <section className="diff-omitted" aria-label="patch が省略されたファイル">
           <h4>patch が省略されたファイル</h4>

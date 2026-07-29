@@ -12,33 +12,37 @@ export function parseDiffFiles(patch: string): FileDiffMetadata[] {
 
 /* サーバーの byte 上限(1 MiB 応答)は DOM 行数を制限しない — 契約内でも
  * 改行だけの 256 KiB ファイルは約 26 万行に展開され、非仮想の FileDiff を
- * メインスレッドで停止させ得る(worktree 由来の patch は敵性入力)。描画は
- * 行数予算内の file に限り、超過分は省略として一覧に落とす。 */
-export const MAX_FILE_RENDER_LINES = 5_000;
-export const MAX_TOTAL_RENDER_LINES = 20_000;
+ * メインスレッドで停止させ得る(worktree 由来の patch は敵性入力)。初期
+ * mount は行数予算内に抑え、超過 file は collapsed(ヘッダのみ)で出して
+ * 展開をユーザーのクリックに委ねる。1 描画行はおよそ 8 DOM 要素になる
+ * (実測)ので、予算いっぱいでも 5 万要素程度に収まる。 */
+export const MAX_FILE_RENDER_LINES = 1_500;
+export const MAX_TOTAL_RENDER_LINES = 6_000;
 
-export interface SuppressedFile {
-  name: string;
-  lines: number;
+/* hunk 単位の描画行数の合計。file 単位の unifiedLineCount は hunk 前の
+ * 折りたたみ済み context(collapsedBefore)を含む絶対位置ベースのため
+ * 使わない — 6,000 行目の 1 行変更が 6,001 行と数えられ、正当な小さい
+ * diff を誤って畳む。 */
+export function renderedLineCount(f: FileDiffMetadata): number {
+  let n = 0;
+  for (const h of f.hunks) n += h.unifiedLineCount;
+  return n;
 }
 
-export function partitionRenderableFiles(files: FileDiffMetadata[]): {
-  rendered: FileDiffMetadata[];
-  suppressed: SuppressedFile[];
-} {
-  const rendered: FileDiffMetadata[] = [];
-  const suppressed: SuppressedFile[] = [];
+export interface RenderPlanEntry {
+  file: FileDiffMetadata;
+  lines: number;
+  overBudget: boolean;
+}
+
+export function planFileRendering(files: FileDiffMetadata[]): RenderPlanEntry[] {
   let budget = MAX_TOTAL_RENDER_LINES;
-  for (const f of files) {
-    const lines = f.unifiedLineCount;
-    if (lines > MAX_FILE_RENDER_LINES || lines > budget) {
-      suppressed.push({ name: f.name, lines });
-      continue;
-    }
-    budget -= lines;
-    rendered.push(f);
-  }
-  return { rendered, suppressed };
+  return files.map((file) => {
+    const lines = renderedLineCount(file);
+    const overBudget = lines > MAX_FILE_RENDER_LINES || lines > budget;
+    if (!overBudget) budget -= lines;
+    return { file, lines, overBudget };
+  });
 }
 
 export const OMITTED_REASON_LABELS: Record<Exclude<DiffOmittedReason, "">, string> = {

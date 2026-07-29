@@ -8,7 +8,8 @@ import {
   MAX_FILE_RENDER_LINES,
   MAX_TOTAL_RENDER_LINES,
   parseDiffFiles,
-  partitionRenderableFiles,
+  planFileRendering,
+  renderedLineCount,
 } from "./diff";
 
 describe("parseDiffFiles", () => {
@@ -79,30 +80,53 @@ describe("diffTotals", () => {
   });
 });
 
-/* 行数上限 — サーバーの byte 上限では防げない敵性 patch の DOM 爆発対策。
- * partitionRenderableFiles は name / unifiedLineCount しか読まない。 */
-describe("partitionRenderableFiles", () => {
-  const file = (name: string, unifiedLineCount: number) =>
-    ({ name, unifiedLineCount }) as FileDiffMetadata;
+/* 行数予算 — サーバーの byte 上限では防げない敵性 patch の DOM 爆発対策。
+ * planFileRendering は name / hunks[].unifiedLineCount しか読まない。 */
+describe("planFileRendering", () => {
+  const file = (name: string, ...hunkLines: number[]) =>
+    ({ name, hunks: hunkLines.map((n) => ({ unifiedLineCount: n })) }) as FileDiffMetadata;
 
-  it("per-file 上限を超える file は省略し、残りは描画する", () => {
-    const { rendered, suppressed } = partitionRenderableFiles([
+  it("per-file 上限を超える file だけを collapsed にする", () => {
+    const plan = planFileRendering([
       file("small.ts", 10),
       file("bomb.txt", MAX_FILE_RENDER_LINES + 1),
       file("small2.ts", 20),
     ]);
-    expect(rendered.map((f) => f.name)).toEqual(["small.ts", "small2.ts"]);
-    expect(suppressed).toEqual([{ name: "bomb.txt", lines: MAX_FILE_RENDER_LINES + 1 }]);
+    expect(plan.map((p) => p.overBudget)).toEqual([false, true, false]);
+    expect(plan[1]!.lines).toBe(MAX_FILE_RENDER_LINES + 1);
   });
 
-  it("合計予算を使い切ったら以降の大きい file を省略し、収まる file は描画する", () => {
-    const big = MAX_FILE_RENDER_LINES; // 上限ちょうどは描画可
+  it("合計予算を使い切ったら以降の file を collapsed にする", () => {
+    const big = MAX_FILE_RENDER_LINES; // 上限ちょうどは展開可
     const n = Math.floor(MAX_TOTAL_RENDER_LINES / big); // 予算を丁度使い切る本数
     const files = Array.from({ length: n + 1 }, (_, i) => file(`f${i}.ts`, big));
-    files.push(file("tiny.ts", 1)); // 予算 0 でも 1 行は超過なので省略される
-    const { rendered, suppressed } = partitionRenderableFiles(files);
-    expect(rendered).toHaveLength(n);
-    expect(suppressed.map((f) => f.name)).toEqual([`f${n}.ts`, "tiny.ts"]);
+    files.push(file("tiny.ts", 1)); // 予算 0 では 1 行も超過
+    const plan = planFileRendering(files);
+    expect(plan.filter((p) => !p.overBudget)).toHaveLength(n);
+    expect(plan.slice(n).map((p) => p.overBudget)).toEqual([true, true]);
+  });
+});
+
+describe("renderedLineCount", () => {
+  it("ファイル後方の小さい hunk を絶対行位置で数えない(collapsedBefore 除外)", () => {
+    // 6,000 行目の 1 行変更 — file 単位 unifiedLineCount は 6,001 相当に
+    // なるが、描画されるのは hunk の 3 行だけ。誤って collapsed にしない。
+    const patch = [
+      "diff --git a/deep.ts b/deep.ts",
+      "index 0123456..89abcde 100644",
+      "--- a/deep.ts",
+      "+++ b/deep.ts",
+      "@@ -6000,3 +6000,3 @@",
+      " ctx1",
+      "-old",
+      "+new",
+      " ctx2",
+      "",
+    ].join("\n");
+    const [f] = parseDiffFiles(patch);
+    expect(f).toBeDefined();
+    expect(renderedLineCount(f!)).toBeLessThanOrEqual(7);
+    expect(planFileRendering([f!])[0]!.overBudget).toBe(false);
   });
 });
 

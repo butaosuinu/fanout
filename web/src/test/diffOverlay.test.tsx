@@ -276,14 +276,14 @@ describe("diff オーバーレイ", () => {
     expect(alert).toHaveTextContent("git command failed");
   });
 
-  it("行数上限を超える file は描画せず省略一覧に出す(敵性 patch の DOM 爆発対策)", async () => {
-    const bombBody = Array.from({ length: 6000 }, () => "+bomb").join("\n");
+  it("行数予算を超える file は collapsed で mount し、クリック展開に委ねる(敵性 patch の DOM 爆発対策)", async () => {
+    const bombBody = Array.from({ length: 1600 }, () => "+payload_row").join("\n");
     const bombPatch = [
       "diff --git a/bomb.txt b/bomb.txt",
       "new file mode 100644",
       "--- /dev/null",
       "+++ b/bomb.txt",
-      "@@ -0,0 +1,6000 @@",
+      "@@ -0,0 +1,1600 @@",
       bombBody,
       "",
     ].join("\n");
@@ -295,7 +295,7 @@ describe("diff オーバーレイ", () => {
             files: [
               makeDiffFile(),
               makeDiffFile({ path: "src/util.ts", additions: 1, deletions: 0 }),
-              makeDiffFile({ path: "bomb.txt", additions: 6000, deletions: 0 }),
+              makeDiffFile({ path: "bomb.txt", additions: 1600, deletions: 0 }),
             ],
           }),
         ),
@@ -307,13 +307,20 @@ describe("diff オーバーレイ", () => {
       expect(shadowText()).toContain("hello_marker");
     });
 
-    const capped = within(overlay).getByRole("region", {
-      name: "表示行数上限で省略したファイル",
+    // collapsed: ヘッダ(ファイル名)は出るが 1,600 行の中身は mount されない
+    expect(shadowText()).toContain("bomb.txt");
+    expect(shadowText()).not.toContain("payload_row");
+    const mounted = [...document.querySelectorAll("diffs-container")].reduce(
+      (n, el) => n + el.shadowRoot!.querySelectorAll("*").length,
+      0,
+    );
+    expect(mounted).toBeLessThan(3000); // 予算内の初期 mount は有界
+
+    // 展開はユーザーの明示クリック — 展開後に中身が mount される
+    await user.click(within(overlay).getByRole("button", { name: /1,600 行 — 展開/ }));
+    await waitFor(() => {
+      expect(shadowText()).toContain("payload_row");
     });
-    expect(within(capped).getByText("bomb.txt")).toBeInTheDocument();
-    expect(within(capped).getByText(/上限 5,000/)).toBeInTheDocument();
-    // bomb.txt の 6000 行は shadow DOM に展開されない
-    expect(shadowText()).not.toContain("bomb");
   });
 
   it("Escape はオーバーレイだけを閉じ、inert 解除後に起点へフォーカスを戻す", async () => {

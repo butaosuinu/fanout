@@ -625,7 +625,7 @@ html.drawer-resizing{ user-select:none; cursor:col-resize; }
   display:flex; align-items:center; gap:10px;
   font-family:var(--f-code); font-size:11px; color:var(--ink-40);
 }
-.plan-reload,.diff-reload,#d-diff-open{
+.plan-reload,.diff-reload,#d-diff-open,.diff-expand{
   font-family:var(--f-code); font-size:11px;
   color:var(--ai);
   background:transparent;
@@ -636,7 +636,7 @@ html.drawer-resizing{ user-select:none; cursor:col-resize; }
 }
 .plan-reload,.diff-reload{ margin-left:auto; }
 #d-diff-open{ margin-left:10px; padding:1px 12px; }
-.plan-reload:hover,.diff-reload:hover,#d-diff-open:hover{ border-color:var(--asagi); color:var(--asagi); }
+.plan-reload:hover,.diff-reload:hover,#d-diff-open:hover,.diff-expand:hover{ border-color:var(--asagi); color:var(--asagi); }
 .diff-reload:disabled{ color:var(--ink-40); cursor:default; }
 
 /* peek — docs サイトの terminal ブロック(両テーマ固定) */
