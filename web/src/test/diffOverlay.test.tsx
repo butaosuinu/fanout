@@ -441,6 +441,142 @@ describe("diff オーバーレイ", () => {
     expect(countMountedNodes()).toBeLessThan(20_000);
   });
 
+  it("再取得で入れ替わった敵性 file を、前の patch の展開状態で展開しない", async () => {
+    /* @pierre/diffs は ref/layout 経路で同期 mount するので、展開状態のリセットが
+     * passive effect だと「リセット前の 1 回」で新しい file を全展開できてしまう。
+     * patch A の index 0 を展開 → 再取得で敵性 patch B に入れ替え、B が collapsed の
+     * ままであることを固定する。 */
+    const small = (marker: string) =>
+      [
+        "diff --git a/one.ts b/one.ts",
+        "new file mode 100644",
+        "--- /dev/null",
+        "+++ b/one.ts",
+        "@@ -0,0 +1,1200 @@",
+        Array.from({ length: 1200 }, () => `+${marker}`).join("\n"),
+        "",
+      ].join("\n");
+    const hostileLine = `+${"a+1+".repeat(248).slice(0, 990)}`;
+    const hostile = [
+      "diff --git a/one.ts b/one.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/one.ts",
+      "@@ -0,0 +1,66 @@",
+      Array.from({ length: 66 }, () => hostileLine).join("\n"),
+      "",
+    ].join("\n");
+    let hit = 0;
+    const user = setup(
+      http.get("/api/diff", () => {
+        hit++;
+        return HttpResponse.json(
+          makeDiffResponse({
+            patch: hit === 1 ? small("first_marker") : hostile,
+            files: [makeDiffFile({ path: "one.ts", additions: 1200, deletions: 0 })],
+          }),
+        );
+      }),
+    );
+
+    const overlay = await openOverlay(user);
+    // patch A: 予算超過なので collapsed → 明示クリックで展開
+    await user.click(await within(overlay).findByRole("button", { name: /ハイライトなし/ }));
+    await waitFor(() => {
+      expect(shadowText()).toContain("first_marker");
+    });
+
+    // 再取得で敵性 patch B へ。同じ index だが展開状態は引き継がない
+    await user.click(within(overlay).getByRole("button", { name: "再取得" }));
+    await waitFor(() => {
+      expect(shadowText()).not.toContain("first_marker");
+    });
+    expect(within(overlay).getByRole("button", { name: /ハイライトなし/ })).toBeInTheDocument();
+    expect(shadowText()).not.toContain("a+1+");
+    expect(countMountedNodes()).toBeLessThan(3000);
+  });
+
+  it("展開しても行数だけで固まる file は展開させない", async () => {
+    /* 契約内(256 KiB の改行のみ)で 26 万行が作れる。highlight と inline diff を
+     * 切っても 1 行あたりの枠は残るため、実測 20,000 行の plaintext で
+     * 100,112 node / 1.1 秒。上限超過は展開ボタンを出さない。 */
+    const lines = 9_000; // MAX_EXPANDABLE_LINES(8,000)超
+    const patch = [
+      "diff --git a/blank.txt b/blank.txt",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/blank.txt",
+      `@@ -0,0 +1,${lines} @@`,
+      Array.from({ length: lines }, () => "+").join("\n"),
+      "",
+    ].join("\n");
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({
+            patch,
+            files: [makeDiffFile({ path: "blank.txt", additions: lines, deletions: 0 })],
+          }),
+        ),
+      ),
+    );
+
+    const overlay = await openOverlay(user);
+    await waitFor(() => {
+      expect(shadowText()).toContain("blank.txt");
+    });
+    expect(within(overlay).queryByRole("button", { name: /ハイライトなし/ })).toBeNull();
+    expect(within(overlay).getByText(/大きすぎるため表示しません/)).toBeInTheDocument();
+    expect(countMountedNodes()).toBeLessThan(3000);
+  });
+
+  it("inline diff の decoration まで数えて予算を超える file は行内差分を切る", async () => {
+    /* codex adversarial review 反復 6 の shape: 399 文字の置換行 18 組 × 2 file。
+     * highlight の見積り(2 node/文字)では両方とも予算内だが、実測は
+     * decoration 7,200 個を含む 65,178 node / 2.3 秒だった。decoration 分
+     * (1 node/文字)を見積りに入れて、行内差分だけ切る。 */
+    const line = (seed: string) => `a${seed}+`.repeat(200).slice(0, 399);
+    const pairs = 18;
+    const filePatch = (n: number) =>
+      [
+        `diff --git a/rep${n}.ts b/rep${n}.ts`,
+        "index 0123456..89abcde 100644",
+        `--- a/rep${n}.ts`,
+        `+++ b/rep${n}.ts`,
+        `@@ -1,${pairs} +1,${pairs} @@`,
+        [
+          ...Array.from({ length: pairs }, () => `-${line("1")}`),
+          ...Array.from({ length: pairs }, () => `+${line("2")}`),
+        ].join("\n"),
+        "",
+      ].join("\n");
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({
+            patch: filePatch(1) + filePatch(2),
+            files: [1, 2].map((n) =>
+              makeDiffFile({ path: `rep${n}.ts`, additions: pairs, deletions: pairs }),
+            ),
+          }),
+        ),
+      ),
+    );
+
+    const overlay = await openOverlay(user);
+    await waitFor(() => {
+      expect(shadowText()).toContain("rep1.ts");
+    });
+
+    // 展開されたまま(collapsed ではない)だが、行内差分の decoration は出ない
+    expect(within(overlay).queryByRole("button", { name: /ハイライトなし/ })).toBeNull();
+    await waitFor(() => {
+      expect(shadowText()).toContain("a2+");
+    });
+    expect(countDiffDecorations()).toBe(0);
+    expect(countMountedNodes()).toBeLessThan(60_000);
+  });
+
   it("Escape はオーバーレイだけを閉じ、inert 解除後に起点へフォーカスを戻す", async () => {
     /* 実アプリ同様 #root 配下に mount し、モーダル中の inert と解除順序を検証する
      * (inert なままの focus 復帰は実ブラウザで拒否される — 順序が本質)。 */

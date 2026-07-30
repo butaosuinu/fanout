@@ -14,25 +14,33 @@ export function parseDiffFiles(patch: string): FileDiffMetadata[] {
  * patch は敵性入力で、契約内でも次を作れる:
  *   (a) 改行だけの 256 KiB ファイル → 約 26 万行
  *   (b) 交互トークン(`a+1+`…)の高密度行 → Shiki が 1 文字 1 span まで出す
- * 平均実測値で見積もると (b) に破られるため、コストは最悪ケースで数える:
- * 1 文字あたり span + text node の 2 node、1 行あたり gutter/wrapper で 8 node。
- * この見積りは実測と誤差 5% 以内(300 行 × 60 文字 = 予測 38,400 / 実測 37,312、
+ *   (c) 399 文字の置換行 → 行内 word 差分が decoration span を大量に生む
+ * 平均実測値で見積もると破られるため、コストは最悪ケースで数える:
+ *   highlight       1 文字あたり span + text の 2 node
+ *   inline diff     さらに 1 文字あたり 1 node(実測 0.5 decoration/文字 × 2)
+ *   行の枠          1 行あたり gutter/wrapper で 8 node
+ * 見積りは実測と誤差 5% 以内(300 行 × 60 文字 = 予測 38,400 / 実測 37,312、
  * 1,500 行 × 40 文字 = 予測 132,000 / 実測 126,112)。
  *
- * 予算超過 file は collapsed(ヘッダのみ)で mount し、展開はユーザーの
- * クリックに委ねる。展開時は highlight を切って(TOKENIZE_MAX_LENGTH_PLAIN)
- * 描画するので、クリック後も固まらない — 上記 (b) の 2 file 版は highlight
- * ありで 262,112 node / 11.9 秒、highlight なしで 1,016 node / 113ms。 */
+ * 予算に収まらない file は 2 段階で軽くする:
+ *   1. inline diff だけ切って highlight は残す(見積り 2 node/文字へ)
+ *   2. それでも収まらなければ collapsed(ヘッダのみ)にして展開をクリックに委ねる
+ * 展開時は highlight も inline diff も切るので、クリック後も固まらない —
+ * 上記 (b) の 2 file 版は既定で 262,112 node / 11.9 秒、この経路で
+ * 1,016 node / 113ms、(c) の 500 行 × 399 文字は 6,065ms → 349ms。 */
 export const NODES_PER_CHAR = 2;
+export const NODES_PER_CHAR_INLINE_DIFF = 1;
 export const NODES_PER_LINE = 8;
 export const MAX_FILE_RENDER_NODES = 40_000;
 export const MAX_TOTAL_RENDER_NODES = 60_000;
 
-/* Shiki に長い 1 行を token 分解させない閾値。これを超える行は 1 span に
- * 落ちるため、行長方向の span 爆発を根元で止める(上記 (b) の実測: 400 で
- * 262,112 node → 1,016 node)。inline diff(行内 word 差分)の per-line 上限も
- * 同じ値に揃える — ライブラリ既定の 1,000 では 400 文字超の行が highlight を
- * 免れても行内差分だけ走る、という食い違いが出る。 */
+/* 展開(plaintext 描画)しても許容できる行数の上限。highlight と inline diff を
+ * 切っても 1 行あたり gutter/wrapper が残るため、行数だけで固まらせられる —
+ * 契約内で作れる 256 KiB の改行のみ file は約 26 万行、実測では 20,000 行の
+ * plaintext で 100,112 node / 1.1 秒だった。これを超える file は展開させず、
+ * 行数だけ表示する(レビューは TUI か GitHub PR 側に委ねる)。 */
+export const MAX_EXPANDABLE_LINES = 8_000;
+
 export const TOKENIZE_MAX_LINE_LENGTH = 400;
 
 /* isDiffMassive(行数 > tokenizeMaxLength)を必ず満たさせて plaintext 描画に
@@ -68,25 +76,63 @@ export function renderedCharCount(f: FileDiffMetadata): number {
   return n;
 }
 
-/* highlight ありで初期 mount した場合の最悪ケース DOM node 数の見積り。 */
-export function estimatedRenderNodes(f: FileDiffMetadata): number {
-  return NODES_PER_CHAR * renderedCharCount(f) + NODES_PER_LINE * renderedLineCount(f);
+/* 初期 mount した場合の最悪ケース DOM node 数の見積り。inline diff(行内 word
+ * 差分)を有効にすると decoration が上乗せされるので、その分を含めた見積りと
+ * 含めない見積りを分けて持つ。 */
+export function estimatedRenderNodes(f: FileDiffMetadata, withInlineDiff = false): number {
+  const perChar = withInlineDiff ? NODES_PER_CHAR + NODES_PER_CHAR_INLINE_DIFF : NODES_PER_CHAR;
+  return perChar * renderedCharCount(f) + NODES_PER_LINE * renderedLineCount(f);
 }
 
 export interface RenderPlanEntry {
   file: FileDiffMetadata;
   lines: number;
   nodes: number;
+  /* 予算に収まらず collapsed で mount する(展開はクリック) */
   overBudget: boolean;
+  /* 行内 word 差分を有効にできる(予算に余裕がある) */
+  inlineDiff: boolean;
+  /* 展開させると行数だけで固まるため、展開自体を許さない */
+  tooLargeToExpand: boolean;
 }
 
 export function planFileRendering(files: FileDiffMetadata[]): RenderPlanEntry[] {
   let budget = MAX_TOTAL_RENDER_NODES;
   return files.map((file) => {
-    const nodes = estimatedRenderNodes(file);
-    const overBudget = nodes > MAX_FILE_RENDER_NODES || nodes > budget;
-    if (!overBudget) budget -= nodes;
-    return { file, lines: renderedLineCount(file), nodes, overBudget };
+    const lines = renderedLineCount(file);
+    const withInline = estimatedRenderNodes(file, true);
+    const plain = estimatedRenderNodes(file);
+    const fits = (n: number) => n <= MAX_FILE_RENDER_NODES && n <= budget;
+    if (fits(withInline)) {
+      budget -= withInline;
+      return {
+        file,
+        lines,
+        nodes: withInline,
+        overBudget: false,
+        inlineDiff: true,
+        tooLargeToExpand: false,
+      };
+    }
+    if (fits(plain)) {
+      budget -= plain;
+      return {
+        file,
+        lines,
+        nodes: plain,
+        overBudget: false,
+        inlineDiff: false,
+        tooLargeToExpand: false,
+      };
+    }
+    return {
+      file,
+      lines,
+      nodes: plain,
+      overBudget: true,
+      inlineDiff: false,
+      tooLargeToExpand: lines > MAX_EXPANDABLE_LINES,
+    };
   });
 }
 

@@ -22,6 +22,8 @@ import type { DiffFileEntry, DiffResponse } from "../lib/types";
  * その性質は diffOverlay.test.tsx の敵性 patch テストで固定している。
  * こちら側でも patch 由来の文字列を dangerouslySetInnerHTML に渡さない。 */
 
+const EMPTY_EXPANSION: ReadonlySet<number> = new Set();
+
 /* memo: Drawer は SSE snapshot tick(約 2s)ごとに再レンダーされるが、diff と
  * theme は変わらないので file 列全体をスキップさせる(library の FileDiff は
  * 非 memo で、素通しすると tick ごとに全 file の setOptions/render が走る)。 */
@@ -36,12 +38,19 @@ const DiffFiles = memo(function DiffFiles({
 }) {
   const plan = useMemo(() => planFileRendering(parseDiffFiles(diff.patch)), [diff.patch]);
   /* 予算超過 file のうちユーザーが明示的に展開したもの(plan の index)。
-   * 再取得で patch が変われば index の意味が変わるのでリセットする。 */
-  const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
-  useEffect(() => setExpanded(new Set()), [diff.patch]);
+   * patch 自体を key に持つ — 再取得で patch が変わると index の意味も変わるが、
+   * passive effect でのリセットでは間に合わない(@pierre/diffs は ref/layout
+   * 経路で同期 mount するので、リセット前の 1 回で新しい file を全展開できる)。 */
+  const [expansion, setExpansion] = useState<{ patch: string; indexes: ReadonlySet<number> }>({
+    patch: diff.patch,
+    indexes: new Set(),
+  });
+  const expanded = expansion.patch === diff.patch ? expansion.indexes : EMPTY_EXPANSION;
+  const expand = (i: number) =>
+    setExpansion({ patch: diff.patch, indexes: new Set(expanded).add(i) });
   return (
     <>
-      {plan.map(({ file, lines, overBudget }, i) => {
+      {plan.map(({ file, lines, overBudget, inlineDiff, tooLargeToExpand }, i) => {
         const collapsed = overBudget && !expanded.has(i);
         return (
           // file type change は同 path が 2 entry になるため path 単独を key にしない
@@ -53,27 +62,28 @@ const DiffFiles = memo(function DiffFiles({
               collapsed,
               tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH,
               maxLineDiffLength: TOKENIZE_MAX_LINE_LENGTH,
-              /* 予算超過 file を展開したときは highlight と inline diff の
-               * 両方を切って描画する(クリック後も固まらないように) */
-              ...(overBudget
-                ? {
-                    tokenizeMaxLength: TOKENIZE_MAX_LENGTH_PLAIN,
-                    lineDiffType: LINE_DIFF_TYPE_PLAIN,
-                  }
-                : {}),
+              /* 予算に余裕がない file は行内 word 差分を切る(decoration が
+               * 1 文字あたり 1 node 上乗せされるため) */
+              ...(inlineDiff ? {} : { lineDiffType: LINE_DIFF_TYPE_PLAIN }),
+              /* 予算超過 file を展開したときは highlight も切って描画する
+               * (クリック後も固まらないように) */
+              ...(overBudget ? { tokenizeMaxLength: TOKENIZE_MAX_LENGTH_PLAIN } : {}),
             }}
             className="diff-file"
             renderHeaderMetadata={
               collapsed
-                ? () => (
-                    <button
-                      type="button"
-                      className="diff-expand"
-                      onClick={() => setExpanded((prev) => new Set(prev).add(i))}
-                    >
-                      {lines.toLocaleString()} 行 — 展開(ハイライトなし)
-                    </button>
-                  )
+                ? () =>
+                    tooLargeToExpand ? (
+                      /* 展開すると行数だけで固まる大きさ。レビューは TUI か
+                       * GitHub PR 側に委ねる(dashboard は表示専用) */
+                      <span className="diff-too-large">
+                        {lines.toLocaleString()} 行 — 大きすぎるため表示しません
+                      </span>
+                    ) : (
+                      <button type="button" className="diff-expand" onClick={() => expand(i)}>
+                        {lines.toLocaleString()} 行 — 展開(ハイライトなし)
+                      </button>
+                    )
                 : undefined
             }
           />

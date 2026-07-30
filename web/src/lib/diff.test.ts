@@ -6,9 +6,11 @@ import {
   diffTotals,
   diffWarning,
   estimatedRenderNodes,
+  MAX_EXPANDABLE_LINES,
   MAX_FILE_RENDER_NODES,
   MAX_TOTAL_RENDER_NODES,
   NODES_PER_CHAR,
+  NODES_PER_CHAR_INLINE_DIFF,
   NODES_PER_LINE,
   parseDiffFiles,
   planFileRendering,
@@ -115,6 +117,17 @@ describe("planFileRendering", () => {
     expect(plan[1]!.nodes).toBeGreaterThan(MAX_FILE_RENDER_NODES);
   });
 
+  /* inline diff の decoration を足すと超えるだけの file は、collapsed に
+   * せず inline diff だけ切って highlight を残す(2 段階の 1 段目) */
+  it("inline diff の分だけ予算を超える file は inline diff だけ切って展開する", () => {
+    const chars = MAX_FILE_RENDER_NODES / (NODES_PER_CHAR + NODES_PER_CHAR_INLINE_DIFF) + 100;
+    const f = file("mid.ts", [200], ["x".repeat(chars)]);
+    expect(estimatedRenderNodes(f, true)).toBeGreaterThan(MAX_FILE_RENDER_NODES);
+    expect(estimatedRenderNodes(f)).toBeLessThanOrEqual(MAX_FILE_RENDER_NODES);
+    const [entry] = planFileRendering([f]);
+    expect(entry).toMatchObject({ overBudget: false, inlineDiff: false });
+  });
+
   it("per-file 予算内でも合計予算の残りに収まらない file は collapsed にする", () => {
     /* 1 file あたり per-file 予算いっぱい — 2 file 目は合計予算の残りに入らない。
      * 予算は残量方式なので、超過 file の後でも残りに収まる小さい file は描画する
@@ -124,6 +137,16 @@ describe("planFileRendering", () => {
     const plan = planFileRendering(files);
     expect(plan.map((p) => p.overBudget)).toEqual([false, true, false]);
     expect(MAX_FILE_RENDER_NODES * 2).toBeGreaterThan(MAX_TOTAL_RENDER_NODES);
+  });
+
+  /* 展開しても行数だけで固まる大きさ(契約内で 26 万行が作れる) */
+  it("展開可能行数の上限を超える file は展開自体を許さない", () => {
+    const plan = planFileRendering([
+      file("huge.txt", [MAX_EXPANDABLE_LINES + 1]),
+      file("big.txt", [MAX_EXPANDABLE_LINES]),
+    ]);
+    expect(plan.map((p) => p.overBudget)).toEqual([true, true]);
+    expect(plan.map((p) => p.tooLargeToExpand)).toEqual([true, false]);
   });
 
   it("典型的なレビュー diff(300 行 × 60 文字)は展開したまま描画する", () => {

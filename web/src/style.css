@@ -714,6 +714,7 @@ html[data-theme="dark"] .terminal{ border-color:var(--suna); }
   font-family:var(--f-code); font-size:12px; color:var(--ink-78);
 }
 .diff-omitted ul{ list-style:none; display:flex; flex-direction:column; gap:3px; }
+.diff-too-large{ font-family:var(--f-code); font-size:11px; color:var(--warn); }
 
 /* ============================================================ a11y / responsive */
 @media (prefers-reduced-motion: reduce){
