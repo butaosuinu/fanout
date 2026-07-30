@@ -31,6 +31,12 @@ export function parseDiffFiles(patch: string): FileDiffMetadata[] {
 export const NODES_PER_CHAR = 2;
 export const NODES_PER_CHAR_INLINE_DIFF = 1;
 export const NODES_PER_LINE = 8;
+/* FileDiff を 1 つ mount するだけで乗る固定コスト(shadow DOM の header、
+ * SVG sprite、style)。実測 108 node/instance で、collapsed でも同じだけ
+ * 掛かる — 契約上限の 500 files を collapsed で並べるだけで 54,000 node に
+ * なる。そのため collapsed file は FileDiff を mount せず自前の軽量行で出し、
+ * mount する file にはこの固定分を予算から引く。 */
+export const FIXED_NODES_PER_FILE = 120;
 export const MAX_FILE_RENDER_NODES = 40_000;
 export const MAX_TOTAL_RENDER_NODES = 60_000;
 
@@ -81,7 +87,9 @@ export function renderedCharCount(f: FileDiffMetadata): number {
  * 含めない見積りを分けて持つ。 */
 export function estimatedRenderNodes(f: FileDiffMetadata, withInlineDiff = false): number {
   const perChar = withInlineDiff ? NODES_PER_CHAR + NODES_PER_CHAR_INLINE_DIFF : NODES_PER_CHAR;
-  return perChar * renderedCharCount(f) + NODES_PER_LINE * renderedLineCount(f);
+  return (
+    FIXED_NODES_PER_FILE + perChar * renderedCharCount(f) + NODES_PER_LINE * renderedLineCount(f)
+  );
 }
 
 export interface RenderPlanEntry {

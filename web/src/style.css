@@ -714,6 +714,15 @@ html[data-theme="dark"] .terminal{ border-color:var(--suna); }
   font-family:var(--f-code); font-size:12px; color:var(--ink-78);
 }
 .diff-omitted ul{ list-style:none; display:flex; flex-direction:column; gap:3px; }
+/* 予算超過で FileDiff を mount しない file の軽量行(ファイル名 + 展開ボタン) */
+.diff-file-collapsed{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  padding:9px 14px;
+  border:1px solid var(--suna); border-radius:10px;
+  background:var(--paper);
+  font-family:var(--f-code); font-size:12px; color:var(--ink-78);
+}
+.diff-file-collapsed code{ overflow-wrap:anywhere; }
 .diff-too-large{ font-family:var(--f-code); font-size:11px; color:var(--warn); }
 
 /* ============================================================ a11y / responsive */

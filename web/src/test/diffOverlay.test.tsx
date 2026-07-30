@@ -4,6 +4,7 @@ import { http, HttpResponse, type RequestHandler } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "../components/App";
 import type { DiffResponse } from "../lib/types";
+import { MAX_TOTAL_RENDER_NODES } from "../lib/diff";
 import { installFakeEventSource, streamSnapshot } from "./fakeEventSource";
 import {
   makeDiffFile,
@@ -331,8 +332,8 @@ describe("diff オーバーレイ", () => {
       expect(shadowText()).toContain("hello_marker");
     });
 
-    // collapsed: ヘッダ(ファイル名)は出るが 1,600 行の中身は mount されない
-    expect(shadowText()).toContain("bomb.txt");
+    // collapsed: 軽量行(ファイル名)は出るが 1,600 行の中身は mount されない
+    expect(within(overlay).getByText("bomb.txt")).toBeInTheDocument();
     expect(shadowText()).not.toContain("payload_row");
     expect(countMountedNodes()).toBeLessThan(3000); // 予算内の初期 mount は有界
 
@@ -376,7 +377,7 @@ describe("diff オーバーレイ", () => {
 
     const overlay = await openOverlay(user);
     await waitFor(() => {
-      expect(shadowText()).toContain("dense1.ts");
+      expect(within(overlay).getByText("dense1.ts")).toBeInTheDocument();
     });
 
     // 2 file とも collapsed で、token は 1 つも mount されない
@@ -425,7 +426,7 @@ describe("diff オーバーレイ", () => {
 
     const overlay = await openOverlay(user);
     await waitFor(() => {
-      expect(shadowText()).toContain("wide.ts");
+      expect(within(overlay).getByText("wide.ts")).toBeInTheDocument();
     });
 
     // 予算超過なので collapsed
@@ -523,7 +524,7 @@ describe("diff オーバーレイ", () => {
 
     const overlay = await openOverlay(user);
     await waitFor(() => {
-      expect(shadowText()).toContain("blank.txt");
+      expect(within(overlay).getByText("blank.txt")).toBeInTheDocument();
     });
     expect(within(overlay).queryByRole("button", { name: /ハイライトなし/ })).toBeNull();
     expect(within(overlay).getByText(/大きすぎるため表示しません/)).toBeInTheDocument();
@@ -575,6 +576,71 @@ describe("diff オーバーレイ", () => {
     });
     expect(countDiffDecorations()).toBe(0);
     expect(countMountedNodes()).toBeLessThan(60_000);
+  });
+
+  it("契約上限の 500 files でも初期 mount の実 node 数を予算内に収める", async () => {
+    /* codex adversarial review 反復 7 の shape: 399 文字置換 18 組の 2 file +
+     * 2 行追加の 498 file(契約上限 500 files)。collapsed でも FileDiff を
+     * mount すると instance ごとに 108 node(shadow DOM の header / SVG sprite /
+     * style)掛かり、実測 93,650 node になった。collapsed は自前の軽量行で
+     * 出し、mount する file には固定分も予算から引く。 */
+    const dense = (n: number) => {
+      const line = (seed: string) => `a${seed}+`.repeat(200).slice(0, 399);
+      const pairs = 18;
+      return [
+        `diff --git a/rep${n}.ts b/rep${n}.ts`,
+        "index 0123456..89abcde 100644",
+        `--- a/rep${n}.ts`,
+        `+++ b/rep${n}.ts`,
+        `@@ -1,${pairs} +1,${pairs} @@`,
+        [
+          ...Array.from({ length: pairs }, () => `-${line("1")}`),
+          ...Array.from({ length: pairs }, () => `+${line("2")}`),
+        ].join("\n"),
+        "",
+      ].join("\n");
+    };
+    const tiny = (n: number) =>
+      [
+        `diff --git a/t${n}.ts b/t${n}.ts`,
+        "new file mode 100644",
+        "--- /dev/null",
+        `+++ b/t${n}.ts`,
+        "@@ -0,0 +1,2 @@",
+        "+const a = 1;",
+        "+const b = 2;",
+        "",
+      ].join("\n");
+    const patch = dense(1) + dense(2) + Array.from({ length: 498 }, (_, i) => tiny(i)).join("");
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({
+            patch,
+            files: [
+              ...[1, 2].map((n) =>
+                makeDiffFile({ path: `rep${n}.ts`, additions: 18, deletions: 18 }),
+              ),
+              ...Array.from({ length: 498 }, (_, i) =>
+                makeDiffFile({ path: `t${i}.ts`, additions: 2, deletions: 0 }),
+              ),
+            ],
+          }),
+        ),
+      ),
+    );
+
+    const overlay = await openOverlay(user);
+    // 予算内の file は展開される(rep1.ts は inline diff だけ切った tier)
+    await waitFor(() => {
+      expect(shadowText()).toContain("rep1.ts");
+    });
+    // collapsed になった file は FileDiff を mount せず軽量行で出る
+    const mountedFiles = document.querySelectorAll("diffs-container").length;
+    expect(mountedFiles).toBeLessThan(500);
+    expect(overlay.querySelectorAll(".diff-file-collapsed").length).toBeGreaterThan(0);
+    expect(mountedFiles + overlay.querySelectorAll(".diff-file-collapsed").length).toBe(500);
+    expect(countMountedNodes()).toBeLessThan(MAX_TOTAL_RENDER_NODES);
   });
 
   it("Escape はオーバーレイだけを閉じ、inert 解除後に起点へフォーカスを戻す", async () => {

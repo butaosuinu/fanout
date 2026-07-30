@@ -51,15 +51,35 @@ const DiffFiles = memo(function DiffFiles({
   return (
     <>
       {plan.map(({ file, lines, overBudget, inlineDiff, tooLargeToExpand }, i) => {
-        const collapsed = overBudget && !expanded.has(i);
+        /* collapsed file は FileDiff を mount しない — instance ごとに shadow DOM の
+         * header/SVG sprite/style で 108 node 掛かり、契約上限の 500 files では
+         * それだけで 54,000 node になる。自前の軽量行で出し、展開時に初めて
+         * FileDiff を mount する。 */
+        if (overBudget && !expanded.has(i)) {
+          return (
+            // file type change は同 path が 2 entry になるため path 単独を key にしない
+            <section className="diff-file-collapsed" key={`${i}:${file.name}`}>
+              <code>{file.name}</code>
+              {tooLargeToExpand ? (
+                /* 展開すると行数だけで固まる大きさ。レビューは TUI か
+                 * GitHub PR 側に委ねる(dashboard は表示専用) */
+                <span className="diff-too-large">
+                  {lines.toLocaleString()} 行 — 大きすぎるため表示しません
+                </span>
+              ) : (
+                <button type="button" className="diff-expand" onClick={() => expand(i)}>
+                  {lines.toLocaleString()} 行 — 展開(ハイライトなし)
+                </button>
+              )}
+            </section>
+          );
+        }
         return (
-          // file type change は同 path が 2 entry になるため path 単独を key にしない
           <FileDiff
             key={`${i}:${file.name}`}
             fileDiff={file}
             options={{
               themeType: theme,
-              collapsed,
               tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH,
               maxLineDiffLength: TOKENIZE_MAX_LINE_LENGTH,
               /* 予算に余裕がない file は行内 word 差分を切る(decoration が
@@ -70,22 +90,6 @@ const DiffFiles = memo(function DiffFiles({
               ...(overBudget ? { tokenizeMaxLength: TOKENIZE_MAX_LENGTH_PLAIN } : {}),
             }}
             className="diff-file"
-            renderHeaderMetadata={
-              collapsed
-                ? () =>
-                    tooLargeToExpand ? (
-                      /* 展開すると行数だけで固まる大きさ。レビューは TUI か
-                       * GitHub PR 側に委ねる(dashboard は表示専用) */
-                      <span className="diff-too-large">
-                        {lines.toLocaleString()} 行 — 大きすぎるため表示しません
-                      </span>
-                    ) : (
-                      <button type="button" className="diff-expand" onClick={() => expand(i)}>
-                        {lines.toLocaleString()} 行 — 展開(ハイライトなし)
-                      </button>
-                    )
-                : undefined
-            }
           />
         );
       })}

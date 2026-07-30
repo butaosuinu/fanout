@@ -6,6 +6,7 @@ import {
   diffTotals,
   diffWarning,
   estimatedRenderNodes,
+  FIXED_NODES_PER_FILE,
   MAX_EXPANDABLE_LINES,
   MAX_FILE_RENDER_NODES,
   MAX_TOTAL_RENDER_NODES,
@@ -132,7 +133,7 @@ describe("planFileRendering", () => {
     /* 1 file あたり per-file 予算いっぱい — 2 file 目は合計予算の残りに入らない。
      * 予算は残量方式なので、超過 file の後でも残りに収まる小さい file は描画する
      * (1 つ大きい file があるだけで以降すべてを畳まない)。 */
-    const chars = "x".repeat(MAX_FILE_RENDER_NODES / NODES_PER_CHAR);
+    const chars = "x".repeat((MAX_FILE_RENDER_NODES - FIXED_NODES_PER_FILE) / NODES_PER_CHAR);
     const files = [file("a.ts", [], [chars]), file("b.ts", [], [chars]), file("c.ts", [], ["y"])];
     const plan = planFileRendering(files);
     expect(plan.map((p) => p.overBudget)).toEqual([false, true, false]);
