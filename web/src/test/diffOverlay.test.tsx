@@ -643,6 +643,61 @@ describe("diff オーバーレイ", () => {
     expect(countMountedNodes()).toBeLessThan(MAX_TOTAL_RENDER_NODES);
   });
 
+  it("予算超過 file の展開は 1 つずつ — 別の file を展開すると前の file を畳む", async () => {
+    /* 展開状態を累積させると、8,000 行級の file を順にクリックするだけで合計
+     * 予算を回避して DOM を積み上げられる(codex-connector の P1 指摘)。
+     * 同時展開は 1 file までとし、明示的な折りたたみもできることを固定する。 */
+    const bomb = (n: number, marker: string) =>
+      [
+        `diff --git a/bomb${n}.txt b/bomb${n}.txt`,
+        "new file mode 100644",
+        "--- /dev/null",
+        `+++ b/bomb${n}.txt`,
+        "@@ -0,0 +1,1600 @@",
+        Array.from({ length: 1600 }, () => `+${marker}`).join("\n"),
+        "",
+      ].join("\n");
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({
+            patch: bomb(1, "first_payload") + bomb(2, "second_payload"),
+            files: [1, 2].map((n) =>
+              makeDiffFile({ path: `bomb${n}.txt`, additions: 1600, deletions: 0 }),
+            ),
+          }),
+        ),
+      ),
+    );
+
+    const overlay = await openOverlay(user);
+    const expandButtons = () => within(overlay).getAllByRole("button", { name: /ハイライトなし/ });
+    await waitFor(() => {
+      expect(expandButtons()).toHaveLength(2);
+    });
+
+    // 1 file 目を展開
+    await user.click(expandButtons()[0]!);
+    await waitFor(() => {
+      expect(shadowText()).toContain("first_payload");
+    });
+
+    // 2 file 目を展開すると 1 file 目は畳まれる(累積しない)
+    await user.click(within(overlay).getByRole("button", { name: /ハイライトなし/ }));
+    await waitFor(() => {
+      expect(shadowText()).toContain("second_payload");
+    });
+    expect(shadowText()).not.toContain("first_payload");
+    expect(document.querySelectorAll("diffs-container")).toHaveLength(1);
+
+    // 明示的に折りたたむと FileDiff は unmount される
+    await user.click(within(overlay).getByRole("button", { name: "折りたたむ" }));
+    await waitFor(() => {
+      expect(document.querySelectorAll("diffs-container")).toHaveLength(0);
+    });
+    expect(expandButtons()).toHaveLength(2);
+  });
+
   it("Escape はオーバーレイだけを閉じ、inert 解除後に起点へフォーカスを戻す", async () => {
     /* 実アプリ同様 #root 配下に mount し、モーダル中の inert と解除順序を検証する
      * (inert なままの focus 復帰は実ブラウザで拒否される — 順序が本質)。 */
