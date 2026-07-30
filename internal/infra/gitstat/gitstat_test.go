@@ -205,6 +205,15 @@ func TestRunnerWorktreePatch(t *testing.T) {
 			wantErrContains: "current branch",
 		},
 		{
+			name:    "symbolic alias to current branch is not a base",
+			baseRef: "refs/tags/base-alias",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				gitTest(t, repo, "symbolic-ref", "refs/tags/base-alias", "refs/heads/feature")
+			},
+			wantErrContains: "current branch",
+		},
+		{
 			name:    "untracked text file",
 			baseRef: "main",
 			prepare: func(t *testing.T, repo string) {
@@ -298,6 +307,24 @@ func TestRunnerWorktreePatch(t *testing.T) {
 			}
 			tt.check(t, repo, got)
 		})
+	}
+}
+
+func TestRunnerWorktreePatchResolvesRelativePathFromRunnerCwd(t *testing.T) {
+	repo := initPatchRepo(t)
+	writeGitstatFile(t, repo, "large.txt", bytes.Repeat([]byte{'x'}, patchFileLimit+1))
+	gitTest(t, repo, "add", "large.txt")
+
+	got, err := (Runner{Cwd: filepath.Dir(repo)}).WorktreePatch(filepath.Base(repo), "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "large.txt",
+		OmittedReason: "tooLarge",
+	})
+	if got.Patch != "" {
+		t.Fatalf("WorktreePatch().Patch has %d bytes, want oversized relative-path file omitted", len(got.Patch))
 	}
 }
 

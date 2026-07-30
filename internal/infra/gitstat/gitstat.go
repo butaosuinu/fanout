@@ -79,11 +79,8 @@ func (r Runner) Worktree(path, baseRef string) (Stat, error) {
 // since the strict merge-base with baseRef. Binary files and files larger than
 // 256 KiB remain in Files but are omitted from Patch.
 func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return Patch{}, fmt.Errorf("worktree path is empty")
-	}
-	if err := r.rejectCurrentBranchBase(path, baseRef); err != nil {
+	path, err := r.resolveWorktreePath(path)
+	if err != nil {
 		return Patch{}, err
 	}
 	mergeBase, err := r.MergeBase(path, baseRef)
@@ -179,36 +176,31 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 	return result, nil
 }
 
-func (r Runner) rejectCurrentBranchBase(path, baseRef string) error {
-	baseRef = strings.TrimSpace(baseRef)
-	if baseRef == "" {
-		return nil
+func (r Runner) resolveWorktreePath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("worktree path is empty")
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
 	}
 
-	out, code, err := r.gitExitCode("-C", path, "symbolic-ref", "--quiet", "HEAD")
-	if err != nil {
-		if code == 1 {
-			return nil
+	base := r.Cwd
+	if base == "" {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return "", fmt.Errorf("resolve worktree path %q: %w", path, err)
 		}
-		return fmt.Errorf("resolve current branch: %w", err)
+		return absolute, nil
 	}
-	currentRef := strings.TrimSpace(string(out))
-	currentBranch := strings.TrimPrefix(currentRef, "refs/heads/")
-	if currentBranch == currentRef {
-		return fmt.Errorf("resolve current branch: unexpected ref %q", currentRef)
-	}
-
-	if baseRef == currentBranch ||
-		baseRef == "origin/"+currentBranch ||
-		baseRef == currentRef {
-		return fmt.Errorf("base ref %q is the current branch", baseRef)
-	}
-	if remoteRef, ok := strings.CutPrefix(baseRef, "refs/remotes/"); ok {
-		if _, remoteBranch, ok := strings.Cut(remoteRef, "/"); ok && remoteBranch == currentBranch {
-			return fmt.Errorf("base ref %q is the current branch", baseRef)
+	if !filepath.IsAbs(base) {
+		absolute, err := filepath.Abs(base)
+		if err != nil {
+			return "", fmt.Errorf("resolve runner cwd %q: %w", base, err)
 		}
+		base = absolute
 	}
-	return nil
+	return filepath.Clean(filepath.Join(base, path)), nil
 }
 
 type patchFile struct {
@@ -436,8 +428,23 @@ func (r Runner) MergeBase(path, baseRef string) (string, error) {
 		candidates = append(candidates, head)
 	}
 
+	currentRef, err := r.currentBranchRef(path)
+	if err != nil {
+		return "", err
+	}
+
 	var lastErr error
 	for _, candidate := range candidates {
+		if currentRef != "" {
+			isCurrent, currentErr := r.refIsCurrentBranch(path, candidate, currentRef)
+			if currentErr != nil {
+				return "", currentErr
+			}
+			if isCurrent {
+				return "", fmt.Errorf("resolve merge-base for %q: base ref %q is the current branch", baseRef, candidate)
+			}
+		}
+
 		out, err := r.git("-C", path, "rev-parse", "--verify", "--end-of-options", candidate+"^{commit}")
 		if err != nil {
 			lastErr = err
@@ -460,6 +467,52 @@ func (r Runner) MergeBase(path, baseRef string) (string, error) {
 		lastErr = fmt.Errorf("git merge-base %s HEAD returned an empty SHA", candidate)
 	}
 	return "", fmt.Errorf("resolve merge-base for %q: %w", baseRef, lastErr)
+}
+
+func (r Runner) currentBranchRef(path string) (string, error) {
+	out, code, err := r.gitExitCode("-C", path, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil {
+		if code == 1 {
+			return "", nil
+		}
+		return "", fmt.Errorf("resolve current branch: %w", err)
+	}
+	currentRef := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(currentRef, "refs/heads/") {
+		return "", fmt.Errorf("resolve current branch: unexpected ref %q", currentRef)
+	}
+	return currentRef, nil
+}
+
+func (r Runner) refIsCurrentBranch(path, candidate, currentRef string) (bool, error) {
+	if sameBranchRef(candidate, currentRef) {
+		return true, nil
+	}
+
+	out, code, err := r.gitExitCode("-C", path, "symbolic-ref", "--quiet", candidate)
+	if err != nil {
+		if code == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("resolve base symbolic ref %q: %w", candidate, err)
+	}
+	return sameBranchRef(strings.TrimSpace(string(out)), currentRef), nil
+}
+
+func sameBranchRef(candidate, currentRef string) bool {
+	if candidate == currentRef {
+		return true
+	}
+	currentBranch, ok := strings.CutPrefix(currentRef, "refs/heads/")
+	if !ok {
+		return false
+	}
+	remoteRef, ok := strings.CutPrefix(candidate, "refs/remotes/")
+	if !ok {
+		return false
+	}
+	_, remoteBranch, ok := strings.Cut(remoteRef, "/")
+	return ok && remoteBranch == currentBranch
 }
 
 // diffBase resolves the ref the diff is measured against: the merge-base of
