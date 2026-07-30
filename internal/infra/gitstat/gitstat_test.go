@@ -367,6 +367,43 @@ func TestRunnerWorktreePatchUsesExactTrackedPathspec(t *testing.T) {
 	}
 }
 
+func TestRunnerWorktreePatchHandlesDirectoryReplacedByFile(t *testing.T) {
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	if err := os.Mkdir(filepath.Join(repo, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeGitstatFile(t, repo, "dir/a", []byte("old\n"))
+	gitTest(t, repo, "add", "dir/a")
+	gitTest(t, repo, "commit", "-m", "initial")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	if err := os.RemoveAll(filepath.Join(repo, "dir")); err != nil {
+		t.Fatal(err)
+	}
+	writeGitstatFile(t, repo, "dir", []byte("new\n"))
+	gitTest(t, repo, "add", "-A")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 2 {
+		t.Fatalf("WorktreePatch().Files = %#v, want file addition and descendant deletion", got.Files)
+	}
+	if added := findFileStat(t, got.Files, "dir"); !added.PatchIncluded {
+		t.Fatalf("added FileStat = %#v, want patch included", added)
+	}
+	if deleted := findFileStat(t, got.Files, "dir/a"); !deleted.PatchIncluded {
+		t.Fatalf("deleted FileStat = %#v, want patch included", deleted)
+	}
+	if blocks := strings.Count(got.Patch, "diff --git "); blocks != 2 {
+		t.Fatalf("WorktreePatch().Patch has %d file blocks, want addition and deletion", blocks)
+	}
+}
+
 func TestRunnerWorktreePatchOnlyCallsReadOnlyGitSubcommands(t *testing.T) {
 	repo := initPatchRepo(t)
 	writeGitstatFile(t, repo, "tracked.txt", []byte("one\nstaged\n"))

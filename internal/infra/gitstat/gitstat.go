@@ -3,6 +3,7 @@ package gitstat
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/butaosuinu/fanout/internal/infra/execx"
 )
@@ -266,7 +268,7 @@ func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (bool,
 				return true, nil
 			}
 		}
-	} else if !os.IsNotExist(statErr) {
+	} else if !os.IsNotExist(statErr) && !errors.Is(statErr, syscall.ENOTDIR) {
 		return false, fmt.Errorf("inspect tracked file %q: %w", file.Path, statErr)
 	}
 
