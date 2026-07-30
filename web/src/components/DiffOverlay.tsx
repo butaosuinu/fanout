@@ -93,11 +93,7 @@ const DiffFiles = memo(function DiffFiles({
             renderHeaderMetadata={
               overBudget
                 ? () => (
-                    <button
-                      type="button"
-                      className="diff-expand"
-                      onClick={() => setExpanded(null)}
-                    >
+                    <button type="button" className="diff-expand" onClick={() => setExpanded(null)}>
                       折りたたむ
                     </button>
                   )
