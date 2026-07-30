@@ -7,6 +7,7 @@ import { apiUrl } from "../lib/api";
 import {
   diffMeta,
   diffWarning,
+  LINE_DIFF_TYPE_PLAIN,
   omittedFiles,
   OMITTED_REASON_LABELS,
   parseDiffFiles,
@@ -51,9 +52,15 @@ const DiffFiles = memo(function DiffFiles({
               themeType: theme,
               collapsed,
               tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH,
-              /* 予算超過 file を展開したときは highlight を切って描画する
-               * (クリック後も固まらないように) */
-              ...(overBudget ? { tokenizeMaxLength: TOKENIZE_MAX_LENGTH_PLAIN } : {}),
+              maxLineDiffLength: TOKENIZE_MAX_LINE_LENGTH,
+              /* 予算超過 file を展開したときは highlight と inline diff の
+               * 両方を切って描画する(クリック後も固まらないように) */
+              ...(overBudget
+                ? {
+                    tokenizeMaxLength: TOKENIZE_MAX_LENGTH_PLAIN,
+                    lineDiffType: LINE_DIFF_TYPE_PLAIN,
+                  }
+                : {}),
             }}
             className="diff-file"
             renderHeaderMetadata={

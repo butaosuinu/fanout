@@ -30,12 +30,22 @@ export const MAX_TOTAL_RENDER_NODES = 60_000;
 
 /* Shiki に長い 1 行を token 分解させない閾値。これを超える行は 1 span に
  * 落ちるため、行長方向の span 爆発を根元で止める(上記 (b) の実測: 400 で
- * 262,112 node → 1,016 node)。 */
+ * 262,112 node → 1,016 node)。inline diff(行内 word 差分)の per-line 上限も
+ * 同じ値に揃える — ライブラリ既定の 1,000 では 400 文字超の行が highlight を
+ * 免れても行内差分だけ走る、という食い違いが出る。 */
 export const TOKENIZE_MAX_LINE_LENGTH = 400;
 
 /* isDiffMassive(行数 > tokenizeMaxLength)を必ず満たさせて plaintext 描画に
  * 落とすための値。展開された予算超過 file に使う。 */
 export const TOKENIZE_MAX_LENGTH_PLAIN = 0;
+
+/* 予算超過 file を展開するときは highlight だけでなく inline diff も切る。
+ * ライブラリ既定の `word-alt` は plaintext 描画でも残り、行内 word 差分の
+ * 計算と decoration span を生む。ライブラリ自身が inline diff を自動停止する
+ * のは 1,000 行超のときだけなので、ちょうど 1,000 行の置換 patch は素通りする
+ * (実測: 500 行 × 399 文字の置換 2 side で 6,065ms → `none` で 287ms、
+ * decoration 1,500 → 0)。 */
+export const LINE_DIFF_TYPE_PLAIN = "none";
 
 /* hunk 単位の描画行数の合計。file 単位の unifiedLineCount は hunk 前の
  * 折りたたみ済み context(collapsedBefore)を含む絶対位置ベースのため

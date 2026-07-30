@@ -103,6 +103,16 @@ function countMountedNodes(): number {
   return n;
 }
 
+/* inline diff(行内 word 差分)の decoration 数。plaintext 展開時に 0 で
+ * あることを固定するために数える。 */
+function countDiffDecorations(): number {
+  let n = 0;
+  for (const host of document.querySelectorAll("diffs-container")) {
+    n += host.shadowRoot!.querySelectorAll("[data-diff-span]").length;
+  }
+  return n;
+}
+
 async function openOverlay(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByText("Fix thing"));
   await user.click(await screen.findByRole("button", { name: "diff を開く" }));
@@ -379,6 +389,56 @@ describe("diff オーバーレイ", () => {
       expect(shadowText()).toContain("a+1+");
     });
     expect(countMountedNodes()).toBeLessThan(10_000);
+  });
+
+  it("置換行だらけの予算超過 file は展開しても inline diff を走らせない", async () => {
+    /* codex adversarial review 反復 5 の shape(500 行 × 399 文字の置換)の
+     * 縮小版。399 文字は per-line の token/inline diff 上限 400 の直下なので、
+     * highlight を切っただけでは行内 word 差分が残り、full-scale では 6,065ms
+     * かかった(lineDiffType: "none" で 287ms、decoration 1,500 → 0)。
+     * ライブラリが inline diff を自動停止するのは 1,000 行超のときだけ。 */
+    const pairs = 120;
+    const line = (seed: string) => (seed + " ").repeat(200).slice(0, 399);
+    const body = [
+      ...Array.from({ length: pairs }, () => `-${line("a")}`),
+      ...Array.from({ length: pairs }, () => `+${line("z")}`),
+    ].join("\n");
+    const replacePatch = [
+      "diff --git a/wide.ts b/wide.ts",
+      "index 0123456..89abcde 100644",
+      "--- a/wide.ts",
+      "+++ b/wide.ts",
+      `@@ -1,${pairs} +1,${pairs} @@`,
+      body,
+      "",
+    ].join("\n");
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({
+            patch: replacePatch,
+            files: [makeDiffFile({ path: "wide.ts", additions: pairs, deletions: pairs })],
+          }),
+        ),
+      ),
+    );
+
+    const overlay = await openOverlay(user);
+    await waitFor(() => {
+      expect(shadowText()).toContain("wide.ts");
+    });
+
+    // 予算超過なので collapsed
+    const expand = within(overlay).getByRole("button", { name: /ハイライトなし/ });
+    expect(countMountedNodes()).toBeLessThan(3000);
+
+    // 展開しても highlight も inline diff も走らない
+    await user.click(expand);
+    await waitFor(() => {
+      expect(shadowText()).toContain("z z z");
+    });
+    expect(countDiffDecorations()).toBe(0);
+    expect(countMountedNodes()).toBeLessThan(20_000);
   });
 
   it("Escape はオーバーレイだけを閉じ、inert 解除後に起点へフォーカスを戻す", async () => {
