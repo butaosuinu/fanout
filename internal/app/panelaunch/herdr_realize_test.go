@@ -1007,6 +1007,54 @@ func TestRealizeHerdrReusesNumericParentCoordinatorAcrossLinkedWorktrees(t *test
 	}
 }
 
+func TestRealizeHerdrResumesPlannedCoordinatorAtSavedPathAcrossLinkedWorktrees(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	savedPath, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	runtime.policyErr = errors.New("stop before coordinator mutation")
+	hooks := deterministicHerdrRealizeHooks()
+	if _, initialErr := realizeHerdrCoordinator(
+		context.Background(),
+		testHerdrCoordinatorRequest(repo),
+		runtime,
+		hooks,
+	); initialErr == nil ||
+		!strings.Contains(initialErr.Error(), "stop before coordinator mutation") {
+		t.Fatalf("initial planned coordinator error = %v", initialErr)
+	}
+	if len(runtime.mutations) != 0 {
+		t.Fatal("planned coordinator unexpectedly issued a mutation")
+	}
+
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "linked-planned-coordinator", sibling, "HEAD")
+	runtime.policyErr = nil
+	resumed, err := realizeHerdrCoordinator(
+		context.Background(),
+		testHerdrCoordinatorRequest(sibling),
+		runtime,
+		hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		resumed.Intent.WorktreePath != savedPath ||
+		resumed.Intent.Resource.CurrentPath != savedPath ||
+		len(runtime.mutations) != 1 ||
+		runtime.mutations[0].SourceRoot != savedPath ||
+		runtime.mutations[0].SourceRepoRoot != savedPath ||
+		runtime.mutations[0].CWD != savedPath {
+		t.Fatalf(
+			"resumed planned coordinator = %+v, err=%v, mutation=%+v",
+			resumed.Intent,
+			err,
+			runtime.mutations,
+		)
+	}
+}
+
 func TestRealizeHerdrResolvesPlanRuntimeParentPerOwnerRoot(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	planDir := filepath.Join(repo, ".fanout", "plans")

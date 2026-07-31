@@ -289,10 +289,10 @@ func RealizeHerdrCoordinator(
 	}
 	mutation, mutationErr := runtime.MutateWorktree(operationCtx, herdrrun.WorktreeMutationRequest{
 		Kind:           herdrrun.WorkspaceCreate,
-		SourceRoot:     identity.RepoRoot,
+		SourceRoot:     intent.WorktreePath,
 		SourceRepoKey:  identity.RepoKey,
-		SourceRepoRoot: identity.RepoRoot,
-		CWD:            cwd,
+		SourceRepoRoot: intent.WorktreePath,
+		CWD:            intent.WorktreePath,
 		Label:          intent.WorkspaceLabel,
 		NoFocus:        true,
 	})
