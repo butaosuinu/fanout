@@ -165,12 +165,11 @@ func (p *poller) loop(ctx context.Context) {
 
 func (p *poller) ghLoop(ctx context.Context) {
 	// Resolve the repo here (not before the server binds) so a slow `gh repo view`
-	// never delays startup, then populate PR state. ctx-guarded so Ctrl-C during a
-	// slow first refresh still exits promptly.
+	// never delays startup, then populate PR state. Skip the whole GitHub tier
+	// while nobody is subscribed; the cheap state/runtime ticker keeps running.
+	// ctx-guarded so Ctrl-C during a slow first refresh still exits promptly.
 	if ctx.Err() == nil {
-		p.ensureResolved()
-		p.refreshGH()
-		p.rebuildAndBroadcast()
+		p.runGHTick()
 	}
 	ghT := time.NewTicker(p.ghInterval)
 	defer ghT.Stop()
@@ -179,10 +178,18 @@ func (p *poller) ghLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ghT.C:
-			p.refreshGH()
-			p.rebuildAndBroadcast()
+			p.runGHTick()
 		}
 	}
+}
+
+func (p *poller) runGHTick() {
+	if p.hub.subscriberCount() == 0 {
+		return
+	}
+	p.ensureResolved()
+	p.refreshGH()
+	p.rebuildAndBroadcast()
 }
 
 // ensureResolved runs the deferred GitHub resolution exactly once. It is only
