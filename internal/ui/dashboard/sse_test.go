@@ -1,6 +1,9 @@
 package dashboard
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestBroadcastCoalescesStaleFrameForSlowSubscriber(t *testing.T) {
 	h := newHub()
@@ -25,5 +28,18 @@ func TestBroadcastDeliversToReadySubscriber(t *testing.T) {
 	h.broadcast([]byte("hello"))
 	if got := string(<-ch); got != "hello" {
 		t.Fatalf("frame = %q, want %q", got, "hello")
+	}
+}
+
+func TestSnapshotActivityLeaseExpires(t *testing.T) {
+	h := newHub()
+	now := time.Date(2026, time.July, 31, 0, 0, 0, 0, time.UTC)
+	h.noteSnapshotRequest(now)
+
+	if !h.snapshotRecentlyRequested(now.Add(snapshotActivityLease - time.Nanosecond)) {
+		t.Fatal("snapshot activity lease expired too early")
+	}
+	if h.snapshotRecentlyRequested(now.Add(snapshotActivityLease)) {
+		t.Fatal("snapshot activity lease did not expire")
 	}
 }

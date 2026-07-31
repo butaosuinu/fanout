@@ -532,6 +532,67 @@ func TestLazyPollerNilResolverIsStateOnly(t *testing.T) {
 	}
 }
 
+func TestPollerGHTickRequiresSubscriber(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1","agent":"claude"}
+	]}`)
+
+	h := newHub()
+	gh := &countingGH{}
+	resolveCalls := 0
+	p := newLazyPoller(root, func() (string, GHProvider, error) {
+		resolveCalls++
+		return "o/n", gh, nil
+	}, h)
+
+	// With no dashboard open, even a GitHub tick must not resolve the repository
+	// or call the provider.
+	p.runGHTick()
+	if resolveCalls != 0 {
+		t.Fatalf("resolve calls without subscribers = %d, want 0", resolveCalls)
+	}
+	if len(gh.calls) != 0 || len(gh.branchCalls) != 0 || len(gh.waveCalls) != 0 {
+		t.Fatalf("provider calls without subscribers = issues %v, branches %v, waves %v; want none",
+			gh.calls, gh.branchCalls, gh.waveCalls)
+	}
+
+	// The next GitHub tick after subscribing resolves, refreshes, and broadcasts
+	// the resulting Snapshot.
+	ch := h.subscribe()
+	p.runGHTick()
+	if resolveCalls != 1 {
+		t.Fatalf("resolve calls after subscribing = %d, want 1", resolveCalls)
+	}
+	if gh.calls[101] != 1 || gh.waveCalls["100"] != 1 {
+		t.Fatalf("provider calls after subscribing = issues %v, waves %v; want issue 101 and parent 100 once",
+			gh.calls, gh.waveCalls)
+	}
+	select {
+	case frame := <-ch:
+		if !strings.Contains(string(frame), `"repo":"o/n"`) ||
+			!strings.Contains(string(frame), `"hasMergedPr":true`) {
+			t.Fatalf("broadcast Snapshot did not contain refreshed GitHub data: %s", frame)
+		}
+	default:
+		t.Fatal("GitHub tick after subscribing did not broadcast a Snapshot")
+	}
+
+	// Closing the last stream stops later provider calls without discarding the
+	// last-known cache used by the state-only snapshot.
+	h.unsubscribe(ch)
+	p.runGHTick()
+	if gh.calls[101] != 1 || gh.waveCalls["100"] != 1 {
+		t.Fatalf("provider calls after unsubscribing = issues %v, waves %v; want cached counts unchanged",
+			gh.calls, gh.waveCalls)
+	}
+	snap := p.build()
+	if len(snap.Sessions) != 1 || len(snap.Sessions[0].Panes) != 1 ||
+		!snap.Sessions[0].Panes[0].HasMergedPR {
+		t.Fatalf("snapshot after unsubscribing did not retain cached GitHub data: %+v", snap)
+	}
+}
+
 func TestContentKeyIgnoresTimestamp(t *testing.T) {
 	a := sessionview.Snapshot{Repo: "x", GeneratedAt: "2026-06-06T00:00:00Z"}
 	b := sessionview.Snapshot{Repo: "x", GeneratedAt: "2026-06-06T00:00:02Z"}
