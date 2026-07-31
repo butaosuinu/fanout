@@ -26,11 +26,23 @@ type executionResult struct {
 	Notices        []string
 }
 
-// IssueExecutionResult reports the exact tmux panes created by an issue or
-// Project fan-out, in creation order. Dry runs return an empty slice.
+// IssueExecutionResult reports the launch plan and exact issues and tmux panes
+// created by an issue or Project fan-out, in creation order. Dry runs return
+// an empty pane-id slice.
 type IssueExecutionResult struct {
-	CreatedPaneIDs []string
-	Notices        []string
+	CreatedIssueNums []int
+	CreatedPaneIDs   []string
+	Notices          []string
+	Plan             Plan
+}
+
+// IssuePlanInput is a caller-prepared issue enumeration and GitHub lookup
+// boundary. The watcher uses it to reuse one candidate snapshot between
+// capacity planning and the launch performed later in the same cycle.
+type IssuePlanInput struct {
+	Loaded            ChildLoadResult
+	HydrateBodyLabels func(*ghissue.Issue) error
+	IssueState        func(int) (string, error)
 }
 
 // IssueReadyFunc runs after the child plan and its effective agents validate,
@@ -57,13 +69,29 @@ func IssuesWithResult(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, command
 // callback. The TUI parent lane uses it to launch its project-root orchestrator
 // only after the exact child plan and agent assignments are known-valid.
 func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, ready IssueReadyFunc) (IssueExecutionResult, exitcode.Code) {
+	return issuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, nil, ready)
+}
+
+// IssuesWithPlanInputResultWhenReady is IssuesWithResultWhenReady with a
+// caller-prepared issue enumeration and lookup cache.
+func IssuesWithPlanInputResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, input IssuePlanInput, ready IssueReadyFunc) (IssueExecutionResult, exitcode.Code) {
+	return issuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, &input, ready)
+}
+
+func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, input *IssuePlanInput, ready IssueReadyFunc) (IssueExecutionResult, exitcode.Code) {
 	resolvedSettings := settings.Resolve(rt.Info.ProjectRoot, settingsOverrides(cfg), lg.Warn)
 	launchCfg := effectiveIssueLaunchConfig(cfg, resolvedSettings)
 	hookConfig := hooks.LoadUserConfig(lg)
 
-	loaded, code := loadChildren(cfg, rt.GH, lg)
-	if code != exitcode.OK {
-		return IssueExecutionResult{}, code
+	var loaded ChildLoadResult
+	if input == nil {
+		var code exitcode.Code
+		loaded, code = loadChildren(cfg, rt.GH, lg)
+		if code != exitcode.OK {
+			return IssueExecutionResult{}, code
+		}
+	} else {
+		loaded = input.Loaded
 	}
 
 	totalChildren := len(loaded.Children)
@@ -119,18 +147,28 @@ func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		return IssueExecutionResult{}, exitcode.Env
 	}
 
+	hydrateBodyLabels := rt.GH.HydrateBodyLabels
+	issueState := rt.GH.IssueState
+	if input != nil {
+		if input.HydrateBodyLabels != nil {
+			hydrateBodyLabels = input.HydrateBodyLabels
+		}
+		if input.IssueState != nil {
+			issueState = input.IssueState
+		}
+	}
 	plan := BuildPlan(
 		cfg,
 		loaded.Children,
 		fanset.Union(sameParentFanned, worktreeFallbackFanned, planOwnedFanned),
 		loaded.ParentBody,
 		func(issue *ghissue.Issue) {
-			if err := rt.GH.HydrateBodyLabels(issue); err != nil {
+			if err := hydrateBodyLabels(issue); err != nil {
 				lg.Warn("#%d: could not fetch body/labels for blocker check; treating as unblocked", issue.Number)
 			}
 		},
 		func(num int) string {
-			state, _ := rt.GH.IssueState(num)
+			state, _ := issueState(num)
 			return state
 		},
 	)
@@ -138,21 +176,21 @@ func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 
 	if plan.OpenAfterFilter == 0 {
 		lg.Info("all OPEN sub-issues filtered out by --only/--skip. nothing to do.")
-		return IssueExecutionResult{}, exitcode.OK
+		return IssueExecutionResult{Plan: plan}, exitcode.OK
 	}
 	if plan.UnfannedCount == 0 {
 		if !callIssueReady(ready, store, recorder, lg) {
-			return IssueExecutionResult{}, exitcode.Env
+			return IssueExecutionResult{Plan: plan}, exitcode.Env
 		}
 		lg.Ok("all %d OPEN sub-issue(s) already have a fanout pane. nothing to do.", len(plan.AlreadyFanned))
-		return IssueExecutionResult{}, exitcode.OK
+		return IssueExecutionResult{Plan: plan}, exitcode.OK
 	}
 	if err := validateIssueAgents(launchCfg, plan.Targets, plan.LimitDeferred); err != nil {
 		lg.Err("%s", err.Error())
-		return IssueExecutionResult{}, exitcode.Env
+		return IssueExecutionResult{Plan: plan}, exitcode.Env
 	}
 	if len(plan.Targets) > 0 && !callIssueReady(ready, store, recorder, lg) {
-		return IssueExecutionResult{}, exitcode.Env
+		return IssueExecutionResult{Plan: plan}, exitcode.Env
 	}
 
 	logAlreadyFanned(plan.AlreadyFanned, lg)
@@ -169,7 +207,19 @@ func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		teamCtx = buildTeamContext(rt.Info.ProjectRoot, cfg.ParentRef, plan.Targets)
 	}
 
-	result := executePlan(launchCfg, lg, rt.Info, rt.Backend, rt.GH, plan.Targets, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
+	hydrateLaunchBody := func(issue *ghissue.Issue) {
+		if issue.Body != "" {
+			return
+		}
+		if input != nil {
+			_ = hydrateBodyLabels(issue)
+			return
+		}
+		if detail, err := rt.GH.IssueDetail(issue.Number); err == nil {
+			issue.Body = detail.Body
+		}
+	}
+	result := executePlan(launchCfg, lg, rt.Info, rt.Backend, plan.Targets, hydrateLaunchBody, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
 	printSummary(plan, result, cfg, lg, c, commandName)
 
 	// Register tmux keybindings so the user can pop the read-only dashboard
@@ -193,9 +243,9 @@ func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 	}
 
 	if result.Failed > 0 {
-		return IssueExecutionResult{CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices}, exitcode.Env
+		return IssueExecutionResult{CreatedIssueNums: result.CreatedNums, CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices, Plan: plan}, exitcode.Env
 	}
-	return IssueExecutionResult{CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices}, exitcode.OK
+	return IssueExecutionResult{CreatedIssueNums: result.CreatedNums, CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices, Plan: plan}, exitcode.OK
 }
 
 func callIssueReady(ready IssueReadyFunc, store state.Store, recorder *state.LockedStore, lg *log.Logger) bool {
@@ -223,7 +273,7 @@ func effectiveIssueLaunchConfig(cfg *cliflags.Config, resolvedSettings settings.
 	return &launchCfg
 }
 
-func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, runtimeBackend backend.Backend, gh ghissue.Runner, targets []ghissue.Issue, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
+func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, runtimeBackend backend.Backend, targets []ghissue.Issue, hydrateBody func(*ghissue.Issue), resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Backend: runtimeBackend, Recorder: recorder, Palette: c, CommandName: commandName}
 	var createdPaneIDs []string
 	var notices []string
@@ -233,10 +283,8 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 		func(issue ghissue.Issue) bool {
 			// Hydrate body lazily for issues that came from the Sub-issues API
 			// path (body=""), unless --unblocked-only already did it upfront.
-			if issue.Body == "" {
-				if detail, err := gh.IssueDetail(issue.Number); err == nil {
-					issue.Body = detail.Body
-				}
+			if issue.Body == "" && hydrateBody != nil {
+				hydrateBody(&issue)
 			}
 			result, ok := launcher.LaunchWithResult(panelaunch.NewIssueRequest(cfg, info.ProjectRoot, issue, resolvedSettings, hookConfig, sharedAcrossParents[issue.Number], teamCtx))
 			if ok && result.PaneID != "" {

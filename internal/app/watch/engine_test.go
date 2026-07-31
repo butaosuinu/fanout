@@ -76,18 +76,14 @@ func (f *fakeWatchIO) IO() IO {
 				return nil, errors.New("unexpected label")
 			}
 		},
-		CountOpenChildren: func(issue ghissue.Issue) (int, error) {
-			f.countCalls = append(f.countCalls, issue.Number)
-			return f.openChildren[issue.Number], nil
-		},
-		CountChildren: func(issue ghissue.Issue) (ChildCounts, error) {
+		PlanChildren: func(issue ghissue.Issue) (ChildPlan, error) {
 			if f.childCounts == nil {
 				f.countCalls = append(f.countCalls, issue.Number)
 				open := f.openChildren[issue.Number]
-				return ChildCounts{Open: open, Launchable: open, Unfanned: open}, nil
+				return f.childPlan(issue, ChildCounts{Open: open, Launchable: open, Unfanned: open}), nil
 			}
 			f.countCalls = append(f.countCalls, issue.Number)
-			return f.childCounts[issue.Number], nil
+			return f.childPlan(issue, f.childCounts[issue.Number]), nil
 		},
 		SwapLabels: func(issue ghissue.Issue, removeLabel, addLabel string) error {
 			f.swaps = append(f.swaps, swapCall{num: issue.Number, remove: removeLabel, add: addLabel})
@@ -103,12 +99,18 @@ func (f *fakeWatchIO) IO() IO {
 			f.standalone = append(f.standalone, issue.Number)
 			return f.standaloneErr[issue.Number]
 		},
-		LaunchParent: func(issue ghissue.Issue, limit int) (ParentLaunchResult, error) {
-			f.parents = append(f.parents, parentLaunch{num: issue.Number, limit: limit})
-			return ParentLaunchResult{Deferred: f.parentDeferred[issue.Number]}, f.parentErr[issue.Number]
-		},
 		PlanLinkedIssueNums: func(state.Store) map[int]bool {
 			return f.planLinked
+		},
+	}
+}
+
+func (f *fakeWatchIO) childPlan(issue ghissue.Issue, counts ChildCounts) ChildPlan {
+	return ChildPlan{
+		Counts: counts,
+		LaunchParent: func(limit int) (ParentLaunchResult, error) {
+			f.parents = append(f.parents, parentLaunch{num: issue.Number, limit: limit})
+			return ParentLaunchResult{Deferred: f.parentDeferred[issue.Number]}, f.parentErr[issue.Number]
 		},
 	}
 }

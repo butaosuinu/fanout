@@ -80,14 +80,12 @@ type Config struct {
 // IO is the watcher's complete external boundary. Tests should provide fakes;
 // production code wires these to ghissue/state/tmux/cmd fanout helpers.
 type IO struct {
-	ListLabeled       func(label string) ([]ghissue.Issue, error)
-	CountOpenChildren func(issue ghissue.Issue) (int, error)
-	CountChildren     func(issue ghissue.Issue) (ChildCounts, error)
-	SwapLabels        func(issue ghissue.Issue, removeLabel, addLabel string) error
-	LoadState         func() (state.Store, error)
-	PaneAlive         func(pane state.Pane) (bool, error)
-	LaunchStandalone  func(issue ghissue.Issue) error
-	LaunchParent      func(issue ghissue.Issue, limit int) (ParentLaunchResult, error)
+	ListLabeled      func(label string) ([]ghissue.Issue, error)
+	PlanChildren     func(issue ghissue.Issue) (ChildPlan, error)
+	SwapLabels       func(issue ghissue.Issue, removeLabel, addLabel string) error
+	LoadState        func() (state.Store, error)
+	PaneAlive        func(pane state.Pane) (bool, error)
+	LaunchStandalone func(issue ghissue.Issue) error
 	// PlanLinkedIssueNums maps recorded plan-lane rows to the GitHub issues
 	// they decompose (production wires panelaunch.PlanLinkedIssueNums). Plan
 	// rows carry no positive IssueNum, so without this link a plan-owned issue
@@ -104,6 +102,13 @@ type ChildCounts struct {
 	Open       int
 	Launchable int
 	Unfanned   int
+}
+
+// ChildPlan binds the counts used to plan a candidate to the parent launch
+// that reuses the same candidate data later in the cycle.
+type ChildPlan struct {
+	Counts       ChildCounts
+	LaunchParent func(limit int) (ParentLaunchResult, error)
 }
 
 // Engine keeps process-local launch failure state between cycles.
@@ -155,6 +160,8 @@ type Action struct {
 	// Limit is non-zero only when MaxSessions is finite and this is a parent
 	// fan-out. The caller should pass it through as fanout's --limit value.
 	Limit int
+
+	launchParent func(limit int) (ParentLaunchResult, error)
 }
 
 // Skip is a candidate removed by idempotency or an already-terminal condition.
@@ -286,11 +293,12 @@ func (e *Engine) PlanCycle() (Report, error) {
 			continue
 		}
 
-		childCounts, err := countChildren(e.io, issue)
+		childPlan, err := e.io.PlanChildren(issue)
 		if err != nil {
 			report.Failures = append(report.Failures, Failure{Issue: issue, Stage: FailureCountChildren, Err: err})
 			continue
 		}
+		childCounts := childPlan.Counts
 		openChildren := childCounts.Open
 		openChildren = max(openChildren, 0)
 		launchableChildren := childCounts.Launchable
@@ -317,6 +325,7 @@ func (e *Engine) PlanCycle() (Report, error) {
 			OpenChildren:       openChildren,
 			LaunchableChildren: launchableChildren,
 			RetryRunning:       candidate.retryRunning,
+			launchParent:       childPlan.LaunchParent,
 		}
 		consumes := 1
 		if openChildren > 0 || candidate.retryKind == LaunchParent {
@@ -345,6 +354,9 @@ func (e *Engine) PlanCycle() (Report, error) {
 		if action.Kind == LaunchParent && remaining > 0 {
 			consumes = min(launchableChildren, remaining)
 			action.Limit = consumes
+		}
+		if action.Kind == LaunchParent && action.launchParent == nil {
+			return report, fmt.Errorf("plan children for issue #%d: parent launch is not configured", issue.Number)
 		}
 		report.Actions = append(report.Actions, action)
 		if remaining > 0 {
@@ -382,7 +394,11 @@ func (e *Engine) RunCycle() (Report, error) {
 		var parentResult ParentLaunchResult
 		switch action.Kind {
 		case LaunchParent:
-			parentResult, launchErr = e.io.LaunchParent(action.Issue, action.Limit)
+			if action.launchParent == nil {
+				launchErr = errors.New("planned parent launch is not configured")
+			} else {
+				parentResult, launchErr = action.launchParent(action.Limit)
+			}
 		default:
 			launchErr = e.io.LaunchStandalone(action.Issue)
 		}
@@ -503,8 +519,8 @@ func validatePlanIO(io IO) error {
 	switch {
 	case io.ListLabeled == nil:
 		return errors.New("watch IO ListLabeled is required")
-	case io.CountChildren == nil && io.CountOpenChildren == nil:
-		return errors.New("watch IO CountChildren is required")
+	case io.PlanChildren == nil:
+		return errors.New("watch IO PlanChildren is required")
 	case io.LoadState == nil:
 		return errors.New("watch IO LoadState is required")
 	case io.PaneAlive == nil:
@@ -523,22 +539,9 @@ func validateRunIO(io IO) error {
 		return errors.New("watch IO SwapLabels is required")
 	case io.LaunchStandalone == nil:
 		return errors.New("watch IO LaunchStandalone is required")
-	case io.LaunchParent == nil:
-		return errors.New("watch IO LaunchParent is required")
 	default:
 		return nil
 	}
-}
-
-func countChildren(io IO, issue ghissue.Issue) (ChildCounts, error) {
-	if io.CountChildren != nil {
-		return io.CountChildren(issue)
-	}
-	open, err := io.CountOpenChildren(issue)
-	if err != nil {
-		return ChildCounts{}, err
-	}
-	return ChildCounts{Open: open, Launchable: open, Unfanned: open}, nil
 }
 
 func countLivePanes(store state.Store, alive func(state.Pane) (bool, error)) (int, error) {
