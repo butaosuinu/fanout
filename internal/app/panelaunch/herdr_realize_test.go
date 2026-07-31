@@ -581,6 +581,66 @@ func TestRealizeHerdrUsesFinalRowsAsIdempotentBindings(t *testing.T) {
 	}
 }
 
+func TestRealizeHerdrPlanTaskReusesSavedChildNames(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	coordinatorReq := testHerdrCoordinatorRequest(repo)
+	coordinatorReq.Parent = "plan:demo"
+	if _, err := realizeHerdrCoordinator(
+		context.Background(),
+		coordinatorReq,
+		runtime,
+		hooks,
+	); !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("plan coordinator error = %v", err)
+	}
+
+	req := testHerdrWorktreeRequest(repo, "saved-task", 0)
+	req.Parent = "plan:demo"
+	req.TaskID = "task-1"
+	child, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("initial plan task error = %v", err)
+	}
+
+	renamed := req
+	renamed.Slug = "renamed-task"
+	renamed.BranchName = "fanout/renamed-task"
+	renamed.WorktreePath = filepath.Join(repo, ".fanout", "worktrees", renamed.Slug)
+	reused, err := realizeHerdrWorktree(context.Background(), renamed, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		reused.Intent.Slug != child.Intent.Slug ||
+		reused.Intent.BranchName != child.Intent.BranchName ||
+		reused.Intent.WorktreePath != child.Intent.WorktreePath ||
+		len(runtime.mutations) != 2 {
+		t.Fatalf(
+			"renamed intent replay = %+v, original = %+v, err=%v, mutations=%d",
+			reused.Intent,
+			child.Intent,
+			err,
+			len(runtime.mutations),
+		)
+	}
+
+	finalizeHerdrTestIntent(t, repo, child.Intent)
+	finalized, err := realizeHerdrWorktree(context.Background(), renamed, runtime, hooks)
+	if err != nil || !finalized.AlreadyFinalized ||
+		finalized.Row.Slug != child.Intent.Slug ||
+		finalized.Row.BranchName != child.Intent.BranchName ||
+		finalized.Row.WorktreePath != child.Intent.WorktreePath ||
+		len(runtime.mutations) != 2 {
+		t.Fatalf(
+			"renamed final replay = %+v, original = %+v, err=%v, mutations=%d",
+			finalized.Row,
+			child.Intent,
+			err,
+			len(runtime.mutations),
+		)
+	}
+}
+
 func TestRealizeHerdrWorktreeAdoptsResponseLossPostcondition(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}

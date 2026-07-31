@@ -1270,12 +1270,11 @@ func validateSavedWorktreeIntent(
 		intent.RuntimeParent != runtimeParent ||
 		intent.OwnerProjectRoot != ownerProjectRoot ||
 		intent.IssueNum != req.IssueNum || intent.TaskID != req.TaskID ||
-		intent.Backend != backend.Herdr || intent.Slug != req.Slug ||
-		intent.BranchName != req.BranchName ||
-		!savedHerdrWorktreePathMatches(
+		intent.Backend != backend.Herdr ||
+		!savedHerdrWorktreePathValid(
 			ownerProjectRoot,
+			intent.Slug,
 			intent.WorktreePath,
-			req.WorktreePath,
 		) ||
 		intent.Session != req.HerdrSession || intent.SocketPath != req.SocketPath ||
 		!sameHerdrResource(intent.Coordinator, coordinator) {
@@ -1398,12 +1397,7 @@ func finalizedHerdrWorktree(
 		row.RuntimeParent != runtimeParent ||
 		row.OwnerProjectRoot != ownerProjectRoot ||
 		row.IssueNum != req.IssueNum || row.TaskID != req.TaskID ||
-		row.Slug != req.Slug || row.BranchName != req.BranchName ||
-		!savedHerdrWorktreePathMatches(
-			ownerProjectRoot,
-			row.WorktreePath,
-			req.WorktreePath,
-		) ||
+		!savedHerdrWorktreePathValid(ownerProjectRoot, row.Slug, row.WorktreePath) ||
 		!savedHerdrWorktreeRepoMatches(ownerProjectRoot, row.Resource, source) ||
 		row.Session != req.HerdrSession || row.SocketPath != req.SocketPath {
 		return HerdrWorktreeResult{}, fmt.Errorf("finalized herdr worktree contradicts request")
@@ -1601,12 +1595,22 @@ func savedHerdrCoordinatorPathMatches(ownerProjectRoot, savedPath, requestPath s
 	return ownerProjectRoot == "" || savedPath == filepath.Clean(requestPath)
 }
 
-func savedHerdrWorktreePathMatches(ownerProjectRoot, savedPath, requestPath string) bool {
+func savedHerdrWorktreePathValid(ownerProjectRoot, savedSlug, savedPath string) bool {
 	savedPath = filepath.Clean(savedPath)
 	if !filepath.IsAbs(savedPath) {
 		return false
 	}
-	return ownerProjectRoot == "" || savedPath == filepath.Clean(requestPath)
+	if ownerProjectRoot == "" {
+		return true
+	}
+	worktreesDir := filepath.Dir(savedPath)
+	fanoutDir := filepath.Dir(worktreesDir)
+	if filepath.Base(savedPath) != savedSlug || filepath.Base(worktreesDir) != "worktrees" ||
+		filepath.Base(fanoutDir) != ".fanout" {
+		return false
+	}
+	savedRoot, err := filepath.EvalSymlinks(filepath.Dir(fanoutDir))
+	return err == nil && filepath.Clean(savedRoot) == filepath.Clean(ownerProjectRoot)
 }
 
 func savedHerdrWorktreeRepoMatches(

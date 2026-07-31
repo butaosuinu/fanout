@@ -796,9 +796,10 @@ func TestRuntimeReadRoutesUseAmbientHerdrWithoutSavedRoute(t *testing.T) {
 	}
 }
 
-func TestRuntimeReadRoutesUseSharedHerdrControlRows(t *testing.T) {
+func TestRuntimeReadRoutesUseSharedHerdrControlRowsAndIntents(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	writeHerdrControlRouteRow(t, repo, "control", "/tmp/control.sock")
+	writeHerdrControlRouteIntent(t, repo, "intent", "/tmp/intent.sock")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("FANOUT_BACKEND", "")
 	t.Setenv("HERDR_ENV", "")
@@ -817,6 +818,11 @@ func TestRuntimeReadRoutesUseSharedHerdrControlRows(t *testing.T) {
 			herdrSession:    "control",
 			herdrSocketPath: "/tmp/control.sock",
 		}: true,
+		{
+			name:            backend.Herdr,
+			herdrSession:    "intent",
+			herdrSocketPath: "/tmp/intent.sock",
+		}: true,
 	}
 	if len(routes) != len(want) {
 		t.Fatalf("routes = %+v, want %d routes", routes, len(want))
@@ -825,6 +831,38 @@ func TestRuntimeReadRoutesUseSharedHerdrControlRows(t *testing.T) {
 		if !want[route] {
 			t.Fatalf("unexpected route %+v; all routes=%+v", route, routes)
 		}
+	}
+}
+
+func writeHerdrControlRouteIntent(t *testing.T, repo, session, socketPath string) {
+	t.Helper()
+	id, err := state.HerdrCoordinatorIntentID("426", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Errorf("unlock Herdr control: %v", unlockErr)
+		}
+	}()
+	locked.UpsertIntent(state.HerdrIntent{
+		ID: id, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentRealized,
+		Parent: "426", RuntimeParent: "426",
+		Backend: backend.Herdr, WorktreePath: repo,
+		WorkspaceLabel: "fanout-coordinator-intent-route",
+		Resource: state.HerdrResource{
+			WorkspaceID: "w2", Label: "fanout-coordinator-intent-route",
+			PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: repo,
+		},
+		Session: session, SocketPath: socketPath,
+		TimeoutMS: 3000, ExpiresUnixMS: 1,
+	})
+	if err := locked.Save(); err != nil {
+		t.Fatal(err)
 	}
 }
 

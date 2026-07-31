@@ -369,7 +369,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 		routeErr = errors.Join(routeErr, fmt.Errorf("list linked worktrees for runtime observation: %w", listErr))
 	}
 	seenRoots := map[string]bool{}
-	hasHerdrRow := false
+	hasHerdrRoute := false
 	for _, root := range roots {
 		key := canonicalRuntimeRoot(root)
 		if seenRoots[key] {
@@ -388,7 +388,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 			case backend.Tmux:
 				addRoute(runtimeReadRoute{name: backend.Tmux})
 			case backend.Herdr:
-				hasHerdrRow = true
+				hasHerdrRoute = true
 				session := strings.TrimSpace(pane.HerdrSession)
 				socketPath := strings.TrimSpace(pane.HerdrSocketPath)
 				if session == "" || socketPath == "" {
@@ -416,11 +416,11 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 
 	control, controlErr := state.LoadHerdrControl(projectRoot)
 	if controlErr != nil {
-		hasHerdrRow = true
+		hasHerdrRoute = true
 		routeErr = errors.Join(routeErr, fmt.Errorf("load Herdr control routes: %w", controlErr))
 	} else {
 		for i, row := range control.Rows {
-			hasHerdrRow = true
+			hasHerdrRoute = true
 			session := strings.TrimSpace(row.Session)
 			socketPath := strings.TrimSpace(row.SocketPath)
 			if session == "" || socketPath == "" {
@@ -429,6 +429,25 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 						Backend: backend.Herdr, SessionID: session, SocketPath: socketPath,
 					},
 					fmt.Errorf("herdr control row %d requires session and socketPath", i),
+				))
+				continue
+			}
+			addRoute(runtimeReadRoute{
+				name:            backend.Herdr,
+				herdrSession:    session,
+				herdrSocketPath: socketPath,
+			})
+		}
+		for i, intent := range control.Intents {
+			hasHerdrRoute = true
+			session := strings.TrimSpace(intent.Session)
+			socketPath := strings.TrimSpace(intent.SocketPath)
+			if session == "" || socketPath == "" {
+				routeErr = errors.Join(routeErr, backend.ObservationRouteUnavailable(
+					backend.ObservationRoute{
+						Backend: backend.Herdr, SessionID: session, SocketPath: socketPath,
+					},
+					fmt.Errorf("herdr control intent %d requires session and socketPath", i),
 				))
 				continue
 			}
@@ -449,7 +468,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 		case backend.Tmux:
 			addRoute(runtimeReadRoute{name: backend.Tmux})
 		case backend.Herdr:
-			if !hasHerdrRow {
+			if !hasHerdrRoute {
 				addRoute(runtimeReadRoute{
 					name:            backend.Herdr,
 					herdrSession:    strings.TrimSpace(inputs.herdrSession),
