@@ -125,16 +125,33 @@ type IssueComment struct {
 // shim runs the real `gh` binary path through PATH, so the default execRunner
 // is sufficient and tests don't actually need to swap.
 type Runner struct {
-	Cwd string
+	Cwd           string
+	rateLimitGate *rateLimitGate
 }
 
 func (r Runner) gh(args ...string) ([]byte, error) {
-	return execx.Output(r.Cwd, nil, "gh", args...)
+	return r.runGH(func() ([]byte, error) {
+		return execx.Output(r.Cwd, nil, "gh", args...)
+	})
 }
 
 func (r Runner) ghWithInput(input string, args ...string) error {
-	_, err := execx.OutputStdin(r.Cwd, input, "gh", args...)
+	_, err := r.runGH(func() ([]byte, error) {
+		return execx.OutputStdin(r.Cwd, input, "gh", args...)
+	})
 	return err
+}
+
+func (r Runner) runGH(run func() ([]byte, error)) ([]byte, error) {
+	gate := r.rateLimitGate
+	if gate == nil {
+		gate = sharedRateLimitGate
+	}
+	if err := gate.before(); err != nil {
+		return nil, err
+	}
+	out, err := run()
+	return out, gate.after(err)
 }
 
 // RepoNameWithOwner runs `gh repo view --json nameWithOwner -q .nameWithOwner`.
