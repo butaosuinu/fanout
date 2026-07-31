@@ -184,6 +184,8 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 				}
 				stat.Additions = replacementStat.Additions
 				stat.Deletions = replacementStat.Deletions
+				stat.Binary = replacementStat.Binary
+				stat.OmittedReason = replacementStat.OmittedReason
 			case file.tracked:
 				out, err = r.gitExactPath(
 					stat.Path,
@@ -205,8 +207,10 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 			if err != nil {
 				return Patch{}, err
 			}
-			patch.WriteString(string(out))
-			stat.PatchIncluded = true
+			if stat.OmittedReason == "" {
+				patch.WriteString(string(out))
+				stat.PatchIncluded = true
+			}
 		}
 		result.Files = append(result.Files, stat)
 	}
