@@ -65,6 +65,9 @@ func CombinedContext(ctx context.Context, dir string, name string, args ...strin
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return out, contextErr
+		}
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
 			return out, err

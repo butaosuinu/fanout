@@ -72,7 +72,10 @@ func ResolveHerdrBase(opts Options) (HerdrBaseResolution, error) {
 
 // ResolveHerdrBaseContext is ResolveHerdrBase with cancellation and deadline support.
 func ResolveHerdrBaseContext(ctx context.Context, opts Options) (HerdrBaseResolution, error) {
-	plan := BuildPlan(opts)
+	plan, planErr := buildPlanContext(ctx, opts)
+	if planErr != nil {
+		return HerdrBaseResolution{}, planErr
+	}
 	if err := requireCleanHerdrSource(ctx, plan.ProjectRoot); err != nil {
 		return HerdrBaseResolution{}, err
 	}

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResolveHerdrRepoIdentityDoesNotRequirePathFormat(t *testing.T) {
@@ -171,6 +172,33 @@ func TestResolveHerdrBaseContextStopsCanceledGitWork(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ResolveHerdrBaseContext() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestResolveHerdrBaseContextStopsDefaultBranchLookup(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	gitTest(t, repo, "remote", "add", "origin", "https://example.invalid/fanout.git")
+	binDir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(binDir, "gh"),
+		[]byte("#!/bin/sh\nexec /bin/sleep 5\n"),
+		0o700,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := ResolveHerdrBaseContext(ctx, Options{
+		ProjectRoot: repo, Slug: "default-timeout", BranchName: "fanout/default-timeout",
+		NoRefresh: true, AllowMissingOrigin: true,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ResolveHerdrBaseContext() error = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("default branch lookup stopped after %v, want under 1s", elapsed)
 	}
 }
 

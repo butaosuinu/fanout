@@ -528,7 +528,9 @@ func RealizeHerdrWorktree(
 		}
 	}
 
-	operationCtx, cancel, contextErr := herdrIntentContext(realizeCtx, intent, hooks.Now())
+	operationNow := hooks.Now()
+	classificationOnly := !operationNow.Before(time.UnixMilli(intent.ExpiresUnixMS))
+	operationCtx, cancel, contextErr := herdrIntentContext(realizeCtx, intent, operationNow)
 	if contextErr != nil {
 		if errors.Is(contextErr, errHerdrIntentDeadlineExpired) &&
 			intent.Status == state.HerdrIntentPlanned {
@@ -540,7 +542,15 @@ func RealizeHerdrWorktree(
 
 	switch intent.Status {
 	case state.HerdrIntentRealized:
-		return resumeRealizedHerdrWorktree(operationCtx, runtime, locked, req, source, intent)
+		return resumeRealizedHerdrWorktree(
+			operationCtx,
+			runtime,
+			locked,
+			req,
+			source,
+			intent,
+			!classificationOnly,
+		)
 	case state.HerdrIntentIssued:
 		return recoverHerdrWorktree(operationCtx, runtime, locked, req, source, intent, nil)
 	case state.HerdrIntentManualCleanupRequired:
@@ -1053,6 +1063,7 @@ func resumeRealizedHerdrWorktree(
 	req HerdrWorktreeRequest,
 	source worktree.HerdrRepoIdentity,
 	intent state.HerdrIntent,
+	allowOpen bool,
 ) (HerdrWorktreeResult, error) {
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
@@ -1103,6 +1114,13 @@ func resumeRealizedHerdrWorktree(
 	}
 	if coordinatorErr := verifyCoordinatorObservation(intent.Coordinator, workspaces); coordinatorErr != nil {
 		return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, coordinatorErr)
+	}
+	if !allowOpen {
+		return HerdrWorktreeResult{}, markHerdrIntentManual(
+			locked,
+			intent,
+			fmt.Errorf("expired realized Herdr worktree has no live workspace"),
+		)
 	}
 	if policyErr := runtime.VerifyWorktreeSetupPolicy(ctx); policyErr != nil {
 		return HerdrWorktreeResult{}, policyErr

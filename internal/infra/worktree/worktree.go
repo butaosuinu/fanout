@@ -66,7 +66,15 @@ type Result struct {
 
 // BuildPlan resolves deterministic worktree paths and the base branch.
 func BuildPlan(opts Options) Plan {
-	base, missingOrigin := resolveBaseBranch(opts)
+	plan, _ := buildPlanContext(context.Background(), opts)
+	return plan
+}
+
+func buildPlanContext(ctx context.Context, opts Options) (Plan, error) {
+	base, missingOrigin, err := resolveBaseBranchContext(ctx, opts)
+	if err != nil {
+		return Plan{}, err
+	}
 	refresh := !opts.NoRefresh
 	refreshSkippedReason := ""
 	var refreshDetails RefreshDetails
@@ -93,7 +101,7 @@ func BuildPlan(opts Options) Plan {
 		RefreshDetails:       refreshDetails,
 		RefreshError:         refreshErr,
 		RefreshSkippedReason: refreshSkippedReason,
-	}
+	}, nil
 }
 
 // Prepare refreshes the base branch and creates the child worktree.
@@ -231,58 +239,91 @@ func missingExcludePatterns(body []byte) []string {
 
 // ResolveDefaultBranch follows fanout's default branch fallback order.
 func ResolveDefaultBranch(root string) string {
-	return resolveDefaultBranch(root, false)
+	branch, _ := resolveDefaultBranchContext(context.Background(), root, false)
+	return branch
 }
 
 // ResolveDefaultBranchAllowMissingOrigin returns the current local branch when
 // no origin remote exists, for local-only plan/manual pane runs.
 func ResolveDefaultBranchAllowMissingOrigin(root string) string {
-	return resolveDefaultBranch(root, true)
+	branch, _ := resolveDefaultBranchContext(context.Background(), root, true)
+	return branch
 }
 
-func resolveDefaultBranch(root string, allowMissingOrigin bool) string {
-	if allowMissingOrigin && !hasOriginRemote(root) {
-		return localBaseRef(root)
+func resolveDefaultBranchContext(
+	ctx context.Context,
+	root string,
+	allowMissingOrigin bool,
+) (string, error) {
+	if allowMissingOrigin {
+		hasOrigin, err := hasOriginRemoteContext(ctx, root)
+		if err != nil {
+			return "", err
+		}
+		if !hasOrigin {
+			return localBaseRefContext(ctx, root)
+		}
 	}
-	cmd := exec.Command("gh", "repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name")
+	cmd := exec.CommandContext(ctx, "gh", "repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name")
 	cmd.Dir = root
 	if out, err := cmd.Output(); err == nil {
 		if s := strings.TrimSpace(string(out)); s != "" && s != "null" {
-			return s
+			return s, nil
 		}
 	}
-	if out, err := git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if out, err := gitContext(ctx, root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
 		s := strings.TrimSpace(string(out))
 		s = strings.TrimPrefix(s, "origin/")
 		if s != "" {
-			return s
+			return s, nil
 		}
 	}
-	return "main"
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "main", nil
 }
 
-func resolveBaseBranch(opts Options) (string, bool) {
-	missingOrigin := opts.AllowMissingOrigin && !hasOriginRemote(opts.ProjectRoot)
+func resolveBaseBranchContext(ctx context.Context, opts Options) (string, bool, error) {
+	missingOrigin := false
+	if opts.AllowMissingOrigin {
+		hasOrigin, err := hasOriginRemoteContext(ctx, opts.ProjectRoot)
+		if err != nil {
+			return "", false, err
+		}
+		missingOrigin = !hasOrigin
+	}
 	base := opts.BaseBranch
 	if base == "" {
 		if missingOrigin {
-			return localBaseRef(opts.ProjectRoot), true
+			localBase, err := localBaseRefContext(ctx, opts.ProjectRoot)
+			return localBase, true, err
 		}
-		return ResolveDefaultBranch(opts.ProjectRoot), false
+		defaultBase, err := resolveDefaultBranchContext(ctx, opts.ProjectRoot, false)
+		return defaultBase, false, err
 	}
-	return base, missingOrigin
+	return base, missingOrigin, nil
 }
 
-func hasOriginRemote(root string) bool {
-	_, err := git(root, "remote", "get-url", "origin")
-	return err == nil
+func hasOriginRemoteContext(ctx context.Context, root string) (bool, error) {
+	_, err := gitContext(ctx, root, "remote", "get-url", "origin")
+	if contextErr := ctx.Err(); contextErr != nil {
+		return false, contextErr
+	}
+	return err == nil, nil
 }
 
-func localBaseRef(root string) string {
-	if branch, err := gitTrim(root, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil && branch != "" {
-		return branch
+func localBaseRefContext(ctx context.Context, root string) (string, error) {
+	if branch, err := gitTrimContext(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil && branch != "" {
+		return branch, nil
 	}
-	return "HEAD"
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "HEAD", nil
 }
 
 func originQualifiedBase(base string) bool {

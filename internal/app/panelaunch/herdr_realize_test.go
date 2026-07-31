@@ -728,6 +728,66 @@ func TestRealizeHerdrWorktreeRecoversExpiredIssuedIntent(t *testing.T) {
 	}
 }
 
+func TestRealizeHerdrWorktreeDoesNotOpenExpiredRealizedIntent(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	req := testHerdrWorktreeRequest(repo, "expired-realized", 437)
+	realized, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("initial realization error = %v", err)
+	}
+	live := make([]herdrrun.WorkspaceObservation, 0, len(runtime.workspaces)-1)
+	for _, workspace := range runtime.workspaces {
+		if workspace.WorkspaceID != realized.Intent.Resource.WorkspaceID {
+			live = append(live, workspace)
+		}
+	}
+	runtime.workspaces = live
+
+	locked, err := state.LockHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := locked.FindIntent(realized.Intent.ID)
+	if !found {
+		t.Fatalf("intent %s not found", realized.Intent.ID)
+	}
+	intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
+	locked.UpsertIntent(intent)
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+
+	mutationsBefore := len(runtime.mutations)
+	_, retryErr := realizeHerdrWorktree(
+		context.Background(),
+		req,
+		runtime,
+		hooks,
+	)
+	if !errors.Is(retryErr, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("expired realized retry error = %v", retryErr)
+	}
+	if len(runtime.mutations) != mutationsBefore {
+		t.Fatal("expired realized intent issued a worktree open mutation")
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found = control.FindIntent(realized.Intent.ID)
+	if !found || intent.Status != state.HerdrIntentManualCleanupRequired {
+		t.Fatalf("expired realized intent = (%+v, %t)", intent, found)
+	}
+}
+
 func TestRealizeHerdrWorktreeRollsBackExpiredPlannedIntent(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
