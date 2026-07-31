@@ -318,9 +318,9 @@ func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (bool,
 				}
 			}
 		} else {
-			tooLarge, indexErr := r.skippedIndexFileTooLarge(path, file.Path)
+			tooLarge, indexErr := r.hiddenIndexFileTooLarge(path, file.Path)
 			if indexErr != nil {
-				return false, fmt.Errorf("inspect skipped index entry %q: %w", file.Path, indexErr)
+				return false, fmt.Errorf("inspect hidden index entry %q: %w", file.Path, indexErr)
 			}
 			if tooLarge {
 				return true, nil
@@ -558,8 +558,8 @@ func (r Runner) pathInIndex(path, rel string) (bool, error) {
 	return len(out) > 0, nil
 }
 
-func (r Runner) skippedIndexFileTooLarge(path, rel string) (bool, error) {
-	out, err := r.gitExactPath(rel, "-C", path, "ls-files", "-t", "--stage", "-z")
+func (r Runner) hiddenIndexFileTooLarge(path, rel string) (bool, error) {
+	out, err := r.gitExactPath(rel, "-C", path, "ls-files", "-v", "--stage", "-z")
 	if err != nil {
 		return false, err
 	}
@@ -573,7 +573,9 @@ func (r Runner) skippedIndexFileTooLarge(path, rel string) (bool, error) {
 	if len(records) != 1 || len(records[0]) < 3 || records[0][1] != ' ' {
 		return false, fmt.Errorf("parse index entry: malformed output")
 	}
-	if records[0][0] != 'S' {
+	switch records[0][0] {
+	case 'S', 's', 'h':
+	default:
 		return false, nil
 	}
 
@@ -587,7 +589,7 @@ func (r Runner) skippedIndexFileTooLarge(path, rel string) (bool, error) {
 	case "160000":
 		return false, nil
 	default:
-		return false, fmt.Errorf("unsupported skipped index mode %q", fields[0])
+		return false, fmt.Errorf("unsupported hidden index mode %q", fields[0])
 	}
 	out, err = r.git("-C", path, "cat-file", "-s", fields[1])
 	if err != nil {
@@ -595,7 +597,7 @@ func (r Runner) skippedIndexFileTooLarge(path, rel string) (bool, error) {
 	}
 	size, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
 	if err != nil {
-		return false, fmt.Errorf("parse skipped index size: %w", err)
+		return false, fmt.Errorf("parse hidden index size: %w", err)
 	}
 	return size > patchFileLimit, nil
 }

@@ -421,6 +421,29 @@ func TestRunnerWorktreePatchChecksSkippedIndexBlobSize(t *testing.T) {
 	}
 }
 
+func TestRunnerWorktreePatchChecksAssumeUnchangedIndexBlobSize(t *testing.T) {
+	repo := initPatchRepo(t)
+	writeGitstatFile(t, repo, "tracked.txt", bytes.Repeat([]byte{'x'}, patchFileLimit+1))
+	gitTest(t, repo, "add", "tracked.txt")
+	gitTest(t, repo, "commit", "-m", "oversized tracked file")
+	gitTest(t, repo, "update-index", "--assume-unchanged", "tracked.txt")
+	if err := os.Remove(filepath.Join(repo, "tracked.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "tracked.txt",
+		OmittedReason: "tooLarge",
+	})
+	if got.Patch != "" {
+		t.Fatalf("WorktreePatch().Patch has %d bytes, want assumed-unchanged oversized index blob omitted", len(got.Patch))
+	}
+}
+
 func TestRunnerWorktreePatchOverridesIgnoreSubmodules(t *testing.T) {
 	repo := t.TempDir()
 	gitTest(t, repo, "init")
