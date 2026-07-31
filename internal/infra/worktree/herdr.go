@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -66,23 +67,28 @@ func resolveHerdrGitPath(root, flag string) (string, error) {
 // ResolveHerdrBase applies the tmux base refresh gate and freezes the selected
 // base to one commit SHA before branch reservation.
 func ResolveHerdrBase(opts Options) (HerdrBaseResolution, error) {
+	return ResolveHerdrBaseContext(context.Background(), opts)
+}
+
+// ResolveHerdrBaseContext is ResolveHerdrBase with cancellation and deadline support.
+func ResolveHerdrBaseContext(ctx context.Context, opts Options) (HerdrBaseResolution, error) {
 	plan := BuildPlan(opts)
-	if err := requireCleanHerdrSource(plan.ProjectRoot); err != nil {
+	if err := requireCleanHerdrSource(ctx, plan.ProjectRoot); err != nil {
 		return HerdrBaseResolution{}, err
 	}
 	if plan.Refresh {
 		refreshErr := plan.RefreshError
 		if refreshErr == nil {
-			refreshErr = RefreshBase(plan.ProjectRoot, plan.BaseBranch)
+			refreshErr = RefreshBaseContext(ctx, plan.ProjectRoot, plan.BaseBranch)
 		}
 		if refreshErr != nil {
 			return HerdrBaseResolution{}, refreshErr
 		}
 	}
-	if err := requireCleanHerdrSource(plan.ProjectRoot); err != nil {
+	if err := requireCleanHerdrSource(ctx, plan.ProjectRoot); err != nil {
 		return HerdrBaseResolution{}, err
 	}
-	sha, err := gitTrim(plan.ProjectRoot, "rev-parse", "--verify", plan.BaseBranch+"^{commit}")
+	sha, err := gitTrimContext(ctx, plan.ProjectRoot, "rev-parse", "--verify", plan.BaseBranch+"^{commit}")
 	if err != nil {
 		return HerdrBaseResolution{}, fmt.Errorf("resolve Herdr base %q to a commit: %w", plan.BaseBranch, err)
 	}
@@ -93,8 +99,8 @@ func ResolveHerdrBase(opts Options) (HerdrBaseResolution, error) {
 	return HerdrBaseResolution{BaseBranch: plan.BaseBranch, SHA: sha}, nil
 }
 
-func requireCleanHerdrSource(root string) error {
-	status, err := gitTrim(root, "status", "--porcelain", "--untracked-files=all")
+func requireCleanHerdrSource(ctx context.Context, root string) error {
+	status, err := gitTrimContext(ctx, root, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return fmt.Errorf("check Herdr source checkout cleanliness: %w", err)
 	}

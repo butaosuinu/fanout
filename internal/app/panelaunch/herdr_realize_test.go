@@ -1127,6 +1127,50 @@ func TestRealizeHerdrReusesNumericParentCoordinatorAcrossLinkedWorktrees(t *test
 	}
 }
 
+func TestRealizeHerdrResumesPlannedChildAtSavedOwnerAcrossLinkedWorktrees(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	savedReq := testHerdrWorktreeRequest(repo, "linked-planned-child", 436)
+	runtime.policyErr = errors.New("stop before child mutation")
+	if _, err := realizeHerdrWorktree(
+		context.Background(),
+		savedReq,
+		runtime,
+		hooks,
+	); err == nil || !strings.Contains(err.Error(), "stop before child mutation") {
+		t.Fatalf("initial planned child error = %v", err)
+	}
+
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "linked-planned-child", sibling, "HEAD")
+	runtime.policyErr = nil
+	retryReq := testHerdrWorktreeRequest(sibling, "linked-planned-child", 436)
+	result, err := realizeHerdrWorktree(
+		context.Background(),
+		retryReq,
+		runtime,
+		hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("linked planned child retry error = %v", err)
+	}
+	if result.Intent.WorktreePath != savedReq.WorktreePath || len(runtime.mutations) != 2 {
+		t.Fatalf(
+			"linked planned child = %+v, mutations = %d",
+			result.Intent,
+			len(runtime.mutations),
+		)
+	}
+	childMutation := runtime.mutations[1]
+	if childMutation.ProjectRoot != repo || childMutation.Path != savedReq.WorktreePath {
+		t.Fatalf("linked planned child mutation = %+v", childMutation)
+	}
+}
+
 func TestRealizeHerdrResumesPlannedCoordinatorAtSavedPathAcrossLinkedWorktrees(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	savedPath, err := filepath.EvalSymlinks(repo)

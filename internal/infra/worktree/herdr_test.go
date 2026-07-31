@@ -1,6 +1,8 @@
 package worktree
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,6 +158,29 @@ func TestResolveHerdrBasePinsCommitAndRejectsDirtySource(t *testing.T) {
 		AllowMissingOrigin: true,
 	}); err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
 		t.Fatalf("dirty base error = %v", err)
+	}
+}
+
+func TestResolveHerdrBaseContextStopsCanceledGitWork(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ResolveHerdrBaseContext(ctx, Options{
+		ProjectRoot: repo, Slug: "canceled", BranchName: "fanout/canceled",
+		NoRefresh: true, AllowMissingOrigin: true,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ResolveHerdrBaseContext() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestRefreshBaseContextStopsCanceledFetch(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := RefreshBaseContext(ctx, repo, "main")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RefreshBaseContext() error = %v, want context.Canceled", err)
 	}
 }
 

@@ -463,6 +463,11 @@ func RealizeHerdrWorktree(
 		); savedErr != nil {
 			return result, savedErr
 		}
+		savedProjectRoot, savedRootErr := savedHerdrWorktreeProjectRoot(intent, source)
+		if savedRootErr != nil {
+			return result, savedRootErr
+		}
+		req.ProjectRoot = savedProjectRoot
 	} else {
 		if excludeErr := worktree.EnsureLocalExclude(req.SourceRoot); excludeErr != nil {
 			return result, excludeErr
@@ -470,7 +475,7 @@ func RealizeHerdrWorktree(
 		if parentErr := worktree.EnsureHerdrWorktreeParent(req.ProjectRoot, req.WorktreePath); parentErr != nil {
 			return result, parentErr
 		}
-		base, baseErr := worktree.ResolveHerdrBase(worktree.Options{
+		base, baseErr := worktree.ResolveHerdrBaseContext(realizeCtx, worktree.Options{
 			ProjectRoot: req.SourceRoot, Slug: req.Slug, BranchName: req.BranchName,
 			BaseBranch: req.BaseBranch, NoRefresh: req.NoRefresh,
 			AllowMissingOrigin: req.AllowMissingOrigin,
@@ -1621,6 +1626,29 @@ func savedHerdrWorktreePathValid(ownerProjectRoot, savedSlug, savedPath string) 
 	}
 	savedRoot, err := filepath.EvalSymlinks(filepath.Dir(fanoutDir))
 	return err == nil && filepath.Clean(savedRoot) == filepath.Clean(ownerProjectRoot)
+}
+
+func savedHerdrWorktreeProjectRoot(
+	intent state.HerdrIntent,
+	source worktree.HerdrRepoIdentity,
+) (string, error) {
+	savedPath := filepath.Clean(intent.WorktreePath)
+	worktreesDir := filepath.Dir(savedPath)
+	fanoutDir := filepath.Dir(worktreesDir)
+	projectRoot := filepath.Dir(fanoutDir)
+	if !filepath.IsAbs(savedPath) || filepath.Base(savedPath) != intent.Slug ||
+		filepath.Base(worktreesDir) != "worktrees" || filepath.Base(fanoutDir) != ".fanout" {
+		return "", fmt.Errorf("saved Herdr worktree path has no owner project root")
+	}
+	identity, err := worktree.ResolveHerdrRepoIdentity(projectRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve saved Herdr worktree owner: %w", err)
+	}
+	if identity.RepoKey != source.RepoKey ||
+		(intent.OwnerProjectRoot != "" && identity.RepoRoot != intent.OwnerProjectRoot) {
+		return "", fmt.Errorf("saved Herdr worktree owner belongs to a different repository")
+	}
+	return projectRoot, nil
 }
 
 func savedHerdrWorktreeRepoMatches(

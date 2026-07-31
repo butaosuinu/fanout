@@ -3,6 +3,7 @@ package worktree
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -327,14 +328,19 @@ func RefreshDetailsFor(base string) (RefreshDetails, error) {
 
 // RefreshBase fetches origin/base and fast-forwards a local base branch when applicable.
 func RefreshBase(root, base string) error {
+	return RefreshBaseContext(context.Background(), root, base)
+}
+
+// RefreshBaseContext is RefreshBase with cancellation and deadline support.
+func RefreshBaseContext(ctx context.Context, root, base string) error {
 	details, err := RefreshDetailsFor(base)
 	if err != nil {
 		return err
 	}
-	if _, err = git(root, "fetch", "--quiet", "--no-tags", "origin", details.FetchBranch); err != nil {
+	if _, err = gitContext(ctx, root, "fetch", "--quiet", "--no-tags", "origin", details.FetchBranch); err != nil {
 		return fmt.Errorf("git fetch origin %s: %w", details.FetchBranch, err)
 	}
-	originSHA, err := gitTrim(root, "rev-parse", "--verify", details.OriginRef)
+	originSHA, err := gitTrimContext(ctx, root, "rev-parse", "--verify", details.OriginRef)
 	if err != nil {
 		return fmt.Errorf("resolve %s: %w", details.OriginRef, err)
 	}
@@ -343,9 +349,9 @@ func RefreshBase(root, base string) error {
 	}
 
 	localRef := "refs/heads/" + details.LocalBranch
-	localSHA, err := gitTrim(root, "rev-parse", "--verify", localRef)
+	localSHA, err := gitTrimContext(ctx, root, "rev-parse", "--verify", localRef)
 	if err != nil {
-		if _, err = git(root, "branch", details.LocalBranch, originSHA); err != nil {
+		if _, err = gitContext(ctx, root, "branch", details.LocalBranch, originSHA); err != nil {
 			return fmt.Errorf("create local base branch %s: %w", details.LocalBranch, err)
 		}
 		return nil
@@ -353,29 +359,32 @@ func RefreshBase(root, base string) error {
 	if localSHA == originSHA {
 		return nil
 	}
-	mergeBase, err := gitTrim(root, "merge-base", localSHA, originSHA)
+	mergeBase, err := gitTrimContext(ctx, root, "merge-base", localSHA, originSHA)
 	if err != nil {
 		return fmt.Errorf("check fast-forward for %s: %w", details.LocalBranch, err)
 	}
 	if mergeBase != localSHA {
 		return fmt.Errorf("local branch %s has diverged from origin/%s", details.LocalBranch, details.FetchBranch)
 	}
-	if _, err = git(root, "branch", "-f", details.LocalBranch, originSHA); err == nil {
+	if _, err = gitContext(ctx, root, "branch", "-f", details.LocalBranch, originSHA); err == nil {
 		return nil
 	}
 
-	checkedOutPath := checkedOutWorktree(root, details.LocalBranch)
+	checkedOutPath, checkedOutErr := checkedOutWorktree(ctx, root, details.LocalBranch)
+	if checkedOutErr != nil {
+		return fmt.Errorf("locate checked-out local branch %s: %w", details.LocalBranch, checkedOutErr)
+	}
 	if checkedOutPath == "" {
 		return fmt.Errorf("local branch %s is checked out and could not be located", details.LocalBranch)
 	}
-	status, err := gitTrim(checkedOutPath, "status", "--porcelain")
+	status, err := gitTrimContext(ctx, checkedOutPath, "status", "--porcelain")
 	if err != nil {
 		return fmt.Errorf("check %s cleanliness: %w", checkedOutPath, err)
 	}
 	if status != "" {
 		return fmt.Errorf("local branch %s is checked out at %s with uncommitted changes; refusing to fast-forward", details.LocalBranch, checkedOutPath)
 	}
-	if _, err := git(checkedOutPath, "merge", "--ff-only", "--quiet", originSHA); err != nil {
+	if _, err := gitContext(ctx, checkedOutPath, "merge", "--ff-only", "--quiet", originSHA); err != nil {
 		return fmt.Errorf("fast-forward %s at %s: %w", details.LocalBranch, checkedOutPath, err)
 	}
 	return nil
@@ -476,10 +485,10 @@ func baseTreeRef(root string) string {
 	return base
 }
 
-func checkedOutWorktree(root, branch string) string {
-	out, err := git(root, "worktree", "list", "--porcelain")
+func checkedOutWorktree(ctx context.Context, root, branch string) (string, error) {
+	out, err := gitContext(ctx, root, "worktree", "list", "--porcelain")
 	if err != nil {
-		return ""
+		return "", err
 	}
 	var current string
 	sc := bufio.NewScanner(strings.NewReader(string(out)))
@@ -490,10 +499,10 @@ func checkedOutWorktree(root, branch string) string {
 			continue
 		}
 		if strings.TrimPrefix(line, "branch refs/heads/") == branch {
-			return current
+			return current, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 func gitTrim(dir string, args ...string) (string, error) {
@@ -504,8 +513,20 @@ func gitTrim(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+func gitTrimContext(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := gitContext(ctx, dir, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func git(dir string, args ...string) ([]byte, error) {
 	return execx.Combined(dir, "git", args...)
+}
+
+func gitContext(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return execx.CombinedContext(ctx, dir, "git", args...)
 }
 
 func dirExists(path string) bool {
