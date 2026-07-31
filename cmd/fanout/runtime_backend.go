@@ -275,11 +275,10 @@ func refreshHerdrControlBindings(inputs *runtimeBackendInputs) error {
 		return fmt.Errorf("load Herdr runtime bindings: %w", err)
 	}
 	ownerProjectRoot := canonicalRuntimeRoot(inputs.projectRoot)
-	resolvePlan := panelaunch.SavedPlanRuntimeParentRef
-	inputs.rows = append(inputs.rows, control.RowBindings(ownerProjectRoot, resolvePlan)...)
+	inputs.rows = append(inputs.rows, control.RowBindings(ownerProjectRoot)...)
 	inputs.provisionalIntents = append(
 		append([]backend.Binding(nil), inputs.suppliedIntents...),
-		control.ProvisionalBindings(ownerProjectRoot, resolvePlan)...,
+		control.ProvisionalBindings(ownerProjectRoot)...,
 	)
 	return nil
 }

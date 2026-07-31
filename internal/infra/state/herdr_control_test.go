@@ -131,11 +131,11 @@ func TestHerdrControlBindingsIncludeRowsAndEveryIntentStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows := store.RowBindings(repo, nil)
+	rows := store.RowBindings(repo)
 	if len(rows) != 1 || rows[0] != (backend.Binding{Parent: "425", Backend: backend.Herdr}) {
 		t.Fatalf("row bindings = %#v", rows)
 	}
-	intents := store.ProvisionalBindings(repo, nil)
+	intents := store.ProvisionalBindings(repo)
 	if len(intents) != len(statuses) {
 		t.Fatalf("intent bindings = %#v, want %d", intents, len(statuses))
 	}
@@ -159,11 +159,11 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 	if err := validateHerdrControl(intents); err != nil {
 		t.Fatal(err)
 	}
-	if got := intents.ProvisionalBindings("/repo/one", nil); len(got) != 1 ||
+	if got := intents.ProvisionalBindings("/repo/one"); len(got) != 1 ||
 		got[0].Parent != "plan:demo" {
 		t.Fatalf("first plan intent bindings = %#v", got)
 	}
-	if got := intents.ProvisionalBindings("/repo/two", nil); len(got) != 1 ||
+	if got := intents.ProvisionalBindings("/repo/two"); len(got) != 1 ||
 		got[0].Parent != "plan:demo" {
 		t.Fatalf("second plan intent bindings = %#v", got)
 	}
@@ -171,6 +171,7 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 	toRow := func(intent HerdrIntent) HerdrRow {
 		return HerdrRow{
 			ID: intent.ID, Kind: intent.Kind, Parent: intent.Parent,
+			RuntimeParent:    intent.RuntimeParent,
 			OwnerProjectRoot: intent.OwnerProjectRoot, Backend: intent.Backend,
 			WorktreePath:  intent.WorktreePath,
 			BranchExisted: intent.BranchExisted, BranchCreated: intent.BranchCreated,
@@ -183,11 +184,11 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 	if err := validateHerdrControl(rows); err != nil {
 		t.Fatal(err)
 	}
-	if got := rows.RowBindings("/repo/one", nil); len(got) != 1 ||
+	if got := rows.RowBindings("/repo/one"); len(got) != 1 ||
 		got[0].Parent != "plan:demo" {
 		t.Fatalf("first plan row bindings = %#v", got)
 	}
-	if got := rows.RowBindings("/repo/two", nil); len(got) != 1 ||
+	if got := rows.RowBindings("/repo/two"); len(got) != 1 ||
 		got[0].Parent != "plan:demo" {
 		t.Fatalf("second plan row bindings = %#v", got)
 	}
@@ -195,16 +196,12 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 
 func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testing.T) {
 	intent := testHerdrCoordinatorIntent("/repo/one", "plan:demo")
+	intent.RuntimeParent = "425"
+	intent.ID, _ = HerdrCoordinatorIntentID(intent.RuntimeParent, "")
 	store := emptyHerdrControl()
 	store.Intents = append(store.Intents, intent)
-	resolvePlan := func(ownerProjectRoot, planSlug string) string {
-		if ownerProjectRoot == "/repo/one" && planSlug == "demo" {
-			return "425"
-		}
-		return "plan:" + planSlug
-	}
 
-	got := store.ProvisionalBindings("/repo/two", resolvePlan)
+	got := store.ProvisionalBindings("/repo/two")
 	if len(got) != 1 || got[0] != (backend.Binding{Parent: "425", Backend: backend.Herdr}) {
 		t.Fatalf("issue-sourced plan bindings = %#v", got)
 	}
@@ -361,6 +358,7 @@ func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 	return HerdrIntent{
 		ID: id, Kind: HerdrIntentCoordinator, Status: HerdrIntentPlanned,
 		Parent:           parentref.Canon(strings.TrimSpace(parent)),
+		RuntimeParent:    parentref.Canon(strings.TrimSpace(parent)),
 		OwnerProjectRoot: ownerProjectRoot,
 		Backend:          backend.Herdr, WorktreePath: repo,
 		WorkspaceLabel: "fanout-coordinator-token", Session: "fanout-test",
@@ -381,6 +379,7 @@ func testHerdrWorktreeIntent(repo, parent string, issue int, slug string) HerdrI
 	return HerdrIntent{
 		ID: id, Kind: HerdrIntentWorktree, Status: HerdrIntentPlanned,
 		Parent:           parentref.Canon(strings.TrimSpace(parent)),
+		RuntimeParent:    parentref.Canon(strings.TrimSpace(parent)),
 		OwnerProjectRoot: ownerProjectRoot,
 		IssueNum:         issue, Backend: backend.Herdr,
 		Slug: slug, BranchName: "fanout/" + slug,
@@ -408,7 +407,8 @@ func testHerdrRow(parent string) HerdrRow {
 	}
 	return HerdrRow{
 		ID: id, Kind: HerdrIntentWorktree, Parent: parent,
-		IssueNum: 426, Backend: backend.Herdr,
+		RuntimeParent: parent,
+		IssueNum:      426, Backend: backend.Herdr,
 		Slug: "child", BranchName: "fanout/child",
 		FullBranchRef: "refs/heads/fanout/child",
 		BaseBranch:    "main", BaseSHA: strings.Repeat("1", 40),

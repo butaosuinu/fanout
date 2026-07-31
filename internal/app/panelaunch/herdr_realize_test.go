@@ -161,6 +161,52 @@ func TestRealizeHerdrWorktreeReopensVerifiedRealizedCheckout(t *testing.T) {
 	}
 }
 
+func TestRealizeHerdrWorktreeKeepsRejectedOpenRetryable(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	req := testHerdrWorktreeRequest(repo, "reopen-rejected", 427)
+	realized, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("initial realization error = %v", err)
+	}
+	runtime.workspaces = runtime.workspaces[:1]
+	successfulMutate := runtime.mutate
+	runtime.mutate = func(
+		mutationReq herdrrun.WorktreeMutationRequest,
+	) (herdrrun.WorktreeMutationResult, error) {
+		if mutationReq.Kind == herdrrun.WorktreeOpen {
+			return herdrrun.WorktreeMutationResult{}, herdrrun.MutationRejectedError{
+				Code: "worktree_open_failed", Message: "rejected before open",
+			}
+		}
+		return successfulMutate(mutationReq)
+	}
+
+	_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, herdrrun.ErrMutationRejected) {
+		t.Fatalf("rejected reopen error = %v", err)
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := control.FindIntent(realized.Intent.ID)
+	if !found || intent.Status != state.HerdrIntentRealized || intent.Failure != "" {
+		t.Fatalf("rejected reopen intent = (%+v,%t), want retryable realized", intent, found)
+	}
+
+	runtime.mutate = successfulMutate
+	reopened, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		reopened.Intent.Status != state.HerdrIntentRealized {
+		t.Fatalf("retry reopen result = %+v, err=%v", reopened, err)
+	}
+}
+
 func TestRealizeHerdrRoutesUseTotalTimeout(t *testing.T) {
 	for _, kind := range []string{"coordinator", "worktree"} {
 		t.Run(kind, func(t *testing.T) {
@@ -268,6 +314,73 @@ func TestRealizeHerdrRollsBackMutationNotIssued(t *testing.T) {
 	})
 }
 
+func TestRealizeHerdrWorktreeRecoversCompletedUnissuedRollback(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	successfulMutate := runtime.mutate
+	ctx, cancel := context.WithCancel(context.Background())
+	runtime.mutate = func(
+		req herdrrun.WorktreeMutationRequest,
+	) (herdrrun.WorktreeMutationResult, error) {
+		if req.Kind == herdrrun.WorktreeCreate {
+			cancel()
+			return herdrrun.WorktreeMutationResult{}, context.DeadlineExceeded
+		}
+		return successfulMutate(req)
+	}
+	req := testHerdrWorktreeRequest(repo, "rollback-recovery", 428)
+	_, err := realizeHerdrWorktree(ctx, req, runtime, hooks)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("interrupted rollback setup error = %v", err)
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := control.FindIntent(intentID)
+	if !found || intent.Status != state.HerdrIntentIssued || !intent.BranchCreated {
+		t.Fatalf("interrupted rollback intent = (%+v,%t)", intent, found)
+	}
+	if deleteErr := worktree.DeleteReservedHerdrBranch(
+		repo,
+		intent.FullBranchRef,
+		intent.BaseSHA,
+	); deleteErr != nil {
+		t.Fatal(deleteErr)
+	}
+
+	runtime.mutate = successfulMutate
+	mutationsBefore := len(runtime.mutations)
+	_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if err == nil || !strings.Contains(err.Error(), "rollback; retry launch") {
+		t.Fatalf("completed rollback recovery error = %v", err)
+	}
+	if len(runtime.mutations) != mutationsBefore {
+		t.Fatal("completed rollback recovery reissued a mutation")
+	}
+	control, err = state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := control.FindIntent(intentID); found {
+		t.Fatal("completed rollback recovery kept the issued intent")
+	}
+
+	relaunched, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		relaunched.Intent.Status != state.HerdrIntentRealized {
+		t.Fatalf("fresh launch after rollback recovery = %+v, err=%v", relaunched, err)
+	}
+}
+
 func TestRealizeHerdrWorktreeChecksPolicyBeforeBranchReservation(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
@@ -369,7 +482,16 @@ func TestVerifyHerdrStateBindingsResolvesIssueSourcedPlanParent(t *testing.T) {
 		t.Fatal(unlockErr)
 	}
 
-	err = verifyHerdrStateBindings(repo, "plan:demo", state.Store{})
+	runtimeParent, err := resolveHerdrRuntimeParent(
+		repo,
+		"plan:demo",
+		repo,
+		state.HerdrControlStore{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = verifyHerdrStateBindings(repo, runtimeParent, state.Store{})
 	if err == nil || !strings.Contains(err.Error(), "runtime backend for parent 425 became tmux") {
 		t.Fatalf("issue-sourced plan binding error = %v", err)
 	}
@@ -808,6 +930,78 @@ func TestRealizeHerdrReusesNumericParentCoordinatorAcrossLinkedWorktrees(t *test
 	}
 }
 
+func TestRealizeHerdrPersistsIssueSourcedRuntimeParentAcrossLinkedWorktrees(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	planDir := filepath.Join(repo, ".fanout", "plans")
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planPath := filepath.Join(planDir, "demo.json")
+	if err := os.WriteFile(
+		planPath,
+		[]byte(`{"version":1,"plan":{"slug":"demo","title":"Demo","source":"issue #425"},"tasks":[]}`),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	planReq := testHerdrCoordinatorRequest(repo)
+	planReq.Parent = "plan:demo"
+	coordinator, err := realizeHerdrCoordinator(
+		context.Background(),
+		planReq,
+		runtime,
+		hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("issue-sourced coordinator error = %v", err)
+	}
+	wantID, err := state.HerdrCoordinatorIntentID("425", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coordinator.Intent.ID != wantID || coordinator.Intent.RuntimeParent != "425" {
+		t.Fatalf("issue-sourced coordinator = %+v, want runtime parent 425", coordinator.Intent)
+	}
+	if removeErr := os.Remove(planPath); removeErr != nil {
+		t.Fatal(removeErr)
+	}
+
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "issue-plan-coordinator", sibling, "HEAD")
+	siblingPlanReq := testHerdrCoordinatorRequest(sibling)
+	siblingPlanReq.Parent = "plan:demo"
+	reusedPlan, err := realizeHerdrCoordinator(
+		context.Background(),
+		siblingPlanReq,
+		runtime,
+		hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		reusedPlan.Intent.ID != wantID {
+		t.Fatalf("saved issue-sourced coordinator reuse = %+v, err=%v", reusedPlan, err)
+	}
+
+	issueReq := testHerdrCoordinatorRequest(sibling)
+	reusedIssue, err := realizeHerdrCoordinator(
+		context.Background(),
+		issueReq,
+		runtime,
+		hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		reusedIssue.Intent.ID != wantID || len(runtime.mutations) != 1 {
+		t.Fatalf(
+			"numeric issue coordinator reuse = %+v, err=%v, mutations=%d",
+			reusedIssue,
+			err,
+			len(runtime.mutations),
+		)
+	}
+}
+
 func TestRealizeHerdrWorktreeRejectsForeignCoordinatorBeforeBranch(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
@@ -958,6 +1152,7 @@ func finalizeHerdrTestIntent(t *testing.T, repo string, intent state.HerdrIntent
 	}
 	row := state.HerdrRow{
 		ID: intent.ID, Kind: intent.Kind, Parent: intent.Parent,
+		RuntimeParent:    intent.RuntimeParent,
 		OwnerProjectRoot: intent.OwnerProjectRoot,
 		IssueNum:         intent.IssueNum, TaskID: intent.TaskID, Backend: intent.Backend,
 		Slug: intent.Slug, BranchName: intent.BranchName,

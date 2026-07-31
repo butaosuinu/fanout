@@ -416,7 +416,18 @@ func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := state.HerdrCoordinatorIntentID(parent, ownerProjectRoot)
+	runtimeParent := parent
+	if planSlug, ok := strings.CutPrefix(parent, "plan:"); ok {
+		runtimeParent = panelaunch.SavedPlanRuntimeParentRef(repo, planSlug)
+	}
+	runtimeOwnerProjectRoot, err := state.HerdrOwnerProjectRoot(
+		runtimeParent,
+		canonicalRuntimeRoot(repo),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := state.HerdrCoordinatorIntentID(runtimeParent, runtimeOwnerProjectRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,6 +445,7 @@ func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 		Kind:             state.HerdrIntentCoordinator,
 		Status:           state.HerdrIntentPlanned,
 		Parent:           parent,
+		RuntimeParent:    runtimeParent,
 		OwnerProjectRoot: ownerProjectRoot,
 		Backend:          backend.Herdr,
 		WorktreePath:     repo,
@@ -859,7 +871,8 @@ func writeHerdrControlRouteRow(t *testing.T, repo, session, socketPath string) {
 	}()
 	locked.UpsertRow(state.HerdrRow{
 		ID: id, Kind: state.HerdrIntentCoordinator, Parent: "425",
-		Backend: backend.Herdr, WorktreePath: repo,
+		RuntimeParent: "425",
+		Backend:       backend.Herdr, WorktreePath: repo,
 		Resource: state.HerdrResource{
 			WorkspaceID: "w1", Label: "fanout-coordinator-route",
 			PaneID: "w1:p1", TerminalID: "term-1", CurrentPath: repo,

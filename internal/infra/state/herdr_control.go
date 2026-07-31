@@ -55,6 +55,7 @@ type HerdrIntent struct {
 	Kind             HerdrIntentKind   `json:"kind"`
 	Status           HerdrIntentStatus `json:"status"`
 	Parent           string            `json:"parent"`
+	RuntimeParent    string            `json:"runtimeParent"`
 	OwnerProjectRoot string            `json:"ownerProjectRoot,omitempty"`
 	IssueNum         int               `json:"issueNum,omitempty"`
 	TaskID           string            `json:"taskId,omitempty"`
@@ -88,6 +89,7 @@ type HerdrRow struct {
 	ID               string          `json:"id"`
 	Kind             HerdrIntentKind `json:"kind"`
 	Parent           string          `json:"parent"`
+	RuntimeParent    string          `json:"runtimeParent"`
 	OwnerProjectRoot string          `json:"ownerProjectRoot,omitempty"`
 	IssueNum         int             `json:"issueNum,omitempty"`
 	TaskID           string          `json:"taskId,omitempty"`
@@ -119,8 +121,6 @@ type LockedHerdrControl struct {
 	file *os.File
 	HerdrControlStore
 }
-
-type HerdrPlanBindingResolver func(ownerProjectRoot, planSlug string) string
 
 // HerdrControlPath returns the repository-common registry path shared by every
 // linked worktree.
@@ -258,15 +258,13 @@ func (s *HerdrControlStore) UpsertRow(row HerdrRow) {
 
 func (s HerdrControlStore) RowBindings(
 	ownerProjectRoot string,
-	resolvePlan HerdrPlanBindingResolver,
 ) []backend.Binding {
 	bindings := make([]backend.Binding, 0, len(s.Rows))
 	for _, row := range s.Rows {
 		parent, ok := herdrBindingParent(
-			row.Parent,
+			row.RuntimeParent,
 			row.OwnerProjectRoot,
 			ownerProjectRoot,
-			resolvePlan,
 		)
 		if !ok {
 			continue
@@ -278,15 +276,13 @@ func (s HerdrControlStore) RowBindings(
 
 func (s HerdrControlStore) ProvisionalBindings(
 	ownerProjectRoot string,
-	resolvePlan HerdrPlanBindingResolver,
 ) []backend.Binding {
 	bindings := make([]backend.Binding, 0, len(s.Intents))
 	for _, intent := range s.Intents {
 		parent, ok := herdrBindingParent(
-			intent.Parent,
+			intent.RuntimeParent,
 			intent.OwnerProjectRoot,
 			ownerProjectRoot,
-			resolvePlan,
 		)
 		if !ok {
 			continue
@@ -298,18 +294,10 @@ func (s HerdrControlStore) ProvisionalBindings(
 
 func herdrBindingParent(
 	parent, storedRoot, projectRoot string,
-	resolvePlan HerdrPlanBindingResolver,
 ) (string, bool) {
 	parent = parentref.Canon(strings.TrimSpace(parent))
-	planSlug, isPlan := strings.CutPrefix(parent, "plan:")
-	if !isPlan {
+	if !strings.HasPrefix(parent, "plan:") {
 		return parent, true
-	}
-	if resolvePlan != nil {
-		resolved := parentref.Canon(strings.TrimSpace(resolvePlan(storedRoot, planSlug)))
-		if resolved != "" && !strings.HasPrefix(resolved, "plan:") {
-			return resolved, true
-		}
 	}
 	return parent, storedRoot == filepath.Clean(projectRoot)
 }
@@ -462,10 +450,15 @@ func validateHerdrControl(store HerdrControlStore) error {
 
 func validateHerdrRow(row HerdrRow) error {
 	parent := parentref.Canon(strings.TrimSpace(row.Parent))
+	runtimeParent := parentref.Canon(strings.TrimSpace(row.RuntimeParent))
 	if row.ID == "" || parent == "" || row.Parent != parent ||
+		runtimeParent == "" || row.RuntimeParent != runtimeParent ||
 		row.Backend != backend.Herdr || row.WorktreePath == "" ||
 		row.Session == "" || row.SocketPath == "" {
 		return fmt.Errorf("herdr control row %q is incomplete", row.ID)
+	}
+	if err := validateHerdrRuntimeParent(parent, runtimeParent); err != nil {
+		return fmt.Errorf("herdr row %s: %w", row.ID, err)
 	}
 	ownerProjectRoot, ownerErr := HerdrOwnerProjectRoot(parent, row.OwnerProjectRoot)
 	if ownerErr != nil || row.OwnerProjectRoot != ownerProjectRoot {
@@ -475,7 +468,10 @@ func validateHerdrRow(row HerdrRow) error {
 	var err error
 	switch row.Kind {
 	case HerdrIntentCoordinator:
-		expectedID, err = HerdrCoordinatorIntentID(parent, ownerProjectRoot)
+		expectedID, err = HerdrCoordinatorIntentID(
+			runtimeParent,
+			herdrRuntimeOwnerProjectRoot(runtimeParent, ownerProjectRoot),
+		)
 		if row.IssueNum != 0 || row.TaskID != "" || row.Slug != "" ||
 			row.BranchName != "" || row.FullBranchRef != "" ||
 			row.BaseBranch != "" || row.BaseSHA != "" || row.ExpectedHead != "" ||
@@ -508,11 +504,16 @@ func validateHerdrRow(row HerdrRow) error {
 
 func validateHerdrIntent(intent HerdrIntent) error {
 	parent := parentref.Canon(strings.TrimSpace(intent.Parent))
+	runtimeParent := parentref.Canon(strings.TrimSpace(intent.RuntimeParent))
 	if intent.ID == "" || parent == "" || intent.Parent != parent ||
+		runtimeParent == "" || intent.RuntimeParent != runtimeParent ||
 		intent.Backend != backend.Herdr || intent.WorkspaceLabel == "" ||
 		intent.WorktreePath == "" || intent.Session == "" || intent.SocketPath == "" ||
 		intent.TimeoutMS < 3000 || intent.TimeoutMS > 300000 || intent.ExpiresUnixMS <= 0 {
 		return fmt.Errorf("herdr intent %q is incomplete", intent.ID)
+	}
+	if err := validateHerdrRuntimeParent(parent, runtimeParent); err != nil {
+		return fmt.Errorf("herdr intent %s: %w", intent.ID, err)
 	}
 	ownerProjectRoot, ownerErr := HerdrOwnerProjectRoot(parent, intent.OwnerProjectRoot)
 	if ownerErr != nil || intent.OwnerProjectRoot != ownerProjectRoot {
@@ -522,7 +523,10 @@ func validateHerdrIntent(intent HerdrIntent) error {
 	var err error
 	switch intent.Kind {
 	case HerdrIntentCoordinator:
-		expectedID, err = HerdrCoordinatorIntentID(parent, ownerProjectRoot)
+		expectedID, err = HerdrCoordinatorIntentID(
+			runtimeParent,
+			herdrRuntimeOwnerProjectRoot(runtimeParent, ownerProjectRoot),
+		)
 		if intent.IssueNum != 0 || intent.TaskID != "" || intent.BranchName != "" ||
 			intent.FullBranchRef != "" || intent.BaseSHA != "" || intent.Coordinator.WorkspaceID != "" {
 			return fmt.Errorf("herdr coordinator intent %s contains child fields", intent.ID)
@@ -578,6 +582,24 @@ func validateHerdrIntent(intent HerdrIntent) error {
 		return fmt.Errorf("herdr intent %s has an invalid branch ownership record", intent.ID)
 	}
 	return nil
+}
+
+func validateHerdrRuntimeParent(parent, runtimeParent string) error {
+	switch {
+	case strings.HasPrefix(runtimeParent, "plan:") && runtimeParent != parent:
+		return fmt.Errorf("runtime parent does not match plan parent")
+	case !strings.HasPrefix(parent, "plan:") && runtimeParent != parent:
+		return fmt.Errorf("runtime parent does not match parent")
+	default:
+		return nil
+	}
+}
+
+func herdrRuntimeOwnerProjectRoot(runtimeParent, ownerProjectRoot string) string {
+	if strings.HasPrefix(runtimeParent, "plan:") {
+		return ownerProjectRoot
+	}
+	return ""
 }
 
 func reserveHerdrControlIdentity(
