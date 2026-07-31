@@ -304,6 +304,12 @@ func (g GH) IssuePRs(num int) (string, []ghissue.PRRef, error) {
 	return g.runner.IssueWithPRs(g.owner, g.repo, num)
 }
 
+// IssuePRsBatch fetches issue state and closed-by PR refs in GraphQL batches.
+// Successful issue snapshots remain available when sibling lookups fail.
+func (g GH) IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error) {
+	return g.runner.IssuesSnapshotWithPRs(g.owner, g.repo, nums)
+}
+
 // BranchPRs fetches PR refs by head branch for branch-owning issue-less rows.
 func (g GH) BranchPRs(branch string) ([]ghissue.PRRef, error) {
 	return g.runner.PRsForBranch(branch)

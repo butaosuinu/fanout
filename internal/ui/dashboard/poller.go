@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -34,7 +35,7 @@ const (
 // as synthetic rows).
 // sessionview.GH satisfies it; tests inject a fake.
 type GHProvider interface {
-	IssuePRs(num int) (string, []ghissue.PRRef, error)
+	IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error)
 	BranchPRs(branch string) ([]ghissue.PRRef, error)
 	Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error)
 }
@@ -395,14 +396,26 @@ func (p *poller) pruneWaveCache(numsByParent map[string][]int) {
 	}
 }
 
-// refreshIssuePRs fetches issue/PR state for each num and stores the result
-// (success or failure) in the PR cache.
+// refreshIssuePRs fetches issue/PR state in one provider call and stores
+// success or failure independently for each requested issue.
 func (p *poller) refreshIssuePRs(gh GHProvider, nums []int) {
+	if len(nums) == 0 {
+		return
+	}
+	snapshots, batchErr := gh.IssuePRsBatch(nums)
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
 	for _, num := range nums {
-		st, prs, err := gh.IssuePRs(num)
-		p.cacheMu.Lock()
-		p.cache[num] = ghCacheEntry{state: st, prs: prs, err: err}
-		p.cacheMu.Unlock()
+		snapshot, ok := snapshots[num]
+		if ok {
+			p.cache[num] = ghCacheEntry{state: snapshot.State, prs: snapshot.PRs}
+			continue
+		}
+		err := batchErr
+		if err == nil {
+			err = fmt.Errorf("#%d: missing from issue PR batch", num)
+		}
+		p.cache[num] = ghCacheEntry{err: err}
 	}
 }
 

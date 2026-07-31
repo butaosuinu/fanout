@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,16 +28,32 @@ type countingGH struct {
 	waveNums    map[string][]int // recordedNums passed per parent (last call)
 	waves       map[string]sessionview.WaveGraph
 	wavesErr    error
+	issueErrs   map[int]error
+	batchCalls  [][]int
 }
 
-func (g *countingGH) IssuePRs(num int) (string, []ghissue.PRRef, error) {
+func (g *countingGH) IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.calls == nil {
 		g.calls = map[int]int{}
 	}
-	g.calls[num]++
-	return "CLOSED", []ghissue.PRRef{{Number: 900 + num, State: "MERGED"}}, nil
+	g.batchCalls = append(g.batchCalls, slices.Clone(nums))
+	snapshots := make(map[int]ghissue.IssueSnapshot, len(nums))
+	var loadErr error
+	for _, num := range nums {
+		g.calls[num]++
+		if err := g.issueErrs[num]; err != nil {
+			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", num, err))
+			continue
+		}
+		snapshots[num] = ghissue.IssueSnapshot{
+			Number: num,
+			State:  "CLOSED",
+			PRs:    []ghissue.PRRef{{Number: 900 + num, State: "MERGED"}},
+		}
+	}
+	return snapshots, loadErr
 }
 
 func (g *countingGH) BranchPRs(branch string) ([]ghissue.PRRef, error) {
@@ -286,6 +304,9 @@ func TestPollerRefreshGHPopulatesCacheAndBuildReadsIt(t *testing.T) {
 	if gh.calls[101] != 1 || gh.calls[102] != 1 {
 		t.Fatalf("expected one gh call per issue, got %v", gh.calls)
 	}
+	if !reflect.DeepEqual(gh.batchCalls, [][]int{{101, 102}}) {
+		t.Fatalf("IssuePRsBatch calls = %v, want one [101 102] batch", gh.batchCalls)
+	}
 	if len(gh.waveCalls) != 1 || gh.waveCalls["100"] != 1 {
 		t.Fatalf("expected one Waves call for parent 100, got %v", gh.waveCalls)
 	}
@@ -307,6 +328,32 @@ func TestPollerRefreshGHPopulatesCacheAndBuildReadsIt(t *testing.T) {
 	}
 	if snap.Degraded.GitHub {
 		t.Fatal("GitHub should not be degraded on success")
+	}
+}
+
+func TestRefreshIssuePRsKeepsSuccessfulSiblingOnBatchFailure(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1"},
+	  {"parent":"100","issueNum":102,"slug":"b","paneId":"%2"}
+	]}`)
+
+	gh := &countingGH{issueErrs: map[int]error{102: errors.New("missing")}}
+	p := newPoller("o/n", root, gh, nil, newHub())
+	p.refreshGH()
+	snap := p.build()
+
+	if !reflect.DeepEqual(gh.batchCalls, [][]int{{101, 102}}) {
+		t.Fatalf("IssuePRsBatch calls = %v, want one [101 102] batch", gh.batchCalls)
+	}
+	if !snap.Sessions[0].Panes[0].HasMergedPR {
+		t.Fatal("successful #101 PR state was lost after sibling batch failure")
+	}
+	if snap.Sessions[0].Panes[1].IssueState != sessionview.IssueStateUnknown {
+		t.Fatalf("failed #102 state = %q, want UNKNOWN", snap.Sessions[0].Panes[1].IssueState)
+	}
+	if !snap.Degraded.GitHub {
+		t.Fatal("failed #102 must degrade GitHub")
 	}
 }
 
