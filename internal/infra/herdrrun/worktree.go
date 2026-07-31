@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
@@ -673,12 +674,7 @@ func workspaceHasPane(observation WorkspaceObservation, expected WorkspacePaneOb
 		observation.CWD == expected.CWD {
 		return true
 	}
-	for _, pane := range observation.Panes {
-		if pane == expected {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(observation.Panes, expected)
 }
 
 func workspaceHasPaneCWD(observation WorkspaceObservation, cwd string) bool {

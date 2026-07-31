@@ -1024,16 +1024,16 @@ func TestRealizeHerdrResolvesPlanRuntimeParentPerOwnerRoot(t *testing.T) {
 	sibling := filepath.Join(t.TempDir(), "sibling")
 	gitCmdTest(t, repo, "worktree", "add", "-b", "issue-plan-coordinator", sibling, "HEAD")
 	siblingPlanDir := filepath.Join(sibling, ".fanout", "plans")
-	if err := os.MkdirAll(siblingPlanDir, 0o755); err != nil {
-		t.Fatal(err)
+	if mkdirErr := os.MkdirAll(siblingPlanDir, 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
 	}
 	siblingPlanPath := filepath.Join(siblingPlanDir, "demo.json")
-	if err := os.WriteFile(
+	if writeErr := os.WriteFile(
 		siblingPlanPath,
 		[]byte(`{"version":1,"plan":{"slug":"demo","title":"Demo","source":"issue #425"},"tasks":[]}`),
 		0o644,
-	); err != nil {
-		t.Fatal(err)
+	); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	siblingPlanReq := testHerdrCoordinatorRequest(sibling)
 	siblingPlanReq.Parent = "plan:demo"
@@ -1047,12 +1047,12 @@ func TestRealizeHerdrResolvesPlanRuntimeParentPerOwnerRoot(t *testing.T) {
 		reusedPlan.Intent.ID != wantID {
 		t.Fatalf("saved issue-sourced coordinator reuse = %+v, err=%v", reusedPlan, err)
 	}
-	if err := os.WriteFile(
+	if writeErr := os.WriteFile(
 		siblingPlanPath,
 		[]byte(`{"version":1,"plan":{"slug":"demo","title":"Demo","source":"issue #426"},"tasks":[]}`),
 		0o644,
-	); err != nil {
-		t.Fatal(err)
+	); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	otherOwnerPlan, err := realizeHerdrCoordinator(
 		context.Background(),
