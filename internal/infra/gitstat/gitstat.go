@@ -257,19 +257,16 @@ func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (bool,
 		return file.OmittedReason == "tooLarge", nil
 	}
 
-	fullPath, err := containedPath(path, file.Path)
+	info, err := lstatContained(path, file.Path)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("inspect tracked file %q: %w", file.Path, err)
 	}
-	info, statErr := os.Lstat(fullPath)
-	if statErr == nil {
+	if info != nil {
 		if info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 			if info.Size() > patchFileLimit {
 				return true, nil
 			}
 		}
-	} else if !os.IsNotExist(statErr) && !errors.Is(statErr, syscall.ENOTDIR) {
-		return false, fmt.Errorf("inspect tracked file %q: %w", file.Path, statErr)
 	}
 
 	out, err := r.git("-C", path, "ls-tree", "-l", "-z", mergeBase, "--", file.Path)
@@ -307,6 +304,37 @@ func containedPath(root, rel string) (string, error) {
 		return "", fmt.Errorf("repository-relative path escapes worktree: %q", rel)
 	}
 	return filepath.Join(root, clean), nil
+}
+
+func lstatContained(root, rel string) (os.FileInfo, error) {
+	fullPath, err := containedPath(root, rel)
+	if err != nil {
+		return nil, err
+	}
+	relPath, err := filepath.Rel(root, fullPath)
+	if err != nil {
+		return nil, err
+	}
+
+	current := root
+	parts := strings.Split(relPath, string(filepath.Separator))
+	for i, part := range parts {
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			if os.IsNotExist(statErr) || errors.Is(statErr, syscall.ENOTDIR) {
+				return nil, nil
+			}
+			return nil, statErr
+		}
+		if i < len(parts)-1 && info.Mode()&os.ModeSymlink != 0 {
+			return nil, nil
+		}
+		if i == len(parts)-1 {
+			return info, nil
+		}
+	}
+	return nil, nil
 }
 
 func parseNumStat(out []byte) ([]FileStat, error) {
