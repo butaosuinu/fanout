@@ -224,7 +224,6 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 }
 
 func (r Runner) resolveWorktreePath(path string) (string, error) {
-	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("worktree path is empty")
 	}
@@ -679,7 +678,6 @@ func splitNUL(out []byte) ([][]byte, error) {
 // baseRef resolves through origin/HEAD. Unlike diffBase, resolution failures
 // are returned instead of falling back to HEAD.
 func (r Runner) MergeBase(path, baseRef string) (string, error) {
-	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("worktree path is empty")
 	}

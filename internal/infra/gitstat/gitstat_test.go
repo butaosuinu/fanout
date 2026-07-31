@@ -374,6 +374,30 @@ func TestRunnerWorktreePatchResolvesRelativePathFromRunnerCwd(t *testing.T) {
 	}
 }
 
+func TestRunnerWorktreePatchPreservesPathWhitespace(t *testing.T) {
+	for _, name := range []string{" repo", "repo "} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			repo := filepath.Join(root, name)
+			if err := os.Mkdir(repo, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			initPatchRepoAt(t, repo)
+			writeGitstatFile(t, repo, "tracked.txt", []byte("one\ntwo\n"))
+
+			got, err := (Runner{Cwd: root}).WorktreePatch(name, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertFileStat(t, got.Files, FileStat{
+				Path:          "tracked.txt",
+				Additions:     1,
+				PatchIncluded: true,
+			})
+		})
+	}
+}
+
 func TestRunnerWorktreePatchOverridesIgnoreSubmodules(t *testing.T) {
 	repo := t.TempDir()
 	gitTest(t, repo, "init")
@@ -878,6 +902,12 @@ exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 func initPatchRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
+	initPatchRepoAt(t, repo)
+	return repo
+}
+
+func initPatchRepoAt(t *testing.T, repo string) {
+	t.Helper()
 	gitTest(t, repo, "init")
 	gitTest(t, repo, "config", "user.email", "test@example.com")
 	gitTest(t, repo, "config", "user.name", "Test User")
@@ -886,7 +916,6 @@ func initPatchRepo(t *testing.T) string {
 	gitTest(t, repo, "commit", "-m", "initial")
 	gitTest(t, repo, "branch", "-M", "main")
 	gitTest(t, repo, "checkout", "-b", "feature")
-	return repo
 }
 
 func writeGitstatFile(t *testing.T, repo, name string, content []byte) {
