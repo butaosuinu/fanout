@@ -52,6 +52,7 @@ type PaneView struct {
 	DisplayName    string       `json:"displayName"`
 	Agent          string       `json:"agent"`
 	BranchName     string       `json:"branchName"`
+	BaseBranch     string       `json:"baseBranch"`
 	PaneID         string       `json:"paneId"`
 	Backend        backend.Name `json:"backend,omitempty"`
 	ShellKey       string       `json:"shellKey,omitempty"`

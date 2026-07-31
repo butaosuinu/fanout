@@ -29,6 +29,7 @@ export interface PaneView {
   agent: string;
   backend?: string; // "tmux" / "herdr"; legacy snapshot は欠落 = tmux
   branchName: string;
+  baseBranch: string;
   paneId: string;
   shellKey?: string;
   sourceIssueNum?: number;

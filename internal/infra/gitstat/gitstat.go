@@ -3,6 +3,7 @@ package gitstat
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -50,7 +51,10 @@ type Patch struct {
 // Runner shells out to git. Cwd is optional and only affects process startup;
 // worktree selection is always explicit through git -C.
 type Runner struct {
-	Cwd string
+	Cwd           string
+	Context       context.Context
+	MaxFiles      int
+	MaxPatchBytes int
 }
 
 // Worktree returns additions/deletions from `git diff --shortstat` against the
@@ -134,12 +138,16 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Path < files[j].Path
 	})
+	if r.MaxFiles > 0 && len(files) > r.MaxFiles {
+		return Patch{}, fmt.Errorf("worktree patch contains %d files; limit is %d", len(files), r.MaxFiles)
+	}
 
 	result := Patch{
 		MergeBase: mergeBase,
 		Files:     make([]FileStat, 0, len(files)),
 	}
 	var patch strings.Builder
+	collectionFull := false
 	for _, file := range files {
 		stat := file.FileStat
 		if file.replacement != nil {
@@ -156,6 +164,13 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 			default:
 				stat.OmittedReason = ""
 			}
+		}
+		if collectionFull {
+			if stat.OmittedReason == "" {
+				stat.OmittedReason = "collectionLimit"
+			}
+			result.Files = append(result.Files, stat)
+			continue
 		}
 		if stat.OmittedReason == "" ||
 			(file.tracked && stat.OmittedReason == "binary") {
@@ -213,8 +228,13 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 				return Patch{}, err
 			}
 			if stat.OmittedReason == "" {
-				patch.WriteString(string(out))
-				stat.PatchIncluded = true
+				if r.MaxPatchBytes > 0 && len(out) > r.MaxPatchBytes-patch.Len() {
+					collectionFull = true
+					stat.OmittedReason = "collectionLimit"
+				} else {
+					patch.Write(out)
+					stat.PatchIncluded = true
+				}
 			}
 		}
 		result.Files = append(result.Files, stat)
@@ -426,7 +446,7 @@ func (r Runner) replacementPatch(
 		return nil, FileStat{}, false, fmt.Errorf("link replacement final side: %w", linkErr)
 	}
 
-	out, code, err := replacementDiff(tempDir, false, baseArg, finalArg)
+	out, code, err := replacementDiff(r.context(), tempDir, false, baseArg, finalArg)
 	changed := code == 1
 	if changed {
 		err = nil
@@ -438,7 +458,7 @@ func (r Runner) replacementPatch(
 		return nil, FileStat{}, false, nil
 	}
 
-	numstatOut, code, err := replacementDiff(tempDir, true, baseArg, finalArg)
+	numstatOut, code, err := replacementDiff(r.context(), tempDir, true, baseArg, finalArg)
 	if code == 1 {
 		err = nil
 	}
@@ -471,7 +491,7 @@ func (r Runner) trackedPathPatch(path, mergeBase, rel string) ([]byte, error) {
 	)
 }
 
-func replacementDiff(cwd string, numstat bool, oldPath, newPath string) ([]byte, int, error) {
+func replacementDiff(ctx context.Context, cwd string, numstat bool, oldPath, newPath string) ([]byte, int, error) {
 	args := []string{
 		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
 		"--no-index", "--src-prefix=", "--dst-prefix=",
@@ -480,7 +500,7 @@ func replacementDiff(cwd string, numstat bool, oldPath, newPath string) ([]byte,
 		args = append(args, "--numstat", "-z")
 	}
 	args = append(args, "--", oldPath, newPath)
-	return execx.OutputExitCode(cwd, gitEnv(), "git", args...)
+	return execx.OutputExitCodeContext(ctx, cwd, gitEnv(), "git", args...)
 }
 
 func (r Runner) mergeBaseTreeEntry(path, mergeBase, rel string) (treeEntry, error) {
@@ -930,11 +950,11 @@ func (r Runner) diffBase(path, baseRef string) string {
 }
 
 func (r Runner) git(args ...string) ([]byte, error) {
-	return execx.Output(r.Cwd, gitEnv(), "git", args...)
+	return execx.OutputContext(r.context(), r.Cwd, gitEnv(), "git", args...)
 }
 
 func (r Runner) gitExitCode(args ...string) ([]byte, int, error) {
-	return execx.OutputExitCode(r.Cwd, gitEnv(), "git", args...)
+	return execx.OutputExitCodeContext(r.context(), r.Cwd, gitEnv(), "git", args...)
 }
 
 func (r Runner) gitExactPath(path string, args ...string) ([]byte, error) {
@@ -945,7 +965,14 @@ func (r Runner) gitExactPath(path string, args ...string) ([]byte, error) {
 		":(top,exclude,glob)"+escapePathspecGlob(path)+"/**",
 	)
 	env := append(gitEnv(), "GIT_LITERAL_PATHSPECS=0")
-	return execx.Output(r.Cwd, env, "git", args...)
+	return execx.OutputContext(r.context(), r.Cwd, env, "git", args...)
+}
+
+func (r Runner) context() context.Context {
+	if r.Context != nil {
+		return r.Context
+	}
+	return context.Background()
 }
 
 func escapePathspecGlob(path string) string {

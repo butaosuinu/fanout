@@ -133,7 +133,9 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `tty`, `execx`, and `browser` are class A.
 - `internal/ui` holds the TUI (`tui`) and the web dashboard (`dashboard`):
   `server.go` (GET-only mux, token middleware) and `runfile.go` (the tokened
-  `.fanout/dashboard.json` reuse/trust gate) and `peek.go` / `plan.go` (the capture-pane validation chain) are class
+  `.fanout/dashboard.json` reuse/trust gate), `diff.go` (stable row identity,
+  read-only worktree patch delivery, and request-wide limits), and `peek.go` /
+  `plan.go` (the capture-pane validation chain) are class
   H; `poller.go`, `sse.go`, and `embed.go` are class M. In `tui`, `actions.go` (lifecycle close/merge/
   cleanup wiring and confirmation flow) is class H, rendering/formatting
   (`view.go` / `compact.go` / `styles.go`) is class A, and
@@ -199,7 +201,9 @@ stdlib-only imports, so repo-support code stays isolated from the product.
 - `fanout dashboard --web` is the one HTTP surface, and it is deliberately
   carved out: a read-only, `127.0.0.1`-bound, GET-only, token-gated localhost
   server that only ever reads state/tmux/gh and never mutates repo or GitHub
-  state. `GET /api/peek` and `GET /api/plan` stay inside that boundary (both
+  state. `GET /api/diff` reads the recorded worktree through a stable snapshot
+  row identity without requiring a live pane. `GET /api/peek` and
+  `GET /api/plan` stay inside that boundary (both
   are a read-only `tmux capture-pane` of a recorded pane; `/api/plan` is
   further gated to plan-mode panes whose recorded agent is `codex`), and Google Fonts is
   the single allowed external fetch from the SPA (loaded `no-referrer` so the

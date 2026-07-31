@@ -2,11 +2,14 @@ package gitstat
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseShortStat(t *testing.T) {
@@ -155,6 +158,91 @@ func TestRunnerWorktreeUnresolvableBaseFallsBackToHEAD(t *testing.T) {
 	}
 	if got.Additions != 1 || got.Deletions != 0 || !got.Dirty {
 		t.Fatalf("Worktree() = %+v, want +1/-0 dirty (HEAD fallback counts only uncommitted)", got)
+	}
+}
+
+func TestRunnerWorktreePatchHonorsSharedContextDeadline(t *testing.T) {
+	binDir := t.TempDir()
+	gitPath := filepath.Join(binDir, "git")
+	if err := os.WriteFile(gitPath, []byte("#!/bin/sh\nwhile :; do :; done\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := (Runner{Context: ctx}).WorktreePatch(t.TempDir(), "main")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WorktreePatch() error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("WorktreePatch() returned after %s, want shared deadline", elapsed)
+	}
+}
+
+func TestRunnerWorktreePatchHonorsRequestLimits(t *testing.T) {
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		writeGitstatFile(t, repo, name, []byte("old\n"))
+	}
+	gitTest(t, repo, "add", ".")
+	gitTest(t, repo, "commit", "-m", "initial")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		writeGitstatFile(t, repo, name, []byte("new content\n"))
+	}
+
+	unlimited, err := (Runner{}).WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := strings.Index(unlimited.Patch, "\ndiff --git ")
+	if next < 0 {
+		t.Fatalf("unlimited patch has no second file group: %q", unlimited.Patch)
+	}
+	firstGroupBytes := next + 1
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(t.TempDir(), "git-args.log")
+	t.Setenv("FANOUT_GITSTAT_REAL_GIT", realGit)
+	t.Setenv("FANOUT_GITSTAT_LOG", logPath)
+	installGitstatShim(t, "git", `
+printf '%s\n' "$*" >> "$FANOUT_GITSTAT_LOG"
+exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
+`)
+	limited, err := (Runner{MaxFiles: 3, MaxPatchBytes: firstGroupBytes}).WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limited.Patch != unlimited.Patch[:firstGroupBytes] {
+		t.Fatalf("limited patch = %q, want first complete file group", limited.Patch)
+	}
+	if len(limited.Files) != 3 || !limited.Files[0].PatchIncluded {
+		t.Fatalf("limited files = %+v, want all metadata and first patch", limited.Files)
+	}
+	for i, file := range limited.Files[1:] {
+		if file.PatchIncluded || file.OmittedReason != "collectionLimit" {
+			t.Fatalf("limited.Files[%d] = %+v, want collectionLimit", i+1, file)
+		}
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(logged), "c.txt") {
+		t.Fatalf("patch commands continued after collection limit:\n%s", logged)
+	}
+
+	_, err = (Runner{MaxFiles: 2}).WorktreePatch(repo, "main")
+	if err == nil || !strings.Contains(err.Error(), "contains 3 files; limit is 2") {
+		t.Fatalf("MaxFiles error = %v", err)
 	}
 }
 

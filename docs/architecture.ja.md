@@ -68,6 +68,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | app | `panelaunch` | pane 生成オーケストレーション | H |
 | ui | `dashboard`(`server.go`) | localhost web サーバの mux・token 検証 | H |
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
+| ui | `dashboard`(`diff.go`) | snapshot の安定 row identity で選んだ worktree diff の read-only 配信・request-wide 上限 | H |
 | ui | `dashboard`(`peek.go` / `plan.go`) | capture-pane 前の検証チェーン(記録済み pane のみ。`plan.go` は plan mode かつ codex に限定) | H |
 | ui | `tui`(`actions.go`) | lifecycle(close/merge/cleanup)実行の配線と確認フロー | H |
 | cmd | `main.go` / `runtime_backend.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` / `tui_watch.go` | dispatch・runtime backend 選択・self-exec・launch 配線・pane identity 検証・state 書き換えを伴う復元/watch 起動 | H |

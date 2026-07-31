@@ -241,7 +241,9 @@ worktree path と base ref はクライアントから受け取らず、token ga
 場合は #516 の strict merge-base 解決に従って拒否し、フォールバックしない。
 GET の成功時は `application/json` と `Cache-Control: no-store` を付けて
 次の全フィールドを返す。
-HEAD は同じ status と header を返し、body は返さない。
+HEAD は identity と記録済み worktree の存在まで検証し、Git を実行しない。
+成功時は GET と同じ `application/json` と `Cache-Control: no-store`、
+`200 OK` を返し、body は返さない。
 
 ```ts
 type DiffResponse = {
@@ -315,9 +317,12 @@ tracked と untracked の各 file は path 順に並べる。
 いずれかの side が 256 KiB(262,144 bytes)を超える file と binary file は
 `files` に残し、patch から省略する。
 
-#577 の `gitstat` 層は 10 秒、500 files、10 MiB 収集、1 MiB response、
-32 MiB 累積 budget と `collectionLimit`/`responseLimit` を実装しない。
-これらの request-wide 上限と省略処理は #578 の endpoint が担う。
+#577 の zero-value `gitstat.Runner` は 10 秒、500 files、10 MiB 収集、
+1 MiB response、32 MiB 累積 budget と `collectionLimit`/`responseLimit` を
+適用しない。
+#578 の endpoint は同じ request context と `MaxFiles` / `MaxPatchBytes` を
+`WorktreePatch` へ渡し、500 files と 10 MiB を収集中に止める。
+1 MiB response 上限と省略処理も #578 の endpoint が担う。
 
 #### #593 に委譲する snapshot isolation
 
@@ -637,12 +642,20 @@ Git のエラー出力が UTF-8 として不正な場合は、byte 列を置換�
 
 #### #578 の request-wide 上限
 
-1 request の diff 収集には共有の 10 秒 deadline を設定する。
-各 subprocess で 10 秒を取り直さず、worktree 検証、non-Git の stat/raw read、
-metadata 収集、patch 生成のすべてで残り時間を使う。
-#593 の private snapshot を導入した後は、その収集と確定にも同じ残り時間を使う。
+GET 1 request の `WorktreePatch` には共有の 10 秒 deadline を設定する。
+各 Git subprocess で 10 秒を取り直さず、metadata 収集と patch 生成で同じ
+request context の残り時間を使う。
+deadline 到達時は実行中の Git process を停止し、partial response を返さず
+502 にする。
+HEAD は Git を実行しない。
+
+#593 の private snapshot 導入後は、worktree 検証、non-Git の stat/raw read、
+snapshot の収集と確定、process group の停止、bounded stdout/stderr も同じ
+deadline に含める。
 binary probe は 8000 bytes/side、変換出力と diff engine 用の regular-file read は
 256 KiB/side を超えない。
+#593 は次の累積 budget を private snapshot と同時に実装する。
+#578 の v1 には適用しない。
 1 request で raw side の読み出しと canonical side の変換出力に使う累積 byte
 budget は、全 file/side 合計で 32 MiB(33,554,432 bytes)とする。
 per-side 上限で `tooLarge` とした content は読まず、この budget に含めない。
@@ -650,14 +663,13 @@ raw content を解放または deduplicate しても読み出した byte を差�
 canonical output も同じ budget へ加算する。
 既知の raw size 合計だけで budget を超える場合は content を保存する前に 502 とし、
 変換中に超える場合は binary 判定、diff、統計、OID 計算を止めて 502 にする。
-deadline 到達時は process group を停止し、partial response を返さず 502 にする。
 patch 以外の stdout とすべての stderr は 10 MiB + 1 byte を検出した時点で
 process group を停止して 502 にし、buffer も 10 MiB + 1 byte を超えない。
 
 tracked と untracked を合わせた対象数は 500 files を上限とする。
 merge-base tree と index の raw metadata entry 数にはこの上限を適用しない。
-raw metadata は共有 deadline と #578 で決める内部 byte 上限の範囲で最後まで
-join する。
+raw metadata は共有 deadline の範囲で最後まで join する。
+#593 の導入後は、同 issue で決める内部 byte 上限も適用する。
 ignore、nested repository の prune、mode と canonical content の比較を終え、
 成功 response の `files` に残る変更 path が 501 件になった時点で 502 にする。
 上限超過で canonical content を作らない `tooLarge` も変更 path として数える。
@@ -693,9 +705,10 @@ body 全体が上限以下なら patch をそのまま返し、10 MiB 収集上�
 SPA は `truncated` が `true`、またはいずれかの `patchIncluded` が `false` なら、
 review 対象が patch に揃っていないことを警告する。
 
-10 秒、500 files、10 MiB、1 MiB、256 KiB、32 MiB は初期値である。
+10 秒、500 files、10 MiB、1 MiB、256 KiB は #578 v1 の初期値である。
 #578 の実装で調整する場合は同じ PR で本書、handler test、MSW fixture を更新し、
 実装と wire contract を一致させる。
+32 MiB は #593 の初期値である。
 
 #593 は次の snapshot isolation test を追加する。
 #593 の test では、未初期化の submodule は gitlink 変更を含め、初期化済みの
@@ -835,7 +848,8 @@ contract には含めない。
 
 #576 は HTTP request/response の意味論、上限、エラーと dashboard の決定を固定する。
 #577 は前述の v1 収集方式と file ごとの 256 KiB 上限を実装する。
-#578 は request-wide 上限、response への省略処理、handler と dashboard を実装する。
+#578 は 10 秒、500 files、10 MiB、1 MiB の request-wide 上限、response への
+省略処理、handler と dashboard を実装する。
 #593 は次の snapshot isolation と内部の強化を実装する。
 
 - `GIT_INDEX_FILE` などで複製 index を live index から分離して読み出す方法
@@ -858,6 +872,7 @@ contract には含めない。
   するかの選択
 - request-private temporary directory を全終了経路で削除する方法
 - admin/metadata file の総 byte 数、source 数、file type の内部上限
+- 32 MiB の snapshot input 上限、bounded stdout/stderr、process group cancellation
 
 #577/#578/#593 の実装判断が本書と食い違う場合は、同じ PR で本書、handler test、
 MSW fixture を更新して wire contract と実装を一致させる。
