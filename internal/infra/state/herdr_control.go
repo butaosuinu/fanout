@@ -115,9 +115,18 @@ type HerdrRow struct {
 }
 
 type HerdrControlStore struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	Rows          []HerdrRow    `json:"rows"`
-	Intents       []HerdrIntent `json:"intents"`
+	SchemaVersion   int           `json:"schemaVersion"`
+	GitCommonDir    string        `json:"gitCommonDir"`
+	GitCommonDevice uint64        `json:"gitCommonDevice"`
+	GitCommonInode  uint64        `json:"gitCommonInode"`
+	Rows            []HerdrRow    `json:"rows"`
+	Intents         []HerdrIntent `json:"intents"`
+}
+
+type herdrControlCommonIdentity struct {
+	path   string
+	device uint64
+	inode  uint64
 }
 
 type LockedHerdrControl struct {
@@ -219,11 +228,18 @@ func (l *LockedHerdrControl) Save() error {
 		return fmt.Errorf("save Herdr control without a held lock")
 	}
 	l.normalize()
-	if err := validateHerdrControl(l.HerdrControlStore); err != nil {
-		return err
+	identity, identityErr := herdrControlIdentity(l.path)
+	if identityErr != nil {
+		return identityErr
 	}
-	if err := atomicfs.WriteJSON(l.path, l.HerdrControlStore, 0o600); err != nil {
-		return fmt.Errorf("write Herdr control %s: %w", l.path, err)
+	if bindingErr := validateHerdrControlIdentity(l.HerdrControlStore, identity); bindingErr != nil {
+		return bindingErr
+	}
+	if validateErr := validateHerdrControl(l.HerdrControlStore); validateErr != nil {
+		return validateErr
+	}
+	if writeErr := atomicfs.WriteJSON(l.path, l.HerdrControlStore, 0o600); writeErr != nil {
+		return fmt.Errorf("write Herdr control %s: %w", l.path, writeErr)
 	}
 	info, err := os.Lstat(l.path)
 	if err != nil {
@@ -385,6 +401,10 @@ func herdrOwnerTuple(parent, ownerProjectRoot string) string {
 }
 
 func loadHerdrControl(path string) (HerdrControlStore, error) {
+	identity, identityErr := herdrControlIdentity(path)
+	if identityErr != nil {
+		return HerdrControlStore{}, identityErr
+	}
 	var store HerdrControlStore
 	found, err := readPrivateHerdrControlJSON(path, &store)
 	if err != nil {
@@ -394,7 +414,7 @@ func loadHerdrControl(path string) (HerdrControlStore, error) {
 		return HerdrControlStore{}, fmt.Errorf("read Herdr control %s: %w", path, err)
 	}
 	if !found {
-		store = emptyHerdrControl()
+		store = emptyHerdrControl(identity)
 	} else if store.SchemaVersion == 0 {
 		return HerdrControlStore{}, fmt.Errorf(
 			"validate Herdr control %s: unsupported Herdr control schema version 0",
@@ -402,10 +422,53 @@ func loadHerdrControl(path string) (HerdrControlStore, error) {
 		)
 	}
 	store.normalize()
+	if err := validateHerdrControlIdentity(store, identity); err != nil {
+		return HerdrControlStore{}, fmt.Errorf("validate Herdr control %s: %w", path, err)
+	}
 	if err := validateHerdrControl(store); err != nil {
 		return HerdrControlStore{}, fmt.Errorf("validate Herdr control %s: %w", path, err)
 	}
 	return store, nil
+}
+
+func herdrControlIdentity(path string) (herdrControlCommonIdentity, error) {
+	commonDir := filepath.Dir(filepath.Dir(path))
+	resolved, resolveErr := filepath.EvalSymlinks(commonDir)
+	if resolveErr != nil {
+		return herdrControlCommonIdentity{}, fmt.Errorf(
+			"canonicalize Herdr control git common directory: %w",
+			resolveErr,
+		)
+	}
+	resolved = filepath.Clean(resolved)
+	if validateErr := validateHerdrControlCommonDir(resolved); validateErr != nil {
+		return herdrControlCommonIdentity{}, validateErr
+	}
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		return herdrControlCommonIdentity{}, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Dev == 0 || stat.Ino == 0 {
+		return herdrControlCommonIdentity{}, fmt.Errorf(
+			"herdr control common directory %s has no physical identity",
+			resolved,
+		)
+	}
+	return herdrControlCommonIdentity{
+		path: resolved, device: uint64(stat.Dev), inode: stat.Ino,
+	}, nil
+}
+
+func validateHerdrControlIdentity(
+	store HerdrControlStore,
+	want herdrControlCommonIdentity,
+) error {
+	if store.GitCommonDir != want.path || store.GitCommonDevice != want.device ||
+		store.GitCommonInode != want.inode {
+		return fmt.Errorf("herdr control belongs to a different git common directory")
+	}
+	return nil
 }
 
 func ensurePrivateHerdrControlDir(path string) error {
@@ -513,11 +576,14 @@ func validateHerdrControlACL(path string) error {
 	return nil
 }
 
-func emptyHerdrControl() HerdrControlStore {
+func emptyHerdrControl(identity herdrControlCommonIdentity) HerdrControlStore {
 	return HerdrControlStore{
-		SchemaVersion: HerdrControlSchemaVersion,
-		Rows:          []HerdrRow{},
-		Intents:       []HerdrIntent{},
+		SchemaVersion:   HerdrControlSchemaVersion,
+		GitCommonDir:    identity.path,
+		GitCommonDevice: identity.device,
+		GitCommonInode:  identity.inode,
+		Rows:            []HerdrRow{},
+		Intents:         []HerdrIntent{},
 	}
 }
 
@@ -536,6 +602,11 @@ func (s *HerdrControlStore) normalize() {
 func validateHerdrControl(store HerdrControlStore) error {
 	if store.SchemaVersion != HerdrControlSchemaVersion {
 		return fmt.Errorf("unsupported Herdr control schema version %d", store.SchemaVersion)
+	}
+	if store.GitCommonDir == "" || !filepath.IsAbs(store.GitCommonDir) ||
+		filepath.Clean(store.GitCommonDir) != store.GitCommonDir ||
+		store.GitCommonDevice == 0 || store.GitCommonInode == 0 {
+		return fmt.Errorf("herdr control git common directory identity is incomplete")
 	}
 	ids := map[string]string{}
 	reservations := map[string]string{}

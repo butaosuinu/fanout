@@ -798,6 +798,16 @@ func rollbackUnissuedHerdrWorktree(
 	intent state.HerdrIntent,
 	mutationErr error,
 ) error {
+	if !intent.BranchExisted && !intent.BranchCreated {
+		_, found, err := worktree.ObserveHerdrBranch(req.SourceRoot, intent.FullBranchRef)
+		if err != nil || found {
+			cause := err
+			if cause == nil {
+				cause = fmt.Errorf("herdr branch exists without persisted ownership")
+			}
+			return markHerdrIntentManual(locked, intent, errors.Join(mutationErr, cause))
+		}
+	}
 	if intent.BranchCreated {
 		if err := worktree.DeleteReservedHerdrBranch(
 			req.SourceRoot,

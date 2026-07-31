@@ -34,23 +34,33 @@ type HerdrCheckoutObservation struct {
 // ResolveHerdrRepoIdentity returns the physical Git common directory and
 // source checkout root used by Herdr worktree provenance.
 func ResolveHerdrRepoIdentity(root string) (HerdrRepoIdentity, error) {
-	repoKey, err := gitTrim(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	repoKey, err := resolveHerdrGitPath(root, "--git-common-dir")
 	if err != nil {
 		return HerdrRepoIdentity{}, fmt.Errorf("resolve Herdr repo key: %w", err)
 	}
-	repoRoot, err := gitTrim(root, "rev-parse", "--path-format=absolute", "--show-toplevel")
+	repoRoot, err := resolveHerdrGitPath(root, "--show-toplevel")
 	if err != nil {
 		return HerdrRepoIdentity{}, fmt.Errorf("resolve Herdr repo root: %w", err)
 	}
-	repoKey, err = physicalHerdrPath(repoKey)
-	if err != nil {
-		return HerdrRepoIdentity{}, fmt.Errorf("canonicalize Herdr repo key: %w", err)
-	}
-	repoRoot, err = physicalHerdrPath(repoRoot)
-	if err != nil {
-		return HerdrRepoIdentity{}, fmt.Errorf("canonicalize Herdr repo root: %w", err)
-	}
 	return HerdrRepoIdentity{RepoKey: repoKey, RepoRoot: repoRoot}, nil
+}
+
+func resolveHerdrGitPath(root, flag string) (string, error) {
+	path, err := gitTrim(root, "rev-parse", flag)
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", fmt.Errorf("git rev-parse %s returned an empty path", flag)
+	}
+	if !filepath.IsAbs(path) {
+		root, err = filepath.Abs(root)
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(root, path)
+	}
+	return physicalHerdrPath(path)
 }
 
 // ResolveHerdrBase applies the tmux base refresh gate and freezes the selected

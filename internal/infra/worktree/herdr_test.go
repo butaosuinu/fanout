@@ -7,6 +7,38 @@ import (
 	"testing"
 )
 
+func TestResolveHerdrRepoIdentityDoesNotRequirePathFormat(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	if err := os.WriteFile(fakeGit, []byte(`#!/bin/sh
+case "$*" in
+  "rev-parse --git-common-dir") printf '.git\n' ;;
+  "rev-parse --show-toplevel") pwd -P ;;
+  *) exit 64 ;;
+esac
+`), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	identity, err := ResolveHerdrRepoIdentity(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoot, err := physicalHerdrPath(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKey, err := physicalHerdrPath(filepath.Join(repo, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity != (HerdrRepoIdentity{RepoKey: wantKey, RepoRoot: wantRoot}) {
+		t.Fatalf("identity = %+v, want repo key %s and root %s", identity, wantKey, wantRoot)
+	}
+}
+
 func TestHerdrBranchReservationIsAtomicAndCompareDeleted(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	base := gitOutput(t, repo, "rev-parse", "HEAD")

@@ -791,6 +791,66 @@ func TestRealizeHerdrWorktreeRollsBackExpiredPlannedIntent(t *testing.T) {
 	}
 }
 
+func TestRealizeHerdrWorktreeKeepsExpiredPlannedIntentWhenBranchOwnershipWasNotSaved(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	stop := errors.New("stop after branch reservation")
+	runtime.observeErr = stop
+	req := testHerdrWorktreeRequest(repo, "expired-ambiguous-branch", 435)
+	if _, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks); !errors.Is(err, stop) {
+		t.Fatalf("initial planned error = %v", err)
+	}
+	locked, err := state.LockHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := locked.FindIntent(intentID)
+	if !found || !intent.BranchCreated {
+		t.Fatalf("planned intent = (%+v,%t)", intent, found)
+	}
+	intent.BranchCreated = false
+	intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
+	locked.UpsertIntent(intent)
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	runtime.observeErr = nil
+
+	if _, realizeErr := realizeHerdrWorktree(
+		context.Background(),
+		req,
+		runtime,
+		hooks,
+	); !errors.Is(realizeErr, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("ambiguous branch ownership error = %v", realizeErr)
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, found := control.FindIntent(intentID)
+	if !found || saved.Status != state.HerdrIntentManualCleanupRequired ||
+		!strings.Contains(saved.Failure, "branch exists without persisted ownership") {
+		t.Fatalf("ambiguous ownership intent = (%+v,%t)", saved, found)
+	}
+	if head, found, err := worktree.ObserveHerdrBranch(repo, intent.FullBranchRef); err != nil {
+		t.Fatal(err)
+	} else if !found || head != intent.ExpectedHead {
+		t.Fatalf("ambiguous branch = (%s,%t), want preserved at %s", head, found, intent.ExpectedHead)
+	}
+}
+
 func TestRealizeHerdrWorktreePreservesIssuedIntentWhenMutationContextIsCanceled(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}

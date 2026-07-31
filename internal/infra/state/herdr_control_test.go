@@ -53,6 +53,44 @@ func TestHerdrControlIsSharedAcrossLinkedWorktrees(t *testing.T) {
 	}
 }
 
+func TestHerdrControlRejectsRegistryFromDifferentCommonDirectory(t *testing.T) {
+	first := newHerdrControlRepo(t)
+	locked, err := LockHerdrControl(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	firstPath, err := HerdrControlPath(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := os.ReadFile(firstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := newHerdrControlRepo(t)
+	secondPath, err := HerdrControlPath(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Dir(secondPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondPath, registry, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadHerdrControl(second); err == nil ||
+		!strings.Contains(err.Error(), "different git common directory") {
+		t.Fatalf("copied registry error = %v", err)
+	}
+}
+
 func TestHerdrControlRejectsNonPrivateNamespace(t *testing.T) {
 	validRegistry := []byte(`{"schemaVersion":1,"rows":[],"intents":[]}`)
 	t.Run("common directory mode", func(t *testing.T) {
@@ -218,7 +256,7 @@ func TestProjectStateLockSerializesHerdrControlWriter(t *testing.T) {
 
 func TestHerdrControlBindingsIncludeRowsAndEveryIntentStatus(t *testing.T) {
 	repo := newHerdrControlRepo(t)
-	store := emptyHerdrControl()
+	store := testEmptyHerdrControl()
 	store.Rows = append(store.Rows, testHerdrRow("425"))
 	statuses := []HerdrIntentStatus{
 		HerdrIntentPlanned,
@@ -264,7 +302,7 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 	if first.ID == second.ID {
 		t.Fatalf("plan intent IDs collide across owner roots: %s", first.ID)
 	}
-	intents := emptyHerdrControl()
+	intents := testEmptyHerdrControl()
 	intents.Intents = []HerdrIntent{first, second}
 	if err := validateHerdrControl(intents); err != nil {
 		t.Fatal(err)
@@ -289,7 +327,7 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 			Session:  intent.Session, SocketPath: intent.SocketPath,
 		}
 	}
-	rows := emptyHerdrControl()
+	rows := testEmptyHerdrControl()
 	rows.Rows = []HerdrRow{toRow(first), toRow(second)}
 	if err := validateHerdrControl(rows); err != nil {
 		t.Fatal(err)
@@ -308,7 +346,7 @@ func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testin
 	intent := testHerdrCoordinatorIntent("/repo/one", "plan:demo")
 	intent.RuntimeParent = "425"
 	intent.ID, _ = HerdrCoordinatorIntentID(intent.RuntimeParent, "")
-	store := emptyHerdrControl()
+	store := testEmptyHerdrControl()
 	store.Intents = append(store.Intents, intent)
 
 	got := store.ProvisionalBindings("/repo/two")
@@ -319,7 +357,7 @@ func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testin
 
 func TestHerdrControlRejectsRowIntentReservationConflict(t *testing.T) {
 	repo := newHerdrControlRepo(t)
-	store := emptyHerdrControl()
+	store := testEmptyHerdrControl()
 	row := testHerdrRow("425")
 	intent := testHerdrWorktreeIntent(repo, "500", 501, "other")
 	intent.BranchName = row.BranchName
@@ -389,7 +427,7 @@ func TestHerdrControlRejectsIncompleteRealizedIntent(t *testing.T) {
 	repo := newHerdrControlRepo(t)
 	intent := testHerdrCoordinatorIntent(repo, "425")
 	intent.Status = HerdrIntentRealized
-	store := emptyHerdrControl()
+	store := testEmptyHerdrControl()
 	store.Intents = append(store.Intents, intent)
 	if err := validateHerdrControl(store); err == nil || !strings.Contains(err.Error(), "resource is incomplete") {
 		t.Fatalf("realized intent validation error = %v", err)
@@ -401,7 +439,7 @@ func TestHerdrControlAcceptsSHA256ObjectIDs(t *testing.T) {
 	intent := testHerdrWorktreeIntent(repo, "425", 426, "sha256")
 	intent.BaseSHA = strings.Repeat("1", 64)
 	intent.ExpectedHead = strings.Repeat("2", 64)
-	store := emptyHerdrControl()
+	store := testEmptyHerdrControl()
 	store.Intents = append(store.Intents, intent)
 	if err := validateHerdrControl(store); err != nil {
 		t.Fatal(err)
@@ -475,6 +513,12 @@ func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 		SocketPath: "/private/tmp/fanout-test/herdr.sock",
 		TimeoutMS:  300000, ExpiresUnixMS: 2000000000000,
 	}
+}
+
+func testEmptyHerdrControl() HerdrControlStore {
+	return emptyHerdrControl(herdrControlCommonIdentity{
+		path: "/repo/.git", device: 1, inode: 1,
+	})
 }
 
 func testHerdrWorktreeIntent(repo, parent string, issue int, slug string) HerdrIntent {
