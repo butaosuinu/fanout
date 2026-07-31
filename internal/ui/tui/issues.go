@@ -77,7 +77,7 @@ type ghLoadedMsg struct {
 }
 
 type issueStatusProvider interface {
-	IssuePRs(num int) (string, []ghissue.PRRef, error)
+	IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error)
 	BranchPRs(branch string) ([]ghissue.PRRef, error)
 	Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error)
 }
@@ -247,15 +247,11 @@ func (l *issueStatusLoader) loadIssueStatuses(
 
 	var loadErr error
 	refreshedIssues := map[int]bool{}
-	for _, num := range recordedIssueNums(store.Panes) {
+	recordedNums := recordedIssueNums(store.Panes)
+	for _, num := range recordedNums {
 		refreshedIssues[num] = true
-		stateName, prs, err := l.gh.IssuePRs(num)
-		if err != nil {
-			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", num, err))
-			continue
-		}
-		l.prCache[num] = issueStatus{State: stateName, PRs: prs}
 	}
+	loadErr = errors.Join(loadErr, l.refreshIssuePRs(recordedNums))
 
 	refreshedBranches := map[string]bool{}
 	for _, task := range taskRows {
@@ -346,18 +342,32 @@ func (l *issueStatusLoader) refreshUnrecordedIssuePRs(
 	for _, num := range recorded {
 		recordedSet[num] = true
 	}
-	var loadErr error
+	var nums []int
 	for _, issue := range graph.Children {
 		if issue.Number <= 0 || recordedSet[issue.Number] || refreshed[issue.Number] {
 			continue
 		}
 		refreshed[issue.Number] = true
-		stateName, prs, err := l.gh.IssuePRs(issue.Number)
-		if err != nil {
-			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", issue.Number, err))
+		nums = append(nums, issue.Number)
+	}
+	slices.Sort(nums)
+	return l.refreshIssuePRs(nums)
+}
+
+func (l *issueStatusLoader) refreshIssuePRs(nums []int) error {
+	if len(nums) == 0 {
+		return nil
+	}
+	snapshots, loadErr := l.gh.IssuePRsBatch(nums)
+	for _, num := range nums {
+		snapshot, ok := snapshots[num]
+		if !ok {
+			if loadErr == nil {
+				loadErr = errors.Join(loadErr, fmt.Errorf("#%d: missing from issue PR batch", num))
+			}
 			continue
 		}
-		l.prCache[issue.Number] = issueStatus{State: stateName, PRs: prs}
+		l.prCache[num] = issueStatus{State: snapshot.State, PRs: snapshot.PRs}
 	}
 	return loadErr
 }

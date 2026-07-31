@@ -16,7 +16,13 @@ import (
 
 type fakeGH struct{}
 
-func (fakeGH) IssuePRs(num int) (string, []ghissue.PRRef, error) { return "OPEN", nil, nil }
+func (fakeGH) IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error) {
+	snapshots := make(map[int]ghissue.IssueSnapshot, len(nums))
+	for _, num := range nums {
+		snapshots[num] = ghissue.IssueSnapshot{Number: num, State: "OPEN"}
+	}
+	return snapshots, nil
+}
 
 func (fakeGH) BranchPRs(branch string) ([]ghissue.PRRef, error) { return nil, nil }
 

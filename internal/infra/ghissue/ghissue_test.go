@@ -317,26 +317,85 @@ func TestIssuesSnapshotWithPRsKeepsPartialResults(t *testing.T) {
 	installFakeGH(t, `{
   "data": {
     "repository": {
-      "issue_1": {
-        "number": 1,
-        "title": "one",
-        "state": "OPEN",
-        "body": "body",
-        "labels": {"nodes": [{"name": "bug"}]},
-        "closedByPullRequestsReferences": {"pageInfo": {"hasNextPage": false}, "nodes": []}
-      },
-      "issue_2": null
-    }
-  },
-  "errors": [{"message": "Could not resolve to an Issue with the number of 2.", "path": ["repository", "issue_2"]}]
-}`)
+	      "issue_1": {
+	        "number": 1,
+	        "title": "one",
+	        "state": "OPEN",
+	        "body": "body",
+	        "labels": {"nodes": [{"name": "bug"}]},
+	        "closedByPullRequestsReferences": {"pageInfo": {"hasNextPage": false}, "nodes": []}
+	      },
+	      "issue_2": {
+	        "number": 2,
+	        "title": "partial",
+	        "state": "OPEN",
+	        "body": "body",
+	        "labels": {"nodes": []},
+	        "closedByPullRequestsReferences": {"pageInfo": {"hasNextPage": false}, "nodes": []}
+	      }
+	    }
+	  },
+	  "errors": [{"message": "Could not load closing PRs.", "path": ["repository", "issue_2", "closedByPullRequestsReferences"]}]
+	}`)
 
 	got, err := (Runner{}).IssuesSnapshotWithPRs("owner", "repo", []int{1, 2})
-	if err == nil || !strings.Contains(err.Error(), "#2: graphql: Could not resolve") {
+	if err == nil || !strings.Contains(err.Error(), "#2: graphql: Could not load closing PRs.") {
 		t.Fatalf("IssuesSnapshotWithPRs() error = %v, want per-issue #2 error", err)
 	}
 	if len(got) != 1 || got[1].Title != "one" || !reflect.DeepEqual(got[1].Labels, []Label{{Name: "bug"}}) {
 		t.Fatalf("IssuesSnapshotWithPRs() = %#v, want successful #1 result", got)
+	}
+}
+
+func TestIssuesSnapshotWithPRsDropsPaginatedIssueOnFallbackFailure(t *testing.T) {
+	installFakeGHScript(t, `
+args="$*"
+case "$args" in
+*"-F num=7"*)
+  printf '%s' 'pagination failed' >&2
+  exit 1
+  ;;
+*)
+  printf '%s' '{"data":{"repository":{"issue_7":{"number":7,"title":"seven","state":"CLOSED","body":"body","labels":{"nodes":[]},"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":true},"nodes":[{"number":100,"state":"CLOSED","mergedAt":null,"commits":{"nodes":[]}}]}},"issue_8":{"number":8,"title":"eight","state":"OPEN","body":"body","labels":{"nodes":[]},"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}}'
+  ;;
+esac
+`)
+
+	got, err := (Runner{}).IssuesSnapshotWithPRs("owner", "repo", []int{7, 8})
+	if err == nil || !strings.Contains(err.Error(), "#7: page closed-by PRs") {
+		t.Fatalf("IssuesSnapshotWithPRs() error = %v, want #7 pagination error", err)
+	}
+	if _, ok := got[7]; ok {
+		t.Fatalf("IssuesSnapshotWithPRs()[7] = %#v, want failed paginated issue omitted", got[7])
+	}
+	if got[8].Title != "eight" {
+		t.Fatalf("IssuesSnapshotWithPRs()[8] = %#v, want successful sibling preserved", got[8])
+	}
+}
+
+func TestIssuesSnapshotWithPRsDropsChunkOnGlobalGraphQLError(t *testing.T) {
+	installFakeGH(t, `{
+	  "data": {
+	    "repository": {
+	      "issue_1": {
+	        "number": 1,
+	        "title": "partial",
+	        "state": "OPEN",
+	        "body": "body",
+	        "labels": {"nodes": []},
+	        "closedByPullRequestsReferences": {"pageInfo": {"hasNextPage": false}, "nodes": []}
+	      }
+	    }
+	  },
+	  "errors": [{"message": "Repository data was incomplete.", "path": ["repository"]}]
+	}`)
+
+	got, err := (Runner{}).IssuesSnapshotWithPRs("owner", "repo", []int{1})
+	if err == nil || !strings.Contains(err.Error(), "gh api graphql issue batch: Repository data was incomplete.") {
+		t.Fatalf("IssuesSnapshotWithPRs() error = %v, want global GraphQL error", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("IssuesSnapshotWithPRs() = %#v, want failed chunk omitted", got)
 	}
 }
 

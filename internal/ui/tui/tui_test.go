@@ -42,29 +42,41 @@ type countingIssueStatusProvider struct {
 	issueStates map[int]string
 	issuePRs    map[int][]ghissue.PRRef
 	issueErrs   map[int]error
+	batchCalls  [][]int
 	branchCalls map[string]int
 	waveCalls   map[string]int
 	waveNums    map[string][]int
 	waves       map[string]sessionview.WaveGraph
 }
 
-func (f *countingIssueStatusProvider) IssuePRs(num int) (string, []ghissue.PRRef, error) {
+func (f *countingIssueStatusProvider) IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error) {
 	if f.issueCalls == nil {
 		f.issueCalls = map[int]int{}
 	}
-	f.issueCalls[num]++
-	if err := f.issueErrs[num]; err != nil {
-		return "", nil, err
+	f.batchCalls = append(f.batchCalls, slices.Clone(nums))
+	snapshots := make(map[int]ghissue.IssueSnapshot, len(nums))
+	var loadErr error
+	for _, num := range nums {
+		f.issueCalls[num]++
+		if err := f.issueErrs[num]; err != nil {
+			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", num, err))
+			continue
+		}
+		stateName := f.issueStates[num]
+		if stateName == "" {
+			stateName = "OPEN"
+		}
+		prs := f.issuePRs[num]
+		if prs == nil {
+			prs = []ghissue.PRRef{{Number: 900 + num, State: "OPEN"}}
+		}
+		snapshots[num] = ghissue.IssueSnapshot{
+			Number: num,
+			State:  stateName,
+			PRs:    slices.Clone(prs),
+		}
 	}
-	stateName := f.issueStates[num]
-	if stateName == "" {
-		stateName = "OPEN"
-	}
-	prs := f.issuePRs[num]
-	if prs == nil {
-		prs = []ghissue.PRRef{{Number: 900 + num, State: "OPEN"}}
-	}
-	return stateName, slices.Clone(prs), nil
+	return snapshots, loadErr
 }
 
 func (f *countingIssueStatusProvider) BranchPRs(branch string) ([]ghissue.PRRef, error) {
@@ -339,6 +351,9 @@ func TestIssueStatusLoaderThrottlesWaveAndUnrecordedPRsAcrossTicks(t *testing.T)
 			gh.branchCalls,
 		)
 	}
+	if !reflect.DeepEqual(gh.batchCalls, [][]int{{101}, {102}}) {
+		t.Fatalf("initial IssuePRsBatch calls = %v, want recorded [101] then queued [102]", gh.batchCalls)
+	}
 
 	_, err = loader.loadIssueStatuses(root, nil, firstAt.Add(20*time.Second))
 	if err != nil {
@@ -363,6 +378,42 @@ func TestIssueStatusLoaderThrottlesWaveAndUnrecordedPRsAcrossTicks(t *testing.T)
 	}
 	if gh.waveCalls["100"] != 2 || gh.issueCalls[101] != 3 || gh.issueCalls[102] != 2 {
 		t.Fatalf("calls after wave interval = wave:%v issue:%v, want wave=2 #101=3 #102=2", gh.waveCalls, gh.issueCalls)
+	}
+}
+
+func TestIssueStatusLoaderKeepsSuccessfulSiblingOnBatchFailure(t *testing.T) {
+	root := t.TempDir()
+	writeTUIState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"first","paneId":"%1"},
+	  {"parent":"100","issueNum":102,"slug":"second","paneId":"%2"}
+	]}`)
+	gh := &countingIssueStatusProvider{
+		issueErrs: map[int]error{102: errBoom},
+		waves: map[string]sessionview.WaveGraph{
+			"100": {
+				Children: []ghissue.Issue{
+					{Number: 101, Title: "first", State: "OPEN"},
+					{Number: 102, Title: "second", State: "OPEN"},
+				},
+				Info: map[int]sessionview.WaveInfo{101: {Wave: 1}, 102: {Wave: 1}},
+			},
+		},
+	}
+	loader := newIssueStatusLoader(time.Minute)
+	loader.resolve = func(string) (issueStatusProvider, error) { return gh, nil }
+
+	statuses, err := loader.loadIssueStatuses(root, nil, time.Unix(100, 0))
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("batch error = %v, want boom", err)
+	}
+	if !reflect.DeepEqual(gh.batchCalls, [][]int{{101, 102}}) {
+		t.Fatalf("IssuePRsBatch calls = %v, want one [101 102] batch", gh.batchCalls)
+	}
+	if _, ok := statuses[keyForIssue("100", 101)]; !ok {
+		t.Fatalf("successful #101 status was lost after sibling batch failure: %#v", statuses)
+	}
+	if _, ok := statuses[keyForIssue("100", 102)]; ok {
+		t.Fatalf("failed #102 unexpectedly populated status: %#v", statuses)
 	}
 }
 
