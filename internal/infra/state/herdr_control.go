@@ -456,8 +456,12 @@ func herdrControlIdentity(path string) (herdrControlCommonIdentity, error) {
 		)
 	}
 	return herdrControlCommonIdentity{
-		path: resolved, device: uint64(stat.Dev), inode: stat.Ino,
+		path: resolved, device: normalizeHerdrControlStatDevice(stat.Dev), inode: stat.Ino,
 	}, nil
+}
+
+func normalizeHerdrControlStatDevice[T ~int32 | ~uint32 | ~uint64](device T) uint64 {
+	return uint64(device)
 }
 
 func validateHerdrControlIdentity(

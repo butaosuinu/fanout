@@ -91,6 +91,15 @@ func TestHerdrControlRejectsRegistryFromDifferentCommonDirectory(t *testing.T) {
 	}
 }
 
+func TestNormalizeHerdrControlStatDeviceSupportsDarwinAndLinuxWidths(t *testing.T) {
+	if got := normalizeHerdrControlStatDevice(int32(42)); got != 42 {
+		t.Fatalf("normalizeHerdrControlStatDevice(int32) = %d, want 42", got)
+	}
+	if got := normalizeHerdrControlStatDevice(uint64(81)); got != 81 {
+		t.Fatalf("normalizeHerdrControlStatDevice(uint64) = %d, want 81", got)
+	}
+}
+
 func TestHerdrControlRejectsNonPrivateNamespace(t *testing.T) {
 	validRegistry := []byte(`{"schemaVersion":1,"rows":[],"intents":[]}`)
 	t.Run("common directory mode", func(t *testing.T) {
