@@ -34,6 +34,13 @@ type IssueGraphClient interface {
 	IssueState(num int) (string, error)
 }
 
+// issueDetailsBatchClient is an optional extension. Keeping it separate from
+// IssueGraphClient preserves the per-issue fallback for existing clients and
+// test fakes.
+type issueDetailsBatchClient interface {
+	IssueDetails(nums []int) (map[int]ghissue.Issue, error)
+}
+
 // WaveGraph is the resolved child set for one parent plus per-child wave and
 // blocker info keyed by issue number.
 type WaveGraph struct {
@@ -198,13 +205,18 @@ func fetchWaveChildren(c IssueGraphClient, parent string, recordedNums []int) (w
 	return out, errors.Join(loadErr, taskErr, recordedErr)
 }
 
-// loadIssueDetails fetches IssueDetail for each num not already in existing,
-// joining per-issue failures and keeping the rest. Loaded nums are marked in
-// existing (failed ones are not, so a later source may retry them) and in
-// hydrated, because IssueDetail returns the full issue — re-fetching it during
-// hydration would double the gh calls for genuinely body-less issues. Failed
-// nums are recorded in failed so dependents can be flagged degraded.
+// loadIssueDetails fetches every num not already in existing, using the
+// optional batch extension when available and IssueDetail otherwise. It joins
+// per-issue failures and keeps the rest. Loaded nums are marked in existing
+// (failed ones are not, so a later source may retry them) and in hydrated,
+// because both paths return the full issue — re-fetching during hydration
+// would double the gh calls for genuinely body-less issues. Failed nums are
+// recorded in failed so dependents can be flagged degraded.
 func loadIssueDetails(c IssueGraphClient, nums []int, existing, hydrated, failed map[int]bool) ([]ghissue.Issue, error) {
+	if batch, ok := c.(issueDetailsBatchClient); ok {
+		return loadIssueDetailsBatch(batch, nums, existing, hydrated, failed)
+	}
+
 	extra := []ghissue.Issue{}
 	var loadErr error
 	for _, num := range nums {
@@ -225,13 +237,52 @@ func loadIssueDetails(c IssueGraphClient, nums []int, existing, hydrated, failed
 	return extra, loadErr
 }
 
+func loadIssueDetailsBatch(c issueDetailsBatchClient, nums []int, existing, hydrated, failed map[int]bool) ([]ghissue.Issue, error) {
+	pending := make([]int, 0, len(nums))
+	scheduled := map[int]bool{}
+	for _, num := range nums {
+		if num <= 0 || existing[num] || scheduled[num] {
+			continue
+		}
+		scheduled[num] = true
+		pending = append(pending, num)
+	}
+	if len(pending) == 0 {
+		return []ghissue.Issue{}, nil
+	}
+
+	details, loadErr := c.IssueDetails(pending)
+	batchReportedError := loadErr != nil
+	extra := make([]ghissue.Issue, 0, len(details))
+	for _, num := range pending {
+		detail, ok := details[num]
+		if !ok {
+			failed[num] = true
+			if !batchReportedError {
+				loadErr = errors.Join(loadErr, fmt.Errorf("#%d: missing from issue details batch", num))
+			}
+			continue
+		}
+		extra = append(extra, detail)
+		existing[num] = true
+		hydrated[num] = true
+		delete(failed, num)
+	}
+	return extra, loadErr
+}
+
 // hydrateIssueBodies fills bodies (and missing titles/states) the Sub-issues
-// API leaves blank. Issues in hydrated already came from IssueDetail and are
-// skipped even when their body is genuinely empty. Per-issue failures are
-// joined (with the failed issue numbers reported so rows can be flagged
-// degraded) and the rest hydrated — a degraded row beats a blank dashboard
-// (the TUI used to hard-fail here).
+// API leaves blank, using the optional batch extension when available.
+// Issues in hydrated already came from a full-detail fetch and are skipped
+// even when their body is genuinely empty. Per-issue failures are joined
+// (with the failed issue numbers reported so rows can be flagged degraded)
+// and the rest hydrated — a degraded row beats a blank dashboard (the TUI
+// used to hard-fail here).
 func hydrateIssueBodies(c IssueGraphClient, issues []ghissue.Issue, hydrated map[int]bool) (map[int]bool, error) {
+	if batch, ok := c.(issueDetailsBatchClient); ok {
+		return hydrateIssueBodiesBatch(batch, issues, hydrated)
+	}
+
 	failed := map[int]bool{}
 	var loadErr error
 	for i := range issues {
@@ -242,6 +293,44 @@ func hydrateIssueBodies(c IssueGraphClient, issues []ghissue.Issue, hydrated map
 		if err != nil {
 			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", issues[i].Number, err))
 			failed[issues[i].Number] = true
+			continue
+		}
+		issues[i].Body = detail.Body
+		issues[i].Labels = detail.Labels
+		if issues[i].Title == "" {
+			issues[i].Title = detail.Title
+		}
+		if issues[i].State == "" {
+			issues[i].State = detail.State
+		}
+	}
+	return failed, loadErr
+}
+
+func hydrateIssueBodiesBatch(c issueDetailsBatchClient, issues []ghissue.Issue, hydrated map[int]bool) (map[int]bool, error) {
+	nums := make([]int, 0, len(issues))
+	for i := range issues {
+		if issues[i].Body == "" && !hydrated[issues[i].Number] {
+			nums = append(nums, issues[i].Number)
+		}
+	}
+	failed := map[int]bool{}
+	if len(nums) == 0 {
+		return failed, nil
+	}
+
+	details, loadErr := c.IssueDetails(nums)
+	batchReportedError := loadErr != nil
+	for i := range issues {
+		if issues[i].Body != "" || hydrated[issues[i].Number] {
+			continue
+		}
+		detail, ok := details[issues[i].Number]
+		if !ok {
+			failed[issues[i].Number] = true
+			if !batchReportedError {
+				loadErr = errors.Join(loadErr, fmt.Errorf("#%d: missing from issue details batch", issues[i].Number))
+			}
 			continue
 		}
 		issues[i].Body = detail.Body
