@@ -467,7 +467,9 @@ func TestRunCycleRecoversParentRunningRetryAfterRestart(t *testing.T) {
 func TestRunCycleSkipsRecoveredRunningParentWithLiveChildren(t *testing.T) {
 	fake := &fakeWatchIO{
 		runningIssues: []ghissue.Issue{issue(301, runningLabel)},
-		openChildren:  map[int]int{301: 2},
+		childCounts: map[int]ChildCounts{
+			301: {Open: 2},
+		},
 		store: state.Store{Panes: []state.Pane{
 			{Parent: "301", IssueNum: 401, PaneID: "%child"},
 		}},
@@ -488,6 +490,37 @@ func TestRunCycleSkipsRecoveredRunningParentWithLiveChildren(t *testing.T) {
 		t.Fatalf("report=%#v parents=%#v, want live parent skipped", report, fake.parents)
 	}
 	assertSkipReasons(t, report, []SkipReason{SkipAlreadyRunning})
+}
+
+func TestRunCycleLaunchesChildAddedAfterRunningParentSnapshot(t *testing.T) {
+	fake := &fakeWatchIO{
+		runningIssues: []ghissue.Issue{issue(301, runningLabel)},
+		childCounts: map[int]ChildCounts{
+			301: {Open: 2, Launchable: 1, Unfanned: 1},
+		},
+		store: state.Store{Panes: []state.Pane{
+			{Parent: "301", IssueNum: 401, PaneID: "%child"},
+		}},
+		alive: map[string]bool{"%child": true},
+	}
+	engine := NewEngine(Config{
+		TriggerLabel: triggerLabel,
+		RunningLabel: runningLabel,
+		Now:          (&fakeClock{now: time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)}).Now,
+	}, fake.IO())
+
+	report, err := engine.RunCycle()
+	if err != nil {
+		t.Fatalf("RunCycle error = %v", err)
+	}
+	assertInts(t, "count calls", fake.countCalls, []int{301})
+	assertSwaps(t, fake.swaps, nil)
+	if got, want := fake.parents, []parentLaunch{{num: 301, limit: 0}}; !slices.Equal(got, want) {
+		t.Fatalf("parent launches = %#v, want %#v for added child with live sibling", got, want)
+	}
+	if len(report.Actions) != 1 || !report.Actions[0].RetryRunning || report.Actions[0].Kind != LaunchParent {
+		t.Fatalf("actions = %#v, want recovered running-label parent launch", report.Actions)
+	}
 }
 
 func TestRunCycleRecoversBothLabeledRunningRetryAfterRestart(t *testing.T) {

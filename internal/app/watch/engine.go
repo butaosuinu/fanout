@@ -314,7 +314,7 @@ func (e *Engine) PlanCycle() (Report, error) {
 			if err != nil {
 				return Report{}, err
 			}
-			if liveParent {
+			if liveParent && launchableChildren == 0 {
 				report.Skipped = append(report.Skipped, Skip{Issue: issue, Reason: SkipAlreadyRunning})
 				continue
 			}

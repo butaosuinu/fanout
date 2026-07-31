@@ -212,6 +212,8 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 			return
 		}
 		if input != nil {
+			// BuildPlan already reported a failed prepared lookup. Replaying
+			// it here only copies the cached launch body, so avoid a duplicate warning.
 			_ = hydrateBodyLabels(issue)
 			return
 		}

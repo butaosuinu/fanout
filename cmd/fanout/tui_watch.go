@@ -455,6 +455,8 @@ func buildWatchParentPlan(projectRoot string, cfg *cliflags.Config, prepared *wa
 		fanset.Union(sameParentFanned, worktreeFallbackFanned, planOwnedFanned),
 		prepared.loaded.ParentBody,
 		func(issue *ghissue.Issue) {
+			// Match run.Issues: a failed hydration degrades blocker checks to
+			// unblocked; the launch plan reports the same cached error as a warning.
 			_ = prepared.hydrateBodyLabels(issue)
 		},
 		func(num int) string {
