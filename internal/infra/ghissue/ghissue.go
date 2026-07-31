@@ -456,8 +456,8 @@ func (r Runner) IssueState(num int) (string, error) {
 // IssuesSnapshotWithPRs fetches issue details and the first 100 closed-by PR
 // refs in aliased GraphQL batches. Only issues whose PR connection has another
 // page fall back to IssueSnapshotWithPRs so the complete PR list is preserved.
-// Per-issue and per-chunk failures are joined while successful sibling results
-// remain available.
+// The returned map contains only fully loaded issues. Per-issue and per-chunk
+// failures are joined while successful sibling results remain available.
 func (r Runner) IssuesSnapshotWithPRs(owner, repo string, nums []int) (map[int]IssueSnapshot, error) {
 	return r.issueSnapshots(owner, repo, nums, true)
 }
@@ -489,6 +489,7 @@ func (r Runner) issueSnapshots(owner, repo string, nums []int, withPRs bool) (ma
 			snapshot, err := r.IssueSnapshotWithPRs(owner, repo, num)
 			if err != nil {
 				loadErr = errors.Join(loadErr, fmt.Errorf("#%d: page closed-by PRs: %w", num, err))
+				delete(snapshots, num)
 				continue
 			}
 			// IssueSnapshotWithPRs owns the complete PR list but its legacy
@@ -596,28 +597,36 @@ func parseIssueDetailsBatch(out []byte, nums []int) (map[int]IssueSnapshot, []in
 
 	aliasErrors := map[string][]string{}
 	var loadErr error
+	globalError := false
 	for _, graphErr := range root.Errors {
 		alias := issueAliasFromPath(graphErr.Path)
 		if alias == "" {
+			globalError = true
 			loadErr = errors.Join(loadErr, fmt.Errorf("gh api graphql issue batch: %s", graphErr.Message))
 			continue
 		}
 		aliasErrors[alias] = append(aliasErrors[alias], graphErr.Message)
+	}
+	if globalError {
+		return map[int]IssueSnapshot{}, nil, loadErr
 	}
 
 	snapshots := make(map[int]IssueSnapshot, len(nums))
 	fallback := []int{}
 	for _, num := range nums {
 		alias := "issue_" + strconv.Itoa(num)
+		messages := aliasErrors[alias]
+		for _, message := range messages {
+			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: graphql: %s", num, message))
+		}
 		node := root.Data.Repository[alias]
 		if node == nil {
-			messages := aliasErrors[alias]
 			if len(messages) == 0 {
 				loadErr = errors.Join(loadErr, fmt.Errorf("#%d: issue not found in batch response", num))
 			}
-			for _, message := range messages {
-				loadErr = errors.Join(loadErr, fmt.Errorf("#%d: graphql: %s", num, message))
-			}
+			continue
+		}
+		if len(messages) > 0 {
 			continue
 		}
 
@@ -639,9 +648,6 @@ func parseIssueDetailsBatch(out []byte, nums []int) (map[int]IssueSnapshot, []in
 		}
 		if node.Refs.PageInfo.HasNextPage {
 			fallback = append(fallback, num)
-		}
-		for _, message := range aliasErrors[alias] {
-			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: graphql: %s", num, message))
 		}
 	}
 	return snapshots, fallback, loadErr
