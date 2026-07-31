@@ -220,10 +220,10 @@ func (r Runner) IssueDetail(num int) (Issue, error) {
 // GraphQL request.
 const issueDetailsBatchSize = 50
 
-// IssueDetails fetches full issue rows in aliased GraphQL batches. It projects
-// IssuesSnapshotWithPRs for clients that only need issue fields.
+// IssueDetails fetches full issue rows in aliased GraphQL batches. It omits
+// closing PRs so body hydration does not pay for or depend on unused PR data.
 func (r Runner) IssueDetails(nums []int) (map[int]Issue, error) {
-	snapshots, err := r.IssuesSnapshotWithPRs("{owner}", "{repo}", nums)
+	snapshots, err := r.issueSnapshots("{owner}", "{repo}", nums, false)
 	issues := make(map[int]Issue, len(snapshots))
 	for num, snapshot := range snapshots {
 		issues[num] = Issue{
@@ -459,6 +459,10 @@ func (r Runner) IssueState(num int) (string, error) {
 // Per-issue and per-chunk failures are joined while successful sibling results
 // remain available.
 func (r Runner) IssuesSnapshotWithPRs(owner, repo string, nums []int) (map[int]IssueSnapshot, error) {
+	return r.issueSnapshots(owner, repo, nums, true)
+}
+
+func (r Runner) issueSnapshots(owner, repo string, nums []int, withPRs bool) (map[int]IssueSnapshot, error) {
 	unique, inputErr := uniquePositiveIssueNumbers(nums)
 	snapshots := make(map[int]IssueSnapshot, len(unique))
 	loadErr := inputErr
@@ -469,7 +473,7 @@ func (r Runner) IssuesSnapshotWithPRs(owner, repo string, nums []int) (map[int]I
 			"api", "graphql",
 			"-F", "owner="+owner,
 			"-F", "repo="+repo,
-			"-f", "query="+issueDetailsQuery(chunk),
+			"-f", "query="+issueDetailsQuery(chunk, withPRs),
 		)
 		if err != nil {
 			for _, num := range chunk {
@@ -517,13 +521,15 @@ func uniquePositiveIssueNumbers(nums []int) ([]int, error) {
 	return unique, inputErr
 }
 
-func issueDetailsQuery(nums []int) string {
-	const issueFields = ` {
+func issueDetailsQuery(nums []int, withPRs bool) string {
+	issueFields := ` {
       number
       title
       state
       body
-      labels(first: 100) { nodes { name } }
+      labels(first: 100) { nodes { name } }`
+	if withPRs {
+		issueFields += `
       closedByPullRequestsReferences(first: 100) {
         pageInfo { hasNextPage endCursor }
         nodes {
@@ -540,7 +546,9 @@ func issueDetailsQuery(nums []int) string {
             }
           }
         }
-      }
+      }`
+	}
+	issueFields += `
     }`
 	fields := make([]string, 0, len(nums))
 	for _, num := range nums {

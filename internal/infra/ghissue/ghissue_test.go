@@ -303,10 +303,13 @@ esac
 	if calls := strings.Count(string(data), "api graphql"); calls != 2 {
 		t.Fatalf("IssueDetails() made %d gh calls, want 2:\n%s", calls, data)
 	}
-	for _, field := range []string{"title", "body", "labels(first: 100)", "closedByPullRequestsReferences(first: 100)"} {
+	for _, field := range []string{"title", "body", "labels(first: 100)"} {
 		if !strings.Contains(string(data), field) {
 			t.Fatalf("IssueDetails() query missing %q:\n%s", field, data)
 		}
+	}
+	if strings.Contains(string(data), "closedByPullRequestsReferences") {
+		t.Fatalf("IssueDetails() fetched unused closing PRs:\n%s", data)
 	}
 }
 
@@ -378,6 +381,9 @@ esac
 	}
 	if !strings.Contains(string(data), "-F after=C1") {
 		t.Fatalf("IssuesSnapshotWithPRs() did not page the fallback:\n%s", data)
+	}
+	if !strings.Contains(string(data), "closedByPullRequestsReferences(first: 100)") {
+		t.Fatalf("IssuesSnapshotWithPRs() batch query omitted closing PRs:\n%s", data)
 	}
 }
 
