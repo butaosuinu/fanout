@@ -28,6 +28,28 @@ func Output(dir string, extraEnv []string, name string, args ...string) ([]byte,
 	return capture(cmd, name, args)
 }
 
+// OutputExitCode is Output with the process exit code returned separately.
+// Successful commands return 0. An exec.ExitError retains Output's error
+// formatting; failures that did not start or wait for a process return -1.
+func OutputExitCode(dir string, extraEnv []string, name string, args ...string) ([]byte, int, error) {
+	cmd := exec.Command(name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
+	out, err := cmd.Output()
+	if err == nil {
+		return out, 0, nil
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return out, ee.ExitCode(), fmt.Errorf("%s %s: %s", name, strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
+	}
+	return out, -1, err
+}
+
 // OutputStdin is Output with stdin attached; it shares the same exec.ExitError
 // formatting.
 func OutputStdin(dir, stdin, name string, args ...string) ([]byte, error) {

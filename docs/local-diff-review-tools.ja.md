@@ -285,6 +285,49 @@ HTML fragment として解釈しない。
 `binary` または `tooLarge` だけで省略した場合は `false` のままとし、
 `files[].omittedReason` で欠落を示す。
 
+#### #577 の v1 収集方式
+
+#577 の `gitstat.WorktreePatch` は strict に解決した `mergeBaseSHA` を基準に、
+live worktree から read-only の Git command で差分を収集する。
+tracked file の統計と path は
+`git diff --numstat -z <mergeBaseSHA> --`、patch は file ごとの
+`git diff <mergeBaseSHA> -- <path>` から得る。
+どちらも `--ignore-submodules=none` を指定し、
+repository または user の `diff.ignoreSubmodules` で gitlink を隠さない。
+gitlink patch は `--submodule=short` で形式を固定する。
+untracked file は `git ls-files --others --exclude-standard -z` で列挙し、
+`/dev/null` に対する file ごとの `git diff --no-index` で統計と patch を得る。
+index から削除した tracked path と同名の untracked file は 1 file に統合する。
+同じ file type の replacement は merge-base blob を repository 外の一時 file に置き、
+final worktree side との `git diff --no-index` から単一 patch block を得る。
+一時 directory は canonical worktree の parent に sibling として作り、
+`TMPDIR` は使わない。
+file type が変わる replacement は削除、追加の 2 block を 1 file group とする。
+この一時 file は immutable な merge-base side だけを保持し、
+worktree または index の snapshot isolation は #593 に委譲する。
+tracked path に `SKIP_WORKTREE` または `assume-unchanged` が設定されている場合は、
+worktree entry の有無にかかわらず live index の stage 0 blob size を
+content の読み出し前に検査し、この index side を patch に使う。
+skip-worktree/sparse-directory entry の immutable な最終 side の生成は #593 に委譲する。
+`--no-index` の exit status は `0` と「差分あり」の `1` を成功とする。
+`--numstat` の additions と deletions がともに `-` の file は binary と判定する。
+tracked と untracked の各 file は path 順に並べる。
+いずれかの side が 256 KiB(262,144 bytes)を超える file と binary file は
+`files` に残し、patch から省略する。
+
+#577 の `gitstat` 層は 10 秒、500 files、10 MiB 収集、1 MiB response、
+32 MiB 累積 budget と `collectionLimit`/`responseLimit` を実装しない。
+これらの request-wide 上限と省略処理は #578 の endpoint が担う。
+
+#### #593 に委譲する snapshot isolation
+
+以下は #593 が `gitstat.WorktreePatch` の snapshot isolation を強化する際の
+目標状態であり、
+#577 の v1 acceptance criteria には含めない。
+private index、NUL probe、収集後の再検証、live worktree を入力にしない patch
+生成と repository-wide `--numstat` の廃止は #593 で実装する。
+#593 は前節の wire contract と上限値を変えずに導入する。
+
 一致した snapshot 行の `WorktreePath` はそのまま信用しない。
 server project root と path を symlink 解決して canonicalize し、project root
 から取得した `git worktree list --porcelain -z` に exact top-level として
@@ -366,7 +409,7 @@ parse できない config も 502 にする。
 検査に使った common/worktree config は immutable snapshot とし、
 repository-facing Git command は live config を再読込せず同じ snapshot だけを
 使う。
-固定方法は #577/#578 に委譲する。
+固定方法は #593 に委譲する。
 repository object format は同じ immutable config snapshot に固定する。
 `sha1` だけを許可し、`sha256` と不明な format は object 読み出しと patch 生成の
 前に 502 にする。
@@ -442,7 +485,7 @@ macOS 以外ではこの config 値にかかわらず path の byte identity を
 worktree に path がないことを削除として扱わない。
 immutable index の content を最終 side に使うか、安全に判定できなければ 502 に
 する。
-選択は #577/#578 に委譲する。
+選択は #593 に委譲する。
 server 起動時に複製した system/global excludes、worktree 内の `.gitignore`、
 verified common dir の `info/exclude` は Git の precedence で適用する。
 後者 2 source は no-follow と 256 KiB 上限で private snapshot に複製する。
@@ -450,7 +493,7 @@ verified common dir の `info/exclude` は Git の precedence で適用する。
 path を列挙結果へ出さず、metadata 出力上限と対象 file 数に含めない。
 `core.ignoreCase=true` では同じ Git-compatible な case-fold をすべての ignore
 source の pattern 照合にも適用する。
-prune の実装方式は #577/#578 に委譲する。
+prune の実装方式は #593 に委譲する。
 検証済み worktree root の `.git` entry は entry 自体だけを開かずに prune する。
 descendant directory に `.git` entry がある場合は、同じ directory の他 entry を
 収集する前に immutable な merge-base/index manifest と突合し、marker が nested
@@ -516,7 +559,7 @@ commit pointer を content identity とし、filter、改行、encoding、`ident
 additions/deletions、synthetic object ID の共通入力にする。
 変換を安全に再現できない場合は binary 判定と object ID 計算の前に 502 とし、
 raw byte pair を成功 response に使わない。
-再現と fail closed の選択は #577/#578 に委譲する。
+再現と fail closed の選択は #593 に委譲する。
 
 tracked と untracked の patch は確定した snapshot から file ごとに生成する。
 Git を diff engine に使う場合は repository の外にある request-private
@@ -592,10 +635,12 @@ complete patch block も UTF-8 validity を検査し、不正なら該当 file �
 Git のエラー出力が UTF-8 として不正な場合は、byte 列を置換せず固定の
 `git command failed` message を返す。
 
+#### #578 の request-wide 上限
+
 1 request の diff 収集には共有の 10 秒 deadline を設定する。
-各 subprocess で 10 秒を取り直さず、worktree 検証、private snapshot の収集と
-確定、non-Git の stat/raw read、metadata 収集、patch 生成のすべてで残り時間を
-使う。
+各 subprocess で 10 秒を取り直さず、worktree 検証、non-Git の stat/raw read、
+metadata 収集、patch 生成のすべてで残り時間を使う。
+#593 の private snapshot を導入した後は、その収集と確定にも同じ残り時間を使う。
 binary probe は 8000 bytes/side、変換出力と diff engine 用の regular-file read は
 256 KiB/side を超えない。
 1 request で raw side の読み出しと canonical side の変換出力に使う累積 byte
@@ -611,7 +656,7 @@ process group を停止して 502 にし、buffer も 10 MiB + 1 byte を超え�
 
 tracked と untracked を合わせた対象数は 500 files を上限とする。
 merge-base tree と index の raw metadata entry 数にはこの上限を適用しない。
-raw metadata は共有 deadline と #577/#578 で決める内部 byte 上限の範囲で最後まで
+raw metadata は共有 deadline と #578 で決める内部 byte 上限の範囲で最後まで
 join する。
 ignore、nested repository の prune、mode と canonical content の比較を終え、
 成功 response の `files` に残る変更 path が 501 件になった時点で 502 にする。
@@ -651,7 +696,9 @@ review 対象が patch に揃っていないことを警告する。
 10 秒、500 files、10 MiB、1 MiB、256 KiB、32 MiB は初期値である。
 #578 の実装で調整する場合は同じ PR で本書、handler test、MSW fixture を更新し、
 実装と wire contract を一致させる。
-同じ test で、未初期化の submodule は gitlink 変更を含め、初期化済みの
+
+#593 は次の snapshot isolation test を追加する。
+#593 の test では、未初期化の submodule は gitlink 変更を含め、初期化済みの
 submodule は nested `HEAD` の変更有無にかかわらず 502 になることを固定する。
 未初期化 submodule の path が欠落または空 directory の場合は index pointer を
 使い、空 directory に entry または `.git` marker が現れた場合は 502 にする。
@@ -787,7 +834,9 @@ contract には含めない。
 ### 実装委譲事項
 
 #576 は HTTP request/response の意味論、上限、エラーと dashboard の決定を固定する。
-次の実装方式と内部上限は #577/#578 で決める。
+#577 は前述の v1 収集方式と file ごとの 256 KiB 上限を実装する。
+#578 は request-wide 上限、response への省略処理、handler と dashboard を実装する。
+#593 は次の snapshot isolation と内部の強化を実装する。
 
 - `GIT_INDEX_FILE` などで複製 index を live index から分離して読み出す方法
 - common/worktree config の immutable snapshot、fingerprint、Git command への固定
@@ -810,7 +859,7 @@ contract には含めない。
 - request-private temporary directory を全終了経路で削除する方法
 - admin/metadata file の総 byte 数、source 数、file type の内部上限
 
-#577/#578 の実装判断が本書と食い違う場合は、同じ PR で本書、handler test、
+#577/#578/#593 の実装判断が本書と食い違う場合は、同じ PR で本書、handler test、
 MSW fixture を更新して wire contract と実装を一致させる。
 
 ### レビューコメントの将来計画

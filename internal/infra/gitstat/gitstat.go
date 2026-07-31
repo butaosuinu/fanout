@@ -2,13 +2,21 @@
 package gitstat
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/butaosuinu/fanout/internal/infra/execx"
 )
+
+const patchFileLimit = 256 * 1024
 
 var (
 	insertionRE = regexp.MustCompile(`(\d+)\s+insertions?\(\+\)`)
@@ -20,6 +28,23 @@ type Stat struct {
 	Additions int
 	Deletions int
 	Dirty     bool
+}
+
+// FileStat describes one changed file in a review patch.
+type FileStat struct {
+	Path          string
+	Additions     int
+	Deletions     int
+	Binary        bool
+	PatchIncluded bool
+	OmittedReason string
+}
+
+// Patch is a merge-base-relative worktree patch and its complete file list.
+type Patch struct {
+	MergeBase string
+	Patch     string
+	Files     []FileStat
 }
 
 // Runner shells out to git. Cwd is optional and only affects process startup;
@@ -52,11 +77,706 @@ func (r Runner) Worktree(path, baseRef string) (Stat, error) {
 	return stat, nil
 }
 
+// WorktreePatch returns the committed, staged, unstaged, and untracked changes
+// since the strict merge-base with baseRef. Binary files and files larger than
+// 256 KiB remain in Files but are omitted from Patch.
+func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
+	path, err := r.resolveWorktreePath(path)
+	if err != nil {
+		return Patch{}, err
+	}
+	mergeBase, err := r.MergeBase(path, baseRef)
+	if err != nil {
+		return Patch{}, err
+	}
+
+	trackedOut, err := r.git(
+		"-C", path,
+		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+		"--ignore-submodules=none",
+		"--numstat", "-z", mergeBase, "--",
+	)
+	if err != nil {
+		return Patch{}, err
+	}
+	tracked, err := parseNumStat(trackedOut)
+	if err != nil {
+		return Patch{}, fmt.Errorf("parse tracked numstat: %w", err)
+	}
+
+	files := make([]patchFile, 0, len(tracked))
+	trackedByPath := make(map[string]int, len(tracked))
+	for _, stat := range tracked {
+		trackedByPath[stat.Path] = len(files)
+		files = append(files, patchFile{FileStat: stat, tracked: true})
+	}
+
+	untrackedOut, err := r.git("-C", path, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return Patch{}, err
+	}
+	untracked, err := parseNULPaths(untrackedOut)
+	if err != nil {
+		return Patch{}, fmt.Errorf("parse untracked paths: %w", err)
+	}
+	for _, rel := range untracked {
+		stat, statErr := r.untrackedFileStat(path, rel)
+		if statErr != nil {
+			return Patch{}, statErr
+		}
+		if index, ok := trackedByPath[rel]; ok {
+			files[index].replacement = &stat
+			continue
+		}
+		files = append(files, patchFile{FileStat: stat})
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path < files[j].Path
+	})
+
+	result := Patch{
+		MergeBase: mergeBase,
+		Files:     make([]FileStat, 0, len(files)),
+	}
+	var patch strings.Builder
+	for _, file := range files {
+		stat := file.FileStat
+		if file.replacement != nil {
+			stat.Additions = 0
+			stat.Deletions = 0
+			switch {
+			case stat.OmittedReason == "tooLarge" ||
+				file.replacement.OmittedReason == "tooLarge":
+				stat.Binary = false
+				stat.OmittedReason = "tooLarge"
+			case stat.Binary || file.replacement.Binary:
+				stat.Binary = true
+				stat.OmittedReason = "binary"
+			default:
+				stat.OmittedReason = ""
+			}
+		}
+		if stat.OmittedReason == "" ||
+			(file.tracked && stat.OmittedReason == "binary") {
+			tooLarge, sizeErr := r.patchFileTooLarge(path, mergeBase, file)
+			if sizeErr != nil {
+				return Patch{}, sizeErr
+			}
+			if tooLarge {
+				stat.Additions = 0
+				stat.Deletions = 0
+				stat.Binary = false
+				stat.OmittedReason = "tooLarge"
+			}
+		}
+		if file.replacement != nil && stat.OmittedReason == "binary" {
+			_, _, changed, replacementErr := r.replacementPatch(path, mergeBase, file)
+			if replacementErr != nil {
+				return Patch{}, replacementErr
+			}
+			if !changed {
+				continue
+			}
+		}
+		if stat.OmittedReason == "" {
+			var out []byte
+			switch {
+			case file.replacement != nil:
+				var replacementStat FileStat
+				var changed bool
+				out, replacementStat, changed, err = r.replacementPatch(path, mergeBase, file)
+				if err != nil {
+					return Patch{}, err
+				}
+				if !changed {
+					continue
+				}
+				stat.Additions = replacementStat.Additions
+				stat.Deletions = replacementStat.Deletions
+				stat.Binary = replacementStat.Binary
+				stat.OmittedReason = replacementStat.OmittedReason
+			case file.tracked:
+				out, err = r.trackedPathPatch(path, mergeBase, stat.Path)
+			default:
+				var code int
+				out, code, err = r.gitExitCode(
+					"-C", path,
+					"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+					"--no-index", "--", "/dev/null", stat.Path,
+				)
+				if code == 1 {
+					err = nil
+				}
+			}
+			if err != nil {
+				return Patch{}, err
+			}
+			if stat.OmittedReason == "" {
+				patch.WriteString(string(out))
+				stat.PatchIncluded = true
+			}
+		}
+		result.Files = append(result.Files, stat)
+	}
+	result.Patch = patch.String()
+	return result, nil
+}
+
+func (r Runner) resolveWorktreePath(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("worktree path is empty")
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
+	}
+
+	base := r.Cwd
+	if base == "" {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return "", fmt.Errorf("resolve worktree path %q: %w", path, err)
+		}
+		return absolute, nil
+	}
+	if !filepath.IsAbs(base) {
+		absolute, err := filepath.Abs(base)
+		if err != nil {
+			return "", fmt.Errorf("resolve runner cwd %q: %w", base, err)
+		}
+		base = absolute
+	}
+	return filepath.Clean(filepath.Join(base, path)), nil
+}
+
+type patchFile struct {
+	FileStat
+	tracked     bool
+	replacement *FileStat
+}
+
+func (r Runner) untrackedFileStat(path, rel string) (FileStat, error) {
+	fullPath, err := containedPath(path, rel)
+	if err != nil {
+		return FileStat{}, err
+	}
+	info, err := os.Lstat(fullPath)
+	if err != nil {
+		return FileStat{}, fmt.Errorf("inspect untracked file %q: %w", rel, err)
+	}
+	if !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
+		return FileStat{}, fmt.Errorf("untracked path %q is not a regular file or symlink", rel)
+	}
+	if info.Size() > patchFileLimit {
+		return FileStat{Path: rel, OmittedReason: "tooLarge"}, nil
+	}
+
+	out, code, err := r.gitExitCode(
+		"-C", path,
+		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+		"--no-index", "--numstat", "-z", "--", "/dev/null", rel,
+	)
+	if code == 1 {
+		err = nil
+	}
+	if err != nil {
+		return FileStat{}, err
+	}
+	stats, err := parseNumStat(out)
+	if err != nil {
+		return FileStat{}, fmt.Errorf("parse untracked numstat for %q: %w", rel, err)
+	}
+	if len(stats) != 1 {
+		return FileStat{}, fmt.Errorf("parse untracked numstat for %q: got %d files, want 1", rel, len(stats))
+	}
+	stat := stats[0]
+	stat.Path = rel
+	if stat.Binary {
+		stat.OmittedReason = "binary"
+	}
+	return stat, nil
+}
+
+func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (bool, error) {
+	if !file.tracked {
+		return file.OmittedReason == "tooLarge", nil
+	}
+
+	inIndex, err := r.pathInIndex(path, file.Path)
+	if err != nil {
+		return false, fmt.Errorf("inspect tracked index entry %q: %w", file.Path, err)
+	}
+	if inIndex {
+		hidden, tooLarge, indexErr := r.hiddenIndexFileTooLarge(path, file.Path)
+		if indexErr != nil {
+			return false, fmt.Errorf("inspect hidden index entry %q: %w", file.Path, indexErr)
+		}
+		if hidden {
+			if tooLarge {
+				return true, nil
+			}
+		} else {
+			info, statErr := lstatContained(path, file.Path)
+			if statErr != nil {
+				return false, fmt.Errorf("inspect tracked file %q: %w", file.Path, statErr)
+			}
+			if info != nil &&
+				(info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0) &&
+				info.Size() > patchFileLimit {
+				return true, nil
+			}
+		}
+	}
+
+	out, err := r.git("-C", path, "ls-tree", "-l", "-z", mergeBase, "--", file.Path)
+	if err != nil {
+		return false, err
+	}
+	if len(out) == 0 {
+		return false, nil
+	}
+	metadata, _, found := bytes.Cut(out, []byte{'\t'})
+	if !found {
+		return false, fmt.Errorf("parse base file size for %q: missing path separator", file.Path)
+	}
+	fields := strings.Fields(string(metadata))
+	if len(fields) != 4 {
+		return false, fmt.Errorf("parse base file size for %q: malformed ls-tree output", file.Path)
+	}
+	if fields[3] == "-" {
+		return false, nil
+	}
+	size, err := strconv.ParseInt(fields[3], 10, 64)
+	if err != nil {
+		return false, fmt.Errorf("parse base file size for %q: %w", file.Path, err)
+	}
+	return size > patchFileLimit, nil
+}
+
+type treeEntry struct {
+	mode       string
+	objectType string
+	oid        string
+}
+
+func (r Runner) replacementPatch(
+	path, mergeBase string,
+	file patchFile,
+) ([]byte, FileStat, bool, error) {
+	entry, err := r.mergeBaseTreeEntry(path, mergeBase, file.Path)
+	if err != nil {
+		return nil, FileStat{}, false, err
+	}
+	info, err := lstatContained(path, file.Path)
+	if err != nil {
+		return nil, FileStat{}, false, err
+	}
+	if info == nil {
+		return nil, FileStat{}, false, fmt.Errorf("inspect replacement %q: missing final side", file.Path)
+	}
+	currentMode, err := worktreeGitMode(info)
+	if err != nil {
+		return nil, FileStat{}, false, fmt.Errorf("inspect replacement %q: %w", file.Path, err)
+	}
+
+	if entry.mode[:2] != currentMode[:2] {
+		deleted, deleteErr := r.trackedPathPatch(path, mergeBase, file.Path)
+		if deleteErr != nil {
+			return nil, FileStat{}, false, deleteErr
+		}
+		added, code, addErr := r.gitExitCode(
+			"-C", path,
+			"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+			"--no-index", "--", "/dev/null", file.Path,
+		)
+		if code == 1 {
+			addErr = nil
+		}
+		if addErr != nil {
+			return nil, FileStat{}, false, addErr
+		}
+		stat := FileStat{
+			Path:      file.Path,
+			Additions: file.Additions + file.replacement.Additions,
+			Deletions: file.Deletions + file.replacement.Deletions,
+		}
+		return append(deleted, added...), stat, true, nil
+	}
+
+	tempDir, err := replacementTempDir(path)
+	if err != nil {
+		return nil, FileStat{}, false, fmt.Errorf("create replacement temp directory: %w", err)
+	}
+	defer func() {
+		// The request-private base file is best-effort cleanup after every return path.
+		_ = os.RemoveAll(tempDir)
+	}()
+
+	relPath := filepath.FromSlash(file.Path)
+	baseArg := filepath.Join("a", relPath)
+	finalArg := filepath.Join("b", relPath)
+	basePath := filepath.Join(tempDir, baseArg)
+	if mkdirErr := os.MkdirAll(filepath.Dir(basePath), 0o700); mkdirErr != nil {
+		return nil, FileStat{}, false, fmt.Errorf("create replacement base directory: %w", mkdirErr)
+	}
+	if materializeErr := r.materializeTreeEntry(path, entry, basePath); materializeErr != nil {
+		return nil, FileStat{}, false, materializeErr
+	}
+	if linkErr := os.Symlink(path, filepath.Join(tempDir, "b")); linkErr != nil {
+		return nil, FileStat{}, false, fmt.Errorf("link replacement final side: %w", linkErr)
+	}
+
+	out, code, err := replacementDiff(tempDir, false, baseArg, finalArg)
+	changed := code == 1
+	if changed {
+		err = nil
+	}
+	if err != nil {
+		return nil, FileStat{}, false, err
+	}
+	if !changed {
+		return nil, FileStat{}, false, nil
+	}
+
+	numstatOut, code, err := replacementDiff(tempDir, true, baseArg, finalArg)
+	if code == 1 {
+		err = nil
+	}
+	if err != nil {
+		return nil, FileStat{}, false, err
+	}
+	stats, err := parseNumStat(numstatOut)
+	if err != nil {
+		return nil, FileStat{}, false, fmt.Errorf("parse replacement numstat for %q: %w", file.Path, err)
+	}
+	if len(stats) != 1 {
+		return nil, FileStat{}, false, fmt.Errorf(
+			"parse replacement numstat for %q: got %d files, want 1",
+			file.Path,
+			len(stats),
+		)
+	}
+	stat := stats[0]
+	stat.Path = file.Path
+	return out, stat, true, nil
+}
+
+func (r Runner) trackedPathPatch(path, mergeBase, rel string) ([]byte, error) {
+	return r.gitExactPath(
+		rel,
+		"-C", path,
+		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+		"--ignore-submodules=none", "--submodule=short",
+		mergeBase,
+	)
+}
+
+func replacementDiff(cwd string, numstat bool, oldPath, newPath string) ([]byte, int, error) {
+	args := []string{
+		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+		"--no-index", "--src-prefix=", "--dst-prefix=",
+	}
+	if numstat {
+		args = append(args, "--numstat", "-z")
+	}
+	args = append(args, "--", oldPath, newPath)
+	return execx.OutputExitCode(cwd, gitEnv(), "git", args...)
+}
+
+func (r Runner) mergeBaseTreeEntry(path, mergeBase, rel string) (treeEntry, error) {
+	out, err := r.git("-C", path, "ls-tree", "-z", mergeBase, "--", rel)
+	if err != nil {
+		return treeEntry{}, err
+	}
+	records, err := splitNUL(out)
+	if err != nil {
+		return treeEntry{}, fmt.Errorf("parse base entry for %q: %w", rel, err)
+	}
+	if len(records) != 1 {
+		return treeEntry{}, fmt.Errorf("parse base entry for %q: got %d entries, want 1", rel, len(records))
+	}
+	metadata, entryPath, found := bytes.Cut(records[0], []byte{'\t'})
+	if !found || string(entryPath) != rel {
+		return treeEntry{}, fmt.Errorf("parse base entry for %q: path mismatch", rel)
+	}
+	fields := strings.Fields(string(metadata))
+	if len(fields) != 3 || len(fields[0]) != 6 {
+		return treeEntry{}, fmt.Errorf("parse base entry for %q: malformed ls-tree output", rel)
+	}
+	return treeEntry{
+		mode:       fields[0],
+		objectType: fields[1],
+		oid:        fields[2],
+	}, nil
+}
+
+func (r Runner) materializeTreeEntry(path string, entry treeEntry, target string) error {
+	if entry.objectType != "blob" {
+		return fmt.Errorf("materialize base entry: unsupported object type %q", entry.objectType)
+	}
+	content, err := r.git("-C", path, "cat-file", "blob", entry.oid)
+	if err != nil {
+		return err
+	}
+	if entry.mode == "120000" {
+		if err := os.Symlink(string(content), target); err != nil {
+			return fmt.Errorf("materialize base symlink: %w", err)
+		}
+		return nil
+	}
+	mode := os.FileMode(0o600)
+	if entry.mode == "100755" {
+		mode = 0o700
+	}
+	if err := os.WriteFile(target, content, mode); err != nil {
+		return fmt.Errorf("materialize base file: %w", err)
+	}
+	if err := os.Chmod(target, mode); err != nil {
+		return fmt.Errorf("set materialized base mode: %w", err)
+	}
+	return nil
+}
+
+func worktreeGitMode(info os.FileInfo) (string, error) {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "120000", nil
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("unsupported final-side mode %s", info.Mode())
+	}
+	if info.Mode().Perm()&0o111 != 0 {
+		return "100755", nil
+	}
+	return "100644", nil
+}
+
+func (r Runner) pathInIndex(path, rel string) (bool, error) {
+	out, err := r.gitExactPath(rel, "-C", path, "ls-files", "--stage", "-z")
+	if err != nil {
+		return false, err
+	}
+	return len(out) > 0, nil
+}
+
+func (r Runner) hiddenIndexFileTooLarge(path, rel string) (bool, bool, error) {
+	out, err := r.gitExactPath(rel, "-C", path, "ls-files", "-v", "--stage", "-z")
+	if err != nil {
+		return false, false, err
+	}
+	records, err := splitNUL(out)
+	if err != nil {
+		return false, false, fmt.Errorf("parse index entry: %w", err)
+	}
+	if len(records) == 0 {
+		return false, false, nil
+	}
+	if len(records) != 1 || len(records[0]) < 3 || records[0][1] != ' ' {
+		return false, false, fmt.Errorf("parse index entry: malformed output")
+	}
+	switch records[0][0] {
+	case 'S', 's', 'h':
+	default:
+		return false, false, nil
+	}
+
+	metadata, entryPath, found := bytes.Cut(records[0][2:], []byte{'\t'})
+	fields := strings.Fields(string(metadata))
+	if !found || string(entryPath) != rel || len(fields) != 3 || fields[2] != "0" {
+		return false, false, fmt.Errorf("parse index entry: malformed stage 0 output")
+	}
+	switch fields[0] {
+	case "100644", "100755", "120000":
+	case "160000":
+		return true, false, nil
+	default:
+		return false, false, fmt.Errorf("unsupported hidden index mode %q", fields[0])
+	}
+	out, err = r.git("-C", path, "cat-file", "-s", fields[1])
+	if err != nil {
+		return false, false, err
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		return false, false, fmt.Errorf("parse hidden index size: %w", err)
+	}
+	return true, size > patchFileLimit, nil
+}
+
+func replacementTempDir(worktree string) (string, error) {
+	worktreeRoot, err := filepath.Abs(worktree)
+	if err != nil {
+		return "", fmt.Errorf("resolve worktree: %w", err)
+	}
+	worktreeRoot, err = filepath.EvalSymlinks(worktreeRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve worktree symlinks: %w", err)
+	}
+
+	tempRoot := filepath.Dir(worktreeRoot)
+	inside, err := pathWithin(worktreeRoot, tempRoot)
+	if err != nil {
+		return "", fmt.Errorf("compare replacement temporary root: %w", err)
+	}
+	if inside {
+		return "", fmt.Errorf("replacement temporary root %q is inside worktree", tempRoot)
+	}
+	tempDir, err := os.MkdirTemp(tempRoot, "fanout-gitstat-")
+	if err != nil {
+		return "", err
+	}
+	tempPath, err := filepath.EvalSymlinks(tempDir)
+	if err != nil {
+		_ = os.RemoveAll(tempDir)
+		return "", fmt.Errorf("resolve replacement temporary directory: %w", err)
+	}
+	inside, err = pathWithin(worktreeRoot, tempPath)
+	if err != nil || inside {
+		_ = os.RemoveAll(tempDir)
+		if err != nil {
+			return "", fmt.Errorf("validate replacement temporary directory: %w", err)
+		}
+		return "", fmt.Errorf("replacement temporary directory %q is inside worktree", tempPath)
+	}
+	return tempPath, nil
+}
+
+func pathWithin(root, path string) (bool, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false, err
+	}
+	return rel == "." ||
+		(rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))), nil
+}
+
+func containedPath(root, rel string) (string, error) {
+	relPath := filepath.FromSlash(rel)
+	if rel == "" || filepath.IsAbs(relPath) {
+		return "", fmt.Errorf("invalid repository-relative path %q", rel)
+	}
+	clean := filepath.Clean(relPath)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("repository-relative path escapes worktree: %q", rel)
+	}
+	return filepath.Join(root, clean), nil
+}
+
+func lstatContained(root, rel string) (os.FileInfo, error) {
+	fullPath, err := containedPath(root, rel)
+	if err != nil {
+		return nil, err
+	}
+	relPath, err := filepath.Rel(root, fullPath)
+	if err != nil {
+		return nil, err
+	}
+
+	current := root
+	parts := strings.Split(relPath, string(filepath.Separator))
+	for i, part := range parts {
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			if os.IsNotExist(statErr) || errors.Is(statErr, syscall.ENOTDIR) {
+				return nil, nil
+			}
+			return nil, statErr
+		}
+		if i < len(parts)-1 && info.Mode()&os.ModeSymlink != 0 {
+			return nil, nil
+		}
+		if i == len(parts)-1 {
+			return info, nil
+		}
+	}
+	return nil, nil
+}
+
+func parseNumStat(out []byte) ([]FileStat, error) {
+	records, err := splitNUL(out)
+	if err != nil {
+		return nil, err
+	}
+	stats := make([]FileStat, 0, len(records))
+	for i := 0; i < len(records); i++ {
+		fields := bytes.SplitN(records[i], []byte{'\t'}, 3)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("malformed numstat record")
+		}
+		path := fields[2]
+		if len(path) == 0 {
+			if i+2 >= len(records) {
+				return nil, fmt.Errorf("malformed rename numstat record")
+			}
+			path = records[i+2]
+			i += 2
+		}
+
+		additions, addBinary, err := parseNumStatCount(fields[0])
+		if err != nil {
+			return nil, err
+		}
+		deletions, deleteBinary, err := parseNumStatCount(fields[1])
+		if err != nil {
+			return nil, err
+		}
+		if addBinary != deleteBinary {
+			return nil, fmt.Errorf("numstat binary markers do not match")
+		}
+		stat := FileStat{
+			Path:      string(path),
+			Additions: additions,
+			Deletions: deletions,
+			Binary:    addBinary,
+		}
+		if stat.Binary {
+			stat.OmittedReason = "binary"
+		}
+		stats = append(stats, stat)
+	}
+	return stats, nil
+}
+
+func parseNumStatCount(field []byte) (int, bool, error) {
+	if bytes.Equal(field, []byte("-")) {
+		return 0, true, nil
+	}
+	count, err := strconv.Atoi(string(field))
+	if err != nil {
+		return 0, false, fmt.Errorf("invalid numstat count %q", field)
+	}
+	return count, false, nil
+}
+
+func parseNULPaths(out []byte) ([]string, error) {
+	records, err := splitNUL(out)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(records))
+	for _, record := range records {
+		if len(record) == 0 {
+			return nil, fmt.Errorf("empty path")
+		}
+		paths = append(paths, string(record))
+	}
+	return paths, nil
+}
+
+func splitNUL(out []byte) ([][]byte, error) {
+	if len(out) == 0 {
+		return [][]byte{}, nil
+	}
+	if out[len(out)-1] != 0 {
+		return nil, fmt.Errorf("missing NUL terminator")
+	}
+	return bytes.Split(out[:len(out)-1], []byte{0}), nil
+}
+
 // MergeBase resolves the merge-base of HEAD and baseRef for review. An empty
 // baseRef resolves through origin/HEAD. Unlike diffBase, resolution failures
 // are returned instead of falling back to HEAD.
 func (r Runner) MergeBase(path, baseRef string) (string, error) {
-	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("worktree path is empty")
 	}
@@ -92,8 +812,23 @@ func (r Runner) MergeBase(path, baseRef string) (string, error) {
 		candidates = append(candidates, head)
 	}
 
+	currentRef, err := r.currentBranchRef(path)
+	if err != nil {
+		return "", err
+	}
+
 	var lastErr error
 	for _, candidate := range candidates {
+		if currentRef != "" {
+			isCurrent, currentErr := r.refIsCurrentBranch(path, candidate, currentRef)
+			if currentErr != nil {
+				return "", currentErr
+			}
+			if isCurrent {
+				return "", fmt.Errorf("resolve merge-base for %q: base ref %q is the current branch", baseRef, candidate)
+			}
+		}
+
 		out, err := r.git("-C", path, "rev-parse", "--verify", "--end-of-options", candidate+"^{commit}")
 		if err != nil {
 			lastErr = err
@@ -116,6 +851,52 @@ func (r Runner) MergeBase(path, baseRef string) (string, error) {
 		lastErr = fmt.Errorf("git merge-base %s HEAD returned an empty SHA", candidate)
 	}
 	return "", fmt.Errorf("resolve merge-base for %q: %w", baseRef, lastErr)
+}
+
+func (r Runner) currentBranchRef(path string) (string, error) {
+	out, code, err := r.gitExitCode("-C", path, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil {
+		if code == 1 {
+			return "", nil
+		}
+		return "", fmt.Errorf("resolve current branch: %w", err)
+	}
+	currentRef := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(currentRef, "refs/heads/") {
+		return "", fmt.Errorf("resolve current branch: unexpected ref %q", currentRef)
+	}
+	return currentRef, nil
+}
+
+func (r Runner) refIsCurrentBranch(path, candidate, currentRef string) (bool, error) {
+	if sameBranchRef(candidate, currentRef) {
+		return true, nil
+	}
+
+	out, code, err := r.gitExitCode("-C", path, "symbolic-ref", "--quiet", candidate)
+	if err != nil {
+		if code == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("resolve base symbolic ref %q: %w", candidate, err)
+	}
+	return sameBranchRef(strings.TrimSpace(string(out)), currentRef), nil
+}
+
+func sameBranchRef(candidate, currentRef string) bool {
+	if candidate == currentRef {
+		return true
+	}
+	currentBranch, ok := strings.CutPrefix(currentRef, "refs/heads/")
+	if !ok {
+		return false
+	}
+	remoteRef, ok := strings.CutPrefix(candidate, "refs/remotes/")
+	if !ok {
+		return false
+	}
+	_, remoteBranch, ok := strings.Cut(remoteRef, "/")
+	return ok && remoteBranch == currentBranch
 }
 
 // diffBase resolves the ref the diff is measured against: the merge-base of
@@ -152,10 +933,36 @@ func (r Runner) git(args ...string) ([]byte, error) {
 	return execx.Output(r.Cwd, gitEnv(), "git", args...)
 }
 
+func (r Runner) gitExitCode(args ...string) ([]byte, int, error) {
+	return execx.OutputExitCode(r.Cwd, gitEnv(), "git", args...)
+}
+
+func (r Runner) gitExactPath(path string, args ...string) ([]byte, error) {
+	args = append(
+		args,
+		"--",
+		":(top,literal)"+path,
+		":(top,exclude,glob)"+escapePathspecGlob(path)+"/**",
+	)
+	env := append(gitEnv(), "GIT_LITERAL_PATHSPECS=0")
+	return execx.Output(r.Cwd, env, "git", args...)
+}
+
+func escapePathspecGlob(path string) string {
+	replacer := strings.NewReplacer(
+		"\\", "\\\\",
+		"*", "\\*",
+		"?", "\\?",
+		"[", "\\[",
+		"]", "\\]",
+	)
+	return replacer.Replace(path)
+}
+
 // gitEnv returns the extra environment entries execx.Output appends to
 // os.Environ() for every git invocation.
 func gitEnv() []string {
-	return []string{"LC_ALL=C", "GIT_OPTIONAL_LOCKS=0"}
+	return []string{"LC_ALL=C", "GIT_OPTIONAL_LOCKS=0", "GIT_LITERAL_PATHSPECS=1"}
 }
 
 func parseShortStat(out string) Stat {

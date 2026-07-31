@@ -103,6 +103,62 @@ func TestOutputDirAndExtraEnv(t *testing.T) {
 	}
 }
 
+func TestOutputExitCode(t *testing.T) {
+	tests := []struct {
+		name     string
+		script   string
+		wantOut  string
+		wantCode int
+		wantErr  string
+	}{
+		{
+			name:     "success",
+			script:   "printf 'ok\n'",
+			wantOut:  "ok\n",
+			wantCode: 0,
+		},
+		{
+			name:     "exit error returns stdout and code",
+			script:   "printf 'diff\n'; printf ' changed \n' >&2; exit 1",
+			wantOut:  "diff\n",
+			wantCode: 1,
+			wantErr:  "fakebin --no-index: changed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			installShim(t, "fakebin", tt.script)
+			out, code, err := OutputExitCode("", nil, "fakebin", "--no-index")
+			if string(out) != tt.wantOut {
+				t.Fatalf("OutputExitCode() output = %q, want %q", out, tt.wantOut)
+			}
+			if code != tt.wantCode {
+				t.Fatalf("OutputExitCode() code = %d, want %d", code, tt.wantCode)
+			}
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("OutputExitCode() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tt.wantErr {
+				t.Fatalf("OutputExitCode() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestOutputExitCodeNonExitError(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, code, err := OutputExitCode("", nil, "no-such-fanout-binary")
+	if code != -1 {
+		t.Fatalf("OutputExitCode() code = %d, want -1", code)
+	}
+	if !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("OutputExitCode() error = %v, want exec.ErrNotFound", err)
+	}
+}
+
 // TestCombinedErrorFormatting pins the "%w: <trimmed combined output>" format
 // previously private to internal/infra/worktree.
 func TestCombinedErrorFormatting(t *testing.T) {
