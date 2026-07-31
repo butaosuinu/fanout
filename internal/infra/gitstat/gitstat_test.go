@@ -441,6 +441,35 @@ func TestRunnerWorktreePatchDoesNotFollowParentSymlink(t *testing.T) {
 	}
 }
 
+func TestRunnerWorktreePatchIgnoresUntrackedReplacementForTrackedSize(t *testing.T) {
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	writeGitstatFile(t, repo, ".gitignore", []byte("ignored.txt\n"))
+	writeGitstatFile(t, repo, "ignored.txt", []byte("old\n"))
+	gitTest(t, repo, "add", ".gitignore")
+	gitTest(t, repo, "add", "-f", "ignored.txt")
+	gitTest(t, repo, "commit", "-m", "initial")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	gitTest(t, repo, "rm", "--cached", "ignored.txt")
+	writeGitstatFile(t, repo, "ignored.txt", bytes.Repeat([]byte{'x'}, patchFileLimit+1))
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "ignored.txt",
+		Deletions:     1,
+		PatchIncluded: true,
+	})
+	if !strings.Contains(got.Patch, "-old") {
+		t.Fatalf("WorktreePatch().Patch = %q, want tracked base-side deletion", got.Patch)
+	}
+}
+
 func TestRunnerWorktreePatchOnlyCallsReadOnlyGitSubcommands(t *testing.T) {
 	repo := initPatchRepo(t)
 	writeGitstatFile(t, repo, "tracked.txt", []byte("one\nstaged\n"))

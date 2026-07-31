@@ -257,14 +257,20 @@ func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (bool,
 		return file.OmittedReason == "tooLarge", nil
 	}
 
-	info, err := lstatContained(path, file.Path)
+	inIndex, err := r.pathInIndex(path, file.Path)
 	if err != nil {
-		return false, fmt.Errorf("inspect tracked file %q: %w", file.Path, err)
+		return false, fmt.Errorf("inspect tracked index entry %q: %w", file.Path, err)
 	}
-	if info != nil {
-		if info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-			if info.Size() > patchFileLimit {
-				return true, nil
+	if inIndex {
+		info, statErr := lstatContained(path, file.Path)
+		if statErr != nil {
+			return false, fmt.Errorf("inspect tracked file %q: %w", file.Path, statErr)
+		}
+		if info != nil {
+			if info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+				if info.Size() > patchFileLimit {
+					return true, nil
+				}
 			}
 		}
 	}
@@ -292,6 +298,14 @@ func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (bool,
 		return false, fmt.Errorf("parse base file size for %q: %w", file.Path, err)
 	}
 	return size > patchFileLimit, nil
+}
+
+func (r Runner) pathInIndex(path, rel string) (bool, error) {
+	out, err := r.gitExactPath(rel, "-C", path, "ls-files", "--stage", "-z")
+	if err != nil {
+		return false, err
+	}
+	return len(out) > 0, nil
 }
 
 func containedPath(root, rel string) (string, error) {
