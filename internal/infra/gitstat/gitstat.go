@@ -317,6 +317,14 @@ func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (bool,
 					return true, nil
 				}
 			}
+		} else {
+			tooLarge, indexErr := r.skippedIndexFileTooLarge(path, file.Path)
+			if indexErr != nil {
+				return false, fmt.Errorf("inspect skipped index entry %q: %w", file.Path, indexErr)
+			}
+			if tooLarge {
+				return true, nil
+			}
 		}
 	}
 
@@ -548,6 +556,48 @@ func (r Runner) pathInIndex(path, rel string) (bool, error) {
 		return false, err
 	}
 	return len(out) > 0, nil
+}
+
+func (r Runner) skippedIndexFileTooLarge(path, rel string) (bool, error) {
+	out, err := r.gitExactPath(rel, "-C", path, "ls-files", "-t", "--stage", "-z")
+	if err != nil {
+		return false, err
+	}
+	records, err := splitNUL(out)
+	if err != nil {
+		return false, fmt.Errorf("parse index entry: %w", err)
+	}
+	if len(records) == 0 {
+		return false, nil
+	}
+	if len(records) != 1 || len(records[0]) < 3 || records[0][1] != ' ' {
+		return false, fmt.Errorf("parse index entry: malformed output")
+	}
+	if records[0][0] != 'S' {
+		return false, nil
+	}
+
+	metadata, entryPath, found := bytes.Cut(records[0][2:], []byte{'\t'})
+	fields := strings.Fields(string(metadata))
+	if !found || string(entryPath) != rel || len(fields) != 3 || fields[2] != "0" {
+		return false, fmt.Errorf("parse index entry: malformed stage 0 output")
+	}
+	switch fields[0] {
+	case "100644", "100755", "120000":
+	case "160000":
+		return false, nil
+	default:
+		return false, fmt.Errorf("unsupported skipped index mode %q", fields[0])
+	}
+	out, err = r.git("-C", path, "cat-file", "-s", fields[1])
+	if err != nil {
+		return false, err
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		return false, fmt.Errorf("parse skipped index size: %w", err)
+	}
+	return size > patchFileLimit, nil
 }
 
 func containedPath(root, rel string) (string, error) {
