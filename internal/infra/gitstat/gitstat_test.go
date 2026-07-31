@@ -444,6 +444,91 @@ func TestRunnerWorktreePatchChecksAssumeUnchangedIndexBlobSize(t *testing.T) {
 	}
 }
 
+func TestRunnerWorktreePatchUsesAssumedIndexBlobWhenWorktreeExists(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		indexContent    []byte
+		worktreeContent []byte
+		want            FileStat
+	}{
+		{
+			name:            "oversized index",
+			indexContent:    bytes.Repeat([]byte{'x'}, patchFileLimit+1),
+			worktreeContent: []byte("small\n"),
+			want: FileStat{
+				Path:          "tracked.txt",
+				OmittedReason: "tooLarge",
+			},
+		},
+		{
+			name:            "oversized worktree",
+			indexContent:    []byte("one\ntwo\n"),
+			worktreeContent: bytes.Repeat([]byte{'x'}, patchFileLimit+1),
+			want: FileStat{
+				Path:          "tracked.txt",
+				Additions:     1,
+				PatchIncluded: true,
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initPatchRepo(t)
+			writeGitstatFile(t, repo, "tracked.txt", tt.indexContent)
+			gitTest(t, repo, "add", "tracked.txt")
+			gitTest(t, repo, "commit", "-m", "tracked change")
+			gitTest(t, repo, "update-index", "--assume-unchanged", "tracked.txt")
+			writeGitstatFile(t, repo, "tracked.txt", tt.worktreeContent)
+
+			got, err := Runner{}.WorktreePatch(repo, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertFileStat(t, got.Files, tt.want)
+			if tt.want.PatchIncluded && !strings.Contains(got.Patch, "+two") {
+				t.Fatalf("WorktreePatch().Patch = %q, want index-side content", got.Patch)
+			}
+			if !tt.want.PatchIncluded && got.Patch != "" {
+				t.Fatalf("WorktreePatch().Patch has %d bytes, want oversized index blob omitted", len(got.Patch))
+			}
+		})
+	}
+}
+
+func TestReplacementTempDirStaysOutsideWorktree(t *testing.T) {
+	worktree := t.TempDir()
+	nestedTemp := filepath.Join(worktree, "tmp")
+	if err := os.Mkdir(nestedTemp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", nestedTemp)
+
+	tempDir, err := replacementTempDir(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if removeErr := os.RemoveAll(tempDir); removeErr != nil {
+			t.Errorf("remove replacement temp directory: %v", removeErr)
+		}
+	}()
+
+	worktreeRoot, err := filepath.EvalSymlinks(worktree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempRoot, err := filepath.EvalSymlinks(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside, err := pathWithin(worktreeRoot, tempRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inside {
+		t.Fatalf("replacementTempDir() = %q, want path outside worktree %q", tempRoot, worktreeRoot)
+	}
+}
+
 func TestRunnerWorktreePatchOverridesIgnoreSubmodules(t *testing.T) {
 	repo := t.TempDir()
 	gitTest(t, repo, "init")

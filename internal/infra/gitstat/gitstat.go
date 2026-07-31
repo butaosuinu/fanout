@@ -307,22 +307,22 @@ func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (bool,
 		return false, fmt.Errorf("inspect tracked index entry %q: %w", file.Path, err)
 	}
 	if inIndex {
-		info, statErr := lstatContained(path, file.Path)
-		if statErr != nil {
-			return false, fmt.Errorf("inspect tracked file %q: %w", file.Path, statErr)
+		hidden, tooLarge, indexErr := r.hiddenIndexFileTooLarge(path, file.Path)
+		if indexErr != nil {
+			return false, fmt.Errorf("inspect hidden index entry %q: %w", file.Path, indexErr)
 		}
-		if info != nil {
-			if info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-				if info.Size() > patchFileLimit {
-					return true, nil
-				}
+		if hidden {
+			if tooLarge {
+				return true, nil
 			}
 		} else {
-			tooLarge, indexErr := r.hiddenIndexFileTooLarge(path, file.Path)
-			if indexErr != nil {
-				return false, fmt.Errorf("inspect hidden index entry %q: %w", file.Path, indexErr)
+			info, statErr := lstatContained(path, file.Path)
+			if statErr != nil {
+				return false, fmt.Errorf("inspect tracked file %q: %w", file.Path, statErr)
 			}
-			if tooLarge {
+			if info != nil &&
+				(info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0) &&
+				info.Size() > patchFileLimit {
 				return true, nil
 			}
 		}
@@ -403,7 +403,7 @@ func (r Runner) replacementPatch(
 		return append(deleted, added...), stat, true, nil
 	}
 
-	tempDir, err := os.MkdirTemp("", "fanout-gitstat-")
+	tempDir, err := replacementTempDir(path)
 	if err != nil {
 		return nil, FileStat{}, false, fmt.Errorf("create replacement temp directory: %w", err)
 	}
@@ -558,48 +558,95 @@ func (r Runner) pathInIndex(path, rel string) (bool, error) {
 	return len(out) > 0, nil
 }
 
-func (r Runner) hiddenIndexFileTooLarge(path, rel string) (bool, error) {
+func (r Runner) hiddenIndexFileTooLarge(path, rel string) (bool, bool, error) {
 	out, err := r.gitExactPath(rel, "-C", path, "ls-files", "-v", "--stage", "-z")
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	records, err := splitNUL(out)
 	if err != nil {
-		return false, fmt.Errorf("parse index entry: %w", err)
+		return false, false, fmt.Errorf("parse index entry: %w", err)
 	}
 	if len(records) == 0 {
-		return false, nil
+		return false, false, nil
 	}
 	if len(records) != 1 || len(records[0]) < 3 || records[0][1] != ' ' {
-		return false, fmt.Errorf("parse index entry: malformed output")
+		return false, false, fmt.Errorf("parse index entry: malformed output")
 	}
 	switch records[0][0] {
 	case 'S', 's', 'h':
 	default:
-		return false, nil
+		return false, false, nil
 	}
 
 	metadata, entryPath, found := bytes.Cut(records[0][2:], []byte{'\t'})
 	fields := strings.Fields(string(metadata))
 	if !found || string(entryPath) != rel || len(fields) != 3 || fields[2] != "0" {
-		return false, fmt.Errorf("parse index entry: malformed stage 0 output")
+		return false, false, fmt.Errorf("parse index entry: malformed stage 0 output")
 	}
 	switch fields[0] {
 	case "100644", "100755", "120000":
 	case "160000":
-		return false, nil
+		return true, false, nil
 	default:
-		return false, fmt.Errorf("unsupported hidden index mode %q", fields[0])
+		return false, false, fmt.Errorf("unsupported hidden index mode %q", fields[0])
 	}
 	out, err = r.git("-C", path, "cat-file", "-s", fields[1])
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	size, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
 	if err != nil {
-		return false, fmt.Errorf("parse hidden index size: %w", err)
+		return false, false, fmt.Errorf("parse hidden index size: %w", err)
 	}
-	return size > patchFileLimit, nil
+	return true, size > patchFileLimit, nil
+}
+
+func replacementTempDir(worktree string) (string, error) {
+	worktreeRoot, err := filepath.Abs(worktree)
+	if err != nil {
+		return "", fmt.Errorf("resolve worktree: %w", err)
+	}
+	worktreeRoot, err = filepath.EvalSymlinks(worktreeRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve worktree symlinks: %w", err)
+	}
+
+	tempRoot := filepath.Dir(worktreeRoot)
+	inside, err := pathWithin(worktreeRoot, tempRoot)
+	if err != nil {
+		return "", fmt.Errorf("compare replacement temporary root: %w", err)
+	}
+	if inside {
+		return "", fmt.Errorf("replacement temporary root %q is inside worktree", tempRoot)
+	}
+	tempDir, err := os.MkdirTemp(tempRoot, "fanout-gitstat-")
+	if err != nil {
+		return "", err
+	}
+	tempPath, err := filepath.EvalSymlinks(tempDir)
+	if err != nil {
+		_ = os.RemoveAll(tempDir)
+		return "", fmt.Errorf("resolve replacement temporary directory: %w", err)
+	}
+	inside, err = pathWithin(worktreeRoot, tempPath)
+	if err != nil || inside {
+		_ = os.RemoveAll(tempDir)
+		if err != nil {
+			return "", fmt.Errorf("validate replacement temporary directory: %w", err)
+		}
+		return "", fmt.Errorf("replacement temporary directory %q is inside worktree", tempPath)
+	}
+	return tempPath, nil
+}
+
+func pathWithin(root, path string) (bool, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false, err
+	}
+	return rel == "." ||
+		(rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))), nil
 }
 
 func containedPath(root, rel string) (string, error) {

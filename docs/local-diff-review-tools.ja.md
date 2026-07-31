@@ -300,12 +300,14 @@ untracked file は `git ls-files --others --exclude-standard -z` で列挙し、
 index から削除した tracked path と同名の untracked file は 1 file に統合する。
 同じ file type の replacement は merge-base blob を repository 外の一時 file に置き、
 final worktree side との `git diff --no-index` から単一 patch block を得る。
+一時 directory は canonical worktree の parent に sibling として作り、
+`TMPDIR` は使わない。
 file type が変わる replacement は削除、追加の 2 block を 1 file group とする。
 この一時 file は immutable な merge-base side だけを保持し、
 worktree または index の snapshot isolation は #593 に委譲する。
-worktree entry がない tracked path に `SKIP_WORKTREE` または
-`assume-unchanged` が設定されている場合は、live index の stage 0 blob size を
-content の読み出し前に検査する。
+tracked path に `SKIP_WORKTREE` または `assume-unchanged` が設定されている場合は、
+worktree entry の有無にかかわらず live index の stage 0 blob size を
+content の読み出し前に検査し、この index side を patch に使う。
 skip-worktree/sparse-directory entry の immutable な最終 side の生成は #593 に委譲する。
 `--no-index` の exit status は `0` と「差分あり」の `1` を成功とする。
 `--numstat` の additions と deletions がともに `-` の file は binary と判定する。
