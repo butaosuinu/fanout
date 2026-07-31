@@ -22,6 +22,17 @@ if (typeof window.matchMedia !== "function") {
     }) as MediaQueryList;
 }
 
+/* jsdom は ResizeObserver を実装しない。@pierre/diffs(diff オーバーレイの描画)の
+ * ResizeManager が参照するため、観測しない最小スタブを入れる。 */
+if (typeof globalThis.ResizeObserver !== "function") {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());

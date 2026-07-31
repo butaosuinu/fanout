@@ -1,4 +1,13 @@
-import { Fragment, useEffect, type CSSProperties } from "react";
+import {
+  Fragment,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { useDrawerWidth } from "../hooks/useDrawerWidth";
 import { usePeek } from "../hooks/usePeek";
 import { usePlan } from "../hooks/usePlan";
@@ -6,6 +15,7 @@ import { fmtCreated } from "../lib/format";
 import { issueUrl } from "../lib/github";
 import {
   blockerLabel,
+  diffQuery,
   fmtWave,
   notStartedNote,
   paneBackend,
@@ -24,6 +34,10 @@ import {
   PrPill,
   Tag,
 } from "./ui";
+
+/* @pierre/diffs(Shiki 込み)は重いので遅延 chunk に隔離し、diff を開くまで
+ * 初回ロードのパスに乗せない。 */
+const DiffOverlay = lazy(() => import("./DiffOverlay").then((m) => ({ default: m.DiffOverlay })));
 
 function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {
   const plan = usePlan({ paneId: pane.paneId, alive: pane.alive }, token);
@@ -122,8 +136,10 @@ function PrsSection({ pane, repo }: { pane: PaneView; repo: string }) {
   );
 }
 
-function PeekPanel({ pane, token }: { pane: PaneView; token: string }) {
-  const peek = usePeek({ paneId: pane.paneId, alive: pane.alive }, token);
+function PeekPanel({ pane, token, paused }: { pane: PaneView; token: string; paused: boolean }) {
+  /* diff オーバーレイ(不透明・全面)が開いている間は 5s ポーリングを止める —
+   * 見えない出力のために tmux capture を回さない。閉じると即再取得される。 */
+  const peek = usePeek(paused ? null : { paneId: pane.paneId, alive: pane.alive }, token);
   return (
     <section className="d-sec">
       <h4>peek — 直近の出力</h4>
@@ -176,11 +192,13 @@ function CaptureDisabled({ kind, reason }: { kind: CaptureKind; reason: string }
 
 export function Drawer({
   pane,
+  parent,
   repo,
   token,
   onClose,
 }: {
   pane: PaneView;
+  parent: string;
   repo: string;
   token: string;
   onClose: () => void;
@@ -188,6 +206,19 @@ export function Drawer({
   const { width, gripProps } = useDrawerWidth();
   const runtimeBackend = paneBackend(pane);
   const captureReason = captureDisabledReason(pane);
+  /* diff オーバーレイは worktree の記録がある行だけ。pane の生死は問わない
+   * (/api/diff は state 記録から worktree を引くため、stale 行でも読める)。 */
+  const dq = diffQuery(parent, pane);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const diffBtnRef = useRef<HTMLButtonElement>(null);
+  /* identity を安定させ、オーバーレイの Escape listener が snapshot tick ごとに
+   * 貼り直されるのを避ける。フォーカス復帰は onClosed(inert 解除後)で行う —
+   * close 直後は #root がまだ inert で、実ブラウザは inert subtree への focus を
+   * 拒否するため。 */
+  const closeDiff = useCallback(() => setDiffOpen(false), []);
+  const restoreDiffFocus = useCallback(() => {
+    diffBtnRef.current?.focus(); // 起点のボタンへフォーカスを戻す
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -282,7 +313,19 @@ export function Drawer({
               <dt>branch</dt>
               <dd id="d-branch">{pane.branchName || "—"}</dd>
               <dt>diff</dt>
-              <dd id="d-diff">{pane.diffSummary || "—"}</dd>
+              <dd id="d-diff">
+                {pane.diffSummary || "—"}
+                {dq && (
+                  <button
+                    type="button"
+                    id="d-diff-open"
+                    ref={diffBtnRef}
+                    onClick={() => setDiffOpen(true)}
+                  >
+                    diff を開く
+                  </button>
+                )}
+              </dd>
               <dt>state</dt>
               <dd id="d-dirty">
                 <DirtyTag state={pane.dirtyState} unknownLabel="unknown" />
@@ -306,9 +349,20 @@ export function Drawer({
           {captureReason ? (
             <CaptureDisabled kind="peek" reason={captureReason} />
           ) : (
-            <PeekPanel pane={pane} token={token} />
+            <PeekPanel pane={pane} token={token} paused={diffOpen} />
           )}
         </div>
+      )}
+      {diffOpen && dq && (
+        <Suspense fallback={null}>
+          <DiffOverlay
+            title={paneLabel(pane)}
+            query={dq}
+            token={token}
+            onClose={closeDiff}
+            onClosed={restoreDiffFocus}
+          />
+        </Suspense>
       )}
     </aside>
   );

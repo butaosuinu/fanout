@@ -147,3 +147,29 @@ export interface PlanResponse {
   found: boolean;
   plan: string;
 }
+
+/* GET /api/diff — 正は docs/local-diff-review-tools.ja.md の wire contract(#576)。
+ * サーバー実装は #577/#578。files は 500 files 上限内の全件(空でも [])、patch は
+ * `diff --git` 始まりの file block の連結。エラー body は {"error":"message"}。 */
+export type DiffOmittedReason = "" | "binary" | "tooLarge" | "collectionLimit" | "responseLimit";
+
+export interface DiffFileEntry {
+  path: string;
+  additions: number | null; // collectionLimit で省略された file は null
+  deletions: number | null;
+  binary: boolean;
+  patchIncluded: boolean;
+  omittedReason: DiffOmittedReason;
+}
+
+export interface DiffResponse {
+  paneId: string;
+  branchName: string;
+  baseBranch: string;
+  mergeBase: string; // strict 解決済み commit SHA
+  capturedAt: string; // RFC3339 UTC
+  files: DiffFileEntry[];
+  patch: string;
+  truncated: boolean;
+  totalBytes: number;
+}

@@ -11,7 +11,7 @@ import {
 } from "../lib/filter";
 import { clock, degradedMessages } from "../lib/format";
 import { deriveAgents, deriveWaves } from "../lib/options";
-import { findPane } from "../lib/pane";
+import { findPaneEntry } from "../lib/pane";
 import { sortPanes, type SortDir } from "../lib/sort";
 import type { Snapshot } from "../lib/types";
 import { Drawer } from "./Drawer";
@@ -39,7 +39,7 @@ export function App() {
    * 評価する(選択変更だけでは notice を消さない)。 */
   useEffect(() => {
     if (!snap) return;
-    if (selected && !findPane(snap, selected)) {
+    if (selected && !findPaneEntry(snap, selected)) {
       setNotice(`${selected} は snapshot から消えたため詳細を閉じました`);
       setSelected(null);
     } else {
@@ -82,7 +82,7 @@ export function App() {
   }
 
   const repo = snap?.repo ?? "";
-  const selectedPane = findPane(snap, selected);
+  const selectedEntry = findPaneEntry(snap, selected);
   const msgs = degradedMessages(snap?.degraded);
   const status = snap
     ? `${notice ? `${notice} · ` : ""}telemetry @ ${clock(snap.generatedAt)}`
@@ -178,10 +178,11 @@ export function App() {
             </footer>
           </div>
         </div>
-        {selectedPane && selected && (
+        {selectedEntry && selected && (
           <Drawer
             key={selected}
-            pane={selectedPane}
+            pane={selectedEntry.pane}
+            parent={selectedEntry.parent}
             repo={repo}
             token={token}
             onClose={closeDrawer}

@@ -1,3 +1,4 @@
+import { act } from "@testing-library/react";
 import { vi } from "vitest";
 
 /* jsdom に EventSource が無いので、テストから手動で open / snapshot / error を
@@ -62,4 +63,13 @@ export function removeEventSource(): void {
   // EventSource 未対応環境(即ポーリング)を再現する
   FakeEventSource.instances = [];
   vi.stubGlobal("EventSource", undefined);
+}
+
+/* SSE の open + snapshot を最新インスタンスへ流す定番手順(各テストファイル共通) */
+export function streamSnapshot(snap: unknown): void {
+  const es = FakeEventSource.latest();
+  act(() => {
+    es.emitOpen();
+    es.emitSnapshot(snap);
+  });
 }

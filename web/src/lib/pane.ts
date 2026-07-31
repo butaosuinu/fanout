@@ -115,11 +115,35 @@ export function rowKey(parent: string, p: PaneView): string {
   return `${parent}#${p.issueNum}${suffix}`;
 }
 
-export function findPane(snap: Snapshot | null, key: string | null): PaneView | null {
+/* 行キーから pane と所属 session の parent を引く。parent は /api/diff の
+ * identity クエリに必要(rowKey から parent を逆パースしない — parent は
+ * Projects URL もあり得る自由文字列)。 */
+export function findPaneEntry(
+  snap: Snapshot | null,
+  key: string | null,
+): { parent: string; pane: PaneView } | null {
   if (!snap || !key) return null;
   for (const s of snap.sessions ?? []) {
     const parent = String(s.parent ?? "");
-    for (const p of s.panes ?? []) if (rowKey(parent, p) === key) return p;
+    for (const p of s.panes ?? []) if (rowKey(parent, p) === key) return { parent, pane: p };
+  }
+  return null;
+}
+
+/* GET /api/diff の行 identity クエリ(正は docs/local-diff-review-tools.ja.md)。
+ * rowKey と同じ識別規則ファミリー — 行種が増えたら両方を揃えること。
+ * GitHub issue 行(issueNum>0)は parent+issue、plan task 行は parent+task+source、
+ * 負の synthetic issue 行(@manual / attached-agent)は parent+issue+source。
+ * identity を組めない行(shell、未開始、worktree 記録なし、source 必須なのに
+ * sourceKey 欠落)は null を返し、呼び出し側はボタンを出さない。 */
+export function diffQuery(parent: string, p: PaneView): Record<string, string> | null {
+  if (p.notStarted || p.kind === "shell" || !p.worktreePath) return null;
+  if (p.taskId) {
+    return p.sourceKey ? { parent, task: p.taskId, source: p.sourceKey } : null;
+  }
+  if (p.issueNum > 0) return { parent, issue: String(p.issueNum) };
+  if (p.issueNum < 0 && p.sourceKey) {
+    return { parent, issue: String(p.issueNum), source: p.sourceKey };
   }
   return null;
 }
