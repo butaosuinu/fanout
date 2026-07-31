@@ -39,6 +39,9 @@ type fakeWatcherRunner struct {
 
 type countingIssueStatusProvider struct {
 	issueCalls  map[int]int
+	issueStates map[int]string
+	issuePRs    map[int][]ghissue.PRRef
+	issueErrs   map[int]error
 	branchCalls map[string]int
 	waveCalls   map[string]int
 	waveNums    map[string][]int
@@ -50,7 +53,18 @@ func (f *countingIssueStatusProvider) IssuePRs(num int) (string, []ghissue.PRRef
 		f.issueCalls = map[int]int{}
 	}
 	f.issueCalls[num]++
-	return "OPEN", []ghissue.PRRef{{Number: 900 + num, State: "OPEN"}}, nil
+	if err := f.issueErrs[num]; err != nil {
+		return "", nil, err
+	}
+	stateName := f.issueStates[num]
+	if stateName == "" {
+		stateName = "OPEN"
+	}
+	prs := f.issuePRs[num]
+	if prs == nil {
+		prs = []ghissue.PRRef{{Number: 900 + num, State: "OPEN"}}
+	}
+	return stateName, slices.Clone(prs), nil
 }
 
 func (f *countingIssueStatusProvider) BranchPRs(branch string) ([]ghissue.PRRef, error) {
@@ -352,7 +366,53 @@ func TestIssueStatusLoaderThrottlesWaveAndUnrecordedPRsAcrossTicks(t *testing.T)
 	}
 }
 
-func TestIssueStatusLoaderNewRecordedIssueBypassesWaveThrottle(t *testing.T) {
+func TestIssueStatusLoaderRefreshesClosedUnrecordedPRsEachWave(t *testing.T) {
+	root := t.TempDir()
+	writeTUIState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"recorded","paneId":"%1"}
+	]}`)
+	gh := &countingIssueStatusProvider{
+		issueStates: map[int]string{102: "CLOSED"},
+		issuePRs:    map[int][]ghissue.PRRef{102: {{Number: 1002, State: "MERGED"}}},
+		waves: map[string]sessionview.WaveGraph{
+			"100": {
+				Children: []ghissue.Issue{
+					{Number: 101, Title: "recorded", State: "OPEN"},
+					{Number: 102, Title: "queued", State: "CLOSED"},
+				},
+				Info: map[int]sessionview.WaveInfo{101: {Wave: 1}, 102: {Wave: 2}},
+			},
+		},
+	}
+	loader := newIssueStatusLoader(time.Minute)
+	loader.resolve = func(string) (issueStatusProvider, error) { return gh, nil }
+	firstAt := time.Unix(100, 0)
+
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt); err != nil {
+		t.Fatal(err)
+	}
+	gh.issuePRs[102] = []ghissue.PRRef{{Number: 2002, State: "MERGED"}}
+	statuses, err := loader.loadIssueStatuses(root, nil, firstAt.Add(20*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := statuses[keyForIssue("100", 102)].PRs[0].Number; got != 1002 {
+		t.Fatalf("closed child PR inside wave interval = #%d, want cached #1002", got)
+	}
+
+	statuses, err = loader.loadIssueStatuses(root, nil, firstAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gh.issueCalls[102] != 2 {
+		t.Fatalf("closed child PR calls after second wave = %d, want 2", gh.issueCalls[102])
+	}
+	if got := statuses[keyForIssue("100", 102)].PRs[0].Number; got != 2002 {
+		t.Fatalf("closed child PR after second wave = #%d, want refreshed #2002", got)
+	}
+}
+
+func TestIssueStatusLoaderRecordedSetChangesBypassWaveThrottle(t *testing.T) {
 	root := t.TempDir()
 	writeTUIState(t, root, `{"schemaVersion":1,"panes":[
 	  {"parent":"100","issueNum":101,"slug":"first","paneId":"%1"}
@@ -393,6 +453,71 @@ func TestIssueStatusLoaderNewRecordedIssueBypassesWaveThrottle(t *testing.T) {
 	}
 	if gh.issueCalls[104] != 1 {
 		t.Fatalf("new recorded issue PR calls = %d, want 1", gh.issueCalls[104])
+	}
+
+	writeTUIState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"first","paneId":"%1"}
+	]}`)
+	gh.waves["100"] = sessionview.WaveGraph{
+		Children: []ghissue.Issue{{Number: 101, Title: "first", State: "OPEN"}},
+		Info:     map[int]sessionview.WaveInfo{101: {Wave: 1}},
+	}
+	statuses, err := loader.loadIssueStatuses(root, nil, firstAt.Add(40*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gh.waveCalls["100"] != 3 {
+		t.Fatalf("wave calls after recorded issue removal = %d, want 3", gh.waveCalls["100"])
+	}
+	if !slices.Equal(gh.waveNums["100"], []int{101}) {
+		t.Fatalf("wave recorded nums after removal = %v, want [101]", gh.waveNums["100"])
+	}
+	if _, ok := statuses[keyForIssue("100", 104)]; ok {
+		t.Fatalf("removed issue remained in statuses: %#v", statuses)
+	}
+}
+
+func TestIssueStatusLoaderKeepsUnrecordedPRErrorUntilNextWave(t *testing.T) {
+	root := t.TempDir()
+	writeTUIState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"recorded","paneId":"%1"}
+	]}`)
+	gh := &countingIssueStatusProvider{
+		issueErrs: map[int]error{102: errBoom},
+		waves: map[string]sessionview.WaveGraph{
+			"100": {
+				Children: []ghissue.Issue{
+					{Number: 101, Title: "recorded", State: "OPEN"},
+					{Number: 102, Title: "queued", State: "OPEN"},
+				},
+				Info: map[int]sessionview.WaveInfo{101: {Wave: 1}, 102: {Wave: 2}},
+			},
+		},
+	}
+	loader := newIssueStatusLoader(time.Minute)
+	loader.resolve = func(string) (issueStatusProvider, error) { return gh, nil }
+	firstAt := time.Unix(100, 0)
+
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt); !errors.Is(err, errBoom) {
+		t.Fatalf("initial child PR error = %v, want boom", err)
+	}
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt.Add(20*time.Second)); !errors.Is(err, errBoom) {
+		t.Fatalf("cached child PR error = %v, want boom", err)
+	}
+	if gh.issueCalls[102] != 1 {
+		t.Fatalf("child PR calls inside wave interval = %d, want 1", gh.issueCalls[102])
+	}
+
+	delete(gh.issueErrs, 102)
+	statuses, err := loader.loadIssueStatuses(root, nil, firstAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gh.issueCalls[102] != 2 {
+		t.Fatalf("child PR calls after retrying wave = %d, want 2", gh.issueCalls[102])
+	}
+	if _, ok := statuses[keyForIssue("100", 102)]; !ok {
+		t.Fatalf("successful retry did not restore queued child: %#v", statuses)
 	}
 }
 

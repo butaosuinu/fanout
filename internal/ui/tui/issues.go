@@ -287,12 +287,16 @@ func (l *issueStatusLoader) loadIssueStatuses(
 		if err != nil {
 			graph = mergeIssueWaveGraphs(entry.graph, graph)
 		}
-		loadErr = errors.Join(loadErr, l.refreshUnrecordedIssuePRs(graph, nums, refreshedIssues))
+		prErr := l.refreshUnrecordedIssuePRs(graph, nums, refreshedIssues)
 		attempted := make(map[int]bool, len(nums))
 		for _, num := range nums {
 			attempted[num] = true
 		}
-		l.waveCache[parent] = issueWaveCacheEntry{graph: graph, err: err, attempted: attempted}
+		l.waveCache[parent] = issueWaveCacheEntry{
+			graph:     graph,
+			err:       errors.Join(err, prErr),
+			attempted: attempted,
+		}
 	}
 
 	for _, parent := range parents {
@@ -348,9 +352,6 @@ func (l *issueStatusLoader) refreshUnrecordedIssuePRs(
 			continue
 		}
 		refreshed[issue.Number] = true
-		if strings.EqualFold(issue.State, "CLOSED") && cachedIssueStateClosed(l.prCache[issue.Number]) {
-			continue
-		}
 		stateName, prs, err := l.gh.IssuePRs(issue.Number)
 		if err != nil {
 			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", issue.Number, err))
@@ -359,10 +360,6 @@ func (l *issueStatusLoader) refreshUnrecordedIssuePRs(
 		l.prCache[issue.Number] = issueStatus{State: stateName, PRs: prs}
 	}
 	return loadErr
-}
-
-func cachedIssueStateClosed(status issueStatus) bool {
-	return strings.EqualFold(status.State, "CLOSED")
 }
 
 func (l *issueStatusLoader) pruneWaveCache(numsByParent map[string][]int) {
@@ -375,6 +372,9 @@ func (l *issueStatusLoader) pruneWaveCache(numsByParent map[string][]int) {
 
 func waveAttemptCovered(entry issueWaveCacheEntry, cached bool, nums []int) bool {
 	if !cached {
+		return false
+	}
+	if len(entry.attempted) != len(nums) {
 		return false
 	}
 	for _, num := range nums {
