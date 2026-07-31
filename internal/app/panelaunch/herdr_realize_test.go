@@ -965,6 +965,46 @@ func TestRealizeHerdrReusesNumericParentCoordinatorAcrossLinkedWorktrees(t *test
 			len(runtime.mutations),
 		)
 	}
+
+	other := filepath.Join(t.TempDir(), "other")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "linked-child-reuse", other, "HEAD")
+	otherChildReq := testHerdrWorktreeRequest(other, "linked-child", 435)
+	reusedChild, err := realizeHerdrWorktree(
+		context.Background(),
+		otherChildReq,
+		runtime,
+		hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		reusedChild.Intent.ID != child.Intent.ID ||
+		reusedChild.Intent.WorktreePath != child.Intent.WorktreePath ||
+		len(runtime.mutations) != 2 {
+		t.Fatalf(
+			"linked child reuse = %+v, original = %+v, err = %v, mutations = %d",
+			reusedChild.Intent,
+			child.Intent,
+			err,
+			len(runtime.mutations),
+		)
+	}
+	finalizeHerdrTestIntent(t, repo, child.Intent)
+	finalChild, err := realizeHerdrWorktree(
+		context.Background(),
+		otherChildReq,
+		runtime,
+		hooks,
+	)
+	if err != nil || !finalChild.AlreadyFinalized ||
+		finalChild.Row.ID != child.Intent.ID ||
+		finalChild.Row.WorktreePath != child.Intent.WorktreePath ||
+		len(runtime.mutations) != 2 {
+		t.Fatalf(
+			"linked finalized child reuse = %+v, err = %v, mutations = %d",
+			finalChild,
+			err,
+			len(runtime.mutations),
+		)
+	}
 }
 
 func TestRealizeHerdrResolvesPlanRuntimeParentPerOwnerRoot(t *testing.T) {

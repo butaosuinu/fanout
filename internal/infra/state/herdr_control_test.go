@@ -55,6 +55,17 @@ func TestHerdrControlIsSharedAcrossLinkedWorktrees(t *testing.T) {
 
 func TestHerdrControlRejectsNonPrivateNamespace(t *testing.T) {
 	validRegistry := []byte(`{"schemaVersion":1,"rows":[],"intents":[]}`)
+	t.Run("common directory mode", func(t *testing.T) {
+		repo := newHerdrControlRepo(t)
+		commonDir := filepath.Join(repo, ".git")
+		if err := os.Chmod(commonDir, 0o775); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := HerdrControlPath(repo); err == nil ||
+			!strings.Contains(err.Error(), "writable by another uid") {
+			t.Fatalf("writable common directory error = %v", err)
+		}
+	})
 	t.Run("control directory mode", func(t *testing.T) {
 		repo := newHerdrControlRepo(t)
 		path, err := HerdrControlPath(repo)

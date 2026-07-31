@@ -1272,13 +1272,17 @@ func validateSavedWorktreeIntent(
 		intent.IssueNum != req.IssueNum || intent.TaskID != req.TaskID ||
 		intent.Backend != backend.Herdr || intent.Slug != req.Slug ||
 		intent.BranchName != req.BranchName ||
-		filepath.Clean(intent.WorktreePath) != filepath.Clean(req.WorktreePath) ||
+		!savedHerdrWorktreePathMatches(
+			ownerProjectRoot,
+			intent.WorktreePath,
+			req.WorktreePath,
+		) ||
 		intent.Session != req.HerdrSession || intent.SocketPath != req.SocketPath ||
 		!sameHerdrResource(intent.Coordinator, coordinator) {
 		return fmt.Errorf("saved Herdr worktree intent contradicts request")
 	}
 	if intent.Resource.RepoKey != "" &&
-		(intent.Resource.RepoKey != source.RepoKey || intent.Resource.RepoRoot != source.RepoRoot) {
+		!savedHerdrWorktreeRepoMatches(ownerProjectRoot, intent.Resource, source) {
 		return fmt.Errorf("saved Herdr worktree intent belongs to a different repository")
 	}
 	return nil
@@ -1395,8 +1399,12 @@ func finalizedHerdrWorktree(
 		row.OwnerProjectRoot != ownerProjectRoot ||
 		row.IssueNum != req.IssueNum || row.TaskID != req.TaskID ||
 		row.Slug != req.Slug || row.BranchName != req.BranchName ||
-		filepath.Clean(row.WorktreePath) != filepath.Clean(req.WorktreePath) ||
-		row.Resource.RepoKey != source.RepoKey || row.Resource.RepoRoot != source.RepoRoot ||
+		!savedHerdrWorktreePathMatches(
+			ownerProjectRoot,
+			row.WorktreePath,
+			req.WorktreePath,
+		) ||
+		!savedHerdrWorktreeRepoMatches(ownerProjectRoot, row.Resource, source) ||
 		row.Session != req.HerdrSession || row.SocketPath != req.SocketPath {
 		return HerdrWorktreeResult{}, fmt.Errorf("finalized herdr worktree contradicts request")
 	}
@@ -1591,6 +1599,25 @@ func savedHerdrCoordinatorPathMatches(ownerProjectRoot, savedPath, requestPath s
 		return false
 	}
 	return ownerProjectRoot == "" || savedPath == filepath.Clean(requestPath)
+}
+
+func savedHerdrWorktreePathMatches(ownerProjectRoot, savedPath, requestPath string) bool {
+	savedPath = filepath.Clean(savedPath)
+	if !filepath.IsAbs(savedPath) {
+		return false
+	}
+	return ownerProjectRoot == "" || savedPath == filepath.Clean(requestPath)
+}
+
+func savedHerdrWorktreeRepoMatches(
+	ownerProjectRoot string,
+	resource state.HerdrResource,
+	source worktree.HerdrRepoIdentity,
+) bool {
+	if resource.RepoKey != source.RepoKey {
+		return false
+	}
+	return ownerProjectRoot == "" || resource.RepoRoot == source.RepoRoot
 }
 
 func newHerdrWorkspaceLabel(

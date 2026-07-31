@@ -129,19 +129,26 @@ type LockedHerdrControl struct {
 // HerdrControlPath returns the repository-common registry path shared by every
 // linked worktree.
 func HerdrControlPath(projectRoot string) (string, error) {
-	out, err := execx.Combined(projectRoot, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	out, err := execx.Combined(projectRoot, "git", "rev-parse", "--git-common-dir")
 	if err != nil {
 		return "", fmt.Errorf("resolve Herdr control git common directory: %w", err)
 	}
 	commonDir := strings.TrimSpace(string(out))
-	if commonDir == "" || !filepath.IsAbs(commonDir) {
+	if commonDir == "" {
 		return "", fmt.Errorf("resolve Herdr control git common directory: invalid path %q", commonDir)
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(projectRoot, commonDir)
 	}
 	commonDir, err = filepath.EvalSymlinks(commonDir)
 	if err != nil {
 		return "", fmt.Errorf("canonicalize Herdr control git common directory: %w", err)
 	}
-	return filepath.Join(filepath.Clean(commonDir), "fanout", "herdr-control.json"), nil
+	commonDir = filepath.Clean(commonDir)
+	if err := validateHerdrControlCommonDir(commonDir); err != nil {
+		return "", err
+	}
+	return filepath.Join(commonDir, "fanout", "herdr-control.json"), nil
 }
 
 func LoadHerdrControl(projectRoot string) (HerdrControlStore, error) {
@@ -412,6 +419,20 @@ func ensurePrivateHerdrControlDir(path string) error {
 	}
 	if err := validateHerdrControlOwner(path, info); err != nil {
 		return err
+	}
+	return validateHerdrControlACL(path)
+}
+
+func validateHerdrControlCommonDir(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("herdr control common directory %s is not a real directory", path)
+	}
+	if err := validateHerdrControlOwner(path, info); err != nil {
+		return err
+	}
+	if info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSticky == 0 {
+		return fmt.Errorf("herdr control common directory %s is writable by another uid", path)
 	}
 	return validateHerdrControlACL(path)
 }
