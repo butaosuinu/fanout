@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -75,6 +76,52 @@ type ghLoadedMsg struct {
 	scheduleNext bool
 }
 
+type issueStatusProvider interface {
+	IssuePRs(num int) (string, []ghissue.PRRef, error)
+	BranchPRs(branch string) ([]ghissue.PRRef, error)
+	Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error)
+}
+
+type issueStatusResolver func(projectRoot string) (issueStatusProvider, error)
+
+type issueWaveCacheEntry struct {
+	graph     sessionview.WaveGraph
+	err       error
+	attempted map[int]bool
+}
+
+// issueStatusLoader owns GitHub identity and caches across TUI ticks. The
+// mutex serializes event-driven refreshes with the scheduled GH loop, so two
+// overlapping commands cannot both resolve the repo or race cache updates.
+type issueStatusLoader struct {
+	mu sync.Mutex
+
+	waveInterval    time.Duration
+	lastWaveRefresh time.Time
+	resolve         issueStatusResolver
+	gh              issueStatusProvider
+
+	prCache     map[int]issueStatus
+	branchCache map[string]branchStatus
+	waveCache   map[string]issueWaveCacheEntry
+}
+
+func newIssueStatusLoader(waveInterval time.Duration) *issueStatusLoader {
+	return &issueStatusLoader{
+		waveInterval: waveInterval,
+		resolve: func(projectRoot string) (issueStatusProvider, error) {
+			gh, err := sessionview.ResolveGH(projectRoot)
+			if err != nil {
+				return nil, fmt.Errorf("resolve repo: %w", err)
+			}
+			return gh, nil
+		},
+		prCache:     map[int]issueStatus{},
+		branchCache: map[string]branchStatus{},
+		waveCache:   map[string]issueWaveCacheEntry{},
+	}
+}
+
 type worktreeStatView struct {
 	Diff  string
 	Dirty string
@@ -106,10 +153,18 @@ func (m model) loadStateCmd(scheduleNext bool) tea.Cmd {
 }
 
 func (m model) loadGHCmd(scheduleNext bool) tea.Cmd {
+	return m.loadGHCmdAt(scheduleNext, time.Time{})
+}
+
+func (m model) loadGHCmdAt(scheduleNext bool, tickAt time.Time) tea.Cmd {
 	projectRoot := m.opts.ProjectRoot
 	listLive := m.opts.ListLive
+	loader := m.issueLoader
 	return func() tea.Msg {
-		issues, err := loadIssueStatuses(projectRoot, listLive)
+		if tickAt.IsZero() {
+			tickAt = time.Now()
+		}
+		issues, err := loader.loadIssueStatuses(projectRoot, listLive, tickAt)
 		return ghLoadedMsg{issues: issues, at: time.Now(), err: err, scheduleNext: scheduleNext}
 	}
 }
@@ -160,11 +215,14 @@ func loadPaneViews(projectRoot string, issues map[issueKey]issueStatus, listLive
 	return paneViewsFromSnapshot(projectRoot, snap), errors.Join(stateErr, backendErr)
 }
 
-func loadIssueStatuses(projectRoot string, liveCollectors ...func() ([]backend.LivePane, error)) (map[issueKey]issueStatus, error) {
-	var listLive func() ([]backend.LivePane, error)
-	if len(liveCollectors) > 0 {
-		listLive = liveCollectors[0]
-	}
+func (l *issueStatusLoader) loadIssueStatuses(
+	projectRoot string,
+	listLive func() ([]backend.LivePane, error),
+	now time.Time,
+) (map[issueKey]issueStatus, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	// Merge sibling worktrees so issue/PR/wave status is fetched for Sessions
 	// fanned out from another worktree too, matching loadPaneViews.
 	store, err := sessionview.MergedStateLoader(projectRoot, listLive)()
@@ -175,44 +233,87 @@ func loadIssueStatuses(projectRoot string, liveCollectors ...func() ([]backend.L
 	taskRows := recordedTaskRows(store.Panes)
 	statuses := map[issueKey]issueStatus{}
 	if len(parents) == 0 && len(taskRows) == 0 {
+		l.pruneWaveCache(nil)
 		return statuses, nil
 	}
 
-	gh := ghissue.Runner{Cwd: projectRoot}
-	nwo, err := gh.RepoNameWithOwner()
-	if err != nil {
-		return nil, fmt.Errorf("resolve repo: %w", err)
-	}
-	owner, repo, ok := strings.Cut(nwo, "/")
-	if !ok || owner == "" || repo == "" {
-		return nil, fmt.Errorf("unexpected repo nameWithOwner: %s", nwo)
+	if l.gh == nil {
+		gh, err := l.resolve(projectRoot)
+		if err != nil {
+			return nil, err
+		}
+		l.gh = gh
 	}
 
-	prCache := map[int]issueStatus{}
-	branchCache := map[string]branchStatus{}
 	var loadErr error
+	refreshedIssues := map[int]bool{}
+	for _, num := range recordedIssueNums(store.Panes) {
+		refreshedIssues[num] = true
+		stateName, prs, err := l.gh.IssuePRs(num)
+		if err != nil {
+			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", num, err))
+			continue
+		}
+		l.prCache[num] = issueStatus{State: stateName, PRs: prs}
+	}
+
+	refreshedBranches := map[string]bool{}
+	for _, task := range taskRows {
+		if refreshedBranches[task.BranchName] {
+			continue
+		}
+		refreshedBranches[task.BranchName] = true
+		prs, err := l.gh.BranchPRs(task.BranchName)
+		if err != nil {
+			loadErr = errors.Join(loadErr, fmt.Errorf("branch %s: %w", task.BranchName, err))
+			continue
+		}
+		l.branchCache[task.BranchName] = branchStatus{PRs: prs}
+	}
+
+	numsByParent := recordedIssueNumsByParent(store.Panes)
+	l.pruneWaveCache(numsByParent)
+	due := l.lastWaveRefresh.IsZero() || now.Sub(l.lastWaveRefresh) >= l.waveInterval
+	if due && len(numsByParent) > 0 {
+		l.lastWaveRefresh = now
+	}
 	for _, parent := range parents {
-		graph, err := sessionview.FetchWaveGraph(gh, parent, recordedIssueNums(store.PanesForParent(parent)))
-		loadErr = errors.Join(loadErr, err)
-		for _, issue := range graph.Children {
-			key := keyForIssue(parent, issue.Number)
-			cached, ok := prCache[issue.Number]
+		nums := numsByParent[parent]
+		entry, cached := l.waveCache[parent]
+		if !due && waveAttemptCovered(entry, cached, nums) {
+			continue
+		}
+		graph, err := l.gh.Waves(parent, nums)
+		if err != nil {
+			graph = mergeIssueWaveGraphs(entry.graph, graph)
+		}
+		prErr := l.refreshUnrecordedIssuePRs(graph, nums, refreshedIssues)
+		attempted := make(map[int]bool, len(nums))
+		for _, num := range nums {
+			attempted[num] = true
+		}
+		l.waveCache[parent] = issueWaveCacheEntry{
+			graph:     graph,
+			err:       errors.Join(err, prErr),
+			attempted: attempted,
+		}
+	}
+
+	for _, parent := range parents {
+		entry, ok := l.waveCache[parent]
+		if !ok {
+			continue
+		}
+		loadErr = errors.Join(loadErr, entry.err)
+		for _, issue := range entry.graph.Children {
+			cached, ok := l.prCache[issue.Number]
 			if !ok {
-				stateName, prs, err := gh.IssueWithPRs(owner, repo, issue.Number)
-				if err != nil {
-					// Accumulate and skip, like the branch/wave paths: a single
-					// sibling-worktree issue that was deleted/made private or hit a
-					// transient gh error must not blank every other row's status.
-					loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", issue.Number, err))
-					continue
-				}
-				cached = issueStatus{State: stateName, PRs: prs}
-				prCache[issue.Number] = cached
+				continue
 			}
 			if cached.State == "" {
 				cached.State = issue.State
 			}
-			info := graph.Info[issue.Number]
+			info := entry.graph.Info[issue.Number]
 			cached.Title = issue.Title
 			cached.Wave = info.Wave
 			cached.WaveLabel = info.WaveLabel
@@ -220,19 +321,13 @@ func loadIssueStatuses(projectRoot string, liveCollectors ...func() ([]backend.L
 			cached.BlockerRows = info.Blockers
 			cached.HasOpenBlockers = info.Blocked
 			cached.WaveDegraded = info.Degraded
-			statuses[key] = cached
+			statuses[keyForIssue(parent, issue.Number)] = cached
 		}
 	}
 	for _, task := range taskRows {
-		cached, ok := branchCache[task.BranchName]
+		cached, ok := l.branchCache[task.BranchName]
 		if !ok {
-			prs, err := gh.PRsForBranch(task.BranchName)
-			if err != nil {
-				loadErr = errors.Join(loadErr, fmt.Errorf("branch %s: %w", task.BranchName, err))
-				continue
-			}
-			cached = branchStatus{PRs: prs}
-			branchCache[task.BranchName] = cached
+			continue
 		}
 		statuses[task.key] = issueStatus{
 			State: sessionview.IssueStateUnknown,
@@ -240,6 +335,77 @@ func loadIssueStatuses(projectRoot string, liveCollectors ...func() ([]backend.L
 		}
 	}
 	return statuses, loadErr
+}
+
+func (l *issueStatusLoader) refreshUnrecordedIssuePRs(
+	graph sessionview.WaveGraph,
+	recorded []int,
+	refreshed map[int]bool,
+) error {
+	recordedSet := make(map[int]bool, len(recorded))
+	for _, num := range recorded {
+		recordedSet[num] = true
+	}
+	var loadErr error
+	for _, issue := range graph.Children {
+		if issue.Number <= 0 || recordedSet[issue.Number] || refreshed[issue.Number] {
+			continue
+		}
+		refreshed[issue.Number] = true
+		stateName, prs, err := l.gh.IssuePRs(issue.Number)
+		if err != nil {
+			loadErr = errors.Join(loadErr, fmt.Errorf("#%d: %w", issue.Number, err))
+			continue
+		}
+		l.prCache[issue.Number] = issueStatus{State: stateName, PRs: prs}
+	}
+	return loadErr
+}
+
+func (l *issueStatusLoader) pruneWaveCache(numsByParent map[string][]int) {
+	for parent := range l.waveCache {
+		if _, ok := numsByParent[parent]; !ok {
+			delete(l.waveCache, parent)
+		}
+	}
+}
+
+func waveAttemptCovered(entry issueWaveCacheEntry, cached bool, nums []int) bool {
+	if !cached {
+		return false
+	}
+	if len(entry.attempted) != len(nums) {
+		return false
+	}
+	for _, num := range nums {
+		if !entry.attempted[num] {
+			return false
+		}
+	}
+	return true
+}
+
+func mergeIssueWaveGraphs(previous, current sessionview.WaveGraph) sessionview.WaveGraph {
+	if len(previous.Children) == 0 && len(previous.Info) == 0 {
+		return current
+	}
+	children := make(map[int]ghissue.Issue, len(previous.Children)+len(current.Children))
+	for _, issue := range previous.Children {
+		children[issue.Number] = issue
+	}
+	for _, issue := range current.Children {
+		children[issue.Number] = issue
+	}
+	current.Children = slices.SortedFunc(maps.Values(children), func(a, b ghissue.Issue) int {
+		return cmp.Compare(a.Number, b.Number)
+	})
+	info := maps.Clone(previous.Info)
+	if info == nil {
+		info = map[int]sessionview.WaveInfo{}
+	}
+	maps.Copy(info, current.Info)
+	current.Info = info
+	return current
 }
 
 type taskStatusRow struct {
@@ -252,13 +418,32 @@ type branchStatus struct {
 }
 
 func recordedIssueNums(panes []state.Pane) []int {
-	nums := make([]int, 0, len(panes))
+	seen := map[int]bool{}
 	for _, pane := range panes {
 		if pane.IssueNum > 0 {
-			nums = append(nums, pane.IssueNum)
+			seen[pane.IssueNum] = true
 		}
 	}
-	return nums
+	return slices.Sorted(maps.Keys(seen))
+}
+
+func recordedIssueNumsByParent(panes []state.Pane) map[string][]int {
+	grouped := map[string]map[int]bool{}
+	for _, pane := range panes {
+		if pane.Parent == "" || pane.IssueNum <= 0 {
+			continue
+		}
+		parent := parentref.Canon(pane.Parent)
+		if grouped[parent] == nil {
+			grouped[parent] = map[int]bool{}
+		}
+		grouped[parent][pane.IssueNum] = true
+	}
+	out := make(map[string][]int, len(grouped))
+	for parent, nums := range grouped {
+		out[parent] = slices.Sorted(maps.Keys(nums))
+	}
+	return out
 }
 
 func issuePRCollector(issues map[issueKey]issueStatus) func(int) (string, []ghissue.PRRef, error) {
