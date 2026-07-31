@@ -470,6 +470,182 @@ func TestRunnerWorktreePatchIgnoresUntrackedReplacementForTrackedSize(t *testing
 	}
 }
 
+func TestRunnerWorktreePatchMergesUntrackedReplacement(t *testing.T) {
+	tests := []struct {
+		name    string
+		content []byte
+		want    *FileStat
+	}{
+		{
+			name:    "changed",
+			content: []byte("new\n"),
+			want: &FileStat{
+				Path:          "replace.txt",
+				Additions:     1,
+				Deletions:     1,
+				PatchIncluded: true,
+			},
+		},
+		{
+			name:    "unchanged",
+			content: []byte("old\n"),
+		},
+		{
+			name:    "oversized",
+			content: bytes.Repeat([]byte{'x'}, patchFileLimit+1),
+			want: &FileStat{
+				Path:          "replace.txt",
+				OmittedReason: "tooLarge",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := t.TempDir()
+			gitTest(t, repo, "init")
+			gitTest(t, repo, "config", "user.email", "test@example.com")
+			gitTest(t, repo, "config", "user.name", "Test User")
+			writeGitstatFile(t, repo, "replace.txt", []byte("old\n"))
+			gitTest(t, repo, "add", "replace.txt")
+			gitTest(t, repo, "commit", "-m", "initial")
+			gitTest(t, repo, "branch", "-M", "main")
+			gitTest(t, repo, "checkout", "-b", "feature")
+			gitTest(t, repo, "rm", "--cached", "replace.txt")
+			writeGitstatFile(t, repo, "replace.txt", tt.content)
+
+			got, err := Runner{}.WorktreePatch(repo, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.want == nil {
+				if len(got.Files) != 0 || got.Patch != "" {
+					t.Fatalf("WorktreePatch() = %#v, want final-side identical path omitted", got)
+				}
+				return
+			}
+			assertFileStat(t, got.Files, *tt.want)
+			if tt.want.PatchIncluded {
+				if blocks := strings.Count(got.Patch, "diff --git "); blocks != 1 {
+					t.Fatalf("WorktreePatch().Patch has %d blocks, want one replacement block", blocks)
+				}
+				if !strings.Contains(got.Patch, "-old") || !strings.Contains(got.Patch, "+new") {
+					t.Fatalf("WorktreePatch().Patch = %q, want old-to-new replacement", got.Patch)
+				}
+				if strings.Contains(got.Patch, "fanout-gitstat-") ||
+					!strings.Contains(got.Patch, "diff --git a/replace.txt b/replace.txt") ||
+					!strings.Contains(got.Patch, "--- a/replace.txt") ||
+					!strings.Contains(got.Patch, "+++ b/replace.txt") {
+					t.Fatalf("WorktreePatch().Patch has non-canonical replacement headers:\n%s", got.Patch)
+				}
+			} else if got.Patch != "" {
+				t.Fatalf("WorktreePatch().Patch has %d bytes, want oversized replacement omitted", len(got.Patch))
+			}
+		})
+	}
+}
+
+func TestRunnerWorktreePatchMergesSymlinkReplacement(t *testing.T) {
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	if err := os.Symlink("old-target", filepath.Join(repo, "link")); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, repo, "add", "link")
+	gitTest(t, repo, "commit", "-m", "initial")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	gitTest(t, repo, "rm", "--cached", "link")
+	if err := os.Remove(filepath.Join(repo, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("new-target", filepath.Join(repo, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "link",
+		Additions:     1,
+		Deletions:     1,
+		PatchIncluded: true,
+	})
+	if blocks := strings.Count(got.Patch, "diff --git "); blocks != 1 {
+		t.Fatalf("WorktreePatch().Patch has %d blocks, want one symlink replacement block", blocks)
+	}
+	if !strings.Contains(got.Patch, "-old-target") || !strings.Contains(got.Patch, "+new-target") {
+		t.Fatalf("WorktreePatch().Patch = %q, want symlink target replacement", got.Patch)
+	}
+}
+
+func TestRunnerWorktreePatchMergesFileTypeReplacement(t *testing.T) {
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	writeGitstatFile(t, repo, "entry", []byte("old\n"))
+	gitTest(t, repo, "add", "entry")
+	gitTest(t, repo, "commit", "-m", "initial")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	gitTest(t, repo, "rm", "--cached", "entry")
+	if err := os.Remove(filepath.Join(repo, "entry")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("new-target", filepath.Join(repo, "entry")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "entry",
+		Additions:     1,
+		Deletions:     1,
+		PatchIncluded: true,
+	})
+	if blocks := strings.Count(got.Patch, "diff --git "); blocks != 2 {
+		t.Fatalf("WorktreePatch().Patch has %d blocks, want delete/add file group", blocks)
+	}
+	if !strings.Contains(got.Patch, "deleted file mode 100644") ||
+		!strings.Contains(got.Patch, "new file mode 120000") {
+		t.Fatalf("WorktreePatch().Patch = %q, want regular-to-symlink replacement", got.Patch)
+	}
+}
+
+func TestRunnerWorktreePatchReplacementPrefersTooLargeOverBinary(t *testing.T) {
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	writeGitstatFile(t, repo, "replace.dat", bytes.Repeat([]byte{'x'}, patchFileLimit+1))
+	gitTest(t, repo, "add", "replace.dat")
+	gitTest(t, repo, "commit", "-m", "initial")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	gitTest(t, repo, "rm", "--cached", "replace.dat")
+	writeGitstatFile(t, repo, "replace.dat", []byte{'a', 0, 'b'})
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "replace.dat",
+		OmittedReason: "tooLarge",
+	})
+	if got.Patch != "" {
+		t.Fatalf("WorktreePatch().Patch = %q, want oversized replacement omitted", got.Patch)
+	}
+}
+
 func TestRunnerWorktreePatchOnlyCallsReadOnlyGitSubcommands(t *testing.T) {
 	repo := initPatchRepo(t)
 	writeGitstatFile(t, repo, "tracked.txt", []byte("one\nstaged\n"))

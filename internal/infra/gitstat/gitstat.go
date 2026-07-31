@@ -104,7 +104,9 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 	}
 
 	files := make([]patchFile, 0, len(tracked))
+	trackedByPath := make(map[string]int, len(tracked))
 	for _, stat := range tracked {
+		trackedByPath[stat.Path] = len(files)
 		files = append(files, patchFile{FileStat: stat, tracked: true})
 	}
 
@@ -121,6 +123,10 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 		if statErr != nil {
 			return Patch{}, statErr
 		}
+		if index, ok := trackedByPath[rel]; ok {
+			files[index].replacement = &stat
+			continue
+		}
 		files = append(files, patchFile{FileStat: stat})
 	}
 
@@ -135,7 +141,23 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 	var patch strings.Builder
 	for _, file := range files {
 		stat := file.FileStat
-		if stat.OmittedReason == "" {
+		if file.replacement != nil {
+			stat.Additions = 0
+			stat.Deletions = 0
+			switch {
+			case stat.OmittedReason == "tooLarge" ||
+				file.replacement.OmittedReason == "tooLarge":
+				stat.Binary = false
+				stat.OmittedReason = "tooLarge"
+			case stat.Binary || file.replacement.Binary:
+				stat.Binary = true
+				stat.OmittedReason = "binary"
+			default:
+				stat.OmittedReason = ""
+			}
+		}
+		if stat.OmittedReason == "" ||
+			(file.replacement != nil && stat.OmittedReason != "tooLarge") {
 			tooLarge, sizeErr := r.patchFileTooLarge(path, mergeBase, file)
 			if sizeErr != nil {
 				return Patch{}, sizeErr
@@ -143,19 +165,33 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 			if tooLarge {
 				stat.Additions = 0
 				stat.Deletions = 0
+				stat.Binary = false
 				stat.OmittedReason = "tooLarge"
 			}
 		}
 		if stat.OmittedReason == "" {
 			var out []byte
-			if file.tracked {
+			switch {
+			case file.replacement != nil:
+				var replacementStat FileStat
+				var changed bool
+				out, replacementStat, changed, err = r.replacementPatch(path, mergeBase, file)
+				if err != nil {
+					return Patch{}, err
+				}
+				if !changed {
+					continue
+				}
+				stat.Additions = replacementStat.Additions
+				stat.Deletions = replacementStat.Deletions
+			case file.tracked:
 				out, err = r.gitExactPath(
 					stat.Path,
 					"-C", path,
 					"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
 					mergeBase,
 				)
-			} else {
+			default:
 				var code int
 				out, code, err = r.gitExitCode(
 					"-C", path,
@@ -207,7 +243,8 @@ func (r Runner) resolveWorktreePath(path string) (string, error) {
 
 type patchFile struct {
 	FileStat
-	tracked bool
+	tracked     bool
+	replacement *FileStat
 }
 
 func (r Runner) untrackedFileStat(path, rel string) (FileStat, error) {
@@ -298,6 +335,198 @@ func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (bool,
 		return false, fmt.Errorf("parse base file size for %q: %w", file.Path, err)
 	}
 	return size > patchFileLimit, nil
+}
+
+type treeEntry struct {
+	mode       string
+	objectType string
+	oid        string
+}
+
+func (r Runner) replacementPatch(
+	path, mergeBase string,
+	file patchFile,
+) ([]byte, FileStat, bool, error) {
+	entry, err := r.mergeBaseTreeEntry(path, mergeBase, file.Path)
+	if err != nil {
+		return nil, FileStat{}, false, err
+	}
+	info, err := lstatContained(path, file.Path)
+	if err != nil {
+		return nil, FileStat{}, false, err
+	}
+	if info == nil {
+		return nil, FileStat{}, false, fmt.Errorf("inspect replacement %q: missing final side", file.Path)
+	}
+	currentMode, err := worktreeGitMode(info)
+	if err != nil {
+		return nil, FileStat{}, false, fmt.Errorf("inspect replacement %q: %w", file.Path, err)
+	}
+
+	if entry.mode[:2] != currentMode[:2] {
+		deleted, deleteErr := r.gitExactPath(
+			file.Path,
+			"-C", path,
+			"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+			mergeBase,
+		)
+		if deleteErr != nil {
+			return nil, FileStat{}, false, deleteErr
+		}
+		added, code, addErr := r.gitExitCode(
+			"-C", path,
+			"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+			"--no-index", "--", "/dev/null", file.Path,
+		)
+		if code == 1 {
+			addErr = nil
+		}
+		if addErr != nil {
+			return nil, FileStat{}, false, addErr
+		}
+		stat := FileStat{
+			Path:      file.Path,
+			Additions: file.Additions + file.replacement.Additions,
+			Deletions: file.Deletions + file.replacement.Deletions,
+		}
+		return append(deleted, added...), stat, true, nil
+	}
+
+	tempDir, err := os.MkdirTemp("", "fanout-gitstat-")
+	if err != nil {
+		return nil, FileStat{}, false, fmt.Errorf("create replacement temp directory: %w", err)
+	}
+	defer func() {
+		// The request-private base file is best-effort cleanup after every return path.
+		_ = os.RemoveAll(tempDir)
+	}()
+
+	relPath := filepath.FromSlash(file.Path)
+	baseArg := filepath.Join("a", relPath)
+	finalArg := filepath.Join("b", relPath)
+	basePath := filepath.Join(tempDir, baseArg)
+	if mkdirErr := os.MkdirAll(filepath.Dir(basePath), 0o700); mkdirErr != nil {
+		return nil, FileStat{}, false, fmt.Errorf("create replacement base directory: %w", mkdirErr)
+	}
+	if materializeErr := r.materializeTreeEntry(path, entry, basePath); materializeErr != nil {
+		return nil, FileStat{}, false, materializeErr
+	}
+	if linkErr := os.Symlink(path, filepath.Join(tempDir, "b")); linkErr != nil {
+		return nil, FileStat{}, false, fmt.Errorf("link replacement final side: %w", linkErr)
+	}
+
+	out, code, err := replacementDiff(tempDir, false, baseArg, finalArg)
+	changed := code == 1
+	if changed {
+		err = nil
+	}
+	if err != nil {
+		return nil, FileStat{}, false, err
+	}
+	if !changed {
+		return nil, FileStat{}, false, nil
+	}
+
+	numstatOut, code, err := replacementDiff(tempDir, true, baseArg, finalArg)
+	if code == 1 {
+		err = nil
+	}
+	if err != nil {
+		return nil, FileStat{}, false, err
+	}
+	stats, err := parseNumStat(numstatOut)
+	if err != nil {
+		return nil, FileStat{}, false, fmt.Errorf("parse replacement numstat for %q: %w", file.Path, err)
+	}
+	if len(stats) != 1 {
+		return nil, FileStat{}, false, fmt.Errorf(
+			"parse replacement numstat for %q: got %d files, want 1",
+			file.Path,
+			len(stats),
+		)
+	}
+	stat := stats[0]
+	stat.Path = file.Path
+	return out, stat, true, nil
+}
+
+func replacementDiff(cwd string, numstat bool, oldPath, newPath string) ([]byte, int, error) {
+	args := []string{
+		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+		"--no-index", "--src-prefix=", "--dst-prefix=",
+	}
+	if numstat {
+		args = append(args, "--numstat", "-z")
+	}
+	args = append(args, "--", oldPath, newPath)
+	return execx.OutputExitCode(cwd, gitEnv(), "git", args...)
+}
+
+func (r Runner) mergeBaseTreeEntry(path, mergeBase, rel string) (treeEntry, error) {
+	out, err := r.git("-C", path, "ls-tree", "-z", mergeBase, "--", rel)
+	if err != nil {
+		return treeEntry{}, err
+	}
+	records, err := splitNUL(out)
+	if err != nil {
+		return treeEntry{}, fmt.Errorf("parse base entry for %q: %w", rel, err)
+	}
+	if len(records) != 1 {
+		return treeEntry{}, fmt.Errorf("parse base entry for %q: got %d entries, want 1", rel, len(records))
+	}
+	metadata, entryPath, found := bytes.Cut(records[0], []byte{'\t'})
+	if !found || string(entryPath) != rel {
+		return treeEntry{}, fmt.Errorf("parse base entry for %q: path mismatch", rel)
+	}
+	fields := strings.Fields(string(metadata))
+	if len(fields) != 3 || len(fields[0]) != 6 {
+		return treeEntry{}, fmt.Errorf("parse base entry for %q: malformed ls-tree output", rel)
+	}
+	return treeEntry{
+		mode:       fields[0],
+		objectType: fields[1],
+		oid:        fields[2],
+	}, nil
+}
+
+func (r Runner) materializeTreeEntry(path string, entry treeEntry, target string) error {
+	if entry.objectType != "blob" {
+		return fmt.Errorf("materialize base entry: unsupported object type %q", entry.objectType)
+	}
+	content, err := r.git("-C", path, "cat-file", "blob", entry.oid)
+	if err != nil {
+		return err
+	}
+	if entry.mode == "120000" {
+		if err := os.Symlink(string(content), target); err != nil {
+			return fmt.Errorf("materialize base symlink: %w", err)
+		}
+		return nil
+	}
+	mode := os.FileMode(0o600)
+	if entry.mode == "100755" {
+		mode = 0o700
+	}
+	if err := os.WriteFile(target, content, mode); err != nil {
+		return fmt.Errorf("materialize base file: %w", err)
+	}
+	if err := os.Chmod(target, mode); err != nil {
+		return fmt.Errorf("set materialized base mode: %w", err)
+	}
+	return nil
+}
+
+func worktreeGitMode(info os.FileInfo) (string, error) {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "120000", nil
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("unsupported final-side mode %s", info.Mode())
+	}
+	if info.Mode().Perm()&0o111 != 0 {
+		return "100755", nil
+	}
+	return "100644", nil
 }
 
 func (r Runner) pathInIndex(path, rel string) (bool, error) {

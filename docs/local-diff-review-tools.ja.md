@@ -294,6 +294,12 @@ tracked file の統計と path は
 `git diff <mergeBaseSHA> -- <path>` から得る。
 untracked file は `git ls-files --others --exclude-standard -z` で列挙し、
 `/dev/null` に対する file ごとの `git diff --no-index` で統計と patch を得る。
+index から削除した tracked path と同名の untracked file は 1 file に統合する。
+同じ file type の replacement は merge-base blob を repository 外の一時 file に置き、
+final worktree side との `git diff --no-index` から単一 patch block を得る。
+file type が変わる replacement は削除、追加の 2 block を 1 file group とする。
+この一時 file は immutable な merge-base side だけを保持し、
+worktree または index の snapshot isolation は #593 に委譲する。
 `--no-index` の exit status は `0` と「差分あり」の `1` を成功とする。
 `--numstat` の additions と deletions がともに `-` の file は binary と判定する。
 tracked と untracked の各 file は path 順に並べる。
