@@ -455,50 +455,13 @@ func (r Runner) replacementPatch(
 }
 
 func (r Runner) trackedPathPatch(path, mergeBase, rel string) ([]byte, error) {
-	gitlink, err := r.pathIsGitlink(path, mergeBase, rel)
-	if err != nil {
-		return nil, err
-	}
-	args := []string{
+	return r.gitExactPath(
+		rel,
 		"-C", path,
 		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
-		"--ignore-submodules=none",
+		"--ignore-submodules=none", "--submodule=short",
 		mergeBase,
-	}
-	if gitlink {
-		return r.git(append(args, "--", rel)...)
-	}
-	return r.gitExactPath(rel, args...)
-}
-
-func (r Runner) pathIsGitlink(path, mergeBase, rel string) (bool, error) {
-	for _, args := range [][]string{
-		{"-C", path, "ls-files", "--stage", "-z", "--", rel},
-		{"-C", path, "ls-tree", "-z", mergeBase, "--", rel},
-	} {
-		out, err := r.git(args...)
-		if err != nil {
-			return false, err
-		}
-		records, err := splitNUL(out)
-		if err != nil {
-			return false, fmt.Errorf("parse gitlink mode for %q: %w", rel, err)
-		}
-		for _, record := range records {
-			metadata, entryPath, found := bytes.Cut(record, []byte{'\t'})
-			if !found || string(entryPath) != rel {
-				continue
-			}
-			fields := strings.Fields(string(metadata))
-			if len(fields) == 0 || len(fields[0]) != 6 {
-				return false, fmt.Errorf("parse gitlink mode for %q: malformed entry", rel)
-			}
-			if fields[0] == "160000" {
-				return true, nil
-			}
-		}
-	}
-	return false, nil
+	)
 }
 
 func replacementDiff(cwd string, numstat bool, oldPath, newPath string) ([]byte, int, error) {
@@ -882,10 +845,21 @@ func (r Runner) gitExactPath(path string, args ...string) ([]byte, error) {
 		args,
 		"--",
 		":(top,literal)"+path,
-		":(top,exclude,literal)"+path+"/",
+		":(top,exclude,glob)"+escapePathspecGlob(path)+"/**",
 	)
 	env := append(gitEnv(), "GIT_LITERAL_PATHSPECS=0")
 	return execx.Output(r.Cwd, env, "git", args...)
+}
+
+func escapePathspecGlob(path string) string {
+	replacer := strings.NewReplacer(
+		"\\", "\\\\",
+		"*", "\\*",
+		"?", "\\?",
+		"[", "\\[",
+		"]", "\\]",
+	)
+	return replacer.Replace(path)
 }
 
 // gitEnv returns the extra environment entries execx.Output appends to

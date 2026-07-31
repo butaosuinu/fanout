@@ -393,30 +393,44 @@ func TestRunnerWorktreePatchOverridesIgnoreSubmodules(t *testing.T) {
 	gitTest(t, sub, "add", "file.txt")
 	gitTest(t, sub, "commit", "-m", "old submodule commit")
 	oldCommit := gitTestOutput(t, sub, "rev-parse", "HEAD")
-	writeGitstatFile(t, sub, "file.txt", []byte("new\n"))
-	gitTest(t, sub, "add", "file.txt")
-	gitTest(t, sub, "commit", "-m", "new submodule commit")
-	newCommit := gitTestOutput(t, sub, "rev-parse", "HEAD")
 	gitTest(t, repo, "update-index", "--add", "--cacheinfo", "160000", oldCommit, "sub")
 	gitTest(t, repo, "commit", "-m", "add gitlink")
 	gitTest(t, repo, "branch", "-M", "main")
 	gitTest(t, repo, "checkout", "-b", "feature")
-	gitTest(t, repo, "update-index", "--cacheinfo", "160000", newCommit, "sub")
+	gitTest(t, repo, "rm", "--cached", "sub")
+	if err := os.RemoveAll(sub); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeGitstatFile(t, repo, "sub/large.txt", bytes.Repeat([]byte{'x'}, patchFileLimit+1))
+	gitTest(t, repo, "add", "sub/large.txt")
 	gitTest(t, repo, "config", "diff.ignoreSubmodules", "all")
+	gitTest(t, repo, "config", "diff.submodule", "log")
 
 	got, err := Runner{}.WorktreePatch(repo, "main")
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertFileStat(t, got.Files, FileStat{
-		Path:          "sub",
-		Additions:     1,
-		Deletions:     1,
-		PatchIncluded: true,
-	})
+	if len(got.Files) != 2 {
+		t.Fatalf("WorktreePatch().Files = %#v, want gitlink deletion and descendant addition", got.Files)
+	}
+	parent := findFileStat(t, got.Files, "sub")
+	if parent.Additions != 0 || parent.Deletions != 1 || !parent.PatchIncluded {
+		t.Fatalf("gitlink FileStat = %#v, want included deletion", parent)
+	}
+	child := findFileStat(t, got.Files, "sub/large.txt")
+	if child.PatchIncluded || child.OmittedReason != "tooLarge" {
+		t.Fatalf("descendant FileStat = %#v, want oversized patch omitted", child)
+	}
+	if blocks := strings.Count(got.Patch, "diff --git "); blocks != 1 {
+		t.Fatalf("WorktreePatch().Patch has %d blocks, want only gitlink deletion", blocks)
+	}
 	if !strings.Contains(got.Patch, "-Subproject commit "+oldCommit) ||
-		!strings.Contains(got.Patch, "+Subproject commit "+newCommit) {
-		t.Fatalf("WorktreePatch().Patch = %q, want gitlink pointer change", got.Patch)
+		strings.Contains(got.Patch, "sub/large.txt") ||
+		strings.Contains(got.Patch, "Submodule sub ") {
+		t.Fatalf("WorktreePatch().Patch = %q, want short exact gitlink deletion", got.Patch)
 	}
 }
 
