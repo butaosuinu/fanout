@@ -253,6 +253,52 @@ func TestRunnerWorktreePatch(t *testing.T) {
 			},
 		},
 		{
+			name:    "oversized tracked binary current side is tooLarge",
+			baseRef: "main",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				content := bytes.Repeat([]byte{'x'}, patchFileLimit+1)
+				content[0] = 0
+				writeGitstatFile(t, repo, "tracked.txt", content)
+			},
+			check: func(t *testing.T, _ string, got Patch) {
+				t.Helper()
+				assertFileStat(t, got.Files, FileStat{
+					Path:          "tracked.txt",
+					OmittedReason: "tooLarge",
+				})
+				if got.Patch != "" {
+					t.Fatalf("WorktreePatch().Patch has %d bytes, want oversized binary omitted", len(got.Patch))
+				}
+			},
+		},
+		{
+			name:    "oversized tracked binary base side is tooLarge",
+			baseRef: "main",
+			prepare: func(t *testing.T, repo string) {
+				t.Helper()
+				gitTest(t, repo, "checkout", "main")
+				content := bytes.Repeat([]byte{'x'}, patchFileLimit+1)
+				content[0] = 0
+				writeGitstatFile(t, repo, "tracked.txt", content)
+				gitTest(t, repo, "add", "tracked.txt")
+				gitTest(t, repo, "commit", "-m", "large binary base")
+				gitTest(t, repo, "checkout", "feature")
+				gitTest(t, repo, "reset", "--hard", "main")
+				writeGitstatFile(t, repo, "tracked.txt", []byte{'a', 0, 'b'})
+			},
+			check: func(t *testing.T, _ string, got Patch) {
+				t.Helper()
+				assertFileStat(t, got.Files, FileStat{
+					Path:          "tracked.txt",
+					OmittedReason: "tooLarge",
+				})
+				if got.Patch != "" {
+					t.Fatalf("WorktreePatch().Patch has %d bytes, want oversized binary omitted", len(got.Patch))
+				}
+			},
+		},
+		{
 			name:    "empty diff",
 			baseRef: "main",
 			check: func(t *testing.T, _ string, got Patch) {
