@@ -240,18 +240,35 @@ func TestValidateBoundCoordinatorRequiresExactIdentity(t *testing.T) {
 	}
 }
 
-func TestWorkspaceObservationWithholdsAmbiguousRootPane(t *testing.T) {
+func TestWorkspaceObservationPreservesPanesWithoutGuessingRoot(t *testing.T) {
 	focused := false
+	rootCWD := "/repo"
+	extraCWD := "/repo/subdir"
 	workspace := workspaceJSON{WorkspaceID: "w1", Label: "coordinator", Focused: &focused}
 	got, err := workspaceObservation(workspace, []paneJSON{
-		{PaneID: "w1:p1", WorkspaceID: "w1", TerminalID: "term-1"},
-		{PaneID: "w1:p2", WorkspaceID: "w1", TerminalID: "term-2"},
+		{PaneID: "w1:p1", WorkspaceID: "w1", TerminalID: "term-1", CWD: &rootCWD},
+		{PaneID: "w1:p2", WorkspaceID: "w1", TerminalID: "term-2", CWD: &extraCWD},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Pane.Pane != "" || got.TerminalID != "" {
-		t.Fatalf("ambiguous root identity was retained: %+v", got)
+		t.Fatalf("multi-pane workspace guessed a root identity: %+v", got)
+	}
+	if len(got.Panes) != 2 ||
+		got.Panes[0].Pane.Pane != "w1:p1" ||
+		got.Panes[0].TerminalID != "term-1" ||
+		got.Panes[0].CWD != rootCWD {
+		t.Fatalf("multi-pane observation = %+v, want saved root pane available", got)
+	}
+	expected := testCoordinatorObservation()
+	expected.CWD = rootCWD
+	if err := validateBoundCoordinator(expected, []WorkspaceObservation{got}); err != nil {
+		t.Fatalf("saved root pane was not matched: %v", err)
+	}
+	got.Panes = got.Panes[1:]
+	if err := validateBoundCoordinator(expected, []WorkspaceObservation{got}); err == nil {
+		t.Fatal("missing saved root pane was accepted")
 	}
 }
 

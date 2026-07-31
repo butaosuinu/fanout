@@ -497,6 +497,43 @@ func TestVerifyHerdrStateBindingsResolvesIssueSourcedPlanParent(t *testing.T) {
 	}
 }
 
+func TestWorkspaceHasHerdrResourceMatchesSavedRootAmongMultiplePanes(t *testing.T) {
+	expected := state.HerdrResource{
+		WorkspaceID: "w1",
+		Label:       "fanout-coordinator-token",
+		PaneID:      "w1:p1",
+		TerminalID:  "term-1",
+		CurrentPath: "/repo",
+	}
+	observation := herdrrun.WorkspaceObservation{
+		WorkspaceID: expected.WorkspaceID,
+		Label:       expected.Label,
+		Panes: []herdrrun.WorkspacePaneObservation{
+			{
+				Pane: backend.PaneRef{
+					Backend: backend.Herdr, Workspace: expected.WorkspaceID, Pane: expected.PaneID,
+				},
+				TerminalID: expected.TerminalID,
+				CWD:        expected.CurrentPath,
+			},
+			{
+				Pane: backend.PaneRef{
+					Backend: backend.Herdr, Workspace: expected.WorkspaceID, Pane: "w1:p2",
+				},
+				TerminalID: "term-2",
+				CWD:        "/repo/subdir",
+			},
+		},
+	}
+	if !workspaceHasHerdrResource(observation, expected) {
+		t.Fatal("saved root pane was not matched in multi-pane workspace")
+	}
+	observation.Panes = observation.Panes[1:]
+	if workspaceHasHerdrResource(observation, expected) {
+		t.Fatal("workspace without the saved root pane was accepted")
+	}
+}
+
 func TestRealizeHerdrUsesFinalRowsAsIdempotentBindings(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
@@ -930,7 +967,7 @@ func TestRealizeHerdrReusesNumericParentCoordinatorAcrossLinkedWorktrees(t *test
 	}
 }
 
-func TestRealizeHerdrPersistsIssueSourcedRuntimeParentAcrossLinkedWorktrees(t *testing.T) {
+func TestRealizeHerdrResolvesPlanRuntimeParentPerOwnerRoot(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	planDir := filepath.Join(repo, ".fanout", "plans")
 	if err := os.MkdirAll(planDir, 0o755); err != nil {
@@ -968,9 +1005,36 @@ func TestRealizeHerdrPersistsIssueSourcedRuntimeParentAcrossLinkedWorktrees(t *t
 	if removeErr := os.Remove(planPath); removeErr != nil {
 		t.Fatal(removeErr)
 	}
+	replayedPlan, err := realizeHerdrCoordinator(
+		context.Background(),
+		planReq,
+		runtime,
+		hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		replayedPlan.Intent.ID != wantID || len(runtime.mutations) != 1 {
+		t.Fatalf(
+			"same-owner saved runtime parent = %+v, err=%v, mutations=%d",
+			replayedPlan,
+			err,
+			len(runtime.mutations),
+		)
+	}
 
 	sibling := filepath.Join(t.TempDir(), "sibling")
 	gitCmdTest(t, repo, "worktree", "add", "-b", "issue-plan-coordinator", sibling, "HEAD")
+	siblingPlanDir := filepath.Join(sibling, ".fanout", "plans")
+	if err := os.MkdirAll(siblingPlanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	siblingPlanPath := filepath.Join(siblingPlanDir, "demo.json")
+	if err := os.WriteFile(
+		siblingPlanPath,
+		[]byte(`{"version":1,"plan":{"slug":"demo","title":"Demo","source":"issue #425"},"tasks":[]}`),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
 	siblingPlanReq := testHerdrCoordinatorRequest(sibling)
 	siblingPlanReq.Parent = "plan:demo"
 	reusedPlan, err := realizeHerdrCoordinator(
@@ -983,6 +1047,34 @@ func TestRealizeHerdrPersistsIssueSourcedRuntimeParentAcrossLinkedWorktrees(t *t
 		reusedPlan.Intent.ID != wantID {
 		t.Fatalf("saved issue-sourced coordinator reuse = %+v, err=%v", reusedPlan, err)
 	}
+	if err := os.WriteFile(
+		siblingPlanPath,
+		[]byte(`{"version":1,"plan":{"slug":"demo","title":"Demo","source":"issue #426"},"tasks":[]}`),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	otherOwnerPlan, err := realizeHerdrCoordinator(
+		context.Background(),
+		siblingPlanReq,
+		runtime,
+		hooks,
+	)
+	wantOtherID, idErr := state.HerdrCoordinatorIntentID("426", "")
+	if idErr != nil {
+		t.Fatal(idErr)
+	}
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		otherOwnerPlan.Intent.ID != wantOtherID ||
+		otherOwnerPlan.Intent.RuntimeParent != "426" ||
+		len(runtime.mutations) != 2 {
+		t.Fatalf(
+			"different-owner runtime parent = %+v, err=%v, mutations=%d",
+			otherOwnerPlan,
+			err,
+			len(runtime.mutations),
+		)
+	}
 
 	issueReq := testHerdrCoordinatorRequest(sibling)
 	reusedIssue, err := realizeHerdrCoordinator(
@@ -992,7 +1084,7 @@ func TestRealizeHerdrPersistsIssueSourcedRuntimeParentAcrossLinkedWorktrees(t *t
 		hooks,
 	)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
-		reusedIssue.Intent.ID != wantID || len(runtime.mutations) != 1 {
+		reusedIssue.Intent.ID != wantID || len(runtime.mutations) != 2 {
 		t.Fatalf(
 			"numeric issue coordinator reuse = %+v, err=%v, mutations=%d",
 			reusedIssue,

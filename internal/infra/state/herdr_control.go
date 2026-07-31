@@ -1,10 +1,14 @@
 package state
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -167,15 +171,25 @@ func LockHerdrControl(projectRoot string) (*LockedHerdrControl, error) {
 }
 
 func lockHerdrControlPath(path string) (*os.File, error) {
-	// This Git-owned file is a cooperative state lock, not a mutation authority;
-	// Herdr's separate private namespace gate owns that security boundary.
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := ensurePrivateHerdrControlDir(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("create Herdr control directory: %w", err)
 	}
 	lockPath := path + ".lock"
-	file, openErr := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	file, openErr := os.OpenFile(
+		lockPath,
+		os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW,
+		0o600,
+	)
 	if openErr != nil {
 		return nil, fmt.Errorf("open Herdr control lock %s: %w", lockPath, openErr)
+	}
+	info, statErr := file.Stat()
+	if statErr == nil {
+		statErr = validatePrivateHerdrControlFile(lockPath, info)
+	}
+	if statErr != nil {
+		_ = file.Close() // The namespace validation error is authoritative.
+		return nil, statErr
 	}
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
 		_ = file.Close() // The flock error is authoritative.
@@ -203,6 +217,13 @@ func (l *LockedHerdrControl) Save() error {
 	}
 	if err := atomicfs.WriteJSON(l.path, l.HerdrControlStore, 0o600); err != nil {
 		return fmt.Errorf("write Herdr control %s: %w", l.path, err)
+	}
+	info, err := os.Lstat(l.path)
+	if err != nil {
+		return fmt.Errorf("validate written Herdr control %s: %w", l.path, err)
+	}
+	if err := validatePrivateHerdrControlFile(l.path, info); err != nil {
+		return err
 	}
 	return nil
 }
@@ -358,7 +379,7 @@ func herdrOwnerTuple(parent, ownerProjectRoot string) string {
 
 func loadHerdrControl(path string) (HerdrControlStore, error) {
 	var store HerdrControlStore
-	found, err := atomicfs.ReadJSON(path, &store)
+	found, err := readPrivateHerdrControlJSON(path, &store)
 	if err != nil {
 		if found {
 			return HerdrControlStore{}, fmt.Errorf("parse Herdr control %s: %w", path, err)
@@ -378,6 +399,97 @@ func loadHerdrControl(path string) (HerdrControlStore, error) {
 		return HerdrControlStore{}, fmt.Errorf("validate Herdr control %s: %w", path, err)
 	}
 	return store, nil
+}
+
+func ensurePrivateHerdrControlDir(path string) error {
+	if err := os.Mkdir(path, 0o700); err != nil && !os.IsExist(err) {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+		info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("herdr control directory %s is not an owner-only real directory", path)
+	}
+	if err := validateHerdrControlOwner(path, info); err != nil {
+		return err
+	}
+	return validateHerdrControlACL(path)
+}
+
+func readPrivateHerdrControlJSON(path string, target any) (bool, error) {
+	dir := filepath.Dir(path)
+	if _, err := os.Lstat(dir); os.IsNotExist(err) {
+		return false, nil
+	}
+	if err := ensurePrivateHerdrControlDir(dir); err != nil {
+		return false, err
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		_ = file.Close() // The read or decode result is authoritative.
+	}()
+	info, err := file.Stat()
+	if err == nil {
+		err = validatePrivateHerdrControlFile(path, info)
+	}
+	if err != nil {
+		return false, err
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(data, target); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func validatePrivateHerdrControlFile(path string, info os.FileInfo) error {
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+		info.Mode().Perm() != 0o600 {
+		return fmt.Errorf("herdr control file %s is not an owner-only regular file", path)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 {
+		return fmt.Errorf("herdr control file %s has an invalid link identity", path)
+	}
+	if err := validateHerdrControlOwner(path, info); err != nil {
+		return err
+	}
+	return validateHerdrControlACL(path)
+}
+
+func validateHerdrControlOwner(path string, info os.FileInfo) error {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Getuid() {
+		return fmt.Errorf("herdr control path %s is not owned by the current uid", path)
+	}
+	return nil
+}
+
+func validateHerdrControlACL(path string) error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	cmd := exec.Command("/bin/ls", "-lde", path)
+	cmd.Env = []string{}
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("inspect ACL on Herdr control path %s: %w", path, err)
+	}
+	first, _, _ := strings.Cut(string(out), "\n")
+	mode, _, ok := strings.Cut(first, " ")
+	if !ok || strings.Contains(mode, "+") {
+		return fmt.Errorf("herdr control path %s has an extended ACL", path)
+	}
+	return nil
 }
 
 func emptyHerdrControl() HerdrControlStore {

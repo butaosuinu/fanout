@@ -62,6 +62,13 @@ type WorkspaceObservation struct {
 	Pane        corebackend.PaneRef
 	TerminalID  string
 	CWD         string
+	Panes       []WorkspacePaneObservation
+}
+
+type WorkspacePaneObservation struct {
+	Pane       corebackend.PaneRef
+	TerminalID string
+	CWD        string
 }
 
 type OwnedWorktreeRoute struct {
@@ -337,7 +344,8 @@ func hasExpectedAlreadyOpenBinding(
 			continue
 		}
 		if workspace.Path != req.Path || workspace.RepoKey != req.SourceRepoKey ||
-			workspace.RepoRoot != req.SourceRepoRoot || workspace.CWD != req.Path {
+			workspace.RepoRoot != req.SourceRepoRoot ||
+			!workspaceHasPaneCWD(workspace, req.Path) {
 			return false
 		}
 		matches++
@@ -576,9 +584,9 @@ func sameWorkspaceObservation(left, right WorkspaceObservation) bool {
 		left.Path == right.Path &&
 		left.RepoKey == right.RepoKey &&
 		left.RepoRoot == right.RepoRoot &&
-		left.Pane == right.Pane &&
-		left.TerminalID == right.TerminalID &&
-		left.CWD == right.CWD
+		workspaceHasPane(left, WorkspacePaneObservation{
+			Pane: right.Pane, TerminalID: right.TerminalID, CWD: right.CWD,
+		})
 }
 
 func (b *Backend) observeOwnedWorkspaces(
@@ -629,6 +637,18 @@ func workspaceObservation(
 		observation.RepoKey = workspace.Worktree.RepoKey
 		observation.RepoRoot = workspace.Worktree.RepoRoot
 	}
+	observation.Panes = make([]WorkspacePaneObservation, 0, len(panes))
+	for _, pane := range panes {
+		observation.Panes = append(observation.Panes, WorkspacePaneObservation{
+			Pane: corebackend.PaneRef{
+				Backend:   corebackend.Herdr,
+				Workspace: workspace.WorkspaceID,
+				Pane:      pane.PaneID,
+			},
+			TerminalID: pane.TerminalID,
+			CWD:        optionalString(pane.CWD),
+		})
+	}
 	switch len(panes) {
 	case 0:
 		return WorkspaceObservation{}, fmt.Errorf("herdr workspace %q has no pane", workspace.WorkspaceID)
@@ -642,9 +662,35 @@ func workspaceObservation(
 		observation.TerminalID = pane.TerminalID
 		observation.CWD = optionalString(pane.CWD)
 	}
-	// Established workspaces may have multiple panes. Recovery cannot infer
-	// which is the root, so leave root identity empty and fail adoption.
+	// Established workspaces may have multiple panes. Keep every pane so a
+	// saved root identity can be verified without guessing a new root.
 	return observation, nil
+}
+
+func workspaceHasPane(observation WorkspaceObservation, expected WorkspacePaneObservation) bool {
+	if observation.Pane == expected.Pane &&
+		observation.TerminalID == expected.TerminalID &&
+		observation.CWD == expected.CWD {
+		return true
+	}
+	for _, pane := range observation.Panes {
+		if pane == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func workspaceHasPaneCWD(observation WorkspaceObservation, cwd string) bool {
+	if observation.CWD == cwd {
+		return true
+	}
+	for _, pane := range observation.Panes {
+		if pane.CWD == cwd {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Backend) runWorktreeMutation(

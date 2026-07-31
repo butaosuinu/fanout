@@ -638,11 +638,10 @@ func resolveHerdrRuntimeParent(
 		if canonicalHerdrParent(savedParent) != parent {
 			return nil
 		}
-		runtimeParent := canonicalHerdrParent(savedRuntimeParent)
-		if strings.HasPrefix(runtimeParent, "plan:") &&
-			filepath.Clean(savedOwnerProjectRoot) != filepath.Clean(ownerProjectRoot) {
+		if filepath.Clean(savedOwnerProjectRoot) != filepath.Clean(ownerProjectRoot) {
 			return nil
 		}
+		runtimeParent := canonicalHerdrParent(savedRuntimeParent)
 		if saved != "" && saved != runtimeParent {
 			return fmt.Errorf(
 				"saved Herdr runtime parents for %s disagree: %s and %s",
@@ -1026,7 +1025,7 @@ func verifyRealizedCoordinator(
 		return err
 	}
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
-	if len(matches) != 1 || !sameHerdrResource(intent.Resource, stateResource(matches[0])) {
+	if len(matches) != 1 || !workspaceHasHerdrResource(matches[0], intent.Resource) {
 		return fmt.Errorf("realized Herdr coordinator identity changed")
 	}
 	return nil
@@ -1050,7 +1049,7 @@ func resumeRealizedHerdrWorktree(
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
 	switch len(matches) {
 	case 1:
-		if !sameHerdrResource(intent.Resource, stateResource(matches[0])) {
+		if !workspaceHasHerdrResource(matches[0], intent.Resource) {
 			return HerdrWorktreeResult{}, markHerdrIntentManual(
 				locked,
 				intent,
@@ -1214,7 +1213,7 @@ func verifyCoordinatorObservation(
 		if workspace.WorkspaceID != expected.WorkspaceID {
 			continue
 		}
-		if sameHerdrResource(expected, stateResource(workspace)) {
+		if workspaceHasHerdrResource(workspace, expected) {
 			return nil
 		}
 		return fmt.Errorf("herdr coordinator identity changed before child mutation")
@@ -1503,6 +1502,31 @@ func observationResource(resource state.HerdrResource) herdrrun.WorkspaceObserva
 
 func sameHerdrResource(left, right state.HerdrResource) bool {
 	return left == right
+}
+
+func workspaceHasHerdrResource(
+	observation herdrrun.WorkspaceObservation,
+	expected state.HerdrResource,
+) bool {
+	if observation.WorkspaceID != expected.WorkspaceID ||
+		observation.Label != expected.Label ||
+		observation.RepoKey != expected.RepoKey ||
+		observation.RepoRoot != expected.RepoRoot {
+		return false
+	}
+	if sameHerdrResource(expected, stateResource(observation)) {
+		return true
+	}
+	for _, pane := range observation.Panes {
+		if pane.Pane.Backend == backend.Herdr &&
+			pane.Pane.Workspace == expected.WorkspaceID &&
+			pane.Pane.Pane == expected.PaneID &&
+			pane.TerminalID == expected.TerminalID &&
+			pane.CWD == expected.CurrentPath {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeHerdrRealizeHooks(hooks HerdrRealizeHooks) HerdrRealizeHooks {

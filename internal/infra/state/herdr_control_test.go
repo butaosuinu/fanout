@@ -53,6 +53,105 @@ func TestHerdrControlIsSharedAcrossLinkedWorktrees(t *testing.T) {
 	}
 }
 
+func TestHerdrControlRejectsNonPrivateNamespace(t *testing.T) {
+	validRegistry := []byte(`{"schemaVersion":1,"rows":[],"intents":[]}`)
+	t.Run("control directory mode", func(t *testing.T) {
+		repo := newHerdrControlRepo(t)
+		path, err := HerdrControlPath(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadHerdrControl(repo); err == nil ||
+			!strings.Contains(err.Error(), "owner-only real directory") {
+			t.Fatalf("permissive control directory error = %v", err)
+		}
+	})
+	t.Run("control directory symlink", func(t *testing.T) {
+		repo := newHerdrControlRepo(t)
+		path, err := HerdrControlPath(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(t.TempDir(), "fanout")
+		if err := os.Mkdir(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Dir(path)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadHerdrControl(repo); err == nil ||
+			!strings.Contains(err.Error(), "owner-only real directory") {
+			t.Fatalf("symlinked control directory error = %v", err)
+		}
+	})
+	t.Run("registry mode", func(t *testing.T) {
+		repo := newHerdrControlRepo(t)
+		path, err := HerdrControlPath(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, validRegistry, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadHerdrControl(repo); err == nil ||
+			!strings.Contains(err.Error(), "owner-only regular file") {
+			t.Fatalf("permissive registry error = %v", err)
+		}
+	})
+	t.Run("registry symlink", func(t *testing.T) {
+		repo := newHerdrControlRepo(t)
+		path, err := HerdrControlPath(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(t.TempDir(), "registry.json")
+		if err := os.WriteFile(target, validRegistry, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadHerdrControl(repo); err == nil {
+			t.Fatal("symlinked registry was accepted")
+		}
+	})
+	t.Run("lock mode", func(t *testing.T) {
+		repo := newHerdrControlRepo(t)
+		path, err := HerdrControlPath(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path+".lock", nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path+".lock", 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LockHerdrControl(repo); err == nil ||
+			!strings.Contains(err.Error(), "owner-only regular file") {
+			t.Fatalf("permissive lock error = %v", err)
+		}
+	})
+}
+
 func TestHerdrControlRejectsExistingRegistryWithoutSchemaVersion(t *testing.T) {
 	for _, contents := range []string{`{}`, `{"schemaVersion":0}`} {
 		t.Run(contents, func(t *testing.T) {
