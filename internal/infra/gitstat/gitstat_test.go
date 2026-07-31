@@ -374,6 +374,52 @@ func TestRunnerWorktreePatchResolvesRelativePathFromRunnerCwd(t *testing.T) {
 	}
 }
 
+func TestRunnerWorktreePatchOverridesIgnoreSubmodules(t *testing.T) {
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	writeGitstatFile(t, repo, "seed.txt", []byte("seed\n"))
+	gitTest(t, repo, "add", "seed.txt")
+	gitTest(t, repo, "commit", "-m", "seed")
+	sub := filepath.Join(repo, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, sub, "init")
+	gitTest(t, sub, "config", "user.email", "test@example.com")
+	gitTest(t, sub, "config", "user.name", "Test User")
+	writeGitstatFile(t, sub, "file.txt", []byte("old\n"))
+	gitTest(t, sub, "add", "file.txt")
+	gitTest(t, sub, "commit", "-m", "old submodule commit")
+	oldCommit := gitTestOutput(t, sub, "rev-parse", "HEAD")
+	writeGitstatFile(t, sub, "file.txt", []byte("new\n"))
+	gitTest(t, sub, "add", "file.txt")
+	gitTest(t, sub, "commit", "-m", "new submodule commit")
+	newCommit := gitTestOutput(t, sub, "rev-parse", "HEAD")
+	gitTest(t, repo, "update-index", "--add", "--cacheinfo", "160000", oldCommit, "sub")
+	gitTest(t, repo, "commit", "-m", "add gitlink")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	gitTest(t, repo, "update-index", "--cacheinfo", "160000", newCommit, "sub")
+	gitTest(t, repo, "config", "diff.ignoreSubmodules", "all")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "sub",
+		Additions:     1,
+		Deletions:     1,
+		PatchIncluded: true,
+	})
+	if !strings.Contains(got.Patch, "-Subproject commit "+oldCommit) ||
+		!strings.Contains(got.Patch, "+Subproject commit "+newCommit) {
+		t.Fatalf("WorktreePatch().Patch = %q, want gitlink pointer change", got.Patch)
+	}
+}
+
 func TestRunnerWorktreePatchUsesExactTrackedPathspec(t *testing.T) {
 	repo := initPatchRepo(t)
 	if err := os.Remove(filepath.Join(repo, "tracked.txt")); err != nil {

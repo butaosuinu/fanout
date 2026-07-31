@@ -292,6 +292,8 @@ live worktree から read-only の Git command で差分を収集する。
 tracked file の統計と path は
 `git diff --numstat -z <mergeBaseSHA> --`、patch は file ごとの
 `git diff <mergeBaseSHA> -- <path>` から得る。
+どちらも `--ignore-submodules=none` を指定し、
+repository または user の `diff.ignoreSubmodules` で gitlink を隠さない。
 untracked file は `git ls-files --others --exclude-standard -z` で列挙し、
 `/dev/null` に対する file ごとの `git diff --no-index` で統計と patch を得る。
 index から削除した tracked path と同名の untracked file は 1 file に統合する。

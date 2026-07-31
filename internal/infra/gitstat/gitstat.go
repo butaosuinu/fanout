@@ -93,6 +93,7 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 	trackedOut, err := r.git(
 		"-C", path,
 		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+		"--ignore-submodules=none",
 		"--numstat", "-z", mergeBase, "--",
 	)
 	if err != nil {
@@ -196,12 +197,7 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 				stat.Binary = replacementStat.Binary
 				stat.OmittedReason = replacementStat.OmittedReason
 			case file.tracked:
-				out, err = r.gitExactPath(
-					stat.Path,
-					"-C", path,
-					"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
-					mergeBase,
-				)
+				out, err = r.trackedPathPatch(path, mergeBase, stat.Path)
 			default:
 				var code int
 				out, code, err = r.gitExitCode(
@@ -377,12 +373,7 @@ func (r Runner) replacementPatch(
 	}
 
 	if entry.mode[:2] != currentMode[:2] {
-		deleted, deleteErr := r.gitExactPath(
-			file.Path,
-			"-C", path,
-			"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
-			mergeBase,
-		)
+		deleted, deleteErr := r.trackedPathPatch(path, mergeBase, file.Path)
 		if deleteErr != nil {
 			return nil, FileStat{}, false, deleteErr
 		}
@@ -461,6 +452,53 @@ func (r Runner) replacementPatch(
 	stat := stats[0]
 	stat.Path = file.Path
 	return out, stat, true, nil
+}
+
+func (r Runner) trackedPathPatch(path, mergeBase, rel string) ([]byte, error) {
+	gitlink, err := r.pathIsGitlink(path, mergeBase, rel)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{
+		"-C", path,
+		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+		"--ignore-submodules=none",
+		mergeBase,
+	}
+	if gitlink {
+		return r.git(append(args, "--", rel)...)
+	}
+	return r.gitExactPath(rel, args...)
+}
+
+func (r Runner) pathIsGitlink(path, mergeBase, rel string) (bool, error) {
+	for _, args := range [][]string{
+		{"-C", path, "ls-files", "--stage", "-z", "--", rel},
+		{"-C", path, "ls-tree", "-z", mergeBase, "--", rel},
+	} {
+		out, err := r.git(args...)
+		if err != nil {
+			return false, err
+		}
+		records, err := splitNUL(out)
+		if err != nil {
+			return false, fmt.Errorf("parse gitlink mode for %q: %w", rel, err)
+		}
+		for _, record := range records {
+			metadata, entryPath, found := bytes.Cut(record, []byte{'\t'})
+			if !found || string(entryPath) != rel {
+				continue
+			}
+			fields := strings.Fields(string(metadata))
+			if len(fields) == 0 || len(fields[0]) != 6 {
+				return false, fmt.Errorf("parse gitlink mode for %q: malformed entry", rel)
+			}
+			if fields[0] == "160000" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func replacementDiff(cwd string, numstat bool, oldPath, newPath string) ([]byte, int, error) {
