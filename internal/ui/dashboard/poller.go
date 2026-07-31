@@ -184,7 +184,7 @@ func (p *poller) ghLoop(ctx context.Context) {
 }
 
 func (p *poller) runGHTick() {
-	if p.hub.subscriberCount() == 0 {
+	if p.hub.subscriberCount() == 0 && !p.hub.snapshotRecentlyRequested(time.Now()) {
 		return
 	}
 	p.ensureResolved()

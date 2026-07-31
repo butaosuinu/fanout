@@ -260,9 +260,12 @@ func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *Server) handleSnapshot(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	if r.Method == http.MethodGet {
+		s.hub.noteSnapshotRequest(time.Now())
+	}
 	// A failed response write means the client went away; nothing to do here.
 	_, _ = w.Write(s.poller.snapshotJSON())
 }

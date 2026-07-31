@@ -5,6 +5,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +89,39 @@ func TestSnapshotEndpointReturnsJSON(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), `"sessions"`) {
 		t.Fatalf("snapshot body missing sessions: %s", body)
+	}
+}
+
+func TestSnapshotPollingKeepsGHRefreshActive(t *testing.T) {
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"a","paneId":"%1","agent":"claude"}
+	]}`)
+
+	h := newHub()
+	gh := &countingGH{}
+	p := newLazyPoller(root, func() (string, GHProvider, error) {
+		return "o/n", gh, nil
+	}, h)
+	srv := &Server{hub: h, poller: p}
+
+	// The SPA polls this endpoint when SSE is unavailable. That request must
+	// keep the next GitHub tick active even though there are no SSE subscribers.
+	first := httptest.NewRecorder()
+	srv.handleSnapshot(first, httptest.NewRequest(http.MethodGet, "/api/snapshot", nil))
+	if h.subscriberCount() != 0 {
+		t.Fatalf("snapshot polling created %d SSE subscriber(s), want 0", h.subscriberCount())
+	}
+	p.runGHTick()
+	if gh.calls[101] != 1 || gh.waveCalls["100"] != 1 {
+		t.Fatalf("provider calls after snapshot poll = issues %v, waves %v; want issue 101 and parent 100 once",
+			gh.calls, gh.waveCalls)
+	}
+
+	second := httptest.NewRecorder()
+	srv.handleSnapshot(second, httptest.NewRequest(http.MethodGet, "/api/snapshot", nil))
+	if body := second.Body.String(); !strings.Contains(body, `"hasMergedPr":true`) {
+		t.Fatalf("snapshot polling did not receive refreshed GitHub data: %s", body)
 	}
 }
 

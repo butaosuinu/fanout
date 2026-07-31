@@ -1,15 +1,25 @@
 package dashboard
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
+
+// snapshotActivityLease keeps the GitHub tier active long enough for the next
+// gh tick after a /api/snapshot request. The SPA uses that endpoint every two
+// seconds when SSE is unavailable, so an open fallback client continuously
+// renews the lease without increasing the GitHub polling cadence.
+const snapshotActivityLease = defaultGHInterval + defaultCheapInterval
 
 // hub is a minimal server-sent-events fan-out: subscribers register a buffered
 // channel and receive every broadcast. Sends never block the poller — a slow
 // client's queued frame is coalesced to the latest rather than stalling the
 // broadcast. Pure stdlib; no websocket dependency.
 type hub struct {
-	mu     sync.Mutex
-	subs   map[chan []byte]struct{}
-	closed bool
+	mu                  sync.Mutex
+	subs                map[chan []byte]struct{}
+	snapshotActiveUntil time.Time
+	closed              bool
 }
 
 func newHub() *hub {
@@ -79,4 +89,16 @@ func (h *hub) subscriberCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.subs)
+}
+
+func (h *hub) noteSnapshotRequest(now time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.snapshotActiveUntil = now.Add(snapshotActivityLease)
+}
+
+func (h *hub) snapshotRecentlyRequested(now time.Time) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return now.Before(h.snapshotActiveUntil)
 }
