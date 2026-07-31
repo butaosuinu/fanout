@@ -245,7 +245,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stateTickMsg:
 		return m, m.loadStateCmd(true)
 	case ghTickMsg:
-		return m, m.loadGHCmd(true)
+		return m, m.loadGHCmdAt(true, time.Time(msg))
 	case activeTickMsg:
 		return m, m.loadActivePaneCmd(true)
 	case activePaneMsg:

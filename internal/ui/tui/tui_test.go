@@ -37,6 +37,40 @@ type fakeWatcherRunner struct {
 	calls  int
 }
 
+type countingIssueStatusProvider struct {
+	issueCalls  map[int]int
+	branchCalls map[string]int
+	waveCalls   map[string]int
+	waveNums    map[string][]int
+	waves       map[string]sessionview.WaveGraph
+}
+
+func (f *countingIssueStatusProvider) IssuePRs(num int) (string, []ghissue.PRRef, error) {
+	if f.issueCalls == nil {
+		f.issueCalls = map[int]int{}
+	}
+	f.issueCalls[num]++
+	return "OPEN", []ghissue.PRRef{{Number: 900 + num, State: "OPEN"}}, nil
+}
+
+func (f *countingIssueStatusProvider) BranchPRs(branch string) ([]ghissue.PRRef, error) {
+	if f.branchCalls == nil {
+		f.branchCalls = map[string]int{}
+	}
+	f.branchCalls[branch]++
+	return []ghissue.PRRef{{Number: 700, State: "OPEN"}}, nil
+}
+
+func (f *countingIssueStatusProvider) Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error) {
+	if f.waveCalls == nil {
+		f.waveCalls = map[string]int{}
+		f.waveNums = map[string][]int{}
+	}
+	f.waveCalls[parent]++
+	f.waveNums[parent] = slices.Clone(recordedNums)
+	return f.waves[parent], nil
+}
+
 func (f *fakeWatcherRunner) RunCycle() (watch.Report, error) {
 	f.calls++
 	return f.report, f.err
@@ -207,14 +241,9 @@ func TestBuildPaneViewsKeysTaskStatusBySourceRoot(t *testing.T) {
 
 func TestLoadIssueStatusesFetchesTaskBranchPRs(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".fanout"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".fanout", "state.json"), []byte(`{"schemaVersion":1,"panes":[
+	writeTUIState(t, root, `{"schemaVersion":1,"panes":[
 	  {"parent":"plan:alpha","issueNum":0,"taskId":"task-a","branchName":"fanout/task-a","paneId":"%1"}
-	]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	]}`)
 	argsPath := installTUIFakeGH(t, `[{
 	  "number":42,
 	  "state":"MERGED",
@@ -224,7 +253,8 @@ func TestLoadIssueStatusesFetchesTaskBranchPRs(t *testing.T) {
 	  "statusCheckRollup":{"state":"SUCCESS"}
 	}]`)
 
-	statuses, err := loadIssueStatuses(root)
+	loader := newIssueStatusLoader(time.Minute)
+	statuses, err := loader.loadIssueStatuses(root, nil, time.Unix(100, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,12 +267,187 @@ func TestLoadIssueStatusesFetchesTaskBranchPRs(t *testing.T) {
 	if status.State != sessionview.IssueStateUnknown || len(status.PRs) != 1 || status.PRs[0].Number != 42 || status.PRs[0].CIStatus != "pass" {
 		t.Fatalf("task branch status = %+v", status)
 	}
+	_, err = loader.loadIssueStatuses(root, nil, time.Unix(120, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(args), "pr list --head fanout/task-a --state all") {
-		t.Fatalf("fake gh args did not include branch PR lookup:\n%s", args)
+	if got := strings.Count(string(args), "repo view --json nameWithOwner -q .nameWithOwner"); got != 1 {
+		t.Fatalf("fake gh repo view calls = %d, want 1:\n%s", got, args)
+	}
+	if got := strings.Count(string(args), "pr list --head fanout/task-a --state all"); got != 2 {
+		t.Fatalf("fake gh branch PR calls = %d, want 2:\n%s", got, args)
+	}
+}
+
+func TestIssueStatusLoaderThrottlesWaveAndUnrecordedPRsAcrossTicks(t *testing.T) {
+	root := t.TempDir()
+	writeTUIState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"recorded","paneId":"%1"},
+	  {"parent":"plan:alpha","issueNum":0,"taskId":"task-a","branchName":"fanout/task-a","paneId":"%2"}
+	]}`)
+	gh := &countingIssueStatusProvider{waves: map[string]sessionview.WaveGraph{
+		"100": {
+			Children: []ghissue.Issue{
+				{Number: 101, Title: "recorded", State: "OPEN"},
+				{Number: 102, Title: "queued", State: "OPEN"},
+			},
+			Info: map[int]sessionview.WaveInfo{
+				101: {Wave: 1},
+				102: {Wave: 2, Blocked: true},
+			},
+		},
+	}}
+	resolveCalls := 0
+	loader := newIssueStatusLoader(time.Minute)
+	loader.resolve = func(string) (issueStatusProvider, error) {
+		resolveCalls++
+		return gh, nil
+	}
+	firstAt := time.Unix(100, 0)
+
+	statuses, err := loader.loadIssueStatuses(root, nil, firstAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := statuses[keyForIssue("100", 102)]; !ok {
+		t.Fatalf("initial wave did not populate queued child: %#v", statuses)
+	}
+	if resolveCalls != 1 || gh.waveCalls["100"] != 1 || gh.issueCalls[101] != 1 || gh.issueCalls[102] != 1 || gh.branchCalls["fanout/task-a"] != 1 {
+		t.Fatalf(
+			"initial calls = resolve:%d wave:%v issue:%v branch:%v, want 1 each",
+			resolveCalls,
+			gh.waveCalls,
+			gh.issueCalls,
+			gh.branchCalls,
+		)
+	}
+
+	_, err = loader.loadIssueStatuses(root, nil, firstAt.Add(20*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolveCalls != 1 {
+		t.Fatalf("resolve calls after second tick = %d, want 1", resolveCalls)
+	}
+	if gh.waveCalls["100"] != 1 {
+		t.Fatalf("wave calls inside interval = %d, want 1", gh.waveCalls["100"])
+	}
+	if gh.issueCalls[101] != 2 || gh.issueCalls[102] != 1 {
+		t.Fatalf("PR calls after throttled tick = %v, want recorded #101=2 queued #102=1", gh.issueCalls)
+	}
+	if gh.branchCalls["fanout/task-a"] != 2 {
+		t.Fatalf("branch calls after throttled tick = %v, want task branch=2", gh.branchCalls)
+	}
+
+	_, err = loader.loadIssueStatuses(root, nil, firstAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gh.waveCalls["100"] != 2 || gh.issueCalls[101] != 3 || gh.issueCalls[102] != 2 {
+		t.Fatalf("calls after wave interval = wave:%v issue:%v, want wave=2 #101=3 #102=2", gh.waveCalls, gh.issueCalls)
+	}
+}
+
+func TestIssueStatusLoaderNewRecordedIssueBypassesWaveThrottle(t *testing.T) {
+	root := t.TempDir()
+	writeTUIState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"first","paneId":"%1"}
+	]}`)
+	gh := &countingIssueStatusProvider{waves: map[string]sessionview.WaveGraph{
+		"100": {
+			Children: []ghissue.Issue{{Number: 101, Title: "first", State: "OPEN"}},
+			Info:     map[int]sessionview.WaveInfo{101: {Wave: 1}},
+		},
+	}}
+	loader := newIssueStatusLoader(time.Hour)
+	loader.resolve = func(string) (issueStatusProvider, error) { return gh, nil }
+	firstAt := time.Unix(100, 0)
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt); err != nil {
+		t.Fatal(err)
+	}
+
+	writeTUIState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"first","paneId":"%1"},
+	  {"parent":"100","issueNum":104,"slug":"new","paneId":"%4"}
+	]}`)
+	gh.waves["100"] = sessionview.WaveGraph{
+		Children: []ghissue.Issue{
+			{Number: 101, Title: "first", State: "OPEN"},
+			{Number: 104, Title: "new", State: "OPEN"},
+		},
+		Info: map[int]sessionview.WaveInfo{101: {Wave: 1}, 104: {Wave: 1}},
+	}
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt.Add(20*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	if gh.waveCalls["100"] != 2 {
+		t.Fatalf("wave calls after new recorded issue = %d, want 2", gh.waveCalls["100"])
+	}
+	if !slices.Equal(gh.waveNums["100"], []int{101, 104}) {
+		t.Fatalf("wave recorded nums = %v, want [101 104]", gh.waveNums["100"])
+	}
+	if gh.issueCalls[104] != 1 {
+		t.Fatalf("new recorded issue PR calls = %d, want 1", gh.issueCalls[104])
+	}
+}
+
+func TestIssueStatusLoaderResolvesRepoOnceAndRetriesFailures(t *testing.T) {
+	root := t.TempDir()
+	writeTUIState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"100","issueNum":101,"slug":"recorded","paneId":"%1"}
+	]}`)
+	gh := &countingIssueStatusProvider{waves: map[string]sessionview.WaveGraph{
+		"100": {
+			Children: []ghissue.Issue{{Number: 101, Title: "recorded", State: "OPEN"}},
+			Info:     map[int]sessionview.WaveInfo{101: {Wave: 1}},
+		},
+	}}
+	resolveCalls := 0
+	loader := newIssueStatusLoader(time.Hour)
+	loader.resolve = func(string) (issueStatusProvider, error) {
+		resolveCalls++
+		if resolveCalls < 3 {
+			return nil, errBoom
+		}
+		return gh, nil
+	}
+	firstAt := time.Unix(100, 0)
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt); !errors.Is(err, errBoom) {
+		t.Fatalf("first resolve error = %v, want boom", err)
+	}
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt.Add(20*time.Second)); !errors.Is(err, errBoom) {
+		t.Fatalf("second resolve error = %v, want boom", err)
+	}
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt.Add(40*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loader.loadIssueStatuses(root, nil, firstAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if resolveCalls != 3 {
+		t.Fatalf("resolve calls = %d, want 3 (two failures plus one retained success)", resolveCalls)
+	}
+}
+
+func TestNewModelDerivesWaveIntervalFromGHInterval(t *testing.T) {
+	m := newModel(Options{GHInterval: 7 * time.Second})
+	if m.issueLoader.waveInterval != 21*time.Second {
+		t.Fatalf("wave interval = %s, want 21s", m.issueLoader.waveInterval)
+	}
+}
+
+func writeTUIState(t *testing.T, root, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, ".fanout"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".fanout", "state.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

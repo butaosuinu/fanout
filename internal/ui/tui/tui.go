@@ -113,6 +113,7 @@ type model struct {
 	filterEditing     bool
 	viewOverride      viewOverride
 	issues            map[issueKey]issueStatus
+	issueLoader       *issueStatusLoader
 	lastState         time.Time
 	lastGH            time.Time
 	stateErr          string
@@ -340,6 +341,7 @@ func newModel(opts Options) model {
 		table:         t,
 		detail:        viewport.New(120, detailHeight),
 		issues:        map[issueKey]issueStatus{},
+		issueLoader:   newIssueStatusLoader(3 * opts.GHInterval),
 		notifications: map[issueKey]issueTransitionSnapshot{},
 		agentStates:   map[string]agentTransitionSnapshot{},
 	}
