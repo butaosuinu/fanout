@@ -14,7 +14,10 @@ var errGraphBoom = errors.New("boom")
 
 // Compile-time check: the gh-backed runner the TUI passes in satisfies the
 // graph client interface.
-var _ IssueGraphClient = ghissue.Runner{}
+var (
+	_ IssueGraphClient        = ghissue.Runner{}
+	_ issueDetailsBatchClient = ghissue.Runner{}
+)
 
 // fakeGraphClient is an in-memory IssueGraphClient. Per-issue errors are
 // injected via detailErr; stateCalls counts IssueState lookups so tests can
@@ -29,6 +32,18 @@ type fakeGraphClient struct {
 	detailCalls   map[int]int
 	states        map[int]string
 	stateCalls    map[int]int
+}
+
+type fakeBatchGraphClient struct {
+	fakeGraphClient
+	batchDetails map[int]ghissue.Issue
+	batchErr     error
+	batchCalls   [][]int
+}
+
+func (f *fakeBatchGraphClient) IssueDetails(nums []int) (map[int]ghissue.Issue, error) {
+	f.batchCalls = append(f.batchCalls, append([]int(nil), nums...))
+	return f.batchDetails, f.batchErr
 }
 
 func (f *fakeGraphClient) ParentBody(int) (string, error) {
@@ -108,6 +123,88 @@ func TestFetchWaveGraphNumericParentUnionsSources(t *testing.T) {
 	}
 	if !reflect.DeepEqual(graph.Info, wantInfo) {
 		t.Fatalf("Info = %#v, want %#v", graph.Info, wantInfo)
+	}
+}
+
+func TestFetchWaveGraphHydratesChildrenInOneBatch(t *testing.T) {
+	client := &fakeBatchGraphClient{
+		fakeGraphClient: fakeGraphClient{
+			subIssues: []ghissue.Issue{
+				{Number: 101},
+				{Number: 102, Title: "existing title", State: "OPEN"},
+			},
+		},
+		batchDetails: map[int]ghissue.Issue{
+			101: {Number: 101, Title: "one", State: "CLOSED", Body: "body one", Labels: []ghissue.Label{{Name: "done"}}},
+			102: {Number: 102, Title: "new title", State: "CLOSED", Body: "body two", Labels: []ghissue.Label{{Name: "bug"}}},
+		},
+	}
+
+	graph, err := FetchWaveGraph(client, "100", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := client.batchCalls, [][]int{{101, 102}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("IssueDetails calls = %#v, want %#v", got, want)
+	}
+	if len(client.detailCalls) != 0 {
+		t.Fatalf("IssueDetail calls = %#v, want none", client.detailCalls)
+	}
+	want := []ghissue.Issue{
+		{Number: 101, Title: "one", State: "CLOSED", Body: "body one", Labels: []ghissue.Label{{Name: "done"}}},
+		{Number: 102, Title: "existing title", State: "OPEN", Body: "body two", Labels: []ghissue.Label{{Name: "bug"}}},
+	}
+	if !reflect.DeepEqual(graph.Children, want) {
+		t.Fatalf("Children = %#v, want %#v", graph.Children, want)
+	}
+}
+
+func TestFetchWaveGraphBatchHydrationFailureKeepsPartialResults(t *testing.T) {
+	client := &fakeBatchGraphClient{
+		fakeGraphClient: fakeGraphClient{
+			subIssues: []ghissue.Issue{
+				{Number: 101, Title: "one", State: "OPEN"},
+				{Number: 102, Title: "two", State: "OPEN"},
+			},
+		},
+		batchDetails: map[int]ghissue.Issue{
+			101: {Number: 101, Title: "one", State: "OPEN", Body: "body one"},
+		},
+		batchErr: errors.New("#102: issue not found"),
+	}
+
+	graph, err := FetchWaveGraph(client, "100", nil)
+	if err == nil || !strings.Contains(err.Error(), "#102: issue not found") {
+		t.Fatalf("FetchWaveGraph() error = %v, want #102 batch error", err)
+	}
+	if graph.Children[0].Body != "body one" || graph.Info[101].Degraded {
+		t.Fatalf("successful #101 result was degraded: child=%#v info=%#v", graph.Children[0], graph.Info[101])
+	}
+	if graph.Children[1].Body != "" || !graph.Info[102].Degraded {
+		t.Fatalf("failed #102 result was not degraded: child=%#v info=%#v", graph.Children[1], graph.Info[102])
+	}
+}
+
+func TestFetchWaveGraphBatchLoadsExtraIssueDetails(t *testing.T) {
+	client := &fakeBatchGraphClient{
+		fakeGraphClient: fakeGraphClient{
+			parentBody: "- [ ] #101 first\n- [ ] #102 missing\n",
+		},
+		batchDetails: map[int]ghissue.Issue{
+			101: {Number: 101, Title: "first", State: "OPEN", Body: "body"},
+		},
+		batchErr: errors.New("#102: issue not found"),
+	}
+
+	graph, err := FetchWaveGraph(client, "100", nil)
+	if err == nil || !strings.Contains(err.Error(), "#102: issue not found") {
+		t.Fatalf("FetchWaveGraph() error = %v, want #102 batch error", err)
+	}
+	if got, want := client.batchCalls, [][]int{{101, 102}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("IssueDetails calls = %#v, want %#v", got, want)
+	}
+	if got, want := childNumbers(graph), []int{101}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("children = %#v, want %#v", got, want)
 	}
 }
 
