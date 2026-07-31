@@ -591,6 +591,27 @@ func TestRunnerWorktreePatchMergesUntrackedReplacement(t *testing.T) {
 	}
 }
 
+func TestRunnerWorktreePatchOmitsUnchangedBinaryReplacement(t *testing.T) {
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	writeGitstatFile(t, repo, "replace.dat", []byte{'o', 'l', 'd', 0, '\n'})
+	gitTest(t, repo, "add", "replace.dat")
+	gitTest(t, repo, "commit", "-m", "initial")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	gitTest(t, repo, "rm", "--cached", "replace.dat")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 0 || got.Patch != "" {
+		t.Fatalf("WorktreePatch() = %#v, want unchanged binary replacement omitted", got)
+	}
+}
+
 func TestRunnerWorktreePatchOmitsBinaryReplacementAfterAttributeOverride(t *testing.T) {
 	repo := t.TempDir()
 	gitTest(t, repo, "init")

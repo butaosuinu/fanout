@@ -169,6 +169,15 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 				stat.OmittedReason = "tooLarge"
 			}
 		}
+		if file.replacement != nil && stat.OmittedReason == "binary" {
+			_, _, changed, replacementErr := r.replacementPatch(path, mergeBase, file)
+			if replacementErr != nil {
+				return Patch{}, replacementErr
+			}
+			if !changed {
+				continue
+			}
+		}
 		if stat.OmittedReason == "" {
 			var out []byte
 			switch {
