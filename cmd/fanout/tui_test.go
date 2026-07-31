@@ -1771,124 +1771,35 @@ func TestWatchLivePaneCacheFailsClosedWhenRecordedKeyIsUnavailable(t *testing.T)
 	}
 }
 
-func TestWatchParentResultAfterLaunchRequeuesOnFollowupError(t *testing.T) {
-	installTUIWatcherGHScript(t, `
-case "$args" in
-"api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
-  printf 'temporary gh failure\n' >&2
-  exit 1
-  ;;
-*)
-  printf 'unexpected gh args: %s\n' "$args" >&2
-  exit 64
-  ;;
-esac
-`)
-	cfg := &cliflags.Config{
-		Parent:        500,
-		ParentRef:     "500",
-		ParentMode:    cliflags.ModeIssue,
-		Limit:         1,
-		UnblockedOnly: true,
+func TestWatchParentLaunchResultCompletesWhenAllTargetsWereCreated(t *testing.T) {
+	plan := run.Plan{
+		Targets: []ghissue.Issue{{Number: 501}, {Number: 502}},
 	}
-
-	got := watchParentResultAfterLaunch(t.TempDir(), cfg, ghissue.Runner{})
-	if !got.Deferred {
-		t.Fatal("watchParentResultAfterLaunch() Deferred = false, want true when post-launch check fails")
+	if got := watchParentLaunchResult(plan, []int{501, 502}); got.Deferred {
+		t.Fatal("watchParentLaunchResult() Deferred = true, want false after all targets were created")
 	}
 }
 
-func TestWatchParentHasRemainingTargetsUsesPostLaunchPlan(t *testing.T) {
-	installTUIWatcherGHScript(t, `
-case "$args" in
-"api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
-  printf '[[{"number":501,"title":"one","state":"open"},{"number":502,"title":"two","state":"open"}]]'
-  ;;
-"issue view 500 --json body -q .body")
-  ;;
-*)
-  printf 'unexpected gh args: %s\n' "$args" >&2
-  exit 64
-  ;;
-esac
-`)
-	repo := t.TempDir()
-	locked, err := state.LockProject(repo)
-	if err != nil {
-		t.Fatal(err)
+func TestWatchParentLaunchResultRequeuesAfterPartialLaunch(t *testing.T) {
+	plan := run.Plan{
+		Targets: []ghissue.Issue{{Number: 501}, {Number: 502}},
 	}
-	if err = locked.RecordPane(state.Pane{Parent: "500", IssueNum: 501, Slug: "one-501", PaneID: "%1"}); err != nil {
-		t.Fatal(err)
-	}
-	if err = locked.RecordPane(state.Pane{Parent: "500", IssueNum: 502, Slug: "two-502", PaneID: "%2"}); err != nil {
-		t.Fatal(err)
-	}
-	if err = locked.Unlock(); err != nil {
-		t.Fatal(err)
-	}
-	cfg := &cliflags.Config{
-		Parent:        500,
-		ParentRef:     "500",
-		ParentMode:    cliflags.ModeIssue,
-		Limit:         1,
-		UnblockedOnly: true,
-	}
-
-	deferred, err := watchParentHasRemainingTargets(repo, cfg, ghissue.Runner{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if deferred {
-		t.Fatal("watchParentHasRemainingTargets() = true, want false after all children are already fanned")
+	if got := watchParentLaunchResult(plan, []int{501}); !got.Deferred {
+		t.Fatal("watchParentLaunchResult() Deferred = false, want true while an uncreated target remains")
 	}
 }
 
-func TestWatchParentHasRemainingTargetsRequeuesAfterPartialLaunch(t *testing.T) {
-	installTUIWatcherGHScript(t, `
-case "$args" in
-"api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
-  printf '[[{"number":501,"title":"one","state":"open"},{"number":502,"title":"two","state":"open"},{"number":503,"title":"three","state":"open"}]]'
-  ;;
-"issue view 500 --json body -q .body")
-  ;;
-*)
-  printf 'unexpected gh args: %s\n' "$args" >&2
-  exit 64
-  ;;
-esac
-`)
-	repo := t.TempDir()
-	locked, err := state.LockProject(repo)
-	if err != nil {
-		t.Fatal(err)
+func TestWatchParentLaunchResultRequeuesLimitDeferredTargets(t *testing.T) {
+	plan := run.Plan{
+		Targets:       []ghissue.Issue{{Number: 501}},
+		LimitDeferred: []ghissue.Issue{{Number: 502}},
 	}
-	if err = locked.RecordPane(state.Pane{Parent: "500", IssueNum: 501, Slug: "one-501", PaneID: "%1"}); err != nil {
-		t.Fatal(err)
-	}
-	if err = locked.RecordPane(state.Pane{Parent: "500", IssueNum: 502, Slug: "two-502", PaneID: "%2"}); err != nil {
-		t.Fatal(err)
-	}
-	if err = locked.Unlock(); err != nil {
-		t.Fatal(err)
-	}
-	cfg := &cliflags.Config{
-		Parent:        500,
-		ParentRef:     "500",
-		ParentMode:    cliflags.ModeIssue,
-		Limit:         1,
-		UnblockedOnly: true,
-	}
-
-	deferred, err := watchParentHasRemainingTargets(repo, cfg, ghissue.Runner{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !deferred {
-		t.Fatal("watchParentHasRemainingTargets() = false, want true while an unfanned child remains")
+	if got := watchParentLaunchResult(plan, []int{501}); !got.Deferred {
+		t.Fatal("watchParentLaunchResult() Deferred = false, want true while a limit-deferred target remains")
 	}
 }
 
-func TestWatchParentHasRemainingTargetsRequeuesBlockedRowsWithoutLimit(t *testing.T) {
+func TestWatchParentLaunchResultRequeuesBlockedRowsWithoutLimit(t *testing.T) {
 	installTUIWatcherGHScript(t, `
 case "$args" in
 "api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
@@ -1913,29 +1824,22 @@ case "$args" in
 esac
 `)
 	repo := t.TempDir()
-	locked, err := state.LockProject(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = locked.RecordPane(state.Pane{Parent: "500", IssueNum: 501, Slug: "one-501", PaneID: "%1"}); err != nil {
-		t.Fatal(err)
-	}
-	if err = locked.Unlock(); err != nil {
-		t.Fatal(err)
-	}
 	cfg := &cliflags.Config{
 		Parent:        500,
 		ParentRef:     "500",
 		ParentMode:    cliflags.ModeIssue,
 		UnblockedOnly: true,
 	}
-
-	deferred, err := watchParentHasRemainingTargets(repo, cfg, ghissue.Runner{})
+	prepared, _, err := prepareWatchParentPlan(repo, ghissue.Runner{}, 500)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !deferred {
-		t.Fatal("watchParentHasRemainingTargets() = false, want true while blocked children remain")
+	plan, err := buildWatchParentPlan(repo, cfg, prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := watchParentLaunchResult(plan, []int{501}); !got.Deferred {
+		t.Fatal("watchParentLaunchResult() Deferred = false, want true while blocked children remain")
 	}
 }
 

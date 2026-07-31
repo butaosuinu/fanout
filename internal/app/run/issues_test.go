@@ -44,7 +44,7 @@ func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
 		{Number: 2, Title: "two", State: "OPEN", Body: "body"},
 	}
 
-	result := executePlan(cfg, lg, info, tmuxbackend.New(), ghissue.Runner{}, targets, settings.Defaults(), hooks.EmptyConfig(), nil, nil, log.Palette{}, "fanout", nil)
+	result := executePlan(cfg, lg, info, tmuxbackend.New(), targets, nil, settings.Defaults(), hooks.EmptyConfig(), nil, nil, log.Palette{}, "fanout", nil)
 
 	if result.Created != 2 || result.Failed != 0 {
 		t.Fatalf("executePlan result = %+v, want 2 created and 0 failed", result)
@@ -114,8 +114,8 @@ func TestExecutePlanPreservesCreatedPaneIDsOnFailFastError(t *testing.T) {
 		log.NewWith(io.Discard, io.Discard, false),
 		info,
 		tmuxbackend.New(),
-		ghissue.Runner{},
 		targets,
+		nil,
 		settings.Defaults(),
 		hooks.EmptyConfig(),
 		nil,

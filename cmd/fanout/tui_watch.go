@@ -41,8 +41,8 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 	watcher := &tuiWatcher{livePanes: livePanes}
 	io := watch.IO{
 		ListLabeled: gh.ListOpenIssuesWithLabel,
-		CountChildren: func(issue ghissue.Issue) (watch.ChildCounts, error) {
-			return countWatchChildTargets(projectRoot, gh, issue.Number)
+		PlanChildren: func(issue ghissue.Issue) (watch.ChildPlan, error) {
+			return newWatchParentChildPlan(projectRoot, session, commandName, resolvedSettings, watcher, gh, issue)
 		},
 		SwapLabels: func(issue ghissue.Issue, removeLabel, addLabel string) error {
 			cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, 0)
@@ -60,11 +60,6 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 			watcher.addNotice(notice)
 			return err
 		},
-		LaunchParent: func(issue ghissue.Issue, limit int) (watch.ParentLaunchResult, error) {
-			result, err := launchWatchParent(projectRoot, session, commandName, resolvedSettings, issue, limit)
-			watcher.addNotice(result.Notice)
-			return result, err
-		},
 		PlanLinkedIssueNums: func(store state.Store) map[int]bool {
 			return panelaunch.PlanLinkedIssueNums(projectRoot, store)
 		},
@@ -77,6 +72,22 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 	interval := time.Duration(resolvedSettings.WatcherIntervalSeconds) * time.Second
 	watcher.engine = watch.NewEngine(cfg, io)
 	return watcher, interval, resolvedSettings.WatcherTriggerLabel, nil
+}
+
+func newWatchParentChildPlan(projectRoot, session, commandName string, resolvedSettings settings.Settings, watcher *tuiWatcher, gh ghissue.Runner, issue ghissue.Issue) (watch.ChildPlan, error) {
+	prepared, counts, err := prepareWatchParentPlan(projectRoot, gh, issue.Number)
+	if err != nil {
+		return watch.ChildPlan{}, err
+	}
+	return watch.ChildPlan{
+		Counts: counts,
+		LaunchParent: func(limit int) (watch.ParentLaunchResult, error) {
+			cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, limit)
+			result, err := launchParentIssueFanoutWithPlanInput(projectRoot, session, commandName, cfg, prepared.runInput())
+			watcher.addNotice(result.Notice)
+			return result, err
+		},
+	}, nil
 }
 
 type tuiWatcher struct {
@@ -153,16 +164,17 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 	return result, nil
 }
 
-func launchWatchParent(projectRoot, session, commandName string, resolvedSettings settings.Settings, issue ghissue.Issue, limit int) (watch.ParentLaunchResult, error) {
-	cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, limit)
-	return launchParentIssueFanout(projectRoot, session, commandName, cfg)
+func launchParentIssueFanoutWithPlanInput(projectRoot, session, commandName string, cfg *cliflags.Config, input run.IssuePlanInput) (watch.ParentLaunchResult, error) {
+	result, err := launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName, cfg, &input, nil)
+	result.Watch.Notice = result.Notice
+	return result.Watch, err
 }
 
 // launchParentIssueFanout runs the full issue-mode fan-out for cfg.Parent
 // against a synthesized runtime targeting the TUI session. The watcher and
 // the TUI issue launcher share it.
 func launchParentIssueFanout(projectRoot, session, commandName string, cfg *cliflags.Config) (watch.ParentLaunchResult, error) {
-	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg, nil)
+	result, err := launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName, cfg, nil, nil)
 	result.Watch.Notice = result.Notice
 	return result.Watch, err
 }
@@ -180,6 +192,10 @@ type tuiIssueReadyFunc func(state.Store, panelaunch.StateRecorder, backend.Backe
 // tmux for the foreground TUI launch. The watcher calls the wrapper above and
 // deliberately discards them so it cannot steal focus.
 func launchParentIssueFanoutWithResult(projectRoot, session, commandName string, cfg *cliflags.Config, ready tuiIssueReadyFunc) (parentIssueFanoutResult, error) {
+	return launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName, cfg, nil, ready)
+}
+
+func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName string, cfg *cliflags.Config, input *run.IssuePlanInput, ready tuiIssueReadyFunc) (parentIssueFanoutResult, error) {
 	// A plan session for this issue (a coordinator, or the tasks it fanned out)
 	// must finish or be closed before the child fan-out lane runs, or the two
 	// decompose the same work twice. Best-effort read: a state read failure
@@ -199,7 +215,13 @@ func launchParentIssueFanoutWithResult(projectRoot, session, commandName string,
 			return ready(store, recorder, rt.Backend)
 		}
 	}
-	execution, code := run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, runReady)
+	var execution run.IssueExecutionResult
+	var code exitcode.Code
+	if input == nil {
+		execution, code = run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, runReady)
+	} else {
+		execution, code = run.IssuesWithPlanInputResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, *input, runReady)
+	}
 	result := parentIssueFanoutResult{
 		CreatedPaneIDs: execution.CreatedPaneIDs,
 		Notice:         combinedLaunchNotice(execution.Notices, bufferedLaunchNotice(stderr)),
@@ -208,7 +230,7 @@ func launchParentIssueFanoutWithResult(projectRoot, session, commandName string,
 	if code != exitcode.OK {
 		return result, bufferedLaunchError(stdout, stderr, "launch parent")
 	}
-	result.Watch = watchParentResultAfterLaunch(projectRoot, cfg, rt.GH)
+	result.Watch = watchParentLaunchResult(execution.Plan, execution.CreatedIssueNums)
 	return result, nil
 }
 
@@ -244,16 +266,91 @@ func countOpenChildTargets(gh ghissue.Runner, parent int) (int, error) {
 }
 
 func countWatchChildTargets(projectRoot string, gh ghissue.Runner, parent int) (watch.ChildCounts, error) {
-	cfg := newWatchPlanConfig(parent, 0)
-	plan, err := buildWatchParentPlan(projectRoot, cfg, gh)
+	_, counts, err := prepareWatchParentPlan(projectRoot, gh, parent)
+	return counts, err
+}
+
+type watchParentPlan struct {
+	loaded     run.ChildLoadResult
+	gh         ghissue.Runner
+	hydrations map[int]watchIssueHydration
+	states     map[int]watchIssueState
+}
+
+type watchIssueHydration struct {
+	body   string
+	labels []ghissue.Label
+	err    error
+}
+
+type watchIssueState struct {
+	state string
+	err   error
+}
+
+func prepareWatchParentPlan(projectRoot string, gh ghissue.Runner, parent int) (*watchParentPlan, watch.ChildCounts, error) {
+	loaded, err := loadWatchParentChildren(gh, parent)
 	if err != nil {
-		return watch.ChildCounts{}, err
+		return nil, watch.ChildCounts{}, err
 	}
-	return watch.ChildCounts{
+	prepared := &watchParentPlan{
+		loaded:     loaded,
+		gh:         gh,
+		hydrations: map[int]watchIssueHydration{},
+		states:     map[int]watchIssueState{},
+	}
+	for _, issue := range loaded.Children {
+		if !loaded.StrongChildren[issue.Number] {
+			prepared.hydrations[issue.Number] = watchIssueHydration{
+				body:   issue.Body,
+				labels: slices.Clone(issue.Labels),
+			}
+		}
+	}
+	cfg := newWatchPlanConfig(parent, 0)
+	plan, err := buildWatchParentPlan(projectRoot, cfg, prepared)
+	if err != nil {
+		return nil, watch.ChildCounts{}, err
+	}
+	return prepared, watch.ChildCounts{
 		Open:       plan.OpenCount,
 		Launchable: len(plan.Targets),
 		Unfanned:   plan.UnfannedCount,
 	}, nil
+}
+
+func (p *watchParentPlan) runInput() run.IssuePlanInput {
+	return run.IssuePlanInput{
+		Loaded:            p.loaded,
+		HydrateBodyLabels: p.hydrateBodyLabels,
+		IssueState:        p.issueState,
+	}
+}
+
+func (p *watchParentPlan) hydrateBodyLabels(issue *ghissue.Issue) error {
+	hydration, ok := p.hydrations[issue.Number]
+	if !ok {
+		hydrated := *issue
+		err := p.gh.HydrateBodyLabels(&hydrated)
+		hydration = watchIssueHydration{
+			body:   hydrated.Body,
+			labels: slices.Clone(hydrated.Labels),
+			err:    err,
+		}
+		p.hydrations[issue.Number] = hydration
+	}
+	issue.Body = hydration.body
+	issue.Labels = slices.Clone(hydration.labels)
+	return hydration.err
+}
+
+func (p *watchParentPlan) issueState(num int) (string, error) {
+	result, ok := p.states[num]
+	if !ok {
+		result.state, result.err = p.gh.IssueState(num)
+		p.states[num] = result
+	}
+	return result.state, result.err
 }
 
 type watchLivePaneCache struct {
@@ -326,52 +423,44 @@ func watchPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
 	return cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
 }
 
-func watchParentResultAfterLaunch(projectRoot string, cfg *cliflags.Config, gh ghissue.Runner) watch.ParentLaunchResult {
-	deferred, err := watchParentHasRemainingTargets(projectRoot, cfg, gh)
-	if err != nil {
-		// The parent fan-out already completed. Keep the parent retriable instead
-		// of reporting the completed launch as failed.
-		return watch.ParentLaunchResult{Deferred: true}
+func watchParentLaunchResult(plan run.Plan, created []int) watch.ParentLaunchResult {
+	createdSet := map[int]bool{}
+	for _, num := range created {
+		createdSet[num] = true
 	}
-	return watch.ParentLaunchResult{Deferred: deferred}
+	for _, target := range plan.Targets {
+		if !createdSet[target.Number] {
+			return watch.ParentLaunchResult{Deferred: true}
+		}
+	}
+	return watch.ParentLaunchResult{
+		Deferred: len(plan.BlockedRows) > 0 || len(plan.LimitDeferred) > 0,
+	}
 }
 
-func watchParentHasRemainingTargets(projectRoot string, cfg *cliflags.Config, gh ghissue.Runner) (bool, error) {
-	plan, err := buildWatchParentPlan(projectRoot, cfg, gh)
-	if err != nil {
-		return false, err
-	}
-	return len(plan.Targets) > 0 || len(plan.BlockedRows) > 0 || len(plan.LimitDeferred) > 0, nil
-}
-
-func buildWatchParentPlan(projectRoot string, cfg *cliflags.Config, gh ghissue.Runner) (run.Plan, error) {
-	loaded, err := loadWatchParentChildren(gh, cfg.Parent)
-	if err != nil {
-		return run.Plan{}, err
-	}
+func buildWatchParentPlan(projectRoot string, cfg *cliflags.Config, prepared *watchParentPlan) (run.Plan, error) {
 	store, err := state.LoadProject(projectRoot)
 	if err != nil {
 		return run.Plan{}, fmt.Errorf("load fanout state: %w", err)
 	}
 	sameParentFanned := store.FannedNumbersForParent(cfg.ParentRef)
 	otherParentFanned := store.FannedNumbersForOtherParents(cfg.ParentRef)
-	worktreeFallbackFanned := run.ExistingWorktreeFanned(cfg, projectRoot, loaded.Children, otherParentFanned)
+	worktreeFallbackFanned := run.ExistingWorktreeFanned(cfg, projectRoot, prepared.loaded.Children, otherParentFanned)
 	// Match run.Issues: plan-owned children never become targets, so the
-	// watcher's capacity planning and post-launch remaining-target recompute
-	// agree with what a launch would actually create.
+	// watcher's capacity planning agrees with what a launch would create.
 	planOwnedFanned := panelaunch.PlanLinkedIssueNums(projectRoot, store)
 	return run.BuildPlan(
 		cfg,
-		loaded.Children,
+		prepared.loaded.Children,
 		fanset.Union(sameParentFanned, worktreeFallbackFanned, planOwnedFanned),
-		loaded.ParentBody,
+		prepared.loaded.ParentBody,
 		func(issue *ghissue.Issue) {
-			// Match run.Issues: a hydration failure degrades blocker checks
-			// for this recomputation but should not make a completed launch fail.
-			_ = gh.HydrateBodyLabels(issue)
+			// Match run.Issues: a failed hydration degrades blocker checks to
+			// unblocked; the launch plan reports the same cached error as a warning.
+			_ = prepared.hydrateBodyLabels(issue)
 		},
 		func(num int) string {
-			stateName, _ := gh.IssueState(num)
+			stateName, _ := prepared.issueState(num)
 			return stateName
 		},
 	), nil

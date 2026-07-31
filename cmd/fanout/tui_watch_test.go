@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
@@ -54,6 +55,92 @@ func TestLaunchStandaloneIssuePaneReportsClaudeModeFallback(t *testing.T) {
 	}
 	if len(store.Panes) != 1 || store.Panes[0].PlanMode {
 		t.Fatalf("state panes = %+v, want one effective non-plan standalone pane", store.Panes)
+	}
+}
+
+func TestWatcherParentCandidateFetchesGitHubDataOnce(t *testing.T) {
+	repo := prepareTUIParentLaunchRepo(t)
+	installTUISequentialTmuxShim(t, repo)
+	argsPath := installTUIWatcherGHScript(t, `
+case "$args" in
+"api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100")
+  printf '[[{"number":501,"title":"ready","state":"open"},{"number":502,"title":"blocked","state":"open"}]]'
+  ;;
+"issue view 500 --json body -q .body")
+  printf '%s\n' '- [ ] #501 ready' '- [ ] #502 blocked'
+  ;;
+"issue view 501 --json body,labels")
+  printf '{"body":"","labels":[]}'
+  ;;
+"issue view 502 --json body,labels")
+  printf '%s' '{"body":"## Blocked by\n- #600","labels":[]}'
+  ;;
+"issue view 600 --json state -q .state")
+  printf 'OPEN\n'
+  ;;
+*)
+  printf 'unexpected gh args: %s\n' "$args" >&2
+  exit 64
+  ;;
+esac
+`)
+
+	issue := ghissue.Issue{Number: 500, Title: "parent", State: "OPEN"}
+	runner := ghissue.Runner{Cwd: repo}
+	var listedLabels []string
+	engine := watch.NewEngine(watch.Config{
+		TriggerLabel: "fanout:auto",
+		RunningLabel: "fanout:running",
+	}, watch.IO{
+		ListLabeled: func(label string) ([]ghissue.Issue, error) {
+			listedLabels = append(listedLabels, label)
+			if label == "fanout:auto" {
+				return []ghissue.Issue{issue}, nil
+			}
+			return nil, nil
+		},
+		PlanChildren: func(issue ghissue.Issue) (watch.ChildPlan, error) {
+			return newWatchParentChildPlan(repo, "fanout-test", "fanout", settings.Defaults(), &tuiWatcher{}, runner, issue)
+		},
+		SwapLabels: func(ghissue.Issue, string, string) error {
+			return nil
+		},
+		LoadState: func() (state.Store, error) {
+			return state.LoadProject(repo)
+		},
+		PaneAlive: func(state.Pane) (bool, error) {
+			return false, nil
+		},
+		LaunchStandalone: func(ghissue.Issue) error {
+			return nil
+		},
+	})
+	report, err := engine.RunCycle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Launched) != 1 || len(report.Deferred) != 1 || report.Deferred[0].Issue.Number != 500 {
+		t.Fatalf("report = %+v, want one launched and deferred parent", report)
+	}
+	if got := strings.Join(listedLabels, ","); got != "fanout:auto,fanout:running" {
+		t.Fatalf("listed labels = %q, want one trigger and one running query", got)
+	}
+
+	body, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := string(body)
+	for _, want := range []string{
+		"api --paginate --slurp repos/{owner}/{repo}/issues/500/sub_issues?per_page=100",
+		"issue view 500 --json body -q .body",
+		"issue view 501 --json body,labels",
+		"issue view 502 --json body,labels",
+		"issue view 600 --json state -q .state",
+	} {
+		if got := strings.Count(calls, want+"\n"); got != 1 {
+			t.Fatalf("gh call %q count = %d, want 1\nall calls:\n%s", want, got, calls)
+		}
 	}
 }
 
