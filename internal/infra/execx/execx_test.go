@@ -1,12 +1,14 @@
 package execx
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // installShim writes an executable shell script named name into a fresh dir
@@ -156,6 +158,42 @@ func TestOutputExitCodeNonExitError(t *testing.T) {
 	}
 	if !errors.Is(err, exec.ErrNotFound) {
 		t.Fatalf("OutputExitCode() error = %v, want exec.ErrNotFound", err)
+	}
+}
+
+func TestContextCommandsStopAtSharedDeadline(t *testing.T) {
+	installShim(t, "fakebin", `while :; do :; done`)
+	for _, tt := range []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{
+			name: "output",
+			run: func(ctx context.Context) error {
+				_, err := OutputContext(ctx, "", nil, "fakebin")
+				return err
+			},
+		},
+		{
+			name: "output with exit code",
+			run: func(ctx context.Context) error {
+				_, _, err := OutputExitCodeContext(ctx, "", nil, "fakebin")
+				return err
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			defer cancel()
+			started := time.Now()
+			err := tt.run(ctx)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error = %v, want context deadline exceeded", err)
+			}
+			if elapsed := time.Since(started); elapsed > time.Second {
+				t.Fatalf("command returned after %s, want deadline-bounded execution", elapsed)
+			}
+		})
 	}
 }
 

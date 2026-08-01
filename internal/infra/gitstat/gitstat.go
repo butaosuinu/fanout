@@ -3,6 +3,7 @@ package gitstat
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -50,7 +51,10 @@ type Patch struct {
 // Runner shells out to git. Cwd is optional and only affects process startup;
 // worktree selection is always explicit through git -C.
 type Runner struct {
-	Cwd string
+	Cwd           string
+	Context       context.Context
+	MaxFiles      int
+	MaxPatchBytes int
 }
 
 // Worktree returns additions/deletions from `git diff --shortstat` against the
@@ -139,7 +143,15 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 		MergeBase: mergeBase,
 		Files:     make([]FileStat, 0, len(files)),
 	}
+	appendFile := func(stat FileStat) error {
+		result.Files = append(result.Files, stat)
+		if r.MaxFiles > 0 && len(result.Files) > r.MaxFiles {
+			return fmt.Errorf("worktree patch contains %d files; limit is %d", len(result.Files), r.MaxFiles)
+		}
+		return nil
+	}
 	var patch strings.Builder
+	collectionFull := false
 	for _, file := range files {
 		stat := file.FileStat
 		if file.replacement != nil {
@@ -169,6 +181,35 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 				stat.Binary = false
 				stat.OmittedReason = "tooLarge"
 			}
+		}
+		replacementChecked := false
+		if file.replacement != nil && stat.OmittedReason == "tooLarge" {
+			changed, replacementErr := r.replacementChanged(path, mergeBase, file, true)
+			if replacementErr != nil {
+				return Patch{}, replacementErr
+			}
+			if !changed {
+				continue
+			}
+			replacementChecked = true
+		}
+		if collectionFull {
+			if file.replacement != nil && !replacementChecked {
+				changed, replacementErr := r.replacementChanged(path, mergeBase, file, false)
+				if replacementErr != nil {
+					return Patch{}, replacementErr
+				}
+				if !changed {
+					continue
+				}
+			}
+			if stat.OmittedReason == "" {
+				stat.OmittedReason = "collectionLimit"
+			}
+			if appendErr := appendFile(stat); appendErr != nil {
+				return Patch{}, appendErr
+			}
+			continue
 		}
 		if file.replacement != nil && stat.OmittedReason == "binary" {
 			_, _, changed, replacementErr := r.replacementPatch(path, mergeBase, file)
@@ -213,11 +254,18 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 				return Patch{}, err
 			}
 			if stat.OmittedReason == "" {
-				patch.WriteString(string(out))
-				stat.PatchIncluded = true
+				if r.MaxPatchBytes > 0 && len(out) > r.MaxPatchBytes-patch.Len() {
+					collectionFull = true
+					stat.OmittedReason = "collectionLimit"
+				} else {
+					patch.Write(out)
+					stat.PatchIncluded = true
+				}
 			}
 		}
-		result.Files = append(result.Files, stat)
+		if appendErr := appendFile(stat); appendErr != nil {
+			return Patch{}, appendErr
+		}
 	}
 	result.Patch = patch.String()
 	return result, nil
@@ -426,7 +474,7 @@ func (r Runner) replacementPatch(
 		return nil, FileStat{}, false, fmt.Errorf("link replacement final side: %w", linkErr)
 	}
 
-	out, code, err := replacementDiff(tempDir, false, baseArg, finalArg)
+	out, code, err := replacementDiff(r.context(), tempDir, false, baseArg, finalArg)
 	changed := code == 1
 	if changed {
 		err = nil
@@ -438,7 +486,7 @@ func (r Runner) replacementPatch(
 		return nil, FileStat{}, false, nil
 	}
 
-	numstatOut, code, err := replacementDiff(tempDir, true, baseArg, finalArg)
+	numstatOut, code, err := replacementDiff(r.context(), tempDir, true, baseArg, finalArg)
 	if code == 1 {
 		err = nil
 	}
@@ -461,6 +509,57 @@ func (r Runner) replacementPatch(
 	return out, stat, true, nil
 }
 
+func (r Runner) replacementChanged(path, mergeBase string, file patchFile, hashFinal bool) (bool, error) {
+	entry, err := r.mergeBaseTreeEntry(path, mergeBase, file.Path)
+	if err != nil {
+		return false, err
+	}
+	fullPath, err := containedPath(path, file.Path)
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Lstat(fullPath)
+	if err != nil {
+		return false, fmt.Errorf("inspect replacement %q: %w", file.Path, err)
+	}
+	currentMode, err := worktreeGitMode(info)
+	if err != nil {
+		return false, fmt.Errorf("inspect replacement %q: %w", file.Path, err)
+	}
+	if entry.mode != currentMode {
+		return true, nil
+	}
+	if entry.objectType != "blob" {
+		return false, fmt.Errorf("compare replacement base entry: unsupported object type %q", entry.objectType)
+	}
+	if hashFinal {
+		out, hashErr := r.git("-C", path, "hash-object", "--no-filters", "--", file.Path)
+		if hashErr != nil {
+			return false, fmt.Errorf("hash oversized replacement %q: %w", file.Path, hashErr)
+		}
+		return strings.TrimSpace(string(out)) != entry.oid, nil
+	}
+
+	baseContent, err := r.git("-C", path, "cat-file", "blob", entry.oid)
+	if err != nil {
+		return false, err
+	}
+	var finalContent []byte
+	if currentMode == "120000" {
+		target, readErr := os.Readlink(fullPath)
+		if readErr != nil {
+			return false, fmt.Errorf("read replacement symlink %q: %w", file.Path, readErr)
+		}
+		finalContent = []byte(target)
+	} else {
+		finalContent, err = os.ReadFile(fullPath)
+		if err != nil {
+			return false, fmt.Errorf("read replacement file %q: %w", file.Path, err)
+		}
+	}
+	return !bytes.Equal(baseContent, finalContent), nil
+}
+
 func (r Runner) trackedPathPatch(path, mergeBase, rel string) ([]byte, error) {
 	return r.gitExactPath(
 		rel,
@@ -471,7 +570,7 @@ func (r Runner) trackedPathPatch(path, mergeBase, rel string) ([]byte, error) {
 	)
 }
 
-func replacementDiff(cwd string, numstat bool, oldPath, newPath string) ([]byte, int, error) {
+func replacementDiff(ctx context.Context, cwd string, numstat bool, oldPath, newPath string) ([]byte, int, error) {
 	args := []string{
 		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
 		"--no-index", "--src-prefix=", "--dst-prefix=",
@@ -480,7 +579,7 @@ func replacementDiff(cwd string, numstat bool, oldPath, newPath string) ([]byte,
 		args = append(args, "--numstat", "-z")
 	}
 	args = append(args, "--", oldPath, newPath)
-	return execx.OutputExitCode(cwd, gitEnv(), "git", args...)
+	return execx.OutputExitCodeContext(ctx, cwd, gitEnv(), "git", args...)
 }
 
 func (r Runner) mergeBaseTreeEntry(path, mergeBase, rel string) (treeEntry, error) {
@@ -930,11 +1029,11 @@ func (r Runner) diffBase(path, baseRef string) string {
 }
 
 func (r Runner) git(args ...string) ([]byte, error) {
-	return execx.Output(r.Cwd, gitEnv(), "git", args...)
+	return execx.OutputContext(r.context(), r.Cwd, gitEnv(), "git", args...)
 }
 
 func (r Runner) gitExitCode(args ...string) ([]byte, int, error) {
-	return execx.OutputExitCode(r.Cwd, gitEnv(), "git", args...)
+	return execx.OutputExitCodeContext(r.context(), r.Cwd, gitEnv(), "git", args...)
 }
 
 func (r Runner) gitExactPath(path string, args ...string) ([]byte, error) {
@@ -945,7 +1044,14 @@ func (r Runner) gitExactPath(path string, args ...string) ([]byte, error) {
 		":(top,exclude,glob)"+escapePathspecGlob(path)+"/**",
 	)
 	env := append(gitEnv(), "GIT_LITERAL_PATHSPECS=0")
-	return execx.Output(r.Cwd, env, "git", args...)
+	return execx.OutputContext(r.context(), r.Cwd, env, "git", args...)
+}
+
+func (r Runner) context() context.Context {
+	if r.Context != nil {
+		return r.Context
+	}
+	return context.Background()
 }
 
 func escapePathspecGlob(path string) string {

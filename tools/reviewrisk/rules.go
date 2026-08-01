@@ -32,6 +32,7 @@ var fileRules = map[string]Rule{
 	// dashboard H files (server mux / runfile trust gate / capture-pane chain).
 	"internal/ui/dashboard/server.go":  {ID: "dashboard-server", Class: ClassH, Source: SourceDocTable, Note: "localhost web サーバの mux・token 検証"},
 	"internal/ui/dashboard/runfile.go": {ID: "dashboard-runfile", Class: ClassH, Source: SourceDocTable, Note: "token を含む dashboard.json・reuse/trust ゲート"},
+	"internal/ui/dashboard/diff.go":    {ID: "dashboard-diff", Class: ClassH, Source: SourceDocTable, Note: "worktree diff の identity 検証・read-only 配信"},
 	"internal/ui/dashboard/peek.go":    {ID: "dashboard-peek-plan", Class: ClassH, Source: SourceDocTable, Note: "capture-pane 前の検証チェーン"},
 	"internal/ui/dashboard/plan.go":    {ID: "dashboard-peek-plan", Class: ClassH, Source: SourceDocTable, Note: "capture-pane 前の検証チェーン(plan mode かつ codex 限定)"},
 

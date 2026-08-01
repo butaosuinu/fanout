@@ -30,7 +30,9 @@ var paneIDRe = regexp.MustCompile(`^%[0-9]{1,9}$`)
 // is paneID. A live tmux row wins over stale duplicates left by pane-id reuse;
 // without one, a non-tmux row wins so requireLivePane can return its explicit
 // backend error. A stale tmux row remains the final fallback. Defined here
-// rather than in poller.go because the capture endpoints are its only consumers.
+// rather than in poller.go because the capture endpoints are its only consumers;
+// diff.go has a separate identity selector because worktree reads neither
+// require nor perform pane capture or liveness checks.
 func (p *poller) snapshotPaneView(paneID string) (sessionview.PaneView, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

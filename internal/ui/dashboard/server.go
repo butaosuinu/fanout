@@ -19,6 +19,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/gitstat"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
@@ -52,6 +53,9 @@ type Options struct {
 	// plus alternate screen, wrapped lines joined). nil defaults to
 	// tmuxrun.CapturePlanSource; tests inject a fake.
 	CapturePlan func(paneID string, lines int) (string, error)
+	// DiffWorktree is the read-only Git collector behind GET /api/diff. nil
+	// defaults to gitstat.Runner.WorktreePatch; tests inject a fake.
+	DiffWorktree func(path, baseRef string) (gitstat.Patch, error)
 	// VerifyPane re-checks, at request time, that the snapshot pane is still
 	// the same live tmux pane. Keyed panes verify paneID + shellKey; legacy
 	// unkeyed agent panes verify paneID + worktree path. nil defaults to a
@@ -63,16 +67,17 @@ type Options struct {
 // port-in-use error surfaces synchronously) and computes the URL; Run serves
 // until the context is canceled.
 type Server struct {
-	listener    net.Listener
-	httpServer  *http.Server
-	poller      *poller
-	hub         *hub
-	token       string
-	base        string // http://127.0.0.1:<port>
-	serveErr    chan error
-	capturePane func(paneID string, lines int) (string, error)
-	capturePlan func(paneID string, lines int) (string, error)
-	verifyPane  func(sessionview.PaneView) error
+	listener     net.Listener
+	httpServer   *http.Server
+	poller       *poller
+	hub          *hub
+	token        string
+	base         string // http://127.0.0.1:<port>
+	serveErr     chan error
+	capturePane  func(paneID string, lines int) (string, error)
+	capturePlan  func(paneID string, lines int) (string, error)
+	diffWorktree func(path, baseRef string) (gitstat.Patch, error)
+	verifyPane   func(sessionview.PaneView) error
 }
 
 // New binds the loopback listener and assembles the handler. The returned
@@ -105,15 +110,16 @@ func New(opts Options) (*Server, error) {
 	p := newLazyPoller(opts.ProjectRoot, opts.ResolveGH, h)
 	p.listLive = opts.ListLive
 	s := &Server{
-		listener:    ln,
-		hub:         h,
-		poller:      p,
-		token:       opts.Token,
-		base:        fmt.Sprintf("http://%s:%d", loopbackInterface, addr.Port),
-		serveErr:    make(chan error, 1),
-		capturePane: capture,
-		capturePlan: capturePlan,
-		verifyPane:  verify,
+		listener:     ln,
+		hub:          h,
+		poller:       p,
+		token:        opts.Token,
+		base:         fmt.Sprintf("http://%s:%d", loopbackInterface, addr.Port),
+		serveErr:     make(chan error, 1),
+		capturePane:  capture,
+		capturePlan:  capturePlan,
+		diffWorktree: opts.DiffWorktree,
+		verifyPane:   verify,
 	}
 	handler, err := s.handler()
 	if err != nil {
@@ -189,6 +195,7 @@ func (s *Server) handler() (http.Handler, error) {
 	mux.HandleFunc("/api/stream", s.getOnly(s.requireToken(s.handleStream)))
 	mux.HandleFunc("/api/peek", s.getOnly(s.requireToken(s.handlePeek)))
 	mux.HandleFunc("/api/plan", s.getOnly(s.requireToken(s.handlePlan)))
+	mux.HandleFunc("/api/diff", diffNoStore(s.getOnly(s.requireToken(s.handleDiff))))
 	// Catch-all: the embedded SPA. The HTML shell is token-free so the page can
 	// load and then read ?token= for its /api/* calls.
 	mux.Handle("/", s.getOnly(s.staticHandler(sub)))

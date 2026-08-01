@@ -200,6 +200,9 @@ func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
 	if p100.Panes[0].IssueNum != 101 || p100.Panes[1].IssueNum != 102 {
 		t.Fatalf("pane order = %d,%d want 101,102", p100.Panes[0].IssueNum, p100.Panes[1].IssueNum)
 	}
+	if p100.Panes[0].BaseBranch != "main" || p100.Panes[1].BaseBranch != "" {
+		t.Fatalf("pane base branches = %q,%q want main and legacy empty", p100.Panes[0].BaseBranch, p100.Panes[1].BaseBranch)
+	}
 	if !p100.Panes[0].HasMergedPR || !p100.Panes[0].Alive || p100.Panes[0].IssueState != "CLOSED" {
 		t.Fatalf("#101 view = %+v", p100.Panes[0])
 	}
