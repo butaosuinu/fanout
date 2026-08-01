@@ -97,19 +97,50 @@ golden またはスナップショットを更新した場合は、diff を目�
 後段でこちらが base 側の scope で裁定し直しても、**出力されなかった blocker は
 復元できない**。
 
-対象は **全階層** の指示ファイル。root だけを列挙すると、`internal/ui/AGENTS.md`
-のような scoped instruction を追加してその配下の実装を変える branch が
-素通りする:
+対象は 3 つとも外さない。1 つでも落とすと素通り経路が残る:
+
+1. **全階層** の指示ファイル。root だけを列挙すると `internal/ui/AGENTS.md` の
+   ような scoped instruction を追加して配下の実装を変える branch が抜ける
+2. **case-insensitive 照合**。macOS の既定 checkout は case-insensitive なので、
+   branch が足した `sub/agents.md` を reviewer は `sub/AGENTS.md` として読める。
+   Git の pathspec は既定 case-sensitive なので `:(icase,glob)` を使う
+3. **untracked と ignored**。`.codex/*` は `.gitignore` で無視されるため、
+   `.codex/config.toml` を置いて指示を注入しても committed diff には出ない
 
 ```bash
-base="$(git merge-base HEAD "origin/$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' || echo main)" 2>/dev/null || git merge-base HEAD main)"
-git diff --name-only "$base"...HEAD -- \
-  ':(glob)**/AGENTS*.md' ':(glob)**/CLAUDE*.md' \
-  ':(glob)**/.codex/**'  ':(glob)**/.claude/**'
+instr=(
+  ':(icase,glob)AGENTS*.md'    ':(icase,glob)**/AGENTS*.md'
+  ':(icase,glob)CLAUDE*.md'    ':(icase,glob)**/CLAUDE*.md'
+  ':(icase,glob).codex'        ':(icase,glob).codex/**'
+  ':(icase,glob)**/.codex/**'
+  ':(icase,glob).claude'       ':(icase,glob).claude/**'
+  ':(icase,glob)**/.claude/**'
+  ':(icase,glob)claude/skills/post-work-review/**'
+)
+default_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)"
+base="$(git merge-base HEAD "$default_branch" 2>/dev/null || git merge-base HEAD main 2>/dev/null)"
+if [ -z "$base" ]; then
+  echo "BLOCKED: merge-base を解決できないため fail closed"
+else
+  git diff --name-only "$base"...HEAD -- "${instr[@]}"   # commit 済みの変更
+  git diff --name-only -- "${instr[@]}"                  # worktree の未コミット変更
+  git diff --name-only --cached -- "${instr[@]}"         # index の未コミット変更
+  git ls-files --others -- "${instr[@]}"                 # untracked (ignored 含む)
+fi
 ```
+
+`git ls-files --others` に `--exclude-standard` を付けないのは、ignored な
+指示ファイルこそ検出したいため。
 
 この確認が読むのはファイル**名**だけなので、対象リポジトリの中身に影響されない。
 判定そのものは信頼できる。
+
+pathspec に自分自身 (`claude/skills/post-work-review/**`) を含めるのは、
+`make link` がこの skill を checkout 内へ symlink するため、gate 自身を変える
+branch では変更後の gate が走るから。**これは marker を書かせない措置であって、
+完全な緩和ではない** — 走っている手順自体が branch 側なので、規則ごと消された
+場合は検出できない。完全に閉じるには Codex helper と同じく checkout 外の
+信頼済みコピーから起動する必要がある(未対応)。
 
 出力が空でなければ **Step 5 の marker を書かない**。Pass 2 は参考情報として
 回してよいが、完了報告で次を明示し、ゲートは閉じたままにする:
