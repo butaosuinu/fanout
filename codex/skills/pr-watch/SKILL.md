@@ -185,6 +185,25 @@ Stop and ask for user judgment when behavior is ambiguous, the required access i
 missing, a conflict needs semantic product judgment, or external CI cannot be
 inspected.
 
+### Triage review findings before fixing
+
+Do not fix every finding. When the repository declares a supported-environment
+matrix or review scope (this one does: `docs/review-scope.ja.md`), sort each
+finding on one axis — **can it be triggered inside that matrix?**
+
+| Verdict | Action |
+| --- | --- |
+| Reachable | Fix it. Severity (P1 / P2) does not downgrade it |
+| Not reachable | Do not fix. Reply in the thread with the rationale and the scope-document line that applies |
+| Ambiguous, or fixing exceeds the PR's scope | File a follow-up issue, put the number in the thread, leave it unfixed here |
+
+Fixing silently and closing silently are both prohibited — an unrecorded verdict
+comes back as the same finding next round.
+
+When a round contains only unreachable findings, reply and end review repair
+without editing. Fixing out-of-matrix findings adds code, which widens the
+surface the next review enumerates, and the rounds stop converging.
+
 ## Push safety
 
 - Force push only when the PR author is the authenticated user and the head
@@ -218,6 +237,11 @@ the same actionable set repeats twice without progress, the same problem recurs
 across three passes, a limit is reached, or an update cannot be classified
 safely. Do not keep polling after `event=blocked` or `event=timeout`.
 
+An automated reviewer may re-review on every push. When each fix produces a
+fresh finding set, the repeat detector never fires and the loop runs forever.
+Stop and hand the state to the user when review findings keep arriving new
+across three passes and a high share of them triage as not reachable.
+
 ## Finish report
 
 Report in 2-4 sentences:
@@ -237,4 +261,7 @@ List remaining work only when the result is not complete.
 - Continue a pass using CI logs or review state fetched before a push.
 - Treat EYES, clean prose, or an unconfigured reaction as literal `:+1:`.
 - Resolve uncertain review threads on the reviewer's behalf.
+- Re-trigger an automated review by hand (`@codex review` and the like). Each
+  trigger re-enumerates the whole changed surface and adds a round. Only do it
+  when the user explicitly asks.
 - Claim background monitoring after the Codex session ends.

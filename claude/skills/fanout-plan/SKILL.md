@@ -52,6 +52,10 @@ Create tasks that can run in parallel panes:
   file, make one block on the other or combine the work into one bounded task.
 - Do not create a catch-all integration task unless there is real integration
   work that cannot stay with the parent/human follow-up.
+- Size each task so its PR lands in the low hundreds of changed lines. Split a
+  new subsystem or state machine by behavior instead of giving one task the
+  whole thing — automated review findings scale super-linearly with PR size,
+  and an oversized task stalls in review rounds instead of merging.
 - Make task titles concrete enough to become pane titles.
 
 Use these naming rules:

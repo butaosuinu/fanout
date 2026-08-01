@@ -50,6 +50,10 @@ to choose. If none exists, request a path or a proposed plan.
   when both must edit the same file.
 - Keep integration in the owning task or parent session unless it is a real,
   independently bounded deliverable.
+- Size each task so its PR lands in the low hundreds of changed lines. Split a
+  new subsystem or state machine by behavior instead of giving one task the
+  whole thing — automated review findings scale super-linearly with PR size,
+  and an oversized task stalls in review rounds instead of merging.
 - Use concrete titles that work as pane labels.
 
 Apply these names:

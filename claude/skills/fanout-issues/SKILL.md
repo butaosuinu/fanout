@@ -24,6 +24,7 @@ Create children that can run in parallel fanout panes:
 - Avoid children that all need to edit the same files unless the dependency is explicit.
 - Split dependencies into waves. If B needs A, mark B as blocked by A instead of asking the agent to infer ordering.
 - Do not create a catch-all "integration" child unless there is real integration work the parent cannot own.
+- Size each child so its PR lands in the low hundreds of changed lines. Split a new subsystem or state machine by behavior rather than making one child that ships it whole — automated review findings scale super-linearly with PR size, and an oversized child stalls in review rounds instead of merging.
 - Keep issue titles specific enough to become readable pane names.
 
 Use this child body shape:

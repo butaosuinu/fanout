@@ -375,10 +375,32 @@ git push --force-with-lease="refs/heads/$head:$pr_head_before_work" "<head-remot
   skip する。
 - 新しいレビュアー返信があれば、top-level comment ではなく latest comment の要求を読む。
 - 仕様判断や方針確認が必要な指摘は無理に直さず、判断点を整理してユーザーに確認する。
+- 直す前に下の裁定を通す。全件を機械的に直さない。
 - 修正したら focused test → commit → canonical full gate(E と同じ 1 回)→ push の順に
   進める。
 - 返信は push 後に行う。インライン返信は top-level comment の `fullDatabaseId` を使う。
 - thread resolve は基本的にレビュアーへ委ねる。自分で resolve するのは確信がある場合のみ。
+
+#### 指摘の裁定
+
+リポジトリが対応環境マトリクスやスコープ文書(`docs/review-scope.ja.md` のようなもの)を
+持つ場合、各指摘を **マトリクス内で到達可能な trigger を示せるか** の一軸で分類する。
+
+| 分類 | 対応 |
+| --- | --- |
+| 到達可能 | 修正する。重大度(P1 / P2 等)では落とさない |
+| 到達不能 | 修正せず、thread に理由とスコープ文書の該当箇所を書いて返信する |
+| 判断が割れる / PR のスコープを超える | follow-up issue を立て、番号を thread に書いて今回は直さない |
+
+無言で直す・無言でクローズするのはどちらも禁止。裁定を書き残さないと、
+次のレビューラウンドで同じ指摘が戻ってくる。
+
+そのラウンドの指摘が到達不能なものだけだったら、修正せず返信して
+レビュー対応を終える。到達不能な指摘を直すとコードが増え、次ラウンドの
+レビュー面が広がってラウンドが収束しなくなる。
+
+スコープ文書が無いリポジトリでは従来どおり全件を検討してよいが、
+同種の指摘が 3 ラウンド続いたらユーザーに範囲の合意を求める。
 
 ## Continuous Watching
 
@@ -618,6 +640,11 @@ done
 同じファイル群に同種の問題が残る場合も止める。残っている問題、試した修正、
 次に必要な判断を短く整理してユーザーに渡す。
 
+自動レビュアーは push ごとに再レビューすることがある。修正のたびに新しい指摘が
+出て集合が毎回変わる場合、oscillation 検知は発火しないまま無限に回る。
+review 指摘が 3 pass 連続で新規に出続け、かつ裁定で「到達不能」に落ちる割合が
+高いなら、自動修正を止めて現状をユーザーに渡す。
+
 ## Do Not
 
 - PR を新規作成しない。
@@ -628,6 +655,8 @@ done
   hooks 設定の書き換えで回避しない。push が deny されたら、指示されたコマンド
   (canonical full gate)を最終 commit で通してから push し直す。
 - GitHub の古い thread や push 前の CI log を根拠に、push 後も同じ pass で修正を続けない。
+- 自動レビューを手動で再トリガーしない(`@codex review` 等)。1 回叩くたびに変更面が
+  全て再列挙され、ラウンドが増える。ユーザーが明示的に求めた場合だけ叩く。
 - approval / `:+1:` 待ちだけのために full One Pass を繰り返さない。
 - unchanged cheap snapshot をモデルに何度も読ませない。
 - full review threads、top-level comments、CI logs、diffs を polling ごとに取得しない。

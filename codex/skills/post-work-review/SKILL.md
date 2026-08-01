@@ -153,6 +153,16 @@ turn wording variations into a machine validation problem.
 
 ## Fix and review again
 
+Before fixing anything, decide which findings are actionable. When the
+repository declares a supported-environment matrix or review scope (this one
+does: `docs/review-scope.ja.md`), a finding is actionable only when it can be
+triggered inside that matrix. Severity does not change that verdict: an
+in-matrix finding is fixed whatever its severity, and an out-of-matrix one is
+not fixed at any severity. Report every rejected finding with the scope line
+that applies rather than dropping it silently. If a round produces only
+out-of-matrix findings, treat the review as having no actionable findings and
+continue to validation.
+
 If the broad review has actionable findings:
 
 1. Apply the fixes in the parent session and run focused checks for edited

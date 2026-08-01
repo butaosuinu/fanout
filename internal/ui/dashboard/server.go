@@ -164,8 +164,11 @@ func (s *Server) Start(ctx context.Context) {
 func (s *Server) Wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
+		// ctx is already canceled here, so the shutdown deadline must start from
+		// a fresh root; inheriting it would abort the grace period immediately.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
+		//nolint:contextcheck // graceful shutdown intentionally does not inherit the canceled ctx
 		_ = s.httpServer.Shutdown(shutdownCtx)
 		return <-s.serveErr
 	case err := <-s.serveErr:

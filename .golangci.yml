@@ -6,8 +6,8 @@
 # - gochecknoglobals: ldflags 注入 version/commit・regexp・lipgloss スタイル・
 #   agent registry が全て正当
 # - funlen / gocognit / cyclop: codex_plan_tui.go 1144 行と TUI Update ループが即死
-# - lll / nlreturn / wsl_v5 / varnamelen / err113 / mnd / depguard / dupl /
-#   contextcheck: コミュニティ合意でノイズ
+# - lll / nlreturn / wsl_v5 / varnamelen / err113 / mnd / depguard / dupl:
+#   コミュニティ合意でノイズ
 # - forcetypeassert: errcheck の check-type-assertions で代替
 # - prealloc / perfsprint: 計測なし最適化
 # - ireturn: bubbletea の Update が tea.Model を返す規約と非両立
@@ -23,6 +23,9 @@ linters:
   enable:
     # バグ検出
     - bodyclose                # selfupdate の HTTP レスポンス Body Close 漏れ
+    # deadline 付き ctx を握り潰す新規呼び出しの回帰防止。2026-08 に実測して
+    # 採用(全 issue 1 件 = server.go の graceful shutdown のみ、nolint で明示)
+    - contextcheck
     - copyloopvar              # Go 1.22+ で不要なループ変数コピー
     - durationcheck
     - errorlint                # errors.Is/As 不使用の比較・型アサーション

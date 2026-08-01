@@ -54,6 +54,38 @@ When Codex runs or posts automatic review comments for a PR in this repository,
 write those review comments in Japanese. Keep file paths, line numbers, symbol
 names, command names, and quoted code unchanged.
 
+## Automated PR Review Scope
+
+fanout is verified only in the environment below. Behavior that breaks solely
+outside this matrix is untested rather than defective, and is not a review
+finding. This is the verified range, not a claim that older setups break.
+
+- git 2.39+, SHA-1 object format only (OID length may be assumed to be 40)
+- non-sparse, non-split index; `core.ignoreCase` and `core.precomposeUnicode`
+  at their platform defaults
+- macOS or Linux; a single-user local checkout (no network filesystems, no
+  shared checkouts, no concurrent operation by other users)
+- tmux 3.3+ and an authenticated `gh`
+
+Rules for a review finding:
+
+- State a concrete trigger reachable inside this matrix. A finding that only
+  fires outside it is out of scope regardless of severity.
+- Do not re-raise a thread the author declined with a stated rationale.
+- ADR and spike documents under `docs/` are decision records, not
+  implementation specs. Do not review them for implementation-level
+  completeness; an unstated condition is undecided, not missing. Only
+  `docs/architecture.ja.md`, `docs/review-scope.ja.md`, and the Behavior
+  Boundaries in `AGENTS.md` / `CLAUDE.md` are binding contracts.
+
+Explicit non-goals: full mutual exclusion against worktree or branch operations
+made by other processes, and guaranteed resource reclamation across every
+crash-resume window. Falling back to a documented manual cleanup is the
+requirement there.
+
+Canonical reference, including the measured baseline this scope was derived
+from: `docs/review-scope.ja.md`.
+
 ## Working With fanout
 
 `fanout` is a standalone git worktree + tmux pane + agent launcher. Build with
@@ -244,6 +276,12 @@ touching only class-A packages can rely on AI review.
 - Walk `docs/review-checklist.ja.md` before creating a PR. The final
   post-work-review gate owns one `make check` run; do not duplicate it with
   separate full `make lint`, `make test`, or `make lint-web` runs.
+- Triage every review finding on one axis: can it be triggered inside the
+  supported matrix above? Fix it if yes (severity does not downgrade it);
+  otherwise reply in the thread with the rationale and which line of
+  `docs/review-scope.ja.md` applies. Never fix silently and never close
+  silently. Do not re-trigger a review with `@codex review` — each trigger
+  re-enumerates the whole changed surface.
 - `go:embed` snapshots whatever is on disk at build time: after editing
   `web/src`, build via `make build-go`, not raw `go build`, or the binary
   ships a stale bundle.

@@ -195,6 +195,7 @@ fi
 
 - 全 fanout 子ペインに効かせたい → CLAUDE.md と AGENTS.md (**両方**。片方だけの更新はドリフトになる)。memory は子ペインの project dir に届かない。
 - レビュー品質 → `docs/review-checklist.ja.md` / post-work-review skill。
+- 対応環境の外でしか踏めない指摘が多い / 指摘が収束していない → `docs/review-scope.ja.md` の対応環境マトリクスと非ゴール。件数だけでなく **PR ごとのレビューラウンド数** も添えて提示する (指摘総数が同じでもラウンドが増えているなら収束していない)。
 - root repo セッションの挙動 → memory feedback (`feedback_*.md` + MEMORY.md の行)。
 
 適用はユーザー承認後: repo ファイルはブランチ + PR、memory は直接追記。
