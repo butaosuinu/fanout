@@ -12,9 +12,13 @@ setup() {
   mkdir -p "$PR_WATCH_FIXTURE" "$BATS_TEST_TMPDIR/bin"
   unset PR_WATCH_CONTINUE PR_WATCH_INTERVAL PR_WATCH_MAX_SECONDS PR_WATCH_PLUS1_ACTOR_RE
   unset PR_WATCH_CHECKS_ERROR PR_WATCH_CHECKS_STATUS
+  unset PR_WATCH_PROBE_COUNTS_STATUS PR_WATCH_PROBE_COMMENTS_STATUS
+  unset PR_WATCH_PROBE_REVIEWS_STATUS PR_WATCH_PROBE_THREADS_STATUS
+  unset PR_WATCH_PROBE_THREAD_COMMENTS_STATUS
 
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'EOF'
 #!/bin/sh
+printf '%s\n' "$*" >>"$PR_WATCH_FIXTURE/calls.log"
 case "${1:-} ${2:-}" in
   "pr view")
     cat "$PR_WATCH_FIXTURE/pr.tsv"
@@ -35,6 +39,40 @@ case "${1:-} ${2:-}" in
     [ -z "${PR_WATCH_CHECKS_ERROR:-}" ] || printf '%s\n' "$PR_WATCH_CHECKS_ERROR" >&2
     exit "${PR_WATCH_CHECKS_STATUS:-0}"
     ;;
+  "api graphql")
+    case "$*" in
+      *"headRefOid"*)
+        cat "$PR_WATCH_FIXTURE/probe-counts.tsv"
+        if [ -f "$PR_WATCH_FIXTURE/probe-counts.next.tsv" ]; then
+          mv "$PR_WATCH_FIXTURE/probe-counts.next.tsv" "$PR_WATCH_FIXTURE/probe-counts.tsv"
+        fi
+        exit "${PR_WATCH_PROBE_COUNTS_STATUS:-0}"
+        ;;
+      *'node(id:$threadId)'*)
+        thread_id=""
+        for arg in "$@"; do
+          case "$arg" in threadId=*) thread_id="${arg#threadId=}" ;; esac
+        done
+        [ -n "$thread_id" ] || exit 2
+        cat "$PR_WATCH_FIXTURE/probe-thread-comments-$thread_id.tsv"
+        exit "${PR_WATCH_PROBE_THREAD_COMMENTS_STATUS:-0}"
+        ;;
+      *"comments(first:100,after:"*)
+        cat "$PR_WATCH_FIXTURE/probe-comments.tsv"
+        exit "${PR_WATCH_PROBE_COMMENTS_STATUS:-0}"
+        ;;
+      *"latestReviews(first:100,after:"*)
+        cat "$PR_WATCH_FIXTURE/probe-reviews.tsv"
+        exit "${PR_WATCH_PROBE_REVIEWS_STATUS:-0}"
+        ;;
+      *"reviewThreads(first:100,after:"*)
+        cat "$PR_WATCH_FIXTURE/probe-threads.tsv"
+        exit "${PR_WATCH_PROBE_THREADS_STATUS:-0}"
+        ;;
+    esac
+    printf 'unexpected graphql call: %s\n' "$*" >&2
+    exit 2
+    ;;
   "api --paginate")
     cat "$PR_WATCH_FIXTURE/reactions.tsv"
     exit "${PR_WATCH_REACTION_STATUS:-0}"
@@ -49,6 +87,12 @@ EOF
   write_pr OPEN false MERGEABLE CLEAN NONE 0 head-one 2026-07-10T00:00:00Z
   : >"$PR_WATCH_FIXTURE/checks.tsv"
   : >"$PR_WATCH_FIXTURE/reactions.tsv"
+  : >"$PR_WATCH_FIXTURE/calls.log"
+  printf 'head-one\t2026-07-10T00:00:00Z\t0\t0\t0\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.tsv"
+  : >"$PR_WATCH_FIXTURE/probe-comments.tsv"
+  : >"$PR_WATCH_FIXTURE/probe-reviews.tsv"
+  : >"$PR_WATCH_FIXTURE/probe-threads.tsv"
 }
 
 write_pr() {
@@ -149,6 +193,229 @@ state_dir_for() {
   [ "$status" -eq 0 ]
   [[ "$output" == event=change* ]]
   [[ "$output" == *"checks_fail=1"* ]]
+}
+
+@test "snapshot emits an updatedAt-only change" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+
+  run_watch "$repo" snapshot --repo acme/widget --pr 27
+  [ "$status" -eq 0 ]
+
+  export PR_WATCH_CONTINUE=1
+  write_pr OPEN false MERGEABLE CLEAN NONE 0 head-one 2026-07-10T00:01:00Z
+  run_watch "$repo" snapshot --repo acme/widget --pr 27
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == event=change* ]]
+  [[ "$output" == *"head=head-one"* ]]
+  [[ "$output" == *"updated=2026-07-10T00:01:00Z"* ]]
+}
+
+@test "review probe skips metadata pagination when every review surface is empty" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  local state_dir
+  setup_repo "$repo"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == event=review_probe* ]]
+  [[ "$output" == *"top_comments=0"* ]]
+  [[ "$output" == *"reviews=0"* ]]
+  [[ "$output" == *"unresolved_threads=0"* ]]
+  [ "$(grep -c '^api graphql' "$PR_WATCH_FIXTURE/calls.log")" -eq 2 ]
+  ! grep -q 'first:100' "$PR_WATCH_FIXTURE/calls.log"
+  ! grep -Eq 'body(Text)?|diffHunk' "$PR_WATCH_FIXTURE/calls.log"
+  state_dir="$(state_dir_for "$repo")"
+  [ ! -e "$state_dir" ]
+}
+
+@test "review probe emits body-free digests only for non-empty review surfaces" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  printf 'head-one\t2026-07-10T00:00:00Z\t1\t1\t2\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.tsv"
+  printf 'total\t1\nnode\t101\talice\t2026-07-10T00:01:00Z\t2026-07-10T00:01:00Z\n' \
+    >"$PR_WATCH_FIXTURE/probe-comments.tsv"
+  printf 'total\t1\nnode\t201\treviewer\tCOMMENTED\t2026-07-10T00:02:00Z\t2026-07-10T00:02:00Z\thead-one\n' \
+    >"$PR_WATCH_FIXTURE/probe-reviews.tsv"
+  {
+    printf 'total\t2\n'
+    printf 'node\tTHREAD-OPEN\tfalse\tmain.go\t12\t10\tRIGHT\t2\n'
+    printf 'node\tTHREAD-DONE\ttrue\tmain.go\t8\t8\tRIGHT\t1\n'
+  } >"$PR_WATCH_FIXTURE/probe-threads.tsv"
+  {
+    printf 'total\tTHREAD-OPEN\t2\n'
+    printf 'node\tTHREAD-OPEN\t301\treviewer\t2026-07-10T00:02:00Z\t2026-07-10T00:02:00Z\n'
+    printf 'node\tTHREAD-OPEN\t302\tagent\t2026-07-10T00:03:00Z\t2026-07-10T00:04:00Z\n'
+  } >"$PR_WATCH_FIXTURE/probe-thread-comments-THREAD-OPEN.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == event=review_probe* ]]
+  [[ "$output" == *"top_comments=1"* ]]
+  [[ "$output" == *"reviews=1"* ]]
+  [[ "$output" == *"unresolved_threads=1"* ]]
+  [[ "$output" == *"top_digest="* ]]
+  [[ "$output" == *"reviews_digest="* ]]
+  [[ "$output" == *"threads_digest="* ]]
+  [[ "$output" == *"fingerprint="* ]]
+  [ "$(grep -c '^api graphql' "$PR_WATCH_FIXTURE/calls.log")" -eq 6 ]
+  ! grep -Eq 'body(Text)?|diffHunk' "$PR_WATCH_FIXTURE/calls.log"
+}
+
+@test "review probe digest is stable across pagination and response order" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  local first_digest second_digest i
+  setup_repo "$repo"
+  printf 'head-one\t2026-07-10T00:00:00Z\t101\t0\t0\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.tsv"
+  {
+    printf 'total\t101\n'
+    i=1
+    while [ "$i" -le 100 ]; do
+      printf 'node\t%s\tuser-%s\t2026-07-10T00:00:00Z\t2026-07-10T00:00:00Z\n' "$i" "$i"
+      i=$((i + 1))
+    done
+    printf 'total\t101\n'
+    printf 'node\t101\tuser-101\t2026-07-10T00:00:00Z\t2026-07-10T00:00:00Z\n'
+  } >"$PR_WATCH_FIXTURE/probe-comments.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+  [ "$status" -eq 0 ]
+  first_digest="${output#*top_digest=}"
+  first_digest="${first_digest%% *}"
+
+  {
+    printf 'total\t101\n'
+    i=101
+    while [ "$i" -ge 2 ]; do
+      printf 'node\t%s\tuser-%s\t2026-07-10T00:00:00Z\t2026-07-10T00:00:00Z\n' "$i" "$i"
+      i=$((i - 1))
+    done
+    printf 'total\t101\n'
+    printf 'node\t1\tuser-1\t2026-07-10T00:00:00Z\t2026-07-10T00:00:00Z\n'
+  } >"$PR_WATCH_FIXTURE/probe-comments.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+  [ "$status" -eq 0 ]
+  second_digest="${output#*top_digest=}"
+  second_digest="${second_digest%% *}"
+  [ "$first_digest" = "$second_digest" ]
+}
+
+@test "review probe detects an edited top-level thread comment after a reply" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  local first_digest second_digest
+  setup_repo "$repo"
+  printf 'head-one\t2026-07-10T00:00:00Z\t0\t0\t1\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.tsv"
+  {
+    printf 'total\t1\n'
+    printf 'node\tTHREAD-OPEN\tfalse\tmain.go\t12\t10\tRIGHT\t2\n'
+  } >"$PR_WATCH_FIXTURE/probe-threads.tsv"
+  {
+    printf 'total\tTHREAD-OPEN\t2\n'
+    printf 'node\tTHREAD-OPEN\t301\treviewer\t2026-07-10T00:01:00Z\t2026-07-10T00:01:00Z\n'
+    printf 'node\tTHREAD-OPEN\t302\tagent\t2026-07-10T00:02:00Z\t2026-07-10T00:02:00Z\n'
+  } >"$PR_WATCH_FIXTURE/probe-thread-comments-THREAD-OPEN.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+  [ "$status" -eq 0 ]
+  first_digest="${output#*threads_digest=}"
+  first_digest="${first_digest%% *}"
+
+  {
+    printf 'total\tTHREAD-OPEN\t2\n'
+    printf 'node\tTHREAD-OPEN\t301\treviewer\t2026-07-10T00:01:00Z\t2026-07-10T00:03:00Z\n'
+    printf 'node\tTHREAD-OPEN\t302\tagent\t2026-07-10T00:02:00Z\t2026-07-10T00:02:00Z\n'
+  } >"$PR_WATCH_FIXTURE/probe-thread-comments-THREAD-OPEN.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+  [ "$status" -eq 0 ]
+  second_digest="${output#*threads_digest=}"
+  second_digest="${second_digest%% *}"
+  [ "$first_digest" != "$second_digest" ]
+}
+
+@test "review probe detects an edited middle thread comment" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  local first_digest second_digest
+  setup_repo "$repo"
+  printf 'head-one\t2026-07-10T00:00:00Z\t0\t0\t1\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.tsv"
+  printf 'total\t1\nnode\tTHREAD-OPEN\tfalse\tmain.go\t12\t10\tRIGHT\t3\n' \
+    >"$PR_WATCH_FIXTURE/probe-threads.tsv"
+  {
+    printf 'total\tTHREAD-OPEN\t3\n'
+    printf 'node\tTHREAD-OPEN\t301\treviewer\t2026-07-10T00:01:00Z\t2026-07-10T00:01:00Z\n'
+    printf 'node\tTHREAD-OPEN\t302\tagent\t2026-07-10T00:02:00Z\t2026-07-10T00:02:00Z\n'
+    printf 'node\tTHREAD-OPEN\t303\treviewer\t2026-07-10T00:03:00Z\t2026-07-10T00:03:00Z\n'
+  } >"$PR_WATCH_FIXTURE/probe-thread-comments-THREAD-OPEN.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+  [ "$status" -eq 0 ]
+  first_digest="${output#*threads_digest=}"
+  first_digest="${first_digest%% *}"
+
+  {
+    printf 'total\tTHREAD-OPEN\t3\n'
+    printf 'node\tTHREAD-OPEN\t301\treviewer\t2026-07-10T00:01:00Z\t2026-07-10T00:01:00Z\n'
+    printf 'node\tTHREAD-OPEN\t302\tagent\t2026-07-10T00:02:00Z\t2026-07-10T00:04:00Z\n'
+    printf 'node\tTHREAD-OPEN\t303\treviewer\t2026-07-10T00:03:00Z\t2026-07-10T00:03:00Z\n'
+  } >"$PR_WATCH_FIXTURE/probe-thread-comments-THREAD-OPEN.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+  [ "$status" -eq 0 ]
+  second_digest="${output#*threads_digest=}"
+  second_digest="${second_digest%% *}"
+  [ "$first_digest" != "$second_digest" ]
+}
+
+@test "review probe blocks on incomplete metadata pagination" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  printf 'head-one\t2026-07-10T00:00:00Z\t2\t0\t0\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.tsv"
+  printf 'total\t2\nnode\t101\talice\t2026-07-10T00:01:00Z\t2026-07-10T00:01:00Z\n' \
+    >"$PR_WATCH_FIXTURE/probe-comments.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == "event=blocked repo=acme/widget pr=27 reason=review_probe_incomplete status=1" ]]
+}
+
+@test "review probe blocks on incomplete thread-comment pagination" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  printf 'head-one\t2026-07-10T00:00:00Z\t0\t0\t1\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.tsv"
+  printf 'total\t1\nnode\tTHREAD-OPEN\tfalse\tmain.go\t12\t10\tRIGHT\t2\n' \
+    >"$PR_WATCH_FIXTURE/probe-threads.tsv"
+  {
+    printf 'total\tTHREAD-OPEN\t2\n'
+    printf 'node\tTHREAD-OPEN\t301\treviewer\t2026-07-10T00:01:00Z\t2026-07-10T00:01:00Z\n'
+  } >"$PR_WATCH_FIXTURE/probe-thread-comments-THREAD-OPEN.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == "event=blocked repo=acme/widget pr=27 reason=review_probe_thread_comments_incomplete status=1" ]]
+}
+
+@test "review probe reports a race instead of classifying stale counts" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  printf 'head-two\t2026-07-10T00:01:00Z\t1\t0\t0\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.next.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "event=change repo=acme/widget pr=27 reason=review_probe_changed" ]]
 }
 
 @test "an empty review decision does not shift snapshot fields" {

@@ -1,7 +1,7 @@
 interface:
   display_name: "PR watch"
   short_description: "Watch and repair a PR to completion"
-  default_prompt: "Use $pr-watch to repair actionable PR failures, then cheap-poll until the PR is mergeable, green, and approved."
+  default_prompt: "Use $pr-watch to probe review metadata first, fetch bodies only for non-empty changed surfaces, repair actionable PR failures, then cheap-poll until the PR is mergeable, green, and approved."
 
 policy:
   allow_implicit_invocation: true

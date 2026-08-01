@@ -46,8 +46,22 @@ empty or failed responses remain unknown or blocked; do not coerce them to green
 
 ## Fetch actionable review state
 
-Fetch full bodies only after a compact event suggests review work. Paginate
-unresolved threads and preserve both the top-level and latest comment.
+Run the metadata-only gate before fetching body content:
+
+```bash
+"$watcher" review-probe --repo "$owner/$repo" --pr "$num"
+```
+
+The probe emits counts and fixed-size digests for top-level comments, latest
+reviews, and unresolved threads. It never emits `body`, `bodyText`, or
+`diffHunk`. Unresolved-thread digests include fully paginated metadata for every
+reply. On a fresh invocation, fetch a surface's bodies only when its count is
+non-zero. During the same foreground run, skip body fetches for an already
+audited surface digest. If the probe reports `reason=review_probe_changed`, run
+it again; if it blocks or fails, do not treat the surface as empty.
+
+For a non-empty, unaudited unresolved-thread surface, first paginate unresolved
+thread IDs.
 
 ```bash
 gh api graphql --paginate -f query='
@@ -56,37 +70,67 @@ gh api graphql --paginate -f query='
       pullRequest(number:$num){
         reviewThreads(first:100,after:$endCursor){
           pageInfo{hasNextPage endCursor}
-          nodes{
-            isResolved path line originalLine diffSide
-            topLevel:comments(first:1){
-              nodes{fullDatabaseId body diffHunk author{login} createdAt}
-            }
-            latest:comments(last:1){nodes{author{login} createdAt body}}
-          }
+          nodes{id isResolved path line originalLine diffSide}
         }
       }
     }
   }' -F owner="$owner" -F repo="$repo" -F num="$num"
 ```
 
-Also inspect latest review summaries and top-level PR comments. `gh pr view
---json comments` is limited, so paginate when comments affect completion or a
-blocked decision.
+For each unresolved `thread_id`, paginate every comment body. Keep
+`fullDatabaseId` for an inline reply through the REST endpoint.
+
+```bash
+gh api graphql --paginate -f query='
+  query($threadId:ID!,$endCursor:String){
+    node(id:$threadId){
+      ... on PullRequestReviewThread{
+        comments(first:100,after:$endCursor){
+          pageInfo{hasNextPage endCursor}
+          nodes{id fullDatabaseId body diffHunk author{login} createdAt updatedAt}
+        }
+      }
+    }
+  }' -F threadId="$thread_id"
+```
+
+For a non-empty, unaudited latest-review surface, paginate review summaries.
 
 ```bash
 gh api graphql --paginate -f query='
   query($owner:String!,$repo:String!,$num:Int!,$endCursor:String){
     repository(owner:$owner,name:$repo){
       pullRequest(number:$num){
-        latestReviews(first:100){nodes{author{login} state body submittedAt}}
-        comments(first:100,after:$endCursor){
+        latestReviews(first:100,after:$endCursor){
           pageInfo{hasNextPage endCursor}
-          nodes{databaseId author{login} body createdAt updatedAt}
+          nodes{id author{login} state body submittedAt updatedAt commit{oid}}
         }
       }
     }
   }' -F owner="$owner" -F repo="$repo" -F num="$num"
 ```
+
+For a non-empty, unaudited top-level-comment surface, paginate PR comments.
+`gh pr view --json comments` is limited and cannot replace this query.
+
+```bash
+gh api graphql --paginate -f query='
+  query($owner:String!,$repo:String!,$num:Int!,$endCursor:String){
+    repository(owner:$owner,name:$repo){
+      pullRequest(number:$num){
+        comments(first:100,after:$endCursor){
+          pageInfo{hasNextPage endCursor}
+          nodes{id author{login} body createdAt updatedAt}
+        }
+      }
+    }
+  }' -F owner="$owner" -F repo="$repo" -F num="$num"
+```
+
+After any body fetch, rerun `review-probe`. Use the bodies only when its `head`
+and combined `fingerprint` still match the values that selected the fetch.
+GraphQL errors, null PR data, or incomplete pagination are blocked states, not
+zero-item results.
 
 Treat a thread as handled when the latest message is this agent's response and
 no reviewer replied afterward. A newer reviewer response supersedes the
@@ -226,9 +270,11 @@ After every push:
 
 1. Discard all pre-push CI logs, mergeability, and review snapshots.
 2. Run the installed `pr-watch/scripts/watch-pr.sh snapshot` against the new head.
-3. Continue with `PR_WATCH_CONTINUE=1 ... wait` while checks settle.
-4. Enter another repair pass only for a new actionable event.
+3. Run `review-probe`; fetch body content only for non-empty unaudited digests.
+4. Continue with `PR_WATCH_CONTINUE=1 ... wait` while checks settle.
+5. Enter another repair pass only for a new actionable event.
 
 The final pass must confirm current-head checks, mergeability, review decision,
-and any configured reaction target. EYES or positive prose does not substitute
-for a literal configured `:+1:`.
+the latest review-probe fingerprint, and any configured reaction target. Reuse
+body classification when every non-empty surface digest is already audited.
+EYES or positive prose does not substitute for a literal configured `:+1:`.
