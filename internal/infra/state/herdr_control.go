@@ -369,16 +369,34 @@ func HerdrOwnerProjectRoot(parent, projectRoot string) (string, error) {
 	return projectRoot, nil
 }
 
-func HerdrCoordinatorIntentID(parent, ownerProjectRoot string) (string, error) {
+func HerdrCoordinatorIntentID(parent, ownerProjectRoot string, issueNum int) (string, error) {
 	parent = parentref.Canon(strings.TrimSpace(parent))
 	if parent == "" {
 		return "", fmt.Errorf("herdr coordinator intent requires a parent")
+	}
+	switch parent {
+	case "@manual":
+		if issueNum >= 0 {
+			return "", fmt.Errorf("manual Herdr coordinator requires a negative synthetic issue number")
+		}
+	case "@watch":
+		if issueNum <= 0 {
+			return "", fmt.Errorf("watch Herdr coordinator requires a positive issue number")
+		}
+	default:
+		if issueNum != 0 {
+			return "", fmt.Errorf("non-synthetic Herdr coordinator cannot use a synthetic issue number")
+		}
 	}
 	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, ownerProjectRoot)
 	if err != nil {
 		return "", err
 	}
-	return "coordinator:" + herdrOwnerTuple(parent, ownerProjectRoot), nil
+	id := "coordinator:" + herdrOwnerTuple(parent, ownerProjectRoot)
+	if issueNum != 0 {
+		id += ":" + strconv.Itoa(issueNum)
+	}
+	return id, nil
 }
 
 // HerdrWorktreeIntentID uses the same issue/task key as the tmux state store:
@@ -673,8 +691,9 @@ func validateHerdrRow(row HerdrRow) error {
 		expectedID, err = HerdrCoordinatorIntentID(
 			runtimeParent,
 			herdrRuntimeOwnerProjectRoot(runtimeParent, ownerProjectRoot),
+			row.IssueNum,
 		)
-		if row.IssueNum != 0 || row.TaskID != "" || row.Slug != "" ||
+		if row.TaskID != "" || row.Slug != "" ||
 			row.BranchName != "" || row.FullBranchRef != "" ||
 			row.BaseBranch != "" || row.BaseSHA != "" || row.ExpectedHead != "" ||
 			row.BranchExisted || row.BranchCreated {
@@ -728,8 +747,9 @@ func validateHerdrIntent(intent HerdrIntent) error {
 		expectedID, err = HerdrCoordinatorIntentID(
 			runtimeParent,
 			herdrRuntimeOwnerProjectRoot(runtimeParent, ownerProjectRoot),
+			intent.IssueNum,
 		)
-		if intent.IssueNum != 0 || intent.TaskID != "" || intent.BranchName != "" ||
+		if intent.TaskID != "" || intent.BranchName != "" ||
 			intent.FullBranchRef != "" || intent.BaseSHA != "" || intent.Coordinator.WorkspaceID != "" {
 			return fmt.Errorf("herdr coordinator intent %s contains child fields", intent.ID)
 		}

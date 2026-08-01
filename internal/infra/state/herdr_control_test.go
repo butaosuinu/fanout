@@ -355,7 +355,7 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testing.T) {
 	intent := testHerdrCoordinatorIntent("/repo/one", "plan:demo")
 	intent.RuntimeParent = "425"
-	intent.ID, _ = HerdrCoordinatorIntentID(intent.RuntimeParent, "")
+	intent.ID, _ = HerdrCoordinatorIntentID(intent.RuntimeParent, "", 0)
 	store := testEmptyHerdrControl()
 	store.Intents = append(store.Intents, intent)
 
@@ -463,6 +463,38 @@ func TestHerdrIntentIDsUseTmuxIssueAndTaskKeys(t *testing.T) {
 	}
 }
 
+func TestHerdrCoordinatorIntentIDsUseSyntheticIssueNumbers(t *testing.T) {
+	firstManual, err := HerdrCoordinatorIntentID("@manual", "", -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondManual, err := HerdrCoordinatorIntentID("@manual", "", -2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	watch, err := HerdrCoordinatorIntentID("@watch", "", 425)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstManual == secondManual || firstManual == watch || secondManual == watch {
+		t.Fatalf(
+			"synthetic coordinator IDs collide: %q, %q, %q",
+			firstManual,
+			secondManual,
+			watch,
+		)
+	}
+	if _, err := HerdrCoordinatorIntentID("@manual", "", 0); err == nil {
+		t.Fatal("manual coordinator without synthetic issue number was accepted")
+	}
+	if _, err := HerdrCoordinatorIntentID("@watch", "", 0); err == nil {
+		t.Fatal("watch coordinator without issue number was accepted")
+	}
+	if _, err := HerdrCoordinatorIntentID("425", "", 426); err == nil {
+		t.Fatal("numeric coordinator with synthetic issue number was accepted")
+	}
+}
+
 func TestHerdrControlRejectsIncompleteRealizedIntent(t *testing.T) {
 	repo := newHerdrControlRepo(t)
 	intent := testHerdrCoordinatorIntent(repo, "425")
@@ -539,7 +571,7 @@ func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 	if err != nil {
 		panic(err)
 	}
-	id, err := HerdrCoordinatorIntentID(parent, ownerProjectRoot)
+	id, err := HerdrCoordinatorIntentID(parent, ownerProjectRoot, 0)
 	if err != nil {
 		panic(err)
 	}

@@ -133,6 +133,60 @@ func TestRealizeHerdrWorktreePersistsIntentAndSkipsReplay(t *testing.T) {
 	}
 }
 
+func TestRealizeHerdrWorktreeLeavesIssuedIntentAfterRealizedSaveFailure(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	controlPath, err := state.HerdrControlPath(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlDir := filepath.Dir(controlPath)
+	t.Cleanup(func() {
+		if chmodErr := os.Chmod(controlDir, 0o700); chmodErr != nil {
+			t.Errorf("restore Herdr control directory mode: %v", chmodErr)
+		}
+	})
+	successfulMutate := runtime.mutate
+	runtime.mutate = func(
+		mutationReq herdrrun.WorktreeMutationRequest,
+	) (herdrrun.WorktreeMutationResult, error) {
+		result, mutateErr := successfulMutate(mutationReq)
+		if mutateErr == nil && mutationReq.Kind == herdrrun.WorktreeCreate {
+			if chmodErr := os.Chmod(controlDir, 0o500); chmodErr != nil {
+				t.Fatalf("make Herdr control directory read-only: %v", chmodErr)
+			}
+		}
+		return result, mutateErr
+	}
+
+	req := testHerdrWorktreeRequest(repo, "realized-save-failure", 426)
+	_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, errHerdrRealizedIntentSave) ||
+		errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("realized save error = %v", err)
+	}
+	if chmodErr := os.Chmod(controlDir, 0o700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	control, loadErr := state.LoadHerdrControl(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	intentID, idErr := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
+	if idErr != nil {
+		t.Fatal(idErr)
+	}
+	intent, found := control.FindIntent(intentID)
+	if !found || intent.Status != state.HerdrIntentIssued ||
+		intent.Resource.WorkspaceID != "" || intent.Failure != "" {
+		t.Fatalf("persisted intent after realized save failure = (%+v,%t)", intent, found)
+	}
+}
+
 func TestRealizeHerdrWorktreeReopensVerifiedRealizedCheckout(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
@@ -1311,6 +1365,42 @@ func TestRealizeHerdrCoordinatorAdoptsResponseLossAndNeverReissues(t *testing.T)
 	}
 }
 
+func TestRealizeHerdrManualCoordinatorsUseSyntheticIssueIdentity(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	req := testHerdrCoordinatorRequest(repo)
+	req.Parent = ManualParentRef
+	req.IssueNum = -1
+
+	first, err := realizeHerdrCoordinator(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("first manual coordinator error = %v", err)
+	}
+	req.IssueNum = -2
+	second, err := realizeHerdrCoordinator(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("second manual coordinator error = %v", err)
+	}
+	if first.Intent.ID == second.Intent.ID || first.Intent.IssueNum != -1 ||
+		second.Intent.IssueNum != -2 || len(runtime.mutations) != 2 {
+		t.Fatalf(
+			"manual coordinators = (%+v, %+v), mutations=%d",
+			first.Intent,
+			second.Intent,
+			len(runtime.mutations),
+		)
+	}
+	control, loadErr := state.LoadHerdrControl(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(control.Intents) != 2 {
+		t.Fatalf("manual coordinator intents = %+v", control.Intents)
+	}
+}
+
 func TestRealizeHerdrReusesNumericParentCoordinatorAcrossLinkedWorktrees(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
@@ -1522,7 +1612,7 @@ func TestRealizeHerdrResolvesPlanRuntimeParentPerOwnerRoot(t *testing.T) {
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("issue-sourced coordinator error = %v", err)
 	}
-	wantID, err := state.HerdrCoordinatorIntentID("425", "")
+	wantID, err := state.HerdrCoordinatorIntentID("425", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1587,7 +1677,7 @@ func TestRealizeHerdrResolvesPlanRuntimeParentPerOwnerRoot(t *testing.T) {
 		runtime,
 		hooks,
 	)
-	wantOtherID, idErr := state.HerdrCoordinatorIntentID("426", "")
+	wantOtherID, idErr := state.HerdrCoordinatorIntentID("426", "", 0)
 	if idErr != nil {
 		t.Fatal(idErr)
 	}

@@ -427,7 +427,7 @@ func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := state.HerdrCoordinatorIntentID(runtimeParent, runtimeOwnerProjectRoot)
+	id, err := state.HerdrCoordinatorIntentID(runtimeParent, runtimeOwnerProjectRoot, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -836,7 +836,7 @@ func TestRuntimeReadRoutesUseSharedHerdrControlRowsAndIntents(t *testing.T) {
 
 func writeHerdrControlRouteIntent(t *testing.T, repo, session, socketPath string) {
 	t.Helper()
-	id, err := state.HerdrCoordinatorIntentID("426", "")
+	id, err := state.HerdrCoordinatorIntentID("426", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -894,7 +894,7 @@ func TestRuntimeReadRoutesUseUserDefaultHerdrWithoutSavedRoute(t *testing.T) {
 
 func writeHerdrControlRouteRow(t *testing.T, repo, session, socketPath string) {
 	t.Helper()
-	id, err := state.HerdrCoordinatorIntentID("425", "")
+	id, err := state.HerdrCoordinatorIntentID("425", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

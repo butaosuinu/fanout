@@ -27,6 +27,7 @@ var (
 	ErrHerdrManualCleanupRequired     = errors.New("herdr launch requires manual cleanup")
 	ErrHerdrLauncherReadinessDeferred = errors.New("herdr launcher readiness is deferred to issue #528")
 	errHerdrIntentDeadlineExpired     = errors.New("herdr realization deadline expired")
+	errHerdrRealizedIntentSave        = errors.New("save realized Herdr worktree intent")
 )
 
 type HerdrWorktreeRuntime interface {
@@ -46,6 +47,7 @@ type HerdrRealizeHooks struct {
 
 type HerdrCoordinatorRequest struct {
 	Parent       string
+	IssueNum     int
 	ProjectRoot  string
 	SourceRoot   string
 	CWD          string
@@ -183,6 +185,7 @@ func RealizeHerdrCoordinator(
 	intentID, intentIDErr := state.HerdrCoordinatorIntentID(
 		runtimeParent,
 		runtimeOwnerProjectRoot,
+		req.IssueNum,
 	)
 	if intentIDErr != nil {
 		return result, intentIDErr
@@ -245,6 +248,7 @@ func RealizeHerdrCoordinator(
 			ID: intentID, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentPlanned,
 			Parent: canonicalHerdrParent(req.Parent), RuntimeParent: runtimeParent,
 			OwnerProjectRoot: ownerProjectRoot,
+			IssueNum:         req.IssueNum,
 			Backend:          backend.Herdr, WorktreePath: cwd,
 			WorkspaceLabel: label, Session: req.HerdrSession, SocketPath: req.SocketPath,
 			TimeoutMS: timeout.Milliseconds(), ExpiresUnixMS: realizeDeadline.UnixMilli(),
@@ -446,6 +450,7 @@ func RealizeHerdrWorktree(
 	coordinatorID, coordinatorIDErr := state.HerdrCoordinatorIntentID(
 		runtimeParent,
 		runtimeOwnerProjectRoot,
+		herdrCoordinatorSyntheticIssueNum(runtimeParent, req.IssueNum),
 	)
 	if coordinatorIDErr != nil {
 		return result, coordinatorIDErr
@@ -660,7 +665,7 @@ func RealizeHerdrWorktree(
 		return recoverHerdrWorktree(operationCtx, runtime, locked, req, source, intent, mutationErr)
 	}
 	if finalizeErr := finalizeHerdrWorktree(locked, req, source, &intent, mutation.WorkspaceObservation); finalizeErr != nil {
-		return result, markHerdrIntentManual(locked, intent, finalizeErr)
+		return result, handleHerdrWorktreeFinalizeError(locked, intent, finalizeErr)
 	}
 	return worktreeDeferred(intent)
 }
@@ -752,6 +757,15 @@ func resolveHerdrRuntimeParent(
 		return "", fmt.Errorf("resolve Herdr runtime parent: empty parent")
 	}
 	return parent, nil
+}
+
+func herdrCoordinatorSyntheticIssueNum(parent string, issueNum int) int {
+	switch canonicalHerdrParent(parent) {
+	case ManualParentRef, WatchParentRef:
+		return issueNum
+	default:
+		return 0
+	}
 }
 
 func verifyHerdrStateBindings(projectRoot, parent string, current state.Store) error {
@@ -987,7 +1001,7 @@ func recoverHerdrWorktree(
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
 	if len(matches) == 1 {
 		if err := finalizeHerdrWorktree(locked, req, source, &intent, matches[0]); err != nil {
-			return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, err)
+			return HerdrWorktreeResult{}, handleHerdrWorktreeFinalizeError(locked, intent, err)
 		}
 		return worktreeDeferred(intent)
 	}
@@ -1101,7 +1115,21 @@ func finalizeHerdrWorktree(
 	intent.Status = state.HerdrIntentRealized
 	intent.Failure = ""
 	locked.UpsertIntent(*intent)
-	return locked.Save()
+	if saveErr := locked.Save(); saveErr != nil {
+		return errors.Join(errHerdrRealizedIntentSave, saveErr)
+	}
+	return nil
+}
+
+func handleHerdrWorktreeFinalizeError(
+	locked *state.LockedHerdrControl,
+	intent state.HerdrIntent,
+	err error,
+) error {
+	if errors.Is(err, errHerdrRealizedIntentSave) {
+		return err
+	}
+	return markHerdrIntentManual(locked, intent, err)
 }
 
 func verifyRealizedCoordinator(
@@ -1231,7 +1259,7 @@ func resumeRealizedHerdrWorktree(
 		&intent,
 		mutation.WorkspaceObservation,
 	); finalizeErr != nil {
-		return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, finalizeErr)
+		return HerdrWorktreeResult{}, handleHerdrWorktreeFinalizeError(locked, intent, finalizeErr)
 	}
 	return worktreeDeferred(intent)
 }
@@ -1328,12 +1356,14 @@ func validateSavedCoordinatorIntent(
 	wantID, err := state.HerdrCoordinatorIntentID(
 		runtimeParent,
 		runtimeOwnerProjectRoot,
+		req.IssueNum,
 	)
 	if err != nil {
 		return err
 	}
 	if intent.ID != wantID || intent.Kind != state.HerdrIntentCoordinator ||
 		intent.RuntimeParent != runtimeParent || intent.Backend != backend.Herdr ||
+		intent.IssueNum != req.IssueNum ||
 		!savedHerdrCoordinatorPathMatches(
 			runtimeOwnerProjectRoot,
 			intent.WorktreePath,
@@ -1452,12 +1482,14 @@ func finalizedHerdrCoordinator(
 	wantID, err := state.HerdrCoordinatorIntentID(
 		runtimeParent,
 		runtimeOwnerProjectRoot,
+		req.IssueNum,
 	)
 	if err != nil {
 		return HerdrCoordinatorResult{}, err
 	}
 	if row.ID != wantID || row.Kind != state.HerdrIntentCoordinator ||
 		row.RuntimeParent != runtimeParent ||
+		row.IssueNum != req.IssueNum ||
 		!savedHerdrCoordinatorPathMatches(
 			runtimeOwnerProjectRoot,
 			row.WorktreePath,
