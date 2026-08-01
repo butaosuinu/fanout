@@ -124,15 +124,6 @@ func RealizeHerdrCoordinator(
 	if identity.RepoKey != projectIdentity.RepoKey {
 		return result, fmt.Errorf("herdr coordinator roots belong to different repositories")
 	}
-	if routeErr := verifyHerdrRealizeRoute(
-		realizeCtx,
-		runtime,
-		identity.RepoKey,
-		req.HerdrSession,
-		req.SocketPath,
-	); routeErr != nil {
-		return result, routeErr
-	}
 	cwd, cwdErr := filepath.EvalSymlinks(req.CWD)
 	if cwdErr != nil {
 		return result, fmt.Errorf("canonicalize Herdr coordinator cwd: %w", cwdErr)
@@ -198,6 +189,26 @@ func RealizeHerdrCoordinator(
 	}
 
 	intent, found := locked.FindIntent(intentID)
+	operationNow := hooks.Now()
+	routeCtx, routeCancel, routeContextErr := herdrRealizeRouteContext(
+		realizeCtx,
+		intent,
+		found,
+		operationNow,
+	)
+	if routeContextErr != nil {
+		return result, routeContextErr
+	}
+	defer routeCancel()
+	if routeErr := verifyHerdrRealizeRoute(
+		routeCtx,
+		runtime,
+		identity.RepoKey,
+		req.HerdrSession,
+		req.SocketPath,
+	); routeErr != nil {
+		return result, routeErr
+	}
 	if found {
 		if savedErr := validateSavedCoordinatorIntent(
 			req,
@@ -236,7 +247,7 @@ func RealizeHerdrCoordinator(
 		}
 	}
 
-	operationCtx, cancel, contextErr := herdrIntentContext(realizeCtx, intent, hooks.Now())
+	operationCtx, cancel, contextErr := herdrIntentContext(routeCtx, intent, operationNow)
 	if contextErr != nil {
 		if errors.Is(contextErr, errHerdrIntentDeadlineExpired) &&
 			intent.Status == state.HerdrIntentPlanned {
@@ -355,15 +366,6 @@ func RealizeHerdrWorktree(
 	if source.RepoKey != project.RepoKey {
 		return result, fmt.Errorf("herdr project and source roots belong to different repositories")
 	}
-	if routeErr := verifyHerdrRealizeRoute(
-		realizeCtx,
-		runtime,
-		source.RepoKey,
-		req.HerdrSession,
-		req.SocketPath,
-	); routeErr != nil {
-		return result, routeErr
-	}
 	ownerProjectRoot, ownerErr := state.HerdrOwnerProjectRoot(req.Parent, project.RepoRoot)
 	if ownerErr != nil {
 		return result, ownerErr
@@ -430,6 +432,26 @@ func RealizeHerdrWorktree(
 	}
 
 	intent, found := locked.FindIntent(intentID)
+	operationNow := hooks.Now()
+	routeCtx, routeCancel, routeContextErr := herdrRealizeRouteContext(
+		realizeCtx,
+		intent,
+		found,
+		operationNow,
+	)
+	if routeContextErr != nil {
+		return result, routeContextErr
+	}
+	defer routeCancel()
+	if routeErr := verifyHerdrRealizeRoute(
+		routeCtx,
+		runtime,
+		source.RepoKey,
+		req.HerdrSession,
+		req.SocketPath,
+	); routeErr != nil {
+		return result, routeErr
+	}
 	if !found {
 		if row, exists := locked.FindRow(intentID); exists {
 			return finalizedHerdrWorktree(
@@ -528,9 +550,8 @@ func RealizeHerdrWorktree(
 		}
 	}
 
-	operationNow := hooks.Now()
 	classificationOnly := !operationNow.Before(time.UnixMilli(intent.ExpiresUnixMS))
-	operationCtx, cancel, contextErr := herdrIntentContext(realizeCtx, intent, operationNow)
+	operationCtx, cancel, contextErr := herdrIntentContext(routeCtx, intent, operationNow)
 	if contextErr != nil {
 		if errors.Is(contextErr, errHerdrIntentDeadlineExpired) &&
 			intent.Status == state.HerdrIntentPlanned {
@@ -641,6 +662,24 @@ func verifyHerdrRealizeRoute(
 		return fmt.Errorf("herdr realization route does not match owned session")
 	}
 	return nil
+}
+
+func herdrRealizeRouteContext(
+	parent context.Context,
+	intent state.HerdrIntent,
+	found bool,
+	now time.Time,
+) (context.Context, context.CancelFunc, error) {
+	if found && !now.Before(time.UnixMilli(intent.ExpiresUnixMS)) &&
+		(intent.Status == state.HerdrIntentIssued || intent.Status == state.HerdrIntentRealized) {
+		return herdrIntentContext(parent, intent, now)
+	}
+	ctx, cancel := context.WithCancel(parent)
+	if err := ctx.Err(); err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	return ctx, cancel, nil
 }
 
 func resolveHerdrRuntimeParent(

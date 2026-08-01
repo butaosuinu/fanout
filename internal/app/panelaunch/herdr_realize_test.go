@@ -244,6 +244,47 @@ func TestRealizeHerdrRoutesUseTotalTimeout(t *testing.T) {
 	}
 }
 
+func TestRealizeHerdrCoordinatorBoundsExpiredRouteClassification(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realized := realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	locked, err := state.LockHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := locked.FindIntent(realized.ID)
+	if !found {
+		t.Fatalf("intent %s not found", realized.ID)
+	}
+	intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
+	locked.UpsertIntent(intent)
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+
+	_, err = realizeHerdrCoordinator(
+		context.Background(),
+		testHerdrCoordinatorRequest(repo),
+		runtime,
+		hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("expired coordinator recovery error = %v", err)
+	}
+	assertHerdrRecoveryClassificationDeadline(
+		t,
+		"expired coordinator route",
+		runtime.routeDeadline,
+		runtime.routeHasDeadline,
+	)
+}
+
 func TestRealizeHerdrRollsBackMutationNotIssued(t *testing.T) {
 	t.Run("coordinator", func(t *testing.T) {
 		repo := newHerdrRealizeRepo(t)
@@ -716,16 +757,18 @@ func TestRealizeHerdrWorktreeRecoversExpiredIssuedIntent(t *testing.T) {
 	if len(runtime.mutations) != mutationsBefore {
 		t.Fatal("expired issued intent reissued the Herdr mutation")
 	}
-	remaining := time.Until(runtime.observeDeadline)
-	if !runtime.observeHasDeadline || remaining <= 0 ||
-		remaining > maxHerdrRecoveryClassificationTimeout {
-		t.Fatalf(
-			"expired intent classification deadline = %v, %t (remaining %v)",
-			runtime.observeDeadline,
-			runtime.observeHasDeadline,
-			remaining,
-		)
-	}
+	assertHerdrRecoveryClassificationDeadline(
+		t,
+		"expired issued route",
+		runtime.routeDeadline,
+		runtime.routeHasDeadline,
+	)
+	assertHerdrRecoveryClassificationDeadline(
+		t,
+		"expired issued observation",
+		runtime.observeDeadline,
+		runtime.observeHasDeadline,
+	)
 }
 
 func TestRealizeHerdrWorktreeDoesNotOpenExpiredRealizedIntent(t *testing.T) {
@@ -775,6 +818,12 @@ func TestRealizeHerdrWorktreeDoesNotOpenExpiredRealizedIntent(t *testing.T) {
 	if !errors.Is(retryErr, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("expired realized retry error = %v", retryErr)
 	}
+	assertHerdrRecoveryClassificationDeadline(
+		t,
+		"expired realized route",
+		runtime.routeDeadline,
+		runtime.routeHasDeadline,
+	)
 	if len(runtime.mutations) != mutationsBefore {
 		t.Fatal("expired realized intent issued a worktree open mutation")
 	}
@@ -1537,6 +1586,25 @@ func deterministicHerdrRealizeHooks() HerdrRealizeHooks {
 			next++
 			return "token" + strconv.Itoa(next), nil
 		},
+	}
+}
+
+func assertHerdrRecoveryClassificationDeadline(
+	t *testing.T,
+	name string,
+	deadline time.Time,
+	hasDeadline bool,
+) {
+	t.Helper()
+	remaining := time.Until(deadline)
+	if !hasDeadline || remaining <= 0 || remaining > maxHerdrRecoveryClassificationTimeout {
+		t.Fatalf(
+			"%s deadline = %v, %t (remaining %v)",
+			name,
+			deadline,
+			hasDeadline,
+			remaining,
+		)
 	}
 }
 
