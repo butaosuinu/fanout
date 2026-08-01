@@ -9,7 +9,7 @@ PR に反映する。判定は advisory — マージはブロックしない。
 
 | Level | 条件 | ガイダンス |
 |---|---|---|
-| none | 変更ファイルが全て NONE クラス | レビュー不要(docs のみ)。CI green でマージ可 |
+| none | 変更ファイルが全て NONE クラス | レビュー不要(README、site、静的資産のみ)。CI green でマージ可 |
 | low | 最大クラスが A | AI レビュー(`/code-review`)で可 |
 | medium | 最大クラスが M | `/code-review` + M ファイルを人間が斜め読み |
 | high | 最大クラスが H、または S9/S10 発火 | 人間レビュー必須。AI は補助 |
@@ -54,6 +54,10 @@ doc 上 `view.go` / `compact.go` / `styles.go` の A 行は「ほか」付きの
 ファイルは A と推測せず M の catch-all に落とす。新しい描画ファイルを足す
 たびに rules.go の更新を要求する安全側の判断。
 
+`docs/` は設計と運用の契約を含むため、既定でMにする。
+画像などの静的資産を置く `docs/assets/` と `docs/mockups/` はNONE、利用者向けの
+`site/` と `README*.md` もNONEのままにする。
+
 ## エスカレーションシグナル
 
 パス分類だけでなく、diff の中身も grep して判定を上に振る。全シグナルは
@@ -67,7 +71,7 @@ doc 上 `view.go` / `compact.go` / `styles.go` の A 行は「ほか」付きの
 | S2 | measure-deleted | `tests/{golden,fixtures,bin}/**` の削除(D)。rename で測定対象外へ移す場合も含む |
 | S3 | skip-added | 追加行に `\b\w+\.(Skip\|Skipf\|SkipNow)\(`(receiver 名は固定せず `t` 以外の `*testing.T`/`*testing.B`、例 `tb.Skip(` / `b.Skip(` も拾う。`t.Skipped()` は Skip 直後の `(` 要求で非マッチ)、vitest の skip 形(`.skip(` / `.skipIf(` / `.skip.` 連鎖 / `skip: true` / `xit(` / `xdescribe(` / `xtest(`。対象は `*.test.ts(x)` / `*.spec.ts(x)` と `web/src/test/**`)、bats(`tests/bats/**` の `.bats` と `.bash`)のコマンド位置の `skip`(行頭と `&&` / `\|\|` / `;` / `then` 等の後。`[[ $CI == true ]] && skip` も拾う) |
 | S4 | guard-modified | `internal/arch/` の変更 |
-| S5 | review-gate-modified | `.claude/`、post-work-review skill(`codex/skills/post-work-review/` / `claude/skills/post-work-review/`)、legacy archive 判定 sentinel (`codex/tools/post-work-review.sh`)の変更 |
+| S5 | review-gate-modified | `AGENTS.md`、`AGENTS.override.md`、`.claude/`、`.codex/`、post-work-review skill(`codex/skills/post-work-review/` / `claude/skills/post-work-review/`)、legacy archive 判定 sentinel (`codex/tools/post-work-review.sh`)の変更 |
 | S6 | risk-tool-modified | `tools/reviewrisk/` または `review-risk.yml` / `review-risk-guard.yml` の変更 |
 | S7 | installer-modified | `install.sh` の変更 |
 | S8 | ci-workflow-deleted | `.github/workflows/` 直下の `.yml`/`.yaml` の削除(D)。rename による無効化(配下外への移動・拡張子変更・サブディレクトリへの移動)も含む |

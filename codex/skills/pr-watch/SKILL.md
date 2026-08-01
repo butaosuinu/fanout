@@ -165,11 +165,21 @@ changed. Read only the relevant part of the [repair playbook](references/repair-
 1. Refresh PR metadata and checks, then run `review-probe`. Fetch unresolved
    thread, latest-review, or paginated top-level-comment bodies only for a
    non-empty surface whose digest is not current.
+   For Codex connector feedback, wait for the submitted review record associated
+   with the saved current head SHA, then collect every visible actionable
+   thread, review summary, and top-level comment for that head as one
+   **current-head review batch**. Do not start editing from one notification or
+   one inline comment while the completed review is still unavailable.
 2. Reconfirm the PR head branch, author, push remote, and saved remote head SHA.
 3. Handle conflict/base drift, failing CI, then actionable review feedback.
+   Cluster the entire current-head review batch by root cause and inspect every
+   affected branch, entrypoint, and consumer before editing. If another
+   current-head finding appears before commit, rebuild the batch and include it
+   in the same repair wave.
 4. Run focused tests while editing. Do not weaken tests, required checks, or
    workflows.
-5. Commit intentionally. Before each push, run the repository's canonical full
+5. Commit the review batch as one intentional commit and use one push for that
+   review wave. Before each push, run the repository's canonical full
    gate once against the final commit (prefer an umbrella target such as
    `make check` when the project defines one; otherwise resolve it from
    AGENTS.md, CLAUDE.md, or the build files). Then push with an explicit
@@ -179,6 +189,10 @@ changed. Read only the relevant part of the [repair playbook](references/repair-
    write automatic review comments in Japanese.
 7. After any push, discard old logs/thread classification and return to a fresh
    snapshot plus `review-probe` on the new head.
+
+Never manually request another Codex review for the same head SHA. If repository
+policy requires an explicit request, send it once only after a new repair commit
+has been pushed.
 
 Repair ownership includes safe fixes that are clearly implied by CI or review.
 Stop and ask for user judgment when behavior is ambiguous, the required access is
@@ -208,6 +222,7 @@ inspected.
 Default limits:
 
 - 3 full repair passes
+- 3 connector review-repair waves
 - 2 full review/comment/thread body refreshes for the same metadata fingerprint
 - 1 CI log fetch per failing check name and head SHA
 - 3 ambiguous-update full inspections
@@ -216,7 +231,9 @@ Default limits:
 Normalize each pass's conflict files, failing jobs, and review paths. Stop when
 the same actionable set repeats twice without progress, the same problem recurs
 across three passes, a limit is reached, or an update cannot be classified
-safely. Do not keep polling after `event=blocked` or `event=timeout`.
+safely. On the third connector review-repair wave, do not start a fourth repair;
+report the remaining current-head batch and hand it to a human. Do not keep
+polling after `event=blocked` or `event=timeout`.
 
 ## Finish report
 

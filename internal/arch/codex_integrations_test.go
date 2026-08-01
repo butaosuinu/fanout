@@ -140,6 +140,11 @@ func TestCodexPostWorkReviewSkillContract(t *testing.T) {
 		"\"$helper\" mark <reviewed-head>",
 		"--ignore-submodules=none",
 		"not proof of a custom role",
+		"high-confidence P0, P1, or P2-equivalent",
+		"complete actionable set in one pass",
+		"same root cause under one finding",
+		"every affected entrypoint and consumer",
+		"no high-confidence P0-P2 findings",
 	} {
 		if !bytes.Contains(skill, []byte(required)) {
 			t.Errorf("post-work-review/SKILL.md missing contract %q", required)
@@ -234,6 +239,93 @@ func TestCodexPRWatchSkillContract(t *testing.T) {
 	metadata := mustReadRepoFile(t, skillDir, "agents", "openai.yaml")
 	if !bytes.Contains(metadata, []byte("probe review metadata first")) {
 		t.Error("pr-watch/agents/openai.yaml does not require a metadata-first review probe")
+	}
+}
+
+func TestCodeReviewRulesContract(t *testing.T) {
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatalf("repoRoot() = %v, want nil", err)
+	}
+	agents := mustReadRepoFile(t, root, "AGENTS.md")
+	for _, required := range []string{
+		"## Code Review Rules",
+		"high-confidence P0-P2",
+		"current diff",
+		"root-cause finding",
+		"state transitions or external side effects",
+		"identity, ownership, binding, and fencing",
+		"Git or filesystem contracts",
+	} {
+		if !bytes.Contains(agents, []byte(required)) {
+			t.Errorf("AGENTS.md missing code-review contract %q", required)
+		}
+	}
+}
+
+func TestReviewConvergenceContracts(t *testing.T) {
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatalf("repoRoot() = %v, want nil", err)
+	}
+	tests := []struct {
+		name     string
+		path     []string
+		required []string
+	}{
+		{
+			name: "codex pr-watch",
+			path: []string{"codex", "skills", "pr-watch", "SKILL.md"},
+			required: []string{
+				"current-head review batch",
+				"same head SHA",
+				"one intentional commit",
+				"3 connector review-repair waves",
+				"hand it to a human",
+			},
+		},
+		{
+			name: "codex pr-watch playbook",
+			path: []string{"codex", "skills", "pr-watch", "references", "repair-playbook.md"},
+			required: []string{
+				"current-head review batch",
+				"one intentional commit and one push",
+				"same head SHA",
+				"three connector review-repair waves",
+			},
+		},
+		{
+			name: "claude post-work-review",
+			path: []string{"claude", "skills", "post-work-review", "SKILL.md"},
+			required: []string{
+				"最大 3 回",
+				"修正は最大 2 回",
+				"3 回目にもactionable finding",
+				"markerを書かない",
+				"同根を一括修正",
+			},
+		},
+		{
+			name: "claude pr-watch",
+			path: []string{"claude", "skills", "pr-watch", "SKILL.md"},
+			required: []string{
+				"current-head review batch",
+				"1 review waveは1 commit、1 push",
+				"同じhead SHA",
+				"max connector review-repair waves: 3",
+				"hand it to a human",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := mustReadRepoFile(t, root, tt.path...)
+			for _, required := range tt.required {
+				if !bytes.Contains(data, []byte(required)) {
+					t.Errorf("%s missing convergence contract %q", filepath.ToSlash(filepath.Join(tt.path...)), required)
+				}
+			}
+		})
 	}
 }
 

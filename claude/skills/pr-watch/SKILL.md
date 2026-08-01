@@ -265,6 +265,12 @@ gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,r
    `pullRequest.comments(first:100, after:$endCursor)` を全ページ取得し、後続ページの
    actionable request を取りこぼさない。
 
+Codex connectorの指摘は、保存したcurrent head SHAに紐づくsubmitted reviewを確認して
+から扱う。
+そのHEADの未解決thread、review summary、top-level commentをすべて取得し、1つの
+**current-head review batch**として固定する。
+completed reviewがまだ見えない段階で、通知された1 commentだけを修正しない。
+
 ### B. 終了判定
 
 対処前に終了済みか確認する。
@@ -371,6 +377,13 @@ git push --force-with-lease="refs/heads/$head:$pr_head_before_work" "<head-remot
 
 未対応のインライン thread、review summary、トップレベル PR コメントを対象にする。
 
+- current-head review batchをroot causeごとにまとめ、同じ原因を持つ分岐、entrypoint、
+  consumerをすべて確認してから編集する。
+- commit前に同じHEADのfindingが増えたらbatchを取り直し、同じreview waveへ含める。
+- 1 review waveは1 commit、1 pushとする。commentごとにcommitとpushを繰り返さない。
+- 同じhead SHAへ手動でCodex reviewを再要求しない。明示要求が必要な場合は、次の
+  repair commitがGitHubへ反映された後に1回だけ送る。
+
 - `latest` comment が自分の返信で、その後レビュアー反応がなければ対応済みとして
   skip する。
 - 新しいレビュアー返信があれば、top-level comment ではなく latest comment の要求を読む。
@@ -416,6 +429,7 @@ Claude の loop を終了すると監視は続かない。バックグラウン�
 Default limits:
 
 - max full repair passes: 3
+- max connector review-repair waves: 3
 - max full comment/thread refreshes without new head commit: 2
 - max CI log fetches per failing check name: 1 per head SHA
 - max ambiguous `updatedAt` full inspections: 3
@@ -424,6 +438,8 @@ Default limits:
 
 After the limit, report the PR URL, current compact status, and the reason the
 watcher stopped.
+On the third connector review-repair wave, report the remaining current-head
+batch and hand it to a human instead of starting a fourth repair.
 
 The approval/reaction wait itself should consume near-zero model tokens because
 each loop pass should rely on compact status before deciding whether to run full

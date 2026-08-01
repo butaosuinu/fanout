@@ -272,10 +272,22 @@ Consider unresolved inline threads, review summaries, and paginated top-level
 comments. Separate actionable defects from questions, stale comments, and
 requests requiring product judgment.
 
+For Codex connector feedback, first identify the saved current head SHA and a
+submitted review record for that SHA. Fetch all currently visible actionable
+threads, review summaries, and top-level comments for that head and treat them
+as one **current-head review batch**. Do not begin from an individual
+notification while the completed review record is unavailable. If another
+current-head finding appears before commit, rebuild the batch before editing.
+
+Cluster the batch by root cause. Confirm every affected branch, entrypoint, and
+consumer, then fix the confirmed occurrences together. One review wave produces
+one intentional commit and one push; it does not produce one commit per comment.
+
 For an actionable request:
 
-1. Trace the behavior in the current head and confirm the issue.
-2. Implement the narrow fix.
+1. Trace the behavior in the current head and confirm the issue plus its
+   same-root-cause occurrences.
+2. Implement the narrow complete fix for the whole cluster.
 3. Run focused tests while editing.
 4. Commit, run the repository's canonical full gate once against the final
    commit (same resolution as in Repair CI), then push.
@@ -286,6 +298,11 @@ repository, automatic review replies are Japanese; keep file paths, symbols,
 commands, and quoted code unchanged. Usually leave thread resolution to the
 reviewer. Resolve it yourself only when the fix is unambiguous and repository
 policy permits it.
+
+Do not manually request another Codex review for the same head SHA. When an
+explicit request is required, send it once after the next repair commit is
+visible on GitHub. Stop after three connector review-repair waves; report the
+remaining batch and require human follow-up instead of starting a fourth.
 
 Do not force a speculative implementation when a reviewer asks for a product or
 architecture choice. Summarize the alternatives and ask the user.

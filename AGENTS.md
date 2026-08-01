@@ -54,6 +54,25 @@ When Codex runs or posts automatic review comments for a PR in this repository,
 write those review comments in Japanese. Keep file paths, line numbers, symbol
 names, command names, and quoted code unchanged.
 
+## Code Review Rules
+
+Report only high-confidence P0-P2 correctness, security, data-loss, or contract
+problems caused by the current diff. Group every affected branch, entrypoint,
+and consumer under one root-cause finding. Omit style, speculation, pre-existing
+issues, and scope expansion.
+
+- For state transitions or external side effects, cover fresh, retry, expired,
+  and completed states plus cancellation, recovery, and replay. Never repeat an
+  ambiguous mutation. This matrix is not required for pure read-only helpers.
+- Derive identity, ownership, binding, and fencing from persisted state, then
+  validate them at every entrypoint before an external call or mutation.
+  Presentation-only code may use display identity when it cannot authorize or
+  mutate anything.
+- When code or design reads, writes, or emulates Git or filesystem contracts,
+  cover object formats, exact pathspecs and unusual paths, symlinks, submodules,
+  sparse and index flags, file type, binary and size limits, config, and
+  snapshots. Do not apply this matrix to unrelated code.
+
 ## Working With fanout
 
 `fanout` is a standalone git worktree + tmux pane + agent launcher. Build with

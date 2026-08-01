@@ -215,6 +215,50 @@ func TestEvaluate(t *testing.T) {
 			wantSig:   []string{sigReviewGateChanged},
 		},
 		{
+			name:      "S5 AGENTS change is critical",
+			diff:      Diff{Files: []FileChange{{Status: 'M', Path: "AGENTS.md"}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigReviewGateChanged},
+		},
+		{
+			name:      "S5 nested AGENTS change is critical",
+			diff:      Diff{Files: []FileChange{{Status: 'M', Path: "docs/assets/AGENTS.md"}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigReviewGateChanged},
+		},
+		{
+			name: "S5 AGENTS override rename is critical",
+			diff: Diff{Files: []FileChange{{
+				Status: 'R', OldPath: "AGENTS.override.md", Path: "docs/old-agent-rules.md",
+			}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigReviewGateChanged},
+		},
+		{
+			name: "S5 case-variant nested AGENTS override rename is critical",
+			diff: Diff{Files: []FileChange{{
+				Status: 'R', OldPath: "site/x/Agents.Override.MD", Path: "docs/old-agent-rules.md",
+			}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigReviewGateChanged},
+		},
+		{
+			name: "S5 .codex rename is critical",
+			diff: Diff{Files: []FileChange{{
+				Status: 'R', OldPath: ".codex/config.toml", Path: "docs/old-codex-config.md",
+			}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigReviewGateChanged},
+		},
+		{
+			name: "S5 case-variant nested .codex rename is critical",
+			diff: Diff{Files: []FileChange{{
+				Status: 'R', OldPath: "site/x/.CoDeX/config.toml", Path: "docs/old-codex-config.md",
+			}}},
+			wantLevel: LevelCritical,
+			wantSig:   []string{sigReviewGateChanged},
+		},
+		{
 			name:      "S6 risk tool change is critical",
 			diff:      Diff{Files: []FileChange{{Status: 'M', Path: "tools/reviewrisk/rules.go"}}},
 			wantLevel: LevelCritical,
