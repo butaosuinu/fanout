@@ -458,17 +458,35 @@ func TestHerdrIntentIDsUseTmuxIssueAndTaskKeys(t *testing.T) {
 	if !strings.Contains(task, "plan:demo") || !strings.Contains(task, "api:client") {
 		t.Fatalf("task id = %q, want length-prefixed plan/task identity", task)
 	}
-	if _, err := HerdrWorktreeIntentID("plan:demo", "/repo/one", 1, "task"); err == nil {
+	if _, mixedErr := HerdrWorktreeIntentID("plan:demo", "/repo/one", 1, "task"); mixedErr == nil {
 		t.Fatal("issue and task identity unexpectedly accepted together")
+	}
+	manual, err := HerdrWorktreeIntentID("@manual", "/repo/one", -1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherManual, err := HerdrWorktreeIntentID("@manual", "/repo/two", -1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manual == otherManual {
+		t.Fatalf("manual worktree IDs collide across owner roots: %q", manual)
+	}
+	if _, err := HerdrWorktreeIntentID("425", "", -1, ""); err == nil {
+		t.Fatal("negative issue number was accepted for a non-manual parent")
 	}
 }
 
 func TestHerdrCoordinatorIntentIDsUseSyntheticIssueNumbers(t *testing.T) {
-	firstManual, err := HerdrCoordinatorIntentID("@manual", "", -1)
+	firstManual, err := HerdrCoordinatorIntentID("@manual", "/repo/one", -1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondManual, err := HerdrCoordinatorIntentID("@manual", "", -2)
+	secondManual, err := HerdrCoordinatorIntentID("@manual", "/repo/one", -2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherOwner, err := HerdrCoordinatorIntentID("@manual", "/repo/two", -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,15 +494,17 @@ func TestHerdrCoordinatorIntentIDsUseSyntheticIssueNumbers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstManual == secondManual || firstManual == watch || secondManual == watch {
+	if firstManual == secondManual || firstManual == otherOwner || firstManual == watch ||
+		secondManual == watch || otherOwner == watch {
 		t.Fatalf(
-			"synthetic coordinator IDs collide: %q, %q, %q",
+			"synthetic coordinator IDs collide: %q, %q, %q, %q",
 			firstManual,
 			secondManual,
+			otherOwner,
 			watch,
 		)
 	}
-	if _, err := HerdrCoordinatorIntentID("@manual", "", 0); err == nil {
+	if _, err := HerdrCoordinatorIntentID("@manual", "/repo/one", 0); err == nil {
 		t.Fatal("manual coordinator without synthetic issue number was accepted")
 	}
 	if _, err := HerdrCoordinatorIntentID("@watch", "", 0); err == nil {

@@ -359,12 +359,12 @@ func herdrBindingParent(
 
 func HerdrOwnerProjectRoot(parent, projectRoot string) (string, error) {
 	parent = parentref.Canon(strings.TrimSpace(parent))
-	if !strings.HasPrefix(parent, "plan:") {
+	if parent != "@manual" && !strings.HasPrefix(parent, "plan:") {
 		return "", nil
 	}
 	projectRoot = strings.TrimSpace(projectRoot)
 	if projectRoot == "" || !filepath.IsAbs(projectRoot) || filepath.Clean(projectRoot) != projectRoot {
-		return "", fmt.Errorf("herdr plan owner project root must be a canonical absolute path")
+		return "", fmt.Errorf("herdr scoped owner project root must be a canonical absolute path")
 	}
 	return projectRoot, nil
 }
@@ -414,7 +414,7 @@ func HerdrWorktreeIntentID(parent, ownerProjectRoot string, issueNum int, taskID
 		return "", fmt.Errorf("herdr worktree intent requires a parent")
 	case taskID != "" && issueNum == 0:
 		return "task:" + owner + ":" + tuplePart(taskID), nil
-	case taskID == "" && issueNum > 0:
+	case taskID == "" && (issueNum > 0 || parent == "@manual" && issueNum < 0):
 		return "issue:" + owner + ":" + strconv.Itoa(issueNum), nil
 	default:
 		return "", fmt.Errorf("herdr worktree intent requires exactly one issue number or task id")
@@ -818,7 +818,7 @@ func validateHerdrRuntimeParent(parent, runtimeParent string) error {
 }
 
 func herdrRuntimeOwnerProjectRoot(runtimeParent, ownerProjectRoot string) string {
-	if strings.HasPrefix(runtimeParent, "plan:") {
+	if runtimeParent == "@manual" || strings.HasPrefix(runtimeParent, "plan:") {
 		return ownerProjectRoot
 	}
 	return ""

@@ -493,6 +493,11 @@ func RealizeHerdrWorktree(
 	if coordinatorErr != nil {
 		return result, coordinatorErr
 	}
+	source, sourceErr = herdrCoordinatorSource(coordinator, source)
+	if sourceErr != nil {
+		return result, sourceErr
+	}
+	req.SourceRoot = source.RepoRoot
 	if found {
 		if savedErr := validateSavedWorktreeIntent(
 			req,
@@ -504,13 +509,11 @@ func RealizeHerdrWorktree(
 		); savedErr != nil {
 			return result, savedErr
 		}
-		savedProjectRoot, savedSource, savedRootErr := savedHerdrWorktreeSource(intent, source)
+		savedProjectRoot, _, savedRootErr := savedHerdrWorktreeSource(intent, source)
 		if savedRootErr != nil {
 			return result, savedRootErr
 		}
 		req.ProjectRoot = savedProjectRoot
-		req.SourceRoot = savedProjectRoot
-		source = savedSource
 	} else {
 		if excludeErr := worktree.EnsureLocalExclude(req.SourceRoot); excludeErr != nil {
 			return result, excludeErr
@@ -1428,7 +1431,9 @@ func validateHerdrWorktreeRequest(req HerdrWorktreeRequest) error {
 		req.HerdrSession == "" || req.SocketPath == "" {
 		return fmt.Errorf("herdr worktree request is incomplete")
 	}
-	if (req.IssueNum > 0) == (strings.TrimSpace(req.TaskID) != "") {
+	issueKey := req.IssueNum > 0 ||
+		canonicalHerdrParent(req.Parent) == ManualParentRef && req.IssueNum < 0
+	if issueKey == (strings.TrimSpace(req.TaskID) != "") {
 		return fmt.Errorf("herdr worktree request requires exactly one issue number or task id")
 	}
 	expected := filepath.Join(req.ProjectRoot, ".fanout", "worktrees", req.Slug)
@@ -1575,6 +1580,20 @@ func resolvedHerdrCoordinator(
 		return row.Resource, nil
 	}
 	return state.HerdrResource{}, fmt.Errorf("herdr coordinator %s is not realized", coordinatorID)
+}
+
+func herdrCoordinatorSource(
+	coordinator state.HerdrResource,
+	requestSource worktree.HerdrRepoIdentity,
+) (worktree.HerdrRepoIdentity, error) {
+	source, err := worktree.ResolveHerdrRepoIdentity(coordinator.CurrentPath)
+	if err != nil {
+		return worktree.HerdrRepoIdentity{}, fmt.Errorf("resolve Herdr coordinator source: %w", err)
+	}
+	if source.RepoKey != requestSource.RepoKey {
+		return worktree.HerdrRepoIdentity{}, fmt.Errorf("herdr coordinator source belongs to a different repository")
+	}
+	return source, nil
 }
 
 func worktreeDeferred(intent state.HerdrIntent) (HerdrWorktreeResult, error) {

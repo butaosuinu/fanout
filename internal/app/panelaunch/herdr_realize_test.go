@@ -1365,7 +1365,7 @@ func TestRealizeHerdrCoordinatorAdoptsResponseLossAndNeverReissues(t *testing.T)
 	}
 }
 
-func TestRealizeHerdrManualCoordinatorsUseSyntheticIssueIdentity(t *testing.T) {
+func TestRealizeHerdrManualCoordinatorsUseScopedSyntheticIssueIdentity(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
 	installSuccessfulHerdrMutations(t, repo, runtime)
@@ -1378,16 +1378,29 @@ func TestRealizeHerdrManualCoordinatorsUseSyntheticIssueIdentity(t *testing.T) {
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("first manual coordinator error = %v", err)
 	}
+	sibling := filepath.Join(t.TempDir(), "manual-sibling")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "manual-sibling", sibling, "HEAD")
+	req = testHerdrCoordinatorRequest(sibling)
+	req.Parent = ManualParentRef
+	req.IssueNum = -1
+	otherOwner, err := realizeHerdrCoordinator(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("linked manual coordinator error = %v", err)
+	}
+	req = testHerdrCoordinatorRequest(repo)
+	req.Parent = ManualParentRef
 	req.IssueNum = -2
 	second, err := realizeHerdrCoordinator(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("second manual coordinator error = %v", err)
 	}
-	if first.Intent.ID == second.Intent.ID || first.Intent.IssueNum != -1 ||
-		second.Intent.IssueNum != -2 || len(runtime.mutations) != 2 {
+	if first.Intent.ID == otherOwner.Intent.ID || first.Intent.ID == second.Intent.ID ||
+		first.Intent.IssueNum != -1 || otherOwner.Intent.IssueNum != -1 ||
+		second.Intent.IssueNum != -2 || len(runtime.mutations) != 3 {
 		t.Fatalf(
-			"manual coordinators = (%+v, %+v), mutations=%d",
+			"manual coordinators = (%+v, %+v, %+v), mutations=%d",
 			first.Intent,
+			otherOwner.Intent,
 			second.Intent,
 			len(runtime.mutations),
 		)
@@ -1396,8 +1409,38 @@ func TestRealizeHerdrManualCoordinatorsUseSyntheticIssueIdentity(t *testing.T) {
 	if loadErr != nil {
 		t.Fatal(loadErr)
 	}
-	if len(control.Intents) != 2 {
+	if len(control.Intents) != 3 {
 		t.Fatalf("manual coordinator intents = %+v", control.Intents)
+	}
+}
+
+func TestRealizeHerdrManualWorktreeUsesNegativeSyntheticIssueIdentity(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	coordinatorReq := testHerdrCoordinatorRequest(repo)
+	coordinatorReq.Parent = ManualParentRef
+	coordinatorReq.IssueNum = -1
+	if _, err := realizeHerdrCoordinator(
+		context.Background(),
+		coordinatorReq,
+		runtime,
+		hooks,
+	); !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("manual coordinator error = %v", err)
+	}
+
+	req := testHerdrWorktreeRequest(repo, "manual-child", -1)
+	req.Parent = ManualParentRef
+	result, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	identity, identityErr := worktree.ResolveHerdrRepoIdentity(repo)
+	if identityErr != nil {
+		t.Fatal(identityErr)
+	}
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		result.Intent.IssueNum != -1 || result.Intent.OwnerProjectRoot != identity.RepoRoot {
+		t.Fatalf("manual worktree = %+v, err=%v", result.Intent, err)
 	}
 }
 
@@ -1430,18 +1473,32 @@ func TestRealizeHerdrReusesNumericParentCoordinatorAcrossLinkedWorktrees(t *test
 			len(runtime.mutations),
 		)
 	}
+	successfulMutate := runtime.mutate
+	runtime.mutate = func(
+		mutationReq herdrrun.WorktreeMutationRequest,
+	) (herdrrun.WorktreeMutationResult, error) {
+		result, mutateErr := successfulMutate(mutationReq)
+		if mutateErr == nil && mutationReq.Kind == herdrrun.WorktreeCreate {
+			result.RepoRoot = coordinator.Resource.CurrentPath
+			runtime.workspaces[len(runtime.workspaces)-1] = result.WorkspaceObservation
+		}
+		return result, mutateErr
+	}
 
 	childReq := testHerdrWorktreeRequest(sibling, "linked-child", 435)
 	child, err := realizeHerdrWorktree(context.Background(), childReq, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("linked child error = %v", err)
 	}
-	if child.Intent.Coordinator != coordinator.Resource || len(runtime.mutations) != 2 {
+	childMutation := runtime.mutations[len(runtime.mutations)-1]
+	if child.Intent.Coordinator != coordinator.Resource || len(runtime.mutations) != 2 ||
+		childMutation.SourceRoot != coordinator.Resource.CurrentPath ||
+		childMutation.SourceRepoRoot != coordinator.Resource.CurrentPath {
 		t.Fatalf(
-			"linked child coordinator = %+v, want %+v; mutations = %d",
+			"linked child coordinator = %+v, want %+v; mutation=%+v",
 			child.Intent.Coordinator,
 			coordinator.Resource,
-			len(runtime.mutations),
+			childMutation,
 		)
 	}
 
