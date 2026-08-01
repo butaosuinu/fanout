@@ -199,7 +199,9 @@ if [ "$command_name" = review-probe ]; then
 
   validate_probe_reviews() {
     awk -F '\t' '
-      NF != 6 || $1 == "" || $3 == "" || $4 == "" || $5 == "" { invalid = 1 }
+      NF != 6 || $1 == "" || $3 == "" || ($3 != "PENDING" && $4 == "") || $5 == "" {
+        invalid = 1
+      }
       END { if (invalid) exit 1 }
     ' "$1" || emit_blocked review_probe_incomplete 1
   }

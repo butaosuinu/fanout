@@ -120,8 +120,13 @@ replies cannot reuse an older audit.
 - During the same foreground run, remember each audited surface digest. Fetch
   bodies only when its digest changes and its count remains non-zero. Do not
   persist body or audit state across a fresh invocation.
-- After a body fetch, rerun `review-probe`. Accept the audit only when `head` and
-  `fingerprint` match the values that selected those bodies.
+- For every fetched body surface, validate a stable `totalCount`, a complete
+  aggregate node count, non-empty unique node IDs, and the exact metadata fields
+  used by `review-probe`. Accept the bodies only when the body-derived surface
+  digest matches the digest that selected the fetch. For unresolved threads,
+  validate both the all-thread connection and every full comment connection.
+- After that validation, rerun `review-probe`. Accept the audit only when `head`
+  and `fingerprint` still match the values that selected those bodies.
 - A blocked, partial, null, or internally changing probe is never evidence for
   zero actionable comments.
 

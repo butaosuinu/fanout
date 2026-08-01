@@ -69,8 +69,12 @@ gh api graphql --paginate -f query='
     repository(owner:$owner,name:$repo){
       pullRequest(number:$num){
         reviewThreads(first:100,after:$endCursor){
+          totalCount
           pageInfo{hasNextPage endCursor}
-          nodes{id isResolved path line originalLine diffSide}
+          nodes{
+            id isResolved path line originalLine diffSide
+            threadComments:comments(first:1){totalCount}
+          }
         }
       }
     }
@@ -85,7 +89,9 @@ gh api graphql --paginate -f query='
   query($threadId:ID!,$endCursor:String){
     node(id:$threadId){
       ... on PullRequestReviewThread{
+        id
         comments(first:100,after:$endCursor){
+          totalCount
           pageInfo{hasNextPage endCursor}
           nodes{id fullDatabaseId body diffHunk author{login} createdAt updatedAt}
         }
@@ -102,6 +108,7 @@ gh api graphql --paginate -f query='
     repository(owner:$owner,name:$repo){
       pullRequest(number:$num){
         latestReviews(first:100,after:$endCursor){
+          totalCount
           pageInfo{hasNextPage endCursor}
           nodes{id author{login} state body submittedAt updatedAt commit{oid}}
         }
@@ -119,6 +126,7 @@ gh api graphql --paginate -f query='
     repository(owner:$owner,name:$repo){
       pullRequest(number:$num){
         comments(first:100,after:$endCursor){
+          totalCount
           pageInfo{hasNextPage endCursor}
           nodes{id author{login} body createdAt updatedAt}
         }
@@ -127,10 +135,28 @@ gh api graphql --paginate -f query='
   }' -F owner="$owner" -F repo="$repo" -F num="$num"
 ```
 
-After any body fetch, rerun `review-probe`. Use the bodies only when its `head`
-and combined `fingerprint` still match the values that selected the fetch.
-GraphQL errors, null PR data, or incomplete pagination are blocked states, not
-zero-item results.
+Before classifying any fetched body, validate its metadata against the probe
+that selected the fetch:
+
+1. Require one stable `totalCount` per paginated connection, non-empty unique
+   node IDs, and an aggregate node count equal to `totalCount`.
+2. Project the body results into the same tab-separated rows as `review-probe`.
+   Sort top-level comments as `id, author, createdAt, updatedAt`; sort reviews as
+   `id, author, state, nullable submittedAt, updatedAt, commit OID`. Use an empty
+   author, nullable value, or commit OID when GraphQL returns null. For threads,
+   sort unresolved rows as `thread ID, false, path, line, originalLine,
+   diffSide, comment total` and comment rows as `thread ID, comment ID, author,
+   createdAt, updatedAt`. Prefix the two sets with `thread` and `comment`, then
+   concatenate them in that order.
+3. Hash those rows with `git hash-object`. Require each body-derived surface
+   digest to equal the `top_digest`, `reviews_digest`, or `threads_digest` that
+   selected the fetch. For threads, validate the complete all-thread connection
+   before filtering resolved nodes and validate every full comment connection.
+
+Then rerun `review-probe`. Use the bodies only when its `head` and combined
+`fingerprint` still match the values that selected the fetch. GraphQL errors,
+null PR data, duplicate or missing nodes, digest mismatches, and incomplete
+pagination are blocked states, not zero-item results.
 
 Treat a thread as handled when the latest message is this agent's response and
 no reviewer replied afterward. A newer reviewer response supersedes the

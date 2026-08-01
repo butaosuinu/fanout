@@ -428,6 +428,29 @@ state_dir_for() {
   [[ "$output" == "event=blocked repo=acme/widget pr=27 reason=review_probe_incomplete status=1" ]]
 }
 
+@test "review probe allows null submittedAt only for pending reviews" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  printf 'head-one\t2026-07-10T00:00:00Z\t0\t1\t0\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.tsv"
+  printf 'total\t1\nnode\t201\treviewer\tPENDING\t\t2026-07-10T00:01:00Z\thead-one\n' \
+    >"$PR_WATCH_FIXTURE/probe-reviews.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == event=review_probe* ]]
+  [[ "$output" == *"reviews=1"* ]]
+
+  printf 'total\t1\nnode\t201\treviewer\tCOMMENTED\t\t2026-07-10T00:01:00Z\thead-one\n' \
+    >"$PR_WATCH_FIXTURE/probe-reviews.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == "event=blocked repo=acme/widget pr=27 reason=review_probe_incomplete status=1" ]]
+}
+
 @test "review probe reports an inconsistent all-thread count" {
   local repo="$BATS_TEST_TMPDIR/repo"
   setup_repo "$repo"

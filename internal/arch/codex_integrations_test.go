@@ -176,6 +176,8 @@ func TestCodexPRWatchSkillContract(t *testing.T) {
 		"whose count is non-zero",
 		"persist body or audit state across a fresh invocation",
 		"fully paginates that metadata",
+		"body-derived surface",
+		"non-empty unique node IDs",
 		"rerun `review-probe`",
 		"blocked, partial, null, or internally changing probe",
 	} {
@@ -219,7 +221,10 @@ func TestCodexPRWatchSkillContract(t *testing.T) {
 		"comments(first:100,after:$endCursor)",
 		"nodes{id author{login} state body",
 		"nodes{id author{login} body createdAt",
-		"After any body fetch, rerun `review-probe`",
+		"aggregate node count equal to `totalCount`",
+		"body-derived surface",
+		"validate the complete all-thread connection",
+		"Then rerun `review-probe`",
 	} {
 		if !bytes.Contains(playbook, []byte(required)) {
 			t.Errorf("pr-watch/references/repair-playbook.md missing contract %q", required)
