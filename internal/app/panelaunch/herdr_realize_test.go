@@ -246,6 +246,50 @@ func TestRealizeHerdrRoutesCapTotalTimeout(t *testing.T) {
 	}
 }
 
+func TestRealizeHerdrFreshCancellationBeforeRouteDoesNotCreateIntent(t *testing.T) {
+	for _, kind := range []string{"coordinator", "worktree"} {
+		t.Run(kind, func(t *testing.T) {
+			repo := newHerdrRealizeRepo(t)
+			runtime := &fakeHerdrRealizeRuntime{}
+			installSuccessfulHerdrMutations(t, repo, runtime)
+			baseHooks := deterministicHerdrRealizeHooks()
+			now := baseHooks.Now()
+			ctx, cancel := context.WithCancel(context.Background())
+			hooks := baseHooks
+			hooks.Now = func() time.Time {
+				cancel()
+				return now
+			}
+
+			var err error
+			switch kind {
+			case "coordinator":
+				_, err = realizeHerdrCoordinator(ctx, testHerdrCoordinatorRequest(repo), runtime, hooks)
+			case "worktree":
+				_, err = realizeHerdrWorktree(
+					ctx,
+					testHerdrWorktreeRequest(repo, "canceled-before-route", 439),
+					runtime,
+					hooks,
+				)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("fresh cancellation error = %v", err)
+			}
+			if runtime.routeCalls != 0 {
+				t.Fatalf("route calls = %d, want 0", runtime.routeCalls)
+			}
+			control, loadErr := state.LoadHerdrControl(repo)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if len(control.Intents) != 0 || len(control.Rows) != 0 {
+				t.Fatalf("control after fresh cancellation = %+v", control)
+			}
+		})
+	}
+}
+
 func TestRealizeHerdrCoordinatorBoundsExpiredRouteClassification(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
@@ -953,6 +997,66 @@ func TestRealizeHerdrWorktreeRollsBackExpiredPlannedIntent(t *testing.T) {
 		t.Fatal(err)
 	} else if found {
 		t.Fatalf("expired planned branch remains at %s", head)
+	}
+}
+
+func TestRealizeHerdrWorktreeRollsBackCanceledPlannedIntent(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	stop := errors.New("stop after branch reservation")
+	runtime.observeErr = stop
+	req := testHerdrWorktreeRequest(repo, "canceled-planned", 440)
+	if _, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks); !errors.Is(err, stop) {
+		t.Fatalf("initial planned error = %v", err)
+	}
+	control, err := state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := control.FindIntent(intentID)
+	if !found || !intent.BranchCreated || intent.Status != state.HerdrIntentPlanned {
+		t.Fatalf("planned intent = (%+v,%t)", intent, found)
+	}
+
+	runtime.observeErr = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelHooks := hooks
+	cancelHooks.Now = func() time.Time {
+		cancel()
+		return hooks.Now()
+	}
+	routeCallsBefore := runtime.routeCalls
+	if _, realizeErr := realizeHerdrWorktree(ctx, req, runtime, cancelHooks); !errors.Is(
+		realizeErr,
+		context.Canceled,
+	) {
+		t.Fatalf("canceled planned error = %v", realizeErr)
+	}
+	if runtime.routeCalls != routeCallsBefore {
+		t.Fatal("canceled planned retry validated the Herdr route before rollback")
+	}
+	control, err = state.LoadHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := control.FindIntent(intentID); found {
+		t.Fatalf("canceled planned intent %s was not removed", intentID)
+	}
+	if head, branchFound, observeErr := worktree.ObserveHerdrBranch(
+		repo,
+		intent.FullBranchRef,
+	); observeErr != nil {
+		t.Fatal(observeErr)
+	} else if branchFound {
+		t.Fatalf("canceled planned branch remains at %s", head)
 	}
 }
 

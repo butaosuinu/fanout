@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -553,9 +552,6 @@ func openCanonicalGitCommonDir(raw string) (string, pathIdentity, error) {
 	if err := validateOwnerUID(resolved, info); err != nil {
 		return "", pathIdentity{}, err
 	}
-	if err := validateNoExtendedACL(resolved); err != nil {
-		return "", pathIdentity{}, err
-	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || stat.Dev == 0 || stat.Ino == 0 {
 		return "", pathIdentity{}, fmt.Errorf("git common directory %s has no physical identity", resolved)
@@ -663,9 +659,6 @@ func validatePinnedBinaryInDir(path, wantHash, binaryDir string) error {
 	if err := validateOwnerUID(path, info); err != nil {
 		return err
 	}
-	if err := validateNoExtendedACL(path); err != nil {
-		return err
-	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || stat.Nlink != 1 {
 		return errPinnedBinaryPhysicalIdentity
@@ -695,7 +688,7 @@ func validatePrivateDir(path string) error {
 	if err := validateOwnerUID(path, info); err != nil {
 		return err
 	}
-	return validateNoExtendedACL(path)
+	return nil
 }
 
 func ensurePrivateContents(path string, expected []byte) error {
@@ -760,7 +753,7 @@ func validatePrivateRegular(path string, info os.FileInfo) error {
 	if err := validateOwnerUID(path, info); err != nil {
 		return err
 	}
-	return validateNoExtendedACL(path)
+	return nil
 }
 
 func validatePrivateSocket(path string) error {
@@ -775,7 +768,7 @@ func validatePrivateSocket(path string) error {
 	if err := validateOwnerUID(path, info); err != nil {
 		return err
 	}
-	return validateNoExtendedACL(path)
+	return nil
 }
 
 func isOwnerOnlySocketMode(mode os.FileMode) bool {
@@ -783,27 +776,10 @@ func isOwnerOnlySocketMode(mode os.FileMode) bool {
 	return permissions == 0o600 || permissions == 0o700
 }
 
+// tmux-parity omits extended ACL inspection; see docs/herdr-runtime-backend-spike.ja.md.
 func validateOwnerUID(path string, info os.FileInfo) error {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok && int(stat.Uid) != os.Getuid() {
 		return fmt.Errorf("herdr owned path %s belongs to uid %d, want %d", path, stat.Uid, os.Getuid())
-	}
-	return nil
-}
-
-func validateNoExtendedACL(path string) error {
-	if runtime.GOOS != "darwin" {
-		return nil
-	}
-	cmd := exec.Command("/bin/ls", "-lde", path)
-	cmd.Env = []string{}
-	out, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("inspect ACL on herdr owned path %s: %w", path, err)
-	}
-	first, _, _ := strings.Cut(string(out), "\n")
-	mode, _, ok := strings.Cut(first, " ")
-	if !ok || strings.Contains(mode, "+") {
-		return fmt.Errorf("herdr owned path %s has an extended ACL", path)
 	}
 	return nil
 }

@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -500,7 +498,7 @@ func ensurePrivateHerdrControlDir(path string) error {
 	if err := validateHerdrControlOwner(path, info); err != nil {
 		return err
 	}
-	return validateHerdrControlACL(path)
+	return nil
 }
 
 func validateHerdrControlCommonDir(path string) error {
@@ -514,7 +512,7 @@ func validateHerdrControlCommonDir(path string) error {
 	if info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSticky == 0 {
 		return fmt.Errorf("herdr control common directory %s is writable by another uid", path)
 	}
-	return validateHerdrControlACL(path)
+	return nil
 }
 
 func readPrivateHerdrControlJSON(path string, target any) (bool, error) {
@@ -564,31 +562,14 @@ func validatePrivateHerdrControlFile(path string, info os.FileInfo) error {
 	if err := validateHerdrControlOwner(path, info); err != nil {
 		return err
 	}
-	return validateHerdrControlACL(path)
+	return nil
 }
 
+// tmux-parity omits extended ACL inspection; see docs/herdr-runtime-backend-spike.ja.md.
 func validateHerdrControlOwner(path string, info os.FileInfo) error {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || int(stat.Uid) != os.Getuid() {
 		return fmt.Errorf("herdr control path %s is not owned by the current uid", path)
-	}
-	return nil
-}
-
-func validateHerdrControlACL(path string) error {
-	if runtime.GOOS != "darwin" {
-		return nil
-	}
-	cmd := exec.Command("/bin/ls", "-lde", path)
-	cmd.Env = []string{}
-	out, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("inspect ACL on Herdr control path %s: %w", path, err)
-	}
-	first, _, _ := strings.Cut(string(out), "\n")
-	mode, _, ok := strings.Cut(first, " ")
-	if !ok || strings.Contains(mode, "+") {
-		return fmt.Errorf("herdr control path %s has an extended ACL", path)
 	}
 	return nil
 }

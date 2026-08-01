@@ -33,7 +33,7 @@ pane 消滅または 0.7.5 direct-launch row の `terminal_id` 変化は `stale`
 0.7.4 Codex integration v6 の resume 実測は履歴として残すが、0.7.5 direct launch の resume には流用しない。
 session identity の read と mutation は別の CLI 接続になるため、直前の version / identity 検査だけでは mutation の対象を束縛できない。
 0700 / 0600 と owner UID だけでは inherited ACL を検査しないため、別 UID の排除を証明しない。
-後述の private namespace gate が対象 path に成功した場合だけ別 UID を排除し、同一 UID の agent は排除せず、ownership marker を mutation authority にしない。
+tmux-parity tier の private namespace gate は mode、owner UID、symlink、書込み可能な祖先を検査するが extended ACL は検査せず、移植可能な ACL gate は proof-grade tier で再評価する。
 tmux backend も同一 UID の agent が server 停止、他 pane への `send-keys`、state signal の偽造を実行できる協調プロセス信頼を前提に launch、cleanup、nudge を提供している。
 private namespace gate 済みの fanout-owned private socket は影響範囲を fanout 所有 session に閉じるため、tmux-parity tier では同一 UID の残余リスクを受容する。
 request-bound generation と conditional mutation、server-authenticated controller capability、server / agent の UID 分離は、herdr が primitive を提供した場合に proof-grade tier へ格上げする条件として保持する。
@@ -55,7 +55,7 @@ tmux-parity は信頼モデルだけでなく機構の密度にも適用し、�
 
 | 対象 | wave 2 の判断 | 理由 |
 |---|---|---|
-| owned server | Go（#526 が PR #572 で実装済み） | owner-only の mode / UID / ACL を検査した owned XDG / socket / marker で別 UID と session 外への影響を封じ込める |
+| owned server | Go（#526 が PR #572 で実装済み） | owner-only の mode / UID、symlink、書込み可能な祖先を検査した owned XDG / socket / marker で session 外への影響を封じ込める。extended ACL は proof-grade tier で再評価する |
 | server 起動 | Go（#526 が PR #572 で実装済み） | per-repo supervisor が caller routing env を fanout-owned XDG / config / socket / session で上書きし、foreground server child を bootstrap する |
 | owned server restart | Go（実装は #530） | 明示操作が marker / lease と saved process / socket の不在を照合して一回だけ spawn し、結果不明は fail closed にする（応答喪失窓への最小追加対処） |
 | 集約読み | `herdr api snapshot` を使う | workspace、tab、pane、layout、agent、focus を 1 回で取得できる |
@@ -145,13 +145,13 @@ fanout の複数行入力はインストール済みの `fanout v0.12.0` を実�
 検証では session directory を 0700、server socket と client socket を 0600 とし、log は 0700 directory 配下の 0644 file に分離した。
 server log は隔離した `XDG_CONFIG_HOME/herdr/sessions/<session>/herdr-server.log` に置かれた。
 0644 は実測値であり、production 契約ではない。
-production supervisor は 0600、ACL-free の log file を使い、workload env の name / value、env file の path、launcher token を log へ出さない。
+production supervisor は 0600 の log file を使い、workload env の name / value、env file の path、launcher token を log へ出さない。
 同じ socket path への二重起動は `herdr server is already running` で終了した。
 同じ path に non-herdr の Unix listener がいる場合も同じ error で終了し、protocol、version、owner は検査しなかった。
 `status --json` の `detached_server_daemon:true` は capability 表示であり、明示的に起動した server 自体は daemonize しなかった。
 
 実測した mode 値だけでは inherited ACL を検査していないため、別 UID の排除を証明しない。
-実装は後述の private namespace gate が成功した場合だけ、この permission 境界を別 UID の排除に使う。
+tmux-parity tier はこの残余リスクを受容し、extended ACL の検査は proof-grade tier で再評価する。
 herdr が起動した agent は同じ UID で動き、`HERDR_SOCKET_PATH` を継承するため、socket が分かれば `server.stop`、`plugin.*`、`worktree.remove` を発行できる。
 同じ UID の process は外部 `owner.json` の stable bytes と registry の PID / start token を変更できるため、status、schema、snapshot の応答は marker nonce または session generation に束縛されない。
 server 停止後に同じ path の server へ置換する ABA も原子的には検出できない。
@@ -182,10 +182,11 @@ marker は owned runtime directory の検査後に exclusive create で書き、
 
 Herdr control state は physical canonical git common directory 配下の `fanout/herdr-control.json` を唯一の正典とし、同じ directory の `herdr-control.json.lock` で直列化する。
 lock、atomic replace（temporary file への書き込みと rename）、fail-fast の水準は tmux backend の `.fanout/state.json`（`internal/infra/state` + `internal/infra/atomicfs`）と同じにし、実装にない durability 要件を追加しない。
-**private namespace gate** は fanout-owned path（`fanout` control directory、owned runtime root、XDG 四 root、config、marker、socket parent）に適用する簡素な owner-only 検査であり、owner UID、exact mode、空の extended ACL、symlink 不在を照合する。
+**private namespace gate** は fanout-owned path（`fanout` control directory、owned runtime root、XDG 四 root、config、marker、socket parent）に適用する簡素な owner-only 検査であり、owner UID、exact mode、symlink 不在を照合する。
+tmux backend と同じく extended ACL は検査せず、移植可能な ACL gate は proof-grade tier で再評価する。
 検査は対象 leaf に加えてその祖先（`fanout` control directory は physical common directory まで、owned runtime root は runtime base の parent まで）にも適用し、別 UID が書込み可能な祖先（sticky bit の rename 保護がない world-writable directory など）があれば fail closed にする（祖先の rename / 差し替えによる検査後の registry / lock 置換の防止）。
 `fanout` directory は 0700、registry と lock は 0600 とし、private namespace gate または physical common-directory identity の照合に失敗した場合は Herdr backend を開始しない。
-pre-existing object の ACL / mode は自動修復せず fail closed にする。
+pre-existing object の mode は自動修復せず fail closed にする。
 registry は schema version、common-directory identity、console / coordinator / child の final row、最小意図記録（intent 行）、telemetry routing を保持する。
 intent 行は絶対 expiry を持ち、発行済み mutation は再発行せず、再実行時の存在確認で採用、rollback 完了、`manual_cleanup_required` のいずれかに分類する。
 並行 invocation は repository 共通の combined launch lock で直列化する。

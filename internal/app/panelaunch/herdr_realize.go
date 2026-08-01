@@ -208,8 +208,10 @@ func RealizeHerdrCoordinator(
 		operationNow,
 	)
 	if routeContextErr != nil {
-		if errors.Is(routeContextErr, errHerdrIntentDeadlineExpired) &&
-			intent.Status == state.HerdrIntentPlanned {
+		if !found {
+			return result, routeContextErr
+		}
+		if intent.Status == state.HerdrIntentPlanned {
 			return result, rollbackUnissuedHerdrCoordinator(locked, intent, routeContextErr)
 		}
 		return result, markHerdrIntentManual(locked, intent, routeContextErr)
@@ -457,8 +459,10 @@ func RealizeHerdrWorktree(
 		operationNow,
 	)
 	if routeContextErr != nil {
-		if errors.Is(routeContextErr, errHerdrIntentDeadlineExpired) &&
-			intent.Status == state.HerdrIntentPlanned {
+		if !found {
+			return result, routeContextErr
+		}
+		if intent.Status == state.HerdrIntentPlanned {
 			return result, rollbackUnissuedHerdrWorktree(locked, req, intent, routeContextErr)
 		}
 		return result, markHerdrIntentManual(locked, intent, routeContextErr)
