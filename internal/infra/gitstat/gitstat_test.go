@@ -279,6 +279,7 @@ func TestRunnerWorktreePatchClassifiesFilesAfterCollectionLimit(t *testing.T) {
 	writeGitstatFile(t, repo, "a.txt", []byte("old\n"))
 	writeGitstatFile(t, repo, "b.txt", []byte("old\n"))
 	writeGitstatFile(t, repo, "m-replace.txt", []byte("same\n"))
+	writeGitstatFile(t, repo, "n-large-same.dat", bytes.Repeat([]byte{'x'}, patchFileLimit+1))
 	writeGitstatFile(t, repo, "z-binary.dat", []byte{'o', 0, 'l', 'd'})
 	gitTest(t, repo, "add", ".")
 	gitTest(t, repo, "commit", "-m", "initial")
@@ -287,6 +288,7 @@ func TestRunnerWorktreePatchClassifiesFilesAfterCollectionLimit(t *testing.T) {
 	writeGitstatFile(t, repo, "a.txt", []byte("new\n"))
 	writeGitstatFile(t, repo, "b.txt", []byte("new\n"))
 	gitTest(t, repo, "rm", "--cached", "m-replace.txt")
+	gitTest(t, repo, "rm", "--cached", "n-large-same.dat")
 	writeGitstatFile(t, repo, "z-binary.dat", bytes.Repeat([]byte{0}, patchFileLimit+1))
 
 	unlimited, err := (Runner{}).WorktreePatch(repo, "main")
@@ -296,6 +298,11 @@ func TestRunnerWorktreePatchClassifiesFilesAfterCollectionLimit(t *testing.T) {
 	next := strings.Index(unlimited.Patch, "\ndiff --git ")
 	if next < 0 {
 		t.Fatalf("unlimited patch has no second file group: %q", unlimited.Patch)
+	}
+	for _, stat := range unlimited.Files {
+		if stat.Path == "n-large-same.dat" {
+			t.Fatalf("unlimited files = %+v, want identical oversized replacement omitted", unlimited.Files)
+		}
 	}
 	firstGroupBytes := next + 1
 	realGit, err := exec.LookPath("git")
@@ -310,7 +317,7 @@ printf '%s\n' "$*" >> "$FANOUT_GITSTAT_LOG"
 exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 `)
 
-	limited, err := (Runner{MaxPatchBytes: firstGroupBytes}).WorktreePatch(repo, "main")
+	limited, err := (Runner{MaxFiles: 3, MaxPatchBytes: firstGroupBytes}).WorktreePatch(repo, "main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,6 +337,50 @@ exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 		if strings.Contains(line, "--src-prefix=") && strings.Contains(line, "m-replace.txt") {
 			t.Fatalf("replacement patch command ran after collection limit:\n%s", logged)
 		}
+	}
+	if !strings.Contains(string(logged), "hash-object --no-filters -- n-large-same.dat") {
+		t.Fatalf("oversized replacement was not compared by object ID:\n%s", logged)
+	}
+}
+
+func TestRunnerWorktreePatchClassifiesGitlinkReplacementAfterCollectionLimit(t *testing.T) {
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	writeGitstatFile(t, repo, "a.txt", []byte("old\n"))
+	writeGitstatFile(t, repo, "b.txt", []byte("old\n"))
+	gitTest(t, repo, "add", ".")
+	gitTest(t, repo, "commit", "-m", "seed")
+	oldCommit := gitTestOutput(t, repo, "rev-parse", "HEAD")
+	gitTest(t, repo, "update-index", "--add", "--cacheinfo", "160000", oldCommit, "m-link")
+	gitTest(t, repo, "commit", "-m", "add gitlink")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	writeGitstatFile(t, repo, "a.txt", []byte("new\n"))
+	writeGitstatFile(t, repo, "b.txt", []byte("new\n"))
+	gitTest(t, repo, "rm", "--cached", "m-link")
+	writeGitstatFile(t, repo, "m-link", []byte("regular file\n"))
+
+	unlimited, err := (Runner{}).WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := strings.Index(unlimited.Patch, "\ndiff --git ")
+	if next < 0 {
+		t.Fatalf("unlimited patch has no second file group: %q", unlimited.Patch)
+	}
+	limited, err := (Runner{MaxPatchBytes: next + 1}).WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := findFileStat(t, limited.Files, "m-link")
+	want := FileStat{
+		Path:          "m-link",
+		OmittedReason: "collectionLimit",
+	}
+	if got != want {
+		t.Fatalf("gitlink replacement FileStat = %#v, want %#v", got, want)
 	}
 }
 
@@ -1194,6 +1245,7 @@ exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 		"rev-parse":        true,
 		"merge-base":       true,
 		"diff":             true,
+		"hash-object":      true,
 		"ls-files":         true,
 		"ls-tree":          true,
 		"symbolic-ref":     true,

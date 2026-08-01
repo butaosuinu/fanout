@@ -182,9 +182,20 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 				stat.OmittedReason = "tooLarge"
 			}
 		}
+		replacementChecked := false
+		if file.replacement != nil && stat.OmittedReason == "tooLarge" {
+			changed, replacementErr := r.replacementChanged(path, mergeBase, file, true)
+			if replacementErr != nil {
+				return Patch{}, replacementErr
+			}
+			if !changed {
+				continue
+			}
+			replacementChecked = true
+		}
 		if collectionFull {
-			if file.replacement != nil && stat.OmittedReason != "tooLarge" {
-				changed, replacementErr := r.replacementChanged(path, mergeBase, file)
+			if file.replacement != nil && !replacementChecked {
+				changed, replacementErr := r.replacementChanged(path, mergeBase, file, false)
 				if replacementErr != nil {
 					return Patch{}, replacementErr
 				}
@@ -498,13 +509,10 @@ func (r Runner) replacementPatch(
 	return out, stat, true, nil
 }
 
-func (r Runner) replacementChanged(path, mergeBase string, file patchFile) (bool, error) {
+func (r Runner) replacementChanged(path, mergeBase string, file patchFile, hashFinal bool) (bool, error) {
 	entry, err := r.mergeBaseTreeEntry(path, mergeBase, file.Path)
 	if err != nil {
 		return false, err
-	}
-	if entry.objectType != "blob" {
-		return false, fmt.Errorf("compare replacement base entry: unsupported object type %q", entry.objectType)
 	}
 	fullPath, err := containedPath(path, file.Path)
 	if err != nil {
@@ -520,6 +528,16 @@ func (r Runner) replacementChanged(path, mergeBase string, file patchFile) (bool
 	}
 	if entry.mode != currentMode {
 		return true, nil
+	}
+	if entry.objectType != "blob" {
+		return false, fmt.Errorf("compare replacement base entry: unsupported object type %q", entry.objectType)
+	}
+	if hashFinal {
+		out, hashErr := r.git("-C", path, "hash-object", "--no-filters", "--", file.Path)
+		if hashErr != nil {
+			return false, fmt.Errorf("hash oversized replacement %q: %w", file.Path, hashErr)
+		}
+		return strings.TrimSpace(string(out)) != entry.oid, nil
 	}
 
 	baseContent, err := r.git("-C", path, "cat-file", "blob", entry.oid)
