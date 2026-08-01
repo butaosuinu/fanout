@@ -139,20 +139,6 @@ fi
 前提チェックは空になる。小文字のステータス文字が assume-unchanged、`S` が
 skip-worktree で、どちらも 1 行でも出たら fail closed。
 
-### 前提チェック 0a: 動的な instruction source を fail closed にする
-
-`.codex/config.toml` やユーザー設定が `model_instructions_file` /
-`project_doc_fallback_filenames` で指示ファイルの場所を差し替えている環境では、
-branch が参照先 (`REVIEW.md` など) だけを変えても上の固定 pathspec に一致しない。
-
-```bash
-grep -REl 'model_instructions_file|project_doc_fallback_filenames' \
-  "${CODEX_HOME:-$HOME/.codex}/config.toml" .codex/config.toml 2>/dev/null
-```
-
-1 件でも出たら **marker を書かない**。同梱の Codex helper も dynamic source 設定を
-fail closed にしており、Claude 経路だけ通すと迂回路になる。
-
 この確認が読むのはファイル**名**だけなので、対象リポジトリの中身に影響されない。
 判定そのものは信頼できる。
 
@@ -160,19 +146,60 @@ pathspec に自分自身 (`claude/skills/post-work-review/**`) を含めるの�
 skill を変更する branch で marker を書かせないため。ただしこれだけでは足りない
 — 走っている手順自体が branch 側なら、規則ごと消せてしまう。
 
+上の pathspec ベースの検査には原理的な穴が残る。`.codex/config.toml` や
+ユーザー設定が `model_instructions_file` / `project_doc_fallback_filenames` で
+指示ファイルの場所を差し替えている環境では、branch が参照先 (`REVIEW.md` など)
+だけを変えても固定 pathspec に一致しない。TOML の escaped key
+(`"model_instructions_file"`) を使えば単純な grep も抜ける。**この検査を
+prose で再実装しない** — 下の信頼済み helper に委譲する。
+
+### 前提チェック 0a: 信頼済み helper があればその判定を採る
+
+Codex 版の post-work-review には、この判定を完全に行う helper が同梱されている
+(`mark-reviewed-head.sh guard`)。checksum 検証されたリリースインストーラが所有し、
+レビュー対象 checkout の外に実体で置かれ、TOML トークナイザによる escaped key の
+検出、submodule、nested Git 境界、index flag まで見る。**あるなら必ずそれを使う。**
+
+```bash
+guard="${CODEX_HOME:-$HOME/.codex}/skills/post-work-review/scripts/mark-reviewed-head.sh"
+base_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
+base_branch="${base_branch:-main}"
+base_head="$(git rev-parse "origin/$base_branch" 2>/dev/null || git rev-parse "$base_branch")"
+if [ -x "$guard" ] && [ ! -L "$guard" ]; then
+  "$guard" guard "$(git rev-parse HEAD)" "$base_branch" "$base_head" || echo "BLOCKED"
+fi
+```
+
+非ゼロ終了なら **marker を書かない**。helper が無い環境では上の pathspec 検査が
+best-effort の代替になるが、動的 instruction source までは見られない。その旨を
+完了報告に書く。
+
 ### 前提チェック 0b: gate 自身が信頼済みコピーであること
 
 この skill が **レビュー対象 checkout の中を指す symlink から走っていないこと**
 を確認する。Codex gate と同じ「gate は checkout の外の実体コピー」という条件で、
 fanout の `make link` は post-work-review だけ symlink せずコピーする。
 
-最終 component の `-L` だけでは足りない。`CLAUDE_CONFIG_DIR` で skill root が
-差し替えられている環境や、`~/.claude/skills` 自体が symlink の環境では、
-実際に読み込まれた gate を検査できない。**全 path component を解決した実体パス**
-で判定する:
+判定は 2 つ要る。**symlink であること自体の拒否**と、**実体パスの位置確認**。
+片方だけでは足りない:
+
+- 最終 component の `-L` だけだと、`CLAUDE_CONFIG_DIR` での差し替えや
+  `~/.claude/skills` 自体が symlink の環境で、実際に読み込まれた gate を見ない
+- 実体パスの包含確認だけだと、gate が**別の worktree**への symlink のときに
+  「現在の repo の外」として通ってしまう。別 branch が変更した gate で
+  現在の branch の marker を書けてしまい、「gate は常にコピー」の不変条件が壊れる
 
 ```bash
 skill_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/post-work-review"
+
+# 1) path component に symlink があれば拒否
+p="$skill_dir"
+while [ -n "$p" ] && [ "$p" != "/" ]; do
+  if [ -L "$p" ]; then echo "BLOCKED: symlink component: $p"; break; fi
+  p="$(dirname "$p")"
+done
+
+# 2) 実体パスがレビュー対象 checkout の中なら拒否
 real_skill="$(cd "$skill_dir" 2>/dev/null && pwd -P)" || real_skill=""
 repo_real="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)" || repo_real=""
 if [ -z "$real_skill" ] || [ -z "$repo_real" ]; then
@@ -184,8 +211,8 @@ else
 fi
 ```
 
-`cd … && pwd -P` は途中の component も含めて symlink を解決する。BLOCKED が出たら
-**marker を書かない**。`make link` を最新の Makefile で回し直せば実体コピーに戻る。
+BLOCKED が出たら **marker を書かない**。`make link` を最新の Makefile で
+回し直せば実体コピーに戻る。
 
 出力が空でなければ **Step 5 の marker を書かない**。Pass 2 は参考情報として
 回してよいが、完了報告で次を明示し、ゲートは閉じたままにする:
