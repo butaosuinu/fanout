@@ -172,6 +172,11 @@ if [ "$command_name" = review-probe ]; then
         next
       }
       $1 == "node" {
+        if (NF < 3 || $2 == "" || seen_node[$2]) {
+          invalid = 1
+          next
+        }
+        seen_node[$2] = 1
         sub(/^node\t/, "")
         print
         nodes++
@@ -183,6 +188,20 @@ if [ "$command_name" = review-probe ]; then
       }
     ' "$probe_raw" >"$probe_unsorted" || emit_blocked review_probe_incomplete 1
     LC_ALL=C sort "$probe_unsorted" >"$probe_sorted" || emit_blocked review_probe_sort_failed 1
+  }
+
+  validate_probe_comments() {
+    awk -F '\t' '
+      NF != 4 || $1 == "" || $3 == "" || $4 == "" { invalid = 1 }
+      END { if (invalid) exit 1 }
+    ' "$1" || emit_blocked review_probe_incomplete 1
+  }
+
+  validate_probe_reviews() {
+    awk -F '\t' '
+      NF != 6 || $1 == "" || $3 == "" || $4 == "" || $5 == "" { invalid = 1 }
+      END { if (invalid) exit 1 }
+    ' "$1" || emit_blocked review_probe_incomplete 1
   }
 
   normalize_probe_thread_comments() {
@@ -208,7 +227,7 @@ if [ "$command_name" = review-probe ]; then
         }
         next
       }
-      $1 == "node" && NF == 6 && $2 in expected && $3 != "" {
+      $1 == "node" && NF == 6 && $2 in expected && $3 != "" && $5 != "" && $6 != "" {
         key = $2 SUBSEP $3
         if (seen_node[key]) invalid = 1
         seen_node[key] = 1
@@ -254,6 +273,7 @@ if [ "$command_name" = review-probe ]; then
     [ "$probe_comments_status" -eq 0 ] || emit_blocked review_probe_comments_failed "$probe_comments_status"
     normalize_probe_connection "$probe_tmp_dir/comments.raw" \
       "$probe_tmp_dir/comments.unsorted" "$probe_tmp_dir/comments.sorted"
+    validate_probe_comments "$probe_tmp_dir/comments.sorted"
   }
 
   fetch_probe_reviews() {
@@ -279,6 +299,7 @@ if [ "$command_name" = review-probe ]; then
     [ "$probe_reviews_status" -eq 0 ] || emit_blocked review_probe_reviews_failed "$probe_reviews_status"
     normalize_probe_connection "$probe_tmp_dir/reviews.raw" \
       "$probe_tmp_dir/reviews.unsorted" "$probe_tmp_dir/reviews.sorted"
+    validate_probe_reviews "$probe_tmp_dir/reviews.sorted"
   }
 
   fetch_probe_thread_comments() {
@@ -351,7 +372,8 @@ if [ "$command_name" = review-probe ]; then
     normalize_probe_connection "$probe_tmp_dir/threads.raw" \
       "$probe_tmp_dir/threads.unsorted" "$probe_tmp_dir/threads.all"
     awk -F '\t' '
-      NF != 7 || $1 == "" || ($2 != "true" && $2 != "false") || $7 !~ /^[0-9]+$/ {
+      NF != 7 || $1 == "" || ($2 != "true" && $2 != "false") || $3 == "" ||
+        $7 !~ /^[0-9]+$/ {
         invalid = 1
         next
       }
@@ -371,6 +393,7 @@ if [ "$command_name" = review-probe ]; then
 
   : >"$probe_tmp_dir/comments.sorted"
   : >"$probe_tmp_dir/reviews.sorted"
+  : >"$probe_tmp_dir/threads.all"
   : >"$probe_tmp_dir/threads.sorted"
   : >"$probe_tmp_dir/thread-comments.sorted"
   if [ "$probe_comments_total" -gt 0 ]; then
@@ -393,12 +416,17 @@ if [ "$command_name" = review-probe ]; then
 
   probe_comments_count="$(awk 'END { print NR + 0 }' "$probe_tmp_dir/comments.sorted")"
   probe_reviews_count="$(awk 'END { print NR + 0 }' "$probe_tmp_dir/reviews.sorted")"
+  probe_all_threads_count="$(awk 'END { print NR + 0 }' "$probe_tmp_dir/threads.all")"
   probe_threads_count="$(awk 'END { print NR + 0 }' "$probe_tmp_dir/threads.sorted")"
   [ "$probe_comments_count" -eq "$probe_comments_total" ] || {
     printf 'event=change repo=%s pr=%s reason=review_probe_changed\n' "$repo" "$pr"
     exit 0
   }
   [ "$probe_reviews_count" -eq "$probe_reviews_total" ] || {
+    printf 'event=change repo=%s pr=%s reason=review_probe_changed\n' "$repo" "$pr"
+    exit 0
+  }
+  [ "$probe_all_threads_count" -eq "$probe_threads_total" ] || {
     printf 'event=change repo=%s pr=%s reason=review_probe_changed\n' "$repo" "$pr"
     exit 0
   }

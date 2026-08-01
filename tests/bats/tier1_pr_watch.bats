@@ -388,6 +388,60 @@ state_dir_for() {
   [[ "$output" == "event=blocked repo=acme/widget pr=27 reason=review_probe_incomplete status=1" ]]
 }
 
+@test "review probe blocks on empty or duplicate metadata node IDs" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  printf 'head-one\t2026-07-10T00:00:00Z\t1\t0\t0\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.tsv"
+  printf 'total\t1\nnode\t\t\t\t\n' >"$PR_WATCH_FIXTURE/probe-comments.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == "event=blocked repo=acme/widget pr=27 reason=review_probe_incomplete status=1" ]]
+
+  printf 'head-one\t2026-07-10T00:00:00Z\t0\t2\t0\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.tsv"
+  {
+    printf 'total\t2\n'
+    printf 'node\t201\treviewer\tCOMMENTED\t2026-07-10T00:01:00Z\t2026-07-10T00:01:00Z\thead-one\n'
+    printf 'node\t201\treviewer\tCOMMENTED\t2026-07-10T00:02:00Z\t2026-07-10T00:02:00Z\thead-one\n'
+  } >"$PR_WATCH_FIXTURE/probe-reviews.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == "event=blocked repo=acme/widget pr=27 reason=review_probe_incomplete status=1" ]]
+}
+
+@test "review probe blocks on missing required metadata fields" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  printf 'head-one\t2026-07-10T00:00:00Z\t1\t0\t0\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.tsv"
+  printf 'total\t1\nnode\t101\talice\t\t2026-07-10T00:01:00Z\n' \
+    >"$PR_WATCH_FIXTURE/probe-comments.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == "event=blocked repo=acme/widget pr=27 reason=review_probe_incomplete status=1" ]]
+}
+
+@test "review probe reports an inconsistent all-thread count" {
+  local repo="$BATS_TEST_TMPDIR/repo"
+  setup_repo "$repo"
+  printf 'head-one\t2026-07-10T00:00:00Z\t0\t0\t2\n' \
+    >"$PR_WATCH_FIXTURE/probe-counts.tsv"
+  printf 'total\t1\nnode\tTHREAD-DONE\ttrue\tmain.go\t8\t8\tRIGHT\t1\n' \
+    >"$PR_WATCH_FIXTURE/probe-threads.tsv"
+
+  run_watch "$repo" review-probe --repo acme/widget --pr 27
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "event=change repo=acme/widget pr=27 reason=review_probe_changed" ]]
+}
+
 @test "review probe blocks on incomplete thread-comment pagination" {
   local repo="$BATS_TEST_TMPDIR/repo"
   setup_repo "$repo"
