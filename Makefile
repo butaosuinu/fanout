@@ -10,6 +10,13 @@ CODEX_SKILL_DIR  := $(CODEX_DIR)/skills
 CLAUDE_COMMANDS := $(notdir $(wildcard claude/commands/*.md))
 CLAUDE_SKILLS   := $(notdir $(wildcard claude/skills/*))
 CODEX_SKILLS    := $(notdir $(wildcard codex/skills/*))
+# `make link` symlinks skills back into the checkout for fast iteration, but the
+# Claude post-work-review gate must never be a symlink: it reviews the very
+# checkout it would then be reading its own instructions from, so a branch
+# editing the skill would change the gate that judges it. Copy that one instead,
+# mirroring how the Codex gate stays outside the reviewed checkout.
+CLAUDE_LINK_SKILLS := $(filter-out post-work-review,$(CLAUDE_SKILLS))
+CLAUDE_COPY_SKILLS := $(filter post-work-review,$(CLAUDE_SKILLS))
 
 BATS       ?= bats
 GO         ?= go
@@ -139,10 +146,20 @@ link-integrations: guard-retired-codex-review
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		ln -sf "$(CURDIR)/claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
 	done
-	@for skill in $(CLAUDE_SKILLS); do \
+	@for skill in $(CLAUDE_LINK_SKILLS); do \
 		rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; \
 		ln -sf "$(CURDIR)/claude/skills/$$skill" "$(CLAUDE_SKILL_DIR)/$$skill"; \
 	done
+	@set -eu; \
+		for skill in $(CLAUDE_COPY_SKILLS); do \
+			rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; \
+			mkdir -p "$(CLAUDE_SKILL_DIR)/$$skill"; \
+			cp -R "claude/skills/$$skill/." "$(CLAUDE_SKILL_DIR)/$$skill/"; \
+			if [ -L "$(CLAUDE_SKILL_DIR)/$$skill" ]; then \
+				echo "error: Claude $$skill gate must not be a symlink: $(CLAUDE_SKILL_DIR)/$$skill" >&2; \
+				exit 1; \
+			fi; \
+		done
 	@for skill in $(filter-out post-work-review,$(CODEX_SKILLS)); do \
 		rm -rf "$(CODEX_SKILL_DIR)/$$skill"; \
 		ln -sf "$(CURDIR)/codex/skills/$$skill" "$(CODEX_SKILL_DIR)/$$skill"; \
@@ -168,7 +185,8 @@ link: build-go-for-install link-integrations
 	@echo "Linked:"
 	@echo "  $(BINDIR)/fanout -> $(CURDIR)/$(GO_BIN)"
 	@for cmd in $(CLAUDE_COMMANDS); do echo "  $(CLAUDE_CMD_DIR)/$$cmd -> $(CURDIR)/claude/commands/$$cmd"; done
-	@for skill in $(CLAUDE_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
+	@for skill in $(CLAUDE_LINK_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill -> $(CURDIR)/claude/skills/$$skill"; done
+	@for skill in $(CLAUDE_COPY_SKILLS); do echo "  $(CLAUDE_SKILL_DIR)/$$skill (copied, never symlinked: review gate)"; done
 	@for skill in $(filter-out post-work-review,$(CODEX_SKILLS)); do \
 		echo "  $(CODEX_SKILL_DIR)/$$skill -> $(CURDIR)/codex/skills/$$skill"; \
 	done

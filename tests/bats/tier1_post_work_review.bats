@@ -202,6 +202,43 @@ run_pr_gate() {
   [ -L "$BATS_TEST_TMPDIR/link-integrations/codex/skills/fanout" ]
 }
 
+# `make link` symlinks skills for fast iteration, but the Claude review gate must
+# stay a real copy: a symlink into the checkout would let a branch that edits the
+# skill change the gate that judges it.
+@test "link-integrations copies the Claude review gate and symlinks other skills" {
+  local repo="$BATS_TEST_TMPDIR/claude-gate-link" root
+  setup_integration_repo "$repo"
+  root="$BATS_TEST_TMPDIR/claude-gate-link-out"
+
+  run make -C "$repo" link-integrations CLAUDE_DIR="$root/claude" \
+    CODEX_DIR="$root/codex" CODEX_HOME="$root/codex"
+  [ "$status" -eq 0 ]
+
+  [ ! -L "$root/claude/skills/post-work-review" ]
+  [ -f "$root/claude/skills/post-work-review/SKILL.md" ]
+  [ -L "$root/claude/skills/pr-watch" ]
+
+  # The copy must carry the checkout's content, not an empty placeholder.
+  run diff "$repo/claude/skills/post-work-review/SKILL.md" \
+    "$root/claude/skills/post-work-review/SKILL.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "link-integrations replaces an existing symlinked Claude review gate" {
+  local repo="$BATS_TEST_TMPDIR/claude-gate-relink" root
+  setup_integration_repo "$repo"
+  root="$BATS_TEST_TMPDIR/claude-gate-relink-out"
+  mkdir -p "$root/claude/skills"
+  ln -s "$repo/claude/skills/post-work-review" "$root/claude/skills/post-work-review"
+  [ -L "$root/claude/skills/post-work-review" ]
+
+  run make -C "$repo" link-integrations CLAUDE_DIR="$root/claude" \
+    CODEX_DIR="$root/codex" CODEX_HOME="$root/codex"
+  [ "$status" -eq 0 ]
+  [ ! -L "$root/claude/skills/post-work-review" ]
+  [ -f "$root/claude/skills/post-work-review/SKILL.md" ]
+}
+
 @test "checkout install and link reject retired drivers under either Codex root" {
   local repo="$BATS_TEST_TMPDIR/legacy-make-integrations" \
     target root codex_dir codex_home driver_root driver index=0

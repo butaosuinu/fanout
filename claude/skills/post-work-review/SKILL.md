@@ -135,12 +135,26 @@ fi
 この確認が読むのはファイル**名**だけなので、対象リポジトリの中身に影響されない。
 判定そのものは信頼できる。
 
-pathspec に自分自身 (`claude/skills/post-work-review/**`) を含めるのは、
-`make link` がこの skill を checkout 内へ symlink するため、gate 自身を変える
-branch では変更後の gate が走るから。**これは marker を書かせない措置であって、
-完全な緩和ではない** — 走っている手順自体が branch 側なので、規則ごと消された
-場合は検出できない。完全に閉じるには Codex helper と同じく checkout 外の
-信頼済みコピーから起動する必要がある(未対応)。
+pathspec に自分自身 (`claude/skills/post-work-review/**`) を含めるのは、この
+skill を変更する branch で marker を書かせないため。ただしこれだけでは足りない
+— 走っている手順自体が branch 側なら、規則ごと消せてしまう。
+
+### 前提チェック 0b: gate 自身が信頼済みコピーであること
+
+この skill が **レビュー対象 checkout の中を指す symlink から走っていないこと**
+を確認する。Codex gate と同じ「gate は checkout の外の実体コピー」という条件で、
+fanout の `make link` は post-work-review だけ symlink せずコピーする。
+
+```bash
+skill_dir="$HOME/.claude/skills/post-work-review"
+if [ -L "$skill_dir" ]; then
+  echo "BLOCKED: gate が symlink から走っている ($(readlink "$skill_dir"))"
+fi
+```
+
+symlink だった場合、または解決先がレビュー対象の worktree 配下だった場合は
+**marker を書かない**。`make link` を最新の Makefile で回し直せば実体コピーに
+戻る。
 
 出力が空でなければ **Step 5 の marker を書かない**。Pass 2 は参考情報として
 回してよいが、完了報告で次を明示し、ゲートは閉じたままにする:
@@ -276,6 +290,8 @@ Pass 2 ループが clean 判定 / ユーザー停止指示 / oscillation 検知
 4. **エージェント指示ファイルを変更していない**: 前提チェック 0 が空でなかった場合、
    または判定自体ができなかった場合は marker を書かない。この branch のレビューは
    trusted checkout または人間が行う。
+5. **gate 自身が信頼済みコピーである**: 前提チェック 0b で symlink を検出したら
+   marker を書かない。
 
 ```bash
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then

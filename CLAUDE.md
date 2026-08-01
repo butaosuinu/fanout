@@ -29,7 +29,11 @@ The Claude Code integration files (`claude/commands/*.md` slash commands and
 bundled in the repo as the source of truth. `make install` places the Claude
 files and non-gate Codex skills under the matching `~/.claude/` and
 `~/.codex/` directories. The checksum-verified release installer alone owns
-Codex `post-work-review`. Do not edit installed copies directly.
+Codex `post-work-review`. `make link` symlinks the rest back into the checkout
+but always copies Claude `post-work-review`: that skill is a review gate, and a
+symlink would let a branch editing it change the gate that judges it
+(pinned by `tests/bats/tier1_post_work_review.bats`). Do not edit installed
+copies directly.
 
 The user-facing surface is in `README.md` and `README.ja.md`. Read those before
 changing behavior; this file covers repo-local architecture and maintenance
