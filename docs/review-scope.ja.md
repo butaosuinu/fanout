@@ -28,7 +28,7 @@ fanout が検証されているのはこの範囲だけ。マトリクス外で�
 | OS | macOS / Linux | Windows は非対応(tmux 前提) |
 | checkout | 単一ユーザーのローカル checkout | ネットワーク FS、共有 checkout、他ユーザーとの同時操作は対象外 |
 | tmux | 3.3 以上 | `README.md` / `README.ja.md` の前提ツール |
-| gh | 認証済み(`gh auth status`) | 同上 |
+| gh | GitHub issue / Project 経路と PR status / cleanup でのみ認証済みを前提 | README も同じ限定。issue-less `fanout plan`・dry-run・`--check-update` は gh 無しで動き(`tests/bats/tier2_dry_run.bats:261`)、これらの経路は gh 無しのまま対象内 |
 | ビルド | Go 1.26.5+ / Node.js 24+ / pnpm 11+ | チェックアウトからビルドする場合のみ |
 
 前提ツールのユーザー向け記述は README にある。この表は README を実装レビュー用に
@@ -85,7 +85,9 @@ decline 済みの thread は、同じ内容で再提起しない。再提起さ�
   spike 文書を細かく書くほど指摘は増える。決定に必要な粒度で止める
 
 契約として拘束力を持つのは、`docs/architecture.ja.md` の層ルールとレビュークラス、
-`CLAUDE.md` / `AGENTS.md` の Behavior Boundaries、この文書のマトリクスだけ。
+`AGENTS.md` の `Automated PR Review Scope` 節、`CLAUDE.md` / `AGENTS.md` の
+Behavior Boundaries だけ。この文書は同じマトリクスを人間向けに展開した写しで、
+ゲートの信頼源ではない(上の注記を参照)。
 
 ## 実測ベースライン(2026-08)
 

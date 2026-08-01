@@ -65,7 +65,10 @@ finding. This is the verified range, not a claim that older setups break.
   at their platform defaults
 - macOS or Linux; a single-user local checkout (no network filesystems, no
   shared checkouts, no concurrent operation by other users)
-- tmux 3.3+ and an authenticated `gh`
+- tmux 3.3+
+- an authenticated `gh` for the GitHub issue / Project workflows and the PR
+  status / cleanup views only. Paths that run without it — issue-less
+  `fanout plan`, dry runs, `--check-update` — stay in scope with no `gh`
 - building from a checkout: Go 1.26.5+, Node.js 24+, pnpm 11+
 
 Rules for a review finding:
@@ -77,9 +80,9 @@ Rules for a review finding:
 - Do not re-raise a thread the author declined with a stated rationale.
 - ADR and spike documents under `docs/` are decision records, not
   implementation specs. Do not review them for implementation-level
-  completeness; an unstated condition is undecided, not missing. Only
-  `docs/architecture.ja.md`, `docs/review-scope.ja.md`, and the Behavior
-  Boundaries in `AGENTS.md` / `CLAUDE.md` are binding contracts.
+  completeness; an unstated condition is undecided, not missing. The binding
+  contracts are `docs/architecture.ja.md`, this section, and the Behavior
+  Boundaries in `AGENTS.md` / `CLAUDE.md`.
 
 Explicit non-goals — reachable inside the matrix, and still not findings:
 
