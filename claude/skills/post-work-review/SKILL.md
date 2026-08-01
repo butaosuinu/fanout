@@ -126,11 +126,32 @@ else
   git diff --name-only -- "${instr[@]}"                  # worktree の未コミット変更
   git diff --name-only --cached -- "${instr[@]}"         # index の未コミット変更
   git ls-files --others -- "${instr[@]}"                 # untracked (ignored 含む)
+  git ls-files -v -- "${instr[@]}" | grep -E '^([a-z]|S) '  # index flag で隠された変更
 fi
 ```
 
 `git ls-files --others` に `--exclude-standard` を付けないのは、ignored な
 指示ファイルこそ検出したいため。
+
+最後の `ls-files -v` が要るのは、`git update-index --assume-unchanged AGENTS.md`
+を付けてから作業ツリーだけ書き換えると、上の `git diff` 3 本がどれも変更を出さず、
+`--others` も追跡済みファイルを出さないため。reviewer は変更後の指示を読むのに
+前提チェックは空になる。小文字のステータス文字が assume-unchanged、`S` が
+skip-worktree で、どちらも 1 行でも出たら fail closed。
+
+### 前提チェック 0a: 動的な instruction source を fail closed にする
+
+`.codex/config.toml` やユーザー設定が `model_instructions_file` /
+`project_doc_fallback_filenames` で指示ファイルの場所を差し替えている環境では、
+branch が参照先 (`REVIEW.md` など) だけを変えても上の固定 pathspec に一致しない。
+
+```bash
+grep -REl 'model_instructions_file|project_doc_fallback_filenames' \
+  "${CODEX_HOME:-$HOME/.codex}/config.toml" .codex/config.toml 2>/dev/null
+```
+
+1 件でも出たら **marker を書かない**。同梱の Codex helper も dynamic source 設定を
+fail closed にしており、Claude 経路だけ通すと迂回路になる。
 
 この確認が読むのはファイル**名**だけなので、対象リポジトリの中身に影響されない。
 判定そのものは信頼できる。
@@ -145,16 +166,26 @@ skill を変更する branch で marker を書かせないため。ただしこ�
 を確認する。Codex gate と同じ「gate は checkout の外の実体コピー」という条件で、
 fanout の `make link` は post-work-review だけ symlink せずコピーする。
 
+最終 component の `-L` だけでは足りない。`CLAUDE_CONFIG_DIR` で skill root が
+差し替えられている環境や、`~/.claude/skills` 自体が symlink の環境では、
+実際に読み込まれた gate を検査できない。**全 path component を解決した実体パス**
+で判定する:
+
 ```bash
-skill_dir="$HOME/.claude/skills/post-work-review"
-if [ -L "$skill_dir" ]; then
-  echo "BLOCKED: gate が symlink から走っている ($(readlink "$skill_dir"))"
+skill_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/post-work-review"
+real_skill="$(cd "$skill_dir" 2>/dev/null && pwd -P)" || real_skill=""
+repo_real="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)" || repo_real=""
+if [ -z "$real_skill" ] || [ -z "$repo_real" ]; then
+  echo "BLOCKED: gate かリポジトリの実体パスを解決できない"
+else
+  case "$real_skill" in
+    "$repo_real"|"$repo_real"/*) echo "BLOCKED: gate がレビュー対象 checkout 内にある: $real_skill" ;;
+  esac
 fi
 ```
 
-symlink だった場合、または解決先がレビュー対象の worktree 配下だった場合は
-**marker を書かない**。`make link` を最新の Makefile で回し直せば実体コピーに
-戻る。
+`cd … && pwd -P` は途中の component も含めて symlink を解決する。BLOCKED が出たら
+**marker を書かない**。`make link` を最新の Makefile で回し直せば実体コピーに戻る。
 
 出力が空でなければ **Step 5 の marker を書かない**。Pass 2 は参考情報として
 回してよいが、完了報告で次を明示し、ゲートは閉じたままにする:
