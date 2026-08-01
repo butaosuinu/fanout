@@ -189,8 +189,19 @@ func RealizeHerdrCoordinator(
 	}
 
 	intent, found := locked.FindIntent(intentID)
+	if !found {
+		if row, exists := locked.FindRow(intentID); exists {
+			return finalizedHerdrCoordinator(
+				req,
+				cwd,
+				runtimeParent,
+				runtimeOwnerProjectRoot,
+				row,
+			)
+		}
+	}
 	operationNow := hooks.Now()
-	routeCtx, routeCancel, routeContextErr := herdrRealizeRouteContext(
+	routeCtx, operationParent, routeCancel, routeContextErr := herdrRealizeRouteContext(
 		realizeCtx,
 		intent,
 		found,
@@ -224,15 +235,6 @@ func RealizeHerdrCoordinator(
 			return result, savedErr
 		}
 	} else {
-		if row, exists := locked.FindRow(intentID); exists {
-			return finalizedHerdrCoordinator(
-				req,
-				cwd,
-				runtimeParent,
-				runtimeOwnerProjectRoot,
-				row,
-			)
-		}
 		label, labelErr := newHerdrWorkspaceLabel("coordinator", hooks.RandomToken)
 		if labelErr != nil {
 			return result, labelErr
@@ -251,7 +253,7 @@ func RealizeHerdrCoordinator(
 		}
 	}
 
-	operationCtx, cancel, contextErr := herdrIntentContext(routeCtx, intent, operationNow)
+	operationCtx, cancel, contextErr := herdrIntentContext(operationParent, intent, operationNow)
 	if contextErr != nil {
 		if errors.Is(contextErr, errHerdrIntentDeadlineExpired) &&
 			intent.Status == state.HerdrIntentPlanned {
@@ -420,6 +422,18 @@ func RealizeHerdrWorktree(
 	if lockedRuntimeParent != runtimeParent {
 		return result, fmt.Errorf("herdr runtime parent changed while acquiring control lock")
 	}
+	intent, found := locked.FindIntent(intentID)
+	if !found {
+		if row, exists := locked.FindRow(intentID); exists {
+			return finalizedHerdrWorktree(
+				req,
+				source,
+				ownerProjectRoot,
+				runtimeParent,
+				row,
+			)
+		}
+	}
 	runtimeOwnerProjectRoot, runtimeOwnerErr := state.HerdrOwnerProjectRoot(
 		runtimeParent,
 		project.RepoRoot,
@@ -435,9 +449,8 @@ func RealizeHerdrWorktree(
 		return result, coordinatorIDErr
 	}
 
-	intent, found := locked.FindIntent(intentID)
 	operationNow := hooks.Now()
-	routeCtx, routeCancel, routeContextErr := herdrRealizeRouteContext(
+	routeCtx, operationParent, routeCancel, routeContextErr := herdrRealizeRouteContext(
 		realizeCtx,
 		intent,
 		found,
@@ -459,17 +472,6 @@ func RealizeHerdrWorktree(
 		req.SocketPath,
 	); routeErr != nil {
 		return result, routeErr
-	}
-	if !found {
-		if row, exists := locked.FindRow(intentID); exists {
-			return finalizedHerdrWorktree(
-				req,
-				source,
-				ownerProjectRoot,
-				runtimeParent,
-				row,
-			)
-		}
 	}
 	coordinator, coordinatorErr := resolvedHerdrCoordinator(
 		locked,
@@ -561,7 +563,7 @@ func RealizeHerdrWorktree(
 	}
 
 	classificationOnly := !operationNow.Before(time.UnixMilli(intent.ExpiresUnixMS))
-	operationCtx, cancel, contextErr := herdrIntentContext(routeCtx, intent, operationNow)
+	operationCtx, cancel, contextErr := herdrIntentContext(operationParent, intent, operationNow)
 	if contextErr != nil {
 		if errors.Is(contextErr, errHerdrIntentDeadlineExpired) &&
 			intent.Status == state.HerdrIntentPlanned {
@@ -679,16 +681,26 @@ func herdrRealizeRouteContext(
 	intent state.HerdrIntent,
 	found bool,
 	now time.Time,
-) (context.Context, context.CancelFunc, error) {
+) (context.Context, context.Context, context.CancelFunc, error) {
+	operationParent := parent
+	operationCancel := func() {}
 	if found {
-		return herdrIntentContext(parent, intent, now)
+		var err error
+		operationParent, operationCancel, err = herdrIntentContext(parent, intent, now)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 	}
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := context.WithTimeout(operationParent, maxHerdrRecoveryClassificationTimeout)
 	if err := ctx.Err(); err != nil {
 		cancel()
-		return nil, nil, err
+		operationCancel()
+		return nil, nil, nil, err
 	}
-	return ctx, cancel, nil
+	return ctx, operationParent, func() {
+		cancel()
+		operationCancel()
+	}, nil
 }
 
 func resolveHerdrRuntimeParent(

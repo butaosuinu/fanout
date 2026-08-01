@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -364,23 +365,32 @@ func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testin
 	}
 }
 
-func TestHerdrSyntheticBindingsExcludeBucketsAndKeepResolvedParents(t *testing.T) {
+func TestHerdrSyntheticBindingsProjectWatcherIssuesAndKeepResolvedParents(t *testing.T) {
 	store := testEmptyHerdrControl()
 	store.Rows = []HerdrRow{
-		{RuntimeParent: "@manual", Backend: backend.Herdr},
-		{RuntimeParent: "425", Backend: backend.Herdr},
+		{RuntimeParent: "@manual", IssueNum: 424, Backend: backend.Herdr},
+		{RuntimeParent: "@watch", IssueNum: 425, Backend: backend.Herdr},
+		{RuntimeParent: "427", Backend: backend.Herdr},
 	}
 	store.Intents = []HerdrIntent{
-		{RuntimeParent: "@watch", Backend: backend.Herdr},
-		{RuntimeParent: "426", Backend: backend.Herdr},
+		{RuntimeParent: "@watch", IssueNum: 426, Backend: backend.Herdr},
+		{RuntimeParent: "428", Backend: backend.Herdr},
 	}
 
 	rows := store.RowBindings("/repo")
-	if len(rows) != 1 || rows[0] != (backend.Binding{Parent: "425", Backend: backend.Herdr}) {
+	wantRows := []backend.Binding{
+		{Parent: "425", Backend: backend.Herdr},
+		{Parent: "427", Backend: backend.Herdr},
+	}
+	if !slices.Equal(rows, wantRows) {
 		t.Fatalf("synthetic row bindings = %#v", rows)
 	}
 	intents := store.ProvisionalBindings("/repo")
-	if len(intents) != 1 || intents[0] != (backend.Binding{Parent: "426", Backend: backend.Herdr}) {
+	wantIntents := []backend.Binding{
+		{Parent: "426", Backend: backend.Herdr},
+		{Parent: "428", Backend: backend.Herdr},
+	}
+	if !slices.Equal(intents, wantIntents) {
 		t.Fatalf("synthetic intent bindings = %#v", intents)
 	}
 }

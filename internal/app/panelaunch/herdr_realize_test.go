@@ -209,7 +209,7 @@ func TestRealizeHerdrWorktreeKeepsRejectedOpenRetryable(t *testing.T) {
 	}
 }
 
-func TestRealizeHerdrRoutesUseTotalTimeout(t *testing.T) {
+func TestRealizeHerdrRoutesCapTotalTimeout(t *testing.T) {
 	for _, kind := range []string{"coordinator", "worktree"} {
 		t.Run(kind, func(t *testing.T) {
 			repo := newHerdrRealizeRepo(t)
@@ -222,23 +222,23 @@ func TestRealizeHerdrRoutesUseTotalTimeout(t *testing.T) {
 			switch kind {
 			case "coordinator":
 				req := testHerdrCoordinatorRequest(repo)
-				req.TotalTimeout = 3 * time.Second
 				_, err = realizeHerdrCoordinator(context.Background(), req, runtime, hooks)
 			case "worktree":
 				req := testHerdrWorktreeRequest(repo, "route-timeout", 426)
-				req.TotalTimeout = 3 * time.Second
 				_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 			}
 			if !errors.Is(err, stop) {
 				t.Fatalf("route error = %v", err)
 			}
-			if !runtime.routeHasDeadline ||
-				runtime.routeDeadline.Before(now.Add(2*time.Second)) ||
-				runtime.routeDeadline.After(now.Add(4*time.Second)) {
+			remaining := time.Until(runtime.routeDeadline)
+			if !runtime.routeHasDeadline || remaining <= 0 ||
+				remaining > maxHerdrRecoveryClassificationTimeout {
 				t.Fatalf(
-					"route deadline = %v, %t, want within total timeout from %v",
+					"route deadline = %v, %t (remaining %v), want at most %v from %v",
 					runtime.routeDeadline,
 					runtime.routeHasDeadline,
+					remaining,
+					maxHerdrRecoveryClassificationTimeout,
 					now,
 				)
 			}
@@ -628,6 +628,8 @@ func TestRealizeHerdrUsesFinalRowsAsIdempotentBindings(t *testing.T) {
 	hooks := deterministicHerdrRealizeHooks()
 	coordinator := realizeTestHerdrCoordinator(t, repo, runtime, hooks)
 	finalizeHerdrTestIntent(t, repo, coordinator)
+	routeCallsBefore := runtime.routeCalls
+	runtime.routeErr = errors.New("route unavailable")
 
 	coordinatorResult, err := realizeHerdrCoordinator(
 		context.Background(),
@@ -636,7 +638,8 @@ func TestRealizeHerdrUsesFinalRowsAsIdempotentBindings(t *testing.T) {
 		hooks,
 	)
 	if err != nil || !coordinatorResult.AlreadyFinalized ||
-		coordinatorResult.Row.ID != coordinator.ID || len(runtime.mutations) != 1 {
+		coordinatorResult.Row.ID != coordinator.ID || len(runtime.mutations) != 1 ||
+		runtime.routeCalls != routeCallsBefore {
 		t.Fatalf(
 			"final coordinator replay = %+v err=%v mutations=%d",
 			coordinatorResult,
@@ -644,6 +647,7 @@ func TestRealizeHerdrUsesFinalRowsAsIdempotentBindings(t *testing.T) {
 			len(runtime.mutations),
 		)
 	}
+	runtime.routeErr = nil
 
 	req := testHerdrWorktreeRequest(repo, "final-row", 432)
 	child, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
@@ -654,11 +658,13 @@ func TestRealizeHerdrUsesFinalRowsAsIdempotentBindings(t *testing.T) {
 		t.Fatalf("child coordinator = %+v, want finalized %+v", child.Intent.Coordinator, coordinator.Resource)
 	}
 	finalizeHerdrTestIntent(t, repo, child.Intent)
+	routeCallsBefore = runtime.routeCalls
+	runtime.routeErr = errors.New("route unavailable")
 
 	finalChild, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if err != nil || !finalChild.AlreadyFinalized ||
 		finalChild.Row.ID != child.Intent.ID || finalChild.Pane != child.Pane ||
-		len(runtime.mutations) != 2 {
+		len(runtime.mutations) != 2 || runtime.routeCalls != routeCallsBefore {
 		t.Fatalf(
 			"final child replay = %+v err=%v mutations=%d",
 			finalChild,

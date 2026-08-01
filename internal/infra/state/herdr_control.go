@@ -307,6 +307,7 @@ func (s HerdrControlStore) RowBindings(
 	for _, row := range s.Rows {
 		parent, ok := herdrBindingParent(
 			row.RuntimeParent,
+			row.IssueNum,
 			row.OwnerProjectRoot,
 			ownerProjectRoot,
 		)
@@ -325,6 +326,7 @@ func (s HerdrControlStore) ProvisionalBindings(
 	for _, intent := range s.Intents {
 		parent, ok := herdrBindingParent(
 			intent.RuntimeParent,
+			intent.IssueNum,
 			intent.OwnerProjectRoot,
 			ownerProjectRoot,
 		)
@@ -337,11 +339,19 @@ func (s HerdrControlStore) ProvisionalBindings(
 }
 
 func herdrBindingParent(
-	parent, storedRoot, projectRoot string,
+	parent string,
+	issueNum int,
+	storedRoot, projectRoot string,
 ) (string, bool) {
 	parent = parentref.Canon(strings.TrimSpace(parent))
-	if parent == "@manual" || parent == "@watch" {
+	if parent == "@manual" {
 		return "", false
+	}
+	if parent == "@watch" {
+		if issueNum <= 0 {
+			return "", false
+		}
+		return strconv.Itoa(issueNum), true
 	}
 	if !strings.HasPrefix(parent, "plan:") {
 		return parent, true
