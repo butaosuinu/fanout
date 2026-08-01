@@ -108,7 +108,7 @@ if [ "$command_name" = review-probe ]; then
   probe_tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/pr-watch-probe.XXXXXX")" ||
     emit_blocked temp_dir_failed 1
   # Invoked indirectly by the EXIT trap.
-  # shellcheck disable=SC2329
+  # shellcheck disable=SC2317,SC2329
   probe_cleanup() {
     rm -f "$probe_tmp_dir/counts.before" "$probe_tmp_dir/counts.after" \
       "$probe_tmp_dir/comments.raw" "$probe_tmp_dir/comments.unsorted" \
