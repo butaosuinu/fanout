@@ -126,9 +126,17 @@ else
   git diff --name-only -- "${instr[@]}"                  # worktree の未コミット変更
   git diff --name-only --cached -- "${instr[@]}"         # index の未コミット変更
   git ls-files --others -- "${instr[@]}"                 # untracked (ignored 含む)
-  git ls-files -v -- "${instr[@]}" | grep -E '^([a-z]|S) '  # index flag で隠された変更
+  if flags="$(git ls-files -v -- "${instr[@]}")"; then
+    printf '%s\n' "$flags" | grep -E '^([a-z]|S) ' || true   # index flag で隠された変更
+  else
+    echo "BLOCKED: index を検査できない"
+  fi
 fi
 ```
+
+`grep` の no-match は status 1 なので `|| true` で潰す。潰さずに書くと、保護対象に
+変更が無い正常系でも `if` ブロック全体が失敗扱いになり、不要に fail closed する。
+`git ls-files` 自体の失敗とは区別すること。
 
 `git ls-files --others` に `--exclude-standard` を付けないのは、ignored な
 指示ファイルこそ検出したいため。
@@ -174,6 +182,20 @@ fi
 best-effort の代替になるが、動的 instruction source までは見られない。その旨を
 完了報告に書く。
 
+helper が見るのはリポジトリ側の `.codex/config.toml` だけで、**ユーザー設定は
+見ない**(その層は trusted parent boundary という設計)。ただし
+`$CODEX_HOME/config.toml` が `project_doc_fallback_filenames` を非空にしていると、
+branch がその参照先(`REVIEW.md` など)を変えるだけで固定 pathspec を抜ける。
+Codex 側 SKILL.md が別途要求している effective parent config の確認を、
+Claude 経路でも行う:
+
+```bash
+user_config="${CODEX_HOME:-$HOME/.codex}/config.toml"
+[ -f "$user_config" ] && grep -nE '^[[:space:]]*"?project_doc_fallback_filenames"?[[:space:]]*=' "$user_config"
+```
+
+非空の設定が出たら、その参照先も保護対象に加えるか、**marker を書かない**。
+
 ### 前提チェック 0b: gate 自身が信頼済みコピーであること
 
 この skill が **レビュー対象 checkout の中を指す symlink から走っていないこと**
@@ -191,10 +213,11 @@ fanout の `make link` は post-work-review だけ symlink せずコピーする
 
 ```bash
 skill_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/post-work-review"
+case "$skill_dir" in /*) ;; *) skill_dir="$PWD/$skill_dir" ;; esac  # 相対値を絶対化
 
 # 1) path component に symlink があれば拒否
 p="$skill_dir"
-while [ -n "$p" ] && [ "$p" != "/" ]; do
+while [ -n "$p" ] && [ "$p" != "/" ] && [ "$p" != "." ]; do
   if [ -L "$p" ]; then echo "BLOCKED: symlink component: $p"; break; fi
   p="$(dirname "$p")"
 done
