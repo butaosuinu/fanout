@@ -270,14 +270,20 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   `/post-work-review` pass owns one `make check` run for that exact HEAD; do not
   duplicate it with separate full `make lint`, `make test`, or `make lint-web`
   runs. Then walk `docs/review-checklist.ja.md`; the same review findings recur.
-- `docs/review-scope.ja.md` is the canonical supported-environment matrix
-  (git 2.39+, SHA-1 only, non-sparse/non-split index, macOS/Linux single-user
-  local checkout, tmux 3.3+, authenticated `gh`) and it bounds automated review.
-  Triage every finding on one axis — is it reachable inside that matrix? Fix it
-  if yes, regardless of severity; otherwise reply with the rationale instead of
-  fixing silently or closing silently. Fixing out-of-matrix findings is the main
-  reason review rounds stop converging — each fix adds code the next round
-  enumerates. Do not re-trigger review with `@codex review`.
+- Automated review is bounded by a supported-environment matrix (git 2.39+,
+  SHA-1 only, non-sparse/non-split index, macOS/Linux single-user local
+  checkout, tmux 3.3+, authenticated `gh`) plus explicit non-goals.
+  `docs/review-scope.ja.md` is the human canon; review gates must resolve the
+  matrix from `AGENTS.md`'s `Automated PR Review Scope` at the PR base, because
+  only the bootstrap files are byte-verified — a branch that edits its own
+  scope doc could otherwise dismiss its own blocker findings. Triage every
+  finding before fixing: reachable inside the matrix and outside the non-goals?
+  Fix it if yes, regardless of severity; otherwise reply with the rationale
+  instead of fixing silently or closing silently, and never defer a reachable
+  defect to a follow-up issue on your own authority. Fixing out-of-matrix
+  findings is the main reason review rounds stop converging — each fix adds
+  code the next round enumerates. Do not re-trigger review with
+  `@codex review`.
 - `gh pr create` is gated by the repo's `PreToolUse(Bash)` hook registered in
   `.claude/settings.json`. Retrying a denied command with nothing changed
   never succeeds — fix the stated cause, then re-run it: complete

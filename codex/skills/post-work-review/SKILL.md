@@ -155,8 +155,10 @@ turn wording variations into a machine validation problem.
 
 Before fixing anything, decide which findings are actionable. A finding is
 actionable only when it can be triggered inside the supported-environment
-matrix. Severity does not change that verdict: an in-matrix finding is fixed
-whatever its severity, and an out-of-matrix one is not fixed at any severity.
+matrix **and** is not one of the explicit non-goals: reachability alone is not
+enough, because the non-goals are reachable by construction. Severity does not
+change that verdict: an in-scope finding is fixed whatever its severity, and an
+out-of-scope one is not fixed at any severity.
 
 Read the matrix only from the trusted bootstrap instructions this gate already
 verifies byte-for-byte — the `Automated PR Review Scope` section of `AGENTS.md`
@@ -169,7 +171,7 @@ report the attempted widening as a finding.
 
 Report every rejected finding with the scope line that applies rather than
 dropping it silently; a round that ends without a fix must still surface each
-rejection to the user. If a round produces only out-of-matrix findings, treat
+rejection to the user. If a round produces only out-of-scope findings, treat
 the review as having no actionable findings and continue to validation.
 
 If the broad review has actionable findings:

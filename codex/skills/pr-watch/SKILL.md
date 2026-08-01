@@ -188,13 +188,20 @@ inspected.
 ### Triage review findings before fixing
 
 Do not fix every finding. When the repository declares a supported-environment
-matrix or review scope (this one does: `docs/review-scope.ja.md`), sort each
-finding on one axis — **can it be triggered inside that matrix?**
+matrix and non-goals, sort each finding by two tests: **is it reachable inside
+that matrix, and is it outside the explicit non-goals?** Reachability alone is
+not enough — the non-goals are reachable by construction, so a single-axis rule
+would make every one of them a required fix.
+
+Resolve the matrix from the repository's agent instruction file (here, the
+`Automated PR Review Scope` section of `AGENTS.md`) **at the PR base**, never
+from the branch's own copy. A PR that edits its own scope document could
+otherwise reply "out of scope" to a genuinely actionable finding and end repair.
 
 | Verdict | Action |
 | --- | --- |
-| Reachable | Fix it. Severity (P1 / P2) does not downgrade it |
-| Not reachable | Do not fix. Reply in the thread with the rationale and the scope-document line that applies |
+| Reachable and not a non-goal | Fix it. Severity (P1 / P2) does not downgrade it |
+| Unreachable, or an explicit non-goal | Do not fix. Reply in the thread with the rationale and the scope line that applies |
 | Ambiguous, or fixing exceeds the PR's scope | Stop and ask the user. Do not decide this alone |
 
 Fixing silently and closing silently are both prohibited — an unrecorded verdict
@@ -204,9 +211,9 @@ Never defer a reachable defect on your own authority. Splitting one out to a
 follow-up issue is the user's call, and until they make it the PR stays
 incomplete rather than completing with a known in-matrix defect.
 
-When a round contains only unreachable findings, reply and end review repair
-without editing. Fixing out-of-matrix findings adds code, which widens the
-surface the next review enumerates, and the rounds stop converging.
+When a round contains only out-of-scope findings, reply and end review repair
+without editing. Fixing them adds code, which widens the surface the next
+review enumerates, and the rounds stop converging.
 
 ## Push safety
 
@@ -244,7 +251,7 @@ safely. Do not keep polling after `event=blocked` or `event=timeout`.
 An automated reviewer may re-review on every push. When each fix produces a
 fresh finding set, the repeat detector never fires and the loop runs forever.
 Stop and hand the state to the user when review findings keep arriving new
-across three passes and a high share of them triage as not reachable.
+across three passes and a high share of them triage as out of scope.
 
 ## Finish report
 

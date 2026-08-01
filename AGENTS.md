@@ -66,11 +66,14 @@ finding. This is the verified range, not a claim that older setups break.
 - macOS or Linux; a single-user local checkout (no network filesystems, no
   shared checkouts, no concurrent operation by other users)
 - tmux 3.3+ and an authenticated `gh`
+- building from a checkout: Go 1.26.5+, Node.js 24+, pnpm 11+
 
 Rules for a review finding:
 
-- State a concrete trigger reachable inside this matrix. A finding that only
-  fires outside it is out of scope regardless of severity.
+- State a concrete trigger that is reachable inside this matrix **and** is not
+  one of the explicit non-goals below. Reachability alone does not make a
+  finding actionable — the non-goals are reachable by construction. A finding
+  failing either test is out of scope regardless of severity.
 - Do not re-raise a thread the author declined with a stated rationale.
 - ADR and spike documents under `docs/` are decision records, not
   implementation specs. Do not review them for implementation-level
@@ -78,10 +81,15 @@ Rules for a review finding:
   `docs/architecture.ja.md`, `docs/review-scope.ja.md`, and the Behavior
   Boundaries in `AGENTS.md` / `CLAUDE.md` are binding contracts.
 
-Explicit non-goals: full mutual exclusion against worktree or branch operations
-made by other processes, and guaranteed resource reclamation across every
-crash-resume window. Falling back to a documented manual cleanup is the
-requirement there.
+Explicit non-goals — reachable inside the matrix, and still not findings:
+
+- Full mutual exclusion against worktree or branch operations made by another
+  process, including the same user in a second shell. `.fanout/state.json`'s
+  lock covers fanout's own launch path; races that close inside that path do
+  count.
+- Guaranteed resource reclamation across every crash-resume window. Falling
+  back to a documented manual cleanup is the requirement, not sealing every
+  window.
 
 This section is the authoritative copy for any review gate: it lives in the
 bootstrap instructions the gate verifies byte-for-byte. Do not read the matrix
@@ -280,12 +288,15 @@ touching only class-A packages can rely on AI review.
 - Walk `docs/review-checklist.ja.md` before creating a PR. The final
   post-work-review gate owns one `make check` run; do not duplicate it with
   separate full `make lint`, `make test`, or `make lint-web` runs.
-- Triage every review finding on one axis: can it be triggered inside the
-  supported matrix above? Fix it if yes (severity does not downgrade it);
-  otherwise reply in the thread with the rationale and which line of
-  `docs/review-scope.ja.md` applies. Never fix silently and never close
-  silently. Do not re-trigger a review with `@codex review` — each trigger
-  re-enumerates the whole changed surface.
+- Triage every review finding before fixing it: is it reachable inside the
+  supported matrix above and outside the explicit non-goals? Fix it if yes
+  (severity does not downgrade it); otherwise reply in the thread with the
+  rationale and which line of the scope section applies. Resolve the matrix
+  from this file at the PR base, never from the branch's own copy. Never fix
+  silently and never close silently, and never defer a reachable defect to a
+  follow-up issue on your own authority — that is the user's call. Do not
+  re-trigger a review with `@codex review`; each trigger re-enumerates the
+  whole changed surface.
 - `go:embed` snapshots whatever is on disk at build time: after editing
   `web/src`, build via `make build-go`, not raw `go build`, or the binary
   ships a stale bundle.
