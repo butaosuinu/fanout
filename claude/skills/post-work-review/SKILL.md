@@ -97,11 +97,19 @@ golden またはスナップショットを更新した場合は、diff を目�
 後段でこちらが base 側の scope で裁定し直しても、**出力されなかった blocker は
 復元できない**。
 
+対象は **全階層** の指示ファイル。root だけを列挙すると、`internal/ui/AGENTS.md`
+のような scoped instruction を追加してその配下の実装を変える branch が
+素通りする:
+
 ```bash
 base="$(git merge-base HEAD "origin/$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' || echo main)" 2>/dev/null || git merge-base HEAD main)"
 git diff --name-only "$base"...HEAD -- \
-  AGENTS.md AGENTS.override.md CLAUDE.md CLAUDE.override.md .codex .claude
+  ':(glob)**/AGENTS*.md' ':(glob)**/CLAUDE*.md' \
+  ':(glob)**/.codex/**'  ':(glob)**/.claude/**'
 ```
+
+この確認が読むのはファイル**名**だけなので、対象リポジトリの中身に影響されない。
+判定そのものは信頼できる。
 
 出力が空でなければ **Step 5 の marker を書かない**。Pass 2 は参考情報として
 回してよいが、完了報告で次を明示し、ゲートは閉じたままにする:

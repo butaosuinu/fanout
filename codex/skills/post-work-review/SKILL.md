@@ -153,12 +153,21 @@ turn wording variations into a machine validation problem.
 
 ## Fix and review again
 
-Before fixing anything, decide which findings are actionable. A finding is
-actionable only when it can be triggered inside the supported-environment
-matrix **and** is not one of the explicit non-goals: reachability alone is not
-enough, because the non-goals are reachable by construction. Severity does not
-change that verdict: an in-scope finding is fixed whatever its severity, and an
-out-of-scope one is not fixed at any severity.
+Before fixing anything, decide which findings are actionable.
+
+This skill is installed globally and runs against repositories that declare no
+review scope at all. Apply the scope triage below **only when the trusted
+bootstrap instructions actually contain an `Automated PR Review Scope` section**
+(fanout does). Without one, fall back to the normal rule: every blocker or major
+finding the reviewer reports is actionable. Never treat a missing matrix as an
+empty matrix — that would silently reject real findings or stall the gate.
+
+Where a matrix is declared, a finding is actionable only when it can be
+triggered inside the supported-environment matrix **and** is not one of the
+explicit non-goals: reachability alone is not enough, because the non-goals are
+reachable by construction. Severity does not change that verdict: an in-scope
+finding is fixed whatever its severity, and an out-of-scope one is not fixed at
+any severity.
 
 Read the matrix only from the trusted bootstrap instructions this gate already
 verifies byte-for-byte — the `Automated PR Review Scope` section of `AGENTS.md`
