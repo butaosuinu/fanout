@@ -44,6 +44,8 @@ approval / reaction 待ちで full thread、comment、diff、CI log を繰り返
 3. `gh pr view` で author、head repository、head/base branch を確認する。
 4. local branch と PR head が違う場合は push せず、正しい head を checkout する。
 5. 自分が作成し、push 権限を持つ topic branch だけを repair 対象にする。
+6. fresh compact snapshot の直後に review metadata probe を実行する。compact PR
+   fields だけで「コメントなし」または完了と判定しない。
 
 Target resolution、full review fetch、rebase、CI、review reply の具体的なコマンドは
 [repair playbook](references/repair-playbook.md) を必要なときだけ読む。
@@ -62,6 +64,9 @@ watcher="${CODEX_DIR:-${CODEX_HOME:-$HOME/.codex}}/skills/pr-watch/scripts/watch
 # Continue the same wait and emit only change, blocked, or timeout.
 PR_WATCH_CONTINUE=1 "$watcher" wait --repo OWNER/REPO --pr N --reaction-target issue
 
+# Probe comment/review presence and fixed-size metadata digests without bodies.
+"$watcher" review-probe --repo OWNER/REPO --pr N
+
 # Remove only this repo + PR state.
 "$watcher" reset --repo OWNER/REPO --pr N
 ```
@@ -79,18 +84,51 @@ Options and environment:
 
 The helper stores only digest/deadline state below
 `git rev-parse --git-path pr-watch-state`, scoped by GitHub repo and PR number.
-This also works when `.git` is a linked-worktree file.
+This also works when `.git` is a linked-worktree file. `review-probe` is
+stateless: it writes neither watcher state nor comment bodies.
 
 ### Event handling
 
 The helper emits one compact `key=value` line only for:
 
 - `event=change`: inspect the compact fields; repair, finish, or continue.
+- `event=review_probe`: apply the metadata gate below.
+- `event=change reason=review_probe_changed`: the PR changed during the probe;
+  rerun `review-probe` before making a completion decision.
 - `event=blocked`: report `reason` and stop until the prerequisite changes.
 - `event=timeout`: report the last compact status and stop.
 
-No output means the snapshot was unchanged. Do not re-read full PR context.
-For the same wait, call `wait` again with `PR_WATCH_CONTINUE=1`.
+No watcher output means the compact snapshot was unchanged. Do not re-read body
+content when the current review fingerprint was already audited. For the same
+wait, call `wait` again with `PR_WATCH_CONTINUE=1`.
+
+### Review metadata gate
+
+Run `review-probe` after a fresh snapshot, after a changed head or `updatedAt`,
+and immediately before completion. It first reads only `totalCount`; non-empty
+surfaces are then reduced to sorted metadata digests. Its output never contains
+`body`, `bodyText`, or `diffHunk`.
+
+For unresolved threads, the digest includes every reply's ID, author, and
+timestamps. The helper fully paginates that metadata so edits to intermediate
+replies cannot reuse an older audit.
+
+- If `top_comments=0`, `reviews=0`, and `unresolved_threads=0`, mark that exact
+  `head` + `fingerprint` current without fetching bodies.
+- On a fresh user invocation, treat every non-empty surface as unaudited. Fetch
+  bodies only for surfaces whose count is non-zero.
+- During the same foreground run, remember each audited surface digest. Fetch
+  bodies only when its digest changes and its count remains non-zero. Do not
+  persist body or audit state across a fresh invocation.
+- For every fetched body surface, validate a stable `totalCount`, a complete
+  aggregate node count, non-empty unique node IDs, and the exact metadata fields
+  used by `review-probe`. Accept the bodies only when the body-derived surface
+  digest matches the digest that selected the fetch. For unresolved threads,
+  validate both the all-thread connection and every full comment connection.
+- After that validation, rerun `review-probe`. Accept the audit only when `head`
+  and `fingerprint` still match the values that selected those bodies.
+- A blocked, partial, null, or internally changing probe is never evidence for
+  zero actionable comments.
 
 Enter the repair loop on:
 
@@ -99,13 +137,13 @@ Enter the repair loop on:
 - `checks_fail>0` or `checks_cancel>0`
 - `review=CHANGES_REQUESTED`
 - a changed head SHA
-- an ambiguous `updatedAt` change that compact metadata cannot classify
+- a changed `updatedAt` where any non-empty surface digest is not already audited
 - CI settling after this skill pushed, when final verification is still due
 
 Stay in the cheap loop for pending CI, `mergeable=UNKNOWN`, unchanged status,
 human approval, configured `:+1:`, or a review request with no known actionable
-comment. For an ambiguous update, inspect latest event/comment metadata first;
-fetch bodies only when it likely contains actionable work.
+comment. Use `review-probe` to classify a review-related update; never fetch body
+content merely because compact PR metadata changed.
 
 The helper polls only GitHub-required checks; optional checks do not enter its
 digest or CI repair triggers. `no required checks reported` is a known empty
@@ -124,8 +162,9 @@ ready.
 Before each repair step, tell the user in one sentence what will be checked or
 changed. Read only the relevant part of the [repair playbook](references/repair-playbook.md).
 
-1. Refresh PR metadata, checks, unresolved threads, latest reviews, and paginated
-   top-level comments as needed.
+1. Refresh PR metadata and checks, then run `review-probe`. Fetch unresolved
+   thread, latest-review, or paginated top-level-comment bodies only for a
+   non-empty surface whose digest is not current.
 2. Reconfirm the PR head branch, author, push remote, and saved remote head SHA.
 3. Handle conflict/base drift, failing CI, then actionable review feedback.
 4. Run focused tests while editing. Do not weaken tests, required checks, or
@@ -138,8 +177,8 @@ changed. Read only the relevant part of the [repair playbook](references/repair-
    authorized history rewrite.
 6. Reply to review feedback only after the fix is pushed. In this repository,
    write automatic review comments in Japanese.
-7. After any push, discard old logs/thread state and return to a fresh cheap
-   snapshot on the new head.
+7. After any push, discard old logs/thread classification and return to a fresh
+   snapshot plus `review-probe` on the new head.
 
 Repair ownership includes safe fixes that are clearly implied by CI or review.
 Stop and ask for user judgment when behavior is ambiguous, the required access is
@@ -169,7 +208,7 @@ inspected.
 Default limits:
 
 - 3 full repair passes
-- 2 full comment/thread refreshes without a new head commit
+- 2 full review/comment/thread body refreshes for the same metadata fingerprint
 - 1 CI log fetch per failing check name and head SHA
 - 3 ambiguous-update full inspections
 - 60 minutes of foreground watch

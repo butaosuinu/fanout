@@ -161,6 +161,82 @@ func TestCodexPostWorkReviewSkillContract(t *testing.T) {
 	}
 }
 
+func TestCodexPRWatchSkillContract(t *testing.T) {
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatalf("repoRoot() = %v, want nil", err)
+	}
+	skillDir := filepath.Join(root, "codex", "skills", "pr-watch")
+	skill := mustReadRepoFile(t, skillDir, "SKILL.md")
+	for _, required := range []string{
+		"`review-probe`",
+		"Review metadata gate",
+		"first reads only `totalCount`",
+		"If `top_comments=0`, `reviews=0`, and `unresolved_threads=0`",
+		"whose count is non-zero",
+		"persist body or audit state across a fresh invocation",
+		"fully paginates that metadata",
+		"body-derived surface",
+		"non-empty unique node IDs",
+		"rerun `review-probe`",
+		"blocked, partial, null, or internally changing probe",
+	} {
+		if !bytes.Contains(skill, []byte(required)) {
+			t.Errorf("pr-watch/SKILL.md missing contract %q", required)
+		}
+	}
+
+	script := mustReadRepoFile(t, skillDir, "scripts", "watch-pr.sh")
+	for _, required := range []string{
+		"snapshot|wait|reset|review-probe",
+		"comments(first:1){totalCount}",
+		"latestReviews(first:1){totalCount}",
+		"reviewThreads(first:1){totalCount}",
+		"comments(first:100,after:$endCursor)",
+		"latestReviews(first:100,after:$endCursor)",
+		"reviewThreads(first:100,after:$endCursor)",
+		"threadComments:comments(first:1){totalCount}",
+		"query($threadId:ID!,$endCursor:String)",
+		"node(id:$threadId)",
+		"reason=review_probe_changed",
+		"event=review_probe",
+	} {
+		if !bytes.Contains(script, []byte(required)) {
+			t.Errorf("pr-watch/scripts/watch-pr.sh missing contract %q", required)
+		}
+	}
+	for _, forbidden := range []string{"bodyText", "diffHunk"} {
+		if bytes.Contains(script, []byte(forbidden)) {
+			t.Errorf("pr-watch/scripts/watch-pr.sh includes body field %q", forbidden)
+		}
+	}
+	if bytes.Contains(script, []byte("databaseId")) {
+		t.Error("pr-watch/scripts/watch-pr.sh uses legacy databaseId instead of global Node IDs")
+	}
+
+	playbook := mustReadRepoFile(t, skillDir, "references", "repair-playbook.md")
+	for _, required := range []string{
+		"Run the metadata-only gate before fetching body content",
+		"latestReviews(first:100,after:$endCursor)",
+		"comments(first:100,after:$endCursor)",
+		"nodes{id author{login} state body",
+		"nodes{id author{login} body createdAt",
+		"aggregate node count equal to `totalCount`",
+		"body-derived surface",
+		"validate the complete all-thread connection",
+		"Then rerun `review-probe`",
+	} {
+		if !bytes.Contains(playbook, []byte(required)) {
+			t.Errorf("pr-watch/references/repair-playbook.md missing contract %q", required)
+		}
+	}
+
+	metadata := mustReadRepoFile(t, skillDir, "agents", "openai.yaml")
+	if !bytes.Contains(metadata, []byte("probe review metadata first")) {
+		t.Error("pr-watch/agents/openai.yaml does not require a metadata-first review probe")
+	}
+}
+
 func mustReadRepoFile(t *testing.T, base string, elem ...string) []byte {
 	t.Helper()
 	file := filepath.Join(append([]string{base}, elem...)...)

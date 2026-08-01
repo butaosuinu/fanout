@@ -6,7 +6,7 @@ set -eu
 
 usage() {
   cat >&2 <<'EOF'
-usage: watch-pr.sh <snapshot|wait|reset> --repo OWNER/REPO --pr N [--reaction-target TARGET ...]
+usage: watch-pr.sh <snapshot|wait|reset|review-probe> --repo OWNER/REPO --pr N [--reaction-target TARGET ...]
 
 TARGET is one of:
   issue
@@ -18,7 +18,7 @@ EOF
 
 command_name="${1:-}"
 case "$command_name" in
-  snapshot|wait|reset) shift ;;
+  snapshot|wait|reset|review-probe) shift ;;
   *) usage ;;
 esac
 
@@ -76,6 +76,9 @@ esac
 case "$pr" in
   ''|*[!0-9]*|0) usage ;;
 esac
+if [ "$command_name" = review-probe ] && [ -n "$reaction_targets" ]; then
+  usage
+fi
 
 emit_blocked() {
   reason="$1"
@@ -100,6 +103,363 @@ if [ "$command_name" = reset ]; then
 fi
 
 command -v gh >/dev/null 2>&1 || emit_blocked gh_missing 127
+
+if [ "$command_name" = review-probe ]; then
+  probe_tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/pr-watch-probe.XXXXXX")" ||
+    emit_blocked temp_dir_failed 1
+  # Invoked indirectly by the EXIT trap.
+  # shellcheck disable=SC2317,SC2329
+  probe_cleanup() {
+    rm -f "$probe_tmp_dir/counts.before" "$probe_tmp_dir/counts.after" \
+      "$probe_tmp_dir/comments.raw" "$probe_tmp_dir/comments.unsorted" \
+      "$probe_tmp_dir/comments.sorted" "$probe_tmp_dir/reviews.raw" \
+      "$probe_tmp_dir/reviews.unsorted" "$probe_tmp_dir/reviews.sorted" \
+      "$probe_tmp_dir/threads.raw" "$probe_tmp_dir/threads.unsorted" \
+      "$probe_tmp_dir/threads.all" "$probe_tmp_dir/threads.sorted" \
+      "$probe_tmp_dir/thread-comments.raw" "$probe_tmp_dir/thread-comments.expected" \
+      "$probe_tmp_dir/thread-comments.unsorted" "$probe_tmp_dir/thread-comments.sorted" \
+      "$probe_tmp_dir/threads.fingerprint" \
+      "$probe_tmp_dir/fingerprint"
+    rmdir "$probe_tmp_dir" 2>/dev/null || :
+  }
+  trap probe_cleanup EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  fetch_probe_counts() {
+    probe_counts_out="$1"
+    set +e
+    # GraphQL and jq variables must remain literal for gh.
+    # shellcheck disable=SC2016
+    gh api graphql -f query='
+      query($owner:String!,$repo:String!,$num:Int!){
+        repository(owner:$owner,name:$repo){
+          pullRequest(number:$num){
+            headRefOid
+            updatedAt
+            comments(first:1){totalCount}
+            latestReviews(first:1){totalCount}
+            reviewThreads(first:1){totalCount}
+          }
+        }
+      }' -F owner="$repo_owner" -F repo="$repo_name" -F num="$pr" \
+      --jq '.data.repository.pullRequest | [.headRefOid,.updatedAt,.comments.totalCount,.latestReviews.totalCount,.reviewThreads.totalCount] | @tsv' \
+      >"$probe_counts_out" 2>/dev/null
+    probe_counts_status=$?
+    set -e
+    [ "$probe_counts_status" -eq 0 ] || emit_blocked review_probe_counts_failed "$probe_counts_status"
+    awk -F '\t' '
+      NR == 1 && NF == 5 && $1 != "" && $2 != "" &&
+        $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ { next }
+      { invalid = 1 }
+      END { if (NR != 1 || invalid) exit 1 }
+    ' "$probe_counts_out" || emit_blocked review_probe_counts_invalid 1
+  }
+
+  normalize_probe_connection() {
+    probe_raw="$1"
+    probe_unsorted="$2"
+    probe_sorted="$3"
+    awk -F '\t' '
+      $1 == "total" && $2 ~ /^[0-9]+$/ {
+        if (!saw_total) {
+          total = $2
+          saw_total = 1
+        } else if ($2 != total) {
+          invalid = 1
+        }
+        next
+      }
+      $1 == "node" {
+        if (NF < 3 || $2 == "" || seen_node[$2]) {
+          invalid = 1
+          next
+        }
+        seen_node[$2] = 1
+        sub(/^node\t/, "")
+        print
+        nodes++
+        next
+      }
+      { invalid = 1 }
+      END {
+        if (!saw_total || invalid || nodes + 0 != total + 0) exit 1
+      }
+    ' "$probe_raw" >"$probe_unsorted" || emit_blocked review_probe_incomplete 1
+    LC_ALL=C sort "$probe_unsorted" >"$probe_sorted" || emit_blocked review_probe_sort_failed 1
+  }
+
+  validate_probe_comments() {
+    awk -F '\t' '
+      NF != 4 || $1 == "" || $3 == "" || $4 == "" { invalid = 1 }
+      END { if (invalid) exit 1 }
+    ' "$1" || emit_blocked review_probe_incomplete 1
+  }
+
+  validate_probe_reviews() {
+    awk -F '\t' '
+      NF != 6 || $1 == "" || $3 == "" || ($3 != "PENDING" && $4 == "") || $5 == "" {
+        invalid = 1
+      }
+      END { if (invalid) exit 1 }
+    ' "$1" || emit_blocked review_probe_incomplete 1
+  }
+
+  normalize_probe_thread_comments() {
+    probe_expected="$1"
+    probe_raw="$2"
+    probe_unsorted="$3"
+    probe_sorted="$4"
+    awk -F '\t' '
+      NR == FNR {
+        if (NF != 2 || $1 == "" || $2 !~ /^[0-9]+$/ || $1 in expected) {
+          invalid = 1
+        } else {
+          expected[$1] = $2
+        }
+        next
+      }
+      $1 == "total" && NF == 3 && $2 in expected && $3 ~ /^[0-9]+$/ {
+        if (!saw_total[$2]) {
+          total[$2] = $3
+          saw_total[$2] = 1
+        } else if ($3 != total[$2]) {
+          invalid = 1
+        }
+        next
+      }
+      $1 == "node" && NF == 6 && $2 in expected && $3 != "" && $5 != "" && $6 != "" {
+        key = $2 SUBSEP $3
+        if (seen_node[key]) invalid = 1
+        seen_node[key] = 1
+        nodes[$2]++
+        sub(/^node\t/, "")
+        print
+        next
+      }
+      { invalid = 1 }
+      END {
+        for (id in expected) {
+          if (!saw_total[id] || total[id] != expected[id] || nodes[id] + 0 != total[id] + 0) {
+            invalid = 1
+          }
+        }
+        if (invalid) exit 1
+      }
+    ' "$probe_expected" "$probe_raw" >"$probe_unsorted" ||
+      emit_blocked review_probe_thread_comments_incomplete 1
+    LC_ALL=C sort "$probe_unsorted" >"$probe_sorted" || emit_blocked review_probe_sort_failed 1
+  }
+
+  fetch_probe_comments() {
+    set +e
+    # GraphQL and jq variables must remain literal for gh.
+    # shellcheck disable=SC2016
+    gh api graphql --paginate -f query='
+      query($owner:String!,$repo:String!,$num:Int!,$endCursor:String){
+        repository(owner:$owner,name:$repo){
+          pullRequest(number:$num){
+            comments(first:100,after:$endCursor){
+              totalCount
+              pageInfo{hasNextPage endCursor}
+              nodes{id author{login} createdAt updatedAt}
+            }
+          }
+        }
+      }' -F owner="$repo_owner" -F repo="$repo_name" -F num="$pr" \
+      --jq '.data.repository.pullRequest.comments as $c | (["total",($c.totalCount|tostring)] | @tsv), ($c.nodes[] | ["node",.id,(.author.login // ""),.createdAt,.updatedAt] | @tsv)' \
+      >"$probe_tmp_dir/comments.raw" 2>/dev/null
+    probe_comments_status=$?
+    set -e
+    [ "$probe_comments_status" -eq 0 ] || emit_blocked review_probe_comments_failed "$probe_comments_status"
+    normalize_probe_connection "$probe_tmp_dir/comments.raw" \
+      "$probe_tmp_dir/comments.unsorted" "$probe_tmp_dir/comments.sorted"
+    validate_probe_comments "$probe_tmp_dir/comments.sorted"
+  }
+
+  fetch_probe_reviews() {
+    set +e
+    # GraphQL and jq variables must remain literal for gh.
+    # shellcheck disable=SC2016
+    gh api graphql --paginate -f query='
+      query($owner:String!,$repo:String!,$num:Int!,$endCursor:String){
+        repository(owner:$owner,name:$repo){
+          pullRequest(number:$num){
+            latestReviews(first:100,after:$endCursor){
+              totalCount
+              pageInfo{hasNextPage endCursor}
+              nodes{id author{login} state submittedAt updatedAt commit{oid}}
+            }
+          }
+        }
+      }' -F owner="$repo_owner" -F repo="$repo_name" -F num="$pr" \
+      --jq '.data.repository.pullRequest.latestReviews as $c | (["total",($c.totalCount|tostring)] | @tsv), ($c.nodes[] | ["node",.id,(.author.login // ""),.state,(.submittedAt // ""),.updatedAt,(.commit.oid // "")] | @tsv)' \
+      >"$probe_tmp_dir/reviews.raw" 2>/dev/null
+    probe_reviews_status=$?
+    set -e
+    [ "$probe_reviews_status" -eq 0 ] || emit_blocked review_probe_reviews_failed "$probe_reviews_status"
+    normalize_probe_connection "$probe_tmp_dir/reviews.raw" \
+      "$probe_tmp_dir/reviews.unsorted" "$probe_tmp_dir/reviews.sorted"
+    validate_probe_reviews "$probe_tmp_dir/reviews.sorted"
+  }
+
+  fetch_probe_thread_comments() {
+    : >"$probe_tmp_dir/thread-comments.raw"
+    awk -F '\t' '{ print $1 "\t" $7 }' "$probe_tmp_dir/threads.sorted" \
+      >"$probe_tmp_dir/thread-comments.expected" ||
+      emit_blocked review_probe_thread_comments_invalid 1
+    if [ ! -s "$probe_tmp_dir/thread-comments.expected" ]; then
+      : >"$probe_tmp_dir/thread-comments.sorted"
+      return
+    fi
+
+    while IFS="$probe_tab" read -r probe_thread_id probe_thread_comments_total; do
+      [ -n "$probe_thread_id" ] || emit_blocked review_probe_thread_comments_invalid 1
+      set +e
+      # GraphQL and jq variables must remain literal for gh.
+      # shellcheck disable=SC2016
+      gh api graphql --paginate -f query='
+        query($threadId:ID!,$endCursor:String){
+          node(id:$threadId){
+            ... on PullRequestReviewThread{
+              id
+              comments(first:100,after:$endCursor){
+                totalCount
+                pageInfo{hasNextPage endCursor}
+                nodes{id author{login} createdAt updatedAt}
+              }
+            }
+          }
+        }' -F threadId="$probe_thread_id" \
+        --jq '.data.node as $t | $t.comments as $c | (["total",$t.id,($c.totalCount|tostring)] | @tsv), ($c.nodes[] | ["node",$t.id,.id,(.author.login // ""),.createdAt,.updatedAt] | @tsv)' \
+        >>"$probe_tmp_dir/thread-comments.raw" 2>/dev/null
+      probe_thread_comments_status=$?
+      set -e
+      [ "$probe_thread_comments_status" -eq 0 ] ||
+        emit_blocked review_probe_thread_comments_failed "$probe_thread_comments_status"
+      [ "$probe_thread_comments_total" -ge 0 ] ||
+        emit_blocked review_probe_thread_comments_invalid 1
+    done <"$probe_tmp_dir/thread-comments.expected"
+
+    normalize_probe_thread_comments "$probe_tmp_dir/thread-comments.expected" \
+      "$probe_tmp_dir/thread-comments.raw" "$probe_tmp_dir/thread-comments.unsorted" \
+      "$probe_tmp_dir/thread-comments.sorted"
+  }
+
+  fetch_probe_threads() {
+    set +e
+    # GraphQL and jq variables must remain literal for gh.
+    # shellcheck disable=SC2016
+    gh api graphql --paginate -f query='
+      query($owner:String!,$repo:String!,$num:Int!,$endCursor:String){
+        repository(owner:$owner,name:$repo){
+          pullRequest(number:$num){
+            reviewThreads(first:100,after:$endCursor){
+              totalCount
+              pageInfo{hasNextPage endCursor}
+              nodes{
+                id isResolved path line originalLine diffSide
+                threadComments:comments(first:1){totalCount}
+              }
+            }
+          }
+        }
+      }' -F owner="$repo_owner" -F repo="$repo_name" -F num="$pr" \
+      --jq '.data.repository.pullRequest.reviewThreads as $c | (["total",($c.totalCount|tostring)] | @tsv), ($c.nodes[] | ["node",.id,(.isResolved|tostring),.path,(.line // ""),(.originalLine // ""),(.diffSide // ""),(.threadComments.totalCount|tostring)] | @tsv)' \
+      >"$probe_tmp_dir/threads.raw" 2>/dev/null
+    probe_threads_status=$?
+    set -e
+    [ "$probe_threads_status" -eq 0 ] || emit_blocked review_probe_threads_failed "$probe_threads_status"
+    normalize_probe_connection "$probe_tmp_dir/threads.raw" \
+      "$probe_tmp_dir/threads.unsorted" "$probe_tmp_dir/threads.all"
+    awk -F '\t' '
+      NF != 7 || $1 == "" || ($2 != "true" && $2 != "false") || $3 == "" ||
+        $7 !~ /^[0-9]+$/ {
+        invalid = 1
+        next
+      }
+      $2 == "false" { print }
+      END { if (invalid) exit 1 }
+    ' "$probe_tmp_dir/threads.all" >"$probe_tmp_dir/threads.unsorted" ||
+      emit_blocked review_probe_threads_invalid 1
+    LC_ALL=C sort "$probe_tmp_dir/threads.unsorted" \
+      >"$probe_tmp_dir/threads.sorted" || emit_blocked review_probe_sort_failed 1
+    fetch_probe_thread_comments
+  }
+
+  fetch_probe_counts "$probe_tmp_dir/counts.before"
+  probe_tab="$(printf '\t')"
+  IFS="$probe_tab" read -r probe_head probe_updated probe_comments_total probe_reviews_total \
+    probe_threads_total <"$probe_tmp_dir/counts.before" || emit_blocked review_probe_counts_invalid 1
+
+  : >"$probe_tmp_dir/comments.sorted"
+  : >"$probe_tmp_dir/reviews.sorted"
+  : >"$probe_tmp_dir/threads.all"
+  : >"$probe_tmp_dir/threads.sorted"
+  : >"$probe_tmp_dir/thread-comments.sorted"
+  if [ "$probe_comments_total" -gt 0 ]; then
+    fetch_probe_comments
+  fi
+  if [ "$probe_reviews_total" -gt 0 ]; then
+    fetch_probe_reviews
+  fi
+  if [ "$probe_threads_total" -gt 0 ]; then
+    fetch_probe_threads
+  fi
+
+  fetch_probe_counts "$probe_tmp_dir/counts.after"
+  probe_counts_before="$(sed -n '1p' "$probe_tmp_dir/counts.before")"
+  probe_counts_after="$(sed -n '1p' "$probe_tmp_dir/counts.after")"
+  if [ "$probe_counts_before" != "$probe_counts_after" ]; then
+    printf 'event=change repo=%s pr=%s reason=review_probe_changed\n' "$repo" "$pr"
+    exit 0
+  fi
+
+  probe_comments_count="$(awk 'END { print NR + 0 }' "$probe_tmp_dir/comments.sorted")"
+  probe_reviews_count="$(awk 'END { print NR + 0 }' "$probe_tmp_dir/reviews.sorted")"
+  probe_all_threads_count="$(awk 'END { print NR + 0 }' "$probe_tmp_dir/threads.all")"
+  probe_threads_count="$(awk 'END { print NR + 0 }' "$probe_tmp_dir/threads.sorted")"
+  [ "$probe_comments_count" -eq "$probe_comments_total" ] || {
+    printf 'event=change repo=%s pr=%s reason=review_probe_changed\n' "$repo" "$pr"
+    exit 0
+  }
+  [ "$probe_reviews_count" -eq "$probe_reviews_total" ] || {
+    printf 'event=change repo=%s pr=%s reason=review_probe_changed\n' "$repo" "$pr"
+    exit 0
+  }
+  [ "$probe_all_threads_count" -eq "$probe_threads_total" ] || {
+    printf 'event=change repo=%s pr=%s reason=review_probe_changed\n' "$repo" "$pr"
+    exit 0
+  }
+
+  {
+    awk '{ print "thread\t" $0 }' "$probe_tmp_dir/threads.sorted"
+    awk '{ print "comment\t" $0 }' "$probe_tmp_dir/thread-comments.sorted"
+  } >"$probe_tmp_dir/threads.fingerprint" || emit_blocked review_probe_digest_failed 1
+
+  probe_comments_digest="$(git hash-object "$probe_tmp_dir/comments.sorted" 2>/dev/null)" ||
+    emit_blocked review_probe_digest_failed 1
+  probe_reviews_digest="$(git hash-object "$probe_tmp_dir/reviews.sorted" 2>/dev/null)" ||
+    emit_blocked review_probe_digest_failed 1
+  probe_threads_digest="$(git hash-object "$probe_tmp_dir/threads.fingerprint" 2>/dev/null)" ||
+    emit_blocked review_probe_digest_failed 1
+  {
+    printf 'head\t%s\n' "$probe_head"
+    printf 'updated\t%s\n' "$probe_updated"
+    printf 'top_comments\t%s\t%s\n' "$probe_comments_count" "$probe_comments_digest"
+    printf 'reviews\t%s\t%s\n' "$probe_reviews_count" "$probe_reviews_digest"
+    printf 'unresolved_threads\t%s\t%s\n' "$probe_threads_count" "$probe_threads_digest"
+  } >"$probe_tmp_dir/fingerprint" || emit_blocked review_probe_digest_failed 1
+  probe_fingerprint="$(git hash-object "$probe_tmp_dir/fingerprint" 2>/dev/null)" ||
+    emit_blocked review_probe_digest_failed 1
+
+  printf 'event=review_probe repo=%s pr=%s head=%s updated=%s top_comments=%s top_digest=%s reviews=%s reviews_digest=%s unresolved_threads=%s threads_digest=%s fingerprint=%s\n' \
+    "$repo" "$pr" "$probe_head" "$probe_updated" "$probe_comments_count" \
+    "$probe_comments_digest" "$probe_reviews_count" "$probe_reviews_digest" \
+    "$probe_threads_count" "$probe_threads_digest" "$probe_fingerprint"
+  exit 0
+fi
 
 case "${PR_WATCH_INTERVAL:-45}" in
   ''|*[!0-9]*) emit_blocked invalid_interval 2 ;;
