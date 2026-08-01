@@ -195,10 +195,14 @@ finding on one axis — **can it be triggered inside that matrix?**
 | --- | --- |
 | Reachable | Fix it. Severity (P1 / P2) does not downgrade it |
 | Not reachable | Do not fix. Reply in the thread with the rationale and the scope-document line that applies |
-| Ambiguous, or fixing exceeds the PR's scope | File a follow-up issue, put the number in the thread, leave it unfixed here |
+| Ambiguous, or fixing exceeds the PR's scope | Stop and ask the user. Do not decide this alone |
 
 Fixing silently and closing silently are both prohibited — an unrecorded verdict
 comes back as the same finding next round.
+
+Never defer a reachable defect on your own authority. Splitting one out to a
+follow-up issue is the user's call, and until they make it the PR stays
+incomplete rather than completing with a known in-matrix defect.
 
 When a round contains only unreachable findings, reply and end review repair
 without editing. Fixing out-of-matrix findings adds code, which widens the

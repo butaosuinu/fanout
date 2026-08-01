@@ -83,8 +83,12 @@ made by other processes, and guaranteed resource reclamation across every
 crash-resume window. Falling back to a documented manual cleanup is the
 requirement there.
 
-Canonical reference, including the measured baseline this scope was derived
-from: `docs/review-scope.ja.md`.
+This section is the authoritative copy for any review gate: it lives in the
+bootstrap instructions the gate verifies byte-for-byte. Do not read the matrix
+from `docs/review-scope.ja.md`, `CLAUDE.md`, or the diff, which the guard does
+not cover — a branch could otherwise widen its own scope and dismiss its own
+blocker findings. `docs/review-scope.ja.md` holds the same matrix plus the
+measured baseline it was derived from, for humans; keep the two in sync.
 
 ## Working With fanout
 
