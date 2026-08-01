@@ -24,6 +24,7 @@ type fakeHerdrRealizeRuntime struct {
 
 	routeDeadline      time.Time
 	routeHasDeadline   bool
+	routeCalls         int
 	observeDeadline    time.Time
 	observeHasDeadline bool
 	policyErr          error
@@ -35,6 +36,7 @@ type fakeHerdrRealizeRuntime struct {
 func (f *fakeHerdrRealizeRuntime) WorktreeRoute(
 	ctx context.Context,
 ) (herdrrun.OwnedWorktreeRoute, error) {
+	f.routeCalls++
 	f.routeDeadline, f.routeHasDeadline = ctx.Deadline()
 	return f.route, f.routeErr
 }
@@ -283,6 +285,50 @@ func TestRealizeHerdrCoordinatorBoundsExpiredRouteClassification(t *testing.T) {
 		runtime.routeDeadline,
 		runtime.routeHasDeadline,
 	)
+}
+
+func TestRealizeHerdrWorktreeUsesSavedRouteDeadline(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	req := testHerdrWorktreeRequest(repo, "saved-route-deadline", 438)
+	realized, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("initial realization error = %v", err)
+	}
+	locked, err := state.LockHerdrControl(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := locked.FindIntent(realized.Intent.ID)
+	if !found {
+		t.Fatalf("intent %s not found", realized.Intent.ID)
+	}
+	intent.ExpiresUnixMS = hooks.Now().Add(2 * time.Second).UnixMilli()
+	locked.UpsertIntent(intent)
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+
+	_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("saved-deadline retry error = %v", err)
+	}
+	remaining := time.Until(runtime.routeDeadline)
+	if !runtime.routeHasDeadline || remaining <= 0 || remaining > 2*time.Second {
+		t.Fatalf(
+			"saved route deadline = %v, %t (remaining %v)",
+			runtime.routeDeadline,
+			runtime.routeHasDeadline,
+			remaining,
+		)
+	}
 }
 
 func TestRealizeHerdrRollsBackMutationNotIssued(t *testing.T) {
@@ -871,6 +917,7 @@ func TestRealizeHerdrWorktreeRollsBackExpiredPlannedIntent(t *testing.T) {
 		t.Fatal(unlockErr)
 	}
 	runtime.observeErr = nil
+	routeCallsBefore := runtime.routeCalls
 
 	if _, realizeErr := realizeHerdrWorktree(
 		context.Background(),
@@ -882,6 +929,9 @@ func TestRealizeHerdrWorktreeRollsBackExpiredPlannedIntent(t *testing.T) {
 		errHerdrIntentDeadlineExpired,
 	) {
 		t.Fatalf("expired planned error = %v", realizeErr)
+	}
+	if runtime.routeCalls != routeCallsBefore {
+		t.Fatal("expired planned retry validated the Herdr route before rollback")
 	}
 	control, err := state.LoadHerdrControl(repo)
 	if err != nil {
@@ -1275,7 +1325,13 @@ func TestRealizeHerdrResumesPlannedChildAtSavedOwnerAcrossLinkedWorktrees(t *tes
 		)
 	}
 	childMutation := runtime.mutations[1]
-	if childMutation.ProjectRoot != repo || childMutation.Path != savedReq.WorktreePath {
+	savedSource, sourceErr := worktree.ResolveHerdrRepoIdentity(repo)
+	if sourceErr != nil {
+		t.Fatal(sourceErr)
+	}
+	if childMutation.ProjectRoot != repo || childMutation.SourceRoot != savedSource.RepoRoot ||
+		childMutation.SourceRepoRoot != savedSource.RepoRoot ||
+		childMutation.Path != savedReq.WorktreePath {
 		t.Fatalf("linked planned child mutation = %+v", childMutation)
 	}
 }

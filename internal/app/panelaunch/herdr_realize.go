@@ -197,7 +197,11 @@ func RealizeHerdrCoordinator(
 		operationNow,
 	)
 	if routeContextErr != nil {
-		return result, routeContextErr
+		if errors.Is(routeContextErr, errHerdrIntentDeadlineExpired) &&
+			intent.Status == state.HerdrIntentPlanned {
+			return result, rollbackUnissuedHerdrCoordinator(locked, intent, routeContextErr)
+		}
+		return result, markHerdrIntentManual(locked, intent, routeContextErr)
 	}
 	defer routeCancel()
 	if routeErr := verifyHerdrRealizeRoute(
@@ -440,7 +444,11 @@ func RealizeHerdrWorktree(
 		operationNow,
 	)
 	if routeContextErr != nil {
-		return result, routeContextErr
+		if errors.Is(routeContextErr, errHerdrIntentDeadlineExpired) &&
+			intent.Status == state.HerdrIntentPlanned {
+			return result, rollbackUnissuedHerdrWorktree(locked, req, intent, routeContextErr)
+		}
+		return result, markHerdrIntentManual(locked, intent, routeContextErr)
 	}
 	defer routeCancel()
 	if routeErr := verifyHerdrRealizeRoute(
@@ -485,11 +493,13 @@ func RealizeHerdrWorktree(
 		); savedErr != nil {
 			return result, savedErr
 		}
-		savedProjectRoot, savedRootErr := savedHerdrWorktreeProjectRoot(intent, source)
+		savedProjectRoot, savedSource, savedRootErr := savedHerdrWorktreeSource(intent, source)
 		if savedRootErr != nil {
 			return result, savedRootErr
 		}
 		req.ProjectRoot = savedProjectRoot
+		req.SourceRoot = savedProjectRoot
+		source = savedSource
 	} else {
 		if excludeErr := worktree.EnsureLocalExclude(req.SourceRoot); excludeErr != nil {
 			return result, excludeErr
@@ -670,8 +680,7 @@ func herdrRealizeRouteContext(
 	found bool,
 	now time.Time,
 ) (context.Context, context.CancelFunc, error) {
-	if found && !now.Before(time.UnixMilli(intent.ExpiresUnixMS)) &&
-		(intent.Status == state.HerdrIntentIssued || intent.Status == state.HerdrIntentRealized) {
+	if found {
 		return herdrIntentContext(parent, intent, now)
 	}
 	ctx, cancel := context.WithCancel(parent)
@@ -1685,27 +1694,27 @@ func savedHerdrWorktreePathValid(ownerProjectRoot, savedSlug, savedPath string) 
 	return err == nil && filepath.Clean(savedRoot) == filepath.Clean(ownerProjectRoot)
 }
 
-func savedHerdrWorktreeProjectRoot(
+func savedHerdrWorktreeSource(
 	intent state.HerdrIntent,
 	source worktree.HerdrRepoIdentity,
-) (string, error) {
+) (string, worktree.HerdrRepoIdentity, error) {
 	savedPath := filepath.Clean(intent.WorktreePath)
 	worktreesDir := filepath.Dir(savedPath)
 	fanoutDir := filepath.Dir(worktreesDir)
 	projectRoot := filepath.Dir(fanoutDir)
 	if !filepath.IsAbs(savedPath) || filepath.Base(savedPath) != intent.Slug ||
 		filepath.Base(worktreesDir) != "worktrees" || filepath.Base(fanoutDir) != ".fanout" {
-		return "", fmt.Errorf("saved Herdr worktree path has no owner project root")
+		return "", worktree.HerdrRepoIdentity{}, fmt.Errorf("saved Herdr worktree path has no owner project root")
 	}
 	identity, err := worktree.ResolveHerdrRepoIdentity(projectRoot)
 	if err != nil {
-		return "", fmt.Errorf("resolve saved Herdr worktree owner: %w", err)
+		return "", worktree.HerdrRepoIdentity{}, fmt.Errorf("resolve saved Herdr worktree owner: %w", err)
 	}
 	if identity.RepoKey != source.RepoKey ||
 		(intent.OwnerProjectRoot != "" && identity.RepoRoot != intent.OwnerProjectRoot) {
-		return "", fmt.Errorf("saved Herdr worktree owner belongs to a different repository")
+		return "", worktree.HerdrRepoIdentity{}, fmt.Errorf("saved Herdr worktree owner belongs to a different repository")
 	}
-	return projectRoot, nil
+	return projectRoot, identity, nil
 }
 
 func savedHerdrWorktreeRepoMatches(

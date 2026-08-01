@@ -364,6 +364,27 @@ func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testin
 	}
 }
 
+func TestHerdrSyntheticBindingsExcludeBucketsAndKeepResolvedParents(t *testing.T) {
+	store := testEmptyHerdrControl()
+	store.Rows = []HerdrRow{
+		{RuntimeParent: "@manual", Backend: backend.Herdr},
+		{RuntimeParent: "425", Backend: backend.Herdr},
+	}
+	store.Intents = []HerdrIntent{
+		{RuntimeParent: "@watch", Backend: backend.Herdr},
+		{RuntimeParent: "426", Backend: backend.Herdr},
+	}
+
+	rows := store.RowBindings("/repo")
+	if len(rows) != 1 || rows[0] != (backend.Binding{Parent: "425", Backend: backend.Herdr}) {
+		t.Fatalf("synthetic row bindings = %#v", rows)
+	}
+	intents := store.ProvisionalBindings("/repo")
+	if len(intents) != 1 || intents[0] != (backend.Binding{Parent: "426", Backend: backend.Herdr}) {
+		t.Fatalf("synthetic intent bindings = %#v", intents)
+	}
+}
+
 func TestHerdrControlRejectsRowIntentReservationConflict(t *testing.T) {
 	repo := newHerdrControlRepo(t)
 	store := testEmptyHerdrControl()

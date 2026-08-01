@@ -340,6 +340,9 @@ func herdrBindingParent(
 	parent, storedRoot, projectRoot string,
 ) (string, bool) {
 	parent = parentref.Canon(strings.TrimSpace(parent))
+	if parent == "@manual" || parent == "@watch" {
+		return "", false
+	}
 	if !strings.HasPrefix(parent, "plan:") {
 		return parent, true
 	}
