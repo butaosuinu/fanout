@@ -138,13 +138,17 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Path < files[j].Path
 	})
-	if r.MaxFiles > 0 && len(files) > r.MaxFiles {
-		return Patch{}, fmt.Errorf("worktree patch contains %d files; limit is %d", len(files), r.MaxFiles)
-	}
 
 	result := Patch{
 		MergeBase: mergeBase,
 		Files:     make([]FileStat, 0, len(files)),
+	}
+	appendFile := func(stat FileStat) error {
+		result.Files = append(result.Files, stat)
+		if r.MaxFiles > 0 && len(result.Files) > r.MaxFiles {
+			return fmt.Errorf("worktree patch contains %d files; limit is %d", len(result.Files), r.MaxFiles)
+		}
+		return nil
 	}
 	var patch strings.Builder
 	collectionFull := false
@@ -165,13 +169,6 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 				stat.OmittedReason = ""
 			}
 		}
-		if collectionFull {
-			if stat.OmittedReason == "" {
-				stat.OmittedReason = "collectionLimit"
-			}
-			result.Files = append(result.Files, stat)
-			continue
-		}
 		if stat.OmittedReason == "" ||
 			(file.tracked && stat.OmittedReason == "binary") {
 			tooLarge, sizeErr := r.patchFileTooLarge(path, mergeBase, file)
@@ -184,6 +181,24 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 				stat.Binary = false
 				stat.OmittedReason = "tooLarge"
 			}
+		}
+		if collectionFull {
+			if file.replacement != nil && stat.OmittedReason != "tooLarge" {
+				changed, replacementErr := r.replacementChanged(path, mergeBase, file)
+				if replacementErr != nil {
+					return Patch{}, replacementErr
+				}
+				if !changed {
+					continue
+				}
+			}
+			if stat.OmittedReason == "" {
+				stat.OmittedReason = "collectionLimit"
+			}
+			if appendErr := appendFile(stat); appendErr != nil {
+				return Patch{}, appendErr
+			}
+			continue
 		}
 		if file.replacement != nil && stat.OmittedReason == "binary" {
 			_, _, changed, replacementErr := r.replacementPatch(path, mergeBase, file)
@@ -237,7 +252,9 @@ func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
 				}
 			}
 		}
-		result.Files = append(result.Files, stat)
+		if appendErr := appendFile(stat); appendErr != nil {
+			return Patch{}, appendErr
+		}
 	}
 	result.Patch = patch.String()
 	return result, nil
@@ -479,6 +496,50 @@ func (r Runner) replacementPatch(
 	stat := stats[0]
 	stat.Path = file.Path
 	return out, stat, true, nil
+}
+
+func (r Runner) replacementChanged(path, mergeBase string, file patchFile) (bool, error) {
+	entry, err := r.mergeBaseTreeEntry(path, mergeBase, file.Path)
+	if err != nil {
+		return false, err
+	}
+	if entry.objectType != "blob" {
+		return false, fmt.Errorf("compare replacement base entry: unsupported object type %q", entry.objectType)
+	}
+	fullPath, err := containedPath(path, file.Path)
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Lstat(fullPath)
+	if err != nil {
+		return false, fmt.Errorf("inspect replacement %q: %w", file.Path, err)
+	}
+	currentMode, err := worktreeGitMode(info)
+	if err != nil {
+		return false, fmt.Errorf("inspect replacement %q: %w", file.Path, err)
+	}
+	if entry.mode != currentMode {
+		return true, nil
+	}
+
+	baseContent, err := r.git("-C", path, "cat-file", "blob", entry.oid)
+	if err != nil {
+		return false, err
+	}
+	var finalContent []byte
+	if currentMode == "120000" {
+		target, readErr := os.Readlink(fullPath)
+		if readErr != nil {
+			return false, fmt.Errorf("read replacement symlink %q: %w", file.Path, readErr)
+		}
+		finalContent = []byte(target)
+	} else {
+		finalContent, err = os.ReadFile(fullPath)
+		if err != nil {
+			return false, fmt.Errorf("read replacement file %q: %w", file.Path, err)
+		}
+	}
+	return !bytes.Equal(baseContent, finalContent), nil
 }
 
 func (r Runner) trackedPathPatch(path, mergeBase, rel string) ([]byte, error) {

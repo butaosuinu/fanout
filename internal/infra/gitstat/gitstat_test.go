@@ -236,13 +236,100 @@ exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(logged), "c.txt") {
-		t.Fatalf("patch commands continued after collection limit:\n%s", logged)
+	for line := range strings.SplitSeq(string(logged), "\n") {
+		if strings.Contains(line, " diff ") && strings.Contains(line, "c.txt") {
+			t.Fatalf("patch commands continued after collection limit:\n%s", logged)
+		}
 	}
 
 	_, err = (Runner{MaxFiles: 2}).WorktreePatch(repo, "main")
 	if err == nil || !strings.Contains(err.Error(), "contains 3 files; limit is 2") {
 		t.Fatalf("MaxFiles error = %v", err)
+	}
+}
+
+func TestRunnerWorktreePatchCountsOnlyFinalChangesForFileLimit(t *testing.T) {
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	writeGitstatFile(t, repo, "a.txt", []byte("old\n"))
+	writeGitstatFile(t, repo, "replace.txt", []byte("same\n"))
+	gitTest(t, repo, "add", ".")
+	gitTest(t, repo, "commit", "-m", "initial")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	writeGitstatFile(t, repo, "a.txt", []byte("new\n"))
+	gitTest(t, repo, "rm", "--cached", "replace.txt")
+
+	got, err := (Runner{MaxFiles: 1}).WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 1 || got.Files[0].Path != "a.txt" || !got.Files[0].PatchIncluded {
+		t.Fatalf("WorktreePatch() files = %+v, want only the final changed file", got.Files)
+	}
+}
+
+func TestRunnerWorktreePatchClassifiesFilesAfterCollectionLimit(t *testing.T) {
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	writeGitstatFile(t, repo, "a.txt", []byte("old\n"))
+	writeGitstatFile(t, repo, "b.txt", []byte("old\n"))
+	writeGitstatFile(t, repo, "m-replace.txt", []byte("same\n"))
+	writeGitstatFile(t, repo, "z-binary.dat", []byte{'o', 0, 'l', 'd'})
+	gitTest(t, repo, "add", ".")
+	gitTest(t, repo, "commit", "-m", "initial")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "checkout", "-b", "feature")
+	writeGitstatFile(t, repo, "a.txt", []byte("new\n"))
+	writeGitstatFile(t, repo, "b.txt", []byte("new\n"))
+	gitTest(t, repo, "rm", "--cached", "m-replace.txt")
+	writeGitstatFile(t, repo, "z-binary.dat", bytes.Repeat([]byte{0}, patchFileLimit+1))
+
+	unlimited, err := (Runner{}).WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := strings.Index(unlimited.Patch, "\ndiff --git ")
+	if next < 0 {
+		t.Fatalf("unlimited patch has no second file group: %q", unlimited.Patch)
+	}
+	firstGroupBytes := next + 1
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(t.TempDir(), "git-args.log")
+	t.Setenv("FANOUT_GITSTAT_REAL_GIT", realGit)
+	t.Setenv("FANOUT_GITSTAT_LOG", logPath)
+	installGitstatShim(t, "git", `
+printf '%s\n' "$*" >> "$FANOUT_GITSTAT_LOG"
+exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
+`)
+
+	limited, err := (Runner{MaxPatchBytes: firstGroupBytes}).WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited.Files) != 3 {
+		t.Fatalf("limited files = %+v, want a.txt, b.txt, and z-binary.dat", limited.Files)
+	}
+	if limited.Files[0].Path != "a.txt" || !limited.Files[0].PatchIncluded ||
+		limited.Files[1].Path != "b.txt" || limited.Files[1].OmittedReason != "collectionLimit" ||
+		limited.Files[2].Path != "z-binary.dat" || limited.Files[2].OmittedReason != "tooLarge" {
+		t.Fatalf("limited files = %+v, want included/collectionLimit/tooLarge", limited.Files)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.SplitSeq(string(logged), "\n") {
+		if strings.Contains(line, "--src-prefix=") && strings.Contains(line, "m-replace.txt") {
+			t.Fatalf("replacement patch command ran after collection limit:\n%s", logged)
+		}
 	}
 }
 
