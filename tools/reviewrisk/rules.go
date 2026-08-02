@@ -75,9 +75,8 @@ var fileRules = map[string]Rule{
 	"CLAUDE.md": ruleAgentGuide,
 	"AGENTS.md": ruleAgentGuide,
 
-	// architecture.ja.md is the class canon; keep its dedicated rule even though
-	// the docs/ prefix now carries the same M class.
-	"docs/architecture.ja.md": {ID: "extra-arch-doc", Class: ClassM, Source: SourceExtra, Note: "レビュークラスの正典"},
+	// architecture.ja.md is the class canon; it overrides the docs/ NONE prefix.
+	"docs/architecture.ja.md": {ID: "extra-arch-doc", Class: ClassM, Source: SourceExtra, Note: "クラス正典(docs/ の NONE を上書き)"},
 
 	"README.md":    ruleReadme,
 	"README.ja.md": ruleReadme,
@@ -187,11 +186,8 @@ var prefixRules = []struct {
 	{"codex/", Rule{ID: "codex-prompts", Class: ClassM, Source: SourceExtra, Note: "配布エージェントプロンプト"}},
 	{"hack/", Rule{ID: "hack", Class: ClassM, Source: SourceExtra, Note: "補助スクリプト"}},
 
-	// Contract-bearing docs are M. Static design assets remain NONE, as does the
-	// user-facing docs site.
-	{"docs/assets/", Rule{ID: "docs-assets", Class: ClassNone, Source: SourceExtra, Note: "ドキュメントの静的資産"}},
-	{"docs/mockups/", Rule{ID: "docs-mockups", Class: ClassNone, Source: SourceExtra, Note: "ドキュメントのモックアップ"}},
-	{"docs/", Rule{ID: "docs", Class: ClassM, Source: SourceExtra, Note: "契約・設計ドキュメント"}},
+	// docs and docs site NONE (except architecture.ja.md above).
+	{"docs/", Rule{ID: "docs", Class: ClassNone, Source: SourceExtra, Note: "ドキュメント"}},
 	{"site/", Rule{ID: "site", Class: ClassNone, Source: SourceExtra, Note: "ドキュメントサイト"}},
 }
 

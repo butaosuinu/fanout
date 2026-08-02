@@ -9,7 +9,7 @@ PR に反映する。判定は advisory — マージはブロックしない。
 
 | Level | 条件 | ガイダンス |
 |---|---|---|
-| none | 変更ファイルが全て NONE クラス | レビュー不要(README、site、静的資産のみ)。CI green でマージ可 |
+| none | 変更ファイルが全て NONE クラス | レビュー不要(docs のみ)。CI green でマージ可 |
 | low | 最大クラスが A | AI レビュー(`/code-review`)で可 |
 | medium | 最大クラスが M | `/code-review` + M ファイルを人間が斜め読み |
 | high | 最大クラスが H、または S9/S10 発火 | 人間レビュー必須。AI は補助 |
@@ -53,10 +53,6 @@ doc 上 `view.go` / `compact.go` / `styles.go` の A 行は「ほか」付きの
 として書かれているが、ルール表はこの 3 ファイルに閉じている。未列挙の描画
 ファイルは A と推測せず M の catch-all に落とす。新しい描画ファイルを足す
 たびに rules.go の更新を要求する安全側の判断。
-
-`docs/` は設計と運用の契約を含むため、既定でMにする。
-画像などの静的資産を置く `docs/assets/` と `docs/mockups/` はNONE、利用者向けの
-`site/` と `README*.md` もNONEのままにする。
 
 ## エスカレーションシグナル
 

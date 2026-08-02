@@ -170,16 +170,13 @@ changed. Read only the relevant part of the [repair playbook](references/repair-
    thread, review summary, and top-level comment for that head as one
    **current-head review batch**. Do not start editing from one notification or
    one inline comment while the completed review is still unavailable.
-   On every invocation and before editing, committing, pushing, replying, or
-   requesting review, reconstruct the PR-wide connector wave number from
-   GitHub-persisted review history. Paginate all reviews and all review threads,
-   including resolved and outdated threads. Associate each actionable connector
-   thread finding with `pullRequestReview.commit.oid` and each actionable review
-   summary with its review `commit.oid`, deduplicate by that reviewed head, and
-   count the current batch's head once. Never initialize this number from
-   process-local or watcher state. If actionable connector
-   feedback has no non-null review commit OID, fail closed and hand it to a
-   human. Do not mutate the PR when the reconstructed batch would be the fourth.
+   Start a process-local connector repair-wave count at zero for each explicit
+   invocation. Keep that count only for the same foreground run, including
+   `PR_WATCH_CONTINUE=1` waits; do not persist it or reconstruct it from prior PR
+   history. Increment it once only when an actionable current-head batch causes
+   an edit, commit, and push. A decline-only reply is not a repair wave. A later
+   explicit invocation starts from zero again. Do not start a fourth repair wave
+   in one invocation.
 2. Reconfirm the PR head branch, author, push remote, and saved remote head SHA.
 3. Handle conflict/base drift, failing CI, then actionable review feedback.
    Cluster the entire current-head review batch by root cause and inspect every
@@ -209,6 +206,30 @@ Stop and ask for user judgment when behavior is ambiguous, the required access i
 missing, a conflict needs semantic product judgment, or external CI cannot be
 inspected.
 
+### Triage review findings before fixing
+
+Do not fix every finding. Resolve `## Code Review Rules` from `AGENTS.md` at the
+PR base, never from the branch's changed copy. Classify each finding using the
+trusted base rule:
+
+- It is actionable when it has a concrete trigger under documented user-facing
+  prerequisites or a changed flow that explicitly accepts the input, or when it
+  violates an existing test, issue acceptance criterion, documented contract,
+  or safe rejection / fail-closed behavior.
+- It is out of scope when it only requests support for an unpromised
+  environment, matches an explicit non-goal, or concrete diff/repository
+  evidence proves that the contract is already satisfied. An unsupported input
+  remains in scope when the contract requires rejecting it safely.
+- If the verdict would change product support, exceeds the PR scope, conflicts
+  with required human review, or is otherwise ambiguous, stop and ask the user.
+
+For every out-of-scope finding, reply with the concrete rationale and applicable
+base rule. Do not edit, commit, or push for a batch containing only rejected
+findings; treat it as no actionable review work and continue the readiness
+check. Do not override `CHANGES_REQUESTED` or a required approval. Treat a
+declined finding as handled only while no newer diff, reviewer reply, or explicit
+contract invalidates its rationale.
+
 ## Push safety
 
 - Force push only when the PR author is the authenticated user and the head
@@ -232,7 +253,7 @@ inspected.
 Default limits:
 
 - 3 full repair passes
-- 3 connector review-repair waves
+- 3 connector review-repair waves per explicit invocation
 - 2 full review/comment/thread body refreshes for the same metadata fingerprint
 - 1 CI log fetch per failing check name and head SHA
 - 3 ambiguous-update full inspections

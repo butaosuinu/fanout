@@ -61,17 +61,30 @@ problems caused by the current diff. Group every affected branch, entrypoint,
 and consumer under one root-cause finding. Omit style, speculation, pre-existing
 issues, and scope expansion.
 
+A finding is actionable only when it has a concrete trigger under documented
+user-facing prerequisites or a changed flow that explicitly accepts the input,
+or when it violates an existing test, issue acceptance criterion, documented
+contract, or safe rejection / fail-closed behavior. Do not request new support
+for an unpromised environment. An explicit safe-rejection contract remains in
+scope even when the rejected input itself is unsupported. If the author declines
+a finding with concrete evidence, do not re-raise it unless a newer diff or an
+explicit contract invalidates that rationale.
+
 - For state transitions or external side effects, cover fresh, retry, expired,
   and completed states plus cancellation, recovery, and replay. Never repeat an
   ambiguous mutation. This matrix is not required for pure read-only helpers.
+  Full mutual exclusion against Git operations from other processes and sealing
+  every crash-recovery window are non-goals when fanout's own lock scope and a
+  documented manual cleanup path remain intact.
 - Derive identity, ownership, binding, and fencing from persisted state, then
   validate them at every entrypoint before an external call or mutation.
   Presentation-only code may use display identity when it cannot authorize or
   mutate anything.
 - When code or design reads, writes, or emulates Git or filesystem contracts,
-  cover object formats, exact pathspecs and unusual paths, symlinks, submodules,
-  sparse and index flags, file type, binary and size limits, config, and
-  snapshots. Do not apply this matrix to unrelated code.
+  check only the applicable documented contract, including exact path handling,
+  symlinks, file type, limits, config, snapshots, and required rejection paths.
+  Do not turn unpromised object formats, index modes, or filesystem environments
+  into required product support.
 
 ## Working With fanout
 

@@ -279,28 +279,35 @@ as one **current-head review batch**. Do not begin from an individual
 notification while the completed review record is unavailable. If another
 current-head finding appears before commit, rebuild the batch before editing.
 
-### Reconstruct connector review waves
+### Track repair waves for this invocation
 
-Before editing or any PR mutation, reconstruct the wave number from GitHub for
-the target repository and PR. Process-local counters and watcher state are not
-authoritative across sessions.
+Start a process-local connector repair-wave count at zero for each explicit
+invocation. Retain it only in the same foreground run, including
+`PR_WATCH_CONTINUE=1` continuations. Do not persist it or reconstruct it from PR
+history. Increment it once only after an actionable current-head review batch
+causes an edit, one intentional commit, and one push. A decline-only reply is
+not a repair wave. A later explicit invocation starts from zero. Do not start a
+fourth repair wave in one invocation.
 
-1. Paginate `reviews(first:100,after:$endCursor)` and retain each review's ID,
-   author, body, state, and non-null `commit.oid`.
-2. Paginate `reviewThreads(first:100,after:$endCursor)` without filtering,
-   including resolved and outdated threads. Read each top-level comment's body,
-   author, and `pullRequestReview.commit.oid`.
-3. Classify actionable connector findings and review summaries, then deduplicate
-   them by reviewed head OID. The current-head review batch counts once. A
-   repeated review on the same head does not create another wave.
-4. Fail closed when actionable connector feedback cannot be bound to a non-null
-   review commit OID. If the current batch would be the fourth distinct wave,
-   do not edit, commit, push, reply, or request another review; require human
-   follow-up.
+### Triage findings
 
-Repeat this reconstruction on every invocation and whenever the head or review
-metadata changes. Resolved or outdated threads remain part of the historical
-count even though they are not current repair work.
+Read `## Code Review Rules` from the PR base, not a copy changed by the target.
+A finding is actionable only when a concrete trigger is reachable under
+documented user-facing prerequisites, or it violates an existing test, issue
+acceptance criterion, documented contract, or required safe rejection or
+fail-closed behavior. Do not request new support for an unpromised environment.
+An explicitly accepted unsupported input and its required safe rejection remain
+in scope.
+
+Reject a finding only with concrete evidence that the trigger is unreachable,
+the behavior is an explicit non-goal, or the applicable contract is already
+satisfied. Reply with the base-side scope rule and that evidence. If every
+finding in the current-head batch is rejected, do not edit, commit, or push;
+continue readiness checks with no actionable review work. This does not satisfy
+`CHANGES_REQUESTED` or a required approval. Reconsider a rejection when a new
+diff, reviewer reply, or explicit contract invalidates its rationale. Ask the
+user when reachability, product support, contract scope, or required human
+review is ambiguous.
 
 Cluster the batch by root cause. Confirm every affected branch, entrypoint, and
 consumer, then fix the confirmed occurrences together. One review wave produces
@@ -324,8 +331,9 @@ policy permits it.
 
 Do not manually request another Codex review for the same head SHA. When an
 explicit request is required, send it once after the next repair commit is
-visible on GitHub. Stop after three connector review-repair waves; report the
-remaining batch and require human follow-up instead of starting a fourth.
+visible on GitHub. Stop after three connector review-repair waves per explicit
+invocation; report the remaining batch and require human follow-up instead of
+starting a fourth.
 
 Do not force a speculative implementation when a reviewer asks for a product or
 architecture choice. Summarize the alternatives and ask the user.

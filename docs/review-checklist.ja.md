@@ -18,9 +18,9 @@ issue #373 の旧集計は、セッション履歴 102 件、CI 失敗 22 run、
 
 - **finding**：connector が投稿した独立した top-level inline comment。
   review summary と返信は含めない。
-- **review wave**：actionable finding を持つ connector review の distinct
-  `commit.oid`。resolved または outdated の thread も PR の履歴数に残し、同じ OID は
-  1 wave と数える。
+- **review wave**：明示的な 1 回の `pr-watch` 起動中に、current-head review batch の
+  actionable finding を 1 commit、1 push で修正した単位。
+  finding を根拠付きで棄却する返信だけなら wave に含めない。
 - **same-head request**：HEAD を更新せずに明示的な review を再要求した回数。
 - **current-head approval**：最終 HEAD の push 後、次の HEAD へ進む前に観測した
   設定済み actor の `+1`。
@@ -35,9 +35,9 @@ issue #373 の旧集計は、セッション履歴 102 件、CI 失敗 22 run、
    信用せず、persisted state、binding、fencing を外部操作前に照合する。
 4. **全 entrypoint と consumer を追う**：同じ契約を使う別経路、linked worktree、
    synthetic parent、cleanup と recovery を同じ修正に含めたか。
-5. **Git とファイルの行列を確認する**：object format、厳密な pathspec、特殊パス、
-   symlink、submodule、sparse と index flags、file type、binary、size、config、snapshot を
-   変更範囲に応じて試したか。
+5. **適用される Git とファイルの契約を確認する**：変更した経路について、既存テスト、
+   issue の acceptance criteria、明示契約、required safe rejection を満たすか。
+   約束していない環境への新しい対応は要求しない。
 6. **カウンタと予算を一度だけ計上する**：二重計上、枯渇時の挙動、reset 条件が
    全分岐で一致するか。
 7. **paginate と fetch の完了後に判定する**：途中ページや部分取得を全件として扱って
@@ -54,10 +54,15 @@ issue #373 の旧集計は、セッション履歴 102 件、CI 失敗 22 run、
   レビューゲートをバイパスする場合は、PR 作成前に `make check` を直接実行する。
 - `post-work-review` は現在の target 全体を読み、P0-P2 相当の finding を同根ごとに
   一括で返す。style、推測、既存問題は修正対象にしない。
-- `pr-watch` は completed review と現在 HEAD の未解決指摘を 1 つの review wave として
+- finding は PR の base 側の `## Code Review Rules` で裁定する。
+  到達不能な環境、明示された non-goal、または契約を満たす証拠がある finding は、
+  根拠を返信して棄却する。
+  全 finding を根拠付きで棄却できれば、修正せず clean として扱う。
+- `pr-watch` は completed review と現在 HEAD の未解決指摘を current-head review batch に
   集め、同根の箇所を 1 commit で修正する。同じ SHA へ review を再要求しない。
-- `pr-watch` は各起動時と PR の変更前に、GitHub の全 review と全 review thread から
-  distinct `commit.oid` を復元する。ローカル counter を wave 数の根拠にしない。
+- `pr-watch` の connector repair-wave counter は明示的な各起動で 0 から始め、1 起動あたり
+  最大 3 wave で止める。
+  同じ起動内の継続監視は counter を保持し、後の明示的な起動は 0 から始める。
 - `make test`、`make lint`、`make lint-web` は失敗の切り分けに使う。
   同じ最終ゲートで個別に重ねて実行しない。
 - branch への `git push` は agent hook でゲートされる。clean tree での
@@ -72,7 +77,7 @@ issue #373 の旧集計は、セッション履歴 102 件、CI 失敗 22 run、
 配布後の作成者本人による次の 20 PR を同じ定義で数える。
 
 - same-head request を 0 件にする。
-- agent-driven repair を 1 PR あたり最大 3 wave で止める。
-- 1 wave 以内で収束する PR を 12/20 から 16/20 以上へ増やす。
+- agent-driven repair を `pr-watch` 1 起動あたり最大 3 wave で止める。
+- 1 回の起動内で 1 wave 以内に収束する PR を増やす。
 
 パターンが実態と乖離したら、`/session-retro` の再発分類を基にこの文書を更新する。
