@@ -11,13 +11,23 @@ const FOCUSABLE = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(",");
 
+/* 実際に Tab で到達できるか。
+ *
+ * 非表示の要素を境界にすると、最後に「見えている」要素から Tab を押しても
+ * current === last が成立せず、そのままブラウザ UI へ抜ける。diff ビュアーの
+ * サイドバーは container query で display:none になるので、実際に起こる。
+ *
+ * 可視性は checkVisibility に聞く。offsetParent や getClientRects は position:
+ * fixed やレイアウトを持たない環境で当てにならない。jsdom は checkVisibility を
+ * 実装しないので、答えられない環境では弾かない(全要素が消えるほうが害が大きい)。 */
+function isVisible(el: HTMLElement): boolean {
+  return typeof el.checkVisibility !== "function" || el.checkVisibility();
+}
+
 /* aria-modal なコンテナの中でフォーカスを循環させる。
  *
  * 背面を inert にしても、末尾から Tab / 先頭から Shift+Tab を押すとフォーカスは
- * ブラウザ UI(アドレスバー等)へ抜ける。モーダルを名乗る以上は自前で折り返す。
- *
- * 可視判定はしない — jsdom は offsetParent が常に null で、実要素まで弾いて
- * しまう。ここで扱うモーダルは非表示のフォーカス可能要素を持たない。 */
+ * ブラウザ UI(アドレスバー等)へ抜ける。モーダルを名乗る以上は自前で折り返す。 */
 export function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean) {
   useEffect(() => {
     if (!active) return;
@@ -25,7 +35,7 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean
       if (e.key !== "Tab" || e.defaultPrevented) return;
       const root = ref.current;
       if (!root) return;
-      const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(isVisible);
       const first = items.at(0);
       const last = items.at(-1);
       if (!first || !last) {

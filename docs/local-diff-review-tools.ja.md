@@ -419,6 +419,10 @@ Session リストの diff 列は、行 identity(`diffQuery`)を組めるなら�
 `aria-modal` を名乗るあいだは Tab を自前で折り返す(`useFocusTrap`)。背面を
 `inert` にしても、末尾から Tab / 先頭から Shift+Tab はブラウザ UI へ抜ける。
 背面を覆っていないコンパクト表示では折り返さない — そこは背面へ出てよい。
+折り返しの境界は「実際に見えている」要素だけで決める。サイドバーは container
+query で `display:none` になるので、非表示のボタンを境界にすると最後に見えている
+要素からの Tab が回らない。可視性は `checkVisibility` に聞く(`offsetParent` や
+`getClientRects` は fixed 配置やレイアウトを持たない環境で当てにならない)。
 
 非 covering から covering へ変わったとき(ウィンドウを 1,100px 以下へ縮めた、
 コンパクトから全画面へ切り替えた)もオーバーレイへフォーカスを引き取る。背面が
