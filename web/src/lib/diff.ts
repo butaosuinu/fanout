@@ -133,14 +133,59 @@ export function groupDiffFilesByDir(files: DiffFileEntry[]): DiffFileGroup[] {
   return [...groups].map(([dir, entries]) => ({ dir, files: entries }));
 }
 
+/* patch 中の path を生のパスへ戻す。git は core.quotePath(既定 on)のとき、
+ * 非 ASCII や制御文字を含む path を `"..."` で囲んで C 形式にエスケープして
+ * 出すため、patch から得た name はサーバーの files[].path と一致しない。
+ * 非 ASCII は UTF-8 の各バイトが 8 進エスケープになるので、バイト列へ戻して
+ * から decode する。 */
+export function unquoteGitPath(name: string): string {
+  if (name.length < 2 || !name.startsWith('"') || !name.endsWith('"')) return name;
+  const body = name.slice(1, -1);
+  const encoder = new TextEncoder();
+  const bytes: number[] = [];
+  const simple: Record<string, number> = {
+    a: 7,
+    b: 8,
+    f: 12,
+    n: 10,
+    r: 13,
+    t: 9,
+    v: 11,
+    '"': 34,
+    "\\": 92,
+  };
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]!;
+    if (c !== "\\") {
+      bytes.push(...encoder.encode(c));
+      continue;
+    }
+    const next = body[++i];
+    if (next === undefined) return name; // 末尾が単独の \ = 想定外の形。触らない
+    if (next >= "0" && next <= "7") {
+      const oct = body.slice(i, i + 3);
+      if (!/^[0-7]{3}$/.test(oct)) return name;
+      bytes.push(parseInt(oct, 8));
+      i += 2;
+      continue;
+    }
+    const mapped = simple[next];
+    if (mapped === undefined) return name; // 知らないエスケープ。触らない
+    bytes.push(mapped);
+  }
+  return new TextDecoder().decode(Uint8Array.from(bytes));
+}
+
 /* patch を持つ file の path → パース済み patch の index。file type change は
- * 同 path で 2 entry になるため配列で持つ(先頭へ飛ばす)。 */
+ * 同 path で 2 entry になるため配列で持つ(先頭へ飛ばす)。key は生のパスへ
+ * 正規化する — サイドバーは files[].path で引くため。 */
 export function indexDiffFilesByPath(files: FileDiffMetadata[]): Map<string, number[]> {
   const byPath = new Map<string, number[]>();
   files.forEach((f, i) => {
-    const at = byPath.get(f.name);
+    const path = unquoteGitPath(f.name);
+    const at = byPath.get(path);
     if (at) at.push(i);
-    else byPath.set(f.name, [i]);
+    else byPath.set(path, [i]);
   });
   return byPath;
 }

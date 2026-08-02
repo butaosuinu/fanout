@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse, type RequestHandler } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { App } from "../components/App";
 import type { DiffResponse } from "../lib/types";
 import { installFakeEventSource, streamSnapshot } from "./fakeEventSource";
@@ -22,6 +22,14 @@ import { server } from "./server";
  * 描画は <Virtualizer> 配下なので、mount されるのは各 file の「可視範囲」だけ。
  * jsdom は全要素の高さが 0 なので全 file が可視扱いになるが、file 内の描画行数は
  * 実ブラウザと同じくウィンドウ由来で有界になる — 行数の有界性はここで固定できる。 */
+
+/* jsdom の既定は 1024。style.css の @media と閾値をまたぐケースでだけ差し替え、
+ * afterEach で必ず戻す。 */
+const DEFAULT_INNER_WIDTH = window.innerWidth;
+const setInnerWidth = (w: number) =>
+  Object.defineProperty(window, "innerWidth", { value: w, configurable: true, writable: true });
+
+afterEach(() => setInnerWidth(DEFAULT_INNER_WIDTH));
 
 beforeEach(() => {
   installFakeEventSource();
@@ -829,6 +837,9 @@ describe("diff オーバーレイ", () => {
 
   it("導線から開いた初回はコンパクト表示になり、グリップで幅を変えられる", async () => {
     localStorage.removeItem("fanout.diffView"); // 未設定 = 既定
+    /* jsdom の既定 innerWidth(1024)は全幅パネルへ落ちる帯なのでグリップが出ない。
+     * 幅を変えられる帯へ広げる(片付けは afterEach)。 */
+    setInnerWidth(1600);
     /* Session リストの diff セルから開く(Drawer を開かないので、パネルの右端は
      * ビューポート右端 = --diff-anchor-right が 0 のまま)。 */
     server.use(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
@@ -876,8 +887,7 @@ describe("diff オーバーレイ", () => {
     const layoutBtn = () => within(overlay).getByRole("button", { name: /^レイアウト:/ });
     const shadow = () => document.querySelector("diffs-container")!.shadowRoot!;
 
-    /* 既定は自動。jsdom は全要素が幅 0 だが ResizeObserver も stub なので、
-     * 自動の解決は初期値(= 左右 2 面)のまま。幅による切替は実ブラウザで確認する。 */
+    /* 既定は自動。jsdom の innerWidth 1024 は閾値 1,000 を超えるので左右 2 面。 */
     expect(layoutBtn()).toHaveAccessibleName("レイアウト: 自動(クリックで左右 2 面)");
     expect(localStorage.getItem("fanout.diffLayout")).toBeNull(); // 既定値はキーを残さない
 
@@ -913,28 +923,19 @@ describe("diff オーバーレイ", () => {
   });
 
   it("auto は本文の幅で split / stack を選ぶ", async () => {
-    /* jsdom の既定 innerWidth は 1024 で閾値 1000 を超えるため、既定の auto は
+    /* jsdom の既定 innerWidth は 1024 で閾値 1,000 を超えるため、既定の auto は
      * 左右 2 面(上のテスト)。ここは狭い側を見る。 */
-    const original = window.innerWidth;
-    Object.defineProperty(window, "innerWidth", { value: 900, configurable: true, writable: true });
-    try {
-      const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
-      const overlay = await openOverlay(user);
-      expect(overlay).toHaveAttribute("data-layout", "stack");
-      await waitFor(() => {
-        const shadow = document.querySelector("diffs-container")!.shadowRoot!;
-        expect(shadow.querySelector("pre > code[data-unified]")).toBeTruthy();
-      });
-      // 明示指定は幅に関係なく優先する
-      await user.click(within(overlay).getByRole("button", { name: /^レイアウト: 自動/ }));
-      expect(overlay).toHaveAttribute("data-layout", "split");
-    } finally {
-      Object.defineProperty(window, "innerWidth", {
-        value: original,
-        configurable: true,
-        writable: true,
-      });
-    }
+    setInnerWidth(900);
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    expect(overlay).toHaveAttribute("data-layout", "stack");
+    await waitFor(() => {
+      const shadow = document.querySelector("diffs-container")!.shadowRoot!;
+      expect(shadow.querySelector("pre > code[data-unified]")).toBeTruthy();
+    });
+    // 明示指定は幅に関係なく優先する
+    await user.click(within(overlay).getByRole("button", { name: /^レイアウト: 自動/ }));
+    expect(overlay).toHaveAttribute("data-layout", "split");
   });
 
   it("全画面表示にはリサイズグリップを出さない", async () => {
@@ -970,6 +971,47 @@ describe("diff オーバーレイ", () => {
     await screen.findByRole("complementary", { name: "worktree diff" });
     // ドロワーは背面ではなく隣に並ぶので peek パネルは生きたまま
     expect(screen.getByText("peek output")).toBeInTheDocument();
+  });
+
+  it("全画面 diff の上で設定を開閉しても、背面の inert は解けない", async () => {
+    /* 設定モーダルは自分が付けた inert だけを外す。無条件に外すと、diff が
+     * 全面を覆ったままリストやドロワーへ Tab できてしまう(DiffOverlay の
+     * inert effect は再実行されないので復旧しない)。 */
+    const root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+    try {
+      server.use(http.get("/api/diff", () => HttpResponse.json(makeDiffResponse())));
+      const user = userEvent.setup();
+      render(<App />, { container: root });
+      streamSnapshot(issueSnapshot());
+
+      const overlay = await openOverlay(user);
+      expect(root.hasAttribute("inert")).toBe(true);
+
+      await user.click(within(overlay).getByRole("button", { name: "テーマ設定" }));
+      await screen.findByRole("dialog", { name: "設定" });
+      expect(root.hasAttribute("inert")).toBe(true);
+      expect(overlay.hasAttribute("inert")).toBe(true); // こちらは設定が付けた
+
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog", { name: "設定" })).not.toBeInTheDocument();
+      expect(overlay.hasAttribute("inert")).toBe(false); // 設定が外す
+      expect(root.hasAttribute("inert")).toBe(true); // diff の inert は残る
+    } finally {
+      root.remove();
+    }
+  });
+
+  it("全幅パネルへ落ちる狭い帯ではリサイズグリップを出さない", async () => {
+    setInnerWidth(900);
+    localStorage.removeItem("fanout.diffView"); // 既定 = コンパクト
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    await user.click(screen.getByText("Fix thing"));
+    await user.click(await screen.findByRole("button", { name: "変更を表示" }));
+    const overlay = await screen.findByRole("complementary", { name: "worktree diff" });
+    // 幅は CSS が全幅に固定するので、動かせない separator は出さない
+    expect(within(overlay).queryByRole("separator")).toBeNull();
   });
 
   it("未開始(synthetic)行と shell 行には diff ボタンを出さない", async () => {

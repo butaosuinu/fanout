@@ -1184,6 +1184,29 @@ describe("session リストの diff 列", () => {
     await screen.findByText("No change");
     expect(screen.queryByRole("button", { name: /変更を表示/ })).not.toBeInTheDocument();
   });
+
+  /* diffSummary は `git diff --shortstat`(未追跡を含まない・rename 検出あり)
+   * 由来なので、未追跡だけの worktree も pure rename も +0/-0 になる。一方
+   * /api/diff はそれらを patch として返すため、行数だけで「差分なし」と
+   * 決めるとレビュー対象を開けない行ができる。 */
+  it("+0/-0 でも dirty ならリンクにする(未追跡だけの worktree)", async () => {
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Untracked only",
+            diffSummary: "+0/-0",
+            dirtyState: "dirty",
+          }),
+        ]),
+      ]),
+    );
+
+    await screen.findByText("Untracked only");
+    expect(await screen.findByRole("button", { name: "変更を表示 +0/-0" })).toBeInTheDocument();
+  });
 });
 
 describe("設定モーダル", () => {

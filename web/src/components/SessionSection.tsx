@@ -51,7 +51,12 @@ function DiffCell({
       <span className="add">+{d.add}</span>/<span className="del">-{d.del}</span>
     </>
   );
-  const changed = Number(d.add) + Number(d.del) > 0;
+  /* 行数だけでは「差分あり」を判定できない。diffSummary は
+   * `git diff --shortstat`(rename 検出あり・未追跡を含まない)由来なので、
+   * 未追跡ファイルだけの worktree も pure rename も +0/-0 になる。一方
+   * /api/diff は未追跡を含め `--no-renames` で patch を返すので、どちらも
+   * レビュー対象として出てくる。dirty も見て取りこぼしを減らす。 */
+  const changed = Number(d.add) + Number(d.del) > 0 || pane.dirtyState === "dirty";
   if (!changed || !diffQuery(parent, pane)) return stat;
   return (
     <button

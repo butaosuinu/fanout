@@ -172,6 +172,30 @@ describe("indexDiffFilesByPath", () => {
       ]),
     );
   });
+
+  /* git は core.quotePath(既定 on)のとき patch 中の path を C 形式で
+   * エスケープするが、サーバーの files[].path は生のまま。key を正規化しないと
+   * 非 ASCII のファイルがサイドバーから飛べなくなる。 */
+  it("quoted path を生のパスへ戻して key にする", () => {
+    const files = [
+      { name: '"docs/\\346\\227\\245\\346\\234\\254\\350\\252\\236.md"' },
+      { name: '"a\\tb.txt"' },
+      { name: "plain.ts" },
+    ] as unknown as FileDiffMetadata[];
+    expect([...indexDiffFilesByPath(files).keys()]).toEqual([
+      "docs/日本語.md",
+      "a\tb.txt",
+      "plain.ts",
+    ]);
+  });
+
+  it("引用でない name と、解釈できないエスケープはそのまま扱う", () => {
+    const files = [
+      { name: 'has"quote.ts' },
+      { name: '"bad\\q.ts"' },
+    ] as unknown as FileDiffMetadata[];
+    expect([...indexDiffFilesByPath(files).keys()]).toEqual(['has"quote.ts', '"bad\\q.ts"']);
+  });
 });
 
 describe("renderedLineCount", () => {

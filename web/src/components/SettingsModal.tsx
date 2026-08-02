@@ -93,10 +93,14 @@ export function SettingsModal({
    * 拒否されるため順序が本質)。 */
   useEffect(() => {
     rootRef.current?.focus();
+    /* 自分が付けた inert だけを外す。全画面 diff から開いた場合 #root は既に
+     * DiffOverlay が inert にしており、無条件に外すと diff が全面を覆ったまま
+     * 背面へ Tab できるようになる(DiffOverlay の effect は再実行されない)。 */
     const blocked = [document.getElementById("root"), document.getElementById("diff-overlay")];
-    for (const el of blocked) el?.setAttribute("inert", "");
+    const added = blocked.filter((el) => el != null && !el.hasAttribute("inert")) as HTMLElement[];
+    for (const el of added) el.setAttribute("inert", "");
     return () => {
-      for (const el of blocked) el?.removeAttribute("inert");
+      for (const el of added) el.removeAttribute("inert");
       onClosedRef.current?.();
     };
   }, []);

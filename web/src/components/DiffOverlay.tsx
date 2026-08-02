@@ -447,8 +447,11 @@ export function DiffOverlay({
       tabIndex={-1}
     >
       {/* role / aria / tabIndex は hook が幅と一体で提供する(スプレッド漏れで
-          セパレータ意味論だけ落ちる事故を防ぐ) */}
-      {viewMode === "compact" && <div className="diff-grip" {...gripProps} />}
+          セパレータ意味論だけ落ちる事故を防ぐ)。狭い帯ではコンパクトも CSS で
+          全幅パネルになり幅を変えられないので、グリップ自体を出さない。 */}
+      {viewMode === "compact" && viewportWidth > COMPACT_FULL_WIDTH_PX && (
+        <div className="diff-grip" {...gripProps} />
+      )}
       <header className="diff-head">
         <h3>
           <span className="diff-title">{title}</span>
