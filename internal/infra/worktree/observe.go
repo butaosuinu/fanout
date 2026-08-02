@@ -192,7 +192,7 @@ func ObserveCheckout(root, checkoutPath string) (CheckoutObservation, error) {
 		return observation, fmt.Errorf("herdr checkout path %s is not a real directory", checkoutPath)
 	}
 
-	entries, err := worktreeEntries(root)
+	entries, err := worktreeEntries(context.Background(), root)
 	if err != nil {
 		return observation, err
 	}
@@ -285,8 +285,8 @@ type worktreeEntry struct {
 	prunable bool
 }
 
-func worktreeEntries(root string) ([]worktreeEntry, error) {
-	cmd := exec.Command("git", "worktree", "list", "--porcelain", "-z")
+func worktreeEntries(ctx context.Context, root string) ([]worktreeEntry, error) {
+	cmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain", "-z")
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {

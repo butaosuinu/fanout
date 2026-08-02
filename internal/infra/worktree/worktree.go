@@ -443,7 +443,7 @@ func RefreshBaseContext(ctx context.Context, root, base string) error {
 // failure it returns {projectRoot} alongside the error so callers degrade to a
 // single-root load.
 func ListRoots(projectRoot string) ([]string, error) {
-	entries, err := worktreeEntries(projectRoot)
+	entries, err := worktreeEntries(context.Background(), projectRoot)
 	if err != nil {
 		return []string{projectRoot}, err
 	}
@@ -506,8 +506,8 @@ func baseTreeRef(root string) string {
 	return base
 }
 
-func checkedOutWorktree(_ context.Context, root, branch string) (string, error) {
-	entries, err := worktreeEntries(root)
+func checkedOutWorktree(ctx context.Context, root, branch string) (string, error) {
+	entries, err := worktreeEntries(ctx, root)
 	if err != nil {
 		return "", err
 	}

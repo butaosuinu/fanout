@@ -28,6 +28,7 @@ var (
 	ErrHerdrLauncherReadinessDeferred = errors.New("herdr launcher readiness is deferred to issue #528")
 	errHerdrIntentDeadlineExpired     = errors.New("herdr realization deadline expired")
 	errHerdrRealizedIntentSave        = errors.New("save realized Herdr worktree intent")
+	errHerdrRealizedIdentityChanged   = errors.New("realized Herdr identity changed")
 )
 
 type HerdrWorktreeRuntime interface {
@@ -229,10 +230,9 @@ func RealizeHerdrCoordinator(
 		operationNow,
 	)
 	if routeContextErr != nil {
-		if !found {
-			return result, routeContextErr
-		}
-		return result, markHerdrIntentManual(locked, intent, routeContextErr)
+		// No mutation and no existence check happened yet; keep the intent so
+		// the next run classifies it (canon: recovery on re-execution).
+		return result, routeContextErr
 	}
 	defer routeCancel()
 	if routeErr := verifyHerdrRealizeRoute(
@@ -256,16 +256,18 @@ func RealizeHerdrCoordinator(
 		}
 		operationCtx, cancel, contextErr := herdrIntentContext(operationParent, intent, operationNow)
 		if contextErr != nil {
-			return result, markHerdrIntentManual(locked, intent, contextErr)
+			return result, contextErr
 		}
 		defer cancel()
 		switch intent.Status {
 		case state.HerdrIntentRealized:
 			if verifyErr := verifyRealizedCoordinator(operationCtx, runtime, intent); verifyErr != nil {
-				if operationErr := operationCtx.Err(); operationErr != nil {
-					return result, errors.Join(verifyErr, operationErr)
+				if errors.Is(verifyErr, errHerdrRealizedIdentityChanged) {
+					return result, markHerdrIntentManual(locked, intent, verifyErr)
 				}
-				return result, markHerdrIntentManual(locked, intent, verifyErr)
+				// The snapshot itself failed; nothing was classified, so the
+				// realized intent stays retryable.
+				return result, verifyErr
 			}
 			return coordinatorDeferred(intent)
 		case state.HerdrIntentIssued:
@@ -394,7 +396,9 @@ func RealizeHerdrWorktree(
 		if intent.Status == state.HerdrIntentPlanned {
 			return result, rollbackUnissuedHerdrWorktree(locked, req, intent, routeContextErr)
 		}
-		return result, markHerdrIntentManual(locked, intent, routeContextErr)
+		// No mutation and no existence check happened yet; keep the intent so
+		// the next run classifies it (canon: recovery on re-execution).
+		return result, routeContextErr
 	}
 	defer routeCancel()
 	if routeErr := verifyHerdrRealizeRoute(
@@ -506,7 +510,7 @@ func RealizeHerdrWorktree(
 			intent.Status == state.HerdrIntentPlanned {
 			return result, rollbackUnissuedHerdrWorktree(locked, req, intent, contextErr)
 		}
-		return result, markHerdrIntentManual(locked, intent, contextErr)
+		return result, contextErr
 	}
 	defer cancel()
 

@@ -4,6 +4,7 @@ package worktree
 // or release refs atomically (empty old OID create, compare-and-delete).
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -97,7 +98,7 @@ func BranchAvailable(root, fullRef string) error {
 }
 
 func branchCheckedOut(root, fullRef string) (bool, error) {
-	entries, err := worktreeEntries(root)
+	entries, err := worktreeEntries(context.Background(), root)
 	if err != nil {
 		return false, err
 	}

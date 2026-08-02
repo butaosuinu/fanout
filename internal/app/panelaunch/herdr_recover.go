@@ -130,19 +130,15 @@ func recoverHerdrCoordinator(
 	intent state.HerdrIntent,
 	mutationErr error,
 ) (HerdrCoordinatorResult, error) {
+	// A failed snapshot classifies nothing: keep the issued intent so the
+	// next run can classify it (canon: adoption or fail-closed needs an
+	// observed state, not an observation failure).
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return HerdrCoordinatorResult{}, errors.Join(
-				mutationErr,
-				fmt.Errorf("observe Herdr coordinator recovery: %w", err),
-				contextErr,
-			)
-		}
-		return HerdrCoordinatorResult{}, markHerdrIntentManual(
-			locked,
-			intent,
-			errors.Join(mutationErr, fmt.Errorf("observe Herdr coordinator recovery: %w", err)),
+		return HerdrCoordinatorResult{}, errors.Join(
+			mutationErr,
+			fmt.Errorf("observe Herdr coordinator recovery: %w", err),
+			ctx.Err(),
 		)
 	}
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
@@ -181,19 +177,14 @@ func recoverHerdrWorktree(
 	intent state.HerdrIntent,
 	mutationErr error,
 ) (HerdrWorktreeResult, error) {
+	// A failed snapshot classifies nothing: keep the issued intent so the
+	// next run can classify it.
 	workspaces, observeErr := runtime.ObserveWorkspaces(ctx)
 	if observeErr != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return HerdrWorktreeResult{}, errors.Join(
-				mutationErr,
-				fmt.Errorf("observe Herdr worktree recovery: %w", observeErr),
-				contextErr,
-			)
-		}
-		return HerdrWorktreeResult{}, markHerdrIntentManual(
-			locked,
-			intent,
-			errors.Join(mutationErr, fmt.Errorf("observe Herdr worktree recovery: %w", observeErr)),
+		return HerdrWorktreeResult{}, errors.Join(
+			mutationErr,
+			fmt.Errorf("observe Herdr worktree recovery: %w", observeErr),
+			ctx.Err(),
 		)
 	}
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
@@ -205,11 +196,7 @@ func recoverHerdrWorktree(
 	}
 	checkout, checkoutErr := worktree.ObserveCheckout(req.SourceRoot, intent.WorktreePath)
 	if checkoutErr != nil {
-		return HerdrWorktreeResult{}, markHerdrIntentManual(
-			locked,
-			intent,
-			errors.Join(mutationErr, checkoutErr),
-		)
+		return HerdrWorktreeResult{}, errors.Join(mutationErr, checkoutErr)
 	}
 	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) &&
 		intent.Resource.WorkspaceID != "" && len(matches) == 0 {
@@ -333,7 +320,7 @@ func verifyRealizedCoordinator(
 	}
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
 	if len(matches) != 1 || !workspaceHasHerdrResource(matches[0], intent.Resource) {
-		return fmt.Errorf("realized Herdr coordinator identity changed")
+		return fmt.Errorf("%w: coordinator", errHerdrRealizedIdentityChanged)
 	}
 	return nil
 }
@@ -347,12 +334,11 @@ func resumeRealizedHerdrWorktree(
 	intent state.HerdrIntent,
 	allowOpen bool,
 ) (HerdrWorktreeResult, error) {
+	// A failed snapshot classifies nothing: keep the realized intent
+	// retryable instead of pinning it to manual cleanup.
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return HerdrWorktreeResult{}, errors.Join(err, contextErr)
-		}
-		return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, err)
+		return HerdrWorktreeResult{}, errors.Join(err, ctx.Err())
 	}
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
 	switch len(matches) {
