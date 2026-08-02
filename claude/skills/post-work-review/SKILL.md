@@ -189,24 +189,31 @@ branch がその参照先(`REVIEW.md` など)を変えるだけで固定 pathspe
 Codex 側 SKILL.md が別途要求している effective parent config の確認を、
 Claude 経路でも行う:
 
+TOML の key は bare / `"double"` / `'literal'` / エスケープ入りの 4 通りで書ける。
+書き方ごとに正規表現を足していくと必ず取りこぼすので、**key 位置を取り出して
+引用符を剥がしてから照合する**:
+
 ```bash
 user_config="${CODEX_HOME:-$HOME/.codex}/config.toml"
 if [ -f "$user_config" ]; then
-  # 素の key 指定
-  grep -nE '^[[:space:]]*"?project_doc_fallback_filenames"?[[:space:]]*=' "$user_config"
-  # escaped key ("project_doc_fallback_filenames") は解読しない。
-  # key 位置に \u / \U がある時点で読めないものとして扱う
-  grep -nE '^[[:space:]]*"[^"]*\\[uU][^"]*"[[:space:]]*=' "$user_config"
+  # 代入の左辺だけを取り出し、空白と引用符を落として正規化する
+  keys="$(sed -nE 's/^[[:space:]]*([^=]+)=.*/\1/p' "$user_config" | tr -d " \t\"'")"
+  printf '%s\n' "$keys" | grep -nx 'project_doc_fallback_filenames'   # 素/"..."/'...'
+  printf '%s\n' "$keys" | grep -nE '\\[uUxX]'                        # 解読しない形
 fi
 ```
 
 どちらかが 1 行でも出たら、その参照先も保護対象に加えるか、**marker を書かない**。
 
-**TOML を prose で解釈しようとしない。** 正当な TOML の quoted key は
-`"project_doc_fallback_filenames"` のように書けるため、literal token の
-grep では抜ける。同梱の `mark-reviewed-head.sh` は同じ形式を
-`unsupported escaped keys` として拒否している。ここでも同じ姿勢で、
-**確実に読めない形は fail closed** にする。誤って止まる側に倒すのが正しい。
+左辺だけを見るので、コメント中に key 名が出てくるだけでは止まらない
+(`# project_doc_fallback_filenames = ...` は正規化後 `#project_doc_...` になり
+一致しない)。
+
+**TOML を prose で解釈しようとしない。** エスケープ入りの key
+(`"project_doc_fallback_filenames"`) は復元を試みず、`\u` / `\U` / `\x`
+が左辺にある時点で「読めない」として fail closed にする。同梱の
+`mark-reviewed-head.sh` も同じ形式を `unsupported escaped keys` として拒否
+している。誤って止まる側に倒すのが正しい。
 
 ### 前提チェック 0b: gate 自身が信頼済みコピーであること
 
