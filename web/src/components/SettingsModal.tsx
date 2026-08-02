@@ -88,18 +88,18 @@ export function SettingsModal({
   const onClosedRef = useRef(onClosed);
   onClosedRef.current = onClosed;
 
-  /* 初期フォーカスを移し、背面を遮る。diff オーバーレイと重なって開くので参照数で持つ — 全画面 diff の
-   * 上で開くと #root の所有者が 2 つになり、素朴に外すとどちらかの閉じ方で
-   * 背面へ Tab できてしまう(diff が snapshot から消えて先に unmount される順序も
-   * ある)。diff オーバーレイは #root の外(portal)なので個別に渡す。
+  /* 初期フォーカスを移し、背面(#root)を遮る。全画面 diff の上で開くと所有者が
+   * 2 つになるので参照数で持つ(lib/inert.ts)。
+   *
+   * diff オーバーレイ(#root の外・portal)はここで触らない。開いた時点でまだ
+   * lazy chunk が解決していないと要素が無く、後から inert 無しで mount されて
+   * 自分に focus を移してしまう。diff 側が settingsOpen を見て自分で inert に
+   * なる(DiffOverlay の suppressed)ほうが mount 順に依存しない。
    * 解除してから onClosed を呼ぶ(inert な subtree への focus は実ブラウザで
    * 拒否されるため順序が本質)。 */
   useEffect(() => {
     rootRef.current?.focus();
-    const release = blockBackground([
-      document.getElementById("root"),
-      document.getElementById("diff-overlay"),
-    ]);
+    const release = blockBackground([document.getElementById("root")]);
     return () => {
       release();
       onClosedRef.current?.();

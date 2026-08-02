@@ -172,6 +172,7 @@ export function DiffOverlay({
   query,
   token,
   anchorKey = null,
+  suppressed = false,
   escapeEnabled = true,
   onOpenSettings,
   onClose,
@@ -183,6 +184,10 @@ export function DiffOverlay({
   /* コンパクト表示の左端を決める #drawer を取り直す合図。ドロワーは
    * key={selected} で作り直されるので、選択が変わると要素の実体も変わる。 */
   anchorKey?: string | null;
+  /* 上に設定モーダルが重なっている。自分を inert にし、mount 時の focus 奪取も
+   * やめる — lazy chunk の解決が設定を開いた後になると、設定側からは要素が
+   * 見えず遮れないため、こちらが自分で降りる。 */
+  suppressed?: boolean;
   /* 設定モーダルが上に重なっている間は Escape を譲る(下の diff は開いたまま) */
   escapeEnabled?: boolean;
   /* 全画面表示中は Nav が inert なので、テーマ設定への入口をここにも置く */
@@ -222,8 +227,16 @@ export function DiffOverlay({
     return blockBackground([document.getElementById("root")]);
   }, [covering]);
 
+  /* 上に設定モーダルがある間は自分を inert にする(mount 順に依存しない) */
   useEffect(() => {
-    rootRef.current?.focus();
+    if (!suppressed) return;
+    return blockBackground([rootRef.current]);
+  }, [suppressed]);
+
+  const suppressedRef = useRef(suppressed);
+  suppressedRef.current = suppressed;
+  useEffect(() => {
+    if (!suppressedRef.current) rootRef.current?.focus();
     return () => onClosedRef.current?.();
   }, []);
 

@@ -1031,6 +1031,34 @@ describe("diff オーバーレイ", () => {
     expect(within(overlay).queryByRole("separator")).toBeNull();
   });
 
+  it("設定を先に開いてから diff が mount されても、diff は inert で focus を奪わない", async () => {
+    /* diff は lazy chunk。解決前に Nav の設定を開くと、設定側からは #diff-overlay
+     * が見えないので遮れない。diff が settingsOpen を見て自分で降りる。 */
+    const root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+    try {
+      server.use(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+      const user = userEvent.setup();
+      render(<App />, { container: root });
+      streamSnapshot(issueSnapshot());
+
+      await user.click(screen.getByText("Fix thing"));
+      await user.click(await screen.findByRole("button", { name: "変更を表示" }));
+      const overlay = await screen.findByRole("dialog", { name: "worktree diff" });
+
+      await user.click(screen.getByRole("button", { name: "設定" }));
+      const settings = await screen.findByRole("dialog", { name: "設定" });
+      expect(overlay.hasAttribute("inert")).toBe(true);
+      expect(settings.contains(document.activeElement)).toBe(true);
+
+      await user.keyboard("{Escape}");
+      expect(overlay.hasAttribute("inert")).toBe(false);
+    } finally {
+      root.remove();
+    }
+  });
+
   it("未開始(synthetic)行と shell 行には diff ボタンを出さない", async () => {
     const user = userEvent.setup();
     render(<App />);

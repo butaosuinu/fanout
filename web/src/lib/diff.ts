@@ -32,9 +32,17 @@ export function parseDiffFiles(patch: string): FileDiffMetadata[] {
 /* これ以上の描画行数を持つ file だけ初期状態で折りたたむ。それ未満は展開して出す。 */
 export const COLLAPSE_LINE_THRESHOLD = 1_000;
 
-/* Shiki のトークン化を諦めて plaintext で描画する総文字数。tokenizeMaxLength に
- * 0 を渡すと isDiffMassive が必ず成立して plaintext 経路に落ちる。 */
+/* Shiki のトークン化を諦めて plaintext で描画する閾値。tokenizeMaxLength に
+ * 0 を渡すと isDiffMassive が必ず成立して plaintext 経路に落ちる。
+ *
+ * 文字数と行数の両方で掛ける。トークン化は描画範囲ではなく file 全体に走るので、
+ * 短い行が大量にある file は文字数だけでは止まらない: 74,000 行の `x` は
+ * 74,000 文字で下の文字数上限を通り、ライブラリ自身の tokenizeMaxLength
+ * (既定 100,000、比較対象は行数)にも掛からないため、展開した瞬間に main
+ * thread で 74,000 行ぶんのトークン化と HAST 構築が走る。契約(1 file 256 KiB)
+ * 内で作れる形なので行数側の蓋が要る。 */
 export const HIGHLIGHT_MAX_CHARS = 150_000;
+export const HIGHLIGHT_MAX_LINES = 20_000;
 export const TOKENIZE_MAX_LENGTH_PLAIN = 0;
 
 /* 行内 word 差分を切る総文字数。ライブラリ既定の `word-alt` は plaintext 描画でも
@@ -90,7 +98,7 @@ export function planDiffFiles(files: FileDiffMetadata[]): DiffFilePlan[] {
       lines,
       chars,
       initiallyCollapsed: lines >= COLLAPSE_LINE_THRESHOLD,
-      highlight: chars <= HIGHLIGHT_MAX_CHARS,
+      highlight: chars <= HIGHLIGHT_MAX_CHARS && lines <= HIGHLIGHT_MAX_LINES,
       inlineDiff: chars <= INLINE_DIFF_MAX_CHARS,
     };
   });
@@ -180,7 +188,53 @@ export function unquoteGitPath(name: string): string {
     if (mapped === undefined) return name; // 知らないエスケープ。触らない
     bytes.push(mapped);
   }
-  return new TextDecoder().decode(Uint8Array.from(bytes));
+  return decodeUtf8LikeGo(bytes);
+}
+
+/* UTF-8 の開始 byte から列の長さ。不正な開始 byte は 0。 */
+function utf8SequenceLength(b: number): number {
+  if (b <= 0x7f) return 1;
+  if (b >= 0xc2 && b <= 0xdf) return 2;
+  if (b >= 0xe0 && b <= 0xef) return 3;
+  if (b >= 0xf0 && b <= 0xf4) return 4;
+  return 0;
+}
+
+/* 不正な UTF-8 の置換規則をサーバー(Go)に合わせる。
+ *
+ * Go の encoding/json は不正な byte を 1 個ずつ U+FFFD にするが、WHATWG の
+ * TextDecoder は不正な列をまとめて 1 個の U+FFFD にする(例: `\341\200` は
+ * Go が 2 個、TextDecoder が 1 個)。素の TextDecoder で復号すると、path に
+ * 不正 byte を含む file だけ files[].path と key が食い違い、サイドバーから
+ * 飛べなくなる。列単位で試し、駄目なら 1 byte 進めて U+FFFD を置く。 */
+function decodeUtf8LikeGo(bytes: number[]): string {
+  const strict = new TextDecoder("utf-8", { fatal: true });
+  let out = "";
+  let i = 0;
+  while (i < bytes.length) {
+    const len = utf8SequenceLength(bytes[i]!);
+    if (len === 1) {
+      out += String.fromCharCode(bytes[i]!);
+      i += 1;
+      continue;
+    }
+    let decoded: string | null = null;
+    if (len > 1 && i + len <= bytes.length) {
+      try {
+        decoded = strict.decode(Uint8Array.from(bytes.slice(i, i + len)));
+      } catch {
+        decoded = null; // 継続 byte が不正 / surrogate 範囲 / overlong
+      }
+    }
+    if (decoded === null) {
+      out += "�";
+      i += 1;
+    } else {
+      out += decoded;
+      i += len;
+    }
+  }
+  return out;
 }
 
 /* patch を持つ file の path → パース済み patch の index。file type change は

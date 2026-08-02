@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type RefObject,
 } from "react";
 import { useDiffView } from "../hooks/useSettings";
 import { useSnapshot } from "../hooks/useSnapshot";
@@ -41,6 +42,18 @@ interface DiffTarget {
   key: string; // rowKey — snapshot から消えたら閉じるための識別子
   title: string;
   query: Record<string, string>;
+}
+
+/* 生きている(DOM に繋がっている)最初の起点へフォーカスを戻す。detached な
+ * 要素への focus() は無言で何も起きないので、候補を順に試す。 */
+function focusFirstConnected(refs: RefObject<HTMLElement | null>[]) {
+  for (const ref of refs) {
+    const el = ref.current;
+    if (el?.isConnected) {
+      el.focus();
+      return;
+    }
+  }
 }
 
 function parentsOf(snap: Snapshot | null): Set<string> {
@@ -160,14 +173,20 @@ export function App() {
   const closeDiff = useCallback(() => setDiffTarget(null), []);
   /* 起点は消さずに残す。StrictMode(dev)は effect を setup → cleanup → setup と
    * 二度回すので、probe の cleanup でも onClosed が呼ばれる。ここで null に
-   * すると、実際に閉じたときに戻す先が無くなる。次に開くとき上書きされる。 */
-  const restoreDiffFocus = useCallback(() => diffOriginRef.current?.focus(), []);
+   * すると、実際に閉じたときに戻す先が無くなる。次に開くとき上書きされる。
+   * 起点が DOM から外れていることもある(diff の中のボタンから設定を開き、
+   * その間に対象行が snapshot から消えて diff が unmount された場合など)ので、
+   * 生きている候補を順に試す。 */
+  const restoreDiffFocus = useCallback(() => focusFirstConnected([diffOriginRef]), []);
   const openSettings = useCallback(() => {
     settingsOriginRef.current = document.activeElement as HTMLElement | null;
     setSettingsOpen(true);
   }, []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
-  const restoreSettingsFocus = useCallback(() => settingsOriginRef.current?.focus(), []);
+  const restoreSettingsFocus = useCallback(
+    () => focusFirstConnected([settingsOriginRef, diffOriginRef]),
+    [],
+  );
   const registerRow = (key: string, el: HTMLTableRowElement | null) => {
     if (el) rowRefs.current.set(key, el);
     else rowRefs.current.delete(key);
@@ -261,6 +280,7 @@ export function App() {
             query={diffTarget.query}
             token={token}
             anchorKey={selected}
+            suppressed={settingsOpen}
             escapeEnabled={!settingsOpen}
             onOpenSettings={openSettings}
             onClose={closeDiff}

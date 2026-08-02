@@ -8,6 +8,7 @@ import {
   diffWarning,
   groupDiffFilesByDir,
   HIGHLIGHT_MAX_CHARS,
+  HIGHLIGHT_MAX_LINES,
   indexDiffFilesByPath,
   INLINE_DIFF_MAX_CHARS,
   parseDiffFiles,
@@ -127,6 +128,20 @@ describe("planDiffFiles", () => {
     expect(p).toMatchObject({ initiallyCollapsed: true, highlight: true });
   });
 
+  /* トークン化は描画範囲ではなく file 全体に走るので、短い行が大量にある file は
+   * 文字数だけでは止まらない(74,000 行の `x` は 74,000 文字で文字数上限を通り、
+   * ライブラリ自身の tokenizeMaxLength = 100,000 行にも掛からない)。 */
+  it("文字数は少なくても行数が多い file は highlight を切る", () => {
+    const many = file(
+      "many.ts",
+      [HIGHLIGHT_MAX_LINES + 1],
+      Array.from({ length: HIGHLIGHT_MAX_LINES + 1 }, () => "x"),
+    );
+    const [plan] = planDiffFiles([many]);
+    expect(plan?.chars).toBeLessThan(HIGHLIGHT_MAX_CHARS); // 文字数側は素通りする
+    expect(plan?.highlight).toBe(false);
+  });
+
   it("行数が少なくても内容量が多い file は highlight と行内差分を切る", () => {
     // 66 行 × 990 文字級の高密度 patch — 行数では測れない
     const dense = file("dense.ts", [66], ["x".repeat(HIGHLIGHT_MAX_CHARS + 1)]);
@@ -155,6 +170,24 @@ describe("groupDiffFilesByDir", () => {
       ["a/c/", ["a/c/d.ts"]],
       ["", ["top.md"]],
     ]);
+  });
+});
+
+describe("不正 UTF-8 を含む path", () => {
+  /* Go(encoding/json)は不正 byte を 1 個ずつ U+FFFD にするが、WHATWG の
+   * TextDecoder は不正な列をまとめて 1 個にする。素の TextDecoder で復号すると
+   * files[].path と key が食い違い、その file だけサイドバーから飛べなくなる。 */
+  it("不正 byte 1 個につき 1 個の U+FFFD にする(Go と同じ規則)", () => {
+    // \341\200 = 3 byte 列の頭 + 継続 1 byte(不足)。Go は 2 個、TextDecoder は 1 個
+    const files = [{ name: "docs/\\341\\200.md" }] as unknown as FileDiffMetadata[];
+    const [key] = [...indexDiffFilesByPath(files).keys()];
+    expect(key).toBe("docs/\uFFFD\uFFFD.md");
+    expect(new TextDecoder().decode(Uint8Array.from([0xe1, 0x80]))).toBe("\uFFFD"); // 参考: 素だと 1 個
+  });
+
+  it("正当な多 byte 列はそのまま復号する", () => {
+    const files = [{ name: "docs/\\346\\227\\245.md" }] as unknown as FileDiffMetadata[];
+    expect([...indexDiffFilesByPath(files).keys()]).toEqual(["docs/日.md"]);
   });
 });
 

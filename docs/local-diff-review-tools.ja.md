@@ -219,9 +219,12 @@ placeholder(shadow root + div 1 個)にする。
 描画行数 1,000 行以上の file だけを折りたたみ、展開してもハイライトは切らない。
 複数 file を同時に展開したままにできる。
 仮想化では有界にならない「file 全体に走る処理」だけを内容量で抑える:
-描画対象の総文字数が 150,000 字を超える file は Shiki のトークン化を切り、
-30,000 字を超える file は行内 word 差分を切る。
-行数ではなく文字数で測るのは、66 行で 65,000 字の高密度 patch を契約内で作れるため。
+Shiki のトークン化は総文字数 150,000 字**または** 20,000 行を超えたら切り、
+行内 word 差分は 30,000 字を超えたら切る。
+文字数と行数の両方が要る。66 行で 65,000 字の高密度 patch も、74,000 行 × 1 字の
+patch も契約内(1 file 256 KiB)で作れるが、前者は行数で、後者は文字数で素通り
+する。後者はライブラリ自身の `tokenizeMaxLength`(既定 100,000、比較対象は
+**行数**)にも掛からないため、展開した瞬間に main thread が止まる。
 
 `.diff-files` は素の block flow にする。
 flex の `gap` や margin を入れると virtualizer が持つ file ごとの top と実際の位置が
@@ -240,7 +243,10 @@ patch に含まれなかった file(バイナリ・サイズ超過・上限)は�
 path の byte 順では `a/b.ts` < `a/c/d.ts` < `a/e.ts` のように同一ディレクトリが
 連続しないため、連続塊ではなく Map で束ねる。
 飛び先の索引を作るときは patch 側の path を生へ戻してから照合する
-(`unquoteGitPath`)。git は `core.quotePath`(既定 on)で非 ASCII や制御文字を
+(`unquoteGitPath`)。
+不正な UTF-8 byte の置換規則はサーバー(Go)に合わせて 1 byte につき 1 個の
+U+FFFD にする — WHATWG の `TextDecoder` は不正な列をまとめて 1 個にするので、
+素で復号すると `files[].path` と key が食い違う。git は `core.quotePath`(既定 on)で非 ASCII や制御文字を
 C 形式にエスケープするが、サーバーの `files[].path` は生のままなので、
 そのままでは非 ASCII のファイルが飛べない。
 `parsePatchFiles` は外側の `"` だけ剥がしてエスケープは残すので、引用符の有無で
@@ -345,6 +351,11 @@ diff ビュアーは全画面のモーダルと、詳細ドロワーの左隣に
 判定は `lib/diffView.ts` の `isDiffCovering` に 1 つだけ置き、オーバーレイ側
 (inert と `aria-modal`)と App 側(peek の停止)が同じ答えを使う。
 グリップも同じ理由でこの帯には出さない(CSS が幅を固定するので動かせない)。
+
+設定モーダルが上にある間、diff オーバーレイは自分で `inert` になる
+(`suppressed` prop)。設定側から `#diff-overlay` を遮らないのは、diff が lazy
+chunk で、解決前に設定を開くとまだ要素が無く、後から inert 無しで mount されて
+自分に focus を移してしまうため。mount 順に依存しない形にする。
 
 背面を遮る `inert` は参照数で持つ(`lib/inert.ts`)。全画面 diff の上に設定
 モーダルを重ねると `#root` の所有者が 2 つになり、素朴に付け外しすると
