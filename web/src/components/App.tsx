@@ -41,6 +41,23 @@ interface DiffTarget {
   query: Record<string, string>;
 }
 
+/* 背面で popup が開いているか。
+ *
+ * capture 段は React の handler より先に走るので、開いている popup の Escape を
+ * 横取りすると 1 回のキーで popup と diff 起動の両方が消える。overlay が出た後は
+ * 「フォーカスが自分の中にあるか」で判定できるが、待機中は自分の DOM が無い。
+ *
+ * フォーカス先から `closest()` で辿るだけでは足りない — FilterDropdown は
+ * `aria-expanded` を trigger に付け、フォーカスは兄弟の popover(検索 input や
+ * option)へ移すので、祖先を辿っても trigger に当たらない。開いている trigger が
+ * 文書内にあるかで見る(popover は blur で閉じるので、開いている = そこに
+ * フォーカスがある)。 */
+function backgroundPopupOpen(): boolean {
+  if (document.querySelector('[aria-expanded="true"]')) return true;
+  const active = document.activeElement;
+  return active instanceof Element && active.closest('[role="dialog"],[role="listbox"]') !== null;
+}
+
 /* lazy chunk の解決待ち。Escape で起動を取り消せるようにするためだけに存在する
  * — fallback が空だと、この間の Escape は(Drawer 起点なら)Drawer だけを閉じて
  * diffTarget が残り、chunk が解決した瞬間に「閉じたはず」の diff が出てくる。
@@ -51,15 +68,7 @@ export function DiffPending({ enabled, onCancel }: { enabled: boolean; onCancel:
     if (!enabled) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
-      /* capture 段は React の handler より先に走る。背面で popup(フィルタの
-       * dropdown 等)が開いていたらそちらの Escape を横取りしない — 1 回のキーで
-       * popup と diff 起動の両方が消えてしまう。overlay が出た後の判定
-       * (フォーカスが自分の中にあるか)と同じ考え方だが、待機中は自分の DOM が
-       * 無いので「フォーカス先が popup を名乗っているか」で見る。 */
-      const active = document.activeElement;
-      if (active instanceof Element && active.closest('[aria-expanded="true"],[role="dialog"]')) {
-        return;
-      }
+      if (backgroundPopupOpen()) return;
       e.preventDefault();
       onCancel();
     };

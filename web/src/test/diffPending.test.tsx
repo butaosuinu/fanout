@@ -32,18 +32,29 @@ describe("DiffPending", () => {
 
   it("背面で popup が開いていれば Escape を横取りしない", () => {
     /* capture 段は React の handler より先に走る。開いている dropdown の Escape を
-     * 奪うと、1 回のキーで popup と diff 起動の両方が消える。 */
+     * 奪うと、1 回のキーで popup と diff 起動の両方が消える。
+     *
+     * FilterDropdown の実際の形に合わせること: aria-expanded は trigger に付き、
+     * フォーカスは兄弟の popover(検索 input)へ移る。フォーカス先から closest()
+     * で辿っても trigger には当たらない。 */
     const onCancel = vi.fn();
+    const fd = document.createElement("div");
+    fd.innerHTML = "";
     const trigger = document.createElement("button");
     trigger.setAttribute("aria-expanded", "true");
-    document.body.appendChild(trigger);
+    const pop = document.createElement("div");
+    const search = document.createElement("input");
+    pop.appendChild(search);
+    fd.append(trigger, pop);
+    document.body.appendChild(fd);
     try {
       render(<DiffPending enabled onCancel={onCancel} />);
-      trigger.focus();
-      fireEvent.keyDown(trigger, { key: "Escape" });
+      search.focus();
+      expect(search.closest('[aria-expanded="true"]')).toBeNull(); // 祖先には居ない
+      fireEvent.keyDown(search, { key: "Escape" });
       expect(onCancel).not.toHaveBeenCalled();
     } finally {
-      trigger.remove();
+      fd.remove();
     }
   });
 
