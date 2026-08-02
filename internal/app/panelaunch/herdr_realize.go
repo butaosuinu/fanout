@@ -554,7 +554,9 @@ func RealizeHerdrWorktree(
 		return result, observeErr
 	}
 	if coordinatorErr := verifyCoordinatorObservation(intent.Coordinator, workspaces); coordinatorErr != nil {
-		return result, markHerdrIntentManual(locked, intent, coordinatorErr)
+		// The create was never issued (planned): release the child
+		// reservation instead of demanding manual cleanup.
+		return result, rollbackUnissuedHerdrWorktree(locked, req, intent, coordinatorErr)
 	}
 	if matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel); len(matches) != 0 {
 		return result, markHerdrIntentManual(

@@ -1710,7 +1710,9 @@ func TestRealizeHerdrResolvesPlanRuntimeParentPerOwnerRoot(t *testing.T) {
 	}
 }
 
-func TestRealizeHerdrWorktreeRejectsForeignCoordinatorBeforeBranch(t *testing.T) {
+// Coordinator identity drift before the child create refuses the mutation and
+// releases the still-unissued child reservation (planned proves non-issuance).
+func TestRealizeHerdrWorktreeRejectsForeignCoordinatorBeforeChildMutation(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
 	installSuccessfulHerdrMutations(t, repo, runtime)
@@ -1720,18 +1722,30 @@ func TestRealizeHerdrWorktreeRejectsForeignCoordinatorBeforeBranch(t *testing.T)
 
 	req := testHerdrWorktreeRequest(repo, "foreign-coordinator", 431)
 	_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
-	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
+	if err == nil || errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		!strings.Contains(err.Error(), "coordinator") {
 		t.Fatalf("foreign coordinator error = %v", err)
+	}
+	if len(runtime.mutations) != 1 {
+		t.Fatalf("foreign coordinator issued child mutation; calls=%d", len(runtime.mutations))
 	}
 	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
-	if _, found, observeErr := worktree.ObserveBranch(context.Background(), repo, fullRef); observeErr != nil || !found {
-		t.Fatalf("branch reservation state = found:%t err:%v", found, observeErr)
+	if _, found, observeErr := worktree.ObserveBranch(context.Background(), repo, fullRef); observeErr != nil || found {
+		t.Fatalf("released branch reservation state = found:%t err:%v", found, observeErr)
 	}
-	if len(runtime.mutations) != 1 {
-		t.Fatalf("foreign coordinator issued child mutation; calls=%d", len(runtime.mutations))
+	control, loadErr := state.LoadHerdrIntents(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	intentID, idErr := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
+	if idErr != nil {
+		t.Fatal(idErr)
+	}
+	if _, found := control.FindIntent(intentID); found {
+		t.Fatal("foreign coordinator kept the planned child intent")
 	}
 }
 

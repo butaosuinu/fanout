@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -602,11 +603,13 @@ func (b *Backend) runWorktreeMutation(
 		return nil, mutationNotIssued(err)
 	}
 	out, err := b.output(ctx, binary, routeEnvironment(target, b.control), args...)
-	if err != nil {
-		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) {
-			// The process never started (fork/exec failure or pre-start
-			// cancellation), so the mutation is provably unissued.
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		// Only a provable start failure (binary resolution or fork/exec) is
+		// unissued. A cancellation after start and a nonzero exit stay
+		// ambiguous and go through existence classification.
+		var execErr *exec.Error
+		var pathErr *os.PathError
+		if errors.As(err, &execErr) || errors.As(err, &pathErr) {
 			return out, mutationNotIssued(err)
 		}
 	}

@@ -54,7 +54,14 @@ func ensureHerdrBranchReservation(
 		return intent, nil
 	}
 	if intent.BranchCreated {
-		if !found || current != intent.ExpectedHead {
+		if !found {
+			// The reserved branch is gone while the create was never issued:
+			// rollback is provably complete, so release and retry fresh.
+			return intent, releaseHerdrIntent(locked, intent.ID, fmt.Errorf(
+				"reserved Herdr branch disappeared; retry launch",
+			))
+		}
+		if current != intent.ExpectedHead {
 			return intent, markHerdrIntentManual(
 				locked,
 				intent,
@@ -132,6 +139,11 @@ func recoverHerdrCoordinator(
 	intent state.HerdrIntent,
 	mutationErr error,
 ) (HerdrCoordinatorResult, error) {
+	// A structured rejection proves the workspace was not created; release
+	// the intent without depending on a snapshot that may fail transiently.
+	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
+		return HerdrCoordinatorResult{}, releaseHerdrIntent(locked, intent.ID, mutationErr)
+	}
 	// A failed snapshot classifies nothing: keep the issued intent so the
 	// next run can classify it (canon: adoption or fail-closed needs an
 	// observed state, not an observation failure).
@@ -157,9 +169,6 @@ func recoverHerdrCoordinator(
 		}
 		return coordinatorDeferred(intent)
 	}
-	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) && len(matches) == 0 {
-		return HerdrCoordinatorResult{}, releaseHerdrIntent(locked, intent.ID, mutationErr)
-	}
 	return HerdrCoordinatorResult{}, markHerdrIntentManual(
 		locked,
 		intent,
@@ -179,6 +188,11 @@ func recoverHerdrWorktree(
 	intent state.HerdrIntent,
 	mutationErr error,
 ) (HerdrWorktreeResult, error) {
+	// A structured rejection proves the mutation created nothing; classify
+	// from local Git state without depending on a snapshot.
+	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
+		return recoverRejectedHerdrWorktree(ctx, locked, req, source, intent, mutationErr)
+	}
 	// A failed snapshot classifies nothing: keep the issued intent so the
 	// next run can classify it.
 	workspaces, observeErr := runtime.ObserveWorkspaces(ctx)
@@ -200,31 +214,6 @@ func recoverHerdrWorktree(
 	if checkoutErr != nil {
 		return HerdrWorktreeResult{}, errors.Join(mutationErr, checkoutErr)
 	}
-	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) &&
-		intent.Resource.WorkspaceID != "" && len(matches) == 0 {
-		_, verifyErr := worktree.VerifyCheckout(
-			ctx,
-			req.SourceRoot,
-			intent.WorktreePath,
-			intent.FullBranchRef,
-			intent.ExpectedHead,
-			source.RepoKey,
-			source.RepoRoot,
-		)
-		if verifyErr != nil && !errors.Is(verifyErr, worktree.ErrCheckoutMismatch) {
-			// The verification itself failed; nothing was classified.
-			return HerdrWorktreeResult{}, errors.Join(mutationErr, verifyErr)
-		}
-		if verifyErr == nil {
-			intent.Status = state.HerdrIntentRealized
-			intent.Failure = ""
-			locked.UpsertIntent(intent)
-			if saveErr := locked.Save(); saveErr != nil {
-				return HerdrWorktreeResult{}, errors.Join(mutationErr, saveErr)
-			}
-			return HerdrWorktreeResult{}, mutationErr
-		}
-	}
 	if mutationErr == nil && intent.BranchCreated && len(matches) == 0 &&
 		checkout.PathAbsent && !checkout.Registered {
 		_, branchFound, branchErr := worktree.ObserveBranch(
@@ -242,23 +231,6 @@ func recoverHerdrWorktree(
 			))
 		}
 	}
-	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) &&
-		len(matches) == 0 && checkout.PathAbsent && !checkout.Registered {
-		if intent.BranchCreated {
-			if err := worktree.DeleteReservedBranch(
-				req.SourceRoot,
-				intent.FullBranchRef,
-				intent.BaseSHA,
-			); err != nil {
-				return HerdrWorktreeResult{}, markHerdrIntentManual(
-					locked,
-					intent,
-					errors.Join(mutationErr, err),
-				)
-			}
-		}
-		return HerdrWorktreeResult{}, releaseHerdrIntent(locked, intent.ID, mutationErr)
-	}
 	return HerdrWorktreeResult{}, markHerdrIntentManual(
 		locked,
 		intent,
@@ -272,6 +244,73 @@ func recoverHerdrWorktree(
 			),
 		),
 	)
+}
+
+// recoverRejectedHerdrWorktree classifies a structured rejection from local
+// Git state: restore a still-valid realized checkout, or release the reserved
+// branch and the intent when nothing was created.
+func recoverRejectedHerdrWorktree(
+	ctx context.Context,
+	locked *state.LockedHerdrIntents,
+	req HerdrWorktreeRequest,
+	source worktree.RepoIdentity,
+	intent state.HerdrIntent,
+	mutationErr error,
+) (HerdrWorktreeResult, error) {
+	if intent.Resource.WorkspaceID != "" {
+		_, verifyErr := worktree.VerifyCheckout(
+			ctx,
+			req.SourceRoot,
+			intent.WorktreePath,
+			intent.FullBranchRef,
+			intent.ExpectedHead,
+			source.RepoKey,
+			source.RepoRoot,
+		)
+		if verifyErr == nil {
+			intent.Status = state.HerdrIntentRealized
+			intent.Failure = ""
+			locked.UpsertIntent(intent)
+			if saveErr := locked.Save(); saveErr != nil {
+				return HerdrWorktreeResult{}, errors.Join(mutationErr, saveErr)
+			}
+			return HerdrWorktreeResult{}, mutationErr
+		}
+		if !errors.Is(verifyErr, worktree.ErrCheckoutMismatch) {
+			// The verification itself failed; nothing was classified.
+			return HerdrWorktreeResult{}, errors.Join(mutationErr, verifyErr)
+		}
+		return HerdrWorktreeResult{}, markHerdrIntentManual(
+			locked,
+			intent,
+			errors.Join(mutationErr, verifyErr),
+		)
+	}
+	checkout, checkoutErr := worktree.ObserveCheckout(ctx, req.SourceRoot, intent.WorktreePath)
+	if checkoutErr != nil {
+		return HerdrWorktreeResult{}, errors.Join(mutationErr, checkoutErr)
+	}
+	if !checkout.PathAbsent || checkout.Registered {
+		return HerdrWorktreeResult{}, markHerdrIntentManual(
+			locked,
+			intent,
+			errors.Join(mutationErr, fmt.Errorf("checkout exists after rejected Herdr create")),
+		)
+	}
+	if intent.BranchCreated {
+		if err := worktree.DeleteReservedBranch(
+			req.SourceRoot,
+			intent.FullBranchRef,
+			intent.BaseSHA,
+		); err != nil {
+			return HerdrWorktreeResult{}, markHerdrIntentManual(
+				locked,
+				intent,
+				errors.Join(mutationErr, err),
+			)
+		}
+	}
+	return HerdrWorktreeResult{}, releaseHerdrIntent(locked, intent.ID, mutationErr)
 }
 
 func finalizeHerdrWorktree(
