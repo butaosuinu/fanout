@@ -202,7 +202,7 @@ func recoverHerdrWorktree(
 	}
 	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) &&
 		intent.Resource.WorkspaceID != "" && len(matches) == 0 {
-		if _, verifyErr := worktree.VerifyCheckout(
+		_, verifyErr := worktree.VerifyCheckout(
 			ctx,
 			req.SourceRoot,
 			intent.WorktreePath,
@@ -210,7 +210,12 @@ func recoverHerdrWorktree(
 			intent.ExpectedHead,
 			source.RepoKey,
 			source.RepoRoot,
-		); verifyErr == nil {
+		)
+		if verifyErr != nil && !errors.Is(verifyErr, worktree.ErrCheckoutMismatch) {
+			// The verification itself failed; nothing was classified.
+			return HerdrWorktreeResult{}, errors.Join(mutationErr, verifyErr)
+		}
+		if verifyErr == nil {
 			intent.Status = state.HerdrIntentRealized
 			intent.Failure = ""
 			locked.UpsertIntent(intent)
@@ -228,11 +233,8 @@ func recoverHerdrWorktree(
 			intent.FullBranchRef,
 		)
 		if branchErr != nil {
-			return HerdrWorktreeResult{}, markHerdrIntentManual(
-				locked,
-				intent,
-				branchErr,
-			)
+			// The branch state was not classified; keep the intent retryable.
+			return HerdrWorktreeResult{}, branchErr
 		}
 		if !branchFound {
 			return HerdrWorktreeResult{}, releaseHerdrIntent(locked, intent.ID, fmt.Errorf(

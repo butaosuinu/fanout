@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
@@ -600,5 +601,14 @@ func (b *Backend) runWorktreeMutation(
 	if err := ctx.Err(); err != nil {
 		return nil, mutationNotIssued(err)
 	}
-	return b.output(ctx, binary, routeEnvironment(target, b.control), args...)
+	out, err := b.output(ctx, binary, routeEnvironment(target, b.control), args...)
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			// The process never started (fork/exec failure or pre-start
+			// cancellation), so the mutation is provably unissued.
+			return out, mutationNotIssued(err)
+		}
+	}
+	return out, err
 }

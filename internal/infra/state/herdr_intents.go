@@ -99,7 +99,7 @@ type LockedHerdrIntents struct {
 // HerdrIntentsPath returns the repository-common journal path shared by every
 // linked worktree.
 func HerdrIntentsPath(projectRoot string) (string, error) {
-	out, err := execx.Combined(projectRoot, "git", "rev-parse", "--git-common-dir")
+	out, err := execx.Output(projectRoot, nil, "git", "rev-parse", "--git-common-dir")
 	if err != nil {
 		return "", fmt.Errorf("resolve Herdr intents git common directory: %w", err)
 	}
