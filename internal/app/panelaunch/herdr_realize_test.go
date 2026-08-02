@@ -595,43 +595,9 @@ func TestRealizeHerdrWorktreeChecksPolicyBeforeBranchReservation(t *testing.T) {
 	}
 }
 
-func TestRealizeHerdrRejectsTmuxBindingBeforeIntent(t *testing.T) {
-	repo := newHerdrRealizeRepo(t)
-	locked, err := state.LockProject(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	locked.Panes = append(locked.Panes, state.Pane{
-		Parent: "425", IssueNum: 999, Backend: backend.Tmux,
-	})
-	if saveErr := locked.Save(); saveErr != nil {
-		t.Fatal(saveErr)
-	}
-	if unlockErr := locked.Unlock(); unlockErr != nil {
-		t.Fatal(unlockErr)
-	}
-
-	runtime := &fakeHerdrRealizeRuntime{}
-	installSuccessfulHerdrMutations(t, repo, runtime)
-	_, err = realizeHerdrCoordinator(
-		context.Background(),
-		testHerdrCoordinatorRequest(repo),
-		runtime,
-		deterministicHerdrRealizeHooks(),
-	)
-	if err == nil {
-		t.Fatal("tmux binding unexpectedly allowed a Herdr intent")
-	}
-	control, err := state.LoadHerdrIntents(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(control.Intents) != 0 {
-		t.Fatalf("Herdr intents = %#v, want none", control.Intents)
-	}
-}
-
-func TestVerifyHerdrStateBindingsResolvesIssueSourcedPlanParent(t *testing.T) {
+// The launch-lock binding recheck lives in cmd's backendSelectionVerifier;
+// realize only resolves the runtime parent from the plan spec source.
+func TestResolveHerdrRuntimeParentUsesIssueSourcedPlanSpec(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	planDir := filepath.Join(repo, ".fanout", "plans")
 	if err := os.MkdirAll(planDir, 0o755); err != nil {
@@ -644,21 +610,6 @@ func TestVerifyHerdrStateBindingsResolvesIssueSourcedPlanParent(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	sibling := filepath.Join(t.TempDir(), "sibling")
-	gitCmdTest(t, repo, "worktree", "add", "-b", "sibling", sibling, "HEAD")
-	locked, err := state.LockProject(sibling)
-	if err != nil {
-		t.Fatal(err)
-	}
-	locked.Panes = append(locked.Panes, state.Pane{
-		Parent: "425", IssueNum: 426, Backend: backend.Tmux,
-	})
-	if saveErr := locked.Save(); saveErr != nil {
-		t.Fatal(saveErr)
-	}
-	if unlockErr := locked.Unlock(); unlockErr != nil {
-		t.Fatal(unlockErr)
-	}
 
 	runtimeParent, err := resolveHerdrRuntimeParent(
 		repo,
@@ -666,12 +617,8 @@ func TestVerifyHerdrStateBindingsResolvesIssueSourcedPlanParent(t *testing.T) {
 		repo,
 		state.HerdrIntents{},
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = verifyHerdrStateBindings(repo, runtimeParent, state.Store{})
-	if err == nil || !strings.Contains(err.Error(), "runtime backend for parent 425 became tmux") {
-		t.Fatalf("issue-sourced plan binding error = %v", err)
+	if err != nil || runtimeParent != "425" {
+		t.Fatalf("resolveHerdrRuntimeParent(plan:demo) = (%q, %v), want issue parent 425", runtimeParent, err)
 	}
 }
 
@@ -1487,12 +1434,11 @@ func TestRealizeHerdrResumesPlannedChildAtSavedOwnerAcrossLinkedWorktrees(t *tes
 	}
 }
 
-func TestRealizeHerdrResumesPlannedCoordinatorAtSavedPathAcrossLinkedWorktrees(t *testing.T) {
+// The coordinator has no planned stage: a failure before the workspace create
+// must leave no intent behind, so the retry starts fresh instead of entering
+// recovery for a mutation that was never recorded.
+func TestRealizeHerdrCoordinatorPolicyFailureLeavesNoIntent(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
-	savedPath, err := filepath.EvalSymlinks(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
 	runtime := &fakeHerdrRealizeRuntime{}
 	installSuccessfulHerdrMutations(t, repo, runtime)
 	runtime.policyErr = errors.New("stop before coordinator mutation")
@@ -1504,34 +1450,30 @@ func TestRealizeHerdrResumesPlannedCoordinatorAtSavedPathAcrossLinkedWorktrees(t
 		hooks,
 	); initialErr == nil ||
 		!strings.Contains(initialErr.Error(), "stop before coordinator mutation") {
-		t.Fatalf("initial planned coordinator error = %v", initialErr)
+		t.Fatalf("policy-blocked coordinator error = %v", initialErr)
 	}
 	if len(runtime.mutations) != 0 {
-		t.Fatal("planned coordinator unexpectedly issued a mutation")
+		t.Fatal("policy-blocked coordinator unexpectedly issued a mutation")
+	}
+	control, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(control.Intents) != 0 {
+		t.Fatalf("policy-blocked coordinator intents = %#v, want none", control.Intents)
 	}
 
-	sibling := filepath.Join(t.TempDir(), "sibling")
-	gitCmdTest(t, repo, "worktree", "add", "-b", "linked-planned-coordinator", sibling, "HEAD")
 	runtime.policyErr = nil
-	resumed, err := realizeHerdrCoordinator(
+	if _, retryErr := realizeHerdrCoordinator(
 		context.Background(),
-		testHerdrCoordinatorRequest(sibling),
+		testHerdrCoordinatorRequest(repo),
 		runtime,
 		hooks,
-	)
-	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
-		resumed.Intent.WorktreePath != savedPath ||
-		resumed.Intent.Resource.CurrentPath != savedPath ||
-		len(runtime.mutations) != 1 ||
-		runtime.mutations[0].SourceRoot != savedPath ||
-		runtime.mutations[0].SourceRepoRoot != savedPath ||
-		runtime.mutations[0].CWD != savedPath {
-		t.Fatalf(
-			"resumed planned coordinator = %+v, err=%v, mutation=%+v",
-			resumed.Intent,
-			err,
-			runtime.mutations,
-		)
+	); !errors.Is(retryErr, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("fresh coordinator retry error = %v", retryErr)
+	}
+	if len(runtime.mutations) != 1 {
+		t.Fatalf("fresh coordinator retry mutations = %d, want 1", len(runtime.mutations))
 	}
 }
 
