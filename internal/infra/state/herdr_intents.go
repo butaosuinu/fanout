@@ -231,7 +231,6 @@ func HerdrOwnerProjectRoot(parent, projectRoot string) (string, error) {
 	if parent != "@manual" && !strings.HasPrefix(parent, "plan:") {
 		return "", nil
 	}
-	projectRoot = strings.TrimSpace(projectRoot)
 	if projectRoot == "" || !filepath.IsAbs(projectRoot) || filepath.Clean(projectRoot) != projectRoot {
 		return "", fmt.Errorf("herdr scoped owner project root must be a canonical absolute path")
 	}

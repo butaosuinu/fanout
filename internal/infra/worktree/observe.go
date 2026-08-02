@@ -54,7 +54,7 @@ func ResolveRepoIdentity(root string) (RepoIdentity, error) {
 }
 
 func resolveGitPath(root, flag string) (string, error) {
-	out, err := git(root, "rev-parse", flag)
+	out, err := gitStdout(context.Background(), root, "rev-parse", flag)
 	if err != nil {
 		return "", err
 	}
@@ -95,7 +95,8 @@ func ResolveLaunchBase(ctx context.Context, opts Options) (BaseResolution, error
 	if err := requireCleanSource(ctx, plan.ProjectRoot); err != nil {
 		return BaseResolution{}, err
 	}
-	sha, err := gitTrimContext(ctx, plan.ProjectRoot, "rev-parse", "--verify", plan.BaseBranch+"^{commit}")
+	shaOut, err := gitStdout(ctx, plan.ProjectRoot, "rev-parse", "--verify", plan.BaseBranch+"^{commit}")
+	sha := strings.TrimSpace(string(shaOut))
 	if err != nil {
 		return BaseResolution{}, fmt.Errorf("resolve Herdr base %q to a commit: %w", plan.BaseBranch, err)
 	}
@@ -107,7 +108,8 @@ func ResolveLaunchBase(ctx context.Context, opts Options) (BaseResolution, error
 }
 
 func requireCleanSource(ctx context.Context, root string) error {
-	status, err := gitTrimContext(ctx, root, "status", "--porcelain", "--untracked-files=all")
+	statusOut, err := gitStdout(ctx, root, "status", "--porcelain", "--untracked-files=all")
+	status := strings.TrimSpace(string(statusOut))
 	if err != nil {
 		return fmt.Errorf("check Herdr source checkout cleanliness: %w", err)
 	}
@@ -232,11 +234,11 @@ func ObserveCheckout(ctx context.Context, root, checkoutPath string) (CheckoutOb
 	if observation.PathAbsent {
 		return observation, nil
 	}
-	observation.HeadSHA, err = gitTrimContext(ctx, checkoutPath, "rev-parse", "--verify", "HEAD")
+	headOut, err := gitStdout(ctx, checkoutPath, "rev-parse", "--verify", "HEAD")
 	if err != nil {
 		return observation, fmt.Errorf("resolve Herdr checkout HEAD at %s: %w", checkoutPath, err)
 	}
-	observation.HeadSHA = strings.ToLower(observation.HeadSHA)
+	observation.HeadSHA = strings.ToLower(strings.TrimSpace(string(headOut)))
 	if !commitSHAPattern.MatchString(observation.HeadSHA) {
 		return observation, fmt.Errorf("herdr checkout %s has invalid HEAD %q", checkoutPath, observation.HeadSHA)
 	}
@@ -283,6 +285,18 @@ func VerifyCheckout(
 		return observation, fmt.Errorf("%w: %s belongs to a different repository", ErrCheckoutMismatch, checkoutPath)
 	}
 	return observation, nil
+}
+
+// gitStdout runs git and returns stdout only, so warnings and advice on
+// stderr never fuse into a parsed value.
+func gitStdout(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return out, nil
 }
 
 type worktreeEntry struct {

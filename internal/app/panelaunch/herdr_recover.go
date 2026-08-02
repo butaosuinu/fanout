@@ -42,11 +42,11 @@ func ensureHerdrBranchReservation(
 	}
 	if intent.BranchExisted {
 		if !found || current != intent.ExpectedHead {
-			return intent, markHerdrIntentManual(
-				locked,
-				intent,
-				fmt.Errorf("adopted Herdr branch moved from %s", intent.ExpectedHead),
-			)
+			// The adopted branch is not fanout-owned and the create was never
+			// issued; release so a fresh retry records the current tip.
+			return intent, releaseHerdrIntent(locked, intent.ID, fmt.Errorf(
+				"adopted Herdr branch moved from %s; retry launch", intent.ExpectedHead,
+			))
 		}
 		if err := worktree.BranchAvailable(ctx, req.SourceRoot, intent.FullBranchRef); err != nil {
 			return intent, err
@@ -80,7 +80,8 @@ func ensureHerdrBranchReservation(
 	if err := worktree.ReserveBranch(req.SourceRoot, intent.FullBranchRef, intent.BaseSHA); err != nil {
 		current, found, observeErr := worktree.ObserveBranch(ctx, req.SourceRoot, intent.FullBranchRef)
 		if observeErr != nil {
-			return intent, markHerdrIntentManual(locked, intent, errors.Join(err, observeErr))
+			// The branch state was not classified; keep the intent retryable.
+			return intent, errors.Join(err, observeErr)
 		}
 		if found {
 			return intent, markHerdrIntentManual(
@@ -108,12 +109,15 @@ func rollbackUnissuedHerdrWorktree(
 	if !intent.BranchExisted && !intent.BranchCreated {
 		// Rollback must complete even when the launch context is canceled.
 		_, found, err := worktree.ObserveBranch(context.Background(), req.SourceRoot, intent.FullBranchRef)
-		if err != nil || found {
-			cause := err
-			if cause == nil {
-				cause = fmt.Errorf("herdr branch exists without persisted ownership")
-			}
-			return markHerdrIntentManual(locked, intent, errors.Join(mutationErr, cause))
+		if err != nil {
+			// The branch state was not classified; keep the intent retryable.
+			return errors.Join(mutationErr, err)
+		}
+		if found {
+			return markHerdrIntentManual(locked, intent, errors.Join(
+				mutationErr,
+				fmt.Errorf("herdr branch exists without persisted ownership"),
+			))
 		}
 	}
 	if intent.BranchCreated {
