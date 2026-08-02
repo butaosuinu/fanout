@@ -132,7 +132,7 @@ Files are expanded with syntax highlighting by default. Only a file with 1,000 o
 
 It opens compact by default: a panel beside the detail drawer. Drag its left edge to widen it up to 95% of the window, over the drawer. In compact the Session list and the drawer stay usable, so you can follow a pane's output while reading its diff. The diagonal-arrow icon switches between compact and full screen. The mode and the width are stored in the browser.
 
-Deletions and additions follow the width by default: stacked in one column when narrow, side by side when wide. The frame icon cycles **auto → side by side → stacked**; picking one explicitly pins it regardless of width.
+Deletions and additions follow the width by default: stacked in one column when narrow, side by side when wide. The frame icon cycles auto → side by side → stacked; picking one explicitly pins it regardless of width.
 
 Buttons in the header and the sidebar are icons; hover one to see what it does.
 

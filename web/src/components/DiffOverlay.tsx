@@ -250,16 +250,21 @@ export function DiffOverlay({
     return () => onClosedRef.current?.();
   }, []);
 
-  /* 非 covering から covering へ変わったとき(ウィンドウを 1,100px 以下へ縮めた、
-   * コンパクトから全画面へ切り替えた)にもフォーカスを引き取る。背面はこの瞬間に
-   * inert になるので、そこに居たフォーカスが行き場を失う。 */
-  const wasCovering = useRef(covering);
+  /* 「自分が最前面のモーダルになった」瞬間にフォーカスを引き取る。covering に
+   * なった(ウィンドウを 1,100px 以下へ縮めた、コンパクトから全画面へ切り替えた)
+   * ときも、上の設定モーダルが閉じて抑止が解けたときも同じ。背面はこの間 inert
+   * なので、引き取らないとフォーカスが行き場を失う。
+   *
+   * 抑止側も見ること — lazy chunk の解決待ちに設定を開くと、mount 時点で
+   * covering かつ suppressed になり、covering だけを見ていると遷移が起きない。 */
+  const wasActive = useRef(covering && !suppressed);
   useEffect(() => {
-    if (covering && !wasCovering.current && !suppressed) {
+    const active = covering && !suppressed;
+    if (active && !wasActive.current) {
       const root = rootRef.current;
       if (root && !root.contains(document.activeElement)) root.focus();
     }
-    wasCovering.current = covering;
+    wasActive.current = active;
   }, [covering, suppressed]);
 
   /* コンパクト表示の右端を詳細ドロワーの左端に合わせる。ドロワーは幅可変

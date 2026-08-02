@@ -1117,6 +1117,51 @@ describe("diff オーバーレイ", () => {
     }
   });
 
+  it("同じ overlay のまま対象を切り替えると、新しい patch に入れ替わる", async () => {
+    /* render 順(旧 patch が 1 コミット残らないこと)は useDiff.test.tsx が見る。
+     * ここは overlay を作り直さずに対象を切り替えられることの担保。 */
+    const patches: Record<string, string> = {
+      "101": linesPatch("a.ts", 3, "patch_of_A"),
+      "102": linesPatch("b.ts", 3, "patch_of_B"),
+    };
+    server.use(
+      http.get("/api/diff", ({ request }) => {
+        const issue = new URL(request.url).searchParams.get("issue") ?? "101";
+        return HttpResponse.json(
+          makeDiffResponse({
+            patch: patches[issue]!,
+            files: [makeDiffFile({ path: issue === "101" ? "a.ts" : "b.ts" })],
+          }),
+        );
+      }),
+    );
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({ issueNum: 101, displayName: "Alpha", diffSummary: "+3/-0" }),
+          makePane({ issueNum: 102, displayName: "Beta", diffSummary: "+3/-0" }),
+        ]),
+      ]),
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "変更を表示 #101 +3/-0" }));
+    const overlay = await screen.findByRole("dialog", { name: "worktree diff" });
+    await waitFor(() => {
+      expect(shadowText()).toContain("patch_of_A");
+    });
+
+    // B へ切り替える。B のタイトルが出た時点で A の patch は消えていること
+    await user.click(screen.getByRole("button", { name: "変更を表示 #102 +3/-0" }));
+    expect(within(overlay).getByText("#102")).toBeInTheDocument();
+    expect(shadowText()).not.toContain("patch_of_A");
+
+    await waitFor(() => {
+      expect(shadowText()).toContain("patch_of_B");
+    });
+  });
+
   it("同名 basename でも、移動ボタンと折りたたみボタンの名前で区別できる", async () => {
     /* 支援技術のボタン一覧から対象を特定できること。basename だけ / 「折りたたむ」
      * だけだと、別ディレクトリの同名 file や複数 file で名前が衝突する。 */
