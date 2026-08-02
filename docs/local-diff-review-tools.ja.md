@@ -352,6 +352,11 @@ diff ビュアーは全画面のモーダルと、詳細ドロワーの左隣に
 (inert と `aria-modal`)と App 側(peek の停止)が同じ答えを使う。
 グリップも同じ理由でこの帯には出さない(CSS が幅を固定するので動かせない)。
 
+diff オーバーレイは lazy chunk なので、解決を待つあいだ Suspense の fallback が
+Escape を持つ(`DiffPending`)。空 fallback にすると、その窓での Escape は
+Drawer だけを閉じて `diffTarget` が残り、chunk が解決した瞬間に「閉じたはず」の
+diff が出てくる(表セル起点では Escape 自体が効かない)。
+
 Escape は「いま居るもの」を閉じる。オーバーレイは document の capture 段で
 受けるが、背面を覆っていないコンパクト表示では、フォーカスが自分の中にあるとき
 だけ引き取る。capture は React の handler より先に走るので、無条件に閉じると

@@ -44,6 +44,25 @@ interface DiffTarget {
   query: Record<string, string>;
 }
 
+/* lazy chunk の解決待ち。Escape で起動を取り消せるようにするためだけに存在する
+ * — fallback が空だと、この間の Escape は(Drawer 起点なら)Drawer だけを閉じて
+ * diffTarget が残り、chunk が解決した瞬間に「閉じたはず」の diff が出てくる。
+ * 表セル起点では Escape 自体が効かない。見た目は出さない(短い窓なので、空の
+ * パネルが一瞬光るほうが煩わしい)。 */
+export function DiffPending({ enabled, onCancel }: { enabled: boolean; onCancel: () => void }) {
+  useEffect(() => {
+    if (!enabled) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      onCancel();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [enabled, onCancel]);
+  return null;
+}
+
 /* 生きている(DOM に繋がっている)最初の起点へフォーカスを戻す。detached な
  * 要素への focus() は無言で何も起きないので、候補を順に試す。 */
 function focusFirstConnected(refs: RefObject<HTMLElement | null>[]) {
@@ -282,7 +301,7 @@ export function App() {
         )}
       </div>
       {diffTarget && (
-        <Suspense fallback={null}>
+        <Suspense fallback={<DiffPending enabled={!settingsOpen} onCancel={closeDiff} />}>
           <DiffOverlay
             title={diffTarget.title}
             query={diffTarget.query}
