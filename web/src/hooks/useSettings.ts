@@ -75,10 +75,13 @@ function currentDiffView(): DiffView {
   return read(DIFF_VIEW_KEY) === "full" ? "full" : "compact";
 }
 
-/* 設定は Nav の歯車、設定モーダル、diff オーバーレイの 3 か所から読まれるため
- * module-level store で全インスタンスを同期する。OS テーマ変更(matchMedia)は
- * ユーザーが明示選択していない場合のみ追従し、listener は購読者がいる間だけ
- * 1 本張る。 */
+/* 設定は設定モーダルと diff オーバーレイから読まれるため module-level store で
+ * 全インスタンスを同期する。OS テーマ変更(matchMedia)はユーザーが明示選択して
+ * いない場合のみ追従し、listener は購読者がいる間だけ 1 本張る。
+ *
+ * 購読するのはどちらも「開いている間だけ」なので、常駐の購読者を App が持つ
+ * (useSystemThemeSync)。無いと両方閉じた瞬間に listener が外れ、システム追従中に
+ * OS の配色が変わってもページ全体が古い配色のまま取り残される。 */
 const listeners = new Set<() => void>();
 let mq: MediaQueryList | null = null;
 
@@ -138,6 +141,13 @@ function setDiffLayout(layout: DiffLayout) {
 function setDiffView(view: DiffView) {
   write(DIFF_VIEW_KEY, view === "full" ? "full" : null);
   emit();
+}
+
+/* App が張る常駐購読。値は使わない — matchMedia listener をアプリの生存期間ぶん
+ * 保つためだけに購読する。解決済みテーマを snapshot にしてあるので、OS の配色が
+ * 変わったときだけ App が再レンダーする。 */
+export function useSystemThemeSync(): void {
+  useSyncExternalStore(subscribe, currentTheme);
 }
 
 /* 解決済みの light/dark だけが要る箇所用(diff オーバーレイの themeType など)。 */

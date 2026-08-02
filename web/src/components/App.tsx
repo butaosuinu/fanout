@@ -9,6 +9,7 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
+import { useSystemThemeSync } from "../hooks/useSettings";
 import { useSnapshot } from "../hooks/useSnapshot";
 import { readToken } from "../lib/api";
 import {
@@ -105,6 +106,9 @@ function parentsOf(snap: Snapshot | null): Set<string> {
 }
 
 export function App() {
+  /* 設定モーダルと diff オーバーレイは開いている間しか外観 store を購読しない。
+   * ここで常駐購読を張り、システム追従中の OS 配色変更を取りこぼさない。 */
+  useSystemThemeSync();
   const token = useMemo(() => readToken(), []);
   const { snap, conn } = useSnapshot(token);
   const [filter, setFilter] = useState("");

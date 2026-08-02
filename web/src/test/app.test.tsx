@@ -1252,6 +1252,55 @@ describe("設定モーダル", () => {
     expect(localStorage.getItem("fanout.theme")).toBeNull();
   });
 
+  it("モーダルを閉じたあとも OS の配色変更に追従する", async () => {
+    /* 外観 store を購読するのは設定モーダルと diff オーバーレイだけで、どちらも
+     * 開いている間しか購読しない。App が常駐購読を張っていないと、両方閉じた
+     * 瞬間に matchMedia listener が外れ、ページ全体が古い配色で取り残される。 */
+    const changeListeners = new Set<(e: MediaQueryListEvent) => void>();
+    let dark = false;
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      get matches() {
+        return dark;
+      },
+      media: query,
+      onchange: null,
+      addEventListener: (_t: string, cb: (e: MediaQueryListEvent) => void) =>
+        changeListeners.add(cb),
+      removeEventListener: (_t: string, cb: (e: MediaQueryListEvent) => void) =>
+        changeListeners.delete(cb),
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }));
+    const flipOsTheme = (toDark: boolean) => {
+      dark = toDark;
+      act(() => {
+        for (const cb of changeListeners) cb({ matches: toDark } as MediaQueryListEvent);
+      });
+    };
+
+    const user = userEvent.setup();
+    render(<App />);
+    // 一度も設定を開かないうちから追従する
+    flipOsTheme(true);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+
+    // 開いて閉じても購読が途切れない
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "設定" });
+    await user.click(within(dialog).getByRole("button", { name: "設定を閉じる" }));
+    flipOsTheme(false);
+    expect(document.documentElement.dataset.theme).toBe("light");
+
+    // 明示選択中は OS 変更を無視する(従来どおり)
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog2 = await screen.findByRole("dialog", { name: "設定" });
+    await user.click(within(dialog2).getByRole("radio", { name: "ライト" }));
+    await user.click(within(dialog2).getByRole("button", { name: "設定を閉じる" }));
+    flipOsTheme(true);
+    expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
   it("diff テーマの選択を localStorage に保存する", async () => {
     const user = userEvent.setup();
     render(<App />);
