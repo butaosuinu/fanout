@@ -272,10 +272,55 @@ Consider unresolved inline threads, review summaries, and paginated top-level
 comments. Separate actionable defects from questions, stale comments, and
 requests requiring product judgment.
 
+For Codex connector feedback, first identify the saved current head SHA and a
+submitted review record for that SHA. Fetch all currently visible actionable
+threads, review summaries, and top-level comments for that head and treat them
+as one **current-head review batch**. Do not begin from an individual
+notification while the completed review record is unavailable. If another
+current-head finding appears before commit, rebuild the batch before editing.
+
+### Track repair waves for this invocation
+
+Start a process-local connector repair-wave count at zero for each explicit
+invocation. Retain it only in the same foreground run, including
+`PR_WATCH_CONTINUE=1` continuations. Do not persist it or reconstruct it from PR
+history. Increment it once only after an actionable current-head review batch
+causes an edit, one intentional commit, and one push. A decline-only reply is
+not a repair wave. A later explicit invocation starts from zero. Do not start a
+fourth repair wave in one invocation.
+
+### Triage findings
+
+For every changed or reviewed path, resolve the applicable base-side instruction
+chain, including the repository-root and every nearer `AGENTS.md` or
+`AGENTS.override.md` in normal precedence. Apply its `## Code Review Rules`
+sections to findings affecting that path, never a copy changed by the target.
+A finding is actionable only when a concrete trigger is reachable under
+documented user-facing prerequisites, or it violates an existing test, issue
+acceptance criterion, documented contract, or required safe rejection or
+fail-closed behavior. Do not request new support for an unpromised environment.
+An explicitly accepted unsupported input and its required safe rejection remain
+in scope.
+
+Reject a finding only with concrete evidence that the trigger is unreachable,
+the behavior is an explicit non-goal, or the applicable contract is already
+satisfied. Reply with the base-side scope rule and that evidence. If every
+finding in the current-head batch is rejected, do not edit, commit, or push;
+continue readiness checks with no actionable review work. This does not satisfy
+`CHANGES_REQUESTED` or a required approval. Reconsider a rejection when a new
+diff, reviewer reply, or explicit contract invalidates its rationale. Ask the
+user when reachability, product support, contract scope, or required human
+review is ambiguous.
+
+Cluster the batch by root cause. Confirm every affected branch, entrypoint, and
+consumer, then fix the confirmed occurrences together. One review wave produces
+one intentional commit and one push; it does not produce one commit per comment.
+
 For an actionable request:
 
-1. Trace the behavior in the current head and confirm the issue.
-2. Implement the narrow fix.
+1. Trace the behavior in the current head and confirm the issue plus its
+   same-root-cause occurrences.
+2. Implement the narrow complete fix for the whole cluster.
 3. Run focused tests while editing.
 4. Commit, run the repository's canonical full gate once against the final
    commit (same resolution as in Repair CI), then push.
@@ -286,6 +331,12 @@ repository, automatic review replies are Japanese; keep file paths, symbols,
 commands, and quoted code unchanged. Usually leave thread resolution to the
 reviewer. Resolve it yourself only when the fix is unambiguous and repository
 policy permits it.
+
+Do not manually request another Codex review for the same head SHA. When an
+explicit request is required, send it once after the next repair commit is
+visible on GitHub. Stop after three connector review-repair waves per explicit
+invocation; report the remaining batch and require human follow-up instead of
+starting a fourth.
 
 Do not force a speculative implementation when a reviewer asks for a product or
 architecture choice. Summarize the alternatives and ask the user.

@@ -93,7 +93,7 @@ func TestClassifyPath(t *testing.T) {
 		{name: "LICENSE is NONE", path: "LICENSE", want: ClassNone, found: true},
 		{name: "README is NONE", path: "README.md", want: ClassNone, found: true},
 		{name: "README.ja is NONE", path: "README.ja.md", want: ClassNone, found: true},
-		{name: "architecture doc overrides docs NONE to M", path: "docs/architecture.ja.md", want: ClassM, found: true},
+		{name: "architecture doc has dedicated M rule", path: "docs/architecture.ja.md", want: ClassM, found: true},
 		{name: "other docs are NONE", path: "docs/review-checklist.ja.md", want: ClassNone, found: true},
 		{name: "workflow is H", path: ".github/workflows/test.yml", want: ClassH, found: true},
 		{name: "github rest is M", path: ".github/CODEOWNERS", want: ClassM, found: true},

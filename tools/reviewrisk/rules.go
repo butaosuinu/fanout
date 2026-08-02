@@ -186,7 +186,7 @@ var prefixRules = []struct {
 	{"codex/", Rule{ID: "codex-prompts", Class: ClassM, Source: SourceExtra, Note: "配布エージェントプロンプト"}},
 	{"hack/", Rule{ID: "hack", Class: ClassM, Source: SourceExtra, Note: "補助スクリプト"}},
 
-	// docs and the docs site are NONE by default (architecture.ja.md overrides).
+	// docs and docs site NONE (except architecture.ja.md above).
 	{"docs/", Rule{ID: "docs", Class: ClassNone, Source: SourceExtra, Note: "ドキュメント"}},
 	{"site/", Rule{ID: "site", Class: ClassNone, Source: SourceExtra, Note: "ドキュメントサイト"}},
 }

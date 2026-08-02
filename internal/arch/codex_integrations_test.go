@@ -140,6 +140,11 @@ func TestCodexPostWorkReviewSkillContract(t *testing.T) {
 		"\"$helper\" mark <reviewed-head>",
 		"--ignore-submodules=none",
 		"not proof of a custom role",
+		"high-confidence P0, P1, or P2-equivalent",
+		"complete actionable set in one pass",
+		"same root cause under one finding",
+		"every affected entrypoint and consumer",
+		"no high-confidence P0-P2 findings",
 	} {
 		if !bytes.Contains(skill, []byte(required)) {
 			t.Errorf("post-work-review/SKILL.md missing contract %q", required)
@@ -234,6 +239,152 @@ func TestCodexPRWatchSkillContract(t *testing.T) {
 	metadata := mustReadRepoFile(t, skillDir, "agents", "openai.yaml")
 	if !bytes.Contains(metadata, []byte("probe review metadata first")) {
 		t.Error("pr-watch/agents/openai.yaml does not require a metadata-first review probe")
+	}
+}
+
+func TestCodeReviewRulesContract(t *testing.T) {
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatalf("repoRoot() = %v, want nil", err)
+	}
+	agents := mustReadRepoFile(t, root, "AGENTS.md")
+	for _, required := range []string{
+		"## Code Review Rules",
+		"high-confidence P0-P2",
+		"current diff",
+		"root-cause finding",
+		"state transitions or external side effects",
+		"identity, ownership, binding, and fencing",
+		"Git or filesystem contracts",
+		"user-facing prerequisites",
+		"existing test, issue acceptance criterion",
+		"safe rejection / fail-closed",
+		"Do not request new support",
+		"Full mutual exclusion",
+		"every crash-recovery window",
+		"explicit contract invalidates that rationale",
+	} {
+		if !bytes.Contains(agents, []byte(required)) {
+			t.Errorf("AGENTS.md missing code-review contract %q", required)
+		}
+	}
+}
+
+func TestReviewConvergenceContracts(t *testing.T) {
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatalf("repoRoot() = %v, want nil", err)
+	}
+	tests := []struct {
+		name     string
+		path     []string
+		required []string
+	}{
+		{
+			name: "codex pr-watch",
+			path: []string{"codex", "skills", "pr-watch", "SKILL.md"},
+			required: []string{
+				"current-head review batch",
+				"same head SHA",
+				"one intentional commit",
+				"3 connector review-repair waves per explicit invocation",
+				"hand it to a human",
+				"process-local connector repair-wave count",
+				"explicit invocation starts from zero again",
+				"A decline-only reply is not a repair wave",
+				"Triage review findings before fixing",
+				"no actionable review work",
+				"applicable base-side instruction chain",
+				"`AGENTS.override.md` in normal precedence",
+			},
+		},
+		{
+			name: "codex pr-watch playbook",
+			path: []string{"codex", "skills", "pr-watch", "references", "repair-playbook.md"},
+			required: []string{
+				"current-head review batch",
+				"one intentional commit and one push",
+				"same head SHA",
+				"three connector review-repair waves per explicit",
+				"Track repair waves for this invocation",
+				"process-local connector repair-wave count",
+				"A decline-only reply is",
+				"A later explicit invocation starts from zero",
+				"Triage findings",
+				"no actionable review work",
+				"applicable base-side instruction",
+				"`AGENTS.override.md` in normal precedence",
+			},
+		},
+		{
+			name: "codex post-work-review",
+			path: []string{"codex", "skills", "post-work-review", "SKILL.md"},
+			required: []string{
+				"A finding is actionable only when",
+				"safe rejection / fail-closed",
+				"If every reported finding is rejected",
+				"no actionable findings",
+				"all rejected as non-actionable with concrete evidence",
+				"stop without a marker",
+				"applicable base-side instruction chain",
+				"`AGENTS.override.md` in normal precedence",
+			},
+		},
+		{
+			name: "claude post-work-review",
+			path: []string{"claude", "skills", "post-work-review", "SKILL.md"},
+			required: []string{
+				"最大 3 回",
+				"修正は最大 2 回",
+				"3 回目にもactionable finding",
+				"markerを書かない",
+				"同根を一括修正",
+				"全findingを根拠付きで棄却",
+				"markerなし",
+				"applicable instruction chain",
+				"`AGENTS.override.md`まで",
+			},
+		},
+		{
+			name: "review checklist",
+			path: []string{"docs", "review-checklist.ja.md"},
+			required: []string{
+				"finding を根拠付きで棄却する返信だけなら wave に含めない",
+				"全 finding を根拠付きで棄却できれば、修正せず clean として扱う",
+				"明示的な各起動で 0 から始め",
+				"1 起動あたり",
+				"base 側で適用される",
+				"instruction chain",
+			},
+		},
+		{
+			name: "claude pr-watch",
+			path: []string{"claude", "skills", "pr-watch", "SKILL.md"},
+			required: []string{
+				"current-head review batch",
+				"1 review waveは1 commit、1 push",
+				"同じhead SHA",
+				"max connector review-repair waves: 3 per explicit invocation",
+				"hand it to a human",
+				"process-localなconnector repair-wave counter",
+				"後の明示的な起動はcounterを0から始め",
+				"根拠を返信してfindingを棄却しただけならwaveに数えない",
+				"全findingを根拠付きで棄却",
+				"actionable review workなし",
+				"applicable instruction chain",
+				"`AGENTS.override.md`まで",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := mustReadRepoFile(t, root, tt.path...)
+			for _, required := range tt.required {
+				if !bytes.Contains(data, []byte(required)) {
+					t.Errorf("%s missing convergence contract %q", filepath.ToSlash(filepath.Join(tt.path...)), required)
+				}
+			}
+		})
 	}
 }
 

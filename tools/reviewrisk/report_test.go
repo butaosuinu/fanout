@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -77,6 +78,41 @@ func TestReportText(t *testing.T) {
 	}
 	if strings.Contains(txt, "stats:") {
 		t.Errorf("Text() still prints the duplicate stats footer, got:\n%s", txt)
+	}
+}
+
+func TestReportQuotesSpecialPathsOnOneLine(t *testing.T) {
+	path := "docs/x\ty/line\n\u2028\u2029`|</code>.md"
+	report := Report{
+		Level: LevelHigh,
+		Files: []FileReport{{
+			Path: path, Status: "M", Class: ClassUnknown, Level: LevelHigh, RuleID: "unclassified",
+		}},
+		Reasons: []Reason{
+			{Signal: sigUnclassifiedPath, Level: LevelHigh, File: path, Detail: "old\n**path**"},
+			{Signal: sigTestDeleted, Level: LevelHigh, File: path, Detail: "rename でテスト形状を喪失(tests/bats/~~old~~.bats)"},
+			{Signal: sigSkipAdded, Level: LevelHigh, File: path, Detail: `スキップ追加: skip "~~case~~"`},
+		},
+		Stats: Stats{Files: 1, Added: 1},
+	}
+
+	quoted := strconv.QuoteToGraphic(path)
+	text := report.Text()
+	if !strings.Contains(text, quoted) || strings.Contains(text, path) {
+		t.Errorf("Text() must quote the special path on one line, got:\n%s", text)
+	}
+
+	markdown := report.Markdown()
+	for _, want := range []string{"<code>", "docs/x\\ty/line\\n\\u2028\\u2029", "&#124;", "&lt;/code&gt;", "old&#92;n&#42;&#42;path&#42;&#42;", "&#126;&#126;old&#126;&#126;", "&#126;&#126;case&#126;&#126;"} {
+		if !strings.Contains(markdown, want) {
+			t.Errorf("Markdown() missing escaped fragment %q, got:\n%s", want, markdown)
+		}
+	}
+	if strings.Contains(markdown, "~~") {
+		t.Errorf("Markdown() contains an unescaped strikethrough delimiter, got:\n%s", markdown)
+	}
+	if strings.Contains(markdown, path) {
+		t.Errorf("Markdown() contains the raw special path, got:\n%s", markdown)
 	}
 }
 

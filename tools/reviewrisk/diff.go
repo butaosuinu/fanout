@@ -36,19 +36,20 @@ func resolveBase(explicit string) (string, error) {
 	return strings.TrimSpace(mb), nil
 }
 
-// loadDiff runs the three read-only git diffs (--name-status -M, --numstat -M,
-// and -U0) between base and the working tree and assembles them into a Diff: the
-// file list with rename detection, per-file added/deleted counts, and the +/-
-// content lines the escalation greps scan. Dropping HEAD makes the base the only
-// argument, so the diff spans base..working tree and sees uncommitted edits
-// (untracked files stay invisible to git diff). core.quotepath=off keeps
-// non-ASCII paths literal so classifyPath matches them.
+// loadDiff runs the three read-only git diffs (--name-status -z -M,
+// --numstat -z -M, and -U0) between base and the working tree and assembles them
+// into a Diff: the file list with rename detection, per-file added/deleted
+// counts, and the +/- content lines the escalation greps scan. Dropping HEAD
+// makes the base the only argument, so the diff spans base..working tree and
+// sees uncommitted edits (untracked files stay invisible to git diff). The two
+// NUL-delimited summaries preserve every path byte except NUL;
+// core.quotepath=off keeps non-ASCII paths literal in the unified diff.
 func loadDiff(base string) (Diff, error) {
-	nameStatus, err := runGit("-c", "core.quotepath=off", "diff", "--name-status", "-M", base)
+	nameStatus, err := runGit("-c", "core.quotepath=off", "diff", "--name-status", "-z", "-M", base)
 	if err != nil {
 		return Diff{}, err
 	}
-	numstat, err := runGit("-c", "core.quotepath=off", "diff", "--numstat", "-M", base)
+	numstat, err := runGit("-c", "core.quotepath=off", "diff", "--numstat", "-z", "-M", base)
 	if err != nil {
 		return Diff{}, err
 	}
@@ -86,29 +87,32 @@ func runGit(args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// parseNameStatus parses `git diff --name-status -M` output. Each line is a
-// tab-separated status letter followed by one path (A/M/D) or, for renames and
-// copies (R<score>/C<score>), the old and new paths.
+// parseNameStatus parses `git diff --name-status -z -M` output. NUL separates
+// the status and every path, so tabs and newlines remain part of a path. A/M/D
+// carry one path; renames and copies carry old and new paths.
 func parseNameStatus(out string) []FileChange {
 	var files []FileChange
-	for line := range strings.SplitSeq(out, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
+	fields := strings.Split(out, "\x00")
+	for i := 0; i < len(fields); {
+		status := fields[i]
+		i++
+		if status == "" {
 			continue
 		}
-		fields := strings.Split(line, "\t")
-		if len(fields) < 2 || fields[0] == "" {
-			continue
-		}
-		fc := FileChange{Status: fields[0][0]}
+		fc := FileChange{Status: status[0]}
 		switch fc.Status {
 		case 'R', 'C':
-			if len(fields) < 3 {
-				continue
+			if i+1 >= len(fields) {
+				return files
 			}
-			fc.OldPath, fc.Path = fields[1], fields[2]
+			fc.OldPath, fc.Path = fields[i], fields[i+1]
+			i += 2
 		default:
-			fc.Path = fields[1]
+			if i >= len(fields) {
+				return files
+			}
+			fc.Path = fields[i]
+			i++
 		}
 		files = append(files, fc)
 	}
@@ -122,61 +126,41 @@ type numstatEntry struct {
 	deleted int
 }
 
-// parseNumstat parses `git diff --numstat -M` output into a per-path count map.
-// Columns are added, deleted, path; a binary file's "-" columns become -1. The
-// path column is normalized through numstatPath so a rename's merged form keys
-// on the new path, matching the name-status entry.
+// parseNumstat parses `git diff --numstat -z -M` output into a per-path count
+// map. Columns are added, deleted, path; a binary file's "-" columns become -1.
+// A rename or copy has an empty path column followed by NUL-delimited old and
+// new paths, and keys on the new path to match the name-status entry.
 func parseNumstat(out string) map[string]numstatEntry {
 	counts := make(map[string]numstatEntry)
-	for line := range strings.SplitSeq(out, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
+	fields := strings.Split(out, "\x00")
+	for i := 0; i < len(fields); {
+		record := fields[i]
+		i++
+		if record == "" {
 			continue
 		}
-		fields := strings.Split(line, "\t")
-		if len(fields) < 3 {
+		columns := strings.SplitN(record, "\t", 3)
+		if len(columns) < 3 {
 			continue
 		}
 		var e numstatEntry
-		if fields[0] == "-" || fields[1] == "-" {
+		if columns[0] == "-" || columns[1] == "-" {
 			e.added, e.deleted = -1, -1
 		} else {
-			e.added, _ = strconv.Atoi(fields[0])
-			e.deleted, _ = strconv.Atoi(fields[1])
+			e.added, _ = strconv.Atoi(columns[0])
+			e.deleted, _ = strconv.Atoi(columns[1])
 		}
-		counts[numstatPath(fields[2])] = e
+		path := columns[2]
+		if path == "" {
+			if i+1 >= len(fields) {
+				return counts
+			}
+			path = fields[i+1]
+			i += 2
+		}
+		counts[path] = e
 	}
 	return counts
-}
-
-// numstatPath collapses the merged rename forms `git diff --numstat -M` emits so
-// the result is the new path, matching the name-status new path. A brace group
-// `dir/{old => new}/rest` becomes `dir/new/rest`; an empty new side
-// (`dir/{old => }/file.go`, a rename that only drops a path segment) collapses
-// the doubled slash to `dir/file.go`, and an empty old side (`{ => new}`) yields
-// just the new side. A brace-less whole-path `old => new` takes the new side. A
-// field with no ` => ` passes through unchanged.
-func numstatPath(field string) string {
-	if open := strings.IndexByte(field, '{'); open >= 0 {
-		if shut := strings.IndexByte(field[open:], '}'); shut >= 0 {
-			shut += open
-			if _, newPart, ok := strings.Cut(field[open+1:shut], " => "); ok {
-				prefix, suffix := field[:open], field[shut+1:]
-				// An empty new side (dir/{old => }/file.go) leaves prefix ending
-				// in '/' and suffix beginning with '/'. Splicing an empty middle
-				// between them doubles the separator (dir//file.go) and misses
-				// the name-status new path, so drop the redundant slash.
-				if newPart == "" {
-					suffix = strings.TrimPrefix(suffix, "/")
-				}
-				return prefix + newPart + suffix
-			}
-		}
-	}
-	if _, newPath, ok := strings.Cut(field, " => "); ok {
-		return newPath
-	}
-	return field
 }
 
 // parseUnified extracts the +/- content lines per file from `git diff -U0`
@@ -202,11 +186,11 @@ func parseUnified(out string) (added, removed map[string][]string) {
 			inHeader = true
 			cur, oldPath = "", ""
 		case inHeader && strings.HasPrefix(line, "--- "):
-			if p := stripDiffPathPrefix(strings.TrimRight(line[4:], "\r")); p != "/dev/null" {
+			if p := parseDiffHeaderPath(line[4:]); p != "/dev/null" {
 				oldPath = p
 			}
 		case inHeader && strings.HasPrefix(line, "+++ "):
-			if p := stripDiffPathPrefix(strings.TrimRight(line[4:], "\r")); p != "/dev/null" {
+			if p := parseDiffHeaderPath(line[4:]); p != "/dev/null" {
 				cur = p
 			} else {
 				cur = "" // deletion: nothing was added under the new path
@@ -224,6 +208,20 @@ func parseUnified(out string) (added, removed map[string][]string) {
 		}
 	}
 	return added, removed
+}
+
+// parseDiffHeaderPath decodes Git's C-quoted ---/+++ path before dropping its
+// a/ or b/ prefix. Git quotes paths containing control bytes even when
+// core.quotepath=off, so leaving the quotes intact would make AddedLines and
+// RemovedLines use different keys from the NUL-delimited file list.
+func parseDiffHeaderPath(p string) string {
+	p = strings.TrimRight(p, "\r")
+	if strings.HasPrefix(p, `"`) {
+		if unquoted, err := strconv.Unquote(p); err == nil {
+			p = unquoted
+		}
+	}
+	return stripDiffPathPrefix(p)
 }
 
 // stripDiffPathPrefix drops the git diff `a/` or `b/` path prefix. /dev/null and

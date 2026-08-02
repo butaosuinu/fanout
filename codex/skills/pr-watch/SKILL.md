@@ -165,11 +165,28 @@ changed. Read only the relevant part of the [repair playbook](references/repair-
 1. Refresh PR metadata and checks, then run `review-probe`. Fetch unresolved
    thread, latest-review, or paginated top-level-comment bodies only for a
    non-empty surface whose digest is not current.
+   For Codex connector feedback, wait for the submitted review record associated
+   with the saved current head SHA, then collect every visible actionable
+   thread, review summary, and top-level comment for that head as one
+   **current-head review batch**. Do not start editing from one notification or
+   one inline comment while the completed review is still unavailable.
+   Start a process-local connector repair-wave count at zero for each explicit
+   invocation. Keep that count only for the same foreground run, including
+   `PR_WATCH_CONTINUE=1` waits; do not persist it or reconstruct it from prior PR
+   history. Increment it once only when an actionable current-head batch causes
+   an edit, commit, and push. A decline-only reply is not a repair wave. A later
+   explicit invocation starts from zero again. Do not start a fourth repair wave
+   in one invocation.
 2. Reconfirm the PR head branch, author, push remote, and saved remote head SHA.
 3. Handle conflict/base drift, failing CI, then actionable review feedback.
+   Cluster the entire current-head review batch by root cause and inspect every
+   affected branch, entrypoint, and consumer before editing. If another
+   current-head finding appears before commit, rebuild the batch and include it
+   in the same repair wave.
 4. Run focused tests while editing. Do not weaken tests, required checks, or
    workflows.
-5. Commit intentionally. Before each push, run the repository's canonical full
+5. Commit the review batch as one intentional commit and use one push for that
+   review wave. Before each push, run the repository's canonical full
    gate once against the final commit (prefer an umbrella target such as
    `make check` when the project defines one; otherwise resolve it from
    AGENTS.md, CLAUDE.md, or the build files). Then push with an explicit
@@ -180,10 +197,41 @@ changed. Read only the relevant part of the [repair playbook](references/repair-
 7. After any push, discard old logs/thread classification and return to a fresh
    snapshot plus `review-probe` on the new head.
 
+Never manually request another Codex review for the same head SHA. If repository
+policy requires an explicit request, send it once only after a new repair commit
+has been pushed.
+
 Repair ownership includes safe fixes that are clearly implied by CI or review.
 Stop and ask for user judgment when behavior is ambiguous, the required access is
 missing, a conflict needs semantic product judgment, or external CI cannot be
 inspected.
+
+### Triage review findings before fixing
+
+Do not fix every finding. For every changed or reviewed path, resolve the
+applicable base-side instruction chain, including the repository-root and every
+nearer `AGENTS.md` or `AGENTS.override.md` in normal precedence. Apply its
+`## Code Review Rules` sections to findings affecting that path. Never use a
+copy changed by the PR branch. Classify each finding using those trusted base
+rules:
+
+- It is actionable when it has a concrete trigger under documented user-facing
+  prerequisites or a changed flow that explicitly accepts the input, or when it
+  violates an existing test, issue acceptance criterion, documented contract,
+  or safe rejection / fail-closed behavior.
+- It is out of scope when it only requests support for an unpromised
+  environment, matches an explicit non-goal, or concrete diff/repository
+  evidence proves that the contract is already satisfied. An unsupported input
+  remains in scope when the contract requires rejecting it safely.
+- If the verdict would change product support, exceeds the PR scope, conflicts
+  with required human review, or is otherwise ambiguous, stop and ask the user.
+
+For every out-of-scope finding, reply with the concrete rationale and applicable
+base rule. Do not edit, commit, or push for a batch containing only rejected
+findings; treat it as no actionable review work and continue the readiness
+check. Do not override `CHANGES_REQUESTED` or a required approval. Treat a
+declined finding as handled only while no newer diff, reviewer reply, or explicit
+contract invalidates its rationale.
 
 ## Push safety
 
@@ -208,6 +256,7 @@ inspected.
 Default limits:
 
 - 3 full repair passes
+- 3 connector review-repair waves per explicit invocation
 - 2 full review/comment/thread body refreshes for the same metadata fingerprint
 - 1 CI log fetch per failing check name and head SHA
 - 3 ambiguous-update full inspections
@@ -216,7 +265,9 @@ Default limits:
 Normalize each pass's conflict files, failing jobs, and review paths. Stop when
 the same actionable set repeats twice without progress, the same problem recurs
 across three passes, a limit is reached, or an update cannot be classified
-safely. Do not keep polling after `event=blocked` or `event=timeout`.
+safely. On the third connector review-repair wave, do not start a fourth repair;
+report the remaining current-head batch and hand it to a human. Do not keep
+polling after `event=blocked` or `event=timeout`.
 
 ## Finish report
 

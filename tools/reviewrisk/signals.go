@@ -145,15 +145,17 @@ func criticalReasons(d Diff) []Reason {
 		if touches(fc, "internal/arch/") {
 			reasons = append(reasons, Reason{Signal: sigGuardModified, Level: LevelCritical, File: fc.Path, Detail: "層ガード(internal/arch)変更"})
 		}
-		// S5 review-gate-modified: any touch of .claude/, the post-work-review
-		// gate skills, or the retired Codex driver sentinel. Re-adding that driver
-		// switches release installation back to the legacy migration path.
+		// S5 review-gate-modified: any touch of repository bootstrap instructions,
+		// agent settings, the post-work-review gate skills, or the retired Codex
+		// driver sentinel. Re-adding that driver switches release installation
+		// back to the legacy migration path.
 		if touches(fc, ".claude/") ||
+			touchesBootstrapInstructions(fc) ||
 			touches(fc, "codex/skills/post-work-review/") ||
 			touches(fc, "claude/skills/post-work-review/") ||
 			fc.Path == "codex/tools/post-work-review.sh" ||
 			fc.OldPath == "codex/tools/post-work-review.sh" {
-			reasons = append(reasons, Reason{Signal: sigReviewGateChanged, Level: LevelCritical, File: fc.Path, Detail: "PR review gate(.claude / post-work-review)変更"})
+			reasons = append(reasons, Reason{Signal: sigReviewGateChanged, Level: LevelCritical, File: fc.Path, Detail: "PR review gate(AGENTS / agent settings / post-work-review)変更"})
 		}
 		// S6 risk-tool-modified: this tool or either of its workflows (the
 		// pull_request judge and the base-side pull_request_target guard).
@@ -351,6 +353,24 @@ func isMeasurePath(p string) bool {
 func touches(fc FileChange, prefix string) bool {
 	return strings.HasPrefix(fc.Path, prefix) ||
 		(fc.OldPath != "" && strings.HasPrefix(fc.OldPath, prefix))
+}
+
+// touchesBootstrapInstructions reports whether either side of a change is a
+// repository instruction file or lives under a .codex directory. The review
+// marker guard treats these names case-insensitively at any depth, so the risk
+// signal must use the same boundary.
+func touchesBootstrapInstructions(fc FileChange) bool {
+	return isBootstrapInstructionPath(fc.Path) ||
+		(fc.OldPath != "" && isBootstrapInstructionPath(fc.OldPath))
+}
+
+func isBootstrapInstructionPath(p string) bool {
+	for part := range strings.SplitSeq(strings.ToLower(p), "/") {
+		if part == "agents.md" || part == "agents.override.md" || part == ".codex" {
+			return true
+		}
+	}
+	return false
 }
 
 // statusString renders a FileChange status byte for the report's St column.

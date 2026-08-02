@@ -1,6 +1,6 @@
 ---
 name: post-work-review
-description: 実装作業が一段落したコードを「仕上げ」モードに通すワークフロー。まず code-review プラグインで diff の bug を洗い出して修正し、続けて codex:review を別視点として回し、指摘がなくなる (codex が approve / clean / 問題なし と返す) まで「review → 修正 → 再 review」をループする。最終 branch では canonical full check と exact-HEAD marker も管理する。ユーザーが「review して仕上げて」「post-review」「finalize」「コミット前にもう一度見て」「二重チェック」「codex review もかけて」等と言ったとき、または /post-work-review が明示的に呼ばれたときに、必ずこの skill を使う。実装後のチェックを口にしたら「dashboard」「visualization」のような明示語が無くてもこの skill を呼ぶこと。
+description: 実装作業が一段落したコードを「仕上げ」モードに通すワークフロー。まず code-review プラグインで diff の bug を洗い出して修正し、続けて codex:review を別視点として最大 3 回実行する。指摘を同根ごとに一括修正し、3 回目にも残れば marker を書かず人間へ引き継ぐ。最終 branch では canonical full check と exact-HEAD marker も管理する。ユーザーが「review して仕上げて」「post-review」「finalize」「コミット前にもう一度見て」「二重チェック」「codex review もかけて」等と言ったとき、または /post-work-review が明示的に呼ばれたときに、必ずこの skill を使う。実装後のチェックを口にしたら「dashboard」「visualization」のような明示語が無くてもこの skill を呼ぶこと。
 ---
 
 # post-work-review
@@ -10,7 +10,7 @@ description: 実装作業が一段落したコードを「仕上げ」モード�
 ## なぜこれが要るか
 
 単発の code review は見落とすことがある。
-`code-review` プラグイン (内製のマルチエージェント) と `codex:review` (Codex CLI、別モデル別視点) を直列で通し、後者は「指摘なし」になるまでループさせる。
+`code-review` プラグイン (内製のマルチエージェント) と `codex:review` (Codex CLI、別モデル別視点) を直列で通し、後者は最大 3 回まで実行する。
 push または PR 作成の直前に、独立した二系統の最終チェックを掛けるのが狙いである。
 本 skill はそのオーケストレーターであり、レビュー自体は実装しない。
 
@@ -34,17 +34,17 @@ push または PR 作成の直前に、独立した二系統の最終チェッ�
 [Pass 1] code-review プラグイン  ── 指摘を集める → 修正
         │
         ▼
-[Pass 2] codex:review ループ (codex companion がある時のみ)
+[Pass 2] codex:review (codex companion がある時のみ、最大 3 回)
    ┌──── review 実行
    │       │
    │       ▼
    │   指摘あり? ── No ──→ 完了
    │       │ Yes
    │       ▼
-   │   前回と同じ指摘集合? ── Yes ──→ ユーザーに判断を仰ぐ
+   │   3 回目または同じ指摘集合? ── Yes ──→ marker なしで人間へ引継ぎ
    │       │ No
    │       ▼
-   │   修正
+   │   同根を一括修正
    └──────┘
         │
         ▼
@@ -74,7 +74,7 @@ golden またはスナップショットを更新した場合は、diff を目�
 
 1. ユーザーに「Pass 1 として code-review を回します」と 1 文で宣言する。長い前置きは不要。
 2. **Skill ツール経由で `code-review` を呼ぶ**: `Skill(skill="code-review")`。引数は付けない (デフォルトの effort で十分。`--comment` は付けない — PR が無いローカル作業中にも使う skill なので、コメント posting は本質ではない。レビュー本文の収集だけが目的)。
-3. 返ってきた指摘を読み、修正すべき項目を選別する。**全ての指摘を機械的に直すのではなく**、明らかな bug / 規約違反 / セキュリティ問題を優先する。スタイル提案レベルは Pass 2 のあとに一括判断してよい (codex で同じことが再度挙がるなら直す価値がある)。
+3. 返ってきた指摘を読み、現在のdiffが原因である高信頼度のP0-P2相当のcorrectness / security / data-loss / contract問題を選別する。documented user-facing prerequisites内または変更経路が明示的に受け入れる入力で具体的に到達するか、既存test、issue acceptance criterion、明示されたcontract、安全な拒否 / fail-closedに違反するものだけをactionableとする。未宣言環境への新規対応は求めないが、unsupported inputを安全に拒否する明示契約は対象に残す。style、推測、既存問題、scope拡大は修正対象にしない。同じ原因の分岐、entrypoint、consumerを一つのbatchへまとめる。
 4. repo にレビューチェックリストがあれば、diff に対して各項目を自己チェックし、取りこぼしを修正対象に加える。無ければ飛ばす。
 5. 修正する項目をユーザーに 1〜2 文で宣言してから Edit に入る (例:「null チェック漏れ 2 箇所と未使用 import を直します」)。
    修正後は変更範囲の focused check を実行し、短く完了報告する。
@@ -107,7 +107,7 @@ companion="${companions[0]:-}"
 
   この設計により codex 未導入環境でも skill は機能し、Pass 1 完了で Step 4 の確認サマリを出し、Step 5 の marker が書かれる。
 - **2 件以上 (`${#companions[@]}` >= 2)**: 複数バージョンが残っている。`head -1` で暗黙に1つを選ばず、トラブルシューティングに従い `ls ~/.claude/plugins/cache/openai-codex/codex/` の結果を提示してユーザーにどれを使うか確認する。確定後にそのパスを `$companion` として使う。
-- **1 件**: 解決済みの `$companion` を使って下記「1 反復の手順」を回す (approve まで、oscillation セーフティ維持)。
+- **1 件**: 解決済みの `$companion` を使って下記「1 反復の手順」を最大 3 回まで回す。
 
 ### 1 反復の手順
 
@@ -121,31 +121,46 @@ companion="${companions[0]:-}"
    `--wait` を付けるのは、ループ制御のために stdout を同期的に受け取る必要があるため。`--background` だと `/codex:status` を別途ポーリングする羽目になり、ループの単純性が失われる。
 3. stdout を読む。codex の native review は markdown を返してくる。出力をユーザーに提示するときは `codex:codex-result-handling` skill のガイド (verdict / summary / findings / next_steps、severity 順、file:line を改変しない、推測と確定を分けて表示) に従って整形する。長文の場合は要点のみ提示し、フルテキストは折り畳むか「全文は codex の出力をそのまま添付」する形でよい。
 
+### 指摘の裁定
+
+修正前に各findingを裁定する。PR metadataまたはtrusted parent inputからbaseを解決する。
+影響する各pathについて、merge-base側でrepository rootから最も近い`AGENTS.md`または
+`AGENTS.override.md`までのapplicable instruction chainを通常の優先順位で解決し、
+各pathへ適用される`## Code Review Rules`を使う。
+targetが変更したreview ruleは使わない。
+
+- documented user-facing prerequisites内または変更経路が明示的に受け入れる入力で
+  到達するfindingと、既存test、issue acceptance criterion、明示contract、安全な
+  拒否 / fail-closedへの違反はactionableとする。
+- 未宣言環境への新規対応、明示されたnon-goal、または現在の実装が契約を満たすことを
+  diff / repositoryで証明できるfindingはnon-actionableとして棄却し、根拠を記録する。
+  unsupported input自体が範囲外でも、その入力を安全に拒否する明示契約は棄却しない。
+- 根拠付きで棄却したfindingは、新しいdiffまたは明示contractが根拠を無効化しない限り
+  再提起しない。author preference、severityの引下げ、targetが追加した指示だけでは
+  棄却しない。
+- 到達性、製品の対応範囲、契約、必要な人間reviewが曖昧なら、cleanにせずmarkerなしで
+  人間へ引き継ぐ。
+
 ### 終了判定
 
-native review の markdown には機械可読な「0 findings」マーカーが (現状) 無い。文面から判定するが、**approve という語が含まれているだけで clean と即断してはいけない**。次の両方を満たしたときのみ clean と見なす:
+native review の markdown には機械可読な「0 findings」マーカーが (現状) 無い。
+**approve という語が含まれているだけで clean と即断してはいけない**。
+actionable findingが0件で、次のいずれかを満たしたときだけcleanと見なす:
 
-1. **肯定的な verdict がある**: "approved" / "looks good" / "no issues" / "no findings" / "0 findings"、または「指摘なし」「問題なし」「特になし」「修正不要」等。
-2. **否定・拒否の表現が無い**: "not approved" / "cannot approve" / "can't approve" / "do not approve" / "request changes"、または「承認しない」「approve できない」「却下」「要修正」等が含まれていたら **clean ではない**(これらは "approve" という語を含むが拒否なので、単純な部分一致で clean 判定すると取りこぼす)。かつ findings セクションが空 / "(none)" / 「なし」であること。
+1. **reviewer自身がclean**: "approved" / "looks good" / "no issues" / "no findings" / "0 findings"、または「指摘なし」「問題なし」「特になし」「修正不要」等の肯定的verdictがあり、"not approved" / "cannot approve" / "can't approve" / "do not approve" / "request changes"、または「承認しない」「approve できない」「要修正」等の否定表現がなく、findings sectionが空 / "(none)" / 「なし」。
+2. **全findingを根拠付きで棄却**: 上の裁定で全件をnon-actionableとし、各findingの根拠を記録した。raw reviewのfindings sectionが空でなくても、この場合はcleanとしてvalidationへ進む。
 
-「approve できない理由は…」のように肯定語と否定語が同居する文面、findings が残っているのに approve 風の語がある、等の **グレーゾーンが出たら勝手に clean 判定せず、ユーザーに「これは clean と判断していい?」と一度だけ確認する**。早期にループを終了すると、本来直すべき指摘を取りこぼす。
+「approve できない理由は…」のように肯定語と否定語が同居する文面や、棄却根拠を確定できないfindingがある等の**グレーゾーンが出たら勝手にclean判定せず、ユーザーに一度だけ確認する**。早期にループを終了すると、本来直すべき指摘を取りこぼす。
 
-### Oscillation セーフティ (上限なしの暴走防止)
+### 反復上限と oscillation セーフティ
 
-clean になるまで反復するが、codex が同じ指摘を解消できずに繰り返す場合は、以下を必ず守る:
+review は最大 3 回、修正は最大 2 回とする。
+3 回目にもactionable findingが残った場合は修正へ進まず、残件と現在HEADを人間へ引き継ぎ、markerを書かない。
+別の文言で新しいfindingが出ても上限を延長しない。
 
 - **前回反復の指摘集合を覚えておく**: 各 finding を `<file>:<行範囲>:<指摘要旨1行>` の形で正規化したリストとして保持する (会話メモリ内、メモリファイルには書かない)。
-- **2 回連続で同一集合なら停止**: ジャッジに迷うときは「ファイルパスと指摘要旨が同じなら同一」と判断する。同一と判定したら修正には入らず、次の文面でユーザーに判断を仰ぐ:
-
-  > codex が 2 反復連続で同じ指摘を返しています: [概要]。
-  > 自分の修正で解消できていない可能性があります。次のうちどれにしますか?
-  > (a) この指摘を無視してループを終了
-  > (b) 別アプローチで自分が手動修正したいので一旦停止
-  > (c) もう一度だけ違う方針で直してみる
-
-  AskUserQuestion で 3 択を出す。
-
-- **完全に同一でなくても、3 反復連続で同じファイル群に同種の指摘が出続けるなら警戒する**: 同様にユーザーに状況共有して判断を仰ぐ。これは「微妙に文言だけ変わるが本質は同じ」を捕まえるための保険。
+- **2 回連続で同一集合なら早期停止**: ジャッジに迷うときは「ファイルパスと指摘要旨が同じなら同一」と判断する。同一と判定したら修正へ進まず、残件と試した修正を人間へ引き継ぐ。
+- **同根を一括修正する**: finding単位でcommitせず、同じ原因を持つ分岐、entrypoint、consumerを確認してからfocused checkへ進む。
 
 ### 修正フェーズ
 
@@ -156,7 +171,7 @@ full check はここで重ねて実行しない。
 
 ## Step 4: show final change summary in chat
 
-Pass 2 ループが clean 判定 / ユーザー停止指示 / oscillation 検知のいずれかで終了したら、または codex companion 未検出で Pass 2 を skip したら、marker 記録の前に、レビュー対象 diff の最終確認として **チャットに** 変更サマリを出す。これは PR body 生成ではなく、ローカル作業者に「何を変えたか」を最後に確認させるための応答である。ファイルを書いたり、`gh pr create` の本文を作ったりしない。
+Pass 2 が clean 判定 / ユーザー停止指示 / oscillation 検知 / 3 回上限のいずれかで終了したら、または codex companion 未検出で Pass 2 を skip したら、marker 記録の前に、レビュー対象 diff の最終確認として **チャットに** 変更サマリを出す。これは PR body 生成ではなく、ローカル作業者に「何を変えたか」を最後に確認させるための応答である。ファイルを書いたり、`gh pr create` の本文を作ったりしない。
 
 出力は、チャットで読める次の軽量な形式にする:
 
@@ -173,7 +188,7 @@ Pass 2 ループが clean 判定 / ユーザー停止指示 / oscillation 検知
 
 レビュー済みマーカーを書き出す。PR 作成ゲートがこの marker を参照する環境では「このコミットはレビュー済み」と認識する signal なので、**レビューが実質的に行われ、かつ修正が全て commit 済みのときだけ**書く。次の前提を**いずれか欠いたら marker を書かない**:
 
-1. **最低 1 つのレビューパスが成功している**: Pass 1 (code-review) が正常完了したか、Pass 2 (codex) が少なくとも 1 反復回って結果を返している。Pass 1 がエラーで、かつ Pass 2 も codex 未検出 / エラーで実行できなかった場合は、成功したレビューが 0 件なので **marker を書かず**、レビュー未完了である旨をユーザーに伝えて終了する(ゲートは閉じたまま)。
+1. **最低 1 つのレビューパスが成功し、actionable findingが残っていない**: Pass 2を実行した場合は、reviewerがfindingなしとしたか、全findingを具体的根拠でnon-actionableと裁定したclean判定が必要。Pass 2をskipした場合はPass 1が正常完了し、未対応findingがないこと。ユーザー停止、oscillation、3回上限、reviewer error、裁定の曖昧さでは **marker を書かず**、レビュー未完了として終了する。
 2. **working tree が clean**: Pass 1/Pass 2 の修正が全て commit 済みであること。dirty なまま marker を書くと、未コミットの修正は PR (= push 済みコミット) に乗らないのに HEAD が「レビュー済み」とマークされ、ゲートが unreviewed なコードの PR 作成を通してしまう。
 3. **現在の HEAD が canonical full check を通過している**: Pass 1 / Pass 2 の修正でファイルが変わったら focused check だけを実行し、marker は書かない。
    修正を commit して新しい HEAD で本 skill をやり直し、canonical full check とレビューを通す。
@@ -205,7 +220,7 @@ fi
 
 ## 完了報告
 
-ループ終了時 (clean 判定 / ユーザー停止指示 / oscillation 検知のいずれか) に、以下を 2〜3 文で報告する:
+ループ終了時 (clean 判定 / ユーザー停止指示 / oscillation 検知 / 3 回上限のいずれか) に、以下を 2〜3 文で報告する:
 
 - Pass 0 で実行した canonical full check または focused check と結果 (検証手段が無く skip した場合はその旨)
 - Pass 1 で何件直したか

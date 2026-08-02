@@ -134,3 +134,77 @@ func TestRunEmitsFormat(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadDiffPreservesNULDelimitedBootstrapPath verifies the Git boundary, not
+// just the parser: a legal tab in an ancestor directory must still trigger S5.
+func TestLoadDiffPreservesNULDelimitedBootstrapPath(t *testing.T) {
+	newCleanRepo(t)
+	path := filepath.Join("docs", "x\ty", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte("review contract\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+	if _, err := runGit("add", "-N", "--", path); err != nil {
+		t.Fatalf("git add -N %q: %v", path, err)
+	}
+
+	d, err := loadDiff("HEAD")
+	if err != nil {
+		t.Fatalf("loadDiff(HEAD): %v", err)
+	}
+	if len(d.Files) != 1 || d.Files[0].Path != path {
+		t.Fatalf("loadDiff files = %#v, want exact path %q", d.Files, path)
+	}
+	if d.Files[0].Added != 1 || d.Files[0].Deleted != 0 {
+		t.Fatalf("loadDiff stats for %q = +%d/-%d, want +1/-0", path, d.Files[0].Added, d.Files[0].Deleted)
+	}
+	for _, reason := range criticalReasons(d) {
+		if reason.Signal == sigReviewGateChanged && reason.File == path {
+			return
+		}
+	}
+	t.Fatalf("criticalReasons(%q) missing %s: %#v", path, sigReviewGateChanged, criticalReasons(d))
+}
+
+// TestLoadDiffDecodesQuotedUnifiedPath verifies the third Git boundary used by
+// content signals. Git C-quotes a tab in ---/+++ headers; loadDiff must still
+// key added and removed lines by the same exact path as --name-status -z.
+func TestLoadDiffDecodesQuotedUnifiedPath(t *testing.T) {
+	newCleanRepo(t)
+	path := filepath.Join("internal", "core", "x\ty", "foo_test.go")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(path), err)
+	}
+	content := "package x\n\nfunc probe() {\n\tt.Skip(\"wip\")\n\trequireToken(r)\n}\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+	if _, err := runGit("add", "-N", "--", path); err != nil {
+		t.Fatalf("git add -N %q: %v", path, err)
+	}
+
+	d, err := loadDiff("HEAD")
+	if err != nil {
+		t.Fatalf("loadDiff(HEAD): %v", err)
+	}
+	if got := d.AddedLines[path]; len(got) == 0 {
+		t.Fatalf("AddedLines[%q] = %#v, want exact-path content", path, got)
+	}
+	if !hasReason(criticalReasons(d), sigSkipAdded, path) {
+		t.Fatalf("criticalReasons(%q) missing %s: %#v", path, sigSkipAdded, criticalReasons(d))
+	}
+	if !hasReason(invariantReasons(d), sigInvariantHit, path) {
+		t.Fatalf("invariantReasons(%q) missing %s: %#v", path, sigInvariantHit, invariantReasons(d))
+	}
+}
+
+func hasReason(reasons []Reason, signal, path string) bool {
+	for _, reason := range reasons {
+		if reason.Signal == signal && reason.File == path {
+			return true
+		}
+	}
+	return false
+}

@@ -265,6 +265,20 @@ gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,r
    `pullRequest.comments(first:100, after:$endCursor)` を全ページ取得し、後続ページの
    actionable request を取りこぼさない。
 
+Codex connectorの指摘は、保存したcurrent head SHAに紐づくsubmitted reviewを確認して
+から扱う。
+そのHEADの未解決thread、review summary、top-level commentをすべて取得し、1つの
+**current-head review batch**として固定する。
+completed reviewがまだ見えない段階で、通知された1 commentだけを修正しない。
+
+明示的な各起動では、process-localなconnector repair-wave counterを0から始める。
+同じforeground runと`PR_WATCH_CONTINUE=1`で継続したwatcherはcounterを保持するが、
+GitHubやwatcher stateへ永続化せず、過去のreview履歴から復元しない。
+current-head review batchのactionable findingに対して編集、1 commit、1 pushまで完了した
+場合だけ1 waveと数える。
+根拠を返信してfindingを棄却しただけならwaveに数えない。
+後の明示的な起動はcounterを0から始め、同じ起動内で4 wave目の修正は開始しない。
+
 ### B. 終了判定
 
 対処前に終了済みか確認する。
@@ -371,6 +385,31 @@ git push --force-with-lease="refs/heads/$head:$pr_head_before_work" "<head-remot
 
 未対応のインライン thread、review summary、トップレベル PR コメントを対象にする。
 
+- 編集前に変更またはreview対象の各pathについて、PRのbase側でrepository rootから
+  最も近い`AGENTS.md`または`AGENTS.override.md`までのapplicable instruction chainを
+  通常の優先順位で解決する。
+  各pathへ適用される`## Code Review Rules`を裁定基準にし、target branchが変更した
+  copyは使わない。
+- findingは、documented user-facing prerequisitesから到達する具体的なtriggerがあるか、
+  existing test、issue acceptance criterion、documented contract、またはrequired safe
+  rejection / fail-closedに反する場合だけactionableとする。
+- 未サポート環境への新しい対応は要求しない。ただし、その入力を明示的に受け付ける
+  経路やrequired safe rejectionの不備はactionableに含める。
+- 明示されたnon-goal、到達不能な環境、または契約を満たす証拠があるfindingは、base側の
+  scope行と根拠を添えてthreadへ返信し、棄却する。
+- reachability、product support、契約、required human reviewの裁定が曖昧なら編集せず、
+  判断点をユーザーへ確認する。
+- current-head review batchの全findingを根拠付きで棄却できた場合は、編集、commit、pushを
+  行わず、actionable review workなしとして終了判定へ進む。
+  これは`CHANGES_REQUESTED`やrequired approvalを満たした扱いにはしない。
+- 新しいdiff、レビュアー返信、または明示契約が棄却根拠を無効にした場合は再裁定する。
+- current-head review batchをroot causeごとにまとめ、同じ原因を持つ分岐、entrypoint、
+  consumerをすべて確認してから編集する。
+- commit前に同じHEADのfindingが増えたらbatchを取り直し、同じreview waveへ含める。
+- 1 review waveは1 commit、1 pushとする。commentごとにcommitとpushを繰り返さない。
+- 同じhead SHAへ手動でCodex reviewを再要求しない。明示要求が必要な場合は、次の
+  repair commitがGitHubへ反映された後に1回だけ送る。
+
 - `latest` comment が自分の返信で、その後レビュアー反応がなければ対応済みとして
   skip する。
 - 新しいレビュアー返信があれば、top-level comment ではなく latest comment の要求を読む。
@@ -416,6 +455,7 @@ Claude の loop を終了すると監視は続かない。バックグラウン�
 Default limits:
 
 - max full repair passes: 3
+- max connector review-repair waves: 3 per explicit invocation
 - max full comment/thread refreshes without new head commit: 2
 - max CI log fetches per failing check name: 1 per head SHA
 - max ambiguous `updatedAt` full inspections: 3
@@ -424,6 +464,8 @@ Default limits:
 
 After the limit, report the PR URL, current compact status, and the reason the
 watcher stopped.
+On the third connector review-repair wave, report the remaining current-head
+batch and hand it to a human instead of starting a fourth repair.
 
 The approval/reaction wait itself should consume near-zero model tokens because
 each loop pass should rely on compact status before deciding whether to run full
