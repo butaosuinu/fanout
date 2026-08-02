@@ -74,19 +74,10 @@ function ThemeSelect({
   );
 }
 
-export function SettingsModal({
-  onClose,
-  onClosed,
-}: {
-  onClose: () => void;
-  /* unmount 時、背面の inert 解除「後」に呼ぶ(起点へのフォーカス復帰用) */
-  onClosed?: () => void;
-}) {
+export function SettingsModal({ onClose }: { onClose: () => void }) {
   const { mode, setMode } = useAppearance();
   const { light, dark, setLight, setDark } = useDiffTheme();
   const rootRef = useRef<HTMLDivElement>(null);
-  const onClosedRef = useRef(onClosed);
-  onClosedRef.current = onClosed;
 
   /* 初期フォーカスを移し、背面(#root)を遮る。全画面 diff の上で開くと所有者が
    * 2 つになるので参照数で持つ(lib/inert.ts)。
@@ -95,15 +86,14 @@ export function SettingsModal({
    * lazy chunk が解決していないと要素が無く、後から inert 無しで mount されて
    * 自分に focus を移してしまう。diff 側が settingsOpen を見て自分で inert に
    * なる(DiffOverlay の suppressed)ほうが mount 順に依存しない。
-   * 解除してから onClosed を呼ぶ(inert な subtree への focus は実ブラウザで
-   * 拒否されるため順序が本質)。 */
+   *
+   * フォーカスの復帰もここではしない。起点が diff の中のボタンだと、この
+   * cleanup の時点では diff がまだ inert(sibling の effect cleanup は後)で、
+   * 実ブラウザは focus() を拒否する。復帰は App 側の effect が担う — 親の
+   * effect は子より後に走るので、diff の inert 解除より確実に後になる。 */
   useEffect(() => {
     rootRef.current?.focus();
-    const release = blockBackground([document.getElementById("root")]);
-    return () => {
-      release();
-      onClosedRef.current?.();
-    };
+    return blockBackground([document.getElementById("root")]);
   }, []);
 
   /* Escape は capture 段で受けて preventDefault する。下に diff オーバーレイが

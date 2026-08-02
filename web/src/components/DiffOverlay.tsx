@@ -263,18 +263,23 @@ export function DiffOverlay({
   }, [viewMode, anchorKey]);
 
   /* capture 段で preventDefault を立て、Drawer の document(bubble)listener に
-   * Escape を渡さない — オーバーレイだけを閉じ、下の Drawer は開いたまま残す。 */
+   * Escape を渡さない — オーバーレイだけを閉じ、下の Drawer は開いたまま残す。
+   *
+   * ただし背面を覆っていないコンパクト表示では、フォーカスが自分の中にあるとき
+   * だけ引き取る。capture は React の handler より先に走るので、無条件に閉じると
+   * 背面で開いている popup(フィルタの dropdown 等)の Escape を横取りし、
+   * 1 回のキーで 2 層が同時に閉じる。Escape は「いま居るもの」を閉じる。 */
   useEffect(() => {
     if (!escapeEnabled) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.defaultPrevented) {
-        e.preventDefault();
-        onClose();
-      }
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (!covering && !rootRef.current?.contains(document.activeElement)) return;
+      e.preventDefault();
+      onClose();
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [onClose, escapeEnabled]);
+  }, [onClose, escapeEnabled, covering]);
 
   const diff = state.phase === "ready" ? state.diff : null;
   const patch = diff?.patch ?? "";

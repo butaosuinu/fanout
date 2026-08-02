@@ -865,7 +865,8 @@ describe("diff オーバーレイ", () => {
     );
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole("button", { name: "変更を表示 +2/-1" }));
+    await user.click(screen.getByText("Fix thing"));
+    await user.click(await screen.findByRole("button", { name: "変更を表示" }));
     const overlay = await screen.findByRole("complementary", { name: "worktree diff" });
     expect(overlay).toHaveAttribute("data-mode", "compact");
     expect(overlay.style.getPropertyValue("--diff-w")).toBe("760px");
@@ -1057,6 +1058,31 @@ describe("diff オーバーレイ", () => {
     } finally {
       root.remove();
     }
+  });
+
+  it("コンパクト表示の Escape は、フォーカスが背面にあるとき diff を閉じない", async () => {
+    /* capture 段は React の handler より先に走る。無条件に閉じると背面で開いて
+     * いる popup の Escape を横取りし、1 回のキーで 2 層が同時に閉じる。 */
+    setInnerWidth(1600); // 1100px 以下だとコンパクトも covering になる
+    localStorage.removeItem("fanout.diffView"); // 既定 = コンパクト
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+
+    await user.click(screen.getByText("Fix thing"));
+    await user.click(await screen.findByRole("button", { name: "変更を表示" }));
+    const overlay = await screen.findByRole("complementary", { name: "worktree diff" });
+
+    // 背面のフィルタ popover を開いてから Escape
+    await user.click(screen.getByRole("button", { name: "issue / runtime 状態で絞り込み" }));
+    await screen.findByRole("listbox");
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument(); // popover は閉じる
+    expect(overlay).toBeInTheDocument(); // diff は残る
+
+    // diff の中にフォーカスがあるときは従来どおり diff を閉じる
+    overlay.focus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("complementary", { name: "worktree diff" })).not.toBeInTheDocument();
   });
 
   it("未開始(synthetic)行と shell 行には diff ボタンを出さない", async () => {

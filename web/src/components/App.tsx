@@ -183,10 +183,18 @@ export function App() {
     setSettingsOpen(true);
   }, []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
-  const restoreSettingsFocus = useCallback(
-    () => focusFirstConnected([settingsOriginRef, diffOriginRef]),
-    [],
-  );
+  /* 設定を閉じたらフォーカスを起点へ戻す。SettingsModal の cleanup ではやらない
+   * — 起点が diff の中のボタンだと、その時点では diff がまだ inert で
+   * (sibling の effect cleanup は後)実ブラウザが focus() を拒否する。親の
+   * effect は子より後に走るので、ここなら inert 解除の後になる。 */
+  const settingsWasOpen = useRef(settingsOpen);
+  useEffect(() => {
+    if (settingsWasOpen.current && !settingsOpen) {
+      focusFirstConnected([settingsOriginRef, diffOriginRef]);
+    }
+    settingsWasOpen.current = settingsOpen;
+  }, [settingsOpen]);
+
   const registerRow = (key: string, el: HTMLTableRowElement | null) => {
     if (el) rowRefs.current.set(key, el);
     else rowRefs.current.delete(key);
@@ -288,7 +296,7 @@ export function App() {
           />
         </Suspense>
       )}
-      {settingsOpen && <SettingsModal onClose={closeSettings} onClosed={restoreSettingsFocus} />}
+      {settingsOpen && <SettingsModal onClose={closeSettings} />}
     </>
   );
 }

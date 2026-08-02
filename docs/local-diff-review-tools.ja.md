@@ -352,6 +352,18 @@ diff ビュアーは全画面のモーダルと、詳細ドロワーの左隣に
 (inert と `aria-modal`)と App 側(peek の停止)が同じ答えを使う。
 グリップも同じ理由でこの帯には出さない(CSS が幅を固定するので動かせない)。
 
+Escape は「いま居るもの」を閉じる。オーバーレイは document の capture 段で
+受けるが、背面を覆っていないコンパクト表示では、フォーカスが自分の中にあるとき
+だけ引き取る。capture は React の handler より先に走るので、無条件に閉じると
+背面で開いている popup(フィルタの dropdown 等)の Escape を横取りし、1 回の
+キーで 2 層が同時に閉じる。
+
+モーダルを閉じたあとのフォーカス復帰は、モーダル自身の cleanup ではなく App の
+effect でやる。起点が diff の中のボタンだと、モーダルの cleanup 時点では diff が
+まだ `inert`(sibling の effect cleanup は後)で、実ブラウザは `focus()` を
+拒否する(実測: スタイル確定後は activeElement が body のまま)。親の effect は
+子より後に走るので、App なら inert 解除の後になる。
+
 設定モーダルが上にある間、diff オーバーレイは自分で `inert` になる
 (`suppressed` prop)。設定側から `#diff-overlay` を遮らないのは、diff が lazy
 chunk で、解決前に設定を開くとまだ要素が無く、後から inert 無しで mount されて
