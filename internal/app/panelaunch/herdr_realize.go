@@ -564,7 +564,11 @@ func RealizeHerdrWorktree(
 		)
 	}
 	if preconditionErr := verifyHerdrWorktreePreconditions(operationCtx, req, source, intent); preconditionErr != nil {
-		return result, markHerdrIntentManual(locked, intent, preconditionErr)
+		// The mutation was never issued (planned), so release the reserved
+		// branch and the intent instead of demanding manual cleanup; the
+		// rollback itself fails closed when the branch ownership no longer
+		// verifies.
+		return result, rollbackUnissuedHerdrWorktree(locked, req, intent, preconditionErr)
 	}
 
 	intent.Status = state.HerdrIntentIssued

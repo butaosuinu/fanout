@@ -103,7 +103,8 @@ func HerdrIntentsPath(projectRoot string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve Herdr intents git common directory: %w", err)
 	}
-	commonDir := strings.TrimSpace(string(out))
+	// Strip exactly the newline git appends; a path's own whitespace is data.
+	commonDir := strings.TrimSuffix(string(out), "\n")
 	if commonDir == "" {
 		return "", fmt.Errorf("resolve Herdr intents git common directory: invalid path %q", commonDir)
 	}

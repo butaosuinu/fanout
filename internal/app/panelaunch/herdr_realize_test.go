@@ -905,6 +905,57 @@ func TestRealizeHerdrWorktreeDoesNotOpenExpiredRealizedIntent(t *testing.T) {
 	}
 }
 
+// A precondition failure before the create is issued releases the reserved
+// branch and the intent (non-issuance is proven by the planned status)
+// instead of demanding manual cleanup.
+func TestRealizeHerdrWorktreePreconditionFailureReleasesPlannedIntent(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	stop := errors.New("stop after branch reservation")
+	runtime.observeErr = stop
+	req := testHerdrWorktreeRequest(repo, "precondition-release", 437)
+	if _, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks); !errors.Is(err, stop) {
+		t.Fatalf("initial planned error = %v", err)
+	}
+	if err := os.MkdirAll(req.WorktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runtime.observeErr = nil
+
+	_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if err == nil || errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("precondition failure error = %v, want released non-manual failure", err)
+	}
+	control, loadErr := state.LoadHerdrIntents(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	intentID, idErr := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
+	if idErr != nil {
+		t.Fatal(idErr)
+	}
+	if _, found := control.FindIntent(intentID); found {
+		t.Fatal("precondition failure kept the planned intent")
+	}
+	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
+	if refErr != nil {
+		t.Fatal(refErr)
+	}
+	if _, found, observeErr := worktree.ObserveBranch(
+		context.Background(),
+		repo,
+		fullRef,
+	); observeErr != nil {
+		t.Fatal(observeErr)
+	} else if found {
+		t.Fatal("precondition failure kept the reserved branch")
+	}
+}
+
 func TestRealizeHerdrWorktreeRollsBackExpiredPlannedIntent(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
