@@ -1,5 +1,8 @@
 package worktree
 
+// Repository identity, frozen base resolution, and checkout observation used
+// by launch flows that verify Git pre- and postconditions themselves.
+
 import (
 	"context"
 	"errors"
@@ -11,19 +14,19 @@ import (
 	"strings"
 )
 
-var herdrCommitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+var commitSHAPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
-type HerdrBaseResolution struct {
+type BaseResolution struct {
 	BaseBranch string
 	SHA        string
 }
 
-type HerdrRepoIdentity struct {
+type RepoIdentity struct {
 	RepoKey  string
 	RepoRoot string
 }
 
-type HerdrCheckoutObservation struct {
+type CheckoutObservation struct {
 	PathAbsent bool
 	Registered bool
 	BranchRef  string
@@ -32,21 +35,21 @@ type HerdrCheckoutObservation struct {
 	RepoRoot   string
 }
 
-// ResolveHerdrRepoIdentity returns the physical Git common directory and
+// ResolveRepoIdentity returns the physical Git common directory and
 // source checkout root used by Herdr worktree provenance.
-func ResolveHerdrRepoIdentity(root string) (HerdrRepoIdentity, error) {
-	repoKey, err := resolveHerdrGitPath(root, "--git-common-dir")
+func ResolveRepoIdentity(root string) (RepoIdentity, error) {
+	repoKey, err := resolveGitPath(root, "--git-common-dir")
 	if err != nil {
-		return HerdrRepoIdentity{}, fmt.Errorf("resolve Herdr repo key: %w", err)
+		return RepoIdentity{}, fmt.Errorf("resolve Herdr repo key: %w", err)
 	}
-	repoRoot, err := resolveHerdrGitPath(root, "--show-toplevel")
+	repoRoot, err := resolveGitPath(root, "--show-toplevel")
 	if err != nil {
-		return HerdrRepoIdentity{}, fmt.Errorf("resolve Herdr repo root: %w", err)
+		return RepoIdentity{}, fmt.Errorf("resolve Herdr repo root: %w", err)
 	}
-	return HerdrRepoIdentity{RepoKey: repoKey, RepoRoot: repoRoot}, nil
+	return RepoIdentity{RepoKey: repoKey, RepoRoot: repoRoot}, nil
 }
 
-func resolveHerdrGitPath(root, flag string) (string, error) {
+func resolveGitPath(root, flag string) (string, error) {
 	path, err := gitTrim(root, "rev-parse", flag)
 	if err != nil {
 		return "", err
@@ -61,23 +64,18 @@ func resolveHerdrGitPath(root, flag string) (string, error) {
 		}
 		path = filepath.Join(root, path)
 	}
-	return physicalHerdrPath(path)
+	return physicalPath(path)
 }
 
-// ResolveHerdrBase applies the tmux base refresh gate and freezes the selected
-// base to one commit SHA before branch reservation.
-func ResolveHerdrBase(opts Options) (HerdrBaseResolution, error) {
-	return ResolveHerdrBaseContext(context.Background(), opts)
-}
-
-// ResolveHerdrBaseContext is ResolveHerdrBase with cancellation and deadline support.
-func ResolveHerdrBaseContext(ctx context.Context, opts Options) (HerdrBaseResolution, error) {
+// ResolveLaunchBase applies the tmux base refresh gate and freezes the
+// selected base to one commit SHA before branch reservation.
+func ResolveLaunchBase(ctx context.Context, opts Options) (BaseResolution, error) {
 	plan, planErr := buildPlanContext(ctx, opts)
 	if planErr != nil {
-		return HerdrBaseResolution{}, planErr
+		return BaseResolution{}, planErr
 	}
-	if err := requireCleanHerdrSource(ctx, plan.ProjectRoot); err != nil {
-		return HerdrBaseResolution{}, err
+	if err := requireCleanSource(ctx, plan.ProjectRoot); err != nil {
+		return BaseResolution{}, err
 	}
 	if plan.Refresh {
 		refreshErr := plan.RefreshError
@@ -85,24 +83,24 @@ func ResolveHerdrBaseContext(ctx context.Context, opts Options) (HerdrBaseResolu
 			refreshErr = RefreshBaseContext(ctx, plan.ProjectRoot, plan.BaseBranch)
 		}
 		if refreshErr != nil {
-			return HerdrBaseResolution{}, refreshErr
+			return BaseResolution{}, refreshErr
 		}
 	}
-	if err := requireCleanHerdrSource(ctx, plan.ProjectRoot); err != nil {
-		return HerdrBaseResolution{}, err
+	if err := requireCleanSource(ctx, plan.ProjectRoot); err != nil {
+		return BaseResolution{}, err
 	}
 	sha, err := gitTrimContext(ctx, plan.ProjectRoot, "rev-parse", "--verify", plan.BaseBranch+"^{commit}")
 	if err != nil {
-		return HerdrBaseResolution{}, fmt.Errorf("resolve Herdr base %q to a commit: %w", plan.BaseBranch, err)
+		return BaseResolution{}, fmt.Errorf("resolve Herdr base %q to a commit: %w", plan.BaseBranch, err)
 	}
 	sha = strings.ToLower(sha)
-	if !herdrCommitSHA.MatchString(sha) {
-		return HerdrBaseResolution{}, fmt.Errorf("resolve Herdr base %q: invalid commit %q", plan.BaseBranch, sha)
+	if !commitSHAPattern.MatchString(sha) {
+		return BaseResolution{}, fmt.Errorf("resolve Herdr base %q: invalid commit %q", plan.BaseBranch, sha)
 	}
-	return HerdrBaseResolution{BaseBranch: plan.BaseBranch, SHA: sha}, nil
+	return BaseResolution{BaseBranch: plan.BaseBranch, SHA: sha}, nil
 }
 
-func requireCleanHerdrSource(ctx context.Context, root string) error {
+func requireCleanSource(ctx context.Context, root string) error {
 	status, err := gitTrimContext(ctx, root, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return fmt.Errorf("check Herdr source checkout cleanliness: %w", err)
@@ -113,105 +111,19 @@ func requireCleanHerdrSource(ctx context.Context, root string) error {
 	return nil
 }
 
-func HerdrBranchRef(root, branch string) (string, error) {
-	branch = strings.TrimSpace(branch)
-	if branch == "" || strings.HasPrefix(branch, "refs/") {
-		return "", fmt.Errorf("herdr branch must be an unqualified local branch name")
-	}
-	fullRef := "refs/heads/" + branch
-	if _, err := git(root, "check-ref-format", fullRef); err != nil {
-		return "", fmt.Errorf("invalid Herdr branch %q: %w", branch, err)
-	}
-	return fullRef, nil
-}
-
-func ObserveHerdrBranch(root, fullRef string) (string, bool, error) {
-	if !strings.HasPrefix(fullRef, "refs/heads/") {
-		return "", false, fmt.Errorf("invalid Herdr local branch ref %q", fullRef)
-	}
-	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", fullRef)
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			return "", false, nil
-		}
-		return "", false, fmt.Errorf("observe Herdr branch %s: %w", fullRef, err)
-	}
-	sha := strings.ToLower(strings.TrimSpace(string(out)))
-	if !herdrCommitSHA.MatchString(sha) {
-		return "", false, fmt.Errorf("observe Herdr branch %s: invalid commit %q", fullRef, sha)
-	}
-	return sha, true, nil
-}
-
-// ReserveHerdrBranch atomically creates fullRef at baseSHA with an empty old
-// OID. Existing refs fail without being modified.
-func ReserveHerdrBranch(root, fullRef, baseSHA string) error {
-	if !strings.HasPrefix(fullRef, "refs/heads/") || !herdrCommitSHA.MatchString(baseSHA) {
-		return fmt.Errorf("invalid Herdr branch reservation %s -> %s", fullRef, baseSHA)
-	}
-	emptyOID := strings.Repeat("0", len(baseSHA))
-	if _, err := git(root, "update-ref", "--create-reflog", fullRef, baseSHA, emptyOID); err != nil {
-		return fmt.Errorf("reserve Herdr branch %s at %s: %w", fullRef, baseSHA, err)
-	}
-	return nil
-}
-
-// DeleteReservedHerdrBranch compare-and-deletes a fanout-created branch only
-// when its expected tip is unchanged and no linked worktree checks it out.
-func DeleteReservedHerdrBranch(root, fullRef, expectedSHA string) error {
-	if !strings.HasPrefix(fullRef, "refs/heads/") || !herdrCommitSHA.MatchString(expectedSHA) {
-		return fmt.Errorf("invalid Herdr branch deletion %s at %s", fullRef, expectedSHA)
-	}
-	checkedOut, err := herdrBranchCheckedOut(root, fullRef)
-	if err != nil {
-		return err
-	}
-	if checkedOut {
-		return fmt.Errorf("refusing to delete checked-out Herdr branch %s", fullRef)
-	}
-	current, found, err := ObserveHerdrBranch(root, fullRef)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return nil
-	}
-	if current != expectedSHA {
-		return fmt.Errorf("herdr branch %s moved from %s to %s", fullRef, expectedSHA, current)
-	}
-	if _, err := git(root, "update-ref", "-d", fullRef, expectedSHA); err != nil {
-		return fmt.Errorf("delete reserved Herdr branch %s: %w", fullRef, err)
-	}
-	return nil
-}
-
-func HerdrBranchAvailable(root, fullRef string) error {
-	checkedOut, err := herdrBranchCheckedOut(root, fullRef)
-	if err != nil {
-		return err
-	}
-	if checkedOut {
-		return fmt.Errorf("herdr branch %s is already checked out", fullRef)
-	}
-	return nil
-}
-
-// EnsureHerdrWorktreeParent creates the deterministic .fanout/worktrees
+// EnsureWorktreeParentDir creates the deterministic .fanout/worktrees
 // parent and rejects symlinked path components or a foreign checkout leaf.
-func EnsureHerdrWorktreeParent(projectRoot, checkoutPath string) error {
-	return ensureHerdrWorktreeParent(projectRoot, checkoutPath, true)
+func EnsureWorktreeParentDir(projectRoot, checkoutPath string) error {
+	return ensureWorktreeParentDir(projectRoot, checkoutPath, true)
 }
 
-// VerifyHerdrWorktreeParent repeats the deterministic no-symlink path check
+// VerifyWorktreeParentDir repeats the deterministic no-symlink path check
 // immediately before a Herdr mutation without creating missing directories.
-func VerifyHerdrWorktreeParent(projectRoot, checkoutPath string) error {
-	return ensureHerdrWorktreeParent(projectRoot, checkoutPath, false)
+func VerifyWorktreeParentDir(projectRoot, checkoutPath string) error {
+	return ensureWorktreeParentDir(projectRoot, checkoutPath, false)
 }
 
-func ensureHerdrWorktreeParent(projectRoot, checkoutPath string, create bool) error {
+func ensureWorktreeParentDir(projectRoot, checkoutPath string, create bool) error {
 	root, err := filepath.Abs(projectRoot)
 	if err != nil {
 		return fmt.Errorf("resolve Herdr project root: %w", err)
@@ -268,8 +180,8 @@ func ensureRealDirectory(path string, create bool) error {
 	return nil
 }
 
-func ObserveHerdrCheckout(root, checkoutPath string) (HerdrCheckoutObservation, error) {
-	observation := HerdrCheckoutObservation{}
+func ObserveCheckout(root, checkoutPath string) (CheckoutObservation, error) {
+	observation := CheckoutObservation{}
 	info, err := os.Lstat(checkoutPath)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -280,13 +192,13 @@ func ObserveHerdrCheckout(root, checkoutPath string) (HerdrCheckoutObservation, 
 		return observation, fmt.Errorf("herdr checkout path %s is not a real directory", checkoutPath)
 	}
 
-	entries, err := herdrWorktreeEntries(root)
+	entries, err := worktreeEntries(root)
 	if err != nil {
 		return observation, err
 	}
 	cleanPath := filepath.Clean(checkoutPath)
 	if !observation.PathAbsent {
-		cleanPath, err = physicalHerdrPath(cleanPath)
+		cleanPath, err = physicalPath(cleanPath)
 		if err != nil {
 			return observation, fmt.Errorf("canonicalize Herdr checkout path: %w", err)
 		}
@@ -300,7 +212,7 @@ func ObserveHerdrCheckout(root, checkoutPath string) (HerdrCheckoutObservation, 
 			observation.BranchRef = entry.branch
 			break
 		}
-		entryPath, pathErr := physicalHerdrPath(entry.path)
+		entryPath, pathErr := physicalPath(entry.path)
 		if pathErr != nil {
 			return observation, fmt.Errorf("canonicalize registered Herdr worktree path: %w", pathErr)
 		}
@@ -319,14 +231,14 @@ func ObserveHerdrCheckout(root, checkoutPath string) (HerdrCheckoutObservation, 
 		return observation, fmt.Errorf("resolve Herdr checkout HEAD at %s: %w", checkoutPath, err)
 	}
 	observation.HeadSHA = strings.ToLower(observation.HeadSHA)
-	if !herdrCommitSHA.MatchString(observation.HeadSHA) {
+	if !commitSHAPattern.MatchString(observation.HeadSHA) {
 		return observation, fmt.Errorf("herdr checkout %s has invalid HEAD %q", checkoutPath, observation.HeadSHA)
 	}
-	sourceIdentity, err := ResolveHerdrRepoIdentity(root)
+	sourceIdentity, err := ResolveRepoIdentity(root)
 	if err != nil {
 		return observation, err
 	}
-	checkoutIdentity, err := ResolveHerdrRepoIdentity(checkoutPath)
+	checkoutIdentity, err := ResolveRepoIdentity(checkoutPath)
 	if err != nil {
 		return observation, err
 	}
@@ -344,10 +256,10 @@ func ObserveHerdrCheckout(root, checkoutPath string) (HerdrCheckoutObservation, 
 	return observation, nil
 }
 
-func VerifyHerdrCheckout(
+func VerifyCheckout(
 	root, checkoutPath, fullRef, expectedHead, expectedRepoKey, expectedRepoRoot string,
-) (HerdrCheckoutObservation, error) {
-	observation, err := ObserveHerdrCheckout(root, checkoutPath)
+) (CheckoutObservation, error) {
+	observation, err := ObserveCheckout(root, checkoutPath)
 	if err != nil {
 		return observation, err
 	}
@@ -366,25 +278,14 @@ func VerifyHerdrCheckout(
 	return observation, nil
 }
 
-type herdrWorktreeEntry struct {
-	path   string
-	branch string
+type worktreeEntry struct {
+	path     string
+	branch   string
+	bare     bool
+	prunable bool
 }
 
-func herdrBranchCheckedOut(root, fullRef string) (bool, error) {
-	entries, err := herdrWorktreeEntries(root)
-	if err != nil {
-		return false, err
-	}
-	for _, entry := range entries {
-		if entry.branch == fullRef {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func herdrWorktreeEntries(root string) ([]herdrWorktreeEntry, error) {
+func worktreeEntries(root string) ([]worktreeEntry, error) {
 	cmd := exec.Command("git", "worktree", "list", "--porcelain", "-z")
 	cmd.Dir = root
 	out, err := cmd.Output()
@@ -392,13 +293,13 @@ func herdrWorktreeEntries(root string) ([]herdrWorktreeEntry, error) {
 		return nil, fmt.Errorf("list Git worktrees for Herdr: %w", err)
 	}
 	fields := strings.Split(string(out), "\x00")
-	var entries []herdrWorktreeEntry
-	var current herdrWorktreeEntry
+	var entries []worktreeEntry
+	var current worktreeEntry
 	flush := func() {
 		if current.path != "" {
 			entries = append(entries, current)
 		}
-		current = herdrWorktreeEntry{}
+		current = worktreeEntry{}
 	}
 	for _, field := range fields {
 		switch {
@@ -409,13 +310,17 @@ func herdrWorktreeEntries(root string) ([]herdrWorktreeEntry, error) {
 			current.path = strings.TrimPrefix(field, "worktree ")
 		case strings.HasPrefix(field, "branch "):
 			current.branch = strings.TrimPrefix(field, "branch ")
+		case field == "bare":
+			current.bare = true
+		case field == "prunable" || strings.HasPrefix(field, "prunable "):
+			current.prunable = true
 		}
 	}
 	flush()
 	return entries, nil
 }
 
-func physicalHerdrPath(path string) (string, error) {
+func physicalPath(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		absolute, err := filepath.Abs(path)
 		if err != nil {

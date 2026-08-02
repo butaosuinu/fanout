@@ -98,7 +98,7 @@ type HerdrWorktreeResult struct {
 type herdrRealizeSetup struct {
 	ctx                     context.Context
 	deadline                time.Time
-	source                  worktree.HerdrRepoIdentity
+	source                  worktree.RepoIdentity
 	ownerProjectRoot        string
 	runtimeParent           string
 	runtimeOwnerProjectRoot string
@@ -128,11 +128,11 @@ func newHerdrRealizeSetup(
 	}
 	setup.ctx = realizeCtx
 	setup.deadline, _ = realizeCtx.Deadline()
-	source, sourceErr := worktree.ResolveHerdrRepoIdentity(sourceRoot)
+	source, sourceErr := worktree.ResolveRepoIdentity(sourceRoot)
 	if sourceErr != nil {
 		return fail(sourceErr)
 	}
-	project, projectErr := worktree.ResolveHerdrRepoIdentity(projectRoot)
+	project, projectErr := worktree.ResolveRepoIdentity(projectRoot)
 	if projectErr != nil {
 		return fail(projectErr)
 	}
@@ -443,10 +443,10 @@ func RealizeHerdrWorktree(
 		if excludeErr := worktree.EnsureLocalExclude(req.SourceRoot); excludeErr != nil {
 			return result, excludeErr
 		}
-		if parentErr := worktree.EnsureHerdrWorktreeParent(req.ProjectRoot, req.WorktreePath); parentErr != nil {
+		if parentErr := worktree.EnsureWorktreeParentDir(req.ProjectRoot, req.WorktreePath); parentErr != nil {
 			return result, parentErr
 		}
-		base, baseErr := worktree.ResolveHerdrBaseContext(setup.ctx, worktree.Options{
+		base, baseErr := worktree.ResolveLaunchBase(setup.ctx, worktree.Options{
 			ProjectRoot: req.SourceRoot, Slug: req.Slug, BranchName: req.BranchName,
 			BaseBranch: req.BaseBranch, NoRefresh: req.NoRefresh,
 			AllowMissingOrigin: req.AllowMissingOrigin,
@@ -454,22 +454,22 @@ func RealizeHerdrWorktree(
 		if baseErr != nil {
 			return result, baseErr
 		}
-		fullRef, refErr := worktree.HerdrBranchRef(req.SourceRoot, req.BranchName)
+		fullRef, refErr := worktree.LocalBranchRef(req.SourceRoot, req.BranchName)
 		if refErr != nil {
 			return result, refErr
 		}
-		head, branchExisted, branchErr := worktree.ObserveHerdrBranch(req.SourceRoot, fullRef)
+		head, branchExisted, branchErr := worktree.ObserveBranch(req.SourceRoot, fullRef)
 		if branchErr != nil {
 			return result, branchErr
 		}
 		if branchExisted {
-			if availableErr := worktree.HerdrBranchAvailable(req.SourceRoot, fullRef); availableErr != nil {
+			if availableErr := worktree.BranchAvailable(req.SourceRoot, fullRef); availableErr != nil {
 				return result, availableErr
 			}
 		} else {
 			head = base.SHA
 		}
-		checkout, checkoutErr := worktree.ObserveHerdrCheckout(req.SourceRoot, req.WorktreePath)
+		checkout, checkoutErr := worktree.ObserveCheckout(req.SourceRoot, req.WorktreePath)
 		if checkoutErr != nil {
 			return result, checkoutErr
 		}
@@ -687,30 +687,30 @@ func herdrCoordinatorSyntheticIssueNum(parent string, issueNum int) int {
 
 func verifyHerdrWorktreePreconditions(
 	req HerdrWorktreeRequest,
-	source worktree.HerdrRepoIdentity,
+	source worktree.RepoIdentity,
 	intent state.HerdrIntent,
 ) error {
-	if err := worktree.VerifyHerdrWorktreeParent(req.ProjectRoot, intent.WorktreePath); err != nil {
+	if err := worktree.VerifyWorktreeParentDir(req.ProjectRoot, intent.WorktreePath); err != nil {
 		return err
 	}
-	branch, found, branchErr := worktree.ObserveHerdrBranch(req.SourceRoot, intent.FullBranchRef)
+	branch, found, branchErr := worktree.ObserveBranch(req.SourceRoot, intent.FullBranchRef)
 	if branchErr != nil {
 		return branchErr
 	}
 	if !found || branch != intent.ExpectedHead {
 		return fmt.Errorf("herdr branch %s does not match saved head", intent.FullBranchRef)
 	}
-	if availableErr := worktree.HerdrBranchAvailable(req.SourceRoot, intent.FullBranchRef); availableErr != nil {
+	if availableErr := worktree.BranchAvailable(req.SourceRoot, intent.FullBranchRef); availableErr != nil {
 		return availableErr
 	}
-	checkout, err := worktree.ObserveHerdrCheckout(req.SourceRoot, intent.WorktreePath)
+	checkout, err := worktree.ObserveCheckout(req.SourceRoot, intent.WorktreePath)
 	if err != nil {
 		return err
 	}
 	if !checkout.PathAbsent || checkout.Registered {
 		return fmt.Errorf("herdr checkout appeared before mutation")
 	}
-	current, err := worktree.ResolveHerdrRepoIdentity(req.SourceRoot)
+	current, err := worktree.ResolveRepoIdentity(req.SourceRoot)
 	if err != nil {
 		return err
 	}
@@ -736,7 +736,7 @@ func validateCoordinatorObservation(
 
 func validateWorktreeObservation(
 	intent state.HerdrIntent,
-	source worktree.HerdrRepoIdentity,
+	source worktree.RepoIdentity,
 	observation herdrrun.WorkspaceObservation,
 ) error {
 	if observation.WorkspaceID == "" || observation.Label != intent.WorkspaceLabel ||
@@ -798,7 +798,7 @@ func validateSavedCoordinatorIntent(
 
 func validateSavedWorktreeIntent(
 	req HerdrWorktreeRequest,
-	source worktree.HerdrRepoIdentity,
+	source worktree.RepoIdentity,
 	coordinator state.HerdrResource,
 	ownerProjectRoot string,
 	runtimeParent string,
@@ -895,14 +895,14 @@ func resolvedHerdrCoordinator(
 
 func herdrCoordinatorSource(
 	coordinator state.HerdrResource,
-	requestSource worktree.HerdrRepoIdentity,
-) (worktree.HerdrRepoIdentity, error) {
-	source, err := worktree.ResolveHerdrRepoIdentity(coordinator.CurrentPath)
+	requestSource worktree.RepoIdentity,
+) (worktree.RepoIdentity, error) {
+	source, err := worktree.ResolveRepoIdentity(coordinator.CurrentPath)
 	if err != nil {
-		return worktree.HerdrRepoIdentity{}, fmt.Errorf("resolve Herdr coordinator source: %w", err)
+		return worktree.RepoIdentity{}, fmt.Errorf("resolve Herdr coordinator source: %w", err)
 	}
 	if source.RepoKey != requestSource.RepoKey {
-		return worktree.HerdrRepoIdentity{}, fmt.Errorf("herdr coordinator source belongs to a different repository")
+		return worktree.RepoIdentity{}, fmt.Errorf("herdr coordinator source belongs to a different repository")
 	}
 	return source, nil
 }
@@ -1064,23 +1064,23 @@ func savedHerdrWorktreePathValid(ownerProjectRoot, savedSlug, savedPath string) 
 
 func savedHerdrWorktreeSource(
 	intent state.HerdrIntent,
-	source worktree.HerdrRepoIdentity,
-) (string, worktree.HerdrRepoIdentity, error) {
+	source worktree.RepoIdentity,
+) (string, worktree.RepoIdentity, error) {
 	savedPath := filepath.Clean(intent.WorktreePath)
 	worktreesDir := filepath.Dir(savedPath)
 	fanoutDir := filepath.Dir(worktreesDir)
 	projectRoot := filepath.Dir(fanoutDir)
 	if !filepath.IsAbs(savedPath) || filepath.Base(savedPath) != intent.Slug ||
 		filepath.Base(worktreesDir) != "worktrees" || filepath.Base(fanoutDir) != ".fanout" {
-		return "", worktree.HerdrRepoIdentity{}, fmt.Errorf("saved Herdr worktree path has no owner project root")
+		return "", worktree.RepoIdentity{}, fmt.Errorf("saved Herdr worktree path has no owner project root")
 	}
-	identity, err := worktree.ResolveHerdrRepoIdentity(projectRoot)
+	identity, err := worktree.ResolveRepoIdentity(projectRoot)
 	if err != nil {
-		return "", worktree.HerdrRepoIdentity{}, fmt.Errorf("resolve saved Herdr worktree owner: %w", err)
+		return "", worktree.RepoIdentity{}, fmt.Errorf("resolve saved Herdr worktree owner: %w", err)
 	}
 	if identity.RepoKey != source.RepoKey ||
 		(intent.OwnerProjectRoot != "" && identity.RepoRoot != intent.OwnerProjectRoot) {
-		return "", worktree.HerdrRepoIdentity{}, fmt.Errorf("saved Herdr worktree owner belongs to a different repository")
+		return "", worktree.RepoIdentity{}, fmt.Errorf("saved Herdr worktree owner belongs to a different repository")
 	}
 	return projectRoot, identity, nil
 }
@@ -1088,7 +1088,7 @@ func savedHerdrWorktreeSource(
 func savedHerdrWorktreeRepoMatches(
 	ownerProjectRoot string,
 	resource state.HerdrResource,
-	source worktree.HerdrRepoIdentity,
+	source worktree.RepoIdentity,
 ) bool {
 	if resource.RepoKey != source.RepoKey {
 		return false

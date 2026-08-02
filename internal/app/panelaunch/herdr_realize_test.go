@@ -525,11 +525,11 @@ func TestRealizeHerdrRollsBackMutationNotIssued(t *testing.T) {
 		if !errors.Is(err, herdrrun.ErrMutationNotIssued) {
 			t.Fatalf("worktree error = %v", err)
 		}
-		fullRef, err := worktree.HerdrBranchRef(repo, req.BranchName)
+		fullRef, err := worktree.LocalBranchRef(repo, req.BranchName)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if head, found, observeErr := worktree.ObserveHerdrBranch(repo, fullRef); observeErr != nil {
+		if head, found, observeErr := worktree.ObserveBranch(repo, fullRef); observeErr != nil {
 			t.Fatal(observeErr)
 		} else if found {
 			t.Fatalf("not-issued branch = %s, want rollback", head)
@@ -580,7 +580,7 @@ func TestRealizeHerdrWorktreeRecoversCompletedUnissuedRollback(t *testing.T) {
 	if !found || intent.Status != state.HerdrIntentIssued || !intent.BranchCreated {
 		t.Fatalf("interrupted rollback intent = (%+v,%t)", intent, found)
 	}
-	if deleteErr := worktree.DeleteReservedHerdrBranch(
+	if deleteErr := worktree.DeleteReservedBranch(
 		repo,
 		intent.FullBranchRef,
 		intent.BaseSHA,
@@ -625,11 +625,11 @@ func TestRealizeHerdrWorktreeChecksPolicyBeforeBranchReservation(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unexpected owned plugin") {
 		t.Fatalf("policy error = %v", err)
 	}
-	fullRef, err := worktree.HerdrBranchRef(repo, req.BranchName)
+	fullRef, err := worktree.LocalBranchRef(repo, req.BranchName)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if head, found, observeErr := worktree.ObserveHerdrBranch(repo, fullRef); observeErr != nil {
+	if head, found, observeErr := worktree.ObserveBranch(repo, fullRef); observeErr != nil {
 		t.Fatal(observeErr)
 	} else if found {
 		t.Fatalf("policy-blocked branch = %s, want absent", head)
@@ -959,7 +959,7 @@ func TestRealizeHerdrWorktreeRollsBackExpiredPlannedIntent(t *testing.T) {
 	if _, found := control.FindIntent(intentID); found {
 		t.Fatalf("expired planned intent %s was not removed", intentID)
 	}
-	if head, found, err := worktree.ObserveHerdrBranch(
+	if head, found, err := worktree.ObserveBranch(
 		repo,
 		intent.FullBranchRef,
 	); err != nil {
@@ -1019,7 +1019,7 @@ func TestRealizeHerdrWorktreeRollsBackCanceledPlannedIntent(t *testing.T) {
 	if _, found := control.FindIntent(intentID); found {
 		t.Fatalf("canceled planned intent %s was not removed", intentID)
 	}
-	if head, branchFound, observeErr := worktree.ObserveHerdrBranch(
+	if head, branchFound, observeErr := worktree.ObserveBranch(
 		repo,
 		intent.FullBranchRef,
 	); observeErr != nil {
@@ -1079,7 +1079,7 @@ func TestRealizeHerdrWorktreeKeepsExpiredPlannedIntentWhenBranchOwnershipWasNotS
 		!strings.Contains(saved.Failure, "branch exists without persisted ownership") {
 		t.Fatalf("ambiguous ownership intent = (%+v,%t)", saved, found)
 	}
-	if head, found, err := worktree.ObserveHerdrBranch(repo, intent.FullBranchRef); err != nil {
+	if head, found, err := worktree.ObserveBranch(repo, intent.FullBranchRef); err != nil {
 		t.Fatal(err)
 	} else if !found || head != intent.ExpectedHead {
 		t.Fatalf("ambiguous branch = (%s,%t), want preserved at %s", head, found, intent.ExpectedHead)
@@ -1162,11 +1162,11 @@ func TestRealizeHerdrWorktreeFailsClosedOnAmbiguousResponseLoss(t *testing.T) {
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("ambiguous response error = %v", err)
 	}
-	fullRef, refErr := worktree.HerdrBranchRef(repo, req.BranchName)
+	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
-	if _, found, observeErr := worktree.ObserveHerdrBranch(repo, fullRef); observeErr != nil || !found {
+	if _, found, observeErr := worktree.ObserveBranch(repo, fullRef); observeErr != nil || !found {
 		t.Fatalf("ambiguous branch was removed: found=%t err=%v", found, observeErr)
 	}
 	control, loadErr := state.LoadHerdrIntents(repo)
@@ -1208,11 +1208,11 @@ func TestRealizeHerdrWorktreeDeletesBranchOnlyAfterStructuredRejection(t *testin
 	if !errors.Is(err, herdrrun.ErrMutationRejected) {
 		t.Fatalf("structured rejection error = %v", err)
 	}
-	fullRef, refErr := worktree.HerdrBranchRef(repo, req.BranchName)
+	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
-	if _, found, observeErr := worktree.ObserveHerdrBranch(repo, fullRef); observeErr != nil || found {
+	if _, found, observeErr := worktree.ObserveBranch(repo, fullRef); observeErr != nil || found {
 		t.Fatalf("rejected branch = found:%t err:%v, want deleted", found, observeErr)
 	}
 	control, loadErr := state.LoadHerdrIntents(repo)
@@ -1346,7 +1346,7 @@ func TestRealizeHerdrManualWorktreeUsesNegativeSyntheticIssueIdentity(t *testing
 	req := testHerdrWorktreeRequest(repo, "manual-child", -1)
 	req.Parent = ManualParentRef
 	result, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
-	identity, identityErr := worktree.ResolveHerdrRepoIdentity(repo)
+	identity, identityErr := worktree.ResolveRepoIdentity(repo)
 	if identityErr != nil {
 		t.Fatal(identityErr)
 	}
@@ -1476,7 +1476,7 @@ func TestRealizeHerdrResumesPlannedChildAtSavedOwnerAcrossLinkedWorktrees(t *tes
 		)
 	}
 	childMutation := runtime.mutations[1]
-	savedSource, sourceErr := worktree.ResolveHerdrRepoIdentity(repo)
+	savedSource, sourceErr := worktree.ResolveRepoIdentity(repo)
 	if sourceErr != nil {
 		t.Fatal(sourceErr)
 	}
@@ -1670,11 +1670,11 @@ func TestRealizeHerdrWorktreeRejectsForeignCoordinatorBeforeBranch(t *testing.T)
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("foreign coordinator error = %v", err)
 	}
-	fullRef, refErr := worktree.HerdrBranchRef(repo, req.BranchName)
+	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
-	if _, found, observeErr := worktree.ObserveHerdrBranch(repo, fullRef); observeErr != nil || !found {
+	if _, found, observeErr := worktree.ObserveBranch(repo, fullRef); observeErr != nil || !found {
 		t.Fatalf("branch reservation state = found:%t err:%v", found, observeErr)
 	}
 	if len(runtime.mutations) != 1 {
@@ -1707,7 +1707,7 @@ func installSuccessfulHerdrMutations(
 	runtime *fakeHerdrRealizeRuntime,
 ) {
 	t.Helper()
-	identity, err := worktree.ResolveHerdrRepoIdentity(repo)
+	identity, err := worktree.ResolveRepoIdentity(repo)
 	if err != nil {
 		t.Fatal(err)
 	}

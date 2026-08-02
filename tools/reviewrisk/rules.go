@@ -97,7 +97,7 @@ var prefixRules = []struct {
 
 	// infra H.
 	{"internal/infra/state/", Rule{ID: "infra-state", Class: ClassH, Source: SourceDocTable, Note: "state.json・Herdr intent journal と lock の読み書き"}},
-	{"internal/infra/worktree/", Rule{ID: "infra-worktree", Class: ClassH, Source: SourceDocTable, Note: "base branch 解決・refresh・worktree add・Herdr ref 予約"}},
+	{"internal/infra/worktree/", Rule{ID: "infra-worktree", Class: ClassH, Source: SourceDocTable, Note: "base branch 解決・refresh・worktree add・branch ref の atomic 予約と checkout 観測"}},
 	{"internal/infra/hooks/", Rule{ID: "infra-hooks", Class: ClassH, Source: SourceDocTable, Note: "ライフサイクルフック実行"}},
 	{"internal/infra/selfupdate/", Rule{ID: "infra-selfupdate", Class: ClassH, Source: SourceDocTable, Note: "自己アップデート"}},
 	{"internal/infra/team/", Rule{ID: "infra-team", Class: ClassH, Source: SourceDocTable, Note: "team SQLite バス"}},

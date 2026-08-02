@@ -25,19 +25,19 @@ esac
 	}
 	t.Setenv("PATH", binDir)
 
-	identity, err := ResolveHerdrRepoIdentity(repo)
+	identity, err := ResolveRepoIdentity(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantRoot, err := physicalHerdrPath(repo)
+	wantRoot, err := physicalPath(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantKey, err := physicalHerdrPath(filepath.Join(repo, ".git"))
+	wantKey, err := physicalPath(filepath.Join(repo, ".git"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity != (HerdrRepoIdentity{RepoKey: wantKey, RepoRoot: wantRoot}) {
+	if identity != (RepoIdentity{RepoKey: wantKey, RepoRoot: wantRoot}) {
 		t.Fatalf("identity = %+v, want repo key %s and root %s", identity, wantKey, wantRoot)
 	}
 }
@@ -45,32 +45,32 @@ esac
 func TestHerdrBranchReservationIsAtomicAndCompareDeleted(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	base := gitOutput(t, repo, "rev-parse", "HEAD")
-	fullRef, refErr := HerdrBranchRef(repo, "fanout/child")
+	fullRef, refErr := LocalBranchRef(repo, "fanout/child")
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
-	if err := ReserveHerdrBranch(repo, fullRef, base); err != nil {
+	if err := ReserveBranch(repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
-	if err := ReserveHerdrBranch(repo, fullRef, base); err == nil {
+	if err := ReserveBranch(repo, fullRef, base); err == nil {
 		t.Fatal("second atomic branch reservation unexpectedly succeeded")
 	}
-	got, found, err := ObserveHerdrBranch(repo, fullRef)
+	got, found, err := ObserveBranch(repo, fullRef)
 	if err != nil || !found || got != base {
 		t.Fatalf("reserved branch = (%q,%t,%v), want %s", got, found, err, base)
 	}
 
 	checkout := filepath.Join(t.TempDir(), "checkout")
 	gitTest(t, repo, "worktree", "add", checkout, "fanout/child")
-	if err := DeleteReservedHerdrBranch(repo, fullRef, base); err == nil ||
+	if err := DeleteReservedBranch(repo, fullRef, base); err == nil ||
 		!strings.Contains(err.Error(), "checked-out") {
 		t.Fatalf("checked-out delete error = %v", err)
 	}
 	gitTest(t, repo, "worktree", "remove", checkout)
-	if err := DeleteReservedHerdrBranch(repo, fullRef, base); err != nil {
+	if err := DeleteReservedBranch(repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := ObserveHerdrBranch(repo, fullRef); err != nil || found {
+	if _, found, err := ObserveBranch(repo, fullRef); err != nil || found {
 		t.Fatalf("branch after compare-delete = (found:%t, err:%v)", found, err)
 	}
 }
@@ -88,24 +88,24 @@ func TestHerdrBranchReservationSupportsSHA256ObjectIDs(t *testing.T) {
 	if len(base) != 64 {
 		t.Fatalf("SHA-256 repository HEAD length = %d, want 64", len(base))
 	}
-	resolved, err := ResolveHerdrBase(Options{
+	resolved, err := ResolveLaunchBase(context.Background(), Options{
 		ProjectRoot: repo, Slug: "sha256", BranchName: "fanout/sha256",
 		AllowMissingOrigin: true,
 	})
 	if err != nil || resolved.SHA != base {
 		t.Fatalf("SHA-256 base = %+v, err=%v", resolved, err)
 	}
-	fullRef, err := HerdrBranchRef(repo, "fanout/sha256")
+	fullRef, err := LocalBranchRef(repo, "fanout/sha256")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ReserveHerdrBranch(repo, fullRef, base); err != nil {
+	if err := ReserveBranch(repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
-	if got, found, err := ObserveHerdrBranch(repo, fullRef); err != nil || !found || got != base {
+	if got, found, err := ObserveBranch(repo, fullRef); err != nil || !found || got != base {
 		t.Fatalf("SHA-256 branch = (%q,%t,%v), want %s", got, found, err, base)
 	}
-	if err := DeleteReservedHerdrBranch(repo, fullRef, base); err != nil {
+	if err := DeleteReservedBranch(repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -113,11 +113,11 @@ func TestHerdrBranchReservationSupportsSHA256ObjectIDs(t *testing.T) {
 func TestDeleteReservedHerdrBranchRejectsMovedTip(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	base := gitOutput(t, repo, "rev-parse", "HEAD")
-	fullRef, err := HerdrBranchRef(repo, "fanout/moved")
+	fullRef, err := LocalBranchRef(repo, "fanout/moved")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ReserveHerdrBranch(repo, fullRef, base); err != nil {
+	if err := ReserveBranch(repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
 	tree := gitOutput(t, repo, "rev-parse", "HEAD^{tree}")
@@ -129,7 +129,7 @@ func TestDeleteReservedHerdrBranchRejectsMovedTip(t *testing.T) {
 		"commit-tree", tree, "-p", base, "-m", "moved",
 	)
 	gitTest(t, repo, "update-ref", fullRef, moved, base)
-	if err := DeleteReservedHerdrBranch(repo, fullRef, base); err == nil ||
+	if err := DeleteReservedBranch(repo, fullRef, base); err == nil ||
 		!strings.Contains(err.Error(), "moved from") {
 		t.Fatalf("moved delete error = %v", err)
 	}
@@ -141,7 +141,7 @@ func TestDeleteReservedHerdrBranchRejectsMovedTip(t *testing.T) {
 func TestResolveHerdrBasePinsCommitAndRejectsDirtySource(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	want := gitOutput(t, repo, "rev-parse", "HEAD")
-	got, err := ResolveHerdrBase(Options{
+	got, err := ResolveLaunchBase(context.Background(), Options{
 		ProjectRoot: repo, Slug: "child", BranchName: "fanout/child",
 		AllowMissingOrigin: true,
 	})
@@ -154,7 +154,7 @@ func TestResolveHerdrBasePinsCommitAndRejectsDirtySource(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ResolveHerdrBase(Options{
+	if _, err := ResolveLaunchBase(context.Background(), Options{
 		ProjectRoot: repo, Slug: "dirty", BranchName: "fanout/dirty",
 		AllowMissingOrigin: true,
 	}); err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
@@ -166,12 +166,12 @@ func TestResolveHerdrBaseContextStopsCanceledGitWork(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := ResolveHerdrBaseContext(ctx, Options{
+	_, err := ResolveLaunchBase(ctx, Options{
 		ProjectRoot: repo, Slug: "canceled", BranchName: "fanout/canceled",
 		NoRefresh: true, AllowMissingOrigin: true,
 	})
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("ResolveHerdrBaseContext() error = %v, want context.Canceled", err)
+		t.Fatalf("ResolveLaunchBase() error = %v, want context.Canceled", err)
 	}
 }
 
@@ -190,12 +190,12 @@ func TestResolveHerdrBaseContextStopsDefaultBranchLookup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	_, err := ResolveHerdrBaseContext(ctx, Options{
+	_, err := ResolveLaunchBase(ctx, Options{
 		ProjectRoot: repo, Slug: "default-timeout", BranchName: "fanout/default-timeout",
 		NoRefresh: true, AllowMissingOrigin: true,
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("ResolveHerdrBaseContext() error = %v, want context.DeadlineExceeded", err)
+		t.Fatalf("ResolveLaunchBase() error = %v, want context.DeadlineExceeded", err)
 	}
 	if elapsed := time.Since(started); elapsed >= time.Second {
 		t.Fatalf("default branch lookup stopped after %v, want under 1s", elapsed)
@@ -219,7 +219,7 @@ func TestEnsureHerdrWorktreeParentRejectsSymlinkComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkout := filepath.Join(repo, ".fanout", "worktrees", "child")
-	if err := EnsureHerdrWorktreeParent(repo, checkout); err == nil ||
+	if err := EnsureWorktreeParentDir(repo, checkout); err == nil ||
 		!strings.Contains(err.Error(), "not a real directory") {
 		t.Fatalf("symlink parent error = %v", err)
 	}
@@ -234,7 +234,7 @@ func TestObserveHerdrCheckoutIgnoresUnrelatedPrunableWorktree(t *testing.T) {
 	}
 
 	target := filepath.Join(repo, ".fanout", "worktrees", "target")
-	got, err := ObserveHerdrCheckout(repo, target)
+	got, err := ObserveCheckout(repo, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestObserveHerdrCheckoutRejectsRecreatedPrunableDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := ObserveHerdrCheckout(repo, checkout); err == nil ||
+	if _, err := ObserveCheckout(repo, checkout); err == nil ||
 		!strings.Contains(err.Error(), "does not resolve to its registered worktree root") {
 		t.Fatalf("recreated prunable checkout error = %v", err)
 	}
@@ -263,23 +263,23 @@ func TestObserveHerdrCheckoutRejectsRecreatedPrunableDirectory(t *testing.T) {
 func TestVerifyHerdrCheckoutPinsBranchHeadAndRepository(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	base := gitOutput(t, repo, "rev-parse", "HEAD")
-	fullRef, refErr := HerdrBranchRef(repo, "fanout/child")
+	fullRef, refErr := LocalBranchRef(repo, "fanout/child")
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
-	if err := ReserveHerdrBranch(repo, fullRef, base); err != nil {
+	if err := ReserveBranch(repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
 	checkout := filepath.Join(repo, ".fanout", "worktrees", "child")
-	if err := EnsureHerdrWorktreeParent(repo, checkout); err != nil {
+	if err := EnsureWorktreeParentDir(repo, checkout); err != nil {
 		t.Fatal(err)
 	}
 	gitTest(t, repo, "worktree", "add", checkout, "fanout/child")
-	identity, err := ResolveHerdrRepoIdentity(repo)
+	identity, err := ResolveRepoIdentity(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := VerifyHerdrCheckout(
+	got, err := VerifyCheckout(
 		repo,
 		checkout,
 		fullRef,
@@ -300,7 +300,7 @@ func TestVerifyHerdrCheckoutPinsBranchHeadAndRepository(t *testing.T) {
 	}
 	gitTest(t, checkout, "add", "next.txt")
 	gitTest(t, checkout, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.test", "commit", "-m", "next")
-	if _, err := VerifyHerdrCheckout(
+	if _, err := VerifyCheckout(
 		repo,
 		checkout,
 		fullRef,

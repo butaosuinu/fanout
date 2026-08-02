@@ -35,7 +35,7 @@ func ensureHerdrBranchReservation(
 	req HerdrWorktreeRequest,
 	intent state.HerdrIntent,
 ) (state.HerdrIntent, error) {
-	current, found, err := worktree.ObserveHerdrBranch(req.SourceRoot, intent.FullBranchRef)
+	current, found, err := worktree.ObserveBranch(req.SourceRoot, intent.FullBranchRef)
 	if err != nil {
 		return intent, err
 	}
@@ -47,7 +47,7 @@ func ensureHerdrBranchReservation(
 				fmt.Errorf("adopted Herdr branch moved from %s", intent.ExpectedHead),
 			)
 		}
-		if err := worktree.HerdrBranchAvailable(req.SourceRoot, intent.FullBranchRef); err != nil {
+		if err := worktree.BranchAvailable(req.SourceRoot, intent.FullBranchRef); err != nil {
 			return intent, err
 		}
 		return intent, nil
@@ -69,8 +69,8 @@ func ensureHerdrBranchReservation(
 			fmt.Errorf("herdr branch appeared before reservation completed"),
 		)
 	}
-	if err := worktree.ReserveHerdrBranch(req.SourceRoot, intent.FullBranchRef, intent.BaseSHA); err != nil {
-		current, found, observeErr := worktree.ObserveHerdrBranch(req.SourceRoot, intent.FullBranchRef)
+	if err := worktree.ReserveBranch(req.SourceRoot, intent.FullBranchRef, intent.BaseSHA); err != nil {
+		current, found, observeErr := worktree.ObserveBranch(req.SourceRoot, intent.FullBranchRef)
 		if observeErr != nil {
 			return intent, markHerdrIntentManual(locked, intent, errors.Join(err, observeErr))
 		}
@@ -98,7 +98,7 @@ func rollbackUnissuedHerdrWorktree(
 	mutationErr error,
 ) error {
 	if !intent.BranchExisted && !intent.BranchCreated {
-		_, found, err := worktree.ObserveHerdrBranch(req.SourceRoot, intent.FullBranchRef)
+		_, found, err := worktree.ObserveBranch(req.SourceRoot, intent.FullBranchRef)
 		if err != nil || found {
 			cause := err
 			if cause == nil {
@@ -108,7 +108,7 @@ func rollbackUnissuedHerdrWorktree(
 		}
 	}
 	if intent.BranchCreated {
-		if err := worktree.DeleteReservedHerdrBranch(
+		if err := worktree.DeleteReservedBranch(
 			req.SourceRoot,
 			intent.FullBranchRef,
 			intent.BaseSHA,
@@ -177,7 +177,7 @@ func recoverHerdrWorktree(
 	runtime HerdrWorktreeRuntime,
 	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
-	source worktree.HerdrRepoIdentity,
+	source worktree.RepoIdentity,
 	intent state.HerdrIntent,
 	mutationErr error,
 ) (HerdrWorktreeResult, error) {
@@ -203,7 +203,7 @@ func recoverHerdrWorktree(
 		}
 		return worktreeDeferred(intent)
 	}
-	checkout, checkoutErr := worktree.ObserveHerdrCheckout(req.SourceRoot, intent.WorktreePath)
+	checkout, checkoutErr := worktree.ObserveCheckout(req.SourceRoot, intent.WorktreePath)
 	if checkoutErr != nil {
 		return HerdrWorktreeResult{}, markHerdrIntentManual(
 			locked,
@@ -213,7 +213,7 @@ func recoverHerdrWorktree(
 	}
 	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) &&
 		intent.Resource.WorkspaceID != "" && len(matches) == 0 {
-		if _, verifyErr := worktree.VerifyHerdrCheckout(
+		if _, verifyErr := worktree.VerifyCheckout(
 			req.SourceRoot,
 			intent.WorktreePath,
 			intent.FullBranchRef,
@@ -232,7 +232,7 @@ func recoverHerdrWorktree(
 	}
 	if mutationErr == nil && intent.BranchCreated && len(matches) == 0 &&
 		checkout.PathAbsent && !checkout.Registered {
-		_, branchFound, branchErr := worktree.ObserveHerdrBranch(
+		_, branchFound, branchErr := worktree.ObserveBranch(
 			req.SourceRoot,
 			intent.FullBranchRef,
 		)
@@ -252,7 +252,7 @@ func recoverHerdrWorktree(
 	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) &&
 		len(matches) == 0 && checkout.PathAbsent && !checkout.Registered {
 		if intent.BranchCreated {
-			if err := worktree.DeleteReservedHerdrBranch(
+			if err := worktree.DeleteReservedBranch(
 				req.SourceRoot,
 				intent.FullBranchRef,
 				intent.BaseSHA,
@@ -284,14 +284,14 @@ func recoverHerdrWorktree(
 func finalizeHerdrWorktree(
 	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
-	source worktree.HerdrRepoIdentity,
+	source worktree.RepoIdentity,
 	intent *state.HerdrIntent,
 	observation herdrrun.WorkspaceObservation,
 ) error {
 	if err := validateWorktreeObservation(*intent, source, observation); err != nil {
 		return err
 	}
-	if _, err := worktree.VerifyHerdrCheckout(
+	if _, err := worktree.VerifyCheckout(
 		req.SourceRoot,
 		intent.WorktreePath,
 		intent.FullBranchRef,
@@ -343,7 +343,7 @@ func resumeRealizedHerdrWorktree(
 	runtime HerdrWorktreeRuntime,
 	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
-	source worktree.HerdrRepoIdentity,
+	source worktree.RepoIdentity,
 	intent state.HerdrIntent,
 	allowOpen bool,
 ) (HerdrWorktreeResult, error) {
@@ -364,7 +364,7 @@ func resumeRealizedHerdrWorktree(
 				fmt.Errorf("realized Herdr worktree identity changed"),
 			)
 		}
-		if _, err := worktree.VerifyHerdrCheckout(
+		if _, err := worktree.VerifyCheckout(
 			req.SourceRoot,
 			intent.WorktreePath,
 			intent.FullBranchRef,
@@ -384,7 +384,7 @@ func resumeRealizedHerdrWorktree(
 		)
 	}
 
-	if _, err := worktree.VerifyHerdrCheckout(
+	if _, err := worktree.VerifyCheckout(
 		req.SourceRoot,
 		intent.WorktreePath,
 		intent.FullBranchRef,

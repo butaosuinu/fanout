@@ -443,43 +443,23 @@ func RefreshBaseContext(ctx context.Context, root, base string) error {
 // failure it returns {projectRoot} alongside the error so callers degrade to a
 // single-root load.
 func ListRoots(projectRoot string) ([]string, error) {
-	out, err := git(projectRoot, "worktree", "list", "--porcelain")
+	entries, err := worktreeEntries(projectRoot)
 	if err != nil {
 		return []string{projectRoot}, err
 	}
 	roots := []string{projectRoot}
 	seen := map[string]bool{projectRoot: true}
-	var current string
-	skip := false
 	childMarker := string(filepath.Separator) + filepath.FromSlash(localExcludePattern)
-	flush := func() {
-		path := current
-		drop := skip
-		current, skip = "", false
-		if path == "" || drop {
-			return
-		}
-		if seen[path] || strings.Contains(path, childMarker) {
-			return
-		}
-		seen[path] = true
-		roots = append(roots, path)
-	}
-	sc := bufio.NewScanner(strings.NewReader(string(out)))
-	for sc.Scan() {
-		line := sc.Text()
-		if after, ok := strings.CutPrefix(line, "worktree "); ok {
-			flush()
-			current = after
+	for _, entry := range entries {
+		// bare and prunable worktrees have no usable working tree to read
+		// state from.
+		if entry.bare || entry.prunable || seen[entry.path] ||
+			strings.Contains(entry.path, childMarker) {
 			continue
 		}
-		// `bare` and `prunable [<reason>]` are stanza attribute lines; either
-		// means the worktree has no usable working tree to read state from.
-		if line == "bare" || line == "prunable" || strings.HasPrefix(line, "prunable ") {
-			skip = true
-		}
+		seen[entry.path] = true
+		roots = append(roots, entry.path)
 	}
-	flush()
 	return roots, nil
 }
 
@@ -526,21 +506,14 @@ func baseTreeRef(root string) string {
 	return base
 }
 
-func checkedOutWorktree(ctx context.Context, root, branch string) (string, error) {
-	out, err := gitContext(ctx, root, "worktree", "list", "--porcelain")
+func checkedOutWorktree(_ context.Context, root, branch string) (string, error) {
+	entries, err := worktreeEntries(root)
 	if err != nil {
 		return "", err
 	}
-	var current string
-	sc := bufio.NewScanner(strings.NewReader(string(out)))
-	for sc.Scan() {
-		line := sc.Text()
-		if after, ok := strings.CutPrefix(line, "worktree "); ok {
-			current = after
-			continue
-		}
-		if strings.TrimPrefix(line, "branch refs/heads/") == branch {
-			return current, nil
+	for _, entry := range entries {
+		if entry.branch == "refs/heads/"+branch {
+			return entry.path, nil
 		}
 	}
 	return "", nil
@@ -589,8 +562,8 @@ func branchExists(root, branch string) bool {
 	if branch == "" {
 		return false
 	}
-	_, err := gitTrim(root, "rev-parse", "--verify", "refs/heads/"+branch)
-	return err == nil
+	_, found, err := ObserveBranch(root, "refs/heads/"+branch)
+	return err == nil && found
 }
 
 // SlugInUse reports whether slug already owns a worktree directory under

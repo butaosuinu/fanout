@@ -55,7 +55,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 |---|---|---|---|
 | meta | `arch` | 層ルールの CI 強制(唯一のガード)。緩和・allowlist 追加は要精査 | H |
 | infra | `state` | `.fanout/state.json` と git common directory の Herdr intent journal、各 lock の読み書き | H |
-| infra | `worktree` | base branch 解決・refresh・`git worktree add`、Herdr branch の atomic ref 予約と checkout 検証 | H |
+| infra | `worktree` | base branch 解決・refresh・`git worktree add`、branch ref の atomic 予約 (compare-and-delete) と checkout 観測 | H |
 | infra | `hooks` | ライフサイクルフック実行 | H |
 | infra | `selfupdate` | 自己アップデート | H |
 | infra | `team` | `--team` / `fanout msg` の SQLite バス | H |
