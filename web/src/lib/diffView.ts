@@ -4,14 +4,38 @@ import type { DiffView } from "../hooks/useSettings";
  * (style.css の @media (max-width:1100px) と同期させること)。 */
 export const COMPACT_FULL_WIDTH_PX = 1100;
 
-/* diff ビュアーが背面(一覧とドロワー)を覆っているか。
+export interface DiffPanelGeometry {
+  view: DiffView;
+  viewportWidth: number;
+  /* パネル右端の位置(= 詳細ドロワーの左端からビューポート右端までの距離)。
+   * ドロワーが無ければ 0。 */
+  anchorRight: number;
+  /* コンパクト表示のパネル幅 */
+  width: number;
+}
+
+/* diff ビュアーが背面(Session 一覧)を覆い尽くしているか。
  *
- * 全画面は当然として、狭い帯ではコンパクトも CSS が全幅パネルにするので背面は
- * 一切見えない。覆っているかどうかは 2 か所の判断に効く:
+ * 覆っているかどうかは 2 か所の判断に効く:
  * - DiffOverlay: モーダルにして背面を inert にするか(見えない要素へ Tab が
  *   抜けないように)
  * - App: 見えない peek の 5 秒ポーリングを止めるか
- * 両方が同じ答えを出す必要があるので、判定はここに 1 つだけ置く。 */
-export function isDiffCovering(view: DiffView, viewportWidth: number): boolean {
-  return view === "full" || viewportWidth <= COMPACT_FULL_WIDTH_PX;
+ * 両方が同じ答えを出す必要があるので、判定はここに 1 つだけ置く。
+ *
+ * モードだけでは決まらない。パネルは右端がドロワーの左端に貼り付き、そこを
+ * 越えた分は左へ伸びるので、狭い画面 + 広いドロワー + 広いパネルでは
+ * 1,100px を超えていても一覧が 1px も残らないことがある(例: 1,200px の画面で
+ * ドロワー 840px・パネル 760px なら右端は 440px、パネルは x=0-760px を占め、
+ * 一覧の 0-360px は完全に隠れる)。実寸で見る。 */
+export function coversBackground({
+  view,
+  viewportWidth,
+  anchorRight,
+  width,
+}: DiffPanelGeometry): boolean {
+  if (view === "full") return true;
+  if (viewportWidth <= COMPACT_FULL_WIDTH_PX) return true; // CSS が全幅パネルにする
+  // style.css の right: max(0, min(--diff-anchor-right, 100vw - --diff-w)) と同じ
+  const right = Math.max(0, Math.min(anchorRight, viewportWidth - width));
+  return viewportWidth - right - width <= 0; // 左に 1px も残らない
 }

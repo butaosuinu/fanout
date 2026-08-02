@@ -14,7 +14,7 @@ import {
   type Theme,
 } from "../hooks/useSettings";
 import { apiUrl } from "../lib/api";
-import { COMPACT_FULL_WIDTH_PX, isDiffCovering } from "../lib/diffView";
+import { COMPACT_FULL_WIDTH_PX, coversBackground } from "../lib/diffView";
 import { blockBackground } from "../lib/inert";
 import { lockDocumentScroll } from "../lib/scrollLock";
 import {
@@ -182,6 +182,7 @@ export function DiffOverlay({
   anchorKey = null,
   suppressed = false,
   escapeEnabled = true,
+  onCoveringChange,
   onOpenSettings,
   onClose,
 }: {
@@ -197,6 +198,8 @@ export function DiffOverlay({
   suppressed?: boolean;
   /* 設定モーダルが上に重なっている間は Escape を譲る(下の diff は開いたまま) */
   escapeEnabled?: boolean;
+  /* 背面を覆っているかの通知。App は隠れた peek のポーリング停止に使う */
+  onCoveringChange?: (covering: boolean) => void;
   /* 全画面表示中は Nav が inert なので、テーマ設定への入口をここにも置く */
   onOpenSettings: () => void;
   onClose: () => void;
@@ -208,15 +211,23 @@ export function DiffOverlay({
   /* auto レイアウトと covering 判定に使うビューポート幅。ResizeObserver は使わない
    * — タブが非表示のあいだ配信が止まるうえ、パネル幅はここで計算できる。 */
   const viewportWidth = useViewportWidth();
-  /* 背面を覆っているならモーダル。全画面はもちろん、狭い帯ではコンパクトも CSS が
-   * nav 下の全幅パネルにするので一覧もドロワーも見えない。覆っているのに非モーダル
-   * だと、見えない背面へ Tab が抜け、隠れた peek のポーリングも続く。 */
-  const covering = isDiffCovering(viewMode, viewportWidth);
+  /* パネル右端の位置(= ドロワーの左端)。実寸で覆っているかを判定するため state で
+   * 持つ。ドロワーは幅可変で、選択が無ければ存在しない。 */
+  const [anchorRight, setAnchorRight] = useState(0);
   const diffThemes = useMemo(() => ({ light, dark }), [light, dark]);
   const { state, refetch } = useDiff(apiUrl("/api/diff", token, query));
   const rootRef = useRef<HTMLDivElement>(null);
   const hostsRef = useRef(new Map<number, HTMLDivElement>());
   const { width: compactWidth, gripProps } = useDiffWidth();
+  /* 背面を覆っているならモーダル。全画面はもちろん、狭い帯や、ドロワーが広くて
+   * パネルが一覧を食い尽くす配置でも覆う。覆っているのに非モーダルだと、見えない
+   * 背面へ Tab が抜け、隠れた peek のポーリングも続く(判定は lib/diffView)。 */
+  const covering = coversBackground({
+    view: viewMode,
+    viewportWidth,
+    anchorRight,
+    width: compactWidth,
+  });
   /* covering(全画面 / 狭い帯の全幅コンパクト)のときだけモーダル。背面を
    * 覆っていないコンパクトは Tab で背面へ出られてよい。 */
   useFocusTrap(rootRef, covering && !suppressed);
@@ -227,6 +238,14 @@ export function DiffOverlay({
   useEffect(() => {
     if (!covering) return;
     return blockBackground([document.getElementById("root")]);
+  }, [covering]);
+
+  /* peek の停止判断は App が持つが、覆っているかはこちらでしか分からない */
+  const onCoveringRef = useRef(onCoveringChange);
+  onCoveringRef.current = onCoveringChange;
+  useEffect(() => {
+    onCoveringRef.current?.(covering);
+    return () => onCoveringRef.current?.(false);
   }, [covering]);
 
   /* 上に設定モーダルがある間は自分を inert にする(mount 順に依存しない) */
@@ -266,16 +285,18 @@ export function DiffOverlay({
   }, [covering, suppressed]);
 
   /* コンパクト表示の右端を詳細ドロワーの左端に合わせる。ドロワーは幅可変
-   * (--drawer-w のドラッグ)かつ選択が無ければ存在しないので、実測して CSS 変数へ
-   * 落とす。ドロワーが無いときはビューポート右端に寄せる。 */
+   * (--drawer-w のドラッグ)かつ選択が無ければ存在しないので実測する。
+   * ドロワーが無いときはビューポート右端に寄せる。 */
   useEffect(() => {
-    const el = rootRef.current;
-    if (!el || viewMode !== "compact") return;
+    if (viewMode !== "compact") return;
     const drawer = document.getElementById("drawer");
     const sync = () => {
-      const left = drawer?.getBoundingClientRect().left ?? window.innerWidth;
-      const right = Math.max(0, Math.round(window.innerWidth - left));
-      el.style.setProperty("--diff-anchor-right", `${right}px`);
+      /* 幅 0 の矩形はレイアウトが無い(jsdom)か実際に場所を取っていないので、
+       * ドロワーが無いのと同じ扱いにする。0 を左端として採ると、パネルが画面を
+       * 覆い尽くしていると誤判定する。 */
+      const rect = drawer?.getBoundingClientRect();
+      const left = rect && rect.width > 0 ? rect.left : window.innerWidth;
+      setAnchorRight(Math.max(0, Math.round(window.innerWidth - left)));
     };
     sync();
     const ro = new ResizeObserver(sync);
@@ -479,7 +500,12 @@ export function DiffOverlay({
       data-layout={stack ? "stack" : "split"}
       /* 幅は CSS 変数だけで制御する(inline width にすると狭い画面の media query が
          cascade で勝てなくなる — ドロワーと同じ理由)。全画面では使われない。 */
-      style={{ "--diff-w": `${compactWidth}px` } as CSSProperties}
+      style={
+        {
+          "--diff-w": `${compactWidth}px`,
+          "--diff-anchor-right": `${anchorRight}px`,
+        } as CSSProperties
+      }
       ref={rootRef}
       tabIndex={-1}
     >

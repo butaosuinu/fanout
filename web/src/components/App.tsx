@@ -9,11 +9,8 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
-import { useDiffView } from "../hooks/useSettings";
 import { useSnapshot } from "../hooks/useSnapshot";
-import { useViewportWidth } from "../hooks/useViewportWidth";
 import { readToken } from "../lib/api";
-import { isDiffCovering } from "../lib/diffView";
 import {
   filterTokens,
   matches,
@@ -94,8 +91,8 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const { view: diffView } = useDiffView();
-  const viewportWidth = useViewportWidth();
+  /* diff が背面を覆っているか。実寸に依存するのでオーバーレイから受け取る */
+  const [diffCovering, setDiffCovering] = useState(false);
   const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
   /* モーダルを開いた起点要素。閉じたときにフォーカスを戻す(diff は表のセル
    * からも Drawer のボタンからも開くので、ref 固定ではなく起点を控える)。
@@ -303,7 +300,7 @@ export function App() {
             parent={selectedEntry.parent}
             repo={repo}
             token={token}
-            diffCovering={diffTarget !== null && isDiffCovering(diffView, viewportWidth)}
+            diffCovering={diffCovering}
             onOpenDiff={openDiff}
             onClose={closeDrawer}
           />
@@ -317,6 +314,7 @@ export function App() {
             token={token}
             anchorKey={selected}
             suppressed={settingsOpen}
+            onCoveringChange={setDiffCovering}
             escapeEnabled={!settingsOpen}
             onOpenSettings={openSettings}
             onClose={closeDiff}
