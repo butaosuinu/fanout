@@ -27,6 +27,7 @@ import {
   type DiffFilePlan,
 } from "../lib/diff";
 import { DiffFileList } from "./DiffFileList";
+import { DiffOmittedNote } from "./DiffOmittedNote";
 import {
   IconButton,
   IconChevronDown,
@@ -502,6 +503,7 @@ export function DiffOverlay({
           {view.warning}
         </div>
       )}
+      {diff && <DiffOmittedNote files={diff.files} />}
       {state.phase === "loading" && <div className="diff-note">diff を取得中…(最大 10 秒)</div>}
       {state.phase === "error" && (
         <div className="diff-note diff-error" role="alert">

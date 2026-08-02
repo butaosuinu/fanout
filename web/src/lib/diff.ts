@@ -137,10 +137,17 @@ export function groupDiffFilesByDir(files: DiffFileEntry[]): DiffFileGroup[] {
  * 非 ASCII や制御文字を含む path を `"..."` で囲んで C 形式にエスケープして
  * 出すため、patch から得た name はサーバーの files[].path と一致しない。
  * 非 ASCII は UTF-8 の各バイトが 8 進エスケープになるので、バイト列へ戻して
- * から decode する。 */
+ * から decode する。
+ *
+ * 引用符の有無で分岐しないこと。parsePatchFiles は外側の `"` を剥がすが
+ * エスケープはそのまま残す(実測: `"docs/\346..."` → `docs/\346...`)。
+ * 代わりに「全ての `\` が正しいエスケープの開始である」ことを条件にし、
+ * 1 つでも解釈できなければ元の name を返す(リテラルの `\` を含む実在の
+ * ファイル名を壊さないため)。 */
 export function unquoteGitPath(name: string): string {
-  if (name.length < 2 || !name.startsWith('"') || !name.endsWith('"')) return name;
-  const body = name.slice(1, -1);
+  const body =
+    name.length >= 2 && name.startsWith('"') && name.endsWith('"') ? name.slice(1, -1) : name;
+  if (!body.includes("\\")) return body === name ? name : body;
   const encoder = new TextEncoder();
   const bytes: number[] = [];
   const simple: Record<string, number> = {

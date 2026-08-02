@@ -229,9 +229,20 @@ flex の `gap` や margin を入れると virtualizer が持つ file ごとの t
 `diffs-container` はカスタム要素で既定が `display: inline` のため `block` にする。
 これを外すと placeholder の高さが効かず全 file が潰れる。
 
-サイドバーは同じディレクトリの file をまとめて並べ、クリックで本文の該当 file へ飛ぶ。
+サイドバーは patch を持つ file だけを、同じディレクトリごとにまとめて並べ、
+クリックで本文の該当 file へ飛ぶ。
+patch に含まれなかった file(バイナリ・サイズ超過・上限)は警告帯の直下に
+`<details>` で常時出す — サイドバーは本文が狭いと畳まれるので、そこにしか
+無いと「どの file がなぜレビューできないか」が狭い画面で丸ごと消える。
 path の byte 順では `a/b.ts` < `a/c/d.ts` < `a/e.ts` のように同一ディレクトリが
 連続しないため、連続塊ではなく Map で束ねる。
+飛び先の索引を作るときは patch 側の path を生へ戻してから照合する
+(`unquoteGitPath`)。git は `core.quotePath`(既定 on)で非 ASCII や制御文字を
+C 形式にエスケープするが、サーバーの `files[].path` は生のままなので、
+そのままでは非 ASCII のファイルが飛べない。
+`parsePatchFiles` は外側の `"` だけ剥がしてエスケープは残すので、引用符の有無で
+分岐してはいけない — テストは実パーサを通すこと(一度これで正規化が丸ごと
+効いていなかった)。
 ジャンプはスクロールだけでは成立しない。
 これは次の virtualizer の性質による。
 `VirtualizedFileDiff` は自身の scroll 内オフセットを一度しか計算せず、更新するのは
@@ -363,7 +374,9 @@ container query は詳細度を足さないので、ルールは `.diff-sidebar`
 ### 一覧からの導線
 
 Session リストの diff 列は、行 identity(`diffQuery`)を組めるなら常にリンクに
-する。行数で「差分なし」と判定しない — `diffSummary` は
+する。summary が解析できない(gitstat の一時失敗で `-` や自由文になる)場合も
+リンクは残す — 復旧後に手で開き直す導線が消えるため。
+行数で「差分なし」とも判定しない — `diffSummary` は
 `git diff --shortstat`(rename 検出あり・未追跡を含まない)由来なので、binary
 だけ / mode だけ / pure rename の変更は commit 済みだと `+0/-0` かつ `clean` に
 なる一方、`/api/diff` は未追跡を含め `--no-renames` で patch を返すため、

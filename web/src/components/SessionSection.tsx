@@ -34,7 +34,7 @@ function BlockersCell({ pane }: { pane: PaneView }) {
   return <span className="muted">{blockersAllClosed(pane) ? "resolved" : "unknown"}</span>;
 }
 
-/* 差分があって identity を組める行だけ、diff ビュアーへの直リンクにする。 */
+/* 行 identity を組める行を、diff ビュアーへの直リンクにする。 */
 function DiffCell({
   parent,
   pane,
@@ -45,11 +45,14 @@ function DiffCell({
   onOpenDiff: (parent: string, pane: PaneView) => void;
 }) {
   const d = parseDiff(pane.diffSummary ?? "");
-  if (!d) return <span className="muted">{pane.diffSummary || "—"}</span>;
-  const stat = (
+  /* 解析できない summary(gitstat の一時失敗で "-" や自由文になる)でも、行
+   * identity があれば diff は取れる。要約はそのままテキストで見せる。 */
+  const stat = d ? (
     <>
       <span className="add">+{d.add}</span>/<span className="del">-{d.del}</span>
     </>
+  ) : (
+    <span className="muted">{pane.diffSummary || "—"}</span>
   );
   /* 行数を「差分あり」の判定には使わない。diffSummary は
    * `git diff --shortstat`(rename 検出あり・未追跡を含まない)由来なので、
@@ -64,7 +67,7 @@ function DiffCell({
       type="button"
       className="diff-link"
       title="変更を表示"
-      aria-label={`変更を表示 +${d.add}/-${d.del}`}
+      aria-label={`変更を表示 ${d ? `+${d.add}/-${d.del}` : pane.diffSummary || "—"}`}
       // 行クリック(Drawer を開く)には伝播させない — セルは diff への直行導線
       onClick={(e) => {
         e.stopPropagation();

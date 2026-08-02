@@ -173,12 +173,31 @@ describe("indexDiffFilesByPath", () => {
     );
   });
 
-  /* git は core.quotePath(既定 on)のとき patch 中の path を C 形式で
-   * エスケープするが、サーバーの files[].path は生のまま。key を正規化しないと
-   * 非 ASCII のファイルがサイドバーから飛べなくなる。 */
-  it("quoted path を生のパスへ戻して key にする", () => {
+  /* git は core.quotePath(既定 on)のとき patch 中の path を C 形式でエスケープ
+   * するが、サーバーの files[].path は生のまま。key を正規化しないと非 ASCII の
+   * ファイルがサイドバーから飛べなくなる。
+   *
+   * 実パーサを通すこと。parsePatchFiles は外側の `"` だけ剥がしてエスケープは
+   * 残すので、引用符付きの文字列を直に食わせるテストだと実際の入力とずれる
+   * (それで一度この正規化が丸ごと効いていなかった)。 */
+  it("非 ASCII の quoted path を、実パーサ出力から生のパスへ戻す", () => {
+    const quoted = '"a/docs/\\346\\227\\245\\346\\234\\254\\350\\252\\236.md"';
+    const patch = [
+      `diff --git ${quoted} ${quoted.replace("a/", "b/")}`,
+      `--- ${quoted}`,
+      `+++ ${quoted.replace("a/", "b/")}`,
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+    expect([...indexDiffFilesByPath(parseDiffFiles(patch)).keys()]).toEqual(["docs/日本語.md"]);
+  });
+
+  it("エスケープの復号は引用符の有無に依存しない", () => {
     const files = [
-      { name: '"docs/\\346\\227\\245\\346\\234\\254\\350\\252\\236.md"' },
+      // parsePatchFiles が外側の " を剥がした後の形
+      { name: "docs/\\346\\227\\245\\346\\234\\254\\350\\252\\236.md" },
       { name: '"a\\tb.txt"' },
       { name: "plain.ts" },
     ] as unknown as FileDiffMetadata[];
@@ -189,12 +208,12 @@ describe("indexDiffFilesByPath", () => {
     ]);
   });
 
-  it("引用でない name と、解釈できないエスケープはそのまま扱う", () => {
+  it("解釈できないエスケープを含む name はそのまま扱う", () => {
     const files = [
+      { name: "has\\qbackslash.ts" },
       { name: 'has"quote.ts' },
-      { name: '"bad\\q.ts"' },
     ] as unknown as FileDiffMetadata[];
-    expect([...indexDiffFilesByPath(files).keys()]).toEqual(['has"quote.ts', '"bad\\q.ts"']);
+    expect([...indexDiffFilesByPath(files).keys()]).toEqual(["has\\qbackslash.ts", 'has"quote.ts']);
   });
 });
 

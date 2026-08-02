@@ -780,7 +780,23 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
   color:var(--ink-78);
   font-family:var(--f-code); font-size:12px;
 }
-/* session リストの diff セル — 差分がある行だけ diff ビュアーへの直リンクにする。
+/* patch を持たない file の一覧。サイドバーは狭いと畳まれるので、警告帯の直下
+   (本文領域の外)に置いて常に見えるようにする。 */
+.diff-omitted{
+  padding:8px 22px 10px;
+  border-bottom:1px solid var(--suna);
+  font-family:var(--f-code); font-size:11.5px; color:var(--ink-60);
+}
+.diff-omitted > summary{ cursor:pointer; }
+.diff-omitted > summary:hover{ color:var(--asagi); }
+.diff-omitted ul{ list-style:none; margin-top:6px; }
+.diff-omitted li{
+  display:flex; align-items:baseline; gap:10px;
+  padding:1px 0 1px 14px;
+}
+.diff-omitted-path{ overflow-wrap:anywhere; }
+
+/* session リストの diff セル — 行 identity を組める行を diff ビュアーへの直リンクにする。
    セル本文(+N/-M)の見た目は据え置きで、リンクであることは下線で示す */
 .diff-link{
   padding:0;

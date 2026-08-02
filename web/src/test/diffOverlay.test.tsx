@@ -313,7 +313,7 @@ describe("diff オーバーレイ", () => {
     expect((window as unknown as { __pwned?: string }).__pwned).toBeUndefined();
   });
 
-  it("truncated / patch 省略 file は警告帯を出し、サイドバーに理由付きで並べる", async () => {
+  it("truncated / patch 省略 file は警告帯を出し、常時見える一覧に理由付きで並べる", async () => {
     const user = setup(
       http.get("/api/diff", () =>
         HttpResponse.json(
@@ -345,11 +345,20 @@ describe("diff オーバーレイ", () => {
     const overlay = await openOverlay(user);
 
     expect(await within(overlay).findByRole("status")).toHaveTextContent(/揃っていません.*2 file/);
+
+    /* 省略 file はサイドバーではなく警告帯の直下に置く。サイドバーは本文が狭いと
+     * 畳まれるので、そこにしか無いと「どの file がなぜレビューできないか」が
+     * 狭い画面で丸ごと消える。 */
+    const omitted = overlay.querySelector(".diff-omitted") as HTMLElement;
+    expect(within(omitted).getByText("assets/logo.png")).toBeInTheDocument();
+    expect(within(omitted).getByText(/バイナリ/)).toBeInTheDocument();
+    expect(within(omitted).getByText("huge.ts")).toBeInTheDocument();
+    expect(within(omitted).getByText(/収集上限/)).toBeInTheDocument();
+
+    // サイドバーは「飛べる file」だけを並べる
     const sidebar = within(overlay).getByRole("region", { name: "変更ファイル" });
-    expect(within(sidebar).getByText("logo.png")).toBeInTheDocument();
-    expect(within(sidebar).getByText(/バイナリ/)).toBeInTheDocument();
-    expect(within(sidebar).getByText("huge.ts")).toBeInTheDocument();
-    expect(within(sidebar).getByText(/収集上限/)).toBeInTheDocument();
+    expect(within(sidebar).getByText("hello.ts")).toBeInTheDocument();
+    expect(within(sidebar).queryByText("logo.png")).toBeNull();
   });
 
   it("404 は worktree 記録なしのエラーメッセージを出す", async () => {
@@ -602,7 +611,7 @@ describe("diff オーバーレイ", () => {
     expect([...document.querySelectorAll("diffs-container")]).toEqual(before);
   });
 
-  it("patch を持たない file はサイドバーから飛べない", async () => {
+  it("サイドバーは patch を持たない file を並べない(飛び先が無いため)", async () => {
     const user = setup(
       http.get("/api/diff", () =>
         HttpResponse.json(
@@ -626,7 +635,9 @@ describe("diff オーバーレイ", () => {
     const overlay = await openOverlay(user);
     const sidebar = await within(overlay).findByRole("region", { name: "変更ファイル" });
     expect(within(sidebar).getByRole("button", { name: /hello\.ts/ })).toBeInTheDocument();
-    expect(within(sidebar).queryByRole("button", { name: /logo\.png/ })).toBeNull();
+    expect(within(sidebar).queryByText(/logo\.png/)).toBeNull();
+    // 代わりに常時見える省略一覧のほうに出る
+    expect(overlay.querySelector(".diff-omitted")).toHaveTextContent("assets/logo.png");
   });
 
   it("行数が少なくても内容量が多い file は highlight と行内差分を切る", async () => {

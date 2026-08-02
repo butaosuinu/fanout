@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { diffTotals, fileBase, groupDiffFilesByDir, OMITTED_REASON_LABELS } from "../lib/diff";
+import { diffTotals, fileBase, groupDiffFilesByDir } from "../lib/diff";
 import type { DiffFileEntry } from "../lib/types";
 import { IconButton, IconFold, IconUnfold } from "./icons";
 
@@ -35,7 +35,9 @@ export const DiffFileList = memo(function DiffFileList({
   onCollapseAll: () => void;
 }) {
   const totals = diffTotals(files);
-  const groups = groupDiffFilesByDir(files);
+  /* patch を持たない file は本文側の DiffOmittedNote が常時出す。ここは
+   * 「飛べる file」だけにして、一覧の意味を移動先に絞る。 */
+  const groups = groupDiffFilesByDir(files.filter((f) => f.patchIncluded));
   return (
     // nav ではなく region — 主目的は一覧で、移動は付随機能
     <section className="diff-sidebar" aria-label="変更ファイル">
@@ -60,13 +62,7 @@ export const DiffFileList = memo(function DiffFileList({
           </h4>
           <ul className="diff-file-rows">
             {g.files.map((f) => {
-              const stat = f.patchIncluded ? (
-                <Stat file={f} />
-              ) : (
-                <span className="diff-file-omitted">
-                  {f.omittedReason ? OMITTED_REASON_LABELS[f.omittedReason] : "省略"}
-                </span>
-              );
+              const stat = <Stat file={f} />;
               const base = fileBase(f.path);
               return (
                 <li key={f.path}>
