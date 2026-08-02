@@ -224,6 +224,36 @@ run_pr_gate() {
   [ "$status" -eq 0 ]
 }
 
+# `cp -R` preserves symlinks inside the tree, so a package-internal symlink would
+# produce an "installed copy" that still reads arbitrary files.
+@test "link-integrations rejects a symlink inside the Claude review gate package" {
+  local repo="$BATS_TEST_TMPDIR/claude-gate-inner-symlink" root
+  setup_integration_repo "$repo"
+  root="$BATS_TEST_TMPDIR/claude-gate-inner-symlink-out"
+  rm "$repo/claude/skills/post-work-review/SKILL.md"
+  ln -s /etc/hosts "$repo/claude/skills/post-work-review/SKILL.md"
+
+  run make -C "$repo" link-integrations CLAUDE_DIR="$root/claude" \
+    CODEX_DIR="$root/codex" CODEX_HOME="$root/codex"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"must not contain symlinks"* ]]
+  [ ! -e "$root/claude/skills/post-work-review" ]
+}
+
+# Claude reads its config root from CLAUDE_CONFIG_DIR, so installing to a fixed
+# ~/.claude would put the gate where Claude never loads it.
+@test "CLAUDE_CONFIG_DIR becomes the default Claude install root" {
+  local repo="$BATS_TEST_TMPDIR/claude-config-dir" root
+  setup_integration_repo "$repo"
+  root="$BATS_TEST_TMPDIR/claude-config-dir-out"
+
+  CLAUDE_CONFIG_DIR="$root/alt" run make -C "$repo" link-integrations \
+    CODEX_DIR="$root/codex" CODEX_HOME="$root/codex"
+  [ "$status" -eq 0 ]
+  [ -f "$root/alt/skills/post-work-review/SKILL.md" ]
+  [ ! -L "$root/alt/skills/post-work-review" ]
+}
+
 @test "link-integrations replaces an existing symlinked Claude review gate" {
   local repo="$BATS_TEST_TMPDIR/claude-gate-relink" root
   setup_integration_repo "$repo"

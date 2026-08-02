@@ -191,10 +191,22 @@ Claude 経路でも行う:
 
 ```bash
 user_config="${CODEX_HOME:-$HOME/.codex}/config.toml"
-[ -f "$user_config" ] && grep -nE '^[[:space:]]*"?project_doc_fallback_filenames"?[[:space:]]*=' "$user_config"
+if [ -f "$user_config" ]; then
+  # 素の key 指定
+  grep -nE '^[[:space:]]*"?project_doc_fallback_filenames"?[[:space:]]*=' "$user_config"
+  # escaped key ("project_doc_fallback_filenames") は解読しない。
+  # key 位置に \u / \U がある時点で読めないものとして扱う
+  grep -nE '^[[:space:]]*"[^"]*\\[uU][^"]*"[[:space:]]*=' "$user_config"
+fi
 ```
 
-非空の設定が出たら、その参照先も保護対象に加えるか、**marker を書かない**。
+どちらかが 1 行でも出たら、その参照先も保護対象に加えるか、**marker を書かない**。
+
+**TOML を prose で解釈しようとしない。** 正当な TOML の quoted key は
+`"project_doc_fallback_filenames"` のように書けるため、literal token の
+grep では抜ける。同梱の `mark-reviewed-head.sh` は同じ形式を
+`unsupported escaped keys` として拒否している。ここでも同じ姿勢で、
+**確実に読めない形は fail closed** にする。誤って止まる側に倒すのが正しい。
 
 ### 前提チェック 0b: gate 自身が信頼済みコピーであること
 
@@ -222,7 +234,11 @@ while [ -n "$p" ] && [ "$p" != "/" ] && [ "$p" != "." ]; do
   p="$(dirname "$p")"
 done
 
-# 2) 実体パスがレビュー対象 checkout の中なら拒否
+# 2) パッケージ内に symlink があれば拒否 (cp -R は中の symlink を保存する)
+find "$skill_dir" -type l 2>/dev/null | grep -q . &&
+  echo "BLOCKED: gate パッケージ内に symlink がある"
+
+# 3) 実体パスがレビュー対象 checkout の中なら拒否
 real_skill="$(cd "$skill_dir" 2>/dev/null && pwd -P)" || real_skill=""
 repo_real="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)" || repo_real=""
 if [ -z "$real_skill" ] || [ -z "$repo_real" ]; then
@@ -234,8 +250,13 @@ else
 fi
 ```
 
-BLOCKED が出たら **marker を書かない**。`make link` を最新の Makefile で
-回し直せば実体コピーに戻る。
+2 が要るのは、`cp -R` がパッケージ**内**の symlink をそのまま保存するため。
+directory 自体だけを見ていると、`SKILL.md` が symlink の「実体コピー」を
+通してしまう。
+
+BLOCKED が出たら **marker を書かない**。`make link` を回し直せば実体コピーに
+戻る (Makefile の `CLAUDE_DIR` は `CLAUDE_CONFIG_DIR` を設定していればそちらを
+既定にするので、custom config root でも同じコマンドでよい)。
 
 出力が空でなければ **Step 5 の marker を書かない**。Pass 2 は参考情報として
 回してよいが、完了報告で次を明示し、ゲートは閉じたままにする:

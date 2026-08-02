@@ -1,6 +1,10 @@
 PREFIX     ?= $(HOME)/.local
 BINDIR     ?= $(PREFIX)/bin
-CLAUDE_DIR ?= $(HOME)/.claude
+# Claude Code reads its config root from CLAUDE_CONFIG_DIR when that is set, so
+# honor it here too. Defaulting to ~/.claude regardless would install the gate
+# somewhere Claude never loads, and the "rerun make link" remediation would keep
+# reporting the same BLOCKED.
+CLAUDE_DIR ?= $(if $(CLAUDE_CONFIG_DIR),$(CLAUDE_CONFIG_DIR),$(HOME)/.claude)
 CODEX_HOME ?= $(HOME)/.codex
 CODEX_HOME_EFFECTIVE := $(if $(strip $(CODEX_HOME)),$(CODEX_HOME),$(HOME)/.codex)
 CODEX_DIR  ?= $(CODEX_HOME_EFFECTIVE)
@@ -49,7 +53,7 @@ endif
 GO_CACHE_ENV   = $(if $(strip $(GOCACHE)),GOCACHE="$(GOCACHE)")
 PNPM_STORE_ARG = $(if $(strip $(PNPM_STORE_DIR)),--store-dir "$(PNPM_STORE_DIR)")
 
-.PHONY: install link uninstall build-go build-go-for-install build-web clean-go clean-web guard-retired-codex-review install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk prepare-dev-cache
+.PHONY: install link uninstall build-go build-go-for-install build-web clean-go clean-web guard-retired-codex-review copy-claude-gate install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk prepare-dev-cache
 
 # The local default lives under predictable /tmp on supported macOS and Linux
 # hosts. Reject a pre-created symlink or a directory owned by another user
@@ -125,16 +129,41 @@ guard-retired-codex-review:
 build-go-for-install: guard-retired-codex-review
 	@$(MAKE) --no-print-directory build-go
 
+# The Claude review gate must be a plain copy with no symlink anywhere in the
+# package: `cp -R` preserves symlinks inside the tree, so a branch that turns
+# SKILL.md into a symlink would otherwise get an "installed copy" that still
+# reads arbitrary files. Reject symlinks on both the source and the result.
+copy-claude-gate:
+	@set -eu; \
+		[ -n "$(SKILL)" ] || { echo "error: copy-claude-gate needs SKILL=<name>" >&2; exit 1; }; \
+		if find "claude/skills/$(SKILL)" -type l | grep -q .; then \
+			echo "error: Claude $(SKILL) gate source must not contain symlinks" >&2; \
+			find "claude/skills/$(SKILL)" -type l >&2; \
+			exit 1; \
+		fi; \
+		rm -rf "$(CLAUDE_SKILL_DIR)/$(SKILL)"; \
+		mkdir -p "$(CLAUDE_SKILL_DIR)/$(SKILL)"; \
+		cp -R "claude/skills/$(SKILL)/." "$(CLAUDE_SKILL_DIR)/$(SKILL)/"; \
+		if [ -L "$(CLAUDE_SKILL_DIR)/$(SKILL)" ] || \
+			find "$(CLAUDE_SKILL_DIR)/$(SKILL)" -type l | grep -q .; then \
+			echo "error: Claude $(SKILL) gate must not be or contain a symlink: $(CLAUDE_SKILL_DIR)/$(SKILL)" >&2; \
+			exit 1; \
+		fi
+
 install-integrations: guard-retired-codex-review
 	@mkdir -p "$(CLAUDE_CMD_DIR)" "$(CLAUDE_SKILL_DIR)" "$(CODEX_SKILL_DIR)"
 	@for cmd in $(CLAUDE_COMMANDS); do \
 		install -m 0644 "claude/commands/$$cmd" "$(CLAUDE_CMD_DIR)/$$cmd"; \
 	done
-	@for skill in $(CLAUDE_SKILLS); do \
+	@for skill in $(filter-out $(CLAUDE_COPY_SKILLS),$(CLAUDE_SKILLS)); do \
 		rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; \
 		mkdir -p "$(CLAUDE_SKILL_DIR)/$$skill"; \
 		cp -R "claude/skills/$$skill/." "$(CLAUDE_SKILL_DIR)/$$skill/"; \
 	done
+	@set -eu; \
+		for skill in $(CLAUDE_COPY_SKILLS); do \
+			$(MAKE) --no-print-directory copy-claude-gate SKILL="$$skill"; \
+		done
 	@for skill in $(filter-out post-work-review,$(CODEX_SKILLS)); do \
 		rm -rf "$(CODEX_SKILL_DIR)/$$skill"; \
 		mkdir -p "$(CODEX_SKILL_DIR)/$$skill"; \
@@ -152,13 +181,7 @@ link-integrations: guard-retired-codex-review
 	done
 	@set -eu; \
 		for skill in $(CLAUDE_COPY_SKILLS); do \
-			rm -rf "$(CLAUDE_SKILL_DIR)/$$skill"; \
-			mkdir -p "$(CLAUDE_SKILL_DIR)/$$skill"; \
-			cp -R "claude/skills/$$skill/." "$(CLAUDE_SKILL_DIR)/$$skill/"; \
-			if [ -L "$(CLAUDE_SKILL_DIR)/$$skill" ]; then \
-				echo "error: Claude $$skill gate must not be a symlink: $(CLAUDE_SKILL_DIR)/$$skill" >&2; \
-				exit 1; \
-			fi; \
+			$(MAKE) --no-print-directory copy-claude-gate SKILL="$$skill"; \
 		done
 	@for skill in $(filter-out post-work-review,$(CODEX_SKILLS)); do \
 		rm -rf "$(CODEX_SKILL_DIR)/$$skill"; \
