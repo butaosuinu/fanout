@@ -111,6 +111,10 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		diffWorktree = func(ctx context.Context, path, baseRef string) (gitstat.Patch, error) {
+			// ctx reaches every git invocation through Runner.Context (see
+			// gitstat.Runner.context, which feeds execx.OutputContext), not
+			// through a parameter — contextcheck cannot follow a struct field.
+			//nolint:contextcheck // ctx is propagated via the Runner.Context field
 			return (gitstat.Runner{
 				Cwd:           s.poller.projectRoot,
 				Context:       ctx,

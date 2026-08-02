@@ -23,8 +23,10 @@ linters:
   enable:
     # バグ検出
     - bodyclose                # selfupdate の HTTP レスポンス Body Close 漏れ
-    # deadline 付き ctx を握り潰す新規呼び出しの回帰防止。2026-08 に実測して
-    # 採用(全 issue 1 件 = server.go の graceful shutdown のみ、nolint で明示)
+    # deadline 付き ctx を握り潰す新規呼び出しの回帰防止。2026-08 に実測して採用。
+    # 全 issue 2 件で、どちらも誤検出のため nolint で理由を明示している
+    # (server.go の graceful shutdown、diff.go の Runner.Context 経由の伝播 —
+    # contextcheck は構造体フィールド経由の ctx を追えない)
     - contextcheck
     - copyloopvar              # Go 1.22+ で不要なループ変数コピー
     - durationcheck
