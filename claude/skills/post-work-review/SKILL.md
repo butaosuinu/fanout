@@ -197,11 +197,18 @@ TOML の key は bare / `"double"` / `'literal'` / エスケープ入りの 4 �
 user_config="${CODEX_HOME:-$HOME/.codex}/config.toml"
 if [ -f "$user_config" ]; then
   # 代入の左辺だけを取り出し、空白と引用符を落として正規化する
-  keys="$(sed -nE 's/^[[:space:]]*([^=]+)=.*/\1/p' "$user_config" | tr -d " \t\"'")"
-  printf '%s\n' "$keys" | grep -nx 'project_doc_fallback_filenames'   # 素/"..."/'...'
-  printf '%s\n' "$keys" | grep -nE '\\[uUxX]'                        # 解読しない形
+  if ! keys="$(sed -nE 's/^[[:space:]]*([^=]+)=.*/\1/p' "$user_config" | tr -d " \t\"'")"; then
+    echo "BLOCKED: user config を読めない"
+  else
+    printf '%s\n' "$keys" | grep -nx 'project_doc_fallback_filenames' || true  # 素/"..."/'...'
+    printf '%s\n' "$keys" | grep -nE '\\[uUxX]' || true                        # 解読しない形
+  fi
 fi
 ```
+
+ここでも `grep` の no-match (status 1) は `|| true` で潰す。潰さないと、保護対象
+key を持たない**正常な** config でブロック全体が失敗し、検査不能として fail closed
+してしまう。読み取り自体の失敗とは区別する。
 
 どちらかが 1 行でも出たら、その参照先も保護対象に加えるか、**marker を書かない**。
 
@@ -261,9 +268,11 @@ fi
 directory 自体だけを見ていると、`SKILL.md` が symlink の「実体コピー」を
 通してしまう。
 
-BLOCKED が出たら **marker を書かない**。`make link` を回し直せば実体コピーに
-戻る (Makefile の `CLAUDE_DIR` は `CLAUDE_CONFIG_DIR` を設定していればそちらを
-既定にするので、custom config root でも同じコマンドでよい)。
+BLOCKED が出たら **marker を書かない**。復旧はリリースインストーラ
+(`install.sh` / `fanout update`) で行う。fanout の checkout make target は
+この gate を一切触らない — `make link` / `make install` はレビュー対象の
+checkout からコピーすることになり、gate を変更した branch が自分を審査する
+状態を作ってしまうため。Codex gate と同じ所有権モデルである。
 
 出力が空でなければ **Step 5 の marker を書かない**。Pass 2 は参考情報として
 回してよいが、完了報告で次を明示し、ゲートは閉じたままにする:

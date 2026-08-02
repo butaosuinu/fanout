@@ -26,13 +26,14 @@ govulncheck (network; deliberately not part of `lint`).
 The Claude Code integration files (`claude/commands/*.md` slash commands and
 `claude/skills/*/SKILL.md` skills) and Codex CLI integration files
 (`codex/skills/*/` skill resources) are
-bundled in the repo as the source of truth. `make install` places the Claude
-files and non-gate Codex skills under the matching `~/.claude/` and
-`~/.codex/` directories. The checksum-verified release installer alone owns
-Codex `post-work-review`. `make link` symlinks the rest back into the checkout
-but always copies Claude `post-work-review`: that skill is a review gate, and a
-symlink would let a branch editing it change the gate that judges it
-(pinned by `tests/bats/tier1_post_work_review.bats`). Do not edit installed
+bundled in the repo as the source of truth. `make install` places the non-gate
+Claude and Codex skills under the matching `~/.claude/` and `~/.codex/`
+directories (`CLAUDE_CONFIG_DIR` overrides the Claude root); `make link`
+symlinks them back into the checkout instead. The checksum-verified release
+installer alone owns **both** `post-work-review` gates — checkout make targets
+never write them, because installing a review gate from the checkout it
+reviews would let a branch that edits the skill install the gate that judges
+it (pinned by `tests/bats/tier1_post_work_review.bats`). Do not edit installed
 copies directly.
 
 The user-facing surface is in `README.md` and `README.ja.md`. Read those before

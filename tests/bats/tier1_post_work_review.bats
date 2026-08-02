@@ -202,46 +202,31 @@ run_pr_gate() {
   [ -L "$BATS_TEST_TMPDIR/link-integrations/codex/skills/fanout" ]
 }
 
-# `make link` symlinks skills for fast iteration, but the Claude review gate must
-# stay a real copy: a symlink into the checkout would let a branch that edits the
-# skill change the gate that judges it.
-@test "link-integrations copies the Claude review gate and symlinks other skills" {
-  local repo="$BATS_TEST_TMPDIR/claude-gate-link" root
+# The Claude review gate reviews the very checkout it would be installed from, so
+# checkout make targets must never write it — only the checksum-verified release
+# installer owns it, exactly like the Codex gate.
+@test "checkout make targets preserve an externally installed Claude review gate" {
+  local repo="$BATS_TEST_TMPDIR/claude-gate-owner" target root
   setup_integration_repo "$repo"
-  root="$BATS_TEST_TMPDIR/claude-gate-link-out"
 
-  run make -C "$repo" link-integrations CLAUDE_DIR="$root/claude" \
-    CODEX_DIR="$root/codex" CODEX_HOME="$root/codex"
-  [ "$status" -eq 0 ]
+  for target in install-integrations link-integrations uninstall-integrations; do
+    root="$BATS_TEST_TMPDIR/claude-gate-owner-$target"
+    mkdir -p "$root/claude/skills/post-work-review"
+    printf 'trusted installed gate\n' >"$root/claude/skills/post-work-review/SKILL.md"
 
-  [ ! -L "$root/claude/skills/post-work-review" ]
-  [ -f "$root/claude/skills/post-work-review/SKILL.md" ]
-  [ -L "$root/claude/skills/pr-watch" ]
+    run make -C "$repo" "$target" CLAUDE_DIR="$root/claude" \
+      CODEX_DIR="$root/codex" CODEX_HOME="$root/codex"
+    [ "$status" -eq 0 ]
+    grep -Fxq 'trusted installed gate' "$root/claude/skills/post-work-review/SKILL.md"
+  done
 
-  # The copy must carry the checkout's content, not an empty placeholder.
-  run diff "$repo/claude/skills/post-work-review/SKILL.md" \
-    "$root/claude/skills/post-work-review/SKILL.md"
-  [ "$status" -eq 0 ]
+  # Other Claude skills still install and link normally.
+  [ -L "$BATS_TEST_TMPDIR/claude-gate-owner-link-integrations/claude/skills/pr-watch" ]
+  [ ! -e "$BATS_TEST_TMPDIR/claude-gate-owner-uninstall-integrations/claude/skills/pr-watch" ]
 }
 
-# `cp -R` preserves symlinks inside the tree, so a package-internal symlink would
-# produce an "installed copy" that still reads arbitrary files.
-@test "link-integrations rejects a symlink inside the Claude review gate package" {
-  local repo="$BATS_TEST_TMPDIR/claude-gate-inner-symlink" root
-  setup_integration_repo "$repo"
-  root="$BATS_TEST_TMPDIR/claude-gate-inner-symlink-out"
-  rm "$repo/claude/skills/post-work-review/SKILL.md"
-  ln -s /etc/hosts "$repo/claude/skills/post-work-review/SKILL.md"
-
-  run make -C "$repo" link-integrations CLAUDE_DIR="$root/claude" \
-    CODEX_DIR="$root/codex" CODEX_HOME="$root/codex"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"must not contain symlinks"* ]]
-  [ ! -e "$root/claude/skills/post-work-review" ]
-}
-
-# Claude reads its config root from CLAUDE_CONFIG_DIR, so installing to a fixed
-# ~/.claude would put the gate where Claude never loads it.
+# Claude reads its config root from CLAUDE_CONFIG_DIR, so a fixed ~/.claude would
+# install the other skills where Claude never loads them.
 @test "CLAUDE_CONFIG_DIR becomes the default Claude install root" {
   local repo="$BATS_TEST_TMPDIR/claude-config-dir" root
   setup_integration_repo "$repo"
@@ -250,23 +235,8 @@ run_pr_gate() {
   CLAUDE_CONFIG_DIR="$root/alt" run make -C "$repo" link-integrations \
     CODEX_DIR="$root/codex" CODEX_HOME="$root/codex"
   [ "$status" -eq 0 ]
-  [ -f "$root/alt/skills/post-work-review/SKILL.md" ]
-  [ ! -L "$root/alt/skills/post-work-review" ]
-}
-
-@test "link-integrations replaces an existing symlinked Claude review gate" {
-  local repo="$BATS_TEST_TMPDIR/claude-gate-relink" root
-  setup_integration_repo "$repo"
-  root="$BATS_TEST_TMPDIR/claude-gate-relink-out"
-  mkdir -p "$root/claude/skills"
-  ln -s "$repo/claude/skills/post-work-review" "$root/claude/skills/post-work-review"
-  [ -L "$root/claude/skills/post-work-review" ]
-
-  run make -C "$repo" link-integrations CLAUDE_DIR="$root/claude" \
-    CODEX_DIR="$root/codex" CODEX_HOME="$root/codex"
-  [ "$status" -eq 0 ]
-  [ ! -L "$root/claude/skills/post-work-review" ]
-  [ -f "$root/claude/skills/post-work-review/SKILL.md" ]
+  [ -L "$root/alt/skills/pr-watch" ]
+  [ ! -e "$root/alt/skills/post-work-review" ]
 }
 
 @test "checkout install and link reject retired drivers under either Codex root" {

@@ -31,10 +31,11 @@ and runs `test`, `lint`, and `lint-web`. `make fmt` formats (gofumpt/goimports),
 Source-of-truth integration files:
 
 - Claude Code: `claude/commands/*.md` and `claude/skills/*/SKILL.md`,
-  installed under `~/.claude/`. `make link` symlinks these back into the
-  checkout, except Claude `post-work-review`, which is always copied — that
-  skill is a review gate, and a symlink would let a branch editing the skill
-  change the gate that judges it.
+  installed under `~/.claude/` (`CLAUDE_CONFIG_DIR` wins when set). The
+  checksum-verified release installer owns Claude `post-work-review`; checkout
+  make targets never change it. That skill is a review gate, and installing it
+  from the checkout would let a branch that edits the skill install the gate
+  that then judges that branch.
 - Codex CLI: `codex/skills/*/` (skill instructions, references, and scripts),
   installed under `~/.codex/skills/`. The checksum-verified release installer
   owns Codex `post-work-review`; checkout make targets never change it.
