@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProper
 import { createPortal } from "react-dom";
 import { useDiff } from "../hooks/useDiff";
 import { useDiffWidth } from "../hooks/useDiffWidth";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useViewportWidth } from "../hooks/useViewportWidth";
 import {
   useDiffLayout,
@@ -151,8 +152,14 @@ const DiffFiles = memo(function DiffFiles({
                   {collapsed && (
                     <span className="diff-file-lines">{lines.toLocaleString()} 行</span>
                   )}
+                  {/* 名前に file 名を入れる — 入れないと、展開中の全ボタンが
+                      「折りたたむ」で並び、支援技術から区別できない */}
                   <IconButton
-                    label={collapsed ? `${lines.toLocaleString()} 行 — 展開` : "折りたたむ"}
+                    label={
+                      collapsed
+                        ? `${file.name} — ${lines.toLocaleString()} 行 — 展開`
+                        : `${file.name} — 折りたたむ`
+                    }
                     onClick={() => onToggle(i)}
                   >
                     {collapsed ? <IconChevronDown /> : <IconChevronUp />}
@@ -213,6 +220,9 @@ export function DiffOverlay({
   const rootRef = useRef<HTMLDivElement>(null);
   const hostsRef = useRef(new Map<number, HTMLDivElement>());
   const { width: compactWidth, gripProps } = useDiffWidth();
+  /* covering(全画面 / 狭い帯の全幅コンパクト)のときだけモーダル。背面を
+   * 覆っていないコンパクトは Tab で背面へ出られてよい。 */
+  useFocusTrap(rootRef, covering && !suppressed);
   /* ref 経由で最新を呼ぶ — effect を [] のまま保ち、再実行による inert の
    * 瞬断を避ける */
   const onClosedRef = useRef(onClosed);
@@ -239,6 +249,18 @@ export function DiffOverlay({
     if (!suppressedRef.current) rootRef.current?.focus();
     return () => onClosedRef.current?.();
   }, []);
+
+  /* 非 covering から covering へ変わったとき(ウィンドウを 1,100px 以下へ縮めた、
+   * コンパクトから全画面へ切り替えた)にもフォーカスを引き取る。背面はこの瞬間に
+   * inert になるので、そこに居たフォーカスが行き場を失う。 */
+  const wasCovering = useRef(covering);
+  useEffect(() => {
+    if (covering && !wasCovering.current && !suppressed) {
+      const root = rootRef.current;
+      if (root && !root.contains(document.activeElement)) root.focus();
+    }
+    wasCovering.current = covering;
+  }, [covering, suppressed]);
 
   /* コンパクト表示の右端を詳細ドロワーの左端に合わせる。ドロワーは幅可変
    * (--drawer-w のドラッグ)かつ選択が無ければ存在しないので、実測して CSS 変数へ

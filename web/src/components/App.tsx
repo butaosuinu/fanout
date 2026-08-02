@@ -64,10 +64,15 @@ export function DiffPending({ enabled, onCancel }: { enabled: boolean; onCancel:
 }
 
 /* 生きている(DOM に繋がっている)最初の起点へフォーカスを戻す。detached な
- * 要素への focus() は無言で何も起きないので、候補を順に試す。 */
+ * 要素への focus() は無言で何も起きないので、候補を順に試す。
+ *
+ * 最後は必ず Nav の歯車へ落とす。起点はいくらでも消える(diff を開いた Drawer を
+ * 先に閉じた、フィルタ変更で起点行が消えた、対象 pane が snapshot から消えて
+ * diff ごと unmount された)ので、存続する要素を末尾に置かないとフォーカスが
+ * どこにも戻らず、キーボードの現在位置が失われる。 */
 function focusFirstConnected(refs: RefObject<HTMLElement | null>[]) {
-  for (const ref of refs) {
-    const el = ref.current;
+  const candidates = [...refs.map((r) => r.current), document.getElementById("settings-open")];
+  for (const el of candidates) {
     if (el?.isConnected) {
       el.focus();
       return;

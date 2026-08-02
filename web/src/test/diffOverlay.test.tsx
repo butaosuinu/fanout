@@ -410,7 +410,7 @@ describe("diff オーバーレイ", () => {
 
     // 予算で打ち切られず、最後の file まで中身が描画される
     for (const f of files) expect(shadowText()).toContain(f.marker);
-    expect(within(overlay).queryByRole("button", { name: /行 — 展開/ })).toBeNull();
+    expect(within(overlay).queryByRole("button", { name: /行 — 展開$/ })).toBeNull();
   });
 
   it("仮想化により、1 file の描画行数はウィンドウ内に収まる", async () => {
@@ -430,7 +430,7 @@ describe("diff オーバーレイ", () => {
 
     const overlay = await openOverlay(user);
     // 1,000 行超なので初期は折りたたみ
-    const expand = await within(overlay).findByRole("button", { name: /1,600 行 — 展開/ });
+    const expand = await within(overlay).findByRole("button", { name: /1,600 行 — 展開$/ });
     expect(shadowText()).not.toContain("payload_row");
 
     await user.click(expand);
@@ -466,7 +466,7 @@ describe("diff オーバーレイ", () => {
     );
 
     const overlay = await openOverlay(user);
-    await user.click(await within(overlay).findByRole("button", { name: /1,200 行 — 展開/ }));
+    await user.click(await within(overlay).findByRole("button", { name: /1,200 行 — 展開$/ }));
     await waitFor(() => {
       expect(shadowText()).toContain("big_marker0");
     });
@@ -495,7 +495,7 @@ describe("diff オーバーレイ", () => {
     );
 
     const overlay = await openOverlay(user);
-    const expandButtons = () => within(overlay).getAllByRole("button", { name: /行 — 展開/ });
+    const expandButtons = () => within(overlay).getAllByRole("button", { name: /行 — 展開$/ });
     await waitFor(() => {
       expect(expandButtons()).toHaveLength(2);
     });
@@ -506,14 +506,14 @@ describe("diff オーバーレイ", () => {
     });
 
     // 2 file 目を展開しても 1 file 目は開いたまま
-    await user.click(within(overlay).getByRole("button", { name: /行 — 展開/ }));
+    await user.click(within(overlay).getByRole("button", { name: /行 — 展開$/ }));
     await waitFor(() => {
       expect(shadowText()).toContain("second_payload");
     });
     expect(shadowText()).toContain("first_payload");
 
     // 明示的に折りたたむとその file だけ畳まれる
-    await user.click(within(overlay).getAllByRole("button", { name: "折りたたむ" })[0]!);
+    await user.click(within(overlay).getAllByRole("button", { name: / — 折りたたむ$/ })[0]!);
     await waitFor(() => {
       expect(shadowText()).not.toContain("first_payload");
     });
@@ -676,7 +676,7 @@ describe("diff オーバーレイ", () => {
     });
 
     // 66 行なので折りたたまれず、そのまま plaintext で描かれる
-    expect(within(overlay).queryByRole("button", { name: /行 — 展開/ })).toBeNull();
+    expect(within(overlay).queryByRole("button", { name: /行 — 展開$/ })).toBeNull();
     expect(countDiffDecorations()).toBe(0);
     expect(
       [...document.querySelectorAll("diffs-container")].flatMap((el) => [
@@ -738,14 +738,14 @@ describe("diff オーバーレイ", () => {
     );
 
     const overlay = await openOverlay(user);
-    await user.click(await within(overlay).findByRole("button", { name: /1,200 行 — 展開/ }));
+    await user.click(await within(overlay).findByRole("button", { name: /1,200 行 — 展開$/ }));
     await waitFor(() => {
       expect(shadowText()).toContain("first_marker");
     });
 
     await user.click(within(overlay).getByRole("button", { name: "再取得" }));
     await waitFor(() => {
-      expect(within(overlay).getByRole("button", { name: /1,200 行 — 展開/ })).toBeInTheDocument();
+      expect(within(overlay).getByRole("button", { name: /1,200 行 — 展開$/ })).toBeInTheDocument();
     });
     expect(shadowText()).not.toContain("second_marker");
     expect(shadowText()).not.toContain("first_marker");
@@ -1083,6 +1083,71 @@ describe("diff オーバーレイ", () => {
     overlay.focus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("complementary", { name: "worktree diff" })).not.toBeInTheDocument();
+  });
+
+  it("モーダル中は Tab が中で循環し、閉じたらフォーカスが失われない", async () => {
+    /* 背面を inert にしても、末尾から Tab / 先頭から Shift+Tab はブラウザ UI へ
+     * 抜ける。aria-modal を名乗る以上は自前で折り返す。 */
+    const root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+    try {
+      server.use(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+      const user = userEvent.setup();
+      render(<App />, { container: root });
+      streamSnapshot(issueSnapshot());
+
+      const overlay = await openOverlay(user);
+      const focusables = () => [...overlay.querySelectorAll<HTMLElement>("button")];
+
+      // 先頭から Shift+Tab は末尾へ回る
+      focusables()[0]!.focus();
+      await user.tab({ shift: true });
+      expect(document.activeElement).toBe(focusables().at(-1));
+
+      // 末尾から Tab は先頭へ回る
+      await user.tab();
+      expect(document.activeElement).toBe(focusables()[0]);
+
+      /* 起点が消えていてもフォーカスは失わない — 最後は Nav の歯車へ落とす */
+      await user.keyboard("{Escape}");
+      expect(document.activeElement).not.toBe(document.body);
+    } finally {
+      root.remove();
+    }
+  });
+
+  it("同名 basename でも、移動ボタンと折りたたみボタンの名前で区別できる", async () => {
+    /* 支援技術のボタン一覧から対象を特定できること。basename だけ / 「折りたたむ」
+     * だけだと、別ディレクトリの同名 file や複数 file で名前が衝突する。 */
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({
+            patch:
+              linesPatch("src/index.ts", 3, "src_row") + linesPatch("test/index.ts", 3, "test_row"),
+            files: [
+              makeDiffFile({ path: "src/index.ts", additions: 3, deletions: 0 }),
+              makeDiffFile({ path: "test/index.ts", additions: 3, deletions: 0 }),
+            ],
+          }),
+        ),
+      ),
+    );
+
+    const overlay = await openOverlay(user);
+    const sidebar = within(overlay).getByRole("region", { name: "変更ファイル" });
+    expect(within(sidebar).getByRole("button", { name: "src/index.ts" })).toBeInTheDocument();
+    expect(within(sidebar).getByRole("button", { name: "test/index.ts" })).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(
+        within(overlay).getByRole("button", { name: "src/index.ts — 折りたたむ" }),
+      ).toBeInTheDocument();
+    });
+    expect(
+      within(overlay).getByRole("button", { name: "test/index.ts — 折りたたむ" }),
+    ).toBeInTheDocument();
   });
 
   it("未開始(synthetic)行と shell 行には diff ボタンを出さない", async () => {

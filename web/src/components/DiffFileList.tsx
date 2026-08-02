@@ -67,10 +67,15 @@ export const DiffFileList = memo(function DiffFileList({
               return (
                 <li key={f.path}>
                   {selectable.has(f.path) ? (
+                    /* 名前にフルパスを入れる — basename だけだと
+                       src/index.ts と test/index.ts が同名になり、支援技術の
+                       ボタン一覧から移動先を区別できない。title は子テキストの
+                       ある要素では accessible name にならない。 */
                     <button
                       type="button"
                       className="diff-file-row"
                       title={f.path}
+                      aria-label={f.path}
                       onClick={() => onSelect(f.path)}
                     >
                       <span className="diff-file-name">{base}</span>

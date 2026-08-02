@@ -67,7 +67,9 @@ function DiffCell({
       type="button"
       className="diff-link"
       title="変更を表示"
-      aria-label={`変更を表示 ${d ? `+${d.add}/-${d.del}` : pane.diffSummary || "—"}`}
+      /* 名前に対象を入れる — 同じ統計の行が複数あると「変更を表示 +N/-M」が
+         並んで、支援技術からどの issue / task の diff か区別できない */
+      aria-label={`変更を表示 ${paneLabel(pane)} ${d ? `+${d.add}/-${d.del}` : pane.diffSummary || "—"}`}
       // 行クリック(Drawer を開く)には伝播させない — セルは diff への直行導線
       onClick={(e) => {
         e.stopPropagation();

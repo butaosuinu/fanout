@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useAppearance, useDiffTheme, type Appearance, type Theme } from "../hooks/useSettings";
 import { DIFF_THEMES_DARK, DIFF_THEMES_LIGHT, type DiffThemeOption } from "../lib/diffThemes";
 import { blockBackground } from "../lib/inert";
@@ -78,6 +79,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const { mode, setMode } = useAppearance();
   const { light, dark, setLight, setDark } = useDiffTheme();
   const rootRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(rootRef, true); // aria-modal を名乗る以上、Tab はここで折り返す
 
   /* 初期フォーカスを移し、背面(#root)を遮る。全画面 diff の上で開くと所有者が
    * 2 つになるので参照数で持つ(lib/inert.ts)。

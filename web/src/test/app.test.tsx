@@ -1130,7 +1130,7 @@ describe("session リストの diff 列", () => {
       ]),
     );
 
-    await user.click(await screen.findByRole("button", { name: "変更を表示 +10/-2" }));
+    await user.click(await screen.findByRole("button", { name: /^変更を表示 .* \+10\/-2$/ }));
 
     /* 導線から開いた既定はコンパクト(モーダルではないので role=complementary)。
        Drawer は開かない。 */
@@ -1162,6 +1162,25 @@ describe("session リストの diff 列", () => {
       "BUTTON#d-diff-open",
       "BUTTON#drawer-close",
     ]);
+  });
+
+  /* 同じ統計の行が複数あると「変更を表示 +N/-M」だけでは支援技術から区別できない。
+   * 対象(paneLabel)を名前に含める。 */
+  it("diff 導線の名前で対象ペインを区別できる", async () => {
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({ issueNum: 101, displayName: "One", diffSummary: "+10/-2" }),
+          makePane({ issueNum: 102, displayName: "Two", diffSummary: "+10/-2" }),
+        ]),
+      ]),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "変更を表示 #101 +10/-2" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "変更を表示 #102 +10/-2" })).toBeInTheDocument();
   });
 
   it("identity を組めない行はリンクにしない", async () => {
@@ -1204,7 +1223,9 @@ describe("session リストの diff 列", () => {
     );
 
     await screen.findByText("Binary only");
-    expect(await screen.findByRole("button", { name: "変更を表示 +0/-0" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /^変更を表示 .* \+0\/-0$/ }),
+    ).toBeInTheDocument();
   });
 });
 
