@@ -1,7 +1,6 @@
 package herdrrun
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -14,70 +13,63 @@ func TestWorktreeMutationArgsPinHerdr075CLI(t *testing.T) {
 	coordinator := testCoordinatorObservation()
 	tests := []struct {
 		name string
-		req  WorktreeMutationRequest
+		args []string
 		want []string
-		id   string
-		kind string
 	}{
 		{
 			name: "coordinator",
-			req: WorktreeMutationRequest{
-				Kind: WorkspaceCreate, CWD: "/repo", Label: "nonce", NoFocus: true,
-			},
+			args: workspaceCreateArgs(WorkspaceCreateRequest{
+				CWD: "/repo", SourceRepoKey: "/repo/.git", Label: "nonce",
+			}),
 			want: []string{
 				"workspace", "create", "--cwd", "/repo", "--label", "nonce", "--no-focus",
 			},
-			id: "cli:workspace:create", kind: "workspace_created",
 		},
 		{
 			name: "fresh branch",
-			req: WorktreeMutationRequest{
-				Kind: WorktreeCreate, Coordinator: coordinator,
-				Branch: "fanout/child", Base: strings.Repeat("1", 40),
-				Path: "/repo/.fanout/worktrees/child", Label: "nonce", NoFocus: true,
-			},
+			args: worktreeCreateArgs(WorktreeCreateRequest{
+				Coordinator: coordinator,
+				Branch:      "fanout/child", Base: strings.Repeat("1", 40),
+				Path: "/repo/.fanout/worktrees/child", Label: "nonce",
+			}),
 			want: []string{
 				"worktree", "create", "--workspace", "w1",
 				"--branch", "fanout/child", "--base", strings.Repeat("1", 40),
 				"--path", "/repo/.fanout/worktrees/child",
 				"--label", "nonce", "--no-focus", "--json",
 			},
-			id: "cli:worktree:create", kind: "worktree_created",
 		},
 		{
 			name: "existing branch omits base",
-			req: WorktreeMutationRequest{
-				Kind: WorktreeCreate, Coordinator: coordinator,
-				Branch: "fanout/existing", Path: "/repo/.fanout/worktrees/existing",
-				Label: "nonce", NoFocus: true,
-			},
+			args: worktreeCreateArgs(WorktreeCreateRequest{
+				Coordinator: coordinator,
+				Branch:      "fanout/existing", Path: "/repo/.fanout/worktrees/existing",
+				Label: "nonce",
+			}),
 			want: []string{
 				"worktree", "create", "--workspace", "w1",
 				"--branch", "fanout/existing",
 				"--path", "/repo/.fanout/worktrees/existing",
 				"--label", "nonce", "--no-focus", "--json",
 			},
-			id: "cli:worktree:create", kind: "worktree_created",
 		},
 		{
 			name: "open",
-			req: WorktreeMutationRequest{
-				Kind: WorktreeOpen, Coordinator: coordinator,
-				Path: "/repo/.fanout/worktrees/child", Label: "nonce", NoFocus: true,
-			},
+			args: worktreeOpenArgs(WorktreeOpenRequest{
+				Coordinator: coordinator,
+				Path:        "/repo/.fanout/worktrees/child", Label: "nonce",
+			}),
 			want: []string{
 				"worktree", "open", "--workspace", "w1",
 				"--path", "/repo/.fanout/worktrees/child",
 				"--label", "nonce", "--no-focus", "--json",
 			},
-			id: "cli:worktree:open", kind: "worktree_opened",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args, id, kind := worktreeMutationArgs(tt.req)
-			if !reflect.DeepEqual(args, tt.want) || id != tt.id || kind != tt.kind {
-				t.Fatalf("got (%#v,%q,%q), want (%#v,%q,%q)", args, id, kind, tt.want, tt.id, tt.kind)
+			if !reflect.DeepEqual(tt.args, tt.want) {
+				t.Fatalf("args = %#v, want %#v", tt.args, tt.want)
 			}
 		})
 	}
@@ -109,13 +101,6 @@ func TestMutationNotIssuedErrorPreservesClassificationAndCause(t *testing.T) {
 	var typed MutationNotIssuedError
 	if !errors.As(err, &typed) || !errors.Is(typed.Cause, cause) {
 		t.Fatalf("mutation-not-issued type = %#v", typed)
-	}
-	if _, err := (&Backend{}).runWorktreeMutation(
-		context.Background(),
-		"/unused/herdr",
-		route{},
-	); !errors.Is(err, ErrMutationNotIssued) {
-		t.Fatalf("deadline-less command error = %v", err)
 	}
 }
 
@@ -155,55 +140,27 @@ func TestDecodeWorktreeMutationResponsePinsResultShape(t *testing.T) {
 	}
 }
 
-func TestValidateAlreadyOpenRequiresSavedWorkspaceAndLabel(t *testing.T) {
-	req := WorktreeMutationRequest{
-		Kind: WorktreeOpen, ExpectedAlreadyOpenID: "w2", ExpectedAlreadyOpenLabel: "nonce",
+func TestValidateAlreadyOpenRequiresIntentBoundWorkspaceAndLabel(t *testing.T) {
+	spec := mutationSpec{
+		kind:                     WorktreeOpen,
+		expectedAlreadyOpenID:    "w2",
+		expectedAlreadyOpenLabel: "nonce",
 	}
-	got := WorkspaceObservation{WorkspaceID: "w2", Label: "nonce"}
-	if err := validateAlreadyOpen(req, got, true, true); err != nil {
+	workspace := workspaceJSON{WorkspaceID: "w2", Label: "nonce"}
+	if err := validateAlreadyOpen(spec, workspace, true); err != nil {
 		t.Fatal(err)
 	}
-	got.WorkspaceID = "w3"
-	if err := validateAlreadyOpen(req, got, true, true); err == nil {
+	foreign := workspace
+	foreign.WorkspaceID = "w3"
+	if err := validateAlreadyOpen(spec, foreign, true); err == nil {
 		t.Fatal("foreign already_open workspace unexpectedly accepted")
 	}
-	got.WorkspaceID = "w2"
-	if err := validateAlreadyOpen(req, got, true, false); err == nil {
-		t.Fatal("workspace absent from pre-state unexpectedly accepted")
+	unbound := mutationSpec{kind: WorktreeOpen}
+	if err := validateAlreadyOpen(unbound, workspace, true); err == nil {
+		t.Fatal("already_open without an intent binding unexpectedly accepted")
 	}
-	if err := validateAlreadyOpen(req, got, false, true); err == nil {
-		t.Fatal("prebound workspace replacement unexpectedly accepted")
-	}
-	if err := validateAlreadyOpen(
-		WorktreeMutationRequest{Kind: WorktreeCreate},
-		WorkspaceObservation{},
-		true,
-		false,
-	); err == nil {
+	if err := validateAlreadyOpen(mutationSpec{kind: WorktreeCreate}, workspace, true); err == nil {
 		t.Fatal("worktree create already_open unexpectedly accepted")
-	}
-}
-
-func TestExpectedAlreadyOpenBindingRequiresExactPreState(t *testing.T) {
-	req := WorktreeMutationRequest{
-		Kind: WorktreeOpen, Path: "/repo/child",
-		SourceRepoKey: "/repo/.git", SourceRepoRoot: "/repo",
-		ExpectedAlreadyOpenID: "w2", ExpectedAlreadyOpenLabel: "nonce",
-	}
-	workspace := WorkspaceObservation{
-		WorkspaceID: "w2", Label: "nonce", Path: req.Path,
-		RepoKey: req.SourceRepoKey, RepoRoot: req.SourceRepoRoot, CWD: req.Path,
-	}
-	if !hasExpectedAlreadyOpenBinding(req, []WorkspaceObservation{workspace}) {
-		t.Fatal("exact pre-state binding was not recognized")
-	}
-	changed := workspace
-	changed.RepoKey = "/foreign/.git"
-	if hasExpectedAlreadyOpenBinding(req, []WorkspaceObservation{changed}) {
-		t.Fatal("foreign pre-state provenance was accepted")
-	}
-	if hasExpectedAlreadyOpenBinding(req, []WorkspaceObservation{workspace, workspace}) {
-		t.Fatal("duplicate pre-state bindings were accepted")
 	}
 }
 
@@ -222,21 +179,6 @@ func TestValidateEmptyPluginListFailsClosed(t *testing.T) {
 		[]byte(`{"id":"cli:plugin:list","result":{"type":"plugin_list"}}`),
 	); err == nil {
 		t.Fatal("missing plugins field unexpectedly accepted")
-	}
-}
-
-func TestValidateBoundCoordinatorRequiresExactIdentity(t *testing.T) {
-	expected := testCoordinatorObservation()
-	if err := validateBoundCoordinator(expected, []WorkspaceObservation{expected}); err != nil {
-		t.Fatal(err)
-	}
-	changed := expected
-	changed.TerminalID = "term-2"
-	if err := validateBoundCoordinator(expected, []WorkspaceObservation{changed}); err == nil {
-		t.Fatal("changed coordinator unexpectedly accepted")
-	}
-	if err := validateBoundCoordinator(expected, nil); err == nil {
-		t.Fatal("missing coordinator unexpectedly accepted")
 	}
 }
 
@@ -261,14 +203,8 @@ func TestWorkspaceObservationPreservesPanesWithoutGuessingRoot(t *testing.T) {
 		got.Panes[0].CWD != rootCWD {
 		t.Fatalf("multi-pane observation = %+v, want saved root pane available", got)
 	}
-	expected := testCoordinatorObservation()
-	expected.CWD = rootCWD
-	if err := validateBoundCoordinator(expected, []WorkspaceObservation{got}); err != nil {
-		t.Fatalf("saved root pane was not matched: %v", err)
-	}
-	got.Panes = got.Panes[1:]
-	if err := validateBoundCoordinator(expected, []WorkspaceObservation{got}); err == nil {
-		t.Fatal("missing saved root pane was accepted")
+	if _, err := workspaceObservation(workspace, nil); err == nil {
+		t.Fatal("pane-less workspace unexpectedly accepted")
 	}
 }
 

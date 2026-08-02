@@ -413,20 +413,14 @@ func resumeRealizedHerdrWorktree(
 	if saveErr := locked.Save(); saveErr != nil {
 		return HerdrWorktreeResult{}, saveErr
 	}
-	mutation, mutationErr := runtime.MutateWorktree(ctx, herdrrun.WorktreeMutationRequest{
-		Kind:                     herdrrun.WorktreeOpen,
+	mutation, mutationErr := runtime.OpenWorktree(ctx, herdrrun.WorktreeOpenRequest{
 		Coordinator:              observationResource(intent.Coordinator),
-		SourceRoot:               source.RepoRoot,
 		SourceRepoKey:            source.RepoKey,
 		SourceRepoRoot:           source.RepoRoot,
-		ProjectRoot:              req.ProjectRoot,
-		FullBranchRef:            intent.FullBranchRef,
-		ExpectedHeadSHA:          intent.ExpectedHead,
 		Path:                     intent.WorktreePath,
 		Label:                    intent.WorkspaceLabel,
 		ExpectedAlreadyOpenID:    intent.Resource.WorkspaceID,
 		ExpectedAlreadyOpenLabel: intent.Resource.Label,
-		NoFocus:                  true,
 	})
 	if mutationErr != nil {
 		if errors.Is(mutationErr, herdrrun.ErrMutationNotIssued) {

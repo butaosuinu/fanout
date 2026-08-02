@@ -16,9 +16,26 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
+// herdrTestMutation flattens the typed mutation requests into one record so
+// assertions can inspect every issued mutation uniformly.
+type herdrTestMutation struct {
+	Kind                     herdrrun.WorktreeMutationKind
+	Coordinator              herdrrun.WorkspaceObservation
+	SourceRoot               string
+	SourceRepoKey            string
+	SourceRepoRoot           string
+	CWD                      string
+	Branch                   string
+	Base                     string
+	Path                     string
+	Label                    string
+	ExpectedAlreadyOpenID    string
+	ExpectedAlreadyOpenLabel string
+}
+
 type fakeHerdrRealizeRuntime struct {
 	workspaces []herdrrun.WorkspaceObservation
-	mutations  []herdrrun.WorktreeMutationRequest
+	mutations  []herdrTestMutation
 	route      herdrrun.OwnedWorktreeRoute
 	routeErr   error
 
@@ -30,7 +47,7 @@ type fakeHerdrRealizeRuntime struct {
 	policyErr          error
 	observeErr         error
 	observeCalls       int
-	mutate             func(herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error)
+	mutate             func(herdrTestMutation) (herdrrun.WorktreeMutationResult, error)
 }
 
 func (f *fakeHerdrRealizeRuntime) WorktreeRoute(
@@ -54,15 +71,51 @@ func (f *fakeHerdrRealizeRuntime) ObserveWorkspaces(ctx context.Context) ([]herd
 	return append([]herdrrun.WorkspaceObservation(nil), f.workspaces...), f.observeErr
 }
 
-func (f *fakeHerdrRealizeRuntime) MutateWorktree(
+func (f *fakeHerdrRealizeRuntime) CreateWorkspace(
 	_ context.Context,
-	req herdrrun.WorktreeMutationRequest,
+	req herdrrun.WorkspaceCreateRequest,
 ) (herdrrun.WorktreeMutationResult, error) {
-	f.mutations = append(f.mutations, req)
+	return f.record(herdrTestMutation{
+		Kind: herdrrun.WorkspaceCreate, CWD: req.CWD,
+		SourceRoot: req.CWD, SourceRepoKey: req.SourceRepoKey, SourceRepoRoot: req.CWD,
+		Label: req.Label,
+	})
+}
+
+func (f *fakeHerdrRealizeRuntime) CreateWorktree(
+	_ context.Context,
+	req herdrrun.WorktreeCreateRequest,
+) (herdrrun.WorktreeMutationResult, error) {
+	return f.record(herdrTestMutation{
+		Kind: herdrrun.WorktreeCreate, Coordinator: req.Coordinator,
+		SourceRoot: req.SourceRepoRoot, SourceRepoKey: req.SourceRepoKey,
+		SourceRepoRoot: req.SourceRepoRoot,
+		Branch:         req.Branch, Base: req.Base, Path: req.Path, Label: req.Label,
+	})
+}
+
+func (f *fakeHerdrRealizeRuntime) OpenWorktree(
+	_ context.Context,
+	req herdrrun.WorktreeOpenRequest,
+) (herdrrun.WorktreeMutationResult, error) {
+	return f.record(herdrTestMutation{
+		Kind: herdrrun.WorktreeOpen, Coordinator: req.Coordinator,
+		SourceRoot: req.SourceRepoRoot, SourceRepoKey: req.SourceRepoKey,
+		SourceRepoRoot: req.SourceRepoRoot,
+		Path:           req.Path, Label: req.Label,
+		ExpectedAlreadyOpenID:    req.ExpectedAlreadyOpenID,
+		ExpectedAlreadyOpenLabel: req.ExpectedAlreadyOpenLabel,
+	})
+}
+
+func (f *fakeHerdrRealizeRuntime) record(
+	m herdrTestMutation,
+) (herdrrun.WorktreeMutationResult, error) {
+	f.mutations = append(f.mutations, m)
 	if f.mutate == nil {
 		return herdrrun.WorktreeMutationResult{}, errors.New("unexpected mutation")
 	}
-	return f.mutate(req)
+	return f.mutate(m)
 }
 
 func realizeHerdrCoordinator(
@@ -152,7 +205,7 @@ func TestRealizeHerdrWorktreeLeavesIssuedIntentAfterRealizedSaveFailure(t *testi
 	})
 	successfulMutate := runtime.mutate
 	runtime.mutate = func(
-		mutationReq herdrrun.WorktreeMutationRequest,
+		mutationReq herdrTestMutation,
 	) (herdrrun.WorktreeMutationResult, error) {
 		result, mutateErr := successfulMutate(mutationReq)
 		if mutateErr == nil && mutationReq.Kind == herdrrun.WorktreeCreate {
@@ -232,7 +285,7 @@ func TestRealizeHerdrWorktreeKeepsRejectedOpenRetryable(t *testing.T) {
 	runtime.workspaces = runtime.workspaces[:1]
 	successfulMutate := runtime.mutate
 	runtime.mutate = func(
-		mutationReq herdrrun.WorktreeMutationRequest,
+		mutationReq herdrTestMutation,
 	) (herdrrun.WorktreeMutationResult, error) {
 		if mutationReq.Kind == herdrrun.WorktreeOpen {
 			return herdrrun.WorktreeMutationResult{}, herdrrun.MutationRejectedError{
@@ -428,7 +481,7 @@ func TestRealizeHerdrRollsBackMutationNotIssued(t *testing.T) {
 		runtime := &fakeHerdrRealizeRuntime{}
 		installSuccessfulHerdrMutations(t, repo, runtime)
 		runtime.mutate = func(
-			herdrrun.WorktreeMutationRequest,
+			herdrTestMutation,
 		) (herdrrun.WorktreeMutationResult, error) {
 			return herdrrun.WorktreeMutationResult{}, herdrrun.MutationNotIssuedError{
 				Cause: errors.New("owned admission failed"),
@@ -460,7 +513,7 @@ func TestRealizeHerdrRollsBackMutationNotIssued(t *testing.T) {
 		hooks := deterministicHerdrRealizeHooks()
 		realizeTestHerdrCoordinator(t, repo, runtime, hooks)
 		runtime.mutate = func(
-			herdrrun.WorktreeMutationRequest,
+			herdrTestMutation,
 		) (herdrrun.WorktreeMutationResult, error) {
 			return herdrrun.WorktreeMutationResult{}, herdrrun.MutationNotIssuedError{
 				Cause: errors.New("owned admission failed"),
@@ -502,7 +555,7 @@ func TestRealizeHerdrWorktreeRecoversCompletedUnissuedRollback(t *testing.T) {
 	successfulMutate := runtime.mutate
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime.mutate = func(
-		req herdrrun.WorktreeMutationRequest,
+		req herdrTestMutation,
 	) (herdrrun.WorktreeMutationResult, error) {
 		if req.Kind == herdrrun.WorktreeCreate {
 			cancel()
@@ -711,7 +764,7 @@ func TestRealizeHerdrWorktreeAdoptsResponseLossPostcondition(t *testing.T) {
 	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
 
 	successfulMutate := runtime.mutate
-	runtime.mutate = func(req herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
 		result, err := successfulMutate(req)
 		if err != nil {
 			return result, err
@@ -1042,7 +1095,7 @@ func TestRealizeHerdrWorktreePreservesIssuedIntentWhenMutationContextIsCanceled(
 
 	successfulMutate := runtime.mutate
 	ctx, cancel := context.WithCancel(context.Background())
-	runtime.mutate = func(req herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
 		result, err := successfulMutate(req)
 		if req.Kind == herdrrun.WorktreeCreate {
 			cancel()
@@ -1097,7 +1150,7 @@ func TestRealizeHerdrWorktreeFailsClosedOnAmbiguousResponseLoss(t *testing.T) {
 	installSuccessfulHerdrMutations(t, repo, runtime)
 	hooks := deterministicHerdrRealizeHooks()
 	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
-	runtime.mutate = func(req herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
 		if req.Kind == herdrrun.WorktreeCreate {
 			return herdrrun.WorktreeMutationResult{}, errors.New("injected response loss")
 		}
@@ -1141,7 +1194,7 @@ func TestRealizeHerdrWorktreeDeletesBranchOnlyAfterStructuredRejection(t *testin
 	installSuccessfulHerdrMutations(t, repo, runtime)
 	hooks := deterministicHerdrRealizeHooks()
 	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
-	runtime.mutate = func(req herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
 		if req.Kind == herdrrun.WorktreeCreate {
 			return herdrrun.WorktreeMutationResult{}, herdrrun.MutationRejectedError{
 				Code: "worktree_create_failed", Message: "rejected before create",
@@ -1199,7 +1252,7 @@ func TestRealizeHerdrCoordinatorAdoptsResponseLossAndNeverReissues(t *testing.T)
 	runtime := &fakeHerdrRealizeRuntime{}
 	installSuccessfulHerdrMutations(t, repo, runtime)
 	successfulMutate := runtime.mutate
-	runtime.mutate = func(req herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
 		result, err := successfulMutate(req)
 		if err != nil {
 			return result, err
@@ -1334,7 +1387,7 @@ func TestRealizeHerdrReusesNumericParentCoordinatorAcrossLinkedWorktrees(t *test
 	}
 	successfulMutate := runtime.mutate
 	runtime.mutate = func(
-		mutationReq herdrrun.WorktreeMutationRequest,
+		mutationReq herdrTestMutation,
 	) (herdrrun.WorktreeMutationResult, error) {
 		result, mutateErr := successfulMutate(mutationReq)
 		if mutateErr == nil && mutationReq.Kind == herdrrun.WorktreeCreate {
@@ -1427,7 +1480,7 @@ func TestRealizeHerdrResumesPlannedChildAtSavedOwnerAcrossLinkedWorktrees(t *tes
 	if sourceErr != nil {
 		t.Fatal(sourceErr)
 	}
-	if childMutation.ProjectRoot != repo || childMutation.SourceRoot != savedSource.RepoRoot ||
+	if childMutation.SourceRoot != savedSource.RepoRoot ||
 		childMutation.SourceRepoRoot != savedSource.RepoRoot ||
 		childMutation.Path != savedReq.WorktreePath {
 		t.Fatalf("linked planned child mutation = %+v", childMutation)
@@ -1664,7 +1717,7 @@ func installSuccessfulHerdrMutations(
 		SocketPath:   "/private/tmp/fanout-test/herdr.sock",
 	}
 	nextWorkspace := 2
-	runtime.mutate = func(req herdrrun.WorktreeMutationRequest) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
 		if req.Kind == herdrrun.WorkspaceCreate {
 			workspaceID := "w1"
 			observation := herdrrun.WorkspaceObservation{

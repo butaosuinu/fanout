@@ -34,9 +34,17 @@ type HerdrWorktreeRuntime interface {
 	WorktreeRoute(context.Context) (herdrrun.OwnedWorktreeRoute, error)
 	VerifyWorktreeSetupPolicy(context.Context) error
 	ObserveWorkspaces(context.Context) ([]herdrrun.WorkspaceObservation, error)
-	MutateWorktree(
+	CreateWorkspace(
 		context.Context,
-		herdrrun.WorktreeMutationRequest,
+		herdrrun.WorkspaceCreateRequest,
+	) (herdrrun.WorktreeMutationResult, error)
+	CreateWorktree(
+		context.Context,
+		herdrrun.WorktreeCreateRequest,
+	) (herdrrun.WorktreeMutationResult, error)
+	OpenWorktree(
+		context.Context,
+		herdrrun.WorktreeOpenRequest,
 	) (herdrrun.WorktreeMutationResult, error)
 }
 
@@ -293,14 +301,10 @@ func RealizeHerdrCoordinator(
 	if saveErr := locked.Save(); saveErr != nil {
 		return result, saveErr
 	}
-	mutation, mutationErr := runtime.MutateWorktree(operationParent, herdrrun.WorktreeMutationRequest{
-		Kind:           herdrrun.WorkspaceCreate,
-		SourceRoot:     intent.WorktreePath,
-		SourceRepoKey:  setup.source.RepoKey,
-		SourceRepoRoot: intent.WorktreePath,
-		CWD:            intent.WorktreePath,
-		Label:          intent.WorkspaceLabel,
-		NoFocus:        true,
+	mutation, mutationErr := runtime.CreateWorkspace(operationParent, herdrrun.WorkspaceCreateRequest{
+		CWD:           intent.WorktreePath,
+		SourceRepoKey: setup.source.RepoKey,
+		Label:         intent.WorkspaceLabel,
 	})
 	if mutationErr != nil {
 		if errors.Is(mutationErr, herdrrun.ErrMutationNotIssued) {
@@ -564,20 +568,14 @@ func RealizeHerdrWorktree(
 	if intent.BranchCreated {
 		baseArg = intent.BaseSHA
 	}
-	mutation, mutationErr := runtime.MutateWorktree(operationCtx, herdrrun.WorktreeMutationRequest{
-		Kind:            herdrrun.WorktreeCreate,
-		Coordinator:     observationResource(intent.Coordinator),
-		SourceRoot:      source.RepoRoot,
-		SourceRepoKey:   source.RepoKey,
-		SourceRepoRoot:  source.RepoRoot,
-		ProjectRoot:     req.ProjectRoot,
-		FullBranchRef:   intent.FullBranchRef,
-		ExpectedHeadSHA: intent.ExpectedHead,
-		Branch:          intent.BranchName,
-		Base:            baseArg,
-		Path:            intent.WorktreePath,
-		Label:           intent.WorkspaceLabel,
-		NoFocus:         true,
+	mutation, mutationErr := runtime.CreateWorktree(operationCtx, herdrrun.WorktreeCreateRequest{
+		Coordinator:    observationResource(intent.Coordinator),
+		SourceRepoKey:  source.RepoKey,
+		SourceRepoRoot: source.RepoRoot,
+		Branch:         intent.BranchName,
+		Base:           baseArg,
+		Path:           intent.WorktreePath,
+		Label:          intent.WorkspaceLabel,
 	})
 	if mutationErr != nil {
 		if errors.Is(mutationErr, herdrrun.ErrMutationNotIssued) {
