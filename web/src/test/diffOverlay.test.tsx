@@ -1177,6 +1177,32 @@ describe("diff オーバーレイ", () => {
     expect(document.documentElement.style.overflow).toBe("");
   });
 
+  it("lazy chunk 解決前に対象が消えても、フォーカスを失わない", async () => {
+    /* この経路では DiffOverlay が一度も mount されない(Suspense fallback が
+     * 消えるだけ)。復帰処理を overlay の cleanup に置いていると走らない。 */
+    const root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+    try {
+      server.use(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+      const user = userEvent.setup();
+      render(<App />, { container: root });
+      streamSnapshot(issueSnapshot());
+
+      await user.click(screen.getByText("Fix thing"));
+      await user.click(await screen.findByRole("button", { name: "変更を表示" }));
+
+      // 対象 pane が snapshot から消える
+      streamSnapshot(makeSnapshot([makeSession("142", [])]));
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog", { name: "worktree diff" })).not.toBeInTheDocument();
+      });
+      expect(document.activeElement).not.toBe(document.body);
+    } finally {
+      root.remove();
+    }
+  });
+
   it("背面が見えるコンパクト表示では document スクロールを止めない", async () => {
     setInnerWidth(1600); // 1100px 以下だとコンパクトも covering になる
     localStorage.removeItem("fanout.diffView"); // 既定 = コンパクト

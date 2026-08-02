@@ -4,6 +4,7 @@ import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useAppearance, useDiffTheme, type Appearance, type Theme } from "../hooks/useSettings";
 import { DIFF_THEMES_DARK, DIFF_THEMES_LIGHT, type DiffThemeOption } from "../lib/diffThemes";
 import { blockBackground } from "../lib/inert";
+import { lockDocumentScroll } from "../lib/scrollLock";
 
 /* 見本は実物の <FileDiff> で描く = @pierre/diffs(Shiki 込み)を引く。設定を
  * 開くまで初回ロードのパスに乗せないため、DiffOverlay と同じく遅延 chunk へ。 */
@@ -95,7 +96,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
    * effect は子より後に走るので、diff の inert 解除より確実に後になる。 */
   useEffect(() => {
     rootRef.current?.focus();
-    return blockBackground([document.getElementById("root")]);
+    const release = blockBackground([document.getElementById("root")]);
+    const unlock = lockDocumentScroll();
+    return () => {
+      release();
+      unlock();
+    };
   }, []);
 
   /* Escape は capture 段で受けて preventDefault する。下に diff オーバーレイが

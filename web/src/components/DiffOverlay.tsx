@@ -16,6 +16,7 @@ import {
 import { apiUrl } from "../lib/api";
 import { COMPACT_FULL_WIDTH_PX, isDiffCovering } from "../lib/diffView";
 import { blockBackground } from "../lib/inert";
+import { lockDocumentScroll } from "../lib/scrollLock";
 import {
   diffMeta,
   diffWarning,
@@ -183,7 +184,6 @@ export function DiffOverlay({
   escapeEnabled = true,
   onOpenSettings,
   onClose,
-  onClosed,
 }: {
   title: string;
   query: Record<string, string>;
@@ -200,9 +200,6 @@ export function DiffOverlay({
   /* 全画面表示中は Nav が inert なので、テーマ設定への入口をここにも置く */
   onOpenSettings: () => void;
   onClose: () => void;
-  /* unmount 時、背面の inert 解除「後」に呼ぶ(起点ボタンへのフォーカス復帰用。
-   * inert な subtree への focus は実ブラウザで拒否されるため順序が本質)。 */
-  onClosed?: () => void;
 }) {
   const { theme } = useTheme();
   const { light, dark } = useDiffTheme();
@@ -223,11 +220,6 @@ export function DiffOverlay({
   /* covering(全画面 / 狭い帯の全幅コンパクト)のときだけモーダル。背面を
    * 覆っていないコンパクトは Tab で背面へ出られてよい。 */
   useFocusTrap(rootRef, covering && !suppressed);
-  /* ref 経由で最新を呼ぶ — effect を [] のまま保ち、再実行による inert の
-   * 瞬断を避ける */
-  const onClosedRef = useRef(onClosed);
-  onClosedRef.current = onClosed;
-
   /* 背面(#root 配下の Nav / テーブル / Drawer)を inert にしてフォーカスと操作を
    * 遮る。設定モーダルと所有者が重なるので参照数で持つ(lib/inert.ts)。
    * unmount 時の cleanup 順は宣言順なので、下の onClosed より必ず先に走る
@@ -247,21 +239,13 @@ export function DiffOverlay({
   suppressedRef.current = suppressed;
   useEffect(() => {
     if (!suppressedRef.current) rootRef.current?.focus();
-    return () => onClosedRef.current?.();
   }, []);
 
-  /* 覆っているあいだは背面の document スクロールを止める。overlay は
-   * position:fixed でスクロールコンテナではなく、`inert` も scroll を
-   * ロックしないので、ヘッダ上のホイールや .diff-body 端でのチェーンが背面の
-   * 一覧を動かしてしまう(閉じたときに位置が変わっている)。 */
+  /* 覆っているあいだは背面の document スクロールも止める(理由は lib/scrollLock)。
+   * 背面が見えるコンパクト表示では止めない — そこは背面を触るための表示。 */
   useEffect(() => {
     if (!covering) return;
-    const el = document.documentElement;
-    const prev = el.style.overflow;
-    el.style.overflow = "hidden";
-    return () => {
-      el.style.overflow = prev;
-    };
+    return lockDocumentScroll();
   }, [covering]);
 
   /* 「自分が最前面のモーダルになった」瞬間にフォーカスを引き取る。covering に

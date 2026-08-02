@@ -1294,6 +1294,36 @@ describe("設定モーダル", () => {
     expect(within(dialog).getByLabelText("ライトテーマ")).toHaveValue("pierre-light");
   });
 
+  it("設定を開いているあいだ背面 document のスクロールを止める", async () => {
+    /* backdrop 上のホイールや modal 端からのチェーンで背面の一覧が動くと、
+     * 閉じたときに位置が変わってしまう。 */
+    const user = userEvent.setup();
+    render(<App />);
+    expect(document.documentElement.style.overflow).toBe("");
+
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    await screen.findByRole("dialog", { name: "設定" });
+    expect(document.documentElement.style.overflow).toBe("hidden");
+
+    await user.click(screen.getByRole("button", { name: "設定を閉じる" }));
+    expect(document.documentElement.style.overflow).toBe("");
+  });
+
+  it("diff テーマの見本は読み上げ対象から外す", async () => {
+    /* 伝えたいのは配色だけ。テーマ名と現在値は直後のラベル付き select が持つ */
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "設定" });
+
+    await waitFor(() => {
+      expect(dialog.querySelectorAll("diffs-container")).toHaveLength(2);
+    });
+    const previews = dialog.querySelectorAll(".set-theme-preview");
+    expect(previews).toHaveLength(2);
+    for (const el of previews) expect(el).toHaveAttribute("aria-hidden", "true");
+  });
+
   it("Escape で閉じ、起点の歯車へフォーカスを戻す", async () => {
     const root = document.createElement("div");
     root.id = "root";

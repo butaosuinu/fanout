@@ -430,11 +430,18 @@ covering になったとき(ウィンドウを 1,100px 以下へ縮めた、コ�
 `suppressed` を含めること — lazy chunk の解決待ちに設定を開くと、mount 時点で
 covering かつ suppressed になり、covering だけを見ていると遷移が起きない。
 
-覆っているあいだは背面の document スクロールも止める。オーバーレイは
-`position:fixed` でスクロールコンテナではなく、`inert` も scroll をロックしない
-ので、ヘッダ上のホイールや `.diff-body` 端からのチェーンが背面の一覧を動かして
-しまう(閉じたときに読んでいた位置が変わっている)。`.diff-body` には
-`overscroll-behavior: contain` も入れる。
+覆っているあいだは背面の document スクロールも止める(`lib/scrollLock.ts`)。
+オーバーレイは `position:fixed` でスクロールコンテナではなく、`inert` も scroll を
+ロックしないので、ヘッダ上のホイールや `.diff-body` 端からのチェーンが背面の一覧を
+動かしてしまう(閉じたときに読んでいた位置が変わっている)。`.diff-body` には
+`overscroll-behavior: contain` も入れる。設定モーダルも単独で開くので同じロックを
+持ち、重なっても壊れないよう inert と同じく参照数で管理する。背面が見える
+コンパクト表示では止めない — そこは背面を触るための表示。
+
+モーダルを閉じたあとのフォーカス復帰は、diff 側も App の effect が担う。diff の
+lazy chunk が解決する前に対象 pane が snapshot から消えると `DiffOverlay` は一度も
+mount されず、その経路(Suspense fallback が消えるだけ)では overlay の cleanup が
+走らないため。
 
 フォーカスの復帰先は最後に必ず Nav の歯車へ落とす。起点はいくらでも消える
 (diff を開いた Drawer を先に閉じた、フィルタ変更で起点行が消えた、対象 pane が

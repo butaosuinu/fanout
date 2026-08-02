@@ -195,22 +195,19 @@ export function App() {
     setDiffTarget({ key: rowKey(parent, pane), title: paneLabel(pane), query });
   }, []);
   const closeDiff = useCallback(() => setDiffTarget(null), []);
-  /* 起点は消さずに残す。StrictMode(dev)は effect を setup → cleanup → setup と
-   * 二度回すので、probe の cleanup でも onClosed が呼ばれる。ここで null に
-   * すると、実際に閉じたときに戻す先が無くなる。次に開くとき上書きされる。
-   * 起点が DOM から外れていることもある(diff の中のボタンから設定を開き、
-   * その間に対象行が snapshot から消えて diff が unmount された場合など)ので、
-   * 生きている候補を順に試す。 */
-  const restoreDiffFocus = useCallback(() => focusFirstConnected([diffOriginRef]), []);
   const openSettings = useCallback(() => {
     settingsOriginRef.current = document.activeElement as HTMLElement | null;
     setSettingsOpen(true);
   }, []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
-  /* 設定を閉じたらフォーカスを起点へ戻す。SettingsModal の cleanup ではやらない
+  /* モーダルを閉じたらフォーカスを起点へ戻す。モーダル自身の cleanup ではやらない
    * — 起点が diff の中のボタンだと、その時点では diff がまだ inert で
    * (sibling の effect cleanup は後)実ブラウザが focus() を拒否する。親の
-   * effect は子より後に走るので、ここなら inert 解除の後になる。 */
+   * effect は子より後に走るので、ここなら inert 解除の後になる。
+   *
+   * diff 側をここに置くのは、lazy chunk の解決待ちに対象 pane が snapshot から
+   * 消えると DiffOverlay が一度も mount されず、その unmount 経路では復帰処理が
+   * 走らないため(fallback の DiffPending が消えるだけ)。 */
   const settingsWasOpen = useRef(settingsOpen);
   useEffect(() => {
     if (settingsWasOpen.current && !settingsOpen) {
@@ -218,6 +215,13 @@ export function App() {
     }
     settingsWasOpen.current = settingsOpen;
   }, [settingsOpen]);
+
+  const diffWasOpen = useRef(diffTarget !== null);
+  useEffect(() => {
+    const open = diffTarget !== null;
+    if (diffWasOpen.current && !open) focusFirstConnected([diffOriginRef]);
+    diffWasOpen.current = open;
+  }, [diffTarget]);
 
   const registerRow = (key: string, el: HTMLTableRowElement | null) => {
     if (el) rowRefs.current.set(key, el);
@@ -316,7 +320,6 @@ export function App() {
             escapeEnabled={!settingsOpen}
             onOpenSettings={openSettings}
             onClose={closeDiff}
-            onClosed={restoreDiffFocus}
           />
         </Suspense>
       )}

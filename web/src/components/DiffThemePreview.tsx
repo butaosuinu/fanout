@@ -15,7 +15,9 @@ const SAMPLE = parseDiffFiles(DIFF_THEME_SAMPLE_PATCH)[0];
 export function DiffThemePreview({ name, themeType }: { name: string; themeType: Theme }) {
   if (!SAMPLE) return null;
   return (
-    <div className="set-theme-preview">
+    /* 伝えたいのは視覚的な配色だけ。テーマ名と現在値は直後のラベル付き select が
+       持つので、固定サンプルの削除行・追加行まで読み上げさせない。 */
+    <div className="set-theme-preview" aria-hidden="true">
       <FileDiff
         fileDiff={SAMPLE}
         options={{
