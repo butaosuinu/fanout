@@ -111,7 +111,7 @@ func (p Pane) IsAttachedAgent() bool {
 }
 
 // LockedStore holds .fanout/state.json.lock while fanout plans and launches.
-// LockProjectForLaunch also holds the repository-common Herdr control lock,
+// LockProjectForLaunch also holds the repository-common Herdr intents lock,
 // keeping backend intent rechecks stable through the final state update. The
 // deliberately coarse locks serialize parallel fanout invocations so the
 // (parent, issueNum) idempotency check and state update happen in one critical
@@ -119,8 +119,8 @@ func (p Pane) IsAttachedAgent() bool {
 type LockedStore struct {
 	path             string
 	file             *os.File
-	herdrControlPath string
-	herdrControlFile *os.File
+	herdrIntentsPath string
+	herdrIntentsFile *os.File
 	Store
 }
 
@@ -153,26 +153,26 @@ func LockProject(projectRoot string) (*LockedStore, error) {
 }
 
 func LockProjectForLaunch(projectRoot string) (*LockedStore, error) {
-	controlPath, err := HerdrControlPath(projectRoot)
+	intentsPath, err := HerdrIntentsPath(projectRoot)
 	if err != nil {
 		return nil, err
 	}
-	herdrControlFile, err := lockHerdrControlPath(controlPath)
+	herdrIntentsFile, err := lockHerdrIntentsPath(intentsPath)
 	if err != nil {
 		return nil, err
 	}
 	locked, err := Lock(Path(projectRoot))
 	if err != nil {
-		if unlockErr := unlockStateFile(herdrControlFile); unlockErr != nil {
+		if unlockErr := unlockStateFile(herdrIntentsFile); unlockErr != nil {
 			return nil, errors.Join(
 				err,
-				fmt.Errorf("unlock Herdr control after state lock failure: %w", unlockErr),
+				fmt.Errorf("unlock Herdr intents after state lock failure: %w", unlockErr),
 			)
 		}
 		return nil, err
 	}
-	locked.herdrControlPath = controlPath
-	locked.herdrControlFile = herdrControlFile
+	locked.herdrIntentsPath = intentsPath
+	locked.herdrIntentsFile = herdrIntentsFile
 	return locked, nil
 }
 
@@ -206,37 +206,36 @@ func (l *LockedStore) Unlock() error {
 	}
 	stateErr := unlockStateFile(l.file)
 	l.file = nil
-	controlErr := unlockStateFile(l.herdrControlFile)
-	l.herdrControlPath = ""
-	l.herdrControlFile = nil
+	intentsErr := unlockStateFile(l.herdrIntentsFile)
+	l.herdrIntentsPath = ""
+	l.herdrIntentsFile = nil
 	if stateErr != nil {
 		return stateErr
 	}
-	return controlErr
+	return intentsErr
 }
 
-// HerdrControl returns a control-store view backed by this project's launch
-// lock. The caller must keep LockedStore held and must not unlock the view.
-func (l *LockedStore) HerdrControl(projectRoot string) (*LockedHerdrControl, error) {
-	if l == nil || l.herdrControlFile == nil || l.herdrControlPath == "" {
-		return nil, fmt.Errorf("herdr control requires the combined launch lock")
+// HerdrIntents returns a journal view backed by this project's launch lock.
+// The view cannot be unlocked; the caller keeps LockedStore held around it.
+func (l *LockedStore) HerdrIntents(projectRoot string) (*LockedHerdrIntents, error) {
+	if l == nil || l.herdrIntentsFile == nil || l.herdrIntentsPath == "" {
+		return nil, fmt.Errorf("herdr intents require the combined launch lock")
 	}
-	controlPath, err := HerdrControlPath(projectRoot)
+	intentsPath, err := HerdrIntentsPath(projectRoot)
 	if err != nil {
 		return nil, err
 	}
-	if controlPath != l.herdrControlPath ||
+	if intentsPath != l.herdrIntentsPath ||
 		filepath.Clean(l.path) != filepath.Clean(Path(projectRoot)) {
-		return nil, fmt.Errorf("herdr control launch lock belongs to a different project")
+		return nil, fmt.Errorf("herdr intents launch lock belongs to a different project")
 	}
-	store, err := loadHerdrControl(l.herdrControlPath)
+	store, err := loadHerdrIntents(l.herdrIntentsPath)
 	if err != nil {
 		return nil, err
 	}
-	return &LockedHerdrControl{
-		path:              l.herdrControlPath,
-		file:              l.herdrControlFile,
-		HerdrControlStore: store,
+	return &LockedHerdrIntents{
+		path:         l.herdrIntentsPath,
+		HerdrIntents: store,
 	}, nil
 }
 

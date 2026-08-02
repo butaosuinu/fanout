@@ -325,7 +325,7 @@ func TestSharedHerdrPlanIntentsRemainOwnerWorktreeLocal(t *testing.T) {
 	}
 
 	writeHerdrCoordinatorIntent(t, sibling, "plan:demo")
-	control, err := state.LoadHerdrControl(repo)
+	control, err := state.LoadHerdrIntents(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,10 +431,7 @@ func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	locked, err := state.LockHerdrControl(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
+	locked := lockHerdrIntentsForTest(t, repo)
 	t.Cleanup(func() {
 		if unlockErr := locked.Unlock(); unlockErr != nil {
 			t.Errorf("unlock Herdr control: %v", unlockErr)
@@ -447,12 +444,10 @@ func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 		Parent:           parent,
 		RuntimeParent:    runtimeParent,
 		OwnerProjectRoot: ownerProjectRoot,
-		Backend:          backend.Herdr,
 		WorktreePath:     repo,
 		WorkspaceLabel:   "fanout-coordinator-test",
 		Session:          "fanout-test",
 		SocketPath:       "/private/tmp/fanout-test/herdr.sock",
-		TimeoutMS:        3000,
 		ExpiresUnixMS:    time.Now().Add(time.Minute).UnixMilli(),
 	})
 	if err := locked.Save(); err != nil {
@@ -834,10 +829,7 @@ func writeHerdrControlRouteIntent(t *testing.T, repo, session, socketPath string
 	if err != nil {
 		t.Fatal(err)
 	}
-	locked, err := state.LockHerdrControl(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
+	locked := lockHerdrIntentsForTest(t, repo)
 	defer func() {
 		if unlockErr := locked.Unlock(); unlockErr != nil {
 			t.Errorf("unlock Herdr control: %v", unlockErr)
@@ -846,14 +838,14 @@ func writeHerdrControlRouteIntent(t *testing.T, repo, session, socketPath string
 	locked.UpsertIntent(state.HerdrIntent{
 		ID: id, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentRealized,
 		Parent: "426", RuntimeParent: "426",
-		Backend: backend.Herdr, WorktreePath: repo,
+		WorktreePath:   repo,
 		WorkspaceLabel: "fanout-coordinator-intent-route",
 		Resource: state.HerdrResource{
 			WorkspaceID: "w2", Label: "fanout-coordinator-intent-route",
 			PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: repo,
 		},
 		Session: session, SocketPath: socketPath,
-		TimeoutMS: 3000, ExpiresUnixMS: 1,
+		ExpiresUnixMS: 1,
 	})
 	if err := locked.Save(); err != nil {
 		t.Fatal(err)
@@ -956,4 +948,27 @@ func TestCollectRuntimeLiveCombinesSuccessesAndReportsRouteFailures(t *testing.T
 	if all || len(failed) != 2 || !failed[routes[1].observationRoute()] || !failed[routes[2].observationRoute()] {
 		t.Fatalf("classified all-route error = %+v all=%t, want both scoped herdr routes", failed, all)
 	}
+}
+
+// testHerdrIntentsLock adapts the combined launch lock to the journal-mutation
+// shape the intent fixtures need.
+type testHerdrIntentsLock struct {
+	project *state.LockedStore
+	*state.LockedHerdrIntents
+}
+
+func (l *testHerdrIntentsLock) Unlock() error { return l.project.Unlock() }
+
+func lockHerdrIntentsForTest(t *testing.T, repo string) *testHerdrIntentsLock {
+	t.Helper()
+	project, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := project.HerdrIntents(repo)
+	if err != nil {
+		_ = project.Unlock()
+		t.Fatal(err)
+	}
+	return &testHerdrIntentsLock{project: project, LockedHerdrIntents: view}
 }

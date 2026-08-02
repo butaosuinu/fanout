@@ -129,7 +129,7 @@ func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.
 		return launchBackendResolution{}, err
 	}
 	inputs.rows = rows
-	if refreshErr := refreshHerdrControlBindings(&inputs); refreshErr != nil {
+	if refreshErr := refreshHerdrIntentBindings(&inputs); refreshErr != nil {
 		return launchBackendResolution{}, refreshErr
 	}
 	selection, err := resolveBackendSelection(cfg.ParentRef, inputs)
@@ -162,7 +162,7 @@ func backendSelectionVerifier(selection backend.Selection, inputs runtimeBackend
 			return err
 		}
 		recheck.rows = rows
-		if err := refreshHerdrControlBindings(&recheck); err != nil {
+		if err := refreshHerdrIntentBindings(&recheck); err != nil {
 			return err
 		}
 		got, resolveErr := resolveBackendSelection(parent, recheck)
@@ -265,12 +265,12 @@ func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store st
 	}
 }
 
-func refreshHerdrControlBindings(inputs *runtimeBackendInputs) error {
+func refreshHerdrIntentBindings(inputs *runtimeBackendInputs) error {
 	if strings.TrimSpace(inputs.projectRoot) == "" {
 		inputs.provisionalIntents = append([]backend.Binding(nil), inputs.suppliedIntents...)
 		return nil
 	}
-	control, err := state.LoadHerdrControl(inputs.projectRoot)
+	control, err := state.LoadHerdrIntents(inputs.projectRoot)
 	if err != nil {
 		return fmt.Errorf("load Herdr runtime bindings: %w", err)
 	}
@@ -413,7 +413,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 		}
 	}
 
-	control, controlErr := state.LoadHerdrControl(projectRoot)
+	control, controlErr := state.LoadHerdrIntents(projectRoot)
 	if controlErr != nil {
 		hasHerdrRoute = true
 		routeErr = errors.Join(routeErr, fmt.Errorf("load Herdr control routes: %w", controlErr))

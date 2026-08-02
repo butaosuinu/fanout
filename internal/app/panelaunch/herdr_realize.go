@@ -134,7 +134,7 @@ func RealizeHerdrCoordinator(
 	if ownerErr != nil {
 		return result, ownerErr
 	}
-	controlSnapshot, snapshotErr := state.LoadHerdrControl(req.ProjectRoot)
+	controlSnapshot, snapshotErr := state.LoadHerdrIntents(req.ProjectRoot)
 	if snapshotErr != nil {
 		return result, snapshotErr
 	}
@@ -155,7 +155,7 @@ func RealizeHerdrCoordinator(
 	); bindingErr != nil {
 		return result, bindingErr
 	}
-	locked, controlErr := launchLock.HerdrControl(req.ProjectRoot)
+	locked, controlErr := launchLock.HerdrIntents(req.ProjectRoot)
 	if controlErr != nil {
 		return result, controlErr
 	}
@@ -163,7 +163,7 @@ func RealizeHerdrCoordinator(
 		req.ProjectRoot,
 		req.Parent,
 		ownerProjectRoot,
-		locked.HerdrControlStore,
+		locked.HerdrIntents,
 	)
 	if lockedRuntimeParentErr != nil {
 		return result, lockedRuntimeParentErr
@@ -234,9 +234,9 @@ func RealizeHerdrCoordinator(
 			Parent: canonicalHerdrParent(req.Parent), RuntimeParent: runtimeParent,
 			OwnerProjectRoot: ownerProjectRoot,
 			IssueNum:         req.IssueNum,
-			Backend:          backend.Herdr, WorktreePath: cwd,
-			WorkspaceLabel: label, Session: req.HerdrSession, SocketPath: req.SocketPath,
-			TimeoutMS: timeout.Milliseconds(), ExpiresUnixMS: realizeDeadline.UnixMilli(),
+			WorktreePath:     cwd,
+			WorkspaceLabel:   label, Session: req.HerdrSession, SocketPath: req.SocketPath,
+			ExpiresUnixMS: realizeDeadline.UnixMilli(),
 		}
 		locked.UpsertIntent(intent)
 		if saveErr := locked.Save(); saveErr != nil {
@@ -376,7 +376,7 @@ func RealizeHerdrWorktree(
 	if intentIDErr != nil {
 		return result, intentIDErr
 	}
-	controlSnapshot, snapshotErr := state.LoadHerdrControl(req.ProjectRoot)
+	controlSnapshot, snapshotErr := state.LoadHerdrIntents(req.ProjectRoot)
 	if snapshotErr != nil {
 		return result, snapshotErr
 	}
@@ -397,7 +397,7 @@ func RealizeHerdrWorktree(
 	); bindingErr != nil {
 		return result, bindingErr
 	}
-	locked, controlErr := launchLock.HerdrControl(req.ProjectRoot)
+	locked, controlErr := launchLock.HerdrIntents(req.ProjectRoot)
 	if controlErr != nil {
 		return result, controlErr
 	}
@@ -405,7 +405,7 @@ func RealizeHerdrWorktree(
 		req.ProjectRoot,
 		req.Parent,
 		ownerProjectRoot,
-		locked.HerdrControlStore,
+		locked.HerdrIntents,
 	)
 	if lockedRuntimeParentErr != nil {
 		return result, lockedRuntimeParentErr
@@ -534,13 +534,13 @@ func RealizeHerdrWorktree(
 			Parent: canonicalHerdrParent(req.Parent), RuntimeParent: runtimeParent,
 			OwnerProjectRoot: ownerProjectRoot,
 			IssueNum:         req.IssueNum,
-			TaskID:           req.TaskID, Backend: backend.Herdr,
-			Slug: req.Slug, BranchName: req.BranchName, FullBranchRef: fullRef,
+			TaskID:           req.TaskID,
+			Slug:             req.Slug, BranchName: req.BranchName, FullBranchRef: fullRef,
 			BaseBranch: base.BaseBranch, BaseSHA: base.SHA, ExpectedHead: head,
 			WorktreePath: filepath.Clean(req.WorktreePath), BranchExisted: branchExisted,
 			WorkspaceLabel: label, Coordinator: coordinator,
 			Session: req.HerdrSession, SocketPath: req.SocketPath,
-			TimeoutMS: timeout.Milliseconds(), ExpiresUnixMS: realizeDeadline.UnixMilli(),
+			ExpiresUnixMS: realizeDeadline.UnixMilli(),
 		}
 		locked.UpsertIntent(intent)
 		if saveErr := locked.Save(); saveErr != nil {
@@ -691,7 +691,7 @@ func herdrRealizeRouteContext(
 
 func resolveHerdrRuntimeParent(
 	projectRoot, parent, ownerProjectRoot string,
-	control state.HerdrControlStore,
+	control state.HerdrIntents,
 ) (string, error) {
 	parent = canonicalHerdrParent(parent)
 	saved := ""
@@ -781,7 +781,7 @@ func verifyHerdrStateBindings(projectRoot, parent string, current state.Store) e
 }
 
 func ensureHerdrBranchReservation(
-	locked *state.LockedHerdrControl,
+	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
 	intent state.HerdrIntent,
 ) (state.HerdrIntent, error) {
@@ -846,7 +846,7 @@ func ensureHerdrBranchReservation(
 }
 
 func rollbackUnissuedHerdrCoordinator(
-	locked *state.LockedHerdrControl,
+	locked *state.LockedHerdrIntents,
 	intent state.HerdrIntent,
 	mutationErr error,
 ) error {
@@ -858,7 +858,7 @@ func rollbackUnissuedHerdrCoordinator(
 }
 
 func rollbackUnissuedHerdrWorktree(
-	locked *state.LockedHerdrControl,
+	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
 	intent state.HerdrIntent,
 	mutationErr error,
@@ -896,7 +896,7 @@ func rollbackUnissuedHerdrWorktree(
 func recoverHerdrCoordinator(
 	ctx context.Context,
 	runtime HerdrWorktreeRuntime,
-	locked *state.LockedHerdrControl,
+	locked *state.LockedHerdrIntents,
 	intent state.HerdrIntent,
 	mutationErr error,
 ) (HerdrCoordinatorResult, error) {
@@ -949,7 +949,7 @@ func recoverHerdrCoordinator(
 func recoverHerdrWorktree(
 	ctx context.Context,
 	runtime HerdrWorktreeRuntime,
-	locked *state.LockedHerdrControl,
+	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
 	source worktree.HerdrRepoIdentity,
 	intent state.HerdrIntent,
@@ -1064,7 +1064,7 @@ func recoverHerdrWorktree(
 }
 
 func finalizeHerdrWorktree(
-	locked *state.LockedHerdrControl,
+	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
 	source worktree.HerdrRepoIdentity,
 	intent *state.HerdrIntent,
@@ -1094,7 +1094,7 @@ func finalizeHerdrWorktree(
 }
 
 func handleHerdrWorktreeFinalizeError(
-	locked *state.LockedHerdrControl,
+	locked *state.LockedHerdrIntents,
 	intent state.HerdrIntent,
 	err error,
 ) error {
@@ -1123,7 +1123,7 @@ func verifyRealizedCoordinator(
 func resumeRealizedHerdrWorktree(
 	ctx context.Context,
 	runtime HerdrWorktreeRuntime,
-	locked *state.LockedHerdrControl,
+	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
 	source worktree.HerdrRepoIdentity,
 	intent state.HerdrIntent,
@@ -1334,7 +1334,7 @@ func validateSavedCoordinatorIntent(
 		return err
 	}
 	if intent.ID != wantID || intent.Kind != state.HerdrIntentCoordinator ||
-		intent.RuntimeParent != runtimeParent || intent.Backend != backend.Herdr ||
+		intent.RuntimeParent != runtimeParent ||
 		intent.IssueNum != req.IssueNum ||
 		!savedHerdrCoordinatorPathMatches(
 			runtimeOwnerProjectRoot,
@@ -1369,7 +1369,6 @@ func validateSavedWorktreeIntent(
 		intent.RuntimeParent != runtimeParent ||
 		intent.OwnerProjectRoot != ownerProjectRoot ||
 		intent.IssueNum != req.IssueNum || intent.TaskID != req.TaskID ||
-		intent.Backend != backend.Herdr ||
 		!savedHerdrWorktreePathValid(
 			ownerProjectRoot,
 			intent.Slug,
@@ -1413,7 +1412,7 @@ func validateHerdrWorktreeRequest(req HerdrWorktreeRequest) error {
 }
 
 func markHerdrIntentManual(
-	locked *state.LockedHerdrControl,
+	locked *state.LockedHerdrIntents,
 	intent state.HerdrIntent,
 	cause error,
 ) error {
@@ -1447,7 +1446,7 @@ func coordinatorDeferred(intent state.HerdrIntent) (HerdrCoordinatorResult, erro
 }
 
 func resolvedHerdrCoordinator(
-	locked *state.LockedHerdrControl,
+	locked *state.LockedHerdrIntents,
 	coordinatorID string,
 	req HerdrWorktreeRequest,
 	repoRoot string,
@@ -1595,11 +1594,7 @@ func herdrIntentContext(
 		case state.HerdrIntentIssued, state.HerdrIntentRealized:
 			// An expired launch never receives another full total_timeout.
 			// Bound this invocation to a short existence classification.
-			timeout := min(
-				time.Duration(intent.TimeoutMS)*time.Millisecond,
-				maxHerdrRecoveryClassificationTimeout,
-			)
-			ctx, cancel := context.WithTimeout(parent, timeout)
+			ctx, cancel := context.WithTimeout(parent, maxHerdrRecoveryClassificationTimeout)
 			if err := ctx.Err(); err != nil {
 				cancel()
 				return nil, nil, err

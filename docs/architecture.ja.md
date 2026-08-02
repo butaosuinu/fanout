@@ -54,7 +54,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | 層 | パッケージ | 責務 | Class |
 |---|---|---|---|
 | meta | `arch` | 層ルールの CI 強制(唯一のガード)。緩和・allowlist 追加は要精査 | H |
-| infra | `state` | `.fanout/state.json` と git common directory の Herdr control registry、各 lock の読み書き | H |
+| infra | `state` | `.fanout/state.json` と git common directory の Herdr intent journal、各 lock の読み書き | H |
 | infra | `worktree` | base branch 解決・refresh・`git worktree add`、Herdr branch の atomic ref 予約と checkout 検証 | H |
 | infra | `hooks` | ライフサイクルフック実行 | H |
 | infra | `selfupdate` | 自己アップデート | H |
@@ -115,7 +115,9 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   起動の両方をカバーする。ロック区間を狭めると `(parent, issueNum)` の
   idempotency が壊れる。
 - **Herdr intent は repository 共通**: linked worktree 間の Herdr intent 行は
-  git common directory の `fanout/herdr-control.json` とその lock を使う。
+  git common directory の `fanout/herdr-intents.json` とその lock を使う。
+  ファイルは `.fanout/state.json` と同水準の atomic replace で書き、読取時の
+  owner / mode / identity 検査は持たない。
   final row は #528 以降が owning worktree の `state.json` pane row として
   確定する(tmux backend と同じ所在)。intent 保存から branch 予約、socket
   mutation、事後条件の確認まで lock を保持する。tmux agent launch も state

@@ -15,25 +15,22 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/parentref"
 )
 
-func TestHerdrControlIsSharedAcrossLinkedWorktrees(t *testing.T) {
-	repo := newHerdrControlRepo(t)
+func TestHerdrIntentsAreSharedAcrossLinkedWorktrees(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
 	sibling := filepath.Join(t.TempDir(), "sibling")
-	runHerdrControlGit(t, repo, "worktree", "add", "-b", "sibling", sibling, "HEAD")
+	runHerdrIntentsGit(t, repo, "worktree", "add", "-b", "sibling", sibling, "HEAD")
 
-	locked, lockErr := LockHerdrControl(repo)
-	if lockErr != nil {
-		t.Fatal(lockErr)
-	}
+	project, view := lockHerdrIntentsForTest(t, repo)
 	intent := testHerdrCoordinatorIntent(repo, "0425")
-	locked.UpsertIntent(intent)
-	if err := locked.Save(); err != nil {
+	view.UpsertIntent(intent)
+	if err := view.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if err := locked.Unlock(); err != nil {
+	if err := project.Unlock(); err != nil {
 		t.Fatal(err)
 	}
 
-	fromSibling, err := LoadHerdrControl(sibling)
+	fromSibling, err := LoadHerdrIntents(sibling)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,11 +38,11 @@ func TestHerdrControlIsSharedAcrossLinkedWorktrees(t *testing.T) {
 	if !ok || got.Parent != "425" {
 		t.Fatalf("shared intent = (%+v, %t), want saved coordinator", got, ok)
 	}
-	repoPath, err := HerdrControlPath(repo)
+	repoPath, err := HerdrIntentsPath(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	siblingPath, err := HerdrControlPath(sibling)
+	siblingPath, err := HerdrIntentsPath(sibling)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,192 +51,48 @@ func TestHerdrControlIsSharedAcrossLinkedWorktrees(t *testing.T) {
 	}
 }
 
-func TestHerdrControlRejectsRegistryFromDifferentCommonDirectory(t *testing.T) {
-	first := newHerdrControlRepo(t)
-	locked, err := LockHerdrControl(first)
+// Group-writable .git (core.sharedRepository=group checkouts) must not block
+// the combined launch lock: the journal follows state.json parity and has no
+// namespace hardening of its own.
+func TestLockProjectForLaunchAcceptsGroupWritableCommonDir(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	if err := os.Chmod(filepath.Join(repo, ".git"), 0o775); err != nil {
+		t.Fatal(err)
+	}
+	project, err := LockProjectForLaunch(repo)
 	if err != nil {
+		t.Fatalf("LockProjectForLaunch() with group-writable .git = %v, want success", err)
+	}
+	if err := project.Unlock(); err != nil {
 		t.Fatal(err)
-	}
-	if saveErr := locked.Save(); saveErr != nil {
-		t.Fatal(saveErr)
-	}
-	if unlockErr := locked.Unlock(); unlockErr != nil {
-		t.Fatal(unlockErr)
-	}
-	firstPath, err := HerdrControlPath(first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	registry, err := os.ReadFile(firstPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	second := newHerdrControlRepo(t)
-	secondPath, err := HerdrControlPath(second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(filepath.Dir(secondPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(secondPath, registry, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadHerdrControl(second); err == nil ||
-		!strings.Contains(err.Error(), "different git common directory") {
-		t.Fatalf("copied registry error = %v", err)
 	}
 }
 
-func TestNormalizeHerdrControlStatDeviceSupportsDarwinAndLinuxWidths(t *testing.T) {
-	if got := normalizeHerdrControlStatDevice(int32(42)); got != 42 {
-		t.Fatalf("normalizeHerdrControlStatDevice(int32) = %d, want 42", got)
+func TestHerdrIntentsRejectFutureSchemaVersion(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	path, err := HerdrIntentsPath(repo)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := normalizeHerdrControlStatDevice(uint64(81)); got != 81 {
-		t.Fatalf("normalizeHerdrControlStatDevice(uint64) = %d, want 81", got)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestHerdrControlRejectsNonPrivateNamespace(t *testing.T) {
-	validRegistry := []byte(`{"schemaVersion":1,"rows":[],"intents":[]}`)
-	t.Run("common directory mode", func(t *testing.T) {
-		repo := newHerdrControlRepo(t)
-		commonDir := filepath.Join(repo, ".git")
-		if err := os.Chmod(commonDir, 0o775); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := HerdrControlPath(repo); err == nil ||
-			!strings.Contains(err.Error(), "writable by another uid") {
-			t.Fatalf("writable common directory error = %v", err)
-		}
-	})
-	t.Run("control directory mode", func(t *testing.T) {
-		repo := newHerdrControlRepo(t)
-		path, err := HerdrControlPath(repo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Mkdir(filepath.Dir(path), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := LoadHerdrControl(repo); err == nil ||
-			!strings.Contains(err.Error(), "owner-only real directory") {
-			t.Fatalf("permissive control directory error = %v", err)
-		}
-	})
-	t.Run("control directory symlink", func(t *testing.T) {
-		repo := newHerdrControlRepo(t)
-		path, err := HerdrControlPath(repo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		target := filepath.Join(t.TempDir(), "fanout")
-		if err := os.Mkdir(target, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(target, filepath.Dir(path)); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := LoadHerdrControl(repo); err == nil ||
-			!strings.Contains(err.Error(), "owner-only real directory") {
-			t.Fatalf("symlinked control directory error = %v", err)
-		}
-	})
-	t.Run("registry mode", func(t *testing.T) {
-		repo := newHerdrControlRepo(t)
-		path, err := HerdrControlPath(repo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Mkdir(filepath.Dir(path), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, validRegistry, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(path, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := LoadHerdrControl(repo); err == nil ||
-			!strings.Contains(err.Error(), "owner-only regular file") {
-			t.Fatalf("permissive registry error = %v", err)
-		}
-	})
-	t.Run("registry symlink", func(t *testing.T) {
-		repo := newHerdrControlRepo(t)
-		path, err := HerdrControlPath(repo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Mkdir(filepath.Dir(path), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		target := filepath.Join(t.TempDir(), "registry.json")
-		if err := os.WriteFile(target, validRegistry, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(target, path); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := LoadHerdrControl(repo); err == nil {
-			t.Fatal("symlinked registry was accepted")
-		}
-	})
-	t.Run("lock mode", func(t *testing.T) {
-		repo := newHerdrControlRepo(t)
-		path, err := HerdrControlPath(repo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Mkdir(filepath.Dir(path), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path+".lock", nil, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(path+".lock", 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := LockHerdrControl(repo); err == nil ||
-			!strings.Contains(err.Error(), "owner-only regular file") {
-			t.Fatalf("permissive lock error = %v", err)
-		}
-	})
-}
-
-func TestHerdrControlRejectsExistingRegistryWithoutSchemaVersion(t *testing.T) {
-	for _, contents := range []string{`{}`, `{"schemaVersion":0}`} {
-		t.Run(contents, func(t *testing.T) {
-			repo := newHerdrControlRepo(t)
-			path, err := HerdrControlPath(repo)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := LoadHerdrControl(repo); err == nil ||
-				!strings.Contains(err.Error(), "unsupported Herdr control schema version 0") {
-				t.Fatalf("schema-less registry error = %v", err)
-			}
-		})
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadHerdrIntents(repo); err == nil ||
+		!strings.Contains(err.Error(), "unsupported Herdr intents schema version 2") {
+		t.Fatalf("future schema error = %v", err)
 	}
 }
 
 func TestProjectStateLockSerializesHerdrControlWriter(t *testing.T) {
-	repo := newHerdrControlRepo(t)
+	repo := newHerdrIntentsRepo(t)
 	project, err := LockProjectForLaunch(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlPath, err := HerdrControlPath(repo)
+	controlPath, err := HerdrIntentsPath(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,8 +118,8 @@ func TestProjectStateLockSerializesHerdrControlWriter(t *testing.T) {
 }
 
 func TestHerdrControlBindingsIncludeEveryIntentStatus(t *testing.T) {
-	repo := newHerdrControlRepo(t)
-	store := testEmptyHerdrControl()
+	repo := newHerdrIntentsRepo(t)
+	store := emptyHerdrIntents()
 	statuses := []HerdrIntentStatus{
 		HerdrIntentPlanned,
 		HerdrIntentIssued,
@@ -284,7 +137,7 @@ func TestHerdrControlBindingsIncludeEveryIntentStatus(t *testing.T) {
 		}
 		store.Intents = append(store.Intents, intent)
 	}
-	if err := validateHerdrControl(store); err != nil {
+	if err := validateHerdrIntents(store); err != nil {
 		t.Fatal(err)
 	}
 
@@ -307,9 +160,9 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 	if first.ID == second.ID {
 		t.Fatalf("plan intent IDs collide across owner roots: %s", first.ID)
 	}
-	intents := testEmptyHerdrControl()
+	intents := emptyHerdrIntents()
 	intents.Intents = []HerdrIntent{first, second}
-	if err := validateHerdrControl(intents); err != nil {
+	if err := validateHerdrIntents(intents); err != nil {
 		t.Fatal(err)
 	}
 	if got := intents.ProvisionalBindings("/repo/one"); len(got) != 1 ||
@@ -326,7 +179,7 @@ func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testin
 	intent := testHerdrCoordinatorIntent("/repo/one", "plan:demo")
 	intent.RuntimeParent = "425"
 	intent.ID, _ = HerdrCoordinatorIntentID(intent.RuntimeParent, "", 0)
-	store := testEmptyHerdrControl()
+	store := emptyHerdrIntents()
 	store.Intents = append(store.Intents, intent)
 
 	got := store.ProvisionalBindings("/repo/two")
@@ -336,11 +189,11 @@ func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testin
 }
 
 func TestHerdrSyntheticBindingsProjectWatcherIssuesAndKeepResolvedParents(t *testing.T) {
-	store := testEmptyHerdrControl()
+	store := emptyHerdrIntents()
 	store.Intents = []HerdrIntent{
-		{RuntimeParent: "@manual", IssueNum: 424, Backend: backend.Herdr},
-		{RuntimeParent: "@watch", IssueNum: 426, Backend: backend.Herdr},
-		{RuntimeParent: "428", Backend: backend.Herdr},
+		{RuntimeParent: "@manual", IssueNum: 424},
+		{RuntimeParent: "@watch", IssueNum: 426},
+		{RuntimeParent: "428"},
 	}
 
 	intents := store.ProvisionalBindings("/repo")
@@ -353,14 +206,11 @@ func TestHerdrSyntheticBindingsProjectWatcherIssuesAndKeepResolvedParents(t *tes
 	}
 }
 
-func TestHerdrControlRejectsDuplicateBranchAndPathReservations(t *testing.T) {
-	repo := newHerdrControlRepo(t)
-	locked, err := LockHerdrControl(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestHerdrIntentsRejectDuplicateBranchAndPathReservations(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	project, view := lockHerdrIntentsForTest(t, repo)
 	t.Cleanup(func() {
-		if err := locked.Unlock(); err != nil {
+		if err := project.Unlock(); err != nil {
 			t.Errorf("unlock: %v", err)
 		}
 	})
@@ -368,16 +218,16 @@ func TestHerdrControlRejectsDuplicateBranchAndPathReservations(t *testing.T) {
 	second := testHerdrWorktreeIntent(repo, "425", 427, "second")
 	second.BranchName = first.BranchName
 	second.FullBranchRef = first.FullBranchRef
-	locked.Intents = []HerdrIntent{first, second}
-	if err := locked.Save(); err == nil || !strings.Contains(err.Error(), "reserve the same branch:") {
+	view.Intents = []HerdrIntent{first, second}
+	if err := view.Save(); err == nil || !strings.Contains(err.Error(), "reserve the same branch:") {
 		t.Fatalf("duplicate branch save error = %v", err)
 	}
 
 	second.BranchName = "fanout/second"
 	second.FullBranchRef = "refs/heads/" + second.BranchName
 	second.WorktreePath = first.WorktreePath
-	locked.Intents = []HerdrIntent{first, second}
-	if err := locked.Save(); err == nil || !strings.Contains(err.Error(), "reserve the same path:") {
+	view.Intents = []HerdrIntent{first, second}
+	if err := view.Save(); err == nil || !strings.Contains(err.Error(), "reserve the same path:") {
 		t.Fatalf("duplicate path save error = %v", err)
 	}
 }
@@ -459,30 +309,30 @@ func TestHerdrCoordinatorIntentIDsUseSyntheticIssueNumbers(t *testing.T) {
 }
 
 func TestHerdrControlRejectsIncompleteRealizedIntent(t *testing.T) {
-	repo := newHerdrControlRepo(t)
+	repo := newHerdrIntentsRepo(t)
 	intent := testHerdrCoordinatorIntent(repo, "425")
 	intent.Status = HerdrIntentRealized
-	store := testEmptyHerdrControl()
+	store := emptyHerdrIntents()
 	store.Intents = append(store.Intents, intent)
-	if err := validateHerdrControl(store); err == nil || !strings.Contains(err.Error(), "resource is incomplete") {
+	if err := validateHerdrIntents(store); err == nil || !strings.Contains(err.Error(), "resource is incomplete") {
 		t.Fatalf("realized intent validation error = %v", err)
 	}
 }
 
 func TestHerdrControlAcceptsSHA256ObjectIDs(t *testing.T) {
-	repo := newHerdrControlRepo(t)
+	repo := newHerdrIntentsRepo(t)
 	intent := testHerdrWorktreeIntent(repo, "425", 426, "sha256")
 	intent.BaseSHA = strings.Repeat("1", 64)
 	intent.ExpectedHead = strings.Repeat("2", 64)
-	store := testEmptyHerdrControl()
+	store := emptyHerdrIntents()
 	store.Intents = append(store.Intents, intent)
-	if err := validateHerdrControl(store); err != nil {
+	if err := validateHerdrIntents(store); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestHerdrControlIssuedWorktreeMayRetainRealizedResourceForOpenRecovery(t *testing.T) {
-	repo := newHerdrControlRepo(t)
+	repo := newHerdrIntentsRepo(t)
 	intent := testHerdrWorktreeIntent(repo, "425", 426, "reopen")
 	intent.Status = HerdrIntentIssued
 	intent.Resource = HerdrResource{
@@ -518,17 +368,25 @@ func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 		Parent:           parentref.Canon(strings.TrimSpace(parent)),
 		RuntimeParent:    parentref.Canon(strings.TrimSpace(parent)),
 		OwnerProjectRoot: ownerProjectRoot,
-		Backend:          backend.Herdr, WorktreePath: repo,
-		WorkspaceLabel: "fanout-coordinator-token", Session: "fanout-test",
-		SocketPath: "/private/tmp/fanout-test/herdr.sock",
-		TimeoutMS:  300000, ExpiresUnixMS: 2000000000000,
+		WorktreePath:     repo,
+		WorkspaceLabel:   "fanout-coordinator-token", Session: "fanout-test",
+		SocketPath:    "/private/tmp/fanout-test/herdr.sock",
+		ExpiresUnixMS: 2000000000000,
 	}
 }
 
-func testEmptyHerdrControl() HerdrControlStore {
-	return emptyHerdrControl(herdrControlCommonIdentity{
-		path: "/repo/.git", device: 1, inode: 1,
-	})
+func lockHerdrIntentsForTest(t *testing.T, repo string) (*LockedStore, *LockedHerdrIntents) {
+	t.Helper()
+	project, err := LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := project.HerdrIntents(repo)
+	if err != nil {
+		_ = project.Unlock()
+		t.Fatal(err)
+	}
+	return project, view
 }
 
 func testHerdrWorktreeIntent(repo, parent string, issue int, slug string) HerdrIntent {
@@ -545,15 +403,15 @@ func testHerdrWorktreeIntent(repo, parent string, issue int, slug string) HerdrI
 		Parent:           parentref.Canon(strings.TrimSpace(parent)),
 		RuntimeParent:    parentref.Canon(strings.TrimSpace(parent)),
 		OwnerProjectRoot: ownerProjectRoot,
-		IssueNum:         issue, Backend: backend.Herdr,
-		Slug: slug, BranchName: "fanout/" + slug,
+		IssueNum:         issue,
+		Slug:             slug, BranchName: "fanout/" + slug,
 		FullBranchRef: "refs/heads/fanout/" + slug,
 		BaseBranch:    "main", BaseSHA: strings.Repeat("1", 40), ExpectedHead: strings.Repeat("1", 40),
 		WorktreePath:   filepath.Join(repo, ".fanout", "worktrees", slug),
 		WorkspaceLabel: "fanout-worktree-" + slug,
 		Coordinator:    testHerdrCoordinatorResource(repo),
 		Session:        "fanout-test", SocketPath: "/private/tmp/fanout-test/herdr.sock",
-		TimeoutMS: 300000, ExpiresUnixMS: 2000000000000,
+		ExpiresUnixMS: 2000000000000,
 	}
 }
 
@@ -564,19 +422,19 @@ func testHerdrCoordinatorResource(repo string) HerdrResource {
 	}
 }
 
-func newHerdrControlRepo(t *testing.T) string {
+func newHerdrIntentsRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
-	runHerdrControlGit(t, repo, "init", "-b", "main")
+	runHerdrIntentsGit(t, repo, "init", "-b", "main")
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runHerdrControlGit(t, repo, "add", "README.md")
-	runHerdrControlGit(t, repo, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.test", "commit", "-m", "init")
+	runHerdrIntentsGit(t, repo, "add", "README.md")
+	runHerdrIntentsGit(t, repo, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.test", "commit", "-m", "init")
 	return repo
 }
 
-func runHerdrControlGit(t *testing.T, dir string, args ...string) string {
+func runHerdrIntentsGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir

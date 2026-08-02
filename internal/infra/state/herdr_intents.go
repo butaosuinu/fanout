@@ -1,9 +1,7 @@
 package state
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,9 +15,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/execx"
 )
 
-const HerdrControlSchemaVersion = 1
+const HerdrIntentsSchemaVersion = 1
 
-var herdrControlCommitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+var herdrCommitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
 type HerdrIntentKind string
 
@@ -61,7 +59,6 @@ type HerdrIntent struct {
 	OwnerProjectRoot string            `json:"ownerProjectRoot,omitempty"`
 	IssueNum         int               `json:"issueNum,omitempty"`
 	TaskID           string            `json:"taskId,omitempty"`
-	Backend          backend.Name      `json:"backend"`
 
 	Slug          string `json:"slug,omitempty"`
 	BranchName    string `json:"branchName,omitempty"`
@@ -78,152 +75,87 @@ type HerdrIntent struct {
 	Coordinator    HerdrResource `json:"coordinator"`
 	Session        string        `json:"session"`
 	SocketPath     string        `json:"socketPath"`
-	TimeoutMS      int64         `json:"timeoutMs"`
 	ExpiresUnixMS  int64         `json:"expiresUnixMs"`
 
 	Failure string `json:"failure,omitempty"`
 }
 
-// The journal holds intents only. The final row lives in the owning
-// worktree's state.json pane row; issue #528 owns the transition from a
-// realized intent to that row.
-type HerdrControlStore struct {
-	SchemaVersion   int           `json:"schemaVersion"`
-	GitCommonDir    string        `json:"gitCommonDir"`
-	GitCommonDevice uint64        `json:"gitCommonDevice"`
-	GitCommonInode  uint64        `json:"gitCommonInode"`
-	Intents         []HerdrIntent `json:"intents"`
+// HerdrIntents is the repository-common intent journal. It holds intents
+// only; the final row lives in the owning worktree's state.json pane row,
+// and issue #528 owns the transition from a realized intent to that row.
+type HerdrIntents struct {
+	SchemaVersion int           `json:"schemaVersion"`
+	Intents       []HerdrIntent `json:"intents"`
 }
 
-type herdrControlCommonIdentity struct {
-	path   string
-	device uint64
-	inode  uint64
-}
-
-type LockedHerdrControl struct {
+// LockedHerdrIntents is a journal view backed by the combined launch lock.
+// The view has no unlock of its own: the lock file is owned by the
+// LockedStore that produced it.
+type LockedHerdrIntents struct {
 	path string
-	file *os.File
-	HerdrControlStore
+	HerdrIntents
 }
 
-// HerdrControlPath returns the repository-common registry path shared by every
+// HerdrIntentsPath returns the repository-common journal path shared by every
 // linked worktree.
-func HerdrControlPath(projectRoot string) (string, error) {
+func HerdrIntentsPath(projectRoot string) (string, error) {
 	out, err := execx.Combined(projectRoot, "git", "rev-parse", "--git-common-dir")
 	if err != nil {
-		return "", fmt.Errorf("resolve Herdr control git common directory: %w", err)
+		return "", fmt.Errorf("resolve Herdr intents git common directory: %w", err)
 	}
 	commonDir := strings.TrimSpace(string(out))
 	if commonDir == "" {
-		return "", fmt.Errorf("resolve Herdr control git common directory: invalid path %q", commonDir)
+		return "", fmt.Errorf("resolve Herdr intents git common directory: invalid path %q", commonDir)
 	}
 	if !filepath.IsAbs(commonDir) {
 		commonDir = filepath.Join(projectRoot, commonDir)
 	}
 	commonDir, err = filepath.EvalSymlinks(commonDir)
 	if err != nil {
-		return "", fmt.Errorf("canonicalize Herdr control git common directory: %w", err)
+		return "", fmt.Errorf("canonicalize Herdr intents git common directory: %w", err)
 	}
-	commonDir = filepath.Clean(commonDir)
-	if err := validateHerdrControlCommonDir(commonDir); err != nil {
-		return "", err
-	}
-	return filepath.Join(commonDir, "fanout", "herdr-control.json"), nil
+	return filepath.Join(filepath.Clean(commonDir), "fanout", "herdr-intents.json"), nil
 }
 
-func LoadHerdrControl(projectRoot string) (HerdrControlStore, error) {
-	path, err := HerdrControlPath(projectRoot)
+func LoadHerdrIntents(projectRoot string) (HerdrIntents, error) {
+	path, err := HerdrIntentsPath(projectRoot)
 	if err != nil {
-		return HerdrControlStore{}, err
+		return HerdrIntents{}, err
 	}
-	return loadHerdrControl(path)
+	return loadHerdrIntents(path)
 }
 
-func LockHerdrControl(projectRoot string) (*LockedHerdrControl, error) {
-	path, pathErr := HerdrControlPath(projectRoot)
-	if pathErr != nil {
-		return nil, pathErr
-	}
-	file, openErr := lockHerdrControlPath(path)
-	if openErr != nil {
-		return nil, openErr
-	}
-	store, err := loadHerdrControl(path)
-	if err != nil {
-		// The load error is authoritative while the private lock is unwound.
-		_ = unlockStateFile(file)
-		return nil, err
-	}
-	return &LockedHerdrControl{path: path, file: file, HerdrControlStore: store}, nil
-}
-
-func lockHerdrControlPath(path string) (*os.File, error) {
-	if err := ensurePrivateHerdrControlDir(filepath.Dir(path)); err != nil {
-		return nil, fmt.Errorf("create Herdr control directory: %w", err)
+func lockHerdrIntentsPath(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("create Herdr intents directory: %w", err)
 	}
 	lockPath := path + ".lock"
-	file, openErr := os.OpenFile(
-		lockPath,
-		os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW,
-		0o600,
-	)
+	file, openErr := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if openErr != nil {
-		return nil, fmt.Errorf("open Herdr control lock %s: %w", lockPath, openErr)
-	}
-	info, statErr := file.Stat()
-	if statErr == nil {
-		statErr = validatePrivateHerdrControlFile(lockPath, info)
-	}
-	if statErr != nil {
-		_ = file.Close() // The namespace validation error is authoritative.
-		return nil, statErr
+		return nil, fmt.Errorf("open Herdr intents lock %s: %w", lockPath, openErr)
 	}
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
 		_ = file.Close() // The flock error is authoritative.
-		return nil, fmt.Errorf("lock Herdr control %s: %w", lockPath, err)
+		return nil, fmt.Errorf("lock Herdr intents %s: %w", lockPath, err)
 	}
 	return file, nil
 }
 
-func (l *LockedHerdrControl) Unlock() error {
-	if l == nil || l.file == nil {
-		return nil
-	}
-	unlockErr := unlockStateFile(l.file)
-	l.file = nil
-	return unlockErr
-}
-
-func (l *LockedHerdrControl) Save() error {
-	if l == nil || l.file == nil {
-		return fmt.Errorf("save Herdr control without a held lock")
+func (l *LockedHerdrIntents) Save() error {
+	if l == nil || l.path == "" {
+		return fmt.Errorf("save Herdr intents without a held lock")
 	}
 	l.normalize()
-	identity, identityErr := herdrControlIdentity(l.path)
-	if identityErr != nil {
-		return identityErr
-	}
-	if bindingErr := validateHerdrControlIdentity(l.HerdrControlStore, identity); bindingErr != nil {
-		return bindingErr
-	}
-	if validateErr := validateHerdrControl(l.HerdrControlStore); validateErr != nil {
+	if validateErr := validateHerdrIntents(l.HerdrIntents); validateErr != nil {
 		return validateErr
 	}
-	if writeErr := atomicfs.WriteJSON(l.path, l.HerdrControlStore, 0o600); writeErr != nil {
-		return fmt.Errorf("write Herdr control %s: %w", l.path, writeErr)
-	}
-	info, err := os.Lstat(l.path)
-	if err != nil {
-		return fmt.Errorf("validate written Herdr control %s: %w", l.path, err)
-	}
-	if err := validatePrivateHerdrControlFile(l.path, info); err != nil {
-		return err
+	if writeErr := atomicfs.WriteJSON(l.path, l.HerdrIntents, 0o600); writeErr != nil {
+		return fmt.Errorf("write Herdr intents %s: %w", l.path, writeErr)
 	}
 	return nil
 }
 
-func (s HerdrControlStore) FindIntent(id string) (HerdrIntent, bool) {
+func (s HerdrIntents) FindIntent(id string) (HerdrIntent, bool) {
 	for _, intent := range s.Intents {
 		if intent.ID == id {
 			return intent, true
@@ -232,7 +164,7 @@ func (s HerdrControlStore) FindIntent(id string) (HerdrIntent, bool) {
 	return HerdrIntent{}, false
 }
 
-func (s *HerdrControlStore) UpsertIntent(intent HerdrIntent) {
+func (s *HerdrIntents) UpsertIntent(intent HerdrIntent) {
 	for i := range s.Intents {
 		if s.Intents[i].ID == intent.ID {
 			s.Intents[i] = intent
@@ -242,7 +174,7 @@ func (s *HerdrControlStore) UpsertIntent(intent HerdrIntent) {
 	s.Intents = append(s.Intents, intent)
 }
 
-func (s *HerdrControlStore) RemoveIntent(id string) bool {
+func (s *HerdrIntents) RemoveIntent(id string) bool {
 	for i := range s.Intents {
 		if s.Intents[i].ID != id {
 			continue
@@ -253,7 +185,7 @@ func (s *HerdrControlStore) RemoveIntent(id string) bool {
 	return false
 }
 
-func (s HerdrControlStore) ProvisionalBindings(
+func (s HerdrIntents) ProvisionalBindings(
 	ownerProjectRoot string,
 ) []backend.Binding {
 	bindings := make([]backend.Binding, 0, len(s.Intents))
@@ -267,7 +199,7 @@ func (s HerdrControlStore) ProvisionalBindings(
 		if !ok {
 			continue
 		}
-		bindings = append(bindings, backend.Binding{Parent: parent, Backend: intent.Backend})
+		bindings = append(bindings, backend.Binding{Parent: parent, Backend: backend.Herdr})
 	}
 	return bindings
 }
@@ -365,196 +297,44 @@ func herdrOwnerTuple(parent, ownerProjectRoot string) string {
 	return identity
 }
 
-func loadHerdrControl(path string) (HerdrControlStore, error) {
-	identity, identityErr := herdrControlIdentity(path)
-	if identityErr != nil {
-		return HerdrControlStore{}, identityErr
-	}
-	var store HerdrControlStore
-	found, err := readPrivateHerdrControlJSON(path, &store)
+func loadHerdrIntents(path string) (HerdrIntents, error) {
+	var store HerdrIntents
+	found, err := atomicfs.ReadJSON(path, &store)
 	if err != nil {
 		if found {
-			return HerdrControlStore{}, fmt.Errorf("parse Herdr control %s: %w", path, err)
+			return HerdrIntents{}, fmt.Errorf("parse Herdr intents %s: %w", path, err)
 		}
-		return HerdrControlStore{}, fmt.Errorf("read Herdr control %s: %w", path, err)
+		return HerdrIntents{}, fmt.Errorf("read Herdr intents %s: %w", path, err)
 	}
 	if !found {
-		store = emptyHerdrControl(identity)
-	} else if store.SchemaVersion == 0 {
-		return HerdrControlStore{}, fmt.Errorf(
-			"validate Herdr control %s: unsupported Herdr control schema version 0",
-			path,
-		)
+		return emptyHerdrIntents(), nil
 	}
 	store.normalize()
-	if err := validateHerdrControlIdentity(store, identity); err != nil {
-		return HerdrControlStore{}, fmt.Errorf("validate Herdr control %s: %w", path, err)
-	}
-	if err := validateHerdrControl(store); err != nil {
-		return HerdrControlStore{}, fmt.Errorf("validate Herdr control %s: %w", path, err)
+	if err := validateHerdrIntents(store); err != nil {
+		return HerdrIntents{}, fmt.Errorf("validate Herdr intents %s: %w", path, err)
 	}
 	return store, nil
 }
 
-func herdrControlIdentity(path string) (herdrControlCommonIdentity, error) {
-	commonDir := filepath.Dir(filepath.Dir(path))
-	resolved, resolveErr := filepath.EvalSymlinks(commonDir)
-	if resolveErr != nil {
-		return herdrControlCommonIdentity{}, fmt.Errorf(
-			"canonicalize Herdr control git common directory: %w",
-			resolveErr,
-		)
-	}
-	resolved = filepath.Clean(resolved)
-	if validateErr := validateHerdrControlCommonDir(resolved); validateErr != nil {
-		return herdrControlCommonIdentity{}, validateErr
-	}
-	info, err := os.Lstat(resolved)
-	if err != nil {
-		return herdrControlCommonIdentity{}, err
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Dev == 0 || stat.Ino == 0 {
-		return herdrControlCommonIdentity{}, fmt.Errorf(
-			"herdr control common directory %s has no physical identity",
-			resolved,
-		)
-	}
-	return herdrControlCommonIdentity{
-		path: resolved, device: normalizeHerdrControlStatDevice(stat.Dev), inode: stat.Ino,
-	}, nil
-}
-
-func normalizeHerdrControlStatDevice[T ~int32 | ~uint32 | ~uint64](device T) uint64 {
-	return uint64(device)
-}
-
-func validateHerdrControlIdentity(
-	store HerdrControlStore,
-	want herdrControlCommonIdentity,
-) error {
-	if store.GitCommonDir != want.path || store.GitCommonDevice != want.device ||
-		store.GitCommonInode != want.inode {
-		return fmt.Errorf("herdr control belongs to a different git common directory")
-	}
-	return nil
-}
-
-func ensurePrivateHerdrControlDir(path string) error {
-	if err := os.Mkdir(path, 0o700); err != nil && !os.IsExist(err) {
-		return err
-	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
-		info.Mode().Perm() != 0o700 {
-		return fmt.Errorf("herdr control directory %s is not an owner-only real directory", path)
-	}
-	if err := validateHerdrControlOwner(path, info); err != nil {
-		return err
-	}
-	return nil
-}
-
-func validateHerdrControlCommonDir(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("herdr control common directory %s is not a real directory", path)
-	}
-	if err := validateHerdrControlOwner(path, info); err != nil {
-		return err
-	}
-	if info.Mode().Perm()&0o022 != 0 && info.Mode()&os.ModeSticky == 0 {
-		return fmt.Errorf("herdr control common directory %s is writable by another uid", path)
-	}
-	return nil
-}
-
-func readPrivateHerdrControlJSON(path string, target any) (bool, error) {
-	dir := filepath.Dir(path)
-	if _, err := os.Lstat(dir); os.IsNotExist(err) {
-		return false, nil
-	}
-	if err := ensurePrivateHerdrControlDir(dir); err != nil {
-		return false, err
-	}
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	defer func() {
-		_ = file.Close() // The read or decode result is authoritative.
-	}()
-	info, err := file.Stat()
-	if err == nil {
-		err = validatePrivateHerdrControlFile(path, info)
-	}
-	if err != nil {
-		return false, err
-	}
-	data, err := io.ReadAll(file)
-	if err != nil {
-		return false, err
-	}
-	if err := json.Unmarshal(data, target); err != nil {
-		return true, err
-	}
-	return true, nil
-}
-
-func validatePrivateHerdrControlFile(path string, info os.FileInfo) error {
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
-		info.Mode().Perm() != 0o600 {
-		return fmt.Errorf("herdr control file %s is not an owner-only regular file", path)
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Nlink != 1 {
-		return fmt.Errorf("herdr control file %s has an invalid link identity", path)
-	}
-	if err := validateHerdrControlOwner(path, info); err != nil {
-		return err
-	}
-	return nil
-}
-
-// tmux-parity omits extended ACL inspection; see docs/herdr-runtime-backend-spike.ja.md.
-func validateHerdrControlOwner(path string, info os.FileInfo) error {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || int(stat.Uid) != os.Getuid() {
-		return fmt.Errorf("herdr control path %s is not owned by the current uid", path)
-	}
-	return nil
-}
-
-func emptyHerdrControl(identity herdrControlCommonIdentity) HerdrControlStore {
-	return HerdrControlStore{
-		SchemaVersion:   HerdrControlSchemaVersion,
-		GitCommonDir:    identity.path,
-		GitCommonDevice: identity.device,
-		GitCommonInode:  identity.inode,
-		Intents:         []HerdrIntent{},
+func emptyHerdrIntents() HerdrIntents {
+	return HerdrIntents{
+		SchemaVersion: HerdrIntentsSchemaVersion,
+		Intents:       []HerdrIntent{},
 	}
 }
 
-func (s *HerdrControlStore) normalize() {
+func (s *HerdrIntents) normalize() {
 	if s.SchemaVersion == 0 {
-		s.SchemaVersion = HerdrControlSchemaVersion
+		s.SchemaVersion = HerdrIntentsSchemaVersion
 	}
 	if s.Intents == nil {
 		s.Intents = []HerdrIntent{}
 	}
 }
 
-func validateHerdrControl(store HerdrControlStore) error {
-	if store.SchemaVersion != HerdrControlSchemaVersion {
-		return fmt.Errorf("unsupported Herdr control schema version %d", store.SchemaVersion)
-	}
-	if store.GitCommonDir == "" || !filepath.IsAbs(store.GitCommonDir) ||
-		filepath.Clean(store.GitCommonDir) != store.GitCommonDir ||
-		store.GitCommonDevice == 0 || store.GitCommonInode == 0 {
-		return fmt.Errorf("herdr control git common directory identity is incomplete")
+func validateHerdrIntents(store HerdrIntents) error {
+	if store.SchemaVersion != HerdrIntentsSchemaVersion {
+		return fmt.Errorf("unsupported Herdr intents schema version %d", store.SchemaVersion)
 	}
 	ids := map[string]bool{}
 	reservations := map[string]string{}
@@ -563,13 +343,13 @@ func validateHerdrControl(store HerdrControlStore) error {
 			return err
 		}
 		if ids[intent.ID] {
-			return fmt.Errorf("duplicate Herdr control id %q", intent.ID)
+			return fmt.Errorf("duplicate Herdr intent id %q", intent.ID)
 		}
 		ids[intent.ID] = true
 		if intent.Kind != HerdrIntentWorktree {
 			continue
 		}
-		if err := reserveHerdrControlIdentity(
+		if err := reserveHerdrIntentIdentity(
 			reservations,
 			intent.ID,
 			intent.FullBranchRef,
@@ -586,9 +366,8 @@ func validateHerdrIntent(intent HerdrIntent) error {
 	runtimeParent := parentref.Canon(strings.TrimSpace(intent.RuntimeParent))
 	if intent.ID == "" || parent == "" || intent.Parent != parent ||
 		runtimeParent == "" || intent.RuntimeParent != runtimeParent ||
-		intent.Backend != backend.Herdr || intent.WorkspaceLabel == "" ||
-		intent.WorktreePath == "" || intent.Session == "" || intent.SocketPath == "" ||
-		intent.TimeoutMS < 3000 || intent.TimeoutMS > 300000 || intent.ExpiresUnixMS <= 0 {
+		intent.WorkspaceLabel == "" || intent.WorktreePath == "" ||
+		intent.Session == "" || intent.SocketPath == "" || intent.ExpiresUnixMS <= 0 {
 		return fmt.Errorf("herdr intent %q is incomplete", intent.ID)
 	}
 	if err := validateHerdrRuntimeParent(parent, runtimeParent); err != nil {
@@ -598,38 +377,22 @@ func validateHerdrIntent(intent HerdrIntent) error {
 	if ownerErr != nil || intent.OwnerProjectRoot != ownerProjectRoot {
 		return fmt.Errorf("herdr intent %s has invalid owner project root", intent.ID)
 	}
-	var expectedID string
-	var err error
 	switch intent.Kind {
 	case HerdrIntentCoordinator:
-		expectedID, err = HerdrCoordinatorIntentID(
-			runtimeParent,
-			herdrRuntimeOwnerProjectRoot(runtimeParent, ownerProjectRoot),
-			intent.IssueNum,
-		)
 		if intent.TaskID != "" || intent.BranchName != "" ||
 			intent.FullBranchRef != "" || intent.BaseSHA != "" || intent.Coordinator.WorkspaceID != "" {
 			return fmt.Errorf("herdr coordinator intent %s contains child fields", intent.ID)
 		}
 	case HerdrIntentWorktree:
-		expectedID, err = HerdrWorktreeIntentID(
-			parent,
-			ownerProjectRoot,
-			intent.IssueNum,
-			intent.TaskID,
-		)
 		if intent.Slug == "" || intent.BranchName == "" || intent.FullBranchRef == "" ||
 			intent.FullBranchRef != "refs/heads/"+intent.BranchName ||
-			intent.BaseBranch == "" || !herdrControlCommitSHA.MatchString(intent.BaseSHA) ||
-			!herdrControlCommitSHA.MatchString(intent.ExpectedHead) ||
+			intent.BaseBranch == "" || !herdrCommitSHA.MatchString(intent.BaseSHA) ||
+			!herdrCommitSHA.MatchString(intent.ExpectedHead) ||
 			intent.Coordinator.WorkspaceID == "" {
 			return fmt.Errorf("herdr worktree intent %s is incomplete", intent.ID)
 		}
 	default:
 		return fmt.Errorf("herdr intent %s has unknown kind %q", intent.ID, intent.Kind)
-	}
-	if err != nil || intent.ID != expectedID {
-		return fmt.Errorf("herdr intent %s has inconsistent identity", intent.ID)
 	}
 	switch intent.Status {
 	case HerdrIntentPlanned:
@@ -682,7 +445,7 @@ func herdrRuntimeOwnerProjectRoot(runtimeParent, ownerProjectRoot string) string
 	return ""
 }
 
-func reserveHerdrControlIdentity(
+func reserveHerdrIntentIdentity(
 	reservations map[string]string,
 	id, fullBranchRef, worktreePath string,
 ) error {
