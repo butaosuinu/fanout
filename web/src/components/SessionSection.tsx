@@ -3,6 +3,7 @@ import { parentLabel, parentUrl } from "../lib/github";
 import { parseDiff } from "../lib/format";
 import {
   blockersAllClosed,
+  diffQuery,
   fmtBlockers,
   fmtWave,
   openBlockerCount,
@@ -33,27 +34,57 @@ function BlockersCell({ pane }: { pane: PaneView }) {
   return <span className="muted">{blockersAllClosed(pane) ? "resolved" : "unknown"}</span>;
 }
 
-function DiffCell({ pane }: { pane: PaneView }) {
+/* 差分があって identity を組める行だけ、diff ビュアーへの直リンクにする。 */
+function DiffCell({
+  parent,
+  pane,
+  onOpenDiff,
+}: {
+  parent: string;
+  pane: PaneView;
+  onOpenDiff: (parent: string, pane: PaneView) => void;
+}) {
   const d = parseDiff(pane.diffSummary ?? "");
   if (!d) return <span className="muted">{pane.diffSummary || "—"}</span>;
-  return (
+  const stat = (
     <>
       <span className="add">+{d.add}</span>/<span className="del">-{d.del}</span>
     </>
   );
+  const changed = Number(d.add) + Number(d.del) > 0;
+  if (!changed || !diffQuery(parent, pane)) return stat;
+  return (
+    <button
+      type="button"
+      className="diff-link"
+      title="変更を表示"
+      aria-label={`変更を表示 +${d.add}/-${d.del}`}
+      // 行クリック(Drawer を開く)には伝播させない — セルは diff への直行導線
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenDiff(parent, pane);
+      }}
+    >
+      {stat}
+    </button>
+  );
 }
 
 function PaneRow({
+  parent,
   pane,
   repo,
   selected,
   onSelect,
+  onOpenDiff,
   registerRow,
 }: {
+  parent: string;
   pane: PaneView;
   repo: string;
   selected: boolean;
   onSelect: () => void;
+  onOpenDiff: (parent: string, pane: PaneView) => void;
   registerRow: (el: HTMLTableRowElement | null) => void;
 }) {
   const ci = paneCI(pane);
@@ -92,7 +123,7 @@ function PaneRow({
         {pane.branchName || "—"}
       </td>
       <td className={pane.worktreeErr ? "c-diff fault" : "c-diff"} title={pane.worktreeErr ?? ""}>
-        <DiffCell pane={pane} />
+        <DiffCell parent={parent} pane={pane} onOpenDiff={onOpenDiff} />
       </td>
       <td>
         <DirtyTag state={pane.dirtyState} />
@@ -152,6 +183,7 @@ export function SessionSection({
   selected,
   onSort,
   onSelect,
+  onOpenDiff,
   registerRow,
 }: {
   item: SessionItem;
@@ -161,6 +193,7 @@ export function SessionSection({
   selected: string | null;
   onSort: (key: string) => void;
   onSelect: (key: string) => void;
+  onOpenDiff: (parent: string, pane: PaneView) => void;
   registerRow: (key: string, el: HTMLTableRowElement | null) => void;
 }) {
   const sr = item.rollup;
@@ -207,10 +240,12 @@ export function SessionSection({
               return (
                 <PaneRow
                   key={key}
+                  parent={item.parent}
                   pane={p}
                   repo={repo}
                   selected={selected === key}
                   onSelect={() => onSelect(key)}
+                  onOpenDiff={onOpenDiff}
                   registerRow={(el) => registerRow(key, el)}
                 />
               );

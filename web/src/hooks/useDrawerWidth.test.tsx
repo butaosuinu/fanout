@@ -76,6 +76,24 @@ describe("useDrawerWidth", () => {
     expect(localStorage.getItem("fanout.drawerWidth")).toBe("780");
   });
 
+  /* 実ドラッグは pointermove を細かく何度も撃つ。拡大方向のガードを live な
+   * intent で判定すると、1 回目の move で intent > startWidth になった時点で
+   * 以降を全部弾き、幅が 1 ステップ分で固まる(最小幅まで縮めた後に広げられ
+   * なくなる、として報告された不具合)。 */
+  it("拡大は連続した pointermove の全量が反映される(1 ステップで固まらない)", () => {
+    localStorage.setItem("fanout.drawerWidth", "320"); // 最小まで縮めた状態から
+    render(<Probe />);
+    expect(width()).toBe(320);
+
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    for (let i = 1; i <= 10; i++) {
+      fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 800 - i * 20, buttons: 1 });
+    }
+    expect(width()).toBe(520); // 320 + 200 — 340(1 ステップ分)で止まらない
+    fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 600 });
+    expect(localStorage.getItem("fanout.drawerWidth")).toBe("520");
+  });
+
   it("ドラッグ中の幅も 320–1416px に clamp する", () => {
     render(<Probe />);
     fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });

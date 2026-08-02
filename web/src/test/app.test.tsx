@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,14 @@ import {
   removeEventSource,
   streamSnapshot,
 } from "./fakeEventSource";
-import { makePane, makeQueuedPane, makeRollup, makeSession, makeSnapshot } from "./fixtures";
+import {
+  makeDiffResponse,
+  makePane,
+  makeQueuedPane,
+  makeRollup,
+  makeSession,
+  makeSnapshot,
+} from "./fixtures";
 import { server } from "./server";
 
 /* App 全体の統合テスト。モックはネットワーク境界のみ:
@@ -1110,20 +1117,158 @@ describe("transport フォールバック", () => {
   });
 });
 
-describe("テーマ", () => {
-  it("切替で data-theme / localStorage / aria-pressed が同期する", async () => {
+describe("session リストの diff 列", () => {
+  it("差分のある行はクリックで diff ビュアーへ直行する(Drawer は開かない)", async () => {
+    server.use(http.get("/api/diff", () => HttpResponse.json(makeDiffResponse())));
     const user = userEvent.setup();
     render(<App />);
-    const btn = screen.getByRole("button", { name: "ライト / ダーク切替" });
-    expect(btn).toHaveAttribute("aria-pressed", "false");
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({ issueNum: 101, displayName: "Fix thing", diffSummary: "+10/-2" }),
+        ]),
+      ]),
+    );
 
-    await user.click(btn);
+    await user.click(await screen.findByRole("button", { name: "変更を表示 +10/-2" }));
+
+    /* 導線から開いた既定はコンパクト(モーダルではないので role=complementary)。
+       Drawer は開かない。 */
+    const overlay = await screen.findByRole("complementary", { name: "worktree diff" });
+    expect(overlay).toHaveAttribute("data-mode", "compact");
+    expect(screen.queryByRole("complementary", { name: "ペイン詳細" })).not.toBeInTheDocument();
+  });
+
+  it("Drawer 上部バーは Session 名 → 差分行数 → 変更を表示 の順に並べる", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({ issueNum: 101, displayName: "Fix thing", diffSummary: "+10/-2" }),
+        ]),
+      ]),
+    );
+
+    await user.click(await screen.findByText("Fix thing"));
+    const head = (await screen.findByRole("complementary", { name: "ペイン詳細" })).querySelector(
+      ".drawer-head",
+    ) as HTMLElement;
+    expect(within(head).getByText("+10")).toBeInTheDocument();
+    expect(within(head).getByText("-2")).toBeInTheDocument();
+    expect([...head.children].map((c) => c.tagName + (c.id ? `#${c.id}` : ""))).toEqual([
+      "H3",
+      "SPAN",
+      "BUTTON#d-diff-open",
+      "BUTTON#drawer-close",
+    ]);
+  });
+
+  it("差分ゼロ・identity を組めない行はリンクにしない", async () => {
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({ issueNum: 101, displayName: "No change", diffSummary: "+0/-0" }),
+          makePane({
+            issueNum: 0,
+            kind: "shell",
+            shellKey: "sh1",
+            displayName: "Shell pane",
+            diffSummary: "+3/-1",
+          }),
+        ]),
+      ]),
+    );
+
+    await screen.findByText("No change");
+    expect(screen.queryByRole("button", { name: /変更を表示/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("設定モーダル", () => {
+  it("外観 3 択が data-theme と localStorage に同期する", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "設定" });
+
+    // 未選択(キー無し)はシステム追従。jsdom の matchMedia スタブは light
+    expect(within(dialog).getByRole("radio", { name: "システム" })).toBeChecked();
+
+    await user.click(within(dialog).getByRole("radio", { name: "ダーク" }));
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(localStorage.getItem("fanout.theme")).toBe("dark");
-    expect(btn).toHaveAttribute("aria-pressed", "true");
 
-    await user.click(btn);
+    await user.click(within(dialog).getByRole("radio", { name: "ライト" }));
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(localStorage.getItem("fanout.theme")).toBe("light");
+
+    // システムに戻すとキーごと消える(FOUC ブートストラップと同じ意味論)
+    await user.click(within(dialog).getByRole("radio", { name: "システム" }));
+    expect(localStorage.getItem("fanout.theme")).toBeNull();
+  });
+
+  it("diff テーマの選択を localStorage に保存する", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "設定" });
+
+    const lightSel = within(dialog).getByLabelText("ライトテーマ");
+    expect(lightSel).toHaveValue("pierre-light");
+    await user.selectOptions(lightSel, "github-light");
+    expect(localStorage.getItem("fanout.diffTheme.light")).toBe("github-light");
+
+    const darkSel = within(dialog).getByLabelText("ダークテーマ");
+    await user.selectOptions(darkSel, "tokyo-night");
+    expect(localStorage.getItem("fanout.diffTheme.dark")).toBe("tokyo-night");
+  });
+
+  it("diff テーマの見本を実物の FileDiff で light / dark 2 枚描く", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "設定" });
+
+    /* 見本は遅延 chunk なので解決を待つ。中身は shadow root に出る — 見本と本番の
+     * 配色が必ず一致することが要点なので、自前描画に差し替えないこと。 */
+    await waitFor(() => {
+      expect(dialog.querySelectorAll("diffs-container")).toHaveLength(2);
+    });
+    const shadow = [...dialog.querySelectorAll("diffs-container")].map(
+      (el) => el.shadowRoot?.textContent ?? "",
+    );
+    for (const text of shadow) expect(text).toContain("#00A3AF");
+  });
+
+  it("保存値が許可リスト外なら既定へ落とす(未登録テーマ名は解決時に throw する)", async () => {
+    localStorage.setItem("fanout.diffTheme.light", "../etc/passwd");
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "設定" });
+    expect(within(dialog).getByLabelText("ライトテーマ")).toHaveValue("pierre-light");
+  });
+
+  it("Escape で閉じ、起点の歯車へフォーカスを戻す", async () => {
+    const root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+    try {
+      const user = userEvent.setup();
+      render(<App />, { container: root });
+      await user.click(screen.getByRole("button", { name: "設定" }));
+      await screen.findByRole("dialog", { name: "設定" });
+      expect(root.hasAttribute("inert")).toBe(true);
+
+      await user.keyboard("{Escape}");
+
+      expect(screen.queryByRole("dialog", { name: "設定" })).not.toBeInTheDocument();
+      expect(root.hasAttribute("inert")).toBe(false);
+      expect(screen.getByRole("button", { name: "設定" })).toHaveFocus();
+    } finally {
+      root.remove();
+    }
   });
 });

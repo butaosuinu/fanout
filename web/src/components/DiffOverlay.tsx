@@ -1,123 +1,168 @@
-import { FileDiff } from "@pierre/diffs/react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { FileDiff, Virtualizer } from "@pierre/diffs/react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { useDiff } from "../hooks/useDiff";
-import { useTheme, type Theme } from "../hooks/useTheme";
+import { useDiffWidth } from "../hooks/useDiffWidth";
+import {
+  useDiffLayout,
+  useDiffTheme,
+  useDiffView,
+  useTheme,
+  type DiffLayout,
+  type Theme,
+} from "../hooks/useSettings";
 import { apiUrl } from "../lib/api";
 import {
   diffMeta,
   diffWarning,
+  indexDiffFilesByPath,
   LINE_DIFF_TYPE_PLAIN,
-  omittedFiles,
-  OMITTED_REASON_LABELS,
   parseDiffFiles,
-  planFileRendering,
+  planDiffFiles,
   TOKENIZE_MAX_LENGTH_PLAIN,
   TOKENIZE_MAX_LINE_LENGTH,
+  type DiffFilePlan,
 } from "../lib/diff";
-import type { DiffFileEntry, DiffResponse } from "../lib/types";
+import { DiffFileList } from "./DiffFileList";
+import {
+  IconButton,
+  IconChevronDown,
+  IconChevronUp,
+  IconClose,
+  IconLayoutAuto,
+  IconLayoutSplit,
+  IconLayoutStack,
+  IconMaximize,
+  IconMinimize,
+  IconRefresh,
+  IconTheme,
+} from "./icons";
 
 /* patch 本文と file path は敵性入力。@pierre/diffs はテキストをトークン分解して
  * DOM API で組み立てる(patch を HTML として解釈しない)前提で採用しており、
  * その性質は diffOverlay.test.tsx の敵性 patch テストで固定している。
  * こちら側でも patch 由来の文字列を dangerouslySetInnerHTML に渡さない。 */
 
+const EMPTY_OVERRIDES: ReadonlyMap<number, boolean> = new Map();
+
+/* 空白の修復判定: この高さ以上が見えている file だけを対象にする。 */
+const BLANK_REPAIR_MIN_PX = 120;
+/* スクロールが止まった後の押さえの再検査(最後のフレームが空白で終わった場合用) */
+const BLANK_REPAIR_SETTLE_MS = 120;
+/* 画面外に先読みしておく高さ。既定の 1,000px は 1 フレームで消費されてしまい、
+ * 高速スクロール中に描画が追いつかない。 */
+const VIRTUALIZER_CONFIG = { overscrollSize: 3000 };
+
+/* auto レイアウトが左右 2 面(split)を選ぶ最小のパネル幅。ファイル一覧(288px)を
+ * 引いた残りを半分に割っても 1 面 350px 前後は残る値。これを下回ると縦積みへ。 */
+const AUTO_SPLIT_MIN_PX = 1000;
+/* これ以下のビューポートでは、コンパクト表示も nav 下の全幅パネルになる
+ * (style.css の @media と同期させること)。 */
+const COMPACT_FULL_WIDTH_PX = 1100;
+
+/* 並べ方ボタンは 1 個で auto -> split -> stack を巡回する */
+const LAYOUT_CYCLE: Record<DiffLayout, DiffLayout> = {
+  auto: "split",
+  split: "stack",
+  stack: "auto",
+};
+const LAYOUT_LABELS: Record<DiffLayout, string> = {
+  auto: "自動",
+  split: "左右 2 面",
+  stack: "縦積み",
+};
+
+/* 片側しかない file(新規追加・削除)は data-diff-type="single" になり、既定では
+ * 全幅に広がる。GitHub の split 表示に合わせ、追加のみは右半分、削除のみは左半分へ
+ * 寄せる。shadow DOM 内はライブラリの unsafeCSS からしか触れない。ここに入れるのは
+ * この固定文字列だけで、patch 由来の値は一切混ぜない(敵性入力規約)。 */
+const SINGLE_SIDE_CSS = [
+  'pre[data-diff-type="single"] > code[data-additions]{ width:50%; margin-left:auto; }',
+  'pre[data-diff-type="single"] > code[data-deletions]{ width:50%; margin-right:auto; }',
+].join("\n");
+
 /* memo: Drawer は SSE snapshot tick(約 2s)ごとに再レンダーされるが、diff と
  * theme は変わらないので file 列全体をスキップさせる(library の FileDiff は
- * 非 memo で、素通しすると tick ごとに全 file の setOptions/render が走る)。 */
+ * 非 memo で、素通しすると tick ごとに全 file の setOptions/render が走る)。
+ * 折りたたみ操作は overrides Map の差し替えで伝わる。 */
 const DiffFiles = memo(function DiffFiles({
-  diff,
-  omitted,
+  plan,
+  overrides,
   theme,
+  diffThemes,
+  stack,
+  registerHost,
+  onToggle,
 }: {
-  diff: DiffResponse;
-  omitted: DiffFileEntry[];
+  plan: DiffFilePlan[];
+  overrides: ReadonlyMap<number, boolean>;
   theme: Theme;
+  diffThemes: { light: string; dark: string };
+  /* 縦積み(unified)にするか。狭いパネルで左右 2 面に割ると 1 面が読めないので
+   * 削除と追加を縦に積む。options 経由なので file は作り直さない。 */
+  stack: boolean;
+  registerHost: (index: number, el: HTMLDivElement | null) => void;
+  onToggle: (index: number) => void;
 }) {
-  const plan = useMemo(() => planFileRendering(parseDiffFiles(diff.patch)), [diff.patch]);
-  /* 予算超過 file のうちユーザーが明示的に展開したもの(plan の index)。
-   * 同時に展開できるのは 1 file だけ — 累積させると、8,000 行級の file を
-   * 順にクリックするだけで合計予算を回避して DOM を積み上げられる。別の file を
-   * 展開すると前の file は unmount され、明示的に折りたたむこともできる。
-   * patch 自体を key に持つ — 再取得で patch が変わると index の意味も変わるが、
-   * passive effect でのリセットでは間に合わない(@pierre/diffs は ref/layout
-   * 経路で同期 mount するので、リセット前の 1 回で新しい file を全展開できる)。 */
-  const [expansion, setExpansion] = useState<{ patch: string; index: number | null }>({
-    patch: diff.patch,
-    index: null,
-  });
-  const expandedIndex = expansion.patch === diff.patch ? expansion.index : null;
-  const setExpanded = (index: number | null) => setExpansion({ patch: diff.patch, index });
   return (
     <>
-      {plan.map(({ file, lines, overBudget, inlineDiff, tooLargeToExpand }, i) => {
-        /* collapsed file は FileDiff を mount しない — instance ごとに shadow DOM の
-         * header/SVG sprite/style で 108 node 掛かり、契約上限の 500 files では
-         * それだけで 54,000 node になる。自前の軽量行で出し、展開時に初めて
-         * FileDiff を mount する。 */
-        if (overBudget && expandedIndex !== i) {
-          return (
-            // file type change は同 path が 2 entry になるため path 単独を key にしない
-            <section className="diff-file-collapsed" key={`${i}:${file.name}`}>
-              <code>{file.name}</code>
-              {tooLargeToExpand ? (
-                /* 展開すると行数だけで固まる大きさ。レビューは TUI か
-                 * GitHub PR 側に委ねる(dashboard は表示専用) */
-                <span className="diff-too-large">
-                  {lines.toLocaleString()} 行 — 大きすぎるため表示しません
-                </span>
-              ) : (
-                <button type="button" className="diff-expand" onClick={() => setExpanded(i)}>
-                  {lines.toLocaleString()} 行 — 展開(ハイライトなし)
-                </button>
-              )}
-            </section>
-          );
-        }
+      {plan.map(({ file, lines, initiallyCollapsed, highlight, inlineDiff }, i) => {
+        const collapsed = overrides.get(i) ?? initiallyCollapsed;
         return (
-          <FileDiff
-            key={`${i}:${file.name}`}
-            fileDiff={file}
-            options={{
-              themeType: theme,
-              tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH,
-              maxLineDiffLength: TOKENIZE_MAX_LINE_LENGTH,
-              /* 予算に余裕がない file は行内 word 差分を切る(decoration が
-               * 1 文字あたり 1 node 上乗せされるため) */
-              ...(inlineDiff ? {} : { lineDiffType: LINE_DIFF_TYPE_PLAIN }),
-              /* 予算超過 file を展開したときは highlight も切って描画する
-               * (クリック後も固まらないように) */
-              ...(overBudget ? { tokenizeMaxLength: TOKENIZE_MAX_LENGTH_PLAIN } : {}),
-            }}
+          // file type change は同 path が 2 entry になるため path 単独を key にしない
+          <div
             className="diff-file"
-            renderHeaderMetadata={
-              overBudget
-                ? () => (
-                    <button type="button" className="diff-expand" onClick={() => setExpanded(null)}>
-                      折りたたむ
-                    </button>
-                  )
-                : undefined
-            }
-          />
+            key={`${i}:${file.name}`}
+            data-collapsed={collapsed ? "" : undefined}
+            ref={(el) => registerHost(i, el)}
+          >
+            {/* key を付けて作り直さないこと — shadow root に前の placeholder /
+                buffer が残り、file の高さが倍になる(DiffOverlay の nudge を参照) */}
+            <FileDiff
+              fileDiff={file}
+              options={{
+                /* light/dark 両方を渡すとライブラリが両方の CSS 変数を出すので、
+                 * 外観モードの切り替えは themeType だけで即座に効く。 */
+                theme: diffThemes,
+                themeType: theme,
+                collapsed,
+                /* スクロール中もファイル名を上端に貼り付ける(GitHub の
+                 * files changed と同じ)。ヘッダは file ごとの shadow root 内で
+                 * sticky になるので、次の file に入れ替わる */
+                stickyHeader: true,
+                /* 長い行は横スクロールさせず折り返す。狭いコンパクト表示で必須で、
+                 * 全画面でも file ごとの横スクロールバーが消えて読みやすい。 */
+                overflow: "wrap",
+                diffStyle: stack ? "unified" : "split",
+                /* 片側寄せは split のときだけの話。unified には single 面が無い */
+                ...(stack ? {} : { unsafeCSS: SINGLE_SIDE_CSS }),
+                tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH,
+                maxLineDiffLength: TOKENIZE_MAX_LINE_LENGTH,
+                /* 内容量が多すぎる file は highlight / 行内 word 差分を切る。
+                 * どちらも描画範囲ではなく file 全体に走る処理なので仮想化では
+                 * 有界にならない(lib/diff.ts 冒頭のコメントを参照)。 */
+                ...(highlight ? {} : { tokenizeMaxLength: TOKENIZE_MAX_LENGTH_PLAIN }),
+                ...(inlineDiff ? {} : { lineDiffType: LINE_DIFF_TYPE_PLAIN }),
+              }}
+              renderHeaderMetadata={() => (
+                <span className="diff-file-acts">
+                  {/* 行数は「大きい file だ」という情報なので、畳んでいる間は
+                      ボタンの外にテキストで残す */}
+                  {collapsed && (
+                    <span className="diff-file-lines">{lines.toLocaleString()} 行</span>
+                  )}
+                  <IconButton
+                    label={collapsed ? `${lines.toLocaleString()} 行 — 展開` : "折りたたむ"}
+                    onClick={() => onToggle(i)}
+                  >
+                    {collapsed ? <IconChevronDown /> : <IconChevronUp />}
+                  </IconButton>
+                </span>
+              )}
+            />
+          </div>
         );
       })}
-      {omitted.length > 0 && (
-        <section className="diff-omitted" aria-label="patch が省略されたファイル">
-          <h4>patch が省略されたファイル</h4>
-          <ul>
-            {omitted.map((f) => (
-              <li key={f.path}>
-                <code>{f.path}</code>
-                <span className="muted">
-                  {" — "}
-                  {f.omittedReason ? OMITTED_REASON_LABELS[f.omittedReason] : "省略"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
     </>
   );
 });
@@ -126,40 +171,94 @@ export function DiffOverlay({
   title,
   query,
   token,
+  anchorKey = null,
+  escapeEnabled = true,
+  onOpenSettings,
   onClose,
   onClosed,
 }: {
   title: string;
   query: Record<string, string>;
   token: string;
+  /* コンパクト表示の左端を決める #drawer を取り直す合図。ドロワーは
+   * key={selected} で作り直されるので、選択が変わると要素の実体も変わる。 */
+  anchorKey?: string | null;
+  /* 設定モーダルが上に重なっている間は Escape を譲る(下の diff は開いたまま) */
+  escapeEnabled?: boolean;
+  /* 全画面表示中は Nav が inert なので、テーマ設定への入口をここにも置く */
+  onOpenSettings: () => void;
   onClose: () => void;
   /* unmount 時、背面の inert 解除「後」に呼ぶ(起点ボタンへのフォーカス復帰用。
    * inert な subtree への focus は実ブラウザで拒否されるため順序が本質)。 */
   onClosed?: () => void;
 }) {
   const { theme } = useTheme();
+  const { light, dark } = useDiffTheme();
+  const { view: viewMode, setView } = useDiffView();
+  const { layout, setLayout } = useDiffLayout();
+  /* 全画面のときだけモーダル。コンパクトは詳細ドロワーと並べて両方触れることが
+   * 目的なので、背面を inert にせず aria-modal も立てない。 */
+  const modal = viewMode === "full";
+  /* auto レイアウトの判定に使うビューポート幅。ResizeObserver は使わない —
+   * タブが非表示のあいだ配信が止まるうえ、パネル幅はここで計算できる。 */
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const diffThemes = useMemo(() => ({ light, dark }), [light, dark]);
   const { state, refetch } = useDiff(apiUrl("/api/diff", token, query));
   const rootRef = useRef<HTMLDivElement>(null);
+  const hostsRef = useRef(new Map<number, HTMLDivElement>());
+  const { width: compactWidth, gripProps } = useDiffWidth();
   /* ref 経由で最新を呼ぶ — effect を [] のまま保ち、再実行による inert の
    * 瞬断を避ける */
   const onClosedRef = useRef(onClosed);
   onClosedRef.current = onClosed;
 
-  /* モーダル化: 初期フォーカスを移し、背面(#root 配下の Nav / テーブル /
-   * Drawer)を inert にしてフォーカスと操作を遮る。閉じたら解除。 */
+  /* 背面(#root 配下の Nav / テーブル / Drawer)を inert にしてフォーカスと操作を
+   * 遮る。unmount 時の cleanup 順は宣言順なので、下の onClosed より必ず先に走る
+   * (inert な subtree への focus は実ブラウザで拒否されるため順序が本質)。 */
   useEffect(() => {
-    rootRef.current?.focus();
+    if (!modal) return;
     const root = document.getElementById("root");
     root?.setAttribute("inert", "");
-    return () => {
-      root?.removeAttribute("inert");
-      onClosedRef.current?.();
-    };
+    return () => root?.removeAttribute("inert");
+  }, [modal]);
+
+  useEffect(() => {
+    rootRef.current?.focus();
+    return () => onClosedRef.current?.();
   }, []);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  /* コンパクト表示の右端を詳細ドロワーの左端に合わせる。ドロワーは幅可変
+   * (--drawer-w のドラッグ)かつ選択が無ければ存在しないので、実測して CSS 変数へ
+   * 落とす。ドロワーが無いときはビューポート右端に寄せる。 */
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || viewMode !== "compact") return;
+    const drawer = document.getElementById("drawer");
+    const sync = () => {
+      const left = drawer?.getBoundingClientRect().left ?? window.innerWidth;
+      const right = Math.max(0, Math.round(window.innerWidth - left));
+      el.style.setProperty("--diff-anchor-right", `${right}px`);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    if (drawer) ro.observe(drawer);
+    window.addEventListener("resize", sync);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", sync);
+    };
+  }, [viewMode, anchorKey]);
 
   /* capture 段で preventDefault を立て、Drawer の document(bubble)listener に
    * Escape を渡さない — オーバーレイだけを閉じ、下の Drawer は開いたまま残す。 */
   useEffect(() => {
+    if (!escapeEnabled) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.defaultPrevented) {
         e.preventDefault();
@@ -168,17 +267,166 @@ export function DiffOverlay({
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [onClose]);
+  }, [onClose, escapeEnabled]);
 
   const diff = state.phase === "ready" ? state.diff : null;
+  const patch = diff?.patch ?? "";
   /* snapshot tick ごとの再レンダーで files 全走査をやり直さない */
   const view = useMemo(
-    () =>
-      diff
-        ? { warning: diffWarning(diff), meta: diffMeta(diff), omitted: omittedFiles(diff.files) }
-        : null,
+    () => (diff ? { warning: diffWarning(diff), meta: diffMeta(diff) } : null),
     [diff],
   );
+  const parsed = useMemo(() => parseDiffFiles(patch), [patch]);
+  const plan = useMemo(() => planDiffFiles(parsed), [parsed]);
+  const byPath = useMemo(() => indexDiffFilesByPath(parsed), [parsed]);
+  const selectable = useMemo(() => new Set(byPath.keys()), [byPath]);
+
+  /* 初期方針(planDiffFiles)に対するユーザーの上書き。複数 file を同時に展開した
+   * ままにできる。patch 自体を key に持つ — 再取得で patch が変わると index の
+   * 意味も変わるが、passive effect でのリセットでは間に合わない(@pierre/diffs は
+   * ref/layout 経路で同期 mount するので、リセット前の 1 回で古い index の
+   * 折りたたみ状態を新しい file に適用してしまう)。 */
+  const [ov, setOv] = useState<{ patch: string; map: ReadonlyMap<number, boolean> }>({
+    patch,
+    map: EMPTY_OVERRIDES,
+  });
+  const overrides = ov.patch === patch ? ov.map : EMPTY_OVERRIDES;
+
+  /* 描画位置の作り直し。ライブラリの virtualizer は各 file の scroll 内オフセットを
+   * 一度しか計算せず、更新するのは「root か content の resize」を検知したときだけ
+   * (`onRender(dirty)` の dirty 経路)。通常のスクロールでは前後の file が実描画で
+   * 伸縮してもオフセットが古いままになり、行は描かれているのに画面外へ置かれて空白に
+   * 見える。そこで root の border-box 高さを 1px 動かして resize を起こし、全 file の
+   * オフセットを取り直させる(実測: 916px の空白が 2 フレームで 8px になる)。
+   *
+   * FileDiff を key で作り直す手も効くが採ってはいけない。React 側が要素を持つ
+   * (isContainerManaged)ため cleanUp は shadow root の placeholder / buffer を
+   * 残したまま参照だけ捨て、作り直した instance がその上に重ねて描く。実測で
+   * 1 回の作り直しだけで全 file の高さが 2 倍になり、文書長が 92,098px →
+   * 184,042px に膨らんで広範囲が空白になった。 */
+  const nudgedRef = useRef(false);
+  const nudge = useCallback(() => {
+    const scroller = rootRef.current?.querySelector<HTMLElement>(".diff-body");
+    if (!scroller) return;
+    nudgedRef.current = !nudgedRef.current;
+    scroller.style.marginBottom = nudgedRef.current ? "1px" : "0px";
+  }, []);
+
+  const onToggle = useCallback(
+    (i: number) => {
+      const collapsed = overrides.get(i) ?? plan[i]?.initiallyCollapsed ?? false;
+      setOv((prev) => {
+        const map = new Map(prev.patch === patch ? prev.map : EMPTY_OVERRIDES);
+        map.set(i, !collapsed);
+        return { patch, map };
+      });
+    },
+    [overrides, plan, patch],
+  );
+  const setAll = useCallback(
+    (collapsed: boolean) => {
+      const map = new Map<number, boolean>();
+      plan.forEach((_, i) => map.set(i, collapsed));
+      setOv({ patch, map });
+    },
+    [plan, patch],
+  );
+  const onExpandAll = useCallback(() => setAll(false), [setAll]);
+  const onCollapseAll = useCallback(() => setAll(true), [setAll]);
+
+  const registerHost = useCallback((i: number, el: HTMLDivElement | null) => {
+    if (el) hostsRef.current.set(i, el);
+    else hostsRef.current.delete(i);
+  }, []);
+
+  /* サイドバーから本文へ飛ぶ。スクロールだけでは着地先の file が placeholder の
+   * まま残るので、nudge で全 file のオフセットと描画範囲を取り直させる。高さが
+   * 確定すると位置がずれるので、次フレームでもう一度合わせる。 */
+  const onSelectFile = useCallback(
+    (path: string) => {
+      const i = byPath.get(path)?.[0];
+      if (i === undefined) return;
+      const target = hostsRef.current.get(i);
+      const scroller = target?.closest<HTMLElement>(".diff-body");
+      if (!target || !scroller) return;
+      if (overrides.get(i) ?? plan[i]?.initiallyCollapsed) {
+        setOv((prev) => {
+          const map = new Map(prev.patch === patch ? prev.map : EMPTY_OVERRIDES);
+          map.set(i, false);
+          return { patch, map };
+        });
+      }
+      const align = () => {
+        scroller.scrollTop +=
+          target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      };
+      align();
+      nudge();
+      requestAnimationFrame(() => requestAnimationFrame(align));
+    },
+    [byPath, overrides, plan, patch, nudge],
+  );
+
+  /* auto は本文領域の幅で決め、split / stack はユーザーの明示指定をそのまま使う。
+   * ヘッダと本文は縦に積むだけなので、本文領域の幅 = パネルの幅。全画面と、
+   * コンパクトが全幅パネルへ落ちる幅(style.css の 1100px と同期)ではビューポート
+   * 幅、それ以外はグリップで決めた幅。 */
+  const panelWidth = modal || viewportWidth <= COMPACT_FULL_WIDTH_PX ? viewportWidth : compactWidth;
+  const stack = layout === "auto" ? panelWidth < AUTO_SPLIT_MIN_PX : layout === "stack";
+
+  /* 表示モードの切替も並べ方の切替も、全 file の高さが変わる。幅の変化だけでは
+   * root の block size が動かないので、明示的に取り直させる。 */
+  const prevLayoutRef = useRef(`${viewMode}:${stack}`);
+  useEffect(() => {
+    const key = `${viewMode}:${stack}`;
+    if (prevLayoutRef.current === key) return;
+    prevLayoutRef.current = key;
+    nudge();
+  }, [viewMode, stack, nudge]);
+
+  /* スクロール中の空白の修復。判定は「見えている帯に実際の行があるか」だけ。
+   * sticky なファイル名ヘッダは数えない — 空白の画面でもヘッダだけは貼り付いて
+   * 見えているため。折りたたみ中の file は行が無くて当然なので対象外。 */
+  useEffect(() => {
+    const scroller = rootRef.current?.querySelector<HTMLElement>(".diff-body");
+    if (!scroller) return;
+    let frame = 0;
+    let settle = 0;
+    const isBlank = () => {
+      const port = scroller.getBoundingClientRect();
+      for (const host of hostsRef.current.values()) {
+        if (host.hasAttribute("data-collapsed")) continue;
+        const box = host.getBoundingClientRect();
+        const top = Math.max(box.top, port.top);
+        const bottom = Math.min(box.bottom, port.bottom);
+        if (bottom - top < BLANK_REPAIR_MIN_PX) continue;
+        const rows = host
+          .querySelector("diffs-container")
+          ?.shadowRoot?.querySelectorAll("[data-line]");
+        /* 行は文書順なので、先頭と末尾で描画済みの範囲が分かる */
+        const first = rows?.item(0)?.getBoundingClientRect();
+        const last = rows?.item(rows.length - 1)?.getBoundingClientRect();
+        if (!first || !last) return true;
+        if (last.bottom <= top || first.top >= bottom) return true;
+      }
+      return false;
+    };
+    const check = () => {
+      frame = 0;
+      if (isBlank()) nudge();
+    };
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(check);
+      clearTimeout(settle);
+      settle = window.setTimeout(check, BLANK_REPAIR_SETTLE_MS);
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(settle);
+      scroller.removeEventListener("scroll", onScroll);
+    };
+  }, [patch, nudge]);
 
   /* #drawer(sticky/fixed)はスタッキングコンテキストを作るため、その子として
    * 描くと z-index が閉じ込められ nav の下に潜る。portal で body 直下に出す。 */
@@ -186,13 +434,21 @@ export function DiffOverlay({
     <div
       className="diff-overlay"
       id="diff-overlay"
-      role="dialog"
-      aria-modal="true"
+      role={modal ? "dialog" : "complementary"}
+      aria-modal={modal || undefined}
       aria-label="worktree diff"
       data-theme={theme}
+      data-mode={viewMode}
+      data-layout={stack ? "stack" : "split"}
+      /* 幅は CSS 変数だけで制御する(inline width にすると狭い画面の media query が
+         cascade で勝てなくなる — ドロワーと同じ理由)。全画面では使われない。 */
+      style={{ "--diff-w": `${compactWidth}px` } as CSSProperties}
       ref={rootRef}
       tabIndex={-1}
     >
+      {/* role / aria / tabIndex は hook が幅と一体で提供する(スプレッド漏れで
+          セパレータ意味論だけ落ちる事故を防ぐ) */}
+      {viewMode === "compact" && <div className="diff-grip" {...gripProps} />}
       <header className="diff-head">
         <h3>
           <span className="diff-title">{title}</span>
@@ -205,38 +461,88 @@ export function DiffOverlay({
         <span className="diff-meta" id="diff-meta">
           {view?.meta ?? ""}
         </span>
-        <button
-          type="button"
+        {/* ラベルは aria-label とツールチップ(data-tip)が持つ。ボタン本体は
+            アイコンだけにして、狭いコンパクト表示でもヘッダを 1 行に収める。 */}
+        <IconButton
+          id="diff-reload"
           className="diff-reload"
-          onClick={refetch}
+          label="再取得"
           disabled={state.phase === "loading"}
+          onClick={refetch}
         >
-          再取得
-        </button>
-        <button type="button" id="diff-close" aria-label="diff を閉じる" onClick={onClose}>
-          ✕
-        </button>
+          <IconRefresh />
+        </IconButton>
+        {/* 1 個で auto -> split -> stack を巡回する。ラベルは現在の設定と、
+            押したときに何になるかの両方を名乗る。 */}
+        <IconButton
+          id="diff-layout"
+          label={`レイアウト: ${LAYOUT_LABELS[layout]}(クリックで${LAYOUT_LABELS[LAYOUT_CYCLE[layout]]})`}
+          onClick={() => setLayout(LAYOUT_CYCLE[layout])}
+        >
+          {layout === "auto" ? (
+            <IconLayoutAuto stack={stack} />
+          ) : layout === "split" ? (
+            <IconLayoutSplit />
+          ) : (
+            <IconLayoutStack />
+          )}
+        </IconButton>
+        <IconButton
+          id="diff-view-mode"
+          label={viewMode === "full" ? "コンパクト表示" : "全画面表示"}
+          onClick={() => setView(viewMode === "full" ? "compact" : "full")}
+        >
+          {viewMode === "full" ? <IconMinimize /> : <IconMaximize />}
+        </IconButton>
+        <IconButton id="diff-settings" label="テーマ設定" popup onClick={onOpenSettings}>
+          <IconTheme />
+        </IconButton>
+        <IconButton id="diff-close" label="diff を閉じる" onClick={onClose}>
+          <IconClose />
+        </IconButton>
       </header>
       {view?.warning && (
         <div className="diff-banner" role="status">
           {view.warning}
         </div>
       )}
-      <div className="diff-body">
-        {state.phase === "loading" && <div className="diff-note">diff を取得中…(最大 10 秒)</div>}
-        {state.phase === "error" && (
-          <div className="diff-note diff-error" role="alert">
-            {state.message}
+      {state.phase === "loading" && <div className="diff-note">diff を取得中…(最大 10 秒)</div>}
+      {state.phase === "error" && (
+        <div className="diff-note diff-error" role="alert">
+          {state.message}
+        </div>
+      )}
+      {diff &&
+        (diff.files.length === 0 ? (
+          <div className="diff-note">merge-base からの変更はありません</div>
+        ) : (
+          <div className="diff-main">
+            <DiffFileList
+              files={diff.files}
+              selectable={selectable}
+              onSelect={onSelectFile}
+              onExpandAll={onExpandAll}
+              onCollapseAll={onCollapseAll}
+            />
+            {/* Virtualizer の root がスクロールコンテナ、content が中身。画面外の
+                file は高さだけ確保した placeholder になる。 */}
+            <Virtualizer
+              className="diff-body"
+              contentClassName="diff-files"
+              config={VIRTUALIZER_CONFIG}
+            >
+              <DiffFiles
+                plan={plan}
+                overrides={overrides}
+                theme={theme}
+                diffThemes={diffThemes}
+                stack={stack}
+                registerHost={registerHost}
+                onToggle={onToggle}
+              />
+            </Virtualizer>
           </div>
-        )}
-        {diff &&
-          view &&
-          (diff.files.length === 0 ? (
-            <div className="diff-note">merge-base からの変更はありません</div>
-          ) : (
-            <DiffFiles diff={diff} omitted={view.omitted} theme={theme} />
-          ))}
-      </div>
+        ))}
     </div>,
     document.body,
   );

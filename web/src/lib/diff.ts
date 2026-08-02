@@ -10,56 +10,41 @@ export function parseDiffFiles(patch: string): FileDiffMetadata[] {
   return parsePatchFiles(patch).flatMap((p) => p.files);
 }
 
-/* サーバーの byte 上限(1 MiB 応答)は DOM コストを制限しない。worktree 由来の
- * patch は敵性入力で、契約内でも次を作れる:
+/* worktree 由来の patch は敵性入力で、サーバーの byte 上限(1 MiB 応答)は DOM
+ * コストを制限しない。契約内でも次を作れる:
  *   (a) 改行だけの 256 KiB ファイル → 約 26 万行
  *   (b) 交互トークン(`a+1+`…)の高密度行 → Shiki が 1 文字 1 span まで出す
  *   (c) 399 文字の置換行 → 行内 word 差分が decoration span を大量に生む
- * 平均実測値で見積もると破られるため、コストは最悪ケースで数える:
- *   highlight       1 文字あたり span + text の 2 node
- *   inline diff     さらに 1 文字あたり 1 node(実測 0.5 decoration/文字 × 2)
- *   行の枠          1 行あたり gutter/wrapper で 8 node
- * 見積りは実測と誤差 5% 以内(300 行 × 60 文字 = 予測 38,400 / 実測 37,312、
- * 1,500 行 × 40 文字 = 予測 132,000 / 実測 126,112)。
+ * これを DOM node の総量予算で受けると、正当な PR サイズ(20 file × 200 行)でも
+ * 予算が数 file で尽きて残りが折りたたまれる。そこで予算ではなく仮想化で受ける:
+ * DiffOverlay は file 列を @pierre/diffs の <Virtualizer> で包み、画面外の file は
+ * 高さだけ確保した placeholder(shadow root + div 1 個)になる。描画 node 数は
+ * patch のサイズではなくビューポートに比例するので、(a) も 500 files も有界。
  *
- * 予算に収まらない file は 2 段階で軽くする:
- *   1. inline diff だけ切って highlight は残す(見積り 2 node/文字へ)
- *   2. それでも収まらなければ collapsed(ヘッダのみ)にして展開をクリックに委ねる
- * 展開時は highlight も inline diff も切るので、クリック後も固まらない —
- * 上記 (b) の 2 file 版は既定で 262,112 node / 11.9 秒、この経路で
- * 1,016 node / 113ms、(c) の 500 行 × 399 文字は 6,065ms → 349ms。 */
-export const NODES_PER_CHAR = 2;
-export const NODES_PER_CHAR_INLINE_DIFF = 1;
-export const NODES_PER_LINE = 8;
-/* FileDiff を 1 つ mount するだけで乗る固定コスト(shadow DOM の header、
- * SVG sprite、style)。実測 108 node/instance で、collapsed でも同じだけ
- * 掛かる — 契約上限の 500 files を collapsed で並べるだけで 54,000 node に
- * なる。そのため collapsed file は FileDiff を mount せず自前の軽量行で出し、
- * mount する file にはこの固定分を予算から引く。 */
-export const FIXED_NODES_PER_FILE = 120;
-export const MAX_FILE_RENDER_NODES = 40_000;
-export const MAX_TOTAL_RENDER_NODES = 60_000;
+ * ここに残る 3 つの閾値は、仮想化でも有界にならない「file 単位で一度に走る処理」
+ * だけを抑えるためのもの:
+ *   - 折りたたみ    : 1 file が長すぎると一覧性を失う(描画コストの話ではない)
+ *   - highlight     : Shiki のトークン化は描画範囲ではなく file 全体に走る
+ *   - inline diff   : 行内 word 差分の計算も同じく file 全体に走る
+ * 行の内容量は行数では測れない((b) は 66 行で 65,000 文字)ため、後ろ 2 つは
+ * 描画対象の総文字数で判定する。 */
 
-/* 展開(plaintext 描画)しても許容できる行数の上限。highlight と inline diff を
- * 切っても 1 行あたり gutter/wrapper が残るため、行数だけで固まらせられる —
- * 契約内で作れる 256 KiB の改行のみ file は約 26 万行、実測では 20,000 行の
- * plaintext で 100,112 node / 1.1 秒だった。これを超える file は展開させず、
- * 行数だけ表示する(レビューは TUI か GitHub PR 側に委ねる)。 */
-export const MAX_EXPANDABLE_LINES = 8_000;
+/* これ以上の描画行数を持つ file だけ初期状態で折りたたむ。それ未満は展開して出す。 */
+export const COLLAPSE_LINE_THRESHOLD = 1_000;
 
-export const TOKENIZE_MAX_LINE_LENGTH = 400;
-
-/* isDiffMassive(行数 > tokenizeMaxLength)を必ず満たさせて plaintext 描画に
- * 落とすための値。展開された予算超過 file に使う。 */
+/* Shiki のトークン化を諦めて plaintext で描画する総文字数。tokenizeMaxLength に
+ * 0 を渡すと isDiffMassive が必ず成立して plaintext 経路に落ちる。 */
+export const HIGHLIGHT_MAX_CHARS = 150_000;
 export const TOKENIZE_MAX_LENGTH_PLAIN = 0;
 
-/* 予算超過 file を展開するときは highlight だけでなく inline diff も切る。
- * ライブラリ既定の `word-alt` は plaintext 描画でも残り、行内 word 差分の
- * 計算と decoration span を生む。ライブラリ自身が inline diff を自動停止する
- * のは 1,000 行超のときだけなので、ちょうど 1,000 行の置換 patch は素通りする
- * (実測: 500 行 × 399 文字の置換 2 side で 6,065ms → `none` で 287ms、
- * decoration 1,500 → 0)。 */
+/* 行内 word 差分を切る総文字数。ライブラリ既定の `word-alt` は plaintext 描画でも
+ * 残り、ライブラリ自身が自動停止するのは 1,000 行超のときだけなので、行数の
+ * 少ない高密度 patch は素通りする(実測: 500 行 × 399 文字の置換 2 side で
+ * 6,065ms → `none` で 287ms、decoration 1,500 → 0)。 */
+export const INLINE_DIFF_MAX_CHARS = 30_000;
 export const LINE_DIFF_TYPE_PLAIN = "none";
+
+export const TOKENIZE_MAX_LINE_LENGTH = 400;
 
 /* hunk 単位の描画行数の合計。file 単位の unifiedLineCount は hunk 前の
  * 折りたたみ済み context(collapsedBefore)を含む絶対位置ベースのため
@@ -82,64 +67,31 @@ export function renderedCharCount(f: FileDiffMetadata): number {
   return n;
 }
 
-/* 初期 mount した場合の最悪ケース DOM node 数の見積り。inline diff(行内 word
- * 差分)を有効にすると decoration が上乗せされるので、その分を含めた見積りと
- * 含めない見積りを分けて持つ。 */
-export function estimatedRenderNodes(f: FileDiffMetadata, withInlineDiff = false): number {
-  const perChar = withInlineDiff ? NODES_PER_CHAR + NODES_PER_CHAR_INLINE_DIFF : NODES_PER_CHAR;
-  return (
-    FIXED_NODES_PER_FILE + perChar * renderedCharCount(f) + NODES_PER_LINE * renderedLineCount(f)
-  );
-}
-
-export interface RenderPlanEntry {
+export interface DiffFilePlan {
   file: FileDiffMetadata;
   lines: number;
-  nodes: number;
-  /* 予算に収まらず collapsed で mount する(展開はクリック) */
-  overBudget: boolean;
-  /* 行内 word 差分を有効にできる(予算に余裕がある) */
+  chars: number;
+  /* 初期状態で折りたたむ(ユーザーの展開操作で上書きされる) */
+  initiallyCollapsed: boolean;
+  /* Shiki の syntax highlight を有効にできる */
+  highlight: boolean;
+  /* 行内 word 差分を有効にできる */
   inlineDiff: boolean;
-  /* 展開させると行数だけで固まるため、展開自体を許さない */
-  tooLargeToExpand: boolean;
 }
 
-export function planFileRendering(files: FileDiffMetadata[]): RenderPlanEntry[] {
-  let budget = MAX_TOTAL_RENDER_NODES;
+/* 各 file の描画方針。file 同士は独立で、走る合計予算は持たない
+ * (合計の有界性は仮想化が担う — 冒頭のコメントを参照)。 */
+export function planDiffFiles(files: FileDiffMetadata[]): DiffFilePlan[] {
   return files.map((file) => {
     const lines = renderedLineCount(file);
-    const withInline = estimatedRenderNodes(file, true);
-    const plain = estimatedRenderNodes(file);
-    const fits = (n: number) => n <= MAX_FILE_RENDER_NODES && n <= budget;
-    if (fits(withInline)) {
-      budget -= withInline;
-      return {
-        file,
-        lines,
-        nodes: withInline,
-        overBudget: false,
-        inlineDiff: true,
-        tooLargeToExpand: false,
-      };
-    }
-    if (fits(plain)) {
-      budget -= plain;
-      return {
-        file,
-        lines,
-        nodes: plain,
-        overBudget: false,
-        inlineDiff: false,
-        tooLargeToExpand: false,
-      };
-    }
+    const chars = renderedCharCount(file);
     return {
       file,
       lines,
-      nodes: plain,
-      overBudget: true,
-      inlineDiff: false,
-      tooLargeToExpand: lines > MAX_EXPANDABLE_LINES,
+      chars,
+      initiallyCollapsed: lines >= COLLAPSE_LINE_THRESHOLD,
+      highlight: chars <= HIGHLIGHT_MAX_CHARS,
+      inlineDiff: chars <= INLINE_DIFF_MAX_CHARS,
     };
   });
 }
@@ -151,8 +103,46 @@ export const OMITTED_REASON_LABELS: Record<Exclude<DiffOmittedReason, "">, strin
   responseLimit: "応答上限(1 MiB)で省略",
 };
 
-export function omittedFiles(files: DiffFileEntry[]): DiffFileEntry[] {
-  return files.filter((f) => !f.patchIncluded);
+export interface DiffFileGroup {
+  /* 末尾 "/" 付きのディレクトリ。リポジトリ直下は "" */
+  dir: string;
+  files: DiffFileEntry[];
+}
+
+export function fileDir(path: string): string {
+  const at = path.lastIndexOf("/");
+  return at < 0 ? "" : path.slice(0, at + 1);
+}
+
+export function fileBase(path: string): string {
+  const at = path.lastIndexOf("/");
+  return at < 0 ? path : path.slice(at + 1);
+}
+
+/* サイドバー用に同じディレクトリの file をまとめる。path の byte 順では
+ * `a/b.ts` < `a/c/d.ts` < `a/e.ts` のように同一ディレクトリが連続しないので、
+ * 連続塊ではなく Map で束ねる(グループの並びは初出順)。 */
+export function groupDiffFilesByDir(files: DiffFileEntry[]): DiffFileGroup[] {
+  const groups = new Map<string, DiffFileEntry[]>();
+  for (const f of files) {
+    const dir = fileDir(f.path);
+    const at = groups.get(dir);
+    if (at) at.push(f);
+    else groups.set(dir, [f]);
+  }
+  return [...groups].map(([dir, entries]) => ({ dir, files: entries }));
+}
+
+/* patch を持つ file の path → パース済み patch の index。file type change は
+ * 同 path で 2 entry になるため配列で持つ(先頭へ飛ばす)。 */
+export function indexDiffFilesByPath(files: FileDiffMetadata[]): Map<string, number[]> {
+  const byPath = new Map<string, number[]>();
+  files.forEach((f, i) => {
+    const at = byPath.get(f.name);
+    if (at) at.push(i);
+    else byPath.set(f.name, [i]);
+  });
+  return byPath;
 }
 
 /* contract の指示: truncated、またはいずれかの patchIncluded=false なら
