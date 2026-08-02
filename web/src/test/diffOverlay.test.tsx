@@ -1247,6 +1247,27 @@ describe("diff オーバーレイ", () => {
     ).toBeInTheDocument();
   });
 
+  it("同じ行キーのまま synthetic 行に置き換わったら diff を閉じる", async () => {
+    /* 記録済み pane を cleanup すると sessionview は同じ rowKey のまま notStarted の
+     * synthetic 行を作り直すので、行の存在だけを見ていると overlay が残り、
+     * worktree も導線も無い行に cleanup 前の patch を出し続けてしまう。 */
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => {
+      expect(shadowText()).toContain("hello_marker");
+    });
+
+    // 同じ issue 番号のまま、worktree を持たない synthetic 行へ置き換わる
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [makeQueuedPane({ issueNum: 101, displayName: "Fix thing" })]),
+      ]),
+    );
+    await waitFor(() => {
+      expect(overlay).not.toBeInTheDocument();
+    });
+  });
+
   it("未開始(synthetic)行と shell 行には diff ボタンを出さない", async () => {
     const user = userEvent.setup();
     render(<App />);

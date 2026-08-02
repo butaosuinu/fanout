@@ -39,3 +39,23 @@ export function coversBackground({
   const right = Math.max(0, Math.min(anchorRight, viewportWidth - width));
   return viewportWidth - right - width <= 0; // 左に 1px も残らない
 }
+
+/* 本文領域(= パネル)の幅。
+ *
+ * coversBackground と混同しないこと。covering は「一覧が 1px も残らない配置か」で
+ * あって幅ではない。ドロワーが広くて一覧が隠れるだけのとき、パネルは compactWidth
+ * のままなので、covering でビューポート幅に置き換えると狭い本文を左右 2 面に
+ * 割ってしまう。ビューポート幅になるのは全画面と、CSS が全幅パネルにする
+ * 1,100px 以下だけ。 */
+export function panelWidthFor({
+  view,
+  viewportWidth,
+  compactWidth,
+}: {
+  view: DiffView;
+  viewportWidth: number;
+  compactWidth: number;
+}): number {
+  if (view === "full" || viewportWidth <= COMPACT_FULL_WIDTH_PX) return viewportWidth;
+  return compactWidth;
+}

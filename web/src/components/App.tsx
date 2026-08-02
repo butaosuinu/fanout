@@ -51,6 +51,15 @@ export function DiffPending({ enabled, onCancel }: { enabled: boolean; onCancel:
     if (!enabled) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
+      /* capture 段は React の handler より先に走る。背面で popup(フィルタの
+       * dropdown 等)が開いていたらそちらの Escape を横取りしない — 1 回のキーで
+       * popup と diff 起動の両方が消えてしまう。overlay が出た後の判定
+       * (フォーカスが自分の中にあるか)と同じ考え方だが、待機中は自分の DOM が
+       * 無いので「フォーカス先が popup を名乗っているか」で見る。 */
+      const active = document.activeElement;
+      if (active instanceof Element && active.closest('[aria-expanded="true"],[role="dialog"]')) {
+        return;
+      }
       e.preventDefault();
       onCancel();
     };
@@ -75,6 +84,11 @@ function focusFirstConnected(refs: RefObject<HTMLElement | null>[]) {
       return;
     }
   }
+}
+
+function sameQuery(a: Record<string, string>, b: Record<string, string>): boolean {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
 }
 
 function parentsOf(snap: Snapshot | null): Set<string> {
@@ -115,10 +129,17 @@ export function App() {
   }, [snap]);
 
   /* diff オーバーレイの対象行が消えた場合も同じく閉じる(表から直接開いた
-   * ときは Drawer が開いていないので、選択の後始末とは別に要る)。 */
+   * ときは Drawer が開いていないので、選択の後始末とは別に要る)。
+   *
+   * 行の存在だけでは足りない。記録済み pane を cleanup すると sessionview は
+   * 同じ rowKey のまま notStarted の synthetic 行を作り直すので、findPaneEntry は
+   * 成功し続ける。その行には worktree も diff 導線も無いのに、cleanup 前に取った
+   * patch を現在の差分として出したままになる。同じ query をまだ組めるかまで見る。 */
   useEffect(() => {
     if (!snap || !diffTarget) return;
-    if (!findPaneEntry(snap, diffTarget.key)) setDiffTarget(null);
+    const entry = findPaneEntry(snap, diffTarget.key);
+    const query = entry ? diffQuery(entry.parent, entry.pane) : null;
+    if (!query || !sameQuery(query, diffTarget.query)) setDiffTarget(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snap]);
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coversBackground } from "./diffView";
+import { coversBackground, panelWidthFor } from "./diffView";
 
 /* 覆っているかはモードだけでは決まらない。パネルは右端がドロワーの左端に貼り付き、
  * そこを越えた分は左へ伸びるので、1,100px を超える画面でも一覧が 1px も残らない
@@ -38,5 +38,29 @@ describe("coversBackground", () => {
     expect(
       coversBackground({ view: "compact", viewportWidth: 2560, anchorRight: 0, width: 2432 }),
     ).toBe(false);
+  });
+});
+
+/* covering と混同しない。ドロワーが広くて一覧が隠れる配置でも、パネルの実幅は
+ * compactWidth のまま。ビューポート幅で判定すると、狭い本文を左右 2 面に割り、
+ * container query でサイドバーまで消える。 */
+describe("panelWidthFor", () => {
+  it("全画面はビューポート幅", () => {
+    expect(panelWidthFor({ view: "full", viewportWidth: 2560, compactWidth: 760 })).toBe(2560);
+  });
+
+  it("1,100px 以下のコンパクトはビューポート幅(CSS が全幅パネルにする)", () => {
+    expect(panelWidthFor({ view: "compact", viewportWidth: 1100, compactWidth: 760 })).toBe(1100);
+  });
+
+  it("覆っていてもコンパクトの実幅を使う", () => {
+    const geometry = {
+      view: "compact",
+      viewportWidth: 1200,
+      anchorRight: 840,
+      width: 760,
+    } as const;
+    expect(coversBackground(geometry)).toBe(true); // 一覧は隠れる
+    expect(panelWidthFor({ view: "compact", viewportWidth: 1200, compactWidth: 760 })).toBe(760);
   });
 });

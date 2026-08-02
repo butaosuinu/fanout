@@ -14,7 +14,7 @@ import {
   type Theme,
 } from "../hooks/useSettings";
 import { apiUrl } from "../lib/api";
-import { COMPACT_FULL_WIDTH_PX, coversBackground } from "../lib/diffView";
+import { coversBackground, panelWidthFor, COMPACT_FULL_WIDTH_PX } from "../lib/diffView";
 import { blockBackground } from "../lib/inert";
 import { lockDocumentScroll } from "../lib/scrollLock";
 import {
@@ -426,10 +426,8 @@ export function DiffOverlay({
   );
 
   /* auto は本文領域の幅で決め、split / stack はユーザーの明示指定をそのまま使う。
-   * ヘッダと本文は縦に積むだけなので、本文領域の幅 = パネルの幅。全画面と、
-   * コンパクトが全幅パネルへ落ちる幅(style.css の 1100px と同期)ではビューポート
-   * 幅、それ以外はグリップで決めた幅。 */
-  const panelWidth = covering ? viewportWidth : compactWidth;
+   * ヘッダと本文は縦に積むだけなので、本文領域の幅 = パネルの幅(lib/diffView)。 */
+  const panelWidth = panelWidthFor({ view: viewMode, viewportWidth, compactWidth });
   const stack = layout === "auto" ? panelWidth < AUTO_SPLIT_MIN_PX : layout === "stack";
 
   /* 表示モードの切替も並べ方の切替も、全 file の高さが変わる。幅の変化だけでは

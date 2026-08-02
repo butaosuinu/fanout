@@ -30,6 +30,23 @@ describe("DiffPending", () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
+  it("背面で popup が開いていれば Escape を横取りしない", () => {
+    /* capture 段は React の handler より先に走る。開いている dropdown の Escape を
+     * 奪うと、1 回のキーで popup と diff 起動の両方が消える。 */
+    const onCancel = vi.fn();
+    const trigger = document.createElement("button");
+    trigger.setAttribute("aria-expanded", "true");
+    document.body.appendChild(trigger);
+    try {
+      render(<DiffPending enabled onCancel={onCancel} />);
+      trigger.focus();
+      fireEvent.keyDown(trigger, { key: "Escape" });
+      expect(onCancel).not.toHaveBeenCalled();
+    } finally {
+      trigger.remove();
+    }
+  });
+
   it("他が消費済みの Escape は取らない", () => {
     const onCancel = vi.fn();
     render(<DiffPending enabled onCancel={onCancel} />);
