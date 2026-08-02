@@ -19,7 +19,7 @@ version / session の検査と owned session の検査後、snapshot / list / wa
 console / coordinator / agent launch は加えて #528 の direct-launch 契約完了を要求する。
 2026-07-27 のユーザー決定により、crash 安全機構は「簡素化方針」の判断基準で tmux backend と同水準の密度にする。
 自動 mutation は state lock、送信直前の identity 再照合、mutation 直前の最小意図記録、事後条件検査を通し、応答喪失は再実行時の存在確認で採用または fail-closed `manual_cleanup_required` にする。
-linked worktree 間の intent、console、final row、telemetry routing は canonical git common directory 配下の単一 Herdr control registry を正典とし、worktree-local `state.json` へ分散しない。
+linked worktree 間の intent と console は canonical git common directory 配下の単一 intent journal を正典とし、final row と telemetry routing は owning worktree の `state.json` pane row を正典とする（intent は journal、final は state.json の二層。final row の確定は #528）。
 Herdr backend の `--team` は #528 の fail-closed gate で最初の mutation 前に拒否し、#568 が registry-backed peer 解決を導入した後に再評価する。
 #552 の Herdr nudge 実装は #568 の完了を前提とする。
 child cleanup は保存済み identity の照合後に `worktree remove` を発行し、branch は herdr に削除させず fanout の compare-and-delete だけが削除する。
@@ -73,7 +73,7 @@ tmux-parity は信頼モデルだけでなく機構の密度にも適用し、�
 | attach | custom socket を選ぶ bare `herdr` command を提示する | `session attach <name>` は別 daemon を自動起動し得るため実行しない |
 | focus | Go | TUI の明示操作だけが送信直前再照合後に focus する |
 | `--team` | 拒否（#568 の registry-backed peer 解決まで。暫定 gate は #528） | `--dry-run` を含む backend / flag validation で明確な invocation error を返し、tmux backend の既存経路は変更しない |
-| nudge | Go（#552 は #568 完了後） | shared registry から宛先を解決し、fresh provider signal と送信直前の live process identity が一致する許可状態だけへ no-wait の `agent prompt` を発行する |
+| nudge | Go（#552 は #568 完了後） | `state.json` の Herdr pane row から宛先を解決し、fresh provider signal と送信直前の live process identity が一致する許可状態だけへ no-wait の `agent prompt` を発行する |
 | `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | 同じ non-shell launcher で絶対 path の `fanout __codex-plan-tui` を起動し、`agent start --kind codex` の args にしない |
 | live identity | Go | routing、checkout、terminal、会話、process を別々に照合する |
 | 0.7.5 direct launch の cold restart resume | 保留 | real Codex の direct launch から restart / attach / resume まで未実測のため、`terminal_id` 変化時は `stale` にする |
@@ -178,27 +178,27 @@ marker は owned runtime directory の検査後に exclusive create で書き、
 | 採用した既存 branch（intent の branch 事前存在 = true）を cleanup の compare-and-delete の自動削除対象に含めるか | #531 | 事前存在した branch は自動削除せず残し、fanout が作成した branch だけを削除候補にする |
 | crash recovery の分類・再開分岐で本文の分類に当てはまらない状態の扱い | #527 / #528 | `manual_cleanup_required` |
 
-### 共有 registry と lifecycle 契約
+### intent journal と lifecycle 契約
 
-Herdr control state は physical canonical git common directory 配下の `fanout/herdr-control.json` を唯一の正典とし、同じ directory の `herdr-control.json.lock` で直列化する。
+Herdr の intent journal は physical canonical git common directory 配下の `fanout/herdr-intents.json` を唯一の正典とし、同じ directory の `herdr-intents.json.lock` で直列化する。
 lock、atomic replace（temporary file への書き込みと rename）、fail-fast の水準は tmux backend の `.fanout/state.json`（`internal/infra/state` + `internal/infra/atomicfs`）と同じにし、実装にない durability 要件を追加しない。
-**private namespace gate** は fanout-owned path（`fanout` control directory、owned runtime root、XDG 四 root、config、marker、socket parent）に適用する簡素な owner-only 検査であり、owner UID、exact mode、symlink 不在を照合する。
+**private namespace gate** は owned runtime path（owned runtime root、XDG 四 root、config、marker、socket parent）に適用する簡素な owner-only 検査であり、owner UID、exact mode、symlink 不在を照合する。
 tmux backend と同じく extended ACL は検査せず、移植可能な ACL gate は proof-grade tier で再評価する。
-検査は対象 leaf に加えてその祖先（`fanout` control directory は physical common directory まで、owned runtime root は runtime base の parent まで）にも適用し、別 UID が書込み可能な祖先（sticky bit の rename 保護がない world-writable directory など）があれば fail closed にする（祖先の rename / 差し替えによる検査後の registry / lock 置換の防止）。
-`fanout` directory は 0700、registry と lock は 0600 とし、private namespace gate または physical common-directory identity の照合に失敗した場合は Herdr backend を開始しない。
+検査は対象 leaf に加えてその祖先（owned runtime root は runtime base の parent まで）にも適用し、別 UID が書込み可能な祖先（sticky bit の rename 保護がない world-writable directory など）があれば fail closed にする（祖先の rename / 差し替えによる検査後の runtime 資源置換の防止）。
 pre-existing object の mode は自動修復せず fail closed にする。
-registry は schema version、common-directory identity、console / coordinator / child の final row、最小意図記録（intent 行）、telemetry routing を保持する。
+repository 内の journal と lock は `.fanout/state.json` と同水準とし（file は 0600 で書く。owner / mode / device identity の読取時検査は行わない）、private namespace gate を適用しない。
+journal は schema version と console / coordinator / child の最小意図記録（intent 行）だけを保持する。
 intent 行は絶対 expiry を持ち、発行済み mutation は再発行せず、再実行時の存在確認で採用、rollback 完了、`manual_cleanup_required` のいずれかに分類する。
 並行 invocation は repository 共通の combined launch lock で直列化する。
-registry / intent / final row は raw workload env value を保持しない。
+journal の intent 行と `state.json` の final row は raw workload env value を保持しない。
 mutation は combined launch lock 下で snapshot と identity を照合し、intent の atomic save、bounded Herdr CLI call、事後条件確認まで同じ lock を保持する。
 launcher の lock-free read は rename 前後どちらかの完全な JSON だけを受理し、decode failure は intent 不在として待たず fail closed にする。
-各 row は起動元の physical worktree root と task provenance を保持するが、mutable な Herdr row を各 checkout の `.fanout/state.json` へ複製しない。
-registry-backed peer 移行までは state-dependent な team 共通経路へ Herdr row を渡さず、`--team` の拒否を registry save または SQLite open より先に確定する。
-status、lifecycle、backend stickiness、session view は worktree-local tmux state と共有 Herdr registry を backend ごとに読み分けて集約する。
-この文書でいう Herdr の `state lock` と `state save` は、以後この共有 registry の lock と atomic replace を指す。
+各 intent 行は起動元の physical worktree root と task provenance を保持する。final row は owning worktree の `.fanout/state.json` pane row として確定し（tmux backend と同じ所在。確定は #528）、intent 行は journal の外へ複製しない。
+registry-backed peer 移行までは state-dependent な team 共通経路へ Herdr row を渡さず、`--team` の拒否を journal save または SQLite open より先に確定する。
+status、lifecycle、backend stickiness、session view は worktree-local state（tmux row と Herdr final row）と intent journal を集約して読む。
+この文書でいう Herdr の `state lock` と `state save` は、以後この journal の lock と atomic replace（final row の確定では加えて owning worktree の `state.json`）を指す。
 
-共有 registry の row key は repo-global な kind-tagged tuple とし、tmux backend の state key（issue 番号、`plan:<slug>` + `TaskID`）と同じ粒度に保つ。
+intent / row の key は repo-global な kind-tagged tuple とし、tmux backend の state key（issue 番号、`plan:<slug>` + `TaskID`）と同じ粒度に保つ。
 positive GitHub issue は `(parent, issue 番号)`、plan task は `(plan slug, task ID)`、synthetic / manual launch は `(operation kind, launch nonce)`、coordinator は `(親 identity, launch nonce)` とする。
 coordinator は親ごとの singleton とし、同じ親の重複を拒否する。
 plan spec snapshot の SHA-256 束縛は行わない（proof-grade tier の再導入候補）。
@@ -301,12 +301,13 @@ clean worktree の remove も checkout を削除したが、どちらも local b
 wave 2 の実装では session を per-repo とする。
 linked worktree は canonical git common directory を共有し、独立 clone は full common-directory identity の hash で名前を分離する。
 marker の full identity が一致しなければ hash が一致しても fail closed にする。
-同じ common directory から起動した supervisor、launcher、emitter、cleanup はすべて同じ `herdr-control.json` と lock を使い、呼び出し元 checkout の `.fanout/state.json` を Herdr intent の探索に使わない。
-これにより linked worktree A が作った console / intent / row を linked worktree B の attach と shutdown も同じ順序で観測する。
-registry-backed peer 移行後の nudge は、同じ shared registry から current recipient row を解決する場合だけこの性質を持つ。
+同じ common directory から起動した supervisor、launcher、emitter、cleanup はすべて同じ `herdr-intents.json` と lock を使い、呼び出し元 checkout の `.fanout/state.json` を Herdr intent の探索に使わない。
+これにより linked worktree A が作った console / intent を linked worktree B の attach と shutdown も同じ順序で観測する。
+final row の探索は tmux backend と同じ multi-root の `state.json` 読み（`worktree.ListRoots` 相当）とする（簡素化方針 基準 1 の適用。単一 registry での row 観測は撤廃）。
+registry-backed peer 移行後の nudge は、current recipient row を owning worktree の `state.json` から解決する（#568 の移行契約に従う）。
 
 repo root に console workspace を一つ置き、実際の親ごとに repo-root cwd の coordinator workspace を一つ置く。
-coordinator の state row は `@manual` の負番号を display address として維持するが、shared registry の typed key には使わず、backend stickiness と lifecycle provenance は実際の親へ帰属させる。
+coordinator の state row は `@manual` の負番号を display address として維持するが、typed intent / row key には使わず、backend stickiness と lifecycle provenance は実際の親へ帰属させる。
 child は sibling workspace とし、workspace label で親を識別する。
 create は `--no-focus` とし、明示的な TUI launch だけが返却 ID を focus する。
 focused child の close 後は exact live identity を再照合した同じ親の coordinator、存在しなければ idle な console shell を focus し、どちらも条件を満たさなければ focus を変更しない。
@@ -314,7 +315,7 @@ focused child の close 後は exact live identity を再照合した同じ親�
 global `terminal.default_shell` は全 workspace の root process に適用されるため、console も launcher の明示 operation とする。
 console intent / row の key は `(canonical git common directory, operation:console)` とし、issue / task row、backend stickiness、nudge roster に含めない。
 console shell は user config、未指定なら fanout 起動時の `SHELL` から解決した絶対 path を使う。
-no-arg TUI の attach 準備は、workspace mutation 前に console の intent 行（row key、launch nonce、cwd、user shell の絶対 path、env file path、`total_timeout` と絶対 expiry、発行時刻）を state save し、launch nonce から workspace label と `FANOUT_READY:<launch-nonce>` / `FANOUT_EXEC:<launch-nonce>` を導出する。
+no-arg TUI の attach 準備は、workspace mutation 前に console の intent 行（row key、launch nonce、cwd、user shell の絶対 path、env file path、絶対 expiry、発行時刻）を state save し、launch nonce から workspace label と `FANOUT_READY:<launch-nonce>` / `FANOUT_EXEC:<launch-nonce>` を導出する。
 そのうえで `workspace create --cwd <repo-root> --label <launch-nonce> --no-focus` を一回発行し、応答の workspace ID、root PaneRef / `terminal_id` / cwd を照合して intent 行へ記録する。
 応答喪失または crash 後の再実行は存在確認で分類する。intent の nonce と一致する label の workspace が一つだけ存在して cwd が一致すれば採用して続行する。続行は現状から分岐し、root pane の foreground が launcher で token 発行済み flag がなければ fresh marker の再観測後に readiness / token から、intent の user shell が既に動いているなら process 照合の finalization から再開する。workspace が不在で create request の非発行を証明できる場合だけ intent 行を消して作り直し、それ以外は `manual_cleanup_required` にする。
 launcher marker と root identity を照合した後だけ exact token を一回発行し、launcher は intent の user shell を interactive child として起動する。
@@ -419,7 +420,8 @@ generic pane の exact focus が必要になった場合、Socket API の `pane.
 resource generation を mutation と原子的に条件化する server 側 primitive は proof-grade tier の格上げ条件として保持する。
 response loss または mutation の有無が不明な場合は blind retry せず、再実行時の存在確認で採用または fail closed にする。
 
-herdr backend は root coordinator の intent 行を保存してから `workspace create` を実行する。
+herdr backend は root coordinator の intent 行を発行直前に保存してから `workspace create` を実行する。
+coordinator の workspace create には非発行を証明する手段がないため、発行前の staging 段（planned）は持たず、保存済み intent が残る crash はすべて存在確認の分類（採用 or `manual_cleanup_required`）で処理する。
 root coordinator の `workspace create` も副作用を持つ launch 操作として intent 行の対象にし、console と同じ「nonce label の存在確認 → 採用 or fail closed」で応答喪失を処理する。
 coordinator root の launcher は worktree root と同じ readiness / token / agent detection 契約を通してから通常 state へ確定する。
 herdr pane 内から fanout を起動する通常ケースでは同じ root cwd のユーザー workspace が既にあるため、root cwd / provenance の一致だけでは coordinator を識別せず、label nonce で識別する。
@@ -444,7 +446,7 @@ row は full branch ref、deterministic checkout path、base branch の表示名
 base selector は launch 時に一回だけ commit SHA へ解決し、ambiguous ref、non-commit、解釈不能な selector は mutation 前に拒否する。
 session view は解決済み base を worktree 比較へ渡し、ref が解決不能なら保存済み base SHA を使って無言で `HEAD` へ落とさない。
 lifecycle hook は base branch 名を既存 state の `BaseBranch` と `FANOUT_BASE_BRANCH` へ渡し、tmux backend と同じ public value を保つ。
-auto-PR の base は tmux backend と同じ規則で決め、registry の base field を書き換えない。
+auto-PR の base は tmux backend と同じ規則で決め、intent / row の base field を書き換えない。
 既存 local branch は tmux backend の `git worktree add` と同じく採用し、`--base` は fresh branch だけに渡す。
 
 child の launch と cleanup の crash 対処は次の一つの形に従う。
@@ -470,9 +472,10 @@ herdr は fetch、dirty gate、divergence gate を実行しない。
 
 herdr backend は tmux-parity trust、owned session、version gate を確認してから child launch に入る。
 以下は wave 2 の自動 launch の契約であり、各条項は tmux 水準（基準 1）か応答喪失窓への最小追加対処（基準 2）のどちらかである。
+送信直前の identity 再照合、git precondition、plugin preflight の各検査は同じ combined launch lock 区間につき一回とし、同じ検査を複数層で繰り返さない。
 
 - base selector を解決済み commit SHA へ一回だけ解決し、source checkout の dirty と divergence を検査する既存の fail-closed 契約を保つ（tmux backend の refresh / safety gate と同一）。
-- state lock 下で row / intent を検査して分類する。final row は idempotency hit として skip し、intent 行だけが残る launch は後述の存在確認 recovery へ進む。row / intent が所有しない既存 checkout / workspace は tmux backend の launch と同じく fail closed にする（`.fanout/worktrees/<slug>` の migration fallback は cleanup 系 action に限り、launch では適用しない）。既存 local branch は採用対象であり、この foreign 拒否には含めない（採用契約は後述）。
+- state lock 下で state.json の final row と journal の intent を検査して分類する。final row は idempotency hit として skip し、intent 行だけが残る launch は後述の存在確認 recovery へ進む。row / intent が所有しない既存 checkout / workspace は tmux backend の launch と同じく fail closed にする（`.fanout/worktrees/<slug>` の migration fallback は cleanup 系 action に限り、launch では適用しない）。既存 local branch は採用対象であり、この foreign 拒否には含めない（採用契約は後述）。
 - 最初の mutation（fresh branch の ref create を含む）より前に intent 行（row key、slug、branch、path、workspace label、branch の事前存在、`total_timeout` と絶対 expiry）を state save する。
 - fresh branch は fanout が atomic ref create（old OID を空とする `update-ref` 相当）で base SHA に作る。既存なら失敗し、tmux backend の `git worktree add -b` と同じ fail-fast にする。
 - 既存 local branch は tmux backend と同じく採用する。`--base` は fresh branch だけに渡し、採用時は事前に記録した branch tip を事後条件に使う。
@@ -516,7 +519,7 @@ fanout が state、snapshot、checkout git dir を照合してから別接続で
 この TOCTOU は tmux cleanup の `ListLive` 照合から `kill-pane` / `git worktree remove` までの race と同種の残余リスクとして tmux-parity tier で受容する。
 tracked / untracked / ignored subtree generation を remove と原子的に条件化する server-side conditional remove、または kernel-enforced write-exclusion fence は proof-grade tier の格上げ条件として保持する。
 
-cleanup の契約は次のとおりとする（#531 が実装する）。
+cleanup の契約は次のとおりとする（#531 が実装する。row は owning worktree の `state.json` の Herdr pane row を指す）。
 
 - state lock 下で保存済み row の workspace ID / label nonce、branch、path を現在値と照合し、live row では `terminal_id` も照合する。`stale` row は保存済み `terminal_id` を現在値と照合できない（pane 消滅、または cold restart による現在の `terminal_id` との不一致）ため、その失効の確認と workspace ID / label / path / checkout の Git provenance の照合で代替する。不一致、非所有、または照合不能なら mutation せず fail closed にする。
 - dirty checkout は明示確認なしに force しない。確認後の force remove でも branch は herdr に削除させない。
@@ -616,14 +619,14 @@ launcher は exact checkout cwd、`HERDR_PANE_ID=w3:p1`、`HERDR_WORKSPACE_ID=w3
 
 wave 2 は Herdr control-plane env と agent workload env を分離する。
 supervisor / Herdr server / control-plane runner の env は空の base から組み立てた secret-free control env とし、owned XDG / config / socket / session、absolute fanout / Herdr entry、必要な固定 control value だけを持つ。
-workload env は呼び出し元 env を launch 時に一回 snapshot し、Herdr routing env（`HERDR_` prefix）、fanout の launcher control env（`FANOUT_HERDR_` prefix）、`TMUX` / `TMUX_PANE` / `TMUX_TMPDIR`、`FANOUT_STATE_PATH`（worktree-local tmux state の override であり、child の status / lifecycle / msg 操作を共有 Herdr registry から逸らす）を除いてそのまま child へ渡す。
+workload env は呼び出し元 env を launch 時に一回 snapshot し、Herdr routing env（`HERDR_` prefix）、fanout の launcher control env（`FANOUT_HERDR_` prefix）、`TMUX` / `TMUX_PANE` / `TMUX_TMPDIR`、`FANOUT_STATE_PATH`（state 所在の override であり、child の status / lifecycle / msg 操作を launch が解決した owning worktree の state から逸らす）を除いてそのまま child へ渡す。
 filter 後に fanout は operation-owned の backend context を child env へ固定する。caller の `FANOUT_BACKEND` を捨てて `FANOUT_BACKEND=herdr` を注入し、owned socket / session の routing 値は注入しない（`HERDR_ENV` の除去で child からの `fanout` 呼び出しが user default または tmux へ fallback する誤 routing の防止）。
 これは tmux backend の pane が呼び出し元 env を継承するのと同じ水準であり、versioned allow / deny policy は撤廃する。
 snapshot は owned XDG / routing env を設定する前に取るため、owned XDG は child へ渡らず、呼び出し元の XDG はそのまま通る。
-raw workload env value を control env、process argv、registry、intent、final row、log へ複製しない。
+raw workload env value を control env、process argv、intent 行、final row、log へ複製しない。
 
 0.7.5 の child root pane は source workspace の env を継承しないため、workload env は launch nonce に束縛した one-shot の 0600 env file で launcher へ渡す。
-env file は private namespace gate 済みの 0700 directory 配下に exclusive create し、registry / intent には path と name 数だけを記録して raw value を保存しない。
+env file は private namespace gate 済みの 0700 directory 配下に exclusive create し、intent 行には path と name 数だけを記録して raw value を保存しない。
 
 launcher の bootstrap protocol は次のとおりとする。
 launcher は process start 時に `HERDR_PANE_ID` / `HERDR_WORKSPACE_ID` と exact cwd に一致する未失効 intent を server env の `FANOUT_HERDR_CONTROL_PATH` から lock-free read で採用し、shell、line editor、checkout 内 code を起動しない。
@@ -660,15 +663,15 @@ workspace-level `agent start` の各条項は次のように移す。
 | issue | 担当契約 |
 |---|---|
 | #526 | version gate と owned session bootstrap（owned XDG / socket / marker / lease、binary pin、supervisor bootstrap と bootstrap 失敗時の停止、live supervisor の再利用）。PR #572 で実装済み。owned server restart と明示 shutdown は含まない |
-| #527 | worktree 実体化: base 解決と dirty / divergence gate、branch の atomic ref create と失敗時の branch 削除、intent 行と存在確認による応答喪失処理、workspace label nonce と事後条件照合、shared registry の row / intent 永続化と state lock、provisionalIntents の backend resolver 配線。目標規模は tmux 側同等機能（worktree / state / panelaunch）の 1〜1.5 倍（概ね 2,500〜4,000 行） |
-| #528 | non-shell launcher（marker / token / env file / exec）、agent detection / rename / process 照合、issue / Project / plan / watcher の launch レーン解禁、deterministic agent name、coordinator row と stickiness、`--team` の fail-closed gate |
+| #527 | worktree 実体化: base 解決と dirty / divergence gate、branch の atomic ref create と失敗時の branch 削除、intent 行と存在確認による応答喪失処理、workspace label nonce と事後条件照合、intent journal の永続化と combined launch lock、provisionalIntents の backend resolver 配線。final row は書かない（確定は #528）。目標規模は tmux 側同等機能（worktree / state / panelaunch）の 1〜1.5 倍（概ね 2,500〜4,000 行） |
+| #528 | non-shell launcher（marker / token / env file / exec）、agent detection / rename / process 照合、issue / Project / plan / watcher の launch レーン解禁、deterministic agent name、realized intent の消費と owning worktree `state.json` への final row 確定（同じ state save で intent 削除）、coordinator row と stickiness、`--team` の fail-closed gate |
 | #529 | provider hook adapter、fresh signal、pending emitter telemetry、`state_refinement` |
 | #530 | plain shell からの owned session bootstrap 導線、console workspace と user shell 起動、owned server の明示 restart と明示 repo-session shutdown、TUI の focus / launch / peek と dashboard peek の解禁（owned session 限定。dashboard は read-only 境界のまま peek content 表示だけ） |
 | #531 | `--close` / `--merge` / `--cleanup` と TUI close: identity 照合後の `worktree remove` と残存 workspace の整理、dirty の明示確認、branch の compare-and-delete、応答喪失の存在確認 |
 | #532 | 0.7.5 direct launch の cold restart resume 再実測。解禁までは `terminal_id` 変化を `stale` にする |
-| #552 | #568 の registry-backed peer 登録 / 自己識別 / 宛先解決を前提に、live `pane process-info` / OS process identity と final state を送信直前に再照合した exact pane ID へ no-wait の `agent prompt` nudge を発行し、移行前は Herdr row に `state.json` 依存経路を適用しない |
+| #552 | #568 の registry-backed peer 登録 / 自己識別 / 宛先解決を前提に、live `pane process-info` / OS process identity と final state を送信直前に再照合した exact pane ID へ no-wait の `agent prompt` nudge を発行し、移行前は team / nudge 共通経路を Herdr row（`state.json` の Herdr pane row）へ適用しない |
 | #554 | owned launcher 経由の `fanout __codex-plan-tui` controller 起動と controller / Codex child の process 照合 |
-| #568 | #528 の fail-closed gate を前提に、issue / plan cohort の peer 登録、plan lane の preseed / cleanup、自己識別、宛先解決、Claude / Codex push caller を shared registry の canonical Herdr row へ移行し、`--team` の再評価条件を満たす |
+| #568 | #528 の fail-closed gate を前提に、issue / plan cohort の peer 登録、plan lane の preseed / cleanup、自己識別、宛先解決、Claude / Codex push caller を `state.json` の canonical Herdr pane row（実行中は journal の intent 行）へ移行し、`--team` の再評価条件を満たす |
 
 #568 は #528 に blocked され、#528 が実装する暫定拒否 gate を registry-backed peer 移行の完了まで維持する。
 #552 の Herdr 実装は #568 の完了後に開始する。
@@ -705,8 +708,8 @@ Codex adapter が未実装、注入不能、または検証不能なら `reporte
 provider hook adapter と event-to-state mapping の検証成功だけでは `state_refinement:true` にしない。
 tmux pane option は使わない。
 hook 環境には絶対 `FANOUT_EMITTER_STATE_PATH`、state row key、launch ごとの opaque emitter nonce、backend、session / workspace / agent identity を注入する。
-`FANOUT_EMITTER_STATE_PATH` は Herdr では shared registry、tmux では owning worktree の `FANOUT_STATE_PATH` と同じ file を指し、emitter は backend と path の組を検証してから更新する。
-row key は shared registry の kind-tagged tuple を intent からコピーし、hook へ row key と launch nonce、emitter nonce を渡す。
+`FANOUT_EMITTER_STATE_PATH` は tmux では owning worktree の `FANOUT_STATE_PATH` と同じ file を指す。Herdr では pending telemetry（final row 確定前）を intent journal、確定後を owning worktree の `state.json` へ保存し、単一 path の配線は #529 実装時に確定する。emitter は backend と path の組を検証してから更新する。
+row key は kind-tagged tuple を intent からコピーし、hook へ row key と launch nonce、emitter nonce を渡す。
 emitter は `ParentRef`、`TaskID`、`IssueNum`、cwd、slug から key を作り直さない。
 emitter nonce は state row にも保存し、再 launch ごとに更新する。
 final row は synthetic launch telemetry として `reported_state:"running"` を保存できるが、current launch に束縛された fresh provider signal を受理するまでは `state_refinement:false` とする。
@@ -824,11 +827,11 @@ backend / flag validation は最初の state、filesystem、git、Herdr mutation
 `--dry-run` も同じ error で終了し、移行前の Herdr `--team` を部分的に計画または seed しない。
 この gate は Herdr backend だけに適用し、tmux backend の `--team` と既存 message bus を変更しない。
 #528 はこの fail-closed gate を実装し、#568 が registry-backed peer 移行を完了するまで解除しない。
-Herdr `--team` の再評価には、`internal/app/run/team.go` の peer 登録が shared registry の issue / plan task row から cohort と `TaskID` を作れることを要求する。
-`internal/app/run/task_team_registry.go` の `preseedTaskTeamRegistry` / `cleanupUncreatedTaskPeers` は、最初の Codex pane より前の provisional plan cohort と fail-fast 後の未作成 peer cleanup を shared registry の canonical plan-task row で処理しなければならない。
-`internal/infra/team/detect.go` の自己識別は shared registry の canonical typed row key、pane / worktree identity、issue number または `TaskID` を一意に解決しなければならない。
-`internal/app/peermsg/nudge.go` の宛先解決は shared registry から current Herdr row と exact pane identity を取得し、後述の nudge gate へ渡さなければならない。
-四経路とその Claude / Codex push caller が registry-backed になるまで、`state.json` を読む共通経路を Herdr row へ適用せず、prompt fallback や worktree-local row の複製で補わない。
+Herdr `--team` の再評価には、`internal/app/run/team.go` の peer 登録が `state.json` の Herdr issue / plan task row から cohort と `TaskID` を作れることを要求する。
+`internal/app/run/task_team_registry.go` の `preseedTaskTeamRegistry` / `cleanupUncreatedTaskPeers` は、最初の Codex pane より前の provisional plan cohort と fail-fast 後の未作成 peer cleanup を canonical plan-task row（実行中は journal の intent 行）で処理しなければならない。
+`internal/infra/team/detect.go` の自己識別は canonical typed row key、pane / worktree identity、issue number または `TaskID` を一意に解決しなければならない。
+`internal/app/peermsg/nudge.go` の宛先解決は owning worktree の `state.json` から current Herdr row と exact pane identity を取得し、後述の nudge gate へ渡さなければならない。
+四経路とその Claude / Codex push caller の移行が完了するまで、team / nudge の共通経路を Herdr row へ適用せず、prompt fallback で補わない。
 この移行実装は本 PR のスコープ外とし、#568 が担当する。
 
 0.7.3 / 0.7.4 の `pane send-text` は literal text だけを送り、別の `pane send-keys enter` まで shell cwd は変わらなかった。
@@ -1301,7 +1304,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | focus | Go | TUI の明示操作だけが target を直前再照合する | request-bound server / target generation |
 | peek / targeted read | Go | exact PaneRef、`terminal_id`、worktree provenance を直前・直後に再照合する | response が authoritative server generation と target terminal identity を束縛する |
 | `--team` | 拒否（#568 の registry-backed peer 解決まで。暫定 gate は #528） | `--dry-run` を含め、SQLite open、registry save、branch / workspace / Herdr mutation より先に明確な invocation error を返す | #568 が peer 登録、plan preseed / cleanup、自己識別、宛先解決、push caller の移行を完了した後に wave 2 条件を再評価する |
-| 自動 nudge | Go（#552 の Herdr 実装は #568 完了後） | shared registry から peer / self / recipient の current Herdr row を一意に解決し、fresh provider signal と送信直前の live `process-info` / OS process identity が一致する許可状態だけへ、exact pane ID を target に no-wait の `agent prompt` を一回発行する | atomic conditional send または permission UI を操作しない out-of-band queue と、agent process から分離した event provenance |
+| 自動 nudge | Go（#552 の Herdr 実装は #568 完了後） | `state.json` の Herdr pane row から peer / self / recipient の current row を一意に解決し、fresh provider signal と送信直前の live `process-info` / OS process identity が一致する許可状態だけへ、exact pane ID を target に no-wait の `agent prompt` を一回発行する | atomic conditional send または permission UI を操作しない out-of-band queue と、agent process から分離した event provenance |
 | `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | owned launcher が絶対 path の `fanout __codex-plan-tui` を起動し、working / plan は emitter lane で報告する | 依存する launch / emitter lane の格上げ条件に従う |
 
 2026-07-27 の簡素化で撤廃または任意記録へ格下げした機構は、proof-grade tier の再導入候補として次に保持する。
@@ -1331,23 +1334,23 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   console detach 後も server を存続させ、最後の child close では止めず、active row / intent と foreign resource のない明示 repo-session shutdown（実装は #530。空状態確認と同じ save の shutdown intent 行で並行 mutation を fence する）だけを teardown とする。
 - herdr backend wave 2 は snapshot / list / wait、targeted content read、root coordinator、worktree / agent launch、focus、nudge、metadata、console / coordinator close、child cleanup を後続実装へ解禁する。
   console / coordinator / agent launch は #528 の direct-launch 契約完了まで fail closed にする。
-  `--team` と #552 の Herdr nudge 実装は例外とし、#528 の fail-closed gate は #568 が peer 登録、plan preseed / cleanup、自己識別、宛先解決を shared registry の Herdr row へ移行するまで最初の mutation 前に拒否する。
+  `--team` と #552 の Herdr nudge 実装は例外とし、#528 の fail-closed gate は #568 が peer 登録、plan preseed / cleanup、自己識別、宛先解決を `state.json` の canonical Herdr pane row へ移行するまで最初の mutation 前に拒否する。
   移行前の Herdr row を worktree-local `state.json` に複製せず、tmux 用の state-dependent peer / nudge 経路へ渡さない。
   各 operation は保存済み identity と live snapshot を直前に再照合し、operation 固有の事後条件を検査する。
   check と operation の間の race は tmux-parity tier の受容済み残余リスクとし、不一致と重複は fail closed に、応答喪失は再実行時の存在確認で採用または fail closed にする。
 - compatibility gate は 2026-07-24 のユーザー決定により stable `>=0.7.5` の version gate だけとする（「version と JSON 対応」の structural gate 記述は履歴）。
   実際の method call が失敗した場合は共通の unavailable error を返す。
-- backend 選択の resolver は final state rows と provisional intents のすべてを入力にする。
+- backend 選択の resolver は final state rows（各 worktree の `state.json`）と provisional intents（intent journal）のすべてを入力にする。
   legacy row の空 backend は tmux に正規化する。
   実際の issue / Project / plan の親では、既存 rows / intents が一つの backend に一致する場合だけその backend を再利用し、mixed state または `--backend` / env との不一致は fail closed にする(明示的な移行はユーザー操作)。
   stickiness の単位は実際の issue / Project / plan の親に限る。
-  wave 2 は親 issue の orchestrator pane を `@manual` の負番号 display row として保存するが、shared registry は actual owner identity と launch nonce の typed coordinator key を使い、issue / plan の provenance を実親へ帰属させて同じ stickiness 判定に含める。
+  wave 2 は親 issue の orchestrator pane を `@manual` の負番号 display row として保存するが、coordinator の intent / row は actual owner identity と launch nonce の typed coordinator key を使い、issue / plan の provenance を実親へ帰属させて同じ stickiness 判定に含める。
   それ以外の `@manual` synthetic launch は互いに独立した launch の集まりであり、row identity とその intent の単位で backend を固定する。
 - canonical git common directory で識別する per-repo session を使う。
   repo root の console workspace、実際の親ごとの coordinator workspace、sibling child workspace を配置する。
   linked worktree は session を共有し、独立 clone は full common-directory identity の hash で分離する。
-  physical common directory 配下の `fanout/herdr-control.json` と `herdr-control.json.lock` を全 linked worktree が共有し、tmux backend の `.fanout/state.json` と同じ lock + atomic replace で直列化する。
-  Herdr の console、intent、final row、telemetry routing はこの registry だけを正典とし、worktree-local `.fanout/state.json` へ複製しない。
+  physical common directory 配下の `fanout/herdr-intents.json` と `herdr-intents.json.lock` を全 linked worktree が共有し、tmux backend の `.fanout/state.json` と同じ lock + atomic replace で直列化する。
+  Herdr の console と intent はこの journal だけを正典とし、final row と telemetry routing は owning worktree の `.fanout/state.json` pane row を正典とする（intent は journal、final は state.json の二層）。
   console は `(canonical git common directory, operation:console)` の専用 intent / row を使い、issue / task row、backend stickiness、nudge roster に含めない。
   console / coordinator / child の launch と cleanup は「worktree の配置と lifecycle」の intent 行 + 存在確認の契約に従う。
 - fanout が worktree safety gate と idempotency を所有し、herdr は checkout と workspace の実体化を担当する。
