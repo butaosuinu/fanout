@@ -291,7 +291,10 @@ fourth repair wave in one invocation.
 
 ### Triage findings
 
-Read `## Code Review Rules` from the PR base, not a copy changed by the target.
+For every changed or reviewed path, resolve the applicable base-side instruction
+chain, including the repository-root and every nearer `AGENTS.md` or
+`AGENTS.override.md` in normal precedence. Apply its `## Code Review Rules`
+sections to findings affecting that path, never a copy changed by the target.
 A finding is actionable only when a concrete trigger is reachable under
 documented user-facing prerequisites, or it violates an existing test, issue
 acceptance criterion, documented contract, or required safe rejection or

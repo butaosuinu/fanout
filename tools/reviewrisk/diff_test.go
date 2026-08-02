@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// TestParseNameStatus pins the git diff --name-status -M parser: A/M/D carry one
-// path, R<score>/C<score> carry old and new, and blank lines are skipped.
+// TestParseNameStatus pins the git diff --name-status -z -M parser: A/M/D carry
+// one exact path and R<score>/C<score> carry exact old and new paths.
 func TestParseNameStatus(t *testing.T) {
 	tests := []struct {
 		name string
@@ -15,7 +15,7 @@ func TestParseNameStatus(t *testing.T) {
 	}{
 		{
 			name: "A/M/D each carry a single path",
-			in:   "A\tcmd/fanout/new.go\nM\tinternal/core/naming/slug.go\nD\ttests/bats/old.bats\n",
+			in:   "A\x00cmd/fanout/new.go\x00M\x00internal/core/naming/slug.go\x00D\x00tests/bats/old.bats\x00",
 			want: []FileChange{
 				{Status: 'A', Path: "cmd/fanout/new.go"},
 				{Status: 'M', Path: "internal/core/naming/slug.go"},
@@ -24,18 +24,21 @@ func TestParseNameStatus(t *testing.T) {
 		},
 		{
 			name: "R100 records old and new paths",
-			in:   "R100\tinternal/old/foo.go\tinternal/new/foo.go\n",
+			in:   "R100\x00internal/old/foo.go\x00internal/new/foo.go\x00",
 			want: []FileChange{{Status: 'R', OldPath: "internal/old/foo.go", Path: "internal/new/foo.go"}},
 		},
 		{
 			name: "C75 copy records old and new paths",
-			in:   "C75\ta.go\tb.go\n",
+			in:   "C75\x00a.go\x00b.go\x00",
 			want: []FileChange{{Status: 'C', OldPath: "a.go", Path: "b.go"}},
 		},
 		{
-			name: "blank lines are skipped",
-			in:   "\nA\tgo.mod\n\n",
-			want: []FileChange{{Status: 'A', Path: "go.mod"}},
+			name: "tabs and newlines remain in paths",
+			in:   "M\x00docs/x\ty/AGENTS.md\x00R100\x00old\nname\x00new\nname\x00",
+			want: []FileChange{
+				{Status: 'M', Path: "docs/x\ty/AGENTS.md"},
+				{Status: 'R', OldPath: "old\nname", Path: "new\nname"},
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -48,9 +51,9 @@ func TestParseNameStatus(t *testing.T) {
 	}
 }
 
-// TestParseNumstat pins the git diff --numstat parser: integer columns parse as
-// counts, a binary file's "-" columns become -1/-1, and a rename's merged path
-// column keys on the new path.
+// TestParseNumstat pins the git diff --numstat -z parser: integer columns parse
+// as counts, a binary file's "-" columns become -1/-1, and a rename's separate
+// old/new paths key on the exact new path.
 func TestParseNumstat(t *testing.T) {
 	tests := []struct {
 		name string
@@ -59,32 +62,31 @@ func TestParseNumstat(t *testing.T) {
 	}{
 		{
 			name: "text file columns parse as integers",
-			in:   "5\t3\tinternal/core/naming/slug.go\n",
+			in:   "5\t3\tinternal/core/naming/slug.go\x00",
 			want: map[string]numstatEntry{"internal/core/naming/slug.go": {added: 5, deleted: 3}},
 		},
 		{
 			name: "binary file dashes become -1",
-			in:   "-\t-\tweb/public/logo.png\n",
+			in:   "-\t-\tweb/public/logo.png\x00",
 			want: map[string]numstatEntry{"web/public/logo.png": {added: -1, deleted: -1}},
 		},
 		{
 			name: "multiple rows accumulate",
-			in:   "1\t0\ta.go\n0\t2\tb.go\n",
+			in:   "1\t0\ta.go\x000\t2\tb.go\x00",
 			want: map[string]numstatEntry{"a.go": {added: 1}, "b.go": {deleted: 2}},
 		},
 		{
-			// A rename's brace form must key on the new path so loadDiff finds it.
-			name: "rename brace form keys on the new path",
-			in:   "2\t1\tinternal/{old => new}/foo.go\n",
-			want: map[string]numstatEntry{"internal/new/foo.go": {added: 2, deleted: 1}},
+			name: "rename keys on the exact new path",
+			in:   "2\t1\t\x00internal/old\tname/foo.go\x00internal/new\tname/foo.go\x00",
+			want: map[string]numstatEntry{"internal/new\tname/foo.go": {added: 2, deleted: 1}},
 		},
 		{
-			// A segment-dropping rename emits an empty new side; the doubled
-			// slash must collapse so the key matches the name-status new path
-			// (else Added/Deleted fall to 0).
-			name: "segment-dropping rename keys on the collapsed new path",
-			in:   "3\t1\tdir/{old => }/file.go\n",
-			want: map[string]numstatEntry{"dir/file.go": {added: 3, deleted: 1}},
+			name: "tabs and newlines remain in ordinary paths",
+			in:   "3\t1\tdir/x\ty/file.go\x000\t2\tdir/x\ny/file.go\x00",
+			want: map[string]numstatEntry{
+				"dir/x\ty/file.go": {added: 3, deleted: 1},
+				"dir/x\ny/file.go": {deleted: 2},
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -92,52 +94,6 @@ func TestParseNumstat(t *testing.T) {
 			got := parseNumstat(tt.in)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("parseNumstat(%q) = %#v, want %#v", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
-// TestNumstatPath pins the rename-path normalization: git's merged brace form
-// and its brace-less whole-path form both collapse to the new path, while a
-// plain path (even one containing no ` => `) passes through unchanged.
-func TestNumstatPath(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{
-			name: "brace group in the middle takes the new side",
-			in:   "internal/{old => new}/foo.go",
-			want: "internal/new/foo.go",
-		},
-		{
-			name: "brace-less whole path takes the new side",
-			in:   "old/path.go => new/path.go",
-			want: "new/path.go",
-		},
-		{
-			name: "empty old side yields just the new segment",
-			in:   "dir/{ => sub}/file.go",
-			want: "dir/sub/file.go",
-		},
-		{
-			// A rename that only drops a path segment (dir/old/file.go ->
-			// dir/file.go) has an empty new side; the doubled slash collapses.
-			name: "empty new side collapses the doubled slash",
-			in:   "dir/{old => }/file.go",
-			want: "dir/file.go",
-		},
-		{
-			name: "plain path without an arrow is unchanged",
-			in:   "internal/core/naming/slug.go",
-			want: "internal/core/naming/slug.go",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := numstatPath(tt.in); got != tt.want {
-				t.Errorf("numstatPath(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}
@@ -224,6 +180,18 @@ func TestParseUnified(t *testing.T) {
 				"--- FANOUT_X removed\n",
 			wantAdded:   map[string][]string{"foo.go": {"++ requireToken junk"}},
 			wantRemoved: map[string][]string{"foo.go": {"-- FANOUT_X removed"}},
+		},
+		{
+			name: "Git C-quoted paths decode to exact path keys",
+			in: "diff --git \"a/internal/core/x\\ty/foo_test.go\" \"b/internal/core/x\\ty/foo_test.go\"\n" +
+				"index 111..222 100644\n" +
+				"--- \"a/internal/core/x\\ty/foo_test.go\"\n" +
+				"+++ \"b/internal/core/x\\ty/foo_test.go\"\n" +
+				"@@ -1 +1 @@\n" +
+				"-requireToken(old)\n" +
+				"+t.Skip(\"wip\")\n",
+			wantAdded:   map[string][]string{"internal/core/x\ty/foo_test.go": {`t.Skip("wip")`}},
+			wantRemoved: map[string][]string{"internal/core/x\ty/foo_test.go": {"requireToken(old)"}},
 		},
 	}
 	for _, tt := range tests {

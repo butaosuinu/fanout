@@ -3,8 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html"
+	"strconv"
 	"strings"
 	"text/tabwriter"
+	"unicode/utf8"
 )
 
 // minusSign is the U+2212 minus used in the "+A −D" diff-size summaries, shared
@@ -21,6 +24,37 @@ func plusMinus(added, deleted int) string {
 	return fmt.Sprintf("+%d %s%d", added, minusSign, deleted)
 }
 
+func singleLineText(s string) string {
+	if !utf8.ValidString(s) || strings.IndexFunc(s, func(r rune) bool { return !strconv.IsGraphic(r) }) >= 0 {
+		return strconv.QuoteToGraphic(s)
+	}
+	return s
+}
+
+func markdownPath(path string) string {
+	display := singleLineText(path)
+	if display == path && !strings.ContainsAny(path, "`|") {
+		return "`" + path + "`"
+	}
+	escaped := html.EscapeString(display)
+	escaped = strings.ReplaceAll(escaped, "|", "&#124;")
+	return "<code>" + escaped + "</code>"
+}
+
+func markdownText(s string) string {
+	escaped := html.EscapeString(singleLineText(s))
+	return strings.NewReplacer(
+		"\\", "&#92;",
+		"`", "&#96;",
+		"*", "&#42;",
+		"_", "&#95;",
+		"[", "&#91;",
+		"]", "&#93;",
+		"|", "&#124;",
+		"~", "&#126;",
+	).Replace(escaped)
+}
+
 // Text renders the report for a terminal: the level and its guidance, the
 // escalation reasons, and an aligned per-file table whose header carries the
 // diff stats.
@@ -35,7 +69,7 @@ func (r Report) Text() string {
 			if file == "" {
 				file = "-"
 			}
-			fmt.Fprintf(&b, "  [%s] %s  %s  %s\n", rs.Level, rs.Signal, file, rs.Detail)
+			fmt.Fprintf(&b, "  [%s] %s  %s  %s\n", rs.Level, rs.Signal, singleLineText(file), singleLineText(rs.Detail))
 		}
 	}
 
@@ -44,7 +78,7 @@ func (r Report) Text() string {
 		tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "  St\tClass\tLevel\tRule\tFile")
 		for _, f := range r.Files {
-			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\n", f.Status, f.Class, f.Level, f.RuleID, f.Path)
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\n", f.Status, f.Class, f.Level, f.RuleID, singleLineText(f.Path))
 		}
 		_ = tw.Flush()
 	}
@@ -70,7 +104,7 @@ func (r Report) Markdown() string {
 			if file == "" {
 				file = "(diff 全体)"
 			}
-			fmt.Fprintf(&b, "- **[%s]** `%s` — `%s`: %s\n", rs.Level, rs.Signal, file, rs.Detail)
+			fmt.Fprintf(&b, "- **[%s]** `%s` — %s: %s\n", rs.Level, rs.Signal, markdownPath(file), markdownText(rs.Detail))
 		}
 		b.WriteString("\n")
 	}
@@ -79,7 +113,7 @@ func (r Report) Markdown() string {
 	b.WriteString("| File | St | Class | Level | Rule |\n")
 	b.WriteString("|---|---|---|---|---|\n")
 	for _, f := range r.Files {
-		fmt.Fprintf(&b, "| `%s` | %s | %s | %s | %s |\n", f.Path, f.Status, f.Class, f.Level, f.RuleID)
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", markdownPath(f.Path), f.Status, f.Class, f.Level, f.RuleID)
 	}
 	b.WriteString("\n</details>\n\n")
 

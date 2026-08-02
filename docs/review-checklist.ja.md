@@ -54,7 +54,8 @@ issue #373 の旧集計は、セッション履歴 102 件、CI 失敗 22 run、
   レビューゲートをバイパスする場合は、PR 作成前に `make check` を直接実行する。
 - `post-work-review` は現在の target 全体を読み、P0-P2 相当の finding を同根ごとに
   一括で返す。style、推測、既存問題は修正対象にしない。
-- finding は PR の base 側の `## Code Review Rules` で裁定する。
+- finding は変更または review 対象の各 path について、PR の base 側で適用される
+  instruction chain と `## Code Review Rules` を通常の優先順位で解決して裁定する。
   到達不能な環境、明示された non-goal、または契約を満たす証拠がある finding は、
   根拠を返信して棄却する。
   全 finding を根拠付きで棄却できれば、修正せず clean として扱う。

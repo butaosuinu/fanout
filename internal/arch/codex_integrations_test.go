@@ -294,6 +294,8 @@ func TestReviewConvergenceContracts(t *testing.T) {
 				"A decline-only reply is not a repair wave",
 				"Triage review findings before fixing",
 				"no actionable review work",
+				"applicable base-side instruction chain",
+				"`AGENTS.override.md` in normal precedence",
 			},
 		},
 		{
@@ -310,6 +312,8 @@ func TestReviewConvergenceContracts(t *testing.T) {
 				"A later explicit invocation starts from zero",
 				"Triage findings",
 				"no actionable review work",
+				"applicable base-side instruction",
+				"`AGENTS.override.md` in normal precedence",
 			},
 		},
 		{
@@ -322,6 +326,8 @@ func TestReviewConvergenceContracts(t *testing.T) {
 				"no actionable findings",
 				"all rejected as non-actionable with concrete evidence",
 				"stop without a marker",
+				"applicable base-side instruction chain",
+				"`AGENTS.override.md` in normal precedence",
 			},
 		},
 		{
@@ -335,6 +341,8 @@ func TestReviewConvergenceContracts(t *testing.T) {
 				"同根を一括修正",
 				"全findingを根拠付きで棄却",
 				"markerなし",
+				"applicable instruction chain",
+				"`AGENTS.override.md`まで",
 			},
 		},
 		{
@@ -345,6 +353,8 @@ func TestReviewConvergenceContracts(t *testing.T) {
 				"全 finding を根拠付きで棄却できれば、修正せず clean として扱う",
 				"明示的な各起動で 0 から始め",
 				"1 起動あたり",
+				"base 側で適用される",
+				"instruction chain",
 			},
 		},
 		{
@@ -361,6 +371,8 @@ func TestReviewConvergenceContracts(t *testing.T) {
 				"根拠を返信してfindingを棄却しただけならwaveに数えない",
 				"全findingを根拠付きで棄却",
 				"actionable review workなし",
+				"applicable instruction chain",
+				"`AGENTS.override.md`まで",
 			},
 		},
 	}

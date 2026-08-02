@@ -115,16 +115,17 @@ go run ./tools/reviewrisk [--base <ref>] [--format text|markdown|json] [--fail-a
   未コミットの変更も判定に入る(未追跡ファイルは git diff に出ないため対象外)。
   CI は clean checkout なので `merge-base..HEAD` と同じ結果になる。
 - git は全て read-only。base 解決の `rev-parse --verify` と `merge-base`、
-  それに diff 3 本 — `diff --name-status -M`(ファイル一覧と rename 検出)、
-  `diff --numstat -M`(行数。rename は併合パスを新パスへ正規化して計上)、
-  `diff -U0`(grep 対象の追加/削除行)。いずれも `core.quotepath=off` で
-  非 ASCII パスをそのまま出す。
+  それに diff 3 本 — `diff --name-status -z -M`(ファイル一覧と rename 検出)、
+  `diff --numstat -z -M`(行数)、`diff -U0`(grep 対象の追加/削除行)。
+  前者 2 本は NUL 区切りで path を保持し、unified diff は `core.quotepath=off` で
+  非 ASCII path をそのまま出す。
 - 終了コードは既定で常に 0(advisory)。`--fail-at <level>` を指定したときだけ、
   判定結果がその level 以上なら 1 を返す。git 実行失敗や flag 不正などの
   運用エラーは 2。
 - `--format markdown` は sticky コメントの本文そのもの: 先頭に
   `<!-- review-risk -->` マーカー、理由リスト、ファイル別クラス表を
-  `<details>` に畳んだもの。
+  `<details>` に畳んだもの。制御文字や Markdown delimiter を含む path は
+  1 行の quoted 表現へ変換する。
 
 `make review-risk` はこの CLI を素の設定で実行する薄いラッパ。
 

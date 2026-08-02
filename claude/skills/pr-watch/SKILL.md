@@ -385,8 +385,11 @@ git push --force-with-lease="refs/heads/$head:$pr_head_before_work" "<head-remot
 
 未対応のインライン thread、review summary、トップレベル PR コメントを対象にする。
 
-- 編集前にPRのbase側の`AGENTS.md`から`## Code Review Rules`を読み、target branchが
-  同じ節を変更していてもbase側を裁定基準にする。
+- 編集前に変更またはreview対象の各pathについて、PRのbase側でrepository rootから
+  最も近い`AGENTS.md`または`AGENTS.override.md`までのapplicable instruction chainを
+  通常の優先順位で解決する。
+  各pathへ適用される`## Code Review Rules`を裁定基準にし、target branchが変更した
+  copyは使わない。
 - findingは、documented user-facing prerequisitesから到達する具体的なtriggerがあるか、
   existing test、issue acceptance criterion、documented contract、またはrequired safe
   rejection / fail-closedに反する場合だけactionableとする。
