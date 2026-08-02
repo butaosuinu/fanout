@@ -170,6 +170,16 @@ changed. Read only the relevant part of the [repair playbook](references/repair-
    thread, review summary, and top-level comment for that head as one
    **current-head review batch**. Do not start editing from one notification or
    one inline comment while the completed review is still unavailable.
+   On every invocation and before editing, committing, pushing, replying, or
+   requesting review, reconstruct the PR-wide connector wave number from
+   GitHub-persisted review history. Paginate all reviews and all review threads,
+   including resolved and outdated threads. Associate each actionable connector
+   thread finding with `pullRequestReview.commit.oid` and each actionable review
+   summary with its review `commit.oid`, deduplicate by that reviewed head, and
+   count the current batch's head once. Never initialize this number from
+   process-local or watcher state. If actionable connector
+   feedback has no non-null review commit OID, fail closed and hand it to a
+   human. Do not mutate the PR when the reconstructed batch would be the fourth.
 2. Reconfirm the PR head branch, author, push remote, and saved remote head SHA.
 3. Handle conflict/base drift, failing CI, then actionable review feedback.
    Cluster the entire current-head review batch by root cause and inspect every

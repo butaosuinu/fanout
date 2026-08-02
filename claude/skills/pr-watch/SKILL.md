@@ -271,6 +271,16 @@ Codex connectorの指摘は、保存したcurrent head SHAに紐づくsubmitted 
 **current-head review batch**として固定する。
 completed reviewがまだ見えない段階で、通知された1 commentだけを修正しない。
 
+各起動時と、編集、commit、push、reply、review requestの前に、GitHubに永続化された
+review履歴からPR単位のconnector wave数を復元する。
+全reviewと全review threadをpaginateし、resolved / outdated threadも履歴数に含める。
+actionableなconnector thread findingは`pullRequestReview.commit.oid`へ、review summaryは
+reviewの`commit.oid`へ結び、distinctなreviewed headごとに数える。
+current batchのHEADは1回だけ数える。
+process-localな変数、ローカルcounter、watcher stateからwave数を初期化しない。
+actionable feedbackをnon-nullのreview commit OIDへ結べない場合はfail closedにする。
+復元結果が4 wave目ならPRを変更せず、人間へ引き継ぐ。
+
 ### B. 終了判定
 
 対処前に終了済みか確認する。
@@ -379,6 +389,8 @@ git push --force-with-lease="refs/heads/$head:$pr_head_before_work" "<head-remot
 
 - current-head review batchをroot causeごとにまとめ、同じ原因を持つ分岐、entrypoint、
   consumerをすべて確認してから編集する。
+- headまたはreview metadataが変わった場合は、GitHubの全review履歴からPR単位の
+  connector wave数を再構築する。
 - commit前に同じHEADのfindingが増えたらbatchを取り直し、同じreview waveへ含める。
 - 1 review waveは1 commit、1 pushとする。commentごとにcommitとpushを繰り返さない。
 - 同じhead SHAへ手動でCodex reviewを再要求しない。明示要求が必要な場合は、次の

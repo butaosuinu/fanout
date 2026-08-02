@@ -279,6 +279,29 @@ as one **current-head review batch**. Do not begin from an individual
 notification while the completed review record is unavailable. If another
 current-head finding appears before commit, rebuild the batch before editing.
 
+### Reconstruct connector review waves
+
+Before editing or any PR mutation, reconstruct the wave number from GitHub for
+the target repository and PR. Process-local counters and watcher state are not
+authoritative across sessions.
+
+1. Paginate `reviews(first:100,after:$endCursor)` and retain each review's ID,
+   author, body, state, and non-null `commit.oid`.
+2. Paginate `reviewThreads(first:100,after:$endCursor)` without filtering,
+   including resolved and outdated threads. Read each top-level comment's body,
+   author, and `pullRequestReview.commit.oid`.
+3. Classify actionable connector findings and review summaries, then deduplicate
+   them by reviewed head OID. The current-head review batch counts once. A
+   repeated review on the same head does not create another wave.
+4. Fail closed when actionable connector feedback cannot be bound to a non-null
+   review commit OID. If the current batch would be the fourth distinct wave,
+   do not edit, commit, push, reply, or request another review; require human
+   follow-up.
+
+Repeat this reconstruction on every invocation and whenever the head or review
+metadata changes. Resolved or outdated threads remain part of the historical
+count even though they are not current repair work.
+
 Cluster the batch by root cause. Confirm every affected branch, entrypoint, and
 consumer, then fix the confirmed occurrences together. One review wave produces
 one intentional commit and one push; it does not produce one commit per comment.

@@ -282,6 +282,11 @@ func TestReviewConvergenceContracts(t *testing.T) {
 				"one intentional commit",
 				"3 connector review-repair waves",
 				"hand it to a human",
+				"GitHub-persisted review history",
+				"including resolved and outdated threads",
+				"`pullRequestReview.commit.oid`",
+				"current batch's head once",
+				"process-local or watcher state",
 			},
 		},
 		{
@@ -292,6 +297,11 @@ func TestReviewConvergenceContracts(t *testing.T) {
 				"one intentional commit and one push",
 				"same head SHA",
 				"three connector review-repair waves",
+				"Reconstruct connector review waves",
+				"reviews(first:100,after:$endCursor)",
+				"reviewThreads(first:100,after:$endCursor)",
+				"including resolved and outdated threads",
+				"`pullRequestReview.commit.oid`",
 			},
 		},
 		{
@@ -306,6 +316,15 @@ func TestReviewConvergenceContracts(t *testing.T) {
 			},
 		},
 		{
+			name: "review checklist",
+			path: []string{"docs", "review-checklist.ja.md"},
+			required: []string{
+				"resolved または outdated の thread",
+				"distinct `commit.oid`",
+				"ローカル counter を wave 数の根拠にしない",
+			},
+		},
+		{
 			name: "claude pr-watch",
 			path: []string{"claude", "skills", "pr-watch", "SKILL.md"},
 			required: []string{
@@ -314,6 +333,11 @@ func TestReviewConvergenceContracts(t *testing.T) {
 				"同じhead SHA",
 				"max connector review-repair waves: 3",
 				"hand it to a human",
+				"GitHubに永続化された",
+				"resolved / outdated thread",
+				"`pullRequestReview.commit.oid`",
+				"current batchのHEADは1回だけ数える",
+				"ローカルcounter",
 			},
 		},
 	}

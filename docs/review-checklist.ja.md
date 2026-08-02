@@ -18,7 +18,9 @@ issue #373 の旧集計は、セッション履歴 102 件、CI 失敗 22 run、
 
 - **finding**：connector が投稿した独立した top-level inline comment。
   review summary と返信は含めない。
-- **review wave**：1 つの HEAD に対して完了した connector review。
+- **review wave**：actionable finding を持つ connector review の distinct
+  `commit.oid`。resolved または outdated の thread も PR の履歴数に残し、同じ OID は
+  1 wave と数える。
 - **same-head request**：HEAD を更新せずに明示的な review を再要求した回数。
 - **current-head approval**：最終 HEAD の push 後、次の HEAD へ進む前に観測した
   設定済み actor の `+1`。
@@ -54,6 +56,8 @@ issue #373 の旧集計は、セッション履歴 102 件、CI 失敗 22 run、
   一括で返す。style、推測、既存問題は修正対象にしない。
 - `pr-watch` は completed review と現在 HEAD の未解決指摘を 1 つの review wave として
   集め、同根の箇所を 1 commit で修正する。同じ SHA へ review を再要求しない。
+- `pr-watch` は各起動時と PR の変更前に、GitHub の全 review と全 review thread から
+  distinct `commit.oid` を復元する。ローカル counter を wave 数の根拠にしない。
 - `make test`、`make lint`、`make lint-web` は失敗の切り分けに使う。
   同じ最終ゲートで個別に重ねて実行しない。
 - branch への `git push` は agent hook でゲートされる。clean tree での
