@@ -28,7 +28,7 @@ fanout が検証されているのはこの範囲だけ。マトリクス外で�
 | OS | macOS / Linux | Windows は非対応(tmux 前提) |
 | checkout | 単一ユーザーのローカル checkout | ネットワーク FS、共有 checkout、他ユーザーとの同時操作は対象外 |
 | tmux | 3.3 以上 | `README.md` / `README.ja.md` の前提ツール |
-| gh | GitHub issue / Project 経路と PR status / cleanup でのみ認証済みを前提 | README も同じ限定。issue-less `fanout plan`・dry-run・`--check-update` は gh 無しで動き(`tests/bats/tier2_dry_run.bats:261`)、これらの経路は gh 無しのまま対象内 |
+| gh | GitHub を使う経路はすべて認証済みを前提 | gh 無しで動くのは issue-less `fanout plan` の dry-run(`tests/bats/tier2_dry_run.bats:261`)と dev build の `--check-update`(`cmd/fanout/selfupdate.go` で短絡)の 2 つだけ。issue モードの dry-run は `cmd/fanout/main.go` の依存チェックで gh を要求し、released build の `--check-update` は `gh release view` を呼ぶ |
 | ビルド | Go 1.26.5+ / Node.js 24+ / pnpm 11+ | チェックアウトからビルドする場合のみ |
 
 前提ツールのユーザー向け記述は README にある。この表は README を実装レビュー用に

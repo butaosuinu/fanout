@@ -81,14 +81,17 @@ codesign -s - /path/to/fanout
 ## From a checkout
 
 ```bash
-make install        # builds the Go binary + copies non-Codex-gate integrations
-make link           # symlinks the binary and non-Codex-gate integrations
-make uninstall      # removes paths except the Codex review gate
+make install        # builds the Go binary + copies the non-gate integrations
+make link           # symlinks the binary and the non-gate integrations
+make uninstall      # removes those paths, leaving both review gates in place
 ```
 
-The checkout Makefile never creates, replaces, or removes the Codex
-`post-work-review` package. Install, update, or remove that gate with the
-checksum-verified release installer above, not with code from the review target.
+The checkout Makefile never creates, replaces, or removes either
+`post-work-review` package — Claude's or Codex's. Install, update, or remove
+those gates with the checksum-verified release installer above, not with code
+from the review target: a branch that edits a gate would otherwise install the
+gate that judges it. `make uninstall` therefore leaves both gates behind, and
+Claude keeps loading its installed `post-work-review` skill afterwards.
 If the retired driver remains under `CODEX_DIR` or the effective `CODEX_HOME`,
 `make install` and `make link` stop before replacing the binary. Run the release
 installer to migrate it.

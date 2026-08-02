@@ -277,9 +277,9 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   runs. Then walk `docs/review-checklist.ja.md`; the same review findings recur.
 - Automated review is bounded by a supported-environment matrix (git 2.39+,
   SHA-1 only, non-sparse/non-split index, macOS/Linux single-user local
-  checkout, tmux 3.3+, and an authenticated `gh` for the GitHub issue / Project
-  and PR status / cleanup paths only — issue-less `fanout plan`, dry runs, and
-  `--check-update` stay in scope with no `gh`) plus explicit non-goals.
+  checkout, tmux 3.3+, and an authenticated `gh` for every GitHub-backed path —
+  only issue-less `fanout plan` dry runs and dev-build `--check-update` stay in
+  scope without it) plus explicit non-goals.
   `docs/review-scope.ja.md` is the human canon; review gates must resolve the
   matrix from `AGENTS.md`'s `Automated PR Review Scope` at the PR base, because
   only the bootstrap files are byte-verified — a branch that edits its own

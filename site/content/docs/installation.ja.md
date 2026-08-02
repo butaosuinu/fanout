@@ -85,13 +85,14 @@ codesign -s - /path/to/fanout
 ## チェックアウトから使う場合
 
 ```bash
-make install        # Go 版をビルド + Codex gate 以外の連携をコピー
-make link           # binary と Codex gate 以外の連携を symlink
-make uninstall      # Codex review gate 以外を削除
+make install        # Go 版をビルド + gate 以外の連携をコピー
+make link           # binary と gate 以外の連携を symlink
+make uninstall      # それらを削除(review gate 2 つは残す)
 ```
 
-checkout の Makefile は Codex の `post-work-review` package を配置、置換、削除しません。
-この gate を触れるのは上記の checksum 検証付き release installer だけで、review 対象のコードから gate を配置することはできません。
+checkout の Makefile は Claude と Codex どちらの `post-work-review` package も配置、置換、削除しません。
+これらの gate を触れるのは上記の checksum 検証付き release installer だけです。review 対象のコードから gate を配置すると、gate を変更した branch が自分を審査する gate をインストールすることになります。
+`make uninstall` は両方の gate を残すため、その後も Claude はインストール済みの `post-work-review` skill を読み込み続けます。
 `CODEX_DIR` または実効 `CODEX_HOME` に旧 driver が残る場合、`make install` と `make link` は binary の置換前に停止するので、release installer で旧 driver を移行してください。
 gate を変更する branch は trusted checkout または人がレビューしてください。
 

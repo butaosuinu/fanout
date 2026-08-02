@@ -15,7 +15,8 @@ Installs the latest fanout Go binary and bundled Claude/Codex integrations.
 Environment:
   BIN_DIR         Binary destination (default: $HOME/.local/bin)
   FANOUT_VERSION Git tag to install, e.g. v0.1.0 (default: latest)
-  CLAUDE_DIR      Claude data directory (default: $HOME/.claude)
+  CLAUDE_DIR      Claude data directory (default: CLAUDE_CONFIG_DIR or $HOME/.claude)
+  CLAUDE_CONFIG_DIR  Claude config root; used when CLAUDE_DIR is unset.
   CODEX_DIR       Codex install directory (default: CODEX_HOME or $HOME/.codex)
   CODEX_HOME      Codex runtime data directory (default: $HOME/.codex)
                     CODEX_DIR must match it when integrations are enabled.
@@ -82,7 +83,10 @@ done
 
 : "${HOME:?HOME must be set}"
 bin_dir="${BIN_DIR:-$HOME/.local/bin}"
-claude_dir="${CLAUDE_DIR:-$HOME/.claude}"
+# Claude Code reads its config root from CLAUDE_CONFIG_DIR. Since this installer
+# is the sole owner of the Claude post-work-review gate, ignoring that variable
+# would leave the trusted gate missing or stale wherever Claude actually reads.
+claude_dir="${CLAUDE_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 codex_home="${CODEX_HOME:-$HOME/.codex}"
 codex_dir="${CODEX_DIR:-$codex_home}"
 version="${FANOUT_VERSION:-latest}"

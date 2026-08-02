@@ -70,9 +70,12 @@ finding. This is the verified range, not a claim that older setups break.
 - macOS or Linux; a single-user local checkout (no network filesystems, no
   shared checkouts, no concurrent operation by other users)
 - tmux 3.3+
-- an authenticated `gh` for the GitHub issue / Project workflows and the PR
-  status / cleanup views only. Paths that run without it — issue-less
-  `fanout plan`, dry runs, `--check-update` — stay in scope with no `gh`
+- an authenticated `gh` for every GitHub-backed path, which is most of them.
+  Two paths run without it and stay in scope with no `gh`: issue-less
+  `fanout plan` dry runs, and `--check-update` on a dev build (it short-circuits
+  before calling `gh`). Issue-mode dry runs still require `gh`
+  (`cmd/fanout/main.go` requires it for every non-lifecycle mode), as does
+  `--check-update` on a released build
 - building from a checkout: Go 1.26.5+, Node.js 24+, pnpm 11+
 
 Rules for a review finding:
