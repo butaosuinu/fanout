@@ -158,19 +158,16 @@ export function App() {
     setDiffTarget({ key: rowKey(parent, pane), title: paneLabel(pane), query });
   }, []);
   const closeDiff = useCallback(() => setDiffTarget(null), []);
-  const restoreDiffFocus = useCallback(() => {
-    diffOriginRef.current?.focus();
-    diffOriginRef.current = null;
-  }, []);
+  /* 起点は消さずに残す。StrictMode(dev)は effect を setup → cleanup → setup と
+   * 二度回すので、probe の cleanup でも onClosed が呼ばれる。ここで null に
+   * すると、実際に閉じたときに戻す先が無くなる。次に開くとき上書きされる。 */
+  const restoreDiffFocus = useCallback(() => diffOriginRef.current?.focus(), []);
   const openSettings = useCallback(() => {
     settingsOriginRef.current = document.activeElement as HTMLElement | null;
     setSettingsOpen(true);
   }, []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
-  const restoreSettingsFocus = useCallback(() => {
-    settingsOriginRef.current?.focus();
-    settingsOriginRef.current = null;
-  }, []);
+  const restoreSettingsFocus = useCallback(() => settingsOriginRef.current?.focus(), []);
   const registerRow = (key: string, el: HTMLTableRowElement | null) => {
     if (el) rowRefs.current.set(key, el);
     else rowRefs.current.delete(key);

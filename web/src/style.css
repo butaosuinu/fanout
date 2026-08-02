@@ -783,10 +783,15 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 /* patch を持たない file の一覧。サイドバーは狭いと畳まれるので、警告帯の直下
    (本文領域の外)に置いて常に見えるようにする。 */
 .diff-omitted{
+  /* 契約上限の 500 file がすべて省略になりうる。オーバーレイは固定高の column
+     flex なので、伸び放題にすると .diff-main(min-height:0)が 0 まで潰れて本文へ
+     到達できなくなる。自分の高さを抑えて中でスクロールさせる。 */
+  flex:none; max-height:30vh; overflow-y:auto;
   padding:8px 22px 10px;
   border-bottom:1px solid var(--suna);
   font-family:var(--f-code); font-size:11.5px; color:var(--ink-60);
 }
+.diff-omitted > summary{ position:sticky; top:-8px; background:var(--washi); }
 .diff-omitted > summary{ cursor:pointer; }
 .diff-omitted > summary:hover{ color:var(--asagi); }
 .diff-omitted ul{ list-style:none; margin-top:6px; }
