@@ -438,13 +438,6 @@ func validateHerdrRuntimeParent(parent, runtimeParent string) error {
 	}
 }
 
-func herdrRuntimeOwnerProjectRoot(runtimeParent, ownerProjectRoot string) string {
-	if runtimeParent == "@manual" || strings.HasPrefix(runtimeParent, "plan:") {
-		return ownerProjectRoot
-	}
-	return ""
-}
-
 func reserveHerdrIntentIdentity(
 	reservations map[string]string,
 	id, fullBranchRef, worktreePath string,
