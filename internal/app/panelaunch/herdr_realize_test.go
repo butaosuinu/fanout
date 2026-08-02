@@ -337,7 +337,7 @@ func TestRealizeHerdrFreshCancellationBeforeRouteDoesNotCreateIntent(t *testing.
 			if loadErr != nil {
 				t.Fatal(loadErr)
 			}
-			if len(control.Intents) != 0 || len(control.Rows) != 0 {
+			if len(control.Intents) != 0 {
 				t.Fatalf("control after fresh cancellation = %+v", control)
 			}
 		})
@@ -719,59 +719,6 @@ func TestWorkspaceHasHerdrResourceMatchesSavedRootAmongMultiplePanes(t *testing.
 	}
 }
 
-func TestRealizeHerdrUsesFinalRowsAsIdempotentBindings(t *testing.T) {
-	repo := newHerdrRealizeRepo(t)
-	runtime := &fakeHerdrRealizeRuntime{}
-	installSuccessfulHerdrMutations(t, repo, runtime)
-	hooks := deterministicHerdrRealizeHooks()
-	coordinator := realizeTestHerdrCoordinator(t, repo, runtime, hooks)
-	finalizeHerdrTestIntent(t, repo, coordinator)
-	routeCallsBefore := runtime.routeCalls
-	runtime.routeErr = errors.New("route unavailable")
-
-	coordinatorResult, err := realizeHerdrCoordinator(
-		context.Background(),
-		testHerdrCoordinatorRequest(repo),
-		runtime,
-		hooks,
-	)
-	if err != nil || !coordinatorResult.AlreadyFinalized ||
-		coordinatorResult.Row.ID != coordinator.ID || len(runtime.mutations) != 1 ||
-		runtime.routeCalls != routeCallsBefore {
-		t.Fatalf(
-			"final coordinator replay = %+v err=%v mutations=%d",
-			coordinatorResult,
-			err,
-			len(runtime.mutations),
-		)
-	}
-	runtime.routeErr = nil
-
-	req := testHerdrWorktreeRequest(repo, "final-row", 432)
-	child, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
-	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
-		t.Fatalf("child with finalized coordinator error = %v", err)
-	}
-	if child.Intent.Coordinator != coordinator.Resource {
-		t.Fatalf("child coordinator = %+v, want finalized %+v", child.Intent.Coordinator, coordinator.Resource)
-	}
-	finalizeHerdrTestIntent(t, repo, child.Intent)
-	routeCallsBefore = runtime.routeCalls
-	runtime.routeErr = errors.New("route unavailable")
-
-	finalChild, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
-	if err != nil || !finalChild.AlreadyFinalized ||
-		finalChild.Row.ID != child.Intent.ID || finalChild.Pane != child.Pane ||
-		len(runtime.mutations) != 2 || runtime.routeCalls != routeCallsBefore {
-		t.Fatalf(
-			"final child replay = %+v err=%v mutations=%d",
-			finalChild,
-			err,
-			len(runtime.mutations),
-		)
-	}
-}
-
 func TestRealizeHerdrPlanTaskReusesSavedChildNames(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
@@ -809,22 +756,6 @@ func TestRealizeHerdrPlanTaskReusesSavedChildNames(t *testing.T) {
 		t.Fatalf(
 			"renamed intent replay = %+v, original = %+v, err=%v, mutations=%d",
 			reused.Intent,
-			child.Intent,
-			err,
-			len(runtime.mutations),
-		)
-	}
-
-	finalizeHerdrTestIntent(t, repo, child.Intent)
-	finalized, err := realizeHerdrWorktree(context.Background(), renamed, runtime, hooks)
-	if err != nil || !finalized.AlreadyFinalized ||
-		finalized.Row.Slug != child.Intent.Slug ||
-		finalized.Row.BranchName != child.Intent.BranchName ||
-		finalized.Row.WorktreePath != child.Intent.WorktreePath ||
-		len(runtime.mutations) != 2 {
-		t.Fatalf(
-			"renamed final replay = %+v, original = %+v, err=%v, mutations=%d",
-			finalized.Row,
 			child.Intent,
 			err,
 			len(runtime.mutations),
@@ -1523,24 +1454,6 @@ func TestRealizeHerdrReusesNumericParentCoordinatorAcrossLinkedWorktrees(t *test
 			len(runtime.mutations),
 		)
 	}
-	finalizeHerdrTestIntent(t, repo, child.Intent)
-	finalChild, err := realizeHerdrWorktree(
-		context.Background(),
-		otherChildReq,
-		runtime,
-		hooks,
-	)
-	if err != nil || !finalChild.AlreadyFinalized ||
-		finalChild.Row.ID != child.Intent.ID ||
-		finalChild.Row.WorktreePath != child.Intent.WorktreePath ||
-		len(runtime.mutations) != 2 {
-		t.Fatalf(
-			"linked finalized child reuse = %+v, err = %v, mutations = %d",
-			finalChild,
-			err,
-			len(runtime.mutations),
-		)
-	}
 }
 
 func TestRealizeHerdrResumesPlannedChildAtSavedOwnerAcrossLinkedWorktrees(t *testing.T) {
@@ -1918,39 +1831,6 @@ func assertHerdrRecoveryClassificationDeadline(
 			hasDeadline,
 			remaining,
 		)
-	}
-}
-
-func finalizeHerdrTestIntent(t *testing.T, repo string, intent state.HerdrIntent) {
-	t.Helper()
-	locked, err := state.LockHerdrControl(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if unlockErr := locked.Unlock(); unlockErr != nil {
-			t.Errorf("unlock Herdr test control: %v", unlockErr)
-		}
-	}()
-	if !locked.RemoveIntent(intent.ID) {
-		t.Fatalf("intent %s was not present for finalization", intent.ID)
-	}
-	row := state.HerdrRow{
-		ID: intent.ID, Kind: intent.Kind, Parent: intent.Parent,
-		RuntimeParent:    intent.RuntimeParent,
-		OwnerProjectRoot: intent.OwnerProjectRoot,
-		IssueNum:         intent.IssueNum, TaskID: intent.TaskID, Backend: intent.Backend,
-		Slug: intent.Slug, BranchName: intent.BranchName,
-		FullBranchRef: intent.FullBranchRef, BaseBranch: intent.BaseBranch,
-		BaseSHA: intent.BaseSHA, ExpectedHead: intent.ExpectedHead,
-		WorktreePath:  intent.WorktreePath,
-		BranchExisted: intent.BranchExisted, BranchCreated: intent.BranchCreated,
-		Resource: intent.Resource,
-		Session:  intent.Session, SocketPath: intent.SocketPath,
-	}
-	locked.UpsertRow(row)
-	if err := locked.Save(); err != nil {
-		t.Fatal(err)
 	}
 }
 

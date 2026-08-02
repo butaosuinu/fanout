@@ -264,10 +264,9 @@ func TestProjectStateLockSerializesHerdrControlWriter(t *testing.T) {
 	}
 }
 
-func TestHerdrControlBindingsIncludeRowsAndEveryIntentStatus(t *testing.T) {
+func TestHerdrControlBindingsIncludeEveryIntentStatus(t *testing.T) {
 	repo := newHerdrControlRepo(t)
 	store := testEmptyHerdrControl()
-	store.Rows = append(store.Rows, testHerdrRow("425"))
 	statuses := []HerdrIntentStatus{
 		HerdrIntentPlanned,
 		HerdrIntentIssued,
@@ -289,10 +288,6 @@ func TestHerdrControlBindingsIncludeRowsAndEveryIntentStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows := store.RowBindings(repo)
-	if len(rows) != 1 || rows[0] != (backend.Binding{Parent: "425", Backend: backend.Herdr}) {
-		t.Fatalf("row bindings = %#v", rows)
-	}
 	intents := store.ProvisionalBindings(repo)
 	if len(intents) != len(statuses) {
 		t.Fatalf("intent bindings = %#v, want %d", intents, len(statuses))
@@ -325,31 +320,6 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 		got[0].Parent != "plan:demo" {
 		t.Fatalf("second plan intent bindings = %#v", got)
 	}
-
-	toRow := func(intent HerdrIntent) HerdrRow {
-		return HerdrRow{
-			ID: intent.ID, Kind: intent.Kind, Parent: intent.Parent,
-			RuntimeParent:    intent.RuntimeParent,
-			OwnerProjectRoot: intent.OwnerProjectRoot, Backend: intent.Backend,
-			WorktreePath:  intent.WorktreePath,
-			BranchExisted: intent.BranchExisted, BranchCreated: intent.BranchCreated,
-			Resource: testHerdrCoordinatorResource(intent.WorktreePath),
-			Session:  intent.Session, SocketPath: intent.SocketPath,
-		}
-	}
-	rows := testEmptyHerdrControl()
-	rows.Rows = []HerdrRow{toRow(first), toRow(second)}
-	if err := validateHerdrControl(rows); err != nil {
-		t.Fatal(err)
-	}
-	if got := rows.RowBindings("/repo/one"); len(got) != 1 ||
-		got[0].Parent != "plan:demo" {
-		t.Fatalf("first plan row bindings = %#v", got)
-	}
-	if got := rows.RowBindings("/repo/two"); len(got) != 1 ||
-		got[0].Parent != "plan:demo" {
-		t.Fatalf("second plan row bindings = %#v", got)
-	}
 }
 
 func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testing.T) {
@@ -367,24 +337,12 @@ func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testin
 
 func TestHerdrSyntheticBindingsProjectWatcherIssuesAndKeepResolvedParents(t *testing.T) {
 	store := testEmptyHerdrControl()
-	store.Rows = []HerdrRow{
-		{RuntimeParent: "@manual", IssueNum: 424, Backend: backend.Herdr},
-		{RuntimeParent: "@watch", IssueNum: 425, Backend: backend.Herdr},
-		{RuntimeParent: "427", Backend: backend.Herdr},
-	}
 	store.Intents = []HerdrIntent{
+		{RuntimeParent: "@manual", IssueNum: 424, Backend: backend.Herdr},
 		{RuntimeParent: "@watch", IssueNum: 426, Backend: backend.Herdr},
 		{RuntimeParent: "428", Backend: backend.Herdr},
 	}
 
-	rows := store.RowBindings("/repo")
-	wantRows := []backend.Binding{
-		{Parent: "425", Backend: backend.Herdr},
-		{Parent: "427", Backend: backend.Herdr},
-	}
-	if !slices.Equal(rows, wantRows) {
-		t.Fatalf("synthetic row bindings = %#v", rows)
-	}
 	intents := store.ProvisionalBindings("/repo")
 	wantIntents := []backend.Binding{
 		{Parent: "426", Backend: backend.Herdr},
@@ -392,21 +350,6 @@ func TestHerdrSyntheticBindingsProjectWatcherIssuesAndKeepResolvedParents(t *tes
 	}
 	if !slices.Equal(intents, wantIntents) {
 		t.Fatalf("synthetic intent bindings = %#v", intents)
-	}
-}
-
-func TestHerdrControlRejectsRowIntentReservationConflict(t *testing.T) {
-	repo := newHerdrControlRepo(t)
-	store := testEmptyHerdrControl()
-	row := testHerdrRow("425")
-	intent := testHerdrWorktreeIntent(repo, "500", 501, "other")
-	intent.BranchName = row.BranchName
-	intent.FullBranchRef = row.FullBranchRef
-	store.Rows = append(store.Rows, row)
-	store.Intents = append(store.Intents, intent)
-	if err := validateHerdrControl(store); err == nil ||
-		!strings.Contains(err.Error(), "reserve the same branch:") {
-		t.Fatalf("row/intent reservation error = %v", err)
 	}
 }
 
@@ -538,31 +481,6 @@ func TestHerdrControlAcceptsSHA256ObjectIDs(t *testing.T) {
 	}
 }
 
-func TestHerdrControlRowsPreserveBranchOwnership(t *testing.T) {
-	created := testHerdrRow("425")
-	if err := validateHerdrRow(created); err != nil {
-		t.Fatal(err)
-	}
-	existing := created
-	existing.BranchCreated = false
-	existing.BranchExisted = true
-	if err := validateHerdrRow(existing); err != nil {
-		t.Fatal(err)
-	}
-	missing := created
-	missing.BranchCreated = false
-	if err := validateHerdrRow(missing); err == nil ||
-		!strings.Contains(err.Error(), "incomplete") {
-		t.Fatalf("missing branch ownership error = %v", err)
-	}
-	contradictory := created
-	contradictory.BranchExisted = true
-	if err := validateHerdrRow(contradictory); err == nil ||
-		!strings.Contains(err.Error(), "incomplete") {
-		t.Fatalf("contradictory branch ownership error = %v", err)
-	}
-}
-
 func TestHerdrControlIssuedWorktreeMayRetainRealizedResourceForOpenRecovery(t *testing.T) {
 	repo := newHerdrControlRepo(t)
 	intent := testHerdrWorktreeIntent(repo, "425", 426, "reopen")
@@ -643,29 +561,6 @@ func testHerdrCoordinatorResource(repo string) HerdrResource {
 	return HerdrResource{
 		WorkspaceID: "w1", Label: "fanout-coordinator-token",
 		PaneID: "w1:p1", TerminalID: "term-1", CurrentPath: repo,
-	}
-}
-
-func testHerdrRow(parent string) HerdrRow {
-	id, err := HerdrWorktreeIntentID(parent, "", 426, "")
-	if err != nil {
-		panic(err)
-	}
-	return HerdrRow{
-		ID: id, Kind: HerdrIntentWorktree, Parent: parent,
-		RuntimeParent: parent,
-		IssueNum:      426, Backend: backend.Herdr,
-		Slug: "child", BranchName: "fanout/child",
-		FullBranchRef: "refs/heads/fanout/child",
-		BaseBranch:    "main", BaseSHA: strings.Repeat("1", 40),
-		ExpectedHead: strings.Repeat("1", 40), WorktreePath: "/repo/child",
-		BranchCreated: true,
-		Resource: HerdrResource{
-			WorkspaceID: "w2", Label: "fanout-worktree-token",
-			PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: "/repo/child",
-			RepoKey: "/repo/.git", RepoRoot: "/repo",
-		},
-		Session: "fanout-test", SocketPath: "/private/tmp/fanout-test/herdr.sock",
 	}
 }
 

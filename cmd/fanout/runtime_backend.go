@@ -275,7 +275,6 @@ func refreshHerdrControlBindings(inputs *runtimeBackendInputs) error {
 		return fmt.Errorf("load Herdr runtime bindings: %w", err)
 	}
 	ownerProjectRoot := canonicalRuntimeRoot(inputs.projectRoot)
-	inputs.rows = append(inputs.rows, control.RowBindings(ownerProjectRoot)...)
 	inputs.provisionalIntents = append(
 		append([]backend.Binding(nil), inputs.suppliedIntents...),
 		control.ProvisionalBindings(ownerProjectRoot)...,
@@ -419,25 +418,6 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 		hasHerdrRoute = true
 		routeErr = errors.Join(routeErr, fmt.Errorf("load Herdr control routes: %w", controlErr))
 	} else {
-		for i, row := range control.Rows {
-			hasHerdrRoute = true
-			session := strings.TrimSpace(row.Session)
-			socketPath := strings.TrimSpace(row.SocketPath)
-			if session == "" || socketPath == "" {
-				routeErr = errors.Join(routeErr, backend.ObservationRouteUnavailable(
-					backend.ObservationRoute{
-						Backend: backend.Herdr, SessionID: session, SocketPath: socketPath,
-					},
-					fmt.Errorf("herdr control row %d requires session and socketPath", i),
-				))
-				continue
-			}
-			addRoute(runtimeReadRoute{
-				name:            backend.Herdr,
-				herdrSession:    session,
-				herdrSocketPath: socketPath,
-			})
-		}
 		for i, intent := range control.Intents {
 			hasHerdrRoute = true
 			session := strings.TrimSpace(intent.Session)

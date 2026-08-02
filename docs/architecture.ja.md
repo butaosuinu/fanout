@@ -114,14 +114,16 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 - **state lock の順序と原子性**: `.fanout/state.json.lock` はプランニングと
   起動の両方をカバーする。ロック区間を狭めると `(parent, issueNum)` の
   idempotency が壊れる。
-- **Herdr control registry は repository 共通**: linked worktree 間の Herdr
-  row / intent は git common directory の `fanout/herdr-control.json` とその
-  lock を使う。intent 保存から branch 予約、socket mutation、事後条件の確認
-  まで lock を保持する。tmux agent launch も state 更新が終わるまで同じ lock
-  を保持する。発行済み mutation は再発行せず、label nonce と Git 事後条件を
-  一意に確認できない場合は `manual_cleanup_required` にする。issue-less plan
-  の row / intent は physical owner root を ID に含め、同じ slug を使う別の
-  linked worktree には backend binding として投影しない。
+- **Herdr intent は repository 共通**: linked worktree 間の Herdr intent 行は
+  git common directory の `fanout/herdr-control.json` とその lock を使う。
+  final row は #528 以降が owning worktree の `state.json` pane row として
+  確定する(tmux backend と同じ所在)。intent 保存から branch 予約、socket
+  mutation、事後条件の確認まで lock を保持する。tmux agent launch も state
+  更新が終わるまで同じ lock を保持する。発行済み mutation は再発行せず、
+  label nonce と Git 事後条件を一意に確認できない場合は
+  `manual_cleanup_required` にする。issue-less plan の intent は physical
+  owner root を ID に含め、同じ slug を使う別の linked worktree には backend
+  binding として投影しない。
 - **worktree refresh は user work を壊さない**: base branch が dirty / ahead /
   diverged なら強制更新せず fail する。
 - **watch のトリガーラベルはプロンプトインジェクション境界**: issue 本文が

@@ -796,9 +796,8 @@ func TestRuntimeReadRoutesUseAmbientHerdrWithoutSavedRoute(t *testing.T) {
 	}
 }
 
-func TestRuntimeReadRoutesUseSharedHerdrControlRowsAndIntents(t *testing.T) {
+func TestRuntimeReadRoutesUseSharedHerdrControlIntents(t *testing.T) {
 	repo := initLifecycleRepo(t)
-	writeHerdrControlRouteRow(t, repo, "control", "/tmp/control.sock")
 	writeHerdrControlRouteIntent(t, repo, "intent", "/tmp/intent.sock")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("FANOUT_BACKEND", "")
@@ -813,11 +812,6 @@ func TestRuntimeReadRoutesUseSharedHerdrControlRowsAndIntents(t *testing.T) {
 	}
 	want := map[runtimeReadRoute]bool{
 		{name: backend.Tmux}: true,
-		{
-			name:            backend.Herdr,
-			herdrSession:    "control",
-			herdrSocketPath: "/tmp/control.sock",
-		}: true,
 		{
 			name:            backend.Herdr,
 			herdrSession:    "intent",
@@ -889,36 +883,6 @@ func TestRuntimeReadRoutesUseUserDefaultHerdrWithoutSavedRoute(t *testing.T) {
 	want := runtimeReadRoute{name: backend.Herdr, herdrSession: "user-default", herdrSocketPath: "/tmp/user-default.sock"}
 	if len(routes) != 1 || routes[0] != want {
 		t.Fatalf("routes = %+v, want [%+v]", routes, want)
-	}
-}
-
-func writeHerdrControlRouteRow(t *testing.T, repo, session, socketPath string) {
-	t.Helper()
-	id, err := state.HerdrCoordinatorIntentID("425", "", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	locked, err := state.LockHerdrControl(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if unlockErr := locked.Unlock(); unlockErr != nil {
-			t.Errorf("unlock Herdr control: %v", unlockErr)
-		}
-	}()
-	locked.UpsertRow(state.HerdrRow{
-		ID: id, Kind: state.HerdrIntentCoordinator, Parent: "425",
-		RuntimeParent: "425",
-		Backend:       backend.Herdr, WorktreePath: repo,
-		Resource: state.HerdrResource{
-			WorkspaceID: "w1", Label: "fanout-coordinator-route",
-			PaneID: "w1:p1", TerminalID: "term-1", CurrentPath: repo,
-		},
-		Session: session, SocketPath: socketPath,
-	})
-	if err := locked.Save(); err != nil {
-		t.Fatal(err)
 	}
 }
 
