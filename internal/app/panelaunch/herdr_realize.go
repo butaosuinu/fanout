@@ -222,6 +222,10 @@ func RealizeHerdrCoordinator(
 	}
 
 	intent, found := locked.FindIntent(intentID)
+	if found && intent.Status == state.HerdrIntentManualCleanupRequired {
+		// Terminal regardless of expiry: surface the saved failure.
+		return result, herdrManualCleanupError(intent)
+	}
 	operationNow := setup.hooks.Now()
 	routeCtx, operationParent, routeCancel, routeContextErr := herdrRealizeRouteContext(
 		setup.ctx,
@@ -272,8 +276,6 @@ func RealizeHerdrCoordinator(
 			return coordinatorDeferred(intent)
 		case state.HerdrIntentIssued:
 			return recoverHerdrCoordinator(operationCtx, runtime, locked, intent, nil)
-		case state.HerdrIntentManualCleanupRequired:
-			return result, herdrManualCleanupError(intent)
 		default:
 			return result, markHerdrIntentManual(
 				locked,
@@ -373,6 +375,10 @@ func RealizeHerdrWorktree(
 		return result, intentIDErr
 	}
 	intent, found := locked.FindIntent(intentID)
+	if found && intent.Status == state.HerdrIntentManualCleanupRequired {
+		// Terminal regardless of expiry: surface the saved failure.
+		return result, herdrManualCleanupError(intent)
+	}
 	coordinatorID, coordinatorIDErr := state.HerdrCoordinatorIntentID(
 		runtimeParent,
 		runtimeOwnerProjectRoot,
@@ -462,18 +468,18 @@ func RealizeHerdrWorktree(
 		if refErr != nil {
 			return result, refErr
 		}
-		head, branchExisted, branchErr := worktree.ObserveBranch(req.SourceRoot, fullRef)
+		head, branchExisted, branchErr := worktree.ObserveBranch(setup.ctx, req.SourceRoot, fullRef)
 		if branchErr != nil {
 			return result, branchErr
 		}
 		if branchExisted {
-			if availableErr := worktree.BranchAvailable(req.SourceRoot, fullRef); availableErr != nil {
+			if availableErr := worktree.BranchAvailable(setup.ctx, req.SourceRoot, fullRef); availableErr != nil {
 				return result, availableErr
 			}
 		} else {
 			head = base.SHA
 		}
-		checkout, checkoutErr := worktree.ObserveCheckout(req.SourceRoot, req.WorktreePath)
+		checkout, checkoutErr := worktree.ObserveCheckout(setup.ctx, req.SourceRoot, req.WorktreePath)
 		if checkoutErr != nil {
 			return result, checkoutErr
 		}
@@ -527,8 +533,6 @@ func RealizeHerdrWorktree(
 		)
 	case state.HerdrIntentIssued:
 		return recoverHerdrWorktree(operationCtx, runtime, locked, req, source, intent, nil)
-	case state.HerdrIntentManualCleanupRequired:
-		return result, herdrManualCleanupError(intent)
 	case state.HerdrIntentPlanned:
 	default:
 		return result, markHerdrIntentManual(
@@ -541,7 +545,7 @@ func RealizeHerdrWorktree(
 	if policyErr := runtime.VerifyWorktreeSetupPolicy(operationCtx); policyErr != nil {
 		return result, policyErr
 	}
-	intent, reservationErr := ensureHerdrBranchReservation(locked, req, intent)
+	intent, reservationErr := ensureHerdrBranchReservation(operationCtx, locked, req, intent)
 	if reservationErr != nil {
 		return result, reservationErr
 	}
@@ -559,7 +563,7 @@ func RealizeHerdrWorktree(
 			fmt.Errorf("planned Herdr worktree label already has %d workspaces", len(matches)),
 		)
 	}
-	if preconditionErr := verifyHerdrWorktreePreconditions(req, source, intent); preconditionErr != nil {
+	if preconditionErr := verifyHerdrWorktreePreconditions(operationCtx, req, source, intent); preconditionErr != nil {
 		return result, markHerdrIntentManual(locked, intent, preconditionErr)
 	}
 
@@ -590,7 +594,7 @@ func RealizeHerdrWorktree(
 		}
 		return recoverHerdrWorktree(operationCtx, runtime, locked, req, source, intent, mutationErr)
 	}
-	if finalizeErr := finalizeHerdrWorktree(locked, req, source, &intent, mutation.WorkspaceObservation); finalizeErr != nil {
+	if finalizeErr := finalizeHerdrWorktree(operationCtx, locked, req, source, &intent, mutation.WorkspaceObservation); finalizeErr != nil {
 		return result, handleHerdrWorktreeFinalizeError(locked, intent, finalizeErr)
 	}
 	return worktreeDeferred(intent)
@@ -690,6 +694,7 @@ func herdrCoordinatorSyntheticIssueNum(parent string, issueNum int) int {
 }
 
 func verifyHerdrWorktreePreconditions(
+	ctx context.Context,
 	req HerdrWorktreeRequest,
 	source worktree.RepoIdentity,
 	intent state.HerdrIntent,
@@ -697,17 +702,17 @@ func verifyHerdrWorktreePreconditions(
 	if err := worktree.VerifyWorktreeParentDir(req.ProjectRoot, intent.WorktreePath); err != nil {
 		return err
 	}
-	branch, found, branchErr := worktree.ObserveBranch(req.SourceRoot, intent.FullBranchRef)
+	branch, found, branchErr := worktree.ObserveBranch(ctx, req.SourceRoot, intent.FullBranchRef)
 	if branchErr != nil {
 		return branchErr
 	}
 	if !found || branch != intent.ExpectedHead {
 		return fmt.Errorf("herdr branch %s does not match saved head", intent.FullBranchRef)
 	}
-	if availableErr := worktree.BranchAvailable(req.SourceRoot, intent.FullBranchRef); availableErr != nil {
+	if availableErr := worktree.BranchAvailable(ctx, req.SourceRoot, intent.FullBranchRef); availableErr != nil {
 		return availableErr
 	}
-	checkout, err := worktree.ObserveCheckout(req.SourceRoot, intent.WorktreePath)
+	checkout, err := worktree.ObserveCheckout(ctx, req.SourceRoot, intent.WorktreePath)
 	if err != nil {
 		return err
 	}

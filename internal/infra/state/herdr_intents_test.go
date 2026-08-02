@@ -68,6 +68,28 @@ func TestLockProjectForLaunchAcceptsGroupWritableCommonDir(t *testing.T) {
 	}
 }
 
+func TestHerdrIntentsRejectExistingJournalWithoutSchemaVersion(t *testing.T) {
+	for _, contents := range []string{`{}`, `{"schemaVersion":0}`} {
+		t.Run(contents, func(t *testing.T) {
+			repo := newHerdrIntentsRepo(t)
+			path, err := HerdrIntentsPath(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadHerdrIntents(repo); err == nil ||
+				!strings.Contains(err.Error(), "unsupported Herdr intents schema version 0") {
+				t.Fatalf("schema-less journal error = %v", err)
+			}
+		})
+	}
+}
+
 func TestHerdrIntentsRejectFutureSchemaVersion(t *testing.T) {
 	repo := newHerdrIntentsRepo(t)
 	path, err := HerdrIntentsPath(repo)

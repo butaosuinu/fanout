@@ -562,7 +562,7 @@ func branchExists(root, branch string) bool {
 	if branch == "" {
 		return false
 	}
-	_, found, err := ObserveBranch(root, "refs/heads/"+branch)
+	_, found, err := ObserveBranch(context.Background(), root, "refs/heads/"+branch)
 	return err == nil && found
 }
 

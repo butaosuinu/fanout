@@ -31,11 +31,12 @@ func releaseHerdrIntent(
 }
 
 func ensureHerdrBranchReservation(
+	ctx context.Context,
 	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
 	intent state.HerdrIntent,
 ) (state.HerdrIntent, error) {
-	current, found, err := worktree.ObserveBranch(req.SourceRoot, intent.FullBranchRef)
+	current, found, err := worktree.ObserveBranch(ctx, req.SourceRoot, intent.FullBranchRef)
 	if err != nil {
 		return intent, err
 	}
@@ -47,7 +48,7 @@ func ensureHerdrBranchReservation(
 				fmt.Errorf("adopted Herdr branch moved from %s", intent.ExpectedHead),
 			)
 		}
-		if err := worktree.BranchAvailable(req.SourceRoot, intent.FullBranchRef); err != nil {
+		if err := worktree.BranchAvailable(ctx, req.SourceRoot, intent.FullBranchRef); err != nil {
 			return intent, err
 		}
 		return intent, nil
@@ -70,7 +71,7 @@ func ensureHerdrBranchReservation(
 		)
 	}
 	if err := worktree.ReserveBranch(req.SourceRoot, intent.FullBranchRef, intent.BaseSHA); err != nil {
-		current, found, observeErr := worktree.ObserveBranch(req.SourceRoot, intent.FullBranchRef)
+		current, found, observeErr := worktree.ObserveBranch(ctx, req.SourceRoot, intent.FullBranchRef)
 		if observeErr != nil {
 			return intent, markHerdrIntentManual(locked, intent, errors.Join(err, observeErr))
 		}
@@ -98,7 +99,8 @@ func rollbackUnissuedHerdrWorktree(
 	mutationErr error,
 ) error {
 	if !intent.BranchExisted && !intent.BranchCreated {
-		_, found, err := worktree.ObserveBranch(req.SourceRoot, intent.FullBranchRef)
+		// Rollback must complete even when the launch context is canceled.
+		_, found, err := worktree.ObserveBranch(context.Background(), req.SourceRoot, intent.FullBranchRef)
 		if err != nil || found {
 			cause := err
 			if cause == nil {
@@ -189,18 +191,19 @@ func recoverHerdrWorktree(
 	}
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
 	if len(matches) == 1 {
-		if err := finalizeHerdrWorktree(locked, req, source, &intent, matches[0]); err != nil {
+		if err := finalizeHerdrWorktree(ctx, locked, req, source, &intent, matches[0]); err != nil {
 			return HerdrWorktreeResult{}, handleHerdrWorktreeFinalizeError(locked, intent, err)
 		}
 		return worktreeDeferred(intent)
 	}
-	checkout, checkoutErr := worktree.ObserveCheckout(req.SourceRoot, intent.WorktreePath)
+	checkout, checkoutErr := worktree.ObserveCheckout(ctx, req.SourceRoot, intent.WorktreePath)
 	if checkoutErr != nil {
 		return HerdrWorktreeResult{}, errors.Join(mutationErr, checkoutErr)
 	}
 	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) &&
 		intent.Resource.WorkspaceID != "" && len(matches) == 0 {
 		if _, verifyErr := worktree.VerifyCheckout(
+			ctx,
 			req.SourceRoot,
 			intent.WorktreePath,
 			intent.FullBranchRef,
@@ -220,6 +223,7 @@ func recoverHerdrWorktree(
 	if mutationErr == nil && intent.BranchCreated && len(matches) == 0 &&
 		checkout.PathAbsent && !checkout.Registered {
 		_, branchFound, branchErr := worktree.ObserveBranch(
+			ctx,
 			req.SourceRoot,
 			intent.FullBranchRef,
 		)
@@ -269,6 +273,7 @@ func recoverHerdrWorktree(
 }
 
 func finalizeHerdrWorktree(
+	ctx context.Context,
 	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
 	source worktree.RepoIdentity,
@@ -276,9 +281,11 @@ func finalizeHerdrWorktree(
 	observation herdrrun.WorkspaceObservation,
 ) error {
 	if err := validateWorktreeObservation(*intent, source, observation); err != nil {
-		return err
+		// The snapshot succeeded, so the mismatch is confirmed.
+		return errors.Join(errHerdrRealizedIdentityChanged, err)
 	}
 	if _, err := worktree.VerifyCheckout(
+		ctx,
 		req.SourceRoot,
 		intent.WorktreePath,
 		intent.FullBranchRef,
@@ -303,10 +310,12 @@ func handleHerdrWorktreeFinalizeError(
 	intent state.HerdrIntent,
 	err error,
 ) error {
-	if errors.Is(err, errHerdrRealizedIntentSave) {
-		return err
+	if errors.Is(err, errHerdrRealizedIdentityChanged) || errors.Is(err, worktree.ErrCheckoutMismatch) {
+		return markHerdrIntentManual(locked, intent, err)
 	}
-	return markHerdrIntentManual(locked, intent, err)
+	// Save failures and transient Git reads classified nothing; keep the
+	// intent retryable.
+	return err
 }
 
 func verifyRealizedCoordinator(
@@ -351,6 +360,7 @@ func resumeRealizedHerdrWorktree(
 			)
 		}
 		if _, err := worktree.VerifyCheckout(
+			ctx,
 			req.SourceRoot,
 			intent.WorktreePath,
 			intent.FullBranchRef,
@@ -358,7 +368,10 @@ func resumeRealizedHerdrWorktree(
 			source.RepoKey,
 			source.RepoRoot,
 		); err != nil {
-			return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, err)
+			if errors.Is(err, worktree.ErrCheckoutMismatch) {
+				return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, err)
+			}
+			return HerdrWorktreeResult{}, err
 		}
 		return worktreeDeferred(intent)
 	case 0:
@@ -371,6 +384,7 @@ func resumeRealizedHerdrWorktree(
 	}
 
 	if _, err := worktree.VerifyCheckout(
+		ctx,
 		req.SourceRoot,
 		intent.WorktreePath,
 		intent.FullBranchRef,
@@ -378,7 +392,10 @@ func resumeRealizedHerdrWorktree(
 		source.RepoKey,
 		source.RepoRoot,
 	); err != nil {
-		return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, err)
+		if errors.Is(err, worktree.ErrCheckoutMismatch) {
+			return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, err)
+		}
+		return HerdrWorktreeResult{}, err
 	}
 	if coordinatorErr := verifyCoordinatorObservation(intent.Coordinator, workspaces); coordinatorErr != nil {
 		return HerdrWorktreeResult{}, markHerdrIntentManual(locked, intent, coordinatorErr)
@@ -423,6 +440,7 @@ func resumeRealizedHerdrWorktree(
 		return recoverHerdrWorktree(ctx, runtime, locked, req, source, intent, mutationErr)
 	}
 	if finalizeErr := finalizeHerdrWorktree(
+		ctx,
 		locked,
 		req,
 		source,

@@ -55,7 +55,7 @@ func TestHerdrBranchReservationIsAtomicAndCompareDeleted(t *testing.T) {
 	if err := ReserveBranch(repo, fullRef, base); err == nil {
 		t.Fatal("second atomic branch reservation unexpectedly succeeded")
 	}
-	got, found, err := ObserveBranch(repo, fullRef)
+	got, found, err := ObserveBranch(context.Background(), repo, fullRef)
 	if err != nil || !found || got != base {
 		t.Fatalf("reserved branch = (%q,%t,%v), want %s", got, found, err, base)
 	}
@@ -70,7 +70,7 @@ func TestHerdrBranchReservationIsAtomicAndCompareDeleted(t *testing.T) {
 	if err := DeleteReservedBranch(repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := ObserveBranch(repo, fullRef); err != nil || found {
+	if _, found, err := ObserveBranch(context.Background(), repo, fullRef); err != nil || found {
 		t.Fatalf("branch after compare-delete = (found:%t, err:%v)", found, err)
 	}
 }
@@ -102,7 +102,7 @@ func TestHerdrBranchReservationSupportsSHA256ObjectIDs(t *testing.T) {
 	if err := ReserveBranch(repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
-	if got, found, err := ObserveBranch(repo, fullRef); err != nil || !found || got != base {
+	if got, found, err := ObserveBranch(context.Background(), repo, fullRef); err != nil || !found || got != base {
 		t.Fatalf("SHA-256 branch = (%q,%t,%v), want %s", got, found, err, base)
 	}
 	if err := DeleteReservedBranch(repo, fullRef, base); err != nil {
@@ -234,7 +234,7 @@ func TestObserveHerdrCheckoutIgnoresUnrelatedPrunableWorktree(t *testing.T) {
 	}
 
 	target := filepath.Join(repo, ".fanout", "worktrees", "target")
-	got, err := ObserveCheckout(repo, target)
+	got, err := ObserveCheckout(context.Background(), repo, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestObserveHerdrCheckoutRejectsRecreatedPrunableDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := ObserveCheckout(repo, checkout); err == nil ||
+	if _, err := ObserveCheckout(context.Background(), repo, checkout); err == nil ||
 		!strings.Contains(err.Error(), "does not resolve to its registered worktree root") {
 		t.Fatalf("recreated prunable checkout error = %v", err)
 	}
@@ -280,6 +280,7 @@ func TestVerifyHerdrCheckoutPinsBranchHeadAndRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := VerifyCheckout(
+		context.Background(),
 		repo,
 		checkout,
 		fullRef,
@@ -301,6 +302,7 @@ func TestVerifyHerdrCheckoutPinsBranchHeadAndRepository(t *testing.T) {
 	gitTest(t, checkout, "add", "next.txt")
 	gitTest(t, checkout, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.test", "commit", "-m", "next")
 	if _, err := VerifyCheckout(
+		context.Background(),
 		repo,
 		checkout,
 		fullRef,

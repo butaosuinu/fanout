@@ -309,6 +309,13 @@ func loadHerdrIntents(path string) (HerdrIntents, error) {
 	if !found {
 		return emptyHerdrIntents(), nil
 	}
+	// Only a missing file starts a fresh v1 journal. An existing file without
+	// a schema version is corrupt and must not be adopted as empty ownership.
+	if store.SchemaVersion == 0 {
+		return HerdrIntents{}, fmt.Errorf(
+			"validate Herdr intents %s: unsupported Herdr intents schema version 0", path,
+		)
+	}
 	store.normalize()
 	if err := validateHerdrIntents(store); err != nil {
 		return HerdrIntents{}, fmt.Errorf("validate Herdr intents %s: %w", path, err)

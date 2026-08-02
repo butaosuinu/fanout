@@ -529,7 +529,7 @@ func TestRealizeHerdrRollsBackMutationNotIssued(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if head, found, observeErr := worktree.ObserveBranch(repo, fullRef); observeErr != nil {
+		if head, found, observeErr := worktree.ObserveBranch(context.Background(), repo, fullRef); observeErr != nil {
 			t.Fatal(observeErr)
 		} else if found {
 			t.Fatalf("not-issued branch = %s, want rollback", head)
@@ -629,7 +629,7 @@ func TestRealizeHerdrWorktreeChecksPolicyBeforeBranchReservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if head, found, observeErr := worktree.ObserveBranch(repo, fullRef); observeErr != nil {
+	if head, found, observeErr := worktree.ObserveBranch(context.Background(), repo, fullRef); observeErr != nil {
 		t.Fatal(observeErr)
 	} else if found {
 		t.Fatalf("policy-blocked branch = %s, want absent", head)
@@ -960,6 +960,7 @@ func TestRealizeHerdrWorktreeRollsBackExpiredPlannedIntent(t *testing.T) {
 		t.Fatalf("expired planned intent %s was not removed", intentID)
 	}
 	if head, found, err := worktree.ObserveBranch(
+		context.Background(),
 		repo,
 		intent.FullBranchRef,
 	); err != nil {
@@ -1020,6 +1021,7 @@ func TestRealizeHerdrWorktreeRollsBackCanceledPlannedIntent(t *testing.T) {
 		t.Fatalf("canceled planned intent %s was not removed", intentID)
 	}
 	if head, branchFound, observeErr := worktree.ObserveBranch(
+		context.Background(),
 		repo,
 		intent.FullBranchRef,
 	); observeErr != nil {
@@ -1079,7 +1081,7 @@ func TestRealizeHerdrWorktreeKeepsExpiredPlannedIntentWhenBranchOwnershipWasNotS
 		!strings.Contains(saved.Failure, "branch exists without persisted ownership") {
 		t.Fatalf("ambiguous ownership intent = (%+v,%t)", saved, found)
 	}
-	if head, found, err := worktree.ObserveBranch(repo, intent.FullBranchRef); err != nil {
+	if head, found, err := worktree.ObserveBranch(context.Background(), repo, intent.FullBranchRef); err != nil {
 		t.Fatal(err)
 	} else if !found || head != intent.ExpectedHead {
 		t.Fatalf("ambiguous branch = (%s,%t), want preserved at %s", head, found, intent.ExpectedHead)
@@ -1166,7 +1168,7 @@ func TestRealizeHerdrWorktreeFailsClosedOnAmbiguousResponseLoss(t *testing.T) {
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
-	if _, found, observeErr := worktree.ObserveBranch(repo, fullRef); observeErr != nil || !found {
+	if _, found, observeErr := worktree.ObserveBranch(context.Background(), repo, fullRef); observeErr != nil || !found {
 		t.Fatalf("ambiguous branch was removed: found=%t err=%v", found, observeErr)
 	}
 	control, loadErr := state.LoadHerdrIntents(repo)
@@ -1212,7 +1214,7 @@ func TestRealizeHerdrWorktreeDeletesBranchOnlyAfterStructuredRejection(t *testin
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
-	if _, found, observeErr := worktree.ObserveBranch(repo, fullRef); observeErr != nil || found {
+	if _, found, observeErr := worktree.ObserveBranch(context.Background(), repo, fullRef); observeErr != nil || found {
 		t.Fatalf("rejected branch = found:%t err:%v, want deleted", found, observeErr)
 	}
 	control, loadErr := state.LoadHerdrIntents(repo)
@@ -1674,7 +1676,7 @@ func TestRealizeHerdrWorktreeRejectsForeignCoordinatorBeforeBranch(t *testing.T)
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
-	if _, found, observeErr := worktree.ObserveBranch(repo, fullRef); observeErr != nil || !found {
+	if _, found, observeErr := worktree.ObserveBranch(context.Background(), repo, fullRef); observeErr != nil || !found {
 		t.Fatalf("branch reservation state = found:%t err:%v", found, observeErr)
 	}
 	if len(runtime.mutations) != 1 {

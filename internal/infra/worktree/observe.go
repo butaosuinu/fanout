@@ -16,6 +16,10 @@ import (
 
 var commitSHAPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
+// ErrCheckoutMismatch marks a confirmed postcondition mismatch, as opposed to
+// a failed observation that classified nothing.
+var ErrCheckoutMismatch = errors.New("checkout does not match the recorded postconditions")
+
 type BaseResolution struct {
 	BaseBranch string
 	SHA        string
@@ -50,10 +54,12 @@ func ResolveRepoIdentity(root string) (RepoIdentity, error) {
 }
 
 func resolveGitPath(root, flag string) (string, error) {
-	path, err := gitTrim(root, "rev-parse", flag)
+	out, err := git(root, "rev-parse", flag)
 	if err != nil {
 		return "", err
 	}
+	// Strip exactly the newline git appends; a path's own whitespace is data.
+	path := strings.TrimSuffix(string(out), "\n")
 	if path == "" {
 		return "", fmt.Errorf("git rev-parse %s returned an empty path", flag)
 	}
@@ -180,7 +186,7 @@ func ensureRealDirectory(path string, create bool) error {
 	return nil
 }
 
-func ObserveCheckout(root, checkoutPath string) (CheckoutObservation, error) {
+func ObserveCheckout(ctx context.Context, root, checkoutPath string) (CheckoutObservation, error) {
 	observation := CheckoutObservation{}
 	info, err := os.Lstat(checkoutPath)
 	switch {
@@ -192,7 +198,7 @@ func ObserveCheckout(root, checkoutPath string) (CheckoutObservation, error) {
 		return observation, fmt.Errorf("herdr checkout path %s is not a real directory", checkoutPath)
 	}
 
-	entries, err := worktreeEntries(context.Background(), root)
+	entries, err := worktreeEntries(ctx, root)
 	if err != nil {
 		return observation, err
 	}
@@ -226,7 +232,7 @@ func ObserveCheckout(root, checkoutPath string) (CheckoutObservation, error) {
 	if observation.PathAbsent {
 		return observation, nil
 	}
-	observation.HeadSHA, err = gitTrim(checkoutPath, "rev-parse", "--verify", "HEAD")
+	observation.HeadSHA, err = gitTrimContext(ctx, checkoutPath, "rev-parse", "--verify", "HEAD")
 	if err != nil {
 		return observation, fmt.Errorf("resolve Herdr checkout HEAD at %s: %w", checkoutPath, err)
 	}
@@ -257,23 +263,24 @@ func ObserveCheckout(root, checkoutPath string) (CheckoutObservation, error) {
 }
 
 func VerifyCheckout(
+	ctx context.Context,
 	root, checkoutPath, fullRef, expectedHead, expectedRepoKey, expectedRepoRoot string,
 ) (CheckoutObservation, error) {
-	observation, err := ObserveCheckout(root, checkoutPath)
+	observation, err := ObserveCheckout(ctx, root, checkoutPath)
 	if err != nil {
 		return observation, err
 	}
 	if observation.PathAbsent || !observation.Registered {
-		return observation, fmt.Errorf("herdr checkout %s is absent or unregistered", checkoutPath)
+		return observation, fmt.Errorf("%w: %s is absent or unregistered", ErrCheckoutMismatch, checkoutPath)
 	}
 	if observation.BranchRef != fullRef {
-		return observation, fmt.Errorf("herdr checkout %s uses %s, want %s", checkoutPath, observation.BranchRef, fullRef)
+		return observation, fmt.Errorf("%w: %s uses %s, want %s", ErrCheckoutMismatch, checkoutPath, observation.BranchRef, fullRef)
 	}
 	if observation.HeadSHA != expectedHead {
-		return observation, fmt.Errorf("herdr checkout %s HEAD is %s, want %s", checkoutPath, observation.HeadSHA, expectedHead)
+		return observation, fmt.Errorf("%w: %s HEAD is %s, want %s", ErrCheckoutMismatch, checkoutPath, observation.HeadSHA, expectedHead)
 	}
 	if observation.RepoKey != expectedRepoKey || observation.RepoRoot != expectedRepoRoot {
-		return observation, fmt.Errorf("herdr checkout %s belongs to a different repository", checkoutPath)
+		return observation, fmt.Errorf("%w: %s belongs to a different repository", ErrCheckoutMismatch, checkoutPath)
 	}
 	return observation, nil
 }

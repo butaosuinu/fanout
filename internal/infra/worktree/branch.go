@@ -23,11 +23,11 @@ func LocalBranchRef(root, branch string) (string, error) {
 	return fullRef, nil
 }
 
-func ObserveBranch(root, fullRef string) (string, bool, error) {
+func ObserveBranch(ctx context.Context, root, fullRef string) (string, bool, error) {
 	if !strings.HasPrefix(fullRef, "refs/heads/") {
 		return "", false, fmt.Errorf("invalid Herdr local branch ref %q", fullRef)
 	}
-	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", fullRef)
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "--quiet", fullRef)
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
@@ -63,14 +63,16 @@ func DeleteReservedBranch(root, fullRef, expectedSHA string) error {
 	if !strings.HasPrefix(fullRef, "refs/heads/") || !commitSHAPattern.MatchString(expectedSHA) {
 		return fmt.Errorf("invalid Herdr branch deletion %s at %s", fullRef, expectedSHA)
 	}
-	checkedOut, err := branchCheckedOut(root, fullRef)
+	// Rollback must complete even when the launch context is already
+	// canceled, so the deletion guards observe without a caller deadline.
+	checkedOut, err := branchCheckedOut(context.Background(), root, fullRef)
 	if err != nil {
 		return err
 	}
 	if checkedOut {
 		return fmt.Errorf("refusing to delete checked-out Herdr branch %s", fullRef)
 	}
-	current, found, err := ObserveBranch(root, fullRef)
+	current, found, err := ObserveBranch(context.Background(), root, fullRef)
 	if err != nil {
 		return err
 	}
@@ -86,8 +88,8 @@ func DeleteReservedBranch(root, fullRef, expectedSHA string) error {
 	return nil
 }
 
-func BranchAvailable(root, fullRef string) error {
-	checkedOut, err := branchCheckedOut(root, fullRef)
+func BranchAvailable(ctx context.Context, root, fullRef string) error {
+	checkedOut, err := branchCheckedOut(ctx, root, fullRef)
 	if err != nil {
 		return err
 	}
@@ -97,8 +99,8 @@ func BranchAvailable(root, fullRef string) error {
 	return nil
 }
 
-func branchCheckedOut(root, fullRef string) (bool, error) {
-	entries, err := worktreeEntries(context.Background(), root)
+func branchCheckedOut(ctx context.Context, root, fullRef string) (bool, error) {
+	entries, err := worktreeEntries(ctx, root)
 	if err != nil {
 		return false, err
 	}
