@@ -15,8 +15,15 @@ const DIFF_DARK_KEY = "fanout.diffTheme.dark";
 const DIFF_VIEW_KEY = "fanout.diffView";
 const DIFF_LAYOUT_KEY = "fanout.diffLayout";
 
-/* localStorage は private mode で例外を投げるので、読み書きとも握りつぶす。 */
+/* localStorage は private mode や quota 超過で例外を投げる。書けなかった値は
+ * ここに退避し、read が storage より優先して返す — そうしないと snapshot が
+ * storage を読み直すたびに旧値へ戻り、設定操作が実質 no-op になる(外観に至って
+ * は data-theme だけ変わって radio が「システム」のまま残り、次の OS テーマ変更
+ * で上書きされる)。書けた場合は storage が正なので退避を捨てる。 */
+const unpersisted = new Map<string, string | null>();
+
 function read(key: string): string | null {
+  if (unpersisted.has(key)) return unpersisted.get(key) ?? null;
   try {
     return localStorage.getItem(key);
   } catch {
@@ -28,8 +35,9 @@ function write(key: string, value: string | null) {
   try {
     if (value === null) localStorage.removeItem(key);
     else localStorage.setItem(key, value);
+    unpersisted.delete(key);
   } catch {
-    /* private mode */
+    unpersisted.set(key, value); // このタブのあいだだけ効かせる
   }
 }
 

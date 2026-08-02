@@ -126,7 +126,7 @@ Each Session row names its runtime backend and pane identity, with a runtime sta
 
 ### Diff viewer
 
-Click the diff column of a Session row, or **Show changes** in the detail drawer header, to read that worktree's changes against the merge-base. A sidebar groups the changed files by directory and shows each one's added and deleted line counts; click a name to jump to its diff. Files whose patch the server omitted (binary, over the size limit) appear there with the reason and are not clickable.
+Click the diff column of a Session row, or **Show changes** in the detail drawer header, to read that worktree's changes against the merge-base. Rows showing `+0/-0` open too — binary-only, mode-only, and rename-only changes do not show up as lines. A sidebar groups the changed files by directory and shows each one's added and deleted line counts; click a name to jump to its diff. Files whose patch the server omitted (binary, over the size limit) appear there with the reason and are not clickable.
 
 Files are expanded with syntax highlighting by default. Only a file with 1,000 or more changed lines starts collapsed, and expanding it keeps the highlighting. The viewer renders just the visible rows, so a diff of several thousand lines stays responsive. The file name stays pinned to the top while you scroll through that file, and long lines wrap. Full screen puts deletions and additions side by side, and a file with only additions or only deletions is shown on one side instead of the full width.
 

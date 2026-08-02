@@ -10,7 +10,9 @@ import {
 } from "react";
 import { useDiffView } from "../hooks/useSettings";
 import { useSnapshot } from "../hooks/useSnapshot";
+import { useViewportWidth } from "../hooks/useViewportWidth";
 import { readToken } from "../lib/api";
+import { isDiffCovering } from "../lib/diffView";
 import {
   filterTokens,
   matches,
@@ -56,6 +58,7 @@ export function App() {
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { view: diffView } = useDiffView();
+  const viewportWidth = useViewportWidth();
   const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
   /* モーダルを開いた起点要素。閉じたときにフォーカスを戻す(diff は表のセル
    * からも Drawer のボタンからも開くので、ref 固定ではなく起点を控える)。
@@ -248,7 +251,7 @@ export function App() {
             parent={selectedEntry.parent}
             repo={repo}
             token={token}
-            diffCovering={diffTarget !== null && diffView === "full"}
+            diffCovering={diffTarget !== null && isDiffCovering(diffView, viewportWidth)}
             onOpenDiff={openDiff}
             onClose={closeDrawer}
           />

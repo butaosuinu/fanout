@@ -790,6 +790,7 @@ describe("diff オーバーレイ", () => {
   });
 
   it("コンパクト表示ではモーダルを降りて背面を触れるようにし、選択は保存される", async () => {
+    setInnerWidth(1600); // 1100px 以下だとコンパクトも全幅 = covering になる
     /* 実アプリ同様 #root 配下に mount する — 全画面だけが背面を inert にする、
      * という切り分けが本題。 */
     const root = document.createElement("div");
@@ -868,6 +869,7 @@ describe("diff オーバーレイ", () => {
   });
 
   it("幅の上限はビューポートの 95%(ドロワーの左端では止めない)", async () => {
+    setInnerWidth(1600); // 1100px 以下だとコンパクトも全幅 = covering になる
     localStorage.removeItem("fanout.diffView");
     localStorage.setItem("fanout.diffWidth", "99999"); // 上限を超える保存値
     const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
@@ -946,6 +948,7 @@ describe("diff オーバーレイ", () => {
   });
 
   it("コンパクトで開くと peek のポーリングは止まらない(全画面のときだけ止める)", async () => {
+    setInnerWidth(1600); // 1100px 以下だとコンパクトも全幅 = covering になる
     let peeks = 0;
     localStorage.removeItem("fanout.diffView");
     const user = setup(
@@ -1009,7 +1012,10 @@ describe("diff オーバーレイ", () => {
     const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
     await user.click(screen.getByText("Fix thing"));
     await user.click(await screen.findByRole("button", { name: "変更を表示" }));
-    const overlay = await screen.findByRole("complementary", { name: "worktree diff" });
+    /* この帯ではコンパクトも全幅パネル = 背面を覆うので、モーダルとして扱う */
+    const overlay = await screen.findByRole("dialog", { name: "worktree diff" });
+    expect(overlay).toHaveAttribute("data-mode", "compact");
+    expect(overlay).toHaveAttribute("aria-modal", "true");
     // 幅は CSS が全幅に固定するので、動かせない separator は出さない
     expect(within(overlay).queryByRole("separator")).toBeNull();
   });

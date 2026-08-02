@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useAppearance, useDiffTheme, type Appearance, type Theme } from "../hooks/useSettings";
 import { DIFF_THEMES_DARK, DIFF_THEMES_LIGHT, type DiffThemeOption } from "../lib/diffThemes";
+import { blockBackground } from "../lib/inert";
 
 /* 見本は実物の <FileDiff> で描く = @pierre/diffs(Shiki 込み)を引く。設定を
  * 開くまで初回ロードのパスに乗せないため、DiffOverlay と同じく遅延 chunk へ。 */
@@ -87,20 +88,20 @@ export function SettingsModal({
   const onClosedRef = useRef(onClosed);
   onClosedRef.current = onClosed;
 
-  /* diff オーバーレイと同じモーダル作法: 初期フォーカスを移し、背面を inert に
-   * して遮る。diff オーバーレイは #root の外(portal)なので個別に inert する。
+  /* 初期フォーカスを移し、背面を遮る。diff オーバーレイと重なって開くので参照数で持つ — 全画面 diff の
+   * 上で開くと #root の所有者が 2 つになり、素朴に外すとどちらかの閉じ方で
+   * 背面へ Tab できてしまう(diff が snapshot から消えて先に unmount される順序も
+   * ある)。diff オーバーレイは #root の外(portal)なので個別に渡す。
    * 解除してから onClosed を呼ぶ(inert な subtree への focus は実ブラウザで
    * 拒否されるため順序が本質)。 */
   useEffect(() => {
     rootRef.current?.focus();
-    /* 自分が付けた inert だけを外す。全画面 diff から開いた場合 #root は既に
-     * DiffOverlay が inert にしており、無条件に外すと diff が全面を覆ったまま
-     * 背面へ Tab できるようになる(DiffOverlay の effect は再実行されない)。 */
-    const blocked = [document.getElementById("root"), document.getElementById("diff-overlay")];
-    const added = blocked.filter((el) => el != null && !el.hasAttribute("inert")) as HTMLElement[];
-    for (const el of added) el.setAttribute("inert", "");
+    const release = blockBackground([
+      document.getElementById("root"),
+      document.getElementById("diff-overlay"),
+    ]);
     return () => {
-      for (const el of added) el.removeAttribute("inert");
+      release();
       onClosedRef.current?.();
     };
   }, []);

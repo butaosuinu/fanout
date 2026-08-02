@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProper
 import { createPortal } from "react-dom";
 import { useDiff } from "../hooks/useDiff";
 import { useDiffWidth } from "../hooks/useDiffWidth";
+import { useViewportWidth } from "../hooks/useViewportWidth";
 import {
   useDiffLayout,
   useDiffTheme,
@@ -12,6 +13,8 @@ import {
   type Theme,
 } from "../hooks/useSettings";
 import { apiUrl } from "../lib/api";
+import { COMPACT_FULL_WIDTH_PX, isDiffCovering } from "../lib/diffView";
+import { blockBackground } from "../lib/inert";
 import {
   diffMeta,
   diffWarning,
@@ -56,10 +59,6 @@ const VIRTUALIZER_CONFIG = { overscrollSize: 3000 };
 /* auto レイアウトが左右 2 面(split)を選ぶ最小のパネル幅。ファイル一覧(288px)を
  * 引いた残りを半分に割っても 1 面 350px 前後は残る値。これを下回ると縦積みへ。 */
 const AUTO_SPLIT_MIN_PX = 1000;
-/* これ以下のビューポートでは、コンパクト表示も nav 下の全幅パネルになる
- * (style.css の @media と同期させること)。 */
-const COMPACT_FULL_WIDTH_PX = 1100;
-
 /* 並べ方ボタンは 1 個で auto -> split -> stack を巡回する */
 const LAYOUT_CYCLE: Record<DiffLayout, DiffLayout> = {
   auto: "split",
@@ -196,12 +195,13 @@ export function DiffOverlay({
   const { light, dark } = useDiffTheme();
   const { view: viewMode, setView } = useDiffView();
   const { layout, setLayout } = useDiffLayout();
-  /* 全画面のときだけモーダル。コンパクトは詳細ドロワーと並べて両方触れることが
-   * 目的なので、背面を inert にせず aria-modal も立てない。 */
-  const modal = viewMode === "full";
-  /* auto レイアウトの判定に使うビューポート幅。ResizeObserver は使わない —
-   * タブが非表示のあいだ配信が止まるうえ、パネル幅はここで計算できる。 */
-  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  /* auto レイアウトと covering 判定に使うビューポート幅。ResizeObserver は使わない
+   * — タブが非表示のあいだ配信が止まるうえ、パネル幅はここで計算できる。 */
+  const viewportWidth = useViewportWidth();
+  /* 背面を覆っているならモーダル。全画面はもちろん、狭い帯ではコンパクトも CSS が
+   * nav 下の全幅パネルにするので一覧もドロワーも見えない。覆っているのに非モーダル
+   * だと、見えない背面へ Tab が抜け、隠れた peek のポーリングも続く。 */
+  const covering = isDiffCovering(viewMode, viewportWidth);
   const diffThemes = useMemo(() => ({ light, dark }), [light, dark]);
   const { state, refetch } = useDiff(apiUrl("/api/diff", token, query));
   const rootRef = useRef<HTMLDivElement>(null);
@@ -213,24 +213,17 @@ export function DiffOverlay({
   onClosedRef.current = onClosed;
 
   /* 背面(#root 配下の Nav / テーブル / Drawer)を inert にしてフォーカスと操作を
-   * 遮る。unmount 時の cleanup 順は宣言順なので、下の onClosed より必ず先に走る
+   * 遮る。設定モーダルと所有者が重なるので参照数で持つ(lib/inert.ts)。
+   * unmount 時の cleanup 順は宣言順なので、下の onClosed より必ず先に走る
    * (inert な subtree への focus は実ブラウザで拒否されるため順序が本質)。 */
   useEffect(() => {
-    if (!modal) return;
-    const root = document.getElementById("root");
-    root?.setAttribute("inert", "");
-    return () => root?.removeAttribute("inert");
-  }, [modal]);
+    if (!covering) return;
+    return blockBackground([document.getElementById("root")]);
+  }, [covering]);
 
   useEffect(() => {
     rootRef.current?.focus();
     return () => onClosedRef.current?.();
-  }, []);
-
-  useEffect(() => {
-    const onResize = () => setViewportWidth(window.innerWidth);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   /* コンパクト表示の右端を詳細ドロワーの左端に合わせる。ドロワーは幅可変
@@ -371,7 +364,7 @@ export function DiffOverlay({
    * ヘッダと本文は縦に積むだけなので、本文領域の幅 = パネルの幅。全画面と、
    * コンパクトが全幅パネルへ落ちる幅(style.css の 1100px と同期)ではビューポート
    * 幅、それ以外はグリップで決めた幅。 */
-  const panelWidth = modal || viewportWidth <= COMPACT_FULL_WIDTH_PX ? viewportWidth : compactWidth;
+  const panelWidth = covering ? viewportWidth : compactWidth;
   const stack = layout === "auto" ? panelWidth < AUTO_SPLIT_MIN_PX : layout === "stack";
 
   /* 表示モードの切替も並べ方の切替も、全 file の高さが変わる。幅の変化だけでは
@@ -434,8 +427,8 @@ export function DiffOverlay({
     <div
       className="diff-overlay"
       id="diff-overlay"
-      role={modal ? "dialog" : "complementary"}
-      aria-modal={modal || undefined}
+      role={covering ? "dialog" : "complementary"}
+      aria-modal={covering || undefined}
       aria-label="worktree diff"
       data-theme={theme}
       data-mode={viewMode}

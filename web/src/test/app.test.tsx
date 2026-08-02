@@ -1164,12 +1164,11 @@ describe("session リストの diff 列", () => {
     ]);
   });
 
-  it("差分ゼロ・identity を組めない行はリンクにしない", async () => {
+  it("identity を組めない行はリンクにしない", async () => {
     render(<App />);
     streamSnapshot(
       makeSnapshot([
         makeSession("142", [
-          makePane({ issueNum: 101, displayName: "No change", diffSummary: "+0/-0" }),
           makePane({
             issueNum: 0,
             kind: "shell",
@@ -1181,30 +1180,30 @@ describe("session リストの diff 列", () => {
       ]),
     );
 
-    await screen.findByText("No change");
+    await screen.findByText("Shell pane");
     expect(screen.queryByRole("button", { name: /変更を表示/ })).not.toBeInTheDocument();
   });
 
   /* diffSummary は `git diff --shortstat`(未追跡を含まない・rename 検出あり)
-   * 由来なので、未追跡だけの worktree も pure rename も +0/-0 になる。一方
-   * /api/diff はそれらを patch として返すため、行数だけで「差分なし」と
-   * 決めるとレビュー対象を開けない行ができる。 */
-  it("+0/-0 でも dirty ならリンクにする(未追跡だけの worktree)", async () => {
+   * 由来なので、binary だけ / mode だけ / pure rename の変更は commit 後に
+   * +0/-0 かつ clean になる。一方 /api/diff はそれらを patch として返すため、
+   * 行数で「差分なし」と決めるとレビュー対象を開けない行ができる。 */
+  it("+0/-0 かつ clean でも identity があればリンクにする", async () => {
     render(<App />);
     streamSnapshot(
       makeSnapshot([
         makeSession("142", [
           makePane({
             issueNum: 101,
-            displayName: "Untracked only",
+            displayName: "Binary only",
             diffSummary: "+0/-0",
-            dirtyState: "dirty",
+            dirtyState: "clean",
           }),
         ]),
       ]),
     );
 
-    await screen.findByText("Untracked only");
+    await screen.findByText("Binary only");
     expect(await screen.findByRole("button", { name: "変更を表示 +0/-0" })).toBeInTheDocument();
   });
 });
