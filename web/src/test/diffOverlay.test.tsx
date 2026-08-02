@@ -1162,6 +1162,32 @@ describe("diff オーバーレイ", () => {
     });
   });
 
+  it("覆っているあいだは背面の document スクロールを止める", async () => {
+    /* overlay は position:fixed でスクロールコンテナではなく、inert も scroll を
+     * ロックしない。ヘッダ上のホイールや .diff-body 端でのチェーンが背面の一覧を
+     * 動かし、閉じたときに読んでいた位置が変わってしまう。 */
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+
+    expect(document.documentElement.style.overflow).toBe("");
+    const overlay = await openOverlay(user); // 既定は全画面 = covering
+    expect(overlay).toHaveAttribute("data-mode", "full");
+    expect(document.documentElement.style.overflow).toBe("hidden");
+
+    await user.click(within(overlay).getByRole("button", { name: "diff を閉じる" }));
+    expect(document.documentElement.style.overflow).toBe("");
+  });
+
+  it("背面が見えるコンパクト表示では document スクロールを止めない", async () => {
+    setInnerWidth(1600); // 1100px 以下だとコンパクトも covering になる
+    localStorage.removeItem("fanout.diffView"); // 既定 = コンパクト
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+
+    await user.click(screen.getByText("Fix thing"));
+    await user.click(await screen.findByRole("button", { name: "変更を表示" }));
+    await screen.findByRole("complementary", { name: "worktree diff" });
+    expect(document.documentElement.style.overflow).toBe("");
+  });
+
   it("同名 basename でも、移動ボタンと折りたたみボタンの名前で区別できる", async () => {
     /* 支援技術のボタン一覧から対象を特定できること。basename だけ / 「折りたたむ」
      * だけだと、別ディレクトリの同名 file や複数 file で名前が衝突する。 */

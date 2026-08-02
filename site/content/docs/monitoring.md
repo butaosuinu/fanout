@@ -128,17 +128,17 @@ Each Session row names its runtime backend and pane identity, with a runtime sta
 
 Click the diff column of a Session row, or **Show changes** in the detail drawer header, to read that worktree's changes against the merge-base. Rows showing `+0/-0` open too — binary-only, mode-only, and rename-only changes do not show up as lines. A sidebar groups the changed files by directory and shows each one's added and deleted line counts; click a name to jump to its diff. Files whose patch the server omitted (binary, over the size limit) are listed under the warning banner instead, with the reason.
 
-Files are expanded with syntax highlighting by default. Only a file with 1,000 or more changed lines starts collapsed, and expanding it keeps the highlighting. The viewer renders just the visible rows, so a diff of several thousand lines stays responsive. The file name stays pinned to the top while you scroll through that file, and long lines wrap. Full screen puts deletions and additions side by side, and a file with only additions or only deletions is shown on one side instead of the full width.
+Files are expanded with syntax highlighting by default. Only a file with 1,000 or more changed lines starts collapsed, and expanding it keeps the highlighting. The viewer renders just the visible rows, so a diff of several thousand lines stays responsive. The file name stays pinned to the top while you scroll through that file, and long lines wrap. When deletions and additions are side by side, a file with only additions or only deletions is shown on one side instead of the full width.
 
 It opens compact by default: a panel beside the detail drawer. Drag its left edge to widen it up to 95% of the window, over the drawer. In compact the Session list and the drawer stay usable, so you can follow a pane's output while reading its diff. The diagonal-arrow icon switches between compact and full screen. The mode and the width are stored in the browser.
 
-Deletions and additions follow the width by default: stacked in one column when narrow, side by side when wide. The frame icon cycles auto → side by side → stacked; picking one explicitly pins it regardless of width.
+How deletions and additions are laid out follows the available width, not the mode: by default they stack in one column below about 1,000px of panel width and sit side by side above it, so a narrow window is stacked even in full screen. The frame icon cycles auto → side by side → stacked; picking one explicitly pins it regardless of width.
 
 Buttons in the header and the sidebar are icons; hover one to see what it does.
 
 ### Settings
 
-The gear in the top-right opens settings. Appearance is **System** / **Light** / **Dark**, and the diff viewer's syntax theme is chosen separately for light and dark from nine curated themes each (Pierre, GitHub, Catppuccin, Gruvbox, Tokyo Night, and more). Both come with a preview, and the diff theme preview uses the same rendering as the real diff, so you see the exact colors before choosing. Settings are stored in the browser and restored on the next visit.
+The gear in the top-right opens settings. Appearance is System / Light / Dark, and the diff viewer's syntax theme is chosen separately for light and dark from nine curated themes each (Pierre, GitHub, Catppuccin, Gruvbox, Tokyo Night, and more). Both come with a preview, and the diff theme preview uses the same rendering as the real diff, so you see the exact colors before choosing. Settings are stored in the browser and restored on the next visit.
 
 ### F12 / prefix + D
 

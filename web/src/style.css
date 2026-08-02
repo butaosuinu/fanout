@@ -821,6 +821,9 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 .diff-body{
   flex:1; min-width:0; min-height:0;
   overflow-y:auto;
+  /* 端まで来ても背面の一覧へスクロールを流さない(コンパクト表示では背面が
+     見えているので、そこが動くと読んでいた位置を失う) */
+  overscroll-behavior:contain;
   padding:18px 22px 32px;
 }
 /* 素の block flow で積む。flex の gap や margin を入れると virtualizer が持つ

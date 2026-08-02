@@ -250,6 +250,20 @@ export function DiffOverlay({
     return () => onClosedRef.current?.();
   }, []);
 
+  /* 覆っているあいだは背面の document スクロールを止める。overlay は
+   * position:fixed でスクロールコンテナではなく、`inert` も scroll を
+   * ロックしないので、ヘッダ上のホイールや .diff-body 端でのチェーンが背面の
+   * 一覧を動かしてしまう(閉じたときに位置が変わっている)。 */
+  useEffect(() => {
+    if (!covering) return;
+    const el = document.documentElement;
+    const prev = el.style.overflow;
+    el.style.overflow = "hidden";
+    return () => {
+      el.style.overflow = prev;
+    };
+  }, [covering]);
+
   /* 「自分が最前面のモーダルになった」瞬間にフォーカスを引き取る。covering に
    * なった(ウィンドウを 1,100px 以下へ縮めた、コンパクトから全画面へ切り替えた)
    * ときも、上の設定モーダルが閉じて抑止が解けたときも同じ。背面はこの間 inert
