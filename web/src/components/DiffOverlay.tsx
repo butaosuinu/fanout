@@ -211,9 +211,11 @@ export function DiffOverlay({
   /* auto レイアウトと covering 判定に使うビューポート幅。ResizeObserver は使わない
    * — タブが非表示のあいだ配信が止まるうえ、パネル幅はここで計算できる。 */
   const viewportWidth = useViewportWidth();
-  /* パネル右端の位置(= ドロワーの左端)。実寸で覆っているかを判定するため state で
-   * 持つ。ドロワーは幅可変で、選択が無ければ存在しない。 */
+  /* パネル右端の位置(= ドロワーの左端)と、背面コンテンツの左端。実寸で覆って
+   * いるかを判定するため state で持つ。ドロワーは幅可変で、選択が無ければ存在
+   * しない。コンテンツ左端はドロワー幅に連動して動く(main-col が縮む)。 */
   const [anchorRight, setAnchorRight] = useState(0);
+  const [contentLeft, setContentLeft] = useState(0);
   const diffThemes = useMemo(() => ({ light, dark }), [light, dark]);
   const { state, refetch } = useDiff(apiUrl("/api/diff", token, query));
   const rootRef = useRef<HTMLDivElement>(null);
@@ -227,6 +229,7 @@ export function DiffOverlay({
     viewportWidth,
     anchorRight,
     width: compactWidth,
+    contentLeft,
   });
   /* covering(全画面 / 狭い帯の全幅コンパクト)のときだけモーダル。背面を
    * 覆っていないコンパクトは Tab で背面へ出られてよい。 */
@@ -286,10 +289,14 @@ export function DiffOverlay({
 
   /* コンパクト表示の右端を詳細ドロワーの左端に合わせる。ドロワーは幅可変
    * (--drawer-w のドラッグ)かつ選択が無ければ存在しないので実測する。
-   * ドロワーが無いときはビューポート右端に寄せる。 */
+   * ドロワーが無いときはビューポート右端に寄せる。
+   *
+   * 背面コンテンツの左端も同じ合図で取り直す — ドロワーを広げると main-col が
+   * 縮み、`.wrap` の中央寄せぶん左端も動く。 */
   useEffect(() => {
     if (viewMode !== "compact") return;
     const drawer = document.getElementById("drawer");
+    const content = document.getElementById("content");
     const sync = () => {
       /* 幅 0 の矩形はレイアウトが無い(jsdom)か実際に場所を取っていないので、
        * ドロワーが無いのと同じ扱いにする。0 を左端として採ると、パネルが画面を
@@ -297,10 +304,16 @@ export function DiffOverlay({
       const rect = drawer?.getBoundingClientRect();
       const left = rect && rect.width > 0 ? rect.left : window.innerWidth;
       setAnchorRight(Math.max(0, Math.round(window.innerWidth - left)));
+      /* コンテンツ側も同じ理由で幅 0 は実測できなかった扱い。0 に倒すと
+       * 「帯が 1px でもあれば覆っていない」という以前の判定に戻るだけで、
+       * 覆っていないものを覆ったと誤判定はしない。 */
+      const c = content?.getBoundingClientRect();
+      setContentLeft(c && c.width > 0 ? Math.max(0, Math.round(c.left)) : 0);
     };
     sync();
     const ro = new ResizeObserver(sync);
     if (drawer) ro.observe(drawer);
+    if (content) ro.observe(content);
     window.addEventListener("resize", sync);
     return () => {
       ro.disconnect();

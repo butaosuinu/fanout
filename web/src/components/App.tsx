@@ -25,6 +25,7 @@ import { deriveAgents, deriveWaves } from "../lib/options";
 import { diffQuery, findPaneEntry, paneLabel, rowKey } from "../lib/pane";
 import { sortPanes, type SortDir } from "../lib/sort";
 import type { PaneView, Snapshot } from "../lib/types";
+import { ChunkBoundary } from "./ChunkBoundary";
 import { Drawer } from "./Drawer";
 import { FilterBar } from "./FilterBar";
 import { Hud } from "./Hud";
@@ -94,6 +95,28 @@ function focusFirstConnected(refs: RefObject<HTMLElement | null>[]) {
       return;
     }
   }
+}
+
+/* chunk が取れなかったときの差分ビュアー。閉じると境界ごと unmount されるので、
+ * 開き直しがそのまま再試行になる(chunk が戻っていれば普通に開く)。 */
+function DiffLoadFailed({ onClose }: { onClose: () => void }) {
+  return (
+    /* モーダルにはしない — 背面は生きているので、閉じて他の操作へ戻れるほうがよい */
+    <div className="diff-failed" role="alert">
+      <p>
+        差分ビュアーを読み込めませんでした。ダッシュボードを再起動した直後だと、開いたままの
+        ページが古いスクリプトを指していることがあります。
+      </p>
+      <div className="diff-failed-actions">
+        <button type="button" className="btn-primary" onClick={() => location.reload()}>
+          ページを再読み込み
+        </button>
+        <button type="button" onClick={onClose}>
+          閉じる
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function sameQuery(a: Record<string, string>, b: Record<string, string>): boolean {
@@ -269,7 +292,8 @@ export function App() {
       />
       <div className="shell">
         <div className="main-col">
-          <div className="wrap">
+          {/* id は diff パネルの covering 判定用 — 中身の左端を実測する */}
+          <div className="wrap" id="content">
             <Hud rollup={snap?.rollup} />
             <div className="banner" id="banner" role="status" hidden={!msgs.length}>
               {msgs.join(" · ")}
@@ -341,19 +365,23 @@ export function App() {
         )}
       </div>
       {diffTarget && (
-        <Suspense fallback={<DiffPending enabled={!settingsOpen} onCancel={closeDiff} />}>
-          <DiffOverlay
-            title={diffTarget.title}
-            query={diffTarget.query}
-            token={token}
-            anchorKey={selected}
-            suppressed={settingsOpen}
-            onCoveringChange={setDiffCovering}
-            escapeEnabled={!settingsOpen}
-            onOpenSettings={openSettings}
-            onClose={closeDiff}
-          />
-        </Suspense>
+        /* chunk の取得に失敗しても dashboard ごと落とさない。境界は diffTarget と
+         * 同じ寿命なので、閉じて開き直せばそのまま再試行になる。 */
+        <ChunkBoundary fallback={<DiffLoadFailed onClose={closeDiff} />}>
+          <Suspense fallback={<DiffPending enabled={!settingsOpen} onCancel={closeDiff} />}>
+            <DiffOverlay
+              title={diffTarget.title}
+              query={diffTarget.query}
+              token={token}
+              anchorKey={selected}
+              suppressed={settingsOpen}
+              onCoveringChange={setDiffCovering}
+              escapeEnabled={!settingsOpen}
+              onOpenSettings={openSettings}
+              onClose={closeDiff}
+            />
+          </Suspense>
+        </ChunkBoundary>
       )}
       {settingsOpen && <SettingsModal onClose={closeSettings} />}
     </>

@@ -755,6 +755,18 @@ html[data-theme="dark"] .terminal{ border-color:var(--suna); }
 }
 /* 左端 6px のリサイズグリップ。ドロワーと同じ作法(hover / focus / ドラッグ中に
    浅葱 2px のライン)。全画面では mount しない。 */
+/* chunk の取得に失敗したときの差し替え。モーダルではないので背面は触れる。 */
+.diff-failed{
+  position:fixed; right:24px; bottom:24px; z-index:60;
+  width:min(420px, calc(100vw - 48px));
+  padding:16px 18px;
+  background:var(--paper); border:1px solid var(--suna); border-radius:10px;
+  box-shadow:0 10px 30px rgb(0 0 0 / .16);
+  font-size:13px; line-height:1.7;
+}
+.diff-failed p{ margin:0 0 12px; }
+.diff-failed-actions{ display:flex; gap:8px; justify-content:flex-end; }
+
 .diff-grip{
   position:absolute; inset:0 auto 0 0; width:6px;
   z-index:3;

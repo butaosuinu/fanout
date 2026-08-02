@@ -5,6 +5,7 @@ import { useAppearance, useDiffTheme, type Appearance, type Theme } from "../hoo
 import { DIFF_THEMES_DARK, DIFF_THEMES_LIGHT, type DiffThemeOption } from "../lib/diffThemes";
 import { blockBackground } from "../lib/inert";
 import { lockDocumentScroll } from "../lib/scrollLock";
+import { ChunkBoundary } from "./ChunkBoundary";
 
 /* 見本は実物の <FileDiff> で描く = @pierre/diffs(Shiki 込み)を引く。設定を
  * 開くまで初回ロードのパスに乗せないため、DiffOverlay と同じく遅延 chunk へ。 */
@@ -60,10 +61,14 @@ function ThemeSelect({
 }) {
   return (
     <div className="set-diff-theme">
-      {/* fallback はテーマ読込中の高さ確保。空の枠が一瞬出るだけで文言は出さない */}
-      <Suspense fallback={<div className="set-theme-preview is-loading" />}>
-        <DiffThemePreview name={value} themeType={themeType} />
-      </Suspense>
+      {/* fallback はテーマ読込中の高さ確保。空の枠が一瞬出るだけで文言は出さない。
+          chunk が取れなかったときも同じ空枠に落とす — 見本は装飾なので、これを
+          理由に設定モーダルごと落とさない(境界が無いと例外がルートまで抜ける)。 */}
+      <ChunkBoundary fallback={<div className="set-theme-preview is-loading" />}>
+        <Suspense fallback={<div className="set-theme-preview is-loading" />}>
+          <DiffThemePreview name={value} themeType={themeType} />
+        </Suspense>
+      </ChunkBoundary>
       <label htmlFor={id}>{label}</label>
       <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map((t) => (

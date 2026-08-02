@@ -12,6 +12,10 @@ export interface DiffPanelGeometry {
   anchorRight: number;
   /* コンパクト表示のパネル幅 */
   width: number;
+  /* 背面コンテンツ(.main-col の .wrap)の左端。実測できなければ 0。
+   * パネル左端との比較にこれが要る — .wrap は中央寄せで左右に余白を持つので、
+   * パネルの左に帯が残っていても中身は 1px も見えないことがある。 */
+  contentLeft: number;
 }
 
 /* diff ビュアーが背面(Session 一覧)を覆い尽くしているか。
@@ -26,18 +30,25 @@ export interface DiffPanelGeometry {
  * 越えた分は左へ伸びるので、狭い画面 + 広いドロワー + 広いパネルでは
  * 1,100px を超えていても一覧が 1px も残らないことがある(例: 1,200px の画面で
  * ドロワー 840px・パネル 760px なら右端は 440px、パネルは x=0-760px を占め、
- * 一覧の 0-360px は完全に隠れる)。実寸で見る。 */
+ * 一覧の 0-360px は完全に隠れる)。実寸で見る。
+ *
+ * 残った帯の幅ではなく、その帯に Session の中身が入るかで見ること。`.wrap` は
+ * `min(--maxw, 100% - 48px)` を中央寄せするので左右に余白があり、帯が余白しか
+ * 掴めない配置がある(例: 1,620px の画面でドロワー 840px・パネル 760px なら
+ * パネルは x=20-780px、`.wrap` は x=24-756px で、20px の帯は残るが中身は
+ * 完全に隠れる)。 */
 export function coversBackground({
   view,
   viewportWidth,
   anchorRight,
   width,
+  contentLeft,
 }: DiffPanelGeometry): boolean {
   if (view === "full") return true;
   if (viewportWidth <= COMPACT_FULL_WIDTH_PX) return true; // CSS が全幅パネルにする
   // style.css の right: max(0, min(--diff-anchor-right, 100vw - --diff-w)) と同じ
   const right = Math.max(0, Math.min(anchorRight, viewportWidth - width));
-  return viewportWidth - right - width <= 0; // 左に 1px も残らない
+  return viewportWidth - right - width <= contentLeft; // 中身が 1px も残らない
 }
 
 /* 本文領域(= パネル)の幅。
