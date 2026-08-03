@@ -1,10 +1,27 @@
 import "@testing-library/jest-dom/vitest";
+import { activateLocale } from "../i18n";
 import { server } from "./server";
 
 /* アプリの fetch は相対 URL(/api/…)のまま。素の Node fetch は相対 URL を
  * 受け付けないが、server.listen() が globalThis.fetch を MSW のインターセプタに
  * 差し替え、それが jsdom の location.origin を基準に相対 URL を解決するので、
  * 追加の絶対化シムは不要(入れても MSW の手前には来ない)。 */
+
+/* jsdom の navigator.language は既定で "en-US"。表示ロケールはブラウザ言語から
+ * 決まるので、そのままだと日本語で書かれた既存アサーションが英語カタログで落ちる。
+ * ブラウザ言語を ja に固定する — 各テストの beforeEach が localStorage.clear() を
+ * 呼ぶため、localStorage に fanout.locale を仕込む手は使えない。英語表示を見たい
+ * テストは設定モーダルの操作か activateLocale("en") で明示的に切り替えること。 */
+Object.defineProperty(window.navigator, "languages", {
+  value: ["ja-JP", "ja"],
+  configurable: true,
+});
+Object.defineProperty(window.navigator, "language", { value: "ja-JP", configurable: true });
+
+/* すべてのテストファイルでロケールを活性化しておく。I18nProvider は locale が
+ * 未設定だと children を描かないので、useSettings を import しないファイル
+ * (hook 単体テストなど)では、これが無いと空の DOM だけが残る。 */
+activateLocale("ja");
 
 /* jsdom は matchMedia を実装しない。テーマ初期値の判定(useTheme / FOUC 相当)
  * が動くだけの最小スタブを入れる(常に light)。 */

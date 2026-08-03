@@ -1,0 +1,407 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-08-04 03:17+0900\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: en\n"
+"Project-Id-Version: \n"
+"Report-Msgid-Bugs-To: \n"
+"PO-Revision-Date: \n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Plural-Forms: \n"
+
+#: src/hooks/usePlan.ts
+msgid "(plan を取得中…)"
+msgstr "(loading plan…)"
+
+#: src/hooks/useDiffWidth.ts
+msgid "diff パネルの幅を変更"
+msgstr "Resize the diff panel"
+
+#: src/components/FilterBar.tsx
+msgid "wave で絞り込み"
+msgstr "Filter by wave"
+
+#: src/components/DiffOverlay.tsx
+msgid "merge-base からの変更はありません"
+msgstr "No changes since the merge-base"
+
+#: src/lib/diff.ts
+msgid "diff の取得に失敗しました (HTTP {status}): {detail}"
+msgstr "Could not load the diff (HTTP {status}): {detail}"
+
+#: src/components/DiffOverlay.tsx
+msgid "全画面表示"
+msgstr "Full screen"
+
+#: src/components/FilterBar.tsx
+msgid "PR 状態で絞り込み"
+msgstr "Filter by PR state"
+
+#: src/hooks/usePeek.ts
+msgid "(pane output unavailable — ペインは終了しています)"
+msgstr "(pane output unavailable — the pane has exited)"
+
+#: src/components/DiffOmittedNote.tsx
+msgid "省略"
+msgstr "omitted"
+
+#: src/components/DiffOverlay.tsx
+msgid "diff を閉じる"
+msgstr "Close the diff"
+
+#: src/components/DiffFileList.tsx
+msgid "すべて折りたたむ"
+msgstr "Collapse all"
+
+#: src/components/DiffOverlay.tsx
+msgid "コンパクト表示"
+msgstr "Compact"
+
+#: src/lib/diff.ts
+msgid "サイズ上限超過のため patch なし"
+msgstr "no patch — over the size limit"
+
+#: src/components/DiffOverlay.tsx
+msgid "縦積み"
+msgstr "Stacked"
+
+#: src/components/FilterBar.tsx
+msgid "worktree の dirty 状態で絞り込み"
+msgstr "Filter by worktree dirty state"
+
+#: src/hooks/usePlan.ts
+msgid "(plan を取得できませんでした)"
+msgstr "(could not load the plan)"
+
+#: src/components/SettingsModal.tsx
+msgid "設定を閉じる"
+msgstr "Close settings"
+
+#: src/lib/pane.ts
+msgid "pane が起動しないまま issue は close されました。"
+msgstr "The issue was closed before its pane ever started."
+
+#: src/components/DiffOverlay.tsx
+msgid "レイアウト: {current}(クリックで{next})"
+msgstr "Layout: {current} (click for {next})"
+
+#: src/hooks/usePlan.ts
+msgid "(plan が見つかりません — まだ提案されていないか、画面外へスクロールアウトしています)"
+msgstr "(no plan found — none proposed yet, or it has scrolled out of view)"
+
+#: src/components/SettingsModal.tsx
+msgid "言語"
+msgstr "Language"
+
+#: src/components/App.tsx
+msgid "アクティブなセッションがありません"
+msgstr "No active sessions"
+
+#: src/components/Drawer.tsx
+#: src/components/SessionSection.tsx
+msgid "変更を表示"
+msgstr "Show changes"
+
+#: src/components/Drawer.tsx
+msgid "plan — 提案中のプラン"
+msgstr "plan — the proposed plan"
+
+#: src/components/FilterDropdown.tsx
+msgid "該当なし"
+msgstr "No matches"
+
+#: src/components/Drawer.tsx
+msgid "この runtime pane は現在読み取り対象にできません。"
+msgstr "This runtime pane cannot be read right now."
+
+#: src/lib/diff.ts
+msgid "応答上限(1 MiB)で省略"
+msgstr "omitted at the response limit (1 MiB)"
+
+#: src/components/DiffOverlay.tsx
+msgid "{name} — {lines} 行 — 展開"
+msgstr "{name} — {lines} lines — expand"
+
+#: src/components/Drawer.tsx
+msgid "状態"
+msgstr "Status"
+
+#: src/lib/pane.ts
+msgid "未開始 — open な blocker があるため待機中です。"
+msgstr "Not started — waiting on an open blocker."
+
+#: src/components/Drawer.tsx
+msgid "提案中のプラン"
+msgstr "The proposed plan"
+
+#: src/components/FilterBar.tsx
+msgid "agent 実行状態で絞り込み"
+msgstr "Filter by agent run state"
+
+#: src/components/App.tsx
+msgid "ページを再読み込み"
+msgstr "Reload the page"
+
+#: src/lib/diff.ts
+msgid "diff を取得できません — worktree の記録が見つかりません(cleanup 済みか、サーバーが /api/diff 未対応の可能性)"
+msgstr "Cannot load the diff — no worktree on record (cleaned up, or the server has no /api/diff)"
+
+#: src/components/DiffFileList.tsx
+msgid "すべて展開"
+msgstr "Expand all"
+
+#: src/components/SettingsModal.tsx
+msgid "ライトテーマ"
+msgstr "Light theme"
+
+#: src/lib/pane.ts
+msgid "未開始 — この子 issue の pane はまだ起動していません。"
+msgstr "Not started — no pane has been launched for this child issue yet."
+
+#. placeholder {0}: omitted.length
+#: src/components/DiffOmittedNote.tsx
+msgid "{0, plural, other {# ファイルは patch に含まれていません}}"
+msgstr "{0, plural, one {# file is not included in the patch} other {# files are not included in the patch}}"
+
+#: src/hooks/useDiff.ts
+msgid "diff の取得に失敗しました(接続エラー)"
+msgstr "Could not load the diff (connection error)"
+
+#: src/components/FilterBar.tsx
+msgid "フィルタ {token} を外す"
+msgstr "Remove filter {token}"
+
+#: src/lib/pane.ts
+msgid "未開始 — issue 状態を取得できていません。"
+msgstr "Not started — the issue state could not be read."
+
+#: src/hooks/usePeek.ts
+msgid "(pane output unavailable)"
+msgstr "(pane output unavailable)"
+
+#: src/components/SessionSection.tsx
+msgid "変更を表示 {target} {stat}"
+msgstr "Show changes {target} {stat}"
+
+#: src/components/SettingsModal.tsx
+msgid "diff テーマ"
+msgstr "Diff theme"
+
+#: src/components/FilterBar.tsx
+msgid "runtime backend で絞り込み"
+msgstr "Filter by runtime backend"
+
+#: src/components/Drawer.tsx
+msgid "{backend} backend はペイン内容の読み取りに対応していません。"
+msgstr "The {backend} backend does not support reading pane content."
+
+#: src/components/SettingsModal.tsx
+msgid "English"
+msgstr "English"
+
+#: src/components/FilterBar.tsx
+msgid "適用中のフィルタ"
+msgstr "Active filters"
+
+#: src/components/App.tsx
+msgid "閉じる"
+msgstr "Close"
+
+#: src/lib/diff.ts
+msgid "diff の取得に失敗しました (HTTP {status})"
+msgstr "Could not load the diff (HTTP {status})"
+
+#: src/lib/diff.ts
+msgid "バイナリのため patch なし"
+msgstr "no patch — binary"
+
+#: src/components/App.tsx
+msgid "フィルタに一致するペインがありません"
+msgstr "No panes match the filter"
+
+#: src/lib/format.ts
+msgid "runtime の一部が利用できません — ペイン生死・peek / plan は劣化表示"
+msgstr "Part of the runtime is unavailable — pane liveness, peek and plan are degraded"
+
+#: src/components/DiffOverlay.tsx
+#: src/components/SettingsModal.tsx
+msgid "自動"
+msgstr "Auto"
+
+#: src/components/DiffOverlay.tsx
+#: src/components/Drawer.tsx
+msgid "再取得"
+msgstr "Reload"
+
+#: src/lib/diff.ts
+msgid "レビュー対象が patch に揃っていません — patch は不完全です"
+msgstr "The patch does not cover everything under review — it is incomplete"
+
+#: src/components/App.tsx
+msgid "filter — 自由語 or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"
+msgstr "filter — free text or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"
+
+#: src/components/DiffOverlay.tsx
+msgid "テーマ設定"
+msgstr "Theme settings"
+
+#: src/components/Drawer.tsx
+msgid "詳細を閉じる"
+msgstr "Close details"
+
+#: src/components/DiffOverlay.tsx
+msgid "左右 2 面"
+msgstr "Side by side"
+
+#: src/components/FilterDropdown.tsx
+msgid "絞り込み…"
+msgstr "Filter…"
+
+#: src/components/Drawer.tsx
+msgid "herdr backend v1 はペイン内容を読み取らないため利用できません。"
+msgstr "Unavailable — herdr backend v1 does not read pane content."
+
+#: src/components/Drawer.tsx
+msgid "ペイン詳細"
+msgstr "Pane details"
+
+#: src/lib/diff.ts
+msgid "サーバーが diff を安全に生成できませんでした: {detail}"
+msgstr "The server could not generate the diff safely: {detail}"
+
+#: src/components/SettingsModal.tsx
+msgid "ダークテーマ"
+msgstr "Dark theme"
+
+#: src/hooks/usePeek.ts
+msgid "captured {at} · {lines} lines · 5s ごとに更新"
+msgstr "captured {at} · {lines} lines · refreshed every 5s"
+
+#: src/components/DiffOverlay.tsx
+msgid "worktree diff"
+msgstr "worktree diff"
+
+#: src/components/DiffFileList.tsx
+msgid "(リポジトリ直下)"
+msgstr "(repository root)"
+
+#: src/components/Drawer.tsx
+msgid "取得中…"
+msgstr "Loading…"
+
+#: src/components/FilterBar.tsx
+msgid "issue / runtime 状態で絞り込み"
+msgstr "Filter by issue / runtime state"
+
+#: src/components/SettingsModal.tsx
+msgid "ライト"
+msgstr "Light"
+
+#: src/lib/format.ts
+msgid "GitHub データ取得が不安定 — issue / PR / CI 列は劣化表示"
+msgstr "GitHub reads are unreliable — the issue, PR and CI columns are degraded"
+
+#: src/lib/diff.ts
+msgid "レビュー対象が patch に揃っていません — {omitted, plural, other {# file の patch が省略されています}}"
+msgstr "The patch does not cover everything under review — {omitted, plural, one {the patch for # file was omitted} other {the patches for # files were omitted}}"
+
+#: src/lib/format.ts
+msgid "runtime が利用できません — ペイン生死・peek は劣化表示"
+msgstr "The runtime is unavailable — pane liveness and peek are degraded"
+
+#: src/components/DiffFileList.tsx
+msgid "変更ファイル"
+msgstr "Changed files"
+
+#: src/components/App.tsx
+msgid "{key} は snapshot から消えたため詳細を閉じました"
+msgstr "{key} disappeared from the snapshot, so its details were closed"
+
+#: src/components/FilterBar.tsx
+msgid "runtime ペイン生死で絞り込み"
+msgstr "Filter by runtime pane liveness"
+
+#: src/hooks/usePlan.ts
+msgid "(plan を取得できません — ペインは終了しています)"
+msgstr "(cannot load the plan — the pane has exited)"
+
+#: src/components/SettingsModal.tsx
+msgid "テーマ"
+msgstr "Theme"
+
+#: src/hooks/useDrawerWidth.ts
+msgid "詳細パネルの幅を変更"
+msgstr "Resize the details panel"
+
+#: src/components/DiffOverlay.tsx
+msgid "{lines} 行"
+msgstr "{lines} lines"
+
+#: src/components/Hud.tsx
+msgid "集計"
+msgstr "Summary"
+
+#: src/components/FilterDropdown.tsx
+msgid "{key} の選択肢を検索"
+msgstr "Search {key} options"
+
+#: src/components/Nav.tsx
+#: src/components/SettingsModal.tsx
+msgid "設定"
+msgstr "Settings"
+
+#: src/components/App.tsx
+msgid "差分ビュアーを読み込めませんでした。ダッシュボードを再起動した直後だと、開いたままのページが古いスクリプトを指していることがあります。"
+msgstr "The diff viewer could not be loaded. Just after a dashboard restart, a page left open can still point at the old script."
+
+#: src/components/SettingsModal.tsx
+msgid "ダーク"
+msgstr "Dark"
+
+#: src/components/DiffOverlay.tsx
+msgid "diff を取得中…(最大 10 秒)"
+msgstr "Loading the diff… (up to 10 seconds)"
+
+#: src/lib/diff.ts
+msgid "diff を取得できません — worktree の記録が見つかりません(cleanup 済みか、サーバーが /api/diff 未対応の可能性): {detail}"
+msgstr "Cannot load the diff — no worktree on record (cleaned up, or the server has no /api/diff): {detail}"
+
+#: src/components/DiffOverlay.tsx
+msgid "{name} — 折りたたむ"
+msgstr "{name} — collapse"
+
+#: src/components/FilterBar.tsx
+msgid "CI 結果で絞り込み"
+msgstr "Filter by CI result"
+
+#: src/components/SettingsModal.tsx
+msgid "日本語"
+msgstr "日本語"
+
+#: src/components/SettingsModal.tsx
+msgid "システム"
+msgstr "System"
+
+#: src/lib/format.ts
+msgid "state 読み込みに失敗: {reason}"
+msgstr "Failed to read state: {reason}"
+
+#: src/components/FilterBar.tsx
+msgid "agent で絞り込み"
+msgstr "Filter by agent"
+
+#: src/components/Drawer.tsx
+msgid "peek — 直近の出力"
+msgstr "peek — recent output"
+
+#: src/lib/diff.ts
+msgid "サーバーが diff を安全に生成できませんでした"
+msgstr "The server could not generate the diff safely"
+
+#: src/lib/diff.ts
+msgid "収集上限(10 MiB)で省略"
+msgstr "omitted at the collection limit (10 MiB)"

@@ -1,3 +1,6 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { Fragment, useEffect, type CSSProperties } from "react";
 import { useDrawerWidth } from "../hooks/useDrawerWidth";
 import { usePeek } from "../hooks/usePeek";
@@ -39,10 +42,13 @@ function DiffStat({ summary }: { summary?: string }) {
 }
 
 function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {
+  const { t } = useLingui();
   const plan = usePlan({ paneId: pane.paneId, alive: pane.alive }, token);
   return (
     <section className="d-sec">
-      <h4>plan — 提案中のプラン</h4>
+      <h4>
+        <Trans>plan — 提案中のプラン</Trans>
+      </h4>
       {/* capture 出力は敵性入力 — markdown レンダせずテキストノードのみで描画。
           tabIndex: 長い plan のスクロールをキーボードで届くように */}
       <pre
@@ -50,19 +56,19 @@ function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {
         id="plan-pre"
         tabIndex={0}
         role="region"
-        aria-label="提案中のプラン"
+        aria-label={t`提案中のプラン`}
       >
         {plan.text}
       </pre>
       <div className="plan-meta" id="plan-meta" aria-live="polite">
-        <span>{plan.loading ? "取得中…" : plan.meta}</span>
+        <span>{plan.loading ? t`取得中…` : plan.meta}</span>
         <button
           type="button"
           className="plan-reload"
           onClick={plan.refetch}
           disabled={plan.loading}
         >
-          再取得
+          <Trans>再取得</Trans>
         </button>
       </div>
     </section>
@@ -142,7 +148,9 @@ function PeekPanel({ pane, token, paused }: { pane: PaneView; token: string; pau
   const peek = usePeek(paused ? null : { paneId: pane.paneId, alive: pane.alive }, token);
   return (
     <section className="d-sec">
-      <h4>peek — 直近の出力</h4>
+      <h4>
+        <Trans>peek — 直近の出力</Trans>
+      </h4>
       <div className="terminal">
         <div className="term-bar">
           <i></i>
@@ -164,27 +172,31 @@ function PeekPanel({ pane, token, paused }: { pane: PaneView; token: string; pau
 
 type CaptureKind = "peek" | "plan";
 
-function captureDisabledReason(pane: PaneView): string | null {
+/* 文字列ではなく descriptor を返し、描画時に解決させる(言語切替が即座に届く)。 */
+function captureDisabledReason(pane: PaneView): MessageDescriptor | null {
   const runtimeBackend = paneBackend(pane);
   if (runtimeBackend === "herdr") {
-    return "herdr backend v1 はペイン内容を読み取らないため利用できません。";
+    return msg`herdr backend v1 はペイン内容を読み取らないため利用できません。`;
   }
   if (runtimeBackend !== "tmux") {
-    return `${runtimeBackend} backend はペイン内容の読み取りに対応していません。`;
+    return msg`${{ backend: runtimeBackend }} backend はペイン内容の読み取りに対応していません。`;
   }
   if (pane.derived?.canPeek === false) {
-    return "この runtime pane は現在読み取り対象にできません。";
+    return msg`この runtime pane は現在読み取り対象にできません。`;
   }
   return null;
 }
 
-function CaptureDisabled({ kind, reason }: { kind: CaptureKind; reason: string }) {
+function CaptureDisabled({ kind, reason }: { kind: CaptureKind; reason: MessageDescriptor }) {
+  const { i18n } = useLingui();
   return (
     <section className="d-sec capture-disabled" aria-label={`${kind} disabled`} aria-disabled>
-      <h4>{kind === "peek" ? "peek — 直近の出力" : "plan — 提案中のプラン"}</h4>
+      <h4>
+        {kind === "peek" ? <Trans>peek — 直近の出力</Trans> : <Trans>plan — 提案中のプラン</Trans>}
+      </h4>
       <div className="capture-disabled-card">
         <span className="capture-disabled-mark">disabled</span>
-        <span>{reason}</span>
+        <span>{i18n._(reason)}</span>
       </div>
     </section>
   );
@@ -209,6 +221,7 @@ export function Drawer({
   onOpenDiff: (parent: string, pane: PaneView) => void;
   onClose: () => void;
 }) {
+  const { i18n, t } = useLingui();
   const { width, gripProps } = useDrawerWidth();
   const runtimeBackend = paneBackend(pane);
   const captureReason = captureDisabledReason(pane);
@@ -230,7 +243,7 @@ export function Drawer({
   return (
     <aside
       id="drawer"
-      aria-label="ペイン詳細"
+      aria-label={t`ペイン詳細`}
       style={{ "--drawer-w": `${width}px` } as CSSProperties}
     >
       {/* role / aria / tabIndex は hook が幅と一体で提供する(スプレッド漏れで
@@ -252,11 +265,11 @@ export function Drawer({
               className="btn-primary"
               onClick={() => onOpenDiff(parent, pane)}
             >
-              変更を表示
+              <Trans>変更を表示</Trans>
             </button>
           </>
         )}
-        <button id="drawer-close" type="button" aria-label="詳細を閉じる" onClick={onClose}>
+        <button id="drawer-close" type="button" aria-label={t`詳細を閉じる`} onClick={onClose}>
           ✕
         </button>
       </header>
@@ -272,8 +285,10 @@ export function Drawer({
               <dd id="d-state">
                 <IssueStateTag state={pane.issueState} unknownLabel="UNKNOWN" />
               </dd>
-              <dt>状態</dt>
-              <dd id="d-not-started">{notStartedNote(pane.tmuxState)}</dd>
+              <dt>
+                <Trans>状態</Trans>
+              </dt>
+              <dd id="d-not-started">{i18n._(notStartedNote(pane.tmuxState))}</dd>
             </dl>
           </section>
           <WaveSection pane={pane} repo={repo} />

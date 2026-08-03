@@ -23,3 +23,7 @@ internal/ui/dashboard/static/*
 !internal/ui/dashboard/static/.gitkeep
 web/node_modules/
 .pnpm-store/
+# Translation catalogs: the .po files are the source of truth and are tracked.
+# `lingui compile` output next to them is a verification artifact only — the
+# runtime compiles .po through @lingui/vite-plugin at build time.
+web/src/locales/*.js

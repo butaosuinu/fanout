@@ -934,7 +934,10 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
   box-shadow:0 24px 48px -24px var(--shadow);
 }
 .settings-modal:focus{ outline:none; }
+/* sticky: 3 セクション分で max-height を越えてモーダルがスクロールするため、
+   見出しと閉じるボタンが流れて消えないよう上端に貼り付ける。 */
 .settings-head{
+  position:sticky; top:0; z-index:1;
   display:flex; align-items:center; gap:10px;
   padding:14px 18px 12px;
   background:var(--paper);
@@ -956,6 +959,26 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 #settings-close:hover{ border-color:var(--asagi); color:var(--asagi); }
 .set-sec{ padding:16px 18px 20px; }
 .set-sec + .set-sec{ border-top:1px solid var(--suna-soft); }
+
+/* 言語の 3 択。外観と違って見本の絵が無いので、.set-theme-cards(3 列固定の
+   グリッド)は流用せず、内容幅で並ぶピル型にする。狭い幅では折り返す。 */
+.set-lang-opts{ display:flex; flex-wrap:wrap; gap:8px; }
+.set-lang-opt{
+  display:inline-flex; align-items:center;
+  padding:6px 14px;
+  border:1px solid var(--suna); border-radius:999px;
+  background:transparent; color:var(--ink-60);
+  font-size:12.5px; cursor:pointer;
+  transition:border-color .25s ease, color .25s ease, background-color .25s ease;
+}
+/* radio は display:none にしない — フォーカスと矢印キー移動を残すため、
+   潰して隠すだけにする(.set-theme-card input と同じ手)。 */
+.set-lang-opt input{ position:absolute; width:0; height:0; opacity:0; }
+.set-lang-opt:hover{ border-color:var(--asagi); color:var(--asagi); }
+.set-lang-opt:has(input:checked){
+  border-color:var(--ai); background:var(--paper-2); color:var(--sumi);
+}
+.set-lang-opt:has(input:focus-visible){ outline:2px solid var(--ai); outline-offset:2px; }
 
 /* 外観の見本カード — ダッシュボードの縮図。色はパレットの実値をここに直接
    置く(var(--washi) 等を使うと、いま選んでいる外観に両方が染まって見本に

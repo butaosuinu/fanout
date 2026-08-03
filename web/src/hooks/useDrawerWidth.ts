@@ -1,3 +1,4 @@
+import { useLingui } from "@lingui/react/macro";
 import { usePanelWidth, type PanelGripProps } from "./usePanelWidth";
 
 export const DRAWER_DEFAULT_WIDTH = 840;
@@ -19,13 +20,14 @@ function drawerViewportMax(): number {
 }
 
 export function useDrawerWidth(): { width: number; gripProps: PanelGripProps } {
+  const { t } = useLingui();
   return usePanelWidth({
     storageKey: "fanout.drawerWidth",
     defaultWidth: DRAWER_DEFAULT_WIDTH,
     minWidth: DRAWER_MIN_WIDTH,
     maxWidth: DRAWER_MAX_WIDTH,
     viewportMax: drawerViewportMax,
-    label: "詳細パネルの幅を変更",
+    label: t`詳細パネルの幅を変更`,
     resizingClass: "drawer-resizing",
   });
 }

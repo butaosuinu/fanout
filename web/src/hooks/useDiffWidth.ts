@@ -1,3 +1,4 @@
+import { useLingui } from "@lingui/react/macro";
 import { usePanelWidth, type PanelGripProps } from "./usePanelWidth";
 
 export const DIFF_DEFAULT_WIDTH = 760;
@@ -15,13 +16,14 @@ const VIEWPORT_RATIO = 0.95;
  * right = min(ドロワー左端, 100vw - 幅) にしてある)。ここでの上限は
  * ビューポート幅だけで決まるので、ドロワーが開いていても 95% まで広げられる。 */
 export function useDiffWidth(): { width: number; gripProps: PanelGripProps } {
+  const { t } = useLingui();
   return usePanelWidth({
     storageKey: "fanout.diffWidth",
     defaultWidth: DIFF_DEFAULT_WIDTH,
     minWidth: DIFF_MIN_WIDTH,
     maxWidth: DIFF_MAX_WIDTH,
     viewportMax: () => window.innerWidth * VIEWPORT_RATIO,
-    label: "diff パネルの幅を変更",
+    label: t`diff パネルの幅を変更`,
     resizingClass: "diff-resizing",
   });
 }

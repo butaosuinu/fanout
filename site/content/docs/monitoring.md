@@ -138,7 +138,9 @@ Buttons in the header and the sidebar are icons; hover one to see what it does.
 
 ### Settings
 
-The gear in the top-right opens settings. Appearance is System / Light / Dark, and the diff viewer's syntax theme is chosen separately for light and dark from nine curated themes each (Pierre, GitHub, Catppuccin, Gruvbox, Tokyo Night, and more). Both come with a preview, and the diff theme preview uses the same rendering as the real diff, so you see the exact colors before choosing. Settings are stored in the browser and restored on the next visit to the same origin (see the port note above).
+The gear in the top-right opens settings. Language is Auto / 日本語 / English — Auto follows the browser's language, and picking one explicitly keeps it. Appearance is System / Light / Dark, and the diff viewer's syntax theme is chosen separately for light and dark from nine curated themes each (Pierre, GitHub, Catppuccin, Gruvbox, Tokyo Night, and more). Both come with a preview, and the diff theme preview uses the same rendering as the real diff, so you see the exact colors before choosing. Settings are stored in the browser and restored on the next visit to the same origin (see the port note above).
+
+The dashboard ships in Japanese and English. Column headers, tags, and filter values stay in English in both languages because they are the filter query syntax — `state:open` and `ci:fail` are what you type, so they read the same either way.
 
 ### F12 / prefix + D
 

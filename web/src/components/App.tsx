@@ -1,3 +1,7 @@
+import { i18n, type MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
+import { I18nProvider } from "@lingui/react";
+import { Trans, useLingui } from "@lingui/react/macro";
 import {
   lazy,
   Suspense,
@@ -9,7 +13,7 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
-import { useSystemThemeSync } from "../hooks/useSettings";
+import { useLocale, useSystemThemeSync } from "../hooks/useSettings";
 import { useSnapshot } from "../hooks/useSnapshot";
 import { readToken } from "../lib/api";
 import {
@@ -104,15 +108,19 @@ function DiffLoadFailed({ onClose }: { onClose: () => void }) {
     /* モーダルにはしない — 背面は生きているので、閉じて他の操作へ戻れるほうがよい */
     <div className="diff-failed" role="alert">
       <p>
-        差分ビュアーを読み込めませんでした。ダッシュボードを再起動した直後だと、開いたままの
-        ページが古いスクリプトを指していることがあります。
+        {/* 文そのものは 1 行に保つこと。JSX は改行+インデントを半角空白に畳むので、
+            日本語の文の途中で折り返すとメッセージにその空白が焼き込まれる(タグの
+            前後での折り返しは前後の空白ごと落ちるので安全)。 */}
+        <Trans>
+          差分ビュアーを読み込めませんでした。ダッシュボードを再起動した直後だと、開いたままのページが古いスクリプトを指していることがあります。
+        </Trans>
       </p>
       <div className="diff-failed-actions">
         <button type="button" className="btn-primary" onClick={() => location.reload()}>
-          ページを再読み込み
+          <Trans>ページを再読み込み</Trans>
         </button>
         <button type="button" onClick={onClose}>
-          閉じる
+          <Trans>閉じる</Trans>
         </button>
       </div>
     </div>
@@ -128,17 +136,35 @@ function parentsOf(snap: Snapshot | null): Set<string> {
   return new Set((snap?.sessions ?? []).map((s) => String(s.parent ?? "")));
 }
 
+/* provider だけを持つ薄い外側。テストは render(<App />) を直接呼ぶので、provider を
+ * main.tsx ではなくここに置く(でないと全テストが provider 無しになる)。
+ * defaultComponent は渡さない — 渡すと <Trans> が DOM 要素で包まれ、直下の
+ * テキストノードだけを見る getByText が軒並み外れる。 */
 export function App() {
+  return (
+    <I18nProvider i18n={i18n}>
+      <Dashboard />
+    </I18nProvider>
+  );
+}
+
+function Dashboard() {
   /* 設定モーダルと diff オーバーレイは開いている間しか外観 store を購読しない。
    * ここで常駐購読を張り、システム追従中の OS 配色変更を取りこぼさない。 */
   useSystemThemeSync();
+  /* ロケール変更で木全体を作り直すための常駐購読。I18nProvider 自身の再レンダーは
+   * children の要素 identity が変わらないため下へ伝わらず、context を購読していない
+   * コンポーネントが古い文言のまま残る。 */
+  useLocale();
+  const { i18n: i18nCtx, t } = useLingui();
   const token = useMemo(() => readToken(), []);
   const { snap, conn } = useSnapshot(token);
   const [filter, setFilter] = useState("");
   const [sortKey, setSortKey] = useState("issueNum");
   const [sortDir, setSortDir] = useState<SortDir>(1);
   const [selected, setSelected] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  /* 文字列ではなく descriptor。言語を切り替えたときに通知だけ古い言語で残らない。 */
+  const [notice, setNotice] = useState<MessageDescriptor | null>(null);
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   /* diff が背面を覆っているか。実寸に依存するのでオーバーレイから受け取る */
@@ -156,7 +182,7 @@ export function App() {
   useEffect(() => {
     if (!snap) return;
     if (selected && !findPaneEntry(snap, selected)) {
-      setNotice(`${selected} は snapshot から消えたため詳細を閉じました`);
+      setNotice(msg`${{ key: selected }} は snapshot から消えたため詳細を閉じました`);
       setSelected(null);
     } else {
       setNotice(null);
@@ -216,7 +242,7 @@ export function App() {
   const selectedEntry = findPaneEntry(snap, selected);
   const msgs = degradedMessages(snap?.degraded);
   const status = snap
-    ? `${notice ? `${notice} · ` : ""}telemetry @ ${clock(snap.generatedAt)}`
+    ? `${notice ? `${i18nCtx._(notice)} · ` : ""}telemetry @ ${clock(snap.generatedAt)}`
     : "awaiting telemetry";
 
   const onSort = (key: string) => {
@@ -296,7 +322,7 @@ export function App() {
           <div className="wrap" id="content">
             <Hud rollup={snap?.rollup} />
             <div className="banner" id="banner" role="status" hidden={!msgs.length}>
-              {msgs.join(" · ")}
+              {msgs.map((m) => i18nCtx._(m)).join(" · ")}
             </div>
             <div className="toolbar rise" style={{ "--d": ".2s" } as CSSProperties}>
               <input
@@ -304,7 +330,7 @@ export function App() {
                 type="search"
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="filter — 自由語 or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"
+                placeholder={t`filter — 自由語 or backend:herdr state:open run:plan agent:claude wave:1 ci:fail`}
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
               />
@@ -323,9 +349,11 @@ export function App() {
                 <section className="session">
                   <div className="empty">
                     <span className="ji">no panes in the breeze</span>
-                    {total
-                      ? "フィルタに一致するペインがありません"
-                      : "アクティブなセッションがありません"}
+                    {total ? (
+                      <Trans>フィルタに一致するペインがありません</Trans>
+                    ) : (
+                      <Trans>アクティブなセッションがありません</Trans>
+                    )}
                   </div>
                 </section>
               )}

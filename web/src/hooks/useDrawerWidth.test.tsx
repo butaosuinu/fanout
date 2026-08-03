@@ -1,3 +1,5 @@
+import { i18n } from "@lingui/core";
+import { I18nProvider } from "@lingui/react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { useDrawerWidth } from "./useDrawerWidth";
@@ -6,7 +8,17 @@ import { useDrawerWidth } from "./useDrawerWidth";
  * pointer イベントを発火する(実ブラウザでは setPointerCapture が grip 外の
  * move/up も同じ要素へ配送することを保証する)。 */
 
+/* provider は Probe の中に入れる — hook は grip の aria-label を翻訳するため
+ * I18nProvider を要求する。ここで包んでおけば全 render(<Probe />) がそのまま済む。 */
 function Probe() {
+  return (
+    <I18nProvider i18n={i18n}>
+      <ProbeInner />
+    </I18nProvider>
+  );
+}
+
+function ProbeInner() {
   const { width, gripProps } = useDrawerWidth();
   return (
     <div>

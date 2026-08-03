@@ -1,7 +1,17 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { lazy, Suspense, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useFocusTrap } from "../hooks/useFocusTrap";
-import { useAppearance, useDiffTheme, type Appearance, type Theme } from "../hooks/useSettings";
+import {
+  useAppearance,
+  useDiffTheme,
+  useLocale,
+  type Appearance,
+  type LocalePref,
+  type Theme,
+} from "../hooks/useSettings";
 import { DIFF_THEMES_DARK, DIFF_THEMES_LIGHT, type DiffThemeOption } from "../lib/diffThemes";
 import { blockBackground } from "../lib/inert";
 import { lockDocumentScroll } from "../lib/scrollLock";
@@ -11,10 +21,20 @@ import { ChunkBoundary } from "./ChunkBoundary";
  * 開くまで初回ロードのパスに乗せないため、DiffOverlay と同じく遅延 chunk へ。 */
 const DiffThemePreview = lazy(() => import("./DiffThemePreview"));
 
-const APPEARANCES: { value: Appearance; label: string }[] = [
-  { value: "system", label: "システム" },
-  { value: "light", label: "ライト" },
-  { value: "dark", label: "ダーク" },
+/* モジュール定数は import 時に一度だけ評価されるので descriptor を置き、描画時に
+ * i18n._() で解決する。 */
+const APPEARANCES: { value: Appearance; label: MessageDescriptor }[] = [
+  { value: "system", label: msg`システム` },
+  { value: "light", label: msg`ライト` },
+  { value: "dark", label: msg`ダーク` },
+];
+
+/* 言語名は自国語のまま出すのが慣例なので「日本語」「English」は両ロケールで同じ
+ * (英語カタログでも訳さない)。翻訳するのは「自動」だけ。 */
+const LOCALES: { value: LocalePref; label: MessageDescriptor }[] = [
+  { value: "auto", label: msg`自動` },
+  { value: "ja", label: msg`日本語` },
+  { value: "en", label: msg`English` },
 ];
 
 /* 外観の見本。ダッシュボードの縮図を CSS だけで描く(nav の帯 + カード + 行)。
@@ -53,12 +73,13 @@ function ThemeSelect({
   onChange,
 }: {
   id: string;
-  label: string;
+  label: MessageDescriptor;
   value: string;
   themeType: Theme;
   options: readonly DiffThemeOption[];
   onChange: (name: string) => void;
 }) {
+  const { i18n } = useLingui();
   return (
     <div className="set-diff-theme">
       {/* fallback はテーマ読込中の高さ確保。空の枠が一瞬出るだけで文言は出さない。
@@ -69,7 +90,7 @@ function ThemeSelect({
           <DiffThemePreview name={value} themeType={themeType} />
         </Suspense>
       </ChunkBoundary>
-      <label htmlFor={id}>{label}</label>
+      <label htmlFor={id}>{i18n._(label)}</label>
       <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map((t) => (
           <option key={t.name} value={t.name}>
@@ -82,6 +103,8 @@ function ThemeSelect({
 }
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
+  const { i18n, t } = useLingui();
+  const { mode: localeMode, setLocale } = useLocale();
   const { mode, setMode } = useAppearance();
   const { light, dark, setLight, setDark } = useDiffTheme();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -135,15 +158,41 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
       >
         <header className="settings-head">
-          <h3 id="settings-title">設定</h3>
-          <button type="button" id="settings-close" aria-label="設定を閉じる" onClick={onClose}>
+          <h3 id="settings-title">
+            <Trans>設定</Trans>
+          </h3>
+          <button type="button" id="settings-close" aria-label={t`設定を閉じる`} onClick={onClose}>
             ✕
           </button>
         </header>
         <section className="set-sec">
+          {/* 外観と同じ理由で radiogroup + aria-labelledby。name は appearance と
+              分ける — 同じダイアログに 2 つのグループが並ぶので、共有すると 1 つの
+              グループとして扱われる。 */}
+          <h4 id="set-locale-label">
+            <Trans>言語</Trans>
+          </h4>
+          <div className="set-lang-opts" role="radiogroup" aria-labelledby="set-locale-label">
+            {LOCALES.map((l) => (
+              <label key={l.value} className="set-lang-opt">
+                <input
+                  type="radio"
+                  name="locale"
+                  value={l.value}
+                  checked={localeMode === l.value}
+                  onChange={() => setLocale(l.value)}
+                />
+                <span>{i18n._(l.label)}</span>
+              </label>
+            ))}
+          </div>
+        </section>
+        <section className="set-sec">
           {/* fieldset/legend は legend が flex/grid に乗らず折り返しが崩れるので、
               radiogroup + aria-labelledby で同じ意味論を作る */}
-          <h4 id="set-appearance-label">テーマ</h4>
+          <h4 id="set-appearance-label">
+            <Trans>テーマ</Trans>
+          </h4>
           <div className="set-theme-cards" role="radiogroup" aria-labelledby="set-appearance-label">
             {APPEARANCES.map((a) => (
               <label key={a.value} className="set-theme-card" data-mode={a.value}>
@@ -155,17 +204,19 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   onChange={() => setMode(a.value)}
                 />
                 <AppearanceArt />
-                <span className="stc-label">{a.label}</span>
+                <span className="stc-label">{i18n._(a.label)}</span>
               </label>
             ))}
           </div>
         </section>
         <section className="set-sec">
-          <h4>diff テーマ</h4>
+          <h4>
+            <Trans>diff テーマ</Trans>
+          </h4>
           <div className="set-diff-themes">
             <ThemeSelect
               id="set-diff-theme-light"
-              label="ライトテーマ"
+              label={msg`ライトテーマ`}
               value={light}
               themeType="light"
               options={DIFF_THEMES_LIGHT}
@@ -173,7 +224,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             />
             <ThemeSelect
               id="set-diff-theme-dark"
-              label="ダークテーマ"
+              label={msg`ダークテーマ`}
               value={dark}
               themeType="dark"
               options={DIFF_THEMES_DARK}

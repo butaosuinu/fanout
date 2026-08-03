@@ -1,3 +1,4 @@
+import { Trans, useLingui } from "@lingui/react/macro";
 import { memo } from "react";
 import { diffTotals, fileBase, groupDiffFilesByDir } from "../lib/diff";
 import type { DiffFileEntry } from "../lib/types";
@@ -34,23 +35,26 @@ export const DiffFileList = memo(function DiffFileList({
   onExpandAll: () => void;
   onCollapseAll: () => void;
 }) {
+  /* memo 境界の内側で locale を購読する。props はロケールに依存しないので、
+   * これが無いと言語を切り替えても見出しとボタン名が古いまま残る。 */
+  const { t } = useLingui();
   const totals = diffTotals(files);
   /* patch を持たない file は本文側の DiffOmittedNote が常時出す。ここは
    * 「飛べる file」だけにして、一覧の意味を移動先に絞る。 */
   const groups = groupDiffFilesByDir(files.filter((f) => f.patchIncluded));
   return (
     // nav ではなく region — 主目的は一覧で、移動は付随機能
-    <section className="diff-sidebar" aria-label="変更ファイル">
+    <section className="diff-sidebar" aria-label={t`変更ファイル`}>
       <div className="diff-sidebar-head">
         <span className="diff-sidebar-count">
           {files.length} files <span className="add">+{totals.additions}</span>
           <span className="del">-{totals.deletions}</span>
         </span>
         <span className="diff-sidebar-acts">
-          <IconButton label="すべて展開" onClick={onExpandAll}>
+          <IconButton label={t`すべて展開`} onClick={onExpandAll}>
             <IconUnfold />
           </IconButton>
-          <IconButton label="すべて折りたたむ" onClick={onCollapseAll}>
+          <IconButton label={t`すべて折りたたむ`} onClick={onCollapseAll}>
             <IconFold />
           </IconButton>
         </span>
@@ -58,7 +62,7 @@ export const DiffFileList = memo(function DiffFileList({
       {groups.map((g) => (
         <div className="diff-file-group" key={g.dir}>
           <h4 className="diff-file-dir" title={g.dir}>
-            {g.dir || "(リポジトリ直下)"}
+            {g.dir || <Trans>(リポジトリ直下)</Trans>}
           </h4>
           <ul className="diff-file-rows">
             {g.files.map((f) => {

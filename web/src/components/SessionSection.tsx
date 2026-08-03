@@ -1,3 +1,6 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
+import { useLingui } from "@lingui/react/macro";
 import type { KeyboardEvent, MouseEvent } from "react";
 import { parentLabel, parentUrl } from "../lib/github";
 import { parseDiff } from "../lib/format";
@@ -35,11 +38,14 @@ function BlockersCell({ pane }: { pane: PaneView }) {
   return <span className="muted">{blockersAllClosed(pane) ? "resolved" : "unknown"}</span>;
 }
 
-/* diff 導線の accessible name。行を指す情報を重複なく並べ、最後に統計を置く。 */
-function diffLinkLabel(pane: PaneView, d: { add: string; del: string } | null): string {
+/* diff 導線の accessible name。行を指す情報を重複なく並べ、最後に統計を置く。
+ * <Trans> ではなく descriptor — <Trans> は {変数} 前後の空白を落とすため、
+ * 区切りの空白に意味があるこの名前が壊れる。 */
+function diffLinkLabel(pane: PaneView, d: { add: string; del: string } | null): MessageDescriptor {
   const parts = [paneLabel(pane), paneName(pane), pane.branchName ?? ""];
   const target = parts.filter((s, i) => s && parts.indexOf(s) === i).join(" ");
-  return `変更を表示 ${target} ${d ? `+${d.add}/-${d.del}` : pane.diffSummary || "—"}`;
+  const stat = d ? `+${d.add}/-${d.del}` : pane.diffSummary || "—";
+  return msg`変更を表示 ${{ target }} ${{ stat }}`;
 }
 
 /* 行 identity を組める行を、diff ビュアーへの直リンクにする。 */
@@ -52,6 +58,7 @@ function DiffCell({
   pane: PaneView;
   onOpenDiff: (parent: string, pane: PaneView) => void;
 }) {
+  const { i18n, t } = useLingui();
   const d = parseDiff(pane.diffSummary ?? "");
   /* 解析できない summary(gitstat の一時失敗で "-" や自由文になる)でも、行
    * identity があれば diff は取れる。要約はそのままテキストで見せる。 */
@@ -74,7 +81,7 @@ function DiffCell({
     <button
       type="button"
       className="diff-link"
-      title="変更を表示"
+      title={t`変更を表示`}
       /* 名前に対象を入れる — 同じ統計の行が複数あると「変更を表示 +N/-M」が
          並んで、支援技術からどの行の diff か区別できない。
          issue / task だけでは足りない: 同じ parent の下で別の worktree が同じ
@@ -82,7 +89,7 @@ function DiffCell({
          source を指す兄弟でも同じ)。行を一意にしているのは worktree なので、
          それを名指す branch まで含める。名前が重なるのは同じ worktree を開く
          ボタン同士、つまり中身が同じときだけになる。 */
-      aria-label={diffLinkLabel(pane, d)}
+      aria-label={i18n._(diffLinkLabel(pane, d))}
       // 行クリック(Drawer を開く)には伝播させない — セルは diff への直行導線
       onClick={(e) => {
         e.stopPropagation();

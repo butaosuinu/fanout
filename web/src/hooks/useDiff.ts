@@ -1,10 +1,14 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
 import { useCallback, useEffect, useState } from "react";
 import { diffErrorMessage } from "../lib/diff";
 import type { DiffResponse } from "../lib/types";
 
 export type DiffState =
   | { phase: "loading" }
-  | { phase: "error"; message: string }
+  /* message は文字列ではなく descriptor。取得時ではなく描画時に解決させることで、
+   * エラー表示中に言語を切り替えても文言が取り残されない。 */
+  | { phase: "error"; message: MessageDescriptor }
   | { phase: "ready"; diff: DiffResponse };
 
 /* オーバーレイを開いた時に 1 回だけ取得する。サーバー側は 1 request に共有
@@ -40,7 +44,7 @@ export function useDiff(url: string): { state: DiffState; refetch: () => void } 
         if (ctrl.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
           return;
         }
-        setState({ phase: "error", message: "diff の取得に失敗しました(接続エラー)" });
+        setState({ phase: "error", message: msg`diff の取得に失敗しました(接続エラー)` });
       }
     };
 

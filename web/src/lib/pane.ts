@@ -1,3 +1,5 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
 import type { BlockerStatus, PaneView, PRRef, Snapshot } from "./types";
 import { issueUrl } from "./github";
 
@@ -153,14 +155,15 @@ export function diffQuery(parent: string, p: PaneView): Record<string, string> |
   return null;
 }
 
-/* 未開始(synthetic)行の Drawer 状態説明文。キーは tmuxState。 */
-const NOT_STARTED_NOTES: Record<string, string> = {
-  queued: "未開始 — この子 issue の pane はまだ起動していません。",
-  deferred: "未開始 — open な blocker があるため待機中です。",
-  closed: "pane が起動しないまま issue は close されました。",
-  unknown: "未開始 — issue 状態を取得できていません。",
+/* 未開始(synthetic)行の Drawer 状態説明文。キーは tmuxState。モジュール定数は
+ * import 時に一度だけ評価されるので、翻訳済み文字列ではなく descriptor を置く。 */
+const NOT_STARTED_NOTES: Record<string, MessageDescriptor> = {
+  queued: msg`未開始 — この子 issue の pane はまだ起動していません。`,
+  deferred: msg`未開始 — open な blocker があるため待機中です。`,
+  closed: msg`pane が起動しないまま issue は close されました。`,
+  unknown: msg`未開始 — issue 状態を取得できていません。`,
 };
 
-export function notStartedNote(tmuxState: string): string {
+export function notStartedNote(tmuxState: string): MessageDescriptor {
   return NOT_STARTED_NOTES[tmuxState] ?? NOT_STARTED_NOTES["unknown"]!;
 }
