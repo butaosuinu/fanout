@@ -366,6 +366,15 @@ func TestHerdrControlIssuedWorktreeMayRetainRealizedResourceForOpenRecovery(t *t
 	if err := validateHerdrIntent(intent); err != nil {
 		t.Fatalf("issued worktree open intent: %v", err)
 	}
+	intent.MutationRejected = true
+	if err := validateHerdrIntent(intent); err != nil {
+		t.Fatalf("issued rejected worktree intent: %v", err)
+	}
+	intent.Status = HerdrIntentRealized
+	if err := validateHerdrIntent(intent); err == nil ||
+		!strings.Contains(err.Error(), "invalid mutation rejection record") {
+		t.Fatalf("realized rejected worktree intent error = %v", err)
+	}
 
 	coordinator := testHerdrCoordinatorIntent(repo, "425")
 	coordinator.Status = HerdrIntentIssued

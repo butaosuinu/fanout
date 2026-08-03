@@ -1279,6 +1279,145 @@ func TestRealizeHerdrWorktreeDeletesBranchOnlyAfterStructuredRejection(t *testin
 	}
 }
 
+func TestRealizeHerdrWorktreeRetainsStructuredRejectionAcrossGitFailure(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	originalPath := os.Getenv("PATH")
+	failingBin := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(failingBin, "git"),
+		[]byte("#!/bin/sh\nexit 99\n"),
+		0o755,
+	); err != nil {
+		t.Fatal(err)
+	}
+	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+		if req.Kind != herdrrun.WorktreeCreate {
+			return herdrrun.WorktreeMutationResult{}, errors.New("unexpected mutation")
+		}
+		t.Setenv("PATH", failingBin)
+		return herdrrun.WorktreeMutationResult{}, herdrrun.MutationRejectedError{
+			Code: "worktree_create_failed", Message: "rejected before create",
+		}
+	}
+
+	req := testHerdrWorktreeRequest(repo, "rejected-retry", 438)
+	_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, herdrrun.ErrMutationRejected) {
+		t.Fatalf("structured rejection with Git failure error = %v", err)
+	}
+	t.Setenv("PATH", originalPath)
+
+	control, loadErr := state.LoadHerdrIntents(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	intentID, _ := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
+	intent, found := control.FindIntent(intentID)
+	if !found || intent.Status != state.HerdrIntentIssued || !intent.MutationRejected {
+		t.Fatalf("persisted rejection intent = (%+v,%t)", intent, found)
+	}
+
+	mutationCount := len(runtime.mutations)
+	runtime.mutate = func(herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+		t.Fatal("rejected intent reissued the Herdr mutation")
+		return herdrrun.WorktreeMutationResult{}, nil
+	}
+	_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, herdrrun.ErrMutationRejected) {
+		t.Fatalf("structured rejection retry error = %v", err)
+	}
+	if len(runtime.mutations) != mutationCount {
+		t.Fatalf("structured rejection retry mutations = %d, want %d", len(runtime.mutations), mutationCount)
+	}
+	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
+	if refErr != nil {
+		t.Fatal(refErr)
+	}
+	if _, found, observeErr := worktree.ObserveBranch(context.Background(), repo, fullRef); observeErr != nil || found {
+		t.Fatalf("rejected retry branch = found:%t err:%v, want deleted", found, observeErr)
+	}
+	control, loadErr = state.LoadHerdrIntents(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if _, found := control.FindIntent(intentID); found {
+		t.Fatal("rejected retry left a provisional intent")
+	}
+}
+
+func TestRealizeHerdrWorktreeRejectsRollbackAfterSourceRepoIdentityChanges(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	owner := filepath.Join(t.TempDir(), "rollback-owner")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "rollback-owner", owner, "HEAD")
+
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, owner, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, owner, runtime, hooks)
+
+	req := testHerdrWorktreeRequest(owner, "rollback-identity", 439)
+	foreign := filepath.Join(t.TempDir(), "foreign")
+	gitCmdTest(t, "", "clone", repo, foreign)
+	gitCmdTest(t, foreign, "branch", req.BranchName, "HEAD")
+
+	dotGitPath := filepath.Join(owner, ".git")
+	originalDotGit, err := os.ReadFile(dotGitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if restoreErr := os.WriteFile(dotGitPath, originalDotGit, 0o644); restoreErr != nil {
+			t.Errorf("restore rollback owner .git file: %v", restoreErr)
+		}
+	})
+	runtime.mutate = func(mutation herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+		if mutation.Kind != herdrrun.WorktreeCreate {
+			return herdrrun.WorktreeMutationResult{}, errors.New("unexpected mutation")
+		}
+		foreignDotGit := "gitdir: " + filepath.Join(foreign, ".git") + "\n"
+		if writeErr := os.WriteFile(dotGitPath, []byte(foreignDotGit), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		return herdrrun.WorktreeMutationResult{}, herdrrun.MutationNotIssuedError{
+			Cause: errors.New("owned admission failed"),
+		}
+	}
+
+	_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) ||
+		!strings.Contains(err.Error(), errHerdrRealizedIdentityChanged.Error()) {
+		t.Fatalf("changed rollback source identity error = %v", err)
+	}
+	if restoreErr := os.WriteFile(dotGitPath, originalDotGit, 0o644); restoreErr != nil {
+		t.Fatal(restoreErr)
+	}
+
+	fullRef, refErr := worktree.LocalBranchRef(owner, req.BranchName)
+	if refErr != nil {
+		t.Fatal(refErr)
+	}
+	if _, found, observeErr := worktree.ObserveBranch(context.Background(), owner, fullRef); observeErr != nil || !found {
+		t.Fatalf("owned reserved branch = found:%t err:%v, want preserved", found, observeErr)
+	}
+	if _, found, observeErr := worktree.ObserveBranch(context.Background(), foreign, fullRef); observeErr != nil || !found {
+		t.Fatalf("foreign branch = found:%t err:%v, want preserved", found, observeErr)
+	}
+	control, loadErr := state.LoadHerdrIntents(owner)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	intentID, _ := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
+	intent, found := control.FindIntent(intentID)
+	if !found || intent.Status != state.HerdrIntentManualCleanupRequired {
+		t.Fatalf("changed rollback source intent = (%+v,%t)", intent, found)
+	}
+}
+
 func TestRealizeHerdrWorktreeAdoptsExistingBranchWithoutBaseArgument(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	gitCmdTest(t, repo, "branch", "fanout/existing", "HEAD")

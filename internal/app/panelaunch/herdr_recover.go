@@ -103,6 +103,7 @@ func ensureHerdrBranchReservation(
 func rollbackUnissuedHerdrWorktree(
 	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
+	source worktree.RepoIdentity,
 	intent state.HerdrIntent,
 	mutationErr error,
 ) error {
@@ -111,6 +112,12 @@ func rollbackUnissuedHerdrWorktree(
 		maxHerdrRecoveryClassificationTimeout,
 	)
 	defer cancel()
+	if sourceErr := verifyHerdrRollbackSource(rollbackCtx, req.SourceRoot, source); sourceErr != nil {
+		if errors.Is(sourceErr, errHerdrRealizedIdentityChanged) {
+			return markHerdrIntentManual(locked, intent, errors.Join(mutationErr, sourceErr))
+		}
+		return errors.Join(mutationErr, sourceErr)
+	}
 	if !intent.BranchExisted && !intent.BranchCreated {
 		// Rollback gets an independent finite budget when the launch context
 		// is already canceled.
@@ -141,6 +148,26 @@ func rollbackUnissuedHerdrWorktree(
 		}
 	}
 	return releaseHerdrIntent(locked, intent.ID, mutationErr)
+}
+
+func verifyHerdrRollbackSource(
+	ctx context.Context,
+	sourceRoot string,
+	expected worktree.RepoIdentity,
+) error {
+	current, err := worktree.ResolveRepoIdentity(ctx, sourceRoot)
+	if err != nil {
+		return fmt.Errorf("resolve Herdr rollback source: %w", err)
+	}
+	if current.RepoKey != expected.RepoKey {
+		return fmt.Errorf(
+			"%w: Herdr rollback source repository changed from %q to %q",
+			errHerdrRealizedIdentityChanged,
+			expected.RepoKey,
+			current.RepoKey,
+		)
+	}
+	return nil
 }
 
 func recoverHerdrCoordinator(
@@ -207,10 +234,33 @@ func recoverHerdrWorktree(
 	intent state.HerdrIntent,
 	mutationErr error,
 ) (HerdrWorktreeResult, error) {
-	// A structured rejection proves the mutation created nothing; classify
-	// from local Git state without depending on a snapshot.
-	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
-		return recoverRejectedHerdrWorktree(ctx, locked, req, source, intent, mutationErr)
+	// Persist the structured rejection before any Git observation so a
+	// transient observation failure cannot send the next run through normal
+	// response-loss recovery.
+	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) && !intent.MutationRejected {
+		intent.MutationRejected = true
+		locked.UpsertIntent(intent)
+		if saveErr := locked.Save(); saveErr != nil {
+			return HerdrWorktreeResult{}, errors.Join(mutationErr, saveErr)
+		}
+	}
+	if intent.MutationRejected {
+		if mutationErr == nil {
+			mutationErr = herdrrun.ErrMutationRejected
+		}
+		recoveryCtx, cancel := context.WithTimeout(
+			context.Background(),
+			maxHerdrRecoveryClassificationTimeout,
+		)
+		defer cancel()
+		return HerdrWorktreeResult{}, recoverRejectedHerdrWorktree(
+			recoveryCtx,
+			locked,
+			req,
+			source,
+			intent,
+			mutationErr,
+		)
 	}
 	// A failed snapshot classifies nothing: keep the issued intent so the
 	// next run can classify it.
@@ -282,7 +332,17 @@ func recoverRejectedHerdrWorktree(
 	source worktree.RepoIdentity,
 	intent state.HerdrIntent,
 	mutationErr error,
-) (HerdrWorktreeResult, error) {
+) error {
+	if sourceErr := verifyHerdrRollbackSource(ctx, req.SourceRoot, source); sourceErr != nil {
+		if errors.Is(sourceErr, errHerdrRealizedIdentityChanged) {
+			return markHerdrIntentManual(
+				locked,
+				intent,
+				errors.Join(mutationErr, sourceErr),
+			)
+		}
+		return errors.Join(mutationErr, sourceErr)
+	}
 	if intent.Resource.WorkspaceID != "" {
 		_, verifyErr := worktree.VerifyCheckout(
 			ctx,
@@ -295,18 +355,19 @@ func recoverRejectedHerdrWorktree(
 		)
 		if verifyErr == nil {
 			intent.Status = state.HerdrIntentRealized
+			intent.MutationRejected = false
 			intent.Failure = ""
 			locked.UpsertIntent(intent)
 			if saveErr := locked.Save(); saveErr != nil {
-				return HerdrWorktreeResult{}, errors.Join(mutationErr, saveErr)
+				return errors.Join(mutationErr, saveErr)
 			}
-			return HerdrWorktreeResult{}, mutationErr
+			return mutationErr
 		}
 		if !errors.Is(verifyErr, worktree.ErrCheckoutMismatch) {
 			// The verification itself failed; nothing was classified.
-			return HerdrWorktreeResult{}, errors.Join(mutationErr, verifyErr)
+			return errors.Join(mutationErr, verifyErr)
 		}
-		return HerdrWorktreeResult{}, markHerdrIntentManual(
+		return markHerdrIntentManual(
 			locked,
 			intent,
 			errors.Join(mutationErr, verifyErr),
@@ -315,16 +376,16 @@ func recoverRejectedHerdrWorktree(
 	checkout, checkoutErr := worktree.ObserveCheckout(ctx, req.SourceRoot, intent.WorktreePath)
 	if checkoutErr != nil {
 		if errors.Is(checkoutErr, worktree.ErrCheckoutMismatch) {
-			return HerdrWorktreeResult{}, markHerdrIntentManual(
+			return markHerdrIntentManual(
 				locked,
 				intent,
 				errors.Join(mutationErr, checkoutErr),
 			)
 		}
-		return HerdrWorktreeResult{}, errors.Join(mutationErr, checkoutErr)
+		return errors.Join(mutationErr, checkoutErr)
 	}
 	if !checkout.PathAbsent || checkout.Registered {
-		return HerdrWorktreeResult{}, markHerdrIntentManual(
+		return markHerdrIntentManual(
 			locked,
 			intent,
 			errors.Join(mutationErr, fmt.Errorf("checkout exists after rejected Herdr create")),
@@ -338,17 +399,17 @@ func recoverRejectedHerdrWorktree(
 			intent.BaseSHA,
 		); err != nil {
 			if errors.Is(err, worktree.ErrBranchRollbackBlocked) {
-				return HerdrWorktreeResult{}, markHerdrIntentManual(
+				return markHerdrIntentManual(
 					locked,
 					intent,
 					errors.Join(mutationErr, err),
 				)
 			}
 			// The observation failed before the delete; retry later.
-			return HerdrWorktreeResult{}, errors.Join(mutationErr, err)
+			return errors.Join(mutationErr, err)
 		}
 	}
-	return HerdrWorktreeResult{}, releaseHerdrIntent(locked, intent.ID, mutationErr)
+	return releaseHerdrIntent(locked, intent.ID, mutationErr)
 }
 
 func finalizeHerdrWorktree(
@@ -376,6 +437,7 @@ func finalizeHerdrWorktree(
 	}
 	intent.Resource = stateResource(observation)
 	intent.Status = state.HerdrIntentRealized
+	intent.MutationRejected = false
 	intent.Failure = ""
 	locked.UpsertIntent(*intent)
 	if saveErr := locked.Save(); saveErr != nil {
@@ -517,7 +579,8 @@ func resumeRealizedHerdrWorktree(
 			}
 			return HerdrWorktreeResult{}, mutationErr
 		}
-		if operationErr := ctx.Err(); operationErr != nil {
+		if operationErr := ctx.Err(); operationErr != nil &&
+			!errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
 			return HerdrWorktreeResult{}, errors.Join(mutationErr, operationErr)
 		}
 		return recoverHerdrWorktree(ctx, runtime, locked, req, source, intent, mutationErr)
@@ -545,6 +608,7 @@ func markHerdrIntentManual(
 		reason = cause.Error()
 	}
 	intent.Status = state.HerdrIntentManualCleanupRequired
+	intent.MutationRejected = false
 	intent.Failure = reason
 	locked.UpsertIntent(intent)
 	if err := locked.Save(); err != nil {

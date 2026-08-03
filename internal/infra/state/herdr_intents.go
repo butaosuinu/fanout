@@ -77,7 +77,8 @@ type HerdrIntent struct {
 	SocketPath     string        `json:"socketPath"`
 	ExpiresUnixMS  int64         `json:"expiresUnixMs"`
 
-	Failure string `json:"failure,omitempty"`
+	MutationRejected bool   `json:"mutationRejected,omitempty"`
+	Failure          string `json:"failure,omitempty"`
 }
 
 // HerdrIntents is the repository-common intent journal. It holds intents
@@ -453,6 +454,10 @@ func validateHerdrIntent(intent HerdrIntent) error {
 	}
 	if intent.BranchCreated && (intent.Kind != HerdrIntentWorktree || intent.BranchExisted) {
 		return fmt.Errorf("herdr intent %s has an invalid branch ownership record", intent.ID)
+	}
+	if intent.MutationRejected &&
+		(intent.Kind != HerdrIntentWorktree || intent.Status != HerdrIntentIssued) {
+		return fmt.Errorf("herdr intent %s has an invalid mutation rejection record", intent.ID)
 	}
 	return nil
 }
