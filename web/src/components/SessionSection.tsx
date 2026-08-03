@@ -3,6 +3,7 @@ import { parentLabel, parentUrl } from "../lib/github";
 import { parseDiff } from "../lib/format";
 import {
   blockersAllClosed,
+  diffQuery,
   fmtBlockers,
   fmtWave,
   openBlockerCount,
@@ -10,6 +11,7 @@ import {
   paneCI,
   paneIssueURL,
   paneLabel,
+  paneName,
   paneRuntimeState,
   paneRuntimeTitle,
   prPrimary,
@@ -33,27 +35,80 @@ function BlockersCell({ pane }: { pane: PaneView }) {
   return <span className="muted">{blockersAllClosed(pane) ? "resolved" : "unknown"}</span>;
 }
 
-function DiffCell({ pane }: { pane: PaneView }) {
+/* diff 導線の accessible name。行を指す情報を重複なく並べ、最後に統計を置く。 */
+function diffLinkLabel(pane: PaneView, d: { add: string; del: string } | null): string {
+  const parts = [paneLabel(pane), paneName(pane), pane.branchName ?? ""];
+  const target = parts.filter((s, i) => s && parts.indexOf(s) === i).join(" ");
+  return `変更を表示 ${target} ${d ? `+${d.add}/-${d.del}` : pane.diffSummary || "—"}`;
+}
+
+/* 行 identity を組める行を、diff ビュアーへの直リンクにする。 */
+function DiffCell({
+  parent,
+  pane,
+  onOpenDiff,
+}: {
+  parent: string;
+  pane: PaneView;
+  onOpenDiff: (parent: string, pane: PaneView) => void;
+}) {
   const d = parseDiff(pane.diffSummary ?? "");
-  if (!d) return <span className="muted">{pane.diffSummary || "—"}</span>;
-  return (
+  /* 解析できない summary(gitstat の一時失敗で "-" や自由文になる)でも、行
+   * identity があれば diff は取れる。要約はそのままテキストで見せる。 */
+  const stat = d ? (
     <>
       <span className="add">+{d.add}</span>/<span className="del">-{d.del}</span>
     </>
+  ) : (
+    <span className="muted">{pane.diffSummary || "—"}</span>
+  );
+  /* 行数を「差分あり」の判定には使わない。diffSummary は
+   * `git diff --shortstat`(rename 検出あり・未追跡を含まない)由来なので、
+   * binary だけ / mode だけ / pure rename の変更は commit 済みだと +0/-0 かつ
+   * clean になる。一方 /api/diff は未追跡を含め `--no-renames` で patch を
+   * 返すので、それらは全部レビュー対象として出てくる。開けないほうが害が
+   * 大きいので、identity を組める行は常にリンクにする(詳細ドロワーの
+   * 「変更を表示」も同じ条件)。 */
+  if (!diffQuery(parent, pane)) return stat;
+  return (
+    <button
+      type="button"
+      className="diff-link"
+      title="変更を表示"
+      /* 名前に対象を入れる — 同じ統計の行が複数あると「変更を表示 +N/-M」が
+         並んで、支援技術からどの行の diff か区別できない。
+         issue / task だけでは足りない: 同じ parent の下で別の worktree が同じ
+         task を持つと paneLabel も表示名も一致しうる(attached-agent が同じ
+         source を指す兄弟でも同じ)。行を一意にしているのは worktree なので、
+         それを名指す branch まで含める。名前が重なるのは同じ worktree を開く
+         ボタン同士、つまり中身が同じときだけになる。 */
+      aria-label={diffLinkLabel(pane, d)}
+      // 行クリック(Drawer を開く)には伝播させない — セルは diff への直行導線
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenDiff(parent, pane);
+      }}
+    >
+      {stat}
+    </button>
   );
 }
 
 function PaneRow({
+  parent,
   pane,
   repo,
   selected,
   onSelect,
+  onOpenDiff,
   registerRow,
 }: {
+  parent: string;
   pane: PaneView;
   repo: string;
   selected: boolean;
   onSelect: () => void;
+  onOpenDiff: (parent: string, pane: PaneView) => void;
   registerRow: (el: HTMLTableRowElement | null) => void;
 }) {
   const ci = paneCI(pane);
@@ -81,7 +136,7 @@ function PaneRow({
         <GhLink url={paneIssueURL(repo, pane)}>{paneLabel(pane)}</GhLink>
       </td>
       <td className="c-name" title={pane.slug}>
-        {pane.derived?.name || pane.displayName || pane.slug || "—"}
+        {paneName(pane) || "—"}
       </td>
       <td>{pane.agent || "—"}</td>
       <td>{wave || <span className="muted">—</span>}</td>
@@ -92,7 +147,7 @@ function PaneRow({
         {pane.branchName || "—"}
       </td>
       <td className={pane.worktreeErr ? "c-diff fault" : "c-diff"} title={pane.worktreeErr ?? ""}>
-        <DiffCell pane={pane} />
+        <DiffCell parent={parent} pane={pane} onOpenDiff={onOpenDiff} />
       </td>
       <td>
         <DirtyTag state={pane.dirtyState} />
@@ -152,6 +207,7 @@ export function SessionSection({
   selected,
   onSort,
   onSelect,
+  onOpenDiff,
   registerRow,
 }: {
   item: SessionItem;
@@ -161,6 +217,7 @@ export function SessionSection({
   selected: string | null;
   onSort: (key: string) => void;
   onSelect: (key: string) => void;
+  onOpenDiff: (parent: string, pane: PaneView) => void;
   registerRow: (key: string, el: HTMLTableRowElement | null) => void;
 }) {
   const sr = item.rollup;
@@ -207,10 +264,12 @@ export function SessionSection({
               return (
                 <PaneRow
                   key={key}
+                  parent={item.parent}
                   pane={p}
                   repo={repo}
                   selected={selected === key}
                   onSelect={() => onSelect(key)}
+                  onOpenDiff={onOpenDiff}
                   registerRow={(el) => registerRow(key, el)}
                 />
               );

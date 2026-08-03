@@ -12,11 +12,18 @@ export type DiffState =
  * refetch のみ。url は呼び出し側が apiUrl で組んだ完成形(値で安定)を受け、
  * unmount / url 変更時は in-flight リクエストを abort する。 */
 export function useDiff(url: string): { state: DiffState; refetch: () => void } {
-  const [state, setState] = useState<DiffState>({ phase: "loading" });
+  /* 取得結果は「どの url のものか」と一緒に持つ。url だけを見て state を
+   * 使い回すと、対象を切り替えた render で新しいタイトルと前の対象の patch が
+   * 同時に描かれる(loading 化は passive effect なので 1 コミット遅れる)。 */
+  const [fetched, setFetched] = useState<{ url: string; state: DiffState }>({
+    url,
+    state: { phase: "loading" },
+  });
   const [epoch, setEpoch] = useState(0);
 
   useEffect(() => {
     const ctrl = new AbortController();
+    const setState = (next: DiffState) => setFetched({ url, state: next });
     setState({ phase: "loading" });
 
     const fetchDiff = async () => {
@@ -42,5 +49,7 @@ export function useDiff(url: string): { state: DiffState; refetch: () => void } 
   }, [url, epoch]);
 
   const refetch = useCallback(() => setEpoch((n) => n + 1), []);
+  /* url が変わった render では effect を待たずに旧データを捨てる */
+  const state: DiffState = fetched.url === url ? fetched.state : { phase: "loading" };
   return { state, refetch };
 }

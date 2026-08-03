@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,14 @@ import {
   removeEventSource,
   streamSnapshot,
 } from "./fakeEventSource";
-import { makePane, makeQueuedPane, makeRollup, makeSession, makeSnapshot } from "./fixtures";
+import {
+  makeDiffResponse,
+  makePane,
+  makeQueuedPane,
+  makeRollup,
+  makeSession,
+  makeSnapshot,
+} from "./fixtures";
 import { server } from "./server";
 
 /* App 全体の統合テスト。モックはネットワーク境界のみ:
@@ -1110,20 +1117,330 @@ describe("transport フォールバック", () => {
   });
 });
 
-describe("テーマ", () => {
-  it("切替で data-theme / localStorage / aria-pressed が同期する", async () => {
+describe("session リストの diff 列", () => {
+  it("差分のある行はクリックで diff ビュアーへ直行する(Drawer は開かない)", async () => {
+    server.use(http.get("/api/diff", () => HttpResponse.json(makeDiffResponse())));
     const user = userEvent.setup();
     render(<App />);
-    const btn = screen.getByRole("button", { name: "ライト / ダーク切替" });
-    expect(btn).toHaveAttribute("aria-pressed", "false");
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({ issueNum: 101, displayName: "Fix thing", diffSummary: "+10/-2" }),
+        ]),
+      ]),
+    );
 
-    await user.click(btn);
+    await user.click(await screen.findByRole("button", { name: /^変更を表示 .* \+10\/-2$/ }));
+
+    /* 導線から開いた既定はコンパクト(モーダルではないので role=complementary)。
+       Drawer は開かない。 */
+    const overlay = await screen.findByRole("complementary", { name: "worktree diff" });
+    expect(overlay).toHaveAttribute("data-mode", "compact");
+    expect(screen.queryByRole("complementary", { name: "ペイン詳細" })).not.toBeInTheDocument();
+  });
+
+  it("Drawer 上部バーは Session 名 → 差分行数 → 変更を表示 の順に並べる", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({ issueNum: 101, displayName: "Fix thing", diffSummary: "+10/-2" }),
+        ]),
+      ]),
+    );
+
+    await user.click(await screen.findByText("Fix thing"));
+    const head = (await screen.findByRole("complementary", { name: "ペイン詳細" })).querySelector(
+      ".drawer-head",
+    ) as HTMLElement;
+    expect(within(head).getByText("+10")).toBeInTheDocument();
+    expect(within(head).getByText("-2")).toBeInTheDocument();
+    expect([...head.children].map((c) => c.tagName + (c.id ? `#${c.id}` : ""))).toEqual([
+      "H3",
+      "SPAN",
+      "BUTTON#d-diff-open",
+      "BUTTON#drawer-close",
+    ]);
+  });
+
+  /* 同じ統計の行が複数あると「変更を表示 +N/-M」だけでは支援技術から区別できない。
+   * 対象(paneLabel)を名前に含める。 */
+  it("diff 導線の名前で対象ペインを区別できる", async () => {
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "One",
+            branchName: "fanout/one",
+            diffSummary: "+10/-2",
+          }),
+          makePane({
+            issueNum: 102,
+            displayName: "Two",
+            branchName: "fanout/two",
+            diffSummary: "+10/-2",
+          }),
+        ]),
+      ]),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "変更を表示 #101 One fanout/one +10/-2" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "変更を表示 #102 Two fanout/two +10/-2" }),
+    ).toBeInTheDocument();
+  });
+
+  /* paneLabel と表示名だけでは足りない。同じ parent の下で別の worktree が同じ
+   * task を持つと(plan spec の branch 上書きなど)、統計まで同じなら 2 つの
+   * ボタンの名前が完全に一致し、支援技術のボタン一覧から選び分けられない。 */
+  it("同じ task を別 worktree が持つ行も名前で区別できる", async () => {
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("plan:alpha", [
+          makePane({
+            issueNum: 0,
+            taskId: "lint",
+            sourceKey: "plan:alpha/lint#a",
+            displayName: "Lint",
+            slug: "lint-a",
+            branchName: "fanout/lint-a",
+            diffSummary: "+10/-2",
+          }),
+          makePane({
+            issueNum: 0,
+            taskId: "lint",
+            sourceKey: "plan:alpha/lint#b",
+            displayName: "Lint",
+            slug: "lint-b",
+            branchName: "fanout/lint-b",
+            diffSummary: "+10/-2",
+          }),
+        ]),
+      ]),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "変更を表示 lint Lint fanout/lint-a +10/-2" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "変更を表示 lint Lint fanout/lint-b +10/-2" }),
+    ).toBeInTheDocument();
+  });
+
+  it("identity を組めない行はリンクにしない", async () => {
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 0,
+            kind: "shell",
+            shellKey: "sh1",
+            displayName: "Shell pane",
+            diffSummary: "+3/-1",
+          }),
+        ]),
+      ]),
+    );
+
+    await screen.findByText("Shell pane");
+    expect(screen.queryByRole("button", { name: /変更を表示/ })).not.toBeInTheDocument();
+  });
+
+  /* diffSummary は `git diff --shortstat`(未追跡を含まない・rename 検出あり)
+   * 由来なので、binary だけ / mode だけ / pure rename の変更は commit 後に
+   * +0/-0 かつ clean になる。一方 /api/diff はそれらを patch として返すため、
+   * 行数で「差分なし」と決めるとレビュー対象を開けない行ができる。 */
+  it("+0/-0 かつ clean でも identity があればリンクにする", async () => {
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Binary only",
+            diffSummary: "+0/-0",
+            dirtyState: "clean",
+          }),
+        ]),
+      ]),
+    );
+
+    await screen.findByText("Binary only");
+    expect(
+      await screen.findByRole("button", { name: /^変更を表示 .* \+0\/-0$/ }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("設定モーダル", () => {
+  it("外観 3 択が data-theme と localStorage に同期する", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "設定" });
+
+    // 未選択(キー無し)はシステム追従。jsdom の matchMedia スタブは light
+    expect(within(dialog).getByRole("radio", { name: "システム" })).toBeChecked();
+
+    await user.click(within(dialog).getByRole("radio", { name: "ダーク" }));
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(localStorage.getItem("fanout.theme")).toBe("dark");
-    expect(btn).toHaveAttribute("aria-pressed", "true");
 
-    await user.click(btn);
+    await user.click(within(dialog).getByRole("radio", { name: "ライト" }));
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(localStorage.getItem("fanout.theme")).toBe("light");
+
+    // システムに戻すとキーごと消える(FOUC ブートストラップと同じ意味論)
+    await user.click(within(dialog).getByRole("radio", { name: "システム" }));
+    expect(localStorage.getItem("fanout.theme")).toBeNull();
+  });
+
+  it("モーダルを閉じたあとも OS の配色変更に追従する", async () => {
+    /* 外観 store を購読するのは設定モーダルと diff オーバーレイだけで、どちらも
+     * 開いている間しか購読しない。App が常駐購読を張っていないと、両方閉じた
+     * 瞬間に matchMedia listener が外れ、ページ全体が古い配色で取り残される。 */
+    const changeListeners = new Set<(e: MediaQueryListEvent) => void>();
+    let dark = false;
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      get matches() {
+        return dark;
+      },
+      media: query,
+      onchange: null,
+      addEventListener: (_t: string, cb: (e: MediaQueryListEvent) => void) =>
+        changeListeners.add(cb),
+      removeEventListener: (_t: string, cb: (e: MediaQueryListEvent) => void) =>
+        changeListeners.delete(cb),
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }));
+    const flipOsTheme = (toDark: boolean) => {
+      dark = toDark;
+      act(() => {
+        for (const cb of changeListeners) cb({ matches: toDark } as MediaQueryListEvent);
+      });
+    };
+
+    const user = userEvent.setup();
+    render(<App />);
+    // 一度も設定を開かないうちから追従する
+    flipOsTheme(true);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+
+    // 開いて閉じても購読が途切れない
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "設定" });
+    await user.click(within(dialog).getByRole("button", { name: "設定を閉じる" }));
+    flipOsTheme(false);
+    expect(document.documentElement.dataset.theme).toBe("light");
+
+    // 明示選択中は OS 変更を無視する(従来どおり)
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog2 = await screen.findByRole("dialog", { name: "設定" });
+    await user.click(within(dialog2).getByRole("radio", { name: "ライト" }));
+    await user.click(within(dialog2).getByRole("button", { name: "設定を閉じる" }));
+    flipOsTheme(true);
+    expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("diff テーマの選択を localStorage に保存する", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "設定" });
+
+    const lightSel = within(dialog).getByLabelText("ライトテーマ");
+    expect(lightSel).toHaveValue("pierre-light");
+    await user.selectOptions(lightSel, "github-light");
+    expect(localStorage.getItem("fanout.diffTheme.light")).toBe("github-light");
+
+    const darkSel = within(dialog).getByLabelText("ダークテーマ");
+    await user.selectOptions(darkSel, "tokyo-night");
+    expect(localStorage.getItem("fanout.diffTheme.dark")).toBe("tokyo-night");
+  });
+
+  it("diff テーマの見本を実物の FileDiff で light / dark 2 枚描く", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "設定" });
+
+    /* 見本は遅延 chunk なので解決を待つ。中身は shadow root に出る — 見本と本番の
+     * 配色が必ず一致することが要点なので、自前描画に差し替えないこと。 */
+    await waitFor(() => {
+      expect(dialog.querySelectorAll("diffs-container")).toHaveLength(2);
+    });
+    const shadow = [...dialog.querySelectorAll("diffs-container")].map(
+      (el) => el.shadowRoot?.textContent ?? "",
+    );
+    for (const text of shadow) expect(text).toContain("#00A3AF");
+  });
+
+  it("保存値が許可リスト外なら既定へ落とす(未登録テーマ名は解決時に throw する)", async () => {
+    localStorage.setItem("fanout.diffTheme.light", "../etc/passwd");
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "設定" });
+    expect(within(dialog).getByLabelText("ライトテーマ")).toHaveValue("pierre-light");
+  });
+
+  it("設定を開いているあいだ背面 document のスクロールを止める", async () => {
+    /* backdrop 上のホイールや modal 端からのチェーンで背面の一覧が動くと、
+     * 閉じたときに位置が変わってしまう。 */
+    const user = userEvent.setup();
+    render(<App />);
+    expect(document.documentElement.style.overflow).toBe("");
+
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    await screen.findByRole("dialog", { name: "設定" });
+    expect(document.documentElement.style.overflow).toBe("hidden");
+
+    await user.click(screen.getByRole("button", { name: "設定を閉じる" }));
+    expect(document.documentElement.style.overflow).toBe("");
+  });
+
+  it("diff テーマの見本は読み上げ対象から外す", async () => {
+    /* 伝えたいのは配色だけ。テーマ名と現在値は直後のラベル付き select が持つ */
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = await screen.findByRole("dialog", { name: "設定" });
+
+    await waitFor(() => {
+      expect(dialog.querySelectorAll("diffs-container")).toHaveLength(2);
+    });
+    const previews = dialog.querySelectorAll(".set-theme-preview");
+    expect(previews).toHaveLength(2);
+    for (const el of previews) expect(el).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("Escape で閉じ、起点の歯車へフォーカスを戻す", async () => {
+    const root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+    try {
+      const user = userEvent.setup();
+      render(<App />, { container: root });
+      await user.click(screen.getByRole("button", { name: "設定" }));
+      await screen.findByRole("dialog", { name: "設定" });
+      expect(root.hasAttribute("inert")).toBe(true);
+
+      await user.keyboard("{Escape}");
+
+      expect(screen.queryByRole("dialog", { name: "設定" })).not.toBeInTheDocument();
+      expect(root.hasAttribute("inert")).toBe(false);
+      expect(screen.getByRole("button", { name: "設定" })).toHaveFocus();
+    } finally {
+      root.remove();
+    }
   });
 });

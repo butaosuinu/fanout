@@ -1,17 +1,8 @@
-import {
-  Fragment,
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
+import { Fragment, useEffect, type CSSProperties } from "react";
 import { useDrawerWidth } from "../hooks/useDrawerWidth";
 import { usePeek } from "../hooks/usePeek";
 import { usePlan } from "../hooks/usePlan";
-import { fmtCreated } from "../lib/format";
+import { fmtCreated, parseDiff } from "../lib/format";
 import { issueUrl } from "../lib/github";
 import {
   blockerLabel,
@@ -35,9 +26,17 @@ import {
   Tag,
 } from "./ui";
 
-/* @pierre/diffs(Shiki 込み)は重いので遅延 chunk に隔離し、diff を開くまで
- * 初回ロードのパスに乗せない。 */
-const DiffOverlay = lazy(() => import("./DiffOverlay").then((m) => ({ default: m.DiffOverlay })));
+/* 上部バーの「変更を表示」に添える差分行数。解析できない(`-` など)ときは出さない */
+function DiffStat({ summary }: { summary?: string }) {
+  const d = parseDiff(summary ?? "");
+  if (!d) return null;
+  return (
+    <span className="d-diff-stat">
+      <span className="add">+{d.add}</span>
+      <span className="del">-{d.del}</span>
+    </span>
+  );
+}
 
 function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {
   const plan = usePlan({ paneId: pane.paneId, alive: pane.alive }, token);
@@ -137,8 +136,9 @@ function PrsSection({ pane, repo }: { pane: PaneView; repo: string }) {
 }
 
 function PeekPanel({ pane, token, paused }: { pane: PaneView; token: string; paused: boolean }) {
-  /* diff オーバーレイ(不透明・全面)が開いている間は 5s ポーリングを止める —
-   * 見えない出力のために tmux capture を回さない。閉じると即再取得される。 */
+  /* diff が全画面(不透明・全面)で開いている間は 5s ポーリングを止める —
+   * 見えない出力のために tmux capture を回さない。閉じると即再取得される。
+   * コンパクト表示では peek も見えているので止めない。 */
   const peek = usePeek(paused ? null : { paneId: pane.paneId, alive: pane.alive }, token);
   return (
     <section className="d-sec">
@@ -195,12 +195,18 @@ export function Drawer({
   parent,
   repo,
   token,
+  diffCovering,
+  onOpenDiff,
   onClose,
 }: {
   pane: PaneView;
   parent: string;
   repo: string;
   token: string;
+  /* diff オーバーレイは App が持つ(表からも直接開くため)。Drawer は peek の
+   * 停止判断にだけ使う — 全画面で覆われているときだけ true。 */
+  diffCovering: boolean;
+  onOpenDiff: (parent: string, pane: PaneView) => void;
   onClose: () => void;
 }) {
   const { width, gripProps } = useDrawerWidth();
@@ -209,16 +215,6 @@ export function Drawer({
   /* diff オーバーレイは worktree の記録がある行だけ。pane の生死は問わない
    * (/api/diff は state 記録から worktree を引くため、stale 行でも読める)。 */
   const dq = diffQuery(parent, pane);
-  const [diffOpen, setDiffOpen] = useState(false);
-  const diffBtnRef = useRef<HTMLButtonElement>(null);
-  /* identity を安定させ、オーバーレイの Escape listener が snapshot tick ごとに
-   * 貼り直されるのを避ける。フォーカス復帰は onClosed(inert 解除後)で行う —
-   * close 直後は #root がまだ inert で、実ブラウザは inert subtree への focus を
-   * 拒否するため。 */
-  const closeDiff = useCallback(() => setDiffOpen(false), []);
-  const restoreDiffFocus = useCallback(() => {
-    diffBtnRef.current?.focus(); // 起点のボタンへフォーカスを戻す
-  }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -247,6 +243,19 @@ export function Drawer({
           </span>
           <span id="d-name">{pane.derived?.name || pane.displayName || pane.slug || "—"}</span>
         </h3>
+        {dq && (
+          <>
+            <DiffStat summary={pane.diffSummary} />
+            <button
+              type="button"
+              id="d-diff-open"
+              className="btn-primary"
+              onClick={() => onOpenDiff(parent, pane)}
+            >
+              変更を表示
+            </button>
+          </>
+        )}
         <button id="drawer-close" type="button" aria-label="詳細を閉じる" onClick={onClose}>
           ✕
         </button>
@@ -313,19 +322,7 @@ export function Drawer({
               <dt>branch</dt>
               <dd id="d-branch">{pane.branchName || "—"}</dd>
               <dt>diff</dt>
-              <dd id="d-diff">
-                {pane.diffSummary || "—"}
-                {dq && (
-                  <button
-                    type="button"
-                    id="d-diff-open"
-                    ref={diffBtnRef}
-                    onClick={() => setDiffOpen(true)}
-                  >
-                    diff を開く
-                  </button>
-                )}
-              </dd>
+              <dd id="d-diff">{pane.diffSummary || "—"}</dd>
               <dt>state</dt>
               <dd id="d-dirty">
                 <DirtyTag state={pane.dirtyState} unknownLabel="unknown" />
@@ -349,20 +346,9 @@ export function Drawer({
           {captureReason ? (
             <CaptureDisabled kind="peek" reason={captureReason} />
           ) : (
-            <PeekPanel pane={pane} token={token} paused={diffOpen} />
+            <PeekPanel pane={pane} token={token} paused={diffCovering} />
           )}
         </div>
-      )}
-      {diffOpen && dq && (
-        <Suspense fallback={null}>
-          <DiffOverlay
-            title={paneLabel(pane)}
-            query={dq}
-            token={token}
-            onClose={closeDiff}
-            onClosed={restoreDiffFocus}
-          />
-        </Suspense>
       )}
     </aside>
   );

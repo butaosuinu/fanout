@@ -33,6 +33,32 @@ if (typeof globalThis.ResizeObserver !== "function") {
   globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
 }
 
+/* jsdom は IntersectionObserver も実装しない。@pierre/diffs の Virtualizer が
+ * setup で 1 個生成するため、観測しない最小スタブを入れる。可視判定自体は
+ * Virtualizer.isInstanceVisible(スクロール位置ベース)にも冗長化されているので、
+ * observer が何も通知しなくても初期描画は成立する。 */
+if (typeof globalThis.IntersectionObserver !== "function") {
+  class IntersectionObserverStub {
+    readonly root = null;
+    readonly rootMargin = "";
+    readonly thresholds: readonly number[] = [];
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+    takeRecords(): IntersectionObserverEntry[] {
+      return [];
+    }
+  }
+  globalThis.IntersectionObserver =
+    IntersectionObserverStub as unknown as typeof IntersectionObserver;
+}
+
+/* jsdom はレイアウトを持たないので scrollIntoView も実装しない。サイドバーから
+ * 本文へ飛ぶ導線が例外で落ちないよう no-op を入れる。 */
+if (typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = () => {};
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());

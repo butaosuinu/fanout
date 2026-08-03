@@ -76,6 +76,24 @@ describe("useDrawerWidth", () => {
     expect(localStorage.getItem("fanout.drawerWidth")).toBe("780");
   });
 
+  /* 実ドラッグは pointermove を細かく何度も撃つ。拡大方向のガードを live な
+   * intent で判定すると、1 回目の move で intent > startWidth になった時点で
+   * 以降を全部弾き、幅が 1 ステップ分で固まる(最小幅まで縮めた後に広げられ
+   * なくなる、として報告された不具合)。 */
+  it("拡大は連続した pointermove の全量が反映される(1 ステップで固まらない)", () => {
+    localStorage.setItem("fanout.drawerWidth", "320"); // 最小まで縮めた状態から
+    render(<Probe />);
+    expect(width()).toBe(320);
+
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    for (let i = 1; i <= 10; i++) {
+      fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 800 - i * 20, buttons: 1 });
+    }
+    expect(width()).toBe(520); // 320 + 200 — 340(1 ステップ分)で止まらない
+    fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 600 });
+    expect(localStorage.getItem("fanout.drawerWidth")).toBe("520");
+  });
+
   it("ドラッグ中の幅も 320–1416px に clamp する", () => {
     render(<Probe />);
     fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
@@ -244,6 +262,27 @@ describe("useDrawerWidth", () => {
     expect(width()).toBe(800);
     fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 840 });
     expect(localStorage.getItem("fanout.drawerWidth")).toBe("800");
+  });
+
+  it("描画上限に張り付いた状態でも、縮めたあと開始幅を越えて引き戻せる", () => {
+    /* 拡大の抑止は「適用すると intent が減る」ときだけ。一度縮めると intent は
+     * もう見えている幅まで下がっているので、そこからの拡大は保存値の取りこぼし
+     * ではなく復帰であって、同じジェスチャー内で戻せなければならない。 */
+    localStorage.setItem("fanout.drawerWidth", "1300");
+    setInnerWidth(1200); // viewport 上限 840 → 描画は 840、intent は 1300
+    render(<Probe />);
+    expect(width()).toBe(840);
+
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 840, buttons: 1 }); // 縮小 → 800
+    expect(width()).toBe(800);
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 810, buttons: 1 }); // 戻す → 830
+    expect(width()).toBe(830);
+    // 開始幅を越えて拡大。描画は上限 840 で頭打ちだが、830 で固まってはいけない
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 740, buttons: 1 });
+    expect(width()).toBe(840);
+    fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 740 });
+    expect(localStorage.getItem("fanout.drawerWidth")).toBe("900");
   });
 
   it("bottom sheet 相当の縮小を経ても intent を失わず、広げれば設定幅へ復元する", () => {
