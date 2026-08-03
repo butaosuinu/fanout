@@ -9,6 +9,23 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## v0.16.0 (2026-08-04)
+
+- **Diff viewer in the web dashboard.** Click a Session row's diff column, or **Show changes** in the detail drawer, to read that worktree's changes against the merge-base — committed, staged, unstaged, and untracked in one view.
+  Files render with syntax highlighting, a sidebar groups them by directory, and the panel drags wider or switches to full screen; appearance and the light / dark diff themes are picked in the gear menu and stored per origin.
+  The server side is a read-only `GET /api/diff` behind the dashboard's token gate, capped at 500 files and a 1 MiB response, with binary and oversized files listed but omitted.
+  See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Fewer GitHub API calls.** The TUI and the dashboard fetch child issue details and PR states in GraphQL batches instead of one call per issue, the TUI refreshes wave graphs on a separate 60-second phase with a cache that survives ticks, the dashboard stops its GitHub polling while nobody is watching, and the watcher reuses one cycle's lookups instead of refetching after each launch.
+  Once a rate-limit response comes back, fanout's issue and PR lookups stop invoking `gh` until the reset time, or back off from 30 seconds to at most 15 minutes when the reset is unknown.
+  See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **herdr backend now needs stable herdr 0.7.5 or newer.** The exact 0.7.3 pin is gone: the CLI and server must run the same stable version, and newer stable releases are accepted without a protocol, API schema, CLI help, platform, or digest check.
+  Prerelease and unparsable versions still fail closed. fanout no longer preflights methods or fields — a failed call reports `herdr method "<name>" is unavailable`.
+  See [herdr backend]({{< relref "/docs/herdr-backend" >}}) and [Troubleshooting]({{< relref "/docs/troubleshooting" >}}).
+- **Agent integration fixes.** Codex's `$pr-watch` settles whether a PR has comments with a body-free probe before fetching any, so a comment no longer slips past the cheap snapshot.
+  Codex review is scoped to high-confidence P0-P2 findings, and its autofix stops after three waves per invocation.
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.16.0)
+
 ## v0.15.0 (2026-07-23)
 
 - **Plan Mode settings for every launch lane.** `newSessionPlanMode`, `orchestratorPlanMode`, and `childPlanMode` now select Plan or build mode for manual, coordinator, attached, orchestrator, issue / Project child, `fanout plan`, and watcher launches.
