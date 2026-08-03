@@ -93,15 +93,7 @@ export interface PanelGripProps {
 export function usePanelWidth(cfg: PanelWidthConfig): { width: number; gripProps: PanelGripProps } {
   const [intent, setIntentState] = useState<number>(() => initialIntent(cfg));
   const intentRef = useRef(intent);
-  /* startIntent はドラッグ開始時点の intent を焼き付ける。ドラッグ中に
-   * intentRef を書き換えるので、live な値を「開始時の intent」として読むと
-   * 2 回目以降の pointermove を自分で弾いてしまう(下の拡大ガードを参照)。 */
-  const dragRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startWidth: number;
-    startIntent: number;
-  } | null>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   // 直前のドラッグが CLICK_SLOP を超えて動いたか(保存 / dblclick リセット判定)
   const movedRef = useRef(false);
   // ビューポート変化で rendered を再計算するための再描画トリガー(intent は不変)
@@ -158,12 +150,7 @@ export function usePanelWidth(cfg: PanelWidthConfig): { width: number; gripProps
     onPointerDown: (e) => {
       if (e.button !== 0 || !e.isPrimary || dragRef.current) return;
       // 起点は「いま見えている幅」= rendered。これで縮小後でもデッドゾーンなし。
-      dragRef.current = {
-        pointerId: e.pointerId,
-        startX: e.clientX,
-        startWidth: rendered,
-        startIntent: intentRef.current,
-      };
+      dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startWidth: rendered };
       movedRef.current = false;
       e.currentTarget.setPointerCapture?.(e.pointerId);
       document.documentElement.classList.add(cfg.resizingClass);
@@ -179,14 +166,20 @@ export function usePanelWidth(cfg: PanelWidthConfig): { width: number; gripProps
       const dx = drag.startX - e.clientX;
       if (dx === 0) return; // 無移動では intent を触らない(rendered への巻き戻り防止)
       const candidate = clampIntent(drag.startWidth + dx, cfg);
-      // 描画上限に張り付いた状態(開始時 intent が見えている startWidth より
-      // 大きい)でさらに拡大方向へ引いても描画は変わらない。ここで intent を
-      // startWidth ベースに縮めると、広い画面で見えるはずの大きい保存値を失う。
-      // 拡大方向は intent を維持し、見えている幅より縮めたときだけ追従する。
-      // 判定は必ず startIntent で行う — live な intentRef を見ると、1 回目の
-      // 拡大で intent > startWidth になった時点で以降の move を全部弾き、
-      // ドラッグが 1 ステップで固まる。
-      if (candidate >= drag.startWidth && drag.startIntent > drag.startWidth) {
+      /* 描画上限に張り付いた状態(intent が見えている幅より大きい)で拡大方向へ
+       * 引いても描画は変わらない。candidate は見えている startWidth 起点なので、
+       * そのまま適用すると intent が candidate まで「縮んで」しまい、広い画面で
+       * 見えるはずの大きい保存値を失う。だから拡大方向は no-op にする。
+       *
+       * 条件は「拡大方向 かつ 適用すると intent が減る」の 2 つとも要る:
+       * - 縮小方向(candidate < startWidth)は常に追従する。見えている幅より
+       *   狭くするのは実際に描画へ効くので、intent もそこへ合わせる。
+       * - 拡大方向でも intent を増やすなら適用する。これが無いと、拡大の 1 回目で
+       *   intent が startWidth を超えた瞬間に以降の move を全部弾き、ドラッグが
+       *   1 ステップで固まる。また一度縮めたあと開始幅まで引き戻せなくなる
+       *   (縮小で intent は既に下がっているので、そこからの拡大は復帰であって
+       *   保存値の取りこぼしではない)。 */
+      if (candidate >= drag.startWidth && candidate < intentRef.current) {
         movedRef.current = true; // ジェスチャーはあったので click 扱いにしない
         return;
       }

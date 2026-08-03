@@ -264,6 +264,27 @@ describe("useDrawerWidth", () => {
     expect(localStorage.getItem("fanout.drawerWidth")).toBe("800");
   });
 
+  it("描画上限に張り付いた状態でも、縮めたあと開始幅を越えて引き戻せる", () => {
+    /* 拡大の抑止は「適用すると intent が減る」ときだけ。一度縮めると intent は
+     * もう見えている幅まで下がっているので、そこからの拡大は保存値の取りこぼし
+     * ではなく復帰であって、同じジェスチャー内で戻せなければならない。 */
+    localStorage.setItem("fanout.drawerWidth", "1300");
+    setInnerWidth(1200); // viewport 上限 840 → 描画は 840、intent は 1300
+    render(<Probe />);
+    expect(width()).toBe(840);
+
+    fireEvent.pointerDown(grip(), { button: 0, pointerId: 1, clientX: 800, isPrimary: true });
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 840, buttons: 1 }); // 縮小 → 800
+    expect(width()).toBe(800);
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 810, buttons: 1 }); // 戻す → 830
+    expect(width()).toBe(830);
+    // 開始幅を越えて拡大。描画は上限 840 で頭打ちだが、830 で固まってはいけない
+    fireEvent.pointerMove(grip(), { pointerId: 1, clientX: 740, buttons: 1 });
+    expect(width()).toBe(840);
+    fireEvent.pointerUp(grip(), { pointerId: 1, clientX: 740 });
+    expect(localStorage.getItem("fanout.drawerWidth")).toBe("900");
+  });
+
   it("bottom sheet 相当の縮小を経ても intent を失わず、広げれば設定幅へ復元する", () => {
     localStorage.setItem("fanout.drawerWidth", "1300");
     render(<Probe />);
