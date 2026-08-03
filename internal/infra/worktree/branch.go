@@ -11,6 +11,11 @@ import (
 	"strings"
 )
 
+// ErrBranchRollbackBlocked marks a confirmed rollback blocker (checked-out or
+// moved branch) or an ambiguous delete outcome, as opposed to an observation
+// failure that classified nothing.
+var ErrBranchRollbackBlocked = errors.New("branch rollback is blocked")
+
 func LocalBranchRef(root, branch string) (string, error) {
 	branch = strings.TrimSpace(branch)
 	if branch == "" || strings.HasPrefix(branch, "refs/") {
@@ -61,16 +66,18 @@ func ReserveBranch(root, fullRef, baseSHA string) error {
 // when its expected tip is unchanged and no linked worktree checks it out.
 func DeleteReservedBranch(root, fullRef, expectedSHA string) error {
 	if !strings.HasPrefix(fullRef, "refs/heads/") || !commitSHAPattern.MatchString(expectedSHA) {
-		return fmt.Errorf("invalid Herdr branch deletion %s at %s", fullRef, expectedSHA)
+		return fmt.Errorf("%w: invalid Herdr branch deletion %s at %s", ErrBranchRollbackBlocked, fullRef, expectedSHA)
 	}
 	// Rollback must complete even when the launch context is already
 	// canceled, so the deletion guards observe without a caller deadline.
+	// Observation failures return untyped so the caller can retry; only a
+	// confirmed blocker or an ambiguous delete outcome is terminal.
 	checkedOut, err := branchCheckedOut(context.Background(), root, fullRef)
 	if err != nil {
 		return err
 	}
 	if checkedOut {
-		return fmt.Errorf("refusing to delete checked-out Herdr branch %s", fullRef)
+		return fmt.Errorf("%w: refusing to delete checked-out Herdr branch %s", ErrBranchRollbackBlocked, fullRef)
 	}
 	current, found, err := ObserveBranch(context.Background(), root, fullRef)
 	if err != nil {
@@ -80,10 +87,10 @@ func DeleteReservedBranch(root, fullRef, expectedSHA string) error {
 		return nil
 	}
 	if current != expectedSHA {
-		return fmt.Errorf("herdr branch %s moved from %s to %s", fullRef, expectedSHA, current)
+		return fmt.Errorf("%w: herdr branch %s moved from %s to %s", ErrBranchRollbackBlocked, fullRef, expectedSHA, current)
 	}
 	if _, err := git(root, "update-ref", "-d", fullRef, expectedSHA); err != nil {
-		return fmt.Errorf("delete reserved Herdr branch %s: %w", fullRef, err)
+		return fmt.Errorf("%w: delete reserved Herdr branch %s: %w", ErrBranchRollbackBlocked, fullRef, err)
 	}
 	return nil
 }

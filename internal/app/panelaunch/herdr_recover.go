@@ -126,11 +126,11 @@ func rollbackUnissuedHerdrWorktree(
 			intent.FullBranchRef,
 			intent.BaseSHA,
 		); err != nil {
-			return markHerdrIntentManual(
-				locked,
-				intent,
-				errors.Join(mutationErr, err),
-			)
+			if errors.Is(err, worktree.ErrBranchRollbackBlocked) {
+				return markHerdrIntentManual(locked, intent, errors.Join(mutationErr, err))
+			}
+			// The observation failed before the delete; retry later.
+			return errors.Join(mutationErr, err)
 		}
 	}
 	return releaseHerdrIntent(locked, intent.ID, mutationErr)
@@ -307,11 +307,15 @@ func recoverRejectedHerdrWorktree(
 			intent.FullBranchRef,
 			intent.BaseSHA,
 		); err != nil {
-			return HerdrWorktreeResult{}, markHerdrIntentManual(
-				locked,
-				intent,
-				errors.Join(mutationErr, err),
-			)
+			if errors.Is(err, worktree.ErrBranchRollbackBlocked) {
+				return HerdrWorktreeResult{}, markHerdrIntentManual(
+					locked,
+					intent,
+					errors.Join(mutationErr, err),
+				)
+			}
+			// The observation failed before the delete; retry later.
+			return HerdrWorktreeResult{}, errors.Join(mutationErr, err)
 		}
 	}
 	return HerdrWorktreeResult{}, releaseHerdrIntent(locked, intent.ID, mutationErr)

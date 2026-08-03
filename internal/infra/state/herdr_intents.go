@@ -298,8 +298,13 @@ func herdrOwnerTuple(parent, ownerProjectRoot string) string {
 }
 
 func loadHerdrIntents(path string) (HerdrIntents, error) {
-	var store HerdrIntents
-	found, err := atomicfs.ReadJSON(path, &store)
+	// Intents decodes through a pointer so a truncated journal (missing or
+	// null intents) is distinguishable from a valid empty list.
+	var raw struct {
+		SchemaVersion int            `json:"schemaVersion"`
+		Intents       *[]HerdrIntent `json:"intents"`
+	}
+	found, err := atomicfs.ReadJSON(path, &raw)
 	if err != nil {
 		if found {
 			return HerdrIntents{}, fmt.Errorf("parse Herdr intents %s: %w", path, err)
@@ -309,14 +314,18 @@ func loadHerdrIntents(path string) (HerdrIntents, error) {
 	if !found {
 		return emptyHerdrIntents(), nil
 	}
-	// Only a missing file starts a fresh v1 journal. An existing file without
-	// a schema version is corrupt and must not be adopted as empty ownership.
-	if store.SchemaVersion == 0 {
+	// Only a missing file starts a fresh v1 journal. An existing file missing
+	// its schema version or intents array is corrupt and must not be adopted
+	// as empty ownership.
+	if raw.SchemaVersion != HerdrIntentsSchemaVersion {
 		return HerdrIntents{}, fmt.Errorf(
-			"validate Herdr intents %s: unsupported Herdr intents schema version 0", path,
+			"validate Herdr intents %s: unsupported Herdr intents schema version %d", path, raw.SchemaVersion,
 		)
 	}
-	store.normalize()
+	if raw.Intents == nil {
+		return HerdrIntents{}, fmt.Errorf("validate Herdr intents %s: journal is missing intents", path)
+	}
+	store := HerdrIntents{SchemaVersion: raw.SchemaVersion, Intents: *raw.Intents}
 	if err := validateHerdrIntents(store); err != nil {
 		return HerdrIntents{}, fmt.Errorf("validate Herdr intents %s: %w", path, err)
 	}
