@@ -265,7 +265,12 @@ func RealizeHerdrCoordinator(
 		defer cancel()
 		switch intent.Status {
 		case state.HerdrIntentRealized:
-			if verifyErr := verifyRealizedCoordinator(operationCtx, runtime, intent); verifyErr != nil {
+			if verifyErr := verifyRealizedCoordinator(
+				operationCtx,
+				runtime,
+				intent,
+				setup.source,
+			); verifyErr != nil {
 				if errors.Is(verifyErr, errHerdrRealizedIdentityChanged) {
 					return result, markHerdrIntentManual(locked, intent, verifyErr)
 				}
@@ -918,7 +923,10 @@ func herdrCoordinatorSource(
 		return worktree.RepoIdentity{}, fmt.Errorf("resolve Herdr coordinator source: %w", err)
 	}
 	if source.RepoKey != requestSource.RepoKey {
-		return worktree.RepoIdentity{}, fmt.Errorf("herdr coordinator source belongs to a different repository")
+		return worktree.RepoIdentity{}, fmt.Errorf(
+			"%w: herdr coordinator source belongs to a different repository",
+			errHerdrRealizedIdentityChanged,
+		)
 	}
 	return source, nil
 }

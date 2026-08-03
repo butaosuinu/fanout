@@ -385,7 +385,11 @@ func verifyRealizedCoordinator(
 	ctx context.Context,
 	runtime HerdrWorktreeRuntime,
 	intent state.HerdrIntent,
+	requestSource worktree.RepoIdentity,
 ) error {
+	if _, err := herdrCoordinatorSource(ctx, intent.Resource, requestSource); err != nil {
+		return err
+	}
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
 		return err

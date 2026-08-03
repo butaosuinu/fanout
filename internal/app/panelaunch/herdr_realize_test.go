@@ -1490,6 +1490,57 @@ func TestRealizeHerdrReusesNumericParentCoordinatorAcrossLinkedWorktrees(t *test
 	}
 }
 
+func TestRealizeHerdrCoordinatorRejectsSavedPathWithChangedRepoIdentity(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	owner := filepath.Join(t.TempDir(), "owner")
+	retrySource := filepath.Join(t.TempDir(), "retry-source")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "coordinator-owner", owner, "HEAD")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "coordinator-retry", retrySource, "HEAD")
+
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, owner, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	coordinator := realizeTestHerdrCoordinator(t, owner, runtime, hooks)
+
+	dotGitPath := filepath.Join(owner, ".git")
+	originalDotGit, err := os.ReadFile(dotGitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if restoreErr := os.WriteFile(dotGitPath, originalDotGit, 0o644); restoreErr != nil {
+			t.Errorf("restore owner .git file: %v", restoreErr)
+		}
+	})
+	foreign := newHerdrRealizeRepo(t)
+	foreignDotGit := "gitdir: " + filepath.Join(foreign, ".git") + "\n"
+	if writeErr := os.WriteFile(dotGitPath, []byte(foreignDotGit), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+
+	_, err = realizeHerdrCoordinator(
+		context.Background(),
+		testHerdrCoordinatorRequest(retrySource),
+		runtime,
+		hooks,
+	)
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) ||
+		!strings.Contains(err.Error(), errHerdrRealizedIdentityChanged.Error()) {
+		t.Fatalf("changed coordinator repository identity error = %v", err)
+	}
+	if len(runtime.mutations) != 1 {
+		t.Fatalf("changed coordinator repository identity mutations = %d, want 1", len(runtime.mutations))
+	}
+	control, loadErr := state.LoadHerdrIntents(retrySource)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	persisted, found := control.FindIntent(coordinator.ID)
+	if !found || persisted.Status != state.HerdrIntentManualCleanupRequired {
+		t.Fatalf("changed coordinator repository identity intent = (%+v,%t)", persisted, found)
+	}
+}
+
 func TestRealizeHerdrResumesPlannedChildAtSavedOwnerAcrossLinkedWorktrees(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
