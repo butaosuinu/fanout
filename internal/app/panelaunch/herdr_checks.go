@@ -52,33 +52,27 @@ func verifyHerdrWorktreePreconditions(
 	return nil
 }
 
-func validateCoordinatorObservation(
+// validateWorkspacePostcondition checks the created workspace against the
+// intent. source is nil for the coordinator (whose workspace must carry no
+// worktree provenance) and set for the child checkout.
+func validateWorkspacePostcondition(
 	intent state.HerdrIntent,
+	source *worktree.RepoIdentity,
 	observation herdrrun.WorkspaceObservation,
 ) error {
+	kind := "coordinator"
+	provenanceOK := observation.Path == "" && observation.RepoKey == "" && observation.RepoRoot == ""
+	if source != nil {
+		kind = "worktree"
+		provenanceOK = filepath.Clean(observation.Path) == filepath.Clean(intent.WorktreePath) &&
+			observation.RepoKey == source.RepoKey && observation.RepoRoot == source.RepoRoot
+	}
 	if observation.WorkspaceID == "" || observation.Label != intent.WorkspaceLabel ||
-		observation.Path != "" || observation.RepoKey != "" || observation.RepoRoot != "" ||
+		!provenanceOK ||
 		observation.Pane.Backend != backend.Herdr || observation.Pane.Workspace != observation.WorkspaceID ||
 		observation.Pane.Pane == "" || observation.TerminalID == "" ||
 		filepath.Clean(observation.CWD) != filepath.Clean(intent.WorktreePath) {
-		return fmt.Errorf("herdr coordinator postcondition does not match intent")
-	}
-	return nil
-}
-
-func validateWorktreeObservation(
-	intent state.HerdrIntent,
-	source worktree.RepoIdentity,
-	observation herdrrun.WorkspaceObservation,
-) error {
-	if observation.WorkspaceID == "" || observation.Label != intent.WorkspaceLabel ||
-		filepath.Clean(observation.Path) != filepath.Clean(intent.WorktreePath) ||
-		observation.RepoKey != source.RepoKey || observation.RepoRoot != source.RepoRoot ||
-		observation.Pane.Backend != backend.Herdr ||
-		observation.Pane.Workspace != observation.WorkspaceID || observation.Pane.Pane == "" ||
-		observation.TerminalID == "" ||
-		filepath.Clean(observation.CWD) != filepath.Clean(intent.WorktreePath) {
-		return fmt.Errorf("herdr worktree postcondition does not match intent")
+		return fmt.Errorf("herdr %s postcondition does not match intent", kind)
 	}
 	return nil
 }
@@ -143,7 +137,7 @@ func validateSavedWorktreeIntent(
 			intent.WorktreePath,
 		) ||
 		intent.Session != req.HerdrSession || intent.SocketPath != req.SocketPath ||
-		!sameHerdrResource(intent.Coordinator, coordinator) {
+		intent.Coordinator != coordinator {
 		return fmt.Errorf("saved Herdr worktree intent contradicts request")
 	}
 	if intent.Resource.RepoKey != "" &&

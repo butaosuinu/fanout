@@ -27,7 +27,7 @@ func RealizeHerdrWorktree(
 	runtime HerdrWorktreeRuntime,
 	launchLock *state.LockedStore,
 	hooks HerdrRealizeHooks,
-) (result HerdrWorktreeResult, retErr error) {
+) (result HerdrRealizeResult, retErr error) {
 	if ctx == nil || runtime == nil || launchLock == nil {
 		return result, fmt.Errorf("realize Herdr worktree requires context, runtime, and launch lock")
 	}
@@ -249,7 +249,7 @@ func RealizeHerdrWorktree(
 	if finalizeErr := finalizeHerdrWorktree(operationCtx, locked, req, source, &intent, mutation.WorkspaceObservation); finalizeErr != nil {
 		return result, handleHerdrWorktreeFinalizeError(locked, intent, finalizeErr)
 	}
-	return worktreeDeferred(intent)
+	return realizeDeferred(intent)
 }
 
 func resolvedHerdrCoordinator(

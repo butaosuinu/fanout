@@ -15,8 +15,10 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-func coordinatorDeferred(intent state.HerdrIntent) (HerdrCoordinatorResult, error) {
-	return HerdrCoordinatorResult{
+// realizeDeferred is the successful stop point of both flows until #528
+// connects the launcher.
+func realizeDeferred(intent state.HerdrIntent) (HerdrRealizeResult, error) {
+	return HerdrRealizeResult{
 		Intent: intent,
 		Pane: backend.PaneRef{
 			Backend: backend.Herdr, Workspace: intent.Resource.WorkspaceID, Pane: intent.Resource.PaneID,
@@ -24,14 +26,6 @@ func coordinatorDeferred(intent state.HerdrIntent) (HerdrCoordinatorResult, erro
 	}, ErrHerdrLauncherReadinessDeferred
 }
 
-func worktreeDeferred(intent state.HerdrIntent) (HerdrWorktreeResult, error) {
-	return HerdrWorktreeResult{
-		Intent: intent,
-		Pane: backend.PaneRef{
-			Backend: backend.Herdr, Workspace: intent.Resource.WorkspaceID, Pane: intent.Resource.PaneID,
-		},
-	}, ErrHerdrLauncherReadinessDeferred
-}
 
 func workspacesWithLabel(
 	workspaces []herdrrun.WorkspaceObservation,
@@ -72,10 +66,6 @@ func observationResource(resource state.HerdrResource) herdrrun.WorkspaceObserva
 	}
 }
 
-func sameHerdrResource(left, right state.HerdrResource) bool {
-	return left == right
-}
-
 func workspaceHasHerdrResource(
 	observation herdrrun.WorkspaceObservation,
 	expected state.HerdrResource,
@@ -86,7 +76,7 @@ func workspaceHasHerdrResource(
 		observation.RepoRoot != expected.RepoRoot {
 		return false
 	}
-	if sameHerdrResource(expected, stateResource(observation)) {
+	if expected == stateResource(observation) {
 		return true
 	}
 	for _, pane := range observation.Panes {

@@ -123,10 +123,10 @@ func realizeHerdrCoordinator(
 	req HerdrCoordinatorRequest,
 	runtime HerdrWorktreeRuntime,
 	hooks HerdrRealizeHooks,
-) (HerdrCoordinatorResult, error) {
+) (HerdrRealizeResult, error) {
 	locked, err := state.LockProjectForLaunch(req.ProjectRoot)
 	if err != nil {
-		return HerdrCoordinatorResult{}, err
+		return HerdrRealizeResult{}, err
 	}
 	result, realizeErr := RealizeHerdrCoordinator(ctx, req, runtime, locked, hooks)
 	return result, errors.Join(realizeErr, locked.Unlock())
@@ -137,10 +137,10 @@ func realizeHerdrWorktree(
 	req HerdrWorktreeRequest,
 	runtime HerdrWorktreeRuntime,
 	hooks HerdrRealizeHooks,
-) (HerdrWorktreeResult, error) {
+) (HerdrRealizeResult, error) {
 	locked, err := state.LockProjectForLaunch(req.ProjectRoot)
 	if err != nil {
-		return HerdrWorktreeResult{}, err
+		return HerdrRealizeResult{}, err
 	}
 	result, realizeErr := RealizeHerdrWorktree(ctx, req, runtime, locked, hooks)
 	return result, errors.Join(realizeErr, locked.Unlock())

@@ -62,7 +62,9 @@ type HerdrCoordinatorRequest struct {
 	TotalTimeout time.Duration
 }
 
-type HerdrCoordinatorResult struct {
+// HerdrRealizeResult is the realized (launcher-deferred) outcome shared by
+// the coordinator and worktree flows.
+type HerdrRealizeResult struct {
 	Intent state.HerdrIntent
 	Pane   backend.PaneRef
 }
@@ -83,11 +85,6 @@ type HerdrWorktreeRequest struct {
 	HerdrSession       string
 	SocketPath         string
 	TotalTimeout       time.Duration
-}
-
-type HerdrWorktreeResult struct {
-	Intent state.HerdrIntent
-	Pane   backend.PaneRef
 }
 
 // herdrRealizeSetup is the shared realize prologue: the bounded operation
@@ -180,7 +177,7 @@ func RealizeHerdrCoordinator(
 	runtime HerdrWorktreeRuntime,
 	launchLock *state.LockedStore,
 	hooks HerdrRealizeHooks,
-) (result HerdrCoordinatorResult, retErr error) {
+) (result HerdrRealizeResult, retErr error) {
 	if ctx == nil || runtime == nil || launchLock == nil {
 		return result, fmt.Errorf("realize Herdr coordinator requires context, runtime, and launch lock")
 	}
@@ -275,7 +272,7 @@ func RealizeHerdrCoordinator(
 				// realized intent stays retryable.
 				return result, verifyErr
 			}
-			return coordinatorDeferred(intent)
+			return realizeDeferred(intent)
 		case state.HerdrIntentIssued:
 			return recoverHerdrCoordinator(
 				operationCtx,
@@ -338,7 +335,7 @@ func RealizeHerdrCoordinator(
 			mutationErr,
 		)
 	}
-	if err := validateCoordinatorObservation(intent, mutation.WorkspaceObservation); err != nil {
+	if err := validateWorkspacePostcondition(intent, nil, mutation.WorkspaceObservation); err != nil {
 		return result, markHerdrIntentManual(locked, intent, err)
 	}
 	intent.Resource = stateResource(mutation.WorkspaceObservation)
@@ -347,7 +344,7 @@ func RealizeHerdrCoordinator(
 	if err := locked.Save(); err != nil {
 		return result, err
 	}
-	return coordinatorDeferred(intent)
+	return realizeDeferred(intent)
 }
 
 func verifyHerdrRealizeRoute(
