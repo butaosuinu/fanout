@@ -129,11 +129,11 @@ func newHerdrRealizeSetup(
 	}
 	setup.ctx = realizeCtx
 	setup.deadline, _ = realizeCtx.Deadline()
-	source, sourceErr := worktree.ResolveRepoIdentity(sourceRoot)
+	source, sourceErr := worktree.ResolveRepoIdentity(realizeCtx, sourceRoot)
 	if sourceErr != nil {
 		return fail(sourceErr)
 	}
-	project, projectErr := worktree.ResolveRepoIdentity(projectRoot)
+	project, projectErr := worktree.ResolveRepoIdentity(realizeCtx, projectRoot)
 	if projectErr != nil {
 		return fail(projectErr)
 	}
@@ -427,7 +427,7 @@ func RealizeHerdrWorktree(
 	if coordinatorErr != nil {
 		return result, coordinatorErr
 	}
-	coordinatorSource, sourceErr := herdrCoordinatorSource(coordinator, source)
+	coordinatorSource, sourceErr := herdrCoordinatorSource(setup.ctx, coordinator, source)
 	if sourceErr != nil {
 		return result, sourceErr
 	}
@@ -444,7 +444,7 @@ func RealizeHerdrWorktree(
 		); savedErr != nil {
 			return result, savedErr
 		}
-		savedProjectRoot, _, savedRootErr := savedHerdrWorktreeSource(intent, source)
+		savedProjectRoot, _, savedRootErr := savedHerdrWorktreeSource(setup.ctx, intent, source)
 		if savedRootErr != nil {
 			return result, savedRootErr
 		}
@@ -725,7 +725,7 @@ func verifyHerdrWorktreePreconditions(
 	if !checkout.PathAbsent || checkout.Registered {
 		return fmt.Errorf("herdr checkout appeared before mutation")
 	}
-	current, err := worktree.ResolveRepoIdentity(req.SourceRoot)
+	current, err := worktree.ResolveRepoIdentity(ctx, req.SourceRoot)
 	if err != nil {
 		return err
 	}
@@ -909,10 +909,11 @@ func resolvedHerdrCoordinator(
 }
 
 func herdrCoordinatorSource(
+	ctx context.Context,
 	coordinator state.HerdrResource,
 	requestSource worktree.RepoIdentity,
 ) (worktree.RepoIdentity, error) {
-	source, err := worktree.ResolveRepoIdentity(coordinator.CurrentPath)
+	source, err := worktree.ResolveRepoIdentity(ctx, coordinator.CurrentPath)
 	if err != nil {
 		return worktree.RepoIdentity{}, fmt.Errorf("resolve Herdr coordinator source: %w", err)
 	}
@@ -1078,6 +1079,7 @@ func savedHerdrWorktreePathValid(ownerProjectRoot, savedSlug, savedPath string) 
 }
 
 func savedHerdrWorktreeSource(
+	ctx context.Context,
 	intent state.HerdrIntent,
 	source worktree.RepoIdentity,
 ) (string, worktree.RepoIdentity, error) {
@@ -1089,7 +1091,7 @@ func savedHerdrWorktreeSource(
 		filepath.Base(worktreesDir) != "worktrees" || filepath.Base(fanoutDir) != ".fanout" {
 		return "", worktree.RepoIdentity{}, fmt.Errorf("saved Herdr worktree path has no owner project root")
 	}
-	identity, err := worktree.ResolveRepoIdentity(projectRoot)
+	identity, err := worktree.ResolveRepoIdentity(ctx, projectRoot)
 	if err != nil {
 		return "", worktree.RepoIdentity{}, fmt.Errorf("resolve saved Herdr worktree owner: %w", err)
 	}

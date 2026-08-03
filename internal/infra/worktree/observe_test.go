@@ -25,7 +25,7 @@ esac
 	}
 	t.Setenv("PATH", binDir)
 
-	identity, err := ResolveRepoIdentity(repo)
+	identity, err := ResolveRepoIdentity(context.Background(), repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func TestVerifyHerdrCheckoutPinsBranchHeadAndRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitTest(t, repo, "worktree", "add", checkout, "fanout/child")
-	identity, err := ResolveRepoIdentity(repo)
+	identity, err := ResolveRepoIdentity(context.Background(), repo)
 	if err != nil {
 		t.Fatal(err)
 	}

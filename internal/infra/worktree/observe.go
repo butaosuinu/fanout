@@ -41,20 +41,20 @@ type CheckoutObservation struct {
 
 // ResolveRepoIdentity returns the physical Git common directory and
 // source checkout root used by Herdr worktree provenance.
-func ResolveRepoIdentity(root string) (RepoIdentity, error) {
-	repoKey, err := resolveGitPath(root, "--git-common-dir")
+func ResolveRepoIdentity(ctx context.Context, root string) (RepoIdentity, error) {
+	repoKey, err := resolveGitPath(ctx, root, "--git-common-dir")
 	if err != nil {
 		return RepoIdentity{}, fmt.Errorf("resolve Herdr repo key: %w", err)
 	}
-	repoRoot, err := resolveGitPath(root, "--show-toplevel")
+	repoRoot, err := resolveGitPath(ctx, root, "--show-toplevel")
 	if err != nil {
 		return RepoIdentity{}, fmt.Errorf("resolve Herdr repo root: %w", err)
 	}
 	return RepoIdentity{RepoKey: repoKey, RepoRoot: repoRoot}, nil
 }
 
-func resolveGitPath(root, flag string) (string, error) {
-	out, err := gitStdout(context.Background(), root, "rev-parse", flag)
+func resolveGitPath(ctx context.Context, root, flag string) (string, error) {
+	out, err := gitStdout(ctx, root, "rev-parse", flag)
 	if err != nil {
 		return "", err
 	}
@@ -95,10 +95,15 @@ func ResolveLaunchBase(ctx context.Context, opts Options) (BaseResolution, error
 	if err := requireCleanSource(ctx, plan.ProjectRoot); err != nil {
 		return BaseResolution{}, err
 	}
-	shaOut, err := gitStdout(ctx, plan.ProjectRoot, "rev-parse", "--verify", plan.BaseBranch+"^{commit}")
+	shaOut, shaErrOut, err := gitStdoutStderr(ctx, plan.ProjectRoot, "rev-parse", "--verify", plan.BaseBranch+"^{commit}")
 	sha := strings.TrimSpace(string(shaOut))
 	if err != nil {
 		return BaseResolution{}, fmt.Errorf("resolve Herdr base %q to a commit: %w", plan.BaseBranch, err)
+	}
+	// git resolves an ambiguous short ref with exit 0 and a stderr warning;
+	// the canon rejects ambiguous selectors before any mutation.
+	if strings.Contains(shaErrOut, "ambiguous") {
+		return BaseResolution{}, fmt.Errorf("resolve Herdr base %q: ref is ambiguous", plan.BaseBranch)
 	}
 	sha = strings.ToLower(sha)
 	if !commitSHAPattern.MatchString(sha) {
@@ -242,11 +247,11 @@ func ObserveCheckout(ctx context.Context, root, checkoutPath string) (CheckoutOb
 	if !commitSHAPattern.MatchString(observation.HeadSHA) {
 		return observation, fmt.Errorf("herdr checkout %s has invalid HEAD %q", checkoutPath, observation.HeadSHA)
 	}
-	sourceIdentity, err := ResolveRepoIdentity(root)
+	sourceIdentity, err := ResolveRepoIdentity(ctx, root)
 	if err != nil {
 		return observation, err
 	}
-	checkoutIdentity, err := ResolveRepoIdentity(checkoutPath)
+	checkoutIdentity, err := ResolveRepoIdentity(ctx, checkoutPath)
 	if err != nil {
 		return observation, err
 	}
@@ -290,13 +295,23 @@ func VerifyCheckout(
 // gitStdout runs git and returns stdout only, so warnings and advice on
 // stderr never fuse into a parsed value.
 func gitStdout(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	out, _, err := gitStdoutStderr(ctx, dir, args...)
+	return out, err
+}
+
+// gitStdoutStderr additionally returns stderr (LC_ALL=C for a deterministic
+// message) for callers that must inspect success-path warnings.
+func gitStdoutStderr(ctx context.Context, dir string, args ...string) ([]byte, string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		return nil, stderr.String(), fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
-	return out, nil
+	return out, stderr.String(), nil
 }
 
 type worktreeEntry struct {

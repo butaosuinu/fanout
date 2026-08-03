@@ -1399,7 +1399,7 @@ func TestRealizeHerdrManualWorktreeUsesNegativeSyntheticIssueIdentity(t *testing
 	req := testHerdrWorktreeRequest(repo, "manual-child", -1)
 	req.Parent = ManualParentRef
 	result, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
-	identity, identityErr := worktree.ResolveRepoIdentity(repo)
+	identity, identityErr := worktree.ResolveRepoIdentity(context.Background(), repo)
 	if identityErr != nil {
 		t.Fatal(identityErr)
 	}
@@ -1529,7 +1529,7 @@ func TestRealizeHerdrResumesPlannedChildAtSavedOwnerAcrossLinkedWorktrees(t *tes
 		)
 	}
 	childMutation := runtime.mutations[1]
-	savedSource, sourceErr := worktree.ResolveRepoIdentity(repo)
+	savedSource, sourceErr := worktree.ResolveRepoIdentity(context.Background(), repo)
 	if sourceErr != nil {
 		t.Fatal(sourceErr)
 	}
@@ -1774,7 +1774,7 @@ func installSuccessfulHerdrMutations(
 	runtime *fakeHerdrRealizeRuntime,
 ) {
 	t.Helper()
-	identity, err := worktree.ResolveRepoIdentity(repo)
+	identity, err := worktree.ResolveRepoIdentity(context.Background(), repo)
 	if err != nil {
 		t.Fatal(err)
 	}
