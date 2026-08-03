@@ -1146,14 +1146,14 @@ describe("diff オーバーレイ", () => {
     );
     const user = userEvent.setup();
 
-    await user.click(await screen.findByRole("button", { name: "変更を表示 #101 +3/-0" }));
+    await user.click(await screen.findByRole("button", { name: /^変更を表示 #101 / }));
     const overlay = await screen.findByRole("dialog", { name: "worktree diff" });
     await waitFor(() => {
       expect(shadowText()).toContain("patch_of_A");
     });
 
     // B へ切り替える。B のタイトルが出た時点で A の patch は消えていること
-    await user.click(screen.getByRole("button", { name: "変更を表示 #102 +3/-0" }));
+    await user.click(screen.getByRole("button", { name: /^変更を表示 #102 / }));
     expect(within(overlay).getByText("#102")).toBeInTheDocument();
     expect(shadowText()).not.toContain("patch_of_A");
 

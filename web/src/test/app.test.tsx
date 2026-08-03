@@ -1171,16 +1171,66 @@ describe("session リストの diff 列", () => {
     streamSnapshot(
       makeSnapshot([
         makeSession("142", [
-          makePane({ issueNum: 101, displayName: "One", diffSummary: "+10/-2" }),
-          makePane({ issueNum: 102, displayName: "Two", diffSummary: "+10/-2" }),
+          makePane({
+            issueNum: 101,
+            displayName: "One",
+            branchName: "fanout/one",
+            diffSummary: "+10/-2",
+          }),
+          makePane({
+            issueNum: 102,
+            displayName: "Two",
+            branchName: "fanout/two",
+            diffSummary: "+10/-2",
+          }),
         ]),
       ]),
     );
 
     expect(
-      await screen.findByRole("button", { name: "変更を表示 #101 +10/-2" }),
+      await screen.findByRole("button", { name: "変更を表示 #101 One fanout/one +10/-2" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "変更を表示 #102 +10/-2" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "変更を表示 #102 Two fanout/two +10/-2" }),
+    ).toBeInTheDocument();
+  });
+
+  /* paneLabel と表示名だけでは足りない。同じ parent の下で別の worktree が同じ
+   * task を持つと(plan spec の branch 上書きなど)、統計まで同じなら 2 つの
+   * ボタンの名前が完全に一致し、支援技術のボタン一覧から選び分けられない。 */
+  it("同じ task を別 worktree が持つ行も名前で区別できる", async () => {
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("plan:alpha", [
+          makePane({
+            issueNum: 0,
+            taskId: "lint",
+            sourceKey: "plan:alpha/lint#a",
+            displayName: "Lint",
+            slug: "lint-a",
+            branchName: "fanout/lint-a",
+            diffSummary: "+10/-2",
+          }),
+          makePane({
+            issueNum: 0,
+            taskId: "lint",
+            sourceKey: "plan:alpha/lint#b",
+            displayName: "Lint",
+            slug: "lint-b",
+            branchName: "fanout/lint-b",
+            diffSummary: "+10/-2",
+          }),
+        ]),
+      ]),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "変更を表示 lint Lint fanout/lint-a +10/-2" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "変更を表示 lint Lint fanout/lint-b +10/-2" }),
+    ).toBeInTheDocument();
   });
 
   it("identity を組めない行はリンクにしない", async () => {

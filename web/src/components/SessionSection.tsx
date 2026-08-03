@@ -11,6 +11,7 @@ import {
   paneCI,
   paneIssueURL,
   paneLabel,
+  paneName,
   paneRuntimeState,
   paneRuntimeTitle,
   prPrimary,
@@ -32,6 +33,13 @@ function BlockersCell({ pane }: { pane: PaneView }) {
   if (pane.blocked) return <Tag cls="t-warn">{`${openBlockerCount(pane)} open`}</Tag>;
   if (!pane.blockers || !pane.blockers.length) return <span className="muted">—</span>;
   return <span className="muted">{blockersAllClosed(pane) ? "resolved" : "unknown"}</span>;
+}
+
+/* diff 導線の accessible name。行を指す情報を重複なく並べ、最後に統計を置く。 */
+function diffLinkLabel(pane: PaneView, d: { add: string; del: string } | null): string {
+  const parts = [paneLabel(pane), paneName(pane), pane.branchName ?? ""];
+  const target = parts.filter((s, i) => s && parts.indexOf(s) === i).join(" ");
+  return `変更を表示 ${target} ${d ? `+${d.add}/-${d.del}` : pane.diffSummary || "—"}`;
 }
 
 /* 行 identity を組める行を、diff ビュアーへの直リンクにする。 */
@@ -68,8 +76,13 @@ function DiffCell({
       className="diff-link"
       title="変更を表示"
       /* 名前に対象を入れる — 同じ統計の行が複数あると「変更を表示 +N/-M」が
-         並んで、支援技術からどの issue / task の diff か区別できない */
-      aria-label={`変更を表示 ${paneLabel(pane)} ${d ? `+${d.add}/-${d.del}` : pane.diffSummary || "—"}`}
+         並んで、支援技術からどの行の diff か区別できない。
+         issue / task だけでは足りない: 同じ parent の下で別の worktree が同じ
+         task を持つと paneLabel も表示名も一致しうる(attached-agent が同じ
+         source を指す兄弟でも同じ)。行を一意にしているのは worktree なので、
+         それを名指す branch まで含める。名前が重なるのは同じ worktree を開く
+         ボタン同士、つまり中身が同じときだけになる。 */
+      aria-label={diffLinkLabel(pane, d)}
       // 行クリック(Drawer を開く)には伝播させない — セルは diff への直行導線
       onClick={(e) => {
         e.stopPropagation();
@@ -123,7 +136,7 @@ function PaneRow({
         <GhLink url={paneIssueURL(repo, pane)}>{paneLabel(pane)}</GhLink>
       </td>
       <td className="c-name" title={pane.slug}>
-        {pane.derived?.name || pane.displayName || pane.slug || "—"}
+        {paneName(pane) || "—"}
       </td>
       <td>{pane.agent || "—"}</td>
       <td>{wave || <span className="muted">—</span>}</td>

@@ -92,6 +92,11 @@ export function paneLabel(p: PaneView): string {
   return p.taskId || `#${p.issueNum}`;
 }
 
+/* 行の表示名(name 列と同じ値)。derived が正、無ければ記録値から組む。 */
+export function paneName(p: PaneView): string {
+  return p.derived?.name || p.displayName || p.slug || "";
+}
+
 export function paneIssueNum(p: PaneView): number {
   if (p.kind === "attached-agent" && p.sourceIssueNum && p.sourceIssueNum > 0) {
     return p.sourceIssueNum;
