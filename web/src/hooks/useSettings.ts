@@ -110,10 +110,20 @@ function onSystemChange(e: MediaQueryListEvent) {
   emit();
 }
 
+/* 外観の matchMedia と対になる、表示言語のシステム追従。ブラウザの優先言語は実行中に
+ * 変わりうる(OS の言語設定や、ブラウザの言語リスト並べ替え)。明示選択していない
+ * あいだは追従しないと、表示と <html lang> が再読み込みまで旧言語で取り残される。 */
+function onLanguageChange() {
+  if (currentLocalePref() !== "auto") return;
+  activateLocale(currentLocale());
+  emit();
+}
+
 function subscribe(cb: () => void): () => void {
   if (listeners.size === 0) {
     mq = matchMedia("(prefers-color-scheme: dark)");
     mq.addEventListener("change", onSystemChange);
+    window.addEventListener("languagechange", onLanguageChange);
   }
   listeners.add(cb);
   return () => {
@@ -121,6 +131,7 @@ function subscribe(cb: () => void): () => void {
     if (listeners.size === 0) {
       mq?.removeEventListener("change", onSystemChange);
       mq = null;
+      window.removeEventListener("languagechange", onLanguageChange);
     }
   };
 }

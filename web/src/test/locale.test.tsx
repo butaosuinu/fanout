@@ -1,5 +1,5 @@
 import { i18n } from "@lingui/core";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { App } from "../components/App";
@@ -95,6 +95,34 @@ describe("表示言語の検出", () => {
     await screen.findByRole("button", { name: "Settings" });
     expect(screen.getByText("No active sessions")).toBeInTheDocument();
     expect(document.documentElement.lang).toBe("en");
+  });
+
+  it("自動のままブラウザ言語が変わったら追従する", async () => {
+    render(<App />);
+    streamSnapshot(makeSnapshot([]));
+    await screen.findByRole("button", { name: "設定" });
+
+    // ブラウザ / OS の言語設定は実行中に変わりうる。追従しないと再読み込みまで
+    // 旧言語で取り残される(外観の matchMedia 追従と同じ契約)。
+    setBrowserLanguages(["en-US"]);
+    act(() => window.dispatchEvent(new Event("languagechange")));
+
+    expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe("en");
+    expect(localStorage.getItem("fanout.locale")).toBeNull(); // 自動のまま
+  });
+
+  it("明示指定中はブラウザ言語が変わっても動かない", async () => {
+    localStorage.setItem("fanout.locale", "ja");
+    activateLocale("ja");
+    render(<App />);
+    await screen.findByRole("button", { name: "設定" });
+
+    setBrowserLanguages(["en-US"]);
+    act(() => window.dispatchEvent(new Event("languagechange")));
+
+    expect(screen.getByRole("button", { name: "設定" })).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe("ja");
   });
 
   it("明示指定はブラウザ言語より優先する", () => {

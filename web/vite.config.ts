@@ -52,5 +52,9 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["src/test/setup.ts"],
+    /* 既定の 5s は、遅延 chunk を待つケースがファイル並列の CPU 競合に負ける。
+       正常時は待たずに終わるので、上げても実行時間は伸びない
+       (src/test/setup.ts の asyncUtilTimeout と対) */
+    testTimeout: 20000,
   },
 });

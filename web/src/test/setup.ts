@@ -1,6 +1,13 @@
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
 import { activateLocale } from "../i18n";
 import { server } from "./server";
+
+/* findBy* の既定待ち時間(1s)は、遅延 chunk を待つケースには足りない。diff
+ * オーバーレイの chunk は @pierre/diffs(Shiki 込み)を引くので初回解決が重く、
+ * ファイル並列でワーカーが CPU を取り合うと 1s を超えて false negative になる。
+ * 正常時は待たずに解決するので、上げても実行時間は伸びない。 */
+configure({ asyncUtilTimeout: 5000 });
 
 /* アプリの fetch は相対 URL(/api/…)のまま。素の Node fetch は相対 URL を
  * 受け付けないが、server.listen() が globalThis.fetch を MSW のインターセプタに
