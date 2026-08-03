@@ -323,7 +323,10 @@ func RealizeHerdrCoordinator(
 		if errors.Is(mutationErr, herdrrun.ErrMutationNotIssued) {
 			return result, releaseHerdrIntent(locked, intent.ID, mutationErr)
 		}
-		if operationErr := operationParent.Err(); operationErr != nil {
+		// A structured rejection is a durable non-creation proof; classify it
+		// even when the operation context has already expired.
+		if operationErr := operationParent.Err(); operationErr != nil &&
+			!errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
 			return result, errors.Join(mutationErr, operationErr)
 		}
 		return recoverHerdrCoordinator(

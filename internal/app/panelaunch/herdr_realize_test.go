@@ -1812,6 +1812,91 @@ func TestRealizeHerdrResumesPlannedChildAtSavedOwnerAcrossLinkedWorktrees(t *tes
 // The coordinator has no planned stage: a failure before the workspace create
 // must leave no intent behind, so the retry starts fresh instead of entering
 // recovery for a mutation that was never recorded.
+// A structured rejection is a durable non-creation proof: even when the
+// operation context has already expired, the coordinator intent is released
+// instead of parking as issued (where the rejection proof would be lost).
+func TestRealizeHerdrCoordinatorRejectedCreateReleasesEvenAfterContextExpiry(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.mutate = func(herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+		cancel()
+		return herdrrun.WorktreeMutationResult{}, herdrrun.MutationRejectedError{
+			Code: "workspace_create_failed", Message: "rejected after deadline",
+		}
+	}
+
+	_, err := realizeHerdrCoordinator(ctx, testHerdrCoordinatorRequest(repo), runtime, hooks)
+	if !errors.Is(err, herdrrun.ErrMutationRejected) || errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("rejected+expired coordinator error = %v", err)
+	}
+	control, loadErr := state.LoadHerdrIntents(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(control.Intents) != 0 {
+		t.Fatalf("rejected+expired coordinator intents = %#v, want released", control.Intents)
+	}
+}
+
+// A journal save failure while persisting the rejection proof must not drop
+// the run into normal response-loss recovery: the in-hand rejection still
+// classifies and rolls back the reserved branch.
+func TestRealizeHerdrWorktreeRejectionSaveFailureStillRollsBack(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	journalPath, pathErr := state.HerdrIntentsPath(repo)
+	if pathErr != nil {
+		t.Fatal(pathErr)
+	}
+	journalDir := filepath.Dir(journalPath)
+	runtime.mutate = func(m herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+		if m.Kind != herdrrun.WorktreeCreate {
+			t.Fatalf("unexpected mutation kind %q", m.Kind)
+		}
+		// Make the journal directory read-only so persisting the rejection
+		// proof fails while local Git classification still works.
+		if err := os.Chmod(journalDir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		return herdrrun.WorktreeMutationResult{}, herdrrun.MutationRejectedError{
+			Code: "worktree_create_failed", Message: "rejected with failing journal",
+		}
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(journalDir, 0o700); err != nil {
+			t.Errorf("restore journal dir mode: %v", err)
+		}
+	})
+
+	req := testHerdrWorktreeRequest(repo, "rejected-save-failure", 438)
+	_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, herdrrun.ErrMutationRejected) || errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("rejected create with failing journal error = %v", err)
+	}
+	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
+	if refErr != nil {
+		t.Fatal(refErr)
+	}
+	if _, found, observeErr := worktree.ObserveBranch(
+		context.Background(),
+		repo,
+		fullRef,
+	); observeErr != nil {
+		t.Fatal(observeErr)
+	} else if found {
+		t.Fatal("rejection rollback with failing journal kept the reserved branch")
+	}
+}
+
 func TestRealizeHerdrCoordinatorPolicyFailureLeavesNoIntent(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}

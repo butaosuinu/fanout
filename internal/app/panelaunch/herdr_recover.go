@@ -241,7 +241,10 @@ func recoverHerdrWorktree(
 		intent.MutationRejected = true
 		locked.UpsertIntent(intent)
 		if saveErr := locked.Save(); saveErr != nil {
-			return HerdrWorktreeResult{}, errors.Join(mutationErr, saveErr)
+			// The proof is still in hand this run; the rejection lane below
+			// rewrites the journal, so a transient save failure must not
+			// drop into normal response-loss recovery.
+			mutationErr = errors.Join(mutationErr, saveErr)
 		}
 	}
 	if intent.MutationRejected {

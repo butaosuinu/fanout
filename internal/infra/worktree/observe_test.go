@@ -337,3 +337,17 @@ func TestVerifyHerdrCheckoutPinsBranchHeadAndRepository(t *testing.T) {
 		t.Fatalf("moved checkout verification error = %v", err)
 	}
 }
+
+// --branch mode rejects names (HEAD, leading dash, @{-1} aliases) that pass
+// the full-ref check but fail when handed to Herdr's --branch.
+func TestLocalBranchRefRejectsBranchModeInvalidNames(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	if ref, err := LocalBranchRef(repo, "fanout/valid-name"); err != nil || ref != "refs/heads/fanout/valid-name" {
+		t.Fatalf("valid branch = (%q, %v)", ref, err)
+	}
+	for _, name := range []string{"HEAD", "-foo", "@{-1}"} {
+		if _, err := LocalBranchRef(repo, name); err == nil {
+			t.Fatalf("branch name %q was accepted", name)
+		}
+	}
+}

@@ -25,6 +25,13 @@ func LocalBranchRef(root, branch string) (string, error) {
 	if _, err := git(root, "check-ref-format", fullRef); err != nil {
 		return "", fmt.Errorf("invalid Herdr branch %q: %w", branch, err)
 	}
+	// The name is also handed to Herdr's --branch, whose branch mode rejects
+	// HEAD and leading dashes that pass the full-ref check. Requiring the
+	// expansion to echo the input also blocks @{-1}-style aliases.
+	expanded, err := gitStdout(context.Background(), root, "check-ref-format", "--branch", branch)
+	if err != nil || strings.TrimSuffix(string(expanded), "\n") != branch {
+		return "", fmt.Errorf("invalid Herdr branch name %q for --branch mode", branch)
+	}
 	return fullRef, nil
 }
 
