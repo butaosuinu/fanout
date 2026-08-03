@@ -46,6 +46,7 @@ tmux-parity は信頼モデルだけでなく機構の密度にも適用し、�
 
 1. tmux backend が同じ失敗モードに持つ対処と同水準にする。tmux の水準は state lock、fail-fast、既存資源の idempotent skip である。迷ったら tmux 側（`internal/infra/worktree`、`internal/infra/state`、`internal/app/panelaunch`）に合わせる。
 2. herdr にしか無い失敗モードだけ最小の追加対処を許す。対象は socket mutation の応答喪失窓と server 再起動、対処は「mutation 直前の最小意図記録（単一 journal 行程度）+ 再実行時の存在確認 → 採用 or fail-closed `manual_cleanup_required`」までとする。
+   一次障害（snapshot・Git 読取・観測の失敗）は intent を変更せず error を返して再実行の分類に委ね、証明の永続化や rollback 自体が失敗する二重障害窓は `manual_cleanup_required` で確定する。これ以深の crash window 対処は proof-grade tier とする。
 3. 次は撤廃または任意記録へ格下げし、「後続 issue への契約」の再評価条件表に proof-grade tier の再導入候補として残す: フル phase machine（`worktree-planned` 以降の多段遷移）、CAS provisional registry、exact request / pre-state の replay 契約、canonical bytes / digest / golden bytes、bundle / journal / epoch / tombstone 群、ownership nonce の二重照合、plan spec snapshot の SHA-256 束縛。
 4. 不変: tmux-parity 信頼モデル、capability gate、`--team` 拒否（#568 まで）、`codexPlanMode` 対応方針、dashboard read-only 境界、proof-grade tier の再評価条件表。実測事実の節も変更しない。
 

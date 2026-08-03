@@ -94,28 +94,8 @@ func ensureHerdrBranchReservation(
 	}
 	intent.BranchCreated = true
 	locked.UpsertIntent(intent)
-	if saveErr := locked.Save(); saveErr != nil {
-		// The reservation proof exists only in this run: without the saved
-		// ownership the next run would treat the branch as foreign and demand
-		// manual cleanup, so release the just-created ref before returning.
-		rollbackCtx, cancel := context.WithTimeout(
-			context.Background(),
-			maxHerdrRecoveryClassificationTimeout,
-		)
-		defer cancel()
-		if deleteErr := worktree.DeleteReservedBranch(
-			rollbackCtx,
-			req.SourceRoot,
-			intent.FullBranchRef,
-			intent.BaseSHA,
-		); deleteErr != nil {
-			if errors.Is(deleteErr, worktree.ErrBranchRollbackBlocked) {
-				return intent, markHerdrIntentManual(locked, intent, errors.Join(saveErr, deleteErr))
-			}
-			return intent, errors.Join(saveErr, deleteErr)
-		}
-		intent.BranchCreated = false
-		return intent, saveErr
+	if err := locked.Save(); err != nil {
+		return intent, err
 	}
 	return intent, nil
 }
@@ -132,12 +112,6 @@ func rollbackUnissuedHerdrWorktree(
 		maxHerdrRecoveryClassificationTimeout,
 	)
 	defer cancel()
-	if sourceErr := verifyHerdrRollbackSource(rollbackCtx, req.SourceRoot, source); sourceErr != nil {
-		if errors.Is(sourceErr, errHerdrRealizedIdentityChanged) {
-			return markHerdrIntentManual(locked, intent, errors.Join(mutationErr, sourceErr))
-		}
-		return errors.Join(mutationErr, sourceErr)
-	}
 	if !intent.BranchExisted && !intent.BranchCreated {
 		// Rollback gets an independent finite budget when the launch context
 		// is already canceled.
@@ -170,26 +144,6 @@ func rollbackUnissuedHerdrWorktree(
 	return releaseHerdrIntent(locked, intent.ID, mutationErr)
 }
 
-func verifyHerdrRollbackSource(
-	ctx context.Context,
-	sourceRoot string,
-	expected worktree.RepoIdentity,
-) error {
-	current, err := worktree.ResolveRepoIdentity(ctx, sourceRoot)
-	if err != nil {
-		return fmt.Errorf("resolve Herdr rollback source: %w", err)
-	}
-	if current.RepoKey != expected.RepoKey {
-		return fmt.Errorf(
-			"%w: Herdr rollback source repository changed from %q to %q",
-			errHerdrRealizedIdentityChanged,
-			expected.RepoKey,
-			current.RepoKey,
-		)
-	}
-	return nil
-}
-
 func recoverHerdrCoordinator(
 	ctx context.Context,
 	runtime HerdrWorktreeRuntime,
@@ -198,21 +152,9 @@ func recoverHerdrCoordinator(
 	requestSource worktree.RepoIdentity,
 	mutationErr error,
 ) (HerdrCoordinatorResult, error) {
-	// Persist the structured rejection before releasing the intent so a
-	// transient deletion save failure leaves a durable proof for the next run.
-	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) && !intent.MutationRejected {
-		intent.MutationRejected = true
-		locked.UpsertIntent(intent)
-		if saveErr := locked.Save(); saveErr != nil {
-			// The proof is still in hand this run; attempt the release even when
-			// its durable record could not be written.
-			mutationErr = errors.Join(mutationErr, saveErr)
-		}
-	}
-	if intent.MutationRejected {
-		if mutationErr == nil {
-			mutationErr = herdrrun.ErrMutationRejected
-		}
+	// A structured rejection proves the workspace was not created; release
+	// the intent without depending on a snapshot that may fail transiently.
+	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
 		return HerdrCoordinatorResult{}, releaseHerdrIntent(locked, intent.ID, mutationErr)
 	}
 	// A failed snapshot classifies nothing: keep the issued intent so the
@@ -266,23 +208,10 @@ func recoverHerdrWorktree(
 	intent state.HerdrIntent,
 	mutationErr error,
 ) (HerdrWorktreeResult, error) {
-	// Persist the structured rejection before any Git observation so a
-	// transient observation failure cannot send the next run through normal
-	// response-loss recovery.
-	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) && !intent.MutationRejected {
-		intent.MutationRejected = true
-		locked.UpsertIntent(intent)
-		if saveErr := locked.Save(); saveErr != nil {
-			// The proof is still in hand this run; the rejection lane below
-			// rewrites the journal, so a transient save failure must not
-			// drop into normal response-loss recovery.
-			mutationErr = errors.Join(mutationErr, saveErr)
-		}
-	}
-	if intent.MutationRejected {
-		if mutationErr == nil {
-			mutationErr = herdrrun.ErrMutationRejected
-		}
+	// A structured rejection proves the mutation created nothing; classify
+	// from local Git state under an independent finite budget (the launch
+	// context may already be exhausted).
+	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
 		recoveryCtx, cancel := context.WithTimeout(
 			context.Background(),
 			maxHerdrRecoveryClassificationTimeout,
@@ -368,16 +297,6 @@ func recoverRejectedHerdrWorktree(
 	intent state.HerdrIntent,
 	mutationErr error,
 ) error {
-	if sourceErr := verifyHerdrRollbackSource(ctx, req.SourceRoot, source); sourceErr != nil {
-		if errors.Is(sourceErr, errHerdrRealizedIdentityChanged) {
-			return markHerdrIntentManual(
-				locked,
-				intent,
-				errors.Join(mutationErr, sourceErr),
-			)
-		}
-		return errors.Join(mutationErr, sourceErr)
-	}
 	if intent.Resource.WorkspaceID != "" {
 		_, verifyErr := worktree.VerifyCheckout(
 			ctx,
@@ -390,7 +309,6 @@ func recoverRejectedHerdrWorktree(
 		)
 		if verifyErr == nil {
 			intent.Status = state.HerdrIntentRealized
-			intent.MutationRejected = false
 			intent.Failure = ""
 			locked.UpsertIntent(intent)
 			if saveErr := locked.Save(); saveErr != nil {
@@ -472,7 +390,6 @@ func finalizeHerdrWorktree(
 	}
 	intent.Resource = stateResource(observation)
 	intent.Status = state.HerdrIntentRealized
-	intent.MutationRejected = false
 	intent.Failure = ""
 	locked.UpsertIntent(*intent)
 	if saveErr := locked.Save(); saveErr != nil {
@@ -643,7 +560,6 @@ func markHerdrIntentManual(
 		reason = cause.Error()
 	}
 	intent.Status = state.HerdrIntentManualCleanupRequired
-	intent.MutationRejected = false
 	intent.Failure = reason
 	locked.UpsertIntent(intent)
 	if err := locked.Save(); err != nil {

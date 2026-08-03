@@ -77,8 +77,7 @@ type HerdrIntent struct {
 	SocketPath     string        `json:"socketPath"`
 	ExpiresUnixMS  int64         `json:"expiresUnixMs"`
 
-	MutationRejected bool   `json:"mutationRejected,omitempty"`
-	Failure          string `json:"failure,omitempty"`
+	Failure string `json:"failure,omitempty"`
 }
 
 // HerdrIntents is the repository-common intent journal. It holds intents
@@ -394,22 +393,12 @@ func validateHerdrIntent(intent HerdrIntent) error {
 	if ownerErr != nil || intent.OwnerProjectRoot != ownerProjectRoot {
 		return fmt.Errorf("herdr intent %s has invalid owner project root", intent.ID)
 	}
-	// Recompute the ID from the stored provenance: a mismatched ID would make
-	// FindIntent miss the row while ProvisionalBindings still claims the
-	// parent, allowing a second intent for the same logical task.
-	var expectedID string
-	var idErr error
 	switch intent.Kind {
 	case HerdrIntentCoordinator:
 		if intent.TaskID != "" || intent.BranchName != "" ||
 			intent.FullBranchRef != "" || intent.BaseSHA != "" || intent.Coordinator.WorkspaceID != "" {
 			return fmt.Errorf("herdr coordinator intent %s contains child fields", intent.ID)
 		}
-		runtimeOwner := ""
-		if runtimeParent == "@manual" || strings.HasPrefix(runtimeParent, "plan:") {
-			runtimeOwner = ownerProjectRoot
-		}
-		expectedID, idErr = HerdrCoordinatorIntentID(runtimeParent, runtimeOwner, intent.IssueNum)
 	case HerdrIntentWorktree:
 		if intent.Slug == "" || intent.BranchName == "" || intent.FullBranchRef == "" ||
 			intent.FullBranchRef != "refs/heads/"+intent.BranchName ||
@@ -418,12 +407,8 @@ func validateHerdrIntent(intent HerdrIntent) error {
 			intent.Coordinator.WorkspaceID == "" {
 			return fmt.Errorf("herdr worktree intent %s is incomplete", intent.ID)
 		}
-		expectedID, idErr = HerdrWorktreeIntentID(parent, ownerProjectRoot, intent.IssueNum, intent.TaskID)
 	default:
 		return fmt.Errorf("herdr intent %s has unknown kind %q", intent.ID, intent.Kind)
-	}
-	if idErr != nil || intent.ID != expectedID {
-		return fmt.Errorf("herdr intent %s has inconsistent identity", intent.ID)
 	}
 	switch intent.Status {
 	case HerdrIntentPlanned:
@@ -454,9 +439,6 @@ func validateHerdrIntent(intent HerdrIntent) error {
 	}
 	if intent.BranchCreated && (intent.Kind != HerdrIntentWorktree || intent.BranchExisted) {
 		return fmt.Errorf("herdr intent %s has an invalid branch ownership record", intent.ID)
-	}
-	if intent.MutationRejected && intent.Status != HerdrIntentIssued {
-		return fmt.Errorf("herdr intent %s has an invalid mutation rejection record", intent.ID)
 	}
 	return nil
 }
