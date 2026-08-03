@@ -94,8 +94,28 @@ func ensureHerdrBranchReservation(
 	}
 	intent.BranchCreated = true
 	locked.UpsertIntent(intent)
-	if err := locked.Save(); err != nil {
-		return intent, err
+	if saveErr := locked.Save(); saveErr != nil {
+		// The reservation proof exists only in this run: without the saved
+		// ownership the next run would treat the branch as foreign and demand
+		// manual cleanup, so release the just-created ref before returning.
+		rollbackCtx, cancel := context.WithTimeout(
+			context.Background(),
+			maxHerdrRecoveryClassificationTimeout,
+		)
+		defer cancel()
+		if deleteErr := worktree.DeleteReservedBranch(
+			rollbackCtx,
+			req.SourceRoot,
+			intent.FullBranchRef,
+			intent.BaseSHA,
+		); deleteErr != nil {
+			if errors.Is(deleteErr, worktree.ErrBranchRollbackBlocked) {
+				return intent, markHerdrIntentManual(locked, intent, errors.Join(saveErr, deleteErr))
+			}
+			return intent, errors.Join(saveErr, deleteErr)
+		}
+		intent.BranchCreated = false
+		return intent, saveErr
 	}
 	return intent, nil
 }

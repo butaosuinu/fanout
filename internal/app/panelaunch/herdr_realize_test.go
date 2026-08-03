@@ -1973,6 +1973,68 @@ func TestRealizeHerdrWorktreeRejectionSaveFailureStillRollsBack(t *testing.T) {
 	}
 }
 
+// A transient journal save failure right after ReserveBranch must not leave a
+// branch the next run would treat as foreign: the in-hand reservation proof
+// rolls the ref back so the planned intent stays cleanly retryable.
+func TestRealizeHerdrWorktreeOwnershipSaveFailureRollsBackReservedBranch(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+
+	stop := errors.New("stop before branch reservation")
+	runtime.policyErr = stop
+	req := testHerdrWorktreeRequest(repo, "ownership-save-failure", 439)
+	if _, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks); !errors.Is(err, stop) {
+		t.Fatalf("initial planned error = %v", err)
+	}
+	runtime.policyErr = nil
+
+	journalPath, pathErr := state.HerdrIntentsPath(repo)
+	if pathErr != nil {
+		t.Fatal(pathErr)
+	}
+	journalDir := filepath.Dir(journalPath)
+	if err := os.Chmod(journalDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	restore := func() {
+		if err := os.Chmod(journalDir, 0o700); err != nil {
+			t.Errorf("restore journal dir mode: %v", err)
+		}
+	}
+	t.Cleanup(restore)
+
+	_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if err == nil || errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("ownership save failure error = %v, want retryable save error", err)
+	}
+	fullRef, refErr := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
+	if refErr != nil {
+		t.Fatal(refErr)
+	}
+	if _, found, observeErr := worktree.ObserveBranch(
+		context.Background(),
+		repo,
+		fullRef,
+	); observeErr != nil {
+		t.Fatal(observeErr)
+	} else if found {
+		t.Fatal("ownership save failure kept the reserved branch")
+	}
+
+	restore()
+	if _, retryErr := realizeHerdrWorktree(
+		context.Background(),
+		req,
+		runtime,
+		hooks,
+	); !errors.Is(retryErr, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatalf("retry after restored journal error = %v", retryErr)
+	}
+}
+
 func TestRealizeHerdrCoordinatorPolicyFailureLeavesNoIntent(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
