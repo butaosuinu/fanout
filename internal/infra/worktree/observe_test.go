@@ -62,16 +62,40 @@ func TestHerdrBranchReservationIsAtomicAndCompareDeleted(t *testing.T) {
 
 	checkout := filepath.Join(t.TempDir(), "checkout")
 	gitTest(t, repo, "worktree", "add", checkout, "fanout/child")
-	if err := DeleteReservedBranch(repo, fullRef, base); err == nil ||
+	if err := DeleteReservedBranch(context.Background(), repo, fullRef, base); err == nil ||
 		!strings.Contains(err.Error(), "checked-out") {
 		t.Fatalf("checked-out delete error = %v", err)
 	}
 	gitTest(t, repo, "worktree", "remove", checkout)
-	if err := DeleteReservedBranch(repo, fullRef, base); err != nil {
+	if err := DeleteReservedBranch(context.Background(), repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
 	if _, found, err := ObserveBranch(context.Background(), repo, fullRef); err != nil || found {
 		t.Fatalf("branch after compare-delete = (found:%t, err:%v)", found, err)
+	}
+}
+
+func TestDeleteReservedHerdrBranchHonorsCanceledContext(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	base := gitOutput(t, repo, "rev-parse", "HEAD")
+	fullRef, err := LocalBranchRef(repo, "fanout/canceled-delete")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ReserveBranch(context.Background(), repo, fullRef, base); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := DeleteReservedBranch(ctx, repo, fullRef, base); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled branch delete error = %v", err)
+	}
+	if got, found, observeErr := ObserveBranch(
+		context.Background(),
+		repo,
+		fullRef,
+	); observeErr != nil || !found || got != base {
+		t.Fatalf("branch after canceled delete = (%q,%t,%v), want %s", got, found, observeErr, base)
 	}
 }
 
@@ -105,7 +129,7 @@ func TestHerdrBranchReservationSupportsSHA256ObjectIDs(t *testing.T) {
 	if got, found, err := ObserveBranch(context.Background(), repo, fullRef); err != nil || !found || got != base {
 		t.Fatalf("SHA-256 branch = (%q,%t,%v), want %s", got, found, err, base)
 	}
-	if err := DeleteReservedBranch(repo, fullRef, base); err != nil {
+	if err := DeleteReservedBranch(context.Background(), repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -129,7 +153,7 @@ func TestDeleteReservedHerdrBranchRejectsMovedTip(t *testing.T) {
 		"commit-tree", tree, "-p", base, "-m", "moved",
 	)
 	gitTest(t, repo, "update-ref", fullRef, moved, base)
-	if err := DeleteReservedBranch(repo, fullRef, base); err == nil ||
+	if err := DeleteReservedBranch(context.Background(), repo, fullRef, base); err == nil ||
 		!strings.Contains(err.Error(), "moved from") {
 		t.Fatalf("moved delete error = %v", err)
 	}

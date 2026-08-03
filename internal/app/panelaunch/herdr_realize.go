@@ -280,7 +280,14 @@ func RealizeHerdrCoordinator(
 			}
 			return coordinatorDeferred(intent)
 		case state.HerdrIntentIssued:
-			return recoverHerdrCoordinator(operationCtx, runtime, locked, intent, nil)
+			return recoverHerdrCoordinator(
+				operationCtx,
+				runtime,
+				locked,
+				intent,
+				setup.source,
+				nil,
+			)
 		default:
 			return result, markHerdrIntentManual(
 				locked,
@@ -322,7 +329,14 @@ func RealizeHerdrCoordinator(
 		if operationErr := operationParent.Err(); operationErr != nil {
 			return result, errors.Join(mutationErr, operationErr)
 		}
-		return recoverHerdrCoordinator(operationParent, runtime, locked, intent, mutationErr)
+		return recoverHerdrCoordinator(
+			operationParent,
+			runtime,
+			locked,
+			intent,
+			setup.source,
+			mutationErr,
+		)
 	}
 	if err := validateCoordinatorObservation(intent, mutation.WorkspaceObservation); err != nil {
 		return result, markHerdrIntentManual(locked, intent, err)

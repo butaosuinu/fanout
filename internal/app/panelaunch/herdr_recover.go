@@ -106,9 +106,15 @@ func rollbackUnissuedHerdrWorktree(
 	intent state.HerdrIntent,
 	mutationErr error,
 ) error {
+	rollbackCtx, cancel := context.WithTimeout(
+		context.Background(),
+		maxHerdrRecoveryClassificationTimeout,
+	)
+	defer cancel()
 	if !intent.BranchExisted && !intent.BranchCreated {
-		// Rollback must complete even when the launch context is canceled.
-		_, found, err := worktree.ObserveBranch(context.Background(), req.SourceRoot, intent.FullBranchRef)
+		// Rollback gets an independent finite budget when the launch context
+		// is already canceled.
+		_, found, err := worktree.ObserveBranch(rollbackCtx, req.SourceRoot, intent.FullBranchRef)
 		if err != nil {
 			// The branch state was not classified; keep the intent retryable.
 			return errors.Join(mutationErr, err)
@@ -122,6 +128,7 @@ func rollbackUnissuedHerdrWorktree(
 	}
 	if intent.BranchCreated {
 		if err := worktree.DeleteReservedBranch(
+			rollbackCtx,
 			req.SourceRoot,
 			intent.FullBranchRef,
 			intent.BaseSHA,
@@ -141,6 +148,7 @@ func recoverHerdrCoordinator(
 	runtime HerdrWorktreeRuntime,
 	locked *state.LockedHerdrIntents,
 	intent state.HerdrIntent,
+	requestSource worktree.RepoIdentity,
 	mutationErr error,
 ) (HerdrCoordinatorResult, error) {
 	// A structured rejection proves the workspace was not created; release
@@ -164,7 +172,14 @@ func recoverHerdrCoordinator(
 		if err := validateCoordinatorObservation(intent, matches[0]); err != nil {
 			return HerdrCoordinatorResult{}, markHerdrIntentManual(locked, intent, err)
 		}
-		intent.Resource = stateResource(matches[0])
+		resource := stateResource(matches[0])
+		if _, sourceErr := herdrCoordinatorSource(ctx, resource, requestSource); sourceErr != nil {
+			if errors.Is(sourceErr, errHerdrRealizedIdentityChanged) {
+				return HerdrCoordinatorResult{}, markHerdrIntentManual(locked, intent, sourceErr)
+			}
+			return HerdrCoordinatorResult{}, errors.Join(mutationErr, sourceErr)
+		}
+		intent.Resource = resource
 		intent.Status = state.HerdrIntentRealized
 		intent.Failure = ""
 		locked.UpsertIntent(intent)
@@ -317,6 +332,7 @@ func recoverRejectedHerdrWorktree(
 	}
 	if intent.BranchCreated {
 		if err := worktree.DeleteReservedBranch(
+			ctx,
 			req.SourceRoot,
 			intent.FullBranchRef,
 			intent.BaseSHA,

@@ -64,22 +64,22 @@ func ReserveBranch(ctx context.Context, root, fullRef, baseSHA string) error {
 
 // DeleteReservedBranch compare-and-deletes a fanout-created branch only
 // when its expected tip is unchanged and no linked worktree checks it out.
-func DeleteReservedBranch(root, fullRef, expectedSHA string) error {
+func DeleteReservedBranch(ctx context.Context, root, fullRef, expectedSHA string) error {
 	if !strings.HasPrefix(fullRef, "refs/heads/") || !commitSHAPattern.MatchString(expectedSHA) {
 		return fmt.Errorf("%w: invalid Herdr branch deletion %s at %s", ErrBranchRollbackBlocked, fullRef, expectedSHA)
 	}
-	// Rollback must complete even when the launch context is already
-	// canceled, so the deletion guards observe without a caller deadline.
-	// Observation failures return untyped so the caller can retry; only a
-	// confirmed blocker or an ambiguous delete outcome is terminal.
-	checkedOut, err := branchCheckedOut(context.Background(), root, fullRef)
+	// The caller supplies an independent finite rollback deadline when its
+	// launch context is already canceled. Observation failures return untyped
+	// so the caller can retry; only a confirmed blocker or an ambiguous delete
+	// outcome is terminal.
+	checkedOut, err := branchCheckedOut(ctx, root, fullRef)
 	if err != nil {
 		return err
 	}
 	if checkedOut {
 		return fmt.Errorf("%w: refusing to delete checked-out Herdr branch %s", ErrBranchRollbackBlocked, fullRef)
 	}
-	current, found, err := ObserveBranch(context.Background(), root, fullRef)
+	current, found, err := ObserveBranch(ctx, root, fullRef)
 	if err != nil {
 		return err
 	}
@@ -89,7 +89,7 @@ func DeleteReservedBranch(root, fullRef, expectedSHA string) error {
 	if current != expectedSHA {
 		return fmt.Errorf("%w: herdr branch %s moved from %s to %s", ErrBranchRollbackBlocked, fullRef, expectedSHA, current)
 	}
-	if _, err := git(root, "update-ref", "-d", fullRef, expectedSHA); err != nil {
+	if _, err := gitContext(ctx, root, "update-ref", "-d", fullRef, expectedSHA); err != nil {
 		return fmt.Errorf("%w: delete reserved Herdr branch %s: %w", ErrBranchRollbackBlocked, fullRef, err)
 	}
 	return nil

@@ -581,6 +581,7 @@ func TestRealizeHerdrWorktreeRecoversCompletedUnissuedRollback(t *testing.T) {
 		t.Fatalf("interrupted rollback intent = (%+v,%t)", intent, found)
 	}
 	if deleteErr := worktree.DeleteReservedBranch(
+		context.Background(),
 		repo,
 		intent.FullBranchRef,
 		intent.BaseSHA,
@@ -1327,6 +1328,84 @@ func TestRealizeHerdrCoordinatorAdoptsResponseLossAndNeverReissues(t *testing.T)
 	}
 	if len(runtime.mutations) != 1 {
 		t.Fatal("coordinator response-loss replay reissued mutation")
+	}
+}
+
+func TestRealizeHerdrCoordinatorRejectsIssuedRecoveryFromChangedRepoIdentity(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	owner := filepath.Join(t.TempDir(), "issued-owner")
+	retrySource := filepath.Join(t.TempDir(), "issued-retry-source")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "issued-coordinator-owner", owner, "HEAD")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "issued-coordinator-retry", retrySource, "HEAD")
+
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, owner, runtime)
+	successfulMutate := runtime.mutate
+	snapshotErr := errors.New("injected coordinator recovery snapshot failure")
+	responseErr := errors.New("injected coordinator response loss")
+	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+		result, mutationErr := successfulMutate(req)
+		if mutationErr != nil {
+			return result, mutationErr
+		}
+		runtime.observeErr = snapshotErr
+		return herdrrun.WorktreeMutationResult{}, responseErr
+	}
+	hooks := deterministicHerdrRealizeHooks()
+	if _, err := realizeHerdrCoordinator(
+		context.Background(),
+		testHerdrCoordinatorRequest(owner),
+		runtime,
+		hooks,
+	); !errors.Is(err, snapshotErr) {
+		t.Fatalf("initial issued coordinator error = %v", err)
+	}
+	runtime.observeErr = nil
+	control, err := state.LoadHerdrIntents(retrySource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(control.Intents) != 1 || control.Intents[0].Status != state.HerdrIntentIssued {
+		t.Fatalf("issued coordinator intents = %+v", control.Intents)
+	}
+	coordinatorID := control.Intents[0].ID
+
+	dotGitPath := filepath.Join(owner, ".git")
+	originalDotGit, err := os.ReadFile(dotGitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if restoreErr := os.WriteFile(dotGitPath, originalDotGit, 0o644); restoreErr != nil {
+			t.Errorf("restore issued owner .git file: %v", restoreErr)
+		}
+	})
+	foreign := newHerdrRealizeRepo(t)
+	foreignDotGit := "gitdir: " + filepath.Join(foreign, ".git") + "\n"
+	if writeErr := os.WriteFile(dotGitPath, []byte(foreignDotGit), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+
+	_, err = realizeHerdrCoordinator(
+		context.Background(),
+		testHerdrCoordinatorRequest(retrySource),
+		runtime,
+		hooks,
+	)
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) ||
+		!strings.Contains(err.Error(), errHerdrRealizedIdentityChanged.Error()) {
+		t.Fatalf("changed issued coordinator repository identity error = %v", err)
+	}
+	if len(runtime.mutations) != 1 {
+		t.Fatalf("changed issued coordinator repository identity mutations = %d, want 1", len(runtime.mutations))
+	}
+	control, err = state.LoadHerdrIntents(retrySource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, found := control.FindIntent(coordinatorID)
+	if !found || persisted.Status != state.HerdrIntentManualCleanupRequired {
+		t.Fatalf("changed issued coordinator repository identity intent = (%+v,%t)", persisted, found)
 	}
 }
 
