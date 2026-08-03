@@ -49,10 +49,10 @@ func TestHerdrBranchReservationIsAtomicAndCompareDeleted(t *testing.T) {
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
-	if err := ReserveBranch(repo, fullRef, base); err != nil {
+	if err := ReserveBranch(context.Background(), repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
-	if err := ReserveBranch(repo, fullRef, base); err == nil {
+	if err := ReserveBranch(context.Background(), repo, fullRef, base); err == nil {
 		t.Fatal("second atomic branch reservation unexpectedly succeeded")
 	}
 	got, found, err := ObserveBranch(context.Background(), repo, fullRef)
@@ -99,7 +99,7 @@ func TestHerdrBranchReservationSupportsSHA256ObjectIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ReserveBranch(repo, fullRef, base); err != nil {
+	if err := ReserveBranch(context.Background(), repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
 	if got, found, err := ObserveBranch(context.Background(), repo, fullRef); err != nil || !found || got != base {
@@ -117,7 +117,7 @@ func TestDeleteReservedHerdrBranchRejectsMovedTip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ReserveBranch(repo, fullRef, base); err != nil {
+	if err := ReserveBranch(context.Background(), repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
 	tree := gitOutput(t, repo, "rev-parse", "HEAD^{tree}")
@@ -267,7 +267,7 @@ func TestVerifyHerdrCheckoutPinsBranchHeadAndRepository(t *testing.T) {
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
-	if err := ReserveBranch(repo, fullRef, base); err != nil {
+	if err := ReserveBranch(context.Background(), repo, fullRef, base); err != nil {
 		t.Fatal(err)
 	}
 	checkout := filepath.Join(repo, ".fanout", "worktrees", "child")

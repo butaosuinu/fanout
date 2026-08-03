@@ -77,7 +77,7 @@ func ensureHerdrBranchReservation(
 			fmt.Errorf("herdr branch appeared before reservation completed"),
 		)
 	}
-	if err := worktree.ReserveBranch(req.SourceRoot, intent.FullBranchRef, intent.BaseSHA); err != nil {
+	if err := worktree.ReserveBranch(ctx, req.SourceRoot, intent.FullBranchRef, intent.BaseSHA); err != nil {
 		current, found, observeErr := worktree.ObserveBranch(ctx, req.SourceRoot, intent.FullBranchRef)
 		if observeErr != nil {
 			// The branch state was not classified; keep the intent retryable.
@@ -216,6 +216,13 @@ func recoverHerdrWorktree(
 	}
 	checkout, checkoutErr := worktree.ObserveCheckout(ctx, req.SourceRoot, intent.WorktreePath)
 	if checkoutErr != nil {
+		if errors.Is(checkoutErr, worktree.ErrCheckoutMismatch) {
+			return HerdrWorktreeResult{}, markHerdrIntentManual(
+				locked,
+				intent,
+				errors.Join(mutationErr, checkoutErr),
+			)
+		}
 		return HerdrWorktreeResult{}, errors.Join(mutationErr, checkoutErr)
 	}
 	if mutationErr == nil && intent.BranchCreated && len(matches) == 0 &&
@@ -292,6 +299,13 @@ func recoverRejectedHerdrWorktree(
 	}
 	checkout, checkoutErr := worktree.ObserveCheckout(ctx, req.SourceRoot, intent.WorktreePath)
 	if checkoutErr != nil {
+		if errors.Is(checkoutErr, worktree.ErrCheckoutMismatch) {
+			return HerdrWorktreeResult{}, markHerdrIntentManual(
+				locked,
+				intent,
+				errors.Join(mutationErr, checkoutErr),
+			)
+		}
 		return HerdrWorktreeResult{}, errors.Join(mutationErr, checkoutErr)
 	}
 	if !checkout.PathAbsent || checkout.Registered {

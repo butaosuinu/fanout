@@ -202,7 +202,7 @@ func ObserveCheckout(ctx context.Context, root, checkoutPath string) (CheckoutOb
 	case err != nil:
 		return observation, fmt.Errorf("inspect Herdr checkout path %s: %w", checkoutPath, err)
 	case !info.IsDir() || info.Mode()&os.ModeSymlink != 0:
-		return observation, fmt.Errorf("herdr checkout path %s is not a real directory", checkoutPath)
+		return observation, fmt.Errorf("%w: %s is not a real directory", ErrCheckoutMismatch, checkoutPath)
 	}
 
 	entries, err := worktreeEntries(ctx, root)
@@ -256,11 +256,12 @@ func ObserveCheckout(ctx context.Context, root, checkoutPath string) (CheckoutOb
 		return observation, err
 	}
 	if checkoutIdentity.RepoKey != sourceIdentity.RepoKey {
-		return observation, fmt.Errorf("herdr checkout %s belongs to a different Git common directory", checkoutPath)
+		return observation, fmt.Errorf("%w: %s belongs to a different Git common directory", ErrCheckoutMismatch, checkoutPath)
 	}
 	if filepath.Clean(checkoutIdentity.RepoRoot) != cleanPath {
 		return observation, fmt.Errorf(
-			"herdr checkout %s does not resolve to its registered worktree root",
+			"%w: %s does not resolve to its registered worktree root",
+			ErrCheckoutMismatch,
 			checkoutPath,
 		)
 	}

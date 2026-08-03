@@ -221,12 +221,9 @@ func (l *LockedStore) HerdrIntents(projectRoot string) (*LockedHerdrIntents, err
 	if l == nil || l.herdrIntentsFile == nil || l.herdrIntentsPath == "" {
 		return nil, fmt.Errorf("herdr intents require the combined launch lock")
 	}
-	intentsPath, err := HerdrIntentsPath(projectRoot)
-	if err != nil {
-		return nil, err
-	}
-	if intentsPath != l.herdrIntentsPath ||
-		filepath.Clean(l.path) != filepath.Clean(Path(projectRoot)) {
+	// The journal path was derived from the same project root at lock time;
+	// re-deriving it here would run git while both locks are held.
+	if filepath.Clean(l.path) != filepath.Clean(Path(projectRoot)) {
 		return nil, fmt.Errorf("herdr intents launch lock belongs to a different project")
 	}
 	store, err := loadHerdrIntents(l.herdrIntentsPath)

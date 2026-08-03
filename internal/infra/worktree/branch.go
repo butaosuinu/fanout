@@ -51,12 +51,12 @@ func ObserveBranch(ctx context.Context, root, fullRef string) (string, bool, err
 
 // ReserveBranch atomically creates fullRef at baseSHA with an empty old
 // OID. Existing refs fail without being modified.
-func ReserveBranch(root, fullRef, baseSHA string) error {
+func ReserveBranch(ctx context.Context, root, fullRef, baseSHA string) error {
 	if !strings.HasPrefix(fullRef, "refs/heads/") || !commitSHAPattern.MatchString(baseSHA) {
 		return fmt.Errorf("invalid Herdr branch reservation %s -> %s", fullRef, baseSHA)
 	}
 	emptyOID := strings.Repeat("0", len(baseSHA))
-	if _, err := git(root, "update-ref", "--create-reflog", fullRef, baseSHA, emptyOID); err != nil {
+	if _, err := gitContext(ctx, root, "update-ref", "--create-reflog", fullRef, baseSHA, emptyOID); err != nil {
 		return fmt.Errorf("reserve Herdr branch %s at %s: %w", fullRef, baseSHA, err)
 	}
 	return nil
