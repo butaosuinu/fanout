@@ -45,7 +45,7 @@ esac
 func TestHerdrBranchReservationIsAtomicAndCompareDeleted(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	base := gitOutput(t, repo, "rev-parse", "HEAD")
-	fullRef, refErr := LocalBranchRef(repo, "fanout/child")
+	fullRef, refErr := LocalBranchRef(context.Background(), repo, "fanout/child")
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
@@ -78,7 +78,7 @@ func TestHerdrBranchReservationIsAtomicAndCompareDeleted(t *testing.T) {
 func TestDeleteReservedHerdrBranchHonorsCanceledContext(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	base := gitOutput(t, repo, "rev-parse", "HEAD")
-	fullRef, err := LocalBranchRef(repo, "fanout/canceled-delete")
+	fullRef, err := LocalBranchRef(context.Background(), repo, "fanout/canceled-delete")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestHerdrBranchReservationSupportsSHA256ObjectIDs(t *testing.T) {
 	if err != nil || resolved.SHA != base {
 		t.Fatalf("SHA-256 base = %+v, err=%v", resolved, err)
 	}
-	fullRef, err := LocalBranchRef(repo, "fanout/sha256")
+	fullRef, err := LocalBranchRef(context.Background(), repo, "fanout/sha256")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestHerdrBranchReservationSupportsSHA256ObjectIDs(t *testing.T) {
 func TestDeleteReservedHerdrBranchRejectsMovedTip(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	base := gitOutput(t, repo, "rev-parse", "HEAD")
-	fullRef, err := LocalBranchRef(repo, "fanout/moved")
+	fullRef, err := LocalBranchRef(context.Background(), repo, "fanout/moved")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestObserveHerdrCheckoutRejectsRecreatedPrunableDirectory(t *testing.T) {
 func TestVerifyHerdrCheckoutPinsBranchHeadAndRepository(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	base := gitOutput(t, repo, "rev-parse", "HEAD")
-	fullRef, refErr := LocalBranchRef(repo, "fanout/child")
+	fullRef, refErr := LocalBranchRef(context.Background(), repo, "fanout/child")
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
@@ -342,12 +342,39 @@ func TestVerifyHerdrCheckoutPinsBranchHeadAndRepository(t *testing.T) {
 // the full-ref check but fail when handed to Herdr's --branch.
 func TestLocalBranchRefRejectsBranchModeInvalidNames(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
-	if ref, err := LocalBranchRef(repo, "fanout/valid-name"); err != nil || ref != "refs/heads/fanout/valid-name" {
+	if ref, err := LocalBranchRef(context.Background(), repo, "fanout/valid-name"); err != nil || ref != "refs/heads/fanout/valid-name" {
 		t.Fatalf("valid branch = (%q, %v)", ref, err)
 	}
 	for _, name := range []string{"HEAD", "-foo", "@{-1}"} {
-		if _, err := LocalBranchRef(repo, name); err == nil {
+		if _, err := LocalBranchRef(context.Background(), repo, name); err == nil {
 			t.Fatalf("branch name %q was accepted", name)
 		}
+	}
+}
+
+func TestLocalBranchRefStopsBranchModeCheckAtContextDeadline(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	if err := os.WriteFile(fakeGit, []byte(`#!/bin/sh
+case "$*" in
+  "check-ref-format refs/heads/fanout/slow") exit 0 ;;
+  "check-ref-format --branch fanout/slow") while :; do :; done ;;
+  *) exit 64 ;;
+esac
+`), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := LocalBranchRef(ctx, repo, "fanout/slow")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("LocalBranchRef() error = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("branch mode check stopped after %v, want under 1s", elapsed)
 	}
 }

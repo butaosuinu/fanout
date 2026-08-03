@@ -178,9 +178,21 @@ func recoverHerdrCoordinator(
 	requestSource worktree.RepoIdentity,
 	mutationErr error,
 ) (HerdrCoordinatorResult, error) {
-	// A structured rejection proves the workspace was not created; release
-	// the intent without depending on a snapshot that may fail transiently.
-	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
+	// Persist the structured rejection before releasing the intent so a
+	// transient deletion save failure leaves a durable proof for the next run.
+	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) && !intent.MutationRejected {
+		intent.MutationRejected = true
+		locked.UpsertIntent(intent)
+		if saveErr := locked.Save(); saveErr != nil {
+			// The proof is still in hand this run; attempt the release even when
+			// its durable record could not be written.
+			mutationErr = errors.Join(mutationErr, saveErr)
+		}
+	}
+	if intent.MutationRejected {
+		if mutationErr == nil {
+			mutationErr = herdrrun.ErrMutationRejected
+		}
 		return HerdrCoordinatorResult{}, releaseHerdrIntent(locked, intent.ID, mutationErr)
 	}
 	// A failed snapshot classifies nothing: keep the issued intent so the

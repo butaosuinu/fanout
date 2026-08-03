@@ -310,6 +310,9 @@ func gitStdoutStderr(ctx context.Context, dir string, args ...string) ([]byte, s
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, stderr.String(), contextErr
+		}
 		return nil, stderr.String(), fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 	return out, stderr.String(), nil

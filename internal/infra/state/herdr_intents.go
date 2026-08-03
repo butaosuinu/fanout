@@ -455,8 +455,7 @@ func validateHerdrIntent(intent HerdrIntent) error {
 	if intent.BranchCreated && (intent.Kind != HerdrIntentWorktree || intent.BranchExisted) {
 		return fmt.Errorf("herdr intent %s has an invalid branch ownership record", intent.ID)
 	}
-	if intent.MutationRejected &&
-		(intent.Kind != HerdrIntentWorktree || intent.Status != HerdrIntentIssued) {
+	if intent.MutationRejected && intent.Status != HerdrIntentIssued {
 		return fmt.Errorf("herdr intent %s has an invalid mutation rejection record", intent.ID)
 	}
 	return nil

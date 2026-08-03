@@ -525,7 +525,7 @@ func TestRealizeHerdrRollsBackMutationNotIssued(t *testing.T) {
 		if !errors.Is(err, herdrrun.ErrMutationNotIssued) {
 			t.Fatalf("worktree error = %v", err)
 		}
-		fullRef, err := worktree.LocalBranchRef(repo, req.BranchName)
+		fullRef, err := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -626,7 +626,7 @@ func TestRealizeHerdrWorktreeChecksPolicyBeforeBranchReservation(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unexpected owned plugin") {
 		t.Fatalf("policy error = %v", err)
 	}
-	fullRef, err := worktree.LocalBranchRef(repo, req.BranchName)
+	fullRef, err := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -942,7 +942,7 @@ func TestRealizeHerdrWorktreePreconditionFailureReleasesPlannedIntent(t *testing
 	if _, found := control.FindIntent(intentID); found {
 		t.Fatal("precondition failure kept the planned intent")
 	}
-	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
+	fullRef, refErr := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
@@ -1216,7 +1216,7 @@ func TestRealizeHerdrWorktreeFailsClosedOnAmbiguousResponseLoss(t *testing.T) {
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("ambiguous response error = %v", err)
 	}
-	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
+	fullRef, refErr := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
@@ -1262,7 +1262,7 @@ func TestRealizeHerdrWorktreeDeletesBranchOnlyAfterStructuredRejection(t *testin
 	if !errors.Is(err, herdrrun.ErrMutationRejected) {
 		t.Fatalf("structured rejection error = %v", err)
 	}
-	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
+	fullRef, refErr := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
@@ -1334,7 +1334,7 @@ func TestRealizeHerdrWorktreeRetainsStructuredRejectionAcrossGitFailure(t *testi
 	if len(runtime.mutations) != mutationCount {
 		t.Fatalf("structured rejection retry mutations = %d, want %d", len(runtime.mutations), mutationCount)
 	}
-	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
+	fullRef, refErr := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
@@ -1397,7 +1397,7 @@ func TestRealizeHerdrWorktreeRejectsRollbackAfterSourceRepoIdentityChanges(t *te
 		t.Fatal(restoreErr)
 	}
 
-	fullRef, refErr := worktree.LocalBranchRef(owner, req.BranchName)
+	fullRef, refErr := worktree.LocalBranchRef(context.Background(), owner, req.BranchName)
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
@@ -1843,6 +1843,82 @@ func TestRealizeHerdrCoordinatorRejectedCreateReleasesEvenAfterContextExpiry(t *
 	}
 }
 
+func TestRealizeHerdrCoordinatorRetainsRejectionAcrossReleaseSaveFailure(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	req := testHerdrCoordinatorRequest(repo)
+	intentID, idErr := state.HerdrCoordinatorIntentID(req.Parent, "", 0)
+	if idErr != nil {
+		t.Fatal(idErr)
+	}
+	intent := state.HerdrIntent{
+		ID: intentID, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentIssued,
+		Parent: req.Parent, RuntimeParent: req.Parent,
+		WorktreePath: repo, WorkspaceLabel: "fanout-coordinator-rejected",
+		Session: req.HerdrSession, SocketPath: req.SocketPath,
+		ExpiresUnixMS:    hooks.Now().Add(req.TotalTimeout).UnixMilli(),
+		MutationRejected: true,
+	}
+	locked := lockHerdrIntentsForTest(t, repo)
+	locked.UpsertIntent(intent)
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+
+	journalPath, pathErr := state.HerdrIntentsPath(repo)
+	if pathErr != nil {
+		t.Fatal(pathErr)
+	}
+	journalDir := filepath.Dir(journalPath)
+	if chmodErr := os.Chmod(journalDir, 0o500); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	t.Cleanup(func() {
+		if chmodErr := os.Chmod(journalDir, 0o700); chmodErr != nil {
+			t.Errorf("restore journal directory mode: %v", chmodErr)
+		}
+	})
+
+	_, err := realizeHerdrCoordinator(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, herdrrun.ErrMutationRejected) ||
+		errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("coordinator rejection release save error = %v", err)
+	}
+	if chmodErr := os.Chmod(journalDir, 0o700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	control, loadErr := state.LoadHerdrIntents(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	persisted, found := control.FindIntent(intentID)
+	if !found || persisted.Status != state.HerdrIntentIssued ||
+		!persisted.MutationRejected {
+		t.Fatalf("persisted coordinator rejection = (%+v,%t)", persisted, found)
+	}
+
+	_, err = realizeHerdrCoordinator(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, herdrrun.ErrMutationRejected) ||
+		errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("coordinator rejection retry error = %v", err)
+	}
+	if len(runtime.mutations) != 0 {
+		t.Fatalf("coordinator rejection retry mutations = %d, want 0", len(runtime.mutations))
+	}
+	control, loadErr = state.LoadHerdrIntents(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if _, found := control.FindIntent(intentID); found {
+		t.Fatal("coordinator rejection retry left an intent")
+	}
+}
+
 // A journal save failure while persisting the rejection proof must not drop
 // the run into normal response-loss recovery: the in-hand rejection still
 // classifies and rolls back the reserved branch.
@@ -1882,7 +1958,7 @@ func TestRealizeHerdrWorktreeRejectionSaveFailureStillRollsBack(t *testing.T) {
 	if !errors.Is(err, herdrrun.ErrMutationRejected) || errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("rejected create with failing journal error = %v", err)
 	}
-	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
+	fullRef, refErr := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
 	if refErr != nil {
 		t.Fatal(refErr)
 	}
@@ -2083,7 +2159,7 @@ func TestRealizeHerdrWorktreeRejectsForeignCoordinatorBeforeChildMutation(t *tes
 	if len(runtime.mutations) != 1 {
 		t.Fatalf("foreign coordinator issued child mutation; calls=%d", len(runtime.mutations))
 	}
-	fullRef, refErr := worktree.LocalBranchRef(repo, req.BranchName)
+	fullRef, refErr := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
 	if refErr != nil {
 		t.Fatal(refErr)
 	}

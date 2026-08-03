@@ -378,6 +378,10 @@ func TestHerdrControlIssuedWorktreeMayRetainRealizedResourceForOpenRecovery(t *t
 
 	coordinator := testHerdrCoordinatorIntent(repo, "425")
 	coordinator.Status = HerdrIntentIssued
+	coordinator.MutationRejected = true
+	if err := validateHerdrIntent(coordinator); err != nil {
+		t.Fatalf("issued rejected coordinator intent: %v", err)
+	}
 	coordinator.Resource = testHerdrCoordinatorResource(repo)
 	if err := validateHerdrIntent(coordinator); err == nil ||
 		!strings.Contains(err.Error(), "resource before realization") {

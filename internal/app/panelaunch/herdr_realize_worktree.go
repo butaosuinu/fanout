@@ -350,7 +350,7 @@ func plannedHerdrWorktreeIntent(
 	if err != nil {
 		return state.HerdrIntent{}, err
 	}
-	fullRef, err := worktree.LocalBranchRef(req.SourceRoot, req.BranchName)
+	fullRef, err := worktree.LocalBranchRef(setup.ctx, req.SourceRoot, req.BranchName)
 	if err != nil {
 		return state.HerdrIntent{}, err
 	}
