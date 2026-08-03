@@ -103,7 +103,6 @@ func ensureHerdrBranchReservation(
 func rollbackUnissuedHerdrWorktree(
 	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
-	source worktree.RepoIdentity,
 	intent state.HerdrIntent,
 	mutationErr error,
 ) error {

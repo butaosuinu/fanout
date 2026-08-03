@@ -91,7 +91,6 @@ func RealizeHerdrWorktree(
 			return result, rollbackUnissuedHerdrWorktree(
 				locked,
 				req,
-				source,
 				intent,
 				routeContextErr,
 			)
@@ -159,7 +158,7 @@ func RealizeHerdrWorktree(
 	if contextErr != nil {
 		if errors.Is(contextErr, errHerdrIntentDeadlineExpired) &&
 			intent.Status == state.HerdrIntentPlanned {
-			return result, rollbackUnissuedHerdrWorktree(locked, req, source, intent, contextErr)
+			return result, rollbackUnissuedHerdrWorktree(locked, req, intent, contextErr)
 		}
 		return result, contextErr
 	}
@@ -201,7 +200,7 @@ func RealizeHerdrWorktree(
 	if coordinatorErr := verifyCoordinatorObservation(intent.Coordinator, workspaces); coordinatorErr != nil {
 		// The create was never issued (planned): release the child
 		// reservation instead of demanding manual cleanup.
-		return result, rollbackUnissuedHerdrWorktree(locked, req, source, intent, coordinatorErr)
+		return result, rollbackUnissuedHerdrWorktree(locked, req, intent, coordinatorErr)
 	}
 	if matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel); len(matches) != 0 {
 		return result, markHerdrIntentManual(
@@ -215,7 +214,7 @@ func RealizeHerdrWorktree(
 		// branch and the intent instead of demanding manual cleanup; the
 		// rollback itself fails closed when the branch ownership no longer
 		// verifies.
-		return result, rollbackUnissuedHerdrWorktree(locked, req, source, intent, preconditionErr)
+		return result, rollbackUnissuedHerdrWorktree(locked, req, intent, preconditionErr)
 	}
 
 	intent.Status = state.HerdrIntentIssued
@@ -238,7 +237,7 @@ func RealizeHerdrWorktree(
 	})
 	if mutationErr != nil {
 		if errors.Is(mutationErr, herdrrun.ErrMutationNotIssued) {
-			return result, rollbackUnissuedHerdrWorktree(locked, req, source, intent, mutationErr)
+			return result, rollbackUnissuedHerdrWorktree(locked, req, intent, mutationErr)
 		}
 		if operationErr := operationCtx.Err(); operationErr != nil &&
 			!errors.Is(mutationErr, herdrrun.ErrMutationRejected) {

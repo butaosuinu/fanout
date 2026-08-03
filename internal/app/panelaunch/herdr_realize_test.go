@@ -225,15 +225,7 @@ func TestRealizeHerdrWorktreeLeavesIssuedIntentAfterRealizedSaveFailure(t *testi
 	if chmodErr := os.Chmod(controlDir, 0o700); chmodErr != nil {
 		t.Fatal(chmodErr)
 	}
-	control, loadErr := state.LoadHerdrIntents(repo)
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	intentID, idErr := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
-	if idErr != nil {
-		t.Fatal(idErr)
-	}
-	intent, found := control.FindIntent(intentID)
+	intent, found := loadHerdrWorktreeIntent(t, repo, req)
 	if !found || intent.Status != state.HerdrIntentIssued ||
 		intent.Resource.WorkspaceID != "" || intent.Failure != "" {
 		t.Fatalf("persisted intent after realized save failure = (%+v,%t)", intent, found)
@@ -404,19 +396,9 @@ func TestRealizeHerdrCoordinatorBoundsExpiredRouteClassification(t *testing.T) {
 	hooks := deterministicHerdrRealizeHooks()
 	realized := realizeTestHerdrCoordinator(t, repo, runtime, hooks)
 
-	locked := lockHerdrIntentsForTest(t, repo)
-	intent, found := locked.FindIntent(realized.ID)
-	if !found {
-		t.Fatalf("intent %s not found", realized.ID)
-	}
-	intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
-	locked.UpsertIntent(intent)
-	if saveErr := locked.Save(); saveErr != nil {
-		t.Fatal(saveErr)
-	}
-	if unlockErr := locked.Unlock(); unlockErr != nil {
-		t.Fatal(unlockErr)
-	}
+	mutateHerdrTestIntent(t, repo, realized.ID, func(intent *state.HerdrIntent) {
+		intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
+	})
 
 	if _, err := realizeHerdrCoordinator(
 		context.Background(),
@@ -446,19 +428,9 @@ func TestRealizeHerdrWorktreeUsesSavedRouteDeadline(t *testing.T) {
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("initial realization error = %v", err)
 	}
-	locked := lockHerdrIntentsForTest(t, repo)
-	intent, found := locked.FindIntent(realized.Intent.ID)
-	if !found {
-		t.Fatalf("intent %s not found", realized.Intent.ID)
-	}
-	intent.ExpiresUnixMS = hooks.Now().Add(2 * time.Second).UnixMilli()
-	locked.UpsertIntent(intent)
-	if saveErr := locked.Save(); saveErr != nil {
-		t.Fatal(saveErr)
-	}
-	if unlockErr := locked.Unlock(); unlockErr != nil {
-		t.Fatal(unlockErr)
-	}
+	mutateHerdrTestIntent(t, repo, realized.Intent.ID, func(intent *state.HerdrIntent) {
+		intent.ExpiresUnixMS = hooks.Now().Add(2 * time.Second).UnixMilli()
+	})
 
 	_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
@@ -568,15 +540,7 @@ func TestRealizeHerdrWorktreeRecoversCompletedUnissuedRollback(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("interrupted rollback setup error = %v", err)
 	}
-	control, err := state.LoadHerdrIntents(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, found := control.FindIntent(intentID)
+	intent, found := loadHerdrWorktreeIntent(t, repo, req)
 	if !found || intent.Status != state.HerdrIntentIssued || !intent.BranchCreated {
 		t.Fatalf("interrupted rollback intent = (%+v,%t)", intent, found)
 	}
@@ -598,11 +562,7 @@ func TestRealizeHerdrWorktreeRecoversCompletedUnissuedRollback(t *testing.T) {
 	if len(runtime.mutations) != mutationsBefore {
 		t.Fatal("completed rollback recovery reissued a mutation")
 	}
-	control, err = state.LoadHerdrIntents(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, found := control.FindIntent(intentID); found {
+	if _, found := loadHerdrWorktreeIntent(t, repo, req); found {
 		t.Fatal("completed rollback recovery kept the issued intent")
 	}
 
@@ -635,15 +595,7 @@ func TestRealizeHerdrWorktreeChecksPolicyBeforeBranchReservation(t *testing.T) {
 	} else if found {
 		t.Fatalf("policy-blocked branch = %s, want absent", head)
 	}
-	control, err := state.LoadHerdrIntents(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, found := control.FindIntent(intentID)
+	intent, found := loadHerdrWorktreeIntent(t, repo, req)
 	if !found || intent.Status != state.HerdrIntentPlanned || intent.BranchCreated {
 		t.Fatalf("policy-blocked intent = %+v, found=%t", intent, found)
 	}
@@ -801,21 +753,11 @@ func TestRealizeHerdrWorktreeRecoversExpiredIssuedIntent(t *testing.T) {
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("initial realization error = %v", err)
 	}
-	locked := lockHerdrIntentsForTest(t, repo)
-	intent, found := locked.FindIntent(realized.Intent.ID)
-	if !found {
-		t.Fatalf("intent %s not found", realized.Intent.ID)
-	}
-	intent.Status = state.HerdrIntentIssued
-	intent.Resource = state.HerdrResource{}
-	intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
-	locked.UpsertIntent(intent)
-	if saveErr := locked.Save(); saveErr != nil {
-		t.Fatal(saveErr)
-	}
-	if unlockErr := locked.Unlock(); unlockErr != nil {
-		t.Fatal(unlockErr)
-	}
+	mutateHerdrTestIntent(t, repo, realized.Intent.ID, func(intent *state.HerdrIntent) {
+		intent.Status = state.HerdrIntentIssued
+		intent.Resource = state.HerdrResource{}
+		intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
+	})
 
 	mutationsBefore := len(runtime.mutations)
 	recovered, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
@@ -863,19 +805,9 @@ func TestRealizeHerdrWorktreeDoesNotOpenExpiredRealizedIntent(t *testing.T) {
 	}
 	runtime.workspaces = live
 
-	locked := lockHerdrIntentsForTest(t, repo)
-	intent, found := locked.FindIntent(realized.Intent.ID)
-	if !found {
-		t.Fatalf("intent %s not found", realized.Intent.ID)
-	}
-	intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
-	locked.UpsertIntent(intent)
-	if saveErr := locked.Save(); saveErr != nil {
-		t.Fatal(saveErr)
-	}
-	if unlockErr := locked.Unlock(); unlockErr != nil {
-		t.Fatal(unlockErr)
-	}
+	mutateHerdrTestIntent(t, repo, realized.Intent.ID, func(intent *state.HerdrIntent) {
+		intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
+	})
 
 	mutationsBefore := len(runtime.mutations)
 	_, retryErr := realizeHerdrWorktree(
@@ -900,7 +832,7 @@ func TestRealizeHerdrWorktreeDoesNotOpenExpiredRealizedIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, found = control.FindIntent(realized.Intent.ID)
+	intent, found := control.FindIntent(realized.Intent.ID)
 	if !found || intent.Status != state.HerdrIntentManualCleanupRequired {
 		t.Fatalf("expired realized intent = (%+v, %t)", intent, found)
 	}
@@ -931,30 +863,10 @@ func TestRealizeHerdrWorktreePreconditionFailureReleasesPlannedIntent(t *testing
 	if err == nil || errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("precondition failure error = %v, want released non-manual failure", err)
 	}
-	control, loadErr := state.LoadHerdrIntents(repo)
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	intentID, idErr := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
-	if idErr != nil {
-		t.Fatal(idErr)
-	}
-	if _, found := control.FindIntent(intentID); found {
+	if _, found := loadHerdrWorktreeIntent(t, repo, req); found {
 		t.Fatal("precondition failure kept the planned intent")
 	}
-	fullRef, refErr := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
-	if refErr != nil {
-		t.Fatal(refErr)
-	}
-	if _, found, observeErr := worktree.ObserveBranch(
-		context.Background(),
-		repo,
-		fullRef,
-	); observeErr != nil {
-		t.Fatal(observeErr)
-	} else if found {
-		t.Fatal("precondition failure kept the reserved branch")
-	}
+	requireHerdrBranch(t, repo, req, false)
 }
 
 func TestRealizeHerdrWorktreeRollsBackExpiredPlannedIntent(t *testing.T) {
@@ -970,23 +882,13 @@ func TestRealizeHerdrWorktreeRollsBackExpiredPlannedIntent(t *testing.T) {
 	if _, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks); !errors.Is(err, stop) {
 		t.Fatalf("initial planned error = %v", err)
 	}
-	locked := lockHerdrIntentsForTest(t, repo)
-	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
-	if err != nil {
-		t.Fatal(err)
+	planned := requireHerdrWorktreeIntent(t, repo, req)
+	if !planned.BranchCreated || planned.Status != state.HerdrIntentPlanned {
+		t.Fatalf("planned intent = %+v", planned)
 	}
-	intent, found := locked.FindIntent(intentID)
-	if !found || !intent.BranchCreated || intent.Status != state.HerdrIntentPlanned {
-		t.Fatalf("planned intent = (%+v,%t)", intent, found)
-	}
-	intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
-	locked.UpsertIntent(intent)
-	if saveErr := locked.Save(); saveErr != nil {
-		t.Fatal(saveErr)
-	}
-	if unlockErr := locked.Unlock(); unlockErr != nil {
-		t.Fatal(unlockErr)
-	}
+	mutateHerdrTestIntent(t, repo, planned.ID, func(intent *state.HerdrIntent) {
+		intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
+	})
 	runtime.observeErr = nil
 	routeCallsBefore := runtime.routeCalls
 
@@ -1004,22 +906,10 @@ func TestRealizeHerdrWorktreeRollsBackExpiredPlannedIntent(t *testing.T) {
 	if runtime.routeCalls != routeCallsBefore {
 		t.Fatal("expired planned retry validated the Herdr route before rollback")
 	}
-	control, err := state.LoadHerdrIntents(repo)
-	if err != nil {
-		t.Fatal(err)
+	if _, found := loadHerdrWorktreeIntent(t, repo, req); found {
+		t.Fatal("expired planned intent was not removed")
 	}
-	if _, found := control.FindIntent(intentID); found {
-		t.Fatalf("expired planned intent %s was not removed", intentID)
-	}
-	if head, found, err := worktree.ObserveBranch(
-		context.Background(),
-		repo,
-		intent.FullBranchRef,
-	); err != nil {
-		t.Fatal(err)
-	} else if found {
-		t.Fatalf("expired planned branch remains at %s", head)
-	}
+	requireHerdrBranch(t, repo, req, false)
 }
 
 func TestRealizeHerdrWorktreeRollsBackCanceledPlannedIntent(t *testing.T) {
@@ -1035,15 +925,7 @@ func TestRealizeHerdrWorktreeRollsBackCanceledPlannedIntent(t *testing.T) {
 	if _, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks); !errors.Is(err, stop) {
 		t.Fatalf("initial planned error = %v", err)
 	}
-	control, err := state.LoadHerdrIntents(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, found := control.FindIntent(intentID)
+	intent, found := loadHerdrWorktreeIntent(t, repo, req)
 	if !found || !intent.BranchCreated || intent.Status != state.HerdrIntentPlanned {
 		t.Fatalf("planned intent = (%+v,%t)", intent, found)
 	}
@@ -1065,12 +947,8 @@ func TestRealizeHerdrWorktreeRollsBackCanceledPlannedIntent(t *testing.T) {
 	if runtime.routeCalls != routeCallsBefore {
 		t.Fatal("canceled planned retry validated the Herdr route before rollback")
 	}
-	control, err = state.LoadHerdrIntents(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, found := control.FindIntent(intentID); found {
-		t.Fatalf("canceled planned intent %s was not removed", intentID)
+	if _, stillFound := loadHerdrWorktreeIntent(t, repo, req); stillFound {
+		t.Fatal("canceled planned intent was not removed")
 	}
 	if head, branchFound, observeErr := worktree.ObserveBranch(
 		context.Background(),
@@ -1096,24 +974,14 @@ func TestRealizeHerdrWorktreeKeepsExpiredPlannedIntentWhenBranchOwnershipWasNotS
 	if _, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks); !errors.Is(err, stop) {
 		t.Fatalf("initial planned error = %v", err)
 	}
-	locked := lockHerdrIntentsForTest(t, repo)
-	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
-	if err != nil {
-		t.Fatal(err)
+	planned := requireHerdrWorktreeIntent(t, repo, req)
+	if !planned.BranchCreated {
+		t.Fatalf("planned intent = %+v", planned)
 	}
-	intent, found := locked.FindIntent(intentID)
-	if !found || !intent.BranchCreated {
-		t.Fatalf("planned intent = (%+v,%t)", intent, found)
-	}
-	intent.BranchCreated = false
-	intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
-	locked.UpsertIntent(intent)
-	if saveErr := locked.Save(); saveErr != nil {
-		t.Fatal(saveErr)
-	}
-	if unlockErr := locked.Unlock(); unlockErr != nil {
-		t.Fatal(unlockErr)
-	}
+	mutateHerdrTestIntent(t, repo, planned.ID, func(intent *state.HerdrIntent) {
+		intent.BranchCreated = false
+		intent.ExpiresUnixMS = hooks.Now().Add(-time.Second).UnixMilli()
+	})
 	runtime.observeErr = nil
 
 	if _, realizeErr := realizeHerdrWorktree(
@@ -1124,20 +992,12 @@ func TestRealizeHerdrWorktreeKeepsExpiredPlannedIntentWhenBranchOwnershipWasNotS
 	); !errors.Is(realizeErr, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("ambiguous branch ownership error = %v", realizeErr)
 	}
-	control, err := state.LoadHerdrIntents(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	saved, found := control.FindIntent(intentID)
-	if !found || saved.Status != state.HerdrIntentManualCleanupRequired ||
+	saved := requireHerdrWorktreeIntent(t, repo, req)
+	if saved.Status != state.HerdrIntentManualCleanupRequired ||
 		!strings.Contains(saved.Failure, "branch exists without persisted ownership") {
-		t.Fatalf("ambiguous ownership intent = (%+v,%t)", saved, found)
+		t.Fatalf("ambiguous ownership intent = %+v", saved)
 	}
-	if head, found, err := worktree.ObserveBranch(context.Background(), repo, intent.FullBranchRef); err != nil {
-		t.Fatal(err)
-	} else if !found || head != intent.ExpectedHead {
-		t.Fatalf("ambiguous branch = (%s,%t), want preserved at %s", head, found, intent.ExpectedHead)
-	}
+	requireHerdrBranch(t, repo, req, true)
 }
 
 func TestRealizeHerdrWorktreePreservesIssuedIntentWhenMutationContextIsCanceled(t *testing.T) {
@@ -1163,15 +1023,7 @@ func TestRealizeHerdrWorktreePreservesIssuedIntentWhenMutationContextIsCanceled(
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled recovery result = %+v, err=%v", result, err)
 	}
-	control, err := state.LoadHerdrIntents(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, found := control.FindIntent(intentID)
+	intent, found := loadHerdrWorktreeIntent(t, repo, req)
 	if !found || intent.Status != state.HerdrIntentIssued {
 		t.Fatalf("canceled recovery intent = (%+v,%t)", intent, found)
 	}
@@ -1338,13 +1190,7 @@ func TestRealizeHerdrWorktreeRejectionWithGitFailureFailsClosedOnRetry(t *testin
 	if len(runtime.mutations) != mutationCount {
 		t.Fatalf("double-failure retry mutations = %d, want %d", len(runtime.mutations), mutationCount)
 	}
-	fullRef, refErr := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
-	if refErr != nil {
-		t.Fatal(refErr)
-	}
-	if _, found, observeErr := worktree.ObserveBranch(context.Background(), repo, fullRef); observeErr != nil || !found {
-		t.Fatalf("fail-closed retry branch = found:%t err:%v, want preserved", found, observeErr)
-	}
+	requireHerdrBranch(t, repo, req, true)
 }
 
 func TestRealizeHerdrWorktreeAdoptsExistingBranchWithoutBaseArgument(t *testing.T) {
@@ -1811,19 +1657,7 @@ func TestRealizeHerdrWorktreeRejectionSaveFailureStillRollsBack(t *testing.T) {
 	if !errors.Is(err, herdrrun.ErrMutationRejected) || errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("rejected create with failing journal error = %v", err)
 	}
-	fullRef, refErr := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
-	if refErr != nil {
-		t.Fatal(refErr)
-	}
-	if _, found, observeErr := worktree.ObserveBranch(
-		context.Background(),
-		repo,
-		fullRef,
-	); observeErr != nil {
-		t.Fatal(observeErr)
-	} else if found {
-		t.Fatal("rejection rollback with failing journal kept the reserved branch")
-	}
+	requireHerdrBranch(t, repo, req, false)
 }
 
 func TestRealizeHerdrCoordinatorPolicyFailureLeavesNoIntent(t *testing.T) {
@@ -2012,22 +1846,8 @@ func TestRealizeHerdrWorktreeRejectsForeignCoordinatorBeforeChildMutation(t *tes
 	if len(runtime.mutations) != 1 {
 		t.Fatalf("foreign coordinator issued child mutation; calls=%d", len(runtime.mutations))
 	}
-	fullRef, refErr := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
-	if refErr != nil {
-		t.Fatal(refErr)
-	}
-	if _, found, observeErr := worktree.ObserveBranch(context.Background(), repo, fullRef); observeErr != nil || found {
-		t.Fatalf("released branch reservation state = found:%t err:%v", found, observeErr)
-	}
-	control, loadErr := state.LoadHerdrIntents(repo)
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	intentID, idErr := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
-	if idErr != nil {
-		t.Fatal(idErr)
-	}
-	if _, found := control.FindIntent(intentID); found {
+	requireHerdrBranch(t, repo, req, false)
+	if _, found := loadHerdrWorktreeIntent(t, repo, req); found {
 		t.Fatal("foreign coordinator kept the planned child intent")
 	}
 }
@@ -2181,6 +2001,63 @@ func lockHerdrIntentsForTest(t *testing.T, repo string) *testHerdrIntentsLock {
 		t.Fatal(err)
 	}
 	return &testHerdrIntentsLock{project: project, LockedHerdrIntents: view}
+}
+
+// mutateHerdrTestIntent edits one saved intent under the combined launch lock.
+func mutateHerdrTestIntent(t *testing.T, repo, intentID string, mutate func(*state.HerdrIntent)) {
+	t.Helper()
+	locked := lockHerdrIntentsForTest(t, repo)
+	intent, found := locked.FindIntent(intentID)
+	if !found {
+		t.Fatalf("intent %s not found", intentID)
+	}
+	mutate(&intent)
+	locked.UpsertIntent(intent)
+	if err := locked.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// requireHerdrWorktreeIntent loads the journal row for req, failing on absence.
+func requireHerdrWorktreeIntent(t *testing.T, repo string, req HerdrWorktreeRequest) state.HerdrIntent {
+	t.Helper()
+	intent, found := loadHerdrWorktreeIntent(t, repo, req)
+	if !found {
+		t.Fatalf("intent for %s/%d/%s not found", req.Parent, req.IssueNum, req.TaskID)
+	}
+	return intent
+}
+
+func loadHerdrWorktreeIntent(t *testing.T, repo string, req HerdrWorktreeRequest) (state.HerdrIntent, bool) {
+	t.Helper()
+	control, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrWorktreeIntentID(req.Parent, "", req.IssueNum, req.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return control.FindIntent(intentID)
+}
+
+// requireHerdrBranch asserts the reservation state of req's branch ref.
+func requireHerdrBranch(t *testing.T, repo string, req HerdrWorktreeRequest, want bool) {
+	t.Helper()
+	fullRef, err := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, found, err := worktree.ObserveBranch(context.Background(), repo, fullRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found != want {
+		t.Fatalf("branch %s found=%t, want %t", fullRef, found, want)
+	}
 }
 
 func newHerdrRealizeRepo(t *testing.T) string {

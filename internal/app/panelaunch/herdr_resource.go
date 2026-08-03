@@ -26,7 +26,6 @@ func realizeDeferred(intent state.HerdrIntent) (HerdrRealizeResult, error) {
 	}, ErrHerdrLauncherReadinessDeferred
 }
 
-
 func workspacesWithLabel(
 	workspaces []herdrrun.WorkspaceObservation,
 	label string,
