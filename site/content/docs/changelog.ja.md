@@ -9,6 +9,24 @@ yomi: changelog
 
 リリースのハイライトを新しい順に並べています。各タグには [GitHub release](https://github.com/butaosuinu/fanout/releases) があり、完全なコミット一覧とビルド済みバイナリ（darwin / linux × amd64 / arm64）を含みます。バージョンは git タグから ldflags 経由で埋め込まれます。`fanout --check-update` で自分の版を確認できます。
 
+## v0.16.0 (2026-08-04)
+
+- **Web ダッシュボードの diff ビュアー。** Session 行の diff 列、または詳細ドロワーの**変更を表示**から、その worktree の merge-base 基準の差分を読めます。commit 済み、staged、unstaged、untracked を 1 つの表示にまとめます。
+  ファイルは syntax highlight 付きで描画し、サイドバーがディレクトリ別にまとめます。パネルは左端をドラッグして広げるか全画面に切り替えられ、外観とライト / ダークの diff テーマは歯車メニューで選んで origin ごとに保存します。
+  サーバ側はダッシュボードと同じ token gate 下の read-only な `GET /api/diff` で、500 ファイル・1 MiB 応答が上限です。バイナリと上限超のファイルは一覧に残して patch を省きます。
+  [モニタリング]({{< relref "/docs/monitoring" >}}) を参照。
+- **GitHub API 呼び出しの削減。** TUI とダッシュボードは子 issue の詳細と PR 状態を issue ごとではなく GraphQL バッチで取得し、TUI の wave graph 更新は既定 60 秒の別フェーズへ分け、tick をまたいで cache を保ちます。
+  ダッシュボードは誰も見ていない間 GitHub の tick を止め、watcher は 1 cycle 内の列挙結果を再利用して launch 後の再取得をやめました。
+  レート制限の応答を受け取った後は、issue と PR の取得が reset 時刻まで `gh` を起動せず、reset 時刻が分からない場合は 30 秒から最大 15 分までバックオフします。
+  [モニタリング]({{< relref "/docs/monitoring" >}}) を参照。
+- **herdr backend は stable の herdr 0.7.5 以上が必要になりました。** 0.7.3 完全一致の pin をやめ、CLI と server が同じ stable version で動いていれば新しい stable も受理します。protocol、API schema、CLI help、platform、release digest では拒否しません。
+  prerelease と解釈できない version は従来どおり fail closed です。method や field の preflight もやめたので、失敗した呼び出しは `herdr method "<name>" is unavailable` を返します。
+  [herdr backend]({{< relref "/docs/herdr-backend" >}}) と [トラブルシューティング]({{< relref "/docs/troubleshooting" >}}) を参照。
+- **エージェント連携の修正。** Codex の `$pr-watch` は本文を取らない probe でコメントの有無を先に確定するため、cheap snapshot でコメントを取りこぼしません。
+  Codex レビューは高信頼度の P0-P2 に範囲を絞り、自動修正は 1 起動あたり 3 wave で停止します。
+
+[リリースノート →](https://github.com/butaosuinu/fanout/releases/tag/v0.16.0)
+
 ## v0.15.0 (2026-07-23)
 
 - **起動レーン別の Plan Mode 設定。** `newSessionPlanMode`、`orchestratorPlanMode`、`childPlanMode` で、manual、coordinator、attach、orchestrator、issue / Project child、`fanout plan` task、watcher の起動姿勢を設定できるようになりました。
