@@ -11,6 +11,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/fanset"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
@@ -221,7 +222,7 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 			issue.Body = detail.Body
 		}
 	}
-	result := executePlan(launchCfg, lg, rt.Info, rt.Backend, plan.Targets, hydrateLaunchBody, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
+	result := executePlan(launchCfg, lg, rt.Info, rt.Backend, rt.Herdr, plan.Targets, hydrateLaunchBody, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
 	printSummary(plan, result, cfg, lg, c, commandName)
 
 	// Register tmux keybindings so the user can pop the read-only dashboard
@@ -229,7 +230,7 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 	// fanout pane. The bindings resolve the repo from the pressing pane at
 	// keypress, so they work from child worktree panes and across repos.
 	// Best-effort, live runs only.
-	if !cfg.DryRun && result.Created > 0 {
+	if shouldBindRuntimeKeys(cfg.DryRun, result.Created, rt.BackendSelection.Name) {
 		bindKeys(lg, resolvedSettings.DashboardKeybind)
 	}
 
@@ -275,8 +276,8 @@ func effectiveIssueLaunchConfig(cfg *cliflags.Config, resolvedSettings settings.
 	return &launchCfg
 }
 
-func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, runtimeBackend backend.Backend, targets []ghissue.Issue, hydrateBody func(*ghissue.Issue), resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Backend: runtimeBackend, Recorder: recorder, Palette: c, CommandName: commandName}
+func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, runtimeBackend backend.Backend, herdr *herdrrun.OwnedSession, targets []ghissue.Issue, hydrateBody func(*ghissue.Issue), resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Backend: runtimeBackend, Herdr: herdr, Recorder: recorder, Palette: c, CommandName: commandName}
 	var createdPaneIDs []string
 	var notices []string
 	created, failed := executeFailFast(

@@ -21,11 +21,10 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
-func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config) (fanouttui.WatcherRunner, time.Duration, string, error) {
+func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, includeHostTmux bool) (fanouttui.WatcherRunner, time.Duration, string, error) {
 	if !resolvedSettings.Watcher {
 		return nil, 0, "", nil
 	}
@@ -37,7 +36,7 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 	if err := gh.EnsureLabel(resolvedSettings.WatcherRunningLabel); err != nil {
 		return nil, 0, "", fmt.Errorf("ensure running label %q: %w", resolvedSettings.WatcherRunningLabel, err)
 	}
-	livePanes := &watchLivePaneCache{list: tmuxbackend.New().ListLiveForIdentity}
+	livePanes := &watchLivePaneCache{list: runtimeListLiveForProject(projectRoot, includeHostTmux)}
 	watcher := &tuiWatcher{livePanes: livePanes}
 	io := watch.IO{
 		ListLabeled: gh.ListOpenIssuesWithLabel,
@@ -155,7 +154,7 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 		return panelaunch.Result{}, watch.ErrAlreadyFanned
 	}
 	req := panelaunch.NewWatchRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Herdr: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.LaunchWithResult(req)
 	if !ok {
 		return panelaunch.Result{}, bufferedLaunchError(stdout, stderr, "create watch pane")

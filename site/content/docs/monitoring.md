@@ -25,7 +25,7 @@ fanout   # start the persistent tmux console
 
 From a plain shell it creates or attaches to fanout's managed tmux session; from inside tmux it turns the current pane into the console. The console reads `.fanout/state.json`, periodically refreshes the issue and PR state of recorded panes, and shows each row's worktree change size as `+X/-Y` and whether it holds uncommitted work as `dirty` / `clean`. The `RUN` column shows the agent's execution state as a glyph — `●` running, `✓` done from the launch wrapper, plus `◐` working, `◇` plan, `◆` blocked, `○` idle when agent hooks report them — and the detail panel shows the same value as `run=`. When you focus a recorded pane with the mouse or tmux `prefix` movement keys, the selected TUI row follows that pane.
 
-The console is backend-aware: the header names the selected runtime backend and why it was selected — `backend: herdr (HERDR_ENV)`, for example — and the detail panel shows each row's `backend=` and `pane=` identity. Under the observation-only [herdr backend]({{< relref "/docs/herdr-backend" >}}) the console is read-only: launch, focus, close, and peek are disabled, and the help screen shows the reason next to each key.
+The console is backend-aware: the header names the selected runtime backend and why it was selected — `backend: herdr (HERDR_ENV)`, for example — and the detail panel shows each row's `backend=` and `pane=` identity. Under the [herdr backend]({{< relref "/docs/herdr-backend" >}}), interactive console actions remain read-only: launch, focus, close, and peek are disabled, and the help screen shows the reason next to each key. CLI and label-watcher launches use the owned runtime path instead.
 
 {{< diagram "console" >}}
 

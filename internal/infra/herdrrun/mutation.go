@@ -195,7 +195,7 @@ func validateEmptyPluginList(data []byte) error {
 	if err := decodeOne(data, &envelope); err != nil {
 		return methodUnavailable("plugin.list")
 	}
-	if envelope.ID != "cli:plugin:list" || envelope.Result == nil ||
+	if envelope.ID != "cli:plugin" || envelope.Result == nil ||
 		envelope.Result.Type != "plugin_list" || envelope.Result.Plugins == nil {
 		return methodUnavailable("plugin.list")
 	}
@@ -309,7 +309,6 @@ func worktreeCreateArgs(req WorktreeCreateRequest) []string {
 		"--path", req.Path,
 		"--label", req.Label,
 		"--no-focus",
-		"--json",
 	)
 }
 
@@ -348,7 +347,6 @@ func worktreeOpenArgs(req WorktreeOpenRequest) []string {
 		"--path", req.Path,
 		"--label", req.Label,
 		"--no-focus",
-		"--json",
 	}
 }
 

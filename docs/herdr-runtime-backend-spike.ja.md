@@ -2,7 +2,7 @@
 
 ステータス: 0.7.5 wave 2 の実機検証を完了し、pane-targeted surface を使う fanout-owned herdr session の実装を解禁する。
 判断主体はユーザー、floor 0.7.5 への改訂日は 2026-07-22 JST、crash 安全機構の tmux-parity 密度への簡素化改訂日は 2026-07-27 JST である。
-この判断は後続 issue の実装条件を定めるものであり、この PR はコードを変更しない。
+この判断は後続 issue の実装条件を定める。
 0.7.5 core runtime matrix と live-agent surface、0.7.4 metadata token reporting と sidebar row layout は実測済みである。
 この文書の日付は日本標準時（JST、UTC+09:00）で記す。
 core runtime の検証日は 2026-07-16、2026-07-21、2026-07-22、metadata token reporting と sidebar row layout の追試日は 2026-07-17 である。
@@ -16,10 +16,10 @@ schema、method、field、CLI help、protocol、behavior profile、active manife
 fanout の herdr backend wave 2 は CLI-first とし、集約読みには CLI wrapper の `herdr api snapshot` を使う。
 raw Socket client は実装しない。
 version / session の検査と owned session の検査後、snapshot / list / wait、targeted read、owned server の bootstrap、launch、cleanup、focus、emitter、metadata、自動 nudge の送信契約を後続実装へ解禁する。
-console / coordinator / agent launch は加えて #528 の direct-launch 契約完了を要求する。
+issue / Project / plan / watcher の coordinator / agent launch は #528 で direct-launch 契約を実装した。interactive TUI の launch は #530 まで read-only とする。
 2026-07-27 のユーザー決定により、crash 安全機構は「簡素化方針」の判断基準で tmux backend と同水準の密度にする。
 自動 mutation は state lock、送信直前の identity 再照合、mutation 直前の最小意図記録、事後条件検査を通し、応答喪失は再実行時の存在確認で採用または fail-closed `manual_cleanup_required` にする。
-linked worktree 間の intent と console は canonical git common directory 配下の単一 intent journal を正典とし、final row と telemetry routing は owning worktree の `state.json` pane row を正典とする（intent は journal、final は state.json の二層。final row の確定は #528）。
+linked worktree 間の intent と console は canonical git common directory 配下の単一 intent journal を正典とし、final row と telemetry routing は owning worktree の `state.json` pane row を正典とする（intent は journal、final は state.json の二層）。
 Herdr backend の `--team` は #528 の fail-closed gate で最初の mutation 前に拒否し、#568 が registry-backed peer 解決を導入した後に再評価する。
 #552 の Herdr nudge 実装は #568 の完了を前提とする。
 child cleanup は保存済み identity の照合後に `worktree remove` を発行し、branch は herdr に削除させず fanout の compare-and-delete だけが削除する。
@@ -194,7 +194,7 @@ intent 行は絶対 expiry を持ち、発行済み mutation は再発行せず�
 journal の intent 行と `state.json` の final row は raw workload env value を保持しない。
 mutation は combined launch lock 下で snapshot と identity を照合し、intent の atomic save、bounded Herdr CLI call、事後条件確認まで同じ lock を保持する。
 launcher の lock-free read は rename 前後どちらかの完全な JSON だけを受理し、decode failure は intent 不在として待たず fail closed にする。
-各 intent 行は起動元の physical worktree root と task provenance を保持する。final row は owning worktree の `.fanout/state.json` pane row として確定し（tmux backend と同じ所在。確定は #528）、intent 行は journal の外へ複製しない。
+各 intent 行は起動元の physical worktree root と task provenance を保持する。final row は owning worktree の `.fanout/state.json` pane row として確定し（tmux backend と同じ所在）、intent 行は journal の外へ複製しない。
 registry-backed peer 移行までは state-dependent な team 共通経路へ Herdr row を渡さず、`--team` の拒否を journal save または SQLite open より先に確定する。
 status、lifecycle、backend stickiness、session view は worktree-local state（tmux row と Herdr final row）と intent journal を集約して読む。
 この文書でいう Herdr の `state lock` と `state save` は、以後この journal の lock と atomic replace（final row の確定では加えて owning worktree の `state.json`）を指す。
@@ -210,7 +210,7 @@ status、close、merge、cleanup は保存済み key をそのまま routing し
 
 config と plugin registry は全 XDG directory の差し替えで default state から隔離できる。
 supervisor の全 Herdr CLI call と server child は SHA-256 で pin した owned copy の Herdr binary を使う。
-owned config は `[update] manifest_check = false` を固定して background remote manifest check を無効にし、#528 以降は `[terminal] default_shell` を絶対 fanout launcher path、`shell_mode` を `non_login` に固定する。
+owned config は `[update] manifest_check = false` を固定して background remote manifest check を無効にし、`[terminal] default_shell` を絶対 fanout launcher path、`shell_mode` を `non_login` に固定する。
 server env の `FANOUT_HERDR_PANE_LAUNCHER=1` は no-arg TUI より先に non-shell launcher mode へ dispatch する。
 server env の `FANOUT_HERDR_LAUNCHER_MAX_WAIT_MS` も `300000` に固定する。
 #427 の hook emitter は絶対 fanout path を使い、launcher control env は operation child env から除く。
@@ -612,7 +612,7 @@ OS process 情報から解決した実 executable も発行した absolute path 
 したがって plain shell への command 送信は diagnostic probe に限り、自動 launch には使わない。
 
 追加の隔離 probe では owned config の `terminal.default_shell` を absolute launcher、`shell_mode` を `non_login` に固定した。
-launcher は exact checkout cwd、`HERDR_PANE_ID=w3:p1`、`HERDR_WORKSPACE_ID=w3`、operation nonce を受け、`pane wait-output` は `FANOUT_READY:<nonce>` を検出した。
+launcher は exact checkout cwd、`HERDR_PANE_ID=w3:p1`、`HERDR_WORKSPACE_ID=w3`、operation nonce を受け、`pane wait-output` は `FANOUT_HERDR_READY:<nonce>` を検出した。
 続いて `pane run w3:p1 FANOUT_EXEC:<nonce>` を一回送ると、launcher が absolute fake process へ `FANOUT_AGENT_PROBE=value with spaces`、一要素の `arg with spaces`、exact cwd を渡した。
 最初の pane で process 起動直後に一回だけ出した marker は buffer に残らなかったため、production launcher は有限 budget 内で marker を再送する。
 この結果から、owned launcher readiness、operation-bound token、agent 検出、rename、process chain 照合を 0.7.5 の launch contract にする。
@@ -631,7 +631,7 @@ env file は private namespace gate 済みの 0700 directory 配下に exclusive
 
 launcher の bootstrap protocol は次のとおりとする。
 launcher は process start 時に `HERDR_PANE_ID` / `HERDR_WORKSPACE_ID` と exact cwd に一致する未失効 intent を server env の `FANOUT_HERDR_CONTROL_PATH` から lock-free read で採用し、shell、line editor、checkout 内 code を起動しない。
-採用後は `FANOUT_READY:<launch-nonce>` を直ちに一回、その後は一秒ごとに bootstrap deadline（hard 300 秒と intent に保存した絶対 expiry の早い方）まで出す。
+採用後は `FANOUT_HERDR_READY:<launch-nonce>` を直ちに一回、その後は一秒ごとに bootstrap deadline（hard 300 秒と intent に保存した絶対 expiry の早い方）まで出す。
 一回だけの即時 marker は capture 前に失われた実測があるため、parent の readiness 判定は再送 marker の `pane wait-output` 検出と launcher process identity の照合で行う。
 matching intent がないまま deadline へ達した launcher は入力を受理せず非ゼロで終了する。
 token の byte 完全一致以外の入力、先行入力、別 nonce は拒否し、child を起動せず終了する。
@@ -1334,7 +1334,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   server loss 後の restart は明示操作（実装は #530）が marker / lease と saved process / socket 不在の照合後に一回だけ spawn し、結果不明は fail closed にする。
   console detach 後も server を存続させ、最後の child close では止めず、active row / intent と foreign resource のない明示 repo-session shutdown（実装は #530。空状態確認と同じ save の shutdown intent 行で並行 mutation を fence する）だけを teardown とする。
 - herdr backend wave 2 は snapshot / list / wait、targeted content read、root coordinator、worktree / agent launch、focus、nudge、metadata、console / coordinator close、child cleanup を後続実装へ解禁する。
-  console / coordinator / agent launch は #528 の direct-launch 契約完了まで fail closed にする。
+  issue / Project / plan / watcher の coordinator / agent launch は #528 の direct-launch 契約を使う。interactive TUI の launch は #530 まで read-only とする。
   `--team` と #552 の Herdr nudge 実装は例外とし、#528 の fail-closed gate は #568 が peer 登録、plan preseed / cleanup、自己識別、宛先解決を `state.json` の canonical Herdr pane row へ移行するまで最初の mutation 前に拒否する。
   移行前の Herdr row を worktree-local `state.json` に複製せず、tmux 用の state-dependent peer / nudge 経路へ渡さない。
   各 operation は保存済み identity と live snapshot を直前に再照合し、operation 固有の事後条件を検査する。

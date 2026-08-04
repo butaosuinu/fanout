@@ -639,6 +639,8 @@ func TestWorkspaceHasHerdrResourceMatchesSavedRootAmongMultiplePanes(t *testing.
 	observation := herdrrun.WorkspaceObservation{
 		WorkspaceID: expected.WorkspaceID,
 		Label:       expected.Label,
+		RepoKey:     "/repo/.git",
+		RepoRoot:    "/repo",
 		Panes: []herdrrun.WorkspacePaneObservation{
 			{
 				Pane: backend.PaneRef{
@@ -659,6 +661,11 @@ func TestWorkspaceHasHerdrResourceMatchesSavedRootAmongMultiplePanes(t *testing.
 	if !workspaceHasHerdrResource(observation, expected) {
 		t.Fatal("saved root pane was not matched in multi-pane workspace")
 	}
+	expected.RepoKey = "/foreign/.git"
+	if workspaceHasHerdrResource(observation, expected) {
+		t.Fatal("workspace with mismatched saved repository provenance was accepted")
+	}
+	expected.RepoKey = ""
 	observation.Panes = observation.Panes[1:]
 	if workspaceHasHerdrResource(observation, expected) {
 		t.Fatal("workspace without the saved root pane was accepted")

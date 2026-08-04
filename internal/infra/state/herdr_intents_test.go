@@ -376,6 +376,21 @@ func TestHerdrControlIssuedWorktreeMayRetainRealizedResourceForOpenRecovery(t *t
 	}
 }
 
+func TestHerdrControlRejectsResourceCurrentPathMismatch(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	intent := testHerdrWorktreeIntent(repo, "425", 426, "mismatch")
+	intent.Status = HerdrIntentRealized
+	intent.Resource = HerdrResource{
+		WorkspaceID: "w2", Label: intent.WorkspaceLabel,
+		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: repo,
+		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
+	}
+	err := validateHerdrIntent(intent)
+	if err == nil || !strings.Contains(err.Error(), "current path") {
+		t.Fatalf("error = %v, want current-path rejection", err)
+	}
+}
+
 func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, repo)
 	if err != nil {

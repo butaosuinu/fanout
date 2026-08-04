@@ -396,7 +396,7 @@ func (b *Backend) probeContext(ctx context.Context) (probeResult, error) {
 	}
 
 	statusArgs := []string{"status", "--json"}
-	// Use --session only to discover an observation-only named session. Once a
+	// Use --session only to discover an external named session. Once a
 	// socket is known, every call selects it explicitly because HERDR_SOCKET_PATH
 	// takes precedence over HERDR_SESSION.
 	if initial.socketPath == "" {

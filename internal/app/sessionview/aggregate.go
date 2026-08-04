@@ -652,7 +652,7 @@ func herdrIdentityMatches(pane state.Pane, current backend.LivePane) bool {
 }
 
 // herdrRowUnsupported identifies persisted rows that predate the authoritative
-// identity baseline required by the observation-only v1 matcher. These rows are
+// identity baseline required by the Herdr runtime matcher. These rows are
 // not stale: without the saved baseline there is no prior terminal or logical
 // conversation to compare. They remain explicitly unsupported and are never
 // filled from the current snapshot, which would adopt a potentially reused

@@ -31,12 +31,15 @@ type Store struct {
 // @manual with non-GitHub numbers that only need to be unique under that parent.
 // TaskID is an additive key for issue-less task rows.
 type Pane struct {
-	Parent     string `json:"parent"`
-	IssueNum   int    `json:"issueNum"`
-	TaskID     string `json:"taskId,omitempty"`
-	Kind       string `json:"kind,omitempty"`
-	Slug       string `json:"slug"`
-	BranchName string `json:"branchName"`
+	Parent string `json:"parent"`
+	// RuntimeParent binds synthetic coordinator rows back to the actual issue,
+	// Project, or plan owner that selected their runtime backend.
+	RuntimeParent string `json:"runtimeParent,omitempty"`
+	IssueNum      int    `json:"issueNum"`
+	TaskID        string `json:"taskId,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	Slug          string `json:"slug"`
+	BranchName    string `json:"branchName"`
 	// BaseBranch is the resolved base branch the worktree branched from
 	// (e.g. "main"). Legacy rows recorded before this field load as "".
 	BaseBranch string `json:"baseBranch,omitempty"`

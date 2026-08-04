@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -37,7 +38,6 @@ const (
 	maxOwnerMarkerBytes     = 64 << 10
 	maxUnixSocketPathBytes  = 103
 	defaultRuntimeParent    = "/tmp"
-	ownedConfigContents     = "[update]\nmanifest_check = false\n"
 	configEnv               = "HERDR_CONFIG_PATH"
 	clientSocketEnv         = "HERDR_CLIENT_SOCKET_PATH"
 	xdgConfigEnv            = "XDG_CONFIG_HOME"
@@ -60,6 +60,10 @@ type OwnedSession struct {
 	Session          string
 	SocketPath       string
 	ClientSocketPath string
+	GitCommonDir     string
+	RuntimeDir       string
+	LauncherPath     string
+	ControlPath      string
 
 	backend *Backend
 }
@@ -132,6 +136,8 @@ type ownerMarker struct {
 	XDGDataHome          string `json:"xdg_data_home"`
 	XDGCacheHome         string `json:"xdg_cache_home"`
 	ConfigPath           string `json:"config_path"`
+	LauncherPath         string `json:"launcher_path"`
+	LauncherSHA256       string `json:"launcher_sha256"`
 }
 
 type supervisorLease struct {
@@ -161,6 +167,7 @@ type ownedLayout struct {
 	xdgCacheHome     string
 	configPath       string
 	binaryDir        string
+	launcherDir      string
 }
 
 type pathIdentity struct {
@@ -197,6 +204,7 @@ func EnsureOwned(ctx context.Context, opts OwnedOptions) (*OwnedSession, error) 
 	return ensureOwned(ctx, opts, nil, startOwnedSupervisor)
 }
 
+//nolint:gocognit,gocyclo,funlen // Admission is one ordered fail-closed transaction; splitting it would obscure cleanup ownership.
 func ensureOwned(
 	ctx context.Context,
 	opts OwnedOptions,
@@ -254,6 +262,13 @@ func ensureOwned(
 	if err != nil {
 		return nil, err
 	}
+	launcher, err := pinOwnedLauncher(layout)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureOwnedConfig(layout, launcher.path); err != nil {
+		return nil, err
+	}
 	admitted, err = pinOwnedBinary(layout, admitted)
 	if err != nil {
 		return nil, err
@@ -268,9 +283,9 @@ func ensureOwned(
 	}
 	var started *startedSupervisor
 	if !found {
-		marker, started, err = claimOwnedSession(layout, commonDir, commonIdentity, session, admitted, start, writeMarker)
+		marker, started, err = claimOwnedSession(layout, commonDir, commonIdentity, session, admitted, launcher, start, writeMarker)
 	} else {
-		err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted)
+		err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted, launcher)
 		if err == nil {
 			err = verifyLiveSupervisor(layout.supervisorLock, marker)
 		}
@@ -297,15 +312,21 @@ func ensureOwned(
 		return nil, err
 	}
 	started.reapAsync()
-	return &OwnedSession{Session: session, SocketPath: layout.socketPath, ClientSocketPath: layout.clientSocketPath, backend: backend}, nil
+	return &OwnedSession{
+		Session: session, SocketPath: layout.socketPath, ClientSocketPath: layout.clientSocketPath,
+		GitCommonDir: commonDir, RuntimeDir: layout.runtimeDir, LauncherPath: launcher.path,
+		ControlPath: filepath.Join(commonDir, "fanout", "herdr-intents.json"), backend: backend,
+	}, nil
 }
 
+//nolint:funlen // The ownership marker is built beside the one supervisor claim whose identity it records.
 func claimOwnedSession(
 	layout ownedLayout,
 	commonDir string,
 	commonIdentity pathIdentity,
 	session string,
 	admitted binaryAdmission,
+	launcher binaryAdmission,
 	start supervisorStarter,
 	writeMarker ownerMarkerWriter,
 ) (ownerMarker, *startedSupervisor, error) {
@@ -345,7 +366,8 @@ func claimOwnedSession(
 		SupervisorPID: started.pid, SupervisorStartToken: startToken,
 		XDGConfigHome: layout.xdgConfigHome, XDGStateHome: layout.xdgStateHome,
 		XDGDataHome: layout.xdgDataHome, XDGCacheHome: layout.xdgCacheHome,
-		ConfigPath: layout.configPath,
+		ConfigPath:   layout.configPath,
+		LauncherPath: launcher.path, LauncherSHA256: launcher.sha256,
 	}
 	if err := writeMarker(layout.markerPath, marker); err != nil {
 		return marker, started, err
@@ -465,6 +487,7 @@ func validateOwnedReady(ctx context.Context, backend *Backend) error {
 	return validatePrivateSocket(marker.ClientSocketPath)
 }
 
+//nolint:funlen // Revalidation deliberately keeps the ownership lock through every identity check.
 func (b *Backend) acquireOwnedOperation(ctx context.Context) (ownedAdmission, *os.File, error) {
 	if b == nil || b.owner == nil {
 		return ownedAdmission{}, nil, fmt.Errorf("herdr mutation requires a fanout-owned session")
@@ -494,7 +517,8 @@ func (b *Backend) acquireOwnedOperation(ctx context.Context) (ownedAdmission, *o
 		admitted := binaryAdmission{
 			path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion,
 		}
-		err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted)
+		launcher := binaryAdmission{path: marker.LauncherPath, sha256: marker.LauncherSHA256}
+		err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted, launcher)
 	}
 	if err == nil {
 		err = verifyLiveSupervisor(layout.supervisorLock, marker)
@@ -584,7 +608,7 @@ func prepareOwnedLayout(runtimeBase, session string) (ownedLayout, error) {
 		clientSocketPath: filepath.Join(runtimeDir, "herdr-client.sock"), xdgConfigHome: configHome,
 		xdgStateHome: filepath.Join(runtimeDir, "xdg-state"), xdgDataHome: filepath.Join(runtimeDir, "xdg-data"),
 		xdgCacheHome: filepath.Join(runtimeDir, "xdg-cache"), configPath: filepath.Join(configHome, "herdr", "config.toml"),
-		binaryDir: filepath.Join(runtimeDir, "binary"),
+		binaryDir: filepath.Join(runtimeDir, "binary"), launcherDir: filepath.Join(runtimeDir, "launcher"),
 	}
 	for _, path := range []string{layout.socketPath, layout.clientSocketPath} {
 		if len(path) > maxUnixSocketPathBytes {
@@ -595,13 +619,10 @@ func prepareOwnedLayout(runtimeBase, session string) (ownedLayout, error) {
 }
 
 func ensureOwnedLayout(layout ownedLayout) error {
-	for _, dir := range []string{layout.runtimeDir, layout.xdgConfigHome, layout.xdgStateHome, layout.xdgDataHome, layout.xdgCacheHome, filepath.Dir(layout.configPath), layout.binaryDir} {
+	for _, dir := range []string{layout.runtimeDir, layout.xdgConfigHome, layout.xdgStateHome, layout.xdgDataHome, layout.xdgCacheHome, filepath.Dir(layout.configPath), layout.binaryDir, layout.launcherDir} {
 		if err := ensurePrivateDir(dir); err != nil {
 			return fmt.Errorf("prepare herdr owned directory: %w", err)
 		}
-	}
-	if err := ensurePrivateContents(layout.configPath, []byte(ownedConfigContents)); err != nil {
-		return err
 	}
 	logFile, err := openPrivateAppendFile(filepath.Join(layout.runtimeDir, ownedSupervisorLogName))
 	if err != nil {
@@ -610,13 +631,13 @@ func ensureOwnedLayout(layout ownedLayout) error {
 	return logFile.Close()
 }
 
-func validateOwnedLayout(layout ownedLayout) error {
-	for _, dir := range []string{layout.runtimeDir, layout.xdgConfigHome, layout.xdgStateHome, layout.xdgDataHome, layout.xdgCacheHome, filepath.Dir(layout.configPath), layout.binaryDir} {
+func validateOwnedLayout(layout ownedLayout, launcherPath string) error {
+	for _, dir := range []string{layout.runtimeDir, layout.xdgConfigHome, layout.xdgStateHome, layout.xdgDataHome, layout.xdgCacheHome, filepath.Dir(layout.configPath), layout.binaryDir, layout.launcherDir} {
 		if err := validatePrivateDir(dir); err != nil {
 			return err
 		}
 	}
-	if err := validatePrivateContents(layout.configPath, []byte(ownedConfigContents)); err != nil {
+	if err := validatePrivateContents(layout.configPath, ownedConfigContents(launcherPath)); err != nil {
 		return err
 	}
 	info, err := os.Lstat(filepath.Join(layout.runtimeDir, ownedSupervisorLogName))
@@ -624,6 +645,27 @@ func validateOwnedLayout(layout ownedLayout) error {
 		return err
 	}
 	return validatePrivateRegular(filepath.Join(layout.runtimeDir, ownedSupervisorLogName), info)
+}
+
+func ownedConfigContents(launcherPath string) []byte {
+	return []byte("[terminal]\ndefault_shell = " + strconv.Quote(launcherPath) +
+		"\nshell_mode = \"non_login\"\n\n[update]\nmanifest_check = false\n")
+}
+
+func ensureOwnedConfig(layout ownedLayout, launcherPath string) error {
+	return ensurePrivateContents(layout.configPath, ownedConfigContents(launcherPath))
+}
+
+func pinOwnedLauncher(layout ownedLayout) (binaryAdmission, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return binaryAdmission{}, fmt.Errorf("resolve fanout launcher executable: %w", err)
+	}
+	path, digest, err := stageExecutable(executable, layout.launcherDir)
+	if err != nil {
+		return binaryAdmission{}, fmt.Errorf("pin fanout pane launcher: %w", err)
+	}
+	return binaryAdmission{path: path, sha256: digest}, nil
 }
 
 func pinOwnedBinary(layout ownedLayout, admitted binaryAdmission) (binaryAdmission, error) {
@@ -987,31 +1029,51 @@ func writeOwnerMarkerExclusive(path string, marker ownerMarker) error {
 	return nil
 }
 
+//nolint:funlen // Keep the strict marker contract and its physical-identity checks together.
 func validateOwnedMarker(
 	marker ownerMarker,
 	layout ownedLayout,
 	commonDir string,
 	commonIdentity pathIdentity,
 	admitted binaryAdmission,
+	launcher binaryAdmission,
 ) error {
-	if marker.SchemaID != ownedMarkerSchemaID || marker.GitCommonDir != commonDir || marker.Session != filepath.Base(layout.runtimeDir) ||
-		marker.GitCommonDevice != commonIdentity.device || marker.GitCommonInode != commonIdentity.inode ||
-		marker.RuntimeDir != layout.runtimeDir || marker.SocketPath != layout.socketPath || marker.ClientSocketPath != layout.clientSocketPath ||
-		marker.XDGConfigHome != layout.xdgConfigHome || marker.XDGStateHome != layout.xdgStateHome || marker.XDGDataHome != layout.xdgDataHome ||
-		marker.XDGCacheHome != layout.xdgCacheHome || marker.ConfigPath != layout.configPath {
+	layoutMatches := []bool{
+		marker.SchemaID == ownedMarkerSchemaID, marker.GitCommonDir == commonDir,
+		marker.Session == filepath.Base(layout.runtimeDir), marker.GitCommonDevice == commonIdentity.device,
+		marker.GitCommonInode == commonIdentity.inode, marker.RuntimeDir == layout.runtimeDir,
+		marker.SocketPath == layout.socketPath, marker.ClientSocketPath == layout.clientSocketPath,
+		marker.XDGConfigHome == layout.xdgConfigHome, marker.XDGStateHome == layout.xdgStateHome,
+		marker.XDGDataHome == layout.xdgDataHome, marker.XDGCacheHome == layout.xdgCacheHome,
+		marker.ConfigPath == layout.configPath,
+	}
+	if slices.Contains(layoutMatches, false) {
 		return fmt.Errorf("herdr ownership marker does not match this repository and runtime layout")
 	}
-	if marker.BinaryPath != admitted.path || marker.BinarySHA256 != admitted.sha256 || marker.BinaryVersion != admitted.version ||
-		!filepath.IsAbs(marker.BinaryPath) || filepath.Clean(marker.BinaryPath) != marker.BinaryPath ||
-		!validHexToken(marker.BinarySHA256) ||
-		validateAdmittedVersion(marker.BinaryVersion) != nil ||
-		!validHexToken(marker.OwnerNonce) || !validHexToken(marker.SupervisorStartToken) || marker.SupervisorPID <= 1 {
+	binaryMatches := []bool{
+		marker.BinaryPath == admitted.path, marker.BinarySHA256 == admitted.sha256,
+		marker.BinaryVersion == admitted.version, filepath.IsAbs(marker.BinaryPath),
+		filepath.Clean(marker.BinaryPath) == marker.BinaryPath, validHexToken(marker.BinarySHA256),
+		validateAdmittedVersion(marker.BinaryVersion) == nil, validHexToken(marker.OwnerNonce),
+		validHexToken(marker.SupervisorStartToken), marker.SupervisorPID > 1,
+	}
+	if slices.Contains(binaryMatches, false) {
 		return fmt.Errorf("herdr ownership marker identity does not match admitted binary and supervisor")
+	}
+	launcherMatches := []bool{
+		marker.LauncherPath == launcher.path, marker.LauncherSHA256 == launcher.sha256,
+		validHexToken(marker.LauncherSHA256),
+	}
+	if slices.Contains(launcherMatches, false) {
+		return fmt.Errorf("herdr ownership marker does not match the bundled fanout launcher")
 	}
 	if err := validatePinnedBinary(marker.BinaryPath, marker.BinarySHA256, layout); err != nil {
 		return fmt.Errorf("herdr owned binary identity changed: %w", err)
 	}
-	return validateOwnedLayout(layout)
+	if err := validatePinnedBinaryInDir(marker.LauncherPath, marker.LauncherSHA256, layout.launcherDir); err != nil {
+		return fmt.Errorf("herdr owned launcher identity changed: %w", err)
+	}
+	return validateOwnedLayout(layout, marker.LauncherPath)
 }
 
 func randomToken() (string, error) {
@@ -1091,6 +1153,7 @@ func IsSupervisorRequest(args []string) bool {
 	return len(args) > 0 && args[0] == ownedSupervisorCommand
 }
 
+//nolint:funlen // The supervisor owns one process and keeps its startup and shutdown fencing in one scope.
 func RunSupervisor(args []string, errw io.Writer) int {
 	if len(args) != 4 {
 		fmt.Fprintln(errw, "fanout herdr supervisor: expected marker path, nonce, start token, and ready fd")
@@ -1168,7 +1231,8 @@ func RunSupervisor(args []string, errw io.Writer) int {
 	admitted := binaryAdmission{
 		path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion,
 	}
-	err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted)
+	launcher := binaryAdmission{path: marker.LauncherPath, sha256: marker.LauncherSHA256}
+	err = validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted, launcher)
 	if err != nil {
 		fmt.Fprintf(errw, "fanout herdr supervisor: marker identity: %v\n", err)
 		return 1
@@ -1327,5 +1391,10 @@ func ownedMarkerEnvironment(marker ownerMarker) []string {
 		xdgDataHome: marker.XDGDataHome, xdgCacheHome: marker.XDGCacheHome,
 		configPath: marker.ConfigPath, clientSocketPath: marker.ClientSocketPath,
 	}
-	return routeEnvironment(route{session: marker.Session, socketPath: marker.SocketPath}, control)
+	environment := routeEnvironment(route{session: marker.Session, socketPath: marker.SocketPath}, control)
+	return append(environment,
+		paneLauncherFlagEnv+"=1",
+		paneLauncherPathEnv+"="+marker.LauncherPath,
+		paneLauncherControlEnv+"="+filepath.Join(marker.GitCommonDir, "fanout", "herdr-intents.json"),
+	)
 }

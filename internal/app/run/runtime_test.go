@@ -7,9 +7,32 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 )
+
+func TestShouldBindRuntimeKeys(t *testing.T) {
+	tests := []struct {
+		name           string
+		dryRun         bool
+		created        int
+		runtimeBackend backend.Name
+		want           bool
+	}{
+		{name: "live tmux launch", created: 1, runtimeBackend: backend.Tmux, want: true},
+		{name: "dry run", dryRun: true, created: 1, runtimeBackend: backend.Tmux},
+		{name: "no created panes", runtimeBackend: backend.Tmux},
+		{name: "herdr launch", created: 1, runtimeBackend: backend.Herdr},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldBindRuntimeKeys(tt.dryRun, tt.created, tt.runtimeBackend); got != tt.want {
+				t.Fatalf("shouldBindRuntimeKeys() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestLoadStateIgnoresLockFileWhenNoWorktreeIsPrepared(t *testing.T) {
 	repo := t.TempDir()

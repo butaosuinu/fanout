@@ -40,6 +40,14 @@ type Definition struct {
 	ResumeArgs []string
 }
 
+// LaunchSpec is the non-shell representation of one agent invocation. Runtime
+// adapters that own the child process use this instead of reparsing a quoted
+// command string.
+type LaunchSpec struct {
+	Executable string
+	Args       []string
+}
+
 var registry = map[string]Definition{
 	"claude": {
 		Name:              "claude",
@@ -152,19 +160,40 @@ func BuildResolvedCommandForBackend(name, prompt string, runtimeBackend backend.
 // the selected runtime using the resolved executable path with the agent's
 // initial launch mode made explicit.
 func BuildResolvedCommandForBackendWithMode(name, prompt string, runtimeBackend backend.Name, mode LaunchMode) (string, error) {
+	spec, err := BuildResolvedLaunchSpec(name, prompt, runtimeBackend, mode)
+	if err != nil {
+		return "", err
+	}
+	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(spec.Executable, spec.Args, "", ""), nil
+}
+
+// BuildResolvedLaunchSpec returns the absolute executable and argv for a live
+// launch without introducing a shell. Args excludes argv[0].
+func BuildResolvedLaunchSpec(
+	name, prompt string,
+	runtimeBackend backend.Name,
+	mode LaunchMode,
+) (LaunchSpec, error) {
 	def, ok := registry[name]
 	if !ok {
-		return "", ValidateKnown(name)
+		return LaunchSpec{}, ValidateKnown(name)
 	}
 	args, err := launchArgsForBackend(def, runtimeBackend, mode)
 	if err != nil {
-		return "", err
+		return LaunchSpec{}, err
 	}
 	path, err := ResolveExecutable(name)
 	if err != nil {
-		return "", err
+		return LaunchSpec{}, err
 	}
-	return "PATH=" + ShellQuote(os.Getenv("PATH")) + " " + buildCommand(path, args, def.PromptFlag, prompt), nil
+	args = append([]string(nil), args...)
+	if strings.TrimSpace(prompt) != "" {
+		if def.PromptFlag != "" {
+			args = append(args, def.PromptFlag)
+		}
+		args = append(args, prompt)
+	}
+	return LaunchSpec{Executable: path, Args: args}, nil
 }
 
 // BuildResumeCommand returns the generic resume command for a supported agent.

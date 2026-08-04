@@ -1,0 +1,20 @@
+{
+  "parent": 524,
+  "children": [
+    {
+      "num": 528,
+      "state": "OPEN",
+      "backend": "herdr",
+      "pane_id": "workspace-528:p1",
+      "prs": [],
+      "has_merged_pr": false
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "merged": 0,
+    "pending": 1,
+    "blocked": 0,
+    "all_merged": false
+  }
+}

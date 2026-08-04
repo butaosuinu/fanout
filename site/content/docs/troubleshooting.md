@@ -100,13 +100,13 @@ Items can look fewer than expected, but that's expected behavior: a Project with
 
 ## "herdr named session ... is not running"
 
-The [herdr backend]({{< relref "/docs/herdr-backend" >}}) needs a running herdr session with an explicit name — fanout never starts a herdr server and never creates or attaches a session, and `default` is rejected. Start the named session in herdr first, then verify from the same shell:
+This error belongs to observation of an external [herdr backend]({{< relref "/docs/herdr-backend" >}}) session. Start that explicitly named session in herdr, then verify it from the same shell (`default` is rejected):
 
 ```bash
 herdr status --json   # server and session state
 ```
 
-`HERDR_SOCKET_PATH` takes precedence over `HERDR_SESSION`, so a stale socket path can point fanout at the wrong server — unset it if `status` disagrees with what you expect. The TUI variant `run fanout inside an existing herdr pane (HERDR_ENV=1)` means what it says: the console only starts under the herdr backend when launched from a pane inside the herdr session.
+`HERDR_SOCKET_PATH` takes precedence over `HERDR_SESSION`, so a stale socket path can point fanout at the wrong server — unset it if `status` disagrees with what you expect. The TUI variant `run fanout inside an existing herdr pane (HERDR_ENV=1)` means what it says: the console only starts under the herdr backend when launched from a pane inside the herdr session. CLI issue, Project, plan, and watcher launches instead create or readopt fanout's repository-owned session.
 
 ## "unsupported herdr CLI version ..."
 
@@ -121,6 +121,6 @@ Install or upgrade to stable herdr 0.7.5 or newer. If the message is `requires a
 
 fanout does not preflight methods or response fields. `herdr method "<name>" is unavailable` means that the named call failed; check that the installed herdr version provides it.
 
-## "herdr backend v1 is observation-only; ... is unavailable"
+## "herdr backend interactive TUI actions are read-only"
 
-Not a fault. herdr backend v1 deliberately fails closed on anything that would mutate a herdr session; `runtime backend herdr does not support ...` is the same family (launch, focus, send, close, restore, peek, plan capture, cleanup). Use the tmux backend for new launches. On an existing herdr row, `--merge` still works — it only merges the branch — while `--close` / `--cleanup` are refused; fold the workspace away in herdr instead. Related: a conflicting `--backend` on a parent with recorded panes fails with `explicit migration is required` — there is no migration command in v1. See [herdr backend]({{< relref "/docs/herdr-backend" >}}) for the full capability table.
+Not a fault. This message now applies to interactive TUI mutation and the remaining unsupported operations, not to CLI issue, Project, plan, or watcher launch. Use `--backend herdr` for those launch lanes. herdr with `--team` and Codex child Plan Mode fail before mutation with a specific `runtime backend herdr does not support ...` error. A conflicting backend on a parent with recorded panes still fails with `explicit migration is required`; there is no migration command in v1. See [herdr backend]({{< relref "/docs/herdr-backend" >}}) for the capability table.

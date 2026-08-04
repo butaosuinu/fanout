@@ -294,9 +294,9 @@ func TestResolveLaunchBackendLoadsSharedHerdrProvisionalIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = resolveLaunchBackend(&cliflags.Config{ParentRef: "425"}, repo, store, nil)
-	if !errors.Is(err, backend.ErrUnsupported) {
-		t.Fatalf("resolveLaunchBackend() error = %v, want provisional Herdr ownership", err)
+	resolved, err := resolveLaunchBackend(&cliflags.Config{ParentRef: "425", DryRun: true}, repo, store, nil)
+	if err != nil || resolved.selection.Name != backend.Herdr {
+		t.Fatalf("resolveLaunchBackend() = (%+v, %v), want provisional Herdr ownership", resolved.selection, err)
 	}
 }
 
@@ -333,12 +333,12 @@ func TestSharedHerdrPlanIntentsRemainOwnerWorktreeLocal(t *testing.T) {
 		t.Fatalf("same-slug plan intents = %#v", control.Intents)
 	}
 	_, err = resolveLaunchBackend(
-		&cliflags.Config{ParentRef: "plan:demo"},
+		&cliflags.Config{ParentRef: "plan:demo", DryRun: true},
 		sibling,
 		siblingStore,
 		nil,
 	)
-	if !errors.Is(err, backend.ErrUnsupported) {
+	if err != nil {
 		t.Fatalf("owner plan binding error = %v, want Herdr ownership", err)
 	}
 }
@@ -368,9 +368,9 @@ func TestSharedHerdrIssueSourcedPlanIntentUsesActualParentAcrossWorktrees(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = resolveLaunchBackend(&cliflags.Config{ParentRef: "425"}, sibling, store, nil)
-	if !errors.Is(err, backend.ErrUnsupported) {
-		t.Fatalf("issue-sourced Herdr plan binding error = %v, want Herdr ownership", err)
+	resolved, err := resolveLaunchBackend(&cliflags.Config{ParentRef: "425", DryRun: true}, sibling, store, nil)
+	if err != nil || resolved.selection.Name != backend.Herdr {
+		t.Fatalf("issue-sourced Herdr plan binding = (%+v, %v), want Herdr ownership", resolved.selection, err)
 	}
 }
 
@@ -400,13 +400,20 @@ func TestBackendSelectionVerifierRechecksSharedHerdrProvisionalIntent(t *testing
 	}
 }
 
-func TestValidateLaunchBackendRejectsHerdrV1(t *testing.T) {
-	err := validateLaunchBackend(backend.Selection{Name: backend.Herdr})
-	if !errors.Is(err, backend.ErrUnsupported) {
-		t.Fatalf("error = %v, want ErrUnsupported", err)
+func TestValidateLaunchBackendAllowsHerdrAndRejectsTeam(t *testing.T) {
+	if err := validateLaunchBackend(&cliflags.Config{}, backend.Selection{Name: backend.Herdr}); err != nil {
+		t.Fatalf("Herdr error = %v", err)
 	}
-	if err := validateLaunchBackend(backend.Selection{Name: backend.Tmux}); err != nil {
+	err := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Herdr})
+	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "--team") {
+		t.Fatalf("team error = %v, want ErrUnsupported", err)
+	}
+	if err := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Tmux}); err != nil {
 		t.Fatalf("tmux error = %v", err)
+	}
+	err = validateLaunchBackend(&cliflags.Config{TUIInteractive: true}, backend.Selection{Name: backend.Herdr})
+	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "interactive TUI") {
+		t.Fatalf("TUI error = %v, want deferred interactive launch", err)
 	}
 }
 
@@ -458,9 +465,10 @@ func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 	}
 }
 
-func TestResolveLaunchRuntimeRejectsHerdrBeforeFanoutMutation(t *testing.T) {
+func TestResolveLaunchRuntimeAllowsHerdrDryRunWithoutMutation(t *testing.T) {
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init", "-b", "main")
+	installHerdrStatusShim(t)
 	t.Chdir(repo)
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("TMUX", "")
@@ -469,15 +477,12 @@ func TestResolveLaunchRuntimeRejectsHerdrBeforeFanoutMutation(t *testing.T) {
 
 	var stderr bytes.Buffer
 	rt, code := resolveLaunchRuntime(
-		&cliflags.Config{ParentRef: "425", Agent: "claude"},
+		&cliflags.Config{ParentRef: "425", Agent: "claude", DryRun: true},
 		nil,
 		log.NewWith(io.Discard, &stderr, false),
 	)
-	if code != exitcode.Env || rt != nil {
-		t.Fatalf("resolveLaunchRuntime() = (%+v, %d), want (nil, %d)", rt, code, exitcode.Env)
-	}
-	if !strings.Contains(stderr.String(), "runtime backend herdr does not support") {
-		t.Fatalf("stderr = %q, want herdr unsupported error", stderr.String())
+	if code != exitcode.OK || rt == nil || rt.BackendSelection.Name != backend.Herdr {
+		t.Fatalf("resolveLaunchRuntime() = (%+v, %d), want Herdr dry-run", rt, code)
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".fanout")); !os.IsNotExist(err) {
 		t.Fatalf("herdr launch preflight mutated .fanout: %v", err)
@@ -487,6 +492,7 @@ func TestResolveLaunchRuntimeRejectsHerdrBeforeFanoutMutation(t *testing.T) {
 func TestResolveLaunchRuntimeUsesCallerProvisionalIntent(t *testing.T) {
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init", "-b", "main")
+	installHerdrStatusShim(t)
 	t.Chdir(repo)
 	t.Setenv("HERDR_ENV", "")
 	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
@@ -495,24 +501,22 @@ func TestResolveLaunchRuntimeUsesCallerProvisionalIntent(t *testing.T) {
 
 	var stderr bytes.Buffer
 	rt, code := resolveLaunchRuntime(
-		&cliflags.Config{ParentRef: "425", Agent: "claude"},
+		&cliflags.Config{ParentRef: "425", Agent: "claude", DryRun: true},
 		[]backend.Binding{{Parent: "425", Backend: backend.Herdr}},
 		log.NewWith(io.Discard, &stderr, false),
 	)
-	if code != exitcode.Env || rt != nil {
-		t.Fatalf("resolveLaunchRuntime(intent) = (%+v, %d), want (nil, %d)", rt, code, exitcode.Env)
-	}
-	if !strings.Contains(stderr.String(), "runtime backend herdr does not support") {
-		t.Fatalf("stderr = %q, want provisional herdr unsupported error", stderr.String())
+	if code != exitcode.OK || rt == nil || rt.BackendSelection.Name != backend.Herdr {
+		t.Fatalf("resolveLaunchRuntime(intent) = (%+v, %d), want provisional Herdr", rt, code)
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".fanout")); !os.IsNotExist(err) {
 		t.Fatalf("provisional herdr preflight mutated .fanout: %v", err)
 	}
 }
 
-func TestResolveLaunchRuntimeRejectsProjectHerdrBeforeMutation(t *testing.T) {
+func TestResolveLaunchRuntimeAllowsProjectHerdrDryRunWithoutMutation(t *testing.T) {
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init", "-b", "main")
+	installHerdrStatusShim(t)
 	t.Chdir(repo)
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("TMUX", "")
@@ -522,19 +526,43 @@ func TestResolveLaunchRuntimeRejectsProjectHerdrBeforeMutation(t *testing.T) {
 	projectURL := "https://github.com/orgs/example/projects/7"
 	var stderr bytes.Buffer
 	rt, code := resolveLaunchRuntime(
-		&cliflags.Config{ParentRef: projectURL, ParentMode: cliflags.ModeProject, Agent: "claude"},
+		&cliflags.Config{ParentRef: projectURL, ParentMode: cliflags.ModeProject, Agent: "claude", DryRun: true},
 		nil,
 		log.NewWith(io.Discard, &stderr, false),
 	)
-	if code != exitcode.Env || rt != nil {
-		t.Fatalf("resolveLaunchRuntime(Project) = (%+v, %d), want (nil, %d)", rt, code, exitcode.Env)
-	}
-	if !strings.Contains(stderr.String(), "runtime backend herdr does not support") {
-		t.Fatalf("stderr = %q, want herdr unsupported error", stderr.String())
+	if code != exitcode.OK || rt == nil || rt.BackendSelection.Name != backend.Herdr {
+		t.Fatalf("resolveLaunchRuntime(Project) = (%+v, %d), want Herdr dry-run", rt, code)
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".fanout")); !os.IsNotExist(err) {
 		t.Fatalf("Project herdr preflight mutated .fanout: %v", err)
 	}
+}
+
+func installHerdrStatusShim(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  printf 'herdr 0.7.5\n'
+  exit 0
+fi
+if [ "${1:-}" = "--session" ]; then
+  shift 2
+fi
+if [ "${1:-}" = "status" ] && [ "${2:-}" = "--json" ]; then
+  printf '%s\n' '{"client":{"version":"0.7.5","channel":"stable","session":"test-session"},"server":{"status":"running","running":true,"version":"0.7.5","socket":"/tmp/fanout-herdr-test.sock","session":"test-session","restart_needed":false},"update":{"restart_needed":false}}'
+  exit 0
+fi
+exit 64
+`
+	path := filepath.Join(dir, "herdr")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HERDR_SESSION", "test-session")
+	t.Setenv("HERDR_SOCKET_PATH", "/tmp/fanout-herdr-test.sock")
 }
 
 func TestLoadRuntimeBackendInputsDefersSettingsWarnings(t *testing.T) {

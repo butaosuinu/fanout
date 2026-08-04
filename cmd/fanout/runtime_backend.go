@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -42,6 +43,7 @@ type runtimeBackendInputs struct {
 type launchBackendResolution struct {
 	selection backend.Selection
 	backend   backend.Backend
+	herdr     *herdrrun.OwnedSession
 	verify    func(parent string, locked state.Store) error
 }
 
@@ -83,7 +85,11 @@ func resolveLaunchRuntime(cfg *cliflags.Config, provisionalIntents []backend.Bin
 		lg.Err("runtime backend: %v", err)
 		return nil, exitcode.Env
 	}
-	return run.ResolveRuntime(cfg, resolved.selection, resolved.backend, resolved.verify, lg)
+	runtime, code := run.ResolveRuntime(cfg, resolved.selection, resolved.backend, resolved.verify, lg)
+	if runtime != nil {
+		runtime.Herdr = resolved.herdr
+	}
+	return runtime, code
 }
 
 // resolveTUILaunchRuntime applies the same launch-backend contract as the CLI
@@ -112,16 +118,16 @@ func resolveTUILaunchRuntimeForTarget(projectRoot, session, target string, cfg *
 		},
 		GH:               ghissue.Runner{Cwd: projectRoot},
 		Backend:          resolved.backend,
+		Herdr:            resolved.herdr,
 		BackendSelection: resolved.selection,
 		VerifyBackend:    resolved.verify,
 	}, nil
 }
 
-// resolveLaunchBackend is the shared read-only composition step for CLI and
-// TUI launches. Herdr v1 is rejected before backend availability checks and
-// before a launch path can lock state, write a briefing, or prepare a
-// worktree. verify repeats parent stickiness against the store held under the
-// launch lock.
+// resolveLaunchBackend is the shared composition step for CLI and TUI launch
+// lanes. Interactive TUI mutation remains deferred, while CLI issue, Project,
+// plan, and watcher lanes may acquire the owned Herdr runtime. verify repeats
+// parent stickiness against the store held under the launch lock.
 func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) (launchBackendResolution, error) {
 	inputs := loadRuntimeBackendInputs(cfg, projectRoot, store, provisionalIntents)
 	rows, err := runtimeBackendBindings(projectRoot, store)
@@ -136,16 +142,17 @@ func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.
 	if err != nil {
 		return launchBackendResolution{}, err
 	}
-	if validateErr := validateLaunchBackend(selection); validateErr != nil {
+	if validateErr := validateLaunchBackend(cfg, selection); validateErr != nil {
 		return launchBackendResolution{}, validateErr
 	}
-	runtimeBackend, err := constructRuntimeBackend(selection.Name, inputs)
+	runtimeBackend, ownedHerdr, err := constructLaunchRuntimeBackend(cfg, selection.Name, inputs)
 	if err != nil {
 		return launchBackendResolution{}, err
 	}
 	return launchBackendResolution{
 		selection: selection,
 		backend:   runtimeBackend,
+		herdr:     ownedHerdr,
 		verify:    backendSelectionVerifier(selection, inputs),
 	}, nil
 }
@@ -225,16 +232,34 @@ func canonicalRuntimeRoot(root string) string {
 	return filepath.Clean(root)
 }
 
-func validateLaunchBackend(selection backend.Selection) error {
-	if selection.Name == backend.Herdr {
-		// Herdr v1 is observation-only. Reject it before provisional intents,
-		// worktrees, or state rows are created. In particular, the read path must
-		// not fill missing row identity from a snapshot: same-name sessions reuse
-		// public IDs, so doing so would adopt a new terminal instead of reporting
-		// the incomplete row as stale.
-		return backend.Unsupported(backend.Herdr, "issue, Project, and plan launch in v1")
+func validateLaunchBackend(cfg *cliflags.Config, selection backend.Selection) error {
+	if selection.Name == backend.Herdr && cfg.Team {
+		return backend.Unsupported(backend.Herdr, "--team launch until registry-backed peers are available")
+	}
+	if selection.Name == backend.Herdr && cfg.TUIInteractive {
+		return backend.Unsupported(backend.Herdr, "interactive TUI launch in the current release wave")
 	}
 	return nil
+}
+
+func constructLaunchRuntimeBackend(
+	cfg *cliflags.Config,
+	name backend.Name,
+	inputs runtimeBackendInputs,
+) (backend.Backend, *herdrrun.OwnedSession, error) {
+	if name != backend.Herdr || cfg.DryRun {
+		runtimeBackend, err := constructRuntimeBackend(name, inputs)
+		return runtimeBackend, nil, err
+	}
+	identity, err := worktree.ResolveRepoIdentity(context.Background(), inputs.projectRoot)
+	if err != nil {
+		return nil, nil, err
+	}
+	owned, err := herdrrun.EnsureOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
+	if err != nil {
+		return nil, nil, err
+	}
+	return owned.Backend(), owned, nil
 }
 
 func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) runtimeBackendInputs {

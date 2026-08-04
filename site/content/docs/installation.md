@@ -19,7 +19,7 @@ Fanning a parent issue out into one pane per child needs three tools on your `PA
 
 > **Project mode only:** the `gh` CLI must have the `read:project` scope so the GraphQL query that lists Project items can succeed. Add it with `gh auth refresh -s read:project`. Issue mode (`fanout <N>`) does not need this scope.
 
-These three cover the default tmux backend. The opt-in [herdr backend]({{< relref "/docs/herdr-backend" >}}) — observation-only in v1 — swaps tmux for herdr 0.7.5, which is AGPL-licensed and not bundled with fanout; install it separately.
+These three cover the default tmux backend. The opt-in [herdr backend]({{< relref "/docs/herdr-backend" >}}) swaps tmux for stable herdr 0.7.5 or newer on CLI launch lanes. herdr is AGPL-licensed and not bundled with fanout; install it separately.
 
 ## Installation
 

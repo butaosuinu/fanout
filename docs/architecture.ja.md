@@ -60,12 +60,12 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `selfupdate` | 自己アップデート | H |
 | infra | `team` | `--team` / `fanout msg` の SQLite バス | H |
 | infra | `settings` | 設定解決。repo config からの watcher・runtime backend 有効化と通知先設定を遮断する安全ゲート | H |
-| infra | `herdrrun` | herdr stable 0.7.5 以上の version gate、fanout-owned session lifecycle、workspace/worktree mutation、snapshot 投影 | H |
+| infra | `herdrrun` | herdr stable 0.7.5 以上の version gate、fanout-owned session lifecycle、non-shell agent launcher、workspace/worktree mutation、snapshot 投影 | H |
 | core | `backend` | runtime backend 契約・親 stickiness・選択優先順位・矛盾時の fail-closed 判定 | H |
 | app | `watch` | ラベル watcher の 1 サイクル | H |
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
-| app | `panelaunch` | tmux pane 生成と Herdr coordinator/worktree 実体化のオーケストレーション | H |
+| app | `panelaunch` | tmux pane 生成と Herdr coordinator/worktree/agent launch のオーケストレーション | H |
 | ui | `dashboard`(`server.go`) | localhost web サーバの mux・token 検証 | H |
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
 | ui | `dashboard`(`diff.go`) | snapshot の安定 row identity で選んだ worktree diff の read-only 配信・request-wide 上限 | H |
@@ -120,10 +120,11 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   git common directory の `fanout/herdr-intents.json` とその lock を使う。
   ファイルは `.fanout/state.json` と同水準の atomic replace で書き、読取時の
   owner / mode / identity 検査は持たない。
-  final row は #528 以降が owning worktree の `state.json` pane row として
+  agent launch の final row は owning worktree の `state.json` pane row として
   確定する(tmux backend と同じ所在)。intent 保存から branch 予約、socket
-  mutation、事後条件の確認まで lock を保持する。tmux agent launch も state
-  更新が終わるまで同じ lock を保持する。発行済み mutation は再発行せず、
+  mutation、launcher の marker/token handshake、agent identity の事後確認、
+  final row の保存と intent の消費まで lock を保持する。tmux agent launch も
+  state 更新が終わるまで同じ lock を保持する。発行済み mutation は再発行せず、
   label nonce と Git 事後条件を一意に確認できない場合は
   `manual_cleanup_required` にする。issue-less plan の intent は physical
   owner root を ID に含め、同じ slug を使う別の linked worktree には backend

@@ -91,7 +91,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 			launchStore = recorder.Store
 		}
 		paneReq := panelaunch.NewManualRequest(cfg, projectRoot, launchStore, hookConfig, manualPaneOptionsForTUI(prompt, agentName))
-		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Herdr: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 		if result, ok := launcher.LaunchWithResult(paneReq); ok {
 			if result.PaneID != "" {
 				createdPaneIDs = append(createdPaneIDs, result.PaneID)
@@ -461,7 +461,7 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 		cfg := newSessionConfigForTUIAgent(projectRoot, agentName, launchLogger.Warn)
 		cfg.ParentRef = resolverParent
 		paneReq := newAttachedPaneRequest(cfg, projectRoot, recorder.Store, hookConfig, prompt, targetPath, resolvedTarget)
-		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Herdr: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 		if launcher.Attach(paneReq, targetPath) {
 			createdCount++
 			continue
@@ -587,9 +587,10 @@ func combinedLaunchNotice(notices []string, extra string) string {
 func newSessionConfigForTUIAgent(projectRoot, agentName string, warnf settings.WarnFunc) *cliflags.Config {
 	planMode := settings.Resolve(projectRoot, settings.CLIOverrides{}, warnf).NewSessionPlanMode
 	return &cliflags.Config{
-		ParentRef: panelaunch.ManualParentRef,
-		Agent:     agentName,
-		PlanMode:  &planMode,
+		ParentRef:      panelaunch.ManualParentRef,
+		Agent:          agentName,
+		PlanMode:       &planMode,
+		TUIInteractive: true,
 	}
 }
 

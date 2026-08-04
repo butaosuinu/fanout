@@ -121,6 +121,7 @@ type Launcher struct {
 	Log         *log.Logger
 	Info        *fanoutruntime.Info
 	Backend     backend.Backend
+	Herdr       HerdrLaunchRuntime
 	Recorder    StateRecorder
 	Palette     log.Palette
 	CommandName string
@@ -135,6 +136,9 @@ func (l *Launcher) LaunchOK(req Request) bool {
 // LaunchWithResult creates one worktree-backed agent pane and returns its exact
 // backend-native pane id. A successful dry run returns an empty Result.
 func (l *Launcher) LaunchWithResult(req Request) (Result, bool) {
+	if l.Backend != nil && l.Backend.Name() == backend.Herdr {
+		return l.launchHerdr(req)
+	}
 	return l.launch(req)
 }
 
@@ -453,7 +457,7 @@ func statePane(req Request, paneID, worktreePath string, now time.Time, codexTUI
 	return statePaneForBackend(req, paneID, worktreePath, now, codexTUIStatus, backend.Tmux)
 }
 
-func statePaneForBackend(req Request, paneID, worktreePath string, now time.Time, codexTUIStatus codexapp.Status, runtimeBackend backend.Name) state.Pane {
+func statePaneForBackend(req Request, paneID, worktreePath string, now time.Time, codexTUIStatus codexapp.Status, runtimeBackend backend.Name, live ...*backend.LivePane) state.Pane {
 	pane := state.Pane{
 		Parent:         req.ParentRef,
 		IssueNum:       req.Number,
@@ -482,7 +486,26 @@ func statePaneForBackend(req Request, paneID, worktreePath string, now time.Time
 	if runtimeBackend != backend.Tmux {
 		pane.Backend = runtimeBackend
 	}
+	applyHerdrStateIdentity(&pane, runtimeBackend, live)
 	return pane
+}
+
+func applyHerdrStateIdentity(
+	pane *state.Pane,
+	runtimeBackend backend.Name,
+	live []*backend.LivePane,
+) {
+	if runtimeBackend != backend.Herdr || len(live) != 1 || live[0] == nil {
+		return
+	}
+	identity := live[0]
+	pane.HerdrWorkspaceID = identity.Ref.Workspace
+	pane.HerdrTerminalID = identity.TerminalID
+	pane.HerdrRepoKey = identity.RepoKey
+	pane.HerdrAgentID = identity.AgentID
+	pane.HerdrAgentSession = identity.AgentSession
+	pane.HerdrSession = identity.SessionID
+	pane.HerdrSocketPath = identity.SocketPath
 }
 
 func ensurePaneLivenessKey(req *Request) error {

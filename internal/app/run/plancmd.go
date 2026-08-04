@@ -202,7 +202,7 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 	result := executeTaskPlan(cliCfg, lg, rt, spec, plan.Targets, resolvedSettings, hookConfig, recorder, c, commandName, teamCtx)
 	printTaskSummary(plan, result, cfg, lg, c, commandName)
 
-	if !cfg.DryRun && result.Created > 0 {
+	if shouldBindRuntimeKeys(cfg.DryRun, result.Created, rt.BackendSelection.Name) {
 		bindKeys(lg, resolvedSettings.DashboardKeybind)
 	}
 
@@ -480,7 +480,7 @@ func planTaskComplete(gh ghissue.Runner, cfg *cliflags.Config, projectRoot strin
 }
 
 func executeTaskPlan(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, spec planspec.Spec, targets []planspec.Task, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, c log.Palette, commandName string, teamCtx *briefing.TeamContext) TaskExecutionResult {
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: rt.Info, Backend: rt.Backend, Recorder: recorder, Palette: c, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: rt.Info, Backend: rt.Backend, Herdr: rt.Herdr, Recorder: recorder, Palette: c, CommandName: commandName}
 	created, failed := executeFailFast(
 		targets,
 		taskID,

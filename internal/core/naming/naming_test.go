@@ -27,6 +27,25 @@ func TestHerdrSessionNameIgnoresPathAliasesForSameIdentity(t *testing.T) {
 	}
 }
 
+func TestHerdrAgentNameBindsEveryTuplePart(t *testing.T) {
+	got := HerdrAgentName("/repo/.git", "issue:3:524:528", "nonce")
+	if got != HerdrAgentName("/repo/.git", "issue:3:524:528", "nonce") {
+		t.Fatal("HerdrAgentName is not deterministic")
+	}
+	for _, changed := range []string{
+		HerdrAgentName("/other/.git", "issue:3:524:528", "nonce"),
+		HerdrAgentName("/repo/.git", "issue:3:524:529", "nonce"),
+		HerdrAgentName("/repo/.git", "issue:3:524:528", "other"),
+	} {
+		if changed == got {
+			t.Fatalf("changed tuple reused Herdr agent name %q", got)
+		}
+	}
+	if len(got) != 31 || !regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`).MatchString(got) {
+		t.Fatalf("invalid Herdr agent name %q", got)
+	}
+}
+
 func TestSlugIsDeterministicKebabWithIssueNumber(t *testing.T) {
 	if got, want := Slug("Fix auth timeout", 123), "fix-auth-timeout-123"; got != want {
 		t.Fatalf("Slug() = %q, want %q", got, want)

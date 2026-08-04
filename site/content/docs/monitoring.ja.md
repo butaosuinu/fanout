@@ -34,7 +34,7 @@ fanout   # start the persistent tmux console
 マウスや tmux の `prefix` ペイン移動で記録済みペインへフォーカスすると、TUI の選択行もそのペインに追従します。
 
 コンソールは backend を認識します。ヘッダには選択中の runtime backend と選択理由(例: `backend: herdr (HERDR_ENV)`)が出て、detail panel には各行の `backend=` と `pane=` の identity が出ます。
-観測専用の [herdr backend]({{< relref "/docs/herdr-backend" >}}) ではコンソールは read-only です。launch・focus・close・peek は無効になり、ヘルプ画面がキーごとに理由を表示します。
+[herdr backend]({{< relref "/docs/herdr-backend" >}})でも対話コンソールの操作は read-only のままです。launch、focus、close、peek は無効になり、ヘルプ画面がキーごとに理由を表示します。CLI と label watcher の launch は owned runtime path を使います。
 
 {{< diagram "console" >}}
 
