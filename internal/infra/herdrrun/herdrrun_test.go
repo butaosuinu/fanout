@@ -572,7 +572,7 @@ func TestListLiveProjectsSnapshotWithoutUsingForegroundCWD(t *testing.T) {
 	if child.RepoKey != "/repo/.git" || child.ProjectRoot != "/repo" || child.WorktreePath != "/repo/.fanout/worktrees/child" {
 		t.Fatalf("child worktree projection = %#v", child)
 	}
-	if child.AgentState != corebackend.AgentWorking || child.NativeAgentState != "working" || child.AgentID != "fanout-child" || !child.AgentPresent || child.Focused || child.Title != "child title" || child.SocketPath != socket {
+	if child.AgentState != corebackend.AgentWorking || child.NativeAgentState != "working" || child.AgentID != "fanout-child" || child.AgentProvider != "codex" || !child.AgentPresent || child.Focused || child.Title != "child title" || child.SocketPath != socket {
 		t.Fatalf("child agent projection = %#v", child)
 	}
 	wantSession := corebackend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-a"}

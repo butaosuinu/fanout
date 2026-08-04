@@ -573,6 +573,139 @@ func TestRealizeHerdrWorktreeRecoversCompletedUnissuedRollback(t *testing.T) {
 	}
 }
 
+func TestRealizeHerdrWorktreeResumesPlannedLaunchRollback(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+	req := testHerdrWorktreeRequest(repo, "planned-launch-rollback", 535)
+	result, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	persistInterruptedHerdrLaunchRollback(t, repo, result.Intent, state.HerdrIntentPlanned)
+
+	mutationsBefore := len(runtime.mutations)
+	resumed, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) || resumed.Intent.ID != result.Intent.ID {
+		t.Fatalf("planned rollback resume = %+v, err=%v", resumed, err)
+	}
+	if len(runtime.mutations) != mutationsBefore {
+		t.Fatal("planned launch rollback recovery reissued a workspace mutation")
+	}
+	control, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackID, _ := state.HerdrRollbackIntentID(result.Intent.ID)
+	if _, found := control.FindIntent(rollbackID); found {
+		t.Fatal("planned launch rollback intent remains after resume")
+	}
+}
+
+func TestRealizeHerdrWorktreeClassifiesIssuedLaunchRollbackWithoutReissue(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+	req := testHerdrWorktreeRequest(repo, "issued-launch-rollback", 536)
+	result, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	persistInterruptedHerdrLaunchRollback(t, repo, result.Intent, state.HerdrIntentIssued)
+	mutationsBefore := len(runtime.mutations)
+
+	_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("live issued rollback error = %v, want manual cleanup", err)
+	}
+	if len(runtime.mutations) != mutationsBefore {
+		t.Fatal("live issued launch rollback recovery reissued a workspace mutation")
+	}
+	control, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackID, _ := state.HerdrRollbackIntentID(result.Intent.ID)
+	rollback, found := control.FindIntent(rollbackID)
+	if !found || rollback.Status != state.HerdrIntentManualCleanupRequired {
+		t.Fatalf("issued rollback = (%+v,%t), want manual cleanup", rollback, found)
+	}
+}
+
+func TestRealizeHerdrWorktreeCompletesAbsentIssuedLaunchRollback(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+	req := testHerdrWorktreeRequest(repo, "absent-launch-rollback", 537)
+	result, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	persistInterruptedHerdrLaunchRollback(t, repo, result.Intent, state.HerdrIntentIssued)
+	gitCmdTest(t, repo, "worktree", "remove", result.Intent.WorktreePath)
+	kept := runtime.workspaces[:0]
+	for _, workspace := range runtime.workspaces {
+		if workspace.WorkspaceID != result.Intent.Resource.WorkspaceID {
+			kept = append(kept, workspace)
+		}
+	}
+	runtime.workspaces = kept
+	mutationsBefore := len(runtime.mutations)
+
+	relaunched, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) ||
+		relaunched.Intent.Resource.WorkspaceID == result.Intent.Resource.WorkspaceID {
+		t.Fatalf("absent issued rollback relaunch = %+v, err=%v", relaunched, err)
+	}
+	if len(runtime.mutations) != mutationsBefore+1 {
+		t.Fatalf("workspace mutations = %d, want one fresh launch after classification", len(runtime.mutations)-mutationsBefore)
+	}
+	control, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackID, _ := state.HerdrRollbackIntentID(result.Intent.ID)
+	if _, found := control.FindIntent(rollbackID); found {
+		t.Fatal("issued launch rollback intent remains after absence classification")
+	}
+}
+
+func persistInterruptedHerdrLaunchRollback(
+	t *testing.T,
+	repo string,
+	intent state.HerdrIntent,
+	status state.HerdrIntentStatus,
+) {
+	t.Helper()
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		_ = locked.Unlock()
+		t.Fatal(err)
+	}
+	rollback, err := beginHerdrLaunchRollback(journal, intent, errors.New("interrupted launch"))
+	if err == nil && status == state.HerdrIntentIssued {
+		rollback.Status = status
+		journal.UpsertIntent(rollback)
+		err = journal.Save()
+	}
+	if unlockErr := locked.Unlock(); err == nil {
+		err = unlockErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRealizeHerdrWorktreeChecksPolicyBeforeBranchReservation(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}

@@ -204,6 +204,7 @@ type LivePane struct {
 	NativeAgentState string
 	TerminalID       string
 	AgentID          string
+	AgentProvider    string
 	AgentSession     *AgentSessionRef
 	AgentPresent     bool
 	ShellKey         string

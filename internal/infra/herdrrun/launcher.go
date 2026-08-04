@@ -358,6 +358,9 @@ func (s *OwnedSession) PrepareWorkloadEnvironment(
 	if err != nil {
 		return "", 0, err
 	}
+	if len(data) > maxOwnerMarkerBytes {
+		return "", 0, fmt.Errorf("workload environment capsule exceeds size limit")
+	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return "", 0, err

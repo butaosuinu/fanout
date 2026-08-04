@@ -73,6 +73,24 @@ func TestWorkloadEnvironmentCapsuleIsOwnerOnlyAndOneShot(t *testing.T) {
 	}
 }
 
+func TestPrepareWorkloadEnvironmentRejectsOversizeBeforePublish(t *testing.T) {
+	runtimeDir := t.TempDir()
+	session := &OwnedSession{RuntimeDir: runtimeDir}
+	nonce := strings.Repeat("b", 32)
+	environment := []string{
+		"BIG=" + strings.Repeat("x", maxOwnerMarkerBytes),
+		"FANOUT_BACKEND=herdr", "FANOUT_BIN=/owned/fanout",
+	}
+	_, _, err := session.PrepareWorkloadEnvironment(nonce, environment)
+	if err == nil || !strings.Contains(err.Error(), "exceeds size limit") {
+		t.Fatalf("error = %v, want size rejection", err)
+	}
+	path := filepath.Join(runtimeDir, "workload-env", "env-"+nonce+".json")
+	if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("oversize capsule was published: %v", statErr)
+	}
+}
+
 func TestConsumeWorkloadEnvironmentRejectsPathOutsideOwnedRuntime(t *testing.T) {
 	runtimeDir := t.TempDir()
 	launch := &state.HerdrLaunch{

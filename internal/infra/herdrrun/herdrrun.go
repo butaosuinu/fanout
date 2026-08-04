@@ -3,6 +3,7 @@ package herdrrun
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -896,13 +897,7 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 			worktreePath = workspace.Worktree.CheckoutPath
 		}
 		agent, agentPresent := agentsByPane[pane.PaneID]
-		agentID := ""
-		if agentPresent {
-			agentID = optionalString(agent.Name)
-			if agentID == "" {
-				agentID = optionalString(agent.Agent)
-			}
-		}
+		agentID, agentProvider := projectAgentIdentity(agent, agentPresent)
 		var agentSession *corebackend.AgentSessionRef
 		if ref, present := sessionRefsByPane[pane.PaneID]; present {
 			agentSession = &corebackend.AgentSessionRef{
@@ -926,6 +921,7 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 			NativeAgentState: pane.AgentStatus,
 			TerminalID:       pane.TerminalID,
 			AgentID:          agentID,
+			AgentProvider:    agentProvider,
 			AgentSession:     agentSession,
 			AgentPresent:     agentPresent,
 			RepoKey:          repoKey,
@@ -936,6 +932,14 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 		})
 	}
 	return live, nil
+}
+
+func projectAgentIdentity(agent agentJSON, present bool) (string, string) {
+	if !present {
+		return "", ""
+	}
+	provider := optionalString(agent.Agent)
+	return cmp.Or(optionalString(agent.Name), provider), provider
 }
 
 func parseAgentSession(ref *agentSessionJSON) (agentSessionKey, bool, error) {

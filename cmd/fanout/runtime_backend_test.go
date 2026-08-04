@@ -401,19 +401,56 @@ func TestBackendSelectionVerifierRechecksSharedHerdrProvisionalIntent(t *testing
 }
 
 func TestValidateLaunchBackendAllowsHerdrAndRejectsTeam(t *testing.T) {
-	if err := validateLaunchBackend(&cliflags.Config{}, backend.Selection{Name: backend.Herdr}); err != nil {
+	if err := validateLaunchBackend(&cliflags.Config{}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{}); err != nil {
 		t.Fatalf("Herdr error = %v", err)
 	}
-	err := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Herdr})
+	err := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{})
 	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "--team") {
 		t.Fatalf("team error = %v, want ErrUnsupported", err)
 	}
-	if err := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Tmux}); err != nil {
+	if err := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Tmux}, runtimeBackendInputs{}); err != nil {
 		t.Fatalf("tmux error = %v", err)
 	}
-	err = validateLaunchBackend(&cliflags.Config{TUIInteractive: true}, backend.Selection{Name: backend.Herdr})
+	err = validateLaunchBackend(&cliflags.Config{TUIInteractive: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{})
 	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "interactive TUI") {
 		t.Fatalf("TUI error = %v, want deferred interactive launch", err)
+	}
+}
+
+func TestValidateLaunchBackendRejectsCodexChildPlanMode(t *testing.T) {
+	selection := backend.Selection{Name: backend.Herdr}
+	inputs := runtimeBackendInputs{childPlanMode: true}
+	tests := []cliflags.Config{
+		{Agent: "codex"},
+		{Agent: "claude", AgentOverrides: []cliflags.AgentOverride{{Target: "task-a", Name: "codex"}}},
+	}
+	for _, cfg := range tests {
+		err := validateLaunchBackend(&cfg, selection, inputs)
+		if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "#554") {
+			t.Fatalf("Codex Plan Mode error = %v, want pre-mutation rejection", err)
+		}
+	}
+	if err := validateLaunchBackend(&cliflags.Config{Agent: "claude"}, selection, inputs); err != nil {
+		t.Fatalf("Claude child Plan Mode error = %v", err)
+	}
+}
+
+func TestResolveLaunchBackendRejectsCodexPlanBeforeOwnedSessionCreation(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("TMUX", "")
+	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	planMode := true
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resolveLaunchBackend(&cliflags.Config{
+		ParentRef: "425", Agent: "codex", PlanMode: &planMode,
+	}, repo, store, nil)
+	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "#554") {
+		t.Fatalf("pre-session Codex Plan Mode error = %v, want ErrUnsupported", err)
 	}
 }
 

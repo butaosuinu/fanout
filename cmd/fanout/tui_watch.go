@@ -12,6 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
+	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
@@ -406,6 +407,9 @@ func (c *watchLivePaneCache) load() ([]backend.LivePane, error) {
 func watchPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
 	if backend.NormalizeName(pane.Backend) != backend.NormalizeName(live.Ref.Backend) || pane.PaneID != live.Ref.Pane {
 		return false
+	}
+	if backend.NormalizeName(pane.Backend) == backend.Herdr {
+		return sessionview.HerdrPaneMatches(pane, live)
 	}
 	if shellKey := strings.TrimSpace(pane.ShellKey); shellKey != "" {
 		return shellKey == live.ShellKey

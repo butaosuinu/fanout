@@ -1663,6 +1663,33 @@ func TestWatchPaneMatchesLiveRequiresBackendMatch(t *testing.T) {
 	}
 }
 
+func TestWatchPaneMatchesLiveRequiresExactHerdrIdentity(t *testing.T) {
+	pane := state.Pane{
+		Backend: backend.Herdr, PaneID: "w1:p1", Agent: "codex",
+		WorktreePath: "/repo/.fanout/worktrees/child", HerdrWorkspaceID: "w1",
+		HerdrTerminalID: "term-1", HerdrRepoKey: "/repo/.git",
+		HerdrAgentID: "fanout-child", HerdrSession: "fanout-owned",
+		HerdrSocketPath: "/tmp/fanout-owned/herdr.sock",
+	}
+	live := backend.LivePane{
+		Ref:         backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
+		CurrentPath: pane.WorktreePath, TerminalID: "term-1",
+		AgentID: "fanout-child", AgentProvider: "codex", AgentPresent: true,
+		RepoKey: "/repo/.git", ProjectRoot: "/repo", WorktreePath: pane.WorktreePath,
+		SessionID: "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",
+		AgentSession: &backend.AgentSessionRef{
+			Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "thread-1",
+		},
+	}
+	if !watchPaneMatchesLive(pane, live) {
+		t.Fatal("watchPaneMatchesLive() rejected exact Herdr identity with a later session ref")
+	}
+	live.AgentProvider = "claude"
+	if watchPaneMatchesLive(pane, live) {
+		t.Fatal("watchPaneMatchesLive() accepted a different Herdr provider")
+	}
+}
+
 func TestWatchPaneMatchesLiveRequiresShellKeyForShellRows(t *testing.T) {
 	pane := state.Pane{
 		Kind:         state.PaneKindShell,

@@ -344,23 +344,10 @@ func (l *Launcher) failClosedIssuedHerdrLaunch(
 	journal *state.LockedHerdrIntents,
 	intent state.HerdrIntent,
 ) error {
-	panes, observeErr := l.Herdr.LivePanes(context.Background())
-	detail := "no exact live agent was observed"
-	if observeErr != nil {
-		detail = "live agent observation failed: " + observeErr.Error()
-	} else if herdrLaunchNamePresent(intent, panes) {
-		detail = "the operation-bound agent name is present"
-	}
-	return markHerdrIntentManual(journal, intent, fmt.Errorf("%w: %s", errHerdrLaunchResponseLost, detail))
-}
-
-func herdrLaunchNamePresent(intent state.HerdrIntent, panes []backend.LivePane) bool {
-	for _, pane := range panes {
-		if pane.Ref.Pane == intent.Resource.PaneID && pane.AgentID == intent.Launch.AgentName {
-			return true
-		}
-	}
-	return false
+	return markHerdrIntentManual(journal, intent, fmt.Errorf(
+		"%w: launch-token outcome is indeterminate",
+		errHerdrLaunchResponseLost,
+	))
 }
 
 func (l *Launcher) finalizeHerdrLaunch(

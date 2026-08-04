@@ -28,8 +28,12 @@ type fakeHerdrLaunchRuntime struct {
 	remove      func(string, string) error
 	launchRoute herdrrun.OwnedLaunchRoute
 	processInfo herdrrun.PaneProcessInfo
+	process     func(context.Context, string) (herdrrun.PaneProcessInfo, error)
 	processErr  error
 	liveErr     error
+	wait        func(context.Context, string, string, time.Duration) error
+	liveCalls   int
+	renameCalls int
 	tokenCalls  int
 }
 
@@ -42,11 +46,17 @@ func (f *fakeHerdrLaunchRuntime) PrepareWorkloadEnvironment(string, []string) (s
 	return "/tmp/env", 1, nil
 }
 
-func (f *fakeHerdrLaunchRuntime) WaitForLauncher(context.Context, string, string, time.Duration) error {
+func (f *fakeHerdrLaunchRuntime) WaitForLauncher(ctx context.Context, paneID, nonce string, timeout time.Duration) error {
+	if f.wait != nil {
+		return f.wait(ctx, paneID, nonce, timeout)
+	}
 	return nil
 }
 
-func (f *fakeHerdrLaunchRuntime) ProcessInfo(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+func (f *fakeHerdrLaunchRuntime) ProcessInfo(ctx context.Context, paneID string) (herdrrun.PaneProcessInfo, error) {
+	if f.process != nil {
+		return f.process(ctx, paneID)
+	}
 	return f.processInfo, f.processErr
 }
 
@@ -56,9 +66,14 @@ func (f *fakeHerdrLaunchRuntime) SendLaunchToken(context.Context, string, string
 }
 
 func (f *fakeHerdrLaunchRuntime) LivePanes(context.Context) ([]backend.LivePane, error) {
+	f.liveCalls++
 	return append([]backend.LivePane(nil), f.live...), f.liveErr
 }
-func (f *fakeHerdrLaunchRuntime) RenameAgent(context.Context, string, string) error { return nil }
+
+func (f *fakeHerdrLaunchRuntime) RenameAgent(context.Context, string, string) error {
+	f.renameCalls++
+	return nil
+}
 
 func (f *fakeHerdrLaunchRuntime) RemoveWorktree(_ context.Context, workspaceID, path string) error {
 	f.removeCalls = append(f.removeCalls, workspaceID)
@@ -116,8 +131,11 @@ func TestIssuedHerdrLaunchWithMatchingNameStillFailsClosed(t *testing.T) {
 	err = launcher.failClosedIssuedHerdrLaunch(journal, intent)
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) ||
 		!strings.Contains(err.Error(), "refusing automatic adoption") ||
-		!strings.Contains(err.Error(), "operation-bound agent name is present") {
+		!strings.Contains(err.Error(), "launch-token outcome is indeterminate") {
 		t.Fatalf("response-loss error = %v", err)
+	}
+	if runtime.liveCalls != 0 {
+		t.Fatalf("response-loss fail-closed performed %d late observations", runtime.liveCalls)
 	}
 	persisted, err := state.LoadHerdrIntents(repo)
 	if err != nil {
@@ -247,6 +265,32 @@ func TestOptionalHerdrAgentSession(t *testing.T) {
 	}
 }
 
+func TestExactHerdrLaunchPaneRequiresProviderAndAcceptsOptionalSession(t *testing.T) {
+	intent := state.HerdrIntent{
+		WorktreePath: "/repo/.fanout/worktrees/child",
+		Session:      "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",
+		Resource: state.HerdrResource{
+			WorkspaceID: "w1", PaneID: "w1:p1", TerminalID: "term-1",
+			RepoKey: "/repo/.git", CurrentPath: "/repo/.fanout/worktrees/child",
+		},
+		Launch: &state.HerdrLaunch{Agent: "codex"},
+	}
+	live := testHerdrIdlePane(intent)
+	live.AgentID = "fanout-child"
+	live.AgentProvider = "codex"
+	live.AgentPresent = true
+	live.AgentSession = &backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "thread-1",
+	}
+	if _, found := exactHerdrLaunchPane(intent, []backend.LivePane{live}, "fanout-child"); !found {
+		t.Fatal("exactHerdrLaunchPane() rejected a valid optional session")
+	}
+	live.AgentProvider = "claude"
+	if _, found := exactHerdrLaunchPane(intent, []backend.LivePane{live}, "fanout-child"); found {
+		t.Fatal("exactHerdrLaunchPane() accepted a different provider")
+	}
+}
+
 func TestVerifyHerdrAgentProcessAcceptsInterpreterWrapper(t *testing.T) {
 	intent := state.HerdrIntent{
 		WorktreePath: "/repo/worktree",
@@ -302,6 +346,73 @@ func TestExpiredHerdrAgentStartBecomesManualCleanupRequired(t *testing.T) {
 	saved, found := journal.FindIntent(intent.ID)
 	if !found || saved.Status != state.HerdrIntentManualCleanupRequired {
 		t.Fatalf("saved intent = (%+v, %t), want manual cleanup", saved, found)
+	}
+}
+
+func TestHerdrLaunchDoesNotIssueTokenAfterLauncherWaitExpires(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrLaunchRuntime{}
+	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, &runtime.fakeHerdrRealizeRuntime, hooks)
+	result, err := realizeHerdrWorktree(
+		context.Background(), testHerdrWorktreeRequest(repo, "wait-expired", 533),
+		&runtime.fakeHerdrRealizeRuntime, hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	intent := result.Intent
+	intent.ExpiresUnixMS = time.Now().Add(40 * time.Millisecond).UnixMilli()
+	intent.Launch = validTestHerdrLaunch()
+	intent.Launch.TokenIssued = false
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	runtime.wait = func(context.Context, string, string, time.Duration) error {
+		time.Sleep(60 * time.Millisecond)
+		return nil
+	}
+	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrAgent(
+		context.Background(), Request{Agent: "claude"}, locked,
+		herdrrun.OwnedLaunchRoute{}, intent, nil,
+	)
+	if err == nil || runtime.tokenCalls != 0 {
+		t.Fatalf("expired launch error/token calls = %v/%d, want error/0", err, runtime.tokenCalls)
+	}
+}
+
+func TestHerdrLaunchDoesNotRenameAfterProcessCheckExpires(t *testing.T) {
+	runtime := &fakeHerdrLaunchRuntime{}
+	intent := state.HerdrIntent{
+		WorktreePath: "/repo/worktree", ExpiresUnixMS: time.Now().Add(40 * time.Millisecond).UnixMilli(),
+		Resource: state.HerdrResource{PaneID: "w1:p1"},
+		Launch: &state.HerdrLaunch{
+			AgentName: "fanout-child", Executable: "/bin/claude", Args: []string{"prompt"},
+		},
+	}
+	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+		time.Sleep(60 * time.Millisecond)
+		return herdrrun.PaneProcessInfo{
+			ShellPID: 42, ForegroundProcessGroup: 42,
+			ForegroundProcesses: []herdrrun.PaneProcess{{
+				PID: 42, CWD: intent.WorktreePath, Argv: []string{"/bin/claude", "prompt"},
+			}},
+		}, nil
+	}
+	err := (&Launcher{Herdr: runtime}).verifyAndRenameHerdrAgent(context.Background(), intent)
+	if err == nil || runtime.renameCalls != 0 {
+		t.Fatalf("expired process check error/rename calls = %v/%d, want error/0", err, runtime.renameCalls)
 	}
 }
 
