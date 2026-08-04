@@ -15,16 +15,34 @@
 <meta name="color-scheme" content="light dark" />
 <title>fanout dashboard</title>
 <script>
-/* FOUC avoidance — runs before first paint. localStorage key: fanout.theme
- * (a plain non-module script: Vite leaves it untouched, so it still runs
- * before the bundle loads). */
+/* FOUC avoidance — runs before first paint. localStorage keys: fanout.theme,
+ * fanout.locale (a plain non-module script: Vite leaves it untouched, so it
+ * still runs before the bundle loads). Both keys use "absent = follow the
+ * system"; the locale rule must stay identical to detectLocale() in
+ * src/i18n.ts. lang drives screen-reader voice and line breaking, so it has
+ * to be right on the first paint, not after React mounts. */
 (function () {
   try {
     var t = localStorage.getItem("fanout.theme");
     if (t !== "light" && t !== "dark")
       t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     document.documentElement.dataset.theme = t;
-  } catch (e) { document.documentElement.dataset.theme = "light"; }
+    var l = localStorage.getItem("fanout.locale");
+    if (l !== "ja" && l !== "en") {
+      var tags = navigator.languages && navigator.languages.length
+        ? navigator.languages : [navigator.language];
+      l = "en";
+      for (var i = 0; i < tags.length; i++) {
+        var p = String(tags[i] || "").toLowerCase().split("-")[0];
+        if (p === "ja") { l = "ja"; break; }
+        if (p === "en") { l = "en"; break; }
+      }
+    }
+    document.documentElement.lang = l;
+  } catch (e) {
+    document.documentElement.dataset.theme = "light";
+    document.documentElement.lang = "ja";
+  }
 })();
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />

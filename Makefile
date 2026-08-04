@@ -42,7 +42,7 @@ endif
 GO_CACHE_ENV   = $(if $(strip $(GOCACHE)),GOCACHE="$(GOCACHE)")
 PNPM_STORE_ARG = $(if $(strip $(PNPM_STORE_DIR)),--store-dir "$(PNPM_STORE_DIR)")
 
-.PHONY: install link uninstall build-go build-go-for-install build-web clean-go clean-web guard-retired-codex-review install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web fix vuln check-bats review-risk prepare-dev-cache
+.PHONY: install link uninstall build-go build-go-for-install build-web clean-go clean-web guard-retired-codex-review install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web i18n-web fix vuln check-bats review-risk prepare-dev-cache
 
 # The local default lives under predictable /tmp on supported macOS and Linux
 # hosts. Reject a pre-created symlink or a directory owned by another user
@@ -189,9 +189,13 @@ uninstall: uninstall-integrations
 #                       `lint-web`, with shared prerequisites run once.
 # `make test-web`     — dashboard web UI tests (vitest; needs Node + pnpm).
 # `make lint-web`     — dashboard web UI lint: oxlint + oxfmt --check + type
-#                       check (tsc --noEmit), cheap-first. Needs Node + pnpm;
-#                       `make lint` stays Node-free on purpose.
+#                       check (tsc --noEmit), cheap-first, then the translation
+#                       catalog gate. Needs Node + pnpm; `make lint` stays
+#                       Node-free on purpose.
 # `make fmt-web`      — dashboard web UI formatting (oxfmt; web/.oxfmtrc.json).
+# `make i18n-web`     — re-extract the dashboard translation catalogs
+#                       (web/src/locales/*.po). Run it after adding or editing
+#                       a UI string, then commit the catalog diff.
 # `make test-tier1`   — flag / prerequisite tests, no live tmux panes.
 # `make test-tier2`   — --dry-run golden tests against fixture scenarios.
 # `make lint`         — pinned golangci-lint v2 (.golangci.yml) plus shellcheck
@@ -269,12 +273,30 @@ go-test: | prepare-dev-cache
 test-web: $(WEB_DIR)/node_modules/.installed
 	cd $(WEB_DIR) && $(PNPM) run test
 
-# Cheap-first: oxlint (ms) -> oxfmt --check (ms) -> tsc (s).
+# Cheap-first: oxlint (ms) -> oxfmt --check (ms) -> tsc (s) -> catalogs (s).
+# The catalog gate is last because it is the only step that writes to the tree:
+# `lingui extract` rewrites web/src/locales/*.po, so a stale catalog surfaces as
+# a git diff. That is why it assumes a clean tree, the same contract as
+# check-marker. `lingui compile --strict` then fails on any untranslated entry;
+# its compiled output next to the .po is gitignored (a verification artifact —
+# the runtime compiles .po through @lingui/vite-plugin at build time).
 lint-web: $(WEB_DIR)/node_modules/.installed
 	cd $(WEB_DIR) && $(PNPM) run lint && $(PNPM) run fmt:check && $(PNPM) run typecheck
+	cd $(WEB_DIR) && $(PNPM) run i18n:extract
+	@set -eu; \
+		drift="$$(git status --porcelain -- $(WEB_DIR)/src/locales)"; \
+		[ -z "$$drift" ] || { \
+			echo "error: translation catalogs are stale; run 'make i18n-web' and commit the result." >&2; \
+			printf '%s\n' "$$drift" >&2; \
+			exit 1; \
+		}
+	cd $(WEB_DIR) && $(PNPM) run i18n:verify
 
 fmt-web: $(WEB_DIR)/node_modules/.installed
 	cd $(WEB_DIR) && $(PNPM) run fmt
+
+i18n-web: $(WEB_DIR)/node_modules/.installed
+	cd $(WEB_DIR) && $(PNPM) run i18n:extract
 
 # Binary install because upstream does not guarantee `go install`; the URL is
 # pinned to the release tag.

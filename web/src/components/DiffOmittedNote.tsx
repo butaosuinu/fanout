@@ -1,3 +1,4 @@
+import { Plural, useLingui } from "@lingui/react/macro";
 import { OMITTED_REASON_LABELS } from "../lib/diff";
 import type { DiffFileEntry } from "../lib/types";
 
@@ -11,17 +12,20 @@ import type { DiffFileEntry } from "../lib/types";
  * 警告帯の直下、本文領域の外に置いて常に見えるようにする。件数が上限
  * (collectionLimit)まで伸びうるので既定は畳んでおく。 */
 export function DiffOmittedNote({ files }: { files: DiffFileEntry[] }) {
+  const { i18n, t } = useLingui();
   const omitted = files.filter((f) => !f.patchIncluded);
   if (!omitted.length) return null;
   return (
     <details className="diff-omitted">
-      <summary>{omitted.length} ファイルは patch に含まれていません</summary>
+      <summary>
+        <Plural value={omitted.length} other="# ファイルは patch に含まれていません" />
+      </summary>
       <ul>
         {omitted.map((f) => (
           <li key={f.path}>
             <span className="diff-omitted-path">{f.path}</span>
             <span className="diff-file-omitted">
-              {f.omittedReason ? OMITTED_REASON_LABELS[f.omittedReason] : "省略"}
+              {f.omittedReason ? i18n._(OMITTED_REASON_LABELS[f.omittedReason]) : t`省略`}
             </span>
           </li>
         ))}

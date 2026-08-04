@@ -1,3 +1,4 @@
+import { useLingui } from "@lingui/react/macro";
 import { useCallback, useEffect, useState } from "react";
 import { apiUrl } from "../lib/api";
 import { clock } from "../lib/format";
@@ -11,12 +12,25 @@ export interface PlanView {
   refetch: () => void;
 }
 
-const LOADING = "(plan を取得中…)";
-const UNAVAILABLE = "(plan を取得できませんでした)";
-const NOT_FOUND =
-  "(plan が見つかりません — まだ提案されていないか、画面外へスクロールアウトしています)";
+/* usePeek と同じ理由で、state には生データだけを置いて文言は返す直前に組む
+ * (翻訳済み文字列を溜めると、言語切替のあと再取得するまで古い言語が残る)。
+ * plan が見つかったときだけ text は capture 由来の実文書になる。 */
+type PlanState = {
+  /* 実際に取得できた plan 本文。プレースホルダは placeholder 側で決める。 */
+  plan: string | null;
+  placeholder: "loading" | "unavailable" | "notFound" | "ended";
+  capturedAt: string | null;
+  found: boolean;
+  loading: boolean;
+};
 
-type ViewState = Omit<PlanView, "refetch">;
+const INITIAL: PlanState = {
+  plan: null,
+  placeholder: "loading",
+  capturedAt: null,
+  found: false,
+  loading: true,
+};
 
 /* usePeek 踏襲の /api/plan 取得 hook。ただしポーリングはしない: plan は peek の
  * ような流れる出力ではなく一度提案されたら安定する文書なので、mount 時に一度
@@ -26,12 +40,8 @@ type ViewState = Omit<PlanView, "refetch">;
  * 一度表示できた plan は alive が落ちても保持する(pane 終了で読みかけの文書を
  * 消さない)。 */
 export function usePlan(pane: { paneId: string; alive: boolean } | null, token: string): PlanView {
-  const [view, setView] = useState<ViewState>({
-    text: LOADING,
-    meta: "—",
-    found: false,
-    loading: true,
-  });
+  const { t } = useLingui();
+  const [state, setState] = useState<PlanState>(INITIAL);
   const [generation, setGeneration] = useState(0);
   const refetch = useCallback(() => setGeneration((g) => g + 1), []);
   const paneId = pane?.paneId ?? null;
@@ -41,22 +51,17 @@ export function usePlan(pane: { paneId: string; alive: boolean } | null, token: 
     if (!paneId) return;
     if (!alive) {
       // 取得済みの plan は残す(snapshot の alive 反転で文書を吹き飛ばさない)
-      setView((v) =>
+      setState((v) =>
         v.found
           ? v
-          : {
-              text: "(plan を取得できません — ペインは終了しています)",
-              meta: "—",
-              found: false,
-              loading: false,
-            },
+          : { plan: null, placeholder: "ended", capturedAt: null, found: false, loading: false },
       );
       return;
     }
 
     let disposed = false;
     const ctrl = new AbortController();
-    setView((v) => ({ ...v, loading: true, ...(v.found ? {} : { text: LOADING }) }));
+    setState((v) => ({ ...v, loading: true, ...(v.found ? {} : { placeholder: "loading" }) }));
 
     const fetchPlan = async () => {
       try {
@@ -66,20 +71,33 @@ export function usePlan(pane: { paneId: string; alive: boolean } | null, token: 
         });
         if (disposed) return;
         if (!res.ok) {
-          setView({ text: UNAVAILABLE, meta: "—", found: false, loading: false });
+          setState({
+            plan: null,
+            placeholder: "unavailable",
+            capturedAt: null,
+            found: false,
+            loading: false,
+          });
           return;
         }
         const body = (await res.json()) as PlanResponse;
         if (disposed) return;
-        setView({
-          text: body.found ? (body.plan ?? "") : NOT_FOUND,
-          meta: `captured ${clock(body.capturedAt)}`,
+        setState({
+          plan: body.found ? (body.plan ?? "") : null,
+          placeholder: "notFound",
+          capturedAt: body.capturedAt,
           found: body.found,
           loading: false,
         });
       } catch (err) {
         if (disposed || (err instanceof DOMException && err.name === "AbortError")) return;
-        setView({ text: UNAVAILABLE, meta: "—", found: false, loading: false });
+        setState({
+          plan: null,
+          placeholder: "unavailable",
+          capturedAt: null,
+          found: false,
+          loading: false,
+        });
       }
     };
 
@@ -90,5 +108,17 @@ export function usePlan(pane: { paneId: string; alive: boolean } | null, token: 
     };
   }, [paneId, alive, token, generation]);
 
-  return { ...view, refetch };
+  const placeholders = {
+    loading: t`(plan を取得中…)`,
+    unavailable: t`(plan を取得できませんでした)`,
+    notFound: t`(plan が見つかりません — まだ提案されていないか、画面外へスクロールアウトしています)`,
+    ended: t`(plan を取得できません — ペインは終了しています)`,
+  };
+  return {
+    text: state.plan ?? placeholders[state.placeholder],
+    meta: state.capturedAt ? `captured ${clock(state.capturedAt)}` : "—",
+    found: state.found,
+    loading: state.loading,
+    refetch,
+  };
 }

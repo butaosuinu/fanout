@@ -1,3 +1,6 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { FileDiff, Virtualizer } from "@pierre/diffs/react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
@@ -68,10 +71,12 @@ const LAYOUT_CYCLE: Record<DiffLayout, DiffLayout> = {
   split: "stack",
   stack: "auto",
 };
-const LAYOUT_LABELS: Record<DiffLayout, string> = {
-  auto: "自動",
-  split: "左右 2 面",
-  stack: "縦積み",
+/* モジュール定数は import 時に一度だけ評価されるので、翻訳済み文字列ではなく
+ * descriptor を置き、描画時に i18n._() で解決する。 */
+const LAYOUT_LABELS: Record<DiffLayout, MessageDescriptor> = {
+  auto: msg`自動`,
+  split: msg`左右 2 面`,
+  stack: msg`縦積み`,
 };
 
 /* 片側しかない file(新規追加・削除)は data-diff-type="single" になり、既定では
@@ -106,6 +111,9 @@ const DiffFiles = memo(function DiffFiles({
   registerHost: (index: number, el: HTMLDivElement | null) => void;
   onToggle: (index: number) => void;
 }) {
+  /* memo 境界の内側で locale を購読する。props はロケールに依存しないので、
+   * これが無いと言語を切り替えても行数ラベルと展開ボタン名が古いまま残る。 */
+  const { i18n, t } = useLingui();
   return (
     <>
       {plan.map(({ file, lines, initiallyCollapsed, highlight, inlineDiff }, i) => {
@@ -151,15 +159,19 @@ const DiffFiles = memo(function DiffFiles({
                   {/* 行数は「大きい file だ」という情報なので、畳んでいる間は
                       ボタンの外にテキストで残す */}
                   {collapsed && (
-                    <span className="diff-file-lines">{lines.toLocaleString()} 行</span>
+                    <span className="diff-file-lines">
+                      {t`${{ lines: lines.toLocaleString(i18n.locale) }} 行`}
+                    </span>
                   )}
                   {/* 名前に file 名を入れる — 入れないと、展開中の全ボタンが
                       「折りたたむ」で並び、支援技術から区別できない */}
                   <IconButton
+                    /* JS の t マクロを使う(<Trans> は {変数} 前後の空白を落とすため、
+                       " — " 区切りのアクセシブル名が壊れる) */
                     label={
                       collapsed
-                        ? `${file.name} — ${lines.toLocaleString()} 行 — 展開`
-                        : `${file.name} — 折りたたむ`
+                        ? t`${{ name: file.name }} — ${{ lines: lines.toLocaleString(i18n.locale) }} 行 — 展開`
+                        : t`${{ name: file.name }} — 折りたたむ`
                     }
                     onClick={() => onToggle(i)}
                   >
@@ -204,6 +216,7 @@ export function DiffOverlay({
   onOpenSettings: () => void;
   onClose: () => void;
 }) {
+  const { i18n, t } = useLingui();
   const { theme } = useTheme();
   const { light, dark } = useDiffTheme();
   const { view: viewMode, setView } = useDiffView();
@@ -505,7 +518,7 @@ export function DiffOverlay({
       id="diff-overlay"
       role={covering ? "dialog" : "complementary"}
       aria-modal={covering || undefined}
-      aria-label="worktree diff"
+      aria-label={t`worktree diff`}
       data-theme={theme}
       data-mode={viewMode}
       data-layout={stack ? "stack" : "split"}
@@ -543,7 +556,7 @@ export function DiffOverlay({
         <IconButton
           id="diff-reload"
           className="diff-reload"
-          label="再取得"
+          label={t`再取得`}
           disabled={state.phase === "loading"}
           onClick={refetch}
         >
@@ -553,7 +566,9 @@ export function DiffOverlay({
             押したときに何になるかの両方を名乗る。 */}
         <IconButton
           id="diff-layout"
-          label={`レイアウト: ${LAYOUT_LABELS[layout]}(クリックで${LAYOUT_LABELS[LAYOUT_CYCLE[layout]]})`}
+          label={t`レイアウト: ${{ current: i18n._(LAYOUT_LABELS[layout]) }}(クリックで${{
+            next: i18n._(LAYOUT_LABELS[LAYOUT_CYCLE[layout]]),
+          }})`}
           onClick={() => setLayout(LAYOUT_CYCLE[layout])}
         >
           {layout === "auto" ? (
@@ -566,33 +581,39 @@ export function DiffOverlay({
         </IconButton>
         <IconButton
           id="diff-view-mode"
-          label={viewMode === "full" ? "コンパクト表示" : "全画面表示"}
+          label={viewMode === "full" ? t`コンパクト表示` : t`全画面表示`}
           onClick={() => setView(viewMode === "full" ? "compact" : "full")}
         >
           {viewMode === "full" ? <IconMinimize /> : <IconMaximize />}
         </IconButton>
-        <IconButton id="diff-settings" label="テーマ設定" popup onClick={onOpenSettings}>
+        <IconButton id="diff-settings" label={t`テーマ設定`} popup onClick={onOpenSettings}>
           <IconTheme />
         </IconButton>
-        <IconButton id="diff-close" label="diff を閉じる" onClick={onClose}>
+        <IconButton id="diff-close" label={t`diff を閉じる`} onClick={onClose}>
           <IconClose />
         </IconButton>
       </header>
       {view?.warning && (
         <div className="diff-banner" role="status">
-          {view.warning}
+          {i18n._(view.warning)}
         </div>
       )}
       {diff && <DiffOmittedNote files={diff.files} />}
-      {state.phase === "loading" && <div className="diff-note">diff を取得中…(最大 10 秒)</div>}
+      {state.phase === "loading" && (
+        <div className="diff-note">
+          <Trans>diff を取得中…(最大 10 秒)</Trans>
+        </div>
+      )}
       {state.phase === "error" && (
         <div className="diff-note diff-error" role="alert">
-          {state.message}
+          {i18n._(state.message)}
         </div>
       )}
       {diff &&
         (diff.files.length === 0 ? (
-          <div className="diff-note">merge-base からの変更はありません</div>
+          <div className="diff-note">
+            <Trans>merge-base からの変更はありません</Trans>
+          </div>
         ) : (
           <div className="diff-main">
             <DiffFileList

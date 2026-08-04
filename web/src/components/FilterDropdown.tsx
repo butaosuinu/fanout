@@ -1,3 +1,4 @@
+import { Trans, useLingui } from "@lingui/react/macro";
 import { memo, useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
 
 export type Option = readonly [value: string, label: string];
@@ -35,6 +36,7 @@ export const FilterDropdown = memo(function FilterDropdown({
   onPickToken: (key: string, value: string) => void;
   onClearKey: (key: string) => void;
 }) {
+  const { t } = useLingui();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0); // roving tabindex の現在位置(visible 基準)
@@ -193,8 +195,8 @@ export const FilterDropdown = memo(function FilterDropdown({
                 ref={searchRef}
                 type="text"
                 value={query}
-                placeholder="絞り込み…"
-                aria-label={`${dataKey} の選択肢を検索`}
+                placeholder={t`絞り込み…`}
+                aria-label={t`${{ key: dataKey }} の選択肢を検索`}
                 autoComplete="off"
                 spellCheck={false}
                 onChange={(e) => {
@@ -239,7 +241,11 @@ export const FilterDropdown = memo(function FilterDropdown({
                 {l}
               </button>
             ))}
-            {!visible.length && <div className="fd-empty">該当なし</div>}
+            {!visible.length && (
+              <div className="fd-empty">
+                <Trans>該当なし</Trans>
+              </div>
+            )}
           </div>
         </div>
       )}

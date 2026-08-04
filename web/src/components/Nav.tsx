@@ -1,14 +1,16 @@
+import { useLingui } from "@lingui/react/macro";
 import type { ConnState } from "../hooks/useSnapshot";
 
 /* 外観と diff テーマは設定モーダルに集約する(将来の設定項目もそこへ足す)。
  * Nav 側はその入口 1 個だけを持つ。 */
 function SettingsButton({ onClick }: { onClick: () => void }) {
+  const { t } = useLingui();
   return (
     <button
       id="settings-open"
       className="settings-btn"
       type="button"
-      aria-label="設定"
+      aria-label={t`設定`}
       aria-haspopup="dialog"
       onClick={onClick}
     >

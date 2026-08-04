@@ -22,6 +22,7 @@ export class ChunkBoundary extends Component<
   }
 
   componentDidCatch(error: unknown) {
+    // 開発者向けのログなので翻訳しない(画面には出ない)
     console.error("chunk の読み込みに失敗しました", error);
   }
 

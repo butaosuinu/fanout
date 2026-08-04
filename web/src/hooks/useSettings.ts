@@ -1,8 +1,11 @@
 import { useSyncExternalStore } from "react";
+import { activateLocale, detectLocale, isLocale, type Locale } from "../i18n";
 import { normalizeDiffTheme } from "../lib/diffThemes";
 
 export type Theme = "light" | "dark";
 export type Appearance = "system" | "light" | "dark";
+/* 表示言語。auto = ブラウザ / OS の言語に追従(= キー不在)。 */
+export type LocalePref = "auto" | Locale;
 /* diff ビュアーの出し方。full = 全画面モーダル、compact = 詳細ドロワーの隣 */
 export type DiffView = "full" | "compact";
 /* 差分の並べ方。auto = 幅で split / stack を選ぶ、split = 左右 2 面、
@@ -10,6 +13,7 @@ export type DiffView = "full" | "compact";
 export type DiffLayout = "auto" | "split" | "stack";
 
 const THEME_KEY = "fanout.theme";
+const LOCALE_KEY = "fanout.locale";
 const DIFF_LIGHT_KEY = "fanout.diffTheme.light";
 const DIFF_DARK_KEY = "fanout.diffTheme.dark";
 const DIFF_VIEW_KEY = "fanout.diffView";
@@ -54,6 +58,17 @@ function currentMode(): Appearance {
   return stored === "dark" || stored === "light" ? stored : "system";
 }
 
+/* 明示選択がない(キー無し)= ブラウザ / OS 追従。fanout.theme と同じ意味論。 */
+function currentLocalePref(): LocalePref {
+  const stored = read(LOCALE_KEY);
+  return isLocale(stored) ? stored : "auto";
+}
+
+function currentLocale(): Locale {
+  const pref = currentLocalePref();
+  return pref === "auto" ? detectLocale() : pref;
+}
+
 function currentDiffLight(): string {
   return normalizeDiffTheme(read(DIFF_LIGHT_KEY), false);
 }
@@ -95,10 +110,20 @@ function onSystemChange(e: MediaQueryListEvent) {
   emit();
 }
 
+/* 外観の matchMedia と対になる、表示言語のシステム追従。ブラウザの優先言語は実行中に
+ * 変わりうる(OS の言語設定や、ブラウザの言語リスト並べ替え)。明示選択していない
+ * あいだは追従しないと、表示と <html lang> が再読み込みまで旧言語で取り残される。 */
+function onLanguageChange() {
+  if (currentLocalePref() !== "auto") return;
+  activateLocale(currentLocale());
+  emit();
+}
+
 function subscribe(cb: () => void): () => void {
   if (listeners.size === 0) {
     mq = matchMedia("(prefers-color-scheme: dark)");
     mq.addEventListener("change", onSystemChange);
+    window.addEventListener("languagechange", onLanguageChange);
   }
   listeners.add(cb);
   return () => {
@@ -106,6 +131,7 @@ function subscribe(cb: () => void): () => void {
     if (listeners.size === 0) {
       mq?.removeEventListener("change", onSystemChange);
       mq = null;
+      window.removeEventListener("languagechange", onLanguageChange);
     }
   };
 }
@@ -120,6 +146,12 @@ function setMode(mode: Appearance) {
     write(THEME_KEY, mode);
     document.documentElement.dataset.theme = mode;
   }
+  emit();
+}
+
+function setLocalePref(pref: LocalePref) {
+  write(LOCALE_KEY, pref === "auto" ? null : pref);
+  activateLocale(currentLocale());
   emit();
 }
 
@@ -148,6 +180,17 @@ function setDiffView(view: DiffView) {
  * 変わったときだけ App が再レンダーする。 */
 export function useSystemThemeSync(): void {
   useSyncExternalStore(subscribe, currentTheme);
+}
+
+/* 表示言語。mode は設定モーダルの選択(auto を含む)、locale は解決済みの表示言語。 */
+export function useLocale(): {
+  mode: LocalePref;
+  locale: Locale;
+  setLocale: (pref: LocalePref) => void;
+} {
+  const mode = useSyncExternalStore(subscribe, currentLocalePref);
+  const locale = useSyncExternalStore(subscribe, currentLocale);
+  return { mode, locale, setLocale: setLocalePref };
 }
 
 /* 解決済みの light/dark だけが要る箇所用(diff オーバーレイの themeType など)。 */
@@ -189,3 +232,10 @@ export function useDiffLayout(): {
 } {
   return { layout: useSyncExternalStore(subscribe, currentDiffLayout), setLayout: setDiffLayout };
 }
+
+/* 初期ロケールの適用。I18nProvider は locale 未設定だと children を描かないので、
+ * 最初の render より前に済ませておく必要がある。設定を持つのはこのモジュールだけ
+ * なので、エントリポイント(main.tsx / テストの setup)に覚えさせず、ここで一度だけ
+ * 走らせる — App は必ずこのモジュールを import するため、どの経路から render しても
+ * 解決済みロケールで始まる。解決規則は index.html のブートストラップと同じ。 */
+activateLocale(currentLocale());

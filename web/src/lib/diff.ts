@@ -1,3 +1,5 @@
+import type { MessageDescriptor } from "@lingui/core";
+import { msg, plural } from "@lingui/core/macro";
 import { parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs";
 import type { DiffFileEntry, DiffOmittedReason, DiffResponse } from "./types";
 import { clock } from "./format";
@@ -104,11 +106,11 @@ export function planDiffFiles(files: FileDiffMetadata[]): DiffFilePlan[] {
   });
 }
 
-export const OMITTED_REASON_LABELS: Record<Exclude<DiffOmittedReason, "">, string> = {
-  binary: "バイナリのため patch なし",
-  tooLarge: "サイズ上限超過のため patch なし",
-  collectionLimit: "収集上限(10 MiB)で省略",
-  responseLimit: "応答上限(1 MiB)で省略",
+export const OMITTED_REASON_LABELS: Record<Exclude<DiffOmittedReason, "">, MessageDescriptor> = {
+  binary: msg`バイナリのため patch なし`,
+  tooLarge: msg`サイズ上限超過のため patch なし`,
+  collectionLimit: msg`収集上限(10 MiB)で省略`,
+  responseLimit: msg`応答上限(1 MiB)で省略`,
 };
 
 export interface DiffFileGroup {
@@ -253,12 +255,17 @@ export function indexDiffFilesByPath(files: FileDiffMetadata[]): Map<string, num
 
 /* contract の指示: truncated、またはいずれかの patchIncluded=false なら
  * 「review 対象が patch に揃っていない」ことを警告する。 */
-export function diffWarning(d: DiffResponse): string | null {
+export function diffWarning(d: DiffResponse): MessageDescriptor | null {
   let omitted = 0;
   for (const f of d.files) if (!f.patchIncluded) omitted++;
   if (!d.truncated && omitted === 0) return null;
-  const detail = omitted > 0 ? `${omitted} file の patch が省略されています` : "patch は不完全です";
-  return `レビュー対象が patch に揃っていません — ${detail}`;
+  /* 断片を組み立てず 2 つの完成した文にする — 訳者が語順を選べるようにするため。 */
+  if (omitted > 0) {
+    return msg`レビュー対象が patch に揃っていません — ${plural(omitted, {
+      other: "# file の patch が省略されています",
+    })}`;
+  }
+  return msg`レビュー対象が patch に揃っていません — patch は不完全です`;
 }
 
 /* additions/deletions の合計。collectionLimit 行(null)は数えない。 */
@@ -282,7 +289,7 @@ export function diffMeta(d: DiffResponse): string {
 
 /* /api/diff のエラー body は {"error":"message"}(text は敵性入力 — 呼び出し側は
  * テキストノードのみで描画)。token/405 の middleware エラーは text/plain。 */
-export async function diffErrorMessage(res: Response): Promise<string> {
+export async function diffErrorMessage(res: Response): Promise<MessageDescriptor> {
   let detail = "";
   try {
     const body: unknown = await res.json();
@@ -292,11 +299,17 @@ export async function diffErrorMessage(res: Response): Promise<string> {
   } catch {
     /* JSON でない body(middleware の text/plain 等)は詳細なし */
   }
-  const head =
-    res.status === 404
-      ? "diff を取得できません — worktree の記録が見つかりません(cleanup 済みか、サーバーが /api/diff 未対応の可能性)"
-      : res.status === 502
-        ? "サーバーが diff を安全に生成できませんでした"
-        : `diff の取得に失敗しました (HTTP ${res.status})`;
-  return detail ? `${head}: ${detail}` : head;
+  if (res.status === 404) {
+    return detail
+      ? msg`diff を取得できません — worktree の記録が見つかりません(cleanup 済みか、サーバーが /api/diff 未対応の可能性): ${{ detail }}`
+      : msg`diff を取得できません — worktree の記録が見つかりません(cleanup 済みか、サーバーが /api/diff 未対応の可能性)`;
+  }
+  if (res.status === 502) {
+    return detail
+      ? msg`サーバーが diff を安全に生成できませんでした: ${{ detail }}`
+      : msg`サーバーが diff を安全に生成できませんでした`;
+  }
+  return detail
+    ? msg`diff の取得に失敗しました (HTTP ${{ status: res.status }}): ${{ detail }}`
+    : msg`diff の取得に失敗しました (HTTP ${{ status: res.status }})`;
 }

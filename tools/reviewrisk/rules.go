@@ -62,10 +62,11 @@ var fileRules = map[string]Rule{
 	"web/pnpm-workspace.yaml": ruleWebBundle,
 	"web/vite.config.ts":      ruleWebBundle,
 
-	"web/tsconfig.json":  ruleWebConfig,
-	"web/.nvmrc":         ruleWebConfig,
-	"web/.oxlintrc.json": ruleWebConfig,
-	"web/.oxfmtrc.json":  ruleWebConfig,
+	"web/tsconfig.json":    ruleWebConfig,
+	"web/lingui.config.ts": ruleWebConfig,
+	"web/.nvmrc":           ruleWebConfig,
+	"web/.oxlintrc.json":   ruleWebConfig,
+	"web/.oxfmtrc.json":    ruleWebConfig,
 
 	".golangci.yml":          ruleLintConfig,
 	".golangci-lint-version": ruleLintConfig,

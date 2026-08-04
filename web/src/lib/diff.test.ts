@@ -1,3 +1,4 @@
+import { i18n } from "@lingui/core";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vitest";
 import { makeDiffFile, makeDiffResponse } from "../test/fixtures";
@@ -48,7 +49,7 @@ describe("diffWarning", () => {
   });
 
   it("truncated なら省略件数なしでも警告する", () => {
-    expect(diffWarning(makeDiffResponse({ truncated: true }))).toMatch(/揃っていません/);
+    expect(i18n._(diffWarning(makeDiffResponse({ truncated: true }))!)).toMatch(/揃っていません/);
   });
 
   it("patchIncluded=false の file があれば件数付きで警告する", () => {
@@ -63,7 +64,7 @@ describe("diffWarning", () => {
         }),
       ],
     });
-    expect(diffWarning(d)).toMatch(/1 file/);
+    expect(i18n._(diffWarning(d)!)).toMatch(/1 file/);
   });
 });
 

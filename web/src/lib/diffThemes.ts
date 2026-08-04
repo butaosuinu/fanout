@@ -56,7 +56,7 @@ export const DIFF_THEME_SAMPLE_PATCH = `diff --git a/theme-sample.ts b/theme-sam
 --- a/theme-sample.ts
 +++ b/theme-sample.ts
 @@ -1,5 +1,5 @@
- // diff テーマ
+ // diff theme preview
  const theme = {
 -  accent: "#165E83",
 +  accent: "#00A3AF",

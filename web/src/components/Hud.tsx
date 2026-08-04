@@ -1,3 +1,4 @@
+import { useLingui } from "@lingui/react/macro";
 import type { CSSProperties } from "react";
 import type { Rollup } from "../lib/types";
 
@@ -14,12 +15,15 @@ const EMPTY_ROLLUP: Pick<
   notStarted: 0,
 };
 
+/* 統計ラベル(panes / live / merged …)は両ロケール共通で英語のまま。フィルタ構文や
+ * wire の語彙と揃える方針で、翻訳対象は日本語の散文だけ。 */
 export function Hud({ rollup }: { rollup: Rollup | null | undefined }) {
+  const { t } = useLingui();
   const r = rollup ?? EMPTY_ROLLUP;
   const pct = r.total ? (r.merged / r.total) * 100 : 0;
   return (
     <>
-      <section className="hud rise" style={{ "--d": ".05s" } as CSSProperties} aria-label="集計">
+      <section className="hud rise" style={{ "--d": ".05s" } as CSSProperties} aria-label={t`集計`}>
         <div className="stat">
           <label>panes</label>
           <b id="s-total">{r.total}</b>
