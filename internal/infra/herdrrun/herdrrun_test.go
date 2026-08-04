@@ -1387,6 +1387,22 @@ func TestObservationCommandErrorClassifiesOnlyTransientFailures(t *testing.T) {
 	}
 }
 
+func TestPaneRunResponseRequiresExactOKEnvelope(t *testing.T) {
+	valid := []byte(`{"id":"cli:pane:run","result":{"type":"ok"}}`)
+	if err := validatePaneRunResponse(valid); err != nil {
+		t.Fatalf("valid pane run response: %v", err)
+	}
+	for _, invalid := range [][]byte{
+		nil,
+		[]byte(`{"id":"cli:pane:get","result":{"type":"ok"}}`),
+		[]byte(`{"id":"cli:pane:run","result":{"type":"unexpected"}}`),
+	} {
+		if err := validatePaneRunResponse(invalid); err == nil {
+			t.Fatalf("invalid pane run response accepted: %s", invalid)
+		}
+	}
+}
+
 func TestRunCommandBoundsInheritedPipeWaitAndKillsProcessGroup(t *testing.T) {
 	testBoundedCommandRunner(t, runCommand)
 }

@@ -57,6 +57,15 @@ type waitOutputResult struct {
 	MatchedLine string `json:"matched_line"`
 }
 
+type paneRunEnvelope struct {
+	ID     string         `json:"id"`
+	Result *paneRunResult `json:"result"`
+}
+
+type paneRunResult struct {
+	Type string `json:"type"`
+}
+
 type agentRenameEnvelope struct {
 	ID     string           `json:"id"`
 	Result *json.RawMessage `json:"result"`
@@ -127,8 +136,14 @@ func (s *OwnedSession) SendLaunchToken(ctx context.Context, paneID, nonce string
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(string(out)) != "" {
-		return fmt.Errorf("herdr pane run returned unexpected output")
+	return validatePaneRunResponse(out)
+}
+
+func validatePaneRunResponse(out []byte) error {
+	var envelope paneRunEnvelope
+	if err := decodeOne(out, &envelope); err != nil || envelope.ID != "cli:pane:run" ||
+		envelope.Result == nil || envelope.Result.Type != "ok" {
+		return fmt.Errorf("herdr pane run returned an unexpected response")
 	}
 	return nil
 }

@@ -309,6 +309,7 @@ func worktreeCreateArgs(req WorktreeCreateRequest) []string {
 		"--path", req.Path,
 		"--label", req.Label,
 		"--no-focus",
+		"--json",
 	)
 }
 
@@ -347,6 +348,7 @@ func worktreeOpenArgs(req WorktreeOpenRequest) []string {
 		"--path", req.Path,
 		"--label", req.Label,
 		"--no-focus",
+		"--json",
 	}
 }
 

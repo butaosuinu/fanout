@@ -352,26 +352,23 @@ func (l *Launcher) newHerdrLaunch(
 		Executable: spec.Executable, Args: spec.Args,
 		EnvFilePath: envPath, EnvNameCount: envCount,
 	}
-	return persistNewHerdrLaunch(journal, intent)
+	return persistNewHerdrLaunch(journal, intent, route.RuntimeDir)
 }
 
 func persistNewHerdrLaunch(
 	journal *state.LockedHerdrIntents,
 	intent state.HerdrIntent,
+	runtimeDir string,
 ) (state.HerdrIntent, error) {
 	persisted, err := persistHerdrLaunch(journal, intent)
 	if err == nil {
 		return persisted, nil
 	}
-	return intent, errors.Join(err, removeUnpublishedHerdrEnvironment(intent.Launch.EnvFilePath))
+	return intent, errors.Join(err, removeUnpublishedHerdrEnvironment(runtimeDir, intent.Launch))
 }
 
-func removeUnpublishedHerdrEnvironment(path string) error {
-	err := os.Remove(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
+func removeUnpublishedHerdrEnvironment(runtimeDir string, launch *state.HerdrLaunch) error {
+	return herdrrun.DiscardWorkloadEnvironment(runtimeDir, launch)
 }
 
 func persistHerdrLaunch(

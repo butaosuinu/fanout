@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -81,7 +82,7 @@ func (l *Launcher) issueHerdrWorktreeRemoval(
 		return err
 	}
 	if intent.Launch != nil {
-		if err := removeUnpublishedHerdrEnvironment(intent.Launch.EnvFilePath); err != nil {
+		if err := removeUnpublishedHerdrEnvironment(filepath.Dir(intent.SocketPath), intent.Launch); err != nil {
 			return err
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/core/errs"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -380,10 +381,8 @@ func writeAndSync(file *os.File, data []byte) error {
 }
 
 func consumeWorkloadEnvironment(launch *state.HerdrLaunch, runtimeDir string) ([]string, error) {
-	expectedPath := filepath.Join(runtimeDir, "workload-env", "env-"+launch.Nonce+".json")
-	if !filepath.IsAbs(runtimeDir) || filepath.Clean(runtimeDir) != runtimeDir ||
-		launch.EnvFilePath != expectedPath {
-		return nil, fmt.Errorf("workload environment capsule is outside the owned runtime")
+	if err := validateWorkloadEnvironmentLocation(runtimeDir, launch); err != nil {
+		return nil, err
 	}
 	data, err := readWorkloadEnvironmentCapsule(launch.EnvFilePath)
 	if err != nil {
@@ -397,6 +396,63 @@ func consumeWorkloadEnvironment(launch *state.HerdrLaunch, runtimeDir string) ([
 		return nil, err
 	}
 	return environment, nil
+}
+
+// DiscardWorkloadEnvironment removes an unconsumed capsule only after its
+// persisted nonce, owned runtime location, and file identity all match.
+func DiscardWorkloadEnvironment(runtimeDir string, launch *state.HerdrLaunch) (err error) {
+	defer errs.Wrap(&err, "discard Herdr workload environment")
+
+	if err := validateWorkloadEnvironmentLocation(runtimeDir, launch); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(launch.EnvFilePath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	opened, statErr := file.Stat()
+	pathInfo, pathErr := os.Lstat(launch.EnvFilePath)
+	identityErr := validateWorkloadEnvironmentFileIdentity(launch.EnvFilePath, opened, pathInfo, statErr, pathErr)
+	closeErr := file.Close()
+	if err := errors.Join(identityErr, closeErr); err != nil {
+		return err
+	}
+	return os.Remove(launch.EnvFilePath)
+}
+
+func validateWorkloadEnvironmentLocation(runtimeDir string, launch *state.HerdrLaunch) error {
+	if launch == nil || !filepath.IsAbs(runtimeDir) || filepath.Clean(runtimeDir) != runtimeDir ||
+		!workloadLaunchNonce.MatchString(launch.Nonce) {
+		return fmt.Errorf("workload environment capsule has an invalid owned runtime identity")
+	}
+	expectedPath := filepath.Join(runtimeDir, "workload-env", "env-"+launch.Nonce+".json")
+	if launch.EnvFilePath != expectedPath {
+		return fmt.Errorf("workload environment capsule is outside the owned runtime")
+	}
+	return nil
+}
+
+func validateWorkloadEnvironmentFileIdentity(
+	path string,
+	opened, current os.FileInfo,
+	statErr, pathErr error,
+) error {
+	if err := errors.Join(statErr, pathErr); err != nil {
+		return err
+	}
+	if err := validatePrivateRegular(path, opened); err != nil {
+		return err
+	}
+	if err := validatePrivateRegular(path, current); err != nil {
+		return err
+	}
+	if !os.SameFile(opened, current) {
+		return fmt.Errorf("workload environment capsule identity changed before removal")
+	}
+	return nil
 }
 
 func readWorkloadEnvironmentCapsule(path string) ([]byte, error) {

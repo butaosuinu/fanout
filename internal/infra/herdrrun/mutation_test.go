@@ -36,7 +36,7 @@ func TestWorktreeMutationArgsPinHerdr075CLI(t *testing.T) {
 				"worktree", "create", "--workspace", "w1",
 				"--branch", "fanout/child", "--base", strings.Repeat("1", 40),
 				"--path", "/repo/.fanout/worktrees/child",
-				"--label", "nonce", "--no-focus",
+				"--label", "nonce", "--no-focus", "--json",
 			},
 		},
 		{
@@ -50,7 +50,7 @@ func TestWorktreeMutationArgsPinHerdr075CLI(t *testing.T) {
 				"worktree", "create", "--workspace", "w1",
 				"--branch", "fanout/existing",
 				"--path", "/repo/.fanout/worktrees/existing",
-				"--label", "nonce", "--no-focus",
+				"--label", "nonce", "--no-focus", "--json",
 			},
 		},
 		{
@@ -62,7 +62,7 @@ func TestWorktreeMutationArgsPinHerdr075CLI(t *testing.T) {
 			want: []string{
 				"worktree", "open", "--workspace", "w1",
 				"--path", "/repo/.fanout/worktrees/child",
-				"--label", "nonce", "--no-focus",
+				"--label", "nonce", "--no-focus", "--json",
 			},
 		},
 	}

@@ -170,12 +170,18 @@ func TestUnpublishedHerdrLaunchRemovesEnvironmentCapsule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	envPath := filepath.Join(t.TempDir(), "env.json")
+	runtimeDir := t.TempDir()
+	nonce := strings.Repeat("a", 32)
+	envDir := filepath.Join(runtimeDir, "workload-env")
+	if err := os.Mkdir(envDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	envPath := filepath.Join(envDir, "env-"+nonce+".json")
 	if err := os.WriteFile(envPath, []byte("secret=value"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	intent := state.HerdrIntent{ID: "invalid", Launch: &state.HerdrLaunch{EnvFilePath: envPath}}
-	if _, err := persistNewHerdrLaunch(journal, intent); err == nil {
+	intent := state.HerdrIntent{ID: "invalid", Launch: &state.HerdrLaunch{Nonce: nonce, EnvFilePath: envPath}}
+	if _, err := persistNewHerdrLaunch(journal, intent, runtimeDir); err == nil {
 		t.Fatal("invalid unpublished launch was saved")
 	}
 	if _, err := os.Stat(envPath); !errors.Is(err, os.ErrNotExist) {

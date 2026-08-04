@@ -102,6 +102,37 @@ func TestConsumeWorkloadEnvironmentRejectsPathOutsideOwnedRuntime(t *testing.T) 
 	}
 }
 
+func TestDiscardWorkloadEnvironmentRequiresOwnedPathAndFileIdentity(t *testing.T) {
+	runtimeDir := t.TempDir()
+	session := &OwnedSession{RuntimeDir: runtimeDir}
+	nonce := strings.Repeat("c", 32)
+	path, count, err := session.PrepareWorkloadEnvironment(nonce, []string{
+		"PATH=/bin", "FANOUT_BACKEND=herdr", "FANOUT_BIN=/owned/fanout",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := &state.HerdrLaunch{Nonce: nonce, EnvFilePath: path, EnvNameCount: count}
+	if err := DiscardWorkloadEnvironment(runtimeDir, launch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("discarded capsule remains: %v", err)
+	}
+
+	foreign := filepath.Join(t.TempDir(), "unrelated")
+	if err := os.WriteFile(foreign, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	launch.EnvFilePath = foreign
+	if err := DiscardWorkloadEnvironment(runtimeDir, launch); err == nil {
+		t.Fatal("outside capsule path was accepted")
+	}
+	if _, err := os.Lstat(foreign); err != nil {
+		t.Fatalf("outside file was removed: %v", err)
+	}
+}
+
 func TestMatchingPaneLaunchIntentRequiresExactWorkspacePaneAndCWD(t *testing.T) {
 	request := paneLauncherRequest{
 		session: "owned-session", socketPath: "/owned/herdr.sock",

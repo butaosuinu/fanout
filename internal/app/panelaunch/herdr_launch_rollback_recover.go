@@ -177,7 +177,7 @@ func finishAbsentHerdrLaunchRollback(
 	rollback state.HerdrIntent,
 ) error {
 	if originalFound && original.Launch != nil {
-		if err := removeUnpublishedHerdrEnvironment(original.Launch.EnvFilePath); err != nil {
+		if err := removeUnpublishedHerdrEnvironment(filepath.Dir(original.SocketPath), original.Launch); err != nil {
 			return failInterruptedHerdrRollback(locked, original, true, rollback, err)
 		}
 	}
