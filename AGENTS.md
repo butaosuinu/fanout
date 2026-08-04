@@ -110,6 +110,16 @@ explicit contract invalidates that rationale.
 
 - Discard an error on purpose with `_ =` plus a comment stating why it is safe
   to ignore; never leave a call silently unchecked.
+- Add a function's identity once with `defer errs.Wrap(&err, ...)`
+  (`internal/core/errs`) instead of repeating it at every return. Name the error
+  return (`(_ Patch, err error)`), register the wrap as the function's first
+  `defer` so LIFO order lets it cover cleanup defers, and drop that identity
+  from the messages inside. Do not add a wrap to an unexported helper whose
+  every caller already names the same subject. `go vet` checks the format
+  string. This does not reduce the `if err != nil` count — only `cmp.Or` and
+  folding repeated branches into one check do. Full ruleset:
+  `docs/error-handling.ja.md`.
+- New code uses `errors.AsType[T](err)` over `errors.As(err, &target)`.
 - `make lint` is the source of truth. Editor integrations may run a different
   golangci-lint version; the pinned version (`.golangci-lint-version`) wins.
 - To bump golangci-lint, edit `.golangci-lint-version` (the Makefile and the
@@ -158,8 +168,10 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `os`/`os/exec` in the purity allowlist), `planspec` (the `fanout plan` JSON
   schema; allowed `os` for spec loading), `naming` (deterministic slug/branch
   generation; identity-deciding, class M with `parentref`/`fanset`), and the
-  AI-reviewable `exitcode`/`cliview` (`blockers` is class M: it drives
-  --unblocked-only launch selection and wave computation).
+  AI-reviewable `exitcode`/`cliview`/`errs` (`blockers` is class M: it drives
+  --unblocked-only launch selection and wave computation). `errs` holds the
+  shared `defer`-based error wrapper; it sits in core because core may import
+  only core, so a helper every layer needs has nowhere else to live.
 - `internal/app` orchestrates use cases on top of `core` and `infra`:
   `panelaunch`, `lifecycle`, `watch` (the label-watcher cycle, pure at the
   package boundary via `watch.IO`), and `briefing` (the prompt text injected
