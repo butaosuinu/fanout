@@ -31,6 +31,15 @@ function BlockersCell({ pane }: { pane: PaneView }) {
   return <span className="muted">{blockersAllClosed(pane) ? "resolved" : "unknown"}</span>;
 }
 
+/* paneCI は snapshot 由来の自由文字列。既知の 3 値だけタグにして、それ以外
+ * (CI 無し・未知の値)は — にする。 */
+function CiCell({ ci }: { ci: string }) {
+  if (ci === "pass") return <Tag cls="t-ok">pass</Tag>;
+  if (ci === "fail") return <Tag cls="t-err">fail</Tag>;
+  if (ci === "pending") return <Tag cls="t-warn">pending</Tag>;
+  return <span className="muted">—</span>;
+}
+
 /* diff 導線の accessible name。行を指す情報を重複なく並べ、最後に統計を置く。
  * <Trans> ではなく descriptor — <Trans> は {変数} 前後の空白を落とすため、
  * 区切りの空白に意味があるこの名前が壊れる。 */
@@ -153,15 +162,7 @@ function PaneRow({
         <DirtyTag state={pane.dirtyState} />
       </td>
       <td>
-        {ci === "pass" ? (
-          <Tag cls="t-ok">pass</Tag>
-        ) : ci === "fail" ? (
-          <Tag cls="t-err">fail</Tag>
-        ) : ci === "pending" ? (
-          <Tag cls="t-warn">pending</Tag>
-        ) : (
-          <span className="muted">—</span>
-        )}
+        <CiCell ci={ci} />
       </td>
       <td
         className="c-runtime"

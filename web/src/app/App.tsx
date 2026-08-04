@@ -23,6 +23,7 @@ import {
   removeToken,
   replaceToken,
   stripKey,
+  type Term,
 } from "../features/filter/filter";
 import { clock, degradedMessages } from "../shared/format";
 import { deriveAgents, deriveWaves } from "../features/sessions/options";
@@ -138,6 +139,41 @@ function parentsOf(snap: Snapshot | null): Set<string> {
   return new Set((snap?.sessions ?? []).map((s) => String(s.parent ?? "")));
 }
 
+interface SessionView {
+  terms: Term[];
+  sortKey: string;
+  sortDir: SortDir;
+  riseParents: Set<string>;
+}
+
+/* 描画する session と、フィルタ前後のペイン数。ペインが 1 つも残らない session は
+ * 落とす。純関数なので呼び出し側で useMemo に包める — snapshot は約 2 秒ごとに
+ * 届くので、同じ入力のまま毎 tick 並べ替え直さないようにするため。 */
+function deriveSessionItems(
+  snap: Snapshot | null,
+  view: SessionView,
+): { items: SessionItem[]; shown: number; total: number } {
+  const sessions = snap?.sessions ?? [];
+  const matched = sessions.map((s) => ({
+    session: s,
+    panes: (s.panes ?? []).filter((p) => matches(p, view.terms)),
+  }));
+  const total = sessions.reduce((n, s) => n + (s.panes ?? []).length, 0);
+  const shown = matched.reduce((n, m) => n + m.panes.length, 0);
+  const items = matched
+    .filter((m) => m.panes.length > 0)
+    .map(({ session, panes }) => {
+      const parent = String(session.parent ?? "");
+      return {
+        parent,
+        panes: sortPanes(panes, view.sortKey, view.sortDir),
+        rollup: session.rollup,
+        rise: view.riseParents.has(parent),
+      };
+    });
+  return { items, shown, total };
+}
+
 /* provider だけを持つ薄い外側。テストは render(<App />) を直接呼ぶので、provider を
  * main.tsx ではなくここに置く(でないと全テストが provider 無しになる)。
  * defaultComponent は渡さない — 渡すと <Trans> が DOM 要素で包まれ、直下の
@@ -221,24 +257,11 @@ function Dashboard() {
     prevParentsRef.current = parentsOf(snap);
   }, [snap]);
 
-  const terms = parseQuery(filter);
-  let shown = 0;
-  let total = 0;
-  const items: SessionItem[] = [];
-  for (const s of snap?.sessions ?? []) {
-    const all = s.panes ?? [];
-    total += all.length;
-    const panes = all.filter((p) => matches(p, terms));
-    shown += panes.length;
-    if (!panes.length) continue;
-    const parent = String(s.parent ?? "");
-    items.push({
-      parent,
-      panes: sortPanes(panes, sortKey, sortDir),
-      rollup: s.rollup,
-      rise: riseParents.has(parent),
-    });
-  }
+  const terms = useMemo(() => parseQuery(filter), [filter]);
+  const { items, shown, total } = useMemo(
+    () => deriveSessionItems(snap, { terms, sortKey, sortDir, riseParents }),
+    [snap, terms, sortKey, sortDir, riseParents],
+  );
 
   const repo = snap?.repo ?? "";
   const selectedEntry = findPaneEntry(snap, selected);

@@ -155,42 +155,66 @@ export function groupDiffFilesByDir(files: DiffFileEntry[]): DiffFileGroup[] {
  * 1 つでも解釈できなければ元の name を返す(リテラルの `\` を含む実在の
  * ファイル名を壊さないため)。 */
 export function unquoteGitPath(name: string): string {
-  const body =
-    name.length >= 2 && name.startsWith('"') && name.endsWith('"') ? name.slice(1, -1) : name;
-  if (!body.includes("\\")) return body === name ? name : body;
+  const body = stripOuterQuotes(name);
+  // エスケープが 1 つも無ければ復号は不要。引用符を剥がしただけの body を返す
+  // (剥がしていなければ body は name そのもの)。
+  if (!body.includes("\\")) return body;
   const encoder = new TextEncoder();
   const bytes: number[] = [];
-  const simple: Record<string, number> = {
-    a: 7,
-    b: 8,
-    f: 12,
-    n: 10,
-    r: 13,
-    t: 9,
-    v: 11,
-    '"': 34,
-    "\\": 92,
-  };
-  for (let i = 0; i < body.length; i++) {
+  let i = 0;
+  while (i < body.length) {
     const c = body[i]!;
     if (c !== "\\") {
       bytes.push(...encoder.encode(c));
+      i += 1;
       continue;
     }
-    const next = body[++i];
-    if (next === undefined) return name; // 末尾が単独の \ = 想定外の形。触らない
-    if (next >= "0" && next <= "7") {
-      const oct = body.slice(i, i + 3);
-      if (!/^[0-7]{3}$/.test(oct)) return name;
-      bytes.push(parseInt(oct, 8));
-      i += 2;
-      continue;
-    }
-    const mapped = simple[next];
-    if (mapped === undefined) return name; // 知らないエスケープ。触らない
-    bytes.push(mapped);
+    const esc = readEscape(body, i);
+    if (esc === null) return name; // 解釈できないエスケープ。触らない
+    bytes.push(esc.byte);
+    i += esc.width;
   }
   return decodeUtf8LikeGo(bytes);
+}
+
+function stripOuterQuotes(name: string): string {
+  const quoted = name.length >= 2 && name.startsWith('"') && name.endsWith('"');
+  return quoted ? name.slice(1, -1) : name;
+}
+
+const SIMPLE_ESCAPES: Record<string, number> = {
+  a: 7,
+  b: 8,
+  f: 12,
+  n: 10,
+  r: 13,
+  t: 9,
+  v: 11,
+  '"': 34,
+  "\\": 92,
+};
+
+/* エスケープ 1 個の読み取り結果。width は `\` を含む消費文字数 — 走査側が
+ * インデックスをこの幅ぶんだけ進める。 */
+interface GitEscape {
+  byte: number;
+  width: number;
+}
+
+/* body[at] の `\` から始まるエスケープ 1 個。解釈できなければ null。
+ * 末尾が単独の `\` は次の文字が無いので "" に落ち、8 進にも既知のエスケープにも
+ * 一致せず null になる(= 想定外の形。触らない)。 */
+function readEscape(body: string, at: number): GitEscape | null {
+  const next = body[at + 1] ?? "";
+  if (next >= "0" && next <= "7") return readOctalEscape(body, at);
+  const byte = SIMPLE_ESCAPES[next];
+  return byte === undefined ? null : { byte, width: 2 }; // 知らないエスケープ
+}
+
+/* `\` + 8 進 3 桁固定(`\346`)。3 桁揃っていなければ解釈しない。 */
+function readOctalEscape(body: string, at: number): GitEscape | null {
+  const oct = body.slice(at + 1, at + 4);
+  return /^[0-7]{3}$/.test(oct) ? { byte: parseInt(oct, 8), width: 4 } : null;
 }
 
 /* UTF-8 の開始 byte から列の長さ。不正な開始 byte は 0。 */
