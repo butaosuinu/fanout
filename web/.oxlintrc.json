@@ -29,8 +29,8 @@
     // 落とすため、矛盾警告を残せない)。
     "eslint/no-underscore-dangle": "off",
     // Restriction ルールはカテゴリに含まれないので明示 enable が必要。これを
-    // 書かないと off override も no-op になり、components/hooks の `!` も
-    // 素通りしてしまう。lib/test だけ override で外す(下記)。
+    // 書かないと off override も no-op になり、コンポーネントや hook の `!` も
+    // 素通りしてしまう。実際に使っているファイルだけ override で外す(下記)。
     "typescript/no-non-null-assertion": "error",
     // describe ブロック内に snapshot ファクトリや MSW handler を置くのは
     // テストの一般的な可読パターン。外スコープ強制は構成を散らすので off。
@@ -38,11 +38,22 @@
   },
   "overrides": [
     {
-      // noUncheckedIndexedAccess 由来の `m[1]!` イディオム (filter.ts / sort.ts
-      // 等の正規表現・境界チェック直後) は lib / test に集中している。
-      // components / hooks では `!` は tsc も黙らせる本物の危険なので rule を
-      // 生かしたままにする。
-      "files": ["src/lib/**", "src/test/**"],
+      // noUncheckedIndexedAccess 由来の `m[1]!` イディオム (正規表現マッチや
+      // 境界チェックの直後) を実際に使っているファイルだけを列挙する。
+      // ドメイン別ディレクトリでは純データ変換と JSX が同じ features/* に同居する
+      // ので、ディレクトリ単位で外すとコンポーネント側の `!` まで通ってしまう。
+      // そこは tsc も黙らせる本物の危険なので rule を生かしたままにする。
+      // src/test/** だけは横断ヘルパ (DOM クエリの `!` 等) が多く、粒度を上げる
+      // 意味がないのでディレクトリのまま。
+      "files": [
+        "src/features/diff/diff.ts",
+        "src/features/diff/diff.test.ts",
+        "src/features/filter/filter.ts",
+        "src/features/sessions/pane.ts",
+        "src/features/sessions/sort.ts",
+        "src/shared/format.ts",
+        "src/test/**"
+      ],
       "rules": { "typescript/no-non-null-assertion": "off" }
     },
     {

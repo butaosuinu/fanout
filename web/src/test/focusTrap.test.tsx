@@ -1,7 +1,7 @@
 import { fireEvent, render } from "@testing-library/react";
 import { useRef } from "react";
 import { describe, expect, it } from "vitest";
-import { useFocusTrap } from "../hooks/useFocusTrap";
+import { useFocusTrap } from "../shared/useFocusTrap";
 
 /* 非表示要素を境界にすると、最後に「見えている」要素から Tab を押しても
  * current === last が成立せず、そのままブラウザ UI へ抜ける。diff ビュアーの

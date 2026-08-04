@@ -2,8 +2,8 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse, type RequestHandler } from "msw";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { App } from "../components/App";
-import type { DiffResponse } from "../lib/types";
+import { App } from "../app/App";
+import type { DiffResponse } from "../transport/types";
 import { installFakeEventSource, streamSnapshot } from "./fakeEventSource";
 import {
   makeDiffFile,

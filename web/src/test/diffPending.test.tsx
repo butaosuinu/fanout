@@ -1,6 +1,6 @@
 import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { DiffPending } from "../components/App";
+import { DiffPending } from "../app/App";
 
 /* diff オーバーレイは lazy chunk。解決を待つあいだ Suspense の fallback として
  * これが立つ。空 fallback にすると、その窓での Escape は(Drawer 起点なら)

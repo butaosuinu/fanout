@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { Suspense, lazy } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChunkBoundary } from "../components/ChunkBoundary";
+import { ChunkBoundary } from "../ui/ChunkBoundary";
 
 /* lazy chunk の取得は失敗しうる(サーバ更新で古い chunk が 404、ネットワーク断)。
  * Suspense は解決待ちしか扱わないので、境界が無いと reject した例外がルートまで
