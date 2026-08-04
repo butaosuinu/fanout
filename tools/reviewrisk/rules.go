@@ -181,9 +181,8 @@ var prefixRules = []struct {
 	{"tools/reviewrisk/", Rule{ID: "tools-reviewrisk", Class: ClassH, Source: SourceDocTable, Note: "PR review risk 判定(物差し。ルール変更はレビュー配線を変える)"}},
 
 	// web transport vs display.
-	{"web/src/hooks/", Rule{ID: "web-transport", Class: ClassM, Source: SourceDocTable, Note: "SSE/polling transport・token 付き /api/* 呼び出し"}},
-	{"web/src/lib/", Rule{ID: "web-transport", Class: ClassM, Source: SourceDocTable, Note: "SSE/polling transport・token 付き /api/* 呼び出し"}},
-	{"web/src/", Rule{ID: "web-src", Class: ClassA, Source: SourceDocTable, Note: "表示(components/styles/tests)"}},
+	{"web/src/transport/", Rule{ID: "web-transport", Class: ClassM, Source: SourceDocTable, Note: "SSE/polling transport・token 付き /api/* 呼び出し"}},
+	{"web/src/", Rule{ID: "web-src", Class: ClassA, Source: SourceDocTable, Note: "表示(app/features/ui/shared/styles/tests)"}},
 	// 製品コードではなく、複雑度チェック専用の隔離 ESLint パッケージ
 	// (typescript-eslint が TS 7 で動かないため web/ 本体から分けてある)。
 	{"web/tools/complexity/", ruleComplexityConfig},
@@ -238,7 +237,7 @@ func classifyPath(p string) (Rule, bool) {
 // web/src/test/ harness dir or a *.test/*.spec .ts(x) file. Vitest collects both
 // the .test and .spec suffixes (web/vite.config.ts does not override
 // test.include), so both count. Per the doc these are class A (display),
-// overriding the web/src/hooks|lib transport prefixes. This is the single
+// overriding the web/src/transport prefix. This is the single
 // web-test-shape predicate shared by classifyPath's A override, S3 skip
 // detection, and S1's isTestShape.
 func isWebTestFile(p string) bool {

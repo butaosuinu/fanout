@@ -26,7 +26,7 @@ PR に反映する。判定は advisory — マージはブロックしない。
    — テストをパッケージのクラスより軽く落とすことはしない
 3. web テスト上書き: `web/src/` 配下の `*.test.ts(x)` / `*.spec.ts(x)` と
    `web/src/test/**` は常に A(`docs/architecture.ja.md` の「tests は A」の行に
-   従う。hooks/lib の M より優先する非対称)。`.spec` も含むのは
+   従う。`web/src/transport` の M より優先する非対称)。`.spec` も含むのは
    `web/vite.config.ts` が `test.include` を上書きせず vitest 既定で
    `.spec` も収集するため
 4. `prefixRules` の longest-prefix wins

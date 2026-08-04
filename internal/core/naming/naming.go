@@ -128,7 +128,7 @@ func parentToken(parentRef string) string {
 
 // AllDigits reports whether s is non-empty and every rune is an ASCII digit.
 // It preserves leading zeros (it never parses the number), matching the
-// dashboard's `^\d+$` parent classification in web/src/lib/github.ts.
+// dashboard's `^\d+$` parent classification in web/src/shared/github.ts.
 func AllDigits(s string) bool {
 	if s == "" {
 		return false

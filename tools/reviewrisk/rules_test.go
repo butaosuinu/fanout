@@ -73,16 +73,17 @@ func TestClassifyPath(t *testing.T) {
 		// --- web ---
 		{name: "web index.html is H", path: "web/index.html", want: ClassH, found: true},
 		{name: "web pnpm workspace config is H", path: "web/pnpm-workspace.yaml", want: ClassH, found: true},
-		{name: "web hooks transport is M", path: "web/src/hooks/useSnapshot.ts", want: ClassM, found: true},
-		{name: "web lib transport is M", path: "web/src/lib/api.ts", want: ClassM, found: true},
-		{name: "web components are A", path: "web/src/components/App.tsx", want: ClassA, found: true},
-		// web test override beats the hooks transport prefix.
-		{name: "web hooks test file overrides to A", path: "web/src/hooks/useDrawerWidth.test.tsx", want: ClassA, found: true},
+		{name: "web transport hook is M", path: "web/src/transport/useSnapshot.ts", want: ClassM, found: true},
+		{name: "web transport api client is M", path: "web/src/transport/api.ts", want: ClassM, found: true},
+		{name: "web app shell is A", path: "web/src/app/App.tsx", want: ClassA, found: true},
+		{name: "web feature component is A", path: "web/src/features/diff/DiffOverlay.tsx", want: ClassA, found: true},
+		// web test override beats the transport prefix.
+		{name: "web transport test file overrides to A", path: "web/src/transport/useDiff.test.tsx", want: ClassA, found: true},
 		{name: "web test harness dir is A", path: "web/src/test/server.ts", want: ClassA, found: true},
 		// vitest collects .spec files too, so a .spec.ts under web/src overrides to A.
-		{name: "web spec file overrides to A", path: "web/src/lib/foo.spec.ts", want: ClassA, found: true},
-		// longest-prefix: lib(M) beats web/src/(A) for a non-test lib file.
-		{name: "web lib file beats web src by longest prefix", path: "web/src/lib/x.ts", want: ClassM, found: true},
+		{name: "web spec file overrides to A", path: "web/src/transport/foo.spec.ts", want: ClassA, found: true},
+		// longest-prefix: transport(M) beats web/src/(A) for a non-test file.
+		{name: "web transport file beats web src by longest prefix", path: "web/src/transport/x.ts", want: ClassM, found: true},
 		{name: "web root unknown file is unclassified", path: "web/unknown.txt", found: false},
 
 		// --- extra top-level and prefix rules ---

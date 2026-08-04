@@ -124,9 +124,9 @@ func TestDocSyncReverse(t *testing.T) {
 			t.Errorf("fileRules[%q] (rule %q) is class %v in rules.go but %v in the doc table", p, r.ID, r.Class, got)
 		}
 	}
-	// prefixRules are matched per PREFIX for the same reason: web/src/hooks/ and
-	// web/src/lib/ share the web-transport ID, so dropping one dir from the doc
-	// must still surface as a stale prefix rule.
+	// prefixRules are matched per PREFIX for the same reason: one ID can cover
+	// several directories, so dropping one dir from the doc must still surface
+	// as a stale prefix rule instead of being covered by its sibling.
 	docDirs := collectDocDirClasses(t)
 	for _, pr := range prefixRules {
 		if pr.rule.Source != SourceDocTable {

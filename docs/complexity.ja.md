@@ -221,9 +221,9 @@ hook を一時的に黙らせるには `FANOUT_SKIP_COMPLEXITY=1`。差し戻し
 | Go 関数長 > 32 行 | 207 関数(9.9%) | 同上 = 518 行 |
 | Go nestif ≥ 5 | 17 箇所 | `internal/infra/gitstat/gitstat.go:357` = 9、最大 16 |
 | Go dupl(threshold 100) | 9 箇所 | `internal/app/run/plancmd.go` ⇄ `internal/app/run/report.go` |
-| `.ts` 認知的複雑度 > 7 | 7 関数 | `web/src/lib/filter.ts:47` = 52(循環的複雑度も 69) |
-| `.tsx` 認知的複雑度 > 8 | 5 関数 | `web/src/components/FilterDropdown.tsx:123` = 16 |
-| `.ts` / `.tsx` 関数長 | 5 / 8 関数 | `web/src/components/DiffOverlay.tsx:178` = 450 行 |
+| `.ts` 認知的複雑度 > 7 | 7 関数 | `web/src/features/filter/filter.ts:47` = 52(循環的複雑度も 69) |
+| `.tsx` 認知的複雑度 > 8 | 5 関数 | `web/src/features/filter/FilterDropdown.tsx:123` = 16 |
+| `.ts` / `.tsx` 関数長 | 5 / 8 関数 | `web/src/features/diff/DiffOverlay.tsx:178` = 450 行 |
 | `.ts` / `.tsx` 文数 | 10 / 4 関数 | `App.tsx:131` と `DiffOverlay.tsx:178` = 各 50 |
 | TS のネスト深さ・引数・コールバック入れ子 | 0 | — |
 
