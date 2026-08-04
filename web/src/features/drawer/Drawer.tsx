@@ -22,12 +22,11 @@ import type { PaneView } from "../../transport/types";
 import {
   AgentStateTag,
   DirtyTag,
-  GhLink,
   isKnownAgentState,
   IssueStateTag,
   PrPill,
-  Tag,
 } from "../sessions/badges";
+import { GhLink, Tag } from "../../ui/Tag";
 
 /* 上部バーの「変更を表示」に添える差分行数。解析できない(`-` など)ときは出さない */
 function DiffStat({ summary }: { summary?: string }) {

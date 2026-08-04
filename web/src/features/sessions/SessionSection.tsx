@@ -22,15 +22,8 @@ import {
 } from "./pane";
 import { COLS, type SortDir } from "./sort";
 import type { PaneView, Rollup } from "../../transport/types";
-import {
-  AgentStateTag,
-  DirtyTag,
-  GhLink,
-  isKnownAgentState,
-  IssueStateTag,
-  PrPill,
-  Tag,
-} from "./badges";
+import { AgentStateTag, DirtyTag, isKnownAgentState, IssueStateTag, PrPill } from "./badges";
+import { GhLink, Tag } from "../../ui/Tag";
 
 function BlockersCell({ pane }: { pane: PaneView }) {
   if (pane.blocked) return <Tag cls="t-warn">{`${openBlockerCount(pane)} open`}</Tag>;
