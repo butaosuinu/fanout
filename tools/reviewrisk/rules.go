@@ -55,6 +55,11 @@ var fileRules = map[string]Rule{
 	// web token-leak boundary.
 	"web/index.html": {ID: "web-index", Class: ClassH, Source: SourceDocTable, Note: "no-referrer・外部 fetch 方針(token 漏洩境界)"},
 
+	// web display files that carry a safety boundary: the display prefix is A,
+	// but these two decide what a href may be and how big a patch may render.
+	"web/src/shared/github.ts":      {ID: "web-github", Class: ClassM, Source: SourceDocTable, Note: "GitHub URL の検証つき生成(href 安全性境界)"},
+	"web/src/features/diff/diff.ts": {ID: "web-diff-parse", Class: ClassM, Source: SourceDocTable, Note: "patch パースと描画上限(敵性 patch のガード)"},
+
 	// Extra files with no package-table row.
 	"go.mod":     {ID: "extra-gomod", Class: ClassH, Source: SourceExtra, Note: "依存サプライチェーン"},
 	"go.sum":     {ID: "extra-gosum", Class: ClassM, Source: SourceExtra, Note: "依存 lock 追随"},

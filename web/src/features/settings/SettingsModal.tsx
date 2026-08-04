@@ -111,7 +111,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   useFocusTrap(rootRef, true); // aria-modal を名乗る以上、Tab はここで折り返す
 
   /* 初期フォーカスを移し、背面(#root)を遮る。全画面 diff の上で開くと所有者が
-   * 2 つになるので参照数で持つ(lib/inert.ts)。
+   * 2 つになるので参照数で持つ(shared/inert.ts)。
    *
    * diff オーバーレイ(#root の外・portal)はここで触らない。開いた時点でまだ
    * lazy chunk が解決していないと要素が無く、後から inert 無しで mount されて

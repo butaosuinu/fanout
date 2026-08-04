@@ -150,7 +150,7 @@ const DiffFiles = memo(function DiffFiles({
                 maxLineDiffLength: TOKENIZE_MAX_LINE_LENGTH,
                 /* 内容量が多すぎる file は highlight / 行内 word 差分を切る。
                  * どちらも描画範囲ではなく file 全体に走る処理なので仮想化では
-                 * 有界にならない(lib/diff.ts 冒頭のコメントを参照)。 */
+                 * 有界にならない(diff.ts 冒頭のコメントを参照)。 */
                 ...(highlight ? {} : { tokenizeMaxLength: TOKENIZE_MAX_LENGTH_PLAIN }),
                 ...(inlineDiff ? {} : { lineDiffType: LINE_DIFF_TYPE_PLAIN }),
               }}
@@ -237,7 +237,7 @@ export function DiffOverlay({
   const { width: compactWidth, gripProps } = useDiffWidth();
   /* 背面を覆っているならモーダル。全画面はもちろん、狭い帯や、ドロワーが広くて
    * パネルが一覧を食い尽くす配置でも覆う。覆っているのに非モーダルだと、見えない
-   * 背面へ Tab が抜け、隠れた peek のポーリングも続く(判定は lib/diffView)。 */
+   * 背面へ Tab が抜け、隠れた peek のポーリングも続く(判定は diffView.ts)。 */
   const covering = coversBackground({
     view: viewMode,
     viewportWidth,
@@ -270,7 +270,7 @@ export function DiffOverlay({
   const onSelectFile = useScrollToFile({ byPath, hostsRef, expand, nudge });
 
   /* auto は本文領域の幅で決め、split / stack はユーザーの明示指定をそのまま使う。
-   * ヘッダと本文は縦に積むだけなので、本文領域の幅 = パネルの幅(lib/diffView)。 */
+   * ヘッダと本文は縦に積むだけなので、本文領域の幅 = パネルの幅(diffView.ts)。 */
   const panelWidth = panelWidthFor({ view: viewMode, viewportWidth, compactWidth });
   const stack = layout === "auto" ? panelWidth < AUTO_SPLIT_MIN_PX : layout === "stack";
   useNudgeOnLayoutChange(`${viewMode}:${stack}`, nudge);

@@ -77,6 +77,16 @@ func TestClassifyPath(t *testing.T) {
 		{name: "web transport api client is M", path: "web/src/transport/api.ts", want: ClassM, found: true},
 		{name: "web app shell is A", path: "web/src/app/App.tsx", want: ClassA, found: true},
 		{name: "web feature component is A", path: "web/src/features/diff/DiffOverlay.tsx", want: ClassA, found: true},
+		// Two display-tree files carry a safety boundary and are pinned M by file
+		// rule, against the A they would get from the web/src/ prefix.
+		{name: "web github url builder is M", path: "web/src/shared/github.ts", want: ClassM, found: true},
+		{name: "web diff patch parser is M", path: "web/src/features/diff/diff.ts", want: ClassM, found: true},
+		// Their colocated tests keep the web test override: the file rules name
+		// only the sources, so *.test.ts still falls through to A.
+		{name: "web github colocated test stays A", path: "web/src/shared/github.test.ts", want: ClassA, found: true},
+		{name: "web diff colocated test stays A", path: "web/src/features/diff/diff.test.ts", want: ClassA, found: true},
+		// A sibling of a pinned file gets no boundary treatment.
+		{name: "web diff view helper is A", path: "web/src/features/diff/diffView.ts", want: ClassA, found: true},
 		// web test override beats the transport prefix.
 		{name: "web transport test file overrides to A", path: "web/src/transport/useDiff.test.tsx", want: ClassA, found: true},
 		{name: "web test harness dir is A", path: "web/src/test/server.ts", want: ClassA, found: true},

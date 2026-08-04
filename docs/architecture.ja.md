@@ -109,6 +109,8 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | tools | `tools/reviewrisk` | PR review risk 判定(物差し。ルール変更はレビュー配線を変える) | H |
 | web | `web/index.html` | no-referrer・外部 fetch 方針(token 漏洩境界) | H |
 | web | `web/src/transport` | SSE/polling transport・token 付き `/api/*` 呼び出し | M |
+| web | `web/src/shared/github.ts` | GitHub URL の検証つき生成(href 安全性境界) | M |
+| web | `web/src/features/diff/diff.ts` | patch パースと描画上限(敵性 patch のガード) | M |
 | web | 上記以外の `web/src`(app / features / ui / shared / styles / tests) | 表示 | A |
 
 ## 人間必見の不変条件カタログ

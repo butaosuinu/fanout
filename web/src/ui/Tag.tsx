@@ -17,7 +17,7 @@ export function Tag({
 }
 
 /* url が空(repo 未解決・@manual の負番号 issue など)ならリンク化せず子を
- * そのまま返す。url の安全性は lib/github の検証で担保済み — ここでは新しい
+ * そのまま返す。url の安全性は shared/github.ts の検証で担保済み — ここでは新しい
  * URL を組み立てないこと。 */
 export function GhLink({
   url,

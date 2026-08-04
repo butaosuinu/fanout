@@ -41,7 +41,8 @@ const STATIC_DROPDOWNS: readonly {
   {
     key: "run",
     ariaLabel: msg`agent 実行状態で絞り込み`,
-    // 6 値契約の単一情報源(ui.tsx AGENT_STATE_CLASSES)から順序ごと導出。
+    // 6 値契約の単一情報源(features/sessions/badges.tsx AGENT_STATE_CLASSES)から
+    // 順序ごと導出。
     options: AGENT_STATES.map((s) => [s, s] as const),
   },
   {

@@ -38,21 +38,23 @@
   },
   "overrides": [
     {
-      // noUncheckedIndexedAccess 由来の `m[1]!` イディオム (正規表現マッチや
-      // 境界チェックの直後) を実際に使っているファイルだけを列挙する。
+      // 非テストは noUncheckedIndexedAccess 由来の `m[1]!` イディオム (正規表現
+      // マッチや境界チェックの直後) を実際に使っているファイルだけを列挙する。
       // ドメイン別ディレクトリでは純データ変換と JSX が同じ features/* に同居する
       // ので、ディレクトリ単位で外すとコンポーネント側の `!` まで通ってしまう。
       // そこは tsc も黙らせる本物の危険なので rule を生かしたままにする。
-      // src/test/** だけは横断ヘルパ (DOM クエリの `!` 等) が多く、粒度を上げる
-      // 意味がないのでディレクトリのまま。
+      // テストは横断ヘルパ (DOM クエリの `!` 等) が多く粒度を上げる意味がないので
+      // 一律で外す。src/test/** と同居 *.test.* で厳しさが変わらないよう、glob は
+      // 下の vitest override と同じ粒度にする。
       "files": [
         "src/features/diff/diff.ts",
-        "src/features/diff/diff.test.ts",
         "src/features/filter/filter.ts",
         "src/features/sessions/pane.ts",
         "src/features/sessions/sort.ts",
         "src/shared/format.ts",
-        "src/test/**"
+        "src/test/**",
+        "src/**/*.test.ts",
+        "src/**/*.test.tsx"
       ],
       "rules": { "typescript/no-non-null-assertion": "off" }
     },
