@@ -1,0 +1,41 @@
+*,*::before,*::after{ box-sizing:border-box; margin:0; padding:0; }
+html{ scroll-behavior:smooth; }
+body{
+  font-family:var(--f-body);
+  font-size:14px; line-height:1.8;
+  color:var(--sumi);
+  background-color:var(--washi);
+  /* 風紋 — 極薄の同心円リング + 和紙の繊維(docs サイトと同一) */
+  background-image:
+    repeating-radial-gradient(circle at 14% -6%,
+      rgba(22,94,131,.022) 0 1.5px, transparent 1.5px 110px),
+    repeating-radial-gradient(circle at 88% 118%,
+      rgba(42,46,51,.018) 0 1.5px, transparent 1.5px 84px),
+    repeating-linear-gradient(94deg,
+      rgba(226,217,200,.16) 0 1px, transparent 1px 9px),
+    repeating-linear-gradient(176deg,
+      rgba(255,255,255,.30) 0 1px, transparent 1px 13px);
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+html[data-theme="dark"] body{
+  /* 夜の風紋 — 浅葱の極薄リングのみ */
+  background-image:
+    repeating-radial-gradient(circle at 14% -6%,
+      rgba(111,174,203,.016) 0 1.5px, transparent 1.5px 110px),
+    repeating-radial-gradient(circle at 88% 118%,
+      rgba(51,191,201,.012) 0 1.5px, transparent 1.5px 84px);
+}
+::selection{ background:var(--byakugun); color:#11506E; }
+a{ color:var(--ai); text-decoration:none; transition:color .25s ease; }
+a:hover{ color:var(--asagi); }
+:focus-visible{ outline:2px solid var(--asagi); outline-offset:3px; border-radius:2px; }
+.wrap{ width:min(var(--maxw), calc(100% - 48px)); margin-inline:auto; }
+
+@keyframes riseIn{ from{ opacity:0; transform:translateY(14px); } }
+/* fill は backwards: 遅延中だけ from 状態を保持し、終了後はアニメを「適用中」
+ * にしない。both だと終了後も opacity/transform が適用扱いになり、全 .rise
+ * 要素に恒久スタッキングコンテキストが残って popover 類が DOM 順で後続要素の
+ * 下に描画される(riseIn は from しか無いので見た目は both と同一)。 */
+.rise{ animation:riseIn .7s var(--ease-fan) backwards; animation-delay:var(--d,0s); }
+

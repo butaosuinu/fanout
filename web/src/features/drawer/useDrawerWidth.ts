@@ -3,7 +3,7 @@ import { usePanelWidth, type PanelGripProps } from "../../shared/usePanelWidth";
 
 export const DRAWER_DEFAULT_WIDTH = 840;
 export const DRAWER_MIN_WIDTH = 320;
-// ドロワーはコンテンツ領域(style.css の --maxw)より広げない。これより広い
+// ドロワーはコンテンツ領域(styles/theme.css の --maxw)より広げない。これより広い
 // グリッドコンテナはそもそも無く、main 列を不当に潰すだけなので静的上限を
 // コンテンツ幅に合わせる。--maxw を変えたらここも合わせること。
 export const DRAWER_MAX_WIDTH = 1416;

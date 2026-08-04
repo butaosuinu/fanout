@@ -1,0 +1,69 @@
+/* ============================================================ ナビ */
+.nav{
+  position:sticky; top:0; z-index:40;
+  background:var(--nav-bg);
+  -webkit-backdrop-filter:blur(14px) saturate(1.2);
+  backdrop-filter:blur(14px) saturate(1.2);
+  border-bottom:1px solid var(--suna);
+}
+.nav-inner{
+  /* +100px は意図的な nav のオーバーハング(nav > コンテンツの関係を維持) */
+  width:min(calc(var(--maxw) + 100px), calc(100% - 40px)); margin-inline:auto;
+  display:flex; align-items:center; gap:14px;
+  height:var(--nav-h);
+}
+.brand{
+  display:flex; align-items:center; gap:9px;
+  font-family:var(--f-disp);
+  font-size:20px; font-weight:560; letter-spacing:-.01em;
+  color:var(--sumi);
+  font-variation-settings:"opsz" 40;
+}
+.brand svg{ display:block; }
+.brand .rib{ stroke:var(--ai); }
+.brand .leaf{ fill:var(--leaf); stroke:var(--ai); }
+.brand .pivot{ fill:var(--asagi); }
+.brand-sub{
+  font-family:var(--f-body); font-size:11px; font-weight:700;
+  letter-spacing:.18em; text-transform:uppercase;
+  color:var(--ai-deep);
+  background:var(--byakugun-bg);
+  border-radius:999px; padding:3px 11px;
+}
+.nav-meta{
+  margin-left:auto;
+  display:flex; align-items:center; gap:14px;
+  min-width:0;
+}
+#repo{
+  font-family:var(--f-code); font-size:12.5px; color:var(--ink-60);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.conn{
+  display:inline-flex; align-items:center; gap:8px;
+  border:1px solid var(--suna); border-radius:999px;
+  background:var(--paper);
+  padding:5px 14px;
+  font-size:12px; font-weight:500; color:var(--ink-60);
+  white-space:nowrap;
+}
+.pulse{
+  width:8px; height:8px; border-radius:50%;
+  background:var(--asagi);
+  animation:beat 1.8s ease-in-out infinite;
+}
+.pulse.down{ background:var(--err); animation:none; }
+@keyframes beat{
+  0%,100%{ box-shadow:0 0 0 0 rgba(0,163,175,.35); }
+  50%{ box-shadow:0 0 0 5px rgba(0,163,175,0); }
+}
+.settings-btn{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:36px; height:36px;
+  border:1px solid var(--suna); border-radius:999px;
+  background:var(--paper); color:var(--ai);
+  cursor:pointer;
+  transition:border-color .25s ease, color .25s ease, transform .25s ease;
+}
+.settings-btn:hover{ border-color:var(--asagi); color:var(--asagi); transform:rotate(35deg); }
+

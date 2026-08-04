@@ -1,7 +1,7 @@
 import type { DiffView } from "../settings/useSettings";
 
 /* これ以下のビューポートでは、コンパクト表示も nav 下の全幅パネルになる
- * (style.css の @media (max-width:1100px) と同期させること)。 */
+ * (styles/responsive.css の @media (max-width:1100px) と同期させること)。 */
 export const COMPACT_FULL_WIDTH_PX = 1100;
 
 export interface DiffPanelGeometry {
@@ -46,7 +46,7 @@ export function coversBackground({
 }: DiffPanelGeometry): boolean {
   if (view === "full") return true;
   if (viewportWidth <= COMPACT_FULL_WIDTH_PX) return true; // CSS が全幅パネルにする
-  // style.css の right: max(0, min(--diff-anchor-right, 100vw - --diff-w)) と同じ
+  // styles/diff.css の right: max(0, min(--diff-anchor-right, 100vw - --diff-w)) と同じ
   const right = Math.max(0, Math.min(anchorRight, viewportWidth - width));
   return viewportWidth - right - width <= contentLeft; // 中身が 1px も残らない
 }

@@ -23,7 +23,7 @@ import { server } from "./server";
  * jsdom は全要素の高さが 0 なので全 file が可視扱いになるが、file 内の描画行数は
  * 実ブラウザと同じくウィンドウ由来で有界になる — 行数の有界性はここで固定できる。 */
 
-/* jsdom の既定は 1024。style.css の @media と閾値をまたぐケースでだけ差し替え、
+/* jsdom の既定は 1024。styles/responsive.css の @media と閾値をまたぐケースでだけ差し替え、
  * afterEach で必ず戻す。 */
 const DEFAULT_INNER_WIDTH = window.innerWidth;
 const setInnerWidth = (w: number) =>
@@ -890,7 +890,7 @@ describe("diff オーバーレイ", () => {
     await user.click(await screen.findByRole("button", { name: "変更を表示" }));
     const overlay = await screen.findByRole("complementary", { name: "worktree diff" });
     /* ドロワーを開いた状態でも上限はビューポートだけで決まる。越えた分は
-     * ドロワーに被さる(右端の算出は style.css 側)。 */
+     * ドロワーに被さる(右端の算出は styles/diff.css 側)。 */
     const cap = Math.floor(window.innerWidth * 0.95);
     expect(overlay.style.getPropertyValue("--diff-w")).toBe(`${cap}px`);
   });

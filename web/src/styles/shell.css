@@ -1,0 +1,82 @@
+/* ============================================================ レイアウト */
+.shell{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) min-content;
+  align-items:start;
+}
+.main-col{ min-width:0; padding-bottom:64px; }
+
+/* ============================================================ HUD */
+.hud{
+  margin-top:30px;
+  /* auto-fit — ドロワー拡大で main col が狭まっても overflow せず折り返す */
+  display:grid; grid-template-columns:repeat(auto-fit, minmax(110px,1fr)); gap:14px;
+}
+.stat{
+  background:var(--paper);
+  border:1px solid var(--suna); border-radius:14px;
+  padding:14px 18px 12px;
+  box-shadow:var(--shadow);
+}
+.stat label{
+  display:block;
+  font-family:var(--f-disp);
+  font-size:10.5px; font-weight:500;
+  letter-spacing:.30em; text-transform:uppercase;
+  color:var(--asagi);
+}
+.stat b{
+  display:block; margin-top:2px;
+  font-family:var(--f-disp); font-variation-settings:"opsz" 60;
+  font-size:30px; font-weight:540; line-height:1.25;
+  color:var(--sumi); font-feature-settings:"tnum";
+}
+.stat .sub{ font-size:11px; color:var(--ink-40); }
+.stat.warned b{ color:var(--warn); }
+.hud-bar{
+  margin-top:14px;
+  height:5px; border-radius:999px;
+  background:var(--byakugun-bg);
+  overflow:hidden;
+}
+.hud-bar i{
+  display:block; height:100%;
+  background:linear-gradient(90deg, var(--ai), var(--asagi));
+  border-radius:999px;
+  transition:width .6s var(--ease-fan);
+}
+
+/* ============================================================ バナー(劣化表示) */
+.banner{
+  margin-top:18px;
+  border-left:2px solid var(--ai);
+  background:var(--byakugun-bg);
+  border-radius:0 10px 10px 0;
+  padding:10px 18px;
+  font-size:13px; color:var(--ink-78);
+}
+.banner[hidden]{ display:none; }
+.banner.warn{ border-left-color:var(--warn); }
+.banner .why{ color:var(--ink-40); font-size:12px; }
+
+/* ============================================================ ツールバー */
+.toolbar{
+  margin-top:26px;
+  display:flex; align-items:center; gap:14px;
+}
+#filter{
+  flex:1; min-width:0;
+  font-family:var(--f-code); font-size:13px;
+  color:var(--sumi);
+  background:var(--paper);
+  border:1px solid var(--suna); border-radius:12px;
+  padding:10px 16px;
+  transition:border-color .25s ease;
+}
+#filter::placeholder{ color:var(--ink-40); }
+#filter:focus{ outline:none; border-color:var(--asagi); }
+#filter-count{
+  font-family:var(--f-code); font-size:12px; color:var(--ink-60);
+  white-space:nowrap;
+}
+

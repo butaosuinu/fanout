@@ -1,0 +1,106 @@
+/* ============================================================ フィルタバー(ドロップダウン+チップ) */
+.filter-bar{
+  margin-top:10px;
+  display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+  /* rise アニメ実行中(0.7s + 遅延)は .filter-bar / .session が一時的に
+   * スタッキングコンテキストになり DOM 順で後の session が上に描画されるため、
+   * popover が開く可能性のある filter-bar を明示的に持ち上げておく
+   * (恒久残留の方は .rise の fill=backwards で根本対処済み。nav の 40 より下)。 */
+  position:relative; z-index:30;
+}
+/* GitHub PR 風ドロップダウン(FilterDropdown)。trigger は旧 select と同じ
+ * 砂色ピル、popover は和紙カード + fdIn の扇イージングで開く。 */
+.fd{ position:relative; }
+.fd-trigger{
+  display:inline-flex; align-items:center; gap:6px;
+  font-family:var(--f-code); font-size:12px;
+  color:var(--ink-60);
+  background:var(--paper);
+  border:1px solid var(--suna); border-radius:999px;
+  padding:4px 12px;
+  cursor:pointer;
+  transition:border-color .25s ease, color .25s ease, background-color .25s ease;
+}
+.fd-trigger:hover{ border-color:var(--asagi); color:var(--sumi); }
+.fd-trigger:focus-visible{ outline:none; border-color:var(--asagi); color:var(--sumi); }
+.fd-trigger[aria-expanded="true"]{ border-color:var(--asagi); color:var(--sumi); }
+.fd-trigger .fd-caret{ color:var(--ink-40); transition:transform .25s var(--ease-fan), color .25s ease; }
+.fd-trigger:hover .fd-caret{ color:var(--asagi); }
+.fd-trigger[aria-expanded="true"] .fd-caret{ color:var(--asagi); transform:rotate(180deg); }
+/* トークン適用中の trigger はチップと同じ浅葱トーン */
+.fd-trigger.on{
+  color:var(--ai-deep);
+  border-color:color-mix(in srgb, var(--asagi) 35%, transparent);
+  background:color-mix(in srgb, var(--asagi) 8%, transparent);
+}
+@keyframes fdIn{ from{ opacity:0; transform:translateY(-5px) scale(.97); } }
+.fd-pop{
+  /* z-index は .filter-bar コンテキスト内の兄弟順制御のみ(nav との前後は
+   * 親 .filter-bar の z-index:30 が決める) */
+  position:absolute; top:calc(100% + 6px); left:0; z-index:1;
+  outline:none; /* tabIndex=-1 の余白クリック受け */
+  min-width:184px;
+  background:var(--paper);
+  border:1px solid var(--suna); border-radius:12px;
+  box-shadow:var(--shadow);
+  padding:6px;
+  transform-origin:top left;
+  animation:fdIn .22s var(--ease-fan) both;
+}
+.fd-search{ padding:2px 2px 7px; margin-bottom:6px; border-bottom:1px solid var(--suna-soft); }
+.fd-search input{
+  width:100%;
+  font-family:var(--f-code); font-size:12px;
+  color:var(--sumi);
+  background:var(--washi);
+  border:1px solid var(--suna); border-radius:8px;
+  padding:5px 10px;
+  transition:border-color .25s ease;
+}
+.fd-search input::placeholder{ color:var(--ink-40); }
+.fd-search input:focus{ outline:none; border-color:var(--asagi); }
+.fd-list{ display:flex; flex-direction:column; gap:1px; max-height:248px; overflow-y:auto; }
+.fd-opt{
+  display:flex; align-items:center; gap:8px;
+  width:100%; text-align:left;
+  font-family:var(--f-code); font-size:12px;
+  color:var(--ink-78);
+  background:transparent;
+  border:none; border-radius:8px;
+  padding:5px 10px;
+  cursor:pointer;
+  transition:background-color .15s ease, color .15s ease;
+}
+.fd-opt:hover{ background:var(--byakugun-bg); color:var(--sumi); }
+/* :focus(-visible でなく)で塗る: クリック開時のプログラムフォーカスでも
+ * roving カーソル位置が見えるように */
+.fd-opt:focus{ outline:none; background:var(--byakugun-bg); color:var(--sumi); }
+.fd-opt .fd-check{
+  flex:none; color:var(--asagi);
+  opacity:0; transform:scale(.6);
+  transition:opacity .15s ease, transform .2s var(--ease-fan);
+}
+.fd-opt[aria-selected="true"]{ color:var(--sumi); font-weight:500; }
+.fd-opt[aria-selected="true"] .fd-check{ opacity:1; transform:scale(1); }
+.fd-empty{ padding:5px 10px; font-family:var(--f-code); font-size:11.5px; color:var(--ink-40); }
+#chips{ display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.chip{
+  display:inline-flex; align-items:center; gap:6px;
+  font-family:var(--f-code); font-size:11px; font-weight:500;
+  letter-spacing:.03em;
+  color:var(--ai-deep);
+  background:color-mix(in srgb, var(--asagi) 8%, transparent);
+  border:1px solid color-mix(in srgb, var(--asagi) 35%, transparent);
+  border-radius:999px;
+  padding:2px 10px;
+  cursor:pointer;
+  transition:border-color .25s ease, color .25s ease, background-color .25s ease;
+}
+.chip .x{ color:var(--ink-40); transition:color .25s ease; }
+.chip:hover{
+  color:var(--err);
+  border-color:color-mix(in srgb, var(--err) 45%, transparent);
+  background:color-mix(in srgb, var(--err) 8%, transparent);
+}
+.chip:hover .x{ color:var(--err); }
+
