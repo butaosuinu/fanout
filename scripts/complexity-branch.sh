@@ -141,11 +141,16 @@ changed="$( {
   git -c core.quotePath=false ls-files --others --exclude-standard -- web/src
 } | sort -u | grep -E '\.tsx?$' | grep -vE "$TS_EXCLUDE" || true)"
 
+ts_index=0
 if [ -n "$changed" ] && [ -x "$ts_bin" ]; then
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     rel="${path#web/}"
-    safe="$(printf '%s' "$rel" | tr '/.' '__')"
+    # 連番で一意にする。パスから作ると `src/a/b.ts` と `src/a_b.ts` が同じ名前に
+    # 潰れ、後勝ちで SARIF が上書きされる。判定は残った側の finding で失敗する一方、
+    # Merge SARIF が上げる注釈からは消えた側が抜けて原因を追えなくなる。
+    ts_index=$((ts_index + 1))
+    safe="$ts_index"
     rm -f "$out/ts-$safe.sarif" "$out/ts-$safe-base.sarif"
     (cd "$root/web" && "$ts_bin" --format @microsoft/eslint-formatter-sarif \
       --output-file "$out/ts-$safe.sarif" "$rel") >"$out/ts.log" 2>&1
