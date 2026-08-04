@@ -37,6 +37,12 @@ type fakeHerdrLaunchRuntime struct {
 	tokenCalls  int
 }
 
+type retryableHerdrObservationError struct{}
+
+func (retryableHerdrObservationError) Error() string { return "transient observation" }
+
+func (retryableHerdrObservationError) RetryableObservation() bool { return true }
+
 func (f *fakeHerdrLaunchRuntime) VerifyOwned(context.Context) error { return nil }
 func (f *fakeHerdrLaunchRuntime) LaunchRoute() (herdrrun.OwnedLaunchRoute, error) {
 	return f.launchRoute, nil
@@ -242,6 +248,56 @@ func TestHerdrCoordinatorRuntimeParentProjectsWatcherIssue(t *testing.T) {
 	}
 }
 
+func TestRecordHerdrCoordinatorReusesLinkedWorktreeStateRow(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "linked-row", sibling, "HEAD")
+	route := herdrrun.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
+	intent := state.HerdrIntent{
+		RuntimeParent: "528",
+		Resource: state.HerdrResource{
+			WorkspaceID: "workspace-1", PaneID: "workspace-1:pane-1",
+			TerminalID: "terminal-1", CurrentPath: repo,
+		},
+	}
+
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
+	if err := launcher.recordHerdrCoordinator(Request{}, locked, intent, route); err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	locked, err = state.LockProjectForLaunch(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcher.Info.ProjectRoot = sibling
+	if err := launcher.recordHerdrCoordinator(Request{}, locked, intent, route); err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	owner, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := state.LoadProject(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owner.Panes) != 1 || owner.Panes[0].WorktreePath != repo || len(other.Panes) != 0 {
+		t.Fatalf("coordinator rows = owner %+v, sibling %+v", owner.Panes, other.Panes)
+	}
+}
+
 func TestOptionalHerdrAgentSession(t *testing.T) {
 	valid := &backend.AgentSessionRef{Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-1"}
 	foreign := &backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-2"}
@@ -262,6 +318,32 @@ func TestOptionalHerdrAgentSession(t *testing.T) {
 				t.Fatalf("valid = %t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+func TestRetryHerdrObservationRetriesOnlyMarkedFailure(t *testing.T) {
+	intent := state.HerdrIntent{ExpiresUnixMS: time.Now().Add(5 * time.Second).UnixMilli()}
+	calls := 0
+	err := retryHerdrObservation(context.Background(), intent, func(context.Context) error {
+		calls++
+		if calls == 1 {
+			return retryableHerdrObservationError{}
+		}
+		return nil
+	})
+	if err != nil || calls != 2 {
+		t.Fatalf("retry observation = calls %d, err %v; want one retry", calls, err)
+	}
+}
+
+func TestObserveExactHerdrAgentReturnsPermanentObservationError(t *testing.T) {
+	runtime := &fakeHerdrLaunchRuntime{liveErr: errors.New("malformed snapshot")}
+	launcher := &Launcher{Herdr: runtime}
+	intent := state.HerdrIntent{ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli()}
+
+	_, found, err := launcher.observeExactHerdrAgent(context.Background(), intent, "agent-1")
+	if err == nil || found {
+		t.Fatalf("permanent observation = found %t, err %v; want immediate failure", found, err)
 	}
 }
 

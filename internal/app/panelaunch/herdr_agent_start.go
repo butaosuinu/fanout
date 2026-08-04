@@ -16,6 +16,8 @@ import (
 
 const herdrLaunchStepTimeout = 5 * time.Second
 
+const herdrLaunchObservationInterval = 2 * time.Second
+
 func (l *Launcher) startHerdrAgent(
 	ctx context.Context,
 	req Request,
@@ -72,17 +74,14 @@ func (l *Launcher) admitHerdrLauncher(
 	if err := l.Herdr.WaitForLauncher(ctx, intent.Resource.PaneID, intent.Launch.Nonce, remainingHerdrLaunchTime(*intent)); err != nil {
 		return err
 	}
-	stepCtx, cancel, err := herdrLaunchStepContext(ctx, *intent)
-	if err != nil {
-		return err
-	}
-	verifyErr := l.verifyHerdrIdleLauncher(stepCtx, *intent, route)
-	stepErr := herdrLaunchStepResult(stepCtx, cancel, verifyErr)
-	if stepErr != nil {
+	verifyErr := retryHerdrObservation(ctx, *intent, func(observeCtx context.Context) error {
+		return l.verifyHerdrIdleLauncher(observeCtx, *intent, route)
+	})
+	if verifyErr != nil {
 		if errors.Is(verifyErr, errHerdrLauncherIdentityChanged) {
-			return markHerdrIntentManual(journal, *intent, stepErr)
+			return markHerdrIntentManual(journal, *intent, verifyErr)
 		}
-		return stepErr
+		return verifyErr
 	}
 	if err := ensureHerdrLaunchActive(ctx, *intent); err != nil {
 		return err
@@ -142,18 +141,19 @@ func (l *Launcher) verifyAndRenameHerdrAgent(
 	ctx context.Context,
 	intent state.HerdrIntent,
 ) error {
-	stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)
+	var process herdrrun.PaneProcessInfo
+	err := retryHerdrObservation(ctx, intent, func(observeCtx context.Context) error {
+		var processErr error
+		process, processErr = l.Herdr.ProcessInfo(observeCtx, intent.Resource.PaneID)
+		return processErr
+	})
 	if err != nil {
-		return err
-	}
-	process, processErr := l.Herdr.ProcessInfo(stepCtx, intent.Resource.PaneID)
-	if err := herdrLaunchStepResult(stepCtx, cancel, processErr); err != nil {
 		return err
 	}
 	if err := verifyHerdrAgentProcess(process, intent); err != nil {
 		return err
 	}
-	stepCtx, cancel, err = herdrLaunchStepContext(ctx, intent)
+	stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)
 	if err != nil {
 		return err
 	}
@@ -215,6 +215,41 @@ func herdrLaunchStepResult(
 	return errors.Join(operationErr, contextErr)
 }
 
+func retryHerdrObservation(
+	ctx context.Context,
+	intent state.HerdrIntent,
+	observe func(context.Context) error,
+) error {
+	for {
+		stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)
+		if err != nil {
+			return err
+		}
+		stepErr := herdrLaunchStepResult(stepCtx, cancel, observe(stepCtx))
+		if stepErr == nil || !herdrrun.IsRetryableObservationError(stepErr) {
+			return stepErr
+		}
+		if err := waitForHerdrObservationRetry(ctx, intent); err != nil {
+			return err
+		}
+	}
+}
+
+func waitForHerdrObservationRetry(ctx context.Context, intent state.HerdrIntent) error {
+	remaining := remainingHerdrLaunchTime(intent)
+	if remaining <= 0 {
+		return fmt.Errorf("Herdr agent-start intent expired")
+	}
+	timer := time.NewTimer(min(herdrLaunchObservationInterval, remaining))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return ensureHerdrLaunchActive(ctx, intent)
+	}
+}
+
 func verifyHerdrLauncherProcess(
 	info herdrrun.PaneProcessInfo,
 	intent state.HerdrIntent,
@@ -268,7 +303,7 @@ func (l *Launcher) waitForHerdrAgent(
 		if remaining <= 0 {
 			break
 		}
-		pause := min(500*time.Millisecond, remaining)
+		pause := min(herdrLaunchObservationInterval, remaining)
 		select {
 		case <-ctx.Done():
 			return backend.LivePane{}, ctx.Err()
@@ -293,7 +328,10 @@ func (l *Launcher) observeExactHerdrAgent(
 		return backend.LivePane{}, false, err
 	}
 	if stepErr != nil {
-		return backend.LivePane{}, false, nil
+		if herdrrun.IsRetryableObservationError(stepErr) {
+			return backend.LivePane{}, false, nil
+		}
+		return backend.LivePane{}, false, stepErr
 	}
 	live, found := exactHerdrLaunchPane(intent, panes, wantAgentID)
 	return live, found, nil

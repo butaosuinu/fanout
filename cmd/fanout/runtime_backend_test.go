@@ -433,6 +433,11 @@ func TestValidateLaunchBackendRejectsCodexChildPlanMode(t *testing.T) {
 	if err := validateLaunchBackend(&cliflags.Config{Agent: "claude"}, selection, inputs); err != nil {
 		t.Fatalf("Claude child Plan Mode error = %v", err)
 	}
+	t.Setenv("FANOUT_AGENT", "codex")
+	err := validateLaunchBackend(&cliflags.Config{}, selection, inputs)
+	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "#554") {
+		t.Fatalf("FANOUT_AGENT Codex Plan Mode error = %v, want pre-mutation rejection", err)
+	}
 }
 
 func TestResolveLaunchBackendRejectsCodexPlanBeforeOwnedSessionCreation(t *testing.T) {

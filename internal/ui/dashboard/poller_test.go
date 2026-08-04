@@ -128,7 +128,7 @@ func newCommittedRepoDash(t *testing.T) string {
 func TestPollerBuildProjectsMatchingHerdrRuntimeObservation(t *testing.T) {
 	root := t.TempDir()
 	writeState(t, root, `{"schemaVersion":1,"panes":[
-	  {"parent":"100","issueNum":101,"backend":"herdr","paneId":"w1:p1","herdrWorkspaceId":"w1","herdrTerminalId":"terminal-a","herdrRepoKey":"/repo/.git","herdrAgentId":"agent-a","herdrAgentSession":{"source":"herdr:codex","agent":"codex","kind":"id","value":"conversation-a"},"herdrSession":"session-a","herdrSocketPath":"/tmp/herdr-a.sock","worktreePath":"/repo/worktree-a"}
+	  {"parent":"100","issueNum":101,"backend":"herdr","paneId":"w1:p1","herdrWorkspaceId":"w1","herdrTerminalId":"terminal-a","herdrRepoKey":"/repo/.git","herdrAgentId":"agent-a","herdrAgentSession":{"source":"herdr:codex","agent":"codex","kind":"id","value":"conversation-a"},"herdrSession":"session-a","herdrSocketPath":"/tmp/herdr-a.sock","agent":"codex","worktreePath":"/repo/worktree-a"}
 	]}`)
 
 	p := newPoller("o/n", root, &countingGH{}, nil, newHub())
@@ -139,19 +139,20 @@ func TestPollerBuildProjectsMatchingHerdrRuntimeObservation(t *testing.T) {
 			Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "conversation-a",
 		}
 		return []backend.LivePane{{
-			Ref:          backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
-			Title:        "herdr child",
-			AgentState:   backend.AgentWorking,
-			AgentID:      "agent-a",
-			AgentSession: agentSession,
-			AgentPresent: true,
-			TerminalID:   "terminal-a",
-			Focused:      true,
-			RepoKey:      "/repo/.git",
-			ProjectRoot:  "/repo",
-			WorktreePath: "/repo/worktree-a",
-			SessionID:    "session-a",
-			SocketPath:   "/tmp/herdr-a.sock",
+			Ref:           backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
+			Title:         "herdr child",
+			AgentState:    backend.AgentWorking,
+			AgentID:       "agent-a",
+			AgentProvider: "codex",
+			AgentSession:  agentSession,
+			AgentPresent:  true,
+			TerminalID:    "terminal-a",
+			Focused:       true,
+			RepoKey:       "/repo/.git",
+			ProjectRoot:   "/repo",
+			WorktreePath:  "/repo/worktree-a",
+			SessionID:     "session-a",
+			SocketPath:    "/tmp/herdr-a.sock",
 		}}, nil
 	}
 

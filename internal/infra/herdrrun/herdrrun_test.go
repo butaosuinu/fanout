@@ -1376,6 +1376,17 @@ func TestFinalizeCommandErrorPreservesCleanupFailureOnDeadline(t *testing.T) {
 	}
 }
 
+func TestObservationCommandErrorClassifiesOnlyTransientFailures(t *testing.T) {
+	transient := observationCommandError("observe", context.DeadlineExceeded)
+	if !IsRetryableObservationError(transient) {
+		t.Fatalf("deadline error = %v, want retryable observation", transient)
+	}
+	permanent := observationCommandError("observe", errors.New("malformed response"))
+	if IsRetryableObservationError(permanent) {
+		t.Fatalf("malformed error = %v, want permanent observation failure", permanent)
+	}
+}
+
 func TestRunCommandBoundsInheritedPipeWaitAndKillsProcessGroup(t *testing.T) {
 	testBoundedCommandRunner(t, runCommand)
 }

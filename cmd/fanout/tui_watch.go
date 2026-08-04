@@ -29,7 +29,7 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 	if !resolvedSettings.Watcher {
 		return nil, 0, "", nil
 	}
-	preflightCfg := &cliflags.Config{ParentRef: tuiWatcherPreflightRef}
+	preflightCfg := newWatcherPreflightConfig(resolvedSettings)
 	if _, err := resolveTUILaunchRuntime(projectRoot, session, preflightCfg); err != nil {
 		return nil, 0, "", err
 	}
@@ -248,6 +248,12 @@ func newWatchLaunchConfig(resolvedSettings settings.Settings, parent, limit int)
 		Format:          cliflags.DefaultFormat,
 		UnblockedOnly:   true,
 	}
+}
+
+func newWatcherPreflightConfig(resolvedSettings settings.Settings) *cliflags.Config {
+	cfg := newWatchLaunchConfig(resolvedSettings, 0, 0)
+	cfg.ParentRef = tuiWatcherPreflightRef
+	return cfg
 }
 
 func watcherAgent(resolvedSettings settings.Settings) string {

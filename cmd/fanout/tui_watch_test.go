@@ -26,6 +26,19 @@ func TestNewWatchLaunchConfigUsesResolvedChildPlanMode(t *testing.T) {
 	}
 }
 
+func TestNewWatcherPreflightConfigCarriesAgentAndPlanMode(t *testing.T) {
+	resolved := settings.Defaults()
+	resolved.WatcherAgent = "codex"
+	resolved.ChildPlanMode = true
+
+	cfg := newWatcherPreflightConfig(resolved)
+
+	if cfg.ParentRef != tuiWatcherPreflightRef || cfg.Agent != "codex" ||
+		cfg.PlanMode == nil || !*cfg.PlanMode {
+		t.Fatalf("watcher preflight config = %+v, want parent, agent, and Plan Mode", cfg)
+	}
+}
+
 func TestLaunchStandaloneIssuePaneReportsClaudeModeFallback(t *testing.T) {
 	repo := prepareTUIParentLaunchRepo(t)
 	installTUITmuxShim(t, "%91")

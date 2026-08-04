@@ -152,8 +152,12 @@ func TestHerdrRowRuntimeActionsAreDisabledBeforePorts(t *testing.T) {
 				t.Fatalf("key %q called runtime ports %d time(s)", tt.key, calls)
 			}
 			message := strings.Join([]string{m.notice, m.actionMessage, m.peek.Err}, " ")
-			if !strings.Contains(message, "herdr backend v1") {
-				t.Fatalf("key %q reason = %q, want explicit herdr v1 reason", tt.key, message)
+			wantReason := backend.HerdrObservationOnlyReason
+			if tt.key == "p" {
+				wantReason = backend.HerdrContentReadReason
+			}
+			if !strings.Contains(message, wantReason) {
+				t.Fatalf("key %q reason = %q, want explicit herdr action reason", tt.key, message)
 			}
 		})
 	}

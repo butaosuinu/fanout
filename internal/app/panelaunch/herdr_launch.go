@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 type HerdrLaunchRuntime interface {
@@ -212,10 +214,9 @@ func (l *Launcher) recordHerdrCoordinator(
 	route herdrrun.OwnedLaunchRoute,
 ) error {
 	runtimeParent := herdrCoordinatorRuntimeParent(intent)
-	for _, pane := range locked.Panes {
-		if pane.Parent == ManualParentRef && pane.RuntimeParent == runtimeParent {
-			return validateHerdrCoordinatorPane(pane, intent, route)
-		}
+	recorded, err := l.findHerdrCoordinatorRow(locked, runtimeParent, intent, route)
+	if err != nil || recorded {
+		return err
 	}
 	number := NextSyntheticPaneNumber(locked.Store, ManualParentRef)
 	pane := state.Pane{
@@ -224,10 +225,53 @@ func (l *Launcher) recordHerdrCoordinator(
 		Backend: backend.Herdr, PaneID: intent.Resource.PaneID,
 		HerdrWorkspaceID: intent.Resource.WorkspaceID, HerdrTerminalID: intent.Resource.TerminalID,
 		HerdrSession: route.Session, HerdrSocketPath: route.SocketPath,
-		DisplayName: "Herdr coordinator: " + runtimeParent, WorktreePath: l.Info.ProjectRoot,
+		DisplayName: "Herdr coordinator: " + runtimeParent, WorktreePath: intent.Resource.CurrentPath,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	return locked.RecordPane(pane)
+}
+
+func (l *Launcher) findHerdrCoordinatorRow(
+	locked *state.LockedStore,
+	runtimeParent string,
+	intent state.HerdrIntent,
+	route herdrrun.OwnedLaunchRoute,
+) (bool, error) {
+	roots, err := worktree.ListRoots(l.Info.ProjectRoot)
+	if err != nil {
+		return false, fmt.Errorf("list linked worktrees for Herdr coordinator: %w", err)
+	}
+	for _, root := range roots {
+		store, loadErr := loadHerdrCoordinatorStore(l.Info.ProjectRoot, root, locked)
+		if loadErr != nil {
+			return false, loadErr
+		}
+		pane, found := findHerdrCoordinatorPane(store, runtimeParent)
+		if found {
+			return true, validateHerdrCoordinatorPane(pane, intent, route)
+		}
+	}
+	return false, nil
+}
+
+func loadHerdrCoordinatorStore(projectRoot, root string, locked *state.LockedStore) (state.Store, error) {
+	if filepath.Clean(root) == filepath.Clean(projectRoot) {
+		return locked.Store, nil
+	}
+	store, err := state.LoadProject(root)
+	if err != nil {
+		return state.Store{}, fmt.Errorf("load Herdr coordinator state from %s: %w", root, err)
+	}
+	return store, nil
+}
+
+func findHerdrCoordinatorPane(store state.Store, runtimeParent string) (state.Pane, bool) {
+	for _, pane := range store.Panes {
+		if pane.Parent == ManualParentRef && pane.RuntimeParent == runtimeParent {
+			return pane, true
+		}
+	}
+	return state.Pane{}, false
 }
 
 func herdrCoordinatorRuntimeParent(intent state.HerdrIntent) string {
@@ -248,6 +292,7 @@ func validateHerdrCoordinatorPane(
 		pane.HerdrWorkspaceID == intent.Resource.WorkspaceID,
 		pane.HerdrTerminalID == intent.Resource.TerminalID,
 		pane.HerdrSession == route.Session, pane.HerdrSocketPath == route.SocketPath,
+		filepath.Clean(pane.WorktreePath) == filepath.Clean(intent.Resource.CurrentPath),
 	}
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("saved Herdr coordinator row contradicts realized intent")

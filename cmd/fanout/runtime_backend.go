@@ -251,7 +251,11 @@ func validateLaunchBackend(
 }
 
 func configMayLaunchCodex(cfg *cliflags.Config) bool {
-	if strings.EqualFold(strings.TrimSpace(cfg.Agent), "codex") {
+	agentName := cfg.Agent
+	if agentName == "" {
+		agentName = os.Getenv("FANOUT_AGENT")
+	}
+	if strings.EqualFold(strings.TrimSpace(agentName), "codex") {
 		return true
 	}
 	for _, override := range cfg.AgentOverrides {

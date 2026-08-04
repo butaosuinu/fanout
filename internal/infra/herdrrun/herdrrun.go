@@ -197,8 +197,7 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 			lastPanes = nil
 			lastErr = snapshotErr
 			lastValid = false
-			var retryable retryableSnapshotError
-			if !errors.As(snapshotErr, &retryable) {
+			if !IsRetryableObservationError(snapshotErr) {
 				return failedWait(snapshotErr)
 			}
 			continue
@@ -336,13 +335,27 @@ func cancelledWait(err error) WaitResult {
 	return WaitResult{Status: WaitCancelled, Err: err}
 }
 
-type retryableSnapshotError struct {
+type retryableObservationError struct {
 	err error
 }
 
-func (e retryableSnapshotError) Error() string { return e.err.Error() }
+func (e retryableObservationError) Error() string { return e.err.Error() }
 
-func (e retryableSnapshotError) Unwrap() error { return e.err }
+func (e retryableObservationError) Unwrap() error { return e.err }
+
+func (e retryableObservationError) RetryableObservation() bool { return true }
+
+type retryableObservation interface {
+	error
+	RetryableObservation() bool
+}
+
+// IsRetryableObservationError reports whether a read-only Herdr command may be
+// retried within the caller's fixed observation budget.
+func IsRetryableObservationError(err error) bool {
+	retryable, ok := errors.AsType[retryableObservation](err)
+	return ok && retryable.RetryableObservation()
+}
 
 type commandCleanupError struct {
 	err error
@@ -357,7 +370,7 @@ func (b *Backend) snapshot(ctx context.Context, timeout time.Duration, probed pr
 	if err != nil {
 		wrapped := methodUnavailable("session.snapshot")
 		if retryableCommandError(err) {
-			return nil, retryableSnapshotError{err: wrapped}
+			return nil, retryableObservationError{err: wrapped}
 		}
 		return nil, wrapped
 	}

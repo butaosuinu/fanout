@@ -136,7 +136,7 @@ func (s *OwnedSession) SendLaunchToken(ctx context.Context, paneID, nonce string
 func (s *OwnedSession) ProcessInfo(ctx context.Context, paneID string) (PaneProcessInfo, error) {
 	out, err := s.runOwnedLaunchCommand(ctx, commandTimeout, "pane", "process-info", "--pane", paneID)
 	if err != nil {
-		return PaneProcessInfo{}, err
+		return PaneProcessInfo{}, observationCommandError("herdr pane process-info", err)
 	}
 	var envelope paneProcessInfoEnvelope
 	if err := decodeOne(out, &envelope); err != nil || envelope.ID != "cli:pane:process_info" ||
@@ -187,14 +187,22 @@ func (s *OwnedSession) LivePanes(ctx context.Context) ([]corebackend.LivePane, e
 	}
 	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
 	if err != nil {
-		return nil, err
+		return nil, observationCommandError("acquire Herdr observation", err)
 	}
 	defer unlockPrivateFile(lock)
 	probed, err := s.backend.probeOwned(ctx, admission)
 	if err != nil {
-		return nil, err
+		return nil, observationCommandError("verify Herdr observation route", err)
 	}
 	return s.backend.snapshot(ctx, commandTimeout, probed)
+}
+
+func observationCommandError(operation string, err error) error {
+	wrapped := fmt.Errorf("%s: %w", operation, err)
+	if retryableCommandError(err) {
+		return retryableObservationError{err: wrapped}
+	}
+	return wrapped
 }
 
 func (s *OwnedSession) runOwnedLaunchCommand(
