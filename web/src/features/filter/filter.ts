@@ -14,19 +14,64 @@ import type { PaneView } from "../../transport/types";
  * #filter のテキストが単一の真実 — ドロップダウンは key:value トークンを書き
  * 込むだけで手打ち構文と完全互換。 */
 
-export const FILTER_KEYS = new Set([
-  "state",
-  "agent",
-  "wave",
-  "ci",
-  "dirty",
-  "live",
-  "issue",
-  "task",
-  "pr",
-  "run",
-  "backend",
+/* 比較の共通正規化。key:value の value は parseQuery で小文字化済みなので、
+ * 突き合わせる側も同じ規則に揃える。 */
+function lower(v: string | number | null | undefined): string {
+  return String(v ?? "").toLowerCase();
+}
+
+function yesNo(on: boolean): string {
+  return on ? "yes" : "no";
+}
+
+/* バックエンドが算出済みのフィルタ値。ある値はそれが正で、無いキーだけ記録値から
+ * 組み直す(古い snapshot でも手打ち構文が壊れないように)。 */
+function derivedValues(p: PaneView): Record<string, string> {
+  return p.derived?.filterValues ?? {};
+}
+
+/* wave: が受け付ける別名 — 数値・waveLabel・derived の 2 種・wN 表記。
+ * どれか 1 つに完全一致すれば通す。 */
+function waveAliases(p: PaneView): string[] {
+  return [
+    p.wave,
+    p.waveLabel,
+    p.derived?.dependencyWave,
+    p.derived?.waveText,
+    compactWave(p),
+    fmtWave(p),
+  ].map(lower);
+}
+
+type FilterPredicate = (p: PaneView, value: string) => boolean;
+
+/* キーごとの述語テーブル。キーのセマンティクス(完全一致か部分一致か、derived の
+ * 値を優先するか)はここ 1 か所だけを読めば分かるようにしてある。 */
+const FILTER_PREDICATES = new Map<string, FilterPredicate>([
+  // runtime 状態に一致するならそれを、さもなくば issue 状態を見る。
+  ["state", (p, v) => paneRuntimeState(p) === v || lower(p.issueState) === v],
+  ["run", (p, v) => (derivedValues(p).run ?? p.agentState ?? "") === v],
+  ["agent", (p, v) => lower(p.agent).includes(v)],
+  ["backend", (p, v) => lower(derivedValues(p).backend ?? paneBackend(p)) === v],
+  ["wave", (p, v) => waveAliases(p).includes(v)],
+  ["ci", (p, v) => paneCI(p) === v],
+  ["dirty", (p, v) => (derivedValues(p).dirty ?? yesNo(p.dirtyState === "dirty")) === v],
+  ["live", (p, v) => (derivedValues(p).live ?? yesNo(p.alive)) === v],
+  [
+    "issue",
+    (p, v) =>
+      (derivedValues(p).issue ?? String(p.issueNum)) === v ||
+      String(p.issueNum) === v ||
+      lower(p.taskId) === v,
+  ],
+  ["task", (p, v) => lower(p.taskId) === v],
+  ["pr", (p, v) => lower(derivedValues(p).pr ?? prPrimary(p.prs)?.state ?? "none") === v],
 ]);
+
+/* パースが key:value として受け付けるキーは述語テーブルそのもの。片方にだけ
+ * キーを足すと「key:value が自由語に落ちる」「制約なしで素通りする」の食い違いが
+ * 出るので、2 つのリストを持たない。 */
+export const FILTER_KEYS = new Set(FILTER_PREDICATES.keys());
 
 export type Term = { kind: "key"; key: string; value: string } | { kind: "word"; word: string };
 
@@ -44,8 +89,9 @@ export function parseQuery(str: string): Term[] {
   return terms;
 }
 
-export function matches(p: PaneView, terms: Term[]): boolean {
-  const hay =
+/* 自由語の検索対象。derived.filterText があればそれが正。 */
+function haystack(p: PaneView): string {
+  return (
     p.derived?.filterText ||
     [
       p.issueNum,
@@ -65,80 +111,16 @@ export function matches(p: PaneView, terms: Term[]): boolean {
       fmtBlockers(p),
     ]
       .join(" ")
-      .toLowerCase();
-  for (const t of terms) {
-    if (t.kind === "word") {
-      if (!hay.includes(t.word)) return false;
-      continue;
-    }
-    const pr = prPrimary(p.prs);
-    switch (t.key) {
-      case "state": {
-        const runtimeState = paneRuntimeState(p);
-        // runtime 状態に一致するならそれを、さもなくば issue 状態を見る。
-        if (
-          (runtimeState === t.value ? runtimeState : String(p.issueState ?? "").toLowerCase()) !==
-          t.value
-        )
-          return false;
-        break;
-      }
-      case "run":
-        if ((p.derived?.filterValues?.run ?? p.agentState ?? "") !== t.value) return false;
-        break;
-      case "agent":
-        if (
-          !String(p.agent ?? "")
-            .toLowerCase()
-            .includes(t.value)
-        )
-          return false;
-        break;
-      case "backend":
-        if ((p.derived?.filterValues?.backend ?? paneBackend(p)).toLowerCase() !== t.value)
-          return false;
-        break;
-      case "wave":
-        if (
-          String(p.wave ?? "") !== t.value &&
-          (p.waveLabel ?? "").toLowerCase() !== t.value &&
-          (p.derived?.dependencyWave ?? "").toLowerCase() !== t.value &&
-          (p.derived?.waveText ?? "").toLowerCase() !== t.value &&
-          compactWave(p).toLowerCase() !== t.value &&
-          fmtWave(p).toLowerCase() !== t.value
-        )
-          return false;
-        break;
-      case "ci":
-        if (paneCI(p) !== t.value) return false;
-        break;
-      case "dirty":
-        if (
-          (p.derived?.filterValues?.dirty ?? (p.dirtyState === "dirty" ? "yes" : "no")) !== t.value
-        )
-          return false;
-        break;
-      case "live":
-        if ((p.derived?.filterValues?.live ?? (p.alive ? "yes" : "no")) !== t.value) return false;
-        break;
-      case "issue":
-        if (
-          (p.derived?.filterValues?.issue ?? String(p.issueNum)) !== t.value &&
-          String(p.issueNum) !== t.value &&
-          String(p.taskId ?? "").toLowerCase() !== t.value
-        )
-          return false;
-        break;
-      case "task":
-        if ((p.taskId ?? "").toLowerCase() !== t.value) return false;
-        break;
-      case "pr":
-        if ((p.derived?.filterValues?.pr ?? pr?.state ?? "none").toLowerCase() !== t.value)
-          return false;
-        break;
-    }
-  }
-  return true;
+      .toLowerCase()
+  );
+}
+
+/* 全 term の AND。述語を持たないキー(手組みの Term)は制約なしとして通す。 */
+export function matches(p: PaneView, terms: Term[]): boolean {
+  const hay = haystack(p);
+  return terms.every((t) =>
+    t.kind === "word" ? hay.includes(t.word) : (FILTER_PREDICATES.get(t.key)?.(p, t.value) ?? true),
+  );
 }
 
 /* ---- フィルタ文字列のトークン操作(ドロップダウン+チップ UI 用) ---- */
