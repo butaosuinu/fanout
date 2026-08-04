@@ -260,7 +260,7 @@ func verifyHerdrLauncherProcess(
 	}
 	for _, process := range info.ForegroundProcesses {
 		if process.PID == info.ShellPID && process.CWD == intent.WorktreePath &&
-			len(process.Argv) == 1 && process.Argv[0] == route.LauncherPath {
+			process.Argv0 == route.LauncherPath && len(process.Argv) == 0 {
 			return nil
 		}
 	}
@@ -268,21 +268,14 @@ func verifyHerdrLauncherProcess(
 }
 
 func verifyHerdrAgentProcess(info herdrrun.PaneProcessInfo, intent state.HerdrIntent) error {
-	wantArgv := append([]string{intent.Launch.Executable}, intent.Launch.Args...)
 	for _, process := range info.ForegroundProcesses {
-		if process.CWD == intent.WorktreePath && matchesHerdrLaunchArgv(process.Argv, wantArgv) &&
+		if process.CWD == intent.WorktreePath && process.Argv0 == intent.Launch.Executable &&
+			slices.Equal(process.Argv, intent.Launch.Args) &&
 			(process.PID == info.ForegroundProcessGroup || process.PID == info.ShellPID) {
 			return nil
 		}
 	}
 	return fmt.Errorf("Herdr agent process identity does not match launch intent")
-}
-
-func matchesHerdrLaunchArgv(got, want []string) bool {
-	if slices.Equal(got, want) {
-		return true
-	}
-	return len(got) == len(want)+1 && got[1] == want[0] && slices.Equal(got[2:], want[1:])
 }
 
 func (l *Launcher) waitForHerdrAgent(
@@ -362,5 +355,5 @@ func exactHerdrLaunchPane(
 }
 
 func validOptionalHerdrAgentSession(session *backend.AgentSessionRef, agentName string) bool {
-	return session == nil || session.Valid() && session.Agent == agentName
+	return session == nil || session.Valid() && session.Agent == agentName && session.Source == "herdr:"+agentName
 }

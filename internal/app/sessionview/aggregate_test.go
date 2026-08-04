@@ -872,12 +872,11 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 			include: true,
 		},
 		{
-			name: "logical conversation reported after persistence",
+			name: "unbound logical conversation requires state binding",
 			mutateRow: func(p *state.Pane) {
 				p.HerdrAgentSession = nil
 			},
-			include:   true,
-			wantAlive: true,
+			include: true,
 		},
 		{
 			name: "provider omitted logical conversation",

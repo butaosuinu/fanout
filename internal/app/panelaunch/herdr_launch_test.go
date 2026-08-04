@@ -307,6 +307,7 @@ func TestRecordHerdrCoordinatorReusesLinkedWorktreeStateRow(t *testing.T) {
 func TestOptionalHerdrAgentSession(t *testing.T) {
 	valid := &backend.AgentSessionRef{Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-1"}
 	foreign := &backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-2"}
+	foreignSource := &backend.AgentSessionRef{Source: "foreign:claude", Agent: "claude", Kind: "id", Value: "session-3"}
 	invalid := &backend.AgentSessionRef{Agent: "claude"}
 	tests := []struct {
 		name    string
@@ -316,6 +317,7 @@ func TestOptionalHerdrAgentSession(t *testing.T) {
 		{name: "not reported", want: true},
 		{name: "reported exact", session: valid, want: true},
 		{name: "foreign agent", session: foreign},
+		{name: "foreign source", session: foreignSource},
 		{name: "incomplete", session: invalid},
 	}
 	for _, test := range tests {
@@ -379,7 +381,7 @@ func TestExactHerdrLaunchPaneRequiresProviderAndAcceptsOptionalSession(t *testin
 	}
 }
 
-func TestVerifyHerdrAgentProcessAcceptsInterpreterWrapper(t *testing.T) {
+func TestVerifyHerdrAgentProcessUsesArgv0AndArgsContract(t *testing.T) {
 	intent := state.HerdrIntent{
 		WorktreePath: "/repo/worktree",
 		Launch: &state.HerdrLaunch{
@@ -391,16 +393,22 @@ func TestVerifyHerdrAgentProcessAcceptsInterpreterWrapper(t *testing.T) {
 		ShellPID: 42, ForegroundProcessGroup: 42,
 		ForegroundProcesses: []herdrrun.PaneProcess{{
 			PID: 42, CWD: intent.WorktreePath,
-			Argv: []string{"node", intent.Launch.Executable, intent.Launch.Args[0]},
+			Argv0: intent.Launch.Executable, Argv: intent.Launch.Args,
 		}},
 	}
 	if err := verifyHerdrAgentProcess(info, intent); err != nil {
-		t.Fatalf("wrapper process rejected: %v", err)
+		t.Fatalf("exact process rejected: %v", err)
 	}
 
-	info.ForegroundProcesses[0].Argv = []string{"node", "/foreign/codex", intent.Launch.Args[0]}
+	info.ForegroundProcesses[0].Argv0 = "/foreign/codex"
 	if err := verifyHerdrAgentProcess(info, intent); err == nil {
-		t.Fatal("foreign wrapper entrypoint was accepted")
+		t.Fatal("foreign argv0 was accepted")
+	}
+
+	info.ForegroundProcesses[0].Argv0 = intent.Launch.Executable
+	info.ForegroundProcesses[0].Argv = append([]string{intent.Launch.Executable}, intent.Launch.Args...)
+	if err := verifyHerdrAgentProcess(info, intent); err == nil {
+		t.Fatal("argv containing argv0 was accepted")
 	}
 }
 
@@ -696,7 +704,7 @@ func testHerdrLauncherProcess(intent state.HerdrIntent, launcherPath string) her
 	return herdrrun.PaneProcessInfo{
 		PaneID: intent.Resource.PaneID, ShellPID: 42, ForegroundProcessGroup: 42,
 		ForegroundProcesses: []herdrrun.PaneProcess{{
-			PID: 42, CWD: intent.WorktreePath, Argv: []string{launcherPath},
+			PID: 42, CWD: intent.WorktreePath, Argv0: launcherPath,
 		}},
 	}
 }

@@ -143,6 +143,7 @@ var prefixRules = []struct {
 	{"internal/app/briefing/", Rule{ID: "app-briefing", Class: ClassH, Source: SourceDocTable, Note: "エージェントに注入するプロンプト本文"}},
 	{"internal/app/lifecycle/", Rule{ID: "app-lifecycle", Class: ClassH, Source: SourceDocTable, Note: "close/merge/cleanup"}},
 	{"internal/app/panelaunch/", Rule{ID: "app-panelaunch", Class: ClassH, Source: SourceDocTable, Note: "tmux pane 生成と Herdr coordinator/worktree/agent launch"}},
+	{"internal/app/sessionbinding/", Rule{ID: "app-sessionbinding", Class: ClassH, Source: SourceDocTable, Note: "遅延 Herdr agent session の初回束縛と state 保存"}},
 
 	// app M.
 	{"internal/app/panelayout/", Rule{ID: "app-panelayout", Class: ClassM, Source: SourceDocTable, Note: "ペインレイアウト計算"}},

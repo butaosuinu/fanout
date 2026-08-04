@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/butaosuinu/fanout/internal/app/sessionbinding"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/blockers"
@@ -189,7 +190,7 @@ func (m model) loadActivePaneCmd(scheduleNext bool) tea.Cmd {
 
 func loadPaneViews(projectRoot string, issues map[issueKey]issueStatus, listLive func() ([]backend.LivePane, error)) ([]paneView, error) {
 	var stateErr error
-	mergedState := sessionview.MergedStateLoader(projectRoot, listLive)
+	mergedState := sessionbinding.StateLoader(projectRoot, listLive)
 	loadState := func() (state.Store, error) {
 		store, err := mergedState()
 		stateErr = err

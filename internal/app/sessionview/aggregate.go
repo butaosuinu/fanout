@@ -614,6 +614,25 @@ func HerdrPaneMatches(pane state.Pane, current backend.LivePane) bool {
 		herdrWorktreeIdentityMatches(pane, current)
 }
 
+// HerdrPaneMatchesForSessionBinding admits only one valid expected-provider
+// conversation on an otherwise exact persisted route and worktree identity.
+func HerdrPaneMatchesForSessionBinding(pane state.Pane, current backend.LivePane) bool {
+	return backend.NormalizeName(pane.Backend) == backend.Herdr && current.Ref.Backend == backend.Herdr &&
+		expectedHerdrAgentSession(current.AgentSession, pane.Agent) &&
+		herdrAgentObservationMatches(pane, current) &&
+		herdrRouteIdentityMatches(pane, current) &&
+		herdrWorktreeIdentityMatches(pane, current)
+}
+
+func expectedHerdrAgentSession(ref *backend.AgentSessionRef, provider string) bool {
+	return ref != nil && ref.Valid() && ref.Agent == provider && ref.Source == "herdr:"+provider
+}
+
+func herdrAgentObservationMatches(pane state.Pane, current backend.LivePane) bool {
+	return current.AgentPresent && current.AgentProvider == pane.Agent &&
+		current.AgentID == pane.HerdrAgentID
+}
+
 func herdrRouteIdentityMatches(pane state.Pane, current backend.LivePane) bool {
 	if current.Ref.Workspace != pane.HerdrWorkspaceID || current.Ref.Pane != pane.PaneID ||
 		current.SessionID != pane.HerdrSession || current.SocketPath != pane.HerdrSocketPath {
@@ -627,8 +646,8 @@ func herdrRouteIdentityMatches(pane state.Pane, current backend.LivePane) bool {
 	return true
 }
 
-// herdrAgentIdentityMatches accepts a later valid optional conversation only
-// when the saved row had none. Once saved, the conversation stays exact.
+// herdrAgentIdentityMatches requires an observed conversation to have been
+// bound to the owning state row first. Once saved, it stays exact.
 func herdrAgentIdentityMatches(pane state.Pane, current backend.LivePane) bool {
 	storedAgent := strings.TrimSpace(pane.Agent) != "" || pane.HerdrAgentID != ""
 	observedAgent := current.AgentPresent || current.AgentID != "" || current.AgentProvider != "" || current.AgentSession != nil
@@ -702,19 +721,20 @@ func herdrRowUnsupported(pane state.Pane) bool {
 func herdrAgentBaselineUnsupported(pane state.Pane) bool {
 	storedAgentID := strings.TrimSpace(pane.HerdrAgentID) != ""
 	if pane.HerdrAgentSession != nil {
-		return !storedAgentID || !pane.HerdrAgentSession.Valid() || pane.HerdrAgentSession.Agent != pane.Agent
+		return !storedAgentID || !expectedHerdrAgentSession(pane.HerdrAgentSession, pane.Agent)
 	}
 	return !storedAgentID && strings.TrimSpace(pane.Agent) != ""
 }
 
 func optionalAgentSessionMatches(stored, current *backend.AgentSessionRef, provider string) bool {
 	if stored == nil {
-		return current == nil || current.Valid() && current.Agent == provider
+		return current == nil
 	}
 	if current == nil {
 		return false
 	}
-	return stored.Valid() && stored.Agent == provider && current.Valid() && *stored == *current
+	return expectedHerdrAgentSession(stored, provider) &&
+		expectedHerdrAgentSession(current, provider) && *stored == *current
 }
 
 func paneAlive(live map[livePaneKey]backend.LivePane, pane state.Pane) bool {

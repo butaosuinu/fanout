@@ -66,6 +66,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
 | app | `panelaunch` | tmux pane 生成と Herdr coordinator/worktree/agent launch のオーケストレーション | H |
+| app | `sessionbinding` | 遅延 Herdr agent session の初回束縛と state lock 下の保存 | H |
 | ui | `dashboard`(`server.go`) | localhost web サーバの mux・token 検証 | H |
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
 | ui | `dashboard`(`diff.go`) | snapshot の安定 row identity で選んだ worktree diff の read-only 配信・request-wide 上限 | H |
@@ -129,6 +130,9 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   `manual_cleanup_required` にする。issue-less plan の intent は physical
   owner root を ID に含め、同じ slug を使う別の linked worktree には backend
   binding として投影しない。
+  launch 時に `agent_session` が nil だった final row は、`sessionbinding` が
+  exact route / terminal / provider / worktree と一意な ref を state lock 下で
+  再照合して初回だけ保存する。保存後は ref の完全一致を要求する。
 - **worktree refresh は user work を壊さない**: base branch が dirty / ahead /
   diverged なら強制更新せず fail する。
 - **watch のトリガーラベルはプロンプトインジェクション境界**: issue 本文が
