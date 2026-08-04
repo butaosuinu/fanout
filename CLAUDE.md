@@ -148,7 +148,9 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   the remaining key/form/polling wiring is class M. The dashboard SPA lives in `web/` (React + Vite + TS,
   split into `src/app`, `src/features/*`, `src/transport`, `src/ui`,
   `src/shared`, `src/styles`; `index.html`'s no-referrer/external-fetch policy
-  is class H, `src/transport` is class M, the rest is class A) and bundles into
+  is class H, `src/transport` is class M — as are `src/shared/github.ts`
+  (href-safety boundary) and `src/features/diff/diff.ts` (hostile-patch
+  parse/render limits) — the rest is class A) and bundles into
   `internal/ui/dashboard/static/` via `go:embed`.
 
 The full package table, the Mermaid dependency diagram, the human-must-read
