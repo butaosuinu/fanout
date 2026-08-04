@@ -107,8 +107,11 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `os`/`os/exec` in the purity allowlist), `planspec` (the `fanout plan` JSON
   schema; allowed `os` for spec loading), `naming` (deterministic slug/branch
   generation; identity-deciding, class M with `parentref`/`fanset`), and the
-  AI-reviewable `exitcode`/`cliview` (`blockers` is class M: it drives
-  --unblocked-only launch selection and wave computation).
+  AI-reviewable `exitcode`/`cliview`/`errs` (`blockers` is class M: it drives
+  --unblocked-only launch selection and wave computation). `errs.Wrap` is the
+  shared `defer`-based error wrapper every layer may import; the conventions
+  around it (named returns, first-defer registration, stating an identity once)
+  are in `docs/error-handling.ja.md`.
 - `internal/app` orchestrates use cases on top of `core` and `infra`:
   `panelaunch` (pane creation), `lifecycle`, `watch` (the label-watcher
   cycle, pure at the package boundary via `watch.IO`), and `briefing` (the

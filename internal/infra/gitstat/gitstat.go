@@ -3,6 +3,7 @@ package gitstat
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/butaosuinu/fanout/internal/core/errs"
 	"github.com/butaosuinu/fanout/internal/infra/execx"
 )
 
@@ -67,12 +69,9 @@ func (r Runner) Worktree(path, baseRef string) (Stat, error) {
 		return Stat{}, fmt.Errorf("worktree path is empty")
 	}
 
-	diffOut, err := r.git("-C", path, "diff", "--shortstat", r.diffBase(path, baseRef))
-	if err != nil {
-		return Stat{}, err
-	}
-	statusOut, err := r.git("-C", path, "status", "--porcelain", "--untracked-files=normal")
-	if err != nil {
+	diffOut, diffErr := r.git("-C", path, "diff", "--shortstat", r.diffBase(path, baseRef))
+	statusOut, statusErr := r.git("-C", path, "status", "--porcelain", "--untracked-files=normal")
+	if err := cmp.Or(diffErr, statusErr); err != nil {
 		return Stat{}, err
 	}
 
@@ -84,8 +83,10 @@ func (r Runner) Worktree(path, baseRef string) (Stat, error) {
 // WorktreePatch returns the committed, staged, unstaged, and untracked changes
 // since the strict merge-base with baseRef. Binary files and files larger than
 // 256 KiB remain in Files but are omitted from Patch.
-func (r Runner) WorktreePatch(path, baseRef string) (Patch, error) {
-	path, err := r.resolveWorktreePath(path)
+func (r Runner) WorktreePatch(path, baseRef string) (_ Patch, err error) {
+	defer errs.Wrap(&err, "worktree patch %q", path)
+
+	path, err = r.resolveWorktreePath(path)
 	if err != nil {
 		return Patch{}, err
 	}
@@ -303,17 +304,19 @@ type patchFile struct {
 	replacement *FileStat
 }
 
-func (r Runner) untrackedFileStat(path, rel string) (FileStat, error) {
+func (r Runner) untrackedFileStat(path, rel string) (_ FileStat, err error) {
+	defer errs.Wrap(&err, "untracked file %q", rel)
+
 	fullPath, err := containedPath(path, rel)
 	if err != nil {
 		return FileStat{}, err
 	}
 	info, err := os.Lstat(fullPath)
 	if err != nil {
-		return FileStat{}, fmt.Errorf("inspect untracked file %q: %w", rel, err)
+		return FileStat{}, err
 	}
 	if !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
-		return FileStat{}, fmt.Errorf("untracked path %q is not a regular file or symlink", rel)
+		return FileStat{}, errors.New("not a regular file or symlink")
 	}
 	if info.Size() > patchFileLimit {
 		return FileStat{Path: rel, OmittedReason: "tooLarge"}, nil
@@ -332,10 +335,10 @@ func (r Runner) untrackedFileStat(path, rel string) (FileStat, error) {
 	}
 	stats, err := parseNumStat(out)
 	if err != nil {
-		return FileStat{}, fmt.Errorf("parse untracked numstat for %q: %w", rel, err)
+		return FileStat{}, fmt.Errorf("parse numstat: %w", err)
 	}
 	if len(stats) != 1 {
-		return FileStat{}, fmt.Errorf("parse untracked numstat for %q: got %d files, want 1", rel, len(stats))
+		return FileStat{}, fmt.Errorf("parse numstat: got %d files, want 1", len(stats))
 	}
 	stat := stats[0]
 	stat.Path = rel
@@ -345,19 +348,20 @@ func (r Runner) untrackedFileStat(path, rel string) (FileStat, error) {
 	return stat, nil
 }
 
-func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (bool, error) {
+func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (_ bool, err error) {
 	if !file.tracked {
 		return file.OmittedReason == "tooLarge", nil
 	}
+	defer errs.Wrap(&err, "patch file size %q", file.Path)
 
 	inIndex, err := r.pathInIndex(path, file.Path)
 	if err != nil {
-		return false, fmt.Errorf("inspect tracked index entry %q: %w", file.Path, err)
+		return false, fmt.Errorf("inspect tracked index entry: %w", err)
 	}
 	if inIndex {
 		hidden, tooLarge, indexErr := r.hiddenIndexFileTooLarge(path, file.Path)
 		if indexErr != nil {
-			return false, fmt.Errorf("inspect hidden index entry %q: %w", file.Path, indexErr)
+			return false, fmt.Errorf("inspect hidden index entry: %w", indexErr)
 		}
 		if hidden {
 			if tooLarge {
@@ -366,7 +370,7 @@ func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (bool,
 		} else {
 			info, statErr := lstatContained(path, file.Path)
 			if statErr != nil {
-				return false, fmt.Errorf("inspect tracked file %q: %w", file.Path, statErr)
+				return false, fmt.Errorf("inspect tracked file: %w", statErr)
 			}
 			if info != nil &&
 				(info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0) &&
@@ -385,18 +389,18 @@ func (r Runner) patchFileTooLarge(path, mergeBase string, file patchFile) (bool,
 	}
 	metadata, _, found := bytes.Cut(out, []byte{'\t'})
 	if !found {
-		return false, fmt.Errorf("parse base file size for %q: missing path separator", file.Path)
+		return false, errors.New("parse base file size: missing path separator")
 	}
 	fields := strings.Fields(string(metadata))
 	if len(fields) != 4 {
-		return false, fmt.Errorf("parse base file size for %q: malformed ls-tree output", file.Path)
+		return false, errors.New("parse base file size: malformed ls-tree output")
 	}
 	if fields[3] == "-" {
 		return false, nil
 	}
 	size, err := strconv.ParseInt(fields[3], 10, 64)
 	if err != nil {
-		return false, fmt.Errorf("parse base file size for %q: %w", file.Path, err)
+		return false, fmt.Errorf("parse base file size: %w", err)
 	}
 	return size > patchFileLimit, nil
 }
@@ -410,7 +414,9 @@ type treeEntry struct {
 func (r Runner) replacementPatch(
 	path, mergeBase string,
 	file patchFile,
-) ([]byte, FileStat, bool, error) {
+) (_ []byte, _ FileStat, _ bool, err error) {
+	defer errs.Wrap(&err, "replacement patch %q", file.Path)
+
 	entry, err := r.mergeBaseTreeEntry(path, mergeBase, file.Path)
 	if err != nil {
 		return nil, FileStat{}, false, err
@@ -420,11 +426,11 @@ func (r Runner) replacementPatch(
 		return nil, FileStat{}, false, err
 	}
 	if info == nil {
-		return nil, FileStat{}, false, fmt.Errorf("inspect replacement %q: missing final side", file.Path)
+		return nil, FileStat{}, false, errors.New("inspect: missing final side")
 	}
 	currentMode, err := worktreeGitMode(info)
 	if err != nil {
-		return nil, FileStat{}, false, fmt.Errorf("inspect replacement %q: %w", file.Path, err)
+		return nil, FileStat{}, false, fmt.Errorf("inspect: %w", err)
 	}
 
 	if entry.mode[:2] != currentMode[:2] {
@@ -453,7 +459,7 @@ func (r Runner) replacementPatch(
 
 	tempDir, err := replacementTempDir(path)
 	if err != nil {
-		return nil, FileStat{}, false, fmt.Errorf("create replacement temp directory: %w", err)
+		return nil, FileStat{}, false, fmt.Errorf("create temp directory: %w", err)
 	}
 	defer func() {
 		// The request-private base file is best-effort cleanup after every return path.
@@ -465,13 +471,13 @@ func (r Runner) replacementPatch(
 	finalArg := filepath.Join("b", relPath)
 	basePath := filepath.Join(tempDir, baseArg)
 	if mkdirErr := os.MkdirAll(filepath.Dir(basePath), 0o700); mkdirErr != nil {
-		return nil, FileStat{}, false, fmt.Errorf("create replacement base directory: %w", mkdirErr)
+		return nil, FileStat{}, false, fmt.Errorf("create base directory: %w", mkdirErr)
 	}
 	if materializeErr := r.materializeTreeEntry(path, entry, basePath); materializeErr != nil {
 		return nil, FileStat{}, false, materializeErr
 	}
 	if linkErr := os.Symlink(path, filepath.Join(tempDir, "b")); linkErr != nil {
-		return nil, FileStat{}, false, fmt.Errorf("link replacement final side: %w", linkErr)
+		return nil, FileStat{}, false, fmt.Errorf("link final side: %w", linkErr)
 	}
 
 	out, code, err := replacementDiff(r.context(), tempDir, false, baseArg, finalArg)
@@ -495,21 +501,23 @@ func (r Runner) replacementPatch(
 	}
 	stats, err := parseNumStat(numstatOut)
 	if err != nil {
-		return nil, FileStat{}, false, fmt.Errorf("parse replacement numstat for %q: %w", file.Path, err)
+		return nil, FileStat{}, false, fmt.Errorf("parse numstat: %w", err)
 	}
 	if len(stats) != 1 {
-		return nil, FileStat{}, false, fmt.Errorf(
-			"parse replacement numstat for %q: got %d files, want 1",
-			file.Path,
-			len(stats),
-		)
+		return nil, FileStat{}, false, fmt.Errorf("parse numstat: got %d files, want 1", len(stats))
 	}
 	stat := stats[0]
 	stat.Path = file.Path
 	return out, stat, true, nil
 }
 
-func (r Runner) replacementChanged(path, mergeBase string, file patchFile, hashFinal bool) (bool, error) {
+func (r Runner) replacementChanged(
+	path, mergeBase string,
+	file patchFile,
+	hashFinal bool,
+) (_ bool, err error) {
+	defer errs.Wrap(&err, "replacement %q", file.Path)
+
 	entry, err := r.mergeBaseTreeEntry(path, mergeBase, file.Path)
 	if err != nil {
 		return false, err
@@ -520,22 +528,22 @@ func (r Runner) replacementChanged(path, mergeBase string, file patchFile, hashF
 	}
 	info, err := os.Lstat(fullPath)
 	if err != nil {
-		return false, fmt.Errorf("inspect replacement %q: %w", file.Path, err)
+		return false, fmt.Errorf("inspect: %w", err)
 	}
 	currentMode, err := worktreeGitMode(info)
 	if err != nil {
-		return false, fmt.Errorf("inspect replacement %q: %w", file.Path, err)
+		return false, fmt.Errorf("inspect: %w", err)
 	}
 	if entry.mode != currentMode {
 		return true, nil
 	}
 	if entry.objectType != "blob" {
-		return false, fmt.Errorf("compare replacement base entry: unsupported object type %q", entry.objectType)
+		return false, fmt.Errorf("compare base entry: unsupported object type %q", entry.objectType)
 	}
 	if hashFinal {
 		out, hashErr := r.git("-C", path, "hash-object", "--no-filters", "--", file.Path)
 		if hashErr != nil {
-			return false, fmt.Errorf("hash oversized replacement %q: %w", file.Path, hashErr)
+			return false, fmt.Errorf("hash oversized final side: %w", hashErr)
 		}
 		return strings.TrimSpace(string(out)) != entry.oid, nil
 	}
@@ -548,13 +556,13 @@ func (r Runner) replacementChanged(path, mergeBase string, file patchFile, hashF
 	if currentMode == "120000" {
 		target, readErr := os.Readlink(fullPath)
 		if readErr != nil {
-			return false, fmt.Errorf("read replacement symlink %q: %w", file.Path, readErr)
+			return false, fmt.Errorf("read symlink: %w", readErr)
 		}
 		finalContent = []byte(target)
 	} else {
 		finalContent, err = os.ReadFile(fullPath)
 		if err != nil {
-			return false, fmt.Errorf("read replacement file %q: %w", file.Path, err)
+			return false, fmt.Errorf("read file: %w", err)
 		}
 	}
 	return !bytes.Equal(baseContent, finalContent), nil
@@ -582,6 +590,8 @@ func replacementDiff(ctx context.Context, cwd string, numstat bool, oldPath, new
 	return execx.OutputExitCodeContext(ctx, cwd, gitEnv(), "git", args...)
 }
 
+// mergeBaseTreeEntry omits rel from its messages: every caller already wraps
+// the identity in, and repeating it reads as two different files.
 func (r Runner) mergeBaseTreeEntry(path, mergeBase, rel string) (treeEntry, error) {
 	out, err := r.git("-C", path, "ls-tree", "-z", mergeBase, "--", rel)
 	if err != nil {
@@ -589,18 +599,18 @@ func (r Runner) mergeBaseTreeEntry(path, mergeBase, rel string) (treeEntry, erro
 	}
 	records, err := splitNUL(out)
 	if err != nil {
-		return treeEntry{}, fmt.Errorf("parse base entry for %q: %w", rel, err)
+		return treeEntry{}, fmt.Errorf("parse base entry: %w", err)
 	}
 	if len(records) != 1 {
-		return treeEntry{}, fmt.Errorf("parse base entry for %q: got %d entries, want 1", rel, len(records))
+		return treeEntry{}, fmt.Errorf("parse base entry: got %d entries, want 1", len(records))
 	}
 	metadata, entryPath, found := bytes.Cut(records[0], []byte{'\t'})
 	if !found || string(entryPath) != rel {
-		return treeEntry{}, fmt.Errorf("parse base entry for %q: path mismatch", rel)
+		return treeEntry{}, errors.New("parse base entry: path mismatch")
 	}
 	fields := strings.Fields(string(metadata))
 	if len(fields) != 3 || len(fields[0]) != 6 {
-		return treeEntry{}, fmt.Errorf("parse base entry for %q: malformed ls-tree output", rel)
+		return treeEntry{}, errors.New("parse base entry: malformed ls-tree output")
 	}
 	return treeEntry{
 		mode:       fields[0],
@@ -882,22 +892,20 @@ func (r Runner) MergeBase(path, baseRef string) (string, error) {
 
 	baseRef = strings.TrimSpace(baseRef)
 	var candidates []string
+	// checkRef is the check-ref-format argv tail for the one user-supplied form
+	// baseRef takes. Collecting it lets the three branches share a single
+	// validation check instead of repeating the same error three times.
+	var checkRef []string
 	switch {
 	case strings.HasPrefix(baseRef, "refs/"):
-		if _, err := r.git("-C", path, "check-ref-format", baseRef); err != nil {
-			return "", fmt.Errorf("validate base ref %q: %w", baseRef, err)
-		}
+		checkRef = []string{baseRef}
 		candidates = append(candidates, baseRef)
 	case strings.HasPrefix(baseRef, "origin/"):
 		candidate := "refs/remotes/" + baseRef
-		if _, err := r.git("-C", path, "check-ref-format", candidate); err != nil {
-			return "", fmt.Errorf("validate base ref %q: %w", baseRef, err)
-		}
+		checkRef = []string{candidate}
 		candidates = append(candidates, candidate)
 	case baseRef != "":
-		if _, err := r.git("-C", path, "check-ref-format", "--branch", baseRef); err != nil {
-			return "", fmt.Errorf("validate base ref %q: %w", baseRef, err)
-		}
+		checkRef = []string{"--branch", baseRef}
 		candidates = append(candidates, "refs/heads/"+baseRef, "refs/remotes/origin/"+baseRef)
 	default:
 		out, err := r.git("-C", path, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
@@ -906,9 +914,15 @@ func (r Runner) MergeBase(path, baseRef string) (string, error) {
 		}
 		head := strings.TrimSpace(string(out))
 		if head == "" {
-			return "", fmt.Errorf("resolve origin/HEAD: empty ref")
+			return "", errors.New("resolve origin/HEAD: empty ref")
 		}
 		candidates = append(candidates, head)
+	}
+	if checkRef != nil {
+		args := append([]string{"-C", path, "check-ref-format"}, checkRef...)
+		if _, err := r.git(args...); err != nil {
+			return "", fmt.Errorf("validate base ref %q: %w", baseRef, err)
+		}
 	}
 
 	currentRef, err := r.currentBranchRef(path)

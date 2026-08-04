@@ -152,6 +152,7 @@ var prefixRules = []struct {
 	// core A.
 	{"internal/core/exitcode/", Rule{ID: "core-exitcode", Class: ClassA, Source: SourceDocTable, Note: "終了コード定義"}},
 	{"internal/core/cliview/", Rule{ID: "core-cliview", Class: ClassA, Source: SourceDocTable, Note: "CLI 出力の整形"}},
+	{"internal/core/errs/", Rule{ID: "core-errs", Class: ClassA, Source: SourceDocTable, Note: "エラーラップの共有ヘルパ"}},
 
 	// tui catch-all: file rules above override actions.go(H) and the A trio.
 	{"internal/ui/tui/", Rule{ID: "tui-rest", Class: ClassM, Source: SourceDocTable, Note: "キー処理・フォーム・ポーリングの配線"}},
