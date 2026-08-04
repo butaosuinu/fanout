@@ -168,7 +168,7 @@ func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentNa
 		return panelaunch.Request{}, "", "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
 
-	recorder, err := state.LockProject(projectRoot)
+	recorder, err := state.LockProjectForLaunch(projectRoot)
 	if err != nil {
 		return panelaunch.Request{}, "", "", err
 	}
@@ -444,7 +444,7 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 		return "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
 
-	recorder, err := state.LockProject(projectRoot)
+	recorder, err := state.LockProjectForLaunch(projectRoot)
 	if err != nil {
 		return "", err
 	}

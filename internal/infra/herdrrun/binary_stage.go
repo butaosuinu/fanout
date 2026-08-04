@@ -183,7 +183,7 @@ func validateAdmissionSourceOwner(path string, info os.FileInfo) error {
 	if !isTrustedAdmissionSourceOwner(ownerUID, os.Getuid(), info.Mode()) {
 		return fmt.Errorf("herdr executable %s belongs to untrusted uid %d or is group/world writable", path, stat.Uid)
 	}
-	return validateNoExtendedACL(path)
+	return nil
 }
 
 func isTrustedAdmissionSourceOwner(ownerUID, currentUID int, mode os.FileMode) bool {

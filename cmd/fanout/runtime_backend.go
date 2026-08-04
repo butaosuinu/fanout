@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -34,6 +33,7 @@ type runtimeBackendInputs struct {
 	userDefault        backend.Name
 	rows               []backend.Binding
 	provisionalIntents []backend.Binding
+	suppliedIntents    []backend.Binding
 
 	herdrSession    string
 	herdrSocketPath string
@@ -129,6 +129,9 @@ func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.
 		return launchBackendResolution{}, err
 	}
 	inputs.rows = rows
+	if refreshErr := refreshHerdrIntentBindings(&inputs); refreshErr != nil {
+		return launchBackendResolution{}, refreshErr
+	}
 	selection, err := resolveBackendSelection(cfg.ParentRef, inputs)
 	if err != nil {
 		return launchBackendResolution{}, err
@@ -159,6 +162,9 @@ func backendSelectionVerifier(selection backend.Selection, inputs runtimeBackend
 			return err
 		}
 		recheck.rows = rows
+		if err := refreshHerdrIntentBindings(&recheck); err != nil {
+			return err
+		}
 		got, resolveErr := resolveBackendSelection(parent, recheck)
 		if resolveErr != nil {
 			return resolveErr
@@ -253,9 +259,27 @@ func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store st
 		userDefault:        userDefault,
 		rows:               backendBindings(projectRoot, store),
 		provisionalIntents: append([]backend.Binding(nil), provisionalIntents...),
+		suppliedIntents:    append([]backend.Binding(nil), provisionalIntents...),
 		herdrSession:       os.Getenv("HERDR_SESSION"),
 		herdrSocketPath:    os.Getenv("HERDR_SOCKET_PATH"),
 	}
+}
+
+func refreshHerdrIntentBindings(inputs *runtimeBackendInputs) error {
+	if strings.TrimSpace(inputs.projectRoot) == "" {
+		inputs.provisionalIntents = append([]backend.Binding(nil), inputs.suppliedIntents...)
+		return nil
+	}
+	control, err := state.LoadHerdrIntents(inputs.projectRoot)
+	if err != nil {
+		return fmt.Errorf("load Herdr runtime bindings: %w", err)
+	}
+	ownerProjectRoot := canonicalRuntimeRoot(inputs.projectRoot)
+	inputs.provisionalIntents = append(
+		append([]backend.Binding(nil), inputs.suppliedIntents...),
+		control.ProvisionalBindings(ownerProjectRoot)...,
+	)
+	return nil
 }
 
 func resolveBackendSelection(parent string, inputs runtimeBackendInputs) (backend.Selection, error) {
@@ -281,49 +305,7 @@ func resolveDisplayBackendSelection(projectRoot string) (backend.Selection, erro
 }
 
 func backendBindings(projectRoot string, store state.Store) []backend.Binding {
-	rows := make([]backend.Binding, 0, len(store.Panes)*2)
-	planParents := map[string]string{}
-	for _, pane := range store.Panes {
-		if pane.IsAttachedAgent() {
-			parent := strings.TrimSpace(pane.SourceParent)
-			if parent == "" {
-				parent = strings.TrimSpace(pane.Parent)
-			}
-			switch {
-			case pane.SourceIssueNum > 0 && (parent == panelaunch.ManualParentRef || parent == panelaunch.WatchParentRef || parent == ""):
-				parent = strconv.Itoa(pane.SourceIssueNum)
-			case strings.HasPrefix(parent, "plan:"):
-				planSlug := strings.TrimPrefix(parent, "plan:")
-				if planSlug != "" {
-					parent = panelaunch.SavedPlanRuntimeParentRef(projectRoot, planSlug)
-				}
-			}
-			if parent != "" && parent != panelaunch.ManualParentRef && parent != panelaunch.WatchParentRef {
-				rows = append(rows, backend.Binding{Parent: parent, Backend: pane.Backend})
-			}
-			continue
-		}
-		// @manual is a shared bucket for unrelated synthetic launches, so the raw
-		// parent cannot establish stickiness. Provenance-bearing coordinator rows
-		// below are instead attributed to their actual issue parent.
-		if issueNum, ok := panelaunch.PaneIssueParentNum(pane); ok {
-			rows = append(rows, backend.Binding{Parent: strconv.Itoa(issueNum), Backend: pane.Backend})
-			continue
-		}
-		if planSlug, ok := strings.CutPrefix(pane.Parent, "plan:"); ok && planSlug != "" {
-			parent, seen := planParents[planSlug]
-			if !seen {
-				parent = panelaunch.SavedPlanRuntimeParentRef(projectRoot, planSlug)
-				planParents[planSlug] = parent
-			}
-			rows = append(rows, backend.Binding{Parent: parent, Backend: pane.Backend})
-			continue
-		}
-		if pane.Parent != panelaunch.ManualParentRef && pane.Parent != panelaunch.WatchParentRef {
-			rows = append(rows, backend.Binding{Parent: pane.Parent, Backend: pane.Backend})
-		}
-	}
-	return rows
+	return panelaunch.RuntimeBackendBindings(projectRoot, store)
 }
 
 func constructRuntimeBackend(name backend.Name, inputs runtimeBackendInputs) (backend.Backend, error) {
@@ -386,7 +368,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 		routeErr = errors.Join(routeErr, fmt.Errorf("list linked worktrees for runtime observation: %w", listErr))
 	}
 	seenRoots := map[string]bool{}
-	hasHerdrRow := false
+	hasHerdrRoute := false
 	for _, root := range roots {
 		key := canonicalRuntimeRoot(root)
 		if seenRoots[key] {
@@ -405,7 +387,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 			case backend.Tmux:
 				addRoute(runtimeReadRoute{name: backend.Tmux})
 			case backend.Herdr:
-				hasHerdrRow = true
+				hasHerdrRoute = true
 				session := strings.TrimSpace(pane.HerdrSession)
 				socketPath := strings.TrimSpace(pane.HerdrSocketPath)
 				if session == "" || socketPath == "" {
@@ -431,6 +413,32 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 		}
 	}
 
+	control, controlErr := state.LoadHerdrIntents(projectRoot)
+	if controlErr != nil {
+		hasHerdrRoute = true
+		routeErr = errors.Join(routeErr, fmt.Errorf("load Herdr control routes: %w", controlErr))
+	} else {
+		for i, intent := range control.Intents {
+			hasHerdrRoute = true
+			session := strings.TrimSpace(intent.Session)
+			socketPath := strings.TrimSpace(intent.SocketPath)
+			if session == "" || socketPath == "" {
+				routeErr = errors.Join(routeErr, backend.ObservationRouteUnavailable(
+					backend.ObservationRoute{
+						Backend: backend.Herdr, SessionID: session, SocketPath: socketPath,
+					},
+					fmt.Errorf("herdr control intent %d requires session and socketPath", i),
+				))
+				continue
+			}
+			addRoute(runtimeReadRoute{
+				name:            backend.Herdr,
+				herdrSession:    session,
+				herdrSocketPath: socketPath,
+			})
+		}
+	}
+
 	inputs := loadRuntimeBackendInputs(&cliflags.Config{}, projectRoot, state.Store{}, nil)
 	selection, err := resolveBackendSelection("", inputs)
 	if err != nil {
@@ -440,7 +448,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 		case backend.Tmux:
 			addRoute(runtimeReadRoute{name: backend.Tmux})
 		case backend.Herdr:
-			if !hasHerdrRow {
+			if !hasHerdrRoute {
 				addRoute(runtimeReadRoute{
 					name:            backend.Herdr,
 					herdrSession:    strings.TrimSpace(inputs.herdrSession),

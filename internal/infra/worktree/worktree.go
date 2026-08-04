@@ -3,6 +3,7 @@ package worktree
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -65,7 +66,15 @@ type Result struct {
 
 // BuildPlan resolves deterministic worktree paths and the base branch.
 func BuildPlan(opts Options) Plan {
-	base, missingOrigin := resolveBaseBranch(opts)
+	plan, _ := buildPlanContext(context.Background(), opts)
+	return plan
+}
+
+func buildPlanContext(ctx context.Context, opts Options) (Plan, error) {
+	base, missingOrigin, err := resolveBaseBranchContext(ctx, opts)
+	if err != nil {
+		return Plan{}, err
+	}
 	refresh := !opts.NoRefresh
 	refreshSkippedReason := ""
 	var refreshDetails RefreshDetails
@@ -92,7 +101,7 @@ func BuildPlan(opts Options) Plan {
 		RefreshDetails:       refreshDetails,
 		RefreshError:         refreshErr,
 		RefreshSkippedReason: refreshSkippedReason,
-	}
+	}, nil
 }
 
 // Prepare refreshes the base branch and creates the child worktree.
@@ -230,58 +239,91 @@ func missingExcludePatterns(body []byte) []string {
 
 // ResolveDefaultBranch follows fanout's default branch fallback order.
 func ResolveDefaultBranch(root string) string {
-	return resolveDefaultBranch(root, false)
+	branch, _ := resolveDefaultBranchContext(context.Background(), root, false)
+	return branch
 }
 
 // ResolveDefaultBranchAllowMissingOrigin returns the current local branch when
 // no origin remote exists, for local-only plan/manual pane runs.
 func ResolveDefaultBranchAllowMissingOrigin(root string) string {
-	return resolveDefaultBranch(root, true)
+	branch, _ := resolveDefaultBranchContext(context.Background(), root, true)
+	return branch
 }
 
-func resolveDefaultBranch(root string, allowMissingOrigin bool) string {
-	if allowMissingOrigin && !hasOriginRemote(root) {
-		return localBaseRef(root)
+func resolveDefaultBranchContext(
+	ctx context.Context,
+	root string,
+	allowMissingOrigin bool,
+) (string, error) {
+	if allowMissingOrigin {
+		hasOrigin, err := hasOriginRemoteContext(ctx, root)
+		if err != nil {
+			return "", err
+		}
+		if !hasOrigin {
+			return localBaseRefContext(ctx, root)
+		}
 	}
-	cmd := exec.Command("gh", "repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name")
+	cmd := exec.CommandContext(ctx, "gh", "repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name")
 	cmd.Dir = root
 	if out, err := cmd.Output(); err == nil {
 		if s := strings.TrimSpace(string(out)); s != "" && s != "null" {
-			return s
+			return s, nil
 		}
 	}
-	if out, err := git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if out, err := gitContext(ctx, root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
 		s := strings.TrimSpace(string(out))
 		s = strings.TrimPrefix(s, "origin/")
 		if s != "" {
-			return s
+			return s, nil
 		}
 	}
-	return "main"
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "main", nil
 }
 
-func resolveBaseBranch(opts Options) (string, bool) {
-	missingOrigin := opts.AllowMissingOrigin && !hasOriginRemote(opts.ProjectRoot)
+func resolveBaseBranchContext(ctx context.Context, opts Options) (string, bool, error) {
+	missingOrigin := false
+	if opts.AllowMissingOrigin {
+		hasOrigin, err := hasOriginRemoteContext(ctx, opts.ProjectRoot)
+		if err != nil {
+			return "", false, err
+		}
+		missingOrigin = !hasOrigin
+	}
 	base := opts.BaseBranch
 	if base == "" {
 		if missingOrigin {
-			return localBaseRef(opts.ProjectRoot), true
+			localBase, err := localBaseRefContext(ctx, opts.ProjectRoot)
+			return localBase, true, err
 		}
-		return ResolveDefaultBranch(opts.ProjectRoot), false
+		defaultBase, err := resolveDefaultBranchContext(ctx, opts.ProjectRoot, false)
+		return defaultBase, false, err
 	}
-	return base, missingOrigin
+	return base, missingOrigin, nil
 }
 
-func hasOriginRemote(root string) bool {
-	_, err := git(root, "remote", "get-url", "origin")
-	return err == nil
+func hasOriginRemoteContext(ctx context.Context, root string) (bool, error) {
+	_, err := gitContext(ctx, root, "remote", "get-url", "origin")
+	if contextErr := ctx.Err(); contextErr != nil {
+		return false, contextErr
+	}
+	return err == nil, nil
 }
 
-func localBaseRef(root string) string {
-	if branch, err := gitTrim(root, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil && branch != "" {
-		return branch
+func localBaseRefContext(ctx context.Context, root string) (string, error) {
+	if branch, err := gitTrimContext(ctx, root, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil && branch != "" {
+		return branch, nil
 	}
-	return "HEAD"
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "HEAD", nil
 }
 
 func originQualifiedBase(base string) bool {
@@ -327,14 +369,19 @@ func RefreshDetailsFor(base string) (RefreshDetails, error) {
 
 // RefreshBase fetches origin/base and fast-forwards a local base branch when applicable.
 func RefreshBase(root, base string) error {
+	return RefreshBaseContext(context.Background(), root, base)
+}
+
+// RefreshBaseContext is RefreshBase with cancellation and deadline support.
+func RefreshBaseContext(ctx context.Context, root, base string) error {
 	details, err := RefreshDetailsFor(base)
 	if err != nil {
 		return err
 	}
-	if _, err = git(root, "fetch", "--quiet", "--no-tags", "origin", details.FetchBranch); err != nil {
+	if _, err = gitContext(ctx, root, "fetch", "--quiet", "--no-tags", "origin", details.FetchBranch); err != nil {
 		return fmt.Errorf("git fetch origin %s: %w", details.FetchBranch, err)
 	}
-	originSHA, err := gitTrim(root, "rev-parse", "--verify", details.OriginRef)
+	originSHA, err := gitTrimContext(ctx, root, "rev-parse", "--verify", details.OriginRef)
 	if err != nil {
 		return fmt.Errorf("resolve %s: %w", details.OriginRef, err)
 	}
@@ -343,9 +390,9 @@ func RefreshBase(root, base string) error {
 	}
 
 	localRef := "refs/heads/" + details.LocalBranch
-	localSHA, err := gitTrim(root, "rev-parse", "--verify", localRef)
+	localSHA, err := gitTrimContext(ctx, root, "rev-parse", "--verify", localRef)
 	if err != nil {
-		if _, err = git(root, "branch", details.LocalBranch, originSHA); err != nil {
+		if _, err = gitContext(ctx, root, "branch", details.LocalBranch, originSHA); err != nil {
 			return fmt.Errorf("create local base branch %s: %w", details.LocalBranch, err)
 		}
 		return nil
@@ -353,29 +400,32 @@ func RefreshBase(root, base string) error {
 	if localSHA == originSHA {
 		return nil
 	}
-	mergeBase, err := gitTrim(root, "merge-base", localSHA, originSHA)
+	mergeBase, err := gitTrimContext(ctx, root, "merge-base", localSHA, originSHA)
 	if err != nil {
 		return fmt.Errorf("check fast-forward for %s: %w", details.LocalBranch, err)
 	}
 	if mergeBase != localSHA {
 		return fmt.Errorf("local branch %s has diverged from origin/%s", details.LocalBranch, details.FetchBranch)
 	}
-	if _, err = git(root, "branch", "-f", details.LocalBranch, originSHA); err == nil {
+	if _, err = gitContext(ctx, root, "branch", "-f", details.LocalBranch, originSHA); err == nil {
 		return nil
 	}
 
-	checkedOutPath := checkedOutWorktree(root, details.LocalBranch)
+	checkedOutPath, checkedOutErr := checkedOutWorktree(ctx, root, details.LocalBranch)
+	if checkedOutErr != nil {
+		return fmt.Errorf("locate checked-out local branch %s: %w", details.LocalBranch, checkedOutErr)
+	}
 	if checkedOutPath == "" {
 		return fmt.Errorf("local branch %s is checked out and could not be located", details.LocalBranch)
 	}
-	status, err := gitTrim(checkedOutPath, "status", "--porcelain")
+	status, err := gitTrimContext(ctx, checkedOutPath, "status", "--porcelain")
 	if err != nil {
 		return fmt.Errorf("check %s cleanliness: %w", checkedOutPath, err)
 	}
 	if status != "" {
 		return fmt.Errorf("local branch %s is checked out at %s with uncommitted changes; refusing to fast-forward", details.LocalBranch, checkedOutPath)
 	}
-	if _, err := git(checkedOutPath, "merge", "--ff-only", "--quiet", originSHA); err != nil {
+	if _, err := gitContext(ctx, checkedOutPath, "merge", "--ff-only", "--quiet", originSHA); err != nil {
 		return fmt.Errorf("fast-forward %s at %s: %w", details.LocalBranch, checkedOutPath, err)
 	}
 	return nil
@@ -393,43 +443,23 @@ func RefreshBase(root, base string) error {
 // failure it returns {projectRoot} alongside the error so callers degrade to a
 // single-root load.
 func ListRoots(projectRoot string) ([]string, error) {
-	out, err := git(projectRoot, "worktree", "list", "--porcelain")
+	entries, err := worktreeEntries(context.Background(), projectRoot)
 	if err != nil {
 		return []string{projectRoot}, err
 	}
 	roots := []string{projectRoot}
 	seen := map[string]bool{projectRoot: true}
-	var current string
-	skip := false
 	childMarker := string(filepath.Separator) + filepath.FromSlash(localExcludePattern)
-	flush := func() {
-		path := current
-		drop := skip
-		current, skip = "", false
-		if path == "" || drop {
-			return
-		}
-		if seen[path] || strings.Contains(path, childMarker) {
-			return
-		}
-		seen[path] = true
-		roots = append(roots, path)
-	}
-	sc := bufio.NewScanner(strings.NewReader(string(out)))
-	for sc.Scan() {
-		line := sc.Text()
-		if after, ok := strings.CutPrefix(line, "worktree "); ok {
-			flush()
-			current = after
+	for _, entry := range entries {
+		// bare and prunable worktrees have no usable working tree to read
+		// state from.
+		if entry.bare || entry.prunable || seen[entry.path] ||
+			strings.Contains(entry.path, childMarker) {
 			continue
 		}
-		// `bare` and `prunable [<reason>]` are stanza attribute lines; either
-		// means the worktree has no usable working tree to read state from.
-		if line == "bare" || line == "prunable" || strings.HasPrefix(line, "prunable ") {
-			skip = true
-		}
+		seen[entry.path] = true
+		roots = append(roots, entry.path)
 	}
-	flush()
 	return roots, nil
 }
 
@@ -476,24 +506,17 @@ func baseTreeRef(root string) string {
 	return base
 }
 
-func checkedOutWorktree(root, branch string) string {
-	out, err := git(root, "worktree", "list", "--porcelain")
+func checkedOutWorktree(ctx context.Context, root, branch string) (string, error) {
+	entries, err := worktreeEntries(ctx, root)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	var current string
-	sc := bufio.NewScanner(strings.NewReader(string(out)))
-	for sc.Scan() {
-		line := sc.Text()
-		if after, ok := strings.CutPrefix(line, "worktree "); ok {
-			current = after
-			continue
-		}
-		if strings.TrimPrefix(line, "branch refs/heads/") == branch {
-			return current
+	for _, entry := range entries {
+		if entry.branch == "refs/heads/"+branch {
+			return entry.path, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 func gitTrim(dir string, args ...string) (string, error) {
@@ -504,8 +527,20 @@ func gitTrim(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+func gitTrimContext(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := gitContext(ctx, dir, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func git(dir string, args ...string) ([]byte, error) {
 	return execx.Combined(dir, "git", args...)
+}
+
+func gitContext(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return execx.CombinedContext(ctx, dir, "git", args...)
 }
 
 func dirExists(path string) bool {
@@ -527,8 +562,8 @@ func branchExists(root, branch string) bool {
 	if branch == "" {
 		return false
 	}
-	_, err := gitTrim(root, "rev-parse", "--verify", "refs/heads/"+branch)
-	return err == nil
+	_, found, err := ObserveBranch(context.Background(), root, "refs/heads/"+branch)
+	return err == nil && found
 }
 
 // SlugInUse reports whether slug already owns a worktree directory under

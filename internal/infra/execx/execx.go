@@ -109,10 +109,18 @@ func capture(ctx context.Context, cmd *exec.Cmd, name string, args []string) ([]
 // failure the trimmed output is appended as "%w: <output>"; when the output is
 // empty the raw error is returned unchanged.
 func Combined(dir string, name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
+	return CombinedContext(context.Background(), dir, name, args...)
+}
+
+// CombinedContext is Combined with cancellation and deadline support.
+func CombinedContext(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return out, contextErr
+		}
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
 			return out, err

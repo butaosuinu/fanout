@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
@@ -103,7 +104,11 @@ func TestBackendSelectionVerifierRejectsRowCreatedAfterPreflight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = locked.Unlock() })
+	t.Cleanup(func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Errorf("unlock project state: %v", unlockErr)
+		}
+	})
 	locked.Panes = append(locked.Panes, state.Pane{
 		Parent:  "425",
 		Backend: backend.Herdr,
@@ -265,6 +270,7 @@ func TestBackendSelectionVerifierRechecksLinkedWorktreeRows(t *testing.T) {
 func TestBackendSelectionVerifierKeepsProvisionalIntents(t *testing.T) {
 	inputs := runtimeBackendInputs{
 		provisionalIntents: []backend.Binding{{Parent: "425", Backend: backend.Herdr}},
+		suppliedIntents:    []backend.Binding{{Parent: "425", Backend: backend.Herdr}},
 	}
 	selection, err := resolveBackendSelection("425", inputs)
 	if err != nil {
@@ -276,6 +282,124 @@ func TestBackendSelectionVerifierKeepsProvisionalIntents(t *testing.T) {
 	}
 }
 
+func TestResolveLaunchBackendLoadsSharedHerdrProvisionalIntent(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	writeHerdrCoordinatorIntent(t, repo, "425")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("FANOUT_BACKEND", "")
+
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resolveLaunchBackend(&cliflags.Config{ParentRef: "425"}, repo, store, nil)
+	if !errors.Is(err, backend.ErrUnsupported) {
+		t.Fatalf("resolveLaunchBackend() error = %v, want provisional Herdr ownership", err)
+	}
+}
+
+func TestSharedHerdrPlanIntentsRemainOwnerWorktreeLocal(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "same-plan-sibling", sibling, "HEAD")
+	writeHerdrCoordinatorIntent(t, repo, "plan:demo")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("FANOUT_BACKEND", "")
+
+	siblingStore, err := state.LoadProject(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolveLaunchBackend(
+		&cliflags.Config{ParentRef: "plan:demo"},
+		sibling,
+		siblingStore,
+		nil,
+	)
+	if err != nil || resolved.selection.Name != backend.Tmux {
+		t.Fatalf("foreign plan binding selected %+v, err=%v", resolved.selection, err)
+	}
+
+	writeHerdrCoordinatorIntent(t, sibling, "plan:demo")
+	control, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(control.Intents) != 2 || control.Intents[0].ID == control.Intents[1].ID {
+		t.Fatalf("same-slug plan intents = %#v", control.Intents)
+	}
+	_, err = resolveLaunchBackend(
+		&cliflags.Config{ParentRef: "plan:demo"},
+		sibling,
+		siblingStore,
+		nil,
+	)
+	if !errors.Is(err, backend.ErrUnsupported) {
+		t.Fatalf("owner plan binding error = %v, want Herdr ownership", err)
+	}
+}
+
+func TestSharedHerdrIssueSourcedPlanIntentUsesActualParentAcrossWorktrees(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	gitCmdTest(t, repo, "worktree", "add", "-b", "issue-plan-herdr-sibling", sibling, "HEAD")
+	planDir := filepath.Join(repo, ".fanout", "plans")
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(planDir, "demo.json"),
+		[]byte(`{"version":1,"plan":{"slug":"demo","title":"Demo","source":"issue #425"},"tasks":[]}`),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	writeHerdrCoordinatorIntent(t, repo, "plan:demo")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("FANOUT_BACKEND", "")
+
+	store, err := state.LoadProject(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resolveLaunchBackend(&cliflags.Config{ParentRef: "425"}, sibling, store, nil)
+	if !errors.Is(err, backend.ErrUnsupported) {
+		t.Fatalf("issue-sourced Herdr plan binding error = %v, want Herdr ownership", err)
+	}
+}
+
+func TestBackendSelectionVerifierRechecksSharedHerdrProvisionalIntent(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("TMUX", "/private/tmp/tmux.sock,1,0")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("FANOUT_BACKEND", "")
+
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolveLaunchBackend(&cliflags.Config{ParentRef: "425"}, repo, store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.selection.Name != backend.Tmux {
+		t.Fatalf("preflight selection = %+v, want tmux", resolved.selection)
+	}
+
+	writeHerdrCoordinatorIntent(t, repo, "425")
+	err = resolved.verify("425", store)
+	if err == nil || !strings.Contains(err.Error(), "selection changed from tmux to herdr while acquiring the launch lock") {
+		t.Fatalf("locked recheck error = %v, want racing Herdr intent rejection", err)
+	}
+}
+
 func TestValidateLaunchBackendRejectsHerdrV1(t *testing.T) {
 	err := validateLaunchBackend(backend.Selection{Name: backend.Herdr})
 	if !errors.Is(err, backend.ErrUnsupported) {
@@ -283,6 +407,54 @@ func TestValidateLaunchBackendRejectsHerdrV1(t *testing.T) {
 	}
 	if err := validateLaunchBackend(backend.Selection{Name: backend.Tmux}); err != nil {
 		t.Fatalf("tmux error = %v", err)
+	}
+}
+
+func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
+	t.Helper()
+	ownerProjectRoot, err := state.HerdrOwnerProjectRoot(parent, canonicalRuntimeRoot(repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeParent := parent
+	if planSlug, ok := strings.CutPrefix(parent, "plan:"); ok {
+		runtimeParent = panelaunch.SavedPlanRuntimeParentRef(repo, planSlug)
+	}
+	runtimeOwnerProjectRoot, err := state.HerdrOwnerProjectRoot(
+		runtimeParent,
+		canonicalRuntimeRoot(repo),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := state.HerdrCoordinatorIntentID(runtimeParent, runtimeOwnerProjectRoot, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := lockHerdrIntentsForTest(t, repo)
+	t.Cleanup(func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Errorf("unlock Herdr control: %v", unlockErr)
+		}
+	})
+	locked.UpsertIntent(state.HerdrIntent{
+		ID:               id,
+		Kind:             state.HerdrIntentCoordinator,
+		Status:           state.HerdrIntentPlanned,
+		Parent:           parent,
+		RuntimeParent:    runtimeParent,
+		OwnerProjectRoot: ownerProjectRoot,
+		WorktreePath:     repo,
+		WorkspaceLabel:   "fanout-coordinator-test",
+		Session:          "fanout-test",
+		SocketPath:       "/private/tmp/fanout-test/herdr.sock",
+		ExpiresUnixMS:    time.Now().Add(time.Minute).UnixMilli(),
+	})
+	if err := locked.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -619,6 +791,67 @@ func TestRuntimeReadRoutesUseAmbientHerdrWithoutSavedRoute(t *testing.T) {
 	}
 }
 
+func TestRuntimeReadRoutesUseSharedHerdrControlIntents(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	writeHerdrControlRouteIntent(t, repo, "intent", "/tmp/intent.sock")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_SESSION", "")
+	t.Setenv("HERDR_SOCKET_PATH", "")
+	t.Setenv("TMUX", "host")
+
+	routes, err := runtimeReadRoutes(repo, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[runtimeReadRoute]bool{
+		{name: backend.Tmux}: true,
+		{
+			name:            backend.Herdr,
+			herdrSession:    "intent",
+			herdrSocketPath: "/tmp/intent.sock",
+		}: true,
+	}
+	if len(routes) != len(want) {
+		t.Fatalf("routes = %+v, want %d routes", routes, len(want))
+	}
+	for _, route := range routes {
+		if !want[route] {
+			t.Fatalf("unexpected route %+v; all routes=%+v", route, routes)
+		}
+	}
+}
+
+func writeHerdrControlRouteIntent(t *testing.T, repo, session, socketPath string) {
+	t.Helper()
+	id, err := state.HerdrCoordinatorIntentID("426", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := lockHerdrIntentsForTest(t, repo)
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Errorf("unlock Herdr control: %v", unlockErr)
+		}
+	}()
+	locked.UpsertIntent(state.HerdrIntent{
+		ID: id, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentRealized,
+		Parent: "426", RuntimeParent: "426",
+		WorktreePath:   repo,
+		WorkspaceLabel: "fanout-coordinator-intent-route",
+		Resource: state.HerdrResource{
+			WorkspaceID: "w2", Label: "fanout-coordinator-intent-route",
+			PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: repo,
+		},
+		Session: session, SocketPath: socketPath,
+		ExpiresUnixMS: 1,
+	})
+	if err := locked.Save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRuntimeReadRoutesUseUserDefaultHerdrWithoutSavedRoute(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -715,4 +948,27 @@ func TestCollectRuntimeLiveCombinesSuccessesAndReportsRouteFailures(t *testing.T
 	if all || len(failed) != 2 || !failed[routes[1].observationRoute()] || !failed[routes[2].observationRoute()] {
 		t.Fatalf("classified all-route error = %+v all=%t, want both scoped herdr routes", failed, all)
 	}
+}
+
+// testHerdrIntentsLock adapts the combined launch lock to the journal-mutation
+// shape the intent fixtures need.
+type testHerdrIntentsLock struct {
+	project *state.LockedStore
+	*state.LockedHerdrIntents
+}
+
+func (l *testHerdrIntentsLock) Unlock() error { return l.project.Unlock() }
+
+func lockHerdrIntentsForTest(t *testing.T, repo string) *testHerdrIntentsLock {
+	t.Helper()
+	project, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := project.HerdrIntents(repo)
+	if err != nil {
+		_ = project.Unlock()
+		t.Fatal(err)
+	}
+	return &testHerdrIntentsLock{project: project, LockedHerdrIntents: view}
 }

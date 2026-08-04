@@ -2,6 +2,7 @@
 package state
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -110,12 +111,16 @@ func (p Pane) IsAttachedAgent() bool {
 }
 
 // LockedStore holds .fanout/state.json.lock while fanout plans and launches.
-// The deliberately coarse lock serializes parallel fanout invocations so the
+// LockProjectForLaunch also holds the repository-common Herdr intents lock,
+// keeping backend intent rechecks stable through the final state update. The
+// deliberately coarse locks serialize parallel fanout invocations so the
 // (parent, issueNum) idempotency check and state update happen in one critical
 // section instead of racing through independent read-modify-write cycles.
 type LockedStore struct {
-	path string
-	file *os.File
+	path             string
+	file             *os.File
+	herdrIntentsPath string
+	herdrIntentsFile *os.File
 	Store
 }
 
@@ -147,6 +152,30 @@ func LockProject(projectRoot string) (*LockedStore, error) {
 	return Lock(Path(projectRoot))
 }
 
+func LockProjectForLaunch(projectRoot string) (*LockedStore, error) {
+	intentsPath, err := HerdrIntentsPath(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	herdrIntentsFile, err := lockHerdrIntentsPath(intentsPath)
+	if err != nil {
+		return nil, err
+	}
+	locked, err := Lock(Path(projectRoot))
+	if err != nil {
+		if unlockErr := unlockStateFile(herdrIntentsFile); unlockErr != nil {
+			return nil, errors.Join(
+				err,
+				fmt.Errorf("unlock Herdr intents after state lock failure: %w", unlockErr),
+			)
+		}
+		return nil, err
+	}
+	locked.herdrIntentsPath = intentsPath
+	locked.herdrIntentsFile = herdrIntentsFile
+	return locked, nil
+}
+
 func Lock(path string) (*LockedStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create fanout state directory: %w", err)
@@ -175,9 +204,44 @@ func (l *LockedStore) Unlock() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
-	err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
-	closeErr := l.file.Close()
+	stateErr := unlockStateFile(l.file)
 	l.file = nil
+	intentsErr := unlockStateFile(l.herdrIntentsFile)
+	l.herdrIntentsPath = ""
+	l.herdrIntentsFile = nil
+	if stateErr != nil {
+		return stateErr
+	}
+	return intentsErr
+}
+
+// HerdrIntents returns a journal view backed by this project's launch lock.
+// The view cannot be unlocked; the caller keeps LockedStore held around it.
+func (l *LockedStore) HerdrIntents(projectRoot string) (*LockedHerdrIntents, error) {
+	if l == nil || l.herdrIntentsFile == nil || l.herdrIntentsPath == "" {
+		return nil, fmt.Errorf("herdr intents require the combined launch lock")
+	}
+	// The journal path was derived from the same project root at lock time;
+	// re-deriving it here would run git while both locks are held.
+	if filepath.Clean(l.path) != filepath.Clean(Path(projectRoot)) {
+		return nil, fmt.Errorf("herdr intents launch lock belongs to a different project")
+	}
+	store, err := loadHerdrIntents(l.herdrIntentsPath)
+	if err != nil {
+		return nil, err
+	}
+	return &LockedHerdrIntents{
+		path:         l.herdrIntentsPath,
+		HerdrIntents: store,
+	}, nil
+}
+
+func unlockStateFile(file *os.File) error {
+	if file == nil {
+		return nil
+	}
+	err := syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	closeErr := file.Close()
 	if err != nil {
 		return err
 	}
