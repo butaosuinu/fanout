@@ -5,6 +5,11 @@
   // ドキュメントは「plugins 指定で default を置換」とも読めるため、no-unused-vars 等の
   // core ルールが必ず効くよう明示しておく(test override も同様)。
   "plugins": ["eslint", "react", "typescript", "unicorn", "oxc"],
+  // oxlint が自動で無視するのは web/node_modules だけで、workspace パッケージが
+  // 持つネストした node_modules は素通しになる。tools/complexity は typescript@6 の
+  // 実体 (typescript.js 20 万行) を抱えているので、明示的に外さないと lint が落ちる。
+  // tools/complexity 自体のソースは対象に残す。
+  "ignorePatterns": ["tools/*/node_modules/**"],
   "categories": {
     "correctness": "error",
     "suspicious": "warn"

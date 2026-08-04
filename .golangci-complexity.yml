@@ -1,0 +1,85 @@
+# 複雑度しきい値の単一ソース(Go 側)。golangci-lint v2 / config schema v2。
+#
+# .golangci.yml とは別ファイルにしてある。複雑度 linter を .golangci.yml へ足すと
+# make lint が既存違反で落ち、make check -> check-marker -> scripts/agent-push-gate.sh
+# の連鎖で push が全面的に止まる。この config は make lint / make check からは呼ばれず、
+# 差分ベースの利用者だけが読む:
+#   - scripts/agent-complexity-on-edit.sh (編集直後の 1 ファイル)
+#   - .github/workflows/complexity.yml   (PR の merge-base 差分)
+# しきい値をここ以外に書かないこと。ローカルで通るのに CI で落ちる、が必ず起きる。
+#
+# .golangci.yml 冒頭の「funlen / gocognit / cyclop: 既存コードが即死」は今も事実で、
+# 実測でも非テストコードの 10% が gocognit 12 を超える。差分ベースで新しく書かれた
+# コードだけを見ることでそれを回避している — 全量スキャンに切り替えないこと。
+#
+# 値の根拠は docs/complexity.ja.md の分布表。要約すると非テストコードの 90 パーセンタイル:
+#   gocognit p90=12 / gocyclo p90=10 / 関数本体 p90=32 行・p90=32 文
+# 助言(2/3)しきい値は hook がこのファイルから導出する。別ファイルに複製しないこと。
+
+version: "2"
+
+run:
+  timeout: 5m
+  # テストは全層で除外する。テーブル駆動テストは意図的に長く、
+  # internal/ui/tui/tui_test.go の 6039 行を叩いても得るものがない。
+  tests: false
+
+linters:
+  default: none
+  enable:
+    - gocognit # 主指標: 認知的複雑度(ネストを重み付けする)
+    - gocyclo # 副指標: 循環的複雑度(ネストを評価しない)
+    - funlen
+    - nestif
+    - dupl # エージェントは抽象化よりコピーを選ぶため
+    # 効いていない //nolint:gocognit 等を検出する。.golangci.yml 側では複雑度
+    # linter が無効なので、あちらの nolintlint はこれらの directive を見ない
+    # (実測: 未使用の //nolint:gocognit を make lint は素通しする)。
+    # nolintlint は有効な linter 向けの directive しか見ないため、
+    # //nolint:nilerr のような他 linter の抑制を誤検出することはない。
+    - nolintlint
+  settings:
+    gocognit:
+      min-complexity: 12
+    gocyclo:
+      min-complexity: 10
+    funlen:
+      # v2.12.2 の既定は ignore-comments: true (コメント行を数えない)。しきい値 32 は
+      # コメント込みの実測行数分布から採ったので、既定のままだと実質的に緩くなる。
+      # 明示的に false を置く。
+      ignore-comments: false
+      lines: 32
+      statements: 32
+    nestif:
+      # 既定値。AST 実測の最大ネスト深さは 4 で、目標の 3〜4 に既に収まっている。
+      min-complexity: 5
+    dupl:
+      threshold: 100
+    nolintlint:
+      allow-unused: false
+      # 理由と linter 指定の強制は .golangci.yml が既に担当している。
+      require-explanation: false
+      require-specific: false
+  exclusions:
+    # "Code generated ... DO NOT EDIT" ヘッダを持つファイルを外す。
+    generated: lax
+    paths:
+      # .golangci.yml と同じ除外。nested go.mod で通常自動除外されるが、
+      # パス指定実行・エディタ統合の事故防止。
+      - \.dmux/
+      - \.fanout/
+      - \.cache/
+      - tests/tmp/
+      # 非製品コード。今このリポジトリには 1 つも無いが、生まれた瞬間にゲートが
+      # 誤爆しないよう先に入れてある。正典は docs/complexity.ja.md の除外対象表。
+      - vendor/
+      - mock_.*\.go$
+      - .*_mock\.go$
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  # 既定の true は同一行の issue を 1 件に畳む。複雑度 linter はどれも関数の
+  # 先頭行を指すため、畳むと gocognit の陰に gocyclo と funlen が完全に隠れる
+  # (実測: 568 件 -> 282 件)。エージェントには超過した指標を全部見せる。
+  uniq-by-line: false

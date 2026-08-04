@@ -1,0 +1,17 @@
+{
+  "name": "fanout-complexity-lint",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./eslint.config.js",
+  "bin": {
+    "complexity-lint": "./bin.js"
+  },
+  "devDependencies": {
+    "@microsoft/eslint-formatter-sarif": "^3.1.0",
+    "eslint": "^10.8.0",
+    "eslint-plugin-sonarjs": "^4.2.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "~8.65.0"
+  }
+}

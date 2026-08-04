@@ -9,6 +9,10 @@
 !.fanout/config.json
 .cache/
 tests/tmp/
+# Derived from .golangci-complexity.yml by scripts/agent-complexity-on-edit.sh
+# (2/3 thresholds for the advisory pass). Must sit at the repo root because
+# golangci-lint resolves analyzed paths relative to the config's directory.
+/.golangci-complexity-advisory.yml
 /fanout-go
 /fanout
 # Local dmux/cmux session artifacts (machine-local hook output; never committed)
@@ -22,6 +26,8 @@ site/resources/
 internal/ui/dashboard/static/*
 !internal/ui/dashboard/static/.gitkeep
 web/node_modules/
+# The complexity-lint workspace package carries its own tree (typescript@6).
+web/tools/*/node_modules/
 .pnpm-store/
 # Translation catalogs: the .po files are the source of truth and are tracked.
 # `lingui compile` output next to them is a verification artifact only — the

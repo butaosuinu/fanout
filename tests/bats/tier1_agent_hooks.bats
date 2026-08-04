@@ -13,6 +13,7 @@ load helpers
 PUSH_GATE="$REPO_ROOT/scripts/agent-push-gate.sh"
 STOP_GATE="$REPO_ROOT/scripts/agent-stop-gate.sh"
 FORMAT_HOOK="$REPO_ROOT/scripts/agent-format-on-edit.sh"
+COMPLEXITY_HOOK="$REPO_ROOT/scripts/agent-complexity-on-edit.sh"
 HOOKS_LIB="$REPO_ROOT/scripts/agent-hooks-lib.sh"
 
 setup_hook_repo() {
@@ -36,7 +37,7 @@ write_marker() {
 # Claude session (CLAUDE_PROJECT_DIR) or exported bypasses cannot leak in.
 run_hook() {
   local script="$1" payload="$2"
-  run bash -c 'printf "%s" "$1" | env -u CLAUDE_PROJECT_DIR -u FANOUT_SKIP_PUSH_CHECK -u FANOUT_SKIP_STOP_GATE bash "$0" 2>&1' "$script" "$payload"
+  run bash -c 'printf "%s" "$1" | env -u CLAUDE_PROJECT_DIR -u FANOUT_SKIP_PUSH_CHECK -u FANOUT_SKIP_STOP_GATE -u FANOUT_SKIP_COMPLEXITY bash "$0" 2>&1' "$script" "$payload"
 }
 
 # run_push_gate CMD CWD — CMD must not itself contain JSON-special characters;
@@ -845,6 +846,299 @@ format_payload() {
     "$FORMAT_HOOK" "$(format_payload "$repo/bad.go" "$repo")" "$BATS_TEST_TMPDIR/evil-cache"
   [ "$status" -eq 0 ]
   [[ "$(cat "$repo/bad.go")" == *'println( "x" )'* ]]
+}
+
+# --- complexity-on-edit --------------------------------------------------------
+
+complexity_payload() {
+  printf '{"session_id":"%s","tool_name":"Edit","tool_input":{"file_path":"%s"},"cwd":"%s"}' "$3" "$1" "$2"
+}
+
+# A sandbox module with the repo's real complexity config and an origin/main the
+# hook can diff against. Callers commit their own baseline before measuring.
+setup_complexity_repo() {
+  local repo="$1"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email "fanout-test@example.com"
+  git -C "$repo" config user.name "fanout test"
+  cp "$REPO_ROOT/.golangci-lint-version" "$REPO_ROOT/.golangci-complexity.yml" "$repo/"
+  # The hook compares against a merge-base baseline through this script.
+  mkdir -p "$repo/.github/scripts"
+  cp "$REPO_ROOT/.github/scripts/complexity-diff.mjs" "$repo/.github/scripts/"
+  printf 'module example.com/probe\n\ngo 1.26\n' >"$repo/go.mod"
+  printf 'package probe\n\n// Simple stays well inside the budget.\nfunc Simple() int { return 1 }\n' >"$repo/probe.go"
+  git -C "$repo" add -A
+  git -C "$repo" commit -qm initial
+  git -C "$repo" branch -M main
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+}
+
+# A function over every Go threshold: cognitive 25, cyclomatic 17, 37 lines.
+write_over_budget_go() {
+  cat >"$1" <<'PROBE'
+package probe
+
+func OverBudget(a, b, c int) int {
+	r := 0
+	if a > 0 {
+		if b > 0 {
+			if c > 0 {
+				for i := 0; i < a; i++ {
+					if i%2 == 0 {
+						r += i
+					} else if i%3 == 0 {
+						r -= i
+					} else {
+						r *= 2
+					}
+				}
+			}
+		}
+	}
+	if a > 1 && b > 1 && c > 1 {
+		r++
+	} else if a > 2 || b > 2 {
+		r--
+	}
+	switch a {
+	case 1:
+		r++
+	case 2:
+		r--
+	default:
+		r = -1
+	}
+	return r
+}
+PROBE
+}
+
+require_pinned_golangci() {
+  local cache_root version
+  cache_root="${FANOUT_DEV_CACHE_DIR:-/tmp/fanout-dev-cache-$(id -u)}"
+  version="$(tr -d '[:space:]' <"$REPO_ROOT/.golangci-lint-version")"
+  [ -x "$cache_root/tools/golangci-lint-$version" ] || skip "pinned golangci-lint not cached locally"
+}
+
+@test "complexity-on-edit: fails open when the pinned golangci-lint is absent" {
+  local repo="$BATS_TEST_TMPDIR/cx-notool"
+  setup_complexity_repo "$repo"
+  write_over_budget_go "$repo/probe.go"
+
+  run bash -c 'printf "%s" "$1" | env -u CLAUDE_PROJECT_DIR -u FANOUT_SKIP_COMPLEXITY -u GOLANGCI_LINT_BIN FANOUT_DEV_CACHE_DIR="$2" bash "$0" 2>&1' \
+    "$COMPLEXITY_HOOK" "$(complexity_payload "$repo/probe.go" "$repo" s1)" "$BATS_TEST_TMPDIR/empty-cache"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-on-edit: fails open outside a git repo and without a base ref" {
+  local loose="$BATS_TEST_TMPDIR/cx-loose"
+  mkdir -p "$loose"
+  printf 'package probe\n' >"$loose/probe.go"
+  run_hook "$COMPLEXITY_HOOK" "$(complexity_payload "$loose/probe.go" "$loose" s1)"
+  [ "$status" -eq 0 ]
+
+  # A repo with no origin/* remote-tracking ref cannot scope to a diff, so the
+  # hook passes rather than flagging pre-existing findings.
+  local repo="$BATS_TEST_TMPDIR/cx-nobase"
+  setup_complexity_repo "$repo"
+  git -C "$repo" update-ref -d refs/remotes/origin/main
+  write_over_budget_go "$repo/probe.go"
+  run_hook "$COMPLEXITY_HOOK" "$(complexity_payload "$repo/probe.go" "$repo" s1)"
+  [ "$status" -eq 0 ]
+}
+
+@test "complexity-on-edit: skips tests and non-target extensions" {
+  local repo="$BATS_TEST_TMPDIR/cx-excluded"
+  setup_complexity_repo "$repo"
+
+  write_over_budget_go "$repo/probe_test.go"
+  run_hook "$COMPLEXITY_HOOK" "$(complexity_payload "$repo/probe_test.go" "$repo" s1)"
+  [ "$status" -eq 0 ]
+
+  printf '#  messy   markdown\n' >"$repo/README.md"
+  run_hook "$COMPLEXITY_HOOK" "$(complexity_payload "$repo/README.md" "$repo" s1)"
+  [ "$status" -eq 0 ]
+}
+
+@test "complexity-on-edit: honors the FANOUT_SKIP_COMPLEXITY escape hatch" {
+  require_pinned_golangci
+  local repo="$BATS_TEST_TMPDIR/cx-escape"
+  setup_complexity_repo "$repo"
+  write_over_budget_go "$repo/probe.go"
+
+  run bash -c 'printf "%s" "$1" | env -u CLAUDE_PROJECT_DIR FANOUT_SKIP_COMPLEXITY=1 bash "$0" 2>&1' \
+    "$COMPLEXITY_HOOK" "$(complexity_payload "$repo/probe.go" "$repo" s1)"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "complexity-on-edit: blocks a newly added over-budget function" {
+  require_pinned_golangci
+  local repo="$BATS_TEST_TMPDIR/cx-block"
+  setup_complexity_repo "$repo"
+  write_over_budget_go "$repo/probe.go"
+
+  run_hook "$COMPLEXITY_HOOK" "$(complexity_payload "$repo/probe.go" "$repo" s1)"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"fanout complexity gate"* ]]
+  [[ "$output" == *"gocognit"* ]]
+  # Every breached metric is reported, not just the first (uniq-by-line: false).
+  [[ "$output" == *"gocyclo"* ]]
+  [[ "$output" == *"funlen"* ]]
+  # The message must say how to reduce it and forbid cosmetic splitting.
+  [[ "$output" == *"早期 return"* ]]
+  [[ "$output" == *"processDataPart1"* ]]
+}
+
+@test "complexity-on-edit: leaves a pre-existing finding alone when the edit is elsewhere" {
+  require_pinned_golangci
+  local repo="$BATS_TEST_TMPDIR/cx-existing"
+  setup_complexity_repo "$repo"
+
+  # The over-budget function is part of the base, so it is not this branch's.
+  write_over_budget_go "$repo/probe.go"
+  git -C "$repo" add probe.go
+  git -C "$repo" commit -qm "pre-existing complexity"
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+
+  printf '\n// unrelated one-line change\n' >>"$repo/probe.go"
+  run_hook "$COMPLEXITY_HOOK" "$(complexity_payload "$repo/probe.go" "$repo" s1)"
+  [ "$status" -eq 0 ]
+}
+
+@test "complexity-on-edit: catches complexity added inside an existing function" {
+  require_pinned_golangci
+  local repo="$BATS_TEST_TMPDIR/cx-body"
+  setup_complexity_repo "$repo"
+
+  # A function that is under budget at the merge base.
+  cat >"$repo/probe.go" <<'PROBE'
+package probe
+
+func UnderBudget(a, b int) int {
+	r := 0
+	if a > 0 {
+		r++
+	}
+	return r
+}
+PROBE
+  git -C "$repo" add probe.go
+  git -C "$repo" commit -qm "under budget"
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+
+  # Same declaration line, heavier body. The linters report at the declaration,
+  # which is NOT a changed line — a changed-line filter drops this entirely.
+  cat >"$repo/probe.go" <<'PROBE'
+package probe
+
+func UnderBudget(a, b int) int {
+	r := 0
+	if a > 0 {
+		if b > 0 {
+			for i := 0; i < a; i++ {
+				if i%2 == 0 {
+					r += i
+				} else if i%3 == 0 {
+					r -= i
+				} else {
+					r *= 2
+				}
+			}
+		}
+	}
+	if a > 1 && b > 1 {
+		r++
+	} else if a > 2 || b > 2 {
+		r--
+	}
+	return r
+}
+PROBE
+  run_hook "$COMPLEXITY_HOOK" "$(complexity_payload "$repo/probe.go" "$repo" s1)"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"gocognit"* ]]
+  [[ "$output" == *"UnderBudget"* ]]
+}
+
+@test "complexity-on-edit: degrades to advice after the retry cap" {
+  require_pinned_golangci
+  local repo="$BATS_TEST_TMPDIR/cx-retry"
+  setup_complexity_repo "$repo"
+  write_over_budget_go "$repo/probe.go"
+
+  local payload
+  payload="$(complexity_payload "$repo/probe.go" "$repo" loop)"
+  for _ in 1 2; do
+    run bash -c 'printf "%s" "$1" | env -u CLAUDE_PROJECT_DIR -u FANOUT_SKIP_COMPLEXITY FANOUT_COMPLEXITY_MAX_RETRIES=2 bash "$0" 2>&1' \
+      "$COMPLEXITY_HOOK" "$payload"
+    [ "$status" -eq 2 ]
+  done
+
+  run bash -c 'printf "%s" "$1" | env -u CLAUDE_PROJECT_DIR -u FANOUT_SKIP_COMPLEXITY FANOUT_COMPLEXITY_MAX_RETRIES=2 bash "$0" 2>&1' \
+    "$COMPLEXITY_HOOK" "$payload"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"additionalContext"* ]]
+  [[ "$output" == *"助言に留めます"* ]]
+
+  # The cap is per session: a different session still gets the block.
+  run_hook "$COMPLEXITY_HOOK" "$(complexity_payload "$repo/probe.go" "$repo" other)"
+  [ "$status" -eq 2 ]
+}
+
+@test "complexity-on-edit: derives the advisory config at two thirds of the block thresholds" {
+  require_pinned_golangci
+  local repo="$BATS_TEST_TMPDIR/cx-advisory"
+  setup_complexity_repo "$repo"
+
+  # Cognitive 10 / cyclomatic 8: under the block thresholds (12 / 10), over the
+  # advisory ones (8 / 6).
+  cat >"$repo/probe.go" <<'PROBE'
+package probe
+
+func NearBudget(a, b int) int {
+	r := 0
+	if a > 0 {
+		if b > 0 {
+			r++
+		}
+	}
+	for i := 0; i < a; i++ {
+		if i%2 == 0 {
+			r += i
+		}
+	}
+	if a > 1 {
+		if b > 2 {
+			r--
+		}
+	}
+	if b > 1 {
+		r++
+	}
+	return r
+}
+PROBE
+
+  run_hook "$COMPLEXITY_HOOK" "$(complexity_payload "$repo/probe.go" "$repo" s1)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"しきい値の手前"* ]]
+  # Advice rides on stdout as PostToolUse additional context, so it has to be
+  # valid JSON: a raw newline inside the string silently drops the whole hint.
+  printf '%s' "$output" | jq -e '.hookSpecificOutput.hookEventName == "PostToolUse"' >/dev/null
+  printf '%s' "$output" | jq -e '.hookSpecificOutput.additionalContext | contains("gocognit")' >/dev/null
+
+  # The generated config is derived, never tracked, and drops the metrics that
+  # have no advisory stage.
+  local advisory="$repo/.golangci-complexity-advisory.yml"
+  [ -f "$advisory" ]
+  grep -q 'min-complexity: 8' "$advisory"
+  grep -q 'min-complexity: 6' "$advisory"
+  grep -q 'lines: 21' "$advisory"
+  ! grep -q 'nestif' "$advisory"
+  ! grep -q 'dupl' "$advisory"
 }
 
 # --- hooks lib -----------------------------------------------------------------

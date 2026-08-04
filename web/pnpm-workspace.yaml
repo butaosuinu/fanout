@@ -1,5 +1,9 @@
 packages:
   - "."
+  # 複雑度チェック用の ESLint 一式。typescript-eslint が TS 7 で動かないため、
+  # typescript@6 を直接依存に持つ隔離パッケージとして分けてある
+  # (tools/complexity/eslint.config.js の冒頭コメント参照)。
+  - "tools/complexity"
 
 minimumReleaseAge: 4320
 minimumReleaseAgeExclude:

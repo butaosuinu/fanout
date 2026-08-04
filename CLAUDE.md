@@ -21,7 +21,10 @@ shellcheck of the test shims (Node-free on purpose; the web lint is
 `test`, `lint`, and `lint-web`. `make fmt` formats Go (gofumpt/goimports),
 `make fmt-web` formats `web/src` + `vite.config.ts` (oxfmt, printWidth 100; CSS と web/ 直下の JSON は対象外), `make fix` runs
 `go fix` idiom updates (run `make test` after applying), and `make vuln` runs
-govulncheck (network; deliberately not part of `lint`).
+govulncheck (network; deliberately not part of `lint`). `make complexity` reports
+what the branch adds against its merge base (configs `.golangci-complexity.yml` /
+`web/tools/complexity/eslint.config.js`); like `vuln` it is deliberately outside
+`check` — see the Complexity Budget section.
 
 The Claude Code integration files (`claude/commands/*.md` slash commands and
 `claude/skills/*/SKILL.md` skills) and Codex CLI integration files
@@ -290,6 +293,12 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   Escape hatch: `FANOUT_SKIP_PUSH_CHECK=1`. Edits are auto-formatted by a
   `PostToolUse` hook (`scripts/agent-format-on-edit.sh`, per-file
   `golangci-lint fmt` / `oxfmt` fast paths only).
+- A second `PostToolUse` hook (`scripts/agent-complexity-on-edit.sh`) measures
+  the edited file's complexity and can send the edit back with exit 2. It only
+  judges lines this branch changed, degrades to advice after three blocks for
+  the same file in one session, and fails open when a tool or config is
+  missing. Escape hatch: `FANOUT_SKIP_COMPLEXITY=1`. See the Complexity Budget
+  section below; it is the speed layer, not the enforcement layer.
 
 ## Test Conventions
 
@@ -316,6 +325,42 @@ just from the function name. `internal/infra/team/detect_test.go` is the model.
   comment above a test that states what it guarantees.
 - Leave existing loop-variable naming as-is (`cases`/`tc` and `tests`/`tt` both
   occur); do not churn files just to unify it. New tables prefer `tests`/`tt`.
+
+## Complexity Budget
+
+New code has a complexity budget. Cognitive complexity is the primary metric,
+cyclomatic the secondary one, and nesting depth is capped separately because
+cyclomatic complexity does not weight nesting — a flat switch and a five-deep
+defensive `if` score the same without it. Full rationale, distributions, and the
+existing-debt list: `docs/complexity.ja.md`.
+
+- Go (non-test): cognitive 12, cyclomatic 10, function body 32 lines / 32
+  statements, `nestif` 5, `dupl` 100. Source: `.golangci-complexity.yml`.
+- TypeScript: cognitive 7 (`.ts`) / 8 (`.tsx`), cyclomatic 8 / 10, function
+  length 60 / 80 lines, statements 10 / 12, nesting depth 3, params 3, nested
+  callbacks 3. Source: `web/tools/complexity/eslint.config.js`. `.tsx` is looser
+  on cyclomatic only, because JSX `&&` and ternaries inflate it mechanically.
+- Write the numbers in those two files and nowhere else. The `PostToolUse` hook,
+  `make complexity`, and `.github/workflows/complexity.yml` all read them, and
+  the advisory tier (2/3 of each threshold) is derived at runtime.
+- Over budget? Reach for an early return or a guard clause to flatten nesting,
+  extract a helper that means something on its own, replace a branch pile with a
+  table, or — in React — split the component and lift logic into a custom hook.
+- Splitting a function purely to get under a number is prohibited. A
+  `processDataPart1` / `processDataPart2` pair that only makes sense at the call
+  site is worse than the long function it replaced, and it defeats the point of
+  measuring.
+- Suppression needs a stated reason: `//nolint:gocognit // <why>` or
+  `// eslint-disable-next-line sonarjs/cognitive-complexity -- <why>`. Reasonless
+  suppressions are caught by `nolintlint` on the Go side and by the PR
+  suppression-watch job on the TS side. Do not reach for one to make a check pass.
+- Only new code is judged. Every layer scopes to the merge base, so pre-existing
+  findings in `internal/ui/tui/update.go` or
+  `web/src/components/DiffOverlay.tsx` never block an edit. Do not switch any
+  layer to a whole-tree scan: 10% of existing non-test Go functions are over
+  budget, and `make check` would stop writing the push-gate marker.
+- Complexity is deliberately not part of `make lint` or `make check` for that
+  same reason. Use `make complexity` to see what your branch adds.
 
 ## Documentation Writing
 
