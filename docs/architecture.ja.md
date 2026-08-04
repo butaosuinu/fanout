@@ -100,6 +100,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | ui | `tui`(描画・整形以外: `update.go` / `keyboard.go` / `newpane*.go` / `issues.go` / `watch.go` / `paneview.go` ほか) | キー処理・フォーム・ポーリングの配線。`paneview.go` は lifecycle 対象 state root の選択入力(`sourceProjectRoot`)を含む | M |
 | core | `exitcode` | 終了コード定義 | A |
 | core | `cliview` | CLI 出力の整形 | A |
+| core | `errs` | エラーラップの共有ヘルパ(`docs/error-handling.ja.md`) | A |
 | ui | `tui`(描画・整形: `view.go` / `compact.go` / `styles.go` ほか) | TUI の View 層 | A |
 | infra | `log` | ロギング | A |
 | infra | `tty` | 端末判定 | A |
