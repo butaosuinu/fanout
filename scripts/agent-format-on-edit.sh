@@ -44,39 +44,6 @@ else
 fi
 [ "${#files[@]}" -gt 0 ] || exit 0
 
-# trusted_cache_root DIR — refuse a symlinked or foreign-owned shared cache
-# before executing a binary out of it (same checks as the Makefile's
-# prepare-dev-cache; the hook runs with the agent user's privileges).
-trusted_cache_root() {
-  local owner
-  [ -L "$1" ] && return 1
-  [ -d "$1" ] || return 1
-  owner="$(stat -f '%u' "$1" 2>/dev/null || stat -c '%u' "$1" 2>/dev/null)" || return 1
-  [ "$owner" = "$(id -u)" ]
-}
-
-# golangci_bin — resolve the pinned formatter once. Same resolution order as
-# the Makefile: explicit override, local shared cache (owner-validated), then
-# the repo-local .cache the CI branch uses. Empty when unavailable.
-golangci_bin() {
-  local version bin cache_root
-  [ -f "$dir/.golangci-lint-version" ] || return 0
-  version="$(tr -d '[:space:]' <"$dir/.golangci-lint-version")"
-  bin="${GOLANGCI_LINT_BIN:-}"
-  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
-    cache_root="${FANOUT_DEV_CACHE_DIR:-/tmp/fanout-dev-cache-$(id -u)}"
-    if trusted_cache_root "$cache_root"; then
-      bin="$cache_root/tools/golangci-lint-$version"
-    else
-      bin=""
-    fi
-  fi
-  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
-    bin="$dir/.cache/tools/golangci-lint-$version"
-  fi
-  [ -x "$bin" ] && printf '%s' "$bin"
-}
-
 go_bin=""
 go_bin_resolved=0
 
@@ -89,7 +56,7 @@ for file in "${files[@]}"; do
   case "$file" in
   *.go)
     if [ "$go_bin_resolved" = "0" ]; then
-      go_bin="$(golangci_bin)"
+      go_bin="$(golangci_bin "$dir")"
       go_bin_resolved=1
     fi
     [ -n "$go_bin" ] || continue

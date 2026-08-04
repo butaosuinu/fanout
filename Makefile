@@ -42,7 +42,7 @@ endif
 GO_CACHE_ENV   = $(if $(strip $(GOCACHE)),GOCACHE="$(GOCACHE)")
 PNPM_STORE_ARG = $(if $(strip $(PNPM_STORE_DIR)),--store-dir "$(PNPM_STORE_DIR)")
 
-.PHONY: install link uninstall build-go build-go-for-install build-web clean-go clean-web guard-retired-codex-review install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web i18n-web fix vuln check-bats review-risk prepare-dev-cache
+.PHONY: install link uninstall build-go build-go-for-install build-web clean-go clean-web guard-retired-codex-review install-integrations link-integrations uninstall-integrations go-test test test-web test-tier1 test-tier2 check check-marker lint lint-go lint-shell lint-web fmt fmt-web i18n-web fix vuln check-bats review-risk complexity prepare-dev-cache
 
 # The local default lives under predictable /tmp on supported macOS and Linux
 # hosts. Reject a pre-created symlink or a directory owned by another user
@@ -209,6 +209,12 @@ uninstall: uninstall-integrations
 #                       change, so it is not a deterministic lint gate.
 # `make review-risk`   — PR review risk level for the working diff (see
 #                       docs/review-risk.ja.md); CI runs the same tool.
+# `make complexity`   — complexity findings this branch adds, measured against
+#                       origin/main (COMPLEXITY_BASE overrides). Same configs
+#                       and same merge-base scoping as CI. Kept out of `check`
+#                       on purpose: 10% of existing non-test Go functions
+#                       exceed the thresholds, so a whole-tree run would block
+#                       every push. See docs/complexity.ja.md.
 #
 # bats-core is required: `brew install bats-core` (macOS) or `apt install bats`
 # (Debian/Ubuntu). check-bats prints the install hint before failing.
@@ -317,7 +323,7 @@ lint-go: $(GOLANGCI_LINT_BIN)
 	$(GO_CACHE_ENV) GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" "$(GOLANGCI_LINT_BIN)" run
 
 lint-shell:
-	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash codex/skills/post-work-review/scripts/mark-reviewed-head.sh codex/skills/pr-watch/scripts/watch-pr.sh scripts/agent-hooks-lib.sh scripts/agent-push-gate.sh scripts/agent-stop-gate.sh scripts/agent-format-on-edit.sh
+	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash codex/skills/post-work-review/scripts/mark-reviewed-head.sh codex/skills/pr-watch/scripts/watch-pr.sh scripts/agent-hooks-lib.sh scripts/agent-push-gate.sh scripts/agent-stop-gate.sh scripts/agent-format-on-edit.sh scripts/agent-complexity-on-edit.sh scripts/complexity-branch.sh
 
 fmt: $(GOLANGCI_LINT_BIN)
 	$(GO_CACHE_ENV) GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" "$(GOLANGCI_LINT_BIN)" fmt
@@ -330,3 +336,13 @@ vuln: | prepare-dev-cache
 
 review-risk: | prepare-dev-cache
 	$(GO_CACHE_ENV) $(GO) run ./tools/reviewrisk
+
+# Deliberately not a prerequisite of `check`: 10% of the existing non-test Go
+# functions exceed the thresholds, so a whole-tree run would fail and the
+# check-marker would never be written, blocking every push. This target answers
+# "what does this branch add?" the same way CI does.
+COMPLEXITY_BASE ?= origin/main
+complexity: $(GOLANGCI_LINT_BIN) $(WEB_DIR)/node_modules/.installed
+	$(GO_CACHE_ENV) GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" \
+		GOLANGCI_LINT_BIN="$(GOLANGCI_LINT_BIN)" \
+		scripts/complexity-branch.sh $(COMPLEXITY_BASE)

@@ -10,8 +10,12 @@ var (
 	ruleWebBundle  = Rule{ID: "extra-web-bundle", Class: ClassH, Source: SourceExtra, Note: "web 依存・埋め込みバンドルの生成系"}
 	ruleWebConfig  = Rule{ID: "extra-web-config", Class: ClassM, Source: SourceExtra, Note: "web ビルド設定"}
 	ruleLintConfig = Rule{ID: "extra-lint-config", Class: ClassM, Source: SourceExtra, Note: "Go lint 設定"}
-	ruleAgentGuide = Rule{ID: "extra-agent-guide", Class: ClassM, Source: SourceExtra, Note: "エージェント作業規約"}
-	ruleReadme     = Rule{ID: "extra-readme", Class: ClassNone, Source: SourceExtra, Note: "利用者向け説明"}
+	// 複雑度しきい値は hook と CI が共有する唯一のソース。数値を緩めると PR ゲートが
+	// 静かに効かなくなるので、ゲート実体 (scripts/ と .github/workflows/ は H) の
+	// 一段下として設定と同じ M に置く。
+	ruleComplexityConfig = Rule{ID: "extra-complexity-config", Class: ClassM, Source: SourceExtra, Note: "複雑度しきい値"}
+	ruleAgentGuide       = Rule{ID: "extra-agent-guide", Class: ClassM, Source: SourceExtra, Note: "エージェント作業規約"}
+	ruleReadme           = Rule{ID: "extra-readme", Class: ClassNone, Source: SourceExtra, Note: "利用者向け説明"}
 )
 
 // fileRules classify a repo-relative path by exact match. File-level rows in the
@@ -70,6 +74,15 @@ var fileRules = map[string]Rule{
 
 	".golangci.yml":          ruleLintConfig,
 	".golangci-lint-version": ruleLintConfig,
+
+	".golangci-complexity.yml": ruleComplexityConfig,
+	"web/eslint.config.js":     ruleComplexityConfig,
+
+	// ゲート判定の実体。ここが緩むと Go・TS 双方の finding を丸ごと消せるので、
+	// .github/ の catch-all (M) ではなく scripts/ のゲート実体と同じ H に置く。
+	".github/scripts/complexity-diff.mjs": {
+		ID: "complexity-gate", Class: ClassH, Source: SourceExtra, Note: "複雑度ゲートの判定実体",
+	},
 
 	".gitignore": {ID: "extra-gitignore", Class: ClassM, Source: SourceExtra, Note: "追跡除外設定"},
 
@@ -171,6 +184,9 @@ var prefixRules = []struct {
 	{"web/src/hooks/", Rule{ID: "web-transport", Class: ClassM, Source: SourceDocTable, Note: "SSE/polling transport・token 付き /api/* 呼び出し"}},
 	{"web/src/lib/", Rule{ID: "web-transport", Class: ClassM, Source: SourceDocTable, Note: "SSE/polling transport・token 付き /api/* 呼び出し"}},
 	{"web/src/", Rule{ID: "web-src", Class: ClassA, Source: SourceDocTable, Note: "表示(components/styles/tests)"}},
+	// 製品コードではなく、複雑度チェック専用の隔離 ESLint パッケージ
+	// (typescript-eslint が TS 7 で動かないため web/ 本体から分けてある)。
+	{"web/tools/complexity/", ruleComplexityConfig},
 
 	// tests: bin is the test yardstick (H); the suites are M (deletion -> S1/S2).
 	{"tests/bin/", Rule{ID: "tests-bin", Class: ClassH, Source: SourceExtra, Note: "fake gh/tmux/git = テストの物差し"}},

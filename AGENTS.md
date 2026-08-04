@@ -132,6 +132,42 @@ explicit contract invalidates that rationale.
 - Run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once per clone
   so bulk-formatting commits stay out of `git blame`.
 
+## Complexity Budget
+
+New code has a complexity budget. Cognitive complexity is the primary metric,
+cyclomatic the secondary one, and nesting depth is capped separately because
+cyclomatic complexity does not weight nesting — a flat switch and a five-deep
+defensive `if` score the same without it. Full rationale, distributions, and the
+existing-debt list: `docs/complexity.ja.md`.
+
+- Go (non-test): cognitive 12, cyclomatic 10, function body 32 lines / 32
+  statements, `nestif` 5, `dupl` 100. Source: `.golangci-complexity.yml`.
+- TypeScript: cognitive 7 (`.ts`) / 8 (`.tsx`), cyclomatic 8 / 10, function
+  length 60 / 80 lines, statements 10 / 12, nesting depth 3, params 3, nested
+  callbacks 3. Source: `web/tools/complexity/eslint.config.js`. `.tsx` is looser
+  on cyclomatic only, because JSX `&&` and ternaries inflate it mechanically.
+  ESLint lives in the isolated `web/tools/complexity` workspace package with its
+  own `typescript@6`: typescript-eslint hard-errors on the `typescript@7` that
+  `web/` uses for `tsc`. Do not move it into `web/` or bump that pin to 7.x.
+- Write the numbers in those two files and nowhere else. The `PostToolUse` hook
+  (`scripts/agent-complexity-on-edit.sh`), `make complexity`, and
+  `.github/workflows/complexity.yml` all read them, and the advisory tier (2/3
+  of each threshold) is derived at runtime.
+- Over budget? Reach for an early return or a guard clause to flatten nesting,
+  extract a helper that means something on its own, replace a branch pile with a
+  table, or — in React — split the component and lift logic into a custom hook.
+- Splitting a function purely to get under a number is prohibited. A
+  `processDataPart1` / `processDataPart2` pair that only makes sense at the call
+  site is worse than the long function it replaced.
+- Suppression needs a stated reason: `//nolint:gocognit // <why>` or
+  `// eslint-disable-next-line sonarjs/cognitive-complexity -- <why>`. Reasonless
+  suppressions are caught by `nolintlint` and by the PR suppression-watch job.
+- Only new code is judged. Every layer scopes to the merge base, so pre-existing
+  findings never block an edit. Do not switch any layer to a whole-tree scan:
+  10% of existing non-test Go functions are over budget, and `make check` would
+  stop writing the push-gate marker. That is also why complexity is not part of
+  `make lint` or `make check` — use `make complexity` instead.
+
 ## Architecture Notes
 
 `internal/` is a 4-layer architecture: `core` (pure logic, no process/network/
@@ -317,8 +353,13 @@ touching only class-A packages can rely on AI review.
   marker makes this free when the push flow was followed. Escape hatch:
   `FANOUT_SKIP_STOP_GATE=1`. Edits are auto-formatted by
   `scripts/agent-format-on-edit.sh` (`PostToolUse`, per-file fast paths only).
-  Codex prompts once per checkout path to trust these repo hooks; accept the
-  prompt in a new worktree or the hooks are silently skipped.
+  A second `PostToolUse` hook (`scripts/agent-complexity-on-edit.sh`) measures
+  the edited file's complexity and can send the edit back with exit 2; it only
+  judges lines this branch changed, degrades to advice after three blocks for
+  one file in a session, and fails open when a tool or config is missing.
+  Escape hatch: `FANOUT_SKIP_COMPLEXITY=1`. Codex prompts once per checkout
+  path to trust these repo hooks; accept the prompt in a new worktree or the
+  hooks are silently skipped.
 
 ## Documentation Writing
 

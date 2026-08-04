@@ -246,3 +246,56 @@ marker_sha() {
 head_sha() {
   git -C "$1" rev-parse HEAD 2>/dev/null
 }
+
+# trusted_cache_root DIR — refuse a symlinked or foreign-owned shared cache
+# before executing a binary out of it (same checks as the Makefile's
+# prepare-dev-cache; the hooks run with the agent user's privileges).
+trusted_cache_root() {
+  local owner
+  [ -L "$1" ] && return 1
+  [ -d "$1" ] || return 1
+  owner="$(stat -f '%u' "$1" 2>/dev/null || stat -c '%u' "$1" 2>/dev/null)" || return 1
+  [ "$owner" = "$(id -u)" ]
+}
+
+# golangci_bin ROOT — resolve the pinned golangci-lint for the repository at
+# ROOT. Same resolution order as the Makefile: explicit override, local shared
+# cache (owner-validated), then the repo-local .cache the CI branch uses.
+# Prints nothing when unavailable — the hooks never download a tool.
+golangci_bin() {
+  local root="$1" version bin cache_root
+  [ -f "$root/.golangci-lint-version" ] || return 0
+  version="$(tr -d '[:space:]' <"$root/.golangci-lint-version")"
+  bin="${GOLANGCI_LINT_BIN:-}"
+  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+    cache_root="${FANOUT_DEV_CACHE_DIR:-/tmp/fanout-dev-cache-$(id -u)}"
+    if trusted_cache_root "$cache_root"; then
+      bin="$cache_root/tools/golangci-lint-$version"
+    else
+      bin=""
+    fi
+  fi
+  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+    bin="$root/.cache/tools/golangci-lint-$version"
+  fi
+  [ -x "$bin" ] && printf '%s' "$bin"
+}
+
+# default_base_ref DIR — the remote default branch to diff against, e.g.
+# origin/main. Empty when no remote-tracking candidate exists; callers must
+# treat that as "cannot scope to a diff" and fail open rather than scanning
+# whole files, which would flag pre-existing findings.
+default_base_ref() {
+  local ref candidate
+  ref="$(git -C "$1" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
+  if [ -n "$ref" ]; then
+    printf '%s' "$ref"
+    return 0
+  fi
+  for candidate in origin/main origin/master; do
+    if git -C "$1" rev-parse -q --verify "$candidate" >/dev/null 2>&1; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+}

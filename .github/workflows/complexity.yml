@@ -1,0 +1,191 @@
+# 複雑度ゲート。PR がこのブランチで新しく持ち込んだ複雑度だけを見る。
+#
+# test.yml に相乗りさせていないのは、あちらの 5 job が shallow checkout を共有して
+# いるため。ベースライン比較には fetch-depth: 0 が要り、SARIF アップロードには
+# security-events: write が要る。どちらも既存 job に持ち込む理由がない。差分ベースで
+# PR に判定を出すワークフローは review-risk.yml が前例で、構成をそれに揃えてある。
+#
+# 判定の実体は scripts/complexity-branch.sh で、make complexity と同じもの。
+# merge base 側の解析結果と比べて悪化した finding だけを残す — 変更行フィルタだけ
+# では、既存関数の宣言行を触らずに本体へ if を足したケースを取りこぼす。
+#
+# しきい値は .golangci-complexity.yml と web/tools/complexity/eslint.config.js が
+# 唯一のソース。ここに数値を書かないこと。
+#
+# action のバージョンは test.yml と揃えてある(パッチ固定、Renovate が更新)。
+name: complexity
+
+on: pull_request
+
+permissions:
+  contents: read
+
+concurrency:
+  group: complexity-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  complexity:
+    name: Added complexity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # SARIF を code scanning に上げるため
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # merge base 側を git archive で取り出すのでフル履歴が要る。
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v5.0.0
+        with:
+          package_json_file: web/package.json
+
+      - name: Set up Node
+        uses: actions/setup-node@v6.5.0
+        with:
+          node-version-file: web/.nvmrc
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install web dependencies
+        run: cd web && pnpm install --frozen-lockfile
+
+      # install-only: 実行は complexity-branch.sh が行う。action の既定の実行では
+      # .golangci.yml が使われてしまい、複雑度用の別 config を渡せない。
+      - name: Install pinned golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version-file: .golangci-lint-version
+          install-only: true
+
+      # exit 1 = 新規の違反あり (後段で落とす)、exit 2 = 解析器の異常 (即失敗)。
+      # 違反と解析失敗を混ぜるとゲートが黙って無効化される。
+      - name: Measure added complexity
+        id: measure
+        env:
+          COMPLEXITY_SARIF_DIR: ${{ runner.temp }}/complexity
+        run: |
+          set -uo pipefail
+          # GitHub Actions の既定 shell は `bash -e` で起動する。`set -uo pipefail`
+          # では -e は外れないので、exit 1 (違反あり) を素で受けると step がそこで
+          # 終わり、status も violations 出力も後段の説明メッセージも一切残らない。
+          set +e
+          scripts/complexity-branch.sh "origin/$GITHUB_BASE_REF"
+          status=$?
+          set -e
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          echo "violations=$status" >> "$GITHUB_OUTPUT"
+
+      # 判定が成立した回だけ SARIF を上げる。違反 0 件でも空の run を上げることで、
+      # 前の push で出たアラートが解消済みとして閉じる。解析が異常終了した回
+      # (exit 2 = violations 未設定) は上げない — 差分フィルタ前の raw な全量スキャン
+      # 結果 (568 件) がそのまま code scanning に流れ込む。
+      - name: Merge SARIF
+        if: steps.measure.outputs.violations != ''
+        env:
+          COMPLEXITY_SARIF_DIR: ${{ runner.temp }}/complexity
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs"), path = require("node:path");
+            const dir = process.env.COMPLEXITY_SARIF_DIR;
+            const runs = [];
+            for (const f of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+              // 接尾辞で判定する。includes だと web/src/foo-base.ts の現在側 SARIF
+              // (ts-src_lib_foo-base_ts.sarif) まで baseline と誤認して捨てる。
+              if (!f.endsWith(".sarif") || f.endsWith("-base.sarif")) continue;
+              try { runs.push(...(JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")).runs ?? [])); }
+              catch { /* 壊れた SARIF は無視する。判定は measure step が済ませている */ }
+            }
+            fs.writeFileSync("complexity.sarif", JSON.stringify({
+              version: "2.1.0",
+              $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+              runs: runs.length ? runs : [{
+                tool: { driver: { name: "fanout-complexity", rules: [] } },
+                results: [],
+              }],
+            }));
+          '
+
+      - name: Upload SARIF
+        if: steps.measure.outputs.violations != ''
+        uses: github/codeql-action/upload-sarif@v4.37.5
+        with:
+          sarif_file: complexity.sarif
+          category: complexity
+
+      - name: Fail on added complexity
+        if: steps.measure.outputs.violations == '1'
+        run: |
+          echo "この PR が新しく持ち込んだ複雑度がしきい値を超えています。" >&2
+          echo "PR の diff 上の注釈と docs/complexity.ja.md を確認してください。" >&2
+          exit 1
+
+  suppressions:
+    name: Suppression watch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    # fork PR には書き込み権限が渡らない。review-risk.yml と同じ扱い。
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # 目的はブロックではなく可視化。エージェントは複雑度を下げる代わりに抑制
+      # コメントを足しがちなので、まず頻度を観測する。数が増えるようならブロックへ
+      # 昇格させる (docs/complexity.ja.md)。未使用の抑制は Go は nolintlint、
+      # TS は ESLint の reportUnusedDisableDirectives が別途拾う。
+      - name: Report added suppressions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          base="$(git merge-base "origin/$GITHUB_BASE_REF" HEAD)"
+          # 対象は Go / TypeScript のソースだけ。pathspec で絞らないと、この
+          # workflow 自身の正規表現や CLAUDE.md・docs の解説文まで「抑制コメント」
+          # として数え、観測がそのまま壊れる。
+          #
+          # grep はすべて -E で揃える。BRE だと GNU grep が `^\+` の \+ を
+          # 「直前要素の 1 回以上」と解釈してエラー終了し、後続の || true が
+          # それを「抑制なし」に化けさせる。
+          added="$(git diff "$base" HEAD -- '*.go' '*.ts' '*.tsx' |
+            grep -E '^\+' |
+            grep -Ev '^\+\+\+' |
+            grep -E '//nolint([[:space:]]|$)|//nolint:[a-z,]*(all|gocognit|gocyclo|funlen|nestif|dupl)|eslint-disable(-next-line|-line)?([[:space:]]*(\*/|--|$))|eslint-disable.*(sonarjs/(cognitive-complexity|no-identical-functions)|complexity|max-lines-per-function|max-statements|max-depth|max-params|max-nested-callbacks)' \
+            || true)"
+          {
+            echo '<!-- complexity-suppressions -->'
+            if [ -z "$added" ]; then
+              echo '## 複雑度の抑制コメント: 新規追加なし'
+            else
+              printf '## 複雑度の抑制コメント: この PR で %s 件追加\n\n' "$(printf '%s\n' "$added" | grep -c .)"
+              echo '複雑度を下げる代わりに抑制していないか確認してください。理由が書かれていれば妥当です。'
+              echo
+              echo '```diff'
+              printf '%s\n' "$added"
+              echo '```'
+            fi
+          } > comment.md
+
+          # review-risk.yml と同じ sticky comment 方式 (third-party action は使わない)。
+          existing_id="$(gh api "repos/$GH_REPO/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.body | startswith("<!-- complexity-suppressions -->"))][0].id // empty')"
+          if [ -n "$existing_id" ]; then
+            gh api --method PATCH "repos/$GH_REPO/issues/comments/$existing_id" -F body=@comment.md
+          else
+            gh api --method POST "repos/$GH_REPO/issues/$PR/comments" -F body=@comment.md
+          fi

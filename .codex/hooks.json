@@ -20,6 +20,11 @@
             "type": "command",
             "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent-format-on-edit.sh\"",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent-complexity-on-edit.sh\"",
+            "timeout": 30
           }
         ]
       }
