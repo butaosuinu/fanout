@@ -30,11 +30,13 @@ type HerdrLaunchRuntime interface {
 	SendLaunchToken(context.Context, string, string) error
 	LivePanes(context.Context) ([]backend.LivePane, error)
 	RenameAgent(context.Context, string, string) error
+	RemoveWorktree(context.Context, string, string) error
 }
 
 var errHerdrLaunchResponseLost = errors.New("herdr agent launch response was lost; refusing automatic adoption")
 
 func (l *Launcher) launchHerdr(req Request) (Result, bool) {
+	l.preflightClaudeLaunchMode(&req)
 	if l.Cfg.DryRun {
 		return l.dryRunHerdr(req)
 	}
@@ -42,13 +44,14 @@ func (l *Launcher) launchHerdr(req Request) (Result, bool) {
 	if !ok {
 		return Result{}, false
 	}
+	defer operation.cancel()
 	intent, err := l.realizeHerdrLaunch(req, operation)
 	if err != nil {
-		return l.failHerdr(req, "realize launch", err)
+		return l.failHerdr(req, "realize launch", l.rollbackFailedHerdrLaunch(operation.locked, intent, err))
 	}
 	live, err := l.startHerdrAgent(operation.ctx, req, operation.locked, operation.route, intent, operation.environment)
 	if err != nil {
-		return l.failHerdr(req, "start agent", err)
+		return l.failHerdr(req, "start agent", l.rollbackFailedHerdrLaunch(operation.locked, intent, err))
 	}
 	if err := l.finalizeHerdrLaunch(req, operation.locked, intent, live); err != nil {
 		return l.failHerdr(req, "finalize launch", err)
@@ -62,20 +65,12 @@ type herdrLaunchOperation struct {
 	locked      *state.LockedStore
 	route       herdrrun.OwnedLaunchRoute
 	environment []string
+	cancel      context.CancelFunc
 }
 
 func (l *Launcher) prepareHerdrOperation(req Request) (herdrLaunchOperation, bool) {
-	locked, ok := l.Recorder.(*state.LockedStore)
-	if !ok || l.Herdr == nil {
-		l.Log.Err("%s: Herdr launch requires an owned session and combined launch lock", paneLogLabel(req))
-		return herdrLaunchOperation{}, false
-	}
-	if req.CodexPlanMode() {
-		l.Log.Err("%s: %v", paneLogLabel(req), backend.Unsupported(backend.Herdr, "Codex Plan Mode child launch until issue #554"))
-		return herdrLaunchOperation{}, false
-	}
-	if req.CodexTeamRequested || req.CodexTeamMode {
-		l.Log.Err("%s: %v", paneLogLabel(req), backend.Unsupported(backend.Herdr, "--team launch until issue #568"))
+	locked, ok := l.admitHerdrLaunchRequest(req)
+	if !ok {
 		return herdrLaunchOperation{}, false
 	}
 	operation := herdrLaunchOperation{
@@ -96,7 +91,27 @@ func (l *Launcher) prepareHerdrOperation(req Request) (herdrLaunchOperation, boo
 		return herdrLaunchOperation{}, false
 	}
 	logPaneRequest(req, l.Log)
+	operation.ctx, operation.cancel = context.WithTimeout(context.Background(), maxHerdrRealizeTimeout)
 	return operation, true
+}
+
+func (l *Launcher) admitHerdrLaunchRequest(req Request) (*state.LockedStore, bool) {
+	locked, ok := l.Recorder.(*state.LockedStore)
+	if !ok || l.Herdr == nil {
+		l.Log.Err("%s: Herdr launch requires an owned session and combined launch lock", paneLogLabel(req))
+		return nil, false
+	}
+	operation := ""
+	if req.CodexPlanMode() {
+		operation = "Codex Plan Mode child launch until issue #554"
+	} else if req.CodexTeamRequested || req.CodexTeamMode {
+		operation = "--team launch until issue #568"
+	}
+	if operation != "" {
+		l.Log.Err("%s: %v", paneLogLabel(req), backend.Unsupported(backend.Herdr, operation))
+		return nil, false
+	}
+	return locked, true
 }
 
 func (l *Launcher) realizeHerdrLaunch(
@@ -117,7 +132,7 @@ func (l *Launcher) realizeHerdrLaunch(
 	result := hooks.RunBlocking(hooks.WorktreeCreated, paneHookContext(req, l.Info.ProjectRoot, intent.WorktreePath, ""), req.Hooks, l.Log)
 	if !result.OK() {
 		printPaneHookOutput(result, l.Log)
-		return state.HerdrIntent{}, fmt.Errorf("run worktree-created hook: %w", result.Err)
+		return intent, fmt.Errorf("run worktree-created hook: %w", result.Err)
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, l.Info.ProjectRoot, intent.WorktreePath, intent.Resource.PaneID), req.Hooks, l.Log)
 	return intent, nil
@@ -156,6 +171,16 @@ func (l *Launcher) realizeHerdrCoordinator(
 	}, l.Herdr, locked, HerdrRealizeHooks{})
 	if err != nil && !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		return state.HerdrIntent{}, err
+	}
+	if err := l.verifyHerdrIdleLauncher(ctx, result.Intent, route); err != nil {
+		if !errors.Is(err, errHerdrLauncherIdentityChanged) {
+			return state.HerdrIntent{}, err
+		}
+		journal, journalErr := locked.HerdrIntents(l.Info.ProjectRoot)
+		if journalErr != nil {
+			return state.HerdrIntent{}, errors.Join(err, journalErr)
+		}
+		return state.HerdrIntent{}, markHerdrIntentManual(journal, result.Intent, err)
 	}
 	return result.Intent, nil
 }
@@ -377,7 +402,11 @@ func markHerdrFinalizationFailure(
 	if err != nil {
 		return err
 	}
-	return markHerdrIntentManual(journal, intent, fmt.Errorf("finalize Herdr launch: %w", cause))
+	latest, found := journal.FindIntent(intent.ID)
+	if !found {
+		return fmt.Errorf("finalize Herdr launch: intent %s disappeared", intent.ID)
+	}
+	return markHerdrIntentManual(journal, latest, fmt.Errorf("finalize Herdr launch: %w", cause))
 }
 
 func printHerdrPaneDryRun(req Request, lg *log.Logger, c log.Palette) {

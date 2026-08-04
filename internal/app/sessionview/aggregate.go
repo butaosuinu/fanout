@@ -618,13 +618,13 @@ func herdrIdentityMatches(pane state.Pane, current backend.LivePane) bool {
 		pane.HerdrTerminalID != current.TerminalID {
 		return false
 	}
-	storedAgent := strings.TrimSpace(pane.Agent) != "" || pane.HerdrAgentID != "" || pane.HerdrAgentSession != nil
+	storedAgent := strings.TrimSpace(pane.Agent) != "" || pane.HerdrAgentID != ""
 	observedAgent := current.AgentPresent || current.AgentID != "" || current.AgentSession != nil
 	if storedAgent != observedAgent {
 		return false
 	}
 	if storedAgent {
-		if pane.HerdrAgentID == "" || pane.HerdrAgentSession == nil || !current.AgentPresent ||
+		if pane.HerdrAgentID == "" || !current.AgentPresent ||
 			pane.HerdrAgentID != current.AgentID || !agentSessionRefsEqual(pane.HerdrAgentSession, current.AgentSession) {
 			return false
 		}
@@ -670,7 +670,7 @@ func herdrRowUnsupported(pane state.Pane) bool {
 	}
 	storedAgentID := strings.TrimSpace(pane.HerdrAgentID) != ""
 	storedAgentSession := pane.HerdrAgentSession != nil
-	if storedAgentID != storedAgentSession || (storedAgentSession && !pane.HerdrAgentSession.Valid()) {
+	if storedAgentSession && (!storedAgentID || !pane.HerdrAgentSession.Valid()) {
 		return true
 	}
 	if !storedAgentID && strings.TrimSpace(pane.Agent) != "" {

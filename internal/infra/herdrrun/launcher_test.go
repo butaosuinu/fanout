@@ -90,7 +90,7 @@ func TestMatchingPaneLaunchIntentRequiresExactWorkspacePaneAndCWD(t *testing.T) 
 		workspaceID: "w1", paneID: "w1:p1", cwd: "/repo/child",
 	}
 	intent := state.HerdrIntent{
-		Status:  state.HerdrIntentRealized,
+		Kind: state.HerdrIntentWorktree, Status: state.HerdrIntentRealized,
 		Session: "owned-session", SocketPath: "/owned/herdr.sock",
 		Resource: state.HerdrResource{
 			WorkspaceID: "w1", PaneID: "w1:p1", CurrentPath: "/repo/child",
@@ -109,6 +109,58 @@ func TestMatchingPaneLaunchIntentRequiresExactWorkspacePaneAndCWD(t *testing.T) 
 	request.socketPath = "/foreign/herdr.sock"
 	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); found {
 		t.Fatal("mismatched owned route was adopted")
+	}
+}
+
+func TestMatchingPaneLaunchIntentAcceptsRealizedCoordinatorWithoutAgentLaunch(t *testing.T) {
+	request := paneLauncherRequest{
+		session: "owned-session", socketPath: "/owned/herdr.sock",
+		workspaceID: "w1", paneID: "w1:p1", cwd: "/repo",
+	}
+	intent := state.HerdrIntent{
+		Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentRealized,
+		Session: "owned-session", SocketPath: "/owned/herdr.sock",
+		Resource: state.HerdrResource{
+			WorkspaceID: "w1", PaneID: "w1:p1", CurrentPath: "/repo",
+		},
+	}
+	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); !found {
+		t.Fatal("realized coordinator was not assigned to its launcher")
+	}
+	intent.Kind = state.HerdrIntentRollback
+	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); found {
+		t.Fatal("rollback intent was assigned to a pane launcher")
+	}
+}
+
+func TestCoordinatorLauncherWaitsWithoutStartingAShell(t *testing.T) {
+	reader, writer := io.Pipe()
+	done := make(chan int)
+	go func() { done <- holdCoordinatorLauncher(reader, io.Discard) }()
+	select {
+	case code := <-done:
+		t.Fatalf("coordinator launcher exited early with %d", code)
+	case <-time.After(10 * time.Millisecond):
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-done; code != 0 {
+		t.Fatalf("coordinator launcher exit = %d, want 0 after EOF", code)
+	}
+}
+
+func TestValidateWorktreeRemoveResponseRequiresExactNonForceResult(t *testing.T) {
+	valid := []byte(`{"id":"cli:worktree:remove","result":{"type":"worktree_removed","workspace_id":"w2","path":"/repo/child","forced":false}}`)
+	if err := validateWorktreeRemoveResponse(valid, "w2", "/repo/child"); err != nil {
+		t.Fatal(err)
+	}
+	forced := []byte(`{"id":"cli:worktree:remove","result":{"type":"worktree_removed","workspace_id":"w2","path":"/repo/child","forced":true}}`)
+	if err := validateWorktreeRemoveResponse(forced, "w2", "/repo/child"); err == nil {
+		t.Fatal("forced remove result was accepted")
+	}
+	if err := validateWorktreeRemoveResponse(valid, "w3", "/repo/child"); err == nil {
+		t.Fatal("foreign workspace result was accepted")
 	}
 }
 

@@ -62,6 +62,18 @@ type agentRenameEnvelope struct {
 	Result *json.RawMessage `json:"result"`
 }
 
+type worktreeRemoveEnvelope struct {
+	ID     string                `json:"id"`
+	Result *worktreeRemoveResult `json:"result"`
+}
+
+type worktreeRemoveResult struct {
+	Type        string `json:"type"`
+	WorkspaceID string `json:"workspace_id"`
+	Path        string `json:"path"`
+	Forced      *bool  `json:"forced"`
+}
+
 // VerifyOwned revalidates the immutable marker, supervisor, sockets, pinned
 // binaries, and exact route for one long-lived launch caller.
 func (s *OwnedSession) VerifyOwned(ctx context.Context) error {
@@ -143,6 +155,28 @@ func (s *OwnedSession) RenameAgent(ctx context.Context, paneID, name string) err
 	var envelope agentRenameEnvelope
 	if err := decodeOne(out, &envelope); err != nil || envelope.ID != "cli:agent:rename" || envelope.Result == nil {
 		return fmt.Errorf("herdr agent rename returned an unexpected response")
+	}
+	return nil
+}
+
+// RemoveWorktree issues the non-force rollback mutation for one identity-
+// fenced child workspace. The caller verifies absence before Git cleanup.
+func (s *OwnedSession) RemoveWorktree(ctx context.Context, workspaceID, path string) error {
+	out, err := s.runOwnedLaunchCommand(ctx, commandTimeout,
+		"worktree", "remove", "--workspace", workspaceID, "--json")
+	if err != nil {
+		return err
+	}
+	return validateWorktreeRemoveResponse(out, workspaceID, path)
+}
+
+func validateWorktreeRemoveResponse(out []byte, workspaceID, path string) error {
+	var envelope worktreeRemoveEnvelope
+	if err := decodeOne(out, &envelope); err != nil || envelope.ID != "cli:worktree:remove" ||
+		envelope.Result == nil || envelope.Result.Type != "worktree_removed" ||
+		envelope.Result.WorkspaceID != workspaceID || envelope.Result.Path != path ||
+		envelope.Result.Forced == nil || *envelope.Result.Forced {
+		return fmt.Errorf("herdr worktree remove returned an unexpected response")
 	}
 	return nil
 }

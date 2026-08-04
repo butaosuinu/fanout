@@ -370,7 +370,7 @@ server の cold restart でも public ID は維持されたが、全 pane の `t
 session 名と public ID だけを state key にすると stale mapping が別 process へ一致する。
 
 herdr から比較可能な session epoch は取得できない。
-wave 2 は session 名を namespace として保存し、各 PaneRef に `terminal_id` と `agent_session` を保存する。
+wave 2 は session 名を namespace として保存し、各 PaneRef に `terminal_id`、provider が報告した場合は `agent_session` を保存する。
 
 herdr 0.7.3 は明示 `--session` が無い場合、継承した `HERDR_SOCKET_PATH` を `HERDR_SESSION` より優先する(Pass 2 レビュー時の 0.7.3 実機確認)。
 herdr pane 内で実行する fanout は常にこの変数を持つため、session 名だけの routing は custom socket や別 session の server に接続し得る。
@@ -424,7 +424,8 @@ response loss または mutation の有無が不明な場合は blind retry せ�
 herdr backend は root coordinator の intent 行を発行直前に保存してから `workspace create` を実行する。
 coordinator の workspace create には非発行を証明する手段がないため、発行前の staging 段（planned）は持たず、保存済み intent が残る crash はすべて存在確認の分類（採用 or `manual_cleanup_required`）で処理する。
 root coordinator の `workspace create` も副作用を持つ launch 操作として intent 行の対象にし、console と同じ「nonce label の存在確認 → 採用 or fail closed」で応答喪失を処理する。
-coordinator root の launcher は worktree root と同じ readiness / token / agent detection 契約を通してから通常 state へ確定する。
+coordinator root の launcher は intent と process / snapshot identity の照合後、shell や agent を起動せず inert な process として残る。
+coordinator workspace を後続 child が再利用できるよう、launcher 自体には launch cycle の 300 秒 expiry を適用しない。
 herdr pane 内から fanout を起動する通常ケースでは同じ root cwd のユーザー workspace が既にあるため、root cwd / provenance の一致だけでは coordinator を識別せず、label nonce で識別する。
 
 ## worktree の配置と lifecycle
@@ -631,10 +632,11 @@ env file は private namespace gate 済みの 0700 directory 配下に exclusive
 
 launcher の bootstrap protocol は次のとおりとする。
 launcher は process start 時に `HERDR_PANE_ID` / `HERDR_WORKSPACE_ID` と exact cwd に一致する未失効 intent を server env の `FANOUT_HERDR_CONTROL_PATH` から lock-free read で採用し、shell、line editor、checkout 内 code を起動しない。
-採用後は `FANOUT_HERDR_READY:<launch-nonce>` を直ちに一回、その後は一秒ごとに bootstrap deadline（hard 300 秒と intent に保存した絶対 expiry の早い方）まで出す。
+worktree intent の採用後は `FANOUT_HERDR_READY:<launch-nonce>` を直ちに一回、その後は一秒ごとに bootstrap deadline（hard 300 秒と intent に保存した絶対 expiry の早い方）まで出す。
 一回だけの即時 marker は capture 前に失われた実測があるため、parent の readiness 判定は再送 marker の `pane wait-output` 検出と launcher process identity の照合で行う。
 matching intent がないまま deadline へ達した launcher は入力を受理せず非ゼロで終了する。
 token の byte 完全一致以外の入力、先行入力、別 nonce は拒否し、child を起動せず終了する。
+coordinator intent を採用した launcher は marker と token を使わず、stdin EOF まで inert に待機する。入力は拒否する。
 launcher は exact token の受理後に env file を読んで直ちに unlink し、intent に記録した cwd / 絶対 executable / argv と合わせて child を exec する。
 env file の欠落、識別不一致、読み取り失敗では child を起動せず fail closed にし、crash 後も current env から再生成しない。
 env file の寿命は intent 行に揃え、intent 行を削除する全経路（final row 確定、rollback 完了、fresh branch 未作成によるやり直し）は記録済み env file の unlink または不在確認を先に行う。

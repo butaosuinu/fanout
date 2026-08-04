@@ -29,6 +29,7 @@ type HerdrIntentKind string
 const (
 	HerdrIntentCoordinator HerdrIntentKind = "coordinator"
 	HerdrIntentWorktree    HerdrIntentKind = "worktree"
+	HerdrIntentRollback    HerdrIntentKind = "rollback"
 )
 
 type HerdrIntentStatus string
@@ -321,6 +322,16 @@ func HerdrWorktreeIntentID(parent, ownerProjectRoot string, issueNum int, taskID
 	}
 }
 
+// HerdrRollbackIntentID binds a one-shot launch rollback to the worktree
+// intent whose realized resource it removes.
+func HerdrRollbackIntentID(worktreeIntentID string) (string, error) {
+	worktreeIntentID = strings.TrimSpace(worktreeIntentID)
+	if worktreeIntentID == "" || strings.HasPrefix(worktreeIntentID, "rollback:") {
+		return "", fmt.Errorf("herdr rollback intent requires a worktree intent id")
+	}
+	return "rollback:" + worktreeIntentID, nil
+}
+
 func herdrOwnerTuple(parent, ownerProjectRoot string) string {
 	identity := tuplePart(parent)
 	if ownerProjectRoot != "" {
@@ -462,6 +473,14 @@ func validateHerdrIntentKind(intent HerdrIntent) error {
 			intent.BaseBranch != "", herdrCommitSHA.MatchString(intent.BaseSHA),
 			herdrCommitSHA.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
 		}
+	case HerdrIntentRollback:
+		requirements = []bool{
+			strings.HasPrefix(intent.ID, "rollback:"), intent.Launch == nil,
+			intent.Slug != "", intent.BranchName != "", intent.FullBranchRef != "",
+			intent.FullBranchRef == "refs/heads/"+intent.BranchName,
+			intent.BaseBranch != "", herdrCommitSHA.MatchString(intent.BaseSHA),
+			herdrCommitSHA.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
+		}
 	default:
 		return fmt.Errorf("unknown kind %q", intent.Kind)
 	}
@@ -486,6 +505,9 @@ func validateHerdrIntentStatus(intent HerdrIntent) error {
 }
 
 func validateHerdrPlanned(intent HerdrIntent) error {
+	if intent.Kind == HerdrIntentRollback {
+		return validateHerdrResource(intent.Resource, true)
+	}
 	if intent.Resource != (HerdrResource{}) {
 		return fmt.Errorf("has a resource before realization")
 	}
@@ -498,14 +520,14 @@ func validateHerdrIssued(intent HerdrIntent) error {
 	}
 	// Worktree open recovery retains the realized resource while the
 	// replacement workspace mutation is in flight.
-	if intent.Kind != HerdrIntentWorktree {
+	if intent.Kind != HerdrIntentWorktree && intent.Kind != HerdrIntentRollback {
 		return fmt.Errorf("has a resource before realization")
 	}
 	return validateHerdrResource(intent.Resource, true)
 }
 
 func validateHerdrRealized(intent HerdrIntent) error {
-	return validateHerdrResource(intent.Resource, intent.Kind == HerdrIntentWorktree)
+	return validateHerdrResource(intent.Resource, intent.Kind != HerdrIntentCoordinator)
 }
 
 func validateHerdrManual(intent HerdrIntent) error {
@@ -516,7 +538,8 @@ func validateHerdrManual(intent HerdrIntent) error {
 }
 
 func validateHerdrIntentOwnership(intent HerdrIntent) error {
-	if intent.BranchCreated && (intent.Kind != HerdrIntentWorktree || intent.BranchExisted) {
+	if intent.BranchCreated &&
+		(intent.Kind != HerdrIntentWorktree && intent.Kind != HerdrIntentRollback || intent.BranchExisted) {
 		return fmt.Errorf("has an invalid branch ownership record")
 	}
 	if intent.Resource != (HerdrResource{}) &&

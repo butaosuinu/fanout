@@ -860,8 +860,18 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 			mutateRow: func(p *state.Pane) {
 				p.HerdrAgentSession = nil
 			},
+			include: true,
+		},
+		{
+			name: "provider omitted logical conversation",
+			mutateRow: func(p *state.Pane) {
+				p.HerdrAgentSession = nil
+			},
+			mutateLive: func(p *backend.LivePane) {
+				p.AgentSession = nil
+			},
 			include:   true,
-			wantState: "unsupported",
+			wantAlive: true,
 		},
 		{
 			name: "recorded logical conversation invalid",

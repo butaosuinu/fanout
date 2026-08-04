@@ -67,11 +67,10 @@ func (l *Launcher) admitHerdrLauncher(
 	if err := l.Herdr.WaitForLauncher(ctx, intent.Resource.PaneID, intent.Launch.Nonce, remainingHerdrLaunchTime(*intent)); err != nil {
 		return err
 	}
-	process, err := l.Herdr.ProcessInfo(ctx, intent.Resource.PaneID)
-	if err != nil {
-		return err
-	}
-	if err := verifyHerdrLauncherProcess(process, *intent, route); err != nil {
+	if err := l.verifyHerdrIdleLauncher(ctx, *intent, route); err != nil {
+		if errors.Is(err, errHerdrLauncherIdentityChanged) {
+			return markHerdrIntentManual(journal, *intent, err)
+		}
 		return err
 	}
 	intent.Launch.LauncherReady = true

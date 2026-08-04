@@ -42,8 +42,8 @@ func IsPaneLauncherRequest() bool {
 	return os.Getenv(paneLauncherFlagEnv) == "1"
 }
 
-// RunPaneLauncher waits for the operation-bound intent and token, removes the
-// one-shot environment capsule, then replaces itself with the exact agent.
+// RunPaneLauncher waits for the operation-bound intent. A coordinator remains
+// an inert long-lived process; a child consumes one token and execs its agent.
 func RunPaneLauncher(in io.Reader, out, errOut io.Writer) int {
 	request, err := paneLauncherRequestFromEnvironment()
 	if err != nil {
@@ -55,6 +55,18 @@ func RunPaneLauncher(in io.Reader, out, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "fanout herdr pane launcher: %v\n", err)
 		return 1
 	}
+	if intent.Kind == state.HerdrIntentCoordinator {
+		return holdCoordinatorLauncher(in, errOut)
+	}
+	return runAgentPaneLauncher(in, out, errOut, request, intent)
+}
+
+func runAgentPaneLauncher(
+	in io.Reader,
+	out, errOut io.Writer,
+	request paneLauncherRequest,
+	intent state.HerdrIntent,
+) int {
 	marker := launcherReadyMarker(intent.Launch.Nonce)
 	if err := writeLauncherReady(out, marker); err != nil {
 		fmt.Fprintf(errOut, "fanout herdr pane launcher: %v\n", err)
@@ -75,6 +87,20 @@ func RunPaneLauncher(in io.Reader, out, errOut io.Writer) int {
 		return 1
 	}
 	panic("unreachable")
+}
+
+func holdCoordinatorLauncher(in io.Reader, errOut io.Writer) int {
+	var input [1]byte
+	_, err := in.Read(input[:])
+	if errors.Is(err, io.EOF) {
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(errOut, "fanout herdr coordinator launcher: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(errOut, "fanout herdr coordinator launcher: unexpected input")
+	return 1
 }
 
 type paneLauncherRequest struct {
@@ -147,7 +173,7 @@ func matchingPaneLaunchIntent(
 	request paneLauncherRequest,
 ) (state.HerdrIntent, bool) {
 	for _, intent := range store.Intents {
-		if intent.Status == state.HerdrIntentRealized && intent.Launch != nil &&
+		if intent.Status == state.HerdrIntentRealized && paneLauncherIntentReady(intent) &&
 			intent.Session == request.session && intent.SocketPath == request.socketPath &&
 			intent.Resource.WorkspaceID == request.workspaceID &&
 			intent.Resource.PaneID == request.paneID &&
@@ -156,6 +182,11 @@ func matchingPaneLaunchIntent(
 		}
 	}
 	return state.HerdrIntent{}, false
+}
+
+func paneLauncherIntentReady(intent state.HerdrIntent) bool {
+	return intent.Kind == state.HerdrIntentCoordinator && intent.Launch == nil ||
+		intent.Kind == state.HerdrIntentWorktree && intent.Launch != nil
 }
 
 func launcherReadyMarker(nonce string) string {

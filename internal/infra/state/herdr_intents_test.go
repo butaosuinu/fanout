@@ -292,6 +292,30 @@ func TestHerdrIntentIDsUseTmuxIssueAndTaskKeys(t *testing.T) {
 	}
 }
 
+func TestHerdrRollbackIntentKeepsIndependentMutationRecord(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	original := testHerdrWorktreeIntent(repo, "425", 426, "rollback")
+	original.Status = HerdrIntentRealized
+	original.Resource = HerdrResource{
+		WorkspaceID: "w2", Label: original.WorkspaceLabel,
+		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: original.WorktreePath,
+		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
+	}
+	rollback := original
+	rollback.ID, _ = HerdrRollbackIntentID(original.ID)
+	rollback.Kind = HerdrIntentRollback
+	rollback.Status = HerdrIntentPlanned
+	store := emptyHerdrIntents()
+	store.Intents = []HerdrIntent{original, rollback}
+	if err := validateHerdrIntents(store); err != nil {
+		t.Fatal(err)
+	}
+	rollback.Launch = &HerdrLaunch{}
+	if err := validateHerdrIntent(rollback); err == nil {
+		t.Fatal("rollback intent accepted an agent launch capsule")
+	}
+}
+
 func TestHerdrCoordinatorIntentIDsUseSyntheticIssueNumbers(t *testing.T) {
 	firstManual, err := HerdrCoordinatorIntentID("@manual", "/repo/one", -1)
 	if err != nil {
