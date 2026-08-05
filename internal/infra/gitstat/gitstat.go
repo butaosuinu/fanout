@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -70,9 +71,14 @@ const untrackedCacheLimit = 4096
 //
 // Counting one untracked file costs a git process, and Runner.Worktree runs on
 // the dashboard's 2-second tick. Uncached, a worktree holding 500 un-ignored
-// files spends ~4.6s per poll and starves the refresh loop. Entries key on the
-// file's size and modification time — the same staleness signal git's own index
-// uses — so a file that changes is recounted and one that does not is free.
+// files spends ~4.6s per poll and starves the refresh loop.
+//
+// Entries key on what the file contains, not on its stat metadata: size and
+// mtime both survive an in-place rewrite (`cp -p` of a same-sized file restores
+// the timestamp to the nanosecond), and a stale count would silently break the
+// guarantee that the session list and the diff viewer agree. Hashing costs far
+// less than the process it saves — 500 files at the 256 KiB ceiling hash in
+// ~190ms against ~4.6s of git startup.
 //
 // The zero value is not usable; call NewUntrackedStatCache. A nil cache is
 // valid and simply disables memoization.
@@ -107,8 +113,32 @@ func (c *UntrackedStatCache) store(key string, stat FileStat) {
 	c.entries[key] = stat
 }
 
-func untrackedCacheKey(path, rel string, info os.FileInfo) string {
-	return fmt.Sprintf("%s\x00%s\x00%d\x00%d", path, rel, info.Size(), info.ModTime().UnixNano())
+// untrackedCacheKey identifies the file by worktree, path, file type, and
+// content hash. The path stays in the key because .gitattributes can change
+// how git treats the same bytes at a different path.
+func untrackedCacheKey(path, rel string, info os.FileInfo) (string, error) {
+	content, err := untrackedContent(path, rel, info)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%x", path, rel, info.Mode().Type(), sha256.Sum256(content)), nil
+}
+
+// untrackedContent reads what git would compare: the link target for a symlink,
+// the file bytes otherwise.
+func untrackedContent(path, rel string, info os.FileInfo) ([]byte, error) {
+	fullPath, err := containedPath(path, rel)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, readErr := os.Readlink(fullPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("read symlink: %w", readErr)
+		}
+		return []byte(target), nil
+	}
+	return os.ReadFile(fullPath)
 }
 
 // diffFlags is the flag set every diff in this package shares. Each entry pins
@@ -507,7 +537,10 @@ func (r Runner) untrackedFileStat(path, rel string) (_ FileStat, err error) {
 	if info.Size() > patchFileLimit {
 		return FileStat{Path: rel, OmittedReason: "tooLarge"}, nil
 	}
-	key := untrackedCacheKey(path, rel, info)
+	key, err := untrackedCacheKey(path, rel, info)
+	if err != nil {
+		return FileStat{}, err
+	}
 	if stat, ok := r.UntrackedCache.lookup(key); ok {
 		return stat, nil
 	}

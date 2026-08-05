@@ -1424,6 +1424,44 @@ func TestRunnerWorktreeMemoizesUntrackedCountsUntilTheFileChanges(t *testing.T) 
 	}
 }
 
+// size と mtime だけを鍵にすると `cp -p` の上書きを取り逃がし、一覧だけが
+// 古い行数を返し続けて viewer と恒久的に食い違う。
+func TestRunnerWorktreeRecountsWhenContentChangesUnderTheSameStat(t *testing.T) {
+	repo := initPatchRepo(t)
+	target := filepath.Join(repo, "untracked.txt")
+	writeGitstatFile(t, repo, "untracked.txt", []byte("one\ntwo\nthree\n"))
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := Runner{UntrackedCache: NewUntrackedStatCache()}
+	if _, err = runner.Worktree(repo, "main"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 同じ byte 数・同じ mtime で中身だけ差し替える(`cp -p` と同じ形)。
+	writeGitstatFile(t, repo, "untracked.txt", []byte("a\nb\nc\nd\ne\nf\ng\n"))
+	if err = os.Chtimes(target, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) {
+		t.Fatalf("fixture did not preserve size/mtime: %d/%v vs %d/%v",
+			after.Size(), after.ModTime(), info.Size(), info.ModTime())
+	}
+
+	got, err := runner.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Additions != 7 {
+		t.Fatalf("Worktree() = +%d, want +7 recounted from the new content", got.Additions)
+	}
+}
+
 func TestUntrackedStatCacheNilIsUsableAndFullResets(t *testing.T) {
 	var absent *UntrackedStatCache
 	absent.store("k", FileStat{Path: "x"})

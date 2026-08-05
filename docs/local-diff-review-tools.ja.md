@@ -601,9 +601,14 @@ rename を削除と追加の 2 file として返す。
 `Runner.Worktree`(Session リストと詳細の `+X/-Y`)はこの収集を共有するので、
 一覧と diff ビュアーの行数は乖離しない — 縮退したときも両方が同時に縮退する。
 未追跡 file の統計は file ごとに git process を起こすが、`Runner.Worktree` は
-dashboard の 2 秒 tick から呼ばれる。`UntrackedStatCache` が size と mtime を
-キーに結果を保持し、変わっていない file を数え直さない
-(実測: 未追跡 500 file で初回 4.1 秒 → 以降 36 ミリ秒)。
+dashboard の 2 秒 tick から呼ばれる。`UntrackedStatCache` が結果を保持し、
+変わっていない file を数え直さない(実測: 未追跡 500 file で初回 4.1 秒 →
+以降 36 ミリ秒)。
+鍵は stat ではなく内容のハッシュにする — size も mtime も in-place の
+書き換えを生き延びる(`cp -p` は同サイズの file の時刻をナノ秒まで復元する)
+ので、stat を鍵にすると一覧だけが古い行数を返し続けて viewer と食い違う。
+ハッシュのコストは節約する process より小さい(500 file が 256 KiB 上限でも
+約 190 ミリ秒)。
 collector を poll ごとに作り直すとキャッシュも作り直されるので、
 `poller` は `sessionview.GitWorktreeStat` を 1 度だけ構築して使い回す。
 untracked file は `git ls-files --others --exclude-standard -z` で列挙し、
