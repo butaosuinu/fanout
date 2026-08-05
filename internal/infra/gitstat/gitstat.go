@@ -165,22 +165,20 @@ func untrackedCacheKey(path, rel, attrs string, info os.FileInfo) (string, error
 // content, so without this an added `*.dat binary` line would leave a stale
 // text count answering until the file itself changed.
 //
-// Scope is the worktree's own .gitattributes files, read from disk so
-// uncommitted edits count. Ignored ones are included: git applies them all the
-// same, so --exclude-standard here would drop a file that still decides the
-// verdict. $GIT_DIR/info/attributes and core.attributesFile are deliberately
-// out of scope: they are machine-local overrides this package does not
-// otherwise follow.
+// Scope is every source git consults for this worktree, in its own precedence
+// order: $GIT_DIR/info/attributes, the worktree's .gitattributes files, and
+// core.attributesFile. All are read from disk so uncommitted edits count, and
+// ignored .gitattributes are included because git applies them all the same.
 func (r Runner) attributesDigest(path string) (string, error) {
-	files, err := r.attributesFiles(path)
+	files, err := r.attributesSources(path)
 	if err != nil {
 		return "", err
 	}
 	digest := sha256.New()
 	for _, rel := range files {
-		full, pathErr := containedPath(path, rel)
-		if pathErr != nil {
-			return "", pathErr
+		full := rel
+		if !filepath.IsAbs(full) {
+			full = filepath.Join(path, filepath.FromSlash(rel))
 		}
 		// Read only what git reads. It does not follow a .gitattributes symlink
 		// (gitattributes(5) "Notes"), and a worktree is hostile input: pointing
@@ -198,8 +196,17 @@ func (r Runner) attributesDigest(path string) (string, error) {
 	return fmt.Sprintf("%x", digest.Sum(nil)), nil
 }
 
-// attributesFiles lists the worktree's .gitattributes files in a stable order.
-func (r Runner) attributesFiles(path string) ([]string, error) {
+// attributesSources lists every attributes file git would consult, in a stable
+// order. Paths are returned as given: worktree-relative for in-tree files, and
+// whatever git or config reports for the two out-of-tree sources.
+func (r Runner) attributesSources(path string) ([]string, error) {
+	sources := []string{}
+	if out, err := r.git("-C", path, "rev-parse", "--git-path", "info/attributes"); err == nil {
+		if rel := strings.TrimSpace(string(out)); rel != "" {
+			sources = append(sources, rel)
+		}
+	}
+
 	env := append(gitEnv(), "GIT_LITERAL_PATHSPECS=0")
 	out, err := execx.OutputContext(r.context(), r.Cwd, env, "git",
 		"-C", path, "ls-files", "-z", "--cached", "--others",
@@ -213,7 +220,16 @@ func (r Runner) attributesFiles(path string) ([]string, error) {
 		return nil, fmt.Errorf("parse attributes paths: %w", err)
 	}
 	sort.Strings(files)
-	return files, nil
+	sources = append(sources, files...)
+
+	// Unset is the common case and git exits non-zero for it; that is not an
+	// error here, just one fewer source.
+	if out, cfgErr := r.git("-C", path, "config", "--get", "core.attributesFile"); cfgErr == nil {
+		if file := strings.TrimSpace(string(out)); file != "" {
+			sources = append(sources, file)
+		}
+	}
+	return sources, nil
 }
 
 // untrackedContent reads what git would compare: the link target for a symlink,
@@ -400,27 +416,53 @@ func (r Runner) mergeUntracked(
 	if err != nil {
 		return nil, err
 	}
+	// The digest costs two git processes on every 2-second tick, so a worktree
+	// with nothing untracked must not pay for it.
+	if len(untracked) == 0 {
+		r.UntrackedCache.replace(path, nil)
+		return files, nil
+	}
 	attrs, err := r.attributesDigest(path)
 	if err != nil {
 		return nil, err
 	}
+	stats, measured, err := r.measureUntracked(path, untracked, attrs)
+	if err != nil {
+		return nil, err
+	}
+	r.UntrackedCache.replace(path, measured)
+
+	for i, rel := range untracked {
+		if index, ok := trackedByPath[rel]; ok {
+			files[index].replacement = &stats[i]
+			continue
+		}
+		files = append(files, patchFile{FileStat: stats[i]})
+	}
+	return files, nil
+}
+
+// measureUntracked counts each untracked file, returning the stats in the order
+// given plus the entries this pass may memoize (a file that changed while git
+// was measuring it yields no key and is left out).
+func (r Runner) measureUntracked(
+	path string,
+	untracked []string,
+	attrs string,
+) ([]FileStat, map[string]FileStat, error) {
+	stats := make([]FileStat, 0, len(untracked))
 	measured := make(map[string]FileStat, len(untracked))
 	for _, rel := range untracked {
-		stat, key, statErr := r.untrackedFileStat(path, rel, attrs)
-		if statErr != nil {
-			return nil, statErr
+		stat, key, err := r.untrackedFileStat(path, rel, attrs)
+		if err != nil {
+			return nil, nil, err
 		}
 		if key != "" {
 			measured[key] = stat
 		}
-		if index, ok := trackedByPath[rel]; ok {
-			files[index].replacement = &stat
-			continue
-		}
-		files = append(files, patchFile{FileStat: stat})
+		stats = append(stats, stat)
 	}
-	r.UntrackedCache.replace(path, measured)
-	return files, nil
+	return stats, measured, nil
 }
 
 // numStat reads per-file counts with rename detection on.

@@ -1280,6 +1280,14 @@ for arg in "$@"; do
     *) subcommand=$arg; break ;;
   esac
 done
+# config is only ever a read here; record its mode so a write would stand out.
+if [ "$subcommand" = "config" ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      --get|--get-all|--list) subcommand="config $arg"; break ;;
+    esac
+  done
+fi
 printf '%s\n' "$subcommand" >> "$FANOUT_GITSTAT_LOG"
 exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 `)
@@ -1310,6 +1318,8 @@ exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 		t.Fatal(err)
 	}
 	readOnly := map[string]bool{
+		// Only the reading form is allowed; a bare "config" would be a write.
+		"config --get":     true,
 		"check-ref-format": true,
 		"rev-parse":        true,
 		"merge-base":       true,
@@ -1319,7 +1329,7 @@ exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 		"ls-tree":          true,
 		"symbolic-ref":     true,
 	}
-	for subcommand := range strings.FieldsSeq(string(logged)) {
+	for subcommand := range strings.SplitSeq(strings.TrimSpace(string(logged)), "\n") {
 		if !readOnly[subcommand] {
 			t.Fatalf("WorktreePatch called non-read-only git subcommand %q; log:\n%s", subcommand, logged)
 		}
@@ -1756,6 +1766,65 @@ func TestRunnerWorktreeRecountsWhenAnIgnoredGitattributesReclassifies(t *testing
 	// .gitattributes itself is never counted.
 	if after.Additions != 1 {
 		t.Fatalf("Worktree() = +%d, want +1 after the ignored attributes applied", after.Additions)
+	}
+}
+
+// git reads $GIT_DIR/info/attributes and core.attributesFile too, and the diff
+// viewer has no cache to go stale — so the summary has to notice them or the
+// two surfaces disagree until the process restarts.
+func TestRunnerWorktreeRecountsWhenOutOfTreeAttributesReclassify(t *testing.T) {
+	tests := []struct {
+		name  string
+		apply func(t *testing.T, repo string)
+	}{
+		{
+			name: "$GIT_DIR/info/attributes",
+			apply: func(t *testing.T, repo string) {
+				t.Helper()
+				info := filepath.Join(repo, ".git", "info")
+				if err := os.MkdirAll(info, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(info, "attributes"), []byte("*.dat binary\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "core.attributesFile",
+			apply: func(t *testing.T, repo string) {
+				t.Helper()
+				global := filepath.Join(t.TempDir(), "global-attrs")
+				if err := os.WriteFile(global, []byte("*.dat binary\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				gitTest(t, repo, "config", "core.attributesFile", global)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initPatchRepo(t)
+			writeGitstatFile(t, repo, "blob.dat", []byte("one\ntwo\nthree\n"))
+			runner := Runner{UntrackedCache: NewUntrackedStatCache()}
+
+			before, err := runner.Worktree(repo, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if before.Additions != 3 {
+				t.Fatalf("Worktree() = +%d, want +3 counted as text", before.Additions)
+			}
+
+			tt.apply(t, repo)
+			after, err := runner.Worktree(repo, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.Additions != 0 {
+				t.Fatalf("Worktree() = +%d, want +0 once %s reclassified it", after.Additions, tt.name)
+			}
+		})
 	}
 }
 

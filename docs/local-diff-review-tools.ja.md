@@ -632,8 +632,11 @@ worktree を捨てる — Session の作成と cleanup は通常の運用ルー�
 除外すると判定を決める file が digest から落ちる。symlink の `.gitattributes` は
 読まない: git も follow しない契約であり(gitattributes(5) Notes)、worktree は
 敵性入力なので `/dev/zero` や device へ向けられると poll が止まる。
-`$GIT_DIR/info/attributes` と `core.attributesFile` は machine-local な
-override なので対象外。
+対象は git が参照する全ソース(`$GIT_DIR/info/attributes`、worktree 内の
+`.gitattributes`、`core.attributesFile`)。diff viewer 側はキャッシュを持たず
+これらを常に反映するので、summary が追わないと一致契約が崩れる。
+未追跡 file が 1 つも無い worktree では digest 自体を計算しない — 2 秒 tick で
+git process 2 つぶんの常時コストになるため。
 collector を tick ごとに作り直すとキャッシュも作り直されるので、
 web の `poller` と TUI の `model` はどちらも `sessionview.GitWorktreeStat` を
 1 度だけ構築して使い回す。
