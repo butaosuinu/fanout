@@ -756,7 +756,7 @@ func TestHerdrCoordinatorRecordConflictRetainsManualCleanupIntent(t *testing.T) 
 	}
 }
 
-func TestHerdrLaunchRollbackRemovesExactResourceAfterResponseLoss(t *testing.T) {
+func TestHerdrLaunchRollbackUsesSavedIdentityAfterLauncherExit(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrLaunchRuntime{}
 	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
@@ -770,9 +770,8 @@ func TestHerdrLaunchRollbackRemovesExactResourceAfterResponseLoss(t *testing.T) 
 		t.Fatal(err)
 	}
 	intent := result.Intent
-	runtime.launchRoute = herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
-	runtime.processInfo = testHerdrLauncherProcess(intent, runtime.launchRoute.LauncherPath)
-	runtime.live = []backend.LivePane{testHerdrIdlePane(intent)}
+	runtime.processErr = errors.New("launcher exited")
+	runtime.liveErr = errors.New("launcher exited")
 	runtime.remove = func(workspaceID, path string) error {
 		if workspaceID != intent.Resource.WorkspaceID || path != intent.WorktreePath {
 			t.Fatalf("remove target = %s %s", workspaceID, path)

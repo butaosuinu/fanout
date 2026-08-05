@@ -415,7 +415,7 @@ func watchPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
 		return false
 	}
 	if backend.NormalizeName(pane.Backend) == backend.Herdr {
-		return sessionview.HerdrPaneMatches(pane, live)
+		return watchHerdrPaneMatchesLive(pane, live)
 	}
 	if shellKey := strings.TrimSpace(pane.ShellKey); shellKey != "" {
 		return shellKey == live.ShellKey
@@ -430,6 +430,13 @@ func watchPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
 	wt := filepath.Clean(worktree)
 	cp := filepath.Clean(live.CurrentPath)
 	return cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+}
+
+func watchHerdrPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
+	if pane.HerdrAgentSession == nil && live.AgentSession != nil {
+		return sessionview.HerdrPaneMatchesForSessionBinding(pane, live)
+	}
+	return sessionview.HerdrPaneMatches(pane, live)
 }
 
 func watchParentLaunchResult(plan run.Plan, created []int) watch.ParentLaunchResult {

@@ -138,13 +138,6 @@ func (l *Launcher) verifyHerdrRollbackTarget(ctx context.Context, intent state.H
 	if err := l.Herdr.VerifyOwned(ctx); err != nil {
 		return err
 	}
-	route, err := l.Herdr.LaunchRoute()
-	if err != nil {
-		return err
-	}
-	if verifyErr := l.verifyHerdrIdleLauncher(ctx, intent, route); verifyErr != nil {
-		return verifyErr
-	}
 	workspaces, err := l.Herdr.ObserveWorkspaces(ctx)
 	if err != nil {
 		return err
