@@ -12,7 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-var errHerdrLauncherIdentityChanged = errors.New("Herdr launcher identity changed")
+var errHerdrLauncherIdentityChanged = errors.New("herdr launcher identity changed")
 
 func (l *Launcher) verifyHerdrIdleLauncher(
 	ctx context.Context,
@@ -23,8 +23,8 @@ func (l *Launcher) verifyHerdrIdleLauncher(
 	if err != nil {
 		return err
 	}
-	if err := verifyHerdrLauncherProcess(process, intent, route); err != nil {
-		return fmt.Errorf("%w: %v", errHerdrLauncherIdentityChanged, err)
+	if verifyErr := verifyHerdrLauncherProcess(process, intent, route); verifyErr != nil {
+		return fmt.Errorf("%w: %w", errHerdrLauncherIdentityChanged, verifyErr)
 	}
 	panes, err := l.Herdr.LivePanes(ctx)
 	if err != nil {

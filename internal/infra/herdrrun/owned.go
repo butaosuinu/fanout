@@ -266,7 +266,8 @@ func ensureOwned(
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureOwnedConfig(layout, launcher.path); err != nil {
+	err = ensureOwnedConfig(layout, launcher.path)
+	if err != nil {
 		return nil, err
 	}
 	admitted, err = pinOwnedBinary(layout, admitted)

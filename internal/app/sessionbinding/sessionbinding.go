@@ -5,6 +5,7 @@ package sessionbinding
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
@@ -35,12 +36,7 @@ func StateLoader(
 }
 
 func hasUnboundHerdrAgent(panes []state.Pane) bool {
-	for _, pane := range panes {
-		if herdrAgentSessionUnbound(pane) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(panes, herdrAgentSessionUnbound)
 }
 
 func bindingRoots(projectRoot string, panes []state.Pane) []string {

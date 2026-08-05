@@ -408,8 +408,8 @@ func TestValidateLaunchBackendAllowsHerdrAndRejectsTeam(t *testing.T) {
 	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "--team") {
 		t.Fatalf("team error = %v, want ErrUnsupported", err)
 	}
-	if err := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Tmux}, runtimeBackendInputs{}); err != nil {
-		t.Fatalf("tmux error = %v", err)
+	if tmuxErr := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Tmux}, runtimeBackendInputs{}); tmuxErr != nil {
+		t.Fatalf("tmux error = %v", tmuxErr)
 	}
 	err = validateLaunchBackend(&cliflags.Config{Agent: "claude", TUIInteractive: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{})
 	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "interactive TUI") {

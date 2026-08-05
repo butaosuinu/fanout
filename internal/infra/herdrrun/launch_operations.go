@@ -114,7 +114,7 @@ func (s *OwnedSession) WaitForLauncher(
 	totalTimeout time.Duration,
 ) error {
 	if totalTimeout <= 0 {
-		return fmt.Errorf("Herdr launcher intent has expired")
+		return fmt.Errorf("herdr launcher intent has expired")
 	}
 	marker := launcherReadyMarker(nonce)
 	out, err := s.runOwnedLaunchCommand(ctx, totalTimeout, "pane", "wait-output", paneID,

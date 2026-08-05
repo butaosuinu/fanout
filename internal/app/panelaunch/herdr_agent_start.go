@@ -62,7 +62,7 @@ func admitHerdrAgentStartDeadline(
 	if err != nil {
 		return err
 	}
-	return markHerdrIntentManual(journal, intent, fmt.Errorf("Herdr agent-start intent expired before launcher admission"))
+	return markHerdrIntentManual(journal, intent, fmt.Errorf("herdr agent-start intent expired before launcher admission"))
 }
 
 func (l *Launcher) admitHerdrLauncher(
@@ -117,7 +117,7 @@ func (l *Launcher) finishIssuedHerdrAgent(
 		return live, err
 	}
 	if _, err := os.Lstat(intent.Launch.EnvFilePath); !errors.Is(err, os.ErrNotExist) {
-		return live, fmt.Errorf("Herdr workload environment capsule was not consumed")
+		return live, fmt.Errorf("herdr workload environment capsule was not consumed")
 	}
 	return live, nil
 }
@@ -150,8 +150,8 @@ func (l *Launcher) verifyAndRenameHerdrAgent(
 	if err != nil {
 		return err
 	}
-	if err := verifyHerdrAgentProcess(process, intent); err != nil {
-		return err
+	if verifyErr := verifyHerdrAgentProcess(process, intent); verifyErr != nil {
+		return verifyErr
 	}
 	stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)
 	if err != nil {
@@ -184,7 +184,7 @@ func ensureHerdrLaunchActive(ctx context.Context, intent state.HerdrIntent) erro
 		return err
 	}
 	if !time.Now().Before(time.UnixMilli(intent.ExpiresUnixMS)) {
-		return fmt.Errorf("Herdr agent-start intent expired")
+		return fmt.Errorf("herdr agent-start intent expired")
 	}
 	return nil
 }
@@ -238,7 +238,7 @@ func retryHerdrObservation(
 func waitForHerdrObservationRetry(ctx context.Context, intent state.HerdrIntent) error {
 	remaining := remainingHerdrLaunchTime(intent)
 	if remaining <= 0 {
-		return fmt.Errorf("Herdr agent-start intent expired")
+		return fmt.Errorf("herdr agent-start intent expired")
 	}
 	timer := time.NewTimer(min(herdrLaunchObservationInterval, remaining))
 	defer timer.Stop()
@@ -256,7 +256,7 @@ func verifyHerdrLauncherProcess(
 	route herdrrun.OwnedLaunchRoute,
 ) error {
 	if info.ShellPID <= 1 || info.ForegroundProcessGroup <= 1 {
-		return fmt.Errorf("Herdr launcher process group is incomplete")
+		return fmt.Errorf("herdr launcher process group is incomplete")
 	}
 	for _, process := range info.ForegroundProcesses {
 		if process.PID == info.ShellPID && process.CWD == intent.WorktreePath &&
@@ -264,7 +264,7 @@ func verifyHerdrLauncherProcess(
 			return nil
 		}
 	}
-	return fmt.Errorf("Herdr launcher process identity does not match the bundled fanout executable")
+	return fmt.Errorf("herdr launcher process identity does not match the bundled fanout executable")
 }
 
 func verifyHerdrAgentProcess(info herdrrun.PaneProcessInfo, intent state.HerdrIntent) error {
@@ -275,7 +275,7 @@ func verifyHerdrAgentProcess(info herdrrun.PaneProcessInfo, intent state.HerdrIn
 			return nil
 		}
 	}
-	return fmt.Errorf("Herdr agent process identity does not match launch intent")
+	return fmt.Errorf("herdr agent process identity does not match launch intent")
 }
 
 func (l *Launcher) waitForHerdrAgent(

@@ -124,8 +124,8 @@ func (l *Launcher) realizeHerdrLaunch(
 	if err != nil {
 		return state.HerdrIntent{}, fmt.Errorf("realize coordinator: %w", err)
 	}
-	if err := l.recordHerdrCoordinator(req, operation.locked, coordinator, operation.route); err != nil {
-		return coordinator, fmt.Errorf("record coordinator: %w", err)
+	if recordErr := l.recordHerdrCoordinator(operation.locked, coordinator, operation.route); recordErr != nil {
+		return coordinator, fmt.Errorf("record coordinator: %w", recordErr)
 	}
 	intent, err := l.realizeHerdrChild(operation.ctx, req, operation.locked, operation.route)
 	if err != nil {
@@ -208,7 +208,6 @@ func (l *Launcher) realizeHerdrChild(
 }
 
 func (l *Launcher) recordHerdrCoordinator(
-	req Request,
 	locked *state.LockedStore,
 	intent state.HerdrIntent,
 	route herdrrun.OwnedLaunchRoute,
@@ -265,7 +264,7 @@ func herdrCoordinatorRowRoots(projectRoot, runtimeParent, ownerProjectRoot strin
 			return nil, matchErr
 		}
 		if !matches {
-			return nil, fmt.Errorf("Herdr coordinator owner %s does not match launch root %s", owner, projectRoot)
+			return nil, fmt.Errorf("herdr coordinator owner %s does not match launch root %s", owner, projectRoot)
 		}
 		return []string{projectRoot}, nil
 	}

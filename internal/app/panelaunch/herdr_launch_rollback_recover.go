@@ -207,7 +207,7 @@ func verifyIssuedHerdrRollbackAbsent(
 	}
 	for _, workspace := range workspaces {
 		if workspace.WorkspaceID == rollback.Resource.WorkspaceID || workspace.Label == rollback.WorkspaceLabel {
-			return fmt.Errorf("Herdr launch rollback target remains live")
+			return fmt.Errorf("herdr launch rollback target remains live")
 		}
 	}
 	checkout, err := worktree.ObserveCheckout(ctx, req.SourceRoot, rollback.WorktreePath)
@@ -215,7 +215,7 @@ func verifyIssuedHerdrRollbackAbsent(
 		return err
 	}
 	if !checkout.PathAbsent || checkout.Registered {
-		return fmt.Errorf("Herdr launch rollback checkout remains registered")
+		return fmt.Errorf("herdr launch rollback checkout remains registered")
 	}
 	return nil
 }

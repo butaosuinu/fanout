@@ -317,8 +317,8 @@ func validateWorkloadEnvironment(environment []string) error {
 		if err != nil {
 			return err
 		}
-		if blockedWorkloadEnvironmentName(name) &&
-			!(name == "FANOUT_BACKEND" && value == "herdr") && name != "FANOUT_BIN" {
+		allowedRouting := (name == "FANOUT_BACKEND" && value == "herdr") || name == "FANOUT_BIN"
+		if blockedWorkloadEnvironmentName(name) && !allowedRouting {
 			return fmt.Errorf("workload environment contains control-plane name %q", name)
 		}
 	}
@@ -403,8 +403,8 @@ func consumeWorkloadEnvironment(launch *state.HerdrLaunch, runtimeDir string) ([
 func DiscardWorkloadEnvironment(runtimeDir string, launch *state.HerdrLaunch) (err error) {
 	defer errs.Wrap(&err, "discard Herdr workload environment")
 
-	if err := validateWorkloadEnvironmentLocation(runtimeDir, launch); err != nil {
-		return err
+	if validationErr := validateWorkloadEnvironmentLocation(runtimeDir, launch); validationErr != nil {
+		return validationErr
 	}
 	file, err := os.OpenFile(launch.EnvFilePath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if errors.Is(err, os.ErrNotExist) {

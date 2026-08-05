@@ -124,8 +124,8 @@ func TestIssuedHerdrLaunchWithMatchingNameStillFailsClosed(t *testing.T) {
 		LauncherReady: true, TokenIssued: true,
 	}
 	journal.UpsertIntent(intent)
-	if err := journal.Save(); err != nil {
-		t.Fatal(err)
+	if saveErr := journal.Save(); saveErr != nil {
+		t.Fatal(saveErr)
 	}
 	runtime.live = []backend.LivePane{{
 		Ref:     backend.PaneRef{Backend: backend.Herdr, Workspace: intent.Resource.WorkspaceID, Pane: intent.Resource.PaneID},
@@ -214,11 +214,11 @@ func TestFinalizeHerdrLaunchFailureBecomesManualCleanupRequired(t *testing.T) {
 		t.Fatal(err)
 	}
 	journal.UpsertIntent(intent)
-	if err := journal.Save(); err != nil {
-		t.Fatal(err)
+	if saveErr := journal.Save(); saveErr != nil {
+		t.Fatal(saveErr)
 	}
-	if err := os.WriteFile(filepath.Join(intent.WorktreePath, ".fanout"), []byte("block directory"), 0o600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(intent.WorktreePath, ".fanout"), []byte("block directory"), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
 	stale := intent
@@ -273,11 +273,11 @@ func TestRecordHerdrCoordinatorReusesLinkedWorktreeStateRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
-	if err := launcher.recordHerdrCoordinator(Request{}, locked, intent, route); err != nil {
-		t.Fatal(err)
+	if recordErr := launcher.recordHerdrCoordinator(locked, intent, route); recordErr != nil {
+		t.Fatal(recordErr)
 	}
-	if err := locked.Unlock(); err != nil {
-		t.Fatal(err)
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
 	}
 
 	locked, err = state.LockProjectForLaunch(sibling)
@@ -285,11 +285,11 @@ func TestRecordHerdrCoordinatorReusesLinkedWorktreeStateRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	launcher.Info.ProjectRoot = sibling
-	if err := launcher.recordHerdrCoordinator(Request{}, locked, intent, route); err != nil {
-		t.Fatal(err)
+	if recordErr := launcher.recordHerdrCoordinator(locked, intent, route); recordErr != nil {
+		t.Fatal(recordErr)
 	}
-	if err := locked.Unlock(); err != nil {
-		t.Fatal(err)
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
 	}
 
 	owner, err := state.LoadProject(repo)
@@ -326,8 +326,8 @@ func TestRecordHerdrCoordinatorScopesPlanSlugToOwnerRoot(t *testing.T) {
 			},
 		}
 		launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: root}}
-		if err := launcher.recordHerdrCoordinator(Request{}, locked, intent, route); err != nil {
-			t.Fatal(err)
+		if recordErr := launcher.recordHerdrCoordinator(locked, intent, route); recordErr != nil {
+			t.Fatal(recordErr)
 		}
 		if err := locked.Unlock(); err != nil {
 			t.Fatal(err)
@@ -516,8 +516,8 @@ func TestHerdrLaunchDoesNotIssueTokenAfterLauncherWaitExpires(t *testing.T) {
 		t.Fatal(err)
 	}
 	journal.UpsertIntent(intent)
-	if err := journal.Save(); err != nil {
-		t.Fatal(err)
+	if saveErr := journal.Save(); saveErr != nil {
+		t.Fatal(saveErr)
 	}
 	runtime.wait = func(context.Context, string, string, time.Duration) error {
 		time.Sleep(60 * time.Millisecond)
@@ -581,8 +581,8 @@ func TestAdmitHerdrLauncherFencesExactTerminalBeforeToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	journal.UpsertIntent(intent)
-	if err := journal.Save(); err != nil {
-		t.Fatal(err)
+	if saveErr := journal.Save(); saveErr != nil {
+		t.Fatal(saveErr)
 	}
 	runtime.launchRoute = herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
 	runtime.processInfo = testHerdrLauncherProcess(intent, runtime.launchRoute.LauncherPath)
@@ -660,7 +660,7 @@ func TestHerdrCoordinatorRecordConflictRetainsManualCleanupIntent(t *testing.T) 
 		result, err := mutate(req)
 		if err == nil && req.Kind == herdrrun.WorkspaceCreate {
 			intent := state.HerdrIntent{
-				WorktreePath: result.WorkspaceObservation.CWD, Session: runtime.launchRoute.Session,
+				WorktreePath: result.CWD, Session: runtime.launchRoute.Session,
 				SocketPath: runtime.launchRoute.SocketPath,
 				Resource:   stateResource(result.WorkspaceObservation),
 			}
@@ -674,14 +674,14 @@ func TestHerdrCoordinatorRecordConflictRetainsManualCleanupIntent(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer func() { _ = locked.Unlock() }()
-	if err := locked.RecordPane(state.Pane{
+	if recordErr := locked.RecordPane(state.Pane{
 		Parent: ManualParentRef, RuntimeParent: "425", IssueNum: -1,
 		Kind: state.PaneKindShell, Backend: backend.Herdr,
 		PaneID: "foreign:pane", HerdrWorkspaceID: "foreign",
 		HerdrTerminalID: "foreign-terminal", HerdrSession: runtime.launchRoute.Session,
 		HerdrSocketPath: runtime.launchRoute.SocketPath, WorktreePath: repo,
-	}); err != nil {
-		t.Fatal(err)
+	}); recordErr != nil {
+		t.Fatal(recordErr)
 	}
 	launcher := &Launcher{
 		Cfg: &cliflags.Config{}, Log: log.NewWith(io.Discard, io.Discard, false),
@@ -746,8 +746,8 @@ func TestHerdrLaunchRollbackRemovesExactResourceAfterResponseLoss(t *testing.T) 
 	}
 	defer func() { _ = locked.Unlock() }()
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
-	if err := launcher.rollbackHerdrLaunch(locked, intent, errors.New("launcher exited")); err != nil {
-		t.Fatal(err)
+	if rollbackErr := launcher.rollbackHerdrLaunch(locked, intent, errors.New("launcher exited")); rollbackErr != nil {
+		t.Fatal(rollbackErr)
 	}
 	if len(runtime.removeCalls) != 1 {
 		t.Fatalf("remove calls = %v, want one", runtime.removeCalls)

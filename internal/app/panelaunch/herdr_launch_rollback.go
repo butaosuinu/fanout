@@ -142,8 +142,8 @@ func (l *Launcher) verifyHerdrRollbackTarget(ctx context.Context, intent state.H
 	if err != nil {
 		return err
 	}
-	if err := l.verifyHerdrIdleLauncher(ctx, intent, route); err != nil {
-		return err
+	if verifyErr := l.verifyHerdrIdleLauncher(ctx, intent, route); verifyErr != nil {
+		return verifyErr
 	}
 	workspaces, err := l.Herdr.ObserveWorkspaces(ctx)
 	if err != nil {
@@ -151,7 +151,7 @@ func (l *Launcher) verifyHerdrRollbackTarget(ctx context.Context, intent state.H
 	}
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
 	if len(matches) != 1 || !workspaceHasHerdrResource(matches[0], intent.Resource) {
-		return fmt.Errorf("Herdr rollback target does not match the saved workspace identity")
+		return fmt.Errorf("herdr rollback target does not match the saved workspace identity")
 	}
 	_, err = worktree.VerifyCheckout(ctx, l.Info.ProjectRoot, intent.WorktreePath,
 		intent.FullBranchRef, intent.ExpectedHead, intent.Resource.RepoKey, intent.Resource.RepoRoot)
@@ -165,7 +165,7 @@ func (l *Launcher) verifyHerdrRollbackAbsent(ctx context.Context, intent state.H
 	}
 	for _, workspace := range workspaces {
 		if workspace.WorkspaceID == intent.Resource.WorkspaceID || workspace.Label == intent.WorkspaceLabel {
-			return fmt.Errorf("Herdr rollback target remains live")
+			return fmt.Errorf("herdr rollback target remains live")
 		}
 	}
 	checkout, err := worktree.ObserveCheckout(ctx, l.Info.ProjectRoot, intent.WorktreePath)
@@ -173,7 +173,7 @@ func (l *Launcher) verifyHerdrRollbackAbsent(ctx context.Context, intent state.H
 		return err
 	}
 	if !checkout.PathAbsent || checkout.Registered {
-		return fmt.Errorf("Herdr rollback checkout remains registered")
+		return fmt.Errorf("herdr rollback checkout remains registered")
 	}
 	return nil
 }
