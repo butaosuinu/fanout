@@ -664,7 +664,7 @@ func TestHerdrCoordinatorIdentityMismatchFailsBeforeStateRow(t *testing.T) {
 		result, err := mutate(req)
 		if err == nil && req.Kind == herdrrun.WorkspaceCreate {
 			intent := state.HerdrIntent{
-				WorktreePath: result.WorkspaceObservation.CWD, Session: runtime.launchRoute.Session,
+				WorktreePath: result.CWD, Session: runtime.launchRoute.Session,
 				SocketPath: runtime.launchRoute.SocketPath,
 				Resource:   stateResource(result.WorkspaceObservation),
 			}
@@ -707,7 +707,7 @@ func TestHerdrCoordinatorRetriesTransientIdentityObservation(t *testing.T) {
 		result, err := mutate(req)
 		if err == nil && req.Kind == herdrrun.WorkspaceCreate {
 			intent := state.HerdrIntent{
-				WorktreePath: result.WorkspaceObservation.CWD, Session: runtime.launchRoute.Session,
+				WorktreePath: result.CWD, Session: runtime.launchRoute.Session,
 				SocketPath: runtime.launchRoute.SocketPath,
 				Resource:   stateResource(result.WorkspaceObservation),
 			}

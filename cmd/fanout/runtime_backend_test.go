@@ -552,14 +552,14 @@ func TestConstructLaunchRuntimeBackendDefersLiveHerdrOwnership(t *testing.T) {
 	gitCmdTest(t, repo, "init", "-b", "main")
 	t.Setenv("PATH", t.TempDir())
 
-	runtimeBackend, owned, prepare, err := constructLaunchRuntimeBackend(
+	runtimeBackend, prepare, err := constructLaunchRuntimeBackend(
 		&cliflags.Config{}, backend.Herdr, runtimeBackendInputs{projectRoot: repo},
 	)
 	if err != nil || runtimeBackend == nil || runtimeBackend.Name() != backend.Herdr {
 		t.Fatalf("construct live Herdr backend = (%v, %v); want mutation-free preview", runtimeBackend, err)
 	}
-	if owned != nil || prepare == nil {
-		t.Fatalf("owned = %+v, prepare nil = %t; want deferred ownership", owned, prepare == nil)
+	if prepare == nil {
+		t.Fatal("prepare is nil; want deferred ownership")
 	}
 }
 
