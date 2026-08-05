@@ -174,7 +174,10 @@ func (l *Launcher) realizeHerdrCoordinator(
 	if err != nil && !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		return state.HerdrIntent{}, err
 	}
-	if err := l.verifyHerdrIdleLauncher(ctx, result.Intent, route); err != nil {
+	verifyErr := retryHerdrObservation(ctx, result.Intent, func(observeCtx context.Context) error {
+		return l.verifyHerdrIdleLauncher(observeCtx, result.Intent, route)
+	})
+	if err := verifyErr; err != nil {
 		if !errors.Is(err, errHerdrLauncherIdentityChanged) {
 			return state.HerdrIntent{}, err
 		}

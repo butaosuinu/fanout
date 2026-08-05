@@ -15,6 +15,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 )
 
@@ -81,6 +82,34 @@ func TestEffectiveIssueLaunchConfigUsesResolvedPlanModeWithoutMutatingParsedConf
 	}
 	if !reflect.DeepEqual(got.AgentOverrides, cfg.AgentOverrides) {
 		t.Fatalf("AgentOverrides = %v, want shallow-copy value %v", got.AgentOverrides, cfg.AgentOverrides)
+	}
+}
+
+func TestPrepareIssueLaunchDefersBackendUntilTargetAndAgentValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		agentName string
+		targets   []ghissue.Issue
+		wantOK    bool
+		wantCalls int
+	}{
+		{name: "no targets", agentName: "claude", wantOK: true},
+		{name: "invalid agent", agentName: "unknown", targets: []ghissue.Issue{{Number: 101}}, wantOK: false},
+		{name: "valid target", agentName: "claude", targets: []ghissue.Issue{{Number: 101}}, wantOK: true, wantCalls: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			rt := &Runtime{PrepareBackend: func() error {
+				calls++
+				return nil
+			}}
+			cfg := &cliflags.Config{Agent: test.agentName, DryRun: true}
+			got := prepareIssueLaunch(cfg, Plan{Targets: test.targets}, rt, state.Store{}, nil, nil, log.NewWith(io.Discard, io.Discard, false))
+			if got != test.wantOK || calls != test.wantCalls {
+				t.Fatalf("prepareIssueLaunch() = %t, calls %d; want %t, %d", got, calls, test.wantOK, test.wantCalls)
+			}
+		})
 	}
 }
 

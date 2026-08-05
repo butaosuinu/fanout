@@ -1,12 +1,15 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -36,6 +39,20 @@ func TestNewWatcherPreflightConfigCarriesAgentAndPlanMode(t *testing.T) {
 	if cfg.ParentRef != tuiWatcherPreflightRef || cfg.Agent != "codex" ||
 		cfg.PlanMode == nil || !*cfg.PlanMode {
 		t.Fatalf("watcher preflight config = %+v, want parent, agent, and Plan Mode", cfg)
+	}
+}
+
+func TestAdmitStandaloneIssueRuntimeDefersBackendForRecordedIssue(t *testing.T) {
+	prepareCalls := 0
+	rt := &run.Runtime{PrepareBackend: func() error {
+		prepareCalls++
+		return nil
+	}}
+	err := admitStandaloneIssueRuntime(t.TempDir(), &cliflags.Config{ParentRef: "425"}, rt, state.Store{
+		Panes: []state.Pane{{Parent: panelaunch.WatchParentRef, IssueNum: 425}},
+	}, 425)
+	if !errors.Is(err, watch.ErrAlreadyFanned) || prepareCalls != 0 {
+		t.Fatalf("admit recorded issue = %v, prepare calls %d; want already-fanned without ownership", err, prepareCalls)
 	}
 }
 

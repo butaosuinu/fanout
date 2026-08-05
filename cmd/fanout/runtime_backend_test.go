@@ -547,6 +547,22 @@ func TestResolveLaunchRuntimeAllowsHerdrDryRunWithoutAmbientSession(t *testing.T
 	}
 }
 
+func TestConstructLaunchRuntimeBackendDefersLiveHerdrOwnership(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init", "-b", "main")
+	t.Setenv("PATH", t.TempDir())
+
+	runtimeBackend, owned, prepare, err := constructLaunchRuntimeBackend(
+		&cliflags.Config{}, backend.Herdr, runtimeBackendInputs{projectRoot: repo},
+	)
+	if err != nil || runtimeBackend == nil || runtimeBackend.Name() != backend.Herdr {
+		t.Fatalf("construct live Herdr backend = (%v, %v); want mutation-free preview", runtimeBackend, err)
+	}
+	if owned != nil || prepare == nil {
+		t.Fatalf("owned = %+v, prepare nil = %t; want deferred ownership", owned, prepare == nil)
+	}
+}
+
 func TestResolveLaunchRuntimeUsesCallerProvisionalIntent(t *testing.T) {
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init", "-b", "main")

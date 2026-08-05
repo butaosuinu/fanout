@@ -45,6 +45,7 @@ type launchBackendResolution struct {
 	selection backend.Selection
 	backend   backend.Backend
 	herdr     *herdrrun.OwnedSession
+	prepare   func() (*herdrrun.OwnedSession, error)
 	verify    func(parent string, locked state.Store) error
 }
 
@@ -88,7 +89,7 @@ func resolveLaunchRuntime(cfg *cliflags.Config, provisionalIntents []backend.Bin
 	}
 	runtime, code := run.ResolveRuntime(cfg, resolved.selection, resolved.backend, resolved.verify, lg)
 	if runtime != nil {
-		runtime.Herdr = resolved.herdr
+		bindLaunchBackend(runtime, resolved)
 	}
 	return runtime, code
 }
@@ -111,7 +112,7 @@ func resolveTUILaunchRuntimeForTarget(projectRoot, session, target string, cfg *
 	if err != nil {
 		return nil, fmt.Errorf("runtime backend: %w", err)
 	}
-	return &run.Runtime{
+	runtime := &run.Runtime{
 		Info: &fanoutruntime.Info{
 			Session:     session,
 			Target:      target,
@@ -122,7 +123,9 @@ func resolveTUILaunchRuntimeForTarget(projectRoot, session, target string, cfg *
 		Herdr:            resolved.herdr,
 		BackendSelection: resolved.selection,
 		VerifyBackend:    resolved.verify,
-	}, nil
+	}
+	bindLaunchBackend(runtime, resolved)
+	return runtime, nil
 }
 
 // resolveLaunchBackend is the shared composition step for CLI and TUI launch
@@ -146,7 +149,7 @@ func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.
 	if validateErr := validateLaunchBackend(cfg, selection, inputs); validateErr != nil {
 		return launchBackendResolution{}, validateErr
 	}
-	runtimeBackend, ownedHerdr, err := constructLaunchRuntimeBackend(cfg, selection.Name, inputs)
+	runtimeBackend, ownedHerdr, prepare, err := constructLaunchRuntimeBackend(cfg, selection.Name, inputs)
 	if err != nil {
 		return launchBackendResolution{}, err
 	}
@@ -154,8 +157,30 @@ func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.
 		selection: selection,
 		backend:   runtimeBackend,
 		herdr:     ownedHerdr,
+		prepare:   prepare,
 		verify:    backendSelectionVerifier(selection, inputs),
 	}, nil
+}
+
+func bindLaunchBackend(runtime *run.Runtime, resolved launchBackendResolution) {
+	runtime.Herdr = resolved.herdr
+	if resolved.prepare == nil {
+		return
+	}
+	var once sync.Once
+	var prepareErr error
+	runtime.PrepareBackend = func() error {
+		once.Do(func() {
+			owned, err := resolved.prepare()
+			if err != nil {
+				prepareErr = err
+				return
+			}
+			runtime.Backend = owned.Backend()
+			runtime.Herdr = owned
+		})
+		return prepareErr
+	}
 }
 
 // backendSelectionVerifier closes over the immutable non-state resolver inputs
@@ -293,23 +318,22 @@ func constructLaunchRuntimeBackend(
 	cfg *cliflags.Config,
 	name backend.Name,
 	inputs runtimeBackendInputs,
-) (backend.Backend, *herdrrun.OwnedSession, error) {
+) (backend.Backend, *herdrrun.OwnedSession, func() (*herdrrun.OwnedSession, error), error) {
 	if name != backend.Herdr {
 		runtimeBackend, err := constructRuntimeBackend(name, inputs)
-		return runtimeBackend, nil, err
+		return runtimeBackend, nil, nil, err
 	}
 	if cfg.DryRun {
-		return herdrrun.NewPreview(), nil, nil
+		return herdrrun.NewPreview(), nil, nil, nil
 	}
-	identity, err := worktree.ResolveRepoIdentity(context.Background(), inputs.projectRoot)
-	if err != nil {
-		return nil, nil, err
+	prepare := func() (*herdrrun.OwnedSession, error) {
+		identity, err := worktree.ResolveRepoIdentity(context.Background(), inputs.projectRoot)
+		if err != nil {
+			return nil, err
+		}
+		return herdrrun.EnsureOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
 	}
-	owned, err := herdrrun.EnsureOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
-	if err != nil {
-		return nil, nil, err
-	}
-	return owned.Backend(), owned, nil
+	return herdrrun.NewPreview(), nil, prepare, nil
 }
 
 func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) runtimeBackendInputs {

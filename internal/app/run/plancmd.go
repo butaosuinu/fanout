@@ -168,8 +168,7 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 		}
 		return TaskExecutionResult{}, exitcode.OK
 	}
-	if err := validateTaskAgents(cliCfg, plan.Targets, plan.LimitDeferred); err != nil {
-		lg.Err("%s", err.Error())
+	if !prepareTaskLaunch(cliCfg, plan, rt, lg) {
 		return TaskExecutionResult{}, exitcode.Env
 	}
 	if code := copyLivePlanSpec(); code != exitcode.OK {
@@ -226,6 +225,21 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 		return result, exitcode.Env
 	}
 	return result, exitcode.OK
+}
+
+func prepareTaskLaunch(cfg *cliflags.Config, plan taskPlan, rt *Runtime, lg *log.Logger) bool {
+	if err := validateTaskAgents(cfg, plan.Targets, plan.LimitDeferred); err != nil {
+		lg.Err("%s", err.Error())
+		return false
+	}
+	if len(plan.Targets) == 0 {
+		return true
+	}
+	if err := rt.PrepareLaunchBackend(); err != nil {
+		lg.Err("runtime backend: %v", err)
+		return false
+	}
+	return true
 }
 
 // CLIConfig projects the plan config onto the shared cliflags.Config the

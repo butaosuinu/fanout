@@ -14,6 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/app/watch"
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/fanset"
@@ -137,6 +138,9 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 	if err != nil {
 		return panelaunch.Result{}, err
 	}
+	if err := validateStandaloneIssueAgent(cfg, issue.Number); err != nil {
+		return panelaunch.Result{}, err
+	}
 	store, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
 	if code != exitcode.OK {
 		return panelaunch.Result{}, bufferedLaunchError(stdout, stderr, "load fanout state")
@@ -146,13 +150,8 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 			_ = recorder.Unlock()
 		}()
 	}
-	if rt.VerifyBackend != nil {
-		if err := rt.VerifyBackend(cfg.ParentRef, store); err != nil {
-			return panelaunch.Result{}, fmt.Errorf("runtime backend: %w", err)
-		}
-	}
-	if hasRecordedIssuePane(projectRoot, store, issue.Number) {
-		return panelaunch.Result{}, watch.ErrAlreadyFanned
+	if err := admitStandaloneIssueRuntime(projectRoot, cfg, rt, store, issue.Number); err != nil {
+		return panelaunch.Result{}, err
 	}
 	req := panelaunch.NewWatchRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Herdr: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
@@ -162,6 +161,35 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 	}
 	result.Notice = combinedLaunchNotice([]string{result.Notice}, bufferedLaunchNotice(stderr))
 	return result, nil
+}
+
+func admitStandaloneIssueRuntime(projectRoot string, cfg *cliflags.Config, rt *run.Runtime, store state.Store, issueNum int) error {
+	if rt.VerifyBackend != nil {
+		if err := rt.VerifyBackend(cfg.ParentRef, store); err != nil {
+			return fmt.Errorf("runtime backend: %w", err)
+		}
+	}
+	if hasRecordedIssuePane(projectRoot, store, issueNum) {
+		return watch.ErrAlreadyFanned
+	}
+	if err := rt.PrepareLaunchBackend(); err != nil {
+		return fmt.Errorf("runtime backend: %w", err)
+	}
+	return nil
+}
+
+func validateStandaloneIssueAgent(cfg *cliflags.Config, issueNum int) error {
+	agentName := cfg.EffectiveAgentForIssue(issueNum)
+	if agentName == "" {
+		return fmt.Errorf("#%d: agent is required", issueNum)
+	}
+	if err := agent.ValidateKnown(agentName); err != nil {
+		return err
+	}
+	if cfg.DryRun {
+		return nil
+	}
+	return agent.ValidateInstalled(agentName)
 }
 
 func launchParentIssueFanoutWithPlanInput(projectRoot, session, commandName string, cfg *cliflags.Config, input run.IssuePlanInput) (watch.ParentLaunchResult, error) {

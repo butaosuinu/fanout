@@ -664,7 +664,7 @@ func TestHerdrCoordinatorIdentityMismatchFailsBeforeStateRow(t *testing.T) {
 		result, err := mutate(req)
 		if err == nil && req.Kind == herdrrun.WorkspaceCreate {
 			intent := state.HerdrIntent{
-				WorktreePath: repo, Session: runtime.launchRoute.Session,
+				WorktreePath: result.WorkspaceObservation.CWD, Session: runtime.launchRoute.Session,
 				SocketPath: runtime.launchRoute.SocketPath,
 				Resource:   stateResource(result.WorkspaceObservation),
 			}
@@ -691,6 +691,53 @@ func TestHerdrCoordinatorIdentityMismatchFailsBeforeStateRow(t *testing.T) {
 	}
 	if len(locked.Panes) != 0 {
 		t.Fatalf("coordinator row was recorded before exact identity verification: %+v", locked.Panes)
+	}
+}
+
+func TestHerdrCoordinatorRetriesTransientIdentityObservation(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrLaunchRuntime{}
+	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
+	runtime.launchRoute = herdrrun.OwnedLaunchRoute{
+		Session: "fanout-test", SocketPath: "/private/tmp/fanout-test/herdr.sock",
+		LauncherPath: "/owned/fanout",
+	}
+	mutate := runtime.mutate
+	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+		result, err := mutate(req)
+		if err == nil && req.Kind == herdrrun.WorkspaceCreate {
+			intent := state.HerdrIntent{
+				WorktreePath: result.WorkspaceObservation.CWD, Session: runtime.launchRoute.Session,
+				SocketPath: runtime.launchRoute.SocketPath,
+				Resource:   stateResource(result.WorkspaceObservation),
+			}
+			runtime.processInfo = testHerdrLauncherProcess(intent, runtime.launchRoute.LauncherPath)
+			runtime.live = []backend.LivePane{testHerdrIdlePane(intent)}
+		}
+		return result, err
+	}
+	processCalls := 0
+	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+		processCalls++
+		if processCalls == 1 {
+			return herdrrun.PaneProcessInfo{}, retryableHerdrObservationError{}
+		}
+		return runtime.processInfo, nil
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	launcher := &Launcher{
+		Cfg: &cliflags.Config{}, Log: log.NewWith(io.Discard, io.Discard, false),
+		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Herdr: runtime,
+	}
+	intent, err := launcher.realizeHerdrCoordinator(
+		context.Background(), Request{ParentRef: "425"}, locked, runtime.launchRoute,
+	)
+	if err != nil || intent.ID == "" || processCalls != 2 {
+		t.Fatalf("coordinator realization = intent %+v, calls %d, err %v; want one successful retry", intent, processCalls, err)
 	}
 }
 

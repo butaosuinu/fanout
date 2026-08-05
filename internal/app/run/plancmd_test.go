@@ -1,6 +1,7 @@
 package run
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,6 +96,34 @@ func TestPlanRerunSpecArgUsesCopiedPlanSlugForLiveRuns(t *testing.T) {
 	}
 	if got := planRerunSpecArg(PlanCommandConfig{SpecArg: "/tmp/plan.json"}, spec); got != "launch-plan" {
 		t.Fatalf("live rerun spec arg = %q, want copied plan slug", got)
+	}
+}
+
+func TestPrepareTaskLaunchDefersBackendUntilTargetAndAgentValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		agentName string
+		targets   []planspec.Task
+		wantOK    bool
+		wantCalls int
+	}{
+		{name: "no targets", agentName: "claude", wantOK: true},
+		{name: "invalid agent", agentName: "unknown", targets: []planspec.Task{{ID: "api"}}, wantOK: false},
+		{name: "valid target", agentName: "claude", targets: []planspec.Task{{ID: "api"}}, wantOK: true, wantCalls: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			rt := &Runtime{PrepareBackend: func() error {
+				calls++
+				return nil
+			}}
+			cfg := &cliflags.Config{Agent: test.agentName, DryRun: true}
+			got := prepareTaskLaunch(cfg, taskPlan{Targets: test.targets}, rt, log.NewWith(io.Discard, io.Discard, false))
+			if got != test.wantOK || calls != test.wantCalls {
+				t.Fatalf("prepareTaskLaunch() = %t, calls %d; want %t, %d", got, calls, test.wantOK, test.wantCalls)
+			}
+		})
 	}
 }
 

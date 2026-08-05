@@ -40,6 +40,17 @@ type Runtime struct {
 	// launch lock. cmd closes over the raw CLI/env/config inputs so backend
 	// selection and construction remain in the composition root.
 	VerifyBackend func(parent string, store state.Store) error
+	// PrepareBackend acquires live backend resources after planning confirms at
+	// least one launch target and validates its effective agent.
+	PrepareBackend func() error
+}
+
+// PrepareLaunchBackend acquires live resources for the selected backend.
+func (r *Runtime) PrepareLaunchBackend() error {
+	if r == nil || r.PrepareBackend == nil {
+		return nil
+	}
+	return r.PrepareBackend()
 }
 
 func shouldBindRuntimeKeys(dryRun bool, created int, runtimeBackend backend.Name) bool {

@@ -186,11 +186,7 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		lg.Ok("all %d OPEN sub-issue(s) already have a fanout pane. nothing to do.", len(plan.AlreadyFanned))
 		return IssueExecutionResult{Plan: plan}, exitcode.OK
 	}
-	if err := validateIssueAgents(launchCfg, plan.Targets, plan.LimitDeferred); err != nil {
-		lg.Err("%s", err.Error())
-		return IssueExecutionResult{Plan: plan}, exitcode.Env
-	}
-	if len(plan.Targets) > 0 && !callIssueReady(ready, store, recorder, lg) {
+	if !prepareIssueLaunch(launchCfg, plan, rt, store, recorder, ready, lg) {
 		return IssueExecutionResult{Plan: plan}, exitcode.Env
 	}
 
@@ -249,6 +245,21 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		return IssueExecutionResult{CreatedIssueNums: result.CreatedNums, CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices, Plan: plan}, exitcode.Env
 	}
 	return IssueExecutionResult{CreatedIssueNums: result.CreatedNums, CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices, Plan: plan}, exitcode.OK
+}
+
+func prepareIssueLaunch(cfg *cliflags.Config, plan Plan, rt *Runtime, store state.Store, recorder *state.LockedStore, ready IssueReadyFunc, lg *log.Logger) bool {
+	if err := validateIssueAgents(cfg, plan.Targets, plan.LimitDeferred); err != nil {
+		lg.Err("%s", err.Error())
+		return false
+	}
+	if len(plan.Targets) == 0 {
+		return true
+	}
+	if err := rt.PrepareLaunchBackend(); err != nil {
+		lg.Err("runtime backend: %v", err)
+		return false
+	}
+	return callIssueReady(ready, store, recorder, lg)
 }
 
 func callIssueReady(ready IssueReadyFunc, store state.Store, recorder *state.LockedStore, lg *log.Logger) bool {
