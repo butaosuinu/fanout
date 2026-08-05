@@ -614,9 +614,14 @@ entry は worktree ごとに持ち、1 回の収集が見つけた集合で丸�
 安定した entry まで捨て、次の tick で全 file の git process が走り直す。
 git は鍵を作った後に file を読み直すので、計測後に鍵を取り直して
 変わっていた場合はキャッシュしない(その pass の統計は返す)。
-cleanup された worktree は二度と巡回されないので、覚えておく worktree 数に
-上限を設け、最も長く巡回していないものから捨てる — Session の作成と cleanup は
-通常の運用ループであり、放置すると常駐 TUI / poller のメモリが増え続ける。
+cleanup された worktree は二度と巡回されないので、一定時間巡回されなかった
+worktree を捨てる — Session の作成と cleanup は通常の運用ループであり、
+放置すると常駐 TUI / poller のメモリが増え続ける。
+上限を worktree 数にしないのは、監視対象が上限を超えると次に必要な entry から
+順に追い出して全 miss になり、直したはずの飢餓が再発するため。
+未追跡 file の binary 判定は `core.bigFileThreshold` を command line で固定する
+— 結果をキャッシュするので、稼働中の設定変更で判定が変わると古い entry が
+答え続ける。
 collector を tick ごとに作り直すとキャッシュも作り直されるので、
 web の `poller` と TUI の `model` はどちらも `sessionview.GitWorktreeStat` を
 1 度だけ構築して使い回す。

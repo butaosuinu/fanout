@@ -1,6 +1,6 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { memo } from "react";
-import { diffTotals, fileBase, groupDiffFilesByDir } from "./diff";
+import { diffTotals, fileBase, fileDir, groupDiffFilesByDir } from "./diff";
 import type { DiffFileEntry } from "../../transport/types";
 import { IconButton, IconFold, IconUnfold } from "../../ui/icons";
 
@@ -18,13 +18,25 @@ function Stat({ file }: { file: DiffFileEntry }) {
   );
 }
 
+/* 移動元のうち「変わったほう」を出す。ディレクトリ移動なら旧ディレクトリ、
+ * 同じディレクトリ内の改名なら旧ファイル名。両側に basename を出すと、
+ * components/App.tsx → app/App.tsx が `App.tsx ← App.tsx` になって
+ * 移動元を示せない。 */
+function renameOrigin(file: DiffFileEntry): string | null {
+  if (!file.oldPath) return null;
+  const from = fileDir(file.oldPath);
+  if (from === fileDir(file.path)) return fileBase(file.oldPath);
+  return from || file.oldPath;
+}
+
 /* 移動した file は basename だけだと移動元が消える — group 見出しは移動先の
  * ディレクトリなので、行にも移動元を出さないと「どこから来たか」が失われる。 */
 function FileRowBody({ file }: { file: DiffFileEntry }) {
+  const from = renameOrigin(file);
   return (
     <>
       <span className="diff-file-name">{fileBase(file.path)}</span>
-      {file.oldPath ? <span className="diff-file-was">← {fileBase(file.oldPath)}</span> : null}
+      {from ? <span className="diff-file-was">← {from}</span> : null}
       <Stat file={file} />
     </>
   );

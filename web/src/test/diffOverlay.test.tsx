@@ -619,7 +619,10 @@ describe("diff オーバーレイ", () => {
 
     const overlay = await openOverlay(user);
     const sidebar = await within(overlay).findByRole("region", { name: "変更ファイル" });
-    expect(within(sidebar).getByRole("listitem").textContent).toBe("App.tsx← App.tsx+1-1");
+    // 同名クロスディレクトリ移動でも移動元が分かる(旧ディレクトリを出す)。
+    expect(within(sidebar).getByRole("listitem").textContent).toBe(
+      "App.tsx← web/src/components/+1-1",
+    );
     expect(
       within(sidebar).getByRole("button", {
         name: "web/src/components/App.tsx → web/src/app/App.tsx",

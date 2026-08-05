@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/errs"
 	"github.com/butaosuinu/fanout/internal/infra/execx"
@@ -85,20 +85,32 @@ type Runner struct {
 // valid and simply disables memoization.
 type UntrackedStatCache struct {
 	mu         sync.Mutex
-	byWorktree map[string]map[string]FileStat
-	swept      []string // least-recently swept first
+	byWorktree map[string]untrackedWorktreeEntry
+	now        func() time.Time
 }
 
-// untrackedCacheWorktrees bounds how many worktrees the cache remembers. A
-// cleaned-up worktree is never swept again, so without this its entries would
-// live until the process exits — and creating and cleaning up sessions is the
-// normal fanout loop. Evicting a whole cold worktree is safe in a way the old
-// per-entry cap was not: nothing live is dropped, and a worktree that comes
-// back simply re-measures once.
-const untrackedCacheWorktrees = 64
+type untrackedWorktreeEntry struct {
+	entries map[string]FileStat
+	swept   time.Time
+}
+
+// untrackedCacheTTL drops worktrees nobody sweeps any more. A cleaned-up
+// worktree is never collected again, so without this its entries would live
+// until the process exits — and creating and cleaning up sessions is the normal
+// fanout loop.
+//
+// The bound is time, not a worktree count: a count evicts by rank, so a
+// dashboard watching more worktrees than the cap would evict the very entry it
+// is about to need and miss on every single one. Anything still being swept is
+// refreshed far inside this window at the 2-second tick, so only genuinely
+// abandoned worktrees age out.
+const untrackedCacheTTL = 5 * time.Minute
 
 func NewUntrackedStatCache() *UntrackedStatCache {
-	return &UntrackedStatCache{byWorktree: map[string]map[string]FileStat{}}
+	return &UntrackedStatCache{
+		byWorktree: map[string]untrackedWorktreeEntry{},
+		now:        time.Now,
+	}
 }
 
 func (c *UntrackedStatCache) lookup(worktree, key string) (FileStat, bool) {
@@ -107,7 +119,7 @@ func (c *UntrackedStatCache) lookup(worktree, key string) (FileStat, bool) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	stat, ok := c.byWorktree[worktree][key]
+	stat, ok := c.byWorktree[worktree].entries[key]
 	return stat, ok
 }
 
@@ -120,17 +132,17 @@ func (c *UntrackedStatCache) replace(worktree string, entries map[string]FileSta
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.swept = slices.DeleteFunc(c.swept, func(s string) bool { return s == worktree })
+	now := c.now()
+	for path, entry := range c.byWorktree {
+		if now.Sub(entry.swept) > untrackedCacheTTL {
+			delete(c.byWorktree, path)
+		}
+	}
 	if len(entries) == 0 {
 		delete(c.byWorktree, worktree)
 		return
 	}
-	c.byWorktree[worktree] = entries
-	c.swept = append(c.swept, worktree)
-	for len(c.swept) > untrackedCacheWorktrees {
-		delete(c.byWorktree, c.swept[0])
-		c.swept = c.swept[1:]
-	}
+	c.byWorktree[worktree] = untrackedWorktreeEntry{entries: entries, swept: now}
 }
 
 // untrackedCacheKey identifies the file by worktree, path, file type, and
@@ -613,7 +625,12 @@ func untrackedFileInfo(path, rel string) (os.FileInfo, error) {
 // addedFileStat counts rel as a whole-file addition against /dev/null.
 func (r Runner) addedFileStat(path, rel string) (FileStat, error) {
 	out, code, err := r.gitExitCode(
-		"-C", path,
+		// Pin core.bigFileThreshold: it decides text vs binary without reading
+		// content, and this result is memoized, so leaving it to repo config
+		// would let a mid-run change flip the verdict while a cached entry keeps
+		// answering. Every file here is under the package's own 256 KiB ceiling,
+		// so git's default just means the content decides.
+		"-c", "core.bigFileThreshold=512m", "-C", path,
 		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
 		"--no-index", "--numstat", "-z", "--", "/dev/null", rel,
 	)

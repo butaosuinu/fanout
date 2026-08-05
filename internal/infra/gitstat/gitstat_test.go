@@ -1266,11 +1266,20 @@ func TestRunnerWorktreePatchOnlyCallsReadOnlyGitSubcommands(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "git-subcommands.log")
 	t.Setenv("FANOUT_GITSTAT_REAL_GIT", realGit)
 	t.Setenv("FANOUT_GITSTAT_LOG", logPath)
+	// The subcommand is the first word that is not a git-level option, so skip
+	// every leading flag — and the value of the ones that take one — rather than
+	// only -C. Iterating with `for` leaves "$@" intact for the exec below.
 	installGitstatShim(t, "git", `
-case "$1" in
-  -C) subcommand=$3 ;;
-  *) subcommand=$1 ;;
-esac
+skip=0
+subcommand=
+for arg in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$arg" in
+    -C|-c) skip=1 ;;
+    -*) ;;
+    *) subcommand=$arg; break ;;
+  esac
+done
 printf '%s\n' "$subcommand" >> "$FANOUT_GITSTAT_LOG"
 exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 `)
@@ -1516,28 +1525,46 @@ func TestUntrackedFileStatReturnsACacheKeyForAQuietFile(t *testing.T) {
 // live until the process exits. Creating and cleaning up sessions is the normal
 // fanout loop, so a long-running TUI or poller would grow without bound.
 func TestUntrackedStatCacheDropsWorktreesItStopsSweeping(t *testing.T) {
+	clock := time.Now()
 	cache := NewUntrackedStatCache()
-	for i := range untrackedCacheWorktrees + 10 {
-		cache.replace(fmt.Sprintf("/wt%d", i), map[string]FileStat{"k": {}})
-	}
-	if got := len(cache.byWorktree); got != untrackedCacheWorktrees {
-		t.Fatalf("cache remembers %d worktrees, want %d", got, untrackedCacheWorktrees)
-	}
-	if cache.size("/wt0") != 0 {
-		t.Fatal("the coldest worktree survived; the cache still grows without bound")
-	}
-	if cache.size(fmt.Sprintf("/wt%d", untrackedCacheWorktrees+9)) != 1 {
-		t.Fatal("the newest sweep was evicted instead of the coldest worktree")
-	}
+	cache.now = func() time.Time { return clock }
 
-	// 再 sweep した worktree は末尾へ回り、次の eviction の対象から外れる。
-	live := "/wt20"
-	cache.replace(live, map[string]FileStat{"k": {}})
-	for i := range 20 {
-		cache.replace(fmt.Sprintf("/later%d", i), map[string]FileStat{"k": {}})
+	cache.replace("/abandoned", map[string]FileStat{"k": {}})
+	cache.replace("/live", map[string]FileStat{"k": {}})
+
+	clock = clock.Add(untrackedCacheTTL + time.Minute)
+	cache.replace("/live", map[string]FileStat{"k": {}})
+
+	if cache.size("/abandoned") != 0 {
+		t.Fatal("a worktree nobody sweeps any more survived; the cache grows without bound")
 	}
-	if cache.size(live) != 1 {
-		t.Fatal("a worktree still being swept was evicted")
+	if cache.size("/live") != 1 {
+		t.Fatal("the worktree still being swept was dropped")
+	}
+}
+
+// Bounding by worktree count instead of age would evict by rank: a dashboard
+// watching more worktrees than the cap evicts the entry it is about to need and
+// misses on every one of them, which is the starvation the cache exists to fix.
+func TestUntrackedStatCacheKeepsEveryWorktreeItKeepsSweeping(t *testing.T) {
+	clock := time.Now()
+	cache := NewUntrackedStatCache()
+	cache.now = func() time.Time { return clock }
+
+	const worktrees = 200
+	for round := range 3 {
+		for i := range worktrees {
+			cache.replace(fmt.Sprintf("/wt%d", i), map[string]FileStat{"k": {}})
+		}
+		clock = clock.Add(2 * time.Second)
+		if round == 0 {
+			continue
+		}
+		for i := range worktrees {
+			if cache.size(fmt.Sprintf("/wt%d", i)) != 1 {
+				t.Fatalf("worktree %d missed on round %d; a rank-based bound would thrash", i, round)
+			}
+		}
 	}
 }
 
@@ -1975,5 +2002,5 @@ func installGitstatShim(t *testing.T, name, script string) {
 func (c *UntrackedStatCache) size(worktree string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.byWorktree[worktree])
+	return len(c.byWorktree[worktree].entries)
 }
