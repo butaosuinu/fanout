@@ -1727,6 +1727,45 @@ func TestRunnerWorktreeRecountsWhenGitattributesReclassifiesAFile(t *testing.T) 
 	}
 }
 
+// git collapses a nested checkout into one directory entry ("sub/"). Treating
+// it as a file fails the whole collection, so every dashboard row for the
+// worktree would report an error on every poll.
+func TestRunnerSkipsUntrackedNestedRepository(t *testing.T) {
+	repo := initPatchRepo(t)
+	sub := filepath.Join(repo, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init"}, {"config", "user.email", "test@example.com"}, {"config", "user.name", "Test User"},
+	} {
+		gitTest(t, sub, args...)
+	}
+	writeGitstatFile(t, sub, "inner.txt", []byte("inner\n"))
+	gitTest(t, sub, "add", "-A")
+	gitTest(t, sub, "commit", "-m", "inner")
+	writeGitstatFile(t, repo, "untracked.txt", []byte("one\n"))
+
+	summary, err := Runner{}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatalf("Worktree() = %v, want no error beside a nested checkout", err)
+	}
+	// The nested repo contributes nothing; the real untracked file still counts.
+	if summary.Additions != 1 || !summary.Dirty {
+		t.Fatalf("Worktree() = %+v, want +1/-0 dirty", summary)
+	}
+
+	patch, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatalf("WorktreePatch() = %v, want no error beside a nested checkout", err)
+	}
+	assertFileStat(t, patch.Files, FileStat{
+		Path:          "untracked.txt",
+		Additions:     1,
+		PatchIncluded: true,
+	})
+}
+
 func TestRunnerWorktreePatchIgnoresRepoRenameConfig(t *testing.T) {
 	for _, renames := range []string{"false", "copies"} {
 		t.Run("diff.renames="+renames, func(t *testing.T) {

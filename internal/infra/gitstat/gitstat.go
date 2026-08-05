@@ -433,6 +433,14 @@ func hasNestedRename(stats []FileStat) bool {
 	return false
 }
 
+// untrackedPaths lists the untracked files both surfaces measure.
+//
+// git collapses a nested checkout into a single directory entry with a trailing
+// slash ("sub/"). Its contents belong to that other repository, so there is
+// nothing here to diff — and treating it as a file would fail the whole
+// collection, turning every dashboard row for the worktree into an error on
+// every poll. Dropping it here keeps the session list and the diff viewer
+// agreeing about what the worktree contains.
 func (r Runner) untrackedPaths(path string) ([]string, error) {
 	out, err := r.git("-C", path, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
@@ -442,7 +450,14 @@ func (r Runner) untrackedPaths(path string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse untracked paths: %w", err)
 	}
-	return paths, nil
+	files := make([]string, 0, len(paths))
+	for _, rel := range paths {
+		if strings.HasSuffix(rel, "/") {
+			continue
+		}
+		files = append(files, rel)
+	}
+	return files, nil
 }
 
 // WorktreePatch returns the committed, staged, unstaged, and untracked changes

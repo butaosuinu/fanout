@@ -633,7 +633,11 @@ disk から読むので未 commit の編集も反映)。`$GIT_DIR/info/attribute
 collector を tick ごとに作り直すとキャッシュも作り直されるので、
 web の `poller` と TUI の `model` はどちらも `sessionview.GitWorktreeStat` を
 1 度だけ構築して使い回す。
-untracked file は `git ls-files --others --exclude-standard -z` で列挙し、
+untracked file は `git ls-files --others --exclude-standard -z` で列挙する。
+入れ子の checkout は git が末尾スラッシュ付きの directory entry(`sub/`)1 つに
+畳むので、これは両サーフェスとも skip する — 中身は別 repository のもので
+diff 対象がなく、file として扱うと収集全体が失敗して当該 worktree の行が
+毎 poll エラーになる。列挙した file は
 `/dev/null` に対する file ごとの `git diff --no-index` で統計と patch を得る。
 index から削除した tracked path と同名の untracked file は 1 file に統合する。
 同じ file type の replacement は merge-base blob を repository 外の一時 file に置き、
