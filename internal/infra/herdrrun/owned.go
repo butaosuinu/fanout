@@ -65,7 +65,8 @@ type OwnedSession struct {
 	LauncherPath     string
 	ControlPath      string
 
-	backend *Backend
+	backend          *Backend
+	processInspector paneProcessInspector
 }
 
 func (s *OwnedSession) Backend() *Backend {

@@ -3,6 +3,7 @@ package herdrrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,12 +13,15 @@ import (
 )
 
 type PaneProcess struct {
-	PID     int      `json:"pid"`
-	Name    string   `json:"name"`
-	Argv    []string `json:"argv"`
-	Argv0   string   `json:"argv0"`
-	Cmdline string   `json:"cmdline"`
-	CWD     string   `json:"cwd"`
+	PID          int      `json:"pid"`
+	ParentPID    int      `json:"-"`
+	ProcessGroup int      `json:"-"`
+	Executable   string   `json:"-"`
+	Name         string   `json:"name"`
+	Argv         []string `json:"argv"`
+	Argv0        string   `json:"argv0"`
+	Cmdline      string   `json:"cmdline"`
+	CWD          string   `json:"cwd"`
 }
 
 type PaneProcessInfo struct {
@@ -154,12 +158,22 @@ func (s *OwnedSession) ProcessInfo(ctx context.Context, paneID string) (PaneProc
 		return PaneProcessInfo{}, observationCommandError("herdr pane process-info", err)
 	}
 	var envelope paneProcessInfoEnvelope
-	if err := decodeOne(out, &envelope); err != nil || envelope.ID != "cli:pane:process_info" ||
+	if decodeErr := decodeOne(out, &envelope); decodeErr != nil || envelope.ID != "cli:pane:process_info" ||
 		envelope.Result == nil || envelope.Result.Type != "pane_process_info" ||
 		envelope.Result.ProcessInfo.PaneID != paneID {
 		return PaneProcessInfo{}, fmt.Errorf("herdr pane process-info returned an unexpected response")
 	}
-	return envelope.Result.ProcessInfo, nil
+	processInfo := envelope.Result.ProcessInfo
+	processes, err := s.inspectPaneProcesses(ctx, processInfo.ForegroundProcesses)
+	if err != nil {
+		wrapped := fmt.Errorf("inspect herdr pane process ancestry: %w", err)
+		if errors.Is(err, errPaneProcessChanged) || retryableCommandError(err) {
+			return PaneProcessInfo{}, retryableObservationError{err: wrapped}
+		}
+		return PaneProcessInfo{}, wrapped
+	}
+	processInfo.ForegroundProcesses = processes
+	return processInfo, nil
 }
 
 func (s *OwnedSession) RenameAgent(ctx context.Context, paneID, name string) error {

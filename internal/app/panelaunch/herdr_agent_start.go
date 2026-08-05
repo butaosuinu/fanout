@@ -268,14 +268,110 @@ func verifyHerdrLauncherProcess(
 }
 
 func verifyHerdrAgentProcess(info herdrrun.PaneProcessInfo, intent state.HerdrIntent) error {
-	for _, process := range info.ForegroundProcesses {
-		if process.CWD == intent.WorktreePath && process.Argv0 == intent.Launch.Executable &&
-			slices.Equal(process.Argv, intent.Launch.Args) &&
-			(process.PID == info.ForegroundProcessGroup || process.PID == info.ShellPID) {
-			return nil
-		}
+	root, processes, ok := herdrAgentProcessRoot(info, intent)
+	if !ok {
+		return fmt.Errorf("herdr agent process identity does not match launch intent")
+	}
+	if directHerdrAgentProcess(root, intent) {
+		return nil
+	}
+	if !interpreterHerdrAgentProcess(root, intent) {
+		return fmt.Errorf("herdr agent process identity does not match launch intent")
+	}
+	if countHerdrAgentDescendants(info, intent, root, processes) == 1 {
+		return nil
 	}
 	return fmt.Errorf("herdr agent process identity does not match launch intent")
+}
+
+func herdrAgentProcessRoot(
+	info herdrrun.PaneProcessInfo,
+	intent state.HerdrIntent,
+) (herdrrun.PaneProcess, map[int]herdrrun.PaneProcess, bool) {
+	if intent.Launch == nil || info.ShellPID <= 1 || info.ForegroundProcessGroup <= 1 {
+		return herdrrun.PaneProcess{}, nil, false
+	}
+	processes, ok := indexHerdrAgentProcesses(info.ForegroundProcesses)
+	if !ok {
+		return herdrrun.PaneProcess{}, nil, false
+	}
+	root, found := processes[info.ShellPID]
+	valid := found && root.ProcessGroup == info.ForegroundProcessGroup &&
+		root.CWD == intent.WorktreePath
+	return root, processes, valid
+}
+
+func indexHerdrAgentProcesses(
+	observed []herdrrun.PaneProcess,
+) (map[int]herdrrun.PaneProcess, bool) {
+	processes := make(map[int]herdrrun.PaneProcess, len(observed))
+	for _, process := range observed {
+		if !validObservedHerdrProcess(process) || processes[process.PID].PID != 0 {
+			return nil, false
+		}
+		processes[process.PID] = process
+	}
+	return processes, true
+}
+
+func validObservedHerdrProcess(process herdrrun.PaneProcess) bool {
+	return process.PID > 1 && process.ParentPID >= 0 &&
+		process.ProcessGroup > 1 && process.Executable != ""
+}
+
+func directHerdrAgentProcess(process herdrrun.PaneProcess, intent state.HerdrIntent) bool {
+	return process.Argv0 == intent.Launch.Executable && slices.Equal(process.Argv, intent.Launch.Args)
+}
+
+func interpreterHerdrAgentProcess(process herdrrun.PaneProcess, intent state.HerdrIntent) bool {
+	want := append([]string{intent.Launch.Executable}, intent.Launch.Args...)
+	return process.Argv0 != intent.Launch.Executable && slices.Equal(process.Argv, want)
+}
+
+func countHerdrAgentDescendants(
+	info herdrrun.PaneProcessInfo,
+	intent state.HerdrIntent,
+	root herdrrun.PaneProcess,
+	processes map[int]herdrrun.PaneProcess,
+) int {
+	matches := 0
+	for _, process := range processes {
+		if matchesHerdrAgentDescendant(info, intent, root, process, processes) {
+			matches++
+		}
+	}
+	return matches
+}
+
+func matchesHerdrAgentDescendant(
+	info herdrrun.PaneProcessInfo,
+	intent state.HerdrIntent,
+	root, process herdrrun.PaneProcess,
+	processes map[int]herdrrun.PaneProcess,
+) bool {
+	return process.PID != root.PID && process.CWD == intent.WorktreePath &&
+		process.ProcessGroup == info.ForegroundProcessGroup &&
+		slices.Equal(process.Argv, intent.Launch.Args) &&
+		herdrProcessDescendsFrom(process.PID, root.PID, processes)
+}
+
+func herdrProcessDescendsFrom(
+	pid, rootPID int,
+	processes map[int]herdrrun.PaneProcess,
+) bool {
+	seen := map[int]bool{}
+	for pid != rootPID {
+		if pid <= 1 || seen[pid] {
+			return false
+		}
+		seen[pid] = true
+		process, found := processes[pid]
+		if !found {
+			return false
+		}
+		pid = process.ParentPID
+	}
+	return true
 }
 
 func (l *Launcher) waitForHerdrAgent(

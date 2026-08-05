@@ -251,6 +251,8 @@ func validateHerdrLaunchBackend(cfg *cliflags.Config, inputs runtimeBackendInput
 	if cfg.TUIInteractive {
 		return backend.Unsupported(backend.Herdr, "interactive TUI launch in the current release wave")
 	}
+	// Per-item overrides are checked before --only/--skip selection. Narrowing
+	// this fail-closed gate to selected items is deferred to a follow-up issue.
 	if inputs.childPlanMode && configMayLaunchCodex(cfg) {
 		return backend.Unsupported(backend.Herdr, "Codex Plan Mode child launch until issue #554")
 	}

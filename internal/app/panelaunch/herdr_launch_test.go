@@ -425,7 +425,7 @@ func TestExactHerdrLaunchPaneRequiresProviderAndAcceptsOptionalSession(t *testin
 	}
 }
 
-func TestVerifyHerdrAgentProcessUsesArgv0AndArgsContract(t *testing.T) {
+func TestVerifyHerdrAgentProcessAcceptsDirectAndInterpreterChains(t *testing.T) {
 	intent := state.HerdrIntent{
 		WorktreePath: "/repo/worktree",
 		Launch: &state.HerdrLaunch{
@@ -436,7 +436,8 @@ func TestVerifyHerdrAgentProcessUsesArgv0AndArgsContract(t *testing.T) {
 	info := herdrrun.PaneProcessInfo{
 		ShellPID: 42, ForegroundProcessGroup: 42,
 		ForegroundProcesses: []herdrrun.PaneProcess{{
-			PID: 42, CWD: intent.WorktreePath,
+			PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: intent.Launch.Executable,
+			CWD:   intent.WorktreePath,
 			Argv0: intent.Launch.Executable, Argv: intent.Launch.Args,
 		}},
 	}
@@ -444,15 +445,62 @@ func TestVerifyHerdrAgentProcessUsesArgv0AndArgsContract(t *testing.T) {
 		t.Fatalf("exact process rejected: %v", err)
 	}
 
-	info.ForegroundProcesses[0].Argv0 = "/foreign/codex"
-	if err := verifyHerdrAgentProcess(info, intent); err == nil {
-		t.Fatal("foreign argv0 was accepted")
+	info.ForegroundProcesses = []herdrrun.PaneProcess{
+		{
+			PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: "/usr/bin/node",
+			CWD: intent.WorktreePath, Argv0: "/usr/bin/node",
+			Argv: append([]string{intent.Launch.Executable}, intent.Launch.Args...),
+		},
+		{
+			PID: 43, ParentPID: 42, ProcessGroup: 42, Executable: "/opt/lib/codex",
+			CWD: intent.WorktreePath, Argv0: "/opt/lib/codex", Argv: intent.Launch.Args,
+		},
+	}
+	if err := verifyHerdrAgentProcess(info, intent); err != nil {
+		t.Fatalf("interpreter process chain rejected: %v", err)
+	}
+}
+
+func TestVerifyHerdrAgentProcessRejectsAmbiguousOrForeignChains(t *testing.T) {
+	intent := state.HerdrIntent{
+		WorktreePath: "/repo/worktree",
+		Launch: &state.HerdrLaunch{
+			Executable: "/opt/bin/codex",
+			Args:       []string{"prompt with spaces"},
+		},
+	}
+	root := herdrrun.PaneProcess{
+		PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: "/usr/bin/node",
+		CWD: intent.WorktreePath, Argv0: "/usr/bin/node",
+		Argv: append([]string{intent.Launch.Executable}, intent.Launch.Args...),
+	}
+	child := herdrrun.PaneProcess{
+		PID: 43, ParentPID: 42, ProcessGroup: 42, Executable: "/opt/lib/codex",
+		CWD: intent.WorktreePath, Argv0: "/opt/lib/codex", Argv: intent.Launch.Args,
+	}
+	info := herdrrun.PaneProcessInfo{
+		ShellPID: 42, ForegroundProcessGroup: 42,
+		ForegroundProcesses: []herdrrun.PaneProcess{root, child},
 	}
 
-	info.ForegroundProcesses[0].Argv0 = intent.Launch.Executable
-	info.ForegroundProcesses[0].Argv = append([]string{intent.Launch.Executable}, intent.Launch.Args...)
+	foreignRoot := root
+	foreignRoot.Argv = []string{"/foreign/codex", intent.Launch.Args[0]}
+	info.ForegroundProcesses[0] = foreignRoot
 	if err := verifyHerdrAgentProcess(info, intent); err == nil {
-		t.Fatal("argv containing argv0 was accepted")
+		t.Fatal("foreign interpreter entrypoint was accepted")
+	}
+
+	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child}
+	info.ForegroundProcesses[1].ParentPID = 99
+	if err := verifyHerdrAgentProcess(info, intent); err == nil {
+		t.Fatal("unrelated child process was accepted")
+	}
+
+	duplicate := child
+	duplicate.PID = 44
+	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child, duplicate}
+	if err := verifyHerdrAgentProcess(info, intent); err == nil {
+		t.Fatal("ambiguous native children were accepted")
 	}
 }
 
