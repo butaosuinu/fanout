@@ -1649,6 +1649,37 @@ func TestRunnerWorktreePatchIgnoresRepoRenameLimit(t *testing.T) {
 	}
 }
 
+// core.bigFileThreshold calls a file binary without reading it. Pinning it on
+// only some commands would let files[] report a counted text file while the
+// patch says "Binary files ... differ", breaking the wire contract that binary
+// files carry no patch.
+func TestRunnerWorktreePatchIgnoresRepoBigFileThreshold(t *testing.T) {
+	repo := initPatchRepo(t)
+	gitTest(t, repo, "config", "core.bigFileThreshold", "1")
+	writeGitstatFile(t, repo, "untracked.txt", []byte("one\ntwo\n"))
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "untracked.txt",
+		Additions:     2,
+		PatchIncluded: true,
+	})
+	if strings.Contains(got.Patch, "Binary files") {
+		t.Fatalf("WorktreePatch().Patch = %q, want the counted text patch", got.Patch)
+	}
+
+	summary, err := Runner{}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Additions != 2 {
+		t.Fatalf("Worktree() = +%d, want +2 to match the file list", summary.Additions)
+	}
+}
+
 func TestRunnerWorktreePatchIgnoresRepoRenameConfig(t *testing.T) {
 	for _, renames := range []string{"false", "copies"} {
 		t.Run("diff.renames="+renames, func(t *testing.T) {

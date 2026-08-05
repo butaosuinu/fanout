@@ -186,6 +186,17 @@ func diffFlags(renames string) []string {
 	}
 }
 
+// gitPinArgs are the git-level options every worktree-content diff shares.
+// core.bigFileThreshold decides text vs binary without reading content, so
+// leaving it to repo config lets one surface call a file binary while another
+// counts its lines — and the untracked count is memoized, so a mid-run change
+// would keep answering from a stale verdict. Every file these commands touch is
+// under the package's own 256 KiB ceiling, so git's default just means the
+// content decides.
+func gitPinArgs() []string {
+	return []string{"-c", "core.bigFileThreshold=512m"}
+}
+
 func numStatArgs(base, renames string) []string {
 	return append(diffFlags(renames), "--numstat", "-z", base, "--")
 }
@@ -502,11 +513,11 @@ func (r Runner) WorktreePatch(path, baseRef string) (_ Patch, err error) {
 				out, err = r.trackedPathPatch(path, mergeBase, stat)
 			default:
 				var code int
-				out, code, err = r.gitExitCode(
+				out, code, err = r.gitExitCode(append(gitPinArgs(),
 					"-C", path,
 					"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
 					"--no-index", "--", "/dev/null", stat.Path,
-				)
+				)...)
 				if code == 1 {
 					err = nil
 				}
@@ -624,16 +635,12 @@ func untrackedFileInfo(path, rel string) (os.FileInfo, error) {
 
 // addedFileStat counts rel as a whole-file addition against /dev/null.
 func (r Runner) addedFileStat(path, rel string) (FileStat, error) {
-	out, code, err := r.gitExitCode(
-		// Pin core.bigFileThreshold: it decides text vs binary without reading
-		// content, and this result is memoized, so leaving it to repo config
-		// would let a mid-run change flip the verdict while a cached entry keeps
-		// answering. Every file here is under the package's own 256 KiB ceiling,
-		// so git's default just means the content decides.
-		"-c", "core.bigFileThreshold=512m", "-C", path,
+	args := append(gitPinArgs(),
+		"-C", path,
 		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
 		"--no-index", "--numstat", "-z", "--", "/dev/null", rel,
 	)
+	out, code, err := r.gitExitCode(args...)
 	if code == 1 {
 		err = nil
 	}
@@ -773,11 +780,11 @@ func (r Runner) modeClassReplacementPatch(
 	if err != nil {
 		return nil, FileStat{}, false, err
 	}
-	added, code, err := r.gitExitCode(
+	added, code, err := r.gitExitCode(append(gitPinArgs(),
 		"-C", path,
 		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
 		"--no-index", "--", "/dev/null", file.Path,
-	)
+	)...)
 	if code == 1 {
 		err = nil
 	}
@@ -959,10 +966,10 @@ func (r Runner) trackedPathPatch(path, mergeBase string, stat FileStat) ([]byte,
 }
 
 func replacementDiff(ctx context.Context, cwd string, numstat bool, oldPath, newPath string) ([]byte, int, error) {
-	args := []string{
+	args := append(gitPinArgs(),
 		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
 		"--no-index", "--src-prefix=", "--dst-prefix=",
-	}
+	)
 	if numstat {
 		args = append(args, "--numstat", "-z")
 	}
