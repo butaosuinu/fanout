@@ -54,6 +54,12 @@ func TestAdmitStandaloneIssueRuntimeDefersBackendForRecordedIssue(t *testing.T) 
 	if !errors.Is(err, watch.ErrAlreadyFanned) || prepareCalls != 0 {
 		t.Fatalf("admit recorded issue = %v, prepare calls %d; want already-fanned without ownership", err, prepareCalls)
 	}
+	err = admitStandaloneIssueRuntime(t.TempDir(), &cliflags.Config{
+		ParentRef: "425", Agent: "unknown", DryRun: true,
+	}, rt, state.Store{}, 425)
+	if err == nil || !strings.Contains(err.Error(), "unknown agent") || prepareCalls != 0 {
+		t.Fatalf("admit invalid agent = %v, prepare calls %d; want validation before ownership", err, prepareCalls)
+	}
 }
 
 func TestLaunchStandaloneIssuePaneReportsClaudeModeFallback(t *testing.T) {

@@ -138,9 +138,6 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 	if err != nil {
 		return panelaunch.Result{}, err
 	}
-	if err := validateStandaloneIssueAgent(cfg, issue.Number); err != nil {
-		return panelaunch.Result{}, err
-	}
 	store, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
 	if code != exitcode.OK {
 		return panelaunch.Result{}, bufferedLaunchError(stdout, stderr, "load fanout state")
@@ -171,6 +168,9 @@ func admitStandaloneIssueRuntime(projectRoot string, cfg *cliflags.Config, rt *r
 	}
 	if hasRecordedIssuePane(projectRoot, store, issueNum) {
 		return watch.ErrAlreadyFanned
+	}
+	if err := validateStandaloneIssueAgent(cfg, issueNum); err != nil {
+		return err
 	}
 	if err := rt.PrepareLaunchBackend(); err != nil {
 		return fmt.Errorf("runtime backend: %w", err)
