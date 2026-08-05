@@ -81,12 +81,9 @@ Two consequences worth spelling out. A herdr pane whose `terminal_id` changed â€
 
 `herdr integration install claude` / `codex` writes hooks into your agent configuration that report the agent's session identity to herdr, which is what makes herdr's session tracking and restore work. fanout never runs it for you â€” your agent configuration stays yours. It is an optional step; consider it if you rely on restore.
 
-Two plugin cautions:
+fanout-owned sessions isolate herdr's XDG directories and require an empty plugin registry before creating a workspace or worktree. Herdr notification and worktree-setup plugins do not run for fanout-owned launches. A non-empty registry makes the launch fail before mutation; use fanout's notification channels and hooks for those launches.
 
-- herdr notification plugins (ntfy, mobile push) fire alongside fanout's own `ntfy` / `slack` channels. Running both means duplicate notifications for the same events; keep one.
-- herdr worktree-setup plugins run on every worktree herdr creates or opens, including worktrees created by fanout. Keep plugin side effects idempotent.
-
-The two tools sit on different layers. herdr plugins approach parallel agent work from the runtime side: launching worktrees from GitHub or Jira, a diff-review sidebar, a multi-project sidebar, layout and notification plugins. fanout approaches it from the GitHub workflow side: parent/child fan-out, briefing generation, blocker waves, PR lifecycle, and review gates. herdr runs and displays panes; fanout plans the work, launches it on tmux or herdr, and tracks the GitHub side.
+The two tools sit on different layers. Outside fanout-owned sessions, herdr plugins approach parallel agent work from the runtime side: launching worktrees from GitHub or Jira, a diff-review sidebar, a multi-project sidebar, layout, and notifications. fanout approaches it from the GitHub workflow side: parent/child fan-out, briefing generation, blocker waves, PR lifecycle, and review gates. herdr runs and displays panes; fanout plans the work, launches it on tmux or herdr, and tracks the GitHub side.
 
 ## Older fanout binaries
 

@@ -103,13 +103,12 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 fanout はこれを代行しません。agent 設定の所有者はあなたです。
 任意の手順です。restore に頼るなら検討してください。
 
-plugin の注意が 2 点あります。
-
-- herdr の通知 plugin(ntfy、モバイル push)は、fanout 自身の `ntfy` / `slack` channel と並行して発火します。両方を有効にすると同じイベントの通知が二重になるので、どちらかに絞ってください。
-- herdr の worktree setup 系 plugin は、fanout が作成するものを含め、herdr が作成または open するすべての worktree で動きます。plugin の副作用は冪等にしてください。
+fanout-owned session は herdr の XDG directory を隔離し、workspace / worktree 作成前に plugin registry が空であることを要求します。
+fanout-owned launch では herdr の通知 plugin と worktree setup plugin は動きません。
+registry が空でない場合は mutation 前に launch が失敗します。通知と setup には fanout の channel と hook を使ってください。
 
 2 つのツールは別の層にあります。
-herdr の plugin は並列エージェント作業を runtime 側から扱います: GitHub や Jira を起点にした worktree 起動、diff レビューの sidebar、複数プロジェクトの sidebar、レイアウトや通知の plugin。
+fanout-owned session 以外では、herdr の plugin が並列エージェント作業を runtime 側から扱います: GitHub や Jira を起点にした worktree 起動、diff レビューの sidebar、複数プロジェクトの sidebar、レイアウトや通知の plugin。
 fanout は GitHub ワークフロー側から扱います: 親子の fan-out、briefing 生成、blocker の wave、PR のライフサイクル、レビューゲート。
 herdr が pane を実行・表示し、fanout が作業を計画して tmux または herdr で起動し、GitHub 側を追跡します。
 
