@@ -627,9 +627,13 @@ worktree を捨てる — Session の作成と cleanup は通常の運用ルー�
 破れる。
 未追跡キャッシュの鍵には worktree の `.gitattributes` 群の digest も含める —
 `*.dat binary` を足すと同じ内容が binary に変わるため、内容だけを鍵にすると
-古い行数を返し続ける。対象は worktree 内の `.gitattributes`(tracked / untracked、
-disk から読むので未 commit の編集も反映)。`$GIT_DIR/info/attributes` と
-`core.attributesFile` は machine-local な override なので対象外。
+古い行数を返し続ける。対象は worktree 内の `.gitattributes`(disk から読むので未 commit の編集も
+反映)。ignore された `.gitattributes` も含める — git は同じように適用するので、
+除外すると判定を決める file が digest から落ちる。symlink の `.gitattributes` は
+読まない: git も follow しない契約であり(gitattributes(5) Notes)、worktree は
+敵性入力なので `/dev/zero` や device へ向けられると poll が止まる。
+`$GIT_DIR/info/attributes` と `core.attributesFile` は machine-local な
+override なので対象外。
 collector を tick ごとに作り直すとキャッシュも作り直されるので、
 web の `poller` と TUI の `model` はどちらも `sessionview.GitWorktreeStat` を
 1 度だけ構築して使い回す。

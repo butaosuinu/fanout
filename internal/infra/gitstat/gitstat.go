@@ -165,32 +165,29 @@ func untrackedCacheKey(path, rel, attrs string, info os.FileInfo) (string, error
 // content, so without this an added `*.dat binary` line would leave a stale
 // text count answering until the file itself changed.
 //
-// Scope is the worktree's own .gitattributes files, tracked or not, read from
-// disk so uncommitted edits count. $GIT_DIR/info/attributes and
-// core.attributesFile are deliberately out of scope: they are machine-local
-// overrides this package does not otherwise follow.
+// Scope is the worktree's own .gitattributes files, read from disk so
+// uncommitted edits count. Ignored ones are included: git applies them all the
+// same, so --exclude-standard here would drop a file that still decides the
+// verdict. $GIT_DIR/info/attributes and core.attributesFile are deliberately
+// out of scope: they are machine-local overrides this package does not
+// otherwise follow.
 func (r Runner) attributesDigest(path string) (string, error) {
-	env := append(gitEnv(), "GIT_LITERAL_PATHSPECS=0")
-	out, err := execx.OutputContext(r.context(), r.Cwd, env, "git",
-		"-C", path, "ls-files", "-z", "--cached", "--others", "--exclude-standard",
-		"--", ":(top,glob)**/.gitattributes", ":(top,literal).gitattributes",
-	)
+	files, err := r.attributesFiles(path)
 	if err != nil {
 		return "", err
 	}
-	files, err := parseNULPaths(out)
-	if err != nil {
-		return "", fmt.Errorf("parse attributes paths: %w", err)
-	}
-	sort.Strings(files)
 	digest := sha256.New()
 	for _, rel := range files {
 		full, pathErr := containedPath(path, rel)
 		if pathErr != nil {
 			return "", pathErr
 		}
-		content, readErr := os.ReadFile(full)
-		if readErr != nil && !os.IsNotExist(readErr) {
+		// Read only what git reads. It does not follow a .gitattributes symlink
+		// (gitattributes(5) "Notes"), and a worktree is hostile input: pointing
+		// the name at /dev/zero or a device node would hang the poll here on a
+		// worktree git itself diffs fine.
+		content, readErr := readRegularFile(full)
+		if readErr != nil {
 			return "", fmt.Errorf("read attributes %q: %w", rel, readErr)
 		}
 		digest.Write([]byte(rel))
@@ -199,6 +196,24 @@ func (r Runner) attributesDigest(path string) (string, error) {
 		digest.Write([]byte{0})
 	}
 	return fmt.Sprintf("%x", digest.Sum(nil)), nil
+}
+
+// attributesFiles lists the worktree's .gitattributes files in a stable order.
+func (r Runner) attributesFiles(path string) ([]string, error) {
+	env := append(gitEnv(), "GIT_LITERAL_PATHSPECS=0")
+	out, err := execx.OutputContext(r.context(), r.Cwd, env, "git",
+		"-C", path, "ls-files", "-z", "--cached", "--others",
+		"--", ":(top,glob)**/.gitattributes", ":(top,literal).gitattributes",
+	)
+	if err != nil {
+		return nil, err
+	}
+	files, err := parseNULPaths(out)
+	if err != nil {
+		return nil, fmt.Errorf("parse attributes paths: %w", err)
+	}
+	sort.Strings(files)
+	return files, nil
 }
 
 // untrackedContent reads what git would compare: the link target for a symlink,
@@ -216,6 +231,22 @@ func untrackedContent(path, rel string, info os.FileInfo) ([]byte, error) {
 		return []byte(target), nil
 	}
 	return os.ReadFile(fullPath)
+}
+
+// readRegularFile returns the file's bytes, or nothing when the path is not a
+// regular file (a symlink, directory, device, or missing entry).
+func readRegularFile(full string) ([]byte, error) {
+	info, err := os.Lstat(full)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil
+	}
+	return os.ReadFile(full)
 }
 
 // diffFlags is the flag set every diff in this package shares. Each entry pins

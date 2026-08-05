@@ -1727,6 +1727,60 @@ func TestRunnerWorktreeRecountsWhenGitattributesReclassifiesAFile(t *testing.T) 
 	}
 }
 
+// git applies an ignored .gitattributes like any other, so leaving it out of
+// the digest would let the memoized count outlive the classification it was
+// measured under.
+func TestRunnerWorktreeRecountsWhenAnIgnoredGitattributesReclassifies(t *testing.T) {
+	repo := initPatchRepo(t)
+	writeGitstatFile(t, repo, ".gitignore", []byte(".gitattributes\n"))
+	gitTest(t, repo, "add", ".gitignore")
+	gitTest(t, repo, "commit", "-m", "ignore attributes")
+	writeGitstatFile(t, repo, "blob.dat", []byte("one\ntwo\nthree\n"))
+	runner := Runner{UntrackedCache: NewUntrackedStatCache()}
+
+	before, err := runner.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// blob.dat +3 と、feature 側で commit した .gitignore +1。
+	if before.Additions != 4 {
+		t.Fatalf("Worktree() = +%d, want +4 with blob.dat counted as text", before.Additions)
+	}
+
+	writeGitstatFile(t, repo, ".gitattributes", []byte("*.dat binary\n"))
+	after, err := runner.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// blob.dat is binary now, so only .gitignore's line remains. The ignored
+	// .gitattributes itself is never counted.
+	if after.Additions != 1 {
+		t.Fatalf("Worktree() = +%d, want +1 after the ignored attributes applied", after.Additions)
+	}
+}
+
+// git does not follow a .gitattributes symlink, and the worktree is hostile
+// input: following one into /dev/zero would hang the poll on a worktree git
+// diffs without trouble.
+func TestRunnerWorktreeDoesNotFollowAGitattributesSymlink(t *testing.T) {
+	repo := initPatchRepo(t)
+	writeGitstatFile(t, repo, "real-attrs", []byte("*.dat binary\n"))
+	if err := os.Symlink("real-attrs", filepath.Join(repo, ".gitattributes")); err != nil {
+		t.Fatal(err)
+	}
+	writeGitstatFile(t, repo, "blob.dat", []byte("one\ntwo\nthree\n"))
+
+	got, err := Runner{UntrackedCache: NewUntrackedStatCache()}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatalf("Worktree() = %v, want no error", err)
+	}
+	// blob.dat +3, real-attrs +1, and the symlink itself +1: git ignored the
+	// linked attributes, so nothing was reclassified as binary.
+	if got.Additions != 5 {
+		t.Fatalf("Worktree() = +%d, want +5 with the symlinked attributes ignored", got.Additions)
+	}
+}
+
 // git collapses a nested checkout into one directory entry ("sub/"). Treating
 // it as a file fails the whole collection, so every dashboard row for the
 // worktree would report an error on every poll.
