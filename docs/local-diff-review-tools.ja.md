@@ -589,8 +589,9 @@ tracked file の統計と path は
 どちらも `--ignore-submodules=none` を指定し、
 repository または user の `diff.ignoreSubmodules` で gitlink を隠さない。
 gitlink patch は `--submodule=short` で形式を固定する。
-`--find-renames` は明示する — `diff.renames` は repository 設定で無効化も
-copies 化もできるので、既定に任せると同じ worktree の行数が環境で変わる。
+`--find-renames` と `-l0` は明示する — `diff.renames` は repository 設定で
+無効化も copies 化もでき、`diff.renameLimit` は候補が増えると exhaustive
+detection を黙って打ち切る。既定に任せると同じ worktree の行数が環境で変わる。
 rename の patch は pathspec に移動元と移動先の両方を渡して取る。
 片側だけでは git が追加として描き、`files[]` が約束した rename と食い違う。
 `a` → `a/b` のように 2 つの path が入れ子になる rename は、祖先側の
@@ -599,6 +600,12 @@ rename の patch は pathspec に移動元と移動先の両方を渡して取�
 rename を削除と追加の 2 file として返す。
 `Runner.Worktree`(Session リストと詳細の `+X/-Y`)はこの収集を共有するので、
 一覧と diff ビュアーの行数は乖離しない — 縮退したときも両方が同時に縮退する。
+未追跡 file の統計は file ごとに git process を起こすが、`Runner.Worktree` は
+dashboard の 2 秒 tick から呼ばれる。`UntrackedStatCache` が size と mtime を
+キーに結果を保持し、変わっていない file を数え直さない
+(実測: 未追跡 500 file で初回 4.1 秒 → 以降 36 ミリ秒)。
+collector を poll ごとに作り直すとキャッシュも作り直されるので、
+`poller` は `sessionview.GitWorktreeStat` を 1 度だけ構築して使い回す。
 untracked file は `git ls-files --others --exclude-standard -z` で列挙し、
 `/dev/null` に対する file ごとの `git diff --no-index` で統計と patch を得る。
 index から削除した tracked path と同名の untracked file は 1 file に統合する。

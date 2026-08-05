@@ -97,6 +97,10 @@ type poller struct {
 	latestJSON []byte
 	lastKey    []byte
 
+	// worktreeStat is built once: it owns the untracked-file cache that keeps
+	// the 2-second tick off a per-file git process for every un-ignored file.
+	worktreeStat func(path, baseRef string) (sessionview.WorktreeStat, error)
+
 	cacheMu     sync.Mutex
 	cache       map[int]ghCacheEntry
 	branchCache map[string]branchPRCacheEntry
@@ -107,6 +111,7 @@ func newPollerBase(projectRoot string, h *hub) *poller {
 	return &poller{
 		projectRoot:   projectRoot,
 		hub:           h,
+		worktreeStat:  sessionview.GitWorktreeStat(projectRoot),
 		cheapInterval: defaultCheapInterval,
 		ghInterval:    defaultGHInterval,
 		waveInterval:  defaultWaveInterval,
@@ -488,7 +493,7 @@ func (p *poller) build() sessionview.Snapshot {
 		IssuePRs:     p.issuePRsFromCache,
 		BranchPRs:    p.branchPRsFromCache,
 		Waves:        p.wavesFromCache,
-		WorktreeStat: sessionview.GitWorktreeStat(p.projectRoot),
+		WorktreeStat: p.worktreeStat,
 		Now:          time.Now,
 	})
 }

@@ -248,8 +248,12 @@ func resolvePath(path string) string {
 // GitWorktreeStat returns a collector for per-pane worktree diff/dirty state.
 // baseRef is the pane's recorded base branch; gitstat diffs against its
 // merge-base ("" falls back to origin/HEAD, then HEAD).
+//
+// The returned collector owns an untracked-file cache, so a caller that polls
+// should build it once and reuse it. Rebuilding it per poll is correct but
+// pays the full per-file count every time.
 func GitWorktreeStat(projectRoot string) func(path, baseRef string) (WorktreeStat, error) {
-	runner := gitstat.Runner{Cwd: projectRoot}
+	runner := gitstat.Runner{Cwd: projectRoot, UntrackedCache: gitstat.NewUntrackedStatCache()}
 	return func(path, baseRef string) (WorktreeStat, error) {
 		stat, err := runner.Worktree(path, baseRef)
 		if err != nil {

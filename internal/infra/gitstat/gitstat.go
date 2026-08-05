@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/butaosuinu/fanout/internal/core/errs"
@@ -54,16 +55,72 @@ type Runner struct {
 	Context       context.Context
 	MaxFiles      int
 	MaxPatchBytes int
+	// UntrackedCache is optional. Supply one when the same Runner keeps
+	// re-measuring a worktree, as the dashboard poller does.
+	UntrackedCache *UntrackedStatCache
+}
+
+// untrackedCacheLimit bounds the cache. Reaching it drops everything rather
+// than evicting by age: the working set is one entry per untracked file per
+// worktree, so passing this means the caller changed shape, not that a few
+// entries went cold.
+const untrackedCacheLimit = 4096
+
+// UntrackedStatCache memoizes untracked-file counts across calls.
+//
+// Counting one untracked file costs a git process, and Runner.Worktree runs on
+// the dashboard's 2-second tick. Uncached, a worktree holding 500 un-ignored
+// files spends ~4.6s per poll and starves the refresh loop. Entries key on the
+// file's size and modification time — the same staleness signal git's own index
+// uses — so a file that changes is recounted and one that does not is free.
+//
+// The zero value is not usable; call NewUntrackedStatCache. A nil cache is
+// valid and simply disables memoization.
+type UntrackedStatCache struct {
+	mu      sync.Mutex
+	entries map[string]FileStat
+}
+
+func NewUntrackedStatCache() *UntrackedStatCache {
+	return &UntrackedStatCache{entries: make(map[string]FileStat)}
+}
+
+func (c *UntrackedStatCache) lookup(key string) (FileStat, bool) {
+	if c == nil {
+		return FileStat{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	stat, ok := c.entries[key]
+	return stat, ok
+}
+
+func (c *UntrackedStatCache) store(key string, stat FileStat) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) >= untrackedCacheLimit {
+		clear(c.entries)
+	}
+	c.entries[key] = stat
+}
+
+func untrackedCacheKey(path, rel string, info os.FileInfo) string {
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%d", path, rel, info.Size(), info.ModTime().UnixNano())
 }
 
 // diffFlags is the flag set every diff in this package shares. Each entry pins
 // a behavior a repo config knob could otherwise change: --find-renames defeats
-// diff.renames (which can switch detection off or widen it to copies), and
-// --no-ext-diff / --no-textconv pin the bytes being compared.
+// diff.renames (which can switch detection off or widen it to copies), -l0
+// defeats diff.renameLimit (which silently drops exhaustive detection and hands
+// back delete+add pairs), and --no-ext-diff / --no-textconv pin the bytes being
+// compared.
 func diffFlags(renames string) []string {
 	return []string{
 		"--no-ext-diff", "--no-textconv", "--no-color",
-		renames, "--ignore-submodules=none",
+		renames, "-l0", "--ignore-submodules=none",
 	}
 }
 
@@ -88,6 +145,13 @@ func (r Runner) Worktree(path, baseRef string) (Stat, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return Stat{}, fmt.Errorf("worktree path is empty")
+	}
+	// The collection reads the worktree directly, so a Cwd-relative path has to
+	// be resolved the same way WorktreePatch resolves it — git would take it
+	// from Cwd while os.Lstat would take it from the process working directory.
+	path, err := r.resolveWorktreePath(path)
+	if err != nil {
+		return Stat{}, err
 	}
 
 	stat, diffErr := r.worktreeStat(path, r.diffBase(path, baseRef))
@@ -436,31 +500,40 @@ type patchFile struct {
 func (r Runner) untrackedFileStat(path, rel string) (_ FileStat, err error) {
 	defer errs.Wrap(&err, "untracked file %q", rel)
 
-	size, err := untrackedFileSize(path, rel)
+	info, err := untrackedFileInfo(path, rel)
 	if err != nil {
 		return FileStat{}, err
 	}
-	if size > patchFileLimit {
+	if info.Size() > patchFileLimit {
 		return FileStat{Path: rel, OmittedReason: "tooLarge"}, nil
 	}
-	return r.addedFileStat(path, rel)
+	key := untrackedCacheKey(path, rel, info)
+	if stat, ok := r.UntrackedCache.lookup(key); ok {
+		return stat, nil
+	}
+	stat, err := r.addedFileStat(path, rel)
+	if err != nil {
+		return FileStat{}, err
+	}
+	r.UntrackedCache.store(key, stat)
+	return stat, nil
 }
 
-// untrackedFileSize rejects anything that is not a regular file or a symlink —
+// untrackedFileInfo rejects anything that is not a regular file or a symlink —
 // the only shapes git will diff against /dev/null.
-func untrackedFileSize(path, rel string) (int64, error) {
+func untrackedFileInfo(path, rel string) (os.FileInfo, error) {
 	fullPath, err := containedPath(path, rel)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	info, err := os.Lstat(fullPath)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
-		return 0, errors.New("not a regular file or symlink")
+		return nil, errors.New("not a regular file or symlink")
 	}
-	return info.Size(), nil
+	return info, nil
 }
 
 // addedFileStat counts rel as a whole-file addition against /dev/null.
