@@ -1478,16 +1478,16 @@ func TestRunnerWorktreeRecountsWhenContentChangesUnderTheSameStat(t *testing.T) 
 func TestUntrackedFileKeyNowFollowsCurrentContent(t *testing.T) {
 	repo := t.TempDir()
 	writeGitstatFile(t, repo, "u.txt", []byte("one\n"))
-	before, err := untrackedFileKeyNow(repo, "u.txt")
+	before, err := untrackedFileKeyNow(repo, "u.txt", "attrs")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if same, sameErr := untrackedFileKeyNow(repo, "u.txt"); sameErr != nil || same != before {
+	if same, sameErr := untrackedFileKeyNow(repo, "u.txt", "attrs"); sameErr != nil || same != before {
 		t.Fatalf("untrackedFileKeyNow() = %q, %v on an unchanged file, want %q", same, sameErr, before)
 	}
 
 	writeGitstatFile(t, repo, "u.txt", []byte("two\n"))
-	after, err := untrackedFileKeyNow(repo, "u.txt")
+	after, err := untrackedFileKeyNow(repo, "u.txt", "attrs")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1498,7 +1498,7 @@ func TestUntrackedFileKeyNowFollowsCurrentContent(t *testing.T) {
 	if err := os.Remove(filepath.Join(repo, "u.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if gone, goneErr := untrackedFileKeyNow(repo, "u.txt"); goneErr == nil {
+	if gone, goneErr := untrackedFileKeyNow(repo, "u.txt", "attrs"); goneErr == nil {
 		t.Fatalf("untrackedFileKeyNow() = %q on a removed file, want an error", gone)
 	}
 }
@@ -1509,7 +1509,7 @@ func TestUntrackedFileStatReturnsACacheKeyForAQuietFile(t *testing.T) {
 	repo := initPatchRepo(t)
 	writeGitstatFile(t, repo, "untracked.txt", []byte("one\n"))
 
-	stat, key, err := Runner{}.untrackedFileStat(repo, "untracked.txt")
+	stat, key, err := Runner{}.untrackedFileStat(repo, "untracked.txt", "attrs")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1677,6 +1677,53 @@ func TestRunnerWorktreePatchIgnoresRepoBigFileThreshold(t *testing.T) {
 	}
 	if summary.Additions != 2 {
 		t.Fatalf("Worktree() = +%d, want +2 to match the file list", summary.Additions)
+	}
+}
+
+// The tracked numstat decides text vs binary too, so leaving it unpinned would
+// turn ordinary tracked text files into -/- rows on both surfaces.
+func TestRunnerWorktreePatchIgnoresRepoBigFileThresholdForTrackedFiles(t *testing.T) {
+	repo := initPatchRepo(t)
+	gitTest(t, repo, "config", "core.bigFileThreshold", "1")
+	writeGitstatFile(t, repo, "tracked.txt", []byte("one\ntwo\nthree\n"))
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "tracked.txt",
+		Additions:     2,
+		PatchIncluded: true,
+	})
+	if strings.Contains(got.Patch, "Binary files") {
+		t.Fatalf("WorktreePatch().Patch = %q, want the counted text patch", got.Patch)
+	}
+}
+
+// .gitattributes reclassifies content in place, so a cache keyed on content
+// alone would keep serving a text count after `*.dat binary` is added.
+func TestRunnerWorktreeRecountsWhenGitattributesReclassifiesAFile(t *testing.T) {
+	repo := initPatchRepo(t)
+	writeGitstatFile(t, repo, "blob.dat", []byte("one\ntwo\nthree\n"))
+	runner := Runner{UntrackedCache: NewUntrackedStatCache()}
+
+	before, err := runner.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Additions != 3 {
+		t.Fatalf("Worktree() = +%d, want +3 counted as text", before.Additions)
+	}
+
+	writeGitstatFile(t, repo, ".gitattributes", []byte("*.dat binary\n"))
+	after, err := runner.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// blob.dat is binary now (0 lines); .gitattributes itself is 1 new line.
+	if after.Additions != 1 {
+		t.Fatalf("Worktree() = +%d, want +1 after the file was reclassified", after.Additions)
 	}
 }
 

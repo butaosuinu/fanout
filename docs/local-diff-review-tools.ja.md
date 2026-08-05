@@ -619,11 +619,17 @@ worktree を捨てる — Session の作成と cleanup は通常の運用ルー�
 放置すると常駐 TUI / poller のメモリが増え続ける。
 上限を worktree 数にしないのは、監視対象が上限を超えると次に必要な entry から
 順に追い出して全 miss になり、直したはずの飢餓が再発するため。
-`core.bigFileThreshold` は worktree の内容を見る `--no-index` の全経路で
-command line から固定する — 判定結果をキャッシュするので稼働中の設定変更で
-古い entry が答え続けるうえ、統計側だけ固定すると `files[]` が text として
-行数を返しているのに patch が `Binary files ... differ` になり、binary は
-patch を持たないという contract が破れる。
+`core.bigFileThreshold` はこの package の全 diff で command line から固定する
+— repo 設定次第で普通の text file が `-/-` の binary 行になり、判定結果を
+キャッシュするので稼働中の変更で古い entry が答え続ける。一部の経路だけ
+固定すると `files[]` が text として行数を返しているのに patch が
+`Binary files ... differ` になり、binary は patch を持たないという contract も
+破れる。
+未追跡キャッシュの鍵には worktree の `.gitattributes` 群の digest も含める —
+`*.dat binary` を足すと同じ内容が binary に変わるため、内容だけを鍵にすると
+古い行数を返し続ける。対象は worktree 内の `.gitattributes`(tracked / untracked、
+disk から読むので未 commit の編集も反映)。`$GIT_DIR/info/attributes` と
+`core.attributesFile` は machine-local な override なので対象外。
 collector を tick ごとに作り直すとキャッシュも作り直されるので、
 web の `poller` と TUI の `model` はどちらも `sessionview.GitWorktreeStat` を
 1 度だけ構築して使い回す。

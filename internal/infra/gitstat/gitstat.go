@@ -145,15 +145,60 @@ func (c *UntrackedStatCache) replace(worktree string, entries map[string]FileSta
 	c.byWorktree[worktree] = untrackedWorktreeEntry{entries: entries, swept: now}
 }
 
-// untrackedCacheKey identifies the file by worktree, path, file type, and
-// content hash. The path stays in the key because .gitattributes can change
-// how git treats the same bytes at a different path.
-func untrackedCacheKey(path, rel string, info os.FileInfo) (string, error) {
+// untrackedCacheKey identifies the file by worktree, path, file type, content
+// hash, and the worktree's attributes digest. The path stays in the key because
+// .gitattributes can classify the same bytes differently at a different path,
+// and the digest is there because it can reclassify them in place.
+func untrackedCacheKey(path, rel, attrs string, info os.FileInfo) (string, error) {
 	content, err := untrackedContent(path, rel, info)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s\x00%s\x00%d\x00%x", path, rel, info.Mode().Type(), sha256.Sum256(content)), nil
+	return fmt.Sprintf(
+		"%s\x00%s\x00%s\x00%d\x00%x",
+		path, rel, attrs, info.Mode().Type(), sha256.Sum256(content),
+	), nil
+}
+
+// attributesDigest hashes the .gitattributes files that decide how git
+// classifies content in this worktree. The untracked counts are memoized by
+// content, so without this an added `*.dat binary` line would leave a stale
+// text count answering until the file itself changed.
+//
+// Scope is the worktree's own .gitattributes files, tracked or not, read from
+// disk so uncommitted edits count. $GIT_DIR/info/attributes and
+// core.attributesFile are deliberately out of scope: they are machine-local
+// overrides this package does not otherwise follow.
+func (r Runner) attributesDigest(path string) (string, error) {
+	env := append(gitEnv(), "GIT_LITERAL_PATHSPECS=0")
+	out, err := execx.OutputContext(r.context(), r.Cwd, env, "git",
+		"-C", path, "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+		"--", ":(top,glob)**/.gitattributes", ":(top,literal).gitattributes",
+	)
+	if err != nil {
+		return "", err
+	}
+	files, err := parseNULPaths(out)
+	if err != nil {
+		return "", fmt.Errorf("parse attributes paths: %w", err)
+	}
+	sort.Strings(files)
+	digest := sha256.New()
+	for _, rel := range files {
+		full, pathErr := containedPath(path, rel)
+		if pathErr != nil {
+			return "", pathErr
+		}
+		content, readErr := os.ReadFile(full)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return "", fmt.Errorf("read attributes %q: %w", rel, readErr)
+		}
+		digest.Write([]byte(rel))
+		digest.Write([]byte{0})
+		digest.Write(content)
+		digest.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", digest.Sum(nil)), nil
 }
 
 // untrackedContent reads what git would compare: the link target for a symlink,
@@ -186,15 +231,22 @@ func diffFlags(renames string) []string {
 	}
 }
 
-// gitPinArgs are the git-level options every worktree-content diff shares.
+// gitPinArgs are the git-level options every diff in this package shares.
 // core.bigFileThreshold decides text vs binary without reading content, so
-// leaving it to repo config lets one surface call a file binary while another
-// counts its lines — and the untracked count is memoized, so a mid-run change
-// would keep answering from a stale verdict. Every file these commands touch is
-// under the package's own 256 KiB ceiling, so git's default just means the
-// content decides.
+// leaving it to repo config lets a repo turn ordinary text files into `-/-`
+// binary rows — and the untracked count is memoized, so a mid-run change would
+// keep answering from a stale verdict. Every file these commands touch is under
+// the package's own 256 KiB ceiling, so git's default just means the content
+// decides.
 func gitPinArgs() []string {
 	return []string{"-c", "core.bigFileThreshold=512m"}
+}
+
+// diffCmd builds the argv for a diff inside path. Every diff goes through here
+// so the pinned git-level options cannot be forgotten on one route and applied
+// on another — that split is what let metadata and patch disagree before.
+func diffCmd(path string, tail ...string) []string {
+	return append(append(gitPinArgs(), "-C", path, "diff"), tail...)
 }
 
 func numStatArgs(base, renames string) []string {
@@ -317,9 +369,13 @@ func (r Runner) mergeUntracked(
 	if err != nil {
 		return nil, err
 	}
+	attrs, err := r.attributesDigest(path)
+	if err != nil {
+		return nil, err
+	}
 	measured := make(map[string]FileStat, len(untracked))
 	for _, rel := range untracked {
-		stat, key, statErr := r.untrackedFileStat(path, rel)
+		stat, key, statErr := r.untrackedFileStat(path, rel, attrs)
 		if statErr != nil {
 			return nil, statErr
 		}
@@ -353,8 +409,7 @@ func (r Runner) numStat(path, base string) ([]FileStat, error) {
 }
 
 func (r Runner) numStatWith(path, base, renames string) ([]FileStat, error) {
-	args := append([]string{"-C", path, "diff"}, numStatArgs(base, renames)...)
-	out, err := r.git(args...)
+	out, err := r.git(diffCmd(path, numStatArgs(base, renames)...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -513,9 +568,8 @@ func (r Runner) WorktreePatch(path, baseRef string) (_ Patch, err error) {
 				out, err = r.trackedPathPatch(path, mergeBase, stat)
 			default:
 				var code int
-				out, code, err = r.gitExitCode(append(gitPinArgs(),
-					"-C", path,
-					"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+				out, code, err = r.gitExitCode(diffCmd(path,
+					"--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
 					"--no-index", "--", "/dev/null", stat.Path,
 				)...)
 				if code == 1 {
@@ -578,7 +632,7 @@ type patchFile struct {
 // untrackedFileStat measures one untracked file and returns the cache key its
 // counts belong to. An empty key means "do not memoize this": the file is
 // oversized, or it changed while git was measuring it.
-func (r Runner) untrackedFileStat(path, rel string) (_ FileStat, _ string, err error) {
+func (r Runner) untrackedFileStat(path, rel, attrs string) (_ FileStat, _ string, err error) {
 	defer errs.Wrap(&err, "untracked file %q", rel)
 
 	info, err := untrackedFileInfo(path, rel)
@@ -588,7 +642,7 @@ func (r Runner) untrackedFileStat(path, rel string) (_ FileStat, _ string, err e
 	if info.Size() > patchFileLimit {
 		return FileStat{Path: rel, OmittedReason: "tooLarge"}, "", nil
 	}
-	key, err := untrackedCacheKey(path, rel, info)
+	key, err := untrackedCacheKey(path, rel, attrs, info)
 	if err != nil {
 		return FileStat{}, "", err
 	}
@@ -602,18 +656,18 @@ func (r Runner) untrackedFileStat(path, rel string) (_ FileStat, _ string, err e
 	// git re-read the file after we hashed it. If a writer got in between, the
 	// counts describe different bytes than the key names — return them for this
 	// pass but do not let them answer for that content later.
-	if after, afterErr := untrackedFileKeyNow(path, rel); afterErr != nil || after != key {
+	if after, afterErr := untrackedFileKeyNow(path, rel, attrs); afterErr != nil || after != key {
 		return stat, "", nil
 	}
 	return stat, key, nil
 }
 
-func untrackedFileKeyNow(path, rel string) (string, error) {
+func untrackedFileKeyNow(path, rel, attrs string) (string, error) {
 	info, err := untrackedFileInfo(path, rel)
 	if err != nil {
 		return "", err
 	}
-	return untrackedCacheKey(path, rel, info)
+	return untrackedCacheKey(path, rel, attrs, info)
 }
 
 // untrackedFileInfo rejects anything that is not a regular file or a symlink —
@@ -635,12 +689,10 @@ func untrackedFileInfo(path, rel string) (os.FileInfo, error) {
 
 // addedFileStat counts rel as a whole-file addition against /dev/null.
 func (r Runner) addedFileStat(path, rel string) (FileStat, error) {
-	args := append(gitPinArgs(),
-		"-C", path,
-		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+	out, code, err := r.gitExitCode(diffCmd(path,
+		"--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
 		"--no-index", "--numstat", "-z", "--", "/dev/null", rel,
-	)
-	out, code, err := r.gitExitCode(args...)
+	)...)
 	if code == 1 {
 		err = nil
 	}
@@ -780,9 +832,8 @@ func (r Runner) modeClassReplacementPatch(
 	if err != nil {
 		return nil, FileStat{}, false, err
 	}
-	added, code, err := r.gitExitCode(append(gitPinArgs(),
-		"-C", path,
-		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
+	added, code, err := r.gitExitCode(diffCmd(path,
+		"--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
 		"--no-index", "--", "/dev/null", file.Path,
 	)...)
 	if code == 1 {
@@ -961,8 +1012,7 @@ func (r Runner) trackedPathPatch(path, mergeBase string, stat FileStat) ([]byte,
 	if stat.OldPath != "" {
 		paths = append(paths, stat.OldPath)
 	}
-	args := append([]string{"-C", path, "diff"}, patchArgs(mergeBase)...)
-	return r.gitExactPaths(paths, args...)
+	return r.gitExactPaths(paths, diffCmd(path, patchArgs(mergeBase)...)...)
 }
 
 func replacementDiff(ctx context.Context, cwd string, numstat bool, oldPath, newPath string) ([]byte, int, error) {
