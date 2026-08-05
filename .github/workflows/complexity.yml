@@ -97,13 +97,64 @@ jobs:
           node -e '
             const fs = require("node:fs"), path = require("node:path");
             const dir = process.env.COMPLEXITY_SARIF_DIR;
-            const runs = [];
-            for (const f of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+            const byTool = new Map();
+
+            // 各 analyzer の per-file run を 1 run に畳む。GitHub code scanning は
+            // 同じ tool/category の複数 run を拒否し、1 file の上限も 20 runs。
+            const normalizeArtifactLocations = (value, artifacts) => {
+              if (Array.isArray(value)) {
+                for (const item of value) normalizeArtifactLocations(item, artifacts);
+                return;
+              }
+              if (!value || typeof value !== "object") return;
+              const location = value.artifactLocation;
+              if (location && Number.isInteger(location.index)) {
+                location.uri ??= artifacts?.[location.index]?.location?.uri;
+                if (!location.uri) throw new Error("artifact index has no URI");
+                delete location.index;
+              }
+              for (const item of Object.values(value)) normalizeArtifactLocations(item, artifacts);
+            };
+
+            const mergeRun = (run) => {
+              const driver = run.tool?.driver;
+              if (!driver?.name) return;
+              let merged = byTool.get(driver.name);
+              if (!merged) {
+                const tool = structuredClone(run.tool);
+                tool.driver.rules = [];
+                merged = { run: { tool, results: [] }, rules: new Map() };
+                byTool.set(driver.name, merged);
+              }
+              for (const rule of driver.rules ?? []) {
+                if (!rule?.id || merged.rules.has(rule.id)) continue;
+                merged.rules.set(rule.id, merged.run.tool.driver.rules.length);
+                merged.run.tool.driver.rules.push(structuredClone(rule));
+              }
+              for (const source of run.results ?? []) {
+                const result = structuredClone(source);
+                const ruleId = result.ruleId ?? driver.rules?.[result.ruleIndex]?.id;
+                if (ruleId) result.ruleId = ruleId;
+                const ruleIndex = merged.rules.get(ruleId);
+                if (ruleIndex === undefined) delete result.ruleIndex;
+                else result.ruleIndex = ruleIndex;
+                normalizeArtifactLocations(result, run.artifacts);
+                merged.run.results.push(result);
+              }
+            };
+
+            for (const f of (fs.existsSync(dir) ? fs.readdirSync(dir) : []).sort()) {
               // 接尾辞で判定する。includes だと web/src/foo-base.ts の現在側 SARIF
               // (ts-src_lib_foo-base_ts.sarif) まで baseline と誤認して捨てる。
               if (!f.endsWith(".sarif") || f.endsWith("-base.sarif")) continue;
-              try { runs.push(...(JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")).runs ?? [])); }
+              try {
+                for (const run of JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")).runs ?? []) mergeRun(run);
+              }
               catch { /* 壊れた SARIF は無視する。判定は measure step が済ませている */ }
+            }
+            const runs = [...byTool.values()].map(({ run }) => run);
+            if (runs.length > 20 || new Set(runs.map((run) => run.tool.driver.name)).size !== runs.length) {
+              throw new Error("merged SARIF still has duplicate tools or too many runs");
             }
             fs.writeFileSync("complexity.sarif", JSON.stringify({
               version: "2.1.0",
