@@ -238,16 +238,37 @@ func validateLaunchBackend(
 	selection backend.Selection,
 	inputs runtimeBackendInputs,
 ) error {
-	if selection.Name == backend.Herdr && cfg.Team {
+	if selection.Name != backend.Herdr {
+		return nil
+	}
+	return validateHerdrLaunchBackend(cfg, inputs)
+}
+
+func validateHerdrLaunchBackend(cfg *cliflags.Config, inputs runtimeBackendInputs) error {
+	if cfg.Team {
 		return backend.Unsupported(backend.Herdr, "--team launch until registry-backed peers are available")
 	}
-	if selection.Name == backend.Herdr && cfg.TUIInteractive {
+	if cfg.TUIInteractive {
 		return backend.Unsupported(backend.Herdr, "interactive TUI launch in the current release wave")
 	}
-	if selection.Name == backend.Herdr && inputs.childPlanMode && configMayLaunchCodex(cfg) {
+	if inputs.childPlanMode && configMayLaunchCodex(cfg) {
 		return backend.Unsupported(backend.Herdr, "Codex Plan Mode child launch until issue #554")
 	}
+	if cfg.Session != "" {
+		return fmt.Errorf("--session is only supported by the tmux backend")
+	}
+	if !configHasLaunchAgent(cfg) {
+		return fmt.Errorf("agent is required; pass --agent <name> or set FANOUT_AGENT")
+	}
 	return nil
+}
+
+func configHasLaunchAgent(cfg *cliflags.Config) bool {
+	agentName := cfg.Agent
+	if agentName == "" {
+		agentName = os.Getenv("FANOUT_AGENT")
+	}
+	return agentName != "" || len(cfg.AgentOverrides) > 0
 }
 
 func configMayLaunchCodex(cfg *cliflags.Config) bool {
@@ -271,9 +292,12 @@ func constructLaunchRuntimeBackend(
 	name backend.Name,
 	inputs runtimeBackendInputs,
 ) (backend.Backend, *herdrrun.OwnedSession, error) {
-	if name != backend.Herdr || cfg.DryRun {
+	if name != backend.Herdr {
 		runtimeBackend, err := constructRuntimeBackend(name, inputs)
 		return runtimeBackend, nil, err
+	}
+	if cfg.DryRun {
+		return herdrrun.NewPreview(), nil, nil
 	}
 	identity, err := worktree.ResolveRepoIdentity(context.Background(), inputs.projectRoot)
 	if err != nil {

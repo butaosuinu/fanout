@@ -1670,6 +1670,9 @@ func TestWatchPaneMatchesLiveRequiresExactHerdrIdentity(t *testing.T) {
 		HerdrTerminalID: "term-1", HerdrRepoKey: "/repo/.git",
 		HerdrAgentID: "fanout-child", HerdrSession: "fanout-owned",
 		HerdrSocketPath: "/tmp/fanout-owned/herdr.sock",
+		HerdrAgentSession: &backend.AgentSessionRef{
+			Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "thread-1",
+		},
 	}
 	live := backend.LivePane{
 		Ref:         backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
@@ -1682,7 +1685,7 @@ func TestWatchPaneMatchesLiveRequiresExactHerdrIdentity(t *testing.T) {
 		},
 	}
 	if !watchPaneMatchesLive(pane, live) {
-		t.Fatal("watchPaneMatchesLive() rejected exact Herdr identity with a later session ref")
+		t.Fatal("watchPaneMatchesLive() rejected exact bound Herdr identity")
 	}
 	live.AgentProvider = "claude"
 	if watchPaneMatchesLive(pane, live) {

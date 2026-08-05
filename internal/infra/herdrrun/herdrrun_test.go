@@ -537,6 +537,23 @@ func TestCheckAvailableRejectsMissingBinaryAndUnnamedSession(t *testing.T) {
 	}
 }
 
+func TestPreviewCheckAvailableRequiresOnlyStableCLI(t *testing.T) {
+	fake := newFakeHerdr("", "")
+	b := NewPreview()
+	b.lookPath = func(string) (string, error) { return "/private/tmp/herdr-0.7.5", nil }
+	b.stageBinary = func(string) (string, string, error) {
+		t.Fatal("preview staged the Herdr binary")
+		return "", "", nil
+	}
+	b.output = fake.output
+	if err := b.CheckAvailable(); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.commands) != 1 || commandKey(fake.commands[0].args) != "version" {
+		t.Fatalf("preview commands = %#v, want version only", fake.commands)
+	}
+}
+
 func TestListLiveProjectsSnapshotWithoutUsingForegroundCWD(t *testing.T) {
 	const (
 		session = "fanout-test"

@@ -46,6 +46,7 @@ var (
 type Backend struct {
 	session     string
 	socketPath  string
+	previewOnly bool
 	probeGate   chan struct{}
 	lookPath    func(string) (string, error)
 	stageBinary func(string) (string, string, error)
@@ -115,12 +116,36 @@ func New(session, socketPath string) *Backend {
 	}
 }
 
+// NewPreview constructs a mutation-free launch preview backend. Availability
+// checks only the CLI version and does not require or probe a named session.
+func NewPreview() *Backend {
+	backend := New("", "")
+	backend.previewOnly = true
+	return backend
+}
+
 func (b *Backend) Name() corebackend.Name { return corebackend.Herdr }
 
-// CheckAvailable verifies the stable version floor and connected server
-// identity. It never starts a server.
+// CheckAvailable verifies the stable version floor. Normal backends also
+// require a connected server; preview backends stop after the CLI check.
 func (b *Backend) CheckAvailable() error {
+	if b.previewOnly {
+		return b.checkPreviewAvailable()
+	}
 	_, err := b.probe()
+	return err
+}
+
+func (b *Backend) checkPreviewAvailable() error {
+	binary, err := b.lookPath(commandName)
+	if err != nil {
+		return fmt.Errorf("herdr stable >=%s is required: %w", minimumVersion, err)
+	}
+	versionOut, err := b.runContext(context.Background(), commandTimeout, binary, route{}, "--version")
+	if err != nil {
+		return fmt.Errorf("herdr --version: %w", err)
+	}
+	_, err = parseAdmittedVersion(versionOut)
 	return err
 }
 

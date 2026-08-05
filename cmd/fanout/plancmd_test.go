@@ -167,6 +167,8 @@ func TestCmdPlanHerdrDryRunDoesNotMutate(t *testing.T) {
 	installHerdrStatusShim(t)
 	t.Chdir(repo)
 	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_SESSION", "")
+	t.Setenv("HERDR_SOCKET_PATH", "")
 	t.Setenv("TMUX", "")
 	t.Setenv("FANOUT_BACKEND", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

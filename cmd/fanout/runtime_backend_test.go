@@ -294,7 +294,7 @@ func TestResolveLaunchBackendLoadsSharedHerdrProvisionalIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := resolveLaunchBackend(&cliflags.Config{ParentRef: "425", DryRun: true}, repo, store, nil)
+	resolved, err := resolveLaunchBackend(&cliflags.Config{ParentRef: "425", Agent: "claude", DryRun: true}, repo, store, nil)
 	if err != nil || resolved.selection.Name != backend.Herdr {
 		t.Fatalf("resolveLaunchBackend() = (%+v, %v), want provisional Herdr ownership", resolved.selection, err)
 	}
@@ -315,7 +315,7 @@ func TestSharedHerdrPlanIntentsRemainOwnerWorktreeLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolved, err := resolveLaunchBackend(
-		&cliflags.Config{ParentRef: "plan:demo"},
+		&cliflags.Config{ParentRef: "plan:demo", Agent: "claude"},
 		sibling,
 		siblingStore,
 		nil,
@@ -333,7 +333,7 @@ func TestSharedHerdrPlanIntentsRemainOwnerWorktreeLocal(t *testing.T) {
 		t.Fatalf("same-slug plan intents = %#v", control.Intents)
 	}
 	_, err = resolveLaunchBackend(
-		&cliflags.Config{ParentRef: "plan:demo", DryRun: true},
+		&cliflags.Config{ParentRef: "plan:demo", Agent: "claude", DryRun: true},
 		sibling,
 		siblingStore,
 		nil,
@@ -368,7 +368,7 @@ func TestSharedHerdrIssueSourcedPlanIntentUsesActualParentAcrossWorktrees(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := resolveLaunchBackend(&cliflags.Config{ParentRef: "425", DryRun: true}, sibling, store, nil)
+	resolved, err := resolveLaunchBackend(&cliflags.Config{ParentRef: "425", Agent: "claude", DryRun: true}, sibling, store, nil)
 	if err != nil || resolved.selection.Name != backend.Herdr {
 		t.Fatalf("issue-sourced Herdr plan binding = (%+v, %v), want Herdr ownership", resolved.selection, err)
 	}
@@ -401,19 +401,33 @@ func TestBackendSelectionVerifierRechecksSharedHerdrProvisionalIntent(t *testing
 }
 
 func TestValidateLaunchBackendAllowsHerdrAndRejectsTeam(t *testing.T) {
-	if err := validateLaunchBackend(&cliflags.Config{}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{}); err != nil {
+	if err := validateLaunchBackend(&cliflags.Config{Agent: "claude"}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{}); err != nil {
 		t.Fatalf("Herdr error = %v", err)
 	}
-	err := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{})
+	err := validateLaunchBackend(&cliflags.Config{Agent: "claude", Team: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{})
 	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "--team") {
 		t.Fatalf("team error = %v, want ErrUnsupported", err)
 	}
 	if err := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Tmux}, runtimeBackendInputs{}); err != nil {
 		t.Fatalf("tmux error = %v", err)
 	}
-	err = validateLaunchBackend(&cliflags.Config{TUIInteractive: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{})
+	err = validateLaunchBackend(&cliflags.Config{Agent: "claude", TUIInteractive: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{})
 	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "interactive TUI") {
 		t.Fatalf("TUI error = %v, want deferred interactive launch", err)
+	}
+}
+
+func TestValidateLaunchBackendRejectsHerdrInputsBeforeSessionAcquisition(t *testing.T) {
+	selection := backend.Selection{Name: backend.Herdr}
+	if err := validateLaunchBackend(
+		&cliflags.Config{Agent: "claude", Session: "tmux-target"}, selection, runtimeBackendInputs{},
+	); err == nil || !strings.Contains(err.Error(), "--session is only supported") {
+		t.Fatalf("Herdr session override error = %v", err)
+	}
+	t.Setenv("FANOUT_AGENT", "")
+	if err := validateLaunchBackend(&cliflags.Config{}, selection, runtimeBackendInputs{}); err == nil ||
+		!strings.Contains(err.Error(), "agent is required") {
+		t.Fatalf("missing Herdr agent error = %v", err)
 	}
 }
 
@@ -507,12 +521,14 @@ func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 	}
 }
 
-func TestResolveLaunchRuntimeAllowsHerdrDryRunWithoutMutation(t *testing.T) {
+func TestResolveLaunchRuntimeAllowsHerdrDryRunWithoutAmbientSession(t *testing.T) {
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init", "-b", "main")
 	installHerdrStatusShim(t)
 	t.Chdir(repo)
 	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_SESSION", "")
+	t.Setenv("HERDR_SOCKET_PATH", "")
 	t.Setenv("TMUX", "")
 	t.Setenv("FANOUT_BACKEND", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
