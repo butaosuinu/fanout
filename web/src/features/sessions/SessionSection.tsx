@@ -71,13 +71,12 @@ function DiffCell({
   ) : (
     <span className="muted">{pane.diffSummary || "—"}</span>
   );
-  /* 行数を「差分あり」の判定には使わない。diffSummary は
-   * `git diff --shortstat`(rename 検出あり・未追跡を含まない)由来なので、
-   * binary だけ / mode だけ / pure rename の変更は commit 済みだと +0/-0 かつ
-   * clean になる。一方 /api/diff は未追跡を含め `--no-renames` で patch を
-   * 返すので、それらは全部レビュー対象として出てくる。開けないほうが害が
-   * 大きいので、identity を組める行は常にリンクにする(詳細ドロワーの
-   * 「変更を表示」も同じ条件)。 */
+  /* 行数を「差分あり」の判定には使わない。diffSummary と /api/diff は同じ
+   * 収集を共有するので行数は一致するが、+0/-0 は「レビュー対象なし」を
+   * 意味しない — binary だけ / mode だけ / pure rename の変更は両方で +0/-0
+   * になり、commit 済みなら clean にもなる一方、/api/diff はそれらを全部
+   * レビュー対象として返す。開けないほうが害が大きいので、identity を
+   * 組める行は常にリンクにする(詳細ドロワーの「変更を表示」も同じ条件)。 */
   if (!diffQuery(parent, pane)) return stat;
   return (
     <button

@@ -28,7 +28,7 @@ Go チームは 2025-06-03 の
 | `internal/core` | 13 | 8 |
 
 ただし**素通しそのものは欠陥ではない**。`internal/infra/execx` は
-`"git diff --shortstat HEAD: <stderr>"` の形でコマンドと stderr を含むエラーを
+`"git diff --numstat HEAD: <stderr>"` の形でコマンドと stderr を含むエラーを
 作るので、その直上での素通しは何も失っていない。問題は、素通しがどの
 worktree・どのファイルについて起きたかを落とすときだけだ。
 
@@ -91,7 +91,7 @@ return FileStat{}, fmt.Errorf("parse numstat: %w", err)
 ## 3. `cmp.Or` — 互いに独立した呼び出し
 
 ```go
-diffOut, diffErr := r.git("-C", path, "diff", "--shortstat", base)
+stat, diffErr := r.worktreeStat(path, base)
 statusOut, statusErr := r.git("-C", path, "status", "--porcelain")
 if err := cmp.Or(diffErr, statusErr); err != nil {
 	return Stat{}, err

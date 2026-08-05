@@ -41,6 +41,39 @@ describe("parseDiffFiles", () => {
   it("空 patch は空配列", () => {
     expect(parseDiffFiles("")).toEqual([]);
   });
+
+  /* サイドバーは files[].path(= 移動先)で本文を引く。ライブラリが name に
+   * どちらを入れるかが変わると、移動した file にだけ飛べなくなる。 */
+  it("rename は移動先を name、移動元を prevName に持つ", () => {
+    const patch = [
+      "diff --git a/src/old.ts b/src/new.ts",
+      "similarity index 87%",
+      "rename from src/old.ts",
+      "rename to src/new.ts",
+      "--- a/src/old.ts",
+      "+++ b/src/new.ts",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+    const [file] = parseDiffFiles(patch);
+    expect(file?.name).toBe("src/new.ts");
+    expect(file?.prevName).toBe("src/old.ts");
+  });
+
+  /* hunk を持たない pure rename が 1 entry として残らないと、patchIncluded な
+   * file が本文から黙って消える(サーバーは 1 block として数えている)。 */
+  it("hunk のない pure rename も 1 entry になる", () => {
+    const patch = [
+      "diff --git a/src/old.ts b/src/new.ts",
+      "similarity index 100%",
+      "rename from src/old.ts",
+      "rename to src/new.ts",
+      "",
+    ].join("\n");
+    expect(parseDiffFiles(patch).map((f) => f.name)).toEqual(["src/new.ts"]);
+  });
 });
 
 describe("diffWarning", () => {

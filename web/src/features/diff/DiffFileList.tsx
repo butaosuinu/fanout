@@ -18,6 +18,23 @@ function Stat({ file }: { file: DiffFileEntry }) {
   );
 }
 
+/* 移動した file は basename だけだと移動元が消える — group 見出しは移動先の
+ * ディレクトリなので、行にも移動元を出さないと「どこから来たか」が失われる。 */
+function FileRowBody({ file }: { file: DiffFileEntry }) {
+  return (
+    <>
+      <span className="diff-file-name">{fileBase(file.path)}</span>
+      {file.oldPath ? <span className="diff-file-was">← {fileBase(file.oldPath)}</span> : null}
+      <Stat file={file} />
+    </>
+  );
+}
+
+/* 行の accessible name。移動は両端が揃って初めて意味を持つ。 */
+function fileRowLabel(file: DiffFileEntry): string {
+  return file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
+}
+
 /* diff オーバーレイのサイドバー。サーバーの files[] をそのまま出すので、patch に
  * 含まれない file(バイナリ・サイズ超過・上限で省略)も欠落させずに並ぶ。
  * patch を持つ file はクリックで本文の該当 file へ飛ぶ。 */
@@ -66,8 +83,7 @@ export const DiffFileList = memo(function DiffFileList({
           </h4>
           <ul className="diff-file-rows">
             {g.files.map((f) => {
-              const stat = <Stat file={f} />;
-              const base = fileBase(f.path);
+              const label = fileRowLabel(f);
               return (
                 <li key={f.path}>
                   {selectable.has(f.path) ? (
@@ -78,17 +94,15 @@ export const DiffFileList = memo(function DiffFileList({
                     <button
                       type="button"
                       className="diff-file-row"
-                      title={f.path}
-                      aria-label={f.path}
+                      title={label}
+                      aria-label={label}
                       onClick={() => onSelect(f.path)}
                     >
-                      <span className="diff-file-name">{base}</span>
-                      {stat}
+                      <FileRowBody file={f} />
                     </button>
                   ) : (
-                    <span className="diff-file-row is-static" title={f.path}>
-                      <span className="diff-file-name">{base}</span>
-                      {stat}
+                    <span className="diff-file-row is-static" title={label}>
+                      <FileRowBody file={f} />
                     </span>
                   )}
                 </li>

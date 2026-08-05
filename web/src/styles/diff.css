@@ -169,6 +169,8 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 .diff-file-row.is-static{ cursor:default; color:var(--ink-40); }
 .diff-file-row.is-static:hover{ background:transparent; }
 .diff-file-name{ flex:1; min-width:0; overflow-wrap:anywhere; }
+/* 移動元。行の主役は移動先なので、縮むのはこちら側 */
+.diff-file-was{ flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink-40); font-size:10.5px; }
 .diff-file-stat{ flex:none; display:flex; gap:5px; font-size:10.5px; }
 /* 追加・削除の色。テーブルの c-diff セルと同じ意味論を diff ビュアー側にも通す */
 .diff-file-stat .add,.diff-sidebar-count .add,.d-diff-stat .add{ color:var(--ok); }

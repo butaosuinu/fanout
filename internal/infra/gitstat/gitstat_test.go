@@ -12,22 +12,69 @@ import (
 	"time"
 )
 
-func TestParseShortStat(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		out       string
-		additions int
-		deletions int
+func TestParseNumStat(t *testing.T) {
+	tests := []struct {
+		name    string
+		out     string
+		want    []FileStat
+		wantErr bool
 	}{
-		{name: "empty", out: "", additions: 0, deletions: 0},
-		{name: "both plural", out: " 2 files changed, 12 insertions(+), 3 deletions(-)\n", additions: 12, deletions: 3},
-		{name: "singular insertion", out: " 1 file changed, 1 insertion(+)\n", additions: 1, deletions: 0},
-		{name: "singular deletion", out: " 1 file changed, 1 deletion(-)\n", additions: 0, deletions: 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseShortStat(tc.out)
-			if got.Additions != tc.additions || got.Deletions != tc.deletions {
-				t.Fatalf("parseShortStat() = +%d/-%d, want +%d/-%d", got.Additions, got.Deletions, tc.additions, tc.deletions)
+		{name: "empty output", out: "", want: []FileStat{}},
+		{
+			name: "plain record",
+			out:  "1\t2\tfile.txt\x00",
+			want: []FileStat{{Path: "file.txt", Additions: 1, Deletions: 2}},
+		},
+		{
+			// A rename leaves the path column empty and spends two more records.
+			name: "rename record keeps both paths",
+			out:  "3\t4\t\x00old.txt\x00new.txt\x00",
+			want: []FileStat{{Path: "new.txt", OldPath: "old.txt", Additions: 3, Deletions: 4}},
+		},
+		{
+			name: "binary record",
+			out:  "-\t-\tblob.bin\x00",
+			want: []FileStat{{Path: "blob.bin", Binary: true, OmittedReason: "binary"}},
+		},
+		{
+			name: "binary rename",
+			out:  "-\t-\t\x00a.bin\x00b.bin\x00",
+			want: []FileStat{{Path: "b.bin", OldPath: "a.bin", Binary: true, OmittedReason: "binary"}},
+		},
+		{
+			name: "rename does not swallow the record after it",
+			out:  "0\t0\t\x00old.txt\x00new.txt\x005\t6\tlater.txt\x00",
+			want: []FileStat{
+				{Path: "new.txt", OldPath: "old.txt"},
+				{Path: "later.txt", Additions: 5, Deletions: 6},
+			},
+		},
+		{name: "record with too few columns is an error", out: "1\tfile.txt\x00", wantErr: true},
+		{name: "non-numeric count is an error", out: "x\t2\tfile.txt\x00", wantErr: true},
+		{name: "half-marked binary pair is an error", out: "-\t2\tfile.txt\x00", wantErr: true},
+		{name: "truncated rename record is an error", out: "1\t2\t\x00old.txt\x00", wantErr: true},
+		{name: "empty rename path is an error", out: "1\t2\t\x00\x00new.txt\x00", wantErr: true},
+		{name: "missing NUL terminator is an error", out: "1\t2\tfile.txt", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseNumStat([]byte(tt.out))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseNumStat(%q) = %+v, want error", tt.out, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseNumStat(%q) = %v, want no error", tt.out, err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("parseNumStat(%q) = %+v, want %+v", tt.out, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("parseNumStat(%q)[%d] = %+v, want %+v", tt.out, i, got[i], tt.want[i])
+				}
 			}
 		})
 	}
@@ -55,8 +102,10 @@ func TestRunnerWorktreeCountsTrackedDiffAndPorcelainDirty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Additions != 2 || got.Deletions != 0 || !got.Dirty {
-		t.Fatalf("Worktree() = %+v, want +2/-0 dirty", got)
+	// +2 from tracked.txt, +1 from untracked.txt: the summary counts the same
+	// files the diff viewer lists.
+	if got.Additions != 3 || got.Deletions != 0 || !got.Dirty {
+		t.Fatalf("Worktree() = %+v, want +3/-0 dirty", got)
 	}
 }
 
@@ -75,8 +124,8 @@ func TestRunnerWorktreeForcesUntrackedFilesIntoDirtyCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Additions != 0 || got.Deletions != 0 || !got.Dirty {
-		t.Fatalf("Worktree() = %+v, want +0/-0 dirty", got)
+	if got.Additions != 1 || got.Deletions != 0 || !got.Dirty {
+		t.Fatalf("Worktree() = %+v, want +1/-0 dirty", got)
 	}
 }
 
@@ -546,6 +595,9 @@ func TestRunnerWorktreePatch(t *testing.T) {
 			},
 			check: func(t *testing.T, _ string, got Patch) {
 				t.Helper()
+				// Untracked and oversized: the size check short-circuits before
+				// numstat runs, so there are no counts to report. Tracked files
+				// keep theirs — see TestRunnerWorktreePatchKeepsOversizedCounts.
 				assertFileStat(t, got.Files, FileStat{
 					Path:          "large.txt",
 					OmittedReason: "tooLarge",
@@ -593,6 +645,7 @@ func TestRunnerWorktreePatchResolvesRelativePathFromRunnerCwd(t *testing.T) {
 	}
 	assertFileStat(t, got.Files, FileStat{
 		Path:          "large.txt",
+		Additions:     1,
 		OmittedReason: "tooLarge",
 	})
 	if got.Patch != "" {
@@ -640,6 +693,8 @@ func TestRunnerWorktreePatchChecksSkippedIndexBlobSize(t *testing.T) {
 	}
 	assertFileStat(t, got.Files, FileStat{
 		Path:          "tracked.txt",
+		Additions:     1,
+		Deletions:     1,
 		OmittedReason: "tooLarge",
 	})
 	if got.Patch != "" {
@@ -663,6 +718,8 @@ func TestRunnerWorktreePatchChecksAssumeUnchangedIndexBlobSize(t *testing.T) {
 	}
 	assertFileStat(t, got.Files, FileStat{
 		Path:          "tracked.txt",
+		Additions:     1,
+		Deletions:     1,
 		OmittedReason: "tooLarge",
 	})
 	if got.Patch != "" {
@@ -683,6 +740,8 @@ func TestRunnerWorktreePatchUsesAssumedIndexBlobWhenWorktreeExists(t *testing.T)
 			worktreeContent: []byte("small\n"),
 			want: FileStat{
 				Path:          "tracked.txt",
+				Additions:     1,
+				Deletions:     1,
 				OmittedReason: "tooLarge",
 			},
 		},
@@ -1255,6 +1314,216 @@ exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 			t.Fatalf("WorktreePatch called non-read-only git subcommand %q; log:\n%s", subcommand, logged)
 		}
 	}
+}
+
+// The session list and the diff viewer must never disagree about how many
+// lines a worktree changed; both read the same collection to guarantee it.
+func TestRunnerWorktreeAndWorktreePatchAgreeOnTotals(t *testing.T) {
+	repo := initPatchRepo(t)
+	seedOnMain(t, repo, map[string][]byte{
+		"moved.txt":    []byte("alpha\nbeta\ngamma\ndelta\nepsilon\n"),
+		"still.txt":    []byte("kept\nas\nis\nexactly\nhere\n"),
+		"dropped.txt":  []byte("gone\n"),
+		"nested/.keep": nil,
+	})
+
+	// A rename with an edit, a pure rename, a deletion, a staged add, an
+	// unstaged edit, an untracked file, and a binary change in one worktree.
+	gitTest(t, repo, "mv", "moved.txt", "renamed.txt")
+	writeGitstatFile(t, repo, "renamed.txt", []byte("alpha\nBETA\ngamma\ndelta\nepsilon\n"))
+	gitTest(t, repo, "mv", "still.txt", "nested/still.txt")
+	gitTest(t, repo, "rm", "dropped.txt")
+	writeGitstatFile(t, repo, "staged.txt", []byte("staged\n"))
+	gitTest(t, repo, "add", "-A")
+	writeGitstatFile(t, repo, "tracked.txt", []byte("one\ntwo\n"))
+	writeGitstatFile(t, repo, "untracked.txt", []byte("loose\nlines\n"))
+	writeGitstatFile(t, repo, "blob.bin", []byte{'a', 0, 'b'})
+
+	summary, err := Runner{}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var additions, deletions, renames int
+	for _, file := range patch.Files {
+		additions += file.Additions
+		deletions += file.Deletions
+		if file.OldPath != "" {
+			renames++
+		}
+	}
+	// Guard the fixture itself: renames are the shape that broke parity, so a
+	// run where git detected none proves nothing.
+	if renames != 2 {
+		t.Fatalf("WorktreePatch().Files = %#v, want 2 renames in the fixture", patch.Files)
+	}
+	if summary.Additions != additions || summary.Deletions != deletions {
+		t.Fatalf(
+			"Worktree() = +%d/-%d, want the WorktreePatch() total +%d/-%d (files %#v)",
+			summary.Additions, summary.Deletions, additions, deletions, patch.Files,
+		)
+	}
+}
+
+func TestRunnerWorktreeCountsRenameOnce(t *testing.T) {
+	repo := initPatchRepo(t)
+	seedOnMain(t, repo, map[string][]byte{"moved.txt": []byte("one\ntwo\nthree\nfour\nfive\nsix\n")})
+	gitTest(t, repo, "mv", "moved.txt", "renamed.txt")
+	writeGitstatFile(t, repo, "renamed.txt", []byte("one\nTWO\nthree\nfour\nfive\nsix\n"))
+	gitTest(t, repo, "add", "-A")
+
+	got, err := Runner{}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The moved file contributes its one edited line, not six deletions plus
+	// six additions.
+	if got.Additions != 1 || got.Deletions != 1 {
+		t.Fatalf("Worktree() = +%d/-%d, want +1/-1", got.Additions, got.Deletions)
+	}
+}
+
+func TestRunnerWorktreePatchIgnoresRepoRenameConfig(t *testing.T) {
+	for _, renames := range []string{"false", "copies"} {
+		t.Run("diff.renames="+renames, func(t *testing.T) {
+			repo := initPatchRepo(t)
+			gitTest(t, repo, "config", "diff.renames", renames)
+			seedOnMain(t, repo, map[string][]byte{"moved.txt": []byte("one\ntwo\nthree\nfour\n")})
+			gitTest(t, repo, "mv", "moved.txt", "renamed.txt")
+			gitTest(t, repo, "add", "-A")
+
+			got, err := Runner{}.WorktreePatch(repo, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stat := findFileStat(t, got.Files, "renamed.txt")
+			if stat.OldPath != "moved.txt" {
+				t.Fatalf("WorktreePatch().Files = %#v, want renamed.txt from moved.txt", got.Files)
+			}
+		})
+	}
+}
+
+func TestRunnerWorktreePatchScopesRenamePathspecToBothPaths(t *testing.T) {
+	repo := initPatchRepo(t)
+	seedOnMain(t, repo, map[string][]byte{"moved.txt": []byte("one\ntwo\nthree\nfour\n")})
+	gitTest(t, repo, "mv", "moved.txt", "renamed.txt")
+	writeGitstatFile(t, repo, "tracked.txt", []byte("one\nsibling\n"))
+	gitTest(t, repo, "add", "-A")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat := findFileStat(t, got.Files, "renamed.txt")
+	if stat.OldPath != "moved.txt" || stat.Additions != 0 || stat.Deletions != 0 {
+		t.Fatalf("WorktreePatch().Files = %#v, want a pure rename of moved.txt", got.Files)
+	}
+	if !strings.Contains(got.Patch, "rename from moved.txt") {
+		t.Fatalf("WorktreePatch().Patch = %q, want a rename header", got.Patch)
+	}
+	if n := strings.Count(got.Patch, "diff --git "); n != 2 {
+		t.Fatalf("WorktreePatch().Patch has %d file blocks, want 2 (rename + sibling)", n)
+	}
+}
+
+func TestRunnerWorktreePatchFallsBackWhenRenamePathsNest(t *testing.T) {
+	repo := initPatchRepo(t)
+	seedOnMain(t, repo, map[string][]byte{"moved": []byte("one\ntwo\nthree\nfour\n")})
+	if err := os.Remove(filepath.Join(repo, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(repo, "moved"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeGitstatFile(t, repo, "moved/inner.txt", []byte("one\ntwo\nthree\nfour\n"))
+	gitTest(t, repo, "add", "-A")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// git pairs `moved` with `moved/inner.txt`, but no pathspec can scope that
+	// pair, so the whole collection drops rename detection.
+	deleted := findFileStat(t, got.Files, "moved")
+	added := findFileStat(t, got.Files, "moved/inner.txt")
+	if deleted.OldPath != "" || added.OldPath != "" {
+		t.Fatalf("WorktreePatch().Files = %#v, want no rename linkage", got.Files)
+	}
+	if deleted.Deletions != 4 || added.Additions != 4 {
+		t.Fatalf("WorktreePatch().Files = %#v, want -4 and +4", got.Files)
+	}
+	if n := strings.Count(got.Patch, "diff --git "); n != 2 {
+		t.Fatalf("WorktreePatch().Patch has %d file blocks, want 2", n)
+	}
+
+	summary, err := Runner{}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Additions != added.Additions || summary.Deletions != deleted.Deletions {
+		t.Fatalf("Worktree() = +%d/-%d, want the same fallback totals", summary.Additions, summary.Deletions)
+	}
+}
+
+func TestRunnerWorktreePatchKeepsOversizedCounts(t *testing.T) {
+	repo := initPatchRepo(t)
+	writeGitstatFile(t, repo, "tracked.txt", bytes.Repeat([]byte{'x'}, patchFileLimit+1))
+	gitTest(t, repo, "add", "tracked.txt")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The patch text is over budget, the counts are not: git measured them in
+	// the same numstat pass the session list sums.
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "tracked.txt",
+		Additions:     1,
+		Deletions:     1,
+		OmittedReason: "tooLarge",
+	})
+}
+
+func TestRunnerWorktreePatchSizesRenameFromItsBasePath(t *testing.T) {
+	repo := initPatchRepo(t)
+	seedOnMain(t, repo, map[string][]byte{"moved.txt": bytes.Repeat([]byte{'x'}, patchFileLimit+1)})
+	gitTest(t, repo, "mv", "moved.txt", "renamed.txt")
+	gitTest(t, repo, "add", "-A")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The merge-base blob lives at the old path; sizing the new one would find
+	// nothing and let an oversized patch through.
+	stat := findFileStat(t, got.Files, "renamed.txt")
+	if stat.OmittedReason != "tooLarge" || stat.PatchIncluded {
+		t.Fatalf("WorktreePatch().Files = %#v, want renamed.txt omitted as tooLarge", got.Files)
+	}
+}
+
+// seedOnMain commits files on main and fast-forwards feature onto it, so the
+// merge-base the collectors diff against already contains them. A rename is
+// only detectable when its source is in that base.
+func seedOnMain(t *testing.T, repo string, files map[string][]byte) {
+	t.Helper()
+	gitTest(t, repo, "checkout", "main")
+	for name, content := range files {
+		if dir := filepath.Dir(name); dir != "." {
+			if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		writeGitstatFile(t, repo, name, content)
+	}
+	gitTest(t, repo, "add", "-A")
+	gitTest(t, repo, "commit", "-m", "seed rename sources")
+	gitTest(t, repo, "checkout", "feature")
+	gitTest(t, repo, "reset", "--hard", "main")
 }
 
 func initPatchRepo(t *testing.T) string {

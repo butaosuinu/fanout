@@ -557,6 +557,103 @@ func TestDiffDefaultCollectorIncludesUntrackedFileAndRejectsHEADBase(t *testing.
 	}
 }
 
+func TestDiffDefaultCollectorReportsRenameAsOneFile(t *testing.T) {
+	repo := t.TempDir()
+	runDiffGit(t, repo, "init")
+	runDiffGit(t, repo, "config", "user.email", "test@example.com")
+	runDiffGit(t, repo, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repo, "moved.txt"), []byte("one\ntwo\nthree\nfour\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runDiffGit(t, repo, "add", "moved.txt")
+	runDiffGit(t, repo, "commit", "-m", "initial")
+	runDiffGit(t, repo, "branch", "-M", "main")
+	runDiffGit(t, repo, "checkout", "-b", "feature")
+	runDiffGit(t, repo, "mv", "moved.txt", "renamed.txt")
+	runDiffGit(t, repo, "commit", "-m", "move it")
+
+	snap := diffSnapshot(repo)
+	response := requestDiff(t, diffHandler(t, "", snap, nil), http.MethodGet, issueDiffQuery())
+	if response.Code != http.StatusOK {
+		t.Fatalf("rename status = %d, body %s", response.Code, response.Body.String())
+	}
+	got := decodeDiffResponse(t, response)
+	// One entry keyed by the new path, not a deletion plus an addition.
+	if len(got.Files) != 1 {
+		t.Fatalf("rename response = %+v, want one file", got.Files)
+	}
+	file := got.Files[0]
+	if file.Path != "renamed.txt" || file.OldPath != "moved.txt" {
+		t.Fatalf("rename response file = %+v, want renamed.txt from moved.txt", file)
+	}
+	if file.Additions == nil || *file.Additions != 0 || file.Deletions == nil || *file.Deletions != 0 {
+		t.Fatalf("rename response file = %+v, want +0/-0", file)
+	}
+	if !strings.Contains(got.Patch, "rename from moved.txt") {
+		t.Fatalf("rename response patch = %q, want a rename header", got.Patch)
+	}
+}
+
+func TestMarshalDiffResponseOmitsOldPathForNonRenames(t *testing.T) {
+	body, err := marshalDiffResponse(
+		sessionview.PaneView{PaneID: "%1"},
+		gitstat.Patch{
+			MergeBase: "abc",
+			Files: []gitstat.FileStat{
+				{Path: "plain.txt", Additions: 1, PatchIncluded: true},
+			},
+			Patch: "diff --git a/plain.txt b/plain.txt\n+one\n",
+		},
+		"2026-08-05T00:00:00Z",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "oldPath") {
+		t.Fatalf("marshalDiffResponse() = %s, want no oldPath key", body)
+	}
+}
+
+func TestValidDiffFileStat(t *testing.T) {
+	tests := []struct {
+		name string
+		stat gitstat.FileStat
+		want bool
+	}{
+		{name: "collected file carries its patch", stat: gitstat.FileStat{PatchIncluded: true}, want: true},
+		{name: "collected file cannot be binary", stat: gitstat.FileStat{PatchIncluded: true, Binary: true}},
+		{
+			name: "binary file is listed without a patch",
+			stat: gitstat.FileStat{Binary: true, OmittedReason: "binary"},
+			want: true,
+		},
+		{name: "binary reason requires the binary flag", stat: gitstat.FileStat{OmittedReason: "binary"}},
+		{name: "oversized file is listed without a patch", stat: gitstat.FileStat{OmittedReason: "tooLarge"}, want: true},
+		{
+			name: "collection limit is listed without a patch",
+			stat: gitstat.FileStat{OmittedReason: "collectionLimit"},
+			want: true,
+		},
+		{name: "unknown reason is rejected", stat: gitstat.FileStat{OmittedReason: "someday"}},
+		{
+			name: "rename must name two distinct paths",
+			stat: gitstat.FileStat{Path: "same.txt", OldPath: "same.txt", PatchIncluded: true},
+		},
+		{
+			name: "rename between two paths is fine",
+			stat: gitstat.FileStat{Path: "new.txt", OldPath: "old.txt", PatchIncluded: true},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := validDiffFileStat(tt.stat); got != tt.want {
+				t.Fatalf("validDiffFileStat(%+v) = %t, want %t", tt.stat, got, tt.want)
+			}
+		})
+	}
+}
+
 func runDiffGit(t *testing.T, repo string, args ...string) {
 	t.Helper()
 	cmdArgs := append([]string{"-C", repo}, args...)

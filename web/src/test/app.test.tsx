@@ -1253,9 +1253,9 @@ describe("session リストの diff 列", () => {
     expect(screen.queryByRole("button", { name: /変更を表示/ })).not.toBeInTheDocument();
   });
 
-  /* diffSummary は `git diff --shortstat`(未追跡を含まない・rename 検出あり)
-   * 由来なので、binary だけ / mode だけ / pure rename の変更は commit 後に
-   * +0/-0 かつ clean になる。一方 /api/diff はそれらを patch として返すため、
+  /* diffSummary と /api/diff は同じ収集を共有するので行数は一致するが、
+   * binary だけ / mode だけ / pure rename の変更は両方で +0/-0 になり、
+   * commit 後は clean にもなる。/api/diff はそれらを patch として返すため、
    * 行数で「差分なし」と決めるとレビュー対象を開けない行ができる。 */
   it("+0/-0 かつ clean でも identity があればリンクにする", async () => {
     render(<App />);

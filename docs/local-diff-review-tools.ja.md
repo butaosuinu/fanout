@@ -422,11 +422,11 @@ container query は詳細度を足さないので、ルールは `.diff-sidebar`
 Session リストの diff 列は、行 identity(`diffQuery`)を組めるなら常にリンクに
 する。summary が解析できない(gitstat の一時失敗で `-` や自由文になる)場合も
 リンクは残す — 復旧後に手で開き直す導線が消えるため。
-行数で「差分なし」とも判定しない — `diffSummary` は
-`git diff --shortstat`(rename 検出あり・未追跡を含まない)由来なので、binary
-だけ / mode だけ / pure rename の変更は commit 済みだと `+0/-0` かつ `clean` に
-なる一方、`/api/diff` は未追跡を含め `--no-renames` で patch を返すため、
-それらは全部レビュー対象として出てくる。開けないほうが害が大きい。
+`diffSummary` と `/api/diff` は同じ収集(後述の `--numstat -z --find-renames`)
+を共有するので、行数そのものは一致する。
+それでも行数で「差分なし」とは判定しない — binary だけ / mode だけ /
+pure rename の変更は両方で `+0/-0` になり、commit 済みなら `clean` にもなるが、
+`/api/diff` はそれらを全部レビュー対象として返す。開けないほうが害が大きい。
 詳細ドロワーの「変更を表示」も同じ条件。
 
 ### キーボードと支援技術
@@ -538,6 +538,7 @@ type DiffResponse = {
   capturedAt: string;
   files: Array<{
     path: string;
+    oldPath?: string;
     additions: number | null;
     deletions: number | null;
     binary: boolean;
@@ -555,9 +556,16 @@ type DiffResponse = {
 `paneId` は一致した行の backend-native ID であり、tmux `%N` に限定しない。
 `files` は後述する 500 files 上限内の全件を返し、空の場合も `null` ではなく
 `[]` を返す。
+rename は 1 file とし、`path` に移動先、`oldPath` に merge-base 側のパスを
+入れる。rename でない file では `oldPath` を省略する。
 バイナリの `additions` と `deletions` は `0`、`binary` は `true` とする。
 `collectionLimit` で省略した file の `additions` と `deletions` は `null` とし、
 統計を計算しない。
+`tooLarge` で省略した file は、git が同じ numstat pass で算出済みの
+`additions` と `deletions` をそのまま返す — 予算超過なのは patch 本文だけで、
+ここを `0` に潰すと Session リストの合計と食い違う。
+ただし未追跡かつ 256 KiB 超の file はサイズ判定で早期に打ち切り、numstat を
+走らせないので `0` とする。
 完全なファイルブロックが応答の `patch` にある場合だけ `patchIncluded` を
 `true` にし、`omittedReason` は空文字列にする。
 含まれない場合は `patchIncluded` を `false` にし、理由を `binary`、
@@ -576,11 +584,21 @@ HTML fragment として解釈しない。
 #577 の `gitstat.WorktreePatch` は strict に解決した `mergeBaseSHA` を基準に、
 live worktree から read-only の Git command で差分を収集する。
 tracked file の統計と path は
-`git diff --numstat -z <mergeBaseSHA> --`、patch は file ごとの
-`git diff <mergeBaseSHA> -- <path>` から得る。
+`git diff --numstat -z --find-renames <mergeBaseSHA> --`、patch は file ごとの
+`git diff --find-renames <mergeBaseSHA> -- <path>` から得る。
 どちらも `--ignore-submodules=none` を指定し、
 repository または user の `diff.ignoreSubmodules` で gitlink を隠さない。
 gitlink patch は `--submodule=short` で形式を固定する。
+`--find-renames` は明示する — `diff.renames` は repository 設定で無効化も
+copies 化もできるので、既定に任せると同じ worktree の行数が環境で変わる。
+rename の patch は pathspec に移動元と移動先の両方を渡して取る。
+片側だけでは git が追加として描き、`files[]` が約束した rename と食い違う。
+`a` → `a/b` のように 2 つの path が入れ子になる rename は、祖先側の
+子孫除外 pathspec が反対側を飲み込むため exact pathspec で切り出せない。
+この対を検出したら収集全体を `--no-renames` でやり直し、その worktree の
+rename を削除と追加の 2 file として返す。
+`Runner.Worktree`(Session リストと詳細の `+X/-Y`)はこの収集を共有するので、
+一覧と diff ビュアーの行数は乖離しない — 縮退したときも両方が同時に縮退する。
 untracked file は `git ls-files --others --exclude-standard -z` で列挙し、
 `/dev/null` に対する file ごとの `git diff --no-index` で統計と patch を得る。
 index から削除した tracked path と同名の untracked file は 1 file に統合する。
@@ -877,7 +895,12 @@ additions と deletions は同じ canonical byte pair の hunk から数え、re
 の `git diff --numstat` は呼ばない。
 
 path の列挙結果は NUL 区切りで解析する。
-`--no-renames` により rename/copy は delete と add の 2 file として返す。
+`--no-renames` を固定するのは request-private な `--no-index` が常に 1 対の
+file しか見ないためで、rename を 2 file に割る意味ではない。
+rename の連結は manifest 側の `--find-renames` 付き numstat 収集から決め、
+backend が logical path から `rename from` / `rename to` header を組み立てて
+1 file group として返す。ここを 2 file に割ると Session リストの行数と
+食い違う(#620 で一本化した不変条件)。
 repository-relative path は snapshot manifest から取得し、patch header の
 C-quoted 文字列を path 復元に使わない。
 untracked symlink は mode 120000 の link 自体を対象とし、link 先を読まない。

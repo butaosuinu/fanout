@@ -586,6 +586,47 @@ describe("diff オーバーレイ", () => {
     ]);
   });
 
+  /* group 見出しは移動先のディレクトリなので、行に移動元が出ないと
+   * ディレクトリ再編のレビューで「どこから来たか」が丸ごと失われる。 */
+  it("移動した file は行に移動元を出し、accessible name に両端を入れる", async () => {
+    const patch = [
+      "diff --git a/web/src/components/App.tsx b/web/src/app/App.tsx",
+      "similarity index 87%",
+      "rename from web/src/components/App.tsx",
+      "rename to web/src/app/App.tsx",
+      "--- a/web/src/components/App.tsx",
+      "+++ b/web/src/app/App.tsx",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({
+            patch,
+            files: [
+              makeDiffFile({
+                path: "web/src/app/App.tsx",
+                oldPath: "web/src/components/App.tsx",
+              }),
+            ],
+          }),
+        ),
+      ),
+    );
+
+    const overlay = await openOverlay(user);
+    const sidebar = await within(overlay).findByRole("region", { name: "変更ファイル" });
+    expect(within(sidebar).getByRole("listitem").textContent).toBe("App.tsx← App.tsx+1-1");
+    expect(
+      within(sidebar).getByRole("button", {
+        name: "web/src/components/App.tsx → web/src/app/App.tsx",
+      }),
+    ).toBeInTheDocument();
+  });
+
   it("サイドバーのファイル名クリックで、折りたたまれた file を開く", async () => {
     const user = setup(
       http.get("/api/diff", () =>
