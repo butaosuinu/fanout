@@ -609,8 +609,9 @@ dashboard の 2 秒 tick から呼ばれる。`UntrackedStatCache` が結果を�
 ので、stat を鍵にすると一覧だけが古い行数を返し続けて viewer と食い違う。
 ハッシュのコストは節約する process より小さい(500 file が 256 KiB 上限でも
 約 190 ミリ秒)。
-collector を poll ごとに作り直すとキャッシュも作り直されるので、
-`poller` は `sessionview.GitWorktreeStat` を 1 度だけ構築して使い回す。
+collector を tick ごとに作り直すとキャッシュも作り直されるので、
+web の `poller` と TUI の `model` はどちらも `sessionview.GitWorktreeStat` を
+1 度だけ構築して使い回す。
 untracked file は `git ls-files --others --exclude-standard -z` で列挙し、
 `/dev/null` に対する file ごとの `git diff --no-index` で統計と patch を得る。
 index から削除した tracked path と同名の untracked file は 1 file に統合する。

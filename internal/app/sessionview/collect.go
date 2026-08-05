@@ -250,8 +250,9 @@ func resolvePath(path string) string {
 // merge-base ("" falls back to origin/HEAD, then HEAD).
 //
 // The returned collector owns an untracked-file cache, so a caller that polls
-// should build it once and reuse it. Rebuilding it per poll is correct but
-// pays the full per-file count every time.
+// should build it once and reuse it — the web poller and the TUI model both
+// hold one instance. Rebuilding it per tick is correct but pays the full
+// per-file count every time.
 func GitWorktreeStat(projectRoot string) func(path, baseRef string) (WorktreeStat, error) {
 	runner := gitstat.Runner{Cwd: projectRoot, UntrackedCache: gitstat.NewUntrackedStatCache()}
 	return func(path, baseRef string) (WorktreeStat, error) {
