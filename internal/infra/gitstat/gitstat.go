@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,7 +86,16 @@ type Runner struct {
 type UntrackedStatCache struct {
 	mu         sync.Mutex
 	byWorktree map[string]map[string]FileStat
+	swept      []string // least-recently swept first
 }
+
+// untrackedCacheWorktrees bounds how many worktrees the cache remembers. A
+// cleaned-up worktree is never swept again, so without this its entries would
+// live until the process exits — and creating and cleaning up sessions is the
+// normal fanout loop. Evicting a whole cold worktree is safe in a way the old
+// per-entry cap was not: nothing live is dropped, and a worktree that comes
+// back simply re-measures once.
+const untrackedCacheWorktrees = 64
 
 func NewUntrackedStatCache() *UntrackedStatCache {
 	return &UntrackedStatCache{byWorktree: map[string]map[string]FileStat{}}
@@ -110,11 +120,17 @@ func (c *UntrackedStatCache) replace(worktree string, entries map[string]FileSta
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.swept = slices.DeleteFunc(c.swept, func(s string) bool { return s == worktree })
 	if len(entries) == 0 {
 		delete(c.byWorktree, worktree)
 		return
 	}
 	c.byWorktree[worktree] = entries
+	c.swept = append(c.swept, worktree)
+	for len(c.swept) > untrackedCacheWorktrees {
+		delete(c.byWorktree, c.swept[0])
+		c.swept = c.swept[1:]
+	}
 }
 
 // untrackedCacheKey identifies the file by worktree, path, file type, and

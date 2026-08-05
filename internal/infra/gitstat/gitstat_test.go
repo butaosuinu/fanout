@@ -1512,6 +1512,35 @@ func TestUntrackedFileStatReturnsACacheKeyForAQuietFile(t *testing.T) {
 	}
 }
 
+// A cleaned-up worktree is never swept again, so its entries would otherwise
+// live until the process exits. Creating and cleaning up sessions is the normal
+// fanout loop, so a long-running TUI or poller would grow without bound.
+func TestUntrackedStatCacheDropsWorktreesItStopsSweeping(t *testing.T) {
+	cache := NewUntrackedStatCache()
+	for i := range untrackedCacheWorktrees + 10 {
+		cache.replace(fmt.Sprintf("/wt%d", i), map[string]FileStat{"k": {}})
+	}
+	if got := len(cache.byWorktree); got != untrackedCacheWorktrees {
+		t.Fatalf("cache remembers %d worktrees, want %d", got, untrackedCacheWorktrees)
+	}
+	if cache.size("/wt0") != 0 {
+		t.Fatal("the coldest worktree survived; the cache still grows without bound")
+	}
+	if cache.size(fmt.Sprintf("/wt%d", untrackedCacheWorktrees+9)) != 1 {
+		t.Fatal("the newest sweep was evicted instead of the coldest worktree")
+	}
+
+	// 再 sweep した worktree は末尾へ回り、次の eviction の対象から外れる。
+	live := "/wt20"
+	cache.replace(live, map[string]FileStat{"k": {}})
+	for i := range 20 {
+		cache.replace(fmt.Sprintf("/later%d", i), map[string]FileStat{"k": {}})
+	}
+	if cache.size(live) != 1 {
+		t.Fatal("a worktree still being swept was evicted")
+	}
+}
+
 func TestUntrackedStatCacheNilIsUsable(t *testing.T) {
 	var absent *UntrackedStatCache
 	absent.replace("/wt", map[string]FileStat{"k": {Path: "x"}})

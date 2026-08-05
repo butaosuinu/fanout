@@ -614,6 +614,9 @@ entry は worktree ごとに持ち、1 回の収集が見つけた集合で丸�
 安定した entry まで捨て、次の tick で全 file の git process が走り直す。
 git は鍵を作った後に file を読み直すので、計測後に鍵を取り直して
 変わっていた場合はキャッシュしない(その pass の統計は返す)。
+cleanup された worktree は二度と巡回されないので、覚えておく worktree 数に
+上限を設け、最も長く巡回していないものから捨てる — Session の作成と cleanup は
+通常の運用ループであり、放置すると常駐 TUI / poller のメモリが増え続ける。
 collector を tick ごとに作り直すとキャッシュも作り直されるので、
 web の `poller` と TUI の `model` はどちらも `sessionview.GitWorktreeStat` を
 1 度だけ構築して使い回す。
