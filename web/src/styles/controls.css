@@ -1,0 +1,47 @@
+/* ============================================================ アイコンボタン
+   diff ビュアーのボタンはすべてこれ。ラベルは aria-label と .tip のツールチップ
+   が持つので、見た目はアイコン 1 個だけ。 */
+.icon-btn{
+  flex:none;
+  width:28px; height:28px;
+  display:inline-flex; align-items:center; justify-content:center;
+  border:1px solid var(--suna); border-radius:999px;
+  background:transparent; color:var(--ink-60);
+  cursor:pointer;
+  transition:border-color .25s ease, color .25s ease;
+}
+.icon-btn:hover:not(:disabled){ border-color:var(--asagi); color:var(--asagi); }
+.icon-btn:disabled{ color:var(--ink-40); cursor:default; }
+.diff-reload{ margin-left:auto; }
+
+/* ツールチップ。native title は遅くて見た目も揃わないので CSS で出す。
+   hover と keyboard focus の両方で見える。 */
+.tip{ position:relative; }
+.tip::after{
+  content:attr(data-tip);
+  position:absolute; top:calc(100% + 7px); left:50%;
+  transform:translateX(-50%);
+  padding:3px 9px;
+  border-radius:7px;
+  background:var(--sumi); color:var(--washi);
+  font-family:var(--f-body); font-size:11px; line-height:1.7;
+  white-space:nowrap;
+  opacity:0; pointer-events:none;
+  transition:opacity .18s ease .3s;
+  z-index:9;
+}
+.tip:hover::after,.tip:focus-visible::after{ opacity:1; }
+/* Drawer 上部バーの主導線。worktree 節に埋もれていた 11px ピルからの格上げで、
+   セッション名のすぐ隣に置く(#drawer-close の margin-left:auto が右端を取る) */
+.btn-primary{
+  flex:none;
+  font-family:var(--f-body); font-size:12px; font-weight:500;
+  color:var(--washi);
+  background:var(--ai);
+  border:1px solid var(--ai); border-radius:999px;
+  padding:5px 15px;
+  cursor:pointer;
+  transition:background .25s ease, border-color .25s ease;
+}
+.btn-primary:hover{ background:var(--asagi); border-color:var(--asagi); }
+

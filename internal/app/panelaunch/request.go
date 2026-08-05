@@ -500,7 +500,7 @@ func BorderLabel(parent, name string) string {
 }
 
 // parentDisplay renders a parent ref for display, mirroring the dashboard's
-// parentLabel (web/src/lib/github.ts): numeric issue parents get a "#" prefix,
+// parentLabel (web/src/shared/github.ts): numeric issue parents get a "#" prefix,
 // GitHub Projects URLs drop the host prefix, and plan:<slug> / @manual pass
 // through unchanged.
 func parentDisplay(parent string) string {

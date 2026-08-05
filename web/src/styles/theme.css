@@ -1,0 +1,63 @@
+:root{
+  color-scheme:light;
+
+  --washi:   #F7F2E8;
+  --paper:   #FFFDF8;
+  --paper-2: rgba(201,232,236,.28);
+  --sumi:    #2A2E33;
+  --ink-78:  rgba(42,46,51,.78);
+  --ink-60:  rgba(42,46,51,.62);
+  --ink-40:  rgba(42,46,51,.45);
+  --ai:      #165E83;
+  --ai-deep: #11506E;
+  --asagi:   #00A3AF;
+  --byakugun:#C9E8EC;
+  --byakugun-bg: rgba(201,232,236,.5);
+  --leaf:    #C9E8EC; /* ロゴの扇面 */
+  --suna:    #E2D9C8;
+  --suna-soft: rgba(226,217,200,.65);
+  --ok:   #0E7A6E;
+  --warn: #9A6B2F;
+  --err:  #B4503B;
+  --nav-bg: rgba(247,242,232,.86);
+  --shadow: 0 6px 18px -8px rgba(42,46,51,.18);
+
+  /* terminal block — docs サイトの濃色ブロックを両テーマ共通で固定 */
+  --term-bg:  #22282E;
+  --term-bar: #1B2126;
+  --term-ink: #E9E3D6;
+  --term-cyan:#33BFC9;
+  --term-dim: #79858E;
+
+  --f-disp: "Fraunces","Shippori Mincho B1",serif;
+  --f-body: "Zen Kaku Gothic New","Hiragino Kaku Gothic ProN",sans-serif;
+  --f-code: "M PLUS 1 Code",ui-monospace,"SFMono-Regular",Menlo,monospace;
+
+  --ease-fan: cubic-bezier(.22,1,.36,1);
+  --maxw: 1416px;
+  --nav-h: 60px;
+}
+html[data-theme="dark"]{
+  color-scheme:dark;
+  --washi:   #161B20;
+  --paper:   #22282E;
+  --paper-2: #1B2126;
+  --sumi:    #E9E3D6;
+  --ink-78:  rgba(233,227,214,.78);
+  --ink-60:  rgba(233,227,214,.58);
+  --ink-40:  rgba(233,227,214,.40);
+  --ai:      #6FAECB;
+  --ai-deep: #8FC3DA;
+  --asagi:   #33BFC9;
+  --byakugun:#C9E8EC;
+  --byakugun-bg: rgba(51,191,201,.13);
+  --leaf:    rgba(51,191,201,.22); /* ロゴの扇面 */
+  --suna:    rgba(233,227,214,.16);
+  --suna-soft: rgba(233,227,214,.10);
+  --ok:   #58BFA4;
+  --warn: #D9A05B;
+  --err:  #E08A74;
+  --nav-bg: rgba(22,27,32,.86);
+  --shadow: 0 14px 32px -18px rgba(0,0,0,.65);
+}
+

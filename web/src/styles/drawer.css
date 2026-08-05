@@ -1,0 +1,136 @@
+/* ============================================================ 詳細ドロワー */
+#drawer{
+  /* 幅は CSS 変数 --drawer-w のみで制御(inline width 禁止 — media query が
+   * cascade で上書きできるように)。上限はリスト側に最低 360px を残し、かつ
+   * グリッドコンテナのコンテンツ幅(--maxw)も超えない(超えると main 列が
+   * 不当に潰れる)。hook の viewportMax と一致させること。 */
+  width:clamp(320px, var(--drawer-w, 840px), min(calc(100vw - 360px), var(--maxw)));
+  position:sticky; top:var(--nav-h);
+  height:calc(100vh - var(--nav-h));
+  display:flex; flex-direction:column;
+  overflow:hidden;
+  background:var(--paper);
+  border-left:1px solid var(--suna);
+}
+#drawer[hidden]{ display:none; }
+/* リサイズグリップ — 左端 6px のヒットエリア。hover / focus / ドラッグ中に
+ * 浅葱 2px のラインを出す(focus の可視化はライン側で行う)。 */
+.drawer-grip{
+  position:absolute; inset:0 auto 0 0; width:6px;
+  z-index:3;
+  cursor:col-resize;
+  touch-action:none;
+}
+.drawer-grip::after{
+  content:""; position:absolute; inset:0 auto 0 0; width:2px;
+  background:var(--asagi);
+  opacity:0; transition:opacity .25s ease;
+}
+.drawer-grip:hover::after,
+.drawer-grip:focus-visible::after,
+html.drawer-resizing .drawer-grip::after{ opacity:1; }
+.drawer-grip:focus-visible{ outline:none; }
+html.drawer-resizing{ user-select:none; cursor:col-resize; }
+/* ヘッダ常時表示は flex column(#drawer)+ .drawer-body のスクロールが担う。
+   diff オーバーレイのヘッダ/本文/見出しは同型なのでセレクタを相乗りさせる */
+.drawer-head,.diff-head{
+  display:flex; align-items:center; gap:10px;
+  padding:16px 20px 13px;
+  background:var(--paper);
+  border-bottom:1px solid var(--suna);
+}
+.diff-head{ gap:12px; flex-wrap:wrap; padding:14px 22px 12px; }
+/* Session 名が余白を占め、差分行数 + 変更を表示 + ✕ が右端に寄る */
+.drawer-head h3{ flex:1; min-width:0; }
+.drawer-head h3,.diff-head h3{
+  font-family:var(--f-disp); font-variation-settings:"opsz" 40;
+  font-size:16px; font-weight:560; line-height:1.5;
+  color:var(--sumi);
+  overflow-wrap:anywhere;
+}
+.diff-head h3{ font-size:15px; }
+.drawer-head .d-issue,.diff-head .diff-title{ color:var(--ai); margin-right:6px; }
+#drawer-close{
+  flex:none;
+  width:30px; height:30px;
+  display:inline-flex; align-items:center; justify-content:center;
+  border:1px solid var(--suna); border-radius:999px;
+  background:transparent; color:var(--ink-60);
+  font-size:14px; cursor:pointer;
+  transition:border-color .25s ease, color .25s ease;
+}
+/* 右寄せは h3 の flex:1 が担う(#drawer-close に auto を足すと差分行数との
+   あいだに余白が割り込む) */
+#drawer-close:hover{ border-color:var(--asagi); color:var(--asagi); }
+/* スクロールは body 側 — グリップ(absolute)をドロワーの可視高に固定するため */
+.drawer-body,.diff-body{ flex:1; min-height:0; overflow-y:auto; padding:18px 20px 28px; }
+.d-sec{ margin-top:20px; }
+.d-sec:first-child{ margin-top:0; }
+.d-sec h4,.set-sec h4{
+  font-family:var(--f-disp);
+  font-size:10.5px; font-weight:500;
+  letter-spacing:.30em; text-transform:uppercase;
+  color:var(--asagi);
+  margin-bottom:8px;
+}
+.d-kv{ display:grid; grid-template-columns:92px minmax(0,1fr); row-gap:4px; column-gap:12px; font-size:12.5px; }
+.d-kv dt{ color:var(--ink-40); }
+.d-kv dd{ font-family:var(--f-code); color:var(--ink-78); overflow-wrap:anywhere; }
+.d-kv dd .tag{ vertical-align:1px; }
+.d-prs{ list-style:none; display:flex; flex-direction:column; gap:8px; font-size:12.5px; }
+.d-prs li{
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  font-family:var(--f-code);
+}
+.d-prompt{
+  font-family:var(--f-code); font-size:12px; line-height:1.9;
+  color:var(--ink-78);
+  background:var(--byakugun-bg);
+  border:1px solid var(--suna); border-radius:10px;
+  padding:12px 14px;
+  white-space:pre-wrap; overflow-wrap:anywhere;
+  max-height:180px; overflow-y:auto;
+}
+.capture-disabled-card{
+  display:flex; align-items:flex-start; gap:10px;
+  padding:11px 13px;
+  border:1px dashed var(--suna); border-radius:10px;
+  background:color-mix(in srgb, var(--paper-2) 72%, transparent);
+  color:var(--ink-40);
+  font-family:var(--f-code); font-size:11.5px; line-height:1.7;
+}
+.capture-disabled-mark{
+  flex:none;
+  padding:0 7px; border:1px solid var(--suna); border-radius:999px;
+  color:var(--ink-40); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase;
+}
+/* plan — Codex Plan Mode の提案プラン。和紙カード + 浅葱の左罫で、dark terminal
+   風の peek(流れる出力)と「文書」を視覚的に区別する */
+.plan-card{
+  font-family:var(--f-code); font-size:12px; line-height:1.9;
+  color:var(--ink-78);
+  background:var(--paper);
+  border:1px solid var(--suna);
+  border-left:3px solid var(--asagi);
+  border-radius:0 10px 10px 0;
+  padding:12px 14px;
+  white-space:pre-wrap; overflow-wrap:anywhere;
+  max-height:320px; overflow-y:auto;
+}
+.plan-meta{
+  margin-top:7px;
+  display:flex; align-items:center; gap:10px;
+  font-family:var(--f-code); font-size:11px; color:var(--ink-40);
+}
+.plan-reload{
+  margin-left:auto;
+  font-family:var(--f-code); font-size:11px;
+  color:var(--ai);
+  background:transparent;
+  border:1px solid var(--suna); border-radius:999px;
+  padding:2px 12px;
+  cursor:pointer;
+  transition:border-color .25s ease, color .25s ease;
+}
+.plan-reload:hover{ border-color:var(--asagi); color:var(--asagi); }
+

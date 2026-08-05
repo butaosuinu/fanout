@@ -319,7 +319,7 @@ auto は本文領域の幅で決める: `AUTO_SPLIT_MIN_PX`(1,000px)未満なら
 ファイル一覧 288px を引いた残りを 2 面に割っても片側 350px 前後は残る値。
 幅の取得に `ResizeObserver` は使わない — タブが非表示のあいだ配信が止まるうえ、
 パネル幅は「全画面 / 1,100px 以下ならビューポート幅、それ以外はグリップで決めた幅」
-として計算できる(1,100px は style.css の @media と同期)。
+として計算できる(1,100px は `web/src/styles/responsive.css` の @media と同期)。
 切り替えは `options` 経由で、file を作り直さない。
 
 片側しかない file(新規追加・削除)は `data-diff-type="single"` になり既定では全幅に

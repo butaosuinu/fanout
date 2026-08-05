@@ -1,0 +1,125 @@
+/* ============================================================ 設定モーダル
+   Nav の歯車から開く。将来の設定項目は .set-sec を足して並べる。 */
+.settings-backdrop{
+  position:fixed; inset:0;
+  z-index:70; /* diff オーバーレイ(60)より前面 */
+  display:flex; align-items:center; justify-content:center;
+  padding:24px;
+  background:color-mix(in srgb, var(--sumi) 32%, transparent);
+}
+.settings-modal{
+  width:min(560px, 100%);
+  max-height:min(640px, 100%);
+  display:flex; flex-direction:column;
+  overflow-y:auto;
+  background:var(--washi);
+  border:1px solid var(--suna); border-radius:14px;
+  box-shadow:0 24px 48px -24px var(--shadow);
+}
+.settings-modal:focus{ outline:none; }
+/* sticky: 3 セクション分で max-height を越えてモーダルがスクロールするため、
+   見出しと閉じるボタンが流れて消えないよう上端に貼り付ける。 */
+.settings-head{
+  position:sticky; top:0; z-index:1;
+  display:flex; align-items:center; gap:10px;
+  padding:14px 18px 12px;
+  background:var(--paper);
+  border-bottom:1px solid var(--suna);
+}
+.settings-head h3{
+  font-family:var(--f-disp); font-variation-settings:"opsz" 40;
+  font-size:15px; font-weight:560; color:var(--sumi);
+}
+#settings-close{
+  flex:none; margin-left:auto;
+  width:30px; height:30px;
+  display:inline-flex; align-items:center; justify-content:center;
+  border:1px solid var(--suna); border-radius:999px;
+  background:transparent; color:var(--ink-60);
+  font-size:14px; cursor:pointer;
+  transition:border-color .25s ease, color .25s ease;
+}
+#settings-close:hover{ border-color:var(--asagi); color:var(--asagi); }
+.set-sec{ padding:16px 18px 20px; }
+.set-sec + .set-sec{ border-top:1px solid var(--suna-soft); }
+
+/* 言語の 3 択。外観と違って見本の絵が無いので、.set-theme-cards(3 列固定の
+   グリッド)は流用せず、内容幅で並ぶピル型にする。狭い幅では折り返す。 */
+.set-lang-opts{ display:flex; flex-wrap:wrap; gap:8px; }
+.set-lang-opt{
+  display:inline-flex; align-items:center;
+  padding:6px 14px;
+  border:1px solid var(--suna); border-radius:999px;
+  background:transparent; color:var(--ink-60);
+  font-size:12.5px; cursor:pointer;
+  transition:border-color .25s ease, color .25s ease, background-color .25s ease;
+}
+/* radio は display:none にしない — フォーカスと矢印キー移動を残すため、
+   潰して隠すだけにする(.set-theme-card input と同じ手)。 */
+.set-lang-opt input{ position:absolute; width:0; height:0; opacity:0; }
+.set-lang-opt:hover{ border-color:var(--asagi); color:var(--asagi); }
+.set-lang-opt:has(input:checked){
+  border-color:var(--ai); background:var(--paper-2); color:var(--sumi);
+}
+.set-lang-opt:has(input:focus-visible){ outline:2px solid var(--ai); outline-offset:2px; }
+
+/* 外観の見本カード — ダッシュボードの縮図。色はパレットの実値をここに直接
+   置く(var(--washi) 等を使うと、いま選んでいる外観に両方が染まって見本に
+   ならない)。light / dark 両方の絵を重ね、data-mode でどちらを出すか決める。 */
+.set-theme-cards{ display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+.set-theme-card{ display:flex; flex-direction:column; gap:7px; cursor:pointer; }
+.set-theme-card input{ position:absolute; width:0; height:0; opacity:0; }
+.stc-art{
+  position:relative; display:block;
+  aspect-ratio:16/11; overflow:hidden;
+  border:1px solid var(--suna); border-radius:9px;
+  transition:border-color .2s ease, box-shadow .2s ease;
+}
+.set-theme-card input:focus-visible + .stc-art,
+.set-theme-card input:checked + .stc-art{
+  border-color:var(--asagi);
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--asagi) 32%, transparent);
+}
+.stc-face{ position:absolute; inset:0; display:block; padding:10px 10px 0; }
+.stc-light{ background:#F7F2E8; }
+.stc-dark{ background:#161B20; }
+.set-theme-card[data-mode="light"] .stc-dark{ display:none; }
+.set-theme-card[data-mode="dark"] .stc-light{ display:none; }
+/* システムは 1 枚のカードで両方を見せる — 右半分だけ dark を出す */
+.set-theme-card[data-mode="system"] .stc-dark{ clip-path:inset(0 0 0 50%); }
+.stc-win{ display:block; height:100%; padding:8px 9px; border-radius:7px 7px 0 0; }
+.stc-light .stc-win{ background:#FFFDF8; box-shadow:0 3px 9px -5px rgba(42,46,51,.5); }
+.stc-dark .stc-win{ background:#22282E; box-shadow:0 3px 9px -5px rgba(0,0,0,.7); }
+.stc-bar{ display:block; height:4px; width:38%; border-radius:2px; }
+.stc-light .stc-bar{ background:#165E83; }
+.stc-dark .stc-bar{ background:#6FAECB; }
+.stc-l{ display:block; height:4px; border-radius:2px; margin-top:7px; }
+.stc-light .stc-l{ background:#E2D9C8; }
+.stc-dark .stc-l{ background:rgba(233,227,214,.20); }
+.stc-l.w1{ width:88%; }
+.stc-l.w2{ width:64%; }
+.stc-l.w3{ width:76%; }
+.stc-label{ text-align:center; font-size:11.5px; color:var(--ink-40); }
+.set-theme-card input:checked ~ .stc-label{ color:var(--sumi); }
+
+/* diff テーマ — 見本(実物の FileDiff)の下に選択 select を置く 2 カラム */
+.set-diff-themes{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.set-diff-theme{ display:flex; flex-direction:column; gap:6px; min-width:0; }
+.set-diff-theme > label{ font-size:11.5px; color:var(--ink-40); }
+/* 高さは見本(固定 patch)の実寸に任せる — 切り落とさず全行を見せる。
+   読込中だけは同じくらいの箱を確保してレイアウトの跳ねを抑える。 */
+.set-theme-preview{
+  overflow:hidden;
+  border:1px solid var(--suna); border-radius:9px;
+  font-size:11px;
+}
+.set-theme-preview.is-loading{ height:118px; background:var(--paper-2); }
+.set-diff-theme select{
+  width:100%; min-width:0;
+  font-family:var(--f-code); font-size:12px; color:var(--ink-78);
+  background:var(--paper);
+  border:1px solid var(--suna); border-radius:8px;
+  padding:4px 8px;
+  cursor:pointer;
+}
+

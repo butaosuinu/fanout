@@ -1,0 +1,17 @@
+/* ============================================================
+   fanout dashboard — PAPER BREEZE(扇と微風・和紙ライト)
+   light = docs site verbatim / dark = 夜の墨(docs .terminal 基準)
+   ============================================================ */
+/* 並び順は cascade の一部: drawer -> diff は .diff-head/.diff-body の同詳細度上書きが依存、responsive は最後尾必須。 */
+@import "./theme.css";
+@import "./base.css";
+@import "./nav.css";
+@import "./shell.css";
+@import "./filter.css";
+@import "./sessions.css";
+@import "./drawer.css";
+@import "./controls.css";
+@import "./terminal.css";
+@import "./diff.css";
+@import "./settings.css";
+@import "./responsive.css";

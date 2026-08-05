@@ -145,9 +145,12 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   H; `poller.go`, `sse.go`, and `embed.go` are class M. In `tui`, `actions.go` (lifecycle close/merge/
   cleanup wiring and confirmation flow) is class H, rendering/formatting
   (`view.go` / `compact.go` / `styles.go`) is class A, and
-  the remaining key/form/polling wiring is class M. The dashboard SPA lives in `web/` (React + Vite + TS; `index.html`'s
-  no-referrer/external-fetch policy is class H, `src/hooks`+`src/lib`
-  transport is class M, the rest is class A) and bundles into
+  the remaining key/form/polling wiring is class M. The dashboard SPA lives in `web/` (React + Vite + TS,
+  split into `src/app`, `src/features/*`, `src/transport`, `src/ui`,
+  `src/shared`, `src/styles`; `index.html`'s no-referrer/external-fetch policy
+  is class H, `src/transport` is class M — as are `src/shared/github.ts`
+  (href-safety boundary) and `src/features/diff/diff.ts` (hostile-patch
+  parse/render limits) — the rest is class A) and bundles into
   `internal/ui/dashboard/static/` via `go:embed`.
 
 The full package table, the Mermaid dependency diagram, the human-must-read
@@ -359,7 +362,7 @@ existing-debt list: `docs/complexity.ja.md`.
   suppression-watch job on the TS side. Do not reach for one to make a check pass.
 - Only new code is judged. Every layer scopes to the merge base, so pre-existing
   findings in `internal/ui/tui/update.go` or
-  `web/src/components/DiffOverlay.tsx` never block an edit. Do not switch any
+  `web/src/features/diff/DiffOverlay.tsx` never block an edit. Do not switch any
   layer to a whole-tree scan: 10% of existing non-test Go functions are over
   budget, and `make check` would stop writing the push-gate marker.
 - Complexity is deliberately not part of `make lint` or `make check` for that

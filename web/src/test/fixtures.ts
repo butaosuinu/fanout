@@ -5,7 +5,7 @@ import type {
   Rollup,
   Session,
   Snapshot,
-} from "../lib/types";
+} from "../transport/types";
 
 export function makeRollup(over: Partial<Rollup> = {}): Rollup {
   return {
