@@ -609,6 +609,11 @@ dashboard の 2 秒 tick から呼ばれる。`UntrackedStatCache` が結果を�
 ので、stat を鍵にすると一覧だけが古い行数を返し続けて viewer と食い違う。
 ハッシュのコストは節約する process より小さい(500 file が 256 KiB 上限でも
 約 190 ミリ秒)。
+entry は worktree ごとに持ち、1 回の収集が見つけた集合で丸ごと置き換える —
+共通の容量上限にすると、1 つの大きい worktree の巡回が他の worktree の
+安定した entry まで捨て、次の tick で全 file の git process が走り直す。
+git は鍵を作った後に file を読み直すので、計測後に鍵を取り直して
+変わっていた場合はキャッシュしない(その pass の統計は返す)。
 collector を tick ごとに作り直すとキャッシュも作り直されるので、
 web の `poller` と TUI の `model` はどちらも `sessionview.GitWorktreeStat` を
 1 度だけ構築して使い回す。

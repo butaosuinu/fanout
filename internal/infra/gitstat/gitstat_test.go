@@ -1402,16 +1402,16 @@ func TestRunnerWorktreeMemoizesUntrackedCountsUntilTheFileChanges(t *testing.T) 
 	if first.Additions != 1 {
 		t.Fatalf("Worktree() = +%d, want +1", first.Additions)
 	}
-	if len(cache.entries) != 1 {
-		t.Fatalf("cache holds %d entries, want 1", len(cache.entries))
+	if n := cache.size(repo); n != 1 {
+		t.Fatalf("cache holds %d entries for the worktree, want 1", n)
 	}
 
 	again, err := runner.Worktree(repo, "main")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.Additions != first.Additions || len(cache.entries) != 1 {
-		t.Fatalf("Worktree() = +%d with %d entries, want the memoized +%d", again.Additions, len(cache.entries), first.Additions)
+	if again.Additions != first.Additions || cache.size(repo) != 1 {
+		t.Fatalf("Worktree() = +%d with %d entries, want the memoized +%d", again.Additions, cache.size(repo), first.Additions)
 	}
 
 	writeGitstatFile(t, repo, "untracked.txt", []byte("one\ntwo\nthree\n"))
@@ -1462,20 +1462,90 @@ func TestRunnerWorktreeRecountsWhenContentChangesUnderTheSameStat(t *testing.T) 
 	}
 }
 
-func TestUntrackedStatCacheNilIsUsableAndFullResets(t *testing.T) {
-	var absent *UntrackedStatCache
-	absent.store("k", FileStat{Path: "x"})
-	if _, ok := absent.lookup("k"); ok {
-		t.Fatal("nil cache reported a hit; it must simply disable memoization")
+// git re-reads the file after the cache key is hashed, so untrackedFileStat
+// re-derives the key afterwards and refuses to memoize when it moved. This
+// pins the comparison that guard depends on: the key follows current content,
+// and a file that vanished yields an error rather than a matching key.
+func TestUntrackedFileKeyNowFollowsCurrentContent(t *testing.T) {
+	repo := t.TempDir()
+	writeGitstatFile(t, repo, "u.txt", []byte("one\n"))
+	before, err := untrackedFileKeyNow(repo, "u.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same, sameErr := untrackedFileKeyNow(repo, "u.txt"); sameErr != nil || same != before {
+		t.Fatalf("untrackedFileKeyNow() = %q, %v on an unchanged file, want %q", same, sameErr, before)
 	}
 
-	cache := NewUntrackedStatCache()
-	for i := range untrackedCacheLimit {
-		cache.store(fmt.Sprintf("k%d", i), FileStat{})
+	writeGitstatFile(t, repo, "u.txt", []byte("two\n"))
+	after, err := untrackedFileKeyNow(repo, "u.txt")
+	if err != nil {
+		t.Fatal(err)
 	}
-	cache.store("overflow", FileStat{})
-	if len(cache.entries) != 1 {
-		t.Fatalf("cache holds %d entries after overflow, want a reset to 1", len(cache.entries))
+	if after == before {
+		t.Fatal("untrackedFileKeyNow() did not move after the content changed")
+	}
+
+	if err := os.Remove(filepath.Join(repo, "u.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if gone, goneErr := untrackedFileKeyNow(repo, "u.txt"); goneErr == nil {
+		t.Fatalf("untrackedFileKeyNow() = %q on a removed file, want an error", gone)
+	}
+}
+
+// A quiet file stays cacheable: the guard must not disable memoization
+// wholesale, or the 2-second tick pays the full per-file cost again.
+func TestUntrackedFileStatReturnsACacheKeyForAQuietFile(t *testing.T) {
+	repo := initPatchRepo(t)
+	writeGitstatFile(t, repo, "untracked.txt", []byte("one\n"))
+
+	stat, key, err := Runner{}.untrackedFileStat(repo, "untracked.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key == "" {
+		t.Fatalf("untrackedFileStat() = %+v with no key; an unchanged file must be cacheable", stat)
+	}
+	if stat.Additions != 1 {
+		t.Fatalf("untrackedFileStat() = %+v, want +1", stat)
+	}
+}
+
+func TestUntrackedStatCacheNilIsUsable(t *testing.T) {
+	var absent *UntrackedStatCache
+	absent.replace("/wt", map[string]FileStat{"k": {Path: "x"}})
+	if _, ok := absent.lookup("/wt", "k"); ok {
+		t.Fatal("nil cache reported a hit; it must simply disable memoization")
+	}
+}
+
+// A worktree sweep must not evict another worktree's entries. A shared
+// capacity cap did exactly that: one large worktree wiped every stable entry
+// and the next tick re-ran a git process per file.
+func TestUntrackedStatCacheKeepsWorktreesIndependent(t *testing.T) {
+	cache := NewUntrackedStatCache()
+	big := map[string]FileStat{}
+	for i := range 5000 {
+		big[fmt.Sprintf("k%d", i)] = FileStat{}
+	}
+	cache.replace("/small", map[string]FileStat{"kept": {Path: "kept"}})
+	cache.replace("/big", big)
+
+	if _, ok := cache.lookup("/small", "kept"); !ok {
+		t.Fatal("a large sweep evicted another worktree's entry")
+	}
+	if cache.size("/big") != len(big) {
+		t.Fatalf("cache holds %d entries for the large worktree, want %d", cache.size("/big"), len(big))
+	}
+
+	// 次の sweep が見つけなかった entry は落ちる(= disk にある分だけ保つ)。
+	cache.replace("/big", map[string]FileStat{"k0": {}})
+	if cache.size("/big") != 1 {
+		t.Fatalf("cache holds %d entries after a smaller sweep, want 1", cache.size("/big"))
+	}
+	if _, ok := cache.lookup("/small", "kept"); !ok {
+		t.Fatal("a sweep of one worktree dropped another worktree's entry")
 	}
 }
 
@@ -1870,4 +1940,11 @@ func installGitstatShim(t *testing.T, name, script string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// size reports how many entries a worktree holds, for assertions only.
+func (c *UntrackedStatCache) size(worktree string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.byWorktree[worktree])
 }

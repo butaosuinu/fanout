@@ -61,12 +61,6 @@ type Runner struct {
 	UntrackedCache *UntrackedStatCache
 }
 
-// untrackedCacheLimit bounds the cache. Reaching it drops everything rather
-// than evicting by age: the working set is one entry per untracked file per
-// worktree, so passing this means the caller changed shape, not that a few
-// entries went cold.
-const untrackedCacheLimit = 4096
-
 // UntrackedStatCache memoizes untracked-file counts across calls.
 //
 // Counting one untracked file costs a git process, and Runner.Worktree runs on
@@ -80,37 +74,47 @@ const untrackedCacheLimit = 4096
 // less than the process it saves — 500 files at the 256 KiB ceiling hash in
 // ~190ms against ~4.6s of git startup.
 //
+// Entries live per worktree and each collection pass replaces its worktree's
+// set wholesale, so the cache holds exactly what is on disk. A shared capacity
+// cap would be worse than no cache: one sweep past the limit evicts the stable
+// entries of every other worktree, and the next tick re-runs a git process for
+// each of them.
+//
 // The zero value is not usable; call NewUntrackedStatCache. A nil cache is
 // valid and simply disables memoization.
 type UntrackedStatCache struct {
-	mu      sync.Mutex
-	entries map[string]FileStat
+	mu         sync.Mutex
+	byWorktree map[string]map[string]FileStat
 }
 
 func NewUntrackedStatCache() *UntrackedStatCache {
-	return &UntrackedStatCache{entries: make(map[string]FileStat)}
+	return &UntrackedStatCache{byWorktree: map[string]map[string]FileStat{}}
 }
 
-func (c *UntrackedStatCache) lookup(key string) (FileStat, bool) {
+func (c *UntrackedStatCache) lookup(worktree, key string) (FileStat, bool) {
 	if c == nil {
 		return FileStat{}, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	stat, ok := c.entries[key]
+	stat, ok := c.byWorktree[worktree][key]
 	return stat, ok
 }
 
-func (c *UntrackedStatCache) store(key string, stat FileStat) {
+// replace swaps in what one collection pass measured. Entries the pass did not
+// see describe files that are gone or changed, so dropping them keeps the cache
+// bounded by the worktree without ever evicting a live entry.
+func (c *UntrackedStatCache) replace(worktree string, entries map[string]FileStat) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.entries) >= untrackedCacheLimit {
-		clear(c.entries)
+	if len(entries) == 0 {
+		delete(c.byWorktree, worktree)
+		return
 	}
-	c.entries[key] = stat
+	c.byWorktree[worktree] = entries
 }
 
 // untrackedCacheKey identifies the file by worktree, path, file type, and
@@ -274,10 +278,14 @@ func (r Runner) mergeUntracked(
 	if err != nil {
 		return nil, err
 	}
+	measured := make(map[string]FileStat, len(untracked))
 	for _, rel := range untracked {
-		stat, statErr := r.untrackedFileStat(path, rel)
+		stat, key, statErr := r.untrackedFileStat(path, rel)
 		if statErr != nil {
 			return nil, statErr
+		}
+		if key != "" {
+			measured[key] = stat
 		}
 		if index, ok := trackedByPath[rel]; ok {
 			files[index].replacement = &stat
@@ -285,6 +293,7 @@ func (r Runner) mergeUntracked(
 		}
 		files = append(files, patchFile{FileStat: stat})
 	}
+	r.UntrackedCache.replace(path, measured)
 	return files, nil
 }
 
@@ -527,29 +536,45 @@ type patchFile struct {
 	replacement *FileStat
 }
 
-func (r Runner) untrackedFileStat(path, rel string) (_ FileStat, err error) {
+// untrackedFileStat measures one untracked file and returns the cache key its
+// counts belong to. An empty key means "do not memoize this": the file is
+// oversized, or it changed while git was measuring it.
+func (r Runner) untrackedFileStat(path, rel string) (_ FileStat, _ string, err error) {
 	defer errs.Wrap(&err, "untracked file %q", rel)
 
 	info, err := untrackedFileInfo(path, rel)
 	if err != nil {
-		return FileStat{}, err
+		return FileStat{}, "", err
 	}
 	if info.Size() > patchFileLimit {
-		return FileStat{Path: rel, OmittedReason: "tooLarge"}, nil
+		return FileStat{Path: rel, OmittedReason: "tooLarge"}, "", nil
 	}
 	key, err := untrackedCacheKey(path, rel, info)
 	if err != nil {
-		return FileStat{}, err
+		return FileStat{}, "", err
 	}
-	if stat, ok := r.UntrackedCache.lookup(key); ok {
-		return stat, nil
+	if stat, ok := r.UntrackedCache.lookup(path, key); ok {
+		return stat, key, nil
 	}
 	stat, err := r.addedFileStat(path, rel)
 	if err != nil {
-		return FileStat{}, err
+		return FileStat{}, "", err
 	}
-	r.UntrackedCache.store(key, stat)
-	return stat, nil
+	// git re-read the file after we hashed it. If a writer got in between, the
+	// counts describe different bytes than the key names — return them for this
+	// pass but do not let them answer for that content later.
+	if after, afterErr := untrackedFileKeyNow(path, rel); afterErr != nil || after != key {
+		return stat, "", nil
+	}
+	return stat, key, nil
+}
+
+func untrackedFileKeyNow(path, rel string) (string, error) {
+	info, err := untrackedFileInfo(path, rel)
+	if err != nil {
+		return "", err
+	}
+	return untrackedCacheKey(path, rel, info)
 }
 
 // untrackedFileInfo rejects anything that is not a regular file or a symlink —
