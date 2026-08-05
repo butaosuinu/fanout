@@ -125,7 +125,7 @@ func (l *Launcher) realizeHerdrLaunch(
 		return state.HerdrIntent{}, fmt.Errorf("realize coordinator: %w", err)
 	}
 	if err := l.recordHerdrCoordinator(req, operation.locked, coordinator, operation.route); err != nil {
-		return state.HerdrIntent{}, fmt.Errorf("record coordinator: %w", err)
+		return coordinator, fmt.Errorf("record coordinator: %w", err)
 	}
 	intent, err := l.realizeHerdrChild(operation.ctx, req, operation.locked, operation.route)
 	if err != nil {
@@ -237,9 +237,9 @@ func (l *Launcher) findHerdrCoordinatorRow(
 	intent state.HerdrIntent,
 	route herdrrun.OwnedLaunchRoute,
 ) (bool, error) {
-	roots, err := worktree.ListRoots(l.Info.ProjectRoot)
+	roots, err := herdrCoordinatorRowRoots(l.Info.ProjectRoot, runtimeParent, intent.OwnerProjectRoot)
 	if err != nil {
-		return false, fmt.Errorf("list linked worktrees for Herdr coordinator: %w", err)
+		return false, err
 	}
 	for _, root := range roots {
 		store, loadErr := loadHerdrCoordinatorStore(l.Info.ProjectRoot, root, locked)
@@ -252,6 +252,40 @@ func (l *Launcher) findHerdrCoordinatorRow(
 		}
 	}
 	return false, nil
+}
+
+func herdrCoordinatorRowRoots(projectRoot, runtimeParent, ownerProjectRoot string) ([]string, error) {
+	owner, err := state.HerdrOwnerProjectRoot(runtimeParent, ownerProjectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Herdr coordinator owner: %w", err)
+	}
+	if owner != "" {
+		matches, matchErr := sameHerdrCoordinatorOwner(projectRoot, owner)
+		if matchErr != nil {
+			return nil, matchErr
+		}
+		if !matches {
+			return nil, fmt.Errorf("Herdr coordinator owner %s does not match launch root %s", owner, projectRoot)
+		}
+		return []string{projectRoot}, nil
+	}
+	roots, err := worktree.ListRoots(projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("list linked worktrees for Herdr coordinator: %w", err)
+	}
+	return roots, nil
+}
+
+func sameHerdrCoordinatorOwner(projectRoot, owner string) (bool, error) {
+	projectInfo, err := os.Stat(projectRoot)
+	if err != nil {
+		return false, fmt.Errorf("stat Herdr coordinator launch root: %w", err)
+	}
+	ownerInfo, err := os.Stat(owner)
+	if err != nil {
+		return false, fmt.Errorf("stat Herdr coordinator owner: %w", err)
+	}
+	return os.SameFile(projectInfo, ownerInfo), nil
 }
 
 func loadHerdrCoordinatorStore(projectRoot, root string, locked *state.LockedStore) (state.Store, error) {

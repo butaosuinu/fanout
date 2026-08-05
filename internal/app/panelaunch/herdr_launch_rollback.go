@@ -19,6 +19,13 @@ func (l *Launcher) rollbackFailedHerdrLaunch(
 	if intent.ID == "" {
 		return cause
 	}
+	if intent.Kind == state.HerdrIntentCoordinator {
+		journal, err := locked.HerdrIntents(l.Info.ProjectRoot)
+		if err != nil {
+			return errors.Join(cause, err)
+		}
+		return errors.Join(cause, markHerdrIntentManual(journal, intent, cause))
+	}
 	rollbackErr := l.rollbackHerdrLaunch(locked, intent, cause)
 	return errors.Join(cause, rollbackErr)
 }
