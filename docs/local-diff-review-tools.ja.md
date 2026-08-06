@@ -633,7 +633,11 @@ worktree を捨てる — Session の作成と cleanup は通常の運用ルー�
 読まない: git も follow しない契約であり(gitattributes(5) Notes)、worktree は
 敵性入力なので `/dev/zero` や device へ向けられると poll が止まる。
 対象は git が参照する全ソース(`$GIT_DIR/info/attributes`、worktree 内の
-`.gitattributes`、`core.attributesFile`)。diff viewer 側はキャッシュを持たず
+`.gitattributes`、user file = `core.attributesFile` または未設定時の
+`$XDG_CONFIG_HOME/git/attributes`)。user file の path は `git config --path` で
+解決する — `--get` は `~` を展開せずに返し、worktree 相対として読まれてしまう。
+symlink を辿らないのは worktree 内の `.gitattributes` だけで、repository と
+user の file は git 同様に辿る。diff viewer 側はキャッシュを持たず
 これらを常に反映するので、summary が追わないと一致契約が崩れる。
 未追跡 file が 1 つも無い worktree では digest 自体を計算しない — 2 秒 tick で
 git process 2 つぶんの常時コストになるため。
@@ -669,6 +673,11 @@ tracked と untracked の各 file は path 順に並べる。
 適用しない。
 #578 の endpoint は同じ request context と `MaxFiles` / `MaxPatchBytes` を
 `WorktreePatch` へ渡し、500 files と 10 MiB を収集中に止める。
+file 上限は未追跡 file を計測する前に判定する — 1 file につき git process が
+1 つ起きるので、明らかに上限超過の要求が全件ぶんのコストを払ってから
+弾かれることがないようにする。tracked と untracked の両方にある path は
+1 file に畳まれ、内容が同じなら消えることもあるので、取りうる最小の件数でも
+上限を超えるときだけ弾く。
 1 MiB response 上限と省略処理も #578 の endpoint が担う。
 
 #### #593 に委譲する snapshot isolation

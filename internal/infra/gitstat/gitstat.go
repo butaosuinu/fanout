@@ -166,29 +166,25 @@ func untrackedCacheKey(path, rel, attrs string, info os.FileInfo) (string, error
 // text count answering until the file itself changed.
 //
 // Scope is every source git consults for this worktree, in its own precedence
-// order: $GIT_DIR/info/attributes, the worktree's .gitattributes files, and
-// core.attributesFile. All are read from disk so uncommitted edits count, and
-// ignored .gitattributes are included because git applies them all the same.
+// order: $GIT_DIR/info/attributes, the worktree's .gitattributes files, and the
+// user file. All are read from disk so uncommitted edits count, and ignored
+// .gitattributes are included because git applies them all the same.
 func (r Runner) attributesDigest(path string) (string, error) {
-	files, err := r.attributesSources(path)
+	sources, err := r.attributesSources(path)
 	if err != nil {
 		return "", err
 	}
 	digest := sha256.New()
-	for _, rel := range files {
-		full := rel
+	for _, source := range sources {
+		full := source.path
 		if !filepath.IsAbs(full) {
-			full = filepath.Join(path, filepath.FromSlash(rel))
+			full = filepath.Join(path, filepath.FromSlash(source.path))
 		}
-		// Read only what git reads. It does not follow a .gitattributes symlink
-		// (gitattributes(5) "Notes"), and a worktree is hostile input: pointing
-		// the name at /dev/zero or a device node would hang the poll here on a
-		// worktree git itself diffs fine.
-		content, readErr := readRegularFile(full)
+		content, readErr := readAttributesFile(full, source.inTree)
 		if readErr != nil {
-			return "", fmt.Errorf("read attributes %q: %w", rel, readErr)
+			return "", fmt.Errorf("read attributes %q: %w", source.path, readErr)
 		}
-		digest.Write([]byte(rel))
+		digest.Write([]byte(source.path))
 		digest.Write([]byte{0})
 		digest.Write(content)
 		digest.Write([]byte{0})
@@ -196,17 +192,54 @@ func (r Runner) attributesDigest(path string) (string, error) {
 	return fmt.Sprintf("%x", digest.Sum(nil)), nil
 }
 
+// attributesSource is one file git consults for attributes. inTree marks the
+// worktree's own .gitattributes, which git reads without following symlinks.
+type attributesSource struct {
+	path   string
+	inTree bool
+}
+
+// readAttributesFile reads a source the way git reads it. An in-tree
+// .gitattributes is never followed through a symlink (gitattributes(5)
+// "Notes") — the worktree is hostile input, and aiming the name at /dev/zero
+// would hang the poll on a worktree git itself diffs fine. The repository and
+// user files sit outside that content, and git does follow those.
+func readAttributesFile(full string, inTree bool) ([]byte, error) {
+	if inTree {
+		return readRegularFile(full)
+	}
+	content, err := os.ReadFile(full)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	return content, nil
+}
+
 // attributesSources lists every attributes file git would consult, in a stable
-// order. Paths are returned as given: worktree-relative for in-tree files, and
-// whatever git or config reports for the two out-of-tree sources.
-func (r Runner) attributesSources(path string) ([]string, error) {
-	sources := []string{}
+// order.
+func (r Runner) attributesSources(path string) ([]attributesSource, error) {
+	sources := []attributesSource{}
 	if out, err := r.git("-C", path, "rev-parse", "--git-path", "info/attributes"); err == nil {
 		if rel := strings.TrimSpace(string(out)); rel != "" {
-			sources = append(sources, rel)
+			sources = append(sources, attributesSource{path: rel})
 		}
 	}
 
+	files, err := r.inTreeAttributesFiles(path)
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range files {
+		sources = append(sources, attributesSource{path: file, inTree: true})
+	}
+
+	if user := r.userAttributesFile(path); user != "" {
+		sources = append(sources, attributesSource{path: user})
+	}
+	return sources, nil
+}
+
+func (r Runner) inTreeAttributesFiles(path string) ([]string, error) {
 	env := append(gitEnv(), "GIT_LITERAL_PATHSPECS=0")
 	out, err := execx.OutputContext(r.context(), r.Cwd, env, "git",
 		"-C", path, "ls-files", "-z", "--cached", "--others",
@@ -220,16 +253,28 @@ func (r Runner) attributesSources(path string) ([]string, error) {
 		return nil, fmt.Errorf("parse attributes paths: %w", err)
 	}
 	sort.Strings(files)
-	sources = append(sources, files...)
+	return files, nil
+}
 
+// userAttributesFile resolves the user-level attributes file git would read:
+// core.attributesFile when set, else the XDG default. --path is what expands a
+// configured "~/.gitattrs"; --get would hand back the tilde and send the read
+// looking under the worktree.
+func (r Runner) userAttributesFile(path string) string {
 	// Unset is the common case and git exits non-zero for it; that is not an
-	// error here, just one fewer source.
-	if out, cfgErr := r.git("-C", path, "config", "--get", "core.attributesFile"); cfgErr == nil {
+	// error here, just the fall-through to the default location.
+	if out, err := r.git("-C", path, "config", "--path", "--get", "core.attributesFile"); err == nil {
 		if file := strings.TrimSpace(string(out)); file != "" {
-			sources = append(sources, file)
+			return file
 		}
 	}
-	return sources, nil
+	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
+		return filepath.Join(xdg, "git", "attributes")
+	}
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return filepath.Join(home, ".config", "git", "attributes")
+	}
+	return ""
 }
 
 // untrackedContent reads what git would compare: the link target for a symlink,
@@ -422,6 +467,9 @@ func (r Runner) mergeUntracked(
 		r.UntrackedCache.replace(path, nil)
 		return files, nil
 	}
+	if err = r.rejectOverFileLimit(files, untracked, trackedByPath); err != nil {
+		return nil, err
+	}
 	attrs, err := r.attributesDigest(path)
 	if err != nil {
 		return nil, err
@@ -431,7 +479,17 @@ func (r Runner) mergeUntracked(
 		return nil, err
 	}
 	r.UntrackedCache.replace(path, measured)
+	return mergePatchFiles(files, untracked, trackedByPath, stats), nil
+}
 
+// mergePatchFiles folds each measured untracked file into the list: a path that
+// is tracked as well becomes that entry's replacement instead of a second row.
+func mergePatchFiles(
+	files []patchFile,
+	untracked []string,
+	trackedByPath map[string]int,
+	stats []FileStat,
+) []patchFile {
 	for i, rel := range untracked {
 		if index, ok := trackedByPath[rel]; ok {
 			files[index].replacement = &stats[i]
@@ -439,7 +497,36 @@ func (r Runner) mergeUntracked(
 		}
 		files = append(files, patchFile{FileStat: stats[i]})
 	}
-	return files, nil
+	return files
+}
+
+// rejectOverFileLimit fails before anything is measured when the result cannot
+// fit under MaxFiles. Counting one untracked file costs a git process, so a
+// request far over the limit must not pay for every one of them only to be
+// rejected at the end. A path that is both tracked and untracked folds into a
+// single entry and can even drop out entirely, so this rejects only when the
+// smallest possible result is still over.
+func (r Runner) rejectOverFileLimit(
+	files []patchFile,
+	untracked []string,
+	trackedByPath map[string]int,
+) error {
+	if r.MaxFiles <= 0 {
+		return nil
+	}
+	added, replacements := 0, 0
+	for _, rel := range untracked {
+		if _, ok := trackedByPath[rel]; ok {
+			replacements++
+			continue
+		}
+		added++
+	}
+	least := len(files) + added - replacements
+	if least <= r.MaxFiles {
+		return nil
+	}
+	return fmt.Errorf("worktree patch contains %d files; limit is %d", least, r.MaxFiles)
 }
 
 // measureUntracked counts each untracked file, returning the stats in the order
