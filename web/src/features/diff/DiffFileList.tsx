@@ -1,6 +1,6 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { memo } from "react";
-import { diffTotals, fileBase, groupDiffFilesByDir } from "./diff";
+import { diffTotals, fileBase, fileDir, groupDiffFilesByDir } from "./diff";
 import type { DiffFileEntry } from "../../transport/types";
 import { IconButton, IconFold, IconUnfold } from "../../ui/icons";
 
@@ -16,6 +16,35 @@ function Stat({ file }: { file: DiffFileEntry }) {
       <span className="del">-{file.deletions}</span>
     </span>
   );
+}
+
+/* 移動元のうち「変わったほう」を出す。ディレクトリ移動なら旧ディレクトリ、
+ * 同じディレクトリ内の改名なら旧ファイル名。両側に basename を出すと、
+ * components/App.tsx → app/App.tsx が `App.tsx ← App.tsx` になって
+ * 移動元を示せない。 */
+function renameOrigin(file: DiffFileEntry): string | null {
+  if (!file.oldPath) return null;
+  const from = fileDir(file.oldPath);
+  if (from === fileDir(file.path)) return fileBase(file.oldPath);
+  return from || file.oldPath;
+}
+
+/* 移動した file は basename だけだと移動元が消える — group 見出しは移動先の
+ * ディレクトリなので、行にも移動元を出さないと「どこから来たか」が失われる。 */
+function FileRowBody({ file }: { file: DiffFileEntry }) {
+  const from = renameOrigin(file);
+  return (
+    <>
+      <span className="diff-file-name">{fileBase(file.path)}</span>
+      {from ? <span className="diff-file-was">← {from}</span> : null}
+      <Stat file={file} />
+    </>
+  );
+}
+
+/* 行の accessible name。移動は両端が揃って初めて意味を持つ。 */
+function fileRowLabel(file: DiffFileEntry): string {
+  return file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
 }
 
 /* diff オーバーレイのサイドバー。サーバーの files[] をそのまま出すので、patch に
@@ -66,8 +95,7 @@ export const DiffFileList = memo(function DiffFileList({
           </h4>
           <ul className="diff-file-rows">
             {g.files.map((f) => {
-              const stat = <Stat file={f} />;
-              const base = fileBase(f.path);
+              const label = fileRowLabel(f);
               return (
                 <li key={f.path}>
                   {selectable.has(f.path) ? (
@@ -78,17 +106,15 @@ export const DiffFileList = memo(function DiffFileList({
                     <button
                       type="button"
                       className="diff-file-row"
-                      title={f.path}
-                      aria-label={f.path}
+                      title={label}
+                      aria-label={label}
                       onClick={() => onSelect(f.path)}
                     >
-                      <span className="diff-file-name">{base}</span>
-                      {stat}
+                      <FileRowBody file={f} />
                     </button>
                   ) : (
-                    <span className="diff-file-row is-static" title={f.path}>
-                      <span className="diff-file-name">{base}</span>
-                      {stat}
+                    <span className="diff-file-row is-static" title={label}>
+                      <FileRowBody file={f} />
                     </span>
                   )}
                 </li>

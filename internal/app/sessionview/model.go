@@ -81,7 +81,7 @@ type PaneView struct {
 	IssueState  string          `json:"issueState"` // OPEN / CLOSED / UNKNOWN
 	PRs         []ghissue.PRRef `json:"prs"`
 	HasMergedPR bool            `json:"hasMergedPr"`
-	DiffSummary string          `json:"diffSummary"`           // +X/-Y vs merge-base with the base branch (committed + uncommitted)
+	DiffSummary string          `json:"diffSummary"`           // +X/-Y vs merge-base with the base branch (committed + uncommitted + untracked)
 	DirtyState  string          `json:"dirtyState"`            // dirty / clean / unknown
 	WorktreeErr string          `json:"worktreeErr,omitempty"` // per-row gitstat failure, if any
 

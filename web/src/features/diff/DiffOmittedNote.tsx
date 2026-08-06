@@ -23,7 +23,9 @@ export function DiffOmittedNote({ files }: { files: DiffFileEntry[] }) {
       <ul>
         {omitted.map((f) => (
           <li key={f.path}>
-            <span className="diff-omitted-path">{f.path}</span>
+            <span className="diff-omitted-path">
+              {f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}
+            </span>
             <span className="diff-file-omitted">
               {f.omittedReason ? i18n._(OMITTED_REASON_LABELS[f.omittedReason]) : t`省略`}
             </span>

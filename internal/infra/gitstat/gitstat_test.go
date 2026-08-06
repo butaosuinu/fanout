@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,22 +13,69 @@ import (
 	"time"
 )
 
-func TestParseShortStat(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		out       string
-		additions int
-		deletions int
+func TestParseNumStat(t *testing.T) {
+	tests := []struct {
+		name    string
+		out     string
+		want    []FileStat
+		wantErr bool
 	}{
-		{name: "empty", out: "", additions: 0, deletions: 0},
-		{name: "both plural", out: " 2 files changed, 12 insertions(+), 3 deletions(-)\n", additions: 12, deletions: 3},
-		{name: "singular insertion", out: " 1 file changed, 1 insertion(+)\n", additions: 1, deletions: 0},
-		{name: "singular deletion", out: " 1 file changed, 1 deletion(-)\n", additions: 0, deletions: 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseShortStat(tc.out)
-			if got.Additions != tc.additions || got.Deletions != tc.deletions {
-				t.Fatalf("parseShortStat() = +%d/-%d, want +%d/-%d", got.Additions, got.Deletions, tc.additions, tc.deletions)
+		{name: "empty output", out: "", want: []FileStat{}},
+		{
+			name: "plain record",
+			out:  "1\t2\tfile.txt\x00",
+			want: []FileStat{{Path: "file.txt", Additions: 1, Deletions: 2}},
+		},
+		{
+			// A rename leaves the path column empty and spends two more records.
+			name: "rename record keeps both paths",
+			out:  "3\t4\t\x00old.txt\x00new.txt\x00",
+			want: []FileStat{{Path: "new.txt", OldPath: "old.txt", Additions: 3, Deletions: 4}},
+		},
+		{
+			name: "binary record",
+			out:  "-\t-\tblob.bin\x00",
+			want: []FileStat{{Path: "blob.bin", Binary: true, OmittedReason: "binary"}},
+		},
+		{
+			name: "binary rename",
+			out:  "-\t-\t\x00a.bin\x00b.bin\x00",
+			want: []FileStat{{Path: "b.bin", OldPath: "a.bin", Binary: true, OmittedReason: "binary"}},
+		},
+		{
+			name: "rename does not swallow the record after it",
+			out:  "0\t0\t\x00old.txt\x00new.txt\x005\t6\tlater.txt\x00",
+			want: []FileStat{
+				{Path: "new.txt", OldPath: "old.txt"},
+				{Path: "later.txt", Additions: 5, Deletions: 6},
+			},
+		},
+		{name: "record with too few columns is an error", out: "1\tfile.txt\x00", wantErr: true},
+		{name: "non-numeric count is an error", out: "x\t2\tfile.txt\x00", wantErr: true},
+		{name: "half-marked binary pair is an error", out: "-\t2\tfile.txt\x00", wantErr: true},
+		{name: "truncated rename record is an error", out: "1\t2\t\x00old.txt\x00", wantErr: true},
+		{name: "empty rename path is an error", out: "1\t2\t\x00\x00new.txt\x00", wantErr: true},
+		{name: "missing NUL terminator is an error", out: "1\t2\tfile.txt", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseNumStat([]byte(tt.out))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseNumStat(%q) = %+v, want error", tt.out, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseNumStat(%q) = %v, want no error", tt.out, err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("parseNumStat(%q) = %+v, want %+v", tt.out, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("parseNumStat(%q)[%d] = %+v, want %+v", tt.out, i, got[i], tt.want[i])
+				}
 			}
 		})
 	}
@@ -55,8 +103,10 @@ func TestRunnerWorktreeCountsTrackedDiffAndPorcelainDirty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Additions != 2 || got.Deletions != 0 || !got.Dirty {
-		t.Fatalf("Worktree() = %+v, want +2/-0 dirty", got)
+	// +2 from tracked.txt, +1 from untracked.txt: the summary counts the same
+	// files the diff viewer lists.
+	if got.Additions != 3 || got.Deletions != 0 || !got.Dirty {
+		t.Fatalf("Worktree() = %+v, want +3/-0 dirty", got)
 	}
 }
 
@@ -75,8 +125,8 @@ func TestRunnerWorktreeForcesUntrackedFilesIntoDirtyCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Additions != 0 || got.Deletions != 0 || !got.Dirty {
-		t.Fatalf("Worktree() = %+v, want +0/-0 dirty", got)
+	if got.Additions != 1 || got.Deletions != 0 || !got.Dirty {
+		t.Fatalf("Worktree() = %+v, want +1/-0 dirty", got)
 	}
 }
 
@@ -546,6 +596,9 @@ func TestRunnerWorktreePatch(t *testing.T) {
 			},
 			check: func(t *testing.T, _ string, got Patch) {
 				t.Helper()
+				// Untracked and oversized: the size check short-circuits before
+				// numstat runs, so there are no counts to report. Tracked files
+				// keep theirs — see TestRunnerWorktreePatchKeepsOversizedCounts.
 				assertFileStat(t, got.Files, FileStat{
 					Path:          "large.txt",
 					OmittedReason: "tooLarge",
@@ -593,6 +646,7 @@ func TestRunnerWorktreePatchResolvesRelativePathFromRunnerCwd(t *testing.T) {
 	}
 	assertFileStat(t, got.Files, FileStat{
 		Path:          "large.txt",
+		Additions:     1,
 		OmittedReason: "tooLarge",
 	})
 	if got.Patch != "" {
@@ -640,6 +694,8 @@ func TestRunnerWorktreePatchChecksSkippedIndexBlobSize(t *testing.T) {
 	}
 	assertFileStat(t, got.Files, FileStat{
 		Path:          "tracked.txt",
+		Additions:     1,
+		Deletions:     1,
 		OmittedReason: "tooLarge",
 	})
 	if got.Patch != "" {
@@ -663,6 +719,8 @@ func TestRunnerWorktreePatchChecksAssumeUnchangedIndexBlobSize(t *testing.T) {
 	}
 	assertFileStat(t, got.Files, FileStat{
 		Path:          "tracked.txt",
+		Additions:     1,
+		Deletions:     1,
 		OmittedReason: "tooLarge",
 	})
 	if got.Patch != "" {
@@ -683,6 +741,8 @@ func TestRunnerWorktreePatchUsesAssumedIndexBlobWhenWorktreeExists(t *testing.T)
 			worktreeContent: []byte("small\n"),
 			want: FileStat{
 				Path:          "tracked.txt",
+				Additions:     1,
+				Deletions:     1,
 				OmittedReason: "tooLarge",
 			},
 		},
@@ -1206,11 +1266,28 @@ func TestRunnerWorktreePatchOnlyCallsReadOnlyGitSubcommands(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "git-subcommands.log")
 	t.Setenv("FANOUT_GITSTAT_REAL_GIT", realGit)
 	t.Setenv("FANOUT_GITSTAT_LOG", logPath)
+	// The subcommand is the first word that is not a git-level option, so skip
+	// every leading flag — and the value of the ones that take one — rather than
+	// only -C. Iterating with `for` leaves "$@" intact for the exec below.
 	installGitstatShim(t, "git", `
-case "$1" in
-  -C) subcommand=$3 ;;
-  *) subcommand=$1 ;;
-esac
+skip=0
+subcommand=
+for arg in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$arg" in
+    -C|-c) skip=1 ;;
+    -*) ;;
+    *) subcommand=$arg; break ;;
+  esac
+done
+# config is only ever a read here; record its mode so a write would stand out.
+if [ "$subcommand" = "config" ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      --get|--get-all|--list) subcommand="config $arg"; break ;;
+    esac
+  done
+fi
 printf '%s\n' "$subcommand" >> "$FANOUT_GITSTAT_LOG"
 exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 `)
@@ -1241,6 +1318,8 @@ exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 		t.Fatal(err)
 	}
 	readOnly := map[string]bool{
+		// Only the reading form is allowed; a bare "config" would be a write.
+		"config --get":     true,
 		"check-ref-format": true,
 		"rev-parse":        true,
 		"merge-base":       true,
@@ -1250,11 +1329,694 @@ exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 		"ls-tree":          true,
 		"symbolic-ref":     true,
 	}
-	for subcommand := range strings.FieldsSeq(string(logged)) {
+	for subcommand := range strings.SplitSeq(strings.TrimSpace(string(logged)), "\n") {
 		if !readOnly[subcommand] {
 			t.Fatalf("WorktreePatch called non-read-only git subcommand %q; log:\n%s", subcommand, logged)
 		}
 	}
+}
+
+// The session list and the diff viewer must never disagree about how many
+// lines a worktree changed; both read the same collection to guarantee it.
+func TestRunnerWorktreeAndWorktreePatchAgreeOnTotals(t *testing.T) {
+	repo := initPatchRepo(t)
+	seedOnMain(t, repo, map[string][]byte{
+		"moved.txt":    []byte("alpha\nbeta\ngamma\ndelta\nepsilon\n"),
+		"still.txt":    []byte("kept\nas\nis\nexactly\nhere\n"),
+		"dropped.txt":  []byte("gone\n"),
+		"nested/.keep": nil,
+	})
+
+	// A rename with an edit, a pure rename, a deletion, a staged add, an
+	// unstaged edit, an untracked file, and a binary change in one worktree.
+	gitTest(t, repo, "mv", "moved.txt", "renamed.txt")
+	writeGitstatFile(t, repo, "renamed.txt", []byte("alpha\nBETA\ngamma\ndelta\nepsilon\n"))
+	gitTest(t, repo, "mv", "still.txt", "nested/still.txt")
+	gitTest(t, repo, "rm", "dropped.txt")
+	writeGitstatFile(t, repo, "staged.txt", []byte("staged\n"))
+	gitTest(t, repo, "add", "-A")
+	writeGitstatFile(t, repo, "tracked.txt", []byte("one\ntwo\n"))
+	writeGitstatFile(t, repo, "untracked.txt", []byte("loose\nlines\n"))
+	writeGitstatFile(t, repo, "blob.bin", []byte{'a', 0, 'b'})
+
+	summary, err := Runner{}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var additions, deletions, renames int
+	for _, file := range patch.Files {
+		additions += file.Additions
+		deletions += file.Deletions
+		if file.OldPath != "" {
+			renames++
+		}
+	}
+	// Guard the fixture itself: renames are the shape that broke parity, so a
+	// run where git detected none proves nothing.
+	if renames != 2 {
+		t.Fatalf("WorktreePatch().Files = %#v, want 2 renames in the fixture", patch.Files)
+	}
+	if summary.Additions != additions || summary.Deletions != deletions {
+		t.Fatalf(
+			"Worktree() = +%d/-%d, want the WorktreePatch() total +%d/-%d (files %#v)",
+			summary.Additions, summary.Deletions, additions, deletions, patch.Files,
+		)
+	}
+}
+
+func TestRunnerWorktreeCountsRenameOnce(t *testing.T) {
+	repo := initPatchRepo(t)
+	seedOnMain(t, repo, map[string][]byte{"moved.txt": []byte("one\ntwo\nthree\nfour\nfive\nsix\n")})
+	gitTest(t, repo, "mv", "moved.txt", "renamed.txt")
+	writeGitstatFile(t, repo, "renamed.txt", []byte("one\nTWO\nthree\nfour\nfive\nsix\n"))
+	gitTest(t, repo, "add", "-A")
+
+	got, err := Runner{}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The moved file contributes its one edited line, not six deletions plus
+	// six additions.
+	if got.Additions != 1 || got.Deletions != 1 {
+		t.Fatalf("Worktree() = +%d/-%d, want +1/-1", got.Additions, got.Deletions)
+	}
+}
+
+// Counting an untracked file costs a git process and Worktree runs on a
+// 2-second tick, so the count is memoized until the file itself changes.
+func TestRunnerWorktreeMemoizesUntrackedCountsUntilTheFileChanges(t *testing.T) {
+	repo := initPatchRepo(t)
+	writeGitstatFile(t, repo, "untracked.txt", []byte("one\n"))
+	cache := NewUntrackedStatCache()
+	runner := Runner{UntrackedCache: cache}
+
+	first, err := runner.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Additions != 1 {
+		t.Fatalf("Worktree() = +%d, want +1", first.Additions)
+	}
+	if n := cache.size(repo); n != 1 {
+		t.Fatalf("cache holds %d entries for the worktree, want 1", n)
+	}
+
+	again, err := runner.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Additions != first.Additions || cache.size(repo) != 1 {
+		t.Fatalf("Worktree() = +%d with %d entries, want the memoized +%d", again.Additions, cache.size(repo), first.Additions)
+	}
+
+	writeGitstatFile(t, repo, "untracked.txt", []byte("one\ntwo\nthree\n"))
+	changed, err := runner.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Additions != 3 {
+		t.Fatalf("Worktree() = +%d after the file grew, want +3", changed.Additions)
+	}
+}
+
+// Content is not the only input to git's text/binary verdict: .gitattributes,
+// core.bigFileThreshold and diff.<driver>.binary all reclassify the same bytes,
+// and that list is not closed. The entry TTL is what bounds the divergence from
+// the cacheless diff viewer, so it has to actually expire.
+func TestRunnerWorktreeRecountsAfterTTLWhenGitReclassifiesTheSameBytes(t *testing.T) {
+	tests := []struct {
+		name       string
+		reclassify func(t *testing.T, repo string)
+	}{
+		{
+			name: ".gitattributes",
+			reclassify: func(t *testing.T, repo string) {
+				t.Helper()
+				writeGitstatFile(t, repo, ".gitattributes", []byte("blob.dat binary\n"))
+			},
+		},
+		{
+			name: "diff.<driver>.binary",
+			reclassify: func(t *testing.T, repo string) {
+				t.Helper()
+				gitTest(t, repo, "config", "diff.probe.binary", "true")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initPatchRepo(t)
+			// The driver case needs the attribute in place from the start; the
+			// attribute case adds its own file below.
+			writeGitstatFile(t, repo, ".gitattributes", []byte("blob.dat diff=probe\n"))
+			gitTest(t, repo, "add", ".gitattributes")
+			gitTest(t, repo, "commit", "-m", "attach a diff driver")
+			writeGitstatFile(t, repo, "blob.dat", []byte("one\ntwo\nthree\n"))
+
+			clock := time.Now()
+			cache := NewUntrackedStatCache()
+			cache.now = func() time.Time { return clock }
+			runner := Runner{UntrackedCache: cache}
+
+			before, err := runner.Worktree(repo, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// blob.dat +3 と、feature 側で commit した .gitattributes +1。
+			if before.Additions != 4 {
+				t.Fatalf("Worktree() = +%d, want +4 with blob.dat counted as text", before.Additions)
+			}
+
+			tt.reclassify(t, repo)
+			// Still inside the TTL: the memoized count stands.
+			clock = clock.Add(untrackedEntryTTL / 2)
+			stale, err := runner.Worktree(repo, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stale.Additions != 4 {
+				t.Fatalf("Worktree() = +%d inside the TTL, want the memoized +4", stale.Additions)
+			}
+
+			clock = clock.Add(untrackedEntryTTL)
+			after, err := runner.Worktree(repo, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// blob.dat は binary になり、残るのは .gitattributes の 1 行だけ。
+			if after.Additions != 1 {
+				t.Fatalf("Worktree() = +%d after the TTL, want +1 from the new verdict", after.Additions)
+			}
+		})
+	}
+}
+
+// size と mtime だけを鍵にすると `cp -p` の上書きを取り逃がし、一覧だけが
+// 古い行数を返し続けて viewer と恒久的に食い違う。
+func TestRunnerWorktreeRecountsWhenContentChangesUnderTheSameStat(t *testing.T) {
+	repo := initPatchRepo(t)
+	target := filepath.Join(repo, "untracked.txt")
+	writeGitstatFile(t, repo, "untracked.txt", []byte("one\ntwo\nthree\n"))
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := Runner{UntrackedCache: NewUntrackedStatCache()}
+	if _, err = runner.Worktree(repo, "main"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 同じ byte 数・同じ mtime で中身だけ差し替える(`cp -p` と同じ形)。
+	writeGitstatFile(t, repo, "untracked.txt", []byte("a\nb\nc\nd\ne\nf\ng\n"))
+	if err = os.Chtimes(target, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) {
+		t.Fatalf("fixture did not preserve size/mtime: %d/%v vs %d/%v",
+			after.Size(), after.ModTime(), info.Size(), info.ModTime())
+	}
+
+	got, err := runner.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Additions != 7 {
+		t.Fatalf("Worktree() = +%d, want +7 recounted from the new content", got.Additions)
+	}
+}
+
+// git re-reads the file after the cache key is hashed, so untrackedFileStat
+// re-derives the key afterwards and refuses to memoize when it moved. This
+// pins the comparison that guard depends on: the key follows current content,
+// and a file that vanished yields an error rather than a matching key.
+func TestUntrackedFileKeyNowFollowsCurrentContent(t *testing.T) {
+	repo := t.TempDir()
+	writeGitstatFile(t, repo, "u.txt", []byte("one\n"))
+	before, err := untrackedFileKeyNow(repo, "u.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same, sameErr := untrackedFileKeyNow(repo, "u.txt"); sameErr != nil || same != before {
+		t.Fatalf("untrackedFileKeyNow() = %q, %v on an unchanged file, want %q", same, sameErr, before)
+	}
+
+	writeGitstatFile(t, repo, "u.txt", []byte("two\n"))
+	after, err := untrackedFileKeyNow(repo, "u.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before {
+		t.Fatal("untrackedFileKeyNow() did not move after the content changed")
+	}
+
+	if err := os.Remove(filepath.Join(repo, "u.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if gone, goneErr := untrackedFileKeyNow(repo, "u.txt"); goneErr == nil {
+		t.Fatalf("untrackedFileKeyNow() = %q on a removed file, want an error", gone)
+	}
+}
+
+// A quiet file stays cacheable: the guard must not disable memoization
+// wholesale, or the 2-second tick pays the full per-file cost again.
+func TestUntrackedFileStatReturnsACacheKeyForAQuietFile(t *testing.T) {
+	repo := initPatchRepo(t)
+	writeGitstatFile(t, repo, "untracked.txt", []byte("one\n"))
+
+	entry, key, err := Runner{}.untrackedFileStat(repo, "untracked.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key == "" {
+		t.Fatalf("untrackedFileStat() = %+v with no key; an unchanged file must be cacheable", entry.stat)
+	}
+	if entry.stat.Additions != 1 {
+		t.Fatalf("untrackedFileStat() = %+v, want +1", entry.stat)
+	}
+}
+
+// A cleaned-up worktree is never swept again, so its entries would otherwise
+// live until the process exits. Creating and cleaning up sessions is the normal
+// fanout loop, so a long-running TUI or poller would grow without bound.
+func TestUntrackedStatCacheDropsWorktreesItStopsSweeping(t *testing.T) {
+	clock := time.Now()
+	cache := NewUntrackedStatCache()
+	cache.now = func() time.Time { return clock }
+
+	cache.replace("/abandoned", map[string]untrackedStat{"k": {}})
+	cache.replace("/live", map[string]untrackedStat{"k": {}})
+
+	clock = clock.Add(untrackedCacheTTL + time.Minute)
+	cache.replace("/live", map[string]untrackedStat{"k": {}})
+
+	if cache.size("/abandoned") != 0 {
+		t.Fatal("a worktree nobody sweeps any more survived; the cache grows without bound")
+	}
+	if cache.size("/live") != 1 {
+		t.Fatal("the worktree still being swept was dropped")
+	}
+}
+
+// Bounding by worktree count instead of age would evict by rank: a dashboard
+// watching more worktrees than the cap evicts the entry it is about to need and
+// misses on every one of them, which is the starvation the cache exists to fix.
+func TestUntrackedStatCacheKeepsEveryWorktreeItKeepsSweeping(t *testing.T) {
+	clock := time.Now()
+	cache := NewUntrackedStatCache()
+	cache.now = func() time.Time { return clock }
+
+	const worktrees = 200
+	for round := range 3 {
+		for i := range worktrees {
+			cache.replace(fmt.Sprintf("/wt%d", i), map[string]untrackedStat{"k": {}})
+		}
+		clock = clock.Add(2 * time.Second)
+		if round == 0 {
+			continue
+		}
+		for i := range worktrees {
+			if cache.size(fmt.Sprintf("/wt%d", i)) != 1 {
+				t.Fatalf("worktree %d missed on round %d; a rank-based bound would thrash", i, round)
+			}
+		}
+	}
+}
+
+// A pass long enough to cross the TTL must not treat its own cache hits as
+// fresh measurements: re-stamping them would hand a stale verdict another full
+// window, and the bound this cache promises would not hold.
+func TestUntrackedStatCacheDoesNotRestampCacheHits(t *testing.T) {
+	clock := time.Now()
+	cache := NewUntrackedStatCache()
+	cache.now = func() time.Time { return clock }
+	cache.replace("/wt", map[string]untrackedStat{"k": {stat: FileStat{Additions: 1}}})
+
+	// A later pass reads the entry while it is still live...
+	clock = clock.Add(untrackedEntryTTL - time.Second)
+	hit, ok := cache.lookup("/wt", "k")
+	if !ok {
+		t.Fatal("lookup() missed an entry that is still inside its TTL")
+	}
+
+	// ...and writes it back only after measuring other files pushed past it.
+	clock = clock.Add(2 * time.Second)
+	cache.replace("/wt", map[string]untrackedStat{"k": hit})
+
+	if _, ok := cache.lookup("/wt", "k"); ok {
+		t.Fatal("a cache hit restarted its own TTL; the staleness bound does not hold")
+	}
+}
+
+func TestUntrackedStatCacheNilIsUsable(t *testing.T) {
+	var absent *UntrackedStatCache
+	absent.replace("/wt", map[string]untrackedStat{"k": {stat: FileStat{Path: "x"}}})
+	if _, ok := absent.lookup("/wt", "k"); ok {
+		t.Fatal("nil cache reported a hit; it must simply disable memoization")
+	}
+}
+
+// A worktree sweep must not evict another worktree's entries. A shared
+// capacity cap did exactly that: one large worktree wiped every stable entry
+// and the next tick re-ran a git process per file.
+func TestUntrackedStatCacheKeepsWorktreesIndependent(t *testing.T) {
+	cache := NewUntrackedStatCache()
+	big := map[string]untrackedStat{}
+	for i := range 5000 {
+		big[fmt.Sprintf("k%d", i)] = untrackedStat{}
+	}
+	cache.replace("/small", map[string]untrackedStat{"kept": {stat: FileStat{Path: "kept"}}})
+	cache.replace("/big", big)
+
+	if _, ok := cache.lookup("/small", "kept"); !ok {
+		t.Fatal("a large sweep evicted another worktree's entry")
+	}
+	if cache.size("/big") != len(big) {
+		t.Fatalf("cache holds %d entries for the large worktree, want %d", cache.size("/big"), len(big))
+	}
+
+	// 次の sweep が見つけなかった entry は落ちる(= disk にある分だけ保つ)。
+	cache.replace("/big", map[string]untrackedStat{"k0": {}})
+	if cache.size("/big") != 1 {
+		t.Fatalf("cache holds %d entries after a smaller sweep, want 1", cache.size("/big"))
+	}
+	if _, ok := cache.lookup("/small", "kept"); !ok {
+		t.Fatal("a sweep of one worktree dropped another worktree's entry")
+	}
+}
+
+// A Cwd-relative worktree path has to reach os.Lstat resolved: git takes it
+// from Cwd, the Go process would take it from its own working directory.
+func TestRunnerWorktreeResolvesRelativePathBeforeReadingUntracked(t *testing.T) {
+	repo := initPatchRepo(t)
+	writeGitstatFile(t, repo, "untracked.txt", []byte("new\n"))
+
+	got, err := (Runner{Cwd: filepath.Dir(repo)}).Worktree(filepath.Base(repo), "main")
+	if err != nil {
+		t.Fatalf("Worktree() = %v, want no error", err)
+	}
+	if got.Additions != 1 || got.Deletions != 0 {
+		t.Fatalf("Worktree() = +%d/-%d, want +1/-0", got.Additions, got.Deletions)
+	}
+}
+
+// diff.renameLimit skips exhaustive detection once the candidate matrix grows,
+// handing back delete+add pairs — the inflation this package exists to avoid.
+func TestRunnerWorktreePatchIgnoresRepoRenameLimit(t *testing.T) {
+	repo := initPatchRepo(t)
+	gitTest(t, repo, "config", "diff.renameLimit", "1")
+	seed := map[string][]byte{}
+	for i := range 5 {
+		seed[fmt.Sprintf("moved%d.txt", i)] = fmt.Appendf(nil, "one\ntwo\nthree\nfour\nfive\n%d\n", i)
+	}
+	seedOnMain(t, repo, seed)
+	for i := range 5 {
+		gitTest(t, repo, "mv", fmt.Sprintf("moved%d.txt", i), fmt.Sprintf("renamed%d.txt", i))
+		writeGitstatFile(t, repo, fmt.Sprintf("renamed%d.txt", i),
+			fmt.Appendf(nil, "one\ntwo\nthree\nfour\nFIVE\n%d\n", i))
+	}
+	gitTest(t, repo, "add", "-A")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		stat := findFileStat(t, got.Files, fmt.Sprintf("renamed%d.txt", i))
+		if stat.OldPath != fmt.Sprintf("moved%d.txt", i) {
+			t.Fatalf("WorktreePatch().Files = %#v, want every move detected as a rename", got.Files)
+		}
+	}
+}
+
+// core.bigFileThreshold calls a file binary without reading it. Pinning it on
+// only some commands would let files[] report a counted text file while the
+// patch says "Binary files ... differ", breaking the wire contract that binary
+// files carry no patch.
+func TestRunnerWorktreePatchIgnoresRepoBigFileThreshold(t *testing.T) {
+	repo := initPatchRepo(t)
+	gitTest(t, repo, "config", "core.bigFileThreshold", "1")
+	writeGitstatFile(t, repo, "untracked.txt", []byte("one\ntwo\n"))
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "untracked.txt",
+		Additions:     2,
+		PatchIncluded: true,
+	})
+	if strings.Contains(got.Patch, "Binary files") {
+		t.Fatalf("WorktreePatch().Patch = %q, want the counted text patch", got.Patch)
+	}
+
+	summary, err := Runner{}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Additions != 2 {
+		t.Fatalf("Worktree() = +%d, want +2 to match the file list", summary.Additions)
+	}
+}
+
+// The tracked numstat decides text vs binary too, so leaving it unpinned would
+// turn ordinary tracked text files into -/- rows on both surfaces.
+func TestRunnerWorktreePatchIgnoresRepoBigFileThresholdForTrackedFiles(t *testing.T) {
+	repo := initPatchRepo(t)
+	gitTest(t, repo, "config", "core.bigFileThreshold", "1")
+	writeGitstatFile(t, repo, "tracked.txt", []byte("one\ntwo\nthree\n"))
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "tracked.txt",
+		Additions:     2,
+		PatchIncluded: true,
+	})
+	if strings.Contains(got.Patch, "Binary files") {
+		t.Fatalf("WorktreePatch().Patch = %q, want the counted text patch", got.Patch)
+	}
+}
+
+// Counting an untracked file costs a git process, so a request that cannot
+// possibly fit under MaxFiles must be rejected before any of them run.
+func TestRunnerWorktreePatchRejectsOverFileLimitBeforeMeasuring(t *testing.T) {
+	repo := initPatchRepo(t)
+	for i := range 6 {
+		writeGitstatFile(t, repo, fmt.Sprintf("u%d.txt", i), []byte("one\n"))
+	}
+	logPath := filepath.Join(t.TempDir(), "git-args.log")
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FANOUT_GITSTAT_REAL_GIT", realGit)
+	t.Setenv("FANOUT_GITSTAT_LOG", logPath)
+	installGitstatShim(t, "git", `
+printf '%s\n' "$*" >> "$FANOUT_GITSTAT_LOG"
+exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
+`)
+
+	_, err = (Runner{MaxFiles: 2}).WorktreePatch(repo, "main")
+	if err == nil || !strings.Contains(err.Error(), "limit is 2") {
+		t.Fatalf("WorktreePatch() = %v, want a file-limit error", err)
+	}
+	logged, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(logged), "--no-index") {
+		t.Fatalf("measured untracked files before rejecting the request:\n%s", logged)
+	}
+}
+
+// git collapses a nested checkout into one directory entry ("sub/"). Treating
+// it as a file fails the whole collection, so every dashboard row for the
+// worktree would report an error on every poll.
+func TestRunnerSkipsUntrackedNestedRepository(t *testing.T) {
+	repo := initPatchRepo(t)
+	sub := filepath.Join(repo, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init"}, {"config", "user.email", "test@example.com"}, {"config", "user.name", "Test User"},
+	} {
+		gitTest(t, sub, args...)
+	}
+	writeGitstatFile(t, sub, "inner.txt", []byte("inner\n"))
+	gitTest(t, sub, "add", "-A")
+	gitTest(t, sub, "commit", "-m", "inner")
+	writeGitstatFile(t, repo, "untracked.txt", []byte("one\n"))
+
+	summary, err := Runner{}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatalf("Worktree() = %v, want no error beside a nested checkout", err)
+	}
+	// The nested repo contributes nothing; the real untracked file still counts.
+	if summary.Additions != 1 || !summary.Dirty {
+		t.Fatalf("Worktree() = %+v, want +1/-0 dirty", summary)
+	}
+
+	patch, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatalf("WorktreePatch() = %v, want no error beside a nested checkout", err)
+	}
+	assertFileStat(t, patch.Files, FileStat{
+		Path:          "untracked.txt",
+		Additions:     1,
+		PatchIncluded: true,
+	})
+}
+
+func TestRunnerWorktreePatchIgnoresRepoRenameConfig(t *testing.T) {
+	for _, renames := range []string{"false", "copies"} {
+		t.Run("diff.renames="+renames, func(t *testing.T) {
+			repo := initPatchRepo(t)
+			gitTest(t, repo, "config", "diff.renames", renames)
+			seedOnMain(t, repo, map[string][]byte{"moved.txt": []byte("one\ntwo\nthree\nfour\n")})
+			gitTest(t, repo, "mv", "moved.txt", "renamed.txt")
+			gitTest(t, repo, "add", "-A")
+
+			got, err := Runner{}.WorktreePatch(repo, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stat := findFileStat(t, got.Files, "renamed.txt")
+			if stat.OldPath != "moved.txt" {
+				t.Fatalf("WorktreePatch().Files = %#v, want renamed.txt from moved.txt", got.Files)
+			}
+		})
+	}
+}
+
+func TestRunnerWorktreePatchScopesRenamePathspecToBothPaths(t *testing.T) {
+	repo := initPatchRepo(t)
+	seedOnMain(t, repo, map[string][]byte{"moved.txt": []byte("one\ntwo\nthree\nfour\n")})
+	gitTest(t, repo, "mv", "moved.txt", "renamed.txt")
+	writeGitstatFile(t, repo, "tracked.txt", []byte("one\nsibling\n"))
+	gitTest(t, repo, "add", "-A")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat := findFileStat(t, got.Files, "renamed.txt")
+	if stat.OldPath != "moved.txt" || stat.Additions != 0 || stat.Deletions != 0 {
+		t.Fatalf("WorktreePatch().Files = %#v, want a pure rename of moved.txt", got.Files)
+	}
+	if !strings.Contains(got.Patch, "rename from moved.txt") {
+		t.Fatalf("WorktreePatch().Patch = %q, want a rename header", got.Patch)
+	}
+	if n := strings.Count(got.Patch, "diff --git "); n != 2 {
+		t.Fatalf("WorktreePatch().Patch has %d file blocks, want 2 (rename + sibling)", n)
+	}
+}
+
+func TestRunnerWorktreePatchFallsBackWhenRenamePathsNest(t *testing.T) {
+	repo := initPatchRepo(t)
+	seedOnMain(t, repo, map[string][]byte{"moved": []byte("one\ntwo\nthree\nfour\n")})
+	if err := os.Remove(filepath.Join(repo, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(repo, "moved"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeGitstatFile(t, repo, "moved/inner.txt", []byte("one\ntwo\nthree\nfour\n"))
+	gitTest(t, repo, "add", "-A")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// git pairs `moved` with `moved/inner.txt`, but no pathspec can scope that
+	// pair, so the whole collection drops rename detection.
+	deleted := findFileStat(t, got.Files, "moved")
+	added := findFileStat(t, got.Files, "moved/inner.txt")
+	if deleted.OldPath != "" || added.OldPath != "" {
+		t.Fatalf("WorktreePatch().Files = %#v, want no rename linkage", got.Files)
+	}
+	if deleted.Deletions != 4 || added.Additions != 4 {
+		t.Fatalf("WorktreePatch().Files = %#v, want -4 and +4", got.Files)
+	}
+	if n := strings.Count(got.Patch, "diff --git "); n != 2 {
+		t.Fatalf("WorktreePatch().Patch has %d file blocks, want 2", n)
+	}
+
+	summary, err := Runner{}.Worktree(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Additions != added.Additions || summary.Deletions != deleted.Deletions {
+		t.Fatalf("Worktree() = +%d/-%d, want the same fallback totals", summary.Additions, summary.Deletions)
+	}
+}
+
+func TestRunnerWorktreePatchKeepsOversizedCounts(t *testing.T) {
+	repo := initPatchRepo(t)
+	writeGitstatFile(t, repo, "tracked.txt", bytes.Repeat([]byte{'x'}, patchFileLimit+1))
+	gitTest(t, repo, "add", "tracked.txt")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The patch text is over budget, the counts are not: git measured them in
+	// the same numstat pass the session list sums.
+	assertFileStat(t, got.Files, FileStat{
+		Path:          "tracked.txt",
+		Additions:     1,
+		Deletions:     1,
+		OmittedReason: "tooLarge",
+	})
+}
+
+func TestRunnerWorktreePatchSizesRenameFromItsBasePath(t *testing.T) {
+	repo := initPatchRepo(t)
+	seedOnMain(t, repo, map[string][]byte{"moved.txt": bytes.Repeat([]byte{'x'}, patchFileLimit+1)})
+	gitTest(t, repo, "mv", "moved.txt", "renamed.txt")
+	gitTest(t, repo, "add", "-A")
+
+	got, err := Runner{}.WorktreePatch(repo, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The merge-base blob lives at the old path; sizing the new one would find
+	// nothing and let an oversized patch through.
+	stat := findFileStat(t, got.Files, "renamed.txt")
+	if stat.OmittedReason != "tooLarge" || stat.PatchIncluded {
+		t.Fatalf("WorktreePatch().Files = %#v, want renamed.txt omitted as tooLarge", got.Files)
+	}
+}
+
+// seedOnMain commits files on main and fast-forwards feature onto it, so the
+// merge-base the collectors diff against already contains them. A rename is
+// only detectable when its source is in that base.
+func seedOnMain(t *testing.T, repo string, files map[string][]byte) {
+	t.Helper()
+	gitTest(t, repo, "checkout", "main")
+	for name, content := range files {
+		if dir := filepath.Dir(name); dir != "." {
+			if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		writeGitstatFile(t, repo, name, content)
+	}
+	gitTest(t, repo, "add", "-A")
+	gitTest(t, repo, "commit", "-m", "seed rename sources")
+	gitTest(t, repo, "checkout", "feature")
+	gitTest(t, repo, "reset", "--hard", "main")
 }
 
 func initPatchRepo(t *testing.T) string {
@@ -1464,4 +2226,11 @@ func installGitstatShim(t *testing.T, name, script string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// size reports how many entries a worktree holds, for assertions only.
+func (c *UntrackedStatCache) size(worktree string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.byWorktree[worktree].entries)
 }

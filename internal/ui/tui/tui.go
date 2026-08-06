@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
+	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
@@ -101,19 +102,22 @@ const (
 )
 
 type model struct {
-	opts              Options
-	mode              viewMode
-	table             table.Model
-	detail            viewport.Model
-	width             int
-	height            int
-	allPanes          []paneView
-	panes             []paneView
-	filterQuery       string
-	filterEditing     bool
-	viewOverride      viewOverride
-	issues            map[issueKey]issueStatus
-	issueLoader       *issueStatusLoader
+	opts          Options
+	mode          viewMode
+	table         table.Model
+	detail        viewport.Model
+	width         int
+	height        int
+	allPanes      []paneView
+	panes         []paneView
+	filterQuery   string
+	filterEditing bool
+	viewOverride  viewOverride
+	issues        map[issueKey]issueStatus
+	issueLoader   *issueStatusLoader
+	// worktreeStat is built once: it owns the untracked-file cache, and
+	// rebuilding it per tick would throw that cache away every refresh.
+	worktreeStat      func(path, baseRef string) (sessionview.WorktreeStat, error)
 	lastState         time.Time
 	lastGH            time.Time
 	stateErr          string
@@ -342,6 +346,7 @@ func newModel(opts Options) model {
 		detail:        viewport.New(120, detailHeight),
 		issues:        map[issueKey]issueStatus{},
 		issueLoader:   newIssueStatusLoader(3 * opts.GHInterval),
+		worktreeStat:  sessionview.GitWorktreeStat(opts.ProjectRoot),
 		notifications: map[issueKey]issueTransitionSnapshot{},
 		agentStates:   map[string]agentTransitionSnapshot{},
 	}

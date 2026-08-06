@@ -45,7 +45,10 @@ type diffResponse struct {
 }
 
 type diffFileEntry struct {
-	Path          string `json:"path"`
+	Path string `json:"path"`
+	// OldPath carries a rename's merge-base path. omitempty on purpose: renames
+	// are a minority of entries and every byte competes for diffMaxBytes.
+	OldPath       string `json:"oldPath,omitempty"`
 	Additions     *int   `json:"additions"`
 	Deletions     *int   `json:"deletions"`
 	Binary        bool   `json:"binary"`
@@ -285,6 +288,7 @@ func marshalDiffResponse(
 		}
 		response.Files[i] = diffFileEntry{
 			Path:          stat.Path,
+			OldPath:       stat.OldPath,
 			Additions:     new(stat.Additions),
 			Deletions:     new(stat.Deletions),
 			Binary:        stat.Binary,
@@ -387,14 +391,17 @@ func marshalDiffResponse(
 }
 
 func validDiffFileStat(stat gitstat.FileStat) bool {
+	// A rename names two distinct paths. Re-asserted here because the SPA keys
+	// the sidebar by Path and would anchor a self-rename to nothing.
+	if stat.OldPath != "" && stat.OldPath == stat.Path {
+		return false
+	}
 	switch stat.OmittedReason {
 	case "":
 		return stat.PatchIncluded && !stat.Binary
 	case "binary":
 		return !stat.PatchIncluded && stat.Binary
-	case "tooLarge":
-		return !stat.PatchIncluded && !stat.Binary
-	case "collectionLimit":
+	case "tooLarge", "collectionLimit":
 		return !stat.PatchIncluded && !stat.Binary
 	default:
 		return false

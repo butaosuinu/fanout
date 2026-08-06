@@ -133,13 +133,14 @@ func (m model) loadStateCmd(scheduleNext bool) tea.Cmd {
 	issues := cloneIssueStatuses(m.issues)
 	restorePanes := m.opts.RestorePanes
 	listLive := m.opts.ListLive
+	worktreeStat := m.worktreeStat
 	return func() tea.Msg {
 		var restoreNotice string
 		var restoreErr error
 		if restorePanes != nil {
 			restoreNotice, restoreErr = restorePanes()
 		}
-		panes, err := loadPaneViews(projectRoot, issues, listLive)
+		panes, err := loadPaneViews(projectRoot, issues, listLive, worktreeStat)
 		return stateLoadedMsg{
 			panes:         panes,
 			at:            time.Now(),
@@ -187,7 +188,12 @@ func (m model) loadActivePaneCmd(scheduleNext bool) tea.Cmd {
 	}
 }
 
-func loadPaneViews(projectRoot string, issues map[issueKey]issueStatus, listLive func() ([]backend.LivePane, error)) ([]paneView, error) {
+func loadPaneViews(
+	projectRoot string,
+	issues map[issueKey]issueStatus,
+	listLive func() ([]backend.LivePane, error),
+	worktreeStat func(path, baseRef string) (sessionview.WorktreeStat, error),
+) ([]paneView, error) {
 	var stateErr error
 	mergedState := sessionview.MergedStateLoader(projectRoot, listLive)
 	loadState := func() (state.Store, error) {
@@ -209,7 +215,7 @@ func loadPaneViews(projectRoot string, issues map[issueKey]issueStatus, listLive
 		ListLive:     live,
 		IssuePRs:     issuePRCollector(issues),
 		Waves:        waveCollector(issues),
-		WorktreeStat: sessionview.GitWorktreeStat(projectRoot),
+		WorktreeStat: worktreeStat,
 		Now:          time.Now,
 	})
 	return paneViewsFromSnapshot(projectRoot, snap), errors.Join(stateErr, backendErr)

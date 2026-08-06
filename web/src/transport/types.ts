@@ -156,6 +156,7 @@ export type DiffOmittedReason = "" | "binary" | "tooLarge" | "collectionLimit" |
 
 export interface DiffFileEntry {
   path: string;
+  oldPath?: string; // rename の merge-base 側パス。rename でない file では欠落
   additions: number | null; // collectionLimit で省略された file は null
   deletions: number | null;
   binary: boolean;
