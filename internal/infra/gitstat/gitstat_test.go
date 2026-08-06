@@ -1591,15 +1591,15 @@ func TestUntrackedFileStatReturnsACacheKeyForAQuietFile(t *testing.T) {
 	repo := initPatchRepo(t)
 	writeGitstatFile(t, repo, "untracked.txt", []byte("one\n"))
 
-	stat, key, err := Runner{}.untrackedFileStat(repo, "untracked.txt")
+	entry, key, err := Runner{}.untrackedFileStat(repo, "untracked.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if key == "" {
-		t.Fatalf("untrackedFileStat() = %+v with no key; an unchanged file must be cacheable", stat)
+		t.Fatalf("untrackedFileStat() = %+v with no key; an unchanged file must be cacheable", entry.stat)
 	}
-	if stat.Additions != 1 {
-		t.Fatalf("untrackedFileStat() = %+v, want +1", stat)
+	if entry.stat.Additions != 1 {
+		t.Fatalf("untrackedFileStat() = %+v, want +1", entry.stat)
 	}
 }
 
@@ -1611,11 +1611,11 @@ func TestUntrackedStatCacheDropsWorktreesItStopsSweeping(t *testing.T) {
 	cache := NewUntrackedStatCache()
 	cache.now = func() time.Time { return clock }
 
-	cache.replace("/abandoned", map[string]FileStat{"k": {}})
-	cache.replace("/live", map[string]FileStat{"k": {}})
+	cache.replace("/abandoned", map[string]untrackedStat{"k": {}})
+	cache.replace("/live", map[string]untrackedStat{"k": {}})
 
 	clock = clock.Add(untrackedCacheTTL + time.Minute)
-	cache.replace("/live", map[string]FileStat{"k": {}})
+	cache.replace("/live", map[string]untrackedStat{"k": {}})
 
 	if cache.size("/abandoned") != 0 {
 		t.Fatal("a worktree nobody sweeps any more survived; the cache grows without bound")
@@ -1636,7 +1636,7 @@ func TestUntrackedStatCacheKeepsEveryWorktreeItKeepsSweeping(t *testing.T) {
 	const worktrees = 200
 	for round := range 3 {
 		for i := range worktrees {
-			cache.replace(fmt.Sprintf("/wt%d", i), map[string]FileStat{"k": {}})
+			cache.replace(fmt.Sprintf("/wt%d", i), map[string]untrackedStat{"k": {}})
 		}
 		clock = clock.Add(2 * time.Second)
 		if round == 0 {
@@ -1650,9 +1650,34 @@ func TestUntrackedStatCacheKeepsEveryWorktreeItKeepsSweeping(t *testing.T) {
 	}
 }
 
+// A pass long enough to cross the TTL must not treat its own cache hits as
+// fresh measurements: re-stamping them would hand a stale verdict another full
+// window, and the bound this cache promises would not hold.
+func TestUntrackedStatCacheDoesNotRestampCacheHits(t *testing.T) {
+	clock := time.Now()
+	cache := NewUntrackedStatCache()
+	cache.now = func() time.Time { return clock }
+	cache.replace("/wt", map[string]untrackedStat{"k": {stat: FileStat{Additions: 1}}})
+
+	// A later pass reads the entry while it is still live...
+	clock = clock.Add(untrackedEntryTTL - time.Second)
+	hit, ok := cache.lookup("/wt", "k")
+	if !ok {
+		t.Fatal("lookup() missed an entry that is still inside its TTL")
+	}
+
+	// ...and writes it back only after measuring other files pushed past it.
+	clock = clock.Add(2 * time.Second)
+	cache.replace("/wt", map[string]untrackedStat{"k": hit})
+
+	if _, ok := cache.lookup("/wt", "k"); ok {
+		t.Fatal("a cache hit restarted its own TTL; the staleness bound does not hold")
+	}
+}
+
 func TestUntrackedStatCacheNilIsUsable(t *testing.T) {
 	var absent *UntrackedStatCache
-	absent.replace("/wt", map[string]FileStat{"k": {Path: "x"}})
+	absent.replace("/wt", map[string]untrackedStat{"k": {stat: FileStat{Path: "x"}}})
 	if _, ok := absent.lookup("/wt", "k"); ok {
 		t.Fatal("nil cache reported a hit; it must simply disable memoization")
 	}
@@ -1663,11 +1688,11 @@ func TestUntrackedStatCacheNilIsUsable(t *testing.T) {
 // and the next tick re-ran a git process per file.
 func TestUntrackedStatCacheKeepsWorktreesIndependent(t *testing.T) {
 	cache := NewUntrackedStatCache()
-	big := map[string]FileStat{}
+	big := map[string]untrackedStat{}
 	for i := range 5000 {
-		big[fmt.Sprintf("k%d", i)] = FileStat{}
+		big[fmt.Sprintf("k%d", i)] = untrackedStat{}
 	}
-	cache.replace("/small", map[string]FileStat{"kept": {Path: "kept"}})
+	cache.replace("/small", map[string]untrackedStat{"kept": {stat: FileStat{Path: "kept"}}})
 	cache.replace("/big", big)
 
 	if _, ok := cache.lookup("/small", "kept"); !ok {
@@ -1678,7 +1703,7 @@ func TestUntrackedStatCacheKeepsWorktreesIndependent(t *testing.T) {
 	}
 
 	// 次の sweep が見つけなかった entry は落ちる(= disk にある分だけ保つ)。
-	cache.replace("/big", map[string]FileStat{"k0": {}})
+	cache.replace("/big", map[string]untrackedStat{"k0": {}})
 	if cache.size("/big") != 1 {
 		t.Fatalf("cache holds %d entries after a smaller sweep, want 1", cache.size("/big"))
 	}
