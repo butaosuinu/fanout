@@ -399,6 +399,41 @@ func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
 	}
 }
 
+func TestEnsureOwnedReadoptsPinnedLauncherAfterFanoutUpdate(t *testing.T) {
+	h := newOwnedHarness(t)
+	marker, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("readOwnerMarker() = %+v, %v, %v", marker, found, err)
+	}
+	legacySource := filepath.Join(h.root, "legacy-fanout")
+	err = os.WriteFile(legacySource, []byte("legacy fanout launcher\n"), 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPath, legacyHash, err := stageExecutable(legacySource, h.layout.launcherDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker.LauncherPath, marker.LauncherSHA256 = legacyPath, legacyHash
+	if err := os.Remove(h.layout.markerPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOwnerMarkerExclusive(h.layout.markerPath, marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(h.layout.configPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureOwnedConfig(h.layout, legacyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	reused := h.ensure()
+	if reused.LauncherPath != legacyPath || h.supervisor.starts != 1 {
+		t.Fatalf("re-adopted launcher = %q, starts=%d, want %q and one start", reused.LauncherPath, h.supervisor.starts, legacyPath)
+	}
+}
+
 func TestOwnedReadinessRequiresPrivateServerAndClientSockets(t *testing.T) {
 	tests := []struct {
 		name string

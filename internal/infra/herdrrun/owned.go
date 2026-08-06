@@ -242,10 +242,6 @@ func ensureOwned(
 		xdgDataHome: layout.xdgDataHome, xdgCacheHome: layout.xdgCacheHome,
 		configPath: layout.configPath, clientSocketPath: layout.clientSocketPath,
 	}
-	admitted, err := backend.admitBinaryContext(ctx, route{session: session, socketPath: layout.socketPath})
-	if err != nil {
-		return nil, err
-	}
 	err = ensurePrivateDir(layout.runtimeBase)
 	if err != nil {
 		return nil, fmt.Errorf("prepare herdr runtime base: %w", err)
@@ -263,25 +259,35 @@ func ensureOwned(
 	if err != nil {
 		return nil, err
 	}
-	launcher, err := pinOwnedLauncher(layout)
+	marker, found, err := readOwnerMarker(layout.markerPath)
 	if err != nil {
 		return nil, err
 	}
-	err = ensureOwnedConfig(layout, launcher.path)
-	if err != nil {
-		return nil, err
+	admitted := binaryAdmission{
+		path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion,
 	}
-	admitted, err = pinOwnedBinary(layout, admitted)
-	if err != nil {
-		return nil, err
+	launcher := binaryAdmission{path: marker.LauncherPath, sha256: marker.LauncherSHA256}
+	if !found {
+		admitted, err = backend.admitBinaryContext(ctx, route{session: session, socketPath: layout.socketPath})
+		if err != nil {
+			return nil, err
+		}
+		launcher, err = pinOwnedLauncher(layout)
+		if err != nil {
+			return nil, err
+		}
+		err = ensureOwnedConfig(layout, launcher.path)
+		if err != nil {
+			return nil, err
+		}
+		admitted, err = pinOwnedBinary(layout, admitted)
+		if err != nil {
+			return nil, err
+		}
 	}
 	backend.lookPath = func(string) (string, error) { return admitted.path, nil }
 	backend.stageBinary = func(sourcePath string) (string, string, error) {
 		return stageExecutable(sourcePath, layout.binaryDir)
-	}
-	marker, found, err := readOwnerMarker(layout.markerPath)
-	if err != nil {
-		return nil, err
 	}
 	var started *startedSupervisor
 	if !found {
