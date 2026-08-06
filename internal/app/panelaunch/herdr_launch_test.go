@@ -741,6 +741,67 @@ func TestHerdrCoordinatorRetriesTransientIdentityObservation(t *testing.T) {
 	}
 }
 
+func TestHerdrCoordinatorReusesExpiredIntentWithinCurrentObservationBudget(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrLaunchRuntime{}
+	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
+	runtime.launchRoute = herdrrun.OwnedLaunchRoute{
+		Session: "fanout-test", SocketPath: "/private/tmp/fanout-test/herdr.sock",
+		LauncherPath: "/owned/fanout",
+	}
+	mutate := runtime.mutate
+	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+		result, err := mutate(req)
+		if err == nil && req.Kind == herdrrun.WorkspaceCreate {
+			intent := state.HerdrIntent{
+				WorktreePath: result.CWD, Session: runtime.launchRoute.Session,
+				SocketPath: runtime.launchRoute.SocketPath,
+				Resource:   stateResource(result.WorkspaceObservation),
+			}
+			runtime.processInfo = testHerdrLauncherProcess(intent, runtime.launchRoute.LauncherPath)
+			runtime.live = []backend.LivePane{testHerdrIdlePane(intent)}
+		}
+		return result, err
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	launcher := &Launcher{
+		Cfg: &cliflags.Config{}, Log: log.NewWith(io.Discard, io.Discard, false),
+		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Herdr: runtime,
+	}
+	intent, err := launcher.realizeHerdrCoordinator(
+		context.Background(), Request{ParentRef: "425"}, locked, runtime.launchRoute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent.ExpiresUnixMS = time.Now().Add(-time.Second).UnixMilli()
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	mutationCount := len(runtime.mutations)
+
+	reused, err := launcher.realizeHerdrCoordinator(
+		context.Background(), Request{ParentRef: "425"}, locked, runtime.launchRoute,
+	)
+	if err != nil || reused.ID != intent.ID || len(runtime.mutations) != mutationCount {
+		t.Fatalf(
+			"expired coordinator reuse = %+v, mutations=%d, err=%v",
+			reused,
+			len(runtime.mutations),
+			err,
+		)
+	}
+}
+
 func TestHerdrCoordinatorRecordConflictRetainsManualCleanupIntent(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrLaunchRuntime{}

@@ -174,7 +174,8 @@ func (l *Launcher) realizeHerdrCoordinator(
 	if err != nil && !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		return state.HerdrIntent{}, err
 	}
-	verifyErr := retryHerdrObservation(ctx, result.Intent, func(observeCtx context.Context) error {
+	observationIntent := herdrCoordinatorObservationIntent(ctx, result.Intent)
+	verifyErr := retryHerdrObservation(ctx, observationIntent, func(observeCtx context.Context) error {
 		return l.verifyHerdrIdleLauncher(observeCtx, result.Intent, route)
 	})
 	if err := verifyErr; err != nil {
@@ -188,6 +189,19 @@ func (l *Launcher) realizeHerdrCoordinator(
 		return state.HerdrIntent{}, markHerdrIntentManual(journal, result.Intent, err)
 	}
 	return result.Intent, nil
+}
+
+func herdrCoordinatorObservationIntent(
+	ctx context.Context,
+	intent state.HerdrIntent,
+) state.HerdrIntent {
+	// A coordinator outlives its creating launch; only this observation uses the current budget.
+	deadline := time.Now().Add(maxHerdrRealizeTimeout)
+	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
+		deadline = parentDeadline
+	}
+	intent.ExpiresUnixMS = deadline.UnixMilli()
+	return intent
 }
 
 func (l *Launcher) realizeHerdrChild(
