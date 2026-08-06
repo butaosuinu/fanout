@@ -62,18 +62,25 @@ type Runner struct {
 	UntrackedCache *UntrackedStatCache
 }
 
-// UntrackedStatCache memoizes untracked-file counts across calls.
+// UntrackedStatCache memoizes untracked-file counts for a short while.
 //
 // Counting one untracked file costs a git process, and Runner.Worktree runs on
 // the dashboard's 2-second tick. Uncached, a worktree holding 500 un-ignored
 // files spends ~4.6s per poll and starves the refresh loop.
 //
-// Entries key on what the file contains, not on its stat metadata: size and
-// mtime both survive an in-place rewrite (`cp -p` of a same-sized file restores
-// the timestamp to the nanosecond), and a stale count would silently break the
-// guarantee that the session list and the diff viewer agree. Hashing costs far
-// less than the process it saves — 500 files at the 256 KiB ceiling hash in
+// Entries key on what the file contains — size and mtime both survive an
+// in-place rewrite (`cp -p` of a same-sized file restores the timestamp to the
+// nanosecond), so stat metadata would miss a change outright. Hashing costs far
+// less than the process it saves: 500 files at the 256 KiB ceiling hash in
 // ~190ms against ~4.6s of git startup.
+//
+// Content is not the only input to git's verdict, though. .gitattributes (in
+// the worktree, in $GIT_DIR/info, or the user file), core.bigFileThreshold, and
+// diff.<driver>.binary all reclassify the same bytes, and that list is not
+// closed. Rather than enumerate it — every miss leaves the session list
+// answering from a verdict the cacheless diff viewer no longer shares — entries
+// simply expire. Staleness is then bounded by untrackedEntryTTL instead of
+// lasting until the file itself changes.
 //
 // Entries live per worktree and each collection pass replaces its worktree's
 // set wholesale, so the cache holds exactly what is on disk. A shared capacity
@@ -90,9 +97,21 @@ type UntrackedStatCache struct {
 }
 
 type untrackedWorktreeEntry struct {
-	entries map[string]FileStat
+	entries map[string]untrackedStat
 	swept   time.Time
 }
+
+// untrackedStat is one memoized count and when git produced it.
+type untrackedStat struct {
+	stat     FileStat
+	measured time.Time
+}
+
+// untrackedEntryTTL bounds how long a memoized count may outlive a change to
+// something other than the file's own bytes. At the 2-second tick this still
+// removes ~93% of the per-file git processes, and it closes the whole class of
+// "some other input to git's text/binary verdict moved" in one rule.
+const untrackedEntryTTL = 30 * time.Second
 
 // untrackedCacheTTL drops worktrees nobody sweeps any more. A cleaned-up
 // worktree is never collected again, so without this its entries would live
@@ -119,13 +138,20 @@ func (c *UntrackedStatCache) lookup(worktree, key string) (FileStat, bool) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	stat, ok := c.byWorktree[worktree].entries[key]
-	return stat, ok
+	entry, ok := c.byWorktree[worktree].entries[key]
+	if !ok || c.now().Sub(entry.measured) > untrackedEntryTTL {
+		return FileStat{}, false
+	}
+	return entry.stat, true
 }
 
-// replace swaps in what one collection pass measured. Entries the pass did not
+// replace swaps in what one collection pass produced. Entries the pass did not
 // see describe files that are gone or changed, so dropping them keeps the cache
 // bounded by the worktree without ever evicting a live entry.
+//
+// A key the pass answered from cache keeps its original measurement time — only
+// a key that had expired (and was therefore re-measured) restarts the clock, so
+// a busy poll cannot keep an entry alive past its TTL.
 func (c *UntrackedStatCache) replace(worktree string, entries map[string]FileStat) {
 	if c == nil {
 		return
@@ -133,148 +159,44 @@ func (c *UntrackedStatCache) replace(worktree string, entries map[string]FileSta
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now()
+	c.dropAbandonedWorktrees(now)
+	if len(entries) == 0 {
+		delete(c.byWorktree, worktree)
+		return
+	}
+	prior := c.byWorktree[worktree].entries
+	next := make(map[string]untrackedStat, len(entries))
+	for key, stat := range entries {
+		if old, ok := prior[key]; ok && now.Sub(old.measured) <= untrackedEntryTTL {
+			next[key] = old
+			continue
+		}
+		next[key] = untrackedStat{stat: stat, measured: now}
+	}
+	c.byWorktree[worktree] = untrackedWorktreeEntry{entries: next, swept: now}
+}
+
+func (c *UntrackedStatCache) dropAbandonedWorktrees(now time.Time) {
 	for path, entry := range c.byWorktree {
 		if now.Sub(entry.swept) > untrackedCacheTTL {
 			delete(c.byWorktree, path)
 		}
 	}
-	if len(entries) == 0 {
-		delete(c.byWorktree, worktree)
-		return
-	}
-	c.byWorktree[worktree] = untrackedWorktreeEntry{entries: entries, swept: now}
 }
 
-// untrackedCacheKey identifies the file by worktree, path, file type, content
-// hash, and the worktree's attributes digest. The path stays in the key because
-// .gitattributes can classify the same bytes differently at a different path,
-// and the digest is there because it can reclassify them in place.
-func untrackedCacheKey(path, rel, attrs string, info os.FileInfo) (string, error) {
+// untrackedCacheKey identifies the file by worktree, path, file type, and
+// content hash. The path stays in the key because .gitattributes can classify
+// the same bytes differently at a different path; the other things that
+// reclassify content in place are handled by the entry TTL, not by the key.
+func untrackedCacheKey(path, rel string, info os.FileInfo) (string, error) {
 	content, err := untrackedContent(path, rel, info)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf(
-		"%s\x00%s\x00%s\x00%d\x00%x",
-		path, rel, attrs, info.Mode().Type(), sha256.Sum256(content),
+		"%s\x00%s\x00%d\x00%x",
+		path, rel, info.Mode().Type(), sha256.Sum256(content),
 	), nil
-}
-
-// attributesDigest hashes the .gitattributes files that decide how git
-// classifies content in this worktree. The untracked counts are memoized by
-// content, so without this an added `*.dat binary` line would leave a stale
-// text count answering until the file itself changed.
-//
-// Scope is every source git consults for this worktree, in its own precedence
-// order: $GIT_DIR/info/attributes, the worktree's .gitattributes files, and the
-// user file. All are read from disk so uncommitted edits count, and ignored
-// .gitattributes are included because git applies them all the same.
-func (r Runner) attributesDigest(path string) (string, error) {
-	sources, err := r.attributesSources(path)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.New()
-	for _, source := range sources {
-		full := source.path
-		if !filepath.IsAbs(full) {
-			full = filepath.Join(path, filepath.FromSlash(source.path))
-		}
-		content, readErr := readAttributesFile(full, source.inTree)
-		if readErr != nil {
-			return "", fmt.Errorf("read attributes %q: %w", source.path, readErr)
-		}
-		digest.Write([]byte(source.path))
-		digest.Write([]byte{0})
-		digest.Write(content)
-		digest.Write([]byte{0})
-	}
-	return fmt.Sprintf("%x", digest.Sum(nil)), nil
-}
-
-// attributesSource is one file git consults for attributes. inTree marks the
-// worktree's own .gitattributes, which git reads without following symlinks.
-type attributesSource struct {
-	path   string
-	inTree bool
-}
-
-// readAttributesFile reads a source the way git reads it. An in-tree
-// .gitattributes is never followed through a symlink (gitattributes(5)
-// "Notes") — the worktree is hostile input, and aiming the name at /dev/zero
-// would hang the poll on a worktree git itself diffs fine. The repository and
-// user files sit outside that content, and git does follow those.
-func readAttributesFile(full string, inTree bool) ([]byte, error) {
-	if inTree {
-		return readRegularFile(full)
-	}
-	content, err := os.ReadFile(full)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
-	return content, nil
-}
-
-// attributesSources lists every attributes file git would consult, in a stable
-// order.
-func (r Runner) attributesSources(path string) ([]attributesSource, error) {
-	sources := []attributesSource{}
-	if out, err := r.git("-C", path, "rev-parse", "--git-path", "info/attributes"); err == nil {
-		if rel := strings.TrimSpace(string(out)); rel != "" {
-			sources = append(sources, attributesSource{path: rel})
-		}
-	}
-
-	files, err := r.inTreeAttributesFiles(path)
-	if err != nil {
-		return nil, err
-	}
-	for _, file := range files {
-		sources = append(sources, attributesSource{path: file, inTree: true})
-	}
-
-	if user := r.userAttributesFile(path); user != "" {
-		sources = append(sources, attributesSource{path: user})
-	}
-	return sources, nil
-}
-
-func (r Runner) inTreeAttributesFiles(path string) ([]string, error) {
-	env := append(gitEnv(), "GIT_LITERAL_PATHSPECS=0")
-	out, err := execx.OutputContext(r.context(), r.Cwd, env, "git",
-		"-C", path, "ls-files", "-z", "--cached", "--others",
-		"--", ":(top,glob)**/.gitattributes", ":(top,literal).gitattributes",
-	)
-	if err != nil {
-		return nil, err
-	}
-	files, err := parseNULPaths(out)
-	if err != nil {
-		return nil, fmt.Errorf("parse attributes paths: %w", err)
-	}
-	sort.Strings(files)
-	return files, nil
-}
-
-// userAttributesFile resolves the user-level attributes file git would read:
-// core.attributesFile when set, else the XDG default. --path is what expands a
-// configured "~/.gitattrs"; --get would hand back the tilde and send the read
-// looking under the worktree.
-func (r Runner) userAttributesFile(path string) string {
-	// Unset is the common case and git exits non-zero for it; that is not an
-	// error here, just the fall-through to the default location.
-	if out, err := r.git("-C", path, "config", "--path", "--get", "core.attributesFile"); err == nil {
-		if file := strings.TrimSpace(string(out)); file != "" {
-			return file
-		}
-	}
-	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
-		return filepath.Join(xdg, "git", "attributes")
-	}
-	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
-		return filepath.Join(home, ".config", "git", "attributes")
-	}
-	return ""
 }
 
 // untrackedContent reads what git would compare: the link target for a symlink,
@@ -292,22 +214,6 @@ func untrackedContent(path, rel string, info os.FileInfo) ([]byte, error) {
 		return []byte(target), nil
 	}
 	return os.ReadFile(fullPath)
-}
-
-// readRegularFile returns the file's bytes, or nothing when the path is not a
-// regular file (a symlink, directory, device, or missing entry).
-func readRegularFile(full string) ([]byte, error) {
-	info, err := os.Lstat(full)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, nil
-	}
-	return os.ReadFile(full)
 }
 
 // diffFlags is the flag set every diff in this package shares. Each entry pins
@@ -461,8 +367,6 @@ func (r Runner) mergeUntracked(
 	if err != nil {
 		return nil, err
 	}
-	// The digest costs two git processes on every 2-second tick, so a worktree
-	// with nothing untracked must not pay for it.
 	if len(untracked) == 0 {
 		r.UntrackedCache.replace(path, nil)
 		return files, nil
@@ -470,11 +374,7 @@ func (r Runner) mergeUntracked(
 	if err = r.rejectOverFileLimit(files, untracked, trackedByPath); err != nil {
 		return nil, err
 	}
-	attrs, err := r.attributesDigest(path)
-	if err != nil {
-		return nil, err
-	}
-	stats, measured, err := r.measureUntracked(path, untracked, attrs)
+	stats, measured, err := r.measureUntracked(path, untracked)
 	if err != nil {
 		return nil, err
 	}
@@ -535,12 +435,11 @@ func (r Runner) rejectOverFileLimit(
 func (r Runner) measureUntracked(
 	path string,
 	untracked []string,
-	attrs string,
 ) ([]FileStat, map[string]FileStat, error) {
 	stats := make([]FileStat, 0, len(untracked))
 	measured := make(map[string]FileStat, len(untracked))
 	for _, rel := range untracked {
-		stat, key, err := r.untrackedFileStat(path, rel, attrs)
+		stat, key, err := r.untrackedFileStat(path, rel)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -807,7 +706,7 @@ type patchFile struct {
 // untrackedFileStat measures one untracked file and returns the cache key its
 // counts belong to. An empty key means "do not memoize this": the file is
 // oversized, or it changed while git was measuring it.
-func (r Runner) untrackedFileStat(path, rel, attrs string) (_ FileStat, _ string, err error) {
+func (r Runner) untrackedFileStat(path, rel string) (_ FileStat, _ string, err error) {
 	defer errs.Wrap(&err, "untracked file %q", rel)
 
 	info, err := untrackedFileInfo(path, rel)
@@ -817,7 +716,7 @@ func (r Runner) untrackedFileStat(path, rel, attrs string) (_ FileStat, _ string
 	if info.Size() > patchFileLimit {
 		return FileStat{Path: rel, OmittedReason: "tooLarge"}, "", nil
 	}
-	key, err := untrackedCacheKey(path, rel, attrs, info)
+	key, err := untrackedCacheKey(path, rel, info)
 	if err != nil {
 		return FileStat{}, "", err
 	}
@@ -831,18 +730,18 @@ func (r Runner) untrackedFileStat(path, rel, attrs string) (_ FileStat, _ string
 	// git re-read the file after we hashed it. If a writer got in between, the
 	// counts describe different bytes than the key names — return them for this
 	// pass but do not let them answer for that content later.
-	if after, afterErr := untrackedFileKeyNow(path, rel, attrs); afterErr != nil || after != key {
+	if after, afterErr := untrackedFileKeyNow(path, rel); afterErr != nil || after != key {
 		return stat, "", nil
 	}
 	return stat, key, nil
 }
 
-func untrackedFileKeyNow(path, rel, attrs string) (string, error) {
+func untrackedFileKeyNow(path, rel string) (string, error) {
 	info, err := untrackedFileInfo(path, rel)
 	if err != nil {
 		return "", err
 	}
-	return untrackedCacheKey(path, rel, attrs, info)
+	return untrackedCacheKey(path, rel, info)
 }
 
 // untrackedFileInfo rejects anything that is not a regular file or a symlink —

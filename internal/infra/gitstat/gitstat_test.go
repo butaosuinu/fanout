@@ -1443,6 +1443,78 @@ func TestRunnerWorktreeMemoizesUntrackedCountsUntilTheFileChanges(t *testing.T) 
 	}
 }
 
+// Content is not the only input to git's text/binary verdict: .gitattributes,
+// core.bigFileThreshold and diff.<driver>.binary all reclassify the same bytes,
+// and that list is not closed. The entry TTL is what bounds the divergence from
+// the cacheless diff viewer, so it has to actually expire.
+func TestRunnerWorktreeRecountsAfterTTLWhenGitReclassifiesTheSameBytes(t *testing.T) {
+	tests := []struct {
+		name       string
+		reclassify func(t *testing.T, repo string)
+	}{
+		{
+			name: ".gitattributes",
+			reclassify: func(t *testing.T, repo string) {
+				t.Helper()
+				writeGitstatFile(t, repo, ".gitattributes", []byte("blob.dat binary\n"))
+			},
+		},
+		{
+			name: "diff.<driver>.binary",
+			reclassify: func(t *testing.T, repo string) {
+				t.Helper()
+				gitTest(t, repo, "config", "diff.probe.binary", "true")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initPatchRepo(t)
+			// The driver case needs the attribute in place from the start; the
+			// attribute case adds its own file below.
+			writeGitstatFile(t, repo, ".gitattributes", []byte("blob.dat diff=probe\n"))
+			gitTest(t, repo, "add", ".gitattributes")
+			gitTest(t, repo, "commit", "-m", "attach a diff driver")
+			writeGitstatFile(t, repo, "blob.dat", []byte("one\ntwo\nthree\n"))
+
+			clock := time.Now()
+			cache := NewUntrackedStatCache()
+			cache.now = func() time.Time { return clock }
+			runner := Runner{UntrackedCache: cache}
+
+			before, err := runner.Worktree(repo, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// blob.dat +3 と、feature 側で commit した .gitattributes +1。
+			if before.Additions != 4 {
+				t.Fatalf("Worktree() = +%d, want +4 with blob.dat counted as text", before.Additions)
+			}
+
+			tt.reclassify(t, repo)
+			// Still inside the TTL: the memoized count stands.
+			clock = clock.Add(untrackedEntryTTL / 2)
+			stale, err := runner.Worktree(repo, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stale.Additions != 4 {
+				t.Fatalf("Worktree() = +%d inside the TTL, want the memoized +4", stale.Additions)
+			}
+
+			clock = clock.Add(untrackedEntryTTL)
+			after, err := runner.Worktree(repo, "main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// blob.dat は binary になり、残るのは .gitattributes の 1 行だけ。
+			if after.Additions != 1 {
+				t.Fatalf("Worktree() = +%d after the TTL, want +1 from the new verdict", after.Additions)
+			}
+		})
+	}
+}
+
 // size と mtime だけを鍵にすると `cp -p` の上書きを取り逃がし、一覧だけが
 // 古い行数を返し続けて viewer と恒久的に食い違う。
 func TestRunnerWorktreeRecountsWhenContentChangesUnderTheSameStat(t *testing.T) {
@@ -1488,16 +1560,16 @@ func TestRunnerWorktreeRecountsWhenContentChangesUnderTheSameStat(t *testing.T) 
 func TestUntrackedFileKeyNowFollowsCurrentContent(t *testing.T) {
 	repo := t.TempDir()
 	writeGitstatFile(t, repo, "u.txt", []byte("one\n"))
-	before, err := untrackedFileKeyNow(repo, "u.txt", "attrs")
+	before, err := untrackedFileKeyNow(repo, "u.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if same, sameErr := untrackedFileKeyNow(repo, "u.txt", "attrs"); sameErr != nil || same != before {
+	if same, sameErr := untrackedFileKeyNow(repo, "u.txt"); sameErr != nil || same != before {
 		t.Fatalf("untrackedFileKeyNow() = %q, %v on an unchanged file, want %q", same, sameErr, before)
 	}
 
 	writeGitstatFile(t, repo, "u.txt", []byte("two\n"))
-	after, err := untrackedFileKeyNow(repo, "u.txt", "attrs")
+	after, err := untrackedFileKeyNow(repo, "u.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1508,7 +1580,7 @@ func TestUntrackedFileKeyNowFollowsCurrentContent(t *testing.T) {
 	if err := os.Remove(filepath.Join(repo, "u.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if gone, goneErr := untrackedFileKeyNow(repo, "u.txt", "attrs"); goneErr == nil {
+	if gone, goneErr := untrackedFileKeyNow(repo, "u.txt"); goneErr == nil {
 		t.Fatalf("untrackedFileKeyNow() = %q on a removed file, want an error", gone)
 	}
 }
@@ -1519,7 +1591,7 @@ func TestUntrackedFileStatReturnsACacheKeyForAQuietFile(t *testing.T) {
 	repo := initPatchRepo(t)
 	writeGitstatFile(t, repo, "untracked.txt", []byte("one\n"))
 
-	stat, key, err := Runner{}.untrackedFileStat(repo, "untracked.txt", "attrs")
+	stat, key, err := Runner{}.untrackedFileStat(repo, "untracked.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1711,195 +1783,6 @@ func TestRunnerWorktreePatchIgnoresRepoBigFileThresholdForTrackedFiles(t *testin
 	}
 }
 
-// .gitattributes reclassifies content in place, so a cache keyed on content
-// alone would keep serving a text count after `*.dat binary` is added.
-func TestRunnerWorktreeRecountsWhenGitattributesReclassifiesAFile(t *testing.T) {
-	repo := initPatchRepo(t)
-	writeGitstatFile(t, repo, "blob.dat", []byte("one\ntwo\nthree\n"))
-	runner := Runner{UntrackedCache: NewUntrackedStatCache()}
-
-	before, err := runner.Worktree(repo, "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if before.Additions != 3 {
-		t.Fatalf("Worktree() = +%d, want +3 counted as text", before.Additions)
-	}
-
-	writeGitstatFile(t, repo, ".gitattributes", []byte("*.dat binary\n"))
-	after, err := runner.Worktree(repo, "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// blob.dat is binary now (0 lines); .gitattributes itself is 1 new line.
-	if after.Additions != 1 {
-		t.Fatalf("Worktree() = +%d, want +1 after the file was reclassified", after.Additions)
-	}
-}
-
-// git applies an ignored .gitattributes like any other, so leaving it out of
-// the digest would let the memoized count outlive the classification it was
-// measured under.
-func TestRunnerWorktreeRecountsWhenAnIgnoredGitattributesReclassifies(t *testing.T) {
-	repo := initPatchRepo(t)
-	writeGitstatFile(t, repo, ".gitignore", []byte(".gitattributes\n"))
-	gitTest(t, repo, "add", ".gitignore")
-	gitTest(t, repo, "commit", "-m", "ignore attributes")
-	writeGitstatFile(t, repo, "blob.dat", []byte("one\ntwo\nthree\n"))
-	runner := Runner{UntrackedCache: NewUntrackedStatCache()}
-
-	before, err := runner.Worktree(repo, "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// blob.dat +3 と、feature 側で commit した .gitignore +1。
-	if before.Additions != 4 {
-		t.Fatalf("Worktree() = +%d, want +4 with blob.dat counted as text", before.Additions)
-	}
-
-	writeGitstatFile(t, repo, ".gitattributes", []byte("*.dat binary\n"))
-	after, err := runner.Worktree(repo, "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// blob.dat is binary now, so only .gitignore's line remains. The ignored
-	// .gitattributes itself is never counted.
-	if after.Additions != 1 {
-		t.Fatalf("Worktree() = +%d, want +1 after the ignored attributes applied", after.Additions)
-	}
-}
-
-// git reads $GIT_DIR/info/attributes and core.attributesFile too, and the diff
-// viewer has no cache to go stale — so the summary has to notice them or the
-// two surfaces disagree until the process restarts.
-func TestRunnerWorktreeRecountsWhenOutOfTreeAttributesReclassify(t *testing.T) {
-	tests := []struct {
-		name  string
-		apply func(t *testing.T, repo string)
-	}{
-		{
-			name: "$GIT_DIR/info/attributes",
-			apply: func(t *testing.T, repo string) {
-				t.Helper()
-				info := filepath.Join(repo, ".git", "info")
-				if err := os.MkdirAll(info, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(info, "attributes"), []byte("*.dat binary\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "core.attributesFile",
-			apply: func(t *testing.T, repo string) {
-				t.Helper()
-				global := filepath.Join(t.TempDir(), "global-attrs")
-				if err := os.WriteFile(global, []byte("*.dat binary\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				gitTest(t, repo, "config", "core.attributesFile", global)
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo := initPatchRepo(t)
-			writeGitstatFile(t, repo, "blob.dat", []byte("one\ntwo\nthree\n"))
-			runner := Runner{UntrackedCache: NewUntrackedStatCache()}
-
-			before, err := runner.Worktree(repo, "main")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if before.Additions != 3 {
-				t.Fatalf("Worktree() = +%d, want +3 counted as text", before.Additions)
-			}
-
-			tt.apply(t, repo)
-			after, err := runner.Worktree(repo, "main")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if after.Additions != 0 {
-				t.Fatalf("Worktree() = +%d, want +0 once %s reclassified it", after.Additions, tt.name)
-			}
-		})
-	}
-}
-
-// The repository and user attributes files sit outside worktree content and
-// git does follow symlinks there, so the no-follow rule for in-tree
-// .gitattributes must not be applied to them.
-func TestRunnerWorktreeFollowsSymlinkedOutOfTreeAttributes(t *testing.T) {
-	tests := []struct {
-		name  string
-		apply func(t *testing.T, repo, target string)
-	}{
-		{
-			name: "$GIT_DIR/info/attributes",
-			apply: func(t *testing.T, repo, target string) {
-				t.Helper()
-				info := filepath.Join(repo, ".git", "info")
-				if err := os.MkdirAll(info, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(target, filepath.Join(info, "attributes")); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "core.attributesFile",
-			apply: func(t *testing.T, repo, target string) {
-				t.Helper()
-				link := filepath.Join(t.TempDir(), "linked-attrs")
-				if err := os.Symlink(target, link); err != nil {
-					t.Fatal(err)
-				}
-				gitTest(t, repo, "config", "core.attributesFile", link)
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo := initPatchRepo(t)
-			writeGitstatFile(t, repo, "blob.dat", []byte("one\ntwo\nthree\n"))
-			target := filepath.Join(t.TempDir(), "real-attrs")
-			if err := os.WriteFile(target, []byte("*.dat binary\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			tt.apply(t, repo, target)
-
-			got, err := Runner{UntrackedCache: NewUntrackedStatCache()}.Worktree(repo, "main")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.Additions != 0 {
-				t.Fatalf("Worktree() = +%d, want +0 from the symlinked %s", got.Additions, tt.name)
-			}
-		})
-	}
-}
-
-// git config --get hands back a configured "~/.gitattrs" unexpanded, which
-// would send the read looking under the worktree instead of $HOME.
-func TestRunnerUserAttributesFileExpandsAndDefaults(t *testing.T) {
-	repo := initPatchRepo(t)
-	gitTest(t, repo, "config", "core.attributesFile", "~/.gitattrs")
-	got := Runner{}.userAttributesFile(repo)
-	if strings.HasPrefix(got, "~") || !filepath.IsAbs(got) {
-		t.Fatalf("userAttributesFile() = %q, want the tilde expanded to an absolute path", got)
-	}
-
-	// Unset falls through to the location git reads by default.
-	bare := initPatchRepo(t)
-	t.Setenv("XDG_CONFIG_HOME", "/xdg")
-	if got := (Runner{}).userAttributesFile(bare); got != filepath.Join("/xdg", "git", "attributes") {
-		t.Fatalf("userAttributesFile() = %q, want the XDG default", got)
-	}
-}
-
 // Counting an untracked file costs a git process, so a request that cannot
 // possibly fit under MaxFiles must be rejected before any of them run.
 func TestRunnerWorktreePatchRejectsOverFileLimitBeforeMeasuring(t *testing.T) {
@@ -1929,28 +1812,6 @@ exec "$FANOUT_GITSTAT_REAL_GIT" "$@"
 	}
 	if strings.Contains(string(logged), "--no-index") {
 		t.Fatalf("measured untracked files before rejecting the request:\n%s", logged)
-	}
-}
-
-// git does not follow a .gitattributes symlink, and the worktree is hostile
-// input: following one into /dev/zero would hang the poll on a worktree git
-// diffs without trouble.
-func TestRunnerWorktreeDoesNotFollowAGitattributesSymlink(t *testing.T) {
-	repo := initPatchRepo(t)
-	writeGitstatFile(t, repo, "real-attrs", []byte("*.dat binary\n"))
-	if err := os.Symlink("real-attrs", filepath.Join(repo, ".gitattributes")); err != nil {
-		t.Fatal(err)
-	}
-	writeGitstatFile(t, repo, "blob.dat", []byte("one\ntwo\nthree\n"))
-
-	got, err := Runner{UntrackedCache: NewUntrackedStatCache()}.Worktree(repo, "main")
-	if err != nil {
-		t.Fatalf("Worktree() = %v, want no error", err)
-	}
-	// blob.dat +3, real-attrs +1, and the symlink itself +1: git ignored the
-	// linked attributes, so nothing was reclassified as binary.
-	if got.Additions != 5 {
-		t.Fatalf("Worktree() = +%d, want +5 with the symlinked attributes ignored", got.Additions)
 	}
 }
 

@@ -606,41 +606,20 @@ dashboard の 2 秒 tick から呼ばれる。`UntrackedStatCache` が結果を�
 以降 36 ミリ秒)。
 鍵は stat ではなく内容のハッシュにする — size も mtime も in-place の
 書き換えを生き延びる(`cp -p` は同サイズの file の時刻をナノ秒まで復元する)
-ので、stat を鍵にすると一覧だけが古い行数を返し続けて viewer と食い違う。
-ハッシュのコストは節約する process より小さい(500 file が 256 KiB 上限でも
-約 190 ミリ秒)。
-entry は worktree ごとに持ち、1 回の収集が見つけた集合で丸ごと置き換える —
-共通の容量上限にすると、1 つの大きい worktree の巡回が他の worktree の
-安定した entry まで捨て、次の tick で全 file の git process が走り直す。
+ので、stat を鍵にすると変更を取り逃がす。
+ただし内容は git の text/binary 判定の唯一の入力ではない。`.gitattributes`
+(worktree 内・`$GIT_DIR/info`・user file)、`core.bigFileThreshold`、
+`diff.<driver>.binary` はいずれも同じ内容の判定を変え、この集合は閉じない。
+入力を列挙して鍵に足す方式は取らず、entry を一定時間で失効させる。
+乖離は「file 自体が変わるまで無期限」ではなく TTL に有界になる。
+2 秒 tick なら file ごとの git process は依然として 9 割以上減る。
 git は鍵を作った後に file を読み直すので、計測後に鍵を取り直して
 変わっていた場合はキャッシュしない(その pass の統計は返す)。
 cleanup された worktree は二度と巡回されないので、一定時間巡回されなかった
-worktree を捨てる — Session の作成と cleanup は通常の運用ループであり、
+worktree ごと捨てる — Session の作成と cleanup は通常の運用ループであり、
 放置すると常駐 TUI / poller のメモリが増え続ける。
 上限を worktree 数にしないのは、監視対象が上限を超えると次に必要な entry から
 順に追い出して全 miss になり、直したはずの飢餓が再発するため。
-`core.bigFileThreshold` はこの package の全 diff で command line から固定する
-— repo 設定次第で普通の text file が `-/-` の binary 行になり、判定結果を
-キャッシュするので稼働中の変更で古い entry が答え続ける。一部の経路だけ
-固定すると `files[]` が text として行数を返しているのに patch が
-`Binary files ... differ` になり、binary は patch を持たないという contract も
-破れる。
-未追跡キャッシュの鍵には worktree の `.gitattributes` 群の digest も含める —
-`*.dat binary` を足すと同じ内容が binary に変わるため、内容だけを鍵にすると
-古い行数を返し続ける。対象は worktree 内の `.gitattributes`(disk から読むので未 commit の編集も
-反映)。ignore された `.gitattributes` も含める — git は同じように適用するので、
-除外すると判定を決める file が digest から落ちる。symlink の `.gitattributes` は
-読まない: git も follow しない契約であり(gitattributes(5) Notes)、worktree は
-敵性入力なので `/dev/zero` や device へ向けられると poll が止まる。
-対象は git が参照する全ソース(`$GIT_DIR/info/attributes`、worktree 内の
-`.gitattributes`、user file = `core.attributesFile` または未設定時の
-`$XDG_CONFIG_HOME/git/attributes`)。user file の path は `git config --path` で
-解決する — `--get` は `~` を展開せずに返し、worktree 相対として読まれてしまう。
-symlink を辿らないのは worktree 内の `.gitattributes` だけで、repository と
-user の file は git 同様に辿る。diff viewer 側はキャッシュを持たず
-これらを常に反映するので、summary が追わないと一致契約が崩れる。
-未追跡 file が 1 つも無い worktree では digest 自体を計算しない — 2 秒 tick で
-git process 2 つぶんの常時コストになるため。
 collector を tick ごとに作り直すとキャッシュも作り直されるので、
 web の `poller` と TUI の `model` はどちらも `sessionview.GitWorktreeStat` を
 1 度だけ構築して使い回す。
