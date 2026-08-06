@@ -784,7 +784,8 @@ func TestHerdrCoordinatorReusesExpiredIntentWithinCurrentObservationBudget(t *te
 	}
 	intent.ExpiresUnixMS = time.Now().Add(-time.Second).UnixMilli()
 	journal.UpsertIntent(intent)
-	if err := journal.Save(); err != nil {
+	err = journal.Save()
+	if err != nil {
 		t.Fatal(err)
 	}
 	mutationCount := len(runtime.mutations)
