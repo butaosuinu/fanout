@@ -192,6 +192,10 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		return IssueExecutionResult{Plan: plan}, exitcode.OK
 	}
 	if plan.UnfannedCount == 0 {
+		if err := prepareIssueCallbacks(rt, ready, after); err != nil {
+			lg.Err("runtime backend: %v", err)
+			return IssueExecutionResult{Plan: plan}, exitcode.Env
+		}
 		if !callIssueReady(ready, store, recorder, lg) {
 			return IssueExecutionResult{Plan: plan}, exitcode.Env
 		}
@@ -267,6 +271,13 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		return IssueExecutionResult{CreatedIssueNums: result.CreatedNums, CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices, Plan: plan}, exitcode.Env
 	}
 	return IssueExecutionResult{CreatedIssueNums: result.CreatedNums, CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices, Plan: plan}, exitcode.OK
+}
+
+func prepareIssueCallbacks(rt *Runtime, ready IssueReadyFunc, after IssueAfterFunc) error {
+	if ready == nil && after == nil {
+		return nil
+	}
+	return rt.PrepareLaunchBackend()
 }
 
 func prepareIssueLaunch(cfg *cliflags.Config, plan Plan, rt *Runtime, store state.Store, recorder *state.LockedStore, ready IssueReadyFunc, lg *log.Logger) bool {

@@ -201,7 +201,11 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		herdr *herdrrun.OwnedSession,
 	) error {
 		if runtimeBackend.Name() == backend.Herdr {
-			return guardIssueOrchestrator(projectRoot, store, issueNum)
+			guardErr := guardIssueOrchestrator(projectRoot, store, issueNum)
+			if errors.Is(guardErr, errIssueOrchestratorRecorded) {
+				return nil
+			}
+			return guardErr
 		}
 		var launchErr error
 		orchestratorReq, orchestratorPaneID, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(

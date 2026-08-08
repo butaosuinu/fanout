@@ -95,6 +95,69 @@ func TestHerdrShellStatePaneUsesAdmittedCanonicalPath(t *testing.T) {
 	}
 }
 
+func TestStaleHerdrConsoleTargetAdmitsOwnedRouteWithNewProcessIdentity(t *testing.T) {
+	saved := herdrConsoleTestPane("/repo", "workspace-root", "pane-old")
+	saved.SourceProjectRoot = "/repo"
+	live := backend.LivePane{
+		Ref: backend.PaneRef{
+			Backend: backend.Herdr, Workspace: saved.HerdrWorkspaceID, Pane: "pane-new",
+		},
+		WorkspaceLabel: saved.HerdrWorkspaceLabel,
+		TerminalID:     "terminal-new",
+		SessionID:      saved.HerdrSession,
+		SocketPath:     saved.HerdrSocketPath,
+		CurrentPath:    saved.WorktreePath,
+	}
+
+	got, found, err := staleHerdrConsoleTarget(saved, []backend.LivePane{live})
+	if err != nil || !found {
+		t.Fatalf("staleHerdrConsoleTarget() = %+v, %t, %v", got, found, err)
+	}
+	if got.Ref.Pane != live.Ref.Pane || got.TerminalID != live.TerminalID {
+		t.Fatalf("stale target = %+v, want current process identity %+v", got, live)
+	}
+
+	live.WorkspaceLabel = "foreign"
+	if _, _, err := staleHerdrConsoleTarget(saved, []backend.LivePane{live}); err == nil {
+		t.Fatal("staleHerdrConsoleTarget() accepted a workspace with a foreign label")
+	}
+}
+
+func TestRemoveSavedHerdrConsoleRowFromOwningLinkedWorktree(t *testing.T) {
+	root, linked := herdrConsoleTestWorktrees(t)
+	pane := herdrConsoleTestPane(linked, "workspace-linked", "pane-linked")
+	recorder, err := state.LockProject(linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.RecordPane(pane); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	pane.SourceProjectRoot = linked
+
+	locked, err := state.LockProjectForLaunch(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := removeSavedHerdrConsoleRow(locked, root, pane); err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := state.LoadProject(linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := store.Find(pane.Parent, pane.IssueNum); found {
+		t.Fatal("saved Herdr console row remains in the owning linked worktree")
+	}
+}
+
 func herdrConsoleTestWorktrees(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()

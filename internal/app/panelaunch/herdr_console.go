@@ -110,7 +110,7 @@ func reuseHerdrConsole(
 	pane state.Pane,
 ) (HerdrConsoleResult, bool, error) {
 	if err := verifySavedHerdrConsole(owned, pane); err != nil {
-		if staleErr := removeAbsentHerdrConsole(locked, projectRoot, owned, pane); staleErr != nil {
+		if staleErr := removeStaleHerdrConsole(locked, projectRoot, owned, pane); staleErr != nil {
 			return HerdrConsoleResult{}, false, errors.Join(
 				fmt.Errorf("saved Herdr console is not safely reusable: %w", err),
 				staleErr,
@@ -125,7 +125,7 @@ func reuseHerdrConsole(
 	return result, true, err
 }
 
-func removeAbsentHerdrConsole(
+func removeStaleHerdrConsole(
 	locked *state.LockedStore,
 	projectRoot string,
 	owned *herdrrun.OwnedSession,
@@ -138,18 +138,109 @@ func removeAbsentHerdrConsole(
 	if err != nil {
 		return fmt.Errorf("recheck saved Herdr console: %w", err)
 	}
-	for _, current := range live {
-		if current.Ref.Workspace == pane.HerdrWorkspaceID {
-			return fmt.Errorf("saved Herdr console workspace still exists with a different identity")
+	current, found, err := staleHerdrConsoleTarget(pane, live)
+	if err != nil {
+		return err
+	}
+	if found {
+		if err := closeStaleHerdrConsole(owned, current); err != nil {
+			return err
 		}
 	}
-	if pane.SourceProjectRoot != projectRoot {
-		return fmt.Errorf("stale Herdr console row belongs to linked worktree %s", pane.SourceProjectRoot)
-	}
-	if err := locked.RemovePane(pane.Parent, pane.IssueNum); err != nil {
+	if err := removeSavedHerdrConsoleRow(locked, projectRoot, pane); err != nil {
 		return fmt.Errorf("remove absent Herdr console row: %w", err)
 	}
 	return nil
+}
+
+func staleHerdrConsoleTarget(
+	saved state.Pane,
+	live []backend.LivePane,
+) (backend.LivePane, bool, error) {
+	var matches []backend.LivePane
+	workspaceFound := false
+	for _, current := range live {
+		if current.Ref.Workspace != saved.HerdrWorkspaceID {
+			continue
+		}
+		workspaceFound = true
+		identity := []bool{
+			current.Ref.Backend == backend.Herdr,
+			current.WorkspaceLabel == saved.HerdrWorkspaceLabel,
+			current.SessionID == saved.HerdrSession,
+			filepath.Clean(current.SocketPath) == filepath.Clean(saved.HerdrSocketPath),
+			filepath.Clean(current.CurrentPath) == filepath.Clean(saved.WorktreePath),
+			current.Ref.Pane != "", current.TerminalID != "", !current.AgentPresent,
+		}
+		if !slices.Contains(identity, false) {
+			matches = append(matches, current)
+		}
+	}
+	if !workspaceFound {
+		return backend.LivePane{}, false, nil
+	}
+	if len(matches) != 1 {
+		return backend.LivePane{}, false, fmt.Errorf(
+			"saved Herdr console workspace has %d owned stale matches", len(matches),
+		)
+	}
+	return matches[0], true, nil
+}
+
+func closeStaleHerdrConsole(owned *herdrrun.OwnedSession, current backend.LivePane) error {
+	identity := herdrrun.OwnedPaneIdentity{
+		Ref: current.Ref, SessionID: current.SessionID, SocketPath: current.SocketPath,
+		WorkspaceLabel: current.WorkspaceLabel, TerminalID: current.TerminalID,
+		CurrentPath: current.CurrentPath,
+	}
+	bound, err := owned.Backend().BindOwnedWorkspaceClose(identity)
+	if err != nil {
+		return fmt.Errorf("bind stale Herdr console for close: %w", err)
+	}
+	_, err = bound.CloseOwned(backend.CloseRequest{Ref: backend.PaneRef{
+		Backend: backend.Herdr, Pane: current.Ref.Pane,
+	}})
+	if err != nil {
+		return fmt.Errorf("close stale Herdr console workspace: %w", err)
+	}
+	return nil
+}
+
+func removeSavedHerdrConsoleRow(
+	locked *state.LockedStore,
+	projectRoot string,
+	pane state.Pane,
+) (retErr error) {
+	ownerRoot := filepath.Clean(pane.SourceProjectRoot)
+	if ownerRoot == filepath.Clean(projectRoot) {
+		return locked.RemovePane(pane.Parent, pane.IssueNum)
+	}
+	owner, err := state.LockProject(ownerRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, owner.Unlock()) }()
+	saved, found := owner.Store.Find(pane.Parent, pane.IssueNum)
+	if !found || !sameSavedHerdrConsole(pane, saved) {
+		return fmt.Errorf("saved Herdr console row changed before cleanup")
+	}
+	return owner.RemovePane(pane.Parent, pane.IssueNum)
+}
+
+func sameSavedHerdrConsole(expected, actual state.Pane) bool {
+	requirements := []bool{
+		actual.RuntimeParent == expected.RuntimeParent,
+		actual.Kind == expected.Kind,
+		backend.NormalizeName(actual.Backend) == backend.Herdr,
+		actual.PaneID == expected.PaneID,
+		actual.HerdrWorkspaceID == expected.HerdrWorkspaceID,
+		actual.HerdrWorkspaceLabel == expected.HerdrWorkspaceLabel,
+		actual.HerdrTerminalID == expected.HerdrTerminalID,
+		actual.HerdrSession == expected.HerdrSession,
+		filepath.Clean(actual.HerdrSocketPath) == filepath.Clean(expected.HerdrSocketPath),
+		filepath.Clean(actual.WorktreePath) == filepath.Clean(expected.WorktreePath),
+	}
+	return !slices.Contains(requirements, false)
 }
 
 func resolveHerdrConsoleInputs(projectRoot, shell string) (string, string, error) {
