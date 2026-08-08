@@ -52,7 +52,9 @@ func (l *Launcher) launchHerdr(req Request) (Result, bool) {
 	if err != nil {
 		return l.failHerdr(req, "realize launch", l.rollbackFailedHerdrLaunch(operation.locked, intent, err))
 	}
-	live, err := l.startHerdrAgent(operation.ctx, req, operation.locked, operation.route, intent, operation.environment)
+	live, err := l.startHerdrRequestAgent(
+		operation.ctx, req, operation.locked, operation.route, intent, operation.environment,
+	)
 	if err != nil {
 		return l.failHerdr(req, "start agent", l.rollbackFailedHerdrLaunch(operation.locked, intent, err))
 	}

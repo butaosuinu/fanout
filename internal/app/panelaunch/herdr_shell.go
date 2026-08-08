@@ -2,9 +2,10 @@ package panelaunch
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -27,26 +28,43 @@ func (l *Launcher) shellHerdr(
 	if err != nil {
 		return err
 	}
-	intent, err := l.realizeHerdrShell(ctx, locked, route, targetPath, number)
+	intent, err := realizeHerdrInteractive(
+		ctx, l.Herdr, locked, route,
+		manualHerdrCoordinatorRequest(l.Info.ProjectRoot, targetPath, route, number),
+		func(string) (*state.HerdrLaunch, error) {
+			return l.newManualHerdrShellLaunch(route)
+		},
+	)
 	if err != nil {
 		return err
 	}
 	live, err := l.startHerdrShell(ctx, locked, route, intent)
 	if err != nil {
-		return markHerdrAttachedFailure(locked, l.Info.ProjectRoot, intent, err)
+		return markHerdrFinalizationFailure(locked, l.Info.ProjectRoot, intent, err)
 	}
-	pane := herdrShellStatePane(intent, live, number, slug, title)
-	return finalizeHerdrShell(locked, l.Info.ProjectRoot, intent, pane)
+	pane := herdrShellStatePane(intent, live, number, slug, title, "")
+	return finalizeHerdrInteractive(locked, l.Info.ProjectRoot, intent, pane)
+}
+
+func (l *Launcher) newManualHerdrShellLaunch(
+	route herdrrun.OwnedLaunchRoute,
+) (*state.HerdrLaunch, error) {
+	_, shell, err := resolveHerdrConsoleInputs(l.Info.ProjectRoot, os.Getenv("SHELL"))
+	if err != nil {
+		return nil, err
+	}
+	return newHerdrShellLaunch(l.Herdr, route, shell, os.Environ())
 }
 
 func herdrShellStatePane(
 	intent state.HerdrIntent,
 	live backend.LivePane,
 	number int,
-	slug, title string,
+	slug, title, runtimeParent string,
 ) state.Pane {
 	return state.Pane{
-		Parent: ManualParentRef, IssueNum: number, Kind: state.PaneKindShell,
+		Parent: ManualParentRef, RuntimeParent: runtimeParent,
+		IssueNum: number, Kind: state.PaneKindShell,
 		Slug: slug, Backend: backend.Herdr, PaneID: live.Ref.Pane,
 		HerdrWorkspaceID: live.Ref.Workspace, HerdrWorkspaceLabel: live.WorkspaceLabel,
 		HerdrTerminalID: live.TerminalID, HerdrRepoKey: live.RepoKey,
@@ -56,75 +74,55 @@ func herdrShellStatePane(
 	}
 }
 
-func (l *Launcher) realizeHerdrShell(
+func (l *Launcher) startHerdrShell(
 	ctx context.Context,
 	locked *state.LockedStore,
 	route herdrrun.OwnedLaunchRoute,
-	targetPath string,
-	number int,
-) (state.HerdrIntent, error) {
-	launch, prepared, err := l.prepareManualHerdrShell(locked, route, number)
-	if err != nil {
-		return state.HerdrIntent{}, err
-	}
-	result, err := RealizeHerdrCoordinator(ctx, HerdrCoordinatorRequest{
-		Parent: ManualParentRef, IssueNum: number,
-		ProjectRoot: l.Info.ProjectRoot, SourceRoot: targetPath, CWD: targetPath,
-		HerdrSession: route.Session, SocketPath: route.SocketPath, Launch: launch,
-	}, l.Herdr, locked, HerdrRealizeHooks{})
-	if err != nil && !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
-		return result.Intent, errors.Join(
-			err,
-			discardRejectedAttachedLaunch(
-				locked, l.Info.ProjectRoot, route, launch, prepared, number,
-			),
-		)
-	}
-	return result.Intent, nil
+	intent state.HerdrIntent,
+) (backend.LivePane, error) {
+	return l.startHerdrAgent(
+		ctx, locked, route, intent, l.prepareHerdrShellStart, exactHerdrShellPane, nil,
+	)
 }
 
-func (l *Launcher) prepareManualHerdrShell(
+func (l *Launcher) prepareHerdrShellStart(
 	locked *state.LockedStore,
-	route herdrrun.OwnedLaunchRoute,
-	number int,
-) (*state.HerdrLaunch, bool, error) {
+	intent state.HerdrIntent,
+) (state.HerdrIntent, error) {
 	journal, err := locked.HerdrIntents(l.Info.ProjectRoot)
 	if err != nil {
-		return nil, false, err
+		return intent, err
 	}
-	intentID, err := state.HerdrCoordinatorIntentID(ManualParentRef, l.Info.ProjectRoot, number)
-	if err != nil {
-		return nil, false, err
+	if saved, found := journal.FindIntent(intent.ID); found {
+		intent = saved
 	}
-	if _, found := journal.FindIntent(intentID); found {
-		return nil, false, nil
+	if intent.Launch == nil || intent.Launch.Agent != "" || intent.Launch.AgentName != "" {
+		return intent, fmt.Errorf("Herdr shell intent has an invalid launch capsule")
 	}
-	shell := os.Getenv("SHELL")
-	_, shell, err = resolveHerdrConsoleInputs(l.Info.ProjectRoot, shell)
-	if err != nil {
-		return nil, false, err
+	if intent.Launch.TokenIssued {
+		return intent, l.failClosedIssuedHerdrLaunch(journal, intent, nil)
 	}
-	return newHerdrShellLaunch(l.Herdr, route, shell, os.Environ())
+	return intent, nil
 }
 
-func finalizeHerdrShell(
-	locked *state.LockedStore,
-	projectRoot string,
+func exactHerdrShellPane(
 	intent state.HerdrIntent,
-	pane state.Pane,
-) (retErr error) {
-	defer func() {
-		if retErr != nil {
-			retErr = errors.Join(retErr, markHerdrFinalizationFailure(locked, projectRoot, intent, retErr))
+	panes []backend.LivePane,
+) (backend.LivePane, bool) {
+	for _, pane := range panes {
+		identity := []bool{
+			pane.Ref.Backend == backend.Herdr,
+			pane.Ref.Workspace == intent.Resource.WorkspaceID,
+			pane.Ref.Pane == intent.Resource.PaneID,
+			pane.WorkspaceLabel == intent.Resource.Label,
+			pane.TerminalID == intent.Resource.TerminalID,
+			filepath.Clean(pane.CurrentPath) == filepath.Clean(intent.WorktreePath),
+			pane.SessionID == intent.Session, pane.SocketPath == intent.SocketPath,
+			!pane.AgentPresent,
 		}
-	}()
-	if err := locked.RecordPane(pane); err != nil {
-		return err
+		if !slices.Contains(identity, false) {
+			return pane, true
+		}
 	}
-	journal, err := locked.HerdrIntents(projectRoot)
-	if err != nil {
-		return err
-	}
-	journal.RemoveIntent(intent.ID)
-	return journal.Save()
+	return backend.LivePane{}, false
 }

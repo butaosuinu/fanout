@@ -75,31 +75,18 @@ func Issues(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName strin
 // IssuesWithResult runs the issue / Project fan-out lane and returns the exact
 // pane ids created before completion or a fail-fast launch error.
 func IssuesWithResult(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc) (IssueExecutionResult, exitcode.Code) {
-	return IssuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, nil)
+	return IssuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, nil, nil)
 }
 
-// IssuesWithResultWhenReady is IssuesWithResult with one optional pre-execute
-// callback. The TUI tmux parent lane uses it to launch its project-root
-// orchestrator after the exact child plan and agent assignments are valid.
-func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, ready IssueReadyFunc) (IssueExecutionResult, exitcode.Code) {
-	return issuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, nil, ready, nil)
-}
-
-// IssuesWithResultWhenCallbacks adds a post-child callback to
-// IssuesWithResultWhenReady without changing the existing callers' ordering.
-func IssuesWithResultWhenCallbacks(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, ready IssueReadyFunc, after IssueAfterFunc) (IssueExecutionResult, exitcode.Code) {
+// IssuesWithResultWhenReady is IssuesWithResult with optional callbacks before
+// and after the child loop. They run while the same state recorder is locked.
+func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, ready IssueReadyFunc, after IssueAfterFunc) (IssueExecutionResult, exitcode.Code) {
 	return issuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, nil, ready, after)
 }
 
 // IssuesWithPlanInputResultWhenReady is IssuesWithResultWhenReady with a
 // caller-prepared issue enumeration and lookup cache.
-func IssuesWithPlanInputResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, input IssuePlanInput, ready IssueReadyFunc) (IssueExecutionResult, exitcode.Code) {
-	return IssuesWithPlanInputResultWhenCallbacks(cfg, lg, rt, commandName, bindKeys, input, ready, nil)
-}
-
-// IssuesWithPlanInputResultWhenCallbacks is the prepared-input variant of
-// IssuesWithResultWhenCallbacks.
-func IssuesWithPlanInputResultWhenCallbacks(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, input IssuePlanInput, ready IssueReadyFunc, after IssueAfterFunc) (IssueExecutionResult, exitcode.Code) {
+func IssuesWithPlanInputResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, input IssuePlanInput, ready IssueReadyFunc, after IssueAfterFunc) (IssueExecutionResult, exitcode.Code) {
 	return issuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, &input, ready, after)
 }
 

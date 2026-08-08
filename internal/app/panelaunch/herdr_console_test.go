@@ -89,7 +89,7 @@ func TestHerdrShellStatePaneUsesAdmittedCanonicalPath(t *testing.T) {
 		SessionID:      "fanout-owned",
 		SocketPath:     "/tmp/fanout-owned.sock",
 	}
-	pane := herdrShellStatePane(intent, live, -1, "shell", "Shell")
+	pane := herdrShellStatePane(intent, live, -1, "shell", "Shell", "")
 	if pane.WorktreePath != intent.WorktreePath {
 		t.Fatalf("saved path = %q, want admitted path %q", pane.WorktreePath, intent.WorktreePath)
 	}

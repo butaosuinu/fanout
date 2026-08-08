@@ -173,45 +173,6 @@ func TestIssuedHerdrLaunchWithMatchingNameStillFailsClosed(t *testing.T) {
 	}
 }
 
-func TestIssuedHerdrShellRecoversWithoutTokenReplay(t *testing.T) {
-	envPath := filepath.Join(t.TempDir(), "consumed-env")
-	intent := state.HerdrIntent{
-		ID: "console", Status: state.HerdrIntentRealized,
-		WorktreePath: "/repo", Session: "fanout-owned", SocketPath: "/tmp/herdr.sock",
-		ExpiresUnixMS: time.Now().Add(5 * time.Second).UnixMilli(),
-		Resource: state.HerdrResource{
-			WorkspaceID: "w1", Label: "fanout-console-owned", PaneID: "w1:p1",
-			TerminalID: "term-1", CurrentPath: "/repo",
-		},
-		Launch: &state.HerdrLaunch{
-			Nonce: strings.Repeat("a", 32), Executable: "/bin/zsh",
-			EnvFilePath: envPath, EnvNameCount: 1, LauncherReady: true, TokenIssued: true,
-		},
-	}
-	runtime := &fakeHerdrLaunchRuntime{
-		processInfo: herdrrun.PaneProcessInfo{
-			ShellPID: 42, ForegroundProcessGroup: 42,
-			ForegroundProcesses: []herdrrun.PaneProcess{{
-				PID: 42, ParentPID: 1, ProcessGroup: 42,
-				Executable: "/bin/zsh", Argv0: "/bin/zsh", CWD: "/repo",
-			}},
-		},
-		live: []backend.LivePane{{
-			Ref:            backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
-			WorkspaceLabel: "fanout-console-owned", TerminalID: "term-1",
-			CurrentPath: "/repo", SessionID: "fanout-owned", SocketPath: "/tmp/herdr.sock",
-		}},
-	}
-	launcher := &Launcher{Herdr: runtime}
-	live, err := launcher.recoverIssuedHerdrShell(context.Background(), nil, intent)
-	if err != nil || live.Ref.Pane != "w1:p1" {
-		t.Fatalf("recover issued shell = %+v, %v", live, err)
-	}
-	if runtime.tokenCalls != 0 {
-		t.Fatalf("issued shell replayed %d token(s)", runtime.tokenCalls)
-	}
-}
-
 func TestUnpublishedHerdrLaunchRemovesEnvironmentCapsule(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	locked, err := state.LockProjectForLaunch(repo)
@@ -1111,14 +1072,32 @@ func TestRetryHerdrObservationRetriesOnlyMarkedFailure(t *testing.T) {
 	}
 }
 
-func TestObserveExactHerdrAgentReturnsPermanentObservationError(t *testing.T) {
+func TestObserveExactHerdrPaneReturnsPermanentObservationError(t *testing.T) {
 	runtime := &fakeHerdrLaunchRuntime{liveErr: errors.New("malformed snapshot")}
 	launcher := &Launcher{Herdr: runtime}
 	intent := state.HerdrIntent{ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli()}
 
-	_, found, err := launcher.observeExactHerdrAgent(context.Background(), intent, "agent-1")
+	_, found, err := launcher.observeExactHerdrPane(
+		context.Background(), intent,
+		func(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
+			return exactHerdrLaunchPane(intent, panes, "agent-1")
+		},
+	)
 	if err == nil || found {
 		t.Fatalf("permanent observation = found %t, err %v; want immediate failure", found, err)
+	}
+}
+
+func TestObserveExactHerdrPaneDefersRetryableObservationError(t *testing.T) {
+	runtime := &fakeHerdrLaunchRuntime{liveErr: retryableHerdrObservationError{}}
+	launcher := &Launcher{Herdr: runtime}
+	intent := state.HerdrIntent{ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli()}
+
+	_, found, err := launcher.observeExactHerdrPane(
+		context.Background(), intent, exactHerdrShellPane,
+	)
+	if err != nil || found {
+		t.Fatalf("retryable observation = found %t, err %v; want deferred retry", found, err)
 	}
 }
 
@@ -1307,8 +1286,13 @@ func TestHerdrLaunchDoesNotIssueTokenAfterLauncherWaitExpires(t *testing.T) {
 		return nil
 	}
 	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrAgent(
-		context.Background(), Request{Agent: "claude"}, locked,
-		herdrrun.OwnedLaunchRoute{}, intent, nil,
+		context.Background(), locked, herdrrun.OwnedLaunchRoute{}, intent,
+		func(_ *state.LockedStore, intent state.HerdrIntent) (state.HerdrIntent, error) {
+			return intent, nil
+		},
+		func(state.HerdrIntent, []backend.LivePane) (backend.LivePane, bool) {
+			return backend.LivePane{}, false
+		}, nil,
 	)
 	if err == nil || runtime.tokenCalls != 0 {
 		t.Fatalf("expired launch error/token calls = %v/%d, want error/0", err, runtime.tokenCalls)
@@ -1356,7 +1340,7 @@ func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 		t.Fatal(statusErr)
 	}
 
-	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrAgent(
+	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrRequestAgent(
 		context.Background(), Request{
 			Agent: "codex", TeamDBPath: "/tmp/team.db", CodexTeamMode: true,
 			CodexTeamStatusPath: filepath.Join(t.TempDir(), "regenerated-status.json"),

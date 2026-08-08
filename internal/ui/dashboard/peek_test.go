@@ -342,31 +342,6 @@ func TestPeekForeignHerdrPaneIs404WithoutRead(t *testing.T) {
 	}
 }
 
-func TestPeekDuplicateOwnedHerdrPaneIDFailsClosed(t *testing.T) {
-	reads := 0
-	srv := &Server{
-		poller:        &poller{},
-		ownsHerdrPane: func(sessionview.PaneView) bool { return true },
-		readHerdrPane: func(sessionview.PaneView, int) (string, error) {
-			reads++
-			return "must not read", nil
-		},
-	}
-	first := peekSnapshot(true).Sessions[0].Panes[0]
-	first.Backend, first.PaneID = backend.Herdr, "duplicate-pane"
-	second := first
-	second.SavedPane.HerdrWorkspaceLabel = "other-owned-label"
-	publishSnapshot(srv, sessionview.Snapshot{Sessions: []sessionview.Session{
-		{Parent: "#1", Panes: []sessionview.PaneView{first}},
-		{Parent: "#2", Panes: []sessionview.PaneView{second}},
-	}})
-	response := httptest.NewRecorder()
-	srv.handlePeek(response, httptest.NewRequest(http.MethodGet, "/api/peek?pane=duplicate-pane", nil))
-	if response.Code != http.StatusNotFound || reads != 0 || !strings.Contains(response.Body.String(), "ambiguous") {
-		t.Fatalf("duplicate owned Herdr peek = status:%d reads:%d body:%s", response.Code, reads, response.Body.String())
-	}
-}
-
 func TestPeekUnknownBackendIs404AndSkipsCapture(t *testing.T) {
 	fake := &fakeCapture{out: "an unrelated tmux pane's terminal"}
 	srv := newPeekServer(t, "", fake)
