@@ -364,7 +364,7 @@ func (l *Launcher) prepareHerdrLaunch(
 	}
 	if intent.Launch != nil {
 		if intent.Launch.TokenIssued {
-			return intent, l.failClosedIssuedHerdrLaunch(journal, intent)
+			return intent, l.failClosedIssuedHerdrLaunch(journal, intent, nil)
 		}
 		return intent, nil
 	}
@@ -491,11 +491,16 @@ func persistHerdrLaunch(
 func (l *Launcher) failClosedIssuedHerdrLaunch(
 	journal *state.LockedHerdrIntents,
 	intent state.HerdrIntent,
+	cause error,
 ) error {
-	return markHerdrIntentManual(journal, intent, fmt.Errorf(
+	responseLost := fmt.Errorf(
 		"%w: launch-token outcome is indeterminate",
 		errHerdrLaunchResponseLost,
-	))
+	)
+	if cause != nil {
+		responseLost = errors.Join(cause, responseLost)
+	}
+	return markHerdrIntentManual(journal, intent, responseLost)
 }
 
 func (l *Launcher) finalizeHerdrLaunch(

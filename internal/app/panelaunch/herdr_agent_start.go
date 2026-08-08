@@ -99,7 +99,7 @@ func (l *Launcher) finishIssuedHerdrAgent(
 ) (live backend.LivePane, retErr error) {
 	defer func() {
 		if retErr != nil {
-			retErr = errors.Join(retErr, l.failClosedIssuedHerdrLaunch(journal, intent))
+			retErr = errors.Join(retErr, l.failClosedIssuedHerdrLaunch(journal, intent, retErr))
 		}
 	}()
 	stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)

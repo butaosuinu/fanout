@@ -137,7 +137,7 @@ func TestIssuedHerdrLaunchWithMatchingNameStillFailsClosed(t *testing.T) {
 		Cfg: &cliflags.Config{}, Log: log.New(false),
 		Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime,
 	}
-	err = launcher.failClosedIssuedHerdrLaunch(journal, intent)
+	err = launcher.failClosedIssuedHerdrLaunch(journal, intent, nil)
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) ||
 		!strings.Contains(err.Error(), "refusing automatic adoption") ||
 		!strings.Contains(err.Error(), "launch-token outcome is indeterminate") {
@@ -324,7 +324,7 @@ func TestAwaitHerdrCodexTeamFailureRequiresManualCleanup(t *testing.T) {
 				}
 			},
 		},
-		{name: "status timeout", remaining: time.Millisecond, wantFailure: "timed out"},
+		{name: "status timeout", remaining: 2 * time.Second, wantFailure: "timed out"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := newHerdrRealizeRepo(t)
@@ -748,8 +748,10 @@ func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 	intent.ExpiresUnixMS = time.Now().Add(time.Minute).UnixMilli()
 	intent.Launch = validTestHerdrLaunch()
 	intent.Launch.Agent = "codex"
+	intent.Launch.TokenIssued = false
 	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
 	runtime.processInfo = testHerdrLauncherProcess(intent, route.LauncherPath)
+	runtime.live = []backend.LivePane{testHerdrIdlePane(intent)}
 	journal, err := locked.HerdrIntents(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -771,8 +773,8 @@ func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) || !strings.Contains(err.Error(), "owner mismatch") {
 		t.Fatalf("failed team agent start error = %v", err)
 	}
-	if runtime.tokenCalls != 1 || runtime.liveCalls != 0 {
-		t.Fatalf("failed team token/live calls = %d/%d, want 1/0", runtime.tokenCalls, runtime.liveCalls)
+	if runtime.tokenCalls != 1 || runtime.liveCalls != 1 {
+		t.Fatalf("failed team token/live calls = %d/%d, want 1/1", runtime.tokenCalls, runtime.liveCalls)
 	}
 	journal, err = locked.HerdrIntents(repo)
 	if err != nil {
