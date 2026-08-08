@@ -834,6 +834,7 @@ Claude の watcher は同じ briefing と SQLite bus を使う。
 非 Plan の Codex は owned launcher から team bridge を起動し、ready status を確認してから final row を確定する。
 Herdr の自動 nudge 送信は #552 まで no-op のままとし、prompt fallback で補わない。
 `--dry-run` は team briefing と registry seed の予定を表示するだけで、SQLite、state、filesystem、Git、Herdr を変更しない。
+`FANOUT_DB_PATH` の相対 path は launcher と子 worktree で異なる DB を開くため、Herdr `--team` は最初の mutation 前に拒否する。
 tmux backend の `--team` と既存 message bus は変更しない。
 
 0.7.3 / 0.7.4 の `pane send-text` は literal text だけを送り、別の `pane send-keys enter` まで shell cwd は変わらなかった。

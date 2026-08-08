@@ -27,7 +27,7 @@ func planHasCodexTeamBridge(cfg *cliflags.Config, tasks []planspec.Task) bool {
 // executeTaskPlan starts its first pane. The later normal seeder replaces each
 // placeholder with its real pane metadata.
 func preseedTaskTeamRegistry(dbPath, parentRef string, tasks []planspec.Task, cfg *cliflags.Config) (retErr error) {
-	db, err := openTaskTeamRegistry(dbPath, parentRef)
+	db, err := openOwnedTeamRegistry(dbPath, parentRef)
 	if err != nil {
 		return err
 	}
@@ -61,7 +61,7 @@ func preseedTaskTeamRegistry(dbPath, parentRef string, tasks []planspec.Task, cf
 // DeleteProvisionalTaskPeer's empty-pane guard preserves rows already replaced
 // by a live pane even if the caller's created-id bookkeeping is stale.
 func cleanupUncreatedTaskPeers(dbPath, parentRef string, planned []planspec.Task, createdIDs []string) (retErr error) {
-	db, err := openTaskTeamRegistry(dbPath, parentRef)
+	db, err := openOwnedTeamRegistry(dbPath, parentRef)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func cleanupUncreatedTaskPeers(dbPath, parentRef string, planned []planspec.Task
 	return nil
 }
 
-func openTaskTeamRegistry(dbPath, parentRef string) (*sql.DB, error) {
+func openOwnedTeamRegistry(dbPath, parentRef string) (*sql.DB, error) {
 	db, err := team.Open(dbPath)
 	if err != nil {
 		return nil, err

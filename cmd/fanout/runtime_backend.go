@@ -21,6 +21,7 @@ import (
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/team"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -266,6 +267,12 @@ func validateLaunchBackend(
 }
 
 func validateHerdrLaunchBackend(cfg *cliflags.Config, inputs runtimeBackendInputs) error {
+	if cfg.Team {
+		dbPath := os.Getenv(team.DBPathEnv)
+		if dbPath != "" && !filepath.IsAbs(dbPath) {
+			return fmt.Errorf("%s must be absolute with --backend herdr --team", team.DBPathEnv)
+		}
+	}
 	if cfg.TUIInteractive {
 		return backend.Unsupported(backend.Herdr, "interactive TUI launch in the current release wave")
 	}

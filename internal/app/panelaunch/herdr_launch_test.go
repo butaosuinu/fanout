@@ -726,6 +726,65 @@ func TestHerdrLaunchDoesNotIssueTokenAfterLauncherWaitExpires(t *testing.T) {
 	}
 }
 
+func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrLaunchRuntime{}
+	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, &runtime.fakeHerdrRealizeRuntime, hooks)
+	result, err := realizeHerdrWorktree(
+		context.Background(), testHerdrWorktreeRequest(repo, "team-start-failure", 568),
+		&runtime.fakeHerdrRealizeRuntime, hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	intent := result.Intent
+	intent.ExpiresUnixMS = time.Now().Add(time.Minute).UnixMilli()
+	intent.Launch = validTestHerdrLaunch()
+	intent.Launch.Agent = "codex"
+	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
+	runtime.processInfo = testHerdrLauncherProcess(intent, route.LauncherPath)
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	if err := codexapp.WriteFailedStatus(statusPath, errors.New("owner mismatch")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrAgent(
+		context.Background(), Request{
+			Agent: "codex", CodexTeamMode: true, CodexTeamStatusPath: statusPath,
+		}, locked, route, intent, nil,
+	)
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) || !strings.Contains(err.Error(), "owner mismatch") {
+		t.Fatalf("failed team agent start error = %v", err)
+	}
+	if runtime.tokenCalls != 1 || runtime.liveCalls != 0 {
+		t.Fatalf("failed team token/live calls = %d/%d, want 1/0", runtime.tokenCalls, runtime.liveCalls)
+	}
+	journal, err = locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, found := journal.FindIntent(intent.ID)
+	if !found || saved.Status != state.HerdrIntentManualCleanupRequired ||
+		!strings.Contains(saved.Failure, "owner mismatch") {
+		t.Fatalf("saved failed team start = (%+v, %t)", saved, found)
+	}
+}
+
 func TestHerdrLaunchDoesNotRenameAfterProcessCheckExpires(t *testing.T) {
 	runtime := &fakeHerdrLaunchRuntime{}
 	intent := state.HerdrIntent{

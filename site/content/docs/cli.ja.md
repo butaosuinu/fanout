@@ -374,7 +374,7 @@ verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` �
 
 [`fanout plan --team`](#plan-fan-out-issue-less) の run では、peer は issue 番号ではなく **task ID** で指定します: `send --to <task-id>`、`peers` は現在の task ID 一覧を表示します。plan モードのペインの `--json` 出力には `selfTask` / `fromTask` / `toTask` フィールドが付き、合成 peer 番号から task ID を解決できます。issue / Project の JSON は変わりません。
 
-データベースは `/tmp/fanout-<repo>-<parent>.db` に置かれ、`FANOUT_DB_PATH` で上書きできます。メッセージは DB に永続し、兄弟は自分のチェックポイントで読みます。`--team` ではさらに `claude` ペインと新規起動の非 Plan `codex` ペインに push レーンが載り、到着ごとに配信します: `claude` ペインは briefing の指示で Monitor ツールの下で `fanout msg watch` を回し、新規起動の非 Plan `codex` ペインは app-server ブリッジ経由になり、idle な turn へ未読メッセージを引用付きの untrusted data として注入します（Codex Plan Mode のペインは pull のまま）。どちらのレーンもペインの tmux 入力には書き込みません — それをするのは `nudge` だけです。レーンが使えないとき（Monitor 不可、restore した codex ペイン）は pull に戻ります。注入失敗の回収は `inbox --all` です（失敗した分は既読化済みのため）。ブリッジの起動自体に失敗した場合（不正な `FANOUT_DB_PATH`、DB の所有者や権限の不正など）は fallback ではなく、その子の launch が失敗します。pure-Go の SQLite ドライバが同梱されているため、外部 `sqlite3` は不要です。
+データベースは `/tmp/fanout-<repo>-<parent>.db` に置かれ、`FANOUT_DB_PATH` で上書きできます。herdr `--team` では、launcher と子 worktree が別の file を開かないよう、上書きに絶対 path が必要です。メッセージは DB に永続し、兄弟は自分のチェックポイントで読みます。`--team` ではさらに `claude` ペインと新規起動の非 Plan `codex` ペインに push レーンが載り、到着ごとに配信します: `claude` ペインは briefing の指示で Monitor ツールの下で `fanout msg watch` を回し、新規起動の非 Plan `codex` ペインは app-server ブリッジ経由になり、idle な turn へ未読メッセージを引用付きの untrusted data として注入します（Codex Plan Mode のペインは pull のまま）。どちらのレーンもペインの tmux 入力には書き込みません — それをするのは `nudge` だけです。レーンが使えないとき（Monitor 不可、restore した codex ペイン）は pull に戻ります。注入失敗の回収は `inbox --all` です（失敗した分は既読化済みのため）。ブリッジの起動自体に失敗した場合（不正な `FANOUT_DB_PATH`、DB の所有者や権限の不正など）は fallback ではなく、その子の launch が失敗します。pure-Go の SQLite ドライバが同梱されているため、外部 `sqlite3` は不要です。
 
 | Exit code | 意味 |
 |---|---|
@@ -428,7 +428,7 @@ fanout check-update
 | `FANOUT_TUI_ENHANCED_KEYS` | `0` で TUI prompt 欄の enhanced keyboard input を無効化する。既定は有効。`Shift+Enter` の改行は端末が区別して報告する必要があり（fanout が tmux `extended-keys` を有効化する）、`Ctrl+J` は常に使える。 |
 | `FANOUT_NTFY_URL` | ntfy POST URL（`ntfyURL`）の環境変数レイヤ。 |
 | `FANOUT_SLACK_WEBHOOK_URL` | Slack webhook POST URL（`slackWebhookURL`）の環境変数レイヤ。 |
-| `FANOUT_DB_PATH` | `--team` と `fanout msg` が使う parent ごとの peer messaging SQLite パスを上書きする。既定: `/tmp/fanout-<repo>-<parent>.db`。 |
+| `FANOUT_DB_PATH` | `--team` と `fanout msg` が使う parent ごとの peer messaging SQLite path を上書きする。herdr `--team` では絶対 path が必要。既定: `/tmp/fanout-<repo>-<parent>.db`。 |
 | `FANOUT_SKIP_PR_REVIEW` | PR レビューゲート hook の 1 回限りのバイパス: `gh pr create` の先頭に `FANOUT_SKIP_PR_REVIEW=1` を付ける。[トラブルシューティング]({{< relref "/docs/troubleshooting" >}})を参照。 |
 
 bool の settings 変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。integer の watcher 変数は 10 進整数を受け付けます。不正な値は warn して無視されます。settings の解決順序では CLI flag と設定ファイルの間に位置します。

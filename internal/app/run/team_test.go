@@ -9,6 +9,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/msgstore"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
 )
@@ -101,5 +102,44 @@ func TestSeedTeamRegistryWarnsWhenDBUnavailable(t *testing.T) {
 	seedTeamRegistry(lg, filepath.Join(t.TempDir(), "no-such-dir", "team.db"), state.Store{}, "100", []int{101})
 	if got := stderr.String(); !strings.Contains(got, "team:") {
 		t.Errorf("stderr = %q, want a team: warning", got)
+	}
+}
+
+func TestSeedTeamRegistryRejectsForeignParentDB(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "team.db")
+	db, err := team.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := team.EnsureSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := msgstore.New(db, "200"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	seedTeamRegistry(
+		log.NewWith(&stdout, &stderr, false), dbPath,
+		state.Store{Panes: []state.Pane{{Parent: "100", IssueNum: 101, PaneID: "w1:p1"}}},
+		"100", []int{101},
+	)
+	if !strings.Contains(stderr.String(), "owned by parent 200") {
+		t.Fatalf("foreign owner warning = %q", stderr.String())
+	}
+	db, err = team.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM peers").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("foreign DB peer rows = %d, want 0", count)
 	}
 }

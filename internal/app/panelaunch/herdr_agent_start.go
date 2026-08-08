@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -127,14 +128,14 @@ func (l *Launcher) adoptHerdrAgent(
 	req Request,
 	intent state.HerdrIntent,
 ) (backend.LivePane, error) {
-	live, err := l.waitForHerdrAgent(ctx, intent, req.Agent)
+	live, err := l.waitForHerdrAgent(ctx, intent, req.Agent, req.CodexTeamStatusPath)
 	if err != nil {
 		return live, err
 	}
 	if err := l.verifyAndRenameHerdrAgent(ctx, intent); err != nil {
 		return live, err
 	}
-	return l.waitForHerdrAgent(ctx, intent, intent.Launch.AgentName)
+	return l.waitForHerdrAgent(ctx, intent, intent.Launch.AgentName, req.CodexTeamStatusPath)
 }
 
 func (l *Launcher) verifyAndRenameHerdrAgent(
@@ -378,9 +379,13 @@ func (l *Launcher) waitForHerdrAgent(
 	ctx context.Context,
 	intent state.HerdrIntent,
 	wantAgentID string,
+	codexTeamStatusPath string,
 ) (backend.LivePane, error) {
 	deadline := time.UnixMilli(intent.ExpiresUnixMS)
 	for time.Now().Before(deadline) {
+		if err := codexapp.StartupFailure(codexTeamStatusPath); err != nil {
+			return backend.LivePane{}, err
+		}
 		live, found, err := l.observeExactHerdrAgent(ctx, intent, wantAgentID)
 		if err != nil {
 			return backend.LivePane{}, err

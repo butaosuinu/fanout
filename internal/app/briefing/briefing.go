@@ -254,16 +254,7 @@ func renderWorkBriefing(b workBriefing) string {
 	if b.settings.AutoPullRequest && b.settings.PRVisualization {
 		base += prVisualizationSection(b.prFooter, b.baseBranch)
 	}
-	if b.team != nil {
-		if b.teamTaskID != "" {
-			base += taskTeamSection(b.teamTaskID, b.team)
-		} else {
-			base += teamSection(b.teamIssueNum, b.team)
-		}
-		if b.agentName == "claude" {
-			base += teamWatchSection
-		}
-	}
+	base += renderTeamBriefing(b)
 	if b.agentName == "codex" {
 		return base + codexReviewSection(b.settings.AutoPullRequest, b.baseBranch)
 	}
@@ -283,6 +274,22 @@ func renderWorkBriefing(b workBriefing) string {
 		base += agentTeamsSection
 	}
 	return base
+}
+
+func renderTeamBriefing(b workBriefing) string {
+	if b.team == nil {
+		return ""
+	}
+	self := b.teamTaskID
+	section := taskTeamSection(self, b.team)
+	if self == "" {
+		self = fmt.Sprintf("%d", b.teamIssueNum)
+		section = teamSection(b.teamIssueNum, b.team)
+	}
+	if b.agentName == "claude" {
+		section += teamWatchSection(self, b.team)
+	}
+	return section
 }
 
 func pullRequestBaseRequirement(baseBranch string) string {
@@ -574,18 +581,23 @@ Agent Teams, which coordinates teammates inside your own single session.
 
 // teamWatchSection is the Claude-only push-messaging block appended directly
 // after the --team coordination section on both the issue and plan-task lanes.
-// It tells the pane to follow the shared bus with `fanout msg watch` under the
-// Monitor tool instead of relying only on the pull checkpoints. Every other
-// agent's --team briefing must stay byte-identical without it (the codex
-// follow-up task pins its own goldens against that contract).
-const teamWatchSection = `
+// It binds the known launch identity explicitly because a Herdr agent can run
+// before its canonical final state row is published. Every other agent's
+// --team briefing must stay byte-identical without it.
+func teamWatchSection(self string, team *TeamContext) string {
+	parent := strings.TrimPrefix(team.ParentLabel, "#")
+	command := "fanout msg watch --self " + agent.ShellQuote(self) + " --parent " + agent.ShellQuote(parent)
+	return fmt.Sprintf(teamWatchSectionTemplate, command)
+}
+
+const teamWatchSectionTemplate = `
 ## Push messages: run the message watcher (Monitor)
 
 Right after reading this briefing, as your FIRST tool action, start the sibling
 message watcher with the Monitor tool in command mode, persistent (session
 length; the default monitor timeout would kill the watcher after minutes):
 
-- Monitor command: ` + "`fanout msg watch`" + `, with persistent: true
+- Monitor command: ` + "`%s`" + `, with persistent: true
 
 Do not wait on it — continue with the task above immediately; the watcher
 delivers new sibling messages as they arrive. Its first poll drains the unread
