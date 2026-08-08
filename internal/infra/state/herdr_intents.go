@@ -31,6 +31,15 @@ const (
 	HerdrIntentCoordinator HerdrIntentKind = "coordinator"
 	HerdrIntentWorktree    HerdrIntentKind = "worktree"
 	HerdrIntentRollback    HerdrIntentKind = "rollback"
+	HerdrIntentCleanup     HerdrIntentKind = "cleanup"
+)
+
+type HerdrCleanupPhase string
+
+const (
+	HerdrCleanupReopen         HerdrCleanupPhase = "reopen"
+	HerdrCleanupRemove         HerdrCleanupPhase = "remove"
+	HerdrCleanupWorkspaceClose HerdrCleanupPhase = "workspace-close"
 )
 
 type HerdrIntentStatus string
@@ -85,6 +94,9 @@ type HerdrIntent struct {
 	ExpiresUnixMS  int64         `json:"expiresUnixMs"`
 
 	Launch *HerdrLaunch `json:"launch,omitempty"`
+
+	CleanupPhase        HerdrCleanupPhase `json:"cleanupPhase,omitempty"`
+	CleanupDeleteBranch bool              `json:"cleanupDeleteBranch,omitempty"`
 
 	Failure string `json:"failure,omitempty"`
 }
@@ -344,6 +356,15 @@ func HerdrRollbackIntentID(worktreeIntentID string) (string, error) {
 	return "rollback:" + worktreeIntentID, nil
 }
 
+// HerdrCleanupIntentID binds lifecycle cleanup to the worktree row it removes.
+func HerdrCleanupIntentID(worktreeIntentID string) (string, error) {
+	worktreeIntentID = strings.TrimSpace(worktreeIntentID)
+	if worktreeIntentID == "" || strings.HasPrefix(worktreeIntentID, "cleanup:") {
+		return "", fmt.Errorf("herdr cleanup intent requires a worktree intent id")
+	}
+	return "cleanup:" + worktreeIntentID, nil
+}
+
 func herdrOwnerTuple(parent, ownerProjectRoot string) string {
 	identity := tuplePart(parent)
 	if ownerProjectRoot != "" {
@@ -471,33 +492,70 @@ func validateHerdrIntentIdentity(intent HerdrIntent) error {
 }
 
 func validateHerdrIntentKind(intent HerdrIntent) error {
-	var requirements []bool
-	switch intent.Kind {
-	case HerdrIntentCoordinator:
-		requirements = []bool{
-			intent.TaskID == "", intent.BranchName == "", intent.FullBranchRef == "",
-			intent.BaseSHA == "", intent.Coordinator.WorkspaceID == "",
-		}
-	case HerdrIntentWorktree:
-		requirements = []bool{
-			intent.Slug != "", intent.BranchName != "", intent.FullBranchRef != "",
-			intent.FullBranchRef == "refs/heads/"+intent.BranchName,
-			intent.BaseBranch != "", herdrCommitSHA.MatchString(intent.BaseSHA),
-			herdrCommitSHA.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
-		}
-	case HerdrIntentRollback:
-		requirements = []bool{
-			strings.HasPrefix(intent.ID, "rollback:"), intent.Launch == nil,
-			intent.Slug != "", intent.BranchName != "", intent.FullBranchRef != "",
-			intent.FullBranchRef == "refs/heads/"+intent.BranchName,
-			intent.BaseBranch != "", herdrCommitSHA.MatchString(intent.BaseSHA),
-			herdrCommitSHA.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
-		}
-	default:
+	validators := map[HerdrIntentKind]func(HerdrIntent) error{
+		HerdrIntentCoordinator: validateHerdrCoordinatorFields,
+		HerdrIntentWorktree:    validateHerdrWorktreeFields,
+		HerdrIntentRollback:    validateHerdrRollbackFields,
+		HerdrIntentCleanup:     validateHerdrCleanupFields,
+	}
+	validate, ok := validators[intent.Kind]
+	if !ok {
 		return fmt.Errorf("unknown kind %q", intent.Kind)
 	}
+	return validate(intent)
+}
+
+func validateHerdrCoordinatorFields(intent HerdrIntent) error {
+	return requireHerdrIntentFields(intent.Kind, []bool{
+		intent.TaskID == "", intent.BranchName == "", intent.FullBranchRef == "",
+		intent.BaseSHA == "", intent.Coordinator.WorkspaceID == "",
+	})
+}
+
+func validateHerdrWorktreeFields(intent HerdrIntent) error {
+	return requireHerdrIntentFields(intent.Kind, []bool{
+		intent.Slug != "", intent.BranchName != "", intent.FullBranchRef != "",
+		intent.FullBranchRef == "refs/heads/"+intent.BranchName,
+		intent.BaseBranch != "", herdrCommitSHA.MatchString(intent.BaseSHA),
+		herdrCommitSHA.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
+	})
+}
+
+func validateHerdrRollbackFields(intent HerdrIntent) error {
+	return requireHerdrIntentFields(intent.Kind, []bool{
+		strings.HasPrefix(intent.ID, "rollback:"), intent.Launch == nil,
+		intent.Slug != "", intent.BranchName != "", intent.FullBranchRef != "",
+		intent.FullBranchRef == "refs/heads/"+intent.BranchName,
+		intent.BaseBranch != "", herdrCommitSHA.MatchString(intent.BaseSHA),
+		herdrCommitSHA.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
+	})
+}
+
+func validateHerdrCleanupFields(intent HerdrIntent) error {
+	validPhases := map[HerdrCleanupPhase]bool{
+		HerdrCleanupReopen:         true,
+		HerdrCleanupRemove:         true,
+		HerdrCleanupWorkspaceClose: true,
+	}
+	if err := requireHerdrIntentFields(intent.Kind, []bool{
+		strings.HasPrefix(intent.ID, "cleanup:"), intent.Launch == nil,
+		intent.BranchName != "", intent.FullBranchRef == "refs/heads/"+intent.BranchName,
+		intent.Resource.WorkspaceID != "", intent.Resource.CurrentPath != "",
+		validPhases[intent.CleanupPhase],
+		intent.CleanupPhase != HerdrCleanupReopen || intent.Coordinator.WorkspaceID != "",
+		!intent.CleanupDeleteBranch || herdrCommitSHA.MatchString(intent.ExpectedHead),
+	}); err != nil {
+		return err
+	}
+	if intent.CleanupPhase == HerdrCleanupReopen {
+		return validateHerdrResource(intent.Coordinator, false)
+	}
+	return nil
+}
+
+func requireHerdrIntentFields(kind HerdrIntentKind, requirements []bool) error {
 	if slices.Contains(requirements, false) {
-		return fmt.Errorf("%s fields are incomplete", intent.Kind)
+		return fmt.Errorf("%s fields are incomplete", kind)
 	}
 	return nil
 }
@@ -517,7 +575,7 @@ func validateHerdrIntentStatus(intent HerdrIntent) error {
 }
 
 func validateHerdrPlanned(intent HerdrIntent) error {
-	if intent.Kind == HerdrIntentRollback {
+	if intent.Kind == HerdrIntentRollback || intent.Kind == HerdrIntentCleanup {
 		return validateHerdrResource(intent.Resource, true)
 	}
 	if intent.Resource != (HerdrResource{}) {
@@ -532,7 +590,7 @@ func validateHerdrIssued(intent HerdrIntent) error {
 	}
 	// Worktree open recovery retains the realized resource while the
 	// replacement workspace mutation is in flight.
-	if intent.Kind != HerdrIntentWorktree && intent.Kind != HerdrIntentRollback {
+	if intent.Kind != HerdrIntentWorktree && intent.Kind != HerdrIntentRollback && intent.Kind != HerdrIntentCleanup {
 		return fmt.Errorf("has a resource before realization")
 	}
 	return validateHerdrResource(intent.Resource, true)
@@ -550,8 +608,12 @@ func validateHerdrManual(intent HerdrIntent) error {
 }
 
 func validateHerdrIntentOwnership(intent HerdrIntent) error {
-	if intent.BranchCreated &&
-		(intent.Kind != HerdrIntentWorktree && intent.Kind != HerdrIntentRollback || intent.BranchExisted) {
+	branchKinds := map[HerdrIntentKind]bool{
+		HerdrIntentWorktree: true,
+		HerdrIntentRollback: true,
+		HerdrIntentCleanup:  true,
+	}
+	if intent.BranchCreated && (!branchKinds[intent.Kind] || intent.BranchExisted) {
 		return fmt.Errorf("has an invalid branch ownership record")
 	}
 	if intent.Resource != (HerdrResource{}) &&

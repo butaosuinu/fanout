@@ -201,6 +201,16 @@ func (s *OwnedSession) RemoveWorktree(ctx context.Context, workspaceID, path str
 	return validateWorktreeRemoveResponse(out, workspaceID, path)
 }
 
+// CloseWorkspace removes a residual child workspace after its checkout is
+// already absent. The caller verifies the workspace identity and postcondition.
+func (s *OwnedSession) CloseWorkspace(ctx context.Context, workspaceID string) error {
+	if strings.TrimSpace(workspaceID) == "" {
+		return mutationNotIssued(fmt.Errorf("herdr workspace close requires a workspace id"))
+	}
+	_, err := s.runOwnedLaunchCommand(ctx, commandTimeout, "workspace", "close", workspaceID)
+	return err
+}
+
 func validateWorktreeRemoveResponse(out []byte, workspaceID, path string) error {
 	var envelope worktreeRemoveEnvelope
 	if err := decodeOne(out, &envelope); err != nil || envelope.ID != "cli:worktree:remove" ||

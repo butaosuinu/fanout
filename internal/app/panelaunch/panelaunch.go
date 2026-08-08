@@ -562,6 +562,7 @@ func applyHerdrStateIdentity(
 	pane.HerdrWorkspaceLabel = identity.WorkspaceLabel
 	pane.HerdrTerminalID = identity.TerminalID
 	pane.HerdrRepoKey = identity.RepoKey
+	pane.HerdrRepoRoot = identity.ProjectRoot
 	pane.HerdrAgentID = identity.AgentID
 	pane.HerdrAgentSession = identity.AgentSession
 	pane.HerdrSession = identity.SessionID

@@ -522,7 +522,7 @@ fanout が state、snapshot、checkout git dir を照合してから別接続で
 この TOCTOU は tmux cleanup の `ListLive` 照合から `kill-pane` / `git worktree remove` までの race と同種の残余リスクとして tmux-parity tier で受容する。
 tracked / untracked / ignored subtree generation を remove と原子的に条件化する server-side conditional remove、または kernel-enforced write-exclusion fence は proof-grade tier の格上げ条件として保持する。
 
-cleanup の契約は次のとおりとする（#531 が実装する。row は owning worktree の `state.json` の Herdr pane row を指す）。
+fanout の cleanup は次の契約に従う（実装: #531。row は owning worktree の `state.json` の Herdr pane row を指す）。
 
 - state lock 下で保存済み row の workspace ID / label nonce、branch、path を現在値と照合し、live row では `terminal_id` も照合する。`stale` row は保存済み `terminal_id` を現在値と照合できない（pane 消滅、または cold restart による現在の `terminal_id` との不一致）ため、その失効の確認と workspace ID / label / path / checkout の Git provenance の照合で代替する。不一致、非所有、または照合不能なら mutation せず fail closed にする。
 - dirty checkout は明示確認なしに force しない。確認後の force remove でも branch は herdr に削除させない。

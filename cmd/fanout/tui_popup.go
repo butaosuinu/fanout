@@ -71,8 +71,9 @@ type tuiNewPanePopupResult struct {
 }
 
 type tuiClosePopupRequest struct {
-	PaneLabel string `json:"paneLabel,omitempty"`
-	Mode      string `json:"mode,omitempty"`
+	PaneLabel       string `json:"paneLabel,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	RequireWorktree bool   `json:"requireWorktree,omitempty"`
 }
 
 type tuiClosePopupResult struct {
@@ -138,39 +139,31 @@ func cmdTUIClosePopup(args []string, lg *log.Logger) exitcode.Code {
 		return exitcode.Invocation
 	}
 
-	var result tuiClosePopupResult
-	code := exitcode.OK
 	request, err := readTUIClosePopupRequest(*requestFile)
-	if err != nil {
-		result = tuiClosePopupResult{Error: err.Error()}
-		code = exitcode.Env
-	} else {
-		mode, err := parseCloseModeName(request.Mode)
-		if err != nil {
-			result = tuiClosePopupResult{Error: err.Error()}
-			code = exitcode.Invocation
-		} else {
-			selected, canceled, runErr := fanouttui.RunCloseChoicePopup(fanouttui.CloseChoicePopupOptions{
-				PaneLabel:   request.PaneLabel,
-				InitialMode: mode,
-				Width:       *width,
-				Height:      *height,
-			})
-			result = tuiClosePopupResult{
-				Canceled: canceled,
-				Mode:     closeModeName(selected),
-			}
-			if runErr != nil {
-				result = tuiClosePopupResult{Error: runErr.Error()}
-				code = exitcode.Env
-			}
-		}
-	}
+	result, code := runTUIClosePopupRequest(request, err, *width, *height)
 	if writeErr := writeTUIClosePopupResult(*resultFile, result); writeErr != nil {
 		lg.Err("write close popup result: %v", writeErr)
 		return exitcode.Env
 	}
 	return code
+}
+
+func runTUIClosePopupRequest(request tuiClosePopupRequest, readErr error, width, height int) (tuiClosePopupResult, exitcode.Code) {
+	if readErr != nil {
+		return tuiClosePopupResult{Error: readErr.Error()}, exitcode.Env
+	}
+	mode, err := parseCloseModeName(request.Mode)
+	if err != nil {
+		return tuiClosePopupResult{Error: err.Error()}, exitcode.Invocation
+	}
+	selected, canceled, err := fanouttui.RunCloseChoicePopup(fanouttui.CloseChoicePopupOptions{
+		PaneLabel: request.PaneLabel, InitialMode: mode, RequireWorktree: request.RequireWorktree,
+		Width: width, Height: height,
+	})
+	if err != nil {
+		return tuiClosePopupResult{Error: err.Error()}, exitcode.Env
+	}
+	return tuiClosePopupResult{Canceled: canceled, Mode: closeModeName(selected)}, exitcode.OK
 }
 
 func cmdTUINewPanePopup(args []string, lg *log.Logger) exitcode.Code {
@@ -335,66 +328,87 @@ func newTUIHelpPopupFunc(projectRoot, commandName string) fanouttui.HelpPopupFun
 
 func newTUICloseChoicePopupFunc(projectRoot, commandName string) fanouttui.CloseChoicePopupFunc {
 	return func(req fanouttui.CloseChoiceRequest) (lifecycle.CloseMode, bool, error) {
-		size, err := tmuxrun.CurrentClientSize()
+		launch, err := startTUICloseChoicePopup(projectRoot, commandName, req)
 		if err != nil {
 			return lifecycle.ClosePaneOnly, false, err
 		}
-		geometry, err := tuiClosePopupGeometryForClient(size)
-		if err != nil {
-			return lifecycle.ClosePaneOnly, false, err
-		}
-		resultFile, doneFile, cleanupPopupResult, err := newPopupResultPaths()
-		if err != nil {
-			return lifecycle.ClosePaneOnly, false, err
-		}
-		defer cleanupPopupResult()
-		requestFile := filepath.Join(filepath.Dir(resultFile), "request.json")
-		if writeErr := writeTUIClosePopupRequest(requestFile, tuiClosePopupRequest{
-			PaneLabel: req.PaneLabel,
-			Mode:      closeModeName(req.InitialMode),
-		}); writeErr != nil {
-			return lifecycle.ClosePaneOnly, false, writeErr
-		}
-		displayErr := tmuxrun.DisplayPopup(tmuxrun.PopupOptions{
-			Width:    geometry.PopupWidth,
-			Height:   geometry.PopupHeight,
-			StartDir: projectRoot,
-			Title:    "Close pane",
-			Command: tuiClosePopupShellCommand(
-				commandName,
-				requestFile,
-				resultFile,
-				doneFile,
-				geometry.ContentWidth,
-				geometry.ContentHeight,
-			),
-			Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth, geometry.PopupHeight),
-		})
-		result, readErr := readTUIClosePopupResult(resultFile)
-		if os.IsNotExist(readErr) && displayErr == nil {
-			result, readErr = waitForTUIClosePopupResult(resultFile, doneFile, tuiNewPanePopupResultWait)
-		}
-		if readErr != nil {
-			if displayErr != nil {
-				return lifecycle.ClosePaneOnly, false, displayErr
-			}
-			return lifecycle.ClosePaneOnly, false, readErr
-		}
-		if result.Error != "" {
-			return lifecycle.ClosePaneOnly, false, fmt.Errorf("%s", result.Error)
-		}
-		if result.Canceled {
-			return lifecycle.ClosePaneOnly, true, nil
-		}
-		if displayErr != nil {
-			return lifecycle.ClosePaneOnly, false, displayErr
-		}
-		mode, err := parseCloseModeName(result.Mode)
-		if err != nil {
-			return lifecycle.ClosePaneOnly, false, err
-		}
-		return mode, false, nil
+		defer launch.cleanup()
+		return finishTUICloseChoicePopup(launch)
 	}
+}
+
+type tuiClosePopupLaunch struct {
+	resultFile string
+	doneFile   string
+	displayErr error
+	cleanup    func()
+}
+
+func startTUICloseChoicePopup(projectRoot, commandName string, req fanouttui.CloseChoiceRequest) (tuiClosePopupLaunch, error) {
+	size, err := tmuxrun.CurrentClientSize()
+	if err != nil {
+		return tuiClosePopupLaunch{}, err
+	}
+	geometry, err := tuiClosePopupGeometryForClient(size)
+	if err != nil {
+		return tuiClosePopupLaunch{}, err
+	}
+	resultFile, doneFile, cleanup, err := newPopupResultPaths()
+	if err != nil {
+		return tuiClosePopupLaunch{}, err
+	}
+	requestFile := filepath.Join(filepath.Dir(resultFile), "request.json")
+	request := tuiClosePopupRequest{
+		PaneLabel: req.PaneLabel, Mode: closeModeName(req.InitialMode), RequireWorktree: req.RequireWorktree,
+	}
+	if err := writeTUIClosePopupRequest(requestFile, request); err != nil {
+		cleanup()
+		return tuiClosePopupLaunch{}, err
+	}
+	displayErr := tmuxrun.DisplayPopup(tuiClosePopupDisplayOptions(
+		projectRoot, commandName, requestFile, resultFile, doneFile, geometry,
+	))
+	return tuiClosePopupLaunch{
+		resultFile: resultFile, doneFile: doneFile, displayErr: displayErr, cleanup: cleanup,
+	}, nil
+}
+
+func tuiClosePopupDisplayOptions(
+	projectRoot, commandName, requestFile, resultFile, doneFile string,
+	geometry tuiClosePopupGeometry,
+) tmuxrun.PopupOptions {
+	return tmuxrun.PopupOptions{
+		Width: geometry.PopupWidth, Height: geometry.PopupHeight,
+		StartDir: projectRoot, Title: "Close pane",
+		Command: tuiClosePopupShellCommand(
+			commandName, requestFile, resultFile, doneFile, geometry.ContentWidth, geometry.ContentHeight,
+		),
+		Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth, geometry.PopupHeight),
+	}
+}
+
+func finishTUICloseChoicePopup(launch tuiClosePopupLaunch) (lifecycle.CloseMode, bool, error) {
+	result, readErr := readTUIClosePopupResult(launch.resultFile)
+	if os.IsNotExist(readErr) && launch.displayErr == nil {
+		result, readErr = waitForTUIClosePopupResult(launch.resultFile, launch.doneFile, tuiNewPanePopupResultWait)
+	}
+	if readErr != nil {
+		if launch.displayErr != nil {
+			return lifecycle.ClosePaneOnly, false, launch.displayErr
+		}
+		return lifecycle.ClosePaneOnly, false, readErr
+	}
+	if result.Error != "" {
+		return lifecycle.ClosePaneOnly, false, fmt.Errorf("%s", result.Error)
+	}
+	if result.Canceled {
+		return lifecycle.ClosePaneOnly, true, nil
+	}
+	if launch.displayErr != nil {
+		return lifecycle.ClosePaneOnly, false, launch.displayErr
+	}
+	mode, err := parseCloseModeName(result.Mode)
+	return mode, false, err
 }
 
 func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPanePromptFunc {

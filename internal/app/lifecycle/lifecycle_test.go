@@ -433,6 +433,7 @@ func TestPaneRefFromStateNormalizesLegacyTmuxAndPreservesHerdrWorkspace(t *testi
 
 func TestCloseHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 	projectRoot := t.TempDir()
+	runHerdrLifecycleGit(t, projectRoot, "init", "--initial-branch", "main")
 	worktreePath := filepath.Join(projectRoot, ".fanout", "worktrees", "child")
 	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
 		t.Fatal(err)
@@ -489,6 +490,7 @@ func TestCloseHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 
 func TestCleanupHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 	projectRoot := t.TempDir()
+	runHerdrLifecycleGit(t, projectRoot, "init", "--initial-branch", "main")
 	installLifecycleCleanupGH(t)
 	worktreePath := filepath.Join(projectRoot, ".fanout", "worktrees", "child")
 	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
@@ -523,6 +525,7 @@ func TestCleanupHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 
 func TestCleanupPlanHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 	projectRoot := t.TempDir()
+	runHerdrLifecycleGit(t, projectRoot, "init", "--initial-branch", "main")
 	installLifecycleCleanupGH(t)
 	worktreePath := filepath.Join(projectRoot, ".fanout", "worktrees", "task-a")
 	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
@@ -628,7 +631,7 @@ func assertHerdrCleanupUnchanged(
 	if !ok || pane.Backend != backend.Herdr {
 		t.Fatalf("state row changed before herdr cleanup rejection: %#v (found=%v)", pane, ok)
 	}
-	if !strings.Contains(strings.Join(errors, "\n"), "runtime backend herdr does not support pane close") {
-		t.Fatalf("errors = %v, want explicit herdr close rejection", errors)
+	if !strings.Contains(strings.Join(errors, "\n"), "Herdr lifecycle runtime is not configured") {
+		t.Fatalf("errors = %v, want explicit missing-runtime rejection", errors)
 	}
 }

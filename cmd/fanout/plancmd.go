@@ -21,7 +21,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 )
 
 const planSubcommand = "plan"
@@ -462,13 +461,7 @@ func cmdPlanLifecycle(cfg run.PlanCommandConfig, lg *log.Logger) exitcode.Code {
 	if cfg.StatusMode {
 		return cmdPlanStatus(cfg, spec, rt.projectRoot, rt.statePath, lg)
 	}
-	runtimeBackend := tmuxbackend.New()
-	lifecycleOpts := lifecycle.Options{
-		ProjectRoot: rt.projectRoot,
-		StatePath:   rt.statePath,
-		Hooks:       hooks.LoadUserConfig(lg),
-		CloseOwned:  runtimeBackend.CloseOwned,
-	}
+	lifecycleOpts := runtimeLifecycleOptions(rt.projectRoot, rt.statePath, hooks.LoadUserConfig(lg))
 
 	switch {
 	case cfg.CloseTaskID != "":

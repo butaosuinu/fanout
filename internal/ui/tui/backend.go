@@ -100,6 +100,61 @@ func herdrActionScope(selected backend.Name, pane *paneView) (bool, string) {
 	return true, ""
 }
 
+func (m model) lifecycleActionDisabledReason(pane *paneView, action string) string {
+	if pane == nil {
+		return m.runtimeActionDisabledReason(nil, action)
+	}
+	if pane.isPaneOnly() && (action != "close" || backend.NormalizeName(pane.Backend) == backend.Herdr) {
+		return fmt.Sprintf("%s unavailable for %s", action, paneOnlyKindLabel(*pane))
+	}
+	return m.lifecycleBackendActionDisabledReason(*pane, action)
+}
+
+func (m model) lifecycleBackendActionDisabledReason(pane paneView, action string) string {
+	switch backend.NormalizeName(pane.Backend) {
+	case backend.Tmux:
+		return m.tmuxLifecycleActionDisabledReason(action)
+	case backend.Herdr:
+		return m.herdrLifecycleActionDisabledReason(pane, action)
+	default:
+		return m.runtimeActionDisabledReason(&pane, action)
+	}
+}
+
+func (m model) tmuxLifecycleActionDisabledReason(action string) string {
+	if action == "merge" || m.opts.LifecycleCloseOwned != nil {
+		return ""
+	}
+	return fmt.Sprintf("runtime backend tmux does not support %s in this TUI", action)
+}
+
+func (m model) herdrLifecycleActionDisabledReason(pane paneView, action string) string {
+	if m.herdrLifecycleConfigured(pane, action) {
+		return ""
+	}
+	return fmt.Sprintf("runtime backend herdr does not support %s in this TUI", action)
+}
+
+func (m model) herdrLifecycleConfigured(pane paneView, action string) bool {
+	if m.opts.LifecycleHerdrRuntimeForRoot == nil {
+		return false
+	}
+	routes := m.lifecycleActionRoutes(pane)
+	roots := routes.cleanupRoots
+	switch action {
+	case "close":
+		roots = routes.closeRoots
+	case "merge":
+		roots = []string{routes.paneRoot}
+	}
+	for _, root := range roots {
+		if m.opts.LifecycleHerdrRuntimeForRoot(root) == nil {
+			return false
+		}
+	}
+	return true
+}
+
 func (m model) peekDisabledReason(pane paneView) string {
 	return m.runtimeActionDisabledReason(&pane, "peek")
 }

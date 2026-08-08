@@ -22,6 +22,12 @@ if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--show-toplevel" && -n "${FIXTURE_
   exit 0
 fi
 
+if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--git-common-dir" && -n "${FIXTURE_DIR:-}" ]]; then
+  mkdir -p "$FIXTURE_DIR/project_root/.fixture-git-common"
+  printf '%s\n' "$FIXTURE_DIR/project_root/.fixture-git-common"
+  exit 0
+fi
+
 if [[ "${1:-}" == "symbolic-ref" && "${2:-}" == "--short" && "${3:-}" == "refs/remotes/origin/HEAD" && -n "${FIXTURE_DIR:-}" ]]; then
   printf 'origin/main\n'
   exit 0

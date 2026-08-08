@@ -7,7 +7,7 @@ kanji: 観
 yomi: herdr
 ---
 
-The herdr backend runs CLI fan-outs in [herdr](https://herdr.dev/), a persistent-PTY runtime for coding agents. It is opt-in. Issue, Project, plan, label-watcher, and interactive TUI launches use a repository-scoped session owned by fanout. The default backend stays tmux. fanout does not bundle herdr; it is AGPL-licensed and installed separately.
+The herdr backend runs CLI fan-outs in [herdr](https://herdr.dev/), a persistent-PTY runtime for coding agents. It is opt-in. Issue, Project, plan, label-watcher, and interactive TUI launches use a repository-scoped session owned by fanout. The no-argument TUI also supports merge, close, and cleanup for verified owned rows. The default backend stays tmux. fanout does not bundle herdr; it is AGPL-licensed and installed separately.
 
 ## What v1 does
 
@@ -21,9 +21,11 @@ Claude launches receive launch-scoped `--settings` hooks. Codex Plan Mode launch
 
 The TUI console and web dashboard use `reported_state` only while the matching pane and agent are live. `--status --format json` includes `reported_state`, and the table format shows it in `REPORTED_STATE`. The value does not complete an issue or authorize cleanup. Automatic nudge uses it only after current launch telemetry sets `state_refinement: true` and the live pane, worktree, agent, and process identity pass a fresh check. A disappeared pane remains `stale`.
 
+`--merge`, `--close`, `--cleanup`, and their TUI actions operate only on complete rows from that owned session. fanout compares the saved workspace ID, label, terminal, repository, path, and branch before mutation. It records a cleanup intent, issues non-force `herdr worktree remove`, verifies that the checkout and workspace are absent, and closes a residual workspace when needed. A checkout left after an earlier workspace close is re-registered only after the owned plugin registry passes the empty-registry preflight. Dirty checkouts, ownership mismatches, and ambiguous responses preserve the row and intent for retry or manual cleanup. Branch deletion uses fanout's compare-and-delete and applies only to a branch recorded as fanout-created.
+
 The unsupported paths still fail closed:
 
-- Interactive send, restore, plan capture, and lifecycle close / merge / cleanup remain unavailable for herdr rows.
+- Interactive send, restore, and plan capture remain unavailable for herdr rows.
 - TUI focus, launch, and peek require a complete saved identity in fanout's owned session. Foreign, stale, and legacy rows stay disabled with a reason.
 - Codex child Plan Mode runs through fanout's app-server controller and owned launcher. Claude and OpenCode keep their native mode flags.
 - No tmux keybindings are registered, and fanout never calls herdr's in-app `notification show`.
@@ -74,8 +76,9 @@ A parent that already has recorded panes keeps its recorded backend. A conflicti
 | Exit status display | Launch wrapper reports `✓ done` | None — herdr's public API keeps no exit status |
 | Pane after the agent exits | Pane stays open with the wrapper message | herdr drops the pane and its own record on normal exit; the fanout row turns `stale` |
 | Interactive TUI launch / focus / peek | TUI keys | Available for ownership-verified panes in fanout's session |
-| Interactive send / restore / plan capture / lifecycle | Supported tmux paths | Unavailable — `runtime backend herdr does not support …` |
+| Interactive send / restore / plan capture | Supported tmux paths | Unavailable — `runtime backend herdr does not support …` |
 | `--team` peer messaging | SQLite registry, Claude watcher, Codex app-server bridge | Same registry and push lanes |
+| `--merge`, `--close`, `--cleanup`; TUI merge / close / cleanup | Supported | Supported for verified fanout-owned rows; cleanup never forces a dirty checkout |
 | Automatic nudge (`fanout msg nudge`) | Delivered when the peer can take input | One no-wait `agent prompt` after fresh refined telemetry and live identity/process checks; otherwise no-op |
 | tmux keybindings (dashboard, console return) | Registered | Not registered |
 | Notifications | bell / tmux / ntfy / slack channels | bell / ntfy / slack work; the tmux channel and herdr's `notification show` do not fire |

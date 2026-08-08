@@ -29,6 +29,7 @@ type Options struct {
 	WatcherRunningLabel string
 	RemoveIssueLabel    func(issueNum int, label string) error
 	CloseOwned          func(backend.CloseRequest) (backend.CloseResult, error)
+	HerdrRuntime        HerdrRuntimeFactory
 }
 
 // Logger is the narrow logging surface lifecycle operations need.
@@ -87,7 +88,7 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 	if mode.removesWorktree() {
 		panes = panesSharingManagedWorktrees(locked.Panes, panes)
 	}
-	if !validateCloseOperations(opts, panes, lg) {
+	if !validateCloseOperations(opts, panes, mode, lg) {
 		return exitcode.Env
 	}
 	windows := map[string]struct{}{}
@@ -98,7 +99,7 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 			return exitcode.Env
 		}
 	}
-	if !closePaneRecords(opts, panes, mode, lg, windows) {
+	if !closePaneRecordsLocked(opts, locked, panes, mode, lg, windows) {
 		return exitcode.Env
 	}
 	if err := removePaneStateRows(locked, panes); err != nil {
@@ -144,7 +145,7 @@ func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg L
 	if mode.removesWorktree() {
 		panes = panesSharingManagedWorktrees(locked.Panes, panes)
 	}
-	if !validateCloseOperations(opts, panes, lg) {
+	if !validateCloseOperations(opts, panes, mode, lg) {
 		return exitcode.Env
 	}
 	windows := map[string]struct{}{}
@@ -155,7 +156,7 @@ func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg L
 			return exitcode.Env
 		}
 	}
-	if !closePaneRecords(opts, panes, mode, lg, windows) {
+	if !closePaneRecordsLocked(opts, locked, panes, mode, lg, windows) {
 		return exitcode.Env
 	}
 	if err := removePaneStateRows(locked, panes); err != nil {
@@ -280,7 +281,7 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 			continue
 		}
 		issuePanes := panesSharingManagedWorktrees(locked.Panes, panesForIssue(panes, issueNum))
-		if !validateCloseOperations(opts, issuePanes, lg) {
+		if !validateCloseOperations(opts, issuePanes, CloseWorktree, lg) {
 			return exitcode.Env
 		}
 	}
@@ -298,7 +299,7 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 			continue
 		}
 		issuePanes := panesSharingManagedWorktrees(locked.Panes, panesForIssue(panes, issueNum))
-		if !cleanupPaneRecords(opts, issuePanes, lg, windows) {
+		if !cleanupPaneRecordsLocked(opts, locked, issuePanes, lg, windows) {
 			failed++
 			continue
 		}
@@ -366,7 +367,7 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	}
 	for _, taskID := range sortedTaskIDs(eligible) {
 		taskPanes := panesSharingManagedWorktrees(locked.Panes, panesForTask(panes, taskID))
-		if !validateCloseOperations(opts, taskPanes, lg) {
+		if !validateCloseOperations(opts, taskPanes, CloseWorktree, lg) {
 			return exitcode.Env
 		}
 	}
@@ -381,7 +382,7 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	defer relayoutClosedWindows(windows, lg)
 	for _, taskID := range sortedTaskIDs(eligible) {
 		taskPanes := panesSharingManagedWorktrees(locked.Panes, panesForTask(panes, taskID))
-		if !cleanupPaneRecords(opts, taskPanes, lg, windows) {
+		if !cleanupPaneRecordsLocked(opts, locked, taskPanes, lg, windows) {
 			failed++
 			continue
 		}
@@ -421,12 +422,31 @@ func lockStateOnly(mode string, opts Options, lg Logger) (*state.LockedStore, ex
 		lg.Err("%s: project_root is not a directory: %s (state=%s)", mode, emptyLabel(opts.ProjectRoot), opts.StatePath)
 		return nil, exitcode.Invocation
 	}
-	locked, err := state.Lock(opts.StatePath)
+	var locked *state.LockedStore
+	var err error
+	if stateFileHasHerdr(opts.StatePath) {
+		locked, err = state.LockProjectForLaunchAt(opts.ProjectRoot, opts.StatePath)
+	} else {
+		locked, err = state.Lock(opts.StatePath)
+	}
 	if err != nil {
 		lg.Err("%s: %v", mode, err)
 		return nil, exitcode.Env
 	}
 	return locked, exitcode.OK
+}
+
+func stateFileHasHerdr(path string) bool {
+	store, err := state.Load(path)
+	if err != nil {
+		return false
+	}
+	for _, pane := range store.Panes {
+		if backend.NormalizeName(pane.Backend) == backend.Herdr {
+			return true
+		}
+	}
+	return false
 }
 
 func unlockState(mode string, locked *state.LockedStore, lg Logger) {
@@ -468,7 +488,11 @@ func statusChildren(projectRoot string, nums []int, mode string, lg Logger) ([]s
 }
 
 func cleanupPaneRecords(opts Options, panes []state.Pane, lg Logger, windows map[string]struct{}) bool {
-	return closePaneRecords(opts, panes, CloseWorktree, lg, windows)
+	return cleanupPaneRecordsLocked(opts, nil, panes, lg, windows)
+}
+
+func cleanupPaneRecordsLocked(opts Options, locked *state.LockedStore, panes []state.Pane, lg Logger, windows map[string]struct{}) bool {
+	return closePaneRecordsLocked(opts, locked, panes, CloseWorktree, lg, windows)
 }
 
 // relayoutWindow re-lays out a tmux window after a pane is removed. It is a var
@@ -481,58 +505,98 @@ var relayoutWindow = panelayout.Apply
 // after this function succeeds, so a tmux inspection/close failure remains
 // retryable with both the worktree and state row intact.
 func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logger, windows map[string]struct{}) bool {
-	// Run every blocking worktree hook before stopping panes. A veto leaves the
-	// entire pane/worktree set untouched instead of closing sibling attached
-	// agents that share the same worktree.
-	if mode.removesWorktree() {
-		for _, pane := range panes {
-			if pane.IsShell() || pane.IsAttachedAgent() || !recordedWorktreeExists(pane) {
-				continue
-			}
-			if !runBlockingHook(hooks.BeforeWorktreeRemove, opts, pane, "", lg) {
-				return false
-			}
+	return closePaneRecordsLocked(opts, nil, panes, mode, lg, windows)
+}
+
+func closePaneRecordsLocked(opts Options, locked *state.LockedStore, panes []state.Pane, mode CloseMode, lg Logger, windows map[string]struct{}) bool {
+	if !runBeforeWorktreeRemoveHooks(opts, panes, mode, lg) {
+		return false
+	}
+	if !closeRuntimePanes(opts, panes, mode, lg, windows) {
+		return false
+	}
+	return !mode.removesWorktree() || removeManagedWorktrees(opts, locked, panes, mode, lg)
+}
+
+func runBeforeWorktreeRemoveHooks(opts Options, panes []state.Pane, mode CloseMode, lg Logger) bool {
+	if !mode.removesWorktree() {
+		return true
+	}
+	for _, pane := range panes {
+		if pane.IsShell() || pane.IsAttachedAgent() || !recordedWorktreeExists(pane) {
+			continue
+		}
+		if !runBlockingHook(hooks.BeforeWorktreeRemove, opts, pane, "", lg) {
+			return false
 		}
 	}
+	return true
+}
 
-	// Stop and verify every pane before the first worktree removal. If one
-	// close fails, durable state and all worktrees remain for a retry; panes
-	// already stopped in this pass are safely classified stale on that retry.
+func closeRuntimePanes(opts Options, panes []state.Pane, mode CloseMode, lg Logger, windows map[string]struct{}) bool {
 	for _, pane := range panes {
+		if paneRefFromState(pane).Backend == backend.Herdr && mode.removesWorktree() {
+			continue
+		}
 		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
 		if !closeOwnedPane(opts, pane, lg, windows) {
 			return false
 		}
 		runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
 	}
+	return true
+}
 
-	if !mode.removesWorktree() {
-		return true
-	}
+func removeManagedWorktrees(opts Options, locked *state.LockedStore, panes []state.Pane, mode CloseMode, lg Logger) bool {
 	for _, pane := range panes {
 		if pane.IsShell() || pane.IsAttachedAgent() {
 			continue
 		}
-		hadWorktree := recordedWorktreeExists(pane)
-		if !removeWorktree(opts.ProjectRoot, pane, lg) {
+		if !removeManagedWorktree(opts, locked, pane, mode, lg) {
 			return false
-		}
-		if hadWorktree {
-			runBackgroundHook(hooks.WorktreeRemoved, opts, pane, "", lg)
-		}
-		if mode == CloseEverything {
-			_ = pruneWorktrees(opts.ProjectRoot, lg)
-			deleteBranchBestEffort(opts.ProjectRoot, pane, lg)
 		}
 	}
 	return true
 }
 
-func validateCloseOperations(opts Options, panes []state.Pane, lg Logger) bool {
+func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.Pane, mode CloseMode, lg Logger) bool {
+	if paneRefFromState(pane).Backend == backend.Herdr {
+		hadWorktree := recordedWorktreeExists(pane)
+		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
+		if !closeHerdrWorktree(opts, locked, pane, mode, lg) {
+			return false
+		}
+		runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
+		if hadWorktree {
+			runBackgroundHook(hooks.WorktreeRemoved, opts, pane, "", lg)
+		}
+		return true
+	}
+	hadWorktree := recordedWorktreeExists(pane)
+	if !removeWorktree(opts.ProjectRoot, pane, lg) {
+		return false
+	}
+	if hadWorktree {
+		runBackgroundHook(hooks.WorktreeRemoved, opts, pane, "", lg)
+	}
+	if mode == CloseEverything {
+		_ = pruneWorktrees(opts.ProjectRoot, lg)
+		deleteBranchBestEffort(opts.ProjectRoot, pane, lg)
+	}
+	return true
+}
+
+func validateCloseOperations(opts Options, panes []state.Pane, mode CloseMode, lg Logger) bool {
 	for _, pane := range panes {
 		ref := paneRefFromState(pane)
+		if ref.Backend == backend.Herdr {
+			if !validateHerdrCloseOperation(opts, pane, mode, lg) {
+				return false
+			}
+			continue
+		}
 		if ref.Backend != backend.Tmux {
-			lg.Err("%s: runtime backend %s does not support pane close", paneLabel(pane), ref.Backend)
+			lg.Err("%s: runtime backend %s does not support lifecycle close", paneLabel(pane), ref.Backend)
 			return false
 		}
 		if strings.TrimSpace(ref.Pane) == "" {

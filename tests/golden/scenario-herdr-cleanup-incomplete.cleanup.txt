@@ -1,0 +1,1 @@
+[err ] #528: saved Herdr lifecycle identity is incomplete; preserving workspace, worktree, and state

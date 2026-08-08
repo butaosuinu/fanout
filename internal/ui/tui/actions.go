@@ -10,6 +10,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -28,6 +29,7 @@ type pendingLifecycleAction struct {
 	pane             paneView
 	closeMode        lifecycle.CloseMode
 	closeOptionIndex int
+	requireWorktree  bool
 }
 
 type lifecycleDoneMsg struct {
@@ -128,16 +130,16 @@ func (m model) updatePendingAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) updatePendingCloseChoice(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
-		m.pendingAction.closeOptionIndex = clampCloseOptionIndex(m.pendingAction.closeOptionIndex - 1)
+		m.pendingAction.closeOptionIndex = clampPendingCloseOptionIndex(m.pendingAction, m.pendingAction.closeOptionIndex-1)
 		m.pendingAction.closeMode = closeOptions()[m.pendingAction.closeOptionIndex].mode
 		return m, nil
 	case "down", "j":
-		m.pendingAction.closeOptionIndex = clampCloseOptionIndex(m.pendingAction.closeOptionIndex + 1)
+		m.pendingAction.closeOptionIndex = clampPendingCloseOptionIndex(m.pendingAction, m.pendingAction.closeOptionIndex+1)
 		m.pendingAction.closeMode = closeOptions()[m.pendingAction.closeOptionIndex].mode
 		return m, nil
 	case "1", "2", "3":
 		idx := int(msg.String()[0] - '1')
-		m.pendingAction.closeOptionIndex = clampCloseOptionIndex(idx)
+		m.pendingAction.closeOptionIndex = clampPendingCloseOptionIndex(m.pendingAction, idx)
 		m.pendingAction.closeMode = closeOptions()[m.pendingAction.closeOptionIndex].mode
 		return m, nil
 	case "y", "enter":
@@ -174,11 +176,7 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 		m.actionMessage = "no pane selected"
 		return m, nil
 	}
-	if pane.isPaneOnly() && action != actionClose {
-		m.actionMessage = fmt.Sprintf("%s unavailable for %s", action, paneOnlyKindLabel(pane))
-		return m, nil
-	}
-	if reason := m.runtimeActionDisabledReason(&pane, string(action)); reason != "" {
+	if reason := m.lifecycleActionDisabledReason(&pane, string(action)); reason != "" {
 		m.actionMessage = reason
 		return m, nil
 	}
@@ -186,8 +184,9 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 	if action == actionClose {
 		m.pendingAction.closeMode = lifecycle.ClosePaneOnly
 		if !pane.isPaneOnly() {
-			m.pendingAction.closeOptionIndex = 0
-			m.pendingAction.closeMode = closeOptions()[0].mode
+			m.pendingAction.requireWorktree = backend.NormalizeName(pane.Backend) == backend.Herdr
+			m.pendingAction.closeOptionIndex = clampPendingCloseOptionIndex(m.pendingAction, 0)
+			m.pendingAction.closeMode = closeOptions()[m.pendingAction.closeOptionIndex].mode
 			return m.closeChoicePopupCmd()
 		}
 	}
@@ -196,97 +195,15 @@ func (m model) startPendingAction(action lifecycleAction) (tea.Model, tea.Cmd) {
 }
 
 func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
-	// Close/merge act on one recorded pane, so route to the worktree that
-	// recorded it. With cross-worktree aggregation that row may live in a sibling
-	// worktree's state.json; using m.opts.ProjectRoot unconditionally would
-	// target the wrong (often empty) store and fail with "not recorded".
-	paneRoot := strings.TrimSpace(pending.pane.sourceProjectRoot)
-	if paneRoot == "" {
-		paneRoot = m.opts.ProjectRoot
-	}
-	// The watcher "running" label is removed from the GitHub issue on
-	// close/merge/cleanup; it is repo-scoped, so the gh runner stays rooted at the
-	// home checkout while state ops route to each owning worktree.
-	watcherLabel := m.opts.WatcherRunningLabel
-	removeLabel := ghissue.Runner{Cwd: m.opts.ProjectRoot}.RemoveIssueLabel
-	lifecycleOpts := func(root string) lifecycle.Options {
-		return lifecycle.Options{
-			ProjectRoot:         root,
-			StatePath:           state.Path(root),
-			Hooks:               m.opts.Hooks,
-			WatcherRunningLabel: watcherLabel,
-			RemoveIssueLabel:    removeLabel,
-			CloseOwned:          m.opts.LifecycleCloseOwned,
-		}
-	}
-	paneOpts := lifecycleOpts(paneRoot)
-	// Close removes the row from its owning store(s). When the same logical child
-	// was recorded in several worktrees the loader collapses it to one displayed
-	// row but keeps every owning root here, so close each — otherwise the
-	// de-duplicated sibling row survives and reappears on the next refresh.
-	closeRoots := pending.pane.sourceProjectRoots
-	if len(closeRoots) == 0 {
-		closeRoots = []string{paneRoot}
-	}
-	// Cleanup is parent-scoped. For a globally-stable parent (a GitHub issue or
-	// Project) the same parent in two worktrees is the same Session, so clean
-	// every source root it spans — otherwise sibling rows survive and reappear on
-	// the next refresh. But a locally-scoped parent (plan:<slug>, @manual) is only
-	// meaningful within its worktree: two worktrees can hold unrelated plans under
-	// the same slug, so cleanup must stay within the selected pane's own root(s).
-	var cleanupRoots []string
-	if isLocalParent(pending.pane.Parent) {
-		cleanupRoots = pending.pane.sourceProjectRoots
-		if len(cleanupRoots) == 0 {
-			cleanupRoots = []string{paneRoot}
-		}
-	} else {
-		cleanupRoots = m.sourceRootsForParent(pending.pane.Parent)
-	}
+	routes := m.lifecycleActionRoutes(pending.pane)
+	paneOpts := m.lifecycleOptions(routes.paneRoot)
+	closeOpts := m.lifecycleOptionsForRoots(routes.closeRoots)
+	cleanupOpts := m.lifecycleOptionsForRoots(routes.cleanupRoots)
 	runner := m.opts.lifecycle
 	return func() tea.Msg {
 		var buf bytes.Buffer
 		lg := actionLogger{w: &buf}
-		var code exitcode.Code
-		switch pending.action {
-		case actionClose:
-			code = exitcode.OK
-			for _, r := range closeRoots {
-				opts := lifecycleOpts(r)
-				var c exitcode.Code
-				if pending.pane.isTask() {
-					c = runner.CloseTaskWithMode(opts, pending.pane.Parent, pending.pane.TaskID, pending.closeMode, lg)
-				} else {
-					c = runner.CloseWithMode(opts, pending.pane.Parent, pending.pane.IssueNum, pending.closeMode, lg)
-				}
-				if c != exitcode.OK {
-					code = c
-				}
-			}
-		case actionMerge:
-			if pending.pane.isTask() {
-				code = runner.MergeTask(paneOpts, pending.pane.Parent, pending.pane.TaskID, lg)
-			} else {
-				code = runner.Merge(paneOpts, pending.pane.Parent, pending.pane.IssueNum, lg)
-			}
-		case actionCleanup:
-			code = exitcode.OK
-			for _, r := range cleanupRoots {
-				opts := lifecycleOpts(r)
-				var c exitcode.Code
-				if pending.pane.isTask() {
-					c = runner.CleanupPlan(opts, pending.pane.Parent, lg)
-				} else {
-					c = runner.Cleanup(opts, pending.pane.Parent, lg)
-				}
-				if c != exitcode.OK {
-					code = c
-				}
-			}
-		default:
-			code = exitcode.Invocation
-			fmt.Fprintf(&buf, "[err ] unknown lifecycle action: %s\n", pending.action)
-		}
+		code := runLifecycleAction(runner, pending, paneOpts, closeOpts, cleanupOpts, lg)
 		return lifecycleDoneMsg{
 			action: pending.action,
 			pane:   pending.pane,
@@ -294,6 +211,104 @@ func (m model) lifecycleCmd(pending pendingLifecycleAction) tea.Cmd {
 			output: strings.TrimSpace(buf.String()),
 		}
 	}
+}
+
+type lifecycleActionRoutes struct {
+	paneRoot     string
+	closeRoots   []string
+	cleanupRoots []string
+}
+
+func (m model) lifecycleActionRoutes(pane paneView) lifecycleActionRoutes {
+	paneRoot := strings.TrimSpace(pane.sourceProjectRoot)
+	if paneRoot == "" {
+		paneRoot = m.opts.ProjectRoot
+	}
+	closeRoots := pane.sourceProjectRoots
+	if len(closeRoots) == 0 {
+		closeRoots = []string{paneRoot}
+	}
+	cleanupRoots := pane.sourceProjectRoots
+	if !isLocalParent(pane.Parent) {
+		cleanupRoots = m.sourceRootsForParent(pane.Parent)
+	}
+	if len(cleanupRoots) == 0 {
+		cleanupRoots = []string{paneRoot}
+	}
+	return lifecycleActionRoutes{paneRoot: paneRoot, closeRoots: closeRoots, cleanupRoots: cleanupRoots}
+}
+
+func (m model) lifecycleOptions(root string) lifecycle.Options {
+	return lifecycle.Options{
+		ProjectRoot:         root,
+		StatePath:           state.Path(root),
+		Hooks:               m.opts.Hooks,
+		WatcherRunningLabel: m.opts.WatcherRunningLabel,
+		RemoveIssueLabel:    ghissue.Runner{Cwd: m.opts.ProjectRoot}.RemoveIssueLabel,
+		CloseOwned:          m.opts.LifecycleCloseOwned,
+		HerdrRuntime:        m.opts.LifecycleHerdrRuntime,
+	}
+}
+
+func (m model) lifecycleOptionsForRoots(roots []string) []lifecycle.Options {
+	opts := make([]lifecycle.Options, 0, len(roots))
+	for _, root := range roots {
+		opts = append(opts, m.lifecycleOptions(root))
+	}
+	return opts
+}
+
+func runLifecycleAction(runner lifecycleRunner, pending pendingLifecycleAction, paneOpts lifecycle.Options, closeOpts, cleanupOpts []lifecycle.Options, lg lifecycle.Logger) exitcode.Code {
+	switch pending.action {
+	case actionClose:
+		return runCloseLifecycle(runner, pending, closeOpts, lg)
+	case actionMerge:
+		return runMergeLifecycle(runner, pending.pane, paneOpts, lg)
+	case actionCleanup:
+		return runCleanupLifecycle(runner, pending.pane, cleanupOpts, lg)
+	default:
+		lg.Err("unknown lifecycle action: %s", pending.action)
+		return exitcode.Invocation
+	}
+}
+
+func runCloseLifecycle(runner lifecycleRunner, pending pendingLifecycleAction, opts []lifecycle.Options, lg lifecycle.Logger) exitcode.Code {
+	code := exitcode.OK
+	for _, opt := range opts {
+		var current exitcode.Code
+		if pending.pane.isTask() {
+			current = runner.CloseTaskWithMode(opt, pending.pane.Parent, pending.pane.TaskID, pending.closeMode, lg)
+		} else {
+			current = runner.CloseWithMode(opt, pending.pane.Parent, pending.pane.IssueNum, pending.closeMode, lg)
+		}
+		if current != exitcode.OK {
+			code = current
+		}
+	}
+	return code
+}
+
+func runMergeLifecycle(runner lifecycleRunner, pane paneView, opts lifecycle.Options, lg lifecycle.Logger) exitcode.Code {
+	if pane.isTask() {
+		return runner.MergeTask(opts, pane.Parent, pane.TaskID, lg)
+	}
+	return runner.Merge(opts, pane.Parent, pane.IssueNum, lg)
+}
+
+func runCleanupLifecycle(runner lifecycleRunner, pane paneView, opts []lifecycle.Options, lg lifecycle.Logger) exitcode.Code {
+	code := exitcode.OK
+	for _, opt := range opts {
+		var current exitcode.Code
+		if pane.isTask() {
+			current = runner.CleanupPlan(opt, pane.Parent, lg)
+		} else {
+			current = runner.Cleanup(opt, pane.Parent, lg)
+		}
+		if current != exitcode.OK {
+			code = current
+		}
+	}
+	return code
 }
 
 // isLocalParent reports whether a parent ref is only meaningful within one
@@ -408,6 +423,14 @@ func clampCloseOptionIndex(idx int) int {
 	}
 	if idx >= len(opts) {
 		return len(opts) - 1
+	}
+	return idx
+}
+
+func clampPendingCloseOptionIndex(pending *pendingLifecycleAction, idx int) int {
+	idx = clampCloseOptionIndex(idx)
+	if pending != nil && pending.requireWorktree && idx == 0 {
+		return 1
 	}
 	return idx
 }

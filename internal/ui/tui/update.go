@@ -380,8 +380,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		pending := *m.pendingAction
-		pending.closeMode = msg.mode
-		pending.closeOptionIndex = closeOptionIndexForMode(msg.mode)
+		pending.closeOptionIndex = clampPendingCloseOptionIndex(&pending, closeOptionIndexForMode(msg.mode))
+		pending.closeMode = closeOptions()[pending.closeOptionIndex].mode
 		m.pendingAction = nil
 		m.actionRunning = true
 		m.actionMessage = lifecycleRunningMessage(pending)

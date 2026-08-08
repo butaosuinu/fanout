@@ -109,7 +109,7 @@ func TestSyntheticPaneDoesNotInventTmuxBackend(t *testing.T) {
 	}
 }
 
-func TestHerdrRowRuntimeActionsAreDisabledBeforePorts(t *testing.T) {
+func TestHerdrRowInteractiveActionsAreDisabledBeforePorts(t *testing.T) {
 	tests := []struct {
 		name string
 		key  string
@@ -118,8 +118,6 @@ func TestHerdrRowRuntimeActionsAreDisabledBeforePorts(t *testing.T) {
 		{name: "peek", key: "p"},
 		{name: "attach", key: "a"},
 		{name: "worktree terminal", key: "A"},
-		{name: "close", key: "c"},
-		{name: "cleanup", key: "X"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -204,31 +202,6 @@ func TestOwnedHerdrPaneFocusAndPeekUsePersistedIdentityPorts(t *testing.T) {
 	}
 }
 
-func TestOwnedHerdrPaneLifecycleStaysDisabled(t *testing.T) {
-	saved := state.Pane{Backend: backend.Herdr, PaneID: "p1", HerdrWorkspaceID: "w1"}
-	m := newModel(Options{
-		BackendSelection: backend.Selection{Name: backend.Herdr},
-		HerdrActionDisabled: func(state.Pane) string {
-			return ""
-		},
-	})
-	m.allPanes = []paneView{{
-		Backend: backend.Herdr, PaneID: "p1", TmuxState: "live", savedPane: saved,
-	}}
-	m.refreshRows()
-
-	for _, action := range []lifecycleAction{actionClose, actionMerge, actionCleanup} {
-		updated, cmd := m.startPendingAction(action)
-		m = updated.(model)
-		if cmd != nil || m.pendingAction != nil {
-			t.Fatalf("%s enabled an owned Herdr lifecycle action", action)
-		}
-		if !strings.Contains(m.actionMessage, backend.HerdrObservationOnlyReason) {
-			t.Fatalf("%s reason = %q, want explicit deferred lifecycle reason", action, m.actionMessage)
-		}
-	}
-}
-
 func TestAutomaticHerdrFocusReloadsPersistedPaneIdentity(t *testing.T) {
 	root := t.TempDir()
 	session := backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "thread-1"}
@@ -291,6 +264,83 @@ func TestHerdrFocusRetainsTargetRouteObservationFailure(t *testing.T) {
 	}
 	if got := observationErrorForPane(errors.New("unscoped failure"), pane); got == nil {
 		t.Fatal("unscoped observation failure was ignored")
+	}
+}
+
+func TestHerdrRowEnablesLifecycleActionsAndDefaultsCloseToWorktree(t *testing.T) {
+	m := newModel(Options{
+		ProjectRoot:      "/repo",
+		BackendSelection: backend.Selection{Name: backend.Tmux},
+	})
+	m.allPanes = []paneView{
+		{Parent: "1", IssueNum: 2, Backend: backend.Herdr, PaneID: "w1:p1", WorktreePath: "/repo/wt"},
+	}
+	m.refreshRows()
+
+	updated, cmd := m.startPendingAction(actionClose)
+	m = updated.(model)
+	if cmd != nil {
+		t.Fatal("Herdr close returned an external command without a configured popup")
+	}
+	if m.pendingAction == nil || !m.pendingAction.requireWorktree {
+		t.Fatal("Herdr close did not require worktree removal")
+	}
+	if m.pendingAction.closeMode != lifecycle.CloseWorktree || m.pendingAction.closeOptionIndex != 1 {
+		t.Fatalf("Herdr close default = mode %v/index %d, want worktree/1", m.pendingAction.closeMode, m.pendingAction.closeOptionIndex)
+	}
+	if view := m.closeChoiceView(); !strings.Contains(view, "unavailable for Herdr") {
+		t.Fatalf("Herdr close choice did not mark pane-only unavailable:\n%s", view)
+	}
+	updated, cmd = m.updatePendingCloseChoice(keyRunes("1"))
+	m = updated.(model)
+	if cmd != nil || m.pendingAction.closeMode != lifecycle.CloseWorktree {
+		t.Fatal("Herdr close choice accepted pane-only mode")
+	}
+
+	m.pendingAction = nil
+	updated, cmd = m.startPendingAction(actionCleanup)
+	m = updated.(model)
+	if cmd != nil || m.pendingAction == nil {
+		t.Fatal("Herdr cleanup was not admitted to confirmation")
+	}
+	if strings.Contains(m.actionMessage, backend.HerdrObservationOnlyReason) {
+		t.Fatalf("Herdr cleanup remained disabled: %q", m.actionMessage)
+	}
+
+	popupModel := closeChoicePopupModel(CloseChoicePopupOptions{
+		InitialMode: lifecycle.ClosePaneOnly, RequireWorktree: true,
+	})
+	if popupModel.pendingAction.closeMode != lifecycle.CloseWorktree {
+		t.Fatal("standalone Herdr close popup accepted pane-only initial mode")
+	}
+	var request CloseChoiceRequest
+	m.pendingAction = nil
+	m.opts.CloseChoicePopup = func(got CloseChoiceRequest) (lifecycle.CloseMode, bool, error) {
+		request = got
+		return lifecycle.CloseWorktree, true, nil
+	}
+	updated, cmd = m.startPendingAction(actionClose)
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("Herdr close did not open the configured popup")
+	}
+	_ = cmd()
+	if !request.RequireWorktree {
+		t.Fatal("Herdr close popup request did not preserve the worktree requirement")
+	}
+}
+
+func TestHelpKeepsHerdrInteractiveActionsDisabledButEnablesLifecycle(t *testing.T) {
+	m := newModel(Options{BackendSelection: backend.Selection{Name: backend.Tmux}})
+	m.allPanes = []paneView{{IssueNum: 1, Backend: backend.Herdr, PaneID: "w1:p1"}}
+	m.refreshRows()
+
+	disabled := m.helpDisabledReasons()
+	if disabled.pane == "" || disabled.peek == "" {
+		t.Fatalf("Herdr interactive help reasons = pane %q/peek %q, want disabled", disabled.pane, disabled.peek)
+	}
+	if disabled.close != "" || disabled.cleanup != "" {
+		t.Fatalf("Herdr lifecycle help reasons = close %q/cleanup %q, want enabled", disabled.close, disabled.cleanup)
 	}
 }
 
