@@ -295,32 +295,47 @@ function isReplacement(prev: DiffChangeKind, next: DiffChangeKind): boolean {
   return prev === "deleted" ? next === "added" : prev === "added" && next === "deleted";
 }
 
-/* patch を持つ file の path → 変更種別。種別は patch の `new file mode` /
- * `deleted file mode` / `rename from` をライブラリのパーサが解釈済みのものを使う
- * (自前で header を読み直すと lib 更新で drift する)。
- *
- * 同 path の 2 entry は file type change なので置換 = modified に畳む。先頭
- * (= deleted)を採ると「削除された」と読めてしまう。
- *
- * ただし畳む条件に正規化前の name の一致を入れる。unquoteGitPath は不正 UTF-8 の
- * 1 byte を U+FFFD 1 個へ潰すので、`docs/\200.md` と `docs/\201.md` のような
- * 別 file が同じ key になりうる。この衝突も「削除 + 追加」の形をしていて種別
- * だけでは置換と区別できず、畳むと実在する追加と削除の両方が変更に化ける。
- * 名前が違えば衝突と見なし、先に見た側の種別を残す(少なくとも片方は正しい)。 */
-export function indexDiffKindsByPath(files: FileDiffMetadata[]): Map<string, DiffChangeKind> {
-  const byPath = new Map<string, DiffChangeKind>();
-  const rawName = new Map<string, string>();
+/* 正規化した path ごとに entry を束ねる。key は生のパスへ戻す — サイドバーは
+ * files[].path で引くため。 */
+function groupByNormalizedPath(files: FileDiffMetadata[]): Map<string, FileDiffMetadata[]> {
+  const groups = new Map<string, FileDiffMetadata[]>();
   for (const f of files) {
     const path = unquoteGitPath(f.name);
-    const prev = byPath.get(path);
-    if (prev === undefined) {
-      byPath.set(path, changeKindOf(f));
-      rawName.set(path, f.name);
-    } else if (rawName.get(path) === f.name && isReplacement(prev, changeKindOf(f))) {
-      byPath.set(path, "modified");
-    }
+    const at = groups.get(path);
+    if (at) at.push(f);
+    else groups.set(path, [f]);
   }
-  return byPath;
+  return groups;
+}
+
+/* 同じ key に集まった entry から行の種別を 1 つ決める。決められないなら null。
+ *
+ * 2 entry で正規化前の name も一致するなら file type change。置換なので
+ * modified に畳む — 先頭(= deleted)を採ると「削除された」と読めてしまう。
+ *
+ * name が違うなら key の衝突。unquoteGitPath は不正 UTF-8 の 1 byte を U+FFFD
+ * 1 個へ潰すので、`docs/\200.md` と `docs/\201.md` が同じ key になる。衝突も
+ * 「削除 + 追加」の形をしていて種別だけでは置換と区別できず、どちらを採っても
+ * もう一方の行に嘘のアイコンが出る。曖昧なので種別なしにする(サイドバーは
+ * アイコン列を空欄にし、行の名前にも種別を足さない)。 */
+function groupChangeKind(entries: FileDiffMetadata[]): DiffChangeKind | null {
+  const [first, second] = entries;
+  if (!first) return null;
+  if (!second) return changeKindOf(first);
+  if (entries.length > 2 || first.name !== second.name) return null;
+  return isReplacement(changeKindOf(first), changeKindOf(second)) ? "modified" : null;
+}
+
+/* patch を持つ file の path → 変更種別。種別は patch の `new file mode` /
+ * `deleted file mode` / `rename from` をライブラリのパーサが解釈済みのものを使う
+ * (自前で header を読み直すと lib 更新で drift する)。 */
+export function indexDiffKindsByPath(files: FileDiffMetadata[]): Map<string, DiffChangeKind> {
+  const kinds = new Map<string, DiffChangeKind>();
+  for (const [path, entries] of groupByNormalizedPath(files)) {
+    const kind = groupChangeKind(entries);
+    if (kind) kinds.set(path, kind);
+  }
+  return kinds;
 }
 
 /* patch を持つ file の path → パース済み patch の index。file type change は

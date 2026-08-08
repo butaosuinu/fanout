@@ -368,17 +368,15 @@ describe("indexDiffKindsByPath", () => {
   });
 
   /* 不正 UTF-8 の 1 byte は U+FFFD 1 個へ潰れるので、別 file が同じ key になる。
-   * 衝突も「削除 + 追加」の形をしていて種別だけでは置換と区別できない。畳むと
-   * 実在する追加と削除の両方が「変更」に化けるため、先に見た側を残す。 */
-  it("正規化後だけ一致する別 path の削除 + 追加は畳まない", () => {
+   * 衝突も「削除 + 追加」の形をしていて種別だけでは置換と区別できず、どちらを
+   * 採ってももう一方の行に嘘のアイコンが出る。曖昧な key は種別を持たせない。 */
+  it("正規化後だけ一致する別 path には種別を持たせない", () => {
     const block = (name: string, header: string) =>
       [`diff --git "a/${name}" "b/${name}"`, header, ""].join("\n");
     const patch =
       block("docs/\\200.md", "new file mode 100644") +
       block("docs/\\201.md", "deleted file mode 100644");
-    const kinds = indexDiffKindsByPath(parseDiffFiles(patch));
-    expect([...kinds.keys()]).toEqual(["docs/�.md"]);
-    expect(kinds.get("docs/�.md")).toBe("added");
+    expect(indexDiffKindsByPath(parseDiffFiles(patch))).toEqual(new Map());
   });
 
   /* key は indexDiffFilesByPath と同じ正規化を通さないと、非 ASCII の file だけ
