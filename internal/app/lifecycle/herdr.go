@@ -304,7 +304,7 @@ func newHerdrCleanupIntent(
 	if err != nil {
 		return state.HerdrIntent{}, err
 	}
-	ownerRoot, expectedHead, err := herdrCleanupMetadata(ctx, opts.ProjectRoot, pane.Parent, fullRef)
+	ownerRoot, expectedHead, branchFound, err := herdrCleanupMetadata(ctx, opts.ProjectRoot, pane.Parent, fullRef)
 	if err != nil {
 		return state.HerdrIntent{}, err
 	}
@@ -318,7 +318,7 @@ func newHerdrCleanupIntent(
 		WorkspaceLabel: resource.Label, Resource: resource,
 		Session: pane.HerdrSession, SocketPath: pane.HerdrSocketPath,
 		ExpiresUnixMS: time.Now().Add(herdrCleanupTimeout).UnixMilli(),
-		CleanupPhase:  phase, CleanupDeleteBranch: mode == CloseEverything && pane.HerdrBranchCreated,
+		CleanupPhase:  phase, CleanupDeleteBranch: mode == CloseEverything && pane.HerdrBranchCreated && branchFound,
 	}
 	if observation.workspace == nil && observation.checkout.PathAbsent && !observation.checkout.Registered {
 		intent.Status = state.HerdrIntentRealized
@@ -329,13 +329,13 @@ func newHerdrCleanupIntent(
 func herdrCleanupMetadata(
 	ctx context.Context,
 	projectRoot, parent, fullRef string,
-) (string, string, error) {
+) (string, string, bool, error) {
 	ownerRoot, err := state.HerdrOwnerProjectRoot(parent, filepath.Clean(projectRoot))
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
-	expectedHead, _, err := worktree.ObserveBranch(ctx, projectRoot, fullRef)
-	return ownerRoot, expectedHead, err
+	expectedHead, found, err := worktree.ObserveBranch(ctx, projectRoot, fullRef)
+	return ownerRoot, expectedHead, found, err
 }
 
 func classifyFreshHerdrCleanup(
@@ -389,7 +389,7 @@ func validateSavedHerdrCleanup(intent state.HerdrIntent, projectRoot string, pan
 		intent.SocketPath == pane.HerdrSocketPath,
 		intent.BranchCreated == pane.HerdrBranchCreated,
 		intent.BranchExisted == !pane.HerdrBranchCreated,
-		intent.CleanupDeleteBranch == (mode == CloseEverything && pane.HerdrBranchCreated),
+		intent.CleanupDeleteBranch == (mode == CloseEverything && pane.HerdrBranchCreated && intent.ExpectedHead != ""),
 		herdrCleanupResourceMatchesPane(intent, pane),
 	}
 	for _, ok := range requirements {

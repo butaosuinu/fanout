@@ -506,6 +506,35 @@ func TestHerdrCloseEverythingCompareDeletesOnlyFanoutCreatedBranch(t *testing.T)
 	}
 }
 
+func TestHerdrCloseEverythingReapsIssueStateAfterResourcesAreAlreadyAbsent(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.HerdrBranchCreated = true
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane)
+	removeHerdrLifecycleResources(t, fixture)
+	runtime := &fakeHerdrLifecycleRuntime{projectRoot: fixture.projectRoot}
+
+	if got := CloseWithMode(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("CloseWithMode() = %d, want %d", got, exitcode.OK)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseEverythingReapsTaskStateAfterResourcesAreAlreadyAbsent(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.Parent = "plan:demo"
+	fixture.pane.IssueNum = 0
+	fixture.pane.TaskID = "task-a"
+	fixture.pane.HerdrBranchCreated = true
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane)
+	removeHerdrLifecycleResources(t, fixture)
+	runtime := &fakeHerdrLifecycleRuntime{projectRoot: fixture.projectRoot}
+
+	if got := CloseTaskWithMode(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.TaskID, CloseEverything, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("CloseTaskWithMode() = %d, want %d", got, exitcode.OK)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
 func herdrLifecycleOptions(fixture herdrLifecycleFixture, runtime HerdrRuntime) Options {
 	return Options{
 		ProjectRoot: fixture.projectRoot,
@@ -699,6 +728,12 @@ func runHerdrLifecycleGit(t *testing.T, root string, args ...string) {
 	_ = runHerdrLifecycleGitOutput(t, root, args...)
 }
 
+func removeHerdrLifecycleResources(t *testing.T, fixture herdrLifecycleFixture) {
+	t.Helper()
+	runHerdrLifecycleGit(t, fixture.projectRoot, "worktree", "remove", fixture.worktreePath)
+	runHerdrLifecycleGit(t, fixture.projectRoot, "branch", "-D", fixture.branch)
+}
+
 func runHerdrLifecycleGitOutput(t *testing.T, root string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
@@ -718,6 +753,21 @@ func recordLifecyclePaneReplacing(t *testing.T, projectRoot string, pane state.P
 	if err := locked.RecordPane(pane); err != nil {
 		_ = locked.Unlock()
 		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func replaceLifecyclePanes(t *testing.T, projectRoot string, panes ...state.Pane) {
+	t.Helper()
+	locked, err := state.Lock(state.Path(projectRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked.Panes = append([]state.Pane(nil), panes...)
+	if err := locked.Save(); err != nil {
+		t.Fatal(errors.Join(err, locked.Unlock()))
 	}
 	if err := locked.Unlock(); err != nil {
 		t.Fatal(err)
