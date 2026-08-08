@@ -63,12 +63,12 @@ func TestPreseedTaskTeamRegistryMakesEarlyMessageReplyAddressable(t *testing.T) 
 	if err != nil {
 		t.Fatalf("reopen team db for Herdr final row: %v", err)
 	}
-	if err := team.UpsertPeer(db, state.Pane{
+	if upsertErr := team.UpsertPeer(db, state.Pane{
 		Parent: parent, TaskID: "task-a", Backend: backend.Herdr,
 		PaneID: "w1:p1", HerdrWorkspaceID: "w1", HerdrTerminalID: "terminal-a",
 		Agent: "claude", WorktreePath: "/repo/.fanout/worktrees/demo-task-a",
-	}, team.Now()); err != nil {
-		t.Fatalf("replace provisional task with Herdr row: %v", err)
+	}, team.Now()); upsertErr != nil {
+		t.Fatalf("replace provisional task with Herdr row: %v", upsertErr)
 	}
 	if closeErr := db.Close(); closeErr != nil {
 		t.Fatalf("close Herdr final row db: %v", closeErr)

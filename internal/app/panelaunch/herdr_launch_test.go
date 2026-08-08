@@ -310,10 +310,13 @@ func TestWaitForHerdrCodexTeamRejectsExpiredLaunch(t *testing.T) {
 
 func TestHerdrCodexTeamStatusPathUsesPersistedLaunchIdentity(t *testing.T) {
 	savedPath := filepath.Join(t.TempDir(), "saved-status.json")
-	intent := state.HerdrIntent{Launch: &state.HerdrLaunch{CodexTeamStatusPath: savedPath}}
+	teamDBPath := filepath.Join(t.TempDir(), "team.db")
+	intent := state.HerdrIntent{Launch: &state.HerdrLaunch{
+		TeamDBPath: teamDBPath, CodexTeamStatusPath: savedPath,
+	}}
 	for _, req := range []Request{
-		{Number: 568, CodexTeamMode: true, CodexTeamStatusPath: "/tmp/new-issue-status.json"},
-		{TaskID: "registry-migration", CodexTeamMode: true, CodexTeamStatusPath: "/tmp/new-task-status.json"},
+		{Number: 568, TeamDBPath: teamDBPath, CodexTeamMode: true, CodexTeamStatusPath: "/tmp/new-issue-status.json"},
+		{TaskID: "registry-migration", TeamDBPath: teamDBPath, CodexTeamMode: true, CodexTeamStatusPath: "/tmp/new-task-status.json"},
 	} {
 		got, err := herdrCodexTeamStatusPath(req, intent)
 		if err != nil {
@@ -325,13 +328,29 @@ func TestHerdrCodexTeamStatusPathUsesPersistedLaunchIdentity(t *testing.T) {
 	}
 }
 
-func TestPrepareHerdrLaunchRejectsCodexTeamModeChange(t *testing.T) {
+func TestPrepareHerdrLaunchRejectsTeamBindingChange(t *testing.T) {
 	for _, tc := range []struct {
-		name                     string
-		savedTeam, requestedTeam bool
+		name                         string
+		savedDBPath, requestedDBPath string
+		savedCodex, requestedCodex   bool
+		want                         string
 	}{
-		{name: "team to non-team", savedTeam: true},
-		{name: "non-team to team", requestedTeam: true},
+		{
+			name: "team to non-team", savedDBPath: "/tmp/team-a.db", savedCodex: true,
+			want: "current team mode",
+		},
+		{
+			name: "non-team to team", requestedDBPath: "/tmp/team-a.db", requestedCodex: true,
+			want: "current team mode",
+		},
+		{
+			name: "Claude team DB changed", savedDBPath: "/tmp/team-a.db", requestedDBPath: "/tmp/team-b.db",
+			want: "current team DB path",
+		},
+		{
+			name: "Codex team DB changed", savedDBPath: "/tmp/team-a.db", requestedDBPath: "/tmp/team-b.db",
+			savedCodex: true, requestedCodex: true, want: "current team DB path",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := newHerdrRealizeRepo(t)
@@ -353,9 +372,10 @@ func TestPrepareHerdrLaunchRejectsCodexTeamModeChange(t *testing.T) {
 			defer func() { _ = locked.Unlock() }()
 			intent := result.Intent
 			intent.Launch = validTestHerdrLaunch()
-			intent.Launch.Agent = "codex"
 			intent.Launch.TokenIssued = false
-			if tc.savedTeam {
+			intent.Launch.TeamDBPath = tc.savedDBPath
+			if tc.savedCodex {
+				intent.Launch.Agent = "codex"
 				intent.Launch.CodexTeamStatusPath = filepath.Join(t.TempDir(), "saved-status.json")
 			}
 			journal, err := locked.HerdrIntents(repo)
@@ -363,17 +383,17 @@ func TestPrepareHerdrLaunchRejectsCodexTeamModeChange(t *testing.T) {
 				t.Fatal(err)
 			}
 			journal.UpsertIntent(intent)
-			if err := journal.Save(); err != nil {
-				t.Fatal(err)
+			if saveErr := journal.Save(); saveErr != nil {
+				t.Fatal(saveErr)
 			}
 
 			_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).prepareHerdrLaunch(
 				Request{
-					Agent: "codex", CodexTeamMode: tc.requestedTeam,
+					Agent: "codex", TeamDBPath: tc.requestedDBPath, CodexTeamMode: tc.requestedCodex,
 					CodexTeamStatusPath: filepath.Join(t.TempDir(), "requested-status.json"),
 				}, locked, herdrrun.OwnedLaunchRoute{}, intent, nil,
 			)
-			if err == nil || !strings.Contains(err.Error(), "does not match the current Codex team mode") {
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("team mode mismatch error = %v", err)
 			}
 			if runtime.tokenCalls != 0 {
@@ -421,6 +441,7 @@ func TestAwaitHerdrCodexTeamFailureRequiresManualCleanup(t *testing.T) {
 			statusPath := filepath.Join(t.TempDir(), "status.json")
 			intent.Launch = validTestHerdrLaunch()
 			intent.Launch.Agent = "codex"
+			intent.Launch.TeamDBPath = "/tmp/team.db"
 			intent.Launch.CodexTeamStatusPath = statusPath
 			intent.ExpiresUnixMS = time.Now().Add(tc.remaining).UnixMilli()
 			journal, err := locked.HerdrIntents(repo)
@@ -428,8 +449,8 @@ func TestAwaitHerdrCodexTeamFailureRequiresManualCleanup(t *testing.T) {
 				t.Fatal(err)
 			}
 			journal.UpsertIntent(intent)
-			if err := journal.Save(); err != nil {
-				t.Fatal(err)
+			if saveErr := journal.Save(); saveErr != nil {
+				t.Fatal(saveErr)
 			}
 			if tc.writeStatus != nil {
 				tc.writeStatus(t, statusPath)
@@ -437,6 +458,7 @@ func TestAwaitHerdrCodexTeamFailureRequiresManualCleanup(t *testing.T) {
 
 			_, err = awaitHerdrCodexTeam(
 				Request{
+					TeamDBPath:          "/tmp/team.db",
 					CodexTeamMode:       true,
 					CodexTeamStatusPath: filepath.Join(t.TempDir(), "regenerated-status.json"),
 				}, locked, repo, intent,
@@ -829,6 +851,7 @@ func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 	intent.Launch = validTestHerdrLaunch()
 	intent.Launch.Agent = "codex"
 	intent.Launch.TokenIssued = false
+	intent.Launch.TeamDBPath = "/tmp/team.db"
 	intent.Launch.CodexTeamStatusPath = statusPath
 	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
 	runtime.processInfo = testHerdrLauncherProcess(intent, route.LauncherPath)
@@ -838,16 +861,16 @@ func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	journal.UpsertIntent(intent)
-	if err := journal.Save(); err != nil {
-		t.Fatal(err)
+	if saveErr := journal.Save(); saveErr != nil {
+		t.Fatal(saveErr)
 	}
-	if err := codexapp.WriteFailedStatus(statusPath, errors.New("owner mismatch")); err != nil {
-		t.Fatal(err)
+	if statusErr := codexapp.WriteFailedStatus(statusPath, errors.New("owner mismatch")); statusErr != nil {
+		t.Fatal(statusErr)
 	}
 
 	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrAgent(
 		context.Background(), Request{
-			Agent: "codex", CodexTeamMode: true,
+			Agent: "codex", TeamDBPath: "/tmp/team.db", CodexTeamMode: true,
 			CodexTeamStatusPath: filepath.Join(t.TempDir(), "regenerated-status.json"),
 		}, locked, route, intent, nil,
 	)

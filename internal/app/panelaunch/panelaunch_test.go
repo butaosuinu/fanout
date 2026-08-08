@@ -1227,6 +1227,9 @@ func TestNewIssueRequestPassesResolvedSettingsAgentAndTeamToBriefing(t *testing.
 	if !got.CodexTeamMode || got.CodexTeamStatusPath != "/tmp/fanout-codex-team-project_root-501.json" {
 		t.Fatalf("codex team mode/status = %t/%q", got.CodexTeamMode, got.CodexTeamStatusPath)
 	}
+	if got.TeamDBPath != "/tmp/fanout-project_root-100.db" {
+		t.Fatalf("TeamDBPath = %q", got.TeamDBPath)
+	}
 	for _, want := range []string{
 		"## Coordinating with your sibling panes",
 		"You are the pane for issue #501 (parent #100)",
@@ -1296,6 +1299,9 @@ func TestNewTaskRequestCodexTeamUsesTaskIdentityAndStatusPath(t *testing.T) {
 	}
 	if got.CodexTeamStatusPath != "/tmp/fanout-codex-team-repo-api-client.json" {
 		t.Fatalf("CodexTeamStatusPath = %q", got.CodexTeamStatusPath)
+	}
+	if got.TeamDBPath != "/tmp/team.db" {
+		t.Fatalf("TeamDBPath = %q", got.TeamDBPath)
 	}
 	if member := codexTeamMember(got); member != "api-client" {
 		t.Fatalf("codexTeamMember() = %q, want api-client", member)

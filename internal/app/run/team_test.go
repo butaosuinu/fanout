@@ -111,14 +111,14 @@ func TestSeedTeamRegistryRejectsForeignParentDB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := team.EnsureSchema(db); err != nil {
-		t.Fatal(err)
+	if schemaErr := team.EnsureSchema(db); schemaErr != nil {
+		t.Fatal(schemaErr)
 	}
-	if _, err := msgstore.New(db, "200"); err != nil {
-		t.Fatal(err)
+	if _, ownerErr := msgstore.New(db, "200"); ownerErr != nil {
+		t.Fatal(ownerErr)
 	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	var stdout, stderr bytes.Buffer

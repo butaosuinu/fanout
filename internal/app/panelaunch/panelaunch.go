@@ -69,6 +69,9 @@ type Request struct {
 	CodexTeamRequested  bool
 	CodexTeamMode       bool
 	CodexTeamStatusPath string
+	// TeamDBPath binds a Herdr launch retry to the registry path selected by
+	// the run that created its persisted launch capsule.
+	TeamDBPath string
 	// ShellKey is the unique @fanout_shell_key token that binds a state row to
 	// its live tmux pane. The historical name is retained for compatibility.
 	ShellKey string

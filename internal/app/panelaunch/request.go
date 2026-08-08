@@ -76,11 +76,7 @@ func NewIssueRequest(cfg *cliflags.Config, projectRoot string, issue ghissue.Iss
 	if req.CodexPlanMode() {
 		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, issue.Number, cfg.DryRun)
 	}
-	req.CodexTeamRequested = teamCtx != nil && agentName == "codex"
-	if req.CodexTeamRequested && !req.PlanMode() {
-		req.CodexTeamMode = true
-		req.CodexTeamStatusPath = codexapp.TeamStatusPath(projectRoot, strconv.Itoa(issue.Number), cfg.DryRun)
-	}
+	configureTeamRequest(&req, teamCtx, projectRoot, strconv.Itoa(issue.Number), cfg.DryRun)
 	return req
 }
 
@@ -131,12 +127,24 @@ func NewTaskRequest(cfg *cliflags.Config, projectRoot string, spec planspec.Spec
 	if req.CodexPlanMode() {
 		req.CodexPlanStatusPath = codexapp.TaskStatusPath(projectRoot, spec.Plan.Slug, task.ID, cfg.DryRun)
 	}
-	req.CodexTeamRequested = teamCtx != nil && agentName == "codex"
+	configureTeamRequest(&req, teamCtx, projectRoot, task.ID, cfg.DryRun)
+	return req
+}
+
+func configureTeamRequest(
+	req *Request,
+	teamCtx *briefing.TeamContext,
+	projectRoot, member string,
+	dryRun bool,
+) {
+	if teamCtx != nil {
+		req.TeamDBPath = filepath.Clean(teamCtx.DBPath)
+	}
+	req.CodexTeamRequested = teamCtx != nil && req.Agent == "codex"
 	if req.CodexTeamRequested && !req.PlanMode() {
 		req.CodexTeamMode = true
-		req.CodexTeamStatusPath = codexapp.TeamStatusPath(projectRoot, task.ID, cfg.DryRun)
+		req.CodexTeamStatusPath = codexapp.TeamStatusPath(projectRoot, member, dryRun)
 	}
-	return req
 }
 
 // NewManualRequest builds the pane request for a TUI-launched manual pane

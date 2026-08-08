@@ -71,7 +71,8 @@ func WriteFailedStatus(path string, startupErr error) error {
 func StartupFailure(path string) error {
 	status, err := readStatus(path)
 	if err != nil {
-		return nil
+		// A missing or incomplete file is not terminal; WaitReady owns its diagnostics.
+		status = Status{}
 	}
 	if status.Status != statusFailed {
 		return nil

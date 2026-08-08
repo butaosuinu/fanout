@@ -363,7 +363,7 @@ func (l *Launcher) prepareHerdrLaunch(
 		intent = saved
 	}
 	if intent.Launch != nil {
-		if err := validateHerdrLaunchMode(req, intent.Launch); err != nil {
+		if err := validateHerdrLaunchBinding(req, intent.Launch); err != nil {
 			return intent, err
 		}
 		if intent.Launch.TokenIssued {
@@ -401,6 +401,7 @@ func (l *Launcher) newHerdrLaunch(
 		Nonce: nonce, Agent: req.Agent,
 		AgentName:  naming.HerdrAgentName(route.GitCommonDir, intent.ID, nonce),
 		Executable: spec.Executable, Args: spec.Args,
+		TeamDBPath:          req.TeamDBPath,
 		CodexTeamStatusPath: newHerdrTeamStatusPath(req),
 		EnvFilePath:         envPath, EnvNameCount: envCount,
 	}
@@ -431,11 +432,19 @@ func newHerdrTeamStatusPath(req Request) string {
 	return ""
 }
 
-func validateHerdrLaunchMode(req Request, launch *state.HerdrLaunch) error {
-	if req.CodexTeamMode == (launch.CodexTeamStatusPath != "") {
+func validateHerdrLaunchBinding(req Request, launch *state.HerdrLaunch) error {
+	requestedTeam := req.TeamDBPath != ""
+	savedTeam := launch.TeamDBPath != ""
+	switch {
+	case requestedTeam != savedTeam:
+		return fmt.Errorf("saved Herdr launch does not match the current team mode")
+	case requestedTeam && req.TeamDBPath != launch.TeamDBPath:
+		return fmt.Errorf("saved Herdr launch does not match the current team DB path")
+	case req.CodexTeamMode != (launch.CodexTeamStatusPath != ""):
+		return fmt.Errorf("saved Herdr launch does not match the current Codex team mode")
+	default:
 		return nil
 	}
-	return fmt.Errorf("saved Herdr launch does not match the current Codex team mode")
 }
 
 func waitForHerdrCodexTeam(req Request, intent state.HerdrIntent) (codexapp.Status, error) {
@@ -444,7 +453,7 @@ func waitForHerdrCodexTeam(req Request, intent state.HerdrIntent) (codexapp.Stat
 	}
 	timeout := min(CodexPlanTUIStartupTimeout, remainingHerdrLaunchTime(intent))
 	if timeout <= 0 {
-		return codexapp.Status{}, fmt.Errorf("Herdr launch expired before Codex team TUI became ready")
+		return codexapp.Status{}, fmt.Errorf("herdr launch expired before Codex team TUI became ready")
 	}
 	status, err := codexapp.WaitReady(req.CodexTeamStatusPath, timeout)
 	if err != nil {
@@ -458,7 +467,7 @@ func waitForHerdrCodexTeam(req Request, intent state.HerdrIntent) (codexapp.Stat
 
 func herdrCodexTeamStatusPath(req Request, intent state.HerdrIntent) (string, error) {
 	if intent.Launch != nil {
-		if err := validateHerdrLaunchMode(req, intent.Launch); err != nil {
+		if err := validateHerdrLaunchBinding(req, intent.Launch); err != nil {
 			return "", err
 		}
 	}
@@ -493,7 +502,7 @@ func awaitHerdrCodexTeam(
 		return status, nil
 	}
 	return status, errors.Join(err, markHerdrIntentManual(
-		journal, latest, fmt.Errorf("Codex team TUI readiness failed: %w", err),
+		journal, latest, fmt.Errorf("codex team TUI readiness failed: %w", err),
 	))
 }
 
@@ -507,7 +516,7 @@ func loadHerdrCodexTeamIntent(
 	}
 	latest, found := journal.FindIntent(intentID)
 	if !found {
-		return nil, state.HerdrIntent{}, fmt.Errorf("Codex team launch intent %s disappeared", intentID)
+		return nil, state.HerdrIntent{}, fmt.Errorf("codex team launch intent %s disappeared", intentID)
 	}
 	return journal, latest, nil
 }

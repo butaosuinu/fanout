@@ -96,6 +96,7 @@ type HerdrLaunch struct {
 	AgentName           string   `json:"agentName"`
 	Executable          string   `json:"executable"`
 	Args                []string `json:"args"`
+	TeamDBPath          string   `json:"teamDbPath,omitempty"`
 	CodexTeamStatusPath string   `json:"codexTeamStatusPath,omitempty"`
 	EnvFilePath         string   `json:"envFilePath"`
 	EnvNameCount        int      `json:"envNameCount"`
@@ -568,7 +569,7 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 		launch.Agent != "",
 		herdrAgentName.MatchString(launch.AgentName),
 		cleanAbsolute(launch.Executable),
-		validHerdrTeamStatusPath(launch.CodexTeamStatusPath),
+		validHerdrTeamPaths(launch),
 		cleanAbsolute(launch.EnvFilePath),
 		launch.EnvNameCount > 0,
 	}
@@ -586,8 +587,11 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 	return nil
 }
 
-func validHerdrTeamStatusPath(path string) bool {
-	return path == "" || cleanAbsolute(path)
+func validHerdrTeamPaths(launch *HerdrLaunch) bool {
+	teamPathOK := launch.TeamDBPath == "" || cleanAbsolute(launch.TeamDBPath)
+	statusPathOK := launch.CodexTeamStatusPath == "" ||
+		(launch.TeamDBPath != "" && cleanAbsolute(launch.CodexTeamStatusPath))
+	return teamPathOK && statusPathOK
 }
 
 func cleanAbsolute(path string) bool {
