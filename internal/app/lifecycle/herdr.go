@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -197,22 +198,11 @@ func validateHerdrLaunchIntentForCleanup(
 	}
 	allowedStatus := intent.Status == state.HerdrIntentRealized ||
 		intent.Status == state.HerdrIntentManualCleanupRequired
-	requirements := []bool{
-		intent.Kind == state.HerdrIntentWorktree, allowedStatus,
-		intent.Parent == pane.Parent, intent.RuntimeParent == pane.RuntimeParent,
-		intent.OwnerProjectRoot == ownerRoot, intent.IssueNum == pane.IssueNum,
-		intent.TaskID == pane.TaskID, intent.Slug == pane.Slug,
-		intent.BranchName == pane.BranchName, intent.FullBranchRef == "refs/heads/"+pane.BranchName,
-		intent.BaseBranch == pane.BaseBranch, intent.WorktreePath == filepath.Clean(pane.WorktreePath),
-		intent.BranchCreated == pane.HerdrBranchCreated, intent.BranchExisted == !pane.HerdrBranchCreated,
-		intent.WorkspaceLabel == pane.HerdrWorkspaceLabel, intent.Resource == herdrResourceFromPane(pane),
-		intent.Session == pane.HerdrSession, intent.SocketPath == pane.HerdrSocketPath,
-		intent.Launch != nil && intent.Launch.TokenIssued,
-	}
-	for _, matches := range requirements {
-		if !matches {
-			return fmt.Errorf("saved Herdr launch intent does not match the child row")
-		}
+	if slices.Contains([]bool{
+		intent.Kind == state.HerdrIntentWorktree, allowedStatus, herdrIntentMatchesPane(intent, pane, ownerRoot),
+		intent.Resource == herdrResourceFromPane(pane), intent.Launch != nil && intent.Launch.TokenIssued,
+	}, false) {
+		return fmt.Errorf("saved Herdr launch intent does not match the child row")
 	}
 	return nil
 }
@@ -372,32 +362,27 @@ func validateSavedHerdrCleanup(intent state.HerdrIntent, projectRoot string, pan
 	if err != nil {
 		return err
 	}
-	requirements := []bool{
-		intent.Kind == state.HerdrIntentCleanup,
-		intent.Parent == pane.Parent,
-		intent.RuntimeParent == pane.RuntimeParent,
-		intent.OwnerProjectRoot == ownerRoot,
-		intent.IssueNum == pane.IssueNum,
-		intent.TaskID == pane.TaskID,
-		intent.Slug == pane.Slug,
-		intent.BranchName == pane.BranchName,
-		intent.FullBranchRef == "refs/heads/"+pane.BranchName,
-		intent.BaseBranch == pane.BaseBranch,
-		filepath.Clean(intent.WorktreePath) == filepath.Clean(pane.WorktreePath),
-		intent.WorkspaceLabel == pane.HerdrWorkspaceLabel,
-		intent.Session == pane.HerdrSession,
-		intent.SocketPath == pane.HerdrSocketPath,
-		intent.BranchCreated == pane.HerdrBranchCreated,
-		intent.BranchExisted == !pane.HerdrBranchCreated,
-		intent.CleanupDeleteBranch == (mode == CloseEverything && pane.HerdrBranchCreated && intent.ExpectedHead != ""),
-		herdrCleanupResourceMatchesPane(intent, pane),
-	}
-	for _, ok := range requirements {
-		if !ok {
-			return fmt.Errorf("saved Herdr cleanup intent does not match the selected state row")
-		}
+	deleteBranch := mode == CloseEverything && pane.HerdrBranchCreated && intent.ExpectedHead != ""
+	if slices.Contains([]bool{
+		intent.Kind == state.HerdrIntentCleanup, herdrIntentMatchesPane(intent, pane, ownerRoot),
+		intent.CleanupDeleteBranch == deleteBranch, herdrCleanupResourceMatchesPane(intent, pane),
+	}, false) {
+		return fmt.Errorf("saved Herdr cleanup intent does not match the selected state row")
 	}
 	return nil
+}
+
+func herdrIntentMatchesPane(intent state.HerdrIntent, pane state.Pane, ownerRoot string) bool {
+	return !slices.Contains([]bool{
+		intent.Parent == pane.Parent, intent.RuntimeParent == pane.RuntimeParent,
+		intent.OwnerProjectRoot == ownerRoot, intent.IssueNum == pane.IssueNum,
+		intent.TaskID == pane.TaskID, intent.Slug == pane.Slug,
+		intent.BranchName == pane.BranchName, intent.FullBranchRef == "refs/heads/"+pane.BranchName,
+		intent.BaseBranch == pane.BaseBranch, filepath.Clean(intent.WorktreePath) == filepath.Clean(pane.WorktreePath),
+		intent.WorkspaceLabel == pane.HerdrWorkspaceLabel, intent.Session == pane.HerdrSession,
+		intent.SocketPath == pane.HerdrSocketPath, intent.BranchCreated == pane.HerdrBranchCreated,
+		intent.BranchExisted == !pane.HerdrBranchCreated,
+	}, false)
 }
 
 func herdrCleanupResourceMatchesPane(intent state.HerdrIntent, pane state.Pane) bool {

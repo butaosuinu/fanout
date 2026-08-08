@@ -45,13 +45,13 @@ func recoverIssuedHerdrReopen(
 	if err != nil {
 		return intent, err
 	}
-	workspace, err := matchHerdrWorkspaceByLabel(
-		workspaces,
-		intent.WorkspaceLabel,
-		intent.WorktreePath,
-		intent.Resource.RepoKey,
-		intent.Resource.RepoRoot,
-	)
+	workspace, err := findUniqueWorkspace(
+		workspaces, true, herdrWorkspaceLabelPredicate(
+			intent.WorkspaceLabel,
+			intent.WorktreePath,
+			intent.Resource.RepoKey,
+			intent.Resource.RepoRoot,
+		))
 	if err != nil {
 		return intent, markHerdrCleanupManual(journal, intent, err)
 	}
@@ -170,7 +170,7 @@ func currentHerdrCoordinator(
 	if err != nil {
 		return herdrrun.WorkspaceObservation{}, err
 	}
-	workspace, err := matchHerdrCoordinatorWorkspace(workspaces, resource)
+	workspace, err := findUniqueWorkspace(workspaces, false, herdrCoordinatorWorkspacePredicate(resource))
 	if err != nil {
 		return herdrrun.WorkspaceObservation{}, err
 	}

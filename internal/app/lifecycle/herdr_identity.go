@@ -54,6 +54,8 @@ func herdrResourceFromPane(pane state.Pane) state.HerdrResource {
 	}
 }
 
+// This projection duplicates panelaunch.stateResource until a follow-up can
+// move the shared Herdr observation mapping below both app packages.
 func herdrResourceFromObservation(observation herdrrun.WorkspaceObservation) state.HerdrResource {
 	return state.HerdrResource{
 		WorkspaceID: observation.WorkspaceID,
@@ -76,7 +78,7 @@ func observeHerdrCleanup(
 	if err != nil {
 		return herdrCleanupObservation{}, err
 	}
-	workspace, err := matchHerdrWorkspace(workspaces, resource)
+	workspace, err := findUniqueWorkspace(workspaces, true, herdrWorkspacePredicate(resource))
 	if err != nil {
 		return herdrCleanupObservation{}, err
 	}
@@ -87,52 +89,47 @@ func observeHerdrCleanup(
 	return herdrCleanupObservation{workspace: workspace, checkout: checkout}, nil
 }
 
-func matchHerdrWorkspace(
+func herdrWorkspacePredicate(resource state.HerdrResource) herdrWorkspacePredicateFunc {
+	return func(workspace herdrrun.WorkspaceObservation) (bool, bool) {
+		candidate := workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label
+		return candidate, herdrWorkspaceMatchesResource(workspace, resource)
+	}
+}
+
+func herdrWorkspaceLabelPredicate(label, path, repoKey, repoRoot string) herdrWorkspacePredicateFunc {
+	return func(workspace herdrrun.WorkspaceObservation) (bool, bool) {
+		exact := filepath.Clean(workspace.Path) == filepath.Clean(path) &&
+			filepath.Clean(workspace.RepoKey) == filepath.Clean(repoKey) &&
+			filepath.Clean(workspace.RepoRoot) == filepath.Clean(repoRoot)
+		return workspace.Label == label, exact
+	}
+}
+
+type herdrWorkspacePredicateFunc func(herdrrun.WorkspaceObservation) (candidate, exact bool)
+
+func findUniqueWorkspace(
 	workspaces []herdrrun.WorkspaceObservation,
-	resource state.HerdrResource,
+	allowAbsent bool,
+	predicate herdrWorkspacePredicateFunc,
 ) (*herdrrun.WorkspaceObservation, error) {
 	var candidates []herdrrun.WorkspaceObservation
 	for _, workspace := range workspaces {
-		if workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label {
+		candidate, _ := predicate(workspace)
+		if candidate {
 			candidates = append(candidates, workspace)
 		}
 	}
-	if len(candidates) == 0 {
+	if len(candidates) == 0 && allowAbsent {
 		return nil, nil
 	}
 	if len(candidates) != 1 {
-		return nil, fmt.Errorf("saved Herdr workspace identity has %d live matches", len(candidates))
+		return nil, fmt.Errorf("herdr workspace identity has %d live matches", len(candidates))
 	}
-	workspace := candidates[0]
-	if !herdrWorkspaceMatchesResource(workspace, resource) {
-		return nil, fmt.Errorf("saved Herdr workspace identity does not match the live workspace")
+	_, exact := predicate(candidates[0])
+	if !exact {
+		return nil, fmt.Errorf("herdr workspace identity does not match the live workspace")
 	}
-	return &workspace, nil
-}
-
-func matchHerdrWorkspaceByLabel(
-	workspaces []herdrrun.WorkspaceObservation,
-	label, path, repoKey, repoRoot string,
-) (*herdrrun.WorkspaceObservation, error) {
-	var matches []herdrrun.WorkspaceObservation
-	for _, workspace := range workspaces {
-		if workspace.Label == label {
-			matches = append(matches, workspace)
-		}
-	}
-	if len(matches) == 0 {
-		return nil, nil
-	}
-	if len(matches) != 1 {
-		return nil, fmt.Errorf("herdr workspace label %q has %d live matches", label, len(matches))
-	}
-	workspace := matches[0]
-	if filepath.Clean(workspace.Path) != filepath.Clean(path) ||
-		filepath.Clean(workspace.RepoKey) != filepath.Clean(repoKey) ||
-		filepath.Clean(workspace.RepoRoot) != filepath.Clean(repoRoot) {
-		return nil, fmt.Errorf("reopened Herdr workspace does not match saved Git provenance")
-	}
-	return &workspace, nil
+	return &candidates[0], nil
 }
 
 func herdrWorkspaceMatchesResource(
@@ -240,31 +237,19 @@ func observeHerdrCoordinator(
 	if err != nil {
 		return herdrrun.WorkspaceObservation{}, err
 	}
-	workspace, err := matchHerdrCoordinatorWorkspace(workspaces, resource)
+	workspace, err := findUniqueWorkspace(workspaces, false, herdrCoordinatorWorkspacePredicate(resource))
 	if err != nil {
 		return herdrrun.WorkspaceObservation{}, err
 	}
 	return *workspace, nil
 }
 
-func matchHerdrCoordinatorWorkspace(
-	workspaces []herdrrun.WorkspaceObservation,
-	resource state.HerdrResource,
-) (*herdrrun.WorkspaceObservation, error) {
-	var matches []herdrrun.WorkspaceObservation
-	for _, workspace := range workspaces {
-		if workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label {
-			matches = append(matches, workspace)
-		}
+func herdrCoordinatorWorkspacePredicate(resource state.HerdrResource) herdrWorkspacePredicateFunc {
+	return func(workspace herdrrun.WorkspaceObservation) (bool, bool) {
+		candidate := workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label
+		exact := workspace.WorkspaceID == resource.WorkspaceID && workspace.Label == resource.Label &&
+			filepath.Clean(workspace.CWD) == filepath.Clean(resource.CurrentPath) &&
+			workspace.Pane.Pane == resource.PaneID && workspace.TerminalID == resource.TerminalID
+		return candidate, exact
 	}
-	if len(matches) != 1 {
-		return nil, fmt.Errorf("saved Herdr coordinator identity has %d live matches", len(matches))
-	}
-	workspace := matches[0]
-	if workspace.WorkspaceID != resource.WorkspaceID || workspace.Label != resource.Label ||
-		filepath.Clean(workspace.CWD) != filepath.Clean(resource.CurrentPath) ||
-		workspace.Pane.Pane != resource.PaneID || workspace.TerminalID != resource.TerminalID {
-		return nil, fmt.Errorf("saved Herdr coordinator identity does not match the live workspace")
-	}
-	return &workspace, nil
 }
