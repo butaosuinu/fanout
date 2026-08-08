@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/stateemitter"
 	"github.com/butaosuinu/fanout/internal/app/statusreport"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
@@ -74,6 +75,9 @@ func attachChildRuntimeMetadata(children []statusreport.Child, store state.Store
 		}
 		children[i].Backend = backend.NormalizeName(pane.Backend)
 		children[i].PaneID = pane.PaneID
+		if children[i].Backend == backend.Herdr {
+			children[i].ReportedState = stateemitter.ReportedState(pane.ReportedState)
+		}
 	}
 }
 

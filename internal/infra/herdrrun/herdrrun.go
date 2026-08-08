@@ -955,7 +955,7 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 			Title:            optionalString(pane.Title),
 			FocusKnown:       true,
 			Focused:          *pane.Focused,
-			AgentState:       corebackend.MapHerdrAgentState(agentPresent, pane.AgentStatus),
+			AgentState:       corebackend.MapHerdrAgentState(agentPresent, pane.AgentStatus, ""),
 			NativeAgentState: pane.AgentStatus,
 			TerminalID:       pane.TerminalID,
 			AgentID:          agentID,

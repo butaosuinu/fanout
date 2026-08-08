@@ -280,8 +280,12 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			if alive {
 				pv.RuntimeTitle = current.Title
 				pv.TmuxTitle = current.Title
-				if backend.NormalizeName(p.Backend) != backend.Herdr || current.AgentPresent {
+				if backend.NormalizeName(p.Backend) != backend.Herdr {
 					pv.AgentState = normalizeAgentState(string(current.AgentState))
+				} else if current.AgentPresent {
+					pv.AgentState = normalizeAgentState(string(backend.MapHerdrAgentState(
+						true, current.NativeAgentState, p.ReportedState,
+					)))
 				}
 			} else if runtimeDegraded && backend.NormalizeName(p.Backend) == backend.Tmux {
 				// tmux 不通時は動的判定ができないので、起動時に state.json へ

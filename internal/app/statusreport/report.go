@@ -24,14 +24,15 @@ type Report struct {
 
 // Child is one fanned child issue with its PR evidence.
 type Child struct {
-	Num         int             `json:"num"`
-	State       string          `json:"state"`
-	Backend     backend.Name    `json:"backend,omitempty"`
-	PaneID      string          `json:"pane_id,omitempty"`
-	PRs         []ghissue.PRRef `json:"prs"`
-	HasMergedPR bool            `json:"has_merged_pr"`
-	Body        string          `json:"-"`
-	Blocked     bool            `json:"-"`
+	Num           int             `json:"num"`
+	State         string          `json:"state"`
+	Backend       backend.Name    `json:"backend,omitempty"`
+	PaneID        string          `json:"pane_id,omitempty"`
+	ReportedState string          `json:"reported_state,omitempty"`
+	PRs           []ghissue.PRRef `json:"prs"`
+	HasMergedPR   bool            `json:"has_merged_pr"`
+	Body          string          `json:"-"`
+	Blocked       bool            `json:"-"`
 }
 
 // Summary is the shared rollup of both the issue and the plan report.

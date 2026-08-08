@@ -56,22 +56,26 @@ func TestMapHerdrAgentState(t *testing.T) {
 		name         string
 		agentPresent bool
 		native       string
+		reported     string
 		want         AgentState
 	}{
+		{name: "reported running", agentPresent: true, native: "unknown", reported: "running", want: AgentRunning},
+		{name: "reported plan", agentPresent: true, native: "working", reported: "plan", want: AgentPlan},
 		{name: "working", agentPresent: true, native: "working", want: AgentWorking},
 		{name: "blocked", agentPresent: true, native: "blocked", want: AgentBlocked},
 		{name: "focused idle", agentPresent: true, native: "idle", want: AgentIdle},
 		{name: "unfocused public done", agentPresent: true, native: "done", want: AgentDone},
 		{name: "unknown is not running", agentPresent: true, native: "unknown"},
-		{name: "missing agent record", agentPresent: false, native: "working"},
+		{name: "missing agent record", agentPresent: false, native: "working", reported: "blocked"},
+		{name: "invalid reported falls back", agentPresent: true, native: "idle", reported: "forged", want: AgentIdle},
 		{name: "running is not a herdr public status", agentPresent: true, native: "running"},
 		{name: "plan is unsupported", agentPresent: true, native: "plan"},
 		{name: "invalid whitespace", agentPresent: true, native: " working "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := MapHerdrAgentState(tt.agentPresent, tt.native); got != tt.want {
-				t.Fatalf("MapHerdrAgentState(%t, %q) = %q, want %q", tt.agentPresent, tt.native, got, tt.want)
+			if got := MapHerdrAgentState(tt.agentPresent, tt.native, tt.reported); got != tt.want {
+				t.Fatalf("MapHerdrAgentState(%t, %q, %q) = %q, want %q", tt.agentPresent, tt.native, tt.reported, got, tt.want)
 			}
 		})
 	}
@@ -79,8 +83,8 @@ func TestMapHerdrAgentState(t *testing.T) {
 	// Herdr exposes an unfocused idle agent as done, then idle after focus.
 	// These are display states only; neither mapping invents running/plan.
 	sequence := []LivePane{
-		{AgentState: MapHerdrAgentState(true, "done"), Focused: false},
-		{AgentState: MapHerdrAgentState(true, "idle"), Focused: true},
+		{AgentState: MapHerdrAgentState(true, "done", ""), Focused: false},
+		{AgentState: MapHerdrAgentState(true, "idle", ""), Focused: true},
 	}
 	if sequence[0].AgentState != AgentDone || sequence[0].Focused ||
 		sequence[1].AgentState != AgentIdle || !sequence[1].Focused {

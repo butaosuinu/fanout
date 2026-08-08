@@ -60,6 +60,16 @@ type Pane struct {
 	HerdrAgentSession *backend.AgentSessionRef `json:"herdrAgentSession,omitempty"`
 	HerdrSession      string                   `json:"herdrSession,omitempty"`
 	HerdrSocketPath   string                   `json:"herdrSocketPath,omitempty"`
+	// ReportedState is cooperative provider telemetry. The launch binding fields
+	// fence updates to one Herdr generation; none of these fields authorizes
+	// lifecycle, cleanup, completion, or nudge operations.
+	ReportedState         string   `json:"reported_state,omitempty"`
+	StateRefinement       bool     `json:"state_refinement,omitempty"`
+	EmitterRowKey         string   `json:"emitterRowKey,omitempty"`
+	LaunchNonce           string   `json:"launchNonce,omitempty"`
+	EmitterNonce          string   `json:"emitterNonce,omitempty"`
+	HerdrLaunchExecutable string   `json:"herdrLaunchExecutable,omitempty"`
+	HerdrLaunchArgs       []string `json:"herdrLaunchArgs,omitempty"`
 	// ShellKey is the tmux pane user-option token that binds this state row to
 	// one live pane. Shell panes can share WorktreePath with the repo root or an
 	// agent worktree, so liveness uses this marker instead of path matching.

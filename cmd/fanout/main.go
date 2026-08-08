@@ -7,7 +7,9 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/run"
+	"github.com/butaosuinu/fanout/internal/app/stateemitter"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
@@ -37,6 +39,9 @@ func main() {
 	table := []dispatch{
 		{func([]string) bool { return herdrrun.IsPaneLauncherRequest() }, func() exitcode.Code {
 			return exitcode.Code(herdrrun.RunPaneLauncher(os.Stdin, os.Stdout, os.Stderr))
+		}},
+		{telemetry.IsRequest, func() exitcode.Code {
+			return exitcode.Code(stateemitter.Run(os.Args[2:], os.Getenv, herdrEmitterObserver{}, os.Stderr))
 		}},
 		{hooks.IsBackgroundRunnerRequest, func() exitcode.Code { return exitcode.Code(hooks.RunBackgroundRunner(os.Args[2:], os.Stderr)) }},
 		{herdrrun.IsSupervisorRequest, func() exitcode.Code { return exitcode.Code(herdrrun.RunSupervisor(os.Args[2:], os.Stderr)) }},

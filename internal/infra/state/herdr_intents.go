@@ -12,6 +12,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/parentref"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 	"github.com/butaosuinu/fanout/internal/infra/execx"
 )
@@ -91,17 +92,19 @@ type HerdrIntent struct {
 // HerdrLaunch is the non-secret launch capsule recorded after workspace
 // realization. The environment itself lives in a one-shot owner-only file.
 type HerdrLaunch struct {
-	Nonce               string   `json:"nonce"`
-	Agent               string   `json:"agent"`
-	AgentName           string   `json:"agentName"`
-	Executable          string   `json:"executable"`
-	Args                []string `json:"args"`
-	TeamDBPath          string   `json:"teamDbPath,omitempty"`
-	CodexTeamStatusPath string   `json:"codexTeamStatusPath,omitempty"`
-	EnvFilePath         string   `json:"envFilePath"`
-	EnvNameCount        int      `json:"envNameCount"`
-	LauncherReady       bool     `json:"launcherReady,omitempty"`
-	TokenIssued         bool     `json:"tokenIssued,omitempty"`
+	Nonce                string   `json:"nonce"`
+	EmitterNonce         string   `json:"emitterNonce,omitempty"`
+	PendingReportedState string   `json:"pendingReportedState,omitempty"`
+	Agent                string   `json:"agent"`
+	AgentName            string   `json:"agentName"`
+	Executable           string   `json:"executable"`
+	Args                 []string `json:"args"`
+	TeamDBPath           string   `json:"teamDbPath,omitempty"`
+	CodexTeamStatusPath  string   `json:"codexTeamStatusPath,omitempty"`
+	EnvFilePath          string   `json:"envFilePath"`
+	EnvNameCount         int      `json:"envNameCount"`
+	LauncherReady        bool     `json:"launcherReady,omitempty"`
+	TokenIssued          bool     `json:"tokenIssued,omitempty"`
 }
 
 // HerdrIntents is the repository-common intent journal. It holds intents
@@ -576,13 +579,43 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("launch fields are incomplete")
 	}
-	for _, arg := range launch.Args {
+	if err := validateHerdrLaunchArguments(launch.Args); err != nil {
+		return err
+	}
+	if err := validateHerdrEmitter(launch); err != nil {
+		return err
+	}
+	if launch.TokenIssued && !launch.LauncherReady {
+		return fmt.Errorf("launch token was issued before launcher readiness")
+	}
+	return nil
+}
+
+func validateHerdrLaunchArguments(args []string) error {
+	for _, arg := range args {
 		if strings.ContainsRune(arg, '\x00') {
 			return fmt.Errorf("launch argv contains NUL")
 		}
 	}
-	if launch.TokenIssued && !launch.LauncherReady {
-		return fmt.Errorf("launch token was issued before launcher readiness")
+	return nil
+}
+
+func validateHerdrEmitter(launch *HerdrLaunch) error {
+	if launch.EmitterNonce == "" {
+		if launch.PendingReportedState != "" {
+			return fmt.Errorf("pending telemetry requires an emitter nonce")
+		}
+		return nil
+	}
+	if launch.Agent != "claude" || !telemetry.ValidNonce(launch.EmitterNonce) {
+		return fmt.Errorf("emitter fields require a Claude launch and valid nonce")
+	}
+	if launch.PendingReportedState == "" {
+		return nil
+	}
+	state, ok := backend.ParseAgentState(launch.PendingReportedState)
+	if !ok || state == backend.AgentRunning {
+		return fmt.Errorf("pending telemetry has an invalid provider state")
 	}
 	return nil
 }

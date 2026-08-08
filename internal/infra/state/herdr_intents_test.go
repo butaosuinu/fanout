@@ -443,6 +443,45 @@ func TestHerdrControlRejectsResourceCurrentPathMismatch(t *testing.T) {
 	}
 }
 
+func TestHerdrControlValidatesEmitterLaunchFields(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	valid := func() HerdrIntent {
+		intent := testHerdrWorktreeIntent(repo, "425", 426, "telemetry")
+		intent.Status = HerdrIntentRealized
+		intent.Resource = HerdrResource{
+			WorkspaceID: "w2", Label: intent.WorkspaceLabel,
+			PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: intent.WorktreePath,
+			RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
+		}
+		intent.Launch = &HerdrLaunch{
+			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
+			PendingReportedState: "working", Agent: "claude", AgentName: "fanout-agent",
+			Executable: "/opt/bin/claude", Args: []string{"prompt"},
+			EnvFilePath: "/tmp/fanout-env.json", EnvNameCount: 1,
+		}
+		return intent
+	}
+	if err := validateHerdrIntent(valid()); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*HerdrLaunch)
+	}{
+		{name: "pending without nonce", mutate: func(launch *HerdrLaunch) { launch.EmitterNonce = "" }},
+		{name: "codex emitter", mutate: func(launch *HerdrLaunch) { launch.Agent = "codex" }},
+		{name: "synthetic pending", mutate: func(launch *HerdrLaunch) { launch.PendingReportedState = "running" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			intent := valid()
+			test.mutate(intent.Launch)
+			if err := validateHerdrIntent(intent); err == nil {
+				t.Fatal("validateHerdrIntent() accepted invalid emitter fields")
+			}
+		})
+	}
+}
+
 func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, repo)
 	if err != nil {

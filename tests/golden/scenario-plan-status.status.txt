@@ -27,6 +27,7 @@
       "branch": "fanout/custom-api-client",
       "backend": "herdr",
       "pane_id": "workspace-2:terminal-3",
+      "reported_state": "idle",
       "prs": [
         {
           "number": 502,

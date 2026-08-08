@@ -1,6 +1,6 @@
 fanout status #200: total=3 merged=1 pending=2 blocked=0 all_merged=false
-ISSUE  BACKEND  PANE                    STATE   PR    PR_STATE           CI    TYPE  FILES  DIFF                                 LINK
------  -------  ----------------------  ------  ----  -----------------  ----  ----  -----  -----------------------------------  ----
-#201   tmux     %9                      CLOSED  #601  merged             pass  feat  5      +120 ++++++++++++  -8  -             https://github.com/butaosuinu/fanout-fixtures/pull/601
-#202   herdr    workspace-1:terminal-2  OPEN    #602  changes-requested  fail  fix   2      +12  ++            -40 ----          https://github.com/butaosuinu/fanout-fixtures/pull/602
-#203   tmux     %11                     OPEN    -     -                  -     -     -      -                                    -
+ISSUE  BACKEND  PANE                    REPORTED_STATE  STATE   PR    PR_STATE           CI    TYPE  FILES  DIFF                                 LINK
+-----  -------  ----------------------  --------------  ------  ----  -----------------  ----  ----  -----  -----------------------------------  ----
+#201   tmux     %9                      -               CLOSED  #601  merged             pass  feat  5      +120 ++++++++++++  -8  -             https://github.com/butaosuinu/fanout-fixtures/pull/601
+#202   herdr    workspace-1:terminal-2  -               OPEN    #602  changes-requested  fail  fix   2      +12  ++            -40 ----          https://github.com/butaosuinu/fanout-fixtures/pull/602
+#203   tmux     %11                     -               OPEN    -     -                  -     -     -      -                                    -

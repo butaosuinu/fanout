@@ -20,6 +20,7 @@ func TestWorkloadEnvironmentRemovesControlPlaneAndForcesBackend(t *testing.T) {
 		"FANOUT_HERDR_CONTROL_PATH=/foreign", "TMUX=/tmp/tmux", "TMUX_PANE=%1",
 		"TMUX_TMPDIR=/tmp", "FANOUT_STATE_PATH=/foreign/state",
 		"FANOUT_BACKEND=tmux", "FANOUT_BIN=/foreign/fanout",
+		"FANOUT_EMITTER_NONCE=foreign", "FANOUT_EMITTER_STATE_PATH=/foreign/state",
 	}
 	got, err := WorkloadEnvironment(caller, "/owned/fanout")
 	if err != nil {

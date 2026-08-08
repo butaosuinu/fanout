@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -130,6 +131,25 @@ func TestBuildCommandForBackendKeepsTmuxHooks(t *testing.T) {
 	want := "claude --settings " + ShellQuote(claudeHookSettingsJSON) + " prompt"
 	if got != want {
 		t.Fatalf("BuildCommandForBackend(claude, tmux) = %q, want %q", got, want)
+	}
+}
+
+func TestBuildResolvedLaunchSpecWithBackendArgsKeepsInjectionBeforeModeAndPrompt(t *testing.T) {
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	spec, err := BuildResolvedLaunchSpecWithBackendArgs(
+		"claude", "prompt", backend.Herdr, ModePlan,
+		[]string{"--settings", `{"hooks":{}}`},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--settings", `{"hooks":{}}`, "--permission-mode", "plan", "prompt"}
+	if !slices.Equal(spec.Args, want) {
+		t.Fatalf("Args = %#v, want %#v", spec.Args, want)
 	}
 }
 

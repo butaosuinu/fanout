@@ -200,14 +200,15 @@ func TestWriteTableIncludesBackendAndPaneColumns(t *testing.T) {
 		FirstColHeader: "ISSUE",
 	}, []TableRow{{
 		Label: "#101", Backend: "herdr", PaneID: "workspace-1:terminal-2",
-		State: "OPEN", PR: "-", PRState: "-", CI: "-", Type: "-", Files: "-", Link: "-",
+		ReportedState: "working",
+		State:         "OPEN", PR: "-", PRState: "-", CI: "-", Type: "-", Files: "-", Link: "-",
 	}}, 0, len("+0"), len("-0"))
 
 	got := out.String()
-	if !strings.Contains(got, "ISSUE  BACKEND  PANE") {
+	if !strings.Contains(got, "ISSUE  BACKEND  PANE                    REPORTED_STATE") {
 		t.Fatalf("table header does not include backend metadata:\n%s", got)
 	}
-	if !strings.Contains(got, "#101   herdr    workspace-1:terminal-2") {
+	if !strings.Contains(got, "#101   herdr    workspace-1:terminal-2  working") {
 		t.Fatalf("table row does not include backend metadata:\n%s", got)
 	}
 }

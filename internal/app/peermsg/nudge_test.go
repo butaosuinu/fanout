@@ -45,6 +45,7 @@ func TestRunMsgNudge(t *testing.T) {
 	withKey := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "claude", ShellKey: "key-five", WorktreePath: "/wt/recipient"}}}
 	withHerdr := state.Store{SchemaVersion: 1, Panes: []state.Pane{{
 		Parent: "68", IssueNum: 71, Backend: backend.Herdr, PaneID: "w1:p1", HerdrWorkspaceID: "w1",
+		ReportedState: "working",
 	}}}
 	withOpencode := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "opencode", WorktreePath: "/wt/recipient"}}}
 	noPaneID := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 72, PaneID: ""}}}

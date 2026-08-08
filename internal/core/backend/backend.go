@@ -99,13 +99,15 @@ func ParseAgentState(raw string) (AgentState, bool) {
 	}
 }
 
-// MapHerdrAgentState projects herdr's public agent status into fanout's
-// six-value display vocabulary. A status is useful only while the snapshot
-// contains the corresponding agent record. In particular, herdr's unknown
-// status is not evidence that an agent process is running.
-func MapHerdrAgentState(agentPresent bool, native string) AgentState {
+// MapHerdrAgentState projects cooperative telemetry, then herdr's public
+// agent status, into fanout's six-value display vocabulary. Either value is
+// useful only while the snapshot contains the corresponding agent record.
+func MapHerdrAgentState(agentPresent bool, native, reported string) AgentState {
 	if !agentPresent {
 		return ""
+	}
+	if state, ok := ParseAgentState(reported); ok {
+		return state
 	}
 	state := AgentState(native)
 	switch state {

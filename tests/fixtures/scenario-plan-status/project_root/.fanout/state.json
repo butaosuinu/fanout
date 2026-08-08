@@ -36,6 +36,8 @@
       },
       "herdrSession": "fixture-session",
       "herdrSocketPath": "/tmp/herdr-fixture.sock",
+      "reported_state": "idle",
+      "state_refinement": true,
       "agent": "claude",
       "displayName": "launch-plan-extract-api-client-api-client",
       "worktreePath": "/tmp/fanout-fixture/api-client",

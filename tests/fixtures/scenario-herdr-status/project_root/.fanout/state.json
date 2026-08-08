@@ -20,6 +20,8 @@
       },
       "herdrSession": "fixture-session",
       "herdrSocketPath": "/tmp/herdr-fixture.sock",
+      "reported_state": "working",
+      "state_refinement": true,
       "agent": "claude",
       "displayName": "herdr-agent-start-528",
       "worktreePath": "/tmp/herdr-status-child",

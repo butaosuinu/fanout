@@ -21,13 +21,14 @@ type PlanReport struct {
 
 // PlanTask is one plan task with the PRs found on its branch.
 type PlanTask struct {
-	ID          string          `json:"id"`
-	Branch      string          `json:"branch"`
-	Backend     backend.Name    `json:"backend,omitempty"`
-	PaneID      string          `json:"pane_id,omitempty"`
-	PRs         []ghissue.PRRef `json:"prs"`
-	HasMergedPR bool            `json:"has_merged_pr"`
-	Blocked     bool            `json:"blocked"`
+	ID            string          `json:"id"`
+	Branch        string          `json:"branch"`
+	Backend       backend.Name    `json:"backend,omitempty"`
+	PaneID        string          `json:"pane_id,omitempty"`
+	ReportedState string          `json:"reported_state,omitempty"`
+	PRs           []ghissue.PRRef `json:"prs"`
+	HasMergedPR   bool            `json:"has_merged_pr"`
+	Blocked       bool            `json:"blocked"`
 }
 
 // BuildPlanReport queries the PRs on every task branch and assembles the
@@ -112,11 +113,12 @@ func WritePlanTable(report PlanReport, projectRoot string, lg *log.Logger) exitc
 	sources := make([]RowSource, 0, len(report.Tasks))
 	for _, task := range report.Tasks {
 		sources = append(sources, RowSource{
-			Label:   task.ID,
-			Backend: task.Backend,
-			PaneID:  task.PaneID,
-			State:   planStatusState(task),
-			PRs:     task.PRs,
+			Label:         task.ID,
+			Backend:       task.Backend,
+			PaneID:        task.PaneID,
+			ReportedState: task.ReportedState,
+			State:         planStatusState(task),
+			PRs:           task.PRs,
 		})
 	}
 	rows, maxLines, addWidth, delWidth, code := BuildTableRows(ghissue.Runner{Cwd: projectRoot}, projectRoot, sources, lg)

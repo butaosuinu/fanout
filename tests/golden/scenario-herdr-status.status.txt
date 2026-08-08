@@ -6,6 +6,7 @@
       "state": "OPEN",
       "backend": "herdr",
       "pane_id": "workspace-528:p1",
+      "reported_state": "working",
       "prs": [],
       "has_merged_pr": false
     }

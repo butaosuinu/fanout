@@ -298,11 +298,15 @@ func filterCallerEnvironment(caller []string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !blockedWorkloadEnvironmentName(name) {
+		if !blockedCallerEnvironmentName(name) {
 			kept = append(kept, entry)
 		}
 	}
 	return kept, nil
+}
+
+func blockedCallerEnvironmentName(name string) bool {
+	return blockedWorkloadEnvironmentName(name) || strings.HasPrefix(name, "FANOUT_EMITTER_")
 }
 
 func blockedWorkloadEnvironmentName(name string) bool {

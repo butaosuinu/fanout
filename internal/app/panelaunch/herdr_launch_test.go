@@ -249,6 +249,78 @@ func TestFinalizeHerdrLaunchFailureBecomesManualCleanupRequired(t *testing.T) {
 	}
 }
 
+func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+	worktreeReq := testHerdrWorktreeRequest(repo, "finalize-telemetry", 531)
+	result, err := realizeHerdrWorktree(context.Background(), worktreeReq, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	intent := result.Intent
+	intent.Launch = validTestHerdrLaunch()
+	intent.Launch.EmitterNonce = strings.Repeat("b", 32)
+	intent.Launch.PendingReportedState = string(backend.AgentIdle)
+	launchReq := Request{
+		ParentRef: worktreeReq.Parent, Number: worktreeReq.IssueNum,
+		Slug: worktreeReq.Slug, BranchName: worktreeReq.BranchName,
+		Prompt: "telemetry prompt", Agent: "claude",
+		Worktree: worktree.Plan{BaseBranch: worktreeReq.BaseBranch},
+	}
+	intent.Launch.Args = []string{"--settings", "{}", launchReq.Prompt}
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	live := backend.LivePane{
+		Ref: backend.PaneRef{
+			Backend: backend.Herdr, Workspace: intent.Resource.WorkspaceID, Pane: intent.Resource.PaneID,
+		},
+		TerminalID: intent.Resource.TerminalID, RepoKey: intent.Resource.RepoKey,
+		AgentID: intent.Launch.AgentName, AgentProvider: intent.Launch.Agent,
+		SessionID: intent.Session, SocketPath: intent.SocketPath,
+	}
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
+	stale := intent
+	stale.Launch = nil
+	if err := launcher.finalizeHerdrLaunch(launchReq, locked, stale, live); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane, found := store.Find(launchReq.ParentRef, launchReq.Number)
+	if !found {
+		t.Fatal("final pane row was not saved")
+	}
+	if pane.ReportedState != "idle" || !pane.StateRefinement ||
+		pane.EmitterRowKey != intent.ID || pane.LaunchNonce != intent.Launch.Nonce ||
+		pane.EmitterNonce != intent.Launch.EmitterNonce || pane.HerdrLaunchExecutable != intent.Launch.Executable ||
+		!slices.Equal(pane.HerdrLaunchArgs, intent.Launch.Args) {
+		t.Fatalf("final telemetry binding = %+v", pane)
+	}
+	persisted, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := persisted.FindIntent(intent.ID); found {
+		t.Fatal("finalized intent remains in provisional journal")
+	}
+}
+
 func validTestHerdrLaunch() *state.HerdrLaunch {
 	return &state.HerdrLaunch{
 		Nonce: strings.Repeat("a", 32), Agent: "claude",

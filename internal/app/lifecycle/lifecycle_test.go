@@ -446,6 +446,7 @@ func TestCloseHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 		Parent:           "423",
 		IssueNum:         425,
 		Backend:          backend.Herdr,
+		ReportedState:    "done",
 		PaneID:           "w2:p1",
 		HerdrWorkspaceID: "w2",
 		WorktreePath:     worktreePath,
@@ -494,11 +495,12 @@ func TestCleanupHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	pane := state.Pane{
-		Parent:       "423",
-		IssueNum:     425,
-		Backend:      backend.Herdr,
-		PaneID:       "w2:p1",
-		WorktreePath: worktreePath,
+		Parent:        "423",
+		IssueNum:      425,
+		Backend:       backend.Herdr,
+		ReportedState: "done",
+		PaneID:        "w2:p1",
+		WorktreePath:  worktreePath,
 	}
 	recordLifecyclePane(t, projectRoot, pane)
 
@@ -527,13 +529,14 @@ func TestCleanupPlanHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	pane := state.Pane{
-		Parent:       "plan:demo",
-		IssueNum:     -1,
-		TaskID:       "task-a",
-		BranchName:   "fanout/task-a",
-		Backend:      backend.Herdr,
-		PaneID:       "w2:p2",
-		WorktreePath: worktreePath,
+		Parent:        "plan:demo",
+		IssueNum:      -1,
+		TaskID:        "task-a",
+		BranchName:    "fanout/task-a",
+		Backend:       backend.Herdr,
+		ReportedState: "done",
+		PaneID:        "w2:p2",
+		WorktreePath:  worktreePath,
 	}
 	recordLifecyclePane(t, projectRoot, pane)
 
