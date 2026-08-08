@@ -78,8 +78,9 @@ type claudeHookSettings struct {
 }
 
 // ClaudeHookCommands describes the state commands shared by every
-// fanout-launched Claude backend. Done is optional; Background keeps hooks from
-// waiting for a best-effort state reporter.
+// fanout-launched Claude backend. Done is optional; Background keeps
+// non-terminal hooks from waiting for a best-effort state reporter. SessionEnd
+// stays synchronous so Done completes while the agent identity is observable.
 type ClaudeHookCommands struct {
 	Working    string
 	Blocked    string
@@ -96,7 +97,7 @@ func BuildClaudeHookSettingsJSON(commands ClaudeHookCommands) string {
 		PostToolUse:      claudeStateHook(commands.Working, commands.Background),
 		Notification:     claudeBlockedHook(commands.Blocked, commands.Background),
 		Stop:             claudeStateHook(commands.Idle, commands.Background),
-		SessionEnd:       claudeStateHook(commands.Done, commands.Background),
+		SessionEnd:       claudeStateHook(commands.Done, false),
 	}}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

@@ -40,7 +40,7 @@ func TestClaudeHookSettingsJSONPinsAgentStateHooks(t *testing.T) {
 	}
 }
 
-func TestBuildClaudeHookSettingsJSONAddsBackgroundSessionEnd(t *testing.T) {
+func TestBuildClaudeHookSettingsJSONKeepsSessionEndSynchronous(t *testing.T) {
 	settingsJSON := BuildClaudeHookSettingsJSON(ClaudeHookCommands{
 		Working: "emit working", Blocked: "emit blocked", Idle: "emit idle", Done: "emit done",
 		Background: true,
@@ -50,15 +50,16 @@ func TestBuildClaudeHookSettingsJSONAddsBackgroundSessionEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []struct {
-		name     string
-		matchers []claudeHookMatcher
-		command  string
+		name       string
+		matchers   []claudeHookMatcher
+		command    string
+		background bool
 	}{
-		{name: "UserPromptSubmit", matchers: settings.Hooks.UserPromptSubmit, command: "emit working"},
-		{name: "PreToolUse", matchers: settings.Hooks.PreToolUse, command: "emit working"},
-		{name: "PostToolUse", matchers: settings.Hooks.PostToolUse, command: "emit working"},
-		{name: "Notification", matchers: settings.Hooks.Notification, command: "emit blocked"},
-		{name: "Stop", matchers: settings.Hooks.Stop, command: "emit idle"},
+		{name: "UserPromptSubmit", matchers: settings.Hooks.UserPromptSubmit, command: "emit working", background: true},
+		{name: "PreToolUse", matchers: settings.Hooks.PreToolUse, command: "emit working", background: true},
+		{name: "PostToolUse", matchers: settings.Hooks.PostToolUse, command: "emit working", background: true},
+		{name: "Notification", matchers: settings.Hooks.Notification, command: "emit blocked", background: true},
+		{name: "Stop", matchers: settings.Hooks.Stop, command: "emit idle", background: true},
 		{name: "SessionEnd", matchers: settings.Hooks.SessionEnd, command: "emit done"},
 	}
 	for _, event := range want {
@@ -66,7 +67,8 @@ func TestBuildClaudeHookSettingsJSONAddsBackgroundSessionEnd(t *testing.T) {
 			t.Fatalf("%s hooks = %#v", event.name, event.matchers)
 		}
 		command := event.matchers[0].Hooks[0].Command
-		if !strings.Contains(command, event.command+" || true") || !strings.Contains(command, "} &") {
+		if !strings.Contains(command, event.command+" || true") ||
+			strings.Contains(command, "} &") != event.background {
 			t.Fatalf("%s command = %q", event.name, command)
 		}
 		if out, err := exec.Command("sh", "-n", "-c", command).CombinedOutput(); err != nil {
