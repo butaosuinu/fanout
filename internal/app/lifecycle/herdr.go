@@ -543,11 +543,38 @@ func recoverExpiredPlannedHerdrCleanup(
 	if herdrCleanupAbsent(observation) {
 		return realizeHerdrCleanup(journal, intent)
 	}
+	if intent.Coordinator != (state.HerdrResource{}) && intent.CleanupPhase != state.HerdrCleanupReopen {
+		return refreshExpiredReopenedHerdrCleanup(ctx, opts, journal, intent, observation)
+	}
 	journal.RemoveIntent(intent.ID)
 	if err := journal.Save(); err != nil {
 		return intent, err
 	}
 	return intent, fmt.Errorf("saved Herdr cleanup intent expired before mutation; retry to replan")
+}
+
+func refreshExpiredReopenedHerdrCleanup(
+	ctx context.Context,
+	opts Options,
+	journal *state.LockedHerdrIntents,
+	intent state.HerdrIntent,
+	observation herdrCleanupObservation,
+) (state.HerdrIntent, error) {
+	phase, err := classifyFreshHerdrCleanup(
+		ctx,
+		opts.ProjectRoot,
+		intent.FullBranchRef,
+		intent.Resource,
+		observation,
+	)
+	if err != nil {
+		return intent, err
+	}
+	intent.Status = state.HerdrIntentPlanned
+	intent.CleanupPhase = phase
+	intent.ExpiresUnixMS = time.Now().Add(herdrCleanupTimeout).UnixMilli()
+	intent.Failure = ""
+	return intent, saveHerdrCleanupIntent(journal, intent)
 }
 
 func finalizeHerdrCleanup(

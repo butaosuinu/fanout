@@ -570,6 +570,35 @@ func TestHerdrCloseAcceptsResponseLossOnlyAfterAbsence(t *testing.T) {
 	}
 }
 
+func TestHerdrCloseDoesNotChainWorkspaceCloseAfterAmbiguousRemove(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot:              fixture.projectRoot,
+		workspaces:               []herdrrun.WorkspaceObservation{fixture.workspace},
+		removeErr:                errors.New("response lost"),
+		keepWorkspaceAfterRemove: true,
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.removeCalls != 1 || runtime.closeCalls != 0 {
+		t.Fatalf("ambiguous cleanup calls = remove %d/close %d, want 1/0", runtime.removeCalls, runtime.closeCalls)
+	}
+	journal, err := state.LoadHerdrIntents(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, intentID, err := herdrCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found || intent.Status != state.HerdrIntentManualCleanupRequired {
+		t.Fatalf("ambiguous cleanup intent = %#v (found=%t), want manual cleanup", intent, found)
+	}
+}
+
 func TestHerdrCloseRemovesResidualLaunchIntentAndEnvironment(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	runtimeDir := filepath.Join(fixture.projectRoot, "herdr-runtime")
@@ -790,6 +819,29 @@ func TestExpiredPlannedHerdrCleanupFinalizesAlreadyAbsentResources(t *testing.T)
 	}
 	if runtime.openCalls != 0 || runtime.removeCalls != 0 || runtime.closeCalls != 0 {
 		t.Fatalf("expired absent cleanup issued mutations: open %d/remove %d/close %d", runtime.openCalls, runtime.removeCalls, runtime.closeCalls)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestExpiredReopenedHerdrCleanupPreservesReplacementIdentity(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	runtime := prepareHerdrCleanupPhase(t, fixture, state.HerdrCleanupReopen)
+	runtime.removeErr = herdrrun.MutationNotIssuedError{Cause: errors.New("remove dispatch unavailable")}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("first Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.openCalls != 1 || runtime.removeCalls != 1 {
+		t.Fatalf("first cleanup calls = open %d/remove %d, want 1/1", runtime.openCalls, runtime.removeCalls)
+	}
+	expireSavedHerdrCleanupIntent(t, fixture)
+	runtime.removeErr = nil
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.openCalls != 1 || runtime.removeCalls != 2 {
+		t.Fatalf("retry cleanup calls = open %d/remove %d, want 1/2", runtime.openCalls, runtime.removeCalls)
 	}
 	assertHerdrLifecycleRemoved(t, fixture)
 }
@@ -1031,6 +1083,36 @@ func recordExpiredHerdrCleanupIntent(
 	journal.UpsertIntent(intent)
 	if saveErr := journal.Save(); saveErr != nil {
 		t.Fatal(saveErr)
+	}
+}
+
+func expireSavedHerdrCleanupIntent(t *testing.T, fixture herdrLifecycleFixture) {
+	t.Helper()
+	_, intentID, err := herdrCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
+		}
+	}()
+	journal, err := locked.HerdrIntents(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found {
+		t.Fatal("cleanup intent is absent")
+	}
+	intent.ExpiresUnixMS = time.Now().Add(-time.Minute).UnixMilli()
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
 	}
 }
 

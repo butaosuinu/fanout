@@ -220,6 +220,10 @@ func recoverHerdrRemoveMutation(
 		return realizeHerdrCleanup(journal, intent)
 	}
 	if observation.workspace != nil && observation.checkout.PathAbsent && !observation.checkout.Registered {
+		if mutationErr != nil {
+			cause := errors.Join(mutationErr, fmt.Errorf("ambiguous Herdr worktree remove left a residual workspace"))
+			return intent, markHerdrCleanupManual(journal, intent, cause)
+		}
 		intent.Status = state.HerdrIntentPlanned
 		intent.CleanupPhase = state.HerdrCleanupWorkspaceClose
 		if err := saveHerdrCleanupIntent(journal, intent); err != nil {
