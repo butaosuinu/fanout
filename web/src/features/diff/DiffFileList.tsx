@@ -1,8 +1,23 @@
 import { Trans, useLingui } from "@lingui/react/macro";
-import { memo } from "react";
-import { diffTotals, fileBase, fileDir, groupDiffFilesByDir } from "./diff";
+import { memo, type ReactElement } from "react";
+import {
+  CHANGE_KIND_LABELS,
+  type DiffChangeKind,
+  diffTotals,
+  fileBase,
+  fileDir,
+  groupDiffFilesByDir,
+} from "./diff";
 import type { DiffFileEntry } from "../../transport/types";
-import { IconButton, IconFold, IconUnfold } from "../../ui/icons";
+import {
+  IconButton,
+  IconFileAdded,
+  IconFileDeleted,
+  IconFileModified,
+  IconFileRenamed,
+  IconFold,
+  IconUnfold,
+} from "../../ui/icons";
 
 /* path も omittedReason もサーバー(= worktree)由来の敵性入力。テキストノードと
  * して描くだけで、HTML としては解釈しない。 */
@@ -29,12 +44,33 @@ function renameOrigin(file: DiffFileEntry): string | null {
   return from || file.oldPath;
 }
 
+const KIND_ICONS: Record<DiffChangeKind, () => ReactElement> = {
+  added: IconFileAdded,
+  modified: IconFileModified,
+  deleted: IconFileDeleted,
+  renamed: IconFileRenamed,
+};
+
+/* 変更種別。アイコンは aria-hidden なので、意味は行の accessible name が持つ
+ * (下の fileRowLabel)。種別が引けないときは何も描かない — 一覧に出るのは
+ * patch を持つ file だけなので通常は起きないが、嘘のアイコンよりは無印がよい。 */
+function KindIcon({ kind }: { kind: DiffChangeKind | undefined }) {
+  if (!kind) return null;
+  const Icon = KIND_ICONS[kind];
+  return (
+    <span className={`diff-file-kind k-${kind}`}>
+      <Icon />
+    </span>
+  );
+}
+
 /* 移動した file は basename だけだと移動元が消える — group 見出しは移動先の
  * ディレクトリなので、行にも移動元を出さないと「どこから来たか」が失われる。 */
-function FileRowBody({ file }: { file: DiffFileEntry }) {
+function FileRowBody({ file, kind }: { file: DiffFileEntry; kind: DiffChangeKind | undefined }) {
   const from = renameOrigin(file);
   return (
     <>
+      <KindIcon kind={kind} />
       <span className="diff-file-name">{fileBase(file.path)}</span>
       {from ? <span className="diff-file-was">← {from}</span> : null}
       <Stat file={file} />
@@ -42,9 +78,12 @@ function FileRowBody({ file }: { file: DiffFileEntry }) {
   );
 }
 
-/* 行の accessible name。移動は両端が揃って初めて意味を持つ。 */
-function fileRowLabel(file: DiffFileEntry): string {
-  return file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
+/* 行の accessible name。移動は両端が揃って初めて意味を持つ。種別を前置するのは
+ * アイコンが読み上げられないため — 行は button に明示的な aria-label を持つので、
+ * 子要素の SVG にラベルを付けても accessible name には入らない。 */
+function fileRowLabel(file: DiffFileEntry, kind: string): string {
+  const path = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
+  return kind ? `${kind} ${path}` : path;
 }
 
 /* diff オーバーレイのサイドバー。サーバーの files[] をそのまま出すので、patch に
@@ -53,6 +92,7 @@ function fileRowLabel(file: DiffFileEntry): string {
 export const DiffFileList = memo(function DiffFileList({
   files,
   selectable,
+  kinds,
   onSelect,
   onExpandAll,
   onCollapseAll,
@@ -60,13 +100,15 @@ export const DiffFileList = memo(function DiffFileList({
   files: DiffFileEntry[];
   /* patch にブロックがあり、本文へ飛べる path */
   selectable: ReadonlySet<string>;
+  /* path → 変更種別。patch のパース結果由来(diff.ts の indexDiffKindsByPath) */
+  kinds: ReadonlyMap<string, DiffChangeKind>;
   onSelect: (path: string) => void;
   onExpandAll: () => void;
   onCollapseAll: () => void;
 }) {
   /* memo 境界の内側で locale を購読する。props はロケールに依存しないので、
    * これが無いと言語を切り替えても見出しとボタン名が古いまま残る。 */
-  const { t } = useLingui();
+  const { i18n, t } = useLingui();
   const totals = diffTotals(files);
   /* patch を持たない file は本文側の DiffOmittedNote が常時出す。ここは
    * 「飛べる file」だけにして、一覧の意味を移動先に絞る。 */
@@ -95,7 +137,8 @@ export const DiffFileList = memo(function DiffFileList({
           </h4>
           <ul className="diff-file-rows">
             {g.files.map((f) => {
-              const label = fileRowLabel(f);
+              const kind = kinds.get(f.path);
+              const label = fileRowLabel(f, kind ? i18n._(CHANGE_KIND_LABELS[kind]) : "");
               return (
                 <li key={f.path}>
                   {selectable.has(f.path) ? (
@@ -110,11 +153,11 @@ export const DiffFileList = memo(function DiffFileList({
                       aria-label={label}
                       onClick={() => onSelect(f.path)}
                     >
-                      <FileRowBody file={f} />
+                      <FileRowBody file={f} kind={kind} />
                     </button>
                   ) : (
                     <span className="diff-file-row is-static" title={label}>
-                      <FileRowBody file={f} />
+                      <FileRowBody file={f} kind={kind} />
                     </span>
                   )}
                 </li>

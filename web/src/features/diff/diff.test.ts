@@ -11,6 +11,7 @@ import {
   HIGHLIGHT_MAX_CHARS,
   HIGHLIGHT_MAX_LINES,
   indexDiffFilesByPath,
+  indexDiffKindsByPath,
   INLINE_DIFF_MAX_CHARS,
   parseDiffFiles,
   planDiffFiles,
@@ -281,6 +282,107 @@ describe("indexDiffFilesByPath", () => {
       { name: 'has"quote.ts' },
     ] as unknown as FileDiffMetadata[];
     expect([...indexDiffFilesByPath(files).keys()]).toEqual(["has\\qbackslash.ts", 'has"quote.ts']);
+  });
+});
+
+describe("indexDiffKindsByPath", () => {
+  /* 種別は patch の header からしか分からない。追加/削除を +N -M から推測すると、
+   * 空ファイルの追加(+0 -0)も全行書き換え(+N -N)も誤判定する。 */
+  it("header から新規追加・削除・変更を振り分ける", () => {
+    const patch = [
+      "diff --git a/src/new.ts b/src/new.ts",
+      "new file mode 100644",
+      "index 0000000..ce01362",
+      "--- /dev/null",
+      "+++ b/src/new.ts",
+      "@@ -0,0 +1 @@",
+      "+hello",
+      "diff --git a/src/gone.ts b/src/gone.ts",
+      "deleted file mode 100644",
+      "index ce01362..0000000",
+      "--- a/src/gone.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-bye",
+      "diff --git a/src/edit.ts b/src/edit.ts",
+      "index 1111111..2222222 100644",
+      "--- a/src/edit.ts",
+      "+++ b/src/edit.ts",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+    expect(indexDiffKindsByPath(parseDiffFiles(patch))).toEqual(
+      new Map([
+        ["src/new.ts", "added"],
+        ["src/gone.ts", "deleted"],
+        ["src/edit.ts", "modified"],
+      ]),
+    );
+  });
+
+  /* 内容が変わったかは行の +N -M が示すので、一覧では 2 種に割らない。 */
+  it("rename は内容変更の有無によらず移動に畳む", () => {
+    const rename = (from: string, to: string, similarity: string) =>
+      [
+        `diff --git a/${from} b/${to}`,
+        `similarity index ${similarity}`,
+        `rename from ${from}`,
+        `rename to ${to}`,
+        "",
+      ].join("\n");
+    const patch =
+      rename("src/pure.ts", "src/moved.ts", "100%") +
+      rename("src/edited.ts", "app/edited.ts", "87%") +
+      ["--- a/src/edited.ts", "+++ b/app/edited.ts", "@@ -1 +1 @@", "-old", "+new", ""].join("\n");
+    expect(indexDiffKindsByPath(parseDiffFiles(patch))).toEqual(
+      new Map([
+        ["src/moved.ts", "renamed"],
+        ["app/edited.ts", "renamed"],
+      ]),
+    );
+  });
+
+  /* file type change(regular file <-> symlink)はサーバーが base 側の削除と
+   * final 側の追加を連結して出す。先頭の block を採ると「削除された」と読める。 */
+  it("同じ path の削除 + 追加は置換として変更に畳む", () => {
+    const patch = [
+      "diff --git a/swap b/swap",
+      "deleted file mode 100644",
+      "index 1111111..0000000",
+      "--- a/swap",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-content",
+      "diff --git a/swap b/swap",
+      "new file mode 120000",
+      "index 0000000..3333333",
+      "--- /dev/null",
+      "+++ b/swap",
+      "@@ -0,0 +1 @@",
+      "+target",
+      "",
+    ].join("\n");
+    expect(indexDiffKindsByPath(parseDiffFiles(patch))).toEqual(new Map([["swap", "modified"]]));
+  });
+
+  /* key は indexDiffFilesByPath と同じ正規化を通さないと、非 ASCII の file だけ
+   * サイドバーでアイコンが落ちる(サーバーの files[].path は生のまま)。 */
+  it("非 ASCII の quoted path を生のパスで引ける", () => {
+    const quoted = '"a/docs/\\346\\227\\245\\346\\234\\254\\350\\252\\236.md"';
+    const patch = [
+      `diff --git ${quoted} ${quoted.replace("a/", "b/")}`,
+      "new file mode 100644",
+      "--- /dev/null",
+      `+++ ${quoted.replace("a/", "b/")}`,
+      "@@ -0,0 +1 @@",
+      "+new",
+      "",
+    ].join("\n");
+    expect(indexDiffKindsByPath(parseDiffFiles(patch))).toEqual(
+      new Map([["docs/日本語.md", "added"]]),
+    );
   });
 });
 

@@ -625,9 +625,78 @@ describe("diff オーバーレイ", () => {
     );
     expect(
       within(sidebar).getByRole("button", {
-        name: "web/src/components/App.tsx → web/src/app/App.tsx",
+        name: "移動 web/src/components/App.tsx → web/src/app/App.tsx",
       }),
     ).toBeInTheDocument();
+  });
+
+  /* 種別は統計からは分からない — 空ファイルの追加は +0 -0、全行書き換えは +N -N に
+   * なる。アイコンは aria-hidden なので、名乗るのは行の accessible name 側。 */
+  it("サイドバーの行に変更種別のアイコンと名前を出す", async () => {
+    const patch = [
+      "diff --git a/src/added.ts b/src/added.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/src/added.ts",
+      "@@ -0,0 +1 @@",
+      "+hello",
+      "diff --git a/src/edited.ts b/src/edited.ts",
+      "index 1111111..2222222 100644",
+      "--- a/src/edited.ts",
+      "+++ b/src/edited.ts",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "diff --git a/src/gone.ts b/src/gone.ts",
+      "deleted file mode 100644",
+      "--- a/src/gone.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-bye",
+      "diff --git a/lib/moved.ts b/src/moved.ts",
+      "similarity index 100%",
+      "rename from lib/moved.ts",
+      "rename to src/moved.ts",
+      "",
+    ].join("\n");
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({
+            patch,
+            files: [
+              makeDiffFile({ path: "src/added.ts", additions: 1, deletions: 0 }),
+              makeDiffFile({ path: "src/edited.ts" }),
+              makeDiffFile({ path: "src/gone.ts", additions: 0, deletions: 1 }),
+              makeDiffFile({
+                path: "src/moved.ts",
+                oldPath: "lib/moved.ts",
+                additions: 0,
+                deletions: 0,
+              }),
+            ],
+          }),
+        ),
+      ),
+    );
+
+    const overlay = await openOverlay(user);
+    const sidebar = await within(overlay).findByRole("region", { name: "変更ファイル" });
+    for (const name of [
+      "新規追加 src/added.ts",
+      "変更 src/edited.ts",
+      "削除 src/gone.ts",
+      "移動 lib/moved.ts → src/moved.ts",
+    ]) {
+      expect(within(sidebar).getByRole("button", { name })).toBeInTheDocument();
+    }
+    // 色は修飾クラスが決めるので、種別ごとに違うクラスが付くことまで見る
+    expect([...sidebar.querySelectorAll(".diff-file-kind")].map((el) => el.className)).toEqual([
+      "diff-file-kind k-added",
+      "diff-file-kind k-modified",
+      "diff-file-kind k-deleted",
+      "diff-file-kind k-renamed",
+    ]);
   });
 
   it("サイドバーのファイル名クリックで、折りたたまれた file を開く", async () => {
@@ -1278,8 +1347,12 @@ describe("diff オーバーレイ", () => {
 
     const overlay = await openOverlay(user);
     const sidebar = within(overlay).getByRole("region", { name: "変更ファイル" });
-    expect(within(sidebar).getByRole("button", { name: "src/index.ts" })).toBeInTheDocument();
-    expect(within(sidebar).getByRole("button", { name: "test/index.ts" })).toBeInTheDocument();
+    expect(
+      within(sidebar).getByRole("button", { name: "新規追加 src/index.ts" }),
+    ).toBeInTheDocument();
+    expect(
+      within(sidebar).getByRole("button", { name: "新規追加 test/index.ts" }),
+    ).toBeInTheDocument();
 
     await waitFor(() => {
       expect(

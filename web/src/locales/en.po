@@ -33,6 +33,10 @@ msgstr "No changes since the merge-base"
 msgid "diff の取得に失敗しました (HTTP {status}): {detail}"
 msgstr "Could not load the diff (HTTP {status}): {detail}"
 
+#: src/features/diff/diff.ts
+msgid "新規追加"
+msgstr "Added"
+
 #: src/features/diff/DiffOverlay.tsx
 msgid "全画面表示"
 msgstr "Full screen"
@@ -84,6 +88,10 @@ msgstr "Close settings"
 #: src/features/sessions/pane.ts
 msgid "pane が起動しないまま issue は close されました。"
 msgstr "The issue was closed before its pane ever started."
+
+#: src/features/diff/diff.ts
+msgid "削除"
+msgstr "Deleted"
 
 #: src/features/diff/DiffOverlay.tsx
 msgid "レイアウト: {current}(クリックで{next})"
@@ -270,6 +278,10 @@ msgid "ペイン詳細"
 msgstr "Pane details"
 
 #: src/features/diff/diff.ts
+msgid "変更"
+msgstr "Modified"
+
+#: src/features/diff/diff.ts
 msgid "サーバーが diff を安全に生成できませんでした: {detail}"
 msgstr "The server could not generate the diff safely: {detail}"
 
@@ -340,6 +352,10 @@ msgstr "Resize the details panel"
 #: src/features/diff/DiffOverlay.tsx
 msgid "{lines} 行"
 msgstr "{lines} lines"
+
+#: src/features/diff/diff.ts
+msgid "移動"
+msgstr "Renamed"
 
 #: src/features/sessions/Hud.tsx
 msgid "集計"

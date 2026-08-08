@@ -263,6 +263,48 @@ function decodeUtf8LikeGo(bytes: number[]): string {
   return out;
 }
 
+/* サイドバーが出す変更種別。ライブラリの ChangeTypes は rename を内容変更の
+ * 有無で 2 つに割るが、一覧では両方とも「移動」— 内容が変わったかは行の
+ * +N -M が既に示している。 */
+export type DiffChangeKind = "added" | "modified" | "deleted" | "renamed";
+
+export const CHANGE_KIND_LABELS: Record<DiffChangeKind, MessageDescriptor> = {
+  added: msg`新規追加`,
+  modified: msg`変更`,
+  deleted: msg`削除`,
+  renamed: msg`移動`,
+};
+
+function changeKindOf(file: FileDiffMetadata): DiffChangeKind {
+  switch (file.type) {
+    case "new":
+      return "added";
+    case "deleted":
+      return "deleted";
+    case "rename-pure":
+    case "rename-changed":
+      return "renamed";
+    default:
+      return "modified";
+  }
+}
+
+/* patch を持つ file の path → 変更種別。種別は patch の `new file mode` /
+ * `deleted file mode` / `rename from` をライブラリのパーサが解釈済みのものを使う
+ * (自前で header を読み直すと lib 更新で drift する)。
+ *
+ * 同 path に 2 entry あるのは file type change(regular file <-> symlink)で、
+ * サーバーが base 側の削除と final 側の追加を連結して出したもの。先頭を採ると
+ * 「削除された」と読めてしまうので、置換として modified に畳む。 */
+export function indexDiffKindsByPath(files: FileDiffMetadata[]): Map<string, DiffChangeKind> {
+  const byPath = new Map<string, DiffChangeKind>();
+  for (const f of files) {
+    const path = unquoteGitPath(f.name);
+    byPath.set(path, byPath.has(path) ? "modified" : changeKindOf(f));
+  }
+  return byPath;
+}
+
 /* patch を持つ file の path → パース済み patch の index。file type change は
  * 同 path で 2 entry になるため配列で持つ(先頭へ飛ばす)。key は生のパスへ
  * 正規化する — サイドバーは files[].path で引くため。 */

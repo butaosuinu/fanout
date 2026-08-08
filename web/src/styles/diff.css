@@ -155,10 +155,12 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
   color:var(--ink-40); overflow-wrap:anywhere;
 }
 .diff-file-rows{ list-style:none; }
+/* 左 padding が 5px なのは、見出し下のインデントを種別アイコンの列が引き継ぐため
+   (5px + アイコン 13px + gap 8px で、名前の左端はアイコン導入前の 16px 付近に残る) */
 .diff-file-row{
   width:100%;
   display:flex; align-items:baseline; gap:8px;
-  padding:4px 7px 4px 16px;
+  padding:4px 7px 4px 5px;
   border:none; border-radius:7px;
   background:transparent;
   font-family:var(--f-code); font-size:11.5px; line-height:1.6;
@@ -168,6 +170,15 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 .diff-file-row:hover{ background:color-mix(in srgb, var(--asagi) 12%, transparent); }
 .diff-file-row.is-static{ cursor:default; color:var(--ink-40); }
 .diff-file-row.is-static:hover{ background:transparent; }
+/* 変更種別。行は baseline 揃えなので、align-self が無いとアイコンが沈む。
+   色だけが種別ごとに変わり、形は 4 種とも円(ui/icons.tsx)。 */
+.diff-file-kind{ flex:none; align-self:center; display:inline-flex; }
+.diff-file-kind.k-added{ color:var(--ok); }
+/* 変更は最多数なので、増減・移動より一段落とす。ただし --ink-40 まで落とすと
+   light テーマで無効表示に見えるので、二次情報として読める --ink-60 で止める */
+.diff-file-kind.k-modified{ color:var(--ink-60); }
+.diff-file-kind.k-deleted{ color:var(--err); }
+.diff-file-kind.k-renamed{ color:var(--ai); }
 .diff-file-name{ flex:1; min-width:0; overflow-wrap:anywhere; }
 /* 移動元。行の主役は移動先なので、縮むのはこちら側 */
 .diff-file-was{ flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink-40); font-size:10.5px; }
