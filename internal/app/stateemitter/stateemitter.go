@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/herdrprocess"
+	"github.com/butaosuinu/fanout/internal/app/sessionbinding"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/errs"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
@@ -148,15 +149,31 @@ func updateFinalRow(
 	if err != nil {
 		return err
 	}
-	if err := verifyCurrentRuntime(ctx, target, observer); err != nil {
+	current, err := verifyCurrentRuntime(ctx, target, observer)
+	if err != nil {
 		if errors.Is(err, errTerminalChanged) {
 			return invalidateFinalRowTelemetry(locked, index)
 		}
 		return err
 	}
+	if err := bindLateAgentSession(locked.Panes, index, current); err != nil {
+		return err
+	}
 	locked.Panes[index].ReportedState = string(signal.State)
 	locked.Panes[index].StateRefinement = true
 	return locked.Save()
+}
+
+func bindLateAgentSession(panes []state.Pane, index int, current backend.LivePane) error {
+	if panes[index].HerdrAgentSession != nil || current.AgentSession == nil {
+		return nil
+	}
+	ref, ok := sessionbinding.UniqueHerdrSessionBinding(panes, index, []backend.LivePane{current})
+	if !ok {
+		return fmt.Errorf("late Herdr agent session does not match exactly one state row")
+	}
+	panes[index].HerdrAgentSession = ref
+	return nil
 }
 
 func invalidateFinalRowTelemetry(locked *state.LockedStore, index int) error {
@@ -197,7 +214,7 @@ func updatePendingIntent(
 	if err != nil {
 		return err
 	}
-	if err := verifyCurrentRuntime(ctx, target, observer); err != nil {
+	if _, err := verifyCurrentRuntime(ctx, target, observer); err != nil {
 		return err
 	}
 	intent.Launch.PendingReportedState = pendingState(
@@ -239,7 +256,8 @@ func finalRuntimeTarget(pane state.Pane, signal telemetry.Signal) (RuntimeTarget
 		WorkspaceID: pane.HerdrWorkspaceID, PaneID: pane.PaneID,
 		TerminalID: pane.HerdrTerminalID, Agent: pane.Agent,
 		AgentID: pane.HerdrAgentID, AgentSession: pane.HerdrAgentSession,
-		WorktreePath: pane.WorktreePath, Executable: pane.HerdrLaunchExecutable,
+		AcceptUnboundSession: pane.HerdrAgentSession == nil,
+		WorktreePath:         pane.WorktreePath, Executable: pane.HerdrLaunchExecutable,
 		Args: slices.Clone(pane.HerdrLaunchArgs),
 	}, nil
 }
@@ -279,33 +297,39 @@ func pendingRuntimeTarget(intent state.HerdrIntent, signal telemetry.Signal) (Ru
 	}, nil
 }
 
-func verifyCurrentRuntime(ctx context.Context, target RuntimeTarget, observer Observer) error {
+func verifyCurrentRuntime(
+	ctx context.Context,
+	target RuntimeTarget,
+	observer Observer,
+) (backend.LivePane, error) {
 	if observer == nil {
-		return fmt.Errorf("runtime observer is unavailable")
+		return backend.LivePane{}, fmt.Errorf("runtime observer is unavailable")
 	}
 	if err := validateRuntimeTarget(target); err != nil {
-		return err
+		return backend.LivePane{}, err
 	}
 	observation, err := observer.Observe(ctx, target)
 	if err != nil {
-		return err
+		return backend.LivePane{}, err
 	}
 	if currentTerminalChanged(target, observation.Panes) {
-		return errTerminalChanged
+		return backend.LivePane{}, errTerminalChanged
 	}
-	if !hasOneMatchingPane(target, observation.Panes) {
-		return fmt.Errorf("saved PaneRef does not match exactly one current runtime pane")
+	current, ok := uniqueMatchingPane(target, observation.Panes)
+	if !ok {
+		return backend.LivePane{}, fmt.Errorf("saved PaneRef does not match exactly one current runtime pane")
 	}
 	if observation.ProcessError != nil {
-		return observation.ProcessError
+		return backend.LivePane{}, observation.ProcessError
 	}
 	if observation.ProcessInfo.PaneID != target.PaneID {
-		return fmt.Errorf("process observation does not match saved PaneRef")
+		return backend.LivePane{}, fmt.Errorf("process observation does not match saved PaneRef")
 	}
-	return herdrprocess.VerifyAgent(observation.ProcessInfo, herdrprocess.Identity{
+	err = herdrprocess.VerifyAgent(observation.ProcessInfo, herdrprocess.Identity{
 		WorktreePath: target.WorktreePath,
 		Executable:   target.Executable, Args: target.Args,
 	})
+	return current, err
 }
 
 func currentTerminalChanged(target RuntimeTarget, panes []backend.LivePane) bool {
@@ -365,14 +389,16 @@ func invalidCanonicalPath(path string) bool {
 	return !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsRune(path, '\x00')
 }
 
-func hasOneMatchingPane(target RuntimeTarget, panes []backend.LivePane) bool {
-	matches := 0
+func uniqueMatchingPane(target RuntimeTarget, panes []backend.LivePane) (backend.LivePane, bool) {
+	var matched backend.LivePane
+	count := 0
 	for _, pane := range panes {
 		if livePaneMatches(target, pane) {
-			matches++
+			matched = pane
+			count++
 		}
 	}
-	return matches == 1
+	return matched, count == 1
 }
 
 func livePaneMatches(target RuntimeTarget, pane backend.LivePane) bool {

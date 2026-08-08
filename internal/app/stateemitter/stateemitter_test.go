@@ -76,6 +76,21 @@ func TestEmitFinalRowFailsClosedOnBindingMismatch(t *testing.T) {
 		{name: "process observation failure", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
 			observer.observation.ProcessError = errors.New("process replaced")
 		}},
+		{name: "foreign late session", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
+			observer.observation.Panes[0].AgentSession = &backend.AgentSessionRef{
+				Source: "foreign:claude", Agent: "claude", Kind: "id", Value: "session-a",
+			}
+		}},
+		{name: "invalid late session", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
+			observer.observation.Panes[0].AgentSession = &backend.AgentSessionRef{
+				Source: "herdr:claude", Agent: "claude", Kind: "id",
+			}
+		}},
+		{name: "ambiguous late session observations", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
+			ref := backend.AgentSessionRef{Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-a"}
+			observer.observation.Panes[0].AgentSession = &ref
+			observer.observation.Panes = append(observer.observation.Panes, observer.observation.Panes[0])
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repo := newEmitterRepo(t)
@@ -95,6 +110,57 @@ func TestEmitFinalRowFailsClosedOnBindingMismatch(t *testing.T) {
 				t.Fatal("failed signal changed reported state")
 			}
 		})
+	}
+}
+
+func TestEmitFinalRowBindsOnlyFirstLateSession(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	first := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-first",
+	}
+	observer.observation.Panes[0].AgentSession = &first
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.HerdrAgentSession == nil || *got.HerdrAgentSession != first || got.ReportedState != "working" {
+		t.Fatalf("late-bound telemetry row = %+v", got)
+	}
+
+	second := first
+	second.Value = "session-second"
+	observer.observation.Panes[0].AgentSession = &second
+	signal.State = backend.AgentIdle
+	if err := Emit(context.Background(), signal, observer); err == nil {
+		t.Fatal("Emit() accepted a replacement late session")
+	}
+	got = loadEmitterPane(t, repo)
+	if got.HerdrAgentSession == nil || *got.HerdrAgentSession != first || got.ReportedState != "working" {
+		t.Fatalf("replacement session changed telemetry row = %+v", got)
+	}
+}
+
+func TestEmitFinalRowRejectsLateSessionSharedByMultipleRows(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	ref := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-first",
+	}
+	observer.observation.Panes[0].AgentSession = &ref
+	duplicate := pane
+	duplicate.EmitterRowKey = "issue:3:524:530"
+	duplicate.IssueNum = 530
+	saveEmitterPanes(t, repo, pane, duplicate)
+
+	if err := Emit(context.Background(), signal, observer); err == nil {
+		t.Fatal("Emit() accepted a late session shared by multiple rows")
+	}
+	got := loadEmitterPane(t, repo)
+	if got.HerdrAgentSession != nil || got.ReportedState != "running" {
+		t.Fatalf("ambiguous late session changed telemetry row = %+v", got)
 	}
 }
 
@@ -333,6 +399,7 @@ func exactObserver(pane state.Pane) *fakeObserver {
 		Ref:         backend.PaneRef{Backend: backend.Herdr, Workspace: pane.HerdrWorkspaceID, Pane: pane.PaneID},
 		CurrentPath: pane.WorktreePath, WorktreePath: pane.WorktreePath,
 		TerminalID: pane.HerdrTerminalID, RepoKey: pane.HerdrRepoKey,
+		ProjectRoot:  filepath.Dir(pane.HerdrRepoKey),
 		AgentPresent: true, AgentProvider: pane.Agent, AgentID: pane.HerdrAgentID,
 		SessionID: pane.HerdrSession, SocketPath: pane.HerdrSocketPath,
 	}
