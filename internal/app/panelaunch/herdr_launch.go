@@ -55,9 +55,9 @@ func (l *Launcher) launchHerdr(req Request) (Result, bool) {
 	if err != nil {
 		return l.failHerdr(req, "start agent", l.rollbackFailedHerdrLaunch(operation.locked, intent, err))
 	}
-	codexStatus, err := waitForHerdrCodexTeam(req, intent)
+	codexStatus, err := awaitHerdrCodexTeam(req, operation.locked, l.Info.ProjectRoot, intent)
 	if err != nil {
-		return l.failHerdr(req, "start Codex team TUI", l.rollbackFailedHerdrLaunch(operation.locked, intent, err))
+		return l.failHerdr(req, "start Codex team TUI", err)
 	}
 	if err := l.finalizeHerdrLaunch(req, operation.locked, intent, live, codexStatus); err != nil {
 		return l.failHerdr(req, "finalize launch", err)
@@ -436,6 +436,29 @@ func waitForHerdrCodexTeam(req Request, intent state.HerdrIntent) (codexapp.Stat
 	// cannot invalidate the ready payload or authorize a later launch.
 	_ = os.Remove(req.CodexTeamStatusPath)
 	return status, nil
+}
+
+func awaitHerdrCodexTeam(
+	req Request,
+	locked *state.LockedStore,
+	projectRoot string,
+	intent state.HerdrIntent,
+) (codexapp.Status, error) {
+	status, err := waitForHerdrCodexTeam(req, intent)
+	if err == nil || !req.CodexTeamMode {
+		return status, err
+	}
+	journal, journalErr := locked.HerdrIntents(projectRoot)
+	if journalErr != nil {
+		return status, errors.Join(err, journalErr)
+	}
+	latest, found := journal.FindIntent(intent.ID)
+	if !found {
+		return status, errors.Join(err, fmt.Errorf("Codex team launch intent %s disappeared", intent.ID))
+	}
+	return status, errors.Join(err, markHerdrIntentManual(
+		journal, latest, fmt.Errorf("Codex team TUI readiness failed: %w", err),
+	))
 }
 
 func persistNewHerdrLaunch(

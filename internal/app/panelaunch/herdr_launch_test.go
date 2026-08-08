@@ -308,6 +308,92 @@ func TestWaitForHerdrCodexTeamRejectsExpiredLaunch(t *testing.T) {
 	}
 }
 
+func TestAwaitHerdrCodexTeamFailureRequiresManualCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		writeStatus func(*testing.T, string)
+		remaining   time.Duration
+		wantFailure string
+	}{
+		{
+			name: "failed status", remaining: time.Second, wantFailure: "watcher boom",
+			writeStatus: func(t *testing.T, path string) {
+				t.Helper()
+				if err := codexapp.WriteFailedStatus(path, errors.New("watcher boom")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{name: "status timeout", remaining: time.Millisecond, wantFailure: "timed out"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newHerdrRealizeRepo(t)
+			runtime := &fakeHerdrRealizeRuntime{}
+			installSuccessfulHerdrMutations(t, repo, runtime)
+			hooks := deterministicHerdrRealizeHooks()
+			realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+			req := testHerdrWorktreeRequest(repo, "team-failure", 568)
+			result, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+			if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+				t.Fatal(err)
+			}
+			locked, err := state.LockProjectForLaunch(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = locked.Unlock() })
+			intent := result.Intent
+			intent.Launch = validTestHerdrLaunch()
+			intent.Launch.Agent = "codex"
+			intent.ExpiresUnixMS = time.Now().Add(tc.remaining).UnixMilli()
+			journal, err := locked.HerdrIntents(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			journal.UpsertIntent(intent)
+			if err := journal.Save(); err != nil {
+				t.Fatal(err)
+			}
+			statusPath := filepath.Join(t.TempDir(), "status.json")
+			if tc.writeStatus != nil {
+				tc.writeStatus(t, statusPath)
+			}
+
+			_, err = awaitHerdrCodexTeam(
+				Request{CodexTeamMode: true, CodexTeamStatusPath: statusPath}, locked, repo, intent,
+			)
+			if !errors.Is(err, ErrHerdrManualCleanupRequired) {
+				t.Fatalf("Codex team readiness error = %v, want manual cleanup", err)
+			}
+			journal, err = locked.HerdrIntents(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			saved, found := journal.FindIntent(intent.ID)
+			if !found || saved.Status != state.HerdrIntentManualCleanupRequired ||
+				saved.Launch == nil || !saved.Launch.TokenIssued ||
+				!strings.Contains(saved.Failure, tc.wantFailure) {
+				t.Fatalf("saved failed team intent = (%+v, %t)", saved, found)
+			}
+			if store, loadErr := state.LoadProject(repo); loadErr != nil {
+				t.Fatal(loadErr)
+			} else if _, found := store.Find(req.Parent, req.IssueNum); found {
+				t.Fatal("failed team launch wrote a final state row")
+			}
+			mutationCount := len(runtime.mutations)
+			if err := locked.Unlock(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks); !errors.Is(err, ErrHerdrManualCleanupRequired) {
+				t.Fatalf("retry error = %v, want saved manual cleanup", err)
+			}
+			if len(runtime.mutations) != mutationCount {
+				t.Fatalf("retry issued %d new mutation(s)", len(runtime.mutations)-mutationCount)
+			}
+		})
+	}
+}
+
 func TestHerdrCoordinatorRuntimeParentProjectsWatcherIssue(t *testing.T) {
 	intent := state.HerdrIntent{RuntimeParent: WatchParentRef, IssueNum: 528}
 	if got := herdrCoordinatorRuntimeParent(intent); got != "528" {
