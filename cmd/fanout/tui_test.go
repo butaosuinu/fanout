@@ -176,6 +176,7 @@ func TestCmdTUIHerdrContextSkipsTmuxComposition(t *testing.T) {
 	t.Setenv("TMUX", "nested-tmux")
 	t.Setenv("TMUX_PANE", "%nested")
 	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("FANOUT_WATCHER", "1")
 	t.Setenv("FANOUT_NOTIFICATIONS", "tmux")
 	tmuxLogPath := installTUIDashboardTmuxShim(t)
 	herdrLogPath := installTUIHerdrShim(t)

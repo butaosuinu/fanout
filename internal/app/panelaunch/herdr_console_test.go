@@ -97,6 +97,16 @@ func TestHerdrShellStatePaneUsesAdmittedCanonicalPath(t *testing.T) {
 	}
 }
 
+func TestValidateHerdrConsoleIntentRootRejectsLinkedWorktreeRecovery(t *testing.T) {
+	intent := state.HerdrIntent{WorktreePath: "/repo/linked-a"}
+	if err := validateHerdrConsoleIntentRoot(intent, "/repo/linked-b"); err == nil {
+		t.Fatal("console recovery accepted an intent owned by another linked worktree")
+	}
+	if err := validateHerdrConsoleIntentRoot(intent, intent.WorktreePath); err != nil {
+		t.Fatalf("console recovery rejected its owning worktree: %v", err)
+	}
+}
+
 func TestStaleHerdrConsoleTargetAdmitsOwnedRouteWithNewProcessIdentity(t *testing.T) {
 	saved := herdrConsoleTestPane("/repo", "workspace-root", "pane-old")
 	saved.SourceProjectRoot = "/repo"

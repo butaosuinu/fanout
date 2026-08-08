@@ -157,7 +157,8 @@ func runTUIConsole(
 	var watchInterval time.Duration
 	var watchLabel string
 	var watchErr error
-	watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig, tmuxHost)
+	interactiveLaunch := tmuxHost || owned != nil
+	watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig, tmuxHost, interactiveLaunch)
 	if watchErr != nil {
 		lg.Err("watcher: %v", watchErr)
 		return exitcode.Env
@@ -192,7 +193,7 @@ func runTUIConsole(
 			commandName,
 			hookConfig,
 			selection,
-			tmuxHost || owned != nil,
+			interactiveLaunch,
 			lg,
 		),
 		ListLive: listLive,
@@ -359,7 +360,7 @@ func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConf
 		var watchInterval time.Duration
 		var watchLabel string
 		var watchErr error
-		watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig, selection.Name == backend.Tmux)
+		watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig, selection.Name == backend.Tmux, interactiveLaunch)
 		if watchErr != nil {
 			return fanouttui.SettingsRuntime{}, fmt.Errorf("watcher: %w", watchErr)
 		}

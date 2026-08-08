@@ -89,6 +89,9 @@ func ensureHerdrConsoleLocked(
 	if err != nil {
 		return HerdrConsoleResult{}, err
 	}
+	if validationErr := validateHerdrConsoleIntentRoot(intent, root); validationErr != nil {
+		return HerdrConsoleResult{}, validationErr
+	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: root}, Herdr: owned}
 	live, err := launcher.startHerdrAgent(ctx, locked, route, intent, validateHerdrShellLaunch, nil, exactHerdrShellPane, nil)
 	if err != nil {
@@ -102,6 +105,13 @@ func ensureHerdrConsoleLocked(
 		return HerdrConsoleResult{}, err
 	}
 	return herdrConsoleResult(owned, pane)
+}
+
+func validateHerdrConsoleIntentRoot(intent state.HerdrIntent, projectRoot string) error {
+	if filepath.Clean(intent.WorktreePath) != filepath.Clean(projectRoot) {
+		return fmt.Errorf("saved Herdr console intent belongs to another worktree")
+	}
+	return nil
 }
 
 func reuseHerdrConsole(

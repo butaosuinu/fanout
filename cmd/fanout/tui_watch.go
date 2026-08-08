@@ -27,8 +27,8 @@ import (
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
-func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, includeHostTmux bool) (fanouttui.WatcherRunner, time.Duration, string, error) {
-	if !resolvedSettings.Watcher {
+func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, includeHostTmux, interactiveLaunch bool) (fanouttui.WatcherRunner, time.Duration, string, error) {
+	if !resolvedSettings.Watcher || !interactiveLaunch {
 		return nil, 0, "", nil
 	}
 	preflightCfg := newWatcherPreflightConfig(resolvedSettings)
