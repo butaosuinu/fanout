@@ -379,6 +379,15 @@ describe("indexDiffKindsByPath", () => {
     expect(indexDiffKindsByPath(parseDiffFiles(patch))).toEqual(new Map());
   });
 
+  /* core.quotePath=false の repository では git が raw byte を出すので、SPA へ
+   * 届く前にサーバー(Go の encoding/json)が U+FFFD へ潰す。patch の name は
+   * 既に同一文字列で、正規化前の一致だけを見ていると別 file を置換と誤認する。 */
+  it("U+FFFD を含む同名 2 entry を file type change と見なさない", () => {
+    const block = (header: string) => ["diff --git a/docs/�.md b/docs/�.md", header, ""].join("\n");
+    const patch = block("new file mode 100644") + block("deleted file mode 100644");
+    expect(indexDiffKindsByPath(parseDiffFiles(patch))).toEqual(new Map());
+  });
+
   /* key は indexDiffFilesByPath と同じ正規化を通さないと、非 ASCII の file だけ
    * サイドバーでアイコンが落ちる(サーバーの files[].path は生のまま)。 */
   it("非 ASCII の quoted path を生のパスで引ける", () => {

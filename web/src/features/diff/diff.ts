@@ -308,21 +308,31 @@ function groupByNormalizedPath(files: FileDiffMetadata[]): Map<string, FileDiffM
   return groups;
 }
 
+/* 2 つの entry が同じ file を指すと言い切れるか。
+ *
+ * 正規化前の name の一致だけでは足りない。不正 UTF-8 の byte は 2 段階で U+FFFD
+ * へ潰れる — `core.quotePath` が既定(on)なら patch の 8 進エスケープを
+ * unquoteGitPath が、off なら raw byte を Go の encoding/json が潰す。どちらの
+ * 経路でも `docs/\200.md` と `docs/\201.md` は同じ文字列になる。
+ * 潰れた跡(U+FFFD)があるなら identity は失われているので同一と見なさない。 */
+function isSameFile(a: FileDiffMetadata, b: FileDiffMetadata): boolean {
+  return a.name === b.name && !a.name.includes("�");
+}
+
 /* 同じ key に集まった entry から行の種別を 1 つ決める。決められないなら null。
  *
- * 2 entry で正規化前の name も一致するなら file type change。置換なので
- * modified に畳む — 先頭(= deleted)を採ると「削除された」と読めてしまう。
+ * 2 entry が同じ file なら file type change。置換なので modified に畳む —
+ * 先頭(= deleted)を採ると「削除された」と読めてしまう。
  *
- * name が違うなら key の衝突。unquoteGitPath は不正 UTF-8 の 1 byte を U+FFFD
- * 1 個へ潰すので、`docs/\200.md` と `docs/\201.md` が同じ key になる。衝突も
- * 「削除 + 追加」の形をしていて種別だけでは置換と区別できず、どちらを採っても
- * もう一方の行に嘘のアイコンが出る。曖昧なので種別なしにする(サイドバーは
- * アイコン列を空欄にし、行の名前にも種別を足さない)。 */
+ * 同じ file と言い切れないなら key の衝突で、これも「削除 + 追加」の形をして
+ * いるため種別だけでは置換と区別できない。どちらを採ってももう一方の行に嘘の
+ * アイコンが出るので、曖昧なら種別なしにする(サイドバーはアイコン列を空欄に
+ * し、行の名前にも種別を足さない)。 */
 function groupChangeKind(entries: FileDiffMetadata[]): DiffChangeKind | null {
   const [first, second] = entries;
   if (!first) return null;
   if (!second) return changeKindOf(first);
-  if (entries.length > 2 || first.name !== second.name) return null;
+  if (entries.length > 2 || !isSameFile(first, second)) return null;
   return isReplacement(changeKindOf(first), changeKindOf(second)) ? "modified" : null;
 }
 
