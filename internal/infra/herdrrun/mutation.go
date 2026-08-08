@@ -519,22 +519,35 @@ func validateMutationResponse(spec mutationSpec, workspace workspaceJSON) error 
 	return nil
 }
 
+// observeOwnedSnapshot returns one validated session snapshot. Callers that
+// need every workspace projected use observeOwnedWorkspaces; callers that only
+// look at one resource walk the snapshot themselves.
+func (b *Backend) observeOwnedSnapshot(
+	ctx context.Context,
+	probed probeResult,
+) (snapshotJSON, error) {
+	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "api", "snapshot")
+	if err != nil {
+		return snapshotJSON{}, methodUnavailable("session.snapshot")
+	}
+	var envelope snapshotEnvelope
+	if err := decodeOne(out, &envelope); err != nil {
+		return snapshotJSON{}, methodUnavailable("session.snapshot")
+	}
+	if _, err := projectSnapshot(envelope, probed); err != nil {
+		return snapshotJSON{}, methodUnavailable("session.snapshot")
+	}
+	return envelope.Result.Snapshot, nil
+}
+
 func (b *Backend) observeOwnedWorkspaces(
 	ctx context.Context,
 	probed probeResult,
 ) ([]WorkspaceObservation, error) {
-	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "api", "snapshot")
+	snapshot, err := b.observeOwnedSnapshot(ctx, probed)
 	if err != nil {
-		return nil, methodUnavailable("session.snapshot")
+		return nil, err
 	}
-	var envelope snapshotEnvelope
-	if err := decodeOne(out, &envelope); err != nil {
-		return nil, methodUnavailable("session.snapshot")
-	}
-	if _, err := projectSnapshot(envelope, probed); err != nil {
-		return nil, methodUnavailable("session.snapshot")
-	}
-	snapshot := envelope.Result.Snapshot
 	panes := make(map[string][]paneJSON, len(*snapshot.Workspaces))
 	for _, pane := range *snapshot.Panes {
 		panes[pane.WorkspaceID] = append(panes[pane.WorkspaceID], pane)

@@ -77,6 +77,32 @@ A parent that already has recorded panes keeps its recorded backend. A conflicti
 
 Two consequences worth spelling out. A herdr pane whose `terminal_id` changed — after a cold server restart, for example — shows as `stale` rather than being re-bound. And because herdr keeps no exit status and drops the pane record on normal exit, a finished agent disappears from the herdr session instead of leaving a `✓ done` pane behind; the recorded fanout row stays and shows `stale`.
 
+## Sidebar tokens
+
+Every verified launch reports five display-only tokens under the source `fanout`, so a sidebar row can name the fan-out child it belongs to. The tokens are presentation data: fanout never reads them back, and they carry no backend state, liveness, or completion.
+
+| Token | Resource | Value |
+|---|---|---|
+| `fanout_issue` | Workspace | `#<issue>` for issue and Project children, the task ID for a `fanout plan` task |
+| `fanout_slug` | Workspace | The child slug, which is also its worktree directory name |
+| `fanout_parent` | Pane | `#<parent>`, `plan:<slug>`, or the Projects path. A watcher launch names the issue it picked up |
+| `fanout_pr` | Pane | Reserved for the pull request; cleared on every report today |
+| `fanout_ci` | Pane | Reserved for CI; cleared on every report today |
+
+One report writes fanout's whole token set for a resource and clears whatever it has no value for, so a reused workspace or pane never shows a stale value. fanout reports once, right after the launch verifies its live identity, and sends no `seq` and no `ttl_ms`. A cold herdr restart drops every token and changes `terminal_id`, which turns the fanout row `stale`; fanout does not re-send.
+
+Rows and styling stay yours — fanout never writes sidebar config. Reference a token as `$name`:
+
+```toml
+[ui.sidebar.spaces]
+rows = [["state_icon", "workspace"], ["$fanout_issue", "$fanout_slug"], ["branch", "git_status"]]
+
+[ui.sidebar.agents]
+rows = [["state_icon", "workspace", "tab"], ["$fanout_parent", "$fanout_pr", "$fanout_ci"], ["agent"]]
+```
+
+A fanout-owned session pins its own `config.toml`, so this example applies to a herdr session you configure yourself. Inside a fanout-owned session the tokens are readable through `herdr api snapshot`, and no sidebar row references them yet.
+
 ## herdr integrations and plugins
 
 `herdr integration install claude` / `codex` writes hooks into your agent configuration that report the agent's session identity to herdr, which is what makes herdr's session tracking and restore work. fanout never runs it for you — your agent configuration stays yours. It is an optional step; consider it if you rely on restore.
