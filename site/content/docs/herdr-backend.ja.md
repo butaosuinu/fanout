@@ -99,7 +99,7 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 
 ## sidebar token
 
-検証を通った launch ごとに、source `fanout` で表示専用の token を 5 つ報告します。sidebar の行にどのファンアウト子かを出せます。
+検証を通った launch ごとに、表示専用の token を 5 つ、source `fanout` で報告します。sidebar の行にどの子の作業かを出せます。
 token は表示専用データです。fanout は読み戻さず、backend state、生死、完了判定にも使いません。
 
 | token | resource | 値 |
