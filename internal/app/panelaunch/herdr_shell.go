@@ -20,7 +20,7 @@ func (l *Launcher) shellHerdr(
 	slug, title string,
 ) error {
 	if l.Herdr == nil {
-		return fmt.Errorf("Herdr terminal launch requires an owned session")
+		return fmt.Errorf("herdr terminal launch requires an owned session")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), maxHerdrRealizeTimeout)
 	defer cancel()
@@ -97,7 +97,7 @@ func (l *Launcher) prepareHerdrShellStart(
 		intent = saved
 	}
 	if intent.Launch == nil || intent.Launch.Agent != "" || intent.Launch.AgentName != "" {
-		return intent, fmt.Errorf("Herdr shell intent has an invalid launch capsule")
+		return intent, fmt.Errorf("herdr shell intent has an invalid launch capsule")
 	}
 	if intent.Launch.TokenIssued {
 		return intent, l.failClosedIssuedHerdrLaunch(journal, intent, nil)

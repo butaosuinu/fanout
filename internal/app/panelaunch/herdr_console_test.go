@@ -17,10 +17,12 @@ func TestFindHerdrConsolePaneAcrossLinkedWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordPane(pane); err != nil {
+	err = recorder.RecordPane(pane)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.Unlock(); err != nil {
+	err = recorder.Unlock()
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -130,10 +132,12 @@ func TestRemoveSavedHerdrConsoleRowFromOwningLinkedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordPane(pane); err != nil {
+	err = recorder.RecordPane(pane)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.Unlock(); err != nil {
+	err = recorder.Unlock()
+	if err != nil {
 		t.Fatal(err)
 	}
 	pane.SourceProjectRoot = linked
@@ -142,10 +146,12 @@ func TestRemoveSavedHerdrConsoleRowFromOwningLinkedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := removeSavedHerdrConsoleRow(locked, root, pane); err != nil {
+	err = removeSavedHerdrConsoleRow(locked, root, pane)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := locked.Unlock(); err != nil {
+	err = locked.Unlock()
+	if err != nil {
 		t.Fatal(err)
 	}
 

@@ -41,7 +41,8 @@ func EnsureHerdrConsole(
 	if err != nil {
 		return result, err
 	}
-	if err := worktree.EnsureLocalExclude(root); err != nil {
+	err = worktree.EnsureLocalExclude(root)
+	if err != nil {
 		return result, fmt.Errorf("prepare local git exclude: %w", err)
 	}
 	locked, err := state.LockProjectForLaunch(root)
@@ -69,9 +70,9 @@ func ensureHerdrConsoleLocked(
 		return HerdrConsoleResult{}, err
 	}
 	if found {
-		result, reused, err := reuseHerdrConsole(locked, root, owned, pane)
-		if err != nil || reused {
-			return result, err
+		result, reused, reuseErr := reuseHerdrConsole(locked, root, owned, pane)
+		if reuseErr != nil || reused {
+			return result, reuseErr
 		}
 	}
 	intent, err := realizeHerdrInteractive(
@@ -220,7 +221,7 @@ func removeSavedHerdrConsoleRow(
 		return err
 	}
 	defer func() { retErr = errors.Join(retErr, owner.Unlock()) }()
-	saved, found := owner.Store.Find(pane.Parent, pane.IssueNum)
+	saved, found := owner.Find(pane.Parent, pane.IssueNum)
 	if !found || !sameSavedHerdrConsole(pane, saved) {
 		return fmt.Errorf("saved Herdr console row changed before cleanup")
 	}
@@ -250,14 +251,14 @@ func resolveHerdrConsoleInputs(projectRoot, shell string) (string, string, error
 	}
 	root = filepath.Clean(root)
 	if !filepath.IsAbs(root) {
-		return "", "", fmt.Errorf("Herdr console root must be absolute")
+		return "", "", fmt.Errorf("herdr console root must be absolute")
 	}
 	shell = strings.TrimSpace(shell)
 	if shell == "" {
 		shell = strings.TrimSpace(os.Getenv("SHELL"))
 	}
 	if !filepath.IsAbs(shell) {
-		return "", "", fmt.Errorf("Herdr console shell must be an absolute path")
+		return "", "", fmt.Errorf("herdr console shell must be an absolute path")
 	}
 	shell, err = filepath.EvalSymlinks(shell)
 	if err != nil {
@@ -265,7 +266,7 @@ func resolveHerdrConsoleInputs(projectRoot, shell string) (string, string, error
 	}
 	info, err := os.Stat(shell)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return "", "", fmt.Errorf("Herdr console shell is not executable: %s", shell)
+		return "", "", fmt.Errorf("herdr console shell is not executable: %s", shell)
 	}
 	return root, filepath.Clean(shell), nil
 }

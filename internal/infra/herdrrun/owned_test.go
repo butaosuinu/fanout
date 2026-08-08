@@ -506,13 +506,11 @@ func TestOpenOwnedMissingSessionIsReadOnly(t *testing.T) {
 	if err := os.Mkdir(commonDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runtimeBase, err := os.MkdirTemp("/tmp", "fanout-open-owned-")
+	nonce, err := randomToken()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(runtimeBase); err != nil {
-		t.Fatal(err)
-	}
+	runtimeBase := filepath.Join("/tmp", "fanout-open-owned-"+nonce[:12])
 	t.Cleanup(func() {
 		_ = os.RemoveAll(runtimeBase) // Clean up only if a failed read-only admission created it.
 	})

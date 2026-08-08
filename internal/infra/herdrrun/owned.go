@@ -327,11 +327,7 @@ func newReopenedOwnedBackend(
 	return backend
 }
 
-func ownedSessionFromMarker(
-	commonDir string,
-	marker ownerMarker,
-	backend *Backend,
-) *OwnedSession {
+func ownedSessionFromMarker(commonDir string, marker ownerMarker, backend *Backend) *OwnedSession {
 	return &OwnedSession{
 		Session: marker.Session, SocketPath: marker.SocketPath,
 		ClientSocketPath: marker.ClientSocketPath, GitCommonDir: commonDir,
@@ -483,7 +479,7 @@ func claimOwnedSession(
 	start supervisorStarter,
 	writeMarker ownerMarkerWriter,
 ) (ownerMarker, *startedSupervisor, error) {
-	if _, running, err := inspectSupervisorLease(layout.supervisorLock); err != nil {
+	if running, err := inspectSupervisorLease(layout.supervisorLock); err != nil {
 		return ownerMarker{}, nil, err
 	} else if running {
 		return ownerMarker{}, nil, fmt.Errorf("refusing to claim herdr session with a foreign supervisor")
@@ -591,7 +587,7 @@ func validateRetiredOwnedSession(layout ownedLayout) error {
 			return fmt.Errorf("herdr owned socket %s remains after supervisor shutdown", path)
 		}
 	}
-	if _, running, err := inspectSupervisorLease(layout.supervisorLock); err != nil {
+	if running, err := inspectSupervisorLease(layout.supervisorLock); err != nil {
 		return err
 	} else if running {
 		return fmt.Errorf("herdr supervisor remains live after shutdown")
@@ -1044,33 +1040,33 @@ func unlockPrivateFile(f *os.File) {
 	_ = f.Close()
 }
 
-func inspectSupervisorLease(path string) (supervisorLease, bool, error) {
+func inspectSupervisorLease(path string) (bool, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return supervisorLease{}, false, err
+		return false, err
 	}
 	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
-		return supervisorLease{}, false, err
+		return false, err
 	}
 	err = validatePrivateRegular(path, info)
 	if err != nil {
-		return supervisorLease{}, false, err
+		return false, err
 	}
 	lockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if lockErr == nil {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		return supervisorLease{}, false, nil
+		return false, nil
 	}
 	if !errors.Is(lockErr, syscall.EWOULDBLOCK) && !errors.Is(lockErr, syscall.EAGAIN) {
-		return supervisorLease{}, false, lockErr
+		return false, lockErr
 	}
-	lease, err := readLeaseFromFile(f)
+	_, err = readLeaseFromFile(f)
 	if err != nil {
-		return supervisorLease{}, true, fmt.Errorf("parse herdr supervisor lease: %w", err)
+		return true, fmt.Errorf("parse herdr supervisor lease: %w", err)
 	}
-	return lease, true, nil
+	return true, nil
 }
 
 func verifyLiveSupervisor(path string, marker ownerMarker) error {
@@ -1097,7 +1093,8 @@ func inspectExistingSupervisorLease(path string) (supervisorLease, bool, error) 
 	if err != nil {
 		return supervisorLease{}, false, err
 	}
-	if err := validatePrivateRegular(path, info); err != nil {
+	err = validatePrivateRegular(path, info)
+	if err != nil {
 		return supervisorLease{}, false, err
 	}
 	lockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)

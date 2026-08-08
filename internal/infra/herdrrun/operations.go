@@ -467,7 +467,8 @@ func (b *Backend) closeOwnedWorkspace(ctx context.Context, target OwnedPaneIdent
 	if err != nil {
 		return failed, err
 	}
-	if _, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "close", target.Ref.Workspace); err != nil {
+	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "close", target.Ref.Workspace)
+	if err != nil {
 		return failed, methodUnavailable("workspace.close")
 	}
 	view, err := b.ownedSnapshotView(ctx, admission)
