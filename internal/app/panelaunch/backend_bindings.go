@@ -10,10 +10,16 @@ import (
 
 // RuntimeBackendBindings projects one worktree-local state store into the
 // parent keys used by runtime backend stickiness.
+//
+//nolint:gocognit,gocyclo,funlen // Binding precedence is an ordered projection of the persisted row variants.
 func RuntimeBackendBindings(projectRoot string, store state.Store) []backend.Binding {
 	rows := make([]backend.Binding, 0, len(store.Panes)*2)
 	planParents := map[string]string{}
 	for _, pane := range store.Panes {
+		if pane.Parent == ManualParentRef && strings.TrimSpace(pane.RuntimeParent) != "" {
+			rows = append(rows, backend.Binding{Parent: pane.RuntimeParent, Backend: pane.Backend})
+			continue
+		}
 		if pane.IsAttachedAgent() {
 			parent := strings.TrimSpace(pane.SourceParent)
 			if parent == "" {

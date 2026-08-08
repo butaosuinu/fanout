@@ -1,45 +1,63 @@
 ---
 title: herdr backend
 linkTitle: herdr backend
-description: "opt-in・観測専用の herdr runtime backend。前提条件、backend 選択の仕組み、tmux との差分、plugin の注意をまとめます。"
+description: "opt-in の herdr runtime backend。owned CLI launch、前提条件、backend 選択、tmux との差分、plugin の注意をまとめます。"
 weight: 90
 kanji: 観
 yomi: herdr
 ---
 
-herdr backend は、[herdr](https://herdr.dev/)(コーディングエージェント向けの tmux 代替・永続 PTY ランタイム)の中で fanout を read-only コンソールとして動かすための backend です。
-opt-in で、v1 は観測専用です。fanout は記録済みの herdr pane を表示しますが、作成・変更・close は一切しません。
-既定の backend は tmux のままで、herdr session の外では tmux 利用者の workflow は何も変わりません。herdr session の中では、上書きしない限り herdr が自動選択で勝ちます(後述)。
+herdr backend は、コーディングエージェント向けの永続 PTY ランタイム [herdr](https://herdr.dev/)で CLI のファンアウトを実行します。
+opt-in で、issue、Project、plan、label watcher の launch はリポジトリ単位の fanout-owned session を使います。
+引数なしの TUI は herdr 上で read-only のままです。
+既定の backend は tmux です。
 fanout は herdr を同梱しません。herdr は AGPL ライセンスで、別途インストールします。
 
 ## v1 でできること
 
-名前付きの herdr session の中で fanout を起動すると、read-only な画面 — 常駐 TUI コンソール、`--status`、web ダッシュボード — にリポジトリの記録済み session が、各 pane の runtime backend と identity 付きで表示されます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
+CLI launch では、fanout がリポジトリの owned session を起動または再採用し、プロジェクトルートの coordinator workspace と子ごとの worktree workspace を作ります。
+選択した agent は pin 済みの non-login fanout launcher から起動されます。
+launcher は operation-bound token を 1 回だけ受け取り、所有者だけが読める environment capsule を 1 回だけ消費して、shell を介さず agent に置き換わります。
+fanout は launch の検証後に限り、workspace、pane、terminal、repository、agent、session、socket の identity を `.fanout/state.json` へ保存します。
+インストール済みの herdr integration が provider session の identity を報告した場合は、その値も保存します。
+
+常駐 TUI コンソール、`--status`、web ダッシュボードには、記録済み session と各 pane の runtime backend、identity が表示されます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
 TUI コンソールと web ダッシュボードは、herdr backend で記録された行を `herdr api snapshot` と照合して生死と agent state を反映します。`--status` が読むのは記録済みの state と GitHub だけです。
-fanout は session を読む前に `herdr --version` を検査します。その後、観測に `herdr status --json` と `herdr api snapshot` を使います。method と field の事前検査は行いません。method call が失敗した場合は `herdr method "<name>" is unavailable` を返します。
+fanout は session の読み書き前に `herdr --version` と owned route を検査します。
+public method の呼び出しが失敗した場合は `herdr method "<name>" is unavailable` を返します。
 
-herdr session を変更しうる操作は、劣化動作ではなく明確なエラーで fail closed します。
+未対応の経路は明確なエラーで fail closed します。
 
-- issue / Project / plan の launch は、worktree や state の変更が起きる前に拒否されます。v1 は herdr 行を自分では記録しません。
-- focus・send・close・restore・出力 peek・plan capture・自動 cleanup は herdr 行では使えません。
+- 対話 TUI の launch、focus、send、restore、出力 peek、plan capture は herdr 行では使えません。
+- herdr と `--team` の組み合わせは、state、filesystem、Git、herdr の変更前に拒否されます。
+- Codex 子の Plan Mode は拒否されます。app-server の launch matrix が対応するまでは build mode を使ってください。Claude と OpenCode は固有の mode flag を使います。
 - 自動 nudge(`fanout msg nudge` の配送)は agent の種類にかかわらず無効です。メッセージ自体は bus に保存され、`inbox` / `board` で読めます。
-- tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれず、Plan Mode の起動もどの agent でも使えません(他の launch と同じく fail closed)。
+- tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれません。
 
 TUI のヘッダには、選択された backend とその理由が常に表示されます。例: `backend: herdr (HERDR_ENV)`。
 
 ## 前提条件
 
 - **stable herdr 0.7.5 以上** — CLI と server は同じ stable version で動かしてください。prerelease と解釈できない version は fail closed します。新しい stable version を protocol、API schema、CLI help、platform、release digest では拒否しません。
-- 明示的な名前を付けた herdr session が稼働していること(`default` は拒否されます)。fanout は herdr server を起動せず、session の作成も attach もしません。
 - `PATH` 上の `herdr` バイナリ。別途インストールしてください。
+- `PATH` 上の選択済み agent CLI。
+
+CLI launch に既存の herdr session は不要です。
+fanout が owner marker 配下の隔離 session を作成または再採用します。
+引数なしの TUI で外部 session を観測する場合は、その名前付き session の pane からコンソールを起動してください(`default` は拒否されます)。
 
 ## opt-in の手順
 
-1. 名前付きの herdr session を自分で起動します([herdr のドキュメント](https://herdr.dev/docs/)を参照)。
-2. その session の pane の中で `fanout` を実行します。herdr が `HERDR_ENV=1` を設定するので、fanout は自動で herdr backend を選びます。
-3. TUI コンソール、`--status`、web ダッシュボードで記録済みの行を読みます。
+CLI run ごとに herdr を明示できます。
 
-launch が fail closed するため、v1 は herdr 行を自分では記録しません。herdr backend の行が存在するのは、通常の launch フローの外(手動の実験)で書かれた場合だけです。日常的には、herdr 内のコンソールはリポジトリの記録済み session の read-only ビューです。
+```bash
+fanout 123 --backend herdr --agent claude
+fanout plan launch-plan --backend herdr --agent claude
+```
+
+繰り返し使う場合は `FANOUT_BACKEND=herdr` または user config の `runtimeBackend` を設定します。
+既存の herdr pane 内では `HERDR_ENV=1` により自動選択されます。
+label watcher も同じ owned launch path を使い、launch ごとに session を再検証します。
 
 backend は次の順で解決され、最初に一致したものが使われます。
 
@@ -62,17 +80,16 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 
 | 機能 | tmux backend | herdr backend v1 |
 |---|---|---|
-| issue / Project / plan の launch | worktree・pane・agent を作成 | worktree / state の変更前に拒否 |
-| worktree 作成 | 子ごとに `.fanout/worktrees/` 配下へ | しない |
+| issue / Project / plan / watcher の launch | worktree、pane、agent を作成 | owned herdr workspace と検証済み agent を作成 |
+| worktree 作成 | 子ごとに `.fanout/worktrees/` 配下へ | 子ごとに `herdr worktree create` / `open` を実行 |
 | 生死と agent state(TUI コンソール、web ダッシュボード) | tmux へ照会 | `herdr api snapshot` — 対応 |
 | exit status 表示 | launch wrapper が `✓ done` を報告 | なし — herdr の public API に exit status は残らない |
 | agent 終了後の pane | wrapper のメッセージ付きで pane が残る | 正常終了で herdr は pane と自身の記録を消す。fanout の行は `stale` になる |
-| focus / send / close / restore / peek / plan capture | TUI キーと lifecycle フラグ | 不可 — `runtime backend herdr does not support …` |
-| 自動 cleanup(`--cleanup`) | merge/close 済み pane を畳む | 拒否。herdr workspace は herdr 側で片付ける |
+| 対話 TUI launch / focus / send / restore / peek / plan capture | TUI キーと lifecycle フラグ | 不可 — `runtime backend herdr does not support …` |
 | 自動 nudge(`fanout msg nudge`) | 相手が入力を受けられる状態なら配送 | agent の種類にかかわらず無効 |
 | tmux keybind(ダッシュボード、コンソール復帰) | 登録する | 登録しない |
 | 通知 | bell / tmux / ntfy / slack の channel | bell / ntfy / slack は動く。tmux channel と herdr の `notification show` は発火しない |
-| Plan Mode launch | 対応 | 非対応 |
+| 子の Plan Mode launch | 対応 | Claude / OpenCode のみ。Codex は拒否 |
 | TUI フォーム(設定、ヘルプ) | tmux popup | インラインの in-process フォーム |
 | session resume | fanout の restore フロー | herdr 任せ(後述) |
 
@@ -86,15 +103,14 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 fanout はこれを代行しません。agent 設定の所有者はあなたです。
 任意の手順です。restore に頼るなら検討してください。
 
-plugin の注意が 2 点あります。
-
-- herdr の通知 plugin(ntfy、モバイル push)は、fanout 自身の `ntfy` / `slack` channel と並行して発火します。両方を有効にすると同じイベントの通知が二重になるので、どちらかに絞ってください。
-- herdr の worktree setup 系 plugin は、herdr が作成・open するすべての worktree で動きます。手動で herdr から fanout の worktree を open した場合も対象です。v1 の fanout 自身は herdr の worktree 操作を発行しません。
+fanout-owned session は herdr の XDG directory を隔離し、workspace / worktree 作成前に plugin registry が空であることを要求します。
+fanout-owned launch では herdr の通知 plugin と worktree setup plugin は動きません。
+registry が空でない場合は mutation 前に launch が失敗します。通知と setup には fanout の channel と hook を使ってください。
 
 2 つのツールは別の層にあります。
-herdr の plugin は並列エージェント作業を runtime 側から扱います: GitHub や Jira を起点にした worktree 起動、diff レビューの sidebar、複数プロジェクトの sidebar、レイアウトや通知の plugin。
+fanout-owned session 以外では、herdr の plugin が並列エージェント作業を runtime 側から扱います: GitHub や Jira を起点にした worktree 起動、diff レビューの sidebar、複数プロジェクトの sidebar、レイアウトや通知の plugin。
 fanout は GitHub ワークフロー側から扱います: 親子の fan-out、briefing 生成、blocker の wave、PR のライフサイクル、レビューゲート。
-herdr が pane を実行・表示し、fanout が作業を計画して(tmux 上で)起動し、GitHub 側を追跡します。
+herdr が pane を実行・表示し、fanout が作業を計画して tmux または herdr で起動し、GitHub 側を追跡します。
 
 ## 旧 fanout バイナリ
 

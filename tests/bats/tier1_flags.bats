@@ -616,7 +616,7 @@ JSON
 
 # --- Runtime backend preflight ---------------------------------------------
 
-@test "--backend herdr issue dry-run fails closed before launch mutation" {
+@test "--backend herdr issue dry-run rejects missing agent before launch mutation" {
   local repo="$BATS_TEST_TMPDIR/herdr-backend-project"
 
   mkdir -p "$repo"
@@ -626,7 +626,7 @@ JSON
   run_fanout --backend herdr 20 --dry-run
 
   [ "$status" -eq 1 ]
-  [ "$output" = "[err ] runtime backend: runtime backend herdr does not support issue, Project, and plan launch in v1" ]
+  [ "$output" = "[err ] runtime backend: agent is required; pass --agent <name> or set FANOUT_AGENT" ]
   [ ! -e "$repo/.fanout" ]
 }
 

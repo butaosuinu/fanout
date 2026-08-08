@@ -34,7 +34,7 @@ fanout   # start the persistent tmux console
 マウスや tmux の `prefix` ペイン移動で記録済みペインへフォーカスすると、TUI の選択行もそのペインに追従します。
 
 コンソールは backend を認識します。ヘッダには選択中の runtime backend と選択理由(例: `backend: herdr (HERDR_ENV)`)が出て、detail panel には各行の `backend=` と `pane=` の identity が出ます。
-観測専用の [herdr backend]({{< relref "/docs/herdr-backend" >}}) ではコンソールは read-only です。launch・focus・close・peek は無効になり、ヘルプ画面がキーごとに理由を表示します。
+[herdr backend]({{< relref "/docs/herdr-backend" >}})でも対話コンソールの操作は read-only のままです。launch、focus、close、peek は無効になり、ヘルプ画面がキーごとに理由を表示します。CLI と label watcher の launch は owned runtime path を使います。
 
 {{< diagram "console" >}}
 
@@ -250,6 +250,6 @@ Catppuccin、Gruvbox、Tokyo Night ほか)から選べます。
 
 - `gh` 未ログインの場合は、バナーを出して state のみのビューを表示します。
 - tmux 外でも配信は続き、ペインの生存は unknown のままになります。
-- herdr の行は保存済みの identity を `herdr api snapshot` と照合して生死と agent state を反映します(identity を snapshot から補完することはありません)。出力の peek は常に空です。
+- herdr の行は保存済みの identity を `herdr api snapshot` と照合して生死と agent state を反映します。行に `agent_session` がない場合は、expected provider の一意で有効な最初の ref を owning state lock 下で永続化し、以後の観測で完全一致を要求します。その他の identity field は snapshot から補完しません。出力の peek は常に空です。
 
 このページに登場するフラグの一覧は [CLI リファレンス]({{< relref "/docs/cli" >}}) にあります。

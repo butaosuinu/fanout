@@ -47,7 +47,7 @@ Each child gets a pane in the current tmux session, an isolated worktree under `
 
 > The pane-creation flow needs `gh`, `git`, and `tmux 3.3+` on your `PATH`. fanout checks the dependencies at startup and prints install hints when one is missing — see [Installation]({{< relref "/docs/installation" >}}).
 
-This page assumes the default tmux backend. The opt-in [herdr backend]({{< relref "/docs/herdr-backend" >}}) is observation-only in v1 and cannot run this fan-out.
+This page assumes the default tmux backend. To run the same fan-out in an owned [herdr backend]({{< relref "/docs/herdr-backend" >}}) session, add `--backend herdr`; no tmux session is required for that run.
 
 ## How child issues are declared
 

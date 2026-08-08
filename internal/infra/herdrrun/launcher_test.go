@@ -1,0 +1,276 @@
+package herdrrun
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/butaosuinu/fanout/internal/infra/state"
+)
+
+func TestWorkloadEnvironmentRemovesControlPlaneAndForcesBackend(t *testing.T) {
+	caller := []string{
+		"PATH=/caller/bin", "KEEP=value", "HERDR_SESSION=foreign",
+		"FANOUT_HERDR_CONTROL_PATH=/foreign", "TMUX=/tmp/tmux", "TMUX_PANE=%1",
+		"TMUX_TMPDIR=/tmp", "FANOUT_STATE_PATH=/foreign/state",
+		"FANOUT_BACKEND=tmux", "FANOUT_BIN=/foreign/fanout",
+	}
+	got, err := WorkloadEnvironment(caller, "/owned/fanout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"PATH=/caller/bin", "KEEP=value", "FANOUT_BACKEND=herdr", "FANOUT_BIN=/owned/fanout",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("environment = %q, want %q", got, want)
+	}
+}
+
+func TestWorkloadEnvironmentRejectsDuplicateNames(t *testing.T) {
+	_, err := WorkloadEnvironment([]string{"PATH=/one", "PATH=/two"}, "/owned/fanout")
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("error = %v, want duplicate rejection", err)
+	}
+}
+
+func TestWorkloadEnvironmentCapsuleIsOwnerOnlyAndOneShot(t *testing.T) {
+	runtimeDir := t.TempDir()
+	if err := os.Chmod(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	session := &OwnedSession{RuntimeDir: runtimeDir}
+	nonce := strings.Repeat("a", 32)
+	environment := []string{"PATH=/caller/bin", "FANOUT_BACKEND=herdr", "FANOUT_BIN=/owned/fanout"}
+	path, count, err := session.PrepareWorkloadEnvironment(nonce, environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 || !info.Mode().IsRegular() {
+		t.Fatalf("capsule mode = %v, want owner-only regular", info.Mode())
+	}
+	got, err := consumeWorkloadEnvironment(&state.HerdrLaunch{
+		Nonce: nonce, EnvFilePath: path, EnvNameCount: count,
+	}, runtimeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, environment) {
+		t.Fatalf("consumed environment = %q, want %q", got, environment)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("capsule remains after consume: %v", err)
+	}
+}
+
+func TestPrepareWorkloadEnvironmentRejectsOversizeBeforePublish(t *testing.T) {
+	runtimeDir := t.TempDir()
+	session := &OwnedSession{RuntimeDir: runtimeDir}
+	nonce := strings.Repeat("b", 32)
+	environment := []string{
+		"BIG=" + strings.Repeat("x", maxOwnerMarkerBytes),
+		"FANOUT_BACKEND=herdr", "FANOUT_BIN=/owned/fanout",
+	}
+	_, _, err := session.PrepareWorkloadEnvironment(nonce, environment)
+	if err == nil || !strings.Contains(err.Error(), "exceeds size limit") {
+		t.Fatalf("error = %v, want size rejection", err)
+	}
+	path := filepath.Join(runtimeDir, "workload-env", "env-"+nonce+".json")
+	if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("oversize capsule was published: %v", statErr)
+	}
+}
+
+func TestConsumeWorkloadEnvironmentRejectsPathOutsideOwnedRuntime(t *testing.T) {
+	runtimeDir := t.TempDir()
+	launch := &state.HerdrLaunch{
+		Nonce: strings.Repeat("a", 32), EnvFilePath: filepath.Join(t.TempDir(), "capsule.json"), EnvNameCount: 1,
+	}
+	if _, err := consumeWorkloadEnvironment(launch, runtimeDir); err == nil ||
+		!strings.Contains(err.Error(), "outside") {
+		t.Fatalf("error = %v, want outside-owned-runtime rejection", err)
+	}
+}
+
+func TestDiscardWorkloadEnvironmentRequiresOwnedPathAndFileIdentity(t *testing.T) {
+	runtimeDir := t.TempDir()
+	session := &OwnedSession{RuntimeDir: runtimeDir}
+	nonce := strings.Repeat("c", 32)
+	path, count, err := session.PrepareWorkloadEnvironment(nonce, []string{
+		"PATH=/bin", "FANOUT_BACKEND=herdr", "FANOUT_BIN=/owned/fanout",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := &state.HerdrLaunch{Nonce: nonce, EnvFilePath: path, EnvNameCount: count}
+	if err := DiscardWorkloadEnvironment(runtimeDir, launch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("discarded capsule remains: %v", err)
+	}
+
+	foreign := filepath.Join(t.TempDir(), "unrelated")
+	if err := os.WriteFile(foreign, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	launch.EnvFilePath = foreign
+	if err := DiscardWorkloadEnvironment(runtimeDir, launch); err == nil {
+		t.Fatal("outside capsule path was accepted")
+	}
+	if _, err := os.Lstat(foreign); err != nil {
+		t.Fatalf("outside file was removed: %v", err)
+	}
+}
+
+func TestMatchingPaneLaunchIntentRequiresExactWorkspacePaneAndCWD(t *testing.T) {
+	request := paneLauncherRequest{
+		session: "owned-session", socketPath: "/owned/herdr.sock",
+		workspaceID: "w1", paneID: "w1:p1", cwd: "/repo/child",
+	}
+	intent := state.HerdrIntent{
+		Kind: state.HerdrIntentWorktree, Status: state.HerdrIntentRealized,
+		Session: "owned-session", SocketPath: "/owned/herdr.sock",
+		Resource: state.HerdrResource{
+			WorkspaceID: "w1", PaneID: "w1:p1", CurrentPath: "/repo/child",
+		},
+		Launch: &state.HerdrLaunch{Nonce: strings.Repeat("a", 32)},
+	}
+	got, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request)
+	if !found || got.Resource.PaneID != "w1:p1" {
+		t.Fatalf("match = (%+v, %t)", got, found)
+	}
+	request.cwd = filepath.Clean("/repo/other")
+	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); found {
+		t.Fatal("mismatched cwd was adopted")
+	}
+	request.cwd = "/repo/child"
+	request.socketPath = "/foreign/herdr.sock"
+	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); found {
+		t.Fatal("mismatched owned route was adopted")
+	}
+}
+
+func TestMatchingPaneLaunchIntentAcceptsRealizedCoordinatorWithoutAgentLaunch(t *testing.T) {
+	request := paneLauncherRequest{
+		session: "owned-session", socketPath: "/owned/herdr.sock",
+		workspaceID: "w1", paneID: "w1:p1", cwd: "/repo",
+	}
+	intent := state.HerdrIntent{
+		Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentRealized,
+		Session: "owned-session", SocketPath: "/owned/herdr.sock",
+		Resource: state.HerdrResource{
+			WorkspaceID: "w1", PaneID: "w1:p1", CurrentPath: "/repo",
+		},
+	}
+	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); !found {
+		t.Fatal("realized coordinator was not assigned to its launcher")
+	}
+	intent.Kind = state.HerdrIntentRollback
+	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); found {
+		t.Fatal("rollback intent was assigned to a pane launcher")
+	}
+}
+
+func TestCoordinatorLauncherWaitsWithoutStartingAShell(t *testing.T) {
+	reader, writer := io.Pipe()
+	done := make(chan int)
+	go func() { done <- holdCoordinatorLauncher(reader, io.Discard) }()
+	select {
+	case code := <-done:
+		t.Fatalf("coordinator launcher exited early with %d", code)
+	case <-time.After(10 * time.Millisecond):
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-done; code != 0 {
+		t.Fatalf("coordinator launcher exit = %d, want 0 after EOF", code)
+	}
+}
+
+func TestValidateWorktreeRemoveResponseRequiresExactNonForceResult(t *testing.T) {
+	valid := []byte(`{"id":"cli:worktree:remove","result":{"type":"worktree_removed","workspace_id":"w2","path":"/repo/child","forced":false}}`)
+	if err := validateWorktreeRemoveResponse(valid, "w2", "/repo/child"); err != nil {
+		t.Fatal(err)
+	}
+	forced := []byte(`{"id":"cli:worktree:remove","result":{"type":"worktree_removed","workspace_id":"w2","path":"/repo/child","forced":true}}`)
+	if err := validateWorktreeRemoveResponse(forced, "w2", "/repo/child"); err == nil {
+		t.Fatal("forced remove result was accepted")
+	}
+	if err := validateWorktreeRemoveResponse(valid, "w3", "/repo/child"); err == nil {
+		t.Fatal("foreign workspace result was accepted")
+	}
+}
+
+func TestWaitForLaunchTokenRequiresExactInput(t *testing.T) {
+	intent := state.HerdrIntent{
+		ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli(),
+		Launch:        &state.HerdrLaunch{Nonce: strings.Repeat("b", 32)},
+	}
+	input := strings.NewReader(launcherStartToken(intent.Launch.Nonce) + "\n")
+	if err := waitForLaunchToken(input, io.Discard, intent); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitForLaunchTokenRejectsUnexpectedInput(t *testing.T) {
+	intent := state.HerdrIntent{
+		ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli(),
+		Launch:        &state.HerdrLaunch{Nonce: strings.Repeat("b", 32)},
+	}
+	err := waitForLaunchToken(strings.NewReader("wrong\n"), io.Discard, intent)
+	if err == nil || !strings.Contains(err.Error(), "unexpected") {
+		t.Fatalf("error = %v, want unexpected-input rejection", err)
+	}
+}
+
+func TestWaitForLaunchTokenResendsReadyMarker(t *testing.T) {
+	intent := state.HerdrIntent{
+		ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli(),
+		Launch:        &state.HerdrLaunch{Nonce: strings.Repeat("b", 32)},
+	}
+	reader, writer := io.Pipe()
+	t.Cleanup(func() {
+		_ = reader.Close() // The test no longer needs the pipe during cleanup.
+	})
+	t.Cleanup(func() {
+		_ = writer.Close() // The test no longer needs the pipe during cleanup.
+	})
+	var output strings.Builder
+	done := make(chan error)
+	go func() {
+		done <- waitForLaunchTokenAtInterval(reader, &output, intent, time.Millisecond)
+	}()
+	time.Sleep(10 * time.Millisecond)
+	if _, err := fmt.Fprintln(writer, launcherStartToken(intent.Launch.Nonce)); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), launcherReadyMarker(intent.Launch.Nonce)) {
+		t.Fatalf("output = %q, want ready marker", output.String())
+	}
+}
+
+func TestOwnedConfigPinsNonLoginLauncher(t *testing.T) {
+	got := string(ownedConfigContents("/owned/fanout"))
+	for _, want := range []string{
+		"default_shell = \"/owned/fanout\"", "shell_mode = \"non_login\"", "manifest_check = false",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("config %q does not contain %q", got, want)
+		}
+	}
+}

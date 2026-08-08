@@ -330,6 +330,7 @@ func tuiIssueLaunchConfig(issueNum int, defaultAgent string, overrides map[strin
 		ProjectStatus:   cliflags.DefaultProjectStatus,
 		Format:          cliflags.DefaultFormat,
 		UnblockedOnly:   true,
+		TUIInteractive:  true,
 	}
 	for target, name := range overrides {
 		cfg.AgentOverrides = cliflags.UpsertAgentOverride(cfg.AgentOverrides, target, name)

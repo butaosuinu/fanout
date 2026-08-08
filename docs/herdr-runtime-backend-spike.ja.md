@@ -2,7 +2,7 @@
 
 ステータス: 0.7.5 wave 2 の実機検証を完了し、pane-targeted surface を使う fanout-owned herdr session の実装を解禁する。
 判断主体はユーザー、floor 0.7.5 への改訂日は 2026-07-22 JST、crash 安全機構の tmux-parity 密度への簡素化改訂日は 2026-07-27 JST である。
-この判断は後続 issue の実装条件を定めるものであり、この PR はコードを変更しない。
+この判断は後続 issue の実装条件を定める。
 0.7.5 core runtime matrix と live-agent surface、0.7.4 metadata token reporting と sidebar row layout は実測済みである。
 この文書の日付は日本標準時（JST、UTC+09:00）で記す。
 core runtime の検証日は 2026-07-16、2026-07-21、2026-07-22、metadata token reporting と sidebar row layout の追試日は 2026-07-17 である。
@@ -16,10 +16,10 @@ schema、method、field、CLI help、protocol、behavior profile、active manife
 fanout の herdr backend wave 2 は CLI-first とし、集約読みには CLI wrapper の `herdr api snapshot` を使う。
 raw Socket client は実装しない。
 version / session の検査と owned session の検査後、snapshot / list / wait、targeted read、owned server の bootstrap、launch、cleanup、focus、emitter、metadata、自動 nudge の送信契約を後続実装へ解禁する。
-console / coordinator / agent launch は加えて #528 の direct-launch 契約完了を要求する。
+issue / Project / plan / watcher の coordinator / agent launch は #528 で direct-launch 契約を実装した。interactive TUI の launch は #530 まで read-only とする。
 2026-07-27 のユーザー決定により、crash 安全機構は「簡素化方針」の判断基準で tmux backend と同水準の密度にする。
 自動 mutation は state lock、送信直前の identity 再照合、mutation 直前の最小意図記録、事後条件検査を通し、応答喪失は再実行時の存在確認で採用または fail-closed `manual_cleanup_required` にする。
-linked worktree 間の intent と console は canonical git common directory 配下の単一 intent journal を正典とし、final row と telemetry routing は owning worktree の `state.json` pane row を正典とする（intent は journal、final は state.json の二層。final row の確定は #528）。
+linked worktree 間の intent と console は canonical git common directory 配下の単一 intent journal を正典とし、final row と telemetry routing は owning worktree の `state.json` pane row を正典とする（intent は journal、final は state.json の二層）。
 Herdr backend の `--team` は #528 の fail-closed gate で最初の mutation 前に拒否し、#568 が registry-backed peer 解決を導入した後に再評価する。
 #552 の Herdr nudge 実装は #568 の完了を前提とする。
 child cleanup は保存済み identity の照合後に `worktree remove` を発行し、branch は herdr に削除させず fanout の compare-and-delete だけが削除する。
@@ -194,7 +194,7 @@ intent 行は絶対 expiry を持ち、発行済み mutation は再発行せず�
 journal の intent 行と `state.json` の final row は raw workload env value を保持しない。
 mutation は combined launch lock 下で snapshot と identity を照合し、intent の atomic save、bounded Herdr CLI call、事後条件確認まで同じ lock を保持する。
 launcher の lock-free read は rename 前後どちらかの完全な JSON だけを受理し、decode failure は intent 不在として待たず fail closed にする。
-各 intent 行は起動元の physical worktree root と task provenance を保持する。final row は owning worktree の `.fanout/state.json` pane row として確定し（tmux backend と同じ所在。確定は #528）、intent 行は journal の外へ複製しない。
+各 intent 行は起動元の physical worktree root と task provenance を保持する。final row は owning worktree の `.fanout/state.json` pane row として確定し（tmux backend と同じ所在）、intent 行は journal の外へ複製しない。
 registry-backed peer 移行までは state-dependent な team 共通経路へ Herdr row を渡さず、`--team` の拒否を journal save または SQLite open より先に確定する。
 status、lifecycle、backend stickiness、session view は worktree-local state（tmux row と Herdr final row）と intent journal を集約して読む。
 この文書でいう Herdr の `state lock` と `state save` は、以後この journal の lock と atomic replace（final row の確定では加えて owning worktree の `state.json`）を指す。
@@ -210,7 +210,7 @@ status、close、merge、cleanup は保存済み key をそのまま routing し
 
 config と plugin registry は全 XDG directory の差し替えで default state から隔離できる。
 supervisor の全 Herdr CLI call と server child は SHA-256 で pin した owned copy の Herdr binary を使う。
-owned config は `[update] manifest_check = false` を固定して background remote manifest check を無効にし、#528 以降は `[terminal] default_shell` を絶対 fanout launcher path、`shell_mode` を `non_login` に固定する。
+owned config は `[update] manifest_check = false` を固定して background remote manifest check を無効にし、`[terminal] default_shell` を絶対 fanout launcher path、`shell_mode` を `non_login` に固定する。
 server env の `FANOUT_HERDR_PANE_LAUNCHER=1` は no-arg TUI より先に non-shell launcher mode へ dispatch する。
 server env の `FANOUT_HERDR_LAUNCHER_MAX_WAIT_MS` も `300000` に固定する。
 #427 の hook emitter は絶対 fanout path を使い、launcher control env は operation child env から除く。
@@ -370,7 +370,7 @@ server の cold restart でも public ID は維持されたが、全 pane の `t
 session 名と public ID だけを state key にすると stale mapping が別 process へ一致する。
 
 herdr から比較可能な session epoch は取得できない。
-wave 2 は session 名を namespace として保存し、各 PaneRef に `terminal_id` と `agent_session` を保存する。
+wave 2 は session 名を namespace として保存し、各 PaneRef に `terminal_id`、provider が報告した場合は `agent_session` を保存する。
 
 herdr 0.7.3 は明示 `--session` が無い場合、継承した `HERDR_SOCKET_PATH` を `HERDR_SESSION` より優先する(Pass 2 レビュー時の 0.7.3 実機確認)。
 herdr pane 内で実行する fanout は常にこの変数を持つため、session 名だけの routing は custom socket や別 session の server に接続し得る。
@@ -424,7 +424,8 @@ response loss または mutation の有無が不明な場合は blind retry せ�
 herdr backend は root coordinator の intent 行を発行直前に保存してから `workspace create` を実行する。
 coordinator の workspace create には非発行を証明する手段がないため、発行前の staging 段（planned）は持たず、保存済み intent が残る crash はすべて存在確認の分類（採用 or `manual_cleanup_required`）で処理する。
 root coordinator の `workspace create` も副作用を持つ launch 操作として intent 行の対象にし、console と同じ「nonce label の存在確認 → 採用 or fail closed」で応答喪失を処理する。
-coordinator root の launcher は worktree root と同じ readiness / token / agent detection 契約を通してから通常 state へ確定する。
+coordinator root の launcher は intent と process / snapshot identity の照合後、shell や agent を起動せず inert な process として残る。
+coordinator workspace を後続 child が再利用できるよう、launcher 自体には launch cycle の 300 秒 expiry を適用しない。
 herdr pane 内から fanout を起動する通常ケースでは同じ root cwd のユーザー workspace が既にあるため、root cwd / provenance の一致だけでは coordinator を識別せず、label nonce で識別する。
 
 ## worktree の配置と lifecycle
@@ -485,14 +486,14 @@ herdr backend は tmux-parity trust、owned session、version gate を確認し�
 - intent 行は launch finalization（agent 検出 / rename / process 照合の完了）まで保持し、final row の確定と同じ state save で削除する。launcher はこの intent から実行内容を読む。
 - 構造化 error が workspace / checkout の非作成を示す失敗では、今回 fanout が作った branch だけを compare-and-delete で削除して fail-fast する（tmux backend の `git worktree add` 失敗時の branch 削除と同じ）。response loss では branch を削除しない。
 - compare-and-delete は fanout の branch 削除手順であり、照合済み tip（launch rollback は記録済み base SHA、cleanup は merge 確認後の current tip）との一致と、同じ full branch ref を checkout する linked worktree の不在を確認してから削除する。cleanup の tip 照合は current tip が merged PR の head と一致するか merge 先 branch の ancestor であることも検証し、未マージ commit を持つ branch は残す。checkout を検査しない `update-ref -d` 単独では行わず、checked-out branch を拒否する tmux backend の `git branch -D` と同じ guard を保つ。
-- `worktree create` 成功後の launch 失敗（launcher timeout / exit、token 失敗、agent 検出失敗）は tmux backend の `failCleanup` と同水準で rollback する。rollback は launch cycle と別の operation として新しい intent 行と budget で実行し、保存済み label nonce / branch / path / `terminal_id` を再照合してから force なしの `worktree remove` を一回発行し、workspace / checkout の不在を確認できた場合だけ自作 branch を記録済み base SHA の compare-and-delete で削除して両 intent 行を消す。照合不一致と dirty 拒否では資源を残して `manual_cleanup_required` にする（tmux も close を確認できない場合は worktree を温存する）。remove の response loss は再実行時の存在確認で分類し、workspace / checkout の不在を確認できれば rollback 完了として branch 削除と intent 整理へ進み、残存または判定不能では旧 request の進行中を排除できないため再発行せず `manual_cleanup_required` にする。
+- `worktree create` 成功後の launch 失敗（launcher timeout / exit、token 失敗、agent 検出失敗）は tmux backend の `failCleanup` と同水準で rollback する。rollback は launch cycle と別の operation として新しい intent 行と budget で実行し、保存済み label nonce / branch / path / `terminal_id` を再照合してから force なしの `worktree remove` を一回発行し、workspace / checkout の不在を確認できた場合だけ自作 branch を記録済み base SHA の compare-and-delete で削除して両 intent 行を消す。照合不一致と dirty 拒否では資源を残して `manual_cleanup_required` にする（tmux も close を確認できない場合は worktree を温存する）。crash 後に rollback intent が `planned` なら未発行として元の realized intent を復元する。`issued` なら remove を再発行せず、workspace / checkout の不在を確認できた場合だけ rollback 完了として branch 削除と intent 整理へ進み、残存または判定不能では旧 request の進行中を排除できないため `manual_cleanup_required` にする。
 - 応答喪失または crash 後の再実行は combined launch lock 下の存在確認で分類する。intent の nonce と一致する label の workspace / checkout が一意に存在し、branch / path / `HEAD` が一致すれば採用する。request 未発行または rollback 完了を存在確認で証明できる場合だけ intent を削除し、それ以外は mutation を再発行せず `manual_cleanup_required` にする。
 - socket mutation（`worktree create` / `worktree remove` など）の再発行と、最初からやり直すための intent 削除は、request の非発行を証明できる場合に限る。事後条件の成立を確認できた場合（create は nonce / identity が一致する資源の採用、remove は対象資源の不在）は operation 完了として intent を整理できる。どちらも証明・確認できない場合は request が server 内で進行中の可能性を排除できないため `manual_cleanup_required` にする（自動 recovery は採用・完了確認 or fail closed が基準 2 の全部であり、暗黙の作り直しも再発行もしない）。branch ref create など local git mutation は構造化結果で非発生を証明できる。fresh branch の launch では flow が branch 作成を `worktree create` より先に行うため、branch が未作成のままであることが create の未発行を証明し、この場合だけ intent 行を削除して最初からやり直せる。
 - 既存 checkout への `worktree open` は同じ intent の launch recovery と cleanup 前の再検証に限り、`already_open:true` は同じ workspace ID / label が row / intent に束縛済みの場合だけ受理する。
 - launch cycle は 3 秒以上 300 秒以下の `total_timeout`（既定 300 秒）を最初の mutation 前に確定し、retry で延長しない。
 - deterministic agent name は `fanout-` + SHA-256（canonical git common directory、row key、launch nonce の length-prefix 連結）の先頭 24 lowercase hex とし、0.7.5 の `[a-z][a-z0-9_-]{0,31}` を満たす。同名 agent が別 pane にある場合は fail closed にする。
 - 操作直前の共通再照合として、root pane の `cwd`、`terminal_id`、`HERDR_PANE_ID` / `HERDR_WORKSPACE_ID`、foreground launcher process を intent と照合してから token を発行する。
-- token の `pane run` も socket mutation として扱い、発行直前に intent 行へ token 発行済み flag を state save する。recovery で flag が立っている場合は token を再送せず、intent に一致する child process chain を観測できれば finalization から再開し、できなければ `manual_cleanup_required` にする（配送済み token の二重入力防止）。flag がない場合だけ fresh marker の再観測後に token を発行できる。
+- token の `pane run` も socket mutation として扱い、発行直前に intent 行へ token 発行済み flag を state save する。flag が立った後の timeout、cancellation、error、response loss は、同名 agent や一致する child process chain を観測できても自動採用せず `manual_cleanup_required` にする。token は再送しない。flag がない場合だけ fresh marker の再観測後に token を発行できる。
 - 失敗した child launch の後は次の child に進まず停止する（tmux backend の `executePlan` fail-fast と同じ）。rollback は前項の identity 照合と不在確認を満たした場合だけ行い、それ以外の削除は cleanup 経路が行う。
 - 照合と mutation の間の TOCTOU（同名 session の差し替え）は tmux と同種の受容済み残余リスクとする。
 - plugin registry は owned XDG の registry と config を launch 前に照合し、予期しない setup hook があれば fail closed にする。この preflight は協調プロセス前提の操作 gate であり atomic proof ではない。
@@ -612,7 +613,7 @@ OS process 情報から解決した実 executable も発行した absolute path 
 したがって plain shell への command 送信は diagnostic probe に限り、自動 launch には使わない。
 
 追加の隔離 probe では owned config の `terminal.default_shell` を absolute launcher、`shell_mode` を `non_login` に固定した。
-launcher は exact checkout cwd、`HERDR_PANE_ID=w3:p1`、`HERDR_WORKSPACE_ID=w3`、operation nonce を受け、`pane wait-output` は `FANOUT_READY:<nonce>` を検出した。
+launcher は exact checkout cwd、`HERDR_PANE_ID=w3:p1`、`HERDR_WORKSPACE_ID=w3`、operation nonce を受け、`pane wait-output` は `FANOUT_HERDR_READY:<nonce>` を検出した。
 続いて `pane run w3:p1 FANOUT_EXEC:<nonce>` を一回送ると、launcher が absolute fake process へ `FANOUT_AGENT_PROBE=value with spaces`、一要素の `arg with spaces`、exact cwd を渡した。
 最初の pane で process 起動直後に一回だけ出した marker は buffer に残らなかったため、production launcher は有限 budget 内で marker を再送する。
 この結果から、owned launcher readiness、operation-bound token、agent 検出、rename、process chain 照合を 0.7.5 の launch contract にする。
@@ -627,14 +628,15 @@ snapshot は owned XDG / routing env を設定する前に取るため、owned X
 raw workload env value を control env、process argv、intent 行、final row、log へ複製しない。
 
 0.7.5 の child root pane は source workspace の env を継承しないため、workload env は launch nonce に束縛した one-shot の 0600 env file で launcher へ渡す。
-env file は private namespace gate 済みの 0700 directory 配下に exclusive create し、intent 行には path と name 数だけを記録して raw value を保存しない。
+env file は private namespace gate 済みの 0700 directory 配下に exclusive create し、intent 行には path と name 数だけを記録して raw value を保存しない。capsule は書き込み前に 64 KiB 以下であることを確認し、reader と同じ上限を使う。
 
 launcher の bootstrap protocol は次のとおりとする。
 launcher は process start 時に `HERDR_PANE_ID` / `HERDR_WORKSPACE_ID` と exact cwd に一致する未失効 intent を server env の `FANOUT_HERDR_CONTROL_PATH` から lock-free read で採用し、shell、line editor、checkout 内 code を起動しない。
-採用後は `FANOUT_READY:<launch-nonce>` を直ちに一回、その後は一秒ごとに bootstrap deadline（hard 300 秒と intent に保存した絶対 expiry の早い方）まで出す。
+worktree intent の採用後は `FANOUT_HERDR_READY:<launch-nonce>` を直ちに一回、その後は一秒ごとに bootstrap deadline（hard 300 秒と intent に保存した絶対 expiry の早い方）まで出す。
 一回だけの即時 marker は capture 前に失われた実測があるため、parent の readiness 判定は再送 marker の `pane wait-output` 検出と launcher process identity の照合で行う。
 matching intent がないまま deadline へ達した launcher は入力を受理せず非ゼロで終了する。
 token の byte 完全一致以外の入力、先行入力、別 nonce は拒否し、child を起動せず終了する。
+coordinator intent を採用した launcher は marker と token を使わず、stdin EOF まで inert に待機する。入力は拒否する。
 launcher は exact token の受理後に env file を読んで直ちに unlink し、intent に記録した cwd / 絶対 executable / argv と合わせて child を exec する。
 env file の欠落、識別不一致、読み取り失敗では child を起動せず fail closed にし、crash 後も current env から再生成しない。
 env file の寿命は intent 行に揃え、intent 行を削除する全経路（final row 確定、rollback 完了、fresh branch 未作成によるやり直し）は記録済み env file の unlink または不在確認を先に行う。
@@ -1080,7 +1082,7 @@ success と error の envelope は次の形だった。
 
 `herdr api snapshot` は raw method `session.snapshot` を CLI から呼び、workspace、tab、pane、layout、agent、focused ID を一つの `session_snapshot` で返す。
 worktree provenance は workspace に入るが、parent workspace ID と session UUID は入らない。
-pane と agent の `agent_session` は optional で、存在する場合は `source`、`agent`、`kind`、`value` を必須にする。
+pane と agent の `agent_session` は optional で、存在する場合は `source`、`agent`、`kind`、`value` を必須にする。final row に ref を保存済みなら以後は完全一致を要求する。launch 時点で未報告なら nil を保存し、後から expected provider の valid ref が一つ現れる遷移だけを受理する。
 `kind` は `id` または `path` である。
 `pane.report_agent_session` は公式 integration が Socket method として使い、fanout は呼ばない。
 fanout は snapshot の ref を読むだけにし、同じ ref を重複報告しない。
@@ -1334,7 +1336,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   server loss 後の restart は明示操作（実装は #530）が marker / lease と saved process / socket 不在の照合後に一回だけ spawn し、結果不明は fail closed にする。
   console detach 後も server を存続させ、最後の child close では止めず、active row / intent と foreign resource のない明示 repo-session shutdown（実装は #530。空状態確認と同じ save の shutdown intent 行で並行 mutation を fence する）だけを teardown とする。
 - herdr backend wave 2 は snapshot / list / wait、targeted content read、root coordinator、worktree / agent launch、focus、nudge、metadata、console / coordinator close、child cleanup を後続実装へ解禁する。
-  console / coordinator / agent launch は #528 の direct-launch 契約完了まで fail closed にする。
+  issue / Project / plan / watcher の coordinator / agent launch は #528 の direct-launch 契約を使う。interactive TUI の launch は #530 まで read-only とする。
+  Codex child Plan Mode は #554 まで runtime session 作成前に拒否する。
   `--team` と #552 の Herdr nudge 実装は例外とし、#528 の fail-closed gate は #568 が peer 登録、plan preseed / cleanup、自己識別、宛先解決を `state.json` の canonical Herdr pane row へ移行するまで最初の mutation 前に拒否する。
   移行前の Herdr row を worktree-local `state.json` に複製せず、tmux 用の state-dependent peer / nudge 経路へ渡さない。
   各 operation は保存済み identity と live snapshot を直前に再照合し、operation 固有の事後条件を検査する。
@@ -1366,6 +1369,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   signal は協調 telemetry として表示、診断、`shouldNudge` gate に使い、完了判定または cleanup に使わない。
   `terminal_id` の変化で `reported_state` を未設定にし、emitter nonce を回転して row を `stale` にする。
 - PaneRef の routing、worktree ownership、terminal 実体、論理上の会話、process の生存を別々に判定する。
+  issue / Project / plan / watcher の liveness は同じ matcher を使い、保存済み provider と snapshot の `agent` field も一致させる。表示名の `name` は provider identity に使わない。
   `unknown` record を無条件に running へ写像しない。
   0.7.5 direct-launch row は `terminal_id` が変わった時点で provider と `agent_session` の有無にかかわらず `stale` にし、#532 の実機連鎖まで resume を保留する。
 - `agent wait` と `pane wait-output` は server-owned current-state / current-buffer wait として有限 timeout 付きで使い、launch finalization と nudge には使わない。

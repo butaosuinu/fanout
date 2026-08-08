@@ -195,7 +195,7 @@ func validateEmptyPluginList(data []byte) error {
 	if err := decodeOne(data, &envelope); err != nil {
 		return methodUnavailable("plugin.list")
 	}
-	if envelope.ID != "cli:plugin:list" || envelope.Result == nil ||
+	if envelope.ID != "cli:plugin" || envelope.Result == nil ||
 		envelope.Result.Type != "plugin_list" || envelope.Result.Plugins == nil {
 		return methodUnavailable("plugin.list")
 	}

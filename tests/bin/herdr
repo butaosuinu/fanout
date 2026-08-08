@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Tier 2 shim for Herdr 0.7.5 status and snapshot reads.
+
+set -euo pipefail
+
+fixture="${FIXTURE_DIR:-}"
+
+emit_fixture() {
+  local path="$1"
+  if [[ -z "$fixture" || ! -f "$path" ]]; then
+    echo "herdr shim: missing fixture $path" >&2
+    exit 1
+  fi
+  cat "$path"
+}
+
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'herdr 0.7.5\n'
+  exit 0
+fi
+
+if [[ "${1:-}" == "--session" ]]; then
+  shift 2
+fi
+
+case "${1:-} ${2:-}" in
+  "status --json")
+    emit_fixture "$fixture/herdr-status.json"
+    ;;
+  "api snapshot")
+    emit_fixture "$fixture/herdr-snapshot.json"
+    ;;
+  *)
+    echo "herdr shim: unsupported command: $*" >&2
+    exit 1
+    ;;
+esac

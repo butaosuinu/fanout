@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/sessionbinding"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -488,7 +489,7 @@ func mergeDegradedWaveInfos(previous, current map[int]sessionview.WaveInfo) map[
 func (p *poller) build() sessionview.Snapshot {
 	repo, _, _ := p.ghIdentity()
 	return sessionview.Build(repo, p.projectRoot, sessionview.Collectors{
-		LoadState:    sessionview.MergedStateLoader(p.projectRoot, p.listLive),
+		LoadState:    sessionbinding.StateLoader(p.projectRoot, p.listLive),
 		ListLive:     p.listLive,
 		IssuePRs:     p.issuePRsFromCache,
 		BranchPRs:    p.branchPRsFromCache,

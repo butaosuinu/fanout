@@ -32,6 +32,7 @@ func pane(parent string, num int, paneID string) state.Pane {
 
 func herdrPane(parent string, num int, paneID string) state.Pane {
 	p := pane(parent, num, paneID)
+	p.Agent = "codex"
 	p.Backend = backend.Herdr
 	p.HerdrWorkspaceID = "workspace-a"
 	p.HerdrTerminalID = "terminal-a"
@@ -64,6 +65,7 @@ func liveHerdrPane(p state.Pane) backend.LivePane {
 		NativeAgentState: "working",
 		TerminalID:       p.HerdrTerminalID,
 		AgentID:          p.HerdrAgentID,
+		AgentProvider:    p.Agent,
 		AgentSession:     agentSession,
 		AgentPresent:     true,
 		Focused:          true,
@@ -804,6 +806,20 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 			include: true,
 		},
 		{
+			name: "agent provider changed",
+			mutateLive: func(p *backend.LivePane) {
+				p.AgentProvider = "claude"
+			},
+			include: true,
+		},
+		{
+			name: "agent provider missing",
+			mutateLive: func(p *backend.LivePane) {
+				p.AgentProvider = ""
+			},
+			include: true,
+		},
+		{
 			name: "recorded agent disappeared",
 			mutateLive: func(p *backend.LivePane) {
 				p.AgentID = ""
@@ -856,12 +872,22 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 			include: true,
 		},
 		{
-			name: "recorded logical conversation missing",
+			name: "unbound logical conversation requires state binding",
 			mutateRow: func(p *state.Pane) {
 				p.HerdrAgentSession = nil
 			},
+			include: true,
+		},
+		{
+			name: "provider omitted logical conversation",
+			mutateRow: func(p *state.Pane) {
+				p.HerdrAgentSession = nil
+			},
+			mutateLive: func(p *backend.LivePane) {
+				p.AgentSession = nil
+			},
 			include:   true,
-			wantState: "unsupported",
+			wantAlive: true,
 		},
 		{
 			name: "recorded logical conversation invalid",

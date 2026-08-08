@@ -1,0 +1,32 @@
+[info] project root: <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root
+[info] fetching sub-issues of #100
+[info] sub-issues: 2 total, 2 OPEN
+[info] will create 2 pane(s); deferred (blocked): 0; deferred (--limit): 0
+[info] #101: First child
+  briefing -> <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/briefings/fanout-project_root-101.md
+  slug -> first-child-101
+  worktree -> <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/worktrees/first-child-101
+  branch -> fanout/first-child-101
+  base -> main
+  briefing size: 4932 bytes
+    $ herdr workspace create --cwd <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root --label <coordinator_nonce> --no-focus
+    $ herdr worktree create --workspace <coordinator_id> --branch fanout/first-child-101 --path <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/worktrees/first-child-101 --label <worktree_nonce> --no-focus
+    # wait for the operation-bound fanout launcher marker, issue one token, and verify the exact agent session
+    # agent argv: claude --permission-mode auto '[fanout #101 of #100] first-child-101: First child. read <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/briefings/fanout-project_root-101.md and begin.'
+    # would write coordinator and child Herdr identities to .fanout/state.json
+[ ok ] #101: dry-run complete
+[info] #102: Second child
+  briefing -> <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/briefings/fanout-project_root-102.md
+  slug -> second-child-102
+  worktree -> <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/worktrees/second-child-102
+  branch -> fanout/second-child-102
+  base -> main
+  briefing size: 4933 bytes
+    $ herdr workspace create --cwd <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root --label <coordinator_nonce> --no-focus
+    $ herdr worktree create --workspace <coordinator_id> --branch fanout/second-child-102 --path <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/worktrees/second-child-102 --label <worktree_nonce> --no-focus
+    # wait for the operation-bound fanout launcher marker, issue one token, and verify the exact agent session
+    # agent argv: claude --permission-mode auto '[fanout #102 of #100] second-child-102: Second child. read <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/briefings/fanout-project_root-102.md and begin.'
+    # would write coordinator and child Herdr identities to .fanout/state.json
+[ ok ] #102: dry-run complete
+
+[ ok ] created: 2

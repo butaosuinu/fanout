@@ -161,11 +161,14 @@ func TestResolvePlanLaunchParentUsesDeclaredIssueSource(t *testing.T) {
 	}
 }
 
-func TestCmdPlanRejectsDirectHerdrBeforeMutation(t *testing.T) {
+func TestCmdPlanHerdrDryRunDoesNotMutate(t *testing.T) {
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init", "-b", "main")
+	installHerdrStatusShim(t)
 	t.Chdir(repo)
 	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_SESSION", "")
+	t.Setenv("HERDR_SOCKET_PATH", "")
 	t.Setenv("TMUX", "")
 	t.Setenv("FANOUT_BACKEND", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -182,15 +185,15 @@ func TestCmdPlanRejectsDirectHerdrBeforeMutation(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := cmdPlan(
-		[]string{specPath, "--backend", "herdr", "--agent", "claude"},
+		[]string{specPath, "--backend", "herdr", "--agent", "claude", "--dry-run"},
 		log.NewWith(&stdout, &stderr, false),
 		"fanout",
 	)
-	if code != exitcode.Env {
-		t.Fatalf("cmdPlan() = %d, want %d; stderr=%q", code, exitcode.Env, stderr.String())
+	if code != exitcode.OK {
+		t.Fatalf("cmdPlan() = %d, want %d; stderr=%q", code, exitcode.OK, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "runtime backend herdr does not support") {
-		t.Fatalf("stderr = %q, want direct herdr unsupported error", stderr.String())
+	if !strings.Contains(stdout.String(), "herdr workspace create") {
+		t.Fatalf("stdout = %q, want Herdr dry-run plan", stdout.String())
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".fanout")); !os.IsNotExist(err) {
 		t.Fatalf("direct herdr plan preflight mutated .fanout: %v", err)

@@ -101,13 +101,11 @@ func runTUIConsole(projectRoot, session, commandName string, selection backend.S
 	var watcher fanouttui.WatcherRunner
 	var watchInterval time.Duration
 	var watchLabel string
-	if tmuxHost {
-		var err error
-		watcher, watchInterval, watchLabel, err = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig)
-		if err != nil {
-			lg.Err("watcher: %v", err)
-			return exitcode.Env
-		}
+	var watchErr error
+	watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig, tmuxHost)
+	if watchErr != nil {
+		lg.Err("watcher: %v", watchErr)
+		return exitcode.Env
 	}
 	notifier, err := fanoutnotify.New(fanoutnotify.Config{
 		Channels:        resolvedSettings.Notifications,
@@ -225,12 +223,10 @@ func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConf
 		var watcher fanouttui.WatcherRunner
 		var watchInterval time.Duration
 		var watchLabel string
-		if selection.Name == backend.Tmux {
-			var err error
-			watcher, watchInterval, watchLabel, err = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig)
-			if err != nil {
-				return fanouttui.SettingsRuntime{}, fmt.Errorf("watcher: %w", err)
-			}
+		var watchErr error
+		watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig, selection.Name == backend.Tmux)
+		if watchErr != nil {
+			return fanouttui.SettingsRuntime{}, fmt.Errorf("watcher: %w", watchErr)
 		}
 		notifier, err := fanoutnotify.New(fanoutnotify.Config{
 			Channels:        resolvedSettings.Notifications,

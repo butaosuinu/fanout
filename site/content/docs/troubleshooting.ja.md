@@ -120,8 +120,8 @@ items が想定より少なく見えることがありますが、Status フィ�
 
 ## "herdr named session ... is not running"
 
-[herdr backend]({{< relref "/docs/herdr-backend" >}}) には、明示的な名前を付けて稼働中の herdr session が必要です。fanout は herdr server を起動せず、session の作成も attach もしません。`default` は拒否されます。
-先に herdr 側で名前付き session を起動し、同じシェルから確認してください。
+このエラーは、外部の [herdr backend]({{< relref "/docs/herdr-backend" >}}) session を観測する経路のものです。
+herdr 側で名前付き session を起動し、同じシェルから確認してください。`default` は拒否されます。
 
 ```bash
 herdr status --json   # server と session の状態
@@ -129,6 +129,7 @@ herdr status --json   # server と session の状態
 
 `HERDR_SOCKET_PATH` は `HERDR_SESSION` より優先されるため、古い socket path が残っていると fanout が別の server を見に行きます。`status` の結果が想定と合わないときは unset してください。
 TUI 版のエラー `run fanout inside an existing herdr pane (HERDR_ENV=1)` は文字どおりの意味です。herdr backend でのコンソールは、herdr session 内の pane から起動したときだけ立ち上がります。
+CLI の issue、Project、plan、watcher launch は、代わりにリポジトリの fanout-owned session を作成または再採用します。
 
 ## "unsupported herdr CLI version ..."
 
@@ -146,9 +147,10 @@ stable herdr 0.7.5 以上へ更新してください。`requires a client/server
 
 fanout は method と response field を事前検査しません。`herdr method "<name>" is unavailable` は、その method call が失敗したことを示します。インストール済みの herdr がその method を提供するか確認してください。
 
-## "herdr backend v1 is observation-only; ... is unavailable"
+## "herdr backend interactive TUI actions are read-only"
 
-故障ではありません。herdr backend v1 は、herdr session を変更しうる操作を意図的に fail closed します。`runtime backend herdr does not support ...` も同じ系統です(launch・focus・send・close・restore・peek・plan capture・cleanup)。
-新しい launch には tmux backend を使ってください。既存の herdr 行では、branch を merge するだけの `--merge` は使えますが、`--close` / `--cleanup` は拒否されます。workspace は herdr 側で片付けてください。
-関連して、記録済みペインを持つ親への矛盾する `--backend` は `explicit migration is required` で失敗します。v1 に移行コマンドはありません。
+故障ではありません。
+このメッセージは対話 TUI の変更操作と未対応の操作に適用され、CLI の issue、Project、plan、watcher launch には適用されません。これらの launch レーンでは `--backend herdr` を使えます。
+herdr と `--team` の組み合わせ、Codex 子の Plan Mode は、変更前に専用の `runtime backend herdr does not support ...` エラーで失敗します。
+記録済みペインを持つ親への矛盾する backend 指定は、引き続き `explicit migration is required` で失敗します。v1 に移行コマンドはありません。
 機能の対応表は [herdr backend]({{< relref "/docs/herdr-backend" >}}) にあります。

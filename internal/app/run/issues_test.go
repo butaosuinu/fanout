@@ -15,6 +15,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 )
 
@@ -44,7 +45,7 @@ func TestExecutePlanSleepsBetweenDryRunIssues(t *testing.T) {
 		{Number: 2, Title: "two", State: "OPEN", Body: "body"},
 	}
 
-	result := executePlan(cfg, lg, info, tmuxbackend.New(), targets, nil, settings.Defaults(), hooks.EmptyConfig(), nil, nil, log.Palette{}, "fanout", nil)
+	result := executePlan(cfg, lg, info, tmuxbackend.New(), nil, targets, nil, settings.Defaults(), hooks.EmptyConfig(), nil, nil, log.Palette{}, "fanout", nil)
 
 	if result.Created != 2 || result.Failed != 0 {
 		t.Fatalf("executePlan result = %+v, want 2 created and 0 failed", result)
@@ -84,6 +85,34 @@ func TestEffectiveIssueLaunchConfigUsesResolvedPlanModeWithoutMutatingParsedConf
 	}
 }
 
+func TestPrepareIssueLaunchDefersBackendUntilTargetAndAgentValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		agentName string
+		targets   []ghissue.Issue
+		wantOK    bool
+		wantCalls int
+	}{
+		{name: "no targets", agentName: "claude", wantOK: true},
+		{name: "invalid agent", agentName: "unknown", targets: []ghissue.Issue{{Number: 101}}, wantOK: false},
+		{name: "valid target", agentName: "claude", targets: []ghissue.Issue{{Number: 101}}, wantOK: true, wantCalls: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			rt := &Runtime{PrepareBackend: func() error {
+				calls++
+				return nil
+			}}
+			cfg := &cliflags.Config{Agent: test.agentName, DryRun: true}
+			got := prepareIssueLaunch(cfg, Plan{Targets: test.targets}, rt, state.Store{}, nil, nil, log.NewWith(io.Discard, io.Discard, false))
+			if got != test.wantOK || calls != test.wantCalls {
+				t.Fatalf("prepareIssueLaunch() = %t, calls %d; want %t, %d", got, calls, test.wantOK, test.wantCalls)
+			}
+		})
+	}
+}
+
 func TestExecutePlanPreservesCreatedPaneIDsOnFailFastError(t *testing.T) {
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init", "-b", "main")
@@ -114,6 +143,7 @@ func TestExecutePlanPreservesCreatedPaneIDsOnFailFastError(t *testing.T) {
 		log.NewWith(io.Discard, io.Discard, false),
 		info,
 		tmuxbackend.New(),
+		nil,
 		targets,
 		nil,
 		settings.Defaults(),

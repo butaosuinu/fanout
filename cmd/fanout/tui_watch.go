@@ -12,7 +12,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
+	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/app/watch"
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/fanset"
@@ -21,15 +23,14 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
-func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config) (fanouttui.WatcherRunner, time.Duration, string, error) {
+func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, includeHostTmux bool) (fanouttui.WatcherRunner, time.Duration, string, error) {
 	if !resolvedSettings.Watcher {
 		return nil, 0, "", nil
 	}
-	preflightCfg := &cliflags.Config{ParentRef: tuiWatcherPreflightRef}
+	preflightCfg := newWatcherPreflightConfig(resolvedSettings)
 	if _, err := resolveTUILaunchRuntime(projectRoot, session, preflightCfg); err != nil {
 		return nil, 0, "", err
 	}
@@ -37,7 +38,7 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 	if err := gh.EnsureLabel(resolvedSettings.WatcherRunningLabel); err != nil {
 		return nil, 0, "", fmt.Errorf("ensure running label %q: %w", resolvedSettings.WatcherRunningLabel, err)
 	}
-	livePanes := &watchLivePaneCache{list: tmuxbackend.New().ListLiveForIdentity}
+	livePanes := &watchLivePaneCache{list: runtimeListLiveForProject(projectRoot, includeHostTmux)}
 	watcher := &tuiWatcher{livePanes: livePanes}
 	io := watch.IO{
 		ListLabeled: gh.ListOpenIssuesWithLabel,
@@ -146,22 +147,49 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 			_ = recorder.Unlock()
 		}()
 	}
-	if rt.VerifyBackend != nil {
-		if err := rt.VerifyBackend(cfg.ParentRef, store); err != nil {
-			return panelaunch.Result{}, fmt.Errorf("runtime backend: %w", err)
-		}
-	}
-	if hasRecordedIssuePane(projectRoot, store, issue.Number) {
-		return panelaunch.Result{}, watch.ErrAlreadyFanned
+	if err := admitStandaloneIssueRuntime(projectRoot, cfg, rt, store, issue.Number); err != nil {
+		return panelaunch.Result{}, err
 	}
 	req := panelaunch.NewWatchRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Herdr: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.LaunchWithResult(req)
 	if !ok {
 		return panelaunch.Result{}, bufferedLaunchError(stdout, stderr, "create watch pane")
 	}
 	result.Notice = combinedLaunchNotice([]string{result.Notice}, bufferedLaunchNotice(stderr))
 	return result, nil
+}
+
+func admitStandaloneIssueRuntime(projectRoot string, cfg *cliflags.Config, rt *run.Runtime, store state.Store, issueNum int) error {
+	if rt.VerifyBackend != nil {
+		if err := rt.VerifyBackend(cfg.ParentRef, store); err != nil {
+			return fmt.Errorf("runtime backend: %w", err)
+		}
+	}
+	if hasRecordedIssuePane(projectRoot, store, issueNum) {
+		return watch.ErrAlreadyFanned
+	}
+	if err := validateStandaloneIssueAgent(cfg, issueNum); err != nil {
+		return err
+	}
+	if err := rt.PrepareLaunchBackend(); err != nil {
+		return fmt.Errorf("runtime backend: %w", err)
+	}
+	return nil
+}
+
+func validateStandaloneIssueAgent(cfg *cliflags.Config, issueNum int) error {
+	agentName := cfg.EffectiveAgentForIssue(issueNum)
+	if agentName == "" {
+		return fmt.Errorf("#%d: agent is required", issueNum)
+	}
+	if err := agent.ValidateKnown(agentName); err != nil {
+		return err
+	}
+	if cfg.DryRun {
+		return nil
+	}
+	return agent.ValidateInstalled(agentName)
 }
 
 func launchParentIssueFanoutWithPlanInput(projectRoot, session, commandName string, cfg *cliflags.Config, input run.IssuePlanInput) (watch.ParentLaunchResult, error) {
@@ -248,6 +276,12 @@ func newWatchLaunchConfig(resolvedSettings settings.Settings, parent, limit int)
 		Format:          cliflags.DefaultFormat,
 		UnblockedOnly:   true,
 	}
+}
+
+func newWatcherPreflightConfig(resolvedSettings settings.Settings) *cliflags.Config {
+	cfg := newWatchLaunchConfig(resolvedSettings, 0, 0)
+	cfg.ParentRef = tuiWatcherPreflightRef
+	return cfg
 }
 
 func watcherAgent(resolvedSettings settings.Settings) string {
@@ -408,6 +442,9 @@ func watchPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
 	if backend.NormalizeName(pane.Backend) != backend.NormalizeName(live.Ref.Backend) || pane.PaneID != live.Ref.Pane {
 		return false
 	}
+	if backend.NormalizeName(pane.Backend) == backend.Herdr {
+		return watchHerdrPaneMatchesLive(pane, live)
+	}
 	if shellKey := strings.TrimSpace(pane.ShellKey); shellKey != "" {
 		return shellKey == live.ShellKey
 	}
@@ -421,6 +458,13 @@ func watchPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
 	wt := filepath.Clean(worktree)
 	cp := filepath.Clean(live.CurrentPath)
 	return cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+}
+
+func watchHerdrPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
+	if pane.HerdrAgentSession == nil && live.AgentSession != nil {
+		return sessionview.HerdrPaneMatchesForSessionBinding(pane, live)
+	}
+	return sessionview.HerdrPaneMatches(pane, live)
 }
 
 func watchParentLaunchResult(plan run.Plan, created []int) watch.ParentLaunchResult {

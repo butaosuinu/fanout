@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -31,6 +32,7 @@ type runtimeBackendInputs struct {
 	herdrEnvironment   bool
 	tmuxEnvironment    bool
 	userDefault        backend.Name
+	childPlanMode      bool
 	rows               []backend.Binding
 	provisionalIntents []backend.Binding
 	suppliedIntents    []backend.Binding
@@ -42,6 +44,7 @@ type runtimeBackendInputs struct {
 type launchBackendResolution struct {
 	selection backend.Selection
 	backend   backend.Backend
+	prepare   func() (*herdrrun.OwnedSession, error)
 	verify    func(parent string, locked state.Store) error
 }
 
@@ -83,7 +86,11 @@ func resolveLaunchRuntime(cfg *cliflags.Config, provisionalIntents []backend.Bin
 		lg.Err("runtime backend: %v", err)
 		return nil, exitcode.Env
 	}
-	return run.ResolveRuntime(cfg, resolved.selection, resolved.backend, resolved.verify, lg)
+	runtime, code := run.ResolveRuntime(cfg, resolved.selection, resolved.backend, resolved.verify, lg)
+	if runtime != nil {
+		bindLaunchBackend(runtime, resolved)
+	}
+	return runtime, code
 }
 
 // resolveTUILaunchRuntime applies the same launch-backend contract as the CLI
@@ -104,7 +111,7 @@ func resolveTUILaunchRuntimeForTarget(projectRoot, session, target string, cfg *
 	if err != nil {
 		return nil, fmt.Errorf("runtime backend: %w", err)
 	}
-	return &run.Runtime{
+	runtime := &run.Runtime{
 		Info: &fanoutruntime.Info{
 			Session:     session,
 			Target:      target,
@@ -114,14 +121,15 @@ func resolveTUILaunchRuntimeForTarget(projectRoot, session, target string, cfg *
 		Backend:          resolved.backend,
 		BackendSelection: resolved.selection,
 		VerifyBackend:    resolved.verify,
-	}, nil
+	}
+	bindLaunchBackend(runtime, resolved)
+	return runtime, nil
 }
 
-// resolveLaunchBackend is the shared read-only composition step for CLI and
-// TUI launches. Herdr v1 is rejected before backend availability checks and
-// before a launch path can lock state, write a briefing, or prepare a
-// worktree. verify repeats parent stickiness against the store held under the
-// launch lock.
+// resolveLaunchBackend is the shared composition step for CLI and TUI launch
+// lanes. Interactive TUI mutation remains deferred, while CLI issue, Project,
+// plan, and watcher lanes may acquire the owned Herdr runtime. verify repeats
+// parent stickiness against the store held under the launch lock.
 func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) (launchBackendResolution, error) {
 	inputs := loadRuntimeBackendInputs(cfg, projectRoot, store, provisionalIntents)
 	rows, err := runtimeBackendBindings(projectRoot, store)
@@ -136,18 +144,39 @@ func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.
 	if err != nil {
 		return launchBackendResolution{}, err
 	}
-	if validateErr := validateLaunchBackend(selection); validateErr != nil {
+	if validateErr := validateLaunchBackend(cfg, selection, inputs); validateErr != nil {
 		return launchBackendResolution{}, validateErr
 	}
-	runtimeBackend, err := constructRuntimeBackend(selection.Name, inputs)
+	runtimeBackend, prepare, err := constructLaunchRuntimeBackend(cfg, selection.Name, inputs)
 	if err != nil {
 		return launchBackendResolution{}, err
 	}
 	return launchBackendResolution{
 		selection: selection,
 		backend:   runtimeBackend,
+		prepare:   prepare,
 		verify:    backendSelectionVerifier(selection, inputs),
 	}, nil
+}
+
+func bindLaunchBackend(runtime *run.Runtime, resolved launchBackendResolution) {
+	if resolved.prepare == nil {
+		return
+	}
+	var once sync.Once
+	var prepareErr error
+	runtime.PrepareBackend = func() error {
+		once.Do(func() {
+			owned, err := resolved.prepare()
+			if err != nil {
+				prepareErr = err
+				return
+			}
+			runtime.Backend = owned.Backend()
+			runtime.Herdr = owned
+		})
+		return prepareErr
+	}
 }
 
 // backendSelectionVerifier closes over the immutable non-state resolver inputs
@@ -225,16 +254,82 @@ func canonicalRuntimeRoot(root string) string {
 	return filepath.Clean(root)
 }
 
-func validateLaunchBackend(selection backend.Selection) error {
-	if selection.Name == backend.Herdr {
-		// Herdr v1 is observation-only. Reject it before provisional intents,
-		// worktrees, or state rows are created. In particular, the read path must
-		// not fill missing row identity from a snapshot: same-name sessions reuse
-		// public IDs, so doing so would adopt a new terminal instead of reporting
-		// the incomplete row as stale.
-		return backend.Unsupported(backend.Herdr, "issue, Project, and plan launch in v1")
+func validateLaunchBackend(
+	cfg *cliflags.Config,
+	selection backend.Selection,
+	inputs runtimeBackendInputs,
+) error {
+	if selection.Name != backend.Herdr {
+		return nil
+	}
+	return validateHerdrLaunchBackend(cfg, inputs)
+}
+
+func validateHerdrLaunchBackend(cfg *cliflags.Config, inputs runtimeBackendInputs) error {
+	if cfg.Team {
+		return backend.Unsupported(backend.Herdr, "--team launch until registry-backed peers are available")
+	}
+	if cfg.TUIInteractive {
+		return backend.Unsupported(backend.Herdr, "interactive TUI launch in the current release wave")
+	}
+	// Per-item overrides are checked before --only/--skip selection. Narrowing
+	// this fail-closed gate to selected items is deferred to a follow-up issue.
+	if inputs.childPlanMode && configMayLaunchCodex(cfg) {
+		return backend.Unsupported(backend.Herdr, "Codex Plan Mode child launch until issue #554")
+	}
+	if cfg.Session != "" {
+		return fmt.Errorf("--session is only supported by the tmux backend")
+	}
+	if !configHasLaunchAgent(cfg) {
+		return fmt.Errorf("agent is required; pass --agent <name> or set FANOUT_AGENT")
 	}
 	return nil
+}
+
+func configHasLaunchAgent(cfg *cliflags.Config) bool {
+	agentName := cfg.Agent
+	if agentName == "" {
+		agentName = os.Getenv("FANOUT_AGENT")
+	}
+	return agentName != "" || len(cfg.AgentOverrides) > 0
+}
+
+func configMayLaunchCodex(cfg *cliflags.Config) bool {
+	agentName := cfg.Agent
+	if agentName == "" {
+		agentName = os.Getenv("FANOUT_AGENT")
+	}
+	if strings.EqualFold(strings.TrimSpace(agentName), "codex") {
+		return true
+	}
+	for _, override := range cfg.AgentOverrides {
+		if strings.EqualFold(strings.TrimSpace(override.Name), "codex") {
+			return true
+		}
+	}
+	return false
+}
+
+func constructLaunchRuntimeBackend(
+	cfg *cliflags.Config,
+	name backend.Name,
+	inputs runtimeBackendInputs,
+) (backend.Backend, func() (*herdrrun.OwnedSession, error), error) {
+	if name != backend.Herdr {
+		runtimeBackend, err := constructRuntimeBackend(name, inputs)
+		return runtimeBackend, nil, err
+	}
+	if cfg.DryRun {
+		return herdrrun.NewPreview(), nil, nil
+	}
+	prepare := func() (*herdrrun.OwnedSession, error) {
+		identity, err := worktree.ResolveRepoIdentity(context.Background(), inputs.projectRoot)
+		if err != nil {
+			return nil, err
+		}
+		return herdrrun.EnsureOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
+	}
+	return herdrrun.NewPreview(), prepare, nil
 }
 
 func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) runtimeBackendInputs {
@@ -250,6 +345,10 @@ func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store st
 	if resolved.RuntimeBackendSource == settings.RuntimeBackendSourceUserConfig {
 		userDefault = resolved.RuntimeBackend
 	}
+	childPlanMode := resolved.ChildPlanMode
+	if cfg.PlanMode != nil {
+		childPlanMode = cfg.PlanModeEnabled()
+	}
 	return runtimeBackendInputs{
 		projectRoot:        projectRoot,
 		cli:                cfg.Backend,
@@ -257,6 +356,7 @@ func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store st
 		herdrEnvironment:   os.Getenv("HERDR_ENV") == "1",
 		tmuxEnvironment:    os.Getenv("TMUX") != "",
 		userDefault:        userDefault,
+		childPlanMode:      childPlanMode,
 		rows:               backendBindings(projectRoot, store),
 		provisionalIntents: append([]backend.Binding(nil), provisionalIntents...),
 		suppliedIntents:    append([]backend.Binding(nil), provisionalIntents...),

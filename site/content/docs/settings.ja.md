@@ -40,13 +40,13 @@ repo config から watcher は変更できず、launch posture の 3 キー(`new
 - `prVisualization`: 子が開く PR の本文を構造化し、条件付きで Mermaid 図を入れる指示を加えます（後述）。
 - `dashboardKeybind`: tmux に `F12` / `prefix + D` のダッシュボードキーと `prefix + M` の同一 worktree 操作キーを登録します。
 - `consoleKeybind`: TUI コンソール起動時に、tmux へ `F11` / `prefix + T` のコンソール復帰キーを登録します。
-- `runtimeBackend`: 解決順の上位で決まらなかったときの fallback の runtime backend（`tmux` または `herdr`）です。親に記録済みの backend、`--backend`、`FANOUT_BACKEND`、実行環境のコンテキスト（`HERDR_ENV` / `TMUX`）がいずれも優先されます。user config 専用で、repo config では警告付きで無視されます。[herdr backend]({{< relref "/docs/herdr-backend" >}}) は v1 では観測専用です。
+- `runtimeBackend`: 解決順の上位で決まらなかったときの fallback の runtime backend（`tmux` または `herdr`）です。親に記録済みの backend、`--backend`、`FANOUT_BACKEND`、実行環境のコンテキスト（`HERDR_ENV` / `TMUX`）がいずれも優先されます。user config 専用で、repo config では警告付きで無視されます。[herdr backend]({{< relref "/docs/herdr-backend" >}}) は CLI launch にリポジトリの owned session を使います。
 
 3 つの launch posture 設定は、各レーンの session を agent の plan mode で始めるかを決めます。3 つの agent(claude / codex / opencode)すべてに共通で効きます:
 
 - `newSessionPlanMode`(既定 `true`): TUI の新規 Session — 手動プロンプトペイン、plan fan-out coordinator(claude / codex のみ)、`a` で attach する agent ペイン。
 - `orchestratorPlanMode`(既定 `true`): issue fan-out のプロジェクトルートに立つオーケストレーターペイン。codex のオーケストレーターは Plan Mode と start gate を両立できないため、fanout は警告して素の codex で起動します。
-- `childPlanMode`(既定 `false`): issue / Project の子、OPEN 子なし issue の単独 Session、`fanout plan` のタスク、watcher 起動。on にすると無人の [watcher]({{< relref "/docs/watcher" >}}) Session が plan 承認待ちで止まります(v2.1.207 未満または version 判定不能の claude は警告つきで mode フラグが省かれ、止まりません)。
+- `childPlanMode`(既定 `false`): issue / Project の子、OPEN 子なし issue の単独 Session、`fanout plan` のタスク、watcher 起動。on にすると無人の [watcher]({{< relref "/docs/watcher" >}}) Session が plan 承認待ちで止まります(v2.1.207 未満または version 判定不能の claude は警告つきで mode フラグが省かれ、止まりません)。herdr backend は Codex 子の Plan Mode を launch 前に拒否します。
 
 3 キーとも user 専用です。変更できるのは user config、環境変数、TUI 設定フォーム(`s`)だけで、repo config の値は警告して無視され、CLI flag もありません。Plan Mode は `--team` より優先されます — codex の plan 子は最小の Plan briefing のまま team bridge を失います。agent ごとのフラグと版要件は [Agent Integrations]({{< relref "/docs/agent-integrations" >}}) を参照してください。廃止された codex 専用の `codexPlanMode` キーと `FANOUT_CODEX_PLAN_MODE` は、3 キーへの置き換えを促す警告つきで無視されます。
 

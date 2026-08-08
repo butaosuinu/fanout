@@ -69,6 +69,10 @@ type Config struct {
 	PRVisualization    *bool
 	DashboardKeybind   *bool
 	Format             string
+	// TUIInteractive marks launch requests initiated by an interactive TUI
+	// action. The label watcher is intentionally not marked: it is a CLI
+	// launch lane even though the no-argument console hosts its loop.
+	TUIInteractive bool
 }
 
 // NameOverride represents a parsed `--name NUM=slug-hint|display-name|branch`

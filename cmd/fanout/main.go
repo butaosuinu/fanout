@@ -21,6 +21,7 @@ var (
 	commit  = "none"
 )
 
+//nolint:funlen // The composition root keeps the first-match-wins dispatch and launch wiring visible together.
 func main() {
 	lg := log.New(false)
 	commandName := invokedCommandName(os.Args)
@@ -34,6 +35,9 @@ func main() {
 		handle func() exitcode.Code
 	}
 	table := []dispatch{
+		{func([]string) bool { return herdrrun.IsPaneLauncherRequest() }, func() exitcode.Code {
+			return exitcode.Code(herdrrun.RunPaneLauncher(os.Stdin, os.Stdout, os.Stderr))
+		}},
 		{hooks.IsBackgroundRunnerRequest, func() exitcode.Code { return exitcode.Code(hooks.RunBackgroundRunner(os.Args[2:], os.Stderr)) }},
 		{herdrrun.IsSupervisorRequest, func() exitcode.Code { return exitcode.Code(herdrrun.RunSupervisor(os.Args[2:], os.Stderr)) }},
 		{isVersionRequest, func() exitcode.Code { fmt.Fprintln(os.Stdout, versionLine()); return exitcode.OK }},

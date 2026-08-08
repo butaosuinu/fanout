@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -16,6 +17,7 @@ const (
 	MaxHerdrSessionNameLength = 56
 	herdrSessionPrefix        = "fanout-"
 	herdrSessionHashLength    = 16
+	herdrAgentHashLength      = 24
 )
 
 // HerdrSessionName returns the stable per-repository name for a fanout-owned
@@ -26,6 +28,19 @@ func HerdrSessionName(device, inode uint64) string {
 	sum := sha256.Sum256([]byte(identity))
 	hash := hex.EncodeToString(sum[:])[:herdrSessionHashLength]
 	return herdrSessionPrefix + "repo-" + hash
+}
+
+// HerdrAgentName returns the operation-bound name used to adopt exactly one
+// agent inside a fanout-owned Herdr session.
+func HerdrAgentName(gitCommonDir, rowKey, launchNonce string) string {
+	var identity strings.Builder
+	for _, value := range []string{gitCommonDir, rowKey, launchNonce} {
+		identity.WriteString(strconv.Itoa(len(value)))
+		identity.WriteByte(':')
+		identity.WriteString(value)
+	}
+	hash := sha256.Sum256([]byte(identity.String()))
+	return herdrSessionPrefix + hex.EncodeToString(hash[:])[:herdrAgentHashLength]
 }
 
 // Slug returns a deterministic slug for an issue title and number.

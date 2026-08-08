@@ -1,13 +1,17 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/watch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
@@ -22,6 +26,39 @@ func TestNewWatchLaunchConfigUsesResolvedChildPlanMode(t *testing.T) {
 
 	if cfg.PlanMode == nil || !*cfg.PlanMode {
 		t.Fatalf("PlanMode = %v, want child Plan Mode watcher override", cfg.PlanMode)
+	}
+}
+
+func TestNewWatcherPreflightConfigCarriesAgentAndPlanMode(t *testing.T) {
+	resolved := settings.Defaults()
+	resolved.WatcherAgent = "codex"
+	resolved.ChildPlanMode = true
+
+	cfg := newWatcherPreflightConfig(resolved)
+
+	if cfg.ParentRef != tuiWatcherPreflightRef || cfg.Agent != "codex" ||
+		cfg.PlanMode == nil || !*cfg.PlanMode {
+		t.Fatalf("watcher preflight config = %+v, want parent, agent, and Plan Mode", cfg)
+	}
+}
+
+func TestAdmitStandaloneIssueRuntimeDefersBackendForRecordedIssue(t *testing.T) {
+	prepareCalls := 0
+	rt := &run.Runtime{PrepareBackend: func() error {
+		prepareCalls++
+		return nil
+	}}
+	err := admitStandaloneIssueRuntime(t.TempDir(), &cliflags.Config{ParentRef: "425"}, rt, state.Store{
+		Panes: []state.Pane{{Parent: panelaunch.WatchParentRef, IssueNum: 425}},
+	}, 425)
+	if !errors.Is(err, watch.ErrAlreadyFanned) || prepareCalls != 0 {
+		t.Fatalf("admit recorded issue = %v, prepare calls %d; want already-fanned without ownership", err, prepareCalls)
+	}
+	err = admitStandaloneIssueRuntime(t.TempDir(), &cliflags.Config{
+		ParentRef: "425", Agent: "unknown", DryRun: true,
+	}, rt, state.Store{}, 425)
+	if err == nil || !strings.Contains(err.Error(), "unknown agent") || prepareCalls != 0 {
+		t.Fatalf("admit invalid agent = %v, prepare calls %d; want validation before ownership", err, prepareCalls)
 	}
 }
 
@@ -144,7 +181,7 @@ esac
 	}
 }
 
-func TestTUIIssueProjectAndWatcherLaunchesRejectHerdrBeforeMutation(t *testing.T) {
+func TestTUIIssueAndProjectLaunchesRejectHerdrBeforeMutation(t *testing.T) {
 	tests := []struct {
 		name   string
 		launch func(string) error
@@ -152,7 +189,7 @@ func TestTUIIssueProjectAndWatcherLaunchesRejectHerdrBeforeMutation(t *testing.T
 		{
 			name: "standalone issue",
 			launch: func(repo string) error {
-				cfg := newWatchLaunchConfig(settings.Defaults(), 425, 0)
+				cfg := tuiIssueLaunchConfig(425, "claude", nil)
 				_, err := launchStandaloneIssuePaneWithResult(repo, "fanout-test", "fanout", cfg, settings.Defaults(), hooks.EmptyConfig(), ghissue.Issue{Number: 425, Title: "standalone"})
 				return err
 			},
@@ -160,7 +197,7 @@ func TestTUIIssueProjectAndWatcherLaunchesRejectHerdrBeforeMutation(t *testing.T
 		{
 			name: "parent issue",
 			launch: func(repo string) error {
-				cfg := newWatchLaunchConfig(settings.Defaults(), 425, 0)
+				cfg := tuiIssueLaunchConfig(425, "claude", nil)
 				_, err := launchParentIssueFanoutWithResult(repo, "fanout-test", "fanout", cfg, nil)
 				return err
 			},
@@ -169,9 +206,10 @@ func TestTUIIssueProjectAndWatcherLaunchesRejectHerdrBeforeMutation(t *testing.T
 			name: "Project",
 			launch: func(repo string) error {
 				cfg := &cliflags.Config{
-					ParentRef:  "https://github.com/orgs/example/projects/7",
-					ParentMode: cliflags.ModeProject,
-					Agent:      "claude",
+					ParentRef:      "https://github.com/orgs/example/projects/7",
+					ParentMode:     cliflags.ModeProject,
+					Agent:          "claude",
+					TUIInteractive: true,
 				}
 				_, err := launchParentIssueFanoutWithResult(repo, "fanout-test", "fanout", cfg, nil)
 				return err
@@ -211,7 +249,7 @@ func TestTUIIssueProjectAndWatcherLaunchesRejectHerdrBeforeMutation(t *testing.T
 	}
 }
 
-func TestNewTUIWatcherRejectsHerdrBeforeGitHubLabelMutation(t *testing.T) {
+func TestWatcherLaunchConfigAllowsHerdrSelection(t *testing.T) {
 	tests := []struct {
 		name       string
 		herdrEnv   string
@@ -239,27 +277,13 @@ func TestNewTUIWatcherRejectsHerdrBeforeGitHubLabelMutation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			ghCalls := installTUIWatcherGHScript(t, `
-printf 'unexpected gh call: %s\n' "$args" >&2
-exit 64
-`)
 			resolved := settings.Defaults()
 			resolved.Watcher = true
-
-			watcher, _, _, err := newTUIWatcher(repo, "fanout-test", "fanout", resolved, hooks.EmptyConfig())
-			if err == nil || !strings.Contains(err.Error(), "runtime backend herdr does not support") {
-				t.Fatalf("newTUIWatcher() = (%T, %v), want herdr unsupported", watcher, err)
-			}
-			if watcher != nil {
-				t.Fatalf("watcher = %T, want nil", watcher)
-			}
-			if body, readErr := os.ReadFile(ghCalls); readErr == nil && len(body) > 0 {
-				t.Fatalf("GitHub calls before herdr rejection:\n%s", body)
-			} else if readErr != nil && !os.IsNotExist(readErr) {
-				t.Fatal(readErr)
-			}
-			if _, statErr := os.Stat(filepath.Join(repo, ".fanout")); !os.IsNotExist(statErr) {
-				t.Fatalf("watcher herdr preflight mutated .fanout: %v", statErr)
+			cfg := newWatchLaunchConfig(resolved, 425, 0)
+			cfg.DryRun = true
+			selection, err := resolveLaunchBackend(cfg, repo, state.Store{}, nil)
+			if err != nil || selection.selection.Name != backend.Herdr {
+				t.Fatalf("watcher Herdr selection = (%+v, %v)", selection.selection, err)
 			}
 		})
 	}

@@ -122,7 +122,7 @@ var prefixRules = []struct {
 	{"internal/infra/selfupdate/", Rule{ID: "infra-selfupdate", Class: ClassH, Source: SourceDocTable, Note: "自己アップデート"}},
 	{"internal/infra/team/", Rule{ID: "infra-team", Class: ClassH, Source: SourceDocTable, Note: "team SQLite バス"}},
 	{"internal/infra/settings/", Rule{ID: "infra-settings", Class: ClassH, Source: SourceDocTable, Note: "設定解決の安全ゲート"}},
-	{"internal/infra/herdrrun/", Rule{ID: "infra-herdrrun", Class: ClassH, Source: SourceDocTable, Note: "herdr version gate、owned session lifecycle、workspace/worktree mutation、snapshot 投影"}},
+	{"internal/infra/herdrrun/", Rule{ID: "infra-herdrrun", Class: ClassH, Source: SourceDocTable, Note: "herdr version gate、owned session lifecycle、non-shell agent launcher、workspace/worktree mutation、snapshot 投影"}},
 
 	// infra M.
 	{"internal/infra/ghissue/", Rule{ID: "infra-ghissue", Class: ClassM, Source: SourceDocTable, Note: "GitHub issue/PR 読み書き"}},
@@ -147,7 +147,8 @@ var prefixRules = []struct {
 	{"internal/app/watch/", Rule{ID: "app-watch", Class: ClassH, Source: SourceDocTable, Note: "ラベル watcher の 1 サイクル"}},
 	{"internal/app/briefing/", Rule{ID: "app-briefing", Class: ClassH, Source: SourceDocTable, Note: "エージェントに注入するプロンプト本文"}},
 	{"internal/app/lifecycle/", Rule{ID: "app-lifecycle", Class: ClassH, Source: SourceDocTable, Note: "close/merge/cleanup"}},
-	{"internal/app/panelaunch/", Rule{ID: "app-panelaunch", Class: ClassH, Source: SourceDocTable, Note: "tmux pane 生成と Herdr coordinator/worktree 実体化"}},
+	{"internal/app/panelaunch/", Rule{ID: "app-panelaunch", Class: ClassH, Source: SourceDocTable, Note: "tmux pane 生成と Herdr coordinator/worktree/agent launch"}},
+	{"internal/app/sessionbinding/", Rule{ID: "app-sessionbinding", Class: ClassH, Source: SourceDocTable, Note: "遅延 Herdr agent session の初回束縛と state 保存"}},
 
 	// app M.
 	{"internal/app/panelayout/", Rule{ID: "app-panelayout", Class: ClassM, Source: SourceDocTable, Note: "ペインレイアウト計算"}},

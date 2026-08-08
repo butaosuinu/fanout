@@ -22,7 +22,7 @@ const (
 
 var (
 	ErrHerdrManualCleanupRequired     = errors.New("herdr launch requires manual cleanup")
-	ErrHerdrLauncherReadinessDeferred = errors.New("herdr launcher readiness is deferred to issue #528")
+	ErrHerdrLauncherReadinessDeferred = errors.New("herdr launcher readiness is deferred to the agent-start phase")
 	errHerdrIntentDeadlineExpired     = errors.New("herdr realization deadline expired")
 	errHerdrRealizedIntentSave        = errors.New("save realized Herdr worktree intent")
 	errHerdrRealizedIdentityChanged   = errors.New("realized Herdr identity changed")
@@ -62,8 +62,8 @@ type HerdrCoordinatorRequest struct {
 	TotalTimeout time.Duration
 }
 
-// HerdrRealizeResult is the realized (launcher-deferred) outcome shared by
-// the coordinator and worktree flows.
+// HerdrRealizeResult is the realized outcome shared by the coordinator and
+// worktree flows before the agent-start phase.
 type HerdrRealizeResult struct {
 	Intent state.HerdrIntent
 	Pane   backend.PaneRef

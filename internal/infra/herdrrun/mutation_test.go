@@ -166,17 +166,17 @@ func TestValidateAlreadyOpenRequiresIntentBoundWorkspaceAndLabel(t *testing.T) {
 
 func TestValidateEmptyPluginListFailsClosed(t *testing.T) {
 	if err := validateEmptyPluginList(
-		[]byte(`{"id":"cli:plugin:list","result":{"type":"plugin_list","plugins":[]}}`),
+		[]byte(`{"id":"cli:plugin","result":{"type":"plugin_list","plugins":[]}}`),
 	); err != nil {
 		t.Fatal(err)
 	}
 	if err := validateEmptyPluginList(
-		[]byte(`{"id":"cli:plugin:list","result":{"type":"plugin_list","plugins":[{"id":"setup"}]}}`),
+		[]byte(`{"id":"cli:plugin","result":{"type":"plugin_list","plugins":[{"id":"setup"}]}}`),
 	); err == nil || !strings.Contains(err.Error(), "not empty") {
 		t.Fatalf("non-empty plugin error = %v", err)
 	}
 	if err := validateEmptyPluginList(
-		[]byte(`{"id":"cli:plugin:list","result":{"type":"plugin_list"}}`),
+		[]byte(`{"id":"cli:plugin","result":{"type":"plugin_list"}}`),
 	); err == nil {
 		t.Fatal("missing plugins field unexpectedly accepted")
 	}

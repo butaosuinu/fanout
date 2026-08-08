@@ -585,7 +585,7 @@ func livePaneForState(live map[livePaneKey]backend.LivePane, pane state.Pane) (b
 	}
 	switch name {
 	case backend.Herdr:
-		return cur, herdrIdentityMatches(pane, cur)
+		return cur, HerdrPaneMatches(pane, cur)
 	case backend.Tmux:
 		if pane.IsShell() || pane.ShellKey != "" {
 			return cur, pane.ShellKey != "" && cur.ShellKey == pane.ShellKey
@@ -606,53 +606,97 @@ func livePaneForState(live map[livePaneKey]backend.LivePane, pane state.Pane) (b
 	}
 }
 
-// herdrIdentityMatches keeps runtime routing, terminal identity, logical agent
-// identity, and worktree ownership as separate checks. A generic row and
-// observation may both omit an agent, leaving AgentState unknown. Once the row
-// records a logical conversation, a missing or different agent identity fails
-// closed. foreground_cwd is deliberately absent from LivePane and therefore
-// cannot become liveness evidence.
-func herdrIdentityMatches(pane state.Pane, current backend.LivePane) bool {
+// HerdrPaneMatches verifies the complete persisted Herdr route, terminal,
+// provider, optional conversation, and worktree identity.
+func HerdrPaneMatches(pane state.Pane, current backend.LivePane) bool {
+	return herdrRouteIdentityMatches(pane, current) &&
+		herdrAgentIdentityMatches(pane, current) &&
+		herdrWorktreeIdentityMatches(pane, current)
+}
+
+// HerdrPaneMatchesForSessionBinding admits only one valid expected-provider
+// conversation on an otherwise exact persisted route and worktree identity.
+func HerdrPaneMatchesForSessionBinding(pane state.Pane, current backend.LivePane) bool {
+	return backend.NormalizeName(pane.Backend) == backend.Herdr && current.Ref.Backend == backend.Herdr &&
+		expectedHerdrAgentSession(current.AgentSession, pane.Agent) &&
+		herdrAgentObservationMatches(pane, current) &&
+		herdrRouteIdentityMatches(pane, current) &&
+		herdrWorktreeIdentityMatches(pane, current)
+}
+
+func expectedHerdrAgentSession(ref *backend.AgentSessionRef, provider string) bool {
+	return ref != nil && ref.Valid() && ref.Agent == provider && ref.Source == "herdr:"+provider
+}
+
+func herdrAgentObservationMatches(pane state.Pane, current backend.LivePane) bool {
+	return current.AgentPresent && current.AgentProvider == pane.Agent &&
+		current.AgentID == pane.HerdrAgentID
+}
+
+func herdrRouteIdentityMatches(pane state.Pane, current backend.LivePane) bool {
+	if current.Ref.Workspace != pane.HerdrWorkspaceID || current.Ref.Pane != pane.PaneID ||
+		current.SessionID != pane.HerdrSession || current.SocketPath != pane.HerdrSocketPath {
+		return false
+	}
 	if strings.TrimSpace(pane.HerdrTerminalID) == "" ||
 		strings.TrimSpace(current.TerminalID) == "" ||
 		pane.HerdrTerminalID != current.TerminalID {
 		return false
 	}
-	storedAgent := strings.TrimSpace(pane.Agent) != "" || pane.HerdrAgentID != "" || pane.HerdrAgentSession != nil
-	observedAgent := current.AgentPresent || current.AgentID != "" || current.AgentSession != nil
-	if storedAgent != observedAgent {
-		return false
-	}
-	if storedAgent {
-		if pane.HerdrAgentID == "" || pane.HerdrAgentSession == nil || !current.AgentPresent ||
-			pane.HerdrAgentID != current.AgentID || !agentSessionRefsEqual(pane.HerdrAgentSession, current.AgentSession) {
-			return false
-		}
-	}
+	return true
+}
 
+// herdrAgentIdentityMatches requires an observed conversation to have been
+// bound to the owning state row first. Once saved, it stays exact.
+func herdrAgentIdentityMatches(pane state.Pane, current backend.LivePane) bool {
+	storedAgent := strings.TrimSpace(pane.Agent) != "" || pane.HerdrAgentID != ""
+	observedAgent := current.AgentPresent || current.AgentID != "" || current.AgentProvider != "" || current.AgentSession != nil
+	if !storedAgent {
+		return !observedAgent
+	}
+	requirements := []bool{
+		observedAgent, pane.HerdrAgentID != "", current.AgentPresent,
+		current.AgentProvider == pane.Agent, pane.HerdrAgentID == current.AgentID,
+		optionalAgentSessionMatches(pane.HerdrAgentSession, current.AgentSession, pane.Agent),
+	}
+	return !slices.Contains(requirements, false)
+}
+
+// herdrWorktreeIdentityMatches keeps worktree provenance separate from the
+// fallback used by generic Herdr workspaces. Foreground cwd is never evidence.
+func herdrWorktreeIdentityMatches(pane state.Pane, current backend.LivePane) bool {
 	storedPath := strings.TrimSpace(pane.WorktreePath)
 	if storedPath == "" {
 		return false
 	}
 	storedPath = filepath.Clean(storedPath)
-	storedRepoKey := pane.HerdrRepoKey
-	repoKey := current.RepoKey
+	storedRepoKey := strings.TrimSpace(pane.HerdrRepoKey)
+	repoKey := strings.TrimSpace(current.RepoKey)
 	worktreePath := strings.TrimSpace(current.WorktreePath)
 	projectRoot := strings.TrimSpace(current.ProjectRoot)
-	if strings.TrimSpace(repoKey) != "" || worktreePath != "" || projectRoot != "" {
-		// herdrrun rejects partial worktree provenance. Keep this boundary
-		// fail-closed for tests and alternative collectors too.
-		return strings.TrimSpace(storedRepoKey) != "" && repoKey == storedRepoKey && worktreePath != "" && projectRoot != "" && filepath.Clean(worktreePath) == storedPath
+	if repoKey != "" || worktreePath != "" || projectRoot != "" {
+		return exactHerdrWorktreeProvenance(storedRepoKey, storedPath, repoKey, worktreePath, projectRoot)
 	}
 
 	// Generic herdr workspaces have no worktree provenance. Only the saved cwd
 	// may support the match; subdirectories and foreground cwd are not accepted.
 	currentPath := strings.TrimSpace(current.CurrentPath)
-	return strings.TrimSpace(storedRepoKey) == "" && currentPath != "" && filepath.Clean(currentPath) == storedPath
+	return storedRepoKey == "" && currentPath != "" && filepath.Clean(currentPath) == storedPath
+}
+
+func exactHerdrWorktreeProvenance(storedRepoKey, storedPath, repoKey, worktreePath, projectRoot string) bool {
+	// herdrrun rejects partial worktree provenance. Keep this boundary
+	// fail-closed for tests and alternative collectors too.
+	requirements := []bool{
+		storedRepoKey != "", repoKey == storedRepoKey,
+		worktreePath != "", projectRoot != "",
+		filepath.Clean(worktreePath) == storedPath,
+	}
+	return !slices.Contains(requirements, false)
 }
 
 // herdrRowUnsupported identifies persisted rows that predate the authoritative
-// identity baseline required by the observation-only v1 matcher. These rows are
+// identity baseline required by the Herdr runtime matcher. These rows are
 // not stale: without the saved baseline there is no prior terminal or logical
 // conversation to compare. They remain explicitly unsupported and are never
 // filled from the current snapshot, which would adopt a potentially reused
@@ -661,29 +705,36 @@ func herdrRowUnsupported(pane state.Pane) bool {
 	if backend.NormalizeName(pane.Backend) != backend.Herdr || strings.TrimSpace(pane.PaneID) == "" {
 		return false
 	}
-	if strings.TrimSpace(pane.HerdrWorkspaceID) == "" ||
-		strings.TrimSpace(pane.HerdrTerminalID) == "" ||
-		strings.TrimSpace(pane.HerdrSession) == "" ||
-		strings.TrimSpace(pane.HerdrSocketPath) == "" ||
-		strings.TrimSpace(pane.WorktreePath) == "" {
+	requiredBaseline := []bool{
+		strings.TrimSpace(pane.HerdrWorkspaceID) != "",
+		strings.TrimSpace(pane.HerdrTerminalID) != "",
+		strings.TrimSpace(pane.HerdrSession) != "",
+		strings.TrimSpace(pane.HerdrSocketPath) != "",
+		strings.TrimSpace(pane.WorktreePath) != "",
+	}
+	if slices.Contains(requiredBaseline, false) {
 		return true
 	}
-	storedAgentID := strings.TrimSpace(pane.HerdrAgentID) != ""
-	storedAgentSession := pane.HerdrAgentSession != nil
-	if storedAgentID != storedAgentSession || (storedAgentSession && !pane.HerdrAgentSession.Valid()) {
-		return true
-	}
-	if !storedAgentID && strings.TrimSpace(pane.Agent) != "" {
-		return true
-	}
-	return false
+	return herdrAgentBaselineUnsupported(pane)
 }
 
-func agentSessionRefsEqual(stored, current *backend.AgentSessionRef) bool {
-	if stored == nil || current == nil {
-		return stored == nil && current == nil
+func herdrAgentBaselineUnsupported(pane state.Pane) bool {
+	storedAgentID := strings.TrimSpace(pane.HerdrAgentID) != ""
+	if pane.HerdrAgentSession != nil {
+		return !storedAgentID || !expectedHerdrAgentSession(pane.HerdrAgentSession, pane.Agent)
 	}
-	return stored.Valid() && current.Valid() && *stored == *current
+	return !storedAgentID && strings.TrimSpace(pane.Agent) != ""
+}
+
+func optionalAgentSessionMatches(stored, current *backend.AgentSessionRef, provider string) bool {
+	if stored == nil {
+		return current == nil
+	}
+	if current == nil {
+		return false
+	}
+	return expectedHerdrAgentSession(stored, provider) &&
+		expectedHerdrAgentSession(current, provider) && *stored == *current
 }
 
 func paneAlive(live map[livePaneKey]backend.LivePane, pane state.Pane) bool {

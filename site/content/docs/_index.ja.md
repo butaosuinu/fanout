@@ -27,5 +27,5 @@ GitHub 親 issue の OPEN な子 issue を子ごとの tmux ペインにファ�
 [CLI リファレンス]({{< relref "/docs/cli" >}})はコマンド形式とフラグ、環境変数、exit code を 1 ページにまとめます。
 [設定]({{< relref "/docs/settings" >}})では生成される briefing のスイッチと解決順序を制御します。
 [エージェント連携]({{< relref "/docs/agent-integrations" >}})は同梱 skill と `/fanout` スラッシュコマンド、agent ごとの Plan Mode の挙動を扱います。
-[herdr backend]({{< relref "/docs/herdr-backend" >}})は opt-in・観測専用の runtime backend と tmux との差分を扱います。
+[herdr backend]({{< relref "/docs/herdr-backend" >}})は opt-in の owned runtime と tmux の差分を扱います。
 詰まったら[トラブルシューティング]({{< relref "/docs/troubleshooting" >}})で原因と直し方を引き、各リリースの変更点は[変更履歴]({{< relref "/docs/changelog" >}})にあります。

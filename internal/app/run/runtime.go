@@ -11,6 +11,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/gitroot"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
@@ -33,11 +34,27 @@ type Runtime struct {
 	Info             *fanoutruntime.Info
 	GH               ghissue.Runner
 	Backend          backend.Backend
+	Herdr            *herdrrun.OwnedSession
 	BackendSelection backend.Selection
 	// VerifyBackend re-runs parent stickiness against the state held under the
 	// launch lock. cmd closes over the raw CLI/env/config inputs so backend
 	// selection and construction remain in the composition root.
 	VerifyBackend func(parent string, store state.Store) error
+	// PrepareBackend acquires live backend resources after planning confirms at
+	// least one launch target and validates its effective agent.
+	PrepareBackend func() error
+}
+
+// PrepareLaunchBackend acquires live resources for the selected backend.
+func (r *Runtime) PrepareLaunchBackend() error {
+	if r == nil || r.PrepareBackend == nil {
+		return nil
+	}
+	return r.PrepareBackend()
+}
+
+func shouldBindRuntimeKeys(dryRun bool, created int, runtimeBackend backend.Name) bool {
+	return !dryRun && created > 0 && runtimeBackend == backend.Tmux
 }
 
 // ResolveRuntime resolves the tmux target and git project root, validates the

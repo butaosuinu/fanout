@@ -61,12 +61,13 @@ func RealizeHerdrWorktree(
 	if intentIDErr != nil {
 		return result, intentIDErr
 	}
-	var intentErr error
-	intent, found := locked.FindIntent(intentID)
-	if found && intent.Status == state.HerdrIntentManualCleanupRequired {
-		// Terminal regardless of expiry: surface the saved failure.
-		return result, herdrManualCleanupError(intent)
+	intent, found, loadErr := loadHerdrWorktreeIntentForRealization(
+		setup.ctx, runtime, locked, req, source, ownerProjectRoot, runtimeParent, intentID,
+	)
+	if loadErr != nil {
+		return result, loadErr
 	}
+	var intentErr error
 	coordinatorID, coordinatorIDErr := state.HerdrCoordinatorIntentID(
 		runtimeParent,
 		runtimeOwnerProjectRoot,

@@ -29,6 +29,13 @@ load helpers
   assert_status_golden scenario-status-mixed
 }
 
+@test "scenario-herdr-status: final Herdr child identity is reported" {
+  use_fixture scenario-herdr-status
+  run_fanout_status 524
+  assert_success
+  assert_status_golden scenario-herdr-status
+}
+
 @test "scenario-status-mixed table: PR diff stats render in a human-readable table" {
   use_fixture scenario-status-mixed
   run_fanout_status 200 --format table

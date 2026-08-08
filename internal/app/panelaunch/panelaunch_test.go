@@ -184,6 +184,36 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 	}
 }
 
+func TestStatePaneForBackendCapturesExactHerdrIdentity(t *testing.T) {
+	session := &backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "thread-528",
+	}
+	live := &backend.LivePane{
+		Ref:        backend.PaneRef{Backend: backend.Herdr, Workspace: "w2", Pane: "w2:p1"},
+		TerminalID: "term-child", RepoKey: "/repo/.git", AgentID: "fanout-0123456789abcdef01234567",
+		AgentSession: session, SessionID: "fanout-repo-abcd", SocketPath: "/tmp/herdr.sock",
+	}
+	req := Request{ParentRef: "524", Number: 528, Slug: "herdr-528", Agent: "codex"}
+	got := statePaneForBackend(req, "w2:p1", "/repo/child", time.Unix(0, 0).UTC(), codexapp.Status{}, backend.Herdr, live)
+	if got.Backend != backend.Herdr || got.HerdrWorkspaceID != "w2" ||
+		got.HerdrTerminalID != "term-child" || got.HerdrRepoKey != "/repo/.git" ||
+		got.HerdrAgentID != live.AgentID || got.HerdrAgentSession == nil ||
+		*got.HerdrAgentSession != *session || got.HerdrSession != "fanout-repo-abcd" ||
+		got.HerdrSocketPath != "/tmp/herdr.sock" {
+		t.Fatalf("Herdr state identity = %+v", got)
+	}
+}
+
+func TestRuntimeBackendBindingsIncludeSyntheticHerdrCoordinatorOwner(t *testing.T) {
+	store := state.Store{Panes: []state.Pane{{
+		Parent: ManualParentRef, RuntimeParent: "524", IssueNum: -1, Backend: backend.Herdr,
+	}}}
+	got := RuntimeBackendBindings("/repo", store)
+	if len(got) != 1 || got[0] != (backend.Binding{Parent: "524", Backend: backend.Herdr}) {
+		t.Fatalf("bindings = %+v, want coordinator owner 524", got)
+	}
+}
+
 func TestSplitAndDecorateSkipsTmuxForSuccessfulNonTmuxBackend(t *testing.T) {
 	installFakeTmux(t, "%unexpected")
 	calls := filepath.Join(t.TempDir(), "tmux.calls")

@@ -168,8 +168,7 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 		}
 		return TaskExecutionResult{}, exitcode.OK
 	}
-	if err := validateTaskAgents(cliCfg, plan.Targets, plan.LimitDeferred); err != nil {
-		lg.Err("%s", err.Error())
+	if !prepareTaskLaunch(cliCfg, plan, rt, lg) {
 		return TaskExecutionResult{}, exitcode.Env
 	}
 	if code := copyLivePlanSpec(); code != exitcode.OK {
@@ -202,7 +201,7 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 	result := executeTaskPlan(cliCfg, lg, rt, spec, plan.Targets, resolvedSettings, hookConfig, recorder, c, commandName, teamCtx)
 	printTaskSummary(plan, result, cfg, lg, c, commandName)
 
-	if !cfg.DryRun && result.Created > 0 {
+	if shouldBindRuntimeKeys(cfg.DryRun, result.Created, rt.BackendSelection.Name) {
 		bindKeys(lg, resolvedSettings.DashboardKeybind)
 	}
 
@@ -226,6 +225,21 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 		return result, exitcode.Env
 	}
 	return result, exitcode.OK
+}
+
+func prepareTaskLaunch(cfg *cliflags.Config, plan taskPlan, rt *Runtime, lg *log.Logger) bool {
+	if err := validateTaskAgents(cfg, plan.Targets, plan.LimitDeferred); err != nil {
+		lg.Err("%s", err.Error())
+		return false
+	}
+	if len(plan.Targets) == 0 {
+		return true
+	}
+	if err := rt.PrepareLaunchBackend(); err != nil {
+		lg.Err("runtime backend: %v", err)
+		return false
+	}
+	return true
 }
 
 // CLIConfig projects the plan config onto the shared cliflags.Config the
@@ -480,7 +494,7 @@ func planTaskComplete(gh ghissue.Runner, cfg *cliflags.Config, projectRoot strin
 }
 
 func executeTaskPlan(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, spec planspec.Spec, targets []planspec.Task, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, c log.Palette, commandName string, teamCtx *briefing.TeamContext) TaskExecutionResult {
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: rt.Info, Backend: rt.Backend, Recorder: recorder, Palette: c, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: rt.Info, Backend: rt.Backend, Herdr: rt.Herdr, Recorder: recorder, Palette: c, CommandName: commandName}
 	created, failed := executeFailFast(
 		targets,
 		taskID,

@@ -24,6 +24,15 @@ load helpers
   assert_golden scenario-sub-issue-only
 }
 
+@test "scenario-herdr-dry-run: Herdr child launch prints the owned launch protocol" {
+  use_fixture scenario-herdr-dry-run
+  export HERDR_SESSION=fixture-session
+  export HERDR_SOCKET_PATH=/tmp/herdr-fixture.sock
+  run_fanout_dry 100 --backend herdr
+  assert_success
+  assert_golden scenario-herdr-dry-run
+}
+
 @test "scenario-body-task-list: children come only from parent body task-list" {
   use_fixture scenario-body-task-list
   run_fanout_dry 200

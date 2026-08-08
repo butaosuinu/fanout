@@ -3,6 +3,7 @@ package herdrrun
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -45,6 +46,7 @@ var (
 type Backend struct {
 	session     string
 	socketPath  string
+	previewOnly bool
 	probeGate   chan struct{}
 	lookPath    func(string) (string, error)
 	stageBinary func(string) (string, string, error)
@@ -114,12 +116,36 @@ func New(session, socketPath string) *Backend {
 	}
 }
 
+// NewPreview constructs a mutation-free launch preview backend. Availability
+// checks only the CLI version and does not require or probe a named session.
+func NewPreview() *Backend {
+	backend := New("", "")
+	backend.previewOnly = true
+	return backend
+}
+
 func (b *Backend) Name() corebackend.Name { return corebackend.Herdr }
 
-// CheckAvailable verifies the stable version floor and connected server
-// identity. It never starts a server.
+// CheckAvailable verifies the stable version floor. Normal backends also
+// require a connected server; preview backends stop after the CLI check.
 func (b *Backend) CheckAvailable() error {
+	if b.previewOnly {
+		return b.checkPreviewAvailable()
+	}
 	_, err := b.probe()
+	return err
+}
+
+func (b *Backend) checkPreviewAvailable() error {
+	binary, err := b.lookPath(commandName)
+	if err != nil {
+		return fmt.Errorf("herdr stable >=%s is required: %w", minimumVersion, err)
+	}
+	versionOut, err := b.runContext(context.Background(), commandTimeout, binary, route{}, "--version")
+	if err != nil {
+		return fmt.Errorf("herdr --version: %w", err)
+	}
+	_, err = parseAdmittedVersion(versionOut)
 	return err
 }
 
@@ -196,8 +222,7 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 			lastPanes = nil
 			lastErr = snapshotErr
 			lastValid = false
-			var retryable retryableSnapshotError
-			if !errors.As(snapshotErr, &retryable) {
+			if !IsRetryableObservationError(snapshotErr) {
 				return failedWait(snapshotErr)
 			}
 			continue
@@ -335,13 +360,27 @@ func cancelledWait(err error) WaitResult {
 	return WaitResult{Status: WaitCancelled, Err: err}
 }
 
-type retryableSnapshotError struct {
+type retryableObservationError struct {
 	err error
 }
 
-func (e retryableSnapshotError) Error() string { return e.err.Error() }
+func (e retryableObservationError) Error() string { return e.err.Error() }
 
-func (e retryableSnapshotError) Unwrap() error { return e.err }
+func (e retryableObservationError) Unwrap() error { return e.err }
+
+func (e retryableObservationError) RetryableObservation() bool { return true }
+
+type retryableObservation interface {
+	error
+	RetryableObservation() bool
+}
+
+// IsRetryableObservationError reports whether a read-only Herdr command may be
+// retried within the caller's fixed observation budget.
+func IsRetryableObservationError(err error) bool {
+	retryable, ok := errors.AsType[retryableObservation](err)
+	return ok && retryable.RetryableObservation()
+}
 
 type commandCleanupError struct {
 	err error
@@ -356,7 +395,7 @@ func (b *Backend) snapshot(ctx context.Context, timeout time.Duration, probed pr
 	if err != nil {
 		wrapped := methodUnavailable("session.snapshot")
 		if retryableCommandError(err) {
-			return nil, retryableSnapshotError{err: wrapped}
+			return nil, retryableObservationError{err: wrapped}
 		}
 		return nil, wrapped
 	}
@@ -396,7 +435,7 @@ func (b *Backend) probeContext(ctx context.Context) (probeResult, error) {
 	}
 
 	statusArgs := []string{"status", "--json"}
-	// Use --session only to discover an observation-only named session. Once a
+	// Use --session only to discover an external named session. Once a
 	// socket is known, every call selects it explicitly because HERDR_SOCKET_PATH
 	// takes precedence over HERDR_SESSION.
 	if initial.socketPath == "" {
@@ -896,13 +935,7 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 			worktreePath = workspace.Worktree.CheckoutPath
 		}
 		agent, agentPresent := agentsByPane[pane.PaneID]
-		agentID := ""
-		if agentPresent {
-			agentID = optionalString(agent.Name)
-			if agentID == "" {
-				agentID = optionalString(agent.Agent)
-			}
-		}
+		agentID, agentProvider := projectAgentIdentity(agent, agentPresent)
 		var agentSession *corebackend.AgentSessionRef
 		if ref, present := sessionRefsByPane[pane.PaneID]; present {
 			agentSession = &corebackend.AgentSessionRef{
@@ -926,6 +959,7 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 			NativeAgentState: pane.AgentStatus,
 			TerminalID:       pane.TerminalID,
 			AgentID:          agentID,
+			AgentProvider:    agentProvider,
 			AgentSession:     agentSession,
 			AgentPresent:     agentPresent,
 			RepoKey:          repoKey,
@@ -936,6 +970,14 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 		})
 	}
 	return live, nil
+}
+
+func projectAgentIdentity(agent agentJSON, present bool) (string, string) {
+	if !present {
+		return "", ""
+	}
+	provider := optionalString(agent.Agent)
+	return cmp.Or(optionalString(agent.Name), provider), provider
 }
 
 func parseAgentSession(ref *agentSessionJSON) (agentSessionKey, bool, error) {

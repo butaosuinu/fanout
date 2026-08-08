@@ -15,8 +15,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-// realizeDeferred is the successful stop point of both flows until #528
-// connects the launcher.
+// realizeDeferred hands a realized workspace to the agent-start phase.
 func realizeDeferred(intent state.HerdrIntent) (HerdrRealizeResult, error) {
 	return HerdrRealizeResult{
 		Intent: intent,
@@ -71,8 +70,7 @@ func workspaceHasHerdrResource(
 ) bool {
 	if observation.WorkspaceID != expected.WorkspaceID ||
 		observation.Label != expected.Label ||
-		observation.RepoKey != expected.RepoKey ||
-		observation.RepoRoot != expected.RepoRoot {
+		!workspaceProvenanceMatches(observation, expected) {
 		return false
 	}
 	if expected == stateResource(observation) {
@@ -88,6 +86,14 @@ func workspaceHasHerdrResource(
 		}
 	}
 	return false
+}
+
+func workspaceProvenanceMatches(
+	observation herdrrun.WorkspaceObservation,
+	expected state.HerdrResource,
+) bool {
+	return (expected.RepoKey == "" || observation.RepoKey == expected.RepoKey) &&
+		(expected.RepoRoot == "" || observation.RepoRoot == expected.RepoRoot)
 }
 
 func newHerdrWorkspaceLabel(

@@ -537,6 +537,23 @@ func TestCheckAvailableRejectsMissingBinaryAndUnnamedSession(t *testing.T) {
 	}
 }
 
+func TestPreviewCheckAvailableRequiresOnlyStableCLI(t *testing.T) {
+	fake := newFakeHerdr("", "")
+	b := NewPreview()
+	b.lookPath = func(string) (string, error) { return "/private/tmp/herdr-0.7.5", nil }
+	b.stageBinary = func(string) (string, string, error) {
+		t.Fatal("preview staged the Herdr binary")
+		return "", "", nil
+	}
+	b.output = fake.output
+	if err := b.CheckAvailable(); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.commands) != 1 || commandKey(fake.commands[0].args) != "version" {
+		t.Fatalf("preview commands = %#v, want version only", fake.commands)
+	}
+}
+
 func TestListLiveProjectsSnapshotWithoutUsingForegroundCWD(t *testing.T) {
 	const (
 		session = "fanout-test"
@@ -572,7 +589,7 @@ func TestListLiveProjectsSnapshotWithoutUsingForegroundCWD(t *testing.T) {
 	if child.RepoKey != "/repo/.git" || child.ProjectRoot != "/repo" || child.WorktreePath != "/repo/.fanout/worktrees/child" {
 		t.Fatalf("child worktree projection = %#v", child)
 	}
-	if child.AgentState != corebackend.AgentWorking || child.NativeAgentState != "working" || child.AgentID != "fanout-child" || !child.AgentPresent || child.Focused || child.Title != "child title" || child.SocketPath != socket {
+	if child.AgentState != corebackend.AgentWorking || child.NativeAgentState != "working" || child.AgentID != "fanout-child" || child.AgentProvider != "codex" || !child.AgentPresent || child.Focused || child.Title != "child title" || child.SocketPath != socket {
 		t.Fatalf("child agent projection = %#v", child)
 	}
 	wantSession := corebackend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-a"}
@@ -1373,6 +1390,33 @@ func TestFinalizeCommandErrorPreservesCleanupFailureOnDeadline(t *testing.T) {
 	}
 	if retryableCommandError(err) {
 		t.Fatal("deadline plus cleanup failure classified as retryable")
+	}
+}
+
+func TestObservationCommandErrorClassifiesOnlyTransientFailures(t *testing.T) {
+	transient := observationCommandError("observe", context.DeadlineExceeded)
+	if !IsRetryableObservationError(transient) {
+		t.Fatalf("deadline error = %v, want retryable observation", transient)
+	}
+	permanent := observationCommandError("observe", errors.New("malformed response"))
+	if IsRetryableObservationError(permanent) {
+		t.Fatalf("malformed error = %v, want permanent observation failure", permanent)
+	}
+}
+
+func TestPaneRunResponseRequiresExactOKEnvelope(t *testing.T) {
+	valid := []byte(`{"id":"cli:pane:run","result":{"type":"ok"}}`)
+	if err := validatePaneRunResponse(valid); err != nil {
+		t.Fatalf("valid pane run response: %v", err)
+	}
+	for _, invalid := range [][]byte{
+		nil,
+		[]byte(`{"id":"cli:pane:get","result":{"type":"ok"}}`),
+		[]byte(`{"id":"cli:pane:run","result":{"type":"unexpected"}}`),
+	} {
+		if err := validatePaneRunResponse(invalid); err == nil {
+			t.Fatalf("invalid pane run response accepted: %s", invalid)
+		}
 	}
 }
 
