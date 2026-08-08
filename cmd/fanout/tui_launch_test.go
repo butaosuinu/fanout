@@ -27,6 +27,17 @@ func TestBufferedLaunchNoticeCollectsAndDeduplicatesWarnings(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRuntimeRequestRemovesTmuxIdentityForHerdr(t *testing.T) {
+	req := panelaunch.Request{ShellKey: "tmux-key", AgentStartGate: "tmux-gate"}
+	herdrReq := coordinatorRuntimeRequest(backend.Herdr, req)
+	if herdrReq.ShellKey != "" || herdrReq.AgentStartGate != "" {
+		t.Fatalf("Herdr coordinator request = %+v, want no tmux identity", herdrReq)
+	}
+	if tmuxReq := coordinatorRuntimeRequest(backend.Tmux, req); tmuxReq.ShellKey != req.ShellKey || tmuxReq.AgentStartGate != req.AgentStartGate {
+		t.Fatalf("tmux coordinator request = %+v, want unchanged tmux identity", tmuxReq)
+	}
+}
+
 func TestPlanSkillPromptPerAgent(t *testing.T) {
 	path := planPromptPath("/repo", 1)
 	tests := []struct {

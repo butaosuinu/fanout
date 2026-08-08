@@ -261,6 +261,6 @@ Catppuccin、Gruvbox、Tokyo Night ほか)から選べます。
 
 - `gh` 未ログインの場合は、バナーを出して state のみのビューを表示します。
 - tmux 外でも配信は続き、ペインの生存は unknown のままになります。
-- herdr の行は保存済みの identity を `herdr api snapshot` と照合して生死と agent state を反映します。行に `agent_session` がない場合は、expected provider の一意で有効な最初の ref を owning state lock 下で永続化し、以後の観測で完全一致を要求します。その他の identity field は snapshot から補完しません。出力の peek は常に空です。
+- herdr の行は保存済みの identity を `herdr api snapshot` と照合して生死と agent state を反映します。行に `agent_session` がない場合は、expected provider の一意で有効な最初の ref を owning state lock 下で永続化し、以後の観測で完全一致を要求します。その他の identity field は snapshot から補完しません。出力の peek は、この repository の fanout-owned Herdr session に属する live row だけ内容を返します。
 
 このページに登場するフラグの一覧は [CLI リファレンス]({{< relref "/docs/cli" >}}) にあります。

@@ -105,6 +105,33 @@ func TestWireOwnedHerdrTUIEnablesScopedInteractivePorts(t *testing.T) {
 	}
 }
 
+func TestSettingsReloadPreservesOnlyAdmittedHerdrIssueLaunch(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	for _, tt := range []struct {
+		name     string
+		admitted bool
+	}{
+		{name: "owned", admitted: true},
+		{name: "foreign"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reload := newTUISettingsReloadFunc(
+				repo, "owned-session", "fanout", hooks.EmptyConfig(),
+				backend.Selection{Name: backend.Herdr}, tt.admitted, discardLogger(),
+			)
+			runtime, err := reload()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (runtime.LaunchIssue != nil) != tt.admitted {
+				t.Fatalf("LaunchIssue configured = %t, want %t", runtime.LaunchIssue != nil, tt.admitted)
+			}
+		})
+	}
+}
+
 func TestOwnedHerdrPaneIdentitySeparatesGenericCWDFromWorktreeProvenance(t *testing.T) {
 	identity, err := ownedHerdrPaneIdentity(state.Pane{
 		Backend: backend.Herdr, PaneID: "w1:p1", HerdrWorkspaceID: "w1",
@@ -593,7 +620,7 @@ func TestTUISettingsReloadCleansDisabledKeybinds(t *testing.T) {
 	}
 	argsPath := installTUISettingsReloadTmuxShim(t)
 
-	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux}, discardLogger())
+	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux}, true, discardLogger())
 	if _, err := reload(); err != nil {
 		t.Fatal(err)
 	}

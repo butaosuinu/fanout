@@ -6,8 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 func TestIsDashboardRequest(t *testing.T) {
@@ -28,6 +31,31 @@ func TestIsDashboardRequest(t *testing.T) {
 				t.Errorf("isDashboardRequest(%v) = %v, want %v", tt.args, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDashboardHerdrPeekAdmissionReopensOwnedSessionPerRequest(t *testing.T) {
+	ready := false
+	calls := 0
+	opener := func(root string) (*herdrrun.OwnedSession, error) {
+		calls++
+		if root != "/repo" || !ready {
+			return nil, errors.New("owned session unavailable")
+		}
+		return &herdrrun.OwnedSession{Session: "owned", SocketPath: "/tmp/owned.sock"}, nil
+	}
+	owns, _ := dashboardHerdrPeekPorts("/repo", opener)
+	pane := sessionview.PaneView{SavedPane: state.Pane{
+		Backend: backend.Herdr, PaneID: "w1:p1", HerdrWorkspaceID: "w1",
+		HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "term-1",
+		HerdrSession: "owned", HerdrSocketPath: "/tmp/owned.sock", WorktreePath: "/repo",
+	}}
+	if owns(pane) {
+		t.Fatal("missing owned session was admitted")
+	}
+	ready = true
+	if !owns(pane) || calls != 2 {
+		t.Fatalf("admission after bootstrap = %t calls=%d, want true/2", owns(pane), calls)
 	}
 }
 

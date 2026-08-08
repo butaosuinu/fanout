@@ -228,6 +228,48 @@ func TestOwnedHerdrPaneLifecycleStaysDisabled(t *testing.T) {
 	}
 }
 
+func TestAutomaticHerdrFocusReloadsPersistedPaneIdentity(t *testing.T) {
+	root := t.TempDir()
+	session := backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "thread-1"}
+	row := state.Pane{
+		Parent: "524", IssueNum: 530, Backend: backend.Herdr, PaneID: "w1:p1",
+		Agent: "codex", HerdrAgentID: "agent-1", HerdrAgentSession: &session,
+		HerdrWorkspaceID: "w1", HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "term-1",
+		HerdrRepoKey: "/repo/.git", HerdrSession: "owned-session", HerdrSocketPath: "/tmp/owned.sock",
+		WorktreePath: root + "/child",
+	}
+	locked, err := state.LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.RecordPane(row); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	live := backend.LivePane{
+		Ref:            backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
+		WorkspaceLabel: "owned-label", TerminalID: "term-1", AgentID: "agent-1",
+		AgentProvider: "codex", AgentSession: &session, AgentPresent: true,
+		RepoKey: "/repo/.git", ProjectRoot: root, WorktreePath: root + "/child",
+		SessionID: "owned-session", SocketPath: "/tmp/owned.sock",
+	}
+	var focused state.Pane
+	m := newModel(Options{
+		ProjectRoot: root, BackendSelection: backend.Selection{Name: backend.Herdr},
+		ListLive:            func() ([]backend.LivePane, error) { return []backend.LivePane{live}, nil },
+		HerdrActionDisabled: func(state.Pane) string { return "" },
+		FocusHerdrPane:      func(pane state.Pane) error { focused = pane; return nil },
+		FocusPane:           func(string) error { t.Fatal("automatic Herdr focus routed through tmux"); return nil },
+	})
+	msg := m.focusPaneIDCmd("w1:p1", "launched")()
+	focusedMsg, ok := msg.(paneFocusedMsg)
+	if !ok || focusedMsg.err != nil || focused.HerdrWorkspaceLabel != "owned-label" || focused.HerdrTerminalID != "term-1" {
+		t.Fatalf("automatic Herdr focus = msg:%#v pane:%+v", msg, focused)
+	}
+}
+
 func TestHerdrConsoleLaunchesAreDisabledBeforePorts(t *testing.T) {
 	launchCalls := 0
 	m := newModel(Options{

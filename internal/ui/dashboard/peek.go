@@ -21,61 +21,38 @@ const (
 	peekMaxLines     = 400
 )
 
-// paneIDRe accepts only bare tmux pane ids ("%N"). Anything else — tmux target
-// syntax, flag-like strings, whitespace — is rejected before capture-pane sees
-// it, so the endpoint can never address an arbitrary tmux target.
+// paneIDRe accepts only bare tmux pane ids ("%N") on the tmux capture route.
+// Herdr uses its separately admitted persisted identity.
 var paneIDRe = regexp.MustCompile(`^%[0-9]{1,9}$`)
 
-// snapshotPaneView selects one latest-snapshot row whose runtime-native pane id
-// is paneID. A live tmux row wins over stale duplicates left by pane-id reuse;
-// without one, a non-tmux row wins so requireLivePane can return its explicit
-// backend error. A stale tmux row remains the final fallback. Defined here
-// rather than in poller.go because the capture endpoints are its only consumers;
-// diff.go has a separate identity selector because worktree reads neither
-// require nor perform pane capture or liveness checks.
-func (p *poller) snapshotPaneView(paneID string) (sessionview.PaneView, bool) {
+// snapshotPaneViews copies every latest-snapshot row with paneID. Selection is
+// performed after releasing the poller lock because owned Herdr admission can
+// inspect the filesystem and runtime.
+func (p *poller) snapshotPaneViews(paneID string) []sessionview.PaneView {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	var (
-		staleTmux      sessionview.PaneView
-		staleTmuxFound bool
-		nonTmux        sessionview.PaneView
-		nonTmuxFound   bool
-	)
+	var matches []sessionview.PaneView
 	for _, sess := range p.latest.Sessions {
 		for i := range sess.Panes {
 			pv := sess.Panes[i]
-			if pv.PaneID != paneID {
-				continue
-			}
-			if backend.NormalizeName(pv.Backend) == backend.Tmux {
-				if pv.Alive {
-					return pv, true
-				}
-				if !staleTmuxFound {
-					staleTmux, staleTmuxFound = pv, true
-				}
-				continue
-			}
-			if !nonTmuxFound {
-				nonTmux, nonTmuxFound = pv, true
+			if pv.PaneID == paneID {
+				matches = append(matches, pv)
 			}
 		}
 	}
-	if nonTmuxFound {
-		return nonTmux, true
-	}
-	return staleTmux, staleTmuxFound
+	return matches
 }
 
 // requireLivePane is the request-validation chain GET /api/peek and
-// GET /api/plan share: pane-id shape (400), snapshot liveness via snapshotPaneView
-// (404), a tmux backend route, and a recorded identity usable for request-time
-// verification. Agent rows need a worktree path; shell rows need a shellKey
-// because they have no worktree of their own. On ok=false the JSON error
+// GET /api/plan share: snapshot selection, owned Herdr admission, or tmux pane-id
+// shape and request-time identity verification. On ok=false the JSON error
 // response has already been written.
 func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionview.PaneView, bool) {
-	pv, recorded := s.poller.snapshotPaneView(paneID)
+	pv, recorded, ambiguous := s.snapshotPaneView(paneID)
+	if ambiguous {
+		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s has ambiguous owned Herdr identity", paneID))
+		return sessionview.PaneView{}, false
+	}
 	runtimeBackend := backend.NormalizeName(pv.Backend)
 	if recorded && runtimeBackend == backend.Herdr {
 		return s.requireOwnedHerdrPane(w, pv)
@@ -85,6 +62,56 @@ func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionv
 		return sessionview.PaneView{}, false
 	}
 	return requireLiveTmuxPane(w, paneID, pv, recorded)
+}
+
+func (s *Server) snapshotPaneView(paneID string) (sessionview.PaneView, bool, bool) {
+	panes := s.poller.snapshotPaneViews(paneID)
+	if live, found := firstLiveTmuxPane(panes); found {
+		return live, true, false
+	}
+	owned, ownedCount := s.ownedHerdrPanes(panes)
+	if ownedCount > 1 {
+		return sessionview.PaneView{}, false, true
+	}
+	if ownedCount == 1 {
+		return owned, true, false
+	}
+	fallback, found := firstPaneFallback(panes)
+	return fallback, found, false
+}
+
+func firstLiveTmuxPane(panes []sessionview.PaneView) (sessionview.PaneView, bool) {
+	for _, pane := range panes {
+		if backend.NormalizeName(pane.Backend) == backend.Tmux && pane.Alive {
+			return pane, true
+		}
+	}
+	return sessionview.PaneView{}, false
+}
+
+func (s *Server) ownedHerdrPanes(panes []sessionview.PaneView) (sessionview.PaneView, int) {
+	var owned sessionview.PaneView
+	count := 0
+	for _, pane := range panes {
+		if backend.NormalizeName(pane.Backend) != backend.Herdr || !pane.Alive || s.ownsHerdrPane == nil || !s.ownsHerdrPane(pane) {
+			continue
+		}
+		owned = pane
+		count++
+	}
+	return owned, count
+}
+
+func firstPaneFallback(panes []sessionview.PaneView) (sessionview.PaneView, bool) {
+	for _, pane := range panes {
+		if backend.NormalizeName(pane.Backend) != backend.Tmux {
+			return pane, true
+		}
+	}
+	if len(panes) == 0 {
+		return sessionview.PaneView{}, false
+	}
+	return panes[0], true
 }
 
 func requireLiveTmuxPane(

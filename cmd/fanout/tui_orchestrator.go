@@ -132,7 +132,7 @@ func cleanupIssueOrchestrator(
 		}
 	}()
 	recorded, found := recorder.Find(req.ParentRef, req.Number)
-	if found && (recorded.PaneID != paneID || recorded.ShellKey != req.ShellKey) {
+	if issueOrchestratorIdentityChanged(runtimeBackend.Name(), recorded, found, req, paneID) {
 		return fmt.Errorf("recorded orchestrator identity changed for %s/%d", req.ParentRef, req.Number)
 	}
 	runtimeBackend, err = issueOrchestratorCloseBackend(runtimeBackend, owned, recorded, found, req)
@@ -146,6 +146,19 @@ func cleanupIssueOrchestrator(
 		return fmt.Errorf("remove orchestrator state: %w", err)
 	}
 	return nil
+}
+
+func issueOrchestratorIdentityChanged(
+	runtimeBackend backend.Name,
+	recorded state.Pane,
+	found bool,
+	req panelaunch.Request,
+	paneID string,
+) bool {
+	if !found || runtimeBackend == backend.Herdr {
+		return found && recorded.PaneID != paneID
+	}
+	return recorded.PaneID != paneID || recorded.ShellKey != req.ShellKey
 }
 
 func issueOrchestratorCloseBackend(

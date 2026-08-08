@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 type paneFocusedMsg struct {
@@ -154,7 +155,68 @@ func (m *model) focusPaneIDCmd(paneID, contextNotice string) tea.Cmd {
 	if paneID == "" {
 		return nil
 	}
+	if m.selectedBackend() == backend.Herdr {
+		return m.focusFreshHerdrPaneIDCmd(paneID, contextNotice)
+	}
 	return m.focusPaneCmd(paneView{PaneID: paneID, TmuxState: "live"}, false, contextNotice)
+}
+
+func (m model) focusFreshHerdrPaneIDCmd(paneID, contextNotice string) tea.Cmd {
+	return func() tea.Msg {
+		pane, err := m.loadFreshHerdrPane(paneID)
+		if err != nil {
+			return paneFocusedMsg{paneID: paneID, err: err, contextNotice: contextNotice}
+		}
+		return focusFreshHerdrPane(m.opts.FocusHerdrPane, m.opts.keyboard, pane, contextNotice)
+	}
+}
+
+func (m model) loadFreshHerdrPane(paneID string) (paneView, error) {
+	panes, err := loadPaneViews(m.opts.ProjectRoot, nil, m.opts.ListLive, nil)
+	pane, selectErr := uniqueLiveHerdrPane(panes, paneID)
+	if err = errors.Join(err, selectErr); err != nil {
+		return paneView{}, err
+	}
+	if reason := m.runtimeActionDisabledReason(&pane, "focus"); reason != "" {
+		return paneView{}, fmt.Errorf("%s", reason)
+	}
+	return pane, nil
+}
+
+func focusFreshHerdrPane(
+	focus func(state.Pane) error,
+	keyboard keyboardProtocols,
+	pane paneView,
+	contextNotice string,
+) paneFocusedMsg {
+	keyboard.Disable()
+	if focus == nil {
+		keyboard.Enable()
+		return paneFocusedMsg{paneID: pane.PaneID, err: fmt.Errorf("owned Herdr focus is not configured"), contextNotice: contextNotice}
+	}
+	if err := focus(pane.savedPane); err != nil {
+		keyboard.Enable()
+		return paneFocusedMsg{paneID: pane.PaneID, err: err, contextNotice: contextNotice}
+	}
+	return paneFocusedMsg{paneID: pane.PaneID, keyboardPaused: true, contextNotice: contextNotice}
+}
+
+func uniqueLiveHerdrPane(panes []paneView, paneID string) (paneView, error) {
+	var found *paneView
+	for i := range panes {
+		pane := &panes[i]
+		if pane.PaneID != paneID || backend.NormalizeName(pane.Backend) != backend.Herdr {
+			continue
+		}
+		if found != nil {
+			return paneView{}, fmt.Errorf("recorded pane identity is ambiguous")
+		}
+		found = pane
+	}
+	if found == nil || !found.canFocus() {
+		return paneView{}, fmt.Errorf("newly created pane is not live")
+	}
+	return *found, nil
 }
 
 func (m *model) focusPaneCmd(pane paneView, zoom bool, contextNotice string) tea.Cmd {

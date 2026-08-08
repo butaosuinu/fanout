@@ -17,6 +17,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/browser"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
@@ -120,29 +121,17 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 			return exitcode.Env
 		}
 	}
-	owned, ownedErr := openOwnedHerdrSession(root)
-	if ownedErr != nil {
-		lg.Debug("dashboard: owned Herdr read unavailable: %v", ownedErr)
-	}
-
+	ownsHerdrPane, readHerdrPane := dashboardHerdrPeekPorts(root, openOwnedHerdrSession)
 	srv, err := dashboard.New(dashboard.Options{
 		ProjectRoot: root,
 		Port:        flags.port,
 		Token:       token,
 		// Resolved lazily on the poller's gh goroutine so a slow `gh repo view`
 		// never delays binding localhost or the state-only paint.
-		ResolveGH: dashboardGHResolver(root, lg),
-		ListLive:  runtimeListLiveForProject(root, false),
-		OwnsHerdrPane: func(pv sessionview.PaneView) bool {
-			return ownedHerdrActionDisabled(owned, pv.SavedPane) == ""
-		},
-		ReadHerdrPane: func(pv sessionview.PaneView, lines int) (string, error) {
-			bound, ref, bindErr := bindOwnedHerdrPane(owned, pv.SavedPane)
-			if bindErr != nil {
-				return "", bindErr
-			}
-			return bound.Read(ref, lines)
-		},
+		ResolveGH:     dashboardGHResolver(root, lg),
+		ListLive:      runtimeListLiveForProject(root, false),
+		OwnsHerdrPane: ownsHerdrPane,
+		ReadHerdrPane: readHerdrPane,
 	})
 	if err != nil {
 		lg.Err("dashboard: bind 127.0.0.1: %v", err)
@@ -197,6 +186,28 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 		return exitcode.Env
 	}
 	return exitcode.OK
+}
+
+func dashboardHerdrPeekPorts(
+	projectRoot string,
+	open func(string) (*herdrrun.OwnedSession, error),
+) (func(sessionview.PaneView) bool, func(sessionview.PaneView, int) (string, error)) {
+	owns := func(pv sessionview.PaneView) bool {
+		owned, err := open(projectRoot)
+		return err == nil && ownedHerdrActionDisabled(owned, pv.SavedPane) == ""
+	}
+	read := func(pv sessionview.PaneView, lines int) (string, error) {
+		owned, err := open(projectRoot)
+		if err != nil {
+			return "", err
+		}
+		bound, ref, err := bindOwnedHerdrPane(owned, pv.SavedPane)
+		if err != nil {
+			return "", err
+		}
+		return bound.Read(ref, lines)
+	}
+	return owns, read
 }
 
 func bindDashboardKeyForBackend(lg *log.Logger, enabled bool, selection backend.Selection) {

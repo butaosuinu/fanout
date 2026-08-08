@@ -10,6 +10,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -239,6 +240,17 @@ func TestCleanupIssueOrchestratorHandlesStaleAndFailedPaneCleanup(t *testing.T) 
 				t.Fatalf("kill-pane ran = %v, want %v; tmux log:\n%s", killRan, tt.wantKillRun, body)
 			}
 		})
+	}
+}
+
+func TestIssueOrchestratorIdentityUsesBackendNativeFields(t *testing.T) {
+	recorded := state.Pane{PaneID: "w1:p1", ShellKey: ""}
+	req := panelaunch.Request{ShellKey: "tmux-key"}
+	if issueOrchestratorIdentityChanged(backend.Herdr, recorded, true, req, "w1:p1") {
+		t.Fatal("Herdr identity treated the caller-only tmux ShellKey as authoritative")
+	}
+	if !issueOrchestratorIdentityChanged(backend.Tmux, recorded, true, req, "w1:p1") {
+		t.Fatal("tmux identity ignored the liveness ShellKey")
 	}
 }
 

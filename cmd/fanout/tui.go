@@ -192,6 +192,7 @@ func runTUIConsole(
 			commandName,
 			hookConfig,
 			selection,
+			tmuxHost || owned != nil,
 			lg,
 		),
 		ListLive: listLive,
@@ -351,7 +352,7 @@ func runtimeShellPaneAlive(listLive func() ([]backend.LivePane, error)) func(pan
 	}
 }
 
-func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConfig hooks.Config, selection backend.Selection, lg *log.Logger) fanouttui.SettingsReloadFunc {
+func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConfig hooks.Config, selection backend.Selection, interactiveLaunch bool, lg *log.Logger) fanouttui.SettingsReloadFunc {
 	return func() (fanouttui.SettingsRuntime, error) {
 		resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
 		var watcher fanouttui.WatcherRunner
@@ -380,13 +381,25 @@ func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConf
 			WatcherRunningLabel: resolvedSettings.WatcherRunningLabel,
 			Notifier:            notifier,
 		}
-		if selection.Name == backend.Tmux {
-			syncDashboardKey(lg, resolvedSettings.DashboardKeybind, true)
-			syncConsoleKey(lg, resolvedSettings.ConsoleKeybind, true)
-			runtime.LaunchIssue = newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig)
-		}
+		syncTUIReloadKeys(selection.Name, resolvedSettings, lg)
+		runtime.LaunchIssue = reloadedTUIIssueLauncher(interactiveLaunch, projectRoot, session, commandName, resolvedSettings, hookConfig)
 		return runtime, nil
 	}
+}
+
+func syncTUIReloadKeys(runtimeBackend backend.Name, resolved settings.Settings, lg *log.Logger) {
+	if runtimeBackend != backend.Tmux {
+		return
+	}
+	syncDashboardKey(lg, resolved.DashboardKeybind, true)
+	syncConsoleKey(lg, resolved.ConsoleKeybind, true)
+}
+
+func reloadedTUIIssueLauncher(enabled bool, projectRoot, session, commandName string, resolved settings.Settings, hookConfig hooks.Config) fanouttui.IssueLaunchFunc {
+	if !enabled {
+		return nil
+	}
+	return newTUIIssueLaunchFunc(projectRoot, session, commandName, resolved, hookConfig)
 }
 
 func tuiLaunchTarget(session string) string {

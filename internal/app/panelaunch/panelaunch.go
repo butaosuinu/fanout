@@ -77,7 +77,8 @@ type Request struct {
 	ShellKey string
 	// AgentStartGate is an optional tmux wait-for lock. AttachWithResult locks
 	// it before splitting the pane; the pane is recorded immediately, but its
-	// agent command waits until the caller invokes ReleaseAgentStartGate.
+	// agent command waits until the caller invokes ReleaseAgentStartGate. Herdr
+	// rejects this field because its parent lane enforces ordering structurally.
 	AgentStartGate string
 	Hooks          hooks.Config
 	Worktree       worktree.Plan
@@ -310,9 +311,7 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		l.Log.Err("%s: runtime backend is not configured", paneLogLabel(req))
 		return Result{}, false
 	}
-	if l.Backend.Name() == backend.Herdr {
-		req.ShellKey = ""
-	} else if keyErr := ensurePaneLivenessKey(&req); keyErr != nil {
+	if keyErr := prepareAttachedLiveness(l.Backend.Name(), &req); keyErr != nil {
 		l.Log.Err("%s: %v", paneLogLabel(req), keyErr)
 		return Result{}, false
 	}
@@ -338,6 +337,17 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		return l.attachHerdr(req, targetPath)
 	}
 	return l.attachTmux(req, targetPath)
+}
+
+func prepareAttachedLiveness(runtimeBackend backend.Name, req *Request) error {
+	if runtimeBackend != backend.Herdr {
+		return ensurePaneLivenessKey(req)
+	}
+	if strings.TrimSpace(req.AgentStartGate) != "" {
+		return fmt.Errorf("agent start gate is not supported by the Herdr backend")
+	}
+	req.ShellKey = ""
+	return nil
 }
 
 func (l *Launcher) attachTmux(req Request, targetPath string) (Result, bool) {
@@ -734,7 +744,10 @@ func ReleaseAgentStartGate(runtimeBackend backend.Backend, req Request) error {
 		return fmt.Errorf("runtime backend is not configured")
 	}
 	if runtimeBackend.Name() == backend.Herdr {
-		return nil
+		if strings.TrimSpace(req.AgentStartGate) == "" {
+			return nil
+		}
+		return fmt.Errorf("agent start gate is not supported by the Herdr backend")
 	}
 	return runtimeBackend.ReleaseStartGate(req.AgentStartGate)
 }

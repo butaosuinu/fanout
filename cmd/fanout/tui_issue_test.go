@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/watch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -415,6 +417,28 @@ func TestLaunchIssueSessionFromTUIParentLaunchesOrchestratorFirst(t *testing.T) 
 	}
 	if !strings.Contains(tmuxLog, "--permission-mode plan") {
 		t.Fatalf("orchestrator split command does not start Claude in plan mode:\n%s", tmuxLog)
+	}
+}
+
+func TestHerdrIssueOrchestratorStartsOnlyAfterAdmissibleChildOutcome(t *testing.T) {
+	tests := []struct {
+		name     string
+		backend  backend.Name
+		progress run.IssueAfterContext
+		want     bool
+	}{
+		{name: "all children completed", backend: backend.Herdr, progress: run.IssueAfterContext{Created: 2}, want: true},
+		{name: "partial child success", backend: backend.Herdr, progress: run.IssueAfterContext{Created: 1, Failed: 1}, want: true},
+		{name: "children already existed", backend: backend.Herdr, want: true},
+		{name: "first child failed", backend: backend.Herdr, progress: run.IssueAfterContext{Failed: 1}},
+		{name: "tmux keeps wait-for path", backend: backend.Tmux, progress: run.IssueAfterContext{Created: 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := launchHerdrOrchestratorAfterChildren(tt.backend, tt.progress); got != tt.want {
+				t.Fatalf("launchHerdrOrchestratorAfterChildren() = %t, want %t", got, tt.want)
+			}
+		})
 	}
 }
 

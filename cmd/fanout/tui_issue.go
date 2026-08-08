@@ -200,6 +200,9 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		runtimeBackend backend.Backend,
 		herdr *herdrrun.OwnedSession,
 	) error {
+		if runtimeBackend.Name() == backend.Herdr {
+			return guardIssueOrchestrator(projectRoot, store, issueNum)
+		}
 		var launchErr error
 		orchestratorReq, orchestratorPaneID, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
 			projectRoot, session, commandName, runtimeBackend, herdr, store, recorder,
@@ -207,14 +210,31 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		)
 		return launchErr
 	}
-	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg, ready)
+	after := func(
+		store state.Store,
+		recorder panelaunch.StateRecorder,
+		runtimeBackend backend.Backend,
+		herdr *herdrrun.OwnedSession,
+		progress run.IssueAfterContext,
+	) error {
+		if !launchHerdrOrchestratorAfterChildren(runtimeBackend.Name(), progress) {
+			return nil
+		}
+		var launchErr error
+		orchestratorReq, orchestratorPaneID, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
+			projectRoot, session, commandName, runtimeBackend, herdr, store, recorder,
+			hookConfig, detail, defaultAgent, resolvedSettings.OrchestratorPlanMode,
+		)
+		return launchErr
+	}
+	result, err := launchParentIssueFanoutWithCallbacks(projectRoot, session, commandName, cfg, ready, after)
 	runtimeBackend := result.runtimeBackend
 	if err != nil && len(result.CreatedPaneIDs) == 0 && orchestratorCreated {
 		if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, result.herdr, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("cleanup issue orchestrator: %w", cleanupErr))
 		} else {
 			orchestratorPaneID = ""
-			if releaseErr := panelaunch.ReleaseAgentStartGate(runtimeBackend, orchestratorReq); releaseErr != nil {
+			if releaseErr := releaseCleanedIssueOrchestratorGate(runtimeBackend, orchestratorReq); releaseErr != nil {
 				err = errors.Join(err, fmt.Errorf("release cleaned issue orchestrator gate: %w", releaseErr))
 			}
 		}
@@ -236,6 +256,17 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		}
 	}
 	return finishTUIIssueParentLaunch(issueNum, orchestratorPaneID, result, err)
+}
+
+func launchHerdrOrchestratorAfterChildren(runtimeBackend backend.Name, progress run.IssueAfterContext) bool {
+	return runtimeBackend == backend.Herdr && (progress.Failed == 0 || progress.Created > 0)
+}
+
+func releaseCleanedIssueOrchestratorGate(runtimeBackend backend.Backend, req panelaunch.Request) error {
+	if runtimeBackend.Name() != backend.Tmux {
+		return nil
+	}
+	return panelaunch.ReleaseAgentStartGate(runtimeBackend, req)
 }
 
 func finishTUIIssueParentLaunch(issueNum int, orchestratorPaneID string, result parentIssueFanoutResult, err error) (fanouttui.LaunchResult, error) {

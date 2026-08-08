@@ -228,13 +228,25 @@ func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName str
 	if err != nil {
 		return panelaunch.Request{}, "", "", err
 	}
-	paneReq := buildReq(store, livenessKey, cfg)
+	paneReq := coordinatorRuntimeRequest(runtimeBackend.Name(), buildReq(store, livenessKey, cfg))
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Backend: runtimeBackend, Herdr: herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.AttachWithResult(paneReq, projectRoot)
 	if !ok {
 		return panelaunch.Request{}, "", "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
 	}
 	return paneReq, result.PaneID, bufferedLaunchNotice(stderr), nil
+}
+
+func coordinatorRuntimeRequest(runtimeBackend backend.Name, req panelaunch.Request) panelaunch.Request {
+	if runtimeBackend != backend.Herdr {
+		return req
+	}
+	// Herdr attach identity never uses the tmux liveness key. A parent
+	// orchestrator is sequenced by the post-child callback, so strip its
+	// tmux-only wait-for gate too.
+	req.ShellKey = ""
+	req.AgentStartGate = ""
+	return req
 }
 
 // launchIssuePlanFromTUI launches one plan coordinator pane that decomposes a
