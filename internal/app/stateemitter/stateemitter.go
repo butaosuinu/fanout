@@ -96,7 +96,7 @@ func Emit(ctx context.Context, signal telemetry.Signal, observer Observer) (err 
 	if err != nil {
 		return err
 	}
-	locked, err := state.LockProjectForLaunch(projectRoot)
+	locked, err := state.LockProjectForLaunchContext(ctx, projectRoot)
 	if err != nil {
 		return err
 	}
@@ -324,10 +324,6 @@ func sameLivePaneWithoutTerminal(target RuntimeTarget, pane backend.LivePane) bo
 		pane.SocketPath == target.SocketPath,
 		pane.RepoKey == target.RepoKey,
 		filepath.Clean(pane.WorktreePath) == filepath.Clean(target.WorktreePath),
-		pane.AgentPresent,
-		pane.AgentProvider == target.Agent,
-		pane.AgentID == target.AgentID,
-		agentSessionMatches(target, pane.AgentSession),
 	}
 	return !slices.Contains(identity, false)
 }

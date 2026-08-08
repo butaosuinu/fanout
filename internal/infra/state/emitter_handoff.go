@@ -13,7 +13,10 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
 )
 
-const emitterHandoffPollInterval = 10 * time.Millisecond
+const (
+	emitterHandoffPollInterval     = 10 * time.Millisecond
+	emitterHandoffReacquireTimeout = 5 * time.Second
+)
 
 // EmitterHandoffPath returns one invocation-scoped marker used to hand the
 // combined launch lock to emitters that arrived before final-row save.
@@ -107,13 +110,17 @@ func EmitterHandoffs(statePath, emitterNonce string) ([]string, error) {
 
 // YieldForEmitter releases the combined lock only after a matching realized
 // launch has published its waiter, then reacquires and reloads both stores.
-// The persisted intent remains the idempotency fence during this handoff.
+// The persisted intent remains the idempotency fence during this handoff. If
+// bounded reacquisition fails, l remains unlocked and the caller must stop.
 func (l *LockedStore) YieldForEmitter(
 	ctx context.Context,
 	projectRoot string,
 	statePath string,
 	emitterNonce string,
 ) (bool, error) {
+	if ctx == nil {
+		return false, fmt.Errorf("emitter handoff requires a context")
+	}
 	handoffs, err := EmitterHandoffs(statePath, emitterNonce)
 	if err != nil || len(handoffs) == 0 {
 		return len(handoffs) == 0, err
@@ -125,7 +132,11 @@ func (l *LockedStore) YieldForEmitter(
 		return false, err
 	}
 	completed, waitErr := waitForEmitterHandoff(ctx, statePath, emitterNonce)
-	reloaded, err := LockProjectForLaunch(projectRoot)
+	// The marker wait may consume ctx. Reacquisition restores the caller's lock
+	// invariant under its own deadline instead of falling back to blocking flock.
+	reacquireCtx, cancel := context.WithTimeout(context.Background(), emitterHandoffReacquireTimeout)
+	defer cancel()
+	reloaded, err := LockProjectForLaunchContext(reacquireCtx, projectRoot)
 	if err != nil {
 		return false, fmt.Errorf("reacquire launch lock after emitter handoff: %w", err)
 	}

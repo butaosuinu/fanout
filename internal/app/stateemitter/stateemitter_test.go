@@ -2,6 +2,7 @@ package stateemitter
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,19 +113,36 @@ func TestEmitFinalRowInvalidatesTelemetryWhenTerminalChanges(t *testing.T) {
 	}
 }
 
-func TestEmitFinalRowDoesNotInvalidateForForeignAgentOnChangedTerminal(t *testing.T) {
+func TestEmitFinalRowInvalidatesChangedTerminalWithForeignAgentRecord(t *testing.T) {
 	repo := newEmitterRepo(t)
 	pane, signal, observer := finalEmitterFixture(t, repo)
 	saveEmitterPanes(t, repo, pane)
 	observer.observation.Panes[0].TerminalID = "replacement-terminal"
 	observer.observation.Panes[0].AgentID = "foreign-agent"
 
-	if err := Emit(context.Background(), signal, observer); err == nil {
-		t.Fatal("Emit() invalidated telemetry without an exact non-terminal identity")
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
 	}
 	got := loadEmitterPane(t, repo)
-	if got.ReportedState != pane.ReportedState || got.EmitterNonce != pane.EmitterNonce {
-		t.Fatalf("foreign agent changed telemetry binding: %+v", got)
+	if got.ReportedState != "" || got.StateRefinement || got.EmitterNonce == pane.EmitterNonce {
+		t.Fatalf("changed terminal retained telemetry binding: %+v", got)
+	}
+}
+
+func TestEmitStopsAtContextDeadlineWhileLaunchLockIsHeld(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	saveEmitterPanes(t, repo, pane)
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := Emit(ctx, signal, observer); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Emit() error = %v, want context deadline", err)
 	}
 }
 

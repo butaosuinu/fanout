@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/parentref"
@@ -64,6 +66,36 @@ func TestLockProjectForLaunchAcceptsGroupWritableCommonDir(t *testing.T) {
 		t.Fatalf("LockProjectForLaunch() with group-writable .git = %v, want success", err)
 	}
 	if err := project.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLockProjectForLaunchContextReleasesIntentsAfterStateTimeout(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	stateOnly, err := Lock(Path(repo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stateOnly.Unlock() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := LockProjectForLaunchContext(ctx, repo); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("LockProjectForLaunchContext() error = %v, want context deadline", err)
+	}
+	intentsPath, err := HerdrIntentsPath(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contender, err := os.OpenFile(intentsPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = contender.Close() }()
+	if err := syscall.Flock(int(contender.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("partially acquired Herdr intents lock was not released: %v", err)
+	}
+	if err := syscall.Flock(int(contender.Fd()), syscall.LOCK_UN); err != nil {
 		t.Fatal(err)
 	}
 }

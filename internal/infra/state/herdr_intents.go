@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,7 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/parentref"
@@ -126,7 +126,17 @@ type LockedHerdrIntents struct {
 // HerdrIntentsPath returns the repository-common journal path shared by every
 // linked worktree.
 func HerdrIntentsPath(projectRoot string) (string, error) {
-	out, err := execx.Output(projectRoot, nil, "git", "rev-parse", "--git-common-dir")
+	return herdrIntentsPathContext(nil, projectRoot)
+}
+
+func herdrIntentsPathContext(ctx context.Context, projectRoot string) (string, error) {
+	var out []byte
+	var err error
+	if ctx == nil {
+		out, err = execx.Output(projectRoot, nil, "git", "rev-parse", "--git-common-dir")
+	} else {
+		out, err = execx.OutputContext(ctx, projectRoot, nil, "git", "rev-parse", "--git-common-dir")
+	}
 	if err != nil {
 		return "", fmt.Errorf("resolve Herdr intents git common directory: %w", err)
 	}
@@ -165,6 +175,10 @@ func LoadHerdrIntentsPath(path string) (HerdrIntents, error) {
 }
 
 func lockHerdrIntentsPath(path string) (*os.File, error) {
+	return lockHerdrIntentsPathContext(nil, path)
+}
+
+func lockHerdrIntentsPathContext(ctx context.Context, path string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create Herdr intents directory: %w", err)
 	}
@@ -173,7 +187,7 @@ func lockHerdrIntentsPath(path string) (*os.File, error) {
 	if openErr != nil {
 		return nil, fmt.Errorf("open Herdr intents lock %s: %w", lockPath, openErr)
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+	if err := lockFileExclusive(ctx, file); err != nil {
 		_ = file.Close() // The flock error is authoritative.
 		return nil, fmt.Errorf("lock Herdr intents %s: %w", lockPath, err)
 	}
