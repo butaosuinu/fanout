@@ -25,10 +25,7 @@ const herdrLaunchLockReacquireTimeout = maxHerdrRealizeTimeout
 
 var errHerdrLaunchStatePreserved = errors.New("issued Herdr launch state preserved")
 
-type herdrLaunchPrepareFunc func(
-	*state.LockedStore,
-	state.HerdrIntent,
-) (state.HerdrIntent, error)
+type herdrLaunchValidator func(*state.HerdrLaunch) error
 
 type herdrPaneSelector func(state.HerdrIntent, []backend.LivePane) (backend.LivePane, bool)
 
@@ -48,8 +45,11 @@ func (l *Launcher) startHerdrRequestAgent(
 ) (backend.LivePane, error) {
 	return l.startHerdrAgent(
 		ctx, locked, route, intent,
-		func(locked *state.LockedStore, intent state.HerdrIntent) (state.HerdrIntent, error) {
-			return l.prepareHerdrLaunch(req, locked, route, intent, callerEnvironment)
+		func(launch *state.HerdrLaunch) error {
+			return validateHerdrLaunchBinding(req, launch)
+		},
+		func(intent state.HerdrIntent) (*state.HerdrLaunch, error) {
+			return l.prepareHerdrLaunchCapsule(req, route, intent, callerEnvironment)
 		},
 		func(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
 			return exactHerdrLaunchPane(intent, panes, intent.Launch.AgentName)
@@ -65,14 +65,15 @@ func (l *Launcher) startHerdrAgent(
 	locked *state.LockedStore,
 	route herdrrun.OwnedLaunchRoute,
 	intent state.HerdrIntent,
-	prepare herdrLaunchPrepareFunc,
+	validate herdrLaunchValidator,
+	build herdrLaunchCapsuleBuilder,
 	expected herdrPaneSelector,
 	adopt herdrAgentAdoptFunc,
 ) (live backend.LivePane, retErr error) {
 	if err := admitHerdrAgentStartDeadline(locked, l.Info.ProjectRoot, intent); err != nil {
 		return live, err
 	}
-	intent, err := prepare(locked, intent)
+	intent, err := l.prepareHerdrLaunch(locked, route, intent, validate, build)
 	if err != nil {
 		return live, err
 	}

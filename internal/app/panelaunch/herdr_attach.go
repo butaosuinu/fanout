@@ -12,7 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-type herdrLaunchCapsuleBuilder func(string) (*state.HerdrLaunch, error)
+type herdrLaunchCapsuleBuilder func(state.HerdrIntent) (*state.HerdrLaunch, error)
 
 func (l *Launcher) attachHerdr(req Request, targetPath string) (Result, bool) {
 	locked, ok := l.admitHerdrLaunchRequest(req)
@@ -28,8 +28,8 @@ func (l *Launcher) attachHerdr(req Request, targetPath string) (Result, bool) {
 	intent, err := realizeHerdrInteractive(
 		ctx, l.Herdr, locked, route,
 		manualHerdrCoordinatorRequest(l.Info.ProjectRoot, targetPath, route, req.Number),
-		func(intentID string) (*state.HerdrLaunch, error) {
-			return l.buildHerdrAgentLaunch(req, route, intentID, os.Environ())
+		func(intent state.HerdrIntent) (*state.HerdrLaunch, error) {
+			return l.prepareHerdrLaunchCapsule(req, route, intent, os.Environ())
 		},
 	)
 	if err != nil {
@@ -41,11 +41,23 @@ func (l *Launcher) attachHerdr(req Request, targetPath string) (Result, bool) {
 			locked, l.Info.ProjectRoot, intent, err,
 		))
 	}
-	if err := finalizeHerdrAttached(req, locked, l.Info.ProjectRoot, intent, live); err != nil {
+	if err := finalizeHerdrPane(locked, l.Info.ProjectRoot, intent, func(latest state.HerdrIntent) (state.Pane, error) {
+		pane := herdrAttachedStatePane(req, latest, live)
+		applyHerdrLaunchTelemetry(&pane, latest)
+		return pane, nil
+	}); err != nil {
 		return l.failHerdr(req, "finalize attached agent", err)
 	}
 	l.Log.Ok("%s: pane %s attached to %s", paneLogLabel(req), live.Ref.Pane, targetPath)
 	return Result{PaneID: live.Ref.Pane, Notice: launchNotice(req)}, true
+}
+
+func herdrAttachedStatePane(req Request, intent state.HerdrIntent, live backend.LivePane) state.Pane {
+	pane := statePaneForBackend(
+		req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(), codexapp.Status{}, backend.Herdr, &live,
+	)
+	pane.Kind = state.PaneKindAttachedAgent
+	return pane
 }
 
 func manualHerdrCoordinatorRequest(
@@ -80,7 +92,7 @@ func realizeHerdrInteractive(
 	var launch *state.HerdrLaunch
 	prepared := false
 	if _, found := journal.FindIntent(intentID); !found {
-		launch, err = build(intentID)
+		launch, err = build(state.HerdrIntent{ID: intentID})
 		prepared = err == nil
 	}
 	if err != nil {
@@ -128,39 +140,32 @@ func discardRejectedHerdrLaunch(
 	return herdrrun.DiscardWorkloadEnvironment(route.RuntimeDir, launch)
 }
 
-func finalizeHerdrAttached(
-	req Request,
+func finalizeHerdrPane(
 	locked *state.LockedStore,
 	projectRoot string,
 	intent state.HerdrIntent,
-	live backend.LivePane,
-) (retErr error) {
-	pane := statePaneForBackend(
-		req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(),
-		codexapp.Status{}, backend.Herdr, &live,
-	)
-	pane.Kind = state.PaneKindAttachedAgent
-	return finalizeHerdrInteractive(locked, projectRoot, intent, pane)
-}
-
-func finalizeHerdrInteractive(
-	locked *state.LockedStore,
-	projectRoot string,
-	intent state.HerdrIntent,
-	pane state.Pane,
+	build func(state.HerdrIntent) (state.Pane, error),
 ) (retErr error) {
 	defer func() {
 		if retErr != nil {
 			retErr = errors.Join(retErr, markHerdrFinalizationFailure(locked, projectRoot, intent, retErr))
 		}
 	}()
-	if err := locked.RecordPane(pane); err != nil {
-		return err
-	}
-	journal, err := locked.HerdrIntents(projectRoot)
+	journal, latest, err := latestHerdrLaunchIntent(locked, projectRoot, intent.ID)
 	if err != nil {
 		return err
 	}
+	pane, err := build(latest)
+	if err != nil {
+		return err
+	}
+	if recordErr := locked.RecordPane(pane); recordErr != nil {
+		return recordErr
+	}
 	journal.RemoveIntent(intent.ID)
 	return journal.Save()
+}
+
+func staticHerdrPane(pane state.Pane) func(state.HerdrIntent) (state.Pane, error) {
+	return func(state.HerdrIntent) (state.Pane, error) { return pane, nil }
 }

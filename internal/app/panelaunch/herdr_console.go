@@ -82,7 +82,7 @@ func ensureHerdrConsoleLocked(
 			ProjectRoot: root, SourceRoot: root, CWD: root,
 			HerdrSession: route.Session, SocketPath: route.SocketPath,
 		},
-		func(string) (*state.HerdrLaunch, error) {
+		func(state.HerdrIntent) (*state.HerdrLaunch, error) {
 			return newHerdrShellLaunch(owned, route, shellPath, callerEnvironment)
 		},
 	)
@@ -90,7 +90,7 @@ func ensureHerdrConsoleLocked(
 		return HerdrConsoleResult{}, err
 	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: root}, Herdr: owned}
-	live, err := launcher.startHerdrShell(ctx, locked, route, intent)
+	live, err := launcher.startHerdrAgent(ctx, locked, route, intent, validateHerdrShellLaunch, nil, exactHerdrShellPane, nil)
 	if err != nil {
 		return HerdrConsoleResult{}, err
 	}
@@ -98,7 +98,7 @@ func ensureHerdrConsoleLocked(
 		intent, live, NextSyntheticPaneNumber(locked.Store, ManualParentRef),
 		"herdr-console", "Herdr console", HerdrConsoleRuntimeParent,
 	)
-	if err := finalizeHerdrInteractive(locked, root, intent, pane); err != nil {
+	if err := finalizeHerdrPane(locked, root, intent, staticHerdrPane(pane)); err != nil {
 		return HerdrConsoleResult{}, err
 	}
 	return herdrConsoleResult(owned, pane)

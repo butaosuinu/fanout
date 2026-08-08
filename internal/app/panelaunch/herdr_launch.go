@@ -62,7 +62,9 @@ func (l *Launcher) launchHerdr(req Request) (Result, bool) {
 	if err != nil {
 		return l.failHerdr(req, "start Codex TUI controller", err)
 	}
-	if err := l.finalizeHerdrLaunch(req, operation.locked, intent, live, codexStatus); err != nil {
+	if err := finalizeHerdrPane(operation.locked, l.Info.ProjectRoot, intent, func(latest state.HerdrIntent) (state.Pane, error) {
+		return herdrAgentStatePane(req, latest, live, codexStatus)
+	}); err != nil {
 		return l.failHerdr(req, "finalize launch", err)
 	}
 	l.reportHerdrSidebarMetadata(req, intent)
@@ -351,11 +353,11 @@ func validateHerdrCoordinatorPane(
 }
 
 func (l *Launcher) prepareHerdrLaunch(
-	req Request,
 	locked *state.LockedStore,
 	route herdrrun.OwnedLaunchRoute,
 	intent state.HerdrIntent,
-	callerEnvironment []string,
+	validate herdrLaunchValidator,
+	build herdrLaunchCapsuleBuilder,
 ) (state.HerdrIntent, error) {
 	journal, err := locked.HerdrIntents(l.Info.ProjectRoot)
 	if err != nil {
@@ -364,31 +366,37 @@ func (l *Launcher) prepareHerdrLaunch(
 	if saved, found := journal.FindIntent(intent.ID); found {
 		intent = saved
 	}
-	if intent.Launch != nil {
-		if err := validateHerdrLaunchBinding(req, intent.Launch); err != nil {
-			return intent, err
-		}
-		if intent.Launch.TokenIssued {
-			return intent, l.failClosedIssuedHerdrLaunch(journal, intent, nil)
-		}
-		return intent, nil
+	if intent.Launch == nil {
+		return buildAndPersistHerdrLaunch(journal, intent, route.RuntimeDir, validate, build)
 	}
-	return l.newHerdrLaunch(req, journal, route, intent, callerEnvironment)
+	if err := validate(intent.Launch); err != nil {
+		return intent, err
+	}
+	if intent.Launch.TokenIssued {
+		return intent, l.failClosedIssuedHerdrLaunch(journal, intent, nil)
+	}
+	return intent, nil
 }
 
-func (l *Launcher) newHerdrLaunch(
-	req Request,
+func buildAndPersistHerdrLaunch(
 	journal *state.LockedHerdrIntents,
-	route herdrrun.OwnedLaunchRoute,
 	intent state.HerdrIntent,
-	callerEnvironment []string,
+	runtimeDir string,
+	validate herdrLaunchValidator,
+	build herdrLaunchCapsuleBuilder,
 ) (state.HerdrIntent, error) {
-	launch, err := l.prepareHerdrLaunchCapsule(req, route, intent, callerEnvironment)
+	if build == nil {
+		return intent, validate(nil)
+	}
+	launch, err := build(intent)
 	if err != nil {
 		return intent, err
 	}
 	intent.Launch = launch
-	return persistNewHerdrLaunch(journal, intent, route.RuntimeDir)
+	if err := validate(launch); err != nil {
+		return intent, errors.Join(err, removeUnpublishedHerdrEnvironment(runtimeDir, launch))
+	}
+	return persistNewHerdrLaunch(journal, intent, runtimeDir)
 }
 
 type resolvedHerdrLaunch struct {
@@ -697,38 +705,24 @@ func (l *Launcher) failClosedIssuedHerdrLaunch(
 	return markHerdrIntentManual(journal, intent, responseLost)
 }
 
-func (l *Launcher) finalizeHerdrLaunch(
+func herdrAgentStatePane(
 	req Request,
-	locked *state.LockedStore,
 	intent state.HerdrIntent,
 	live backend.LivePane,
 	codexStatus codexapp.Status,
-) (retErr error) {
-	defer func() {
-		if retErr != nil {
-			retErr = errors.Join(retErr, markHerdrFinalizationFailure(locked, l.Info.ProjectRoot, intent, retErr))
-		}
-	}()
+) (state.Pane, error) {
 	if err := displayname.WriteFanoutMetadata(intent.WorktreePath, displayname.FanoutMetadata{
 		Agent: req.Agent, DisplayName: paneTitle(req), BranchName: req.BranchName,
 		Slug: req.Slug, WorktreePath: intent.WorktreePath,
 		CodexThreadID: codexStatus.ThreadID, CodexSessionID: codexStatus.SessionID,
 	}); err != nil {
-		return err
-	}
-	journal, latest, err := latestHerdrLaunchIntent(locked, l.Info.ProjectRoot, intent.ID)
-	if err != nil {
-		return err
+		return state.Pane{}, err
 	}
 	pane := statePaneForBackend(
-		req, live.Ref.Pane, latest.WorktreePath, time.Now().UTC(), codexStatus, backend.Herdr, &live,
+		req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(), codexStatus, backend.Herdr, &live,
 	)
-	applyHerdrLaunchTelemetry(&pane, latest)
-	if err := locked.RecordPane(pane); err != nil {
-		return err
-	}
-	journal.RemoveIntent(intent.ID)
-	return journal.Save()
+	applyHerdrLaunchTelemetry(&pane, intent)
+	return pane, nil
 }
 
 func latestHerdrLaunchIntent(

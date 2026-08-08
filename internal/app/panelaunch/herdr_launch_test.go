@@ -233,10 +233,11 @@ func TestFinalizeHerdrLaunchFailureBecomesManualCleanupRequired(t *testing.T) {
 	if writeErr := os.WriteFile(filepath.Join(intent.WorktreePath, ".fanout"), []byte("block directory"), 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
 	stale := intent
 	stale.Launch = nil
-	err = launcher.finalizeHerdrLaunch(Request{}, locked, stale, backend.LivePane{}, codexapp.Status{})
+	err = finalizeHerdrPane(locked, repo, stale, func(latest state.HerdrIntent) (state.Pane, error) {
+		return herdrAgentStatePane(Request{}, latest, backend.LivePane{}, codexapp.Status{})
+	})
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("finalization error = %v, want manual cleanup", err)
 	}
@@ -302,10 +303,11 @@ func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T
 		AgentSession: &pendingSession,
 		SessionID:    intent.Session, SocketPath: intent.SocketPath,
 	}
-	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
 	stale := intent
 	stale.Launch = nil
-	err = launcher.finalizeHerdrLaunch(launchReq, locked, stale, live, codexapp.Status{})
+	err = finalizeHerdrPane(locked, repo, stale, func(latest state.HerdrIntent) (state.Pane, error) {
+		return herdrAgentStatePane(launchReq, latest, live, codexapp.Status{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,8 +395,11 @@ func TestWaitForHerdrAgentRevalidatesConcurrentIntentChanges(t *testing.T) {
 				return []backend.LivePane{live}, <-updated
 			}
 			launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
-			_, err := launcher.waitForHerdrAgentUnlocked(
-				context.Background(), locked, intent, intent.Launch.AgentName, "",
+			_, err := launcher.waitForHerdrPaneUnlocked(
+				context.Background(), locked, intent,
+				func(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
+					return exactHerdrLaunchPane(intent, panes, intent.Launch.AgentName)
+				}, "",
 			)
 			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
 				t.Fatalf("wait error = %v, want %v containing %q", err, test.wantErr, test.wantErrText)
@@ -448,7 +453,15 @@ func TestFinishIssuedHerdrAgentPreservesObservedAgentAfterContextExpires(t *test
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := launcher.finishIssuedHerdrAgent(ctx, Request{Agent: intent.Launch.Agent}, locked, intent)
+	_, err := launcher.finishIssuedHerdrAgent(
+		ctx, locked, intent,
+		func(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
+			return exactHerdrLaunchPane(intent, panes, intent.Launch.AgentName)
+		},
+		func(ctx context.Context, locked *state.LockedStore, intent state.HerdrIntent) (backend.LivePane, error) {
+			return launcher.adoptHerdrAgent(ctx, Request{Agent: intent.Launch.Agent}, locked, intent)
+		},
+	)
 	if !errors.Is(err, errHerdrLaunchStatePreserved) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("finish error = %v, want preserved launch with expired context", err)
 	}
@@ -848,11 +861,15 @@ func TestPrepareHerdrLaunchRejectsTeamBindingChange(t *testing.T) {
 				t.Fatal(saveErr)
 			}
 
+			req := Request{
+				Agent: "codex", TeamDBPath: tc.requestedDBPath, CodexTeamMode: tc.requestedCodex,
+				CodexTeamStatusPath: filepath.Join(t.TempDir(), "requested-status.json"),
+			}
 			_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).prepareHerdrLaunch(
-				Request{
-					Agent: "codex", TeamDBPath: tc.requestedDBPath, CodexTeamMode: tc.requestedCodex,
-					CodexTeamStatusPath: filepath.Join(t.TempDir(), "requested-status.json"),
-				}, locked, herdrrun.OwnedLaunchRoute{}, intent, nil,
+				locked, herdrrun.OwnedLaunchRoute{}, intent,
+				func(launch *state.HerdrLaunch) error {
+					return validateHerdrLaunchBinding(req, launch)
+				}, nil,
 			)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("team mode mismatch error = %v", err)
@@ -1312,9 +1329,7 @@ func TestHerdrLaunchDoesNotIssueTokenAfterLauncherWaitExpires(t *testing.T) {
 	}
 	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrAgent(
 		context.Background(), locked, herdrrun.OwnedLaunchRoute{}, intent,
-		func(_ *state.LockedStore, intent state.HerdrIntent) (state.HerdrIntent, error) {
-			return intent, nil
-		},
+		func(*state.HerdrLaunch) error { return nil }, nil,
 		func(state.HerdrIntent, []backend.LivePane) (backend.LivePane, bool) {
 			return backend.LivePane{}, false
 		}, nil,
