@@ -23,8 +23,12 @@ type fakeHerdrLifecycleRuntime struct {
 	workspaces               []herdrrun.WorkspaceObservation
 	verifyErr                error
 	setupErr                 error
+	openErr                  error
 	removeErr                error
+	closeErr                 error
+	observeAfterMutationErr  error
 	keepWorkspaceAfterRemove bool
+	mutationDispatched       bool
 
 	verifyCalls int
 	setupCalls  int
@@ -44,22 +48,33 @@ func (f *fakeHerdrLifecycleRuntime) VerifyWorktreeSetupPolicy(context.Context) e
 }
 
 func (f *fakeHerdrLifecycleRuntime) ObserveWorkspaces(context.Context) ([]herdrrun.WorkspaceObservation, error) {
+	if f.mutationDispatched && f.observeAfterMutationErr != nil {
+		return nil, f.observeAfterMutationErr
+	}
 	return append([]herdrrun.WorkspaceObservation(nil), f.workspaces...), nil
 }
 
 func (f *fakeHerdrLifecycleRuntime) OpenWorktree(_ context.Context, req herdrrun.WorktreeOpenRequest) (herdrrun.WorktreeMutationResult, error) {
 	f.openCalls++
+	if herdrMutationDefinitelyNotIssued(f.openErr) {
+		return herdrrun.WorktreeMutationResult{}, f.openErr
+	}
 	workspace := herdrLifecycleWorkspace("w-reopened", req.Label, req.Path, req.SourceRepoKey, req.SourceRepoRoot)
 	f.workspaces = append(f.workspaces, workspace)
-	return herdrrun.WorktreeMutationResult{WorkspaceObservation: workspace}, nil
+	f.mutationDispatched = true
+	return herdrrun.WorktreeMutationResult{WorkspaceObservation: workspace}, f.openErr
 }
 
 func (f *fakeHerdrLifecycleRuntime) RemoveWorktree(ctx context.Context, workspaceID, path string) error {
 	f.removeCalls++
+	if herdrMutationDefinitelyNotIssued(f.removeErr) {
+		return f.removeErr
+	}
 	cmd := exec.CommandContext(ctx, "git", "-C", f.projectRoot, "worktree", "remove", path)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return errors.Join(f.removeErr, errors.New(strings.TrimSpace(string(out))), err)
 	}
+	f.mutationDispatched = true
 	if !f.keepWorkspaceAfterRemove {
 		f.removeWorkspace(workspaceID)
 	}
@@ -68,8 +83,12 @@ func (f *fakeHerdrLifecycleRuntime) RemoveWorktree(ctx context.Context, workspac
 
 func (f *fakeHerdrLifecycleRuntime) CloseWorkspace(_ context.Context, workspaceID string) error {
 	f.closeCalls++
+	if herdrMutationDefinitelyNotIssued(f.closeErr) {
+		return f.closeErr
+	}
+	f.mutationDispatched = true
 	f.removeWorkspace(workspaceID)
-	return nil
+	return f.closeErr
 }
 
 func (f *fakeHerdrLifecycleRuntime) removeWorkspace(workspaceID string) {
@@ -80,6 +99,30 @@ func (f *fakeHerdrLifecycleRuntime) removeWorkspace(workspaceID string) {
 		}
 	}
 	f.workspaces = kept
+}
+
+func (f *fakeHerdrLifecycleRuntime) setMutationError(phase state.HerdrCleanupPhase, err error) {
+	switch phase {
+	case state.HerdrCleanupReopen:
+		f.openErr = err
+	case state.HerdrCleanupRemove:
+		f.removeErr = err
+	case state.HerdrCleanupWorkspaceClose:
+		f.closeErr = err
+	}
+}
+
+func (f *fakeHerdrLifecycleRuntime) phaseMutationCalls(phase state.HerdrCleanupPhase) int {
+	switch phase {
+	case state.HerdrCleanupReopen:
+		return f.openCalls
+	case state.HerdrCleanupRemove:
+		return f.removeCalls
+	case state.HerdrCleanupWorkspaceClose:
+		return f.closeCalls
+	default:
+		return 0
+	}
 }
 
 type herdrLifecycleFixture struct {
@@ -517,6 +560,67 @@ func TestSavedHerdrCleanupRejectsChangedRuntimeIdentity(t *testing.T) {
 	}
 }
 
+func TestHerdrCleanupRestoresPlannedAfterDefiniteNonMutation(t *testing.T) {
+	errorsByName := map[string]error{
+		"not-issued": herdrrun.MutationNotIssuedError{Cause: errors.New("dispatch unavailable")},
+		"rejected":   herdrrun.MutationRejectedError{Code: "rejected", Message: "request refused"},
+	}
+	for _, phase := range []state.HerdrCleanupPhase{
+		state.HerdrCleanupReopen,
+		state.HerdrCleanupRemove,
+		state.HerdrCleanupWorkspaceClose,
+	} {
+		for errorName, mutationErr := range errorsByName {
+			t.Run(string(phase)+"/"+errorName, func(t *testing.T) {
+				fixture := newHerdrLifecycleFixture(t)
+				runtime := prepareHerdrCleanupPhase(t, fixture, phase)
+				runtime.setMutationError(phase, mutationErr)
+
+				if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+					t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+				}
+				assertHerdrCleanupIntentStatus(t, fixture, state.HerdrIntentPlanned, true)
+				assertHerdrStateRowPresent(t, fixture)
+				if runtime.phaseMutationCalls(phase) != 1 {
+					t.Fatalf("%s mutation calls = %d, want 1", phase, runtime.phaseMutationCalls(phase))
+				}
+			})
+		}
+	}
+}
+
+func TestHerdrCleanupLeavesIssuedAfterPostMutationObservationFailure(t *testing.T) {
+	for _, phase := range []state.HerdrCleanupPhase{
+		state.HerdrCleanupReopen,
+		state.HerdrCleanupRemove,
+		state.HerdrCleanupWorkspaceClose,
+	} {
+		t.Run(string(phase), func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			runtime := prepareHerdrCleanupPhase(t, fixture, phase)
+			runtime.observeAfterMutationErr = errors.New("observation temporarily unavailable")
+
+			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+			}
+			assertHerdrCleanupIntentStatus(t, fixture, state.HerdrIntentIssued, true)
+			assertHerdrStateRowPresent(t, fixture)
+			if runtime.phaseMutationCalls(phase) != 1 {
+				t.Fatalf("%s mutation calls = %d, want 1", phase, runtime.phaseMutationCalls(phase))
+			}
+
+			runtime.observeAfterMutationErr = nil
+			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+				t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+			}
+			if runtime.phaseMutationCalls(phase) != 1 {
+				t.Fatalf("retry replayed %s mutation: calls = %d", phase, runtime.phaseMutationCalls(phase))
+			}
+			assertHerdrLifecycleRemoved(t, fixture)
+		})
+	}
+}
+
 func TestExpiredPlannedHerdrCleanupDoesNotIssueMutation(t *testing.T) {
 	for _, phase := range []state.HerdrCleanupPhase{
 		state.HerdrCleanupReopen,
@@ -538,8 +642,29 @@ func TestExpiredPlannedHerdrCleanupDoesNotIssueMutation(t *testing.T) {
 				t.Fatalf("expired %s mutation calls = setup %d/open %d/remove %d/close %d", phase, runtime.setupCalls, runtime.openCalls, runtime.removeCalls, runtime.closeCalls)
 			}
 			assertHerdrLifecyclePreserved(t, fixture)
+			assertHerdrCleanupIntentStatus(t, fixture, "", false)
+
+			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+				t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+			}
+			assertHerdrLifecycleRemoved(t, fixture)
 		})
 	}
+}
+
+func TestExpiredPlannedHerdrCleanupFinalizesAlreadyAbsentResources(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	recordExpiredHerdrCleanupIntent(t, fixture, state.HerdrCleanupRemove)
+	runHerdrLifecycleGit(t, fixture.projectRoot, "worktree", "remove", fixture.worktreePath)
+	runtime := &fakeHerdrLifecycleRuntime{projectRoot: fixture.projectRoot}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.openCalls != 0 || runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+		t.Fatalf("expired absent cleanup issued mutations: open %d/remove %d/close %d", runtime.openCalls, runtime.removeCalls, runtime.closeCalls)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
 }
 
 func TestHerdrCloseEverythingCompareDeletesOnlyFanoutCreatedBranch(t *testing.T) {
@@ -645,6 +770,32 @@ func herdrLifecycleWorkspace(id, label, path, repoKey, repoRoot string) herdrrun
 		Pane: ref, TerminalID: terminalID, CWD: path,
 		Panes: []herdrrun.WorkspacePaneObservation{{Pane: ref, TerminalID: terminalID, CWD: path}},
 	}
+}
+
+func prepareHerdrCleanupPhase(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	phase state.HerdrCleanupPhase,
+) *fakeHerdrLifecycleRuntime {
+	t.Helper()
+	runtime := &fakeHerdrLifecycleRuntime{projectRoot: fixture.projectRoot}
+	switch phase {
+	case state.HerdrCleanupReopen:
+		coordinator := herdrLifecycleWorkspace(
+			"w-coordinator", "coordinator-label", fixture.projectRoot,
+			fixture.pane.HerdrRepoKey, fixture.pane.HerdrRepoRoot,
+		)
+		recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+		runtime.workspaces = []herdrrun.WorkspaceObservation{coordinator}
+	case state.HerdrCleanupRemove:
+		runtime.workspaces = []herdrrun.WorkspaceObservation{fixture.workspace}
+	case state.HerdrCleanupWorkspaceClose:
+		runHerdrLifecycleGit(t, fixture.projectRoot, "worktree", "remove", fixture.worktreePath)
+		runtime.workspaces = []herdrrun.WorkspaceObservation{fixture.workspace}
+	default:
+		t.Fatalf("unsupported cleanup phase %q", phase)
+	}
+	return runtime
 }
 
 func recordLifecycleCoordinatorIntent(
@@ -911,5 +1062,40 @@ func assertHerdrLifecyclePreserved(t *testing.T, fixture herdrLifecycleFixture) 
 	}
 	if _, found := store.Find(fixture.pane.Parent, fixture.pane.IssueNum); !found {
 		t.Fatal("state row was not preserved")
+	}
+}
+
+func assertHerdrStateRowPresent(t *testing.T, fixture herdrLifecycleFixture) {
+	t.Helper()
+	store, err := state.Load(state.Path(fixture.projectRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := store.Find(fixture.pane.Parent, fixture.pane.IssueNum); !found {
+		t.Fatal("state row was not preserved")
+	}
+}
+
+func assertHerdrCleanupIntentStatus(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	want state.HerdrIntentStatus,
+	wantFound bool,
+) {
+	t.Helper()
+	_, intentID, err := herdrCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := state.LoadHerdrIntents(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if found != wantFound {
+		t.Fatalf("cleanup intent found = %t, want %t", found, wantFound)
+	}
+	if found && (intent.Status != want || intent.Failure != "") {
+		t.Fatalf("cleanup intent status/failure = %q/%q, want %q/empty", intent.Status, intent.Failure, want)
 	}
 }

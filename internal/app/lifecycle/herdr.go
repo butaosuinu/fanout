@@ -410,22 +410,17 @@ func driveHerdrCleanup(
 	worktreeIntentID string,
 	lg Logger,
 ) error {
-	if intent.Status == state.HerdrIntentPlanned && time.Now().UnixMilli() >= intent.ExpiresUnixMS {
-		return fmt.Errorf("saved Herdr cleanup intent expired before mutation")
+	intent, err := resumeHerdrCleanup(ctx, opts, journal, runtime, intent)
+	if err != nil {
+		return err
 	}
-	if intent.Status == state.HerdrIntentManualCleanupRequired || intent.Status == state.HerdrIntentIssued {
-		recovered, err := recoverHerdrCleanup(ctx, opts, journal, runtime, intent)
-		if err != nil {
-			return err
-		}
-		intent = recovered
-	}
-	var err error
 	switch intent.Status {
 	case state.HerdrIntentRealized:
 		// Post-mutation Git cleanup continues below.
 	case state.HerdrIntentPlanned:
-		intent, err = executeHerdrCleanupPhase(ctx, opts, journal, runtime, intent)
+		phaseCtx, cancel := context.WithDeadline(ctx, time.UnixMilli(intent.ExpiresUnixMS))
+		intent, err = executeHerdrCleanupPhase(phaseCtx, opts, journal, runtime, intent)
+		cancel()
 	default:
 		err = fmt.Errorf("unsupported Herdr cleanup status %q", intent.Status)
 	}
@@ -433,6 +428,43 @@ func driveHerdrCleanup(
 		return err
 	}
 	return finalizeHerdrCleanup(ctx, opts.ProjectRoot, journal, pane, intent, worktreeIntentID, lg)
+}
+
+func resumeHerdrCleanup(
+	ctx context.Context,
+	opts Options,
+	journal *state.LockedHerdrIntents,
+	runtime HerdrRuntime,
+	intent state.HerdrIntent,
+) (state.HerdrIntent, error) {
+	if intent.Status == state.HerdrIntentPlanned && time.Now().UnixMilli() >= intent.ExpiresUnixMS {
+		return recoverExpiredPlannedHerdrCleanup(ctx, opts, journal, runtime, intent)
+	}
+	if intent.Status == state.HerdrIntentManualCleanupRequired || intent.Status == state.HerdrIntentIssued {
+		return recoverHerdrCleanup(ctx, opts, journal, runtime, intent)
+	}
+	return intent, nil
+}
+
+func recoverExpiredPlannedHerdrCleanup(
+	ctx context.Context,
+	opts Options,
+	journal *state.LockedHerdrIntents,
+	runtime HerdrRuntime,
+	intent state.HerdrIntent,
+) (state.HerdrIntent, error) {
+	observation, err := observeHerdrCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
+	if err != nil {
+		return intent, err
+	}
+	if herdrCleanupAbsent(observation) {
+		return realizeHerdrCleanup(journal, intent)
+	}
+	journal.RemoveIntent(intent.ID)
+	if err := journal.Save(); err != nil {
+		return intent, err
+	}
+	return intent, fmt.Errorf("saved Herdr cleanup intent expired before mutation; retry to replan")
 }
 
 func finalizeHerdrCleanup(

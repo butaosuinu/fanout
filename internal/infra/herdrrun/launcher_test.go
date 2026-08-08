@@ -1,6 +1,7 @@
 package herdrrun
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -275,6 +276,30 @@ func TestValidateWorktreeRemoveResponseRequiresExactNonForceResult(t *testing.T)
 	}
 	if err := validateWorktreeRemoveResponse(valid, "w3", "/repo/child"); err == nil {
 		t.Fatal("foreign workspace result was accepted")
+	}
+}
+
+func TestOwnedCleanupMutationsClassifyPreDispatchFailures(t *testing.T) {
+	var session *OwnedSession
+	for name, mutation := range map[string]func() error{
+		"remove nil session": func() error {
+			return session.RemoveWorktree(context.Background(), "w2", "/repo/child")
+		},
+		"close nil session": func() error {
+			return session.CloseWorkspace(context.Background(), "w2")
+		},
+		"remove incomplete identity": func() error {
+			return (&OwnedSession{}).RemoveWorktree(context.Background(), "", "/repo/child")
+		},
+		"close incomplete identity": func() error {
+			return (&OwnedSession{}).CloseWorkspace(context.Background(), "")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := mutation(); !errors.Is(err, ErrMutationNotIssued) {
+				t.Fatalf("error = %v, want ErrMutationNotIssued", err)
+			}
+		})
 	}
 }
 
