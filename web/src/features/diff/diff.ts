@@ -263,6 +263,91 @@ function decodeUtf8LikeGo(bytes: number[]): string {
   return out;
 }
 
+/* サイドバーが出す変更種別。ライブラリの ChangeTypes は rename を内容変更の
+ * 有無で 2 つに割るが、一覧では両方とも「移動」— 内容が変わったかは行の
+ * +N -M が既に示している。 */
+export type DiffChangeKind = "added" | "modified" | "deleted" | "renamed";
+
+export const CHANGE_KIND_LABELS: Record<DiffChangeKind, MessageDescriptor> = {
+  added: msg`新規追加`,
+  modified: msg`変更`,
+  deleted: msg`削除`,
+  renamed: msg`移動`,
+};
+
+function changeKindOf(file: FileDiffMetadata): DiffChangeKind {
+  switch (file.type) {
+    case "new":
+      return "added";
+    case "deleted":
+      return "deleted";
+    case "rename-pure":
+    case "rename-changed":
+      return "renamed";
+    default:
+      return "modified";
+  }
+}
+
+/* file type change(regular file <-> symlink)の 2 entry か。git は 1 つの diff で
+ * 表せないので、サーバーは base 側の削除と final 側の追加を連結して出す。 */
+function isReplacement(prev: DiffChangeKind, next: DiffChangeKind): boolean {
+  return prev === "deleted" ? next === "added" : prev === "added" && next === "deleted";
+}
+
+/* 正規化した path ごとに entry を束ねる。key は生のパスへ戻す — サイドバーは
+ * files[].path で引くため。 */
+function groupByNormalizedPath(files: FileDiffMetadata[]): Map<string, FileDiffMetadata[]> {
+  const groups = new Map<string, FileDiffMetadata[]>();
+  for (const f of files) {
+    const path = unquoteGitPath(f.name);
+    const at = groups.get(path);
+    if (at) at.push(f);
+    else groups.set(path, [f]);
+  }
+  return groups;
+}
+
+/* 2 つの entry が同じ file を指すと言い切れるか。
+ *
+ * 正規化前の name の一致だけでは足りない。不正 UTF-8 の byte は 2 段階で U+FFFD
+ * へ潰れる — `core.quotePath` が既定(on)なら patch の 8 進エスケープを
+ * unquoteGitPath が、off なら raw byte を Go の encoding/json が潰す。どちらの
+ * 経路でも `docs/\200.md` と `docs/\201.md` は同じ文字列になる。
+ * 潰れた跡(U+FFFD)があるなら identity は失われているので同一と見なさない。 */
+function isSameFile(a: FileDiffMetadata, b: FileDiffMetadata): boolean {
+  return a.name === b.name && !a.name.includes("�");
+}
+
+/* 同じ key に集まった entry から行の種別を 1 つ決める。決められないなら null。
+ *
+ * 2 entry が同じ file なら file type change。置換なので modified に畳む —
+ * 先頭(= deleted)を採ると「削除された」と読めてしまう。
+ *
+ * 同じ file と言い切れないなら key の衝突で、これも「削除 + 追加」の形をして
+ * いるため種別だけでは置換と区別できない。どちらを採ってももう一方の行に嘘の
+ * アイコンが出るので、曖昧なら種別なしにする(サイドバーはアイコン列を空欄に
+ * し、行の名前にも種別を足さない)。 */
+function groupChangeKind(entries: FileDiffMetadata[]): DiffChangeKind | null {
+  const [first, second] = entries;
+  if (!first) return null;
+  if (!second) return changeKindOf(first);
+  if (entries.length > 2 || !isSameFile(first, second)) return null;
+  return isReplacement(changeKindOf(first), changeKindOf(second)) ? "modified" : null;
+}
+
+/* patch を持つ file の path → 変更種別。種別は patch の `new file mode` /
+ * `deleted file mode` / `rename from` をライブラリのパーサが解釈済みのものを使う
+ * (自前で header を読み直すと lib 更新で drift する)。 */
+export function indexDiffKindsByPath(files: FileDiffMetadata[]): Map<string, DiffChangeKind> {
+  const kinds = new Map<string, DiffChangeKind>();
+  for (const [path, entries] of groupByNormalizedPath(files)) {
+    const kind = groupChangeKind(entries);
+    if (kind) kinds.set(path, kind);
+  }
+  return kinds;
+}
+
 /* patch を持つ file の path → パース済み patch の index。file type change は
  * 同 path で 2 entry になるため配列で持つ(先頭へ飛ばす)。key は生のパスへ
  * 正規化する — サイドバーは files[].path で引くため。 */

@@ -38,12 +38,15 @@ export function IconButton({
 
 /* diff ビュアーのアイコンボタン用。Nav の歯車と同じ描き味(24 グリッド・
  * stroke currentColor・丸端)に揃える。ラベルはボタン側の aria-label が持つので、
- * ここは常に aria-hidden。 */
-function Glyph({ children }: { children: ReactNode }) {
+ * ここは常に aria-hidden。
+ *
+ * size はボタン以外へ置くときだけ渡す — サイドバーの file 行は 11.5px なので、
+ * ボタンの 15px のままだと行の文字より大きくなる。 */
+function Glyph({ size = 15, children }: { size?: number; children: ReactNode }) {
   return (
     <svg
-      width="15"
-      height="15"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -167,6 +170,48 @@ export function IconChevronUp() {
   return (
     <Glyph>
       <path d="M6 14.5l6-6 6 6" />
+    </Glyph>
+  );
+}
+
+/* diff サイドバーの変更種別。4 種とも円を外形にして、内側の印だけで意味を分ける
+ * — 行頭に縦一列で並ぶので、シルエットが揃っていないと流し読みで視線が引っかかる。
+ * 色は CSS 側(.diff-file-kind の修飾クラス)が currentColor 経由で当てる。 */
+const KIND_SIZE = 13;
+
+export function IconFileAdded() {
+  return (
+    <Glyph size={KIND_SIZE}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 8v8M8 12h8" />
+    </Glyph>
+  );
+}
+
+/* 中身が変わっただけ。増減どちらでもないので、向きを持たない中心の点で示す */
+export function IconFileModified() {
+  return (
+    <Glyph size={KIND_SIZE}>
+      <circle cx="12" cy="12" r="8.5" />
+      <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+export function IconFileDeleted() {
+  return (
+    <Glyph size={KIND_SIZE}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M8 12h8" />
+    </Glyph>
+  );
+}
+
+export function IconFileRenamed() {
+  return (
+    <Glyph size={KIND_SIZE}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M8 12h5.5M12.5 8.5L16 12l-3.5 3.5" />
     </Glyph>
   );
 }

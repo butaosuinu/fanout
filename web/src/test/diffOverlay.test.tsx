@@ -94,6 +94,12 @@ function linesPatch(path: string, lines: number, marker: string): string {
   ].join("\n");
 }
 
+/* 変更種別アイコンの修飾クラス(k-added など)。基底クラスや将来の付随クラスに
+ * 依存させないため、k- 接頭辞の 1 個だけを取り出す。 */
+function kindModifier(el: Element): string {
+  return [...el.classList].find((c) => c.startsWith("k-")) ?? "";
+}
+
 function issueSnapshot() {
   return makeSnapshot([
     makeSession("142", [
@@ -625,9 +631,108 @@ describe("diff オーバーレイ", () => {
     );
     expect(
       within(sidebar).getByRole("button", {
-        name: "web/src/components/App.tsx → web/src/app/App.tsx",
+        name: "web/src/components/App.tsx → web/src/app/App.tsx — 移動",
       }),
     ).toBeInTheDocument();
+  });
+
+  /* 種別は統計からは分からない — 空ファイルの追加は +0 -0、全行書き換えは +N -N に
+   * なる。アイコンは aria-hidden なので、名乗るのは行の accessible name 側。 */
+  it("サイドバーの行に変更種別のアイコンと名前を出す", async () => {
+    const patch = [
+      "diff --git a/src/added.ts b/src/added.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/src/added.ts",
+      "@@ -0,0 +1 @@",
+      "+hello",
+      "diff --git a/src/edited.ts b/src/edited.ts",
+      "index 1111111..2222222 100644",
+      "--- a/src/edited.ts",
+      "+++ b/src/edited.ts",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "diff --git a/src/gone.ts b/src/gone.ts",
+      "deleted file mode 100644",
+      "--- a/src/gone.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-bye",
+      "diff --git a/lib/moved.ts b/src/moved.ts",
+      "similarity index 100%",
+      "rename from lib/moved.ts",
+      "rename to src/moved.ts",
+      "",
+    ].join("\n");
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({
+            patch,
+            files: [
+              makeDiffFile({ path: "src/added.ts", additions: 1, deletions: 0 }),
+              makeDiffFile({ path: "src/edited.ts" }),
+              makeDiffFile({ path: "src/gone.ts", additions: 0, deletions: 1 }),
+              makeDiffFile({
+                path: "src/moved.ts",
+                oldPath: "lib/moved.ts",
+                additions: 0,
+                deletions: 0,
+              }),
+            ],
+          }),
+        ),
+      ),
+    );
+
+    const overlay = await openOverlay(user);
+    const sidebar = await within(overlay).findByRole("region", { name: "変更ファイル" });
+    // 種別は後置する — 支援技術の type-ahead が先頭から照合するので、パスが先頭
+    for (const name of [
+      "src/added.ts — 新規追加",
+      "src/edited.ts — 変更",
+      "src/gone.ts — 削除",
+      "lib/moved.ts → src/moved.ts — 移動",
+    ]) {
+      expect(within(sidebar).getByRole("button", { name })).toBeInTheDocument();
+    }
+    /* 色は修飾クラスが決めるので、種別ごとに違う修飾が行順に付くことまで見る。
+     * className の完全一致にはしない — 無関係なクラスが 1 個増えただけで
+     * 見た目も意味も変わらないのにテストが落ちる。 */
+    expect([...sidebar.querySelectorAll(".diff-file-kind")].map(kindModifier)).toEqual([
+      "k-added",
+      "k-modified",
+      "k-deleted",
+      "k-renamed",
+    ]);
+  });
+
+  /* 行の左インデントはアイコン列が担っているので、種別が引けない行で列ごと畳むと
+   * その行だけ左へ飛び出し、ディレクトリ見出しの下に属して見えなくなる。 */
+  it("種別が引けない行でもアイコン列の幅は残し、名前に種別を足さない", async () => {
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({
+            patch: linesPatch("src/known.ts", 2, "known_row"),
+            files: [
+              makeDiffFile({ path: "src/known.ts", additions: 2, deletions: 0 }),
+              // patchIncluded だが patch にブロックが無い(= is-static 行)
+              makeDiffFile({ path: "src/orphan.ts", additions: 1, deletions: 0 }),
+            ],
+          }),
+        ),
+      ),
+    );
+
+    const overlay = await openOverlay(user);
+    const sidebar = await within(overlay).findByRole("region", { name: "変更ファイル" });
+    expect([...sidebar.querySelectorAll(".diff-file-kind")].map(kindModifier)).toEqual([
+      "k-added",
+      "",
+    ]);
+    expect(within(sidebar).getByTitle("src/orphan.ts")).toBeInTheDocument();
   });
 
   it("サイドバーのファイル名クリックで、折りたたまれた file を開く", async () => {
@@ -1278,8 +1383,12 @@ describe("diff オーバーレイ", () => {
 
     const overlay = await openOverlay(user);
     const sidebar = within(overlay).getByRole("region", { name: "変更ファイル" });
-    expect(within(sidebar).getByRole("button", { name: "src/index.ts" })).toBeInTheDocument();
-    expect(within(sidebar).getByRole("button", { name: "test/index.ts" })).toBeInTheDocument();
+    expect(
+      within(sidebar).getByRole("button", { name: "src/index.ts — 新規追加" }),
+    ).toBeInTheDocument();
+    expect(
+      within(sidebar).getByRole("button", { name: "test/index.ts — 新規追加" }),
+    ).toBeInTheDocument();
 
     await waitFor(() => {
       expect(

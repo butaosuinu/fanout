@@ -29,14 +29,12 @@ import { coversBackground, panelWidthFor, COMPACT_FULL_WIDTH_PX } from "./diffVi
 import {
   diffMeta,
   diffWarning,
-  indexDiffFilesByPath,
   LINE_DIFF_TYPE_PLAIN,
-  parseDiffFiles,
-  planDiffFiles,
   TOKENIZE_MAX_LENGTH_PLAIN,
   TOKENIZE_MAX_LINE_LENGTH,
   type DiffFilePlan,
 } from "./diff";
+import { useDiffPatch } from "./useDiffPatch";
 import { DiffFileList } from "./DiffFileList";
 import { DiffOmittedNote } from "./DiffOmittedNote";
 import {
@@ -256,10 +254,7 @@ export function DiffOverlay({
     () => (diff ? { warning: diffWarning(diff), meta: diffMeta(diff) } : null),
     [diff],
   );
-  const parsed = useMemo(() => parseDiffFiles(patch), [patch]);
-  const plan = useMemo(() => planDiffFiles(parsed), [parsed]);
-  const byPath = useMemo(() => indexDiffFilesByPath(parsed), [parsed]);
-  const selectable = useMemo(() => new Set(byPath.keys()), [byPath]);
+  const { plan, byPath, selectable, kinds } = useDiffPatch(patch);
 
   const { overrides, onToggle, onExpandAll, onCollapseAll, expand } = useDiffCollapse(patch, plan);
   const nudge = useDiffNudge(rootRef);
@@ -385,6 +380,7 @@ export function DiffOverlay({
             <DiffFileList
               files={diff.files}
               selectable={selectable}
+              kinds={kinds}
               onSelect={onSelectFile}
               onExpandAll={onExpandAll}
               onCollapseAll={onCollapseAll}
