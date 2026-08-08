@@ -229,17 +229,13 @@ func TestMetadataTargetLiveRequiresTheExactWorkspaceAndPane(t *testing.T) {
 	}
 }
 
-// TestReportBracketedMetadataRechecksTheTargetOnBothSides pins the order a
-// report runs in: identity snapshot, workspace report, pane report, identity
-// snapshot again.
-func TestReportBracketedMetadataRechecksTheTargetOnBothSides(t *testing.T) {
-	const (
-		session = "fanout-test"
-		socket  = "/private/tmp/fanout-test/herdr.sock"
-	)
-	fake := newFakeHerdr(session, socket)
+// TestReportBracketedMetadataRechecksTheTargetAroundEveryReport pins the
+// per-mutation bracket: each report is preceded by its own identity snapshot,
+// and one more closes the patch. A single bracket around both reports would let
+// the pane be replaced between them.
+func TestReportBracketedMetadataRechecksTheTargetAroundEveryReport(t *testing.T) {
+	fake, b := newMetadataTestBackend(t)
 	fake.respond = func([]string) ([]byte, error) { return nil, nil }
-	b := newTestBackend(t, session, socket, fake)
 	probed, err := b.probe()
 	if err != nil {
 		t.Fatal(err)
@@ -247,39 +243,31 @@ func TestReportBracketedMetadataRechecksTheTargetOnBothSides(t *testing.T) {
 	if err := b.reportBracketedMetadata(t.Context(), probed, snapshotMetadataReport()); err != nil {
 		t.Fatalf("reportBracketedMetadata() error = %v", err)
 	}
-	var reports [][]string
-	snapshots := 0
-	for _, call := range fake.commands[2:] {
-		if commandKey(call.args) == "snapshot" {
-			snapshots++
-			continue
-		}
-		reports = append(reports, call.args)
+	want := []string{
+		"snapshot",
+		"workspace report-metadata w2 --source fanout --token fanout_issue=#494",
+		"snapshot",
+		"pane report-metadata w2:p1 --source fanout --clear-token fanout_pr",
+		"snapshot",
 	}
-	if snapshots != 2 {
-		t.Fatalf("identity snapshots = %d, want one before and one after the report", snapshots)
-	}
-	want := [][]string{
-		{"workspace", "report-metadata", "w2", "--source", "fanout", "--token", "fanout_issue=#494"},
-		{"pane", "report-metadata", "w2:p1", "--source", "fanout", "--clear-token", "fanout_pr"},
-	}
-	if !reflect.DeepEqual(reports, want) {
-		t.Fatalf("report commands = %#v, want %#v", reports, want)
+	if got := metadataCallLog(fake); !reflect.DeepEqual(got, want) {
+		t.Fatalf("call sequence = %#v, want %#v", got, want)
 	}
 }
 
-func TestReportBracketedMetadataFailsClosedOnAnUnexpectedResponse(t *testing.T) {
-	const (
-		session = "fanout-test"
-		socket  = "/private/tmp/fanout-test/herdr.sock"
-	)
-	fake := newFakeHerdr(session, socket)
+// TestReportBracketedMetadataRechecksTheTargetAfterAFailedReport keeps a lost
+// response classified: the mutation may have applied, so the closing recheck
+// still runs and the error says how much of the patch was issued.
+func TestReportBracketedMetadataRechecksTheTargetAfterAFailedReport(t *testing.T) {
+	fake, b := newMetadataTestBackend(t)
 	// A successful report-metadata prints nothing at all, so any output is an
 	// outcome fanout cannot classify.
-	fake.respond = func([]string) ([]byte, error) {
-		return []byte(`{"error":{"code":"workspace_not_found","message":"gone"},"id":"cli:request"}`), nil
+	fake.respond = func(args []string) ([]byte, error) {
+		if args[0] != "pane" {
+			return nil, nil
+		}
+		return []byte(`{"error":{"code":"pane_not_found","message":"gone"},"id":"cli:request"}`), nil
 	}
-	b := newTestBackend(t, session, socket, fake)
 	probed, err := b.probe()
 	if err != nil {
 		t.Fatal(err)
@@ -288,6 +276,32 @@ func TestReportBracketedMetadataFailsClosedOnAnUnexpectedResponse(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), "unexpected response") {
 		t.Fatalf("reportBracketedMetadata() = %v, want an unexpected-response error", err)
 	}
+	if got := metadataCallLog(fake); got[len(got)-1] != "snapshot" {
+		t.Fatalf("call sequence = %#v, want a closing recheck after the failed report", got)
+	}
+}
+
+func newMetadataTestBackend(t *testing.T) (*fakeHerdr, *Backend) {
+	t.Helper()
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	return fake, newTestBackend(t, session, socket, fake)
+}
+
+// metadataCallLog renders the calls made after the probe's version and status.
+func metadataCallLog(fake *fakeHerdr) []string {
+	log := make([]string, 0, len(fake.commands))
+	for _, call := range fake.commands[2:] {
+		if commandKey(call.args) == "snapshot" {
+			log = append(log, "snapshot")
+			continue
+		}
+		log = append(log, strings.Join(call.args, " "))
+	}
+	return log
 }
 
 func TestReportMetadataRejectsANilSessionAndAnEmptyTarget(t *testing.T) {

@@ -8,6 +8,7 @@ package herdrrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -29,12 +30,12 @@ const MaxMetadataTokenValue = 80
 // maxMetadataTokensPerReport is Herdr's per-report token cap.
 const maxMetadataTokensPerReport = 16
 
-// MetadataReportBudget bounds one ReportMetadata end to end. The call makes six
-// commandTimeout-bounded Herdr calls — the owned probe's version and status, an
-// identity snapshot on each side of the bracket, and the two reports — so the
-// budget is deliberately shorter than their sum: metadata is display-only and
-// runs after a launch already succeeded, so a slow Herdr must skip the report
-// rather than hold up the next child.
+// MetadataReportBudget bounds one ReportMetadata end to end. The call makes
+// several commandTimeout-bounded Herdr calls — the owned probe, an identity
+// snapshot around every report, and the reports themselves — and the budget is
+// deliberately shorter than their sum: metadata is display-only and runs after
+// a launch already succeeded, so a slow Herdr must skip the report rather than
+// hold up the next child.
 const MetadataReportBudget = 4 * commandTimeout
 
 var metadataTokenName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
@@ -87,43 +88,45 @@ func (s *OwnedSession) ReportMetadata(ctx context.Context, report MetadataReport
 	return s.backend.reportBracketedMetadata(ctx, probed, report)
 }
 
+// reportBracketedMetadata brackets every report individually: the target is
+// revalidated immediately before each one, and once more after the last. Herdr
+// has no multi-resource report, so the workspace patch can land while the pane
+// is replaced underneath the next call, and only a per-mutation bracket catches
+// that. A failed report closes with the same recheck, because a lost response
+// leaves the mutation ambiguous.
 func (b *Backend) reportBracketedMetadata(
 	ctx context.Context,
 	probed probeResult,
 	report MetadataReport,
 ) error {
-	if err := b.verifyMetadataTarget(ctx, probed, report.Target); err != nil {
-		return fmt.Errorf("verify Herdr metadata target: %w", err)
-	}
-	if err := b.runMetadataReports(ctx, probed, report); err != nil {
-		return err
-	}
-	if err := b.verifyMetadataTarget(ctx, probed, report.Target); err != nil {
-		return fmt.Errorf("herdr metadata report outcome is unknown: %w", err)
-	}
-	return nil
-}
-
-// runMetadataReports issues the patch one resource at a time. Herdr has no
-// multi-resource report, so a failure after the first call leaves the patch
-// half applied; say so, because the tokens already written stay written and
-// nothing rewrites them.
-func (b *Backend) runMetadataReports(
-	ctx context.Context,
-	probed probeResult,
-	report MetadataReport,
-) error {
-	for i, args := range metadataCalls(report) {
-		err := b.runMetadataReport(ctx, probed, args)
-		switch {
-		case err == nil:
-		case i > 0:
-			return fmt.Errorf("%w; earlier reports in this patch already applied", err)
-		default:
-			return err
+	issued := 0
+	for _, args := range metadataCalls(report) {
+		if err := b.verifyMetadataTarget(ctx, probed, report.Target); err != nil {
+			return metadataBracketError(issued, err)
+		}
+		reportErr := b.runMetadataReport(ctx, probed, args)
+		issued++
+		if reportErr != nil {
+			closing := b.verifyMetadataTarget(ctx, probed, report.Target)
+			return errors.Join(reportErr, metadataBracketError(issued, closing))
 		}
 	}
-	return nil
+	return metadataBracketError(issued, b.verifyMetadataTarget(ctx, probed, report.Target))
+}
+
+// metadataBracketError names which side of the patch a failed recheck leaves
+// uncertain. Before any report nothing was written; after one, the tokens
+// already written may belong to a resource that has since been replaced.
+// fanout does not retry in either case.
+func metadataBracketError(issued int, err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case issued == 0:
+		return fmt.Errorf("verify Herdr metadata target: %w", err)
+	default:
+		return fmt.Errorf("herdr metadata outcome is unknown after %d issued report(s): %w", issued, err)
+	}
 }
 
 // runMetadataReport dispatches one report. Herdr answers a successful
