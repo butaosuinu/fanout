@@ -27,6 +27,22 @@ func (f *fakeObserver) Observe(_ context.Context, target RuntimeTarget) (Observa
 	return f.observation, f.err
 }
 
+type blockingObserver struct {
+	observation Observation
+	entered     chan struct{}
+	release     chan struct{}
+}
+
+func (b *blockingObserver) Observe(ctx context.Context, _ RuntimeTarget) (Observation, error) {
+	close(b.entered)
+	select {
+	case <-b.release:
+		return b.observation, nil
+	case <-ctx.Done():
+		return Observation{}, ctx.Err()
+	}
+}
+
 func TestEmitUpdatesOnlyFinalRowTelemetry(t *testing.T) {
 	repo := newEmitterRepo(t)
 	pane, signal, observer := finalEmitterFixture(t, repo)
@@ -44,6 +60,66 @@ func TestEmitUpdatesOnlyFinalRowTelemetry(t *testing.T) {
 	}
 	if len(observer.targets) != 1 || observer.targets[0].PaneID != pane.PaneID {
 		t.Fatalf("observer targets = %+v", observer.targets)
+	}
+}
+
+func TestEmitFinalRowPersistsDoneAgainstLateSignal(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	saveEmitterPanes(t, repo, pane)
+
+	for _, reported := range []backend.AgentState{backend.AgentDone, backend.AgentIdle, backend.AgentWorking} {
+		signal.State = reported
+		if err := Emit(context.Background(), signal, observer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "done" || !got.StateRefinement {
+		t.Fatalf("telemetry = (%q, %t), want done refinement", got.ReportedState, got.StateRefinement)
+	}
+}
+
+func TestEmitObservesOutsideLockAndRevalidatesBeforeSave(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, exact := finalEmitterFixture(t, repo)
+	saveEmitterPanes(t, repo, pane)
+	observer := &blockingObserver{
+		observation: exact.observation,
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	emitErr := make(chan error, 1)
+	go func() {
+		emitErr <- Emit(context.Background(), signal, observer)
+	}()
+
+	select {
+	case <-observer.entered:
+	case <-time.After(time.Second):
+		t.Fatal("observer was not called")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	locked, err := state.LockProjectForLaunchContext(ctx, repo)
+	if err != nil {
+		t.Fatalf("lock while observing: %v", err)
+	}
+	locked.Panes[0].EmitterNonce = strings.Repeat("c", 32)
+	if err := locked.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	close(observer.release)
+
+	if err := <-emitErr; err == nil {
+		t.Fatal("Emit() accepted a stale generation")
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "running" || got.EmitterNonce != strings.Repeat("c", 32) {
+		t.Fatalf("stale signal changed telemetry row = %+v", got)
 	}
 }
 

@@ -46,9 +46,9 @@ type RuntimeTarget struct {
 }
 
 // Observation is one runtime snapshot plus the target pane's current process
-// information, collected while the owning state lock is held. ProcessError is
-// kept separate so terminal replacement can invalidate telemetry from the pane
-// snapshot even while the process tree is changing.
+// information. ProcessError is kept separate so terminal replacement can
+// invalidate telemetry from the pane snapshot even while the process tree is
+// changing.
 type Observation struct {
 	Panes        []backend.LivePane
 	ProcessInfo  herdrrun.PaneProcessInfo
@@ -88,20 +88,72 @@ func Emit(ctx context.Context, signal telemetry.Signal, observer Observer) (err 
 	if err != nil {
 		return err
 	}
+	target, err := loadRuntimeTarget(ctx, projectRoot, signal)
+	if err != nil {
+		return err
+	}
+	observation, err := observeRuntime(ctx, target, observer)
+	if err != nil {
+		return err
+	}
 	locked, err := state.LockProjectForLaunchContext(ctx, projectRoot)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
+	return applyObservedSignal(locked, projectRoot, signal, observation)
+}
 
+func loadRuntimeTarget(
+	ctx context.Context,
+	projectRoot string,
+	signal telemetry.Signal,
+) (target RuntimeTarget, err error) {
+	locked, err := state.LockProjectForLaunchContext(ctx, projectRoot)
+	if err != nil {
+		return RuntimeTarget{}, err
+	}
+	defer func() { err = errors.Join(err, locked.Unlock()) }()
+	return runtimeTargetForSignal(locked, projectRoot, signal)
+}
+
+func runtimeTargetForSignal(
+	locked *state.LockedStore,
+	projectRoot string,
+	signal telemetry.Signal,
+) (RuntimeTarget, error) {
+	row, err := uniqueFinalRow(locked.Panes, signal.RowKey)
+	if err != nil {
+		return RuntimeTarget{}, err
+	}
+	if row >= 0 {
+		return finalRuntimeTarget(locked.Panes[row], signal)
+	}
+	journal, err := locked.HerdrIntents(projectRoot)
+	if err != nil {
+		return RuntimeTarget{}, err
+	}
+	intent, found := journal.FindIntent(signal.RowKey)
+	if !found {
+		return RuntimeTarget{}, fmt.Errorf("no final row or provisional intent matches emitter row key")
+	}
+	return pendingRuntimeTarget(intent, signal)
+}
+
+func applyObservedSignal(
+	locked *state.LockedStore,
+	projectRoot string,
+	signal telemetry.Signal,
+	observation Observation,
+) error {
 	row, err := uniqueFinalRow(locked.Panes, signal.RowKey)
 	if err != nil {
 		return err
 	}
 	if row >= 0 {
-		return updateFinalRow(ctx, locked, row, signal, observer)
+		return updateFinalRow(locked, row, signal, observation)
 	}
-	return updatePendingIntent(ctx, locked, projectRoot, signal, observer)
+	return updatePendingIntent(locked, projectRoot, signal, observation)
 }
 
 func projectRootForStatePath(path string) (string, error) {
@@ -127,17 +179,16 @@ func uniqueFinalRow(panes []state.Pane, rowKey string) (int, error) {
 }
 
 func updateFinalRow(
-	ctx context.Context,
 	locked *state.LockedStore,
 	index int,
 	signal telemetry.Signal,
-	observer Observer,
+	observation Observation,
 ) error {
 	target, err := finalRuntimeTarget(locked.Panes[index], signal)
 	if err != nil {
 		return err
 	}
-	current, err := verifyCurrentRuntime(ctx, target, observer)
+	current, err := verifyRuntimeObservation(target, observation)
 	if err != nil {
 		if errors.Is(err, errTerminalChanged) {
 			return invalidateFinalRowTelemetry(locked, index)
@@ -147,7 +198,10 @@ func updateFinalRow(
 	if err := bindLateAgentSession(locked.Panes, index, current); err != nil {
 		return err
 	}
-	locked.Panes[index].ReportedState = string(signal.State)
+	locked.Panes[index].ReportedState = nextReportedState(
+		locked.Panes[index].ReportedState,
+		string(signal.State),
+	)
 	locked.Panes[index].StateRefinement = true
 	return locked.Save()
 }
@@ -184,11 +238,10 @@ func newEmitterNonce() (string, error) {
 }
 
 func updatePendingIntent(
-	ctx context.Context,
 	locked *state.LockedStore,
 	projectRoot string,
 	signal telemetry.Signal,
-	observer Observer,
+	observation Observation,
 ) error {
 	journal, err := locked.HerdrIntents(projectRoot)
 	if err != nil {
@@ -202,10 +255,10 @@ func updatePendingIntent(
 	if err != nil {
 		return err
 	}
-	if _, err := verifyCurrentRuntime(ctx, target, observer); err != nil {
+	if _, err := verifyRuntimeObservation(target, observation); err != nil {
 		return err
 	}
-	intent.Launch.PendingReportedState = pendingState(
+	intent.Launch.PendingReportedState = nextReportedState(
 		intent.Launch.PendingReportedState,
 		string(signal.State),
 	)
@@ -213,7 +266,7 @@ func updatePendingIntent(
 	return journal.Save()
 }
 
-func pendingState(current, next string) string {
+func nextReportedState(current, next string) string {
 	if current == string(backend.AgentDone) {
 		return current
 	}
@@ -285,19 +338,26 @@ func pendingRuntimeTarget(intent state.HerdrIntent, signal telemetry.Signal) (Ru
 	}, nil
 }
 
-func verifyCurrentRuntime(
+func observeRuntime(
 	ctx context.Context,
 	target RuntimeTarget,
 	observer Observer,
-) (backend.LivePane, error) {
+) (Observation, error) {
 	if observer == nil {
-		return backend.LivePane{}, fmt.Errorf("runtime observer is unavailable")
+		return Observation{}, fmt.Errorf("runtime observer is unavailable")
 	}
 	if err := validateRuntimeTarget(target); err != nil {
-		return backend.LivePane{}, err
+		return Observation{}, err
 	}
 	observation, err := observer.Observe(ctx, target)
 	if err != nil {
+		return Observation{}, err
+	}
+	return observation, nil
+}
+
+func verifyRuntimeObservation(target RuntimeTarget, observation Observation) (backend.LivePane, error) {
+	if err := validateRuntimeTarget(target); err != nil {
 		return backend.LivePane{}, err
 	}
 	if currentTerminalChanged(target, observation.Panes) {
@@ -313,7 +373,7 @@ func verifyCurrentRuntime(
 	if observation.ProcessInfo.PaneID != target.PaneID {
 		return backend.LivePane{}, fmt.Errorf("process observation does not match saved PaneRef")
 	}
-	err = herdrprocess.VerifyAgent(observation.ProcessInfo, herdrprocess.Identity{
+	err := herdrprocess.VerifyAgent(observation.ProcessInfo, herdrprocess.Identity{
 		WorktreePath: target.WorktreePath,
 		Executable:   target.Executable, Args: target.Args,
 	})
