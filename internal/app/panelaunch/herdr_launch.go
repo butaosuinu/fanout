@@ -363,6 +363,9 @@ func (l *Launcher) prepareHerdrLaunch(
 		intent = saved
 	}
 	if intent.Launch != nil {
+		if err := validateHerdrLaunchMode(req, intent.Launch); err != nil {
+			return intent, err
+		}
 		if intent.Launch.TokenIssued {
 			return intent, l.failClosedIssuedHerdrLaunch(journal, intent, nil)
 		}
@@ -398,7 +401,7 @@ func (l *Launcher) newHerdrLaunch(
 		Nonce: nonce, Agent: req.Agent,
 		AgentName:  naming.HerdrAgentName(route.GitCommonDir, intent.ID, nonce),
 		Executable: spec.Executable, Args: spec.Args,
-		CodexTeamStatusPath: req.CodexTeamStatusPath,
+		CodexTeamStatusPath: newHerdrTeamStatusPath(req),
 		EnvFilePath:         envPath, EnvNameCount: envCount,
 	}
 	return persistNewHerdrLaunch(journal, intent, route.RuntimeDir)
@@ -421,6 +424,20 @@ func buildHerdrLaunchSpec(req Request) (agent.LaunchSpec, error) {
 	), nil
 }
 
+func newHerdrTeamStatusPath(req Request) string {
+	if req.CodexTeamMode {
+		return req.CodexTeamStatusPath
+	}
+	return ""
+}
+
+func validateHerdrLaunchMode(req Request, launch *state.HerdrLaunch) error {
+	if req.CodexTeamMode == (launch.CodexTeamStatusPath != "") {
+		return nil
+	}
+	return fmt.Errorf("saved Herdr launch does not match the current Codex team mode")
+}
+
 func waitForHerdrCodexTeam(req Request, intent state.HerdrIntent) (codexapp.Status, error) {
 	if !req.CodexTeamMode {
 		return codexapp.Status{}, nil
@@ -440,6 +457,11 @@ func waitForHerdrCodexTeam(req Request, intent state.HerdrIntent) (codexapp.Stat
 }
 
 func herdrCodexTeamStatusPath(req Request, intent state.HerdrIntent) (string, error) {
+	if intent.Launch != nil {
+		if err := validateHerdrLaunchMode(req, intent.Launch); err != nil {
+			return "", err
+		}
+	}
 	if !req.CodexTeamMode {
 		return "", nil
 	}

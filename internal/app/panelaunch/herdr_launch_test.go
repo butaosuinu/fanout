@@ -325,6 +325,64 @@ func TestHerdrCodexTeamStatusPathUsesPersistedLaunchIdentity(t *testing.T) {
 	}
 }
 
+func TestPrepareHerdrLaunchRejectsCodexTeamModeChange(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		savedTeam, requestedTeam bool
+	}{
+		{name: "team to non-team", savedTeam: true},
+		{name: "non-team to team", requestedTeam: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newHerdrRealizeRepo(t)
+			runtime := &fakeHerdrLaunchRuntime{}
+			installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
+			hooks := deterministicHerdrRealizeHooks()
+			realizeTestHerdrCoordinator(t, repo, &runtime.fakeHerdrRealizeRuntime, hooks)
+			result, err := realizeHerdrWorktree(
+				context.Background(), testHerdrWorktreeRequest(repo, "team-mode", 568),
+				&runtime.fakeHerdrRealizeRuntime, hooks,
+			)
+			if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+				t.Fatal(err)
+			}
+			locked, err := state.LockProjectForLaunch(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = locked.Unlock() }()
+			intent := result.Intent
+			intent.Launch = validTestHerdrLaunch()
+			intent.Launch.Agent = "codex"
+			intent.Launch.TokenIssued = false
+			if tc.savedTeam {
+				intent.Launch.CodexTeamStatusPath = filepath.Join(t.TempDir(), "saved-status.json")
+			}
+			journal, err := locked.HerdrIntents(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			journal.UpsertIntent(intent)
+			if err := journal.Save(); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).prepareHerdrLaunch(
+				Request{
+					Agent: "codex", CodexTeamMode: tc.requestedTeam,
+					CodexTeamStatusPath: filepath.Join(t.TempDir(), "requested-status.json"),
+				}, locked, herdrrun.OwnedLaunchRoute{}, intent, nil,
+			)
+			if err == nil || !strings.Contains(err.Error(), "does not match the current Codex team mode") {
+				t.Fatalf("team mode mismatch error = %v", err)
+			}
+			if runtime.tokenCalls != 0 {
+				t.Fatalf("team mode mismatch issued %d launch token(s)", runtime.tokenCalls)
+			}
+		})
+	}
+}
+
 func TestAwaitHerdrCodexTeamFailureRequiresManualCleanup(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
