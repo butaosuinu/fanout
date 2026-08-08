@@ -33,6 +33,7 @@ type HerdrLaunchRuntime interface {
 	LivePanes(context.Context) ([]backend.LivePane, error)
 	RenameAgent(context.Context, string, string) error
 	RemoveWorktree(context.Context, string, string) error
+	ReportMetadata(context.Context, herdrrun.MetadataReport) error
 }
 
 var errHerdrLaunchResponseLost = errors.New("herdr agent launch response was lost; refusing automatic adoption")
@@ -58,6 +59,7 @@ func (l *Launcher) launchHerdr(req Request) (Result, bool) {
 	if err := l.finalizeHerdrLaunch(req, operation.locked, intent, live); err != nil {
 		return l.failHerdr(req, "finalize launch", err)
 	}
+	l.reportHerdrSidebarMetadata(req, intent)
 	l.Log.Ok("%s: pane %s created in %s", paneLogLabel(req), live.Ref.Pane, intent.WorktreePath)
 	return Result{PaneID: live.Ref.Pane, Notice: launchNotice(req)}, true
 }
@@ -497,6 +499,7 @@ func printHerdrPaneDryRun(req Request, lg *log.Logger, c log.Palette) {
 	fmt.Fprintf(lg.Stdout(), "    %s# wait for the operation-bound fanout launcher marker, issue one token, and verify the exact agent session%s\n", c.Dim, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s# agent argv: %s%s\n", c.Dim, req.AgentCommand, c.Reset)
 	fmt.Fprintf(lg.Stdout(), "    %s# would write coordinator and child Herdr identities to .fanout/state.json%s\n", c.Dim, c.Reset)
+	fmt.Fprintf(lg.Stdout(), "    %s# would report display-only sidebar tokens with --source %s to the child workspace and pane%s\n", c.Dim, herdrrun.MetadataSource, c.Reset)
 	printPaneHookDryRun(req, lg, c)
 	lg.Ok("%s: dry-run complete", paneLogLabel(req))
 }

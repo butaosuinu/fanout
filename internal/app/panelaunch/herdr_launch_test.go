@@ -24,18 +24,20 @@ import (
 
 type fakeHerdrLaunchRuntime struct {
 	fakeHerdrRealizeRuntime
-	live        []backend.LivePane
-	removeCalls []string
-	remove      func(string, string) error
-	launchRoute herdrrun.OwnedLaunchRoute
-	processInfo herdrrun.PaneProcessInfo
-	process     func(context.Context, string) (herdrrun.PaneProcessInfo, error)
-	processErr  error
-	liveErr     error
-	wait        func(context.Context, string, string, time.Duration) error
-	liveCalls   int
-	renameCalls int
-	tokenCalls  int
+	live            []backend.LivePane
+	metadataReports []herdrrun.MetadataReport
+	metadataErr     error
+	removeCalls     []string
+	remove          func(string, string) error
+	launchRoute     herdrrun.OwnedLaunchRoute
+	processInfo     herdrrun.PaneProcessInfo
+	process         func(context.Context, string) (herdrrun.PaneProcessInfo, error)
+	processErr      error
+	liveErr         error
+	wait            func(context.Context, string, string, time.Duration) error
+	liveCalls       int
+	renameCalls     int
+	tokenCalls      int
 }
 
 type retryableHerdrObservationError struct{}
@@ -80,6 +82,11 @@ func (f *fakeHerdrLaunchRuntime) LivePanes(context.Context) ([]backend.LivePane,
 func (f *fakeHerdrLaunchRuntime) RenameAgent(context.Context, string, string) error {
 	f.renameCalls++
 	return nil
+}
+
+func (f *fakeHerdrLaunchRuntime) ReportMetadata(_ context.Context, report herdrrun.MetadataReport) error {
+	f.metadataReports = append(f.metadataReports, report)
+	return f.metadataErr
 }
 
 func (f *fakeHerdrLaunchRuntime) RemoveWorktree(_ context.Context, workspaceID, path string) error {

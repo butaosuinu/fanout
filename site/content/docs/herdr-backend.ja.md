@@ -97,6 +97,36 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 `terminal_id` が変わった herdr pane — たとえば server の cold restart 後 — は、再束縛されずに `stale` と表示されます。
 また herdr は exit status を残さず、正常終了で pane の記録も消えるため、終了した agent は `✓ done` の pane を残さずに herdr session から消えます。記録済みの fanout の行は残り、`stale` と表示されます。
 
+## sidebar token
+
+検証を通った launch ごとに、source `fanout` で表示専用の token を 5 つ報告します。sidebar の行にどのファンアウト子かを出せます。
+token は表示専用データです。fanout は読み戻さず、backend state、生死、完了判定にも使いません。
+
+| token | resource | 値 |
+|---|---|---|
+| `fanout_issue` | workspace | issue / Project の子は `#<issue>`、`fanout plan` のタスクは task ID |
+| `fanout_slug` | workspace | 子の slug。worktree ディレクトリ名と同じ |
+| `fanout_parent` | pane | `#<parent>`、`plan:<slug>`、Projects のパス |
+| `fanout_pr` | pane | PR 用に予約。現時点では報告のたびに clear |
+| `fanout_ci` | pane | CI 用に予約。現時点では報告のたびに clear |
+
+1 回の報告でその resource の fanout token 一式を書き、値を持たないものは clear します。使い回された workspace や pane に古い値が残りません。
+報告は launch が生きた identity を検証した直後の 1 回だけで、`seq` も `ttl_ms` も送りません。
+herdr の cold restart では token がすべて消え、`terminal_id` も変わるため fanout の行は `stale` になります。再送はしません。
+
+行とスタイリングはあなたのものです。fanout は sidebar の設定を書き換えません。token は `$name` で参照します。
+
+```toml
+[ui.sidebar.spaces]
+rows = [["state_icon", "workspace"], ["$fanout_issue", "$fanout_slug"], ["branch", "git_status"]]
+
+[ui.sidebar.agents]
+rows = [["state_icon", "workspace", "tab"], ["$fanout_parent", "$fanout_pr", "$fanout_ci"], ["agent"]]
+```
+
+fanout-owned session は自分の `config.toml` を固定するため、この例は自分で設定する herdr session に適用します。
+fanout-owned session の中では token を `herdr api snapshot` で読めますが、参照する sidebar の行はまだありません。
+
 ## herdr の integration と plugin
 
 `herdr integration install claude` / `codex` は、agent の session identity を herdr に報告する hook をあなたの agent 設定に書き込みます。herdr の session 追跡と復元はこれで機能します。

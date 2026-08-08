@@ -5,7 +5,7 @@
 この判断は後続 issue の実装条件を定める。
 0.7.5 core runtime matrix と live-agent surface、0.7.4 metadata token reporting と sidebar row layout は実測済みである。
 この文書の日付は日本標準時（JST、UTC+09:00）で記す。
-core runtime の検証日は 2026-07-16、2026-07-21、2026-07-22、metadata token reporting と sidebar row layout の追試日は 2026-07-17 である。
+core runtime の検証日は 2026-07-16、2026-07-21、2026-07-22、metadata token reporting と sidebar row layout の追試日は 2026-07-17、0.7.5 での metadata 再検証日は 2026-08-09 である。
 0.7.3 と 0.7.4 は protocol `16`、0.7.5 は protocol `17` であり、schema version はすべて `1` である。
 関連分析の「0.7.4 wave 2」は 2026-07-21 の旧判断を時系列で残した段落であり、その直後に記録された 0.7.5 breaking change と floor 改訂が優先する。
 後続実装が従う current contract はこの文書である。
@@ -983,6 +983,25 @@ request が authoritative server generation と target `terminal_id` / workspace
 `seq` は reporter 内の順序制御であり、cold restart で失われるため identity precondition の代用にしない。
 metadata は表示専用データとし、backend state、liveness、nudge authority、完了判定には使わない。
 
+#### 0.7.5 での metadata 再検証（2026-08-09）
+
+#494 の実装前に、隔離した owned 相当 session（専用 XDG / config / socket）で 0.7.5 の `report-metadata` を再測定した。
+
+| 観測 | 結果 |
+|---|---|
+| 成功 | exit 0、stdout / stderr とも空 |
+| 失敗 | exit 非 0、error envelope は **stderr** に出る（`{"error":{"code":"workspace_not_found",…},"id":"cli:request"}`）。flag 不足は exit 2 の平文、server 停止は exit 1 |
+| 値の長さ | 81 文字以上は拒否せず 80 **文字**で切る（`あ`×90 は 80 文字 / 240 byte になった） |
+| 制御文字 | 送信値から除去される（`a\tb` は `ab` として保存） |
+| 1 report の token 数 | 17 個は `invalid_metadata_token`（最大 16） |
+| 空値 | key を削除する。`--clear-token` と同じ結果 |
+| `seq` | 5 の後の 3 は exit 0 でも反映しない。`seq` 省略の報告は 5 の後でも反映する。scope は resource 単位（workspace の `seq=5` は pane の `seq=1` を落とさない） |
+| `ttl_ms` | 1 を指定した token は expire 後 snapshot から消える |
+| cold restart | workspace / pane と `tokens` の関係は doc 記載どおり: resource は復元し `tokens` は `null`、`terminal_id` は変わる |
+
+成功が無出力・失敗が stderr である以上、exit code と「stdout が空であること」の両方を成功条件にする。
+値を silent に切る挙動があるため、reporter 側が 80 文字以内・trim 済み・制御文字なしに整えてから送る。
+
 ### Shift+Enter
 
 attach 中の herdr client に Shift+Enter の `ESC [ 13 ; 2 u` を送ると、pane 側は `ESC [ 27 ; 2 ; 13 ~` を受信した。
@@ -1303,7 +1322,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | dirty `--force` | 明示確認後だけ許可 | dirty checkout はユーザーの明示確認なしに force しない | conditional remove / fence と fingerprint-bound receipt |
 | #427 emitter | Go | cooperative telemetry と `shouldNudge` gate に限り、completion / cleanup authority にしない | agent process から分離した event provenance |
 | 0.7.5 direct launch の cold restart resume | 保留 | `terminal_id` 変化時は `stale`。#532 が real direct launch / restart / attach / resume の実機連鎖を証明した後に再判定する | authoritative server generation と launch provenance の原子的な束縛 |
-| #494 metadata | Go | exact target の直前・直後照合、固定 source、seq / TTL、表示専用 token | `report-metadata` が authoritative server generation と target generation を原子的に検査する |
+| #494 metadata | Go | exact target の直前・直後照合、固定 source、`seq` / `ttl_ms` 不使用、表示専用 token | `report-metadata` が authoritative server generation と target generation を原子的に検査する |
 | focus | Go | TUI の明示操作だけが target を直前再照合する | request-bound server / target generation |
 | peek / targeted read | Go | exact PaneRef、`terminal_id`、worktree provenance を直前・直後に再照合する | response が authoritative server generation と target terminal identity を束縛する |
 | `--team` | 拒否（#568 の registry-backed peer 解決まで。暫定 gate は #528） | `--dry-run` を含め、SQLite open、registry save、branch / workspace / Herdr mutation より先に明確な invocation error を返す | #568 が peer 登録、plan preseed / cleanup、自己識別、宛先解決、push caller の移行を完了した後に wave 2 条件を再評価する |
@@ -1379,8 +1398,20 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - wave 2 は初回の live identity 確定後に `report-metadata` を発行する。
   metadata は backend state、liveness、nudge authority、完了判定に使わない。
   #494 の `report-metadata` call は対象 `pane_id` または `workspace_id`、固定 `source`、空でない token patch、必要な `seq` / `ttl_ms` だけで構成し、title、display agent、state label を書き換えない。
-  #494 は実装前に `fanout_issue`、`fanout_slug`、`fanout_parent`、`fanout_pr`、`fanout_ci` の pane / workspace 配置、固定 source、sequence の永続化、TTL、値欠落時の clear を一意に決める（token patch は未指定 key を維持するため、欠落値の clear を決めないと古い値が表示され続ける）。
+  #494 が実装前に確定した配置と規則は次のとおりである（2026-08-09、token patch は未指定 key を維持するため、欠落値の clear を決めないと古い値が表示され続ける）。
+
+  | 項目 | 決定 |
+  |---|---|
+  | workspace token | `fanout_issue`（issue / Project は `#<issue>`、plan は task ID）、`fanout_slug` |
+  | pane token | `fanout_parent`（`#<parent>` / `plan:<slug>` / Projects path）、`fanout_pr`、`fanout_ci` |
+  | 固定 source | `fanout` |
+  | sequence | 送らない。永続化もしない。1 launch 1 resource 1 report であり、`seq` 省略の報告は過去の `seq` に関係なく反映する |
+  | TTL | 送らない。token は resource の寿命と cold restart までとする |
+  | 値欠落時の clear | 各報告はその resource の fanout token 一式を書き、値の無い token を明示的に clear する。v1 は launch 時に PR / CI の取得元が無いため `fanout_pr` / `fanout_ci` を常に clear する |
+  | 報告回数 | launch の live identity 検証直後の 1 回。更新も cold restart 後の再送も行わない |
+
   `rows`、`rows_by_agent`、`row_gap` と styling は herdr とユーザーが所有し、fanout は config を書き換えない。
+  fanout-owned session の `config.toml` は owned layout の完全一致検査で固定されているため、sidebar 行を足せるのはユーザーが自分で設定する herdr session である。owned session 内では `herdr api snapshot` で token を読める。
 - in-app notification を配信保証のある channel として扱わず、fanout から自動呼び出しもしない。
 
 ## 参考

@@ -14,6 +14,7 @@
     # wait for the operation-bound fanout launcher marker, issue one token, and verify the exact agent session
     # agent argv: claude --permission-mode auto '[fanout #101 of #100] first-child-101: First child. read <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/briefings/fanout-project_root-101.md and begin.'
     # would write coordinator and child Herdr identities to .fanout/state.json
+    # would report display-only sidebar tokens with --source fanout to the child workspace and pane
 [ ok ] #101: dry-run complete
 [info] #102: Second child
   briefing -> <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/briefings/fanout-project_root-102.md
@@ -27,6 +28,7 @@
     # wait for the operation-bound fanout launcher marker, issue one token, and verify the exact agent session
     # agent argv: claude --permission-mode auto '[fanout #102 of #100] second-child-102: Second child. read <REPO>/tests/fixtures/scenario-herdr-dry-run/project_root/.fanout/briefings/fanout-project_root-102.md and begin.'
     # would write coordinator and child Herdr identities to .fanout/state.json
+    # would report display-only sidebar tokens with --source fanout to the child workspace and pane
 [ ok ] #102: dry-run complete
 
 [ ok ] created: 2
