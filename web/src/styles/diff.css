@@ -155,12 +155,13 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
   color:var(--ink-40); overflow-wrap:anywhere;
 }
 .diff-file-rows{ list-style:none; }
-/* 左 padding が 5px なのは、見出し下のインデントを種別アイコンの列が引き継ぐため
-   (5px + アイコン 13px + gap 8px で、名前の左端はアイコン導入前の 16px 付近に残る) */
+/* 左 padding は見出し(.diff-file-dir)と同じ 7px。行のインデントは種別アイコンの
+   列が担うので、見出しの文字とアイコンの左端が縦に揃う。名前の左端はその分
+   (アイコン 13px + gap 8px)だけ右へ動き、7+13+8=28px になる */
 .diff-file-row{
   width:100%;
   display:flex; align-items:baseline; gap:8px;
-  padding:4px 7px 4px 5px;
+  padding:4px 7px;
   border:none; border-radius:7px;
   background:transparent;
   font-family:var(--f-code); font-size:11.5px; line-height:1.6;
@@ -170,9 +171,17 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 .diff-file-row:hover{ background:color-mix(in srgb, var(--asagi) 12%, transparent); }
 .diff-file-row.is-static{ cursor:default; color:var(--ink-40); }
 .diff-file-row.is-static:hover{ background:transparent; }
-/* 変更種別。行は baseline 揃えなので、align-self が無いとアイコンが沈む。
+/* 変更種別。幅は種別が引けない行でも確保する — インデントをこの列が担うので、
+   要素ごと畳むとその行だけ左へずれる。
+   高さは行 1 行分(font-size 11.5px × line-height 1.6 = 18.4px)に固定して
+   flex-start へ寄せ、その中で上下中央に置く。align-self:center だと行全体の
+   中央になり、名前が折り返した行でアイコンだけ下がって列が乱れる。
    色だけが種別ごとに変わり、形は 4 種とも円(ui/icons.tsx)。 */
-.diff-file-kind{ flex:none; align-self:center; display:inline-flex; }
+.diff-file-kind{
+  flex:none; align-self:flex-start;
+  width:13px; height:1.6em;
+  display:inline-flex; align-items:center;
+}
 .diff-file-kind.k-added{ color:var(--ok); }
 /* 変更は最多数なので、増減・移動より一段落とす。ただし --ink-40 まで落とすと
    light テーマで無効表示に見えるので、二次情報として読める --ink-60 で止める */

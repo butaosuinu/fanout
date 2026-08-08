@@ -52,14 +52,14 @@ const KIND_ICONS: Record<DiffChangeKind, () => ReactElement> = {
 };
 
 /* 変更種別。アイコンは aria-hidden なので、意味は行の accessible name が持つ
- * (下の fileRowLabel)。種別が引けないときは何も描かない — 一覧に出るのは
- * patch を持つ file だけなので通常は起きないが、嘘のアイコンよりは無印がよい。 */
+ * (下の fileRowLabel)。種別が引けないときも span は残す — 行の左インデントは
+ * この列が担っているので、要素ごと消すとその行だけ左へずれる。嘘のアイコンを
+ * 描くよりは空欄がよい、が列そのものは畳まない。 */
 function KindIcon({ kind }: { kind: DiffChangeKind | undefined }) {
-  if (!kind) return null;
-  const Icon = KIND_ICONS[kind];
+  const Icon = kind ? KIND_ICONS[kind] : null;
   return (
-    <span className={`diff-file-kind k-${kind}`}>
-      <Icon />
+    <span className={kind ? `diff-file-kind k-${kind}` : "diff-file-kind"}>
+      {Icon ? <Icon /> : null}
     </span>
   );
 }
@@ -78,12 +78,16 @@ function FileRowBody({ file, kind }: { file: DiffFileEntry; kind: DiffChangeKind
   );
 }
 
-/* 行の accessible name。移動は両端が揃って初めて意味を持つ。種別を前置するのは
+/* 行の accessible name。移動は両端が揃って初めて意味を持つ。種別も名乗るのは
  * アイコンが読み上げられないため — 行は button に明示的な aria-label を持つので、
- * 子要素の SVG にラベルを付けても accessible name には入らない。 */
+ * 子要素の SVG にラベルを付けても accessible name には入らない。
+ *
+ * 種別は後置する。支援技術の要素一覧は accessible name の先頭から type-ahead で
+ * 絞り込むので、前置すると 40 行が「変更 …」で始まり、パスを打っても目的の file
+ * へ飛べなくなる。区切りは本文側の折りたたみボタン(`<path> — 折りたたむ`)に揃える。 */
 function fileRowLabel(file: DiffFileEntry, kind: string): string {
   const path = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
-  return kind ? `${kind} ${path}` : path;
+  return kind ? `${path} — ${kind}` : path;
 }
 
 /* diff オーバーレイのサイドバー。サーバーの files[] をそのまま出すので、patch に

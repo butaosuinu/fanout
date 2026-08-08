@@ -289,18 +289,36 @@ function changeKindOf(file: FileDiffMetadata): DiffChangeKind {
   }
 }
 
+/* file type change(regular file <-> symlink)の 2 entry か。git は 1 つの diff で
+ * 表せないので、サーバーは base 側の削除と final 側の追加を連結して出す。 */
+function isReplacement(prev: DiffChangeKind, next: DiffChangeKind): boolean {
+  return prev === "deleted" ? next === "added" : prev === "added" && next === "deleted";
+}
+
 /* patch を持つ file の path → 変更種別。種別は patch の `new file mode` /
  * `deleted file mode` / `rename from` をライブラリのパーサが解釈済みのものを使う
  * (自前で header を読み直すと lib 更新で drift する)。
  *
- * 同 path に 2 entry あるのは file type change(regular file <-> symlink)で、
- * サーバーが base 側の削除と final 側の追加を連結して出したもの。先頭を採ると
- * 「削除された」と読めてしまうので、置換として modified に畳む。 */
+ * 同 path の 2 entry は file type change なので置換 = modified に畳む。先頭
+ * (= deleted)を採ると「削除された」と読めてしまう。
+ *
+ * ただし畳む条件に正規化前の name の一致を入れる。unquoteGitPath は不正 UTF-8 の
+ * 1 byte を U+FFFD 1 個へ潰すので、`docs/\200.md` と `docs/\201.md` のような
+ * 別 file が同じ key になりうる。この衝突も「削除 + 追加」の形をしていて種別
+ * だけでは置換と区別できず、畳むと実在する追加と削除の両方が変更に化ける。
+ * 名前が違えば衝突と見なし、先に見た側の種別を残す(少なくとも片方は正しい)。 */
 export function indexDiffKindsByPath(files: FileDiffMetadata[]): Map<string, DiffChangeKind> {
   const byPath = new Map<string, DiffChangeKind>();
+  const rawName = new Map<string, string>();
   for (const f of files) {
     const path = unquoteGitPath(f.name);
-    byPath.set(path, byPath.has(path) ? "modified" : changeKindOf(f));
+    const prev = byPath.get(path);
+    if (prev === undefined) {
+      byPath.set(path, changeKindOf(f));
+      rawName.set(path, f.name);
+    } else if (rawName.get(path) === f.name && isReplacement(prev, changeKindOf(f))) {
+      byPath.set(path, "modified");
+    }
   }
   return byPath;
 }
