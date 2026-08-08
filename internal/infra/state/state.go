@@ -60,6 +60,12 @@ type Pane struct {
 	HerdrAgentSession *backend.AgentSessionRef `json:"herdrAgentSession,omitempty"`
 	HerdrSession      string                   `json:"herdrSession,omitempty"`
 	HerdrSocketPath   string                   `json:"herdrSocketPath,omitempty"`
+	// The launch entrypoint and original args survive intent consumption so a
+	// Codex cold-restart resume can require the same provider entrypoint. Process
+	// identity is rebound together with terminal identity after exact verification.
+	HerdrLaunchExecutable string                   `json:"herdrLaunchExecutable,omitempty"`
+	HerdrLaunchArgs       []string                 `json:"herdrLaunchArgs,omitempty"`
+	HerdrProcessIdentity  *backend.ProcessIdentity `json:"herdrProcessIdentity,omitempty"`
 	// ShellKey is the tmux pane user-option token that binds this state row to
 	// one live pane. Shell panes can share WorktreePath with the repo root or an
 	// agent worktree, so liveness uses this marker instead of path matching.

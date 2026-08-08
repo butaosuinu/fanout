@@ -77,6 +77,31 @@ func liveHerdrPane(p state.Pane) backend.LivePane {
 	}
 }
 
+func TestHerdrPaneMatchesForCodexResumeSeparatesTerminalAndConversation(t *testing.T) {
+	row := herdrPane("532", 532, "w1:p1")
+	live := liveHerdrPane(row)
+	live.TerminalID = "terminal-b"
+	live.AgentID = "agent-b"
+	if !HerdrPaneMatchesForCodexResume(row, live) {
+		t.Fatal("exact Codex conversation on a new terminal was rejected")
+	}
+
+	live.TerminalID = row.HerdrTerminalID
+	if HerdrPaneMatchesForCodexResume(row, live) {
+		t.Fatal("unchanged terminal was treated as a cold-restart candidate")
+	}
+	live.TerminalID = "terminal-b"
+	live.AgentSession.Value = "session-other"
+	if HerdrPaneMatchesForCodexResume(row, live) {
+		t.Fatal("different Codex conversation was accepted")
+	}
+	live.AgentSession = row.HerdrAgentSession
+	live.AgentProvider = "claude"
+	if HerdrPaneMatchesForCodexResume(row, live) {
+		t.Fatal("unverified provider was accepted")
+	}
+}
+
 func buildWithLivePanes(rows []state.Pane, live []backend.LivePane, liveErr error) Snapshot {
 	return Build("o/n", "/repo", Collectors{
 		Now:       fixedNow,

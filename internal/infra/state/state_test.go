@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -190,7 +191,11 @@ func TestLegacyStateRoundTripOmitsTaskID(t *testing.T) {
 	if strings.Contains(string(data), `"taskId"`) {
 		t.Fatalf("legacy round-trip added taskId:\n%s", data)
 	}
-	for _, key := range []string{"backend", "herdrWorkspaceId", "herdrTerminalId", "herdrRepoKey", "herdrAgentId", "herdrAgentSession", "herdrSession", "herdrSocketPath"} {
+	for _, key := range []string{
+		"backend", "herdrWorkspaceId", "herdrTerminalId", "herdrRepoKey", "herdrAgentId",
+		"herdrAgentSession", "herdrSession", "herdrSocketPath", "herdrLaunchExecutable",
+		"herdrLaunchArgs", "herdrProcessIdentity",
+	} {
 		if strings.Contains(string(data), `"`+key+`"`) {
 			t.Fatalf("legacy round-trip added %s:\n%s", key, data)
 		}
@@ -220,8 +225,13 @@ func TestBackendMetadataRoundTripsAndOmitsWhenEmpty(t *testing.T) {
 		HerdrAgentSession: &backend.AgentSessionRef{
 			Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-425",
 		},
-		HerdrSession:    "fanout-dev",
-		HerdrSocketPath: "/tmp/herdr-fanout-dev.sock",
+		HerdrSession:          "fanout-dev",
+		HerdrSocketPath:       "/tmp/herdr-fanout-dev.sock",
+		HerdrLaunchExecutable: "/opt/codex",
+		HerdrLaunchArgs:       []string{"--no-alt-screen"},
+		HerdrProcessIdentity: &backend.ProcessIdentity{
+			ShellPID: 41, ForegroundProcessGroup: 41, AgentPID: 42,
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +251,9 @@ func TestBackendMetadataRoundTripsAndOmitsWhenEmpty(t *testing.T) {
 		herdrPane.HerdrWorkspaceID != "w1" || herdrPane.HerdrTerminalID != "term-425" || herdrPane.HerdrRepoKey != "/repo/.git" ||
 		herdrPane.HerdrAgentID != "agent-425" || herdrPane.HerdrAgentSession == nil ||
 		*herdrPane.HerdrAgentSession != (backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-425"}) ||
-		herdrPane.HerdrSession != "fanout-dev" || herdrPane.HerdrSocketPath != "/tmp/herdr-fanout-dev.sock" {
+		herdrPane.HerdrSession != "fanout-dev" || herdrPane.HerdrSocketPath != "/tmp/herdr-fanout-dev.sock" ||
+		herdrPane.HerdrLaunchExecutable != "/opt/codex" || !slices.Equal(herdrPane.HerdrLaunchArgs, []string{"--no-alt-screen"}) ||
+		herdrPane.HerdrProcessIdentity == nil || *herdrPane.HerdrProcessIdentity != (backend.ProcessIdentity{ShellPID: 41, ForegroundProcessGroup: 41, AgentPID: 42}) {
 		t.Fatalf("herdr metadata = %+v", herdrPane)
 	}
 	legacyPane, ok := loaded.Find("423", 426)
@@ -264,6 +276,10 @@ func TestBackendMetadataRoundTripsAndOmitsWhenEmpty(t *testing.T) {
 		`"value": "session-425"`,
 		`"herdrSession": "fanout-dev"`,
 		`"herdrSocketPath": "/tmp/herdr-fanout-dev.sock"`,
+		`"herdrLaunchExecutable": "/opt/codex"`,
+		`"herdrLaunchArgs": [`,
+		`"herdrProcessIdentity": {`,
+		`"agentPid": 42`,
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("state missing %s:\n%s", want, data)

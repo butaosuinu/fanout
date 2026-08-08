@@ -343,11 +343,14 @@ func cloneLivePanes(panes []corebackend.LivePane) []corebackend.LivePane {
 	}
 	cloned := append([]corebackend.LivePane(nil), panes...)
 	for i := range cloned {
-		if cloned[i].AgentSession == nil {
-			continue
+		if cloned[i].AgentSession != nil {
+			session := *cloned[i].AgentSession
+			cloned[i].AgentSession = &session
 		}
-		session := *cloned[i].AgentSession
-		cloned[i].AgentSession = &session
+		if cloned[i].ProcessIdentity != nil {
+			identity := *cloned[i].ProcessIdentity
+			cloned[i].ProcessIdentity = &identity
+		}
 	}
 	return cloned
 }

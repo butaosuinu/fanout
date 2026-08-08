@@ -65,6 +65,15 @@ type AgentSessionRef struct {
 	Value  string `json:"value"`
 }
 
+// ProcessIdentity binds one verified agent process to its foreground process
+// group. AgentPID is the direct process or the unique native child of an
+// interpreter wrapper.
+type ProcessIdentity struct {
+	ShellPID               int `json:"shellPid"`
+	ForegroundProcessGroup int `json:"foregroundProcessGroup"`
+	AgentPID               int `json:"agentPid"`
+}
+
 // Valid reports whether every identity component is present and the ref kind
 // is one admitted herdr version exposes. Validation does not normalize the tuple because
 // liveness comparison is exact.
@@ -206,6 +215,7 @@ type LivePane struct {
 	AgentID          string
 	AgentProvider    string
 	AgentSession     *AgentSessionRef
+	ProcessIdentity  *ProcessIdentity
 	AgentPresent     bool
 	ShellKey         string
 	RepoKey          string

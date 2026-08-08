@@ -71,3 +71,33 @@ func TestProcessRelationInspectionFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestMatchAgentProcessReturnsExactDirectAndInterpreterIdentity(t *testing.T) {
+	direct := PaneProcessInfo{
+		ShellPID: 42, ForegroundProcessGroup: 42,
+		ForegroundProcesses: []PaneProcess{{
+			PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: "/opt/codex",
+			CWD: "/repo", Argv0: "/opt/codex", Argv: []string{"resume", "session-a"},
+		}},
+	}
+	identity, err := MatchAgentProcess(direct, "/opt/codex", []string{"resume", "session-a"}, "/repo")
+	if err != nil || identity.ShellPID != 42 || identity.ForegroundProcessGroup != 42 || identity.AgentPID != 42 {
+		t.Fatalf("direct identity = %+v, %v", identity, err)
+	}
+
+	interpreter := direct
+	interpreter.ForegroundProcesses = []PaneProcess{
+		{
+			PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: "/usr/bin/node",
+			CWD: "/repo", Argv0: "/usr/bin/node", Argv: []string{"/opt/codex", "resume", "session-a"},
+		},
+		{
+			PID: 43, ParentPID: 42, ProcessGroup: 42, Executable: "/opt/lib/codex",
+			CWD: "/repo", Argv0: "/opt/lib/codex", Argv: []string{"resume", "session-a"},
+		},
+	}
+	identity, err = MatchAgentProcess(interpreter, "/opt/codex", []string{"resume", "session-a"}, "/repo")
+	if err != nil || identity.AgentPID != 43 {
+		t.Fatalf("interpreter identity = %+v, %v", identity, err)
+	}
+}

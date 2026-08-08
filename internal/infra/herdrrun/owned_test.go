@@ -276,6 +276,50 @@ func TestPhysicalRepositoryAliasesShareOwnedSessionName(t *testing.T) {
 	}
 }
 
+func TestOpenOwnedDoesNotCreateMissingRuntime(t *testing.T) {
+	root := t.TempDir()
+	commonDir := filepath.Join(root, "repo.git")
+	if err := os.Mkdir(commonDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtimeBase := filepath.Join(root, "runtime")
+	_, err := OpenOwned(context.Background(), OwnedOptions{
+		GitCommonDir: commonDir,
+		RuntimeBase:  runtimeBase,
+	})
+	if err == nil {
+		t.Fatal("OpenOwned() created or accepted a missing runtime")
+	}
+	_, identity, identityErr := openCanonicalGitCommonDir(commonDir)
+	if identityErr != nil {
+		t.Fatal(identityErr)
+	}
+	runtimeDir := filepath.Join(runtimeBase, naming.HerdrSessionName(identity.device, identity.inode))
+	if _, statErr := os.Stat(runtimeDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("missing runtime was mutated: %v", statErr)
+	}
+}
+
+func TestOpenOwnedReadoptsWithoutStartingSupervisor(t *testing.T) {
+	h := newOwnedHarness(t)
+	backend := New(h.session.Session, h.session.SocketPath)
+	backend.output = h.fake.output
+	opened, err := openOwned(context.Background(), OwnedOptions{
+		GitCommonDir: h.commonDir,
+		RuntimeBase:  h.runtimeBase,
+	}, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.supervisor.starts != 1 {
+		t.Fatalf("supervisor starts = %d, want existing one", h.supervisor.starts)
+	}
+	if opened.Session != h.session.Session || opened.SocketPath != h.session.SocketPath ||
+		opened.LauncherPath != h.session.LauncherPath {
+		t.Fatalf("opened session = %+v, want existing %+v", opened, h.session)
+	}
+}
+
 func (h *ownedHarness) ensure() *OwnedSession {
 	h.t.Helper()
 	session, err := h.tryEnsure()

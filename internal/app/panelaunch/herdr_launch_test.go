@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -237,6 +238,36 @@ func TestFinalizeHerdrLaunchFailureBecomesManualCleanupRequired(t *testing.T) {
 	}
 	if saved.Launch == nil || !saved.Launch.TokenIssued || saved.Launch.Nonce != intent.Launch.Nonce {
 		t.Fatalf("saved finalization launch = %+v, want latest issued capsule", saved.Launch)
+	}
+}
+
+func TestHerdrFinalPanePersistsResumeProof(t *testing.T) {
+	process := backend.ProcessIdentity{ShellPID: 42, ForegroundProcessGroup: 42, AgentPID: 43}
+	live := backend.LivePane{
+		Ref:             backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
+		TerminalID:      "terminal-a",
+		ProcessIdentity: &process,
+	}
+	intent := state.HerdrIntent{
+		WorktreePath: "/repo/child",
+		Launch: &state.HerdrLaunch{
+			Executable: "/opt/codex",
+			Args:       []string{"--no-alt-screen"},
+		},
+	}
+	pane, err := herdrFinalPane(Request{Agent: "codex"}, intent, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pane.HerdrLaunchExecutable != "/opt/codex" ||
+		!slices.Equal(pane.HerdrLaunchArgs, []string{"--no-alt-screen"}) ||
+		pane.HerdrProcessIdentity == nil || *pane.HerdrProcessIdentity != process {
+		t.Fatalf("resume proof = %+v", pane)
+	}
+	intent.Launch.Args[0] = "mutated"
+	process.AgentPID = 99
+	if pane.HerdrLaunchArgs[0] != "--no-alt-screen" || pane.HerdrProcessIdentity.AgentPID != 43 {
+		t.Fatalf("resume proof aliases launch data: %+v", pane)
 	}
 }
 
@@ -598,7 +629,7 @@ func TestHerdrLaunchDoesNotRenameAfterProcessCheckExpires(t *testing.T) {
 			}},
 		}, nil
 	}
-	err := (&Launcher{Herdr: runtime}).verifyAndRenameHerdrAgent(context.Background(), intent)
+	_, err := (&Launcher{Herdr: runtime}).verifyAndRenameHerdrAgent(context.Background(), intent)
 	if err == nil || runtime.renameCalls != 0 {
 		t.Fatalf("expired process check error/rename calls = %v/%d, want error/0", err, runtime.renameCalls)
 	}

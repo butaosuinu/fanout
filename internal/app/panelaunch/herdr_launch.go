@@ -459,7 +459,10 @@ func (l *Launcher) finalizeHerdrLaunch(
 	}); err != nil {
 		return err
 	}
-	pane := statePaneForBackend(req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(), codexapp.Status{}, backend.Herdr, &live)
+	pane, err := herdrFinalPane(req, intent, live)
+	if err != nil {
+		return err
+	}
 	if err := locked.RecordPane(pane); err != nil {
 		return err
 	}
@@ -469,6 +472,18 @@ func (l *Launcher) finalizeHerdrLaunch(
 	}
 	journal.RemoveIntent(intent.ID)
 	return journal.Save()
+}
+
+func herdrFinalPane(req Request, intent state.HerdrIntent, live backend.LivePane) (state.Pane, error) {
+	if intent.Launch == nil || live.ProcessIdentity == nil {
+		return state.Pane{}, fmt.Errorf("finalize Herdr launch without verified launch and process identity")
+	}
+	pane := statePaneForBackend(req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(), codexapp.Status{}, backend.Herdr, &live)
+	pane.HerdrLaunchExecutable = intent.Launch.Executable
+	pane.HerdrLaunchArgs = slices.Clone(intent.Launch.Args)
+	processIdentity := *live.ProcessIdentity
+	pane.HerdrProcessIdentity = &processIdentity
+	return pane, nil
 }
 
 func markHerdrFinalizationFailure(

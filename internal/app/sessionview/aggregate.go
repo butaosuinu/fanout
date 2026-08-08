@@ -624,6 +624,39 @@ func HerdrPaneMatchesForSessionBinding(pane state.Pane, current backend.LivePane
 		herdrWorktreeIdentityMatches(pane, current)
 }
 
+// HerdrPaneMatchesForCodexResume admits only a changed terminal carrying the
+// exact persisted Codex conversation on the same owned route and worktree.
+// Process identity remains a separate mandatory check before state mutation.
+func HerdrPaneMatchesForCodexResume(pane state.Pane, current backend.LivePane) bool {
+	requirements := []bool{
+		backend.NormalizeName(pane.Backend) == backend.Herdr,
+		current.Ref.Backend == backend.Herdr,
+		pane.Agent == "codex",
+		current.AgentPresent,
+		current.AgentProvider == "codex",
+		current.AgentID != "",
+		exactCodexSession(pane.HerdrAgentSession),
+		exactCodexSession(current.AgentSession),
+	}
+	if slices.Contains(requirements, false) {
+		return false
+	}
+	return *pane.HerdrAgentSession == *current.AgentSession &&
+		herdrChangedTerminalRouteMatches(pane, current) && herdrWorktreeIdentityMatches(pane, current)
+}
+
+func exactCodexSession(ref *backend.AgentSessionRef) bool {
+	return ref != nil && ref.Valid() && ref.Source == "herdr:codex" &&
+		ref.Agent == "codex" && ref.Kind == "id"
+}
+
+func herdrChangedTerminalRouteMatches(pane state.Pane, current backend.LivePane) bool {
+	return current.Ref.Workspace == pane.HerdrWorkspaceID && current.Ref.Pane == pane.PaneID &&
+		current.SessionID == pane.HerdrSession && current.SocketPath == pane.HerdrSocketPath &&
+		strings.TrimSpace(pane.HerdrTerminalID) != "" && strings.TrimSpace(current.TerminalID) != "" &&
+		pane.HerdrTerminalID != current.TerminalID
+}
+
 func expectedHerdrAgentSession(ref *backend.AgentSessionRef, provider string) bool {
 	return ref != nil && ref.Valid() && ref.Agent == provider && ref.Source == "herdr:"+provider
 }
