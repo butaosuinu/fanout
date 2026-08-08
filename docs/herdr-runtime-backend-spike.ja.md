@@ -20,8 +20,8 @@ issue / Project / plan / watcher の coordinator / agent launch は #528 で dir
 2026-07-27 のユーザー決定により、crash 安全機構は「簡素化方針」の判断基準で tmux backend と同水準の密度にする。
 自動 mutation は state lock、送信直前の identity 再照合、mutation 直前の最小意図記録、事後条件検査を通し、応答喪失は再実行時の存在確認で採用または fail-closed `manual_cleanup_required` にする。
 linked worktree 間の intent と console は canonical git common directory 配下の単一 intent journal を正典とし、final row と telemetry routing は owning worktree の `state.json` pane row を正典とする（intent は journal、final は state.json の二層）。
-Herdr backend の `--team` は #528 の fail-closed gate で最初の mutation 前に拒否し、#568 が registry-backed peer 解決を導入した後に再評価する。
-#552 の Herdr nudge 実装は #568 の完了を前提とする。
+Herdr backend の `--team` は #568 の registry-backed peer 解決を使い、issue / Project / plan の launch で受理する。
+#552 の Herdr nudge 実装は registry-backed の宛先解決を使い、送信前の live identity gate を追加する。
 child cleanup は保存済み identity の照合後に `worktree remove` を発行し、branch は herdr に削除させず fanout の compare-and-delete だけが削除する。
 owned XDG の config と plugin registry に予期しない setup hook があれば launch 前に fail closed にする。
 console shell と agent の実行物は fanout が解決した絶対 path を launcher が直接起動し、content-addressed launch bundle は proof-grade tier の再導入候補とする。
@@ -48,7 +48,7 @@ tmux-parity は信頼モデルだけでなく機構の密度にも適用し、�
 2. herdr にしか無い失敗モードだけ最小の追加対処を許す。対象は socket mutation の応答喪失窓と server 再起動、対処は「mutation 直前の最小意図記録（単一 journal 行程度）+ 再実行時の存在確認 → 採用 or fail-closed `manual_cleanup_required`」までとする。
    一次障害（snapshot・Git 読取・観測の失敗）は intent を変更せず error を返して再実行の分類に委ね、証明の永続化や rollback 自体が失敗する二重障害窓は `manual_cleanup_required` で確定する。これ以深の crash window 対処は proof-grade tier とする。
 3. 次は撤廃または任意記録へ格下げし、「後続 issue への契約」の再評価条件表に proof-grade tier の再導入候補として残す: フル phase machine（`worktree-planned` 以降の多段遷移）、CAS provisional registry、exact request / pre-state の replay 契約、canonical bytes / digest / golden bytes、bundle / journal / epoch / tombstone 群、ownership nonce の二重照合、plan spec snapshot の SHA-256 束縛。
-4. 不変: tmux-parity 信頼モデル、capability gate、`--team` 拒否（#568 まで）、`codexPlanMode` 対応方針、dashboard read-only 境界、proof-grade tier の再評価条件表。実測事実の節も変更しない。
+4. 不変: tmux-parity 信頼モデル、capability gate、`--team` の registry 契約、`codexPlanMode` 対応方針、dashboard read-only 境界、proof-grade tier の再評価条件表。実測事実の節も変更しない。
 
 本文の launch / worktree / cleanup / state 系契約はこの基準の適用後の形であり、各条項は tmux 水準（基準 1）か応答喪失窓・server 再起動への最小追加対処（基準 2）のどちらかに属する。
 
@@ -73,7 +73,7 @@ tmux-parity は信頼モデルだけでなく機構の密度にも適用し、�
 | compatibility gate | version だけを検査する | stable `>=0.7.5` を許可する。schema、method、field、CLI help、protocol、behavior profile、active manifest は事前検査しない |
 | attach | custom socket を選ぶ bare `herdr` command を提示する | `session attach <name>` は別 daemon を自動起動し得るため実行しない |
 | focus | Go | TUI の明示操作だけが送信直前再照合後に focus する |
-| `--team` | 拒否（#568 の registry-backed peer 解決まで。暫定 gate は #528） | `--dry-run` を含む backend / flag validation で明確な invocation error を返し、tmux backend の既存経路は変更しない |
+| `--team` | Go | final row から peer registry を seed し、issue / Project / plan の自己識別と push lane を backend 共通で処理する。`--dry-run` は registry を変更しない |
 | nudge | Go（#552 は #568 完了後） | `state.json` の Herdr pane row から宛先を解決し、fresh provider signal と送信直前の live process identity が一致する許可状態だけへ no-wait の `agent prompt` を発行する |
 | `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | 同じ non-shell launcher で絶対 path の `fanout __codex-plan-tui` を起動し、`agent start --kind codex` の args にしない |
 | live identity | Go | routing、checkout、terminal、会話、process を別々に照合する |
@@ -195,7 +195,7 @@ journal の intent 行と `state.json` の final row は raw workload env value 
 mutation は combined launch lock 下で snapshot と identity を照合し、intent の atomic save、bounded Herdr CLI call、事後条件確認まで同じ lock を保持する。
 launcher の lock-free read は rename 前後どちらかの完全な JSON だけを受理し、decode failure は intent 不在として待たず fail closed にする。
 各 intent 行は起動元の physical worktree root と task provenance を保持する。final row は owning worktree の `.fanout/state.json` pane row として確定し（tmux backend と同じ所在）、intent 行は journal の外へ複製しない。
-registry-backed peer 移行までは state-dependent な team 共通経路へ Herdr row を渡さず、`--team` の拒否を journal save または SQLite open より先に確定する。
+team 共通経路は final row の backend と typed key を保ったまま Herdr row を peer registry へ渡す。
 status、lifecycle、backend stickiness、session view は worktree-local state（tmux row と Herdr final row）と intent journal を集約して読む。
 この文書でいう Herdr の `state lock` と `state save` は、以後この journal の lock と atomic replace（final row の確定では加えて owning worktree の `state.json`）を指す。
 
@@ -305,7 +305,7 @@ marker の full identity が一致しなければ hash が一致しても fail c
 同じ common directory から起動した supervisor、launcher、emitter、cleanup はすべて同じ `herdr-intents.json` と lock を使い、呼び出し元 checkout の `.fanout/state.json` を Herdr intent の探索に使わない。
 これにより linked worktree A が作った console / intent を linked worktree B の attach と shutdown も同じ順序で観測する。
 final row の探索は tmux backend と同じ multi-root の `state.json` 読み（`worktree.ListRoots` 相当）とする（簡素化方針 基準 1 の適用。単一 registry での row 観測は撤廃）。
-registry-backed peer 移行後の nudge は、current recipient row を owning worktree の `state.json` から解決する（#568 の移行契約に従う）。
+registry-backed peer の nudge 宛先は、current recipient row を owning worktree の `state.json` から解決する。
 
 repo root に console workspace を一つ置き、実際の親ごとに repo-root cwd の coordinator workspace を一つ置く。
 coordinator の state row は `@manual` の負番号を display address として維持するが、typed intent / row key には使わず、backend stickiness と lifecycle provenance は実際の親へ帰属させる。
@@ -672,11 +672,10 @@ workspace-level `agent start` の各条項は次のように移す。
 | #530 | plain shell からの owned session bootstrap 導線、console workspace と user shell 起動、owned server の明示 restart と明示 repo-session shutdown、TUI の focus / launch / peek と dashboard peek の解禁（owned session 限定。dashboard は read-only 境界のまま peek content 表示だけ） |
 | #531 | `--close` / `--merge` / `--cleanup` と TUI close: identity 照合後の `worktree remove` と残存 workspace の整理、dirty の明示確認、branch の compare-and-delete、応答喪失の存在確認 |
 | #532 | 0.7.5 direct launch の cold restart resume 再実測。解禁までは `terminal_id` 変化を `stale` にする |
-| #552 | #568 の registry-backed peer 登録 / 自己識別 / 宛先解決を前提に、live `pane process-info` / OS process identity と final state を送信直前に再照合した exact pane ID へ no-wait の `agent prompt` nudge を発行し、移行前は team / nudge 共通経路を Herdr row（`state.json` の Herdr pane row）へ適用しない |
+| #552 | #568 の registry-backed peer 登録 / 自己識別 / 宛先解決を使い、live `pane process-info` / OS process identity と final state を送信直前に再照合した exact pane ID へ no-wait の `agent prompt` nudge を発行する |
 | #554 | owned launcher 経由の `fanout __codex-plan-tui` controller 起動と controller / Codex child の process 照合 |
-| #568 | #528 の fail-closed gate を前提に、issue / plan cohort の peer 登録、plan lane の preseed / cleanup、自己識別、宛先解決、Claude / Codex push caller を `state.json` の canonical Herdr pane row（実行中は journal の intent 行）へ移行し、`--team` の再評価条件を満たす |
+| #568 | issue / plan cohort の peer 登録、plan lane の preseed / cleanup、自己識別、宛先解決、Claude / Codex push caller を `state.json` の canonical Herdr pane row へ移行し、`--team` を解禁する |
 
-#568 は #528 に blocked され、#528 が実装する暫定拒否 gate を registry-backed peer 移行の完了まで維持する。
 #552 の Herdr 実装は #568 の完了後に開始する。
 owned server の bootstrap は #526（PR #572）が実装済みで、明示 restart / shutdown と console lifecycle は #530、cleanup lifecycle は #531 が実装する。
 
@@ -825,17 +824,17 @@ worktree provenance がない generic workspace では、fanout state に保存�
 
 ### send と nudge
 
-wave 2 の Herdr backend は registry-backed peer 解決が実装されるまで `--team` を受理しない。
-backend / flag validation は最初の state、filesystem、git、Herdr mutation より前に `herdr backend: --team requires registry-backed peer resolution` を返して終了する。
-`--dry-run` も同じ error で終了し、移行前の Herdr `--team` を部分的に計画または seed しない。
-この gate は Herdr backend だけに適用し、tmux backend の `--team` と既存 message bus を変更しない。
-#528 はこの fail-closed gate を実装し、#568 が registry-backed peer 移行を完了するまで解除しない。
-Herdr `--team` の再評価には、`internal/app/run/team.go` の peer 登録が `state.json` の Herdr issue / plan task row から cohort と `TaskID` を作れることを要求する。
-`internal/app/run/task_team_registry.go` の `preseedTaskTeamRegistry` / `cleanupUncreatedTaskPeers` は、最初の Codex pane より前の provisional plan cohort と fail-fast 後の未作成 peer cleanup を canonical plan-task row（実行中は journal の intent 行）で処理しなければならない。
-`internal/infra/team/detect.go` の自己識別は canonical typed row key、pane / worktree identity、issue number または `TaskID` を一意に解決しなければならない。
-`internal/app/peermsg/nudge.go` の宛先解決は owning worktree の `state.json` から current Herdr row と exact pane identity を取得し、後述の nudge gate へ渡さなければならない。
-四経路とその Claude / Codex push caller の移行が完了するまで、team / nudge の共通経路を Herdr row へ適用せず、prompt fallback で補わない。
-この移行実装は本 PR のスコープ外とし、#568 が担当する。
+wave 2 の Herdr backend は registry-backed peer 解決を使って `--team` を受理する。
+`internal/app/run/team.go` は `state.json` の Herdr issue / plan task row から cohort と `TaskID` を作り、parent ごとの SQLite registry へ seed する。
+`internal/app/run/task_team_registry.go` の `preseedTaskTeamRegistry` / `cleanupUncreatedTaskPeers` は、最初の Codex pane より前の provisional plan cohort と fail-fast 後の未作成 peer cleanup を処理する。
+作成済み task の final Herdr row が provisional peer を置換した後は、cleanup がその peer を削除しない。
+`internal/infra/team/detect.go` の自己識別は worktree path から canonical Herdr row を選び、typed row key、pane identity、issue number または `TaskID` を解決する。
+`internal/app/peermsg/nudge.go` の宛先解決は owning worktree の `state.json` から current Herdr row と exact PaneRef を取得し、#552 の送信 gate へ渡す。
+Claude の watcher は同じ briefing と SQLite bus を使う。
+非 Plan の Codex は owned launcher から team bridge を起動し、ready status を確認してから final row を確定する。
+Herdr の自動 nudge 送信は #552 まで no-op のままとし、prompt fallback で補わない。
+`--dry-run` は team briefing と registry seed の予定を表示するだけで、SQLite、state、filesystem、Git、Herdr を変更しない。
+tmux backend の `--team` と既存 message bus は変更しない。
 
 0.7.3 / 0.7.4 の `pane send-text` は literal text だけを送り、別の `pane send-keys enter` まで shell cwd は変わらなかった。
 同じ version の `agent send` も literal text を直ちに送り、agent status を working または blocked と報告した状態でも送信した。
@@ -862,7 +861,7 @@ herdr の `done` は process exit ではなく、agent が処理を終えて `id
 focus 後は `done` から `idle` へ変わる。
 
 2026-07-21 JST のユーザー決定により、herdr backend の自動 nudge の送信契約を tmux-parity tier で解禁する。
-#552 の Herdr 実装は前述の registry-backed peer 解決が完了した後に開始し、それまでは `--team` の fail-closed gate により到達不能にする。
+#552 の Herdr 実装は前述の registry-backed peer 解決を使い、送信前の identity gate を追加する。
 対象 agent は current launch の fresh provider signal を受理して `state_refinement:true` になった Claude と Codex に限る。
 provider hook adapter の注入と mapping を検証できない agent、または fresh signal が未着の agent は、名前が Claude または Codex でも no-op にする。
 trim 済み `reported_state` が `running`、`working`、`plan`、`idle` の場合だけ送信候補とし、`blocked`、`done`、未設定、未知値は no-op とする。
@@ -882,7 +881,8 @@ runtime の atomic conditional send または terminal permission UI を操作�
 `codexPlanMode` は `plan` state の通常 nudge と別契約であり、owned launcher が絶対 `fanout __codex-plan-tui` を root pane 内で起動する controller として対応する。
 controller の working / plan は emitter lane の `reported_state` で報告し、tmux pane option には書き込まない。
 tmux backend の peer message bus への保存は維持する。
-Herdr backend は registry-backed peer 解決まで message bus / nudge lane を開始せず、herdr の `notification show` も nudge に使わない。
+Herdr backend の `--team` は message bus と Claude / Codex push lane を開始する。
+自動 nudge の送信は #552 まで no-op とし、herdr の `notification show` も nudge に使わない。
 
 ### focus と wait
 
@@ -1306,7 +1306,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | #494 metadata | Go | exact target の直前・直後照合、固定 source、seq / TTL、表示専用 token | `report-metadata` が authoritative server generation と target generation を原子的に検査する |
 | focus | Go | TUI の明示操作だけが target を直前再照合する | request-bound server / target generation |
 | peek / targeted read | Go | exact PaneRef、`terminal_id`、worktree provenance を直前・直後に再照合する | response が authoritative server generation と target terminal identity を束縛する |
-| `--team` | 拒否（#568 の registry-backed peer 解決まで。暫定 gate は #528） | `--dry-run` を含め、SQLite open、registry save、branch / workspace / Herdr mutation より先に明確な invocation error を返す | #568 が peer 登録、plan preseed / cleanup、自己識別、宛先解決、push caller の移行を完了した後に wave 2 条件を再評価する |
+| `--team` | Go | issue / plan の final row を parent ごとの registry へ seed し、plan preseed / cleanup、自己識別、宛先解決、Claude / Codex push caller を backend 共通で処理する。`--dry-run` は変更を行わない | message bus の server-side tenant key |
 | 自動 nudge | Go（#552 の Herdr 実装は #568 完了後） | `state.json` の Herdr pane row から peer / self / recipient の current row を一意に解決し、fresh provider signal と送信直前の live `process-info` / OS process identity が一致する許可状態だけへ、exact pane ID を target に no-wait の `agent prompt` を一回発行する | atomic conditional send または permission UI を操作しない out-of-band queue と、agent process から分離した event provenance |
 | `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | owned launcher が絶対 path の `fanout __codex-plan-tui` を起動し、working / plan は emitter lane で報告する | 依存する launch / emitter lane の格上げ条件に従う |
 
@@ -1338,8 +1338,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - herdr backend wave 2 は snapshot / list / wait、targeted content read、root coordinator、worktree / agent launch、focus、nudge、metadata、console / coordinator close、child cleanup を後続実装へ解禁する。
   issue / Project / plan / watcher の coordinator / agent launch は #528 の direct-launch 契約を使う。interactive TUI の launch は #530 まで read-only とする。
   Codex child Plan Mode は #554 まで runtime session 作成前に拒否する。
-  `--team` と #552 の Herdr nudge 実装は例外とし、#528 の fail-closed gate は #568 が peer 登録、plan preseed / cleanup、自己識別、宛先解決を `state.json` の canonical Herdr pane row へ移行するまで最初の mutation 前に拒否する。
-  移行前の Herdr row を worktree-local `state.json` に複製せず、tmux 用の state-dependent peer / nudge 経路へ渡さない。
+  `--team` は #568 の peer 登録、plan preseed / cleanup、自己識別、宛先解決を使う。
+  Herdr row を worktree-local `state.json` に複製せず、owning worktree の canonical row から peer registry と nudge 宛先を解決する。
   各 operation は保存済み identity と live snapshot を直前に再照合し、operation 固有の事後条件を検査する。
   check と operation の間の race は tmux-parity tier の受容済み残余リスクとし、不一致と重複は fail closed に、応答喪失は再実行時の存在確認で採用または fail closed にする。
 - compatibility gate は 2026-07-24 のユーザー決定により stable `>=0.7.5` の version gate だけとする（「version と JSON 対応」の structural gate 記述は履歴）。

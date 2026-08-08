@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
@@ -223,7 +225,7 @@ func TestFinalizeHerdrLaunchFailureBecomesManualCleanupRequired(t *testing.T) {
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
 	stale := intent
 	stale.Launch = nil
-	err = launcher.finalizeHerdrLaunch(Request{}, locked, stale, backend.LivePane{})
+	err = launcher.finalizeHerdrLaunch(Request{}, locked, stale, backend.LivePane{}, codexapp.Status{})
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("finalization error = %v, want manual cleanup", err)
 	}
@@ -245,6 +247,64 @@ func validTestHerdrLaunch() *state.HerdrLaunch {
 		Nonce: strings.Repeat("a", 32), Agent: "claude",
 		AgentName: "fanout-0123456789abcdef01234567", Executable: "/bin/claude",
 		EnvFilePath: "/tmp/env", EnvNameCount: 1, LauncherReady: true, TokenIssued: true,
+	}
+}
+
+func TestBuildHerdrLaunchSpecStartsCodexTeamBridge(t *testing.T) {
+	binDir := t.TempDir()
+	codexPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codexPath, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	req := Request{
+		Number: 568, ParentRef: "524", Agent: "codex", Prompt: "registry migration",
+		CodexTeamMode: true, CodexTeamStatusPath: "/tmp/team-status.json",
+	}
+
+	spec, err := buildHerdrLaunchSpec(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := codexapp.TeamLaunchSpec(
+		self, codexPath, req.Prompt, "568", req.ParentRef, req.CodexTeamStatusPath,
+	)
+	if spec.Executable != want.Executable || !slices.Equal(spec.Args, want.Args) {
+		t.Fatalf("Herdr team launch spec = %+v, want %+v", spec, want)
+	}
+}
+
+func TestWaitForHerdrCodexTeamConsumesReadyStatus(t *testing.T) {
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	if err := os.WriteFile(statusPath, []byte(`{"status":"ready","threadId":"thread-568","sessionId":"session-568"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{CodexTeamMode: true, CodexTeamStatusPath: statusPath}
+	intent := state.HerdrIntent{ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli()}
+
+	status, err := waitForHerdrCodexTeam(req, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ThreadID != "thread-568" || status.SessionID != "session-568" {
+		t.Fatalf("Codex team status = %+v", status)
+	}
+	if _, err := os.Stat(statusPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("consumed Codex team status remains: %v", err)
+	}
+}
+
+func TestWaitForHerdrCodexTeamRejectsExpiredLaunch(t *testing.T) {
+	req := Request{CodexTeamMode: true, CodexTeamStatusPath: filepath.Join(t.TempDir(), "status.json")}
+	intent := state.HerdrIntent{ExpiresUnixMS: time.Now().Add(-time.Second).UnixMilli()}
+
+	_, err := waitForHerdrCodexTeam(req, intent)
+	if err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired Codex team launch error = %v", err)
 	}
 }
 

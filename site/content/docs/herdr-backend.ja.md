@@ -29,7 +29,6 @@ public method の呼び出しが失敗した場合は `herdr method "<name>" is 
 未対応の経路は明確なエラーで fail closed します。
 
 - 対話 TUI の launch、focus、send、restore、出力 peek、plan capture は herdr 行では使えません。
-- herdr と `--team` の組み合わせは、state、filesystem、Git、herdr の変更前に拒否されます。
 - Codex 子の Plan Mode は拒否されます。app-server の launch matrix が対応するまでは build mode を使ってください。Claude と OpenCode は固有の mode flag を使います。
 - 自動 nudge(`fanout msg nudge` の配送)は agent の種類にかかわらず無効です。メッセージ自体は bus に保存され、`inbox` / `board` で読めます。
 - tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれません。
@@ -53,6 +52,7 @@ CLI run ごとに herdr を明示できます。
 ```bash
 fanout 123 --backend herdr --agent claude
 fanout plan launch-plan --backend herdr --agent claude
+fanout 123 --backend herdr --agent codex --team
 ```
 
 繰り返し使う場合は `FANOUT_BACKEND=herdr` または user config の `runtimeBackend` を設定します。
@@ -86,6 +86,7 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 | exit status 表示 | launch wrapper が `✓ done` を報告 | なし — herdr の public API に exit status は残らない |
 | agent 終了後の pane | wrapper のメッセージ付きで pane が残る | 正常終了で herdr は pane と自身の記録を消す。fanout の行は `stale` になる |
 | 対話 TUI launch / focus / send / restore / peek / plan capture | TUI キーと lifecycle フラグ | 不可 — `runtime backend herdr does not support …` |
+| `--team` peer messaging | SQLite registry、Claude watcher、Codex app-server bridge | 同じ registry と push lane |
 | 自動 nudge(`fanout msg nudge`) | 相手が入力を受けられる状態なら配送 | agent の種類にかかわらず無効 |
 | tmux keybind(ダッシュボード、コンソール復帰) | 登録する | 登録しない |
 | 通知 | bell / tmux / ntfy / slack の channel | bell / ntfy / slack は動く。tmux channel と herdr の `notification show` は発火しない |

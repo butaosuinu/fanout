@@ -8,10 +8,12 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/peermsg"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/msgstore"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
 )
 
@@ -57,6 +59,20 @@ func TestPreseedTaskTeamRegistryMakesEarlyMessageReplyAddressable(t *testing.T) 
 	if closeErr := db.Close(); closeErr != nil {
 		t.Fatalf("close sender db: %v", closeErr)
 	}
+	db, err = team.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen team db for Herdr final row: %v", err)
+	}
+	if err := team.UpsertPeer(db, state.Pane{
+		Parent: parent, TaskID: "task-a", Backend: backend.Herdr,
+		PaneID: "w1:p1", HerdrWorkspaceID: "w1", HerdrTerminalID: "terminal-a",
+		Agent: "claude", WorktreePath: "/repo/.fanout/worktrees/demo-task-a",
+	}, team.Now()); err != nil {
+		t.Fatalf("replace provisional task with Herdr row: %v", err)
+	}
+	if closeErr := db.Close(); closeErr != nil {
+		t.Fatalf("close Herdr final row db: %v", closeErr)
+	}
 
 	var stdout, stderr bytes.Buffer
 	watcher, code := peermsg.OpenWatcher(
@@ -98,6 +114,13 @@ func TestPreseedTaskTeamRegistryMakesEarlyMessageReplyAddressable(t *testing.T) 
 	}
 	if count != 0 {
 		t.Fatalf("task-b provisional peers = %d, want 0 after fail-fast cleanup", count)
+	}
+	var paneID string
+	if err := db.QueryRow("SELECT pane_id FROM peers WHERE task_id = 'task-a'").Scan(&paneID); err != nil {
+		t.Fatalf("select created Herdr task peer: %v", err)
+	}
+	if paneID != "w1:p1" {
+		t.Fatalf("created Herdr task pane = %q, want w1:p1", paneID)
 	}
 }
 

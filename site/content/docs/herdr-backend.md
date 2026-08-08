@@ -18,7 +18,6 @@ The persistent TUI console, `--status`, and the web dashboard show recorded sess
 The unsupported paths still fail closed:
 
 - Interactive TUI launch, focus, send, restore, output peek, and plan capture are unavailable for herdr rows.
-- herdr with `--team` is rejected before state, filesystem, Git, or herdr mutation.
 - Codex child Plan Mode is rejected; use build mode until its app-server launch matrix is supported. Claude and OpenCode keep their native mode flags.
 - Automatic nudges (`fanout msg nudge` delivery) are disabled for every agent kind. Messages still persist to the bus for `inbox` / `board` reads.
 - No tmux keybindings are registered, and fanout never calls herdr's in-app `notification show`.
@@ -40,6 +39,7 @@ Select herdr explicitly for one CLI run:
 ```bash
 fanout 123 --backend herdr --agent claude
 fanout plan launch-plan --backend herdr --agent claude
+fanout 123 --backend herdr --agent codex --team
 ```
 
 For repeated runs, set `FANOUT_BACKEND=herdr` or the user-only `runtimeBackend` setting. Running fanout inside an existing herdr pane also sets `HERDR_ENV=1`, which selects herdr automatically. The label watcher uses the same owned launch path and revalidates the session before each launch.
@@ -68,6 +68,7 @@ A parent that already has recorded panes keeps its recorded backend. A conflicti
 | Exit status display | Launch wrapper reports `✓ done` | None — herdr's public API keeps no exit status |
 | Pane after the agent exits | Pane stays open with the wrapper message | herdr drops the pane and its own record on normal exit; the fanout row turns `stale` |
 | Interactive TUI launch / focus / send / restore / peek / plan capture | TUI keys and lifecycle flags | Unavailable — `runtime backend herdr does not support …` |
+| `--team` peer messaging | SQLite registry, Claude watcher, Codex app-server bridge | Same registry and push lanes |
 | Automatic nudge (`fanout msg nudge`) | Delivered when the peer can take input | Disabled for every agent kind |
 | tmux keybindings (dashboard, console return) | Registered | Not registered |
 | Notifications | bell / tmux / ntfy / slack channels | bell / ntfy / slack work; the tmux channel and herdr's `notification show` do not fire |

@@ -266,9 +266,6 @@ func validateLaunchBackend(
 }
 
 func validateHerdrLaunchBackend(cfg *cliflags.Config, inputs runtimeBackendInputs) error {
-	if cfg.Team {
-		return backend.Unsupported(backend.Herdr, "--team launch until registry-backed peers are available")
-	}
 	if cfg.TUIInteractive {
 		return backend.Unsupported(backend.Herdr, "interactive TUI launch in the current release wave")
 	}

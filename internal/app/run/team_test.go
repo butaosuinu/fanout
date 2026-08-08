@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -52,7 +53,12 @@ func TestSeedTeamRegistryUpsertsCreatedPanes(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "team.db")
 	st := state.Store{Panes: []state.Pane{
 		{Parent: "100", IssueNum: 101, PaneID: "%5", Slug: "first-child-101", Agent: "claude", DisplayName: "first-child-101", WorktreePath: "/repo/.fanout/worktrees/first-child-101"},
-		{Parent: "100", IssueNum: 102, PaneID: "%6", Slug: "second-child-102", Agent: "claude", DisplayName: "second-child-102", WorktreePath: "/repo/.fanout/worktrees/second-child-102"},
+		{
+			Parent: "100", IssueNum: 102, Backend: backend.Herdr,
+			PaneID: "w2:p1", HerdrWorkspaceID: "w2", HerdrTerminalID: "terminal-102",
+			Slug: "second-child-102", Agent: "claude", DisplayName: "second-child-102",
+			WorktreePath: "/repo/.fanout/worktrees/second-child-102",
+		},
 	}}
 	var stdout, stderr bytes.Buffer
 	lg := log.NewWith(&stdout, &stderr, false)
@@ -83,8 +89,8 @@ func TestSeedTeamRegistryUpsertsCreatedPanes(t *testing.T) {
 	if err := db.QueryRow("SELECT pane_id FROM peers WHERE issue = ?", 102).Scan(&paneID); err != nil {
 		t.Fatalf("select peer 102: %v", err)
 	}
-	if paneID != "%6" {
-		t.Errorf("peer 102 pane_id = %q, want %%6", paneID)
+	if paneID != "w2:p1" {
+		t.Errorf("Herdr peer 102 pane_id = %q, want w2:p1", paneID)
 	}
 }
 

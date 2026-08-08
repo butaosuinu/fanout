@@ -400,18 +400,17 @@ func TestBackendSelectionVerifierRechecksSharedHerdrProvisionalIntent(t *testing
 	}
 }
 
-func TestValidateLaunchBackendAllowsHerdrAndRejectsTeam(t *testing.T) {
+func TestValidateLaunchBackendAllowsHerdrTeam(t *testing.T) {
 	if err := validateLaunchBackend(&cliflags.Config{Agent: "claude"}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{}); err != nil {
 		t.Fatalf("Herdr error = %v", err)
 	}
-	err := validateLaunchBackend(&cliflags.Config{Agent: "claude", Team: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{})
-	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "--team") {
-		t.Fatalf("team error = %v, want ErrUnsupported", err)
+	if err := validateLaunchBackend(&cliflags.Config{Agent: "claude", Team: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{}); err != nil {
+		t.Fatalf("Herdr team error = %v", err)
 	}
 	if tmuxErr := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Tmux}, runtimeBackendInputs{}); tmuxErr != nil {
 		t.Fatalf("tmux error = %v", tmuxErr)
 	}
-	err = validateLaunchBackend(&cliflags.Config{Agent: "claude", TUIInteractive: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{})
+	err := validateLaunchBackend(&cliflags.Config{Agent: "claude", TUIInteractive: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{})
 	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "interactive TUI") {
 		t.Fatalf("TUI error = %v, want deferred interactive launch", err)
 	}

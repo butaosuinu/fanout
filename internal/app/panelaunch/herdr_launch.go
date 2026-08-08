@@ -55,7 +55,11 @@ func (l *Launcher) launchHerdr(req Request) (Result, bool) {
 	if err != nil {
 		return l.failHerdr(req, "start agent", l.rollbackFailedHerdrLaunch(operation.locked, intent, err))
 	}
-	if err := l.finalizeHerdrLaunch(req, operation.locked, intent, live); err != nil {
+	codexStatus, err := waitForHerdrCodexTeam(req, intent)
+	if err != nil {
+		return l.failHerdr(req, "start Codex team TUI", l.rollbackFailedHerdrLaunch(operation.locked, intent, err))
+	}
+	if err := l.finalizeHerdrLaunch(req, operation.locked, intent, live, codexStatus); err != nil {
 		return l.failHerdr(req, "finalize launch", err)
 	}
 	l.Log.Ok("%s: pane %s created in %s", paneLogLabel(req), live.Ref.Pane, intent.WorktreePath)
@@ -103,14 +107,8 @@ func (l *Launcher) admitHerdrLaunchRequest(req Request) (*state.LockedStore, boo
 		l.Log.Err("%s: Herdr launch requires an owned session and combined launch lock", paneLogLabel(req))
 		return nil, false
 	}
-	operation := ""
 	if req.CodexPlanMode() {
-		operation = "Codex Plan Mode child launch until issue #554"
-	} else if req.CodexTeamRequested || req.CodexTeamMode {
-		operation = "--team launch until issue #568"
-	}
-	if operation != "" {
-		l.Log.Err("%s: %v", paneLogLabel(req), backend.Unsupported(backend.Herdr, operation))
+		l.Log.Err("%s: %v", paneLogLabel(req), backend.Unsupported(backend.Herdr, "Codex Plan Mode child launch until issue #554"))
 		return nil, false
 	}
 	return locked, true
@@ -384,7 +382,7 @@ func (l *Launcher) newHerdrLaunch(
 	if err != nil {
 		return intent, err
 	}
-	spec, err := agent.BuildResolvedLaunchSpec(req.Agent, req.Prompt, backend.Herdr, req.LaunchMode)
+	spec, err := buildHerdrLaunchSpec(req)
 	if err != nil {
 		return intent, err
 	}
@@ -403,6 +401,41 @@ func (l *Launcher) newHerdrLaunch(
 		EnvFilePath: envPath, EnvNameCount: envCount,
 	}
 	return persistNewHerdrLaunch(journal, intent, route.RuntimeDir)
+}
+
+func buildHerdrLaunchSpec(req Request) (agent.LaunchSpec, error) {
+	if !req.CodexTeamMode {
+		return agent.BuildResolvedLaunchSpec(req.Agent, req.Prompt, backend.Herdr, req.LaunchMode)
+	}
+	codexPath, err := agent.ResolveExecutable("codex")
+	if err != nil {
+		return agent.LaunchSpec{}, err
+	}
+	fanoutPath, err := os.Executable()
+	if err != nil {
+		return agent.LaunchSpec{}, fmt.Errorf("resolve fanout executable: %w", err)
+	}
+	return codexapp.TeamLaunchSpec(
+		fanoutPath, codexPath, req.Prompt, codexTeamMember(req), req.ParentRef, req.CodexTeamStatusPath,
+	), nil
+}
+
+func waitForHerdrCodexTeam(req Request, intent state.HerdrIntent) (codexapp.Status, error) {
+	if !req.CodexTeamMode {
+		return codexapp.Status{}, nil
+	}
+	timeout := min(CodexPlanTUIStartupTimeout, remainingHerdrLaunchTime(intent))
+	if timeout <= 0 {
+		return codexapp.Status{}, fmt.Errorf("Herdr launch expired before Codex team TUI became ready")
+	}
+	status, err := codexapp.WaitReady(req.CodexTeamStatusPath, timeout)
+	if err != nil {
+		return status, err
+	}
+	// The unique status path has served its launch fence; a removal failure
+	// cannot invalidate the ready payload or authorize a later launch.
+	_ = os.Remove(req.CodexTeamStatusPath)
+	return status, nil
 }
 
 func persistNewHerdrLaunch(
@@ -447,6 +480,7 @@ func (l *Launcher) finalizeHerdrLaunch(
 	locked *state.LockedStore,
 	intent state.HerdrIntent,
 	live backend.LivePane,
+	codexStatus codexapp.Status,
 ) (retErr error) {
 	defer func() {
 		if retErr != nil {
@@ -456,10 +490,11 @@ func (l *Launcher) finalizeHerdrLaunch(
 	if err := displayname.WriteFanoutMetadata(intent.WorktreePath, displayname.FanoutMetadata{
 		Agent: req.Agent, DisplayName: paneTitle(req), BranchName: req.BranchName,
 		Slug: req.Slug, WorktreePath: intent.WorktreePath,
+		CodexThreadID: codexStatus.ThreadID, CodexSessionID: codexStatus.SessionID,
 	}); err != nil {
 		return err
 	}
-	pane := statePaneForBackend(req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(), codexapp.Status{}, backend.Herdr, &live)
+	pane := statePaneForBackend(req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(), codexStatus, backend.Herdr, &live)
 	if err := locked.RecordPane(pane); err != nil {
 		return err
 	}
