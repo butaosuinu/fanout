@@ -106,7 +106,7 @@ token は表示専用データです。fanout は読み戻さず、backend state
 |---|---|---|
 | `fanout_issue` | workspace | issue / Project の子は `#<issue>`、`fanout plan` のタスクは task ID |
 | `fanout_slug` | workspace | 子の slug。worktree ディレクトリ名と同じ |
-| `fanout_parent` | pane | `#<parent>`、`plan:<slug>`、Projects のパス |
+| `fanout_parent` | pane | `#<parent>`、`plan:<slug>`、Projects のパス。watcher launch は拾った issue を出す |
 | `fanout_pr` | pane | PR 用に予約。現時点では報告のたびに clear |
 | `fanout_ci` | pane | CI 用に予約。現時点では報告のたびに clear |
 

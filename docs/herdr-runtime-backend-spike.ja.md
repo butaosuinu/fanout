@@ -1404,7 +1404,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   | 項目 | 決定 |
   |---|---|
   | workspace token | `fanout_issue`（issue / Project は `#<issue>`、plan は task ID）、`fanout_slug` |
-  | pane token | `fanout_parent`（`#<parent>` / `plan:<slug>` / Projects path）、`fanout_pr`、`fanout_ci` |
+  | pane token | `fanout_parent`（`#<parent>` / `plan:<slug>` / Projects path。watcher launch は拾った issue を `#<issue>` で出す）、`fanout_pr`、`fanout_ci` |
   | 固定 source | `fanout` |
   | sequence | 送らない。永続化もしない。1 launch 1 resource 1 report であり、`seq` 省略の報告は過去の `seq` に関係なく反映する |
   | TTL | 送らない。token は resource の寿命と cold restart までとする |

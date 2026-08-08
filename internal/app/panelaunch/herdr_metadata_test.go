@@ -66,6 +66,22 @@ func TestHerdrSidebarMetadataFixesTokenPlacement(t *testing.T) {
 			},
 		},
 		{
+			// The watcher stores the synthetic @watch parent, and the rest of
+			// the launch path resolves it to the issue it picked up. Reporting
+			// the marker would leave the Agent row unable to name any issue.
+			name: "watcher launch names the issue it picked up",
+			req:  Request{ParentRef: WatchParentRef, Number: 494, Slug: "herdr-sidebar-494"},
+			wantWorkspace: []herdrrun.MetadataToken{
+				{Name: "fanout_issue", Value: "#494"},
+				{Name: "fanout_slug", Value: "herdr-sidebar-494"},
+			},
+			wantPane: []herdrrun.MetadataToken{
+				{Name: "fanout_parent", Value: "#494"},
+				{Name: "fanout_pr"},
+				{Name: "fanout_ci"},
+			},
+		},
+		{
 			// A synthetic manual row has neither an issue number nor a task
 			// id, so the name clears instead of showing a negative row number.
 			name: "synthetic manual row clears the child name",

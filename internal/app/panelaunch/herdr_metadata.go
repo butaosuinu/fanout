@@ -57,7 +57,7 @@ func herdrSidebarMetadata(req Request, intent state.HerdrIntent) herdrrun.Metada
 		// A launch has no PR or CI reading yet, and v1 has no later reporter,
 		// so both are cleared rather than left at whatever the resource held.
 		PaneTokens: []herdrrun.MetadataToken{
-			{Name: metadataParentToken, Value: herdrMetadataValue(parentDisplay(req.ParentRef))},
+			{Name: metadataParentToken, Value: herdrParentToken(req)},
 			{Name: metadataPRToken},
 			{Name: metadataCIToken},
 		},
@@ -71,6 +71,18 @@ func herdrChildToken(req Request) string {
 		return "#" + strconv.Itoa(req.Number)
 	}
 	return herdrMetadataValue(req.TaskID)
+}
+
+// herdrParentToken names the fan-out the pane belongs to. A watcher launch
+// stores the synthetic @watch parent, and the rest of the launch path resolves
+// it to the issue the watcher picked up — herdrCoordinatorRuntimeParent does
+// exactly this for the coordinator workspace — so the sidebar names that issue
+// instead of the marker.
+func herdrParentToken(req Request) string {
+	if canonicalHerdrParent(req.ParentRef) == WatchParentRef && req.Number > 0 {
+		return herdrChildToken(req)
+	}
+	return herdrMetadataValue(parentDisplay(req.ParentRef))
 }
 
 // herdrMetadataValue shapes one value the way Herdr stores it — trimmed,

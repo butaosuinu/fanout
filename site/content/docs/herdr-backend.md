@@ -85,7 +85,7 @@ Every verified launch reports five display-only tokens under the source `fanout`
 |---|---|---|
 | `fanout_issue` | Workspace | `#<issue>` for issue and Project children, the task ID for a `fanout plan` task |
 | `fanout_slug` | Workspace | The child slug, which is also its worktree directory name |
-| `fanout_parent` | Pane | `#<parent>`, `plan:<slug>`, or the Projects path |
+| `fanout_parent` | Pane | `#<parent>`, `plan:<slug>`, or the Projects path. A watcher launch names the issue it picked up |
 | `fanout_pr` | Pane | Reserved for the pull request; cleared on every report today |
 | `fanout_ci` | Pane | Reserved for CI; cleared on every report today |
 
