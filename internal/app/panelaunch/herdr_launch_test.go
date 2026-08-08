@@ -300,7 +300,7 @@ func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
 	stale := intent
 	stale.Launch = nil
-	err = launcher.finalizeHerdrLaunch(launchReq, locked, stale, live)
+	err = launcher.finalizeHerdrLaunch(launchReq, locked, stale, live, codexapp.Status{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestWaitForHerdrAgentRevalidatesConcurrentIntentChanges(t *testing.T) {
 			}
 			launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
 			_, err := launcher.waitForHerdrAgentUnlocked(
-				context.Background(), locked, intent, intent.Launch.AgentName,
+				context.Background(), locked, intent, intent.Launch.AgentName, "",
 			)
 			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
 				t.Fatalf("wait error = %v, want %v containing %q", err, test.wantErr, test.wantErrText)

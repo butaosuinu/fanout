@@ -101,7 +101,7 @@ func (l *Launcher) finishIssuedHerdrAgent(
 ) (live backend.LivePane, retErr error) {
 	defer func() {
 		if retErr != nil {
-			retErr = errors.Join(retErr, l.failClosedLatestIssuedHerdrLaunch(locked, intent))
+			retErr = errors.Join(retErr, l.failClosedLatestIssuedHerdrLaunch(locked, intent, retErr))
 		}
 	}()
 	stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)
@@ -207,6 +207,7 @@ func sameHerdrLaunchGeneration(latest, want state.HerdrIntent) bool {
 func (l *Launcher) failClosedLatestIssuedHerdrLaunch(
 	locked *state.LockedStore,
 	intent state.HerdrIntent,
+	cause error,
 ) error {
 	journal, err := locked.HerdrIntents(l.Info.ProjectRoot)
 	if err != nil {
@@ -219,7 +220,7 @@ func (l *Launcher) failClosedLatestIssuedHerdrLaunch(
 	if latest.Status == state.HerdrIntentManualCleanupRequired {
 		return herdrManualCleanupError(latest)
 	}
-	return l.failClosedIssuedHerdrLaunch(journal, latest)
+	return l.failClosedIssuedHerdrLaunch(journal, latest, cause)
 }
 
 func (l *Launcher) verifyAndRenameHerdrAgent(
