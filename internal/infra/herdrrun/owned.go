@@ -240,7 +240,7 @@ func openOwned(ctx context.Context, opts OwnedOptions, backend *Backend) (*Owned
 	if err := validateOwnedReady(ctx, backend); err != nil {
 		return nil, err
 	}
-	return ownedSessionFromMarker(commonDir, layout, marker, backend), nil
+	return ownedSessionFromMarker(commonDir, marker, backend), nil
 }
 
 func loadExistingOwnedMarker(
@@ -296,7 +296,6 @@ func newExistingOwnedBackend(
 
 func ownedSessionFromMarker(
 	commonDir string,
-	layout ownedLayout,
 	marker ownerMarker,
 	backend *Backend,
 ) *OwnedSession {
@@ -413,7 +412,8 @@ func ensureOwned(
 		return nil, err
 	}
 	backend.owner = &ownedAdmission{marker: marker, markerPath: layout.markerPath, lockPath: layout.lifecycleLock}
-	if err := waitForOwnedReady(ctx, backend); err != nil {
+	err = waitForOwnedReady(ctx, backend)
+	if err != nil {
 		if started != nil {
 			unlockPrivateFile(lock)
 			lock = nil

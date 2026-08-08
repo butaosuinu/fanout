@@ -170,7 +170,7 @@ func LockProject(projectRoot string) (*LockedStore, error) {
 }
 
 func LockProjectForLaunch(projectRoot string) (*LockedStore, error) {
-	return lockProjectForLaunch(nil, projectRoot)
+	return lockProjectForLaunch(context.Background(), projectRoot, true)
 }
 
 // LockProjectForLaunchContext acquires the combined state and Herdr intents
@@ -179,19 +179,19 @@ func LockProjectForLaunchContext(ctx context.Context, projectRoot string) (*Lock
 	if ctx == nil {
 		return nil, fmt.Errorf("lock project for launch requires a context")
 	}
-	return lockProjectForLaunch(ctx, projectRoot)
+	return lockProjectForLaunch(ctx, projectRoot, false)
 }
 
-func lockProjectForLaunch(ctx context.Context, projectRoot string) (*LockedStore, error) {
+func lockProjectForLaunch(ctx context.Context, projectRoot string, blocking bool) (*LockedStore, error) {
 	intentsPath, err := herdrIntentsPathContext(ctx, projectRoot)
 	if err != nil {
 		return nil, err
 	}
-	herdrIntentsFile, err := lockHerdrIntentsPathContext(ctx, intentsPath)
+	herdrIntentsFile, err := lockHerdrIntentsPath(ctx, intentsPath, blocking)
 	if err != nil {
 		return nil, err
 	}
-	locked, err := lockStatePath(ctx, Path(projectRoot))
+	locked, err := lockStatePath(ctx, Path(projectRoot), blocking)
 	if err != nil {
 		if unlockErr := unlockStateFile(herdrIntentsFile); unlockErr != nil {
 			return nil, errors.Join(
@@ -207,10 +207,10 @@ func lockProjectForLaunch(ctx context.Context, projectRoot string) (*LockedStore
 }
 
 func Lock(path string) (*LockedStore, error) {
-	return lockStatePath(nil, path)
+	return lockStatePath(context.Background(), path, true)
 }
 
-func lockStatePath(ctx context.Context, path string) (*LockedStore, error) {
+func lockStatePath(ctx context.Context, path string, blocking bool) (*LockedStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create fanout state directory: %w", err)
 	}
@@ -219,7 +219,7 @@ func lockStatePath(ctx context.Context, path string) (*LockedStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open fanout state lock %s: %w", lockPath, err)
 	}
-	if err = lockFileExclusive(ctx, f); err != nil {
+	if err = lockFileExclusive(ctx, f, blocking); err != nil {
 		// Cleanup of the never-locked handle; the flock error is the one to report.
 		_ = f.Close()
 		return nil, fmt.Errorf("lock fanout state %s: %w", lockPath, err)
@@ -234,8 +234,8 @@ func lockStatePath(ctx context.Context, path string) (*LockedStore, error) {
 	return &LockedStore{path: path, file: f, Store: store}, nil
 }
 
-func lockFileExclusive(ctx context.Context, file *os.File) error {
-	if ctx == nil {
+func lockFileExclusive(ctx context.Context, file *os.File, blocking bool) error {
+	if blocking {
 		return syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
 	}
 	if err := ctx.Err(); err != nil {

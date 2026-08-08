@@ -228,16 +228,19 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	journal.UpsertIntent(intent)
-	if err := journal.Save(); err != nil {
+	err = journal.Save()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := locked.Unlock(); err != nil {
+	err = locked.Unlock()
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, reported := range []backend.AgentState{backend.AgentIdle, backend.AgentDone, backend.AgentWorking} {
 		signal.State = reported
-		if err := Emit(context.Background(), signal, observer); err != nil {
+		err = Emit(context.Background(), signal, observer)
+		if err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -80,8 +80,8 @@ func TestLockProjectForLaunchContextReleasesIntentsAfterStateTimeout(t *testing.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if _, err := LockProjectForLaunchContext(ctx, repo); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("LockProjectForLaunchContext() error = %v, want context deadline", err)
+	if _, lockErr := LockProjectForLaunchContext(ctx, repo); !errors.Is(lockErr, context.DeadlineExceeded) {
+		t.Fatalf("LockProjectForLaunchContext() error = %v, want context deadline", lockErr)
 	}
 	intentsPath, err := HerdrIntentsPath(repo)
 	if err != nil {

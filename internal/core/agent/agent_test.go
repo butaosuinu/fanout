@@ -74,7 +74,7 @@ func TestBuildClaudeHookSettingsJSONAddsBackgroundSessionEnd(t *testing.T) {
 		}
 	}
 	blocked := settings.Hooks.Notification[0].Hooks[0].Command
-	for _, notificationType := range strings.Split(blockedNotificationTypes, "|") {
+	for notificationType := range strings.SplitSeq(blockedNotificationTypes, "|") {
 		if !strings.Contains(blocked, notificationType) {
 			t.Fatalf("Notification command %q lacks %q", blocked, notificationType)
 		}

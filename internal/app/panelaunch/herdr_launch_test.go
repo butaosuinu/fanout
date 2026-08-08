@@ -285,7 +285,8 @@ func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T
 		t.Fatal(err)
 	}
 	journal.UpsertIntent(intent)
-	if err := journal.Save(); err != nil {
+	err = journal.Save()
+	if err != nil {
 		t.Fatal(err)
 	}
 	live := backend.LivePane{
@@ -299,7 +300,8 @@ func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
 	stale := intent
 	stale.Launch = nil
-	if err := launcher.finalizeHerdrLaunch(launchReq, locked, stale, live); err != nil {
+	err = launcher.finalizeHerdrLaunch(launchReq, locked, stale, live)
+	if err != nil {
 		t.Fatal(err)
 	}
 	store, err := state.LoadProject(repo)

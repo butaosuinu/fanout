@@ -126,17 +126,11 @@ type LockedHerdrIntents struct {
 // HerdrIntentsPath returns the repository-common journal path shared by every
 // linked worktree.
 func HerdrIntentsPath(projectRoot string) (string, error) {
-	return herdrIntentsPathContext(nil, projectRoot)
+	return herdrIntentsPathContext(context.Background(), projectRoot)
 }
 
 func herdrIntentsPathContext(ctx context.Context, projectRoot string) (string, error) {
-	var out []byte
-	var err error
-	if ctx == nil {
-		out, err = execx.Output(projectRoot, nil, "git", "rev-parse", "--git-common-dir")
-	} else {
-		out, err = execx.OutputContext(ctx, projectRoot, nil, "git", "rev-parse", "--git-common-dir")
-	}
+	out, err := execx.OutputContext(ctx, projectRoot, nil, "git", "rev-parse", "--git-common-dir")
 	if err != nil {
 		return "", fmt.Errorf("resolve Herdr intents git common directory: %w", err)
 	}
@@ -174,11 +168,7 @@ func LoadHerdrIntentsPath(path string) (HerdrIntents, error) {
 	return loadHerdrIntents(path)
 }
 
-func lockHerdrIntentsPath(path string) (*os.File, error) {
-	return lockHerdrIntentsPathContext(nil, path)
-}
-
-func lockHerdrIntentsPathContext(ctx context.Context, path string) (*os.File, error) {
+func lockHerdrIntentsPath(ctx context.Context, path string, blocking bool) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create Herdr intents directory: %w", err)
 	}
@@ -187,7 +177,7 @@ func lockHerdrIntentsPathContext(ctx context.Context, path string) (*os.File, er
 	if openErr != nil {
 		return nil, fmt.Errorf("open Herdr intents lock %s: %w", lockPath, openErr)
 	}
-	if err := lockFileExclusive(ctx, file); err != nil {
+	if err := lockFileExclusive(ctx, file, blocking); err != nil {
 		_ = file.Close() // The flock error is authoritative.
 		return nil, fmt.Errorf("lock Herdr intents %s: %w", lockPath, err)
 	}
