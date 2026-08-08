@@ -28,7 +28,11 @@ import (
 // no file under the user's home is touched. Each hook is the best-effort
 // agentStateSetCommand one-liner (`|| true` keeps a hookless environment, e.g.
 // tmux gone, from surfacing errors into the session).
-var claudeHookSettingsJSON = buildClaudeHookSettingsJSON()
+var claudeHookSettingsJSON = BuildClaudeHookSettingsJSON(ClaudeHookCommands{
+	Working: agentStateSetCommand("working"),
+	Blocked: agentStateSetCommand("blocked"),
+	Idle:    agentStateSetCommand("idle"),
+})
 
 // agentStateOption must stay identical to internal/infra/tmuxrun's
 // @fanout_agent_state pane user option, and agentStateSetCommand must produce
@@ -66,30 +70,33 @@ type claudeHookEvents struct {
 	PostToolUse      []claudeHookMatcher `json:"PostToolUse"`
 	Notification     []claudeHookMatcher `json:"Notification"`
 	Stop             []claudeHookMatcher `json:"Stop"`
+	SessionEnd       []claudeHookMatcher `json:"SessionEnd,omitempty"`
 }
 
 type claudeHookSettings struct {
 	Hooks claudeHookEvents `json:"hooks"`
 }
 
-func buildClaudeHookSettingsJSON() string {
-	hook := func(command string) []claudeHookMatcher {
-		return []claudeHookMatcher{{Hooks: []claudeHookCommand{{
-			Type:    "command",
-			Command: command,
-		}}}}
-	}
-	stateHook := func(state string) []claudeHookMatcher {
-		return hook(agentStateSetCommand(state) + " || true")
-	}
-	blockedHook := hook(`grep -Eq '"notification_type"[[:space:]]*:[[:space:]]*"(` + blockedNotificationTypes + `)"' - && ` +
-		agentStateSetCommand("blocked") + " || true")
+// ClaudeHookCommands describes the state commands shared by every
+// fanout-launched Claude backend. Done is optional; Background keeps hooks from
+// waiting for a best-effort state reporter.
+type ClaudeHookCommands struct {
+	Working    string
+	Blocked    string
+	Idle       string
+	Done       string
+	Background bool
+}
+
+// BuildClaudeHookSettingsJSON builds deterministic lifecycle hook settings.
+func BuildClaudeHookSettingsJSON(commands ClaudeHookCommands) string {
 	settings := claudeHookSettings{Hooks: claudeHookEvents{
-		UserPromptSubmit: stateHook("working"),
-		PreToolUse:       stateHook("working"),
-		PostToolUse:      stateHook("working"),
-		Notification:     blockedHook,
-		Stop:             stateHook("idle"),
+		UserPromptSubmit: claudeStateHook(commands.Working, commands.Background),
+		PreToolUse:       claudeStateHook(commands.Working, commands.Background),
+		PostToolUse:      claudeStateHook(commands.Working, commands.Background),
+		Notification:     claudeBlockedHook(commands.Blocked, commands.Background),
+		Stop:             claudeStateHook(commands.Idle, commands.Background),
+		SessionEnd:       claudeStateHook(commands.Done, commands.Background),
 	}}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -100,4 +107,33 @@ func buildClaudeHookSettingsJSON() string {
 		panic(err) // fixed struct of strings; cannot fail
 	}
 	return strings.TrimSuffix(buf.String(), "\n")
+}
+
+func claudeStateHook(command string, background bool) []claudeHookMatcher {
+	if command == "" {
+		return nil
+	}
+	if background {
+		command = "{ " + command + " || true; } &"
+	} else {
+		command += " || true"
+	}
+	return claudeHook(command)
+}
+
+func claudeBlockedHook(command string, background bool) []claudeHookMatcher {
+	if command == "" {
+		return nil
+	}
+	filter := `grep -Eq '"notification_type"[[:space:]]*:[[:space:]]*"(` + blockedNotificationTypes + `)"' -`
+	if background {
+		return claudeHook("if " + filter + "; then { " + command + " || true; } & fi")
+	}
+	return claudeHook(filter + " && " + command + " || true")
+}
+
+func claudeHook(command string) []claudeHookMatcher {
+	return []claudeHookMatcher{{Hooks: []claudeHookCommand{{
+		Type: "command", Command: command,
+	}}}}
 }

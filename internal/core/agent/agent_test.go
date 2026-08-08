@@ -3,8 +3,10 @@ package agent
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -35,6 +37,47 @@ func TestClaudeHookSettingsJSONPinsAgentStateHooks(t *testing.T) {
 	}
 	if !json.Valid([]byte(claudeHookSettingsJSON)) {
 		t.Fatalf("claudeHookSettingsJSON is not valid JSON: %q", claudeHookSettingsJSON)
+	}
+}
+
+func TestBuildClaudeHookSettingsJSONAddsBackgroundSessionEnd(t *testing.T) {
+	settingsJSON := BuildClaudeHookSettingsJSON(ClaudeHookCommands{
+		Working: "emit working", Blocked: "emit blocked", Idle: "emit idle", Done: "emit done",
+		Background: true,
+	})
+	var settings claudeHookSettings
+	if err := json.Unmarshal([]byte(settingsJSON), &settings); err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		name     string
+		matchers []claudeHookMatcher
+		command  string
+	}{
+		{name: "UserPromptSubmit", matchers: settings.Hooks.UserPromptSubmit, command: "emit working"},
+		{name: "PreToolUse", matchers: settings.Hooks.PreToolUse, command: "emit working"},
+		{name: "PostToolUse", matchers: settings.Hooks.PostToolUse, command: "emit working"},
+		{name: "Notification", matchers: settings.Hooks.Notification, command: "emit blocked"},
+		{name: "Stop", matchers: settings.Hooks.Stop, command: "emit idle"},
+		{name: "SessionEnd", matchers: settings.Hooks.SessionEnd, command: "emit done"},
+	}
+	for _, event := range want {
+		if len(event.matchers) != 1 || len(event.matchers[0].Hooks) != 1 {
+			t.Fatalf("%s hooks = %#v", event.name, event.matchers)
+		}
+		command := event.matchers[0].Hooks[0].Command
+		if !strings.Contains(command, event.command+" || true") || !strings.Contains(command, "} &") {
+			t.Fatalf("%s command = %q", event.name, command)
+		}
+		if out, err := exec.Command("sh", "-n", "-c", command).CombinedOutput(); err != nil {
+			t.Fatalf("%s command is not valid POSIX shell: %v: %s", event.name, err, out)
+		}
+	}
+	blocked := settings.Hooks.Notification[0].Hooks[0].Command
+	for _, notificationType := range strings.Split(blockedNotificationTypes, "|") {
+		if !strings.Contains(blocked, notificationType) {
+			t.Fatalf("Notification command %q lacks %q", blocked, notificationType)
+		}
 	}
 }
 

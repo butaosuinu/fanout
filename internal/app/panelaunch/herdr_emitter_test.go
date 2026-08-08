@@ -2,7 +2,6 @@ package panelaunch
 
 import (
 	"encoding/json"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -58,49 +57,6 @@ func TestHerdrEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
 	}
 	if _, leaked := environment[telemetry.StatePathEnv]; leaked {
 		t.Fatal("owner FANOUT_STATE_PATH leaked into the agent environment")
-	}
-}
-
-func TestHerdrClaudeHookSettingsReportsProviderLifecycleBestEffort(t *testing.T) {
-	settingsJSON, err := herdrClaudeHookSettings("/opt/fanout build/fanout")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var settings claudeHookSettings
-	if err := json.Unmarshal([]byte(settingsJSON), &settings); err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]string{
-		"UserPromptSubmit": "working", "PreToolUse": "working", "PostToolUse": "working",
-		"Notification": "blocked", "Stop": "idle", "SessionEnd": "done",
-	}
-	for event, reportedState := range want {
-		matchers := settings.Hooks[event]
-		if len(matchers) != 1 || len(matchers[0].Hooks) != 1 {
-			t.Fatalf("%s hooks = %#v", event, matchers)
-		}
-		command := matchers[0].Hooks[0].Command
-		for _, required := range []string{
-			`FANOUT_STATE_PATH="$FANOUT_EMITTER_STATE_PATH"`,
-			`'/opt/fanout build/fanout' ` + telemetry.Command + " " + reportedState,
-			"|| true",
-		} {
-			if !strings.Contains(command, required) {
-				t.Fatalf("%s command %q lacks %q", event, command, required)
-			}
-		}
-		if strings.Contains(command, "tmux") {
-			t.Fatalf("%s command depends on tmux: %q", event, command)
-		}
-		if !strings.Contains(command, "} &") {
-			t.Fatalf("%s command waits for telemetry: %q", event, command)
-		}
-		if out, err := exec.Command("sh", "-n", "-c", command).CombinedOutput(); err != nil {
-			t.Fatalf("%s command is not valid POSIX shell: %v: %s", event, err, out)
-		}
-	}
-	if !strings.Contains(settings.Hooks["Notification"][0].Hooks[0].Command, "permission_prompt") {
-		t.Fatal("Notification hook lacks blocking-input filter")
 	}
 }
 

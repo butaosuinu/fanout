@@ -251,44 +251,6 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 	}
 }
 
-func TestRunSignalHandsConcurrentPreFinalReportsToPendingIntent(t *testing.T) {
-	repo := newEmitterRepo(t)
-	intent, signal, observer := pendingEmitterFixture(t, repo)
-	saveEmitterIntent(t, repo, intent)
-	locked, err := state.LockProjectForLaunch(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = locked.Unlock() }()
-
-	errs := make(chan error, 2)
-	for _, reported := range []backend.AgentState{backend.AgentWorking, backend.AgentDone} {
-		report := signal
-		report.State = reported
-		go func() { errs <- runSignal(report, observer) }()
-	}
-	waitForEmitterHandoffs(t, signal.StatePath, signal.EmitterNonce, 2)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	completed, err := locked.YieldForEmitter(ctx, repo, signal.StatePath, signal.EmitterNonce)
-	if err != nil || !completed {
-		t.Fatalf("YieldForEmitter() = (%t, %v), want completed", completed, err)
-	}
-	for range 2 {
-		if err := <-errs; err != nil {
-			t.Fatal(err)
-		}
-	}
-	journal, err := locked.HerdrIntents(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, found := journal.FindIntent(intent.ID)
-	if !found || got.Launch.PendingReportedState != "done" {
-		t.Fatalf("handed-off pending intent = (%+v, %t), want done", got, found)
-	}
-}
-
 func TestEmitPendingIntentRejectsIncompleteIdentityMatch(t *testing.T) {
 	repo := newEmitterRepo(t)
 	intent, signal, observer := pendingEmitterFixture(t, repo)
@@ -456,22 +418,6 @@ func loadEmitterPane(t *testing.T, repo string) state.Pane {
 		t.Fatal("state has no pane")
 	}
 	return store.Panes[0]
-}
-
-func waitForEmitterHandoffs(t *testing.T, statePath, launchNonce string, count int) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		paths, err := state.EmitterHandoffs(statePath, launchNonce)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(paths) == count {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d emitter handoffs", count)
 }
 
 func newEmitterRepo(t *testing.T) string {

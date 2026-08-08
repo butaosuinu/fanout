@@ -75,18 +75,6 @@ func Run(args []string, getenv func(string) string, observer Observer, errw io.W
 }
 
 func runSignal(signal telemetry.Signal, observer Observer) (err error) {
-	eventNonce, err := newEmitterNonce()
-	if err != nil {
-		return err
-	}
-	handoffPath, err := state.EmitterHandoffPath(signal.StatePath, signal.EmitterNonce, eventNonce)
-	if err != nil {
-		return err
-	}
-	if err := state.MarkEmitterHandoff(handoffPath); err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, state.ClearEmitterHandoff(handoffPath)) }()
 	ctx, cancel := context.WithTimeout(context.Background(), emitterTimeout)
 	defer cancel()
 	return Emit(ctx, signal, observer)

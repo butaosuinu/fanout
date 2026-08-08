@@ -49,7 +49,7 @@ func (l *Launcher) startHerdrAgent(
 	if err := saveHerdrLaunchPhase(journal, intent); err != nil {
 		return live, err
 	}
-	return l.finishIssuedHerdrAgent(ctx, req, journal, intent)
+	return l.finishIssuedHerdrAgent(ctx, req, locked, intent)
 }
 
 func admitHerdrAgentStartDeadline(
@@ -95,12 +95,12 @@ func (l *Launcher) admitHerdrLauncher(
 func (l *Launcher) finishIssuedHerdrAgent(
 	ctx context.Context,
 	req Request,
-	journal *state.LockedHerdrIntents,
+	locked *state.LockedStore,
 	intent state.HerdrIntent,
 ) (live backend.LivePane, retErr error) {
 	defer func() {
 		if retErr != nil {
-			retErr = errors.Join(retErr, l.failClosedIssuedHerdrLaunch(journal, intent, retErr))
+			retErr = errors.Join(retErr, l.failClosedLatestIssuedHerdrLaunch(locked, intent))
 		}
 	}()
 	stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)
@@ -114,7 +114,7 @@ func (l *Launcher) finishIssuedHerdrAgent(
 	if tokenErr != nil {
 		return live, tokenErr
 	}
-	live, err = l.adoptHerdrAgent(ctx, req, intent)
+	live, err = l.adoptHerdrAgent(ctx, req, locked, intent)
 	if err != nil {
 		return live, err
 	}
@@ -127,20 +127,59 @@ func (l *Launcher) finishIssuedHerdrAgent(
 func (l *Launcher) adoptHerdrAgent(
 	ctx context.Context,
 	req Request,
+	locked *state.LockedStore,
 	intent state.HerdrIntent,
 ) (backend.LivePane, error) {
 	statusPath, err := herdrCodexTeamStatusPath(req, intent)
 	if err != nil {
 		return backend.LivePane{}, err
 	}
-	live, err := l.waitForHerdrAgent(ctx, intent, req.Agent, statusPath)
+	live, err := l.waitForHerdrAgentUnlocked(ctx, locked, intent, req.Agent, statusPath)
 	if err != nil {
 		return live, err
 	}
 	if err := l.verifyAndRenameHerdrAgent(ctx, intent); err != nil {
 		return live, err
 	}
-	return l.waitForHerdrAgent(ctx, intent, intent.Launch.AgentName, statusPath)
+	return l.waitForHerdrAgentUnlocked(ctx, locked, intent, intent.Launch.AgentName, statusPath)
+}
+
+func (l *Launcher) waitForHerdrAgentUnlocked(
+	ctx context.Context,
+	locked *state.LockedStore,
+	intent state.HerdrIntent,
+	wantAgentID string,
+	codexTeamStatusPath string,
+) (backend.LivePane, error) {
+	if intent.Launch == nil || intent.Launch.EmitterNonce == "" {
+		return l.waitForHerdrAgent(ctx, intent, wantAgentID, codexTeamStatusPath)
+	}
+	if err := locked.Unlock(); err != nil {
+		return backend.LivePane{}, err
+	}
+	live, waitErr := l.waitForHerdrAgent(ctx, intent, wantAgentID, codexTeamStatusPath)
+	reloaded, lockErr := state.LockProjectForLaunch(l.Info.ProjectRoot)
+	if lockErr == nil {
+		*locked = *reloaded
+	} else {
+		lockErr = fmt.Errorf("reacquire launch lock after Herdr agent wait: %w", lockErr)
+	}
+	return live, errors.Join(waitErr, lockErr)
+}
+
+func (l *Launcher) failClosedLatestIssuedHerdrLaunch(
+	locked *state.LockedStore,
+	intent state.HerdrIntent,
+) error {
+	journal, err := locked.HerdrIntents(l.Info.ProjectRoot)
+	if err != nil {
+		return err
+	}
+	latest, found := journal.FindIntent(intent.ID)
+	if !found {
+		return fmt.Errorf("issued Herdr launch intent disappeared during agent wait")
+	}
+	return l.failClosedIssuedHerdrLaunch(journal, latest)
 }
 
 func (l *Launcher) verifyAndRenameHerdrAgent(
