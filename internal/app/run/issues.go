@@ -243,7 +243,7 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		Created: result.Created,
 		Failed:  result.Failed,
 	}
-	if len(plan.Targets) > 0 && !callIssueAfter(after, recorder.Store, recorder, progress, lg) {
+	if len(plan.Targets) > 0 && !callIssueAfter(after, store, recorder, progress, lg) {
 		return IssueExecutionResult{CreatedIssueNums: result.CreatedNums, CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices, Plan: plan}, exitcode.Env
 	}
 

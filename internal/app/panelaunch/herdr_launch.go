@@ -489,6 +489,24 @@ func newHerdrPlanStatusPath(req Request) string {
 }
 
 func validateHerdrLaunchBinding(req Request, launch *state.HerdrLaunch) error {
+	if err := validateHerdrTeamBinding(req, launch); err != nil {
+		return err
+	}
+	boundReq := req
+	boundReq.CodexTeamStatusPath = launch.CodexTeamStatusPath
+	boundReq.CodexPlanStatusPath = launch.CodexPlanStatusPath
+	spec, err := buildHerdrLaunchSpec(boundReq)
+	if err != nil {
+		return err
+	}
+	if launch.Agent != req.Agent || launch.Executable != spec.Executable ||
+		!slices.Equal(launch.Args, spec.Args) {
+		return fmt.Errorf("saved Herdr launch does not match the current agent command")
+	}
+	return nil
+}
+
+func validateHerdrTeamBinding(req Request, launch *state.HerdrLaunch) error {
 	requestedTeam := req.TeamDBPath != ""
 	savedTeam := launch.TeamDBPath != ""
 	switch {
@@ -500,9 +518,8 @@ func validateHerdrLaunchBinding(req Request, launch *state.HerdrLaunch) error {
 		return fmt.Errorf("saved Herdr launch does not match the current Codex team mode")
 	case req.CodexPlanMode() != (launch.CodexPlanStatusPath != ""):
 		return fmt.Errorf("saved Herdr launch does not match the current Codex Plan Mode")
-	default:
-		return nil
 	}
+	return nil
 }
 
 func waitForHerdrCodexTUI(req Request, intent state.HerdrIntent) (codexapp.Status, error) {
@@ -536,7 +553,7 @@ func requestedHerdrCodexStatusPath(req Request) string {
 
 func herdrCodexStatusPath(req Request, intent state.HerdrIntent) (string, error) {
 	if intent.Launch != nil {
-		if err := validateHerdrLaunchBinding(req, intent.Launch); err != nil {
+		if err := validateHerdrTeamBinding(req, intent.Launch); err != nil {
 			return "", err
 		}
 	}

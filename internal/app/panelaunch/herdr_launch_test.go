@@ -764,6 +764,31 @@ func TestValidateHerdrLaunchBindingRejectsCodexPlanModeChange(t *testing.T) {
 	}
 }
 
+func TestValidateHerdrLaunchBindingRejectsRequestChange(t *testing.T) {
+	binDir := t.TempDir()
+	claudePath := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(claudePath, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	req := Request{Agent: "claude", Prompt: "original", LaunchMode: agent.ModeBuild}
+	spec, err := buildHerdrLaunchSpec(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := &state.HerdrLaunch{
+		Agent: req.Agent, Executable: spec.Executable, Args: spec.Args,
+	}
+	if err := validateHerdrLaunchBinding(req, launch); err != nil {
+		t.Fatalf("unchanged binding error = %v", err)
+	}
+	req.Prompt = "changed"
+	if err := validateHerdrLaunchBinding(req, launch); err == nil ||
+		!strings.Contains(err.Error(), "current agent command") {
+		t.Fatalf("changed prompt binding error = %v", err)
+	}
+}
+
 func TestPrepareHerdrLaunchRejectsTeamBindingChange(t *testing.T) {
 	for _, tc := range []struct {
 		name                         string
@@ -1300,6 +1325,7 @@ func TestHerdrLaunchDoesNotIssueTokenAfterLauncherWaitExpires(t *testing.T) {
 }
 
 func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
+	installFakeExecutable(t, "codex")
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrLaunchRuntime{}
 	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
@@ -1325,6 +1351,17 @@ func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 	intent.Launch.TokenIssued = false
 	intent.Launch.TeamDBPath = "/tmp/team.db"
 	intent.Launch.CodexTeamStatusPath = statusPath
+	req := Request{
+		Agent: "codex", TeamDBPath: "/tmp/team.db", CodexTeamMode: true,
+		CodexTeamStatusPath: filepath.Join(t.TempDir(), "regenerated-status.json"),
+	}
+	boundReq := req
+	boundReq.CodexTeamStatusPath = statusPath
+	spec, err := buildHerdrLaunchSpec(boundReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent.Launch.Executable, intent.Launch.Args = spec.Executable, spec.Args
 	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
 	runtime.processInfo = testHerdrLauncherProcess(intent, route.LauncherPath)
 	runtime.live = []backend.LivePane{testHerdrIdlePane(intent)}
@@ -1341,10 +1378,7 @@ func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 	}
 
 	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrRequestAgent(
-		context.Background(), Request{
-			Agent: "codex", TeamDBPath: "/tmp/team.db", CodexTeamMode: true,
-			CodexTeamStatusPath: filepath.Join(t.TempDir(), "regenerated-status.json"),
-		}, locked, route, intent, nil,
+		context.Background(), req, locked, route, intent, nil,
 	)
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) || !strings.Contains(err.Error(), "owner mismatch") {
 		t.Fatalf("failed team agent start error = %v", err)
