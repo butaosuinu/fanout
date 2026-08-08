@@ -187,13 +187,10 @@ func TestWorkspaceObservationPreservesPanesWithoutGuessingRoot(t *testing.T) {
 	rootCWD := "/repo"
 	extraCWD := "/repo/subdir"
 	workspace := workspaceJSON{WorkspaceID: "w1", Label: "coordinator", Focused: &focused}
-	got, err := workspaceObservation(workspace, []paneJSON{
+	got := workspaceObservation(workspace, []paneJSON{
 		{PaneID: "w1:p1", WorkspaceID: "w1", TerminalID: "term-1", CWD: &rootCWD},
 		{PaneID: "w1:p2", WorkspaceID: "w1", TerminalID: "term-2", CWD: &extraCWD},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if got.Pane.Pane != "" || got.TerminalID != "" {
 		t.Fatalf("multi-pane workspace guessed a root identity: %+v", got)
 	}
@@ -203,8 +200,10 @@ func TestWorkspaceObservationPreservesPanesWithoutGuessingRoot(t *testing.T) {
 		got.Panes[0].CWD != rootCWD {
 		t.Fatalf("multi-pane observation = %+v, want saved root pane available", got)
 	}
-	if _, err := workspaceObservation(workspace, nil); err == nil {
-		t.Fatal("pane-less workspace unexpectedly accepted")
+	paneLess := workspaceObservation(workspace, nil)
+	if paneLess.WorkspaceID != "w1" || paneLess.Label != "coordinator" ||
+		len(paneLess.Panes) != 0 || paneLess.Pane.Pane != "" || paneLess.TerminalID != "" {
+		t.Fatalf("pane-less observation = %+v, want workspace identity without an invented pane", paneLess)
 	}
 }
 

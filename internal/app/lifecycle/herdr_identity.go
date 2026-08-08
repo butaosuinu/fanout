@@ -241,15 +241,36 @@ func observeHerdrCoordinator(
 	if err != nil {
 		return herdrrun.WorkspaceObservation{}, err
 	}
-	return *workspace, nil
+	projected, ok := projectHerdrCoordinatorPane(*workspace, resource)
+	if !ok {
+		return herdrrun.WorkspaceObservation{}, fmt.Errorf("herdr coordinator pane projection changed after matching")
+	}
+	return projected, nil
 }
 
 func herdrCoordinatorWorkspacePredicate(resource state.HerdrResource) herdrWorkspacePredicateFunc {
 	return func(workspace herdrrun.WorkspaceObservation) (bool, bool) {
 		candidate := workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label
-		exact := workspace.WorkspaceID == resource.WorkspaceID && workspace.Label == resource.Label &&
-			filepath.Clean(workspace.CWD) == filepath.Clean(resource.CurrentPath) &&
-			workspace.Pane.Pane == resource.PaneID && workspace.TerminalID == resource.TerminalID
+		_, exact := projectHerdrCoordinatorPane(workspace, resource)
 		return candidate, exact
 	}
+}
+
+func projectHerdrCoordinatorPane(
+	workspace herdrrun.WorkspaceObservation,
+	resource state.HerdrResource,
+) (herdrrun.WorkspaceObservation, bool) {
+	if workspace.WorkspaceID != resource.WorkspaceID || workspace.Label != resource.Label {
+		return herdrrun.WorkspaceObservation{}, false
+	}
+	want := backend.PaneRef{Backend: backend.Herdr, Workspace: resource.WorkspaceID, Pane: resource.PaneID}
+	for _, pane := range workspace.Panes {
+		if pane.Pane != want || pane.TerminalID != resource.TerminalID ||
+			filepath.Clean(pane.CWD) != filepath.Clean(resource.CurrentPath) {
+			continue
+		}
+		workspace.Pane, workspace.TerminalID, workspace.CWD = pane.Pane, pane.TerminalID, pane.CWD
+		return workspace, true
+	}
+	return herdrrun.WorkspaceObservation{}, false
 }

@@ -410,6 +410,9 @@ func driveHerdrCleanup(
 	worktreeIntentID string,
 	lg Logger,
 ) error {
+	if intent.Status == state.HerdrIntentPlanned && time.Now().UnixMilli() >= intent.ExpiresUnixMS {
+		return fmt.Errorf("saved Herdr cleanup intent expired before mutation")
+	}
 	if intent.Status == state.HerdrIntentManualCleanupRequired || intent.Status == state.HerdrIntentIssued {
 		recovered, err := recoverHerdrCleanup(ctx, opts, journal, runtime, intent)
 		if err != nil {

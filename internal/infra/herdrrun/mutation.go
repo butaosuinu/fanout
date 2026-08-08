@@ -554,11 +554,7 @@ func (b *Backend) observeOwnedWorkspaces(
 	}
 	result := make([]WorkspaceObservation, 0, len(*snapshot.Workspaces))
 	for _, workspace := range *snapshot.Workspaces {
-		observation, err := workspaceObservation(workspace, panes[workspace.WorkspaceID])
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, observation)
+		result = append(result, workspaceObservation(workspace, panes[workspace.WorkspaceID]))
 	}
 	return result, nil
 }
@@ -566,7 +562,7 @@ func (b *Backend) observeOwnedWorkspaces(
 func workspaceObservation(
 	workspace workspaceJSON,
 	panes []paneJSON,
-) (WorkspaceObservation, error) {
+) WorkspaceObservation {
 	observation := WorkspaceObservation{
 		WorkspaceID: workspace.WorkspaceID,
 		Label:       workspace.Label,
@@ -588,10 +584,7 @@ func workspaceObservation(
 			CWD:        optionalString(pane.CWD),
 		})
 	}
-	switch len(panes) {
-	case 0:
-		return WorkspaceObservation{}, fmt.Errorf("herdr workspace %q has no pane", workspace.WorkspaceID)
-	case 1:
+	if len(panes) == 1 {
 		pane := panes[0]
 		observation.Pane = corebackend.PaneRef{
 			Backend:   corebackend.Herdr,
@@ -603,7 +596,7 @@ func workspaceObservation(
 	}
 	// Established workspaces may have multiple panes. Keep every pane so a
 	// saved root identity can be verified without guessing a new root.
-	return observation, nil
+	return observation
 }
 
 func (b *Backend) runWorktreeMutation(
