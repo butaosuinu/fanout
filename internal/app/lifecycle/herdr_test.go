@@ -160,11 +160,11 @@ func TestHerdrMergeFastForwardsRecordedBranch(t *testing.T) {
 	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "merged.txt")
 	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "child")
 
-	opts := Options{
-		ProjectRoot: fixture.projectRoot,
-		StatePath:   state.Path(fixture.projectRoot),
-		Hooks:       hooks.EmptyConfig(),
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
 	}
+	opts := herdrLifecycleOptions(fixture, runtime)
 	if got := Merge(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
 		t.Fatalf("Merge() = %d, want %d", got, exitcode.OK)
 	}
@@ -172,6 +172,30 @@ func TestHerdrMergeFastForwardsRecordedBranch(t *testing.T) {
 	got := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", "HEAD"))
 	if got != want {
 		t.Fatalf("merged HEAD = %s, want child %s", got, want)
+	}
+}
+
+func TestHerdrMergeRejectsIncompleteIdentityBeforeGitMutation(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "untrusted.txt"), []byte("child\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "untrusted.txt")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "untrusted child")
+	fixture.pane.HerdrWorkspaceLabel = ""
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+	}
+	before := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", "HEAD"))
+
+	if got := Merge(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Merge() = %d, want %d", got, exitcode.Env)
+	}
+	after := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", "HEAD"))
+	if after != before || runtime.verifyCalls != 0 {
+		t.Fatalf("incomplete merge mutated or contacted runtime: HEAD %s -> %s, verify calls %d", before, after, runtime.verifyCalls)
 	}
 }
 
@@ -203,14 +227,7 @@ func TestHerdrCloseReopensCheckoutOnlyStateBeforeRemoval(t *testing.T) {
 	coordinator.Panes = []herdrrun.WorkspacePaneObservation{{
 		Pane: coordinator.Pane, TerminalID: coordinator.TerminalID, CWD: fixture.projectRoot,
 	}}
-	recordLifecyclePane(t, fixture.projectRoot, state.Pane{
-		Parent: "@manual", RuntimeParent: fixture.pane.RuntimeParent, IssueNum: -1,
-		Kind: state.PaneKindShell, Backend: backend.Herdr,
-		PaneID: coordinator.Pane.Pane, HerdrWorkspaceID: coordinator.WorkspaceID,
-		HerdrWorkspaceLabel: coordinator.Label, HerdrTerminalID: coordinator.TerminalID,
-		HerdrSession: fixture.pane.HerdrSession, HerdrSocketPath: fixture.pane.HerdrSocketPath,
-		WorktreePath: fixture.projectRoot,
-	})
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
 		workspaces:  []herdrrun.WorkspaceObservation{coordinator},
@@ -223,6 +240,32 @@ func TestHerdrCloseReopensCheckoutOnlyStateBeforeRemoval(t *testing.T) {
 	assertHerdrLifecycleRemoved(t, fixture)
 	if runtime.setupCalls != 1 || runtime.openCalls != 1 || runtime.removeCalls != 1 {
 		t.Fatalf("reopen calls = setup %d/open %d/remove %d, want 1/1/1", runtime.setupCalls, runtime.openCalls, runtime.removeCalls)
+	}
+}
+
+func TestFindHerdrCoordinatorIntentPreservesPlanOwnerScope(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	target := fixture.pane
+	target.Parent = "plan:demo"
+	coordinator := herdrLifecycleWorkspace("w-coordinator", "coordinator-label", fixture.projectRoot,
+		target.HerdrRepoKey, target.HerdrRepoRoot)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, target, coordinator)
+	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	intent, err := findHerdrCoordinatorIntent(locked, fixture.projectRoot, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.Parent != target.Parent || intent.OwnerProjectRoot != fixture.projectRoot {
+		t.Fatalf("plan coordinator identity = parent %q owner %q", intent.Parent, intent.OwnerProjectRoot)
 	}
 }
 
@@ -329,11 +372,65 @@ func TestHerdrCloseAcceptsResponseLossOnlyAfterAbsence(t *testing.T) {
 	}
 }
 
+func TestHerdrCloseRemovesResidualLaunchIntentAndEnvironment(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	runtimeDir := filepath.Join(fixture.projectRoot, "herdr-runtime")
+	if err := os.MkdirAll(filepath.Join(runtimeDir, "workload-env"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixture.pane.HerdrSocketPath = filepath.Join(runtimeDir, "herdr.sock")
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	worktreeIntentID, envPath := recordResidualHerdrLaunchIntent(t, fixture, runtimeDir)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+	}
+	journal, err := state.LoadHerdrIntents(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := journal.FindIntent(worktreeIntentID); found {
+		t.Fatal("residual Herdr launch intent remains after cleanup")
+	}
+	if _, err := os.Lstat(envPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("residual Herdr launch environment remains: %v", err)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseRejectsResidualLaunchIntentForDifferentWorkspace(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	runtimeDir := filepath.Join(fixture.projectRoot, "herdr-runtime")
+	if err := os.MkdirAll(filepath.Join(runtimeDir, "workload-env"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixture.pane.HerdrSocketPath = filepath.Join(runtimeDir, "herdr.sock")
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	worktreeIntentID, _ := recordResidualHerdrLaunchIntent(t, fixture, runtimeDir)
+	rewriteResidualLaunchLabel(t, fixture.projectRoot, worktreeIntentID, "foreign-workspace")
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	assertHerdrLifecyclePreserved(t, fixture)
+	if runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+		t.Fatalf("mismatched launch intent issued mutations: remove %d/close %d", runtime.removeCalls, runtime.closeCalls)
+	}
+}
+
 func TestHerdrCloseDoesNotReplayIssuedRemoveAfterCrash(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	head := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
 	runHerdrLifecycleGit(t, fixture.projectRoot, "worktree", "remove", fixture.worktreePath)
-	intentID, err := herdrCleanupIntentID(fixture.projectRoot, fixture.pane)
+	_, intentID, err := herdrCleanupIntentIDs(fixture.projectRoot, fixture.pane)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,6 +565,135 @@ func herdrLifecycleWorkspace(id, label, path, repoKey, repoRoot string) herdrrun
 	}
 }
 
+func recordLifecycleCoordinatorIntent(
+	t *testing.T,
+	projectRoot string,
+	target state.Pane,
+	workspace herdrrun.WorkspaceObservation,
+) {
+	t.Helper()
+	locked, err := state.LockProjectForLaunch(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	journal, err := locked.HerdrIntents(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeOwnerRoot, err := state.HerdrOwnerProjectRoot(target.RuntimeParent, filepath.Clean(projectRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerRoot, err := state.HerdrOwnerProjectRoot(target.Parent, filepath.Clean(projectRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := state.HerdrCoordinatorIntentID(target.RuntimeParent, runtimeOwnerRoot, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(state.HerdrIntent{
+		ID: id, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentRealized,
+		Parent: target.Parent, RuntimeParent: target.RuntimeParent, OwnerProjectRoot: ownerRoot,
+		WorktreePath: workspace.CWD, WorkspaceLabel: workspace.Label,
+		Resource: state.HerdrResource{
+			WorkspaceID: workspace.WorkspaceID, Label: workspace.Label,
+			PaneID: workspace.Pane.Pane, TerminalID: workspace.TerminalID,
+			CurrentPath: workspace.CWD,
+		},
+		Session: target.HerdrSession, SocketPath: target.HerdrSocketPath,
+		ExpiresUnixMS: time.Now().Add(time.Minute).UnixMilli(),
+	})
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func recordResidualHerdrLaunchIntent(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	runtimeDir string,
+) (string, string) {
+	t.Helper()
+	worktreeIntentID, _, err := herdrCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
+	nonce := strings.Repeat("a", 32)
+	envPath := filepath.Join(runtimeDir, "workload-env", "env-"+nonce+".json")
+	if err := os.WriteFile(envPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	journal, err := locked.HerdrIntents(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(state.HerdrIntent{
+		ID: worktreeIntentID, Kind: state.HerdrIntentWorktree, Status: state.HerdrIntentRealized,
+		Parent: fixture.pane.Parent, RuntimeParent: fixture.pane.RuntimeParent,
+		IssueNum: fixture.pane.IssueNum, Slug: fixture.pane.Slug,
+		BranchName: fixture.pane.BranchName, FullBranchRef: "refs/heads/" + fixture.pane.BranchName,
+		BaseBranch: fixture.pane.BaseBranch, BaseSHA: head, ExpectedHead: head,
+		WorktreePath: fixture.pane.WorktreePath, BranchExisted: true,
+		WorkspaceLabel: fixture.pane.HerdrWorkspaceLabel,
+		Coordinator:    state.HerdrResource{WorkspaceID: "coordinator"},
+		Resource:       herdrResourceFromPane(fixture.pane),
+		Session:        fixture.pane.HerdrSession, SocketPath: fixture.pane.HerdrSocketPath,
+		ExpiresUnixMS: time.Now().Add(time.Minute).UnixMilli(),
+		Launch: &state.HerdrLaunch{
+			Nonce: nonce, Agent: "claude", AgentName: "fanout-" + strings.Repeat("a", 24),
+			Executable: "/usr/bin/true", EnvFilePath: envPath, EnvNameCount: 1,
+			LauncherReady: true, TokenIssued: true,
+		},
+	})
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	return worktreeIntentID, envPath
+}
+
+func rewriteResidualLaunchLabel(t *testing.T, projectRoot, intentID, label string) {
+	t.Helper()
+	locked, err := state.LockProjectForLaunch(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	journal, err := locked.HerdrIntents(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found {
+		t.Fatal("residual Herdr launch intent is missing")
+	}
+	intent.WorkspaceLabel = label
+	intent.Resource.Label = label
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func runHerdrLifecycleGit(t *testing.T, root string, args ...string) {
 	t.Helper()
 	_ = runHerdrLifecycleGitOutput(t, root, args...)
@@ -514,8 +740,10 @@ func assertHerdrLifecycleRemoved(t *testing.T, fixture herdrLifecycleFixture) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(journal.Intents) != 0 {
-		t.Fatalf("cleanup intent remains after completion: %#v", journal.Intents)
+	for _, intent := range journal.Intents {
+		if intent.Kind != state.HerdrIntentCoordinator {
+			t.Fatalf("child lifecycle intent remains after completion: %#v", journal.Intents)
+		}
 	}
 }
 

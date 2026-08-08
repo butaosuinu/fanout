@@ -330,6 +330,21 @@ func TestHerdrRowEnablesLifecycleActionsAndDefaultsCloseToWorktree(t *testing.T)
 	}
 }
 
+func TestLifecycleOptionsBuildsHerdrRuntimeForOwningRoot(t *testing.T) {
+	var gotRoot string
+	m := newModel(Options{
+		ProjectRoot: "/repo/home",
+		LifecycleHerdrRuntimeForRoot: func(root string) lifecycle.HerdrRuntimeFactory {
+			gotRoot = root
+			return nil
+		},
+	})
+	_ = m.lifecycleOptions("/repo/sibling")
+	if gotRoot != "/repo/sibling" {
+		t.Fatalf("Herdr lifecycle factory root = %q, want sibling owner", gotRoot)
+	}
+}
+
 func TestHelpKeepsHerdrInteractiveActionsDisabledButEnablesLifecycle(t *testing.T) {
 	m := newModel(Options{BackendSelection: backend.Selection{Name: backend.Tmux}})
 	m.allPanes = []paneView{{IssueNum: 1, Backend: backend.Herdr, PaneID: "w1:p1"}}

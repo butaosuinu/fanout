@@ -188,24 +188,22 @@ func Merge(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 		lg.Err("--merge: #%d is not recorded for parent %s in %s", issueNum, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
-	if strings.TrimSpace(pane.BranchName) == "" {
-		lg.Err("--merge: #%d has no branchName recorded in %s", issueNum, opts.StatePath)
+	locked, pane, ok, code := lockHerdrMergeTarget(opts, pane, lg, func(store state.Store) (state.Pane, bool) {
+		return store.Find(parent, issueNum)
+	})
+	if code != exitcode.OK {
+		return code
+	}
+	if locked != nil {
+		defer unlockState("--merge", locked, lg)
+	}
+	if !ok {
+		lg.Err("--merge: #%d is not recorded for parent %s in %s", issueNum, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
-	targetBranch := currentBranch(opts.ProjectRoot)
-	if !runBlockingHook(hooks.PreMerge, opts, pane, targetBranch, lg) {
-		return exitcode.Env
+	if code := mergeRecordedPane(opts, pane, fmt.Sprintf("#%d", issueNum), lg); code != exitcode.OK {
+		return code
 	}
-	out, err := gitLifecycle(opts.ProjectRoot, "merge", "--ff-only", pane.BranchName)
-	if err != nil {
-		lg.Err("--merge: git merge --ff-only %s failed for #%d; no conflict resolution was attempted", pane.BranchName, pane.IssueNum)
-		if s := strings.TrimSpace(string(out)); s != "" {
-			fmt.Fprintln(lg.Stderr(), s)
-		}
-		return exitcode.Env
-	}
-	runBackgroundHook(hooks.PostMerge, opts, pane, targetBranch, lg)
-	lg.Ok("#%d: merged %s with --ff-only", pane.IssueNum, pane.BranchName)
 	removeWatcherRunningLabelBestEffort(opts, parent, pane.IssueNum, remainingIssuePanesAfter(store.PanesForParent(parent), pane.IssueNum), lg)
 	return exitcode.OK
 }
@@ -221,9 +219,30 @@ func MergeTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
 		lg.Err("--merge: task %s is not recorded for parent %s in %s", taskID, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
-	if strings.TrimSpace(pane.BranchName) == "" {
-		lg.Err("--merge: task %s has no branchName recorded in %s", taskID, opts.StatePath)
+	locked, pane, ok, code := lockHerdrMergeTarget(opts, pane, lg, func(store state.Store) (state.Pane, bool) {
+		return store.FindTask(parent, taskID)
+	})
+	if code != exitcode.OK {
+		return code
+	}
+	if locked != nil {
+		defer unlockState("--merge", locked, lg)
+	}
+	if !ok {
+		lg.Err("--merge: task %s is not recorded for parent %s in %s", taskID, parent, opts.StatePath)
 		return exitcode.Invocation
+	}
+	return mergeRecordedPane(opts, pane, taskID, lg)
+}
+
+func mergeRecordedPane(opts Options, pane state.Pane, subject string, lg Logger) exitcode.Code {
+	if strings.TrimSpace(pane.BranchName) == "" {
+		lg.Err("--merge: %s has no branchName recorded in %s", subject, opts.StatePath)
+		return exitcode.Invocation
+	}
+	if err := validateHerdrMergeOperation(opts, pane); err != nil {
+		lg.Err("--merge: %s Herdr identity check failed: %v", subject, err)
+		return exitcode.Env
 	}
 	targetBranch := currentBranch(opts.ProjectRoot)
 	if !runBlockingHook(hooks.PreMerge, opts, pane, targetBranch, lg) {
@@ -231,14 +250,14 @@ func MergeTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
 	}
 	out, err := gitLifecycle(opts.ProjectRoot, "merge", "--ff-only", pane.BranchName)
 	if err != nil {
-		lg.Err("--merge: git merge --ff-only %s failed for task %s; no conflict resolution was attempted", pane.BranchName, taskID)
-		if s := strings.TrimSpace(string(out)); s != "" {
-			fmt.Fprintln(lg.Stderr(), s)
+		lg.Err("--merge: git merge --ff-only %s failed for %s; no conflict resolution was attempted", pane.BranchName, subject)
+		if details := strings.TrimSpace(string(out)); details != "" {
+			fmt.Fprintln(lg.Stderr(), details)
 		}
 		return exitcode.Env
 	}
 	runBackgroundHook(hooks.PostMerge, opts, pane, targetBranch, lg)
-	lg.Ok("%s: merged %s with --ff-only", taskID, pane.BranchName)
+	lg.Ok("%s: merged %s with --ff-only", subject, pane.BranchName)
 	return exitcode.OK
 }
 
@@ -415,6 +434,23 @@ func loadState(mode string, opts Options, lg Logger) (state.Store, exitcode.Code
 		return state.Store{}, exitcode.Invocation
 	}
 	return store, exitcode.OK
+}
+
+func lockHerdrMergeTarget(
+	opts Options,
+	pane state.Pane,
+	lg Logger,
+	find func(state.Store) (state.Pane, bool),
+) (*state.LockedStore, state.Pane, bool, exitcode.Code) {
+	if backend.NormalizeName(pane.Backend) != backend.Herdr {
+		return nil, pane, true, exitcode.OK
+	}
+	locked, code := lockStateOnly("--merge", opts, lg)
+	if code != exitcode.OK {
+		return nil, state.Pane{}, false, code
+	}
+	current, found := find(locked.Store)
+	return locked, current, found, exitcode.OK
 }
 
 func lockStateOnly(mode string, opts Options, lg Logger) (*state.LockedStore, exitcode.Code) {

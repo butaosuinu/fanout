@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -181,64 +180,65 @@ func verifyHerdrCheckout(
 	return err
 }
 
-func herdrCoordinatorRuntimeParent(pane state.Pane) string {
-	if pane.RuntimeParent == watcherStandaloneParent {
-		return strconv.Itoa(pane.IssueNum)
+func findHerdrCoordinatorIntent(
+	locked *state.LockedStore,
+	projectRoot string,
+	target state.Pane,
+) (state.HerdrIntent, error) {
+	id, ownerRoot, err := herdrCoordinatorIntentIdentity(projectRoot, target)
+	if err != nil {
+		return state.HerdrIntent{}, err
 	}
-	return pane.RuntimeParent
+	journal, err := locked.HerdrIntents(projectRoot)
+	if err != nil {
+		return state.HerdrIntent{}, err
+	}
+	intent, found := journal.FindIntent(id)
+	if !found {
+		return state.HerdrIntent{}, fmt.Errorf("saved Herdr coordinator intent is not recorded")
+	}
+	if !herdrCoordinatorIntentMatches(intent, target, ownerRoot) {
+		return state.HerdrIntent{}, fmt.Errorf("saved Herdr coordinator intent does not match the child row")
+	}
+	return intent, nil
 }
 
-func findHerdrCoordinatorPane(locked *state.LockedStore, target state.Pane) (state.Pane, error) {
-	want := herdrCoordinatorRuntimeParent(target)
-	var matches []state.Pane
-	for _, pane := range locked.Panes {
-		if pane.Parent == "@manual" && pane.IsShell() && backend.NormalizeName(pane.Backend) == backend.Herdr &&
-			pane.RuntimeParent == want {
-			matches = append(matches, pane)
-		}
+func herdrCoordinatorIntentIdentity(projectRoot string, target state.Pane) (string, string, error) {
+	projectRoot = filepath.Clean(projectRoot)
+	runtimeOwnerRoot, err := state.HerdrOwnerProjectRoot(target.RuntimeParent, projectRoot)
+	if err != nil {
+		return "", "", err
 	}
-	if len(matches) != 1 {
-		return state.Pane{}, fmt.Errorf("saved Herdr coordinator identity has %d state matches", len(matches))
+	ownerRoot, err := state.HerdrOwnerProjectRoot(target.Parent, projectRoot)
+	if err != nil {
+		return "", "", err
 	}
-	if err := validateHerdrCoordinatorIdentity(matches[0]); err != nil {
-		return state.Pane{}, err
+	issueNum := 0
+	if target.RuntimeParent == "@manual" || target.RuntimeParent == watcherStandaloneParent {
+		issueNum = target.IssueNum
 	}
-	return matches[0], nil
+	id, err := state.HerdrCoordinatorIntentID(target.RuntimeParent, runtimeOwnerRoot, issueNum)
+	return id, ownerRoot, err
 }
 
-func validateHerdrCoordinatorIdentity(pane state.Pane) error {
-	required := []string{
-		pane.PaneID,
-		pane.HerdrWorkspaceID,
-		pane.HerdrWorkspaceLabel,
-		pane.HerdrTerminalID,
-		pane.HerdrSession,
-		pane.HerdrSocketPath,
-		pane.WorktreePath,
-	}
-	for _, value := range required {
-		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("saved Herdr coordinator identity is incomplete")
-		}
-	}
-	return nil
+func herdrCoordinatorIntentMatches(intent state.HerdrIntent, target state.Pane, ownerRoot string) bool {
+	return intent.Kind == state.HerdrIntentCoordinator &&
+		intent.Status == state.HerdrIntentRealized &&
+		intent.Parent == target.Parent &&
+		intent.RuntimeParent == target.RuntimeParent &&
+		intent.OwnerProjectRoot == ownerRoot &&
+		intent.Session == target.HerdrSession &&
+		intent.SocketPath == target.HerdrSocketPath
 }
 
 func observeHerdrCoordinator(
 	ctx context.Context,
 	runtime HerdrRuntime,
-	pane state.Pane,
+	resource state.HerdrResource,
 ) (herdrrun.WorkspaceObservation, error) {
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
 		return herdrrun.WorkspaceObservation{}, err
-	}
-	resource := state.HerdrResource{
-		WorkspaceID: pane.HerdrWorkspaceID,
-		Label:       pane.HerdrWorkspaceLabel,
-		PaneID:      pane.PaneID,
-		TerminalID:  pane.HerdrTerminalID,
-		CurrentPath: filepath.Clean(pane.WorktreePath),
 	}
 	workspace, err := matchHerdrCoordinatorWorkspace(workspaces, resource)
 	if err != nil {

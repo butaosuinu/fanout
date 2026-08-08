@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
@@ -29,6 +30,56 @@ type HerdrRuntime interface {
 }
 
 type HerdrRuntimeFactory func(context.Context, state.Pane) (HerdrRuntime, error)
+
+func validateHerdrMergeOperation(opts Options, pane state.Pane) error {
+	if backend.NormalizeName(pane.Backend) != backend.Herdr {
+		return nil
+	}
+	if err := validateHerdrPaneIdentity(pane); err != nil {
+		return err
+	}
+	if opts.HerdrRuntime == nil {
+		return fmt.Errorf("Herdr lifecycle runtime is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), herdrCleanupTimeout)
+	defer cancel()
+	runtime, err := opts.HerdrRuntime(ctx, pane)
+	if err != nil {
+		return err
+	}
+	if err := runtime.VerifyOwned(ctx); err != nil {
+		return err
+	}
+	return verifyHerdrMergeTarget(ctx, opts.ProjectRoot, runtime, pane)
+}
+
+func verifyHerdrMergeTarget(ctx context.Context, projectRoot string, runtime HerdrRuntime, pane state.Pane) error {
+	resource := herdrResourceFromPane(pane)
+	observation, err := observeHerdrCleanup(ctx, runtime, projectRoot, resource)
+	if err != nil {
+		return err
+	}
+	if observation.checkout.PathAbsent || !observation.checkout.Registered {
+		return fmt.Errorf("saved Herdr merge checkout is absent or unregistered")
+	}
+	if observation.workspace != nil {
+		if err := verifyHerdrTerminalInvalidation(*observation.workspace, resource); err != nil {
+			return err
+		}
+	}
+	fullRef, err := worktree.LocalBranchRef(ctx, projectRoot, pane.BranchName)
+	if err != nil {
+		return err
+	}
+	expectedHead, found, err := worktree.ObserveBranch(ctx, projectRoot, fullRef)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("saved Herdr merge branch is absent")
+	}
+	return verifyHerdrCheckout(ctx, projectRoot, fullRef, expectedHead, resource)
+}
 
 func validateHerdrCloseOperation(opts Options, pane state.Pane, mode CloseMode, lg Logger) bool {
 	switch {
@@ -80,13 +131,31 @@ func runHerdrCleanup(
 	if err := runtime.VerifyOwned(ctx); err != nil {
 		return err
 	}
-	journal, err := locked.HerdrIntents(opts.ProjectRoot)
+	journal, intent, worktreeIntentID, err := loadHerdrCleanupIntent(ctx, opts, locked, runtime, pane, mode)
 	if err != nil {
 		return err
 	}
-	intentID, err := herdrCleanupIntentID(opts.ProjectRoot, pane)
+	return driveHerdrCleanup(ctx, opts, journal, runtime, pane, intent, worktreeIntentID, lg)
+}
+
+func loadHerdrCleanupIntent(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	runtime HerdrRuntime,
+	pane state.Pane,
+	mode CloseMode,
+) (*state.LockedHerdrIntents, state.HerdrIntent, string, error) {
+	journal, err := locked.HerdrIntents(opts.ProjectRoot)
 	if err != nil {
-		return err
+		return nil, state.HerdrIntent{}, "", err
+	}
+	worktreeIntentID, intentID, err := herdrCleanupIntentIDs(opts.ProjectRoot, pane)
+	if err != nil {
+		return nil, state.HerdrIntent{}, "", err
+	}
+	if err := validateHerdrLaunchIntentForCleanup(journal, worktreeIntentID, opts.ProjectRoot, pane); err != nil {
+		return nil, state.HerdrIntent{}, "", err
 	}
 	intent, found := journal.FindIntent(intentID)
 	if !found {
@@ -95,21 +164,57 @@ func runHerdrCleanup(
 		err = validateSavedHerdrCleanup(intent, opts.ProjectRoot, pane, mode)
 	}
 	if err != nil {
-		return err
+		return nil, state.HerdrIntent{}, "", err
 	}
-	return driveHerdrCleanup(ctx, opts, journal, runtime, pane, intent, lg)
+	return journal, intent, worktreeIntentID, nil
 }
 
-func herdrCleanupIntentID(projectRoot string, pane state.Pane) (string, error) {
+func herdrCleanupIntentIDs(projectRoot string, pane state.Pane) (string, string, error) {
 	ownerRoot, err := state.HerdrOwnerProjectRoot(pane.Parent, filepath.Clean(projectRoot))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	worktreeID, err := state.HerdrWorktreeIntentID(pane.Parent, ownerRoot, pane.IssueNum, pane.TaskID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return state.HerdrCleanupIntentID(worktreeID)
+	cleanupID, err := state.HerdrCleanupIntentID(worktreeID)
+	return worktreeID, cleanupID, err
+}
+
+func validateHerdrLaunchIntentForCleanup(
+	journal *state.LockedHerdrIntents,
+	worktreeIntentID, projectRoot string,
+	pane state.Pane,
+) error {
+	intent, found := journal.FindIntent(worktreeIntentID)
+	if !found {
+		return nil
+	}
+	ownerRoot, err := state.HerdrOwnerProjectRoot(pane.Parent, filepath.Clean(projectRoot))
+	if err != nil {
+		return err
+	}
+	allowedStatus := intent.Status == state.HerdrIntentRealized ||
+		intent.Status == state.HerdrIntentManualCleanupRequired
+	requirements := []bool{
+		intent.Kind == state.HerdrIntentWorktree, allowedStatus,
+		intent.Parent == pane.Parent, intent.RuntimeParent == pane.RuntimeParent,
+		intent.OwnerProjectRoot == ownerRoot, intent.IssueNum == pane.IssueNum,
+		intent.TaskID == pane.TaskID, intent.Slug == pane.Slug,
+		intent.BranchName == pane.BranchName, intent.FullBranchRef == "refs/heads/"+pane.BranchName,
+		intent.BaseBranch == pane.BaseBranch, intent.WorktreePath == filepath.Clean(pane.WorktreePath),
+		intent.BranchCreated == pane.HerdrBranchCreated, intent.BranchExisted == !pane.HerdrBranchCreated,
+		intent.WorkspaceLabel == pane.HerdrWorkspaceLabel, intent.Resource == herdrResourceFromPane(pane),
+		intent.Session == pane.HerdrSession, intent.SocketPath == pane.HerdrSocketPath,
+		intent.Launch != nil && intent.Launch.TokenIssued,
+	}
+	for _, matches := range requirements {
+		if !matches {
+			return fmt.Errorf("saved Herdr launch intent does not match the child row")
+		}
+	}
+	return nil
 }
 
 func beginHerdrCleanup(
@@ -135,7 +240,7 @@ func beginHerdrCleanup(
 		return state.HerdrIntent{}, err
 	}
 	if intent.CleanupPhase == state.HerdrCleanupReopen {
-		intent, err = attachHerdrCleanupCoordinator(ctx, locked, runtime, pane, intent)
+		intent, err = attachHerdrCleanupCoordinator(ctx, locked, runtime, opts.ProjectRoot, pane, intent)
 		if err != nil {
 			return state.HerdrIntent{}, err
 		}
@@ -160,14 +265,15 @@ func attachHerdrCleanupCoordinator(
 	ctx context.Context,
 	locked *state.LockedStore,
 	runtime HerdrRuntime,
+	projectRoot string,
 	pane state.Pane,
 	intent state.HerdrIntent,
 ) (state.HerdrIntent, error) {
-	coordinator, err := findHerdrCoordinatorPane(locked, pane)
+	coordinator, err := findHerdrCoordinatorIntent(locked, projectRoot, pane)
 	if err != nil {
 		return intent, err
 	}
-	live, err := observeHerdrCoordinator(ctx, runtime, coordinator)
+	live, err := observeHerdrCoordinator(ctx, runtime, coordinator.Resource)
 	if err != nil {
 		return intent, err
 	}
@@ -316,6 +422,7 @@ func driveHerdrCleanup(
 	runtime HerdrRuntime,
 	pane state.Pane,
 	intent state.HerdrIntent,
+	worktreeIntentID string,
 	lg Logger,
 ) error {
 	if intent.Status == state.HerdrIntentManualCleanupRequired || intent.Status == state.HerdrIntentIssued {
@@ -337,7 +444,7 @@ func driveHerdrCleanup(
 	if err != nil {
 		return err
 	}
-	return finalizeHerdrCleanup(ctx, opts.ProjectRoot, journal, pane, intent, lg)
+	return finalizeHerdrCleanup(ctx, opts.ProjectRoot, journal, pane, intent, worktreeIntentID, lg)
 }
 
 func finalizeHerdrCleanup(
@@ -346,6 +453,7 @@ func finalizeHerdrCleanup(
 	journal *state.LockedHerdrIntents,
 	pane state.Pane,
 	intent state.HerdrIntent,
+	worktreeIntentID string,
 	lg Logger,
 ) error {
 	if intent.Status != state.HerdrIntentRealized {
@@ -354,8 +462,20 @@ func finalizeHerdrCleanup(
 	if branchErr := finishHerdrBranchCleanup(ctx, projectRoot, intent); branchErr != nil {
 		lg.Warn("%s: %v; leaving branch in place", paneLabel(pane), branchErr)
 	}
+	if err := discardSavedHerdrLaunchEnvironment(journal, worktreeIntentID); err != nil {
+		return err
+	}
 	journal.RemoveIntent(intent.ID)
+	journal.RemoveIntent(worktreeIntentID)
 	return journal.Save()
+}
+
+func discardSavedHerdrLaunchEnvironment(journal *state.LockedHerdrIntents, worktreeIntentID string) error {
+	intent, found := journal.FindIntent(worktreeIntentID)
+	if !found {
+		return nil
+	}
+	return herdrrun.DiscardWorkloadEnvironment(filepath.Dir(intent.SocketPath), intent.Launch)
 }
 
 func executeHerdrCleanupPhase(
