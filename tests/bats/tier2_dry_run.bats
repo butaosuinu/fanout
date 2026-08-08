@@ -33,6 +33,28 @@ load helpers
   assert_golden scenario-herdr-dry-run
 }
 
+@test "scenario-herdr-dry-run with --team: registry seed remains side-effect free" {
+  skip_unless_fanout_go
+  use_fixture scenario-herdr-dry-run
+  export HERDR_SESSION=fixture-session
+  export HERDR_SOCKET_PATH=/tmp/herdr-fixture.sock
+  run_fanout_dry 100 --backend herdr --team
+  assert_success
+  [[ "$output" == *"# would seed team registry: 2 peer(s)"* ]]
+  [[ "$output" != *"--team child launch until issue #568"* ]]
+}
+
+@test "scenario-herdr-dry-run with codex --team: bridge uses the owned launch protocol" {
+  skip_unless_fanout_go
+  use_fixture scenario-herdr-dry-run
+  export HERDR_SESSION=fixture-session
+  export HERDR_SOCKET_PATH=/tmp/herdr-fixture.sock
+  run_fanout_dry 100 --agent codex --backend herdr --team
+  assert_success
+  [[ "$output" == *"# agent argv: fanout-go __codex-team-tui"* ]]
+  [[ "$output" == *"# would seed team registry: 2 peer(s)"* ]]
+}
+
 @test "scenario-body-task-list: children come only from parent body task-list" {
   use_fixture scenario-body-task-list
   run_fanout_dry 200

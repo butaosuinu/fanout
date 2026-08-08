@@ -91,10 +91,10 @@ fanout 123 --base-branch release/v2 --branch-prefix fanout/release/
 | フラグ | 引数 | 説明 |
 |---|---|---|
 | `--agent` | `<name>` または `<NUM>=<name>` | 子ペインで起動する agent CLI: `claude`、`codex`、`opencode`。`FANOUT_AGENT` 未設定なら必須。素の `--agent <name>` は全ての子の既定を設定し、繰り返し可能な `--agent <NUM>=<name>` 形式は子 issue（または Project item）1 件を番号で上書きする。例: `--agent codex --agent 456=claude`。各子はまず一致する per-target 上書きから agent を解決し、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決する。未知の agent はペイン作成前に失敗し、live 実行では agent CLI のインストールも確認するが、いずれもその run で実際に選択された agent についてのみ行う。 |
-| `--backend` | `<tmux\|herdr>` | この run の runtime backend。既定: `tmux`。[herdr backend]({{< relref "/docs/herdr-backend" >}}) は issue と Project の子をリポジトリの owned session で起動する。記録済みペインを持つ親は記録された backend を使い続け、矛盾する上書きは backend を混ぜずに失敗する。herdr と `--team` の組み合わせ、Codex 子の Plan Mode は変更前に拒否する。 |
+| `--backend` | `<tmux\|herdr>` | この run の runtime backend。既定: `tmux`。[herdr backend]({{< relref "/docs/herdr-backend" >}}) は issue と Project の子をリポジトリの owned session で起動する。記録済みペインを持つ親は記録された backend を使い続け、矛盾する上書きは backend を混ぜずに失敗する。herdr の Codex 子は Plan Mode を変更前に拒否する。 |
 | `--session` | `<tmux-session>` | 起動元のペインではなく指定した tmux セッション名を target にする。fanout 自体は引き続き tmux 内から実行する必要がある。 |
 | `--sleep` | `<seconds>` | 子の作成成功ごとに挟む待機秒数。既定: `4`。launch 間の rate limit であり、retry 用ノブではない。 |
-| `--team` | — | その run を兄弟協調に opt-in する。各子の通常 briefing に「Coordinating with your sibling panes」roster 節を付け、作成済みペインを親の peer レジストリ（[`fanout msg`](#fanout-msg) サブコマンドが読む parent ごとの SQLite バス）に seed する。Plan Mode の Codex 子は seed されるが最小限の Plan-Mode briefing を受け取る。Plan Mode が優先され、Codex team bridge は無効になる。どちらも best-effort で、レジストリの失敗が fan-out を止めることはない — 例外は新規起動の非 Plan `codex` ペインの app-server ブリッジ起動で、ペイン内の DB セットアップは fail-fast（不正な `FANOUT_DB_PATH`、DB の所有者/権限の不正はその launch を失敗させる）。herdr backend は変更前にこの flag を拒否する。既定: off。 |
+| `--team` | — | その run を兄弟協調に opt-in する。各子の通常 briefing に「Coordinating with your sibling panes」roster 節を付け、作成済みペインを親の peer レジストリ（[`fanout msg`](#fanout-msg) サブコマンドが読む parent ごとの SQLite バス）に seed する。Plan Mode の Codex 子は seed されるが最小限の Plan-Mode briefing を受け取る。Plan Mode が優先され、Codex team bridge は無効になる。どちらも best-effort で、レジストリの失敗が fan-out を止めることはない — 例外は新規起動の非 Plan `codex` ペインの app-server ブリッジ起動で、ペイン内の DB セットアップは fail-fast（不正な `FANOUT_DB_PATH`、DB の所有者/権限の不正はその launch を失敗させる）。tmux と herdr は同じ peer registry と push lane を使う。既定: off。 |
 | `--dry-run` | — | backend 固有の worktree、runtime、agent 起動コマンドを実行せずに表示する。worktree、ペイン、state row、briefing file は作らない。 |
 | `--debug` | — | 追加の診断ログを有効化する。 |
 | `--popup-timeout` | `<seconds>` | 旧ランタイム互換の deprecated フラグ。受理されるが無視される。 |
@@ -156,7 +156,7 @@ spec フォーマット:
 | `--branch-prefix` | `<prefix>` | 生成 task branch 名の prefix。 |
 | `--no-refresh` | — | task worktree 作成前の base branch refresh をスキップする。 |
 | `--backend` | `<tmux\|herdr>` | この plan run の runtime backend。`plan.source` が issue を指す plan はその issue の backend binding を共有し、issue-less の plan は現在の project の state 内で `plan:<slug>` 単位に sticky。herdr は task をリポジトリの owned session で起動する。 |
-| `--team` | — | その plan run を兄弟協調に opt-in する。issue モードと同じだが、peer は issue 番号ではなく **task ID** で指定する（issue-less な plan task には `#N` が無い）。plan の per-parent peer レジストリに seed し、各 task briefing に roster 節を付ける。plan に Codex team task が含まれるときのレジストリ preseed は fail-fast で、DB の失敗はペイン作成前に run を止める。plan のバスは `/tmp/fanout-<repo>-plan-<slug>.db`。herdr は変更前にこの flag を拒否する。plan の read / lifecycle モード（`--status` / `--close` / `--merge` / `--cleanup`）とは併用不可。既定: off。 |
+| `--team` | — | その plan run を兄弟協調に opt-in する。issue モードと同じだが、peer は issue 番号ではなく **task ID** で指定する（issue-less な plan task には `#N` が無い）。plan の per-parent peer レジストリに seed し、各 task briefing に roster 節を付ける。plan に Codex team task が含まれるときのレジストリ preseed は fail-fast で、DB の失敗はペイン作成前に run を止める。plan のバスは `/tmp/fanout-<repo>-plan-<slug>.db`。tmux と herdr は同じ preseed / cleanup 経路を使う。plan の read / lifecycle モード（`--status` / `--close` / `--merge` / `--cleanup`）とは併用不可。既定: off。 |
 
 `--agent` は issue モードと同じ働きですが、per-target 上書きは issue 番号ではなく task ID をキーにします。`--agent <name>` が既定を設定し、繰り返し可能な `--agent <task-id>=<name>` 形式が task 1 件を上書きします。各 task はまず一致する上書き、次に global `--agent`、最後に `FANOUT_AGENT` の順に解決します。
 
@@ -356,7 +356,7 @@ live な [TUI コンソール]({{< relref "/docs/monitoring" >}})ペインに切
 fanout msg <verb> [options] [body...]
 ```
 
-parent ごとの SQLite メッセージバス上での兄弟協調です。fanout したペイン内で実行すると、`fanout msg` は自分がどの子でどの親に属すかを、tmux ペインと `.fanout/state.json` から自動検出します。ペインは fan-out 時に [`--team`](#実行制御フラグ) で opt-in しますが、後から任意のペインが自分で `register` することもできます。Claude Code の Agent Teams との違いと協調のワークフローは[ワークフロー]({{< relref "/docs/workflow" >}})を参照してください。
+parent ごとの SQLite メッセージバス上での兄弟協調です。fanout したペイン内で実行すると、`fanout msg` は runtime pane または管理対象 worktree と、owning checkout の `.fanout/state.json` から自分の子と親を自動検出します。ペインは fan-out 時に [`--team`](#実行制御フラグ) で opt-in しますが、後から任意のペインが自分で `register` することもできます。Claude Code の Agent Teams との違いと協調のワークフローは[ワークフロー]({{< relref "/docs/workflow" >}})を参照してください。
 
 | verb | 説明 |
 |---|---|
@@ -374,7 +374,7 @@ verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` �
 
 [`fanout plan --team`](#plan-fan-out-issue-less) の run では、peer は issue 番号ではなく **task ID** で指定します: `send --to <task-id>`、`peers` は現在の task ID 一覧を表示します。plan モードのペインの `--json` 出力には `selfTask` / `fromTask` / `toTask` フィールドが付き、合成 peer 番号から task ID を解決できます。issue / Project の JSON は変わりません。
 
-データベースは `/tmp/fanout-<repo>-<parent>.db` に置かれ、`FANOUT_DB_PATH` で上書きできます。メッセージは DB に永続し、兄弟は自分のチェックポイントで読みます。`--team` ではさらに `claude` ペインと新規起動の非 Plan `codex` ペインに push レーンが載り、到着ごとに配信します: `claude` ペインは briefing の指示で Monitor ツールの下で `fanout msg watch` を回し、新規起動の非 Plan `codex` ペインは app-server ブリッジ経由になり、idle な turn へ未読メッセージを引用付きの untrusted data として注入します（Codex Plan Mode のペインは pull のまま）。どちらのレーンもペインの tmux 入力には書き込みません — それをするのは `nudge` だけです。レーンが使えないとき（Monitor 不可、restore した codex ペイン）は pull に戻ります。注入失敗の回収は `inbox --all` です（失敗した分は既読化済みのため）。ブリッジの起動自体に失敗した場合（不正な `FANOUT_DB_PATH`、DB の所有者や権限の不正など）は fallback ではなく、launch 自体が失敗してペインと worktree が片づけられます。pure-Go の SQLite ドライバが同梱されているため、外部 `sqlite3` は不要です。
+データベースは `/tmp/fanout-<repo>-<parent>.db` に置かれ、`FANOUT_DB_PATH` で上書きできます。herdr `--team` では、launcher と子 worktree が別の file を開かないよう、上書きに絶対 path が必要です。メッセージは DB に永続し、兄弟は自分のチェックポイントで読みます。`--team` ではさらに `claude` ペインと新規起動の非 Plan `codex` ペインに push レーンが載り、到着ごとに配信します: `claude` ペインは briefing の指示で Monitor ツールの下で `fanout msg watch` を回し、新規起動の非 Plan `codex` ペインは app-server ブリッジ経由になり、idle な turn へ未読メッセージを引用付きの untrusted data として注入します（Codex Plan Mode のペインは pull のまま）。どちらのレーンもペインの tmux 入力には書き込みません — それをするのは `nudge` だけです。レーンが使えないとき（Monitor 不可、restore した codex ペイン）は pull に戻ります。注入失敗の回収は `inbox --all` です（失敗した分は既読化済みのため）。ブリッジの起動自体に失敗した場合（不正な `FANOUT_DB_PATH`、DB の所有者や権限の不正など）は fallback ではなく、その子の launch が失敗します。pure-Go の SQLite ドライバが同梱されているため、外部 `sqlite3` は不要です。
 
 | Exit code | 意味 |
 |---|---|
@@ -428,7 +428,7 @@ fanout check-update
 | `FANOUT_TUI_ENHANCED_KEYS` | `0` で TUI prompt 欄の enhanced keyboard input を無効化する。既定は有効。`Shift+Enter` の改行は端末が区別して報告する必要があり（fanout が tmux `extended-keys` を有効化する）、`Ctrl+J` は常に使える。 |
 | `FANOUT_NTFY_URL` | ntfy POST URL（`ntfyURL`）の環境変数レイヤ。 |
 | `FANOUT_SLACK_WEBHOOK_URL` | Slack webhook POST URL（`slackWebhookURL`）の環境変数レイヤ。 |
-| `FANOUT_DB_PATH` | `--team` と `fanout msg` が使う parent ごとの peer messaging SQLite パスを上書きする。既定: `/tmp/fanout-<repo>-<parent>.db`。 |
+| `FANOUT_DB_PATH` | `--team` と `fanout msg` が使う parent ごとの peer messaging SQLite path を上書きする。herdr `--team` では絶対 path が必要。既定: `/tmp/fanout-<repo>-<parent>.db`。 |
 | `FANOUT_SKIP_PR_REVIEW` | PR レビューゲート hook の 1 回限りのバイパス: `gh pr create` の先頭に `FANOUT_SKIP_PR_REVIEW=1` を付ける。[トラブルシューティング]({{< relref "/docs/troubleshooting" >}})を参照。 |
 
 bool の settings 変数は `1/true/yes/on` と `0/false/no/off` を受け付けます（大小文字は無視）。integer の watcher 変数は 10 進整数を受け付けます。不正な値は warn して無視されます。settings の解決順序では CLI flag と設定ファイルの間に位置します。

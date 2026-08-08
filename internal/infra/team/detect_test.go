@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -271,6 +272,23 @@ func TestIdentifyPaneSynthesizesPlanTaskIdentity(t *testing.T) {
 	}
 	if id.Issue == 0 {
 		t.Error("Identity.Issue is 0; a plan pane must self-detect a non-zero peer number")
+	}
+}
+
+func TestIdentifyPaneResolvesCanonicalHerdrRowFromWorktree(t *testing.T) {
+	pane := state.Pane{
+		Parent: "524", IssueNum: 568, Backend: backend.Herdr,
+		PaneID: "w1:p1", HerdrWorkspaceID: "w1", HerdrTerminalID: "terminal-568",
+		WorktreePath: "/repo/.fanout/worktrees/herdr-peer-568", Agent: "codex",
+	}
+
+	id, err := IdentifyPane("", pane.WorktreePath, state.Store{Panes: []state.Pane{pane}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.Issue != 568 || id.Parent != "524" || id.Pane.PaneID != pane.PaneID ||
+		id.Pane.HerdrWorkspaceID != pane.HerdrWorkspaceID || id.Pane.HerdrTerminalID != pane.HerdrTerminalID {
+		t.Fatalf("Herdr identity = %+v, want canonical row %+v", id, pane)
 	}
 }
 

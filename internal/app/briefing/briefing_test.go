@@ -511,13 +511,13 @@ func TestTaskTeamSectionAbsentWithoutTeamContext(t *testing.T) {
 func TestTeamWatchSectionFollowsTeamSectionForClaude(t *testing.T) {
 	issueTeam := testTeamContext()
 	issueGot := Render(101, "First child", "Issue body", "claude", "main", settings.Defaults(), false, issueTeam)
-	if !strings.Contains(issueGot, teamSection(101, issueTeam)+teamWatchSection) {
+	if !strings.Contains(issueGot, teamSection(101, issueTeam)+teamWatchSection("101", issueTeam)) {
 		t.Fatalf("Render(..., \"claude\", team) does not append the watch section directly after the team section:\n%s", issueGot)
 	}
 
 	taskTeam := testTaskTeamContext()
 	taskGot := RenderTask("launch-plan", "Launch plan", "base-types", "Define base types", "Task body", "claude", "main", settings.Defaults(), false, taskTeam)
-	if !strings.Contains(taskGot, taskTeamSection("base-types", taskTeam)+teamWatchSection) {
+	if !strings.Contains(taskGot, taskTeamSection("base-types", taskTeam)+teamWatchSection("base-types", taskTeam)) {
 		t.Fatalf("RenderTask(..., \"claude\", team) does not append the watch section directly after the team section:\n%s", taskGot)
 	}
 }
@@ -529,12 +529,12 @@ func TestTeamWatchSectionFollowsTeamSectionForClaude(t *testing.T) {
 func TestTeamWatchSectionPinsPushMessagingContract(t *testing.T) {
 	// Wrap-insensitive: the const's hard line breaks are incidental
 	// formatting, so contract phrases are matched with whitespace collapsed.
-	normalized := strings.Join(strings.Fields(teamWatchSection), " ")
+	normalized := strings.Join(strings.Fields(teamWatchSection("101", testTeamContext())), " ")
 	for _, want := range []string{
 		"## Push messages: run the message watcher (Monitor)",
 		"as your FIRST tool action",
 		"Monitor tool in command mode, persistent",
-		"`fanout msg watch`, with persistent: true",
+		"`fanout msg watch --self 101 --parent 100`, with persistent: true",
 		"Do not wait on it",
 		"still post a one-line heads-up before touching files siblings may share",
 		"Start it exactly once",

@@ -23,6 +23,27 @@ func TestWriteFailedStatusReportsPreControllerFailure(t *testing.T) {
 	}
 }
 
+func TestStartupFailureReturnsOnlyFailedStatus(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	if err := StartupFailure(missing); err != nil {
+		t.Fatalf("missing status error = %v", err)
+	}
+	ready := filepath.Join(t.TempDir(), "ready.json")
+	if err := writeStatus(ready, Status{Status: statusReady}); err != nil {
+		t.Fatal(err)
+	}
+	if err := StartupFailure(ready); err != nil {
+		t.Fatalf("ready status error = %v", err)
+	}
+	failed := filepath.Join(t.TempDir(), "failed.json")
+	if err := WriteFailedStatus(failed, errors.New("owner mismatch")); err != nil {
+		t.Fatal(err)
+	}
+	if err := StartupFailure(failed); err == nil || err.Error() != "owner mismatch" {
+		t.Fatalf("failed status error = %v", err)
+	}
+}
+
 func TestWaitForCodexPlanTUIReadyReadsReadyStatus(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "status.json")
 	if err := writeStatus(path, Status{Status: statusReady}); err != nil {

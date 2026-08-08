@@ -91,15 +91,17 @@ type HerdrIntent struct {
 // HerdrLaunch is the non-secret launch capsule recorded after workspace
 // realization. The environment itself lives in a one-shot owner-only file.
 type HerdrLaunch struct {
-	Nonce         string   `json:"nonce"`
-	Agent         string   `json:"agent"`
-	AgentName     string   `json:"agentName"`
-	Executable    string   `json:"executable"`
-	Args          []string `json:"args"`
-	EnvFilePath   string   `json:"envFilePath"`
-	EnvNameCount  int      `json:"envNameCount"`
-	LauncherReady bool     `json:"launcherReady,omitempty"`
-	TokenIssued   bool     `json:"tokenIssued,omitempty"`
+	Nonce               string   `json:"nonce"`
+	Agent               string   `json:"agent"`
+	AgentName           string   `json:"agentName"`
+	Executable          string   `json:"executable"`
+	Args                []string `json:"args"`
+	TeamDBPath          string   `json:"teamDbPath,omitempty"`
+	CodexTeamStatusPath string   `json:"codexTeamStatusPath,omitempty"`
+	EnvFilePath         string   `json:"envFilePath"`
+	EnvNameCount        int      `json:"envNameCount"`
+	LauncherReady       bool     `json:"launcherReady,omitempty"`
+	TokenIssued         bool     `json:"tokenIssued,omitempty"`
 }
 
 // HerdrIntents is the repository-common intent journal. It holds intents
@@ -567,6 +569,7 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 		launch.Agent != "",
 		herdrAgentName.MatchString(launch.AgentName),
 		cleanAbsolute(launch.Executable),
+		validHerdrTeamPaths(launch),
 		cleanAbsolute(launch.EnvFilePath),
 		launch.EnvNameCount > 0,
 	}
@@ -582,6 +585,13 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 		return fmt.Errorf("launch token was issued before launcher readiness")
 	}
 	return nil
+}
+
+func validHerdrTeamPaths(launch *HerdrLaunch) bool {
+	teamPathOK := launch.TeamDBPath == "" || cleanAbsolute(launch.TeamDBPath)
+	statusPathOK := launch.CodexTeamStatusPath == "" ||
+		(launch.TeamDBPath != "" && cleanAbsolute(launch.CodexTeamStatusPath))
+	return teamPathOK && statusPathOK
 }
 
 func cleanAbsolute(path string) bool {

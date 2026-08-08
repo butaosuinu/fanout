@@ -143,7 +143,7 @@ func TestRunMsgNudge(t *testing.T) {
 			listErr: errors.New("tmux down"), wantCode: exitcode.OK, wantListed: true, wantStderr: "tmux is unavailable",
 		},
 		{
-			name: "herdr automatic nudge is disabled before runtime IO", req: Request{Verb: "nudge", To: 71}, store: withHerdr,
+			name: "herdr recipient resolves before issue 552 delivery gate", req: Request{Verb: "nudge", To: 71}, store: withHerdr,
 			wantCode: exitcode.OK, wantStderr: "automatic nudge is unavailable for herdr backend",
 		},
 		{

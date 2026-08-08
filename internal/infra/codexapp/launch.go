@@ -42,23 +42,29 @@ func LaunchCommand(fanoutPath, codexPath, prompt, statusPath string) string {
 // team bridge. self is an issue number or plan task id; passing it explicitly
 // avoids pane-identity detection before the launcher's state row exists.
 func TeamLaunchCommand(fanoutPath, codexPath, prompt, self, parent, statusPath string) string {
+	spec := TeamLaunchSpec(fanoutPath, codexPath, prompt, self, parent, statusPath)
+	args := append([]string{spec.Executable}, spec.Args...)
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = agent.ShellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+// TeamLaunchSpec is the non-shell form of TeamLaunchCommand. Runtime backends
+// that own the child process use it without reparsing shell quoting.
+func TeamLaunchSpec(fanoutPath, codexPath, prompt, self, parent, statusPath string) agent.LaunchSpec {
 	if strings.TrimSpace(fanoutPath) == "" {
 		fanoutPath = "fanout"
 	}
-	args := []string{
-		fanoutPath,
+	return agent.LaunchSpec{Executable: fanoutPath, Args: []string{
 		TeamTUICommand,
 		"--codex", codexPath,
 		"--prompt", prompt,
 		"--self", self,
 		"--parent", parent,
 		"--status-file", statusPath,
-	}
-	quoted := make([]string, len(args))
-	for i, arg := range args {
-		quoted[i] = agent.ShellQuote(arg)
-	}
-	return strings.Join(quoted, " ")
+	}}
 }
 
 // ResumeLaunchCommand builds the shell command that resumes an existing Plan

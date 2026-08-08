@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
@@ -142,7 +144,7 @@ func TestIssuedHerdrLaunchWithMatchingNameStillFailsClosed(t *testing.T) {
 		Cfg: &cliflags.Config{}, Log: log.New(false),
 		Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime,
 	}
-	err = launcher.failClosedIssuedHerdrLaunch(journal, intent)
+	err = launcher.failClosedIssuedHerdrLaunch(journal, intent, nil)
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) ||
 		!strings.Contains(err.Error(), "refusing automatic adoption") ||
 		!strings.Contains(err.Error(), "launch-token outcome is indeterminate") {
@@ -230,7 +232,7 @@ func TestFinalizeHerdrLaunchFailureBecomesManualCleanupRequired(t *testing.T) {
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
 	stale := intent
 	stale.Launch = nil
-	err = launcher.finalizeHerdrLaunch(Request{}, locked, stale, backend.LivePane{})
+	err = launcher.finalizeHerdrLaunch(Request{}, locked, stale, backend.LivePane{}, codexapp.Status{})
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("finalization error = %v, want manual cleanup", err)
 	}
@@ -252,6 +254,251 @@ func validTestHerdrLaunch() *state.HerdrLaunch {
 		Nonce: strings.Repeat("a", 32), Agent: "claude",
 		AgentName: "fanout-0123456789abcdef01234567", Executable: "/bin/claude",
 		EnvFilePath: "/tmp/env", EnvNameCount: 1, LauncherReady: true, TokenIssued: true,
+	}
+}
+
+func TestBuildHerdrLaunchSpecStartsCodexTeamBridge(t *testing.T) {
+	binDir := t.TempDir()
+	codexPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codexPath, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	req := Request{
+		Number: 568, ParentRef: "524", Agent: "codex", Prompt: "registry migration",
+		CodexTeamMode: true, CodexTeamStatusPath: "/tmp/team-status.json",
+	}
+
+	spec, err := buildHerdrLaunchSpec(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := codexapp.TeamLaunchSpec(
+		self, codexPath, req.Prompt, "568", req.ParentRef, req.CodexTeamStatusPath,
+	)
+	if spec.Executable != want.Executable || !slices.Equal(spec.Args, want.Args) {
+		t.Fatalf("Herdr team launch spec = %+v, want %+v", spec, want)
+	}
+}
+
+func TestWaitForHerdrCodexTeamConsumesReadyStatus(t *testing.T) {
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	if err := os.WriteFile(statusPath, []byte(`{"status":"ready","threadId":"thread-568","sessionId":"session-568"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{CodexTeamMode: true, CodexTeamStatusPath: statusPath}
+	intent := state.HerdrIntent{ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli()}
+
+	status, err := waitForHerdrCodexTeam(req, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ThreadID != "thread-568" || status.SessionID != "session-568" {
+		t.Fatalf("Codex team status = %+v", status)
+	}
+	if _, err := os.Stat(statusPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("consumed Codex team status remains: %v", err)
+	}
+}
+
+func TestWaitForHerdrCodexTeamRejectsExpiredLaunch(t *testing.T) {
+	req := Request{CodexTeamMode: true, CodexTeamStatusPath: filepath.Join(t.TempDir(), "status.json")}
+	intent := state.HerdrIntent{ExpiresUnixMS: time.Now().Add(-time.Second).UnixMilli()}
+
+	_, err := waitForHerdrCodexTeam(req, intent)
+	if err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired Codex team launch error = %v", err)
+	}
+}
+
+func TestHerdrCodexTeamStatusPathUsesPersistedLaunchIdentity(t *testing.T) {
+	savedPath := filepath.Join(t.TempDir(), "saved-status.json")
+	teamDBPath := filepath.Join(t.TempDir(), "team.db")
+	intent := state.HerdrIntent{Launch: &state.HerdrLaunch{
+		TeamDBPath: teamDBPath, CodexTeamStatusPath: savedPath,
+	}}
+	for _, req := range []Request{
+		{Number: 568, TeamDBPath: teamDBPath, CodexTeamMode: true, CodexTeamStatusPath: "/tmp/new-issue-status.json"},
+		{TaskID: "registry-migration", TeamDBPath: teamDBPath, CodexTeamMode: true, CodexTeamStatusPath: "/tmp/new-task-status.json"},
+	} {
+		got, err := herdrCodexTeamStatusPath(req, intent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != savedPath {
+			t.Fatalf("persisted team status path = %q, want %q", got, savedPath)
+		}
+	}
+}
+
+func TestPrepareHerdrLaunchRejectsTeamBindingChange(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		savedDBPath, requestedDBPath string
+		savedCodex, requestedCodex   bool
+		want                         string
+	}{
+		{
+			name: "team to non-team", savedDBPath: "/tmp/team-a.db", savedCodex: true,
+			want: "current team mode",
+		},
+		{
+			name: "non-team to team", requestedDBPath: "/tmp/team-a.db", requestedCodex: true,
+			want: "current team mode",
+		},
+		{
+			name: "Claude team DB changed", savedDBPath: "/tmp/team-a.db", requestedDBPath: "/tmp/team-b.db",
+			want: "current team DB path",
+		},
+		{
+			name: "Codex team DB changed", savedDBPath: "/tmp/team-a.db", requestedDBPath: "/tmp/team-b.db",
+			savedCodex: true, requestedCodex: true, want: "current team DB path",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newHerdrRealizeRepo(t)
+			runtime := &fakeHerdrLaunchRuntime{}
+			installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
+			hooks := deterministicHerdrRealizeHooks()
+			realizeTestHerdrCoordinator(t, repo, &runtime.fakeHerdrRealizeRuntime, hooks)
+			result, err := realizeHerdrWorktree(
+				context.Background(), testHerdrWorktreeRequest(repo, "team-mode", 568),
+				&runtime.fakeHerdrRealizeRuntime, hooks,
+			)
+			if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+				t.Fatal(err)
+			}
+			locked, err := state.LockProjectForLaunch(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = locked.Unlock() }()
+			intent := result.Intent
+			intent.Launch = validTestHerdrLaunch()
+			intent.Launch.TokenIssued = false
+			intent.Launch.TeamDBPath = tc.savedDBPath
+			if tc.savedCodex {
+				intent.Launch.Agent = "codex"
+				intent.Launch.CodexTeamStatusPath = filepath.Join(t.TempDir(), "saved-status.json")
+			}
+			journal, err := locked.HerdrIntents(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			journal.UpsertIntent(intent)
+			if saveErr := journal.Save(); saveErr != nil {
+				t.Fatal(saveErr)
+			}
+
+			_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).prepareHerdrLaunch(
+				Request{
+					Agent: "codex", TeamDBPath: tc.requestedDBPath, CodexTeamMode: tc.requestedCodex,
+					CodexTeamStatusPath: filepath.Join(t.TempDir(), "requested-status.json"),
+				}, locked, herdrrun.OwnedLaunchRoute{}, intent, nil,
+			)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("team mode mismatch error = %v", err)
+			}
+			if runtime.tokenCalls != 0 {
+				t.Fatalf("team mode mismatch issued %d launch token(s)", runtime.tokenCalls)
+			}
+		})
+	}
+}
+
+func TestAwaitHerdrCodexTeamFailureRequiresManualCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		writeStatus func(*testing.T, string)
+		remaining   time.Duration
+		wantFailure string
+	}{
+		{
+			name: "failed status", remaining: time.Second, wantFailure: "watcher boom",
+			writeStatus: func(t *testing.T, path string) {
+				t.Helper()
+				if err := codexapp.WriteFailedStatus(path, errors.New("watcher boom")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{name: "status timeout", remaining: 2 * time.Second, wantFailure: "timed out"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newHerdrRealizeRepo(t)
+			runtime := &fakeHerdrRealizeRuntime{}
+			installSuccessfulHerdrMutations(t, repo, runtime)
+			hooks := deterministicHerdrRealizeHooks()
+			realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+			req := testHerdrWorktreeRequest(repo, "team-failure", 568)
+			result, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
+			if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+				t.Fatal(err)
+			}
+			locked, err := state.LockProjectForLaunch(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = locked.Unlock() })
+			intent := result.Intent
+			statusPath := filepath.Join(t.TempDir(), "status.json")
+			intent.Launch = validTestHerdrLaunch()
+			intent.Launch.Agent = "codex"
+			intent.Launch.TeamDBPath = "/tmp/team.db"
+			intent.Launch.CodexTeamStatusPath = statusPath
+			intent.ExpiresUnixMS = time.Now().Add(tc.remaining).UnixMilli()
+			journal, err := locked.HerdrIntents(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			journal.UpsertIntent(intent)
+			if saveErr := journal.Save(); saveErr != nil {
+				t.Fatal(saveErr)
+			}
+			if tc.writeStatus != nil {
+				tc.writeStatus(t, statusPath)
+			}
+
+			_, err = awaitHerdrCodexTeam(
+				Request{
+					TeamDBPath:          "/tmp/team.db",
+					CodexTeamMode:       true,
+					CodexTeamStatusPath: filepath.Join(t.TempDir(), "regenerated-status.json"),
+				}, locked, repo, intent,
+			)
+			if !errors.Is(err, ErrHerdrManualCleanupRequired) {
+				t.Fatalf("Codex team readiness error = %v, want manual cleanup", err)
+			}
+			journal, err = locked.HerdrIntents(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			saved, found := journal.FindIntent(intent.ID)
+			if !found || saved.Status != state.HerdrIntentManualCleanupRequired ||
+				saved.Launch == nil || !saved.Launch.TokenIssued ||
+				!strings.Contains(saved.Failure, tc.wantFailure) {
+				t.Fatalf("saved failed team intent = (%+v, %t)", saved, found)
+			}
+			if store, loadErr := state.LoadProject(repo); loadErr != nil {
+				t.Fatal(loadErr)
+			} else if _, found := store.Find(req.Parent, req.IssueNum); found {
+				t.Fatal("failed team launch wrote a final state row")
+			}
+			mutationCount := len(runtime.mutations)
+			if err := locked.Unlock(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks); !errors.Is(err, ErrHerdrManualCleanupRequired) {
+				t.Fatalf("retry error = %v, want saved manual cleanup", err)
+			}
+			if len(runtime.mutations) != mutationCount {
+				t.Fatalf("retry issued %d new mutation(s)", len(runtime.mutations)-mutationCount)
+			}
+		})
 	}
 }
 
@@ -584,6 +831,70 @@ func TestHerdrLaunchDoesNotIssueTokenAfterLauncherWaitExpires(t *testing.T) {
 	)
 	if err == nil || runtime.tokenCalls != 0 {
 		t.Fatalf("expired launch error/token calls = %v/%d, want error/0", err, runtime.tokenCalls)
+	}
+}
+
+func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrLaunchRuntime{}
+	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, &runtime.fakeHerdrRealizeRuntime, hooks)
+	result, err := realizeHerdrWorktree(
+		context.Background(), testHerdrWorktreeRequest(repo, "team-start-failure", 568),
+		&runtime.fakeHerdrRealizeRuntime, hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	intent := result.Intent
+	intent.ExpiresUnixMS = time.Now().Add(time.Minute).UnixMilli()
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	intent.Launch = validTestHerdrLaunch()
+	intent.Launch.Agent = "codex"
+	intent.Launch.TokenIssued = false
+	intent.Launch.TeamDBPath = "/tmp/team.db"
+	intent.Launch.CodexTeamStatusPath = statusPath
+	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
+	runtime.processInfo = testHerdrLauncherProcess(intent, route.LauncherPath)
+	runtime.live = []backend.LivePane{testHerdrIdlePane(intent)}
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(intent)
+	if saveErr := journal.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if statusErr := codexapp.WriteFailedStatus(statusPath, errors.New("owner mismatch")); statusErr != nil {
+		t.Fatal(statusErr)
+	}
+
+	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrAgent(
+		context.Background(), Request{
+			Agent: "codex", TeamDBPath: "/tmp/team.db", CodexTeamMode: true,
+			CodexTeamStatusPath: filepath.Join(t.TempDir(), "regenerated-status.json"),
+		}, locked, route, intent, nil,
+	)
+	if !errors.Is(err, ErrHerdrManualCleanupRequired) || !strings.Contains(err.Error(), "owner mismatch") {
+		t.Fatalf("failed team agent start error = %v", err)
+	}
+	if runtime.tokenCalls != 1 || runtime.liveCalls != 1 {
+		t.Fatalf("failed team token/live calls = %d/%d, want 1/1", runtime.tokenCalls, runtime.liveCalls)
+	}
+	journal, err = locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, found := journal.FindIntent(intent.ID)
+	if !found || saved.Status != state.HerdrIntentManualCleanupRequired ||
+		!strings.Contains(saved.Failure, "owner mismatch") {
+		t.Fatalf("saved failed team start = (%+v, %t)", saved, found)
 	}
 }
 

@@ -316,6 +316,34 @@ func TestHerdrRollbackIntentKeepsIndependentMutationRecord(t *testing.T) {
 	}
 }
 
+func TestHerdrLaunchRequiresAbsoluteTeamPaths(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	intent := testHerdrWorktreeIntent(repo, "425", 426, "team-status")
+	intent.Status = HerdrIntentRealized
+	intent.Resource = HerdrResource{
+		WorkspaceID: "w2", Label: intent.WorkspaceLabel,
+		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: intent.WorktreePath,
+		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
+	}
+	intent.Launch = &HerdrLaunch{
+		Nonce: strings.Repeat("a", 32), Agent: "codex",
+		AgentName: "fanout-0123456789abcdef01234567", Executable: "/bin/fanout",
+		TeamDBPath: "relative-team.db", EnvFilePath: "/tmp/env", EnvNameCount: 1,
+	}
+	if err := validateHerdrIntent(intent); err == nil || !strings.Contains(err.Error(), "launch fields are incomplete") {
+		t.Fatalf("relative team DB path error = %v", err)
+	}
+	intent.Launch.TeamDBPath = "/tmp/team.db"
+	intent.Launch.CodexTeamStatusPath = "relative-status.json"
+	if err := validateHerdrIntent(intent); err == nil || !strings.Contains(err.Error(), "launch fields are incomplete") {
+		t.Fatalf("relative team status path error = %v", err)
+	}
+	intent.Launch.CodexTeamStatusPath = "/tmp/team-status.json"
+	if err := validateHerdrIntent(intent); err != nil {
+		t.Fatalf("absolute team status path error = %v", err)
+	}
+}
+
 func TestHerdrCoordinatorIntentIDsUseSyntheticIssueNumbers(t *testing.T) {
 	firstManual, err := HerdrCoordinatorIntentID("@manual", "/repo/one", -1)
 	if err != nil {

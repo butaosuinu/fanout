@@ -64,6 +64,25 @@ func WriteFailedStatus(path string, startupErr error) error {
 	return writeStatus(path, Status{Status: statusFailed, Error: message})
 }
 
+// StartupFailure reports a terminal failed status without waiting for a
+// missing or not-yet-ready status file. Herdr uses it while it is still
+// waiting for the Codex provider identity, so bridge setup failures do not
+// consume the whole owned-launch deadline.
+func StartupFailure(path string) error {
+	status, err := readStatus(path)
+	if err != nil {
+		// A missing or incomplete file is not terminal; WaitReady owns its diagnostics.
+		status = Status{}
+	}
+	if status.Status != statusFailed {
+		return nil
+	}
+	if status.Error == "" {
+		return fmt.Errorf("Codex TUI setup failed") //nolint:staticcheck // ST1005: "Codex TUI" is a proper noun
+	}
+	return errors.New(status.Error)
+}
+
 // readStatus parses the status file at path.
 func readStatus(path string) (Status, error) {
 	body, err := os.ReadFile(path)

@@ -59,7 +59,7 @@ func teamParentLabel(parentRef string) string {
 // seedTeamRegistry upserts the panes created this run into the per-parent
 // peers table, looked up by issue number.
 func seedTeamRegistry(lg *log.Logger, dbPath string, st state.Store, parentRef string, created []int) {
-	seedRegistry(lg, dbPath, created,
+	seedRegistry(lg, dbPath, parentRef, created,
 		func(num int) (state.Pane, bool) { return st.Find(parentRef, num) },
 		func(num int) string { return fmt.Sprintf("#%d", num) },
 	)
@@ -68,7 +68,7 @@ func seedTeamRegistry(lg *log.Logger, dbPath string, st state.Store, parentRef s
 // seedTaskTeamRegistry is the issue-less plan variant: it upserts the plan-task
 // panes created this run into the per-parent peers table, looked up by task id.
 func seedTaskTeamRegistry(lg *log.Logger, dbPath string, st state.Store, parentRef string, createdIDs []string) {
-	seedRegistry(lg, dbPath, createdIDs,
+	seedRegistry(lg, dbPath, parentRef, createdIDs,
 		func(id string) (state.Pane, bool) { return st.FindTask(parentRef, id) },
 		func(id string) string { return id },
 	)
@@ -78,8 +78,8 @@ func seedTaskTeamRegistry(lg *log.Logger, dbPath string, st state.Store, parentR
 // Messaging is best-effort by design: every failure is a warning and the
 // fan-out result is never affected. find resolves a created key to its state
 // row; label renders the key for the missing-row warning ("#42" or a task id).
-func seedRegistry[K any](lg *log.Logger, dbPath string, created []K, find func(K) (state.Pane, bool), label func(K) string) {
-	db, err := team.Open(dbPath)
+func seedRegistry[K any](lg *log.Logger, dbPath, parentRef string, created []K, find func(K) (state.Pane, bool), label func(K) string) {
+	db, err := openOwnedTeamRegistry(dbPath, parentRef)
 	if err != nil {
 		lg.Warn("team: %v", err)
 		return
@@ -89,11 +89,6 @@ func seedRegistry[K any](lg *log.Logger, dbPath string, created []K, find func(K
 			lg.Warn("team: close registry db: %v", err)
 		}
 	}()
-	if err := team.EnsureSchema(db); err != nil {
-		lg.Warn("team: %v", err)
-		return
-	}
-
 	// One timestamp for the run so a cohort launched together joins together.
 	now := team.Now()
 	seeded := 0

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -98,7 +99,7 @@ func (l *Launcher) finishIssuedHerdrAgent(
 ) (live backend.LivePane, retErr error) {
 	defer func() {
 		if retErr != nil {
-			retErr = errors.Join(retErr, l.failClosedIssuedHerdrLaunch(journal, intent))
+			retErr = errors.Join(retErr, l.failClosedIssuedHerdrLaunch(journal, intent, retErr))
 		}
 	}()
 	stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)
@@ -127,14 +128,18 @@ func (l *Launcher) adoptHerdrAgent(
 	req Request,
 	intent state.HerdrIntent,
 ) (backend.LivePane, error) {
-	live, err := l.waitForHerdrAgent(ctx, intent, req.Agent)
+	statusPath, err := herdrCodexTeamStatusPath(req, intent)
+	if err != nil {
+		return backend.LivePane{}, err
+	}
+	live, err := l.waitForHerdrAgent(ctx, intent, req.Agent, statusPath)
 	if err != nil {
 		return live, err
 	}
 	if err := l.verifyAndRenameHerdrAgent(ctx, intent); err != nil {
 		return live, err
 	}
-	return l.waitForHerdrAgent(ctx, intent, intent.Launch.AgentName)
+	return l.waitForHerdrAgent(ctx, intent, intent.Launch.AgentName, statusPath)
 }
 
 func (l *Launcher) verifyAndRenameHerdrAgent(
@@ -378,9 +383,13 @@ func (l *Launcher) waitForHerdrAgent(
 	ctx context.Context,
 	intent state.HerdrIntent,
 	wantAgentID string,
+	codexTeamStatusPath string,
 ) (backend.LivePane, error) {
 	deadline := time.UnixMilli(intent.ExpiresUnixMS)
 	for time.Now().Before(deadline) {
+		if err := codexapp.StartupFailure(codexTeamStatusPath); err != nil {
+			return backend.LivePane{}, err
+		}
 		live, found, err := l.observeExactHerdrAgent(ctx, intent, wantAgentID)
 		if err != nil {
 			return backend.LivePane{}, err
