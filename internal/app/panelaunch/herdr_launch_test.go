@@ -325,15 +325,103 @@ func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T
 	}
 }
 
-func TestWaitForHerdrAgentUnlocksForPendingTelemetry(t *testing.T) {
+func TestWaitForHerdrAgentRevalidatesConcurrentIntentChanges(t *testing.T) {
+	tests := []struct {
+		name        string
+		mutate      func(*state.LockedHerdrIntents, state.HerdrIntent) error
+		wantErr     error
+		wantErrText string
+		wantFound   bool
+		wantStatus  state.HerdrIntentStatus
+		wantPending string
+	}{
+		{
+			name: "pending telemetry",
+			mutate: func(journal *state.LockedHerdrIntents, intent state.HerdrIntent) error {
+				intent.Launch.PendingReportedState = string(backend.AgentWorking)
+				journal.UpsertIntent(intent)
+				return journal.Save()
+			},
+			wantFound: true, wantStatus: state.HerdrIntentRealized,
+			wantPending: string(backend.AgentWorking),
+		},
+		{
+			name: "parallel retry marks manual",
+			mutate: func(journal *state.LockedHerdrIntents, intent state.HerdrIntent) error {
+				err := markHerdrIntentManual(journal, intent, errors.New("parallel retry"))
+				if errors.Is(err, ErrHerdrManualCleanupRequired) {
+					return nil
+				}
+				return err
+			},
+			wantErr: ErrHerdrManualCleanupRequired, wantFound: true,
+			wantStatus: state.HerdrIntentManualCleanupRequired,
+		},
+		{
+			name: "launch identity drifts",
+			mutate: func(journal *state.LockedHerdrIntents, intent state.HerdrIntent) error {
+				intent.Launch.Nonce = strings.Repeat("c", 32)
+				journal.UpsertIntent(intent)
+				return journal.Save()
+			},
+			wantErrText: "launch identity changed", wantFound: true,
+			wantStatus: state.HerdrIntentRealized,
+		},
+		{
+			name: "intent disappears",
+			mutate: func(journal *state.LockedHerdrIntents, intent state.HerdrIntent) error {
+				journal.RemoveIntent(intent.ID)
+				return journal.Save()
+			},
+			wantErrText: "intent disappeared",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo, locked, intent, live := herdrEmitterWaitFixture(t)
+			updated := make(chan error, 1)
+			go mutateHerdrIntentAfterUnlock(repo, intent, test.mutate, updated)
+			runtime := &fakeHerdrLaunchRuntime{}
+			runtime.listLive = func(context.Context) ([]backend.LivePane, error) {
+				return []backend.LivePane{live}, <-updated
+			}
+			launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
+			_, err := launcher.waitForHerdrAgentUnlocked(
+				context.Background(), locked, intent, intent.Launch.AgentName,
+			)
+			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("wait error = %v, want %v containing %q", err, test.wantErr, test.wantErrText)
+			}
+			if test.wantErr == nil && test.wantErrText == "" && err != nil {
+				t.Fatalf("wait error = %v, want nil", err)
+			}
+			if test.wantErrText != "" && (err == nil || !strings.Contains(err.Error(), test.wantErrText)) {
+				t.Fatalf("wait error = %v, want text %q", err, test.wantErrText)
+			}
+			journal, loadErr := locked.HerdrIntents(repo)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			latest, found := journal.FindIntent(intent.ID)
+			if found != test.wantFound {
+				t.Fatalf("intent found = %t, want %t", found, test.wantFound)
+			}
+			if found && (latest.Status != test.wantStatus || latest.Launch.PendingReportedState != test.wantPending) {
+				t.Fatalf("persisted concurrent intent = %+v", latest)
+			}
+		})
+	}
+}
+
+func herdrEmitterWaitFixture(t *testing.T) (string, *state.LockedStore, state.HerdrIntent, backend.LivePane) {
+	t.Helper()
 	repo := newHerdrRealizeRepo(t)
 	realizeRuntime := &fakeHerdrRealizeRuntime{}
 	installSuccessfulHerdrMutations(t, repo, realizeRuntime)
 	hooks := deterministicHerdrRealizeHooks()
 	realizeTestHerdrCoordinator(t, repo, realizeRuntime, hooks)
 	result, err := realizeHerdrWorktree(
-		context.Background(), testHerdrWorktreeRequest(repo, "emitter-lock-window", 529),
-		realizeRuntime, hooks,
+		context.Background(), testHerdrWorktreeRequest(repo, "emitter-lock-window", 529), realizeRuntime, hooks,
 	)
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatal(err)
@@ -342,7 +430,7 @@ func TestWaitForHerdrAgentUnlocksForPendingTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = locked.Unlock() }()
+	t.Cleanup(func() { _ = locked.Unlock() })
 	intent := result.Intent
 	intent.Launch = validTestHerdrLaunch()
 	intent.Launch.EmitterNonce = strings.Repeat("b", 32)
@@ -354,49 +442,34 @@ func TestWaitForHerdrAgentUnlocksForPendingTelemetry(t *testing.T) {
 	if err := journal.Save(); err != nil {
 		t.Fatal(err)
 	}
-
 	live := testHerdrIdlePane(intent)
 	live.AgentPresent = true
 	live.AgentProvider = intent.Launch.Agent
 	live.AgentID = intent.Launch.AgentName
-	updated := make(chan error, 1)
-	go func() {
-		concurrent, lockErr := state.LockProjectForLaunch(repo)
-		if lockErr != nil {
-			updated <- lockErr
-			return
-		}
-		concurrentJournal, updateErr := concurrent.HerdrIntents(repo)
-		if updateErr == nil {
-			latest, found := concurrentJournal.FindIntent(intent.ID)
+	return repo, locked, intent, live
+}
+
+func mutateHerdrIntentAfterUnlock(
+	repo string,
+	intent state.HerdrIntent,
+	mutate func(*state.LockedHerdrIntents, state.HerdrIntent) error,
+	result chan<- error,
+) {
+	locked, err := state.LockProjectForLaunch(repo)
+	if err == nil {
+		journal, journalErr := locked.HerdrIntents(repo)
+		err = journalErr
+		if journalErr == nil {
+			latest, found := journal.FindIntent(intent.ID)
 			if !found {
-				updateErr = errors.New("realized intent disappeared")
+				err = errors.New("realized intent disappeared before mutation")
 			} else {
-				latest.Launch.PendingReportedState = string(backend.AgentWorking)
-				concurrentJournal.UpsertIntent(latest)
-				updateErr = concurrentJournal.Save()
+				err = mutate(journal, latest)
 			}
 		}
-		updated <- errors.Join(updateErr, concurrent.Unlock())
-	}()
-	runtime := &fakeHerdrLaunchRuntime{}
-	runtime.listLive = func(context.Context) ([]backend.LivePane, error) {
-		return []backend.LivePane{live}, <-updated
+		err = errors.Join(err, locked.Unlock())
 	}
-	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
-	if _, err := launcher.waitForHerdrAgentUnlocked(
-		context.Background(), locked, intent, intent.Launch.AgentName,
-	); err != nil {
-		t.Fatal(err)
-	}
-	journal, err = locked.HerdrIntents(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	latest, found := journal.FindIntent(intent.ID)
-	if !found || latest.Launch.PendingReportedState != string(backend.AgentWorking) {
-		t.Fatalf("pending telemetry after lock reacquire = (%+v, %t)", latest, found)
-	}
+	result <- err
 }
 
 func validTestHerdrLaunch() *state.HerdrLaunch {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"time"
 
@@ -161,10 +162,46 @@ func (l *Launcher) waitForHerdrAgentUnlocked(
 	reloaded, lockErr := state.LockProjectForLaunch(l.Info.ProjectRoot)
 	if lockErr == nil {
 		*locked = *reloaded
+		lockErr = validateReacquiredHerdrLaunch(locked, l.Info.ProjectRoot, intent)
 	} else {
 		lockErr = fmt.Errorf("reacquire launch lock after Herdr agent wait: %w", lockErr)
 	}
 	return live, errors.Join(waitErr, lockErr)
+}
+
+func validateReacquiredHerdrLaunch(
+	locked *state.LockedStore,
+	projectRoot string,
+	want state.HerdrIntent,
+) error {
+	journal, err := locked.HerdrIntents(projectRoot)
+	if err != nil {
+		return err
+	}
+	latest, found := journal.FindIntent(want.ID)
+	if !found {
+		return fmt.Errorf("issued Herdr launch intent disappeared during agent wait")
+	}
+	if latest.Status == state.HerdrIntentManualCleanupRequired {
+		return herdrManualCleanupError(latest)
+	}
+	if !sameHerdrLaunchGeneration(latest, want) {
+		return fmt.Errorf("issued Herdr launch identity changed during agent wait")
+	}
+	return nil
+}
+
+func sameHerdrLaunchGeneration(latest, want state.HerdrIntent) bool {
+	if latest.Status != state.HerdrIntentRealized || latest.Launch == nil || want.Launch == nil {
+		return false
+	}
+	latestLaunch := *latest.Launch
+	wantLaunch := *want.Launch
+	latestLaunch.PendingReportedState = ""
+	wantLaunch.PendingReportedState = ""
+	latest.Launch = &latestLaunch
+	want.Launch = &wantLaunch
+	return reflect.DeepEqual(latest, want)
 }
 
 func (l *Launcher) failClosedLatestIssuedHerdrLaunch(
@@ -178,6 +215,9 @@ func (l *Launcher) failClosedLatestIssuedHerdrLaunch(
 	latest, found := journal.FindIntent(intent.ID)
 	if !found {
 		return fmt.Errorf("issued Herdr launch intent disappeared during agent wait")
+	}
+	if latest.Status == state.HerdrIntentManualCleanupRequired {
+		return herdrManualCleanupError(latest)
 	}
 	return l.failClosedIssuedHerdrLaunch(journal, latest)
 }
