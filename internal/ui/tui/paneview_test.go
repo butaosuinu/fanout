@@ -71,7 +71,7 @@ func TestTableRowMatchesColumns(t *testing.T) {
 	}
 }
 
-func TestPaneViewRuntimeActionsRequireTmuxBackend(t *testing.T) {
+func TestPaneViewRuntimeActionsRequireSupportedBackend(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		backend backend.Name
@@ -79,7 +79,7 @@ func TestPaneViewRuntimeActionsRequireTmuxBackend(t *testing.T) {
 	}{
 		{name: "legacy tmux row", want: true},
 		{name: "explicit tmux row", backend: backend.Tmux, want: true},
-		{name: "herdr row", backend: backend.Herdr, want: false},
+		{name: "herdr row", backend: backend.Herdr, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pane := paneView{Backend: tc.backend, PaneID: "%1", TmuxState: "live"}

@@ -16,6 +16,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -79,8 +80,13 @@ type Options struct {
 	PaneAlive         func(string) bool
 	ShellPaneAlive    func(paneID, shellKey string) bool
 	CapturePaneOutput func(string, int) (string, error)
-	ListLive          func() ([]backend.LivePane, error)
-	ClosePane         func(backend.PaneRef) error
+	// Herdr capabilities receive the exact persisted identity. The composition
+	// root must bind it to this repository's owned session before each action.
+	HerdrActionDisabled func(state.Pane) string
+	FocusHerdrPane      func(state.Pane) error
+	CaptureHerdrPane    func(state.Pane, int) (string, error)
+	ListLive            func() ([]backend.LivePane, error)
+	ClosePane           func(backend.PaneRef) error
 	// LifecycleCloseOwned is the runtime-specific destructive capability used
 	// for state-backed closes. It keeps identity verification isolated from the
 	// mixed-backend display collector.

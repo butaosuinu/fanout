@@ -10,6 +10,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/blockers"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 // IssueStateUnknown marks a pane whose issue/PR state could not be fetched
@@ -45,6 +46,9 @@ type WorktreeStat struct {
 // PaneView is one recorded pane augmented with runtime liveness, gh state, and git
 // worktree status.
 type PaneView struct {
+	// SavedPane retains the authoritative runtime identity for in-process TUI
+	// and dashboard adapters. It never crosses the dashboard JSON boundary.
+	SavedPane      state.Pane   `json:"-"`
 	IssueNum       int          `json:"issueNum"`
 	TaskID         string       `json:"taskId,omitempty"`
 	Kind           string       `json:"kind,omitempty"`

@@ -13,6 +13,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -162,6 +163,8 @@ func validGitHubPathPart(part string) bool {
 // launchIssueSessionFromTUI starts a session for one issue picked in the TUI:
 // a project-root orchestrator followed by a full fan-out when the issue has
 // OPEN children, or a single pane otherwise (the watcher's standalone lane).
+//
+//nolint:gocognit,gocyclo,funlen // The transaction keeps standalone, parent fan-out, rollback, and start-gate outcomes ordered.
 func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, issueNum int, defaultAgent string, overrides map[string]string) (fanouttui.LaunchResult, error) {
 	if issueNum <= 0 {
 		return fanouttui.LaunchResult{}, fmt.Errorf("issue number is required")
@@ -191,17 +194,23 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	var orchestratorPaneID string
 	var orchestratorCreated bool
 	var orchestratorNotice string
-	ready := func(store state.Store, recorder panelaunch.StateRecorder, runtimeBackend backend.Backend) error {
+	ready := func(
+		store state.Store,
+		recorder panelaunch.StateRecorder,
+		runtimeBackend backend.Backend,
+		herdr *herdrrun.OwnedSession,
+	) error {
 		var launchErr error
 		orchestratorReq, orchestratorPaneID, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
-			projectRoot, session, commandName, runtimeBackend, store, recorder, hookConfig, detail, defaultAgent, resolvedSettings.OrchestratorPlanMode,
+			projectRoot, session, commandName, runtimeBackend, herdr, store, recorder,
+			hookConfig, detail, defaultAgent, resolvedSettings.OrchestratorPlanMode,
 		)
 		return launchErr
 	}
 	result, err := launchParentIssueFanoutWithResult(projectRoot, session, commandName, cfg, ready)
 	runtimeBackend := result.runtimeBackend
 	if err != nil && len(result.CreatedPaneIDs) == 0 && orchestratorCreated {
-		if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
+		if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, result.herdr, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("cleanup issue orchestrator: %w", cleanupErr))
 		} else {
 			orchestratorPaneID = ""
@@ -212,7 +221,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	} else if orchestratorCreated {
 		if releaseErr := panelaunch.ReleaseAgentStartGate(runtimeBackend, orchestratorReq); releaseErr != nil {
 			err = errors.Join(err, fmt.Errorf("release issue orchestrator gate: %w", releaseErr))
-			if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
+			if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, result.herdr, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
 				err = errors.Join(err, fmt.Errorf("cleanup gated issue orchestrator: %w", cleanupErr))
 			} else {
 				orchestratorPaneID = ""

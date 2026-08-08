@@ -18,6 +18,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
@@ -45,6 +46,7 @@ func newTUIIssuePlanLaunchFunc(projectRoot, session, commandName string, hookCon
 	}
 }
 
+//nolint:gocognit,gocyclo,funlen // Keep the multi-agent partial-success transaction under one state and Herdr-intent lock.
 func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfig hooks.Config, req fanouttui.LaunchRequest) (fanouttui.LaunchResult, error) {
 	if req.PlanFanout {
 		return launchPlanPromptFromTUI(projectRoot, session, commandName, hookConfig, req)
@@ -82,6 +84,9 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 		if err := rt.VerifyBackend(cfg.ParentRef, store); err != nil {
 			return fanouttui.LaunchResult{}, fmt.Errorf("runtime backend: %w", err)
 		}
+	}
+	if err := rt.PrepareLaunchBackend(); err != nil {
+		return fanouttui.LaunchResult{}, fmt.Errorf("runtime backend: %w", err)
 	}
 	createdPaneIDs := make([]string, 0, len(agentNames))
 	for _, agentName := range agentNames {
@@ -151,6 +156,8 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 // running `fanout plan` inside a worktree would resolve the git root there and
 // nest state under the coordinator's worktree. Its initial posture follows
 // newSessionPlanMode.
+//
+//nolint:funlen // Coordinator validation, backend admission, and the one attach remain one lock-scoped transaction.
 func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentName string, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, string, error) {
 	if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
 		return panelaunch.Request{}, "", "", validateErr
@@ -180,16 +187,22 @@ func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentNa
 			return panelaunch.Request{}, "", "", fmt.Errorf("runtime backend: %w", err)
 		}
 	}
-	return launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, rt.Backend, cfg, recorder.Store, recorder, guard, buildReq)
+	if err := rt.PrepareLaunchBackend(); err != nil {
+		return panelaunch.Request{}, "", "", fmt.Errorf("runtime backend: %w", err)
+	}
+	return launchPlanCoordinatorLockedWithConfig(
+		projectRoot, session, commandName, rt.Backend, rt.Herdr,
+		cfg, recorder.Store, recorder, guard, buildReq,
+	)
 }
 
 // launchPlanCoordinatorLocked is the state-lock-held entry for the issue
 // parent lane. That lane already owns the child fan-out lock when its validated
 // plan becomes ready, so it reuses that recorder instead of taking a nested
 // lock.
-func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, agentName string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, string, error) {
+func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr *herdrrun.OwnedSession, agentName string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, string, error) {
 	cfg := &cliflags.Config{Agent: agentName}
-	return launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, runtimeBackend, cfg, store, recorder, guard,
+	return launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, runtimeBackend, herdr, cfg, store, recorder, guard,
 		func(store state.Store, livenessKey string, _ *cliflags.Config) panelaunch.Request {
 			return buildReq(store, livenessKey)
 		})
@@ -197,7 +210,7 @@ func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runti
 
 // launchPlanCoordinatorLockedWithConfig carries a lane-specific launch mode
 // through the shared coordinator attach path.
-func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName string, runtimeBackend backend.Backend, cfg *cliflags.Config, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, string, error) {
+func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr *herdrrun.OwnedSession, cfg *cliflags.Config, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, string, error) {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	if guard != nil {
@@ -216,7 +229,7 @@ func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName str
 		return panelaunch.Request{}, "", "", err
 	}
 	paneReq := buildReq(store, livenessKey, cfg)
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Backend: runtimeBackend, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Backend: runtimeBackend, Herdr: herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.AttachWithResult(paneReq, projectRoot)
 	if !ok {
 		return panelaunch.Request{}, "", "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
@@ -407,6 +420,7 @@ func launchAttachedAgentFromTUI(projectRoot, session, commandName string, hookCo
 	return launchAttachedAgent(ownerRoot, tuiLaunchTarget(session), commandName, hookConfig, req)
 }
 
+//nolint:gocognit,gocyclo,funlen // Keep all requested attached agents in one state and Herdr-intent lock with explicit partial success.
 func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hooks.Config, req fanouttui.AttachLaunchRequest) (string, error) {
 	prompt := normalizeTUIPrompt(req.Prompt)
 	if prompt == "" {
@@ -455,6 +469,9 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 		if err := rt.VerifyBackend(resolverParent, recorder.Store); err != nil {
 			return "", fmt.Errorf("runtime backend: %w", err)
 		}
+	}
+	if err := rt.PrepareLaunchBackend(); err != nil {
+		return "", fmt.Errorf("runtime backend: %w", err)
 	}
 	createdCount := 0
 	for _, agentName := range agentNames {
@@ -609,8 +626,31 @@ func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaun
 }
 
 func launchShellPane(projectRoot, target string, req fanouttui.ShellLaunchRequest) error {
-	launcher := &panelaunch.Launcher{Info: &fanoutruntime.Info{Target: target, ProjectRoot: projectRoot}}
+	launcher := &panelaunch.Launcher{
+		Info: &fanoutruntime.Info{Target: target, ProjectRoot: projectRoot},
+	}
 	return launcher.Shell(panelaunch.ShellRequest{TargetPath: req.TargetPath, Root: req.Root})
+}
+
+func newOwnedHerdrLaunchShellFunc(
+	projectRoot string,
+	owned *herdrrun.OwnedSession,
+) fanouttui.ShellLaunchFunc {
+	return func(req fanouttui.ShellLaunchRequest) error {
+		ownerRoot := projectRoot
+		if !req.Root {
+			ownerRoot = launchOwnerProjectRoot(projectRoot, req.SourceProjectRoot)
+		}
+		launcher := &panelaunch.Launcher{
+			Info:    &fanoutruntime.Info{ProjectRoot: ownerRoot},
+			Backend: owned.Backend(),
+			Herdr:   owned,
+		}
+		return launcher.Shell(panelaunch.ShellRequest{
+			TargetPath: req.TargetPath,
+			Root:       req.Root,
+		})
+	}
 }
 
 func launchOwnerProjectRoot(defaultRoot, sourceProjectRoot string) string {

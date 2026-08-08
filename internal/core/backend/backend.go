@@ -17,11 +17,8 @@ const (
 	Herdr Name = "herdr"
 
 	// HerdrObservationOnlyReason is the shared operator-facing explanation for
-	// interactive TUI actions disabled by the herdr v1 contract.
-	HerdrObservationOnlyReason = "herdr backend interactive TUI actions are read-only"
-	// HerdrContentReadReason is more specific for peek/content surfaces, which
-	// must not issue a targeted herdr read even when the pane is live.
-	HerdrContentReadReason = "herdr backend v1 does not read pane content"
+	// interactive TUI actions outside the admitted owned-session capability.
+	HerdrObservationOnlyReason = "herdr backend interactive TUI action is unavailable"
 )
 
 // ParseName validates a configured backend name. An empty value means no
@@ -204,6 +201,7 @@ type LivePane struct {
 
 	AgentState       AgentState
 	NativeAgentState string
+	WorkspaceLabel   string
 	TerminalID       string
 	AgentID          string
 	AgentProvider    string

@@ -41,6 +41,29 @@ func TestWorkloadEnvironmentRejectsDuplicateNames(t *testing.T) {
 	}
 }
 
+func TestWorkloadExecEnvironmentRestoresOnlyValidatedShellRoute(t *testing.T) {
+	request := paneLauncherRequest{
+		session: "owned-session", socketPath: "/owned/herdr.sock",
+		workspaceID: "w1", paneID: "w1:p1",
+	}
+	base := []string{"PATH=/bin", "FANOUT_BACKEND=herdr"}
+	shell := state.HerdrIntent{Launch: &state.HerdrLaunch{}}
+	got := workloadExecEnvironment(request, shell, append([]string(nil), base...))
+	wantSuffix := []string{
+		"HERDR_ENV=1", "HERDR_SESSION=owned-session", "HERDR_SOCKET_PATH=/owned/herdr.sock",
+		"HERDR_WORKSPACE_ID=w1", "HERDR_PANE_ID=w1:p1",
+	}
+	if !slices.Equal(got[len(base):], wantSuffix) {
+		t.Fatalf("shell route environment = %q, want suffix %q", got, wantSuffix)
+	}
+
+	agentIntent := state.HerdrIntent{Launch: &state.HerdrLaunch{Agent: "codex"}}
+	agentEnv := workloadExecEnvironment(request, agentIntent, append([]string(nil), base...))
+	if !slices.Equal(agentEnv, base) {
+		t.Fatalf("agent environment = %q, want control-plane-free %q", agentEnv, base)
+	}
+}
+
 func TestWorkloadEnvironmentCapsuleIsOwnerOnlyAndOneShot(t *testing.T) {
 	runtimeDir := t.TempDir()
 	if err := os.Chmod(runtimeDir, 0o700); err != nil {
@@ -176,6 +199,10 @@ func TestMatchingPaneLaunchIntentAcceptsRealizedCoordinatorWithoutAgentLaunch(t 
 	}
 	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); !found {
 		t.Fatal("realized coordinator was not assigned to its launcher")
+	}
+	intent.Launch = &state.HerdrLaunch{Nonce: strings.Repeat("a", 32)}
+	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); !found {
+		t.Fatal("launch-bearing coordinator was not assigned to its launcher")
 	}
 	intent.Kind = state.HerdrIntentRollback
 	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); found {

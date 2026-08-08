@@ -667,6 +667,7 @@ func errFromString(s string) error {
 	return errors.New(s)
 }
 
+//nolint:funlen // Keeping the exact snapshot-to-TUI field projection together makes omitted fields visible in review.
 func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []paneView {
 	out := []paneView{}
 	for _, session := range snap.Sessions {
@@ -677,6 +678,7 @@ func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []pane
 				derived = sessionview.DerivePane(projectRoot, parent, pv)
 			}
 			out = append(out, paneView{
+				savedPane:          pv.SavedPane,
 				Parent:             parent,
 				IssueNum:           pv.IssueNum,
 				TaskID:             pv.TaskID,

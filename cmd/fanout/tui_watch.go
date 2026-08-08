@@ -19,6 +19,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/fanset"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
@@ -212,9 +213,15 @@ type parentIssueFanoutResult struct {
 	CreatedPaneIDs []string
 	Notice         string
 	runtimeBackend backend.Backend
+	herdr          *herdrrun.OwnedSession
 }
 
-type tuiIssueReadyFunc func(state.Store, panelaunch.StateRecorder, backend.Backend) error
+type tuiIssueReadyFunc func(
+	state.Store,
+	panelaunch.StateRecorder,
+	backend.Backend,
+	*herdrrun.OwnedSession,
+) error
 
 // launchParentIssueFanoutWithResult preserves the exact pane ids returned by
 // tmux for the foreground TUI launch. The watcher calls the wrapper above and
@@ -223,6 +230,7 @@ func launchParentIssueFanoutWithResult(projectRoot, session, commandName string,
 	return launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName, cfg, nil, ready)
 }
 
+//nolint:funlen // Keep runtime resolution, readiness injection, and result projection in one backend transaction boundary.
 func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName string, cfg *cliflags.Config, input *run.IssuePlanInput, ready tuiIssueReadyFunc) (parentIssueFanoutResult, error) {
 	// A plan session for this issue (a coordinator, or the tasks it fanned out)
 	// must finish or be closed before the child fan-out lane runs, or the two
@@ -240,7 +248,7 @@ func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandNam
 	var runReady run.IssueReadyFunc
 	if ready != nil {
 		runReady = func(store state.Store, recorder panelaunch.StateRecorder) error {
-			return ready(store, recorder, rt.Backend)
+			return ready(store, recorder, rt.Backend, rt.Herdr)
 		}
 	}
 	var execution run.IssueExecutionResult
@@ -254,6 +262,7 @@ func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandNam
 		CreatedPaneIDs: execution.CreatedPaneIDs,
 		Notice:         combinedLaunchNotice(execution.Notices, bufferedLaunchNotice(stderr)),
 		runtimeBackend: rt.Backend,
+		herdr:          rt.Herdr,
 	}
 	if code != exitcode.OK {
 		return result, bufferedLaunchError(stdout, stderr, "launch parent")

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
@@ -277,11 +278,67 @@ func TestPeekHerdrPaneIs404AndSkipsCapture(t *testing.T) {
 		t.Fatalf("herdr pane status = %d want 404, body %s", status, body)
 	}
 	var got map[string]string
-	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], backend.HerdrContentReadReason) {
-		t.Fatalf("body = %s want the explicit herdr content-read reason", body)
+	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], "fanout-owned Herdr session") {
+		t.Fatalf("body = %s want the explicit owned-session reason", body)
 	}
 	if calls, _, _ := fake.snapshot(); calls != 0 {
 		t.Fatalf("capture ran %d time(s) for a herdr pane", calls)
+	}
+}
+
+func TestPeekOwnedHerdrPaneReadsThroughOwnedCapability(t *testing.T) {
+	read := 0
+	srv := &Server{
+		poller: &poller{},
+		ownsHerdrPane: func(pv sessionview.PaneView) bool {
+			return pv.SavedPane.HerdrWorkspaceLabel == "owned-label"
+		},
+		readHerdrPane: func(pv sessionview.PaneView, lines int) (string, error) {
+			read++
+			if pv.SavedPane.HerdrTerminalID != "terminal-1" || lines != 17 {
+				return "", fmt.Errorf("wrong persisted identity or line count")
+			}
+			return "owned output", nil
+		},
+	}
+	snap := peekSnapshot(true)
+	snap.Sessions[0].Panes[0].Backend = backend.Herdr
+	snap.Sessions[0].Panes[0].PaneID = "pane-1"
+	snap.Sessions[0].Panes[0].SavedPane = state.Pane{
+		Backend: backend.Herdr, PaneID: "pane-1",
+		HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "terminal-1",
+	}
+	publishSnapshot(srv, snap)
+	req := httptest.NewRequest(http.MethodGet, "/api/peek?pane=pane-1&lines=17", nil)
+	response := httptest.NewRecorder()
+	srv.handlePeek(response, req)
+	if response.Code != http.StatusOK || read != 1 ||
+		!strings.Contains(response.Body.String(), "owned output") {
+		t.Fatalf("owned Herdr peek = status:%d reads:%d body:%s", response.Code, read, response.Body.String())
+	}
+}
+
+func TestPeekForeignHerdrPaneIs404WithoutRead(t *testing.T) {
+	read := 0
+	srv := &Server{
+		poller:        &poller{},
+		ownsHerdrPane: func(sessionview.PaneView) bool { return false },
+		readHerdrPane: func(sessionview.PaneView, int) (string, error) {
+			read++
+			return "foreign", nil
+		},
+	}
+	snap := peekSnapshot(true)
+	snap.Sessions[0].Panes[0].Backend = backend.Herdr
+	snap.Sessions[0].Panes[0].PaneID = "foreign-pane"
+	publishSnapshot(srv, snap)
+	response := httptest.NewRecorder()
+	srv.handlePeek(
+		response,
+		httptest.NewRequest(http.MethodGet, "/api/peek?pane=foreign-pane", nil),
+	)
+	if response.Code != http.StatusNotFound || read != 0 {
+		t.Fatalf("foreign Herdr peek = status:%d reads:%d, want 404/0", response.Code, read)
 	}
 }
 

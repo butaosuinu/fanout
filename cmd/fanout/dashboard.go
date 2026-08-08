@@ -58,6 +58,8 @@ func isDashboardRequest(args []string) bool {
 // cmdDashboard starts the read-only localhost web dashboard. It accepts --web
 // (the only mode today; a no-op kept for forward-compat with a future --tui),
 // --port, --open, --no-token, and --no-keybind.
+//
+//nolint:gocognit,gocyclo,funlen // Dashboard startup is one ordered lock, run-file, server, health, and shutdown transaction.
 func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 	for _, a := range args {
 		if a == "-h" || a == "--help" {
@@ -118,6 +120,10 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 			return exitcode.Env
 		}
 	}
+	owned, ownedErr := openOwnedHerdrSession(root)
+	if ownedErr != nil {
+		lg.Debug("dashboard: owned Herdr read unavailable: %v", ownedErr)
+	}
 
 	srv, err := dashboard.New(dashboard.Options{
 		ProjectRoot: root,
@@ -127,6 +133,16 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 		// never delays binding localhost or the state-only paint.
 		ResolveGH: dashboardGHResolver(root, lg),
 		ListLive:  runtimeListLiveForProject(root, false),
+		OwnsHerdrPane: func(pv sessionview.PaneView) bool {
+			return ownedHerdrActionDisabled(owned, pv.SavedPane) == ""
+		},
+		ReadHerdrPane: func(pv sessionview.PaneView, lines int) (string, error) {
+			bound, ref, bindErr := bindOwnedHerdrPane(owned, pv.SavedPane)
+			if bindErr != nil {
+				return "", bindErr
+			}
+			return bound.Read(ref, lines)
+		},
 	})
 	if err != nil {
 		lg.Err("dashboard: bind 127.0.0.1: %v", err)

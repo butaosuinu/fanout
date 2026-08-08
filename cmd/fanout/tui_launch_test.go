@@ -486,7 +486,7 @@ func TestLaunchPlanPromptFromTUIReturnsClaudeModeFallbackNotice(t *testing.T) {
 	}
 }
 
-func TestTUIAgentLaunchesRejectHerdrBeforeMutationDespiteUnrelatedManualRow(t *testing.T) {
+func TestTUIAgentLaunchFailuresDoNotOverwriteExistingState(t *testing.T) {
 	tests := []struct {
 		name   string
 		launch func(string) error
@@ -583,15 +583,9 @@ esac
 			if err != nil {
 				t.Fatal(err)
 			}
-			excludePath := filepath.Join(repo, ".git", "info", "exclude")
-			excludeBefore, err := os.ReadFile(excludePath)
-			if err != nil {
-				t.Fatal(err)
-			}
-
 			err = tt.launch(repo)
-			if err == nil || !strings.Contains(err.Error(), "runtime backend herdr does not support") {
-				t.Fatalf("launch error = %v, want herdr unsupported", err)
+			if err == nil {
+				t.Fatal("launch succeeded with the test Herdr shim")
 			}
 			stateAfter, err := os.ReadFile(state.Path(repo))
 			if err != nil {
@@ -599,13 +593,6 @@ esac
 			}
 			if string(stateAfter) != string(stateBefore) {
 				t.Fatalf("state changed before herdr rejection:\n%s", stateAfter)
-			}
-			excludeAfter, err := os.ReadFile(excludePath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(excludeAfter) != string(excludeBefore) {
-				t.Fatalf("git exclude changed before herdr rejection:\n%s", excludeAfter)
 			}
 			for _, path := range []string{
 				filepath.Join(repo, ".fanout", "briefings"),

@@ -16,7 +16,7 @@ schema、method、field、CLI help、protocol、behavior profile、active manife
 fanout の herdr backend wave 2 は CLI-first とし、集約読みには CLI wrapper の `herdr api snapshot` を使う。
 raw Socket client は実装しない。
 version / session の検査と owned session の検査後、snapshot / list / wait、targeted read、owned server の bootstrap、launch、cleanup、focus、emitter、metadata、自動 nudge の送信契約を後続実装へ解禁する。
-issue / Project / plan / watcher の coordinator / agent launch は #528 で direct-launch 契約を実装した。interactive TUI の launch は #530 まで read-only とする。
+issue / Project / plan / watcher の coordinator / agent launch は #528 で direct-launch 契約を実装した。interactive TUI の launch / focus / peek は ownership 検証済みの owned session に限って #530 で解禁した。
 2026-07-27 のユーザー決定により、crash 安全機構は「簡素化方針」の判断基準で tmux backend と同水準の密度にする。
 自動 mutation は state lock、送信直前の identity 再照合、mutation 直前の最小意図記録、事後条件検査を通し、応答喪失は再実行時の存在確認で採用または fail-closed `manual_cleanup_required` にする。
 linked worktree 間の intent と console は canonical git common directory 配下の単一 intent journal を正典とし、final row と telemetry routing は owning worktree の `state.json` pane row を正典とする（intent は journal、final は state.json の二層）。
@@ -424,7 +424,8 @@ response loss または mutation の有無が不明な場合は blind retry せ�
 herdr backend は root coordinator の intent 行を発行直前に保存してから `workspace create` を実行する。
 coordinator の workspace create には非発行を証明する手段がないため、発行前の staging 段（planned）は持たず、保存済み intent が残る crash はすべて存在確認の分類（採用 or `manual_cleanup_required`）で処理する。
 root coordinator の `workspace create` も副作用を持つ launch 操作として intent 行の対象にし、console と同じ「nonce label の存在確認 → 採用 or fail closed」で応答喪失を処理する。
-coordinator root の launcher は intent と process / snapshot identity の照合後、shell や agent を起動せず inert な process として残る。
+`Launch == nil` の coordinator root launcher は intent と process / snapshot identity の照合後、shell や agent を起動せず inert な process として残る。
+console と TUI の manual / attach coordinator は launch intent の operation token で shell または agent を直接起動する。
 coordinator workspace を後続 child が再利用できるよう、launcher 自体には launch cycle の 300 秒 expiry を適用しない。
 herdr pane 内から fanout を起動する通常ケースでは同じ root cwd のユーザー workspace が既にあるため、root cwd / provenance の一致だけでは coordinator を識別せず、label nonce で識別する。
 
@@ -1359,7 +1360,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   server loss 後の restart は明示操作（実装は #530）が marker / lease と saved process / socket 不在の照合後に一回だけ spawn し、結果不明は fail closed にする。
   console detach 後も server を存続させ、最後の child close では止めず、active row / intent と foreign resource のない明示 repo-session shutdown（実装は #530。空状態確認と同じ save の shutdown intent 行で並行 mutation を fence する）だけを teardown とする。
 - herdr backend wave 2 は snapshot / list / wait、targeted content read、root coordinator、worktree / agent launch、focus、nudge、metadata、console / coordinator close、child cleanup を後続実装へ解禁する。
-  issue / Project / plan / watcher の coordinator / agent launch は #528 の direct-launch 契約を使う。interactive TUI の launch は #530 まで read-only とする。
+  issue / Project / plan / watcher の coordinator / agent launch は #528 の direct-launch 契約を使う。interactive TUI の launch / focus / peek は ownership 検証済みの owned session に限って #530 で解禁した。
   Codex child Plan Mode は #554 の owned launcher で `fanout __codex-plan-tui` を起動し、controller と Codex TUI child の exact process chain を照合する。
   `--team` は #568 の peer 登録、plan preseed / cleanup、自己識別、宛先解決を使う。
   Herdr row を worktree-local `state.json` に複製せず、owning worktree の canonical row から peer registry と nudge 宛先を解決する。

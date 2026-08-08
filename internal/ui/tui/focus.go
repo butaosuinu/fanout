@@ -159,28 +159,49 @@ func (m *model) focusPaneIDCmd(paneID, contextNotice string) tea.Cmd {
 
 func (m *model) focusPaneCmd(pane paneView, zoom bool, contextNotice string) tea.Cmd {
 	paneID := pane.PaneID
-	alive := m.opts.PaneAlive
-	shellAlive := m.opts.ShellPaneAlive
-	focus := m.opts.FocusPane
-	zoomPane := m.opts.ZoomPane
-	keyboard := m.opts.keyboard
 	if contextNotice == "" {
 		m.notice = fmt.Sprintf("focusing %s...", paneID)
 	} else {
 		m.notice = contextNotice
 	}
+	if backend.NormalizeName(pane.Backend) == backend.Herdr {
+		return m.focusHerdrPaneCmd(pane, contextNotice)
+	}
+	return m.focusTmuxPaneCmd(pane, zoom, contextNotice)
+}
+
+func (m *model) focusHerdrPaneCmd(pane paneView, contextNotice string) tea.Cmd {
+	focus := m.opts.FocusHerdrPane
+	keyboard := m.opts.keyboard
+	return func() tea.Msg {
+		keyboard.Disable()
+		if focus == nil {
+			keyboard.Enable()
+			return paneFocusedMsg{paneID: pane.PaneID, err: fmt.Errorf("owned Herdr focus is not configured"), contextNotice: contextNotice}
+		}
+		if err := focus(pane.savedPane); err != nil {
+			keyboard.Enable()
+			return paneFocusedMsg{paneID: pane.PaneID, err: err, contextNotice: contextNotice}
+		}
+		return paneFocusedMsg{paneID: pane.PaneID, keyboardPaused: true, contextNotice: contextNotice}
+	}
+}
+
+func (m *model) focusTmuxPaneCmd(pane paneView, zoom bool, contextNotice string) tea.Cmd {
+	alive, shellAlive := m.opts.PaneAlive, m.opts.ShellPaneAlive
+	focus, zoomPane, keyboard := m.opts.FocusPane, m.opts.ZoomPane, m.opts.keyboard
 	return func() tea.Msg {
 		if !paneAliveForAction(pane, alive, shellAlive) {
-			return paneFocusedMsg{paneID: paneID, err: errPaneNotAlive, contextNotice: contextNotice}
+			return paneFocusedMsg{paneID: pane.PaneID, err: errPaneNotAlive, contextNotice: contextNotice}
 		}
 		keyboard.Disable()
-		if err := focus(paneID); err != nil {
+		if err := focus(pane.PaneID); err != nil {
 			keyboard.Enable()
-			return paneFocusedMsg{paneID: paneID, err: err, contextNotice: contextNotice}
+			return paneFocusedMsg{paneID: pane.PaneID, err: err, contextNotice: contextNotice}
 		}
-		msg := paneFocusedMsg{paneID: paneID, keyboardPaused: true, contextNotice: contextNotice}
+		msg := paneFocusedMsg{paneID: pane.PaneID, keyboardPaused: true, contextNotice: contextNotice}
 		if zoom {
-			msg.zoomErr = zoomPane(paneID)
+			msg.zoomErr = zoomPane(pane.PaneID)
 		}
 		return msg
 	}
@@ -208,17 +229,33 @@ func (m *model) peekSelectedCmd(force bool) tea.Cmd {
 		return nil
 	}
 
-	paneID := pane.PaneID
+	m.peek = panePeek{PaneID: pane.PaneID, Loading: true}
+	return m.capturePaneCmd(pane)
+}
+
+func (m *model) capturePaneCmd(pane paneView) tea.Cmd {
+	if backend.NormalizeName(pane.Backend) == backend.Herdr {
+		return m.captureHerdrPaneCmd(pane)
+	}
 	revalidateIdentity := pane.isShell() || strings.TrimSpace(pane.ShellKey) != ""
-	shellAlive := m.opts.ShellPaneAlive
-	capture := m.opts.CapturePaneOutput
-	m.peek = panePeek{PaneID: paneID, Loading: true}
+	shellAlive, capture := m.opts.ShellPaneAlive, m.opts.CapturePaneOutput
 	return func() tea.Msg {
-		if revalidateIdentity && !shellAlive(paneID, pane.ShellKey) {
-			return panePeekLoadedMsg{paneID: paneID, at: time.Now(), err: errPaneNotAlive}
+		if revalidateIdentity && !shellAlive(pane.PaneID, pane.ShellKey) {
+			return panePeekLoadedMsg{paneID: pane.PaneID, at: time.Now(), err: errPaneNotAlive}
 		}
-		out, err := capture(paneID, peekLines)
-		return panePeekLoadedMsg{paneID: paneID, output: out, at: time.Now(), err: err}
+		out, err := capture(pane.PaneID, peekLines)
+		return panePeekLoadedMsg{paneID: pane.PaneID, output: out, at: time.Now(), err: err}
+	}
+}
+
+func (m *model) captureHerdrPaneCmd(pane paneView) tea.Cmd {
+	capture := m.opts.CaptureHerdrPane
+	return func() tea.Msg {
+		if capture == nil {
+			return panePeekLoadedMsg{paneID: pane.PaneID, at: time.Now(), err: fmt.Errorf("owned Herdr read is not configured")}
+		}
+		out, err := capture(pane.savedPane, peekLines)
+		return panePeekLoadedMsg{paneID: pane.PaneID, output: out, at: time.Now(), err: err}
 	}
 }
 

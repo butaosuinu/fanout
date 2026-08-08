@@ -59,6 +59,7 @@ type paneView struct {
 	Prompt             string
 	NotStarted         bool
 	Derived            sessionview.PaneDerived
+	savedPane          state.Pane
 }
 
 type hudSummary struct {
@@ -147,7 +148,9 @@ func (p paneView) backendLabel() string {
 }
 
 func (p paneView) canFocus() bool {
-	return backend.NormalizeName(p.Backend) == backend.Tmux && strings.TrimSpace(p.PaneID) != "" && p.TmuxState != "stale" && p.TmuxState != "-"
+	runtimeBackend := backend.NormalizeName(p.Backend)
+	return (runtimeBackend == backend.Tmux || runtimeBackend == backend.Herdr) &&
+		strings.TrimSpace(p.PaneID) != "" && p.TmuxState != "stale" && p.TmuxState != "-" && p.TmuxState != "unsupported"
 }
 
 func (p paneView) canPeek() bool {

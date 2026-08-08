@@ -186,6 +186,20 @@ func TestRealizeHerdrWorktreePersistsIntentAndSkipsReplay(t *testing.T) {
 	}
 }
 
+func TestHerdrCoordinatorWorkspaceLabelUsesLaunchNonce(t *testing.T) {
+	nonce := strings.Repeat("a", 32)
+	label, err := herdrCoordinatorWorkspaceLabel(HerdrCoordinatorRequest{
+		Parent: HerdrConsoleRuntimeParent,
+		Launch: &state.HerdrLaunch{Nonce: nonce},
+	}, func() (string, error) {
+		t.Fatal("random label source called for an operation-bound coordinator")
+		return "", nil
+	})
+	if err != nil || label != "fanout-console-"+nonce {
+		t.Fatalf("console label = %q, %v", label, err)
+	}
+}
+
 func TestRealizeHerdrWorktreeLeavesIssuedIntentAfterRealizedSaveFailure(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}

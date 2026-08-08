@@ -60,6 +60,10 @@ type HerdrCoordinatorRequest struct {
 	HerdrSession string
 	SocketPath   string
 	TotalTimeout time.Duration
+	// Launch, when non-nil, is journaled before workspace creation so the pane
+	// launcher can start a console or attached workload without an unfenced
+	// post-create mutation window. Normal coordinators leave it nil and idle.
+	Launch *state.HerdrLaunch
 }
 
 // HerdrRealizeResult is the realized outcome shared by the coordinator and
@@ -294,7 +298,7 @@ func RealizeHerdrCoordinator(
 	if policyErr := runtime.VerifyWorktreeSetupPolicy(operationParent); policyErr != nil {
 		return result, policyErr
 	}
-	label, labelErr := newHerdrWorkspaceLabel("coordinator", setup.hooks.RandomToken)
+	label, labelErr := herdrCoordinatorWorkspaceLabel(req, setup.hooks.RandomToken)
 	if labelErr != nil {
 		return result, labelErr
 	}
@@ -306,6 +310,7 @@ func RealizeHerdrCoordinator(
 		WorktreePath:     cwd,
 		WorkspaceLabel:   label, Session: req.HerdrSession, SocketPath: req.SocketPath,
 		ExpiresUnixMS: setup.deadline.UnixMilli(),
+		Launch:        cloneHerdrLaunch(req.Launch),
 	}
 	locked.UpsertIntent(intent)
 	if saveErr := locked.Save(); saveErr != nil {
@@ -345,6 +350,31 @@ func RealizeHerdrCoordinator(
 		return result, err
 	}
 	return realizeDeferred(intent)
+}
+
+func herdrCoordinatorWorkspaceLabel(
+	req HerdrCoordinatorRequest,
+	randomToken func() (string, error),
+) (string, error) {
+	if req.Launch == nil {
+		return newHerdrWorkspaceLabel("coordinator", randomToken)
+	}
+	kind := "manual"
+	if canonicalHerdrParent(req.Parent) == HerdrConsoleRuntimeParent {
+		kind = "console"
+	}
+	return newHerdrWorkspaceLabel(kind, func() (string, error) {
+		return req.Launch.Nonce, nil
+	})
+}
+
+func cloneHerdrLaunch(launch *state.HerdrLaunch) *state.HerdrLaunch {
+	if launch == nil {
+		return nil
+	}
+	cloned := *launch
+	cloned.Args = append([]string(nil), launch.Args...)
+	return &cloned
 }
 
 func verifyHerdrRealizeRoute(

@@ -52,18 +52,18 @@ type Pane struct {
 	// round trips for existing state.json files.
 	Backend backend.Name `json:"backend,omitempty"`
 	PaneID  string       `json:"paneId"`
-	// Herdr identity is additive so legacy rows still decode. Observation-only
-	// v1 does not create herdr rows through a launch path or fill identity from a
-	// snapshot. A future mutation-enabled launch must persist these authoritative
-	// values; a row without a comparison baseline is unsupported rather than
-	// rebound by name, while a complete row whose identity differs is stale.
-	HerdrWorkspaceID  string                   `json:"herdrWorkspaceId,omitempty"`
-	HerdrTerminalID   string                   `json:"herdrTerminalId,omitempty"`
-	HerdrRepoKey      string                   `json:"herdrRepoKey,omitempty"`
-	HerdrAgentID      string                   `json:"herdrAgentId,omitempty"`
-	HerdrAgentSession *backend.AgentSessionRef `json:"herdrAgentSession,omitempty"`
-	HerdrSession      string                   `json:"herdrSession,omitempty"`
-	HerdrSocketPath   string                   `json:"herdrSocketPath,omitempty"`
+	// Herdr identity is additive so legacy rows still decode. Owned-session
+	// launch paths persist these authoritative values; a row without a comparison
+	// baseline is unsupported rather than rebound by name, while a complete row
+	// whose identity differs is stale.
+	HerdrWorkspaceID    string                   `json:"herdrWorkspaceId,omitempty"`
+	HerdrWorkspaceLabel string                   `json:"herdrWorkspaceLabel,omitempty"`
+	HerdrTerminalID     string                   `json:"herdrTerminalId,omitempty"`
+	HerdrRepoKey        string                   `json:"herdrRepoKey,omitempty"`
+	HerdrAgentID        string                   `json:"herdrAgentId,omitempty"`
+	HerdrAgentSession   *backend.AgentSessionRef `json:"herdrAgentSession,omitempty"`
+	HerdrSession        string                   `json:"herdrSession,omitempty"`
+	HerdrSocketPath     string                   `json:"herdrSocketPath,omitempty"`
 	// ReportedState is cooperative provider telemetry. The launch binding fields
 	// fence updates to one Herdr generation; none of these fields authorizes
 	// lifecycle, cleanup, completion, or nudge operations.

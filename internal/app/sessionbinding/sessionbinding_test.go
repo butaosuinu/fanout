@@ -83,8 +83,9 @@ func testHerdrPane(root string) state.Pane {
 	return state.Pane{
 		Parent: "528", IssueNum: 529, Backend: backend.Herdr,
 		PaneID: "workspace-a:p1", Agent: "codex", HerdrAgentID: "agent-a",
-		HerdrWorkspaceID: "workspace-a", HerdrTerminalID: "terminal-a",
-		HerdrRepoKey: "/repo/.git", HerdrSession: "session-a",
+		HerdrWorkspaceID: "workspace-a", HerdrWorkspaceLabel: "owned-label-a",
+		HerdrTerminalID: "terminal-a",
+		HerdrRepoKey:    "/repo/.git", HerdrSession: "session-a",
 		HerdrSocketPath: "/tmp/herdr-a.sock", WorktreePath: filepath.Join(root, "child"),
 	}
 }
@@ -94,7 +95,8 @@ func testLiveHerdrPane(row state.Pane, session backend.AgentSessionRef) backend.
 		Ref: backend.PaneRef{
 			Backend: backend.Herdr, Workspace: row.HerdrWorkspaceID, Pane: row.PaneID,
 		},
-		TerminalID: row.HerdrTerminalID, AgentID: row.HerdrAgentID,
+		WorkspaceLabel: row.HerdrWorkspaceLabel,
+		TerminalID:     row.HerdrTerminalID, AgentID: row.HerdrAgentID,
 		AgentProvider: row.Agent, AgentSession: &session, AgentPresent: true,
 		RepoKey: row.HerdrRepoKey, ProjectRoot: filepath.Dir(row.WorktreePath),
 		WorktreePath: row.WorktreePath, SessionID: row.HerdrSession,

@@ -89,8 +89,9 @@ type HerdrIntent struct {
 	Failure string `json:"failure,omitempty"`
 }
 
-// HerdrLaunch is the non-secret launch capsule recorded after workspace
-// realization. The environment itself lives in a one-shot owner-only file.
+// HerdrLaunch is the non-secret launch capsule recorded before a coordinator
+// workspace mutation or after child-worktree realization. The environment
+// itself lives in a one-shot owner-only file.
 type HerdrLaunch struct {
 	Nonce                string                   `json:"nonce"`
 	EmitterNonce         string                   `json:"emitterNonce,omitempty"`
@@ -255,7 +256,7 @@ func herdrBindingParent(
 	storedRoot, projectRoot string,
 ) (string, bool) {
 	parent = parentref.Canon(strings.TrimSpace(parent))
-	if parent == "@manual" {
+	if parent == "@manual" || parent == "@console" {
 		return "", false
 	}
 	if parent == "@watch" {
@@ -568,15 +569,11 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 	if launch == nil {
 		return nil
 	}
-	allowedStatus := intent.Status == HerdrIntentRealized ||
-		intent.Status == HerdrIntentManualCleanupRequired
-	if intent.Kind != HerdrIntentWorktree || !allowedStatus {
-		return fmt.Errorf("launch fields require a realized or fail-closed worktree")
+	if !herdrLaunchAllowed(intent.Kind, intent.Status) {
+		return fmt.Errorf("launch fields require an issued coordinator or realized worktree")
 	}
 	requirements := []bool{
 		herdrLaunchNonce.MatchString(launch.Nonce),
-		launch.Agent != "",
-		herdrAgentName.MatchString(launch.AgentName),
 		cleanAbsolute(launch.Executable),
 		validHerdrCodexPaths(launch),
 		cleanAbsolute(launch.EnvFilePath),
@@ -585,7 +582,10 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("launch fields are incomplete")
 	}
-	if err := validateHerdrLaunchArguments(launch.Args); err != nil {
+	if err := validateHerdrLaunchArgs(launch.Args); err != nil {
+		return err
+	}
+	if err := validateHerdrLaunchAgentIdentity(launch); err != nil {
 		return err
 	}
 	if err := validateHerdrEmitter(launch); err != nil {
@@ -597,11 +597,12 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 	return nil
 }
 
-func validateHerdrLaunchArguments(args []string) error {
-	for _, arg := range args {
-		if strings.ContainsRune(arg, '\x00') {
-			return fmt.Errorf("launch argv contains NUL")
-		}
+func validateHerdrLaunchAgentIdentity(launch *HerdrLaunch) error {
+	if (launch.Agent == "") != (launch.AgentName == "") {
+		return fmt.Errorf("launch agent identity is partial")
+	}
+	if launch.AgentName != "" && !herdrAgentName.MatchString(launch.AgentName) {
+		return fmt.Errorf("launch agent name is invalid")
 	}
 	return nil
 }
@@ -641,6 +642,27 @@ func validHerdrCodexPaths(launch *HerdrLaunch) bool {
 		launch.CodexPlanStatusPath == "" || launch.Agent == "codex",
 	}
 	return !slices.Contains(checks, false)
+}
+
+func validateHerdrLaunchArgs(args []string) error {
+	for _, arg := range args {
+		if strings.ContainsRune(arg, '\x00') {
+			return fmt.Errorf("launch argv contains NUL")
+		}
+	}
+	return nil
+}
+
+func herdrLaunchAllowed(kind HerdrIntentKind, status HerdrIntentStatus) bool {
+	switch kind {
+	case HerdrIntentWorktree:
+		return status == HerdrIntentRealized || status == HerdrIntentManualCleanupRequired
+	case HerdrIntentCoordinator:
+		return status == HerdrIntentIssued || status == HerdrIntentRealized ||
+			status == HerdrIntentManualCleanupRequired
+	default:
+		return false
+	}
 }
 
 func cleanAbsolute(path string) bool {

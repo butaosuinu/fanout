@@ -9,7 +9,7 @@ yomi: monitoring
 
 Fan out five child issues and tmux fills with five panes, each running a different agent in a different worktree. The next thing you want to know is which pane reached a PR, and where one is stuck.
 
-fanout answers that through three windows: the **persistent TUI console** if you want to watch from your terminal, `--status` **JSON** if you want to feed automation, and the read-only **web dashboard** if you want to share with a team or a browser. `--status` and the web dashboard are read-only — they only read `.fanout/state.json`, tmux, and GitHub — but the TUI's key bindings can also merge, close, and clean up panes (the same operations as `--merge` / `--close` / `--cleanup`).
+fanout answers that through three windows: the **persistent TUI console** if you want to watch from your terminal, `--status` **JSON** if you want to feed automation, and the read-only **web dashboard** if you want to share with a team or a browser. `--status` and the web dashboard are read-only — they only read `.fanout/state.json`, the selected runtime, and GitHub — but the TUI's tmux paths can also merge, close, and clean up panes (the same operations as `--merge` / `--close` / `--cleanup`).
 
 ## Pane border labels
 
@@ -20,12 +20,12 @@ Before any of the three windows, tmux itself tells the panes apart: fanout label
 To watch every pane from your terminal, run `fanout` with no arguments to start the persistent console.
 
 ```bash
-fanout   # start the persistent tmux console
+fanout   # start the persistent console
 ```
 
-From a plain shell it creates or attaches to fanout's managed tmux session; from inside tmux it turns the current pane into the console. The console reads `.fanout/state.json`, periodically refreshes the issue and PR state of recorded panes, and shows each row's worktree change size as `+X/-Y` and whether it holds uncommitted work as `dirty` / `clean`. The `RUN` column shows the agent's execution state as a glyph — `●` running, `✓` done from the launch wrapper, plus `◐` working, `◇` plan, `◆` blocked, `○` idle when agent hooks report them — and the detail panel shows the same value as `run=`. When you focus a recorded pane with the mouse or tmux `prefix` movement keys, the selected TUI row follows that pane.
+With the tmux backend, a plain-shell launch creates or attaches to fanout's managed tmux session; inside tmux, the current pane becomes the console. With the herdr backend, a plain-shell launch bootstraps fanout's repository-owned session and console workspace, then prints the attach command. Run that command to enter the console; fanout leaves the calling shell intact. The console reads `.fanout/state.json`, periodically refreshes the issue and PR state of recorded panes, and shows each row's worktree change size as `+X/-Y` and whether it holds uncommitted work as `dirty` / `clean`. The `RUN` column shows the agent's execution state as a glyph — `●` running, `✓` done from the launch wrapper, plus `◐` working, `◇` plan, `◆` blocked, `○` idle when agent hooks report them — and the detail panel shows the same value as `run=`. When you focus a recorded tmux pane with the mouse or tmux `prefix` movement keys, the selected TUI row follows that pane.
 
-The console is backend-aware: the header names the selected runtime backend and why it was selected — `backend: herdr (HERDR_ENV)`, for example — and the detail panel shows each row's `backend=` and `pane=` identity. Under the [herdr backend]({{< relref "/docs/herdr-backend" >}}), interactive console actions remain read-only: launch, focus, close, and peek are disabled, and the help screen shows the reason next to each key. CLI and label-watcher launches use the owned runtime path instead.
+The console is backend-aware: the header names the selected runtime backend and why it was selected — `backend: herdr (HERDR_ENV)`, for example — and the detail panel shows each row's `backend=` and `pane=` identity. In fanout's owned [herdr backend]({{< relref "/docs/herdr-backend" >}}) session, issue / Prompt / attach / shell launch, focus, and peek are enabled. Foreign or incomplete Herdr rows stay disabled with the reason beside each key. Herdr send, restore, lifecycle close / merge / cleanup, and plan capture remain unavailable.
 
 {{< diagram "console" >}}
 
@@ -39,19 +39,19 @@ fanout reads structured agent state from the pane's `@fanout_agent_state` tmux o
 
 | Key | Action |
 |---|---|
-| `?` | Open the keyboard shortcut help in a tmux popup. Press `Esc`, `q`, or `?` again to close it. |
+| `?` | Open keyboard shortcut help (tmux popup or inline Herdr form). Press `Esc`, `q`, or `?` again to close it. |
 | `j` / `k` | Move the selection down / up (arrow keys work too). |
 | `[` / `]` | Jump to the previous / next Session group. |
 | `/` | Filter the loaded rows (free text or a predicate such as `state:open`). `Esc` only leaves the input; pressing `Esc` again from the list clears the filter. |
-| `n` | Open the new-session tmux popup. Its Mode row switches between Prompt and Issue; see [New session modes](#new-session-modes). |
-| `s` | Open the settings tmux popup. Choose user or repo config, edit the same keys as `config.json`, and save with `Ctrl+S`. |
+| `n` | Open the new-session form (tmux popup or inline Herdr form). Its Mode row switches between Prompt and Issue; see [New session modes](#new-session-modes). |
+| `s` | Open settings (tmux popup or inline Herdr form). Choose user or repo config, edit the same keys as `config.json`, and save with `Ctrl+S`. |
 | `Ctrl+O` | In the new-session Issue list, open the selected issue in the default browser. |
 | `a` | Attach one or more agent panes to the selected row's recorded worktree. No git worktree is created. The attached rows share the selected worktree and branch, can be focused and peeked, and do not count toward merge progress. Attached agents use the same launch posture as [new-session panes](#new-session-modes). |
 | `A` | Open a shell terminal in the selected row's recorded worktree. Shell rows are recorded as `@manual` entries, can be focused and peeked, and do not count toward merge progress. |
-| `t` | Open a shell terminal at the project root. Closing it removes only the tmux pane and the state row; it never deletes the git worktree. |
+| `t` | Open a shell terminal at the project root. On tmux, closing it removes only the pane and state row; it never deletes the git worktree. Herdr lifecycle close remains unavailable. |
 | `Enter` / `o` | Focus the selected live row's pane. |
 | `1`-`9` | Jump to the Nth row of the displayed list and focus its pane. Out-of-range numbers show a notice. |
-| `Z` | Focus the selected pane and zoom it. Creating or closing a pane, or resizing the tmux window, unzooms it — press `Z` again if you need to. |
+| `Z` | On tmux, focus the selected pane and zoom it. Creating or closing a pane, or resizing the window, unzooms it — press `Z` again if you need to. |
 | `p` | Refresh the read-only output snapshot in the detail panel. |
 | `v` | Cycle the view override: auto → compact → full. Auto picks the [compact view](#compact-view) below 80 columns; compact forces the switcher even on a wide screen, full forces the table even on a narrow one. Not persisted. |
 | `c` / `x` | Open close options for the selected pane: close only the pane, close the pane and the worktree, or also delete the local branch. |
@@ -69,13 +69,13 @@ Press `s` to edit fanout's JSON settings without leaving the console. The Target
 
 ### F11 / prefix + T
 
-From any pane, **`F11`** or **`prefix + T`** returns to the console — the counterpart of `F12` / `prefix + D` — but with no live console it just prints a notice on the status line.
+From any tmux pane, **`F11`** or **`prefix + T`** returns to the console — the counterpart of `F12` / `prefix + D` — but with no live console it just prints a notice on the status line. Herdr does not register tmux keybindings.
 
 Disable it with the `consoleKeybind` config key or `FANOUT_CONSOLE_KEYBIND=0` (see [Settings]({{< relref "/docs/settings" >}})).
 
 ### New session modes
 
-`n` opens a tmux popup with a Mode row that switches between Prompt and Issue.
+`n` opens a form with a Mode row that switches between Prompt and Issue. It is a tmux popup under tmux and an inline form under Herdr.
 
 After this popup successfully launches a Prompt, plan coordinator, or Issue Session, the console focuses the first newly created pane in actual creation order. When an Issue fan-out creates an orchestrator, that pane is first in the creation order. Press `F11` or `prefix + T` to return. Agent attach (`a`), shell (`A` / `t`), watcher, and ordinary CLI launch paths leave focus where it was.
 
@@ -122,7 +122,7 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 The server binds only to `127.0.0.1` and exposes GET-only endpoints, generating a random token each start and embedding it in the URL (drop it with `--no-token` on a single-user machine). The embedded SPA shows the live Session list with a filter, a detail drawer, and a live peek of recent output.
 The dashboard also shows the PR link and CI status for a Prompt Session when a PR exists for its recorded branch.
 
-Each Session row names its runtime backend and pane identity, with a runtime state of `live` / `stale` / `unknown` / `unsupported` / `-`, and the filter accepts `backend:tmux` / `backend:herdr`. For rows on the [herdr backend]({{< relref "/docs/herdr-backend" >}}) the live peek stays empty — herdr backend v1 does not read pane content.
+Each Session row names its runtime backend and pane identity, with a runtime state of `live` / `stale` / `unknown` / `unsupported` / `-`, and the filter accepts `backend:tmux` / `backend:herdr`. For rows on the [herdr backend]({{< relref "/docs/herdr-backend" >}}), live peek returns content only when the saved row still matches a pane in fanout's owned session. Foreign and stale rows return 404, and the dashboard remains GET-only.
 
 ### Diff viewer
 

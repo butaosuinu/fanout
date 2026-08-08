@@ -376,6 +376,27 @@ func TestHerdrLaunchRequiresAbsoluteTeamPaths(t *testing.T) {
 	}
 }
 
+func TestHerdrCoordinatorLaunchAllowsShellAndRejectsPartialAgentIdentity(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	intent := testHerdrCoordinatorIntent(repo, "425")
+	intent.Status = HerdrIntentIssued
+	intent.Launch = &HerdrLaunch{
+		Nonce:        strings.Repeat("a", 32),
+		Executable:   "/bin/zsh",
+		EnvFilePath:  "/private/tmp/fanout-test/env.json",
+		EnvNameCount: 1,
+	}
+	if err := validateHerdrIntent(intent); err != nil {
+		t.Fatalf("issued coordinator shell launch = %v, want success", err)
+	}
+
+	intent.Launch.Agent = "codex"
+	if err := validateHerdrIntent(intent); err == nil ||
+		!strings.Contains(err.Error(), "launch agent identity is partial") {
+		t.Fatalf("partial agent identity error = %v", err)
+	}
+}
+
 func TestHerdrCoordinatorIntentIDsUseSyntheticIssueNumbers(t *testing.T) {
 	firstManual, err := HerdrCoordinatorIntentID("@manual", "/repo/one", -1)
 	if err != nil {

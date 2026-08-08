@@ -208,7 +208,7 @@ func TestLegacyStateRoundTripOmitsTaskID(t *testing.T) {
 	if strings.Contains(string(data), `"taskId"`) {
 		t.Fatalf("legacy round-trip added taskId:\n%s", data)
 	}
-	for _, key := range []string{"backend", "herdrWorkspaceId", "herdrTerminalId", "herdrRepoKey", "herdrAgentId", "herdrAgentSession", "herdrSession", "herdrSocketPath"} {
+	for _, key := range []string{"backend", "herdrWorkspaceId", "herdrWorkspaceLabel", "herdrTerminalId", "herdrRepoKey", "herdrAgentId", "herdrAgentSession", "herdrSession", "herdrSocketPath"} {
 		if strings.Contains(string(data), `"`+key+`"`) {
 			t.Fatalf("legacy round-trip added %s:\n%s", key, data)
 		}
@@ -227,14 +227,15 @@ func TestBackendMetadataRoundTripsAndOmitsWhenEmpty(t *testing.T) {
 	t.Cleanup(func() { _ = locked.Unlock() })
 
 	if err = locked.RecordPane(Pane{
-		Parent:           "423",
-		IssueNum:         425,
-		Backend:          backend.Herdr,
-		PaneID:           "w1:p1",
-		HerdrWorkspaceID: "w1",
-		HerdrTerminalID:  "term-425",
-		HerdrRepoKey:     "/repo/.git",
-		HerdrAgentID:     "agent-425",
+		Parent:              "423",
+		IssueNum:            425,
+		Backend:             backend.Herdr,
+		PaneID:              "w1:p1",
+		HerdrWorkspaceID:    "w1",
+		HerdrWorkspaceLabel: "owned-label",
+		HerdrTerminalID:     "term-425",
+		HerdrRepoKey:        "/repo/.git",
+		HerdrAgentID:        "agent-425",
 		HerdrAgentSession: &backend.AgentSessionRef{
 			Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-425",
 		},
@@ -256,7 +257,8 @@ func TestBackendMetadataRoundTripsAndOmitsWhenEmpty(t *testing.T) {
 		t.Fatal("herdr pane not found after round trip")
 	}
 	if herdrPane.Backend != backend.Herdr || herdrPane.PaneID != "w1:p1" ||
-		herdrPane.HerdrWorkspaceID != "w1" || herdrPane.HerdrTerminalID != "term-425" || herdrPane.HerdrRepoKey != "/repo/.git" ||
+		herdrPane.HerdrWorkspaceID != "w1" || herdrPane.HerdrWorkspaceLabel != "owned-label" ||
+		herdrPane.HerdrTerminalID != "term-425" || herdrPane.HerdrRepoKey != "/repo/.git" ||
 		herdrPane.HerdrAgentID != "agent-425" || herdrPane.HerdrAgentSession == nil ||
 		*herdrPane.HerdrAgentSession != (backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-425"}) ||
 		herdrPane.HerdrSession != "fanout-dev" || herdrPane.HerdrSocketPath != "/tmp/herdr-fanout-dev.sock" {
@@ -274,6 +276,7 @@ func TestBackendMetadataRoundTripsAndOmitsWhenEmpty(t *testing.T) {
 	for _, want := range []string{
 		`"backend": "herdr"`,
 		`"herdrWorkspaceId": "w1"`,
+		`"herdrWorkspaceLabel": "owned-label"`,
 		`"herdrTerminalId": "term-425"`,
 		`"herdrRepoKey": "/repo/.git"`,
 		`"herdrAgentId": "agent-425"`,

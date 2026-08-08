@@ -173,6 +173,45 @@ func TestIssuedHerdrLaunchWithMatchingNameStillFailsClosed(t *testing.T) {
 	}
 }
 
+func TestIssuedHerdrShellRecoversWithoutTokenReplay(t *testing.T) {
+	envPath := filepath.Join(t.TempDir(), "consumed-env")
+	intent := state.HerdrIntent{
+		ID: "console", Status: state.HerdrIntentRealized,
+		WorktreePath: "/repo", Session: "fanout-owned", SocketPath: "/tmp/herdr.sock",
+		ExpiresUnixMS: time.Now().Add(5 * time.Second).UnixMilli(),
+		Resource: state.HerdrResource{
+			WorkspaceID: "w1", Label: "fanout-console-owned", PaneID: "w1:p1",
+			TerminalID: "term-1", CurrentPath: "/repo",
+		},
+		Launch: &state.HerdrLaunch{
+			Nonce: strings.Repeat("a", 32), Executable: "/bin/zsh",
+			EnvFilePath: envPath, EnvNameCount: 1, LauncherReady: true, TokenIssued: true,
+		},
+	}
+	runtime := &fakeHerdrLaunchRuntime{
+		processInfo: herdrrun.PaneProcessInfo{
+			ShellPID: 42, ForegroundProcessGroup: 42,
+			ForegroundProcesses: []herdrrun.PaneProcess{{
+				PID: 42, ParentPID: 1, ProcessGroup: 42,
+				Executable: "/bin/zsh", Argv0: "/bin/zsh", CWD: "/repo",
+			}},
+		},
+		live: []backend.LivePane{{
+			Ref:            backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
+			WorkspaceLabel: "fanout-console-owned", TerminalID: "term-1",
+			CurrentPath: "/repo", SessionID: "fanout-owned", SocketPath: "/tmp/herdr.sock",
+		}},
+	}
+	launcher := &Launcher{Herdr: runtime}
+	live, err := launcher.recoverIssuedHerdrShell(context.Background(), nil, intent)
+	if err != nil || live.Ref.Pane != "w1:p1" {
+		t.Fatalf("recover issued shell = %+v, %v", live, err)
+	}
+	if runtime.tokenCalls != 0 {
+		t.Fatalf("issued shell replayed %d token(s)", runtime.tokenCalls)
+	}
+}
+
 func TestUnpublishedHerdrLaunchRemovesEnvironmentCapsule(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	locked, err := state.LockProjectForLaunch(repo)

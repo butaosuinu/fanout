@@ -128,7 +128,7 @@ func newCommittedRepoDash(t *testing.T) string {
 func TestPollerBuildProjectsMatchingHerdrRuntimeObservation(t *testing.T) {
 	root := t.TempDir()
 	writeState(t, root, `{"schemaVersion":1,"panes":[
-	  {"parent":"100","issueNum":101,"backend":"herdr","paneId":"w1:p1","herdrWorkspaceId":"w1","herdrTerminalId":"terminal-a","herdrRepoKey":"/repo/.git","herdrAgentId":"agent-a","herdrAgentSession":{"source":"herdr:codex","agent":"codex","kind":"id","value":"conversation-a"},"herdrSession":"session-a","herdrSocketPath":"/tmp/herdr-a.sock","agent":"codex","worktreePath":"/repo/worktree-a"}
+	  {"parent":"100","issueNum":101,"backend":"herdr","paneId":"w1:p1","herdrWorkspaceId":"w1","herdrWorkspaceLabel":"owned-label-a","herdrTerminalId":"terminal-a","herdrRepoKey":"/repo/.git","herdrAgentId":"agent-a","herdrAgentSession":{"source":"herdr:codex","agent":"codex","kind":"id","value":"conversation-a"},"herdrSession":"session-a","herdrSocketPath":"/tmp/herdr-a.sock","agent":"codex","worktreePath":"/repo/worktree-a"}
 	]}`)
 
 	p := newPoller("o/n", root, &countingGH{}, nil, newHub())
@@ -147,6 +147,7 @@ func TestPollerBuildProjectsMatchingHerdrRuntimeObservation(t *testing.T) {
 			AgentProvider:    "codex",
 			AgentSession:     agentSession,
 			AgentPresent:     true,
+			WorkspaceLabel:   "owned-label-a",
 			TerminalID:       "terminal-a",
 			Focused:          true,
 			RepoKey:          "/repo/.git",

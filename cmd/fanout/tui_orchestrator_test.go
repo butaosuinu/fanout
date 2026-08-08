@@ -215,7 +215,7 @@ func TestCleanupIssueOrchestratorHandlesStaleAndFailedPaneCleanup(t *testing.T) 
 			}
 
 			tmuxLog := installIssueOrchestratorCleanupTmuxShim(t, tt.liveKey, tt.killFails)
-			err = cleanupIssueOrchestrator(repo, "fanout-test", tmuxbackend.New(), req, "%91")
+			err = cleanupIssueOrchestrator(repo, "fanout-test", tmuxbackend.New(), nil, req, "%91")
 			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("cleanupIssueOrchestrator() error = %v, want %q", err, tt.wantErr)
 			}

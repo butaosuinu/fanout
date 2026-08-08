@@ -6,6 +6,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 func TestViewAlwaysShowsBackendSelectionAndReason(t *testing.T) {
@@ -153,13 +154,77 @@ func TestHerdrRowRuntimeActionsAreDisabledBeforePorts(t *testing.T) {
 			}
 			message := strings.Join([]string{m.notice, m.actionMessage, m.peek.Err}, " ")
 			wantReason := backend.HerdrObservationOnlyReason
-			if tt.key == "p" {
-				wantReason = backend.HerdrContentReadReason
-			}
 			if !strings.Contains(message, wantReason) {
 				t.Fatalf("key %q reason = %q, want explicit herdr action reason", tt.key, message)
 			}
 		})
+	}
+}
+
+func TestOwnedHerdrPaneFocusAndPeekUsePersistedIdentityPorts(t *testing.T) {
+	saved := state.Pane{
+		Backend: backend.Herdr, PaneID: "p1", HerdrWorkspaceID: "w1",
+		HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "t1",
+	}
+	focused, captured := false, false
+	m := newModel(Options{
+		BackendSelection: backend.Selection{Name: backend.Herdr},
+		HerdrActionDisabled: func(got state.Pane) string {
+			if got.PaneID != saved.PaneID {
+				return "wrong identity"
+			}
+			return ""
+		},
+		FocusHerdrPane: func(got state.Pane) error {
+			focused = got.PaneID == saved.PaneID
+			return nil
+		},
+		CaptureHerdrPane: func(got state.Pane, lines int) (string, error) {
+			captured = got.PaneID == saved.PaneID && lines == peekLines
+			return "owned output", nil
+		},
+	})
+	m.allPanes = []paneView{
+		{Backend: backend.Herdr, PaneID: "p1", TmuxState: "live", savedPane: saved},
+	}
+	m.refreshRows()
+	if cmd := m.focusSelectedCmd(); cmd == nil {
+		t.Fatal("focusSelectedCmd() = nil, want owned Herdr focus")
+	} else {
+		_ = cmd()
+	}
+	if cmd := m.peekSelectedCmd(true); cmd == nil {
+		t.Fatal("peekSelectedCmd() = nil, want owned Herdr read")
+	} else {
+		_ = cmd()
+	}
+	if !focused || !captured {
+		t.Fatalf("owned ports called = focus:%t peek:%t, want both true", focused, captured)
+	}
+}
+
+func TestOwnedHerdrPaneLifecycleStaysDisabled(t *testing.T) {
+	saved := state.Pane{Backend: backend.Herdr, PaneID: "p1", HerdrWorkspaceID: "w1"}
+	m := newModel(Options{
+		BackendSelection: backend.Selection{Name: backend.Herdr},
+		HerdrActionDisabled: func(state.Pane) string {
+			return ""
+		},
+	})
+	m.allPanes = []paneView{{
+		Backend: backend.Herdr, PaneID: "p1", TmuxState: "live", savedPane: saved,
+	}}
+	m.refreshRows()
+
+	for _, action := range []lifecycleAction{actionClose, actionMerge, actionCleanup} {
+		updated, cmd := m.startPendingAction(action)
+		m = updated.(model)
+		if cmd != nil || m.pendingAction != nil {
+			t.Fatalf("%s enabled an owned Herdr lifecycle action", action)
+		}
+		if !strings.Contains(m.actionMessage, backend.HerdrObservationOnlyReason) {
+			t.Fatalf("%s reason = %q, want explicit deferred lifecycle reason", action, m.actionMessage)
+		}
 	}
 }
 

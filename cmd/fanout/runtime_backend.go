@@ -94,10 +94,9 @@ func resolveLaunchRuntime(cfg *cliflags.Config, provisionalIntents []backend.Bin
 }
 
 // resolveTUILaunchRuntime applies the same launch-backend contract as the CLI
-// while preserving the no-argument TUI's already-established tmux session and
-// target. The TUI session bootstrap remains tmux-specific; issue, Project,
-// plan, and watcher launches still resolve parent ownership before they can
-// lock state or create launch artifacts.
+// while carrying the no-argument TUI's already-established runtime identifiers.
+// Issue, Project, plan, and watcher launches resolve parent ownership before
+// they can lock state or create launch artifacts.
 func resolveTUILaunchRuntime(projectRoot, session string, cfg *cliflags.Config) (*run.Runtime, error) {
 	return resolveTUILaunchRuntimeForTarget(projectRoot, session, tuiLaunchTarget(session), cfg, nil)
 }
@@ -127,9 +126,8 @@ func resolveTUILaunchRuntimeForTarget(projectRoot, session, target string, cfg *
 }
 
 // resolveLaunchBackend is the shared composition step for CLI and TUI launch
-// lanes. Interactive TUI mutation remains deferred, while CLI issue, Project,
-// plan, and watcher lanes may acquire the owned Herdr runtime. verify repeats
-// parent stickiness against the store held under the launch lock.
+// lanes. Owned Herdr launch lanes acquire the same repository runtime. verify
+// repeats parent stickiness against the store held under the launch lock.
 func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) (launchBackendResolution, error) {
 	inputs := loadRuntimeBackendInputs(cfg, projectRoot, store, provisionalIntents)
 	rows, err := runtimeBackendBindings(projectRoot, store)
@@ -271,9 +269,6 @@ func validateHerdrLaunchBackend(cfg *cliflags.Config) error {
 			return fmt.Errorf("%s must be absolute with --backend herdr --team", team.DBPathEnv)
 		}
 	}
-	if cfg.TUIInteractive {
-		return backend.Unsupported(backend.Herdr, "interactive TUI launch in the current release wave")
-	}
 	if cfg.Session != "" {
 		return fmt.Errorf("--session is only supported by the tmux backend")
 	}
@@ -311,6 +306,22 @@ func constructLaunchRuntimeBackend(
 		return herdrrun.EnsureOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
 	}
 	return herdrrun.NewPreview(), prepare, nil
+}
+
+func openOwnedHerdrSession(projectRoot string) (*herdrrun.OwnedSession, error) {
+	identity, err := worktree.ResolveRepoIdentity(context.Background(), projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	return herdrrun.OpenOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
+}
+
+func ensureOwnedHerdrSession(projectRoot string) (*herdrrun.OwnedSession, error) {
+	identity, err := worktree.ResolveRepoIdentity(context.Background(), projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	return herdrrun.EnsureOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
 }
 
 func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) runtimeBackendInputs {

@@ -128,8 +128,10 @@ herdr status --json   # server と session の状態
 ```
 
 `HERDR_SOCKET_PATH` は `HERDR_SESSION` より優先されるため、古い socket path が残っていると fanout が別の server を見に行きます。`status` の結果が想定と合わないときは unset してください。
-TUI 版のエラー `run fanout inside an existing herdr pane (HERDR_ENV=1)` は文字どおりの意味です。herdr backend でのコンソールは、herdr session 内の pane から起動したときだけ立ち上がります。
-CLI の issue、Project、plan、watcher launch は、代わりにリポジトリの fanout-owned session を作成または再採用します。
+素のシェルから引数なしの TUI を起動する場合、既存の Herdr pane は不要です。
+fanout はリポジトリの owned session を作成または再採用し、console shell を起動して attach command を表示します。
+同じシェルでその command を実行してください。
+CLI の issue、Project、plan、watcher launch も同じ owned session を使います。
 
 ## "unsupported herdr CLI version ..."
 
@@ -147,10 +149,11 @@ stable herdr 0.7.5 以上へ更新してください。`requires a client/server
 
 fanout は method と response field を事前検査しません。`herdr method "<name>" is unavailable` は、その method call が失敗したことを示します。インストール済みの herdr がその method を提供するか確認してください。
 
-## "herdr backend interactive TUI actions are read-only"
+## "herdr backend interactive TUI action is unavailable"
 
 故障ではありません。
-このメッセージは対話 TUI の変更操作と未対応の操作に適用され、CLI の issue、Project、plan、watcher、`--team` launch には適用されません。これらの launch レーンでは `--backend herdr` を使えます。
+fanout-owned session では、完全な保存済み identity が live pane と一致する行に限り、対話 launch、focus、peek を使えます。
+このメッセージは foreign または identity が不完全な行と、未対応の send、restore、lifecycle、plan capture に引き続き適用されます。
 Codex 子の Plan Mode は fanout の app-server controller と owned launcher で動きます。
 記録済みペインを持つ親への矛盾する backend 指定は、引き続き `explicit migration is required` で失敗します。v1 に移行コマンドはありません。
 機能の対応表は [herdr backend]({{< relref "/docs/herdr-backend" >}}) にあります。

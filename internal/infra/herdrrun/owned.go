@@ -47,6 +47,10 @@ const (
 	xdgCacheEnv             = "XDG_CACHE_HOME"
 )
 
+// ErrOwnedSessionNotFound reports that no persisted owned-session admission
+// exists for the requested repository identity.
+var ErrOwnedSessionNotFound = errors.New("fanout-owned herdr session does not exist")
+
 var (
 	errOwnedSupervisorNotRunning    = errors.New("herdr owned supervisor is not running; refusing automatic recovery without proof that prior operations are quiescent")
 	errPinnedBinaryPhysicalIdentity = errors.New("herdr binary bundle has an invalid physical identity")
@@ -218,61 +222,89 @@ func openOwned(ctx context.Context, opts OwnedOptions, backend *Backend) (*Owned
 	if ctx == nil {
 		return nil, fmt.Errorf("open owned herdr session requires a context")
 	}
-	commonDir, commonIdentity, err := openCanonicalGitCommonDir(opts.GitCommonDir)
+	commonDir, layout, marker, admitted, err := existingOwnedAdmission(opts)
 	if err != nil {
 		return nil, err
 	}
-	session := naming.HerdrSessionName(commonIdentity.device, commonIdentity.inode)
-	layout, err := prepareOwnedLayout(opts.RuntimeBase, session)
+	backend, err = reopenOwnedBackend(ctx, layout, marker, admitted, backend)
 	if err != nil {
-		return nil, err
-	}
-	lock, err := lockExistingPrivateFileContext(ctx, layout.lifecycleLock)
-	if err != nil {
-		return nil, fmt.Errorf("lock existing herdr owned lifecycle: %w", err)
-	}
-	defer unlockPrivateFile(lock)
-	marker, admitted, err := loadExistingOwnedMarker(layout, commonDir, commonIdentity)
-	if err != nil {
-		return nil, err
-	}
-	backend = newExistingOwnedBackend(marker, layout, admitted, backend)
-	if err := validateOwnedReady(ctx, backend); err != nil {
 		return nil, err
 	}
 	return ownedSessionFromMarker(commonDir, marker, backend), nil
 }
 
-func loadExistingOwnedMarker(
-	layout ownedLayout,
-	commonDir string,
-	commonIdentity pathIdentity,
-) (ownerMarker, binaryAdmission, error) {
+func existingOwnedAdmission(
+	opts OwnedOptions,
+) (string, ownedLayout, ownerMarker, binaryAdmission, error) {
+	commonDir, commonIdentity, err := openCanonicalGitCommonDir(opts.GitCommonDir)
+	if err != nil {
+		return "", ownedLayout{}, ownerMarker{}, binaryAdmission{}, err
+	}
+	session := naming.HerdrSessionName(commonIdentity.device, commonIdentity.inode)
+	layout, err := prepareOwnedLayout(opts.RuntimeBase, session)
+	if err != nil {
+		return "", ownedLayout{}, ownerMarker{}, binaryAdmission{}, err
+	}
 	marker, found, err := readOwnerMarker(layout.markerPath)
 	if err != nil {
-		return ownerMarker{}, binaryAdmission{}, err
+		return "", ownedLayout{}, ownerMarker{}, binaryAdmission{}, err
 	}
 	if !found {
-		return ownerMarker{}, binaryAdmission{}, fmt.Errorf("herdr owned session marker is missing")
+		return "", ownedLayout{}, ownerMarker{}, binaryAdmission{}, ErrOwnedSessionNotFound
 	}
 	admitted := binaryAdmission{
 		path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion,
 	}
 	launcher := binaryAdmission{path: marker.LauncherPath, sha256: marker.LauncherSHA256}
 	if err := validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted, launcher); err != nil {
-		return ownerMarker{}, binaryAdmission{}, err
+		return "", ownedLayout{}, ownerMarker{}, binaryAdmission{}, err
 	}
-	return marker, admitted, nil
+	return commonDir, layout, marker, admitted, nil
 }
 
-func newExistingOwnedBackend(
-	marker ownerMarker,
+func reopenOwnedBackend(
+	ctx context.Context,
 	layout ownedLayout,
+	marker ownerMarker,
+	admitted binaryAdmission,
+	backend *Backend,
+) (*Backend, error) {
+	lock, err := lockExistingPrivateFileContext(ctx, layout.lifecycleLock)
+	if err != nil {
+		return nil, fmt.Errorf("lock existing herdr owned lifecycle: %w", err)
+	}
+	defer unlockPrivateFile(lock)
+	current, found, err := readOwnerMarker(layout.markerPath)
+	if err != nil || !found || current != marker {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("herdr ownership marker changed")
+	}
+	if err := verifyLiveSupervisor(layout.supervisorLock, marker); err != nil {
+		return nil, err
+	}
+	if err := validatePrivateSocket(marker.SocketPath); err != nil {
+		return nil, err
+	}
+	if err := validatePrivateSocket(marker.ClientSocketPath); err != nil {
+		return nil, err
+	}
+	backend = newReopenedOwnedBackend(layout, marker, admitted, backend)
+	if _, err := backend.probeOwned(ctx, *backend.owner); err != nil {
+		return nil, err
+	}
+	return backend, nil
+}
+
+func newReopenedOwnedBackend(
+	layout ownedLayout,
+	marker ownerMarker,
 	admitted binaryAdmission,
 	backend *Backend,
 ) *Backend {
 	if backend == nil {
-		backend = New(marker.Session, marker.SocketPath)
+		backend = New(marker.Session, layout.socketPath)
 	}
 	backend.session = marker.Session
 	backend.socketPath = marker.SocketPath
@@ -284,13 +316,14 @@ func newExistingOwnedBackend(
 	backend.lookPath = func(string) (string, error) { return admitted.path, nil }
 	backend.stageBinary = func(sourcePath string) (string, string, error) {
 		if sourcePath != admitted.path {
-			return "", "", fmt.Errorf("herdr owned binary identity changed")
+			return "", "", fmt.Errorf("reopened herdr binary path changed")
+		}
+		if err := validatePinnedBinary(sourcePath, admitted.sha256, layout); err != nil {
+			return "", "", err
 		}
 		return admitted.path, admitted.sha256, nil
 	}
-	backend.owner = &ownedAdmission{
-		marker: marker, markerPath: layout.markerPath, lockPath: layout.lifecycleLock,
-	}
+	backend.owner = &ownedAdmission{marker: marker, markerPath: layout.markerPath, lockPath: layout.lifecycleLock}
 	return backend
 }
 
@@ -612,7 +645,7 @@ func (b *Backend) acquireOwnedOperation(ctx context.Context) (ownedAdmission, *o
 	if b == nil || b.owner == nil {
 		return ownedAdmission{}, nil, fmt.Errorf("herdr mutation requires a fanout-owned session")
 	}
-	lock, err := lockPrivateFileContext(ctx, b.owner.lockPath)
+	lock, err := lockExistingPrivateFileContext(ctx, b.owner.lockPath)
 	if err != nil {
 		return ownedAdmission{}, nil, err
 	}
@@ -947,28 +980,29 @@ func validateOwnerUID(path string, info os.FileInfo) error {
 }
 
 func lockPrivateFileContext(ctx context.Context, path string) (*os.File, error) {
-	if ctx == nil {
-		return nil, fmt.Errorf("lock private file requires a context")
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	return lockOpenedPrivateFileContext(ctx, path, f)
+	return lockPrivateFileContextWithFlags(ctx, path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW)
 }
 
 func lockExistingPrivateFileContext(ctx context.Context, path string) (*os.File, error) {
+	return lockPrivateFileContextWithFlags(ctx, path, os.O_RDWR|syscall.O_NOFOLLOW)
+}
+
+func lockPrivateFileContextWithFlags(ctx context.Context, path string, flags int) (*os.File, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("lock private file requires a context")
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW, 0)
+	f, err := openPrivateLockFile(path, flags)
 	if err != nil {
 		return nil, err
 	}
-	return lockOpenedPrivateFileContext(ctx, path, f)
+	return waitForPrivateFileLock(ctx, f)
 }
 
-func lockOpenedPrivateFileContext(ctx context.Context, path string, f *os.File) (*os.File, error) {
+func openPrivateLockFile(path string, flags int) (*os.File, error) {
+	f, err := os.OpenFile(path, flags, 0o600)
+	if err != nil {
+		return nil, err
+	}
 	info, err := f.Stat()
 	if err == nil {
 		err = validatePrivateRegular(path, info)
@@ -977,8 +1011,12 @@ func lockOpenedPrivateFileContext(ctx context.Context, path string, f *os.File) 
 		_ = f.Close()
 		return nil, err
 	}
+	return f, nil
+}
+
+func waitForPrivateFileLock(ctx context.Context, f *os.File) (*os.File, error) {
 	for {
-		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
 			return f, nil
 		}
@@ -1036,7 +1074,7 @@ func inspectSupervisorLease(path string) (supervisorLease, bool, error) {
 }
 
 func verifyLiveSupervisor(path string, marker ownerMarker) error {
-	lease, running, err := inspectSupervisorLease(path)
+	lease, running, err := inspectExistingSupervisorLease(path)
 	if err != nil {
 		return err
 	}
@@ -1047,6 +1085,34 @@ func verifyLiveSupervisor(path string, marker ownerMarker) error {
 		return fmt.Errorf("herdr supervisor lease does not match ownership marker")
 	}
 	return nil
+}
+
+func inspectExistingSupervisorLease(path string) (supervisorLease, bool, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return supervisorLease{}, false, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return supervisorLease{}, false, err
+	}
+	if err := validatePrivateRegular(path, info); err != nil {
+		return supervisorLease{}, false, err
+	}
+	lockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if lockErr == nil {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		return supervisorLease{}, false, nil
+	}
+	if !errors.Is(lockErr, syscall.EWOULDBLOCK) && !errors.Is(lockErr, syscall.EAGAIN) {
+		return supervisorLease{}, false, lockErr
+	}
+	lease, err := readLeaseFromFile(f)
+	if err != nil {
+		return supervisorLease{}, true, fmt.Errorf("parse herdr supervisor lease: %w", err)
+	}
+	return lease, true, nil
 }
 
 func writeSupervisorLease(f *os.File, marker ownerMarker) error {

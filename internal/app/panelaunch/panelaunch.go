@@ -310,7 +310,9 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		l.Log.Err("%s: runtime backend is not configured", paneLogLabel(req))
 		return Result{}, false
 	}
-	if keyErr := ensurePaneLivenessKey(&req); keyErr != nil {
+	if l.Backend.Name() == backend.Herdr {
+		req.ShellKey = ""
+	} else if keyErr := ensurePaneLivenessKey(&req); keyErr != nil {
 		l.Log.Err("%s: %v", paneLogLabel(req), keyErr)
 		return Result{}, false
 	}
@@ -332,7 +334,13 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		logPlanMode(req, l.Log)
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, l.Info.ProjectRoot, targetPath, ""), req.Hooks, l.Log)
+	if l.Backend.Name() == backend.Herdr {
+		return l.attachHerdr(req, targetPath)
+	}
+	return l.attachTmux(req, targetPath)
+}
 
+func (l *Launcher) attachTmux(req Request, targetPath string) (Result, bool) {
 	paneID, ok := l.splitAndDecorate(req, targetPath, decorateOpts{strictShellKey: true})
 	if !ok {
 		if paneID != "" {
@@ -340,38 +348,61 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		}
 		return Result{}, false
 	}
-	codexPlanStatus := codexapp.Status{}
-	if req.CodexPlanMode() {
-		var planErr error
-		codexPlanStatus, planErr = codexapp.WaitReady(req.CodexPlanStatusPath, CodexPlanTUIStartupTimeout)
-		if planErr != nil {
-			l.Log.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, planErr)
-			cleaned := failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, targetPath, req.ShellKey, nil, l.Log)
-			if !cleaned {
-				l.recordRecoveryPane(req, paneID, targetPath, state.PaneKindAttachedAgent, codexPlanStatus)
-			} else {
-				l.releaseStartGateAfterFailure(req)
-			}
-			return Result{}, false
-		}
-		_ = os.Remove(req.CodexPlanStatusPath)
+	codexPlanStatus, ok := l.waitAttachedCodexPlan(req, paneID, targetPath)
+	if !ok {
+		return Result{}, false
 	}
-	if l.Recorder != nil {
-		entry := statePaneForBackend(req, paneID, targetPath, time.Now().UTC(), codexPlanStatus, l.Backend.Name())
-		entry.Kind = state.PaneKindAttachedAgent
-		if err := l.Recorder.RecordPane(entry); err != nil {
-			l.Log.Err("%s: write fanout state: %v", paneLogLabel(req), err)
-			if failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, targetPath, req.ShellKey, nil, l.Log) {
-				rollbackState(l.Recorder, req, l.Log)
-				l.releaseStartGateAfterFailure(req)
-			} else {
-				l.recordRecoveryPane(req, paneID, targetPath, state.PaneKindAttachedAgent, codexPlanStatus)
-			}
-			return Result{}, false
-		}
+	if !l.recordAttachedPane(req, paneID, targetPath, codexPlanStatus) {
+		return Result{}, false
 	}
 	l.Log.Ok("%s: pane %s attached to %s", paneLogLabel(req), paneID, targetPath)
 	return Result{PaneID: paneID, Notice: launchNotice(req)}, true
+}
+
+func (l *Launcher) waitAttachedCodexPlan(
+	req Request,
+	paneID, targetPath string,
+) (codexapp.Status, bool) {
+	status := codexapp.Status{}
+	if !req.CodexPlanMode() {
+		return status, true
+	}
+	status, err := codexapp.WaitReady(req.CodexPlanStatusPath, CodexPlanTUIStartupTimeout)
+	if err == nil {
+		_ = os.Remove(req.CodexPlanStatusPath)
+		return status, true
+	}
+	l.Log.Err("%s: start Codex Plan Mode TUI in pane %s: %v", paneLogLabel(req), paneID, err)
+	cleaned := failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, targetPath, req.ShellKey, nil, l.Log)
+	if !cleaned {
+		l.recordRecoveryPane(req, paneID, targetPath, state.PaneKindAttachedAgent, status)
+	} else {
+		l.releaseStartGateAfterFailure(req)
+	}
+	return status, false
+}
+
+func (l *Launcher) recordAttachedPane(
+	req Request,
+	paneID, targetPath string,
+	status codexapp.Status,
+) bool {
+	if l.Recorder == nil {
+		return true
+	}
+	entry := statePaneForBackend(req, paneID, targetPath, time.Now().UTC(), status, l.Backend.Name())
+	entry.Kind = state.PaneKindAttachedAgent
+	if err := l.Recorder.RecordPane(entry); err != nil {
+		l.Log.Err("%s: write fanout state: %v", paneLogLabel(req), err)
+		if failCleanup(l.Backend, paneLogLabel(req), l.Info.Target, paneID, targetPath, req.ShellKey, nil, l.Log) {
+			rollbackState(l.Recorder, req, l.Log)
+			l.releaseStartGateAfterFailure(req)
+		} else {
+			l.recordRecoveryPane(req, paneID, targetPath, state.PaneKindAttachedAgent, status)
+		}
+		return false
+	}
+	return true
 }
 
 // decorateOpts selects the strictness of splitAndDecorate's post-split steps.
@@ -503,6 +534,7 @@ func applyHerdrStateIdentity(
 	}
 	identity := live[0]
 	pane.HerdrWorkspaceID = identity.Ref.Workspace
+	pane.HerdrWorkspaceLabel = identity.WorkspaceLabel
 	pane.HerdrTerminalID = identity.TerminalID
 	pane.HerdrRepoKey = identity.RepoKey
 	pane.HerdrAgentID = identity.AgentID
@@ -701,6 +733,9 @@ func ReleaseAgentStartGate(runtimeBackend backend.Backend, req Request) error {
 	if runtimeBackend == nil {
 		return fmt.Errorf("runtime backend is not configured")
 	}
+	if runtimeBackend.Name() == backend.Herdr {
+		return nil
+	}
 	return runtimeBackend.ReleaseStartGate(req.AgentStartGate)
 }
 
@@ -894,8 +929,8 @@ func (l *Launcher) recordRecoveryPane(req Request, paneID, worktreePath, kind st
 	l.Log.Warn("%s: pane %s may still be live; recorded it for lifecycle cleanup", paneLogLabel(req), paneID)
 }
 
-// KillAttachedPane tears down the keyed tmux pane created by AttachWithResult
-// only when its live @fanout_shell_key still matches the recorded identity. It
+// KillAttachedPane tears down the pane created by AttachWithResult only when
+// its backend-specific live identity still matches the recorded identity. It
 // does not remove the state row; callers may do that only after this succeeds.
 // An empty paneID is a no-op, and an already-gone pane is considered stopped.
 func KillAttachedPane(runtimeBackend backend.Backend, target, paneID, shellKey string) error {
@@ -913,10 +948,7 @@ func KillAttachedPane(runtimeBackend backend.Backend, target, paneID, shellKey s
 	if !ok {
 		return fmt.Errorf("runtime backend %s does not support identity-aware pane close", runtimeBackend.Name())
 	}
-	result, err := closer.CloseOwned(backend.CloseRequest{
-		Ref:      backend.PaneRef{Backend: runtimeBackend.Name(), Pane: paneID},
-		ShellKey: shellKey,
-	})
+	result, err := closer.CloseOwned(attachedPaneCloseRequest(runtimeBackend.Name(), paneID, shellKey))
 	if err != nil {
 		return err
 	}
@@ -930,15 +962,30 @@ func KillAttachedPane(runtimeBackend backend.Backend, target, paneID, shellKey s
 	default:
 		return fmt.Errorf("attached pane %s close returned unknown status %d", paneID, result.Status)
 	}
-	if runtimeBackend.Name() == backend.Tmux {
-		relayoutTarget := result.ContainerID
-		if relayoutTarget == "" {
-			relayoutTarget = target
-		}
-		// The pane is confirmed gone; layout repair is cosmetic best-effort.
-		_ = panelayout.Apply(relayoutTarget, panelayout.Close)
-	}
+	repairAttachedPaneLayout(runtimeBackend.Name(), target, result.ContainerID)
 	return nil
+}
+
+func attachedPaneCloseRequest(runtimeBackend backend.Name, paneID, shellKey string) backend.CloseRequest {
+	request := backend.CloseRequest{
+		Ref:      backend.PaneRef{Backend: runtimeBackend, Pane: paneID},
+		ShellKey: shellKey,
+	}
+	if runtimeBackend == backend.Herdr {
+		request.ShellKey = ""
+	}
+	return request
+}
+
+func repairAttachedPaneLayout(runtimeBackend backend.Name, target, containerID string) {
+	if runtimeBackend != backend.Tmux {
+		return
+	}
+	if containerID == "" {
+		containerID = target
+	}
+	// The pane is confirmed gone; layout repair is cosmetic best-effort.
+	_ = panelayout.Apply(containerID, panelayout.Close)
 }
 
 var setPaneLivenessKey = tmuxrun.SetPaneShellKey
