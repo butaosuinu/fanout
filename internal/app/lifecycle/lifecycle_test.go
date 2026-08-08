@@ -80,7 +80,7 @@ func stubRelayout(t *testing.T) *[]relayoutCall {
 // close, then relayout the accumulated set once.
 func closeAndRelayout(panes []state.Pane) {
 	windows := map[string]struct{}{}
-	closePaneRecords(fakeRuntimeOptions(), panes, ClosePaneOnly, nopLogger{}, windows)
+	closePaneRecordsLocked(fakeRuntimeOptions(), nil, panes, ClosePaneOnly, nopLogger{}, windows)
 	relayoutClosedWindows(windows, nopLogger{})
 }
 
@@ -153,8 +153,8 @@ func TestCleanupAccumulatesWindowsAcrossPanes(t *testing.T) {
 	calls := stubRelayout(t)
 
 	windows := map[string]struct{}{}
-	cleanupPaneRecords(fakeRuntimeOptions(), []state.Pane{{PaneID: "%1", IssueNum: 1}}, nopLogger{}, windows)
-	cleanupPaneRecords(fakeRuntimeOptions(), []state.Pane{{PaneID: "%2", IssueNum: 2}}, nopLogger{}, windows)
+	cleanupPaneRecordsLocked(fakeRuntimeOptions(), nil, []state.Pane{{PaneID: "%1", IssueNum: 1}}, nopLogger{}, windows)
+	cleanupPaneRecordsLocked(fakeRuntimeOptions(), nil, []state.Pane{{PaneID: "%2", IssueNum: 2}}, nopLogger{}, windows)
 	relayoutClosedWindows(windows, nopLogger{})
 
 	if len(*calls) != 1 || (*calls)[0].id != "@7" {
@@ -191,7 +191,7 @@ func TestClosePaneRecordsPreservesLiveLegacyShellWithoutKey(t *testing.T) {
 		WorktreePath: "/repo",
 	}
 
-	if closePaneRecords(fakeRuntimeOptions(), []state.Pane{pane}, ClosePaneOnly, nopLogger{}, map[string]struct{}{}) {
+	if closePaneRecordsLocked(fakeRuntimeOptions(), nil, []state.Pane{pane}, ClosePaneOnly, nopLogger{}, map[string]struct{}{}) {
 		t.Fatal("closePaneRecords() succeeded without a shell liveness key")
 	}
 	if len(*closeCalls) != 1 || (*closeCalls)[0].shellKey != "" {
@@ -205,7 +205,7 @@ func TestClosePaneRecordsPreservesLiveLegacyAttachedAgentWithoutKey(t *testing.T
 	})
 	calls := stubRelayout(t)
 
-	if closePaneRecords(fakeRuntimeOptions(), []state.Pane{{PaneID: "%1", IssueNum: -1, Kind: state.PaneKindAttachedAgent, WorktreePath: "/wt/source"}}, ClosePaneOnly, nopLogger{}, map[string]struct{}{}) {
+	if closePaneRecordsLocked(fakeRuntimeOptions(), nil, []state.Pane{{PaneID: "%1", IssueNum: -1, Kind: state.PaneKindAttachedAgent, WorktreePath: "/wt/source"}}, ClosePaneOnly, nopLogger{}, map[string]struct{}{}) {
 		t.Fatal("closePaneRecords() succeeded for a live legacy attached pane")
 	}
 	if len(*calls) != 0 {
@@ -271,7 +271,7 @@ func TestClosePaneRecordsStopsAllPanesBeforeRemovingWorktrees(t *testing.T) {
 	}
 	opts := fakeRuntimeOptions()
 	opts.ProjectRoot = projectRoot
-	if !closePaneRecords(opts, panes, CloseWorktree, nopLogger{}, map[string]struct{}{}) {
+	if !closePaneRecordsLocked(opts, nil, panes, CloseWorktree, nopLogger{}, map[string]struct{}{}) {
 		t.Fatal("closePaneRecords() failed")
 	}
 	body, err := os.ReadFile(eventsPath)
@@ -313,7 +313,7 @@ func TestClosePaneRecordsFailurePreservesEveryWorktree(t *testing.T) {
 	}
 	opts := fakeRuntimeOptions()
 	opts.ProjectRoot = t.TempDir()
-	if closePaneRecords(opts, panes, CloseWorktree, nopLogger{}, map[string]struct{}{}) {
+	if closePaneRecordsLocked(opts, nil, panes, CloseWorktree, nopLogger{}, map[string]struct{}{}) {
 		t.Fatal("closePaneRecords() succeeded, want failure")
 	}
 	for _, path := range []string{wt1, wt2} {
@@ -376,7 +376,7 @@ func TestClosePaneRecordsRoutesLegacyStateThroughBackendPort(t *testing.T) {
 		return backend.CloseResult{Status: backend.CloseConfirmed}, nil
 	}
 
-	ok := closePaneRecords(opts, []state.Pane{{PaneID: "%9", IssueNum: 9}}, ClosePaneOnly, nopLogger{}, map[string]struct{}{})
+	ok := closePaneRecordsLocked(opts, nil, []state.Pane{{PaneID: "%9", IssueNum: 9}}, ClosePaneOnly, nopLogger{}, map[string]struct{}{})
 	if !ok {
 		t.Fatal("closePaneRecords() = false, want true")
 	}
@@ -395,7 +395,7 @@ func TestClosePaneRecordsUsesBackendLivePaneForShellIdentity(t *testing.T) {
 		return backend.CloseResult{Status: backend.CloseConfirmed}, nil
 	}
 
-	ok := closePaneRecords(opts, []state.Pane{{PaneID: "%2", IssueNum: -1, Kind: state.PaneKindShell, ShellKey: "shell-2"}}, ClosePaneOnly, nopLogger{}, map[string]struct{}{})
+	ok := closePaneRecordsLocked(opts, nil, []state.Pane{{PaneID: "%2", IssueNum: -1, Kind: state.PaneKindShell, ShellKey: "shell-2"}}, ClosePaneOnly, nopLogger{}, map[string]struct{}{})
 	if !ok {
 		t.Fatal("closePaneRecords() = false, want true")
 	}

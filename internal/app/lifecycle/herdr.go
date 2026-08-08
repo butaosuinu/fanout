@@ -16,7 +16,7 @@ import (
 
 const herdrCleanupTimeout = 5 * time.Minute
 
-var ErrHerdrManualCleanupRequired = errors.New("Herdr lifecycle requires manual cleanup")
+var ErrHerdrManualCleanupRequired = errors.New("herdr lifecycle requires manual cleanup")
 
 // HerdrRuntime is the mutation surface lifecycle needs from one existing owned
 // session. The composition root supplies a route-bound implementation.
@@ -39,7 +39,7 @@ func validateHerdrMergeOperation(opts Options, pane state.Pane) error {
 		return err
 	}
 	if opts.HerdrRuntime == nil {
-		return fmt.Errorf("Herdr lifecycle runtime is not configured")
+		return fmt.Errorf("herdr lifecycle runtime is not configured")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), herdrCleanupTimeout)
 	defer cancel()
@@ -63,8 +63,8 @@ func verifyHerdrMergeTarget(ctx context.Context, projectRoot string, runtime Her
 		return fmt.Errorf("saved Herdr merge checkout is absent or unregistered")
 	}
 	if observation.workspace != nil {
-		if err := verifyHerdrTerminalInvalidation(*observation.workspace, resource); err != nil {
-			return err
+		if terminalErr := verifyHerdrTerminalInvalidation(*observation.workspace, resource); terminalErr != nil {
+			return terminalErr
 		}
 	}
 	fullRef, err := worktree.LocalBranchRef(ctx, projectRoot, pane.BranchName)
@@ -128,8 +128,8 @@ func runHerdrCleanup(
 	if err != nil {
 		return err
 	}
-	if err := runtime.VerifyOwned(ctx); err != nil {
-		return err
+	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
+		return verifyErr
 	}
 	journal, intent, worktreeIntentID, err := loadHerdrCleanupIntent(ctx, opts, locked, runtime, pane, mode)
 	if err != nil {
@@ -154,8 +154,8 @@ func loadHerdrCleanupIntent(
 	if err != nil {
 		return nil, state.HerdrIntent{}, "", err
 	}
-	if err := validateHerdrLaunchIntentForCleanup(journal, worktreeIntentID, opts.ProjectRoot, pane); err != nil {
-		return nil, state.HerdrIntent{}, "", err
+	if validationErr := validateHerdrLaunchIntentForCleanup(journal, worktreeIntentID, opts.ProjectRoot, pane); validationErr != nil {
+		return nil, state.HerdrIntent{}, "", validationErr
 	}
 	intent, found := journal.FindIntent(intentID)
 	if !found {
@@ -437,7 +437,7 @@ func driveHerdrCleanup(
 	case state.HerdrIntentRealized:
 		// Post-mutation Git cleanup continues below.
 	case state.HerdrIntentPlanned:
-		intent, err = executeHerdrCleanupPhase(ctx, opts, journal, runtime, pane, intent)
+		intent, err = executeHerdrCleanupPhase(ctx, opts, journal, runtime, intent)
 	default:
 		err = fmt.Errorf("unsupported Herdr cleanup status %q", intent.Status)
 	}
@@ -457,7 +457,7 @@ func finalizeHerdrCleanup(
 	lg Logger,
 ) error {
 	if intent.Status != state.HerdrIntentRealized {
-		return fmt.Errorf("Herdr cleanup did not reach a confirmed postcondition")
+		return fmt.Errorf("herdr cleanup did not reach a confirmed postcondition")
 	}
 	if branchErr := finishHerdrBranchCleanup(ctx, projectRoot, intent); branchErr != nil {
 		lg.Warn("%s: %v; leaving branch in place", paneLabel(pane), branchErr)
@@ -483,7 +483,6 @@ func executeHerdrCleanupPhase(
 	opts Options,
 	journal *state.LockedHerdrIntents,
 	runtime HerdrRuntime,
-	pane state.Pane,
 	intent state.HerdrIntent,
 ) (state.HerdrIntent, error) {
 	switch intent.CleanupPhase {
@@ -506,10 +505,7 @@ func markHerdrCleanupManual(
 	intent.Status = state.HerdrIntentManualCleanupRequired
 	intent.Failure = cause.Error()
 	journal.UpsertIntent(intent)
-	return errors.Join(
-		fmt.Errorf("%w: %v", ErrHerdrManualCleanupRequired, cause),
-		journal.Save(),
-	)
+	return errors.Join(ErrHerdrManualCleanupRequired, cause, journal.Save())
 }
 
 func saveHerdrCleanupIntent(journal *state.LockedHerdrIntents, intent state.HerdrIntent) error {
@@ -533,10 +529,10 @@ func finishHerdrBranchCleanup(ctx context.Context, projectRoot string, intent st
 		return nil
 	}
 	if current != intent.ExpectedHead {
-		return fmt.Errorf("Herdr branch tip moved from %s to %s", intent.ExpectedHead, current)
+		return fmt.Errorf("herdr branch tip moved from %s to %s", intent.ExpectedHead, current)
 	}
 	if _, err := gitLifecycle(projectRoot, "merge-base", "--is-ancestor", current, "HEAD"); err != nil {
-		return fmt.Errorf("Herdr branch %s is not an ancestor of HEAD", intent.BranchName)
+		return fmt.Errorf("herdr branch %s is not an ancestor of HEAD", intent.BranchName)
 	}
 	if err := worktree.DeleteReservedBranch(ctx, projectRoot, intent.FullBranchRef, current); err != nil {
 		return fmt.Errorf("compare-and-delete Herdr branch %s: %w", intent.BranchName, err)

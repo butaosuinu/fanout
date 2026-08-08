@@ -109,17 +109,15 @@ func TestLockProjectForLaunchAtCombinesCustomStateAndIntentLocks(t *testing.T) {
 	}
 	view, err := project.HerdrIntents(repo)
 	if err != nil {
-		_ = project.Unlock()
-		t.Fatal(err)
+		t.Fatal(errors.Join(err, project.Unlock()))
 	}
 	intent := testHerdrCoordinatorIntent(repo, "425")
 	view.UpsertIntent(intent)
-	if err := view.Save(); err != nil {
-		_ = project.Unlock()
-		t.Fatal(err)
+	if saveErr := view.Save(); saveErr != nil {
+		t.Fatal(errors.Join(saveErr, project.Unlock()))
 	}
-	if err := project.Unlock(); err != nil {
-		t.Fatal(err)
+	if unlockErr := project.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
 	}
 	loaded, err := LoadHerdrIntents(repo)
 	if err != nil {

@@ -255,8 +255,8 @@ func TestFindHerdrCoordinatorIntentPreservesPlanOwnerScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := locked.Unlock(); err != nil {
-			t.Error(err)
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
 		}
 	}()
 
@@ -606,8 +606,8 @@ func recordLifecycleCoordinatorIntent(
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := locked.Unlock(); err != nil {
-			t.Error(err)
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
 		}
 	}()
 	journal, err := locked.HerdrIntents(projectRoot)
@@ -656,16 +656,16 @@ func recordResidualHerdrLaunchIntent(
 	head := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
 	nonce := strings.Repeat("a", 32)
 	envPath := filepath.Join(runtimeDir, "workload-env", "env-"+nonce+".json")
-	if err := os.WriteFile(envPath, []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(envPath, []byte("{}\n"), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := locked.Unlock(); err != nil {
-			t.Error(err)
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
 		}
 	}()
 	journal, err := locked.HerdrIntents(fixture.projectRoot)
@@ -703,8 +703,8 @@ func rewriteResidualLaunchLabel(t *testing.T, projectRoot, intentID, label strin
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := locked.Unlock(); err != nil {
-			t.Error(err)
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
 		}
 	}()
 	journal, err := locked.HerdrIntents(projectRoot)

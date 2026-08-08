@@ -570,8 +570,9 @@ func TestViewOverrideFullForcesTableWhenNarrow(t *testing.T) {
 func TestCompactKeysUseSelectedPane(t *testing.T) {
 	newCompactModel := func(focused *string) model {
 		opts := Options{
-			PaneAlive:         func(string) bool { return true },
-			CapturePaneOutput: func(string, int) (string, error) { return "", nil },
+			PaneAlive:           func(string) bool { return true },
+			CapturePaneOutput:   func(string, int) (string, error) { return "", nil },
+			LifecycleCloseOwned: configuredTmuxClose,
 		}
 		if focused != nil {
 			opts.FocusPane = func(paneID string) error {

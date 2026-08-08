@@ -150,7 +150,7 @@ func verifyHerdrReopenPreconditions(
 		return err
 	}
 	if observation.workspace != nil || observation.checkout.PathAbsent || !observation.checkout.Registered {
-		return fmt.Errorf("Herdr cleanup reopen preconditions changed")
+		return fmt.Errorf("herdr cleanup reopen preconditions changed")
 	}
 	return verifyHerdrCheckout(
 		ctx,
@@ -207,7 +207,7 @@ func executeHerdrRemove(
 		}
 		return executeHerdrWorkspaceClose(ctx, opts, journal, runtime, intent)
 	}
-	cause := errors.Join(mutationErr, fmt.Errorf("Herdr worktree remove did not establish absence"))
+	cause := errors.Join(mutationErr, fmt.Errorf("herdr worktree remove did not establish absence"))
 	return intent, markHerdrCleanupManual(journal, intent, cause)
 }
 
@@ -222,7 +222,7 @@ func verifyHerdrRemovePreconditions(
 		return err
 	}
 	if observation.workspace == nil || observation.checkout.PathAbsent || !observation.checkout.Registered {
-		return fmt.Errorf("Herdr worktree remove preconditions changed")
+		return fmt.Errorf("herdr worktree remove preconditions changed")
 	}
 	if err := verifyHerdrTerminalInvalidation(*observation.workspace, intent.Resource); err != nil {
 		return err
@@ -248,7 +248,7 @@ func executeHerdrWorkspaceClose(
 		return intent, err
 	}
 	if observation.workspace == nil || !observation.checkout.PathAbsent || observation.checkout.Registered {
-		return intent, fmt.Errorf("Herdr residual workspace close preconditions changed")
+		return intent, fmt.Errorf("herdr residual workspace close preconditions changed")
 	}
 	if err := verifyHerdrTerminalInvalidation(*observation.workspace, intent.Resource); err != nil {
 		return intent, err
@@ -262,7 +262,7 @@ func executeHerdrWorkspaceClose(
 	if observeErr == nil && herdrCleanupAbsent(observation) {
 		return realizeHerdrCleanup(journal, intent)
 	}
-	cause := errors.Join(mutationErr, observeErr, fmt.Errorf("Herdr residual workspace close did not establish absence"))
+	cause := errors.Join(mutationErr, observeErr, fmt.Errorf("herdr residual workspace close did not establish absence"))
 	return intent, markHerdrCleanupManual(journal, intent, cause)
 }
 

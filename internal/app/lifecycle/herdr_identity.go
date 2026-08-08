@@ -124,7 +124,7 @@ func matchHerdrWorkspaceByLabel(
 		return nil, nil
 	}
 	if len(matches) != 1 {
-		return nil, fmt.Errorf("Herdr workspace label %q has %d live matches", label, len(matches))
+		return nil, fmt.Errorf("herdr workspace label %q has %d live matches", label, len(matches))
 	}
 	workspace := matches[0]
 	if filepath.Clean(workspace.Path) != filepath.Clean(path) ||

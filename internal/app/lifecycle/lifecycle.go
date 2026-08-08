@@ -179,24 +179,15 @@ func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg L
 
 // Merge fast-forwards the project checkout to the recorded child branch.
 func Merge(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
-	store, code := loadState("--merge", opts, lg)
+	if code := validateState("--merge", opts, lg); code != exitcode.OK {
+		return code
+	}
+	locked, code := lockStateOnly("--merge", opts, lg)
 	if code != exitcode.OK {
 		return code
 	}
-	pane, ok := store.Find(parent, issueNum)
-	if !ok {
-		lg.Err("--merge: #%d is not recorded for parent %s in %s", issueNum, parent, opts.StatePath)
-		return exitcode.Invocation
-	}
-	locked, pane, ok, code := lockHerdrMergeTarget(opts, pane, lg, func(store state.Store) (state.Pane, bool) {
-		return store.Find(parent, issueNum)
-	})
-	if code != exitcode.OK {
-		return code
-	}
-	if locked != nil {
-		defer unlockState("--merge", locked, lg)
-	}
+	defer unlockState("--merge", locked, lg)
+	pane, ok := locked.Find(parent, issueNum)
 	if !ok {
 		lg.Err("--merge: #%d is not recorded for parent %s in %s", issueNum, parent, opts.StatePath)
 		return exitcode.Invocation
@@ -204,30 +195,21 @@ func Merge(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 	if code := mergeRecordedPane(opts, pane, fmt.Sprintf("#%d", issueNum), lg); code != exitcode.OK {
 		return code
 	}
-	removeWatcherRunningLabelBestEffort(opts, parent, pane.IssueNum, remainingIssuePanesAfter(store.PanesForParent(parent), pane.IssueNum), lg)
+	removeWatcherRunningLabelBestEffort(opts, parent, pane.IssueNum, remainingIssuePanesAfter(locked.PanesForParent(parent), pane.IssueNum), lg)
 	return exitcode.OK
 }
 
 // MergeTask fast-forwards the project checkout to the recorded task branch.
 func MergeTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
-	store, code := loadState("--merge", opts, lg)
+	if code := validateState("--merge", opts, lg); code != exitcode.OK {
+		return code
+	}
+	locked, code := lockStateOnly("--merge", opts, lg)
 	if code != exitcode.OK {
 		return code
 	}
-	pane, ok := store.FindTask(parent, taskID)
-	if !ok {
-		lg.Err("--merge: task %s is not recorded for parent %s in %s", taskID, parent, opts.StatePath)
-		return exitcode.Invocation
-	}
-	locked, pane, ok, code := lockHerdrMergeTarget(opts, pane, lg, func(store state.Store) (state.Pane, bool) {
-		return store.FindTask(parent, taskID)
-	})
-	if code != exitcode.OK {
-		return code
-	}
-	if locked != nil {
-		defer unlockState("--merge", locked, lg)
-	}
+	defer unlockState("--merge", locked, lg)
+	pane, ok := locked.FindTask(parent, taskID)
 	if !ok {
 		lg.Err("--merge: task %s is not recorded for parent %s in %s", taskID, parent, opts.StatePath)
 		return exitcode.Invocation
@@ -423,34 +405,17 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	return exitcode.OK
 }
 
-func loadState(mode string, opts Options, lg Logger) (state.Store, exitcode.Code) {
+func validateState(mode string, opts Options, lg Logger) exitcode.Code {
 	if opts.ProjectRoot == "" || !dirExists(opts.ProjectRoot) {
 		lg.Err("%s: project_root is not a directory: %s (state=%s)", mode, emptyLabel(opts.ProjectRoot), opts.StatePath)
-		return state.Store{}, exitcode.Invocation
+		return exitcode.Invocation
 	}
-	store, err := state.Load(opts.StatePath)
+	_, err := state.Load(opts.StatePath)
 	if err != nil {
 		lg.Err("%s: fanout state at %s is not valid JSON or has an invalid schema: %v", mode, opts.StatePath, err)
-		return state.Store{}, exitcode.Invocation
+		return exitcode.Invocation
 	}
-	return store, exitcode.OK
-}
-
-func lockHerdrMergeTarget(
-	opts Options,
-	pane state.Pane,
-	lg Logger,
-	find func(state.Store) (state.Pane, bool),
-) (*state.LockedStore, state.Pane, bool, exitcode.Code) {
-	if backend.NormalizeName(pane.Backend) != backend.Herdr {
-		return nil, pane, true, exitcode.OK
-	}
-	locked, code := lockStateOnly("--merge", opts, lg)
-	if code != exitcode.OK {
-		return nil, state.Pane{}, false, code
-	}
-	current, found := find(locked.Store)
-	return locked, current, found, exitcode.OK
+	return exitcode.OK
 }
 
 func lockStateOnly(mode string, opts Options, lg Logger) (*state.LockedStore, exitcode.Code) {
@@ -523,10 +488,6 @@ func statusChildren(projectRoot string, nums []int, mode string, lg Logger) ([]s
 	return children, exitcode.OK
 }
 
-func cleanupPaneRecords(opts Options, panes []state.Pane, lg Logger, windows map[string]struct{}) bool {
-	return cleanupPaneRecordsLocked(opts, nil, panes, lg, windows)
-}
-
 func cleanupPaneRecordsLocked(opts Options, locked *state.LockedStore, panes []state.Pane, lg Logger, windows map[string]struct{}) bool {
 	return closePaneRecordsLocked(opts, locked, panes, CloseWorktree, lg, windows)
 }
@@ -540,10 +501,6 @@ var relayoutWindow = panelayout.Apply
 // underneath an agent that is still running. The caller removes state only
 // after this function succeeds, so a tmux inspection/close failure remains
 // retryable with both the worktree and state row intact.
-func closePaneRecords(opts Options, panes []state.Pane, mode CloseMode, lg Logger, windows map[string]struct{}) bool {
-	return closePaneRecordsLocked(opts, nil, panes, mode, lg, windows)
-}
-
 func closePaneRecordsLocked(opts Options, locked *state.LockedStore, panes []state.Pane, mode CloseMode, lg Logger, windows map[string]struct{}) bool {
 	if !runBeforeWorktreeRemoveHooks(opts, panes, mode, lg) {
 		return false

@@ -19,6 +19,7 @@ type helpDisabledReasons struct {
 	launch  string
 	pane    string
 	close   string
+	merge   string
 	cleanup string
 	peek    string
 }
@@ -73,14 +74,8 @@ func (m *model) openHelpPopupCmd() tea.Cmd {
 }
 
 func (m model) helpHasDisabledRuntimeActions() bool {
-	if m.runtimeActionDisabledReason(nil, "launch") != "" {
-		return true
-	}
-	pane, ok := m.selectedPane()
-	if !ok {
-		return false
-	}
-	return m.runtimeActionDisabledReason(&pane, "runtime action") != "" || m.peekDisabledReason(pane) != ""
+	disabled := m.helpDisabledReasons()
+	return firstNonEmpty(disabled.launch, disabled.pane, disabled.close, disabled.merge, disabled.cleanup, disabled.peek) != ""
 }
 
 func (m model) helpView() string {
@@ -93,7 +88,7 @@ func (m model) helpView() string {
 		lines = append(lines, titleStyle.Render("Keyboard shortcuts"))
 	}
 	footer := "Esc / q / ? close"
-	if reason := firstNonEmpty(disabled.launch, disabled.pane, disabled.peek); reason != "" {
+	if reason := firstNonEmpty(disabled.launch, disabled.pane, disabled.close, disabled.merge, disabled.cleanup, disabled.peek); reason != "" {
 		if summary, _, ok := strings.Cut(reason, ";"); ok {
 			reason = summary
 		}
@@ -120,6 +115,7 @@ func (m model) helpDisabledReasons() helpDisabledReasons {
 	if pane, ok := m.selectedPane(); ok {
 		disabled.pane = m.runtimeActionDisabledReason(&pane, "runtime action")
 		disabled.close = m.lifecycleActionDisabledReason(&pane, "close")
+		disabled.merge = m.lifecycleActionDisabledReason(&pane, "merge")
 		disabled.cleanup = m.lifecycleActionDisabledReason(&pane, "cleanup")
 		disabled.peek = m.peekDisabledReason(pane)
 	}
@@ -142,7 +138,7 @@ func helpMonitorEntries(disabled helpDisabledReasons) []helpEntry {
 		{"p", "Peek output", disabled.peek},
 		{"v", "Auto/compact/full view", ""},
 		{"c/x", "Close pane", disabled.close},
-		{"m", "Merge branch", ""},
+		{"m", "Merge branch", disabled.merge},
 		{"X", "Cleanup parent", disabled.cleanup},
 	}
 }
