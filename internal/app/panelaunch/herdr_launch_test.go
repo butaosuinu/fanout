@@ -817,6 +817,18 @@ func TestVerifyHerdrAgentProcessRejectsAmbiguousOrForeignChains(t *testing.T) {
 	}
 
 	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child}
+	info.ForegroundProcesses[0].Executable = "/foreign/not-node"
+	if err := verifyHerdrAgentProcess(info, intent); err == nil {
+		t.Fatal("interpreter argv0 from a different OS executable was accepted")
+	}
+
+	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child}
+	info.ForegroundProcesses[1].Executable = "/foreign/not-codex"
+	if err := verifyHerdrAgentProcess(info, intent); err == nil {
+		t.Fatal("agent argv0 from a different OS executable was accepted")
+	}
+
+	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child}
 	info.ForegroundProcesses[1].ParentPID = 99
 	if err := verifyHerdrAgentProcess(info, intent); err == nil {
 		t.Fatal("unrelated child process was accepted")

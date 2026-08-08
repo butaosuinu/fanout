@@ -3,6 +3,8 @@ package stateemitter
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +22,8 @@ import (
 )
 
 const emitterTimeout = 15 * time.Second
+
+var errTerminalChanged = errors.New("current Herdr terminal changed")
 
 // RuntimeTarget is the persisted launch binding used for one current-runtime
 // observation. AcceptUnboundSession is true only before final-row persistence.
@@ -57,15 +61,31 @@ type Observer interface {
 func Run(args []string, getenv func(string) string, observer Observer, errw io.Writer) int {
 	signal, err := telemetry.ParseSignal(args, getenv)
 	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), emitterTimeout)
-		defer cancel()
-		err = Emit(ctx, signal, observer)
+		err = runSignal(signal, observer)
 	}
 	if err == nil {
 		return 0
 	}
 	fmt.Fprintf(errw, "fanout telemetry emitter: %v\n", err)
 	return 1
+}
+
+func runSignal(signal telemetry.Signal, observer Observer) (err error) {
+	eventNonce, err := newEmitterNonce()
+	if err != nil {
+		return err
+	}
+	handoffPath, err := state.EmitterHandoffPath(signal.StatePath, signal.EmitterNonce, eventNonce)
+	if err != nil {
+		return err
+	}
+	if err := state.MarkEmitterHandoff(handoffPath); err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, state.ClearEmitterHandoff(handoffPath)) }()
+	ctx, cancel := context.WithTimeout(context.Background(), emitterTimeout)
+	defer cancel()
+	return Emit(ctx, signal, observer)
 }
 
 // Emit updates exactly one final row or one matching provisional launch. It
@@ -126,11 +146,33 @@ func updateFinalRow(
 		return err
 	}
 	if err := verifyCurrentRuntime(ctx, target, observer); err != nil {
+		if errors.Is(err, errTerminalChanged) {
+			return invalidateFinalRowTelemetry(locked, index)
+		}
 		return err
 	}
 	locked.Panes[index].ReportedState = string(signal.State)
 	locked.Panes[index].StateRefinement = true
 	return locked.Save()
+}
+
+func invalidateFinalRowTelemetry(locked *state.LockedStore, index int) error {
+	nonce, err := newEmitterNonce()
+	if err != nil {
+		return err
+	}
+	locked.Panes[index].ReportedState = ""
+	locked.Panes[index].StateRefinement = false
+	locked.Panes[index].EmitterNonce = nonce
+	return locked.Save()
+}
+
+func newEmitterNonce() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("rotate telemetry emitter nonce: %w", err)
+	}
+	return hex.EncodeToString(value), nil
 }
 
 func updatePendingIntent(
@@ -245,6 +287,9 @@ func verifyCurrentRuntime(ctx context.Context, target RuntimeTarget, observer Ob
 	if err != nil {
 		return err
 	}
+	if currentTerminalChanged(target, observation.Panes) {
+		return errTerminalChanged
+	}
 	if !hasOneMatchingPane(target, observation.Panes) {
 		return fmt.Errorf("saved PaneRef does not match exactly one current runtime pane")
 	}
@@ -255,6 +300,36 @@ func verifyCurrentRuntime(ctx context.Context, target RuntimeTarget, observer Ob
 		WorktreePath: target.WorktreePath,
 		Executable:   target.Executable, Args: target.Args,
 	})
+}
+
+func currentTerminalChanged(target RuntimeTarget, panes []backend.LivePane) bool {
+	matches := 0
+	changed := false
+	for _, pane := range panes {
+		if !sameLivePaneWithoutTerminal(target, pane) {
+			continue
+		}
+		matches++
+		changed = pane.TerminalID != "" && pane.TerminalID != target.TerminalID
+	}
+	return matches == 1 && changed
+}
+
+func sameLivePaneWithoutTerminal(target RuntimeTarget, pane backend.LivePane) bool {
+	identity := []bool{
+		pane.Ref.Backend == target.Backend,
+		pane.Ref.Workspace == target.WorkspaceID,
+		pane.Ref.Pane == target.PaneID,
+		pane.SessionID == target.Session,
+		pane.SocketPath == target.SocketPath,
+		pane.RepoKey == target.RepoKey,
+		filepath.Clean(pane.WorktreePath) == filepath.Clean(target.WorktreePath),
+		pane.AgentPresent,
+		pane.AgentProvider == target.Agent,
+		pane.AgentID == target.AgentID,
+		agentSessionMatches(target, pane.AgentSession),
+	}
+	return !slices.Contains(identity, false)
 }
 
 func validateRuntimeTarget(target RuntimeTarget) error {

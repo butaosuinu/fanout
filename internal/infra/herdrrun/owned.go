@@ -64,6 +64,7 @@ type OwnedSession struct {
 	GitCommonDir     string
 	RuntimeDir       string
 	LauncherPath     string
+	EmitterPath      string
 	ControlPath      string
 
 	backend          *Backend
@@ -303,6 +304,7 @@ func ownedSessionFromMarker(
 		Session: marker.Session, SocketPath: marker.SocketPath,
 		ClientSocketPath: marker.ClientSocketPath, GitCommonDir: commonDir,
 		RuntimeDir: marker.RuntimeDir, LauncherPath: marker.LauncherPath,
+		EmitterPath: marker.LauncherPath,
 		ControlPath: filepath.Join(commonDir, "fanout", "herdr-intents.json"), backend: backend,
 	}
 }
@@ -421,10 +423,18 @@ func ensureOwned(
 		}
 		return nil, err
 	}
+	emitter := launcher
+	if found {
+		emitter, err = pinOwnedLauncher(layout)
+		if err != nil {
+			return nil, err
+		}
+	}
 	started.reapAsync()
 	return &OwnedSession{
 		Session: session, SocketPath: layout.socketPath, ClientSocketPath: layout.clientSocketPath,
-		GitCommonDir: commonDir, RuntimeDir: layout.runtimeDir, LauncherPath: launcher.path,
+		GitCommonDir: commonDir, RuntimeDir: layout.runtimeDir,
+		LauncherPath: launcher.path, EmitterPath: emitter.path,
 		ControlPath: filepath.Join(commonDir, "fanout", "herdr-intents.json"), backend: backend,
 	}, nil
 }

@@ -472,6 +472,9 @@ func TestEnsureOwnedReadoptsPinnedLauncherAfterFanoutUpdate(t *testing.T) {
 	if reused.LauncherPath != legacyPath || h.supervisor.starts != 1 {
 		t.Fatalf("re-adopted launcher = %q, starts=%d, want %q and one start", reused.LauncherPath, h.supervisor.starts, legacyPath)
 	}
+	if reused.EmitterPath == legacyPath || reused.EmitterPath == "" {
+		t.Fatalf("re-adopted emitter = %q, want current content-addressed fanout", reused.EmitterPath)
+	}
 }
 
 func TestOwnedReadinessRequiresPrivateServerAndClientSockets(t *testing.T) {

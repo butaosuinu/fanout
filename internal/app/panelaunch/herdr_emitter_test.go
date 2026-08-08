@@ -2,6 +2,7 @@ package panelaunch
 
 import (
 	"encoding/json"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ func TestHerdrEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
 	route := herdrrun.OwnedLaunchRoute{
 		Session: "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",
 		LauncherPath: "/opt/fanout build/fanout",
+		EmitterPath:  "/opt/current fanout/fanout",
 	}
 	launch, err := newHerdrEmitterLaunch(
 		Request{Agent: "claude"}, route, intent, strings.Repeat("a", 32),
@@ -90,9 +92,32 @@ func TestHerdrClaudeHookSettingsReportsProviderLifecycleBestEffort(t *testing.T)
 		if strings.Contains(command, "tmux") {
 			t.Fatalf("%s command depends on tmux: %q", event, command)
 		}
+		if !strings.Contains(command, "} &") {
+			t.Fatalf("%s command waits for telemetry: %q", event, command)
+		}
+		if out, err := exec.Command("sh", "-n", "-c", command).CombinedOutput(); err != nil {
+			t.Fatalf("%s command is not valid POSIX shell: %v: %s", event, err, out)
+		}
 	}
 	if !strings.Contains(settings.Hooks["Notification"][0].Hooks[0].Command, "permission_prompt") {
 		t.Fatal("Notification hook lacks blocking-input filter")
+	}
+}
+
+func TestHerdrEmitterLaunchUsesCurrentPinnedEmitterInsteadOfSessionLauncher(t *testing.T) {
+	launch, err := newHerdrEmitterLaunch(
+		Request{Agent: "claude"},
+		herdrrun.OwnedLaunchRoute{
+			LauncherPath: "/owned/old-fanout", EmitterPath: "/owned/current-fanout",
+		},
+		state.HerdrIntent{}, strings.Repeat("a", 32), "agent", "/repo/.fanout/state.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := launch.backendArgs[1]
+	if !strings.Contains(settings, "/owned/current-fanout") || strings.Contains(settings, "old-fanout") {
+		t.Fatalf("settings use stale session launcher: %s", settings)
 	}
 }
 

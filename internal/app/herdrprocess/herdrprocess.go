@@ -3,6 +3,7 @@ package herdrprocess
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
@@ -70,12 +71,14 @@ func validObservedProcess(process herdrrun.PaneProcess) bool {
 }
 
 func directAgentProcess(process herdrrun.PaneProcess, identity Identity) bool {
-	return process.Argv0 == identity.Executable && slices.Equal(process.Argv, identity.Args)
+	return observedExecutableMatches(process.Executable, identity.Executable) &&
+		process.Argv0 == identity.Executable && slices.Equal(process.Argv, identity.Args)
 }
 
 func interpreterAgentProcess(process herdrrun.PaneProcess, identity Identity) bool {
 	want := append([]string{identity.Executable}, identity.Args...)
-	return process.Argv0 != identity.Executable && slices.Equal(process.Argv, want)
+	return observedExecutableMatches(process.Executable, process.Argv0) &&
+		process.Argv0 != identity.Executable && slices.Equal(process.Argv, want)
 }
 
 func countAgentDescendants(
@@ -101,8 +104,14 @@ func matchesAgentDescendant(
 ) bool {
 	return process.PID != root.PID && process.CWD == identity.WorktreePath &&
 		process.ProcessGroup == info.ForegroundProcessGroup &&
+		observedExecutableMatches(process.Executable, process.Argv0) &&
 		slices.Equal(process.Argv, identity.Args) &&
 		processDescendsFrom(process.PID, root.PID, processes)
+}
+
+func observedExecutableMatches(observed, argv0 string) bool {
+	// ps comm is an OS-observed executable name on macOS, not an absolute path.
+	return filepath.Base(observed) == filepath.Base(argv0)
 }
 
 func processDescendsFrom(pid, rootPID int, processes map[int]herdrrun.PaneProcess) bool {
