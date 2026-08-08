@@ -9,7 +9,6 @@ import (
 	"context"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
@@ -27,19 +26,19 @@ const (
 	metadataCIToken     = "fanout_ci"
 )
 
-// herdrMetadataTimeout bounds the whole report: two identity snapshots around
-// two report calls, each of which the runtime bounds separately.
-const herdrMetadataTimeout = 30 * time.Second
-
 // reportHerdrSidebarMetadata publishes the display-only tokens once the launch
 // has a verified live identity. Metadata is never authority, so a failure
-// leaves the launch standing; fanout logs it and does not retry, because a lost
-// outcome must not race a replaced session.
+// leaves the launch standing; fanout notes it and does not retry, because a
+// lost outcome must not race a replaced session.
+//
+// The note is dim rather than a warning on purpose: the TUI turns every [warn]
+// line from a successful launch into its result banner (bufferedLaunchNotice),
+// and a cosmetic token failure must not read as a broken launch.
 func (l *Launcher) reportHerdrSidebarMetadata(req Request, intent state.HerdrIntent) {
-	ctx, cancel := context.WithTimeout(context.Background(), herdrMetadataTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), herdrrun.MetadataReportBudget)
 	defer cancel()
 	if err := l.Herdr.ReportMetadata(ctx, herdrSidebarMetadata(req, intent)); err != nil {
-		l.Log.Warn("%s: report Herdr sidebar metadata: %v", paneLogLabel(req), err)
+		l.Log.Dim("%s: Herdr sidebar metadata not reported: %v", paneLogLabel(req), err)
 	}
 }
 

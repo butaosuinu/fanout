@@ -2,7 +2,6 @@ package panelaunch
 
 import (
 	"errors"
-	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -140,13 +139,14 @@ func TestHerdrMetadataValueMatchesHerdrStorage(t *testing.T) {
 }
 
 // TestReportHerdrSidebarMetadataNeverFailsALaunch keeps metadata display-only:
-// the report runs after the row is recorded and a failure is reported, not
-// retried and not escalated.
+// the report runs once after the row is recorded, is not retried, and stays out
+// of stderr so cmd/fanout's bufferedLaunchNotice cannot turn a cosmetic token
+// failure into the TUI's launch banner.
 func TestReportHerdrSidebarMetadataNeverFailsALaunch(t *testing.T) {
 	runtime := &fakeHerdrLaunchRuntime{metadataErr: errors.New("target is not live")}
-	var out strings.Builder
+	var out, errOut strings.Builder
 	launcher := &Launcher{
-		Cfg: &cliflags.Config{}, Log: log.NewWith(io.Discard, &out, false),
+		Cfg: &cliflags.Config{}, Log: log.NewWith(&out, &errOut, false),
 		Info: &fanoutruntime.Info{ProjectRoot: "/repo"}, Herdr: runtime,
 	}
 	req := Request{ParentRef: "524", Number: 494, Slug: "herdr-sidebar-494"}
@@ -157,7 +157,10 @@ func TestReportHerdrSidebarMetadataNeverFailsALaunch(t *testing.T) {
 		t.Fatalf("metadata reports = %d, want exactly one attempt", len(runtime.metadataReports))
 	}
 	if !strings.Contains(out.String(), "target is not live") {
-		t.Fatalf("log = %q, want the report failure reported", out.String())
+		t.Errorf("stdout = %q, want the report failure noted", out.String())
+	}
+	if errOut.String() != "" {
+		t.Errorf("stderr = %q, want a display-only failure to stay off the launch log", errOut.String())
 	}
 }
 

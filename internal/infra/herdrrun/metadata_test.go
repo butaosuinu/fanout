@@ -5,8 +5,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 func TestMetadataArgsPinHerdr075CLI(t *testing.T) {
@@ -174,23 +172,58 @@ func TestValidateMetadataReportFailsClosed(t *testing.T) {
 func TestMetadataTargetLiveRequiresTheExactWorkspaceAndPane(t *testing.T) {
 	tests := []struct {
 		name    string
-		mutate  func(*WorkspaceObservation)
+		mutate  func(*snapshotJSON)
 		wantHit bool
 	}{
-		{name: "matches the recorded workspace and pane", mutate: func(*WorkspaceObservation) {}, wantHit: true},
-		{name: "rejects a relabeled workspace", mutate: func(w *WorkspaceObservation) { w.Label = "fanout-worktree-other" }},
-		{name: "rejects a foreign repository", mutate: func(w *WorkspaceObservation) { w.RepoKey = "/other/.git" }},
-		{name: "rejects a moved checkout", mutate: func(w *WorkspaceObservation) { w.Path = "/repo/.fanout/worktrees/other" }},
-		{name: "rejects a replaced terminal", mutate: func(w *WorkspaceObservation) { w.Panes[0].TerminalID = "term-2" }},
-		{name: "rejects a different pane", mutate: func(w *WorkspaceObservation) { w.Panes[0].Pane.Pane = "w2:p9" }},
-		{name: "rejects a workspace with no panes", mutate: func(w *WorkspaceObservation) { w.Panes = nil }},
+		{name: "matches the recorded workspace and pane", mutate: func(*snapshotJSON) {}, wantHit: true},
+		{
+			// The launch postcondition compares checkout paths through
+			// filepath.Clean; the report must not be stricter than the launch
+			// it follows.
+			name: "accepts a checkout path the launch would also accept",
+			mutate: func(s *snapshotJSON) {
+				(*s.Workspaces)[0].Worktree.CheckoutPath = "/repo/.fanout/worktrees/child/"
+			},
+			wantHit: true,
+		},
+		{
+			// Herdr drops a pane record when its agent exits, so a sibling
+			// child going away must not fail this target's recheck.
+			name: "ignores an unrelated workspace that lost its pane",
+			mutate: func(s *snapshotJSON) {
+				*s.Workspaces = append(*s.Workspaces, workspaceJSON{WorkspaceID: "w3", Label: "sibling"})
+			},
+			wantHit: true,
+		},
+		{
+			name:   "rejects a relabeled workspace",
+			mutate: func(s *snapshotJSON) { (*s.Workspaces)[0].Label = "fanout-worktree-other" },
+		},
+		{
+			name:   "rejects a foreign repository",
+			mutate: func(s *snapshotJSON) { (*s.Workspaces)[0].Worktree.RepoKey = "/other/.git" },
+		},
+		{
+			name: "rejects a moved checkout",
+			mutate: func(s *snapshotJSON) {
+				(*s.Workspaces)[0].Worktree.CheckoutPath = "/repo/.fanout/worktrees/other"
+			},
+		},
+		{
+			name:   "rejects a coordinator workspace with no worktree provenance",
+			mutate: func(s *snapshotJSON) { (*s.Workspaces)[0].Worktree = nil },
+		},
+		{name: "rejects a replaced terminal", mutate: func(s *snapshotJSON) { (*s.Panes)[0].TerminalID = "term-2" }},
+		{name: "rejects a pane that moved workspace", mutate: func(s *snapshotJSON) { (*s.Panes)[0].WorkspaceID = "w9" }},
+		{name: "rejects a session without the pane", mutate: func(s *snapshotJSON) { *s.Panes = nil }},
+		{name: "rejects a session without the workspace", mutate: func(s *snapshotJSON) { *s.Workspaces = nil }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			observed := testMetadataObservation()
-			tt.mutate(&observed)
-			if got := metadataTargetLive(testMetadataTarget(), []WorkspaceObservation{observed}); got != tt.wantHit {
-				t.Fatalf("metadataTargetLive(target, %+v) = %t, want %t", observed, got, tt.wantHit)
+			snapshot := testMetadataSnapshot()
+			tt.mutate(&snapshot)
+			if got := metadataTargetLive(testMetadataTarget(), snapshot); got != tt.wantHit {
+				t.Fatalf("metadataTargetLive(target, snapshot) = %t, want %t", got, tt.wantHit)
 			}
 		})
 	}
@@ -291,16 +324,16 @@ func testMetadataTarget() MetadataTarget {
 	}
 }
 
-func testMetadataObservation() WorkspaceObservation {
-	pane := corebackend.PaneRef{Backend: corebackend.Herdr, Workspace: "w2", Pane: "w2:p1"}
-	return WorkspaceObservation{
+func testMetadataSnapshot() snapshotJSON {
+	workspaces := []workspaceJSON{{
 		WorkspaceID: "w2", Label: "fanout-worktree-abc",
-		Path: "/repo/.fanout/worktrees/child", RepoKey: "/repo/.git", RepoRoot: "/repo",
-		Pane: pane, TerminalID: "term-1", CWD: "/repo/.fanout/worktrees/child",
-		Panes: []WorkspacePaneObservation{
-			{Pane: pane, TerminalID: "term-1", CWD: "/repo/.fanout/worktrees/child"},
+		Worktree: &worktreeInfoJSON{
+			RepoKey: "/repo/.git", RepoRoot: "/repo",
+			CheckoutPath: "/repo/.fanout/worktrees/child",
 		},
-	}
+	}}
+	panes := []paneJSON{{PaneID: "w2:p1", WorkspaceID: "w2", TerminalID: "term-1"}}
+	return snapshotJSON{Workspaces: &workspaces, Panes: &panes}
 }
 
 func manyMetadataTokens(count int) []MetadataToken {

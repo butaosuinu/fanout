@@ -9,12 +9,11 @@ package herdrrun
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"unicode"
-
-	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 // MetadataSource is the fixed reporter ID on every fanout report. Herdr lets
@@ -29,6 +28,14 @@ const MaxMetadataTokenValue = 80
 
 // maxMetadataTokensPerReport is Herdr's per-report token cap.
 const maxMetadataTokensPerReport = 16
+
+// MetadataReportBudget bounds one ReportMetadata end to end. The call makes six
+// commandTimeout-bounded Herdr calls — the owned probe's version and status, an
+// identity snapshot on each side of the bracket, and the two reports — so the
+// budget is deliberately shorter than their sum: metadata is display-only and
+// runs after a launch already succeeded, so a slow Herdr must skip the report
+// rather than hold up the next child.
+const MetadataReportBudget = 4 * commandTimeout
 
 var metadataTokenName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
@@ -88,13 +95,33 @@ func (b *Backend) reportBracketedMetadata(
 	if err := b.verifyMetadataTarget(ctx, probed, report.Target); err != nil {
 		return fmt.Errorf("verify Herdr metadata target: %w", err)
 	}
-	for _, args := range metadataCalls(report) {
-		if err := b.runMetadataReport(ctx, probed, args); err != nil {
-			return err
-		}
+	if err := b.runMetadataReports(ctx, probed, report); err != nil {
+		return err
 	}
 	if err := b.verifyMetadataTarget(ctx, probed, report.Target); err != nil {
 		return fmt.Errorf("herdr metadata report outcome is unknown: %w", err)
+	}
+	return nil
+}
+
+// runMetadataReports issues the patch one resource at a time. Herdr has no
+// multi-resource report, so a failure after the first call leaves the patch
+// half applied; say so, because the tokens already written stay written and
+// nothing rewrites them.
+func (b *Backend) runMetadataReports(
+	ctx context.Context,
+	probed probeResult,
+	report MetadataReport,
+) error {
+	for i, args := range metadataCalls(report) {
+		err := b.runMetadataReport(ctx, probed, args)
+		switch {
+		case err == nil:
+		case i > 0:
+			return fmt.Errorf("%w; earlier reports in this patch already applied", err)
+		default:
+			return err
+		}
 	}
 	return nil
 }
@@ -139,44 +166,56 @@ func metadataArgs(resource, id string, tokens []MetadataToken) []string {
 	return args
 }
 
+// verifyMetadataTarget reads one snapshot and inspects only this target.
+// Projecting every workspace would fail on any unrelated pane-less one — Herdr
+// drops a pane record when its agent exits — and a sibling child exiting has
+// nothing to say about whether this target is live.
 func (b *Backend) verifyMetadataTarget(
 	ctx context.Context,
 	probed probeResult,
 	target MetadataTarget,
 ) error {
-	workspaces, err := b.observeOwnedWorkspaces(ctx, probed)
+	snapshot, err := b.observeOwnedSnapshot(ctx, probed)
 	if err != nil {
 		return err
 	}
-	if !metadataTargetLive(target, workspaces) {
+	if !metadataTargetLive(target, snapshot) {
 		return fmt.Errorf("%w: metadata target is not live", ErrOwnedIdentityMismatch)
 	}
 	return nil
 }
 
-func metadataTargetLive(target MetadataTarget, workspaces []WorkspaceObservation) bool {
+// metadataTargetLive relies on projectSnapshot having already rejected
+// duplicate workspace and pane IDs, so the first match is the only match.
+func metadataTargetLive(target MetadataTarget, snapshot snapshotJSON) bool {
+	return metadataWorkspaceLive(target, *snapshot.Workspaces) &&
+		metadataPaneLive(target, *snapshot.Panes)
+}
+
+func metadataWorkspaceLive(target MetadataTarget, workspaces []workspaceJSON) bool {
 	for _, workspace := range workspaces {
-		if metadataWorkspaceLive(target, workspace) && metadataPaneLive(target, workspace.Panes) {
-			return true
+		if workspace.WorkspaceID != target.WorkspaceID {
+			continue
 		}
+		return workspace.Label == target.Label && metadataProvenanceLive(target, workspace.Worktree)
 	}
 	return false
 }
 
-func metadataWorkspaceLive(target MetadataTarget, workspace WorkspaceObservation) bool {
-	return workspace.WorkspaceID == target.WorkspaceID && workspace.Label == target.Label &&
-		workspace.RepoKey == target.RepoKey && workspace.RepoRoot == target.RepoRoot &&
-		workspace.Path == target.CheckoutPath
+// metadataProvenanceLive compares the checkout path the way every other Herdr
+// identity check does, so a report cannot reject a target the launch accepted.
+func metadataProvenanceLive(target MetadataTarget, worktree *worktreeInfoJSON) bool {
+	return worktree != nil && worktree.RepoKey == target.RepoKey &&
+		worktree.RepoRoot == target.RepoRoot &&
+		filepath.Clean(worktree.CheckoutPath) == filepath.Clean(target.CheckoutPath)
 }
 
-func metadataPaneLive(target MetadataTarget, panes []WorkspacePaneObservation) bool {
-	want := corebackend.PaneRef{
-		Backend: corebackend.Herdr, Workspace: target.WorkspaceID, Pane: target.PaneID,
-	}
+func metadataPaneLive(target MetadataTarget, panes []paneJSON) bool {
 	for _, pane := range panes {
-		if pane.Pane == want && pane.TerminalID == target.TerminalID {
-			return true
+		if pane.PaneID != target.PaneID {
+			continue
 		}
+		return pane.WorkspaceID == target.WorkspaceID && pane.TerminalID == target.TerminalID
 	}
 	return false
 }

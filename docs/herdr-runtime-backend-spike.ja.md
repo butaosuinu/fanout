@@ -995,6 +995,7 @@ metadata は表示専用データとし、backend state、liveness、nudge autho
 | 制御文字 | 送信値から除去される（`a\tb` は `ab` として保存） |
 | 1 report の token 数 | 17 個は `invalid_metadata_token`（最大 16） |
 | 空値 | key を削除する。`--clear-token` と同じ結果 |
+| 存在しない key の clear | 受理する。作成直後の pane への `--clear-token fanout_pr --clear-token fanout_ci` は exit 0 で、他の token も同じ request で書けた |
 | `seq` | 5 の後の 3 は exit 0 でも反映しない。`seq` 省略の報告は 5 の後でも反映する。scope は resource 単位（workspace の `seq=5` は pane の `seq=1` を落とさない） |
 | `ttl_ms` | 1 を指定した token は expire 後 snapshot から消える |
 | cold restart | workspace / pane と `tokens` の関係は doc 記載どおり: resource は復元し `tokens` は `null`、`terminal_id` は変わる |
@@ -1412,6 +1413,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 
   `rows`、`rows_by_agent`、`row_gap` と styling は herdr とユーザーが所有し、fanout は config を書き換えない。
   fanout-owned session の `config.toml` は owned layout の完全一致検査で固定されているため、sidebar 行を足せるのはユーザーが自分で設定する herdr session である。owned session 内では `herdr api snapshot` で token を読める。
+  owned session の sidebar に token を出すには owned config がユーザー由来の `[ui.sidebar.*]` を受け取る必要があり、これは owned layout の完全一致検査を緩める判断を伴うため #494 の範囲外とする。#533 で扱う。
+  報告は表示専用であり launch を遅らせてはならないため、`herdrrun.MetadataReportBudget` を超えた時点で報告を捨てる。失敗は `[warn]` にしない（TUI が成功 launch の `[warn]` 行を結果通知に昇格させるため）。
 - in-app notification を配信保証のある channel として扱わず、fanout から自動呼び出しもしない。
 
 ## 参考
