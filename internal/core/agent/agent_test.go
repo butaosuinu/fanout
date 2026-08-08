@@ -43,7 +43,7 @@ func TestClaudeHookSettingsJSONPinsAgentStateHooks(t *testing.T) {
 func TestBuildClaudeHookSettingsJSONKeepsSessionEndSynchronous(t *testing.T) {
 	settingsJSON := BuildClaudeHookSettingsJSON(ClaudeHookCommands{
 		Working: "emit working", Blocked: "emit blocked", Idle: "emit idle", Done: "emit done",
-		Background: true,
+		DoneMatcher: "logout|other", DoneTimeoutSeconds: 15, Background: true,
 	})
 	var settings claudeHookSettings
 	if err := json.Unmarshal([]byte(settingsJSON), &settings); err != nil {
@@ -54,13 +54,18 @@ func TestBuildClaudeHookSettingsJSONKeepsSessionEndSynchronous(t *testing.T) {
 		matchers   []claudeHookMatcher
 		command    string
 		background bool
+		matcher    string
+		timeout    int
 	}{
 		{name: "UserPromptSubmit", matchers: settings.Hooks.UserPromptSubmit, command: "emit working", background: true},
 		{name: "PreToolUse", matchers: settings.Hooks.PreToolUse, command: "emit working", background: true},
 		{name: "PostToolUse", matchers: settings.Hooks.PostToolUse, command: "emit working", background: true},
 		{name: "Notification", matchers: settings.Hooks.Notification, command: "emit blocked", background: true},
 		{name: "Stop", matchers: settings.Hooks.Stop, command: "emit idle", background: true},
-		{name: "SessionEnd", matchers: settings.Hooks.SessionEnd, command: "emit done"},
+		{
+			name: "SessionEnd", matchers: settings.Hooks.SessionEnd, command: "emit done",
+			matcher: "logout|other", timeout: 15,
+		},
 	}
 	for _, event := range want {
 		if len(event.matchers) != 1 || len(event.matchers[0].Hooks) != 1 {
@@ -73,6 +78,9 @@ func TestBuildClaudeHookSettingsJSONKeepsSessionEndSynchronous(t *testing.T) {
 		}
 		if out, err := exec.Command("sh", "-n", "-c", command).CombinedOutput(); err != nil {
 			t.Fatalf("%s command is not valid POSIX shell: %v: %s", event.name, err, out)
+		}
+		if event.matchers[0].Matcher != event.matcher || event.matchers[0].Hooks[0].Timeout != event.timeout {
+			t.Fatalf("%s matcher = %#v", event.name, event.matchers[0])
 		}
 	}
 	blocked := settings.Hooks.Notification[0].Hooks[0].Command

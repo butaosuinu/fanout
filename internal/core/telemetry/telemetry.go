@@ -10,7 +10,10 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
-const Command = "__fanout-emitter"
+const (
+	Command               = "__fanout-emitter"
+	EmitterTimeoutSeconds = 15
+)
 
 const (
 	StatePathEnv    = "FANOUT_STATE_PATH"

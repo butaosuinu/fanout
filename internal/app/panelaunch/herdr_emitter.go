@@ -17,6 +17,8 @@ type herdrEmitterLaunch struct {
 	nonce       string
 }
 
+const herdrClaudeExitReasons = "logout|prompt_input_exit|bypass_permissions_disabled|other"
+
 func newHerdrEmitterLaunch(
 	req Request,
 	route herdrrun.OwnedLaunchRoute,
@@ -63,6 +65,7 @@ func herdrClaudeHookSettings(fanoutPath string) (string, error) {
 		Working: emit(string(backend.AgentWorking)),
 		Blocked: emit(string(backend.AgentBlocked)),
 		Idle:    emit(string(backend.AgentIdle)), Done: emit(string(backend.AgentDone)),
+		DoneMatcher: herdrClaudeExitReasons, DoneTimeoutSeconds: telemetry.EmitterTimeoutSeconds,
 		Background: true,
 	}), nil
 }

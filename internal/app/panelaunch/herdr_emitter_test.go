@@ -32,6 +32,12 @@ func TestHerdrEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
 	if len(launch.backendArgs) != 2 || launch.backendArgs[0] != "--settings" || !json.Valid([]byte(launch.backendArgs[1])) {
 		t.Fatalf("backend args = %#v", launch.backendArgs)
 	}
+	settings := launch.backendArgs[1]
+	if !strings.Contains(settings, `"matcher":"`+herdrClaudeExitReasons+`"`) ||
+		!strings.Contains(settings, `"timeout":15`) ||
+		strings.Contains(settings, "clear") || strings.Contains(settings, "resume") {
+		t.Fatalf("SessionEnd settings = %s", settings)
+	}
 	if !telemetry.ValidNonce(launch.nonce) {
 		t.Fatalf("emitter nonce = %q", launch.nonce)
 	}

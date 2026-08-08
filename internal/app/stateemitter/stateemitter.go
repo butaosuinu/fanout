@@ -22,7 +22,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-const emitterTimeout = 15 * time.Second
+const emitterTimeout = telemetry.EmitterTimeoutSeconds * time.Second
 
 var errTerminalChanged = errors.New("current Herdr terminal changed")
 

@@ -56,10 +56,12 @@ const blockedNotificationTypes = "permission_prompt|agent_needs_input|elicitatio
 type claudeHookCommand struct {
 	Type    string `json:"type"`
 	Command string `json:"command"`
+	Timeout int    `json:"timeout,omitempty"`
 }
 
 type claudeHookMatcher struct {
-	Hooks []claudeHookCommand `json:"hooks"`
+	Matcher string              `json:"matcher,omitempty"`
+	Hooks   []claudeHookCommand `json:"hooks"`
 }
 
 // claudeHookEvents fixes the JSON key order so the generated settings string
@@ -82,11 +84,13 @@ type claudeHookSettings struct {
 // non-terminal hooks from waiting for a best-effort state reporter. SessionEnd
 // stays synchronous so Done completes while the agent identity is observable.
 type ClaudeHookCommands struct {
-	Working    string
-	Blocked    string
-	Idle       string
-	Done       string
-	Background bool
+	Working            string
+	Blocked            string
+	Idle               string
+	Done               string
+	DoneMatcher        string
+	DoneTimeoutSeconds int
+	Background         bool
 }
 
 // BuildClaudeHookSettingsJSON builds deterministic lifecycle hook settings.
@@ -97,7 +101,7 @@ func BuildClaudeHookSettingsJSON(commands ClaudeHookCommands) string {
 		PostToolUse:      claudeStateHook(commands.Working, commands.Background),
 		Notification:     claudeBlockedHook(commands.Blocked, commands.Background),
 		Stop:             claudeStateHook(commands.Idle, commands.Background),
-		SessionEnd:       claudeStateHook(commands.Done, false),
+		SessionEnd:       claudeSessionEndHook(commands),
 	}}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -108,6 +112,16 @@ func BuildClaudeHookSettingsJSON(commands ClaudeHookCommands) string {
 		panic(err) // fixed struct of strings; cannot fail
 	}
 	return strings.TrimSuffix(buf.String(), "\n")
+}
+
+func claudeSessionEndHook(commands ClaudeHookCommands) []claudeHookMatcher {
+	matchers := claudeStateHook(commands.Done, false)
+	if len(matchers) == 0 {
+		return nil
+	}
+	matchers[0].Matcher = commands.DoneMatcher
+	matchers[0].Hooks[0].Timeout = commands.DoneTimeoutSeconds
+	return matchers
 }
 
 func claudeStateHook(command string, background bool) []claudeHookMatcher {
