@@ -519,6 +519,9 @@ func runBeforeWorktreeRemoveHooks(opts Options, panes []state.Pane, mode CloseMo
 		if pane.IsShell() || pane.IsAttachedAgent() || !recordedWorktreeExists(pane) {
 			continue
 		}
+		if !verifyHerdrHookPreflight(opts, pane, mode, hooks.BeforeWorktreeRemove, lg) {
+			return false
+		}
 		if !runBlockingHook(hooks.BeforeWorktreeRemove, opts, pane, "", lg) {
 			return false
 		}
@@ -555,6 +558,9 @@ func removeManagedWorktrees(opts Options, locked *state.LockedStore, panes []sta
 func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.Pane, mode CloseMode, lg Logger) bool {
 	if paneRefFromState(pane).Backend == backend.Herdr {
 		hadWorktree := recordedWorktreeExists(pane)
+		if !verifyHerdrHookPreflight(opts, pane, mode, hooks.BeforePaneClose, lg) {
+			return false
+		}
 		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
 		if !closeHerdrWorktree(opts, locked, pane, mode, lg) {
 			return false
@@ -575,6 +581,17 @@ func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.P
 	if mode == CloseEverything {
 		_ = pruneWorktrees(opts.ProjectRoot, lg)
 		deleteBranchBestEffort(opts.ProjectRoot, pane, lg)
+	}
+	return true
+}
+
+func verifyHerdrHookPreflight(opts Options, pane state.Pane, mode CloseMode, hook hooks.Type, lg Logger) bool {
+	if paneRefFromState(pane).Backend != backend.Herdr || len(opts.Hooks.Events[hook]) == 0 {
+		return true
+	}
+	if err := verifyHerdrClosePreflight(opts, pane, mode); err != nil {
+		lg.Err("%s: Herdr %s hook preflight failed: %v", paneLabel(pane), hook, err)
+		return false
 	}
 	return true
 }

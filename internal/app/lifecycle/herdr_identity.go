@@ -74,11 +74,27 @@ func observeHerdrCleanup(
 	projectRoot string,
 	resource state.HerdrResource,
 ) (herdrCleanupObservation, error) {
+	return observeHerdrCleanupMatching(
+		ctx,
+		runtime,
+		projectRoot,
+		resource,
+		herdrWorkspacePredicate(resource),
+	)
+}
+
+func observeHerdrCleanupMatching(
+	ctx context.Context,
+	runtime HerdrRuntime,
+	projectRoot string,
+	resource state.HerdrResource,
+	predicate herdrWorkspacePredicateFunc,
+) (herdrCleanupObservation, error) {
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
 		return herdrCleanupObservation{}, err
 	}
-	workspace, err := findUniqueWorkspace(workspaces, true, herdrWorkspacePredicate(resource))
+	workspace, err := findUniqueWorkspace(workspaces, true, predicate)
 	if err != nil {
 		return herdrCleanupObservation{}, err
 	}
@@ -91,17 +107,21 @@ func observeHerdrCleanup(
 
 func herdrWorkspacePredicate(resource state.HerdrResource) herdrWorkspacePredicateFunc {
 	return func(workspace herdrrun.WorkspaceObservation) (bool, bool) {
-		candidate := workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label
+		candidate := workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label ||
+			herdrWorkspaceMatchesProvenance(
+				workspace,
+				resource.CurrentPath,
+				resource.RepoKey,
+				resource.RepoRoot,
+			)
 		return candidate, herdrWorkspaceMatchesResource(workspace, resource)
 	}
 }
 
 func herdrWorkspaceLabelPredicate(label, path, repoKey, repoRoot string) herdrWorkspacePredicateFunc {
 	return func(workspace herdrrun.WorkspaceObservation) (bool, bool) {
-		exact := filepath.Clean(workspace.Path) == filepath.Clean(path) &&
-			filepath.Clean(workspace.RepoKey) == filepath.Clean(repoKey) &&
-			filepath.Clean(workspace.RepoRoot) == filepath.Clean(repoRoot)
-		return workspace.Label == label, exact
+		provenance := herdrWorkspaceMatchesProvenance(workspace, path, repoKey, repoRoot)
+		return workspace.Label == label || provenance, workspace.Label == label && provenance
 	}
 }
 
@@ -141,6 +161,15 @@ func herdrWorkspaceMatchesResource(
 		filepath.Clean(workspace.Path) == filepath.Clean(resource.CurrentPath) &&
 		filepath.Clean(workspace.RepoKey) == filepath.Clean(resource.RepoKey) &&
 		filepath.Clean(workspace.RepoRoot) == filepath.Clean(resource.RepoRoot)
+}
+
+func herdrWorkspaceMatchesProvenance(
+	workspace herdrrun.WorkspaceObservation,
+	path, repoKey, repoRoot string,
+) bool {
+	return filepath.Clean(workspace.Path) == filepath.Clean(path) &&
+		filepath.Clean(workspace.RepoKey) == filepath.Clean(repoKey) &&
+		filepath.Clean(workspace.RepoRoot) == filepath.Clean(repoRoot)
 }
 
 func verifyHerdrTerminalInvalidation(
