@@ -398,7 +398,8 @@ func (l *Launcher) newHerdrLaunch(
 		Nonce: nonce, Agent: req.Agent,
 		AgentName:  naming.HerdrAgentName(route.GitCommonDir, intent.ID, nonce),
 		Executable: spec.Executable, Args: spec.Args,
-		EnvFilePath: envPath, EnvNameCount: envCount,
+		CodexTeamStatusPath: req.CodexTeamStatusPath,
+		EnvFilePath:         envPath, EnvNameCount: envCount,
 	}
 	return persistNewHerdrLaunch(journal, intent, route.RuntimeDir)
 }
@@ -438,27 +439,55 @@ func waitForHerdrCodexTeam(req Request, intent state.HerdrIntent) (codexapp.Stat
 	return status, nil
 }
 
+func herdrCodexTeamStatusPath(req Request, intent state.HerdrIntent) (string, error) {
+	if !req.CodexTeamMode {
+		return "", nil
+	}
+	if intent.Launch == nil || intent.Launch.CodexTeamStatusPath == "" {
+		return "", fmt.Errorf("saved Herdr Codex team launch is missing its status path")
+	}
+	return intent.Launch.CodexTeamStatusPath, nil
+}
+
 func awaitHerdrCodexTeam(
 	req Request,
 	locked *state.LockedStore,
 	projectRoot string,
 	intent state.HerdrIntent,
 ) (codexapp.Status, error) {
-	status, err := waitForHerdrCodexTeam(req, intent)
-	if err == nil || !req.CodexTeamMode {
-		return status, err
+	if !req.CodexTeamMode {
+		return codexapp.Status{}, nil
 	}
-	journal, journalErr := locked.HerdrIntents(projectRoot)
-	if journalErr != nil {
-		return status, errors.Join(err, journalErr)
+	journal, latest, err := loadHerdrCodexTeamIntent(locked, projectRoot, intent.ID)
+	if err != nil {
+		return codexapp.Status{}, err
 	}
-	latest, found := journal.FindIntent(intent.ID)
-	if !found {
-		return status, errors.Join(err, fmt.Errorf("Codex team launch intent %s disappeared", intent.ID))
+	req.CodexTeamStatusPath, err = herdrCodexTeamStatusPath(req, latest)
+	var status codexapp.Status
+	if err == nil {
+		status, err = waitForHerdrCodexTeam(req, latest)
+	}
+	if err == nil {
+		return status, nil
 	}
 	return status, errors.Join(err, markHerdrIntentManual(
 		journal, latest, fmt.Errorf("Codex team TUI readiness failed: %w", err),
 	))
+}
+
+func loadHerdrCodexTeamIntent(
+	locked *state.LockedStore,
+	projectRoot, intentID string,
+) (*state.LockedHerdrIntents, state.HerdrIntent, error) {
+	journal, err := locked.HerdrIntents(projectRoot)
+	if err != nil {
+		return nil, state.HerdrIntent{}, err
+	}
+	latest, found := journal.FindIntent(intentID)
+	if !found {
+		return nil, state.HerdrIntent{}, fmt.Errorf("Codex team launch intent %s disappeared", intentID)
+	}
+	return journal, latest, nil
 }
 
 func persistNewHerdrLaunch(

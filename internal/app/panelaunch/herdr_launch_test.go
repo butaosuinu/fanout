@@ -308,6 +308,23 @@ func TestWaitForHerdrCodexTeamRejectsExpiredLaunch(t *testing.T) {
 	}
 }
 
+func TestHerdrCodexTeamStatusPathUsesPersistedLaunchIdentity(t *testing.T) {
+	savedPath := filepath.Join(t.TempDir(), "saved-status.json")
+	intent := state.HerdrIntent{Launch: &state.HerdrLaunch{CodexTeamStatusPath: savedPath}}
+	for _, req := range []Request{
+		{Number: 568, CodexTeamMode: true, CodexTeamStatusPath: "/tmp/new-issue-status.json"},
+		{TaskID: "registry-migration", CodexTeamMode: true, CodexTeamStatusPath: "/tmp/new-task-status.json"},
+	} {
+		got, err := herdrCodexTeamStatusPath(req, intent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != savedPath {
+			t.Fatalf("persisted team status path = %q, want %q", got, savedPath)
+		}
+	}
+}
+
 func TestAwaitHerdrCodexTeamFailureRequiresManualCleanup(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -343,8 +360,10 @@ func TestAwaitHerdrCodexTeamFailureRequiresManualCleanup(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = locked.Unlock() })
 			intent := result.Intent
+			statusPath := filepath.Join(t.TempDir(), "status.json")
 			intent.Launch = validTestHerdrLaunch()
 			intent.Launch.Agent = "codex"
+			intent.Launch.CodexTeamStatusPath = statusPath
 			intent.ExpiresUnixMS = time.Now().Add(tc.remaining).UnixMilli()
 			journal, err := locked.HerdrIntents(repo)
 			if err != nil {
@@ -354,13 +373,15 @@ func TestAwaitHerdrCodexTeamFailureRequiresManualCleanup(t *testing.T) {
 			if err := journal.Save(); err != nil {
 				t.Fatal(err)
 			}
-			statusPath := filepath.Join(t.TempDir(), "status.json")
 			if tc.writeStatus != nil {
 				tc.writeStatus(t, statusPath)
 			}
 
 			_, err = awaitHerdrCodexTeam(
-				Request{CodexTeamMode: true, CodexTeamStatusPath: statusPath}, locked, repo, intent,
+				Request{
+					CodexTeamMode:       true,
+					CodexTeamStatusPath: filepath.Join(t.TempDir(), "regenerated-status.json"),
+				}, locked, repo, intent,
 			)
 			if !errors.Is(err, ErrHerdrManualCleanupRequired) {
 				t.Fatalf("Codex team readiness error = %v, want manual cleanup", err)
@@ -746,9 +767,11 @@ func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 	defer func() { _ = locked.Unlock() }()
 	intent := result.Intent
 	intent.ExpiresUnixMS = time.Now().Add(time.Minute).UnixMilli()
+	statusPath := filepath.Join(t.TempDir(), "status.json")
 	intent.Launch = validTestHerdrLaunch()
 	intent.Launch.Agent = "codex"
 	intent.Launch.TokenIssued = false
+	intent.Launch.CodexTeamStatusPath = statusPath
 	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
 	runtime.processInfo = testHerdrLauncherProcess(intent, route.LauncherPath)
 	runtime.live = []backend.LivePane{testHerdrIdlePane(intent)}
@@ -760,14 +783,14 @@ func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 	if err := journal.Save(); err != nil {
 		t.Fatal(err)
 	}
-	statusPath := filepath.Join(t.TempDir(), "status.json")
 	if err := codexapp.WriteFailedStatus(statusPath, errors.New("owner mismatch")); err != nil {
 		t.Fatal(err)
 	}
 
 	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrAgent(
 		context.Background(), Request{
-			Agent: "codex", CodexTeamMode: true, CodexTeamStatusPath: statusPath,
+			Agent: "codex", CodexTeamMode: true,
+			CodexTeamStatusPath: filepath.Join(t.TempDir(), "regenerated-status.json"),
 		}, locked, route, intent, nil,
 	)
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) || !strings.Contains(err.Error(), "owner mismatch") {

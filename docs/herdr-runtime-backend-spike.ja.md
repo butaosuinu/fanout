@@ -832,6 +832,7 @@ wave 2 の Herdr backend は registry-backed peer 解決を使って `--team` �
 `internal/app/peermsg/nudge.go` の宛先解決は owning worktree の `state.json` から current Herdr row と exact PaneRef を取得し、#552 の送信 gate へ渡す。
 Claude の watcher は同じ briefing と SQLite bus を使う。
 非 Plan の Codex は owned launcher から team bridge を起動し、ready status を確認してから final row を確定する。
+Codex team の status path は launch capsule に保存し、pre-token recovery でも同じ file を監視する。
 Herdr の自動 nudge 送信は #552 まで no-op のままとし、prompt fallback で補わない。
 `--dry-run` は team briefing と registry seed の予定を表示するだけで、SQLite、state、filesystem、Git、Herdr を変更しない。
 `FANOUT_DB_PATH` の相対 path は launcher と子 worktree で異なる DB を開くため、Herdr `--team` は最初の mutation 前に拒否する。

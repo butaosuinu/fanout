@@ -128,14 +128,18 @@ func (l *Launcher) adoptHerdrAgent(
 	req Request,
 	intent state.HerdrIntent,
 ) (backend.LivePane, error) {
-	live, err := l.waitForHerdrAgent(ctx, intent, req.Agent, req.CodexTeamStatusPath)
+	statusPath, err := herdrCodexTeamStatusPath(req, intent)
+	if err != nil {
+		return backend.LivePane{}, err
+	}
+	live, err := l.waitForHerdrAgent(ctx, intent, req.Agent, statusPath)
 	if err != nil {
 		return live, err
 	}
 	if err := l.verifyAndRenameHerdrAgent(ctx, intent); err != nil {
 		return live, err
 	}
-	return l.waitForHerdrAgent(ctx, intent, intent.Launch.AgentName, req.CodexTeamStatusPath)
+	return l.waitForHerdrAgent(ctx, intent, intent.Launch.AgentName, statusPath)
 }
 
 func (l *Launcher) verifyAndRenameHerdrAgent(
