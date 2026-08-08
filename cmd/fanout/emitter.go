@@ -26,8 +26,7 @@ func (herdrEmitterObserver) Observe(
 		return stateemitter.Observation{}, err
 	}
 	process, err := owned.ProcessInfo(ctx, target.PaneID)
-	if err != nil {
-		return stateemitter.Observation{}, err
-	}
-	return stateemitter.Observation{Panes: panes, ProcessInfo: process}, nil
+	return stateemitter.Observation{
+		Panes: panes, ProcessInfo: process, ProcessError: err,
+	}, nil
 }

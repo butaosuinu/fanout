@@ -148,6 +148,8 @@ var prefixRules = []struct {
 	{"internal/app/briefing/", Rule{ID: "app-briefing", Class: ClassH, Source: SourceDocTable, Note: "エージェントに注入するプロンプト本文"}},
 	{"internal/app/lifecycle/", Rule{ID: "app-lifecycle", Class: ClassH, Source: SourceDocTable, Note: "close/merge/cleanup"}},
 	{"internal/app/panelaunch/", Rule{ID: "app-panelaunch", Class: ClassH, Source: SourceDocTable, Note: "tmux pane 生成と Herdr coordinator/worktree/agent launch"}},
+	{"internal/app/herdrprocess/", Rule{ID: "app-herdrprocess", Class: ClassH, Source: SourceDocTable, Note: "保存済み Herdr launch と現在の process identity の照合"}},
+	{"internal/app/stateemitter/", Rule{ID: "app-stateemitter", Class: ClassH, Source: SourceDocTable, Note: "launch に束縛した telemetry の検証と state lock 下の更新"}},
 	{"internal/app/sessionbinding/", Rule{ID: "app-sessionbinding", Class: ClassH, Source: SourceDocTable, Note: "遅延 Herdr agent session の初回束縛と state 保存"}},
 
 	// app M.
@@ -160,6 +162,7 @@ var prefixRules = []struct {
 
 	// core H.
 	{"internal/core/backend/", Rule{ID: "core-backend", Class: ClassH, Source: SourceDocTable, Note: "runtime backend 契約・親 stickiness・選択の fail-closed 判定"}},
+	{"internal/core/telemetry/", Rule{ID: "core-telemetry", Class: ClassH, Source: SourceDocTable, Note: "emitter command と環境変数の wire contract"}},
 
 	// core M.
 	{"internal/core/agent/", Rule{ID: "core-agent", Class: ClassM, Source: SourceDocTable, Note: "エージェント名解決・CLI 検証"}},

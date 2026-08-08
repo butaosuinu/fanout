@@ -66,7 +66,10 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
 | app | `panelaunch` | tmux pane 生成と Herdr coordinator/worktree/agent launch のオーケストレーション | H |
+| app | `herdrprocess` | 保存済み Herdr launch と現在の process identity の照合 | H |
+| app | `stateemitter` | launch に束縛した telemetry の検証と state lock 下の更新 | H |
 | app | `sessionbinding` | 遅延 Herdr agent session の初回束縛と state lock 下の保存 | H |
+| core | `telemetry` | emitter command と環境変数の wire contract | H |
 | ui | `dashboard`(`server.go`) | localhost web サーバの mux・token 検証 | H |
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
 | ui | `dashboard`(`diff.go`) | snapshot の安定 row identity で選んだ worktree diff の read-only 配信・request-wide 上限 | H |

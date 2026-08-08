@@ -73,6 +73,9 @@ func TestEmitFinalRowFailsClosedOnBindingMismatch(t *testing.T) {
 		{name: "process executable mismatch", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
 			observer.observation.ProcessInfo.ForegroundProcesses[0].Executable = "/foreign/not-claude"
 		}},
+		{name: "process observation failure", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
+			observer.observation.ProcessError = errors.New("process replaced")
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repo := newEmitterRepo(t)
@@ -100,6 +103,7 @@ func TestEmitFinalRowInvalidatesTelemetryWhenTerminalChanges(t *testing.T) {
 	pane, signal, observer := finalEmitterFixture(t, repo)
 	saveEmitterPanes(t, repo, pane)
 	observer.observation.Panes[0].TerminalID = "replacement-terminal"
+	observer.observation.ProcessError = errors.New("process replaced")
 
 	if err := Emit(context.Background(), signal, observer); err != nil {
 		t.Fatal(err)

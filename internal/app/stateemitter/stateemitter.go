@@ -45,10 +45,13 @@ type RuntimeTarget struct {
 }
 
 // Observation is one runtime snapshot plus the target pane's current process
-// information, collected while the owning state lock is held.
+// information, collected while the owning state lock is held. ProcessError is
+// kept separate so terminal replacement can invalidate telemetry from the pane
+// snapshot even while the process tree is changing.
 type Observation struct {
-	Panes       []backend.LivePane
-	ProcessInfo herdrrun.PaneProcessInfo
+	Panes        []backend.LivePane
+	ProcessInfo  herdrrun.PaneProcessInfo
+	ProcessError error
 }
 
 // Observer reads current Herdr state for a persisted launch target.
@@ -292,6 +295,9 @@ func verifyCurrentRuntime(ctx context.Context, target RuntimeTarget, observer Ob
 	}
 	if !hasOneMatchingPane(target, observation.Panes) {
 		return fmt.Errorf("saved PaneRef does not match exactly one current runtime pane")
+	}
+	if observation.ProcessError != nil {
+		return observation.ProcessError
 	}
 	if observation.ProcessInfo.PaneID != target.PaneID {
 		return fmt.Errorf("process observation does not match saved PaneRef")
