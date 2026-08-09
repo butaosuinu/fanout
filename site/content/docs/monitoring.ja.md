@@ -107,7 +107,7 @@ Herdr は tmux keybind を登録しません。
 tmux では popup、Herdr では inline form です。
 
 この popup から Prompt、plan coordinator、Issue のいずれかを正常に起動すると、実際の作成順で先頭の新規ペインへフォーカスが移ります。
-Issue fan-out で orchestrator ペインを作成した場合は、作成順でそのペインが先頭です。
+Issue fan-out では、tmux は orchestrator を先に作成し、Herdr は child ペインの後に作成するため、Herdr では最初の新規 child にフォーカスが移ります。
 `F11` または `prefix + T` でコンソールに戻れます。
 agent 追加(`a`)、shell(`A` / `t`)、watcher、通常の CLI 起動は、元のフォーカスを維持します。
 
@@ -122,7 +122,8 @@ OpenCode は同梱の `/fanout plan` command を読めずコーディネータ�
 **Issue** はリポジトリの OPEN issue を一覧し、番号やタイトル、ラベルで絞り込めます。
 `Ctrl+O` で選択中の issue を既定ブラウザで開けます。
 issue を選んで既定の agent を決めると、`Enter` で子ごとに agent を切り替える割り当て画面が開きます(繰り返し指定の `--agent NUM=name` 相当)。
-親 issue の Issue fan-out で orchestrator ペインを作成するときは、popup の既定 agent で project root に worktree なしで先に起動します。
+親 issue の Issue fan-out で orchestrator ペインを作成するときは、popup の既定 agent で project root に worktree なしで起動します。
+tmux は start gate で待機する orchestrator を child ペインより先に作成し、start gate 非対応の Herdr は child ペインを先に作成します。
 orchestrator は `orchestratorPlanMode`(既定 `true`)に従います。
 codex の orchestrator は、子の fan-out 完了まで agent 起動を留める start gate と Plan Mode を両立できないため、fanout は警告して素の codex で起動します。
 子は子ごとに割り当てた agent でファンアウトします。

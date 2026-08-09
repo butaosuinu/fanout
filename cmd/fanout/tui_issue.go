@@ -259,7 +259,8 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			result.Notice = orchestratorNotice + "; " + result.Notice
 		}
 	}
-	return finishTUIIssueParentLaunch(issueNum, orchestratorPaneID, result, err)
+	orchestratorAfterChildren := runtimeBackend != nil && runtimeBackend.Name() == backend.Herdr
+	return finishTUIIssueParentLaunch(issueNum, orchestratorAfterChildren, orchestratorPaneID, result, err)
 }
 
 func launchHerdrOrchestratorAfterChildren(runtimeBackend backend.Name, progress run.IssueAfterContext) bool {
@@ -273,12 +274,9 @@ func releaseCleanedIssueOrchestratorGate(runtimeBackend backend.Backend, req pan
 	return panelaunch.ReleaseAgentStartGate(runtimeBackend, req)
 }
 
-func finishTUIIssueParentLaunch(issueNum int, orchestratorPaneID string, result parentIssueFanoutResult, err error) (fanouttui.LaunchResult, error) {
+func finishTUIIssueParentLaunch(issueNum int, orchestratorAfterChildren bool, orchestratorPaneID string, result parentIssueFanoutResult, err error) (fanouttui.LaunchResult, error) {
 	created := len(result.CreatedPaneIDs)
-	createdPaneIDs := result.CreatedPaneIDs
-	if orchestratorPaneID != "" {
-		createdPaneIDs = append([]string{orchestratorPaneID}, result.CreatedPaneIDs...)
-	}
+	createdPaneIDs := orderedTUIIssuePaneIDs(orchestratorAfterChildren, orchestratorPaneID, result.CreatedPaneIDs)
 	if err != nil {
 		if len(createdPaneIDs) > 0 {
 			// The fail-fast loop may have created panes before the failure;
@@ -313,6 +311,16 @@ func finishTUIIssueParentLaunch(issueNum int, orchestratorPaneID string, result 
 		notice += "; " + result.Notice
 	}
 	return fanouttui.LaunchResult{Notice: notice, CreatedPaneIDs: createdPaneIDs}, nil
+}
+
+func orderedTUIIssuePaneIDs(orchestratorAfterChildren bool, orchestratorPaneID string, childPaneIDs []string) []string {
+	if orchestratorPaneID == "" {
+		return childPaneIDs
+	}
+	if orchestratorAfterChildren {
+		return append(append([]string{}, childPaneIDs...), orchestratorPaneID)
+	}
+	return append([]string{orchestratorPaneID}, childPaneIDs...)
 }
 
 // fetchLaunchableIssue is the shared launch preamble for the TUI issue lanes:

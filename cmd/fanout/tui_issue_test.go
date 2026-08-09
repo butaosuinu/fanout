@@ -230,7 +230,7 @@ esac
 }
 
 func TestFinishTUIIssueParentLaunchPreservesPartialSuccess(t *testing.T) {
-	result, err := finishTUIIssueParentLaunch(500, "", parentIssueFanoutResult{
+	result, err := finishTUIIssueParentLaunch(500, false, "", parentIssueFanoutResult{
 		CreatedPaneIDs: []string{"%91"},
 	}, errors.New("launch child #502: boom"))
 	if err != nil {
@@ -247,7 +247,7 @@ func TestFinishTUIIssueParentLaunchPreservesPartialSuccess(t *testing.T) {
 
 func TestFinishTUIIssueParentLaunchReturnsErrorWithoutCreatedPane(t *testing.T) {
 	wantErr := errors.New("launch failed")
-	result, err := finishTUIIssueParentLaunch(500, "", parentIssueFanoutResult{}, wantErr)
+	result, err := finishTUIIssueParentLaunch(500, false, "", parentIssueFanoutResult{}, wantErr)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("finishTUIIssueParentLaunch() error = %v, want %v", err, wantErr)
 	}
@@ -256,10 +256,11 @@ func TestFinishTUIIssueParentLaunchReturnsErrorWithoutCreatedPane(t *testing.T) 
 	}
 }
 
-func TestFinishTUIIssueParentLaunchPrependsOrchestrator(t *testing.T) {
+func TestFinishTUIIssueParentLaunchPreservesCreationOrder(t *testing.T) {
 	partialErr := errors.New("launch child #502: boom")
 	tests := []struct {
 		name               string
+		orchestratorAfter  bool
 		orchestratorPaneID string
 		result             parentIssueFanoutResult
 		launchErr          error
@@ -274,6 +275,14 @@ func TestFinishTUIIssueParentLaunchPrependsOrchestrator(t *testing.T) {
 			wantPaneIDs:        []string{"%90", "%91", "%92"},
 		},
 		{
+			name:               "herdr orchestrator follows created children",
+			orchestratorAfter:  true,
+			orchestratorPaneID: "%90",
+			result:             parentIssueFanoutResult{CreatedPaneIDs: []string{"%91", "%92"}},
+			wantNotice:         "fanned out #500: started orchestrator + 2 child pane(s)",
+			wantPaneIDs:        []string{"%91", "%92", "%90"},
+		},
+		{
 			name:               "orchestrator remains when every child already has a pane",
 			orchestratorPaneID: "%90",
 			wantNotice:         "started orchestrator for #500; children already have panes",
@@ -286,6 +295,15 @@ func TestFinishTUIIssueParentLaunchPrependsOrchestrator(t *testing.T) {
 			launchErr:          partialErr,
 			wantNotice:         "started orchestrator + 1 child pane(s), then failed: launch child #502: boom",
 			wantPaneIDs:        []string{"%90", "%91"},
+		},
+		{
+			name:               "herdr partial child failure keeps creation order",
+			orchestratorAfter:  true,
+			orchestratorPaneID: "%90",
+			result:             parentIssueFanoutResult{CreatedPaneIDs: []string{"%91"}},
+			launchErr:          partialErr,
+			wantNotice:         "started orchestrator + 1 child pane(s), then failed: launch child #502: boom",
+			wantPaneIDs:        []string{"%91", "%90"},
 		},
 		{
 			name:               "orchestrator warning survives partial child failure",
@@ -345,7 +363,7 @@ func TestFinishTUIIssueParentLaunchPrependsOrchestrator(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := finishTUIIssueParentLaunch(500, tt.orchestratorPaneID, tt.result, tt.launchErr)
+			got, err := finishTUIIssueParentLaunch(500, tt.orchestratorAfter, tt.orchestratorPaneID, tt.result, tt.launchErr)
 			if err != nil {
 				t.Fatalf("finishTUIIssueParentLaunch() error = %v, want nil", err)
 			}
