@@ -1,21 +1,32 @@
 // Package peermsg executes the `fanout msg` verbs: identity resolution,
 // per-parent SQLite messaging (peers / inbox / board / send / post /
-// mark-read / register), and the best-effort tmux nudge. The CLI boundary —
+// mark-read / register), and the best-effort runtime nudge. The CLI boundary —
 // argv parsing, usage text, invocation-error wording — stays in cmd/fanout;
 // this package receives the parsed Request and owns everything after it.
 package peermsg
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
 )
+
+// HerdrNudger is the already-owned runtime surface used by one best-effort
+// nudge. Production opens it without creating or restarting a session.
+type HerdrNudger interface {
+	LivePanes(context.Context) ([]backend.LivePane, error)
+	ProcessInfo(context.Context, string) (herdrrun.PaneProcessInfo, error)
+	Nudge(context.Context, herdrrun.NudgeTarget, string) error
+}
 
 // Request is the parsed, validated form of a `fanout msg` invocation
 // (cmd/fanout's msgFlags after parse/validate). Field semantics mirror the
@@ -48,9 +59,13 @@ type Request struct {
 type Deps struct {
 	// DetectIdentity resolves the invoking pane's identity from fanout state.
 	DetectIdentity func() (team.Identity, error)
-	// ListLive and SendLine are the backend-neutral runtime seams nudge drives.
+	// ListLive and SendLine are the tmux runtime seams nudge drives.
 	ListLive func() ([]backend.LivePane, error)
 	SendLine func(backend.PaneRef, string) error
+	// OpenHerdr opens an existing owned Herdr runtime. ReadLockedState performs
+	// the final telemetry re-read under the owning state lock.
+	OpenHerdr       func(context.Context) (HerdrNudger, error)
+	ReadLockedState func(func(state.Store) error) error
 	// LoadState resolves and loads the owner checkout's .fanout/state.json
 	// read-only — the recipient's recorded pane id lives there, not in the
 	// messages DB.
@@ -64,9 +79,10 @@ type Deps struct {
 // composition root. This package never constructs an infra backend itself.
 func DefaultDeps(runtimeBackend backend.Backend) Deps {
 	deps := Deps{
-		DetectIdentity: team.Detect,
-		LoadState:      defaultLoadState,
-		Tick:           time.After,
+		DetectIdentity:  team.Detect,
+		LoadState:       defaultLoadState,
+		ReadLockedState: defaultReadLockedState,
+		Tick:            time.After,
 	}
 	if runtimeBackend != nil {
 		deps.ListLive = runtimeBackend.ListLive
@@ -104,6 +120,26 @@ const fanoutStatePathEnv = "FANOUT_STATE_PATH"
 // same resolver every other msg verb uses (openMsgDB) — so resolveStateRuntime
 // would silently load an empty store and report every peer "not recorded".
 func defaultLoadState() (state.Store, error) {
+	statePath, err := defaultStatePath()
+	if err != nil {
+		return state.Store{}, err
+	}
+	return state.Load(statePath)
+}
+
+func defaultReadLockedState(read func(state.Store) error) error {
+	statePath, err := defaultStatePath()
+	if err != nil {
+		return err
+	}
+	locked, err := state.Lock(statePath)
+	if err != nil {
+		return err
+	}
+	return errors.Join(read(locked.Store), locked.Unlock())
+}
+
+func defaultStatePath() (string, error) {
 	statePath := os.Getenv(fanoutStatePathEnv)
 	if statePath != "" {
 		if abs, err := filepath.Abs(statePath); err == nil {
@@ -112,11 +148,11 @@ func defaultLoadState() (state.Store, error) {
 	} else {
 		root, err := team.OwnerProjectRoot()
 		if err != nil {
-			return state.Store{}, err
+			return "", err
 		}
 		statePath = state.Path(root)
 	}
-	return state.Load(statePath)
+	return statePath, nil
 }
 
 // Run executes a parsed msg request: resolve identity, short-circuit nudge,
@@ -134,7 +170,7 @@ func Run(req Request, deps Deps, lg *log.Logger) exitcode.Code {
 	}
 
 	// nudge reads neither the messages DB nor store identity: it resolves the
-	// recipient from state.json and pushes via tmux, so short it out before
+	// recipient from state.json and pushes via its recorded runtime, so short it out before
 	// openMsgDB.
 	if req.Verb == "nudge" {
 		return runMsgNudge(&req, parent, deps, lg)

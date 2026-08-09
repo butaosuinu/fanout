@@ -932,6 +932,8 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 			return []byte("current viewport\n"), nil
 		case slices.Equal(args, []string{"agent", "prompt", "w2:p1", "hello"}):
 			return agentPromptResponse(target, nil), nil
+		case slices.Equal(args, []string{"agent", "prompt", "w2:p1", "nudge"}):
+			return agentPromptResponse(target, nil), nil
 		case slices.Equal(args, []string{"agent", "focus", target.Ref.Pane}):
 			h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
 				for i := range *snapshot.Panes {
@@ -968,6 +970,13 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 		t.Fatalf("ReadOwnedPane(visible) = %q, %v", content, err)
 	}
 	if err := bound.SendLine(target.Ref, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	nudgeTarget := NudgeTarget{
+		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
+		TerminalID: target.TerminalID, AgentID: target.AgentID, AgentSession: target.AgentSession,
+	}
+	if err := h.session.Nudge(context.Background(), nudgeTarget, "nudge"); err != nil {
 		t.Fatal(err)
 	}
 	if err := bound.Focus(target.Ref); err != nil {

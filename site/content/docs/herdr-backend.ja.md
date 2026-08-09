@@ -35,14 +35,13 @@ Plan Mode 以外の Codex と OpenCode の launch には emitter を設定しま
 
 TUI コンソールと web ダッシュボードが `reported_state` を使うのは、一致する pane と agent が live の場合だけです。
 `--status --format json` は `reported_state` を含み、table 形式は `REPORTED_STATE` 列へ表示します。
-この値は診断用です。
-`SessionEnd` が `done` を報告しても、issue の完了、cleanup の許可、自動 nudge の有効化には使いません。
+この値は issue の完了や cleanup の許可には使いません。
+自動 nudge に使うのは、current launch の telemetry によって `state_refinement: true` となり、live pane、worktree、agent、process identity の再照合を通った場合だけです。
 pane が消えた場合は `stale` のままです。
 
 未対応の経路は明確なエラーで fail closed します。
 
 - 対話 TUI の launch、focus、send、restore、出力 peek、plan capture は herdr 行では使えません。
-- 自動 nudge(`fanout msg nudge` の配送)は agent の種類にかかわらず無効です。メッセージ自体は bus に保存され、`inbox` / `board` で読めます。
 - tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれません。
 
 TUI のヘッダには、選択された backend とその理由が常に表示されます。例: `backend: herdr (HERDR_ENV)`。
@@ -99,7 +98,7 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 | agent 終了後の pane | wrapper のメッセージ付きで pane が残る | 正常終了で herdr は pane と自身の記録を消す。fanout の行は `stale` になる |
 | 対話 TUI launch / focus / send / restore / peek / plan capture | TUI キーと lifecycle フラグ | 不可 — `runtime backend herdr does not support …` |
 | `--team` peer messaging | SQLite registry、Claude watcher、Codex app-server bridge | 同じ registry と push lane |
-| 自動 nudge(`fanout msg nudge`) | 相手が入力を受けられる状態なら配送 | agent の種類にかかわらず無効 |
+| 自動 nudge(`fanout msg nudge`) | 相手が入力を受けられる状態なら配送 | current launch に束縛された refined telemetry と live identity/process の照合後に no-wait の `agent prompt` を 1 回発行。それ以外は no-op |
 | tmux keybind(ダッシュボード、コンソール復帰) | 登録する | 登録しない |
 | 通知 | bell / tmux / ntfy / slack の channel | bell / ntfy / slack は動く。tmux channel と herdr の `notification show` は発火しない |
 | 子の Plan Mode launch | 対応 | 対応。Codex は fanout の app-server controller、Claude / OpenCode は固有の mode flag を使う |
