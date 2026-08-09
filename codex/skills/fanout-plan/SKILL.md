@@ -194,7 +194,7 @@ each task briefing. Address peers by task ID:
 
 Claude task panes are briefed to start `fanout msg watch` under their Monitor
 tool (mark-on-emit); restored Codex panes stay pull-based. `send` and `post` persist data;
-`nudge` is a separate best-effort tmux hint and may safely no-op. Never store
+`nudge` is a separate best-effort recorded-runtime hint and may safely no-op. Never store
 secrets in the plaintext owner-only database under `/tmp`.
 
 Fresh Codex task panes launched with `--team` receive unread rows as one quoted

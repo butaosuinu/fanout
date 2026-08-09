@@ -208,7 +208,7 @@ When the plan includes Codex team tasks, the registry preseed and each
 bridge's in-pane DB setup are fail-fast — a failure there (a bad
 `FANOUT_DB_PATH`, wrong DB ownership or permissions) stops the run before
 pane creation or fails that launch instead of falling back to pull.
-`nudge` is the only push that writes to tmux input. The DB is a plaintext
+`nudge` is the only push that writes to pane input. The DB is a plaintext
 SQLite file under `/tmp` (`0600`, owner-only) — never put secrets in messages.
 This is distinct from Claude Code Agent Teams (a Claude-only, single-session
 feature).
