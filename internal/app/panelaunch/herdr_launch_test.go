@@ -1260,6 +1260,21 @@ func TestVerifyHerdrAgentProcessRejectsAmbiguousOrForeignChains(t *testing.T) {
 	}
 }
 
+func TestVerifyHerdrLauncherProcessRejectsForeignOSIdentity(t *testing.T) {
+	intent := state.HerdrIntent{WorktreePath: "/repo/worktree"}
+	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
+	for _, mutate := range []func(*herdrrun.PaneProcess){
+		func(process *herdrrun.PaneProcess) { process.Executable = "/foreign/fanout" },
+		func(process *herdrrun.PaneProcess) { process.ProcessGroup++ },
+	} {
+		info := testHerdrLauncherProcess(intent, route.LauncherPath)
+		mutate(&info.ForegroundProcesses[0])
+		if err := verifyHerdrLauncherProcess(info, intent, route); err == nil {
+			t.Fatal("foreign launcher OS identity was accepted")
+		}
+	}
+}
+
 func TestWaitForHerdrLaunchProcessRetriesExactLauncherTransition(t *testing.T) {
 	intent := state.HerdrIntent{
 		WorktreePath: "/repo/worktree", ExpiresUnixMS: time.Now().Add(3 * time.Second).UnixMilli(),
@@ -1287,6 +1302,19 @@ func TestWaitForHerdrLaunchProcessRetriesExactLauncherTransition(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("process-info calls = %d, want 2", calls)
+	}
+	calls = 0
+	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+		calls++
+		info := testHerdrLauncherProcess(intent, route.LauncherPath)
+		info.ForegroundProcesses[0].Executable = "/foreign/fanout"
+		return info, nil
+	}
+	if err := (&Launcher{Herdr: runtime}).waitForHerdrLaunchProcess(context.Background(), intent, route); err == nil {
+		t.Fatal("foreign launcher transition was accepted")
+	}
+	if calls != 1 {
+		t.Fatalf("foreign process-info calls = %d, want 1", calls)
 	}
 }
 
@@ -1828,7 +1856,8 @@ func testHerdrLauncherProcess(intent state.HerdrIntent, launcherPath string) her
 	return herdrrun.PaneProcessInfo{
 		PaneID: intent.Resource.PaneID, ShellPID: 42, ForegroundProcessGroup: 42,
 		ForegroundProcesses: []herdrrun.PaneProcess{{
-			PID: 42, CWD: intent.WorktreePath, Argv0: launcherPath,
+			PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: launcherPath,
+			CWD: intent.WorktreePath, Argv0: launcherPath,
 		}},
 	}
 }

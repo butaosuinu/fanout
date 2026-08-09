@@ -443,6 +443,7 @@ func verifyHerdrLauncherProcess(
 	}
 	for _, process := range info.ForegroundProcesses {
 		if process.PID == info.ShellPID && process.CWD == intent.WorktreePath &&
+			process.ProcessGroup == info.ForegroundProcessGroup && process.Executable == route.LauncherPath &&
 			process.Argv0 == route.LauncherPath && len(process.Argv) == 0 {
 			return nil
 		}
