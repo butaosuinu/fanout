@@ -35,6 +35,14 @@ type herdrAgentAdoptFunc func(
 	state.HerdrIntent,
 ) (backend.LivePane, error)
 
+type herdrLaunchTransitionPending struct{}
+
+func (herdrLaunchTransitionPending) Error() string {
+	return "herdr launcher is still starting the workload"
+}
+
+func (herdrLaunchTransitionPending) RetryableObservation() bool { return true }
+
 func (l *Launcher) startHerdrRequestAgent(
 	ctx context.Context,
 	req Request,
@@ -91,7 +99,7 @@ func (l *Launcher) startHerdrAgent(
 	if err := saveHerdrLaunchPhase(journal, intent); err != nil {
 		return live, err
 	}
-	return l.finishIssuedHerdrAgent(ctx, locked, intent, expected, adopt)
+	return l.finishIssuedHerdrAgent(ctx, locked, route, intent, expected, adopt)
 }
 
 func admitHerdrAgentStartDeadline(
@@ -137,6 +145,7 @@ func (l *Launcher) admitHerdrLauncher(
 func (l *Launcher) finishIssuedHerdrAgent(
 	ctx context.Context,
 	locked *state.LockedStore,
+	route herdrrun.OwnedLaunchRoute,
 	intent state.HerdrIntent,
 	expected herdrPaneSelector,
 	adopt herdrAgentAdoptFunc,
@@ -149,7 +158,7 @@ func (l *Launcher) finishIssuedHerdrAgent(
 	if err := l.sendHerdrLaunchToken(ctx, intent); err != nil {
 		return live, err
 	}
-	live, err := l.observeStartedHerdrPane(ctx, locked, intent, expected, adopt)
+	live, err := l.observeStartedHerdrPane(ctx, locked, route, intent, expected, adopt)
 	if err != nil {
 		return live, err
 	}
@@ -162,6 +171,7 @@ func (l *Launcher) finishIssuedHerdrAgent(
 func (l *Launcher) observeStartedHerdrPane(
 	ctx context.Context,
 	locked *state.LockedStore,
+	route herdrrun.OwnedLaunchRoute,
 	intent state.HerdrIntent,
 	expected herdrPaneSelector,
 	adopt herdrAgentAdoptFunc,
@@ -169,7 +179,7 @@ func (l *Launcher) observeStartedHerdrPane(
 	if adopt != nil {
 		return adopt(ctx, locked, intent)
 	}
-	if err := l.waitForHerdrLaunchProcess(ctx, intent); err != nil {
+	if err := l.waitForHerdrLaunchProcess(ctx, intent, route); err != nil {
 		return backend.LivePane{}, err
 	}
 	return l.waitForHerdrPane(ctx, intent, expected, intent.Launch.CodexTeamStatusPath)
@@ -460,13 +470,18 @@ func herdrLaunchProcessIdentity(intent state.HerdrIntent) herdrprocess.Identity 
 func (l *Launcher) waitForHerdrLaunchProcess(
 	ctx context.Context,
 	intent state.HerdrIntent,
+	route herdrrun.OwnedLaunchRoute,
 ) error {
 	return retryHerdrObservation(ctx, intent, func(observeCtx context.Context) error {
 		process, err := l.Herdr.ProcessInfo(observeCtx, intent.Resource.PaneID)
 		if err != nil {
 			return err
 		}
-		return verifyHerdrAgentProcess(process, intent)
+		processErr := verifyHerdrAgentProcess(process, intent)
+		if processErr == nil || verifyHerdrLauncherProcess(process, intent, route) != nil {
+			return processErr
+		}
+		return herdrLaunchTransitionPending{}
 	})
 }
 

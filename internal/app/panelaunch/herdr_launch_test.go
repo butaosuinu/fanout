@@ -454,7 +454,7 @@ func TestFinishIssuedHerdrAgentPreservesObservedAgentAfterContextExpires(t *test
 	defer cancel()
 
 	_, err := launcher.finishIssuedHerdrAgent(
-		ctx, locked, intent,
+		ctx, locked, herdrrun.OwnedLaunchRoute{}, intent,
 		func(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
 			return exactHerdrLaunchPane(intent, panes, intent.Launch.AgentName)
 		},
@@ -1257,6 +1257,36 @@ func TestVerifyHerdrAgentProcessRejectsAmbiguousOrForeignChains(t *testing.T) {
 	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child, duplicate}
 	if err := verifyHerdrAgentProcess(info, intent); err == nil {
 		t.Fatal("ambiguous native children were accepted")
+	}
+}
+
+func TestWaitForHerdrLaunchProcessRetriesExactLauncherTransition(t *testing.T) {
+	intent := state.HerdrIntent{
+		WorktreePath: "/repo/worktree", ExpiresUnixMS: time.Now().Add(3 * time.Second).UnixMilli(),
+		Resource: state.HerdrResource{PaneID: "w1:p1"},
+		Launch:   &state.HerdrLaunch{Executable: "/bin/zsh"},
+	}
+	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
+	runtime := &fakeHerdrLaunchRuntime{}
+	calls := 0
+	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+		calls++
+		if calls == 1 {
+			return testHerdrLauncherProcess(intent, route.LauncherPath), nil
+		}
+		return herdrrun.PaneProcessInfo{
+			ShellPID: 42, ForegroundProcessGroup: 42,
+			ForegroundProcesses: []herdrrun.PaneProcess{{
+				PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: "/bin/zsh",
+				CWD: intent.WorktreePath, Argv0: "/bin/zsh",
+			}},
+		}, nil
+	}
+	if err := (&Launcher{Herdr: runtime}).waitForHerdrLaunchProcess(context.Background(), intent, route); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("process-info calls = %d, want 2", calls)
 	}
 }
 
