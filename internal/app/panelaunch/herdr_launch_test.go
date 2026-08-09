@@ -420,6 +420,51 @@ func TestWaitForHerdrAgentRevalidatesConcurrentIntentChanges(t *testing.T) {
 	}
 }
 
+func TestFinishIssuedHerdrAgentPreservesObservedAgentAfterContextExpires(t *testing.T) {
+	repo, locked, intent, live := herdrEmitterWaitFixture(t)
+	live.AgentID = intent.Launch.Agent
+	held := make(chan struct{})
+	holderDone := make(chan error, 1)
+	go func() {
+		contender, err := state.LockProjectForLaunch(repo)
+		if err != nil {
+			close(held)
+			holderDone <- err
+			return
+		}
+		close(held)
+		time.Sleep(250 * time.Millisecond)
+		holderDone <- contender.Unlock()
+	}()
+	runtime := &fakeHerdrLaunchRuntime{}
+	runtime.listLive = func(context.Context) ([]backend.LivePane, error) {
+		<-held
+		return []backend.LivePane{live}, nil
+	}
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := launcher.finishIssuedHerdrAgent(ctx, Request{Agent: intent.Launch.Agent}, locked, intent)
+	if !errors.Is(err, errHerdrLaunchStatePreserved) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("finish error = %v, want preserved launch with expired context", err)
+	}
+	if errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("observed agent entered manual cleanup: %v", err)
+	}
+	if holderErr := <-holderDone; holderErr != nil {
+		t.Fatal(holderErr)
+	}
+	journal, loadErr := locked.HerdrIntents(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	latest, found := journal.FindIntent(intent.ID)
+	if !found || latest.Status != state.HerdrIntentRealized {
+		t.Fatalf("preserved launch intent = (%+v, %t)", latest, found)
+	}
+}
+
 func herdrEmitterWaitFixture(t *testing.T) (string, *state.LockedStore, state.HerdrIntent, backend.LivePane) {
 	t.Helper()
 	repo := newHerdrRealizeRepo(t)

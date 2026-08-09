@@ -24,7 +24,7 @@ import (
 
 const emitterTimeout = telemetry.EmitterTimeoutSeconds * time.Second
 
-var errTerminalChanged = errors.New("current Herdr terminal changed")
+var errRuntimeIdentityChanged = errors.New("current Herdr runtime identity changed")
 
 // RuntimeTarget is the persisted launch binding used for one current-runtime
 // observation. AcceptUnboundSession is true only before final-row persistence.
@@ -190,7 +190,7 @@ func updateFinalRow(
 	}
 	current, err := verifyRuntimeObservation(target, observation)
 	if err != nil {
-		if errors.Is(err, errTerminalChanged) {
+		if errors.Is(err, errRuntimeIdentityChanged) {
 			return invalidateFinalRowTelemetry(locked, index)
 		}
 		return err
@@ -366,22 +366,31 @@ func verifyRuntimeObservation(target RuntimeTarget, observation Observation) (ba
 		return backend.LivePane{}, err
 	}
 	if currentTerminalChanged(target, observation.Panes) {
-		return backend.LivePane{}, errTerminalChanged
+		return backend.LivePane{}, errRuntimeIdentityChanged
 	}
 	current, ok := uniqueMatchingPane(target, observation.Panes)
 	if !ok {
-		return backend.LivePane{}, fmt.Errorf("saved PaneRef does not match exactly one current runtime pane")
+		return backend.LivePane{}, fmt.Errorf(
+			"%w: saved PaneRef does not match exactly one current runtime pane",
+			errRuntimeIdentityChanged,
+		)
 	}
 	if observation.ProcessError != nil {
 		return backend.LivePane{}, observation.ProcessError
 	}
 	if observation.ProcessInfo.PaneID != target.PaneID {
-		return backend.LivePane{}, fmt.Errorf("process observation does not match saved PaneRef")
+		return backend.LivePane{}, fmt.Errorf(
+			"%w: process observation does not match saved PaneRef",
+			errRuntimeIdentityChanged,
+		)
 	}
 	err := herdrprocess.VerifyAgent(observation.ProcessInfo, herdrprocess.Identity{
 		WorktreePath: target.WorktreePath,
 		Executable:   target.Executable, Args: target.Args,
 	})
+	if err != nil {
+		return backend.LivePane{}, fmt.Errorf("%w: %w", errRuntimeIdentityChanged, err)
+	}
 	return current, err
 }
 

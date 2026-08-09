@@ -21,6 +21,8 @@ const herdrLaunchStepTimeout = 5 * time.Second
 
 const herdrLaunchObservationInterval = 2 * time.Second
 
+var errHerdrLaunchStatePreserved = errors.New("issued Herdr launch state preserved")
+
 func (l *Launcher) startHerdrAgent(
 	ctx context.Context,
 	req Request,
@@ -100,7 +102,7 @@ func (l *Launcher) finishIssuedHerdrAgent(
 	intent state.HerdrIntent,
 ) (live backend.LivePane, retErr error) {
 	defer func() {
-		if retErr != nil {
+		if retErr != nil && !errors.Is(retErr, errHerdrLaunchStatePreserved) {
 			retErr = errors.Join(retErr, l.failClosedLatestIssuedHerdrLaunch(locked, intent, retErr))
 		}
 	}()
@@ -159,14 +161,33 @@ func (l *Launcher) waitForHerdrAgentUnlocked(
 		return backend.LivePane{}, err
 	}
 	live, waitErr := l.waitForHerdrAgent(ctx, intent, wantAgentID, codexTeamStatusPath)
-	reloaded, lockErr := state.LockProjectForLaunch(l.Info.ProjectRoot)
-	if lockErr == nil {
-		*locked = *reloaded
-		lockErr = validateReacquiredHerdrLaunch(locked, l.Info.ProjectRoot, intent)
-	} else {
-		lockErr = fmt.Errorf("reacquire launch lock after Herdr agent wait: %w", lockErr)
+	lockErr := l.reacquireHerdrLaunchAfterAgentWait(locked, intent)
+	if waitErr == nil && lockErr == nil && ctx.Err() != nil {
+		waitErr = fmt.Errorf(
+			"%w: launch context expired after current agent observation: %w",
+			errHerdrLaunchStatePreserved,
+			ctx.Err(),
+		)
 	}
 	return live, errors.Join(waitErr, lockErr)
+}
+
+func (l *Launcher) reacquireHerdrLaunchAfterAgentWait(
+	locked *state.LockedStore,
+	intent state.HerdrIntent,
+) error {
+	ctx, cancel := context.WithTimeout(context.Background(), herdrLaunchStepTimeout)
+	defer cancel()
+	reloaded, err := state.LockProjectForLaunchContext(ctx, l.Info.ProjectRoot)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: reacquire launch lock after Herdr agent wait: %w",
+			errHerdrLaunchStatePreserved,
+			err,
+		)
+	}
+	*locked = *reloaded
+	return validateReacquiredHerdrLaunch(locked, l.Info.ProjectRoot, intent)
 }
 
 func validateReacquiredHerdrLaunch(

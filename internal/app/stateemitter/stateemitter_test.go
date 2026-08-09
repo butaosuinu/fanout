@@ -125,9 +125,10 @@ func TestEmitObservesOutsideLockAndRevalidatesBeforeSave(t *testing.T) {
 
 func TestEmitFinalRowFailsClosedOnBindingMismatch(t *testing.T) {
 	for _, test := range []struct {
-		name   string
-		mutate func(*state.Pane, *telemetry.Signal, *fakeObserver)
-		count  int
+		name      string
+		mutate    func(*state.Pane, *telemetry.Signal, *fakeObserver)
+		count     int
+		wantStale bool
 	}{
 		{name: "zero rows", count: 0},
 		{name: "multiple rows", count: 2},
@@ -142,13 +143,13 @@ func TestEmitFinalRowFailsClosedOnBindingMismatch(t *testing.T) {
 		}},
 		{name: "current pane ref mismatch", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
 			observer.observation.Panes[0].Ref.Pane = "workspace-1:pane-2"
-		}},
+		}, wantStale: true},
 		{name: "process mismatch", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
 			observer.observation.ProcessInfo.ForegroundProcesses[0].Argv = []string{"wrong"}
-		}},
+		}, wantStale: true},
 		{name: "process executable mismatch", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
 			observer.observation.ProcessInfo.ForegroundProcesses[0].Executable = "/foreign/not-claude"
-		}},
+		}, wantStale: true},
 		{name: "process observation failure", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
 			observer.observation.ProcessError = errors.New("process replaced")
 		}},
@@ -156,21 +157,23 @@ func TestEmitFinalRowFailsClosedOnBindingMismatch(t *testing.T) {
 			observer.observation.Panes[0].AgentSession = &backend.AgentSessionRef{
 				Source: "foreign:claude", Agent: "claude", Kind: "id", Value: "session-a",
 			}
-		}},
+		}, wantStale: true},
 		{name: "invalid late session", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
 			observer.observation.Panes[0].AgentSession = &backend.AgentSessionRef{
 				Source: "herdr:claude", Agent: "claude", Kind: "id",
 			}
-		}},
+		}, wantStale: true},
 		{name: "ambiguous late session observations", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
 			ref := backend.AgentSessionRef{Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-a"}
 			observer.observation.Panes[0].AgentSession = &ref
 			observer.observation.Panes = append(observer.observation.Panes, observer.observation.Panes[0])
-		}},
+		}, wantStale: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repo := newEmitterRepo(t)
 			pane, signal, observer := finalEmitterFixture(t, repo)
+			pane.ReportedState = string(backend.AgentBlocked)
+			pane.StateRefinement = true
 			if test.mutate != nil {
 				test.mutate(&pane, &signal, observer)
 			}
@@ -179,11 +182,26 @@ func TestEmitFinalRowFailsClosedOnBindingMismatch(t *testing.T) {
 				panes[i] = pane
 			}
 			saveEmitterPanes(t, repo, panes...)
-			if err := Emit(context.Background(), signal, observer); err == nil {
+			err := Emit(context.Background(), signal, observer)
+			if test.wantStale {
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := loadEmitterPane(t, repo)
+				if got.ReportedState != "" || got.StateRefinement || got.EmitterNonce == pane.EmitterNonce {
+					t.Fatalf("stale telemetry row = %+v", got)
+				}
+				return
+			}
+			if err == nil {
 				t.Fatal("Emit() succeeded")
 			}
-			if test.count > 0 && loadEmitterPane(t, repo).ReportedState != "running" {
-				t.Fatal("failed signal changed reported state")
+			if test.count > 0 {
+				got := loadEmitterPane(t, repo)
+				if got.ReportedState != string(backend.AgentBlocked) || !got.StateRefinement ||
+					got.EmitterNonce != pane.EmitterNonce {
+					t.Fatalf("failed signal changed telemetry row = %+v", got)
+				}
 			}
 		})
 	}
@@ -210,12 +228,13 @@ func TestEmitFinalRowBindsOnlyFirstLateSession(t *testing.T) {
 	second.Value = "session-second"
 	observer.observation.Panes[0].AgentSession = &second
 	signal.State = backend.AgentIdle
-	if err := Emit(context.Background(), signal, observer); err == nil {
-		t.Fatal("Emit() accepted a replacement late session")
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
 	}
 	got = loadEmitterPane(t, repo)
-	if got.HerdrAgentSession == nil || *got.HerdrAgentSession != first || got.ReportedState != "working" {
-		t.Fatalf("replacement session changed telemetry row = %+v", got)
+	if got.HerdrAgentSession == nil || *got.HerdrAgentSession != first || got.ReportedState != "" ||
+		got.StateRefinement || got.EmitterNonce == pane.EmitterNonce {
+		t.Fatalf("replacement session did not stale telemetry row = %+v", got)
 	}
 }
 
