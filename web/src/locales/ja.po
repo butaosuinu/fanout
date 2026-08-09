@@ -57,6 +57,10 @@ msgstr "省略"
 msgid "diff を閉じる"
 msgstr "diff を閉じる"
 
+#: src/features/drawer/Drawer.tsx
+msgid "herdr backend は plan capture に対応していません。"
+msgstr "herdr backend は plan capture に対応していません。"
+
 #: src/features/diff/DiffFileList.tsx
 msgid "すべて折りたたむ"
 msgstr "すべて折りたたむ"
@@ -268,10 +272,6 @@ msgstr "左右 2 面"
 #: src/features/filter/FilterDropdown.tsx
 msgid "絞り込み…"
 msgstr "絞り込み…"
-
-#: src/features/drawer/Drawer.tsx
-msgid "herdr backend v1 はペイン内容を読み取らないため利用できません。"
-msgstr "herdr backend v1 はペイン内容を読み取らないため利用できません。"
 
 #: src/features/drawer/Drawer.tsx
 msgid "ペイン詳細"

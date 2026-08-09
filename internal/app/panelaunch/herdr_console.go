@@ -121,6 +121,9 @@ func reuseHerdrConsole(
 	pane state.Pane,
 ) (HerdrConsoleResult, bool, error) {
 	if err := verifySavedHerdrConsole(owned, pane); err != nil {
+		if !staleHerdrConsoleRecoverable(err) {
+			return HerdrConsoleResult{}, false, err
+		}
 		if staleErr := removeStaleHerdrConsole(locked, projectRoot, owned, pane); staleErr != nil {
 			return HerdrConsoleResult{}, false, errors.Join(
 				fmt.Errorf("saved Herdr console is not safely reusable: %w", err),
@@ -134,6 +137,10 @@ func reuseHerdrConsole(
 	}
 	result, err := herdrConsoleResult(owned, pane)
 	return result, true, err
+}
+
+func staleHerdrConsoleRecoverable(err error) bool {
+	return errors.Is(err, herdrrun.ErrOwnedIdentityMismatch)
 }
 
 func removeStaleHerdrConsole(

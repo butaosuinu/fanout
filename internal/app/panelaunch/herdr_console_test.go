@@ -1,12 +1,14 @@
 package panelaunch
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -104,6 +106,16 @@ func TestValidateHerdrConsoleIntentRootRejectsLinkedWorktreeRecovery(t *testing.
 	}
 	if err := validateHerdrConsoleIntentRoot(intent, intent.WorktreePath); err != nil {
 		t.Fatalf("console recovery rejected its owning worktree: %v", err)
+	}
+}
+
+func TestStaleHerdrConsoleRecoveryRequiresIdentityMismatch(t *testing.T) {
+	if staleHerdrConsoleRecoverable(os.ErrDeadlineExceeded) {
+		t.Fatal("transient observation error qualified for destructive stale recovery")
+	}
+	mismatch := fmt.Errorf("bind saved console: %w", herdrrun.ErrOwnedIdentityMismatch)
+	if !staleHerdrConsoleRecoverable(mismatch) {
+		t.Fatal("owned identity mismatch did not qualify for stale recovery")
 	}
 }
 
