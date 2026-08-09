@@ -21,6 +21,8 @@ const herdrLaunchStepTimeout = 5 * time.Second
 
 const herdrLaunchObservationInterval = 2 * time.Second
 
+const herdrLaunchLockReacquireTimeout = maxHerdrRealizeTimeout
+
 var errHerdrLaunchStatePreserved = errors.New("issued Herdr launch state preserved")
 
 func (l *Launcher) startHerdrAgent(
@@ -176,7 +178,7 @@ func (l *Launcher) reacquireHerdrLaunchAfterAgentWait(
 	locked *state.LockedStore,
 	intent state.HerdrIntent,
 ) error {
-	ctx, cancel := context.WithTimeout(context.Background(), herdrLaunchStepTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), herdrLaunchLockReacquireTimeout)
 	defer cancel()
 	reloaded, err := state.LockProjectForLaunchContext(ctx, l.Info.ProjectRoot)
 	if err != nil {

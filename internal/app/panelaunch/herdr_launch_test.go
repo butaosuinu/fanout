@@ -421,6 +421,9 @@ func TestWaitForHerdrAgentRevalidatesConcurrentIntentChanges(t *testing.T) {
 }
 
 func TestFinishIssuedHerdrAgentPreservesObservedAgentAfterContextExpires(t *testing.T) {
+	if herdrLaunchLockReacquireTimeout < maxHerdrRealizeTimeout {
+		t.Fatalf("lock recovery timeout = %s, want at least %s", herdrLaunchLockReacquireTimeout, maxHerdrRealizeTimeout)
+	}
 	repo, locked, intent, live := herdrEmitterWaitFixture(t)
 	live.AgentID = intent.Launch.Agent
 	held := make(chan struct{})
