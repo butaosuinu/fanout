@@ -325,7 +325,9 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, found := stored.FindIntent(intent.ID)
-	if !found || got.Launch.PendingReportedState != "done" {
+	wantSession := observer.observation.Panes[0].AgentSession
+	if !found || got.Launch.PendingReportedState != "done" || got.Launch.PendingAgentSession == nil ||
+		wantSession == nil || *got.Launch.PendingAgentSession != *wantSession {
 		t.Fatalf("pending intent = (%+v, %t), want done", got, found)
 	}
 }
@@ -392,6 +394,10 @@ func finalEmitterFixture(t *testing.T, repo string) (state.Pane, telemetry.Signa
 func pendingEmitterFixture(t *testing.T, repo string) (state.HerdrIntent, telemetry.Signal, *fakeObserver) {
 	t.Helper()
 	pane, signal, observer := finalEmitterFixture(t, repo)
+	session := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "pending-session",
+	}
+	observer.observation.Panes[0].AgentSession = &session
 	intent := state.HerdrIntent{
 		ID: signal.RowKey, Kind: state.HerdrIntentWorktree, Status: state.HerdrIntentRealized,
 		Parent: "524", RuntimeParent: "524", IssueNum: 529,

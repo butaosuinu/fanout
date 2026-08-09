@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -108,6 +109,28 @@ func TestApplyHerdrLaunchTelemetryStartsSyntheticRunningUnrefined(t *testing.T) 
 	}
 	if pane.EmitterRowKey != intent.ID || pane.LaunchNonce != intent.Launch.Nonce || pane.EmitterNonce != intent.Launch.EmitterNonce {
 		t.Fatalf("launch binding = %+v", pane)
+	}
+}
+
+func TestApplyHerdrLaunchTelemetryDropsPendingStateFromReplacedSession(t *testing.T) {
+	pending := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "old-session",
+	}
+	current := pending
+	current.Value = "new-session"
+	pane := state.Pane{Backend: "herdr", HerdrAgentSession: &current, StateRefinement: true}
+	intent := state.HerdrIntent{
+		ID: "issue:3:524:529",
+		Launch: &state.HerdrLaunch{
+			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
+			PendingReportedState: "idle", PendingAgentSession: &pending,
+		},
+	}
+
+	applyHerdrLaunchTelemetry(&pane, intent)
+
+	if pane.ReportedState != "running" || pane.StateRefinement {
+		t.Fatalf("replaced-session telemetry = (%q, %t), want synthetic running", pane.ReportedState, pane.StateRefinement)
 	}
 }
 

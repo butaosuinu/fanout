@@ -92,19 +92,20 @@ type HerdrIntent struct {
 // HerdrLaunch is the non-secret launch capsule recorded after workspace
 // realization. The environment itself lives in a one-shot owner-only file.
 type HerdrLaunch struct {
-	Nonce                string   `json:"nonce"`
-	EmitterNonce         string   `json:"emitterNonce,omitempty"`
-	PendingReportedState string   `json:"pendingReportedState,omitempty"`
-	Agent                string   `json:"agent"`
-	AgentName            string   `json:"agentName"`
-	Executable           string   `json:"executable"`
-	Args                 []string `json:"args"`
-	TeamDBPath           string   `json:"teamDbPath,omitempty"`
-	CodexTeamStatusPath  string   `json:"codexTeamStatusPath,omitempty"`
-	EnvFilePath          string   `json:"envFilePath"`
-	EnvNameCount         int      `json:"envNameCount"`
-	LauncherReady        bool     `json:"launcherReady,omitempty"`
-	TokenIssued          bool     `json:"tokenIssued,omitempty"`
+	Nonce                string                   `json:"nonce"`
+	EmitterNonce         string                   `json:"emitterNonce,omitempty"`
+	PendingReportedState string                   `json:"pendingReportedState,omitempty"`
+	PendingAgentSession  *backend.AgentSessionRef `json:"pendingAgentSession,omitempty"`
+	Agent                string                   `json:"agent"`
+	AgentName            string                   `json:"agentName"`
+	Executable           string                   `json:"executable"`
+	Args                 []string                 `json:"args"`
+	TeamDBPath           string                   `json:"teamDbPath,omitempty"`
+	CodexTeamStatusPath  string                   `json:"codexTeamStatusPath,omitempty"`
+	EnvFilePath          string                   `json:"envFilePath"`
+	EnvNameCount         int                      `json:"envNameCount"`
+	LauncherReady        bool                     `json:"launcherReady,omitempty"`
+	TokenIssued          bool                     `json:"tokenIssued,omitempty"`
 }
 
 // HerdrIntents is the repository-common intent journal. It holds intents

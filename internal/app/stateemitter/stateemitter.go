@@ -255,13 +255,18 @@ func updatePendingIntent(
 	if err != nil {
 		return err
 	}
-	if _, err := verifyRuntimeObservation(target, observation); err != nil {
+	current, err := verifyRuntimeObservation(target, observation)
+	if err != nil {
 		return err
 	}
-	intent.Launch.PendingReportedState = nextReportedState(
-		intent.Launch.PendingReportedState,
-		string(signal.State),
-	)
+	if current.AgentSession == nil {
+		return fmt.Errorf("pending telemetry requires a current agent session")
+	}
+	if intent.Launch.PendingReportedState != string(backend.AgentDone) {
+		session := *current.AgentSession
+		intent.Launch.PendingAgentSession = &session
+	}
+	intent.Launch.PendingReportedState = nextReportedState(intent.Launch.PendingReportedState, string(signal.State))
 	journal.UpsertIntent(intent)
 	return journal.Save()
 }

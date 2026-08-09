@@ -273,6 +273,10 @@ func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T
 	intent.Launch = validTestHerdrLaunch()
 	intent.Launch.EmitterNonce = strings.Repeat("b", 32)
 	intent.Launch.PendingReportedState = string(backend.AgentIdle)
+	pendingSession := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-531",
+	}
+	intent.Launch.PendingAgentSession = &pendingSession
 	launchReq := Request{
 		ParentRef: worktreeReq.Parent, Number: worktreeReq.IssueNum,
 		Slug: worktreeReq.Slug, BranchName: worktreeReq.BranchName,
@@ -295,7 +299,8 @@ func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T
 		},
 		TerminalID: intent.Resource.TerminalID, RepoKey: intent.Resource.RepoKey,
 		AgentID: intent.Launch.AgentName, AgentProvider: intent.Launch.Agent,
-		SessionID: intent.Session, SocketPath: intent.SocketPath,
+		AgentSession: &pendingSession,
+		SessionID:    intent.Session, SocketPath: intent.SocketPath,
 	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
 	stale := intent

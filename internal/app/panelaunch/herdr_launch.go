@@ -671,7 +671,9 @@ func applyHerdrLaunchTelemetry(pane *state.Pane, intent state.HerdrIntent) {
 	pane.HerdrLaunchExecutable = launch.Executable
 	pane.HerdrLaunchArgs = slices.Clone(launch.Args)
 	pane.ReportedState = string(backend.AgentRunning)
-	if launch.PendingReportedState != "" {
+	pane.StateRefinement = false
+	if launch.PendingReportedState != "" && launch.PendingAgentSession != nil &&
+		pane.HerdrAgentSession != nil && *launch.PendingAgentSession == *pane.HerdrAgentSession {
 		pane.ReportedState = launch.PendingReportedState
 		pane.StateRefinement = true
 	}

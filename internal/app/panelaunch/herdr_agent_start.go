@@ -198,7 +198,9 @@ func sameHerdrLaunchGeneration(latest, want state.HerdrIntent) bool {
 	latestLaunch := *latest.Launch
 	wantLaunch := *want.Launch
 	latestLaunch.PendingReportedState = ""
+	latestLaunch.PendingAgentSession = nil
 	wantLaunch.PendingReportedState = ""
+	wantLaunch.PendingAgentSession = nil
 	latest.Launch = &latestLaunch
 	want.Launch = &wantLaunch
 	return reflect.DeepEqual(latest, want)
