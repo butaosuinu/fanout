@@ -1,6 +1,7 @@
 package panelaunch
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -133,17 +134,44 @@ func TestStaleHerdrConsoleTargetAdmitsOwnedRouteWithNewProcessIdentity(t *testin
 		CurrentPath:    saved.WorktreePath,
 	}
 
-	got, found, err := staleHerdrConsoleTarget(saved, []backend.LivePane{live})
-	if err != nil || !found {
-		t.Fatalf("staleHerdrConsoleTarget() = %+v, %t, %v", got, found, err)
+	got, err := staleHerdrConsoleTarget(saved, []backend.LivePane{live})
+	if err != nil {
+		t.Fatalf("staleHerdrConsoleTarget() = %+v, %v", got, err)
 	}
 	if got.Ref.Pane != live.Ref.Pane || got.TerminalID != live.TerminalID {
 		t.Fatalf("stale target = %+v, want current process identity %+v", got, live)
 	}
 
 	live.WorkspaceLabel = "foreign"
-	if _, _, err := staleHerdrConsoleTarget(saved, []backend.LivePane{live}); err == nil {
+	if _, err := staleHerdrConsoleTarget(saved, []backend.LivePane{live}); err == nil {
 		t.Fatal("staleHerdrConsoleTarget() accepted a workspace with a foreign label")
+	}
+}
+
+func TestStaleHerdrConsoleWorkspaceWithoutPaneRequiresManualCleanup(t *testing.T) {
+	saved := herdrConsoleTestPane("/repo", "workspace-root", "pane-old")
+	workspaces := []herdrrun.WorkspaceObservation{{
+		WorkspaceID: saved.HerdrWorkspaceID,
+		Label:       saved.HerdrWorkspaceLabel,
+	}}
+	present, err := savedHerdrConsoleWorkspacePresent(saved, workspaces)
+	if err != nil || !present {
+		t.Fatalf("savedHerdrConsoleWorkspacePresent() = %t, %v, want present", present, err)
+	}
+	if _, err := staleHerdrConsoleTarget(saved, nil); !errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("staleHerdrConsoleTarget() error = %v, want manual cleanup", err)
+	}
+	workspaces[0].Label = "foreign"
+	if _, err := savedHerdrConsoleWorkspacePresent(saved, workspaces); err == nil {
+		t.Fatal("savedHerdrConsoleWorkspacePresent() accepted a foreign workspace label")
+	}
+}
+
+func TestAbsentHerdrConsoleWorkspaceAllowsSavedRowRemoval(t *testing.T) {
+	saved := herdrConsoleTestPane("/repo", "workspace-root", "pane-old")
+	present, err := savedHerdrConsoleWorkspacePresent(saved, nil)
+	if err != nil || present {
+		t.Fatalf("savedHerdrConsoleWorkspacePresent() = %t, %v, want absent", present, err)
 	}
 }
 

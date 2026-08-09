@@ -70,7 +70,7 @@ func ensureHerdrConsoleLocked(
 		return HerdrConsoleResult{}, err
 	}
 	if found {
-		result, reused, reuseErr := reuseHerdrConsole(locked, root, owned, pane)
+		result, reused, reuseErr := reuseHerdrConsole(ctx, locked, root, owned, pane)
 		if reuseErr != nil || reused {
 			return result, reuseErr
 		}
@@ -115,6 +115,7 @@ func validateHerdrConsoleIntentRoot(intent state.HerdrIntent, projectRoot string
 }
 
 func reuseHerdrConsole(
+	ctx context.Context,
 	locked *state.LockedStore,
 	projectRoot string,
 	owned *herdrrun.OwnedSession,
@@ -124,7 +125,7 @@ func reuseHerdrConsole(
 		if !staleHerdrConsoleRecoverable(err) {
 			return HerdrConsoleResult{}, false, err
 		}
-		if staleErr := removeStaleHerdrConsole(locked, projectRoot, owned, pane); staleErr != nil {
+		if staleErr := removeStaleHerdrConsole(ctx, locked, projectRoot, owned, pane); staleErr != nil {
 			return HerdrConsoleResult{}, false, errors.Join(
 				fmt.Errorf("saved Herdr console is not safely reusable: %w", err),
 				staleErr,
@@ -144,6 +145,7 @@ func staleHerdrConsoleRecoverable(err error) bool {
 }
 
 func removeStaleHerdrConsole(
+	ctx context.Context,
 	locked *state.LockedStore,
 	projectRoot string,
 	owned *herdrrun.OwnedSession,
@@ -152,36 +154,57 @@ func removeStaleHerdrConsole(
 	if err := validateSavedHerdrConsoleShape(pane); err != nil {
 		return err
 	}
-	live, err := owned.Backend().ListLive()
+	workspaces, err := owned.ObserveWorkspaces(ctx)
 	if err != nil {
-		return fmt.Errorf("recheck saved Herdr console: %w", err)
+		return fmt.Errorf("observe saved Herdr console workspace: %w", err)
 	}
-	current, found, err := staleHerdrConsoleTarget(pane, live)
+	present, err := savedHerdrConsoleWorkspacePresent(pane, workspaces)
 	if err != nil {
 		return err
 	}
-	if found {
-		if err := closeStaleHerdrConsole(owned, current); err != nil {
-			return err
+	if !present {
+		return removeSavedHerdrConsoleRow(locked, projectRoot, pane)
+	}
+	live, err := owned.LivePanes(ctx)
+	if err != nil {
+		return fmt.Errorf("recheck saved Herdr console panes: %w", err)
+	}
+	current, err := staleHerdrConsoleTarget(pane, live)
+	if err != nil {
+		return err
+	}
+	if err := closeStaleHerdrConsole(owned, current); err != nil {
+		return err
+	}
+	return removeSavedHerdrConsoleRow(locked, projectRoot, pane)
+}
+
+func savedHerdrConsoleWorkspacePresent(
+	saved state.Pane,
+	workspaces []herdrrun.WorkspaceObservation,
+) (bool, error) {
+	for _, workspace := range workspaces {
+		if workspace.WorkspaceID != saved.HerdrWorkspaceID {
+			continue
 		}
+		if workspace.Label != saved.HerdrWorkspaceLabel || workspace.Path != "" ||
+			workspace.RepoKey != "" || workspace.RepoRoot != "" {
+			return false, fmt.Errorf("saved Herdr console workspace identity changed")
+		}
+		return true, nil
 	}
-	if err := removeSavedHerdrConsoleRow(locked, projectRoot, pane); err != nil {
-		return fmt.Errorf("remove absent Herdr console row: %w", err)
-	}
-	return nil
+	return false, nil
 }
 
 func staleHerdrConsoleTarget(
 	saved state.Pane,
 	live []backend.LivePane,
-) (backend.LivePane, bool, error) {
+) (backend.LivePane, error) {
 	var matches []backend.LivePane
-	workspaceFound := false
 	for _, current := range live {
 		if current.Ref.Workspace != saved.HerdrWorkspaceID {
 			continue
 		}
-		workspaceFound = true
 		identity := []bool{
 			current.Ref.Backend == backend.Herdr,
 			current.WorkspaceLabel == saved.HerdrWorkspaceLabel,
@@ -194,15 +217,13 @@ func staleHerdrConsoleTarget(
 			matches = append(matches, current)
 		}
 	}
-	if !workspaceFound {
-		return backend.LivePane{}, false, nil
-	}
 	if len(matches) != 1 {
-		return backend.LivePane{}, false, fmt.Errorf(
-			"saved Herdr console workspace has %d owned stale matches", len(matches),
+		return backend.LivePane{}, fmt.Errorf(
+			"%w: saved Herdr console workspace has %d closeable pane matches",
+			ErrHerdrManualCleanupRequired, len(matches),
 		)
 	}
-	return matches[0], true, nil
+	return matches[0], nil
 }
 
 func closeStaleHerdrConsole(owned *herdrrun.OwnedSession, current backend.LivePane) error {
