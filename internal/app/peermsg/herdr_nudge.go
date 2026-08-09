@@ -55,7 +55,8 @@ func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (HerdrNu
 	if runtime == nil {
 		return nil, state.Pane{}, "", fmt.Errorf("herdr nudge runtime is unavailable")
 	}
-	if err := verifyHerdrNudgeRuntime(ctx, runtime, pane); err != nil {
+	err = verifyHerdrNudgeRuntime(ctx, runtime, pane)
+	if err != nil {
 		return nil, state.Pane{}, "", err
 	}
 	latest, latestState, err := recheckHerdrNudgeState(pane, deps)
