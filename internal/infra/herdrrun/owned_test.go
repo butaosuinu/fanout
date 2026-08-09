@@ -526,6 +526,26 @@ func TestOpenOwnedMissingSessionIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestReopenedOwnedBackendAdmitsPinnedBinary(t *testing.T) {
+	h := newOwnedHarness(t)
+	marker, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("readOwnerMarker() = %+v, %t, %v", marker, found, err)
+	}
+	admitted := binaryAdmission{
+		path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion,
+	}
+	backend := newReopenedOwnedBackend(h.layout, marker, admitted)
+	backend.output = h.fake.output
+	probed, err := backend.probeOwned(context.Background(), *backend.owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probed.binary != marker.BinaryPath || probed.sha256 != marker.BinarySHA256 {
+		t.Fatalf("reopened admission = %+v, want marker binary identity", probed)
+	}
+}
+
 func TestEnsureOwnedReadoptsPinnedLauncherAfterFanoutUpdate(t *testing.T) {
 	h := newOwnedHarness(t)
 	marker, found, err := readOwnerMarker(h.layout.markerPath)
