@@ -334,6 +334,49 @@ func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T
 	}
 }
 
+func TestFinalizeHerdrCoordinatorAgentRetainsActualParentIntent(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	intent := realizeTestHerdrCoordinator(t, repo, runtime, deterministicHerdrRealizeHooks())
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	intent.Launch = validTestHerdrLaunch()
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	live := testHerdrIdlePane(intent)
+	live.AgentPresent = true
+	live.AgentID = intent.Launch.AgentName
+	req := Request{
+		ParentRef: ManualParentRef, RuntimeParent: intent.RuntimeParent,
+		Number: -2, Slug: "orchestrator-issue-425-2", Agent: "claude",
+	}
+	if err := finalizeHerdrCoordinatorAgent(req, locked, repo, intent, live); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, found := persisted.FindIntent(intent.ID)
+	if !found || saved.Status != state.HerdrIntentRealized || saved.Launch != nil {
+		t.Fatalf("retained coordinator intent = (%+v, %t)", saved, found)
+	}
+	pane, found := locked.Find(ManualParentRef, -2)
+	if !found || pane.RuntimeParent != intent.RuntimeParent || pane.PaneID != intent.Resource.PaneID {
+		t.Fatalf("coordinator agent row = (%+v, %t)", pane, found)
+	}
+}
+
 func TestWaitForHerdrAgentRevalidatesConcurrentIntentChanges(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -981,6 +1024,23 @@ func TestHerdrCoordinatorRuntimeParentProjectsWatcherIssue(t *testing.T) {
 	}
 }
 
+func TestHerdrCoordinatorIssueNumPreservesSyntheticOwners(t *testing.T) {
+	tests := []struct {
+		parent string
+		number int
+		want   int
+	}{
+		{parent: ManualParentRef, number: -3, want: -3},
+		{parent: WatchParentRef, number: 528, want: 528},
+		{parent: "528", number: 99, want: 0},
+	}
+	for _, test := range tests {
+		if got := herdrCoordinatorIssueNum(Request{ParentRef: test.parent, Number: test.number}); got != test.want {
+			t.Fatalf("coordinator issue number for %s/%d = %d, want %d", test.parent, test.number, got, test.want)
+		}
+	}
+}
+
 func TestRecordHerdrCoordinatorReusesLinkedWorktreeStateRow(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	sibling := filepath.Join(t.TempDir(), "sibling")
@@ -1385,11 +1445,11 @@ func TestIssuedHerdrSyntheticReservationBlocksReuseWithoutManualizing(t *testing
 		t.Fatal(err)
 	}
 
-	reservationErr := admitHerdrSyntheticLaunch(locked, repo, req.IssueNum)
+	reservationErr := admitHerdrCoordinatorLaunch(locked, repo, ManualParentRef, req.IssueNum)
 	if !errors.Is(reservationErr, errHerdrLaunchStatePreserved) {
 		t.Fatalf("synthetic launch admission error = %v, want preserved state", reservationErr)
 	}
-	if err := admitHerdrSyntheticLaunch(locked, repo, -2); err != nil {
+	if err := admitHerdrCoordinatorLaunch(locked, repo, ManualParentRef, -2); err != nil {
 		t.Fatalf("unreserved synthetic number was rejected: %v", err)
 	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}

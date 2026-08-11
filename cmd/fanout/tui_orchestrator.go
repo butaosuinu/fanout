@@ -47,7 +47,7 @@ func guardIssueOrchestrator(projectRoot string, store state.Store, issueNum int)
 // launch transaction.
 func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr *herdrrun.OwnedSession, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string, orchestratorPlanMode bool) (panelaunch.Request, string, bool, string, error) {
 	var fallbackNotice string
-	req, paneID, launchNotice, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, runtimeBackend, herdr, agentName, store, recorder,
+	req, paneID, launchNotice, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, runtimeBackend, herdr, agentName, fmt.Sprintf("%d", issue.Number), store, recorder,
 		func(store state.Store) error {
 			return guardIssueOrchestrator(projectRoot, store, issue.Number)
 		},

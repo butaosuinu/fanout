@@ -46,7 +46,10 @@ const BaseRefreshSkippedNotice = "base branch refresh skipped"
 
 // Request describes one pane to create.
 type Request struct {
-	ParentRef           string
+	ParentRef string
+	// RuntimeParent binds a Herdr root-coordinator launch while ParentRef keeps
+	// the final display row under @manual.
+	RuntimeParent       string
 	Number              int
 	TaskID              string
 	Title               string
@@ -515,6 +518,7 @@ func statePane(req Request, paneID, worktreePath string, now time.Time, codexTUI
 func statePaneForBackend(req Request, paneID, worktreePath string, now time.Time, codexTUIStatus codexapp.Status, runtimeBackend backend.Name, live ...*backend.LivePane) state.Pane {
 	pane := state.Pane{
 		Parent:         req.ParentRef,
+		RuntimeParent:  req.RuntimeParent,
 		IssueNum:       req.Number,
 		TaskID:         req.TaskID,
 		Slug:           req.Slug,

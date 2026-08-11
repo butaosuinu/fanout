@@ -113,26 +113,31 @@ func (l *Launcher) admitHerdrLaunchRequest(req Request) (*state.LockedStore, boo
 		l.Log.Err("%s: Herdr launch requires an owned session and combined launch lock", paneLogLabel(req))
 		return nil, false
 	}
-	if req.Number >= 0 {
-		return locked, true
+	if req.Number < 0 {
+		if err := admitHerdrCoordinatorLaunch(locked, l.Info.ProjectRoot, ManualParentRef, req.Number); err != nil {
+			l.Log.Err("%s: %v", paneLogLabel(req), err)
+			return nil, false
+		}
 	}
-	if err := admitHerdrSyntheticLaunch(locked, l.Info.ProjectRoot, req.Number); err != nil {
-		l.Log.Err("%s: %v", paneLogLabel(req), err)
-		return nil, false
+	if req.RuntimeParent != "" {
+		if err := admitHerdrCoordinatorLaunch(locked, l.Info.ProjectRoot, req.RuntimeParent, 0); err != nil {
+			l.Log.Err("%s: %v", paneLogLabel(req), err)
+			return nil, false
+		}
 	}
 	return locked, true
 }
 
-func admitHerdrSyntheticLaunch(
+func admitHerdrCoordinatorLaunch(
 	locked *state.LockedStore,
-	projectRoot string,
+	projectRoot, parent string,
 	issueNum int,
 ) error {
 	ownerRoot, err := filepath.EvalSymlinks(projectRoot)
 	if err != nil {
-		return fmt.Errorf("canonicalize Herdr synthetic launch owner: %w", err)
+		return fmt.Errorf("canonicalize Herdr coordinator launch owner: %w", err)
 	}
-	intentID, err := state.HerdrCoordinatorIntentID(ManualParentRef, filepath.Clean(ownerRoot), issueNum)
+	intentID, err := state.HerdrCoordinatorIntentID(parent, filepath.Clean(ownerRoot), issueNum)
 	if err != nil {
 		return err
 	}
@@ -154,6 +159,15 @@ func admitHerdrSyntheticLaunch(
 		return fmt.Errorf("%w: Herdr launch %s already has an issued token", errHerdrLaunchStatePreserved, intent.ID)
 	}
 	return markHerdrIntentManual(journal, intent, fmt.Errorf("issued Herdr launch expired before finalization"))
+}
+
+func herdrCoordinatorIssueNum(req Request) int {
+	switch canonicalHerdrParent(req.ParentRef) {
+	case ManualParentRef, WatchParentRef:
+		return req.Number
+	default:
+		return 0
+	}
 }
 
 func (l *Launcher) realizeHerdrLaunch(
@@ -202,12 +216,8 @@ func (l *Launcher) realizeHerdrCoordinator(
 	locked *state.LockedStore,
 	route herdrrun.OwnedLaunchRoute,
 ) (state.HerdrIntent, error) {
-	issueNum := 0
-	if canonicalHerdrParent(req.ParentRef) == WatchParentRef {
-		issueNum = req.Number
-	}
 	result, err := RealizeHerdrCoordinator(ctx, HerdrCoordinatorRequest{
-		Parent: req.ParentRef, IssueNum: issueNum, ProjectRoot: l.Info.ProjectRoot,
+		Parent: req.ParentRef, IssueNum: herdrCoordinatorIssueNum(req), ProjectRoot: l.Info.ProjectRoot,
 		SourceRoot: l.Info.ProjectRoot, CWD: l.Info.ProjectRoot,
 		HerdrSession: route.Session, SocketPath: route.SocketPath,
 	}, l.Herdr, locked, HerdrRealizeHooks{})

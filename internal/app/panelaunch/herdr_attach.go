@@ -25,13 +25,7 @@ func (l *Launcher) attachHerdr(
 	if err != nil {
 		return l.failHerdr(req, "verify owned route", err)
 	}
-	intent, err := realizeHerdrInteractive(
-		ctx, l.Herdr, locked, route,
-		manualHerdrCoordinatorRequest(l.Info.ProjectRoot, targetPath, route, req.Number),
-		func(intent state.HerdrIntent) (*state.HerdrLaunch, error) {
-			return l.prepareHerdrLaunchCapsule(req, route, intent, os.Environ())
-		},
-	)
+	intent, err := l.prepareHerdrAttachedIntent(ctx, req, targetPath, locked, route)
 	if err != nil {
 		return l.failHerdr(req, "realize attached workspace", err)
 	}
@@ -41,11 +35,48 @@ func (l *Launcher) attachHerdr(
 			locked, l.Info.ProjectRoot, intent, err,
 		))
 	}
-	if err := finalizeHerdrAttachedAgent(req, locked, l.Info.ProjectRoot, intent, live); err != nil {
+	finalize := finalizeHerdrAttachedAgent
+	if req.RuntimeParent != "" {
+		finalize = finalizeHerdrCoordinatorAgent
+	}
+	if err := finalize(req, locked, l.Info.ProjectRoot, intent, live); err != nil {
 		return l.failHerdr(req, "finalize attached agent", err)
 	}
 	l.Log.Ok("%s: pane %s attached to %s", paneLogLabel(req), live.Ref.Pane, targetPath)
 	return Result{PaneID: live.Ref.Pane, Notice: launchNotice(req)}, true
+}
+
+func (l *Launcher) prepareHerdrAttachedIntent(
+	ctx context.Context,
+	req Request,
+	targetPath string,
+	locked *state.LockedStore,
+	route herdrrun.OwnedLaunchRoute,
+) (state.HerdrIntent, error) {
+	build := func(intent state.HerdrIntent) (*state.HerdrLaunch, error) {
+		return l.prepareHerdrLaunchCapsule(req, route, intent, os.Environ())
+	}
+	if req.RuntimeParent == "" {
+		return realizeHerdrInteractive(
+			ctx, l.Herdr, locked, route,
+			manualHerdrCoordinatorRequest(l.Info.ProjectRoot, targetPath, route, req.Number), build,
+		)
+	}
+	runtimeReq := req
+	runtimeReq.ParentRef, runtimeReq.Number = req.RuntimeParent, 0
+	intent, err := l.realizeHerdrCoordinator(ctx, runtimeReq, locked, route)
+	if err != nil {
+		return intent, err
+	}
+	if err := l.recordHerdrCoordinator(locked, intent, route); err != nil {
+		return intent, err
+	}
+	if intent.Launch == nil {
+		intent.ExpiresUnixMS = time.Now().Add(maxHerdrRealizeTimeout).UnixMilli()
+	}
+	return l.prepareHerdrLaunch(locked, route, intent, func(launch *state.HerdrLaunch) error {
+		return validateHerdrLaunchBinding(req, launch)
+	}, build)
 }
 
 func finalizeHerdrAttachedAgent(
@@ -55,11 +86,25 @@ func finalizeHerdrAttachedAgent(
 	intent state.HerdrIntent,
 	live backend.LivePane,
 ) error {
-	return finalizeHerdrPane(locked, projectRoot, intent, func(latest state.HerdrIntent) (state.Pane, error) {
+	return finalizeHerdrPane(locked, projectRoot, intent, herdrAttachedPaneBuilder(req, live))
+}
+
+func finalizeHerdrCoordinatorAgent(
+	req Request,
+	locked *state.LockedStore,
+	projectRoot string,
+	intent state.HerdrIntent,
+	live backend.LivePane,
+) error {
+	return finalizeRetainedHerdrPane(locked, projectRoot, intent, herdrAttachedPaneBuilder(req, live))
+}
+
+func herdrAttachedPaneBuilder(req Request, live backend.LivePane) func(state.HerdrIntent) (state.Pane, error) {
+	return func(latest state.HerdrIntent) (state.Pane, error) {
 		pane := herdrAttachedStatePane(req, latest, live)
 		applyHerdrLaunchTelemetry(&pane, latest)
 		return pane, nil
-	})
+	}
 }
 
 func herdrAttachedStatePane(req Request, intent state.HerdrIntent, live backend.LivePane) state.Pane {
@@ -155,6 +200,36 @@ func finalizeHerdrPane(
 	projectRoot string,
 	intent state.HerdrIntent,
 	build func(state.HerdrIntent) (state.Pane, error),
+) error {
+	return finalizeHerdrPaneIntent(locked, projectRoot, intent, build, func(
+		journal *state.LockedHerdrIntents,
+		latest state.HerdrIntent,
+	) {
+		journal.RemoveIntent(latest.ID)
+	})
+}
+
+func finalizeRetainedHerdrPane(
+	locked *state.LockedStore,
+	projectRoot string,
+	intent state.HerdrIntent,
+	build func(state.HerdrIntent) (state.Pane, error),
+) error {
+	return finalizeHerdrPaneIntent(locked, projectRoot, intent, build, func(
+		journal *state.LockedHerdrIntents,
+		latest state.HerdrIntent,
+	) {
+		latest.Launch = nil
+		journal.UpsertIntent(latest)
+	})
+}
+
+func finalizeHerdrPaneIntent(
+	locked *state.LockedStore,
+	projectRoot string,
+	intent state.HerdrIntent,
+	build func(state.HerdrIntent) (state.Pane, error),
+	finalize func(*state.LockedHerdrIntents, state.HerdrIntent),
 ) (retErr error) {
 	defer func() {
 		if retErr != nil {
@@ -172,7 +247,7 @@ func finalizeHerdrPane(
 	if recordErr := locked.RecordPane(pane); recordErr != nil {
 		return recordErr
 	}
-	journal.RemoveIntent(intent.ID)
+	finalize(journal, latest)
 	return journal.Save()
 }
 

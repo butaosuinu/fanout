@@ -71,6 +71,9 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	if err != nil {
 		return fanouttui.LaunchResult{}, err
 	}
+	if err := validateHerdrInteractiveAgents(rt.Backend.Name(), cfg, agentNames); err != nil {
+		return fanouttui.LaunchResult{}, err
+	}
 	store, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
 	if code != exitcode.OK {
 		return fanouttui.LaunchResult{}, bufferedLaunchError(stdout, stderr, "load fanout state")
@@ -200,8 +203,8 @@ func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentNa
 // parent lane. That lane already owns the child fan-out lock when its validated
 // plan becomes ready, so it reuses that recorder instead of taking a nested
 // lock.
-func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr *herdrrun.OwnedSession, agentName string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, string, error) {
-	cfg := &cliflags.Config{Agent: agentName}
+func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr *herdrrun.OwnedSession, agentName, runtimeParent string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, string, error) {
+	cfg := &cliflags.Config{Agent: agentName, ParentRef: runtimeParent}
 	return launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, runtimeBackend, herdr, cfg, store, recorder, guard,
 		func(store state.Store, livenessKey string, _ *cliflags.Config) panelaunch.Request {
 			return buildReq(store, livenessKey)
@@ -228,7 +231,7 @@ func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName str
 	if err != nil {
 		return panelaunch.Request{}, "", "", err
 	}
-	paneReq := coordinatorRuntimeRequest(runtimeBackend.Name(), buildReq(store, livenessKey, cfg))
+	paneReq := coordinatorRuntimeRequest(runtimeBackend.Name(), cfg.ParentRef, buildReq(store, livenessKey, cfg))
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Backend: runtimeBackend, Herdr: herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.AttachWithResult(paneReq, projectRoot)
 	if !ok {
@@ -237,15 +240,17 @@ func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName str
 	return paneReq, result.PaneID, bufferedLaunchNotice(stderr), nil
 }
 
-func coordinatorRuntimeRequest(runtimeBackend backend.Name, req panelaunch.Request) panelaunch.Request {
+func coordinatorRuntimeRequest(runtimeBackend backend.Name, runtimeParent string, req panelaunch.Request) panelaunch.Request {
 	if runtimeBackend != backend.Herdr {
 		return req
 	}
-	// Herdr attach identity never uses the tmux liveness key. A parent
-	// orchestrator is sequenced by the post-child callback, so strip its
-	// tmux-only wait-for gate too.
+	// Herdr root-coordinator identity never uses the tmux liveness key. Its
+	// lifecycle binds to the actual parent while the display row stays manual.
 	req.ShellKey = ""
 	req.AgentStartGate = ""
+	if runtimeParent != panelaunch.ManualParentRef {
+		req.RuntimeParent = runtimeParent
+	}
 	return req
 }
 
@@ -466,6 +471,9 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 	if err != nil {
 		return "", err
 	}
+	if err := validateHerdrInteractiveAgents(rt.Backend.Name(), cfg, agentNames); err != nil {
+		return "", err
+	}
 	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
 		return "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
@@ -621,6 +629,17 @@ func newSessionConfigForTUIAgent(projectRoot, agentName string, warnf settings.W
 		PlanMode:       &planMode,
 		TUIInteractive: true,
 	}
+}
+
+func validateHerdrInteractiveAgents(
+	runtimeBackend backend.Name,
+	cfg *cliflags.Config,
+	agentNames []string,
+) error {
+	if runtimeBackend != backend.Herdr || !cfg.PlanModeEnabled() || !slices.Contains(agentNames, "codex") {
+		return nil
+	}
+	return backend.Unsupported(backend.Herdr, "Codex Plan Mode child launch until issue #554")
 }
 
 func newTUILaunchShellFunc(projectRoot, session string) fanouttui.ShellLaunchFunc {

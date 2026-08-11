@@ -29,12 +29,29 @@ func TestBufferedLaunchNoticeCollectsAndDeduplicatesWarnings(t *testing.T) {
 
 func TestCoordinatorRuntimeRequestRemovesTmuxIdentityForHerdr(t *testing.T) {
 	req := panelaunch.Request{ShellKey: "tmux-key", AgentStartGate: "tmux-gate"}
-	herdrReq := coordinatorRuntimeRequest(backend.Herdr, req)
-	if herdrReq.ShellKey != "" || herdrReq.AgentStartGate != "" {
+	herdrReq := coordinatorRuntimeRequest(backend.Herdr, "500", req)
+	if herdrReq.ShellKey != "" || herdrReq.AgentStartGate != "" || herdrReq.RuntimeParent != "500" {
 		t.Fatalf("Herdr coordinator request = %+v, want no tmux identity", herdrReq)
 	}
-	if tmuxReq := coordinatorRuntimeRequest(backend.Tmux, req); tmuxReq.ShellKey != req.ShellKey || tmuxReq.AgentStartGate != req.AgentStartGate {
+	if tmuxReq := coordinatorRuntimeRequest(backend.Tmux, "500", req); tmuxReq.ShellKey != req.ShellKey || tmuxReq.AgentStartGate != req.AgentStartGate || tmuxReq.RuntimeParent != "" {
 		t.Fatalf("tmux coordinator request = %+v, want unchanged tmux identity", tmuxReq)
+	}
+	if manualReq := coordinatorRuntimeRequest(backend.Herdr, panelaunch.ManualParentRef, req); manualReq.RuntimeParent != "" {
+		t.Fatalf("manual Herdr coordinator request = %+v, want independent synthetic identity", manualReq)
+	}
+}
+
+func TestValidateHerdrInteractiveAgentsRejectsAnyCodexPlanRequest(t *testing.T) {
+	planMode := true
+	cfg := &cliflags.Config{PlanMode: &planMode}
+	if err := validateHerdrInteractiveAgents(backend.Herdr, cfg, []string{"claude", "codex"}); err == nil {
+		t.Fatal("multi-agent Herdr request accepted unsupported Codex Plan Mode")
+	}
+	if err := validateHerdrInteractiveAgents(backend.Herdr, cfg, []string{"claude"}); err != nil {
+		t.Fatalf("Claude-only Herdr request was rejected: %v", err)
+	}
+	if err := validateHerdrInteractiveAgents(backend.Tmux, cfg, []string{"codex"}); err != nil {
+		t.Fatalf("tmux Codex Plan Mode request was rejected: %v", err)
 	}
 }
 
