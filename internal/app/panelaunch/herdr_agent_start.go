@@ -551,6 +551,7 @@ func exactHerdrLaunchPane(
 		identity := []bool{
 			pane.Ref.Backend == backend.Herdr,
 			pane.Ref.Workspace == intent.Resource.WorkspaceID,
+			intent.Resource.Label != "", pane.WorkspaceLabel == intent.Resource.Label,
 			pane.Ref.Pane == intent.Resource.PaneID,
 			pane.TerminalID == intent.Resource.TerminalID,
 			pane.RepoKey == intent.Resource.RepoKey,

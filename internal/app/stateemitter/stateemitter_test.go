@@ -178,6 +178,9 @@ func TestEmitFinalRowFailsClosedOnBindingMismatch(t *testing.T) {
 		{name: "current pane ref mismatch", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
 			observer.observation.Panes[0].Ref.Pane = "workspace-1:pane-2"
 		}, wantStale: true},
+		{name: "current workspace label mismatch", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
+			observer.observation.Panes[0].WorkspaceLabel = "foreign-label"
+		}, wantStale: true},
 		{name: "process mismatch", count: 1, mutate: func(_ *state.Pane, _ *telemetry.Signal, observer *fakeObserver) {
 			observer.observation.ProcessInfo.ForegroundProcesses[0].Argv = []string{"wrong"}
 		}, wantStale: true},
@@ -404,6 +407,25 @@ func TestEmitPendingIntentRejectsIncompleteIdentityMatch(t *testing.T) {
 	}
 }
 
+func TestEmitPendingIntentRejectsWorkspaceLabelReplacement(t *testing.T) {
+	repo := newEmitterRepo(t)
+	intent, signal, observer := pendingEmitterFixture(t, repo)
+	saveEmitterIntent(t, repo, intent)
+	observer.observation.Panes[0].WorkspaceLabel = "foreign-label"
+
+	if err := Emit(context.Background(), signal, observer); err == nil {
+		t.Fatal("Emit() succeeded with a replaced provisional workspace label")
+	}
+	stored, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found := stored.FindIntent(intent.ID)
+	if !found || got.Launch.PendingReportedState != "" {
+		t.Fatalf("replaced provisional workspace changed intent: (%+v, %t)", got, found)
+	}
+}
+
 func TestEmitPendingIntentRejectsExpiredLaunchWithoutMutation(t *testing.T) {
 	repo := newEmitterRepo(t)
 	intent, signal, observer := pendingEmitterFixture(t, repo)
@@ -477,6 +499,7 @@ func pendingEmitterFixture(t *testing.T, repo string) (state.HerdrIntent, teleme
 			LauncherReady: true, TokenIssued: true,
 		},
 	}
+	observer.observation.Panes[0].WorkspaceLabel = intent.Resource.Label
 	return intent, signal, observer
 }
 

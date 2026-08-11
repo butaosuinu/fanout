@@ -41,6 +41,7 @@ func herdrIdlePanePresent(intent state.HerdrIntent, panes []backend.LivePane) bo
 		identity := []bool{
 			pane.Ref.Backend == backend.Herdr,
 			pane.Ref.Workspace == intent.Resource.WorkspaceID,
+			intent.Resource.Label != "", pane.WorkspaceLabel == intent.Resource.Label,
 			pane.Ref.Pane == intent.Resource.PaneID,
 			pane.TerminalID == intent.Resource.TerminalID,
 			filepath.Clean(pane.CurrentPath) == filepath.Clean(intent.WorktreePath),

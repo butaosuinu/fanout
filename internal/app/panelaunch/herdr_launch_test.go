@@ -1148,7 +1148,7 @@ func TestExactHerdrLaunchPaneRequiresProviderAndAcceptsOptionalSession(t *testin
 		WorktreePath: "/repo/.fanout/worktrees/child",
 		Session:      "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",
 		Resource: state.HerdrResource{
-			WorkspaceID: "w1", PaneID: "w1:p1", TerminalID: "term-1",
+			WorkspaceID: "w1", Label: "owned-label-1", PaneID: "w1:p1", TerminalID: "term-1",
 			RepoKey: "/repo/.git", CurrentPath: "/repo/.fanout/worktrees/child",
 		},
 		Launch: &state.HerdrLaunch{Agent: "codex"},
@@ -1163,6 +1163,11 @@ func TestExactHerdrLaunchPaneRequiresProviderAndAcceptsOptionalSession(t *testin
 	if _, found := exactHerdrLaunchPane(intent, []backend.LivePane{live}, "fanout-child"); !found {
 		t.Fatal("exactHerdrLaunchPane() rejected a valid optional session")
 	}
+	live.WorkspaceLabel = "foreign-label"
+	if _, found := exactHerdrLaunchPane(intent, []backend.LivePane{live}, "fanout-child"); found {
+		t.Fatal("exactHerdrLaunchPane() accepted a different workspace label")
+	}
+	live.WorkspaceLabel = intent.Resource.Label
 	live.AgentProvider = "claude"
 	if _, found := exactHerdrLaunchPane(intent, []backend.LivePane{live}, "fanout-child"); found {
 		t.Fatal("exactHerdrLaunchPane() accepted a different provider")
@@ -1867,8 +1872,9 @@ func testHerdrIdlePane(intent state.HerdrIntent) backend.LivePane {
 		Ref: backend.PaneRef{
 			Backend: backend.Herdr, Workspace: intent.Resource.WorkspaceID, Pane: intent.Resource.PaneID,
 		},
-		CurrentPath: intent.WorktreePath, TerminalID: intent.Resource.TerminalID,
-		RepoKey: intent.Resource.RepoKey, WorktreePath: intent.WorktreePath,
+		CurrentPath: intent.WorktreePath, WorkspaceLabel: intent.Resource.Label,
+		TerminalID: intent.Resource.TerminalID,
+		RepoKey:    intent.Resource.RepoKey, WorktreePath: intent.WorktreePath,
 		SessionID: intent.Session, SocketPath: intent.SocketPath,
 	}
 }

@@ -35,6 +35,7 @@ type RuntimeTarget struct {
 	SocketPath           string
 	RepoKey              string
 	WorkspaceID          string
+	WorkspaceLabel       string
 	PaneID               string
 	TerminalID           string
 	Agent                string
@@ -301,7 +302,8 @@ func finalRuntimeTarget(pane state.Pane, signal telemetry.Signal) (RuntimeTarget
 	return RuntimeTarget{
 		Backend: backend.Herdr, Session: pane.HerdrSession,
 		SocketPath: pane.HerdrSocketPath, RepoKey: pane.HerdrRepoKey,
-		WorkspaceID: pane.HerdrWorkspaceID, PaneID: pane.PaneID,
+		WorkspaceID: pane.HerdrWorkspaceID, WorkspaceLabel: pane.HerdrWorkspaceLabel,
+		PaneID:     pane.PaneID,
 		TerminalID: pane.HerdrTerminalID, Agent: pane.Agent,
 		AgentID: pane.HerdrAgentID, PlanMode: pane.PlanMode, AgentSession: pane.HerdrAgentSession,
 		AcceptUnboundSession: pane.HerdrAgentSession == nil,
@@ -318,6 +320,23 @@ func pendingRuntimeTarget(intent state.HerdrIntent, signal telemetry.Signal) (Ru
 	if !time.Now().Before(time.UnixMilli(intent.ExpiresUnixMS)) {
 		return RuntimeTarget{}, fmt.Errorf("matching provisional intent has expired")
 	}
+	if !pendingSignalMatches(intent, signal) {
+		return RuntimeTarget{}, fmt.Errorf("provisional intent does not match emitter launch identity")
+	}
+	return RuntimeTarget{
+		Backend: backend.Herdr, Session: intent.Session,
+		SocketPath: intent.SocketPath, RepoKey: intent.Resource.RepoKey,
+		WorkspaceID: intent.Resource.WorkspaceID, WorkspaceLabel: intent.Resource.Label,
+		PaneID:     intent.Resource.PaneID,
+		TerminalID: intent.Resource.TerminalID, Agent: launch.Agent,
+		AgentID: launch.AgentName, PlanMode: launch.CodexPlanStatusPath != "", AcceptUnboundSession: true,
+		WorktreePath: intent.WorktreePath, Executable: launch.Executable,
+		Args: slices.Clone(launch.Args),
+	}, nil
+}
+
+func pendingSignalMatches(intent state.HerdrIntent, signal telemetry.Signal) bool {
+	launch := intent.Launch
 	identity := []bool{
 		signal.Backend == backend.Herdr,
 		intent.ID == signal.RowKey,
@@ -331,18 +350,7 @@ func pendingRuntimeTarget(intent state.HerdrIntent, signal telemetry.Signal) (Ru
 		launch.Agent == signal.Agent,
 		launch.AgentName == signal.AgentID,
 	}
-	if slices.Contains(identity, false) {
-		return RuntimeTarget{}, fmt.Errorf("provisional intent does not match emitter launch identity")
-	}
-	return RuntimeTarget{
-		Backend: backend.Herdr, Session: intent.Session,
-		SocketPath: intent.SocketPath, RepoKey: intent.Resource.RepoKey,
-		WorkspaceID: intent.Resource.WorkspaceID, PaneID: intent.Resource.PaneID,
-		TerminalID: intent.Resource.TerminalID, Agent: launch.Agent,
-		AgentID: launch.AgentName, PlanMode: launch.CodexPlanStatusPath != "", AcceptUnboundSession: true,
-		WorktreePath: intent.WorktreePath, Executable: launch.Executable,
-		Args: slices.Clone(launch.Args),
-	}, nil
+	return !slices.Contains(identity, false)
 }
 
 func observeRuntime(
@@ -413,6 +421,7 @@ func sameLivePaneWithoutTerminal(target RuntimeTarget, pane backend.LivePane) bo
 	identity := []bool{
 		pane.Ref.Backend == target.Backend,
 		pane.Ref.Workspace == target.WorkspaceID,
+		pane.WorkspaceLabel == target.WorkspaceLabel,
 		pane.Ref.Pane == target.PaneID,
 		pane.SessionID == target.Session,
 		pane.SocketPath == target.SocketPath,
@@ -425,7 +434,7 @@ func sameLivePaneWithoutTerminal(target RuntimeTarget, pane backend.LivePane) bo
 func validateRuntimeTarget(target RuntimeTarget) error {
 	identity := []string{
 		target.Session, target.SocketPath, target.RepoKey, target.WorkspaceID,
-		target.PaneID, target.TerminalID, target.Agent, target.AgentID,
+		target.WorkspaceLabel, target.PaneID, target.TerminalID, target.Agent, target.AgentID,
 	}
 	if slices.ContainsFunc(identity, invalidIdentityValue) {
 		return fmt.Errorf("persisted telemetry runtime identity is incomplete")
@@ -477,6 +486,7 @@ func livePaneMatches(target RuntimeTarget, pane backend.LivePane) bool {
 	identity := []bool{
 		pane.Ref.Backend == target.Backend,
 		pane.Ref.Workspace == target.WorkspaceID,
+		pane.WorkspaceLabel == target.WorkspaceLabel,
 		pane.Ref.Pane == target.PaneID,
 		pane.TerminalID == target.TerminalID,
 		pane.SessionID == target.Session,
