@@ -1356,6 +1356,66 @@ func TestExpiredHerdrAgentStartBecomesManualCleanupRequired(t *testing.T) {
 	}
 }
 
+func TestIssuedHerdrSyntheticReservationBlocksReuseWithoutManualizing(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	req := testHerdrCoordinatorRequest(repo)
+	req.Parent = ManualParentRef
+	req.IssueNum = -1
+	result, err := realizeHerdrCoordinator(
+		context.Background(), req, runtime, deterministicHerdrRealizeHooks(),
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	intent := result.Intent
+	intent.Launch = validTestHerdrLaunch()
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	reservationErr := admitHerdrSyntheticLaunch(locked, repo, req.IssueNum)
+	if !errors.Is(reservationErr, errHerdrLaunchStatePreserved) {
+		t.Fatalf("synthetic launch admission error = %v, want preserved state", reservationErr)
+	}
+	if err := admitHerdrSyntheticLaunch(locked, repo, -2); err != nil {
+		t.Fatalf("unreserved synthetic number was rejected: %v", err)
+	}
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
+	_, prepareErr := launcher.prepareHerdrLaunch(
+		locked, herdrrun.OwnedLaunchRoute{}, intent,
+		func(*state.HerdrLaunch) error { return nil }, nil,
+	)
+	if !errors.Is(prepareErr, errHerdrLaunchStatePreserved) {
+		t.Fatalf("prepare issued launch error = %v, want preserved state", prepareErr)
+	}
+	if err := markHerdrFinalizationFailure(locked, repo, intent, prepareErr); !errors.Is(err, errHerdrLaunchStatePreserved) {
+		t.Fatalf("finalization classification error = %v, want preserved state", err)
+	}
+	if err := launcher.rollbackFailedHerdrLaunch(locked, intent, prepareErr); !errors.Is(err, errHerdrLaunchStatePreserved) {
+		t.Fatalf("rollback classification error = %v, want preserved state", err)
+	}
+	persisted, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, found := persisted.FindIntent(intent.ID)
+	if !found || saved.Status != state.HerdrIntentRealized || saved.Failure != "" {
+		t.Fatalf("issued reservation = (%+v, %t), want unchanged realized intent", saved, found)
+	}
+}
+
 func TestHerdrLaunchDoesNotIssueTokenAfterLauncherWaitExpires(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrLaunchRuntime{}

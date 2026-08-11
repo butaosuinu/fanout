@@ -113,7 +113,47 @@ func (l *Launcher) admitHerdrLaunchRequest(req Request) (*state.LockedStore, boo
 		l.Log.Err("%s: Herdr launch requires an owned session and combined launch lock", paneLogLabel(req))
 		return nil, false
 	}
+	if req.Number >= 0 {
+		return locked, true
+	}
+	if err := admitHerdrSyntheticLaunch(locked, l.Info.ProjectRoot, req.Number); err != nil {
+		l.Log.Err("%s: %v", paneLogLabel(req), err)
+		return nil, false
+	}
 	return locked, true
+}
+
+func admitHerdrSyntheticLaunch(
+	locked *state.LockedStore,
+	projectRoot string,
+	issueNum int,
+) error {
+	ownerRoot, err := filepath.EvalSymlinks(projectRoot)
+	if err != nil {
+		return fmt.Errorf("canonicalize Herdr synthetic launch owner: %w", err)
+	}
+	intentID, err := state.HerdrCoordinatorIntentID(ManualParentRef, filepath.Clean(ownerRoot), issueNum)
+	if err != nil {
+		return err
+	}
+	journal, err := locked.HerdrIntents(projectRoot)
+	if err != nil {
+		return err
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found {
+		return nil
+	}
+	if intent.Status == state.HerdrIntentManualCleanupRequired {
+		return herdrManualCleanupError(intent)
+	}
+	if intent.Launch == nil || !intent.Launch.TokenIssued {
+		return nil
+	}
+	if remainingHerdrLaunchTime(intent) > 0 {
+		return fmt.Errorf("%w: Herdr launch %s already has an issued token", errHerdrLaunchStatePreserved, intent.ID)
+	}
+	return markHerdrIntentManual(journal, intent, fmt.Errorf("issued Herdr launch expired before finalization"))
 }
 
 func (l *Launcher) realizeHerdrLaunch(
@@ -373,7 +413,7 @@ func (l *Launcher) prepareHerdrLaunch(
 		return intent, err
 	}
 	if intent.Launch.TokenIssued {
-		return intent, l.failClosedIssuedHerdrLaunch(journal, intent, nil)
+		return intent, fmt.Errorf("%w: Herdr launch %s already has an issued token", errHerdrLaunchStatePreserved, intent.ID)
 	}
 	return intent, nil
 }
@@ -766,6 +806,9 @@ func markHerdrFinalizationFailure(
 	intent state.HerdrIntent,
 	cause error,
 ) error {
+	if errors.Is(cause, errHerdrLaunchStatePreserved) {
+		return cause
+	}
 	journal, err := locked.HerdrIntents(projectRoot)
 	if err != nil {
 		return err

@@ -16,6 +16,9 @@ func (l *Launcher) rollbackFailedHerdrLaunch(
 	intent state.HerdrIntent,
 	cause error,
 ) error {
+	if errors.Is(cause, errHerdrLaunchStatePreserved) {
+		return cause
+	}
 	if intent.ID == "" {
 		return cause
 	}

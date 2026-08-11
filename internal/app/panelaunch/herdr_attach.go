@@ -14,11 +14,11 @@ import (
 
 type herdrLaunchCapsuleBuilder func(state.HerdrIntent) (*state.HerdrLaunch, error)
 
-func (l *Launcher) attachHerdr(req Request, targetPath string) (Result, bool) {
-	locked, ok := l.admitHerdrLaunchRequest(req)
-	if !ok {
-		return Result{}, false
-	}
+func (l *Launcher) attachHerdr(
+	req Request,
+	targetPath string,
+	locked *state.LockedStore,
+) (Result, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), maxHerdrRealizeTimeout)
 	defer cancel()
 	route, err := verifyHerdrConsoleRoute(ctx, l.Herdr)

@@ -311,8 +311,8 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		l.Log.Err("%s: runtime backend is not configured", paneLogLabel(req))
 		return Result{}, false
 	}
-	if keyErr := prepareAttachedLiveness(l.Backend.Name(), &req); keyErr != nil {
-		l.Log.Err("%s: %v", paneLogLabel(req), keyErr)
+	herdrLocked, ok := l.prepareAttachedLaunch(&req)
+	if !ok {
 		return Result{}, false
 	}
 	l.preflightClaudeLaunchMode(&req)
@@ -333,10 +333,21 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		logPlanMode(req, l.Log)
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, l.Info.ProjectRoot, targetPath, ""), req.Hooks, l.Log)
-	if l.Backend.Name() == backend.Herdr {
-		return l.attachHerdr(req, targetPath)
+	if herdrLocked != nil {
+		return l.attachHerdr(req, targetPath, herdrLocked)
 	}
 	return l.attachTmux(req, targetPath)
+}
+
+func (l *Launcher) prepareAttachedLaunch(req *Request) (*state.LockedStore, bool) {
+	if err := prepareAttachedLiveness(l.Backend.Name(), req); err != nil {
+		l.Log.Err("%s: %v", paneLogLabel(*req), err)
+		return nil, false
+	}
+	if l.Backend.Name() != backend.Herdr {
+		return nil, true
+	}
+	return l.admitHerdrLaunchRequest(*req)
 }
 
 func prepareAttachedLiveness(runtimeBackend backend.Name, req *Request) error {

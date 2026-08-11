@@ -55,6 +55,9 @@ func (l *Launcher) Shell(req ShellRequest) error {
 	slug := shellPaneSlug(targetPath, req.Root, number)
 	title := shellPaneTitle(targetPath, req.Root)
 	if l.Backend != nil && l.Backend.Name() == backend.Herdr {
+		if err := admitHerdrSyntheticLaunch(recorder, projectRoot, number); err != nil {
+			return err
+		}
 		return l.shellHerdr(recorder, targetPath, number, slug, title)
 	}
 	return l.shellTmux(recorder, targetPath, number, slug, title)
