@@ -9,7 +9,7 @@ yomi: monitoring
 
 Fan out five child issues and tmux fills with five panes, each running a different agent in a different worktree. The next thing you want to know is which pane reached a PR, and where one is stuck.
 
-fanout answers that through three windows: the **persistent TUI console** if you want to watch from your terminal, `--status` **JSON** if you want to feed automation, and the read-only **web dashboard** if you want to share with a team or a browser. `--status` and the web dashboard are read-only — they only read `.fanout/state.json`, the selected runtime, and GitHub — but the TUI's tmux paths can also merge, close, and clean up panes (the same operations as `--merge` / `--close` / `--cleanup`).
+fanout answers that through three windows: the **persistent TUI console** if you want to watch from your terminal, `--status` **JSON** if you want to feed automation, and the read-only **web dashboard** if you want to share with a team or a browser. `--status` and the web dashboard are read-only — they only read `.fanout/state.json`, the selected runtime, and GitHub — but the TUI can also merge, close, and clean up verified rows through the selected runtime (the same operations as `--merge` / `--close` / `--cleanup`).
 
 ## Pane border labels
 
@@ -25,7 +25,7 @@ fanout   # start the persistent console
 
 With the tmux backend, a plain-shell launch creates or attaches to fanout's managed tmux session; inside tmux, the current pane becomes the console. With the herdr backend, a plain-shell launch bootstraps fanout's repository-owned session and console workspace, then prints the attach command. Run that command to enter the console; fanout leaves the calling shell intact. The console reads `.fanout/state.json`, periodically refreshes the issue and PR state of recorded panes, and shows each row's worktree change size as `+X/-Y` and whether it holds uncommitted work as `dirty` / `clean`. The `RUN` column shows the agent's execution state as a glyph — `●` running, `✓` done from the launch wrapper, plus `◐` working, `◇` plan, `◆` blocked, `○` idle when agent hooks report them — and the detail panel shows the same value as `run=`. When you focus a recorded tmux pane with the mouse or tmux `prefix` movement keys, the selected TUI row follows that pane.
 
-The console is backend-aware: the header names the selected runtime backend and why it was selected — `backend: herdr (HERDR_ENV)`, for example — and the detail panel shows each row's `backend=` and `pane=` identity. In fanout's owned [herdr backend]({{< relref "/docs/herdr-backend" >}}) session, issue / Prompt / attach / shell launch, focus, and peek are enabled. Foreign or incomplete Herdr rows stay disabled with the reason beside each key. Herdr send, restore, lifecycle close / merge / cleanup, and plan capture remain unavailable.
+The console is backend-aware: the header names the selected runtime backend and why it was selected — `backend: herdr (HERDR_ENV)`, for example — and the detail panel shows each row's `backend=` and `pane=` identity. In fanout's owned [herdr backend]({{< relref "/docs/herdr-backend" >}}) session, issue / Prompt / attach / shell launch, focus, and peek are enabled. Verified worktree rows also support merge, close, and cleanup. Foreign or incomplete Herdr rows stay disabled with the reason beside each key. Send, restore, and plan capture remain unavailable. CLI and label-watcher launches use the same owned runtime path.
 
 {{< diagram "console" >}}
 

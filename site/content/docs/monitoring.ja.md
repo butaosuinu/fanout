@@ -12,7 +12,7 @@ yomi: monitoring
 
 fanout はこれを 3 つの窓で見ます。
 手元で常時眺めるなら**常駐 TUI コンソール**、automation に食わせるなら `--status` の **JSON**、チームやブラウザで共有するなら読み取り専用の **Web ダッシュボード**です。
-`--status` と Web ダッシュボードは読み取り専用で `.fanout/state.json`、選択中の runtime、GitHub を読むだけですが、TUI の tmux 経路はキー操作から merge、close、cleanup も実行できます(`--merge` / `--close` / `--cleanup` と同じ処理です)。
+`--status` と Web ダッシュボードは読み取り専用で `.fanout/state.json`、選択中の runtime、GitHub を読むだけですが、TUI は選択中の runtime で検証済みの行に merge、close、cleanup も実行できます(`--merge` / `--close` / `--cleanup` と同じ処理です)。
 
 ## ペイン枠線ラベル
 
@@ -38,8 +38,10 @@ fanout は呼び出し元の shell を残します。
 
 コンソールは backend を認識します。ヘッダには選択中の runtime backend と選択理由(例: `backend: herdr (HERDR_ENV)`)が出て、detail panel には各行の `backend=` と `pane=` の identity が出ます。
 fanout-owned [herdr backend]({{< relref "/docs/herdr-backend" >}}) session では、issue / Prompt / attach / shell の launch、focus、peek を使えます。
+検証済みの worktree 行には merge、close、cleanup も実行できます。
 foreign または identity が不完全な Herdr 行は、キーごとの理由を表示して無効になります。
-Herdr の send、restore、lifecycle の close / merge / cleanup、plan capture は未対応です。
+send、restore、plan capture は未対応です。
+CLI と label watcher の launch も同じ owned runtime path を使います。
 
 {{< diagram "console" >}}
 
