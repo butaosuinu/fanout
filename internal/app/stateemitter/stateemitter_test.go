@@ -12,6 +12,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -60,6 +61,39 @@ func TestEmitUpdatesOnlyFinalRowTelemetry(t *testing.T) {
 	}
 	if len(observer.targets) != 1 || observer.targets[0].PaneID != pane.PaneID {
 		t.Fatalf("observer targets = %+v", observer.targets)
+	}
+}
+
+func TestEmitUpdatesCodexPlanRowThroughExactControllerProcess(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, _, _ := finalEmitterFixture(t, repo)
+	pane.Agent = "codex"
+	pane.PlanMode = true
+	pane.HerdrLaunchExecutable = "/opt/fanout"
+	pane.HerdrLaunchArgs = []string{
+		codexapp.PlanTUICommand, "--codex", "/opt/codex",
+		"--prompt", "plan it", "--status-file", "/tmp/status.json",
+	}
+	signal := signalForPane(repo, pane)
+	signal.State = backend.AgentPlan
+	observer := exactObserver(pane)
+	observer.observation.ProcessInfo.ForegroundProcesses = append(
+		observer.observation.ProcessInfo.ForegroundProcesses,
+		herdrrun.PaneProcess{
+			PID: 43, ParentPID: 42, ProcessGroup: 42, Executable: "/opt/codex",
+			Argv0: "/opt/codex", Argv: []string{"--remote", "ws://127.0.0.1:1234"},
+			CWD: pane.WorktreePath,
+		},
+	)
+	observer.observation.Panes[0].AgentProvider = "codex"
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "plan" || !got.StateRefinement {
+		t.Fatalf("Codex Plan telemetry = (%q, %t)", got.ReportedState, got.StateRefinement)
 	}
 }
 

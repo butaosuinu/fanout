@@ -15,14 +15,13 @@ For a CLI launch, fanout starts or readopts its repository-owned herdr session, 
 
 The persistent TUI console, `--status`, and the web dashboard show recorded sessions with each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and web dashboard match herdr rows against `herdr api snapshot`; `--status` reads recorded state and GitHub only. Before reading or mutating a session, fanout checks `herdr --version` and the exact owned route. A failed public method returns `herdr method "<name>" is unavailable`.
 
-Claude launches also receive launch-scoped `--settings` hooks. The emitter accepts `working`, `plan`, `blocked`, `idle`, and `done`; the lifecycle hooks report the states available from Claude's hook events. fanout accepts a report only when its row key, launch nonce, emitter nonce, saved pane identity, current herdr identity, and agent process match. A verified launch starts with synthetic `reported_state: running`; the first accepted provider report sets `state_refinement: true`. Codex and OpenCode launches do not install this emitter.
+Claude launches receive launch-scoped `--settings` hooks. Codex Plan Mode launches receive the same launch-bound emitter environment without hooks; fanout's app-server controller reports `working`, `plan`, and `idle`. The emitter accepts `working`, `plan`, `blocked`, `idle`, and `done`, and the Claude lifecycle hooks report the states available from Claude's hook events. fanout accepts a report only when its row key, launch nonce, emitter nonce, saved pane identity, current herdr identity, and agent process match. A verified launch starts with synthetic `reported_state: running`; the first accepted provider report sets `state_refinement: true`. Codex launches outside Plan Mode and OpenCode launches do not install this emitter.
 
 The TUI console and web dashboard use `reported_state` only while the matching pane and agent are live. `--status --format json` includes `reported_state`, and the table format shows it in `REPORTED_STATE`. The value is diagnostic: `SessionEnd` reporting `done` does not complete an issue, authorize cleanup, or enable automatic nudge. A disappeared pane remains `stale`.
 
 The unsupported paths still fail closed:
 
 - Interactive TUI launch, focus, send, restore, output peek, and plan capture are unavailable for herdr rows.
-- Codex child Plan Mode is rejected; use build mode until its app-server launch matrix is supported. Claude and OpenCode keep their native mode flags.
 - Automatic nudges (`fanout msg nudge` delivery) are disabled for every agent kind. Messages still persist to the bus for `inbox` / `board` reads.
 - No tmux keybindings are registered, and fanout never calls herdr's in-app `notification show`.
 
@@ -68,7 +67,7 @@ A parent that already has recorded panes keeps its recorded backend. A conflicti
 |---|---|---|
 | Issue / Project / plan / watcher launch | Creates worktrees, panes, agents | Creates owned herdr workspaces and verified agents |
 | Worktree creation | One per child under `.fanout/worktrees/` | One per child through `herdr worktree create` / `open` |
-| Liveness and agent state (TUI console, web dashboard) | tmux queries and pane options | `herdr api snapshot` plus launch-bound Claude telemetry |
+| Liveness and agent state (TUI console, web dashboard) | tmux queries and pane options | `herdr api snapshot` plus launch-bound Claude or Codex Plan telemetry |
 | Exit status display | Launch wrapper reports `✓ done` | None — herdr's public API keeps no exit status |
 | Pane after the agent exits | Pane stays open with the wrapper message | herdr drops the pane and its own record on normal exit; the fanout row turns `stale` |
 | Interactive TUI launch / focus / send / restore / peek / plan capture | TUI keys and lifecycle flags | Unavailable — `runtime backend herdr does not support …` |
@@ -76,7 +75,7 @@ A parent that already has recorded panes keeps its recorded backend. A conflicti
 | Automatic nudge (`fanout msg nudge`) | Delivered when the peer can take input | Disabled for every agent kind |
 | tmux keybindings (dashboard, console return) | Registered | Not registered |
 | Notifications | bell / tmux / ntfy / slack channels | bell / ntfy / slack work; the tmux channel and herdr's `notification show` do not fire |
-| Child Plan Mode launch | Supported | Claude / OpenCode only; Codex is rejected |
+| Child Plan Mode launch | Supported | Supported; Codex uses fanout's app-server controller, while Claude / OpenCode use native flags |
 | TUI forms (settings, help) | tmux popups | Inline in-process forms |
 | Session resume | fanout's restore flow | Left to herdr (see below) |
 

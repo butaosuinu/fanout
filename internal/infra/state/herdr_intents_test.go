@@ -496,12 +496,19 @@ func TestHerdrControlValidatesEmitterLaunchFields(t *testing.T) {
 	if err := validateHerdrIntent(valid()); err != nil {
 		t.Fatal(err)
 	}
+	codex := valid()
+	codex.Launch.Agent = "codex"
+	codex.Launch.CodexPlanStatusPath = filepath.Join(t.TempDir(), "status.json")
+	if err := validateHerdrIntent(codex); err != nil {
+		t.Fatalf("Codex Plan emitter fields: %v", err)
+	}
 	for _, test := range []struct {
 		name   string
 		mutate func(*HerdrLaunch)
 	}{
 		{name: "pending without nonce", mutate: func(launch *HerdrLaunch) { launch.EmitterNonce = "" }},
-		{name: "codex emitter", mutate: func(launch *HerdrLaunch) { launch.Agent = "codex" }},
+		{name: "Codex emitter without Plan mode", mutate: func(launch *HerdrLaunch) { launch.Agent = "codex" }},
+		{name: "unsupported emitter", mutate: func(launch *HerdrLaunch) { launch.Agent = "opencode" }},
 		{name: "synthetic pending", mutate: func(launch *HerdrLaunch) { launch.PendingReportedState = "running" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -26,11 +26,12 @@ TUI コンソールと web ダッシュボードは、herdr backend で記録さ
 fanout は session の読み書き前に `herdr --version` と owned route を検査します。
 public method の呼び出しが失敗した場合は `herdr method "<name>" is unavailable` を返します。
 
-Claude の launch には、launch 単位の `--settings` hook も渡します。
-emitter は `working`、`plan`、`blocked`、`idle`、`done` を受理し、lifecycle hook は Claude の hook event から判定できる状態を報告します。
+Claude の launch には、launch 単位の `--settings` hook を渡します。
+Codex Plan Mode の launch には、同じ launch-bound emitter environment を hook なしで渡し、fanout の app-server controller が `working`、`plan`、`idle` を報告します。
+emitter は `working`、`plan`、`blocked`、`idle`、`done` を受理し、Claude の lifecycle hook は hook event から判定できる状態を報告します。
 fanout が報告を受理するのは、row key、launch nonce、emitter nonce、保存済み pane identity、現在の herdr identity、agent process が一致した場合だけです。
 検証済み launch の初期値は synthetic な `reported_state: running` であり、最初の provider 報告を受理すると `state_refinement: true` になります。
-Codex と OpenCode の launch には emitter を設定しません。
+Plan Mode 以外の Codex と OpenCode の launch には emitter を設定しません。
 
 TUI コンソールと web ダッシュボードが `reported_state` を使うのは、一致する pane と agent が live の場合だけです。
 `--status --format json` は `reported_state` を含み、table 形式は `REPORTED_STATE` 列へ表示します。
@@ -41,7 +42,6 @@ pane が消えた場合は `stale` のままです。
 未対応の経路は明確なエラーで fail closed します。
 
 - 対話 TUI の launch、focus、send、restore、出力 peek、plan capture は herdr 行では使えません。
-- Codex 子の Plan Mode は拒否されます。app-server の launch matrix が対応するまでは build mode を使ってください。Claude と OpenCode は固有の mode flag を使います。
 - 自動 nudge(`fanout msg nudge` の配送)は agent の種類にかかわらず無効です。メッセージ自体は bus に保存され、`inbox` / `board` で読めます。
 - tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれません。
 
@@ -94,7 +94,7 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 |---|---|---|
 | issue / Project / plan / watcher の launch | worktree、pane、agent を作成 | owned herdr workspace と検証済み agent を作成 |
 | worktree 作成 | 子ごとに `.fanout/worktrees/` 配下へ | 子ごとに `herdr worktree create` / `open` を実行 |
-| 生死と agent state(TUI コンソール、web ダッシュボード) | tmux への照会と pane option | `herdr api snapshot` と launch に束縛した Claude telemetry |
+| 生死と agent state(TUI コンソール、web ダッシュボード) | tmux への照会と pane option | `herdr api snapshot` と launch に束縛した Claude または Codex Plan telemetry |
 | exit status 表示 | launch wrapper が `✓ done` を報告 | なし — herdr の public API に exit status は残らない |
 | agent 終了後の pane | wrapper のメッセージ付きで pane が残る | 正常終了で herdr は pane と自身の記録を消す。fanout の行は `stale` になる |
 | 対話 TUI launch / focus / send / restore / peek / plan capture | TUI キーと lifecycle フラグ | 不可 — `runtime backend herdr does not support …` |
@@ -102,7 +102,7 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 | 自動 nudge(`fanout msg nudge`) | 相手が入力を受けられる状態なら配送 | agent の種類にかかわらず無効 |
 | tmux keybind(ダッシュボード、コンソール復帰) | 登録する | 登録しない |
 | 通知 | bell / tmux / ntfy / slack の channel | bell / ntfy / slack は動く。tmux channel と herdr の `notification show` は発火しない |
-| 子の Plan Mode launch | 対応 | Claude / OpenCode のみ。Codex は拒否 |
+| 子の Plan Mode launch | 対応 | 対応。Codex は fanout の app-server controller、Claude / OpenCode は固有の mode flag を使う |
 | TUI フォーム(設定、ヘルプ) | tmux popup | インラインの in-process フォーム |
 | session resume | fanout の restore フロー | herdr 任せ(後述) |
 

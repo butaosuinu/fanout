@@ -33,7 +33,6 @@ type runtimeBackendInputs struct {
 	herdrEnvironment   bool
 	tmuxEnvironment    bool
 	userDefault        backend.Name
-	childPlanMode      bool
 	rows               []backend.Binding
 	provisionalIntents []backend.Binding
 	suppliedIntents    []backend.Binding
@@ -145,7 +144,7 @@ func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.
 	if err != nil {
 		return launchBackendResolution{}, err
 	}
-	if validateErr := validateLaunchBackend(cfg, selection, inputs); validateErr != nil {
+	if validateErr := validateLaunchBackend(cfg, selection); validateErr != nil {
 		return launchBackendResolution{}, validateErr
 	}
 	runtimeBackend, prepare, err := constructLaunchRuntimeBackend(cfg, selection.Name, inputs)
@@ -258,15 +257,14 @@ func canonicalRuntimeRoot(root string) string {
 func validateLaunchBackend(
 	cfg *cliflags.Config,
 	selection backend.Selection,
-	inputs runtimeBackendInputs,
 ) error {
 	if selection.Name != backend.Herdr {
 		return nil
 	}
-	return validateHerdrLaunchBackend(cfg, inputs)
+	return validateHerdrLaunchBackend(cfg)
 }
 
-func validateHerdrLaunchBackend(cfg *cliflags.Config, inputs runtimeBackendInputs) error {
+func validateHerdrLaunchBackend(cfg *cliflags.Config) error {
 	if cfg.Team {
 		dbPath := os.Getenv(team.DBPathEnv)
 		if dbPath != "" && !filepath.IsAbs(dbPath) {
@@ -275,11 +273,6 @@ func validateHerdrLaunchBackend(cfg *cliflags.Config, inputs runtimeBackendInput
 	}
 	if cfg.TUIInteractive {
 		return backend.Unsupported(backend.Herdr, "interactive TUI launch in the current release wave")
-	}
-	// Per-item overrides are checked before --only/--skip selection. Narrowing
-	// this fail-closed gate to selected items is deferred to a follow-up issue.
-	if inputs.childPlanMode && configMayLaunchCodex(cfg) {
-		return backend.Unsupported(backend.Herdr, "Codex Plan Mode child launch until issue #554")
 	}
 	if cfg.Session != "" {
 		return fmt.Errorf("--session is only supported by the tmux backend")
@@ -296,22 +289,6 @@ func configHasLaunchAgent(cfg *cliflags.Config) bool {
 		agentName = os.Getenv("FANOUT_AGENT")
 	}
 	return agentName != "" || len(cfg.AgentOverrides) > 0
-}
-
-func configMayLaunchCodex(cfg *cliflags.Config) bool {
-	agentName := cfg.Agent
-	if agentName == "" {
-		agentName = os.Getenv("FANOUT_AGENT")
-	}
-	if strings.EqualFold(strings.TrimSpace(agentName), "codex") {
-		return true
-	}
-	for _, override := range cfg.AgentOverrides {
-		if strings.EqualFold(strings.TrimSpace(override.Name), "codex") {
-			return true
-		}
-	}
-	return false
 }
 
 func constructLaunchRuntimeBackend(
@@ -349,10 +326,6 @@ func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store st
 	if resolved.RuntimeBackendSource == settings.RuntimeBackendSourceUserConfig {
 		userDefault = resolved.RuntimeBackend
 	}
-	childPlanMode := resolved.ChildPlanMode
-	if cfg.PlanMode != nil {
-		childPlanMode = cfg.PlanModeEnabled()
-	}
 	return runtimeBackendInputs{
 		projectRoot:        projectRoot,
 		cli:                cfg.Backend,
@@ -360,7 +333,6 @@ func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store st
 		herdrEnvironment:   os.Getenv("HERDR_ENV") == "1",
 		tmuxEnvironment:    os.Getenv("TMUX") != "",
 		userDefault:        userDefault,
-		childPlanMode:      childPlanMode,
 		rows:               backendBindings(projectRoot, store),
 		provisionalIntents: append([]backend.Binding(nil), provisionalIntents...),
 		suppliedIntents:    append([]backend.Binding(nil), provisionalIntents...),

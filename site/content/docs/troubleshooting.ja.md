@@ -151,6 +151,6 @@ fanout は method と response field を事前検査しません。`herdr method
 
 故障ではありません。
 このメッセージは対話 TUI の変更操作と未対応の操作に適用され、CLI の issue、Project、plan、watcher、`--team` launch には適用されません。これらの launch レーンでは `--backend herdr` を使えます。
-Codex 子の Plan Mode は、変更前に専用の `runtime backend herdr does not support ...` エラーで失敗します。
+Codex 子の Plan Mode は fanout の app-server controller と owned launcher で動きます。
 記録済みペインを持つ親への矛盾する backend 指定は、引き続き `explicit migration is required` で失敗します。v1 に移行コマンドはありません。
 機能の対応表は [herdr backend]({{< relref "/docs/herdr-backend" >}}) にあります。

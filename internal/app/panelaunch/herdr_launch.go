@@ -56,9 +56,9 @@ func (l *Launcher) launchHerdr(req Request) (Result, bool) {
 	if err != nil {
 		return l.failHerdr(req, "start agent", l.rollbackFailedHerdrLaunch(operation.locked, intent, err))
 	}
-	codexStatus, err := awaitHerdrCodexTeam(req, operation.locked, l.Info.ProjectRoot, intent)
+	codexStatus, err := awaitHerdrCodexTUI(operation.ctx, req, operation.locked, l.Info.ProjectRoot, intent)
 	if err != nil {
-		return l.failHerdr(req, "start Codex team TUI", err)
+		return l.failHerdr(req, "start Codex TUI controller", err)
 	}
 	if err := l.finalizeHerdrLaunch(req, operation.locked, intent, live, codexStatus); err != nil {
 		return l.failHerdr(req, "finalize launch", err)
@@ -107,10 +107,6 @@ func (l *Launcher) admitHerdrLaunchRequest(req Request) (*state.LockedStore, boo
 	locked, ok := l.Recorder.(*state.LockedStore)
 	if !ok || l.Herdr == nil {
 		l.Log.Err("%s: Herdr launch requires an owned session and combined launch lock", paneLogLabel(req))
-		return nil, false
-	}
-	if req.CodexPlanMode() {
-		l.Log.Err("%s: %v", paneLogLabel(req), backend.Unsupported(backend.Herdr, "Codex Plan Mode child launch until issue #554"))
 		return nil, false
 	}
 	return locked, true
@@ -451,12 +447,13 @@ func (l *Launcher) prepareHerdrLaunchCapsule(
 		Executable: resolved.spec.Executable, Args: resolved.spec.Args,
 		TeamDBPath:          req.TeamDBPath,
 		CodexTeamStatusPath: newHerdrTeamStatusPath(req),
+		CodexPlanStatusPath: newHerdrPlanStatusPath(req),
 		EnvFilePath:         envPath, EnvNameCount: envCount,
 	}, nil
 }
 
 func buildHerdrLaunchSpec(req Request) (agent.LaunchSpec, error) {
-	if !req.CodexTeamMode {
+	if !req.CodexPlanMode() && !req.CodexTeamMode {
 		return agent.BuildResolvedLaunchSpec(req.Agent, req.Prompt, backend.Herdr, req.LaunchMode)
 	}
 	codexPath, err := agent.ResolveExecutable("codex")
@@ -467,14 +464,22 @@ func buildHerdrLaunchSpec(req Request) (agent.LaunchSpec, error) {
 	if err != nil {
 		return agent.LaunchSpec{}, fmt.Errorf("resolve fanout executable: %w", err)
 	}
-	return codexapp.TeamLaunchSpec(
-		fanoutPath, codexPath, req.Prompt, codexTeamMember(req), req.ParentRef, req.CodexTeamStatusPath,
-	), nil
+	if req.CodexPlanMode() {
+		return codexapp.PlanLaunchSpec(fanoutPath, codexPath, req.Prompt, req.CodexPlanStatusPath), nil
+	}
+	return codexapp.TeamLaunchSpec(fanoutPath, codexPath, req.Prompt, codexTeamMember(req), req.ParentRef, req.CodexTeamStatusPath), nil
 }
 
 func newHerdrTeamStatusPath(req Request) string {
 	if req.CodexTeamMode {
 		return req.CodexTeamStatusPath
+	}
+	return ""
+}
+
+func newHerdrPlanStatusPath(req Request) string {
+	if req.CodexPlanMode() {
+		return req.CodexPlanStatusPath
 	}
 	return ""
 }
@@ -489,71 +494,132 @@ func validateHerdrLaunchBinding(req Request, launch *state.HerdrLaunch) error {
 		return fmt.Errorf("saved Herdr launch does not match the current team DB path")
 	case req.CodexTeamMode != (launch.CodexTeamStatusPath != ""):
 		return fmt.Errorf("saved Herdr launch does not match the current Codex team mode")
+	case req.CodexPlanMode() != (launch.CodexPlanStatusPath != ""):
+		return fmt.Errorf("saved Herdr launch does not match the current Codex Plan Mode")
 	default:
 		return nil
 	}
 }
 
-func waitForHerdrCodexTeam(req Request, intent state.HerdrIntent) (codexapp.Status, error) {
-	if !req.CodexTeamMode {
+func waitForHerdrCodexTUI(req Request, intent state.HerdrIntent) (codexapp.Status, error) {
+	statusPath := requestedHerdrCodexStatusPath(req)
+	if statusPath == "" {
 		return codexapp.Status{}, nil
 	}
 	timeout := min(CodexPlanTUIStartupTimeout, remainingHerdrLaunchTime(intent))
 	if timeout <= 0 {
-		return codexapp.Status{}, fmt.Errorf("herdr launch expired before Codex team TUI became ready")
+		return codexapp.Status{}, fmt.Errorf("herdr launch expired before Codex TUI controller became ready")
 	}
-	status, err := codexapp.WaitReady(req.CodexTeamStatusPath, timeout)
+	status, err := codexapp.WaitReady(statusPath, timeout)
 	if err != nil {
 		return status, err
 	}
 	// The unique status path has served its launch fence; a removal failure
 	// cannot invalidate the ready payload or authorize a later launch.
-	_ = os.Remove(req.CodexTeamStatusPath)
+	_ = os.Remove(statusPath)
 	return status, nil
 }
 
-func herdrCodexTeamStatusPath(req Request, intent state.HerdrIntent) (string, error) {
+func requestedHerdrCodexStatusPath(req Request) string {
+	if req.CodexPlanMode() {
+		return req.CodexPlanStatusPath
+	}
+	if req.CodexTeamMode {
+		return req.CodexTeamStatusPath
+	}
+	return ""
+}
+
+func herdrCodexStatusPath(req Request, intent state.HerdrIntent) (string, error) {
 	if intent.Launch != nil {
 		if err := validateHerdrLaunchBinding(req, intent.Launch); err != nil {
 			return "", err
 		}
 	}
-	if !req.CodexTeamMode {
+	if requestedHerdrCodexStatusPath(req) == "" {
 		return "", nil
 	}
-	if intent.Launch == nil || intent.Launch.CodexTeamStatusPath == "" {
-		return "", fmt.Errorf("saved Herdr Codex team launch is missing its status path")
+	if intent.Launch == nil {
+		return "", fmt.Errorf("saved Herdr Codex launch is missing its status path")
+	}
+	if req.CodexPlanMode() {
+		return intent.Launch.CodexPlanStatusPath, nil
 	}
 	return intent.Launch.CodexTeamStatusPath, nil
 }
 
-func awaitHerdrCodexTeam(
+func awaitHerdrCodexTUI(
+	ctx context.Context,
 	req Request,
 	locked *state.LockedStore,
 	projectRoot string,
 	intent state.HerdrIntent,
 ) (codexapp.Status, error) {
-	if !req.CodexTeamMode {
+	if requestedHerdrCodexStatusPath(req) == "" {
 		return codexapp.Status{}, nil
 	}
-	journal, latest, err := loadHerdrCodexTeamIntent(locked, projectRoot, intent.ID)
+	journal, latest, err := loadHerdrCodexIntent(locked, projectRoot, intent.ID)
 	if err != nil {
 		return codexapp.Status{}, err
 	}
-	req.CodexTeamStatusPath, err = herdrCodexTeamStatusPath(req, latest)
-	var status codexapp.Status
-	if err == nil {
-		status, err = waitForHerdrCodexTeam(req, latest)
+	req, err = bindHerdrCodexStatusPath(req, latest)
+	if err != nil {
+		return codexapp.Status{}, errors.Join(err, markHerdrIntentManual(
+			journal, latest, fmt.Errorf("codex TUI controller readiness failed: %w", err),
+		))
 	}
+	status, journal, latest, err := waitForHerdrCodexTUIUnlocked(
+		ctx, req, locked, projectRoot, latest,
+	)
 	if err == nil {
 		return status, nil
 	}
+	if journal == nil {
+		return status, err
+	}
 	return status, errors.Join(err, markHerdrIntentManual(
-		journal, latest, fmt.Errorf("codex team TUI readiness failed: %w", err),
+		journal, latest, fmt.Errorf("codex TUI controller readiness failed: %w", err),
 	))
 }
 
-func loadHerdrCodexTeamIntent(
+func bindHerdrCodexStatusPath(req Request, intent state.HerdrIntent) (Request, error) {
+	statusPath, err := herdrCodexStatusPath(req, intent)
+	if err != nil {
+		return req, err
+	}
+	if req.CodexPlanMode() {
+		req.CodexPlanStatusPath = statusPath
+	} else {
+		req.CodexTeamStatusPath = statusPath
+	}
+	return req, nil
+}
+
+func waitForHerdrCodexTUIUnlocked(
+	ctx context.Context,
+	req Request,
+	locked *state.LockedStore,
+	projectRoot string,
+	intent state.HerdrIntent,
+) (codexapp.Status, *state.LockedHerdrIntents, state.HerdrIntent, error) {
+	if err := locked.Unlock(); err != nil {
+		return codexapp.Status{}, nil, intent, err
+	}
+	status, waitErr := waitForHerdrCodexTUI(req, intent)
+	if err := reacquireHerdrLaunchLock(locked, projectRoot, intent); err != nil {
+		return status, nil, intent, errors.Join(waitErr, err)
+	}
+	journal, latest, err := loadHerdrCodexIntent(locked, projectRoot, intent.ID)
+	if err != nil {
+		return status, nil, intent, errors.Join(waitErr, err)
+	}
+	if waitErr == nil {
+		waitErr = ensureHerdrLaunchActive(ctx, latest)
+	}
+	return status, journal, latest, waitErr
+}
+
+func loadHerdrCodexIntent(
 	locked *state.LockedStore,
 	projectRoot, intentID string,
 ) (*state.LockedHerdrIntents, state.HerdrIntent, error) {
@@ -563,7 +629,7 @@ func loadHerdrCodexTeamIntent(
 	}
 	latest, found := journal.FindIntent(intentID)
 	if !found {
-		return nil, state.HerdrIntent{}, fmt.Errorf("codex team launch intent %s disappeared", intentID)
+		return nil, state.HerdrIntent{}, fmt.Errorf("codex launch intent %s disappeared", intentID)
 	}
 	return journal, latest, nil
 }

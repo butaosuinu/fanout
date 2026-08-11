@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
@@ -84,13 +85,39 @@ func TestHerdrEmitterLaunchUsesCurrentPinnedEmitterInsteadOfSessionLauncher(t *t
 	}
 }
 
-func TestHerdrEmitterLaunchLeavesCodexBare(t *testing.T) {
+func TestHerdrEmitterLaunchLeavesNonPlanCodexBare(t *testing.T) {
 	launch, err := newHerdrEmitterLaunch(Request{Agent: "codex"}, herdrrun.OwnedLaunchRoute{}, state.HerdrIntent{}, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if launch.nonce != "" || len(launch.backendArgs) != 0 || len(launch.environment) != 0 {
 		t.Fatalf("codex emitter launch = %+v", launch)
+	}
+}
+
+func TestHerdrEmitterLaunchInjectsCodexPlanIdentityWithoutBackendArgs(t *testing.T) {
+	intent := state.HerdrIntent{
+		ID: "issue:3:524:554", WorkspaceLabel: "fanout-codex-plan",
+		Resource: state.HerdrResource{
+			WorkspaceID: "workspace-1", Label: "fanout-codex-plan",
+			PaneID: "workspace-1:pane-1", TerminalID: "terminal-1",
+		},
+	}
+	route := herdrrun.OwnedLaunchRoute{Session: "fanout-owned", SocketPath: "/tmp/herdr.sock"}
+	launch, err := newHerdrEmitterLaunch(
+		Request{Agent: "codex", LaunchMode: agent.ModePlan}, route, intent,
+		strings.Repeat("a", 32), "fanout-agent", "/repo/.fanout/state.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !telemetry.ValidNonce(launch.nonce) || len(launch.backendArgs) != 0 {
+		t.Fatalf("Codex Plan emitter launch = %+v", launch)
+	}
+	environment := environmentMap(t, launch.environment)
+	if environment[telemetry.AgentEnv] != "codex" ||
+		environment[telemetry.WorkspaceLabelEnv] != intent.WorkspaceLabel {
+		t.Fatalf("Codex Plan emitter environment = %#v", environment)
 	}
 }
 

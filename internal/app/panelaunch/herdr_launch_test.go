@@ -563,6 +563,32 @@ func TestBuildHerdrLaunchSpecStartsCodexTeamBridge(t *testing.T) {
 	}
 }
 
+func TestBuildHerdrLaunchSpecStartsCodexPlanController(t *testing.T) {
+	binDir := t.TempDir()
+	codexPath := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codexPath, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	req := Request{
+		Number: 554, ParentRef: "524", Agent: "codex", Prompt: "plan the backend",
+		LaunchMode: agent.ModePlan, CodexPlanStatusPath: "/tmp/plan-status.json",
+	}
+
+	spec, err := buildHerdrLaunchSpec(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := codexapp.PlanLaunchSpec(self, codexPath, req.Prompt, req.CodexPlanStatusPath)
+	if spec.Executable != want.Executable || !slices.Equal(spec.Args, want.Args) {
+		t.Fatalf("Herdr Plan launch spec = %+v, want %+v", spec, want)
+	}
+}
+
 func TestWaitForHerdrCodexTeamConsumesReadyStatus(t *testing.T) {
 	statusPath := filepath.Join(t.TempDir(), "status.json")
 	if err := os.WriteFile(statusPath, []byte(`{"status":"ready","threadId":"thread-568","sessionId":"session-568"}`), 0o600); err != nil {
@@ -571,7 +597,7 @@ func TestWaitForHerdrCodexTeamConsumesReadyStatus(t *testing.T) {
 	req := Request{CodexTeamMode: true, CodexTeamStatusPath: statusPath}
 	intent := state.HerdrIntent{ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli()}
 
-	status, err := waitForHerdrCodexTeam(req, intent)
+	status, err := waitForHerdrCodexTUI(req, intent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -587,7 +613,7 @@ func TestWaitForHerdrCodexTeamRejectsExpiredLaunch(t *testing.T) {
 	req := Request{CodexTeamMode: true, CodexTeamStatusPath: filepath.Join(t.TempDir(), "status.json")}
 	intent := state.HerdrIntent{ExpiresUnixMS: time.Now().Add(-time.Second).UnixMilli()}
 
-	_, err := waitForHerdrCodexTeam(req, intent)
+	_, err := waitForHerdrCodexTUI(req, intent)
 	if err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expired Codex team launch error = %v", err)
 	}
@@ -603,13 +629,138 @@ func TestHerdrCodexTeamStatusPathUsesPersistedLaunchIdentity(t *testing.T) {
 		{Number: 568, TeamDBPath: teamDBPath, CodexTeamMode: true, CodexTeamStatusPath: "/tmp/new-issue-status.json"},
 		{TaskID: "registry-migration", TeamDBPath: teamDBPath, CodexTeamMode: true, CodexTeamStatusPath: "/tmp/new-task-status.json"},
 	} {
-		got, err := herdrCodexTeamStatusPath(req, intent)
+		got, err := herdrCodexStatusPath(req, intent)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got != savedPath {
 			t.Fatalf("persisted team status path = %q, want %q", got, savedPath)
 		}
+	}
+}
+
+func TestHerdrCodexPlanStatusPathUsesPersistedLaunchIdentity(t *testing.T) {
+	savedPath := filepath.Join(t.TempDir(), "saved-status.json")
+	intent := state.HerdrIntent{Launch: &state.HerdrLaunch{CodexPlanStatusPath: savedPath}}
+	req := Request{
+		Agent: "codex", LaunchMode: agent.ModePlan,
+		CodexPlanStatusPath: filepath.Join(t.TempDir(), "regenerated-status.json"),
+	}
+	got, err := herdrCodexStatusPath(req, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != savedPath {
+		t.Fatalf("persisted Plan status path = %q, want %q", got, savedPath)
+	}
+}
+
+func TestWaitForHerdrCodexTUIUnlockedReleasesLockAndRechecksDeadline(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+	result, err := realizeHerdrWorktree(
+		context.Background(), testHerdrWorktreeRequest(repo, "plan-wait", 554), runtime, hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+	intent := result.Intent
+	intent.ExpiresUnixMS = time.Now().Add(time.Second).UnixMilli()
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	intent.Launch = validTestHerdrLaunch()
+	intent.Launch.Agent = "codex"
+	intent.Launch.CodexPlanStatusPath = statusPath
+	j, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.UpsertIntent(intent)
+	if saveErr := j.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	type waitResult struct {
+		status codexapp.Status
+		err    error
+	}
+	waited := make(chan waitResult, 1)
+	go func() {
+		status, _, _, waitErr := waitForHerdrCodexTUIUnlocked(
+			context.Background(),
+			Request{Agent: "codex", LaunchMode: agent.ModePlan, CodexPlanStatusPath: statusPath},
+			locked, repo, intent,
+		)
+		waited <- waitResult{status: status, err: waitErr}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	contender, err := state.LockProjectForLaunchContext(ctx, repo)
+	if err != nil {
+		t.Fatalf("readiness wait kept the launch lock: %v", err)
+	}
+	if writeErr := os.WriteFile(statusPath, []byte(`{"status":"ready","threadId":"thread-554","sessionId":"session-554"}`), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if unlockErr := contender.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	got := <-waited
+	if got.err != nil || got.status.ThreadID != "thread-554" {
+		t.Fatalf("unlocked readiness wait = %+v, err %v", got.status, got.err)
+	}
+
+	statusPath = filepath.Join(t.TempDir(), "expired-status.json")
+	intent.ExpiresUnixMS = time.Now().Add(500 * time.Millisecond).UnixMilli()
+	intent.Launch.CodexPlanStatusPath = statusPath
+	j, err = locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.UpsertIntent(intent)
+	if saveErr := j.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	go func() {
+		status, _, _, waitErr := waitForHerdrCodexTUIUnlocked(
+			context.Background(),
+			Request{Agent: "codex", LaunchMode: agent.ModePlan, CodexPlanStatusPath: statusPath},
+			locked, repo, intent,
+		)
+		waited <- waitResult{status: status, err: waitErr}
+	}()
+	expiredCtx, expiredCancel := context.WithTimeout(context.Background(), time.Second)
+	defer expiredCancel()
+	contender, err = state.LockProjectForLaunchContext(expiredCtx, repo)
+	if err != nil {
+		t.Fatalf("expired readiness wait kept the launch lock: %v", err)
+	}
+	if writeErr := os.WriteFile(statusPath, []byte(`{"status":"ready","threadId":"expired-thread","sessionId":"expired-session"}`), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	time.Sleep(time.Until(time.UnixMilli(intent.ExpiresUnixMS)) + 20*time.Millisecond)
+	if unlockErr := contender.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	got = <-waited
+	if got.err == nil || !strings.Contains(got.err.Error(), "expired") {
+		t.Fatalf("expired readiness wait = %+v, err %v", got.status, got.err)
+	}
+}
+
+func TestValidateHerdrLaunchBindingRejectsCodexPlanModeChange(t *testing.T) {
+	launch := validTestHerdrLaunch()
+	launch.Agent = "codex"
+	launch.CodexPlanStatusPath = "/tmp/status.json"
+	if err := validateHerdrLaunchBinding(Request{Agent: "codex"}, launch); err == nil ||
+		!strings.Contains(err.Error(), "current Codex Plan Mode") {
+		t.Fatalf("Plan mode mismatch error = %v", err)
 	}
 }
 
@@ -741,7 +892,8 @@ func TestAwaitHerdrCodexTeamFailureRequiresManualCleanup(t *testing.T) {
 				tc.writeStatus(t, statusPath)
 			}
 
-			_, err = awaitHerdrCodexTeam(
+			_, err = awaitHerdrCodexTUI(
+				context.Background(),
 				Request{
 					TeamDBPath:          "/tmp/team.db",
 					CodexTeamMode:       true,

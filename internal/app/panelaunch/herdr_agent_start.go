@@ -135,7 +135,7 @@ func (l *Launcher) adoptHerdrAgent(
 	locked *state.LockedStore,
 	intent state.HerdrIntent,
 ) (backend.LivePane, error) {
-	statusPath, err := herdrCodexTeamStatusPath(req, intent)
+	statusPath, err := herdrCodexStatusPath(req, intent)
 	if err != nil {
 		return backend.LivePane{}, err
 	}
@@ -154,16 +154,16 @@ func (l *Launcher) waitForHerdrAgentUnlocked(
 	locked *state.LockedStore,
 	intent state.HerdrIntent,
 	wantAgentID string,
-	codexTeamStatusPath string,
+	codexStatusPath string,
 ) (backend.LivePane, error) {
 	if intent.Launch == nil || intent.Launch.EmitterNonce == "" {
-		return l.waitForHerdrAgent(ctx, intent, wantAgentID, codexTeamStatusPath)
+		return l.waitForHerdrAgent(ctx, intent, wantAgentID, codexStatusPath)
 	}
 	if err := locked.Unlock(); err != nil {
 		return backend.LivePane{}, err
 	}
-	live, waitErr := l.waitForHerdrAgent(ctx, intent, wantAgentID, codexTeamStatusPath)
-	lockErr := l.reacquireHerdrLaunchAfterAgentWait(locked, intent)
+	live, waitErr := l.waitForHerdrAgent(ctx, intent, wantAgentID, codexStatusPath)
+	lockErr := reacquireHerdrLaunchLock(locked, l.Info.ProjectRoot, intent)
 	if waitErr == nil && lockErr == nil && ctx.Err() != nil {
 		waitErr = fmt.Errorf(
 			"%w: launch context expired after current agent observation: %w",
@@ -174,22 +174,23 @@ func (l *Launcher) waitForHerdrAgentUnlocked(
 	return live, errors.Join(waitErr, lockErr)
 }
 
-func (l *Launcher) reacquireHerdrLaunchAfterAgentWait(
+func reacquireHerdrLaunchLock(
 	locked *state.LockedStore,
+	projectRoot string,
 	intent state.HerdrIntent,
 ) error {
 	ctx, cancel := context.WithTimeout(context.Background(), herdrLaunchLockReacquireTimeout)
 	defer cancel()
-	reloaded, err := state.LockProjectForLaunchContext(ctx, l.Info.ProjectRoot)
+	reloaded, err := state.LockProjectForLaunchContext(ctx, projectRoot)
 	if err != nil {
 		return fmt.Errorf(
-			"%w: reacquire launch lock after Herdr agent wait: %w",
+			"%w: reacquire Herdr launch lock after runtime wait: %w",
 			errHerdrLaunchStatePreserved,
 			err,
 		)
 	}
 	*locked = *reloaded
-	return validateReacquiredHerdrLaunch(locked, l.Info.ProjectRoot, intent)
+	return validateReacquiredHerdrLaunch(locked, projectRoot, intent)
 }
 
 func validateReacquiredHerdrLaunch(
@@ -203,13 +204,13 @@ func validateReacquiredHerdrLaunch(
 	}
 	latest, found := journal.FindIntent(want.ID)
 	if !found {
-		return fmt.Errorf("issued Herdr launch intent disappeared during agent wait")
+		return fmt.Errorf("issued Herdr launch intent disappeared during runtime wait")
 	}
 	if latest.Status == state.HerdrIntentManualCleanupRequired {
 		return herdrManualCleanupError(latest)
 	}
 	if !sameHerdrLaunchGeneration(latest, want) {
-		return fmt.Errorf("issued Herdr launch identity changed during agent wait")
+		return fmt.Errorf("issued Herdr launch identity changed during runtime wait")
 	}
 	return nil
 }
@@ -391,7 +392,7 @@ func herdrLaunchProcessIdentity(intent state.HerdrIntent) herdrprocess.Identity 
 	}
 	return herdrprocess.Identity{
 		WorktreePath: intent.WorktreePath,
-		Executable:   intent.Launch.Executable, Args: intent.Launch.Args,
+		Executable:   intent.Launch.Executable, Args: intent.Launch.Args, Agent: intent.Launch.Agent,
 	}
 }
 
@@ -399,11 +400,11 @@ func (l *Launcher) waitForHerdrAgent(
 	ctx context.Context,
 	intent state.HerdrIntent,
 	wantAgentID string,
-	codexTeamStatusPath string,
+	codexStatusPath string,
 ) (backend.LivePane, error) {
 	deadline := time.UnixMilli(intent.ExpiresUnixMS)
 	for time.Now().Before(deadline) {
-		if err := codexapp.StartupFailure(codexTeamStatusPath); err != nil {
+		if err := codexapp.StartupFailure(codexStatusPath); err != nil {
 			return backend.LivePane{}, err
 		}
 		live, found, err := l.observeExactHerdrAgent(ctx, intent, wantAgentID)

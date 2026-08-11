@@ -129,6 +129,17 @@ func (b *Backend) readCore(ref corebackend.PaneRef, lines int) (string, error) {
 	return b.readOwned(ctx, target, lines)
 }
 
+// ReadOwnedPane reads an identity-fenced pane within the caller's deadline.
+func (s *OwnedSession) ReadOwnedPane(ctx context.Context, target OwnedPaneIdentity, lines int) (string, error) {
+	if s == nil || s.backend == nil {
+		return "", fmt.Errorf("herdr owned session is nil")
+	}
+	if ctx == nil {
+		return "", fmt.Errorf("read Herdr owned pane requires a context")
+	}
+	return s.backend.readOwned(ctx, target, lines)
+}
+
 func (b *Backend) readOwned(ctx context.Context, target OwnedPaneIdentity, lines int) (string, error) {
 	if lines < 0 {
 		return "", fmt.Errorf("herdr read lines must be non-negative")

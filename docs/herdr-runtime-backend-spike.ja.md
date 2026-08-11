@@ -1360,7 +1360,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   console detach 後も server を存続させ、最後の child close では止めず、active row / intent と foreign resource のない明示 repo-session shutdown（実装は #530。空状態確認と同じ save の shutdown intent 行で並行 mutation を fence する）だけを teardown とする。
 - herdr backend wave 2 は snapshot / list / wait、targeted content read、root coordinator、worktree / agent launch、focus、nudge、metadata、console / coordinator close、child cleanup を後続実装へ解禁する。
   issue / Project / plan / watcher の coordinator / agent launch は #528 の direct-launch 契約を使う。interactive TUI の launch は #530 まで read-only とする。
-  Codex child Plan Mode は #554 まで runtime session 作成前に拒否する。
+  Codex child Plan Mode は #554 の owned launcher で `fanout __codex-plan-tui` を起動し、controller と Codex TUI child の exact process chain を照合する。
   `--team` は #568 の peer 登録、plan preseed / cleanup、自己識別、宛先解決を使う。
   Herdr row を worktree-local `state.json` に複製せず、owning worktree の canonical row から peer registry と nudge 宛先を解決する。
   各 operation は保存済み identity と live snapshot を直前に再照合し、operation 固有の事後条件を検査する。
