@@ -431,6 +431,29 @@ func TestPaneRefFromStateNormalizesLegacyTmuxAndPreservesHerdrWorkspace(t *testi
 	}
 }
 
+func TestLockStateAfterHerdrPrecheckReacquiresCombinedLockWhenHerdrAppears(t *testing.T) {
+	projectRoot := t.TempDir()
+	runHerdrLifecycleGit(t, projectRoot, "init", "--initial-branch", "main")
+	recordLifecyclePane(t, projectRoot, state.Pane{
+		Parent: "423", IssueNum: 425, Backend: backend.Herdr,
+		PaneID: "w2:p1", HerdrWorkspaceID: "w2",
+	})
+	opts := Options{ProjectRoot: projectRoot, StatePath: state.Path(projectRoot)}
+
+	locked, err := lockStateAfterHerdrPrecheck(opts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
+		}
+	}()
+	if _, err := locked.HerdrIntents(projectRoot); err != nil {
+		t.Fatalf("Herdr row found after precheck without combined lock: %v", err)
+	}
+}
+
 func TestCloseHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 	projectRoot := t.TempDir()
 	runHerdrLifecycleGit(t, projectRoot, "init", "--initial-branch", "main")

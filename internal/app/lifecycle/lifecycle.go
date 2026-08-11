@@ -423,13 +423,7 @@ func lockStateOnly(mode string, opts Options, lg Logger) (*state.LockedStore, ex
 		lg.Err("%s: project_root is not a directory: %s (state=%s)", mode, emptyLabel(opts.ProjectRoot), opts.StatePath)
 		return nil, exitcode.Invocation
 	}
-	var locked *state.LockedStore
-	var err error
-	if stateFileHasHerdr(opts.StatePath) {
-		locked, err = state.LockProjectForLaunchAt(opts.ProjectRoot, opts.StatePath)
-	} else {
-		locked, err = state.Lock(opts.StatePath)
-	}
+	locked, err := lockStateAfterHerdrPrecheck(opts, stateFileHasHerdr(opts.StatePath))
 	if err != nil {
 		lg.Err("%s: %v", mode, err)
 		return nil, exitcode.Env
@@ -437,11 +431,29 @@ func lockStateOnly(mode string, opts Options, lg Logger) (*state.LockedStore, ex
 	return locked, exitcode.OK
 }
 
+func lockStateAfterHerdrPrecheck(opts Options, precheckedHerdr bool) (*state.LockedStore, error) {
+	if precheckedHerdr {
+		return state.LockProjectForLaunchAt(opts.ProjectRoot, opts.StatePath)
+	}
+	locked, err := state.Lock(opts.StatePath)
+	if err != nil || !storeHasHerdr(locked.Store) {
+		return locked, err
+	}
+	if err := locked.Unlock(); err != nil {
+		return nil, fmt.Errorf("unlock state before Herdr combined lock: %w", err)
+	}
+	return state.LockProjectForLaunchAt(opts.ProjectRoot, opts.StatePath)
+}
+
 func stateFileHasHerdr(path string) bool {
 	store, err := state.Load(path)
 	if err != nil {
 		return false
 	}
+	return storeHasHerdr(store)
+}
+
+func storeHasHerdr(store state.Store) bool {
 	for _, pane := range store.Panes {
 		if backend.NormalizeName(pane.Backend) == backend.Herdr {
 			return true

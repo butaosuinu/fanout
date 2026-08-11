@@ -570,8 +570,19 @@ func refreshExpiredReopenedHerdrCleanup(
 	if err != nil {
 		return intent, err
 	}
+	_, expectedHead, branchFound, err := herdrCleanupMetadata(
+		ctx,
+		opts.ProjectRoot,
+		intent.Parent,
+		intent.FullBranchRef,
+	)
+	if err != nil {
+		return intent, err
+	}
 	intent.Status = state.HerdrIntentPlanned
 	intent.CleanupPhase = phase
+	intent.ExpectedHead = expectedHead
+	intent.CleanupDeleteBranch = intent.CleanupDeleteBranch && branchFound
 	intent.ExpiresUnixMS = time.Now().Add(herdrCleanupTimeout).UnixMilli()
 	intent.Failure = ""
 	return intent, saveHerdrCleanupIntent(journal, intent)

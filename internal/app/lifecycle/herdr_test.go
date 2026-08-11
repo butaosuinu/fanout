@@ -716,7 +716,7 @@ func TestSavedHerdrCleanupRejectsChangedRuntimeIdentity(t *testing.T) {
 	}
 }
 
-func TestHerdrCleanupRestoresPlannedAfterDefiniteNonMutation(t *testing.T) {
+func TestHerdrCleanupDiscardsPlanAfterDefiniteNonMutation(t *testing.T) {
 	errorsByName := map[string]error{
 		"not-issued": herdrrun.MutationNotIssuedError{Cause: errors.New("dispatch unavailable")},
 		"rejected":   herdrrun.MutationRejectedError{Code: "rejected", Message: "request refused"},
@@ -735,14 +735,51 @@ func TestHerdrCleanupRestoresPlannedAfterDefiniteNonMutation(t *testing.T) {
 				if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
 					t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
 				}
-				assertHerdrCleanupIntentStatus(t, fixture, state.HerdrIntentPlanned, true)
+				assertHerdrCleanupIntentStatus(t, fixture, "", false)
 				assertHerdrStateRowPresent(t, fixture)
 				if runtime.phaseMutationCalls(phase) != 1 {
 					t.Fatalf("%s mutation calls = %d, want 1", phase, runtime.phaseMutationCalls(phase))
 				}
+
+				runtime.setMutationError(phase, nil)
+				if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+					t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+				}
+				if runtime.phaseMutationCalls(phase) != 2 {
+					t.Fatalf("retry %s mutation calls = %d, want 2", phase, runtime.phaseMutationCalls(phase))
+				}
+				assertHerdrLifecycleRemoved(t, fixture)
 			})
 		}
 	}
+}
+
+func TestHerdrCleanupReplansAfterRejectedRemoveAndHeadChange(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+		removeErr:   herdrrun.MutationRejectedError{Code: "dirty", Message: "request refused"},
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	assertHerdrCleanupIntentStatus(t, fixture, "", false)
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "retry.txt"), []byte("retry\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "retry.txt")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "retry cleanup")
+
+	runtime.removeErr = nil
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.removeCalls != 2 {
+		t.Fatalf("remove calls = %d, want 2", runtime.removeCalls)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
 }
 
 func TestHerdrCleanupLeavesIssuedAfterPostMutationObservationFailure(t *testing.T) {
@@ -823,7 +860,7 @@ func TestExpiredPlannedHerdrCleanupFinalizesAlreadyAbsentResources(t *testing.T)
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
-func TestExpiredReopenedHerdrCleanupPreservesReplacementIdentity(t *testing.T) {
+func TestExpiredReopenedHerdrCleanupPreservesReplacementIdentityAndRefreshesHead(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	runtime := prepareHerdrCleanupPhase(t, fixture, state.HerdrCleanupReopen)
 	runtime.removeErr = herdrrun.MutationNotIssuedError{Cause: errors.New("remove dispatch unavailable")}
@@ -834,6 +871,11 @@ func TestExpiredReopenedHerdrCleanupPreservesReplacementIdentity(t *testing.T) {
 	if runtime.openCalls != 1 || runtime.removeCalls != 1 {
 		t.Fatalf("first cleanup calls = open %d/remove %d, want 1/1", runtime.openCalls, runtime.removeCalls)
 	}
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "reopened-retry.txt"), []byte("retry\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "reopened-retry.txt")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "retry reopened cleanup")
 	expireSavedHerdrCleanupIntent(t, fixture)
 	runtime.removeErr = nil
 
