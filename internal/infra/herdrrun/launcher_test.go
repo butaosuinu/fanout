@@ -303,6 +303,23 @@ func TestOwnedCleanupMutationsClassifyPreDispatchFailures(t *testing.T) {
 	}
 }
 
+func TestOwnedCloseWorkspaceClassifiesRejection(t *testing.T) {
+	h := newOwnedHarness(t)
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if !slices.Equal(args, []string{"workspace", "close", "w2"}) {
+			return nil, fmt.Errorf("unexpected mutation args %v", args)
+		}
+		return []byte(`{"id":"cli:workspace:close","error":{"code":"workspace_not_empty","message":"workspace still has panes"}}`),
+			errors.New("exit status 1")
+	}
+
+	err := h.session.CloseWorkspace(context.Background(), "w2")
+	rejected, ok := errors.AsType[MutationRejectedError](err)
+	if !ok || rejected.Code != "workspace_not_empty" || rejected.Message != "workspace still has panes" {
+		t.Fatalf("rejection = (%+v,%t), want decoded workspace close rejection", rejected, ok)
+	}
+}
+
 func TestWaitForLaunchTokenRequiresExactInput(t *testing.T) {
 	intent := state.HerdrIntent{
 		ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli(),

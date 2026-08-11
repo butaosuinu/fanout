@@ -213,7 +213,12 @@ func (s *OwnedSession) CloseWorkspace(ctx context.Context, workspaceID string) e
 	if strings.TrimSpace(workspaceID) == "" {
 		return mutationNotIssued(fmt.Errorf("herdr workspace close requires a workspace id"))
 	}
-	_, err := s.runOwnedMutationCommand(ctx, commandTimeout, "workspace", "close", workspaceID)
+	out, err := s.runOwnedMutationCommand(ctx, commandTimeout, "workspace", "close", workspaceID)
+	if err != nil {
+		if rejected, ok := decodeMutationRejection(out, "cli:workspace:close"); ok {
+			return rejected
+		}
+	}
 	return err
 }
 
