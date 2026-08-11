@@ -15,6 +15,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
@@ -339,6 +340,55 @@ func TestPeekForeignHerdrPaneIs404WithoutRead(t *testing.T) {
 	)
 	if response.Code != http.StatusNotFound || read != 0 {
 		t.Fatalf("foreign Herdr peek = status:%d reads:%d, want 404/0", response.Code, read)
+	}
+}
+
+func TestPeekStaleHerdrPaneHeadIs404WithoutRead(t *testing.T) {
+	read := 0
+	srv := &Server{
+		poller:        &poller{},
+		ownsHerdrPane: func(sessionview.PaneView) bool { return false },
+		readHerdrPane: func(sessionview.PaneView, int) (string, error) {
+			read++
+			return "stale", nil
+		},
+	}
+	snap := peekSnapshot(true)
+	snap.Sessions[0].Panes[0].Backend = backend.Herdr
+	publishSnapshot(srv, snap)
+	response := httptest.NewRecorder()
+	srv.handlePeek(
+		response,
+		httptest.NewRequest(http.MethodHead, "/api/peek?pane=%255", nil),
+	)
+	if response.Code != http.StatusNotFound || read != 0 {
+		t.Fatalf("stale Herdr HEAD = status:%d reads:%d, want 404/0", response.Code, read)
+	}
+}
+
+func TestPeekHerdrIdentityLossDuringReadIs404(t *testing.T) {
+	for _, targetErr := range []error{
+		herdrrun.ErrOwnedIdentityMismatch,
+		herdrrun.ErrOwnedSessionNotFound,
+	} {
+		srv := &Server{
+			poller:        &poller{},
+			ownsHerdrPane: func(sessionview.PaneView) bool { return true },
+			readHerdrPane: func(sessionview.PaneView, int) (string, error) {
+				return "", fmt.Errorf("request-time binding: %w", targetErr)
+			},
+		}
+		snap := peekSnapshot(true)
+		snap.Sessions[0].Panes[0].Backend = backend.Herdr
+		publishSnapshot(srv, snap)
+		response := httptest.NewRecorder()
+		srv.handlePeek(
+			response,
+			httptest.NewRequest(http.MethodGet, "/api/peek?pane=%255", nil),
+		)
+		if response.Code != http.StatusNotFound {
+			t.Errorf("read error %v status = %d, want 404", targetErr, response.Code)
+		}
 	}
 }
 

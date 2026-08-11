@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
@@ -247,7 +249,7 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := s.readPane(pv, lines)
 	if err != nil {
-		peekError(w, http.StatusBadGateway, err.Error())
+		peekError(w, paneReadErrorStatus(pv, err), err.Error())
 		return
 	}
 	// A failed response write means the client went away; nothing to do here.
@@ -257,6 +259,15 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 		CapturedAt: time.Now().UTC().Format(time.RFC3339),
 		Output:     out,
 	})
+}
+
+func paneReadErrorStatus(pv sessionview.PaneView, err error) int {
+	if backend.NormalizeName(pv.Backend) == backend.Herdr &&
+		(errors.Is(err, herdrrun.ErrOwnedIdentityMismatch) ||
+			errors.Is(err, herdrrun.ErrOwnedSessionNotFound)) {
+		return http.StatusNotFound
+	}
+	return http.StatusBadGateway
 }
 
 func (s *Server) readPane(pv sessionview.PaneView, lines int) (string, error) {

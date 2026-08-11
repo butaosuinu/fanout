@@ -63,8 +63,8 @@ type Options struct {
 	// tmuxrun.ListLivePanes-backed check; tests inject a fake.
 	VerifyPane func(sessionview.PaneView) error
 	// Owned Herdr peek is read-only but uses persisted ownership identity rather
-	// than a tmux pane id. OwnsHerdrPane admits the current owned session;
-	// ReadHerdrPane performs the request-time immutable binding and read.
+	// than a tmux pane id. OwnsHerdrPane performs request-time immutable admission;
+	// ReadHerdrPane repeats that binding immediately before the read.
 	OwnsHerdrPane func(sessionview.PaneView) bool
 	ReadHerdrPane func(sessionview.PaneView, int) (string, error)
 }

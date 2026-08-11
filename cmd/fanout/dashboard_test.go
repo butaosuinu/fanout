@@ -34,7 +34,7 @@ func TestIsDashboardRequest(t *testing.T) {
 	}
 }
 
-func TestDashboardHerdrPeekAdmissionReopensOwnedSessionPerRequest(t *testing.T) {
+func TestDashboardHerdrPeekAdmissionReopensAndBindsOwnedSessionPerRequest(t *testing.T) {
 	ready := false
 	calls := 0
 	opener := func(root string) (*herdrrun.OwnedSession, error) {
@@ -50,12 +50,14 @@ func TestDashboardHerdrPeekAdmissionReopensOwnedSessionPerRequest(t *testing.T) 
 		HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "term-1",
 		HerdrSession: "owned", HerdrSocketPath: "/tmp/owned.sock", WorktreePath: "/repo",
 	}}
-	if owns(pane) {
+	admitted := owns(pane)
+	if admitted {
 		t.Fatal("missing owned session was admitted")
 	}
 	ready = true
-	if !owns(pane) || calls != 2 {
-		t.Fatalf("admission after bootstrap = %t calls=%d, want true/2", owns(pane), calls)
+	admitted = owns(pane)
+	if admitted || calls != 2 {
+		t.Fatalf("route-only admission = %t calls=%d, want false/2 without an exact backend binding", admitted, calls)
 	}
 }
 

@@ -73,7 +73,11 @@ func bindOwnedHerdrPane(
 	if err != nil {
 		return nil, backend.PaneRef{}, err
 	}
-	bound, err := owned.Backend().BindOwnedTarget(identity)
+	ownedBackend := owned.Backend()
+	if ownedBackend == nil {
+		return nil, backend.PaneRef{}, fmt.Errorf("%s", ownedHerdrUnavailable)
+	}
+	bound, err := ownedBackend.BindOwnedTarget(identity)
 	if err != nil {
 		return nil, backend.PaneRef{}, err
 	}

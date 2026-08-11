@@ -192,16 +192,19 @@ func dashboardHerdrPeekPorts(
 	projectRoot string,
 	open func(string) (*herdrrun.OwnedSession, error),
 ) (func(sessionview.PaneView) bool, func(sessionview.PaneView, int) (string, error)) {
-	owns := func(pv sessionview.PaneView) bool {
-		owned, err := open(projectRoot)
-		return err == nil && ownedHerdrActionDisabled(owned, pv.SavedPane) == ""
-	}
-	read := func(pv sessionview.PaneView, lines int) (string, error) {
+	bind := func(pv sessionview.PaneView) (*herdrrun.Backend, backend.PaneRef, error) {
 		owned, err := open(projectRoot)
 		if err != nil {
-			return "", err
+			return nil, backend.PaneRef{}, err
 		}
-		bound, ref, err := bindOwnedHerdrPane(owned, pv.SavedPane)
+		return bindOwnedHerdrPane(owned, pv.SavedPane)
+	}
+	owns := func(pv sessionview.PaneView) bool {
+		_, _, err := bind(pv)
+		return err == nil
+	}
+	read := func(pv sessionview.PaneView, lines int) (string, error) {
+		bound, ref, err := bind(pv)
 		if err != nil {
 			return "", err
 		}
