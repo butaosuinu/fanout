@@ -343,7 +343,7 @@ func TestRunMsgNudgeHerdrFailsClosedBeforePrompt(t *testing.T) {
 			}
 			deps := herdrNudgeDeps(initial, locked, runtime)
 			if test.lockErr != nil {
-				deps.ReadLockedState = func(func(state.Store) error) error { return test.lockErr }
+				deps.ReadLockedState = func(context.Context, func(state.Store) error) error { return test.lockErr }
 			}
 			var out, errb strings.Builder
 			code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
@@ -351,6 +351,34 @@ func TestRunMsgNudgeHerdrFailsClosedBeforePrompt(t *testing.T) {
 				t.Fatalf("code=%d nudged=%v stderr=%q, want %q", code, runtime.nudged, errb.String(), test.want)
 			}
 		})
+	}
+}
+
+func TestRecheckHerdrNudgeStateHonorsContext(t *testing.T) {
+	store, runtime := herdrNudgeFixture("working", true)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	deps := herdrNudgeDeps(store, store, runtime)
+	deps.ReadLockedState = func(ctx context.Context, _ func(state.Store) error) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if _, _, err := recheckHerdrNudgeState(ctx, store.Panes[0], deps); !errors.Is(err, context.Canceled) {
+		t.Fatalf("recheckHerdrNudgeState() error = %v, want context canceled", err)
+	}
+}
+
+func TestRunMsgNudgeHerdrRechecksRuntimeAfterStateLockWait(t *testing.T) {
+	store, runtime := herdrNudgeFixture("working", true)
+	deps := herdrNudgeDeps(store, store, runtime)
+	deps.ReadLockedState = func(_ context.Context, read func(state.Store) error) error {
+		runtime.panes[0].WorktreePath = "/repo/reused"
+		return read(store)
+	}
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.nudged || !strings.Contains(errb.String(), "provenance changed") {
+		t.Fatalf("code=%d nudged=%v stderr=%q", code, runtime.nudged, errb.String())
 	}
 }
 
@@ -417,7 +445,7 @@ func herdrNudgeDeps(initial, locked state.Store, runtime *fakeHerdrNudger) Deps 
 	return Deps{
 		LoadState:       func() (state.Store, error) { return initial, nil },
 		OpenHerdr:       func(context.Context) (HerdrNudger, error) { return runtime, nil },
-		ReadLockedState: func(read func(state.Store) error) error { return read(locked) },
+		ReadLockedState: func(_ context.Context, read func(state.Store) error) error { return read(locked) },
 	}
 }
 

@@ -210,6 +210,14 @@ func Lock(path string) (*LockedStore, error) {
 	return lockStatePath(context.Background(), path, true)
 }
 
+// LockContext acquires one state lock until ctx expires.
+func LockContext(ctx context.Context, path string) (*LockedStore, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("lock fanout state requires a context")
+	}
+	return lockStatePath(ctx, path, false)
+}
+
 func lockStatePath(ctx context.Context, path string, blocking bool) (*LockedStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create fanout state directory: %w", err)

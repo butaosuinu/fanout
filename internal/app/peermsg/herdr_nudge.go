@@ -55,12 +55,14 @@ func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (HerdrNu
 	if runtime == nil {
 		return nil, state.Pane{}, "", fmt.Errorf("herdr nudge runtime is unavailable")
 	}
-	err = verifyHerdrNudgeRuntime(ctx, runtime, pane)
+	latest, latestState, err := recheckHerdrNudgeState(ctx, pane, deps)
 	if err != nil {
-		return nil, state.Pane{}, "", err
+		return nil, latest, latestState, err
 	}
-	latest, latestState, err := recheckHerdrNudgeState(pane, deps)
-	return runtime, latest, latestState, err
+	if err := verifyHerdrNudgeRuntime(ctx, runtime, latest); err != nil {
+		return nil, latest, latestState, err
+	}
+	return runtime, latest, latestState, nil
 }
 
 func verifyHerdrNudgeRuntime(ctx context.Context, runtime HerdrNudger, pane state.Pane) error {
@@ -107,9 +109,9 @@ func herdrNudgePaneMatches(recorded state.Pane, current backend.LivePane) bool {
 	return sessionview.HerdrPaneMatches(recorded, current)
 }
 
-func recheckHerdrNudgeState(recorded state.Pane, deps Deps) (state.Pane, string, error) {
+func recheckHerdrNudgeState(ctx context.Context, recorded state.Pane, deps Deps) (state.Pane, string, error) {
 	var latest state.Pane
-	err := deps.ReadLockedState(func(store state.Store) error {
+	err := deps.ReadLockedState(ctx, func(store state.Store) error {
 		var matches int
 		latest, matches = uniqueNudgeRecipient(
 			store, recorded.Parent, recorded.IssueNum, recorded.TaskID,

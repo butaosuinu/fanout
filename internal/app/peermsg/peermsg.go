@@ -63,9 +63,9 @@ type Deps struct {
 	ListLive func() ([]backend.LivePane, error)
 	SendLine func(backend.PaneRef, string) error
 	// OpenHerdr opens an existing owned Herdr runtime. ReadLockedState performs
-	// the final telemetry re-read under the owning state lock.
+	// the final telemetry re-read under the owning state lock and call deadline.
 	OpenHerdr       func(context.Context) (HerdrNudger, error)
-	ReadLockedState func(func(state.Store) error) error
+	ReadLockedState func(context.Context, func(state.Store) error) error
 	// LoadState resolves and loads the owner checkout's .fanout/state.json
 	// read-only — the recipient's recorded pane id lives there, not in the
 	// messages DB.
@@ -127,12 +127,12 @@ func defaultLoadState() (state.Store, error) {
 	return state.Load(statePath)
 }
 
-func defaultReadLockedState(read func(state.Store) error) error {
+func defaultReadLockedState(ctx context.Context, read func(state.Store) error) error {
 	statePath, err := defaultStatePath()
 	if err != nil {
 		return err
 	}
-	locked, err := state.Lock(statePath)
+	locked, err := state.LockContext(ctx, statePath)
 	if err != nil {
 		return err
 	}
