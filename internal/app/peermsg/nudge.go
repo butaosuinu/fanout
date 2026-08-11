@@ -69,29 +69,41 @@ func runMsgNudge(req *Request, parent string, deps Deps, lg *log.Logger) exitcod
 		return exitcode.Invocation
 	}
 	// Plan recipients are addressed by task id (state rows carry IssueNum 0),
-	// so look them up by task id under a plan parent; issue/Project recipients
-	// keep the numeric lookup.
-	var pane state.Pane
-	var found bool
-	if team.IsPlanParent(parent) {
-		pane, found = st.FindTask(parent, req.ToRaw)
-	} else {
-		pane, found = st.Find(parent, req.To)
-	}
-
-	report := msgNudgeReport{Target: req.To, PaneID: pane.PaneID}
+	// while issue/Project recipients use the numeric key. A duplicate logical
+	// recipient is ambiguous even when one row has a unique runtime binding.
+	pane, matches := uniqueNudgeRecipient(st, parent, req.To, req.ToRaw)
+	report := msgNudgeReport{Target: req.To}
 	if team.IsPlanParent(parent) {
 		report.TargetTask = req.ToRaw
 	}
 	switch {
-	case !found:
+	case matches == 0:
 		report.Reason = "recipient is not recorded in fanout state"
+	case matches != 1:
+		report.Reason = "recipient identity is ambiguous in fanout state"
 	case pane.PaneID == "":
 		report.Reason = "recipient has no recorded pane"
 	default:
+		report.PaneID = pane.PaneID
 		report.AgentState, report.Reason, report.Nudged = deliverRuntimeNudge(pane, deps)
 	}
 	return writeMsgNudgeResult(req, parent, report, lg)
+}
+
+func uniqueNudgeRecipient(store state.Store, parent string, issueNum int, taskID string) (state.Pane, int) {
+	var matched state.Pane
+	count := 0
+	for _, pane := range store.PanesForParent(parent) {
+		isMatch := pane.IssueNum == issueNum
+		if team.IsPlanParent(parent) {
+			isMatch = taskID != "" && pane.TaskID == taskID
+		}
+		if isMatch {
+			matched = pane
+			count++
+		}
+	}
+	return matched, count
 }
 
 func deliverRuntimeNudge(pane state.Pane, deps Deps) (agentState, reason string, nudged bool) {

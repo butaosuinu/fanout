@@ -110,9 +110,13 @@ func herdrNudgePaneMatches(recorded state.Pane, current backend.LivePane) bool {
 func recheckHerdrNudgeState(recorded state.Pane, deps Deps) (state.Pane, string, error) {
 	var latest state.Pane
 	err := deps.ReadLockedState(func(store state.Store) error {
-		var found bool
-		latest, found = uniqueHerdrNudgeRow(store, recorded.EmitterRowKey)
-		if !found || !sameHerdrNudgeBinding(recorded, latest) {
+		var matches int
+		latest, matches = uniqueNudgeRecipient(
+			store, recorded.Parent, recorded.IssueNum, recorded.TaskID,
+		)
+		byRow, rowFound := uniqueHerdrNudgeRow(store, recorded.EmitterRowKey)
+		if matches != 1 || !rowFound || !sameHerdrNudgeBinding(latest, byRow) ||
+			!sameHerdrNudgeBinding(recorded, latest) {
 			return fmt.Errorf("recipient launch binding changed before prompt")
 		}
 		if !latest.StateRefinement {

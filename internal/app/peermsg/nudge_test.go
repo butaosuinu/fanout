@@ -46,6 +46,10 @@ func TestRunMsgNudge(t *testing.T) {
 	withWorktree := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "claude", WorktreePath: "/wt/recipient"}}}
 	withKey := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "claude", ShellKey: "key-five", WorktreePath: "/wt/recipient"}}}
 	withOpencode := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "opencode", WorktreePath: "/wt/recipient"}}}
+	duplicateRecipient := state.Store{SchemaVersion: 1, Panes: []state.Pane{
+		{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "claude", WorktreePath: "/wt/recipient"},
+		{Parent: "0068", IssueNum: 71, PaneID: "%6", Agent: "claude", WorktreePath: "/wt/stale"},
+	}}
 	noPaneID := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 72, PaneID: ""}}}
 	lp := func(id, path, agentState string) backend.LivePane {
 		state, _ := backend.ParseAgentState(agentState)
@@ -148,6 +152,10 @@ func TestRunMsgNudge(t *testing.T) {
 		{
 			name: "recipient absent from state is a no-op success", req: Request{Verb: "nudge", To: 99}, store: withWorktree,
 			wantCode: exitcode.OK, wantStderr: "not recorded",
+		},
+		{
+			name: "duplicate logical recipient is a no-op success", req: Request{Verb: "nudge", To: 71}, store: duplicateRecipient,
+			wantCode: exitcode.OK, wantStderr: "identity is ambiguous",
 		},
 		{
 			name: "recipient without a recorded pane is a no-op success", req: Request{Verb: "nudge", To: 72}, store: noPaneID,
@@ -302,17 +310,19 @@ func TestRunMsgNudgeHerdrRequiresFreshRefinedState(t *testing.T) {
 
 func TestRunMsgNudgeHerdrFailsClosedBeforePrompt(t *testing.T) {
 	for _, test := range []struct {
-		name       string
-		mutateLive func(*backend.LivePane)
-		mutateProc func(*herdrrun.PaneProcessInfo)
-		mutateRow  func(*state.Pane)
-		lockErr    error
-		want       string
+		name        string
+		mutateLive  func(*backend.LivePane)
+		mutateProc  func(*herdrrun.PaneProcessInfo)
+		mutateRow   func(*state.Pane)
+		mutateStore func(*state.Store)
+		lockErr     error
+		want        string
 	}{
 		{name: "worktree changed", mutateLive: func(p *backend.LivePane) { p.WorktreePath = "/repo/other" }, want: "provenance changed"},
 		{name: "terminal changed", mutateLive: func(p *backend.LivePane) { p.TerminalID = "term-new" }, want: "identity or worktree"},
 		{name: "process changed", mutateProc: func(p *herdrrun.PaneProcessInfo) { p.ForegroundProcesses[0].Argv = []string{"other"} }, want: "process identity"},
 		{name: "emitter generation changed", mutateRow: func(p *state.Pane) { p.EmitterNonce = strings.Repeat("c", 32) }, want: "launch binding changed"},
+		{name: "recipient duplicated", mutateStore: appendDuplicateNudgeRecipient, want: "launch binding changed"},
 		{name: "latest state blocked", mutateRow: func(p *state.Pane) { p.ReportedState = "blocked" }, want: "not nudgeable"},
 		{name: "state lock failed", lockErr: errors.New("lock failed"), want: "lock failed"},
 	} {
@@ -328,6 +338,9 @@ func TestRunMsgNudgeHerdrFailsClosedBeforePrompt(t *testing.T) {
 			if test.mutateRow != nil {
 				test.mutateRow(&locked.Panes[0])
 			}
+			if test.mutateStore != nil {
+				test.mutateStore(&locked)
+			}
 			deps := herdrNudgeDeps(initial, locked, runtime)
 			if test.lockErr != nil {
 				deps.ReadLockedState = func(func(state.Store) error) error { return test.lockErr }
@@ -338,6 +351,24 @@ func TestRunMsgNudgeHerdrFailsClosedBeforePrompt(t *testing.T) {
 				t.Fatalf("code=%d nudged=%v stderr=%q, want %q", code, runtime.nudged, errb.String(), test.want)
 			}
 		})
+	}
+}
+
+func appendDuplicateNudgeRecipient(store *state.Store) {
+	duplicate := store.Panes[0]
+	duplicate.PaneID = "w1:p2"
+	duplicate.HerdrTerminalID = "term-duplicate"
+	duplicate.EmitterRowKey = "issue:68:71:duplicate"
+	store.Panes = append(store.Panes, duplicate)
+}
+
+func TestUniqueNudgeRecipientRejectsDuplicatePlanTask(t *testing.T) {
+	store := state.Store{SchemaVersion: 1, Panes: []state.Pane{
+		{Parent: "plan:demo", TaskID: "task-a", PaneID: "w1:p1"},
+		{Parent: "plan:demo", TaskID: "task-a", PaneID: "w1:p2"},
+	}}
+	if _, matches := uniqueNudgeRecipient(store, "plan:demo", 0, "task-a"); matches != 2 {
+		t.Fatalf("uniqueNudgeRecipient() matches = %d, want 2", matches)
 	}
 }
 
