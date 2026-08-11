@@ -392,6 +392,56 @@ func TestHerdrCloseReopensCheckoutOnlyStateWithMultiPaneCoordinator(t *testing.T
 	}
 }
 
+func TestHerdrCloseReusesIssueCoordinatorAcrossLinkedPlanOwners(t *testing.T) {
+	base := newHerdrLifecycleFixture(t)
+	secondRoot := filepath.Join(t.TempDir(), "second-plan")
+	runHerdrLifecycleGit(t, base.projectRoot, "worktree", "add", "-b", "plan-second-owner", secondRoot, "HEAD")
+	childPath := filepath.Join(secondRoot, ".fanout", "worktrees", "shared-child")
+	if err := os.MkdirAll(filepath.Dir(childPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	branch := "fanout/shared-child"
+	runHerdrLifecycleGit(t, secondRoot, "worktree", "add", "-b", branch, childPath)
+	identity, err := worktree.ResolveRepoIdentity(context.Background(), secondRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := herdrLifecycleWorkspace("w-shared-child", "shared-child-label", childPath, identity.RepoKey, identity.RepoRoot)
+	pane := state.Pane{
+		Parent: "plan:second", RuntimeParent: "425", TaskID: "shared-child", Slug: "shared-child",
+		Backend: backend.Herdr, PaneID: workspace.Pane.Pane,
+		HerdrWorkspaceID: workspace.WorkspaceID, HerdrWorkspaceLabel: workspace.Label,
+		HerdrTerminalID: workspace.TerminalID, HerdrRepoKey: identity.RepoKey,
+		HerdrRepoRoot: identity.RepoRoot, HerdrSession: "fanout-owned",
+		HerdrSocketPath: "/tmp/fanout-owned.sock", BranchName: branch,
+		BaseBranch: "main", WorktreePath: childPath,
+	}
+	recordLifecyclePane(t, secondRoot, pane)
+	fixture := herdrLifecycleFixture{
+		projectRoot: secondRoot, worktreePath: childPath, branch: branch,
+		pane: pane, workspace: workspace,
+	}
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", base.projectRoot, identity.RepoKey, identity.RepoRoot,
+	)
+	firstPlan := pane
+	firstPlan.Parent = "plan:first"
+	recordLifecycleCoordinatorIntent(t, base.projectRoot, firstPlan, coordinator)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: secondRoot,
+		workspaces:  []herdrrun.WorkspaceObservation{coordinator},
+	}
+
+	lg := &captureLogger{}
+	if got := CloseTask(herdrLifecycleOptions(fixture, runtime), pane.Parent, pane.TaskID, lg); got != exitcode.OK {
+		t.Fatalf("CloseTask() = %d, want %d; errors=%v", got, exitcode.OK, lg.errors)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+	if runtime.openCalls != 1 || runtime.removeCalls != 1 {
+		t.Fatalf("shared coordinator calls = open %d/remove %d, want 1/1", runtime.openCalls, runtime.removeCalls)
+	}
+}
+
 func TestFindHerdrCoordinatorIntentPreservesPlanOwnerScope(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	target := fixture.pane

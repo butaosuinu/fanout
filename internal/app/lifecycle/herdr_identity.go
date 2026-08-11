@@ -211,7 +211,7 @@ func findHerdrCoordinatorIntent(
 	projectRoot string,
 	target state.Pane,
 ) (state.HerdrIntent, error) {
-	id, ownerRoot, err := herdrCoordinatorIntentIdentity(projectRoot, target)
+	id, runtimeOwnerRoot, err := herdrCoordinatorIntentIdentity(projectRoot, target)
 	if err != nil {
 		return state.HerdrIntent{}, err
 	}
@@ -223,7 +223,7 @@ func findHerdrCoordinatorIntent(
 	if !found {
 		return state.HerdrIntent{}, fmt.Errorf("saved Herdr coordinator intent is not recorded")
 	}
-	if !herdrCoordinatorIntentMatches(intent, target, ownerRoot) {
+	if !herdrCoordinatorIntentMatches(intent, target, runtimeOwnerRoot, projectRoot) {
 		return state.HerdrIntent{}, fmt.Errorf("saved Herdr coordinator intent does not match the child row")
 	}
 	return intent, nil
@@ -235,26 +235,33 @@ func herdrCoordinatorIntentIdentity(projectRoot string, target state.Pane) (stri
 	if err != nil {
 		return "", "", err
 	}
-	ownerRoot, err := state.HerdrOwnerProjectRoot(target.Parent, projectRoot)
-	if err != nil {
-		return "", "", err
-	}
 	issueNum := 0
 	if target.RuntimeParent == "@manual" || target.RuntimeParent == watcherStandaloneParent {
 		issueNum = target.IssueNum
 	}
 	id, err := state.HerdrCoordinatorIntentID(target.RuntimeParent, runtimeOwnerRoot, issueNum)
-	return id, ownerRoot, err
+	return id, runtimeOwnerRoot, err
 }
 
-func herdrCoordinatorIntentMatches(intent state.HerdrIntent, target state.Pane, ownerRoot string) bool {
+func herdrCoordinatorIntentMatches(
+	intent state.HerdrIntent,
+	target state.Pane,
+	runtimeOwnerRoot, projectRoot string,
+) bool {
 	return intent.Kind == state.HerdrIntentCoordinator &&
 		intent.Status == state.HerdrIntentRealized &&
-		intent.Parent == target.Parent &&
 		intent.RuntimeParent == target.RuntimeParent &&
-		intent.OwnerProjectRoot == ownerRoot &&
+		savedHerdrCoordinatorPathMatches(runtimeOwnerRoot, intent.WorktreePath, projectRoot) &&
 		intent.Session == target.HerdrSession &&
 		intent.SocketPath == target.HerdrSocketPath
+}
+
+func savedHerdrCoordinatorPathMatches(ownerProjectRoot, savedPath, projectRoot string) bool {
+	savedPath = filepath.Clean(savedPath)
+	if !filepath.IsAbs(savedPath) {
+		return false
+	}
+	return ownerProjectRoot == "" || savedPath == filepath.Clean(projectRoot)
 }
 
 func observeHerdrCoordinator(
