@@ -535,7 +535,7 @@ func TestReopenedOwnedBackendAdmitsPinnedBinary(t *testing.T) {
 	admitted := binaryAdmission{
 		path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion,
 	}
-	backend := newReopenedOwnedBackend(h.layout, marker, admitted)
+	backend := newReopenedOwnedBackend(h.layout, marker, admitted, nil)
 	backend.output = h.fake.output
 	probed, err := backend.probeOwned(context.Background(), *backend.owner)
 	if err != nil {

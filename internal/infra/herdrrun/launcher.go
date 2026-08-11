@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/errs"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -98,7 +99,7 @@ func workloadExecEnvironment(
 	environment []string,
 ) []string {
 	if intent.Launch.Agent != "" {
-		return environment
+		return bindHerdrEmitterEnvironment(intent, environment)
 	}
 	// The capsule rejects caller-supplied HERDR_* values. An interactive shell
 	// still needs its runtime context, so restore only the route identity that
@@ -110,6 +111,29 @@ func workloadExecEnvironment(
 		workspaceIDEnv+"="+request.workspaceID,
 		paneIDEnv+"="+request.paneID,
 	)
+}
+
+func bindHerdrEmitterEnvironment(intent state.HerdrIntent, environment []string) []string {
+	launch := intent.Launch
+	if launch == nil || launch.EmitterNonce == "" {
+		return environment
+	}
+	bindings := map[string]string{
+		telemetry.RowKeyEnv: intent.ID, telemetry.LaunchNonceEnv: launch.Nonce,
+		telemetry.EmitterNonceEnv: launch.EmitterNonce, telemetry.BackendEnv: "herdr",
+		telemetry.SessionEnv: intent.Session, telemetry.SocketPathEnv: intent.SocketPath,
+		telemetry.WorkspaceIDEnv: intent.Resource.WorkspaceID,
+		telemetry.PaneIDEnv:      intent.Resource.PaneID,
+		telemetry.TerminalIDEnv:  intent.Resource.TerminalID,
+		telemetry.AgentEnv:       launch.Agent, telemetry.AgentIDEnv: launch.AgentName,
+	}
+	for i, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		if value, ok := bindings[name]; ok {
+			environment[i] = name + "=" + value
+		}
+	}
+	return environment
 }
 
 func holdCoordinatorLauncher(in io.Reader, errOut io.Writer) int {

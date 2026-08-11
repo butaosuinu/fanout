@@ -41,15 +41,25 @@ func (l *Launcher) attachHerdr(req Request, targetPath string) (Result, bool) {
 			locked, l.Info.ProjectRoot, intent, err,
 		))
 	}
-	if err := finalizeHerdrPane(locked, l.Info.ProjectRoot, intent, func(latest state.HerdrIntent) (state.Pane, error) {
-		pane := herdrAttachedStatePane(req, latest, live)
-		applyHerdrLaunchTelemetry(&pane, latest)
-		return pane, nil
-	}); err != nil {
+	if err := finalizeHerdrAttachedAgent(req, locked, l.Info.ProjectRoot, intent, live); err != nil {
 		return l.failHerdr(req, "finalize attached agent", err)
 	}
 	l.Log.Ok("%s: pane %s attached to %s", paneLogLabel(req), live.Ref.Pane, targetPath)
 	return Result{PaneID: live.Ref.Pane, Notice: launchNotice(req)}, true
+}
+
+func finalizeHerdrAttachedAgent(
+	req Request,
+	locked *state.LockedStore,
+	projectRoot string,
+	intent state.HerdrIntent,
+	live backend.LivePane,
+) error {
+	return finalizeHerdrPane(locked, projectRoot, intent, func(latest state.HerdrIntent) (state.Pane, error) {
+		pane := herdrAttachedStatePane(req, latest, live)
+		applyHerdrLaunchTelemetry(&pane, latest)
+		return pane, nil
+	})
 }
 
 func herdrAttachedStatePane(req Request, intent state.HerdrIntent, live backend.LivePane) state.Pane {

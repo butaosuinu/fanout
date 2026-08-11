@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -61,6 +62,42 @@ func TestWorkloadExecEnvironmentRestoresOnlyValidatedShellRoute(t *testing.T) {
 	agentEnv := workloadExecEnvironment(request, agentIntent, append([]string(nil), base...))
 	if !slices.Equal(agentEnv, base) {
 		t.Fatalf("agent environment = %q, want control-plane-free %q", agentEnv, base)
+	}
+}
+
+func TestWorkloadExecEnvironmentBindsEmitterToRealizedCoordinator(t *testing.T) {
+	intent := state.HerdrIntent{
+		ID: "coordinator:manual:/repo:530", Session: "owned-session", SocketPath: "/owned/herdr.sock",
+		Resource: state.HerdrResource{
+			WorkspaceID: "w1", PaneID: "w1:p1", TerminalID: "terminal-1",
+		},
+		Launch: &state.HerdrLaunch{
+			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
+			Agent: "claude", AgentName: "fanout-agent",
+		},
+	}
+	environment := []string{
+		telemetry.RowKeyEnv + "=", telemetry.LaunchNonceEnv + "=",
+		telemetry.EmitterNonceEnv + "=", telemetry.BackendEnv + "=",
+		telemetry.SessionEnv + "=", telemetry.SocketPathEnv + "=",
+		telemetry.WorkspaceIDEnv + "=", telemetry.PaneIDEnv + "=",
+		telemetry.TerminalIDEnv + "=", telemetry.AgentEnv + "=",
+		telemetry.AgentIDEnv + "=", "PATH=/bin",
+	}
+	got := workloadExecEnvironment(paneLauncherRequest{}, intent, environment)
+	want := map[string]string{
+		telemetry.RowKeyEnv: intent.ID, telemetry.LaunchNonceEnv: intent.Launch.Nonce,
+		telemetry.EmitterNonceEnv: intent.Launch.EmitterNonce, telemetry.BackendEnv: "herdr",
+		telemetry.SessionEnv: intent.Session, telemetry.SocketPathEnv: intent.SocketPath,
+		telemetry.WorkspaceIDEnv: intent.Resource.WorkspaceID,
+		telemetry.PaneIDEnv:      intent.Resource.PaneID, telemetry.TerminalIDEnv: intent.Resource.TerminalID,
+		telemetry.AgentEnv: intent.Launch.Agent, telemetry.AgentIDEnv: intent.Launch.AgentName,
+	}
+	for _, entry := range got {
+		name, value, _ := strings.Cut(entry, "=")
+		if expected, ok := want[name]; ok && value != expected {
+			t.Fatalf("environment[%s] = %q, want %q", name, value, expected)
+		}
 	}
 }
 
