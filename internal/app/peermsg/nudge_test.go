@@ -298,6 +298,18 @@ func TestRunMsgNudgeHerdrUsesTheTmuxStateAllowlist(t *testing.T) {
 	}
 }
 
+func TestRunMsgNudgeHerdrAllowsUnreportedAgentSession(t *testing.T) {
+	store, runtime := herdrNudgeFixture("idle", true)
+	store.Panes[0].HerdrAgentSession = nil
+	runtime.panes[0].AgentSession = nil
+	deps := herdrNudgeDeps(store, store, runtime)
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.nudgeCalls != 1 || errb.Len() != 0 {
+		t.Fatalf("code=%d calls=%d stderr=%q", code, runtime.nudgeCalls, errb.String())
+	}
+}
+
 func TestRunMsgNudgeHerdrRequiresFreshRefinedState(t *testing.T) {
 	store, runtime := herdrNudgeFixture("running", false)
 	deps := herdrNudgeDeps(store, store, runtime)

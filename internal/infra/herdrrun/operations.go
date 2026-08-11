@@ -273,14 +273,14 @@ func validNudgeTarget(target NudgeTarget, admission ownedAdmission) bool {
 		target.SessionID == admission.marker.Session,
 		target.SocketPath == admission.marker.SocketPath,
 		target.Ref.Workspace != "", target.Ref.Pane != "",
-		target.TerminalID != "", target.AgentID != "", target.AgentSession != nil,
+		target.TerminalID != "", target.AgentID != "",
 	}
 	for _, ok := range checks {
 		if !ok {
 			return false
 		}
 	}
-	return target.AgentSession.Valid()
+	return target.AgentSession == nil || target.AgentSession.Valid()
 }
 
 func validateAgentPromptResponse(data []byte, target OwnedPaneIdentity) error {
@@ -303,12 +303,23 @@ func validateAgentPromptResponse(data []byte, target OwnedPaneIdentity) error {
 	if agentID != target.AgentID {
 		return fmt.Errorf("%w: prompted agent name changed", ErrOwnedIdentityMismatch)
 	}
-	ref, present, err := parseAgentSession(agent.AgentSession)
-	if err != nil || !present || target.AgentSession == nil ||
-		ref != (agentSessionKey{source: target.AgentSession.Source, agent: target.AgentSession.Agent, kind: target.AgentSession.Kind, value: target.AgentSession.Value}) {
+	if !agentPromptSessionMatches(agent.AgentSession, target.AgentSession) {
 		return fmt.Errorf("%w: prompted agent session changed", ErrOwnedIdentityMismatch)
 	}
 	return nil
+}
+
+func agentPromptSessionMatches(current *agentSessionJSON, expected *corebackend.AgentSessionRef) bool {
+	ref, present, err := parseAgentSession(current)
+	if err != nil {
+		return false
+	}
+	if expected == nil {
+		return !present
+	}
+	return present && ref == (agentSessionKey{
+		source: expected.Source, agent: expected.Agent, kind: expected.Kind, value: expected.Value,
+	})
 }
 
 func (b *Backend) focusCore(ref corebackend.PaneRef) error {

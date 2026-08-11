@@ -398,15 +398,20 @@ func agentPromptResponse(target OwnedPaneIdentity, mutate func(*agentJSON)) []by
 	focused := false
 	revision := uint64(3)
 	name := target.AgentID
-	agentName := target.AgentSession.Agent
-	source := target.AgentSession.Source
-	kind := target.AgentSession.Kind
-	value := target.AgentSession.Value
+	agentName := ""
+	var session *agentSessionJSON
+	if target.AgentSession != nil {
+		agentName = target.AgentSession.Agent
+		source := target.AgentSession.Source
+		kind := target.AgentSession.Kind
+		value := target.AgentSession.Value
+		session = &agentSessionJSON{Source: &source, Agent: &agentName, Kind: &kind, Value: &value}
+	}
 	agent := agentJSON{
 		TerminalID: target.TerminalID, Name: &name, Agent: &agentName, AgentStatus: "working",
 		WorkspaceID: target.Ref.Workspace, TabID: "w2:t1", PaneID: target.Ref.Pane,
 		Focused: &focused, Revision: &revision,
-		AgentSession: &agentSessionJSON{Source: &source, Agent: &agentName, Kind: &kind, Value: &value},
+		AgentSession: session,
 	}
 	if mutate != nil {
 		mutate(&agent)
@@ -418,6 +423,25 @@ func agentPromptResponse(target OwnedPaneIdentity, mutate func(*agentJSON)) []by
 		panic(err)
 	}
 	return data
+}
+
+func TestOwnedSessionNudgeAllowsUnreportedAgentSession(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	target.AgentSession = nil
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if !slices.Equal(args, []string{"agent", "prompt", target.Ref.Pane, "nudge"}) {
+			return nil, fmt.Errorf("unexpected mutation args %v", args)
+		}
+		return agentPromptResponse(target, nil), nil
+	}
+	nudgeTarget := NudgeTarget{
+		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
+		TerminalID: target.TerminalID, AgentID: target.AgentID,
+	}
+	if err := h.session.Nudge(context.Background(), nudgeTarget, "nudge"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {

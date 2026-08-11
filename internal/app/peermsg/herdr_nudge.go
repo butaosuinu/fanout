@@ -184,7 +184,10 @@ func sameHerdrNudgeBinding(left, right state.Pane) bool {
 }
 
 func sameAgentSession(left, right *backend.AgentSessionRef) bool {
-	return left != nil && right != nil && *left == *right
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func herdrNudgeTarget(pane state.Pane) herdrrun.NudgeTarget {
