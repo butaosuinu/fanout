@@ -137,3 +137,21 @@ func TestHerdrCodexPlanCaptureTargetRequiresExactLiveIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestReadHerdrCodexPlanVisibleScreenSelectsCurrentViewport(t *testing.T) {
+	ref := backend.PaneRef{Backend: backend.Herdr, Workspace: "workspace-1", Pane: "workspace-1:pane-1"}
+	requestedLines := -1
+	screen, err := readHerdrCodexPlanVisibleScreen(func(gotRef backend.PaneRef, lines int) (string, error) {
+		if gotRef != ref {
+			t.Fatalf("read ref = %+v, want %+v", gotRef, ref)
+		}
+		requestedLines = lines
+		return "current viewport", nil
+	}, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if screen != "current viewport" || requestedLines != 0 {
+		t.Fatalf("read = %q with lines %d, want visible viewport", screen, requestedLines)
+	}
+}

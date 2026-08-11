@@ -928,6 +928,8 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 		switch {
 		case slices.Equal(args, []string{"pane", "read", "w2:p1", "--source", "recent-unwrapped", "--lines", "2", "--format", "text"}):
 			return []byte("one\ntwo\n"), nil
+		case slices.Equal(args, []string{"pane", "read", "w2:p1", "--source", "visible", "--format", "text"}):
+			return []byte("current viewport\n"), nil
 		case slices.Equal(args, []string{"agent", "prompt", "w2:p1", "hello"}):
 			return agentPromptResponse(target, nil), nil
 		case slices.Equal(args, []string{"agent", "focus", target.Ref.Pane}):
@@ -960,6 +962,10 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 	content, err := bound.Read(target.Ref, 2)
 	if err != nil || content != "one\ntwo\n" {
 		t.Fatalf("Read() = %q, %v", content, err)
+	}
+	content, err = bound.Read(target.Ref, 0)
+	if err != nil || content != "current viewport\n" {
+		t.Fatalf("Read(visible) = %q, %v", content, err)
 	}
 	if err := bound.SendLine(target.Ref, "hello"); err != nil {
 		t.Fatal(err)

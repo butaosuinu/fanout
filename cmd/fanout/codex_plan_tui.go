@@ -138,7 +138,11 @@ func captureHerdrCodexPlanScreen(owned *herdrrun.OwnedSession, base herdrrun.Own
 	if err != nil {
 		return "", err
 	}
-	return bound.Read(target.Ref, codexPlanTUIScreenCaptureLines)
+	return readHerdrCodexPlanVisibleScreen(bound.Read, target.Ref)
+}
+
+func readHerdrCodexPlanVisibleScreen(read func(backend.PaneRef, int) (string, error), ref backend.PaneRef) (string, error) {
+	return read(ref, 0)
 }
 
 func herdrCodexPlanCaptureTarget(base herdrrun.OwnedPaneIdentity, panes []backend.LivePane) (herdrrun.OwnedPaneIdentity, error) {
