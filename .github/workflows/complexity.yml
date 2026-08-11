@@ -168,7 +168,7 @@ jobs:
 
       - name: Upload SARIF
         if: steps.measure.outputs.violations != ''
-        uses: github/codeql-action/upload-sarif@v4.37.5
+        uses: github/codeql-action/upload-sarif@v4.37.6
         with:
           sarif_file: complexity.sarif
           category: complexity
