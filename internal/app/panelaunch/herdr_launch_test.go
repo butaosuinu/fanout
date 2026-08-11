@@ -705,11 +705,11 @@ func TestWaitForHerdrCodexTUIUnlockedReleasesLockAndRechecksDeadline(t *testing.
 	if err != nil {
 		t.Fatalf("readiness wait kept the launch lock: %v", err)
 	}
-	if err := os.WriteFile(statusPath, []byte(`{"status":"ready","threadId":"thread-554","sessionId":"session-554"}`), 0o600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(statusPath, []byte(`{"status":"ready","threadId":"thread-554","sessionId":"session-554"}`), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
-	if err := contender.Unlock(); err != nil {
-		t.Fatal(err)
+	if unlockErr := contender.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
 	}
 	got := <-waited
 	if got.err != nil || got.status.ThreadID != "thread-554" {
@@ -741,12 +741,12 @@ func TestWaitForHerdrCodexTUIUnlockedReleasesLockAndRechecksDeadline(t *testing.
 	if err != nil {
 		t.Fatalf("expired readiness wait kept the launch lock: %v", err)
 	}
-	if err := os.WriteFile(statusPath, []byte(`{"status":"ready","threadId":"expired-thread","sessionId":"expired-session"}`), 0o600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(statusPath, []byte(`{"status":"ready","threadId":"expired-thread","sessionId":"expired-session"}`), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	time.Sleep(time.Until(time.UnixMilli(intent.ExpiresUnixMS)) + 20*time.Millisecond)
-	if err := contender.Unlock(); err != nil {
-		t.Fatal(err)
+	if unlockErr := contender.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
 	}
 	got = <-waited
 	if got.err == nil || !strings.Contains(got.err.Error(), "expired") {
