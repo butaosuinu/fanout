@@ -683,8 +683,8 @@ func TestWaitForHerdrCodexTUIUnlockedReleasesLaunchLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	j.UpsertIntent(intent)
-	if err := j.Save(); err != nil {
-		t.Fatal(err)
+	if saveErr := j.Save(); saveErr != nil {
+		t.Fatal(saveErr)
 	}
 	type waitResult struct {
 		status codexapp.Status

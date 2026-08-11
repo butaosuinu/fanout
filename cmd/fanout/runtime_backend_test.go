@@ -403,16 +403,16 @@ func TestBackendSelectionVerifierRechecksSharedHerdrProvisionalIntent(t *testing
 
 func TestValidateLaunchBackendAllowsHerdrTeam(t *testing.T) {
 	t.Setenv(team.DBPathEnv, "")
-	if err := validateLaunchBackend(&cliflags.Config{Agent: "claude"}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{}); err != nil {
+	if err := validateLaunchBackend(&cliflags.Config{Agent: "claude"}, backend.Selection{Name: backend.Herdr}); err != nil {
 		t.Fatalf("Herdr error = %v", err)
 	}
-	if err := validateLaunchBackend(&cliflags.Config{Agent: "claude", Team: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{}); err != nil {
+	if err := validateLaunchBackend(&cliflags.Config{Agent: "claude", Team: true}, backend.Selection{Name: backend.Herdr}); err != nil {
 		t.Fatalf("Herdr team error = %v", err)
 	}
-	if tmuxErr := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Tmux}, runtimeBackendInputs{}); tmuxErr != nil {
+	if tmuxErr := validateLaunchBackend(&cliflags.Config{Team: true}, backend.Selection{Name: backend.Tmux}); tmuxErr != nil {
 		t.Fatalf("tmux error = %v", tmuxErr)
 	}
-	err := validateLaunchBackend(&cliflags.Config{Agent: "claude", TUIInteractive: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{})
+	err := validateLaunchBackend(&cliflags.Config{Agent: "claude", TUIInteractive: true}, backend.Selection{Name: backend.Herdr})
 	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "interactive TUI") {
 		t.Fatalf("TUI error = %v, want deferred interactive launch", err)
 	}
@@ -421,7 +421,7 @@ func TestValidateLaunchBackendAllowsHerdrTeam(t *testing.T) {
 func TestValidateLaunchBackendRejectsRelativeHerdrTeamDBPath(t *testing.T) {
 	t.Setenv(team.DBPathEnv, "team.db")
 	err := validateLaunchBackend(
-		&cliflags.Config{Agent: "claude", Team: true}, backend.Selection{Name: backend.Herdr}, runtimeBackendInputs{},
+		&cliflags.Config{Agent: "claude", Team: true}, backend.Selection{Name: backend.Herdr},
 	)
 	if err == nil || !strings.Contains(err.Error(), "FANOUT_DB_PATH must be absolute") {
 		t.Fatalf("relative Herdr team DB error = %v", err)
@@ -431,12 +431,12 @@ func TestValidateLaunchBackendRejectsRelativeHerdrTeamDBPath(t *testing.T) {
 func TestValidateLaunchBackendRejectsHerdrInputsBeforeSessionAcquisition(t *testing.T) {
 	selection := backend.Selection{Name: backend.Herdr}
 	if err := validateLaunchBackend(
-		&cliflags.Config{Agent: "claude", Session: "tmux-target"}, selection, runtimeBackendInputs{},
+		&cliflags.Config{Agent: "claude", Session: "tmux-target"}, selection,
 	); err == nil || !strings.Contains(err.Error(), "--session is only supported") {
 		t.Fatalf("Herdr session override error = %v", err)
 	}
 	t.Setenv("FANOUT_AGENT", "")
-	if err := validateLaunchBackend(&cliflags.Config{}, selection, runtimeBackendInputs{}); err == nil ||
+	if err := validateLaunchBackend(&cliflags.Config{}, selection); err == nil ||
 		!strings.Contains(err.Error(), "agent is required") {
 		t.Fatalf("missing Herdr agent error = %v", err)
 	}
@@ -449,12 +449,12 @@ func TestValidateLaunchBackendAllowsCodexChildPlanMode(t *testing.T) {
 		{Agent: "claude", AgentOverrides: []cliflags.AgentOverride{{Target: "task-a", Name: "codex"}}},
 	}
 	for _, cfg := range tests {
-		if err := validateLaunchBackend(&cfg, selection, runtimeBackendInputs{}); err != nil {
+		if err := validateLaunchBackend(&cfg, selection); err != nil {
 			t.Fatalf("Codex Plan Mode error = %v", err)
 		}
 	}
 	t.Setenv("FANOUT_AGENT", "codex")
-	if err := validateLaunchBackend(&cliflags.Config{}, selection, runtimeBackendInputs{}); err != nil {
+	if err := validateLaunchBackend(&cliflags.Config{}, selection); err != nil {
 		t.Fatalf("FANOUT_AGENT Codex Plan Mode error = %v", err)
 	}
 }

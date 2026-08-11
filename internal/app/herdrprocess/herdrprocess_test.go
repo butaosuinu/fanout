@@ -22,7 +22,8 @@ func TestVerifyAgentAcceptsExactCodexPlanController(t *testing.T) {
 
 func TestVerifyAgentAcceptsCodexPlanInterpreterChain(t *testing.T) {
 	identity, info := codexPlanProcessFixture()
-	remoteArgs := append(info.ForegroundProcesses[1].Argv, "resume", "thread-554")
+	remoteArgs := append([]string{}, info.ForegroundProcesses[1].Argv...)
+	remoteArgs = append(remoteArgs, "resume", "thread-554")
 	info.ForegroundProcesses[1] = testProcess(20, 10, "/usr/bin/node", "/usr/bin/node", append([]string{testCodex}, remoteArgs...))
 	info.ForegroundProcesses = append(info.ForegroundProcesses, testProcess(21, 20, "/opt/lib/codex", "/opt/lib/codex", remoteArgs))
 	if err := VerifyAgent(info, identity); err != nil {

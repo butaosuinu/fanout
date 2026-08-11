@@ -144,7 +144,7 @@ func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.
 	if err != nil {
 		return launchBackendResolution{}, err
 	}
-	if validateErr := validateLaunchBackend(cfg, selection, inputs); validateErr != nil {
+	if validateErr := validateLaunchBackend(cfg, selection); validateErr != nil {
 		return launchBackendResolution{}, validateErr
 	}
 	runtimeBackend, prepare, err := constructLaunchRuntimeBackend(cfg, selection.Name, inputs)
@@ -257,15 +257,14 @@ func canonicalRuntimeRoot(root string) string {
 func validateLaunchBackend(
 	cfg *cliflags.Config,
 	selection backend.Selection,
-	inputs runtimeBackendInputs,
 ) error {
 	if selection.Name != backend.Herdr {
 		return nil
 	}
-	return validateHerdrLaunchBackend(cfg, inputs)
+	return validateHerdrLaunchBackend(cfg)
 }
 
-func validateHerdrLaunchBackend(cfg *cliflags.Config, inputs runtimeBackendInputs) error {
+func validateHerdrLaunchBackend(cfg *cliflags.Config) error {
 	if cfg.Team {
 		dbPath := os.Getenv(team.DBPathEnv)
 		if dbPath != "" && !filepath.IsAbs(dbPath) {

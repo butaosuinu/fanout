@@ -159,7 +159,7 @@ func herdrCodexPlanCaptureTarget(base herdrrun.OwnedPaneIdentity, panes []backen
 		}
 	}
 	if len(matches) != 1 {
-		return herdrrun.OwnedPaneIdentity{}, fmt.Errorf("Codex Plan controller pane does not match exactly one live Herdr target")
+		return herdrrun.OwnedPaneIdentity{}, fmt.Errorf("codex Plan controller pane does not match exactly one live Herdr target")
 	}
 	base.AgentSession = matches[0].AgentSession
 	return base, nil
