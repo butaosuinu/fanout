@@ -655,6 +655,67 @@ func TestHerdrCodexPlanStatusPathUsesPersistedLaunchIdentity(t *testing.T) {
 	}
 }
 
+func TestWaitForHerdrCodexTUIUnlockedReleasesLaunchLock(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+	result, err := realizeHerdrWorktree(
+		context.Background(), testHerdrWorktreeRequest(repo, "plan-wait", 554), runtime, hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+	intent := result.Intent
+	intent.ExpiresUnixMS = time.Now().Add(time.Second).UnixMilli()
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	intent.Launch = validTestHerdrLaunch()
+	intent.Launch.Agent = "codex"
+	intent.Launch.CodexPlanStatusPath = statusPath
+	j, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.UpsertIntent(intent)
+	if err := j.Save(); err != nil {
+		t.Fatal(err)
+	}
+	type waitResult struct {
+		status codexapp.Status
+		err    error
+	}
+	waited := make(chan waitResult, 1)
+	go func() {
+		status, _, _, waitErr := waitForHerdrCodexTUIUnlocked(
+			Request{Agent: "codex", LaunchMode: agent.ModePlan, CodexPlanStatusPath: statusPath},
+			locked, repo, intent,
+		)
+		waited <- waitResult{status: status, err: waitErr}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	contender, err := state.LockProjectForLaunchContext(ctx, repo)
+	if err != nil {
+		t.Fatalf("readiness wait kept the launch lock: %v", err)
+	}
+	if err := os.WriteFile(statusPath, []byte(`{"status":"ready","threadId":"thread-554","sessionId":"session-554"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := contender.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	got := <-waited
+	if got.err != nil || got.status.ThreadID != "thread-554" {
+		t.Fatalf("unlocked readiness wait = %+v, err %v", got.status, got.err)
+	}
+}
+
 func TestValidateHerdrLaunchBindingRejectsCodexPlanModeChange(t *testing.T) {
 	launch := validTestHerdrLaunch()
 	launch.Agent = "codex"

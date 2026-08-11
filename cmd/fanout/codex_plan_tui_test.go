@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
@@ -60,6 +61,45 @@ func TestCodexPlanEmitterEnvUsesPinnedEmitterStatePath(t *testing.T) {
 	}
 	if got := getenv(telemetry.RowKeyEnv); got != env[telemetry.RowKeyEnv] {
 		t.Fatalf("emitter row key = %q", got)
+	}
+}
+
+func TestBestEffortStateSinkDoesNotBlockController(t *testing.T) {
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	sink := newBestEffortStateSink(func(state string) {
+		select {
+		case started <- state:
+		default:
+		}
+		if state == "working" {
+			<-release
+		}
+	})
+	sink("working")
+	if got := <-started; got != "working" {
+		t.Fatalf("first state = %q", got)
+	}
+	done := make(chan struct{})
+	go func() {
+		for range codexPlanTelemetryQueueSize + 2 {
+			sink("plan")
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("best-effort state sink blocked the controller")
+	}
+	close(release)
+	select {
+	case got := <-started:
+		if got != "plan" {
+			t.Fatalf("queued state = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued state was not emitted")
 	}
 }
 

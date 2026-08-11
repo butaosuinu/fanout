@@ -21,6 +21,8 @@ import (
 
 const codexPlanTUIScreenCaptureLines = 2000
 
+const codexPlanTelemetryQueueSize = 8
+
 func isCodexPlanTUIRequest(args []string) bool {
 	return len(args) > 0 && args[0] == codexapp.PlanTUICommand
 }
@@ -45,15 +47,30 @@ func cmdCodexPlanTUI(args []string, lg *log.Logger) exitcode.Code {
 
 func codexPlanStateSink(getenv func(string) string) func(string) {
 	if backend.Name(getenv(telemetry.BackendEnv)) == backend.Herdr {
-		return func(state string) {
+		return newBestEffortStateSink(func(state string) {
 			// Display telemetry is best-effort and must not affect the controller lifecycle.
 			_ = stateemitter.Run([]string{state}, codexPlanEmitterEnv(getenv), herdrEmitterObserver{}, io.Discard)
-		}
+		})
 	}
 	paneID := getenv("TMUX_PANE")
 	return func(state string) {
 		// A missing/replaced pane only loses display telemetry.
 		_ = tmuxrun.SetPaneAgentState(paneID, state)
+	}
+}
+
+func newBestEffortStateSink(emit func(string)) func(string) {
+	queue := make(chan string, codexPlanTelemetryQueueSize)
+	go func() {
+		for state := range queue {
+			emit(state)
+		}
+	}()
+	return func(state string) {
+		select {
+		case queue <- state:
+		default:
+		}
 	}
 }
 

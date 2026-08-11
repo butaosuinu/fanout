@@ -561,23 +561,57 @@ func awaitHerdrCodexTUI(
 	if err != nil {
 		return codexapp.Status{}, err
 	}
-	statusPath, pathErr := herdrCodexStatusPath(req, latest)
-	err = pathErr
+	req, err = bindHerdrCodexStatusPath(req, latest)
+	if err != nil {
+		return codexapp.Status{}, errors.Join(err, markHerdrIntentManual(
+			journal, latest, fmt.Errorf("codex TUI controller readiness failed: %w", err),
+		))
+	}
+	status, journal, latest, err := waitForHerdrCodexTUIUnlocked(
+		req, locked, projectRoot, latest,
+	)
+	if err == nil {
+		return status, nil
+	}
+	if journal == nil {
+		return status, err
+	}
+	return status, errors.Join(err, markHerdrIntentManual(
+		journal, latest, fmt.Errorf("codex TUI controller readiness failed: %w", err),
+	))
+}
+
+func bindHerdrCodexStatusPath(req Request, intent state.HerdrIntent) (Request, error) {
+	statusPath, err := herdrCodexStatusPath(req, intent)
+	if err != nil {
+		return req, err
+	}
 	if req.CodexPlanMode() {
 		req.CodexPlanStatusPath = statusPath
 	} else {
 		req.CodexTeamStatusPath = statusPath
 	}
-	var status codexapp.Status
-	if err == nil {
-		status, err = waitForHerdrCodexTUI(req, latest)
+	return req, nil
+}
+
+func waitForHerdrCodexTUIUnlocked(
+	req Request,
+	locked *state.LockedStore,
+	projectRoot string,
+	intent state.HerdrIntent,
+) (codexapp.Status, *state.LockedHerdrIntents, state.HerdrIntent, error) {
+	if err := locked.Unlock(); err != nil {
+		return codexapp.Status{}, nil, intent, err
 	}
-	if err == nil {
-		return status, nil
+	status, waitErr := waitForHerdrCodexTUI(req, intent)
+	if err := reacquireHerdrLaunchLock(locked, projectRoot, intent); err != nil {
+		return status, nil, intent, errors.Join(waitErr, err)
 	}
-	return status, errors.Join(err, markHerdrIntentManual(
-		journal, latest, fmt.Errorf("codex TUI controller readiness failed: %w", err),
-	))
+	journal, latest, err := loadHerdrCodexIntent(locked, projectRoot, intent.ID)
+	if err != nil {
+		return status, nil, intent, errors.Join(waitErr, err)
+	}
+	return status, journal, latest, waitErr
 }
 
 func loadHerdrCodexIntent(
