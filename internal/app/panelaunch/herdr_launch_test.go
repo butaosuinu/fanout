@@ -655,7 +655,7 @@ func TestHerdrCodexPlanStatusPathUsesPersistedLaunchIdentity(t *testing.T) {
 	}
 }
 
-func TestWaitForHerdrCodexTUIUnlockedReleasesLaunchLock(t *testing.T) {
+func TestWaitForHerdrCodexTUIUnlockedReleasesLockAndRechecksDeadline(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
 	installSuccessfulHerdrMutations(t, repo, runtime)
@@ -693,6 +693,7 @@ func TestWaitForHerdrCodexTUIUnlockedReleasesLaunchLock(t *testing.T) {
 	waited := make(chan waitResult, 1)
 	go func() {
 		status, _, _, waitErr := waitForHerdrCodexTUIUnlocked(
+			context.Background(),
 			Request{Agent: "codex", LaunchMode: agent.ModePlan, CodexPlanStatusPath: statusPath},
 			locked, repo, intent,
 		)
@@ -713,6 +714,43 @@ func TestWaitForHerdrCodexTUIUnlockedReleasesLaunchLock(t *testing.T) {
 	got := <-waited
 	if got.err != nil || got.status.ThreadID != "thread-554" {
 		t.Fatalf("unlocked readiness wait = %+v, err %v", got.status, got.err)
+	}
+
+	statusPath = filepath.Join(t.TempDir(), "expired-status.json")
+	intent.ExpiresUnixMS = time.Now().Add(500 * time.Millisecond).UnixMilli()
+	intent.Launch.CodexPlanStatusPath = statusPath
+	j, err = locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.UpsertIntent(intent)
+	if saveErr := j.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	go func() {
+		status, _, _, waitErr := waitForHerdrCodexTUIUnlocked(
+			context.Background(),
+			Request{Agent: "codex", LaunchMode: agent.ModePlan, CodexPlanStatusPath: statusPath},
+			locked, repo, intent,
+		)
+		waited <- waitResult{status: status, err: waitErr}
+	}()
+	expiredCtx, expiredCancel := context.WithTimeout(context.Background(), time.Second)
+	defer expiredCancel()
+	contender, err = state.LockProjectForLaunchContext(expiredCtx, repo)
+	if err != nil {
+		t.Fatalf("expired readiness wait kept the launch lock: %v", err)
+	}
+	if err := os.WriteFile(statusPath, []byte(`{"status":"ready","threadId":"expired-thread","sessionId":"expired-session"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Until(time.UnixMilli(intent.ExpiresUnixMS)) + 20*time.Millisecond)
+	if err := contender.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	got = <-waited
+	if got.err == nil || !strings.Contains(got.err.Error(), "expired") {
+		t.Fatalf("expired readiness wait = %+v, err %v", got.status, got.err)
 	}
 }
 
@@ -855,6 +893,7 @@ func TestAwaitHerdrCodexTeamFailureRequiresManualCleanup(t *testing.T) {
 			}
 
 			_, err = awaitHerdrCodexTUI(
+				context.Background(),
 				Request{
 					TeamDBPath:          "/tmp/team.db",
 					CodexTeamMode:       true,

@@ -41,7 +41,6 @@ pane が消えた場合は `stale` のままです。
 未対応の経路は明確なエラーで fail closed します。
 
 - 対話 TUI の launch、focus、send、restore、出力 peek、plan capture は herdr 行では使えません。
-- Codex 子の Plan Mode は拒否されます。app-server の launch matrix が対応するまでは build mode を使ってください。Claude と OpenCode は固有の mode flag を使います。
 - 自動 nudge(`fanout msg nudge` の配送)は agent の種類にかかわらず無効です。メッセージ自体は bus に保存され、`inbox` / `board` で読めます。
 - tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれません。
 
@@ -102,7 +101,7 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 | 自動 nudge(`fanout msg nudge`) | 相手が入力を受けられる状態なら配送 | agent の種類にかかわらず無効 |
 | tmux keybind(ダッシュボード、コンソール復帰) | 登録する | 登録しない |
 | 通知 | bell / tmux / ntfy / slack の channel | bell / ntfy / slack は動く。tmux channel と herdr の `notification show` は発火しない |
-| 子の Plan Mode launch | 対応 | Claude / OpenCode のみ。Codex は拒否 |
+| 子の Plan Mode launch | 対応 | 対応。Codex は fanout の app-server controller、Claude / OpenCode は固有の mode flag を使う |
 | TUI フォーム(設定、ヘルプ) | tmux popup | インラインの in-process フォーム |
 | session resume | fanout の restore フロー | herdr 任せ(後述) |
 

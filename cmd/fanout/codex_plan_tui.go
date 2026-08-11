@@ -53,7 +53,7 @@ func cmdCodexPlanTUI(args []string, lg *log.Logger) exitcode.Code {
 }
 
 func codexPlanStateSink(getenv func(string) string) func(string) {
-	if backend.Name(getenv(telemetry.BackendEnv)) == backend.Herdr {
+	if codexPlanRuntimeBackend(getenv) == backend.Herdr {
 		return newBestEffortStateSink(func(state string) {
 			// Display telemetry is best-effort and must not affect the controller lifecycle.
 			_ = stateemitter.Run([]string{state}, codexPlanEmitterEnv(getenv), herdrEmitterObserver{}, io.Discard)
@@ -64,6 +64,13 @@ func codexPlanStateSink(getenv func(string) string) func(string) {
 		// A missing/replaced pane only loses display telemetry.
 		_ = tmuxrun.SetPaneAgentState(paneID, state)
 	}
+}
+
+func codexPlanRuntimeBackend(getenv func(string) string) backend.Name {
+	if strings.TrimSpace(getenv("TMUX_PANE")) != "" {
+		return backend.Tmux
+	}
+	return backend.Name(getenv(telemetry.BackendEnv))
 }
 
 func newBestEffortStateSink(emit func(string)) func(string) {
@@ -91,7 +98,7 @@ func codexPlanEmitterEnv(getenv func(string) string) func(string) string {
 }
 
 func codexPlanScreenCapture(getenv func(string) string) func() (string, error) {
-	if backend.Name(getenv(telemetry.BackendEnv)) != backend.Herdr {
+	if codexPlanRuntimeBackend(getenv) != backend.Herdr {
 		paneID := getenv("TMUX_PANE")
 		return func() (string, error) {
 			return tmuxrun.CapturePlanSource(paneID, codexPlanTUIScreenCaptureLines)

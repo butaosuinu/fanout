@@ -66,6 +66,22 @@ func TestCodexPlanEmitterEnvUsesPinnedEmitterStatePath(t *testing.T) {
 	}
 }
 
+func TestCodexPlanRuntimeBackendPrefersTmuxPaneOverInheritedEmitter(t *testing.T) {
+	env := map[string]string{
+		"TMUX_PANE":          "%7",
+		telemetry.BackendEnv: string(backend.Herdr),
+	}
+	getenv := func(name string) string { return env[name] }
+
+	if got := codexPlanRuntimeBackend(getenv); got != backend.Tmux {
+		t.Fatalf("Codex Plan runtime backend = %q, want tmux", got)
+	}
+	delete(env, "TMUX_PANE")
+	if got := codexPlanRuntimeBackend(getenv); got != backend.Herdr {
+		t.Fatalf("Codex Plan runtime backend without tmux pane = %q, want herdr", got)
+	}
+}
+
 func TestBestEffortStateSinkDoesNotBlockController(t *testing.T) {
 	started := make(chan string, 2)
 	release := make(chan struct{})

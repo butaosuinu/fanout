@@ -22,7 +22,6 @@ The TUI console and web dashboard use `reported_state` only while the matching p
 The unsupported paths still fail closed:
 
 - Interactive TUI launch, focus, send, restore, output peek, and plan capture are unavailable for herdr rows.
-- Codex child Plan Mode is rejected; use build mode until its app-server launch matrix is supported. Claude and OpenCode keep their native mode flags.
 - Automatic nudges (`fanout msg nudge` delivery) are disabled for every agent kind. Messages still persist to the bus for `inbox` / `board` reads.
 - No tmux keybindings are registered, and fanout never calls herdr's in-app `notification show`.
 
@@ -76,7 +75,7 @@ A parent that already has recorded panes keeps its recorded backend. A conflicti
 | Automatic nudge (`fanout msg nudge`) | Delivered when the peer can take input | Disabled for every agent kind |
 | tmux keybindings (dashboard, console return) | Registered | Not registered |
 | Notifications | bell / tmux / ntfy / slack channels | bell / ntfy / slack work; the tmux channel and herdr's `notification show` do not fire |
-| Child Plan Mode launch | Supported | Claude / OpenCode only; Codex is rejected |
+| Child Plan Mode launch | Supported | Supported; Codex uses fanout's app-server controller, while Claude / OpenCode use native flags |
 | TUI forms (settings, help) | tmux popups | Inline in-process forms |
 | Session resume | fanout's restore flow | Left to herdr (see below) |
 

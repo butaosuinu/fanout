@@ -56,7 +56,7 @@ func (l *Launcher) launchHerdr(req Request) (Result, bool) {
 	if err != nil {
 		return l.failHerdr(req, "start agent", l.rollbackFailedHerdrLaunch(operation.locked, intent, err))
 	}
-	codexStatus, err := awaitHerdrCodexTUI(req, operation.locked, l.Info.ProjectRoot, intent)
+	codexStatus, err := awaitHerdrCodexTUI(operation.ctx, req, operation.locked, l.Info.ProjectRoot, intent)
 	if err != nil {
 		return l.failHerdr(req, "start Codex TUI controller", err)
 	}
@@ -549,6 +549,7 @@ func herdrCodexStatusPath(req Request, intent state.HerdrIntent) (string, error)
 }
 
 func awaitHerdrCodexTUI(
+	ctx context.Context,
 	req Request,
 	locked *state.LockedStore,
 	projectRoot string,
@@ -568,7 +569,7 @@ func awaitHerdrCodexTUI(
 		))
 	}
 	status, journal, latest, err := waitForHerdrCodexTUIUnlocked(
-		req, locked, projectRoot, latest,
+		ctx, req, locked, projectRoot, latest,
 	)
 	if err == nil {
 		return status, nil
@@ -595,6 +596,7 @@ func bindHerdrCodexStatusPath(req Request, intent state.HerdrIntent) (Request, e
 }
 
 func waitForHerdrCodexTUIUnlocked(
+	ctx context.Context,
 	req Request,
 	locked *state.LockedStore,
 	projectRoot string,
@@ -610,6 +612,9 @@ func waitForHerdrCodexTUIUnlocked(
 	journal, latest, err := loadHerdrCodexIntent(locked, projectRoot, intent.ID)
 	if err != nil {
 		return status, nil, intent, errors.Join(waitErr, err)
+	}
+	if waitErr == nil {
+		waitErr = ensureHerdrLaunchActive(ctx, latest)
 	}
 	return status, journal, latest, waitErr
 }
