@@ -963,9 +963,9 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 	if err != nil || content != "one\ntwo\n" {
 		t.Fatalf("Read() = %q, %v", content, err)
 	}
-	content, err = bound.Read(target.Ref, 0)
+	content, err = h.session.ReadOwnedPane(context.Background(), target, 0)
 	if err != nil || content != "current viewport\n" {
-		t.Fatalf("Read(visible) = %q, %v", content, err)
+		t.Fatalf("ReadOwnedPane(visible) = %q, %v", content, err)
 	}
 	if err := bound.SendLine(target.Ref, "hello"); err != nil {
 		t.Fatal(err)

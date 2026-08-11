@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -138,20 +140,72 @@ func TestHerdrCodexPlanCaptureTargetRequiresExactLiveIdentity(t *testing.T) {
 	}
 }
 
-func TestReadHerdrCodexPlanVisibleScreenSelectsCurrentViewport(t *testing.T) {
-	ref := backend.PaneRef{Backend: backend.Herdr, Workspace: "workspace-1", Pane: "workspace-1:pane-1"}
-	requestedLines := -1
-	screen, err := readHerdrCodexPlanVisibleScreen(func(gotRef backend.PaneRef, lines int) (string, error) {
-		if gotRef != ref {
-			t.Fatalf("read ref = %+v, want %+v", gotRef, ref)
+func TestBestEffortScreenCaptureDoesNotBlockController(t *testing.T) {
+	started := make(chan struct{}, 2)
+	finished := make(chan struct{}, 2)
+	capture := newBestEffortScreenCapture(25*time.Millisecond, func(ctx context.Context) (string, error) {
+		started <- struct{}{}
+		<-ctx.Done()
+		finished <- struct{}{}
+		return "", ctx.Err()
+	})
+
+	if _, err := capture(); !errors.Is(err, errHerdrCodexPlanCapturePending) {
+		t.Fatalf("initial capture error = %v, want pending", err)
+	}
+	<-started
+	before := time.Now()
+	if _, err := capture(); !errors.Is(err, errHerdrCodexPlanCapturePending) {
+		t.Fatalf("busy capture error = %v, want cached pending", err)
+	}
+	if elapsed := time.Since(before); elapsed > 100*time.Millisecond {
+		t.Fatalf("busy capture blocked controller for %v", elapsed)
+	}
+	<-finished
+	if _, err := capture(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("completed capture error = %v, want deadline", err)
+	}
+}
+
+func TestBestEffortScreenCaptureReturnsCacheDuringRefresh(t *testing.T) {
+	secondStarted := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	calls := 0
+	capture := newBestEffortScreenCapture(time.Second, func(context.Context) (string, error) {
+		calls++
+		if calls == 1 {
+			return "approval viewport", nil
 		}
-		requestedLines = lines
-		return "current viewport", nil
-	}, ref)
-	if err != nil {
-		t.Fatal(err)
+		if calls == 2 {
+			close(secondStarted)
+			<-releaseSecond
+		}
+		return "working viewport", nil
+	})
+
+	if _, err := capture(); !errors.Is(err, errHerdrCodexPlanCapturePending) {
+		t.Fatalf("initial capture error = %v, want pending", err)
 	}
-	if screen != "current viewport" || requestedLines != 0 {
-		t.Fatalf("read = %q with lines %d, want visible viewport", screen, requestedLines)
+	deadline := time.After(time.Second)
+	for {
+		screen, err := capture()
+		if err == nil && screen == "approval viewport" {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("first screen was not cached")
+		case <-time.After(time.Millisecond):
+		}
 	}
+	<-secondStarted
+	before := time.Now()
+	screen, err := capture()
+	if err != nil || screen != "approval viewport" {
+		t.Fatalf("refresh cache = %q, %v", screen, err)
+	}
+	if elapsed := time.Since(before); elapsed > 100*time.Millisecond {
+		t.Fatalf("cached capture blocked controller for %v", elapsed)
+	}
+	close(releaseSecond)
 }

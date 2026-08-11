@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/stateemitter"
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -22,6 +25,10 @@ import (
 const codexPlanTUIScreenCaptureLines = 2000
 
 const codexPlanTelemetryQueueSize = 8
+
+const herdrCodexPlanCaptureTimeout = time.Second
+
+var errHerdrCodexPlanCapturePending = errors.New("herdr Codex Plan screen capture is pending")
 
 func isCodexPlanTUIRequest(args []string) bool {
 	return len(args) > 0 && args[0] == codexapp.PlanTUICommand
@@ -90,22 +97,10 @@ func codexPlanScreenCapture(getenv func(string) string) func() (string, error) {
 			return tmuxrun.CapturePlanSource(paneID, codexPlanTUIScreenCaptureLines)
 		}
 	}
-	capture, err := newHerdrCodexPlanCapture(getenv)
-	if err != nil {
-		return func() (string, error) { return "", err }
-	}
-	return capture
+	return newHerdrCodexPlanCapture(getenv)
 }
 
-func newHerdrCodexPlanCapture(getenv func(string) string) (func() (string, error), error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("resolve Codex Plan controller cwd: %w", err)
-	}
-	repo, err := worktree.ResolveRepoIdentity(context.Background(), cwd)
-	if err != nil {
-		return nil, err
-	}
+func newHerdrCodexPlanCapture(getenv func(string) string) func() (string, error) {
 	base := herdrrun.OwnedPaneIdentity{
 		Ref: backend.PaneRef{
 			Backend:   backend.Herdr,
@@ -113,20 +108,37 @@ func newHerdrCodexPlanCapture(getenv func(string) string) (func() (string, error
 		},
 		SessionID: getenv(telemetry.SessionEnv), SocketPath: getenv(telemetry.SocketPathEnv),
 		WorkspaceLabel: getenv(telemetry.WorkspaceLabelEnv), TerminalID: getenv(telemetry.TerminalIDEnv),
-		RepoKey: repo.RepoKey, WorktreePath: cwd, CurrentPath: cwd,
 		AgentID: getenv(telemetry.AgentIDEnv),
 	}
-	owned, err := herdrrun.OpenOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: repo.RepoKey})
-	if err != nil {
-		return nil, err
-	}
-	return func() (string, error) {
-		return captureHerdrCodexPlanScreen(owned, base)
-	}, nil
+	var owned *herdrrun.OwnedSession
+	return newBestEffortScreenCapture(herdrCodexPlanCaptureTimeout, func(ctx context.Context) (string, error) {
+		if owned == nil {
+			var err error
+			owned, base, err = openHerdrCodexPlanCapture(ctx, base)
+			if err != nil {
+				return "", err
+			}
+		}
+		return captureHerdrCodexPlanScreen(ctx, owned, base)
+	})
 }
 
-func captureHerdrCodexPlanScreen(owned *herdrrun.OwnedSession, base herdrrun.OwnedPaneIdentity) (string, error) {
-	panes, err := owned.LivePanes(context.Background())
+func openHerdrCodexPlanCapture(ctx context.Context, base herdrrun.OwnedPaneIdentity) (*herdrrun.OwnedSession, herdrrun.OwnedPaneIdentity, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, base, fmt.Errorf("resolve Codex Plan controller cwd: %w", err)
+	}
+	repo, err := worktree.ResolveRepoIdentity(ctx, cwd)
+	if err != nil {
+		return nil, base, err
+	}
+	base.RepoKey, base.WorktreePath, base.CurrentPath = repo.RepoKey, cwd, cwd
+	owned, err := herdrrun.OpenOwned(ctx, herdrrun.OwnedOptions{GitCommonDir: repo.RepoKey})
+	return owned, base, err
+}
+
+func captureHerdrCodexPlanScreen(ctx context.Context, owned *herdrrun.OwnedSession, base herdrrun.OwnedPaneIdentity) (string, error) {
+	panes, err := owned.LivePanes(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -134,15 +146,44 @@ func captureHerdrCodexPlanScreen(owned *herdrrun.OwnedSession, base herdrrun.Own
 	if err != nil {
 		return "", err
 	}
-	bound, err := owned.Backend().BindOwnedTarget(target)
-	if err != nil {
-		return "", err
-	}
-	return readHerdrCodexPlanVisibleScreen(bound.Read, target.Ref)
+	return owned.ReadOwnedPane(ctx, target, 0)
 }
 
-func readHerdrCodexPlanVisibleScreen(read func(backend.PaneRef, int) (string, error), ref backend.PaneRef) (string, error) {
-	return read(ref, 0)
+type bestEffortScreenCapture struct {
+	request chan struct{}
+	result  atomic.Pointer[bestEffortScreenCaptureResult]
+}
+
+type bestEffortScreenCaptureResult struct {
+	screen string
+	err    error
+}
+
+func newBestEffortScreenCapture(timeout time.Duration, read func(context.Context) (string, error)) func() (string, error) {
+	worker := &bestEffortScreenCapture{request: make(chan struct{}, 1)}
+	go worker.run(timeout, read)
+	return worker.capture
+}
+
+func (w *bestEffortScreenCapture) run(timeout time.Duration, read func(context.Context) (string, error)) {
+	for range w.request {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		screen, err := read(ctx)
+		cancel()
+		w.result.Store(&bestEffortScreenCaptureResult{screen: screen, err: err})
+	}
+}
+
+func (w *bestEffortScreenCapture) capture() (string, error) {
+	select {
+	case w.request <- struct{}{}:
+	default:
+	}
+	result := w.result.Load()
+	if result == nil {
+		return "", errHerdrCodexPlanCapturePending
+	}
+	return result.screen, result.err
 }
 
 func herdrCodexPlanCaptureTarget(base herdrrun.OwnedPaneIdentity, panes []backend.LivePane) (herdrrun.OwnedPaneIdentity, error) {
