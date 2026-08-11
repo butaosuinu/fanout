@@ -235,6 +235,7 @@ func TestRunMsgNudge(t *testing.T) {
 type fakeHerdrNudger struct {
 	panes      []backend.LivePane
 	panesErr   error
+	beforeLive func()
 	process    herdrrun.PaneProcessInfo
 	processErr error
 	nudgeErr   error
@@ -245,6 +246,9 @@ type fakeHerdrNudger struct {
 }
 
 func (f *fakeHerdrNudger) LivePanes(context.Context) ([]backend.LivePane, error) {
+	if f.beforeLive != nil {
+		f.beforeLive()
+	}
 	return f.panes, f.panesErr
 }
 
@@ -379,6 +383,18 @@ func TestRunMsgNudgeHerdrRechecksRuntimeAfterStateLockWait(t *testing.T) {
 	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
 	if code != exitcode.OK || runtime.nudged || !strings.Contains(errb.String(), "provenance changed") {
 		t.Fatalf("code=%d nudged=%v stderr=%q", code, runtime.nudged, errb.String())
+	}
+}
+
+func TestRunMsgNudgeHerdrRechecksStateAfterRuntimeVerification(t *testing.T) {
+	initial, runtime := herdrNudgeFixture("working", true)
+	locked := cloneNudgeStore(initial)
+	runtime.beforeLive = func() { locked.Panes[0].ReportedState = "blocked" }
+	deps := herdrNudgeDeps(initial, locked, runtime)
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.nudgeCalls != 0 || !strings.Contains(errb.String(), "not nudgeable") {
+		t.Fatalf("code=%d calls=%d stderr=%q", code, runtime.nudgeCalls, errb.String())
 	}
 }
 

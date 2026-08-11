@@ -45,15 +45,12 @@ func herdrNudgeCandidate(pane state.Pane) (string, string, bool) {
 }
 
 func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (HerdrNudger, state.Pane, string, error) {
-	if deps.OpenHerdr == nil || deps.ReadLockedState == nil {
+	if deps.ReadLockedState == nil {
 		return nil, state.Pane{}, "", fmt.Errorf("herdr nudge runtime is unavailable")
 	}
-	runtime, err := deps.OpenHerdr(ctx)
+	runtime, err := openHerdrNudgeRuntime(ctx, deps.OpenHerdr)
 	if err != nil {
-		return nil, state.Pane{}, "", fmt.Errorf("open herdr runtime: %w", err)
-	}
-	if runtime == nil {
-		return nil, state.Pane{}, "", fmt.Errorf("herdr nudge runtime is unavailable")
+		return nil, state.Pane{}, "", err
 	}
 	latest, latestState, err := recheckHerdrNudgeState(ctx, pane, deps)
 	if err != nil {
@@ -62,7 +59,25 @@ func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (HerdrNu
 	if err := verifyHerdrNudgeRuntime(ctx, runtime, latest); err != nil {
 		return nil, latest, latestState, err
 	}
-	return runtime, latest, latestState, nil
+	final, finalState, err := recheckHerdrNudgeState(ctx, latest, deps)
+	if err != nil {
+		return nil, final, finalState, err
+	}
+	return runtime, final, finalState, nil
+}
+
+func openHerdrNudgeRuntime(ctx context.Context, open func(context.Context) (HerdrNudger, error)) (HerdrNudger, error) {
+	if open == nil {
+		return nil, fmt.Errorf("herdr nudge runtime is unavailable")
+	}
+	runtime, err := open(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("open herdr runtime: %w", err)
+	}
+	if runtime == nil {
+		return nil, fmt.Errorf("herdr nudge runtime is unavailable")
+	}
+	return runtime, nil
 }
 
 func verifyHerdrNudgeRuntime(ctx context.Context, runtime HerdrNudger, pane state.Pane) error {
@@ -112,14 +127,10 @@ func herdrNudgePaneMatches(recorded state.Pane, current backend.LivePane) bool {
 func recheckHerdrNudgeState(ctx context.Context, recorded state.Pane, deps Deps) (state.Pane, string, error) {
 	var latest state.Pane
 	err := deps.ReadLockedState(ctx, func(store state.Store) error {
-		var matches int
-		latest, matches = uniqueNudgeRecipient(
-			store, recorded.Parent, recorded.IssueNum, recorded.TaskID,
-		)
-		byRow, rowFound := uniqueHerdrNudgeRow(store, recorded.EmitterRowKey)
-		if matches != 1 || !rowFound || !sameHerdrNudgeBinding(latest, byRow) ||
-			!sameHerdrNudgeBinding(recorded, latest) {
-			return fmt.Errorf("recipient launch binding changed before prompt")
+		var bindingErr error
+		latest, bindingErr = currentHerdrNudgeBinding(store, recorded)
+		if bindingErr != nil {
+			return bindingErr
 		}
 		if !latest.StateRefinement {
 			return fmt.Errorf("agent state is not refined for the current launch")
@@ -130,6 +141,16 @@ func recheckHerdrNudgeState(ctx context.Context, recorded state.Pane, deps Deps)
 		return nil
 	})
 	return latest, strings.TrimSpace(latest.ReportedState), err
+}
+
+func currentHerdrNudgeBinding(store state.Store, recorded state.Pane) (state.Pane, error) {
+	latest, matches := uniqueNudgeRecipient(store, recorded.Parent, recorded.IssueNum, recorded.TaskID)
+	byRow, rowFound := uniqueHerdrNudgeRow(store, recorded.EmitterRowKey)
+	if matches != 1 || !rowFound || !sameHerdrNudgeBinding(latest, byRow) ||
+		!sameHerdrNudgeBinding(recorded, latest) {
+		return state.Pane{}, fmt.Errorf("recipient launch binding changed before prompt")
+	}
+	return latest, nil
 }
 
 func uniqueHerdrNudgeRow(store state.Store, rowKey string) (state.Pane, bool) {
