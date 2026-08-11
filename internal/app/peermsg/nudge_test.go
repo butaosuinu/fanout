@@ -8,6 +8,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -310,6 +311,33 @@ func TestRunMsgNudgeHerdrAllowsUnreportedAgentSession(t *testing.T) {
 	}
 }
 
+func TestRunMsgNudgeHerdrRejectsInvalidLaunchGenerationBeforeRuntimeIO(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*state.Pane)
+	}{
+		{name: "agent name", mutate: func(p *state.Pane) { p.HerdrAgentID = "fanout-corrupt" }},
+		{name: "launch nonce", mutate: func(p *state.Pane) {
+			p.LaunchNonce = "invalid"
+			p.HerdrAgentID = naming.HerdrAgentName(p.HerdrRepoKey, p.EmitterRowKey, p.LaunchNonce)
+		}},
+		{name: "emitter nonce", mutate: func(p *state.Pane) { p.EmitterNonce = "invalid" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, runtime := herdrNudgeFixture("working", true)
+			test.mutate(&store.Panes[0])
+			runtime.panes[0].AgentID = store.Panes[0].HerdrAgentID
+			runtime.beforeLive = func() { t.Fatal("invalid generation reached runtime IO") }
+			deps := herdrNudgeDeps(store, store, runtime)
+			var out, errb strings.Builder
+			code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+			if code != exitcode.OK || runtime.nudgeCalls != 0 || !strings.Contains(errb.String(), "binding changed") {
+				t.Fatalf("code=%d calls=%d stderr=%q", code, runtime.nudgeCalls, errb.String())
+			}
+		})
+	}
+}
+
 func TestRunMsgNudgeHerdrRequiresFreshRefinedState(t *testing.T) {
 	store, runtime := herdrNudgeFixture("running", false)
 	deps := herdrNudgeDeps(store, store, runtime)
@@ -442,14 +470,17 @@ func TestRunMsgNudgeHerdrDoesNotRetryAnAmbiguousPromptFailure(t *testing.T) {
 func herdrNudgeFixture(reportedState string, refined bool) (state.Store, *fakeHerdrNudger) {
 	worktree := "/repo/.fanout/worktrees/child"
 	args := []string{"--permission-mode", "auto", "prompt"}
+	repoKey := "/repo/.git"
+	rowKey := "issue:68:71"
+	launchNonce := strings.Repeat("a", 32)
 	session := &backend.AgentSessionRef{Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-71"}
 	pane := state.Pane{
 		Parent: "68", IssueNum: 71, Backend: backend.Herdr, PaneID: "w1:p1", Agent: "claude",
-		HerdrWorkspaceID: "w1", HerdrTerminalID: "term-71", HerdrRepoKey: "/repo/.git",
-		HerdrAgentID: "fanout-agent", HerdrAgentSession: session,
+		HerdrWorkspaceID: "w1", HerdrTerminalID: "term-71", HerdrRepoKey: repoKey,
+		HerdrAgentID: naming.HerdrAgentName(repoKey, rowKey, launchNonce), HerdrAgentSession: session,
 		HerdrSession: "fanout-owned", HerdrSocketPath: "/tmp/fanout-owned/herdr.sock",
 		WorktreePath: worktree, ReportedState: reportedState, StateRefinement: refined,
-		EmitterRowKey: "issue:68:71", LaunchNonce: strings.Repeat("a", 32),
+		EmitterRowKey: rowKey, LaunchNonce: launchNonce,
 		EmitterNonce: strings.Repeat("b", 32), HerdrLaunchExecutable: "/usr/bin/claude",
 		HerdrLaunchArgs: args,
 	}

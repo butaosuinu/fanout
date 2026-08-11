@@ -10,6 +10,8 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/herdrprocess"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/naming"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -147,10 +149,15 @@ func currentHerdrNudgeBinding(store state.Store, recorded state.Pane) (state.Pan
 	latest, matches := uniqueNudgeRecipient(store, recorded.Parent, recorded.IssueNum, recorded.TaskID)
 	byRow, rowFound := uniqueHerdrNudgeRow(store, recorded.EmitterRowKey)
 	if matches != 1 || !rowFound || !sameHerdrNudgeBinding(latest, byRow) ||
-		!sameHerdrNudgeBinding(recorded, latest) {
+		!sameHerdrNudgeBinding(recorded, latest) || !validHerdrNudgeGeneration(latest) {
 		return state.Pane{}, fmt.Errorf("recipient launch binding changed before prompt")
 	}
 	return latest, nil
+}
+
+func validHerdrNudgeGeneration(pane state.Pane) bool {
+	return telemetry.ValidNonce(pane.LaunchNonce) && telemetry.ValidNonce(pane.EmitterNonce) &&
+		pane.HerdrAgentID == naming.HerdrAgentName(pane.HerdrRepoKey, pane.EmitterRowKey, pane.LaunchNonce)
 }
 
 func uniqueHerdrNudgeRow(store state.Store, rowKey string) (state.Pane, bool) {
