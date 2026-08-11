@@ -11,6 +11,7 @@ import {
 import type { DiffFileEntry } from "../../transport/types";
 import {
   IconButton,
+  IconCheck,
   IconFileAdded,
   IconFileDeleted,
   IconFileModified,
@@ -65,8 +66,18 @@ function KindIcon({ kind }: { kind: DiffChangeKind | undefined }) {
 }
 
 /* 移動した file は basename だけだと移動元が消える — group 見出しは移動先の
- * ディレクトリなので、行にも移動元を出さないと「どこから来たか」が失われる。 */
-function FileRowBody({ file, kind }: { file: DiffFileEntry; kind: DiffChangeKind | undefined }) {
+ * ディレクトリなので、行にも移動元を出さないと「どこから来たか」が失われる。
+ * 確認済みの印は行末に置く。ここは表示専用で、チェックの操作は本文の
+ * ファイル名ヘッダが持つ(意味は行の accessible name が名乗る)。 */
+function FileRowBody({
+  file,
+  kind,
+  viewed,
+}: {
+  file: DiffFileEntry;
+  kind: DiffChangeKind | undefined;
+  viewed: boolean;
+}) {
   const from = renameOrigin(file);
   return (
     <>
@@ -74,6 +85,11 @@ function FileRowBody({ file, kind }: { file: DiffFileEntry; kind: DiffChangeKind
       <span className="diff-file-name">{fileBase(file.path)}</span>
       {from ? <span className="diff-file-was">← {from}</span> : null}
       <Stat file={file} />
+      {viewed ? (
+        <span className="diff-file-check">
+          <IconCheck />
+        </span>
+      ) : null}
     </>
   );
 }
@@ -85,9 +101,94 @@ function FileRowBody({ file, kind }: { file: DiffFileEntry; kind: DiffChangeKind
  * 種別は後置する。支援技術の要素一覧は accessible name の先頭から type-ahead で
  * 絞り込むので、前置すると 40 行が「変更 …」で始まり、パスを打っても目的の file
  * へ飛べなくなる。区切りは本文側の折りたたみボタン(`<path> — 折りたたむ`)に揃える。 */
-function fileRowLabel(file: DiffFileEntry, kind: string): string {
+function fileRowLabel(file: DiffFileEntry, kind: string, viewed: string): string {
   const path = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
-  return kind ? `${path} — ${kind}` : path;
+  return [path, kind, viewed].filter(Boolean).join(" — ");
+}
+
+/* 一覧の 1 行。飛べる file はボタン、飛べない file は静的なテキスト。
+ * 名前にフルパスを入れる — basename だけだと src/index.ts と test/index.ts が
+ * 同名になり、支援技術のボタン一覧から移動先を区別できない。title は子テキストの
+ * ある要素では accessible name にならない。 */
+function FileRow({
+  file,
+  kind,
+  viewed,
+  selectable,
+  onSelect,
+}: {
+  file: DiffFileEntry;
+  kind: DiffChangeKind | undefined;
+  viewed: boolean;
+  selectable: boolean;
+  onSelect: (path: string) => void;
+}) {
+  const { i18n, t } = useLingui();
+  const label = fileRowLabel(
+    file,
+    kind ? i18n._(CHANGE_KIND_LABELS[kind]) : "",
+    viewed ? t`確認済み` : "",
+  );
+  const body = <FileRowBody file={file} kind={kind} viewed={viewed} />;
+  const className = viewed ? "diff-file-row is-viewed" : "diff-file-row";
+  if (!selectable) {
+    return (
+      <span className={`${className} is-static`} title={label}>
+        {body}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={className}
+      title={label}
+      aria-label={label}
+      onClick={() => onSelect(file.path)}
+    >
+      {body}
+    </button>
+  );
+}
+
+/* 件数と一括操作。確認済みの進捗の分母は「本文にブロックがある file」— binary や
+ * 省略された file はチェックを持てないので、母集団に入れると必ず届かない。 */
+function SidebarHead({
+  files,
+  viewedCount,
+  viewableCount,
+  onExpandAll,
+  onCollapseAll,
+}: {
+  files: DiffFileEntry[];
+  viewedCount: number;
+  viewableCount: number;
+  onExpandAll: () => void;
+  onCollapseAll: () => void;
+}) {
+  const { t } = useLingui();
+  const totals = diffTotals(files);
+  return (
+    <div className="diff-sidebar-head">
+      <span className="diff-sidebar-count">
+        {files.length} files <span className="add">+{totals.additions}</span>
+        <span className="del">-{totals.deletions}</span>
+      </span>
+      {viewableCount > 0 && (
+        <span className="diff-sidebar-viewed">
+          {t`${{ done: viewedCount }} / ${{ total: viewableCount }} 確認済み`}
+        </span>
+      )}
+      <span className="diff-sidebar-acts">
+        <IconButton label={t`すべて展開`} onClick={onExpandAll}>
+          <IconUnfold />
+        </IconButton>
+        <IconButton label={t`すべて折りたたむ`} onClick={onCollapseAll}>
+          <IconFold />
+        </IconButton>
+      </span>
+    </div>
+  );
 }
 
 /* diff オーバーレイのサイドバー。サーバーの files[] をそのまま出すので、patch に
@@ -97,6 +198,8 @@ export const DiffFileList = memo(function DiffFileList({
   files,
   selectable,
   kinds,
+  viewedPaths,
+  hideViewed,
   onSelect,
   onExpandAll,
   onCollapseAll,
@@ -106,67 +209,46 @@ export const DiffFileList = memo(function DiffFileList({
   selectable: ReadonlySet<string>;
   /* path → 変更種別。patch のパース結果由来(diff.ts の indexDiffKindsByPath) */
   kinds: ReadonlyMap<string, DiffChangeKind>;
+  viewedPaths: ReadonlySet<string>;
+  /* 本文と揃えて確認済みの行を降ろす。残すと飛び先の無いリンクになる */
+  hideViewed: boolean;
   onSelect: (path: string) => void;
   onExpandAll: () => void;
   onCollapseAll: () => void;
 }) {
   /* memo 境界の内側で locale を購読する。props はロケールに依存しないので、
    * これが無いと言語を切り替えても見出しとボタン名が古いまま残る。 */
-  const { i18n, t } = useLingui();
-  const totals = diffTotals(files);
+  const { t } = useLingui();
   /* patch を持たない file は本文側の DiffOmittedNote が常時出す。ここは
    * 「飛べる file」だけにして、一覧の意味を移動先に絞る。 */
-  const groups = groupDiffFilesByDir(files.filter((f) => f.patchIncluded));
+  const listed = files.filter((f) => f.patchIncluded && !(hideViewed && viewedPaths.has(f.path)));
   return (
     // nav ではなく region — 主目的は一覧で、移動は付随機能
     <section className="diff-sidebar" aria-label={t`変更ファイル`}>
-      <div className="diff-sidebar-head">
-        <span className="diff-sidebar-count">
-          {files.length} files <span className="add">+{totals.additions}</span>
-          <span className="del">-{totals.deletions}</span>
-        </span>
-        <span className="diff-sidebar-acts">
-          <IconButton label={t`すべて展開`} onClick={onExpandAll}>
-            <IconUnfold />
-          </IconButton>
-          <IconButton label={t`すべて折りたたむ`} onClick={onCollapseAll}>
-            <IconFold />
-          </IconButton>
-        </span>
-      </div>
-      {groups.map((g) => (
+      <SidebarHead
+        files={files}
+        viewedCount={viewedPaths.size}
+        viewableCount={selectable.size}
+        onExpandAll={onExpandAll}
+        onCollapseAll={onCollapseAll}
+      />
+      {groupDiffFilesByDir(listed).map((g) => (
         <div className="diff-file-group" key={g.dir}>
           <h4 className="diff-file-dir" title={g.dir}>
             {g.dir || <Trans>(リポジトリ直下)</Trans>}
           </h4>
           <ul className="diff-file-rows">
-            {g.files.map((f) => {
-              const kind = kinds.get(f.path);
-              const label = fileRowLabel(f, kind ? i18n._(CHANGE_KIND_LABELS[kind]) : "");
-              return (
-                <li key={f.path}>
-                  {selectable.has(f.path) ? (
-                    /* 名前にフルパスを入れる — basename だけだと
-                       src/index.ts と test/index.ts が同名になり、支援技術の
-                       ボタン一覧から移動先を区別できない。title は子テキストの
-                       ある要素では accessible name にならない。 */
-                    <button
-                      type="button"
-                      className="diff-file-row"
-                      title={label}
-                      aria-label={label}
-                      onClick={() => onSelect(f.path)}
-                    >
-                      <FileRowBody file={f} kind={kind} />
-                    </button>
-                  ) : (
-                    <span className="diff-file-row is-static" title={label}>
-                      <FileRowBody file={f} kind={kind} />
-                    </span>
-                  )}
-                </li>
-              );
-            })}
+            {g.files.map((f) => (
+              <li key={f.path}>
+                <FileRow
+                  file={f}
+                  kind={kinds.get(f.path)}
+                  viewed={viewedPaths.has(f.path)}
+                  selectable={selectable.has(f.path)}
+                  onSelect={onSelect}
+                />
+              </li>
+            ))}
           </ul>
         </div>
       ))}

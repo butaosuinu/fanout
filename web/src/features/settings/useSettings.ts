@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { activateLocale, detectLocale, isLocale, type Locale } from "../../i18n";
+import { readLocal, writeLocal } from "../../shared/localStore";
 import { normalizeDiffTheme } from "./diffThemes";
 
 export type Theme = "light" | "dark";
@@ -18,32 +19,12 @@ const DIFF_LIGHT_KEY = "fanout.diffTheme.light";
 const DIFF_DARK_KEY = "fanout.diffTheme.dark";
 const DIFF_VIEW_KEY = "fanout.diffView";
 const DIFF_LAYOUT_KEY = "fanout.diffLayout";
+const DIFF_HIDE_VIEWED_KEY = "fanout.diffHideViewed";
 
-/* localStorage は private mode や quota 超過で例外を投げる。書けなかった値は
- * ここに退避し、read が storage より優先して返す — そうしないと snapshot が
- * storage を読み直すたびに旧値へ戻り、設定操作が実質 no-op になる(外観に至って
- * は data-theme だけ変わって radio が「システム」のまま残り、次の OS テーマ変更
- * で上書きされる)。書けた場合は storage が正なので退避を捨てる。 */
-const unpersisted = new Map<string, string | null>();
-
-function read(key: string): string | null {
-  if (unpersisted.has(key)) return unpersisted.get(key) ?? null;
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function write(key: string, value: string | null) {
-  try {
-    if (value === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, value);
-    unpersisted.delete(key);
-  } catch {
-    unpersisted.set(key, value); // このタブのあいだだけ効かせる
-  }
-}
+/* 書き込み失敗(private mode / quota)時の退避は shared/localStore が持つ。退避が
+ * 無いと snapshot が storage を読み直すたびに旧値へ戻り、設定操作が実質 no-op に
+ * なる(外観に至っては data-theme だけ変わって radio が「システム」のまま残り、
+ * 次の OS テーマ変更で上書きされる)。 */
 
 /* 解決済みテーマの正は <html data-theme>。初期値は index.html の FOUC
  * ブートストラップが first paint 前に書き込み済み。 */
@@ -54,13 +35,13 @@ function currentTheme(): Theme {
 /* 明示選択がない(キー無し)= システム追従。FOUC ブートストラップと同じ意味論で、
  * キーそのものも値も従来のまま。 */
 function currentMode(): Appearance {
-  const stored = read(THEME_KEY);
+  const stored = readLocal(THEME_KEY);
   return stored === "dark" || stored === "light" ? stored : "system";
 }
 
 /* 明示選択がない(キー無し)= ブラウザ / OS 追従。fanout.theme と同じ意味論。 */
 function currentLocalePref(): LocalePref {
-  const stored = read(LOCALE_KEY);
+  const stored = readLocal(LOCALE_KEY);
   return isLocale(stored) ? stored : "auto";
 }
 
@@ -70,16 +51,16 @@ function currentLocale(): Locale {
 }
 
 function currentDiffLight(): string {
-  return normalizeDiffTheme(read(DIFF_LIGHT_KEY), false);
+  return normalizeDiffTheme(readLocal(DIFF_LIGHT_KEY), false);
 }
 
 function currentDiffDark(): string {
-  return normalizeDiffTheme(read(DIFF_DARK_KEY), true);
+  return normalizeDiffTheme(readLocal(DIFF_DARK_KEY), true);
 }
 
 /* 既定は auto。キー無し = auto なので、未設定と明示 auto を区別しない。 */
 function currentDiffLayout(): DiffLayout {
-  const v = read(DIFF_LAYOUT_KEY);
+  const v = readLocal(DIFF_LAYOUT_KEY);
   return v === "split" || v === "stack" ? v : "auto";
 }
 
@@ -87,7 +68,13 @@ function currentDiffLayout(): DiffLayout {
  * 全画面はそこから広げる操作にする。キー無し = compact なので、未設定と明示
  * compact は区別しない。 */
 function currentDiffView(): DiffView {
-  return read(DIFF_VIEW_KEY) === "full" ? "full" : "compact";
+  return readLocal(DIFF_VIEW_KEY) === "full" ? "full" : "compact";
+}
+
+/* 確認済み file を本文と一覧から隠すか。既定は表示(キー無し)— 隠すのは
+ * 読み進めたあとの操作で、開いた直後に file が消えている状態は事故に見える。 */
+function currentDiffHideViewed(): boolean {
+  return readLocal(DIFF_HIDE_VIEWED_KEY) === "hide";
 }
 
 /* 設定は設定モーダルと diff オーバーレイから読まれるため module-level store で
@@ -138,40 +125,45 @@ function subscribe(cb: () => void): () => void {
 
 function setMode(mode: Appearance) {
   if (mode === "system") {
-    write(THEME_KEY, null);
+    writeLocal(THEME_KEY, null);
     document.documentElement.dataset.theme = matchMedia("(prefers-color-scheme: dark)").matches
       ? "dark"
       : "light";
   } else {
-    write(THEME_KEY, mode);
+    writeLocal(THEME_KEY, mode);
     document.documentElement.dataset.theme = mode;
   }
   emit();
 }
 
 function setLocalePref(pref: LocalePref) {
-  write(LOCALE_KEY, pref === "auto" ? null : pref);
+  writeLocal(LOCALE_KEY, pref === "auto" ? null : pref);
   activateLocale(currentLocale());
   emit();
 }
 
 function setDiffLight(name: string) {
-  write(DIFF_LIGHT_KEY, normalizeDiffTheme(name, false));
+  writeLocal(DIFF_LIGHT_KEY, normalizeDiffTheme(name, false));
   emit();
 }
 
 function setDiffDark(name: string) {
-  write(DIFF_DARK_KEY, normalizeDiffTheme(name, true));
+  writeLocal(DIFF_DARK_KEY, normalizeDiffTheme(name, true));
   emit();
 }
 
 function setDiffLayout(layout: DiffLayout) {
-  write(DIFF_LAYOUT_KEY, layout === "auto" ? null : layout);
+  writeLocal(DIFF_LAYOUT_KEY, layout === "auto" ? null : layout);
   emit();
 }
 
 function setDiffView(view: DiffView) {
-  write(DIFF_VIEW_KEY, view === "full" ? "full" : null);
+  writeLocal(DIFF_VIEW_KEY, view === "full" ? "full" : null);
+  emit();
+}
+
+function setDiffHideViewed(hide: boolean) {
+  writeLocal(DIFF_HIDE_VIEWED_KEY, hide ? "hide" : null);
   emit();
 }
 
@@ -231,6 +223,18 @@ export function useDiffLayout(): {
   setLayout: (layout: DiffLayout) => void;
 } {
   return { layout: useSyncExternalStore(subscribe, currentDiffLayout), setLayout: setDiffLayout };
+}
+
+/* 確認済み file を隠すか。オーバーレイのヘッダから直接触るので、並べ方や表示
+ * モードと同じくここに載せて次回の表示にも引き継ぐ。 */
+export function useDiffHideViewed(): {
+  hideViewed: boolean;
+  setHideViewed: (hide: boolean) => void;
+} {
+  return {
+    hideViewed: useSyncExternalStore(subscribe, currentDiffHideViewed),
+    setHideViewed: setDiffHideViewed,
+  };
 }
 
 /* 初期ロケールの適用。I18nProvider は locale 未設定だと children を描かないので、

@@ -37,7 +37,7 @@ msgstr "diff の取得に失敗しました (HTTP {status}): {detail}"
 msgid "新規追加"
 msgstr "新規追加"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "全画面表示"
 msgstr "全画面表示"
 
@@ -53,7 +53,7 @@ msgstr "(pane output unavailable — ペインは終了しています)"
 msgid "省略"
 msgstr "省略"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "diff を閉じる"
 msgstr "diff を閉じる"
 
@@ -61,7 +61,7 @@ msgstr "diff を閉じる"
 msgid "すべて折りたたむ"
 msgstr "すべて折りたたむ"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "コンパクト表示"
 msgstr "コンパクト表示"
 
@@ -69,7 +69,7 @@ msgstr "コンパクト表示"
 msgid "サイズ上限超過のため patch なし"
 msgstr "サイズ上限超過のため patch なし"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "縦積み"
 msgstr "縦積み"
 
@@ -93,7 +93,7 @@ msgstr "pane が起動しないまま issue は close されました。"
 msgid "削除"
 msgstr "削除"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "レイアウト: {current}(クリックで{next})"
 msgstr "レイアウト: {current}(クリックで{next})"
 
@@ -130,7 +130,7 @@ msgstr "この runtime pane は現在読み取り対象にできません。"
 msgid "応答上限(1 MiB)で省略"
 msgstr "応答上限(1 MiB)で省略"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffFileRow.tsx
 msgid "{name} — {lines} 行 — 展開"
 msgstr "{name} — {lines} 行 — 展開"
 
@@ -175,6 +175,11 @@ msgstr "未開始 — この子 issue の pane はまだ起動していません
 msgid "{0, plural, other {# ファイルは patch に含まれていません}}"
 msgstr "{0, plural, other {# ファイルは patch に含まれていません}}"
 
+#: src/features/diff/DiffFileList.tsx
+#: src/features/diff/DiffFileRow.tsx
+msgid "確認済み"
+msgstr "確認済み"
+
 #: src/transport/useDiff.ts
 msgid "diff の取得に失敗しました(接続エラー)"
 msgstr "diff の取得に失敗しました(接続エラー)"
@@ -207,6 +212,10 @@ msgstr "runtime backend で絞り込み"
 msgid "{backend} backend はペイン内容の読み取りに対応していません。"
 msgstr "{backend} backend はペイン内容の読み取りに対応していません。"
 
+#: src/features/diff/DiffFileRow.tsx
+msgid "{name} — 確認済み"
+msgstr "{name} — 確認済み"
+
 #: src/features/settings/SettingsModal.tsx
 msgid "English"
 msgstr "English"
@@ -235,12 +244,16 @@ msgstr "フィルタに一致するペインがありません"
 msgid "runtime の一部が利用できません — ペイン生死・peek / plan は劣化表示"
 msgstr "runtime の一部が利用できません — ペイン生死・peek / plan は劣化表示"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 #: src/features/settings/SettingsModal.tsx
 msgid "自動"
 msgstr "自動"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffFileList.tsx
+msgid "{done} / {total} 確認済み"
+msgstr "{done} / {total} 確認済み"
+
+#: src/features/diff/DiffToolbar.tsx
 #: src/features/drawer/Drawer.tsx
 msgid "再取得"
 msgstr "再取得"
@@ -253,7 +266,7 @@ msgstr "レビュー対象が patch に揃っていません — patch は不完
 msgid "filter — 自由語 or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"
 msgstr "filter — 自由語 or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "テーマ設定"
 msgstr "テーマ設定"
 
@@ -261,7 +274,7 @@ msgstr "テーマ設定"
 msgid "詳細を閉じる"
 msgstr "詳細を閉じる"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "左右 2 面"
 msgstr "左右 2 面"
 
@@ -284,6 +297,10 @@ msgstr "変更"
 #: src/features/diff/diff.ts
 msgid "サーバーが diff を安全に生成できませんでした: {detail}"
 msgstr "サーバーが diff を安全に生成できませんでした: {detail}"
+
+#: src/features/diff/DiffToolbar.tsx
+msgid "確認済みも表示"
+msgstr "確認済みも表示"
 
 #: src/features/settings/SettingsModal.tsx
 msgid "ダークテーマ"
@@ -333,6 +350,10 @@ msgstr "変更ファイル"
 msgid "{key} は snapshot から消えたため詳細を閉じました"
 msgstr "{key} は snapshot から消えたため詳細を閉じました"
 
+#: src/features/diff/DiffOverlay.tsx
+msgid "すべてのファイルを確認済みにしました"
+msgstr "すべてのファイルを確認済みにしました"
+
 #: src/features/filter/FilterBar.tsx
 msgid "runtime ペイン生死で絞り込み"
 msgstr "runtime ペイン生死で絞り込み"
@@ -349,7 +370,7 @@ msgstr "テーマ"
 msgid "詳細パネルの幅を変更"
 msgstr "詳細パネルの幅を変更"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffFileRow.tsx
 msgid "{lines} 行"
 msgstr "{lines} 行"
 
@@ -386,7 +407,7 @@ msgstr "diff を取得中…(最大 10 秒)"
 msgid "diff を取得できません — worktree の記録が見つかりません(cleanup 済みか、サーバーが /api/diff 未対応の可能性): {detail}"
 msgstr "diff を取得できません — worktree の記録が見つかりません(cleanup 済みか、サーバーが /api/diff 未対応の可能性): {detail}"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffFileRow.tsx
 msgid "{name} — 折りたたむ"
 msgstr "{name} — 折りたたむ"
 
@@ -409,6 +430,10 @@ msgstr "state 読み込みに失敗: {reason}"
 #: src/features/filter/FilterBar.tsx
 msgid "agent で絞り込み"
 msgstr "agent で絞り込み"
+
+#: src/features/diff/DiffToolbar.tsx
+msgid "確認済みを隠す"
+msgstr "確認済みを隠す"
 
 #: src/features/drawer/Drawer.tsx
 msgid "peek — 直近の出力"

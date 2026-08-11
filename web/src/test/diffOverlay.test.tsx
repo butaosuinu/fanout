@@ -177,7 +177,9 @@ describe("diff オーバーレイ", () => {
 
     const overlay = await openOverlay(user);
 
-    expect(captured).not.toBeNull();
+    /* dialog は fetch の完了を待たずに出るので、取得そのものを待ってから読む
+       (即読みだと lazy chunk の解決コスト次第で取りこぼす) */
+    await waitFor(() => expect(captured).not.toBeNull());
     expect(captured!.get("parent")).toBe("142");
     expect(captured!.get("issue")).toBe("101");
     expect(captured!.get("task")).toBeNull();
@@ -1446,5 +1448,170 @@ describe("diff オーバーレイ", () => {
     await user.click(screen.getByText("Shell pane"));
     await screen.findByRole("complementary", { name: "ペイン詳細" });
     expect(screen.queryByRole("button", { name: "変更を表示" })).not.toBeInTheDocument();
+  });
+});
+
+/* 確認済み(GitHub の Viewed 相当)。保存先は localStorage だけ — dashboard の
+ * サーバーは GET-only で mutation endpoint を持たない。 */
+describe("diff オーバーレイの確認済み", () => {
+  const VIEWED_KEY = "fanout.diffViewed.142#101";
+
+  /* 「src/hello.ts — 確認済み」のチェック。1 file に 1 個で、名前で引ける */
+  const viewedBox = (overlay: HTMLElement, path: string) =>
+    within(overlay).getByRole("checkbox", { name: `${path} — 確認済み` });
+
+  it("チェックを入れるとその file を畳み、外すと開き直す", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await waitFor(() => expect(shadowText()).not.toContain("hello_marker"));
+    // 他の file は畳まれない
+    expect(shadowText()).toContain("util_marker");
+
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+  });
+
+  it("サイドバーに進捗とチェック済みの行を出す", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    const sidebar = await within(overlay).findByRole("region", { name: "変更ファイル" });
+    expect(within(sidebar).getByText("0 / 2 確認済み")).toBeInTheDocument();
+
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await waitFor(() => {
+      expect(within(sidebar).getByText("1 / 2 確認済み")).toBeInTheDocument();
+    });
+    /* 行の accessible name にも状態を後置する — アイコンだけでは読み上げられない */
+    expect(
+      within(sidebar).getByRole("button", { name: "src/hello.ts — 変更 — 確認済み" }),
+    ).toBeInTheDocument();
+  });
+
+  it("overlay を開き直しても確認済みが残る", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await waitFor(() => expect(localStorage.getItem(VIEWED_KEY)).not.toBeNull());
+
+    /* Drawer は開いたままなので、行ではなく「変更を表示」から開き直す */
+    await user.click(within(overlay).getByRole("button", { name: "diff を閉じる" }));
+    await user.click(await screen.findByRole("button", { name: "変更を表示" }));
+    const reopened = await screen.findByRole("dialog", { name: "worktree diff" });
+
+    /* 復元した file は畳まれた状態で出る(展開ボタンが「展開」を名乗る) */
+    await waitFor(() => {
+      expect(viewedBox(reopened, "src/hello.ts")).toBeChecked();
+    });
+    expect(shadowText()).not.toContain("hello_marker");
+    expect(shadowText()).toContain("util_marker");
+  });
+
+  it("再取得で中身が変わった file だけ確認済みを外す", async () => {
+    /* patch を差し替えられるハンドラ。1 回目と 2 回目で hello.ts だけ中身が変わる */
+    let payload = "hello_marker";
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          twoFileDiff({
+            patch: TWO_FILE_PATCH.replace("hello_marker", payload),
+          }),
+        ),
+      ),
+    );
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await user.click(viewedBox(overlay, "src/util.ts"));
+    await waitFor(() => expect(viewedBox(overlay, "src/util.ts")).toBeChecked());
+
+    payload = "hello_changed";
+    await user.click(within(overlay).getByRole("button", { name: "再取得" }));
+
+    await waitFor(() => expect(shadowText()).toContain("hello_changed"));
+    expect(viewedBox(overlay, "src/hello.ts")).not.toBeChecked();
+    // 変わっていない file の確認済みは残る
+    expect(viewedBox(overlay, "src/util.ts")).toBeChecked();
+  });
+
+  it("別の session 行へは確認済みが漏れない", async () => {
+    server.use(
+      http.get("/api/diff", ({ request }) => {
+        const issue = new URL(request.url).searchParams.get("issue") ?? "101";
+        return HttpResponse.json(
+          makeDiffResponse({
+            patch: linesPatch("a.ts", 3, `patch_of_${issue}`),
+            files: [makeDiffFile({ path: "a.ts" })],
+          }),
+        );
+      }),
+    );
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({ issueNum: 101, displayName: "Alpha", diffSummary: "+3/-0" }),
+          makePane({ issueNum: 102, displayName: "Beta", diffSummary: "+3/-0" }),
+        ]),
+      ]),
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: /^変更を表示 #101 / }));
+    const overlay = await screen.findByRole("dialog", { name: "worktree diff" });
+    await waitFor(() => expect(shadowText()).toContain("patch_of_101"));
+    await user.click(viewedBox(overlay, "a.ts"));
+    await waitFor(() => expect(viewedBox(overlay, "a.ts")).toBeChecked());
+
+    await user.click(screen.getByRole("button", { name: /^変更を表示 #102 / }));
+    await waitFor(() => expect(shadowText()).toContain("patch_of_102"));
+    expect(viewedBox(overlay, "a.ts")).not.toBeChecked();
+  });
+
+  it("確認済みを隠すと本文と一覧の両方から降ろす", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+
+    await user.click(within(overlay).getByRole("button", { name: "確認済みを隠す" }));
+
+    await waitFor(() => {
+      expect(within(overlay).queryByRole("checkbox", { name: /^src\/hello\.ts/ })).toBeNull();
+    });
+    const sidebar = within(overlay).getByRole("region", { name: "変更ファイル" });
+    expect(within(sidebar).queryByText("hello.ts")).toBeNull();
+    // 残りは触れる。分母は変わらない(確認済みの母集団は patch を持つ file 全部)
+    expect(within(sidebar).getByText("1 / 2 確認済み")).toBeInTheDocument();
+    expect(shadowText()).toContain("util_marker");
+
+    await user.click(within(overlay).getByRole("button", { name: "確認済みも表示" }));
+    await waitFor(() => expect(viewedBox(overlay, "src/hello.ts")).toBeChecked());
+  });
+
+  it("全 file を確認済みにして隠すと、空になった理由を出す", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    await user.click(within(overlay).getByRole("button", { name: "確認済みを隠す" }));
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await user.click(viewedBox(overlay, "src/util.ts"));
+
+    await waitFor(() => {
+      expect(within(overlay).getByText("すべてのファイルを確認済みにしました")).toBeInTheDocument();
+    });
+    /* 隠した file ごと unmount されるので、フォーカスは overlay が引き取る */
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("壊れた保存値は無視して、確認済み無しとして開く", async () => {
+    localStorage.setItem(VIEWED_KEY, '{"v":1,"t":1,"files":["src/hello.ts"]}');
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    expect(viewedBox(overlay, "src/hello.ts")).not.toBeChecked();
   });
 });

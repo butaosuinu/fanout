@@ -143,10 +143,48 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 }
 .diff-sidebar-count{ font-family:var(--f-code); font-size:11px; color:var(--ink-60); }
 .diff-sidebar-count .add,.diff-sidebar-count .del{ margin-left:6px; }
+/* 確認済みの進捗。件数行と同じ扱いの二次情報なので、色も大きさも揃える */
+.diff-sidebar-viewed{ font-family:var(--f-code); font-size:11px; color:var(--ink-60); }
 .diff-sidebar-acts{ display:flex; gap:6px; }
-/* ファイル名ヘッダ内の行数 + 展開ボタン。行数は情報なのでボタンの外に残す */
+/* ファイル名ヘッダ内の行数 + 確認済み + 展開ボタン。行数は情報なのでボタンの外に残す */
 .diff-file-acts{ display:inline-flex; align-items:center; gap:8px; }
 .diff-file-lines{ font-family:var(--f-code); font-size:11px; color:var(--ink-40); }
+/* 確認済みのチェック。shadow root に slot されるが light DOM なのでここが効く。
+   native の input は潰して隠すだけにする — display:none にするとフォーカスも
+   キーボード操作も失う(設定モーダルの .set-lang-opt と同じ手)。
+   ヘッダはライブラリ側の配色なので、色は継承した currentColor に任せる。 */
+.diff-file-viewed{
+  position:relative;
+  display:inline-flex; align-items:center; gap:6px;
+  padding:2px 9px;
+  border:1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius:999px;
+  font-size:11px; line-height:1.6; white-space:nowrap;
+  opacity:.7; cursor:pointer;
+  transition:opacity .2s ease, border-color .2s ease, color .2s ease;
+}
+.diff-file-viewed input{ position:absolute; width:0; height:0; opacity:0; }
+/* チェックボックスの箱 */
+.diff-file-viewed::before{
+  content:""; flex:none;
+  width:11px; height:11px;
+  border:1px solid currentColor; border-radius:3px;
+}
+/* チェック済みのレ点。箱を塗り潰したうえに重ねるので、箱の実寸に合わせて絶対配置
+   する(::before は 1 個しか使えないため) */
+.diff-file-viewed::after{
+  content:""; position:absolute;
+  left:13px; top:calc(50% - 4.5px);
+  width:3px; height:6px;
+  border:solid var(--washi); border-width:0 1.5px 1.5px 0;
+  transform:rotate(45deg);
+  opacity:0;
+}
+.diff-file-viewed:hover{ opacity:1; }
+.diff-file-viewed:has(input:checked){ opacity:1; border-color:var(--asagi); color:var(--asagi); }
+.diff-file-viewed:has(input:checked)::before{ background:var(--asagi); border-color:var(--asagi); }
+.diff-file-viewed:has(input:checked)::after{ opacity:1; }
+.diff-file-viewed:has(input:focus-visible){ outline:2px solid var(--asagi); outline-offset:2px; }
 /* 同じディレクトリの file はまとめ、見出しにパス、下にファイル名だけを並べる */
 .diff-file-group{ padding:8px 8px 2px; }
 .diff-file-dir{
@@ -171,6 +209,20 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 .diff-file-row:hover{ background:color-mix(in srgb, var(--asagi) 12%, transparent); }
 .diff-file-row.is-static{ cursor:default; color:var(--ink-40); }
 .diff-file-row.is-static:hover{ background:transparent; }
+/* 確認済みは「読み終えた行」。まだ飛べるので消さず、一段落として前景から外す。
+   種別アイコンと増減の色も一緒に落とす — 名前だけ薄くしても行は目立ったまま。 */
+.diff-file-row.is-viewed{ color:var(--ink-40); }
+.diff-file-row.is-viewed .diff-file-kind,
+.diff-file-row.is-viewed .diff-file-stat .add,
+.diff-file-row.is-viewed .diff-file-stat .del{ color:var(--ink-40); }
+.diff-file-row.is-viewed:hover{ color:var(--ink-78); }
+/* 行末の確認済みマーク。行の主役は名前なので縮まない側に置き、色だけで示す */
+.diff-file-check{
+  flex:none; align-self:flex-start;
+  height:1.6em;
+  display:inline-flex; align-items:center;
+  color:var(--asagi);
+}
 /* 変更種別。幅は種別が引けない行でも確保する — インデントをこの列が担うので、
    要素ごと畳むとその行だけ左へずれる。
    高さは行 1 行分(font-size 11.5px × line-height 1.6 = 18.4px)に固定して

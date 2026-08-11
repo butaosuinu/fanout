@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
 
+/* このモジュールは 1 つの関心の集まり — ライブラリの virtualizer が持つ file ごとの
+ * オフセットは resize でしか更新されないので、スクロール中の空白も、サイドバーから
+ * のジャンプも、レイアウト変更も、すべて同じ nudge で直す。個々の hook を呼び出し側
+ * に並べると、どれか 1 本を張り忘れた瞬間に「行はあるのに画面が空白」に戻る。
+ * useDiffScrolling(末尾)がその束ね役で、DiffOverlay はこれだけを呼ぶ。 */
+
 /* 空白の修復判定: この高さ以上が見えている file だけを対象にする。 */
 const BLANK_REPAIR_MIN_PX = 120;
 /* スクロールが止まった後の押さえの再検査(最後のフレームが空白で終わった場合用) */
@@ -21,7 +27,7 @@ type Hosts = RefObject<Map<number, HTMLDivElement>>;
  * 残したまま参照だけ捨て、作り直した instance がその上に重ねて描く。実測で
  * 1 回の作り直しだけで全 file の高さが 2 倍になり、文書長が 92,098px →
  * 184,042px に膨らんで広範囲が空白になった。 */
-export function useDiffNudge(rootRef: RefObject<HTMLElement | null>): () => void {
+function useDiffNudge(rootRef: RefObject<HTMLElement | null>): () => void {
   const nudgedRef = useRef(false);
   return useCallback(() => {
     const scroller = rootRef.current?.querySelector<HTMLElement>(".diff-body");
@@ -33,7 +39,7 @@ export function useDiffNudge(rootRef: RefObject<HTMLElement | null>): () => void
 
 /* 表示モードの切替も並べ方の切替も、全 file の高さが変わる。幅の変化だけでは
  * root の block size が動かないので、明示的に取り直させる。 */
-export function useNudgeOnLayoutChange(layoutKey: string, nudge: () => void) {
+function useNudgeOnLayoutChange(layoutKey: string, nudge: () => void) {
   const prevRef = useRef(layoutKey);
   useEffect(() => {
     if (prevRef.current === layoutKey) return;
@@ -75,7 +81,7 @@ function isBlank(scroller: HTMLElement, hosts: Iterable<HTMLElement>): boolean {
 }
 
 /* スクロール中の空白の修復。判定は「見えている帯に実際の行があるか」だけ。 */
-export function useBlankRepair({
+function useBlankRepair({
   rootRef,
   hostsRef,
   patch,
@@ -113,7 +119,7 @@ export function useBlankRepair({
 /* サイドバーから本文へ飛ぶ。スクロールだけでは着地先の file が placeholder の
  * まま残るので、nudge で全 file のオフセットと描画範囲を取り直させる。高さが
  * 確定すると位置がずれるので、次フレームでもう一度合わせる。 */
-export function useScrollToFile({
+function useScrollToFile({
   byPath,
   hostsRef,
   expand,
@@ -143,4 +149,35 @@ export function useScrollToFile({
     },
     [byPath, expand, hostsRef, nudge],
   );
+}
+
+/* 上の 4 本をまとめて張る。host の台帳(index -> .diff-file)もここが持つ —
+ * 空白判定もジャンプも同じ台帳を見るので、持ち主を呼び出し側に置く理由がない。 */
+export function useDiffScrolling({
+  rootRef,
+  byPath,
+  expand,
+  patch,
+  layoutKey,
+}: {
+  rootRef: RefObject<HTMLElement | null>;
+  byPath: Map<string, number[]>;
+  expand: (i: number) => void;
+  patch: string;
+  /* 全 file の高さが変わる操作の合成キー(表示モード・並べ方・確認済みの絞り込み) */
+  layoutKey: string;
+}): {
+  registerHost: (index: number, el: HTMLDivElement | null) => void;
+  onSelectFile: (path: string) => void;
+} {
+  const hostsRef = useRef(new Map<number, HTMLDivElement>());
+  const nudge = useDiffNudge(rootRef);
+  const registerHost = useCallback((i: number, el: HTMLDivElement | null) => {
+    if (el) hostsRef.current.set(i, el);
+    else hostsRef.current.delete(i);
+  }, []);
+  const onSelectFile = useScrollToFile({ byPath, hostsRef, expand, nudge });
+  useNudgeOnLayoutChange(layoutKey, nudge);
+  useBlankRepair({ rootRef, hostsRef, patch, nudge });
+  return { registerHost, onSelectFile };
 }

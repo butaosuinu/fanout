@@ -1,9 +1,10 @@
 import { useMemo } from "react";
 import { indexDiffFilesByPath, indexDiffKindsByPath, parseDiffFiles, planDiffFiles } from "./diff";
+import { diffFilePaths, indexFingerprintsByPath } from "./viewed";
 
 /* patch 文字列から、描画に要る派生物をまとめて作る。
  *
- * 4 つとも「patch をパースした結果」の別の切り口で、依存も parsed 1 本に揃う。
+ * どれも「patch をパースした結果」の別の切り口で、依存も parsed 1 本に揃う。
  * 呼び出し側に useMemo を並べると、どれが patch に依存していてどれが派生の派生か
  * が読み取れなくなり、snapshot の tick ごとに全走査をやり直す事故も起きやすい。
  *
@@ -15,5 +16,9 @@ export function useDiffPatch(patch: string) {
   /* 本文へ飛べる path。patch にブロックがある file だけが持つ */
   const selectable = useMemo(() => new Set(byPath.keys()), [byPath]);
   const kinds = useMemo(() => indexDiffKindsByPath(parsed), [parsed]);
-  return { plan, byPath, selectable, kinds };
+  /* plan の index -> 正規化 path。本文は index、サイドバーは path で file を指す */
+  const paths = useMemo(() => diffFilePaths(parsed), [parsed]);
+  /* 確認済みの無効化に使う内容 fingerprint(viewed.ts 冒頭を参照) */
+  const fingerprints = useMemo(() => indexFingerprintsByPath(parsed), [parsed]);
+  return { plan, byPath, selectable, kinds, paths, fingerprints };
 }

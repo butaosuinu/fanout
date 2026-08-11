@@ -339,6 +339,19 @@ shadow root の `[data-placeholder]` と `[data-virtualizer-buffer]` を残し�
 ファイル名ヘッダは `stickyHeader` で上端に固定する(GitHub の files changed と同じ)。
 長い行は `overflow: "wrap"` で折り返し、file ごとの横スクロールバーを出さない。
 
+ヘッダとコード本文の境界は `unsafeCSS` で引く。
+ライブラリはヘッダにもコード行にも同じ `--diffs-bg` を敷き、罫線も引かないので、
+素のままではヘッダと本文の切れ目も、隣り合う file の切れ目も読めない。
+ヘッダに `--diffs-bg-context` を敷き、`border-block` に `--diffs-bg-separator` の
+1px を入れる。
+色はシャドウスコープの `--diffs-*` トークンから取ること — アプリ側の `--suna` などは
+shadow root に無く、light/dark で別々に選べる diff テーマにも追従しない。
+ライブラリ CSS は `@layer base`、`unsafeCSS` は `@layer unsafe` に包まれて注入される
+(レイヤ順 `base, theme, rendered, unsafe`)ので、詳細度に関係なく勝てる。
+`.diff-file` 側に枠線を足す案は採らない。枠線は flow の高さに乗るため、
+`.diff-files` の gap で実測済みのオフセットずれと同じ轍を踏む。
+sticky で貼り付いている間も下罫線は残るので、スクロール中も境界が消えない。
+
 並べ方は auto / split / stack の 3 状態で、ヘッダのボタン 1 個が
 auto -> split -> stack を巡回する(`fanout.diffLayout`、キー無しが auto)。
 auto は本文領域の幅で決める: `AUTO_SPLIT_MIN_PX`(1,000px)未満なら stack。
@@ -366,6 +379,62 @@ allowlist で検証してから渡す。
 狭い 2 カラムに収めるため `diffStyle: "unified"` と `disableFileHeader` を渡すが、
 `hunkSeparators: "simple"` は渡さない(v1.2.12 では本文が一切描かれなくなる)。
 見本も `@pierre/diffs` を引くので、設定を開くまでロードしない遅延 chunk に置く。
+
+### 確認済み
+
+file ごとに「確認済み」を立てられる(GitHub の Viewed 相当)。
+立てた file は畳み、外すと開き直す。
+サイドバーは行を一段落として行末にチェックを出し、見出しに `X / Y 確認済み` を出す。
+分母は patch にブロックがある file だけ — binary・サイズ超過・上限で省略された file は
+チェックを持てないので、母集団に入れると必ず届かない。
+
+保存先は localStorage だけである。
+dashboard のサーバーは GET-only で mutation endpoint を持たないため、
+サーバー側に持たせる選択肢がない。
+キーは session 行の `rowKey` ごとに 1 本(`fanout.diffViewed.<rowKey>`)。
+全 scope を 1 本の JSON にまとめると、チェック 1 個ごとに全体を再シリアライズする
+ことになる(contract 上限は 1 scope あたり 500 files)。
+保存値は敵性入力として検証する — 版・型・件数を確かめ、`string` 同士のペアだけを
+500 件まで採る。
+scope は 8 本まで残し、超えたら最終更新(`t`)の古いほうから捨てる。
+
+無効化は fingerprint の一致で行い、リセット処理を持たない。
+「保存値の fingerprint が現在の patch の fingerprint と一致する path」だけを確認済みと
+見なすので、内容が変わった file は自動で外れ、他の file は残る。
+fingerprint は patch のパース結果から作る。
+`/api/diff` の `files[]` は path しか identity を持たない(sha も種別も返さない)ため、
+サーバーの応答だけでは内容の同一性を判定できない。
+材料は `type` / `name` / `prevName` / `newObjectId` と描画対象の全行で、FNV-1a に
+畳み込む。
+`newObjectId`(patch の `index` 行)単独では足りない — pure rename は
+`similarity index 100%` だけで `index` 行を持たず、mode だけの変更も同様。
+項目ごとに長さも畳み込むこと。入れないと `["ab","c"]` と `["a","bc"]` が同じ値になり、
+行の切れ目の違いを取り違える。
+コストは応答の 1 MiB 上限で有界(約 100 万文字を 1 パス)で、patch をキーにした memo の
+中で 1 回だけ走る。
+key は `unquoteGitPath` で正規化した path にして、サイドバー(`files[].path`)と本文で
+同じ key を引けるようにする。
+file type change の同 path 2 entry は 1 つの file なので、両方の fingerprint を畳んで
+1 エントリにする。
+
+確認済みは折りたたみの既定値にも通す(`collapsedAt` の第 3 引数)。
+通さないと、保存値から復元した file の展開ボタンが no-op になる — 上書きが無い状態で
+`initiallyCollapsed=false` を見て「いまは展開中」と判断し、押すと `true` を書いて
+畳んだままになる。
+チェックの操作は上書き(`overrides`)も一緒に書き換える。
+明示的に展開済み(上書き `false`)の file を確認済みにしても畳ませるため。
+
+ヘッダのボタン 1 個で確認済みを本文と一覧から隠せる(`fanout.diffHideViewed`、
+キー無しが表示)。
+このボタンをサイドバーに置いてはいけない — サイドバーは container query で消えるので、
+狭い幅では隠したまま戻せなくなる。
+隠すのは描画から降ろすだけで、`plan` の index は詰めない。
+折りたたみの上書き・host の台帳・飛び先の索引がすべて index を key にしているためで、
+詰めると全部を張り替えることになる。
+サイドバーの行も同時に降ろす(残すと飛び先の無いリンクになる)。
+全 file が確認済みになったら、本文に空になった理由を出す。
+隠す設定でチェックを入れると、そのチェックごと unmount される。
+フォーカスが `<body>` へ落ちてトラップの外に出るので、オーバーレイ自身に引き取らせる。
 
 ### 全画面とコンパクトの 2 表示
 
@@ -497,8 +566,8 @@ basename だけだと `src/index.ts` と `test/index.ts` が衝突する。
 
 ### ボタンはアイコン + ツールチップ
 
-diff ビュアーのボタン(再取得・並べ方・表示モード・テーマ設定・閉じる・
-すべて展開 / 折りたたむ・file ごとの展開)はすべてアイコン 1 個にする。
+diff ビュアーのボタン(再取得・確認済みを隠す・並べ方・表示モード・テーマ設定・
+閉じる・すべて展開 / 折りたたむ・file ごとの展開)はすべてアイコン 1 個にする。
 狭いコンパクト表示でもヘッダが 1 行に収まる。
 ラベルは `aria-label` と、CSS で出すツールチップ(`.tip` + `data-tip`)に同じ
 文字列を渡す。
@@ -507,8 +576,12 @@ file ごとの展開ボタンは `renderHeaderMetadata` 経由で shadow root �
 されるが、ツールチップは light DOM 側の CSS で出るのでクリップされない
 (実機で確認済み)。
 行数は「大きい file だ」という情報なのでボタンの外にテキストで残す。
-表示モードの切替は状態表示ではなく「次にする操作」を名乗るアクションボタンなので、
-`aria-pressed` は付けない(ラベルと意味が食い違う)。
+表示モードの切替も確認済みの絞り込みも、状態表示ではなく「次にする操作」を名乗る
+アクションボタンなので、`aria-pressed` は付けない(ラベルと意味が食い違う)。
+file ごとの確認済みだけはアイコンボタンではなく native の `<input type="checkbox">` に
+する — こちらは操作ではなく状態そのもので、支援技術にもチェック状態として伝えたい。
+`input` は潰して隠すだけにし、`display:none` にはしない(フォーカスとキーボード操作を
+失う。設定モーダルの `.set-lang-opt` と同じ手)。
 3 状態を巡回する並べ方ボタンは、現在値と押した結果の両方をラベルに載せる
 (`レイアウト: 自動(クリックで左右 2 面)`)。
 アイコンは全画面 / コンパクトが斜めの外向き・内向き矢印、すべて展開 /

@@ -127,6 +127,28 @@ export function IconFold() {
   );
 }
 
+/* 確認済み file を隠す / 隠したぶんも表示する。目に斜線でどちらの向きかを示す。
+ * ラベルは「次にする操作」を名乗るので、押した結果に対応するほうを描く
+ * (表示モードの切替と同じ作法)。 */
+export function IconEye() {
+  return (
+    <Glyph>
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" />
+      <circle cx="12" cy="12" r="2.8" />
+    </Glyph>
+  );
+}
+
+export function IconEyeOff() {
+  return (
+    <Glyph>
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" />
+      <circle cx="12" cy="12" r="2.8" />
+      <path d="M4 20L20 4" />
+    </Glyph>
+  );
+}
+
 /* 差分の並べ方。枠を縦線で割れば左右 2 面、横線で割れば縦積み。
  * auto は「幅で決まる」ことを破線の仕切りで示す。 */
 export function IconLayoutSplit() {
@@ -178,6 +200,15 @@ export function IconChevronUp() {
  * — 行頭に縦一列で並ぶので、シルエットが揃っていないと流し読みで視線が引っかかる。
  * 色は CSS 側(.diff-file-kind の修飾クラス)が currentColor 経由で当てる。 */
 const KIND_SIZE = 13;
+
+/* 確認済みの印。サイドバーの行頭に変更種別と並ぶので同じ 13px にする。 */
+export function IconCheck() {
+  return (
+    <Glyph size={KIND_SIZE}>
+      <path d="M4.5 12.5l5 5 10-11" />
+    </Glyph>
+  );
+}
 
 export function IconFileAdded() {
   return (
