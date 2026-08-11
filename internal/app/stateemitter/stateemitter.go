@@ -46,6 +46,7 @@ type RuntimeTarget struct {
 	WorktreePath         string
 	Executable           string
 	Args                 []string
+	GenericWorkspace     bool
 }
 
 // Observation is one runtime snapshot plus the target pane's current process
@@ -308,13 +309,16 @@ func finalRuntimeTarget(pane state.Pane, signal telemetry.Signal) (RuntimeTarget
 		AgentID: pane.HerdrAgentID, PlanMode: pane.PlanMode, AgentSession: pane.HerdrAgentSession,
 		AcceptUnboundSession: pane.HerdrAgentSession == nil,
 		WorktreePath:         pane.WorktreePath, Executable: pane.HerdrLaunchExecutable,
-		Args: slices.Clone(pane.HerdrLaunchArgs),
+		Args:             slices.Clone(pane.HerdrLaunchArgs),
+		GenericWorkspace: pane.Kind == state.PaneKindAttachedAgent && pane.HerdrRepoKey == "",
 	}, nil
 }
 
 func pendingRuntimeTarget(intent state.HerdrIntent, signal telemetry.Signal) (RuntimeTarget, error) {
 	launch := intent.Launch
-	if intent.Kind != state.HerdrIntentWorktree || intent.Status != state.HerdrIntentRealized || launch == nil {
+	generic := intent.Kind == state.HerdrIntentCoordinator && intent.Resource.RepoKey == ""
+	if intent.Status != state.HerdrIntentRealized || launch == nil ||
+		(intent.Kind != state.HerdrIntentWorktree && !generic) {
 		return RuntimeTarget{}, fmt.Errorf("matching provisional intent is not an active agent launch")
 	}
 	if !time.Now().Before(time.UnixMilli(intent.ExpiresUnixMS)) {
@@ -331,7 +335,8 @@ func pendingRuntimeTarget(intent state.HerdrIntent, signal telemetry.Signal) (Ru
 		TerminalID: intent.Resource.TerminalID, Agent: launch.Agent,
 		AgentID: launch.AgentName, PlanMode: launch.CodexPlanStatusPath != "", AcceptUnboundSession: true,
 		WorktreePath: intent.WorktreePath, Executable: launch.Executable,
-		Args: slices.Clone(launch.Args),
+		Args:             slices.Clone(launch.Args),
+		GenericWorkspace: generic,
 	}, nil
 }
 
@@ -426,22 +431,33 @@ func sameLivePaneWithoutTerminal(target RuntimeTarget, pane backend.LivePane) bo
 		pane.SessionID == target.Session,
 		pane.SocketPath == target.SocketPath,
 		pane.RepoKey == target.RepoKey,
-		filepath.Clean(pane.WorktreePath) == filepath.Clean(target.WorktreePath),
+		runtimePathMatches(target, pane),
 	}
 	return !slices.Contains(identity, false)
 }
 
+func runtimePathMatches(target RuntimeTarget, pane backend.LivePane) bool {
+	if target.GenericWorkspace {
+		return pane.CurrentPath == target.WorktreePath
+	}
+	return filepath.Clean(pane.WorktreePath) == filepath.Clean(target.WorktreePath)
+}
+
 func validateRuntimeTarget(target RuntimeTarget) error {
 	identity := []string{
-		target.Session, target.SocketPath, target.RepoKey, target.WorkspaceID,
+		target.Session, target.SocketPath, target.WorkspaceID,
 		target.WorkspaceLabel, target.PaneID, target.TerminalID, target.Agent, target.AgentID,
 	}
 	if slices.ContainsFunc(identity, invalidIdentityValue) {
 		return fmt.Errorf("persisted telemetry runtime identity is incomplete")
 	}
-	paths := []string{target.SocketPath, target.RepoKey, target.WorktreePath, target.Executable}
+	paths := []string{target.SocketPath, target.WorktreePath, target.Executable}
 	if slices.ContainsFunc(paths, invalidCanonicalPath) {
 		return fmt.Errorf("persisted telemetry path identity is invalid")
+	}
+	if target.GenericWorkspace != (target.RepoKey == "") ||
+		target.RepoKey != "" && invalidCanonicalPath(target.RepoKey) {
+		return fmt.Errorf("persisted telemetry repository identity is invalid")
 	}
 	if target.Backend != backend.Herdr || !validTelemetryAgent(target) || invalidAgentSession(target) {
 		return fmt.Errorf("persisted telemetry backend identity is invalid")
@@ -492,7 +508,7 @@ func livePaneMatches(target RuntimeTarget, pane backend.LivePane) bool {
 		pane.SessionID == target.Session,
 		pane.SocketPath == target.SocketPath,
 		pane.RepoKey == target.RepoKey,
-		filepath.Clean(pane.WorktreePath) == filepath.Clean(target.WorktreePath),
+		runtimePathMatches(target, pane),
 		pane.AgentPresent,
 		pane.AgentProvider == target.Agent,
 		pane.AgentID == target.AgentID,

@@ -334,46 +334,62 @@ func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T
 	}
 }
 
-func TestFinalizeHerdrCoordinatorAgentRetainsActualParentIntent(t *testing.T) {
+func TestFinalizeHerdrAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
-	runtime := &fakeHerdrRealizeRuntime{}
-	installSuccessfulHerdrMutations(t, repo, runtime)
-	intent := realizeTestHerdrCoordinator(t, repo, runtime, deterministicHerdrRealizeHooks())
+	runtime := &fakeHerdrLaunchRuntime{}
+	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
+	hooks := deterministicHerdrRealizeHooks()
+	shared := realizeTestHerdrCoordinator(t, repo, &runtime.fakeHerdrRealizeRuntime, hooks)
+	runtime.launchRoute = herdrrun.OwnedLaunchRoute{
+		GitCommonDir: runtime.route.GitCommonDir,
+		Session:      runtime.route.Session, SocketPath: runtime.route.SocketPath,
+		LauncherPath: "/owned/fanout", RuntimeDir: t.TempDir(),
+	}
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
 	locked, err := state.LockProjectForLaunch(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = locked.Unlock() }()
-	intent.Launch = validTestHerdrLaunch()
-	journal, err := locked.HerdrIntents(repo)
+	req := Request{
+		ParentRef: ManualParentRef, RuntimeParent: shared.RuntimeParent,
+		Number: -2, Slug: "orchestrator-issue-425-2", Agent: "claude", Prompt: "coordinate",
+	}
+	launcher := &Launcher{
+		Cfg: &cliflags.Config{}, Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime,
+	}
+	intent, err := launcher.prepareHerdrAttachedIntent(
+		context.Background(), req, repo, locked, runtime.launchRoute,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal.UpsertIntent(intent)
-	if err := journal.Save(); err != nil {
-		t.Fatal(err)
+	if intent.Parent != ManualParentRef || intent.ID == shared.ID {
+		t.Fatalf("attached workspace reused shared coordinator: %+v", intent)
 	}
 	live := testHerdrIdlePane(intent)
-	live.AgentPresent = true
-	live.AgentID = intent.Launch.AgentName
-	req := Request{
-		ParentRef: ManualParentRef, RuntimeParent: intent.RuntimeParent,
-		Number: -2, Slug: "orchestrator-issue-425-2", Agent: "claude",
-	}
-	if err := finalizeHerdrCoordinatorAgent(req, locked, repo, intent, live); err != nil {
+	live.AgentPresent, live.AgentProvider, live.AgentID = true, "claude", intent.Launch.AgentName
+	if err := finalizeHerdrAttachedAgent(req, locked, repo, intent, live); err != nil {
 		t.Fatal(err)
 	}
 	persisted, err := state.LoadHerdrIntents(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved, found := persisted.FindIntent(intent.ID)
+	if _, found := persisted.FindIntent(intent.ID); found {
+		t.Fatal("finalized generic workspace intent remains in journal")
+	}
+	saved, found := persisted.FindIntent(shared.ID)
 	if !found || saved.Status != state.HerdrIntentRealized || saved.Launch != nil {
-		t.Fatalf("retained coordinator intent = (%+v, %t)", saved, found)
+		t.Fatalf("shared coordinator intent = (%+v, %t)", saved, found)
 	}
 	pane, found := locked.Find(ManualParentRef, -2)
-	if !found || pane.RuntimeParent != intent.RuntimeParent || pane.PaneID != intent.Resource.PaneID {
-		t.Fatalf("coordinator agent row = (%+v, %t)", pane, found)
+	if !found || pane.RuntimeParent != shared.RuntimeParent || pane.PaneID != intent.Resource.PaneID {
+		t.Fatalf("attached agent row = (%+v, %t)", pane, found)
 	}
 }
 

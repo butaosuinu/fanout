@@ -119,12 +119,6 @@ func (l *Launcher) admitHerdrLaunchRequest(req Request) (*state.LockedStore, boo
 			return nil, false
 		}
 	}
-	if req.RuntimeParent != "" {
-		if err := admitHerdrCoordinatorLaunch(locked, l.Info.ProjectRoot, req.RuntimeParent, 0); err != nil {
-			l.Log.Err("%s: %v", paneLogLabel(req), err)
-			return nil, false
-		}
-	}
 	return locked, true
 }
 

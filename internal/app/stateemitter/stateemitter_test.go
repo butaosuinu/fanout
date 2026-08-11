@@ -97,6 +97,35 @@ func TestEmitUpdatesCodexPlanRowThroughExactControllerProcess(t *testing.T) {
 	}
 }
 
+func TestEmitUpdatesGenericWorkspaceFinalRowTelemetry(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := genericFinalEmitterFixture(t, repo)
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "working" || !got.StateRefinement {
+		t.Fatalf("generic workspace telemetry = (%q, %t)", got.ReportedState, got.StateRefinement)
+	}
+}
+
+func TestEmitInvalidatesGenericWorkspaceOnCurrentPathChange(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := genericFinalEmitterFixture(t, repo)
+	observer.observation.Panes[0].CurrentPath = filepath.Join(repo, "other")
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "" || got.StateRefinement || got.EmitterNonce == pane.EmitterNonce {
+		t.Fatalf("changed generic workspace retained telemetry binding: %+v", got)
+	}
+}
+
 func TestEmitFinalRowPersistsDoneAgainstLateSignal(t *testing.T) {
 	repo := newEmitterRepo(t)
 	pane, signal, observer := finalEmitterFixture(t, repo)
@@ -388,6 +417,24 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 	}
 }
 
+func TestEmitUpdatesGenericWorkspacePendingIntent(t *testing.T) {
+	repo := newEmitterRepo(t)
+	intent, signal, observer := genericPendingEmitterFixture(t, repo)
+	saveEmitterIntent(t, repo, intent)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found := stored.FindIntent(intent.ID)
+	if !found || got.Launch.PendingReportedState != "working" || got.Launch.PendingAgentSession == nil {
+		t.Fatalf("generic provisional telemetry = (%+v, %t)", got, found)
+	}
+}
+
 func TestEmitPendingIntentRejectsIncompleteIdentityMatch(t *testing.T) {
 	repo := newEmitterRepo(t)
 	intent, signal, observer := pendingEmitterFixture(t, repo)
@@ -467,6 +514,18 @@ func finalEmitterFixture(t *testing.T, repo string) (state.Pane, telemetry.Signa
 	return pane, signal, exactObserver(pane)
 }
 
+func genericFinalEmitterFixture(t *testing.T, repo string) (state.Pane, telemetry.Signal, *fakeObserver) {
+	t.Helper()
+	pane, _, _ := finalEmitterFixture(t, repo)
+	pane.Parent, pane.RuntimeParent, pane.IssueNum = "@manual", "524", -1
+	pane.Kind = state.PaneKindAttachedAgent
+	pane.Slug, pane.BranchName, pane.WorktreePath, pane.HerdrRepoKey = "orchestrator-524", "", repo, ""
+	pane.EmitterRowKey, _ = state.HerdrCoordinatorIntentID("@manual", repo, pane.IssueNum)
+	observer := exactObserver(pane)
+	observer.observation.Panes[0].WorktreePath = ""
+	return pane, signalForPane(repo, pane), observer
+}
+
 func pendingEmitterFixture(t *testing.T, repo string) (state.HerdrIntent, telemetry.Signal, *fakeObserver) {
 	t.Helper()
 	pane, signal, observer := finalEmitterFixture(t, repo)
@@ -500,6 +559,24 @@ func pendingEmitterFixture(t *testing.T, repo string) (state.HerdrIntent, teleme
 		},
 	}
 	observer.observation.Panes[0].WorkspaceLabel = intent.Resource.Label
+	return intent, signal, observer
+}
+
+func genericPendingEmitterFixture(t *testing.T, repo string) (state.HerdrIntent, telemetry.Signal, *fakeObserver) {
+	t.Helper()
+	intent, signal, observer := pendingEmitterFixture(t, repo)
+	intent.ID, _ = state.HerdrCoordinatorIntentID("@manual", repo, -1)
+	intent.Kind, intent.Parent, intent.RuntimeParent, intent.IssueNum = state.HerdrIntentCoordinator, "@manual", "@manual", -1
+	intent.OwnerProjectRoot = repo
+	intent.Slug, intent.BranchName, intent.FullBranchRef = "", "", ""
+	intent.BaseBranch, intent.BaseSHA, intent.ExpectedHead = "", "", ""
+	intent.WorktreePath, intent.WorkspaceLabel = repo, intent.Resource.Label
+	intent.Resource.CurrentPath, intent.Resource.RepoKey, intent.Resource.RepoRoot = repo, "", ""
+	intent.Coordinator = state.HerdrResource{}
+	signal.RowKey = intent.ID
+	live := &observer.observation.Panes[0]
+	live.CurrentPath, live.WorktreePath, live.RepoKey, live.ProjectRoot = repo, "", "", ""
+	observer.observation.ProcessInfo.ForegroundProcesses[0].CWD = repo
 	return intent, signal, observer
 }
 
