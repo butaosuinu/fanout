@@ -280,8 +280,11 @@ func TestRunMsgNudgeHerdrUsesTheTmuxStateAllowlist(t *testing.T) {
 			store, runtime := herdrNudgeFixture(test.state, true)
 			opened := false
 			deps := herdrNudgeDeps(store, store, runtime)
-			deps.OpenHerdr = func(context.Context) (HerdrNudger, error) {
+			deps.OpenHerdr = func(_ context.Context, repoKey string) (HerdrNudger, error) {
 				opened = true
+				if repoKey != store.Panes[0].HerdrRepoKey {
+					t.Fatalf("repo key = %q, want %q", repoKey, store.Panes[0].HerdrRepoKey)
+				}
 				return runtime, nil
 			}
 			var out, errb strings.Builder
@@ -341,7 +344,7 @@ func TestRunMsgNudgeHerdrRejectsInvalidLaunchGenerationBeforeRuntimeIO(t *testin
 func TestRunMsgNudgeHerdrRequiresFreshRefinedState(t *testing.T) {
 	store, runtime := herdrNudgeFixture("running", false)
 	deps := herdrNudgeDeps(store, store, runtime)
-	deps.OpenHerdr = func(context.Context) (HerdrNudger, error) {
+	deps.OpenHerdr = func(context.Context, string) (HerdrNudger, error) {
 		t.Fatal("unrefined state opened the Herdr runtime")
 		return nil, nil
 	}
@@ -521,7 +524,7 @@ func herdrNudgeFixture(reportedState string, refined bool) (state.Store, *fakeHe
 func herdrNudgeDeps(initial, locked state.Store, runtime *fakeHerdrNudger) Deps {
 	return Deps{
 		LoadState:       func() (state.Store, error) { return initial, nil },
-		OpenHerdr:       func(context.Context) (HerdrNudger, error) { return runtime, nil },
+		OpenHerdr:       func(context.Context, string) (HerdrNudger, error) { return runtime, nil },
 		ReadLockedState: func(_ context.Context, read func(state.Store) error) error { return read(locked) },
 	}
 }

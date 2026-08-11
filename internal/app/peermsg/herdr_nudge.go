@@ -50,7 +50,7 @@ func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (HerdrNu
 	if deps.ReadLockedState == nil {
 		return nil, state.Pane{}, "", fmt.Errorf("herdr nudge runtime is unavailable")
 	}
-	runtime, err := openHerdrNudgeRuntime(ctx, deps.OpenHerdr)
+	runtime, err := openHerdrNudgeRuntime(ctx, deps.OpenHerdr, pane.HerdrRepoKey)
 	if err != nil {
 		return nil, state.Pane{}, "", err
 	}
@@ -77,11 +77,11 @@ func revalidateHerdrNudge(ctx context.Context, runtime HerdrNudger, pane state.P
 	return latest, latestState, nil
 }
 
-func openHerdrNudgeRuntime(ctx context.Context, open func(context.Context) (HerdrNudger, error)) (HerdrNudger, error) {
-	if open == nil {
+func openHerdrNudgeRuntime(ctx context.Context, open func(context.Context, string) (HerdrNudger, error), repoKey string) (HerdrNudger, error) {
+	if open == nil || strings.TrimSpace(repoKey) == "" {
 		return nil, fmt.Errorf("herdr nudge runtime is unavailable")
 	}
-	runtime, err := open(ctx)
+	runtime, err := open(ctx, repoKey)
 	if err != nil {
 		return nil, fmt.Errorf("open herdr runtime: %w", err)
 	}

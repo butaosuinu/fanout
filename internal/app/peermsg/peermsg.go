@@ -62,9 +62,10 @@ type Deps struct {
 	// ListLive and SendLine are the tmux runtime seams nudge drives.
 	ListLive func() ([]backend.LivePane, error)
 	SendLine func(backend.PaneRef, string) error
-	// OpenHerdr opens an existing owned Herdr runtime. ReadLockedState performs
-	// the final telemetry re-read under the owning state lock and call deadline.
-	OpenHerdr       func(context.Context) (HerdrNudger, error)
+	// OpenHerdr opens the existing owned Herdr runtime named by the recipient's
+	// saved repo key. ReadLockedState performs the final telemetry re-read under
+	// the owning state lock and call deadline.
+	OpenHerdr       func(context.Context, string) (HerdrNudger, error)
 	ReadLockedState func(context.Context, func(state.Store) error) error
 	// LoadState resolves and loads the owner checkout's .fanout/state.json
 	// read-only — the recipient's recorded pane id lives there, not in the

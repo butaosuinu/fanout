@@ -11,9 +11,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
-	"github.com/butaosuinu/fanout/internal/infra/team"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
-	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 const msgUsage = `Usage: fanout msg <verb> [options] [body...]
@@ -153,16 +151,8 @@ func cmdMsg(args []string, lg *log.Logger) exitcode.Code {
 	return peermsg.Run(flags.request(), deps, lg)
 }
 
-func openMsgHerdr(ctx context.Context) (peermsg.HerdrNudger, error) {
-	root, err := team.OwnerProjectRoot()
-	if err != nil {
-		return nil, err
-	}
-	identity, err := worktree.ResolveRepoIdentity(ctx, root)
-	if err != nil {
-		return nil, err
-	}
-	return herdrrun.OpenOwned(ctx, herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
+func openMsgHerdr(ctx context.Context, repoKey string) (peermsg.HerdrNudger, error) {
+	return herdrrun.OpenOwned(ctx, herdrrun.OwnedOptions{GitCommonDir: repoKey})
 }
 
 // parseMsgFlags parses `msg` argv. A nil msgFlags means "stop with this
