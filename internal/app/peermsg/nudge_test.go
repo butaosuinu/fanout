@@ -438,6 +438,24 @@ func TestRunMsgNudgeHerdrRechecksStateAfterRuntimeVerification(t *testing.T) {
 	}
 }
 
+func TestRunMsgNudgeHerdrRechecksProcessAfterFinalStateLockWait(t *testing.T) {
+	store, runtime := herdrNudgeFixture("working", true)
+	lockCalls := 0
+	deps := herdrNudgeDeps(store, store, runtime)
+	deps.ReadLockedState = func(_ context.Context, read func(state.Store) error) error {
+		lockCalls++
+		if lockCalls == 2 {
+			runtime.process.ForegroundProcesses[0].Argv = []string{"other"}
+		}
+		return read(store)
+	}
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.nudgeCalls != 0 || !strings.Contains(errb.String(), "process identity") {
+		t.Fatalf("code=%d calls=%d stderr=%q", code, runtime.nudgeCalls, errb.String())
+	}
+}
+
 func appendDuplicateNudgeRecipient(store *state.Store) {
 	duplicate := store.Panes[0]
 	duplicate.PaneID = "w1:p2"

@@ -54,19 +54,27 @@ func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (HerdrNu
 	if err != nil {
 		return nil, state.Pane{}, "", err
 	}
-	latest, latestState, err := recheckHerdrNudgeState(ctx, pane, deps)
+	latest, latestState, err := revalidateHerdrNudge(ctx, runtime, pane, deps)
 	if err != nil {
 		return nil, latest, latestState, err
 	}
-	err = verifyHerdrNudgeRuntime(ctx, runtime, latest)
-	if err != nil {
-		return nil, latest, latestState, err
-	}
-	final, finalState, err := recheckHerdrNudgeState(ctx, latest, deps)
+	final, finalState, err := revalidateHerdrNudge(ctx, runtime, latest, deps)
 	if err != nil {
 		return nil, final, finalState, err
 	}
 	return runtime, final, finalState, nil
+}
+
+func revalidateHerdrNudge(ctx context.Context, runtime HerdrNudger, pane state.Pane, deps Deps) (state.Pane, string, error) {
+	latest, latestState, err := recheckHerdrNudgeState(ctx, pane, deps)
+	if err != nil {
+		return latest, latestState, err
+	}
+	err = verifyHerdrNudgeRuntime(ctx, runtime, latest)
+	if err != nil {
+		return latest, latestState, err
+	}
+	return latest, latestState, nil
 }
 
 func openHerdrNudgeRuntime(ctx context.Context, open func(context.Context) (HerdrNudger, error)) (HerdrNudger, error) {
