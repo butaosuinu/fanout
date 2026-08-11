@@ -177,8 +177,8 @@ func (m model) loadFreshHerdrPane(paneID string) (paneView, error) {
 	if selectErr != nil {
 		return paneView{}, errors.Join(err, selectErr)
 	}
-	if err := observationErrorForPane(err, pane); err != nil {
-		return paneView{}, err
+	if observationErr := observationErrorForPane(err, pane); observationErr != nil {
+		return paneView{}, observationErr
 	}
 	if reason := m.runtimeActionDisabledReason(&pane, "focus"); reason != "" {
 		return paneView{}, fmt.Errorf("%s", reason)
