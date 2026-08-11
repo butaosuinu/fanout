@@ -58,7 +58,7 @@ func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (HerdrNu
 	if err != nil {
 		return nil, latest, latestState, err
 	}
-	final, finalState, err := revalidateHerdrNudge(ctx, runtime, latest, deps)
+	final, finalState, err := recheckHerdrNudgeState(ctx, latest, deps)
 	if err != nil {
 		return nil, final, finalState, err
 	}
@@ -114,6 +114,7 @@ func verifyHerdrNudgeProcess(ctx context.Context, runtime HerdrNudger, pane stat
 		WorktreePath: pane.WorktreePath,
 		Executable:   pane.HerdrLaunchExecutable,
 		Args:         pane.HerdrLaunchArgs,
+		Agent:        pane.Agent,
 	})
 	if err != nil {
 		return fmt.Errorf("verify recipient process identity: %w", err)
