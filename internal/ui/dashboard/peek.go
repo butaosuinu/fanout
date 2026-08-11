@@ -25,42 +25,59 @@ const (
 // Herdr uses its separately admitted persisted identity.
 var paneIDRe = regexp.MustCompile(`^%[0-9]{1,9}$`)
 
+type snapshotPaneSelection struct {
+	staleTmux      sessionview.PaneView
+	staleTmuxFound bool
+	nonTmux        sessionview.PaneView
+	nonTmuxFound   bool
+	nonTmuxUnique  bool
+}
+
+func (s *snapshotPaneSelection) observe(pv sessionview.PaneView) (sessionview.PaneView, bool) {
+	if backend.NormalizeName(pv.Backend) == backend.Tmux {
+		if pv.Alive {
+			return pv, true
+		}
+		if !s.staleTmuxFound {
+			s.staleTmux, s.staleTmuxFound = pv, true
+		}
+		return sessionview.PaneView{}, false
+	}
+	if s.nonTmuxFound {
+		s.nonTmuxUnique = false
+	} else {
+		s.nonTmux, s.nonTmuxFound, s.nonTmuxUnique = pv, true, true
+	}
+	return sessionview.PaneView{}, false
+}
+
+func (s snapshotPaneSelection) result() (sessionview.PaneView, bool, bool) {
+	if s.nonTmuxFound {
+		return s.nonTmux, true, s.nonTmuxUnique
+	}
+	return s.staleTmux, s.staleTmuxFound, true
+}
+
 // snapshotPaneView selects one latest-snapshot row whose runtime-native pane id
-// is paneID. A live tmux row wins over stale duplicates; a non-tmux row is the
-// next fallback so backend-specific admission runs after releasing this lock.
-func (p *poller) snapshotPaneView(paneID string) (sessionview.PaneView, bool) {
+// is paneID. A live tmux row wins over stale duplicates. Multiple non-tmux rows
+// are reported as non-unique so backend admission cannot authorize the wrong
+// persisted identity after releasing this lock.
+func (p *poller) snapshotPaneView(paneID string) (sessionview.PaneView, bool, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	var (
-		staleTmux      sessionview.PaneView
-		staleTmuxFound bool
-		nonTmux        sessionview.PaneView
-		nonTmuxFound   bool
-	)
+	selection := snapshotPaneSelection{}
 	for _, sess := range p.latest.Sessions {
 		for i := range sess.Panes {
 			pv := sess.Panes[i]
 			if pv.PaneID != paneID {
 				continue
 			}
-			if backend.NormalizeName(pv.Backend) == backend.Tmux {
-				if pv.Alive {
-					return pv, true
-				}
-				if !staleTmuxFound {
-					staleTmux, staleTmuxFound = pv, true
-				}
-				continue
-			}
-			if !nonTmuxFound {
-				nonTmux, nonTmuxFound = pv, true
+			if selected, found := selection.observe(pv); found {
+				return selected, true, true
 			}
 		}
 	}
-	if nonTmuxFound {
-		return nonTmux, true
-	}
-	return staleTmux, staleTmuxFound
+	return selection.result()
 }
 
 // requireLivePane is the request-validation chain GET /api/peek and
@@ -68,7 +85,11 @@ func (p *poller) snapshotPaneView(paneID string) (sessionview.PaneView, bool) {
 // shape and request-time identity verification. On ok=false the JSON error
 // response has already been written.
 func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionview.PaneView, bool) {
-	pv, recorded := s.poller.snapshotPaneView(paneID)
+	pv, recorded, unique := s.poller.snapshotPaneView(paneID)
+	if recorded && !unique {
+		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s does not identify one recorded runtime pane", paneID))
+		return sessionview.PaneView{}, false
+	}
 	runtimeBackend := backend.NormalizeName(pv.Backend)
 	if recorded && runtimeBackend == backend.Herdr {
 		return s.requireOwnedHerdrPane(w, pv)

@@ -342,6 +342,38 @@ func TestPeekForeignHerdrPaneIs404WithoutRead(t *testing.T) {
 	}
 }
 
+func TestPeekDuplicateHerdrPaneIDIs404BeforeOwnershipCheck(t *testing.T) {
+	owned, read := 0, 0
+	srv := &Server{
+		poller: &poller{},
+		ownsHerdrPane: func(sessionview.PaneView) bool {
+			owned++
+			return true
+		},
+		readHerdrPane: func(sessionview.PaneView, int) (string, error) {
+			read++
+			return "wrong generation", nil
+		},
+	}
+	snap := peekSnapshot(true)
+	snap.Sessions[0].Panes[0].Backend = backend.Herdr
+	snap.Sessions[0].Panes[0].PaneID = "shared-pane"
+	duplicate := snap.Sessions[0].Panes[0]
+	duplicate.SavedPane.HerdrWorkspaceLabel = "owned-generation"
+	snap.Sessions = append(snap.Sessions, sessionview.Session{
+		Parent: "#2", Panes: []sessionview.PaneView{duplicate},
+	})
+	publishSnapshot(srv, snap)
+	response := httptest.NewRecorder()
+	srv.handlePeek(
+		response,
+		httptest.NewRequest(http.MethodGet, "/api/peek?pane=shared-pane", nil),
+	)
+	if response.Code != http.StatusNotFound || owned != 0 || read != 0 {
+		t.Fatalf("duplicate Herdr peek = status:%d ownership:%d reads:%d, want 404/0/0", response.Code, owned, read)
+	}
+}
+
 func TestPeekUnknownBackendIs404AndSkipsCapture(t *testing.T) {
 	fake := &fakeCapture{out: "an unrelated tmux pane's terminal"}
 	srv := newPeekServer(t, "", fake)
