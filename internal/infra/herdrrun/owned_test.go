@@ -251,6 +251,46 @@ func TestPrepareOwnedLayoutUsesShortDefaultWithLongTMPDIR(t *testing.T) {
 	}
 }
 
+func TestOpenOwnedDoesNotCreateMissingOwnedLayout(t *testing.T) {
+	root := t.TempDir()
+	commonDir := filepath.Join(root, "repo.git")
+	if err := os.Mkdir(commonDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtimeBase := filepath.Join(root, "runtime")
+	if _, err := OpenOwned(context.Background(), OwnedOptions{
+		GitCommonDir: commonDir, RuntimeBase: runtimeBase,
+	}); err == nil {
+		t.Fatal("OpenOwned() succeeded without an existing owner layout")
+	}
+	if _, err := os.Lstat(runtimeBase); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("OpenOwned() created runtime layout: %v", err)
+	}
+}
+
+func TestOpenOwnedReadoptsExistingOwnedSession(t *testing.T) {
+	h := newOwnedHarness(t)
+	observed := New(h.session.Session, h.session.SocketPath)
+	observed.output = h.fake.output
+	opened, err := openOwned(context.Background(), OwnedOptions{
+		GitCommonDir: h.commonDir, RuntimeBase: h.runtimeBase,
+	}, observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.Session != h.session.Session || opened.SocketPath != h.session.SocketPath ||
+		opened.GitCommonDir != h.session.GitCommonDir {
+		t.Fatalf("opened session = %+v, want route from %+v", opened, h.session)
+	}
+	panes, err := opened.LivePanes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(panes) == 0 {
+		t.Fatal("opened session returned no live panes")
+	}
+}
+
 func TestPhysicalRepositoryAliasesShareOwnedSessionName(t *testing.T) {
 	root := t.TempDir()
 	commonDir := filepath.Join(root, "repo.git")
@@ -431,6 +471,9 @@ func TestEnsureOwnedReadoptsPinnedLauncherAfterFanoutUpdate(t *testing.T) {
 	reused := h.ensure()
 	if reused.LauncherPath != legacyPath || h.supervisor.starts != 1 {
 		t.Fatalf("re-adopted launcher = %q, starts=%d, want %q and one start", reused.LauncherPath, h.supervisor.starts, legacyPath)
+	}
+	if reused.EmitterPath == legacyPath || reused.EmitterPath == "" {
+		t.Fatalf("re-adopted emitter = %q, want current content-addressed fanout", reused.EmitterPath)
 	}
 }
 

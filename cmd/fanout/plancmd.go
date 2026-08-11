@@ -10,6 +10,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
+	"github.com/butaosuinu/fanout/internal/app/stateemitter"
 	"github.com/butaosuinu/fanout/internal/app/statusreport"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
@@ -555,6 +556,9 @@ func attachPlanRuntimeMetadata(tasks []statusreport.PlanTask, store state.Store,
 		}
 		tasks[i].Backend = backend.NormalizeName(pane.Backend)
 		tasks[i].PaneID = pane.PaneID
+		if tasks[i].Backend == backend.Herdr {
+			tasks[i].ReportedState = stateemitter.ReportedState(pane.ReportedState)
+		}
 	}
 }
 

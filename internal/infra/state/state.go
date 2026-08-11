@@ -2,18 +2,22 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 )
 
 const SchemaVersion = 1
+
+const stateLockPollInterval = 10 * time.Millisecond
 
 const (
 	PaneKindAttachedAgent = "attached-agent"
@@ -60,6 +64,16 @@ type Pane struct {
 	HerdrAgentSession *backend.AgentSessionRef `json:"herdrAgentSession,omitempty"`
 	HerdrSession      string                   `json:"herdrSession,omitempty"`
 	HerdrSocketPath   string                   `json:"herdrSocketPath,omitempty"`
+	// ReportedState is cooperative provider telemetry. The launch binding fields
+	// fence updates to one Herdr generation; none of these fields authorizes
+	// lifecycle, cleanup, completion, or nudge operations.
+	ReportedState         string   `json:"reported_state,omitempty"`
+	StateRefinement       bool     `json:"state_refinement,omitempty"`
+	EmitterRowKey         string   `json:"emitterRowKey,omitempty"`
+	LaunchNonce           string   `json:"launchNonce,omitempty"`
+	EmitterNonce          string   `json:"emitterNonce,omitempty"`
+	HerdrLaunchExecutable string   `json:"herdrLaunchExecutable,omitempty"`
+	HerdrLaunchArgs       []string `json:"herdrLaunchArgs,omitempty"`
 	// ShellKey is the tmux pane user-option token that binds this state row to
 	// one live pane. Shell panes can share WorktreePath with the repo root or an
 	// agent worktree, so liveness uses this marker instead of path matching.
@@ -156,15 +170,28 @@ func LockProject(projectRoot string) (*LockedStore, error) {
 }
 
 func LockProjectForLaunch(projectRoot string) (*LockedStore, error) {
-	intentsPath, err := HerdrIntentsPath(projectRoot)
+	return lockProjectForLaunch(context.Background(), projectRoot, true)
+}
+
+// LockProjectForLaunchContext acquires the combined state and Herdr intents
+// locks without waiting past ctx. A failed second lock releases the first.
+func LockProjectForLaunchContext(ctx context.Context, projectRoot string) (*LockedStore, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("lock project for launch requires a context")
+	}
+	return lockProjectForLaunch(ctx, projectRoot, false)
+}
+
+func lockProjectForLaunch(ctx context.Context, projectRoot string, blocking bool) (*LockedStore, error) {
+	intentsPath, err := herdrIntentsPathContext(ctx, projectRoot)
 	if err != nil {
 		return nil, err
 	}
-	herdrIntentsFile, err := lockHerdrIntentsPath(intentsPath)
+	herdrIntentsFile, err := lockHerdrIntentsPath(ctx, intentsPath, blocking)
 	if err != nil {
 		return nil, err
 	}
-	locked, err := Lock(Path(projectRoot))
+	locked, err := lockStatePath(ctx, Path(projectRoot), blocking)
 	if err != nil {
 		if unlockErr := unlockStateFile(herdrIntentsFile); unlockErr != nil {
 			return nil, errors.Join(
@@ -180,6 +207,10 @@ func LockProjectForLaunch(projectRoot string) (*LockedStore, error) {
 }
 
 func Lock(path string) (*LockedStore, error) {
+	return lockStatePath(context.Background(), path, true)
+}
+
+func lockStatePath(ctx context.Context, path string, blocking bool) (*LockedStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create fanout state directory: %w", err)
 	}
@@ -188,7 +219,7 @@ func Lock(path string) (*LockedStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open fanout state lock %s: %w", lockPath, err)
 	}
-	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err = lockFileExclusive(ctx, f, blocking); err != nil {
 		// Cleanup of the never-locked handle; the flock error is the one to report.
 		_ = f.Close()
 		return nil, fmt.Errorf("lock fanout state %s: %w", lockPath, err)
@@ -201,6 +232,35 @@ func Lock(path string) (*LockedStore, error) {
 		return nil, err
 	}
 	return &LockedStore{path: path, file: f, Store: store}, nil
+}
+
+func lockFileExclusive(ctx context.Context, file *os.File, blocking bool) error {
+	if blocking {
+		return syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(stateLockPollInterval)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil || !lockWouldBlock(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func lockWouldBlock(err error) bool {
+	return errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)
 }
 
 func (l *LockedStore) Unlock() error {

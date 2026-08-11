@@ -76,7 +76,7 @@ func bindOwnedHerdrAgentSessions(projectRoot string, live []backend.LivePane) (e
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
 	changed := false
 	for i := range locked.Panes {
-		ref, ok := uniqueHerdrSessionBinding(locked.Panes, i, live)
+		ref, ok := UniqueHerdrSessionBinding(locked.Panes, i, live)
 		if !ok {
 			continue
 		}
@@ -89,7 +89,9 @@ func bindOwnedHerdrAgentSessions(projectRoot string, live []backend.LivePane) (e
 	return nil
 }
 
-func uniqueHerdrSessionBinding(
+// UniqueHerdrSessionBinding returns the first valid late session only when one
+// persisted row and one live observation share the same launch identity.
+func UniqueHerdrSessionBinding(
 	panes []state.Pane,
 	target int,
 	live []backend.LivePane,

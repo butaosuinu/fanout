@@ -1078,6 +1078,28 @@ func TestBuildHerdrAgentRecordIsSeparateFromPaneLiveness(t *testing.T) {
 	}
 }
 
+func TestBuildHerdrReportedStateRefinesOnlyLiveAgentDisplay(t *testing.T) {
+	row := herdrPane("1", 2, "workspace-a:p1")
+	row.ReportedState = "plan"
+	observed := liveHerdrPane(row)
+	observed.AgentState = ""
+	observed.NativeAgentState = "unknown"
+
+	got := buildWithLivePanes([]state.Pane{row}, []backend.LivePane{observed}, nil).Sessions[0].Panes[0]
+	if !got.Alive || got.AgentState != "plan" {
+		t.Fatalf("live telemetry display = alive:%t state:%q, want live plan", got.Alive, got.AgentState)
+	}
+	stale := buildWithLivePanes([]state.Pane{row}, nil, nil).Sessions[0].Panes[0]
+	if stale.Alive || stale.AgentState != "" {
+		t.Fatalf("stale telemetry display = alive:%t state:%q, want stale without state", stale.Alive, stale.AgentState)
+	}
+	row.ReportedState = "done"
+	done := buildWithLivePanes([]state.Pane{row}, []backend.LivePane{observed}, nil)
+	if done.Rollup.Merged != 0 || done.Rollup.Pending != 1 || done.Rollup.AllMerged {
+		t.Fatalf("done telemetry changed completion rollup: %+v", done.Rollup)
+	}
+}
+
 func TestBuildHerdrDoneThenFocusedIdleRemainPublicDisplayStates(t *testing.T) {
 	row := herdrPane("1", 2, "workspace-a:p1")
 	sequence := []struct {

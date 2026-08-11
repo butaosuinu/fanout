@@ -383,31 +383,76 @@ func (l *Launcher) newHerdrLaunch(
 	intent state.HerdrIntent,
 	callerEnvironment []string,
 ) (state.HerdrIntent, error) {
-	nonce, err := randomHerdrToken()
+	launch, err := l.prepareHerdrLaunchCapsule(req, route, intent, callerEnvironment)
 	if err != nil {
 		return intent, err
 	}
-	spec, err := buildHerdrLaunchSpec(req)
+	intent.Launch = launch
+	return persistNewHerdrLaunch(journal, intent, route.RuntimeDir)
+}
+
+type resolvedHerdrLaunch struct {
+	nonce     string
+	agentName string
+	emitter   herdrEmitterLaunch
+	spec      agent.LaunchSpec
+}
+
+func (l *Launcher) resolveHerdrLaunch(
+	req Request,
+	route herdrrun.OwnedLaunchRoute,
+	intent state.HerdrIntent,
+) (resolvedHerdrLaunch, error) {
+	nonce, err := randomHerdrToken()
 	if err != nil {
-		return intent, err
+		return resolvedHerdrLaunch{}, err
+	}
+	agentName := naming.HerdrAgentName(route.GitCommonDir, intent.ID, nonce)
+	emitter, err := newHerdrEmitterLaunch(
+		req, route, intent, nonce, agentName, state.Path(l.Info.ProjectRoot),
+	)
+	if err != nil {
+		return resolvedHerdrLaunch{}, err
+	}
+	spec, err := buildHerdrLaunchSpec(req)
+	if len(emitter.backendArgs) != 0 {
+		spec, err = agent.BuildResolvedLaunchSpecWithBackendArgs(
+			req.Agent, req.Prompt, backend.Herdr, req.LaunchMode, emitter.backendArgs,
+		)
+	}
+	if err != nil {
+		return resolvedHerdrLaunch{}, err
+	}
+	return resolvedHerdrLaunch{nonce: nonce, agentName: agentName, emitter: emitter, spec: spec}, nil
+}
+
+func (l *Launcher) prepareHerdrLaunchCapsule(
+	req Request,
+	route herdrrun.OwnedLaunchRoute,
+	intent state.HerdrIntent,
+	callerEnvironment []string,
+) (*state.HerdrLaunch, error) {
+	resolved, err := l.resolveHerdrLaunch(req, route, intent)
+	if err != nil {
+		return nil, err
 	}
 	environment, err := herdrrun.WorkloadEnvironment(callerEnvironment, route.LauncherPath)
 	if err != nil {
-		return intent, err
+		return nil, err
 	}
-	envPath, envCount, err := l.Herdr.PrepareWorkloadEnvironment(nonce, environment)
+	environment = append(environment, resolved.emitter.environment...)
+	envPath, envCount, err := l.Herdr.PrepareWorkloadEnvironment(resolved.nonce, environment)
 	if err != nil {
-		return intent, err
+		return nil, err
 	}
-	intent.Launch = &state.HerdrLaunch{
-		Nonce: nonce, Agent: req.Agent,
-		AgentName:  naming.HerdrAgentName(route.GitCommonDir, intent.ID, nonce),
-		Executable: spec.Executable, Args: spec.Args,
+	return &state.HerdrLaunch{
+		Nonce: resolved.nonce, EmitterNonce: resolved.emitter.nonce, Agent: req.Agent,
+		AgentName:  resolved.agentName,
+		Executable: resolved.spec.Executable, Args: resolved.spec.Args,
 		TeamDBPath:          req.TeamDBPath,
 		CodexTeamStatusPath: newHerdrTeamStatusPath(req),
 		EnvFilePath:         envPath, EnvNameCount: envCount,
-	}
-	return persistNewHerdrLaunch(journal, intent, route.RuntimeDir)
+	}, nil
 }
 
 func buildHerdrLaunchSpec(req Request) (agent.LaunchSpec, error) {
@@ -584,16 +629,54 @@ func (l *Launcher) finalizeHerdrLaunch(
 	}); err != nil {
 		return err
 	}
-	pane := statePaneForBackend(req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(), codexStatus, backend.Herdr, &live)
-	if err := locked.RecordPane(pane); err != nil {
+	journal, latest, err := latestHerdrLaunchIntent(locked, l.Info.ProjectRoot, intent.ID)
+	if err != nil {
 		return err
 	}
-	journal, err := locked.HerdrIntents(l.Info.ProjectRoot)
-	if err != nil {
+	pane := statePaneForBackend(
+		req, live.Ref.Pane, latest.WorktreePath, time.Now().UTC(), codexStatus, backend.Herdr, &live,
+	)
+	applyHerdrLaunchTelemetry(&pane, latest)
+	if err := locked.RecordPane(pane); err != nil {
 		return err
 	}
 	journal.RemoveIntent(intent.ID)
 	return journal.Save()
+}
+
+func latestHerdrLaunchIntent(
+	locked *state.LockedStore,
+	projectRoot string,
+	intentID string,
+) (*state.LockedHerdrIntents, state.HerdrIntent, error) {
+	journal, err := locked.HerdrIntents(projectRoot)
+	if err != nil {
+		return nil, state.HerdrIntent{}, err
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found {
+		return nil, state.HerdrIntent{}, fmt.Errorf("finalize Herdr launch: intent %s disappeared", intentID)
+	}
+	return journal, intent, nil
+}
+
+func applyHerdrLaunchTelemetry(pane *state.Pane, intent state.HerdrIntent) {
+	launch := intent.Launch
+	if pane == nil || launch == nil || launch.EmitterNonce == "" {
+		return
+	}
+	pane.EmitterRowKey = intent.ID
+	pane.LaunchNonce = launch.Nonce
+	pane.EmitterNonce = launch.EmitterNonce
+	pane.HerdrLaunchExecutable = launch.Executable
+	pane.HerdrLaunchArgs = slices.Clone(launch.Args)
+	pane.ReportedState = string(backend.AgentRunning)
+	pane.StateRefinement = false
+	if launch.PendingReportedState != "" && launch.PendingAgentSession != nil &&
+		pane.HerdrAgentSession != nil && *launch.PendingAgentSession == *pane.HerdrAgentSession {
+		pane.ReportedState = launch.PendingReportedState
+		pane.StateRefinement = true
+	}
 }
 
 func markHerdrFinalizationFailure(

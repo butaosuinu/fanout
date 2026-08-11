@@ -37,6 +37,7 @@ type OwnedLaunchRoute struct {
 	Session      string
 	SocketPath   string
 	LauncherPath string
+	EmitterPath  string
 	ControlPath  string
 }
 
@@ -108,7 +109,8 @@ func (s *OwnedSession) LaunchRoute() (OwnedLaunchRoute, error) {
 	}
 	return OwnedLaunchRoute{
 		GitCommonDir: s.GitCommonDir, RuntimeDir: s.RuntimeDir, Session: s.Session,
-		SocketPath: s.SocketPath, LauncherPath: s.LauncherPath, ControlPath: s.ControlPath,
+		SocketPath: s.SocketPath, LauncherPath: s.LauncherPath,
+		EmitterPath: s.EmitterPath, ControlPath: s.ControlPath,
 	}, nil
 }
 

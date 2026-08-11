@@ -174,6 +174,18 @@ func BuildResolvedLaunchSpec(
 	runtimeBackend backend.Name,
 	mode LaunchMode,
 ) (LaunchSpec, error) {
+	return BuildResolvedLaunchSpecWithBackendArgs(name, prompt, runtimeBackend, mode, nil)
+}
+
+// BuildResolvedLaunchSpecWithBackendArgs builds a direct live launch and
+// inserts caller-resolved backend arguments before mode flags and the prompt.
+// It does not interpret the injected values; app orchestration owns them.
+func BuildResolvedLaunchSpecWithBackendArgs(
+	name, prompt string,
+	runtimeBackend backend.Name,
+	mode LaunchMode,
+	backendArgs []string,
+) (LaunchSpec, error) {
 	def, ok := registry[name]
 	if !ok {
 		return LaunchSpec{}, ValidateKnown(name)
@@ -186,7 +198,7 @@ func BuildResolvedLaunchSpec(
 	if err != nil {
 		return LaunchSpec{}, err
 	}
-	args = append([]string(nil), args...)
+	args = slices.Concat(backendArgs, args)
 	if strings.TrimSpace(prompt) != "" {
 		if def.PromptFlag != "" {
 			args = append(args, def.PromptFlag)

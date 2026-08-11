@@ -34,6 +34,7 @@ type fakeHerdrLaunchRuntime struct {
 	launchRoute     herdrrun.OwnedLaunchRoute
 	processInfo     herdrrun.PaneProcessInfo
 	process         func(context.Context, string) (herdrrun.PaneProcessInfo, error)
+	listLive        func(context.Context) ([]backend.LivePane, error)
 	processErr      error
 	liveErr         error
 	wait            func(context.Context, string, string, time.Duration) error
@@ -76,8 +77,11 @@ func (f *fakeHerdrLaunchRuntime) SendLaunchToken(context.Context, string, string
 	return nil
 }
 
-func (f *fakeHerdrLaunchRuntime) LivePanes(context.Context) ([]backend.LivePane, error) {
+func (f *fakeHerdrLaunchRuntime) LivePanes(ctx context.Context) ([]backend.LivePane, error) {
 	f.liveCalls++
+	if f.listLive != nil {
+		return f.listLive(ctx)
+	}
 	return append([]backend.LivePane(nil), f.live...), f.liveErr
 }
 
@@ -247,6 +251,280 @@ func TestFinalizeHerdrLaunchFailureBecomesManualCleanupRequired(t *testing.T) {
 	if saved.Launch == nil || !saved.Launch.TokenIssued || saved.Launch.Nonce != intent.Launch.Nonce {
 		t.Fatalf("saved finalization launch = %+v, want latest issued capsule", saved.Launch)
 	}
+}
+
+func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
+	worktreeReq := testHerdrWorktreeRequest(repo, "finalize-telemetry", 531)
+	result, err := realizeHerdrWorktree(context.Background(), worktreeReq, runtime, hooks)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	intent := result.Intent
+	intent.Launch = validTestHerdrLaunch()
+	intent.Launch.EmitterNonce = strings.Repeat("b", 32)
+	intent.Launch.PendingReportedState = string(backend.AgentIdle)
+	pendingSession := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-531",
+	}
+	intent.Launch.PendingAgentSession = &pendingSession
+	launchReq := Request{
+		ParentRef: worktreeReq.Parent, Number: worktreeReq.IssueNum,
+		Slug: worktreeReq.Slug, BranchName: worktreeReq.BranchName,
+		Prompt: "telemetry prompt", Agent: "claude",
+		Worktree: worktree.Plan{BaseBranch: worktreeReq.BaseBranch},
+	}
+	intent.Launch.Args = []string{"--settings", "{}", launchReq.Prompt}
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(intent)
+	err = journal.Save()
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := backend.LivePane{
+		Ref: backend.PaneRef{
+			Backend: backend.Herdr, Workspace: intent.Resource.WorkspaceID, Pane: intent.Resource.PaneID,
+		},
+		TerminalID: intent.Resource.TerminalID, RepoKey: intent.Resource.RepoKey,
+		AgentID: intent.Launch.AgentName, AgentProvider: intent.Launch.Agent,
+		AgentSession: &pendingSession,
+		SessionID:    intent.Session, SocketPath: intent.SocketPath,
+	}
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
+	stale := intent
+	stale.Launch = nil
+	err = launcher.finalizeHerdrLaunch(launchReq, locked, stale, live, codexapp.Status{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane, found := store.Find(launchReq.ParentRef, launchReq.Number)
+	if !found {
+		t.Fatal("final pane row was not saved")
+	}
+	if pane.ReportedState != "idle" || !pane.StateRefinement ||
+		pane.EmitterRowKey != intent.ID || pane.LaunchNonce != intent.Launch.Nonce ||
+		pane.EmitterNonce != intent.Launch.EmitterNonce || pane.HerdrLaunchExecutable != intent.Launch.Executable ||
+		!slices.Equal(pane.HerdrLaunchArgs, intent.Launch.Args) {
+		t.Fatalf("final telemetry binding = %+v", pane)
+	}
+	persisted, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := persisted.FindIntent(intent.ID); found {
+		t.Fatal("finalized intent remains in provisional journal")
+	}
+}
+
+func TestWaitForHerdrAgentRevalidatesConcurrentIntentChanges(t *testing.T) {
+	tests := []struct {
+		name        string
+		mutate      func(*state.LockedHerdrIntents, state.HerdrIntent) error
+		wantErr     error
+		wantErrText string
+		wantFound   bool
+		wantStatus  state.HerdrIntentStatus
+		wantPending string
+	}{
+		{
+			name: "pending telemetry",
+			mutate: func(journal *state.LockedHerdrIntents, intent state.HerdrIntent) error {
+				intent.Launch.PendingReportedState = string(backend.AgentWorking)
+				journal.UpsertIntent(intent)
+				return journal.Save()
+			},
+			wantFound: true, wantStatus: state.HerdrIntentRealized,
+			wantPending: string(backend.AgentWorking),
+		},
+		{
+			name: "parallel retry marks manual",
+			mutate: func(journal *state.LockedHerdrIntents, intent state.HerdrIntent) error {
+				err := markHerdrIntentManual(journal, intent, errors.New("parallel retry"))
+				if errors.Is(err, ErrHerdrManualCleanupRequired) {
+					return nil
+				}
+				return err
+			},
+			wantErr: ErrHerdrManualCleanupRequired, wantFound: true,
+			wantStatus: state.HerdrIntentManualCleanupRequired,
+		},
+		{
+			name: "launch identity drifts",
+			mutate: func(journal *state.LockedHerdrIntents, intent state.HerdrIntent) error {
+				intent.Launch.Nonce = strings.Repeat("c", 32)
+				journal.UpsertIntent(intent)
+				return journal.Save()
+			},
+			wantErrText: "launch identity changed", wantFound: true,
+			wantStatus: state.HerdrIntentRealized,
+		},
+		{
+			name: "intent disappears",
+			mutate: func(journal *state.LockedHerdrIntents, intent state.HerdrIntent) error {
+				journal.RemoveIntent(intent.ID)
+				return journal.Save()
+			},
+			wantErrText: "intent disappeared",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo, locked, intent, live := herdrEmitterWaitFixture(t)
+			updated := make(chan error, 1)
+			go mutateHerdrIntentAfterUnlock(repo, intent, test.mutate, updated)
+			runtime := &fakeHerdrLaunchRuntime{}
+			runtime.listLive = func(context.Context) ([]backend.LivePane, error) {
+				return []backend.LivePane{live}, <-updated
+			}
+			launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
+			_, err := launcher.waitForHerdrAgentUnlocked(
+				context.Background(), locked, intent, intent.Launch.AgentName, "",
+			)
+			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("wait error = %v, want %v containing %q", err, test.wantErr, test.wantErrText)
+			}
+			if test.wantErr == nil && test.wantErrText == "" && err != nil {
+				t.Fatalf("wait error = %v, want nil", err)
+			}
+			if test.wantErrText != "" && (err == nil || !strings.Contains(err.Error(), test.wantErrText)) {
+				t.Fatalf("wait error = %v, want text %q", err, test.wantErrText)
+			}
+			journal, loadErr := locked.HerdrIntents(repo)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			latest, found := journal.FindIntent(intent.ID)
+			if found != test.wantFound {
+				t.Fatalf("intent found = %t, want %t", found, test.wantFound)
+			}
+			if found && (latest.Status != test.wantStatus || latest.Launch.PendingReportedState != test.wantPending) {
+				t.Fatalf("persisted concurrent intent = %+v", latest)
+			}
+		})
+	}
+}
+
+func TestFinishIssuedHerdrAgentPreservesObservedAgentAfterContextExpires(t *testing.T) {
+	if herdrLaunchLockReacquireTimeout < maxHerdrRealizeTimeout {
+		t.Fatalf("lock recovery timeout = %s, want at least %s", herdrLaunchLockReacquireTimeout, maxHerdrRealizeTimeout)
+	}
+	repo, locked, intent, live := herdrEmitterWaitFixture(t)
+	live.AgentID = intent.Launch.Agent
+	held := make(chan struct{})
+	holderDone := make(chan error, 1)
+	go func() {
+		contender, err := state.LockProjectForLaunch(repo)
+		if err != nil {
+			close(held)
+			holderDone <- err
+			return
+		}
+		close(held)
+		time.Sleep(250 * time.Millisecond)
+		holderDone <- contender.Unlock()
+	}()
+	runtime := &fakeHerdrLaunchRuntime{}
+	runtime.listLive = func(context.Context) ([]backend.LivePane, error) {
+		<-held
+		return []backend.LivePane{live}, nil
+	}
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := launcher.finishIssuedHerdrAgent(ctx, Request{Agent: intent.Launch.Agent}, locked, intent)
+	if !errors.Is(err, errHerdrLaunchStatePreserved) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("finish error = %v, want preserved launch with expired context", err)
+	}
+	if errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("observed agent entered manual cleanup: %v", err)
+	}
+	if holderErr := <-holderDone; holderErr != nil {
+		t.Fatal(holderErr)
+	}
+	journal, loadErr := locked.HerdrIntents(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	latest, found := journal.FindIntent(intent.ID)
+	if !found || latest.Status != state.HerdrIntentRealized {
+		t.Fatalf("preserved launch intent = (%+v, %t)", latest, found)
+	}
+}
+
+func herdrEmitterWaitFixture(t *testing.T) (string, *state.LockedStore, state.HerdrIntent, backend.LivePane) {
+	t.Helper()
+	repo := newHerdrRealizeRepo(t)
+	realizeRuntime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, realizeRuntime)
+	hooks := deterministicHerdrRealizeHooks()
+	realizeTestHerdrCoordinator(t, repo, realizeRuntime, hooks)
+	result, err := realizeHerdrWorktree(
+		context.Background(), testHerdrWorktreeRequest(repo, "emitter-lock-window", 529), realizeRuntime, hooks,
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+	intent := result.Intent
+	intent.Launch = validTestHerdrLaunch()
+	intent.Launch.EmitterNonce = strings.Repeat("b", 32)
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	live := testHerdrIdlePane(intent)
+	live.AgentPresent = true
+	live.AgentProvider = intent.Launch.Agent
+	live.AgentID = intent.Launch.AgentName
+	return repo, locked, intent, live
+}
+
+func mutateHerdrIntentAfterUnlock(
+	repo string,
+	intent state.HerdrIntent,
+	mutate func(*state.LockedHerdrIntents, state.HerdrIntent) error,
+	result chan<- error,
+) {
+	locked, err := state.LockProjectForLaunch(repo)
+	if err == nil {
+		journal, journalErr := locked.HerdrIntents(repo)
+		err = journalErr
+		if journalErr == nil {
+			latest, found := journal.FindIntent(intent.ID)
+			if !found {
+				err = errors.New("realized intent disappeared before mutation")
+			} else {
+				err = mutate(journal, latest)
+			}
+		}
+		err = errors.Join(err, locked.Unlock())
+	}
+	result <- err
 }
 
 func validTestHerdrLaunch() *state.HerdrLaunch {
@@ -742,6 +1020,18 @@ func TestVerifyHerdrAgentProcessRejectsAmbiguousOrForeignChains(t *testing.T) {
 	info.ForegroundProcesses[0] = foreignRoot
 	if err := verifyHerdrAgentProcess(info, intent); err == nil {
 		t.Fatal("foreign interpreter entrypoint was accepted")
+	}
+
+	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child}
+	info.ForegroundProcesses[0].Executable = "/foreign/not-node"
+	if err := verifyHerdrAgentProcess(info, intent); err == nil {
+		t.Fatal("interpreter argv0 from a different OS executable was accepted")
+	}
+
+	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child}
+	info.ForegroundProcesses[1].Executable = "/foreign/not-codex"
+	if err := verifyHerdrAgentProcess(info, intent); err == nil {
+		t.Fatal("agent argv0 from a different OS executable was accepted")
 	}
 
 	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child}

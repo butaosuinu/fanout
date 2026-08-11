@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,10 +9,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/parentref"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 	"github.com/butaosuinu/fanout/internal/infra/execx"
 )
@@ -91,17 +92,20 @@ type HerdrIntent struct {
 // HerdrLaunch is the non-secret launch capsule recorded after workspace
 // realization. The environment itself lives in a one-shot owner-only file.
 type HerdrLaunch struct {
-	Nonce               string   `json:"nonce"`
-	Agent               string   `json:"agent"`
-	AgentName           string   `json:"agentName"`
-	Executable          string   `json:"executable"`
-	Args                []string `json:"args"`
-	TeamDBPath          string   `json:"teamDbPath,omitempty"`
-	CodexTeamStatusPath string   `json:"codexTeamStatusPath,omitempty"`
-	EnvFilePath         string   `json:"envFilePath"`
-	EnvNameCount        int      `json:"envNameCount"`
-	LauncherReady       bool     `json:"launcherReady,omitempty"`
-	TokenIssued         bool     `json:"tokenIssued,omitempty"`
+	Nonce                string                   `json:"nonce"`
+	EmitterNonce         string                   `json:"emitterNonce,omitempty"`
+	PendingReportedState string                   `json:"pendingReportedState,omitempty"`
+	PendingAgentSession  *backend.AgentSessionRef `json:"pendingAgentSession,omitempty"`
+	Agent                string                   `json:"agent"`
+	AgentName            string                   `json:"agentName"`
+	Executable           string                   `json:"executable"`
+	Args                 []string                 `json:"args"`
+	TeamDBPath           string                   `json:"teamDbPath,omitempty"`
+	CodexTeamStatusPath  string                   `json:"codexTeamStatusPath,omitempty"`
+	EnvFilePath          string                   `json:"envFilePath"`
+	EnvNameCount         int                      `json:"envNameCount"`
+	LauncherReady        bool                     `json:"launcherReady,omitempty"`
+	TokenIssued          bool                     `json:"tokenIssued,omitempty"`
 }
 
 // HerdrIntents is the repository-common intent journal. It holds intents
@@ -123,7 +127,11 @@ type LockedHerdrIntents struct {
 // HerdrIntentsPath returns the repository-common journal path shared by every
 // linked worktree.
 func HerdrIntentsPath(projectRoot string) (string, error) {
-	out, err := execx.Output(projectRoot, nil, "git", "rev-parse", "--git-common-dir")
+	return herdrIntentsPathContext(context.Background(), projectRoot)
+}
+
+func herdrIntentsPathContext(ctx context.Context, projectRoot string) (string, error) {
+	out, err := execx.OutputContext(ctx, projectRoot, nil, "git", "rev-parse", "--git-common-dir")
 	if err != nil {
 		return "", fmt.Errorf("resolve Herdr intents git common directory: %w", err)
 	}
@@ -161,7 +169,7 @@ func LoadHerdrIntentsPath(path string) (HerdrIntents, error) {
 	return loadHerdrIntents(path)
 }
 
-func lockHerdrIntentsPath(path string) (*os.File, error) {
+func lockHerdrIntentsPath(ctx context.Context, path string, blocking bool) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create Herdr intents directory: %w", err)
 	}
@@ -170,7 +178,7 @@ func lockHerdrIntentsPath(path string) (*os.File, error) {
 	if openErr != nil {
 		return nil, fmt.Errorf("open Herdr intents lock %s: %w", lockPath, openErr)
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+	if err := lockFileExclusive(ctx, file, blocking); err != nil {
 		_ = file.Close() // The flock error is authoritative.
 		return nil, fmt.Errorf("lock Herdr intents %s: %w", lockPath, err)
 	}
@@ -576,13 +584,43 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("launch fields are incomplete")
 	}
-	for _, arg := range launch.Args {
+	if err := validateHerdrLaunchArguments(launch.Args); err != nil {
+		return err
+	}
+	if err := validateHerdrEmitter(launch); err != nil {
+		return err
+	}
+	if launch.TokenIssued && !launch.LauncherReady {
+		return fmt.Errorf("launch token was issued before launcher readiness")
+	}
+	return nil
+}
+
+func validateHerdrLaunchArguments(args []string) error {
+	for _, arg := range args {
 		if strings.ContainsRune(arg, '\x00') {
 			return fmt.Errorf("launch argv contains NUL")
 		}
 	}
-	if launch.TokenIssued && !launch.LauncherReady {
-		return fmt.Errorf("launch token was issued before launcher readiness")
+	return nil
+}
+
+func validateHerdrEmitter(launch *HerdrLaunch) error {
+	if launch.EmitterNonce == "" {
+		if launch.PendingReportedState != "" {
+			return fmt.Errorf("pending telemetry requires an emitter nonce")
+		}
+		return nil
+	}
+	if launch.Agent != "claude" || !telemetry.ValidNonce(launch.EmitterNonce) {
+		return fmt.Errorf("emitter fields require a Claude launch and valid nonce")
+	}
+	if launch.PendingReportedState == "" {
+		return nil
+	}
+	state, ok := backend.ParseAgentState(launch.PendingReportedState)
+	if !ok || state == backend.AgentRunning {
+		return fmt.Errorf("pending telemetry has an invalid provider state")
 	}
 	return nil
 }
