@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -256,9 +257,13 @@ func TestAutomaticHerdrFocusReloadsPersistedPaneIdentity(t *testing.T) {
 		SessionID: "owned-session", SocketPath: "/tmp/owned.sock",
 	}
 	var focused state.Pane
+	unrelated := backend.ObservationRouteUnavailable(
+		backend.ObservationRoute{Backend: backend.Tmux},
+		errors.New("tmux route failed"),
+	)
 	m := newModel(Options{
 		ProjectRoot: root, BackendSelection: backend.Selection{Name: backend.Herdr},
-		ListLive:            func() ([]backend.LivePane, error) { return []backend.LivePane{live}, nil },
+		ListLive:            func() ([]backend.LivePane, error) { return []backend.LivePane{live}, unrelated },
 		HerdrActionDisabled: func(state.Pane) string { return "" },
 		FocusHerdrPane:      func(pane state.Pane) error { focused = pane; return nil },
 		FocusPane:           func(string) error { t.Fatal("automatic Herdr focus routed through tmux"); return nil },
@@ -267,6 +272,25 @@ func TestAutomaticHerdrFocusReloadsPersistedPaneIdentity(t *testing.T) {
 	focusedMsg, ok := msg.(paneFocusedMsg)
 	if !ok || focusedMsg.err != nil || focused.HerdrWorkspaceLabel != "owned-label" || focused.HerdrTerminalID != "term-1" {
 		t.Fatalf("automatic Herdr focus = msg:%#v pane:%+v", msg, focused)
+	}
+}
+
+func TestHerdrFocusRetainsTargetRouteObservationFailure(t *testing.T) {
+	pane := paneView{
+		Backend: backend.Herdr,
+		savedPane: state.Pane{
+			HerdrSession: "owned-session", HerdrSocketPath: "/tmp/owned.sock",
+		},
+	}
+	route := backend.ObservationRoute{
+		Backend: backend.Herdr, SessionID: "owned-session", SocketPath: "/tmp/owned.sock",
+	}
+	err := backend.ObservationRouteUnavailable(route, errors.New("owned route failed"))
+	if got := observationErrorForPane(err, pane); !errors.Is(got, err) {
+		t.Fatalf("target route error = %v, want %v", got, err)
+	}
+	if got := observationErrorForPane(errors.New("unscoped failure"), pane); got == nil {
+		t.Fatal("unscoped observation failure was ignored")
 	}
 }
 

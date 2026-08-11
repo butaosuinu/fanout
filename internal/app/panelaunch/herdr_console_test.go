@@ -214,6 +214,59 @@ func TestRemoveSavedHerdrConsoleRowFromOwningLinkedWorktree(t *testing.T) {
 	}
 }
 
+func TestRemoveStaleHerdrConsoleStateRemovesCompletedIntentBeforeRow(t *testing.T) {
+	root, _ := herdrConsoleTestWorktrees(t)
+	pane := herdrConsoleTestPane(root, "workspace-root", "pane-root")
+	pane.SourceProjectRoot = root
+	locked, err := state.LockProjectForLaunch(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
+		}
+	}()
+	if err = locked.RecordPane(pane); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := locked.HerdrIntents(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentID, err := state.HerdrCoordinatorIntentID(HerdrConsoleRuntimeParent, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(state.HerdrIntent{
+		ID: intentID, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentRealized,
+		Parent: HerdrConsoleRuntimeParent, RuntimeParent: HerdrConsoleRuntimeParent,
+		WorktreePath: pane.WorktreePath, WorkspaceLabel: pane.HerdrWorkspaceLabel,
+		Resource: state.HerdrResource{
+			WorkspaceID: pane.HerdrWorkspaceID, Label: pane.HerdrWorkspaceLabel,
+			PaneID: pane.PaneID, TerminalID: pane.HerdrTerminalID, CurrentPath: pane.WorktreePath,
+		},
+		Session: pane.HerdrSession, SocketPath: pane.HerdrSocketPath,
+		ExpiresUnixMS: time.Now().Add(time.Minute).UnixMilli(),
+	})
+	if err = journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err = removeStaleHerdrConsoleState(locked, root, pane); err != nil {
+		t.Fatal(err)
+	}
+	journal, err = locked.HerdrIntents(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := journal.FindIntent(intentID); found {
+		t.Fatal("completed console intent remains after stale cleanup")
+	}
+	if _, found := locked.Find(pane.Parent, pane.IssueNum); found {
+		t.Fatal("stale console row remains after intent cleanup")
+	}
+}
+
 func herdrConsoleTestWorktrees(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()

@@ -133,7 +133,7 @@ func reuseHerdrConsole(
 		}
 		return HerdrConsoleResult{}, false, nil
 	}
-	if err := removeCompletedHerdrConsoleIntent(locked, projectRoot); err != nil {
+	if err := removeCompletedHerdrConsoleIntent(locked, projectRoot, pane); err != nil {
 		return HerdrConsoleResult{}, false, err
 	}
 	result, err := herdrConsoleResult(owned, pane)
@@ -163,7 +163,7 @@ func removeStaleHerdrConsole(
 		return err
 	}
 	if !present {
-		return removeSavedHerdrConsoleRow(locked, projectRoot, pane)
+		return removeStaleHerdrConsoleState(locked, projectRoot, pane)
 	}
 	live, err := owned.LivePanes(ctx)
 	if err != nil {
@@ -174,6 +174,17 @@ func removeStaleHerdrConsole(
 		return err
 	}
 	if err := closeStaleHerdrConsole(owned, current); err != nil {
+		return err
+	}
+	return removeStaleHerdrConsoleState(locked, projectRoot, pane)
+}
+
+func removeStaleHerdrConsoleState(
+	locked *state.LockedStore,
+	projectRoot string,
+	pane state.Pane,
+) error {
+	if err := removeCompletedHerdrConsoleIntent(locked, projectRoot, pane); err != nil {
 		return err
 	}
 	return removeSavedHerdrConsoleRow(locked, projectRoot, pane)
@@ -443,7 +454,11 @@ func validateSavedHerdrConsoleShape(pane state.Pane) error {
 	return nil
 }
 
-func removeCompletedHerdrConsoleIntent(locked *state.LockedStore, projectRoot string) error {
+func removeCompletedHerdrConsoleIntent(
+	locked *state.LockedStore,
+	projectRoot string,
+	pane state.Pane,
+) error {
 	journal, err := locked.HerdrIntents(projectRoot)
 	if err != nil {
 		return err
@@ -452,10 +467,26 @@ func removeCompletedHerdrConsoleIntent(locked *state.LockedStore, projectRoot st
 	if err != nil {
 		return err
 	}
-	if !journal.RemoveIntent(intentID) {
+	intent, found := journal.FindIntent(intentID)
+	if !found {
 		return nil
 	}
+	if !completedHerdrConsoleIntentMatchesPane(intent, pane) {
+		return fmt.Errorf("completed Herdr console intent does not match saved pane")
+	}
+	journal.RemoveIntent(intentID)
 	return journal.Save()
+}
+
+func completedHerdrConsoleIntentMatchesPane(intent state.HerdrIntent, pane state.Pane) bool {
+	if intent.Kind != state.HerdrIntentCoordinator || intent.Status != state.HerdrIntentRealized ||
+		intent.Parent != HerdrConsoleRuntimeParent || intent.RuntimeParent != HerdrConsoleRuntimeParent ||
+		filepath.Clean(intent.WorktreePath) != filepath.Clean(pane.WorktreePath) ||
+		intent.WorkspaceLabel != pane.HerdrWorkspaceLabel {
+		return false
+	}
+	route := herdrrun.OwnedLaunchRoute{Session: intent.Session, SocketPath: intent.SocketPath}
+	return validateHerdrCoordinatorPane(pane, intent, route) == nil
 }
 
 func herdrConsoleResult(

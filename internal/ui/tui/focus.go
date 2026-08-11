@@ -174,13 +174,32 @@ func (m model) focusFreshHerdrPaneIDCmd(paneID, contextNotice string) tea.Cmd {
 func (m model) loadFreshHerdrPane(paneID string) (paneView, error) {
 	panes, err := loadPaneViews(m.opts.ProjectRoot, nil, m.opts.ListLive, nil)
 	pane, selectErr := uniqueLiveHerdrPane(panes, paneID)
-	if err = errors.Join(err, selectErr); err != nil {
+	if selectErr != nil {
+		return paneView{}, errors.Join(err, selectErr)
+	}
+	if err := observationErrorForPane(err, pane); err != nil {
 		return paneView{}, err
 	}
 	if reason := m.runtimeActionDisabledReason(&pane, "focus"); reason != "" {
 		return paneView{}, fmt.Errorf("%s", reason)
 	}
 	return pane, nil
+}
+
+func observationErrorForPane(err error, pane paneView) error {
+	failedRoutes, allRoutes := backend.ClassifyObservationError(err)
+	if err == nil || allRoutes {
+		return err
+	}
+	route := backend.ObservationRoute{Backend: backend.NormalizeName(pane.Backend)}
+	if route.Backend == backend.Herdr {
+		route.SessionID = strings.TrimSpace(pane.savedPane.HerdrSession)
+		route.SocketPath = strings.TrimSpace(pane.savedPane.HerdrSocketPath)
+	}
+	if failedRoutes[route] {
+		return err
+	}
+	return nil
 }
 
 func focusFreshHerdrPane(
