@@ -105,20 +105,28 @@ func validateHerdrCloseOperation(opts Options, pane state.Pane, mode CloseMode, 
 }
 
 func verifyHerdrClosePreflight(opts Options, pane state.Pane, mode CloseMode) error {
+	_, err := inspectHerdrClosePreflight(opts, pane, mode)
+	return err
+}
+
+func inspectHerdrClosePreflight(opts Options, pane state.Pane, mode CloseMode) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), herdrCleanupTimeout)
 	defer cancel()
 	runtime, err := opts.HerdrRuntime(ctx, pane)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
-		return verifyErr
+		return false, verifyErr
 	}
-	resource, predicate, reopened, err := herdrClosePreflightIdentity(opts, pane, mode)
+	resource, predicate, reopened, cleanupStarted, err := herdrClosePreflightIdentity(opts, pane, mode)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return verifyHerdrCloseTarget(ctx, opts.ProjectRoot, runtime, pane, resource, predicate, reopened)
+	if err := verifyHerdrCloseTarget(ctx, opts.ProjectRoot, runtime, pane, resource, predicate, reopened); err != nil {
+		return false, err
+	}
+	return cleanupStarted, nil
 }
 
 func verifyHerdrCloseTarget(
@@ -153,22 +161,22 @@ func herdrClosePreflightIdentity(
 	opts Options,
 	pane state.Pane,
 	mode CloseMode,
-) (state.HerdrResource, herdrWorkspacePredicateFunc, bool, error) {
+) (state.HerdrResource, herdrWorkspacePredicateFunc, bool, bool, error) {
 	resource := herdrResourceFromPane(pane)
 	journal, err := state.LoadHerdrIntents(opts.ProjectRoot)
 	if err != nil {
-		return state.HerdrResource{}, nil, false, err
+		return state.HerdrResource{}, nil, false, false, err
 	}
 	_, cleanupID, err := herdrCleanupIntentIDs(opts.ProjectRoot, pane)
 	if err != nil {
-		return state.HerdrResource{}, nil, false, err
+		return state.HerdrResource{}, nil, false, false, err
 	}
 	intent, found := journal.FindIntent(cleanupID)
 	if !found {
-		return resource, herdrWorkspacePredicate(resource), false, nil
+		return resource, herdrWorkspacePredicate(resource), false, false, nil
 	}
 	if err := validateSavedHerdrCleanup(intent, opts.ProjectRoot, pane, mode); err != nil {
-		return state.HerdrResource{}, nil, false, err
+		return state.HerdrResource{}, nil, false, false, err
 	}
 	resource = intent.Resource
 	reopened := intent.Status == state.HerdrIntentIssued && intent.CleanupPhase == state.HerdrCleanupReopen
@@ -179,9 +187,9 @@ func herdrClosePreflightIdentity(
 			intent.Resource.RepoKey,
 			intent.Resource.RepoRoot,
 		)
-		return resource, predicate, true, nil
+		return resource, predicate, true, true, nil
 	}
-	return resource, herdrWorkspacePredicate(resource), false, nil
+	return resource, herdrWorkspacePredicate(resource), false, true, nil
 }
 
 func closeHerdrWorktree(

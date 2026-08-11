@@ -531,8 +531,12 @@ func runBeforeWorktreeRemoveHooks(opts Options, panes []state.Pane, mode CloseMo
 		if pane.IsShell() || pane.IsAttachedAgent() || !recordedWorktreeExists(pane) {
 			continue
 		}
-		if !verifyHerdrHookPreflight(opts, pane, mode, hooks.BeforeWorktreeRemove, lg) {
+		skipHook, ok := verifyHerdrHookPreflight(opts, pane, mode, hooks.BeforeWorktreeRemove, lg)
+		if !ok {
 			return false
+		}
+		if skipHook {
+			continue
 		}
 		if !runBlockingHook(hooks.BeforeWorktreeRemove, opts, pane, "", lg) {
 			return false
@@ -570,10 +574,13 @@ func removeManagedWorktrees(opts Options, locked *state.LockedStore, panes []sta
 func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.Pane, mode CloseMode, lg Logger) bool {
 	if paneRefFromState(pane).Backend == backend.Herdr {
 		hadWorktree := recordedWorktreeExists(pane)
-		if !verifyHerdrHookPreflight(opts, pane, mode, hooks.BeforePaneClose, lg) {
+		skipHook, ok := verifyHerdrHookPreflight(opts, pane, mode, hooks.BeforePaneClose, lg)
+		if !ok {
 			return false
 		}
-		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
+		if !skipHook {
+			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
+		}
 		if !closeHerdrWorktree(opts, locked, pane, mode, lg) {
 			return false
 		}
@@ -597,15 +604,16 @@ func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.P
 	return true
 }
 
-func verifyHerdrHookPreflight(opts Options, pane state.Pane, mode CloseMode, hook hooks.Type, lg Logger) bool {
+func verifyHerdrHookPreflight(opts Options, pane state.Pane, mode CloseMode, hook hooks.Type, lg Logger) (bool, bool) {
 	if paneRefFromState(pane).Backend != backend.Herdr || len(opts.Hooks.Events[hook]) == 0 {
-		return true
+		return false, true
 	}
-	if err := verifyHerdrClosePreflight(opts, pane, mode); err != nil {
+	cleanupStarted, err := inspectHerdrClosePreflight(opts, pane, mode)
+	if err != nil {
 		lg.Err("%s: Herdr %s hook preflight failed: %v", paneLabel(pane), hook, err)
-		return false
+		return false, false
 	}
-	return true
+	return cleanupStarted, true
 }
 
 func validateCloseOperations(opts Options, panes []state.Pane, mode CloseMode, lg Logger) bool {

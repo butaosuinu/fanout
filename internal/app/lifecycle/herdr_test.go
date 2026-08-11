@@ -527,6 +527,80 @@ func TestHerdrHooksRequireFreshIdentityPreflight(t *testing.T) {
 	}
 }
 
+func TestHerdrCleanupRetryDoesNotRepeatHooks(t *testing.T) {
+	tests := []struct {
+		name      string
+		prepare   func(*testing.T, herdrLifecycleFixture) *fakeHerdrLifecycleRuntime
+		beforeTry func(*fakeHerdrLifecycleRuntime)
+		wantRetry exitcode.Code
+	}{
+		{
+			name: "manual cleanup required",
+			prepare: func(t *testing.T, fixture herdrLifecycleFixture) *fakeHerdrLifecycleRuntime {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(fixture.worktreePath, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return &fakeHerdrLifecycleRuntime{
+					projectRoot: fixture.projectRoot,
+					workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+				}
+			},
+			beforeTry: func(*fakeHerdrLifecycleRuntime) {},
+			wantRetry: exitcode.Env,
+		},
+		{
+			name: "issued reopen",
+			prepare: func(t *testing.T, fixture herdrLifecycleFixture) *fakeHerdrLifecycleRuntime {
+				t.Helper()
+				runtime := prepareHerdrCleanupPhase(t, fixture, state.HerdrCleanupReopen)
+				runtime.observeAfterMutationErr = errors.New("observation temporarily unavailable")
+				return runtime
+			},
+			beforeTry: func(runtime *fakeHerdrLifecycleRuntime) {
+				runtime.observeAfterMutationErr = nil
+			},
+			wantRetry: exitcode.OK,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			hookPath := filepath.Join(t.TempDir(), "before-worktree")
+			t.Setenv("FANOUT_TEST_BEFORE_WORKTREE", hookPath)
+			runtime := tt.prepare(t, fixture)
+			opts := herdrLifecycleOptions(fixture, runtime)
+			opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+				hooks.BeforeWorktreeRemove: {{
+					Command: `printf 'called\n' >> "$FANOUT_TEST_BEFORE_WORKTREE"`, Timeout: time.Second,
+				}},
+			}}
+
+			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+			}
+			assertHerdrHookCalls(t, hookPath, 1)
+
+			tt.beforeTry(runtime)
+			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != tt.wantRetry {
+				t.Fatalf("retry Close() = %d, want %d", got, tt.wantRetry)
+			}
+			assertHerdrHookCalls(t, hookPath, 1)
+		})
+	}
+}
+
+func assertHerdrHookCalls(t *testing.T, path string, want int) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "called\n"); got != want {
+		t.Fatalf("hook calls = %d, want %d", got, want)
+	}
+}
+
 func TestHerdrCloseDoesNotForceDirtyCheckout(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
