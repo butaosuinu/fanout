@@ -27,7 +27,7 @@ func newHerdrEmitterLaunch(
 	agentID string,
 	statePath string,
 ) (herdrEmitterLaunch, error) {
-	if req.Agent != "claude" {
+	if req.Agent != "claude" && !req.CodexPlanMode() {
 		return herdrEmitterLaunch{}, nil
 	}
 	emitterNonce, err := randomHerdrToken()
@@ -38,17 +38,20 @@ func newHerdrEmitterLaunch(
 	if emitterPath == "" {
 		emitterPath = route.LauncherPath
 	}
-	settings, err := herdrClaudeHookSettings(emitterPath)
-	if err != nil {
-		return herdrEmitterLaunch{}, err
-	}
-	return herdrEmitterLaunch{
-		backendArgs: []string{"--settings", settings},
+	launch := herdrEmitterLaunch{
 		environment: herdrEmitterEnvironment(
 			statePath, intent, route, launchNonce, emitterNonce, req.Agent, agentID,
 		),
 		nonce: emitterNonce,
-	}, nil
+	}
+	if req.Agent == "claude" {
+		settings, err := herdrClaudeHookSettings(emitterPath)
+		if err != nil {
+			return herdrEmitterLaunch{}, err
+		}
+		launch.backendArgs = []string{"--settings", settings}
+	}
+	return launch, nil
 }
 
 func herdrClaudeHookSettings(fanoutPath string) (string, error) {
@@ -88,6 +91,7 @@ func herdrEmitterEnvironment(
 		{telemetry.SessionEnv, route.Session},
 		{telemetry.SocketPathEnv, route.SocketPath},
 		{telemetry.WorkspaceIDEnv, intent.Resource.WorkspaceID},
+		{telemetry.WorkspaceLabelEnv, intent.Resource.Label},
 		{telemetry.PaneIDEnv, intent.Resource.PaneID},
 		{telemetry.TerminalIDEnv, intent.Resource.TerminalID},
 		{telemetry.AgentEnv, agentName},

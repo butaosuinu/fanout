@@ -18,6 +18,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/errs"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -38,6 +39,7 @@ type RuntimeTarget struct {
 	TerminalID           string
 	Agent                string
 	AgentID              string
+	PlanMode             bool
 	AgentSession         *backend.AgentSessionRef
 	AcceptUnboundSession bool
 	WorktreePath         string
@@ -301,7 +303,7 @@ func finalRuntimeTarget(pane state.Pane, signal telemetry.Signal) (RuntimeTarget
 		SocketPath: pane.HerdrSocketPath, RepoKey: pane.HerdrRepoKey,
 		WorkspaceID: pane.HerdrWorkspaceID, PaneID: pane.PaneID,
 		TerminalID: pane.HerdrTerminalID, Agent: pane.Agent,
-		AgentID: pane.HerdrAgentID, AgentSession: pane.HerdrAgentSession,
+		AgentID: pane.HerdrAgentID, PlanMode: pane.PlanMode, AgentSession: pane.HerdrAgentSession,
 		AcceptUnboundSession: pane.HerdrAgentSession == nil,
 		WorktreePath:         pane.WorktreePath, Executable: pane.HerdrLaunchExecutable,
 		Args: slices.Clone(pane.HerdrLaunchArgs),
@@ -337,7 +339,7 @@ func pendingRuntimeTarget(intent state.HerdrIntent, signal telemetry.Signal) (Ru
 		SocketPath: intent.SocketPath, RepoKey: intent.Resource.RepoKey,
 		WorkspaceID: intent.Resource.WorkspaceID, PaneID: intent.Resource.PaneID,
 		TerminalID: intent.Resource.TerminalID, Agent: launch.Agent,
-		AgentID: launch.AgentName, AcceptUnboundSession: true,
+		AgentID: launch.AgentName, PlanMode: launch.CodexPlanStatusPath != "", AcceptUnboundSession: true,
 		WorktreePath: intent.WorktreePath, Executable: launch.Executable,
 		Args: slices.Clone(launch.Args),
 	}, nil
@@ -386,7 +388,7 @@ func verifyRuntimeObservation(target RuntimeTarget, observation Observation) (ba
 	}
 	err := herdrprocess.VerifyAgent(observation.ProcessInfo, herdrprocess.Identity{
 		WorktreePath: target.WorktreePath,
-		Executable:   target.Executable, Args: target.Args,
+		Executable:   target.Executable, Args: target.Args, Agent: target.Agent,
 	})
 	if err != nil {
 		return backend.LivePane{}, fmt.Errorf("%w: %w", errRuntimeIdentityChanged, err)
@@ -432,10 +434,18 @@ func validateRuntimeTarget(target RuntimeTarget) error {
 	if slices.ContainsFunc(paths, invalidCanonicalPath) {
 		return fmt.Errorf("persisted telemetry path identity is invalid")
 	}
-	if target.Backend != backend.Herdr || target.Agent != "claude" || invalidAgentSession(target) {
+	if target.Backend != backend.Herdr || !validTelemetryAgent(target) || invalidAgentSession(target) {
 		return fmt.Errorf("persisted telemetry backend identity is invalid")
 	}
 	return nil
+}
+
+func validTelemetryAgent(target RuntimeTarget) bool {
+	if target.Agent == "claude" {
+		return true
+	}
+	return target.Agent == "codex" && target.PlanMode &&
+		len(target.Args) > 0 && target.Args[0] == codexapp.PlanTUICommand
 }
 
 func invalidAgentSession(target RuntimeTarget) bool {

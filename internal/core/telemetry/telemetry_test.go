@@ -18,6 +18,14 @@ func TestParseSignalAcceptsExactLaunchIdentity(t *testing.T) {
 	}
 }
 
+func TestParseSignalAcceptsCodexPlanController(t *testing.T) {
+	env := validSignalEnvironment()
+	env[AgentEnv] = "codex"
+	if _, err := ParseSignal([]string{"plan"}, func(key string) string { return env[key] }); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestParseSignalRejectsSyntheticOrIncompleteInput(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -34,7 +42,7 @@ func TestParseSignalRejectsSyntheticOrIncompleteInput(t *testing.T) {
 			env[BackendEnv] = "tmux"
 		}},
 		{name: "unsupported agent", args: []string{"done"}, mutate: func(env map[string]string) {
-			env[AgentEnv] = "codex"
+			env[AgentEnv] = "opencode"
 		}},
 		{name: "bad generation", args: []string{"plan"}, mutate: func(env map[string]string) {
 			env[LaunchNonceEnv] = "old"

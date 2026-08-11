@@ -135,7 +135,7 @@ func (l *Launcher) adoptHerdrAgent(
 	locked *state.LockedStore,
 	intent state.HerdrIntent,
 ) (backend.LivePane, error) {
-	statusPath, err := herdrCodexTeamStatusPath(req, intent)
+	statusPath, err := herdrCodexStatusPath(req, intent)
 	if err != nil {
 		return backend.LivePane{}, err
 	}
@@ -154,15 +154,15 @@ func (l *Launcher) waitForHerdrAgentUnlocked(
 	locked *state.LockedStore,
 	intent state.HerdrIntent,
 	wantAgentID string,
-	codexTeamStatusPath string,
+	codexStatusPath string,
 ) (backend.LivePane, error) {
 	if intent.Launch == nil || intent.Launch.EmitterNonce == "" {
-		return l.waitForHerdrAgent(ctx, intent, wantAgentID, codexTeamStatusPath)
+		return l.waitForHerdrAgent(ctx, intent, wantAgentID, codexStatusPath)
 	}
 	if err := locked.Unlock(); err != nil {
 		return backend.LivePane{}, err
 	}
-	live, waitErr := l.waitForHerdrAgent(ctx, intent, wantAgentID, codexTeamStatusPath)
+	live, waitErr := l.waitForHerdrAgent(ctx, intent, wantAgentID, codexStatusPath)
 	lockErr := l.reacquireHerdrLaunchAfterAgentWait(locked, intent)
 	if waitErr == nil && lockErr == nil && ctx.Err() != nil {
 		waitErr = fmt.Errorf(
@@ -391,7 +391,7 @@ func herdrLaunchProcessIdentity(intent state.HerdrIntent) herdrprocess.Identity 
 	}
 	return herdrprocess.Identity{
 		WorktreePath: intent.WorktreePath,
-		Executable:   intent.Launch.Executable, Args: intent.Launch.Args,
+		Executable:   intent.Launch.Executable, Args: intent.Launch.Args, Agent: intent.Launch.Agent,
 	}
 }
 
@@ -399,11 +399,11 @@ func (l *Launcher) waitForHerdrAgent(
 	ctx context.Context,
 	intent state.HerdrIntent,
 	wantAgentID string,
-	codexTeamStatusPath string,
+	codexStatusPath string,
 ) (backend.LivePane, error) {
 	deadline := time.UnixMilli(intent.ExpiresUnixMS)
 	for time.Now().Before(deadline) {
-		if err := codexapp.StartupFailure(codexTeamStatusPath); err != nil {
+		if err := codexapp.StartupFailure(codexStatusPath); err != nil {
 			return backend.LivePane{}, err
 		}
 		live, found, err := l.observeExactHerdrAgent(ctx, intent, wantAgentID)

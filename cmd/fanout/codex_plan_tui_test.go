@@ -5,7 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 )
 
@@ -42,5 +45,55 @@ func TestParseCodexPlanTUIArgsStillRequiresPromptOrResumeThread(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "--prompt is required") {
 		t.Fatalf("stderr = %q, want prompt error", stderr.String())
+	}
+}
+
+func TestCodexPlanEmitterEnvUsesPinnedEmitterStatePath(t *testing.T) {
+	env := map[string]string{
+		telemetry.StatePathEnv:   "/caller/.fanout/state.json",
+		telemetry.EmitterPathEnv: "/owner/.fanout/state.json",
+		telemetry.RowKeyEnv:      "issue:3:524:554",
+	}
+	getenv := codexPlanEmitterEnv(func(name string) string { return env[name] })
+	if got := getenv(telemetry.StatePathEnv); got != env[telemetry.EmitterPathEnv] {
+		t.Fatalf("emitter state path = %q", got)
+	}
+	if got := getenv(telemetry.RowKeyEnv); got != env[telemetry.RowKeyEnv] {
+		t.Fatalf("emitter row key = %q", got)
+	}
+}
+
+func TestHerdrCodexPlanCaptureTargetRequiresExactLiveIdentity(t *testing.T) {
+	session := backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-554"}
+	base := herdrrun.OwnedPaneIdentity{
+		Ref:       backend.PaneRef{Backend: backend.Herdr, Workspace: "workspace-1", Pane: "workspace-1:pane-1"},
+		SessionID: "fanout-owned", SocketPath: "/tmp/herdr.sock", TerminalID: "terminal-1",
+		RepoKey: "/repo/.git", WorktreePath: "/repo/worktree", CurrentPath: "/repo/worktree",
+		AgentID: "fanout-agent",
+	}
+	live := backend.LivePane{
+		Ref: base.Ref, SessionID: base.SessionID, SocketPath: base.SocketPath,
+		TerminalID: base.TerminalID, RepoKey: base.RepoKey,
+		WorktreePath: base.WorktreePath, CurrentPath: base.CurrentPath,
+		AgentPresent: true, AgentProvider: "codex", AgentID: "fanout-agent", AgentSession: &session,
+	}
+	got, err := herdrCodexPlanCaptureTarget(base, []backend.LivePane{live})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AgentID != live.AgentID || got.AgentSession != live.AgentSession {
+		t.Fatalf("capture target = %+v", got)
+	}
+
+	wrong := live
+	wrong.CurrentPath = "/repo/other"
+	for name, panes := range map[string][]backend.LivePane{
+		"missing": nil, "mismatch": {wrong}, "duplicate": {live, live},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := herdrCodexPlanCaptureTarget(base, panes); err == nil {
+				t.Fatal("capture target accepted ambiguous or mismatched live identity")
+			}
+		})
 	}
 }

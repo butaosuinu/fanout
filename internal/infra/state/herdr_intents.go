@@ -102,6 +102,7 @@ type HerdrLaunch struct {
 	Args                 []string                 `json:"args"`
 	TeamDBPath           string                   `json:"teamDbPath,omitempty"`
 	CodexTeamStatusPath  string                   `json:"codexTeamStatusPath,omitempty"`
+	CodexPlanStatusPath  string                   `json:"codexPlanStatusPath,omitempty"`
 	EnvFilePath          string                   `json:"envFilePath"`
 	EnvNameCount         int                      `json:"envNameCount"`
 	LauncherReady        bool                     `json:"launcherReady,omitempty"`
@@ -577,7 +578,7 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 		launch.Agent != "",
 		herdrAgentName.MatchString(launch.AgentName),
 		cleanAbsolute(launch.Executable),
-		validHerdrTeamPaths(launch),
+		validHerdrCodexPaths(launch),
 		cleanAbsolute(launch.EnvFilePath),
 		launch.EnvNameCount > 0,
 	}
@@ -612,8 +613,8 @@ func validateHerdrEmitter(launch *HerdrLaunch) error {
 		}
 		return nil
 	}
-	if launch.Agent != "claude" || !telemetry.ValidNonce(launch.EmitterNonce) {
-		return fmt.Errorf("emitter fields require a Claude launch and valid nonce")
+	if !validHerdrEmitterAgent(launch) || !telemetry.ValidNonce(launch.EmitterNonce) {
+		return fmt.Errorf("emitter fields require a Claude or Codex Plan launch and valid nonce")
 	}
 	if launch.PendingReportedState == "" {
 		return nil
@@ -625,11 +626,21 @@ func validateHerdrEmitter(launch *HerdrLaunch) error {
 	return nil
 }
 
-func validHerdrTeamPaths(launch *HerdrLaunch) bool {
-	teamPathOK := launch.TeamDBPath == "" || cleanAbsolute(launch.TeamDBPath)
-	statusPathOK := launch.CodexTeamStatusPath == "" ||
-		(launch.TeamDBPath != "" && cleanAbsolute(launch.CodexTeamStatusPath))
-	return teamPathOK && statusPathOK
+func validHerdrEmitterAgent(launch *HerdrLaunch) bool {
+	return launch.Agent == "claude" || launch.Agent == "codex" && launch.CodexPlanStatusPath != ""
+}
+
+func validHerdrCodexPaths(launch *HerdrLaunch) bool {
+	checks := []bool{
+		launch.TeamDBPath == "" || cleanAbsolute(launch.TeamDBPath),
+		launch.CodexTeamStatusPath == "" ||
+			(launch.TeamDBPath != "" && cleanAbsolute(launch.CodexTeamStatusPath)),
+		launch.CodexPlanStatusPath == "" || cleanAbsolute(launch.CodexPlanStatusPath),
+		launch.CodexTeamStatusPath == "" || launch.CodexPlanStatusPath == "",
+		launch.CodexTeamStatusPath == "" || launch.Agent == "codex",
+		launch.CodexPlanStatusPath == "" || launch.Agent == "codex",
+	}
+	return !slices.Contains(checks, false)
 }
 
 func cleanAbsolute(path string) bool {

@@ -442,45 +442,20 @@ func TestValidateLaunchBackendRejectsHerdrInputsBeforeSessionAcquisition(t *test
 	}
 }
 
-func TestValidateLaunchBackendRejectsCodexChildPlanMode(t *testing.T) {
+func TestValidateLaunchBackendAllowsCodexChildPlanMode(t *testing.T) {
 	selection := backend.Selection{Name: backend.Herdr}
-	inputs := runtimeBackendInputs{childPlanMode: true}
 	tests := []cliflags.Config{
 		{Agent: "codex"},
 		{Agent: "claude", AgentOverrides: []cliflags.AgentOverride{{Target: "task-a", Name: "codex"}}},
 	}
 	for _, cfg := range tests {
-		err := validateLaunchBackend(&cfg, selection, inputs)
-		if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "#554") {
-			t.Fatalf("Codex Plan Mode error = %v, want pre-mutation rejection", err)
+		if err := validateLaunchBackend(&cfg, selection, runtimeBackendInputs{}); err != nil {
+			t.Fatalf("Codex Plan Mode error = %v", err)
 		}
 	}
-	if err := validateLaunchBackend(&cliflags.Config{Agent: "claude"}, selection, inputs); err != nil {
-		t.Fatalf("Claude child Plan Mode error = %v", err)
-	}
 	t.Setenv("FANOUT_AGENT", "codex")
-	err := validateLaunchBackend(&cliflags.Config{}, selection, inputs)
-	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "#554") {
-		t.Fatalf("FANOUT_AGENT Codex Plan Mode error = %v, want pre-mutation rejection", err)
-	}
-}
-
-func TestResolveLaunchBackendRejectsCodexPlanBeforeOwnedSessionCreation(t *testing.T) {
-	repo := initLifecycleRepo(t)
-	t.Setenv("HERDR_ENV", "1")
-	t.Setenv("TMUX", "")
-	t.Setenv("FANOUT_BACKEND", "")
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	planMode := true
-	store, err := state.LoadProject(repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = resolveLaunchBackend(&cliflags.Config{
-		ParentRef: "425", Agent: "codex", PlanMode: &planMode,
-	}, repo, store, nil)
-	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "#554") {
-		t.Fatalf("pre-session Codex Plan Mode error = %v, want ErrUnsupported", err)
+	if err := validateLaunchBackend(&cliflags.Config{}, selection, runtimeBackendInputs{}); err != nil {
+		t.Fatalf("FANOUT_AGENT Codex Plan Mode error = %v", err)
 	}
 }
 

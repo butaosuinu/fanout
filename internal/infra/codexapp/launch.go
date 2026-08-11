@@ -21,21 +21,27 @@ const TeamTUICommand = "__codex-team-tui"
 // LaunchCommand builds the shell command that starts the Plan Mode controller
 // for a fresh prompt.
 func LaunchCommand(fanoutPath, codexPath, prompt, statusPath string) string {
-	if strings.TrimSpace(fanoutPath) == "" {
-		fanoutPath = "fanout"
-	}
-	args := []string{
-		fanoutPath,
-		PlanTUICommand,
-		"--codex", codexPath,
-		"--prompt", prompt,
-		"--status-file", statusPath,
-	}
+	spec := PlanLaunchSpec(fanoutPath, codexPath, prompt, statusPath)
+	args := append([]string{spec.Executable}, spec.Args...)
 	quoted := make([]string, len(args))
 	for i, arg := range args {
 		quoted[i] = agent.ShellQuote(arg)
 	}
 	return strings.Join(quoted, " ")
+}
+
+// PlanLaunchSpec is the non-shell form of LaunchCommand. Runtime backends
+// that own the pane process use it without reparsing shell quoting.
+func PlanLaunchSpec(fanoutPath, codexPath, prompt, statusPath string) agent.LaunchSpec {
+	if strings.TrimSpace(fanoutPath) == "" {
+		fanoutPath = "fanout"
+	}
+	return agent.LaunchSpec{Executable: fanoutPath, Args: []string{
+		PlanTUICommand,
+		"--codex", codexPath,
+		"--prompt", prompt,
+		"--status-file", statusPath,
+	}}
 }
 
 // TeamLaunchCommand builds the shell command that starts the non-Plan Codex

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -16,19 +17,20 @@ const (
 )
 
 const (
-	StatePathEnv    = "FANOUT_STATE_PATH"
-	EmitterPathEnv  = "FANOUT_EMITTER_STATE_PATH"
-	RowKeyEnv       = "FANOUT_EMITTER_ROW_KEY"
-	LaunchNonceEnv  = "FANOUT_EMITTER_LAUNCH_NONCE"
-	EmitterNonceEnv = "FANOUT_EMITTER_NONCE"
-	BackendEnv      = "FANOUT_EMITTER_BACKEND"
-	SessionEnv      = "FANOUT_EMITTER_SESSION"
-	SocketPathEnv   = "FANOUT_EMITTER_SOCKET_PATH"
-	WorkspaceIDEnv  = "FANOUT_EMITTER_WORKSPACE_ID"
-	PaneIDEnv       = "FANOUT_EMITTER_PANE_ID"
-	TerminalIDEnv   = "FANOUT_EMITTER_TERMINAL_ID"
-	AgentEnv        = "FANOUT_EMITTER_AGENT"
-	AgentIDEnv      = "FANOUT_EMITTER_AGENT_ID"
+	StatePathEnv      = "FANOUT_STATE_PATH"
+	EmitterPathEnv    = "FANOUT_EMITTER_STATE_PATH"
+	RowKeyEnv         = "FANOUT_EMITTER_ROW_KEY"
+	LaunchNonceEnv    = "FANOUT_EMITTER_LAUNCH_NONCE"
+	EmitterNonceEnv   = "FANOUT_EMITTER_NONCE"
+	BackendEnv        = "FANOUT_EMITTER_BACKEND"
+	SessionEnv        = "FANOUT_EMITTER_SESSION"
+	SocketPathEnv     = "FANOUT_EMITTER_SOCKET_PATH"
+	WorkspaceIDEnv    = "FANOUT_EMITTER_WORKSPACE_ID"
+	WorkspaceLabelEnv = "FANOUT_EMITTER_WORKSPACE_LABEL"
+	PaneIDEnv         = "FANOUT_EMITTER_PANE_ID"
+	TerminalIDEnv     = "FANOUT_EMITTER_TERMINAL_ID"
+	AgentEnv          = "FANOUT_EMITTER_AGENT"
+	AgentIDEnv        = "FANOUT_EMITTER_AGENT_ID"
 )
 
 var noncePattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -101,8 +103,8 @@ func validateSignal(signal Signal, emitterPath string) error {
 	if signal.Backend != backend.Herdr {
 		return fmt.Errorf("emitter backend must be %s", backend.Herdr)
 	}
-	if signal.Agent != "claude" {
-		return fmt.Errorf("telemetry emitter supports Claude launches only")
+	if !slices.Contains([]string{"claude", "codex"}, signal.Agent) {
+		return fmt.Errorf("telemetry emitter supports Claude and Codex launches only")
 	}
 	return validateRuntimeIdentity(signal)
 }
