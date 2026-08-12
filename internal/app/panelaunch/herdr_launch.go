@@ -99,6 +99,10 @@ func (l *Launcher) prepareHerdrOperation(req Request) (herdrLaunchOperation, boo
 		l.Log.Err("%s: resolve owned Herdr route: %v", paneLogLabel(req), err)
 		return herdrLaunchOperation{}, false
 	}
+	if err := validateHerdrLaunchRoute(operation.route); err != nil {
+		l.Log.Err("%s: %v", paneLogLabel(req), err)
+		return herdrLaunchOperation{}, false
+	}
 	if req.BriefingPath != "" && !l.writeBriefing(req) {
 		return herdrLaunchOperation{}, false
 	}

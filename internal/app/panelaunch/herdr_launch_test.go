@@ -1985,7 +1985,9 @@ func TestPrepareHerdrOperationSetsOneSharedLaunchDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = locked.Unlock() }()
-	runtime := &fakeHerdrLaunchRuntime{}
+	runtime := &fakeHerdrLaunchRuntime{launchRoute: herdrrun.OwnedLaunchRoute{
+		LauncherPath: "/owned/fanout", EmitterPath: "/owned/fanout",
+	}}
 	launcher := &Launcher{
 		Cfg: &cliflags.Config{}, Log: log.NewWith(io.Discard, io.Discard, false),
 		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Herdr: runtime,

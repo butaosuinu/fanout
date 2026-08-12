@@ -282,6 +282,9 @@ func TestOpenOwnedReadoptsExistingOwnedSession(t *testing.T) {
 		opened.GitCommonDir != h.session.GitCommonDir {
 		t.Fatalf("opened session = %+v, want route from %+v", opened, h.session)
 	}
+	if opened.EmitterPath != opened.LauncherPath {
+		t.Fatalf("opened current launcher route = %+v", opened)
+	}
 	panes, err := opened.LivePanes(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -581,6 +584,17 @@ func TestEnsureOwnedReadoptsPinnedLauncherAfterFanoutUpdate(t *testing.T) {
 	}
 	if reused.EmitterPath == legacyPath || reused.EmitterPath == "" {
 		t.Fatalf("re-adopted emitter = %q, want current content-addressed fanout", reused.EmitterPath)
+	}
+	observed := New(reused.Session, reused.SocketPath)
+	observed.output = h.fake.output
+	opened, err := openOwned(context.Background(), OwnedOptions{
+		GitCommonDir: h.commonDir, RuntimeBase: h.runtimeBase,
+	}, observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.EmitterPath == "" || opened.EmitterPath == opened.LauncherPath {
+		t.Fatalf("opened route = %+v, want read-only current-launcher mismatch", opened)
 	}
 }
 

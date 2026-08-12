@@ -230,7 +230,7 @@ func openOwned(ctx context.Context, opts OwnedOptions, backend *Backend) (*Owned
 	if err != nil {
 		return nil, err
 	}
-	return ownedSessionFromMarker(commonDir, marker, backend), nil
+	return ownedSessionFromMarker(commonDir, marker, currentOwnedEmitterPath(marker), backend), nil
 }
 
 func existingOwnedAdmission(
@@ -327,14 +327,43 @@ func newReopenedOwnedBackend(
 	return backend
 }
 
-func ownedSessionFromMarker(commonDir string, marker ownerMarker, backend *Backend) *OwnedSession {
+func ownedSessionFromMarker(
+	commonDir string,
+	marker ownerMarker,
+	emitterPath string,
+	backend *Backend,
+) *OwnedSession {
 	return &OwnedSession{
 		Session: marker.Session, SocketPath: marker.SocketPath,
 		ClientSocketPath: marker.ClientSocketPath, GitCommonDir: commonDir,
 		RuntimeDir: marker.RuntimeDir, LauncherPath: marker.LauncherPath,
-		EmitterPath: marker.LauncherPath,
+		EmitterPath: emitterPath,
 		ControlPath: filepath.Join(commonDir, "fanout", "herdr-intents.json"), backend: backend,
 	}
+}
+
+func currentOwnedEmitterPath(marker ownerMarker) string {
+	executable, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		return ""
+	}
+	current, err := os.Open(executable)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = current.Close() }()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, current); err != nil {
+		return ""
+	}
+	if hex.EncodeToString(hash.Sum(nil)) == marker.LauncherSHA256 {
+		return marker.LauncherPath
+	}
+	return filepath.Clean(executable)
 }
 
 //nolint:gocognit,gocyclo,funlen // Admission is one ordered fail-closed transaction; splitting it would obscure cleanup ownership.
