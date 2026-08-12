@@ -151,8 +151,9 @@ function FileRow({
   );
 }
 
-/* 件数と一括操作。確認済みの進捗の分母は「本文にブロックがある file」— binary や
- * 省略された file はチェックを持てないので、母集団に入れると必ず届かない。 */
+/* 件数と一括操作。確認済みの進捗の分母は「チェックを出せる file」— binary や
+ * 省略された file、正規化で衝突して identity を決められない path はチェックを
+ * 持てないので、母集団に入れると必ず届かない進捗になる。 */
 function SidebarHead({
   files,
   viewedCount,
@@ -199,6 +200,7 @@ export const DiffFileList = memo(function DiffFileList({
   selectable,
   kinds,
   viewedPaths,
+  viewableCount,
   hideViewed,
   onSelect,
   onExpandAll,
@@ -210,6 +212,9 @@ export const DiffFileList = memo(function DiffFileList({
   /* path → 変更種別。patch のパース結果由来(diff.ts の indexDiffKindsByPath) */
   kinds: ReadonlyMap<string, DiffChangeKind>;
   viewedPaths: ReadonlySet<string>;
+  /* チェックを出せる path の数。進捗の分母はこれ — `selectable` を使うと、
+   * identity を決められずチェックを出さない path のぶん到達不能な進捗になる。 */
+  viewableCount: number;
   /* 本文と揃えて確認済みの行を降ろす。残すと飛び先の無いリンクになる */
   hideViewed: boolean;
   onSelect: (path: string) => void;
@@ -228,7 +233,7 @@ export const DiffFileList = memo(function DiffFileList({
       <SidebarHead
         files={files}
         viewedCount={viewedPaths.size}
-        viewableCount={selectable.size}
+        viewableCount={viewableCount}
         onExpandAll={onExpandAll}
         onCollapseAll={onCollapseAll}
       />

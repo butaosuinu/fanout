@@ -313,6 +313,7 @@ export function DiffOverlay({
               selectable={selectable}
               kinds={kinds}
               viewedPaths={viewedPaths}
+              viewableCount={fingerprints.size}
               hideViewed={hideViewed}
               onSelect={onSelectFile}
               onExpandAll={onExpandAll}

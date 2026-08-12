@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import { parseViewed, readViewedRaw, saveViewed, subscribeViewed } from "./viewedStore";
+import { parseViewed, readViewedRaw, setViewedPath, subscribeViewed } from "./viewedStore";
 
 /* 保存済みの fingerprint が現在の patch の fingerprint と一致する path だけを
  * 「いま確認済み」と見なす。これが無効化そのもので、リセット処理は要らない —
@@ -34,16 +34,15 @@ export function useDiffViewed(scope: string, fingerprints: ReadonlyMap<string, s
   const stored = useMemo(() => parseViewed(raw), [raw]);
   const viewedPaths = useMemo(() => matching(stored, fingerprints), [stored, fingerprints]);
 
+  /* 書き戻すのは 1 file 分だけ。ここで Map 全体を渡すと、別タブの直前の
+   * チェックを巻き戻す(viewedStore の setViewedPath を参照)。 */
   const setViewed = useCallback(
     (path: string, on: boolean) => {
       const fp = fingerprints.get(path);
       if (fp === undefined) return; // patch に無い / identity が曖昧な path は扱わない
-      const map = new Map(stored);
-      if (on) map.set(path, fp);
-      else map.delete(path);
-      saveViewed(scope, map);
+      setViewedPath(scope, path, on ? fp : null);
     },
-    [fingerprints, scope, stored],
+    [fingerprints, scope],
   );
 
   return { viewedPaths, setViewed };

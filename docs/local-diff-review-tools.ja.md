@@ -385,8 +385,9 @@ allowlist で検証してから渡す。
 file ごとに「確認済み」を立てられる(GitHub の Viewed 相当)。
 立てた file は畳み、外すと開き直す。
 サイドバーは行を一段落として行末にチェックを出し、見出しに `X / Y 確認済み` を出す。
-分母は patch にブロックがある file だけ — binary・サイズ超過・上限で省略された file は
-チェックを持てないので、母集団に入れると必ず届かない。
+分母は「チェックを出せる file」= fingerprint を持つ path の数にする。
+binary・サイズ超過・上限で省略された file も、正規化の衝突で identity を決められない
+path も、チェックを持てないので母集団に入れると必ず届かない進捗になる。
 
 保存先は localStorage だけである。
 dashboard のサーバーは GET-only で mutation endpoint を持たないため、
@@ -394,7 +395,11 @@ dashboard のサーバーは GET-only で mutation endpoint を持たないた�
 localStorage は origin(ポート込み)ごとなので、既定の OS 任せポートで
 `fanout dashboard --web` を起動し直すと引き継がれない。
 表示モードやパネル幅と同じ制約で、持ち越すには `--port N` を固定する。
-キーは session 行の `rowKey` ごとに 1 本(`fanout.diffViewed.<rowKey>`)。
+キーは repo と session 行の `rowKey` の組ごとに 1 本
+(`fanout.diffViewed.<repo>/<rowKey>`、両方を URL エンコードして連結)。
+`rowKey` だけでは足りない — 同じ `--port N` を固定して別のリポジトリの dashboard を
+順に開くと origin が同じなので、`142#101` のような rowKey がそのまま衝突する。
+repo は snapshot の `repo`(未解決なら "")。
 全 scope を 1 本の JSON にまとめると、チェック 1 個ごとに全体を再シリアライズする
 ことになる(contract 上限は 1 scope あたり 500 files)。
 保存値は敵性入力として検証する — 版・型を確かめ、`string` 同士のペアだけを採る。
@@ -478,9 +483,17 @@ file がある diff では嘘になる。
 ヘッダのボタン全部とサイドバーを Tab で辿り直すことになる。
 DOM は commit 後に入れ替わるので、探すのは次フレーム。
 
-別タブが同じ scope を書いたら `storage` イベントで読み直す。
-読み直さないと、こちらの render 時点の snapshot で丸ごと上書きしてあちらの
-チェックを消す(`storage` は書いた本人には飛ばないので、自分の書き込みでは鳴らない)。
+書き戻すのは 1 file 分だけにして、書く直前に storage を読み直す。
+呼び出し側が持っている Map を丸ごと書くと、別タブが直前に入れたチェックを
+巻き戻す — `storage` イベントの到着はこちらの操作より遅れうるので、購読だけでは
+この競合を塞げない。
+入れ直す path は `delete` してから `set` する。`Map.set` は既存 key の位置を
+変えないので、そのままだと「いちばん新しいチェック」が上限で落ちる側に残る。
+購読は store が自分の書き込みと `storage` イベントを 1 本の通知に束ねる
+(`storage` は書いた本人には飛ばないので、片方だけでは反映が漏れる)。
+状態は storage が唯一の正にして、フック側に複製を持たない。
+複製すると、scope の入れ替わりと別タブの書き込みの両方を自前で無効化して回ることに
+なる。
 
 ### 全画面とコンパクトの 2 表示
 

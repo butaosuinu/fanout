@@ -32,6 +32,14 @@ function viewedStorageKey(scope: string): string {
   return PREFIX + scope;
 }
 
+/* 保存単位。`rowKey` だけでは足りない — localStorage は origin ごとなので、同じ
+ * `--port N` を固定して別のリポジトリの dashboard を順に開くと `142#101` のような
+ * rowKey がそのまま衝突する。repo を前置して分ける(未解決なら "" のまま=従来通り)。
+ * repo と rowKey はどちらも自由文字列なので、区切りは両方をエンコードしてから。 */
+export function viewedScope(repo: string, rowKey: string): string {
+  return `${encodeURIComponent(repo)}/${encodeURIComponent(rowKey)}`;
+}
+
 /* 購読は 2 系統ある。別タブの書き込み(`storage` イベント)と、自分の書き込み。
  * `storage` は書いた本人には飛ばないので、両方をここで 1 つの通知に束ねる
  * (features/settings/useSettings.ts と同じ module store の作法)。
@@ -103,9 +111,20 @@ export function loadViewed(scope: string): Map<string, string> {
   return parseViewed(readLocal(viewedStorageKey(scope)));
 }
 
-/* 空になったら scope ごと消す(「既定値ならキーを消す」既存規約)。 */
-export function saveViewed(scope: string, files: ReadonlyMap<string, string>) {
+/* 1 file 分だけを書き換える。`fp` が null なら確認済みを外す。
+ *
+ * 呼び出し側の Map をそのまま書き戻さないこと。別タブが直前に書いた分が
+ * こちらの render 時点の snapshot には無く、丸ごと上書きすると消える
+ * (`storage` イベントの到着はこちらの操作より遅れうる)。書く直前に読み直して
+ * 1 件だけ足し引きすれば、少なくとも「相手のチェックを巻き戻す」ことは無い。
+ *
+ * 既存 path は delete してから set する。`Map.set` は既存 key の位置を変えないので、
+ * 入れ直さないと「いちばん新しいチェック」が上限で落ちる側に残ってしまう。 */
+export function setViewedPath(scope: string, path: string, fp: string | null) {
   const key = viewedStorageKey(scope);
+  const files = parseViewed(readLocal(key));
+  files.delete(path);
+  if (fp !== null) files.set(path, fp);
   if (files.size === 0) writeLocal(key, null);
   else writeRecord(key, files);
   emit();

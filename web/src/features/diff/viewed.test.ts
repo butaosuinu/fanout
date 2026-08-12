@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseDiffFiles } from "./diff";
 import { diffFilePaths, fileFingerprint, indexFingerprintsByPath, indicesForPaths } from "./viewed";
-import { loadViewed, saveViewed } from "./viewedStore";
+import { loadViewed, setViewedPath, viewedScope } from "./viewedStore";
 
 /* 実パーサを通す — fingerprint は FileDiffMetadata の形に依存するので、手で組んだ
  * オブジェクトで固定するとライブラリ更新に対して何も守れない(diff.test.ts と同じ方針)。 */
@@ -171,18 +171,18 @@ describe("viewedStore", () => {
   beforeEach(() => localStorage.clear());
 
   it("保存した path と fingerprint を読み戻す", () => {
-    saveViewed("142#101", new Map([["a.ts", "fp1"]]));
+    setViewedPath("142#101", "a.ts", "fp1");
     expect([...loadViewed("142#101")]).toEqual([["a.ts", "fp1"]]);
   });
 
   it("scope が違えば混ざらない", () => {
-    saveViewed("142#101", new Map([["a.ts", "fp1"]]));
+    setViewedPath("142#101", "a.ts", "fp1");
     expect(loadViewed("142#102").size).toBe(0);
   });
 
   it("空になったら scope ごとキーを消す", () => {
-    saveViewed("142#101", new Map([["a.ts", "fp1"]]));
-    saveViewed("142#101", new Map());
+    setViewedPath("142#101", "a.ts", "fp1");
+    setViewedPath("142#101", "a.ts", null);
     expect(localStorage.getItem("fanout.diffViewed.142#101")).toBeNull();
   });
 
@@ -228,9 +228,7 @@ describe("viewedStore", () => {
   /* 上限に当たったときに捨てるのは古いほうで、いま入れたチェックは残ること。
      逆にすると「上限に達した瞬間から保存が黙って効かなくなる」。 */
   it("contract 上限の 500 件を超えたら古いほうから捨てる", () => {
-    const files = new Map<string, string>();
-    for (let i = 0; i < 600; i++) files.set(`f${i}.ts`, "fp");
-    saveViewed("142#101", files);
+    for (let i = 0; i < 600; i++) setViewedPath("142#101", `f${i}.ts`, "fp");
     const loaded = loadViewed("142#101");
     expect(loaded.size).toBe(500);
     expect(loaded.has("f599.ts")).toBe(true);
@@ -245,7 +243,7 @@ describe("viewedStore", () => {
         JSON.stringify({ v: 1, t: i, files: { "a.ts": "fp" } }),
       );
     }
-    saveViewed("new", new Map([["a.ts", "fp"]]));
+    setViewedPath("new", "a.ts", "fp");
     expect(loadViewed("old0").size).toBe(0);
     expect(loadViewed("old50").size).toBe(1);
     expect(loadViewed("new").size).toBe(1);
@@ -258,7 +256,46 @@ describe("viewedStore", () => {
         JSON.stringify({ v: 1, t: i, files: { "a.ts": "fp" } }),
       );
     }
-    saveViewed("new", new Map([["a.ts", "fp"]]));
+    setViewedPath("new", "a.ts", "fp");
     expect(loadViewed("old0").size).toBe(1);
+  });
+
+  /* 書き戻しは 1 file 分。別タブが直前に書いた分を巻き戻さないこと。 */
+  it("書き込み前に読み直すので、間に入った別の書き込みを消さない", () => {
+    setViewedPath("142#101", "a.ts", "fp1");
+    // 別タブが書いた体(こちらの state には無い)
+    const raw = JSON.parse(localStorage.getItem("fanout.diffViewed.142#101")!);
+    raw.files["b.ts"] = "fp2";
+    localStorage.setItem("fanout.diffViewed.142#101", JSON.stringify(raw));
+
+    setViewedPath("142#101", "c.ts", "fp3");
+
+    expect([...loadViewed("142#101").keys()].sort()).toEqual(["a.ts", "b.ts", "c.ts"]);
+  });
+
+  /* 上限で落とすのは古い順なので、入れ直した path は末尾へ動かす。
+     Map.set は既存 key の位置を変えないため、明示的に delete してから入れる。 */
+  it("既存 path を入れ直すと、いちばん新しい扱いになる", () => {
+    setViewedPath("142#101", "a.ts", "fp1");
+    setViewedPath("142#101", "b.ts", "fp2");
+    setViewedPath("142#101", "a.ts", "fp1-new");
+    expect([...loadViewed("142#101").keys()]).toEqual(["b.ts", "a.ts"]);
+  });
+});
+
+describe("viewedScope", () => {
+  /* localStorage は origin ごとなので、ポートを固定して別リポジトリを開くと
+     parent#issue 形式の rowKey がそのまま衝突する。 */
+  it("repo が違えば別の scope になる", () => {
+    expect(viewedScope("owner/a", "142#101")).not.toBe(viewedScope("owner/b", "142#101"));
+  });
+
+  it("repo と rowKey の境界が動いても衝突しない", () => {
+    /* エンコードしないと "a/b" + "c" と "a" + "b/c" が同じ文字列になる */
+    expect(viewedScope("a/b", "c")).not.toBe(viewedScope("a", "b/c"));
+  });
+
+  it("repo 未解決(空)でも rowKey だけで一意に決まる", () => {
+    expect(viewedScope("", "142#101")).not.toBe(viewedScope("", "142#102"));
   });
 });

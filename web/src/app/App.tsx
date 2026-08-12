@@ -35,6 +35,7 @@ import { Drawer } from "../features/drawer/Drawer";
 import { FilterBar } from "../features/filter/FilterBar";
 import { Hud } from "../features/sessions/Hud";
 import { Nav } from "./Nav";
+import { viewedScope } from "../features/diff/viewedStore";
 import { SessionSection, type SessionItem } from "../features/sessions/SessionSection";
 import { SettingsModal } from "../features/settings/SettingsModal";
 
@@ -420,6 +421,7 @@ function Dashboard() {
       {diffTarget && (
         <DiffOverlaySlot
           target={diffTarget}
+          repo={repo}
           token={token}
           anchorKey={selected}
           settingsOpen={settingsOpen}
@@ -438,6 +440,7 @@ function Dashboard() {
  * 再試行になる。 */
 function DiffOverlaySlot({
   target,
+  repo,
   token,
   anchorKey,
   settingsOpen,
@@ -446,6 +449,8 @@ function DiffOverlaySlot({
   onClose,
 }: {
   target: DiffTarget;
+  /* 保存 scope の前置き。ポート固定で別リポジトリを開いても rowKey が衝突しない */
+  repo: string;
   token: string;
   anchorKey: string | null;
   /* 上に設定モーダルが重なっている。抑止と Escape の譲り先がこれで決まる */
@@ -461,7 +466,7 @@ function DiffOverlaySlot({
           title={target.title}
           query={target.query}
           token={token}
-          scopeKey={target.key}
+          scopeKey={viewedScope(repo, target.key)}
           anchorKey={anchorKey}
           suppressed={settingsOpen}
           onCoveringChange={onCoveringChange}
