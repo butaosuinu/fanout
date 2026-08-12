@@ -340,6 +340,40 @@ func TestHerdrRowEnablesLifecycleActionsAndDefaultsCloseToWorktree(t *testing.T)
 	}
 }
 
+func TestHerdrConsoleLifecycleActionsRequireAmbientOwnedSession(t *testing.T) {
+	const foreignReason = "pane is not in this repository's fanout-owned Herdr session"
+	tests := []struct {
+		name   string
+		reason string
+	}{
+		{name: "owned"},
+		{name: "foreign", reason: foreignReason},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newModel(Options{
+				BackendSelection: backend.Selection{Name: backend.Herdr},
+				HerdrActionDisabled: func(pane state.Pane) string {
+					if pane.PaneID != "w1:p1" {
+						return "lifecycle gate did not receive the saved pane identity"
+					}
+					return tt.reason
+				},
+				LifecycleHerdrRuntimeForRoot: configuredHerdrRuntime,
+			})
+			pane := paneView{
+				Backend: backend.Herdr, PaneID: "w1:p1", TmuxState: "stale", WorktreePath: "/repo/wt",
+				savedPane: state.Pane{Backend: backend.Herdr, PaneID: "w1:p1"},
+			}
+			for _, action := range []string{"close", "merge", "cleanup"} {
+				if got := m.lifecycleActionDisabledReason(&pane, action); got != tt.reason {
+					t.Fatalf("%s disabled reason = %q, want %q", action, got, tt.reason)
+				}
+			}
+		})
+	}
+}
+
 func TestLifecycleOptionsBuildsHerdrRuntimeForOwningRoot(t *testing.T) {
 	var gotRoot string
 	m := newModel(Options{

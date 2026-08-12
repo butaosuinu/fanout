@@ -129,6 +129,14 @@ func (m model) tmuxLifecycleActionDisabledReason(action string) string {
 }
 
 func (m model) herdrLifecycleActionDisabledReason(pane paneView, action string) string {
+	if m.selectedBackend() == backend.Herdr {
+		if m.opts.HerdrActionDisabled == nil {
+			return herdrActionDisabledReason(action)
+		}
+		if reason := strings.TrimSpace(m.opts.HerdrActionDisabled(pane.savedPane)); reason != "" {
+			return reason
+		}
+	}
 	if m.herdrLifecycleConfigured(pane, action) {
 		return ""
 	}
