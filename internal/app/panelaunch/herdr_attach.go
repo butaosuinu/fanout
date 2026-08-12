@@ -35,7 +35,11 @@ func (l *Launcher) attachHerdr(
 			locked, l.Info.ProjectRoot, intent, err,
 		))
 	}
-	if err := finalizeHerdrAttachedAgent(req, locked, l.Info.ProjectRoot, intent, live); err != nil {
+	codexStatus, err := awaitHerdrCodexTUI(ctx, req, locked, l.Info.ProjectRoot, intent)
+	if err != nil {
+		return l.failHerdr(req, "start Codex TUI controller", err)
+	}
+	if err := finalizeHerdrAttachedAgent(req, locked, l.Info.ProjectRoot, intent, live, codexStatus); err != nil {
 		return l.failHerdr(req, "finalize attached agent", err)
 	}
 	l.Log.Ok("%s: pane %s attached to %s", paneLogLabel(req), live.Ref.Pane, targetPath)
@@ -66,21 +70,22 @@ func finalizeHerdrAttachedAgent(
 	projectRoot string,
 	intent state.HerdrIntent,
 	live backend.LivePane,
+	codexStatus codexapp.Status,
 ) error {
-	return finalizeHerdrPane(locked, projectRoot, intent, herdrAttachedPaneBuilder(req, live))
+	return finalizeHerdrPane(locked, projectRoot, intent, herdrAttachedPaneBuilder(req, live, codexStatus))
 }
 
-func herdrAttachedPaneBuilder(req Request, live backend.LivePane) func(state.HerdrIntent) (state.Pane, error) {
+func herdrAttachedPaneBuilder(req Request, live backend.LivePane, codexStatus codexapp.Status) func(state.HerdrIntent) (state.Pane, error) {
 	return func(latest state.HerdrIntent) (state.Pane, error) {
-		pane := herdrAttachedStatePane(req, latest, live)
+		pane := herdrAttachedStatePane(req, latest, live, codexStatus)
 		applyHerdrLaunchTelemetry(&pane, latest)
 		return pane, nil
 	}
 }
 
-func herdrAttachedStatePane(req Request, intent state.HerdrIntent, live backend.LivePane) state.Pane {
+func herdrAttachedStatePane(req Request, intent state.HerdrIntent, live backend.LivePane, codexStatus codexapp.Status) state.Pane {
 	pane := statePaneForBackend(
-		req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(), codexapp.Status{}, backend.Herdr, &live,
+		req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(), codexStatus, backend.Herdr, &live,
 	)
 	pane.Kind = state.PaneKindAttachedAgent
 	return pane

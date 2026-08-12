@@ -71,9 +71,6 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	if err != nil {
 		return fanouttui.LaunchResult{}, err
 	}
-	if err := validateHerdrInteractiveAgents(rt.Backend.Name(), cfg, agentNames); err != nil {
-		return fanouttui.LaunchResult{}, err
-	}
 	store, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
 	if code != exitcode.OK {
 		return fanouttui.LaunchResult{}, bufferedLaunchError(stdout, stderr, "load fanout state")
@@ -490,9 +487,6 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 	if err != nil {
 		return "", err
 	}
-	if validateErr := validateHerdrInteractiveAgents(rt.Backend.Name(), cfg, agentNames); validateErr != nil {
-		return "", validateErr
-	}
 	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
 		return "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
@@ -648,17 +642,6 @@ func newSessionConfigForTUIAgent(projectRoot, agentName string, warnf settings.W
 		PlanMode:       &planMode,
 		TUIInteractive: true,
 	}
-}
-
-func validateHerdrInteractiveAgents(
-	runtimeBackend backend.Name,
-	cfg *cliflags.Config,
-	agentNames []string,
-) error {
-	if runtimeBackend != backend.Herdr || !cfg.PlanModeEnabled() || !slices.Contains(agentNames, "codex") {
-		return nil
-	}
-	return backend.Unsupported(backend.Herdr, "Codex Plan Mode child launch until issue #554")
 }
 
 func newTUILaunchShellFunc(projectRoot, session string) fanouttui.ShellLaunchFunc {

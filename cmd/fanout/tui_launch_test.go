@@ -41,20 +41,6 @@ func TestCoordinatorRuntimeRequestRemovesTmuxIdentityForHerdr(t *testing.T) {
 	}
 }
 
-func TestValidateHerdrInteractiveAgentsRejectsAnyCodexPlanRequest(t *testing.T) {
-	planMode := true
-	cfg := &cliflags.Config{PlanMode: &planMode}
-	if err := validateHerdrInteractiveAgents(backend.Herdr, cfg, []string{"claude", "codex"}); err == nil {
-		t.Fatal("multi-agent Herdr request accepted unsupported Codex Plan Mode")
-	}
-	if err := validateHerdrInteractiveAgents(backend.Herdr, cfg, []string{"claude"}); err != nil {
-		t.Fatalf("Claude-only Herdr request was rejected: %v", err)
-	}
-	if err := validateHerdrInteractiveAgents(backend.Tmux, cfg, []string{"codex"}); err != nil {
-		t.Fatalf("tmux Codex Plan Mode request was rejected: %v", err)
-	}
-}
-
 func TestPlanSkillPromptPerAgent(t *testing.T) {
 	path := planPromptPath("/repo", 1)
 	tests := []struct {

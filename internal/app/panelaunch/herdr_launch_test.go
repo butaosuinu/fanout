@@ -396,7 +396,7 @@ func TestFinalizeHerdrAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
 	}
 	live := testHerdrIdlePane(intent)
 	live.AgentPresent, live.AgentProvider, live.AgentID = true, "claude", intent.Launch.AgentName
-	if finalizeErr := finalizeHerdrAttachedAgent(req, locked, repo, intent, live); finalizeErr != nil {
+	if finalizeErr := finalizeHerdrAttachedAgent(req, locked, repo, intent, live, codexapp.Status{}); finalizeErr != nil {
 		t.Fatal(finalizeErr)
 	}
 	persisted, err := state.LoadHerdrIntents(repo)
@@ -413,6 +413,19 @@ func TestFinalizeHerdrAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
 	pane, found := locked.Find(ManualParentRef, -2)
 	if !found || pane.RuntimeParent != shared.RuntimeParent || pane.PaneID != intent.Resource.PaneID {
 		t.Fatalf("attached agent row = (%+v, %t)", pane, found)
+	}
+}
+
+func TestHerdrAttachedStatePanePreservesCodexControllerIdentity(t *testing.T) {
+	status := codexapp.Status{ThreadID: "thread-554", SessionID: "session-554"}
+	pane := herdrAttachedStatePane(
+		Request{ParentRef: ManualParentRef, Number: -1, Agent: "codex", LaunchMode: agent.ModePlan},
+		state.HerdrIntent{WorktreePath: "/repo"},
+		backend.LivePane{Ref: backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"}},
+		status,
+	)
+	if pane.CodexThreadID != status.ThreadID || pane.CodexSessionID != status.SessionID {
+		t.Fatalf("attached Codex identity = %q/%q, want %q/%q", pane.CodexThreadID, pane.CodexSessionID, status.ThreadID, status.SessionID)
 	}
 }
 
