@@ -1,6 +1,14 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { Virtualizer } from "@pierre/diffs/react";
-import { memo, useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  memo,
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 import { useDiff } from "../../transport/useDiff";
 import { useDiffAnchorSync } from "./useDiffAnchorSync";
@@ -22,7 +30,8 @@ import { coversBackground, panelWidthFor, COMPACT_FULL_WIDTH_PX } from "./diffVi
 import { diffMeta, diffWarning, type DiffFilePlan } from "./diff";
 import { useDiffPatch } from "./useDiffPatch";
 import { useDiffViewed } from "./useDiffViewed";
-import { viewedIndices } from "./viewed";
+import { indicesForPaths } from "./viewed";
+import { useStableCallback } from "../../shared/useStableCallback";
 import { DiffFileList } from "./DiffFileList";
 import { DiffFileRow } from "./DiffFileRow";
 import { DiffOmittedNote } from "./DiffOmittedNote";
@@ -34,6 +43,22 @@ import { DiffToolbar } from "./DiffToolbar";
  * こちら側でも patch 由来の文字列を dangerouslySetInnerHTML に渡さない。 */
 
 const NO_INDICES: ReadonlySet<number> = new Set();
+
+/* 「確認済みを隠す」中にチェックを入れると、その行ごと unmount されてフォーカスが
+ * body へ落ち、トラップの外に出る。次に読む file は残っているうちの先頭なので、
+ * そのチェックへ渡す(無ければオーバーレイ自身が引き取る)。DOM は commit 後に
+ * 入れ替わるので次フレームで探す。checkbox は shadow root へ slot されるが、実体は
+ * .diff-file の light DOM の子なので querySelector で届く。 */
+function useRefocusAfterHide(rootRef: RefObject<HTMLElement | null>): () => void {
+  return useCallback(() => {
+    requestAnimationFrame(() => {
+      const root = rootRef.current;
+      if (!root) return;
+      const next = root.querySelector<HTMLElement>(".diff-file .diff-file-viewed input");
+      (next ?? root).focus({ preventScroll: true });
+    });
+  }, [rootRef]);
+}
 
 /* 画面外に先読みしておく高さ。既定の 1,000px は 1 フレームで消費されてしまい、
  * 高速スクロール中に描画が追いつかない。 */
@@ -50,8 +75,9 @@ const AUTO_SPLIT_MIN_PX = 1000;
  * 触った file だけ(DiffFileRow が memo なので)。 */
 const DiffFiles = memo(function DiffFiles({
   plan,
-  overrides,
+  isCollapsed,
   viewed,
+  viewable,
   hidden,
   theme,
   diffThemes,
@@ -61,8 +87,11 @@ const DiffFiles = memo(function DiffFiles({
   onToggleViewed,
 }: {
   plan: DiffFilePlan[];
-  overrides: ReadonlyMap<number, boolean>;
+  /* 畳まれているかの判定は useDiffCollapse が持つ(同じ式を 2 箇所に書かない) */
+  isCollapsed: (index: number) => boolean;
   viewed: ReadonlySet<number>;
+  /* チェックを出せる index。identity が曖昧な path は持てない(viewed.ts) */
+  viewable: ReadonlySet<number>;
   /* 「確認済みを隠す」で本文から降ろす index。plan の index は詰めない —
    * 折りたたみ・host 登録・飛び先の索引がすべて index を key にしているため。 */
   hidden: ReadonlySet<number>;
@@ -73,10 +102,12 @@ const DiffFiles = memo(function DiffFiles({
   onToggle: (index: number) => void;
   onToggleViewed: (index: number) => void;
 }) {
+  /* patch を持たない file(バイナリ・上限で省略)は plan に入らないので、
+   * 「すべて」とは言わない — 警告帯と DiffOmittedNote がまだ残件を出している。 */
   if (plan.length > 0 && hidden.size === plan.length) {
     return (
       <div className="diff-note">
-        <Trans>すべてのファイルを確認済みにしました</Trans>
+        <Trans>patch のあるファイルはすべて確認済みです</Trans>
       </div>
     );
   }
@@ -92,8 +123,9 @@ const DiffFiles = memo(function DiffFiles({
             theme={theme}
             diffThemes={diffThemes}
             stack={stack}
-            collapsed={overrides.get(i) ?? (viewed.has(i) || entry.initiallyCollapsed)}
+            collapsed={isCollapsed(i)}
             viewed={viewed.has(i)}
+            viewable={viewable.has(i)}
             registerHost={registerHost}
             onToggle={onToggle}
             onToggleViewed={onToggleViewed}
@@ -155,6 +187,7 @@ export function DiffOverlay({
   const diffThemes = useMemo(() => ({ light, dark }), [light, dark]);
   const { state, refetch } = useDiff(apiUrl("/api/diff", token, query));
   const rootRef = useRef<HTMLDivElement>(null);
+  const refocusAfterHide = useRefocusAfterHide(rootRef);
   const { width: compactWidth, gripProps } = useDiffWidth();
   /* 背面を覆っているならモーダル。全画面はもちろん、狭い帯や、ドロワーが広くて
    * パネルが一覧を食い尽くす配置でも覆う。覆っているのに非モーダルだと、見えない
@@ -179,30 +212,26 @@ export function DiffOverlay({
   );
   const { plan, byPath, selectable, kinds, paths, fingerprints } = useDiffPatch(patch);
   const { viewedPaths, setViewed } = useDiffViewed(scopeKey, fingerprints);
-  const viewed = useMemo(() => viewedIndices(paths, viewedPaths), [paths, viewedPaths]);
+  const viewed = useMemo(() => indicesForPaths(paths, viewedPaths), [paths, viewedPaths]);
+  /* チェックを出せる file。identity が曖昧な path は fingerprint を持たない
+   * (viewed.ts の sameFileGroup)ので、チェックしても何も起きない = 出さない。 */
+  const viewable = useMemo(() => indicesForPaths(paths, fingerprints), [paths, fingerprints]);
   /* 隠すのは描画から降ろすだけで、plan の index は詰めない(DiffFiles を参照)。 */
   const hidden = hideViewed ? viewed : NO_INDICES;
-  const { overrides, onToggle, onExpandAll, onCollapseAll, expand, setCollapsed } = useDiffCollapse(
-    patch,
-    plan,
-    viewed,
-  );
-  /* 確認済みにしたら畳む / 外したら開く(GitHub と同じ)。畳むのは明示的に展開
-   * 済み(override=false)の file にも効かせたいので、上書きも一緒に書き換える。
+  const { isCollapsed, onToggle, onExpandAll, onCollapseAll, expand, setCollapsed } =
+    useDiffCollapse(patch, plan, viewed);
+  /* 確認済みにしたら畳む(GitHub と同じ)。明示的に展開済み(override=false)の
+   * file にも効かせたいので上書きを書く。外すときは `false` ではなく上書きの取り消し
+   * — `false` を書くと 1,000 行超で既定折りたたみだった file が全開になる。
    * file type change は同 path が 2 entry になるため、path の全 index に及ぼす。 */
-  const onToggleViewed = useCallback(
-    (i: number) => {
-      const path = paths[i];
-      if (path === undefined) return;
-      const next = !viewedPaths.has(path);
-      setViewed(path, next);
-      for (const j of byPath.get(path) ?? []) setCollapsed(j, next);
-      /* 隠す設定なら、いまチェックした file ごと unmount される。フォーカスが
-       * body へ落ちてトラップの外に出るので、オーバーレイ自身に引き取らせる。 */
-      if (next && hideViewed) rootRef.current?.focus();
-    },
-    [byPath, hideViewed, paths, setCollapsed, setViewed, viewedPaths],
-  );
+  const onToggleViewed = useStableCallback((i: number) => {
+    const path = paths[i];
+    if (path === undefined) return;
+    const next = !viewedPaths.has(path);
+    setViewed(path, next);
+    for (const j of byPath.get(path) ?? []) setCollapsed(j, next ? true : null);
+    if (next && hideViewed) refocusAfterHide();
+  });
 
   /* auto は本文領域の幅で決め、split / stack はユーザーの明示指定をそのまま使う。
    * ヘッダと本文は縦に積むだけなので、本文領域の幅 = パネルの幅(diffView.ts)。 */
@@ -298,8 +327,9 @@ export function DiffOverlay({
             >
               <DiffFiles
                 plan={plan}
-                overrides={overrides}
+                isCollapsed={isCollapsed}
                 viewed={viewed}
+                viewable={viewable}
                 hidden={hidden}
                 theme={theme}
                 diffThemes={diffThemes}

@@ -1,5 +1,5 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
-import { unquoteGitPath } from "./diff";
+import { isSameFile, unquoteGitPath } from "./diff";
 
 /* 「確認済み」の identity。
  *
@@ -34,23 +34,53 @@ function foldLines(hash: number, lines: string[]): number {
 /* file 1 つの内容 fingerprint。衝突しても失われるのは「変わったのに確認済みが
  * 残る」ことだけで、同じ file の旧内容と新内容が 32bit で衝突する確率の話。 */
 export function fileFingerprint(f: FileDiffMetadata): string {
-  let h = foldLines(FNV_OFFSET, [f.type, f.name, f.prevName ?? "", f.newObjectId ?? ""]);
+  /* mode を混ぜるのは、mode だけの変更が `index` 行も hunk も持たないため。
+   * 入れないと chmod +x とその取り消しが同じ値になり、確認済みが残ったまま
+   * 「隠す」で二度と出てこない。 */
+  const meta = [
+    f.type,
+    f.name,
+    f.prevName ?? "",
+    f.newObjectId ?? "",
+    f.mode ?? "",
+    f.prevMode ?? "",
+  ];
+  let h = foldLines(FNV_OFFSET, meta);
   h = foldLines(h, f.deletionLines);
   h = foldLines(h, f.additionLines);
   return (h >>> 0).toString(36);
 }
 
+/* 同じ key に集まった entry が全部同じ file だと言い切れるか。
+ *
+ * 不正 UTF-8 の byte は正規化で U+FFFD へ潰れるので、`docs/\200.md` と
+ * `docs/\201.md` は同じ key になる(`diff.ts` の冒頭を参照)。潰れた跡があるなら
+ * identity は失われていて、確認済みは「別の file にもチェックが入って、隠す設定
+ * なら本文からも一覧からも消える」= 読んでいない変更が通る、という壊れ方をする。
+ * `diff.ts` が変更種別で同じ判定を使っているのと同じ理由だが、こちらは 1 entry でも
+ * U+FFFD を含むなら降ろす — アイコンを間違えるより取り違えの害が大きい。 */
+function sameFileGroup(entries: FileDiffMetadata[]): boolean {
+  const first = entries[0];
+  return first !== undefined && entries.every((e) => isSameFile(first, e));
+}
+
 /* 正規化 path -> fingerprint。key を生のパスへ戻すのはサイドバーが
  * `files[].path` で引くため(`indexDiffFilesByPath` と同じ規則)。
  * file type change の同 path 2 entry は 1 つの file なので、両方を畳んで
- * 1 エントリにする — 確認済みも 1 つとして扱う。 */
+ * 1 エントリにする — 確認済みも 1 つとして扱う。
+ * 同一と言い切れない key は fingerprint を持たせない。呼び出し側はこの Map に
+ * 無い path をチェック不可として扱う(確認済みにできず、復元もされない)。 */
 export function indexFingerprintsByPath(files: FileDiffMetadata[]): Map<string, string> {
-  const fingerprints = new Map<string, string>();
+  const groups = new Map<string, FileDiffMetadata[]>();
   for (const f of files) {
     const path = unquoteGitPath(f.name);
-    const prev = fingerprints.get(path);
-    const fp = fileFingerprint(f);
-    fingerprints.set(path, prev === undefined ? fp : `${prev}.${fp}`);
+    const at = groups.get(path);
+    if (at) at.push(f);
+    else groups.set(path, [f]);
+  }
+  const fingerprints = new Map<string, string>();
+  for (const [path, entries] of groups) {
+    if (sameFileGroup(entries)) fingerprints.set(path, entries.map(fileFingerprint).join("."));
   }
   return fingerprints;
 }
@@ -61,11 +91,15 @@ export function diffFilePaths(files: FileDiffMetadata[]): string[] {
   return files.map((f) => unquoteGitPath(f.name));
 }
 
-/* 確認済みの path から、本文側の plan index の集合へ。 */
-export function viewedIndices(paths: string[], viewedPaths: ReadonlySet<string>): Set<number> {
+/* path の集合を本文側の plan index の集合へ。確認済み(viewedPaths)と、そもそも
+ * チェックできる file(fingerprints の key)の両方をこれで引く。 */
+export function indicesForPaths(
+  paths: string[],
+  member: { has(path: string): boolean },
+): Set<number> {
   const indices = new Set<number>();
   paths.forEach((path, i) => {
-    if (viewedPaths.has(path)) indices.add(i);
+    if (member.has(path)) indices.add(i);
   });
   return indices;
 }

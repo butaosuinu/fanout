@@ -16,13 +16,17 @@ export function readLocal(key: string): string | null {
   }
 }
 
-export function writeLocal(key: string, value: string | null) {
+/* 書けたら true。quota を空けて書き直したい呼び出し側があるので、失敗を握り
+ * つぶすだけにしない(退避は残すので、このタブの表示は正しいまま)。 */
+export function writeLocal(key: string, value: string | null): boolean {
   try {
     if (value === null) localStorage.removeItem(key);
     else localStorage.setItem(key, value);
     unpersisted.delete(key);
+    return true;
   } catch {
     unpersisted.set(key, value); // このタブのあいだだけ効かせる
+    return false;
   }
 }
 

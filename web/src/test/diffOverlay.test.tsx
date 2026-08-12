@@ -1592,7 +1592,24 @@ describe("diff オーバーレイの確認済み", () => {
     await waitFor(() => expect(viewedBox(overlay, "src/hello.ts")).toBeChecked());
   });
 
-  it("全 file を確認済みにして隠すと、空になった理由を出す", async () => {
+  /* 隠す設定では、チェックした行ごと unmount される。overlay の一番上へ戻すと
+     キーボードだけで読む人は file ごとにヘッダ全部を Tab で辿り直すことになる。 */
+  it("隠す設定でチェックすると、次に読む file のチェックへフォーカスが移る", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    await user.click(within(overlay).getByRole("button", { name: "確認済みを隠す" }));
+
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(viewedBox(overlay, "src/util.ts"));
+    });
+  });
+
+  /* 「すべて」とは言わない — patch を持たない file は本文に出ないので、
+     全部見たと読める文言は嘘になりうる(警告帯と省略一覧が残件を出している)。 */
+  it("patch のある file を全部確認済みにして隠すと、空になった理由を出す", async () => {
     const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
     const overlay = await openOverlay(user);
     await waitFor(() => expect(shadowText()).toContain("hello_marker"));
@@ -1601,10 +1618,75 @@ describe("diff オーバーレイの確認済み", () => {
     await user.click(viewedBox(overlay, "src/util.ts"));
 
     await waitFor(() => {
-      expect(within(overlay).getByText("すべてのファイルを確認済みにしました")).toBeInTheDocument();
+      expect(
+        within(overlay).getByText("patch のあるファイルはすべて確認済みです"),
+      ).toBeInTheDocument();
     });
-    /* 隠した file ごと unmount されるので、フォーカスは overlay が引き取る */
-    expect(document.activeElement).not.toBe(document.body);
+    /* 隠した file ごと unmount されるので、フォーカスの引き取りが要る。DOM の
+       入れ替わりを待つため次フレームで動くので、ここも待って確かめる。 */
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+  });
+
+  /* 確認済みを外すのは「上書きの取り消し」であって「開け」ではない。false を
+     書くと、1,000 行超で既定折りたたみだった file が開いたことすら無い状態から
+     全開になり、読んでいた位置が飛ぶ。 */
+  it("既定で畳まれる大きい file は、確認済みを外しても畳まれたまま", async () => {
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          twoFileDiff({
+            patch: TWO_FILE_PATCH + linesPatch("bomb.txt", 1600, "payload_row"),
+            files: [
+              makeDiffFile(),
+              makeDiffFile({ path: "src/util.ts", additions: 1, deletions: 0 }),
+              makeDiffFile({ path: "bomb.txt", additions: 1600, deletions: 0 }),
+            ],
+          }),
+        ),
+      ),
+    );
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    // 最初から畳まれている
+    expect(shadowText()).not.toContain("payload_row");
+
+    await user.click(viewedBox(overlay, "bomb.txt"));
+    await waitFor(() => expect(viewedBox(overlay, "bomb.txt")).toBeChecked());
+    await user.click(viewedBox(overlay, "bomb.txt"));
+    await waitFor(() => expect(viewedBox(overlay, "bomb.txt")).not.toBeChecked());
+
+    expect(shadowText()).not.toContain("payload_row");
+  });
+
+  /* 不正 UTF-8 の byte は正規化で U+FFFD へ潰れ、別 file が同じ key に集まる。
+     チェックを出すと片方を読んだだけでもう片方も確認済みになる。 */
+  it("正規化で衝突した file にはチェックを出さない", async () => {
+    const patch = [
+      'diff --git "a/docs/\\200.md" "b/docs/\\200.md"',
+      '--- "a/docs/\\200.md"',
+      '+++ "b/docs/\\200.md"',
+      "@@ -1 +1 @@",
+      "-one",
+      "+first_marker",
+      'diff --git "a/docs/\\201.md" "b/docs/\\201.md"',
+      '--- "a/docs/\\201.md"',
+      '+++ "b/docs/\\201.md"',
+      "@@ -1 +1 @@",
+      "-two",
+      "+second_marker",
+      "",
+    ].join("\n");
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({ patch, files: [makeDiffFile({ path: "docs/�.md" })] }),
+        ),
+      ),
+    );
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("first_marker"));
+    expect(shadowText()).toContain("second_marker");
+    expect(within(overlay).queryAllByRole("checkbox")).toHaveLength(0);
   });
 
   it("壊れた保存値は無視して、確認済み無しとして開く", async () => {

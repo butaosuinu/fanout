@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useStableCallback } from "../../shared/useStableCallback";
 import type { DiffFilePlan } from "./diff";
 
 const EMPTY_OVERRIDES: ReadonlyMap<number, boolean> = new Map();
@@ -26,11 +27,15 @@ function collapsedAt(
 export function useDiffCollapse(patch: string, plan: DiffFilePlan[], viewed: ReadonlySet<number>) {
   const [ov, setOv] = useState<Overrides>({ patch, map: EMPTY_OVERRIDES });
   const overrides = ov.patch === patch ? ov.map : EMPTY_OVERRIDES;
+  /* collapsed が null なら上書きを取り消して初期方針へ戻す。確認済みを外したとき
+   * に `false` を書いてしまうと、1,000 行以上で既定折りたたみだった file が
+   * 「開いたことすらない状態」から全開になり、読んでいた位置が飛ぶ。 */
   const setCollapsed = useCallback(
-    (i: number, collapsed: boolean) => {
+    (i: number, collapsed: boolean | null) => {
       setOv((prev) => {
         const map = new Map(prev.patch === patch ? prev.map : EMPTY_OVERRIDES);
-        map.set(i, collapsed);
+        if (collapsed === null) map.delete(i);
+        else map.set(i, collapsed);
         return { patch, map };
       });
     },
@@ -45,20 +50,28 @@ export function useDiffCollapse(patch: string, plan: DiffFilePlan[], viewed: Rea
     [plan, patch],
   );
 
-  const onToggle = useCallback(
-    (i: number) => setCollapsed(i, !collapsedAt(plan[i], overrides.get(i), viewed.has(i))),
-    [overrides, plan, setCollapsed, viewed],
+  /* 「畳まれているか」の唯一の判定。描画側にも同じ式を書くと、上書き・確認済み・
+   * 初期方針の優先順位が 2 箇所に増え、片方だけ変えたときにボタンと本文が食い違う。
+   * identity は overrides / plan / viewed が変わったときだけ変わるので、描画側の
+   * memo 境界もこれを渡して壊れない。 */
+  const isCollapsed = useCallback(
+    (i: number) => collapsedAt(plan[i], overrides.get(i), viewed.has(i)),
+    [overrides, plan, viewed],
   );
+
+  /* 行に降りるハンドラは identity を固定する。ここが毎 render 変わると
+   * DiffFileRow の memo が全件で外れ、1 回のクリックが全 file の再描画になる。 */
+  const onToggle = useStableCallback((i: number) => setCollapsed(i, !isCollapsed(i)));
   /* 折りたたまれていれば開く。すでに開いていれば何もしない — 無条件に書くと
    * 同じ状態のまま Map を差し替えて再レンダーを起こす。 */
   const expand = useCallback(
     (i: number) => {
-      if (collapsedAt(plan[i], overrides.get(i), viewed.has(i))) setCollapsed(i, false);
+      if (isCollapsed(i)) setCollapsed(i, false);
     },
-    [overrides, plan, setCollapsed, viewed],
+    [isCollapsed, setCollapsed],
   );
   const onExpandAll = useCallback(() => setAll(false), [setAll]);
   const onCollapseAll = useCallback(() => setAll(true), [setAll]);
 
-  return { overrides, onToggle, expand, onExpandAll, onCollapseAll, setCollapsed };
+  return { isCollapsed, onToggle, expand, onExpandAll, onCollapseAll, setCollapsed };
 }

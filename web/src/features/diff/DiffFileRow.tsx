@@ -47,6 +47,7 @@ function FileActions({
   lineText,
   collapsed,
   viewed,
+  viewable,
   onToggle,
   onToggleViewed,
 }: {
@@ -54,6 +55,9 @@ function FileActions({
   lineText: string;
   collapsed: boolean;
   viewed: boolean;
+  /* identity が曖昧な path はチェックを持てない(viewed.ts の sameFileGroup)。
+     押しても何も起きないチェックを出すほうが害なので、丸ごと省く。 */
+  viewable: boolean;
   onToggle: () => void;
   onToggleViewed: () => void;
 }) {
@@ -63,15 +67,17 @@ function FileActions({
       {/* 行数は「大きい file だ」という情報なので、畳んでいる間はボタンの外に
           テキストで残す */}
       {collapsed && <span className="diff-file-lines">{t`${{ lines: lineText }} 行`}</span>}
-      <label className="diff-file-viewed">
-        <input
-          type="checkbox"
-          checked={viewed}
-          aria-label={t`${{ name }} — 確認済み`}
-          onChange={onToggleViewed}
-        />
-        <span aria-hidden="true">{t`確認済み`}</span>
-      </label>
+      {viewable && (
+        <label className="diff-file-viewed">
+          <input
+            type="checkbox"
+            checked={viewed}
+            aria-label={t`${{ name }} — 確認済み`}
+            onChange={onToggleViewed}
+          />
+          <span aria-hidden="true">{t`確認済み`}</span>
+        </label>
+      )}
       <IconButton
         /* JS の t マクロを使う(<Trans> は {変数} 前後の空白を落とすため、
            " — " 区切りのアクセシブル名が壊れる) */
@@ -88,6 +94,47 @@ function FileActions({
   );
 }
 
+/* この file をどう描くかの指定一式。`@pierre/diffs` の options は毎 render 作り
+ * 直してよい(ライブラリ側が中身を比較する)が、unsafeCSS だけは文字列が変わると
+ * file を丸ごと描き直すので、上の定数をそのまま渡す。 */
+function fileDiffOptions({
+  entry,
+  theme,
+  diffThemes,
+  stack,
+  collapsed,
+}: {
+  entry: DiffFilePlan;
+  theme: Theme;
+  diffThemes: { light: string; dark: string };
+  stack: boolean;
+  collapsed: boolean;
+}) {
+  const { highlight, inlineDiff } = entry;
+  return {
+    /* light/dark 両方を渡すとライブラリが両方の CSS 変数を出すので、外観モードの
+     * 切り替えは themeType だけで即座に効く。 */
+    theme: diffThemes,
+    themeType: theme,
+    collapsed,
+    /* スクロール中もファイル名を上端に貼り付ける(GitHub の files changed と同じ)。
+     * ヘッダは file ごとの shadow root 内で sticky になるので、次の file に
+     * 入れ替わる */
+    stickyHeader: true,
+    /* 長い行は横スクロールさせず折り返す。狭いコンパクト表示で必須で、全画面でも
+     * file ごとの横スクロールバーが消えて読みやすい。 */
+    overflow: "wrap" as const,
+    diffStyle: stack ? ("unified" as const) : ("split" as const),
+    unsafeCSS: stack ? STACK_CSS : SPLIT_CSS,
+    tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH,
+    maxLineDiffLength: TOKENIZE_MAX_LINE_LENGTH,
+    /* 内容量が多すぎる file は highlight / 行内 word 差分を切る。どちらも描画範囲
+     * ではなく file 全体に走る処理なので仮想化では有界にならない(diff.ts 冒頭)。 */
+    ...(highlight ? {} : { tokenizeMaxLength: TOKENIZE_MAX_LENGTH_PLAIN }),
+    ...(inlineDiff ? {} : { lineDiffType: LINE_DIFF_TYPE_PLAIN }),
+  };
+}
+
 /* file 1 つぶんの描画。
  *
  * memo にするのは、確認済みや折りたたみの操作で 500 file 全部を描き直さないため
@@ -101,6 +148,7 @@ export const DiffFileRow = memo(function DiffFileRow({
   stack,
   collapsed,
   viewed,
+  viewable,
   registerHost,
   onToggle,
   onToggleViewed,
@@ -114,6 +162,7 @@ export const DiffFileRow = memo(function DiffFileRow({
   stack: boolean;
   collapsed: boolean;
   viewed: boolean;
+  viewable: boolean;
   registerHost: (index: number, el: HTMLDivElement | null) => void;
   onToggle: (index: number) => void;
   onToggleViewed: (index: number) => void;
@@ -121,48 +170,28 @@ export const DiffFileRow = memo(function DiffFileRow({
   /* memo 境界の内側で locale を購読する。props はロケールに依存しないので、
    * これが無いと言語を切り替えても行数ラベルとボタン名が古いまま残る。 */
   const { i18n } = useLingui();
-  const { file, lines, highlight, inlineDiff } = entry;
+  const { file, lines } = entry;
   const lineText = lines.toLocaleString(i18n.locale);
   return (
     <div
       className="diff-file"
+      /* data-collapsed は飾りではない — useDiffScroller の空白判定が、行が
+         無くて当然の file をこれで除外する。属性を足すならそこまで見ること。 */
       data-collapsed={collapsed ? "" : undefined}
-      data-viewed={viewed ? "" : undefined}
       ref={(el) => registerHost(index, el)}
     >
       {/* key を付けて作り直さないこと — shadow root に前の placeholder /
           buffer が残り、file の高さが倍になる(useDiffNudge を参照) */}
       <FileDiff
         fileDiff={file}
-        options={{
-          /* light/dark 両方を渡すとライブラリが両方の CSS 変数を出すので、
-           * 外観モードの切り替えは themeType だけで即座に効く。 */
-          theme: diffThemes,
-          themeType: theme,
-          collapsed,
-          /* スクロール中もファイル名を上端に貼り付ける(GitHub の files changed と
-           * 同じ)。ヘッダは file ごとの shadow root 内で sticky になるので、
-           * 次の file に入れ替わる */
-          stickyHeader: true,
-          /* 長い行は横スクロールさせず折り返す。狭いコンパクト表示で必須で、
-           * 全画面でも file ごとの横スクロールバーが消えて読みやすい。 */
-          overflow: "wrap",
-          diffStyle: stack ? "unified" : "split",
-          unsafeCSS: stack ? STACK_CSS : SPLIT_CSS,
-          tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH,
-          maxLineDiffLength: TOKENIZE_MAX_LINE_LENGTH,
-          /* 内容量が多すぎる file は highlight / 行内 word 差分を切る。どちらも
-           * 描画範囲ではなく file 全体に走る処理なので仮想化では有界にならない
-           * (diff.ts 冒頭のコメントを参照)。 */
-          ...(highlight ? {} : { tokenizeMaxLength: TOKENIZE_MAX_LENGTH_PLAIN }),
-          ...(inlineDiff ? {} : { lineDiffType: LINE_DIFF_TYPE_PLAIN }),
-        }}
+        options={fileDiffOptions({ entry, theme, diffThemes, stack, collapsed })}
         renderHeaderMetadata={() => (
           <FileActions
             name={file.name}
             lineText={lineText}
             collapsed={collapsed}
             viewed={viewed}
+            viewable={viewable}
             onToggle={() => onToggle(index)}
             onToggleViewed={() => onToggleViewed(index)}
           />

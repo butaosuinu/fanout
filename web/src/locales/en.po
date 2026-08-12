@@ -350,10 +350,6 @@ msgstr "Changed files"
 msgid "{key} は snapshot から消えたため詳細を閉じました"
 msgstr "{key} disappeared from the snapshot, so its details were closed"
 
-#: src/features/diff/DiffOverlay.tsx
-msgid "すべてのファイルを確認済みにしました"
-msgstr "Every file is marked viewed"
-
 #: src/features/filter/FilterBar.tsx
 msgid "runtime ペイン生死で絞り込み"
 msgstr "Filter by runtime pane liveness"
@@ -381,6 +377,10 @@ msgstr "Renamed"
 #: src/features/sessions/Hud.tsx
 msgid "集計"
 msgstr "Summary"
+
+#: src/features/diff/DiffOverlay.tsx
+msgid "patch のあるファイルはすべて確認済みです"
+msgstr "Every file with a patch is viewed"
 
 #: src/features/filter/FilterDropdown.tsx
 msgid "{key} の選択肢を検索"

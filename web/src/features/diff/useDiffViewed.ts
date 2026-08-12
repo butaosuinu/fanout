@@ -1,12 +1,13 @@
-import { useCallback, useMemo, useState } from "react";
-import { loadViewed, saveViewed } from "./viewedStore";
-
-/* scope ごとの保存値。scope が変われば path の意味も変わるので、両者を組で持つ。 */
-type Stored = { scope: string; map: ReadonlyMap<string, string> };
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { parseViewed, readViewedRaw, saveViewed, subscribeViewed } from "./viewedStore";
 
 /* 保存済みの fingerprint が現在の patch の fingerprint と一致する path だけを
  * 「いま確認済み」と見なす。これが無効化そのもので、リセット処理は要らない —
- * 内容が変わった file は一致しなくなって自動的に外れ、他の file は残る。 */
+ * 内容が変わった file は一致しなくなって自動的に外れ、他の file は残る。
+ *
+ * 一致しなくなった entry は消さずに残す。消すと、変更を戻して同じ内容に帰った
+ * file の確認済みが二度と復活しない(fingerprint は内容が同じなら同じ値になる)。
+ * 際限なく伸びないよう、保存側が新しいほうから 500 件で切る。 */
 function matching(
   stored: ReadonlyMap<string, string>,
   fingerprints: ReadonlyMap<string, string>,
@@ -20,29 +21,29 @@ function matching(
 
 /* file ごとの「確認済み」。
  *
- * scope は session 行の rowKey。`DiffOverlay` は対象を切り替えても remount されない
- * ので、scope の変化は render 中に見て読み直す — passive effect でのリセットでは
- * `@pierre/diffs` の同期 mount に間に合わない(`useDiffCollapse` と同じ理由)。 */
+ * scope は session 行の rowKey。状態は storage が唯一の正で、ローカルに複製しない
+ * — `DiffOverlay` は対象を切り替えても remount されないので、複製すると scope の
+ * 入れ替わりと別タブの書き込みの両方を自前で無効化して回ることになる。
+ * 購読は store 側が自分の書き込みと `storage` イベントを束ねて 1 本で配る。 */
 export function useDiffViewed(scope: string, fingerprints: ReadonlyMap<string, string>) {
-  const [stored, setStored] = useState<Stored>(() => ({ scope, map: loadViewed(scope) }));
-  /* scope が入れ替わった最初の render はまだ state が古いので、その場で読み直す。
-   * storage 読み出しは副作用を持たないので render 中でよい。memo は再パースを
-   * 減らすためだけのもので、正しさは再計算しても変わらない。 */
-  const loaded = useMemo(() => loadViewed(scope), [scope]);
-  const current = stored.scope === scope ? stored.map : loaded;
-  const viewedPaths = useMemo(() => matching(current, fingerprints), [current, fingerprints]);
+  const raw = useSyncExternalStore(
+    subscribeViewed,
+    () => readViewedRaw(scope),
+    () => null, // SSR は無い(dashboard は CSR のみ)。念のため空で揃える
+  );
+  const stored = useMemo(() => parseViewed(raw), [raw]);
+  const viewedPaths = useMemo(() => matching(stored, fingerprints), [stored, fingerprints]);
 
   const setViewed = useCallback(
     (path: string, on: boolean) => {
       const fp = fingerprints.get(path);
-      if (fp === undefined) return; // patch に無い path は確認済みにできない
-      const map = new Map(current);
+      if (fp === undefined) return; // patch に無い / identity が曖昧な path は扱わない
+      const map = new Map(stored);
       if (on) map.set(path, fp);
       else map.delete(path);
       saveViewed(scope, map);
-      setStored({ scope, map });
     },
-    [current, fingerprints, scope],
+    [fingerprints, scope, stored],
   );
 
   return { viewedPaths, setViewed };

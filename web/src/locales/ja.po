@@ -350,10 +350,6 @@ msgstr "変更ファイル"
 msgid "{key} は snapshot から消えたため詳細を閉じました"
 msgstr "{key} は snapshot から消えたため詳細を閉じました"
 
-#: src/features/diff/DiffOverlay.tsx
-msgid "すべてのファイルを確認済みにしました"
-msgstr "すべてのファイルを確認済みにしました"
-
 #: src/features/filter/FilterBar.tsx
 msgid "runtime ペイン生死で絞り込み"
 msgstr "runtime ペイン生死で絞り込み"
@@ -381,6 +377,10 @@ msgstr "移動"
 #: src/features/sessions/Hud.tsx
 msgid "集計"
 msgstr "集計"
+
+#: src/features/diff/DiffOverlay.tsx
+msgid "patch のあるファイルはすべて確認済みです"
+msgstr "patch のあるファイルはすべて確認済みです"
 
 #: src/features/filter/FilterDropdown.tsx
 msgid "{key} の選択肢を検索"
