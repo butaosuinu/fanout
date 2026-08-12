@@ -194,6 +194,7 @@ func sameHerdrNudgeBinding(left, right state.Pane) bool {
 		left.Parent == right.Parent, left.IssueNum == right.IssueNum, left.TaskID == right.TaskID,
 		left.Backend == right.Backend, left.PaneID == right.PaneID,
 		left.HerdrWorkspaceID == right.HerdrWorkspaceID,
+		left.HerdrWorkspaceLabel == right.HerdrWorkspaceLabel,
 		left.HerdrTerminalID == right.HerdrTerminalID, left.HerdrRepoKey == right.HerdrRepoKey,
 		left.HerdrAgentID == right.HerdrAgentID, left.HerdrSession == right.HerdrSession,
 		left.HerdrSocketPath == right.HerdrSocketPath,
