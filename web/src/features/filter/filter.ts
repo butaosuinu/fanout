@@ -6,6 +6,8 @@ import {
   paneCI,
   paneRuntimeState,
   paneRuntimeTitle,
+  prDisplayState,
+  prHasConflict,
   prPrimary,
   prReviewValue,
 } from "../sessions/pane";
@@ -46,6 +48,14 @@ function waveAliases(p: PaneView): string[] {
 
 type FilterPredicate = (p: PaneView, value: string) => boolean;
 
+/* pr: の突き合わせ先は 2 つ — ライフサイクル状態(derived が正)と、行に描画されて
+ * いる DisplayState ラベル。どちらかに完全一致すれば通す。 */
+function prMatches(p: PaneView, value: string): boolean {
+  const pr = prPrimary(p.prs);
+  if (lower(derivedValues(p).pr ?? pr?.state ?? "none") === value) return true;
+  return !!pr && prDisplayState(pr) === value;
+}
+
 /* キーごとの述語テーブル。キーのセマンティクス(完全一致か部分一致か、derived の
  * 値を優先するか)はここ 1 か所だけを読めば分かるようにしてある。 */
 const FILTER_PREDICATES = new Map<string, FilterPredicate>([
@@ -66,9 +76,13 @@ const FILTER_PREDICATES = new Map<string, FilterPredicate>([
       lower(p.taskId) === v,
   ],
   ["task", (p, v) => lower(p.taskId) === v],
-  ["pr", (p, v) => lower(derivedValues(p).pr ?? prPrimary(p.prs)?.state ?? "none") === v],
-  // pr: がライフサイクル状態(open/closed/merged)なのに対し、review: はレビュー状態。
-  // 直交する軸なので、merged の行も review:approved で引ける。
+  // ライフサイクル状態(open/closed/merged)に加えて、pr 列に実際に描画されている
+  // ラベル(approved / changes-requested / review-required / draft)も受ける。
+  // 見えている語をそのキーで打てないと、0 件になった理由が分からない。既存の
+  // pr:open 等は生の state 側で従来どおり当たるので、純粋な追加。
+  ["pr", prMatches],
+  // pr: がライフサイクル状態なのに対し、review: はレビュー状態。直交する軸なので、
+  // merged の行も review:approved で引ける。
   ["review", (p, v) => lower(derivedValues(p).review ?? prReviewValue(prPrimary(p.prs))) === v],
 ]);
 
@@ -113,10 +127,18 @@ function haystack(p: PaneView): string {
       p.agentState,
       fmtWave(p),
       fmtBlockers(p),
+      conflictWord(p),
     ]
       .join(" ")
       .toLowerCase()
   );
+}
+
+/* 行に出ている conflict タグを自由語検索から引けるようにする(他のタグは全部
+ * 引ける)。コメント件数は入れない — 裸の数値は issue 番号や diff 行数と衝突する。 */
+function conflictWord(p: PaneView): string {
+  const pr = prPrimary(p.prs);
+  return pr && prHasConflict(pr) ? "conflict" : "";
 }
 
 /* 全 term の AND。述語を持たないキー(手組みの Term)は制約なしとして通す。 */

@@ -903,11 +903,15 @@ func TestPRsForBranchDetailMapsGraphQLNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := string(data)
-	// -f, not -F: -F coerces types, so a branch named "123" would fail String!.
+	// -f everywhere, never -F: -F coerces types, so a repo named "2048" or a
+	// branch named "123" would be sent as an Int and fail String!.
+	if strings.Contains(args, "\n-F\n") {
+		t.Fatalf("PRsForBranchDetail() used -F for a String! variable:\n%s", args)
+	}
 	for _, want := range []string{
 		"api\ngraphql",
-		"-F\nowner=owner",
-		"-F\nrepo=repo",
+		"-f\nowner=owner",
+		"-f\nrepo=repo",
 		"-f\nbranch=fanout/taskid-state-pr-213",
 		".data.repository.pullRequests.nodes // []",
 		"states: [OPEN, CLOSED, MERGED]",
@@ -936,10 +940,13 @@ func TestPRsForBranchDetailReturnsEmptyList(t *testing.T) {
 // paths, and a field present on only some of them shows up as a row whose
 // conflict/comment badges vanish depending on how the row was recorded.
 func TestPRQueriesShareReviewSignalFields(t *testing.T) {
+	// Each entry must be a query actually sent to gh, never prRefNodeFields
+	// itself — asserting the shared constant against itself is true by
+	// construction and guards nothing.
 	queries := map[string]string{
-		"issue batch":  issueDetailsQuery([]int{7}, true),
-		"branch":       branchPRsQuery,
-		"issue detail": prRefNodeFields,
+		"issue batch":     issueDetailsQuery([]int{7}, true),
+		"issue pr paging": issuePRsPageQuery,
+		"branch":          branchPRsQuery,
 	}
 	for name, query := range queries {
 		t.Run(name, func(t *testing.T) {
@@ -956,7 +963,13 @@ func TestPRQueriesShareReviewSignalFields(t *testing.T) {
 // makes this feature free: mergeable/totalCommentsCount ride the existing
 // batched query, so a poll costs the same number of gh processes as before.
 func TestIssueDetailsBatchStaysOneCallWithReviewSignals(t *testing.T) {
-	argsPath := installFakeGH(t, `{"data":{"repository":{"issue_7":{"number":7,"title":"seven","state":"open","body":"b","labels":{"nodes":[]},"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":70,"state":"OPEN","mergedAt":null,"mergeable":"CONFLICTING","totalCommentsCount":4,"commits":{"nodes":[]}}]}}}}}`)
+	// installFakeGHScript, not installFakeGH: the latter's shim truncates the
+	// args file with `>`, so a per-issue fan-out would still leave one line and
+	// the call count below could never fail.
+	argsPath := installFakeGHScript(t, `
+printf '%s\n' "$*" >> "$GH_FAKE_ARGS"
+printf '%s' '{"data":{"repository":{"issue_7":{"number":7,"title":"seven","state":"open","body":"b","labels":{"nodes":[]},"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":70,"state":"OPEN","mergedAt":null,"mergeable":"CONFLICTING","totalCommentsCount":4,"commits":{"nodes":[]}}]}}}}}'
+`)
 
 	got, err := (Runner{}).IssuesSnapshotWithPRs("owner", "repo", []int{7})
 	if err != nil {

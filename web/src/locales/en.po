@@ -160,7 +160,7 @@ msgstr "Filter by agent run state"
 
 #: src/features/sessions/badges.tsx
 msgid "コメント {count} 件(inline レビューコメントを含む)"
-msgstr "{count} comments, including inline review comments"
+msgstr "{count, plural, one {# comment} other {# comments}}, including inline review comments"
 
 #: src/app/App.tsx
 msgid "ページを再読み込み"

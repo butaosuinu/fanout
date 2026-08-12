@@ -968,6 +968,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 		pv.DiffSummary,
 		pv.DirtyState,
 		pv.WorktreeErr,
+		conflictFilterText(pv.PRs),
 		pv.Agent,
 		pv.WaveLabel,
 		waveBadge,
@@ -1039,6 +1040,18 @@ func paneFilterValues(pv PaneView, runtimeState, backendName, ci, dependencyWave
 		values["wave"] = strings.ToLower(strings.TrimSpace(firstNonEmpty(pv.WaveLabel, dependencyWave)))
 	}
 	return values
+}
+
+// conflictFilterText makes the row's rendered `conflict` badge findable by
+// free-text search, the way every other visible tag (draft, merged, ci fail,
+// dirty, W2 blocked) already is. The comment count is deliberately left out: a
+// bare number in the haystack would collide with issue numbers and diff counts.
+func conflictFilterText(prs []ghissue.PRRef) string {
+	pr, ok := ghissue.PrimaryPR(prs)
+	if !ok || !pr.HasConflict() {
+		return ""
+	}
+	return "conflict"
 }
 
 // reviewFilterValue is the `review:` vocabulary: the primary PR's review

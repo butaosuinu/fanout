@@ -4007,7 +4007,7 @@ if [[ "$1 $2" == "repo view" ]]; then
   printf 'o/n'
   exit 0
 fi
-if [[ "$1 $2" == "api graphql" && "$*" == *"pullRequests(headRefName:"* ]]; then
+if [[ "$1 $2" == "api graphql" && "$*" == *"branch="* ]]; then
   printf '%s' "$GH_FAKE_PR_LIST"
   exit 0
 fi

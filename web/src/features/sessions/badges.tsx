@@ -2,7 +2,7 @@ import { useLingui } from "@lingui/react/macro";
 import { prUrl } from "../../shared/github";
 import type { PRRef } from "../../transport/types";
 import { GhLink, Tag } from "../../ui/Tag";
-import { prDisplayState, prHasConflict } from "./pane";
+import { prDisplayState, prHasConflict, prReviewValue } from "./pane";
 
 /* agentState の 6 値契約(sessionview normalizeAgentState の許可リスト)ごとの
  * タグ色。進行中(running / working)はアンバー、plan は浅葱、blocked は赤、
@@ -110,9 +110,13 @@ export function PrCiTag({ ci }: { ci?: string }) {
   return null;
 }
 
-/* 生の reviewDecision タグ(ドロワー用)。行のピルは DisplayState 語彙に潰すので、
- * merged 済み PR の approved はここでしか見えない。 */
-export function PrReviewTag({ decision }: { decision?: string }) {
-  if (!decision) return null;
-  return <Tag>{decision.toLowerCase().replaceAll("_", " ")}</Tag>;
+/* reviewDecision タグ(ドロワー用)。ピルが既にその語を出しているときは省く —
+ * open + approved の PR で「#701 approved」の隣に「approved」が並ぶのを防ぐ。
+ * 出番は merged / closed / draft、つまり DisplayState が decision を覆い隠す
+ * ケースだけになる。表記は review: フィルタと同じハイフン形に揃える(ドロワーで
+ * 読んだ語をそのままフィルタ欄に打てるように)。 */
+export function PrReviewTag({ pr }: { pr: PRRef }) {
+  const value = prReviewValue(pr);
+  if (value === "none" || value === prDisplayState(pr)) return null;
+  return <Tag>{value}</Tag>;
 }

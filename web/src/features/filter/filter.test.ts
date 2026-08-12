@@ -155,6 +155,25 @@ describe("matches", () => {
     expect(matches(makePane({ prs }), q("pr:open"))).toBe(false);
   });
 
+  it("pr: は生の state と、行に描画されるラベルの両方を受ける", () => {
+    const approved = [{ number: 1, state: "OPEN", mergedAt: null, reviewDecision: "APPROVED" }];
+    // 行には "#1 approved" と出るので、その語がそのまま打てること
+    expect(matches(makePane({ prs: approved }), q("pr:approved"))).toBe(true);
+    // 生の state 側の既存構文は壊さない
+    expect(matches(makePane({ prs: approved }), q("pr:open"))).toBe(true);
+    expect(matches(makePane({ prs: approved }), q("pr:merged"))).toBe(false);
+    const draft = [{ number: 2, state: "OPEN", mergedAt: null, isDraft: true }];
+    expect(matches(makePane({ prs: draft }), q("pr:draft"))).toBe(true);
+  });
+
+  it("自由語 conflict は conflict タグの出ている行に当たる", () => {
+    const conflicting = [{ number: 1, state: "OPEN", mergedAt: null, mergeable: "CONFLICTING" }];
+    const clean = [{ number: 2, state: "OPEN", mergedAt: null, mergeable: "MERGEABLE" }];
+    expect(matches(makePane({ prs: conflicting }), q("conflict"))).toBe(true);
+    expect(matches(makePane({ prs: clean }), q("conflict"))).toBe(false);
+    expect(matches(makePane({ prs: null }), q("conflict"))).toBe(false);
+  });
+
   it("review: は primary PR の reviewDecision、無ければ none", () => {
     expect(matches(makePane({ prs: null }), q("review:none"))).toBe(true);
     const approved = [{ number: 1, state: "OPEN", mergedAt: null, reviewDecision: "APPROVED" }];

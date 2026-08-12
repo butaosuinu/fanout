@@ -217,7 +217,46 @@ describe("snapshot 描画", () => {
     expect(within(drawer).getByText("ci pass", { selector: ".tag" })).toBeInTheDocument();
     expect(within(drawer).getByText("conflict", { selector: ".tag" })).toBeInTheDocument();
     expect(within(drawer).getByText("💬 12", { selector: ".tag" })).toBeInTheDocument();
-    expect(within(drawer).getByText("approved", { selector: ".tag" })).toBeInTheDocument();
+    // ピルが既に approved を出しているので、素の reviewDecision タグは重ねない
+    expect(within(drawer).queryByText("approved", { selector: ".tag" })).not.toBeInTheDocument();
+  });
+
+  it("merged PR のドロワーはピルが隠す reviewDecision をタグで補う", async () => {
+    const user = userEvent.setup();
+    server.use(peekHandler(() => "manual output"));
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("@manual", [
+          makePane({
+            issueNum: -1,
+            sourceKey: "manual-prompt",
+            displayName: "Merged session",
+            slug: "manual-3-merged-session-pane",
+            branchName: "fanout/manual-3-merged-session-pane",
+            issueState: "UNKNOWN",
+            prs: [
+              {
+                number: 703,
+                state: "MERGED",
+                mergedAt: "2026-06-01T00:00:00Z",
+                reviewDecision: "CHANGES_REQUESTED",
+              },
+            ],
+          }),
+        ]),
+      ]),
+    );
+
+    const row = screen.getByText("Merged session").closest("tr")!;
+    // 行のピルは merged に潰れる — reviewDecision は行には出ない
+    expect(within(row).getByRole("link", { name: "#703 merged" })).toBeInTheDocument();
+    expect(within(row).queryByText("changes-requested")).not.toBeInTheDocument();
+
+    await user.click(within(row).getByText("Merged session"));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    // ドロワーだけが decision を補う。表記は review: フィルタと同じハイフン形
+    expect(within(drawer).getByText("changes-requested", { selector: ".tag" })).toBeInTheDocument();
   });
 
   it("mergeable / comments が無い PR は conflict タグもコメント件数も出さない", async () => {

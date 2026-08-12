@@ -124,7 +124,7 @@ function PrRow({ pr, repo }: { pr: PRRef; repo: string }) {
       <PrCiTag ci={pr.ci} />
       <PrConflictTag pr={pr} />
       <PrCommentsTag pr={pr} />
-      <PrReviewTag decision={pr.reviewDecision} />
+      <PrReviewTag pr={pr} />
     </li>
   );
 }

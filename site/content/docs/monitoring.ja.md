@@ -193,10 +193,16 @@ PR だけでなくその行のすべての PR について同じ 3 つが出ま�
 conflict タグは GitHub が競合を報告したときだけ出ます。merge 済み・close 済みの PR は
 マージ可能性を持たず、base に push した直後の再計算中も同じく持ちません。
 
-レビュー状態は PR 状態とは別に絞り込みます。問いが違うためです。`pr:open` は PR が
-ライフサイクルのどこにいるかを、`review:approved` はレビューを通ったかを訊きます。
-approved な PR は merge 後も `review:approved` に当たります。`review:` が取る値は
-`approved` / `changes-requested` / `review-required` / `none` です。
+列に出ている語はそのままフィルタに打てます。`pr:` はライフサイクル状態（`open` /
+`closed` / `merged`）とピルのラベル（`approved` / `changes-requested` /
+`review-required` / `draft`）の両方を取り、`conflict` は自由語で当たります。
+
+`review:` は別の軸です。レビュー状態とライフサイクル状態は問いが違うためです。
+`pr:open` は PR がライフサイクルのどこにいるかを、`review:approved` はレビューを
+通ったかを訊きます。approved な PR は、ピルが `merged` に潰れたあとも
+`review:approved` に当たります。`review:` が取る値は `approved` /
+`changes-requested` / `review-required` / `none` です。どちらもダッシュボードの
+フィルタで、TUI は別のフィルタ文法を持ち `review:` は受け付けません。
 
 Session の各行には runtime backend と pane の identity が出て、runtime の状態は `live` / `stale` / `unknown` / `unsupported` / `-` で示されます。フィルタは `backend:tmux` / `backend:herdr` を受け付けます。
 [herdr backend]({{< relref "/docs/herdr-backend" >}}) の行では、保存済みの行が fanout-owned session の pane と一致する場合だけ live peek が内容を返します。

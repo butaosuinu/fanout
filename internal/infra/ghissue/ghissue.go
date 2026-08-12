@@ -90,9 +90,11 @@ func (pr PRRef) HasConflict() bool {
 	return pr.Mergeable == "CONFLICTING"
 }
 
-// normalizeMergeable keeps the two states worth storing and drops UNKNOWN, so
-// the dashboard's change detection never sees a "known -> unknown -> known"
-// round trip as three distinct snapshots.
+// normalizeMergeable keeps the two states worth showing and maps everything
+// else — UNKNOWN, and any state GitHub adds later — to "", so the wire carries
+// only values a badge can act on. It does not remove churn: GitHub recomputes
+// mergeability asynchronously, so an open PR can still travel
+// MERGEABLE -> "" -> MERGEABLE across polls.
 func normalizeMergeable(state string) string {
 	switch strings.ToUpper(strings.TrimSpace(state)) {
 	case "CONFLICTING":
@@ -585,6 +587,26 @@ const prRefNodeFields = `
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 `
 
+// issuePRsPageQuery is the fallback for issues with more than 100 closing PRs,
+// walking closedByPullRequestsReferences by cursor. It lives here rather than
+// inside IssueSnapshotWithPRs so the field-parity test can read it: the three
+// PR queries have to stay in sync, and a guard that cannot see one of them
+// does not guard it.
+const issuePRsPageQuery = `
+    query($owner: String!, $repo: String!, $num: Int!, $after: String) {
+      repository(owner: $owner, name: $repo) {
+        issue(number: $num) {
+          state
+          body
+          closedByPullRequestsReferences(first: 100, after: $after) {
+            pageInfo { hasNextPage endCursor }
+            nodes {` + prRefNodeFields + `}
+          }
+        }
+      }
+    }
+  `
+
 // branchPRsQuery looks PRs up by head branch. states + orderBy reproduce
 // `gh pr list --state all`, whose default order is newest-first: PrimaryPR
 // picks "first MERGED, else first", so the order is part of the contract.
@@ -731,20 +753,6 @@ func issueAliasFromPath(path []json.RawMessage) string {
 // IssueSnapshotWithPRs returns an issue's state/body plus all closed-by
 // PR refs, following closedByPullRequestsReferences pagination.
 func (r Runner) IssueSnapshotWithPRs(owner, repo string, num int) (IssueSnapshot, error) {
-	const query = `
-    query($owner: String!, $repo: String!, $num: Int!, $after: String) {
-      repository(owner: $owner, name: $repo) {
-        issue(number: $num) {
-          state
-          body
-          closedByPullRequestsReferences(first: 100, after: $after) {
-            pageInfo { hasNextPage endCursor }
-            nodes {` + prRefNodeFields + `}
-          }
-        }
-      }
-    }
-  `
 	snapshot := IssueSnapshot{Number: num, PRs: []PRRef{}}
 	cursor := ""
 	for {
@@ -753,7 +761,7 @@ func (r Runner) IssueSnapshotWithPRs(owner, repo string, num int) (IssueSnapshot
 			"-F", "owner=" + owner,
 			"-F", "repo=" + repo,
 			"-F", "num=" + strconv.Itoa(num),
-			"-f", "query=" + query,
+			"-f", "query=" + issuePRsPageQuery,
 			"--jq", ".data.repository.issue // empty",
 		}
 		if cursor != "" {
@@ -809,15 +817,17 @@ func (r Runner) IssueWithPRs(owner, repo string, num int) (state string, prs []P
 
 // PRsForBranchDetail returns head-branch PR refs via GraphQL, with the same
 // per-PR detail the issue paths collect. It exists alongside PRsForBranch
-// because `gh pr list --json` has no totalCommentsCount or mergeable field;
-// the CLI merge gates only need merged-ness and stay on the cheaper list path.
+// because `gh pr list --json` has no totalCommentsCount: its `comments` field
+// is the conversation array, which omits inline review comments. The CLI merge
+// gates only need merged-ness and stay on the cheaper list path.
 func (r Runner) PRsForBranchDetail(owner, repo, branch string) ([]PRRef, error) {
+	// -f, not -F, for all three: -F type-coerces, so an owner/repo/branch that
+	// parses as JSON ("2048", "null") would be sent as a non-string and fail
+	// the String! signature.
 	out, err := r.gh(
 		"api", "graphql",
-		"-F", "owner="+owner,
-		"-F", "repo="+repo,
-		// -f, not -F: -F type-coerces, so a branch named "123" would be sent as
-		// an Int and fail the String! signature.
+		"-f", "owner="+owner,
+		"-f", "repo="+repo,
 		"-f", "branch="+branch,
 		"-f", "query="+branchPRsQuery,
 		"--jq", ".data.repository.pullRequests.nodes // []",

@@ -456,6 +456,28 @@ func TestBuildAddsDerivedDisplayFilterAndSortFields(t *testing.T) {
 	}
 }
 
+// TestConflictFilterText pins that the rendered `conflict` badge is reachable
+// by free-text search, like every other visible tag.
+func TestConflictFilterText(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		prs  []ghissue.PRRef
+		want string
+	}{
+		{name: "conflicting primary", prs: []ghissue.PRRef{{Number: 1, State: "OPEN", Mergeable: "CONFLICTING"}}, want: "conflict"},
+		{name: "mergeable primary", prs: []ghissue.PRRef{{Number: 1, State: "OPEN", Mergeable: "MERGEABLE"}}, want: ""},
+		// merged PRs always report UNKNOWN, which normalizes to ""
+		{name: "merged primary", prs: []ghissue.PRRef{{Number: 1, State: "MERGED"}}, want: ""},
+		{name: "no prs", prs: nil, want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := conflictFilterText(tt.prs); got != tt.want {
+				t.Fatalf("conflictFilterText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestReviewFilterValue pins that `review:` stays orthogonal to `pr:`: it
 // reports the decision even after the PR merges, where DisplayState would have
 // collapsed to "merged".
