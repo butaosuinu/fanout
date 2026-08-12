@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/naming"
+	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -102,8 +103,8 @@ func spawnRestartedOwned(
 	admitted := binaryAdmission{
 		path: expected.BinaryPath, sha256: expected.BinarySHA256, version: expected.BinaryVersion,
 	}
-	launcher := binaryAdmission{path: expected.LauncherPath, sha256: expected.LauncherSHA256}
-	if err := validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, launcher); err != nil {
+	launcher, err := prepareRestartedLauncher(expected, commonDir, commonIdentity, layout, admitted)
+	if err != nil {
 		return nil, err
 	}
 	marker, started, err := claimOwnedSession(
@@ -123,6 +124,33 @@ func spawnRestartedOwned(
 	}
 	started.reapAsync()
 	return ownedSessionFromMarker(commonDir, marker, marker.LauncherPath, backend), nil
+}
+
+func prepareRestartedLauncher(
+	expected state.HerdrServerIdentity,
+	commonDir string,
+	commonIdentity pathIdentity,
+	layout ownedLayout,
+	admitted binaryAdmission,
+) (binaryAdmission, error) {
+	previous := binaryAdmission{path: expected.LauncherPath, sha256: expected.LauncherSHA256}
+	current, err := pinOwnedLauncher(layout)
+	if err != nil {
+		return binaryAdmission{}, err
+	}
+	if current == previous {
+		return current, validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, current)
+	}
+	if validatePrivateContents(layout.configPath, ownedConfigContents(current.path)) == nil {
+		return current, validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, current)
+	}
+	if err := validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, previous); err != nil {
+		return binaryAdmission{}, err
+	}
+	if err := atomicfs.WriteFile(layout.configPath, ownedConfigContents(current.path), 0o600); err != nil {
+		return binaryAdmission{}, fmt.Errorf("replace Herdr owned launcher config for restart: %w", err)
+	}
+	return current, validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, current)
 }
 
 // ShutdownOwned stops one live generation only on the invocation that saved
@@ -157,7 +185,7 @@ func shutdownOwned(
 	if err != nil {
 		return err
 	}
-	return waitForOwnedRetirement(ctx, layout, expected, signalErr)
+	return waitForOwnedRetirement(ctx, layout, expected, signalErr, !issueSignal)
 }
 
 func beginOwnedShutdown(
@@ -362,7 +390,7 @@ func removeRetiredOwnedMarker(path string, found bool) error {
 
 func inspectLifecycleLease(path string) (supervisorLease, bool, bool, error) {
 	lease, running, err := inspectExistingSupervisorLease(path)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, errUnpublishedSupervisorLease) {
 		return supervisorLease{}, false, false, nil
 	}
 	return lease, err == nil, running, err
@@ -427,9 +455,14 @@ func validateRestartBundle(
 	admitted binaryAdmission,
 	launcher binaryAdmission,
 ) error {
+	if err := validatePinnedBinaryInDir(expected.LauncherPath, expected.LauncherSHA256, layout.launcherDir); err != nil {
+		return fmt.Errorf("previous Herdr owned launcher identity changed: %w", err)
+	}
 	marker := markerFromServerIdentity(expected)
 	marker.GitCommonDevice = commonIdentity.device
 	marker.GitCommonInode = commonIdentity.inode
+	marker.LauncherPath = launcher.path
+	marker.LauncherSHA256 = launcher.sha256
 	return validateOwnedMarker(marker, layout, commonDir, commonIdentity, admitted, launcher)
 }
 
@@ -505,6 +538,7 @@ func waitForOwnedRetirement(
 	layout ownedLayout,
 	expected state.HerdrServerIdentity,
 	signalErr error,
+	configMayBeAbsent bool,
 ) error {
 	deadline := time.Now().Add(ownedShutdownGrace + ownedReadyTimeout)
 	var lastErr error
@@ -514,7 +548,7 @@ func waitForOwnedRetirement(
 		}
 		lastErr = verifyRetiredOwnedIdentity(layout, expected)
 		if lastErr == nil {
-			return nil
+			return removeRetiredOwnedConfig(layout, expected, configMayBeAbsent)
 		}
 		timer := time.NewTimer(ownedReadyInterval)
 		select {
@@ -525,6 +559,33 @@ func waitForOwnedRetirement(
 		}
 	}
 	return errors.Join(signalErr, fmt.Errorf("herdr owned server shutdown result is unresolved: %w", lastErr))
+}
+
+func removeRetiredOwnedConfig(
+	layout ownedLayout,
+	expected state.HerdrServerIdentity,
+	mayBeAbsent bool,
+) error {
+	_, err := os.Lstat(layout.configPath)
+	if errors.Is(err, os.ErrNotExist) && mayBeAbsent {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect retired Herdr owned config: %w", err)
+	}
+	if err := validatePrivateContents(layout.configPath, ownedConfigContents(expected.LauncherPath)); err != nil {
+		return fmt.Errorf("validate retired Herdr owned config: %w", err)
+	}
+	if err := os.Remove(layout.configPath); err != nil {
+		return fmt.Errorf("remove retired Herdr owned config: %w", err)
+	}
+	if _, err := os.Lstat(layout.configPath); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return fmt.Errorf("verify retired Herdr owned config removal: %w", err)
+		}
+		return fmt.Errorf("retired Herdr owned config remains after removal")
+	}
+	return nil
 }
 
 func verifyRetiredOwnedIdentity(

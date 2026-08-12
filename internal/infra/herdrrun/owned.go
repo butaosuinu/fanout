@@ -54,6 +54,7 @@ var ErrOwnedSessionNotFound = errors.New("fanout-owned herdr session does not ex
 
 var (
 	errOwnedSupervisorNotRunning    = errors.New("herdr owned supervisor is not running; refusing automatic recovery without proof that prior operations are quiescent")
+	errUnpublishedSupervisorLease   = errors.New("herdr supervisor lease was not published")
 	errPinnedBinaryPhysicalIdentity = errors.New("herdr binary bundle has an invalid physical identity")
 )
 
@@ -1171,12 +1172,9 @@ func inspectExistingSupervisorLease(path string) (supervisorLease, bool, error) 
 	}
 	lockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if lockErr == nil {
-		lease, readErr := readLeaseFromFile(f)
+		lease, readErr := readRetiredSupervisorLease(f, info)
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		if readErr != nil {
-			return supervisorLease{}, false, fmt.Errorf("parse retired herdr supervisor lease: %w", readErr)
-		}
-		return lease, false, nil
+		return lease, false, readErr
 	}
 	if !errors.Is(lockErr, syscall.EWOULDBLOCK) && !errors.Is(lockErr, syscall.EAGAIN) {
 		return supervisorLease{}, false, lockErr
@@ -1186,6 +1184,17 @@ func inspectExistingSupervisorLease(path string) (supervisorLease, bool, error) 
 		return supervisorLease{}, true, fmt.Errorf("parse herdr supervisor lease: %w", err)
 	}
 	return lease, true, nil
+}
+
+func readRetiredSupervisorLease(f *os.File, info os.FileInfo) (supervisorLease, error) {
+	if info.Size() == 0 {
+		return supervisorLease{}, errUnpublishedSupervisorLease
+	}
+	lease, err := readLeaseFromFile(f)
+	if err != nil {
+		return supervisorLease{}, fmt.Errorf("parse retired herdr supervisor lease: %w", err)
+	}
+	return lease, nil
 }
 
 func writeSupervisorLease(f *os.File, marker ownerMarker, serverPID int) error {

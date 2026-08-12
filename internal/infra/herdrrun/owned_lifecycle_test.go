@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -91,6 +92,64 @@ func TestRestartOwnedRecoversAfterOldMarkerAndLeaseRemoval(t *testing.T) {
 	}
 }
 
+func TestRestartOwnedRecoversFromUnpublishedSupervisorLease(t *testing.T) {
+	h := newOwnedHarness(t)
+	expected := inspectOwnedServerForTest(t, h)
+	saveOwnedServerIntent(t, h, state.HerdrIntentRestart, expected)
+	retireFakeSupervisorForRestart(t, h, true)
+	if err := os.WriteFile(h.layout.supervisorLock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := restartOwned(
+		context.Background(), h.ownedOptions(), expected, h.supervisor.start, h.session.backend,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if h.supervisor.starts != 2 {
+		t.Fatalf("supervisor starts = %d, want 2", h.supervisor.starts)
+	}
+}
+
+func TestRestartOwnedPinsCurrentLauncherAndRecoversAfterConfigUpdate(t *testing.T) {
+	h := newOwnedHarness(t)
+	current, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("read current marker = (%+v, %t, %v)", current, found, err)
+	}
+	previous := installLegacyOwnedLauncher(t, h)
+	expected := inspectOwnedServerForTest(t, h)
+	saveOwnedServerIntent(t, h, state.HerdrIntentRestart, expected)
+	retireFakeSupervisorForRestart(t, h, true)
+
+	commonDir, commonIdentity, err := openCanonicalGitCommonDir(h.commonDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted := binaryAdmission{
+		path: expected.BinaryPath, sha256: expected.BinarySHA256, version: expected.BinaryVersion,
+	}
+	pinned, err := prepareRestartedLauncher(expected, commonDir, commonIdentity, h.layout, admitted)
+	if err != nil || pinned.path != current.LauncherPath || pinned.sha256 != current.LauncherSHA256 {
+		t.Fatalf("prepare restarted launcher = (%+v, %v), want current %+v", pinned, err, current)
+	}
+
+	restarted, err := restartOwned(
+		context.Background(), h.ownedOptions(), expected, h.supervisor.start, h.session.backend,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("read restarted marker = (%+v, %t, %v)", marker, found, err)
+	}
+	if marker.LauncherPath != current.LauncherPath || marker.LauncherSHA256 != current.LauncherSHA256 ||
+		restarted.LauncherPath != current.LauncherPath || marker.LauncherPath == previous.path {
+		t.Fatalf("restarted launcher = marker:%+v session:%+v, want current %+v", marker, restarted, current)
+	}
+}
+
 func TestShutdownOwnedRejectsResourcesAndDoesNotSignalOnRetry(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)
@@ -134,6 +193,39 @@ func TestShutdownOwnedStopsEmptyGenerationAndVerifiesRetirement(t *testing.T) {
 	}
 }
 
+func TestShutdownOwnedAllowsCurrentLauncherBootstrapAfterUpdate(t *testing.T) {
+	h := newOwnedHarness(t)
+	current, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("read current marker = (%+v, %t, %v)", current, found, err)
+	}
+	previous := installLegacyOwnedLauncher(t, h)
+	expected := inspectOwnedServerForTest(t, h)
+	saveOwnedServerIntent(t, h, state.HerdrIntentShutdown, expected)
+	h.fake.snapshot = emptyOwnedSnapshot(h.fake.snapshot)
+
+	err = shutdownOwned(context.Background(), h.ownedOptions(), expected, true, func(int) error {
+		retireFakeOwnedGeneration(t, h)
+		return nil
+	}, h.session.backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Lstat(h.layout.configPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retired config remains: %v", err)
+	}
+	clearOwnedServerIntents(t, h)
+	restarted := h.ensure()
+	marker, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("read bootstrapped marker = (%+v, %t, %v)", marker, found, err)
+	}
+	if marker.LauncherPath != current.LauncherPath || marker.LauncherSHA256 != current.LauncherSHA256 ||
+		restarted.LauncherPath != current.LauncherPath || marker.LauncherPath == previous.path {
+		t.Fatalf("bootstrapped launcher = marker:%+v session:%+v, want current %+v", marker, restarted, current)
+	}
+}
+
 func TestShutdownRetryCompletesAbsentGenerationWithoutSignal(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)
@@ -151,6 +243,15 @@ func TestShutdownRetryCompletesAbsentGenerationWithoutSignal(t *testing.T) {
 	if signals != 0 {
 		t.Fatalf("shutdown retry signals = %d, want 0", signals)
 	}
+	if err = shutdownOwned(
+		context.Background(), h.ownedOptions(), expected, false,
+		func(int) error { signals++; return nil }, h.session.backend,
+	); err != nil {
+		t.Fatalf("shutdown replay after config removal: %v", err)
+	}
+	if signals != 0 {
+		t.Fatalf("shutdown replay signals = %d, want 0", signals)
+	}
 	if err := validateRetiredOwnedSession(h.layout); err != nil {
 		t.Fatalf("retired owned session: %v", err)
 	}
@@ -167,6 +268,33 @@ func inspectOwnedServerForTest(t *testing.T, h *ownedHarness) state.HerdrServerI
 		t.Fatal(err)
 	}
 	return identity
+}
+
+func installLegacyOwnedLauncher(t *testing.T, h *ownedHarness) binaryAdmission {
+	t.Helper()
+	source := filepath.Join(h.root, "legacy-fanout")
+	if err := os.WriteFile(source, []byte("legacy fanout launcher\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path, digest, err := stageExecutable(source, h.layout.launcherDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("read marker for legacy launcher = (%+v, %t, %v)", marker, found, err)
+	}
+	marker.LauncherPath, marker.LauncherSHA256 = path, digest
+	if err = os.Remove(h.layout.markerPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = writeOwnerMarkerExclusive(h.layout.markerPath, marker); err != nil {
+		t.Fatal(err)
+	}
+	if err = atomicfs.WriteFile(h.layout.configPath, ownedConfigContents(path), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return binaryAdmission{path: path, sha256: digest}
 }
 
 func saveOwnedServerIntent(
@@ -194,6 +322,21 @@ func saveOwnedServerIntent(
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func clearOwnedServerIntents(t *testing.T, h *ownedHarness) {
+	t.Helper()
+	data, err := json.Marshal(state.HerdrIntents{
+		SchemaVersion: state.HerdrIntentsSchemaVersion,
+		Intents:       []state.HerdrIntent{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(h.commonDir, "fanout", "herdr-intents.json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
