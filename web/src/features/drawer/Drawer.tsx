@@ -18,15 +18,19 @@ import {
   paneRuntimeState,
   paneRuntimeTitle,
 } from "../sessions/pane";
-import type { PaneView } from "../../transport/types";
+import type { PaneView, PRRef } from "../../transport/types";
 import {
   AgentStateTag,
   DirtyTag,
   isKnownAgentState,
   IssueStateTag,
+  PrCiTag,
+  PrCommentsTag,
+  PrConflictTag,
   PrPill,
+  PrReviewTag,
 } from "../sessions/badges";
-import { GhLink, Tag } from "../../ui/Tag";
+import { GhLink } from "../../ui/Tag";
 
 /* 上部バーの「変更を表示」に添える差分行数。解析できない(`-` など)ときは出さない */
 function DiffStat({ summary }: { summary?: string }) {
@@ -111,39 +115,28 @@ function WaveSection({ pane, repo }: { pane: PaneView; repo: string }) {
   );
 }
 
+/* ドロワーの PR 1 件。タグはどれも該当しなければ null を返すので、ここに条件分岐は
+ * 置かない。区切りの空白は不要 — .d-prs li が flex + gap を持っている。 */
+function PrRow({ pr, repo }: { pr: PRRef; repo: string }) {
+  return (
+    <li>
+      <PrPill repo={repo} pr={pr} />
+      <PrCiTag ci={pr.ci} />
+      <PrConflictTag pr={pr} />
+      <PrCommentsTag pr={pr} />
+      <PrReviewTag decision={pr.reviewDecision} />
+    </li>
+  );
+}
+
 function PrsSection({ pane, repo }: { pane: PaneView; repo: string }) {
+  const prs = pane.prs ?? [];
   return (
     <section className="d-sec">
       <h4>pull requests</h4>
       <ul className="d-prs" id="d-prs">
-        {pane.prs && pane.prs.length ? (
-          pane.prs.map((pr) => (
-            <li key={pr.number}>
-              <PrPill repo={repo} pr={pr} />
-              {pr.ci === "pass" ? (
-                <>
-                  {" "}
-                  <Tag cls="t-ok">ci pass</Tag>
-                </>
-              ) : pr.ci === "fail" ? (
-                <>
-                  {" "}
-                  <Tag cls="t-err">ci fail</Tag>
-                </>
-              ) : pr.ci ? (
-                <>
-                  {" "}
-                  <Tag cls="t-warn">ci pending</Tag>
-                </>
-              ) : null}
-              {pr.reviewDecision && (
-                <>
-                  {" "}
-                  <Tag>{pr.reviewDecision.toLowerCase().replace(/_/g, " ")}</Tag>
-                </>
-              )}
-            </li>
-          ))
+        {prs.length ? (
+          prs.map((pr) => <PrRow key={pr.number} pr={pr} repo={repo} />)
         ) : (
           <li className="muted">—</li>
         )}

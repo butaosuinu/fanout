@@ -11,6 +11,39 @@ export function prPrimary(prs: PRRef[] | null | undefined): PRRef | null {
   return prs.find((p) => p.state === "MERGED") ?? prs[0] ?? null;
 }
 
+/* ghissue.PRRef.DisplayState の reviewDecision 部分の語彙。 */
+const PR_REVIEW_DISPLAY: Record<string, string> = {
+  APPROVED: "approved",
+  CHANGES_REQUESTED: "changes-requested",
+  REVIEW_REQUIRED: "review-required",
+};
+
+/* ghissue.PRRef.DisplayState のミラー。優先順位まで Go と揃えること —
+ * merged / closed / draft が reviewDecision より先に決まる。TUI の
+ * summarizePRs も同じ語彙を出しているので、ここがズレると TUI と web で
+ * 同じ PR が別の状態に見える。 */
+export function prDisplayState(pr: PRRef): string {
+  const state = (pr.state ?? "").trim().toUpperCase();
+  if (state === "MERGED" || pr.mergedAt) return "merged";
+  if (state === "CLOSED") return "closed";
+  if (pr.isDraft) return "draft";
+  return PR_REVIEW_DISPLAY[(pr.reviewDecision ?? "").trim().toUpperCase()] ?? state.toLowerCase();
+}
+
+/* ghissue.PRRef.HasConflict のミラー。CONFLICTING だけが「衝突あり」— 欠落は
+ * MERGED/CLOSED か GitHub が再計算中で、「衝突なし」の意味ではない。 */
+export function prHasConflict(pr: PRRef): boolean {
+  return pr.mergeable === "CONFLICTING";
+}
+
+/* sessionview.reviewFilterValue のミラー(review: フィルタのフォールバック)。
+ * DisplayState と違い merged/draft に潰されない — merge 後も
+ * review:approved で引けるようにするため。 */
+export function prReviewValue(pr: PRRef | null): string {
+  const decision = (pr?.reviewDecision ?? "").trim().toLowerCase();
+  return decision ? decision.replaceAll("_", "-") : "none";
+}
+
 const CI_RANK: Record<string, number> = { fail: 3, pending: 2, pass: 1 };
 
 export function ciWorst(prs: PRRef[] | null | undefined): string {

@@ -7,6 +7,7 @@ import {
   paneRuntimeState,
   paneRuntimeTitle,
   prPrimary,
+  prReviewValue,
 } from "../sessions/pane";
 import type { PaneView } from "../../transport/types";
 
@@ -66,6 +67,9 @@ const FILTER_PREDICATES = new Map<string, FilterPredicate>([
   ],
   ["task", (p, v) => lower(p.taskId) === v],
   ["pr", (p, v) => lower(derivedValues(p).pr ?? prPrimary(p.prs)?.state ?? "none") === v],
+  // pr: がライフサイクル状態(open/closed/merged)なのに対し、review: はレビュー状態。
+  // 直交する軸なので、merged の行も review:approved で引ける。
+  ["review", (p, v) => lower(derivedValues(p).review ?? prReviewValue(prPrimary(p.prs))) === v],
 ]);
 
 /* パースが key:value として受け付けるキーは述語テーブルそのもの。片方にだけ

@@ -226,7 +226,7 @@ These paired switches toggle briefing instructions and tmux keybindings for one 
 
 `fanout <parent> --status` is read-only: it enumerates the children recorded for that parent in `.fanout/state.json` (or `FANOUT_STATE_PATH`), queries each one through `gh api graphql` for issue state plus closed-by PR merge/review/CI status, and prints one JSON document on stdout by default.
 
-The JSON document carries `parent`, `children[]` — each child with `num`, `state`, `backend` and `pane_id` (omitted when empty), `prs[]` (`number`, `state`, `mergedAt`, `reviewDecision`, `ci`), and `has_merged_pr` — and `summary` (`total`, `merged`, `pending`, `blocked`, `all_merged`).
+The JSON document carries `parent`, `children[]` — each child with `num`, `state`, `backend` and `pane_id` (omitted when empty), `prs[]` (`number`, `state`, `mergedAt`, `reviewDecision`, `ci`, plus `mergeable` and `comments` when GitHub reported them), and `has_merged_pr` — and `summary` (`total`, `merged`, `pending`, `blocked`, `all_merged`).
 
 - `--format <json|table>` — output format, default `json`. The table format adds normalized PR state (`open`, `draft`, `review-required`, `approved`, `changes-requested`, `merged`, `closed`), CI, PR diff bars, changed-file counts, Conventional-Commit type and PR links.
 - `--post-dashboard` — upsert one marker-based rollup comment on the parent issue, aggregating child PR links, PR state, CI, diff size, Conventional-Commit type, TL;DR and Review effort score from machine-readable PR data. This is the only `--status` option that writes to GitHub.

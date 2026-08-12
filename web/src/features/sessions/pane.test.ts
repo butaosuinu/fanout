@@ -1,6 +1,93 @@
 import { describe, expect, it } from "vitest";
 import { makePane, makeQueuedPane } from "../../test/fixtures";
-import { diffQuery, paneBackend, paneIssueURL, paneLabel, rowKey } from "./pane";
+import type { PRRef } from "../../transport/types";
+import {
+  diffQuery,
+  paneBackend,
+  paneIssueURL,
+  paneLabel,
+  prDisplayState,
+  prHasConflict,
+  prReviewValue,
+  rowKey,
+} from "./pane";
+
+/* ghissue.PRRef のミラー群。Go 側の DisplayState / HasConflict /
+ * reviewFilterValue と同じ判断をすることを固定する。 */
+describe("PR ref mirrors of the Go helpers", () => {
+  const pr = (over: Partial<PRRef>): PRRef => ({
+    number: 1,
+    state: "OPEN",
+    mergedAt: null,
+    ...over,
+  });
+
+  const displayStateCases: { name: string; in: PRRef; want: string }[] = [
+    {
+      name: "merged が reviewDecision より優先",
+      in: pr({ state: "MERGED", reviewDecision: "APPROVED" }),
+      want: "merged",
+    },
+    // state が OPEN のままでも mergedAt があれば merged 扱い(Go と同じ)
+    {
+      name: "mergedAt があれば state が OPEN でも merged",
+      in: pr({ mergedAt: "2026-06-01T00:00:00Z" }),
+      want: "merged",
+    },
+    {
+      name: "closed が draft より優先",
+      in: pr({ state: "CLOSED", isDraft: true }),
+      want: "closed",
+    },
+    {
+      name: "draft が reviewDecision より優先",
+      in: pr({ isDraft: true, reviewDecision: "APPROVED" }),
+      want: "draft",
+    },
+    {
+      name: "APPROVED を approved に潰す",
+      in: pr({ reviewDecision: "APPROVED" }),
+      want: "approved",
+    },
+    {
+      name: "CHANGES_REQUESTED をハイフン化",
+      in: pr({ reviewDecision: "CHANGES_REQUESTED" }),
+      want: "changes-requested",
+    },
+    {
+      name: "REVIEW_REQUIRED をハイフン化",
+      in: pr({ reviewDecision: "REVIEW_REQUIRED" }),
+      want: "review-required",
+    },
+    {
+      name: "未知の decision は state に落ちる",
+      in: pr({ reviewDecision: "SOMETHING_NEW" }),
+      want: "open",
+    },
+    { name: "decision 無しは state 小文字", in: pr({}), want: "open" },
+    { name: "state 空は空", in: pr({ state: "" }), want: "" },
+  ];
+
+  for (const tt of displayStateCases) {
+    it(`prDisplayState: ${tt.name}`, () => {
+      expect(prDisplayState(tt.in)).toBe(tt.want);
+    });
+  }
+
+  it("prHasConflict は CONFLICTING だけを衝突とみなす", () => {
+    expect(prHasConflict(pr({ mergeable: "CONFLICTING" }))).toBe(true);
+    expect(prHasConflict(pr({ mergeable: "MERGEABLE" }))).toBe(false);
+    // 欠落 = MERGED/CLOSED か GitHub 再計算中。「衝突なし」ではないが出しもしない
+    expect(prHasConflict(pr({}))).toBe(false);
+  });
+
+  it("prReviewValue は merged でも decision を返す(DisplayState と直交)", () => {
+    expect(prReviewValue(pr({ reviewDecision: "CHANGES_REQUESTED" }))).toBe("changes-requested");
+    expect(prReviewValue(pr({ state: "MERGED", reviewDecision: "APPROVED" }))).toBe("approved");
+    expect(prReviewValue(pr({ reviewDecision: "" }))).toBe("none");
+    expect(prReviewValue(null)).toBe("none");
+  });
+});
 
 describe("pane identity helpers", () => {
   it("normalizes a missing legacy backend to tmux", () => {

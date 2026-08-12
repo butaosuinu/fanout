@@ -942,21 +942,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 		backendName = strings.ToLower(strings.TrimSpace(string(backend.NormalizeName(pv.Backend))))
 	}
 
-	filterValues := map[string]string{
-		"state":   strings.ToLower(strings.TrimSpace(firstMatchingState(runtimeState, pv.IssueState))),
-		"backend": backendName,
-		"run":     strings.ToLower(strings.TrimSpace(pv.AgentState)),
-		"agent":   strings.ToLower(strings.TrimSpace(pv.Agent)),
-		"wave":    strings.ToLower(strings.TrimSpace(firstNonEmpty(strconv.Itoa(pv.Wave), pv.WaveLabel, dependencyWave))),
-		"ci":      strings.ToLower(strings.TrimSpace(ci)),
-		"dirty":   yesNo(pv.DirtyState == "dirty"),
-		"live":    yesNo(pv.Alive),
-		"issue":   issueFilterValue(pv),
-		"pr":      strings.ToLower(firstNonEmpty(prState, "none")),
-	}
-	if pv.Wave <= 0 {
-		filterValues["wave"] = strings.ToLower(strings.TrimSpace(firstNonEmpty(pv.WaveLabel, dependencyWave)))
-	}
+	filterValues := paneFilterValues(pv, runtimeState, backendName, ci, dependencyWave, prState)
 
 	filterText := strings.ToLower(strings.Join([]string{
 		parent,
@@ -1029,6 +1015,48 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 			PR:       prRank(prState),
 		},
 	}
+}
+
+// paneFilterValues is the structured-filter vocabulary for one pane: exactly
+// the key set the dashboard SPA's FILTER_PREDICATES mirrors
+// (web/src/features/filter/filter.ts). Adding a key here without adding the
+// matching predicate there makes `key:value` silently fall back to free text.
+func paneFilterValues(pv PaneView, runtimeState, backendName, ci, dependencyWave, prState string) map[string]string {
+	values := map[string]string{
+		"state":   strings.ToLower(strings.TrimSpace(firstMatchingState(runtimeState, pv.IssueState))),
+		"backend": backendName,
+		"run":     strings.ToLower(strings.TrimSpace(pv.AgentState)),
+		"agent":   strings.ToLower(strings.TrimSpace(pv.Agent)),
+		"wave":    strings.ToLower(strings.TrimSpace(firstNonEmpty(strconv.Itoa(pv.Wave), pv.WaveLabel, dependencyWave))),
+		"ci":      strings.ToLower(strings.TrimSpace(ci)),
+		"dirty":   yesNo(pv.DirtyState == "dirty"),
+		"live":    yesNo(pv.Alive),
+		"issue":   issueFilterValue(pv),
+		"pr":      strings.ToLower(firstNonEmpty(prState, "none")),
+		"review":  reviewFilterValue(pv.PRs),
+	}
+	if pv.Wave <= 0 {
+		values["wave"] = strings.ToLower(strings.TrimSpace(firstNonEmpty(pv.WaveLabel, dependencyWave)))
+	}
+	return values
+}
+
+// reviewFilterValue is the `review:` vocabulary: the primary PR's review
+// decision lowercased and hyphenated (approved / changes-requested /
+// review-required). "none" covers both "no PR" and "GitHub recorded no
+// decision", matching how `pr:` collapses to "none". This is deliberately
+// separate from PRRef.DisplayState, which lets merged/closed/draft outrank the
+// decision — `review:approved` should still find an approved PR after it merges.
+func reviewFilterValue(prs []ghissue.PRRef) string {
+	pr, ok := ghissue.PrimaryPR(prs)
+	if !ok {
+		return "none"
+	}
+	decision := strings.ToLower(strings.TrimSpace(pr.ReviewDecision))
+	if decision == "" {
+		return "none"
+	}
+	return strings.ReplaceAll(decision, "_", "-")
 }
 
 func paneName(pv PaneView) string {

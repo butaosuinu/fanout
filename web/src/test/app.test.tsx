@@ -177,7 +177,17 @@ describe("snapshot 描画", () => {
             paneId: "%9",
             branchName: "fanout/manual-1-prompt-session-pane",
             issueState: "UNKNOWN",
-            prs: [{ number: 701, state: "OPEN", mergedAt: null, ci: "pass" }],
+            prs: [
+              {
+                number: 701,
+                state: "OPEN",
+                mergedAt: null,
+                ci: "pass",
+                reviewDecision: "APPROVED",
+                mergeable: "CONFLICTING",
+                comments: 12,
+              },
+            ],
             ciStatus: "pass",
           }),
         ]),
@@ -188,19 +198,60 @@ describe("snapshot 描画", () => {
     expect(within(row).getByText("#-1")).toBeInTheDocument();
     expect(within(row).queryByRole("link", { name: "#-1" })).not.toBeInTheDocument();
     expect(row.querySelector('a[href$="/issues/-1"]')).toBeNull();
-    expect(within(row).getByRole("link", { name: "#701 OPEN" })).toHaveAttribute(
+    // ラベルは DisplayState 語彙(TUI と同じ) — 生の OPEN ではなく approved。
+    // conflict / コメント件数はリンクの外の兄弟なので、リンク名には混ざらない。
+    expect(within(row).getByRole("link", { name: "#701 approved" })).toHaveAttribute(
       "href",
       "https://github.com/octo/fanout/pull/701",
     );
+    expect(within(row).getByText("conflict", { selector: ".tag" })).toBeInTheDocument();
+    expect(within(row).getByText("💬 12", { selector: ".tag" })).toBeInTheDocument();
     expect(within(row).getByText("pass", { selector: ".tag" })).toBeInTheDocument();
 
     await user.click(within(row).getByText("Prompt session"));
     const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
-    expect(within(drawer).getByRole("link", { name: "#701 OPEN" })).toHaveAttribute(
+    expect(within(drawer).getByRole("link", { name: "#701 approved" })).toHaveAttribute(
       "href",
       "https://github.com/octo/fanout/pull/701",
     );
     expect(within(drawer).getByText("ci pass", { selector: ".tag" })).toBeInTheDocument();
+    expect(within(drawer).getByText("conflict", { selector: ".tag" })).toBeInTheDocument();
+    expect(within(drawer).getByText("💬 12", { selector: ".tag" })).toBeInTheDocument();
+    expect(within(drawer).getByText("approved", { selector: ".tag" })).toBeInTheDocument();
+  });
+
+  it("mergeable / comments が無い PR は conflict タグもコメント件数も出さない", async () => {
+    const user = userEvent.setup();
+    server.use(peekHandler(() => "manual output"));
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("@manual", [
+          makePane({
+            issueNum: -1,
+            sourceKey: "manual-prompt",
+            displayName: "Clean session",
+            slug: "manual-2-clean-session-pane",
+            branchName: "fanout/manual-2-clean-session-pane",
+            issueState: "UNKNOWN",
+            // MERGEABLE は「衝突なし」、comments 0 は omitempty で欠落した状態。
+            prs: [
+              { number: 702, state: "OPEN", mergedAt: null, mergeable: "MERGEABLE", comments: 0 },
+            ],
+          }),
+        ]),
+      ]),
+    );
+
+    const row = screen.getByText("Clean session").closest("tr")!;
+    expect(within(row).getByRole("link", { name: "#702 open" })).toBeInTheDocument();
+    expect(within(row).queryByText("conflict")).not.toBeInTheDocument();
+    expect(within(row).queryByText(/💬/)).not.toBeInTheDocument();
+
+    await user.click(within(row).getByText("Clean session"));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    expect(within(drawer).queryByText("conflict")).not.toBeInTheDocument();
+    expect(within(drawer).queryByText(/💬/)).not.toBeInTheDocument();
   });
 
   it("degraded フラグで banner を表示し、正常時は隠す", () => {

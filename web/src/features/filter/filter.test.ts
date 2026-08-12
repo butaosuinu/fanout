@@ -155,6 +155,27 @@ describe("matches", () => {
     expect(matches(makePane({ prs }), q("pr:open"))).toBe(false);
   });
 
+  it("review: は primary PR の reviewDecision、無ければ none", () => {
+    expect(matches(makePane({ prs: null }), q("review:none"))).toBe(true);
+    const approved = [{ number: 1, state: "OPEN", mergedAt: null, reviewDecision: "APPROVED" }];
+    expect(matches(makePane({ prs: approved }), q("review:approved"))).toBe(true);
+    expect(matches(makePane({ prs: approved }), q("review:changes-requested"))).toBe(false);
+    // pr: と直交する軸 — merged でも approved で引ける
+    const mergedApproved = [
+      {
+        number: 2,
+        state: "MERGED",
+        mergedAt: "2026-06-01T00:00:00Z",
+        reviewDecision: "APPROVED",
+      },
+    ];
+    expect(matches(makePane({ prs: mergedApproved }), q("review:approved pr:merged"))).toBe(true);
+    // decision が空の PR は none
+    expect(
+      matches(makePane({ prs: [{ number: 3, state: "OPEN", mergedAt: null }] }), q("review:none")),
+    ).toBe(true);
+  });
+
   it("複数 term は AND", () => {
     const p = makePane({ agent: "claude", dirtyState: "dirty" });
     expect(matches(p, q("agent:claude dirty:yes"))).toBe(true);
@@ -168,10 +189,19 @@ describe("matches", () => {
       dirtyState: "clean",
       derived: {
         filterText: "shared haystack",
-        filterValues: { run: "running", dirty: "yes", live: "no", issue: "777", pr: "merged" },
+        filterValues: {
+          run: "running",
+          dirty: "yes",
+          live: "no",
+          issue: "777",
+          pr: "merged",
+          review: "approved",
+        },
       },
     });
-    expect(matches(p, q("shared run:running dirty:yes live:no issue:777 pr:merged"))).toBe(true);
+    expect(
+      matches(p, q("shared run:running dirty:yes live:no issue:777 pr:merged review:approved")),
+    ).toBe(true);
     expect(matches(p, q("fallback"))).toBe(false);
   });
 });

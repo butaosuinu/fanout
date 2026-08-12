@@ -126,6 +126,13 @@ export interface PRRef {
   isDraft?: boolean;
   reviewDecision?: string;
   ci?: string;
+  /* GitHub の MergeableState から UNKNOWN を落とした値: "CONFLICTING" /
+   * "MERGEABLE" / 欠落。MERGED・CLOSED の PR は常に欠落し、GitHub が base push
+   * 後に再計算する間も欠落するので、欠落は「不明」であって「衝突なし」ではない。 */
+  mergeable?: string;
+  /* PullRequest.totalCommentsCount(会話コメント + inline レビューコメント)。
+   * 0 件は omitempty で欠落する。 */
+  comments?: number;
 }
 
 export interface BlockerStatus {
