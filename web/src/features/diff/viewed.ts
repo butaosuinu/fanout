@@ -100,10 +100,18 @@ export function fileFingerprint(f: FileDiffMetadata): string {
  * identity は失われていて、確認済みは「別の file にもチェックが入って、隠す設定
  * なら本文からも一覧からも消える」= 読んでいない変更が通る、という壊れ方をする。
  * `diff.ts` が変更種別で同じ判定を使っているのと同じ理由だが、こちらは 1 entry でも
- * U+FFFD を含むなら降ろす — アイコンを間違えるより取り違えの害が大きい。 */
+ * U+FFFD を含むなら降ろす — アイコンを間違えるより取り違えの害が大きい。
+ *
+ * 移動元(`prevName`)も同じ目で見る。`isSameFile` は移動先しか見ないが、こちらは
+ * `prevName` を fingerprint の材料にしているので、そこが潰れていれば別の rename と
+ * 同じ値になる。object id も hunk も持たない pure rename では、材料が名前しか
+ * 無いぶんそのまま衝突する(`core.quotePath=false` で移動元だけが不正 UTF-8、
+ * という形で起きる)。 */
 function sameFileGroup(entries: FileDiffMetadata[]): boolean {
   const first = entries[0];
-  return first !== undefined && entries.every((e) => isSameFile(first, e));
+  if (first === undefined) return false;
+  if (entries.some((e) => (e.prevName ?? "").includes("�"))) return false;
+  return entries.every((e) => isSameFile(first, e));
 }
 
 /* 正規化 path -> fingerprint。key を生のパスへ戻すのはサイドバーが

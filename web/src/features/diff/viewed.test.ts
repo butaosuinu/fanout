@@ -167,6 +167,38 @@ describe("indexFingerprintsByPath", () => {
     expect(indexFingerprintsByPath(files).size).toBe(0);
   });
 
+  /* pure rename は object id も hunk も持たないので、材料が名前しか無い。移動元が
+     潰れていると、別の file からの rename が同じ fingerprint になり、保存済みの
+     確認済みがそちらへ復元されてしまう(`core.quotePath=false` で起きる形)。 */
+  it("移動元だけが潰れている rename には fingerprint を持たせない", () => {
+    const files = parseDiffFiles(
+      [
+        "diff --git a/docs/�.md b/docs/new.md",
+        "similarity index 100%",
+        "rename from docs/�.md",
+        "rename to docs/new.md",
+        "",
+      ].join("\n"),
+    );
+    // 前提: 移動先は正常で、移動元だけが潰れている
+    expect(files[0]?.name).toBe("docs/new.md");
+    expect(files[0]?.prevName).toContain("�");
+    expect(indexFingerprintsByPath(files).size).toBe(0);
+  });
+
+  it("移動元も移動先も正常な rename には fingerprint を出す", () => {
+    const files = parseDiffFiles(
+      [
+        "diff --git a/docs/old.md b/docs/new.md",
+        "similarity index 100%",
+        "rename from docs/old.md",
+        "rename to docs/new.md",
+        "",
+      ].join("\n"),
+    );
+    expect(indexFingerprintsByPath(files).has("docs/new.md")).toBe(true);
+  });
+
   it("U+FFFD を含まない同 path の 2 entry は畳む(file type change)", () => {
     const patch = [
       "diff --git a/a.ts b/a.ts",

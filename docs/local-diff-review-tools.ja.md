@@ -474,6 +474,10 @@ file type change の同 path 2 entry は 1 つの file なので、両方の fin
 ただし畳めるのは、同じ key の entry が全部同じ file だと言い切れるときだけ。
 不正 UTF-8 の byte は U+FFFD へ潰れるので `docs/\200.md` と `docs/\201.md` が
 同じ key になる(変更種別が `isSameFile` で同じ判定をしているのと同じ理由)。
+移動元(`prevName`)も同じ目で見る。`prevName` は fingerprint の材料なので、そこが
+潰れていれば別の rename と同じ値になる。object id も hunk も持たない pure rename は
+材料が名前しか無いぶん、そのまま衝突する(`core.quotePath=false` で移動元だけが
+不正 UTF-8、という形で起きる)。
 言い切れない key は fingerprint を持たせず、チェック自体を出さない。
 アイコンを間違えるのと違って、ここでの取り違えは「読んでいない file が確認済みに
 なって本文からも一覧からも消える」形で効く。
