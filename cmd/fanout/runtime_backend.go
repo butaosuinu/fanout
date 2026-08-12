@@ -212,14 +212,35 @@ func backendSelectionVerifier(selection backend.Selection, inputs runtimeBackend
 // specs. The current store is supplied by the caller so the lock-time check
 // observes the exact state protected by that caller's launch lock.
 func runtimeBackendBindings(projectRoot string, current state.Store) ([]backend.Binding, error) {
-	rows := backendBindings(projectRoot, current)
-	if strings.TrimSpace(projectRoot) == "" {
-		return rows, nil
-	}
-
-	roots, err := worktree.ListRoots(projectRoot)
+	stores, err := runtimeProjectStores(projectRoot, current)
 	if err != nil {
 		return nil, fmt.Errorf("list linked worktrees for runtime backend bindings: %w", err)
+	}
+	rows := make([]backend.Binding, 0)
+	for i, entry := range stores {
+		for _, binding := range backendBindings(entry.root, entry.store) {
+			if i > 0 && strings.HasPrefix(strings.TrimSpace(binding.Parent), "plan:") {
+				continue
+			}
+			rows = append(rows, binding)
+		}
+	}
+	return rows, nil
+}
+
+type runtimeProjectStore struct {
+	root  string
+	store state.Store
+}
+
+func runtimeProjectStores(projectRoot string, current state.Store) ([]runtimeProjectStore, error) {
+	stores := []runtimeProjectStore{{root: projectRoot, store: current}}
+	if strings.TrimSpace(projectRoot) == "" {
+		return stores, nil
+	}
+	roots, err := worktree.ListRoots(projectRoot)
+	if err != nil {
+		return nil, err
 	}
 	seen := map[string]bool{canonicalRuntimeRoot(projectRoot): true}
 	for _, root := range roots {
@@ -230,16 +251,11 @@ func runtimeBackendBindings(projectRoot string, current state.Store) ([]backend.
 		seen[key] = true
 		store, loadErr := state.LoadProject(root)
 		if loadErr != nil {
-			return nil, fmt.Errorf("load runtime backend bindings from %s: %w", root, loadErr)
+			return nil, fmt.Errorf("load linked worktree state from %s: %w", root, loadErr)
 		}
-		for _, binding := range backendBindings(root, store) {
-			if strings.HasPrefix(strings.TrimSpace(binding.Parent), "plan:") {
-				continue
-			}
-			rows = append(rows, binding)
-		}
+		stores = append(stores, runtimeProjectStore{root: root, store: store})
 	}
-	return rows, nil
+	return stores, nil
 }
 
 func canonicalRuntimeRoot(root string) string {

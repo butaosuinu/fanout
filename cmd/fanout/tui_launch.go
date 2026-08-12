@@ -287,7 +287,7 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 		return fanouttui.LaunchResult{}, fmt.Errorf("issue #%d has %d open children; uncheck the plan checkbox", issueNum, openChildren)
 	}
 	paneReq, paneID, launchNotice, err := launchPlanCoordinator(projectRoot, session, commandName, strconv.Itoa(issueNum), coordinatorAgent,
-		func(store state.Store) error { return guardIssuePlanCoordinator(projectRoot, store, issueNum) },
+		func(store state.Store) error { return guardLinkedIssuePlanCoordinator(projectRoot, store, issueNum) },
 		func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request {
 			return newIssuePlanPaneRequest(projectRoot, store, hookConfig, detail, cfg, workerAgent, livenessKey)
 		})
@@ -314,6 +314,25 @@ func guardIssuePlanCoordinator(projectRoot string, store state.Store, issueNum i
 	}
 	if hasRecordedIssuePane(projectRoot, store, issueNum) {
 		return fmt.Errorf("issue #%d already has a fanout pane", issueNum)
+	}
+	return nil
+}
+
+func guardLinkedIssuePlanCoordinator(projectRoot string, current state.Store, issueNum int) error {
+	return guardLinkedIssueSession(projectRoot, current, func(root string, store state.Store) error {
+		return guardIssuePlanCoordinator(root, store, issueNum)
+	})
+}
+
+func guardLinkedIssueSession(projectRoot string, current state.Store, guard func(string, state.Store) error) error {
+	stores, err := runtimeProjectStores(projectRoot, current)
+	if err != nil {
+		return fmt.Errorf("inspect linked worktree issue sessions: %w", err)
+	}
+	for _, entry := range stores {
+		if guardErr := guard(entry.root, entry.store); guardErr != nil {
+			return guardErr
+		}
 	}
 	return nil
 }

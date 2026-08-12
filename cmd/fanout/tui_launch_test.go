@@ -327,6 +327,43 @@ func TestHasRecordedIssuePaneSeesPlanSessions(t *testing.T) {
 	}
 }
 
+func TestLinkedIssueSessionGuardsRejectSiblingOwnership(t *testing.T) {
+	tests := []struct {
+		name     string
+		pane     state.Pane
+		guard    func(string, state.Store) error
+		wantText string
+	}{
+		{
+			name:     "plan coordinator rejects sibling orchestrator",
+			pane:     state.Pane{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "orchestrator-issue-123-1"},
+			guard:    func(root string, store state.Store) error { return guardLinkedIssuePlanCoordinator(root, store, 123) },
+			wantText: "issue #123 already has a fanout pane",
+		},
+		{
+			name:     "orchestrator rejects sibling plan coordinator",
+			pane:     state.Pane{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-123-1"},
+			guard:    func(root string, store state.Store) error { return guardLinkedIssueOrchestrator(root, store, 123) },
+			wantText: "issue #123 already has a plan session",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initLifecycleRepo(t)
+			sibling := filepath.Join(t.TempDir(), "sibling")
+			gitCmdTest(t, repo, "worktree", "add", "-b", "issue-session-sibling", sibling, "HEAD")
+			writeRawLifecycleState(t, sibling, tt.pane)
+			store, err := state.LoadProject(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if guardErr := tt.guard(repo, store); guardErr == nil || !strings.Contains(guardErr.Error(), tt.wantText) {
+				t.Fatalf("linked issue guard error = %v, want %q", guardErr, tt.wantText)
+			}
+		})
+	}
+}
+
 // TestLaunchParentIssueFanoutRejectsPlanSession pins the parent-lane guard: an
 // issue owned by a plan session (here: surviving plan task rows) must not also
 // fan out its children, even when it gained OPEN children after the plan

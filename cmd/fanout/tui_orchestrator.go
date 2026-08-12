@@ -41,6 +41,12 @@ func guardIssueOrchestrator(projectRoot string, store state.Store, issueNum int)
 	return nil
 }
 
+func guardLinkedIssueOrchestrator(projectRoot string, current state.Store, issueNum int) error {
+	return guardLinkedIssueSession(projectRoot, current, func(root string, store state.Store) error {
+		return guardIssueOrchestrator(root, store, issueNum)
+	})
+}
+
 // launchIssueOrchestratorPrepared attaches one agent to the project root in
 // the configured initial mode after child planning and agent validation. The
 // caller's locked recorder keeps the orchestrator row and child rows in one
@@ -49,7 +55,7 @@ func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, r
 	var fallbackNotice string
 	req, paneID, launchNotice, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, runtimeBackend, herdr, agentName, fmt.Sprintf("%d", issue.Number), store, recorder,
 		func(store state.Store) error {
-			return guardIssueOrchestrator(projectRoot, store, issue.Number)
+			return guardLinkedIssueOrchestrator(projectRoot, store, issue.Number)
 		},
 		func(store state.Store, livenessKey string) panelaunch.Request {
 			var req panelaunch.Request
