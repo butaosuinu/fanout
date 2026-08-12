@@ -471,8 +471,8 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 	if err != nil {
 		return "", err
 	}
-	if err := validateHerdrInteractiveAgents(rt.Backend.Name(), cfg, agentNames); err != nil {
-		return "", err
+	if validateErr := validateHerdrInteractiveAgents(rt.Backend.Name(), cfg, agentNames); validateErr != nil {
+		return "", validateErr
 	}
 	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
 		return "", fmt.Errorf("prepare local git exclude: %w", excludeErr)

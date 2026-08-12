@@ -118,7 +118,7 @@ func (l *Launcher) admitHerdrLaunchRequest(req Request) (*state.LockedStore, boo
 		return nil, false
 	}
 	if req.Number < 0 {
-		if err := admitHerdrCoordinatorLaunch(locked, l.Info.ProjectRoot, ManualParentRef, req.Number); err != nil {
+		if err := admitHerdrCoordinatorLaunch(locked, l.Info.ProjectRoot, req.Number); err != nil {
 			l.Log.Err("%s: %v", paneLogLabel(req), err)
 			return nil, false
 		}
@@ -128,14 +128,14 @@ func (l *Launcher) admitHerdrLaunchRequest(req Request) (*state.LockedStore, boo
 
 func admitHerdrCoordinatorLaunch(
 	locked *state.LockedStore,
-	projectRoot, parent string,
+	projectRoot string,
 	issueNum int,
 ) error {
 	ownerRoot, err := filepath.EvalSymlinks(projectRoot)
 	if err != nil {
 		return fmt.Errorf("canonicalize Herdr coordinator launch owner: %w", err)
 	}
-	intentID, err := state.HerdrCoordinatorIntentID(parent, filepath.Clean(ownerRoot), issueNum)
+	intentID, err := state.HerdrCoordinatorIntentID(ManualParentRef, filepath.Clean(ownerRoot), issueNum)
 	if err != nil {
 		return err
 	}

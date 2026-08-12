@@ -565,17 +565,17 @@ func TestEnsureOwnedReadoptsPinnedLauncherAfterFanoutUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	marker.LauncherPath, marker.LauncherSHA256 = legacyPath, legacyHash
-	if err := os.Remove(h.layout.markerPath); err != nil {
-		t.Fatal(err)
+	if removeErr := os.Remove(h.layout.markerPath); removeErr != nil {
+		t.Fatal(removeErr)
 	}
-	if err := writeOwnerMarkerExclusive(h.layout.markerPath, marker); err != nil {
-		t.Fatal(err)
+	if markerErr := writeOwnerMarkerExclusive(h.layout.markerPath, marker); markerErr != nil {
+		t.Fatal(markerErr)
 	}
-	if err := os.Remove(h.layout.configPath); err != nil {
-		t.Fatal(err)
+	if removeErr := os.Remove(h.layout.configPath); removeErr != nil {
+		t.Fatal(removeErr)
 	}
-	if err := ensureOwnedConfig(h.layout, legacyPath); err != nil {
-		t.Fatal(err)
+	if configErr := ensureOwnedConfig(h.layout, legacyPath); configErr != nil {
+		t.Fatal(configErr)
 	}
 
 	reused := h.ensure()

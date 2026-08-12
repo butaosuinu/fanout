@@ -396,8 +396,8 @@ func TestFinalizeHerdrAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
 	}
 	live := testHerdrIdlePane(intent)
 	live.AgentPresent, live.AgentProvider, live.AgentID = true, "claude", intent.Launch.AgentName
-	if err := finalizeHerdrAttachedAgent(req, locked, repo, intent, live); err != nil {
-		t.Fatal(err)
+	if finalizeErr := finalizeHerdrAttachedAgent(req, locked, repo, intent, live); finalizeErr != nil {
+		t.Fatal(finalizeErr)
 	}
 	persisted, err := state.LoadHerdrIntents(repo)
 	if err != nil {
@@ -1480,16 +1480,16 @@ func TestIssuedHerdrSyntheticReservationBlocksReuseWithoutManualizing(t *testing
 		t.Fatal(err)
 	}
 	journal.UpsertIntent(intent)
-	if err := journal.Save(); err != nil {
-		t.Fatal(err)
+	if saveErr := journal.Save(); saveErr != nil {
+		t.Fatal(saveErr)
 	}
 
-	reservationErr := admitHerdrCoordinatorLaunch(locked, repo, ManualParentRef, req.IssueNum)
+	reservationErr := admitHerdrCoordinatorLaunch(locked, repo, req.IssueNum)
 	if !errors.Is(reservationErr, errHerdrLaunchStatePreserved) {
 		t.Fatalf("synthetic launch admission error = %v, want preserved state", reservationErr)
 	}
-	if err := admitHerdrCoordinatorLaunch(locked, repo, ManualParentRef, -2); err != nil {
-		t.Fatalf("unreserved synthetic number was rejected: %v", err)
+	if admitErr := admitHerdrCoordinatorLaunch(locked, repo, -2); admitErr != nil {
+		t.Fatalf("unreserved synthetic number was rejected: %v", admitErr)
 	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
 	_, prepareErr := launcher.prepareHerdrLaunch(
@@ -1499,11 +1499,11 @@ func TestIssuedHerdrSyntheticReservationBlocksReuseWithoutManualizing(t *testing
 	if !errors.Is(prepareErr, errHerdrLaunchStatePreserved) {
 		t.Fatalf("prepare issued launch error = %v, want preserved state", prepareErr)
 	}
-	if err := markHerdrFinalizationFailure(locked, repo, intent, prepareErr); !errors.Is(err, errHerdrLaunchStatePreserved) {
-		t.Fatalf("finalization classification error = %v, want preserved state", err)
+	if classifyErr := markHerdrFinalizationFailure(locked, repo, intent, prepareErr); !errors.Is(classifyErr, errHerdrLaunchStatePreserved) {
+		t.Fatalf("finalization classification error = %v, want preserved state", classifyErr)
 	}
-	if err := launcher.rollbackFailedHerdrLaunch(locked, intent, prepareErr); !errors.Is(err, errHerdrLaunchStatePreserved) {
-		t.Fatalf("rollback classification error = %v, want preserved state", err)
+	if rollbackErr := launcher.rollbackFailedHerdrLaunch(locked, intent, prepareErr); !errors.Is(rollbackErr, errHerdrLaunchStatePreserved) {
+		t.Fatalf("rollback classification error = %v, want preserved state", rollbackErr)
 	}
 	persisted, err := state.LoadHerdrIntents(repo)
 	if err != nil {
