@@ -70,7 +70,8 @@ func prepareHerdrPrompt(ctx context.Context, pane state.Pane, open func(context.
 	if err != nil {
 		return nil, err
 	}
-	if err := verifyHerdrNudgeRuntime(ctx, runtime, pane); err != nil {
+	err = verifyHerdrNudgeRuntime(ctx, runtime, pane)
+	if err != nil {
 		return nil, err
 	}
 	prompt, err := runtime.PrepareNudge(ctx, herdrNudgeTarget(pane), nudgeText)
