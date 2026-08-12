@@ -222,7 +222,7 @@ func (b *Backend) sendLineOwned(ctx context.Context, target OwnedPaneIdentity, l
 	if target.AgentID == "" || target.AgentSession == nil {
 		return fmt.Errorf("%w: send line requires a saved live-agent identity", ErrOwnedIdentityMismatch)
 	}
-	admission, lock, err := b.acquireOwnedOperation(ctx)
+	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
 		return err
 	}
@@ -259,12 +259,11 @@ func (s *OwnedSession) PrepareNudge(ctx context.Context, target NudgeTarget, lin
 		return nil, fmt.Errorf("%w: saved nudge target is incomplete or belongs to a foreign route", ErrOwnedIdentityMismatch)
 	}
 	target.AgentSession = cloneAgentSession(target.AgentSession)
-	probed, err := s.backend.probeOwned(ctx, admission)
-	if err != nil {
+	if _, err := s.backend.probeOwned(ctx, admission); err != nil {
 		return nil, err
 	}
 	return func(promptCtx context.Context) error {
-		return s.backend.runNudgePrompt(promptCtx, probed, target, line)
+		return s.backend.runNudgePrompt(promptCtx, target, line)
 	}, nil
 }
 
@@ -288,7 +287,16 @@ func validateNudgeRequest(session *OwnedSession, line string) error {
 	return nil
 }
 
-func (b *Backend) runNudgePrompt(ctx context.Context, probed probeResult, target NudgeTarget, line string) error {
+func (b *Backend) runNudgePrompt(ctx context.Context, target NudgeTarget, line string) error {
+	admission, lock, err := b.acquireOwnedMutation(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlockPrivateFile(lock)
+	probed, err := b.probeOwned(ctx, admission)
+	if err != nil {
+		return err
+	}
 	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route,
 		"agent", "prompt", target.Ref.Pane, line)
 	if err != nil {
@@ -373,7 +381,7 @@ func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) erro
 	if (target.AgentID == "") != (target.AgentSession == nil) {
 		return fmt.Errorf("%w: focus target has a partial live-agent identity", ErrOwnedIdentityMismatch)
 	}
-	admission, lock, err := b.acquireOwnedOperation(ctx)
+	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
 		return err
 	}
@@ -414,7 +422,7 @@ func (b *Backend) closeCore(ref corebackend.PaneRef) error {
 }
 
 func (b *Backend) closePaneOwned(ctx context.Context, target OwnedPaneIdentity) error {
-	admission, lock, err := b.acquireOwnedOperation(ctx)
+	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
 		return err
 	}
@@ -458,7 +466,7 @@ func (b *Backend) CloseOwned(req corebackend.CloseRequest) (corebackend.CloseRes
 
 func (b *Backend) closeOwnedWorkspace(ctx context.Context, target OwnedPaneIdentity) (corebackend.CloseResult, error) {
 	failed := corebackend.CloseResult{Status: corebackend.CloseFailed}
-	admission, lock, err := b.acquireOwnedOperation(ctx)
+	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
 		return failed, err
 	}
@@ -486,7 +494,7 @@ func (b *Backend) closeOwnedSession(ctx context.Context, req OwnedCloseRequest) 
 	if err := verifyWorktreeOwnership(req); err != nil {
 		return failed, err
 	}
-	admission, lock, err := b.acquireOwnedOperation(ctx)
+	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
 		return failed, err
 	}

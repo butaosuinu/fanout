@@ -112,6 +112,8 @@ func TestNormalizeStatDeviceSupportsDarwinAndLinuxWidths(t *testing.T) {
 
 func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (*startedSupervisor, error) {
 	s.starts++
+	supervisorPID := 1_000_000_000 + s.starts*2
+	serverPID := supervisorPID + 1
 	runtimeDir := filepath.Dir(markerPath)
 	lock, err := os.OpenFile(filepath.Join(runtimeDir, ownedSupervisorLockName), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -122,7 +124,10 @@ func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (*star
 		_ = lock.Close()
 		return nil, err
 	}
-	lease := supervisorLease{SchemaID: ownedMarkerSchemaID, OwnerNonce: nonce, StartToken: startToken, PID: os.Getpid()}
+	lease := supervisorLease{
+		SchemaID: ownedMarkerSchemaID, OwnerNonce: nonce, StartToken: startToken,
+		PID: supervisorPID, ServerPID: serverPID,
+	}
 	data, err := json.Marshal(lease)
 	if err != nil {
 		return nil, err
@@ -149,7 +154,7 @@ func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (*star
 		s.listeners = append(s.listeners, listener)
 	}
 	return &startedSupervisor{
-		pid: os.Getpid(),
+		pid: supervisorPID,
 		signal: func(os.Signal) error {
 			s.close()
 			return nil
@@ -488,9 +493,10 @@ func TestPreparedNudgeIssuesOnlyPromptAfterPreparation(t *testing.T) {
 	if err := prompt(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.fake.commands[preparedCommands:]; len(got) != 1 ||
-		!slices.Equal(got[0].args, []string{"agent", "prompt", target.Ref.Pane, "nudge"}) {
-		t.Fatalf("commands after final gate = %v, want one agent prompt", got)
+	if got := h.fake.commands[preparedCommands:]; len(got) != 3 ||
+		commandKey(got[0].args) != "version" || commandKey(got[1].args) != "status" ||
+		!slices.Equal(got[2].args, []string{"agent", "prompt", target.Ref.Pane, "nudge"}) {
+		t.Fatalf("commands after final gate = %v, want revalidation then one agent prompt", got)
 	}
 }
 
@@ -745,6 +751,10 @@ func TestFreshReadinessFailureGracefullyStopsServerProcessGroup(t *testing.T) {
 	}
 	if !errors.Is(ensureErr, context.Canceled) {
 		t.Fatalf("ensureOwned() error = %v, want context cancellation after server start", ensureErr)
+	}
+	lease, _, err := inspectExistingSupervisorLease(harness.layout.supervisorLock)
+	if err != nil || lease.ServerPID != result.pid {
+		t.Fatalf("supervisor lease server pid = %d, err=%v, want %d", lease.ServerPID, err, result.pid)
 	}
 	assertProcessOwnedRetired(t, harness, result.pid, ensureErr)
 }

@@ -911,6 +911,19 @@ func TestRuntimeReadRoutesUseSharedHerdrControlIntents(t *testing.T) {
 	}
 }
 
+func TestHerdrIntentRuntimeRouteUsesServerLifecycleIdentity(t *testing.T) {
+	intent := state.HerdrIntent{
+		Kind: state.HerdrIntentRestart,
+		Server: &state.HerdrServerIdentity{
+			Session: "owned-server", SocketPath: "/tmp/owned-server.sock",
+		},
+	}
+	session, socketPath := herdrIntentRuntimeRoute(intent)
+	if session != "owned-server" || socketPath != "/tmp/owned-server.sock" {
+		t.Fatalf("herdrIntentRuntimeRoute() = (%q, %q)", session, socketPath)
+	}
+}
+
 func writeHerdrControlRouteIntent(t *testing.T, repo, session, socketPath string) {
 	t.Helper()
 	id, err := state.HerdrCoordinatorIntentID("426", "", 0)

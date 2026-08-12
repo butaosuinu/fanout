@@ -58,7 +58,7 @@ tmux-parity は信頼モデルだけでなく機構の密度にも適用し、�
 |---|---|---|
 | owned server | Go（#526 が PR #572 で実装済み） | owner-only の mode / UID、symlink、書込み可能な祖先を検査した owned XDG / socket / marker で session 外への影響を封じ込める。extended ACL は proof-grade tier で再評価する |
 | server 起動 | Go（#526 が PR #572 で実装済み） | per-repo supervisor が caller routing env を fanout-owned XDG / config / socket / session で上書きし、foreground server child を bootstrap する |
-| owned server restart | Go（実装は #530） | 明示操作が marker / lease と saved process / socket の不在を照合して一回だけ spawn し、結果不明は fail closed にする（応答喪失窓への最小追加対処） |
+| owned server restart | Go（実装は #637） | 明示操作が marker / lease と saved process / socket の不在を照合して一回だけ spawn し、結果不明は fail closed にする（応答喪失窓への最小追加対処） |
 | 集約読み | `herdr api snapshot` を使う | workspace、tab、pane、layout、agent、focus を 1 回で取得できる |
 | content read / peek | Go | exact PaneRef と `terminal_id` を直前・直後に再照合し、不一致は結果を破棄する |
 | raw Socket API | 不採用 | wave 2 で必要な操作は CLI wrapper で足りる |
@@ -224,7 +224,7 @@ crash 後の再実行は marker と supervisor lease を読み、live supervisor
 supervisor が不在で marker / lease が残る場合は PR #572 の実装どおり fail closed にし、正常に retire された layout だけを検証して作り直す。
 marker / lease / socket の不一致、foreign resource、検証不能は自動採用も自動削除もせず fail closed にする。
 
-server loss 後の restart は herdr 固有の最小追加対処とする（簡素化方針の基準 2。未実装で、実装 owner は #530）。
+server loss 後の restart は herdr 固有の最小追加対処とする（簡素化方針の基準 2。未実装で、実装 owner は #637）。
 restart は明示操作だけが開始し、restart の intent 行を state save してから、saved supervisor / server process と socket の不在と旧 marker の一致を照合する。
 restart intent 行がある間は shutdown と同じく、restart 自身と read-only 操作以外の mutation を明確な error で拒否する。
 照合成功後に旧 marker / lease を削除し、fresh bootstrap と同じ手順（新しい owner nonce での marker / lease の exclusive create、単一 spawn、status の session / socket 検査）で作り直す。
@@ -234,7 +234,7 @@ restart intent 行がある間は shutdown と同じく、restart 自身と read
 restart intent 行の削除は、version gate と status 検査の再実行、旧 `terminal_id` の direct-launch row の `stale` 化を確定した同じ state save で行う（削除が先行すると re-gate 前に別 worktree の mutation が再開する）。
 自動 resume は行わない。
 
-通常 shutdown は明示操作だけとし（未実装で、実装 owner は #530）、state lock 下で active row / intent と foreign resource の不在を確認し、同じ save で shutdown の intent 行を保存してから server を停止し、marker を削除する。
+通常 shutdown は明示操作だけとし（未実装で、実装 owner は #637）、state lock 下で active row / intent と foreign resource の不在を確認し、同じ save で shutdown の intent 行を保存してから server を停止し、marker を削除する。
 shutdown intent 行がある間、別 worktree を含む新しい launch / mutation は明確な error で拒否する（空状態確認と server 停止の間に intent が入り込む race の fence）。
 停止と marker 削除を確認した save で shutdown intent 行を削除する。
 response loss で停止の発生を証明できない場合は shutdown intent 行と marker を残して fail closed にし、再実行時の存在確認（process / socket の不在）で完了を確定する。

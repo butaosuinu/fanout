@@ -48,6 +48,7 @@ func main() {
 		{isVersionRequest, func() exitcode.Code { fmt.Fprintln(os.Stdout, versionLine()); return exitcode.OK }},
 		{isUpdateRequest, func() exitcode.Code { return cmdUpdate(os.Args[2:], version, ghissue.Runner{}, lg) }},
 		{isCheckUpdateRequest, func() exitcode.Code { return cmdCheckUpdate(version, ghissue.Runner{}, lg) }},
+		{isHerdrLifecycleRequest, func() exitcode.Code { return cmdHerdrLifecycle(os.Args[2:], lg) }},
 		{isTUIRequest, func() exitcode.Code { return cmdTUI(commandName, lg) }},
 		{isTUINewPanePopupRequest, func() exitcode.Code { return cmdTUINewPanePopup(os.Args[2:], lg) }},
 		{isTUIHelpPopupRequest, func() exitcode.Code { return cmdTUIHelpPopup(os.Args[2:], lg) }},

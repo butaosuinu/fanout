@@ -236,6 +236,48 @@ func TestHerdrControlBindingsIncludeEveryIntentStatus(t *testing.T) {
 	}
 }
 
+func TestHerdrServerLifecycleIntentValidatesExactIdentity(t *testing.T) {
+	for _, kind := range []HerdrIntentKind{HerdrIntentRestart, HerdrIntentShutdown} {
+		t.Run(string(kind), func(t *testing.T) {
+			intent := testHerdrServerIntent(kind)
+			store := emptyHerdrIntents()
+			store.Intents = append(store.Intents, intent)
+			if err := validateHerdrIntents(store); err != nil {
+				t.Fatal(err)
+			}
+			got, found, err := store.ServerLifecycleIntent()
+			if err != nil || !found || got.ID != intent.ID || got.Server == nil || *got.Server != *intent.Server {
+				t.Fatalf("ServerLifecycleIntent() = (%+v, %t, %v)", got, found, err)
+			}
+			if bindings := store.ProvisionalBindings("/repo"); len(bindings) != 0 {
+				t.Fatalf("server lifecycle provisional bindings = %+v, want none", bindings)
+			}
+		})
+	}
+}
+
+func TestHerdrServerLifecycleIntentRejectsAmbiguousOrIncompleteRows(t *testing.T) {
+	restart := testHerdrServerIntent(HerdrIntentRestart)
+	shutdown := testHerdrServerIntent(HerdrIntentShutdown)
+	store := emptyHerdrIntents()
+	store.Intents = []HerdrIntent{restart, shutdown}
+	if err := validateHerdrIntents(store); err == nil || !strings.Contains(err.Error(), "multiple") {
+		t.Fatalf("multiple lifecycle intents error = %v", err)
+	}
+
+	restart.Server.ServerPID = 0
+	store.Intents = []HerdrIntent{restart}
+	if err := validateHerdrIntents(store); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("restart without server pid error = %v", err)
+	}
+
+	regular := testHerdrCoordinatorIntent("/repo", "637")
+	regular.Server = shutdown.Server
+	if err := validateHerdrIntent(regular); err == nil || !strings.Contains(err.Error(), "unrelated server identity") {
+		t.Fatalf("regular intent with server identity error = %v", err)
+	}
+}
+
 func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 	first := testHerdrCoordinatorIntent("/repo/one", "plan:demo")
 	second := testHerdrCoordinatorIntent("/repo/two", "plan:demo")
@@ -624,6 +666,26 @@ func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 		WorkspaceLabel:   "fanout-coordinator-token", Session: "fanout-test",
 		SocketPath:    "/private/tmp/fanout-test/herdr.sock",
 		ExpiresUnixMS: 2000000000000,
+	}
+}
+
+func testHerdrServerIntent(kind HerdrIntentKind) HerdrIntent {
+	id, err := HerdrServerIntentID(kind)
+	if err != nil {
+		panic(err)
+	}
+	return HerdrIntent{
+		ID: id, Kind: kind, Status: HerdrIntentPlanned,
+		Server: &HerdrServerIdentity{
+			GitCommonDir: "/repo/.git", RuntimeDir: "/tmp/fanout-herdr",
+			Session: "fanout-owned", SocketPath: "/tmp/fanout-herdr/herdr.sock",
+			ClientSocketPath: "/tmp/fanout-herdr/herdr-client.sock",
+			OwnerNonce:       strings.Repeat("a", 64), SupervisorPID: 42,
+			SupervisorStartToken: strings.Repeat("b", 64), ServerPID: 43,
+			BinaryPath: "/usr/local/bin/herdr", BinarySHA256: strings.Repeat("c", 64),
+			BinaryVersion: "0.7.5", LauncherPath: "/usr/local/bin/fanout",
+			LauncherSHA256: strings.Repeat("d", 64),
+		},
 	}
 }
 

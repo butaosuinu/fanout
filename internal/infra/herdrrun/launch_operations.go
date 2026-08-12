@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -138,7 +139,7 @@ func (s *OwnedSession) WaitForLauncher(
 }
 
 func (s *OwnedSession) SendLaunchToken(ctx context.Context, paneID, nonce string) error {
-	out, err := s.runOwnedLaunchCommand(ctx, commandTimeout, "pane", "run", paneID, launcherStartToken(nonce))
+	out, err := s.runOwnedLaunchMutationCommand(ctx, commandTimeout, "pane", "run", paneID, launcherStartToken(nonce))
 	if err != nil {
 		return err
 	}
@@ -179,7 +180,7 @@ func (s *OwnedSession) ProcessInfo(ctx context.Context, paneID string) (PaneProc
 }
 
 func (s *OwnedSession) RenameAgent(ctx context.Context, paneID, name string) error {
-	out, err := s.runOwnedLaunchCommand(ctx, commandTimeout, "agent", "rename", paneID, name)
+	out, err := s.runOwnedLaunchMutationCommand(ctx, commandTimeout, "agent", "rename", paneID, name)
 	if err != nil {
 		return err
 	}
@@ -262,10 +263,27 @@ func (s *OwnedSession) runOwnedLaunchCommand(
 	timeout time.Duration,
 	args ...string,
 ) ([]byte, error) {
+	return s.runOwnedCommand(ctx, timeout, (*Backend).acquireOwnedOperation, args...)
+}
+
+func (s *OwnedSession) runOwnedLaunchMutationCommand(
+	ctx context.Context,
+	timeout time.Duration,
+	args ...string,
+) ([]byte, error) {
+	return s.runOwnedCommand(ctx, timeout, (*Backend).acquireOwnedMutation, args...)
+}
+
+func (s *OwnedSession) runOwnedCommand(
+	ctx context.Context,
+	timeout time.Duration,
+	acquire func(*Backend, context.Context) (ownedAdmission, *os.File, error),
+	args ...string,
+) ([]byte, error) {
 	if s == nil || s.backend == nil {
 		return nil, fmt.Errorf("herdr owned session is nil")
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	admission, lock, err := acquire(s.backend, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +303,7 @@ func (s *OwnedSession) runOwnedMutationCommand(
 	if s == nil || s.backend == nil {
 		return nil, mutationNotIssued(fmt.Errorf("herdr owned session is nil"))
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	admission, lock, err := s.backend.acquireOwnedMutation(ctx)
 	if err != nil {
 		return nil, mutationNotIssued(err)
 	}
