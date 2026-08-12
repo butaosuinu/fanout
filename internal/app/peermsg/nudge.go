@@ -20,7 +20,7 @@ import (
 const nudgeText = "[fanout] peer message in your inbox — run: fanout msg inbox"
 
 // msgNudgeReport is the --json encoding of a nudge attempt. Nudged is true only
-// when the send-keys actually went out; Reason explains every other outcome so
+// when the runtime send actually went out; Reason explains every other outcome so
 // automation can tell a delivered push from a best-effort no-op.
 type msgNudgeReport struct {
 	Target     int    `json:"target"`
@@ -31,8 +31,8 @@ type msgNudgeReport struct {
 	Reason     string `json:"reason"`
 }
 
-// shouldNudge reports whether a pane in the given @fanout_agent_state should
-// receive a send-keys nudge. Every state in which the agent can safely take
+// shouldNudge reports whether a pane in the given refined agent state should
+// receive a nudge. Every state in which the agent can safely take
 // queued input qualifies: "idle" (at its prompt, the ideal moment), "running"
 // (wrapper state, granularity unknown), and the hook states "working" and
 // "plan" — the supported agents (claude, codex) queue typed input during a
@@ -58,7 +58,7 @@ func shouldNudge(agentState string) bool {
 // runMsgNudge resolves peer req.To's recorded pane from state.json and pushes
 // the inbox hint when its agent can take queued input (running / working /
 // plan / idle). Every operational miss (recipient absent, no pane id, pane
-// gone, agent not nudgeable, send-keys failure) is a no-op SUCCESS with a
+// gone, agent not nudgeable, runtime send failure) is a no-op SUCCESS with a
 // warning/reason: the message is already persisted by send, so a failed nudge
 // must never break messaging. Only invocation errors (handled earlier) exit
 // non-zero.
@@ -69,29 +69,51 @@ func runMsgNudge(req *Request, parent string, deps Deps, lg *log.Logger) exitcod
 		return exitcode.Invocation
 	}
 	// Plan recipients are addressed by task id (state rows carry IssueNum 0),
-	// so look them up by task id under a plan parent; issue/Project recipients
-	// keep the numeric lookup.
-	var pane state.Pane
-	var found bool
-	if team.IsPlanParent(parent) {
-		pane, found = st.FindTask(parent, req.ToRaw)
-	} else {
-		pane, found = st.Find(parent, req.To)
-	}
-
-	report := msgNudgeReport{Target: req.To, PaneID: pane.PaneID}
+	// while issue/Project recipients use the numeric key. A duplicate logical
+	// recipient is ambiguous even when one row has a unique runtime binding.
+	pane, matches := uniqueNudgeRecipient(st, parent, req.To, req.ToRaw)
+	report := msgNudgeReport{Target: req.To}
 	if team.IsPlanParent(parent) {
 		report.TargetTask = req.ToRaw
 	}
 	switch {
-	case !found:
+	case matches == 0:
 		report.Reason = "recipient is not recorded in fanout state"
+	case matches != 1:
+		report.Reason = "recipient identity is ambiguous in fanout state"
 	case pane.PaneID == "":
 		report.Reason = "recipient has no recorded pane"
 	default:
-		report.AgentState, report.Reason, report.Nudged = deliverNudge(pane, deps)
+		report.PaneID = pane.PaneID
+		report.AgentState, report.Reason, report.Nudged = deliverRuntimeNudge(pane, deps)
 	}
 	return writeMsgNudgeResult(req, parent, report, lg)
+}
+
+func uniqueNudgeRecipient(store state.Store, parent string, issueNum int, taskID string) (state.Pane, int) {
+	var matched state.Pane
+	count := 0
+	for _, pane := range store.PanesForParent(parent) {
+		isMatch := pane.IssueNum == issueNum
+		if team.IsPlanParent(parent) {
+			isMatch = taskID != "" && pane.TaskID == taskID
+		}
+		if isMatch {
+			matched = pane
+			count++
+		}
+	}
+	return matched, count
+}
+
+func deliverRuntimeNudge(pane state.Pane, deps Deps) (agentState, reason string, nudged bool) {
+	if backend.NormalizeName(pane.Backend) == backend.Herdr {
+		if !agent.PaneStateRefined(pane.Agent) {
+			return "", fmt.Sprintf("agent %q has no agent-state refinement; nudge is disabled for its panes", pane.Agent), false
+		}
+		return deliverHerdrNudge(pane, deps)
+	}
+	return deliverNudge(pane, deps)
 }
 
 // deliverNudge re-reads the live tmux panes immediately before sending (TOCTOU),

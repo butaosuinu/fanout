@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/peermsg"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 )
@@ -32,14 +34,14 @@ Write verbs:
 
 Notify verbs:
   nudge <N>                      Best-effort: drop an inbox hint into peer #N's
-                                 pane via tmux send-keys, but only when its
-                                 agent can take queued input (state running /
-                                 working / plan / idle). Never touches the DB
-                                 (the message is already persisted by send); a
-                                 pane that is gone, blocked on a permission
-                                 prompt, state-unknown, or done is a no-op
-                                 success, so a failed nudge never breaks
-                                 messaging.
+                                 pane through its recorded runtime, but only
+                                 when its agent can take queued input (state
+                                 running / working / plan / idle). Never
+                                 touches the DB (the message is already
+                                 persisted by send); a pane that is gone,
+                                 blocked on a permission prompt, state-unknown,
+                                 or done is a no-op success, so a failed nudge
+                                 never breaks messaging.
 
 Options:
   --json           Emit JSON instead of the human-readable view.
@@ -144,7 +146,13 @@ func cmdMsg(args []string, lg *log.Logger) exitcode.Code {
 	if flags == nil {
 		return code // help (OK) or a parse error; either way the message is out
 	}
-	return peermsg.Run(flags.request(), peermsg.DefaultDeps(tmuxbackend.New()), lg)
+	deps := peermsg.DefaultDeps(tmuxbackend.New())
+	deps.OpenHerdr = openMsgHerdr
+	return peermsg.Run(flags.request(), deps, lg)
+}
+
+func openMsgHerdr(ctx context.Context, repoKey string) (peermsg.HerdrNudger, error) {
+	return herdrrun.OpenOwned(ctx, herdrrun.OwnedOptions{GitCommonDir: repoKey})
 }
 
 // parseMsgFlags parses `msg` argv. A nil msgFlags means "stop with this

@@ -1,12 +1,16 @@
 package peermsg
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/core/naming"
+	"github.com/butaosuinu/fanout/internal/infra/codexapp"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -43,11 +47,11 @@ func TestRunMsgNudge(t *testing.T) {
 	withPane := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "claude"}}}
 	withWorktree := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "claude", WorktreePath: "/wt/recipient"}}}
 	withKey := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "claude", ShellKey: "key-five", WorktreePath: "/wt/recipient"}}}
-	withHerdr := state.Store{SchemaVersion: 1, Panes: []state.Pane{{
-		Parent: "68", IssueNum: 71, Backend: backend.Herdr, PaneID: "w1:p1", HerdrWorkspaceID: "w1",
-		ReportedState: "working",
-	}}}
 	withOpencode := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "opencode", WorktreePath: "/wt/recipient"}}}
+	duplicateRecipient := state.Store{SchemaVersion: 1, Panes: []state.Pane{
+		{Parent: "68", IssueNum: 71, PaneID: "%5", Agent: "claude", WorktreePath: "/wt/recipient"},
+		{Parent: "0068", IssueNum: 71, PaneID: "%6", Agent: "claude", WorktreePath: "/wt/stale"},
+	}}
 	noPaneID := state.Store{SchemaVersion: 1, Panes: []state.Pane{{Parent: "68", IssueNum: 72, PaneID: ""}}}
 	lp := func(id, path, agentState string) backend.LivePane {
 		state, _ := backend.ParseAgentState(agentState)
@@ -144,16 +148,16 @@ func TestRunMsgNudge(t *testing.T) {
 			listErr: errors.New("tmux down"), wantCode: exitcode.OK, wantListed: true, wantStderr: "tmux is unavailable",
 		},
 		{
-			name: "herdr recipient resolves before issue 552 delivery gate", req: Request{Verb: "nudge", To: 71}, store: withHerdr,
-			wantCode: exitcode.OK, wantStderr: "automatic nudge is unavailable for herdr backend",
-		},
-		{
 			name: "send-keys failure stays a best-effort success", req: Request{Verb: "nudge", To: 71}, store: withWorktree,
 			live: []backend.LivePane{lp("%5", "/wt/recipient", "running")}, sendErr: errors.New("boom"), wantCode: exitcode.OK, wantListed: true, wantSendCalled: true, wantStderr: "send-keys failed",
 		},
 		{
 			name: "recipient absent from state is a no-op success", req: Request{Verb: "nudge", To: 99}, store: withWorktree,
 			wantCode: exitcode.OK, wantStderr: "not recorded",
+		},
+		{
+			name: "duplicate logical recipient is a no-op success", req: Request{Verb: "nudge", To: 71}, store: duplicateRecipient,
+			wantCode: exitcode.OK, wantStderr: "identity is ambiguous",
 		},
 		{
 			name: "recipient without a recorded pane is a no-op success", req: Request{Verb: "nudge", To: 72}, store: noPaneID,
@@ -228,6 +232,390 @@ func TestRunMsgNudge(t *testing.T) {
 			}
 		})
 	}
+}
+
+type fakeHerdrNudger struct {
+	panes      []backend.LivePane
+	panesErr   error
+	beforeLive func()
+	liveCalls  int
+	beforePrep func()
+	process    herdrrun.PaneProcessInfo
+	processErr error
+	nudgeErr   error
+	nudged     bool
+	nudgeCalls int
+	target     herdrrun.NudgeTarget
+	text       string
+}
+
+func (f *fakeHerdrNudger) LivePanes(context.Context) ([]backend.LivePane, error) {
+	f.liveCalls++
+	if f.beforeLive != nil {
+		f.beforeLive()
+	}
+	return f.panes, f.panesErr
+}
+
+func (f *fakeHerdrNudger) ProcessInfo(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+	return f.process, f.processErr
+}
+
+func (f *fakeHerdrNudger) PrepareNudge(_ context.Context, target herdrrun.NudgeTarget, text string) (herdrrun.NudgePrompt, error) {
+	if f.beforePrep != nil {
+		f.beforePrep()
+	}
+	return func(context.Context) error {
+		f.nudged, f.target, f.text = true, target, text
+		f.nudgeCalls++
+		return f.nudgeErr
+	}, nil
+}
+
+func TestRunMsgNudgeHerdrUsesTheTmuxStateAllowlist(t *testing.T) {
+	for _, test := range []struct {
+		state string
+		want  bool
+	}{
+		{state: "running", want: true},
+		{state: "working", want: true},
+		{state: "plan", want: true},
+		{state: "idle", want: true},
+		{state: "blocked"},
+		{state: "done"},
+		{state: ""},
+	} {
+		t.Run("state_"+test.state, func(t *testing.T) {
+			store, runtime := herdrNudgeFixture(test.state, true)
+			opened := false
+			deps := herdrNudgeDeps(store, store, runtime)
+			deps.OpenHerdr = func(_ context.Context, repoKey string) (HerdrNudger, error) {
+				opened = true
+				if repoKey != store.Panes[0].HerdrRepoKey {
+					t.Fatalf("repo key = %q, want %q", repoKey, store.Panes[0].HerdrRepoKey)
+				}
+				return runtime, nil
+			}
+			var out, errb strings.Builder
+			code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+			if code != exitcode.OK || runtime.nudged != test.want {
+				t.Fatalf("state %q: code=%d nudged=%v stderr=%q", test.state, code, runtime.nudged, errb.String())
+			}
+			if opened != test.want {
+				t.Errorf("state %q: runtime opened=%v, want %v", test.state, opened, test.want)
+			}
+			if test.want && (runtime.text != nudgeText || runtime.target.Ref.Pane != "w1:p1") {
+				t.Errorf("nudge = target %+v text %q", runtime.target, runtime.text)
+			}
+		})
+	}
+}
+
+func TestRunMsgNudgeHerdrAllowsUnreportedAgentSession(t *testing.T) {
+	store, runtime := herdrNudgeFixture("idle", true)
+	store.Panes[0].HerdrAgentSession = nil
+	runtime.panes[0].AgentSession = nil
+	deps := herdrNudgeDeps(store, store, runtime)
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.nudgeCalls != 1 || errb.Len() != 0 {
+		t.Fatalf("code=%d calls=%d stderr=%q", code, runtime.nudgeCalls, errb.String())
+	}
+}
+
+func TestRunMsgNudgeHerdrRejectsInvalidLaunchGenerationBeforeRuntimeIO(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*state.Pane)
+	}{
+		{name: "agent name", mutate: func(p *state.Pane) { p.HerdrAgentID = "fanout-corrupt" }},
+		{name: "launch nonce", mutate: func(p *state.Pane) {
+			p.LaunchNonce = "invalid"
+			p.HerdrAgentID = naming.HerdrAgentName(p.HerdrRepoKey, p.EmitterRowKey, p.LaunchNonce)
+		}},
+		{name: "emitter nonce", mutate: func(p *state.Pane) { p.EmitterNonce = "invalid" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, runtime := herdrNudgeFixture("working", true)
+			test.mutate(&store.Panes[0])
+			runtime.panes[0].AgentID = store.Panes[0].HerdrAgentID
+			runtime.beforeLive = func() { t.Fatal("invalid generation reached runtime IO") }
+			deps := herdrNudgeDeps(store, store, runtime)
+			var out, errb strings.Builder
+			code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+			if code != exitcode.OK || runtime.nudgeCalls != 0 || !strings.Contains(errb.String(), "binding changed") {
+				t.Fatalf("code=%d calls=%d stderr=%q", code, runtime.nudgeCalls, errb.String())
+			}
+		})
+	}
+}
+
+func TestRunMsgNudgeHerdrRequiresFreshRefinedState(t *testing.T) {
+	store, runtime := herdrNudgeFixture("running", false)
+	deps := herdrNudgeDeps(store, store, runtime)
+	deps.OpenHerdr = func(context.Context, string) (HerdrNudger, error) {
+		t.Fatal("unrefined state opened the Herdr runtime")
+		return nil, nil
+	}
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.nudged || !strings.Contains(errb.String(), "not refined") {
+		t.Fatalf("unrefined nudge: code=%d nudged=%v stderr=%q", code, runtime.nudged, errb.String())
+	}
+}
+
+func TestRunMsgNudgeHerdrFailsClosedBeforePrompt(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		mutateLive  func(*backend.LivePane)
+		mutateProc  func(*herdrrun.PaneProcessInfo)
+		mutateRow   func(*state.Pane)
+		mutateStore func(*state.Store)
+		lockErr     error
+		want        string
+	}{
+		{name: "worktree changed", mutateLive: func(p *backend.LivePane) { p.WorktreePath = "/repo/other" }, want: "provenance changed"},
+		{name: "terminal changed", mutateLive: func(p *backend.LivePane) { p.TerminalID = "term-new" }, want: "identity or worktree"},
+		{name: "process changed", mutateProc: func(p *herdrrun.PaneProcessInfo) { p.ForegroundProcesses[0].Argv = []string{"other"} }, want: "process identity"},
+		{name: "emitter generation changed", mutateRow: func(p *state.Pane) { p.EmitterNonce = strings.Repeat("c", 32) }, want: "launch binding changed"},
+		{name: "recipient duplicated", mutateStore: appendDuplicateNudgeRecipient, want: "launch binding changed"},
+		{name: "latest state blocked", mutateRow: func(p *state.Pane) { p.ReportedState = "blocked" }, want: "not nudgeable"},
+		{name: "state lock failed", lockErr: errors.New("lock failed"), want: "lock failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			initial, runtime := herdrNudgeFixture("working", true)
+			locked := cloneNudgeStore(initial)
+			if test.mutateLive != nil {
+				test.mutateLive(&runtime.panes[0])
+			}
+			if test.mutateProc != nil {
+				test.mutateProc(&runtime.process)
+			}
+			if test.mutateRow != nil {
+				test.mutateRow(&locked.Panes[0])
+			}
+			if test.mutateStore != nil {
+				test.mutateStore(&locked)
+			}
+			deps := herdrNudgeDeps(initial, locked, runtime)
+			if test.lockErr != nil {
+				deps.ReadLockedState = func(context.Context, func(state.Store) error) error { return test.lockErr }
+			}
+			var out, errb strings.Builder
+			code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+			if code != exitcode.OK || runtime.nudged || !strings.Contains(errb.String(), test.want) {
+				t.Fatalf("code=%d nudged=%v stderr=%q, want %q", code, runtime.nudged, errb.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestRecheckHerdrNudgeStateHonorsContext(t *testing.T) {
+	store, runtime := herdrNudgeFixture("working", true)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	deps := herdrNudgeDeps(store, store, runtime)
+	deps.ReadLockedState = func(ctx context.Context, _ func(state.Store) error) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if _, _, err := recheckHerdrNudgeState(ctx, store.Panes[0], deps); !errors.Is(err, context.Canceled) {
+		t.Fatalf("recheckHerdrNudgeState() error = %v, want context canceled", err)
+	}
+}
+
+func TestRunMsgNudgeHerdrRechecksRuntimeAfterStateLockWait(t *testing.T) {
+	store, runtime := herdrNudgeFixture("working", true)
+	deps := herdrNudgeDeps(store, store, runtime)
+	deps.ReadLockedState = func(_ context.Context, read func(state.Store) error) error {
+		runtime.panes[0].WorktreePath = "/repo/reused"
+		return read(store)
+	}
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.nudged || !strings.Contains(errb.String(), "provenance changed") {
+		t.Fatalf("code=%d nudged=%v stderr=%q", code, runtime.nudged, errb.String())
+	}
+}
+
+func TestRunMsgNudgeHerdrRechecksStateAfterRuntimePreflight(t *testing.T) {
+	initial, runtime := herdrNudgeFixture("working", true)
+	locked := cloneNudgeStore(initial)
+	runtime.beforePrep = func() { locked.Panes[0].ReportedState = "blocked" }
+	deps := herdrNudgeDeps(initial, locked, runtime)
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.liveCalls != 1 || runtime.nudgeCalls != 0 ||
+		!strings.Contains(errb.String(), "not nudgeable") {
+		t.Fatalf("code=%d live=%d nudges=%d stderr=%q", code, runtime.liveCalls, runtime.nudgeCalls, errb.String())
+	}
+}
+
+func TestRunMsgNudgeHerdrDoesNotReadRuntimeAfterFinalStateGate(t *testing.T) {
+	store, runtime := herdrNudgeFixture("working", true)
+	lockCalls := 0
+	runtime.beforeLive = func() {
+		if runtime.liveCalls == 2 {
+			store.Panes[0].ReportedState = "blocked"
+		}
+	}
+	deps := herdrNudgeDeps(store, store, runtime)
+	deps.ReadLockedState = func(_ context.Context, read func(state.Store) error) error {
+		lockCalls++
+		return read(store)
+	}
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || lockCalls != 2 || runtime.liveCalls != 1 || runtime.nudgeCalls != 1 || errb.Len() != 0 {
+		t.Fatalf("code=%d locks=%d live=%d nudges=%d stderr=%q", code, lockCalls, runtime.liveCalls, runtime.nudgeCalls, errb.String())
+	}
+}
+
+func TestRunMsgNudgeHerdrAcceptsExactCodexPlanProcess(t *testing.T) {
+	store, runtime := codexPlanNudgeFixture()
+	deps := herdrNudgeDeps(store, store, runtime)
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.nudgeCalls != 1 || errb.Len() != 0 {
+		t.Fatalf("code=%d nudges=%d stderr=%q", code, runtime.nudgeCalls, errb.String())
+	}
+}
+
+func TestRunMsgNudgeHerdrRejectsInexactCodexPlanProcessTrees(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*herdrrun.PaneProcessInfo)
+	}{
+		{name: "missing TUI", mutate: func(info *herdrrun.PaneProcessInfo) {
+			info.ForegroundProcesses = info.ForegroundProcesses[:1]
+		}},
+		{name: "duplicate TUI", mutate: func(info *herdrrun.PaneProcessInfo) {
+			info.ForegroundProcesses = append(info.ForegroundProcesses, herdrNudgeProcess(
+				121, 101, "/opt/codex", []string{"--remote", "ws://127.0.0.1:1234"},
+			))
+		}},
+		{name: "wrong remote", mutate: func(info *herdrrun.PaneProcessInfo) {
+			info.ForegroundProcesses[1].Argv[1] = "ws://localhost:1234"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, runtime := codexPlanNudgeFixture()
+			test.mutate(&runtime.process)
+			deps := herdrNudgeDeps(store, store, runtime)
+			var out, errb strings.Builder
+			code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+			if code != exitcode.OK || runtime.nudgeCalls != 0 || !strings.Contains(errb.String(), "process identity") {
+				t.Fatalf("code=%d nudges=%d stderr=%q", code, runtime.nudgeCalls, errb.String())
+			}
+		})
+	}
+}
+
+func appendDuplicateNudgeRecipient(store *state.Store) {
+	duplicate := store.Panes[0]
+	duplicate.PaneID = "w1:p2"
+	duplicate.HerdrTerminalID = "term-duplicate"
+	duplicate.EmitterRowKey = "issue:68:71:duplicate"
+	store.Panes = append(store.Panes, duplicate)
+}
+
+func TestUniqueNudgeRecipientRejectsDuplicatePlanTask(t *testing.T) {
+	store := state.Store{SchemaVersion: 1, Panes: []state.Pane{
+		{Parent: "plan:demo", TaskID: "task-a", PaneID: "w1:p1"},
+		{Parent: "plan:demo", TaskID: "task-a", PaneID: "w1:p2"},
+	}}
+	if _, matches := uniqueNudgeRecipient(store, "plan:demo", 0, "task-a"); matches != 2 {
+		t.Fatalf("uniqueNudgeRecipient() matches = %d, want 2", matches)
+	}
+}
+
+func TestRunMsgNudgeHerdrDoesNotRetryAnAmbiguousPromptFailure(t *testing.T) {
+	store, runtime := herdrNudgeFixture("idle", true)
+	runtime.nudgeErr = errors.New("response lost")
+	deps := herdrNudgeDeps(store, store, runtime)
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.nudgeCalls != 1 || !strings.Contains(errb.String(), "agent prompt failed") {
+		t.Fatalf("code=%d calls=%d stderr=%q", code, runtime.nudgeCalls, errb.String())
+	}
+}
+
+func herdrNudgeFixture(reportedState string, refined bool) (state.Store, *fakeHerdrNudger) {
+	worktree := "/repo/.fanout/worktrees/child"
+	args := []string{"--permission-mode", "auto", "prompt"}
+	repoKey := "/repo/.git"
+	rowKey := "issue:68:71"
+	launchNonce := strings.Repeat("a", 32)
+	session := &backend.AgentSessionRef{Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-71"}
+	pane := state.Pane{
+		Parent: "68", IssueNum: 71, Backend: backend.Herdr, PaneID: "w1:p1", Agent: "claude",
+		HerdrWorkspaceID: "w1", HerdrTerminalID: "term-71", HerdrRepoKey: repoKey,
+		HerdrAgentID: naming.HerdrAgentName(repoKey, rowKey, launchNonce), HerdrAgentSession: session,
+		HerdrSession: "fanout-owned", HerdrSocketPath: "/tmp/fanout-owned/herdr.sock",
+		WorktreePath: worktree, ReportedState: reportedState, StateRefinement: refined,
+		EmitterRowKey: rowKey, LaunchNonce: launchNonce,
+		EmitterNonce: strings.Repeat("b", 32), HerdrLaunchExecutable: "/usr/bin/claude",
+		HerdrLaunchArgs: args,
+	}
+	live := backend.LivePane{
+		Ref: paneRef(pane), TerminalID: pane.HerdrTerminalID, SessionID: pane.HerdrSession,
+		SocketPath: pane.HerdrSocketPath, RepoKey: pane.HerdrRepoKey,
+		ProjectRoot: "/repo", WorktreePath: worktree, CurrentPath: worktree, AgentPresent: true,
+		AgentProvider: pane.Agent, AgentID: pane.HerdrAgentID, AgentSession: session,
+	}
+	process := herdrrun.PaneProcessInfo{
+		PaneID: pane.PaneID, ShellPID: 101, ForegroundProcessGroup: 101,
+		ForegroundProcesses: []herdrrun.PaneProcess{{
+			PID: 101, ParentPID: 1, ProcessGroup: 101, Executable: "/usr/bin/claude",
+			Argv0: "/usr/bin/claude", Argv: args, CWD: worktree,
+		}},
+	}
+	return state.Store{SchemaVersion: 1, Panes: []state.Pane{pane}}, &fakeHerdrNudger{panes: []backend.LivePane{live}, process: process}
+}
+
+func codexPlanNudgeFixture() (state.Store, *fakeHerdrNudger) {
+	store, runtime := herdrNudgeFixture("plan", true)
+	pane := &store.Panes[0]
+	pane.Agent = "codex"
+	pane.HerdrLaunchExecutable = "/opt/fanout"
+	pane.HerdrLaunchArgs = []string{
+		codexapp.PlanTUICommand, "--codex", "/opt/codex",
+		"--prompt", "plan it", "--status-file", "/tmp/status.json",
+	}
+	session := &backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-71"}
+	pane.HerdrAgentSession = session
+	runtime.panes[0].AgentProvider = "codex"
+	runtime.panes[0].AgentSession = session
+	runtime.process = herdrrun.PaneProcessInfo{
+		PaneID: pane.PaneID, ShellPID: 101, ForegroundProcessGroup: 101,
+		ForegroundProcesses: []herdrrun.PaneProcess{
+			herdrNudgeProcess(101, 1, "/opt/fanout", pane.HerdrLaunchArgs),
+			herdrNudgeProcess(120, 101, "/opt/codex", []string{"--remote", "ws://127.0.0.1:1234"}),
+		},
+	}
+	return store, runtime
+}
+
+func herdrNudgeProcess(pid, parent int, executable string, args []string) herdrrun.PaneProcess {
+	return herdrrun.PaneProcess{
+		PID: pid, ParentPID: parent, ProcessGroup: 101, Executable: executable,
+		Argv0: executable, Argv: args, CWD: "/repo/.fanout/worktrees/child",
+	}
+}
+
+func herdrNudgeDeps(initial, locked state.Store, runtime *fakeHerdrNudger) Deps {
+	return Deps{
+		LoadState:       func() (state.Store, error) { return initial, nil },
+		OpenHerdr:       func(context.Context, string) (HerdrNudger, error) { return runtime, nil },
+		ReadLockedState: func(_ context.Context, read func(state.Store) error) error { return read(locked) },
+	}
+}
+
+func cloneNudgeStore(store state.Store) state.Store {
+	clone := store
+	clone.Panes = append([]state.Pane(nil), store.Panes...)
+	clone.Panes[0].HerdrLaunchArgs = append([]string(nil), store.Panes[0].HerdrLaunchArgs...)
+	return clone
 }
 
 func TestMatchLivePane(t *testing.T) {

@@ -368,13 +368,13 @@ parent ごとの SQLite メッセージバス上での兄弟協調です。fanou
 | `post` | `[--kind K] <body...>`: `<body...>` を共有ボードに投稿する。 |
 | `mark-read` | `[--id <N> ... \| --all]`: 1:1 メッセージを id 指定（繰り返し可）で既読にするか、`--all` で全件を既読にしてボードカーソルを進める。 |
 | `register` | このペインを peers テーブルに upsert する（`--team` が自動で行う。再 join に使う）。 |
-| `nudge` | `<N>`: best-effort で、peer `#N` の agent が入力を queue できる状態（`running` / `working` / `plan` / `idle`）のときだけ tmux 経由でそのペインに inbox の hint を送る。メッセージではなく通知専用 verb で、DB は触らない。それ以外（ペイン消失 / 状態不明 / 許可待ちの `blocked` / done）は何もせず success（no-op）。pane-state refinement のない agent（`opencode`）は permission prompt 中でも `running` のままなので、nudge 対象から常に除外する。 |
+| `nudge` | `<N>`: best-effort で、peer `#N` の agent が入力を queue できる状態（`running` / `working` / `plan` / `idle`）のときだけ、記録済み runtime 経由でそのペインに inbox の hint を送る。tmux は `send-keys` を使う。herdr は current launch に束縛された refined telemetry と live pane、worktree、agent、process identity が一致した場合だけ、no-wait の `agent prompt` を 1 回発行する。メッセージではなく通知専用 verb で、DB は触らない。それ以外（ペイン消失 / 状態不明 / 許可待ちの `blocked` / done）は何もせず success（no-op）。current launch に対する pane-state refinement のない agent は対象外。 |
 
 verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` と `--parent <ref>`（ペイン検出を上書き）。
 
 [`fanout plan --team`](#plan-fan-out-issue-less) の run では、peer は issue 番号ではなく **task ID** で指定します: `send --to <task-id>`、`peers` は現在の task ID 一覧を表示します。plan モードのペインの `--json` 出力には `selfTask` / `fromTask` / `toTask` フィールドが付き、合成 peer 番号から task ID を解決できます。issue / Project の JSON は変わりません。
 
-データベースは `/tmp/fanout-<repo>-<parent>.db` に置かれ、`FANOUT_DB_PATH` で上書きできます。herdr `--team` では、launcher と子 worktree が別の file を開かないよう、上書きに絶対 path が必要です。メッセージは DB に永続し、兄弟は自分のチェックポイントで読みます。`--team` ではさらに `claude` ペインと新規起動の非 Plan `codex` ペインに push レーンが載り、到着ごとに配信します: `claude` ペインは briefing の指示で Monitor ツールの下で `fanout msg watch` を回し、新規起動の非 Plan `codex` ペインは app-server ブリッジ経由になり、idle な turn へ未読メッセージを引用付きの untrusted data として注入します（Codex Plan Mode のペインは pull のまま）。どちらのレーンもペインの tmux 入力には書き込みません — それをするのは `nudge` だけです。レーンが使えないとき（Monitor 不可、restore した codex ペイン）は pull に戻ります。注入失敗の回収は `inbox --all` です（失敗した分は既読化済みのため）。ブリッジの起動自体に失敗した場合（不正な `FANOUT_DB_PATH`、DB の所有者や権限の不正など）は fallback ではなく、その子の launch が失敗します。pure-Go の SQLite ドライバが同梱されているため、外部 `sqlite3` は不要です。
+データベースは `/tmp/fanout-<repo>-<parent>.db` に置かれ、`FANOUT_DB_PATH` で上書きできます。herdr `--team` では、launcher と子 worktree が別の file を開かないよう、上書きに絶対 path が必要です。メッセージは DB に永続し、兄弟は自分のチェックポイントで読みます。`--team` ではさらに `claude` ペインと新規起動の非 Plan `codex` ペインに push レーンが載り、到着ごとに配信します: `claude` ペインは briefing の指示で Monitor ツールの下で `fanout msg watch` を回し、新規起動の非 Plan `codex` ペインは app-server ブリッジ経由になり、idle な turn へ未読メッセージを引用付きの untrusted data として注入します（Codex Plan Mode のペインは pull のまま）。どちらのレーンも pane input には書き込みません — それをするのは `nudge` だけです。レーンが使えないとき（Monitor 不可、restore した codex ペイン）は pull に戻ります。注入失敗の回収は `inbox --all` です（失敗した分は既読化済みのため）。ブリッジの起動自体に失敗した場合（不正な `FANOUT_DB_PATH`、DB の所有者や権限の不正など）は fallback ではなく、その子の launch が失敗します。pure-Go の SQLite ドライバが同梱されているため、外部 `sqlite3` は不要です。
 
 | Exit code | 意味 |
 |---|---|

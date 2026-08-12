@@ -398,15 +398,20 @@ func agentPromptResponse(target OwnedPaneIdentity, mutate func(*agentJSON)) []by
 	focused := false
 	revision := uint64(3)
 	name := target.AgentID
-	agentName := target.AgentSession.Agent
-	source := target.AgentSession.Source
-	kind := target.AgentSession.Kind
-	value := target.AgentSession.Value
+	agentName := ""
+	var session *agentSessionJSON
+	if target.AgentSession != nil {
+		agentName = target.AgentSession.Agent
+		source := target.AgentSession.Source
+		kind := target.AgentSession.Kind
+		value := target.AgentSession.Value
+		session = &agentSessionJSON{Source: &source, Agent: &agentName, Kind: &kind, Value: &value}
+	}
 	agent := agentJSON{
 		TerminalID: target.TerminalID, Name: &name, Agent: &agentName, AgentStatus: "working",
 		WorkspaceID: target.Ref.Workspace, TabID: "w2:t1", PaneID: target.Ref.Pane,
 		Focused: &focused, Revision: &revision,
-		AgentSession: &agentSessionJSON{Source: &source, Agent: &agentName, Kind: &kind, Value: &value},
+		AgentSession: session,
 	}
 	if mutate != nil {
 		mutate(&agent)
@@ -418,6 +423,62 @@ func agentPromptResponse(target OwnedPaneIdentity, mutate func(*agentJSON)) []by
 		panic(err)
 	}
 	return data
+}
+
+func TestOwnedSessionNudgeAllowsUnreportedAgentSession(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	target.AgentSession = nil
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if !slices.Equal(args, []string{"agent", "prompt", target.Ref.Pane, "nudge"}) {
+			return nil, fmt.Errorf("unexpected mutation args %v", args)
+		}
+		return agentPromptResponse(target, nil), nil
+	}
+	nudgeTarget := NudgeTarget{
+		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
+		TerminalID: target.TerminalID, AgentID: target.AgentID,
+	}
+	if err := h.session.Nudge(context.Background(), nudgeTarget, "nudge"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPreparedNudgeIssuesOnlyPromptAfterPreparation(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if !slices.Equal(args, []string{"agent", "prompt", target.Ref.Pane, "nudge"}) {
+			return nil, fmt.Errorf("unexpected mutation args %v", args)
+		}
+		return agentPromptResponse(target, nil), nil
+	}
+	nudgeTarget := NudgeTarget{
+		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
+		TerminalID: target.TerminalID, AgentID: target.AgentID, AgentSession: target.AgentSession,
+	}
+	beforePreparation := len(h.fake.commands)
+	prompt, err := h.session.PrepareNudge(context.Background(), nudgeTarget, "nudge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedCommands := len(h.fake.commands)
+	preflight := h.fake.commands[beforePreparation:preparedCommands]
+	if len(preflight) == 0 {
+		t.Fatal("PrepareNudge() issued no ownership preflight")
+	}
+	for _, command := range preflight {
+		if key := commandKey(command.args); key != "version" && key != "status" {
+			t.Fatalf("PrepareNudge() command = %v, want only version/status preflight", command.args)
+		}
+	}
+	if err := prompt(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.fake.commands[preparedCommands:]; len(got) != 1 ||
+		!slices.Equal(got[0].args, []string{"agent", "prompt", target.Ref.Pane, "nudge"}) {
+		t.Fatalf("commands after final gate = %v, want one agent prompt", got)
+	}
 }
 
 func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
@@ -932,6 +993,8 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 			return []byte("current viewport\n"), nil
 		case slices.Equal(args, []string{"agent", "prompt", "w2:p1", "hello"}):
 			return agentPromptResponse(target, nil), nil
+		case slices.Equal(args, []string{"agent", "prompt", "w2:p1", "nudge"}):
+			return agentPromptResponse(target, nil), nil
 		case slices.Equal(args, []string{"agent", "focus", target.Ref.Pane}):
 			h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
 				for i := range *snapshot.Panes {
@@ -968,6 +1031,13 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 		t.Fatalf("ReadOwnedPane(visible) = %q, %v", content, err)
 	}
 	if err := bound.SendLine(target.Ref, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	nudgeTarget := NudgeTarget{
+		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
+		TerminalID: target.TerminalID, AgentID: target.AgentID, AgentSession: target.AgentSession,
+	}
+	if err := h.session.Nudge(context.Background(), nudgeTarget, "nudge"); err != nil {
 		t.Fatal(err)
 	}
 	if err := bound.Focus(target.Ref); err != nil {

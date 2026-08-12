@@ -1,11 +1,14 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 )
@@ -20,6 +23,21 @@ func TestLoadMissingReturnsEmptyStore(t *testing.T) {
 	}
 	if len(got.Panes) != 0 {
 		t.Fatalf("panes = %d, want 0", len(got.Panes))
+	}
+}
+
+func TestLockContextStopsWaitingAtDeadline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".fanout", "state.json")
+	locked, err := Lock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := LockContext(ctx, path); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("LockContext() error = %v, want context deadline", err)
 	}
 }
 

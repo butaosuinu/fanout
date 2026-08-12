@@ -204,7 +204,7 @@ Inside a pane, use:
 - `fanout msg nudge <N>`
 
 Use task IDs instead of issue numbers for a `fanout plan --team` parent. Send
-and post persist messages; `nudge` is a separate best-effort tmux hint. It may
+and post persist messages; `nudge` is a separate best-effort recorded-runtime hint. It may
 target agent states `running`, `working`, `plan`, or `idle`, but never
 `blocked`, `done`, or an unknown state. A skipped nudge remains success because
 the stored message is authoritative.

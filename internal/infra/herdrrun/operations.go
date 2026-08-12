@@ -33,6 +33,21 @@ type OwnedPaneIdentity struct {
 	AgentSession   *corebackend.AgentSessionRef
 }
 
+// NudgeTarget binds one no-wait agent prompt to the route, pane, terminal,
+// agent, and provider session that the caller revalidated.
+type NudgeTarget struct {
+	Ref          corebackend.PaneRef
+	SessionID    string
+	SocketPath   string
+	TerminalID   string
+	AgentID      string
+	AgentSession *corebackend.AgentSessionRef
+}
+
+// NudgePrompt is one fully preflighted no-wait agent prompt. Callers issue it
+// at most once after their final cooperative-state gate.
+type NudgePrompt func(context.Context) error
+
 type OwnedCloseRequest struct {
 	Target                 OwnedPaneIdentity
 	WorktreeOwnershipNonce string
@@ -209,6 +224,82 @@ func (b *Backend) sendLineOwned(ctx context.Context, target OwnedPaneIdentity, l
 	return nil
 }
 
+// PrepareNudge completes the owned-route preflight before the caller's final
+// cooperative-state gate. The returned function issues only agent prompt.
+func (s *OwnedSession) PrepareNudge(ctx context.Context, target NudgeTarget, line string) (NudgePrompt, error) {
+	if err := validateNudgeRequest(s, line); err != nil {
+		return nil, err
+	}
+	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockPrivateFile(lock)
+	if !validNudgeTarget(target, admission) {
+		return nil, fmt.Errorf("%w: saved nudge target is incomplete or belongs to a foreign route", ErrOwnedIdentityMismatch)
+	}
+	target.AgentSession = cloneAgentSession(target.AgentSession)
+	probed, err := s.backend.probeOwned(ctx, admission)
+	if err != nil {
+		return nil, err
+	}
+	return func(promptCtx context.Context) error {
+		return s.backend.runNudgePrompt(promptCtx, probed, target, line)
+	}, nil
+}
+
+// Nudge preserves the direct infra entrypoint for callers that do not have a
+// separate cooperative-state gate.
+func (s *OwnedSession) Nudge(ctx context.Context, target NudgeTarget, line string) error {
+	prompt, err := s.PrepareNudge(ctx, target, line)
+	if err != nil {
+		return err
+	}
+	return prompt(ctx)
+}
+
+func validateNudgeRequest(session *OwnedSession, line string) error {
+	if session == nil || session.backend == nil {
+		return fmt.Errorf("herdr owned session is nil")
+	}
+	if strings.ContainsAny(line, "\x00\r\n") {
+		return fmt.Errorf("herdr nudge contains a NUL, CR, or LF byte")
+	}
+	return nil
+}
+
+func (b *Backend) runNudgePrompt(ctx context.Context, probed probeResult, target NudgeTarget, line string) error {
+	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route,
+		"agent", "prompt", target.Ref.Pane, line)
+	if err != nil {
+		return methodUnavailable("agent.prompt")
+	}
+	identity := OwnedPaneIdentity{
+		Ref: target.Ref, TerminalID: target.TerminalID, AgentID: target.AgentID,
+		AgentSession: cloneAgentSession(target.AgentSession),
+	}
+	if validateAgentPromptResponse(out, identity) != nil {
+		return methodUnavailable("agent.prompt")
+	}
+	return nil
+}
+
+func validNudgeTarget(target NudgeTarget, admission ownedAdmission) bool {
+	checks := []bool{
+		target.Ref.Backend == corebackend.Herdr,
+		target.SessionID == admission.marker.Session,
+		target.SocketPath == admission.marker.SocketPath,
+		target.Ref.Workspace != "", target.Ref.Pane != "",
+		target.TerminalID != "", target.AgentID != "",
+	}
+	for _, ok := range checks {
+		if !ok {
+			return false
+		}
+	}
+	return target.AgentSession == nil || target.AgentSession.Valid()
+}
+
 func validateAgentPromptResponse(data []byte, target OwnedPaneIdentity) error {
 	var envelope agentPromptEnvelope
 	if err := decodeOne(data, &envelope); err != nil {
@@ -229,12 +320,23 @@ func validateAgentPromptResponse(data []byte, target OwnedPaneIdentity) error {
 	if agentID != target.AgentID {
 		return fmt.Errorf("%w: prompted agent name changed", ErrOwnedIdentityMismatch)
 	}
-	ref, present, err := parseAgentSession(agent.AgentSession)
-	if err != nil || !present || target.AgentSession == nil ||
-		ref != (agentSessionKey{source: target.AgentSession.Source, agent: target.AgentSession.Agent, kind: target.AgentSession.Kind, value: target.AgentSession.Value}) {
+	if !agentPromptSessionMatches(agent.AgentSession, target.AgentSession) {
 		return fmt.Errorf("%w: prompted agent session changed", ErrOwnedIdentityMismatch)
 	}
 	return nil
+}
+
+func agentPromptSessionMatches(current *agentSessionJSON, expected *corebackend.AgentSessionRef) bool {
+	ref, present, err := parseAgentSession(current)
+	if err != nil {
+		return false
+	}
+	if expected == nil {
+		return !present
+	}
+	return present && ref == (agentSessionKey{
+		source: expected.Source, agent: expected.Agent, kind: expected.Kind, value: expected.Value,
+	})
 }
 
 func (b *Backend) focusCore(ref corebackend.PaneRef) error {
