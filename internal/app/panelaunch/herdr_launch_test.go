@@ -349,7 +349,7 @@ func TestFinalizeHerdrAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", binDir)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	locked, err := state.LockProjectForLaunch(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -370,6 +370,15 @@ func TestFinalizeHerdrAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
 	}
 	if intent.Parent != ManualParentRef || intent.ID == shared.ID {
 		t.Fatalf("attached workspace reused shared coordinator: %+v", intent)
+	}
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := journal.ProvisionalBindings(repo)
+	if intent.RuntimeParent != shared.RuntimeParent || len(bindings) != 2 ||
+		bindings[0].Parent != shared.RuntimeParent || bindings[1].Parent != shared.RuntimeParent {
+		t.Fatalf("attached workspace provisional binding = (%+v, %+v)", intent, bindings)
 	}
 	live := testHerdrIdlePane(intent)
 	live.AgentPresent, live.AgentProvider, live.AgentID = true, "claude", intent.Launch.AgentName

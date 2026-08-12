@@ -62,6 +62,13 @@ func TestEmitUpdatesOnlyFinalRowTelemetry(t *testing.T) {
 	if len(observer.targets) != 1 || observer.targets[0].PaneID != pane.PaneID {
 		t.Fatalf("observer targets = %+v", observer.targets)
 	}
+	wantGitCommonDir, err := filepath.EvalSymlinks(filepath.Join(repo, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observer.targets[0].GitCommonDir != wantGitCommonDir {
+		t.Fatalf("observer Git common dir = %q, want %q", observer.targets[0].GitCommonDir, wantGitCommonDir)
+	}
 }
 
 func TestEmitUpdatesCodexPlanRowThroughExactControllerProcess(t *testing.T) {
@@ -494,6 +501,10 @@ func TestEmitPendingIntentRejectsExpiredLaunchWithoutMutation(t *testing.T) {
 
 func finalEmitterFixture(t *testing.T, repo string) (state.Pane, telemetry.Signal, *fakeObserver) {
 	t.Helper()
+	repoKey, err := filepath.EvalSymlinks(filepath.Join(repo, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	worktree := filepath.Join(repo, ".fanout", "worktrees", "telemetry")
 	if err := os.MkdirAll(worktree, 0o755); err != nil {
 		t.Fatal(err)
@@ -504,7 +515,7 @@ func finalEmitterFixture(t *testing.T, repo string) (state.Pane, telemetry.Signa
 		WorktreePath: worktree, AgentStatus: "running", ReportedState: "running",
 		HerdrWorkspaceID: "workspace-1", HerdrWorkspaceLabel: "owned-label-1",
 		HerdrTerminalID: "terminal-1",
-		HerdrRepoKey:    filepath.Join(repo, ".git"), HerdrAgentID: "fanout-agent",
+		HerdrRepoKey:    repoKey, HerdrAgentID: "fanout-agent",
 		HerdrSession: "fanout-owned", HerdrSocketPath: "/tmp/fanout-owned/herdr.sock",
 		EmitterRowKey: "issue:3:524:529", LaunchNonce: strings.Repeat("a", 32),
 		EmitterNonce: strings.Repeat("b", 32), HerdrLaunchExecutable: "/opt/bin/claude",
@@ -566,7 +577,7 @@ func genericPendingEmitterFixture(t *testing.T, repo string) (state.HerdrIntent,
 	t.Helper()
 	intent, signal, observer := pendingEmitterFixture(t, repo)
 	intent.ID, _ = state.HerdrCoordinatorIntentID("@manual", repo, -1)
-	intent.Kind, intent.Parent, intent.RuntimeParent, intent.IssueNum = state.HerdrIntentCoordinator, "@manual", "@manual", -1
+	intent.Kind, intent.Parent, intent.RuntimeParent, intent.IssueNum = state.HerdrIntentCoordinator, "@manual", "524", -1
 	intent.OwnerProjectRoot = repo
 	intent.Slug, intent.BranchName, intent.FullBranchRef = "", "", ""
 	intent.BaseBranch, intent.BaseSHA, intent.ExpectedHead = "", "", ""

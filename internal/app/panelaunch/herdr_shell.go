@@ -31,7 +31,7 @@ func (l *Launcher) shellHerdr(
 	}
 	intent, err := realizeHerdrInteractive(
 		ctx, l.Herdr, locked, route,
-		manualHerdrCoordinatorRequest(l.Info.ProjectRoot, targetPath, route, number),
+		manualHerdrCoordinatorRequest(l.Info.ProjectRoot, targetPath, route, "", number),
 		func(state.HerdrIntent) (*state.HerdrLaunch, error) {
 			return l.newManualHerdrShellLaunch(route)
 		},

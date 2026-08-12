@@ -21,6 +21,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 const emitterTimeout = telemetry.EmitterTimeoutSeconds * time.Second
@@ -34,6 +35,7 @@ type RuntimeTarget struct {
 	Session              string
 	SocketPath           string
 	RepoKey              string
+	GitCommonDir         string
 	WorkspaceID          string
 	WorkspaceLabel       string
 	PaneID               string
@@ -105,7 +107,7 @@ func Emit(ctx context.Context, signal telemetry.Signal, observer Observer) (err 
 		return err
 	}
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
-	return applyObservedSignal(locked, projectRoot, signal, observation)
+	return applyObservedSignal(locked, projectRoot, target.GitCommonDir, signal, observation)
 }
 
 func loadRuntimeTarget(
@@ -113,17 +115,22 @@ func loadRuntimeTarget(
 	projectRoot string,
 	signal telemetry.Signal,
 ) (target RuntimeTarget, err error) {
+	owner, err := worktree.ResolveRepoIdentity(ctx, projectRoot)
+	if err != nil {
+		return RuntimeTarget{}, err
+	}
 	locked, err := state.LockProjectForLaunchContext(ctx, projectRoot)
 	if err != nil {
 		return RuntimeTarget{}, err
 	}
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
-	return runtimeTargetForSignal(locked, projectRoot, signal)
+	return runtimeTargetForSignal(locked, projectRoot, owner.RepoKey, signal)
 }
 
 func runtimeTargetForSignal(
 	locked *state.LockedStore,
 	projectRoot string,
+	gitCommonDir string,
 	signal telemetry.Signal,
 ) (RuntimeTarget, error) {
 	row, err := uniqueFinalRow(locked.Panes, signal.RowKey)
@@ -131,7 +138,7 @@ func runtimeTargetForSignal(
 		return RuntimeTarget{}, err
 	}
 	if row >= 0 {
-		return finalRuntimeTarget(locked.Panes[row], signal)
+		return finalRuntimeTarget(locked.Panes[row], gitCommonDir, signal)
 	}
 	journal, err := locked.HerdrIntents(projectRoot)
 	if err != nil {
@@ -141,12 +148,13 @@ func runtimeTargetForSignal(
 	if !found {
 		return RuntimeTarget{}, fmt.Errorf("no final row or provisional intent matches emitter row key")
 	}
-	return pendingRuntimeTarget(intent, signal)
+	return pendingRuntimeTarget(intent, gitCommonDir, signal)
 }
 
 func applyObservedSignal(
 	locked *state.LockedStore,
 	projectRoot string,
+	gitCommonDir string,
 	signal telemetry.Signal,
 	observation Observation,
 ) error {
@@ -155,9 +163,9 @@ func applyObservedSignal(
 		return err
 	}
 	if row >= 0 {
-		return updateFinalRow(locked, row, signal, observation)
+		return updateFinalRow(locked, row, gitCommonDir, signal, observation)
 	}
-	return updatePendingIntent(locked, projectRoot, signal, observation)
+	return updatePendingIntent(locked, projectRoot, gitCommonDir, signal, observation)
 }
 
 func projectRootForStatePath(path string) (string, error) {
@@ -185,10 +193,11 @@ func uniqueFinalRow(panes []state.Pane, rowKey string) (int, error) {
 func updateFinalRow(
 	locked *state.LockedStore,
 	index int,
+	gitCommonDir string,
 	signal telemetry.Signal,
 	observation Observation,
 ) error {
-	target, err := finalRuntimeTarget(locked.Panes[index], signal)
+	target, err := finalRuntimeTarget(locked.Panes[index], gitCommonDir, signal)
 	if err != nil {
 		return err
 	}
@@ -244,6 +253,7 @@ func newEmitterNonce() (string, error) {
 func updatePendingIntent(
 	locked *state.LockedStore,
 	projectRoot string,
+	gitCommonDir string,
 	signal telemetry.Signal,
 	observation Observation,
 ) error {
@@ -255,7 +265,7 @@ func updatePendingIntent(
 	if !found {
 		return fmt.Errorf("no final row or provisional intent matches emitter row key")
 	}
-	target, err := pendingRuntimeTarget(intent, signal)
+	target, err := pendingRuntimeTarget(intent, gitCommonDir, signal)
 	if err != nil {
 		return err
 	}
@@ -282,7 +292,7 @@ func nextReportedState(current, next string) string {
 	return next
 }
 
-func finalRuntimeTarget(pane state.Pane, signal telemetry.Signal) (RuntimeTarget, error) {
+func finalRuntimeTarget(pane state.Pane, gitCommonDir string, signal telemetry.Signal) (RuntimeTarget, error) {
 	identity := []bool{
 		signal.Backend == backend.Herdr,
 		pane.Backend == backend.Herdr,
@@ -302,7 +312,7 @@ func finalRuntimeTarget(pane state.Pane, signal telemetry.Signal) (RuntimeTarget
 	}
 	return RuntimeTarget{
 		Backend: backend.Herdr, Session: pane.HerdrSession,
-		SocketPath: pane.HerdrSocketPath, RepoKey: pane.HerdrRepoKey,
+		SocketPath: pane.HerdrSocketPath, RepoKey: pane.HerdrRepoKey, GitCommonDir: gitCommonDir,
 		WorkspaceID: pane.HerdrWorkspaceID, WorkspaceLabel: pane.HerdrWorkspaceLabel,
 		PaneID:     pane.PaneID,
 		TerminalID: pane.HerdrTerminalID, Agent: pane.Agent,
@@ -314,7 +324,11 @@ func finalRuntimeTarget(pane state.Pane, signal telemetry.Signal) (RuntimeTarget
 	}, nil
 }
 
-func pendingRuntimeTarget(intent state.HerdrIntent, signal telemetry.Signal) (RuntimeTarget, error) {
+func pendingRuntimeTarget(
+	intent state.HerdrIntent,
+	gitCommonDir string,
+	signal telemetry.Signal,
+) (RuntimeTarget, error) {
 	launch := intent.Launch
 	generic := intent.Kind == state.HerdrIntentCoordinator && intent.Resource.RepoKey == ""
 	if intent.Status != state.HerdrIntentRealized || launch == nil ||
@@ -329,7 +343,7 @@ func pendingRuntimeTarget(intent state.HerdrIntent, signal telemetry.Signal) (Ru
 	}
 	return RuntimeTarget{
 		Backend: backend.Herdr, Session: intent.Session,
-		SocketPath: intent.SocketPath, RepoKey: intent.Resource.RepoKey,
+		SocketPath: intent.SocketPath, RepoKey: intent.Resource.RepoKey, GitCommonDir: gitCommonDir,
 		WorkspaceID: intent.Resource.WorkspaceID, WorkspaceLabel: intent.Resource.Label,
 		PaneID:     intent.Resource.PaneID,
 		TerminalID: intent.Resource.TerminalID, Agent: launch.Agent,
@@ -451,12 +465,12 @@ func validateRuntimeTarget(target RuntimeTarget) error {
 	if slices.ContainsFunc(identity, invalidIdentityValue) {
 		return fmt.Errorf("persisted telemetry runtime identity is incomplete")
 	}
-	paths := []string{target.SocketPath, target.WorktreePath, target.Executable}
+	paths := []string{target.SocketPath, target.GitCommonDir, target.WorktreePath, target.Executable}
 	if slices.ContainsFunc(paths, invalidCanonicalPath) {
 		return fmt.Errorf("persisted telemetry path identity is invalid")
 	}
 	if target.GenericWorkspace != (target.RepoKey == "") ||
-		target.RepoKey != "" && invalidCanonicalPath(target.RepoKey) {
+		target.RepoKey != "" && (invalidCanonicalPath(target.RepoKey) || target.RepoKey != target.GitCommonDir) {
 		return fmt.Errorf("persisted telemetry repository identity is invalid")
 	}
 	if target.Backend != backend.Herdr || !validTelemetryAgent(target) || invalidAgentSession(target) {

@@ -54,7 +54,9 @@ func (l *Launcher) prepareHerdrAttachedIntent(
 	}
 	return realizeHerdrInteractive(
 		ctx, l.Herdr, locked, route,
-		manualHerdrCoordinatorRequest(l.Info.ProjectRoot, targetPath, route, req.Number), build,
+		manualHerdrCoordinatorRequest(
+			l.Info.ProjectRoot, targetPath, route, req.RuntimeParent, req.Number,
+		), build,
 	)
 }
 
@@ -87,10 +89,11 @@ func herdrAttachedStatePane(req Request, intent state.HerdrIntent, live backend.
 func manualHerdrCoordinatorRequest(
 	projectRoot, targetPath string,
 	route herdrrun.OwnedLaunchRoute,
+	runtimeParent string,
 	number int,
 ) HerdrCoordinatorRequest {
 	return HerdrCoordinatorRequest{
-		Parent: ManualParentRef, IssueNum: number,
+		Parent: ManualParentRef, RuntimeParent: runtimeParent, IssueNum: number,
 		ProjectRoot: projectRoot, SourceRoot: targetPath, CWD: targetPath,
 		HerdrSession: route.Session, SocketPath: route.SocketPath,
 	}

@@ -460,7 +460,7 @@ func validateHerdrIntentIdentity(intent HerdrIntent) error {
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("herdr intent %q is incomplete", intent.ID)
 	}
-	if err := validateHerdrRuntimeParent(parent, runtimeParent); err != nil {
+	if err := validateHerdrRuntimeParent(intent, parent, runtimeParent); err != nil {
 		return fmt.Errorf("herdr intent %s: %w", intent.ID, err)
 	}
 	ownerProjectRoot, ownerErr := HerdrOwnerProjectRoot(parent, intent.OwnerProjectRoot)
@@ -669,15 +669,31 @@ func cleanAbsolute(path string) bool {
 	return filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.ContainsRune(path, '\x00')
 }
 
-func validateHerdrRuntimeParent(parent, runtimeParent string) error {
+func validateHerdrRuntimeParent(intent HerdrIntent, parent, runtimeParent string) error {
 	switch {
 	case strings.HasPrefix(runtimeParent, "plan:") && runtimeParent != parent:
+		if validGenericHerdrRuntimeParent(intent, parent, runtimeParent) {
+			return nil
+		}
 		return fmt.Errorf("runtime parent does not match plan parent")
 	case !strings.HasPrefix(parent, "plan:") && runtimeParent != parent:
+		if validGenericHerdrRuntimeParent(intent, parent, runtimeParent) {
+			return nil
+		}
 		return fmt.Errorf("runtime parent does not match parent")
 	default:
 		return nil
 	}
+}
+
+func validGenericHerdrRuntimeParent(intent HerdrIntent, parent, runtimeParent string) bool {
+	if intent.Kind != HerdrIntentCoordinator || parent != "@manual" || intent.IssueNum >= 0 {
+		return false
+	}
+	_, ok := herdrBindingParent(
+		runtimeParent, intent.IssueNum, intent.OwnerProjectRoot, intent.OwnerProjectRoot,
+	)
+	return ok
 }
 
 func reserveHerdrIntentIdentity(
