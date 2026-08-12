@@ -916,6 +916,9 @@ func TestPRsForBranchDetailMapsGraphQLNodes(t *testing.T) {
 		".data.repository.pullRequests.nodes // []",
 		"states: [OPEN, CLOSED, MERGED]",
 		"orderBy: {field: CREATED_AT, direction: DESC}",
+		// `gh pr list` の既定 30 件と一致させる。広げると PrimaryPR の
+		// 「MERGED 優先」と噛み合って古い merged PR が primary を奪う。
+		"first: 30",
 	} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("PRsForBranchDetail() args missing %q:\n%s", want, args)

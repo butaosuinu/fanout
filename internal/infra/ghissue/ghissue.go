@@ -607,15 +607,18 @@ const issuePRsPageQuery = `
     }
   `
 
-// branchPRsQuery looks PRs up by head branch. states + orderBy reproduce
-// `gh pr list --state all`, whose default order is newest-first: PrimaryPR
-// picks "first MERGED, else first", so the order is part of the contract.
-// first: 100 is a superset of gh's default 30.
+// branchPRsQuery looks PRs up by head branch. states + orderBy + first
+// reproduce `gh pr list --state all`, whose default order is newest-first and
+// whose default limit is 30. All three are part of the contract, the limit
+// included: PrimaryPR picks "first MERGED, else first", so widening the window
+// is not a superset — it lets an older merged PR outrank the current open one
+// on a branch with more than 30 PRs, which would flip the row's state, its CI,
+// HasMergedPR, and the session rollup.
 const branchPRsQuery = `
     query($owner: String!, $repo: String!, $branch: String!) {
       repository(owner: $owner, name: $repo) {
         pullRequests(headRefName: $branch, states: [OPEN, CLOSED, MERGED],
-                     first: 100, orderBy: {field: CREATED_AT, direction: DESC}) {
+                     first: 30, orderBy: {field: CREATED_AT, direction: DESC}) {
           nodes {` + prRefNodeFields + `}
         }
       }
