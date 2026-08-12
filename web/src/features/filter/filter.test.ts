@@ -166,12 +166,19 @@ describe("matches", () => {
     expect(matches(makePane({ prs: draft }), q("pr:draft"))).toBe(true);
   });
 
-  it("自由語 conflict は conflict タグの出ている行に当たる", () => {
+  it("行に出ている PR タグは自由語で引ける", () => {
     const conflicting = [{ number: 1, state: "OPEN", mergedAt: null, mergeable: "CONFLICTING" }];
     const clean = [{ number: 2, state: "OPEN", mergedAt: null, mergeable: "MERGEABLE" }];
     expect(matches(makePane({ prs: conflicting }), q("conflict"))).toBe(true);
     expect(matches(makePane({ prs: clean }), q("conflict"))).toBe(false);
     expect(matches(makePane({ prs: null }), q("conflict"))).toBe(false);
+    // ピルが merged に潰しても approved は行に出ているので引けること
+    const mergedApproved = [
+      { number: 3, state: "MERGED", mergedAt: "2026-06-01T00:00:00Z", reviewDecision: "APPROVED" },
+    ];
+    expect(matches(makePane({ prs: mergedApproved }), q("approved"))).toBe(true);
+    // "none" は haystack に入れない — 入れると全行に当たる
+    expect(matches(makePane({ prs: clean }), q("none"))).toBe(false);
   });
 
   it("review: は primary PR の reviewDecision、無ければ none", () => {

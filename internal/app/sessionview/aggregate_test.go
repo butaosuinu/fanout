@@ -456,9 +456,11 @@ func TestBuildAddsDerivedDisplayFilterAndSortFields(t *testing.T) {
 	}
 }
 
-// TestConflictFilterText pins that the rendered `conflict` badge is reachable
-// by free-text search, like every other visible tag.
-func TestConflictFilterText(t *testing.T) {
+// TestPRBadgeFilterText pins that every PR badge the row renders is reachable
+// by free-text search, like the other visible tags. The merged+APPROVED case is
+// the one that matters: the pill collapses to "merged", so "approved" is only
+// visible as a badge and would otherwise be unsearchable.
+func TestPRBadgeFilterText(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		prs  []ghissue.PRRef
@@ -466,13 +468,16 @@ func TestConflictFilterText(t *testing.T) {
 	}{
 		{name: "conflicting primary", prs: []ghissue.PRRef{{Number: 1, State: "OPEN", Mergeable: "CONFLICTING"}}, want: "conflict"},
 		{name: "mergeable primary", prs: []ghissue.PRRef{{Number: 1, State: "OPEN", Mergeable: "MERGEABLE"}}, want: ""},
-		// merged PRs always report UNKNOWN, which normalizes to ""
-		{name: "merged primary", prs: []ghissue.PRRef{{Number: 1, State: "MERGED"}}, want: ""},
+		{name: "merged approved keeps the decision searchable", prs: []ghissue.PRRef{{Number: 1, State: "MERGED", ReviewDecision: "APPROVED"}}, want: "approved"},
+		{name: "hyphenates changes requested", prs: []ghissue.PRRef{{Number: 1, State: "CLOSED", ReviewDecision: "CHANGES_REQUESTED"}}, want: "changes-requested"},
+		{name: "decision and conflict together", prs: []ghissue.PRRef{{Number: 1, State: "OPEN", ReviewDecision: "APPROVED", Mergeable: "CONFLICTING"}}, want: "approved conflict"},
+		// "none" must not reach the haystack — it would match every row
+		{name: "no decision and no conflict", prs: []ghissue.PRRef{{Number: 1, State: "MERGED"}}, want: ""},
 		{name: "no prs", prs: nil, want: ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := conflictFilterText(tt.prs); got != tt.want {
-				t.Fatalf("conflictFilterText() = %q, want %q", got, tt.want)
+			if got := prBadgeFilterText(tt.prs); got != tt.want {
+				t.Fatalf("prBadgeFilterText() = %q, want %q", got, tt.want)
 			}
 		})
 	}

@@ -968,7 +968,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 		pv.DiffSummary,
 		pv.DirtyState,
 		pv.WorktreeErr,
-		conflictFilterText(pv.PRs),
+		prBadgeFilterText(pv.PRs),
 		pv.Agent,
 		pv.WaveLabel,
 		waveBadge,
@@ -1042,16 +1042,25 @@ func paneFilterValues(pv PaneView, runtimeState, backendName, ci, dependencyWave
 	return values
 }
 
-// conflictFilterText makes the row's rendered `conflict` badge findable by
-// free-text search, the way every other visible tag (draft, merged, ci fail,
-// dirty, W2 blocked) already is. The comment count is deliberately left out: a
-// bare number in the haystack would collide with issue numbers and diff counts.
-func conflictFilterText(prs []ghissue.PRRef) string {
+// prBadgeFilterText makes the row's rendered PR badges findable by free-text
+// search, the way every other visible tag (draft, merged, ci fail, dirty,
+// W2 blocked) already is: the review decision — which the pill hides whenever
+// it collapses to merged/closed/draft — and the conflict marker. The comment
+// count is deliberately left out: a bare number in the haystack would collide
+// with issue numbers and diff counts.
+func prBadgeFilterText(prs []ghissue.PRRef) string {
 	pr, ok := ghissue.PrimaryPR(prs)
-	if !ok || !pr.HasConflict() {
+	if !ok {
 		return ""
 	}
-	return "conflict"
+	words := make([]string, 0, 2)
+	if decision := reviewFilterValue(prs); decision != "none" {
+		words = append(words, decision)
+	}
+	if pr.HasConflict() {
+		words = append(words, "conflict")
+	}
+	return strings.Join(words, " ")
 }
 
 // reviewFilterValue is the `review:` vocabulary: the primary PR's review

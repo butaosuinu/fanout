@@ -127,18 +127,24 @@ function haystack(p: PaneView): string {
       p.agentState,
       fmtWave(p),
       fmtBlockers(p),
-      conflictWord(p),
+      prBadgeWords(p),
     ]
       .join(" ")
       .toLowerCase()
   );
 }
 
-/* 行に出ている conflict タグを自由語検索から引けるようにする(他のタグは全部
- * 引ける)。コメント件数は入れない — 裸の数値は issue 番号や diff 行数と衝突する。 */
-function conflictWord(p: PaneView): string {
+/* sessionview.prBadgeFilterText のミラー。行に出ている PR タグ(ピルが merged /
+ * closed / draft に潰したときのレビュー状態と、conflict)を自由語検索から引ける
+ * ようにする — 他の可視タグは全部引ける。コメント件数は入れない: 裸の数値は
+ * issue 番号や diff 行数と衝突する。 */
+function prBadgeWords(p: PaneView): string {
   const pr = prPrimary(p.prs);
-  return pr && prHasConflict(pr) ? "conflict" : "";
+  if (!pr) return "";
+  const decision = prReviewValue(pr);
+  return [decision === "none" ? "" : decision, prHasConflict(pr) ? "conflict" : ""]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /* 全 term の AND。述語を持たないキー(手組みの Term)は制約なしとして通す。 */
