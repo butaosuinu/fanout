@@ -327,7 +327,19 @@ func verifyHerdrConsoleRoute(
 	if err := owned.VerifyOwned(ctx); err != nil {
 		return herdrrun.OwnedLaunchRoute{}, err
 	}
-	return owned.LaunchRoute()
+	route, err := owned.LaunchRoute()
+	if err != nil {
+		return herdrrun.OwnedLaunchRoute{}, err
+	}
+	if route.LauncherPath == "" || route.EmitterPath == "" {
+		return herdrrun.OwnedLaunchRoute{}, fmt.Errorf("owned Herdr launch route is incomplete")
+	}
+	if route.LauncherPath != route.EmitterPath {
+		return herdrrun.OwnedLaunchRoute{}, fmt.Errorf(
+			"owned Herdr launcher predates the current fanout; restart is required before interactive launch",
+		)
+	}
+	return route, nil
 }
 
 func newHerdrShellLaunch(

@@ -51,7 +51,21 @@ func (retryableHerdrObservationError) RetryableObservation() bool { return true 
 
 func (f *fakeHerdrLaunchRuntime) VerifyOwned(context.Context) error { return nil }
 func (f *fakeHerdrLaunchRuntime) LaunchRoute() (herdrrun.OwnedLaunchRoute, error) {
-	return f.launchRoute, nil
+	route := f.launchRoute
+	if route.EmitterPath == "" {
+		route.EmitterPath = route.LauncherPath
+	}
+	return route, nil
+}
+
+func TestVerifyHerdrConsoleRouteRejectsOutdatedLauncher(t *testing.T) {
+	runtime := &fakeHerdrLaunchRuntime{launchRoute: herdrrun.OwnedLaunchRoute{
+		LauncherPath: "/owned/old-fanout", EmitterPath: "/owned/current-fanout",
+	}}
+	if _, err := verifyHerdrConsoleRoute(context.Background(), runtime); err == nil ||
+		!strings.Contains(err.Error(), "restart is required") {
+		t.Fatalf("verifyHerdrConsoleRoute() error = %v, want immediate restart requirement", err)
+	}
 }
 
 func (f *fakeHerdrLaunchRuntime) PrepareWorkloadEnvironment(string, []string) (string, int, error) {
