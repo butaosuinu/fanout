@@ -25,7 +25,7 @@ msgstr "Resize the diff panel"
 msgid "wave で絞り込み"
 msgstr "Filter by wave"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffBody.tsx
 msgid "merge-base からの変更はありません"
 msgstr "No changes since the merge-base"
 
@@ -378,7 +378,7 @@ msgstr "Renamed"
 msgid "集計"
 msgstr "Summary"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffBody.tsx
 msgid "patch のあるファイルはすべて確認済みです"
 msgstr "Every file with a patch is viewed"
 

@@ -25,7 +25,7 @@ msgstr "diff パネルの幅を変更"
 msgid "wave で絞り込み"
 msgstr "wave で絞り込み"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffBody.tsx
 msgid "merge-base からの変更はありません"
 msgstr "merge-base からの変更はありません"
 
@@ -378,7 +378,7 @@ msgstr "移動"
 msgid "集計"
 msgstr "集計"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffBody.tsx
 msgid "patch のあるファイルはすべて確認済みです"
 msgstr "patch のあるファイルはすべて確認済みです"
 
