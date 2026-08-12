@@ -3,6 +3,7 @@ import { Virtualizer } from "@pierre/diffs/react";
 import {
   memo,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -218,8 +219,12 @@ export function DiffOverlay({
   const viewable = useMemo(() => indicesForPaths(paths, fingerprints), [paths, fingerprints]);
   /* 隠すのは描画から降ろすだけで、plan の index は詰めない(DiffFiles を参照)。 */
   const hidden = hideViewed ? viewed : NO_INDICES;
+  /* 折りたたみの上書きが効く範囲。patch だけで区切ると、同じ worktree を指す行
+   * (attached-agent など)は patch が一致するので、行を切り替えても前の行の
+   * 上書きが残り、確認済みで復元した file が開いたままになる。 */
+  const collapseScope = `${scopeKey}\n${patch}`;
   const { isCollapsed, onToggle, onExpandAll, onCollapseAll, expand, setCollapsed } =
-    useDiffCollapse(patch, plan, viewed);
+    useDiffCollapse(collapseScope, plan, viewed);
   /* 確認済みの結果としての折りたたみは、上書きを**消す**ことで表す(付ける側も
    * 外す側も)。畳むかどうかは `collapsedAt` が確認済みから導くので、上書きを書く
    * 必要が無い。
@@ -238,6 +243,13 @@ export function DiffOverlay({
     for (const j of byPath.get(path) ?? []) setCollapsed(j, null);
     if (next && hideViewed) refocusAfterHide();
   });
+  /* 行が消える理由はローカル操作だけではない — 別タブが同じ scope でチェックすると
+   * storage 経由でここでも消える。呼び出し点が無いので、隠れる集合が動いたあとに
+   * 焦点が落ちていたら拾い直す。覆っているあいだだけ効かせる(コンパクトで背面を
+   * 触っている人からフォーカスを奪わない)。 */
+  useEffect(() => {
+    if (covering && document.activeElement === document.body) refocusAfterHide();
+  }, [covering, hidden, refocusAfterHide]);
 
   /* auto は本文領域の幅で決め、split / stack はユーザーの明示指定をそのまま使う。
    * ヘッダと本文は縦に積むだけなので、本文領域の幅 = パネルの幅(diffView.ts)。 */

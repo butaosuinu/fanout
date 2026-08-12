@@ -1574,6 +1574,48 @@ describe("diff オーバーレイの確認済み", () => {
     expect(viewedBox(overlay, "a.ts")).not.toBeChecked();
   });
 
+  /* 同じ worktree を指す行同士は patch が一致する。折りたたみの上書きを patch だけで
+     区切ると、前の行で展開した状態が次の行へ持ち越され、確認済みで復元した file が
+     開いたまま出る。 */
+  it("同じ patch の別 session 行へ切り替えても、前の行の展開状態を持ち込まない", async () => {
+    const patch = linesPatch("a.ts", 3, "shared_marker");
+    server.use(
+      http.get("/api/diff", () =>
+        HttpResponse.json(makeDiffResponse({ patch, files: [makeDiffFile({ path: "a.ts" })] })),
+      ),
+    );
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({ issueNum: 101, displayName: "Alpha", diffSummary: "+3/-0" }),
+          makePane({ issueNum: 102, displayName: "Beta", diffSummary: "+3/-0" }),
+        ]),
+      ]),
+    );
+    const user = userEvent.setup();
+
+    // #102 側で確認済みにしておく(= 開き直したら畳まれて出るはず)
+    await user.click(await screen.findByRole("button", { name: /^変更を表示 #102 / }));
+    const overlay = await screen.findByRole("dialog", { name: "worktree diff" });
+    await waitFor(() => expect(shadowText()).toContain("shared_marker"));
+    await user.click(viewedBox(overlay, "a.ts"));
+    await waitFor(() => expect(shadowText()).not.toContain("shared_marker"));
+
+    // #101 へ移って展開の上書きを作る(こちらは未確認なので開いている)
+    await user.click(screen.getByRole("button", { name: /^変更を表示 #101 / }));
+    await waitFor(() => expect(shadowText()).toContain("shared_marker"));
+    await user.click(within(overlay).getByRole("button", { name: /^a\.ts — 折りたたむ$/ }));
+    await waitFor(() => expect(shadowText()).not.toContain("shared_marker"));
+    await user.click(within(overlay).getByRole("button", { name: /^a\.ts — .* — 展開$/ }));
+    await waitFor(() => expect(shadowText()).toContain("shared_marker"));
+
+    // #102 へ戻す。確認済みなので畳まれて出る(#101 の上書きを引きずらない)
+    await user.click(screen.getByRole("button", { name: /^変更を表示 #102 / }));
+    await waitFor(() => expect(viewedBox(overlay, "a.ts")).toBeChecked());
+    expect(shadowText()).not.toContain("shared_marker");
+  });
+
   it("確認済みを隠すと本文と一覧の両方から降ろす", async () => {
     const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
     const overlay = await openOverlay(user);
