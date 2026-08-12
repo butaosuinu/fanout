@@ -1692,6 +1692,25 @@ describe("diff オーバーレイの確認済み", () => {
     expect(within(overlay).queryAllByRole("checkbox")).toHaveLength(0);
   });
 
+  /* 確認済みの折りたたみは上書きではなく導出。上書きを書くと、別タブで外された
+     ときにチェックだけ外れて本文が畳まれたまま残る。 */
+  it("別タブで外されたら、チェックも折りたたみも一緒に戻る", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await waitFor(() => expect(shadowText()).not.toContain("hello_marker"));
+
+    // 別タブが外した体。storage イベントは書いた本人には飛ばないので自前で撒く
+    localStorage.removeItem(VIEWED_KEY);
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: VIEWED_KEY, storageArea: localStorage }),
+    );
+
+    await waitFor(() => expect(viewedBox(overlay, "src/hello.ts")).not.toBeChecked());
+    expect(shadowText()).toContain("hello_marker");
+  });
+
   it("壊れた保存値は無視して、確認済み無しとして開く", async () => {
     localStorage.setItem(VIEWED_KEY, '{"v":1,"t":1,"files":["src/hello.ts"]}');
     const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));

@@ -220,16 +220,22 @@ export function DiffOverlay({
   const hidden = hideViewed ? viewed : NO_INDICES;
   const { isCollapsed, onToggle, onExpandAll, onCollapseAll, expand, setCollapsed } =
     useDiffCollapse(patch, plan, viewed);
-  /* 確認済みにしたら畳む(GitHub と同じ)。明示的に展開済み(override=false)の
-   * file にも効かせたいので上書きを書く。外すときは `false` ではなく上書きの取り消し
-   * — `false` を書くと 1,000 行超で既定折りたたみだった file が全開になる。
+  /* 確認済みの結果としての折りたたみは、上書きを**消す**ことで表す(付ける側も
+   * 外す側も)。畳むかどうかは `collapsedAt` が確認済みから導くので、上書きを書く
+   * 必要が無い。
+   *
+   * `true` を書いてはいけない。上書きは確認済みより優先するので、別タブで外された
+   * ときにチェックだけ外れて本文が畳まれたまま残る。`false` も書けない — 1,000 行超で
+   * 既定折りたたみだった file が、開いたことすら無い状態から全開になる。
+   * 消すだけなら、明示的に展開済み(上書き `false`)の file を確認済みにしたときも
+   * ちゃんと畳まれる。
    * file type change は同 path が 2 entry になるため、path の全 index に及ぼす。 */
   const onToggleViewed = useStableCallback((i: number) => {
     const path = paths[i];
     if (path === undefined) return;
     const next = !viewedPaths.has(path);
     setViewed(path, next);
-    for (const j of byPath.get(path) ?? []) setCollapsed(j, next ? true : null);
+    for (const j of byPath.get(path) ?? []) setCollapsed(j, null);
     if (next && hideViewed) refocusAfterHide();
   });
 
