@@ -444,6 +444,43 @@ func TestOwnedSessionNudgeAllowsUnreportedAgentSession(t *testing.T) {
 	}
 }
 
+func TestPreparedNudgeIssuesOnlyPromptAfterPreparation(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if !slices.Equal(args, []string{"agent", "prompt", target.Ref.Pane, "nudge"}) {
+			return nil, fmt.Errorf("unexpected mutation args %v", args)
+		}
+		return agentPromptResponse(target, nil), nil
+	}
+	nudgeTarget := NudgeTarget{
+		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
+		TerminalID: target.TerminalID, AgentID: target.AgentID, AgentSession: target.AgentSession,
+	}
+	beforePreparation := len(h.fake.commands)
+	prompt, err := h.session.PrepareNudge(context.Background(), nudgeTarget, "nudge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedCommands := len(h.fake.commands)
+	preflight := h.fake.commands[beforePreparation:preparedCommands]
+	if len(preflight) == 0 {
+		t.Fatal("PrepareNudge() issued no ownership preflight")
+	}
+	for _, command := range preflight {
+		if key := commandKey(command.args); key != "version" && key != "status" {
+			t.Fatalf("PrepareNudge() command = %v, want only version/status preflight", command.args)
+		}
+	}
+	if err := prompt(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.fake.commands[preparedCommands:]; len(got) != 1 ||
+		!slices.Equal(got[0].args, []string{"agent", "prompt", target.Ref.Pane, "nudge"}) {
+		t.Fatalf("commands after final gate = %v, want one agent prompt", got)
+	}
+}
+
 func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
 	h := newOwnedHarness(t)
 	first := h.session

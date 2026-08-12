@@ -44,6 +44,10 @@ type NudgeTarget struct {
 	AgentSession *corebackend.AgentSessionRef
 }
 
+// NudgePrompt is one fully preflighted no-wait agent prompt. Callers issue it
+// at most once after their final cooperative-state gate.
+type NudgePrompt func(context.Context) error
+
 type OwnedCloseRequest struct {
 	Target                 OwnedPaneIdentity
 	WorktreeOwnershipNonce string
@@ -220,25 +224,38 @@ func (b *Backend) sendLineOwned(ctx context.Context, target OwnedPaneIdentity, l
 	return nil
 }
 
-// Nudge issues one no-wait agent prompt through the existing owned route. The
-// caller owns the immediately preceding pane, process, and cooperative-state gates.
-func (s *OwnedSession) Nudge(ctx context.Context, target NudgeTarget, line string) error {
+// PrepareNudge completes the owned-route preflight before the caller's final
+// cooperative-state gate. The returned function issues only agent prompt.
+func (s *OwnedSession) PrepareNudge(ctx context.Context, target NudgeTarget, line string) (NudgePrompt, error) {
 	if err := validateNudgeRequest(s, line); err != nil {
-		return err
+		return nil, err
 	}
 	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer unlockPrivateFile(lock)
 	if !validNudgeTarget(target, admission) {
-		return fmt.Errorf("%w: saved nudge target is incomplete or belongs to a foreign route", ErrOwnedIdentityMismatch)
+		return nil, fmt.Errorf("%w: saved nudge target is incomplete or belongs to a foreign route", ErrOwnedIdentityMismatch)
 	}
+	target.AgentSession = cloneAgentSession(target.AgentSession)
 	probed, err := s.backend.probeOwned(ctx, admission)
+	if err != nil {
+		return nil, err
+	}
+	return func(promptCtx context.Context) error {
+		return s.backend.runNudgePrompt(promptCtx, probed, target, line)
+	}, nil
+}
+
+// Nudge preserves the direct infra entrypoint for callers that do not have a
+// separate cooperative-state gate.
+func (s *OwnedSession) Nudge(ctx context.Context, target NudgeTarget, line string) error {
+	prompt, err := s.PrepareNudge(ctx, target, line)
 	if err != nil {
 		return err
 	}
-	return s.backend.runNudgePrompt(ctx, probed, target, line)
+	return prompt(ctx)
 }
 
 func validateNudgeRequest(session *OwnedSession, line string) error {

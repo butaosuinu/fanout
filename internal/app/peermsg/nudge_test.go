@@ -239,6 +239,7 @@ type fakeHerdrNudger struct {
 	panesErr   error
 	beforeLive func()
 	liveCalls  int
+	beforePrep func()
 	process    herdrrun.PaneProcessInfo
 	processErr error
 	nudgeErr   error
@@ -260,10 +261,15 @@ func (f *fakeHerdrNudger) ProcessInfo(context.Context, string) (herdrrun.PanePro
 	return f.process, f.processErr
 }
 
-func (f *fakeHerdrNudger) Nudge(_ context.Context, target herdrrun.NudgeTarget, text string) error {
-	f.nudged, f.target, f.text = true, target, text
-	f.nudgeCalls++
-	return f.nudgeErr
+func (f *fakeHerdrNudger) PrepareNudge(_ context.Context, target herdrrun.NudgeTarget, text string) (herdrrun.NudgePrompt, error) {
+	if f.beforePrep != nil {
+		f.beforePrep()
+	}
+	return func(context.Context) error {
+		f.nudged, f.target, f.text = true, target, text
+		f.nudgeCalls++
+		return f.nudgeErr
+	}, nil
 }
 
 func TestRunMsgNudgeHerdrUsesTheTmuxStateAllowlist(t *testing.T) {
@@ -432,10 +438,10 @@ func TestRunMsgNudgeHerdrRechecksRuntimeAfterStateLockWait(t *testing.T) {
 	}
 }
 
-func TestRunMsgNudgeHerdrRechecksStateAfterRuntimeVerification(t *testing.T) {
+func TestRunMsgNudgeHerdrRechecksStateAfterRuntimePreflight(t *testing.T) {
 	initial, runtime := herdrNudgeFixture("working", true)
 	locked := cloneNudgeStore(initial)
-	runtime.beforeLive = func() { locked.Panes[0].ReportedState = "blocked" }
+	runtime.beforePrep = func() { locked.Panes[0].ReportedState = "blocked" }
 	deps := herdrNudgeDeps(initial, locked, runtime)
 	var out, errb strings.Builder
 	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))

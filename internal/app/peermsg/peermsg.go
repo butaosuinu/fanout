@@ -25,7 +25,7 @@ import (
 type HerdrNudger interface {
 	LivePanes(context.Context) ([]backend.LivePane, error)
 	ProcessInfo(context.Context, string) (herdrrun.PaneProcessInfo, error)
-	Nudge(context.Context, herdrrun.NudgeTarget, string) error
+	PrepareNudge(context.Context, herdrrun.NudgeTarget, string) (herdrrun.NudgePrompt, error)
 }
 
 // Request is the parsed, validated form of a `fanout msg` invocation
@@ -63,8 +63,8 @@ type Deps struct {
 	ListLive func() ([]backend.LivePane, error)
 	SendLine func(backend.PaneRef, string) error
 	// OpenHerdr opens the existing owned Herdr runtime named by the recipient's
-	// saved repo key. ReadLockedState performs the final telemetry re-read under
-	// the owning state lock and call deadline.
+	// saved repo key. ReadLockedState performs the initial and final telemetry
+	// reads under the owning state lock and call deadline.
 	OpenHerdr       func(context.Context, string) (HerdrNudger, error)
 	ReadLockedState func(context.Context, func(state.Store) error) error
 	// LoadState resolves and loads the owner checkout's .fanout/state.json

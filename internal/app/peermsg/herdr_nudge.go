@@ -25,11 +25,11 @@ func deliverHerdrNudge(pane state.Pane, deps Deps) (agentState, reason string, n
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), herdrNudgeTimeout)
 	defer cancel()
-	runtime, latest, latestState, err := prepareHerdrNudge(ctx, pane, deps)
+	prompt, _, latestState, err := prepareHerdrNudge(ctx, pane, deps)
 	if err != nil {
 		return latestState, err.Error(), false
 	}
-	if err := runtime.Nudge(ctx, herdrNudgeTarget(latest), nudgeText); err != nil {
+	if err := prompt(ctx); err != nil {
 		return latestState, fmt.Sprintf("agent prompt failed: %v", err), false
 	}
 	return latestState, "", true
@@ -46,15 +46,15 @@ func herdrNudgeCandidate(pane state.Pane) (string, string, bool) {
 	return observedState, "", true
 }
 
-func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (HerdrNudger, state.Pane, string, error) {
+func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (herdrrun.NudgePrompt, state.Pane, string, error) {
 	if deps.ReadLockedState == nil {
 		return nil, state.Pane{}, "", fmt.Errorf("herdr nudge runtime is unavailable")
 	}
-	runtime, err := openHerdrNudgeRuntime(ctx, deps.OpenHerdr, pane.HerdrRepoKey)
+	latest, latestState, err := recheckHerdrNudgeState(ctx, pane, deps)
 	if err != nil {
-		return nil, state.Pane{}, "", err
+		return nil, latest, latestState, err
 	}
-	latest, latestState, err := revalidateHerdrNudge(ctx, runtime, pane, deps)
+	prompt, err := prepareHerdrPrompt(ctx, latest, deps.OpenHerdr)
 	if err != nil {
 		return nil, latest, latestState, err
 	}
@@ -62,19 +62,25 @@ func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (HerdrNu
 	if err != nil {
 		return nil, final, finalState, err
 	}
-	return runtime, final, finalState, nil
+	return prompt, final, finalState, nil
 }
 
-func revalidateHerdrNudge(ctx context.Context, runtime HerdrNudger, pane state.Pane, deps Deps) (state.Pane, string, error) {
-	latest, latestState, err := recheckHerdrNudgeState(ctx, pane, deps)
+func prepareHerdrPrompt(ctx context.Context, pane state.Pane, open func(context.Context, string) (HerdrNudger, error)) (herdrrun.NudgePrompt, error) {
+	runtime, err := openHerdrNudgeRuntime(ctx, open, pane.HerdrRepoKey)
 	if err != nil {
-		return latest, latestState, err
+		return nil, err
 	}
-	err = verifyHerdrNudgeRuntime(ctx, runtime, latest)
+	if err := verifyHerdrNudgeRuntime(ctx, runtime, pane); err != nil {
+		return nil, err
+	}
+	prompt, err := runtime.PrepareNudge(ctx, herdrNudgeTarget(pane), nudgeText)
 	if err != nil {
-		return latest, latestState, err
+		return nil, fmt.Errorf("prepare agent prompt: %w", err)
 	}
-	return latest, latestState, nil
+	if prompt == nil {
+		return nil, fmt.Errorf("prepare agent prompt: runtime returned no prompt")
+	}
+	return prompt, nil
 }
 
 func openHerdrNudgeRuntime(ctx context.Context, open func(context.Context, string) (HerdrNudger, error), repoKey string) (HerdrNudger, error) {
