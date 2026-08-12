@@ -1455,9 +1455,9 @@ describe("diff オーバーレイ", () => {
 /* 確認済み(GitHub の Viewed 相当)。保存先は localStorage だけ — dashboard の
  * サーバーは GET-only で mutation endpoint を持たない。 */
 describe("diff オーバーレイの確認済み", () => {
-  /* 保存キーは repo で分ける — ポート固定で別リポジトリを開くと rowKey が衝突する。
-     fixture の repo は "octo/fanout"、行は parent 142 の issue 101。 */
-  const VIEWED_KEY = `fanout.diffViewed.${viewedScope("octo/fanout", "142#101")}`;
+  /* 保存キーは projectRoot で分ける — ポート固定で別リポジトリを開くと rowKey が
+     衝突する。fixture の projectRoot は "/tmp/repo"、行は parent 142 の issue 101。 */
+  const VIEWED_KEY = `fanout.diffViewed.${viewedScope("/tmp/repo", "142#101")}`;
 
   /* 「src/hello.ts — 確認済み」のチェック。1 file に 1 個で、名前で引ける */
   const viewedBox = (overlay: HTMLElement, path: string) =>

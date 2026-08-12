@@ -21,11 +21,16 @@ const MAX_FILES = 500;
  * 「隣の子をレビューしている間に前の子の確認済みが消える」が普通に起きる。 */
 const MAX_SCOPES = 50;
 
-/* 保存形。`t` は剪定の順序付けだけに使う。 */
+/* 保存形。`t` は scope の剪定順、`files` の並びは file の剪定順に使う。
+ *
+ * `files` は object にしない。JS は整数に見える key(`"1"`)を挿入順より先に、
+ * 昇順で列挙するので、リポジトリ直下に `1` という file があるだけで並びが崩れる —
+ * いちばん新しいチェックが先頭へ回り、500 件上限の切り捨てで真っ先に落ちる。
+ * 並びに意味を持たせるなら配列で持つ。 */
 interface ViewedRecord {
-  v: 1;
+  v: 2;
   t: number;
-  files: Record<string, string>;
+  files: [path: string, fingerprint: string][];
 }
 
 function viewedStorageKey(scope: string): string {
@@ -34,10 +39,15 @@ function viewedStorageKey(scope: string): string {
 
 /* 保存単位。`rowKey` だけでは足りない — localStorage は origin ごとなので、同じ
  * `--port N` を固定して別のリポジトリの dashboard を順に開くと `142#101` のような
- * rowKey がそのまま衝突する。repo を前置して分ける(未解決なら "" のまま=従来通り)。
- * repo と rowKey はどちらも自由文字列なので、区切りは両方をエンコードしてから。 */
-export function viewedScope(repo: string, rowKey: string): string {
-  return `${encodeURIComponent(repo)}/${encodeURIComponent(rowKey)}`;
+ * rowKey がそのまま衝突する。
+ *
+ * 前置きに使うのは `repo`(owner/name)ではなく `projectRoot`。repo は
+ * `gh repo view` の解決待ちで最初の snapshot が "" を配り、あとから埋まる — その間に
+ * 付けたチェックが別のキーへ書かれて迷子になる。projectRoot はサーバー起動前に
+ * 決まっていて動かず、gh 未ログインでもリポジトリを区別できる。
+ * どちらも自由文字列なので、連結する前に両方をエンコードする。 */
+export function viewedScope(projectRoot: string, rowKey: string): string {
+  return `${encodeURIComponent(projectRoot)}/${encodeURIComponent(rowKey)}`;
 }
 
 /* 購読は 2 系統ある。別タブの書き込み(`storage` イベント)と、自分の書き込み。
@@ -79,7 +89,12 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * `typeof === "number"` を通り、剪定の比較関数が NaN を返して並び順が壊れる。 */
 function isRecordShape(body: unknown): body is ViewedRecord {
   if (!isPlainObject(body)) return false;
-  return body.v === 1 && Number.isFinite(body.t) && isPlainObject(body.files);
+  return body.v === 2 && Number.isFinite(body.t) && Array.isArray(body.files);
+}
+
+/* 2 要素の string 配列だけを採る(要素の中身も敵性入力)。 */
+function isPair(v: unknown): v is [string, string] {
+  return Array.isArray(v) && v.length === 2 && typeof v[0] === "string" && typeof v[1] === "string";
 }
 
 function parseRecord(raw: string | null): ViewedRecord | null {
@@ -92,11 +107,11 @@ function parseRecord(raw: string | null): ViewedRecord | null {
   }
 }
 
-/* string 同士のペアだけを採り、上限で切る。切るのは末尾ではなく先頭側 —
- * Map も JSON object も挿入順を保つので、末尾がいちばん新しいチェックになる。
- * 先頭を落とせば「上限に達した瞬間から新しいチェックが保存されない」を避けられる。 */
-function toFileMap(files: Record<string, string>): Map<string, string> {
-  const pairs = Object.entries(files).filter(([path, fp]) => path !== "" && typeof fp === "string");
+/* 形の合うペアだけを採り、上限で切る。切るのは末尾ではなく先頭側 — 配列の末尾が
+ * いちばん新しいチェックなので、先頭を落とせば「上限に達した瞬間から新しい
+ * チェックが保存されない」を避けられる。 */
+function toFileMap(files: unknown[]): Map<string, string> {
+  const pairs = files.filter(isPair).filter(([path]) => path !== "");
   return new Map(pairs.slice(-MAX_FILES));
 }
 
@@ -131,8 +146,8 @@ export function setViewedPath(scope: string, path: string, fp: string | null) {
 }
 
 function writeRecord(key: string, files: ReadonlyMap<string, string>) {
-  const capped = [...files].slice(-MAX_FILES);
-  const body = JSON.stringify({ v: 1, t: Date.now(), files: Object.fromEntries(capped) });
+  const rec: ViewedRecord = { v: 2, t: Date.now(), files: [...files].slice(-MAX_FILES) };
+  const body = JSON.stringify(rec);
   /* 先に剪定してから書く。逆にすると、quota で書けなかった直後に領域を空けて
    * 終わり(誰も書き直さない)になり、古い scope を捨てただけで終わる。 */
   pruneScopes(key);

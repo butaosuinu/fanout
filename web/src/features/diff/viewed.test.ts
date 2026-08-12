@@ -192,28 +192,32 @@ describe("viewedStore", () => {
   });
 
   it("知らない版の保存値を落とす", () => {
-    const raw = JSON.stringify({ v: 2, t: 1, files: { "a.ts": "fp1" } });
+    const raw = JSON.stringify({ v: 1, t: 1, files: [["a.ts", "fp1"]] });
     localStorage.setItem("fanout.diffViewed.142#101", raw);
     expect(loadViewed("142#101").size).toBe(0);
   });
 
-  it("files が配列の保存値を落とす", () => {
-    localStorage.setItem("fanout.diffViewed.142#101", '{"v":1,"t":1,"files":[]}');
+  it("files が object の保存値を落とす", () => {
+    localStorage.setItem("fanout.diffViewed.142#101", '{"v":2,"t":1,"files":{}}');
     expect(loadViewed("142#101").size).toBe(0);
   });
 
   it("files が null の保存値を落とす", () => {
-    localStorage.setItem("fanout.diffViewed.142#101", '{"v":1,"t":1,"files":null}');
+    localStorage.setItem("fanout.diffViewed.142#101", '{"v":2,"t":1,"files":null}');
     expect(loadViewed("142#101").size).toBe(0);
   });
 
   it("files が文字列の保存値を落とす", () => {
-    localStorage.setItem("fanout.diffViewed.142#101", '{"v":1,"t":1,"files":"a.ts"}');
+    localStorage.setItem("fanout.diffViewed.142#101", '{"v":2,"t":1,"files":"a.ts"}');
     expect(loadViewed("142#101").size).toBe(0);
   });
 
   it("string でない fingerprint の行だけを捨てる", () => {
-    const raw = JSON.stringify({ v: 1, t: 1, files: { "a.ts": "fp1", "b.ts": 7, "c.ts": null } });
+    const raw = JSON.stringify({
+      v: 2,
+      t: 1,
+      files: [["a.ts", "fp1"], ["b.ts", 7], ["c.ts"], "nope"],
+    });
     localStorage.setItem("fanout.diffViewed.142#101", raw);
     expect([...loadViewed("142#101")]).toEqual([["a.ts", "fp1"]]);
   });
@@ -221,7 +225,7 @@ describe("viewedStore", () => {
   it("有限でない t の保存値を落とす", () => {
     /* JSON.parse は 1e999 を Infinity にするので typeof === "number" は通る。
        剪定の比較関数が NaN を返し、並び順が実装依存になるのを防ぐ。 */
-    localStorage.setItem("fanout.diffViewed.142#101", '{"v":1,"t":1e999,"files":{"a.ts":"fp1"}}');
+    localStorage.setItem("fanout.diffViewed.142#101", '{"v":2,"t":1e999,"files":[["a.ts","fp1"]]}');
     expect(loadViewed("142#101").size).toBe(0);
   });
 
@@ -240,7 +244,7 @@ describe("viewedStore", () => {
     for (let i = 0; i <= 50; i++) {
       localStorage.setItem(
         `fanout.diffViewed.old${i}`,
-        JSON.stringify({ v: 1, t: i, files: { "a.ts": "fp" } }),
+        JSON.stringify({ v: 2, t: i, files: [["a.ts", "fp"]] }),
       );
     }
     setViewedPath("new", "a.ts", "fp");
@@ -253,7 +257,7 @@ describe("viewedStore", () => {
     for (let i = 0; i < 49; i++) {
       localStorage.setItem(
         `fanout.diffViewed.old${i}`,
-        JSON.stringify({ v: 1, t: i, files: { "a.ts": "fp" } }),
+        JSON.stringify({ v: 2, t: i, files: [["a.ts", "fp"]] }),
       );
     }
     setViewedPath("new", "a.ts", "fp");
@@ -265,7 +269,7 @@ describe("viewedStore", () => {
     setViewedPath("142#101", "a.ts", "fp1");
     // 別タブが書いた体(こちらの state には無い)
     const raw = JSON.parse(localStorage.getItem("fanout.diffViewed.142#101")!);
-    raw.files["b.ts"] = "fp2";
+    raw.files.push(["b.ts", "fp2"]);
     localStorage.setItem("fanout.diffViewed.142#101", JSON.stringify(raw));
 
     setViewedPath("142#101", "c.ts", "fp3");
@@ -280,6 +284,15 @@ describe("viewedStore", () => {
     setViewedPath("142#101", "b.ts", "fp2");
     setViewedPath("142#101", "a.ts", "fp1-new");
     expect([...loadViewed("142#101").keys()]).toEqual(["b.ts", "a.ts"]);
+  });
+
+  /* JS は JSON object の整数 key を挿入順より先に昇順で列挙するので、object で
+     持つとリポジトリ直下の `1` という file だけで並びが崩れる。 */
+  it("整数に見える file 名があっても保存順が崩れない", () => {
+    setViewedPath("142#101", "a.ts", "fp1");
+    setViewedPath("142#101", "1", "fp2");
+    setViewedPath("142#101", "b.ts", "fp3");
+    expect([...loadViewed("142#101").keys()]).toEqual(["a.ts", "1", "b.ts"]);
   });
 });
 

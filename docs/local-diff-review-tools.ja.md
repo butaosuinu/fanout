@@ -395,13 +395,21 @@ dashboard のサーバーは GET-only で mutation endpoint を持たないた�
 localStorage は origin(ポート込み)ごとなので、既定の OS 任せポートで
 `fanout dashboard --web` を起動し直すと引き継がれない。
 表示モードやパネル幅と同じ制約で、持ち越すには `--port N` を固定する。
-キーは repo と session 行の `rowKey` の組ごとに 1 本
-(`fanout.diffViewed.<repo>/<rowKey>`、両方を URL エンコードして連結)。
+キーは `projectRoot` と session 行の `rowKey` の組ごとに 1 本
+(`fanout.diffViewed.<projectRoot>/<rowKey>`、両方を URL エンコードして連結)。
 `rowKey` だけでは足りない — 同じ `--port N` を固定して別のリポジトリの dashboard を
 順に開くと origin が同じなので、`142#101` のような rowKey がそのまま衝突する。
-repo は snapshot の `repo`(未解決なら "")。
+前置きに `repo`(owner/name)を使ってはいけない。`gh repo view` の解決待ちで最初の
+snapshot は `repo: ""` を配り、あとから埋まる — その間に付けたチェックが別のキーへ
+書かれて迷子になる。`projectRoot` はサーバー起動前に決まっていて動かず、
+gh 未ログインでもリポジトリを区別できる。
 全 scope を 1 本の JSON にまとめると、チェック 1 個ごとに全体を再シリアライズする
 ことになる(contract 上限は 1 scope あたり 500 files)。
+`files` は object ではなく `[path, fingerprint]` の配列で持つ(`v: 2`)。
+JS は JSON object の整数に見える key(`"1"`)を挿入順より先に昇順で列挙するので、
+リポジトリ直下に `1` という file があるだけで並びが崩れ、いちばん新しいチェックが
+先頭へ回って上限の切り捨てで真っ先に落ちる。
+順序に意味を持たせるなら配列にする。
 保存値は敵性入力として検証する — 版・型を確かめ、`string` 同士のペアだけを採る。
 `t` は `typeof === "number"` では足りず有限数まで見る。`1e999` は `JSON.parse` が
 `Infinity` にするので型検査を通り、剪定の比較関数が `NaN` を返して並び順が壊れる。

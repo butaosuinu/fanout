@@ -264,7 +264,9 @@ function Dashboard() {
     [snap, terms, sortKey, sortDir, riseParents],
   );
 
-  const repo = snap?.repo ?? "";
+  /* projectRoot は repo と違って最初の snapshot から入っていて動かない
+   * (gh の解決を待たない)。確認済みの保存 scope はこちらで分ける。 */
+  const { repo, projectRoot } = snap ?? { repo: "", projectRoot: "" };
   const selectedEntry = findPaneEntry(snap, selected);
   const msgs = degradedMessages(snap?.degraded);
   const status = snap
@@ -421,7 +423,7 @@ function Dashboard() {
       {diffTarget && (
         <DiffOverlaySlot
           target={diffTarget}
-          repo={repo}
+          projectRoot={projectRoot}
           token={token}
           anchorKey={selected}
           settingsOpen={settingsOpen}
@@ -440,7 +442,7 @@ function Dashboard() {
  * 再試行になる。 */
 function DiffOverlaySlot({
   target,
-  repo,
+  projectRoot,
   token,
   anchorKey,
   settingsOpen,
@@ -449,8 +451,9 @@ function DiffOverlaySlot({
   onClose,
 }: {
   target: DiffTarget;
-  /* 保存 scope の前置き。ポート固定で別リポジトリを開いても rowKey が衝突しない */
-  repo: string;
+  /* 保存 scope の前置き。ポート固定で別リポジトリを開いても rowKey が衝突しない。
+     repo ではなく projectRoot を使う — repo は gh の解決待ちで後から埋まる */
+  projectRoot: string;
   token: string;
   anchorKey: string | null;
   /* 上に設定モーダルが重なっている。抑止と Escape の譲り先がこれで決まる */
@@ -466,7 +469,7 @@ function DiffOverlaySlot({
           title={target.title}
           query={target.query}
           token={token}
-          scopeKey={viewedScope(repo, target.key)}
+          scopeKey={viewedScope(projectRoot, target.key)}
           anchorKey={anchorKey}
           suppressed={settingsOpen}
           onCoveringChange={onCoveringChange}
