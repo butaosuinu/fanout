@@ -58,6 +58,47 @@ describe("fileFingerprint", () => {
     expect(modeOnly("100644", "100755")).not.toBe(modeOnly("100755", "100644"));
   });
 
+  /* rebase や merge-base の更新で、同じ置換が file 内の別の箇所へ移ることがある。
+     行の中身は同じでも表示される差分は変わるので、確認済みは外れてほしい。 */
+  it("同じ置換でも hunk の位置が違えば別の値になる", () => {
+    const atLine = (n: number) =>
+      fingerprintOf(
+        [
+          "diff --git a/a.ts b/a.ts",
+          "--- a/a.ts",
+          "+++ b/a.ts",
+          `@@ -${n},1 +${n},1 @@`,
+          "-old",
+          "+new",
+          "",
+        ].join("\n"),
+      );
+    expect(atLine(12)).not.toBe(atLine(80));
+  });
+
+  it("base 側の blob が変われば別の値になる", () => {
+    const withIndex = (prev: string) =>
+      fingerprintOf(
+        [
+          "diff --git a/a.ts b/a.ts",
+          `index ${prev}..2222222 100644`,
+          "--- a/a.ts",
+          "+++ b/a.ts",
+          "@@ -1 +1 @@",
+          "-old",
+          "+new",
+          "",
+        ].join("\n"),
+      );
+    expect(withIndex("1111111")).not.toBe(withIndex("3333333"));
+  });
+
+  it("64bit ぶんの桁を返す(総当たりで衝突を作らせない)", () => {
+    /* 32bit だと patch を書く側が古い値に衝突する内容を数秒で作れる。
+       2 本を base36 7 桁ずつ連結した固定長。 */
+    expect(fingerprintOf(patchOf("a.ts", "old", "new"))).toMatch(/^[0-9a-z]{14}$/);
+  });
+
   it("index 行を持たない pure rename でも値を返す", () => {
     /* rename だけの patch は `index` 行が無いので newObjectId が undefined になる */
     const patch = [

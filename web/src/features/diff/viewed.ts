@@ -14,41 +14,76 @@ import { isSameFile, unquoteGitPath } from "./diff";
  * コストは応答の 1 MiB 上限で有界(約 100 万文字を 1 パス)で、patch をキーにした
  * memo の中で 1 回だけ走る。 */
 
-const FNV_OFFSET = 0x811c9dc5;
-const FNV_PRIME = 0x01000193;
+/* FNV-1a を 2 本、別々の乗数で同時に回して 64bit にする。
+ *
+ * 32bit 1 本では足りない。patch を書くのはレビュー対象のエージェント自身なので、
+ * 「前に確認済みにされた fingerprint」に衝突する内容を総当たりで作れば、変更を
+ * レビューから隠せる — 2^32 は数秒で回る。2 本を同時に合わせるには 2^64 要る。
+ * 2 パスにせず 1 パスで両方進めるので、走査コストは変わらない。 */
+const OFFSET_A = 0x811c9dc5; // FNV-1a 32bit の既定値
+const PRIME_A = 0x01000193;
+const OFFSET_B = 0x9747b28c; // 別系統(MurmurHash2)の種と乗数
+const PRIME_B = 0x5bd1e995;
 
-/* FNV-1a 32bit の 1 項目ぶん。長さを先に畳み込んで区切りにする — 入れないと
- * ["ab","c"] と ["a","bc"] が同じ値になり、行の切れ目の違いを取り違える。 */
-function foldString(hash: number, s: string): number {
-  let h = Math.imul(hash ^ s.length, FNV_PRIME);
-  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), FNV_PRIME);
-  return h;
+/* 32bit を base36 で表す最大桁。桁を揃えないと 2 本を連結した境界が曖昧になる
+ * (`1z` + `41z3` と `1z4` + `1z3` が同じ文字列になる)。 */
+const BASE36_WIDTH = 7;
+
+function base36(v: number): string {
+  return (v >>> 0).toString(36).padStart(BASE36_WIDTH, "0");
 }
 
-function foldLines(hash: number, lines: string[]): number {
-  let h = foldString(hash, String(lines.length));
-  for (const line of lines) h = foldString(h, line);
-  return h;
+/* 長さを先に畳み込んで区切りにする — 入れないと ["ab","c"] と ["a","bc"] が
+ * 同じ値になり、行の切れ目の違いを取り違える。 */
+function fold(parts: Iterable<string>): string {
+  let a = OFFSET_A;
+  let b = OFFSET_B;
+  for (const s of parts) {
+    a = Math.imul(a ^ s.length, PRIME_A);
+    b = Math.imul(b ^ s.length, PRIME_B);
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      a = Math.imul(a ^ c, PRIME_A);
+      b = Math.imul(b ^ c, PRIME_B);
+    }
+  }
+  return base36(a) + base36(b);
 }
 
-/* file 1 つの内容 fingerprint。衝突しても失われるのは「変わったのに確認済みが
- * 残る」ことだけで、同じ file の旧内容と新内容が 32bit で衝突する確率の話。 */
+/* file の同一性を名乗る部分。
+ *
+ * mode を混ぜるのは、mode だけの変更が `index` 行も hunk も持たないため。
+ * 入れないと chmod +x とその取り消しが同じ値になる。
+ * prev 側の object id も要る — rebase や merge-base の更新で最終 blob が同じまま
+ * base だけ変わる形があり、new 側だけでは区別できない。 */
+function* identityParts(f: FileDiffMetadata): Generator<string> {
+  yield f.type;
+  yield f.name;
+  yield f.prevName ?? "";
+  yield f.newObjectId ?? "";
+  yield f.prevObjectId ?? "";
+  yield f.mode ?? "";
+  yield f.prevMode ?? "";
+}
+
+/* fingerprint に食わせる材料。可変長のまとまりごとに件数を先に流して、
+ * 「hunk が 1 本減って削除行が 1 本増えた」を取り違えないようにする。
+ * hunk の位置(`@@` 行)まで含めるのは、同じ置換が file 内の別の箇所へ移った
+ * だけでも表示される差分は変わるため。
+ * generator なのは、26 万行の file で配列を作り直さないため。 */
+function* fingerprintParts(f: FileDiffMetadata): Generator<string> {
+  yield* identityParts(f);
+  yield String(f.hunks.length);
+  for (const h of f.hunks) yield h.hunkSpecs ?? "";
+  yield String(f.deletionLines.length);
+  yield* f.deletionLines;
+  yield String(f.additionLines.length);
+  yield* f.additionLines;
+}
+
+/* file 1 つの内容 fingerprint。 */
 export function fileFingerprint(f: FileDiffMetadata): string {
-  /* mode を混ぜるのは、mode だけの変更が `index` 行も hunk も持たないため。
-   * 入れないと chmod +x とその取り消しが同じ値になり、確認済みが残ったまま
-   * 「隠す」で二度と出てこない。 */
-  const meta = [
-    f.type,
-    f.name,
-    f.prevName ?? "",
-    f.newObjectId ?? "",
-    f.mode ?? "",
-    f.prevMode ?? "",
-  ];
-  let h = foldLines(FNV_OFFSET, meta);
-  h = foldLines(h, f.deletionLines);
-  h = foldLines(h, f.additionLines);
-  return (h >>> 0).toString(36);
+  return fold(fingerprintParts(f));
 }
 
 /* 同じ key に集まった entry が全部同じ file だと言い切れるか。
