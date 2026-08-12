@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
@@ -23,7 +25,7 @@ func TestRestartOwnedRejectsLiveGenerationWithoutSpawning(t *testing.T) {
 	}
 
 	_, err = restartOwned(context.Background(), h.ownedOptions(), expected, h.supervisor.start, h.session.backend)
-	if err == nil || !strings.Contains(err.Error(), "supervisor is still live") {
+	if !errors.Is(err, ErrOwnedGenerationStillLive) {
 		t.Fatalf("restart live generation error = %v", err)
 	}
 	current, found, readErr := readOwnerMarker(h.layout.markerPath)
@@ -154,16 +156,35 @@ func TestShutdownOwnedRejectsResourcesAndDoesNotSignalOnRetry(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)
 	saveOwnedServerIntent(t, h, state.HerdrIntentShutdown, expected)
+	issued := 0
 	signals := 0
 	signal := func(int) error { signals++; return nil }
+	markIssued := func() error { issued++; return nil }
 
-	err := shutdownOwned(context.Background(), h.ownedOptions(), expected, true, signal, h.session.backend)
-	if err == nil || !strings.Contains(err.Error(), "workspace resources") || signals != 0 {
-		t.Fatalf("shutdown with resources = %v, signals=%d", err, signals)
+	err := shutdownOwned(context.Background(), h.ownedOptions(), expected, markIssued, signal, h.session.backend)
+	if err == nil || !strings.Contains(err.Error(), "workspace resources") || issued != 0 || signals != 0 {
+		t.Fatalf("shutdown with resources = %v, issued=%d, signals=%d", err, issued, signals)
 	}
-	err = shutdownOwned(context.Background(), h.ownedOptions(), expected, false, signal, h.session.backend)
+	err = shutdownOwned(context.Background(), h.ownedOptions(), expected, nil, signal, h.session.backend)
 	if err == nil || !strings.Contains(err.Error(), "refusing to repeat") || signals != 0 {
 		t.Fatalf("shutdown retry = %v, signals=%d", err, signals)
+	}
+}
+
+func TestShutdownOwnedDoesNotSignalWhenIssuedSaveFails(t *testing.T) {
+	h := newOwnedHarness(t)
+	expected := inspectOwnedServerForTest(t, h)
+	saveOwnedServerIntent(t, h, state.HerdrIntentShutdown, expected)
+	h.fake.snapshot = emptyOwnedSnapshot(h.fake.snapshot)
+	injected := errors.New("save issued shutdown")
+	signals := 0
+
+	err := shutdownOwned(
+		context.Background(), h.ownedOptions(), expected, func() error { return injected },
+		func(int) error { signals++; return nil }, h.session.backend,
+	)
+	if !errors.Is(err, injected) || signals != 0 {
+		t.Fatalf("shutdown after issued save failure = %v, signals=%d", err, signals)
 	}
 }
 
@@ -172,17 +193,21 @@ func TestShutdownOwnedStopsEmptyGenerationAndVerifiesRetirement(t *testing.T) {
 	expected := inspectOwnedServerForTest(t, h)
 	saveOwnedServerIntent(t, h, state.HerdrIntentShutdown, expected)
 	h.fake.snapshot = emptyOwnedSnapshot(h.fake.snapshot)
+	issued := false
 	signals := 0
 	signal := func(pid int) error {
 		signals++
-		if pid != expected.SupervisorPID {
+		if !issued || pid != expected.SupervisorPID {
 			return errors.New("wrong supervisor pid")
 		}
 		retireFakeOwnedGeneration(t, h)
 		return nil
 	}
 
-	if err := shutdownOwned(context.Background(), h.ownedOptions(), expected, true, signal, h.session.backend); err != nil {
+	if err := shutdownOwned(context.Background(), h.ownedOptions(), expected, func() error {
+		issued = true
+		return nil
+	}, signal, h.session.backend); err != nil {
 		t.Fatal(err)
 	}
 	if signals != 1 {
@@ -204,7 +229,7 @@ func TestShutdownOwnedAllowsCurrentLauncherBootstrapAfterUpdate(t *testing.T) {
 	saveOwnedServerIntent(t, h, state.HerdrIntentShutdown, expected)
 	h.fake.snapshot = emptyOwnedSnapshot(h.fake.snapshot)
 
-	err = shutdownOwned(context.Background(), h.ownedOptions(), expected, true, func(int) error {
+	err = shutdownOwned(context.Background(), h.ownedOptions(), expected, func() error { return nil }, func(int) error {
 		retireFakeOwnedGeneration(t, h)
 		return nil
 	}, h.session.backend)
@@ -234,7 +259,7 @@ func TestShutdownRetryCompletesAbsentGenerationWithoutSignal(t *testing.T) {
 	signals := 0
 
 	err := shutdownOwned(
-		context.Background(), h.ownedOptions(), expected, false,
+		context.Background(), h.ownedOptions(), expected, nil,
 		func(int) error { signals++; return nil }, h.session.backend,
 	)
 	if err != nil {
@@ -244,7 +269,7 @@ func TestShutdownRetryCompletesAbsentGenerationWithoutSignal(t *testing.T) {
 		t.Fatalf("shutdown retry signals = %d, want 0", signals)
 	}
 	if err = shutdownOwned(
-		context.Background(), h.ownedOptions(), expected, false,
+		context.Background(), h.ownedOptions(), expected, nil,
 		func(int) error { signals++; return nil }, h.session.backend,
 	); err != nil {
 		t.Fatalf("shutdown replay after config removal: %v", err)
@@ -254,6 +279,25 @@ func TestShutdownRetryCompletesAbsentGenerationWithoutSignal(t *testing.T) {
 	}
 	if err := validateRetiredOwnedSession(h.layout); err != nil {
 		t.Fatalf("retired owned session: %v", err)
+	}
+}
+
+func TestVerifySavedProcessesAbsentRejectsLiveServerProcessGroup(t *testing.T) {
+	identity := state.HerdrServerIdentity{SupervisorPID: 42, ServerPID: 43}
+	var targets []int
+	err := verifySavedProcessesAbsentWithProbe(identity, "restart", func(pid int) error {
+		targets = append(targets, pid)
+		if pid == -identity.ServerPID {
+			return nil
+		}
+		return syscall.ESRCH
+	})
+	if err == nil || !strings.Contains(err.Error(), "server process group") {
+		t.Fatalf("live server process group error = %v", err)
+	}
+	want := []int{identity.SupervisorPID, identity.ServerPID, -identity.ServerPID}
+	if !slices.Equal(targets, want) {
+		t.Fatalf("process absence targets = %v, want %v", targets, want)
 	}
 }
 

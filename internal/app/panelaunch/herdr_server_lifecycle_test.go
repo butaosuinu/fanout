@@ -2,12 +2,14 @@ package panelaunch
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -67,6 +69,121 @@ func TestRejectActiveHerdrIntentsRequiresEmptyJournal(t *testing.T) {
 	journal.Intents = nil
 	if err := rejectActiveHerdrIntents(journal); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReleaseRejectedHerdrRestartDropsOnlyFreshLiveIntent(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
+		}
+	}()
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := newHerdrServerIntent(state.HerdrIntentRestart, testHerdrServerIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(intent)
+	if err = journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	cause := herdrrun.ErrOwnedGenerationStillLive
+	if err = releaseRejectedHerdrRestart(journal, intent, true, cause); !errors.Is(err, cause) {
+		t.Fatalf("release fresh live restart error = %v", err)
+	}
+	if _, found, intentErr := journal.ServerLifecycleIntent(); intentErr != nil || found {
+		t.Fatalf("fresh live restart intent remains: found=%t err=%v", found, intentErr)
+	}
+
+	journal.UpsertIntent(intent)
+	if err = journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err = releaseRejectedHerdrRestart(journal, intent, false, cause); !errors.Is(err, cause) {
+		t.Fatalf("release resumed live restart error = %v", err)
+	}
+	if _, found, err := journal.ServerLifecycleIntent(); err != nil || !found {
+		t.Fatalf("resumed live restart intent = found:%t err:%v", found, err)
+	}
+}
+
+func TestHerdrShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		_ = locked.Unlock() // The journal error is authoritative.
+		t.Fatal(err)
+	}
+	intent, err := newHerdrServerIntent(state.HerdrIntentShutdown, testHerdrServerIdentity())
+	if err != nil {
+		_ = locked.Unlock() // The intent construction error is authoritative.
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(intent)
+	if err = journal.Save(); err != nil {
+		_ = locked.Unlock() // The journal save error is authoritative.
+		t.Fatal(err)
+	}
+	markIssued, err := herdrShutdownIssueCallback(journal, intent)
+	if err != nil || markIssued == nil || intent.Status != state.HerdrIntentPlanned {
+		_ = locked.Unlock() // The callback assertion below is authoritative.
+		t.Fatalf("planned callback = (%+v, %t, %v)", intent, markIssued != nil, err)
+	}
+	if err = markIssued(); err != nil {
+		_ = locked.Unlock() // The issued-state save error is authoritative.
+		t.Fatal(err)
+	}
+	if err = locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found, err := stored.ServerLifecycleIntent()
+	if err != nil || !found || intent.Status != state.HerdrIntentIssued {
+		t.Fatalf("stored issued shutdown = (%+v, %t, %v)", intent, found, err)
+	}
+	locked, err = state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
+		}
+	}()
+	journal, err = locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markIssued, err = herdrShutdownIssueCallback(journal, intent)
+	if err != nil || markIssued != nil {
+		t.Fatalf("issued retry callback = (%t, %v), want nil", markIssued != nil, err)
+	}
+}
+
+func testHerdrServerIdentity() state.HerdrServerIdentity {
+	return state.HerdrServerIdentity{
+		GitCommonDir: "/repo/.git", RuntimeDir: "/tmp/fanout-herdr", Session: "fanout-owned",
+		SocketPath: "/tmp/fanout-herdr/herdr.sock", ClientSocketPath: "/tmp/fanout-herdr/herdr-client.sock",
+		OwnerNonce: strings.Repeat("a", 64), SupervisorPID: 42,
+		SupervisorStartToken: strings.Repeat("b", 64), ServerPID: 43,
+		BinaryPath: "/usr/local/bin/herdr", BinarySHA256: strings.Repeat("c", 64), BinaryVersion: "0.7.5",
+		LauncherPath: "/usr/local/bin/fanout", LauncherSHA256: strings.Repeat("d", 64),
 	}
 }
 

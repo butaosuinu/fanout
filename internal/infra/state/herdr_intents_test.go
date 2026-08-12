@@ -256,6 +256,19 @@ func TestHerdrServerLifecycleIntentValidatesExactIdentity(t *testing.T) {
 	}
 }
 
+func TestHerdrServerLifecycleIntentAllowsOnlyIssuedShutdown(t *testing.T) {
+	shutdown := testHerdrServerIntent(HerdrIntentShutdown)
+	shutdown.Status = HerdrIntentIssued
+	if err := validateHerdrIntent(shutdown); err != nil {
+		t.Fatal(err)
+	}
+	restart := testHerdrServerIntent(HerdrIntentRestart)
+	restart.Status = HerdrIntentIssued
+	if err := validateHerdrIntent(restart); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("issued restart error = %v", err)
+	}
+}
+
 func TestHerdrServerLifecycleIntentRejectsAmbiguousOrIncompleteRows(t *testing.T) {
 	restart := testHerdrServerIntent(HerdrIntentRestart)
 	shutdown := testHerdrServerIntent(HerdrIntentShutdown)

@@ -539,7 +539,9 @@ func validateHerdrServerIntent(intent HerdrIntent) error {
 	if err != nil {
 		return err
 	}
-	if intent.ID != wantID || intent.Status != HerdrIntentPlanned || intent.Server == nil {
+	validStatus := intent.Status == HerdrIntentPlanned ||
+		intent.Kind == HerdrIntentShutdown && intent.Status == HerdrIntentIssued
+	if intent.ID != wantID || !validStatus || intent.Server == nil {
 		return fmt.Errorf("herdr server lifecycle intent %q is incomplete", intent.ID)
 	}
 	empty := []bool{

@@ -14,6 +14,10 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
+// ErrOwnedGenerationStillLive reports that the exact saved server generation
+// is still live, so an explicit restart has not issued an external mutation.
+var ErrOwnedGenerationStillLive = errors.New("herdr owned server generation is still live")
+
 // InspectOwnedServer returns the marker and lease identity that an explicit
 // restart or shutdown must persist before it changes the owned server.
 func InspectOwnedServer(opts OwnedOptions) (state.HerdrServerIdentity, error) {
@@ -153,23 +157,23 @@ func prepareRestartedLauncher(
 	return current, validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, current)
 }
 
-// ShutdownOwned stops one live generation only on the invocation that saved
-// its shutdown intent. A retry performs existence confirmation and never sends
-// the signal again.
+// ShutdownOwned calls markIssued after its final preflight and immediately
+// before stopping one live generation. A nil callback denotes a retry that
+// confirms retirement without repeating the ambiguous signal.
 func ShutdownOwned(
 	ctx context.Context,
 	opts OwnedOptions,
 	expected state.HerdrServerIdentity,
-	issueSignal bool,
+	markIssued func() error,
 ) error {
-	return shutdownOwned(ctx, opts, expected, issueSignal, signalOwnedSupervisor, nil)
+	return shutdownOwned(ctx, opts, expected, markIssued, signalOwnedSupervisor, nil)
 }
 
 func shutdownOwned(
 	ctx context.Context,
 	opts OwnedOptions,
 	expected state.HerdrServerIdentity,
-	issueSignal bool,
+	markIssued func() error,
 	signal func(int) error,
 	backend *Backend,
 ) error {
@@ -181,11 +185,11 @@ func shutdownOwned(
 	if err != nil {
 		return err
 	}
-	signalErr, err := beginOwnedShutdown(ctx, commonDir, commonIdentity, layout, expected, issueSignal, signal, backend)
+	signalErr, err := beginOwnedShutdown(ctx, commonDir, commonIdentity, layout, expected, markIssued, signal, backend)
 	if err != nil {
 		return err
 	}
-	return waitForOwnedRetirement(ctx, layout, expected, signalErr, !issueSignal)
+	return waitForOwnedRetirement(ctx, layout, expected, signalErr, markIssued == nil)
 }
 
 func beginOwnedShutdown(
@@ -194,7 +198,7 @@ func beginOwnedShutdown(
 	commonIdentity pathIdentity,
 	layout ownedLayout,
 	expected state.HerdrServerIdentity,
-	issueSignal bool,
+	markIssued func() error,
 	signal func(int) error,
 	backend *Backend,
 ) (error, error) {
@@ -213,11 +217,26 @@ func beginOwnedShutdown(
 	if err := validateExpectedOwnedMarker(expected, commonDir, commonIdentity, layout, current); err != nil {
 		return nil, err
 	}
-	if !issueSignal {
+	if markIssued == nil {
 		return nil, reconcileRetriedOwnedShutdown(layout, expected)
 	}
+	return issueVerifiedOwnedShutdown(ctx, layout, current, expected, markIssued, signal, backend)
+}
+
+func issueVerifiedOwnedShutdown(
+	ctx context.Context,
+	layout ownedLayout,
+	current ownerMarker,
+	expected state.HerdrServerIdentity,
+	markIssued func() error,
+	signal func(int) error,
+	backend *Backend,
+) (error, error) {
 	if err := verifyEmptyOwnedServer(ctx, layout, current, expected, backend); err != nil {
 		return nil, err
+	}
+	if err := markIssued(); err != nil {
+		return nil, fmt.Errorf("persist issued Herdr shutdown signal: %w", err)
 	}
 	return signal(expected.SupervisorPID), nil
 }
@@ -339,11 +358,11 @@ func retireAbsentOwnedGeneration(
 	if err != nil {
 		return err
 	}
-	if running {
-		return fmt.Errorf("herdr owned supervisor is still live; refusing %s", action)
-	}
 	if err := validateRetiredServerLease(expected, lease, leaseFound, markerFound); err != nil {
 		return err
+	}
+	if running {
+		return fmt.Errorf("%w; refusing %s", ErrOwnedGenerationStillLive, action)
 	}
 	if err := verifySavedProcessesAbsent(expected, action); err != nil {
 		return err
@@ -397,21 +416,37 @@ func inspectLifecycleLease(path string) (supervisorLease, bool, bool, error) {
 }
 
 func verifySavedProcessesAbsent(identity state.HerdrServerIdentity, action string) error {
-	for label, pid := range map[string]int{
-		"supervisor": identity.SupervisorPID,
-		"server":     identity.ServerPID,
-	} {
-		if pid <= 1 {
-			return fmt.Errorf("saved Herdr %s process identity is unavailable", label)
+	return verifySavedProcessesAbsentWithProbe(identity, action, func(pid int) error {
+		return syscall.Kill(pid, 0)
+	})
+}
+
+func verifySavedProcessesAbsentWithProbe(
+	identity state.HerdrServerIdentity,
+	action string,
+	probe func(int) error,
+) error {
+	checks := []struct {
+		label    string
+		identity int
+		target   int
+	}{
+		{label: "supervisor", identity: identity.SupervisorPID, target: identity.SupervisorPID},
+		{label: "server", identity: identity.ServerPID, target: identity.ServerPID},
+		{label: "server process group", identity: identity.ServerPID, target: -identity.ServerPID},
+	}
+	for _, check := range checks {
+		if check.identity <= 1 {
+			return fmt.Errorf("saved Herdr %s identity is unavailable", check.label)
 		}
-		err := syscall.Kill(pid, 0)
+		err := probe(check.target)
 		if errors.Is(err, syscall.ESRCH) {
 			continue
 		}
 		if err == nil || errors.Is(err, syscall.EPERM) {
-			return fmt.Errorf("saved Herdr %s process %d is still live; refusing %s", label, pid, action)
+			return fmt.Errorf("saved Herdr %s %d is still live; refusing %s", check.label, check.identity, action)
 		}
-		return fmt.Errorf("inspect saved Herdr %s process %d: %w", label, pid, err)
+		return fmt.Errorf("inspect saved Herdr %s %d: %w", check.label, check.identity, err)
 	}
 	return nil
 }

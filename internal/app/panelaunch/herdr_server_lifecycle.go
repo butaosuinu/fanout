@@ -31,13 +31,13 @@ func RestartHerdrServer(
 	if err != nil {
 		return nil, err
 	}
-	intent, _, err := ensureHerdrServerIntent(journal, state.HerdrIntentRestart, opts)
+	intent, created, err := ensureHerdrServerIntent(journal, state.HerdrIntentRestart, opts)
 	if err != nil {
 		return nil, err
 	}
 	restarted, err := herdrrun.RestartOwned(ctx, opts, *intent.Server)
 	if err != nil {
-		return nil, err
+		return nil, releaseRejectedHerdrRestart(journal, intent, created, err)
 	}
 	if err = verifyRestartedHerdrRows(ctx, projectRoot, locked, restarted); err != nil {
 		return nil, err
@@ -46,6 +46,18 @@ func RestartHerdrServer(
 		return nil, err
 	}
 	return restarted, nil
+}
+
+func releaseRejectedHerdrRestart(
+	journal *state.LockedHerdrIntents,
+	intent state.HerdrIntent,
+	created bool,
+	cause error,
+) error {
+	if !created || !errors.Is(cause, herdrrun.ErrOwnedGenerationStillLive) {
+		return cause
+	}
+	return releaseHerdrIntent(journal, intent.ID, cause)
 }
 
 // ShutdownHerdrServer explicitly retires an empty owned server. A saved intent
@@ -65,23 +77,51 @@ func ShutdownHerdrServer(
 	if err != nil {
 		return err
 	}
-	intent, found, err := currentHerdrServerIntent(journal, state.HerdrIntentShutdown)
+	intent, err := prepareOrResumeHerdrShutdown(ctx, projectRoot, journal, opts)
 	if err != nil {
 		return err
 	}
-	if !found {
-		if err = rejectActiveHerdrIntents(journal.HerdrIntents); err != nil {
-			return err
-		}
-		intent, err = prepareHerdrShutdown(ctx, projectRoot, journal, opts)
-		if err != nil {
-			return err
-		}
+	markIssued, err := herdrShutdownIssueCallback(journal, intent)
+	if err != nil {
+		return err
 	}
-	if err = herdrrun.ShutdownOwned(ctx, opts, *intent.Server, !found); err != nil {
+	if err = herdrrun.ShutdownOwned(ctx, opts, *intent.Server, markIssued); err != nil {
 		return err
 	}
 	return completeHerdrServerLifecycle(locked, journal, intent.ID)
+}
+
+func prepareOrResumeHerdrShutdown(
+	ctx context.Context,
+	projectRoot string,
+	journal *state.LockedHerdrIntents,
+	opts herdrrun.OwnedOptions,
+) (state.HerdrIntent, error) {
+	intent, found, err := currentHerdrServerIntent(journal, state.HerdrIntentShutdown)
+	if err != nil || found {
+		return intent, err
+	}
+	if err := rejectActiveHerdrIntents(journal.HerdrIntents); err != nil {
+		return state.HerdrIntent{}, err
+	}
+	return prepareHerdrShutdown(ctx, projectRoot, journal, opts)
+}
+
+func herdrShutdownIssueCallback(
+	journal *state.LockedHerdrIntents,
+	intent state.HerdrIntent,
+) (func() error, error) {
+	if intent.Status == state.HerdrIntentIssued {
+		return nil, nil
+	}
+	if intent.Status != state.HerdrIntentPlanned {
+		return nil, fmt.Errorf("herdr shutdown intent has invalid status %q", intent.Status)
+	}
+	return func() error {
+		intent.Status = state.HerdrIntentIssued
+		journal.UpsertIntent(intent)
+		return journal.Save()
+	}, nil
 }
 
 func rejectActiveHerdrIntents(journal state.HerdrIntents) error {
