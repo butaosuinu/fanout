@@ -15,7 +15,10 @@ import { localKeysWithPrefix, readLocal, writeLocal } from "../../shared/localSt
  * 落とす(先例: features/settings/diffThemes.ts の normalizeDiffTheme)。 */
 
 const PREFIX = "fanout.diffViewed.";
-/* `/api/diff` の contract 上限と同じ。1 scope が持ちうる entry の天井。 */
+/* `/api/diff` の contract 上限と同じ。1 scope が持ちうる **path** の天井。
+ * entry 数で切ってはいけない — 同じ path の古い fingerprint(履歴)が現行 file の
+ * 枠を食い、500 file 全部を確認済みにしたあとに 1 file が変わって再チェックされる
+ * だけで、無関係な未変更 file のチェックが落ちる。 */
 const MAX_FILES = 500;
 /* 1 つの path が持てる fingerprint の数。内容が行き来する file(生成物の
  * 再生成など)1 つに 500 件の枠を食われないための蓋。 */
@@ -116,14 +119,11 @@ function parseRecord(raw: string | null): ViewedRecord | null {
   }
 }
 
-/* 形の合うペアだけを採り、上限で切る。切るのは末尾ではなく先頭側 — 配列の末尾が
- * いちばん新しいチェックなので、先頭を落とせば「上限に達した瞬間から新しい
- * チェックが保存されない」を避けられる。 */
+/* 形の合うペアだけを採り、上限で切る。 */
 export function parseViewed(raw: string | null): ViewedEntry[] {
   const rec = parseRecord(raw);
   if (!rec) return [];
-  const pairs = rec.files.filter(isPair).filter(([path]) => path !== "");
-  return pairs.slice(-MAX_FILES);
+  return capEntries(rec.files.filter(isPair).filter(([path]) => path !== ""));
 }
 
 export function loadViewed(scope: string): ViewedEntry[] {
@@ -156,17 +156,23 @@ export function setViewedEntry({
   const rest = parseViewed(readLocal(key)).filter(([p, f]) => p !== path || f !== fp);
   const next = viewed ? [...rest, entry] : rest;
   if (next.length === 0) writeLocal(key, null);
-  else writeRecord(key, capPerPath(next));
+  else writeRecord(key, capEntries(next));
   emit();
 }
 
+/* 上限は 2 段。まず 1 path が持てる fingerprint を絞り、そのうえで path の本数を
+ * 絞る。この順序に意味がある — 逆にすると履歴が path の枠を数えてしまう。
+ * どちらも「古いほうから落とす」で、配列の並びがそのまま剪定順。 */
+function capEntries(entries: ViewedEntry[]): ViewedEntry[] {
+  return capPaths(capPerPath(entries));
+}
+
 /* 1 path が持てる fingerprint を新しいほうから MAX_PER_PATH 件に絞る。内容が
- * 行き来する file 1 つで 500 件の枠を食い潰させない。 */
+ * 行き来する file 1 つで枠を食い潰させない。 */
 function capPerPath(entries: ViewedEntry[]): ViewedEntry[] {
   const total = new Map<string, number>();
   for (const [path] of entries) total.set(path, (total.get(path) ?? 0) + 1);
-  /* 前から数えて、その path の超過分(= 古いほう)だけを落とす。並びは剪定順
-   * そのものなので、逆順に組み直さずに 1 パスで済ませる。 */
+  /* 前から数えて、その path の超過分(= 古いほう)だけを落とす。 */
   const seen = new Map<string, number>();
   return entries.filter(([path]) => {
     const n = (seen.get(path) ?? 0) + 1;
@@ -175,8 +181,24 @@ function capPerPath(entries: ViewedEntry[]): ViewedEntry[] {
   });
 }
 
+/* path の本数を新しいほうから MAX_FILES に絞る。落とすのは path 単位なので、
+ * ある path の履歴が別の path の現行 entry を押し出すことはない。
+ * 新しさは「その path が最後に出てくる位置」で測る。 */
+function capPaths(entries: ViewedEntry[]): ViewedEntry[] {
+  const lastAt = new Map<string, number>();
+  entries.forEach(([path], i) => lastAt.set(path, i));
+  if (lastAt.size <= MAX_FILES) return entries;
+  const keep = new Set(
+    [...lastAt]
+      .sort((a, b) => a[1] - b[1])
+      .slice(-MAX_FILES)
+      .map(([path]) => path),
+  );
+  return entries.filter(([path]) => keep.has(path));
+}
+
 function writeRecord(key: string, files: ViewedEntry[]) {
-  const rec: ViewedRecord = { v: 2, t: Date.now(), files: files.slice(-MAX_FILES) };
+  const rec: ViewedRecord = { v: 2, t: Date.now(), files };
   const body = JSON.stringify(rec);
   /* 先に剪定してから書く。逆にすると、quota で書けなかった直後に領域を空けて
    * 終わり(誰も書き直さない)になり、古い scope を捨てただけで終わる。 */

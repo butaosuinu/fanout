@@ -310,6 +310,27 @@ describe("viewedStore", () => {
   });
 
   /* 内容が行き来する file 1 つに 500 件の枠を食わせない */
+  /* 上限は entry 数ではなく path 数。entry で切ると、500 file 全部を確認済みに
+     したあとに 1 file が変わって再チェックされるだけで、その履歴が枠を食って
+     無関係な未変更 file のチェックが落ちる。 */
+  it("履歴の fingerprint が他の path の枠を食わない", () => {
+    for (let i = 0; i < 500; i++) {
+      setViewedEntry({ scope: "142#101", entry: [`f${i}.ts`, "fp"], viewed: true });
+    }
+    // 真ん中の file だけ内容が変わって、再チェックされた
+    setViewedEntry({ scope: "142#101", entry: ["f250.ts", "fp-new"], viewed: true });
+
+    const loaded = loadViewed("142#101");
+    const paths = new Set(loaded.map(([p]) => p));
+    expect(paths.size).toBe(500);
+    // 触っていない file は現行の fingerprint を保ったまま
+    expect(loaded).toContainEqual(["f0.ts", "fp"]);
+    expect(loaded).toContainEqual(["f499.ts", "fp"]);
+    // 変わった file は新旧どちらの内容も「見た」として残る
+    expect(loaded).toContainEqual(["f250.ts", "fp"]);
+    expect(loaded).toContainEqual(["f250.ts", "fp-new"]);
+  });
+
   it("1 path が持てる fingerprint は新しいほうから 4 件まで", () => {
     for (const fp of ["fp1", "fp2", "fp3", "fp4", "fp5"]) {
       setViewedEntry({ scope: "142#101", entry: ["a.ts", fp], viewed: true });
