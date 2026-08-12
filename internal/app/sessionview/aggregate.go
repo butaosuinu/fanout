@@ -241,6 +241,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			runtimeState := runtimeStateOf(p.PaneID, runtimeDegraded, runtimeUnsupported, alive)
 			wi := graph.Info[p.IssueNum]
 			pv := PaneView{
+				SavedPane:          p,
 				IssueNum:           p.IssueNum,
 				TaskID:             p.TaskID,
 				Kind:               p.Kind,
@@ -639,7 +640,9 @@ func herdrAgentObservationMatches(pane state.Pane, current backend.LivePane) boo
 
 func herdrRouteIdentityMatches(pane state.Pane, current backend.LivePane) bool {
 	if current.Ref.Workspace != pane.HerdrWorkspaceID || current.Ref.Pane != pane.PaneID ||
-		current.SessionID != pane.HerdrSession || current.SocketPath != pane.HerdrSocketPath {
+		current.SessionID != pane.HerdrSession || current.SocketPath != pane.HerdrSocketPath ||
+		strings.TrimSpace(pane.HerdrWorkspaceLabel) == "" ||
+		pane.HerdrWorkspaceLabel != current.WorkspaceLabel {
 		return false
 	}
 	if strings.TrimSpace(pane.HerdrTerminalID) == "" ||
@@ -653,6 +656,9 @@ func herdrRouteIdentityMatches(pane state.Pane, current backend.LivePane) bool {
 // herdrAgentIdentityMatches requires an observed conversation to have been
 // bound to the owning state row first. Once saved, it stays exact.
 func herdrAgentIdentityMatches(pane state.Pane, current backend.LivePane) bool {
+	if pane.IsShell() {
+		return herdrShellIdentityMatches(pane, current)
+	}
 	storedAgent := strings.TrimSpace(pane.Agent) != "" || pane.HerdrAgentID != ""
 	observedAgent := current.AgentPresent || current.AgentID != "" || current.AgentProvider != "" || current.AgentSession != nil
 	if !storedAgent {
@@ -664,6 +670,12 @@ func herdrAgentIdentityMatches(pane state.Pane, current backend.LivePane) bool {
 		optionalAgentSessionMatches(pane.HerdrAgentSession, current.AgentSession, pane.Agent),
 	}
 	return !slices.Contains(requirements, false)
+}
+
+func herdrShellIdentityMatches(pane state.Pane, current backend.LivePane) bool {
+	return pane.HerdrAgentID == "" && pane.HerdrAgentSession == nil &&
+		!current.AgentPresent && current.AgentID == "" && current.AgentProvider == "" &&
+		current.AgentSession == nil
 }
 
 // herdrWorktreeIdentityMatches keeps worktree provenance separate from the
@@ -711,6 +723,7 @@ func herdrRowUnsupported(pane state.Pane) bool {
 	}
 	requiredBaseline := []bool{
 		strings.TrimSpace(pane.HerdrWorkspaceID) != "",
+		strings.TrimSpace(pane.HerdrWorkspaceLabel) != "",
 		strings.TrimSpace(pane.HerdrTerminalID) != "",
 		strings.TrimSpace(pane.HerdrSession) != "",
 		strings.TrimSpace(pane.HerdrSocketPath) != "",
@@ -724,6 +737,9 @@ func herdrRowUnsupported(pane state.Pane) bool {
 
 func herdrAgentBaselineUnsupported(pane state.Pane) bool {
 	storedAgentID := strings.TrimSpace(pane.HerdrAgentID) != ""
+	if pane.IsShell() {
+		return storedAgentID || pane.HerdrAgentSession != nil
+	}
 	if pane.HerdrAgentSession != nil {
 		return !storedAgentID || !expectedHerdrAgentSession(pane.HerdrAgentSession, pane.Agent)
 	}
@@ -906,6 +922,8 @@ func appendReason(existing, add string) string {
 // DerivePane computes display/filter/sort helper values from the canonical
 // PaneView fields. parent is passed separately because PaneView deliberately
 // does not repeat its containing Session parent on the public wire shape.
+//
+//nolint:funlen // This is one pure projection of the complete pane wire model into derived display fields.
 func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 	runtimeState := firstNonEmpty(pv.RuntimeState, pv.TmuxState)
 	runtimeTitle := firstNonEmpty(pv.RuntimeTitle, pv.TmuxTitle)
@@ -975,6 +993,9 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 	}, "\n"))
 
 	canFocus := backend.NormalizeName(pv.Backend) == backend.Tmux && canFocusPane(pv.PaneID, runtimeState)
+	canPeek := (backend.NormalizeName(pv.Backend) == backend.Tmux ||
+		backend.NormalizeName(pv.Backend) == backend.Herdr) &&
+		canFocusPane(pv.PaneID, runtimeState)
 	return PaneDerived{
 		Name:             name,
 		PRSummary:        prSummary,
@@ -991,7 +1012,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 		FilterText:       filterText,
 		FilterValues:     filterValues,
 		CanFocus:         canFocus,
-		CanPeek:          canFocus,
+		CanPeek:          canPeek,
 		WorktreeRelative: relWorktree,
 		Sort: PaneSortKeys{
 			IssueNum: pv.IssueNum,

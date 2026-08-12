@@ -10,6 +10,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -215,7 +216,7 @@ func TestCleanupIssueOrchestratorHandlesStaleAndFailedPaneCleanup(t *testing.T) 
 			}
 
 			tmuxLog := installIssueOrchestratorCleanupTmuxShim(t, tt.liveKey, tt.killFails)
-			err = cleanupIssueOrchestrator(repo, "fanout-test", tmuxbackend.New(), req, "%91")
+			err = cleanupIssueOrchestrator(repo, "fanout-test", tmuxbackend.New(), nil, req, "%91")
 			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("cleanupIssueOrchestrator() error = %v, want %q", err, tt.wantErr)
 			}
@@ -239,6 +240,17 @@ func TestCleanupIssueOrchestratorHandlesStaleAndFailedPaneCleanup(t *testing.T) 
 				t.Fatalf("kill-pane ran = %v, want %v; tmux log:\n%s", killRan, tt.wantKillRun, body)
 			}
 		})
+	}
+}
+
+func TestIssueOrchestratorIdentityUsesBackendNativeFields(t *testing.T) {
+	recorded := state.Pane{PaneID: "w1:p1", ShellKey: ""}
+	req := panelaunch.Request{ShellKey: "tmux-key"}
+	if issueOrchestratorIdentityChanged(backend.Herdr, recorded, true, req, "w1:p1") {
+		t.Fatal("Herdr identity treated the caller-only tmux ShellKey as authoritative")
+	}
+	if !issueOrchestratorIdentityChanged(backend.Tmux, recorded, true, req, "w1:p1") {
+		t.Fatal("tmux identity ignored the liveness ShellKey")
 	}
 }
 

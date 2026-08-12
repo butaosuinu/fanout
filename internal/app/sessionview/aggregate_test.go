@@ -35,6 +35,7 @@ func herdrPane(parent string, num int, paneID string) state.Pane {
 	p.Agent = "codex"
 	p.Backend = backend.Herdr
 	p.HerdrWorkspaceID = "workspace-a"
+	p.HerdrWorkspaceLabel = "owned-label-a"
 	p.HerdrTerminalID = "terminal-a"
 	p.HerdrRepoKey = "/repo/.git"
 	p.HerdrAgentID = "agent-a"
@@ -63,6 +64,7 @@ func liveHerdrPane(p state.Pane) backend.LivePane {
 		Title:            "herdr child",
 		AgentState:       backend.AgentWorking,
 		NativeAgentState: "working",
+		WorkspaceLabel:   p.HerdrWorkspaceLabel,
 		TerminalID:       p.HerdrTerminalID,
 		AgentID:          p.HerdrAgentID,
 		AgentProvider:    p.Agent,
@@ -732,6 +734,21 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 	}{
 		{name: "matching identity is live", include: true, wantAlive: true},
 		{
+			name: "workspace label changed",
+			mutateLive: func(p *backend.LivePane) {
+				p.WorkspaceLabel = "foreign-label"
+			},
+			include: true,
+		},
+		{
+			name: "recorded workspace label missing",
+			mutateRow: func(p *state.Pane) {
+				p.HerdrWorkspaceLabel = ""
+			},
+			include:   true,
+			wantState: "unsupported",
+		},
+		{
 			name: "terminal id changed",
 			mutateLive: func(p *backend.LivePane) {
 				p.TerminalID = "terminal-reused"
@@ -954,6 +971,9 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 			if tt.mutateLive != nil {
 				tt.mutateLive(&observed)
 			}
+			if tt.wantAlive && herdrRowUnsupported(row) {
+				t.Fatalf("matching fixture is unexpectedly unsupported: %+v", row)
+			}
 			var live []backend.LivePane
 			if tt.include {
 				live = []backend.LivePane{observed}
@@ -978,6 +998,24 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 				t.Fatalf("Build() runtimeTitle=%q tmuxTitle=%q agentState=%q, want titles=%q agentState=%q", got.RuntimeTitle, got.TmuxTitle, got.AgentState, wantTitle, wantAgentState)
 			}
 		})
+	}
+}
+
+func TestHerdrPaneMatchesOwnedShellWithoutAgentIdentity(t *testing.T) {
+	row := herdrPane("@manual", -1, "workspace-a:p1")
+	row.Kind = state.PaneKindShell
+	row.Agent = state.PaneKindShell
+	row.HerdrAgentID = ""
+	row.HerdrAgentSession = nil
+	live := liveHerdrPane(row)
+	live.AgentState = ""
+	live.NativeAgentState = ""
+	live.AgentID = ""
+	live.AgentProvider = ""
+	live.AgentSession = nil
+	live.AgentPresent = false
+	if !HerdrPaneMatches(row, live) || herdrRowUnsupported(row) {
+		t.Fatalf("owned shell identity rejected: row=%+v live=%+v", row, live)
 	}
 }
 
@@ -1250,15 +1288,15 @@ func TestBuildHerdrUsesPersistedIdentityWithoutRebinding(t *testing.T) {
 	}
 }
 
-func TestDerivePaneDisablesHerdrV1TargetedActions(t *testing.T) {
+func TestDerivePaneEnablesHerdrReadButNotDashboardMutation(t *testing.T) {
 	derived := DerivePane("/repo", "425", PaneView{
 		Backend:   backend.Herdr,
 		PaneID:    "w1:p1",
 		Alive:     true,
 		TmuxState: "live",
 	})
-	if derived.CanFocus || derived.CanPeek {
-		t.Fatalf("herdr derived actions = focus:%t peek:%t, want both false", derived.CanFocus, derived.CanPeek)
+	if derived.CanFocus || !derived.CanPeek {
+		t.Fatalf("herdr derived actions = focus:%t peek:%t, want false/true", derived.CanFocus, derived.CanPeek)
 	}
 	if derived.FilterValues["backend"] != "herdr" || !strings.Contains(derived.FilterText, "herdr") {
 		t.Fatalf("herdr derived filter metadata = values:%+v text:%q", derived.FilterValues, derived.FilterText)

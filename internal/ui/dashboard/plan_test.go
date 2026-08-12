@@ -174,8 +174,8 @@ func TestPlanHerdrPaneIs404AndSkipsCapture(t *testing.T) {
 		t.Fatalf("herdr pane status = %d want 404, body %s", status, body)
 	}
 	var got map[string]string
-	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], backend.HerdrContentReadReason) {
-		t.Fatalf("body = %s want the explicit herdr content-read reason", body)
+	if err := json.Unmarshal(body, &got); err != nil || !strings.Contains(got["error"], "fanout-owned Herdr session") {
+		t.Fatalf("body = %s want the owned-session admission reason", body)
 	}
 	if calls, _, _ := fake.snapshot(); calls != 0 {
 		t.Fatalf("capture ran %d time(s) for a herdr pane", calls)

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -18,6 +20,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
@@ -27,6 +30,122 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
+
+func TestEnterHerdrTUISessionBootstrapsConsoleAndPrintsAttachCommand(t *testing.T) {
+	originalEnsure := ensureOwnedHerdrForTUI
+	originalConsole := ensureHerdrConsoleForTUI
+	t.Cleanup(func() {
+		ensureOwnedHerdrForTUI = originalEnsure
+		ensureHerdrConsoleForTUI = originalConsole
+	})
+	owned := &herdrrun.OwnedSession{Session: "owned-session"}
+	ensureOwnedHerdrForTUI = func(root string) (*herdrrun.OwnedSession, error) {
+		if root != "/repo" {
+			t.Fatalf("ensure root = %q, want /repo", root)
+		}
+		return owned, nil
+	}
+	ensureHerdrConsoleForTUI = func(
+		_ context.Context,
+		root string,
+		got *herdrrun.OwnedSession,
+		_ []string,
+		_ string,
+	) (panelaunch.HerdrConsoleResult, error) {
+		if root != "/repo" || got != owned {
+			t.Fatalf("console input = root:%q session:%p", root, got)
+		}
+		return panelaunch.HerdrConsoleResult{
+			Pane:          state.Pane{PaneID: "pane-1"},
+			AttachCommand: "HERDR_SESSION='owned-session' '/owned/herdr'",
+		}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	logger := log.NewWith(&stdout, &stderr, false)
+	code := enterHerdrTUISession(
+		"/repo",
+		backend.Selection{Name: backend.Herdr, Reason: backend.ReasonUserConfig},
+		logger,
+	)
+	if code != exitcode.OK || stderr.Len() != 0 {
+		t.Fatalf("enterHerdrTUISession() = %d stderr=%q", code, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, "pane-1") ||
+		!strings.Contains(out, "HERDR_SESSION='owned-session' '/owned/herdr'") {
+		t.Fatalf("console output = %q", out)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if got := lines[len(lines)-1]; got != "HERDR_SESSION='owned-session' '/owned/herdr'" {
+		t.Fatalf("attach line = %q, want bare command", got)
+	}
+}
+
+func TestWireOwnedHerdrTUIEnablesScopedInteractivePorts(t *testing.T) {
+	opts := fanouttui.Options{}
+	owned := &herdrrun.OwnedSession{Session: "owned-session"}
+	wireOwnedHerdrTUI(
+		&opts,
+		"/repo",
+		"owned-session",
+		"fanout",
+		settings.Defaults(),
+		hooks.EmptyConfig(),
+		owned,
+	)
+	if opts.LaunchPane == nil || opts.LaunchAttach == nil || opts.LaunchIssue == nil ||
+		opts.LaunchIssuePlan == nil || opts.LaunchShell == nil || opts.FocusHerdrPane == nil ||
+		opts.CaptureHerdrPane == nil {
+		t.Fatalf("owned Herdr ports are incomplete: %+v", opts)
+	}
+	if reason := opts.HerdrActionDisabled(state.Pane{}); reason != "" {
+		t.Fatalf("owned console launch disabled: %q", reason)
+	}
+	if opts.RestorePanes != nil || opts.LifecycleCloseOwned != nil {
+		t.Fatal("owned Herdr wiring enabled deferred restore/lifecycle ports")
+	}
+}
+
+func TestSettingsReloadPreservesOnlyAdmittedHerdrIssueLaunch(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	for _, tt := range []struct {
+		name     string
+		admitted bool
+	}{
+		{name: "owned", admitted: true},
+		{name: "foreign"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reload := newTUISettingsReloadFunc(
+				repo, "owned-session", "fanout", hooks.EmptyConfig(),
+				backend.Selection{Name: backend.Herdr}, tt.admitted, discardLogger(),
+			)
+			runtime, err := reload()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (runtime.LaunchIssue != nil) != tt.admitted {
+				t.Fatalf("LaunchIssue configured = %t, want %t", runtime.LaunchIssue != nil, tt.admitted)
+			}
+		})
+	}
+}
+
+func TestOwnedHerdrPaneIdentitySeparatesGenericCWDFromWorktreeProvenance(t *testing.T) {
+	identity, err := ownedHerdrPaneIdentity(state.Pane{
+		Backend: backend.Herdr, PaneID: "w1:p1", HerdrWorkspaceID: "w1",
+		HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "term-1",
+		HerdrSession: "owned", HerdrSocketPath: "/tmp/owned.sock",
+		WorktreePath: "/repo",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.WorktreePath != "" || identity.CurrentPath != "/repo" {
+		t.Fatalf("generic identity = %+v, want cwd without worktree provenance", identity)
+	}
+}
 
 func TestTUIAgentOrDefault(t *testing.T) {
 	for _, tc := range []struct {
@@ -57,6 +176,7 @@ func TestCmdTUIHerdrContextSkipsTmuxComposition(t *testing.T) {
 	t.Setenv("TMUX", "nested-tmux")
 	t.Setenv("TMUX_PANE", "%nested")
 	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("FANOUT_WATCHER", "1")
 	t.Setenv("FANOUT_NOTIFICATIONS", "tmux")
 	tmuxLogPath := installTUIDashboardTmuxShim(t)
 	herdrLogPath := installTUIHerdrShim(t)
@@ -172,7 +292,7 @@ func TestCmdTUIHerdrContextUsesOwnerRootFromChildWorktree(t *testing.T) {
 	}
 }
 
-func TestCmdTUIUserConfiguredHerdrOutsideContextGuidesWithoutTmux(t *testing.T) {
+func TestCmdTUIUserConfiguredHerdrOutsideContextBootstrapsWithoutTmux(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
@@ -192,28 +312,49 @@ func TestCmdTUIUserConfiguredHerdrOutsideContextGuidesWithoutTmux(t *testing.T) 
 	}
 
 	originalRunTUI := runTUI
+	originalEnsure := ensureOwnedHerdrForTUI
+	originalConsole := ensureHerdrConsoleForTUI
 	called := false
 	runTUI = func(fanouttui.Options) error {
 		called = true
 		return nil
 	}
-	defer func() { runTUI = originalRunTUI }()
+	ensureOwnedHerdrForTUI = func(string) (*herdrrun.OwnedSession, error) {
+		return &herdrrun.OwnedSession{Session: "owned-session"}, nil
+	}
+	ensureHerdrConsoleForTUI = func(
+		context.Context,
+		string,
+		*herdrrun.OwnedSession,
+		[]string,
+		string,
+	) (panelaunch.HerdrConsoleResult, error) {
+		return panelaunch.HerdrConsoleResult{
+			Pane:          state.Pane{PaneID: "console-pane"},
+			AttachCommand: "HERDR_SESSION='owned-session' herdr",
+		}, nil
+	}
+	defer func() {
+		runTUI = originalRunTUI
+		ensureOwnedHerdrForTUI = originalEnsure
+		ensureHerdrConsoleForTUI = originalConsole
+	}()
 	var stdout, stderr strings.Builder
 	code := cmdTUI("fanout", log.NewWith(&stdout, &stderr, false))
-	if code != exitcode.Env {
-		t.Fatalf("cmdTUI() = %d, want Env", code)
+	if code != exitcode.OK {
+		t.Fatalf("cmdTUI() = %d, want OK; stderr=%s", code, stderr.String())
 	}
 	if called {
-		t.Fatal("runTUI was called outside an existing herdr pane")
+		t.Fatal("runTUI was called before attaching to the owned Herdr console")
 	}
-	for _, want := range []string{"existing herdr pane", "HERDR_ENV=1", "cannot create or attach a session"} {
-		if !strings.Contains(stderr.String(), want) {
-			t.Fatalf("stderr missing %q:\n%s", want, stderr.String())
+	for _, want := range []string{"console-pane", "HERDR_SESSION='owned-session' herdr"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
 		}
 	}
 	if _, err := os.Stat(tmuxLogPath); !os.IsNotExist(err) {
 		body, _ := os.ReadFile(tmuxLogPath)
-		t.Fatalf("guided herdr startup invoked tmux:\n%s", body)
+		t.Fatalf("Herdr bootstrap invoked tmux:\n%s", body)
 	}
 }
 
@@ -480,7 +621,7 @@ func TestTUISettingsReloadCleansDisabledKeybinds(t *testing.T) {
 	}
 	argsPath := installTUISettingsReloadTmuxShim(t)
 
-	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux}, discardLogger())
+	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux}, true, discardLogger())
 	if _, err := reload(); err != nil {
 		t.Fatal(err)
 	}
@@ -1667,7 +1808,8 @@ func TestWatchPaneMatchesLiveRequiresExactHerdrIdentity(t *testing.T) {
 	pane := state.Pane{
 		Backend: backend.Herdr, PaneID: "w1:p1", Agent: "codex",
 		WorktreePath: "/repo/.fanout/worktrees/child", HerdrWorkspaceID: "w1",
-		HerdrTerminalID: "term-1", HerdrRepoKey: "/repo/.git",
+		HerdrWorkspaceLabel: "owned-label-1",
+		HerdrTerminalID:     "term-1", HerdrRepoKey: "/repo/.git",
 		HerdrAgentID: "fanout-child", HerdrSession: "fanout-owned",
 		HerdrSocketPath: "/tmp/fanout-owned/herdr.sock",
 		HerdrAgentSession: &backend.AgentSessionRef{
@@ -1676,7 +1818,7 @@ func TestWatchPaneMatchesLiveRequiresExactHerdrIdentity(t *testing.T) {
 	}
 	live := backend.LivePane{
 		Ref:         backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
-		CurrentPath: pane.WorktreePath, TerminalID: "term-1",
+		CurrentPath: pane.WorktreePath, WorkspaceLabel: "owned-label-1", TerminalID: "term-1",
 		AgentID: "fanout-child", AgentProvider: "codex", AgentPresent: true,
 		RepoKey: "/repo/.git", ProjectRoot: "/repo", WorktreePath: pane.WorktreePath,
 		SessionID: "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",
@@ -1697,13 +1839,14 @@ func TestWatchPaneMatchesLiveAllowsLateHerdrSession(t *testing.T) {
 	pane := state.Pane{
 		Backend: backend.Herdr, PaneID: "w1:p1", Agent: "codex",
 		WorktreePath: "/repo/.fanout/worktrees/child", HerdrWorkspaceID: "w1",
-		HerdrTerminalID: "term-1", HerdrRepoKey: "/repo/.git",
+		HerdrWorkspaceLabel: "owned-label-1",
+		HerdrTerminalID:     "term-1", HerdrRepoKey: "/repo/.git",
 		HerdrAgentID: "fanout-child", HerdrSession: "fanout-owned",
 		HerdrSocketPath: "/tmp/fanout-owned/herdr.sock",
 	}
 	live := backend.LivePane{
 		Ref:         backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
-		CurrentPath: pane.WorktreePath, TerminalID: "term-1",
+		CurrentPath: pane.WorktreePath, WorkspaceLabel: "owned-label-1", TerminalID: "term-1",
 		AgentID: "fanout-child", AgentProvider: "codex", AgentPresent: true,
 		RepoKey: "/repo/.git", ProjectRoot: "/repo", WorktreePath: pane.WorktreePath,
 		SessionID: "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",

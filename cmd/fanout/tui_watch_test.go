@@ -181,7 +181,7 @@ esac
 	}
 }
 
-func TestTUIIssueAndProjectLaunchesRejectHerdrBeforeMutation(t *testing.T) {
+func TestTUIIssueAndProjectHerdrLaunchFailuresDoNotPersistPanes(t *testing.T) {
 	tests := []struct {
 		name   string
 		launch func(string) error
@@ -225,25 +225,12 @@ func TestTUIIssueAndProjectLaunchesRejectHerdrBeforeMutation(t *testing.T) {
 			t.Setenv("TMUX", "nested-tmux")
 			t.Setenv("FANOUT_BACKEND", "")
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-			excludePath := filepath.Join(repo, ".git", "info", "exclude")
-			excludeBefore, err := os.ReadFile(excludePath)
-			if err != nil {
-				t.Fatal(err)
+			err := tt.launch(repo)
+			if err == nil {
+				t.Fatal("launch succeeded without a usable Herdr or GitHub test environment")
 			}
-
-			err = tt.launch(repo)
-			if err == nil || !strings.Contains(err.Error(), "runtime backend herdr does not support") {
-				t.Fatalf("launch error = %v, want herdr unsupported", err)
-			}
-			if _, statErr := os.Stat(filepath.Join(repo, ".fanout")); !os.IsNotExist(statErr) {
-				t.Fatalf("herdr rejection mutated .fanout: %v", statErr)
-			}
-			excludeAfter, err := os.ReadFile(excludePath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(excludeAfter) != string(excludeBefore) {
-				t.Fatalf("git exclude changed before herdr rejection:\n%s", excludeAfter)
+			if store, loadErr := state.Load(state.Path(repo)); loadErr != nil || len(store.Panes) != 0 {
+				t.Fatalf("missing-session rejection persisted panes: store=%+v err=%v", store, loadErr)
 			}
 		})
 	}

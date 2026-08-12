@@ -10,6 +10,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -40,15 +41,21 @@ func guardIssueOrchestrator(projectRoot string, store state.Store, issueNum int)
 	return nil
 }
 
+func guardLinkedIssueOrchestrator(projectRoot string, current state.Store, issueNum int) error {
+	return guardLinkedIssueSession(projectRoot, current, func(root string, store state.Store) error {
+		return guardIssueOrchestrator(root, store, issueNum)
+	})
+}
+
 // launchIssueOrchestratorPrepared attaches one agent to the project root in
 // the configured initial mode after child planning and agent validation. The
 // caller's locked recorder keeps the orchestrator row and child rows in one
 // launch transaction.
-func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, runtimeBackend backend.Backend, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string, orchestratorPlanMode bool) (panelaunch.Request, string, bool, string, error) {
+func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr *herdrrun.OwnedSession, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string, orchestratorPlanMode bool) (panelaunch.Request, string, bool, string, error) {
 	var fallbackNotice string
-	req, paneID, launchNotice, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, runtimeBackend, agentName, store, recorder,
+	req, paneID, launchNotice, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, runtimeBackend, herdr, agentName, fmt.Sprintf("%d", issue.Number), store, recorder,
 		func(store state.Store) error {
-			return guardIssueOrchestrator(projectRoot, store, issue.Number)
+			return guardLinkedIssueOrchestrator(projectRoot, store, issue.Number)
 		},
 		func(store state.Store, livenessKey string) panelaunch.Request {
 			var req panelaunch.Request
@@ -114,7 +121,13 @@ func orchestratorIssueBriefingPath(projectRoot string, issueNum, number int) str
 
 // cleanupIssueOrchestrator rolls back a newly created parent pane when the
 // child fan-out failed before creating any child pane.
-func cleanupIssueOrchestrator(projectRoot, session string, runtimeBackend backend.Backend, req panelaunch.Request, paneID string) (err error) {
+func cleanupIssueOrchestrator(
+	projectRoot, session string,
+	runtimeBackend backend.Backend,
+	owned *herdrrun.OwnedSession,
+	req panelaunch.Request,
+	paneID string,
+) (err error) {
 	recorder, err := state.LockProject(projectRoot)
 	if err != nil {
 		return err
@@ -124,9 +137,13 @@ func cleanupIssueOrchestrator(projectRoot, session string, runtimeBackend backen
 			err = errors.Join(err, fmt.Errorf("unlock fanout state: %w", unlockErr))
 		}
 	}()
-	if recorded, ok := recorder.Find(req.ParentRef, req.Number); ok &&
-		(recorded.PaneID != paneID || recorded.ShellKey != req.ShellKey) {
+	recorded, found := recorder.Find(req.ParentRef, req.Number)
+	if issueOrchestratorIdentityChanged(runtimeBackend.Name(), recorded, found, req, paneID) {
 		return fmt.Errorf("recorded orchestrator identity changed for %s/%d", req.ParentRef, req.Number)
+	}
+	runtimeBackend, err = issueOrchestratorCloseBackend(runtimeBackend, owned, recorded, found, req)
+	if err != nil {
+		return err
 	}
 	if err := panelaunch.KillAttachedPane(runtimeBackend, tuiLaunchTarget(session), paneID, req.ShellKey); err != nil {
 		return err
@@ -135,4 +152,33 @@ func cleanupIssueOrchestrator(projectRoot, session string, runtimeBackend backen
 		return fmt.Errorf("remove orchestrator state: %w", err)
 	}
 	return nil
+}
+
+func issueOrchestratorIdentityChanged(
+	runtimeBackend backend.Name,
+	recorded state.Pane,
+	found bool,
+	req panelaunch.Request,
+	paneID string,
+) bool {
+	if !found || runtimeBackend == backend.Herdr {
+		return found && recorded.PaneID != paneID
+	}
+	return recorded.PaneID != paneID || recorded.ShellKey != req.ShellKey
+}
+
+func issueOrchestratorCloseBackend(
+	runtimeBackend backend.Backend,
+	owned *herdrrun.OwnedSession,
+	recorded state.Pane,
+	found bool,
+	req panelaunch.Request,
+) (backend.Backend, error) {
+	if runtimeBackend.Name() != backend.Herdr {
+		return runtimeBackend, nil
+	}
+	if !found {
+		return nil, fmt.Errorf("recorded Herdr orchestrator identity is missing for %s/%d", req.ParentRef, req.Number)
+	}
+	return bindOwnedHerdrWorkspaceClose(owned, recorded)
 }

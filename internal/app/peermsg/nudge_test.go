@@ -377,6 +377,7 @@ func TestRunMsgNudgeHerdrFailsClosedBeforePrompt(t *testing.T) {
 		{name: "worktree changed", mutateLive: func(p *backend.LivePane) { p.WorktreePath = "/repo/other" }, want: "provenance changed"},
 		{name: "terminal changed", mutateLive: func(p *backend.LivePane) { p.TerminalID = "term-new" }, want: "identity or worktree"},
 		{name: "process changed", mutateProc: func(p *herdrrun.PaneProcessInfo) { p.ForegroundProcesses[0].Argv = []string{"other"} }, want: "process identity"},
+		{name: "workspace ownership changed", mutateRow: func(p *state.Pane) { p.HerdrWorkspaceLabel = "fanout-worktree-replaced" }, want: "launch binding changed"},
 		{name: "emitter generation changed", mutateRow: func(p *state.Pane) { p.EmitterNonce = strings.Repeat("c", 32) }, want: "launch binding changed"},
 		{name: "recipient duplicated", mutateStore: appendDuplicateNudgeRecipient, want: "launch binding changed"},
 		{name: "latest state blocked", mutateRow: func(p *state.Pane) { p.ReportedState = "blocked" }, want: "not nudgeable"},
@@ -549,7 +550,8 @@ func herdrNudgeFixture(reportedState string, refined bool) (state.Store, *fakeHe
 	session := &backend.AgentSessionRef{Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-71"}
 	pane := state.Pane{
 		Parent: "68", IssueNum: 71, Backend: backend.Herdr, PaneID: "w1:p1", Agent: "claude",
-		HerdrWorkspaceID: "w1", HerdrTerminalID: "term-71", HerdrRepoKey: repoKey,
+		HerdrWorkspaceID: "w1", HerdrWorkspaceLabel: "fanout-worktree-owned",
+		HerdrTerminalID: "term-71", HerdrRepoKey: repoKey,
 		HerdrAgentID: naming.HerdrAgentName(repoKey, rowKey, launchNonce), HerdrAgentSession: session,
 		HerdrSession: "fanout-owned", HerdrSocketPath: "/tmp/fanout-owned/herdr.sock",
 		WorktreePath: worktree, ReportedState: reportedState, StateRefinement: refined,
@@ -559,7 +561,7 @@ func herdrNudgeFixture(reportedState string, refined bool) (state.Store, *fakeHe
 	}
 	live := backend.LivePane{
 		Ref: paneRef(pane), TerminalID: pane.HerdrTerminalID, SessionID: pane.HerdrSession,
-		SocketPath: pane.HerdrSocketPath, RepoKey: pane.HerdrRepoKey,
+		SocketPath: pane.HerdrSocketPath, WorkspaceLabel: pane.HerdrWorkspaceLabel, RepoKey: pane.HerdrRepoKey,
 		ProjectRoot: "/repo", WorktreePath: worktree, CurrentPath: worktree, AgentPresent: true,
 		AgentProvider: pane.Agent, AgentID: pane.HerdrAgentID, AgentSession: session,
 	}

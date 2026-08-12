@@ -152,6 +152,10 @@ func validateHerdrCoordinatorRequest(req HerdrCoordinatorRequest) error {
 		req.CWD == "" || req.HerdrSession == "" || req.SocketPath == "" {
 		return fmt.Errorf("herdr coordinator request is incomplete")
 	}
+	if req.RuntimeParent != "" &&
+		(canonicalHerdrParent(req.Parent) != ManualParentRef || req.IssueNum >= 0) {
+		return fmt.Errorf("explicit Herdr runtime parent requires a manual coordinator")
+	}
 	return nil
 }
 

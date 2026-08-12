@@ -590,7 +590,7 @@ const planUsage = `Usage: fanout plan <spec.json | plan-slug> [options]
 Options:
   --agent <name|task-id=name> Agent to launch (or FANOUT_AGENT). Repeat for
                               per-task overrides.
-  --backend <tmux|herdr>      Select the runtime backend (herdr v1 is read-only)
+  --backend <tmux|herdr>      Select the runtime backend
   --dry-run                   Print worktree/tmux/agent actions without launching
   --status                    Print task status and exit
   --format <json|table>       Output format for --status (default: json)

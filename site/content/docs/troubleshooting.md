@@ -106,7 +106,7 @@ This error belongs to observation of an external [herdr backend]({{< relref "/do
 herdr status --json   # server and session state
 ```
 
-`HERDR_SOCKET_PATH` takes precedence over `HERDR_SESSION`, so a stale socket path can point fanout at the wrong server — unset it if `status` disagrees with what you expect. The TUI variant `run fanout inside an existing herdr pane (HERDR_ENV=1)` means what it says: the console only starts under the herdr backend when launched from a pane inside the herdr session. CLI issue, Project, plan, and watcher launches instead create or readopt fanout's repository-owned session.
+`HERDR_SOCKET_PATH` takes precedence over `HERDR_SESSION`, so a stale socket path can point fanout at the wrong server — unset it if `status` disagrees with what you expect. A no-argument TUI started from a plain shell no longer needs an existing Herdr pane: it creates or adopts fanout's repository-owned session, starts its console shell, and prints the attach command. Run that command from the same shell. CLI issue, Project, plan, and watcher launches use the same owned session.
 
 ## "unsupported herdr CLI version ..."
 
@@ -121,6 +121,6 @@ Install or upgrade to stable herdr 0.7.5 or newer. If the message is `requires a
 
 fanout does not preflight methods or response fields. `herdr method "<name>" is unavailable` means that the named call failed; check that the installed herdr version provides it.
 
-## "herdr backend interactive TUI actions are read-only"
+## "herdr backend interactive TUI action is unavailable"
 
-Not a fault. This message now applies to interactive TUI mutation and the remaining unsupported operations, not to CLI issue, Project, plan, watcher, or `--team` launch. Use `--backend herdr` for those launch lanes. Codex child Plan Mode is supported through fanout's app-server controller and owned launcher. A conflicting backend on a parent with recorded panes still fails with `explicit migration is required`; there is no migration command in v1. See [herdr backend]({{< relref "/docs/herdr-backend" >}}) for the capability table.
+Not a fault. In fanout's owned session, interactive launch, focus, and peek are available for rows whose complete saved identity still matches the live pane. The message remains for foreign or incomplete rows and unsupported send, restore, lifecycle, and plan-capture operations. Codex child Plan Mode runs through fanout's app-server controller and owned launcher. A conflicting backend on a parent with recorded panes still fails with `explicit migration is required`; there is no migration command in v1. See [herdr backend]({{< relref "/docs/herdr-backend" >}}) for the capability table.

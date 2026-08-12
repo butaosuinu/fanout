@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/errs"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -43,8 +44,9 @@ func IsPaneLauncherRequest() bool {
 	return os.Getenv(paneLauncherFlagEnv) == "1"
 }
 
-// RunPaneLauncher waits for the operation-bound intent. A coordinator remains
-// an inert long-lived process; a child consumes one token and execs its agent.
+// RunPaneLauncher waits for the operation-bound intent. A coordinator without
+// a launch remains inert; launch-bearing coordinators and children consume one
+// token and exec their recorded workload.
 func RunPaneLauncher(in io.Reader, out, errOut io.Writer) int {
 	request, err := paneLauncherRequestFromEnvironment()
 	if err != nil {
@@ -56,13 +58,13 @@ func RunPaneLauncher(in io.Reader, out, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "fanout herdr pane launcher: %v\n", err)
 		return 1
 	}
-	if intent.Kind == state.HerdrIntentCoordinator {
+	if intent.Kind == state.HerdrIntentCoordinator && intent.Launch == nil {
 		return holdCoordinatorLauncher(in, errOut)
 	}
-	return runAgentPaneLauncher(in, out, errOut, request, intent)
+	return runWorkloadPaneLauncher(in, out, errOut, request, intent)
 }
 
-func runAgentPaneLauncher(
+func runWorkloadPaneLauncher(
 	in io.Reader,
 	out, errOut io.Writer,
 	request paneLauncherRequest,
@@ -82,12 +84,56 @@ func runAgentPaneLauncher(
 		fmt.Fprintf(errOut, "fanout herdr pane launcher: %v\n", err)
 		return 1
 	}
+	environment = workloadExecEnvironment(request, intent, environment)
 	argv := append([]string{intent.Launch.Executable}, intent.Launch.Args...)
 	if err := syscall.Exec(intent.Launch.Executable, argv, environment); err != nil {
-		fmt.Fprintf(errOut, "fanout herdr pane launcher: exec agent: %v\n", err)
+		fmt.Fprintf(errOut, "fanout herdr pane launcher: exec workload: %v\n", err)
 		return 1
 	}
 	panic("unreachable")
+}
+
+func workloadExecEnvironment(
+	request paneLauncherRequest,
+	intent state.HerdrIntent,
+	environment []string,
+) []string {
+	if intent.Launch.Agent != "" {
+		return bindHerdrEmitterEnvironment(intent, environment)
+	}
+	// The capsule rejects caller-supplied HERDR_* values. An interactive shell
+	// still needs its runtime context, so restore only the route identity that
+	// this launcher already validated against the realized intent.
+	return append(environment,
+		"HERDR_ENV=1",
+		sessionEnv+"="+request.session,
+		socketEnv+"="+request.socketPath,
+		workspaceIDEnv+"="+request.workspaceID,
+		paneIDEnv+"="+request.paneID,
+	)
+}
+
+func bindHerdrEmitterEnvironment(intent state.HerdrIntent, environment []string) []string {
+	launch := intent.Launch
+	if launch == nil || launch.EmitterNonce == "" {
+		return environment
+	}
+	bindings := map[string]string{
+		telemetry.RowKeyEnv: intent.ID, telemetry.LaunchNonceEnv: launch.Nonce,
+		telemetry.EmitterNonceEnv: launch.EmitterNonce, telemetry.BackendEnv: "herdr",
+		telemetry.SessionEnv: intent.Session, telemetry.SocketPathEnv: intent.SocketPath,
+		telemetry.WorkspaceIDEnv: intent.Resource.WorkspaceID,
+		telemetry.PaneIDEnv:      intent.Resource.PaneID,
+		telemetry.TerminalIDEnv:  intent.Resource.TerminalID,
+		telemetry.AgentEnv:       launch.Agent, telemetry.AgentIDEnv: launch.AgentName,
+	}
+	for i, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		if value, ok := bindings[name]; ok {
+			environment[i] = name + "=" + value
+		}
+	}
+	return environment
 }
 
 func holdCoordinatorLauncher(in io.Reader, errOut io.Writer) int {
@@ -186,7 +232,7 @@ func matchingPaneLaunchIntent(
 }
 
 func paneLauncherIntentReady(intent state.HerdrIntent) bool {
-	return intent.Kind == state.HerdrIntentCoordinator && intent.Launch == nil ||
+	return intent.Kind == state.HerdrIntentCoordinator ||
 		intent.Kind == state.HerdrIntentWorktree && intent.Launch != nil
 }
 

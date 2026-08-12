@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 func TestViewAlwaysShowsBackendSelectionAndReason(t *testing.T) {
@@ -153,13 +155,142 @@ func TestHerdrRowRuntimeActionsAreDisabledBeforePorts(t *testing.T) {
 			}
 			message := strings.Join([]string{m.notice, m.actionMessage, m.peek.Err}, " ")
 			wantReason := backend.HerdrObservationOnlyReason
-			if tt.key == "p" {
-				wantReason = backend.HerdrContentReadReason
-			}
 			if !strings.Contains(message, wantReason) {
 				t.Fatalf("key %q reason = %q, want explicit herdr action reason", tt.key, message)
 			}
 		})
+	}
+}
+
+func TestOwnedHerdrPaneFocusAndPeekUsePersistedIdentityPorts(t *testing.T) {
+	saved := state.Pane{
+		Backend: backend.Herdr, PaneID: "p1", HerdrWorkspaceID: "w1",
+		HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "t1",
+	}
+	focused, captured := false, false
+	m := newModel(Options{
+		BackendSelection: backend.Selection{Name: backend.Herdr},
+		HerdrActionDisabled: func(got state.Pane) string {
+			if got.PaneID != saved.PaneID {
+				return "wrong identity"
+			}
+			return ""
+		},
+		FocusHerdrPane: func(got state.Pane) error {
+			focused = got.PaneID == saved.PaneID
+			return nil
+		},
+		CaptureHerdrPane: func(got state.Pane, lines int) (string, error) {
+			captured = got.PaneID == saved.PaneID && lines == peekLines
+			return "owned output", nil
+		},
+	})
+	m.allPanes = []paneView{
+		{Backend: backend.Herdr, PaneID: "p1", TmuxState: "live", savedPane: saved},
+	}
+	m.refreshRows()
+	if cmd := m.focusSelectedCmd(); cmd == nil {
+		t.Fatal("focusSelectedCmd() = nil, want owned Herdr focus")
+	} else {
+		_ = cmd()
+	}
+	if cmd := m.peekSelectedCmd(true); cmd == nil {
+		t.Fatal("peekSelectedCmd() = nil, want owned Herdr read")
+	} else {
+		_ = cmd()
+	}
+	if !focused || !captured {
+		t.Fatalf("owned ports called = focus:%t peek:%t, want both true", focused, captured)
+	}
+}
+
+func TestOwnedHerdrPaneLifecycleStaysDisabled(t *testing.T) {
+	saved := state.Pane{Backend: backend.Herdr, PaneID: "p1", HerdrWorkspaceID: "w1"}
+	m := newModel(Options{
+		BackendSelection: backend.Selection{Name: backend.Herdr},
+		HerdrActionDisabled: func(state.Pane) string {
+			return ""
+		},
+	})
+	m.allPanes = []paneView{{
+		Backend: backend.Herdr, PaneID: "p1", TmuxState: "live", savedPane: saved,
+	}}
+	m.refreshRows()
+
+	for _, action := range []lifecycleAction{actionClose, actionMerge, actionCleanup} {
+		updated, cmd := m.startPendingAction(action)
+		m = updated.(model)
+		if cmd != nil || m.pendingAction != nil {
+			t.Fatalf("%s enabled an owned Herdr lifecycle action", action)
+		}
+		if !strings.Contains(m.actionMessage, backend.HerdrObservationOnlyReason) {
+			t.Fatalf("%s reason = %q, want explicit deferred lifecycle reason", action, m.actionMessage)
+		}
+	}
+}
+
+func TestAutomaticHerdrFocusReloadsPersistedPaneIdentity(t *testing.T) {
+	root := t.TempDir()
+	session := backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "thread-1"}
+	row := state.Pane{
+		Parent: "524", IssueNum: 530, Backend: backend.Herdr, PaneID: "w1:p1",
+		Agent: "codex", HerdrAgentID: "agent-1", HerdrAgentSession: &session,
+		HerdrWorkspaceID: "w1", HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "term-1",
+		HerdrRepoKey: "/repo/.git", HerdrSession: "owned-session", HerdrSocketPath: "/tmp/owned.sock",
+		WorktreePath: root + "/child",
+	}
+	locked, err := state.LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.RecordPane(row); err != nil {
+		t.Fatal(err)
+	}
+	if err = locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	live := backend.LivePane{
+		Ref:            backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
+		WorkspaceLabel: "owned-label", TerminalID: "term-1", AgentID: "agent-1",
+		AgentProvider: "codex", AgentSession: &session, AgentPresent: true,
+		RepoKey: "/repo/.git", ProjectRoot: root, WorktreePath: root + "/child",
+		SessionID: "owned-session", SocketPath: "/tmp/owned.sock",
+	}
+	var focused state.Pane
+	unrelated := backend.ObservationRouteUnavailable(
+		backend.ObservationRoute{Backend: backend.Tmux},
+		errors.New("tmux route failed"),
+	)
+	m := newModel(Options{
+		ProjectRoot: root, BackendSelection: backend.Selection{Name: backend.Herdr},
+		ListLive:            func() ([]backend.LivePane, error) { return []backend.LivePane{live}, unrelated },
+		HerdrActionDisabled: func(state.Pane) string { return "" },
+		FocusHerdrPane:      func(pane state.Pane) error { focused = pane; return nil },
+		FocusPane:           func(string) error { t.Fatal("automatic Herdr focus routed through tmux"); return nil },
+	})
+	msg := m.focusPaneIDCmd("w1:p1", "launched")()
+	focusedMsg, ok := msg.(paneFocusedMsg)
+	if !ok || focusedMsg.err != nil || focused.HerdrWorkspaceLabel != "owned-label" || focused.HerdrTerminalID != "term-1" {
+		t.Fatalf("automatic Herdr focus = msg:%#v pane:%+v", msg, focused)
+	}
+}
+
+func TestHerdrFocusRetainsTargetRouteObservationFailure(t *testing.T) {
+	pane := paneView{
+		Backend: backend.Herdr,
+		savedPane: state.Pane{
+			HerdrSession: "owned-session", HerdrSocketPath: "/tmp/owned.sock",
+		},
+	}
+	route := backend.ObservationRoute{
+		Backend: backend.Herdr, SessionID: "owned-session", SocketPath: "/tmp/owned.sock",
+	}
+	err := backend.ObservationRouteUnavailable(route, errors.New("owned route failed"))
+	if got := observationErrorForPane(err, pane); !errors.Is(got, err) {
+		t.Fatalf("target route error = %v, want %v", got, err)
+	}
+	if got := observationErrorForPane(errors.New("unscoped failure"), pane); got == nil {
+		t.Fatal("unscoped observation failure was ignored")
 	}
 }
 

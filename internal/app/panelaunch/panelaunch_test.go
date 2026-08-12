@@ -204,6 +204,17 @@ func TestStatePaneForBackendCapturesExactHerdrIdentity(t *testing.T) {
 	}
 }
 
+func TestPrepareAttachedLivenessRejectsHerdrStartGate(t *testing.T) {
+	req := Request{AgentStartGate: "tmux-only", ShellKey: "tmux-key"}
+	err := prepareAttachedLiveness(backend.Herdr, &req)
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("prepareAttachedLiveness() error = %v, want Herdr rejection", err)
+	}
+	if req.ShellKey != "tmux-key" {
+		t.Fatalf("rejected request ShellKey = %q, want unchanged", req.ShellKey)
+	}
+}
+
 func TestRuntimeBackendBindingsIncludeSyntheticHerdrCoordinatorOwner(t *testing.T) {
 	store := state.Store{Panes: []state.Pane{{
 		Parent: ManualParentRef, RuntimeParent: "524", IssueNum: -1, Backend: backend.Herdr,

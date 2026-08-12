@@ -709,9 +709,10 @@ describe("drawer + peek", () => {
   });
 
   it.each([
-    ["derived.canPeek", true],
-    ["backend fallback", false],
-  ])("live herdr pane は %s で targeted read を呼ばない", async (_gate, includeDerived) => {
+    ["owned", true, 1],
+    ["derived.canPeek=false", false, 0],
+    ["derived.canPeek missing", undefined, 0],
+  ])("live herdr pane は %s の peek gate に従う", async (_gate, canPeek, wantPeekCalls) => {
     let peekCalls = 0;
     let planCalls = 0;
     server.use(
@@ -737,7 +738,7 @@ describe("drawer + peek", () => {
             paneId: "w1:p5",
             alive: true,
             planMode: true,
-            ...(includeDerived ? { derived: { canPeek: false } } : {}),
+            ...(canPeek === undefined ? {} : { derived: { canPeek } }),
           }),
         ]),
       ]),
@@ -747,14 +748,20 @@ describe("drawer + peek", () => {
     const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
     expect(drawer.querySelector("#d-backend")).toHaveTextContent("herdr");
     expect(drawer.querySelector("#d-pane")).toHaveTextContent("w1:p5");
-    expect(within(drawer).getByLabelText("peek disabled")).toHaveAttribute("aria-disabled", "true");
     expect(within(drawer).getByLabelText("plan disabled")).toHaveAttribute("aria-disabled", "true");
-    expect(
-      within(drawer).getAllByText(
-        "herdr backend v1 はペイン内容を読み取らないため利用できません。",
-      ),
-    ).toHaveLength(2);
-    expect(peekCalls).toBe(0);
+    if (wantPeekCalls > 0) {
+      expect(
+        within(drawer).getByText("herdr backend は plan capture に対応していません。"),
+      ).toBeInTheDocument();
+      await waitFor(() => expect(peekCalls).toBe(wantPeekCalls));
+      expect(within(drawer).queryByLabelText("peek disabled")).not.toBeInTheDocument();
+    } else {
+      expect(within(drawer).getByLabelText("peek disabled")).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      expect(peekCalls).toBe(0);
+    }
     expect(planCalls).toBe(0);
   });
 

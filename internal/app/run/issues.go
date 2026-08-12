@@ -48,9 +48,21 @@ type IssuePlanInput struct {
 
 // IssueReadyFunc runs after the child plan and its effective agents validate,
 // while the live state recorder remains locked, but before any child pane is
-// created. Callers can atomically attach a parent coordinator to the same
+// created. Callers can reserve or attach a parent coordinator in the same
 // state transaction without duplicating issue planning.
 type IssueReadyFunc func(state.Store, panelaunch.StateRecorder) error
+
+// IssueAfterContext reports the child-launch outcome while the same state
+// recorder used by the fan-out remains locked.
+type IssueAfterContext struct {
+	Created int
+	Failed  int
+}
+
+// IssueAfterFunc runs after the fail-fast child loop while the launch state is
+// still locked. The TUI uses it to start a Herdr parent coordinator only after
+// every successfully created child row is committed.
+type IssueAfterFunc func(state.Store, panelaunch.StateRecorder, IssueAfterContext) error
 
 // Issues runs the issue / Project fan-out lane against an already-resolved
 // runtime. cmd owns parsing, dependency checks, and runtime resolution before
@@ -63,23 +75,23 @@ func Issues(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName strin
 // IssuesWithResult runs the issue / Project fan-out lane and returns the exact
 // pane ids created before completion or a fail-fast launch error.
 func IssuesWithResult(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc) (IssueExecutionResult, exitcode.Code) {
-	return IssuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, nil)
+	return IssuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, nil, nil)
 }
 
-// IssuesWithResultWhenReady is IssuesWithResult with one optional pre-execute
-// callback. The TUI parent lane uses it to launch its project-root orchestrator
-// only after the exact child plan and agent assignments are known-valid.
-func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, ready IssueReadyFunc) (IssueExecutionResult, exitcode.Code) {
-	return issuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, nil, ready)
+// IssuesWithResultWhenReady is IssuesWithResult with optional callbacks before
+// and after the child loop. They run while the same state recorder is locked.
+func IssuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, ready IssueReadyFunc, after IssueAfterFunc) (IssueExecutionResult, exitcode.Code) {
+	return issuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, nil, ready, after)
 }
 
 // IssuesWithPlanInputResultWhenReady is IssuesWithResultWhenReady with a
 // caller-prepared issue enumeration and lookup cache.
-func IssuesWithPlanInputResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, input IssuePlanInput, ready IssueReadyFunc) (IssueExecutionResult, exitcode.Code) {
-	return issuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, &input, ready)
+func IssuesWithPlanInputResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, input IssuePlanInput, ready IssueReadyFunc, after IssueAfterFunc) (IssueExecutionResult, exitcode.Code) {
+	return issuesWithResultWhenReady(cfg, lg, rt, commandName, bindKeys, &input, ready, after)
 }
 
-func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, input *IssuePlanInput, ready IssueReadyFunc) (IssueExecutionResult, exitcode.Code) {
+//nolint:gocognit,gocyclo,funlen // The locked issue fan-out transaction must order planning, child side effects, and its two boundary callbacks together.
+func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, commandName string, bindKeys BindKeysFunc, input *IssuePlanInput, ready IssueReadyFunc, after IssueAfterFunc) (IssueExecutionResult, exitcode.Code) {
 	resolvedSettings := settings.Resolve(rt.Info.ProjectRoot, settingsOverrides(cfg), lg.Warn)
 	launchCfg := effectiveIssueLaunchConfig(cfg, resolvedSettings)
 	hookConfig := hooks.LoadUserConfig(lg)
@@ -180,7 +192,14 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		return IssueExecutionResult{Plan: plan}, exitcode.OK
 	}
 	if plan.UnfannedCount == 0 {
+		if err := prepareIssueCallbacks(rt, ready, after); err != nil {
+			lg.Err("runtime backend: %v", err)
+			return IssueExecutionResult{Plan: plan}, exitcode.Env
+		}
 		if !callIssueReady(ready, store, recorder, lg) {
+			return IssueExecutionResult{Plan: plan}, exitcode.Env
+		}
+		if !callIssueAfter(after, store, recorder, IssueAfterContext{}, lg) {
 			return IssueExecutionResult{Plan: plan}, exitcode.Env
 		}
 		lg.Ok("all %d OPEN sub-issue(s) already have a fanout pane. nothing to do.", len(plan.AlreadyFanned))
@@ -220,6 +239,13 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 	}
 	result := executePlan(launchCfg, lg, rt.Info, rt.Backend, rt.Herdr, plan.Targets, hydrateLaunchBody, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
 	printSummary(plan, result, cfg, lg, c, commandName)
+	progress := IssueAfterContext{
+		Created: result.Created,
+		Failed:  result.Failed,
+	}
+	if len(plan.Targets) > 0 && !callIssueAfter(after, store, recorder, progress, lg) {
+		return IssueExecutionResult{CreatedIssueNums: result.CreatedNums, CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices, Plan: plan}, exitcode.Env
+	}
 
 	// Register tmux keybindings so the user can pop the read-only dashboard
 	// (F12 or prefix + D) and same-worktree action menu (prefix + M) from any
@@ -247,6 +273,13 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 	return IssueExecutionResult{CreatedIssueNums: result.CreatedNums, CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices, Plan: plan}, exitcode.OK
 }
 
+func prepareIssueCallbacks(rt *Runtime, ready IssueReadyFunc, after IssueAfterFunc) error {
+	if ready == nil && after == nil {
+		return nil
+	}
+	return rt.PrepareLaunchBackend()
+}
+
 func prepareIssueLaunch(cfg *cliflags.Config, plan Plan, rt *Runtime, store state.Store, recorder *state.LockedStore, ready IssueReadyFunc, lg *log.Logger) bool {
 	if err := validateIssueAgents(cfg, plan.Targets, plan.LimitDeferred); err != nil {
 		lg.Err("%s", err.Error())
@@ -270,6 +303,20 @@ func callIssueReady(ready IssueReadyFunc, store state.Store, recorder *state.Loc
 		store = recorder.Store
 	}
 	if err := ready(store, recorder); err != nil {
+		lg.Err("%s", err.Error())
+		return false
+	}
+	return true
+}
+
+func callIssueAfter(after IssueAfterFunc, store state.Store, recorder *state.LockedStore, progress IssueAfterContext, lg *log.Logger) bool {
+	if after == nil {
+		return true
+	}
+	if recorder != nil {
+		store = recorder.Store
+	}
+	if err := after(store, recorder, progress); err != nil {
 		lg.Err("%s", err.Error())
 		return false
 	}

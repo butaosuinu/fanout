@@ -282,6 +282,9 @@ func TestOpenOwnedReadoptsExistingOwnedSession(t *testing.T) {
 		opened.GitCommonDir != h.session.GitCommonDir {
 		t.Fatalf("opened session = %+v, want route from %+v", opened, h.session)
 	}
+	if opened.EmitterPath != opened.LauncherPath {
+		t.Fatalf("opened current launcher route = %+v", opened)
+	}
 	panes, err := opened.LivePanes(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -500,6 +503,52 @@ func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
 	}
 }
 
+func TestOpenOwnedMissingSessionIsReadOnly(t *testing.T) {
+	root := t.TempDir()
+	commonDir := filepath.Join(root, "repo.git")
+	if err := os.Mkdir(commonDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nonce, err := randomToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeBase := filepath.Join("/tmp", "fanout-open-owned-"+nonce[:12])
+	t.Cleanup(func() {
+		_ = os.RemoveAll(runtimeBase) // Clean up only if a failed read-only admission created it.
+	})
+	_, err = OpenOwned(context.Background(), OwnedOptions{
+		GitCommonDir: commonDir,
+		RuntimeBase:  runtimeBase,
+	})
+	if !errors.Is(err, ErrOwnedSessionNotFound) {
+		t.Fatalf("OpenOwned() error = %v, want ErrOwnedSessionNotFound", err)
+	}
+	if _, statErr := os.Lstat(runtimeBase); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("OpenOwned() created runtime path: %v", statErr)
+	}
+}
+
+func TestReopenedOwnedBackendAdmitsPinnedBinary(t *testing.T) {
+	h := newOwnedHarness(t)
+	marker, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("readOwnerMarker() = %+v, %t, %v", marker, found, err)
+	}
+	admitted := binaryAdmission{
+		path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion,
+	}
+	backend := newReopenedOwnedBackend(h.layout, marker, admitted, nil)
+	backend.output = h.fake.output
+	probed, err := backend.probeOwned(context.Background(), *backend.owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probed.binary != marker.BinaryPath || probed.sha256 != marker.BinarySHA256 {
+		t.Fatalf("reopened admission = %+v, want marker binary identity", probed)
+	}
+}
+
 func TestEnsureOwnedReadoptsPinnedLauncherAfterFanoutUpdate(t *testing.T) {
 	h := newOwnedHarness(t)
 	marker, found, err := readOwnerMarker(h.layout.markerPath)
@@ -516,17 +565,17 @@ func TestEnsureOwnedReadoptsPinnedLauncherAfterFanoutUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	marker.LauncherPath, marker.LauncherSHA256 = legacyPath, legacyHash
-	if err := os.Remove(h.layout.markerPath); err != nil {
-		t.Fatal(err)
+	if removeErr := os.Remove(h.layout.markerPath); removeErr != nil {
+		t.Fatal(removeErr)
 	}
-	if err := writeOwnerMarkerExclusive(h.layout.markerPath, marker); err != nil {
-		t.Fatal(err)
+	if markerErr := writeOwnerMarkerExclusive(h.layout.markerPath, marker); markerErr != nil {
+		t.Fatal(markerErr)
 	}
-	if err := os.Remove(h.layout.configPath); err != nil {
-		t.Fatal(err)
+	if removeErr := os.Remove(h.layout.configPath); removeErr != nil {
+		t.Fatal(removeErr)
 	}
-	if err := ensureOwnedConfig(h.layout, legacyPath); err != nil {
-		t.Fatal(err)
+	if configErr := ensureOwnedConfig(h.layout, legacyPath); configErr != nil {
+		t.Fatal(configErr)
 	}
 
 	reused := h.ensure()
@@ -535,6 +584,17 @@ func TestEnsureOwnedReadoptsPinnedLauncherAfterFanoutUpdate(t *testing.T) {
 	}
 	if reused.EmitterPath == legacyPath || reused.EmitterPath == "" {
 		t.Fatalf("re-adopted emitter = %q, want current content-addressed fanout", reused.EmitterPath)
+	}
+	observed := New(reused.Session, reused.SocketPath)
+	observed.output = h.fake.output
+	opened, err := openOwned(context.Background(), OwnedOptions{
+		GitCommonDir: h.commonDir, RuntimeBase: h.runtimeBase,
+	}, observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.EmitterPath == "" || opened.EmitterPath == opened.LauncherPath {
+		t.Fatalf("opened route = %+v, want read-only current-launcher mismatch", opened)
 	}
 }
 
@@ -1107,7 +1167,7 @@ func TestBoundOwnedBackendRejectsAgentFocusWithoutTargetPaneFocus(t *testing.T) 
 	}
 }
 
-func TestBoundOwnedBackendRejectsFocusWithoutLiveAgentIdentity(t *testing.T) {
+func TestBoundOwnedBackendFocusesWorkspaceWithoutLiveAgentIdentity(t *testing.T) {
 	h := newOwnedHarness(t)
 	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
 		for i := range *snapshot.Panes {
@@ -1123,12 +1183,20 @@ func TestBoundOwnedBackendRejectsFocusWithoutLiveAgentIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseline := len(h.fake.commands)
-	if err := bound.Focus(target.Ref); !errors.Is(err, ErrOwnedIdentityMismatch) {
-		t.Fatalf("Focus() without live agent error = %v", err)
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if !slices.Equal(args, []string{"workspace", "focus", target.Ref.Workspace}) {
+			return nil, fmt.Errorf("unexpected mutation args %v", args)
+		}
+		h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+			for i := range *snapshot.Panes {
+				focused := (*snapshot.Panes)[i].PaneID == target.Ref.Pane
+				(*snapshot.Panes)[i].Focused = &focused
+			}
+		})
+		return nil, nil
 	}
-	if len(h.fake.commands) != baseline {
-		t.Fatalf("focus without live agent invoked herdr: before=%d after=%d", baseline, len(h.fake.commands))
+	if err := bound.Focus(target.Ref); err != nil {
+		t.Fatalf("Focus() without live agent error = %v", err)
 	}
 }
 
@@ -1181,6 +1249,58 @@ func TestBoundOwnedCloserClosesWorkspaceButRetainsCheckoutForManualReconciliatio
 	}
 	if _, err := os.Stat(filepath.Join(h.worktreeGitDir, worktreeOwnershipMarkerName)); err != nil {
 		t.Fatalf("retained worktree marker: %v", err)
+	}
+}
+
+func TestBoundOwnedWorkspaceCloserClosesExactGenericWorkspace(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	target.RepoKey = ""
+	target.WorktreePath = ""
+	target.CurrentPath = "/wrong-saved-cwd"
+	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+		for i := range *snapshot.Workspaces {
+			if (*snapshot.Workspaces)[i].WorkspaceID == target.Ref.Workspace {
+				(*snapshot.Workspaces)[i].Worktree = nil
+			}
+		}
+	})
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if !slices.Equal(args, []string{"workspace", "close", target.Ref.Workspace}) {
+			return nil, fmt.Errorf("unexpected close args %v", args)
+		}
+		h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+			workspaces := slices.DeleteFunc(*snapshot.Workspaces, func(w workspaceJSON) bool {
+				return w.WorkspaceID == target.Ref.Workspace
+			})
+			panes := slices.DeleteFunc(*snapshot.Panes, func(p paneJSON) bool {
+				return p.WorkspaceID == target.Ref.Workspace
+			})
+			agents := slices.DeleteFunc(*snapshot.Agents, func(a agentJSON) bool {
+				return a.WorkspaceID == target.Ref.Workspace
+			})
+			snapshot.Workspaces, snapshot.Panes, snapshot.Agents = &workspaces, &panes, &agents
+		})
+		return nil, nil
+	}
+	bound, err := h.session.Backend().BindOwnedWorkspaceClose(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := bound.CloseOwned(corebackend.CloseRequest{Ref: corebackend.PaneRef{
+		Backend: corebackend.Herdr,
+		Pane:    target.Ref.Pane,
+	}})
+	if err != nil || result.Status != corebackend.CloseConfirmed {
+		t.Fatalf("CloseOwned() = %+v, %v", result, err)
+	}
+}
+
+func TestBoundOwnedWorkspaceCloserRejectsWorktreeTarget(t *testing.T) {
+	h := newOwnedHarness(t)
+	_, err := h.session.Backend().BindOwnedWorkspaceClose(h.target())
+	if !errors.Is(err, ErrOwnedIdentityMismatch) {
+		t.Fatalf("BindOwnedWorkspaceClose() error = %v", err)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -38,6 +39,65 @@ func TestWorkloadEnvironmentRejectsDuplicateNames(t *testing.T) {
 	_, err := WorkloadEnvironment([]string{"PATH=/one", "PATH=/two"}, "/owned/fanout")
 	if err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("error = %v, want duplicate rejection", err)
+	}
+}
+
+func TestWorkloadExecEnvironmentRestoresOnlyValidatedShellRoute(t *testing.T) {
+	request := paneLauncherRequest{
+		session: "owned-session", socketPath: "/owned/herdr.sock",
+		workspaceID: "w1", paneID: "w1:p1",
+	}
+	base := []string{"PATH=/bin", "FANOUT_BACKEND=herdr"}
+	shell := state.HerdrIntent{Launch: &state.HerdrLaunch{}}
+	got := workloadExecEnvironment(request, shell, append([]string(nil), base...))
+	wantSuffix := []string{
+		"HERDR_ENV=1", "HERDR_SESSION=owned-session", "HERDR_SOCKET_PATH=/owned/herdr.sock",
+		"HERDR_WORKSPACE_ID=w1", "HERDR_PANE_ID=w1:p1",
+	}
+	if !slices.Equal(got[len(base):], wantSuffix) {
+		t.Fatalf("shell route environment = %q, want suffix %q", got, wantSuffix)
+	}
+
+	agentIntent := state.HerdrIntent{Launch: &state.HerdrLaunch{Agent: "codex"}}
+	agentEnv := workloadExecEnvironment(request, agentIntent, append([]string(nil), base...))
+	if !slices.Equal(agentEnv, base) {
+		t.Fatalf("agent environment = %q, want control-plane-free %q", agentEnv, base)
+	}
+}
+
+func TestWorkloadExecEnvironmentBindsEmitterToRealizedCoordinator(t *testing.T) {
+	intent := state.HerdrIntent{
+		ID: "coordinator:manual:/repo:530", Session: "owned-session", SocketPath: "/owned/herdr.sock",
+		Resource: state.HerdrResource{
+			WorkspaceID: "w1", PaneID: "w1:p1", TerminalID: "terminal-1",
+		},
+		Launch: &state.HerdrLaunch{
+			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
+			Agent: "claude", AgentName: "fanout-agent",
+		},
+	}
+	environment := []string{
+		telemetry.RowKeyEnv + "=", telemetry.LaunchNonceEnv + "=",
+		telemetry.EmitterNonceEnv + "=", telemetry.BackendEnv + "=",
+		telemetry.SessionEnv + "=", telemetry.SocketPathEnv + "=",
+		telemetry.WorkspaceIDEnv + "=", telemetry.PaneIDEnv + "=",
+		telemetry.TerminalIDEnv + "=", telemetry.AgentEnv + "=",
+		telemetry.AgentIDEnv + "=", "PATH=/bin",
+	}
+	got := workloadExecEnvironment(paneLauncherRequest{}, intent, environment)
+	want := map[string]string{
+		telemetry.RowKeyEnv: intent.ID, telemetry.LaunchNonceEnv: intent.Launch.Nonce,
+		telemetry.EmitterNonceEnv: intent.Launch.EmitterNonce, telemetry.BackendEnv: "herdr",
+		telemetry.SessionEnv: intent.Session, telemetry.SocketPathEnv: intent.SocketPath,
+		telemetry.WorkspaceIDEnv: intent.Resource.WorkspaceID,
+		telemetry.PaneIDEnv:      intent.Resource.PaneID, telemetry.TerminalIDEnv: intent.Resource.TerminalID,
+		telemetry.AgentEnv: intent.Launch.Agent, telemetry.AgentIDEnv: intent.Launch.AgentName,
+	}
+	for _, entry := range got {
+		name, value, _ := strings.Cut(entry, "=")
+		if expected, ok := want[name]; ok && value != expected {
+			t.Fatalf("environment[%s] = %q, want %q", name, value, expected)
+		}
 	}
 }
 
@@ -176,6 +236,10 @@ func TestMatchingPaneLaunchIntentAcceptsRealizedCoordinatorWithoutAgentLaunch(t 
 	}
 	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); !found {
 		t.Fatal("realized coordinator was not assigned to its launcher")
+	}
+	intent.Launch = &state.HerdrLaunch{Nonce: strings.Repeat("a", 32)}
+	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); !found {
+		t.Fatal("launch-bearing coordinator was not assigned to its launcher")
 	}
 	intent.Kind = state.HerdrIntentRollback
 	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); found {

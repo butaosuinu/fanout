@@ -57,6 +57,7 @@ type OwnedCloseRequest struct {
 type ownedTargetAdmission struct {
 	target           OwnedPaneIdentity
 	closeRequest     *OwnedCloseRequest
+	workspaceClose   bool
 	closeFingerprint corebackend.CloseRequest
 }
 
@@ -77,6 +78,25 @@ func (b *Backend) BindOwnedTarget(target OwnedPaneIdentity) (*Backend, error) {
 func (b *Backend) BindOwnedClose(req OwnedCloseRequest) (*Backend, error) {
 	cloned := cloneOwnedCloseRequest(req)
 	return b.bindOwnedTarget(cloned.Target, &cloned)
+}
+
+// BindOwnedWorkspaceClose admits an exact generic workspace for close. It is
+// limited to checkout-free console/coordinator workspaces; worktree-backed
+// close must retain the stronger ownership proof used by BindOwnedClose.
+func (b *Backend) BindOwnedWorkspaceClose(target OwnedPaneIdentity) (*Backend, error) {
+	if target.RepoKey != "" || target.WorktreePath != "" {
+		return nil, fmt.Errorf("%w: generic workspace close cannot own a checkout", ErrOwnedIdentityMismatch)
+	}
+	bound, err := b.bindOwnedTarget(target, nil)
+	if err != nil {
+		return nil, err
+	}
+	bound.target.workspaceClose = true
+	bound.target.closeFingerprint = corebackend.CloseRequest{Ref: corebackend.PaneRef{
+		Backend: corebackend.Herdr,
+		Pane:    target.Ref.Pane,
+	}}
+	return bound, nil
 }
 
 func (b *Backend) bindOwnedTarget(target OwnedPaneIdentity, closeRequest *OwnedCloseRequest) (*Backend, error) {
@@ -350,8 +370,8 @@ func (b *Backend) focusCore(ref corebackend.PaneRef) error {
 }
 
 func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) error {
-	if target.AgentID == "" || target.AgentSession == nil {
-		return fmt.Errorf("%w: focus requires a saved live-agent identity", ErrOwnedIdentityMismatch)
+	if (target.AgentID == "") != (target.AgentSession == nil) {
+		return fmt.Errorf("%w: focus target has a partial live-agent identity", ErrOwnedIdentityMismatch)
 	}
 	admission, lock, err := b.acquireOwnedOperation(ctx)
 	if err != nil {
@@ -362,9 +382,15 @@ func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) erro
 	if err != nil {
 		return err
 	}
-	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "agent", "focus", target.Ref.Pane)
+	args := []string{"workspace", "focus", target.Ref.Workspace}
+	method := "workspace.focus"
+	if target.AgentID != "" {
+		args = []string{"agent", "focus", target.Ref.Pane}
+		method = "agent.focus"
+	}
+	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, args...)
 	if err != nil {
-		return methodUnavailable("agent.focus")
+		return methodUnavailable(method)
 	}
 	view, err := b.ownedSnapshotView(ctx, admission)
 	if err != nil {
@@ -372,7 +398,7 @@ func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) erro
 	}
 	current, ok := view.find(target.Ref)
 	if !ok || !ownedPaneMatches(target, current) || !current.paneFocused {
-		return fmt.Errorf("%w: agent focus did not focus the admitted pane", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: focus did not select the admitted pane", ErrOwnedIdentityMismatch)
 	}
 	return nil
 }
@@ -416,7 +442,7 @@ func (b *Backend) closePaneOwned(ctx context.Context, target OwnedPaneIdentity) 
 
 func (b *Backend) CloseOwned(req corebackend.CloseRequest) (corebackend.CloseResult, error) {
 	failed := corebackend.CloseResult{Status: corebackend.CloseFailed}
-	if b == nil || b.target == nil || b.target.closeRequest == nil {
+	if b == nil || b.target == nil || (!b.target.workspaceClose && b.target.closeRequest == nil) {
 		return failed, corebackend.Unsupported(corebackend.Herdr, "owned close without an immutable target admission")
 	}
 	if req != b.target.closeFingerprint {
@@ -424,7 +450,35 @@ func (b *Backend) CloseOwned(req corebackend.CloseRequest) (corebackend.CloseRes
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*commandTimeout)
 	defer cancel()
+	if b.target.workspaceClose {
+		return b.closeOwnedWorkspace(ctx, b.target.target)
+	}
 	return b.closeOwnedSession(ctx, cloneOwnedCloseRequest(*b.target.closeRequest))
+}
+
+func (b *Backend) closeOwnedWorkspace(ctx context.Context, target OwnedPaneIdentity) (corebackend.CloseResult, error) {
+	failed := corebackend.CloseResult{Status: corebackend.CloseFailed}
+	admission, lock, err := b.acquireOwnedOperation(ctx)
+	if err != nil {
+		return failed, err
+	}
+	defer unlockPrivateFile(lock)
+	target, probed, err := b.resolveOwnedTarget(ctx, admission, target)
+	if err != nil {
+		return failed, err
+	}
+	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "close", target.Ref.Workspace)
+	if err != nil {
+		return failed, methodUnavailable("workspace.close")
+	}
+	view, err := b.ownedSnapshotView(ctx, admission)
+	if err != nil {
+		return failed, err
+	}
+	if view.workspacePresent(target.Ref.Workspace) {
+		return failed, fmt.Errorf("herdr workspace close returned success but workspace remains live")
+	}
+	return corebackend.CloseResult{Status: corebackend.CloseConfirmed}, nil
 }
 
 func (b *Backend) closeOwnedSession(ctx context.Context, req OwnedCloseRequest) (corebackend.CloseResult, error) {

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 func normalizeBackendSelection(selection backend.Selection) backend.Selection {
@@ -51,19 +52,54 @@ func herdrActionDisabledReason(action string) string {
 	return fmt.Sprintf("%s; %s is unavailable", backend.HerdrObservationOnlyReason, action)
 }
 
+func herdrInteractiveActionSupported(action string) bool {
+	switch strings.TrimSpace(action) {
+	case "focus", "peek", "attach", "terminal launch", "launch", "runtime action":
+		return true
+	default:
+		return false
+	}
+}
+
 func (m model) runtimeActionDisabledReason(pane *paneView, action string) string {
-	if m.selectedBackend() == backend.Herdr {
+	applies, reason := herdrActionScope(m.selectedBackend(), pane)
+	if !applies {
+		return ""
+	}
+	if reason != "" {
+		return reason
+	}
+	if !herdrInteractiveActionSupported(action) {
 		return herdrActionDisabledReason(action)
 	}
-	if pane != nil && backend.NormalizeName(pane.Backend) == backend.Herdr {
+	if m.opts.HerdrActionDisabled == nil {
 		return herdrActionDisabledReason(action)
+	}
+	saved := state.Pane{}
+	if pane != nil {
+		saved = pane.savedPane
+	}
+	if reason := strings.TrimSpace(m.opts.HerdrActionDisabled(saved)); reason != "" {
+		return reason
 	}
 	return ""
 }
 
-func (m model) peekDisabledReason(pane paneView) string {
-	if m.selectedBackend() == backend.Herdr || backend.NormalizeName(pane.Backend) == backend.Herdr {
-		return backend.HerdrContentReadReason
+func herdrActionScope(selected backend.Name, pane *paneView) (bool, string) {
+	selectedHerdr := selected == backend.Herdr
+	paneHerdr := pane != nil && backend.NormalizeName(pane.Backend) == backend.Herdr
+	if !selectedHerdr && !paneHerdr {
+		return false, ""
 	}
-	return ""
+	if selectedHerdr && pane != nil && !paneHerdr {
+		return true, "pane is not in this repository's fanout-owned Herdr session"
+	}
+	if paneHerdr && !pane.canFocus() {
+		return true, "pane is not in this repository's fanout-owned Herdr session"
+	}
+	return true, ""
+}
+
+func (m model) peekDisabledReason(pane paneView) string {
+	return m.runtimeActionDisabledReason(&pane, "peek")
 }

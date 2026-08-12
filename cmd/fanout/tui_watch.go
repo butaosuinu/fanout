@@ -19,6 +19,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/fanset"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
@@ -26,8 +27,8 @@ import (
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
-func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, includeHostTmux bool) (fanouttui.WatcherRunner, time.Duration, string, error) {
-	if !resolvedSettings.Watcher {
+func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, includeHostTmux, interactiveLaunch bool) (fanouttui.WatcherRunner, time.Duration, string, error) {
+	if !resolvedSettings.Watcher || !interactiveLaunch {
 		return nil, 0, "", nil
 	}
 	preflightCfg := newWatcherPreflightConfig(resolvedSettings)
@@ -193,7 +194,7 @@ func validateStandaloneIssueAgent(cfg *cliflags.Config, issueNum int) error {
 }
 
 func launchParentIssueFanoutWithPlanInput(projectRoot, session, commandName string, cfg *cliflags.Config, input run.IssuePlanInput) (watch.ParentLaunchResult, error) {
-	result, err := launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName, cfg, &input, nil)
+	result, err := launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName, cfg, &input, nil, nil)
 	result.Watch.Notice = result.Notice
 	return result.Watch, err
 }
@@ -202,7 +203,7 @@ func launchParentIssueFanoutWithPlanInput(projectRoot, session, commandName stri
 // against a synthesized runtime targeting the TUI session. The watcher and
 // the TUI issue launcher share it.
 func launchParentIssueFanout(projectRoot, session, commandName string, cfg *cliflags.Config) (watch.ParentLaunchResult, error) {
-	result, err := launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName, cfg, nil, nil)
+	result, err := launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName, cfg, nil, nil, nil)
 	result.Watch.Notice = result.Notice
 	return result.Watch, err
 }
@@ -212,18 +213,37 @@ type parentIssueFanoutResult struct {
 	CreatedPaneIDs []string
 	Notice         string
 	runtimeBackend backend.Backend
+	herdr          *herdrrun.OwnedSession
 }
 
-type tuiIssueReadyFunc func(state.Store, panelaunch.StateRecorder, backend.Backend) error
+type tuiIssueReadyFunc func(
+	state.Store,
+	panelaunch.StateRecorder,
+	backend.Backend,
+	*herdrrun.OwnedSession,
+) error
+
+type tuiIssueAfterFunc func(
+	state.Store,
+	panelaunch.StateRecorder,
+	backend.Backend,
+	*herdrrun.OwnedSession,
+	run.IssueAfterContext,
+) error
 
 // launchParentIssueFanoutWithResult preserves the exact pane ids returned by
 // tmux for the foreground TUI launch. The watcher calls the wrapper above and
 // deliberately discards them so it cannot steal focus.
 func launchParentIssueFanoutWithResult(projectRoot, session, commandName string, cfg *cliflags.Config, ready tuiIssueReadyFunc) (parentIssueFanoutResult, error) {
-	return launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName, cfg, nil, ready)
+	return launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName, cfg, nil, ready, nil)
 }
 
-func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName string, cfg *cliflags.Config, input *run.IssuePlanInput, ready tuiIssueReadyFunc) (parentIssueFanoutResult, error) {
+func launchParentIssueFanoutWithCallbacks(projectRoot, session, commandName string, cfg *cliflags.Config, ready tuiIssueReadyFunc, after tuiIssueAfterFunc) (parentIssueFanoutResult, error) {
+	return launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName, cfg, nil, ready, after)
+}
+
+//nolint:funlen // Keep runtime resolution, readiness injection, and result projection in one backend transaction boundary.
+func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandName string, cfg *cliflags.Config, input *run.IssuePlanInput, ready tuiIssueReadyFunc, after tuiIssueAfterFunc) (parentIssueFanoutResult, error) {
 	// A plan session for this issue (a coordinator, or the tasks it fanned out)
 	// must finish or be closed before the child fan-out lane runs, or the two
 	// decompose the same work twice. Best-effort read: a state read failure
@@ -240,20 +260,27 @@ func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandNam
 	var runReady run.IssueReadyFunc
 	if ready != nil {
 		runReady = func(store state.Store, recorder panelaunch.StateRecorder) error {
-			return ready(store, recorder, rt.Backend)
+			return ready(store, recorder, rt.Backend, rt.Herdr)
+		}
+	}
+	var runAfter run.IssueAfterFunc
+	if after != nil {
+		runAfter = func(store state.Store, recorder panelaunch.StateRecorder, progress run.IssueAfterContext) error {
+			return after(store, recorder, rt.Backend, rt.Herdr, progress)
 		}
 	}
 	var execution run.IssueExecutionResult
 	var code exitcode.Code
 	if input == nil {
-		execution, code = run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, runReady)
+		execution, code = run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, runReady, runAfter)
 	} else {
-		execution, code = run.IssuesWithPlanInputResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, *input, runReady)
+		execution, code = run.IssuesWithPlanInputResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, *input, runReady, runAfter)
 	}
 	result := parentIssueFanoutResult{
 		CreatedPaneIDs: execution.CreatedPaneIDs,
 		Notice:         combinedLaunchNotice(execution.Notices, bufferedLaunchNotice(stderr)),
 		runtimeBackend: rt.Backend,
+		herdr:          rt.Herdr,
 	}
 	if code != exitcode.OK {
 		return result, bufferedLaunchError(stdout, stderr, "launch parent")

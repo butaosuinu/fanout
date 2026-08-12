@@ -8,8 +8,7 @@ yomi: herdr
 ---
 
 herdr backend は、コーディングエージェント向けの永続 PTY ランタイム [herdr](https://herdr.dev/)で CLI のファンアウトを実行します。
-opt-in で、issue、Project、plan、label watcher の launch はリポジトリ単位の fanout-owned session を使います。
-引数なしの TUI は herdr 上で read-only のままです。
+opt-in で、issue、Project、plan、label watcher、対話 TUI の launch はリポジトリ単位の fanout-owned session を使います。
 既定の backend は tmux です。
 fanout は herdr を同梱しません。herdr は AGPL ライセンスで、別途インストールします。
 
@@ -21,9 +20,17 @@ launcher は operation-bound token を 1 回だけ受け取り、所有者だけ
 fanout は launch の検証後に限り、workspace、pane、terminal、repository、agent、session、socket の identity を `.fanout/state.json` へ保存します。
 インストール済みの herdr integration が provider session の identity を報告した場合は、その値も保存します。
 
+素のシェルから引数なしの `fanout` を実行すると、owned session を起動または再採用し、repository root の console shell を 1 つ起動して、隔離済みの attach command を表示します。
+console workspace へ入るには、表示された command を実行してください。
+fanout は呼び出し元の shell を置き換えず、自動 attach もしません。
+linked worktree 間では同じ console 行を共有します。
+
 常駐 TUI コンソール、`--status`、web ダッシュボードには、記録済み session と各 pane の runtime backend、identity が表示されます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
-TUI コンソールと web ダッシュボードは、herdr backend で記録された行を `herdr api snapshot` と照合して生死と agent state を反映します。`--status` が読むのは記録済みの state と GitHub だけです。
-fanout は session の読み書き前に `herdr --version` と owned route を検査します。
+TUI コンソールと web ダッシュボードは、herdr backend で記録された行を `herdr api snapshot` と照合して生死と agent state を反映します。
+`--status` が読むのは記録済みの state と GitHub だけです。
+owned console 内の TUI は issue、Prompt、attached-agent、shell の pane を起動し、focus と出力 peek を実行できます。
+ダッシュボードも mutation endpoint を追加せず、owned 行の出力を peek できます。
+fanout は session の読み書き前に `herdr --version`、owned route、保存済み workspace ownership label を検査します。
 public method の呼び出しが失敗した場合は `herdr method "<name>" is unavailable` を返します。
 
 Claude の launch には、launch 単位の `--settings` hook を渡します。
@@ -41,7 +48,9 @@ pane が消えた場合は `stale` のままです。
 
 未対応の経路は明確なエラーで fail closed します。
 
-- 対話 TUI の launch、focus、send、restore、出力 peek、plan capture は herdr 行では使えません。
+- 対話 send、restore、plan capture、lifecycle の close / merge / cleanup は herdr 行では使えません。
+- TUI の focus、launch、peek には、fanout-owned session に属する完全な保存済み identity が必要です。foreign、stale、legacy の行は理由付きで無効になります。
+- Codex 子の Plan Mode は fanout の app-server controller と owned launcher で動きます。Claude と OpenCode は固有の mode flag を使います。
 - tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれません。
 
 TUI のヘッダには、選択された backend とその理由が常に表示されます。例: `backend: herdr (HERDR_ENV)`。
@@ -52,9 +61,10 @@ TUI のヘッダには、選択された backend とその理由が常に表示�
 - `PATH` 上の `herdr` バイナリ。別途インストールしてください。
 - `PATH` 上の選択済み agent CLI。
 
-CLI launch に既存の herdr session は不要です。
+CLI launch と引数なしの TUI に既存の herdr session は不要です。
 fanout が owner marker 配下の隔離 session を作成または再採用します。
-引数なしの TUI で外部 session を観測する場合は、その名前付き session の pane からコンソールを起動してください(`default` は拒否されます)。
+素のシェルから TUI を bootstrap した後は、表示された attach command を実行してください。
+foreign な herdr session 内で起動した TUI は観測専用のままで、対話操作に owned-session authority は与えられません(`default` は拒否されます)。
 
 ## opt-in の手順
 
@@ -96,7 +106,8 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 | 生死と agent state(TUI コンソール、web ダッシュボード) | tmux への照会と pane option | `herdr api snapshot` と launch に束縛した Claude または Codex Plan telemetry |
 | exit status 表示 | launch wrapper が `✓ done` を報告 | なし — herdr の public API に exit status は残らない |
 | agent 終了後の pane | wrapper のメッセージ付きで pane が残る | 正常終了で herdr は pane と自身の記録を消す。fanout の行は `stale` になる |
-| 対話 TUI launch / focus / send / restore / peek / plan capture | TUI キーと lifecycle フラグ | 不可 — `runtime backend herdr does not support …` |
+| 対話 TUI launch / focus / peek | TUI キー | fanout-owned session の ownership 検証済み pane だけ対応 |
+| 対話 send / restore / plan capture / lifecycle | tmux の各対応経路 | 不可 — `runtime backend herdr does not support …` |
 | `--team` peer messaging | SQLite registry、Claude watcher、Codex app-server bridge | 同じ registry と push lane |
 | 自動 nudge(`fanout msg nudge`) | 相手が入力を受けられる状態なら配送 | current launch に束縛された refined telemetry と live identity/process の照合後に no-wait の `agent prompt` を 1 回発行。それ以外は no-op |
 | tmux keybind(ダッシュボード、コンソール復帰) | 登録する | 登録しない |

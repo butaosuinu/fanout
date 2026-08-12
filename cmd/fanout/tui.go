@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -16,10 +17,12 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
@@ -28,6 +31,11 @@ import (
 const tuiPaneTitle = "fanout tui"
 
 var runTUI = fanouttui.Run
+
+var (
+	ensureOwnedHerdrForTUI   = ensureOwnedHerdrSession
+	ensureHerdrConsoleForTUI = panelaunch.EnsureHerdrConsole
+)
 
 func isTUIRequest(args []string) bool {
 	return len(args) == 0
@@ -49,14 +57,7 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 		return exitcode.Env
 	}
 	if selection.Name == backend.Herdr {
-		if os.Getenv("HERDR_ENV") != "1" {
-			lg.Err(
-				"tui: backend herdr selected by %s; run fanout inside an existing herdr pane (HERDR_ENV=1); herdr v1 cannot create or attach a session",
-				selection.Reason,
-			)
-			return exitcode.Env
-		}
-		return runTUIConsole(projectRoot, strings.TrimSpace(os.Getenv("HERDR_SESSION")), commandName, selection, lg)
+		return cmdHerdrTUI(projectRoot, commandName, selection, lg)
 	}
 	if selection.Name != backend.Tmux {
 		lg.Err("tui: unsupported runtime backend %q", selection.Name)
@@ -90,10 +91,64 @@ func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
 	if !fanouttui.EnhancedKeysDisabled(os.Getenv(fanouttui.EnhancedKeysEnv)) {
 		tmuxrun.EnableExtendedKeys()
 	}
-	return runTUIConsole(projectRoot, session, commandName, selection, lg)
+	return runTUIConsole(projectRoot, session, commandName, selection, nil, lg)
 }
 
-func runTUIConsole(projectRoot, session, commandName string, selection backend.Selection, lg *log.Logger) exitcode.Code {
+func cmdHerdrTUI(
+	projectRoot, commandName string,
+	selection backend.Selection,
+	lg *log.Logger,
+) exitcode.Code {
+	if os.Getenv("HERDR_ENV") != "1" {
+		return enterHerdrTUISession(projectRoot, selection, lg)
+	}
+	owned, openErr := openOwnedHerdrSession(projectRoot)
+	if openErr == nil && !ambientHerdrRouteMatches(owned) {
+		openErr = fmt.Errorf("%s", ownedHerdrUnavailable)
+		owned = nil
+	}
+	if openErr != nil {
+		lg.Warn("tui: owned Herdr actions disabled: %v", openErr)
+	}
+	return runTUIConsole(
+		projectRoot,
+		strings.TrimSpace(os.Getenv("HERDR_SESSION")),
+		commandName,
+		selection,
+		owned,
+		lg,
+	)
+}
+
+func enterHerdrTUISession(
+	projectRoot string,
+	selection backend.Selection,
+	lg *log.Logger,
+) exitcode.Code {
+	owned, err := ensureOwnedHerdrForTUI(projectRoot)
+	if err != nil {
+		lg.Err("tui: ensure owned Herdr session: %v", err)
+		return exitcode.Env
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	console, err := ensureHerdrConsoleForTUI(ctx, projectRoot, owned, os.Environ(), "")
+	if err != nil {
+		lg.Err("tui: ensure owned Herdr console: %v", err)
+		return exitcode.Env
+	}
+	lg.Ok("Herdr console %s is ready (selected by %s)", console.Pane.PaneID, selection.Reason)
+	fmt.Fprintln(lg.Stdout(), console.AttachCommand)
+	return exitcode.OK
+}
+
+//nolint:funlen // The console composition root keeps its complete option wiring visible in one place.
+func runTUIConsole(
+	projectRoot, session, commandName string,
+	selection backend.Selection,
+	owned *herdrrun.OwnedSession,
+	lg *log.Logger,
+) exitcode.Code {
 	tmuxHost := selection.Name == backend.Tmux
 	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
 	listLive := runtimeListLiveForProject(projectRoot, tmuxHost)
@@ -102,7 +157,8 @@ func runTUIConsole(projectRoot, session, commandName string, selection backend.S
 	var watchInterval time.Duration
 	var watchLabel string
 	var watchErr error
-	watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig, tmuxHost)
+	interactiveLaunch := tmuxHost || owned != nil
+	watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig, tmuxHost, interactiveLaunch)
 	if watchErr != nil {
 		lg.Err("watcher: %v", watchErr)
 		return exitcode.Env
@@ -137,6 +193,7 @@ func runTUIConsole(projectRoot, session, commandName string, selection backend.S
 			commandName,
 			hookConfig,
 			selection,
+			interactiveLaunch,
 			lg,
 		),
 		ListLive: listLive,
@@ -144,50 +201,13 @@ func runTUIConsole(projectRoot, session, commandName string, selection backend.S
 	}
 
 	if tmuxHost {
-		runtimeBackend := tmuxbackend.New()
-		opts.LaunchPane = newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig)
-		opts.NewPanePrompt = newTUINewPanePromptFunc(projectRoot, commandName)
-		opts.HelpPopup = newTUIHelpPopupFunc(projectRoot, commandName)
-		opts.CloseChoicePopup = newTUICloseChoicePopupFunc(projectRoot, commandName)
-		opts.SettingsPopup = newTUISettingsPopupFunc(projectRoot, commandName)
-		opts.LaunchAttach = newTUIAttachAgentFunc(projectRoot, session, commandName, hookConfig)
-		// List providers also feed the in-process fallback form (NewPanePrompt
-		// unavailable); the popup process wires its own copies.
-		opts.ListOpenIssues = newTUIListOpenIssuesFunc(projectRoot)
-		opts.ListIssueChildren = newTUIListIssueChildrenFunc(projectRoot)
-		opts.LaunchIssue = newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig)
-		opts.LaunchIssuePlan = newTUIIssuePlanLaunchFunc(projectRoot, session, commandName, hookConfig)
-		opts.OpenIssue = newTUIOpenIssueFunc(projectRoot)
-		opts.LaunchShell = newTUILaunchShellFunc(projectRoot, session)
-		opts.RestorePanes = newTUIRestoreFunc(projectRoot, session, commandName)
-		opts.Relayout = func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) }
-		opts.LifecycleCloseOwned = runtimeBackend.CloseOwned
-		opts.ShellPaneAlive = runtimeShellPaneAlive(runtimeBackend.ListLive)
-		opts.FocusPane = func(paneID string) error {
-			return runtimeBackend.Focus(backend.PaneRef{Backend: backend.Tmux, Pane: paneID})
-		}
-		opts.PaneAlive = func(paneID string) bool {
-			panes, listErr := runtimeBackend.ListLive()
-			if listErr != nil {
-				return false
-			}
-			for _, pane := range panes {
-				if pane.Ref.Pane == paneID {
-					return true
-				}
-			}
-			return false
-		}
-		opts.CapturePaneOutput = func(paneID string, lines int) (string, error) {
-			return runtimeBackend.Read(backend.PaneRef{Backend: backend.Tmux, Pane: paneID}, lines)
-		}
-		opts.ClosePane = runtimeBackend.Close
-		opts.ActivePane = newTUIActivePaneFunc(os.Getenv("TMUX_PANE"))
-
-		restoreTitle := markTUIRunning(projectRoot)
+		restoreTitle := wireTmuxTUI(
+			&opts, projectRoot, session, commandName, resolvedSettings, hookConfig, lg,
+		)
 		defer restoreTitle()
-		bindDashboardKey(lg, resolvedSettings.DashboardKeybind)
-		bindConsoleKey(lg, resolvedSettings.ConsoleKeybind)
+	}
+	if selection.Name == backend.Herdr {
+		wireOwnedHerdrTUI(&opts, projectRoot, session, commandName, resolvedSettings, hookConfig, owned)
 	}
 
 	if err := runTUI(opts); err != nil {
@@ -195,6 +215,122 @@ func runTUIConsole(projectRoot, session, commandName string, selection backend.S
 		return exitcode.Env
 	}
 	return exitcode.OK
+}
+
+func wireTmuxTUI(
+	opts *fanouttui.Options,
+	projectRoot, session, commandName string,
+	resolvedSettings settings.Settings,
+	hookConfig hooks.Config,
+	lg *log.Logger,
+) func() {
+	runtimeBackend := tmuxbackend.New()
+	opts.LaunchPane = newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig)
+	opts.NewPanePrompt = newTUINewPanePromptFunc(projectRoot, commandName)
+	opts.HelpPopup = newTUIHelpPopupFunc(projectRoot, commandName)
+	opts.CloseChoicePopup = newTUICloseChoicePopupFunc(projectRoot, commandName)
+	opts.SettingsPopup = newTUISettingsPopupFunc(projectRoot, commandName)
+	opts.LaunchAttach = newTUIAttachAgentFunc(projectRoot, session, commandName, hookConfig)
+	opts.ListOpenIssues = newTUIListOpenIssuesFunc(projectRoot)
+	opts.ListIssueChildren = newTUIListIssueChildrenFunc(projectRoot)
+	opts.LaunchIssue = newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig)
+	opts.LaunchIssuePlan = newTUIIssuePlanLaunchFunc(projectRoot, session, commandName, hookConfig)
+	opts.OpenIssue = newTUIOpenIssueFunc(projectRoot)
+	opts.LaunchShell = newTUILaunchShellFunc(projectRoot, session)
+	opts.RestorePanes = newTUIRestoreFunc(projectRoot, session, commandName)
+	opts.Relayout = func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) }
+	wireTmuxPaneActions(opts, runtimeBackend)
+	bindDashboardKey(lg, resolvedSettings.DashboardKeybind)
+	bindConsoleKey(lg, resolvedSettings.ConsoleKeybind)
+	return markTUIRunning(projectRoot)
+}
+
+func wireTmuxPaneActions(opts *fanouttui.Options, runtimeBackend *tmuxbackend.Backend) {
+	opts.LifecycleCloseOwned = runtimeBackend.CloseOwned
+	opts.ShellPaneAlive = runtimeShellPaneAlive(runtimeBackend.ListLive)
+	opts.FocusPane = func(paneID string) error {
+		return runtimeBackend.Focus(backend.PaneRef{Backend: backend.Tmux, Pane: paneID})
+	}
+	opts.PaneAlive = runtimeTmuxPaneAlive(runtimeBackend.ListLive)
+	opts.CapturePaneOutput = func(paneID string, lines int) (string, error) {
+		return runtimeBackend.Read(backend.PaneRef{Backend: backend.Tmux, Pane: paneID}, lines)
+	}
+	opts.ClosePane = runtimeBackend.Close
+	opts.ActivePane = newTUIActivePaneFunc(os.Getenv("TMUX_PANE"))
+}
+
+func runtimeTmuxPaneAlive(listLive func() ([]backend.LivePane, error)) func(string) bool {
+	return func(paneID string) bool {
+		panes, err := listLive()
+		if err != nil {
+			return false
+		}
+		for _, pane := range panes {
+			if pane.Ref.Pane == paneID {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func ambientHerdrRouteMatches(owned *herdrrun.OwnedSession) bool {
+	return owned != nil &&
+		strings.TrimSpace(os.Getenv("HERDR_SESSION")) == owned.Session &&
+		filepath.Clean(os.Getenv("HERDR_SOCKET_PATH")) == filepath.Clean(owned.SocketPath)
+}
+
+func wireOwnedHerdrTUI(
+	opts *fanouttui.Options,
+	projectRoot, session, commandName string,
+	resolvedSettings settings.Settings,
+	hookConfig hooks.Config,
+	owned *herdrrun.OwnedSession,
+) {
+	opts.HerdrActionDisabled = func(pane state.Pane) string {
+		return ownedHerdrActionDisabled(owned, pane)
+	}
+	if owned == nil {
+		return
+	}
+	wireOwnedHerdrLaunchTUI(
+		opts, projectRoot, session, commandName, resolvedSettings, hookConfig, owned,
+	)
+	wireOwnedHerdrPaneTUI(opts, owned)
+}
+
+func wireOwnedHerdrLaunchTUI(
+	opts *fanouttui.Options,
+	projectRoot, session, commandName string,
+	resolvedSettings settings.Settings,
+	hookConfig hooks.Config,
+	owned *herdrrun.OwnedSession,
+) {
+	opts.LaunchPane = newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig)
+	opts.LaunchAttach = newTUIAttachAgentFunc(projectRoot, session, commandName, hookConfig)
+	opts.ListOpenIssues = newTUIListOpenIssuesFunc(projectRoot)
+	opts.ListIssueChildren = newTUIListIssueChildrenFunc(projectRoot)
+	opts.LaunchIssue = newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig)
+	opts.LaunchIssuePlan = newTUIIssuePlanLaunchFunc(projectRoot, session, commandName, hookConfig)
+	opts.OpenIssue = newTUIOpenIssueFunc(projectRoot)
+	opts.LaunchShell = newOwnedHerdrLaunchShellFunc(projectRoot, owned)
+}
+
+func wireOwnedHerdrPaneTUI(opts *fanouttui.Options, owned *herdrrun.OwnedSession) {
+	opts.FocusHerdrPane = func(pane state.Pane) error {
+		bound, ref, err := bindOwnedHerdrPane(owned, pane)
+		if err != nil {
+			return err
+		}
+		return bound.Focus(ref)
+	}
+	opts.CaptureHerdrPane = func(pane state.Pane, lines int) (string, error) {
+		bound, ref, err := bindOwnedHerdrPane(owned, pane)
+		if err != nil {
+			return "", err
+		}
+		return bound.Read(ref, lines)
+	}
 }
 
 func runtimeShellPaneAlive(listLive func() ([]backend.LivePane, error)) func(paneID, shellKey string) bool {
@@ -217,14 +353,14 @@ func runtimeShellPaneAlive(listLive func() ([]backend.LivePane, error)) func(pan
 	}
 }
 
-func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConfig hooks.Config, selection backend.Selection, lg *log.Logger) fanouttui.SettingsReloadFunc {
+func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConfig hooks.Config, selection backend.Selection, interactiveLaunch bool, lg *log.Logger) fanouttui.SettingsReloadFunc {
 	return func() (fanouttui.SettingsRuntime, error) {
 		resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
 		var watcher fanouttui.WatcherRunner
 		var watchInterval time.Duration
 		var watchLabel string
 		var watchErr error
-		watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig, selection.Name == backend.Tmux)
+		watcher, watchInterval, watchLabel, watchErr = newTUIWatcher(projectRoot, session, commandName, resolvedSettings, hookConfig, selection.Name == backend.Tmux, interactiveLaunch)
 		if watchErr != nil {
 			return fanouttui.SettingsRuntime{}, fmt.Errorf("watcher: %w", watchErr)
 		}
@@ -246,13 +382,25 @@ func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConf
 			WatcherRunningLabel: resolvedSettings.WatcherRunningLabel,
 			Notifier:            notifier,
 		}
-		if selection.Name == backend.Tmux {
-			syncDashboardKey(lg, resolvedSettings.DashboardKeybind, true)
-			syncConsoleKey(lg, resolvedSettings.ConsoleKeybind, true)
-			runtime.LaunchIssue = newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig)
-		}
+		syncTUIReloadKeys(selection.Name, resolvedSettings, lg)
+		runtime.LaunchIssue = reloadedTUIIssueLauncher(interactiveLaunch, projectRoot, session, commandName, resolvedSettings, hookConfig)
 		return runtime, nil
 	}
+}
+
+func syncTUIReloadKeys(runtimeBackend backend.Name, resolved settings.Settings, lg *log.Logger) {
+	if runtimeBackend != backend.Tmux {
+		return
+	}
+	syncDashboardKey(lg, resolved.DashboardKeybind, true)
+	syncConsoleKey(lg, resolved.ConsoleKeybind, true)
+}
+
+func reloadedTUIIssueLauncher(enabled bool, projectRoot, session, commandName string, resolved settings.Settings, hookConfig hooks.Config) fanouttui.IssueLaunchFunc {
+	if !enabled {
+		return nil
+	}
+	return newTUIIssueLaunchFunc(projectRoot, session, commandName, resolved, hookConfig)
 }
 
 func tuiLaunchTarget(session string) string {

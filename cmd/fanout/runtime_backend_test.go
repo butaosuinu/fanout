@@ -413,8 +413,8 @@ func TestValidateLaunchBackendAllowsHerdrTeam(t *testing.T) {
 		t.Fatalf("tmux error = %v", tmuxErr)
 	}
 	err := validateLaunchBackend(&cliflags.Config{Agent: "claude", TUIInteractive: true}, backend.Selection{Name: backend.Herdr})
-	if !errors.Is(err, backend.ErrUnsupported) || !strings.Contains(err.Error(), "interactive TUI") {
-		t.Fatalf("TUI error = %v, want deferred interactive launch", err)
+	if err != nil {
+		t.Fatalf("interactive TUI Herdr error = %v", err)
 	}
 }
 

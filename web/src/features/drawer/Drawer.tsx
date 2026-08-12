@@ -41,6 +41,18 @@ function DiffStat({ summary }: { summary?: string }) {
 }
 
 function PlanPanel({ pane, token }: { pane: PaneView; token: string }) {
+  if (paneBackend(pane) === "herdr") {
+    return (
+      <CaptureDisabled
+        kind="plan"
+        reason={msg`herdr backend は plan capture に対応していません。`}
+      />
+    );
+  }
+  return <ReadablePlanPanel pane={pane} token={token} />;
+}
+
+function ReadablePlanPanel({ pane, token }: { pane: PaneView; token: string }) {
   const { t } = useLingui();
   const plan = usePlan({ paneId: pane.paneId, alive: pane.alive }, token);
   return (
@@ -174,10 +186,10 @@ type CaptureKind = "peek" | "plan";
 /* 文字列ではなく descriptor を返し、描画時に解決させる(言語切替が即座に届く)。 */
 function captureDisabledReason(pane: PaneView): MessageDescriptor | null {
   const runtimeBackend = paneBackend(pane);
-  if (runtimeBackend === "herdr") {
-    return msg`herdr backend v1 はペイン内容を読み取らないため利用できません。`;
+  if (runtimeBackend === "herdr" && pane.derived?.canPeek !== true) {
+    return msg`この runtime pane は現在読み取り対象にできません。`;
   }
-  if (runtimeBackend !== "tmux") {
+  if (runtimeBackend !== "tmux" && runtimeBackend !== "herdr") {
     return msg`${{ backend: runtimeBackend }} backend はペイン内容の読み取りに対応していません。`;
   }
   if (pane.derived?.canPeek === false) {

@@ -57,6 +57,10 @@ msgstr "omitted"
 msgid "diff を閉じる"
 msgstr "Close the diff"
 
+#: src/features/drawer/Drawer.tsx
+msgid "herdr backend は plan capture に対応していません。"
+msgstr "The herdr backend does not support plan capture."
+
 #: src/features/diff/DiffFileList.tsx
 msgid "すべて折りたたむ"
 msgstr "Collapse all"
@@ -268,10 +272,6 @@ msgstr "Side by side"
 #: src/features/filter/FilterDropdown.tsx
 msgid "絞り込み…"
 msgstr "Filter…"
-
-#: src/features/drawer/Drawer.tsx
-msgid "herdr backend v1 はペイン内容を読み取らないため利用できません。"
-msgstr "Unavailable — herdr backend v1 does not read pane content."
 
 #: src/features/drawer/Drawer.tsx
 msgid "ペイン詳細"

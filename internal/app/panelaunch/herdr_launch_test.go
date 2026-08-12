@@ -51,7 +51,21 @@ func (retryableHerdrObservationError) RetryableObservation() bool { return true 
 
 func (f *fakeHerdrLaunchRuntime) VerifyOwned(context.Context) error { return nil }
 func (f *fakeHerdrLaunchRuntime) LaunchRoute() (herdrrun.OwnedLaunchRoute, error) {
-	return f.launchRoute, nil
+	route := f.launchRoute
+	if route.EmitterPath == "" {
+		route.EmitterPath = route.LauncherPath
+	}
+	return route, nil
+}
+
+func TestVerifyHerdrConsoleRouteRejectsOutdatedLauncher(t *testing.T) {
+	runtime := &fakeHerdrLaunchRuntime{launchRoute: herdrrun.OwnedLaunchRoute{
+		LauncherPath: "/owned/old-fanout", EmitterPath: "/owned/current-fanout",
+	}}
+	if _, err := verifyHerdrConsoleRoute(context.Background(), runtime); err == nil ||
+		!strings.Contains(err.Error(), "restart is required") {
+		t.Fatalf("verifyHerdrConsoleRoute() error = %v, want immediate restart requirement", err)
+	}
 }
 
 func (f *fakeHerdrLaunchRuntime) PrepareWorkloadEnvironment(string, []string) (string, int, error) {
@@ -233,10 +247,11 @@ func TestFinalizeHerdrLaunchFailureBecomesManualCleanupRequired(t *testing.T) {
 	if writeErr := os.WriteFile(filepath.Join(intent.WorktreePath, ".fanout"), []byte("block directory"), 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
 	stale := intent
 	stale.Launch = nil
-	err = launcher.finalizeHerdrLaunch(Request{}, locked, stale, backend.LivePane{}, codexapp.Status{})
+	err = finalizeHerdrPane(locked, repo, stale, func(latest state.HerdrIntent) (state.Pane, error) {
+		return herdrAgentStatePane(Request{}, latest, backend.LivePane{}, codexapp.Status{})
+	})
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("finalization error = %v, want manual cleanup", err)
 	}
@@ -302,10 +317,11 @@ func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T
 		AgentSession: &pendingSession,
 		SessionID:    intent.Session, SocketPath: intent.SocketPath,
 	}
-	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
 	stale := intent
 	stale.Launch = nil
-	err = launcher.finalizeHerdrLaunch(launchReq, locked, stale, live, codexapp.Status{})
+	err = finalizeHerdrPane(locked, repo, stale, func(latest state.HerdrIntent) (state.Pane, error) {
+		return herdrAgentStatePane(launchReq, latest, live, codexapp.Status{})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,6 +345,87 @@ func TestFinalizeHerdrLaunchAppliesPendingTelemetryFromLatestIntent(t *testing.T
 	}
 	if _, found := persisted.FindIntent(intent.ID); found {
 		t.Fatal("finalized intent remains in provisional journal")
+	}
+}
+
+func TestFinalizeHerdrAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrLaunchRuntime{}
+	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
+	hooks := deterministicHerdrRealizeHooks()
+	shared := realizeTestHerdrCoordinator(t, repo, &runtime.fakeHerdrRealizeRuntime, hooks)
+	runtime.launchRoute = herdrrun.OwnedLaunchRoute{
+		GitCommonDir: runtime.route.GitCommonDir,
+		Session:      runtime.route.Session, SocketPath: runtime.route.SocketPath,
+		LauncherPath: "/owned/fanout", RuntimeDir: t.TempDir(),
+	}
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	req := Request{
+		ParentRef: ManualParentRef, RuntimeParent: shared.RuntimeParent,
+		Number: -2, Slug: "orchestrator-issue-425-2", Agent: "claude", Prompt: "coordinate",
+	}
+	launcher := &Launcher{
+		Cfg: &cliflags.Config{}, Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime,
+	}
+	intent, err := launcher.prepareHerdrAttachedIntent(
+		context.Background(), req, repo, locked, runtime.launchRoute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.Parent != ManualParentRef || intent.ID == shared.ID {
+		t.Fatalf("attached workspace reused shared coordinator: %+v", intent)
+	}
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := journal.ProvisionalBindings(repo)
+	if intent.RuntimeParent != shared.RuntimeParent || len(bindings) != 2 ||
+		bindings[0].Parent != shared.RuntimeParent || bindings[1].Parent != shared.RuntimeParent {
+		t.Fatalf("attached workspace provisional binding = (%+v, %+v)", intent, bindings)
+	}
+	live := testHerdrIdlePane(intent)
+	live.AgentPresent, live.AgentProvider, live.AgentID = true, "claude", intent.Launch.AgentName
+	if finalizeErr := finalizeHerdrAttachedAgent(req, locked, repo, intent, live, codexapp.Status{}); finalizeErr != nil {
+		t.Fatal(finalizeErr)
+	}
+	persisted, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := persisted.FindIntent(intent.ID); found {
+		t.Fatal("finalized generic workspace intent remains in journal")
+	}
+	saved, found := persisted.FindIntent(shared.ID)
+	if !found || saved.Status != state.HerdrIntentRealized || saved.Launch != nil {
+		t.Fatalf("shared coordinator intent = (%+v, %t)", saved, found)
+	}
+	pane, found := locked.Find(ManualParentRef, -2)
+	if !found || pane.RuntimeParent != shared.RuntimeParent || pane.PaneID != intent.Resource.PaneID {
+		t.Fatalf("attached agent row = (%+v, %t)", pane, found)
+	}
+}
+
+func TestHerdrAttachedStatePanePreservesCodexControllerIdentity(t *testing.T) {
+	status := codexapp.Status{ThreadID: "thread-554", SessionID: "session-554"}
+	pane := herdrAttachedStatePane(
+		Request{ParentRef: ManualParentRef, Number: -1, Agent: "codex", LaunchMode: agent.ModePlan},
+		state.HerdrIntent{WorktreePath: "/repo"},
+		backend.LivePane{Ref: backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"}},
+		status,
+	)
+	if pane.CodexThreadID != status.ThreadID || pane.CodexSessionID != status.SessionID {
+		t.Fatalf("attached Codex identity = %q/%q, want %q/%q", pane.CodexThreadID, pane.CodexSessionID, status.ThreadID, status.SessionID)
 	}
 }
 
@@ -393,8 +490,11 @@ func TestWaitForHerdrAgentRevalidatesConcurrentIntentChanges(t *testing.T) {
 				return []backend.LivePane{live}, <-updated
 			}
 			launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
-			_, err := launcher.waitForHerdrAgentUnlocked(
-				context.Background(), locked, intent, intent.Launch.AgentName, "",
+			_, err := launcher.waitForHerdrPaneUnlocked(
+				context.Background(), locked, intent,
+				func(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
+					return exactHerdrLaunchPane(intent, panes, intent.Launch.AgentName)
+				}, "",
 			)
 			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
 				t.Fatalf("wait error = %v, want %v containing %q", err, test.wantErr, test.wantErrText)
@@ -448,7 +548,15 @@ func TestFinishIssuedHerdrAgentPreservesObservedAgentAfterContextExpires(t *test
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := launcher.finishIssuedHerdrAgent(ctx, Request{Agent: intent.Launch.Agent}, locked, intent)
+	_, err := launcher.finishIssuedHerdrAgent(
+		ctx, locked, herdrrun.OwnedLaunchRoute{}, intent,
+		func(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
+			return exactHerdrLaunchPane(intent, panes, intent.Launch.AgentName)
+		},
+		func(ctx context.Context, locked *state.LockedStore, intent state.HerdrIntent) (backend.LivePane, error) {
+			return launcher.adoptHerdrAgent(ctx, Request{Agent: intent.Launch.Agent}, locked, intent)
+		},
+	)
 	if !errors.Is(err, errHerdrLaunchStatePreserved) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("finish error = %v, want preserved launch with expired context", err)
 	}
@@ -764,6 +872,31 @@ func TestValidateHerdrLaunchBindingRejectsCodexPlanModeChange(t *testing.T) {
 	}
 }
 
+func TestValidateHerdrLaunchBindingRejectsRequestChange(t *testing.T) {
+	binDir := t.TempDir()
+	claudePath := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(claudePath, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	req := Request{Agent: "claude", Prompt: "original", LaunchMode: agent.ModeBuild}
+	spec, err := buildHerdrLaunchSpec(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := &state.HerdrLaunch{
+		Agent: req.Agent, Executable: spec.Executable, Args: spec.Args,
+	}
+	if err := validateHerdrLaunchBinding(req, launch); err != nil {
+		t.Fatalf("unchanged binding error = %v", err)
+	}
+	req.Prompt = "changed"
+	if err := validateHerdrLaunchBinding(req, launch); err == nil ||
+		!strings.Contains(err.Error(), "current agent command") {
+		t.Fatalf("changed prompt binding error = %v", err)
+	}
+}
+
 func TestPrepareHerdrLaunchRejectsTeamBindingChange(t *testing.T) {
 	for _, tc := range []struct {
 		name                         string
@@ -823,11 +956,15 @@ func TestPrepareHerdrLaunchRejectsTeamBindingChange(t *testing.T) {
 				t.Fatal(saveErr)
 			}
 
+			req := Request{
+				Agent: "codex", TeamDBPath: tc.requestedDBPath, CodexTeamMode: tc.requestedCodex,
+				CodexTeamStatusPath: filepath.Join(t.TempDir(), "requested-status.json"),
+			}
 			_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).prepareHerdrLaunch(
-				Request{
-					Agent: "codex", TeamDBPath: tc.requestedDBPath, CodexTeamMode: tc.requestedCodex,
-					CodexTeamStatusPath: filepath.Join(t.TempDir(), "requested-status.json"),
-				}, locked, herdrrun.OwnedLaunchRoute{}, intent, nil,
+				locked, herdrrun.OwnedLaunchRoute{}, intent,
+				func(launch *state.HerdrLaunch) error {
+					return validateHerdrLaunchBinding(req, launch)
+				}, nil,
 			)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("team mode mismatch error = %v", err)
@@ -936,6 +1073,23 @@ func TestHerdrCoordinatorRuntimeParentProjectsWatcherIssue(t *testing.T) {
 	intent := state.HerdrIntent{RuntimeParent: WatchParentRef, IssueNum: 528}
 	if got := herdrCoordinatorRuntimeParent(intent); got != "528" {
 		t.Fatalf("runtime parent = %q, want 528", got)
+	}
+}
+
+func TestHerdrCoordinatorIssueNumPreservesSyntheticOwners(t *testing.T) {
+	tests := []struct {
+		parent string
+		number int
+		want   int
+	}{
+		{parent: ManualParentRef, number: -3, want: -3},
+		{parent: WatchParentRef, number: 528, want: 528},
+		{parent: "528", number: 99, want: 0},
+	}
+	for _, test := range tests {
+		if got := herdrCoordinatorIssueNum(Request{ParentRef: test.parent, Number: test.number}); got != test.want {
+			t.Fatalf("coordinator issue number for %s/%d = %d, want %d", test.parent, test.number, got, test.want)
+		}
 	}
 }
 
@@ -1072,14 +1226,32 @@ func TestRetryHerdrObservationRetriesOnlyMarkedFailure(t *testing.T) {
 	}
 }
 
-func TestObserveExactHerdrAgentReturnsPermanentObservationError(t *testing.T) {
+func TestObserveExactHerdrPaneReturnsPermanentObservationError(t *testing.T) {
 	runtime := &fakeHerdrLaunchRuntime{liveErr: errors.New("malformed snapshot")}
 	launcher := &Launcher{Herdr: runtime}
 	intent := state.HerdrIntent{ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli()}
 
-	_, found, err := launcher.observeExactHerdrAgent(context.Background(), intent, "agent-1")
+	_, found, err := launcher.observeExactHerdrPane(
+		context.Background(), intent,
+		func(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
+			return exactHerdrLaunchPane(intent, panes, "agent-1")
+		},
+	)
 	if err == nil || found {
 		t.Fatalf("permanent observation = found %t, err %v; want immediate failure", found, err)
+	}
+}
+
+func TestObserveExactHerdrPaneDefersRetryableObservationError(t *testing.T) {
+	runtime := &fakeHerdrLaunchRuntime{liveErr: retryableHerdrObservationError{}}
+	launcher := &Launcher{Herdr: runtime}
+	intent := state.HerdrIntent{ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli()}
+
+	_, found, err := launcher.observeExactHerdrPane(
+		context.Background(), intent, exactHerdrShellPane,
+	)
+	if err != nil || found {
+		t.Fatalf("retryable observation = found %t, err %v; want deferred retry", found, err)
 	}
 }
 
@@ -1088,7 +1260,7 @@ func TestExactHerdrLaunchPaneRequiresProviderAndAcceptsOptionalSession(t *testin
 		WorktreePath: "/repo/.fanout/worktrees/child",
 		Session:      "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",
 		Resource: state.HerdrResource{
-			WorkspaceID: "w1", PaneID: "w1:p1", TerminalID: "term-1",
+			WorkspaceID: "w1", Label: "owned-label-1", PaneID: "w1:p1", TerminalID: "term-1",
 			RepoKey: "/repo/.git", CurrentPath: "/repo/.fanout/worktrees/child",
 		},
 		Launch: &state.HerdrLaunch{Agent: "codex"},
@@ -1103,6 +1275,11 @@ func TestExactHerdrLaunchPaneRequiresProviderAndAcceptsOptionalSession(t *testin
 	if _, found := exactHerdrLaunchPane(intent, []backend.LivePane{live}, "fanout-child"); !found {
 		t.Fatal("exactHerdrLaunchPane() rejected a valid optional session")
 	}
+	live.WorkspaceLabel = "foreign-label"
+	if _, found := exactHerdrLaunchPane(intent, []backend.LivePane{live}, "fanout-child"); found {
+		t.Fatal("exactHerdrLaunchPane() accepted a different workspace label")
+	}
+	live.WorkspaceLabel = intent.Resource.Label
 	live.AgentProvider = "claude"
 	if _, found := exactHerdrLaunchPane(intent, []backend.LivePane{live}, "fanout-child"); found {
 		t.Fatal("exactHerdrLaunchPane() accepted a different provider")
@@ -1200,6 +1377,64 @@ func TestVerifyHerdrAgentProcessRejectsAmbiguousOrForeignChains(t *testing.T) {
 	}
 }
 
+func TestVerifyHerdrLauncherProcessRejectsForeignOSIdentity(t *testing.T) {
+	intent := state.HerdrIntent{WorktreePath: "/repo/worktree"}
+	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
+	for _, mutate := range []func(*herdrrun.PaneProcess){
+		func(process *herdrrun.PaneProcess) { process.Executable = "/foreign/fanout" },
+		func(process *herdrrun.PaneProcess) { process.ProcessGroup++ },
+	} {
+		info := testHerdrLauncherProcess(intent, route.LauncherPath)
+		mutate(&info.ForegroundProcesses[0])
+		if err := verifyHerdrLauncherProcess(info, intent, route); err == nil {
+			t.Fatal("foreign launcher OS identity was accepted")
+		}
+	}
+}
+
+func TestWaitForHerdrLaunchProcessRetriesExactLauncherTransition(t *testing.T) {
+	intent := state.HerdrIntent{
+		WorktreePath: "/repo/worktree", ExpiresUnixMS: time.Now().Add(3 * time.Second).UnixMilli(),
+		Resource: state.HerdrResource{PaneID: "w1:p1"},
+		Launch:   &state.HerdrLaunch{Executable: "/bin/zsh"},
+	}
+	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
+	runtime := &fakeHerdrLaunchRuntime{}
+	calls := 0
+	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+		calls++
+		if calls == 1 {
+			return testHerdrLauncherProcess(intent, route.LauncherPath), nil
+		}
+		return herdrrun.PaneProcessInfo{
+			ShellPID: 42, ForegroundProcessGroup: 42,
+			ForegroundProcesses: []herdrrun.PaneProcess{{
+				PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: "/bin/zsh",
+				CWD: intent.WorktreePath, Argv0: "/bin/zsh",
+			}},
+		}, nil
+	}
+	if err := (&Launcher{Herdr: runtime}).waitForHerdrLaunchProcess(context.Background(), intent, route); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("process-info calls = %d, want 2", calls)
+	}
+	calls = 0
+	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+		calls++
+		info := testHerdrLauncherProcess(intent, route.LauncherPath)
+		info.ForegroundProcesses[0].Executable = "/foreign/fanout"
+		return info, nil
+	}
+	if err := (&Launcher{Herdr: runtime}).waitForHerdrLaunchProcess(context.Background(), intent, route); err == nil {
+		t.Fatal("foreign launcher transition was accepted")
+	}
+	if calls != 1 {
+		t.Fatalf("foreign process-info calls = %d, want 1", calls)
+	}
+}
+
 func TestExpiredHerdrAgentStartBecomesManualCleanupRequired(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrRealizeRuntime{}
@@ -1230,6 +1465,66 @@ func TestExpiredHerdrAgentStartBecomesManualCleanupRequired(t *testing.T) {
 	saved, found := journal.FindIntent(intent.ID)
 	if !found || saved.Status != state.HerdrIntentManualCleanupRequired {
 		t.Fatalf("saved intent = (%+v, %t), want manual cleanup", saved, found)
+	}
+}
+
+func TestIssuedHerdrSyntheticReservationBlocksReuseWithoutManualizing(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	runtime := &fakeHerdrRealizeRuntime{}
+	installSuccessfulHerdrMutations(t, repo, runtime)
+	req := testHerdrCoordinatorRequest(repo)
+	req.Parent = ManualParentRef
+	req.IssueNum = -1
+	result, err := realizeHerdrCoordinator(
+		context.Background(), req, runtime, deterministicHerdrRealizeHooks(),
+	)
+	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	intent := result.Intent
+	intent.Launch = validTestHerdrLaunch()
+	journal, err := locked.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.UpsertIntent(intent)
+	if saveErr := journal.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+
+	reservationErr := admitHerdrCoordinatorLaunch(locked, repo, req.IssueNum)
+	if !errors.Is(reservationErr, errHerdrLaunchStatePreserved) {
+		t.Fatalf("synthetic launch admission error = %v, want preserved state", reservationErr)
+	}
+	if admitErr := admitHerdrCoordinatorLaunch(locked, repo, -2); admitErr != nil {
+		t.Fatalf("unreserved synthetic number was rejected: %v", admitErr)
+	}
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
+	_, prepareErr := launcher.prepareHerdrLaunch(
+		locked, herdrrun.OwnedLaunchRoute{}, intent,
+		func(*state.HerdrLaunch) error { return nil }, nil,
+	)
+	if !errors.Is(prepareErr, errHerdrLaunchStatePreserved) {
+		t.Fatalf("prepare issued launch error = %v, want preserved state", prepareErr)
+	}
+	if classifyErr := markHerdrFinalizationFailure(locked, repo, intent, prepareErr); !errors.Is(classifyErr, errHerdrLaunchStatePreserved) {
+		t.Fatalf("finalization classification error = %v, want preserved state", classifyErr)
+	}
+	if rollbackErr := launcher.rollbackFailedHerdrLaunch(locked, intent, prepareErr); !errors.Is(rollbackErr, errHerdrLaunchStatePreserved) {
+		t.Fatalf("rollback classification error = %v, want preserved state", rollbackErr)
+	}
+	persisted, err := state.LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, found := persisted.FindIntent(intent.ID)
+	if !found || saved.Status != state.HerdrIntentRealized || saved.Failure != "" {
+		t.Fatalf("issued reservation = (%+v, %t), want unchanged realized intent", saved, found)
 	}
 }
 
@@ -1268,8 +1563,11 @@ func TestHerdrLaunchDoesNotIssueTokenAfterLauncherWaitExpires(t *testing.T) {
 		return nil
 	}
 	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrAgent(
-		context.Background(), Request{Agent: "claude"}, locked,
-		herdrrun.OwnedLaunchRoute{}, intent, nil,
+		context.Background(), locked, herdrrun.OwnedLaunchRoute{}, intent,
+		func(*state.HerdrLaunch) error { return nil }, nil,
+		func(state.HerdrIntent, []backend.LivePane) (backend.LivePane, bool) {
+			return backend.LivePane{}, false
+		}, nil,
 	)
 	if err == nil || runtime.tokenCalls != 0 {
 		t.Fatalf("expired launch error/token calls = %v/%d, want error/0", err, runtime.tokenCalls)
@@ -1277,6 +1575,7 @@ func TestHerdrLaunchDoesNotIssueTokenAfterLauncherWaitExpires(t *testing.T) {
 }
 
 func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
+	installFakeExecutable(t, "codex")
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrLaunchRuntime{}
 	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
@@ -1302,6 +1601,17 @@ func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 	intent.Launch.TokenIssued = false
 	intent.Launch.TeamDBPath = "/tmp/team.db"
 	intent.Launch.CodexTeamStatusPath = statusPath
+	req := Request{
+		Agent: "codex", TeamDBPath: "/tmp/team.db", CodexTeamMode: true,
+		CodexTeamStatusPath: filepath.Join(t.TempDir(), "regenerated-status.json"),
+	}
+	boundReq := req
+	boundReq.CodexTeamStatusPath = statusPath
+	spec, err := buildHerdrLaunchSpec(boundReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent.Launch.Executable, intent.Launch.Args = spec.Executable, spec.Args
 	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
 	runtime.processInfo = testHerdrLauncherProcess(intent, route.LauncherPath)
 	runtime.live = []backend.LivePane{testHerdrIdlePane(intent)}
@@ -1317,11 +1627,8 @@ func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 		t.Fatal(statusErr)
 	}
 
-	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrAgent(
-		context.Background(), Request{
-			Agent: "codex", TeamDBPath: "/tmp/team.db", CodexTeamMode: true,
-			CodexTeamStatusPath: filepath.Join(t.TempDir(), "regenerated-status.json"),
-		}, locked, route, intent, nil,
+	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrRequestAgent(
+		context.Background(), req, locked, route, intent, nil,
 	)
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) || !strings.Contains(err.Error(), "owner mismatch") {
 		t.Fatalf("failed team agent start error = %v", err)
@@ -1691,7 +1998,9 @@ func TestPrepareHerdrOperationSetsOneSharedLaunchDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = locked.Unlock() }()
-	runtime := &fakeHerdrLaunchRuntime{}
+	runtime := &fakeHerdrLaunchRuntime{launchRoute: herdrrun.OwnedLaunchRoute{
+		LauncherPath: "/owned/fanout", EmitterPath: "/owned/fanout",
+	}}
 	launcher := &Launcher{
 		Cfg: &cliflags.Config{}, Log: log.NewWith(io.Discard, io.Discard, false),
 		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Herdr: runtime,
@@ -1726,7 +2035,8 @@ func testHerdrLauncherProcess(intent state.HerdrIntent, launcherPath string) her
 	return herdrrun.PaneProcessInfo{
 		PaneID: intent.Resource.PaneID, ShellPID: 42, ForegroundProcessGroup: 42,
 		ForegroundProcesses: []herdrrun.PaneProcess{{
-			PID: 42, CWD: intent.WorktreePath, Argv0: launcherPath,
+			PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: launcherPath,
+			CWD: intent.WorktreePath, Argv0: launcherPath,
 		}},
 	}
 }
@@ -1736,8 +2046,9 @@ func testHerdrIdlePane(intent state.HerdrIntent) backend.LivePane {
 		Ref: backend.PaneRef{
 			Backend: backend.Herdr, Workspace: intent.Resource.WorkspaceID, Pane: intent.Resource.PaneID,
 		},
-		CurrentPath: intent.WorktreePath, TerminalID: intent.Resource.TerminalID,
-		RepoKey: intent.Resource.RepoKey, WorktreePath: intent.WorktreePath,
+		CurrentPath: intent.WorktreePath, WorkspaceLabel: intent.Resource.Label,
+		TerminalID: intent.Resource.TerminalID,
+		RepoKey:    intent.Resource.RepoKey, WorktreePath: intent.WorktreePath,
 		SessionID: intent.Session, SocketPath: intent.SocketPath,
 	}
 }

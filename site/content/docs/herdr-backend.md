@@ -7,13 +7,15 @@ kanji: 観
 yomi: herdr
 ---
 
-The herdr backend runs CLI fan-outs in [herdr](https://herdr.dev/), a persistent-PTY runtime for coding agents. It is opt-in. Issue, Project, plan, and label-watcher launches use a repository-scoped session owned by fanout; the no-argument TUI remains read-only under herdr. The default backend stays tmux. fanout does not bundle herdr; it is AGPL-licensed and installed separately.
+The herdr backend runs CLI fan-outs in [herdr](https://herdr.dev/), a persistent-PTY runtime for coding agents. It is opt-in. Issue, Project, plan, label-watcher, and interactive TUI launches use a repository-scoped session owned by fanout. The default backend stays tmux. fanout does not bundle herdr; it is AGPL-licensed and installed separately.
 
 ## What v1 does
 
 For a CLI launch, fanout starts or readopts its repository-owned herdr session, creates one project-root coordinator workspace, creates a worktree workspace per child, and starts the selected agent through a pinned non-login fanout launcher. The launcher receives one operation-bound token, consumes an owner-only environment capsule once, and replaces itself with the agent without invoking a shell. fanout records the exact workspace, pane, terminal, repository, agent, session, and socket identities in `.fanout/state.json` only after the launch is verified. It also records the provider session identity when the installed herdr integration reports one.
 
-The persistent TUI console, `--status`, and the web dashboard show recorded sessions with each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and web dashboard match herdr rows against `herdr api snapshot`; `--status` reads recorded state and GitHub only. Before reading or mutating a session, fanout checks `herdr --version` and the exact owned route. A failed public method returns `herdr method "<name>" is unavailable`.
+From a plain shell, no-argument `fanout` starts or adopts the owned session, launches one repository-root console shell, and prints the isolated attach command. Run that command to enter the console workspace; fanout does not replace or attach the calling shell itself. The exact console row is shared across linked worktrees.
+
+The persistent TUI console, `--status`, and the web dashboard show recorded sessions with each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and web dashboard match herdr rows against `herdr api snapshot`; `--status` reads recorded state and GitHub only. Inside the owned console, the TUI can launch issue, Prompt, attached-agent, and shell panes, focus them, and peek at their output. The dashboard can peek at owned rows without adding a mutation endpoint. Before reading or mutating a session, fanout checks `herdr --version`, the exact owned route, and the saved workspace ownership label. A failed public method returns `herdr method "<name>" is unavailable`.
 
 Claude launches receive launch-scoped `--settings` hooks. Codex Plan Mode launches receive the same launch-bound emitter environment without hooks; fanout's app-server controller reports `working`, `plan`, and `idle`. The emitter accepts `working`, `plan`, `blocked`, `idle`, and `done`, and the Claude lifecycle hooks report the states available from Claude's hook events. fanout accepts a report only when its row key, launch nonce, emitter nonce, saved pane identity, current herdr identity, and agent process match. A verified launch starts with synthetic `reported_state: running`; the first accepted provider report sets `state_refinement: true`. Codex launches outside Plan Mode and OpenCode launches do not install this emitter.
 
@@ -21,7 +23,9 @@ The TUI console and web dashboard use `reported_state` only while the matching p
 
 The unsupported paths still fail closed:
 
-- Interactive TUI launch, focus, send, restore, output peek, and plan capture are unavailable for herdr rows.
+- Interactive send, restore, plan capture, and lifecycle close / merge / cleanup remain unavailable for herdr rows.
+- TUI focus, launch, and peek require a complete saved identity in fanout's owned session. Foreign, stale, and legacy rows stay disabled with a reason.
+- Codex child Plan Mode runs through fanout's app-server controller and owned launcher. Claude and OpenCode keep their native mode flags.
 - No tmux keybindings are registered, and fanout never calls herdr's in-app `notification show`.
 
 The TUI header always shows the selected backend and why it was selected, such as `backend: herdr (HERDR_ENV)`.
@@ -32,7 +36,7 @@ The TUI header always shows the selected backend and why it was selected, such a
 - The `herdr` binary on your `PATH`, installed separately.
 - The selected agent CLI on your `PATH`.
 
-CLI launches do not require a pre-existing herdr session. fanout creates or readopts an isolated session under its owner marker. The no-argument TUI is different: to observe an external named session, start the console from a pane in that session (`default` is rejected).
+CLI and no-argument TUI launches do not require a pre-existing herdr session. fanout creates or adopts an isolated session under its owner marker. After a plain-shell TUI bootstrap, run the printed attach command. A TUI started inside a foreign herdr session remains observational; its interactive actions do not gain owned-session authority (`default` is rejected).
 
 ## Opting in
 
@@ -69,7 +73,8 @@ A parent that already has recorded panes keeps its recorded backend. A conflicti
 | Liveness and agent state (TUI console, web dashboard) | tmux queries and pane options | `herdr api snapshot` plus launch-bound Claude or Codex Plan telemetry |
 | Exit status display | Launch wrapper reports `✓ done` | None — herdr's public API keeps no exit status |
 | Pane after the agent exits | Pane stays open with the wrapper message | herdr drops the pane and its own record on normal exit; the fanout row turns `stale` |
-| Interactive TUI launch / focus / send / restore / peek / plan capture | TUI keys and lifecycle flags | Unavailable — `runtime backend herdr does not support …` |
+| Interactive TUI launch / focus / peek | TUI keys | Available for ownership-verified panes in fanout's session |
+| Interactive send / restore / plan capture / lifecycle | Supported tmux paths | Unavailable — `runtime backend herdr does not support …` |
 | `--team` peer messaging | SQLite registry, Claude watcher, Codex app-server bridge | Same registry and push lanes |
 | Automatic nudge (`fanout msg nudge`) | Delivered when the peer can take input | One no-wait `agent prompt` after fresh refined telemetry and live identity/process checks; otherwise no-op |
 | tmux keybindings (dashboard, console return) | Registered | Not registered |

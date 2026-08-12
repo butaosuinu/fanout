@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
@@ -21,72 +23,92 @@ const (
 	peekMaxLines     = 400
 )
 
-// paneIDRe accepts only bare tmux pane ids ("%N"). Anything else — tmux target
-// syntax, flag-like strings, whitespace — is rejected before capture-pane sees
-// it, so the endpoint can never address an arbitrary tmux target.
+// paneIDRe accepts only bare tmux pane ids ("%N") on the tmux capture route.
+// Herdr uses its separately admitted persisted identity.
 var paneIDRe = regexp.MustCompile(`^%[0-9]{1,9}$`)
 
+type snapshotPaneSelection struct {
+	staleTmux      sessionview.PaneView
+	staleTmuxFound bool
+	nonTmux        sessionview.PaneView
+	nonTmuxFound   bool
+	nonTmuxUnique  bool
+}
+
+func (s *snapshotPaneSelection) observe(pv sessionview.PaneView) (sessionview.PaneView, bool) {
+	if backend.NormalizeName(pv.Backend) == backend.Tmux {
+		if pv.Alive {
+			return pv, true
+		}
+		if !s.staleTmuxFound {
+			s.staleTmux, s.staleTmuxFound = pv, true
+		}
+		return sessionview.PaneView{}, false
+	}
+	if s.nonTmuxFound {
+		s.nonTmuxUnique = false
+	} else {
+		s.nonTmux, s.nonTmuxFound, s.nonTmuxUnique = pv, true, true
+	}
+	return sessionview.PaneView{}, false
+}
+
+func (s snapshotPaneSelection) result() (sessionview.PaneView, bool, bool) {
+	if s.nonTmuxFound {
+		return s.nonTmux, true, s.nonTmuxUnique
+	}
+	return s.staleTmux, s.staleTmuxFound, true
+}
+
 // snapshotPaneView selects one latest-snapshot row whose runtime-native pane id
-// is paneID. A live tmux row wins over stale duplicates left by pane-id reuse;
-// without one, a non-tmux row wins so requireLivePane can return its explicit
-// backend error. A stale tmux row remains the final fallback. Defined here
-// rather than in poller.go because the capture endpoints are its only consumers;
-// diff.go has a separate identity selector because worktree reads neither
-// require nor perform pane capture or liveness checks.
-func (p *poller) snapshotPaneView(paneID string) (sessionview.PaneView, bool) {
+// is paneID. A live tmux row wins over stale duplicates. Multiple non-tmux rows
+// are reported as non-unique so backend admission cannot authorize the wrong
+// persisted identity after releasing this lock.
+func (p *poller) snapshotPaneView(paneID string) (sessionview.PaneView, bool, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	var (
-		staleTmux      sessionview.PaneView
-		staleTmuxFound bool
-		nonTmux        sessionview.PaneView
-		nonTmuxFound   bool
-	)
+	selection := snapshotPaneSelection{}
 	for _, sess := range p.latest.Sessions {
 		for i := range sess.Panes {
 			pv := sess.Panes[i]
 			if pv.PaneID != paneID {
 				continue
 			}
-			if backend.NormalizeName(pv.Backend) == backend.Tmux {
-				if pv.Alive {
-					return pv, true
-				}
-				if !staleTmuxFound {
-					staleTmux, staleTmuxFound = pv, true
-				}
-				continue
-			}
-			if !nonTmuxFound {
-				nonTmux, nonTmuxFound = pv, true
+			if selected, found := selection.observe(pv); found {
+				return selected, true, true
 			}
 		}
 	}
-	if nonTmuxFound {
-		return nonTmux, true
-	}
-	return staleTmux, staleTmuxFound
+	return selection.result()
 }
 
 // requireLivePane is the request-validation chain GET /api/peek and
-// GET /api/plan share: pane-id shape (400), snapshot liveness via snapshotPaneView
-// (404), a tmux backend route, and a recorded identity usable for request-time
-// verification. Agent rows need a worktree path; shell rows need a shellKey
-// because they have no worktree of their own. On ok=false the JSON error
+// GET /api/plan share: snapshot selection, owned Herdr admission, or tmux pane-id
+// shape and request-time identity verification. On ok=false the JSON error
 // response has already been written.
 func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionview.PaneView, bool) {
-	pv, recorded := s.poller.snapshotPaneView(paneID)
-	if recorded {
-		switch runtimeBackend := backend.NormalizeName(pv.Backend); runtimeBackend {
-		case backend.Tmux:
-		case backend.Herdr:
-			peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s: %s", paneID, backend.HerdrContentReadReason))
-			return sessionview.PaneView{}, false
-		default:
-			peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s uses unsupported backend %q", paneID, runtimeBackend))
-			return sessionview.PaneView{}, false
-		}
+	pv, recorded, unique := s.poller.snapshotPaneView(paneID)
+	if recorded && !unique {
+		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s does not identify one recorded runtime pane", paneID))
+		return sessionview.PaneView{}, false
 	}
+	runtimeBackend := backend.NormalizeName(pv.Backend)
+	if recorded && runtimeBackend == backend.Herdr {
+		return s.requireOwnedHerdrPane(w, pv)
+	}
+	if recorded && runtimeBackend != backend.Tmux {
+		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s uses unsupported backend %q", paneID, runtimeBackend))
+		return sessionview.PaneView{}, false
+	}
+	return requireLiveTmuxPane(w, paneID, pv, recorded)
+}
+
+func requireLiveTmuxPane(
+	w http.ResponseWriter,
+	paneID string,
+	pv sessionview.PaneView,
+	recorded bool,
+) (sessionview.PaneView, bool) {
 	if !paneIDRe.MatchString(paneID) {
 		peekError(w, http.StatusBadRequest, fmt.Sprintf("invalid pane id %q: want a tmux pane id like %%5", paneID))
 		return sessionview.PaneView{}, false
@@ -109,6 +131,26 @@ func (s *Server) requireLivePane(w http.ResponseWriter, paneID string) (sessionv
 	return pv, true
 }
 
+func (s *Server) requireOwnedHerdrPane(
+	w http.ResponseWriter,
+	pv sessionview.PaneView,
+) (sessionview.PaneView, bool) {
+	owned := pv.Alive && s.ownsHerdrPane != nil && s.readHerdrPane != nil &&
+		s.ownsHerdrPane(pv)
+	if !owned {
+		peekError(
+			w,
+			http.StatusNotFound,
+			fmt.Sprintf(
+				"pane %s is not in this repository's fanout-owned Herdr session",
+				pv.PaneID,
+			),
+		)
+		return sessionview.PaneView{}, false
+	}
+	return pv, true
+}
+
 // beginPaneCapture is the capture preamble shared by GET /api/peek and
 // GET /api/plan: response headers, the HEAD early-return (getOnly permits
 // HEAD; answer it before running tmux — mirrors handleStream's HEAD
@@ -125,6 +167,9 @@ func (s *Server) beginPaneCapture(w http.ResponseWriter, r *http.Request, pv ses
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
 		return false
+	}
+	if backend.NormalizeName(pv.Backend) == backend.Herdr {
+		return true
 	}
 	if err := s.verifyPane(pv); err != nil {
 		peekError(w, http.StatusNotFound, err.Error())
@@ -202,9 +247,9 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 	if !s.beginPaneCapture(w, r, pv) {
 		return
 	}
-	out, err := s.capturePane(paneID, lines)
+	out, err := s.readPane(pv, lines)
 	if err != nil {
-		peekError(w, http.StatusBadGateway, "tmux capture-pane: "+err.Error())
+		peekError(w, paneReadErrorStatus(pv, err), err.Error())
 		return
 	}
 	// A failed response write means the client went away; nothing to do here.
@@ -214,6 +259,30 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 		CapturedAt: time.Now().UTC().Format(time.RFC3339),
 		Output:     out,
 	})
+}
+
+func paneReadErrorStatus(pv sessionview.PaneView, err error) int {
+	if backend.NormalizeName(pv.Backend) == backend.Herdr &&
+		(errors.Is(err, herdrrun.ErrOwnedIdentityMismatch) ||
+			errors.Is(err, herdrrun.ErrOwnedSessionNotFound)) {
+		return http.StatusNotFound
+	}
+	return http.StatusBadGateway
+}
+
+func (s *Server) readPane(pv sessionview.PaneView, lines int) (string, error) {
+	if backend.NormalizeName(pv.Backend) == backend.Herdr {
+		out, err := s.readHerdrPane(pv, lines)
+		if err != nil {
+			return "", fmt.Errorf("herdr pane read: %w", err)
+		}
+		return out, nil
+	}
+	out, err := s.capturePane(pv.PaneID, lines)
+	if err != nil {
+		return "", fmt.Errorf("tmux capture-pane: %w", err)
+	}
+	return out, nil
 }
 
 // peekError writes a JSON error body so the SPA can surface the message

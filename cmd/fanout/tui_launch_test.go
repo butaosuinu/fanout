@@ -27,6 +27,20 @@ func TestBufferedLaunchNoticeCollectsAndDeduplicatesWarnings(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRuntimeRequestRemovesTmuxIdentityForHerdr(t *testing.T) {
+	req := panelaunch.Request{ShellKey: "tmux-key", AgentStartGate: "tmux-gate"}
+	herdrReq := coordinatorRuntimeRequest(backend.Herdr, "500", req)
+	if herdrReq.ShellKey != "" || herdrReq.AgentStartGate != "" || herdrReq.RuntimeParent != "500" {
+		t.Fatalf("Herdr coordinator request = %+v, want no tmux identity", herdrReq)
+	}
+	if tmuxReq := coordinatorRuntimeRequest(backend.Tmux, "500", req); tmuxReq.ShellKey != req.ShellKey || tmuxReq.AgentStartGate != req.AgentStartGate || tmuxReq.RuntimeParent != "" {
+		t.Fatalf("tmux coordinator request = %+v, want unchanged tmux identity", tmuxReq)
+	}
+	if manualReq := coordinatorRuntimeRequest(backend.Herdr, panelaunch.ManualParentRef, req); manualReq.RuntimeParent != "" {
+		t.Fatalf("manual Herdr coordinator request = %+v, want independent synthetic identity", manualReq)
+	}
+}
+
 func TestPlanSkillPromptPerAgent(t *testing.T) {
 	path := planPromptPath("/repo", 1)
 	tests := []struct {
@@ -299,6 +313,43 @@ func TestHasRecordedIssuePaneSeesPlanSessions(t *testing.T) {
 	}
 }
 
+func TestLinkedIssueSessionGuardsRejectSiblingOwnership(t *testing.T) {
+	tests := []struct {
+		name     string
+		pane     state.Pane
+		guard    func(string, state.Store) error
+		wantText string
+	}{
+		{
+			name:     "plan coordinator rejects sibling orchestrator",
+			pane:     state.Pane{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "orchestrator-issue-123-1"},
+			guard:    func(root string, store state.Store) error { return guardLinkedIssuePlanCoordinator(root, store, 123) },
+			wantText: "issue #123 already has a fanout pane",
+		},
+		{
+			name:     "orchestrator rejects sibling plan coordinator",
+			pane:     state.Pane{Parent: panelaunch.ManualParentRef, IssueNum: -1, Slug: "plan-issue-123-1"},
+			guard:    func(root string, store state.Store) error { return guardLinkedIssueOrchestrator(root, store, 123) },
+			wantText: "issue #123 already has a plan session",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initLifecycleRepo(t)
+			sibling := filepath.Join(t.TempDir(), "sibling")
+			gitCmdTest(t, repo, "worktree", "add", "-b", "issue-session-sibling", sibling, "HEAD")
+			writeRawLifecycleState(t, sibling, tt.pane)
+			store, err := state.LoadProject(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if guardErr := tt.guard(repo, store); guardErr == nil || !strings.Contains(guardErr.Error(), tt.wantText) {
+				t.Fatalf("linked issue guard error = %v, want %q", guardErr, tt.wantText)
+			}
+		})
+	}
+}
+
 // TestLaunchParentIssueFanoutRejectsPlanSession pins the parent-lane guard: an
 // issue owned by a plan session (here: surviving plan task rows) must not also
 // fan out its children, even when it gained OPEN children after the plan
@@ -486,7 +537,7 @@ func TestLaunchPlanPromptFromTUIReturnsClaudeModeFallbackNotice(t *testing.T) {
 	}
 }
 
-func TestTUIAgentLaunchesRejectHerdrBeforeMutationDespiteUnrelatedManualRow(t *testing.T) {
+func TestTUIAgentLaunchFailuresDoNotOverwriteExistingState(t *testing.T) {
 	tests := []struct {
 		name   string
 		launch func(string) error
@@ -583,15 +634,9 @@ esac
 			if err != nil {
 				t.Fatal(err)
 			}
-			excludePath := filepath.Join(repo, ".git", "info", "exclude")
-			excludeBefore, err := os.ReadFile(excludePath)
-			if err != nil {
-				t.Fatal(err)
-			}
-
 			err = tt.launch(repo)
-			if err == nil || !strings.Contains(err.Error(), "runtime backend herdr does not support") {
-				t.Fatalf("launch error = %v, want herdr unsupported", err)
+			if err == nil {
+				t.Fatal("launch succeeded with the test Herdr shim")
 			}
 			stateAfter, err := os.ReadFile(state.Path(repo))
 			if err != nil {
@@ -599,13 +644,6 @@ esac
 			}
 			if string(stateAfter) != string(stateBefore) {
 				t.Fatalf("state changed before herdr rejection:\n%s", stateAfter)
-			}
-			excludeAfter, err := os.ReadFile(excludePath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(excludeAfter) != string(excludeBefore) {
-				t.Fatalf("git exclude changed before herdr rejection:\n%s", excludeAfter)
 			}
 			for _, path := range []string{
 				filepath.Join(repo, ".fanout", "briefings"),

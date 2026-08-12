@@ -12,7 +12,7 @@ yomi: monitoring
 
 fanout はこれを 3 つの窓で見ます。
 手元で常時眺めるなら**常駐 TUI コンソール**、automation に食わせるなら `--status` の **JSON**、チームやブラウザで共有するなら読み取り専用の **Web ダッシュボード**です。
-`--status` と Web ダッシュボードは読み取り専用で `.fanout/state.json` と tmux と GitHub を読むだけですが、TUI はキー操作から merge、close、cleanup も実行できます(`--merge` / `--close` / `--cleanup` と同じ処理です)。
+`--status` と Web ダッシュボードは読み取り専用で `.fanout/state.json`、選択中の runtime、GitHub を読むだけですが、TUI の tmux 経路はキー操作から merge、close、cleanup も実行できます(`--merge` / `--close` / `--cleanup` と同じ処理です)。
 
 ## ペイン枠線ラベル
 
@@ -25,16 +25,21 @@ fanout は作成した各ペインの上枠に `<parent> · <name>` のラベル
 手元で全ペインを眺め続けるなら、引数なしの `fanout` で常駐コンソールを起動します。
 
 ```bash
-fanout   # start the persistent tmux console
+fanout   # start the persistent console
 ```
 
-素のシェルから起動すると fanout 管理の tmux session を作成または attach し、tmux 内から起動すると現在のペインをそのままコンソールにします。
+tmux backend では、素のシェルから起動すると fanout 管理の tmux session を作成または attach し、tmux 内から起動すると現在のペインをそのままコンソールにします。
+herdr backend では、素のシェルから起動するとリポジトリの fanout-owned session と console workspace を bootstrap し、attach command を表示します。
+表示された command を実行して console へ入ってください。
+fanout は呼び出し元の shell を残します。
 コンソールは `.fanout/state.json` を読み、記録済みペインの issue と PR の状態を定期更新し、各行の worktree には変更量を `+X/-Y`、未 commit の作業の有無を `dirty` / `clean` で示します。
 `RUN` 列には agent の実行状態がグリフで出て(起動ラッパー由来の `●` running・`✓` done に加え、agent hooks が報告すると `◐` working・`◇` plan・`◆` blocked・`○` idle)、detail panel には同じ値が `run=` として出ます。
-マウスや tmux の `prefix` ペイン移動で記録済みペインへフォーカスすると、TUI の選択行もそのペインに追従します。
+マウスや tmux の `prefix` ペイン移動で記録済み tmux ペインへフォーカスすると、TUI の選択行もそのペインに追従します。
 
 コンソールは backend を認識します。ヘッダには選択中の runtime backend と選択理由(例: `backend: herdr (HERDR_ENV)`)が出て、detail panel には各行の `backend=` と `pane=` の identity が出ます。
-[herdr backend]({{< relref "/docs/herdr-backend" >}})でも対話コンソールの操作は read-only のままです。launch、focus、close、peek は無効になり、ヘルプ画面がキーごとに理由を表示します。CLI と label watcher の launch は owned runtime path を使います。
+fanout-owned [herdr backend]({{< relref "/docs/herdr-backend" >}}) session では、issue / Prompt / attach / shell の launch、focus、peek を使えます。
+foreign または identity が不完全な Herdr 行は、キーごとの理由を表示して無効になります。
+Herdr の send、restore、lifecycle の close / merge / cleanup、plan capture は未対応です。
 
 {{< diagram "console" >}}
 
@@ -54,19 +59,19 @@ fanout は、ペインの `@fanout_agent_state` tmux option から構造化さ�
 
 | キー | 動作 |
 |---|---|
-| `?` | キーボードショートカットのヘルプを tmux popup で開く。`Esc`、`q`、もう一度 `?` のいずれかで閉じる。 |
+| `?` | キーボードショートカットのヘルプを開く(tmux popup または Herdr の inline form)。`Esc`、`q`、もう一度 `?` のいずれかで閉じる。 |
 | `j` / `k` | 選択を下 / 上に移動する(矢印キーでも可)。 |
 | `[` / `]` | 前 / 次の Session グループへジャンプする。 |
 | `/` | ロード済みの行を絞り込む(フリーテキストか `state:open` のような述語)。`Esc` は入力を抜けるだけで、一覧からもう一度 `Esc` を押すとフィルタを解除する。 |
-| `n` | 新規 Session の tmux popup を開く。Mode 行で Prompt / Issue を切り替える。詳細は[新規 Session のモード](#新規-session-のモード)を参照。 |
-| `s` | 設定の tmux popup を開く。user config / repo config を選び、`config.json` と同じキーを編集し、`Ctrl+S` で保存する。 |
+| `n` | 新規 Session の form を開く(tmux popup または Herdr の inline form)。Mode 行で Prompt / Issue を切り替える。詳細は[新規 Session のモード](#新規-session-のモード)を参照。 |
+| `s` | 設定を開く(tmux popup または Herdr の inline form)。user config / repo config を選び、`config.json` と同じキーを編集し、`Ctrl+S` で保存する。 |
 | `Ctrl+O` | 新規 Session の Issue 一覧で、選択中の issue を既定ブラウザで開く。 |
 | `a` | 選択中の行に記録された worktree に、agent ペインを 1 つ以上追加する。git worktree は作らない。追加行は選択元の worktree と branch を共有し、focus と peek はできるが merge 進捗には数えない。追加した agent は[新規 Session のペイン](#新規-session-のモード)と同じ launch posture を使う。 |
 | `A` | 選択中の行に記録された worktree で shell terminal を開く。shell 行は `@manual` entry として記録され、focus と peek はできるが merge 進捗には数えない。 |
-| `t` | project root で shell terminal を開く。close は tmux ペインと state 行だけを消し、git worktree は削除しない。 |
+| `t` | project root で shell terminal を開く。tmux での close はペインと state 行だけを消し、git worktree は削除しない。Herdr の lifecycle close は未対応。 |
 | `Enter` / `o` | 選択中の live 行のペインにフォーカスする。 |
 | `1`-`9` | 表示リストの N 行目へジャンプして、そのペインにフォーカスする。範囲外の数字は notice を表示する。 |
-| `Z` | 選択中のペインにフォーカスして zoom する。ペインの作成や削除、tmux window のリサイズで解除されるので、必要ならもう一度 `Z` を押す。 |
+| `Z` | tmux で選択中のペインにフォーカスして zoom する。ペインの作成や削除、window のリサイズで解除されるので、必要ならもう一度 `Z` を押す。 |
 | `p` | detail panel の read-only 出力スナップショットを更新する。 |
 | `v` | 表示の手動切替を auto → compact → full でサイクルする。auto は幅 80 桁未満で[コンパクト表示](#コンパクト表示)を選ぶ。compact は広い画面でも switcher を強制し、full は狭くてもテーブルを強制する。永続化はしない。 |
 | `c` / `x` | 選択中のペインの close option を開く。ペインだけを閉じる、ペインと worktree を閉じる、local branch も削除する、から選ぶ。 |
@@ -91,16 +96,18 @@ repo config から launch posture と watcher は変更できず、HTTP 通知 e
 
 ### F11 / prefix + T
 
-どのペインからでも **`F11`** または **`prefix + T`** でコンソールに戻れます(`F12` / `prefix + D` の対)が、live なコンソールが無いときはステータスラインに通知して終わります。
+どの tmux ペインからでも **`F11`** または **`prefix + T`** でコンソールに戻れます(`F12` / `prefix + D` の対)が、live なコンソールが無いときはステータスラインに通知して終わります。
+Herdr は tmux keybind を登録しません。
 
 設定キー `consoleKeybind` または `FANOUT_CONSOLE_KEYBIND=0` で無効化できます([Settings]({{< relref "/docs/settings" >}}) を参照してください)。
 
 ### 新規 Session のモード
 
-`n` は Mode 行つきの tmux popup を開き、Prompt / Issue を切り替えます。
+`n` は Mode 行つきの form を開き、Prompt / Issue を切り替えます。
+tmux では popup、Herdr では inline form です。
 
 この popup から Prompt、plan coordinator、Issue のいずれかを正常に起動すると、実際の作成順で先頭の新規ペインへフォーカスが移ります。
-Issue fan-out で orchestrator ペインを作成した場合は、作成順でそのペインが先頭です。
+Issue fan-out では、tmux は orchestrator を先に作成し、Herdr は child ペインの後に作成するため、Herdr では最初の新規 child にフォーカスが移ります。
 `F11` または `prefix + T` でコンソールに戻れます。
 agent 追加(`a`)、shell(`A` / `t`)、watcher、通常の CLI 起動は、元のフォーカスを維持します。
 
@@ -115,7 +122,8 @@ OpenCode は同梱の `/fanout plan` command を読めずコーディネータ�
 **Issue** はリポジトリの OPEN issue を一覧し、番号やタイトル、ラベルで絞り込めます。
 `Ctrl+O` で選択中の issue を既定ブラウザで開けます。
 issue を選んで既定の agent を決めると、`Enter` で子ごとに agent を切り替える割り当て画面が開きます(繰り返し指定の `--agent NUM=name` 相当)。
-親 issue の Issue fan-out で orchestrator ペインを作成するときは、popup の既定 agent で project root に worktree なしで先に起動します。
+親 issue の Issue fan-out で orchestrator ペインを作成するときは、popup の既定 agent で project root に worktree なしで起動します。
+tmux は start gate で待機する orchestrator を child ペインより先に作成し、start gate 非対応の Herdr は child ペインを先に作成します。
 orchestrator は `orchestratorPlanMode`(既定 `true`)に従います。
 codex の orchestrator は、子の fan-out 完了まで agent 起動を留める start gate と Plan Mode を両立できないため、fanout は警告して素の codex で起動します。
 子は子ごとに割り当てた agent でファンアウトします。
@@ -176,7 +184,8 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 Prompt Session の記録済み branch に PR があると、ダッシュボードに PR リンクと CI 状態も表示します。
 
 Session の各行には runtime backend と pane の identity が出て、runtime の状態は `live` / `stale` / `unknown` / `unsupported` / `-` で示されます。フィルタは `backend:tmux` / `backend:herdr` を受け付けます。
-[herdr backend]({{< relref "/docs/herdr-backend" >}}) の行では live peek は空のままです。herdr backend v1 は pane の内容を読みません。
+[herdr backend]({{< relref "/docs/herdr-backend" >}}) の行では、保存済みの行が fanout-owned session の pane と一致する場合だけ live peek が内容を返します。
+foreign または stale な行は 404 を返し、ダッシュボードは GET 専用のままです。
 
 ### diff ビュアー
 
@@ -253,6 +262,6 @@ Catppuccin、Gruvbox、Tokyo Night ほか)から選べます。
 
 - `gh` 未ログインの場合は、バナーを出して state のみのビューを表示します。
 - tmux 外でも配信は続き、ペインの生存は unknown のままになります。
-- herdr の行は保存済みの identity を `herdr api snapshot` と照合して生死と agent state を反映します。行に `agent_session` がない場合は、expected provider の一意で有効な最初の ref を owning state lock 下で永続化し、以後の観測で完全一致を要求します。その他の identity field は snapshot から補完しません。出力の peek は常に空です。
+- herdr の行は保存済みの identity を `herdr api snapshot` と照合して生死と agent state を反映します。行に `agent_session` がない場合は、expected provider の一意で有効な最初の ref を owning state lock 下で永続化し、以後の観測で完全一致を要求します。その他の identity field は snapshot から補完しません。出力の peek は、この repository の fanout-owned Herdr session に属する live row だけ内容を返します。
 
 このページに登場するフラグの一覧は [CLI リファレンス]({{< relref "/docs/cli" >}}) にあります。

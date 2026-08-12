@@ -94,10 +94,9 @@ func resolveLaunchRuntime(cfg *cliflags.Config, provisionalIntents []backend.Bin
 }
 
 // resolveTUILaunchRuntime applies the same launch-backend contract as the CLI
-// while preserving the no-argument TUI's already-established tmux session and
-// target. The TUI session bootstrap remains tmux-specific; issue, Project,
-// plan, and watcher launches still resolve parent ownership before they can
-// lock state or create launch artifacts.
+// while carrying the no-argument TUI's already-established runtime identifiers.
+// Issue, Project, plan, and watcher launches resolve parent ownership before
+// they can lock state or create launch artifacts.
 func resolveTUILaunchRuntime(projectRoot, session string, cfg *cliflags.Config) (*run.Runtime, error) {
 	return resolveTUILaunchRuntimeForTarget(projectRoot, session, tuiLaunchTarget(session), cfg, nil)
 }
@@ -127,9 +126,8 @@ func resolveTUILaunchRuntimeForTarget(projectRoot, session, target string, cfg *
 }
 
 // resolveLaunchBackend is the shared composition step for CLI and TUI launch
-// lanes. Interactive TUI mutation remains deferred, while CLI issue, Project,
-// plan, and watcher lanes may acquire the owned Herdr runtime. verify repeats
-// parent stickiness against the store held under the launch lock.
+// lanes. Owned Herdr launch lanes acquire the same repository runtime. verify
+// repeats parent stickiness against the store held under the launch lock.
 func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) (launchBackendResolution, error) {
 	inputs := loadRuntimeBackendInputs(cfg, projectRoot, store, provisionalIntents)
 	rows, err := runtimeBackendBindings(projectRoot, store)
@@ -214,14 +212,35 @@ func backendSelectionVerifier(selection backend.Selection, inputs runtimeBackend
 // specs. The current store is supplied by the caller so the lock-time check
 // observes the exact state protected by that caller's launch lock.
 func runtimeBackendBindings(projectRoot string, current state.Store) ([]backend.Binding, error) {
-	rows := backendBindings(projectRoot, current)
-	if strings.TrimSpace(projectRoot) == "" {
-		return rows, nil
-	}
-
-	roots, err := worktree.ListRoots(projectRoot)
+	stores, err := runtimeProjectStores(projectRoot, current)
 	if err != nil {
 		return nil, fmt.Errorf("list linked worktrees for runtime backend bindings: %w", err)
+	}
+	rows := make([]backend.Binding, 0)
+	for i, entry := range stores {
+		for _, binding := range backendBindings(entry.root, entry.store) {
+			if i > 0 && strings.HasPrefix(strings.TrimSpace(binding.Parent), "plan:") {
+				continue
+			}
+			rows = append(rows, binding)
+		}
+	}
+	return rows, nil
+}
+
+type runtimeProjectStore struct {
+	root  string
+	store state.Store
+}
+
+func runtimeProjectStores(projectRoot string, current state.Store) ([]runtimeProjectStore, error) {
+	stores := []runtimeProjectStore{{root: projectRoot, store: current}}
+	if strings.TrimSpace(projectRoot) == "" {
+		return stores, nil
+	}
+	roots, err := worktree.ListRoots(projectRoot)
+	if err != nil {
+		return nil, err
 	}
 	seen := map[string]bool{canonicalRuntimeRoot(projectRoot): true}
 	for _, root := range roots {
@@ -232,16 +251,11 @@ func runtimeBackendBindings(projectRoot string, current state.Store) ([]backend.
 		seen[key] = true
 		store, loadErr := state.LoadProject(root)
 		if loadErr != nil {
-			return nil, fmt.Errorf("load runtime backend bindings from %s: %w", root, loadErr)
+			return nil, fmt.Errorf("load linked worktree state from %s: %w", root, loadErr)
 		}
-		for _, binding := range backendBindings(root, store) {
-			if strings.HasPrefix(strings.TrimSpace(binding.Parent), "plan:") {
-				continue
-			}
-			rows = append(rows, binding)
-		}
+		stores = append(stores, runtimeProjectStore{root: root, store: store})
 	}
-	return rows, nil
+	return stores, nil
 }
 
 func canonicalRuntimeRoot(root string) string {
@@ -270,9 +284,6 @@ func validateHerdrLaunchBackend(cfg *cliflags.Config) error {
 		if dbPath != "" && !filepath.IsAbs(dbPath) {
 			return fmt.Errorf("%s must be absolute with --backend herdr --team", team.DBPathEnv)
 		}
-	}
-	if cfg.TUIInteractive {
-		return backend.Unsupported(backend.Herdr, "interactive TUI launch in the current release wave")
 	}
 	if cfg.Session != "" {
 		return fmt.Errorf("--session is only supported by the tmux backend")
@@ -311,6 +322,22 @@ func constructLaunchRuntimeBackend(
 		return herdrrun.EnsureOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
 	}
 	return herdrrun.NewPreview(), prepare, nil
+}
+
+func openOwnedHerdrSession(projectRoot string) (*herdrrun.OwnedSession, error) {
+	identity, err := worktree.ResolveRepoIdentity(context.Background(), projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	return herdrrun.OpenOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
+}
+
+func ensureOwnedHerdrSession(projectRoot string) (*herdrrun.OwnedSession, error) {
+	identity, err := worktree.ResolveRepoIdentity(context.Background(), projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	return herdrrun.EnsureOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
 }
 
 func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) runtimeBackendInputs {

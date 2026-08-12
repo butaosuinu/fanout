@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,14 +53,19 @@ type HerdrRealizeHooks struct {
 }
 
 type HerdrCoordinatorRequest struct {
-	Parent       string
-	IssueNum     int
-	ProjectRoot  string
-	SourceRoot   string
-	CWD          string
-	HerdrSession string
-	SocketPath   string
-	TotalTimeout time.Duration
+	Parent        string
+	RuntimeParent string
+	IssueNum      int
+	ProjectRoot   string
+	SourceRoot    string
+	CWD           string
+	HerdrSession  string
+	SocketPath    string
+	TotalTimeout  time.Duration
+	// Launch, when non-nil, is journaled before workspace creation so the pane
+	// launcher can start a console or attached workload without an unfenced
+	// post-create mutation window. Normal coordinators leave it nil and idle.
+	Launch *state.HerdrLaunch
 }
 
 // HerdrRealizeResult is the realized outcome shared by the coordinator and
@@ -149,7 +155,7 @@ func newHerdrRealizeSetup(
 		projectRoot,
 		parent,
 		ownerProjectRoot,
-		locked.HerdrIntents,
+		herdrCoordinatorIdentityIntents(parent, locked.HerdrIntents),
 	)
 	if runtimeParentErr != nil {
 		return fail(runtimeParentErr)
@@ -246,7 +252,7 @@ func RealizeHerdrCoordinator(
 		if savedErr := validateSavedCoordinatorIntent(
 			req,
 			cwd,
-			setup.runtimeParent,
+			herdrCoordinatorRequestRuntimeParent(req, setup.runtimeParent),
 			setup.runtimeOwnerProjectRoot,
 			intent,
 		); savedErr != nil {
@@ -294,18 +300,20 @@ func RealizeHerdrCoordinator(
 	if policyErr := runtime.VerifyWorktreeSetupPolicy(operationParent); policyErr != nil {
 		return result, policyErr
 	}
-	label, labelErr := newHerdrWorkspaceLabel("coordinator", setup.hooks.RandomToken)
+	label, labelErr := herdrCoordinatorWorkspaceLabel(req, setup.hooks.RandomToken)
 	if labelErr != nil {
 		return result, labelErr
 	}
 	intent = state.HerdrIntent{
 		ID: intentID, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentIssued,
-		Parent: canonicalHerdrParent(req.Parent), RuntimeParent: setup.runtimeParent,
+		Parent:           canonicalHerdrParent(req.Parent),
+		RuntimeParent:    herdrCoordinatorRequestRuntimeParent(req, setup.runtimeParent),
 		OwnerProjectRoot: setup.ownerProjectRoot,
 		IssueNum:         req.IssueNum,
 		WorktreePath:     cwd,
 		WorkspaceLabel:   label, Session: req.HerdrSession, SocketPath: req.SocketPath,
 		ExpiresUnixMS: setup.deadline.UnixMilli(),
+		Launch:        cloneHerdrLaunch(req.Launch),
 	}
 	locked.UpsertIntent(intent)
 	if saveErr := locked.Save(); saveErr != nil {
@@ -345,6 +353,31 @@ func RealizeHerdrCoordinator(
 		return result, err
 	}
 	return realizeDeferred(intent)
+}
+
+func herdrCoordinatorWorkspaceLabel(
+	req HerdrCoordinatorRequest,
+	randomToken func() (string, error),
+) (string, error) {
+	if req.Launch == nil {
+		return newHerdrWorkspaceLabel("coordinator", randomToken)
+	}
+	kind := "manual"
+	if canonicalHerdrParent(req.Parent) == HerdrConsoleRuntimeParent {
+		kind = "console"
+	}
+	return newHerdrWorkspaceLabel(kind, func() (string, error) {
+		return req.Launch.Nonce, nil
+	})
+}
+
+func cloneHerdrLaunch(launch *state.HerdrLaunch) *state.HerdrLaunch {
+	if launch == nil {
+		return nil
+	}
+	cloned := *launch
+	cloned.Args = append([]string(nil), launch.Args...)
+	return &cloned
 }
 
 func verifyHerdrRealizeRoute(
@@ -429,6 +462,24 @@ func resolveHerdrRuntimeParent(
 		return "", fmt.Errorf("resolve Herdr runtime parent: empty parent")
 	}
 	return parent, nil
+}
+
+func herdrCoordinatorIdentityIntents(parent string, control state.HerdrIntents) state.HerdrIntents {
+	if canonicalHerdrParent(parent) != ManualParentRef {
+		return control
+	}
+	identity := control
+	identity.Intents = slices.DeleteFunc(slices.Clone(control.Intents), func(intent state.HerdrIntent) bool {
+		return intent.Parent == ManualParentRef && intent.RuntimeParent != ManualParentRef
+	})
+	return identity
+}
+
+func herdrCoordinatorRequestRuntimeParent(req HerdrCoordinatorRequest, fallback string) string {
+	if req.RuntimeParent != "" {
+		return canonicalHerdrParent(req.RuntimeParent)
+	}
+	return fallback
 }
 
 func normalizeHerdrRealizeHooks(hooks HerdrRealizeHooks) HerdrRealizeHooks {

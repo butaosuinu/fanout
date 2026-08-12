@@ -113,6 +113,18 @@ func TestPrepareIssueLaunchDefersBackendUntilTargetAndAgentValidate(t *testing.T
 	}
 }
 
+func TestPrepareIssueCallbacksForCompletedReplay(t *testing.T) {
+	calls := 0
+	rt := &Runtime{PrepareBackend: func() error {
+		calls++
+		return nil
+	}}
+	after := func(state.Store, panelaunch.StateRecorder, IssueAfterContext) error { return nil }
+	if err := prepareIssueCallbacks(rt, nil, after); err != nil || calls != 1 {
+		t.Fatalf("prepareIssueCallbacks() error = %v, calls %d; want nil, 1", err, calls)
+	}
+}
+
 func TestExecutePlanPreservesCreatedPaneIDsOnFailFastError(t *testing.T) {
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init", "-b", "main")

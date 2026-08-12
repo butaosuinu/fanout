@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 // planCaptureLines は plan 抽出のために遡る通常スクリーン履歴の行数。peek の
@@ -40,6 +42,10 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	paneID := r.URL.Query().Get("pane")
 	pv, ok := s.requireLivePane(w, paneID)
 	if !ok {
+		return
+	}
+	if backend.NormalizeName(pv.Backend) != backend.Tmux {
+		peekError(w, http.StatusNotFound, fmt.Sprintf("pane %s is not a tmux plan-mode pane", paneID))
 		return
 	}
 	if !pv.PlanMode || pv.Agent != "codex" {

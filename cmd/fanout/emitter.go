@@ -8,13 +8,19 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 )
 
-type herdrEmitterObserver struct{}
+type herdrEmitterObserver struct {
+	openOwned func(context.Context, herdrrun.OwnedOptions) (*herdrrun.OwnedSession, error)
+}
 
-func (herdrEmitterObserver) Observe(
+func (o herdrEmitterObserver) Observe(
 	ctx context.Context,
 	target stateemitter.RuntimeTarget,
 ) (stateemitter.Observation, error) {
-	owned, err := herdrrun.OpenOwned(ctx, herdrrun.OwnedOptions{GitCommonDir: target.RepoKey})
+	openOwned := o.openOwned
+	if openOwned == nil {
+		openOwned = herdrrun.OpenOwned
+	}
+	owned, err := openOwned(ctx, herdrrun.OwnedOptions{GitCommonDir: target.GitCommonDir})
 	if err != nil {
 		return stateemitter.Observation{}, err
 	}

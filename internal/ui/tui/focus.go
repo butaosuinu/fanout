@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 type paneFocusedMsg struct {
@@ -154,33 +155,134 @@ func (m *model) focusPaneIDCmd(paneID, contextNotice string) tea.Cmd {
 	if paneID == "" {
 		return nil
 	}
+	if m.selectedBackend() == backend.Herdr {
+		return m.focusFreshHerdrPaneIDCmd(paneID, contextNotice)
+	}
 	return m.focusPaneCmd(paneView{PaneID: paneID, TmuxState: "live"}, false, contextNotice)
+}
+
+func (m model) focusFreshHerdrPaneIDCmd(paneID, contextNotice string) tea.Cmd {
+	return func() tea.Msg {
+		pane, err := m.loadFreshHerdrPane(paneID)
+		if err != nil {
+			return paneFocusedMsg{paneID: paneID, err: err, contextNotice: contextNotice}
+		}
+		return focusFreshHerdrPane(m.opts.FocusHerdrPane, m.opts.keyboard, pane, contextNotice)
+	}
+}
+
+func (m model) loadFreshHerdrPane(paneID string) (paneView, error) {
+	panes, err := loadPaneViews(m.opts.ProjectRoot, nil, m.opts.ListLive, nil)
+	pane, selectErr := uniqueLiveHerdrPane(panes, paneID)
+	if selectErr != nil {
+		return paneView{}, errors.Join(err, selectErr)
+	}
+	if observationErr := observationErrorForPane(err, pane); observationErr != nil {
+		return paneView{}, observationErr
+	}
+	if reason := m.runtimeActionDisabledReason(&pane, "focus"); reason != "" {
+		return paneView{}, fmt.Errorf("%s", reason)
+	}
+	return pane, nil
+}
+
+func observationErrorForPane(err error, pane paneView) error {
+	failedRoutes, allRoutes := backend.ClassifyObservationError(err)
+	if err == nil || allRoutes {
+		return err
+	}
+	route := backend.ObservationRoute{Backend: backend.NormalizeName(pane.Backend)}
+	if route.Backend == backend.Herdr {
+		route.SessionID = strings.TrimSpace(pane.savedPane.HerdrSession)
+		route.SocketPath = strings.TrimSpace(pane.savedPane.HerdrSocketPath)
+	}
+	if failedRoutes[route] {
+		return err
+	}
+	return nil
+}
+
+func focusFreshHerdrPane(
+	focus func(state.Pane) error,
+	keyboard keyboardProtocols,
+	pane paneView,
+	contextNotice string,
+) paneFocusedMsg {
+	keyboard.Disable()
+	if focus == nil {
+		keyboard.Enable()
+		return paneFocusedMsg{paneID: pane.PaneID, err: fmt.Errorf("owned Herdr focus is not configured"), contextNotice: contextNotice}
+	}
+	if err := focus(pane.savedPane); err != nil {
+		keyboard.Enable()
+		return paneFocusedMsg{paneID: pane.PaneID, err: err, contextNotice: contextNotice}
+	}
+	return paneFocusedMsg{paneID: pane.PaneID, keyboardPaused: true, contextNotice: contextNotice}
+}
+
+func uniqueLiveHerdrPane(panes []paneView, paneID string) (paneView, error) {
+	var found *paneView
+	for i := range panes {
+		pane := &panes[i]
+		if pane.PaneID != paneID || backend.NormalizeName(pane.Backend) != backend.Herdr {
+			continue
+		}
+		if found != nil {
+			return paneView{}, fmt.Errorf("recorded pane identity is ambiguous")
+		}
+		found = pane
+	}
+	if found == nil || !found.canFocus() {
+		return paneView{}, fmt.Errorf("newly created pane is not live")
+	}
+	return *found, nil
 }
 
 func (m *model) focusPaneCmd(pane paneView, zoom bool, contextNotice string) tea.Cmd {
 	paneID := pane.PaneID
-	alive := m.opts.PaneAlive
-	shellAlive := m.opts.ShellPaneAlive
-	focus := m.opts.FocusPane
-	zoomPane := m.opts.ZoomPane
-	keyboard := m.opts.keyboard
 	if contextNotice == "" {
 		m.notice = fmt.Sprintf("focusing %s...", paneID)
 	} else {
 		m.notice = contextNotice
 	}
+	if backend.NormalizeName(pane.Backend) == backend.Herdr {
+		return m.focusHerdrPaneCmd(pane, contextNotice)
+	}
+	return m.focusTmuxPaneCmd(pane, zoom, contextNotice)
+}
+
+func (m *model) focusHerdrPaneCmd(pane paneView, contextNotice string) tea.Cmd {
+	focus := m.opts.FocusHerdrPane
+	keyboard := m.opts.keyboard
+	return func() tea.Msg {
+		keyboard.Disable()
+		if focus == nil {
+			keyboard.Enable()
+			return paneFocusedMsg{paneID: pane.PaneID, err: fmt.Errorf("owned Herdr focus is not configured"), contextNotice: contextNotice}
+		}
+		if err := focus(pane.savedPane); err != nil {
+			keyboard.Enable()
+			return paneFocusedMsg{paneID: pane.PaneID, err: err, contextNotice: contextNotice}
+		}
+		return paneFocusedMsg{paneID: pane.PaneID, keyboardPaused: true, contextNotice: contextNotice}
+	}
+}
+
+func (m *model) focusTmuxPaneCmd(pane paneView, zoom bool, contextNotice string) tea.Cmd {
+	alive, shellAlive := m.opts.PaneAlive, m.opts.ShellPaneAlive
+	focus, zoomPane, keyboard := m.opts.FocusPane, m.opts.ZoomPane, m.opts.keyboard
 	return func() tea.Msg {
 		if !paneAliveForAction(pane, alive, shellAlive) {
-			return paneFocusedMsg{paneID: paneID, err: errPaneNotAlive, contextNotice: contextNotice}
+			return paneFocusedMsg{paneID: pane.PaneID, err: errPaneNotAlive, contextNotice: contextNotice}
 		}
 		keyboard.Disable()
-		if err := focus(paneID); err != nil {
+		if err := focus(pane.PaneID); err != nil {
 			keyboard.Enable()
-			return paneFocusedMsg{paneID: paneID, err: err, contextNotice: contextNotice}
+			return paneFocusedMsg{paneID: pane.PaneID, err: err, contextNotice: contextNotice}
 		}
-		msg := paneFocusedMsg{paneID: paneID, keyboardPaused: true, contextNotice: contextNotice}
+		msg := paneFocusedMsg{paneID: pane.PaneID, keyboardPaused: true, contextNotice: contextNotice}
 		if zoom {
-			msg.zoomErr = zoomPane(paneID)
+			msg.zoomErr = zoomPane(pane.PaneID)
 		}
 		return msg
 	}
@@ -208,17 +310,33 @@ func (m *model) peekSelectedCmd(force bool) tea.Cmd {
 		return nil
 	}
 
-	paneID := pane.PaneID
+	m.peek = panePeek{PaneID: pane.PaneID, Loading: true}
+	return m.capturePaneCmd(pane)
+}
+
+func (m *model) capturePaneCmd(pane paneView) tea.Cmd {
+	if backend.NormalizeName(pane.Backend) == backend.Herdr {
+		return m.captureHerdrPaneCmd(pane)
+	}
 	revalidateIdentity := pane.isShell() || strings.TrimSpace(pane.ShellKey) != ""
-	shellAlive := m.opts.ShellPaneAlive
-	capture := m.opts.CapturePaneOutput
-	m.peek = panePeek{PaneID: paneID, Loading: true}
+	shellAlive, capture := m.opts.ShellPaneAlive, m.opts.CapturePaneOutput
 	return func() tea.Msg {
-		if revalidateIdentity && !shellAlive(paneID, pane.ShellKey) {
-			return panePeekLoadedMsg{paneID: paneID, at: time.Now(), err: errPaneNotAlive}
+		if revalidateIdentity && !shellAlive(pane.PaneID, pane.ShellKey) {
+			return panePeekLoadedMsg{paneID: pane.PaneID, at: time.Now(), err: errPaneNotAlive}
 		}
-		out, err := capture(paneID, peekLines)
-		return panePeekLoadedMsg{paneID: paneID, output: out, at: time.Now(), err: err}
+		out, err := capture(pane.PaneID, peekLines)
+		return panePeekLoadedMsg{paneID: pane.PaneID, output: out, at: time.Now(), err: err}
+	}
+}
+
+func (m *model) captureHerdrPaneCmd(pane paneView) tea.Cmd {
+	capture := m.opts.CaptureHerdrPane
+	return func() tea.Msg {
+		if capture == nil {
+			return panePeekLoadedMsg{paneID: pane.PaneID, at: time.Now(), err: fmt.Errorf("owned Herdr read is not configured")}
+		}
+		out, err := capture(pane.savedPane, peekLines)
+		return panePeekLoadedMsg{paneID: pane.PaneID, output: out, at: time.Now(), err: err}
 	}
 }
 

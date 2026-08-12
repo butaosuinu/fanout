@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/panelayout"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
@@ -29,34 +30,20 @@ var (
 	closeFreshPane      = tmuxrun.CloseFreshPane
 )
 
-// Shell opens a plain tmux shell pane at req.TargetPath and records it as a
-// keyed @manual shell row in l.Info.ProjectRoot's state. Plain TUI terminals
-// are part of tmux session management, not backend agent launch, so this path
-// deliberately stays outside backend.Backend. It locks that project's state
-// itself; only l.Info is used.
+// Shell opens a plain shell pane at req.TargetPath and records it as an
+// @manual shell row in l.Info.ProjectRoot's state. Tmux rows use a liveness
+// key; Herdr rows persist the exact owned-session identity.
 func (l *Launcher) Shell(req ShellRequest) error {
 	projectRoot := l.Info.ProjectRoot
-	target := l.Info.Target
-	rawPath := strings.TrimSpace(req.TargetPath)
-	if rawPath == "" {
-		return fmt.Errorf("terminal path is required")
-	}
-	targetPath, err := filepath.Abs(rawPath)
+	targetPath, err := resolveShellTarget(req.TargetPath)
 	if err != nil {
-		return fmt.Errorf("resolve terminal path: %w", err)
+		return err
 	}
-	st, statErr := os.Stat(targetPath)
-	if statErr != nil {
-		return fmt.Errorf("terminal path: %w", statErr)
-	} else if !st.IsDir() {
-		return fmt.Errorf("terminal path is not a directory: %s", targetPath)
-	}
-
 	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
 		return fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
 
-	recorder, err := state.LockProject(projectRoot)
+	recorder, err := l.lockShellState(projectRoot)
 	if err != nil {
 		return err
 	}
@@ -67,6 +54,41 @@ func (l *Launcher) Shell(req ShellRequest) error {
 	number := NextSyntheticPaneNumber(recorder.Store, ManualParentRef)
 	slug := shellPaneSlug(targetPath, req.Root, number)
 	title := shellPaneTitle(targetPath, req.Root)
+	if l.Backend != nil && l.Backend.Name() == backend.Herdr {
+		if err := admitHerdrCoordinatorLaunch(recorder, projectRoot, number); err != nil {
+			return err
+		}
+		return l.shellHerdr(recorder, targetPath, number, slug, title)
+	}
+	return l.shellTmux(recorder, targetPath, number, slug, title)
+}
+
+func resolveShellTarget(rawPath string) (string, error) {
+	rawPath = strings.TrimSpace(rawPath)
+	if rawPath == "" {
+		return "", fmt.Errorf("terminal path is required")
+	}
+	targetPath, err := filepath.Abs(rawPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve terminal path: %w", err)
+	}
+	st, err := os.Stat(targetPath)
+	if err != nil {
+		return "", fmt.Errorf("terminal path: %w", err)
+	}
+	if !st.IsDir() {
+		return "", fmt.Errorf("terminal path is not a directory: %s", targetPath)
+	}
+	return targetPath, nil
+}
+
+func (l *Launcher) shellTmux(
+	recorder *state.LockedStore,
+	targetPath string,
+	number int,
+	slug, title string,
+) error {
+	target := l.Info.Target
 	shellKey, err := NewShellPaneKey()
 	if err != nil {
 		return err
@@ -75,56 +97,94 @@ func (l *Launcher) Shell(req ShellRequest) error {
 	if err != nil {
 		return err
 	}
-	entry := state.Pane{
-		Parent:       ManualParentRef,
-		IssueNum:     number,
-		Kind:         state.PaneKindShell,
-		Slug:         slug,
-		PaneID:       paneID,
-		ShellKey:     shellKey,
-		Agent:        state.PaneKindShell,
-		DisplayName:  title,
-		WorktreePath: targetPath,
-		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
-	}
+	entry := newShellPaneEntry(number, slug, paneID, shellKey, title, targetPath)
 	if err := setPaneLivenessKey(paneID, shellKey); err != nil {
-		stampErr := fmt.Errorf("set terminal pane liveness key: %w", err)
-		if cleanupErr := cleanupFreshShellPane(target, paneID); cleanupErr != nil {
-			recoveryErr := recorder.RecordPane(entry)
-			if recoveryErr != nil {
-				recoveryErr = fmt.Errorf("preserve live terminal pane %s in fanout state: %w", paneID, recoveryErr)
-			}
-			return errors.Join(stampErr, fmt.Errorf("stop unstamped terminal pane %s: %w", paneID, cleanupErr), recoveryErr)
-		}
-		return stampErr
+		return recoverUnstampedShell(recorder, target, entry, err)
 	}
 	// Shell pane ergonomics are best-effort; the recorded pane id is enough to
 	// keep the terminal usable when tmux metadata/layout updates fail.
-	_ = tmuxrun.SetPaneTitle(paneID, title)
-	_ = tmuxrun.SetPaneLabel(paneID, BorderLabel(ManualParentRef, title))
-	_ = tmuxrun.EnablePaneBorderTitles(paneID)
-	_ = tmuxrun.SetPaneProjectRoot(paneID, projectRoot)
-	_ = tmuxrun.SetPaneWorktreePath(paneID, targetPath)
+	decorateShellPane(paneID, title, l.Info.ProjectRoot, targetPath)
 	if err := recorder.RecordPane(entry); err != nil {
-		writeErr := fmt.Errorf("write fanout state: %w", err)
-		if cleanupShellPane(target, paneID, targetPath, shellKey) {
-			removeErr := recorder.RemovePane(ManualParentRef, number)
-			if removeErr != nil {
-				removeErr = fmt.Errorf("remove stopped terminal pane from fanout state: %w", removeErr)
-			}
-			return errors.Join(writeErr, removeErr)
-		}
-		recoveryErr := recorder.RecordPane(entry)
-		if recoveryErr != nil {
-			recoveryErr = fmt.Errorf("preserve live terminal pane %s in fanout state: %w", paneID, recoveryErr)
-		}
-		return errors.Join(writeErr, fmt.Errorf("terminal pane %s remains live", paneID), recoveryErr)
+		return recoverUnrecordedShell(recorder, target, entry, err)
 	}
 	// Re-layout only after the pane is recorded, so a failed/rolled-back launch
 	// never leaves the window arranged around a pane that no longer exists or an
 	// orphaned spacer behind.
 	_ = panelayout.Apply(target, panelayout.Create)
 	return nil
+}
+
+func newShellPaneEntry(
+	number int,
+	slug, paneID, shellKey, title, targetPath string,
+) state.Pane {
+	return state.Pane{
+		Parent: ManualParentRef, IssueNum: number, Kind: state.PaneKindShell,
+		Slug: slug, PaneID: paneID, ShellKey: shellKey, Agent: state.PaneKindShell,
+		DisplayName: title, WorktreePath: targetPath,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+func decorateShellPane(paneID, title, projectRoot, targetPath string) {
+	_ = tmuxrun.SetPaneTitle(paneID, title)
+	_ = tmuxrun.SetPaneLabel(paneID, BorderLabel(ManualParentRef, title))
+	_ = tmuxrun.EnablePaneBorderTitles(paneID)
+	_ = tmuxrun.SetPaneProjectRoot(paneID, projectRoot)
+	_ = tmuxrun.SetPaneWorktreePath(paneID, targetPath)
+}
+
+func recoverUnstampedShell(
+	recorder *state.LockedStore,
+	target string,
+	entry state.Pane,
+	stampCause error,
+) error {
+	stampErr := fmt.Errorf("set terminal pane liveness key: %w", stampCause)
+	if cleanupErr := cleanupFreshShellPane(target, entry.PaneID); cleanupErr != nil {
+		recoveryErr := recorder.RecordPane(entry)
+		if recoveryErr != nil {
+			recoveryErr = fmt.Errorf("preserve live terminal pane %s in fanout state: %w", entry.PaneID, recoveryErr)
+		}
+		return errors.Join(
+			stampErr,
+			fmt.Errorf("stop unstamped terminal pane %s: %w", entry.PaneID, cleanupErr),
+			recoveryErr,
+		)
+	}
+	return stampErr
+}
+
+func recoverUnrecordedShell(
+	recorder *state.LockedStore,
+	target string,
+	entry state.Pane,
+	recordCause error,
+) error {
+	writeErr := fmt.Errorf("write fanout state: %w", recordCause)
+	if cleanupShellPane(target, entry.PaneID, entry.WorktreePath, entry.ShellKey) {
+		removeErr := recorder.RemovePane(ManualParentRef, entry.IssueNum)
+		if removeErr != nil {
+			removeErr = fmt.Errorf("remove stopped terminal pane from fanout state: %w", removeErr)
+		}
+		return errors.Join(writeErr, removeErr)
+	}
+	recoveryErr := recorder.RecordPane(entry)
+	if recoveryErr != nil {
+		recoveryErr = fmt.Errorf("preserve live terminal pane %s in fanout state: %w", entry.PaneID, recoveryErr)
+	}
+	return errors.Join(
+		writeErr,
+		fmt.Errorf("terminal pane %s remains live", entry.PaneID),
+		recoveryErr,
+	)
+}
+
+func (l *Launcher) lockShellState(projectRoot string) (*state.LockedStore, error) {
+	if l.Backend != nil && l.Backend.Name() == backend.Herdr {
+		return state.LockProjectForLaunch(projectRoot)
+	}
+	return state.LockProject(projectRoot)
 }
 
 func cleanupFreshShellPane(relayoutTarget, paneID string) error {

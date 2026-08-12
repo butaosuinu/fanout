@@ -18,9 +18,9 @@ const usageText = `Usage: fanout
        fanout <parent-issue|project-url> [options]
        fanout plan <spec.json|plan-slug> [options]
 
-With no arguments, starts fanout's persistent tmux console. The console creates
-or attaches a fanout-managed tmux session when launched from a plain shell, and
-shows recorded panes from .fanout/state.json with live tmux and issue/PR status.
+With no arguments, starts fanout's persistent console. A plain-shell tmux run
+creates or attaches a managed tmux session. A plain-shell herdr run bootstraps
+the repository-owned session and console, then prints its attach command.
 
 With a parent issue or GitHub Projects v2 URL, creates one tmux pane per OPEN
 sub-issue of a parent issue, OR per OPEN item in that Project. Each pane gets a
@@ -37,9 +37,8 @@ Options:
                       mode.
   --backend <tmux|herdr>
                       Select the runtime backend. Parent state is sticky and
-                      rejects a conflicting override. herdr is read-only in
-                      v1, so issue and plan launch commands fail before any
-                      worktree or state mutation.
+                      rejects a conflicting override. herdr launch, focus, and
+                      peek require fanout's ownership-verified session.
   --base-branch <branch>
                       Branch to refresh and branch child worktrees from.
                       Default: GitHub default branch, then origin/HEAD, then
