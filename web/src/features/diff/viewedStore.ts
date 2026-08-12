@@ -15,22 +15,31 @@ import { localKeysWithPrefix, readLocal, writeLocal } from "../../shared/localSt
  * 落とす(先例: features/settings/diffThemes.ts の normalizeDiffTheme)。 */
 
 const PREFIX = "fanout.diffViewed.";
-/* `/api/diff` の contract 上限と同じ。1 scope が持ちうる file 数の天井。 */
+/* `/api/diff` の contract 上限と同じ。1 scope が持ちうる entry の天井。 */
 const MAX_FILES = 500;
+/* 1 つの path が持てる fingerprint の数。内容が行き来する file(生成物の
+ * 再生成など)1 つに 500 件の枠を食われないための蓋。 */
+const MAX_PER_PATH = 4;
 /* 残す scope の本数。fan-out は親 1 つに子が何十個も並ぶので、数個で切ると
  * 「隣の子をレビューしている間に前の子の確認済みが消える」が普通に起きる。 */
 const MAX_SCOPES = 50;
 
-/* 保存形。`t` は scope の剪定順、`files` の並びは file の剪定順に使う。
+/* 確認済み 1 件 = 「この path のこの内容を見た」。同じ path が複数の fingerprint を
+ * 持ちうる。1 path 1 fingerprint にすると、2 タブで同じ行を開いて片方だけ再取得した
+ * とき、古い patch を見ているタブの操作が新しいほうのチェックを消す(どちらの
+ * 「見た」も本当なので、片方を捨てる理由が無い)。 */
+export type ViewedEntry = [path: string, fingerprint: string];
+
+/* 保存形。`t` は scope の剪定順、`files` の並びは entry の剪定順に使う。
  *
  * `files` は object にしない。JS は整数に見える key(`"1"`)を挿入順より先に、
  * 昇順で列挙するので、リポジトリ直下に `1` という file があるだけで並びが崩れる —
  * いちばん新しいチェックが先頭へ回り、500 件上限の切り捨てで真っ先に落ちる。
- * 並びに意味を持たせるなら配列で持つ。 */
+ * 同じ path を複数持てる必要もあるので、いずれにせよ配列。 */
 interface ViewedRecord {
   v: 2;
   t: number;
-  files: [path: string, fingerprint: string][];
+  files: ViewedEntry[];
 }
 
 function viewedStorageKey(scope: string): string {
@@ -110,43 +119,64 @@ function parseRecord(raw: string | null): ViewedRecord | null {
 /* 形の合うペアだけを採り、上限で切る。切るのは末尾ではなく先頭側 — 配列の末尾が
  * いちばん新しいチェックなので、先頭を落とせば「上限に達した瞬間から新しい
  * チェックが保存されない」を避けられる。 */
-function toFileMap(files: unknown[]): Map<string, string> {
-  const pairs = files.filter(isPair).filter(([path]) => path !== "");
-  return new Map(pairs.slice(-MAX_FILES));
-}
-
-/* 生の保存文字列から path -> fingerprint へ。文字列を受け取るのは、購読側が
- * `useSyncExternalStore` の snapshot(= 生の文字列)を持つため。 */
-export function parseViewed(raw: string | null): Map<string, string> {
+export function parseViewed(raw: string | null): ViewedEntry[] {
   const rec = parseRecord(raw);
-  return rec ? toFileMap(rec.files) : new Map();
+  if (!rec) return [];
+  const pairs = rec.files.filter(isPair).filter(([path]) => path !== "");
+  return pairs.slice(-MAX_FILES);
 }
 
-export function loadViewed(scope: string): Map<string, string> {
+export function loadViewed(scope: string): ViewedEntry[] {
   return parseViewed(readLocal(viewedStorageKey(scope)));
 }
 
-/* 1 file 分だけを書き換える。`fp` が null なら確認済みを外す。
+/* 1 entry(path と fingerprint の組)だけを書き換える。
  *
- * 呼び出し側の Map をそのまま書き戻さないこと。別タブが直前に書いた分が
+ * 呼び出し側が持っている一覧をそのまま書き戻さないこと。別タブが直前に書いた分が
  * こちらの render 時点の snapshot には無く、丸ごと上書きすると消える
  * (`storage` イベントの到着はこちらの操作より遅れうる)。書く直前に読み直して
- * 1 件だけ足し引きすれば、少なくとも「相手のチェックを巻き戻す」ことは無い。
+ * 1 件だけ足し引きすれば、相手のチェックを巻き戻すことは無い。
  *
- * 既存 path は delete してから set する。`Map.set` は既存 key の位置を変えないので、
- * 入れ直さないと「いちばん新しいチェック」が上限で落ちる側に残ってしまう。 */
-export function setViewedPath(scope: string, path: string, fp: string | null) {
+ * 外すときも fingerprint 単位で消す。path 単位で消すと、片方のタブだけ再取得した
+ * 状態で古い patch のタブが操作したときに、新しい内容のチェックまで巻き添えになる。
+ *
+ * 同じ組を入れ直すときは末尾へ動かす。並びがそのまま剪定順なので、動かさないと
+ * 「いちばん新しいチェック」が先に落ちる側に残る。 */
+export function setViewedEntry({
+  scope,
+  entry,
+  viewed,
+}: {
+  scope: string;
+  entry: ViewedEntry;
+  viewed: boolean;
+}) {
   const key = viewedStorageKey(scope);
-  const files = parseViewed(readLocal(key));
-  files.delete(path);
-  if (fp !== null) files.set(path, fp);
-  if (files.size === 0) writeLocal(key, null);
-  else writeRecord(key, files);
+  const [path, fp] = entry;
+  const rest = parseViewed(readLocal(key)).filter(([p, f]) => p !== path || f !== fp);
+  const next = viewed ? [...rest, entry] : rest;
+  if (next.length === 0) writeLocal(key, null);
+  else writeRecord(key, capPerPath(next));
   emit();
 }
 
-function writeRecord(key: string, files: ReadonlyMap<string, string>) {
-  const rec: ViewedRecord = { v: 2, t: Date.now(), files: [...files].slice(-MAX_FILES) };
+/* 1 path が持てる fingerprint を新しいほうから MAX_PER_PATH 件に絞る。内容が
+ * 行き来する file 1 つで 500 件の枠を食い潰させない。 */
+function capPerPath(entries: ViewedEntry[]): ViewedEntry[] {
+  const total = new Map<string, number>();
+  for (const [path] of entries) total.set(path, (total.get(path) ?? 0) + 1);
+  /* 前から数えて、その path の超過分(= 古いほう)だけを落とす。並びは剪定順
+   * そのものなので、逆順に組み直さずに 1 パスで済ませる。 */
+  const seen = new Map<string, number>();
+  return entries.filter(([path]) => {
+    const n = (seen.get(path) ?? 0) + 1;
+    seen.set(path, n);
+    return n > (total.get(path) ?? 0) - MAX_PER_PATH;
+  });
+}
+
+function writeRecord(key: string, files: ViewedEntry[]) {
+  const rec: ViewedRecord = { v: 2, t: Date.now(), files: files.slice(-MAX_FILES) };
   const body = JSON.stringify(rec);
   /* 先に剪定してから書く。逆にすると、quota で書けなかった直後に領域を空けて
    * 終わり(誰も書き直さない)になり、古い scope を捨てただけで終わる。 */

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseDiffFiles } from "./diff";
 import { diffFilePaths, fileFingerprint, indexFingerprintsByPath, indicesForPaths } from "./viewed";
-import { loadViewed, setViewedPath, viewedScope } from "./viewedStore";
+import { loadViewed, setViewedEntry, viewedScope } from "./viewedStore";
 
 /* 実パーサを通す — fingerprint は FileDiffMetadata の形に依存するので、手で組んだ
  * オブジェクトで固定するとライブラリ更新に対して何も守れない(diff.test.ts と同じ方針)。 */
@@ -171,45 +171,45 @@ describe("viewedStore", () => {
   beforeEach(() => localStorage.clear());
 
   it("保存した path と fingerprint を読み戻す", () => {
-    setViewedPath("142#101", "a.ts", "fp1");
-    expect([...loadViewed("142#101")]).toEqual([["a.ts", "fp1"]]);
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fp1"], viewed: true });
+    expect(loadViewed("142#101")).toEqual([["a.ts", "fp1"]]);
   });
 
   it("scope が違えば混ざらない", () => {
-    setViewedPath("142#101", "a.ts", "fp1");
-    expect(loadViewed("142#102").size).toBe(0);
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fp1"], viewed: true });
+    expect(loadViewed("142#102").length).toBe(0);
   });
 
   it("空になったら scope ごとキーを消す", () => {
-    setViewedPath("142#101", "a.ts", "fp1");
-    setViewedPath("142#101", "a.ts", null);
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fp1"], viewed: true });
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fp1"], viewed: false });
     expect(localStorage.getItem("fanout.diffViewed.142#101")).toBeNull();
   });
 
   it("JSON ですらない保存値を落とす", () => {
     localStorage.setItem("fanout.diffViewed.142#101", "not json");
-    expect(loadViewed("142#101").size).toBe(0);
+    expect(loadViewed("142#101").length).toBe(0);
   });
 
   it("知らない版の保存値を落とす", () => {
     const raw = JSON.stringify({ v: 1, t: 1, files: [["a.ts", "fp1"]] });
     localStorage.setItem("fanout.diffViewed.142#101", raw);
-    expect(loadViewed("142#101").size).toBe(0);
+    expect(loadViewed("142#101").length).toBe(0);
   });
 
   it("files が object の保存値を落とす", () => {
     localStorage.setItem("fanout.diffViewed.142#101", '{"v":2,"t":1,"files":{}}');
-    expect(loadViewed("142#101").size).toBe(0);
+    expect(loadViewed("142#101").length).toBe(0);
   });
 
   it("files が null の保存値を落とす", () => {
     localStorage.setItem("fanout.diffViewed.142#101", '{"v":2,"t":1,"files":null}');
-    expect(loadViewed("142#101").size).toBe(0);
+    expect(loadViewed("142#101").length).toBe(0);
   });
 
   it("files が文字列の保存値を落とす", () => {
     localStorage.setItem("fanout.diffViewed.142#101", '{"v":2,"t":1,"files":"a.ts"}');
-    expect(loadViewed("142#101").size).toBe(0);
+    expect(loadViewed("142#101").length).toBe(0);
   });
 
   it("string でない fingerprint の行だけを捨てる", () => {
@@ -219,24 +219,25 @@ describe("viewedStore", () => {
       files: [["a.ts", "fp1"], ["b.ts", 7], ["c.ts"], "nope"],
     });
     localStorage.setItem("fanout.diffViewed.142#101", raw);
-    expect([...loadViewed("142#101")]).toEqual([["a.ts", "fp1"]]);
+    expect(loadViewed("142#101")).toEqual([["a.ts", "fp1"]]);
   });
 
   it("有限でない t の保存値を落とす", () => {
     /* JSON.parse は 1e999 を Infinity にするので typeof === "number" は通る。
        剪定の比較関数が NaN を返し、並び順が実装依存になるのを防ぐ。 */
     localStorage.setItem("fanout.diffViewed.142#101", '{"v":2,"t":1e999,"files":[["a.ts","fp1"]]}');
-    expect(loadViewed("142#101").size).toBe(0);
+    expect(loadViewed("142#101").length).toBe(0);
   });
 
   /* 上限に当たったときに捨てるのは古いほうで、いま入れたチェックは残ること。
      逆にすると「上限に達した瞬間から保存が黙って効かなくなる」。 */
   it("contract 上限の 500 件を超えたら古いほうから捨てる", () => {
-    for (let i = 0; i < 600; i++) setViewedPath("142#101", `f${i}.ts`, "fp");
-    const loaded = loadViewed("142#101");
-    expect(loaded.size).toBe(500);
-    expect(loaded.has("f599.ts")).toBe(true);
-    expect(loaded.has("f0.ts")).toBe(false);
+    for (let i = 0; i < 600; i++)
+      setViewedEntry({ scope: "142#101", entry: [`f${i}.ts`, "fp"], viewed: true });
+    const paths = loadViewed("142#101").map(([path]) => path);
+    expect(paths).toHaveLength(500);
+    expect(paths).toContain("f599.ts");
+    expect(paths).not.toContain("f0.ts");
   });
 
   it("scope が上限を超えたら最終更新の古いほうから捨てる", () => {
@@ -247,10 +248,10 @@ describe("viewedStore", () => {
         JSON.stringify({ v: 2, t: i, files: [["a.ts", "fp"]] }),
       );
     }
-    setViewedPath("new", "a.ts", "fp");
-    expect(loadViewed("old0").size).toBe(0);
-    expect(loadViewed("old50").size).toBe(1);
-    expect(loadViewed("new").size).toBe(1);
+    setViewedEntry({ scope: "new", entry: ["a.ts", "fp"], viewed: true });
+    expect(loadViewed("old0").length).toBe(0);
+    expect(loadViewed("old50").length).toBe(1);
+    expect(loadViewed("new").length).toBe(1);
   });
 
   it("上限ちょうどの scope 数では何も捨てない", () => {
@@ -260,39 +261,69 @@ describe("viewedStore", () => {
         JSON.stringify({ v: 2, t: i, files: [["a.ts", "fp"]] }),
       );
     }
-    setViewedPath("new", "a.ts", "fp");
-    expect(loadViewed("old0").size).toBe(1);
+    setViewedEntry({ scope: "new", entry: ["a.ts", "fp"], viewed: true });
+    expect(loadViewed("old0").length).toBe(1);
   });
 
   /* 書き戻しは 1 file 分。別タブが直前に書いた分を巻き戻さないこと。 */
   it("書き込み前に読み直すので、間に入った別の書き込みを消さない", () => {
-    setViewedPath("142#101", "a.ts", "fp1");
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fp1"], viewed: true });
     // 別タブが書いた体(こちらの state には無い)
     const raw = JSON.parse(localStorage.getItem("fanout.diffViewed.142#101")!);
     raw.files.push(["b.ts", "fp2"]);
     localStorage.setItem("fanout.diffViewed.142#101", JSON.stringify(raw));
 
-    setViewedPath("142#101", "c.ts", "fp3");
+    setViewedEntry({ scope: "142#101", entry: ["c.ts", "fp3"], viewed: true });
 
-    expect([...loadViewed("142#101").keys()].sort()).toEqual(["a.ts", "b.ts", "c.ts"]);
+    expect(
+      loadViewed("142#101")
+        .map(([p]) => p)
+        .sort(),
+    ).toEqual(["a.ts", "b.ts", "c.ts"]);
   });
 
   /* 上限で落とすのは古い順なので、入れ直した path は末尾へ動かす。
      Map.set は既存 key の位置を変えないため、明示的に delete してから入れる。 */
-  it("既存 path を入れ直すと、いちばん新しい扱いになる", () => {
-    setViewedPath("142#101", "a.ts", "fp1");
-    setViewedPath("142#101", "b.ts", "fp2");
-    setViewedPath("142#101", "a.ts", "fp1-new");
-    expect([...loadViewed("142#101").keys()]).toEqual(["b.ts", "a.ts"]);
+  it("同じ組を入れ直すと、いちばん新しい扱いになる", () => {
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fp1"], viewed: true });
+    setViewedEntry({ scope: "142#101", entry: ["b.ts", "fp2"], viewed: true });
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fp1"], viewed: true });
+    expect(loadViewed("142#101").map(([p]) => p)).toEqual(["b.ts", "a.ts"]);
+  });
+
+  /* 2 タブで同じ行を開き、片方だけ再取得したときの競合。どちらの「見た」も本当
+     なので、片方を捨てずに両方残す。 */
+  it("同じ path でも fingerprint が違えば両方残す", () => {
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fpB"], viewed: true }); // 再取得したタブ
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fpA"], viewed: true }); // 古い patch のタブ
+    expect(loadViewed("142#101")).toEqual([
+      ["a.ts", "fpB"],
+      ["a.ts", "fpA"],
+    ]);
+  });
+
+  it("外すのは fingerprint 単位で、別の内容のチェックは残す", () => {
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fpB"], viewed: true });
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fpA"], viewed: true });
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fpA"], viewed: false });
+    expect(loadViewed("142#101")).toEqual([["a.ts", "fpB"]]);
+  });
+
+  /* 内容が行き来する file 1 つに 500 件の枠を食わせない */
+  it("1 path が持てる fingerprint は新しいほうから 4 件まで", () => {
+    for (const fp of ["fp1", "fp2", "fp3", "fp4", "fp5"]) {
+      setViewedEntry({ scope: "142#101", entry: ["a.ts", fp], viewed: true });
+    }
+    expect(loadViewed("142#101").map(([, fp]) => fp)).toEqual(["fp2", "fp3", "fp4", "fp5"]);
   });
 
   /* JS は JSON object の整数 key を挿入順より先に昇順で列挙するので、object で
      持つとリポジトリ直下の `1` という file だけで並びが崩れる。 */
   it("整数に見える file 名があっても保存順が崩れない", () => {
-    setViewedPath("142#101", "a.ts", "fp1");
-    setViewedPath("142#101", "1", "fp2");
-    setViewedPath("142#101", "b.ts", "fp3");
-    expect([...loadViewed("142#101").keys()]).toEqual(["a.ts", "1", "b.ts"]);
+    setViewedEntry({ scope: "142#101", entry: ["a.ts", "fp1"], viewed: true });
+    setViewedEntry({ scope: "142#101", entry: ["1", "fp2"], viewed: true });
+    setViewedEntry({ scope: "142#101", entry: ["b.ts", "fp3"], viewed: true });
+    expect(loadViewed("142#101").map(([p]) => p)).toEqual(["a.ts", "1", "b.ts"]);
   });
 });
 
