@@ -207,6 +207,8 @@ describe("snapshot 描画", () => {
     expect(within(row).getByText("conflict", { selector: ".tag" })).toBeInTheDocument();
     expect(within(row).getByText("💬 12", { selector: ".tag" })).toBeInTheDocument();
     expect(within(row).getByText("pass", { selector: ".tag" })).toBeInTheDocument();
+    // ピルが既に approved を出しているので、行でも重ねない
+    expect(within(row).queryByText("approved", { selector: ".tag" })).not.toBeInTheDocument();
 
     await user.click(within(row).getByText("Prompt session"));
     const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
@@ -249,13 +251,14 @@ describe("snapshot 描画", () => {
     );
 
     const row = screen.getByText("Merged session").closest("tr")!;
-    // 行のピルは merged に潰れる — reviewDecision は行には出ない
+    // ピルは merged に潰れるが、レビュー状態は行からも消さない — 一覧と詳細の
+    // 両方で approved の有無が読めることが要件。表記は review: フィルタと同じ
+    // ハイフン形にする。
     expect(within(row).getByRole("link", { name: "#703 merged" })).toBeInTheDocument();
-    expect(within(row).queryByText("changes-requested")).not.toBeInTheDocument();
+    expect(within(row).getByText("changes-requested", { selector: ".tag" })).toBeInTheDocument();
 
     await user.click(within(row).getByText("Merged session"));
     const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
-    // ドロワーだけが decision を補う。表記は review: フィルタと同じハイフン形
     expect(within(drawer).getByText("changes-requested", { selector: ".tag" })).toBeInTheDocument();
   });
 
