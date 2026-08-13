@@ -42,6 +42,7 @@ func RestartHerdrServer(
 	if err = verifyRestartedHerdrRows(ctx, projectRoot, locked, restarted); err != nil {
 		return nil, err
 	}
+	markPlannedHerdrReopenCleanupManual(journal)
 	if err = completeHerdrServerLifecycle(locked, journal, intent.ID); err != nil {
 		return nil, err
 	}
@@ -365,6 +366,18 @@ func completeHerdrServerLifecycle(
 		return fmt.Errorf("herdr server lifecycle intent %s disappeared before completion", intentID)
 	}
 	return journal.Save()
+}
+
+func markPlannedHerdrReopenCleanupManual(journal *state.LockedHerdrIntents) {
+	for i := range journal.Intents {
+		intent := &journal.Intents[i]
+		if intent.Kind != state.HerdrIntentCleanup || intent.CleanupPhase != state.HerdrCleanupReopen ||
+			intent.Status != state.HerdrIntentPlanned {
+			continue
+		}
+		intent.Status = state.HerdrIntentManualCleanupRequired
+		intent.Failure = "Herdr server restart invalidated the saved cleanup coordinator identity"
+	}
 }
 
 func herdrServerAction(kind state.HerdrIntentKind) string {

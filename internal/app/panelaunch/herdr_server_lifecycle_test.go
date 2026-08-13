@@ -115,6 +115,34 @@ func TestReleaseRejectedHerdrRestartDropsOnlyFreshLiveIntent(t *testing.T) {
 	}
 }
 
+func TestMarkPlannedHerdrReopenCleanupManual(t *testing.T) {
+	journal := &state.LockedHerdrIntents{HerdrIntents: state.HerdrIntents{
+		SchemaVersion: state.HerdrIntentsSchemaVersion,
+		Intents: []state.HerdrIntent{
+			{Kind: state.HerdrIntentCleanup, CleanupPhase: state.HerdrCleanupReopen, Status: state.HerdrIntentPlanned},
+			{Kind: state.HerdrIntentCleanup, CleanupPhase: state.HerdrCleanupReopen, Status: state.HerdrIntentIssued},
+			{Kind: state.HerdrIntentCleanup, CleanupPhase: state.HerdrCleanupRemove, Status: state.HerdrIntentPlanned},
+			{Kind: state.HerdrIntentRestart, Status: state.HerdrIntentPlanned},
+		},
+	}}
+
+	markPlannedHerdrReopenCleanupManual(journal)
+
+	got := journal.Intents[0]
+	if got.Status != state.HerdrIntentManualCleanupRequired ||
+		!strings.Contains(got.Failure, "invalidated the saved cleanup coordinator identity") {
+		t.Fatalf("planned reopen cleanup = %+v", got)
+	}
+	wantStatuses := []state.HerdrIntentStatus{
+		state.HerdrIntentIssued, state.HerdrIntentPlanned, state.HerdrIntentPlanned,
+	}
+	for i, want := range wantStatuses {
+		if got := journal.Intents[i+1].Status; got != want {
+			t.Fatalf("unaffected intent %d status = %q, want %q", i+1, got, want)
+		}
+	}
+}
+
 func TestHerdrShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	locked, err := state.LockProjectForLaunch(repo)
