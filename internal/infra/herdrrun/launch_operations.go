@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 type PaneProcess struct {
@@ -146,7 +148,68 @@ func (s *OwnedSession) SendLaunchToken(ctx context.Context, paneID, nonce string
 	return validatePaneRunResponse(out)
 }
 
+// SendRestartResumeToken is the only pane mutation admitted while a server
+// restart intent is active. The lockless journal read is stable because the
+// caller holds the repository-common intent lock through token issuance.
+func (s *OwnedSession) SendRestartResumeToken(ctx context.Context, paneID, nonce string) error {
+	if err := s.requireRestartResumeToken(paneID, nonce); err != nil {
+		return err
+	}
+	out, err := s.runOwnedLaunchCommand(ctx, commandTimeout, "pane", "run", paneID, launcherStartToken(nonce))
+	if err != nil {
+		return err
+	}
+	return validatePaneRunResponse(out)
+}
+
+func (s *OwnedSession) requireRestartResumeToken(paneID, nonce string) error {
+	validRequest := !slices.Contains([]bool{
+		s != nil, s != nil && s.ControlPath != "", paneID != "", workloadLaunchNonce.MatchString(nonce),
+	}, false)
+	if !validRequest {
+		return fmt.Errorf("invalid Herdr restart resume token request")
+	}
+	journal, err := state.LoadHerdrIntentsPath(s.ControlPath)
+	if err != nil {
+		return err
+	}
+	server, found, err := journal.ServerLifecycleIntent()
+	validLifecycle := !slices.Contains([]bool{
+		err == nil, found, server.Kind == state.HerdrIntentRestart,
+		server.Server != nil, serverRestartTokenMatches(server.Server, s),
+	}, false)
+	if !validLifecycle {
+		return fmt.Errorf("Herdr restart resume token requires an active server restart intent")
+	}
+	matches := 0
+	for _, intent := range journal.Intents {
+		if exactRestartResumeTokenIntent(intent, s.Session, s.SocketPath, paneID, nonce) {
+			matches++
+		}
+	}
+	if matches != 1 {
+		return fmt.Errorf("Herdr restart resume token has %d exact intents", matches)
+	}
+	return nil
+}
+
+func serverRestartTokenMatches(server *state.HerdrServerIdentity, session *OwnedSession) bool {
+	return server != nil && session != nil && server.GitCommonDir == session.GitCommonDir &&
+		server.RuntimeDir == session.RuntimeDir && server.Session == session.Session &&
+		server.SocketPath == session.SocketPath && server.ClientSocketPath == session.ClientSocketPath
+}
+
+func exactRestartResumeTokenIntent(intent state.HerdrIntent, session, socketPath, paneID, nonce string) bool {
+	return intent.Kind == state.HerdrIntentResume && intent.Status == state.HerdrIntentRealized &&
+		intent.Session == session && intent.SocketPath == socketPath &&
+		intent.Resource.PaneID == paneID && intent.Launch != nil && intent.Launch.Nonce == nonce &&
+		intent.Launch.LauncherReady && intent.Launch.TokenIssued
+}
+
 func validatePaneRunResponse(out []byte) error {
+	if len(out) == 0 {
+		return nil
+	}
 	var envelope paneRunEnvelope
 	if err := decodeOne(out, &envelope); err != nil || envelope.ID != "cli:pane:run" ||
 		envelope.Result == nil || envelope.Result.Type != "ok" {
@@ -167,7 +230,7 @@ func (s *OwnedSession) ProcessInfo(ctx context.Context, paneID string) (PaneProc
 		return PaneProcessInfo{}, fmt.Errorf("herdr pane process-info returned an unexpected response")
 	}
 	processInfo := envelope.Result.ProcessInfo
-	processes, err := s.inspectPaneProcesses(ctx, processInfo.ForegroundProcesses)
+	processes, err := s.inspectNormalizedPaneProcesses(ctx, processInfo.ForegroundProcesses)
 	if err != nil {
 		wrapped := fmt.Errorf("inspect herdr pane process ancestry: %w", err)
 		if errors.Is(err, errPaneProcessChanged) || retryableCommandError(err) {
@@ -248,6 +311,19 @@ func (s *OwnedSession) LivePanes(ctx context.Context) ([]corebackend.LivePane, e
 		return nil, observationCommandError("verify Herdr observation route", err)
 	}
 	return s.backend.snapshot(ctx, commandTimeout, probed)
+}
+
+// WaitRestoredPanes applies Backend.Wait's single total budget to the exact
+// owned route after a server restart.
+func (s *OwnedSession) WaitRestoredPanes(
+	ctx context.Context,
+	totalTimeout time.Duration,
+	match func([]corebackend.LivePane) bool,
+) WaitResult {
+	if s == nil || s.backend == nil {
+		return failedWait(fmt.Errorf("herdr owned session is nil"))
+	}
+	return s.backend.Wait(ctx, totalTimeout, match)
 }
 
 func observationCommandError(operation string, err error) error {

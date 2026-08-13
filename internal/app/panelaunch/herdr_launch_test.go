@@ -26,21 +26,24 @@ import (
 
 type fakeHerdrLaunchRuntime struct {
 	fakeHerdrRealizeRuntime
-	live            []backend.LivePane
-	metadataReports []herdrrun.MetadataReport
-	metadataErr     error
-	removeCalls     []string
-	remove          func(string, string) error
-	launchRoute     herdrrun.OwnedLaunchRoute
-	processInfo     herdrrun.PaneProcessInfo
-	process         func(context.Context, string) (herdrrun.PaneProcessInfo, error)
-	listLive        func(context.Context) ([]backend.LivePane, error)
-	processErr      error
-	liveErr         error
-	wait            func(context.Context, string, string, time.Duration) error
-	liveCalls       int
-	renameCalls     int
-	tokenCalls      int
+	live               []backend.LivePane
+	metadataReports    []herdrrun.MetadataReport
+	metadataErr        error
+	removeCalls        []string
+	remove             func(string, string) error
+	launchRoute        herdrrun.OwnedLaunchRoute
+	processInfo        herdrrun.PaneProcessInfo
+	process            func(context.Context, string) (herdrrun.PaneProcessInfo, error)
+	listLive           func(context.Context) ([]backend.LivePane, error)
+	processErr         error
+	liveErr            error
+	wait               func(context.Context, string, string, time.Duration) error
+	liveCalls          int
+	renameCalls        int
+	tokenCalls         int
+	restartTokenErr    error
+	restartWaitCalls   int
+	restartWaitTimeout time.Duration
 }
 
 type retryableHerdrObservationError struct{}
@@ -1688,7 +1691,7 @@ func TestHerdrLaunchDoesNotRenameAfterProcessCheckExpires(t *testing.T) {
 			}},
 		}, nil
 	}
-	err := (&Launcher{Herdr: runtime}).verifyAndRenameHerdrAgent(context.Background(), intent)
+	_, err := (&Launcher{Herdr: runtime}).verifyAndRenameHerdrAgent(context.Background(), intent)
 	if err == nil || runtime.renameCalls != 0 {
 		t.Fatalf("expired process check error/rename calls = %v/%d, want error/0", err, runtime.renameCalls)
 	}

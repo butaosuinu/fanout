@@ -98,19 +98,19 @@ func workloadExecEnvironment(
 	intent state.HerdrIntent,
 	environment []string,
 ) []string {
-	if intent.Launch.Agent != "" {
-		return bindHerdrEmitterEnvironment(intent, environment)
-	}
-	// The capsule rejects caller-supplied HERDR_* values. An interactive shell
-	// still needs its runtime context, so restore only the route identity that
-	// this launcher already validated against the realized intent.
-	return append(environment,
+	// The capsule rejects caller-supplied HERDR_* values. Restore only the
+	// route identity that this launcher validated against the realized intent.
+	environment = append(environment,
 		"HERDR_ENV=1",
 		sessionEnv+"="+request.session,
 		socketEnv+"="+request.socketPath,
 		workspaceIDEnv+"="+request.workspaceID,
 		paneIDEnv+"="+request.paneID,
 	)
+	if intent.Launch.Agent != "" {
+		return bindHerdrEmitterEnvironment(intent, environment)
+	}
+	return environment
 }
 
 func bindHerdrEmitterEnvironment(intent state.HerdrIntent, environment []string) []string {
@@ -233,7 +233,8 @@ func matchingPaneLaunchIntent(
 
 func paneLauncherIntentReady(intent state.HerdrIntent) bool {
 	return intent.Kind == state.HerdrIntentCoordinator ||
-		intent.Kind == state.HerdrIntentWorktree && intent.Launch != nil
+		(intent.Kind == state.HerdrIntentWorktree || intent.Kind == state.HerdrIntentResume) &&
+			intent.Launch != nil
 }
 
 func launcherReadyMarker(nonce string) string {

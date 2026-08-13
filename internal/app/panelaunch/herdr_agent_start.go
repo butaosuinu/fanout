@@ -201,12 +201,17 @@ func (l *Launcher) adoptHerdrAgent(
 	if err != nil {
 		return live, err
 	}
-	if err := l.verifyAndRenameHerdrAgent(ctx, intent); err != nil {
+	processIdentity, err := l.verifyAndRenameHerdrAgent(ctx, intent)
+	if err != nil {
 		return live, err
 	}
-	return l.waitForHerdrPaneUnlocked(ctx, locked, intent, func(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
+	live, err = l.waitForHerdrPaneUnlocked(ctx, locked, intent, func(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
 		return exactHerdrLaunchPane(intent, panes, intent.Launch.AgentName)
 	}, statusPath)
+	if err == nil {
+		live.ProcessIdentity = &processIdentity
+	}
+	return live, err
 }
 
 func (l *Launcher) waitForHerdrPaneUnlocked(
@@ -312,7 +317,7 @@ func (l *Launcher) failClosedLatestIssuedHerdrLaunch(
 func (l *Launcher) verifyAndRenameHerdrAgent(
 	ctx context.Context,
 	intent state.HerdrIntent,
-) error {
+) (backend.ProcessIdentity, error) {
 	var process herdrrun.PaneProcessInfo
 	err := retryHerdrObservation(ctx, intent, func(observeCtx context.Context) error {
 		var processErr error
@@ -320,19 +325,21 @@ func (l *Launcher) verifyAndRenameHerdrAgent(
 		return processErr
 	})
 	if err != nil {
-		return err
+		return backend.ProcessIdentity{}, err
 	}
-	if verifyErr := verifyHerdrAgentProcess(process, intent); verifyErr != nil {
-		return verifyErr
+	identity, verifyErr := matchHerdrAgentProcess(process, intent)
+	if verifyErr != nil {
+		return backend.ProcessIdentity{}, verifyErr
 	}
 	stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)
 	if err != nil {
-		return err
+		return backend.ProcessIdentity{}, err
 	}
-	return herdrLaunchStepResult(
+	err = herdrLaunchStepResult(
 		stepCtx, cancel,
 		l.Herdr.RenameAgent(stepCtx, intent.Resource.PaneID, intent.Launch.AgentName),
 	)
+	return identity, err
 }
 
 func saveHerdrLaunchPhase(journal *state.LockedHerdrIntents, intent state.HerdrIntent) error {
@@ -452,10 +459,19 @@ func verifyHerdrLauncherProcess(
 }
 
 func verifyHerdrAgentProcess(info herdrrun.PaneProcessInfo, intent state.HerdrIntent) error {
-	if err := herdrprocess.VerifyAgent(info, herdrLaunchProcessIdentity(intent)); err != nil {
-		return fmt.Errorf("herdr agent process identity does not match launch intent")
+	_, err := matchHerdrAgentProcess(info, intent)
+	return err
+}
+
+func matchHerdrAgentProcess(
+	info herdrrun.PaneProcessInfo,
+	intent state.HerdrIntent,
+) (backend.ProcessIdentity, error) {
+	identity, err := herdrprocess.MatchAgent(info, herdrLaunchProcessIdentity(intent))
+	if err != nil {
+		return backend.ProcessIdentity{}, fmt.Errorf("herdr agent process identity does not match launch intent")
 	}
-	return nil
+	return identity, nil
 }
 
 func herdrLaunchProcessIdentity(intent state.HerdrIntent) herdrprocess.Identity {

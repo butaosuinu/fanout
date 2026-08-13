@@ -15,6 +15,7 @@ import (
 	"time"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 type recordedCommand struct {
@@ -552,6 +553,9 @@ func TestPreviewCheckAvailableRequiresOnlyStableCLI(t *testing.T) {
 	if len(fake.commands) != 1 || commandKey(fake.commands[0].args) != "version" {
 		t.Fatalf("preview commands = %#v, want version only", fake.commands)
 	}
+	if got, present := envValue(fake.commands[0].env, sessionEnv); present {
+		t.Fatalf("preview %s = %q, want absent", sessionEnv, got)
+	}
 }
 
 func TestListLiveProjectsSnapshotWithoutUsingForegroundCWD(t *testing.T) {
@@ -598,6 +602,54 @@ func TestListLiveProjectsSnapshotWithoutUsingForegroundCWD(t *testing.T) {
 	}
 	if gotCalls := len(fake.commands); gotCalls != 3 || commandKey(fake.commands[2].args) != "snapshot" {
 		t.Fatalf("ListLive() calls = %#v", fake.commands)
+	}
+}
+
+func TestListLiveProjectsRestoredSessionWithoutLiveAgent(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	fake.snapshot = strings.Replace(fake.snapshot, `      "agents":[
+        {"terminal_id":"term-child","name":"fanout-child","agent":"codex","agent_status":"working","workspace_id":"w2","tab_id":"w2:t1","pane_id":"w2:p1","focused":false,"cwd":"/wrong-saved-cwd","foreground_cwd":"/tmp/other-foreground","revision":2,"agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"session-a"}}
+      ]`, `      "agents":[]`, 1)
+	b := newTestBackend(t, session, socket, fake)
+
+	got, err := b.ListLive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := got[1]
+	want := corebackend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-a",
+	}
+	if child.AgentPresent || child.AgentID != "" || child.AgentProvider != "" ||
+		child.AgentState != "" || child.AgentSession == nil || *child.AgentSession != want {
+		t.Fatalf("restored shell placeholder = %#v", child)
+	}
+}
+
+func TestListLiveProjectsDuplicateRestoredPlaceholdersForCallerRejection(t *testing.T) {
+	const (
+		session = "fanout-test"
+		socket  = "/private/tmp/fanout-test/herdr.sock"
+	)
+	fake := newFakeHerdr(session, socket)
+	fake.snapshot = strings.Replace(fake.snapshot, `"agent_status":"unknown","revision":1`,
+		`"agent_status":"unknown","revision":1,"agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"session-a"}`, 1)
+	fake.snapshot = strings.Replace(fake.snapshot, `      "agents":[
+        {"terminal_id":"term-child","name":"fanout-child","agent":"codex","agent_status":"working","workspace_id":"w2","tab_id":"w2:t1","pane_id":"w2:p1","focused":false,"cwd":"/wrong-saved-cwd","foreground_cwd":"/tmp/other-foreground","revision":2,"agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"session-a"}}
+      ]`, `      "agents":[]`, 1)
+	b := newTestBackend(t, session, socket, fake)
+
+	got, err := b.ListLive()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].AgentSession == nil || got[1].AgentSession == nil ||
+		*got[0].AgentSession != *got[1].AgentSession || got[0].AgentPresent || got[1].AgentPresent {
+		t.Fatalf("duplicate restored placeholders = %#v", got)
 	}
 }
 
@@ -1405,18 +1457,55 @@ func TestObservationCommandErrorClassifiesOnlyTransientFailures(t *testing.T) {
 }
 
 func TestPaneRunResponseRequiresExactOKEnvelope(t *testing.T) {
-	valid := []byte(`{"id":"cli:pane:run","result":{"type":"ok"}}`)
-	if err := validatePaneRunResponse(valid); err != nil {
-		t.Fatalf("valid pane run response: %v", err)
+	for _, valid := range [][]byte{
+		nil,
+		[]byte(`{"id":"cli:pane:run","result":{"type":"ok"}}`),
+	} {
+		if err := validatePaneRunResponse(valid); err != nil {
+			t.Fatalf("valid pane run response %q: %v", valid, err)
+		}
 	}
 	for _, invalid := range [][]byte{
-		nil,
+		[]byte("\n"),
 		[]byte(`{"id":"cli:pane:get","result":{"type":"ok"}}`),
 		[]byte(`{"id":"cli:pane:run","result":{"type":"unexpected"}}`),
 	} {
 		if err := validatePaneRunResponse(invalid); err == nil {
 			t.Fatalf("invalid pane run response accepted: %s", invalid)
 		}
+	}
+}
+
+func TestRestartResumeTokenRequiresExactLifecycleAndIntentRoute(t *testing.T) {
+	session := &OwnedSession{
+		GitCommonDir: "/repo/.git", RuntimeDir: "/runtime", Session: "fanout-owned",
+		SocketPath: "/runtime/herdr.sock", ClientSocketPath: "/runtime/client.sock",
+	}
+	server := &state.HerdrServerIdentity{
+		GitCommonDir: session.GitCommonDir, RuntimeDir: session.RuntimeDir, Session: session.Session,
+		SocketPath: session.SocketPath, ClientSocketPath: session.ClientSocketPath,
+	}
+	if !serverRestartTokenMatches(server, session) {
+		t.Fatal("exact restart lifecycle route did not match")
+	}
+	server.SocketPath = "/runtime/other.sock"
+	if serverRestartTokenMatches(server, session) {
+		t.Fatal("mismatched restart lifecycle route matched")
+	}
+
+	nonce := strings.Repeat("a", 32)
+	intent := state.HerdrIntent{
+		Kind: state.HerdrIntentResume, Status: state.HerdrIntentRealized,
+		Session: session.Session, SocketPath: session.SocketPath,
+		Resource: state.HerdrResource{PaneID: "w1:p1"},
+		Launch:   &state.HerdrLaunch{Nonce: nonce, LauncherReady: true, TokenIssued: true},
+	}
+	if !exactRestartResumeTokenIntent(intent, session.Session, session.SocketPath, "w1:p1", nonce) {
+		t.Fatal("exact resume token intent did not match")
+	}
+	intent.Launch.TokenIssued = false
+	if exactRestartResumeTokenIntent(intent, session.Session, session.SocketPath, "w1:p1", nonce) {
+		t.Fatal("unissued resume token intent matched")
 	}
 }
 

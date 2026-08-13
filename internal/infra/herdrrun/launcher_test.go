@@ -43,7 +43,7 @@ func TestWorkloadEnvironmentRejectsDuplicateNames(t *testing.T) {
 	}
 }
 
-func TestWorkloadExecEnvironmentRestoresOnlyValidatedShellRoute(t *testing.T) {
+func TestWorkloadExecEnvironmentRestoresValidatedRoute(t *testing.T) {
 	request := paneLauncherRequest{
 		session: "owned-session", socketPath: "/owned/herdr.sock",
 		workspaceID: "w1", paneID: "w1:p1",
@@ -61,8 +61,8 @@ func TestWorkloadExecEnvironmentRestoresOnlyValidatedShellRoute(t *testing.T) {
 
 	agentIntent := state.HerdrIntent{Launch: &state.HerdrLaunch{Agent: "codex"}}
 	agentEnv := workloadExecEnvironment(request, agentIntent, append([]string(nil), base...))
-	if !slices.Equal(agentEnv, base) {
-		t.Fatalf("agent environment = %q, want control-plane-free %q", agentEnv, base)
+	if !slices.Equal(agentEnv[len(base):], wantSuffix) {
+		t.Fatalf("agent route environment = %q, want suffix %q", agentEnv, wantSuffix)
 	}
 }
 
@@ -374,7 +374,8 @@ func TestWaitForLaunchTokenResendsReadyMarker(t *testing.T) {
 func TestOwnedConfigPinsNonLoginLauncher(t *testing.T) {
 	got := string(ownedConfigContents("/owned/fanout"))
 	for _, want := range []string{
-		"default_shell = \"/owned/fanout\"", "shell_mode = \"non_login\"", "manifest_check = false",
+		"default_shell = \"/owned/fanout\"", "shell_mode = \"non_login\"",
+		"resume_agents_on_restore = false", "manifest_check = false",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("config %q does not contain %q", got, want)

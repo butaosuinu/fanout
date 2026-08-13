@@ -779,6 +779,7 @@ func herdrAgentStatePane(
 	)
 	applyHerdrLaunchOwnership(&pane, intent)
 	applyHerdrLaunchTelemetry(&pane, intent)
+	pane.HerdrDirectAgentLaunch = !req.CodexPlanMode() && !req.CodexTeamMode
 	return pane, nil
 }
 
@@ -800,14 +801,17 @@ func latestHerdrLaunchIntent(
 
 func applyHerdrLaunchTelemetry(pane *state.Pane, intent state.HerdrIntent) {
 	launch := intent.Launch
-	if pane == nil || launch == nil || launch.EmitterNonce == "" {
+	if pane == nil || launch == nil {
+		return
+	}
+	pane.HerdrLaunchExecutable = launch.Executable
+	pane.HerdrLaunchArgs = slices.Clone(launch.Args)
+	if launch.EmitterNonce == "" {
 		return
 	}
 	pane.EmitterRowKey = intent.ID
 	pane.LaunchNonce = launch.Nonce
 	pane.EmitterNonce = launch.EmitterNonce
-	pane.HerdrLaunchExecutable = launch.Executable
-	pane.HerdrLaunchArgs = slices.Clone(launch.Args)
 	pane.ReportedState = string(backend.AgentRunning)
 	pane.StateRefinement = false
 	if launch.PendingReportedState != "" && launch.PendingAgentSession != nil &&

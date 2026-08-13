@@ -79,6 +79,68 @@ func TestVerifyAgentRejectsDuplicateCodexPlanExecutableBinding(t *testing.T) {
 	}
 }
 
+func TestMatchAgentReturnsExactCodexResumeProcessIdentity(t *testing.T) {
+	identity := Identity{
+		WorktreePath: testWorktree, Executable: testCodex,
+		Args: []string{"resume", "019f-session"}, Agent: "codex",
+	}
+	info := herdrrun.PaneProcessInfo{
+		ShellPID: 10, ForegroundProcessGroup: 99,
+		ForegroundProcesses: []herdrrun.PaneProcess{
+			testProcess(10, 1, "/usr/bin/node", "/usr/bin/node", []string{testCodex, "resume", "019f-session"}),
+			testProcess(20, 10, "/opt/lib/codex", "/opt/lib/codex", []string{"resume", "019f-session"}),
+		},
+	}
+
+	got, err := MatchAgent(info, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ShellPID != 10 || got.ForegroundProcessGroup != 99 || got.AgentPID != 20 {
+		t.Fatalf("process identity = %+v", got)
+	}
+}
+
+func TestMatchAgentRejectsInexactCodexResumeProcess(t *testing.T) {
+	baseIdentity := Identity{
+		WorktreePath: testWorktree, Executable: testCodex,
+		Args: []string{"resume", "019f-session"}, Agent: "codex",
+	}
+	baseInfo := herdrrun.PaneProcessInfo{
+		ShellPID: 10, ForegroundProcessGroup: 99,
+		ForegroundProcesses: []herdrrun.PaneProcess{
+			testProcess(10, 1, testCodex, testCodex, []string{"resume", "019f-session"}),
+		},
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*Identity, *herdrrun.PaneProcessInfo)
+	}{
+		{name: "extra arg", mutate: func(_ *Identity, info *herdrrun.PaneProcessInfo) {
+			info.ForegroundProcesses[0].Argv = append(info.ForegroundProcesses[0].Argv, "--full-auto")
+		}},
+		{name: "wrong cwd", mutate: func(_ *Identity, info *herdrrun.PaneProcessInfo) {
+			info.ForegroundProcesses[0].CWD = "/repo/other"
+		}},
+		{name: "wrong process group", mutate: func(_ *Identity, info *herdrrun.PaneProcessInfo) {
+			info.ForegroundProcesses[0].ProcessGroup = 100
+		}},
+		{name: "relative saved executable", mutate: func(identity *Identity, _ *herdrrun.PaneProcessInfo) {
+			identity.Executable = "codex"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			identity, info := baseIdentity, baseInfo
+			info.ForegroundProcesses = append([]herdrrun.PaneProcess(nil), baseInfo.ForegroundProcesses...)
+			info.ForegroundProcesses[0].Argv = append([]string(nil), baseInfo.ForegroundProcesses[0].Argv...)
+			test.mutate(&identity, &info)
+			if _, err := MatchAgent(info, identity); err == nil {
+				t.Fatal("MatchAgent() accepted an inexact resume process")
+			}
+		})
+	}
+}
+
 func codexPlanProcessFixture() (Identity, herdrrun.PaneProcessInfo) {
 	args := []string{
 		codexapp.PlanTUICommand, "--codex", testCodex,

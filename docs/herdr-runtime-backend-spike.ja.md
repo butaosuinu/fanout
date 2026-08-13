@@ -772,20 +772,18 @@ attach 後の pane には restart 前の prompt と `PROBE_OK` の応答履歴�
 この実測から、`terminal_id` の変化だけでは論理上の会話の喪失を判定できない。
 一方、attach 前の `agent_session` ref と `idle` だけでは process の生存を判定できない。
 
-この実測は 0.7.4 の workspace-level `agent start` と公式 integration の経路である。
-0.7.5 の owned launcher で direct launch した real Codex が同じ `agent_session` を登録し、cold restart 後に placeholder と `codex resume <id>` を復元することは確認していない。
-したがって current contract は 0.7.5 direct-launch row の `terminal_id` が変わった時点で `stale` とし、0.7.4 matcher を実行しない。
+#532 の current contract は、明示的な `fanout herdr restart` の中で fanout-owned launcher から direct Codex を resume する。
+owned config は herdr 固有の自動 resume を無効にし、保存済み `agent_session` が `{source:"herdr:codex", agent:"codex", kind:"id", value:<session-id>}` と完全一致する pane が一つだけある場合に限って resume intent を作る。
+Claude、OpenCode、Codex Plan / Team controller、旧版 state row は `stale` のまま残す。
 
-#532 が resume を再解禁するには、同じ direct-launched Codex について restart 前の session ref、restart 後の exact placeholder、attach 後の resume process を一続きの隔離実機試験で確認する。
-最低受入条件は、保存済み `agent_session` が `{source:"herdr:codex", agent:"codex", kind:"id", value:<session-id>}` と完全一致し、現在の pane に同じ ref が一つだけ存在することである。
-attach 後は保存済み Codex の絶対 entrypoint / argv の記録と resume 用 matcher を再評価し、`pane process-info` と OS process 情報から同じ launcher に由来する chain を一つだけ得なければならない。
+resume 後は保存済み Codex の絶対 entrypoint を使い、`pane process-info` と OS process 情報から同じ launcher に由来する chain を一つだけ得なければならない。
 matcher は wrapper / interpreter / native child の許可 ancestry を検査し、resume process の provider args が `["resume", "<session-id>"]` と完全一致することを要求して追加引数を許可しない。
 `<session-id>` は保存済み `agent_session.value` と byte-for-byte で一致させる。
 候補の `process-info.foreground_processes[].cwd` は final row に保存した root pane cwd と完全一致させ、`pane get.cwd` または snapshot の `foreground_cwd` で代用しない。
-候補 PID が保存済み launcher process の子孫であり、現在の foreground process group に属することを OS process 情報で確認する。
+候補 PID が復元された placeholder の `shell_pid` の子孫であり、現在の foreground process group に属することを OS process 情報で確認する。
 OS ancestry または process group を取得できない場合は再束縛しない。
-この実機連鎖と全条件が成立した場合だけ、新しい terminal / process identity を一回の state save で束縛する設計を別 PR で解禁できる。
-その場合も `reported_state` は未設定、`state_refinement:false` から始め、新しい `terminal_id` と回転後の emitter nonce に束縛された fresh provider signal まで nudge を no-op にする。
+全条件が成立した場合だけ、新しい terminal / process identity を一回の state save で束縛する。
+再束縛後も `reported_state` は未設定、`state_refinement:false` から始め、新しい `terminal_id` と回転後の emitter nonce に束縛された fresh provider signal まで nudge を no-op にする。
 ref、placeholder、候補 chain の欠落または重複、matcher / argv / process cwd / ancestry / process group の不一致では緩い process 名一致へ fallback しない。
 
 「agent record がないなら done」だけでは restart 後を判定できない。

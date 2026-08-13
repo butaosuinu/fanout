@@ -859,7 +859,7 @@ func validateOwnedLayout(layout ownedLayout, launcherPath string) error {
 			return err
 		}
 	}
-	if err := validatePrivateContents(layout.configPath, ownedConfigContents(launcherPath)); err != nil {
+	if err := validateCompatibleOwnedConfig(layout.configPath, launcherPath); err != nil {
 		return err
 	}
 	info, err := os.Lstat(filepath.Join(layout.runtimeDir, ownedSupervisorLogName))
@@ -871,7 +871,24 @@ func validateOwnedLayout(layout ownedLayout, launcherPath string) error {
 
 func ownedConfigContents(launcherPath string) []byte {
 	return []byte("[terminal]\ndefault_shell = " + strconv.Quote(launcherPath) +
+		"\nshell_mode = \"non_login\"\n\n[session]\nresume_agents_on_restore = false\n\n" +
+		"[update]\nmanifest_check = false\n")
+}
+
+func legacyOwnedConfigContents(launcherPath string) []byte {
+	return []byte("[terminal]\ndefault_shell = " + strconv.Quote(launcherPath) +
 		"\nshell_mode = \"non_login\"\n\n[update]\nmanifest_check = false\n")
+}
+
+func validateCompatibleOwnedConfig(path, launcherPath string) error {
+	currentErr := validatePrivateContents(path, ownedConfigContents(launcherPath))
+	if currentErr == nil {
+		return nil
+	}
+	if err := validatePrivateContents(path, legacyOwnedConfigContents(launcherPath)); err != nil {
+		return currentErr
+	}
+	return nil
 }
 
 func ensureOwnedConfig(layout ownedLayout, launcherPath string) error {

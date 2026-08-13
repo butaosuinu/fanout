@@ -124,11 +124,15 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 | 通知 | bell / tmux / ntfy / slack の channel | bell / ntfy / slack は動く。tmux channel と herdr の `notification show` は発火しない |
 | 子の Plan Mode launch | 対応 | 対応。Codex は fanout の app-server controller、Claude / OpenCode は固有の mode flag を使う |
 | TUI フォーム(設定、ヘルプ) | tmux popup | インラインの in-process フォーム |
-| session resume | fanout の restore フロー | herdr 任せ(後述) |
+| session resume | fanout の restore フロー | 明示的な `fanout herdr restart` で完全に検証できた direct Codex session だけを resume。ほかの provider と不完全な binding は `stale` のまま |
 
-補足が 2 点あります。
-`terminal_id` が変わった herdr pane — たとえば server の cold restart 後 — は、再束縛されずに `stale` と表示されます。
-また herdr は exit status を残さず、正常終了で pane の記録も消えるため、終了した agent は `✓ done` の pane を残さずに herdr session から消えます。記録済みの fanout の行は残り、`stale` と表示されます。
+明示的な `fanout herdr restart` は、復元された pane の `agent_session` が保存値と完全一致し、起動した process の絶対 executable、`codex resume <session-id>` argv、cwd、ancestry、foreground process group を検証できた direct Codex 行だけを再束縛します。
+値の欠落、重複、不一致、検証不能では行を `stale` のまま残します。
+Claude、OpenCode、Codex Plan / Team controller はこの経路で resume しません。
+復元直後の shell placeholder が `idle` と表示されても、process の生存や完了を示しません。
+
+herdr は exit status を残さず、正常終了で pane の記録も消します。
+終了した agent は `✓ done` の pane を残さずに herdr session から消え、記録済みの fanout 行は `stale` と表示されます。
 
 ## sidebar token
 
@@ -145,7 +149,8 @@ token は表示専用データです。fanout は読み戻さず、backend state
 
 1 回の報告でその resource の fanout token 一式を書き、値を持たないものは clear します。使い回された workspace や pane に古い値が残りません。
 報告は launch が生きた identity を検証した直後の 1 回だけで、`seq` も `ttl_ms` も送りません。
-herdr の cold restart では token がすべて消え、`terminal_id` も変わるため fanout の行は `stale` になります。再送はしません。
+herdr の cold restart では token がすべて消え、`terminal_id` も変わります。
+完全一致した Codex resume は行を再束縛できますが、表示 token は再送しません。
 
 行とスタイリングはあなたのものです。fanout は sidebar の設定を書き換えません。token は `$name` で参照します。
 

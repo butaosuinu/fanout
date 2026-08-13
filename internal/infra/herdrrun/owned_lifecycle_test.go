@@ -173,6 +173,36 @@ func TestRestartOwnedPinsCurrentLauncherAndRecoversAfterConfigUpdate(t *testing.
 	}
 }
 
+func TestPrepareRestartedLauncherMigratesLegacyOwnedConfig(t *testing.T) {
+	h := newOwnedHarness(t)
+	marker, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found {
+		t.Fatalf("read current marker = (%+v, %t, %v)", marker, found, err)
+	}
+	if err := atomicfs.WriteFile(h.layout.configPath, legacyOwnedConfigContents(marker.LauncherPath), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expected := inspectOwnedServerForTest(t, h)
+	commonDir, commonIdentity, err := openCanonicalGitCommonDir(h.commonDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted := binaryAdmission{
+		path: expected.BinaryPath, sha256: expected.BinarySHA256, version: expected.BinaryVersion,
+	}
+
+	pinned, err := prepareRestartedLauncher(expected, commonDir, commonIdentity, h.layout, admitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned.path != marker.LauncherPath || pinned.sha256 != marker.LauncherSHA256 {
+		t.Fatalf("pinned launcher = %+v, want marker launcher", pinned)
+	}
+	if err := validatePrivateContents(h.layout.configPath, ownedConfigContents(marker.LauncherPath)); err != nil {
+		t.Fatalf("migrated config: %v", err)
+	}
+}
+
 func TestShutdownOwnedRejectsResourcesAndDoesNotSignalOnRetry(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)

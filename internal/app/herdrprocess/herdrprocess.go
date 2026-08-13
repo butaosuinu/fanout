@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 )
@@ -21,24 +22,36 @@ type Identity struct {
 	Agent        string
 }
 
-// VerifyAgent accepts the direct agent process or one exact interpreter root
+// MatchAgent accepts the direct agent process or one exact interpreter root
 // with exactly one matching native descendant in the foreground process group.
-func VerifyAgent(info herdrrun.PaneProcessInfo, identity Identity) error {
+func MatchAgent(info herdrrun.PaneProcessInfo, identity Identity) (backend.ProcessIdentity, error) {
 	root, processes, ok := agentProcessRoot(info, identity)
 	if !ok {
-		return mismatchError()
+		return backend.ProcessIdentity{}, mismatchError()
 	}
 	if identity.Agent == "codex" && len(identity.Args) > 0 && identity.Args[0] == codexapp.PlanTUICommand {
-		return verifyCodexPlanController(info, identity, root, processes)
+		if err := verifyCodexPlanController(info, identity, root, processes); err != nil {
+			return backend.ProcessIdentity{}, err
+		}
+		return processIdentity(info, root.PID), nil
 	}
 	if directAgentProcess(root, identity) {
-		return nil
+		return processIdentity(info, root.PID), nil
 	}
-	if !interpreterAgentProcess(root, identity) ||
-		countAgentDescendants(info, identity, root, processes) != 1 {
-		return mismatchError()
+	if !interpreterAgentProcess(root, identity) {
+		return backend.ProcessIdentity{}, mismatchError()
 	}
-	return nil
+	agentPID, matches := matchingAgentDescendant(info, identity, root, processes)
+	if matches != 1 {
+		return backend.ProcessIdentity{}, mismatchError()
+	}
+	return processIdentity(info, agentPID), nil
+}
+
+// VerifyAgent preserves the error-only call contract for existing callers.
+func VerifyAgent(info herdrrun.PaneProcessInfo, identity Identity) error {
+	_, err := MatchAgent(info, identity)
+	return err
 }
 
 func verifyCodexPlanController(
@@ -168,7 +181,8 @@ func agentProcessRoot(
 	info herdrrun.PaneProcessInfo,
 	identity Identity,
 ) (herdrrun.PaneProcess, map[int]herdrrun.PaneProcess, bool) {
-	if identity.Executable == "" || info.ShellPID <= 1 || info.ForegroundProcessGroup <= 1 {
+	if !cleanAbsolute(identity.Executable) || !cleanAbsolute(identity.WorktreePath) ||
+		info.ShellPID <= 1 || info.ForegroundProcessGroup <= 1 {
 		return herdrrun.PaneProcess{}, nil, false
 	}
 	processes, ok := indexAgentProcesses(info.ForegroundProcesses)
@@ -208,19 +222,20 @@ func interpreterAgentProcess(process herdrrun.PaneProcess, identity Identity) bo
 		process.Argv0 != identity.Executable && slices.Equal(process.Argv, want)
 }
 
-func countAgentDescendants(
+func matchingAgentDescendant(
 	info herdrrun.PaneProcessInfo,
 	identity Identity,
 	root herdrrun.PaneProcess,
 	processes map[int]herdrrun.PaneProcess,
-) int {
-	matches := 0
+) (int, int) {
+	agentPID, matches := 0, 0
 	for _, process := range processes {
 		if matchesAgentDescendant(info, identity, root, process, processes) {
+			agentPID = process.PID
 			matches++
 		}
 	}
-	return matches
+	return agentPID, matches
 }
 
 func matchesAgentDescendant(
@@ -239,6 +254,16 @@ func matchesAgentDescendant(
 func observedExecutableMatches(observed, argv0 string) bool {
 	// ps comm is an OS-observed executable name on macOS, not an absolute path.
 	return filepath.Base(observed) == filepath.Base(argv0)
+}
+
+func cleanAbsolute(path string) bool {
+	return filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.ContainsRune(path, '\x00')
+}
+
+func processIdentity(info herdrrun.PaneProcessInfo, agentPID int) backend.ProcessIdentity {
+	return backend.ProcessIdentity{
+		ShellPID: info.ShellPID, ForegroundProcessGroup: info.ForegroundProcessGroup, AgentPID: agentPID,
+	}
 }
 
 func processDescendsFrom(pid, rootPID int, processes map[int]herdrrun.PaneProcess) bool {

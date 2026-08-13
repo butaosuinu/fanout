@@ -84,9 +84,11 @@ A parent that already has recorded panes keeps its recorded backend. A conflicti
 | Notifications | bell / tmux / ntfy / slack channels | bell / ntfy / slack work; the tmux channel and herdr's `notification show` do not fire |
 | Child Plan Mode launch | Supported | Supported; Codex uses fanout's app-server controller, while Claude / OpenCode use native flags |
 | TUI forms (settings, help) | tmux popups | Inline in-process forms |
-| Session resume | fanout's restore flow | Left to herdr (see below) |
+| Session resume | fanout's restore flow | An explicit `fanout herdr restart` resumes an exactly verified direct Codex session; every other provider or incomplete binding stays `stale` |
 
-Two consequences worth spelling out. A herdr pane whose `terminal_id` changed — after a cold server restart, for example — shows as `stale` rather than being re-bound. And because herdr keeps no exit status and drops the pane record on normal exit, a finished agent disappears from the herdr session instead of leaving a `✓ done` pane behind; the recorded fanout row stays and shows `stale`.
+An explicit `fanout herdr restart` re-binds a direct Codex row only when the restored shell placeholder has the exact saved `agent_session` and the launched process matches the saved absolute executable, `codex resume <session-id>` argv, cwd, ancestry, and foreground process group. Missing, duplicate, mismatched, or unverifiable data leaves the row `stale`; Claude, OpenCode, and Codex Plan / Team controllers are never resumed by this path. An `idle` placeholder does not prove process liveness or completion.
+
+Because herdr keeps no exit status and drops the pane record on normal exit, a finished agent disappears from the herdr session instead of leaving a `✓ done` pane behind; the recorded fanout row stays and shows `stale`.
 
 ## Sidebar tokens
 
@@ -100,7 +102,7 @@ Every verified launch reports five display-only tokens under the source `fanout`
 | `fanout_pr` | Pane | Reserved for the pull request; cleared on every report today |
 | `fanout_ci` | Pane | Reserved for CI; cleared on every report today |
 
-One report writes fanout's whole token set for a resource and clears whatever it has no value for, so a reused workspace or pane never shows a stale value. fanout reports once, right after the launch verifies its live identity, and sends no `seq` and no `ttl_ms`. A cold herdr restart drops every token and changes `terminal_id`, which turns the fanout row `stale`; fanout does not re-send.
+One report writes fanout's whole token set for a resource and clears whatever it has no value for, so a reused workspace or pane never shows a stale value. fanout reports once, right after the launch verifies its live identity, and sends no `seq` and no `ttl_ms`. A cold herdr restart drops every token and changes `terminal_id`; an exact Codex resume can re-bind the row, but fanout does not re-send the display tokens.
 
 Rows and styling stay yours — fanout never writes sidebar config. Reference a token as `$name`:
 

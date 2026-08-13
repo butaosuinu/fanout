@@ -3,9 +3,37 @@ package herdrrun
 import (
 	"context"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestNormalizePaneProcessArgsSeparatesAbsoluteArgv0(t *testing.T) {
+	raw := []PaneProcess{{
+		Argv0: "codex", Argv: []string{"/opt/codex", "resume", "session-id"},
+	}}
+	got, err := normalizePaneProcessArgs(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Argv0 != "/opt/codex" || !slices.Equal(got[0].Argv, []string{"resume", "session-id"}) {
+		t.Fatalf("normalized process = %+v", got[0])
+	}
+	if raw[0].Argv0 != "codex" || len(raw[0].Argv) != 3 {
+		t.Fatalf("raw process was mutated: %+v", raw[0])
+	}
+}
+
+func TestNormalizePaneProcessArgsRejectsInconsistentArgv0(t *testing.T) {
+	for _, process := range []PaneProcess{
+		{Argv0: "codex"},
+		{Argv0: "claude", Argv: []string{"/opt/codex", "resume", "session-id"}},
+	} {
+		if _, err := normalizePaneProcessArgs([]PaneProcess{process}); err == nil {
+			t.Fatalf("inconsistent process accepted: %+v", process)
+		}
+	}
+}
 
 func TestInspectPaneProcessRelationsReadsCurrentProcess(t *testing.T) {
 	pid := os.Getpid()
