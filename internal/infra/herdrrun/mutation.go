@@ -366,7 +366,7 @@ func (s *OwnedSession) issueMutation(
 			fmt.Errorf("herdr owned session is nil"),
 		)
 	}
-	admission, lock, admissionErr := s.backend.acquireOwnedOperation(ctx)
+	admission, lock, admissionErr := s.backend.acquireOwnedMutation(ctx)
 	if admissionErr != nil {
 		return WorktreeMutationResult{}, mutationNotIssued(admissionErr)
 	}

@@ -76,7 +76,7 @@ func (s *OwnedSession) ReportMetadata(ctx context.Context, report MetadataReport
 	if err := validateMetadataReport(report); err != nil {
 		return err
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	admission, lock, err := s.backend.acquireOwnedMutation(ctx)
 	if err != nil {
 		return err
 	}

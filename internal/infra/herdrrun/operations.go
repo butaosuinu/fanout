@@ -222,7 +222,7 @@ func (b *Backend) sendLineOwned(ctx context.Context, target OwnedPaneIdentity, l
 	if target.AgentID == "" || target.AgentSession == nil {
 		return fmt.Errorf("%w: send line requires a saved live-agent identity", ErrOwnedIdentityMismatch)
 	}
-	admission, lock, err := b.acquireOwnedOperation(ctx)
+	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
 		return err
 	}
@@ -250,7 +250,7 @@ func (s *OwnedSession) PrepareNudge(ctx context.Context, target NudgeTarget, lin
 	if err := validateNudgeRequest(s, line); err != nil {
 		return nil, err
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	admission, lock, err := s.backend.acquireOwnedMutation(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +373,7 @@ func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) erro
 	if (target.AgentID == "") != (target.AgentSession == nil) {
 		return fmt.Errorf("%w: focus target has a partial live-agent identity", ErrOwnedIdentityMismatch)
 	}
-	admission, lock, err := b.acquireOwnedOperation(ctx)
+	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
 		return err
 	}
@@ -414,7 +414,7 @@ func (b *Backend) closeCore(ref corebackend.PaneRef) error {
 }
 
 func (b *Backend) closePaneOwned(ctx context.Context, target OwnedPaneIdentity) error {
-	admission, lock, err := b.acquireOwnedOperation(ctx)
+	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
 		return err
 	}
@@ -458,7 +458,7 @@ func (b *Backend) CloseOwned(req corebackend.CloseRequest) (corebackend.CloseRes
 
 func (b *Backend) closeOwnedWorkspace(ctx context.Context, target OwnedPaneIdentity) (corebackend.CloseResult, error) {
 	failed := corebackend.CloseResult{Status: corebackend.CloseFailed}
-	admission, lock, err := b.acquireOwnedOperation(ctx)
+	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
 		return failed, err
 	}
@@ -486,7 +486,7 @@ func (b *Backend) closeOwnedSession(ctx context.Context, req OwnedCloseRequest) 
 	if err := verifyWorktreeOwnership(req); err != nil {
 		return failed, err
 	}
-	admission, lock, err := b.acquireOwnedOperation(ctx)
+	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
 		return failed, err
 	}

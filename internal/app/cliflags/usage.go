@@ -17,6 +17,7 @@ const supportedAgentsPlaceholder = "@SUPPORTED_AGENTS@"
 const usageText = `Usage: fanout
        fanout <parent-issue|project-url> [options]
        fanout plan <spec.json|plan-slug> [options]
+       fanout herdr <restart|shutdown>
 
 With no arguments, starts fanout's persistent console. A plain-shell tmux run
 creates or attaches a managed tmux session. A plain-shell herdr run bootstraps
@@ -168,6 +169,8 @@ Options:
   msg                 Subcommand. Peer messaging between fanout panes over a
                       per-parent SQLite DB: send/post/mark-read/register plus
                       peers/inbox/board read views. See 'fanout msg --help'.
+  herdr               Subcommand. Explicitly restart or shut down the
+                      repository-owned Herdr server. See 'fanout herdr --help'.
   update              Subcommand. Replace this binary and bundled Claude/Codex
                       integrations through install.sh immediately. Supports
                       --version <tag> and --no-skills.

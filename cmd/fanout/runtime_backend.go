@@ -523,8 +523,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 	} else {
 		for i, intent := range control.Intents {
 			hasHerdrRoute = true
-			session := strings.TrimSpace(intent.Session)
-			socketPath := strings.TrimSpace(intent.SocketPath)
+			session, socketPath := herdrIntentRuntimeRoute(intent)
 			if session == "" || socketPath == "" {
 				routeErr = errors.Join(routeErr, backend.ObservationRouteUnavailable(
 					backend.ObservationRoute{
@@ -561,6 +560,13 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 		}
 	}
 	return routes, routeErr
+}
+
+func herdrIntentRuntimeRoute(intent state.HerdrIntent) (string, string) {
+	if state.IsHerdrServerLifecycleKind(intent.Kind) && intent.Server != nil {
+		return strings.TrimSpace(intent.Server.Session), strings.TrimSpace(intent.Server.SocketPath)
+	}
+	return strings.TrimSpace(intent.Session), strings.TrimSpace(intent.SocketPath)
 }
 
 // collectRuntimeLive keeps useful observations when one of several independent

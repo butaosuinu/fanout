@@ -22,6 +22,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/errs"
 	"github.com/butaosuinu/fanout/internal/core/naming"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 const (
@@ -53,6 +54,7 @@ var ErrOwnedSessionNotFound = errors.New("fanout-owned herdr session does not ex
 
 var (
 	errOwnedSupervisorNotRunning    = errors.New("herdr owned supervisor is not running; refusing automatic recovery without proof that prior operations are quiescent")
+	errUnpublishedSupervisorLease   = errors.New("herdr supervisor lease was not published")
 	errPinnedBinaryPhysicalIdentity = errors.New("herdr binary bundle has an invalid physical identity")
 )
 
@@ -152,6 +154,7 @@ type supervisorLease struct {
 	OwnerNonce string `json:"owner_nonce"`
 	StartToken string `json:"start_token"`
 	PID        int    `json:"pid"`
+	ServerPID  int    `json:"server_pid,omitempty"`
 }
 
 type ownedAdmission struct {
@@ -416,6 +419,10 @@ func ensureOwned(
 		return nil, fmt.Errorf("lock herdr owned lifecycle: %w", err)
 	}
 	defer func() { unlockPrivateFile(lock) }()
+	err = rejectOwnedServerLifecycle(commonDir)
+	if err != nil {
+		return nil, err
+	}
 	err = ensureOwnedLayout(layout)
 	if err != nil {
 		return nil, err
@@ -712,6 +719,43 @@ func (b *Backend) acquireOwnedOperation(ctx context.Context) (ownedAdmission, *o
 		return ownedAdmission{}, nil, err
 	}
 	return admission, lock, nil
+}
+
+func (b *Backend) acquireOwnedMutation(ctx context.Context) (ownedAdmission, *os.File, error) {
+	if b != nil && b.owner != nil {
+		if err := rejectOwnedServerLifecycle(b.owner.marker.GitCommonDir); err != nil {
+			return ownedAdmission{}, nil, err
+		}
+	}
+	admission, lock, err := b.acquireOwnedOperation(ctx)
+	if err != nil {
+		return ownedAdmission{}, nil, err
+	}
+	if err := rejectOwnedServerLifecycle(admission.marker.GitCommonDir); err != nil {
+		unlockPrivateFile(lock)
+		return ownedAdmission{}, nil, err
+	}
+	return admission, lock, nil
+}
+
+func rejectOwnedServerLifecycle(gitCommonDir string) error {
+	path := filepath.Join(gitCommonDir, "fanout", "herdr-intents.json")
+	journal, err := state.LoadHerdrIntentsPath(path)
+	if err != nil {
+		return fmt.Errorf("load Herdr server lifecycle fence: %w", err)
+	}
+	intent, found, err := journal.ServerLifecycleIntent()
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	action := "restart"
+	if intent.Kind == state.HerdrIntentShutdown {
+		action = "shutdown"
+	}
+	return fmt.Errorf("herdr owned server %s is pending; only %s and read-only operations are allowed", action, action)
 }
 
 func (b *Backend) probeOwned(ctx context.Context, admission ownedAdmission) (probeResult, error) {
@@ -1128,8 +1172,9 @@ func inspectExistingSupervisorLease(path string) (supervisorLease, bool, error) 
 	}
 	lockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if lockErr == nil {
+		lease, readErr := readRetiredSupervisorLease(f, info)
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		return supervisorLease{}, false, nil
+		return lease, false, readErr
 	}
 	if !errors.Is(lockErr, syscall.EWOULDBLOCK) && !errors.Is(lockErr, syscall.EAGAIN) {
 		return supervisorLease{}, false, lockErr
@@ -1141,8 +1186,22 @@ func inspectExistingSupervisorLease(path string) (supervisorLease, bool, error) 
 	return lease, true, nil
 }
 
-func writeSupervisorLease(f *os.File, marker ownerMarker) error {
-	lease := supervisorLease{SchemaID: ownedMarkerSchemaID, OwnerNonce: marker.OwnerNonce, StartToken: marker.SupervisorStartToken, PID: marker.SupervisorPID}
+func readRetiredSupervisorLease(f *os.File, info os.FileInfo) (supervisorLease, error) {
+	if info.Size() == 0 {
+		return supervisorLease{}, errUnpublishedSupervisorLease
+	}
+	lease, err := readLeaseFromFile(f)
+	if err != nil {
+		return supervisorLease{}, fmt.Errorf("parse retired herdr supervisor lease: %w", err)
+	}
+	return lease, nil
+}
+
+func writeSupervisorLease(f *os.File, marker ownerMarker, serverPID int) error {
+	lease := supervisorLease{
+		SchemaID: ownedMarkerSchemaID, OwnerNonce: marker.OwnerNonce,
+		StartToken: marker.SupervisorStartToken, PID: marker.SupervisorPID, ServerPID: serverPID,
+	}
 	data, err := json.Marshal(lease)
 	if err != nil {
 		return err
@@ -1464,7 +1523,7 @@ func RunSupervisor(args []string, errw io.Writer) int {
 		fmt.Fprintf(errw, "fanout herdr supervisor: marker identity: %v\n", err)
 		return 1
 	}
-	err = writeSupervisorLease(lock, marker)
+	err = writeSupervisorLease(lock, marker, 0)
 	if err != nil {
 		fmt.Fprintf(errw, "fanout herdr supervisor: write lease: %v\n", err)
 		return 1
@@ -1484,7 +1543,7 @@ func RunSupervisor(args []string, errw io.Writer) int {
 	signals := make(chan os.Signal, 4)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGCHLD)
 	defer signal.Stop(signals)
-	if err := cmd.Start(); err != nil {
+	if err := startOwnedServerWithLease(cmd, lock, marker); err != nil {
 		fmt.Fprintf(errw, "fanout herdr supervisor: start server: %v\n", err)
 		return 1
 	}
@@ -1539,6 +1598,20 @@ func RunSupervisor(args []string, errw io.Writer) int {
 		return 1
 	}
 	return code
+}
+
+func startOwnedServerWithLease(cmd *exec.Cmd, lock *os.File, marker ownerMarker) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if err := writeSupervisorLease(lock, marker, cmd.Process.Pid); err != nil {
+		// The lease error is authoritative; these calls only ensure the unrecorded
+		// child cannot survive the failed ownership publication.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		return fmt.Errorf("write server lease: %w", err)
+	}
+	return nil
 }
 
 func retireOwnedSession(layout ownedLayout, marker ownerMarker, supervisorLock *os.File) error {

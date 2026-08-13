@@ -236,6 +236,67 @@ func TestHerdrControlBindingsIncludeEveryIntentStatus(t *testing.T) {
 	}
 }
 
+func TestHerdrServerLifecycleIntentValidatesExactIdentity(t *testing.T) {
+	for _, kind := range []HerdrIntentKind{HerdrIntentRestart, HerdrIntentShutdown} {
+		t.Run(string(kind), func(t *testing.T) {
+			intent := testHerdrServerIntent(kind)
+			store := emptyHerdrIntents()
+			store.Intents = append(store.Intents, intent)
+			if err := validateHerdrIntents(store); err != nil {
+				t.Fatal(err)
+			}
+			got, found, err := store.ServerLifecycleIntent()
+			if err != nil || !found || got.ID != intent.ID || got.Server == nil || *got.Server != *intent.Server {
+				t.Fatalf("ServerLifecycleIntent() = (%+v, %t, %v)", got, found, err)
+			}
+			if bindings := store.ProvisionalBindings("/repo"); len(bindings) != 0 {
+				t.Fatalf("server lifecycle provisional bindings = %+v, want none", bindings)
+			}
+		})
+	}
+}
+
+func TestHerdrServerLifecycleIntentAllowsOnlyIssuedShutdown(t *testing.T) {
+	shutdown := testHerdrServerIntent(HerdrIntentShutdown)
+	shutdown.Status = HerdrIntentIssued
+	if err := validateHerdrIntent(shutdown); err != nil {
+		t.Fatal(err)
+	}
+	restart := testHerdrServerIntent(HerdrIntentRestart)
+	restart.Status = HerdrIntentIssued
+	if err := validateHerdrIntent(restart); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("issued restart error = %v", err)
+	}
+}
+
+func TestHerdrServerLifecycleIntentRejectsAmbiguousOrIncompleteRows(t *testing.T) {
+	restart := testHerdrServerIntent(HerdrIntentRestart)
+	shutdown := testHerdrServerIntent(HerdrIntentShutdown)
+	store := emptyHerdrIntents()
+	store.Intents = []HerdrIntent{restart, shutdown}
+	if err := validateHerdrIntents(store); err == nil || !strings.Contains(err.Error(), "multiple") {
+		t.Fatalf("multiple lifecycle intents error = %v", err)
+	}
+
+	restart.Server.ServerPID = 0
+	store.Intents = []HerdrIntent{restart}
+	if err := validateHerdrIntents(store); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("restart without server pid error = %v", err)
+	}
+
+	regular := testHerdrCoordinatorIntent("/repo", "637")
+	regular.Server = shutdown.Server
+	if err := validateHerdrIntent(regular); err == nil || !strings.Contains(err.Error(), "unrelated server identity") {
+		t.Fatalf("regular intent with server identity error = %v", err)
+	}
+
+	restart = testHerdrServerIntent(HerdrIntentRestart)
+	restart.CleanupPhase = HerdrCleanupRemove
+	if err := validateHerdrIntent(restart); err == nil || !strings.Contains(err.Error(), "unrelated fields") {
+		t.Fatalf("server intent with cleanup phase error = %v", err)
+	}
+}
+
 func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 	first := testHerdrCoordinatorIntent("/repo/one", "plan:demo")
 	second := testHerdrCoordinatorIntent("/repo/two", "plan:demo")
@@ -427,16 +488,7 @@ func TestHerdrCoordinatorLaunchAllowsShellAndRejectsPartialAgentIdentity(t *test
 
 func TestHerdrCleanupIntentKeepsIndependentMutationRecord(t *testing.T) {
 	repo := newHerdrIntentsRepo(t)
-	cleanup := testHerdrWorktreeIntent(repo, "425", 426, "cleanup")
-	cleanup.ID, _ = HerdrCleanupIntentID(cleanup.ID)
-	cleanup.Kind = HerdrIntentCleanup
-	cleanup.Status = HerdrIntentPlanned
-	cleanup.CleanupPhase = HerdrCleanupRemove
-	cleanup.Resource = HerdrResource{
-		WorkspaceID: "w2", Label: cleanup.WorkspaceLabel,
-		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: cleanup.WorktreePath,
-		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
-	}
+	cleanup := testHerdrCleanupIntent(repo, HerdrCleanupRemove, HerdrIntentPlanned)
 	store := emptyHerdrIntents()
 	store.Intents = []HerdrIntent{cleanup}
 	if err := validateHerdrIntents(store); err != nil {
@@ -446,6 +498,51 @@ func TestHerdrCleanupIntentKeepsIndependentMutationRecord(t *testing.T) {
 	if err := validateHerdrIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {
 		t.Fatalf("unknown cleanup phase error = %v", err)
 	}
+}
+
+func TestHerdrCleanupIntentCoexistsWithServerRestart(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	phases := []HerdrCleanupPhase{HerdrCleanupReopen, HerdrCleanupRemove, HerdrCleanupWorkspaceClose}
+	statuses := []HerdrIntentStatus{
+		HerdrIntentPlanned, HerdrIntentIssued, HerdrIntentManualCleanupRequired, HerdrIntentRealized,
+	}
+	for _, phase := range phases {
+		for _, status := range statuses {
+			t.Run(string(phase)+"/"+string(status), func(t *testing.T) {
+				cleanup := testHerdrCleanupIntent(repo, phase, status)
+				store := emptyHerdrIntents()
+				store.Intents = []HerdrIntent{cleanup, testHerdrServerIntent(HerdrIntentRestart)}
+				if err := validateHerdrIntents(store); err != nil {
+					t.Fatal(err)
+				}
+				got, found, err := store.ServerLifecycleIntent()
+				if err != nil || !found || got.Kind != HerdrIntentRestart {
+					t.Fatalf("ServerLifecycleIntent() = (%+v, %t, %v)", got, found, err)
+				}
+			})
+		}
+	}
+}
+
+func testHerdrCleanupIntent(
+	repo string,
+	phase HerdrCleanupPhase,
+	status HerdrIntentStatus,
+) HerdrIntent {
+	cleanup := testHerdrWorktreeIntent(repo, "425", 426, "cleanup")
+	cleanup.ID, _ = HerdrCleanupIntentID(cleanup.ID)
+	cleanup.Kind = HerdrIntentCleanup
+	cleanup.Status = status
+	cleanup.CleanupPhase = phase
+	cleanup.Resource = HerdrResource{
+		WorkspaceID: "w2", Label: cleanup.WorkspaceLabel,
+		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: cleanup.WorktreePath,
+		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
+	}
+	if status == HerdrIntentManualCleanupRequired {
+		cleanup.Failure = "server unavailable"
+	}
+	return cleanup
 }
 
 func TestHerdrCleanupIntentIDRejectsNestedCleanup(t *testing.T) {
@@ -624,6 +721,26 @@ func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 		WorkspaceLabel:   "fanout-coordinator-token", Session: "fanout-test",
 		SocketPath:    "/private/tmp/fanout-test/herdr.sock",
 		ExpiresUnixMS: 2000000000000,
+	}
+}
+
+func testHerdrServerIntent(kind HerdrIntentKind) HerdrIntent {
+	id, err := HerdrServerIntentID(kind)
+	if err != nil {
+		panic(err)
+	}
+	return HerdrIntent{
+		ID: id, Kind: kind, Status: HerdrIntentPlanned,
+		Server: &HerdrServerIdentity{
+			GitCommonDir: "/repo/.git", RuntimeDir: "/tmp/fanout-herdr",
+			Session: "fanout-owned", SocketPath: "/tmp/fanout-herdr/herdr.sock",
+			ClientSocketPath: "/tmp/fanout-herdr/herdr-client.sock",
+			OwnerNonce:       strings.Repeat("a", 64), SupervisorPID: 42,
+			SupervisorStartToken: strings.Repeat("b", 64), ServerPID: 43,
+			BinaryPath: "/usr/local/bin/herdr", BinarySHA256: strings.Repeat("c", 64),
+			BinaryVersion: "0.7.5", LauncherPath: "/usr/local/bin/fanout",
+			LauncherSHA256: strings.Repeat("d", 64),
+		},
 	}
 }
 

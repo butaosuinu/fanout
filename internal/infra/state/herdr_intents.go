@@ -23,6 +23,7 @@ var (
 	herdrCommitSHA   = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 	herdrLaunchNonce = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	herdrAgentName   = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	herdrOwnerToken  = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 type HerdrIntentKind string
@@ -32,6 +33,8 @@ const (
 	HerdrIntentWorktree    HerdrIntentKind = "worktree"
 	HerdrIntentRollback    HerdrIntentKind = "rollback"
 	HerdrIntentCleanup     HerdrIntentKind = "cleanup"
+	HerdrIntentRestart     HerdrIntentKind = "server-restart"
+	HerdrIntentShutdown    HerdrIntentKind = "server-shutdown"
 )
 
 type HerdrCleanupPhase string
@@ -61,6 +64,25 @@ type HerdrResource struct {
 	CurrentPath string `json:"currentPath"`
 	RepoKey     string `json:"repoKey,omitempty"`
 	RepoRoot    string `json:"repoRoot,omitempty"`
+}
+
+// HerdrServerIdentity is the persisted owner marker and supervisor lease
+// identity used to fence one explicit restart or shutdown.
+type HerdrServerIdentity struct {
+	GitCommonDir         string `json:"gitCommonDir"`
+	RuntimeDir           string `json:"runtimeDir"`
+	Session              string `json:"session"`
+	SocketPath           string `json:"socketPath"`
+	ClientSocketPath     string `json:"clientSocketPath"`
+	OwnerNonce           string `json:"ownerNonce"`
+	SupervisorPID        int    `json:"supervisorPid"`
+	SupervisorStartToken string `json:"supervisorStartToken"`
+	ServerPID            int    `json:"serverPid,omitempty"`
+	BinaryPath           string `json:"binaryPath"`
+	BinarySHA256         string `json:"binarySha256"`
+	BinaryVersion        string `json:"binaryVersion"`
+	LauncherPath         string `json:"launcherPath"`
+	LauncherSHA256       string `json:"launcherSha256"`
 }
 
 // HerdrIntent is one minimal mutation journal row. Status records whether the
@@ -93,7 +115,8 @@ type HerdrIntent struct {
 	SocketPath     string        `json:"socketPath"`
 	ExpiresUnixMS  int64         `json:"expiresUnixMs"`
 
-	Launch *HerdrLaunch `json:"launch,omitempty"`
+	Launch *HerdrLaunch         `json:"launch,omitempty"`
+	Server *HerdrServerIdentity `json:"server,omitempty"`
 
 	CleanupPhase        HerdrCleanupPhase `json:"cleanupPhase,omitempty"`
 	CleanupDeleteBranch bool              `json:"cleanupDeleteBranch,omitempty"`
@@ -222,6 +245,36 @@ func (s HerdrIntents) FindIntent(id string) (HerdrIntent, bool) {
 	return HerdrIntent{}, false
 }
 
+// ServerLifecycleIntent returns the single explicit server lifecycle row.
+func (s HerdrIntents) ServerLifecycleIntent() (HerdrIntent, bool, error) {
+	var found HerdrIntent
+	hasFound := false
+	for _, intent := range s.Intents {
+		if !IsHerdrServerLifecycleKind(intent.Kind) {
+			continue
+		}
+		if hasFound {
+			return HerdrIntent{}, false, fmt.Errorf("multiple Herdr server lifecycle intents are pending")
+		}
+		found = intent
+		hasFound = true
+	}
+	return found, hasFound, nil
+}
+
+// IsHerdrServerLifecycleKind reports whether kind fences the owned server.
+func IsHerdrServerLifecycleKind(kind HerdrIntentKind) bool {
+	return kind == HerdrIntentRestart || kind == HerdrIntentShutdown
+}
+
+// HerdrServerIntentID returns the singleton ID for one server lifecycle kind.
+func HerdrServerIntentID(kind HerdrIntentKind) (string, error) {
+	if !IsHerdrServerLifecycleKind(kind) {
+		return "", fmt.Errorf("invalid Herdr server lifecycle intent kind %q", kind)
+	}
+	return "server:" + string(kind), nil
+}
+
 func (s *HerdrIntents) UpsertIntent(intent HerdrIntent) {
 	for i := range s.Intents {
 		if s.Intents[i].ID == intent.ID {
@@ -248,6 +301,9 @@ func (s HerdrIntents) ProvisionalBindings(
 ) []backend.Binding {
 	bindings := make([]backend.Binding, 0, len(s.Intents))
 	for _, intent := range s.Intents {
+		if IsHerdrServerLifecycleKind(intent.Kind) {
+			continue
+		}
 		parent, ok := herdrBindingParent(
 			intent.RuntimeParent,
 			intent.IssueNum,
@@ -428,6 +484,9 @@ func validateHerdrIntents(store HerdrIntents) error {
 	if store.SchemaVersion != HerdrIntentsSchemaVersion {
 		return fmt.Errorf("unsupported Herdr intents schema version %d", store.SchemaVersion)
 	}
+	if _, _, err := store.ServerLifecycleIntent(); err != nil {
+		return err
+	}
 	ids := map[string]bool{}
 	reservations := map[string]string{}
 	for _, intent := range store.Intents {
@@ -454,6 +513,12 @@ func validateHerdrIntents(store HerdrIntents) error {
 }
 
 func validateHerdrIntent(intent HerdrIntent) error {
+	if IsHerdrServerLifecycleKind(intent.Kind) {
+		return validateHerdrServerIntent(intent)
+	}
+	if intent.Server != nil {
+		return fmt.Errorf("herdr intent %s has an unrelated server identity", intent.ID)
+	}
 	if err := validateHerdrIntentIdentity(intent); err != nil {
 		return err
 	}
@@ -465,6 +530,56 @@ func validateHerdrIntent(intent HerdrIntent) error {
 	}
 	if err := validateHerdrIntentOwnership(intent); err != nil {
 		return fmt.Errorf("herdr intent %s: %w", intent.ID, err)
+	}
+	return nil
+}
+
+func validateHerdrServerIntent(intent HerdrIntent) error {
+	wantID, err := HerdrServerIntentID(intent.Kind)
+	if err != nil {
+		return err
+	}
+	validStatus := intent.Status == HerdrIntentPlanned ||
+		intent.Kind == HerdrIntentShutdown && intent.Status == HerdrIntentIssued
+	if intent.ID != wantID || !validStatus || intent.Server == nil {
+		return fmt.Errorf("herdr server lifecycle intent %q is incomplete", intent.ID)
+	}
+	empty := []bool{
+		intent.Parent == "", intent.RuntimeParent == "", intent.OwnerProjectRoot == "",
+		intent.IssueNum == 0, intent.TaskID == "", intent.Slug == "", intent.BranchName == "",
+		intent.FullBranchRef == "", intent.BaseBranch == "", intent.BaseSHA == "",
+		intent.ExpectedHead == "", intent.WorktreePath == "", !intent.BranchExisted,
+		!intent.BranchCreated, intent.WorkspaceLabel == "", intent.Resource == (HerdrResource{}),
+		intent.Coordinator == (HerdrResource{}), intent.Session == "", intent.SocketPath == "",
+		intent.ExpiresUnixMS == 0, intent.Launch == nil, intent.CleanupPhase == "",
+		!intent.CleanupDeleteBranch, intent.Failure == "",
+	}
+	if slices.Contains(empty, false) {
+		return fmt.Errorf("herdr server lifecycle intent %s has unrelated fields", intent.ID)
+	}
+	return validateHerdrServerIdentity(intent.Kind, *intent.Server)
+}
+
+func validateHerdrServerIdentity(kind HerdrIntentKind, identity HerdrServerIdentity) error {
+	paths := []string{
+		identity.GitCommonDir, identity.RuntimeDir, identity.SocketPath, identity.ClientSocketPath,
+		identity.BinaryPath, identity.LauncherPath,
+	}
+	for _, path := range paths {
+		if !cleanAbsolute(path) {
+			return fmt.Errorf("herdr server lifecycle identity has an invalid path")
+		}
+	}
+	required := []bool{
+		identity.Session != "", herdrOwnerToken.MatchString(identity.OwnerNonce),
+		identity.SupervisorPID > 1, herdrOwnerToken.MatchString(identity.SupervisorStartToken),
+		herdrOwnerToken.MatchString(identity.BinarySHA256), identity.BinaryVersion != "",
+		herdrOwnerToken.MatchString(identity.LauncherSHA256),
+		identity.ServerPID == 0 || identity.ServerPID > 1,
+		kind != HerdrIntentRestart || identity.ServerPID > 1,
+	}
+	if slices.Contains(required, false) {
+		return fmt.Errorf("herdr server lifecycle identity is incomplete")
 	}
 	return nil
 }
