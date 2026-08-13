@@ -493,10 +493,9 @@ func TestPreparedNudgeIssuesOnlyPromptAfterPreparation(t *testing.T) {
 	if err := prompt(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.fake.commands[preparedCommands:]; len(got) != 3 ||
-		commandKey(got[0].args) != "version" || commandKey(got[1].args) != "status" ||
-		!slices.Equal(got[2].args, []string{"agent", "prompt", target.Ref.Pane, "nudge"}) {
-		t.Fatalf("commands after final gate = %v, want revalidation then one agent prompt", got)
+	if got := h.fake.commands[preparedCommands:]; len(got) != 1 ||
+		!slices.Equal(got[0].args, []string{"agent", "prompt", target.Ref.Pane, "nudge"}) {
+		t.Fatalf("commands after final gate = %v, want one agent prompt", got)
 	}
 }
 

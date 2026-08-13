@@ -50,6 +50,12 @@ func TestRestartIntentAllowsReadsAndRejectsMutationsAndBootstrap(t *testing.T) {
 	if err := bound.Focus(target.Ref); err == nil || !strings.Contains(err.Error(), "restart is pending") {
 		t.Fatalf("Focus() under restart intent error = %v", err)
 	}
+	if _, err := h.session.PrepareNudge(context.Background(), NudgeTarget{
+		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
+		TerminalID: target.TerminalID, AgentID: target.AgentID, AgentSession: target.AgentSession,
+	}, "nudge"); err == nil || !strings.Contains(err.Error(), "restart is pending") {
+		t.Fatalf("PrepareNudge() under restart intent error = %v", err)
+	}
 	for name, mutation := range map[string]func() error{
 		"worktree remove": func() error {
 			return h.session.RemoveWorktree(context.Background(), "w2", "/repo/child")

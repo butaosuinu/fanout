@@ -250,7 +250,7 @@ func (s *OwnedSession) PrepareNudge(ctx context.Context, target NudgeTarget, lin
 	if err := validateNudgeRequest(s, line); err != nil {
 		return nil, err
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	admission, lock, err := s.backend.acquireOwnedMutation(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -259,11 +259,12 @@ func (s *OwnedSession) PrepareNudge(ctx context.Context, target NudgeTarget, lin
 		return nil, fmt.Errorf("%w: saved nudge target is incomplete or belongs to a foreign route", ErrOwnedIdentityMismatch)
 	}
 	target.AgentSession = cloneAgentSession(target.AgentSession)
-	if _, err := s.backend.probeOwned(ctx, admission); err != nil {
+	probed, err := s.backend.probeOwned(ctx, admission)
+	if err != nil {
 		return nil, err
 	}
 	return func(promptCtx context.Context) error {
-		return s.backend.runNudgePrompt(promptCtx, target, line)
+		return s.backend.runNudgePrompt(promptCtx, probed, target, line)
 	}, nil
 }
 
@@ -287,16 +288,7 @@ func validateNudgeRequest(session *OwnedSession, line string) error {
 	return nil
 }
 
-func (b *Backend) runNudgePrompt(ctx context.Context, target NudgeTarget, line string) error {
-	admission, lock, err := b.acquireOwnedMutation(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlockPrivateFile(lock)
-	probed, err := b.probeOwned(ctx, admission)
-	if err != nil {
-		return err
-	}
+func (b *Backend) runNudgePrompt(ctx context.Context, probed probeResult, target NudgeTarget, line string) error {
 	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route,
 		"agent", "prompt", target.Ref.Pane, line)
 	if err != nil {
