@@ -7,7 +7,7 @@ kanji: 観
 yomi: herdr
 ---
 
-The herdr backend runs CLI fan-outs in [herdr](https://herdr.dev/), a persistent-PTY runtime for coding agents. It is opt-in. Issue, Project, plan, label-watcher, and interactive TUI launches use a repository-scoped session owned by fanout. The no-argument TUI also supports merge, close, and cleanup for verified owned rows. The default backend stays tmux. fanout does not bundle herdr; it is AGPL-licensed and installed separately.
+The herdr backend runs CLI fan-outs in [herdr](https://herdr.dev/), a persistent-PTY runtime for coding agents. It is opt-in. Issue, Project, plan, label-watcher, and interactive TUI launches use a repository-scoped session owned by fanout. The no-argument TUI also supports merge, close, and cleanup for verified owned rows. The default backend stays tmux. fanout does not bundle herdr; install it separately.
 
 ## What v1 does
 

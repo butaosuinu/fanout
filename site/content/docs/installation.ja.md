@@ -21,7 +21,7 @@ yomi: install
 
 この 3 つは既定の tmux backend の前提です。
 opt-in の [herdr backend]({{< relref "/docs/herdr-backend" >}})では、CLI launch レーンで tmux の代わりに stable herdr 0.7.5 以上を使います。
-herdr は AGPL ライセンスで fanout には同梱されないため、別途インストールしてください。
+herdr は fanout に同梱されないため、別途インストールしてください。
 
 ## インストール
 

@@ -1306,7 +1306,7 @@ cleanup、metadata、targeted read も resource-specific generation を原子的
 
 この表は機能導入時期と実測 provenance を示すだけで、floor 未満または structural gate を通らない version の互換性を認めない。
 
-version ごとの根拠は [v0.7.0](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.0)、[v0.7.1](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.1)、[v0.7.2](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.2)、[v0.7.3](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.3)、[v0.7.4](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.4)、[v0.7.5](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.5) を参照する。
+version ごとの根拠は [v0.7.0](https://github.com/herdrdev/herdr/releases/tag/v0.7.0)、[v0.7.1](https://github.com/herdrdev/herdr/releases/tag/v0.7.1)、[v0.7.2](https://github.com/herdrdev/herdr/releases/tag/v0.7.2)、[v0.7.3](https://github.com/herdrdev/herdr/releases/tag/v0.7.3)、[v0.7.4](https://github.com/herdrdev/herdr/releases/tag/v0.7.4)、[v0.7.5](https://github.com/herdrdev/herdr/releases/tag/v0.7.5) を参照する。
 
 ## 後続 issue への契約
 
@@ -1426,8 +1426,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - [CLI reference](https://herdr.dev/docs/cli-reference/)
 - [Socket API](https://herdr.dev/docs/socket-api/)
 - [Agents](https://herdr.dev/docs/agents/)
-- [Agent automation v0.7.5](https://github.com/ogulcancelik/herdr/blob/v0.7.5/website/src/content/docs/agent-automation.mdx)
-- [v0.7.5 release](https://github.com/ogulcancelik/herdr/releases/tag/v0.7.5)
+- [Agent automation v0.7.5](https://github.com/herdrdev/herdr/blob/v0.7.5/website/src/content/docs/agent-automation.mdx)
+- [v0.7.5 release](https://github.com/herdrdev/herdr/releases/tag/v0.7.5)
 - [Configuration](https://herdr.dev/docs/configuration/)
 - [Config reference](https://herdr.dev/docs/config-reference/)
 - [Session state](https://herdr.dev/docs/session-state/)
