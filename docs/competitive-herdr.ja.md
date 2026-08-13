@@ -1,6 +1,6 @@
 # herdr 競合分析 — agent multiplexer との棲み分けと取り込み
 
-ステータス: 分析 + 提案。作成: 2026-07。改訂: 2026-07-22 — v0.7.5 の live-agent CLI、公式デモ、plugin 生態系掃引(topic `herdr-plugin` 全 289 repo)を反映。herdr 公式ドキュメント・GitHub リポジトリの調査と、fanout 実コード(`internal/infra/tmuxrun` / `internal/app/sessionview` / `cmd/fanout/msg.go`)での実現性検証に基づく。
+ステータス: 分析 + 提案。作成: 2026-07。改訂: 2026-08-14 — v0.8.0 の Apache-2.0 再ライセンスと GitHub organization 移行を反映。前回改訂 2026-07-22 は v0.7.5 の live-agent CLI、公式デモ、plugin 生態系掃引(topic `herdr-plugin` 全 289 repo)を反映。herdr 公式ドキュメント・GitHub リポジトリの調査と、fanout 実コード(`internal/infra/tmuxrun` / `internal/app/sessionview` / `cmd/fanout/msg.go`)での実現性検証に基づく。
 
 この文書は tmux backend に取り込む機能を扱う。
 herdr runtime backend wave 2 の API と制約は [実機検証](herdr-runtime-backend-spike.ja.md) を参照。
@@ -9,9 +9,10 @@ herdr runtime backend wave 2 の API と制約は [実機検証](herdr-runtime-b
 
 [herdr](https://herdr.dev/) は「agent multiplexer」— 複数のコーディングエージェントを 1 つのターミナルで走らせるための、tmux 代替の永続 PTY ランタイム。
 Rust 製シングルバイナリ(実測 14〜17MB)で、サーバー・クライアント構成をローカル Unix socket でつなぐ。
-AGPL-3.0 + 商用のデュアルライセンス。
+Apache-2.0 ライセンス。v0.8.0 で AGPL-3.0 + 商用デュアルから変更された。
 GitHub 約 1 万 stars(2026-07 時点)で、2026-06-30 の GitHub Trending では 1 位だった。
-2026-07-15 UTC に v0.7.4、2026-07-21 UTC に v0.7.5 が公開された。
+2026-07-15 UTC に v0.7.4、2026-07-21 UTC に v0.7.5、2026-08-03 UTC に v0.8.0 が公開された。
+v0.8.0 で GitHub organization が `ogulcancelik/herdr` から `herdrdev/herdr` へ移った。
 
 中核は 3 つ。
 
@@ -133,9 +134,10 @@ A → B の順で入れ、C は並行。#59 / #106 は A / B の上に乗る(#10
 
 ## 参考
 
-- https://herdr.dev/ / https://github.com/ogulcancelik/herdr
-- v0.7.4 release / sidebar config: https://github.com/ogulcancelik/herdr/releases/tag/v0.7.4 / https://herdr.dev/docs/config-reference/
-- v0.7.5 release / agent automation: https://github.com/ogulcancelik/herdr/releases/tag/v0.7.5 / https://herdr.dev/docs/agent-automation/
+- https://herdr.dev/ / https://github.com/herdrdev/herdr
+- v0.7.4 release / sidebar config: https://github.com/herdrdev/herdr/releases/tag/v0.7.4 / https://herdr.dev/docs/config-reference/
+- v0.7.5 release / agent automation: https://github.com/herdrdev/herdr/releases/tag/v0.7.5 / https://herdr.dev/docs/agent-automation/
+- v0.8.0 release: https://github.com/herdrdev/herdr/releases/tag/v0.8.0 — linked worktree workspace の label 保持修正(fanout の identity fence が依存する)、Apache-2.0 再ライセンス、organization 移行
 - v0.7.5 発表スレッド(2026-07-21): https://x.com/herdrdev/status/2079634095047413886 — agent CLI 紹介とデモ動画は同スレッド .../2079634098197348518
 - plugin marketplace: https://herdr.dev/plugins/ — GitHub topic `herdr-plugin` の自動収集
 - Socket API: https://herdr.dev/docs/socket-api/ — `pane.*` / `agent.*` / `events.subscribe/wait` / worktree 操作
