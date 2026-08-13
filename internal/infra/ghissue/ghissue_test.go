@@ -1,6 +1,7 @@
 package ghissue
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -30,6 +31,74 @@ func TestPRRefDisplayState(t *testing.T) {
 				t.Fatalf("DisplayState() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNormalizeMergeable(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "conflicting", in: "CONFLICTING", want: "CONFLICTING"},
+		{name: "mergeable", in: "MERGEABLE", want: "MERGEABLE"},
+		// merged/closed PRs and the window while GitHub recomputes
+		{name: "unknown collapses to empty", in: "UNKNOWN", want: ""},
+		{name: "empty stays empty", in: "", want: ""},
+		{name: "lowercases and trims", in: "  conflicting ", want: "CONFLICTING"},
+		{name: "unrecognized enum collapses to empty", in: "SOMETHING_NEW", want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeMergeable(tt.in); got != tt.want {
+				t.Fatalf("normalizeMergeable(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPRRefHasConflict guarantees an unset Mergeable never reads as "no
+// conflict": every merged PR reports UNKNOWN, so treating "" as clean would
+// claim knowledge the snapshot does not have.
+func TestPRRefHasConflict(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		pr   PRRef
+		want bool
+	}{
+		{name: "conflicting", pr: PRRef{Mergeable: "CONFLICTING"}, want: true},
+		{name: "mergeable", pr: PRRef{Mergeable: "MERGEABLE"}, want: false},
+		{name: "unset is not a conflict", pr: PRRef{}, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.pr.HasConflict(); got != tt.want {
+				t.Fatalf("HasConflict() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPRRefMarshalOmitsUnsetReviewSignals pins the wire shape the dashboard SPA
+// reads: an unknown mergeable state and a zero comment count disappear rather
+// than serializing as "" / 0, so "absent" is the single signal for "nothing to
+// show" on both sides.
+func TestPRRefMarshalOmitsUnsetReviewSignals(t *testing.T) {
+	out, err := json.Marshal(PRRef{Number: 7, State: "MERGED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for _, field := range []string{`"mergeable"`, `"comments"`} {
+		if strings.Contains(got, field) {
+			t.Fatalf("PRRef marshal = %s, want %s omitted when unset", got, field)
+		}
+	}
+
+	out, err = json.Marshal(PRRef{Number: 7, State: "OPEN", Mergeable: "CONFLICTING", Comments: 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(out); !strings.Contains(got, `"mergeable":"CONFLICTING"`) || !strings.Contains(got, `"comments":12`) {
+		t.Fatalf("PRRef marshal = %s, want mergeable and comments present", got)
 	}
 }
 
@@ -772,6 +841,154 @@ func TestPRsForBranchReturnsEmptyList(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("PRsForBranch() = %#v, want empty", got)
+	}
+}
+
+// TestPRsForBranchDetailMapsGraphQLNodes pins the branch lookup the dashboard
+// uses. It exists next to PRsForBranch rather than replacing it because
+// `gh pr list --json` has no totalCommentsCount/mergeable field, and the CLI
+// merge gates plus the bats gh shim still dispatch on the list argv.
+func TestPRsForBranchDetailMapsGraphQLNodes(t *testing.T) {
+	mergedAt := "2026-06-13T01:02:03Z"
+	argsPath := installFakeGH(t, `[
+  {
+    "number": 10,
+    "state": "MERGED",
+    "mergedAt": "2026-06-13T01:02:03Z",
+    "reviewDecision": "APPROVED",
+    "mergeable": "UNKNOWN",
+    "totalCommentsCount": 3,
+    "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]}
+  },
+  {
+    "number": 11,
+    "state": "OPEN",
+    "mergedAt": null,
+    "isDraft": true,
+    "mergeable": "CONFLICTING",
+    "totalCommentsCount": 29,
+    "commits": {"nodes": []}
+  }
+]`)
+
+	got, err := (Runner{}).PRsForBranchDetail("owner", "repo", "fanout/taskid-state-pr-213")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []PRRef{
+		{
+			Number:         10,
+			State:          "MERGED",
+			MergedAt:       &mergedAt,
+			ReviewDecision: "APPROVED",
+			CIStatus:       "pass",
+			// merged PRs always report UNKNOWN, which normalizes away
+			Comments: 3,
+		},
+		{
+			Number:    11,
+			State:     "OPEN",
+			IsDraft:   true,
+			Mergeable: "CONFLICTING",
+			Comments:  29,
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("PRsForBranchDetail() = %#v, want %#v", got, want)
+	}
+
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(data)
+	// -f everywhere, never -F: -F coerces types, so a repo named "2048" or a
+	// branch named "123" would be sent as an Int and fail String!.
+	if strings.Contains(args, "\n-F\n") {
+		t.Fatalf("PRsForBranchDetail() used -F for a String! variable:\n%s", args)
+	}
+	for _, want := range []string{
+		"api\ngraphql",
+		"-f\nowner=owner",
+		"-f\nrepo=repo",
+		"-f\nbranch=fanout/taskid-state-pr-213",
+		".data.repository.pullRequests.nodes // []",
+		"states: [OPEN, CLOSED, MERGED]",
+		"orderBy: {field: CREATED_AT, direction: DESC}",
+		// `gh pr list` の既定 30 件と一致させる。広げると PrimaryPR の
+		// 「MERGED 優先」と噛み合って古い merged PR が primary を奪う。
+		"first: 30",
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("PRsForBranchDetail() args missing %q:\n%s", want, args)
+		}
+	}
+}
+
+func TestPRsForBranchDetailReturnsEmptyList(t *testing.T) {
+	installFakeGH(t, `[]`)
+
+	got, err := (Runner{}).PRsForBranchDetail("owner", "repo", "fanout/no-prs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("PRsForBranchDetail() = %#v, want empty", got)
+	}
+}
+
+// TestPRQueriesShareReviewSignalFields guarantees every query that yields a
+// PRRef asks for the same fields. The dashboard reaches PRs through three
+// paths, and a field present on only some of them shows up as a row whose
+// conflict/comment badges vanish depending on how the row was recorded.
+func TestPRQueriesShareReviewSignalFields(t *testing.T) {
+	// Each entry must be a query actually sent to gh, never prRefNodeFields
+	// itself — asserting the shared constant against itself is true by
+	// construction and guards nothing.
+	queries := map[string]string{
+		"issue batch":     issueDetailsQuery([]int{7}, true),
+		"issue pr paging": issuePRsPageQuery,
+		"branch":          branchPRsQuery,
+	}
+	for name, query := range queries {
+		t.Run(name, func(t *testing.T) {
+			for _, field := range []string{"reviewDecision", "mergeable", "totalCommentsCount"} {
+				if !strings.Contains(query, field) {
+					t.Fatalf("%s query omits %q:\n%s", name, field, query)
+				}
+			}
+		})
+	}
+}
+
+// TestIssueDetailsBatchStaysOneCallWithReviewSignals pins the property that
+// makes this feature free: mergeable/totalCommentsCount ride the existing
+// batched query, so a poll costs the same number of gh processes as before.
+func TestIssueDetailsBatchStaysOneCallWithReviewSignals(t *testing.T) {
+	// installFakeGHScript, not installFakeGH: the latter's shim truncates the
+	// args file with `>`, so a per-issue fan-out would still leave one line and
+	// the call count below could never fail.
+	argsPath := installFakeGHScript(t, `
+printf '%s\n' "$*" >> "$GH_FAKE_ARGS"
+printf '%s' '{"data":{"repository":{"issue_7":{"number":7,"title":"seven","state":"open","body":"b","labels":{"nodes":[]},"closedByPullRequestsReferences":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":70,"state":"OPEN","mergedAt":null,"mergeable":"CONFLICTING","totalCommentsCount":4,"commits":{"nodes":[]}}]}}}}}'
+`)
+
+	got, err := (Runner{}).IssuesSnapshotWithPRs("owner", "repo", []int{7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prs := got[7].PRs
+	if len(prs) != 1 || prs[0].Mergeable != "CONFLICTING" || prs[0].Comments != 4 {
+		t.Fatalf("IssuesSnapshotWithPRs()[7].PRs = %#v, want one conflicting PR with 4 comments", prs)
+	}
+
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls := strings.Count(string(data), "graphql"); calls != 1 {
+		t.Fatalf("IssuesSnapshotWithPRs() made %d graphql calls, want 1:\n%s", calls, data)
 	}
 }
 

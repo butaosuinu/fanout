@@ -316,8 +316,11 @@ func (g GH) IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error) {
 }
 
 // BranchPRs fetches PR refs by head branch for branch-owning issue-less rows.
+// It takes the GraphQL path rather than PRsForBranch so these rows carry the
+// same mergeable/comment detail the issue-backed rows get; the CLI merge gates
+// stay on the cheaper `gh pr list` path.
 func (g GH) BranchPRs(branch string) ([]ghissue.PRRef, error) {
-	return g.runner.PRsForBranch(branch)
+	return g.runner.PRsForBranchDetail(g.owner, g.repo, branch)
 }
 
 // Waves fetches one parent's wave/blocker graph: the resolved child set plus

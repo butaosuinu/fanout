@@ -185,6 +185,25 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 埋め込みの SPA は、フィルタと詳細ドロワー、直近出力の live peek でライブの Session 一覧を見せます。
 Prompt Session の記録済み branch に PR があると、ダッシュボードに PR リンクと CI 状態も表示します。
 
+`pr` 列にはその行の PR のレビュー状態が出ます。語彙は TUI と同じで、`merged` /
+`closed` / `draft` / `approved` / `changes-requested` / `review-required` / `open`
+です。隣には base branch と競合している PR を示す `conflict` タグと、会話コメントと
+inline レビューコメントを合算したコメント件数が並びます。詳細ドロワーでは、primary
+PR だけでなくその行のすべての PR について同じ 3 つが出ます。
+conflict タグは GitHub が競合を報告したときだけ出ます。merge 済み・close 済みの PR は
+マージ可能性を持たず、base に push した直後の再計算中も同じく持ちません。
+
+列に出ている語はそのままフィルタに打てます。`pr:` はライフサイクル状態（`open` /
+`closed` / `merged`）とピルのラベル（`approved` / `changes-requested` /
+`review-required` / `draft`）の両方を取り、`conflict` は自由語で当たります。
+
+`review:` は別の軸です。レビュー状態とライフサイクル状態は問いが違うためです。
+`pr:open` は PR がライフサイクルのどこにいるかを、`review:approved` はレビューを
+通ったかを訊きます。approved な PR は、ピルが `merged` に潰れたあとも
+`review:approved` に当たります。`review:` が取る値は `approved` /
+`changes-requested` / `review-required` / `none` です。どちらもダッシュボードの
+フィルタで、TUI は別のフィルタ文法を持ち `review:` は受け付けません。
+
 Session の各行には runtime backend と pane の identity が出て、runtime の状態は `live` / `stale` / `unknown` / `unsupported` / `-` で示されます。フィルタは `backend:tmux` / `backend:herdr` を受け付けます。
 [herdr backend]({{< relref "/docs/herdr-backend" >}}) の行では、保存済みの行が fanout-owned session の pane と一致する場合だけ live peek が内容を返します。
 foreign または stale な行は 404 を返し、ダッシュボードは GET 専用のままです。

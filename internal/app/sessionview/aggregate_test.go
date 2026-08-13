@@ -420,7 +420,7 @@ func TestBuildAddsDerivedDisplayFilterAndSortFields(t *testing.T) {
 		LoadState: storeOf(state.Pane{Parent: "100", IssueNum: 101, Slug: "child", DisplayName: "Child work", PaneID: "%1", Agent: "codex", BranchName: "feat/child", WorktreePath: "/repo/.fanout/worktrees/child"}),
 		ListLive:  livePanesWith(map[string]LivePaneInfo{"%1": {Path: "/repo/.fanout/worktrees/child", Title: "child title", AgentState: "running"}}),
 		IssuePRs: func(num int) (string, []ghissue.PRRef, error) {
-			return "OPEN", []ghissue.PRRef{{Number: 501, State: "OPEN", CIStatus: "fail"}}, nil
+			return "OPEN", []ghissue.PRRef{{Number: 501, State: "OPEN", CIStatus: "fail", ReviewDecision: "CHANGES_REQUESTED"}}, nil
 		},
 		Waves: wavesOf(map[int]WaveInfo{
 			101: {Wave: 2, WaveLabel: "wave2", Blocked: true, Blockers: []blockers.Status{{Num: 99, State: "OPEN"}}},
@@ -432,7 +432,7 @@ func TestBuildAddsDerivedDisplayFilterAndSortFields(t *testing.T) {
 
 	pv := Build("o/n", "/repo", c).Sessions[0].Panes[0]
 	d := pv.Derived
-	if d.Name != "Child work" || d.PRSummary != "#501 open" || d.CI != "fail" {
+	if d.Name != "Child work" || d.PRSummary != "#501 changes-requested" || d.CI != "fail" {
 		t.Fatalf("derived display = %+v", d)
 	}
 	if d.WaveBadge != "W2 blocked" || d.WaveText != "wave2 W2 blocked" || d.BlockersText != "OPEN #99" {
@@ -444,11 +444,73 @@ func TestBuildAddsDerivedDisplayFilterAndSortFields(t *testing.T) {
 	if d.FilterValues["backend"] != "tmux" || d.FilterValues["run"] != "running" || d.FilterValues["dirty"] != "yes" || d.FilterValues["pr"] != "open" {
 		t.Fatalf("derived filter values = %+v", d.FilterValues)
 	}
+	// pr: はライフサイクル状態、review: はレビュー状態 — 直交する 2 軸
+	if d.FilterValues["review"] != "changes-requested" {
+		t.Fatalf("derived review filter value = %q, want %q", d.FilterValues["review"], "changes-requested")
+	}
 	if !strings.Contains(d.FilterText, "tmux") || !strings.Contains(d.FilterText, "child title") || !strings.Contains(d.FilterText, "+12/-3") {
 		t.Fatalf("derived filter text = %q", d.FilterText)
 	}
 	if d.WorktreeRelative != ".fanout/worktrees/child" || !d.CanFocus || !d.CanPeek {
 		t.Fatalf("derived path/focus = %+v", d)
+	}
+}
+
+// TestPRBadgeFilterText pins that every PR badge the row renders is reachable
+// by free-text search, like the other visible tags. The merged+APPROVED case is
+// the one that matters: the pill collapses to "merged", so "approved" is only
+// visible as a badge and would otherwise be unsearchable.
+func TestPRBadgeFilterText(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		prs  []ghissue.PRRef
+		want string
+	}{
+		{name: "conflicting primary", prs: []ghissue.PRRef{{Number: 1, State: "OPEN", Mergeable: "CONFLICTING"}}, want: "conflict"},
+		{name: "mergeable primary", prs: []ghissue.PRRef{{Number: 1, State: "OPEN", Mergeable: "MERGEABLE"}}, want: ""},
+		{name: "merged approved keeps the decision searchable", prs: []ghissue.PRRef{{Number: 1, State: "MERGED", ReviewDecision: "APPROVED"}}, want: "approved"},
+		{name: "hyphenates changes requested", prs: []ghissue.PRRef{{Number: 1, State: "CLOSED", ReviewDecision: "CHANGES_REQUESTED"}}, want: "changes-requested"},
+		{name: "decision and conflict together", prs: []ghissue.PRRef{{Number: 1, State: "OPEN", ReviewDecision: "APPROVED", Mergeable: "CONFLICTING"}}, want: "approved conflict"},
+		// "none" must not reach the haystack — it would match every row
+		{name: "no decision and no conflict", prs: []ghissue.PRRef{{Number: 1, State: "MERGED"}}, want: ""},
+		{name: "no prs", prs: nil, want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := prBadgeFilterText(tt.prs); got != tt.want {
+				t.Fatalf("prBadgeFilterText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestReviewFilterValue pins that `review:` stays orthogonal to `pr:`: it
+// reports the decision even after the PR merges, where DisplayState would have
+// collapsed to "merged".
+func TestReviewFilterValue(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		prs  []ghissue.PRRef
+		want string
+	}{
+		{name: "no prs", prs: nil, want: "none"},
+		{name: "approved", prs: []ghissue.PRRef{{Number: 1, State: "OPEN", ReviewDecision: "APPROVED"}}, want: "approved"},
+		{name: "hyphenates changes requested", prs: []ghissue.PRRef{{Number: 1, State: "OPEN", ReviewDecision: "CHANGES_REQUESTED"}}, want: "changes-requested"},
+		{name: "empty decision is none", prs: []ghissue.PRRef{{Number: 1, State: "OPEN"}}, want: "none"},
+		{name: "merged pr keeps its decision", prs: []ghissue.PRRef{{Number: 1, State: "MERGED", ReviewDecision: "APPROVED"}}, want: "approved"},
+		{
+			name: "reads the primary pr, not the first",
+			prs: []ghissue.PRRef{
+				{Number: 1, State: "OPEN", ReviewDecision: "REVIEW_REQUIRED"},
+				{Number: 2, State: "MERGED", ReviewDecision: "APPROVED"},
+			},
+			want: "approved",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := reviewFilterValue(tt.prs); got != tt.want {
+				t.Fatalf("reviewFilterValue() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

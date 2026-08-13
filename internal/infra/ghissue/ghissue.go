@@ -46,6 +46,15 @@ type PRRef struct {
 	IsDraft        bool    `json:"isDraft,omitempty"`
 	ReviewDecision string  `json:"reviewDecision,omitempty"`
 	CIStatus       string  `json:"ci,omitempty"`
+	// Mergeable is GitHub's MergeableState with UNKNOWN normalized away:
+	// "CONFLICTING", "MERGEABLE", or "". MERGED and CLOSED PRs always report
+	// UNKNOWN, and GitHub recomputes lazily after a base push, so "" means
+	// "not known", never "no conflict".
+	Mergeable string `json:"mergeable,omitempty"`
+	// Comments is PullRequest.totalCommentsCount: conversation comments plus
+	// inline review comments. Not comments.totalCount, which omits the inline
+	// ones. Only the GraphQL paths set it; the `gh pr list` path leaves it 0.
+	Comments int `json:"comments,omitempty"`
 }
 
 func (pr PRRef) DisplayState() string {
@@ -71,6 +80,29 @@ func (pr PRRef) DisplayState() string {
 		return ""
 	}
 	return strings.ToLower(state)
+}
+
+// HasConflict reports whether GitHub says this PR conflicts with its base.
+// Only CONFLICTING is actionable: an empty Mergeable means "not known" (every
+// merged/closed PR, plus the window while GitHub recomputes after a base push),
+// not "clean".
+func (pr PRRef) HasConflict() bool {
+	return pr.Mergeable == "CONFLICTING"
+}
+
+// normalizeMergeable keeps the two states worth showing and maps everything
+// else — UNKNOWN, and any state GitHub adds later — to "", so the wire carries
+// only values a badge can act on. It does not remove churn: GitHub recomputes
+// mergeability asynchronously, so an open PR can still travel
+// MERGEABLE -> "" -> MERGEABLE across polls.
+func normalizeMergeable(state string) string {
+	switch strings.ToUpper(strings.TrimSpace(state)) {
+	case "CONFLICTING":
+		return "CONFLICTING"
+	case "MERGEABLE":
+		return "MERGEABLE"
+	}
+	return ""
 }
 
 // PrimaryPR picks the ref that best represents an issue's closing PRs: the
@@ -539,6 +571,60 @@ func uniquePositiveIssueNumbers(nums []int) ([]int, error) {
 	return unique, inputErr
 }
 
+// prRefNodeFields is the PullRequest selection shared by every query that
+// yields a PRRef: the aliased issue batch, its >100-refs pagination fallback,
+// and the head-branch lookup. All three unmarshal into prRefGraphQL, so they
+// have to ask for the same fields — keeping one copy is what makes that true
+// by construction instead of by review.
+const prRefNodeFields = `
+  number
+  state
+  mergedAt
+  isDraft
+  reviewDecision
+  mergeable
+  totalCommentsCount
+  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+`
+
+// issuePRsPageQuery is the fallback for issues with more than 100 closing PRs,
+// walking closedByPullRequestsReferences by cursor. It lives here rather than
+// inside IssueSnapshotWithPRs so the field-parity test can read it: the three
+// PR queries have to stay in sync, and a guard that cannot see one of them
+// does not guard it.
+const issuePRsPageQuery = `
+    query($owner: String!, $repo: String!, $num: Int!, $after: String) {
+      repository(owner: $owner, name: $repo) {
+        issue(number: $num) {
+          state
+          body
+          closedByPullRequestsReferences(first: 100, after: $after) {
+            pageInfo { hasNextPage endCursor }
+            nodes {` + prRefNodeFields + `}
+          }
+        }
+      }
+    }
+  `
+
+// branchPRsQuery looks PRs up by head branch. states + orderBy + first
+// reproduce `gh pr list --state all`, whose default order is newest-first and
+// whose default limit is 30. All three are part of the contract, the limit
+// included: PrimaryPR picks "first MERGED, else first", so widening the window
+// is not a superset — it lets an older merged PR outrank the current open one
+// on a branch with more than 30 PRs, which would flip the row's state, its CI,
+// HasMergedPR, and the session rollup.
+const branchPRsQuery = `
+    query($owner: String!, $repo: String!, $branch: String!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequests(headRefName: $branch, states: [OPEN, CLOSED, MERGED],
+                     first: 30, orderBy: {field: CREATED_AT, direction: DESC}) {
+          nodes {` + prRefNodeFields + `}
+        }
+      }
+    }
+  `
+
 func issueDetailsQuery(nums []int, withPRs bool) string {
 	issueFields := ` {
       number
@@ -550,20 +636,7 @@ func issueDetailsQuery(nums []int, withPRs bool) string {
 		issueFields += `
       closedByPullRequestsReferences(first: 100) {
         pageInfo { hasNextPage endCursor }
-        nodes {
-          number
-          state
-          mergedAt
-          isDraft
-          reviewDecision
-          commits(last: 1) {
-            nodes {
-              commit {
-                statusCheckRollup { state }
-              }
-            }
-          }
-        }
+        nodes {` + prRefNodeFields + `}
       }`
 	}
 	issueFields += `
@@ -683,35 +756,6 @@ func issueAliasFromPath(path []json.RawMessage) string {
 // IssueSnapshotWithPRs returns an issue's state/body plus all closed-by
 // PR refs, following closedByPullRequestsReferences pagination.
 func (r Runner) IssueSnapshotWithPRs(owner, repo string, num int) (IssueSnapshot, error) {
-	const query = `
-    query($owner: String!, $repo: String!, $num: Int!, $after: String) {
-      repository(owner: $owner, name: $repo) {
-        issue(number: $num) {
-          state
-          body
-          closedByPullRequestsReferences(first: 100, after: $after) {
-            pageInfo { hasNextPage endCursor }
-            nodes {
-              number
-              state
-              mergedAt
-              isDraft
-              reviewDecision
-              commits(last: 1) {
-                nodes {
-                  commit {
-                    statusCheckRollup {
-                      state
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  `
 	snapshot := IssueSnapshot{Number: num, PRs: []PRRef{}}
 	cursor := ""
 	for {
@@ -720,7 +764,7 @@ func (r Runner) IssueSnapshotWithPRs(owner, repo string, num int) (IssueSnapshot
 			"-F", "owner=" + owner,
 			"-F", "repo=" + repo,
 			"-F", "num=" + strconv.Itoa(num),
-			"-f", "query=" + query,
+			"-f", "query=" + issuePRsPageQuery,
 			"--jq", ".data.repository.issue // empty",
 		}
 		if cursor != "" {
@@ -774,6 +818,37 @@ func (r Runner) IssueWithPRs(owner, repo string, num int) (state string, prs []P
 	return snapshot.State, snapshot.PRs, nil
 }
 
+// PRsForBranchDetail returns head-branch PR refs via GraphQL, with the same
+// per-PR detail the issue paths collect. It exists alongside PRsForBranch
+// because `gh pr list --json` has no totalCommentsCount: its `comments` field
+// is the conversation array, which omits inline review comments. The CLI merge
+// gates only need merged-ness and stay on the cheaper list path.
+func (r Runner) PRsForBranchDetail(owner, repo, branch string) ([]PRRef, error) {
+	// -f, not -F, for all three: -F type-coerces, so an owner/repo/branch that
+	// parses as JSON ("2048", "null") would be sent as a non-string and fail
+	// the String! signature.
+	out, err := r.gh(
+		"api", "graphql",
+		"-f", "owner="+owner,
+		"-f", "repo="+repo,
+		"-f", "branch="+branch,
+		"-f", "query="+branchPRsQuery,
+		"--jq", ".data.repository.pullRequests.nodes // []",
+	)
+	if err != nil {
+		return nil, err
+	}
+	var nodes []prRefGraphQL
+	if err := json.Unmarshal(out, &nodes); err != nil {
+		return nil, fmt.Errorf("parse gh api graphql prs for branch %q: %w", branch, err)
+	}
+	prs := make([]PRRef, 0, len(nodes))
+	for _, pr := range nodes {
+		prs = append(prs, pr.ref())
+	}
+	return prs, nil
+}
+
 func (r Runner) PRsForBranch(branch string) ([]PRRef, error) {
 	out, err := r.gh(
 		"pr", "list",
@@ -796,12 +871,14 @@ func (r Runner) PRsForBranch(branch string) ([]PRRef, error) {
 }
 
 type prRefGraphQL struct {
-	Number         int     `json:"number"`
-	State          string  `json:"state"`
-	MergedAt       *string `json:"mergedAt"`
-	IsDraft        bool    `json:"isDraft"`
-	ReviewDecision string  `json:"reviewDecision"`
-	Commits        struct {
+	Number             int     `json:"number"`
+	State              string  `json:"state"`
+	MergedAt           *string `json:"mergedAt"`
+	IsDraft            bool    `json:"isDraft"`
+	ReviewDecision     string  `json:"reviewDecision"`
+	Mergeable          string  `json:"mergeable"`
+	TotalCommentsCount int     `json:"totalCommentsCount"`
+	Commits            struct {
 		Nodes []struct {
 			Commit struct {
 				StatusCheckRollup *struct {
@@ -829,6 +906,8 @@ func (pr prRefGraphQL) ref() PRRef {
 		IsDraft:        pr.IsDraft,
 		ReviewDecision: pr.ReviewDecision,
 		CIStatus:       normalizeCIStatus(pr.statusCheckRollupState()),
+		Mergeable:      normalizeMergeable(pr.Mergeable),
+		Comments:       pr.TotalCommentsCount,
 	}
 }
 

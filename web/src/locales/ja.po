@@ -73,6 +73,10 @@ msgstr "コンパクト表示"
 msgid "サイズ上限超過のため patch なし"
 msgstr "サイズ上限超過のため patch なし"
 
+#: src/features/filter/FilterBar.tsx
+msgid "PR のレビュー状態で絞り込み"
+msgstr "PR のレビュー状態で絞り込み"
+
 #: src/features/diff/DiffToolbar.tsx
 msgid "縦積み"
 msgstr "縦積み"
@@ -153,6 +157,10 @@ msgstr "提案中のプラン"
 #: src/features/filter/FilterBar.tsx
 msgid "agent 実行状態で絞り込み"
 msgstr "agent 実行状態で絞り込み"
+
+#: src/features/sessions/badges.tsx
+msgid "コメント {count} 件(inline レビューコメントを含む)"
+msgstr "コメント {count} 件(inline レビューコメントを含む)"
 
 #: src/app/App.tsx
 msgid "ページを再読み込み"
@@ -265,6 +273,10 @@ msgstr "再取得"
 #: src/features/diff/diff.ts
 msgid "レビュー対象が patch に揃っていません — patch は不完全です"
 msgstr "レビュー対象が patch に揃っていません — patch は不完全です"
+
+#: src/features/sessions/badges.tsx
+msgid "base branch と競合しています"
+msgstr "base branch と競合しています"
 
 #: src/app/App.tsx
 msgid "filter — 自由語 or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"

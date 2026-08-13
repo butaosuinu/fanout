@@ -21,8 +21,17 @@ import {
   rowKey,
 } from "./pane";
 import { COLS, type SortDir } from "./sort";
-import type { PaneView, Rollup } from "../../transport/types";
-import { AgentStateTag, DirtyTag, isKnownAgentState, IssueStateTag, PrPill } from "./badges";
+import type { PaneView, PRRef, Rollup } from "../../transport/types";
+import {
+  AgentStateTag,
+  DirtyTag,
+  isKnownAgentState,
+  IssueStateTag,
+  PrCommentsTag,
+  PrConflictTag,
+  PrPill,
+  PrReviewTag,
+} from "./badges";
 import { GhLink, Tag } from "../../ui/Tag";
 
 function BlockersCell({ pane }: { pane: PaneView }) {
@@ -38,6 +47,23 @@ function CiCell({ ci }: { ci: string }) {
   if (ci === "fail") return <Tag cls="t-err">fail</Tag>;
   if (ci === "pending") return <Tag cls="t-warn">pending</Tag>;
   return <span className="muted">—</span>;
+}
+
+/* pr 列は primary PR 1 件ぶんの信号をまとめる: 状態ピル + レビュー状態 + conflict +
+ * コメント件数。各タグは該当しなければ null を返すので、ここに条件分岐は要らない。
+ * PrReviewTag はピルが decision を覆い隠すとき(merged / closed / draft)だけ出る
+ * ので、重複せずに approved の有無が一覧からも消えない。タグはリンクの外に置く —
+ * 中に入れるとリンクの accessible name に混ざる。 */
+function PrCell({ repo, pr }: { repo: string; pr: PRRef | null }) {
+  if (!pr) return <span className="muted">—</span>;
+  return (
+    <span className="pr-cell">
+      <PrPill repo={repo} pr={pr} />
+      <PrReviewTag pr={pr} />
+      <PrConflictTag pr={pr} />
+      <PrCommentsTag pr={pr} />
+    </span>
+  );
 }
 
 /* diff 導線の accessible name。行を指す情報を重複なく並べ、最後に統計を置く。
@@ -185,8 +211,8 @@ function PaneRow({
       <td>
         <IssueStateTag state={pane.issueState} />
       </td>
-      <td>
-        <PrPill repo={repo} pr={prPrimary(pane.prs)} />
+      <td className="c-pr">
+        <PrCell repo={repo} pr={prPrimary(pane.prs)} />
       </td>
     </tr>
   );

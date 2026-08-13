@@ -227,7 +227,7 @@ CLI flag は常に環境変数や設定ファイルのレイヤより優先さ�
 
 `fanout <parent> --status` は読み取り専用です。`.fanout/state.json`（または `FANOUT_STATE_PATH`）からその parent の記録済み子を列挙し、各子について `gh api graphql` で issue state と closed-by PR の merge/review/CI 状態を取得して、既定では JSON 1 ドキュメントを stdout に出力します。
 
-JSON ドキュメントは `parent`、`children[]`（各子は `num` / `state` / `backend` と `pane_id`（空なら省略）/ `prs[]`（`number` / `state` / `mergedAt` / `reviewDecision` / `ci`）/ `has_merged_pr`）、`summary`（`total` / `merged` / `pending` / `blocked` / `all_merged`）を持ちます。
+JSON ドキュメントは `parent`、`children[]`（各子は `num` / `state` / `backend` と `pane_id`（空なら省略）/ `prs[]`（`number` / `state` / `mergedAt` / `reviewDecision` / `ci`、GitHub が報告した場合は `mergeable` と `comments` も）/ `has_merged_pr`）、`summary`（`total` / `merged` / `pending` / `blocked` / `all_merged`）を持ちます。
 
 - `--format <json|table>`（出力形式。既定: `json`）。table 形式は正規化した PR 状態（`open`、`draft`、`review-required`、`approved`、`changes-requested`、`merged`、`closed`）、CI、差分バー、変更ファイル数、Conventional-Commit 種別、PR リンクを追加する。
 - `--post-dashboard`（親 issue に marker 付き rollup コメントを 1 つ upsert する）。各子の PR リンク、PR 状態、CI、差分規模、Conventional-Commit 種別、TL;DR、Review effort score を機械可読な PR データから集約する。`--status` 系で唯一 GitHub に書き込む option。

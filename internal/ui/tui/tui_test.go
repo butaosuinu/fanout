@@ -276,7 +276,7 @@ func TestLoadIssueStatusesFetchesTaskBranchPRs(t *testing.T) {
 	  "mergedAt":"2026-06-13T00:00:00Z",
 	  "isDraft":false,
 	  "reviewDecision":"APPROVED",
-	  "statusCheckRollup":{"state":"SUCCESS"}
+	  "commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}
 	}]`)
 
 	loader := newIssueStatusLoader(time.Minute)
@@ -304,7 +304,7 @@ func TestLoadIssueStatusesFetchesTaskBranchPRs(t *testing.T) {
 	if got := strings.Count(string(args), "repo view --json nameWithOwner -q .nameWithOwner"); got != 1 {
 		t.Fatalf("fake gh repo view calls = %d, want 1:\n%s", got, args)
 	}
-	if got := strings.Count(string(args), "pr list --head fanout/task-a --state all"); got != 2 {
+	if got := strings.Count(string(args), "-f branch=fanout/task-a"); got != 2 {
 		t.Fatalf("fake gh branch PR calls = %d, want 2:\n%s", got, args)
 	}
 }
@@ -3991,7 +3991,11 @@ func (f *fakeLifecycleRunner) CleanupPlan(opts lifecycle.Options, parent string,
 	return f.code
 }
 
-func installTUIFakeGH(t *testing.T, prListOutput string) string {
+// installTUIFakeGH serves the two gh calls a branch-owning row needs: the repo
+// resolve and the head-branch PR lookup. branchPRsOutput is the post-jq node
+// array of ghissue's GraphQL branch query (sessionview.GH.BranchPRs takes that
+// path so these rows carry mergeable/comment detail), not `gh pr list` JSON.
+func installTUIFakeGH(t *testing.T, branchPRsOutput string) string {
 	t.Helper()
 	dir := t.TempDir()
 	argsPath := filepath.Join(dir, "args")
@@ -4003,7 +4007,7 @@ if [[ "$1 $2" == "repo view" ]]; then
   printf 'o/n'
   exit 0
 fi
-if [[ "$1 $2" == "pr list" ]]; then
+if [[ "$1 $2" == "api graphql" && "$*" == *"branch="* ]]; then
   printf '%s' "$GH_FAKE_PR_LIST"
   exit 0
 fi
@@ -4014,7 +4018,7 @@ exit 1
 		t.Fatal(err)
 	}
 	t.Setenv("GH_FAKE_ARGS", argsPath)
-	t.Setenv("GH_FAKE_PR_LIST", prListOutput)
+	t.Setenv("GH_FAKE_PR_LIST", branchPRsOutput)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return argsPath
 }

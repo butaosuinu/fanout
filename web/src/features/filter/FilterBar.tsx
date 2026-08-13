@@ -80,6 +80,16 @@ const STATIC_DROPDOWNS: readonly {
       ["none", "none"],
     ],
   },
+  {
+    key: "review",
+    ariaLabel: msg`PR のレビュー状態で絞り込み`,
+    options: [
+      ["approved", "approved"],
+      ["changes-requested", "changes-requested"],
+      ["review-required", "review-required"],
+      ["none", "none"],
+    ],
+  },
 ];
 
 /* チップの除去ラベル。t マクロを使う — <Trans> は {変数} 前後の空白を落とすため。 */

@@ -122,6 +122,12 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 The server binds only to `127.0.0.1` and exposes GET-only endpoints, generating a random token each start and embedding it in the URL (drop it with `--no-token` on a single-user machine). The embedded SPA shows the live Session list with a filter, a detail drawer, and a live peek of recent output.
 The dashboard also shows the PR link and CI status for a Prompt Session when a PR exists for its recorded branch.
 
+The `pr` column carries the review state of that row's PR, using the same vocabulary as the TUI: `merged`, `closed`, `draft`, `approved`, `changes-requested`, `review-required`, `open`. Next to it, a `conflict` tag marks a PR that conflicts with its base branch, and a comment count covers conversation comments plus inline review comments. The detail drawer repeats all three for every PR on the row, not just the primary one. A conflict tag only appears when GitHub reports one: merged and closed PRs never carry mergeability, and neither does an open PR in the seconds after a base push while GitHub recomputes.
+
+Anything the column shows can be typed back into the filter. `pr:` takes both the lifecycle state (`open`, `closed`, `merged`) and the label on the pill (`approved`, `changes-requested`, `review-required`, `draft`), and free-text `conflict` finds the rows carrying that tag.
+
+`review:` is the separate axis, because review state and lifecycle state are different questions: `pr:open` asks where the PR sits in its lifecycle, `review:approved` asks whether it passed review — and an approved PR still matches `review:approved` after it merges, where the pill has collapsed to `merged`. `review:` takes `approved`, `changes-requested`, `review-required`, and `none`. Both keys are dashboard filters; the TUI has its own filter grammar and does not accept `review:`.
+
 Each Session row names its runtime backend and pane identity, with a runtime state of `live` / `stale` / `unknown` / `unsupported` / `-`, and the filter accepts `backend:tmux` / `backend:herdr`. For rows on the [herdr backend]({{< relref "/docs/herdr-backend" >}}), live peek returns content only when the saved row still matches a pane in fanout's owned session. Foreign and stale rows return 404, and the dashboard remains GET-only.
 
 ### Diff viewer
