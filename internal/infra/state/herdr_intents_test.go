@@ -289,6 +289,12 @@ func TestHerdrServerLifecycleIntentRejectsAmbiguousOrIncompleteRows(t *testing.T
 	if err := validateHerdrIntent(regular); err == nil || !strings.Contains(err.Error(), "unrelated server identity") {
 		t.Fatalf("regular intent with server identity error = %v", err)
 	}
+
+	restart = testHerdrServerIntent(HerdrIntentRestart)
+	restart.CleanupPhase = HerdrCleanupRemove
+	if err := validateHerdrIntent(restart); err == nil || !strings.Contains(err.Error(), "unrelated fields") {
+		t.Fatalf("server intent with cleanup phase error = %v", err)
+	}
 }
 
 func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
@@ -496,6 +502,10 @@ func TestHerdrCleanupIntentKeepsIndependentMutationRecord(t *testing.T) {
 	store.Intents = []HerdrIntent{cleanup}
 	if err := validateHerdrIntents(store); err != nil {
 		t.Fatal(err)
+	}
+	store.Intents = append(store.Intents, testHerdrServerIntent(HerdrIntentRestart))
+	if err := validateHerdrIntents(store); err == nil || !strings.Contains(err.Error(), "cannot coexist") {
+		t.Fatalf("cleanup and server lifecycle coexistence error = %v", err)
 	}
 	cleanup.CleanupPhase = "unknown"
 	if err := validateHerdrIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {

@@ -50,6 +50,21 @@ func TestRestartIntentAllowsReadsAndRejectsMutationsAndBootstrap(t *testing.T) {
 	if err := bound.Focus(target.Ref); err == nil || !strings.Contains(err.Error(), "restart is pending") {
 		t.Fatalf("Focus() under restart intent error = %v", err)
 	}
+	for name, mutation := range map[string]func() error{
+		"worktree remove": func() error {
+			return h.session.RemoveWorktree(context.Background(), "w2", "/repo/child")
+		},
+		"workspace close": func() error {
+			return h.session.CloseWorkspace(context.Background(), "w2")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := mutation()
+			if !errors.Is(err, ErrMutationNotIssued) || !strings.Contains(err.Error(), "restart is pending") {
+				t.Fatalf("cleanup mutation under restart intent error = %v", err)
+			}
+		})
+	}
 	if _, err := h.tryEnsure(); err == nil || !strings.Contains(err.Error(), "restart is pending") {
 		t.Fatalf("EnsureOwned() under restart intent error = %v", err)
 	}

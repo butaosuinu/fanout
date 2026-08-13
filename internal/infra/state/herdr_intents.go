@@ -484,7 +484,7 @@ func validateHerdrIntents(store HerdrIntents) error {
 	if store.SchemaVersion != HerdrIntentsSchemaVersion {
 		return fmt.Errorf("unsupported Herdr intents schema version %d", store.SchemaVersion)
 	}
-	if _, _, err := store.ServerLifecycleIntent(); err != nil {
+	if err := validateHerdrServerLifecycleIsolation(store); err != nil {
 		return err
 	}
 	ids := map[string]bool{}
@@ -507,6 +507,19 @@ func validateHerdrIntents(store HerdrIntents) error {
 			intent.WorktreePath,
 		); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateHerdrServerLifecycleIsolation(store HerdrIntents) error {
+	_, found, err := store.ServerLifecycleIntent()
+	if err != nil || !found {
+		return err
+	}
+	for _, intent := range store.Intents {
+		if intent.Kind == HerdrIntentCleanup {
+			return fmt.Errorf("Herdr server lifecycle and cleanup intents cannot coexist")
 		}
 	}
 	return nil
