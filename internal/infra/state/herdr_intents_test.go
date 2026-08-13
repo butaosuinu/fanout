@@ -488,29 +488,61 @@ func TestHerdrCoordinatorLaunchAllowsShellAndRejectsPartialAgentIdentity(t *test
 
 func TestHerdrCleanupIntentKeepsIndependentMutationRecord(t *testing.T) {
 	repo := newHerdrIntentsRepo(t)
-	cleanup := testHerdrWorktreeIntent(repo, "425", 426, "cleanup")
-	cleanup.ID, _ = HerdrCleanupIntentID(cleanup.ID)
-	cleanup.Kind = HerdrIntentCleanup
-	cleanup.Status = HerdrIntentPlanned
-	cleanup.CleanupPhase = HerdrCleanupRemove
-	cleanup.Resource = HerdrResource{
-		WorkspaceID: "w2", Label: cleanup.WorkspaceLabel,
-		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: cleanup.WorktreePath,
-		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
-	}
+	cleanup := testHerdrCleanupIntent(repo, HerdrCleanupRemove, HerdrIntentPlanned)
 	store := emptyHerdrIntents()
 	store.Intents = []HerdrIntent{cleanup}
 	if err := validateHerdrIntents(store); err != nil {
 		t.Fatal(err)
 	}
-	store.Intents = append(store.Intents, testHerdrServerIntent(HerdrIntentRestart))
-	if err := validateHerdrIntents(store); err == nil || !strings.Contains(err.Error(), "cannot coexist") {
-		t.Fatalf("cleanup and server lifecycle coexistence error = %v", err)
-	}
 	cleanup.CleanupPhase = "unknown"
 	if err := validateHerdrIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {
 		t.Fatalf("unknown cleanup phase error = %v", err)
 	}
+}
+
+func TestHerdrCleanupIntentCoexistsWithServerRestart(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	phases := []HerdrCleanupPhase{HerdrCleanupReopen, HerdrCleanupRemove, HerdrCleanupWorkspaceClose}
+	statuses := []HerdrIntentStatus{
+		HerdrIntentPlanned, HerdrIntentIssued, HerdrIntentManualCleanupRequired, HerdrIntentRealized,
+	}
+	for _, phase := range phases {
+		for _, status := range statuses {
+			t.Run(string(phase)+"/"+string(status), func(t *testing.T) {
+				cleanup := testHerdrCleanupIntent(repo, phase, status)
+				store := emptyHerdrIntents()
+				store.Intents = []HerdrIntent{cleanup, testHerdrServerIntent(HerdrIntentRestart)}
+				if err := validateHerdrIntents(store); err != nil {
+					t.Fatal(err)
+				}
+				got, found, err := store.ServerLifecycleIntent()
+				if err != nil || !found || got.Kind != HerdrIntentRestart {
+					t.Fatalf("ServerLifecycleIntent() = (%+v, %t, %v)", got, found, err)
+				}
+			})
+		}
+	}
+}
+
+func testHerdrCleanupIntent(
+	repo string,
+	phase HerdrCleanupPhase,
+	status HerdrIntentStatus,
+) HerdrIntent {
+	cleanup := testHerdrWorktreeIntent(repo, "425", 426, "cleanup")
+	cleanup.ID, _ = HerdrCleanupIntentID(cleanup.ID)
+	cleanup.Kind = HerdrIntentCleanup
+	cleanup.Status = status
+	cleanup.CleanupPhase = phase
+	cleanup.Resource = HerdrResource{
+		WorkspaceID: "w2", Label: cleanup.WorkspaceLabel,
+		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: cleanup.WorktreePath,
+		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
+	}
+	if status == HerdrIntentManualCleanupRequired {
+		cleanup.Failure = "server unavailable"
+	}
+	return cleanup
 }
 
 func TestHerdrCleanupIntentIDRejectsNestedCleanup(t *testing.T) {
