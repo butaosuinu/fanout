@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/errs"
@@ -266,6 +267,9 @@ func completeHerdrServerLifecycle(
 	if !journal.RemoveIntent(intentID) {
 		return fmt.Errorf("herdr server lifecycle intent %s disappeared before completion", intentID)
 	}
+	journal.Intents = slices.DeleteFunc(journal.Intents, func(intent state.HerdrIntent) bool {
+		return intent.Kind == state.HerdrIntentResume
+	})
 	return journal.Save()
 }
 

@@ -79,6 +79,44 @@ func TestResumeRestartedHerdrRowsRebindsExactCodexProcess(t *testing.T) {
 		got.HerdrLaunchArgs[1] != saved.HerdrAgentSession.Value {
 		t.Fatalf("rebound argv = %#v", got.HerdrLaunchArgs)
 	}
+	if !containsHerdrResumeIntent(journal.Intents) {
+		t.Fatal("successful resume intent was removed before server lifecycle completion")
+	}
+	completeRestartLifecycleForTest(t, locked, journal)
+	if containsHerdrResumeIntent(journal.Intents) {
+		t.Fatal("successful resume intent remained after server lifecycle completion")
+	}
+}
+
+func TestResumeRestartedHerdrRowsDoesNotPartiallyResumeAfterWaitTimeout(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	saved, placeholder := restartCodexFixture()
+	missing := saved
+	missing.IssueNum, missing.PaneID, missing.HerdrWorkspaceID = 533, "w2:p1", "w2"
+	missing.HerdrTerminalID, missing.WorktreePath = "term-missing", "/repo/missing"
+	missing.HerdrAgentSession = cloneAgentSession(saved.HerdrAgentSession)
+	missing.HerdrAgentSession.Value = "019f-missing"
+	recordRestartStatePane(t, repo, saved)
+	recordRestartStatePane(t, repo, missing)
+	runtime := &fakeHerdrLaunchRuntime{
+		live: []backend.LivePane{placeholder},
+		launchRoute: herdrrun.OwnedLaunchRoute{
+			RuntimeDir: "/runtime", Session: saved.HerdrSession, SocketPath: saved.HerdrSocketPath,
+			LauncherPath: "/runtime/launcher/fanout", ControlPath: "/repo/.git/fanout/herdr-intents.json",
+		},
+	}
+	locked, journal := lockHerdrRestartTest(t, repo)
+
+	if err := resumeRestartedHerdrRows(
+		context.Background(), repo, locked, journal, runtime, 3*time.Second,
+	); err != nil {
+		t.Fatal(err)
+	}
+	got, found := locked.Find(saved.Parent, saved.IssueNum)
+	if !found || got.HerdrTerminalID != saved.HerdrTerminalID || got.ReportedState != "" ||
+		got.StateRefinement || runtime.tokenCalls != 0 {
+		t.Fatalf("timed-out observed row = (%+v, %t, tokens=%d)", got, found, runtime.tokenCalls)
+	}
 }
 
 func TestResumeRestartedHerdrRowsDoesNotRetryFailedToken(t *testing.T) {
@@ -139,8 +177,12 @@ func TestResumeRestartedHerdrRowsRecoversIssuedProcessWithoutResendingToken(t *t
 	}
 	got, found := locked.Find(saved.Parent, saved.IssueNum)
 	if !found || got.HerdrTerminalID != resumed.TerminalID || got.HerdrAgentID != resumed.AgentID ||
-		runtime.tokenCalls != 0 || containsHerdrResumeIntent(journal.Intents) {
+		runtime.tokenCalls != 0 || !containsHerdrResumeIntent(journal.Intents) {
 		t.Fatalf("recovered resume = (%+v, %t, tokens=%d)", got, found, runtime.tokenCalls)
+	}
+	completeRestartLifecycleForTest(t, locked, journal)
+	if containsHerdrResumeIntent(journal.Intents) {
+		t.Fatal("recovered resume intent remained after server lifecycle completion")
 	}
 }
 
@@ -170,8 +212,12 @@ func TestResumeRestartedHerdrRowsCompletesAlreadySavedIssuedResume(t *testing.T)
 	}
 	got, found := locked.Find(saved.Parent, saved.IssueNum)
 	if !found || got.EmitterNonce != saved.EmitterNonce || runtime.tokenCalls != 0 ||
-		containsHerdrResumeIntent(journal.Intents) {
+		!containsHerdrResumeIntent(journal.Intents) {
 		t.Fatalf("completed saved resume = (%+v, %t, tokens=%d)", got, found, runtime.tokenCalls)
+	}
+	completeRestartLifecycleForTest(t, locked, journal)
+	if containsHerdrResumeIntent(journal.Intents) {
+		t.Fatal("saved resume intent remained after server lifecycle completion")
 	}
 }
 
@@ -267,6 +313,21 @@ func containsHerdrResumeIntent(intents []state.HerdrIntent) bool {
 	return slices.ContainsFunc(intents, func(intent state.HerdrIntent) bool {
 		return intent.Kind == state.HerdrIntentResume
 	})
+}
+
+func completeRestartLifecycleForTest(
+	t *testing.T,
+	locked *state.LockedStore,
+	journal *state.LockedHerdrIntents,
+) {
+	t.Helper()
+	id, err := state.HerdrServerIntentID(state.HerdrIntentRestart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := completeHerdrServerLifecycle(locked, journal, id); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestExactRestartedCodexPlaceholderAcceptsIdleWithoutTreatingItAsDone(t *testing.T) {

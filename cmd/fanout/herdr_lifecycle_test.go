@@ -29,6 +29,16 @@ func TestIsHerdrLifecycleRequest(t *testing.T) {
 	}
 }
 
+func TestHerdrLifecycleTimeoutLeavesFinalizationBudget(t *testing.T) {
+	if herdrLifecycleTimeout <= herdrrun.DefaultWaitTimeout {
+		t.Fatalf(
+			"herdr lifecycle timeout = %s, want greater than restart wait %s",
+			herdrLifecycleTimeout,
+			herdrrun.DefaultWaitTimeout,
+		)
+	}
+}
+
 func TestRunHerdrLifecycleRequiresExplicitAction(t *testing.T) {
 	for _, args := range [][]string{nil, {}, {"bogus"}, {"restart", "shutdown"}} {
 		var out, errOut bytes.Buffer

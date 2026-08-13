@@ -64,8 +64,18 @@ func resumeRestartedHerdrRows(
 	if err := validateRestartedTerminals(rows, wait.Panes); err != nil {
 		return err
 	}
-	candidates := restartedCodexCandidates(rows, wait.Panes)
+	candidates := restartedCandidatesAfterWait(wait, rows)
 	return processRestartedHerdrRows(ctx, locked, journal, restarted, rows, candidates, deadline)
+}
+
+func restartedCandidatesAfterWait(
+	wait herdrrun.WaitResult,
+	rows []herdrRestartRow,
+) map[string]herdrRestartCandidate {
+	if wait.Status != herdrrun.WaitMatched {
+		return map[string]herdrRestartCandidate{}
+	}
+	return restartedCodexCandidates(rows, wait.Panes)
 }
 
 func herdrRestartWaitTimeout(totalTimeout time.Duration) (time.Duration, error) {
@@ -279,7 +289,7 @@ func finishRecoveredHerdrResume(
 		return finalizeFailedHerdrResume(ctx, locked, journal, "", row, intent)
 	}
 	if completedHerdrResumeBinding(row.saved, intent, live, process) {
-		return removeHerdrResumeIntent(journal, intent.ID)
+		return nil
 	}
 	return completeHerdrResumeRow(ctx, locked, journal, row, intent, live, process)
 }
@@ -408,6 +418,9 @@ func processOneRestartedHerdrRow(
 	deadline time.Time,
 ) error {
 	if !eligible || candidate.row.root != row.root {
+		if intent, found := existingHerdrResumeIntent(journal, row.saved); found {
+			return finalizeFailedHerdrResume(ctx, locked, journal, route.RuntimeDir, row, intent)
+		}
 		return persistHerdrRestartRow(ctx, locked, row, nil, nil, nil)
 	}
 	intent, err := prepareHerdrResumeIntent(journal, restarted, route, candidate, deadline)
@@ -422,6 +435,20 @@ func processOneRestartedHerdrRow(
 		return failHerdrResumeRow(ctx, locked, journal, route.RuntimeDir, row, intent, err)
 	}
 	return completeHerdrResumeRow(ctx, locked, journal, row, intent, live, process)
+}
+
+func existingHerdrResumeIntent(
+	journal *state.LockedHerdrIntents,
+	pane state.Pane,
+) (state.HerdrIntent, bool) {
+	id, err := state.HerdrResumeIntentID(
+		pane.HerdrSession, pane.HerdrSocketPath, pane.HerdrWorkspaceID, pane.PaneID,
+	)
+	if err != nil {
+		return state.HerdrIntent{}, false
+	}
+	intent, found := journal.FindIntent(id)
+	return intent, found && intent.Kind == state.HerdrIntentResume
 }
 
 func failHerdrResumeRow(
@@ -473,14 +500,7 @@ func completeHerdrResumeRow(
 	if err := persistHerdrRestartRow(ctx, locked, row, &live, &process, intent.Launch); err != nil {
 		return err
 	}
-	return removeHerdrResumeIntent(journal, intent.ID)
-}
-
-func removeHerdrResumeIntent(journal *state.LockedHerdrIntents, intentID string) error {
-	if !journal.RemoveIntent(intentID) {
-		return fmt.Errorf("Herdr resume intent %s disappeared before completion", intentID)
-	}
-	return journal.Save()
+	return nil
 }
 
 func prepareHerdrResumeIntent(
