@@ -1093,6 +1093,29 @@ func TestHerdrCoordinatorIssueNumPreservesSyntheticOwners(t *testing.T) {
 	}
 }
 
+func TestHerdrLifecycleOwnershipIsPersistedInStateRows(t *testing.T) {
+	intent := state.HerdrIntent{
+		RuntimeParent: "528", WorkspaceLabel: "fanout-worktree-nonce", BranchCreated: true,
+		Resource: state.HerdrResource{
+			WorkspaceID: "w2", Label: "fanout-worktree-nonce", PaneID: "w2:p1",
+			TerminalID: "terminal-2", CurrentPath: "/repo/child",
+			RepoKey: "/repo/.git", RepoRoot: "/repo",
+		},
+	}
+	pane := state.Pane{}
+	applyHerdrLaunchOwnership(&pane, intent)
+	if pane.RuntimeParent != intent.RuntimeParent || pane.HerdrWorkspaceLabel != intent.WorkspaceLabel || !pane.HerdrBranchCreated {
+		t.Fatalf("child lifecycle ownership = %+v", pane)
+	}
+
+	coordinator := herdrCoordinatorPane(intent, herdrrun.OwnedLaunchRoute{
+		Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock",
+	}, intent.RuntimeParent, -1)
+	if coordinator.HerdrWorkspaceLabel != intent.WorkspaceLabel {
+		t.Fatalf("coordinator lifecycle ownership = %+v", coordinator)
+	}
+}
+
 func TestRecordHerdrCoordinatorReusesLinkedWorktreeStateRow(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	sibling := filepath.Join(t.TempDir(), "sibling")

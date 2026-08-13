@@ -196,8 +196,9 @@ func runTUIConsole(
 			interactiveLaunch,
 			lg,
 		),
-		ListLive: listLive,
-		Notifier: notifier,
+		ListLive:                     listLive,
+		Notifier:                     notifier,
+		LifecycleHerdrRuntimeForRoot: newHerdrLifecycleFactory,
 	}
 
 	if tmuxHost {

@@ -283,7 +283,16 @@ func (l *Launcher) recordHerdrCoordinator(
 		return err
 	}
 	number := NextSyntheticPaneNumber(locked.Store, ManualParentRef)
-	pane := state.Pane{
+	return locked.RecordPane(herdrCoordinatorPane(intent, route, runtimeParent, number))
+}
+
+func herdrCoordinatorPane(
+	intent state.HerdrIntent,
+	route herdrrun.OwnedLaunchRoute,
+	runtimeParent string,
+	number int,
+) state.Pane {
+	return state.Pane{
 		Parent: ManualParentRef, RuntimeParent: runtimeParent, IssueNum: number,
 		Kind: state.PaneKindShell, Slug: fmt.Sprintf("herdr-coordinator-%d", -number),
 		Backend: backend.Herdr, PaneID: intent.Resource.PaneID,
@@ -293,7 +302,6 @@ func (l *Launcher) recordHerdrCoordinator(
 		DisplayName: "Herdr coordinator: " + runtimeParent, WorktreePath: intent.Resource.CurrentPath,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	return locked.RecordPane(pane)
 }
 
 func (l *Launcher) findHerdrCoordinatorRow(
@@ -769,6 +777,7 @@ func herdrAgentStatePane(
 	pane := statePaneForBackend(
 		req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(), codexStatus, backend.Herdr, &live,
 	)
+	applyHerdrLaunchOwnership(&pane, intent)
 	applyHerdrLaunchTelemetry(&pane, intent)
 	return pane, nil
 }
@@ -806,6 +815,12 @@ func applyHerdrLaunchTelemetry(pane *state.Pane, intent state.HerdrIntent) {
 		pane.ReportedState = launch.PendingReportedState
 		pane.StateRefinement = true
 	}
+}
+
+func applyHerdrLaunchOwnership(pane *state.Pane, intent state.HerdrIntent) {
+	pane.RuntimeParent = intent.RuntimeParent
+	pane.HerdrWorkspaceLabel = intent.WorkspaceLabel
+	pane.HerdrBranchCreated = intent.BranchCreated
 }
 
 func markHerdrFinalizationFailure(

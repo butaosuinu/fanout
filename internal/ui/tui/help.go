@@ -15,6 +15,15 @@ type helpEntry struct {
 	DisabledReason string
 }
 
+type helpDisabledReasons struct {
+	launch  string
+	pane    string
+	close   string
+	merge   string
+	cleanup string
+	peek    string
+}
+
 // HelpPopupFunc opens the keyboard shortcut help in an external surface, such as
 // a tmux display-popup.
 type HelpPopupFunc func() error
@@ -65,61 +74,21 @@ func (m *model) openHelpPopupCmd() tea.Cmd {
 }
 
 func (m model) helpHasDisabledRuntimeActions() bool {
-	if m.runtimeActionDisabledReason(nil, "launch") != "" {
-		return true
-	}
-	pane, ok := m.selectedPane()
-	if !ok {
-		return false
-	}
-	return m.runtimeActionDisabledReason(&pane, "runtime action") != "" || m.peekDisabledReason(pane) != ""
+	disabled := m.helpDisabledReasons()
+	return firstNonEmpty(disabled.launch, disabled.pane, disabled.close, disabled.merge, disabled.cleanup, disabled.peek) != ""
 }
 
 func (m model) helpView() string {
-	launchDisabled := m.runtimeActionDisabledReason(nil, "launch")
-	var paneDisabled, peekDisabled string
-	if pane, ok := m.selectedPane(); ok {
-		paneDisabled = m.runtimeActionDisabledReason(&pane, "runtime action")
-		peekDisabled = m.peekDisabledReason(pane)
-	}
-	monitor := []helpEntry{
-		{"n", "New agent pane", launchDisabled},
-		{"s", "Settings", ""},
-		{"a", "Attach agent to worktree", paneDisabled},
-		{"A", "Worktree terminal", firstNonEmpty(paneDisabled, launchDisabled)},
-		{"t", "Project root terminal", launchDisabled},
-		{"j/k", "Move selection", ""},
-		{"[ / ]", "Prev / next Session", ""},
-		{"1-9", "Jump to Nth pane", ""},
-		{"/", "Filter rows", ""},
-		{"Enter/o", "Focus pane", paneDisabled},
-		{"Z", "Focus + zoom pane", paneDisabled},
-		{"p", "Peek output", peekDisabled},
-		{"v", "Auto/compact/full view", ""},
-		{"c/x", "Close pane", paneDisabled},
-		{"m", "Merge branch", ""},
-		{"X", "Cleanup parent", paneDisabled},
-	}
-	newPane := []helpEntry{
-		{"Ctrl+J", "Prompt newline", launchDisabled},
-		{"Tab", "Move fields", launchDisabled},
-		{"Up/Down", "Pick agent / row", launchDisabled},
-		{"Space", "Toggle agent", launchDisabled},
-		{"Left/Right", "Mode / agent", launchDisabled},
-		{"@", "File completion", launchDisabled},
-		{"Ctrl+O", "Open issue", launchDisabled},
-		{"Enter", "Create / next", launchDisabled},
-		{"Esc", "Cancel / back", launchDisabled},
-	}
+	disabled := m.helpDisabledReasons()
+	monitor := helpMonitorEntries(disabled)
+	newPane := helpNewPaneEntries(disabled.launch)
 	columnWidth := m.helpColumnWidth()
-	// No blank lines around the columns: the in-TUI modal fallback must stay
-	// within a standard 24-row terminal (content 20 + border/padding 4).
 	lines := make([]string, 0, 4)
 	if !m.helpOnly {
 		lines = append(lines, titleStyle.Render("Keyboard shortcuts"))
 	}
 	footer := "Esc / q / ? close"
-	if reason := firstNonEmpty(launchDisabled, paneDisabled, peekDisabled); reason != "" {
+	if reason := firstNonEmpty(disabled.launch, disabled.pane, disabled.close, disabled.merge, disabled.cleanup, disabled.peek); reason != "" {
 		if summary, _, ok := strings.Cut(reason, ";"); ok {
 			reason = summary
 		}
@@ -139,6 +108,53 @@ func (m model) helpView() string {
 		return popupContentStyle.Width(m.helpModalWidth()).Render(content)
 	}
 	return modalStyle.Width(m.helpModalWidth()).Render(content)
+}
+
+func (m model) helpDisabledReasons() helpDisabledReasons {
+	disabled := helpDisabledReasons{launch: m.runtimeActionDisabledReason(nil, "launch")}
+	if pane, ok := m.selectedPane(); ok {
+		disabled.pane = m.runtimeActionDisabledReason(&pane, "runtime action")
+		disabled.close = m.lifecycleActionDisabledReason(&pane, "close")
+		disabled.merge = m.lifecycleActionDisabledReason(&pane, "merge")
+		disabled.cleanup = m.lifecycleActionDisabledReason(&pane, "cleanup")
+		disabled.peek = m.peekDisabledReason(pane)
+	}
+	return disabled
+}
+
+func helpMonitorEntries(disabled helpDisabledReasons) []helpEntry {
+	return []helpEntry{
+		{"n", "New agent pane", disabled.launch},
+		{"s", "Settings", ""},
+		{"a", "Attach agent to worktree", disabled.pane},
+		{"A", "Worktree terminal", firstNonEmpty(disabled.pane, disabled.launch)},
+		{"t", "Project root terminal", disabled.launch},
+		{"j/k", "Move selection", ""},
+		{"[ / ]", "Prev / next Session", ""},
+		{"1-9", "Jump to Nth pane", ""},
+		{"/", "Filter rows", ""},
+		{"Enter/o", "Focus pane", disabled.pane},
+		{"Z", "Focus + zoom pane", disabled.pane},
+		{"p", "Peek output", disabled.peek},
+		{"v", "Auto/compact/full view", ""},
+		{"c/x", "Close pane", disabled.close},
+		{"m", "Merge branch", disabled.merge},
+		{"X", "Cleanup parent", disabled.cleanup},
+	}
+}
+
+func helpNewPaneEntries(launchDisabled string) []helpEntry {
+	return []helpEntry{
+		{"Ctrl+J", "Prompt newline", launchDisabled},
+		{"Tab", "Move fields", launchDisabled},
+		{"Up/Down", "Pick agent / row", launchDisabled},
+		{"Space", "Toggle agent", launchDisabled},
+		{"Left/Right", "Mode / agent", launchDisabled},
+		{"@", "File completion", launchDisabled},
+		{"Ctrl+O", "Open issue", launchDisabled},
+		{"Enter", "Create / next", launchDisabled},
+		{"Esc", "Cancel / back", launchDisabled},
+	}
 }
 
 func (m model) helpColumn(title string, entries []helpEntry, width int) string {

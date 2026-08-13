@@ -90,11 +90,12 @@ type Options struct {
 	// LifecycleCloseOwned is the runtime-specific destructive capability used
 	// for state-backed closes. It keeps identity verification isolated from the
 	// mixed-backend display collector.
-	LifecycleCloseOwned func(backend.CloseRequest) (backend.CloseResult, error)
-	ListRepoFiles       func(root string) ([]string, error)
-	Notifier            transitionNotifier
-	lifecycle           lifecycleRunner
-	keyboard            keyboardProtocols
+	LifecycleCloseOwned          func(backend.CloseRequest) (backend.CloseResult, error)
+	LifecycleHerdrRuntimeForRoot func(string) lifecycle.HerdrRuntimeFactory
+	ListRepoFiles                func(root string) ([]string, error)
+	Notifier                     transitionNotifier
+	lifecycle                    lifecycleRunner
+	keyboard                     keyboardProtocols
 }
 
 type viewMode int

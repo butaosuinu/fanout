@@ -100,6 +100,34 @@ func TestLockProjectForLaunchContextReleasesIntentsAfterStateTimeout(t *testing.
 	}
 }
 
+func TestLockProjectForLaunchAtCombinesCustomStateAndIntentLocks(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	customState := filepath.Join(t.TempDir(), "state.json")
+	project, err := LockProjectForLaunchAt(repo, customState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := project.HerdrIntents(repo)
+	if err != nil {
+		t.Fatal(errors.Join(err, project.Unlock()))
+	}
+	intent := testHerdrCoordinatorIntent(repo, "425")
+	view.UpsertIntent(intent)
+	if saveErr := view.Save(); saveErr != nil {
+		t.Fatal(errors.Join(saveErr, project.Unlock()))
+	}
+	if unlockErr := project.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	loaded, err := LoadHerdrIntents(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := loaded.FindIntent(intent.ID); !found {
+		t.Fatal("intent was not saved through the custom state lock")
+	}
+}
+
 func TestHerdrIntentsRejectExistingJournalWithoutSchemaVersion(t *testing.T) {
 	for _, contents := range []string{`{}`, `{"schemaVersion":0}`} {
 		t.Run(contents, func(t *testing.T) {
@@ -394,6 +422,42 @@ func TestHerdrCoordinatorLaunchAllowsShellAndRejectsPartialAgentIdentity(t *test
 	if err := validateHerdrIntent(intent); err == nil ||
 		!strings.Contains(err.Error(), "launch agent identity is partial") {
 		t.Fatalf("partial agent identity error = %v", err)
+	}
+}
+
+func TestHerdrCleanupIntentKeepsIndependentMutationRecord(t *testing.T) {
+	repo := newHerdrIntentsRepo(t)
+	cleanup := testHerdrWorktreeIntent(repo, "425", 426, "cleanup")
+	cleanup.ID, _ = HerdrCleanupIntentID(cleanup.ID)
+	cleanup.Kind = HerdrIntentCleanup
+	cleanup.Status = HerdrIntentPlanned
+	cleanup.CleanupPhase = HerdrCleanupRemove
+	cleanup.Resource = HerdrResource{
+		WorkspaceID: "w2", Label: cleanup.WorkspaceLabel,
+		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: cleanup.WorktreePath,
+		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
+	}
+	store := emptyHerdrIntents()
+	store.Intents = []HerdrIntent{cleanup}
+	if err := validateHerdrIntents(store); err != nil {
+		t.Fatal(err)
+	}
+	cleanup.CleanupPhase = "unknown"
+	if err := validateHerdrIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {
+		t.Fatalf("unknown cleanup phase error = %v", err)
+	}
+}
+
+func TestHerdrCleanupIntentIDRejectsNestedCleanup(t *testing.T) {
+	id, err := HerdrCleanupIntentID("issue:3:425:426")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "cleanup:issue:3:425:426" {
+		t.Fatalf("cleanup id = %q", id)
+	}
+	if _, err := HerdrCleanupIntentID(id); err == nil {
+		t.Fatal("nested cleanup intent id was accepted")
 	}
 }
 

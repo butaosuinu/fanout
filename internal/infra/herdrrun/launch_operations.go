@@ -193,12 +193,33 @@ func (s *OwnedSession) RenameAgent(ctx context.Context, paneID, name string) err
 // RemoveWorktree issues the non-force rollback mutation for one identity-
 // fenced child workspace. The caller verifies absence before Git cleanup.
 func (s *OwnedSession) RemoveWorktree(ctx context.Context, workspaceID, path string) error {
-	out, err := s.runOwnedLaunchCommand(ctx, commandTimeout,
+	if strings.TrimSpace(workspaceID) == "" || path == "" {
+		return mutationNotIssued(fmt.Errorf("herdr worktree remove identity is incomplete"))
+	}
+	out, err := s.runOwnedMutationCommand(ctx, commandTimeout,
 		"worktree", "remove", "--workspace", workspaceID, "--json")
 	if err != nil {
+		if rejected, ok := decodeMutationRejection(out, "cli:worktree:remove"); ok {
+			return rejected
+		}
 		return err
 	}
 	return validateWorktreeRemoveResponse(out, workspaceID, path)
+}
+
+// CloseWorkspace removes a residual child workspace after its checkout is
+// already absent. The caller verifies the workspace identity and postcondition.
+func (s *OwnedSession) CloseWorkspace(ctx context.Context, workspaceID string) error {
+	if strings.TrimSpace(workspaceID) == "" {
+		return mutationNotIssued(fmt.Errorf("herdr workspace close requires a workspace id"))
+	}
+	out, err := s.runOwnedMutationCommand(ctx, commandTimeout, "workspace", "close", workspaceID)
+	if err != nil {
+		if rejected, ok := decodeMutationRejection(out, "cli:workspace:close"); ok {
+			return rejected
+		}
+	}
+	return err
 }
 
 func validateWorktreeRemoveResponse(out []byte, workspaceID, path string) error {
@@ -254,4 +275,29 @@ func (s *OwnedSession) runOwnedLaunchCommand(
 		return nil, err
 	}
 	return s.backend.runContext(ctx, timeout, probed.binary, probed.route, args...)
+}
+
+func (s *OwnedSession) runOwnedMutationCommand(
+	ctx context.Context,
+	timeout time.Duration,
+	args ...string,
+) ([]byte, error) {
+	if s == nil || s.backend == nil {
+		return nil, mutationNotIssued(fmt.Errorf("herdr owned session is nil"))
+	}
+	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	if err != nil {
+		return nil, mutationNotIssued(err)
+	}
+	defer unlockPrivateFile(lock)
+	probed, err := s.backend.probeOwned(ctx, admission)
+	if err != nil {
+		return nil, mutationNotIssued(err)
+	}
+	if timeout <= 0 {
+		return nil, mutationNotIssued(context.DeadlineExceeded)
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return s.backend.runWorktreeMutation(callCtx, probed.binary, probed.route, args...)
 }

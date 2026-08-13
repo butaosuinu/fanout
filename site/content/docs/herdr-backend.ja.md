@@ -9,6 +9,7 @@ yomi: herdr
 
 herdr backend は、コーディングエージェント向けの永続 PTY ランタイム [herdr](https://herdr.dev/)で CLI のファンアウトを実行します。
 opt-in で、issue、Project、plan、label watcher、対話 TUI の launch はリポジトリ単位の fanout-owned session を使います。
+引数なしの TUI は、identity を検証した owned 行に merge、close、cleanup も実行できます。
 既定の backend は tmux です。
 fanout は herdr を同梱しません。herdr は AGPL ライセンスで、別途インストールします。
 
@@ -46,9 +47,16 @@ TUI コンソールと web ダッシュボードが `reported_state` を使う�
 自動 nudge に使うのは、current launch の telemetry によって `state_refinement: true` となり、live pane、worktree、agent、process identity の再照合を通った場合だけです。
 pane が消えた場合は `stale` のままです。
 
+`--merge`、`--close`、`--cleanup`、対応する TUI 操作は、owned session の identity がそろった行だけを対象にします。
+fanout は保存済みの workspace ID、label、terminal、repository、path、branch を mutation 前に照合します。
+cleanup intent を保存してから non-force の `herdr worktree remove` を発行し、checkout と workspace の不在を確認します。workspace だけが残れば close します。
+先に workspace が閉じられて checkout が残った場合は、owned plugin registry が空であることを確認してから削除用 workspace を再登録します。
+dirty checkout、所有不一致、応答結果を確定できない状態では行と intent を残し、再試行または手動 cleanup を求めます。
+branch は fanout-created と記録されたものだけを compare-and-delete します。
+
 未対応の経路は明確なエラーで fail closed します。
 
-- 対話 send、restore、plan capture、lifecycle の close / merge / cleanup は herdr 行では使えません。
+- 対話 send、restore、plan capture は herdr 行では使えません。
 - TUI の focus、launch、peek には、fanout-owned session に属する完全な保存済み identity が必要です。foreign、stale、legacy の行は理由付きで無効になります。
 - Codex 子の Plan Mode は fanout の app-server controller と owned launcher で動きます。Claude と OpenCode は固有の mode flag を使います。
 - tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれません。
@@ -107,8 +115,9 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 | exit status 表示 | launch wrapper が `✓ done` を報告 | なし — herdr の public API に exit status は残らない |
 | agent 終了後の pane | wrapper のメッセージ付きで pane が残る | 正常終了で herdr は pane と自身の記録を消す。fanout の行は `stale` になる |
 | 対話 TUI launch / focus / peek | TUI キー | fanout-owned session の ownership 検証済み pane だけ対応 |
-| 対話 send / restore / plan capture / lifecycle | tmux の各対応経路 | 不可 — `runtime backend herdr does not support …` |
+| 対話 send / restore / plan capture | tmux の各対応経路 | 不可 — `runtime backend herdr does not support …` |
 | `--team` peer messaging | SQLite registry、Claude watcher、Codex app-server bridge | 同じ registry と push lane |
+| `--merge` / `--close` / `--cleanup`、TUI merge / close / cleanup | 対応 | fanout-owned 行の identity を検証して実行。dirty checkout は force しない |
 | 自動 nudge(`fanout msg nudge`) | 相手が入力を受けられる状態なら配送 | current launch に束縛された refined telemetry と live identity/process の照合後に no-wait の `agent prompt` を 1 回発行。それ以外は no-op |
 | tmux keybind(ダッシュボード、コンソール復帰) | 登録する | 登録しない |
 | 通知 | bell / tmux / ntfy / slack の channel | bell / ntfy / slack は動く。tmux channel と herdr の `notification show` は発火しない |

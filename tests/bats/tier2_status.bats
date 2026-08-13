@@ -36,6 +36,15 @@ load helpers
   assert_status_golden scenario-herdr-status
 }
 
+@test "scenario-herdr-cleanup-incomplete: cleanup rejects legacy identity before mutation" {
+  use_fixture scenario-herdr-cleanup-incomplete
+  cp -R "$FIXTURE_DIR" "$BATS_TEST_TMPDIR/fixture"
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  run_fanout 524 --cleanup
+  [ "$status" -eq 1 ]
+  assert_golden scenario-herdr-cleanup-incomplete cleanup
+}
+
 @test "scenario-status-mixed table: PR diff stats render in a human-readable table" {
   use_fixture scenario-status-mixed
   run_fanout_status 200 --format table

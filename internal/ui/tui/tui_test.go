@@ -2221,8 +2221,9 @@ func TestNumericJumpOutOfRangeShowsNotice(t *testing.T) {
 func TestNumericKeysDuringCloseMenuSelectOptionsNotJump(t *testing.T) {
 	focusCalls := 0
 	m := newModel(Options{
-		ProjectRoot: "/repo",
-		lifecycle:   &fakeLifecycleRunner{code: exitcode.OK},
+		ProjectRoot:         "/repo",
+		LifecycleCloseOwned: configuredTmuxClose,
+		lifecycle:           &fakeLifecycleRunner{code: exitcode.OK},
 		FocusPane: func(string) error {
 			focusCalls++
 			return nil
@@ -3094,7 +3095,7 @@ func paneByIssue(t *testing.T, panes []paneView, issueNum int) paneView {
 
 func TestLifecycleCloseKeyConfirmsRunsAndRefreshes(t *testing.T) {
 	runner := &fakeLifecycleRunner{code: exitcode.OK}
-	m := newModel(Options{ProjectRoot: "/repo", WatcherRunningLabel: "fanout:test-running", lifecycle: runner})
+	m := newModel(Options{ProjectRoot: "/repo", WatcherRunningLabel: "fanout:test-running", LifecycleCloseOwned: configuredTmuxClose, lifecycle: runner})
 	m.width = 100
 	m.height = 40
 	m.allPanes = []paneView{{Parent: "84", IssueNum: 101, Name: "child"}}
@@ -3161,8 +3162,9 @@ func TestLifecycleCloseKeyUsesPopupWhenConfigured(t *testing.T) {
 	calls := 0
 	var prompted CloseChoiceRequest
 	m := newModel(Options{
-		ProjectRoot: "/repo",
-		lifecycle:   runner,
+		ProjectRoot:         "/repo",
+		LifecycleCloseOwned: configuredTmuxClose,
+		lifecycle:           runner,
 		CloseChoicePopup: func(req CloseChoiceRequest) (lifecycle.CloseMode, bool, error) {
 			calls++
 			prompted = req
@@ -3241,8 +3243,9 @@ func TestLifecycleClosePopupCancelAndFailure(t *testing.T) {
 	t.Run("cancel", func(t *testing.T) {
 		runner := &fakeLifecycleRunner{code: exitcode.OK}
 		m := newModel(Options{
-			ProjectRoot: "/repo",
-			lifecycle:   runner,
+			ProjectRoot:         "/repo",
+			LifecycleCloseOwned: configuredTmuxClose,
+			lifecycle:           runner,
 			CloseChoicePopup: func(CloseChoiceRequest) (lifecycle.CloseMode, bool, error) {
 				return lifecycle.ClosePaneOnly, true, nil
 			},
@@ -3274,8 +3277,9 @@ func TestLifecycleClosePopupCancelAndFailure(t *testing.T) {
 	t.Run("failure", func(t *testing.T) {
 		runner := &fakeLifecycleRunner{code: exitcode.OK}
 		m := newModel(Options{
-			ProjectRoot: "/repo",
-			lifecycle:   runner,
+			ProjectRoot:         "/repo",
+			LifecycleCloseOwned: configuredTmuxClose,
+			lifecycle:           runner,
 			CloseChoicePopup: func(CloseChoiceRequest) (lifecycle.CloseMode, bool, error) {
 				return lifecycle.ClosePaneOnly, false, errBoom
 			},
@@ -3355,7 +3359,7 @@ func TestLifecycleCloseChoiceSelectsWorktreeAndBranchModes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.key, func(t *testing.T) {
 			runner := &fakeLifecycleRunner{code: exitcode.OK}
-			m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+			m := newModel(Options{ProjectRoot: "/repo", LifecycleCloseOwned: configuredTmuxClose, lifecycle: runner})
 			m.allPanes = []paneView{{Parent: "84", IssueNum: 101, Name: "child"}}
 			m.refreshRows()
 
@@ -3622,7 +3626,7 @@ func TestLifecycleKeysRoutePlanTaskRows(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.key, func(t *testing.T) {
 			runner := &fakeLifecycleRunner{code: exitcode.OK}
-			m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+			m := newModel(Options{ProjectRoot: "/repo", LifecycleCloseOwned: configuredTmuxClose, lifecycle: runner})
 			m.width = 100
 			m.height = 40
 			m.allPanes = []paneView{{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "api-client", Name: "task"}}
@@ -3671,7 +3675,7 @@ func TestLifecycleKeysRoutePlanTaskRows(t *testing.T) {
 
 func TestLifecycleCloseKeyRoutesPlanTaskRows(t *testing.T) {
 	runner := &fakeLifecycleRunner{code: exitcode.OK}
-	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+	m := newModel(Options{ProjectRoot: "/repo", LifecycleCloseOwned: configuredTmuxClose, lifecycle: runner})
 	m.allPanes = []paneView{{Parent: "plan:launch-plan", IssueNum: 0, TaskID: "api-client", Name: "task"}}
 	m.refreshRows()
 
@@ -3708,7 +3712,7 @@ func TestLifecycleMergeAndCleanupSkipShellRows(t *testing.T) {
 	for _, key := range []string{"m", "X"} {
 		t.Run(key, func(t *testing.T) {
 			runner := &fakeLifecycleRunner{code: exitcode.OK}
-			m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+			m := newModel(Options{ProjectRoot: "/repo", LifecycleCloseOwned: configuredTmuxClose, lifecycle: runner})
 			m.allPanes = []paneView{{Parent: "@manual", IssueNum: -1, Kind: state.PaneKindShell, Name: "root terminal"}}
 			m.refreshRows()
 
@@ -3734,7 +3738,7 @@ func TestLifecycleCloseAliasesCloseShellRows(t *testing.T) {
 	for _, key := range []string{"c", "x"} {
 		t.Run(key, func(t *testing.T) {
 			runner := &fakeLifecycleRunner{code: exitcode.OK}
-			m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+			m := newModel(Options{ProjectRoot: "/repo", LifecycleCloseOwned: configuredTmuxClose, lifecycle: runner})
 			m.allPanes = []paneView{{Parent: "@manual", IssueNum: -1, Kind: state.PaneKindShell, Name: "root terminal"}}
 			m.refreshRows()
 
@@ -3773,7 +3777,7 @@ func TestLifecycleCloseAliasesCloseShellRows(t *testing.T) {
 
 func TestLifecycleCloseAliasUsesSelectedPane(t *testing.T) {
 	runner := &fakeLifecycleRunner{code: exitcode.OK}
-	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+	m := newModel(Options{ProjectRoot: "/repo", LifecycleCloseOwned: configuredTmuxClose, lifecycle: runner})
 	m.allPanes = []paneView{
 		{Parent: "100", IssueNum: 1, Name: "one"},
 		{Parent: "200", IssueNum: 2, Name: "two"},
@@ -3811,7 +3815,7 @@ func TestLifecycleCloseAliasUsesSelectedPane(t *testing.T) {
 
 func TestLifecycleCleanupKeyUsesSelectedParent(t *testing.T) {
 	runner := &fakeLifecycleRunner{code: exitcode.OK}
-	m := newModel(Options{ProjectRoot: "/repo", lifecycle: runner})
+	m := newModel(Options{ProjectRoot: "/repo", LifecycleCloseOwned: configuredTmuxClose, lifecycle: runner})
 	m.allPanes = []paneView{
 		{Parent: "100", IssueNum: 1, Name: "one"},
 		{Parent: "200", IssueNum: 2, Name: "two"},

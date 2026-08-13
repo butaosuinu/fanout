@@ -15,8 +15,9 @@ const closePopupOpeningNotice = "opening close popup..."
 // CloseChoiceRequest describes the pane close option prompt shown in an
 // external surface, such as a tmux display-popup.
 type CloseChoiceRequest struct {
-	PaneLabel   string
-	InitialMode lifecycle.CloseMode
+	PaneLabel       string
+	InitialMode     lifecycle.CloseMode
+	RequireWorktree bool
 }
 
 // CloseChoicePopupFunc collects the close mode to use. canceled is true when
@@ -25,15 +26,32 @@ type CloseChoicePopupFunc func(CloseChoiceRequest) (mode lifecycle.CloseMode, ca
 
 // CloseChoicePopupOptions configures the standalone close-choice popup program.
 type CloseChoicePopupOptions struct {
-	PaneLabel   string
-	InitialMode lifecycle.CloseMode
-	Width       int
-	Height      int
+	PaneLabel       string
+	InitialMode     lifecycle.CloseMode
+	RequireWorktree bool
+	Width           int
+	Height          int
 }
 
 // RunCloseChoicePopup opens only the close-choice UI and returns the selected
 // close mode.
 func RunCloseChoicePopup(opts CloseChoicePopupOptions) (lifecycle.CloseMode, bool, error) {
+	m := closeChoicePopupModel(opts)
+	finalModel, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	if err != nil {
+		return lifecycle.ClosePaneOnly, false, err
+	}
+	final, ok := finalModel.(model)
+	if !ok {
+		return lifecycle.ClosePaneOnly, false, fmt.Errorf("unexpected close popup model %T", finalModel)
+	}
+	if !final.closeDone || final.closeCanceled {
+		return lifecycle.ClosePaneOnly, true, nil
+	}
+	return final.closeResult, false, nil
+}
+
+func closeChoicePopupModel(opts CloseChoicePopupOptions) model {
 	width := opts.Width
 	if width <= 0 {
 		width = 72
@@ -51,25 +69,15 @@ func RunCloseChoicePopup(opts CloseChoicePopupOptions) (lifecycle.CloseMode, boo
 	if label == "" {
 		label = "pane"
 	}
-	idx := closeOptionIndexForMode(opts.InitialMode)
 	m.pendingAction = &pendingLifecycleAction{
-		action:           actionClose,
-		pane:             paneView{TaskID: label},
-		closeOptionIndex: idx,
-		closeMode:        closeOptions()[idx].mode,
+		action:          actionClose,
+		pane:            paneView{TaskID: label},
+		requireWorktree: opts.RequireWorktree,
 	}
-	finalModel, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
-	if err != nil {
-		return lifecycle.ClosePaneOnly, false, err
-	}
-	final, ok := finalModel.(model)
-	if !ok {
-		return lifecycle.ClosePaneOnly, false, fmt.Errorf("unexpected close popup model %T", finalModel)
-	}
-	if !final.closeDone || final.closeCanceled {
-		return lifecycle.ClosePaneOnly, true, nil
-	}
-	return final.closeResult, false, nil
+	idx := clampPendingCloseOptionIndex(m.pendingAction, closeOptionIndexForMode(opts.InitialMode))
+	m.pendingAction.closeOptionIndex = idx
+	m.pendingAction.closeMode = closeOptions()[idx].mode
+	return m
 }
 
 func (m model) closeChoicePopupCmd() (model, tea.Cmd) {
@@ -85,8 +93,9 @@ func (m model) closeChoicePopupCmd() (model, tea.Cmd) {
 	m.closePopupOpen = true
 	cmd := func() tea.Msg {
 		mode, canceled, err := popup(CloseChoiceRequest{
-			PaneLabel:   pending.pane.identityLabel(),
-			InitialMode: pending.closeMode,
+			PaneLabel:       pending.pane.identityLabel(),
+			InitialMode:     pending.closeMode,
+			RequireWorktree: pending.requireWorktree,
 		})
 		return closeChoicePopupDoneMsg{mode: mode, canceled: canceled, err: err}
 	}
@@ -112,7 +121,11 @@ func (m model) closeChoiceView() string {
 			marker = selectedItemMarker
 			style = titleStyle
 		}
-		lines = append(lines, style.Render(fmt.Sprintf("%s%d. %s - %s", marker, i+1, opt.label, opt.description)))
+		description := opt.description
+		if i == 0 && m.pendingAction != nil && m.pendingAction.requireWorktree {
+			description = "unavailable for Herdr"
+		}
+		lines = append(lines, style.Render(fmt.Sprintf("%s%d. %s - %s", marker, i+1, opt.label, description)))
 	}
 	lines = append(lines, dimStyle.Render("up/down or 1-3 select, enter confirm, esc cancel"))
 	content := strings.Join(lines, "\n")

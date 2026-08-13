@@ -248,10 +248,12 @@ The lifecycle commands operate on entries recorded in `.fanout/state.json`; they
 
 `.fanout/state.json` holds `schemaVersion` plus one row per pane. Every row carries `parent`, `issueNum`, `slug`, `branchName`, `paneId`, `agent`, `displayName`, `worktreePath`, `prompt`, and `createdAt`. Keys omitted when empty: `taskId`, `kind`, `shellKey`, `baseBranch`, `wave`, `agentStatus`, the plan-mode marker `codexPlanMode` (a historical key name — recorded for any agent's plan-mode pane), the Codex thread metadata (`codexThreadId`, `codexSessionId`), and the attach source (`sourceParent`, `sourceIssueNum`, `sourceTaskId`). `shellKey` ties each newly created row to one live tmux pane. TUI shell terminals use `kind: "shell"` (closing one removes only the tmux pane and the state row), and agents attached to an existing worktree use `kind: "attached-agent"`.
 
+Herdr child rows also save the backend, workspace ID and label, terminal ID, repository key and root, owned session and socket, and whether fanout created the branch. Lifecycle mutations reject incomplete or mismatched Herdr identity.
+
 If launch or restore fails and fanout cannot confirm that the new pane stopped, it keeps a recovery row (and any created worktree) so a later lifecycle command can retry safely.
 
 - `fanout <parent> --merge <NUM>` runs `git -C <project-root> merge --ff-only <recorded-branch>`. If the merge is not a fast-forward, fanout reports the git error and does not start an editor or conflict-resolution flow.
-- `fanout <parent> --close <NUM>` verifies the recorded tmux pane by `shellKey`, closes and rechecks it, then removes the worktree with `git worktree remove <path> --force`, removes the state entry, and runs `git worktree prune`. A legacy row without `shellKey` is removable only after its pane ID is confirmed absent. If pane ownership cannot be verified or the pane remains live, fanout keeps the worktree and state entry for a retry.
+- `fanout <parent> --close <NUM>` closes the recorded child and removes its worktree and state entry. For tmux, fanout verifies the pane by `shellKey`, closes and rechecks it, then uses `git worktree remove <path> --force`. A legacy row without `shellKey` is removable only after its pane ID is confirmed absent. For Herdr, fanout verifies the owned route and saved runtime/Git identity, records a cleanup intent, and uses non-force `herdr worktree remove`; dirty or ambiguous state fails closed without deleting the row.
 - `fanout <parent> --cleanup` closes every recorded child whose issue is `CLOSED` or whose closed-by PR list contains a `MERGED` PR. Pending children remain recorded.
 
 ```bash

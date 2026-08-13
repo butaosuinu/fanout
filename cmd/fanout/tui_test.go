@@ -951,7 +951,9 @@ func TestTUINewPanePopupResultRoundTrip(t *testing.T) {
 func TestTUIClosePopupRequestAndResultRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	requestPath := filepath.Join(dir, "request.json")
-	request := tuiClosePopupRequest{PaneLabel: "#101", Mode: closeModeName(lifecycle.CloseEverything)}
+	request := tuiClosePopupRequest{
+		PaneLabel: "#101", Mode: closeModeName(lifecycle.CloseEverything), RequireWorktree: true,
+	}
 	if err := writeTUIClosePopupRequest(requestPath, request); err != nil {
 		t.Fatal(err)
 	}

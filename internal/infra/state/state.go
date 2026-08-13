@@ -53,13 +53,15 @@ type Pane struct {
 	Backend backend.Name `json:"backend,omitempty"`
 	PaneID  string       `json:"paneId"`
 	// Herdr identity is additive so legacy rows still decode. Owned-session
-	// launch paths persist these authoritative values; a row without a comparison
-	// baseline is unsupported rather than rebound by name, while a complete row
-	// whose identity differs is stale.
+	// launch paths persist these authoritative values; observation never fills
+	// them from a snapshot. A row without a comparison baseline is unsupported
+	// rather than rebound by name, while a complete row whose identity differs is stale.
 	HerdrWorkspaceID    string                   `json:"herdrWorkspaceId,omitempty"`
 	HerdrWorkspaceLabel string                   `json:"herdrWorkspaceLabel,omitempty"`
 	HerdrTerminalID     string                   `json:"herdrTerminalId,omitempty"`
 	HerdrRepoKey        string                   `json:"herdrRepoKey,omitempty"`
+	HerdrRepoRoot       string                   `json:"herdrRepoRoot,omitempty"`
+	HerdrBranchCreated  bool                     `json:"herdrBranchCreated,omitempty"`
 	HerdrAgentID        string                   `json:"herdrAgentId,omitempty"`
 	HerdrAgentSession   *backend.AgentSessionRef `json:"herdrAgentSession,omitempty"`
 	HerdrSession        string                   `json:"herdrSession,omitempty"`
@@ -138,6 +140,7 @@ type LockedStore struct {
 	file             *os.File
 	herdrIntentsPath string
 	herdrIntentsFile *os.File
+	herdrProjectRoot string
 	Store
 }
 
@@ -170,7 +173,7 @@ func LockProject(projectRoot string) (*LockedStore, error) {
 }
 
 func LockProjectForLaunch(projectRoot string) (*LockedStore, error) {
-	return lockProjectForLaunch(context.Background(), projectRoot, true)
+	return lockProjectForLaunch(context.Background(), projectRoot, Path(projectRoot), true)
 }
 
 // LockProjectForLaunchContext acquires the combined state and Herdr intents
@@ -179,10 +182,16 @@ func LockProjectForLaunchContext(ctx context.Context, projectRoot string) (*Lock
 	if ctx == nil {
 		return nil, fmt.Errorf("lock project for launch requires a context")
 	}
-	return lockProjectForLaunch(ctx, projectRoot, false)
+	return lockProjectForLaunch(ctx, projectRoot, Path(projectRoot), false)
 }
 
-func lockProjectForLaunch(ctx context.Context, projectRoot string, blocking bool) (*LockedStore, error) {
+// LockProjectForLaunchAt holds the repository-common Herdr intent lock and a
+// caller-selected state file lock in the same order as the launch path.
+func LockProjectForLaunchAt(projectRoot, statePath string) (*LockedStore, error) {
+	return lockProjectForLaunch(context.Background(), projectRoot, statePath, true)
+}
+
+func lockProjectForLaunch(ctx context.Context, projectRoot, statePath string, blocking bool) (*LockedStore, error) {
 	intentsPath, err := herdrIntentsPathContext(ctx, projectRoot)
 	if err != nil {
 		return nil, err
@@ -191,7 +200,7 @@ func lockProjectForLaunch(ctx context.Context, projectRoot string, blocking bool
 	if err != nil {
 		return nil, err
 	}
-	locked, err := lockStatePath(ctx, Path(projectRoot), blocking)
+	locked, err := lockStatePath(ctx, statePath, blocking)
 	if err != nil {
 		if unlockErr := unlockStateFile(herdrIntentsFile); unlockErr != nil {
 			return nil, errors.Join(
@@ -203,6 +212,7 @@ func lockProjectForLaunch(ctx context.Context, projectRoot string, blocking bool
 	}
 	locked.herdrIntentsPath = intentsPath
 	locked.herdrIntentsFile = herdrIntentsFile
+	locked.herdrProjectRoot = filepath.Clean(projectRoot)
 	return locked, nil
 }
 
@@ -280,6 +290,7 @@ func (l *LockedStore) Unlock() error {
 	intentsErr := unlockStateFile(l.herdrIntentsFile)
 	l.herdrIntentsPath = ""
 	l.herdrIntentsFile = nil
+	l.herdrProjectRoot = ""
 	if stateErr != nil {
 		return stateErr
 	}
@@ -294,7 +305,7 @@ func (l *LockedStore) HerdrIntents(projectRoot string) (*LockedHerdrIntents, err
 	}
 	// The journal path was derived from the same project root at lock time;
 	// re-deriving it here would run git while both locks are held.
-	if filepath.Clean(l.path) != filepath.Clean(Path(projectRoot)) {
+	if l.herdrProjectRoot != filepath.Clean(projectRoot) {
 		return nil, fmt.Errorf("herdr intents launch lock belongs to a different project")
 	}
 	store, err := loadHerdrIntents(l.herdrIntentsPath)

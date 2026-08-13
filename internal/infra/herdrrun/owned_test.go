@@ -330,10 +330,20 @@ func (h *ownedHarness) ensure() *OwnedSession {
 
 func (h *ownedHarness) tryEnsure() (*OwnedSession, error) {
 	h.t.Helper()
+	return ensureOwned(
+		context.Background(),
+		OwnedOptions{GitCommonDir: h.commonDir, RuntimeBase: h.runtimeBase},
+		h.backend(),
+		h.supervisor.start,
+	)
+}
+
+func (h *ownedHarness) backend() *Backend {
+	h.t.Helper()
 	b := New(h.layout.runtimeDir[strings.LastIndex(h.layout.runtimeDir, string(os.PathSeparator))+1:], h.layout.socketPath)
 	b.lookPath = func(string) (string, error) { return h.binary, nil }
 	b.output = h.fake.output
-	return ensureOwned(context.Background(), OwnedOptions{GitCommonDir: h.commonDir, RuntimeBase: h.runtimeBase}, b, h.supervisor.start)
+	return b
 }
 
 func (h *ownedHarness) target() OwnedPaneIdentity {
@@ -488,11 +498,21 @@ func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
 	h := newOwnedHarness(t)
 	first := h.session
 	second := h.ensure()
+	third, err := openOwned(context.Background(), OwnedOptions{
+		GitCommonDir: h.commonDir,
+		RuntimeBase:  h.runtimeBase,
+	}, h.backend())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if h.supervisor.starts != 1 {
 		t.Fatalf("supervisor starts = %d, want 1", h.supervisor.starts)
 	}
 	if first.Session != second.Session || first.SocketPath != second.SocketPath || first.ClientSocketPath != second.ClientSocketPath {
 		t.Fatalf("re-adopted session differs: first=%+v second=%+v", first, second)
+	}
+	if third.Session != first.Session || third.SocketPath != first.SocketPath {
+		t.Fatalf("lifecycle re-adopted session differs: first=%+v third=%+v", first, third)
 	}
 	command, err := second.AttachCommand()
 	if err != nil {

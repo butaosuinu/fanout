@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "524",
+      "issueNum": 528,
+      "slug": "legacy-herdr-child",
+      "branchName": "fanout/legacy-herdr-child",
+      "backend": "herdr",
+      "paneId": "workspace-528:p1",
+      "herdrWorkspaceId": "workspace-528",
+      "herdrTerminalId": "terminal-528",
+      "herdrSession": "fixture-session",
+      "herdrSocketPath": "/tmp/herdr-fixture.sock",
+      "agent": "claude",
+      "displayName": "legacy-herdr-child",
+      "worktreePath": "/tmp/herdr-status-child",
+      "createdAt": "2026-08-05T00:00:00Z"
+    }
+  ]
+}
