@@ -11,7 +11,8 @@ herdr backend は、コーディングエージェント向けの永続 PTY ラ�
 opt-in で、issue、Project、plan、label watcher、対話 TUI の launch はリポジトリ単位の fanout-owned session を使います。
 引数なしの TUI は、identity を検証した owned 行に merge、close、cleanup も実行できます。
 既定の backend は tmux です。
-fanout は herdr を同梱しません。別途インストールします。
+fanout は herdr を同梱しないので、別途インストールしてください。
+v0.8.0 以降は Apache-2.0、0.7.x は AGPL-3.0 + 商用のデュアルライセンスです。
 
 ## v1 でできること
 

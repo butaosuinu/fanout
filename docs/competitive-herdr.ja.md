@@ -137,7 +137,7 @@ A → B の順で入れ、C は並行。#59 / #106 は A / B の上に乗る(#10
 - https://herdr.dev/ / https://github.com/herdrdev/herdr
 - v0.7.4 release / sidebar config: https://github.com/herdrdev/herdr/releases/tag/v0.7.4 / https://herdr.dev/docs/config-reference/
 - v0.7.5 release / agent automation: https://github.com/herdrdev/herdr/releases/tag/v0.7.5 / https://herdr.dev/docs/agent-automation/
-- v0.8.0 release: https://github.com/herdrdev/herdr/releases/tag/v0.8.0 — Apache-2.0 再ライセンス、organization 移行、worktree workspace の label 保持修正
+- v0.8.0 release: https://github.com/herdrdev/herdr/releases/tag/v0.8.0 — linked worktree workspace の label 保持修正(fanout の identity fence が依存する)、Apache-2.0 再ライセンス、organization 移行
 - v0.7.5 発表スレッド(2026-07-21): https://x.com/herdrdev/status/2079634095047413886 — agent CLI 紹介とデモ動画は同スレッド .../2079634098197348518
 - plugin marketplace: https://herdr.dev/plugins/ — GitHub topic `herdr-plugin` の自動収集
 - Socket API: https://herdr.dev/docs/socket-api/ — `pane.*` / `agent.*` / `events.subscribe/wait` / worktree 操作
