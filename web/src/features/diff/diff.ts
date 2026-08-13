@@ -52,7 +52,7 @@ export const TOKENIZE_MAX_LENGTH_PLAIN = 0;
  * 少ない高密度 patch は素通りする(実測: 500 行 × 399 文字の置換 2 side で
  * 6,065ms → `none` で 287ms、decoration 1,500 → 0)。 */
 export const INLINE_DIFF_MAX_CHARS = 30_000;
-export const LINE_DIFF_TYPE_PLAIN = "none";
+export const LINE_DIFF_TYPE_PLAIN = "none" as const;
 
 export const TOKENIZE_MAX_LINE_LENGTH = 400;
 
@@ -315,7 +315,7 @@ function groupByNormalizedPath(files: FileDiffMetadata[]): Map<string, FileDiffM
  * unquoteGitPath が、off なら raw byte を Go の encoding/json が潰す。どちらの
  * 経路でも `docs/\200.md` と `docs/\201.md` は同じ文字列になる。
  * 潰れた跡(U+FFFD)があるなら identity は失われているので同一と見なさない。 */
-function isSameFile(a: FileDiffMetadata, b: FileDiffMetadata): boolean {
+export function isSameFile(a: FileDiffMetadata, b: FileDiffMetadata): boolean {
   return a.name === b.name && !a.name.includes("�");
 }
 

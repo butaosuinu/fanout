@@ -35,6 +35,7 @@ import { Drawer } from "../features/drawer/Drawer";
 import { FilterBar } from "../features/filter/FilterBar";
 import { Hud } from "../features/sessions/Hud";
 import { Nav } from "./Nav";
+import { viewedScope } from "../features/diff/viewedStore";
 import { SessionSection, type SessionItem } from "../features/sessions/SessionSection";
 import { SettingsModal } from "../features/settings/SettingsModal";
 
@@ -263,7 +264,9 @@ function Dashboard() {
     [snap, terms, sortKey, sortDir, riseParents],
   );
 
-  const repo = snap?.repo ?? "";
+  /* projectRoot は repo と違って最初の snapshot から入っていて動かない
+   * (gh の解決を待たない)。確認済みの保存 scope はこちらで分ける。 */
+  const { repo, projectRoot } = snap ?? { repo: "", projectRoot: "" };
   const selectedEntry = findPaneEntry(snap, selected);
   const msgs = degradedMessages(snap?.degraded);
   const status = snap
@@ -418,25 +421,63 @@ function Dashboard() {
         )}
       </div>
       {diffTarget && (
-        /* chunk の取得に失敗しても dashboard ごと落とさない。境界は diffTarget と
-         * 同じ寿命なので、閉じて開き直せばそのまま再試行になる。 */
-        <ChunkBoundary fallback={<DiffLoadFailed onClose={closeDiff} />}>
-          <Suspense fallback={<DiffPending enabled={!settingsOpen} onCancel={closeDiff} />}>
-            <DiffOverlay
-              title={diffTarget.title}
-              query={diffTarget.query}
-              token={token}
-              anchorKey={selected}
-              suppressed={settingsOpen}
-              onCoveringChange={setDiffCovering}
-              escapeEnabled={!settingsOpen}
-              onOpenSettings={openSettings}
-              onClose={closeDiff}
-            />
-          </Suspense>
-        </ChunkBoundary>
+        <DiffOverlaySlot
+          target={diffTarget}
+          projectRoot={projectRoot}
+          token={token}
+          anchorKey={selected}
+          settingsOpen={settingsOpen}
+          onCoveringChange={setDiffCovering}
+          onOpenSettings={openSettings}
+          onClose={closeDiff}
+        />
       )}
       {settingsOpen && <SettingsModal onClose={closeSettings} />}
     </>
+  );
+}
+
+/* diff オーバーレイの遅延読み込み境界。chunk の取得に失敗しても dashboard ごと
+ * 落とさない — 境界は diffTarget と同じ寿命なので、閉じて開き直せばそのまま
+ * 再試行になる。 */
+function DiffOverlaySlot({
+  target,
+  projectRoot,
+  token,
+  anchorKey,
+  settingsOpen,
+  onCoveringChange,
+  onOpenSettings,
+  onClose,
+}: {
+  target: DiffTarget;
+  /* 保存 scope の前置き。ポート固定で別リポジトリを開いても rowKey が衝突しない。
+     repo ではなく projectRoot を使う — repo は gh の解決待ちで後から埋まる */
+  projectRoot: string;
+  token: string;
+  anchorKey: string | null;
+  /* 上に設定モーダルが重なっている。抑止と Escape の譲り先がこれで決まる */
+  settingsOpen: boolean;
+  onCoveringChange: (covering: boolean) => void;
+  onOpenSettings: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <ChunkBoundary fallback={<DiffLoadFailed onClose={onClose} />}>
+      <Suspense fallback={<DiffPending enabled={!settingsOpen} onCancel={onClose} />}>
+        <DiffOverlay
+          title={target.title}
+          query={target.query}
+          token={token}
+          scopeKey={viewedScope(projectRoot, target.key)}
+          anchorKey={anchorKey}
+          suppressed={settingsOpen}
+          onCoveringChange={onCoveringChange}
+          escapeEnabled={!settingsOpen}
+          onOpenSettings={onOpenSettings}
+          onClose={onClose}
+        />
+      </Suspense>
+    </ChunkBoundary>
   );
 }

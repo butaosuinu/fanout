@@ -25,7 +25,7 @@ msgstr "Resize the diff panel"
 msgid "wave で絞り込み"
 msgstr "Filter by wave"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffBody.tsx
 msgid "merge-base からの変更はありません"
 msgstr "No changes since the merge-base"
 
@@ -37,7 +37,7 @@ msgstr "Could not load the diff (HTTP {status}): {detail}"
 msgid "新規追加"
 msgstr "Added"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "全画面表示"
 msgstr "Full screen"
 
@@ -53,7 +53,7 @@ msgstr "(pane output unavailable — the pane has exited)"
 msgid "省略"
 msgstr "omitted"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "diff を閉じる"
 msgstr "Close the diff"
 
@@ -65,7 +65,7 @@ msgstr "The herdr backend does not support plan capture."
 msgid "すべて折りたたむ"
 msgstr "Collapse all"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "コンパクト表示"
 msgstr "Compact"
 
@@ -73,7 +73,7 @@ msgstr "Compact"
 msgid "サイズ上限超過のため patch なし"
 msgstr "no patch — over the size limit"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "縦積み"
 msgstr "Stacked"
 
@@ -97,7 +97,7 @@ msgstr "The issue was closed before its pane ever started."
 msgid "削除"
 msgstr "Deleted"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "レイアウト: {current}(クリックで{next})"
 msgstr "Layout: {current} (click for {next})"
 
@@ -134,7 +134,7 @@ msgstr "This runtime pane cannot be read right now."
 msgid "応答上限(1 MiB)で省略"
 msgstr "omitted at the response limit (1 MiB)"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffFileRow.tsx
 msgid "{name} — {lines} 行 — 展開"
 msgstr "{name} — {lines} lines — expand"
 
@@ -179,6 +179,11 @@ msgstr "Not started — no pane has been launched for this child issue yet."
 msgid "{0, plural, other {# ファイルは patch に含まれていません}}"
 msgstr "{0, plural, one {# file is not included in the patch} other {# files are not included in the patch}}"
 
+#: src/features/diff/DiffFileList.tsx
+#: src/features/diff/DiffFileRow.tsx
+msgid "確認済み"
+msgstr "Viewed"
+
 #: src/transport/useDiff.ts
 msgid "diff の取得に失敗しました(接続エラー)"
 msgstr "Could not load the diff (connection error)"
@@ -211,6 +216,10 @@ msgstr "Filter by runtime backend"
 msgid "{backend} backend はペイン内容の読み取りに対応していません。"
 msgstr "The {backend} backend does not support reading pane content."
 
+#: src/features/diff/DiffFileRow.tsx
+msgid "{name} — 確認済み"
+msgstr "{name} — viewed"
+
 #: src/features/settings/SettingsModal.tsx
 msgid "English"
 msgstr "English"
@@ -239,12 +248,16 @@ msgstr "No panes match the filter"
 msgid "runtime の一部が利用できません — ペイン生死・peek / plan は劣化表示"
 msgstr "Part of the runtime is unavailable — pane liveness, peek and plan are degraded"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 #: src/features/settings/SettingsModal.tsx
 msgid "自動"
 msgstr "Auto"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffFileList.tsx
+msgid "{done} / {total} 確認済み"
+msgstr "{done} / {total} viewed"
+
+#: src/features/diff/DiffToolbar.tsx
 #: src/features/drawer/Drawer.tsx
 msgid "再取得"
 msgstr "Reload"
@@ -257,7 +270,7 @@ msgstr "The patch does not cover everything under review — it is incomplete"
 msgid "filter — 自由語 or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"
 msgstr "filter — free text or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "テーマ設定"
 msgstr "Theme settings"
 
@@ -265,7 +278,7 @@ msgstr "Theme settings"
 msgid "詳細を閉じる"
 msgstr "Close details"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffToolbar.tsx
 msgid "左右 2 面"
 msgstr "Side by side"
 
@@ -284,6 +297,10 @@ msgstr "Modified"
 #: src/features/diff/diff.ts
 msgid "サーバーが diff を安全に生成できませんでした: {detail}"
 msgstr "The server could not generate the diff safely: {detail}"
+
+#: src/features/diff/DiffToolbar.tsx
+msgid "確認済みも表示"
+msgstr "Show viewed files"
 
 #: src/features/settings/SettingsModal.tsx
 msgid "ダークテーマ"
@@ -349,7 +366,7 @@ msgstr "Theme"
 msgid "詳細パネルの幅を変更"
 msgstr "Resize the details panel"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffFileRow.tsx
 msgid "{lines} 行"
 msgstr "{lines} lines"
 
@@ -360,6 +377,10 @@ msgstr "Renamed"
 #: src/features/sessions/Hud.tsx
 msgid "集計"
 msgstr "Summary"
+
+#: src/features/diff/DiffBody.tsx
+msgid "patch のあるファイルはすべて確認済みです"
+msgstr "Every file with a patch is viewed"
 
 #: src/features/filter/FilterDropdown.tsx
 msgid "{key} の選択肢を検索"
@@ -386,7 +407,7 @@ msgstr "Loading the diff… (up to 10 seconds)"
 msgid "diff を取得できません — worktree の記録が見つかりません(cleanup 済みか、サーバーが /api/diff 未対応の可能性): {detail}"
 msgstr "Cannot load the diff — no worktree on record (cleaned up, or the server has no /api/diff): {detail}"
 
-#: src/features/diff/DiffOverlay.tsx
+#: src/features/diff/DiffFileRow.tsx
 msgid "{name} — 折りたたむ"
 msgstr "{name} — collapse"
 
@@ -409,6 +430,10 @@ msgstr "Failed to read state: {reason}"
 #: src/features/filter/FilterBar.tsx
 msgid "agent で絞り込み"
 msgstr "Filter by agent"
+
+#: src/features/diff/DiffToolbar.tsx
+msgid "確認済みを隠す"
+msgstr "Hide viewed files"
 
 #: src/features/drawer/Drawer.tsx
 msgid "peek — 直近の出力"

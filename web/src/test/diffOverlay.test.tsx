@@ -14,6 +14,7 @@ import {
   makeSnapshot,
 } from "./fixtures";
 import { server } from "./server";
+import { viewedScope } from "../features/diff/viewedStore";
 
 /* diff オーバーレイの統合テスト。モックはネットワーク境界(/api/diff)のみで、
  * @pierre/diffs の描画は実物を通す — patch が HTML として注入されないこと
@@ -177,7 +178,9 @@ describe("diff オーバーレイ", () => {
 
     const overlay = await openOverlay(user);
 
-    expect(captured).not.toBeNull();
+    /* dialog は fetch の完了を待たずに出るので、取得そのものを待ってから読む
+       (即読みだと lazy chunk の解決コスト次第で取りこぼす) */
+    await waitFor(() => expect(captured).not.toBeNull());
     expect(captured!.get("parent")).toBe("142");
     expect(captured!.get("issue")).toBe("101");
     expect(captured!.get("task")).toBeNull();
@@ -1446,5 +1449,315 @@ describe("diff オーバーレイ", () => {
     await user.click(screen.getByText("Shell pane"));
     await screen.findByRole("complementary", { name: "ペイン詳細" });
     expect(screen.queryByRole("button", { name: "変更を表示" })).not.toBeInTheDocument();
+  });
+});
+
+/* 確認済み(GitHub の Viewed 相当)。保存先は localStorage だけ — dashboard の
+ * サーバーは GET-only で mutation endpoint を持たない。 */
+describe("diff オーバーレイの確認済み", () => {
+  /* 保存キーは projectRoot で分ける — ポート固定で別リポジトリを開くと rowKey が
+     衝突する。fixture の projectRoot は "/tmp/repo"、行は parent 142 の issue 101。 */
+  const VIEWED_KEY = `fanout.diffViewed.${viewedScope("/tmp/repo", "142#101")}`;
+
+  /* 「src/hello.ts — 確認済み」のチェック。1 file に 1 個で、名前で引ける */
+  const viewedBox = (overlay: HTMLElement, path: string) =>
+    within(overlay).getByRole("checkbox", { name: `${path} — 確認済み` });
+
+  it("チェックを入れるとその file を畳み、外すと開き直す", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await waitFor(() => expect(shadowText()).not.toContain("hello_marker"));
+    // 他の file は畳まれない
+    expect(shadowText()).toContain("util_marker");
+
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+  });
+
+  it("サイドバーに進捗とチェック済みの行を出す", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    const sidebar = await within(overlay).findByRole("region", { name: "変更ファイル" });
+    expect(within(sidebar).getByText("0 / 2 確認済み")).toBeInTheDocument();
+
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await waitFor(() => {
+      expect(within(sidebar).getByText("1 / 2 確認済み")).toBeInTheDocument();
+    });
+    /* 行の accessible name にも状態を後置する — アイコンだけでは読み上げられない */
+    expect(
+      within(sidebar).getByRole("button", { name: "src/hello.ts — 変更 — 確認済み" }),
+    ).toBeInTheDocument();
+  });
+
+  it("overlay を開き直しても確認済みが残る", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await waitFor(() => expect(localStorage.getItem(VIEWED_KEY)).not.toBeNull());
+
+    /* Drawer は開いたままなので、行ではなく「変更を表示」から開き直す */
+    await user.click(within(overlay).getByRole("button", { name: "diff を閉じる" }));
+    await user.click(await screen.findByRole("button", { name: "変更を表示" }));
+    const reopened = await screen.findByRole("dialog", { name: "worktree diff" });
+
+    /* 復元した file は畳まれた状態で出る(展開ボタンが「展開」を名乗る) */
+    await waitFor(() => {
+      expect(viewedBox(reopened, "src/hello.ts")).toBeChecked();
+    });
+    expect(shadowText()).not.toContain("hello_marker");
+    expect(shadowText()).toContain("util_marker");
+  });
+
+  it("再取得で中身が変わった file だけ確認済みを外す", async () => {
+    /* patch を差し替えられるハンドラ。1 回目と 2 回目で hello.ts だけ中身が変わる */
+    let payload = "hello_marker";
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          twoFileDiff({
+            patch: TWO_FILE_PATCH.replace("hello_marker", payload),
+          }),
+        ),
+      ),
+    );
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await user.click(viewedBox(overlay, "src/util.ts"));
+    await waitFor(() => expect(viewedBox(overlay, "src/util.ts")).toBeChecked());
+
+    payload = "hello_changed";
+    await user.click(within(overlay).getByRole("button", { name: "再取得" }));
+
+    await waitFor(() => expect(shadowText()).toContain("hello_changed"));
+    expect(viewedBox(overlay, "src/hello.ts")).not.toBeChecked();
+    // 変わっていない file の確認済みは残る
+    expect(viewedBox(overlay, "src/util.ts")).toBeChecked();
+  });
+
+  it("別の session 行へは確認済みが漏れない", async () => {
+    server.use(
+      http.get("/api/diff", ({ request }) => {
+        const issue = new URL(request.url).searchParams.get("issue") ?? "101";
+        return HttpResponse.json(
+          makeDiffResponse({
+            patch: linesPatch("a.ts", 3, `patch_of_${issue}`),
+            files: [makeDiffFile({ path: "a.ts" })],
+          }),
+        );
+      }),
+    );
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({ issueNum: 101, displayName: "Alpha", diffSummary: "+3/-0" }),
+          makePane({ issueNum: 102, displayName: "Beta", diffSummary: "+3/-0" }),
+        ]),
+      ]),
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: /^変更を表示 #101 / }));
+    const overlay = await screen.findByRole("dialog", { name: "worktree diff" });
+    await waitFor(() => expect(shadowText()).toContain("patch_of_101"));
+    await user.click(viewedBox(overlay, "a.ts"));
+    await waitFor(() => expect(viewedBox(overlay, "a.ts")).toBeChecked());
+
+    await user.click(screen.getByRole("button", { name: /^変更を表示 #102 / }));
+    await waitFor(() => expect(shadowText()).toContain("patch_of_102"));
+    expect(viewedBox(overlay, "a.ts")).not.toBeChecked();
+  });
+
+  /* 同じ worktree を指す行同士は patch が一致する。折りたたみの上書きを patch だけで
+     区切ると、前の行で展開した状態が次の行へ持ち越され、確認済みで復元した file が
+     開いたまま出る。 */
+  it("同じ patch の別 session 行へ切り替えても、前の行の展開状態を持ち込まない", async () => {
+    const patch = linesPatch("a.ts", 3, "shared_marker");
+    server.use(
+      http.get("/api/diff", () =>
+        HttpResponse.json(makeDiffResponse({ patch, files: [makeDiffFile({ path: "a.ts" })] })),
+      ),
+    );
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({ issueNum: 101, displayName: "Alpha", diffSummary: "+3/-0" }),
+          makePane({ issueNum: 102, displayName: "Beta", diffSummary: "+3/-0" }),
+        ]),
+      ]),
+    );
+    const user = userEvent.setup();
+
+    // #102 側で確認済みにしておく(= 開き直したら畳まれて出るはず)
+    await user.click(await screen.findByRole("button", { name: /^変更を表示 #102 / }));
+    const overlay = await screen.findByRole("dialog", { name: "worktree diff" });
+    await waitFor(() => expect(shadowText()).toContain("shared_marker"));
+    await user.click(viewedBox(overlay, "a.ts"));
+    await waitFor(() => expect(shadowText()).not.toContain("shared_marker"));
+
+    // #101 へ移って展開の上書きを作る(こちらは未確認なので開いている)
+    await user.click(screen.getByRole("button", { name: /^変更を表示 #101 / }));
+    await waitFor(() => expect(shadowText()).toContain("shared_marker"));
+    await user.click(within(overlay).getByRole("button", { name: /^a\.ts — 折りたたむ$/ }));
+    await waitFor(() => expect(shadowText()).not.toContain("shared_marker"));
+    await user.click(within(overlay).getByRole("button", { name: /^a\.ts — .* — 展開$/ }));
+    await waitFor(() => expect(shadowText()).toContain("shared_marker"));
+
+    // #102 へ戻す。確認済みなので畳まれて出る(#101 の上書きを引きずらない)
+    await user.click(screen.getByRole("button", { name: /^変更を表示 #102 / }));
+    await waitFor(() => expect(viewedBox(overlay, "a.ts")).toBeChecked());
+    expect(shadowText()).not.toContain("shared_marker");
+  });
+
+  it("確認済みを隠すと本文と一覧の両方から降ろす", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+
+    await user.click(within(overlay).getByRole("button", { name: "確認済みを隠す" }));
+
+    await waitFor(() => {
+      expect(within(overlay).queryByRole("checkbox", { name: /^src\/hello\.ts/ })).toBeNull();
+    });
+    const sidebar = within(overlay).getByRole("region", { name: "変更ファイル" });
+    expect(within(sidebar).queryByText("hello.ts")).toBeNull();
+    // 残りは触れる。分母は変わらない(確認済みの母集団は patch を持つ file 全部)
+    expect(within(sidebar).getByText("1 / 2 確認済み")).toBeInTheDocument();
+    expect(shadowText()).toContain("util_marker");
+
+    await user.click(within(overlay).getByRole("button", { name: "確認済みも表示" }));
+    await waitFor(() => expect(viewedBox(overlay, "src/hello.ts")).toBeChecked());
+  });
+
+  /* 隠す設定では、チェックした行ごと unmount される。overlay の一番上へ戻すと
+     キーボードだけで読む人は file ごとにヘッダ全部を Tab で辿り直すことになる。 */
+  it("隠す設定でチェックすると、次に読む file のチェックへフォーカスが移る", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    await user.click(within(overlay).getByRole("button", { name: "確認済みを隠す" }));
+
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(viewedBox(overlay, "src/util.ts"));
+    });
+  });
+
+  /* 「すべて」とは言わない — patch を持たない file は本文に出ないので、
+     全部見たと読める文言は嘘になりうる(警告帯と省略一覧が残件を出している)。 */
+  it("patch のある file を全部確認済みにして隠すと、空になった理由を出す", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    await user.click(within(overlay).getByRole("button", { name: "確認済みを隠す" }));
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await user.click(viewedBox(overlay, "src/util.ts"));
+
+    await waitFor(() => {
+      expect(
+        within(overlay).getByText("patch のあるファイルはすべて確認済みです"),
+      ).toBeInTheDocument();
+    });
+    /* 隠した file ごと unmount されるので、フォーカスの引き取りが要る。DOM の
+       入れ替わりを待つため次フレームで動くので、ここも待って確かめる。 */
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+  });
+
+  /* 確認済みを外すのは「上書きの取り消し」であって「開け」ではない。false を
+     書くと、1,000 行超で既定折りたたみだった file が開いたことすら無い状態から
+     全開になり、読んでいた位置が飛ぶ。 */
+  it("既定で畳まれる大きい file は、確認済みを外しても畳まれたまま", async () => {
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          twoFileDiff({
+            patch: TWO_FILE_PATCH + linesPatch("bomb.txt", 1600, "payload_row"),
+            files: [
+              makeDiffFile(),
+              makeDiffFile({ path: "src/util.ts", additions: 1, deletions: 0 }),
+              makeDiffFile({ path: "bomb.txt", additions: 1600, deletions: 0 }),
+            ],
+          }),
+        ),
+      ),
+    );
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    // 最初から畳まれている
+    expect(shadowText()).not.toContain("payload_row");
+
+    await user.click(viewedBox(overlay, "bomb.txt"));
+    await waitFor(() => expect(viewedBox(overlay, "bomb.txt")).toBeChecked());
+    await user.click(viewedBox(overlay, "bomb.txt"));
+    await waitFor(() => expect(viewedBox(overlay, "bomb.txt")).not.toBeChecked());
+
+    expect(shadowText()).not.toContain("payload_row");
+  });
+
+  /* 不正 UTF-8 の byte は正規化で U+FFFD へ潰れ、別 file が同じ key に集まる。
+     チェックを出すと片方を読んだだけでもう片方も確認済みになる。 */
+  it("正規化で衝突した file にはチェックを出さない", async () => {
+    const patch = [
+      'diff --git "a/docs/\\200.md" "b/docs/\\200.md"',
+      '--- "a/docs/\\200.md"',
+      '+++ "b/docs/\\200.md"',
+      "@@ -1 +1 @@",
+      "-one",
+      "+first_marker",
+      'diff --git "a/docs/\\201.md" "b/docs/\\201.md"',
+      '--- "a/docs/\\201.md"',
+      '+++ "b/docs/\\201.md"',
+      "@@ -1 +1 @@",
+      "-two",
+      "+second_marker",
+      "",
+    ].join("\n");
+    const user = setup(
+      http.get("/api/diff", () =>
+        HttpResponse.json(
+          makeDiffResponse({ patch, files: [makeDiffFile({ path: "docs/�.md" })] }),
+        ),
+      ),
+    );
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("first_marker"));
+    expect(shadowText()).toContain("second_marker");
+    expect(within(overlay).queryAllByRole("checkbox")).toHaveLength(0);
+  });
+
+  /* 確認済みの折りたたみは上書きではなく導出。上書きを書くと、別タブで外された
+     ときにチェックだけ外れて本文が畳まれたまま残る。 */
+  it("別タブで外されたら、チェックも折りたたみも一緒に戻る", async () => {
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    await user.click(viewedBox(overlay, "src/hello.ts"));
+    await waitFor(() => expect(shadowText()).not.toContain("hello_marker"));
+
+    // 別タブが外した体。storage イベントは書いた本人には飛ばないので自前で撒く
+    localStorage.removeItem(VIEWED_KEY);
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: VIEWED_KEY, storageArea: localStorage }),
+    );
+
+    await waitFor(() => expect(viewedBox(overlay, "src/hello.ts")).not.toBeChecked());
+    expect(shadowText()).toContain("hello_marker");
+  });
+
+  it("壊れた保存値は無視して、確認済み無しとして開く", async () => {
+    localStorage.setItem(VIEWED_KEY, '{"v":1,"t":1,"files":["src/hello.ts"]}');
+    const user = setup(http.get("/api/diff", () => HttpResponse.json(twoFileDiff())));
+    const overlay = await openOverlay(user);
+    await waitFor(() => expect(shadowText()).toContain("hello_marker"));
+    expect(viewedBox(overlay, "src/hello.ts")).not.toBeChecked();
   });
 });
