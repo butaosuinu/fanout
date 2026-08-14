@@ -172,7 +172,6 @@ fanout herdr shutdown   # 空の owned server を停止する
 
 `restart` は死んだ server 向けです。fanout は旧世代の supervisor process と socket の消失を確認できたときだけ置き換えます。まだ動いている世代は `herdr owned server generation is still live` で拒否します。
 その後は新しい世代を起動し、旧版の fanout が書いた owned `config.toml` を置き換え、記録済みの行を上記のルールで再束縛します。
-reopen の途中で中断された cleanup は `manual_cleanup_required` になり、herdr 側での手動対応が必要です。
 失敗した後にどちらの verb を再実行しても安全です。fanout は何をしようとしたかを記録しており、作業を繰り返すのではなくその結果を確認します。
 
 `shutdown` は空の server を retire します。このリポジトリの state に herdr の行が残っている間(linked worktree もすべて対象)、owned session に workspace が残っている間、別の herdr intent が保留中の間は拒否します。
@@ -220,7 +219,7 @@ fanout-owned session は herdr の XDG directory を隔離し、workspace / work
 fanout-owned launch では herdr の通知 plugin と worktree setup plugin は動きません。
 registry が空でない場合は mutation 前に launch が失敗します。通知と setup には fanout の channel と hook を使ってください。
 
-通知元は 1 つに絞ってください。fanout の `ntfy` / `slack` channel は、PR や CI の遷移に加えて agent の遷移(plan ready、入力待ち、agent 終了)も通知し、herdr の通知 plugin も同じ agent state を独自に通知します。
+通知元は 1 つに絞ってください。fanout の `ntfy` / `slack` channel は、PR や CI の遷移に加えて agent の遷移(plan ready、入力待ち)も通知し、herdr の通知 plugin も同じ agent state を独自に通知します。
 owned launch はその plugin に届かないため、二重通知が起きるのは自分で設定した session だけです。そちらでどちらか一方を止めてください。
 agent integration は別経路です。hook は session identity を herdr へ報告するもので、fanout の launch 単位の hook と併存し、通知は出しません。
 
