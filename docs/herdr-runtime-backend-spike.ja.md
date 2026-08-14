@@ -607,7 +607,8 @@ child root pane の cwd は checkout path と一致したが、source workspace 
 pane run <root-pane> '/usr/bin/env "FANOUT_AGENT_PROBE=value with spaces" "/absolute/path/to/codex" "arg with spaces" --flag'
 ```
 
-Herdr はこの process を Codex として検出し、`process-info` は absolute argv0、`["arg with spaces","--flag"]`、exact cwd を返した。
+Herdr はこの process を Codex として検出した。
+0.7.5 の raw `process-info` は provider 名の `argv0` と absolute executable を先頭に含む `argv` を返すため、fanout は absolute argv0 と引数だけの `argv` へ正規化してから exact cwd と併せて照合する。
 OS process 情報から解決した実 executable も発行した absolute path と一致した。
 続く `agent rename <pane-id> <name>` と current-state の `agent wait <name> --until idle --timeout 5000` は成功し、wait は約 2 ms で返った。
 ただし `pane run` と backing `pane.send_input` は expected `terminal_id`、foreground shell、空入力の precondition を持たず、text と Enter を一操作で送るだけである。

@@ -8,19 +8,31 @@ import (
 	"testing"
 )
 
-func TestNormalizePaneProcessArgsSeparatesAbsoluteArgv0(t *testing.T) {
-	raw := []PaneProcess{{
-		Argv0: "codex", Argv: []string{"/opt/codex", "resume", "session-id"},
-	}}
-	got, err := normalizePaneProcessArgs(raw)
-	if err != nil {
-		t.Fatal(err)
+func TestNormalizePaneProcessArgsSeparatesRawExecutable(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  PaneProcess
+		args []string
+	}{
+		{name: "launcher", raw: PaneProcess{Argv0: "fanout", Argv: []string{"/opt/fanout"}}},
+		{name: "codex", raw: PaneProcess{
+			Argv0: "codex", Argv: []string{"/opt/codex", "resume", "session-id"},
+		}, args: []string{"resume", "session-id"}},
 	}
-	if got[0].Argv0 != "/opt/codex" || !slices.Equal(got[0].Argv, []string{"resume", "session-id"}) {
-		t.Fatalf("normalized process = %+v", got[0])
-	}
-	if raw[0].Argv0 != "codex" || len(raw[0].Argv) != 3 {
-		t.Fatalf("raw process was mutated: %+v", raw[0])
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			raw := []PaneProcess{test.raw}
+			got, err := normalizePaneProcessArgs(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got[0].Argv0 != test.raw.Argv[0] || !slices.Equal(got[0].Argv, test.args) {
+				t.Fatalf("normalized process = %+v", got[0])
+			}
+			if raw[0].Argv0 != test.raw.Argv0 || !slices.Equal(raw[0].Argv, test.raw.Argv) {
+				t.Fatalf("raw process was mutated: %+v", raw[0])
+			}
+		})
 	}
 }
 

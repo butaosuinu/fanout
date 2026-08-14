@@ -399,6 +399,18 @@ func TestExactRestartedCodexPlaceholderAcceptsIdleWithoutTreatingItAsDone(t *tes
 	}
 }
 
+func TestExactRestartedCodexPlaceholderAcceptsGenericAttachedAgent(t *testing.T) {
+	saved, live := restartCodexFixture()
+	saved.Kind = state.PaneKindAttachedAgent
+	saved.HerdrRepoKey, saved.HerdrRepoRoot = "", ""
+	live.RepoKey, live.ProjectRoot, live.WorktreePath = "", "", ""
+
+	got, ok := exactRestartedCodexPlaceholder(saved, []backend.LivePane{live})
+	if !ok || got.CurrentPath != saved.WorktreePath {
+		t.Fatalf("generic attached placeholder = (%+v, %t)", got, ok)
+	}
+}
+
 func TestExactHerdrResumePlaceholderRejectsMissingAgentSession(t *testing.T) {
 	saved, live := restartCodexFixture()
 	intent := state.HerdrIntent{
@@ -442,7 +454,25 @@ func TestExactRestartedCodexPlaceholderFailsClosed(t *testing.T) {
 		{name: "controller launch", mutate: func(saved *state.Pane, _ *[]backend.LivePane) {
 			saved.HerdrDirectAgentLaunch = false
 		}},
+		{name: "partial saved provenance", mutate: func(saved *state.Pane, _ *[]backend.LivePane) {
+			saved.HerdrRepoKey = ""
+		}},
+		{name: "generic non-attached row", mutate: func(saved *state.Pane, live *[]backend.LivePane) {
+			saved.HerdrRepoKey, saved.HerdrRepoRoot = "", ""
+			(*live)[0].RepoKey, (*live)[0].ProjectRoot, (*live)[0].WorktreePath = "", "", ""
+		}},
+		{name: "generic partial live provenance", mutate: func(saved *state.Pane, live *[]backend.LivePane) {
+			saved.Kind = state.PaneKindAttachedAgent
+			saved.HerdrRepoKey, saved.HerdrRepoRoot = "", ""
+			(*live)[0].RepoKey, (*live)[0].ProjectRoot, (*live)[0].WorktreePath = "unexpected", "", ""
+		}},
 		{name: "worktree cwd mismatch", mutate: func(_ *state.Pane, live *[]backend.LivePane) {
+			(*live)[0].CurrentPath = "/repo/other"
+		}},
+		{name: "generic cwd mismatch", mutate: func(saved *state.Pane, live *[]backend.LivePane) {
+			saved.Kind = state.PaneKindAttachedAgent
+			saved.HerdrRepoKey, saved.HerdrRepoRoot = "", ""
+			(*live)[0].RepoKey, (*live)[0].ProjectRoot, (*live)[0].WorktreePath = "", "", ""
 			(*live)[0].CurrentPath = "/repo/other"
 		}},
 	} {

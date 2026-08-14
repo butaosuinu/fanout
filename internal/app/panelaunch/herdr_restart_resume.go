@@ -334,11 +334,18 @@ func resumableSavedCodex(saved state.Pane) bool {
 		saved.Agent == "codex", saved.HerdrDirectAgentLaunch, !saved.PlanMode,
 		exactCodexSessionRef(ref), saved.HerdrAgentID != "",
 		cleanAbsolutePath(saved.HerdrLaunchExecutable), cleanAbsolutePath(saved.WorktreePath),
-		cleanAbsolutePath(saved.HerdrRepoRoot), saved.HerdrRepoKey != "",
+		validSavedHerdrRestartProvenance(saved),
 		saved.HerdrProcessIdentity != nil && saved.HerdrProcessIdentity.Valid(),
 		completeHerdrRestartRoute(saved), saved.HerdrWorkspaceLabel != "",
 	}
 	return !slices.Contains(requirements, false)
+}
+
+func validSavedHerdrRestartProvenance(saved state.Pane) bool {
+	if saved.HerdrRepoKey == "" && saved.HerdrRepoRoot == "" {
+		return saved.Kind == state.PaneKindAttachedAgent
+	}
+	return saved.HerdrRepoKey != "" && cleanAbsolutePath(saved.HerdrRepoRoot)
 }
 
 func exactCodexSessionRef(ref *backend.AgentSessionRef) bool {
@@ -367,10 +374,18 @@ func restartedCodexPlaceholderMatches(saved state.Pane, current backend.LivePane
 		current.WorkspaceLabel == saved.HerdrWorkspaceLabel,
 		!current.AgentPresent, current.AgentProvider == "", current.AgentID == "",
 		current.AgentSession != nil && *current.AgentSession == *saved.HerdrAgentSession,
-		current.RepoKey == saved.HerdrRepoKey, current.ProjectRoot == saved.HerdrRepoRoot,
-		current.WorktreePath == saved.WorktreePath, current.CurrentPath == saved.WorktreePath,
+		herdrRestartProvenanceMatches(saved, current),
 	}
 	return !slices.Contains(requirements, false)
+}
+
+func herdrRestartProvenanceMatches(saved state.Pane, current backend.LivePane) bool {
+	if saved.HerdrRepoKey == "" && saved.HerdrRepoRoot == "" {
+		return current.RepoKey == "" && current.ProjectRoot == "" && current.WorktreePath == "" &&
+			current.CurrentPath == saved.WorktreePath
+	}
+	return current.RepoKey == saved.HerdrRepoKey && current.ProjectRoot == saved.HerdrRepoRoot &&
+		current.WorktreePath == saved.WorktreePath && current.CurrentPath == saved.WorktreePath
 }
 
 func herdrRestartRouteKey(saved state.Pane) string {
