@@ -40,6 +40,7 @@ fanout <parent-issue> --close <NUM> # remove child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed children
 fanout dashboard --web              # read-only localhost web dashboard (Session view)
 fanout msg <verb> [options] [body...]  # 兄弟ペイン間の peer messaging
+fanout herdr <restart|shutdown>     # owned herdr server のライフサイクル
 fanout --check-update               # Compare this binary with the latest release
 fanout update                       # Replace this binary + integrations via install.sh
 fanout --help
@@ -384,6 +385,21 @@ verb 共通のオプション: `--json`（機械可読出力）、`--self <N>` �
 | `4` | SQLite バックエンドの失敗 |
 
 全サーフェスは `fanout msg --help` を参照してください。
+
+### `fanout herdr`
+
+```text
+fanout herdr <restart|shutdown>
+```
+
+このリポジトリの fanout-owned な [herdr]({{< relref "/docs/herdr-backend" >}}) server を明示的に操作します。ほかのコマンドの副作用で server が再起動・停止することはありません。
+
+| verb | 動作 |
+|---|---|
+| `restart` | 死んだ owned server を、supervisor process と socket の消失を確認できたら置き換え、記録済みの行を再束縛する。完全に検証できた direct Codex の行だけが resume し、attach した Codex や Plan mode の行を含めてほかは `stale` のまま。まだ動いている世代は `herdr owned server generation is still live` で拒否する。 |
+| `shutdown` | 空の owned server を retire する。このリポジトリの state に herdr の行が残っている間（linked worktree もすべて対象）、session に workspace が残っている間、別の herdr intent が保留中の間は拒否する。素のシェルからの TUI bootstrap が記録する console 行と、ファンアウトが記録する coordinator 行には削除する verb がないため、herdr backend を動かした checkout は現状 `shutdown` まで到達できない。 |
+
+exit code は成功が `0`、preflight の拒否も途中の失敗も含めてどの段階で失敗しても `1`、不正な呼び出しが `2` です。失敗した後に同じ verb を再実行しても安全です。fanout は何をしようとしたかを記録しており、作業を繰り返すのではなくその結果を確認します。
 
 ### `fanout update`
 

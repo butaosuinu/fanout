@@ -1,7 +1,7 @@
 ---
 title: herdr backend
 linkTitle: herdr backend
-description: "opt-in の herdr runtime backend。owned CLI launch、前提条件、backend 選択、tmux との差分、plugin の注意をまとめます。"
+description: "opt-in の herdr runtime backend。owned CLI launch、前提条件、backend 選択、tmux との差分、server の restart と shutdown、plugin の注意をまとめます。"
 weight: 90
 kanji: 観
 yomi: herdr
@@ -14,7 +14,7 @@ opt-in で、issue、Project、plan、label watcher、対話 TUI の launch は�
 fanout は herdr を同梱しないので、別途インストールしてください。
 v0.8.0 以降は Apache-2.0、0.7.x は AGPL-3.0 + 商用のデュアルライセンスです。
 
-## v1 でできること
+## できること
 
 CLI launch では、fanout がリポジトリの owned session を起動または再採用し、プロジェクトルートの coordinator workspace と子ごとの worktree workspace を作ります。
 選択した agent は pin 済みの non-login fanout launcher から起動されます。
@@ -23,10 +23,8 @@ direct Codex には公式 session report に必要な owned socket と exact pan
 fanout は launch の検証後に限り、workspace、pane、terminal、repository、agent、session、socket の identity を `.fanout/state.json` へ保存します。
 インストール済みの herdr integration が provider session の identity を報告した場合は、その値も保存します。
 
-素のシェルから引数なしの `fanout` を実行すると、owned session を起動または再採用し、repository root の console shell を 1 つ起動して、隔離済みの attach command を表示します。
-console workspace へ入るには、表示された command を実行してください。
-fanout は呼び出し元の shell を置き換えず、自動 attach もしません。
-linked worktree 間では同じ console 行を共有します。
+owned session は自分の `config.toml` を固定します。既定 shell は fanout の launcher(non-login)、herdr の復元時 agent resume は off、herdr の update manifest check も off です。
+fanout の知らないところで agent が起動し直されることはありません。resume は後述の明示操作だけです。
 
 常駐 TUI コンソール、`--status`、web ダッシュボードには、記録済み session と各 pane の runtime backend、identity が表示されます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
 TUI コンソールと web ダッシュボードは、herdr backend で記録された行を `herdr api snapshot` と照合して生死と agent state を反映します。
@@ -73,7 +71,6 @@ TUI のヘッダには、選択された backend とその理由が常に表示�
 
 CLI launch と引数なしの TUI に既存の herdr session は不要です。
 fanout が owner marker 配下の隔離 session を作成または再採用します。
-素のシェルから TUI を bootstrap した後は、表示された attach command を実行してください。
 foreign な herdr session 内で起動した TUI は観測専用のままで、対話操作に owned-session authority は与えられません(`default` は拒否されます)。
 
 ## opt-in の手順
@@ -105,11 +102,40 @@ backend は次の順で解決され、最初に一致したものが使われま
 
 記録済みの pane を持つ親は、記録された backend を使い続けます。
 矛盾する `--backend` や `FANOUT_BACKEND` は、1 つの親の下で backend が混ざらないよう `explicit migration is required` で失敗します。
-v1 に移行コマンドはありません。既存の tmux 親は tmux のままです。
+backend の移行コマンドはありません。既存の tmux 親は tmux のままです。
+
+## owned session を起動する
+
+素のシェルからの引数なし `fanout` が session を bootstrap し、attach command を 1 つ表示します。
+
+```bash
+export FANOUT_BACKEND=herdr
+fanout
+```
+
+この実行で owned session と repository root の console shell が 1 つ起動または再採用されます。
+表示された command で attach し、console ペインの中でもう一度 `fanout` を実行してください。
+そのペインでは herdr が `HERDR_ENV=1` を設定するため、TUI コンソールがそのまま開きます。
+fanout が呼び出し元の shell を置き換えたり attach したりすることはなく、linked worktree 間では同じ console 行を共有します。
+
+CLI のファンアウトには attach も既存 session も不要です。
+同じ owned session を作成または再採用し、プロジェクトルートの coordinator workspace と子ごとの worktree workspace を足して、各 agent を起動します。
+様子を見たくなったときに attach してください。
+
+## 観測専用リリースからの移行
+
+v0.13.0 の herdr backend は観測専用でした。名前付き session は自分で起動し、fanout は herdr 0.7.3 に完全一致で固定し、launch と変更操作はすべて拒否していたため、herdr の行を自分で記録することもありません。
+owned モデルへ移る手順は次のとおりです。
+
+1. `herdr` CLI を stable 0.7.5 以上へ更新します。0.7.3 と 0.7.4 は `unsupported herdr CLI version …` で fail closed します。owned session は pin した CLI で自分の server を起動するため、既存の herdr server を再起動する必要はありません。
+2. 名前付き session を手で起動する手順をやめます。fanout が owner marker 配下に自分の session を作ります。fanout が所有しない session では対話操作は理由付きで無効のままです。
+3. 旧 herdr pane から出て、`HERDR_SESSION` と `HERDR_SOCKET_PATH` を unset した素のシェルから bootstrap します。これらは foreign な行を読むときの接続先を決めますし、herdr pane の中では owned session と一致しないと TUI が警告付きで観測専用に落ちます。
+
+`.fanout/state.json` の変換は不要で、tmux の親もそのままです。
 
 ## tmux との差分
 
-| 機能 | tmux backend | herdr backend v1 |
+| 機能 | tmux backend | herdr backend |
 |---|---|---|
 | issue / Project / plan / watcher の launch | worktree、pane、agent を作成 | owned herdr workspace と検証済み agent を作成 |
 | worktree 作成 | 子ごとに `.fanout/worktrees/` 配下へ | 子ごとに `herdr worktree create` / `open` を実行 |
@@ -129,11 +155,28 @@ v1 に移行コマンドはありません。既存の tmux 親は tmux のま�
 
 明示的な `fanout herdr restart` は、復元された pane の `agent_session` が保存値と完全一致し、起動した process の絶対 executable、`codex resume <session-id>` argv、cwd、ancestry、foreground process group を検証できた direct Codex 行だけを再束縛します。
 値の欠落、重複、不一致、検証不能では行を `stale` のまま残します。
-Claude、OpenCode、Codex Plan / Team controller はこの経路で resume しません。
+Claude、OpenCode、Codex Plan / Team controller、TUI で既存 worktree に attach した Codex はこの経路で resume しません。
 復元直後の shell placeholder が `idle` と表示されても、process の生存や完了を示しません。
 
 herdr は exit status を残さず、正常終了で pane の記録も消します。
 終了した agent は `✓ done` の pane を残さずに herdr session から消え、記録済みの fanout 行は `stale` と表示されます。
+
+## restart と shutdown
+
+fanout が owned server を副作用で再起動・停止することはありません。明示的な 2 つの verb で操作します。
+
+```bash
+fanout herdr restart    # 停止済みの owned server を置き換え、検証を通った行を再束縛する
+fanout herdr shutdown   # 空の owned server を停止する
+```
+
+`restart` は死んだ server 向けです。fanout は旧世代の supervisor process と socket の消失を確認できたときだけ置き換えます。まだ動いている世代は `herdr owned server generation is still live` で拒否します。
+その後は新しい世代を起動し、旧版の fanout が書いた owned `config.toml` を置き換え、記録済みの行を上記のルールで再束縛します。
+失敗した後にどちらの verb を再実行しても安全です。fanout は何をしようとしたかを記録しており、作業を繰り返すのではなくその結果を確認します。
+
+`shutdown` は空の server を retire します。このリポジトリの state に herdr の行が残っている間(linked worktree もすべて対象)、owned session に workspace が残っている間、別の herdr intent が保留中の間は拒否します。
+子の行は `--close` / `--cleanup` で消えますが、shell 行 2 種は残ります。素のシェルからの TUI bootstrap が記録する console 行と、issue / Project / plan のファンアウトが記録するプロジェクトルートの coordinator 行です。
+どちらにも削除する verb がないため、herdr backend を一度でも動かした checkout は現状 `shutdown` まで到達できません。
 
 ## sidebar token
 
@@ -175,6 +218,10 @@ fanout はこれを代行しません。agent 設定の所有者はあなたで�
 fanout-owned session は herdr の XDG directory を隔離し、workspace / worktree 作成前に plugin registry が空であることを要求します。
 fanout-owned launch では herdr の通知 plugin と worktree setup plugin は動きません。
 registry が空でない場合は mutation 前に launch が失敗します。通知と setup には fanout の channel と hook を使ってください。
+
+通知元は 1 つに絞ってください。fanout の `ntfy` / `slack` channel は、PR や CI の遷移に加えて agent の遷移(plan ready、入力待ち)も通知し、herdr の通知 plugin も同じ agent state を独自に通知します。
+owned launch はその plugin に届かないため、二重通知が起きるのは自分で設定した session だけです。そちらでどちらか一方を止めてください。
+agent integration は別経路です。hook は session identity を herdr へ報告するもので、fanout の launch 単位の hook と併存し、通知は出しません。
 
 2 つのツールは別の層にあります。
 fanout-owned session 以外では、herdr の plugin が並列エージェント作業を runtime 側から扱います: GitHub や Jira を起点にした worktree 起動、diff レビューの sidebar、複数プロジェクトの sidebar、レイアウトや通知の plugin。

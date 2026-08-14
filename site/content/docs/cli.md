@@ -40,6 +40,7 @@ fanout <parent-issue> --close <NUM> # remove child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed children
 fanout dashboard --web              # read-only localhost web dashboard (Session view)
 fanout msg <verb> [options] [body...]  # peer messaging between sibling panes
+fanout herdr <restart|shutdown>     # owned herdr server lifecycle
 fanout --check-update               # Compare this binary with the latest release
 fanout update                       # Replace this binary + integrations via install.sh
 fanout --help
@@ -379,6 +380,21 @@ The database lives at `/tmp/fanout-<repo>-<parent>.db` and is overridable with `
 | `4` | SQLite backend failure |
 
 Run `fanout msg --help` for the full surface.
+
+### `fanout herdr`
+
+```text
+fanout herdr <restart|shutdown>
+```
+
+Explicit lifecycle for this repository's fanout-owned [herdr]({{< relref "/docs/herdr-backend" >}}) server. fanout never restarts or stops that server as a side effect of another command.
+
+| Verb | What it does |
+|---|---|
+| `restart` | Replace a dead owned server once its supervisor process and sockets are proven gone, then re-bind recorded rows: an exactly verified direct Codex row resumes and everything else — including an attached Codex and a Plan-mode row — stays `stale`. A generation that is still running refuses with `herdr owned server generation is still live`. |
+| `shutdown` | Retire an empty owned server. Refuses while a herdr row remains in this repository's state (every linked worktree counts), while the session still holds workspaces, or while another herdr intent is pending. The console row a plain-shell TUI bootstrap records and the coordinator row every fan-out records have no removal verb, so a checkout that has run the herdr backend cannot reach `shutdown` today. |
+
+Exits `0` on success, `1` when the operation fails at any stage — a preflight refusal and a failure partway through both land here — and `2` on bad invocation. Rerunning the same verb after a failure is safe: fanout records what it set out to do and confirms that outcome rather than repeating the work.
 
 ### `fanout update`
 
