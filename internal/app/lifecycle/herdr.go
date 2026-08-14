@@ -614,9 +614,49 @@ func finalizeHerdrCleanup(
 	if err := discardSavedHerdrLaunchEnvironment(journal, worktreeIntentID); err != nil {
 		return err
 	}
+	if err := discardManualHerdrResumeIntent(journal, pane); err != nil {
+		return err
+	}
 	journal.RemoveIntent(intent.ID)
 	journal.RemoveIntent(worktreeIntentID)
 	return journal.Save()
+}
+
+func discardManualHerdrResumeIntent(journal *state.LockedHerdrIntents, pane state.Pane) error {
+	intentID, err := state.HerdrResumeIntentID(
+		pane.HerdrSession, pane.HerdrSocketPath, pane.HerdrWorkspaceID, pane.PaneID,
+	)
+	if err != nil {
+		return err
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found {
+		return nil
+	}
+	if !manualHerdrResumeIntentMatchesPane(intent, pane) {
+		return fmt.Errorf("saved Herdr resume intent does not match the selected state row")
+	}
+	if err := herdrrun.DiscardWorkloadEnvironment(filepath.Dir(intent.SocketPath), intent.Launch); err != nil {
+		return err
+	}
+	journal.RemoveIntent(intentID)
+	return nil
+}
+
+func manualHerdrResumeIntentMatchesPane(intent state.HerdrIntent, pane state.Pane) bool {
+	return !slices.Contains([]bool{
+		intent.Kind == state.HerdrIntentResume,
+		intent.Status == state.HerdrIntentManualCleanupRequired,
+		intent.Parent == pane.Parent, intent.RuntimeParent == pane.RuntimeParent,
+		intent.IssueNum == pane.IssueNum, intent.TaskID == pane.TaskID,
+		filepath.Clean(intent.WorktreePath) == filepath.Clean(pane.WorktreePath),
+		intent.Session == pane.HerdrSession, intent.SocketPath == pane.HerdrSocketPath,
+		intent.Resource.WorkspaceID == pane.HerdrWorkspaceID,
+		intent.Resource.PaneID == pane.PaneID,
+		intent.ResumeAgentSession != nil, pane.HerdrAgentSession != nil,
+		intent.ResumeAgentSession != nil && pane.HerdrAgentSession != nil &&
+			*intent.ResumeAgentSession == *pane.HerdrAgentSession,
+	}, false)
 }
 
 func discardSavedHerdrLaunchEnvironment(journal *state.LockedHerdrIntents, worktreeIntentID string) error {

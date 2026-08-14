@@ -77,7 +77,7 @@ tmux-parity は信頼モデルだけでなく機構の密度にも適用し、�
 | nudge | Go（#552 は #568 完了後） | `state.json` の Herdr pane row から宛先を解決し、fresh provider signal と送信直前の live process identity が一致する許可状態だけへ no-wait の `agent prompt` を発行する |
 | `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | 同じ non-shell launcher で絶対 path の `fanout __codex-plan-tui` を起動し、`agent start --kind codex` の args にしない |
 | live identity | Go | routing、checkout、terminal、会話、process を別々に照合する |
-| 0.7.5 direct launch の cold restart resume | 保留 | real Codex の direct launch から restart / attach / resume まで未実測のため、`terminal_id` 変化時は `stale` にする |
+| 0.7.5 direct launch の cold restart resume | Go（#532） | 明示的な `fanout herdr restart` で exact direct Codex だけを resume して再束縛し、欠落、不一致、重複、未検証 provider は `stale` にする |
 | console / coordinator close | Go | checkout を持たない exact owned workspace / pane だけを送信直前に再照合し、応答喪失は再実行時の存在確認で確定する |
 | child launch rollback | tmux の `failCleanup` と同水準 | 今回作った資源だけを identity 照合後に削除し、照合不一致、残存または判定不能な response loss では資源を残して fail closed にする |
 | dirty `--force` | 明示確認後だけ許可 | dirty checkout はユーザーの明示確認なしに force しない。launch rollback の remove も force なしで発行する |
@@ -1326,7 +1326,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | child launch rollback | tmux の `failCleanup` と同水準 | 今回作った資源だけを identity 照合後に force なしで削除し、照合不一致、dirty 拒否、残存または判定不能な response loss では資源を残して fail closed にする（不在を確認できた response loss は完了扱い） | child cleanup と同じ conditional remove または fence |
 | dirty `--force` | 明示確認後だけ許可 | dirty checkout はユーザーの明示確認なしに force しない | conditional remove / fence と fingerprint-bound receipt |
 | #427 emitter | Go | cooperative telemetry と `shouldNudge` gate に限り、completion / cleanup authority にしない | agent process から分離した event provenance |
-| 0.7.5 direct launch の cold restart resume | 保留 | `terminal_id` 変化時は `stale`。#532 が real direct launch / restart / attach / resume の実機連鎖を証明した後に再判定する | authoritative server generation と launch provenance の原子的な束縛 |
+| 0.7.5 direct launch の cold restart resume | Go（#532） | 明示的な restart で exact direct Codex だけを保存済み executable、resume argv、cwd、ancestry、process group の一致後に再束縛し、それ以外は `stale` にする | authoritative server generation と launch provenance の原子的な束縛 |
 | #494 metadata | Go | exact target の直前・直後照合、固定 source、`seq` / `ttl_ms` 不使用、表示専用 token | `report-metadata` が authoritative server generation と target generation を原子的に検査する |
 | focus | Go | TUI の明示操作だけが target を直前再照合する | request-bound server / target generation |
 | peek / targeted read | Go | exact PaneRef、`terminal_id`、worktree provenance を直前・直後に再照合する | response が authoritative server generation と target terminal identity を束縛する |

@@ -753,6 +753,73 @@ func TestHerdrCloseRemovesResidualLaunchIntentAndEnvironment(t *testing.T) {
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
+func TestHerdrCloseRemovesManualResumeIntentAfterConfirmedCleanup(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	runtimeDir := filepath.Join(fixture.projectRoot, "herdr-runtime")
+	fixture.pane.HerdrSocketPath = filepath.Join(runtimeDir, "herdr.sock")
+	ref := &backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "019f-session",
+	}
+	fixture.pane.HerdrAgentSession = ref
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	resumeID, envPath := recordManualHerdrResumeIntent(t, fixture, runtimeDir)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+	}
+	journal, err := state.LoadHerdrIntents(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := journal.FindIntent(resumeID); found {
+		t.Fatal("manual Herdr resume intent remains after cleanup")
+	}
+	if _, err := os.Lstat(envPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("manual Herdr resume environment remains: %v", err)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestDiscardManualHerdrResumeIntentRejectsDifferentSession(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	runtimeDir := filepath.Join(fixture.projectRoot, "herdr-runtime")
+	fixture.pane.HerdrSocketPath = filepath.Join(runtimeDir, "herdr.sock")
+	fixture.pane.HerdrAgentSession = &backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "019f-session",
+	}
+	resumeID, envPath := recordManualHerdrResumeIntent(t, fixture, runtimeDir)
+	other := *fixture.pane.HerdrAgentSession
+	other.Value = "019f-other-session"
+	fixture.pane.HerdrAgentSession = &other
+	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	journal, err := locked.HerdrIntents(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := discardManualHerdrResumeIntent(journal, fixture.pane); err == nil {
+		t.Fatal("mismatched manual resume intent was accepted")
+	}
+	if _, found := journal.FindIntent(resumeID); !found {
+		t.Fatal("mismatched manual resume intent was removed")
+	}
+	if _, err := os.Lstat(envPath); err != nil {
+		t.Fatalf("mismatched manual resume environment was removed: %v", err)
+	}
+}
+
 func TestHerdrCloseRejectsResidualLaunchIntentForDifferentWorkspace(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	runtimeDir := filepath.Join(fixture.projectRoot, "herdr-runtime")
@@ -1333,6 +1400,64 @@ func recordResidualHerdrLaunchIntent(
 		t.Fatal(err)
 	}
 	return worktreeIntentID, envPath
+}
+
+func recordManualHerdrResumeIntent(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	runtimeDir string,
+) (string, string) {
+	t.Helper()
+	id, err := state.HerdrResumeIntentID(
+		fixture.pane.HerdrSession,
+		fixture.pane.HerdrSocketPath,
+		fixture.pane.HerdrWorkspaceID,
+		fixture.pane.PaneID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := strings.Repeat("e", 32)
+	envPath := filepath.Join(runtimeDir, "workload-env", "env-"+nonce+".json")
+	if err := os.MkdirAll(filepath.Dir(envPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(envPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	journal, err := locked.HerdrIntents(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := *fixture.pane.HerdrAgentSession
+	journal.UpsertIntent(state.HerdrIntent{
+		ID: id, Kind: state.HerdrIntentResume, Status: state.HerdrIntentManualCleanupRequired,
+		Parent: fixture.pane.Parent, RuntimeParent: fixture.pane.RuntimeParent,
+		IssueNum: fixture.pane.IssueNum, TaskID: fixture.pane.TaskID,
+		WorktreePath: fixture.pane.WorktreePath, WorkspaceLabel: fixture.pane.HerdrWorkspaceLabel,
+		Resource: herdrResourceFromPane(fixture.pane),
+		Session:  fixture.pane.HerdrSession, SocketPath: fixture.pane.HerdrSocketPath,
+		ExpiresUnixMS: time.Now().Add(time.Minute).UnixMilli(), ResumeAgentSession: &ref,
+		Failure: "token outcome is ambiguous",
+		Launch: &state.HerdrLaunch{
+			Nonce: nonce, Agent: "codex", Executable: "/opt/codex",
+			Args: []string{"resume", ref.Value}, EnvFilePath: envPath, EnvNameCount: 1,
+			LauncherReady: true, TokenIssued: true,
+		},
+	})
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	return id, envPath
 }
 
 func rewriteResidualLaunchLabel(t *testing.T, projectRoot, intentID, label string) {

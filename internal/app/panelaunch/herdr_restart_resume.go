@@ -51,7 +51,6 @@ func resumeRestartedHerdrRows(
 	if err != nil {
 		return err
 	}
-	deadline := time.Now().Add(totalTimeout)
 	wait := restarted.WaitRestoredPanes(ctx, totalTimeout, func(live []backend.LivePane) bool {
 		return allHerdrRestartRoutesObserved(rows, live)
 	})
@@ -65,18 +64,17 @@ func resumeRestartedHerdrRows(
 	if err := validateRestartedTerminals(rows, wait.Panes); err != nil {
 		return err
 	}
-	candidates := restartedCandidatesAfterWait(wait, rows)
+	candidates := restartedCodexCandidates(rows, wait.Panes)
+	deadline := herdrRestartResumeDeadline(ctx, totalTimeout)
 	return processRestartedHerdrRows(ctx, locked, journal, restarted, rows, candidates, deadline)
 }
 
-func restartedCandidatesAfterWait(
-	wait herdrrun.WaitResult,
-	rows []herdrRestartRow,
-) map[string]herdrRestartCandidate {
-	if wait.Status != herdrrun.WaitMatched {
-		return map[string]herdrRestartCandidate{}
+func herdrRestartResumeDeadline(ctx context.Context, timeout time.Duration) time.Time {
+	deadline := time.Now().Add(timeout)
+	if outer, ok := ctx.Deadline(); ok && outer.Before(deadline) {
+		return outer
 	}
-	return restartedCodexCandidates(rows, wait.Panes)
+	return deadline
 }
 
 func herdrRestartWaitTimeout(totalTimeout time.Duration) (time.Duration, error) {

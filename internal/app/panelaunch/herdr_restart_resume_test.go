@@ -88,9 +88,11 @@ func TestResumeRestartedHerdrRowsRebindsExactCodexProcess(t *testing.T) {
 	}
 }
 
-func TestResumeRestartedHerdrRowsDoesNotPartiallyResumeAfterWaitTimeout(t *testing.T) {
+func TestResumeRestartedHerdrRowsResumesExactRowAfterWaitTimeout(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	saved, placeholder := restartCodexFixture()
+	resumed := placeholder
+	resumed.AgentID, resumed.AgentProvider, resumed.AgentPresent = "restored-codex", "codex", true
 	missing := saved
 	missing.IssueNum, missing.PaneID, missing.HerdrWorkspaceID = 533, "w2:p1", "w2"
 	missing.HerdrTerminalID, missing.WorktreePath = "term-missing", "/repo/missing"
@@ -105,6 +107,25 @@ func TestResumeRestartedHerdrRowsDoesNotPartiallyResumeAfterWaitTimeout(t *testi
 			LauncherPath: "/runtime/launcher/fanout", ControlPath: "/repo/.git/fanout/herdr-intents.json",
 		},
 	}
+	runtime.listLive = func(context.Context) ([]backend.LivePane, error) {
+		if runtime.tokenCalls == 0 {
+			return []backend.LivePane{placeholder}, nil
+		}
+		return []backend.LivePane{resumed}, nil
+	}
+	runtime.process = func(_ context.Context, paneID string) (herdrrun.PaneProcessInfo, error) {
+		if paneID == missing.PaneID {
+			return herdrrun.PaneProcessInfo{}, errors.New("missing pane")
+		}
+		if runtime.tokenCalls == 0 {
+			return restartProcessInfo(runtime.launchRoute.LauncherPath, nil, saved.WorktreePath), nil
+		}
+		return restartProcessInfo(
+			saved.HerdrLaunchExecutable,
+			[]string{"resume", saved.HerdrAgentSession.Value},
+			saved.WorktreePath,
+		), nil
+	}
 	locked, journal := lockHerdrRestartTest(t, repo)
 
 	if err := resumeRestartedHerdrRows(
@@ -113,9 +134,25 @@ func TestResumeRestartedHerdrRowsDoesNotPartiallyResumeAfterWaitTimeout(t *testi
 		t.Fatal(err)
 	}
 	got, found := locked.Find(saved.Parent, saved.IssueNum)
-	if !found || got.HerdrTerminalID != saved.HerdrTerminalID || got.ReportedState != "" ||
-		got.StateRefinement || runtime.tokenCalls != 0 {
+	if !found || got.HerdrTerminalID != resumed.TerminalID || got.HerdrAgentID != resumed.AgentID ||
+		got.ReportedState != "" || got.StateRefinement || runtime.tokenCalls != 1 {
 		t.Fatalf("timed-out observed row = (%+v, %t, tokens=%d)", got, found, runtime.tokenCalls)
+	}
+	stale, found := locked.Find(missing.Parent, missing.IssueNum)
+	if !found || stale.HerdrTerminalID != missing.HerdrTerminalID || stale.ReportedState != "" ||
+		stale.StateRefinement {
+		t.Fatalf("timed-out missing row = (%+v, %t)", stale, found)
+	}
+}
+
+func TestHerdrRestartResumeDeadlineUsesRemainingLifecycleBudget(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	got := herdrRestartResumeDeadline(ctx, 5*time.Minute)
+	want, ok := ctx.Deadline()
+	if !ok || !got.Equal(want) {
+		t.Fatalf("resume deadline = %s, want outer lifecycle deadline %s", got, want)
 	}
 }
 

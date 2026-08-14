@@ -39,14 +39,24 @@ func RestartHerdrServer(
 	if err != nil {
 		return nil, releaseRejectedHerdrRestart(journal, intent, created, err)
 	}
-	if err = verifyRestartedHerdrRows(ctx, projectRoot, locked, journal, restarted); err != nil {
-		return nil, err
-	}
-	markPlannedHerdrReopenCleanupManual(journal)
-	if err = completeHerdrServerLifecycle(locked, journal, intent.ID); err != nil {
+	rowErr := verifyRestartedHerdrRows(ctx, projectRoot, locked, journal, restarted)
+	if err = finishHerdrRestartRows(locked, journal, intent.ID, rowErr); err != nil {
 		return nil, err
 	}
 	return restarted, nil
+}
+
+func finishHerdrRestartRows(
+	locked *state.LockedStore,
+	journal *state.LockedHerdrIntents,
+	intentID string,
+	rowErr error,
+) error {
+	if rowErr != nil && !errors.Is(rowErr, ErrHerdrManualCleanupRequired) {
+		return rowErr
+	}
+	markPlannedHerdrReopenCleanupManual(journal)
+	return errors.Join(rowErr, completeHerdrServerLifecycle(locked, journal, intentID))
 }
 
 func releaseRejectedHerdrRestart(
