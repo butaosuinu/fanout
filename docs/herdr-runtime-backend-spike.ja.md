@@ -382,8 +382,8 @@ targeted content read の前後で snapshot を再確認しても、read 中だ�
 
 `terminal_id` は server が所有する terminal 実体の識別子であり、論理上の会話または agent process の識別子ではない。
 同じ `terminal_id` でも、想定した agent process の生存は別に確認する。
-0.7.5 direct-launch row は `terminal_id` が変わった時点で、保存済みの `{source, agent, kind, value}` と完全一致する一意な `agent_session` があっても `stale` とし、新しい terminal へ再対応付けしない。
-`agent_session` ref は current terminal 上の会話識別の補助照合と #532 の再実測入力として保存するが、#532 の実測完了と別 PR による current contract の改訂までは resume または再束縛の実装条件に使わない。
+0.7.5 direct-launch row は `terminal_id` が変わった時点で `stale` とし、通常の adoption では新しい terminal へ再対応付けしない。
+ただし、明示的な `fanout herdr restart` は、後述する #532 の current contract を満たす direct Codex だけを保存済み `agent_session` から resume して再束縛する。
 0.7.4 の attach 前に同じ ref が resume placeholder として現れた履歴から、ref は process の生存証拠にせず、同じ `terminal_id` の live row でも provider 固有の process identity を別に検査する。
 fanout-owned marker / nonce は owned lifecycle の reconciliation token として使うが、同一 UID に対する mutation authority の証明には使わない。
 
@@ -1395,7 +1395,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - PaneRef の routing、worktree ownership、terminal 実体、論理上の会話、process の生存を別々に判定する。
   issue / Project / plan / watcher の liveness は同じ matcher を使い、保存済み provider と snapshot の `agent` field も一致させる。表示名の `name` は provider identity に使わない。
   `unknown` record を無条件に running へ写像しない。
-  0.7.5 direct-launch row は `terminal_id` が変わった時点で provider と `agent_session` の有無にかかわらず `stale` にし、#532 の実機連鎖まで resume を保留する。
+  0.7.5 direct-launch row は `terminal_id` が変わった時点で `stale` にする。
+  ただし、明示的な `fanout herdr restart` は #532 の exact direct Codex 条件を満たす row だけを resume して再束縛し、それ以外は `stale` のまま残す。
 - `agent wait` と `pane wait-output` は server-owned current-state / current-buffer wait として有限 timeout 付きで使い、launch finalization と nudge には使わない。
   polling は「read、入力、focus、wait」の共有 budget に従う。
 - fanout-owned session 外の generic workspace shell は `HERDR_ENV=1` から自動検出し、その external session の config / default shell は変更しない。
