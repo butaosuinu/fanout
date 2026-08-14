@@ -54,6 +54,13 @@ func VerifyAgent(info herdrrun.PaneProcessInfo, identity Identity) error {
 	return err
 }
 
+// InterpreterLaunchPending reports the narrow process transition where the
+// exact interpreter root is live but has not exposed its native child yet.
+func InterpreterLaunchPending(info herdrrun.PaneProcessInfo, identity Identity) bool {
+	root, processes, ok := agentProcessRoot(info, identity)
+	return ok && len(processes) == 1 && interpreterAgentProcess(root, identity)
+}
+
 func verifyCodexPlanController(
 	info herdrrun.PaneProcessInfo,
 	identity Identity,

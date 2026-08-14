@@ -137,8 +137,8 @@ func TestResumeRestartedHerdrRowsDoesNotRetryFailedToken(t *testing.T) {
 
 	if err := resumeRestartedHerdrRows(
 		context.Background(), repo, locked, journal, runtime, 3*time.Second,
-	); err != nil {
-		t.Fatal(err)
+	); !errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("failed token error = %v, want manual cleanup", err)
 	}
 	got, found := locked.Find(saved.Parent, saved.IssueNum)
 	if !found || got.HerdrTerminalID != saved.HerdrTerminalID || got.ReportedState != "" ||
@@ -146,10 +146,23 @@ func TestResumeRestartedHerdrRowsDoesNotRetryFailedToken(t *testing.T) {
 		runtime.tokenCalls != 1 {
 		t.Fatalf("failed resume state/runtime = (%+v, %t, tokens=%d)", got, found, runtime.tokenCalls)
 	}
-	for _, intent := range journal.Intents {
-		if intent.Kind == state.HerdrIntentResume {
-			t.Fatalf("failed resume intent remained replayable: %+v", intent)
-		}
+	resume, found := herdrResumeIntent(journal.Intents)
+	if !found || resume.Status != state.HerdrIntentManualCleanupRequired ||
+		!resume.Launch.TokenIssued || resume.Failure != "token failed" {
+		t.Fatalf("failed resume intent = (%+v, %t)", resume, found)
+	}
+	if err := resumeRestartedHerdrRows(
+		context.Background(), repo, locked, journal, runtime, 3*time.Second,
+	); !errors.Is(err, ErrHerdrManualCleanupRequired) {
+		t.Fatalf("ambiguous retry error = %v, want manual cleanup", err)
+	}
+	if runtime.tokenCalls != 1 {
+		t.Fatalf("ambiguous resume retried token %d times", runtime.tokenCalls)
+	}
+	completeRestartLifecycleForTest(t, locked, journal)
+	resume, found = herdrResumeIntent(journal.Intents)
+	if !found || resume.Status != state.HerdrIntentManualCleanupRequired {
+		t.Fatalf("manual resume intent after server completion = (%+v, %t)", resume, found)
 	}
 }
 
@@ -313,6 +326,15 @@ func containsHerdrResumeIntent(intents []state.HerdrIntent) bool {
 	return slices.ContainsFunc(intents, func(intent state.HerdrIntent) bool {
 		return intent.Kind == state.HerdrIntentResume
 	})
+}
+
+func herdrResumeIntent(intents []state.HerdrIntent) (state.HerdrIntent, bool) {
+	for _, intent := range intents {
+		if intent.Kind == state.HerdrIntentResume {
+			return intent, true
+		}
+	}
+	return state.HerdrIntent{}, false
 }
 
 func completeRestartLifecycleForTest(

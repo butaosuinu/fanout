@@ -19,6 +19,7 @@ v0.8.0 以降は Apache-2.0、0.7.x は AGPL-3.0 + 商用のデュアルライ�
 CLI launch では、fanout がリポジトリの owned session を起動または再採用し、プロジェクトルートの coordinator workspace と子ごとの worktree workspace を作ります。
 選択した agent は pin 済みの non-login fanout launcher から起動されます。
 launcher は operation-bound token を 1 回だけ受け取り、所有者だけが読める environment capsule を 1 回だけ消費して、shell を介さず agent に置き換わります。
+direct Codex には owned session / socket route を渡さず、公式 session report 専用の launch-scoped relay を渡します。
 fanout は launch の検証後に限り、workspace、pane、terminal、repository、agent、session、socket の identity を `.fanout/state.json` へ保存します。
 インストール済みの herdr integration が provider session の identity を報告した場合は、その値も保存します。
 

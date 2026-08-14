@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/herdrprocess"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -259,11 +260,12 @@ func recoverIssuedHerdrResume(
 	live []backend.LivePane,
 ) error {
 	if intent.Status == state.HerdrIntentManualCleanupRequired {
-		return finalizeFailedHerdrResume(ctx, locked, journal, "", row, intent)
+		return retainAmbiguousHerdrResume(ctx, locked, row, intent)
 	}
 	current, ok := restartedCodexPane(intent, live)
 	if !ok {
-		return finalizeFailedHerdrResume(ctx, locked, journal, "", row, intent)
+		return preserveAmbiguousHerdrResume(ctx, locked, journal, row, intent,
+			fmt.Errorf("issued Herdr resume process is not observable"))
 	}
 	process, err := restarted.ProcessInfo(ctx, intent.Resource.PaneID)
 	if err == nil {
@@ -273,7 +275,8 @@ func recoverIssuedHerdrResume(
 			return finishRecoveredHerdrResume(ctx, locked, journal, row, intent, current, identity)
 		}
 	}
-	return finalizeFailedHerdrResume(ctx, locked, journal, "", row, intent)
+	return preserveAmbiguousHerdrResume(ctx, locked, journal, row, intent,
+		fmt.Errorf("issued Herdr resume process identity is not exact"))
 }
 
 func finishRecoveredHerdrResume(
@@ -286,7 +289,7 @@ func finishRecoveredHerdrResume(
 	process backend.ProcessIdentity,
 ) error {
 	if err := requireConsumedHerdrResumeEnvironment(intent); err != nil {
-		return finalizeFailedHerdrResume(ctx, locked, journal, "", row, intent)
+		return preserveAmbiguousHerdrResume(ctx, locked, journal, row, intent, err)
 	}
 	if completedHerdrResumeBinding(row.saved, intent, live, process) {
 		return nil
@@ -419,6 +422,9 @@ func processOneRestartedHerdrRow(
 ) error {
 	if !eligible || candidate.row.root != row.root {
 		if intent, found := existingHerdrResumeIntent(journal, row.saved); found {
+			if intent.Status == state.HerdrIntentManualCleanupRequired || intent.Launch.TokenIssued {
+				return retainAmbiguousHerdrResume(ctx, locked, row, intent)
+			}
 			return finalizeFailedHerdrResume(ctx, locked, journal, route.RuntimeDir, row, intent)
 		}
 		return persistHerdrRestartRow(ctx, locked, row, nil, nil, nil)
@@ -428,7 +434,7 @@ func processOneRestartedHerdrRow(
 		return err
 	}
 	if intent.Status == state.HerdrIntentManualCleanupRequired || intent.Launch.TokenIssued {
-		return finalizeFailedHerdrResume(ctx, locked, journal, route.RuntimeDir, row, intent)
+		return retainAmbiguousHerdrResume(ctx, locked, row, intent)
 	}
 	live, process, err := startRestartedCodex(ctx, restarted, launcher, journal, route, &intent)
 	if err != nil {
@@ -460,10 +466,42 @@ func failHerdrResumeRow(
 	intent state.HerdrIntent,
 	cause error,
 ) error {
+	if intent.Launch.TokenIssued {
+		return preserveAmbiguousHerdrResume(ctx, locked, journal, row, intent, cause)
+	}
 	if err := preserveFailedHerdrResume(journal, intent, cause); err != nil {
 		return err
 	}
 	return finalizeFailedHerdrResume(ctx, locked, journal, runtimeDir, row, intent)
+}
+
+func preserveAmbiguousHerdrResume(
+	ctx context.Context,
+	locked *state.LockedStore,
+	journal *state.LockedHerdrIntents,
+	row herdrRestartRow,
+	intent state.HerdrIntent,
+	cause error,
+) error {
+	intent.Status = state.HerdrIntentManualCleanupRequired
+	intent.Failure = cause.Error()
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		return err
+	}
+	return retainAmbiguousHerdrResume(ctx, locked, row, intent)
+}
+
+func retainAmbiguousHerdrResume(
+	ctx context.Context,
+	locked *state.LockedStore,
+	row herdrRestartRow,
+	intent state.HerdrIntent,
+) error {
+	if err := persistHerdrRestartRow(ctx, locked, row, nil, nil, nil); err != nil {
+		return err
+	}
+	return herdrManualCleanupError(intent)
 }
 
 func finalizeFailedHerdrResume(
@@ -693,7 +731,9 @@ func waitForRestartedCodexProcess(
 			return err
 		}
 		matched, err = matchHerdrAgentProcess(process, intent)
-		if err == nil || verifyHerdrLauncherProcess(process, intent, route) != nil {
+		pending := verifyHerdrLauncherProcess(process, intent, route) == nil ||
+			herdrprocess.InterpreterLaunchPending(process, herdrLaunchProcessIdentity(intent))
+		if err == nil || !pending {
 			return err
 		}
 		return herdrLaunchTransitionPending{}

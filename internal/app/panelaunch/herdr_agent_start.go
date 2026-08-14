@@ -495,7 +495,9 @@ func (l *Launcher) waitForHerdrLaunchProcess(
 			return err
 		}
 		processErr := verifyHerdrAgentProcess(process, intent)
-		if processErr == nil || verifyHerdrLauncherProcess(process, intent, route) != nil {
+		pending := verifyHerdrLauncherProcess(process, intent, route) == nil ||
+			herdrprocess.InterpreterLaunchPending(process, herdrLaunchProcessIdentity(intent))
+		if processErr == nil || !pending {
 			return processErr
 		}
 		return herdrLaunchTransitionPending{}

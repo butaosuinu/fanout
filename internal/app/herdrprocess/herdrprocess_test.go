@@ -101,6 +101,27 @@ func TestMatchAgentReturnsExactCodexResumeProcessIdentity(t *testing.T) {
 	}
 }
 
+func TestInterpreterLaunchPendingAcceptsOnlyExactRootWithoutChildren(t *testing.T) {
+	identity := Identity{
+		WorktreePath: testWorktree, Executable: testCodex,
+		Args: []string{"resume", "019f-session"}, Agent: "codex",
+	}
+	root := testProcess(
+		10, 1, "/usr/bin/node", "/usr/bin/node", []string{testCodex, "resume", "019f-session"},
+	)
+	info := herdrrun.PaneProcessInfo{
+		ShellPID: 10, ForegroundProcessGroup: 99, ForegroundProcesses: []herdrrun.PaneProcess{root},
+	}
+	if !InterpreterLaunchPending(info, identity) {
+		t.Fatal("exact interpreter-only transition was not pending")
+	}
+	info.ForegroundProcesses = append(info.ForegroundProcesses,
+		testProcess(20, 10, "/bin/sh", "/bin/sh", nil))
+	if InterpreterLaunchPending(info, identity) {
+		t.Fatal("interpreter transition with a foreign child was pending")
+	}
+}
+
 func TestMatchAgentRejectsInexactCodexResumeProcess(t *testing.T) {
 	baseIdentity := Identity{
 		WorktreePath: testWorktree, Executable: testCodex,

@@ -43,14 +43,14 @@ func TestWorkloadEnvironmentRejectsDuplicateNames(t *testing.T) {
 	}
 }
 
-func TestWorkloadExecEnvironmentRestoresValidatedRoute(t *testing.T) {
+func TestWorkloadExecEnvironmentKeepsAgentOffOwnedControlRoute(t *testing.T) {
 	request := paneLauncherRequest{
 		session: "owned-session", socketPath: "/owned/herdr.sock",
 		workspaceID: "w1", paneID: "w1:p1",
 	}
 	base := []string{"PATH=/bin", "FANOUT_BACKEND=herdr"}
 	shell := state.HerdrIntent{Launch: &state.HerdrLaunch{}}
-	got := workloadExecEnvironment(request, shell, append([]string(nil), base...))
+	got := workloadExecEnvironment(request, shell, append([]string(nil), base...), "")
 	wantSuffix := []string{
 		"HERDR_ENV=1", "HERDR_SESSION=owned-session", "HERDR_SOCKET_PATH=/owned/herdr.sock",
 		"HERDR_WORKSPACE_ID=w1", "HERDR_PANE_ID=w1:p1",
@@ -60,9 +60,20 @@ func TestWorkloadExecEnvironmentRestoresValidatedRoute(t *testing.T) {
 	}
 
 	agentIntent := state.HerdrIntent{Launch: &state.HerdrLaunch{Agent: "codex"}}
-	agentEnv := workloadExecEnvironment(request, agentIntent, append([]string(nil), base...))
-	if !slices.Equal(agentEnv[len(base):], wantSuffix) {
-		t.Fatalf("agent route environment = %q, want suffix %q", agentEnv, wantSuffix)
+	agentEnv := workloadExecEnvironment(
+		request, agentIntent, append([]string(nil), base...), "/runtime/agent-session.sock",
+	)
+	wantAgentSuffix := []string{
+		"HERDR_ENV=1", "HERDR_SOCKET_PATH=/runtime/agent-session.sock", "HERDR_PANE_ID=w1:p1",
+	}
+	if !slices.Equal(agentEnv[len(base):], wantAgentSuffix) {
+		t.Fatalf("agent relay environment = %q, want suffix %q", agentEnv, wantAgentSuffix)
+	}
+	for _, entry := range agentEnv {
+		if entry == "HERDR_SESSION=owned-session" || entry == "HERDR_SOCKET_PATH=/owned/herdr.sock" ||
+			entry == "HERDR_WORKSPACE_ID=w1" {
+			t.Fatalf("agent environment exposes owned route: %q", agentEnv)
+		}
 	}
 }
 
@@ -85,7 +96,7 @@ func TestWorkloadExecEnvironmentBindsEmitterToRealizedCoordinator(t *testing.T) 
 		telemetry.TerminalIDEnv + "=", telemetry.AgentEnv + "=",
 		telemetry.AgentIDEnv + "=", "PATH=/bin",
 	}
-	got := workloadExecEnvironment(paneLauncherRequest{}, intent, environment)
+	got := workloadExecEnvironment(paneLauncherRequest{}, intent, environment, "")
 	want := map[string]string{
 		telemetry.RowKeyEnv: intent.ID, telemetry.LaunchNonceEnv: intent.Launch.Nonce,
 		telemetry.EmitterNonceEnv: intent.Launch.EmitterNonce, telemetry.BackendEnv: "herdr",

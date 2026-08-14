@@ -268,7 +268,8 @@ func completeHerdrServerLifecycle(
 		return fmt.Errorf("herdr server lifecycle intent %s disappeared before completion", intentID)
 	}
 	journal.Intents = slices.DeleteFunc(journal.Intents, func(intent state.HerdrIntent) bool {
-		return intent.Kind == state.HerdrIntentResume
+		return intent.Kind == state.HerdrIntentResume &&
+			intent.Status != state.HerdrIntentManualCleanupRequired
 	})
 	return journal.Save()
 }
