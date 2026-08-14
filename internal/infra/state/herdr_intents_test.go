@@ -490,6 +490,14 @@ func TestHerdrLaunchRequiresAbsoluteTeamPaths(t *testing.T) {
 	if err := validateHerdrIntent(intent); err != nil {
 		t.Fatalf("absolute team status path error = %v", err)
 	}
+	intent.Launch.AgentSessionStatePath = "relative-state.json"
+	if err := validateHerdrIntent(intent); err == nil || !strings.Contains(err.Error(), "launch fields are incomplete") {
+		t.Fatalf("relative agent-session state path error = %v", err)
+	}
+	intent.Launch.AgentSessionStatePath = "/tmp/state.json"
+	if err := validateHerdrIntent(intent); err != nil {
+		t.Fatalf("absolute agent-session state path error = %v", err)
+	}
 }
 
 func TestHerdrCoordinatorLaunchAllowsShellAndRejectsPartialAgentIdentity(t *testing.T) {

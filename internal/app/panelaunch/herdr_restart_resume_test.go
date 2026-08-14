@@ -272,6 +272,9 @@ func TestResumeRestartedHerdrRowsDoesNotReplayInterruptedIntent(t *testing.T) {
 		mustResumeEnvironment(t, runtime.route.RuntimeDir, strings.Repeat("a", 32)),
 		1, candidate, time.Now().Add(time.Minute),
 	)
+	if intent.Launch.AgentSessionStatePath != state.Path(repo) {
+		t.Fatalf("resume relay state path = %q, want %q", intent.Launch.AgentSessionStatePath, state.Path(repo))
+	}
 	intent.Launch.LauncherReady, intent.Launch.TokenIssued = true, true
 	journal.UpsertIntent(intent)
 	if err := journal.Save(); err != nil {

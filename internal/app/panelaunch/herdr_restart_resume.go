@@ -568,7 +568,8 @@ func newHerdrResumeIntent(
 		ExpiresUnixMS: deadline.UnixMilli(), ResumeAgentSession: &ref,
 		Launch: &state.HerdrLaunch{
 			Nonce: nonce, Agent: "codex", Executable: saved.HerdrLaunchExecutable,
-			Args: []string{"resume", ref.Value}, EnvFilePath: envPath, EnvNameCount: envCount,
+			Args: []string{"resume", ref.Value}, AgentSessionStatePath: state.Path(candidate.row.root),
+			EnvFilePath: envPath, EnvNameCount: envCount,
 		},
 	}
 }
