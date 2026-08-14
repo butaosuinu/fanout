@@ -309,7 +309,11 @@ func relayAgentSessionReport(
 	intent state.HerdrIntent,
 	connection net.Conn,
 ) error {
-	if err := connection.SetDeadline(time.Now().Add(commandTimeout)); err != nil {
+	deadline, err := agentSessionRelayConnectionDeadline(intent, time.Now())
+	if err != nil {
+		return err
+	}
+	if err := connection.SetDeadline(deadline); err != nil {
 		return fmt.Errorf("bound agent-session report: %w", err)
 	}
 	report, err := readAgentSessionReport(connection)
@@ -419,9 +423,22 @@ func authorizeAgentSessionRelayReport(
 }
 
 func activeAgentSessionRelayIntent(request agentSessionRelayRequest, intent state.HerdrIntent) bool {
-	return intent.Status == state.HerdrIntentRealized && intent.Launch != nil &&
+	return time.Now().Before(time.UnixMilli(intent.ExpiresUnixMS)) &&
+		intent.Status == state.HerdrIntentRealized && intent.Launch != nil &&
 		intent.Launch.Nonce == request.nonce && intent.Launch.LauncherReady && intent.Launch.TokenIssued &&
 		intent.Launch.AgentSessionStatePath == request.statePath && directCodexIntegrationLaunch(intent)
+}
+
+func agentSessionRelayConnectionDeadline(intent state.HerdrIntent, now time.Time) (time.Time, error) {
+	expires := time.UnixMilli(intent.ExpiresUnixMS)
+	if !now.Before(expires) {
+		return time.Time{}, fmt.Errorf("agent-session relay launch intent expired")
+	}
+	deadline := now.Add(commandTimeout)
+	if deadline.After(expires) {
+		deadline = expires
+	}
+	return deadline, nil
 }
 
 func sameAgentSessionRelayLaunch(left, right state.HerdrIntent) bool {

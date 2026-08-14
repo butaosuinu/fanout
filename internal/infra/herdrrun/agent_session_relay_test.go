@@ -217,6 +217,24 @@ func TestAgentSessionRelayRequestRequiresAbsoluteStatePath(t *testing.T) {
 	}
 }
 
+func TestAgentSessionRelayConnectionDeadlineDoesNotOutliveIntent(t *testing.T) {
+	now := time.Now()
+	intent := testAgentSessionRelayIntent("/repo/.fanout/state.json")
+	expires := now.Add(time.Second).Truncate(time.Millisecond)
+	intent.ExpiresUnixMS = expires.UnixMilli()
+	deadline, err := agentSessionRelayConnectionDeadline(intent, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deadline.Equal(expires) {
+		t.Fatalf("connection deadline = %s, want intent expiry %s", deadline, expires)
+	}
+	intent.ExpiresUnixMS = now.UnixMilli()
+	if _, err := agentSessionRelayConnectionDeadline(intent, now); err == nil {
+		t.Fatal("expired relay intent received a connection deadline")
+	}
+}
+
 func TestWaitForAgentSessionRelayReadyRequiresChildMarker(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {
