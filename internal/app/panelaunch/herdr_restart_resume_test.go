@@ -19,6 +19,7 @@ type restartRuntimeFake struct {
 	t               *testing.T
 	route           herdrrun.OwnedLaunchRoute
 	waitPanes       []backend.LivePane
+	issuePanes      []backend.LivePane
 	resumedPanes    []backend.LivePane
 	launcherInfo    herdrrun.PaneProcessInfo
 	resumedInfo     herdrrun.PaneProcessInfo
@@ -75,7 +76,11 @@ func (f *restartRuntimeFake) IssueRestartResume(
 	markIssued func() error,
 ) error {
 	f.issueTimeout = timeout
-	if err := preflight(f.launcherInfo, slices.Clone(f.waitPanes)); err != nil {
+	panes := f.waitPanes
+	if f.issuePanes != nil {
+		panes = f.issuePanes
+	}
+	if err := preflight(f.launcherInfo, slices.Clone(panes)); err != nil {
 		return err
 	}
 	if err := markIssued(); err != nil {
@@ -181,6 +186,27 @@ func TestResumeRestartedHerdrRowsDoesNotLetMissingCodexBlockExactCandidate(t *te
 	stale, found := locked.Find(missing.Parent, missing.IssueNum)
 	if !found || stale.HerdrDirectAgentLaunch || runtime.waitCalls != 1 {
 		t.Fatalf("missing row/runtime = (%+v, %t, waits=%d)", stale, found, runtime.waitCalls)
+	}
+}
+
+func TestResumeRestartedHerdrRowsRejectsDuplicateRefAddedBeforeToken(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	saved, placeholder := restartCodexFixture()
+	duplicate := placeholder
+	duplicate.Ref.Pane = "w1:p2"
+	recordRestartStatePane(t, repo, saved)
+	locked, journal := lockHerdrRestartTest(t, repo)
+	runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
+	runtime.issuePanes = []backend.LivePane{placeholder, duplicate}
+
+	if err := resumeRestartedHerdrRows(
+		context.Background(), repo, locked, journal, runtime, 3*time.Second,
+	); err != nil {
+		t.Fatal(err)
+	}
+	got, found := locked.Find(saved.Parent, saved.IssueNum)
+	if !found || got.HerdrDirectAgentLaunch || runtime.issueCalls != 0 {
+		t.Fatalf("duplicate preflight result = (%+v, %t, issues=%d)", got, found, runtime.issueCalls)
 	}
 }
 

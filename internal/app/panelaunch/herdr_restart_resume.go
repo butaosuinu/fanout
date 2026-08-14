@@ -582,15 +582,7 @@ func startRestartedCodex(
 	intent *state.HerdrIntent,
 ) error {
 	preflight := func(info herdrrun.PaneProcessInfo, panes []backend.LivePane) error {
-		if err := verifyHerdrLauncherProcess(info, *intent, route); err != nil {
-			return err
-		}
-		for _, pane := range panes {
-			if exactHerdrResumePlaceholder(*intent, pane) {
-				return nil
-			}
-		}
-		return fmt.Errorf("exact Herdr Codex resume placeholder is not live")
+		return preflightRestartedCodex(info, panes, *intent, route)
 	}
 	markIssued := func() error {
 		intent.Launch.LauncherReady = true
@@ -605,6 +597,26 @@ func startRestartedCodex(
 	}
 	_, _, err := waitForRestartedCodexProcess(ctx, restarted, *intent)
 	return err
+}
+
+func preflightRestartedCodex(
+	info herdrrun.PaneProcessInfo,
+	panes []backend.LivePane,
+	intent state.HerdrIntent,
+	route herdrrun.OwnedLaunchRoute,
+) error {
+	if err := verifyHerdrLauncherProcess(info, intent, route); err != nil {
+		return err
+	}
+	if countExactAgentSession(panes, intent.ResumeAgentSession) != 1 {
+		return fmt.Errorf("herdr Codex resume session is no longer unique")
+	}
+	for _, pane := range panes {
+		if exactHerdrResumePlaceholder(intent, pane) {
+			return nil
+		}
+	}
+	return fmt.Errorf("exact Herdr Codex resume placeholder is not live")
 }
 
 func waitForRestartedCodexProcess(
