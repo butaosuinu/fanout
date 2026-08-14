@@ -628,11 +628,13 @@ func applyHerdrRestartRow(
 	pane.ReportedState, pane.EmitterRowKey, pane.LaunchNonce = "", "", ""
 	pane.StateRefinement, pane.EmitterNonce = false, nonce
 	if live == nil || process == nil || launch == nil {
+		pane.HerdrDirectAgentLaunch = false
 		return nil
 	}
 	pane.HerdrTerminalID = live.TerminalID
 	pane.HerdrAgentID = live.AgentID
-	pane.HerdrAgentSession = cloneAgentSession(live.AgentSession)
+	ref := *live.AgentSession
+	pane.HerdrAgentSession = &ref
 	identity := *process
 	pane.HerdrProcessIdentity = &identity
 	pane.HerdrLaunchExecutable = launch.Executable
@@ -669,12 +671,4 @@ func sameHerdrRestartBaseline(current, saved state.Pane) bool {
 		current.WorktreePath == saved.WorktreePath,
 	}
 	return !slices.Contains(requirements, false)
-}
-
-func cloneAgentSession(ref *backend.AgentSessionRef) *backend.AgentSessionRef {
-	if ref == nil {
-		return nil
-	}
-	cloned := *ref
-	return &cloned
 }

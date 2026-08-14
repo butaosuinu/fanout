@@ -216,8 +216,15 @@ func TestResumeRestartedHerdrRowsLeavesLostTokenResponseStale(t *testing.T) {
 	}
 	got, _ := locked.Find(saved.Parent, saved.IssueNum)
 	if runtime.issueCalls != 1 || got.HerdrTerminalID != saved.HerdrTerminalID ||
-		got.ReportedState != "" || got.StateRefinement || containsHerdrResumeIntent(journal.Intents) {
+		got.HerdrDirectAgentLaunch || got.ReportedState != "" || got.StateRefinement ||
+		containsHerdrResumeIntent(journal.Intents) {
 		t.Fatalf("lost token response result: row=%+v calls=%d", got, runtime.issueCalls)
+	}
+	if err := resumeRestartedHerdrRows(context.Background(), repo, locked, journal, runtime, 3*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.issueCalls != 1 {
+		t.Fatalf("lost token response was retried: calls=%d", runtime.issueCalls)
 	}
 }
 
