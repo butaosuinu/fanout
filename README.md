@@ -72,6 +72,9 @@ Binary-only install, custom destinations, pinned versions, uninstall,
 building from a checkout, and the remaining prerequisite notes (Project
 mode's gh scope, the opt-in herdr backend) are covered in the
 [installation docs](https://butaosuinu.github.io/fanout/docs/installation/).
+The opt-in [herdr backend](https://butaosuinu.github.io/fanout/docs/herdr-backend/)
+runs the same fan-out in a fanout-owned herdr session instead of tmux, from
+stable herdr 0.7.5 up.
 
 ## Quick start
 

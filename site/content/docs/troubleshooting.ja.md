@@ -152,8 +152,8 @@ fanout は method と response field を事前検査しません。`herdr method
 ## "herdr backend interactive TUI action is unavailable"
 
 故障ではありません。
-fanout-owned session では、完全な保存済み identity が live pane と一致する行に限り、対話 launch、focus、peek を使えます。
-このメッセージは foreign または identity が不完全な行と、未対応の send、restore、lifecycle、plan capture に引き続き適用されます。
+fanout-owned session では、完全な保存済み identity が live pane と一致する行に限り、対話 launch、focus、peek を使えます。検証済みの worktree 行には merge、close、cleanup も実行できます。
+このメッセージは foreign または identity が不完全な行と、未対応の send、restore、plan capture に引き続き適用されます。
 Codex 子の Plan Mode は fanout の app-server controller と owned launcher で動きます。
-記録済みペインを持つ親への矛盾する backend 指定は、引き続き `explicit migration is required` で失敗します。v1 に移行コマンドはありません。
+記録済みペインを持つ親への矛盾する backend 指定は、引き続き `explicit migration is required` で失敗します。backend の移行コマンドはありません。
 機能の対応表は [herdr backend]({{< relref "/docs/herdr-backend" >}}) にあります。

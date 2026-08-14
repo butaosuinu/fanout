@@ -1,7 +1,7 @@
 ---
 title: herdr backend
 linkTitle: herdr backend
-description: "The opt-in herdr runtime backend: owned CLI launches, prerequisites, backend selection, differences from tmux, and plugin cautions."
+description: "The opt-in herdr runtime backend: owned CLI launches, prerequisites, backend selection, differences from tmux, server restart and shutdown, and plugin cautions."
 weight: 90
 kanji: 観
 yomi: herdr
@@ -9,11 +9,11 @@ yomi: herdr
 
 The herdr backend runs CLI fan-outs in [herdr](https://herdr.dev/), a persistent-PTY runtime for coding agents. It is opt-in. Issue, Project, plan, label-watcher, and interactive TUI launches use a repository-scoped session owned by fanout. The no-argument TUI also supports merge, close, and cleanup for verified owned rows. The default backend stays tmux. fanout does not bundle herdr; install it separately. v0.8.0 and later are Apache-2.0; 0.7.x is AGPL-3.0 with a commercial option.
 
-## What v1 does
+## What it does
 
 For a CLI launch, fanout starts or readopts its repository-owned herdr session, creates one project-root coordinator workspace, creates a worktree workspace per child, and starts the selected agent through a pinned non-login fanout launcher. The launcher receives one operation-bound token, consumes an owner-only environment capsule once, and replaces itself with the agent without invoking a shell. Direct Codex receives the owned socket and exact pane ID required by its official session report, but not the session or workspace route. fanout records the exact workspace, pane, terminal, repository, agent, session, and socket identities in `.fanout/state.json` only after the launch is verified. It also records the provider session identity when the installed herdr integration reports one.
 
-From a plain shell, no-argument `fanout` starts or adopts the owned session, launches one repository-root console shell, and prints the isolated attach command. Run that command to enter the console workspace; fanout does not replace or attach the calling shell itself. The exact console row is shared across linked worktrees.
+The owned session pins its own `config.toml`: fanout's launcher as the non-login default shell, herdr's restore-time agent resume off, and herdr's update manifest check off. Nothing restarts an agent behind fanout's back — resume is the explicit path below.
 
 The persistent TUI console, `--status`, and the web dashboard show recorded sessions with each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and web dashboard match herdr rows against `herdr api snapshot`; `--status` reads recorded state and GitHub only. Inside the owned console, the TUI can launch issue, Prompt, attached-agent, and shell panes, focus them, and peek at their output. The dashboard can peek at owned rows without adding a mutation endpoint. Before reading or mutating a session, fanout checks `herdr --version`, the exact owned route, and the saved workspace ownership label. A failed public method returns `herdr method "<name>" is unavailable`.
 
@@ -38,7 +38,7 @@ The TUI header always shows the selected backend and why it was selected, such a
 - The `herdr` binary on your `PATH`, installed separately.
 - The selected agent CLI on your `PATH`.
 
-CLI and no-argument TUI launches do not require a pre-existing herdr session. fanout creates or adopts an isolated session under its owner marker. After a plain-shell TUI bootstrap, run the printed attach command. A TUI started inside a foreign herdr session remains observational; its interactive actions do not gain owned-session authority (`default` is rejected).
+CLI and no-argument TUI launches do not require a pre-existing herdr session: fanout creates or adopts an isolated session under its owner marker. A TUI started inside a foreign herdr session remains observational; its interactive actions do not gain owned-session authority (`default` is rejected).
 
 ## Opting in
 
@@ -64,11 +64,34 @@ The backend for a run resolves in this order, first match wins:
 
 When both `HERDR_ENV` and `TMUX` are set — tmux nested inside herdr — herdr wins; override with `FANOUT_BACKEND=tmux`, or `--backend tmux` on the launch commands that accept the flag (the no-argument console reads the environment and config only). `runtimeBackend` is a user-config key: repo config cannot set it and is ignored with a warning ([Settings]({{< relref "/docs/settings" >}})).
 
-A parent that already has recorded panes keeps its recorded backend. A conflicting `--backend` or `FANOUT_BACKEND` fails with `explicit migration is required` rather than mixing backends under one parent. There is no migration command in v1 — existing tmux parents stay on tmux.
+A parent that already has recorded panes keeps its recorded backend. A conflicting `--backend` or `FANOUT_BACKEND` fails with `explicit migration is required` rather than mixing backends under one parent. There is no backend migration command — existing tmux parents stay on tmux.
+
+## Start an owned session
+
+From a plain shell, no-argument `fanout` bootstraps the session and prints one attach command:
+
+```bash
+export FANOUT_BACKEND=herdr
+fanout
+```
+
+That starts or adopts the owned session and one repository-root console shell. Run the printed command to attach, then run `fanout` again inside the console pane: herdr sets `HERDR_ENV=1` there, so the TUI console opens in that pane. fanout never replaces or attaches the calling shell itself, and linked worktrees share the one console row.
+
+A CLI fan-out needs neither an attach nor an existing session. It creates or adopts the same owned session, adds the project-root coordinator workspace and one worktree workspace per child, and starts each agent; attach when you want to watch them.
+
+## Coming from the observation-only release
+
+v0.13.0's herdr backend was observation-only: you started a named herdr session yourself, fanout pinned herdr 0.7.3 exactly, and every launch and mutation was refused — so it recorded no herdr rows of its own. To move to the owned model:
+
+1. Upgrade to stable herdr 0.7.5 or newer and restart the herdr server so the CLI and server report the same version. 0.7.3 and 0.7.4 now fail closed with `unsupported herdr CLI version …`.
+2. Stop starting and naming a session by hand. fanout creates its own under an owner marker; in a session it does not own, interactive actions stay disabled with a reason.
+3. Unset `HERDR_SESSION` and `HERDR_SOCKET_PATH` left over from that workflow. They still select the server fanout reads foreign rows from, and inside a herdr pane they must match the owned session or the TUI drops back to observation with a warning.
+
+`.fanout/state.json` needs no conversion, and tmux parents are untouched.
 
 ## Differences from tmux
 
-| Capability | tmux backend | herdr backend v1 |
+| Capability | tmux backend | herdr backend |
 |---|---|---|
 | Issue / Project / plan / watcher launch | Creates worktrees, panes, agents | Creates owned herdr workspaces and verified agents |
 | Worktree creation | One per child under `.fanout/worktrees/` | One per child through `herdr worktree create` / `open` |
@@ -89,6 +112,19 @@ A parent that already has recorded panes keeps its recorded backend. A conflicti
 An explicit `fanout herdr restart` re-binds a direct Codex row only when the restored shell placeholder has the exact saved `agent_session` and the launched process matches the saved absolute executable, `codex resume <session-id>` argv, cwd, ancestry, and foreground process group. Missing, duplicate, mismatched, or unverifiable data leaves the row `stale`; Claude, OpenCode, and Codex Plan / Team controllers are never resumed by this path. An `idle` placeholder does not prove process liveness or completion.
 
 Because herdr keeps no exit status and drops the pane record on normal exit, a finished agent disappears from the herdr session instead of leaving a `✓ done` pane behind; the recorded fanout row stays and shows `stale`.
+
+## Restart and shutdown
+
+fanout never restarts or stops the owned server as a side effect. Two explicit verbs do it:
+
+```bash
+fanout herdr restart    # replace a dead owned server, then re-bind what verifies
+fanout herdr shutdown   # stop an empty owned server
+```
+
+`restart` proceeds only after the saved supervisor lease, server process, and sockets are proven absent; a generation that is still running refuses with `herdr owned server generation is still live`. It then starts a fresh generation, replaces an owned `config.toml` written by an older fanout, and re-binds the recorded rows under the rules above. A cleanup interrupted mid-reopen becomes `manual_cleanup_required` and needs a manual pass in herdr.
+
+`shutdown` retires an empty server. It refuses while any herdr row remains in this repository's state — every linked worktree counts — while the owned session still holds workspaces, or while another herdr intent is pending. Close or clean up those rows first.
 
 ## Sidebar tokens
 
@@ -121,6 +157,8 @@ A fanout-owned session pins its own `config.toml`, so this example applies to a 
 `herdr integration install claude` / `codex` writes hooks into your agent configuration that report the agent's session identity to herdr, which is what makes herdr's session tracking and restore work. fanout never runs it for you — your agent configuration stays yours. It is an optional step; consider it if you rely on restore.
 
 fanout-owned sessions isolate herdr's XDG directories and require an empty plugin registry before creating a workspace or worktree. Herdr notification and worktree-setup plugins do not run for fanout-owned launches. A non-empty registry makes the launch fail before mutation; use fanout's notification channels and hooks for those launches.
+
+Keep one notification source per event. fanout's `ntfy` / `slack` channels announce agent transitions — plan ready, waiting for input, agent exited — next to PR and CI transitions, and a herdr notification plugin announces its own view of the same agent states. Owned launches never reach those plugins, so the duplicate only appears in sessions you configure yourself; turn one side off there. The agent integration is a separate path: its hooks report the session identity to herdr, run alongside fanout's launch-scoped hooks, and send no notification.
 
 The two tools sit on different layers. Outside fanout-owned sessions, herdr plugins approach parallel agent work from the runtime side: launching worktrees from GitHub or Jira, a diff-review sidebar, a multi-project sidebar, layout, and notifications. fanout approaches it from the GitHub workflow side: parent/child fan-out, briefing generation, blocker waves, PR lifecycle, and review gates. herdr runs and displays panes; fanout plans the work, launches it on tmux or herdr, and tracks the GitHub side.
 

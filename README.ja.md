@@ -72,7 +72,10 @@ Claude/Codex 連携ファイルを配置します。バイナリのみのイン�
 変更、バージョン固定、アンインストール、チェックアウトからのビルド、そのほかの
 前提条件(Project モードの gh スコープ、opt-in の herdr backend)は
 [インストールドキュメント](https://butaosuinu.github.io/fanout/ja/docs/installation/)
-に記載しています。
+に記載しています。opt-in の
+[herdr backend](https://butaosuinu.github.io/fanout/ja/docs/herdr-backend/)
+は、tmux の代わりに fanout-owned な herdr session で同じファンアウトを実行します
+(stable herdr 0.7.5 以上)。
 
 ## クイックスタート
 
