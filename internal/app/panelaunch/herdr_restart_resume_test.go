@@ -23,8 +23,10 @@ type restartRuntimeFake struct {
 	launcherInfo    herdrrun.PaneProcessInfo
 	resumedInfo     herdrrun.PaneProcessInfo
 	waitTimeout     time.Duration
+	waitDelay       time.Duration
 	waitCalls       int
 	issueCalls      int
+	issueTimeout    time.Duration
 	issueErr        error
 	onIssue         func()
 	preparedEnvPath string
@@ -57,6 +59,7 @@ func (f *restartRuntimeFake) WaitRestoredPanes(
 ) herdrrun.WaitResult {
 	f.waitCalls++
 	f.waitTimeout = timeout
+	time.Sleep(f.waitDelay)
 	status := herdrrun.WaitTimedOut
 	if match(f.waitPanes) {
 		status = herdrrun.WaitMatched
@@ -67,10 +70,11 @@ func (f *restartRuntimeFake) WaitRestoredPanes(
 func (f *restartRuntimeFake) IssueRestartResume(
 	_ context.Context,
 	_, _ string,
-	_ time.Duration,
+	timeout time.Duration,
 	preflight func(herdrrun.PaneProcessInfo, []backend.LivePane) error,
 	markIssued func() error,
 ) error {
+	f.issueTimeout = timeout
 	if err := preflight(f.launcherInfo, slices.Clone(f.waitPanes)); err != nil {
 		return err
 	}
@@ -99,6 +103,7 @@ func TestResumeRestartedHerdrRowsRebindsExactCodexProcess(t *testing.T) {
 	recordRestartStatePane(t, repo, saved)
 	locked, journal := lockHerdrRestartTest(t, repo)
 	runtime := newRestartRuntimeFake(t, saved, placeholder, resumed)
+	runtime.waitDelay = 500 * time.Millisecond
 
 	if err := resumeRestartedHerdrRows(
 		context.Background(), repo, locked, journal, runtime, 3*time.Second,
@@ -118,8 +123,36 @@ func TestResumeRestartedHerdrRowsRebindsExactCodexProcess(t *testing.T) {
 		runtime.waitCalls != 1 || runtime.waitTimeout != 3*time.Second {
 		t.Fatalf("resume result args=%q issues=%d wait=%d/%s", got.HerdrLaunchArgs, runtime.issueCalls, runtime.waitCalls, runtime.waitTimeout)
 	}
+	if runtime.issueTimeout <= 0 || runtime.issueTimeout >= 2750*time.Millisecond {
+		t.Fatalf("resume issue timeout = %s, want wait time deducted from 3s budget", runtime.issueTimeout)
+	}
 	if containsHerdrResumeIntent(journal.Intents) {
 		t.Fatal("successful resume intent remains")
+	}
+}
+
+func TestResumeRestartedHerdrRowsDoesNotWaitForUnsupportedMissingRoute(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	saved, placeholder := restartCodexFixture()
+	unsupported := saved
+	unsupported.IssueNum, unsupported.PaneID = 533, "w1:p2"
+	unsupported.Agent = "claude"
+	recordRestartStatePane(t, repo, saved)
+	recordRestartStatePane(t, repo, unsupported)
+	locked, journal := lockHerdrRestartTest(t, repo)
+	runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
+
+	if err := resumeRestartedHerdrRows(
+		context.Background(), repo, locked, journal, runtime, 3*time.Second,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.waitCalls != 1 || runtime.issueCalls != 1 {
+		t.Fatalf("restart calls = (wait=%d, issue=%d), want (1, 1)", runtime.waitCalls, runtime.issueCalls)
+	}
+	got, found := locked.Find(unsupported.Parent, unsupported.IssueNum)
+	if !found || got.HerdrDirectAgentLaunch || got.ReportedState != "" || got.StateRefinement {
+		t.Fatalf("unsupported missing row = (%+v, %t), want stale", got, found)
 	}
 }
 

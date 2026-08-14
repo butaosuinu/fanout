@@ -55,7 +55,12 @@ func resumeRestartedHerdrRows(
 	if err != nil {
 		return err
 	}
-	wait, totalTimeout, err := waitForHerdrRestartRows(ctx, restarted, rows, totalTimeout)
+	totalTimeout, err = herdrRestartWaitTimeout(totalTimeout)
+	if err != nil {
+		return err
+	}
+	deadline := herdrRestartResumeDeadline(ctx, totalTimeout)
+	wait, err := waitForHerdrRestartRows(ctx, restarted, rows, totalTimeout)
 	if err != nil {
 		return err
 	}
@@ -63,7 +68,7 @@ func resumeRestartedHerdrRows(
 		return err
 	}
 	return resumeObservedHerdrRows(
-		ctx, locked, journal, restarted, rows, wait.Panes, totalTimeout,
+		ctx, locked, journal, restarted, rows, wait.Panes, deadline,
 	)
 }
 
@@ -74,14 +79,13 @@ func resumeObservedHerdrRows(
 	restarted HerdrRestartRuntime,
 	rows []herdrRestartRow,
 	live []backend.LivePane,
-	totalTimeout time.Duration,
+	deadline time.Time,
 ) error {
 	route, err := restarted.LaunchRoute()
 	if err != nil {
 		return err
 	}
 	candidates := restartedCodexCandidates(rows, live)
-	deadline := herdrRestartResumeDeadline(ctx, totalTimeout)
 	for _, row := range rows {
 		candidate, eligible := candidates[herdrRestartRouteKey(row.saved)]
 		if err := processRestartedHerdrRow(
@@ -98,18 +102,14 @@ func waitForHerdrRestartRows(
 	restarted HerdrRestartRuntime,
 	rows []herdrRestartRow,
 	totalTimeout time.Duration,
-) (herdrrun.WaitResult, time.Duration, error) {
-	totalTimeout, err := herdrRestartWaitTimeout(totalTimeout)
-	if err != nil {
-		return herdrrun.WaitResult{}, 0, err
-	}
+) (herdrrun.WaitResult, error) {
 	wait := restarted.WaitRestoredPanes(ctx, totalTimeout, func(live []backend.LivePane) bool {
-		return allHerdrRestartRoutesObserved(rows, live)
+		return allResumableHerdrRestartRoutesObserved(rows, live)
 	})
 	if wait.Status == herdrrun.WaitFailed || wait.Status == herdrrun.WaitCancelled {
-		return wait, 0, fmt.Errorf("wait for restarted Herdr panes: %w", wait.Err)
+		return wait, fmt.Errorf("wait for restarted Herdr panes: %w", wait.Err)
 	}
-	return wait, totalTimeout, nil
+	return wait, nil
 }
 
 func herdrRestartResumeDeadline(ctx context.Context, timeout time.Duration) time.Time {
@@ -177,9 +177,9 @@ func herdrRestartRowsInStore(root string, current bool, store state.Store) []her
 	return rows
 }
 
-func allHerdrRestartRoutesObserved(rows []herdrRestartRow, live []backend.LivePane) bool {
+func allResumableHerdrRestartRoutesObserved(rows []herdrRestartRow, live []backend.LivePane) bool {
 	for _, row := range rows {
-		if completeHerdrRestartRoute(row.saved) && countHerdrRestartRoute(row.saved, live) == 0 {
+		if resumableSavedCodex(row.saved) && countHerdrRestartRoute(row.saved, live) == 0 {
 			return false
 		}
 	}
