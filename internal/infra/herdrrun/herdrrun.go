@@ -343,11 +343,14 @@ func cloneLivePanes(panes []corebackend.LivePane) []corebackend.LivePane {
 	}
 	cloned := append([]corebackend.LivePane(nil), panes...)
 	for i := range cloned {
-		if cloned[i].AgentSession == nil {
-			continue
+		if cloned[i].AgentSession != nil {
+			session := *cloned[i].AgentSession
+			cloned[i].AgentSession = &session
 		}
-		session := *cloned[i].AgentSession
-		cloned[i].AgentSession = &session
+		if cloned[i].ProcessIdentity != nil {
+			identity := *cloned[i].ProcessIdentity
+			cloned[i].ProcessIdentity = &identity
+		}
 	}
 	return cloned
 }
@@ -542,7 +545,9 @@ func routeEnvironment(target route, controls ...*controlPlaneEnvironment) []stri
 			env = append(env, entry)
 		}
 	}
-	env = append(env, sessionEnv+"="+target.session)
+	if target.session != "" {
+		env = append(env, sessionEnv+"="+target.session)
+	}
 	if target.socketPath != "" {
 		env = append(env, socketEnv+"="+target.socketPath)
 	}
@@ -857,7 +862,7 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 
 	panesByID := make(map[string]paneJSON, len(*snapshot.Panes))
 	terminalIDs := make(map[string]string, len(*snapshot.Panes))
-	sessionRefs := make(map[agentSessionKey]string, len(*snapshot.Panes))
+	sessionRefPanes := make(map[agentSessionKey][]string, len(*snapshot.Panes))
 	sessionRefsByPane := make(map[string]agentSessionKey, len(*snapshot.Panes))
 	for _, pane := range *snapshot.Panes {
 		if strings.TrimSpace(pane.PaneID) == "" || strings.TrimSpace(pane.TerminalID) == "" || strings.TrimSpace(pane.WorkspaceID) == "" || strings.TrimSpace(pane.TabID) == "" || pane.Focused == nil || pane.Revision == nil {
@@ -880,10 +885,7 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 			return nil, fmt.Errorf("herdr pane %q: %w", pane.PaneID, err)
 		}
 		if present {
-			if previous, duplicate := sessionRefs[ref]; duplicate {
-				return nil, fmt.Errorf("herdr panes %q and %q report duplicate agent session refs", previous, pane.PaneID)
-			}
-			sessionRefs[ref] = pane.PaneID
+			sessionRefPanes[ref] = append(sessionRefPanes[ref], pane.PaneID)
 			sessionRefsByPane[pane.PaneID] = ref
 		}
 		panesByID[pane.PaneID] = pane
@@ -915,12 +917,9 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 		}
 		agentsByPane[agent.PaneID] = agent
 	}
-	for paneID := range sessionRefsByPane {
-		if _, ok := agentsByPane[paneID]; !ok {
-			return nil, fmt.Errorf("herdr pane %q reports an agent session ref without an agent record", paneID)
-		}
+	if duplicate := duplicateLiveAgentSession(sessionRefPanes, agentsByPane); duplicate != "" {
+		return nil, fmt.Errorf("herdr live agent reports duplicate agent session ref on pane %q", duplicate)
 	}
-
 	live := make([]corebackend.LivePane, 0, len(*snapshot.Panes))
 	for _, pane := range *snapshot.Panes {
 		workspace := workspaces[pane.WorkspaceID]
@@ -971,6 +970,23 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 		})
 	}
 	return live, nil
+}
+
+func duplicateLiveAgentSession(
+	refs map[agentSessionKey][]string,
+	agents map[string]agentJSON,
+) string {
+	for _, paneIDs := range refs {
+		if len(paneIDs) < 2 {
+			continue
+		}
+		for _, paneID := range paneIDs {
+			if _, present := agents[paneID]; present {
+				return paneID
+			}
+		}
+	}
+	return ""
 }
 
 func projectAgentIdentity(agent agentJSON, present bool) (string, string) {

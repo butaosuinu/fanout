@@ -2,6 +2,8 @@ package state
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,6 +35,7 @@ const (
 	HerdrIntentWorktree    HerdrIntentKind = "worktree"
 	HerdrIntentRollback    HerdrIntentKind = "rollback"
 	HerdrIntentCleanup     HerdrIntentKind = "cleanup"
+	HerdrIntentResume      HerdrIntentKind = "agent-resume"
 	HerdrIntentRestart     HerdrIntentKind = "server-restart"
 	HerdrIntentShutdown    HerdrIntentKind = "server-shutdown"
 )
@@ -117,6 +120,9 @@ type HerdrIntent struct {
 
 	Launch *HerdrLaunch         `json:"launch,omitempty"`
 	Server *HerdrServerIdentity `json:"server,omitempty"`
+	// ResumeAgentSession binds a cold-restart launch to one exact persisted
+	// Codex conversation. Other intent kinds must leave it empty.
+	ResumeAgentSession *backend.AgentSessionRef `json:"resumeAgentSession,omitempty"`
 
 	CleanupPhase        HerdrCleanupPhase `json:"cleanupPhase,omitempty"`
 	CleanupDeleteBranch bool              `json:"cleanupDeleteBranch,omitempty"`
@@ -273,6 +279,15 @@ func HerdrServerIntentID(kind HerdrIntentKind) (string, error) {
 		return "", fmt.Errorf("invalid Herdr server lifecycle intent kind %q", kind)
 	}
 	return "server:" + string(kind), nil
+}
+
+func HerdrResumeIntentID(session, socketPath, workspaceID, paneID string) (string, error) {
+	parts := []string{session, socketPath, workspaceID, paneID}
+	if slices.Contains(parts, "") {
+		return "", fmt.Errorf("herdr resume intent requires a complete route")
+	}
+	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return "resume:" + hex.EncodeToString(digest[:]), nil
 }
 
 func (s *HerdrIntents) UpsertIntent(intent HerdrIntent) {
@@ -519,6 +534,9 @@ func validateHerdrIntent(intent HerdrIntent) error {
 	if intent.Server != nil {
 		return fmt.Errorf("herdr intent %s has an unrelated server identity", intent.ID)
 	}
+	if intent.Kind != HerdrIntentResume && intent.ResumeAgentSession != nil {
+		return fmt.Errorf("herdr intent %s has an unrelated resume session", intent.ID)
+	}
 	if err := validateHerdrIntentIdentity(intent); err != nil {
 		return err
 	}
@@ -552,7 +570,7 @@ func validateHerdrServerIntent(intent HerdrIntent) error {
 		!intent.BranchCreated, intent.WorkspaceLabel == "", intent.Resource == (HerdrResource{}),
 		intent.Coordinator == (HerdrResource{}), intent.Session == "", intent.SocketPath == "",
 		intent.ExpiresUnixMS == 0, intent.Launch == nil, intent.CleanupPhase == "",
-		!intent.CleanupDeleteBranch, intent.Failure == "",
+		intent.ResumeAgentSession == nil, !intent.CleanupDeleteBranch, intent.Failure == "",
 	}
 	if slices.Contains(empty, false) {
 		return fmt.Errorf("herdr server lifecycle intent %s has unrelated fields", intent.ID)
@@ -612,6 +630,7 @@ func validateHerdrIntentKind(intent HerdrIntent) error {
 		HerdrIntentWorktree:    validateHerdrWorktreeFields,
 		HerdrIntentRollback:    validateHerdrRollbackFields,
 		HerdrIntentCleanup:     validateHerdrCleanupFields,
+		HerdrIntentResume:      validateHerdrResumeFields,
 	}
 	validate, ok := validators[intent.Kind]
 	if !ok {
@@ -666,6 +685,32 @@ func validateHerdrCleanupFields(intent HerdrIntent) error {
 		return validateHerdrResource(intent.Coordinator, false)
 	}
 	return nil
+}
+
+func validateHerdrResumeFields(intent HerdrIntent) error {
+	ref := intent.ResumeAgentSession
+	expectedID, _ := HerdrResumeIntentID(
+		intent.Session, intent.SocketPath, intent.Resource.WorkspaceID, intent.Resource.PaneID,
+	)
+	return requireHerdrIntentFields(intent.Kind, []bool{
+		intent.ID == expectedID,
+		validHerdrResumeLaunch(intent.Launch, ref),
+		intent.Resource.WorkspaceID != "", intent.Resource.PaneID != "",
+		intent.Resource.TerminalID != "", intent.Resource.CurrentPath != "",
+		intent.Coordinator == (HerdrResource{}), intent.CleanupPhase == "",
+		!intent.CleanupDeleteBranch, intent.Server == nil,
+	})
+}
+
+func validHerdrResumeLaunch(launch *HerdrLaunch, ref *backend.AgentSessionRef) bool {
+	return validHerdrCodexSessionRef(ref) && launch != nil && launch.Agent == "codex" &&
+		launch.AgentName == "" && len(launch.Args) == 2 && launch.Args[0] == "resume" &&
+		launch.Args[1] == ref.Value
+}
+
+func validHerdrCodexSessionRef(ref *backend.AgentSessionRef) bool {
+	return ref != nil && ref.Valid() && ref.Source == "herdr:codex" &&
+		ref.Agent == "codex" && ref.Kind == "id"
 }
 
 func requireHerdrIntentFields(kind HerdrIntentKind, requirements []bool) error {
@@ -762,7 +807,7 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 	if err := validateHerdrLaunchArgs(launch.Args); err != nil {
 		return err
 	}
-	if err := validateHerdrLaunchAgentIdentity(launch); err != nil {
+	if err := validateHerdrLaunchAgentIdentity(intent.Kind, launch); err != nil {
 		return err
 	}
 	if err := validateHerdrEmitter(launch); err != nil {
@@ -774,7 +819,10 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 	return nil
 }
 
-func validateHerdrLaunchAgentIdentity(launch *HerdrLaunch) error {
+func validateHerdrLaunchAgentIdentity(kind HerdrIntentKind, launch *HerdrLaunch) error {
+	if kind == HerdrIntentResume && launch.Agent == "codex" && launch.AgentName == "" {
+		return nil
+	}
 	if (launch.Agent == "") != (launch.AgentName == "") {
 		return fmt.Errorf("launch agent identity is partial")
 	}
@@ -837,6 +885,8 @@ func herdrLaunchAllowed(kind HerdrIntentKind, status HerdrIntentStatus) bool {
 	case HerdrIntentCoordinator:
 		return status == HerdrIntentIssued || status == HerdrIntentRealized ||
 			status == HerdrIntentManualCleanupRequired
+	case HerdrIntentResume:
+		return status == HerdrIntentRealized
 	default:
 		return false
 	}
@@ -864,7 +914,8 @@ func validateHerdrRuntimeParent(intent HerdrIntent, parent, runtimeParent string
 }
 
 func validGenericHerdrRuntimeParent(intent HerdrIntent, parent, runtimeParent string) bool {
-	if intent.Kind != HerdrIntentCoordinator || parent != "@manual" || intent.IssueNum >= 0 {
+	validKind := intent.Kind == HerdrIntentCoordinator || intent.Kind == HerdrIntentResume
+	if !validKind || parent != "@manual" || intent.IssueNum >= 0 {
 		return false
 	}
 	_, ok := herdrBindingParent(

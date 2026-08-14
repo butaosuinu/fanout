@@ -2,6 +2,7 @@ package panelaunch
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -136,6 +137,20 @@ func TestApplyHerdrLaunchTelemetryStartsSyntheticRunningUnrefined(t *testing.T) 
 	}
 	if pane.EmitterRowKey != intent.ID || pane.LaunchNonce != intent.Launch.Nonce || pane.EmitterNonce != intent.Launch.EmitterNonce {
 		t.Fatalf("launch binding = %+v", pane)
+	}
+}
+
+func TestApplyHerdrLaunchTelemetryPersistsDirectLaunchWithoutEmitter(t *testing.T) {
+	pane := state.Pane{Backend: "herdr"}
+	intent := state.HerdrIntent{Launch: &state.HerdrLaunch{
+		Executable: "/opt/bin/codex", Args: []string{"prompt"},
+	}}
+
+	applyHerdrLaunchTelemetry(&pane, intent)
+
+	if pane.HerdrLaunchExecutable != intent.Launch.Executable ||
+		!slices.Equal(pane.HerdrLaunchArgs, intent.Launch.Args) || pane.ReportedState != "" {
+		t.Fatalf("direct launch binding = %+v", pane)
 	}
 }
 

@@ -62,6 +62,18 @@ type AgentSessionRef struct {
 	Value  string `json:"value"`
 }
 
+// ProcessIdentity binds one OS-verified agent process to its shell root and
+// foreground process group. It is an observation result, not a portable PID.
+type ProcessIdentity struct {
+	ShellPID               int `json:"shellPid"`
+	ForegroundProcessGroup int `json:"foregroundProcessGroup"`
+	AgentPID               int `json:"agentPid"`
+}
+
+func (i ProcessIdentity) Valid() bool {
+	return i.ShellPID > 1 && i.ForegroundProcessGroup > 1 && i.AgentPID > 1
+}
+
 // Valid reports whether every identity component is present and the ref kind
 // is one admitted herdr version exposes. Validation does not normalize the tuple because
 // liveness comparison is exact.
@@ -206,6 +218,7 @@ type LivePane struct {
 	AgentID          string
 	AgentProvider    string
 	AgentSession     *AgentSessionRef
+	ProcessIdentity  *ProcessIdentity
 	AgentPresent     bool
 	ShellKey         string
 	RepoKey          string

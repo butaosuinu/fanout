@@ -269,6 +269,33 @@ func TestHerdrServerLifecycleIntentAllowsOnlyIssuedShutdown(t *testing.T) {
 	}
 }
 
+func TestHerdrResumeIntentRequiresExactCodexSessionAndArgv(t *testing.T) {
+	valid := testHerdrResumeIntent()
+	if err := validateHerdrIntent(valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*HerdrIntent)
+	}{
+		{name: "wrong id", mutate: func(intent *HerdrIntent) { intent.ID = "resume:" + strings.Repeat("0", 64) }},
+		{name: "missing ref", mutate: func(intent *HerdrIntent) { intent.ResumeAgentSession = nil }},
+		{name: "path ref", mutate: func(intent *HerdrIntent) { intent.ResumeAgentSession.Kind = "path" }},
+		{name: "wrong session", mutate: func(intent *HerdrIntent) { intent.Launch.Args[1] = "other" }},
+		{name: "extra arg", mutate: func(intent *HerdrIntent) { intent.Launch.Args = append(intent.Launch.Args, "--full-auto") }},
+		{name: "wrong provider", mutate: func(intent *HerdrIntent) { intent.Launch.Agent = "claude" }},
+		{name: "preassigned agent name", mutate: func(intent *HerdrIntent) { intent.Launch.AgentName = "fanout-codex" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			intent := testHerdrResumeIntent()
+			test.mutate(&intent)
+			if err := validateHerdrIntent(intent); err == nil {
+				t.Fatal("validateHerdrIntent() accepted an inexact resume")
+			}
+		})
+	}
+}
+
 func TestHerdrServerLifecycleIntentRejectsAmbiguousOrIncompleteRows(t *testing.T) {
 	restart := testHerdrServerIntent(HerdrIntentRestart)
 	shutdown := testHerdrServerIntent(HerdrIntentShutdown)
@@ -740,6 +767,33 @@ func testHerdrServerIntent(kind HerdrIntentKind) HerdrIntent {
 			BinaryPath: "/usr/local/bin/herdr", BinarySHA256: strings.Repeat("c", 64),
 			BinaryVersion: "0.7.5", LauncherPath: "/usr/local/bin/fanout",
 			LauncherSHA256: strings.Repeat("d", 64),
+		},
+	}
+}
+
+func testHerdrResumeIntent() HerdrIntent {
+	ref := &backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "019f-session",
+	}
+	id, err := HerdrResumeIntentID("fanout-owned", "/runtime/herdr.sock", "w1", "w1:p1")
+	if err != nil {
+		panic(err)
+	}
+	return HerdrIntent{
+		ID: id, Kind: HerdrIntentResume, Status: HerdrIntentRealized,
+		Parent: "524", RuntimeParent: "524", IssueNum: 532,
+		WorktreePath: "/repo/worktree", WorkspaceLabel: "fanout-workspace-token",
+		Resource: HerdrResource{
+			WorkspaceID: "w1", Label: "fanout-workspace-token", PaneID: "w1:p1",
+			TerminalID: "term-new", CurrentPath: "/repo/worktree",
+			RepoKey: "/repo/.git", RepoRoot: "/repo",
+		},
+		Session: "fanout-owned", SocketPath: "/runtime/herdr.sock",
+		ExpiresUnixMS: 2000000000000, ResumeAgentSession: ref,
+		Launch: &HerdrLaunch{
+			Nonce: strings.Repeat("b", 32), Agent: "codex",
+			Executable: "/opt/codex", Args: []string{"resume", ref.Value},
+			EnvFilePath: "/runtime/env.json", EnvNameCount: 3,
 		},
 	}
 }

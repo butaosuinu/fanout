@@ -56,26 +56,28 @@ type Pane struct {
 	// launch paths persist these authoritative values; observation never fills
 	// them from a snapshot. A row without a comparison baseline is unsupported
 	// rather than rebound by name, while a complete row whose identity differs is stale.
-	HerdrWorkspaceID    string                   `json:"herdrWorkspaceId,omitempty"`
-	HerdrWorkspaceLabel string                   `json:"herdrWorkspaceLabel,omitempty"`
-	HerdrTerminalID     string                   `json:"herdrTerminalId,omitempty"`
-	HerdrRepoKey        string                   `json:"herdrRepoKey,omitempty"`
-	HerdrRepoRoot       string                   `json:"herdrRepoRoot,omitempty"`
-	HerdrBranchCreated  bool                     `json:"herdrBranchCreated,omitempty"`
-	HerdrAgentID        string                   `json:"herdrAgentId,omitempty"`
-	HerdrAgentSession   *backend.AgentSessionRef `json:"herdrAgentSession,omitempty"`
-	HerdrSession        string                   `json:"herdrSession,omitempty"`
-	HerdrSocketPath     string                   `json:"herdrSocketPath,omitempty"`
+	HerdrWorkspaceID     string                   `json:"herdrWorkspaceId,omitempty"`
+	HerdrWorkspaceLabel  string                   `json:"herdrWorkspaceLabel,omitempty"`
+	HerdrTerminalID      string                   `json:"herdrTerminalId,omitempty"`
+	HerdrRepoKey         string                   `json:"herdrRepoKey,omitempty"`
+	HerdrRepoRoot        string                   `json:"herdrRepoRoot,omitempty"`
+	HerdrBranchCreated   bool                     `json:"herdrBranchCreated,omitempty"`
+	HerdrAgentID         string                   `json:"herdrAgentId,omitempty"`
+	HerdrAgentSession    *backend.AgentSessionRef `json:"herdrAgentSession,omitempty"`
+	HerdrProcessIdentity *backend.ProcessIdentity `json:"herdrProcessIdentity,omitempty"`
+	HerdrSession         string                   `json:"herdrSession,omitempty"`
+	HerdrSocketPath      string                   `json:"herdrSocketPath,omitempty"`
 	// ReportedState is cooperative provider telemetry. The launch binding fields
 	// fence updates to one Herdr generation; none of these fields authorizes
 	// lifecycle, cleanup, completion, or nudge operations.
-	ReportedState         string   `json:"reported_state,omitempty"`
-	StateRefinement       bool     `json:"state_refinement,omitempty"`
-	EmitterRowKey         string   `json:"emitterRowKey,omitempty"`
-	LaunchNonce           string   `json:"launchNonce,omitempty"`
-	EmitterNonce          string   `json:"emitterNonce,omitempty"`
-	HerdrLaunchExecutable string   `json:"herdrLaunchExecutable,omitempty"`
-	HerdrLaunchArgs       []string `json:"herdrLaunchArgs,omitempty"`
+	ReportedState          string   `json:"reported_state,omitempty"`
+	StateRefinement        bool     `json:"state_refinement,omitempty"`
+	EmitterRowKey          string   `json:"emitterRowKey,omitempty"`
+	LaunchNonce            string   `json:"launchNonce,omitempty"`
+	EmitterNonce           string   `json:"emitterNonce,omitempty"`
+	HerdrLaunchExecutable  string   `json:"herdrLaunchExecutable,omitempty"`
+	HerdrLaunchArgs        []string `json:"herdrLaunchArgs,omitempty"`
+	HerdrDirectAgentLaunch bool     `json:"herdrDirectAgentLaunch,omitempty"`
 	// ShellKey is the tmux pane user-option token that binds this state row to
 	// one live pane. Shell panes can share WorktreePath with the repo root or an
 	// agent worktree, so liveness uses this marker instead of path matching.

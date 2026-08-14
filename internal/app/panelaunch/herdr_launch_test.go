@@ -1688,7 +1688,7 @@ func TestHerdrLaunchDoesNotRenameAfterProcessCheckExpires(t *testing.T) {
 			}},
 		}, nil
 	}
-	err := (&Launcher{Herdr: runtime}).verifyAndRenameHerdrAgent(context.Background(), intent)
+	_, err := (&Launcher{Herdr: runtime}).verifyAndRenameHerdrAgent(context.Background(), intent)
 	if err == nil || runtime.renameCalls != 0 {
 		t.Fatalf("expired process check error/rename calls = %v/%d, want error/0", err, runtime.renameCalls)
 	}

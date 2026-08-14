@@ -13,7 +13,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-const herdrLifecycleTimeout = 5 * time.Minute
+const herdrLifecycleTimeout = herdrrun.DefaultWaitTimeout + time.Minute
 
 type herdrLifecycleDeps struct {
 	projectRoot  func() (string, error)

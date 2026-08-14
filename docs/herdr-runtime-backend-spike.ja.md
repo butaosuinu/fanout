@@ -77,7 +77,7 @@ tmux-parity は信頼モデルだけでなく機構の密度にも適用し、�
 | nudge | Go（#552 は #568 完了後） | `state.json` の Herdr pane row から宛先を解決し、fresh provider signal と送信直前の live process identity が一致する許可状態だけへ no-wait の `agent prompt` を発行する |
 | `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | 同じ non-shell launcher で絶対 path の `fanout __codex-plan-tui` を起動し、`agent start --kind codex` の args にしない |
 | live identity | Go | routing、checkout、terminal、会話、process を別々に照合する |
-| 0.7.5 direct launch の cold restart resume | 保留 | real Codex の direct launch から restart / attach / resume まで未実測のため、`terminal_id` 変化時は `stale` にする |
+| 0.7.5 direct launch の cold restart resume | Go（#532） | 明示的な `fanout herdr restart` で exact direct Codex だけを resume して再束縛し、欠落、不一致、重複、未検証 provider は `stale` にする |
 | console / coordinator close | Go | checkout を持たない exact owned workspace / pane だけを送信直前に再照合し、応答喪失は再実行時の存在確認で確定する |
 | child launch rollback | tmux の `failCleanup` と同水準 | 今回作った資源だけを identity 照合後に削除し、照合不一致、残存または判定不能な response loss では資源を残して fail closed にする |
 | dirty `--force` | 明示確認後だけ許可 | dirty checkout はユーザーの明示確認なしに force しない。launch rollback の remove も force なしで発行する |
@@ -382,8 +382,8 @@ targeted content read の前後で snapshot を再確認しても、read 中だ�
 
 `terminal_id` は server が所有する terminal 実体の識別子であり、論理上の会話または agent process の識別子ではない。
 同じ `terminal_id` でも、想定した agent process の生存は別に確認する。
-0.7.5 direct-launch row は `terminal_id` が変わった時点で、保存済みの `{source, agent, kind, value}` と完全一致する一意な `agent_session` があっても `stale` とし、新しい terminal へ再対応付けしない。
-`agent_session` ref は current terminal 上の会話識別の補助照合と #532 の再実測入力として保存するが、#532 の実測完了と別 PR による current contract の改訂までは resume または再束縛の実装条件に使わない。
+0.7.5 direct-launch row は `terminal_id` が変わった時点で `stale` とし、通常の adoption では新しい terminal へ再対応付けしない。
+ただし、明示的な `fanout herdr restart` は、後述する #532 の current contract を満たす direct Codex だけを保存済み `agent_session` から resume して再束縛する。
 0.7.4 の attach 前に同じ ref が resume placeholder として現れた履歴から、ref は process の生存証拠にせず、同じ `terminal_id` の live row でも provider 固有の process identity を別に検査する。
 fanout-owned marker / nonce は owned lifecycle の reconciliation token として使うが、同一 UID に対する mutation authority の証明には使わない。
 
@@ -607,7 +607,8 @@ child root pane の cwd は checkout path と一致したが、source workspace 
 pane run <root-pane> '/usr/bin/env "FANOUT_AGENT_PROBE=value with spaces" "/absolute/path/to/codex" "arg with spaces" --flag'
 ```
 
-Herdr はこの process を Codex として検出し、`process-info` は absolute argv0、`["arg with spaces","--flag"]`、exact cwd を返した。
+Herdr はこの process を Codex として検出した。
+0.7.5 の raw `process-info` は provider 名の `argv0` と absolute executable を先頭に含む `argv` を返すため、fanout は absolute argv0 と引数だけの `argv` へ正規化してから exact cwd と併せて照合する。
 OS process 情報から解決した実 executable も発行した absolute path と一致した。
 続く `agent rename <pane-id> <name>` と current-state の `agent wait <name> --until idle --timeout 5000` は成功し、wait は約 2 ms で返った。
 ただし `pane run` と backing `pane.send_input` は expected `terminal_id`、foreground shell、空入力の precondition を持たず、text と Enter を一操作で送るだけである。
@@ -772,21 +773,21 @@ attach 後の pane には restart 前の prompt と `PROBE_OK` の応答履歴�
 この実測から、`terminal_id` の変化だけでは論理上の会話の喪失を判定できない。
 一方、attach 前の `agent_session` ref と `idle` だけでは process の生存を判定できない。
 
-この実測は 0.7.4 の workspace-level `agent start` と公式 integration の経路である。
-0.7.5 の owned launcher で direct launch した real Codex が同じ `agent_session` を登録し、cold restart 後に placeholder と `codex resume <id>` を復元することは確認していない。
-したがって current contract は 0.7.5 direct-launch row の `terminal_id` が変わった時点で `stale` とし、0.7.4 matcher を実行しない。
+#532 の current contract は、明示的な `fanout herdr restart` の中で fanout-owned launcher から direct Codex を resume する。
+owned config は herdr 固有の自動 resume を無効にし、保存済み `agent_session` が `{source:"herdr:codex", agent:"codex", kind:"id", value:<session-id>}` と完全一致する pane が一つだけある場合に限って resume intent を作る。
+Claude、OpenCode、Codex Plan / Team controller、attached agent、旧版 state row は `stale` のまま残す。
+direct Codex には公式 integration の session report に必要な owned socket と exact pane ID だけを渡し、session / workspace route は渡さない。
 
-#532 が resume を再解禁するには、同じ direct-launched Codex について restart 前の session ref、restart 後の exact placeholder、attach 後の resume process を一続きの隔離実機試験で確認する。
-最低受入条件は、保存済み `agent_session` が `{source:"herdr:codex", agent:"codex", kind:"id", value:<session-id>}` と完全一致し、現在の pane に同じ ref が一つだけ存在することである。
-attach 後は保存済み Codex の絶対 entrypoint / argv の記録と resume 用 matcher を再評価し、`pane process-info` と OS process 情報から同じ launcher に由来する chain を一つだけ得なければならない。
+resume 後は保存済み Codex の絶対 entrypoint を使い、`pane process-info` と OS process 情報から同じ launcher に由来する chain を一つだけ得なければならない。
 matcher は wrapper / interpreter / native child の許可 ancestry を検査し、resume process の provider args が `["resume", "<session-id>"]` と完全一致することを要求して追加引数を許可しない。
 `<session-id>` は保存済み `agent_session.value` と byte-for-byte で一致させる。
 候補の `process-info.foreground_processes[].cwd` は final row に保存した root pane cwd と完全一致させ、`pane get.cwd` または snapshot の `foreground_cwd` で代用しない。
-候補 PID が保存済み launcher process の子孫であり、現在の foreground process group に属することを OS process 情報で確認する。
+候補 PID が復元された placeholder の `shell_pid` の子孫であり、現在の foreground process group に属することを OS process 情報で確認する。
 OS ancestry または process group を取得できない場合は再束縛しない。
-この実機連鎖と全条件が成立した場合だけ、新しい terminal / process identity を一回の state save で束縛する設計を別 PR で解禁できる。
-その場合も `reported_state` は未設定、`state_refinement:false` から始め、新しい `terminal_id` と回転後の emitter nonce に束縛された fresh provider signal まで nudge を no-op にする。
+全条件が成立した場合だけ、新しい terminal / process identity を一回の state save で束縛する。
+再束縛後も `reported_state` は未設定、`state_refinement:false` から始め、新しい `terminal_id` と回転後の emitter nonce に束縛された fresh provider signal まで nudge を no-op にする。
 ref、placeholder、候補 chain の欠落または重複、matcher / argv / process cwd / ancestry / process group の不一致では緩い process 名一致へ fallback しない。
+token 発行後の結果が確定しない場合も再送せず、row を `stale` のまま残す。
 
 「agent record がないなら done」だけでは restart 後を判定できない。
 name が残った `unknown` record も、一致する ref を持つ再開待ちの record も、現在の agent process の生存を単独では示さない。
@@ -1326,7 +1327,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 | child launch rollback | tmux の `failCleanup` と同水準 | 今回作った資源だけを identity 照合後に force なしで削除し、照合不一致、dirty 拒否、残存または判定不能な response loss では資源を残して fail closed にする（不在を確認できた response loss は完了扱い） | child cleanup と同じ conditional remove または fence |
 | dirty `--force` | 明示確認後だけ許可 | dirty checkout はユーザーの明示確認なしに force しない | conditional remove / fence と fingerprint-bound receipt |
 | #427 emitter | Go | cooperative telemetry と `shouldNudge` gate に限り、completion / cleanup authority にしない | agent process から分離した event provenance |
-| 0.7.5 direct launch の cold restart resume | 保留 | `terminal_id` 変化時は `stale`。#532 が real direct launch / restart / attach / resume の実機連鎖を証明した後に再判定する | authoritative server generation と launch provenance の原子的な束縛 |
+| 0.7.5 direct launch の cold restart resume | Go（#532） | 明示的な restart で exact direct Codex だけを保存済み executable、resume argv、cwd、ancestry、process group の一致後に再束縛し、それ以外は `stale` にする | authoritative server generation と launch provenance の原子的な束縛 |
 | #494 metadata | Go | exact target の直前・直後照合、固定 source、`seq` / `ttl_ms` 不使用、表示専用 token | `report-metadata` が authoritative server generation と target generation を原子的に検査する |
 | focus | Go | TUI の明示操作だけが target を直前再照合する | request-bound server / target generation |
 | peek / targeted read | Go | exact PaneRef、`terminal_id`、worktree provenance を直前・直後に再照合する | response が authoritative server generation と target terminal identity を束縛する |
@@ -1395,7 +1396,8 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - PaneRef の routing、worktree ownership、terminal 実体、論理上の会話、process の生存を別々に判定する。
   issue / Project / plan / watcher の liveness は同じ matcher を使い、保存済み provider と snapshot の `agent` field も一致させる。表示名の `name` は provider identity に使わない。
   `unknown` record を無条件に running へ写像しない。
-  0.7.5 direct-launch row は `terminal_id` が変わった時点で provider と `agent_session` の有無にかかわらず `stale` にし、#532 の実機連鎖まで resume を保留する。
+  0.7.5 direct-launch row は `terminal_id` が変わった時点で `stale` にする。
+  ただし、明示的な `fanout herdr restart` は #532 の exact direct Codex 条件を満たす row だけを resume して再束縛し、それ以外は `stale` のまま残す。
 - `agent wait` と `pane wait-output` は server-owned current-state / current-buffer wait として有限 timeout 付きで使い、launch finalization と nudge には使わない。
   polling は「read、入力、focus、wait」の共有 budget に従う。
 - fanout-owned session 外の generic workspace shell は `HERDR_ENV=1` から自動検出し、その external session の config / default shell は変更しない。

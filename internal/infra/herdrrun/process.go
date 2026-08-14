@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +19,31 @@ type processRelation struct {
 	parentPID    int
 	processGroup int
 	executable   string
+}
+
+func (s *OwnedSession) inspectNormalizedPaneProcesses(
+	ctx context.Context,
+	processes []PaneProcess,
+) ([]PaneProcess, error) {
+	normalized, err := normalizePaneProcessArgs(processes)
+	if err != nil {
+		return nil, err
+	}
+	return s.inspectPaneProcesses(ctx, normalized)
+}
+
+func normalizePaneProcessArgs(processes []PaneProcess) ([]PaneProcess, error) {
+	normalized := slices.Clone(processes)
+	for i := range normalized {
+		process := &normalized[i]
+		if len(process.Argv) == 0 || process.Argv0 == "" ||
+			filepath.Base(process.Argv[0]) != filepath.Base(process.Argv0) {
+			return nil, fmt.Errorf("herdr pane process has inconsistent argv0")
+		}
+		process.Argv0 = process.Argv[0]
+		process.Argv = slices.Clone(process.Argv[1:])
+	}
+	return normalized, nil
 }
 
 func (s *OwnedSession) inspectPaneProcesses(

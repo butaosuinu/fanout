@@ -142,9 +142,6 @@ func prepareRestartedLauncher(
 	if err != nil {
 		return binaryAdmission{}, err
 	}
-	if current == previous {
-		return current, validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, current)
-	}
 	if validatePrivateContents(layout.configPath, ownedConfigContents(current.path)) == nil {
 		return current, validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, current)
 	}
@@ -153,6 +150,9 @@ func prepareRestartedLauncher(
 	}
 	if err := atomicfs.WriteFile(layout.configPath, ownedConfigContents(current.path), 0o600); err != nil {
 		return binaryAdmission{}, fmt.Errorf("replace Herdr owned launcher config for restart: %w", err)
+	}
+	if err := validatePrivateContents(layout.configPath, ownedConfigContents(current.path)); err != nil {
+		return binaryAdmission{}, err
 	}
 	return current, validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, current)
 }
@@ -608,7 +608,7 @@ func removeRetiredOwnedConfig(
 	if err != nil {
 		return fmt.Errorf("inspect retired Herdr owned config: %w", err)
 	}
-	if err := validatePrivateContents(layout.configPath, ownedConfigContents(expected.LauncherPath)); err != nil {
+	if err := validateCompatibleOwnedConfig(layout.configPath, expected.LauncherPath); err != nil {
 		return fmt.Errorf("validate retired Herdr owned config: %w", err)
 	}
 	if err := os.Remove(layout.configPath); err != nil {

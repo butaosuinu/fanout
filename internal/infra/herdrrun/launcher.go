@@ -98,19 +98,28 @@ func workloadExecEnvironment(
 	intent state.HerdrIntent,
 	environment []string,
 ) []string {
-	if intent.Launch.Agent != "" {
-		return bindHerdrEmitterEnvironment(intent, environment)
+	if intent.Launch.Agent == "" {
+		return append(environment,
+			"HERDR_ENV=1",
+			sessionEnv+"="+request.session,
+			socketEnv+"="+request.socketPath,
+			workspaceIDEnv+"="+request.workspaceID,
+			paneIDEnv+"="+request.paneID,
+		)
 	}
-	// The capsule rejects caller-supplied HERDR_* values. An interactive shell
-	// still needs its runtime context, so restore only the route identity that
-	// this launcher already validated against the realized intent.
-	return append(environment,
-		"HERDR_ENV=1",
-		sessionEnv+"="+request.session,
-		socketEnv+"="+request.socketPath,
-		workspaceIDEnv+"="+request.workspaceID,
-		paneIDEnv+"="+request.paneID,
-	)
+	if directCodexIntegrationLaunch(intent) {
+		environment = append(environment,
+			"HERDR_ENV=1", socketEnv+"="+request.socketPath, paneIDEnv+"="+request.paneID,
+		)
+	}
+	return bindHerdrEmitterEnvironment(intent, environment)
+}
+
+func directCodexIntegrationLaunch(intent state.HerdrIntent) bool {
+	launch := intent.Launch
+	directKind := intent.Kind == state.HerdrIntentWorktree || intent.Kind == state.HerdrIntentResume
+	return directKind && launch != nil && launch.Agent == "codex" &&
+		launch.CodexPlanStatusPath == "" && launch.CodexTeamStatusPath == ""
 }
 
 func bindHerdrEmitterEnvironment(intent state.HerdrIntent, environment []string) []string {
@@ -233,7 +242,8 @@ func matchingPaneLaunchIntent(
 
 func paneLauncherIntentReady(intent state.HerdrIntent) bool {
 	return intent.Kind == state.HerdrIntentCoordinator ||
-		intent.Kind == state.HerdrIntentWorktree && intent.Launch != nil
+		(intent.Kind == state.HerdrIntentWorktree || intent.Kind == state.HerdrIntentResume) &&
+			intent.Launch != nil
 }
 
 func launcherReadyMarker(nonce string) string {

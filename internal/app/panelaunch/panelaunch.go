@@ -565,6 +565,7 @@ func applyHerdrStateIdentity(
 	pane.HerdrRepoRoot = identity.ProjectRoot
 	pane.HerdrAgentID = identity.AgentID
 	pane.HerdrAgentSession = identity.AgentSession
+	pane.HerdrProcessIdentity = identity.ProcessIdentity
 	pane.HerdrSession = identity.SessionID
 	pane.HerdrSocketPath = identity.SocketPath
 }

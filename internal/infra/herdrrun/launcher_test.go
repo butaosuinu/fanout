@@ -43,7 +43,7 @@ func TestWorkloadEnvironmentRejectsDuplicateNames(t *testing.T) {
 	}
 }
 
-func TestWorkloadExecEnvironmentRestoresOnlyValidatedShellRoute(t *testing.T) {
+func TestWorkloadExecEnvironmentRoutesDirectCodexIntegration(t *testing.T) {
 	request := paneLauncherRequest{
 		session: "owned-session", socketPath: "/owned/herdr.sock",
 		workspaceID: "w1", paneID: "w1:p1",
@@ -59,10 +59,31 @@ func TestWorkloadExecEnvironmentRestoresOnlyValidatedShellRoute(t *testing.T) {
 		t.Fatalf("shell route environment = %q, want suffix %q", got, wantSuffix)
 	}
 
-	agentIntent := state.HerdrIntent{Launch: &state.HerdrLaunch{Agent: "codex"}}
+	agentIntent := state.HerdrIntent{
+		Kind: state.HerdrIntentWorktree, Launch: &state.HerdrLaunch{Agent: "codex"},
+	}
 	agentEnv := workloadExecEnvironment(request, agentIntent, append([]string(nil), base...))
-	if !slices.Equal(agentEnv, base) {
-		t.Fatalf("agent environment = %q, want control-plane-free %q", agentEnv, base)
+	wantAgentSuffix := []string{
+		"HERDR_ENV=1", "HERDR_SOCKET_PATH=/owned/herdr.sock", "HERDR_PANE_ID=w1:p1",
+	}
+	if !slices.Equal(agentEnv[len(base):], wantAgentSuffix) {
+		t.Fatalf("agent integration environment = %q, want suffix %q", agentEnv, wantAgentSuffix)
+	}
+	for _, entry := range agentEnv {
+		if entry == "HERDR_SESSION=owned-session" || entry == "HERDR_WORKSPACE_ID=w1" {
+			t.Fatalf("agent environment exposes unrelated route fields: %q", agentEnv)
+		}
+	}
+	for name, intent := range map[string]state.HerdrIntent{
+		"attached": {Kind: state.HerdrIntentCoordinator, Launch: &state.HerdrLaunch{Agent: "codex"}},
+		"plan": {
+			Kind:   state.HerdrIntentWorktree,
+			Launch: &state.HerdrLaunch{Agent: "codex", CodexPlanStatusPath: "/runtime/plan.json"},
+		},
+	} {
+		if got := workloadExecEnvironment(request, intent, append([]string(nil), base...)); !slices.Equal(got, base) {
+			t.Fatalf("%s environment = %q, want %q", name, got, base)
+		}
 	}
 }
 
@@ -374,7 +395,8 @@ func TestWaitForLaunchTokenResendsReadyMarker(t *testing.T) {
 func TestOwnedConfigPinsNonLoginLauncher(t *testing.T) {
 	got := string(ownedConfigContents("/owned/fanout"))
 	for _, want := range []string{
-		"default_shell = \"/owned/fanout\"", "shell_mode = \"non_login\"", "manifest_check = false",
+		"default_shell = \"/owned/fanout\"", "shell_mode = \"non_login\"",
+		"resume_agents_on_restore = false", "manifest_check = false",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("config %q does not contain %q", got, want)

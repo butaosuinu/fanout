@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"slices"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/errs"
@@ -39,7 +38,7 @@ func RestartHerdrServer(
 	if err != nil {
 		return nil, releaseRejectedHerdrRestart(journal, intent, created, err)
 	}
-	if err = verifyRestartedHerdrRows(ctx, projectRoot, locked, restarted); err != nil {
+	if err = verifyRestartedHerdrRows(ctx, projectRoot, locked, journal, restarted); err != nil {
 		return nil, err
 	}
 	markPlannedHerdrReopenCleanupManual(journal)
@@ -244,108 +243,10 @@ func verifyRestartedHerdrRows(
 	ctx context.Context,
 	projectRoot string,
 	locked *state.LockedStore,
-	restarted *herdrrun.OwnedSession,
+	journal *state.LockedHerdrIntents,
+	restarted HerdrRestartRuntime,
 ) error {
-	live, err := restarted.LivePanes(ctx)
-	if err != nil {
-		return fmt.Errorf("verify restarted Herdr snapshot: %w", err)
-	}
-	return staleHerdrRowsAfterRestart(ctx, projectRoot, locked, live)
-}
-
-func staleHerdrRowsAfterRestart(
-	ctx context.Context,
-	projectRoot string,
-	locked *state.LockedStore,
-	live []backend.LivePane,
-) error {
-	roots, err := worktree.ListRoots(projectRoot)
-	if err != nil {
-		return fmt.Errorf("list linked worktrees after Herdr restart: %w", err)
-	}
-	currentRoot, err := filepath.EvalSymlinks(projectRoot)
-	if err != nil {
-		return fmt.Errorf("canonicalize Herdr restart root: %w", err)
-	}
-	seen := map[string]bool{}
-	for _, root := range roots {
-		canonicalRoot, err := filepath.EvalSymlinks(root)
-		if err != nil {
-			return fmt.Errorf("canonicalize linked Herdr state root: %w", err)
-		}
-		if seen[canonicalRoot] {
-			continue
-		}
-		seen[canonicalRoot] = true
-		if err := staleHerdrRowsInRoot(ctx, canonicalRoot, canonicalRoot == currentRoot, locked, live); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func staleHerdrRowsInRoot(
-	ctx context.Context,
-	root string,
-	current bool,
-	locked *state.LockedStore,
-	live []backend.LivePane,
-) (err error) {
-	if current {
-		return staleHerdrRowsInStore(&locked.Store, live)
-	}
-	sibling, err := state.LockContext(ctx, state.Path(root))
-	if err != nil {
-		return fmt.Errorf("lock linked Herdr state in %s: %w", filepath.Clean(root), err)
-	}
-	defer func() { err = errors.Join(err, sibling.Unlock()) }()
-	if err = staleHerdrRowsInStore(&sibling.Store, live); err != nil {
-		return err
-	}
-	return sibling.Save()
-}
-
-func staleHerdrRowsInStore(store *state.Store, live []backend.LivePane) error {
-	for i := range store.Panes {
-		pane := &store.Panes[i]
-		if backend.NormalizeName(pane.Backend) != backend.Herdr || pane.HerdrTerminalID == "" {
-			continue
-		}
-		if err := requireRestartedHerdrRowStale(*pane, live); err != nil {
-			return err
-		}
-		nonce, err := randomHerdrToken()
-		if err != nil {
-			return fmt.Errorf("rotate stale Herdr emitter nonce: %w", err)
-		}
-		pane.ReportedState = ""
-		pane.StateRefinement = false
-		pane.EmitterNonce = nonce
-	}
-	return nil
-}
-
-func requireRestartedHerdrRowStale(saved state.Pane, live []backend.LivePane) error {
-	route := []string{
-		saved.HerdrSession, saved.HerdrSocketPath, saved.HerdrWorkspaceID, saved.PaneID,
-	}
-	if slices.Contains(route, "") {
-		return fmt.Errorf("saved Herdr row has incomplete restart identity")
-	}
-	matches := 0
-	for _, current := range live {
-		if !sameHerdrRestartRoute(saved, current) {
-			continue
-		}
-		matches++
-		if current.TerminalID == "" || current.TerminalID == saved.HerdrTerminalID {
-			return fmt.Errorf("saved Herdr row terminal identity is not stale after restart")
-		}
-	}
-	if matches > 1 {
-		return fmt.Errorf("saved Herdr row has %d matching restarted panes", matches)
-	}
-	return nil
+	return resumeRestartedHerdrRows(ctx, projectRoot, locked, journal, restarted, 0)
 }
 
 func sameHerdrRestartRoute(saved state.Pane, current backend.LivePane) bool {
