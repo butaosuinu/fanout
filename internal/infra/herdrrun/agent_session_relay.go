@@ -217,16 +217,16 @@ func serveAgentSessionRelay(request agentSessionRelayRequest) error {
 	if err := unixListener.SetDeadline(time.UnixMilli(intent.ExpiresUnixMS)); err != nil {
 		return fmt.Errorf("bound relay lifetime: %w", err)
 	}
-	return acceptAgentSessionReport(intent, unixListener)
+	return acceptAgentSessionReport(request, unixListener)
 }
 
-func acceptAgentSessionReport(intent state.HerdrIntent, listener *net.UnixListener) error {
+func acceptAgentSessionReport(request agentSessionRelayRequest, listener *net.UnixListener) error {
 	for {
 		connection, err := listener.AcceptUnix()
 		if err != nil {
 			return fmt.Errorf("accept agent-session report: %w", err)
 		}
-		err = relayAgentSessionReport(intent, connection)
+		err = relayAgentSessionReport(request, connection)
 		_ = connection.Close() // The relay result is authoritative; the peer may close first.
 		if err == nil {
 			return nil
@@ -234,11 +234,15 @@ func acceptAgentSessionReport(intent state.HerdrIntent, listener *net.UnixListen
 	}
 }
 
-func relayAgentSessionReport(intent state.HerdrIntent, connection *net.UnixConn) error {
+func relayAgentSessionReport(request agentSessionRelayRequest, connection net.Conn) error {
 	if err := connection.SetDeadline(time.Now().Add(commandTimeout)); err != nil {
 		return fmt.Errorf("bound agent-session report: %w", err)
 	}
 	report, err := readAgentSessionReport(connection)
+	if err != nil {
+		return err
+	}
+	intent, err := currentAgentSessionRelayIntent(request)
 	if err != nil {
 		return err
 	}

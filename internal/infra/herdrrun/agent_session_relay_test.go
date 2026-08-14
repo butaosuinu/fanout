@@ -1,6 +1,10 @@
 package herdrrun
 
 import (
+	"io"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -48,6 +52,36 @@ func TestReadAgentSessionReportRejectsExtraControlFields(t *testing.T) {
 		`"agent_session_id":"session-1"},"workspace_id":"w1"}` + "\n"
 	if _, err := readAgentSessionReport(strings.NewReader(input)); err == nil {
 		t.Fatal("agent-session relay accepted an extra control-plane field")
+	}
+}
+
+func TestRelayAgentSessionReportRejectsInactiveIntentBeforeForward(t *testing.T) {
+	controlPath := filepath.Join(t.TempDir(), "herdr-intents.json")
+	if err := os.WriteFile(controlPath, []byte(`{"schemaVersion":1,"intents":[]}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := agentSessionRelayRequest{
+		controlPath: controlPath, intentID: "removed-intent", nonce: strings.Repeat("a", 32),
+	}
+	server, client := net.Pipe()
+	defer func() {
+		_ = server.Close()
+		_ = client.Close()
+	}()
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(client, `{"id":"hook","method":"pane.report_agent_session","params":{`+
+			`"pane_id":"w1:p1","source":"herdr:codex","agent":"codex","seq":1,`+
+			`"agent_session_id":"session-1"}}`+"\n")
+		writeDone <- err
+	}()
+
+	err := relayAgentSessionReport(request, server)
+	if err == nil || !strings.Contains(err.Error(), "launch intent is not active") {
+		t.Fatalf("inactive intent error = %v", err)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -64,10 +64,6 @@ func resumeRestartedHerdrRows(
 	if err != nil {
 		return err
 	}
-	rows, err = retireUnsupportedHerdrRestartRows(ctx, locked, journal, restarted, route, rows, deadline)
-	if err != nil {
-		return err
-	}
 	return resumePendingHerdrRestartRows(
 		ctx, locked, journal, restarted, route, rows, totalTimeout, deadline,
 	)
@@ -85,18 +81,21 @@ func resumePendingHerdrRestartRows(
 ) error {
 	firstWait := true
 	for len(rows) != 0 {
-		wait, observed, err := observePendingHerdrRestartRows(
-			ctx, restarted, rows, totalTimeout, deadline, firstWait,
-		)
+		wait, observed, err := observePendingHerdrRestartRows(ctx, restarted, rows, totalTimeout, deadline, firstWait)
 		if err != nil {
 			return err
 		}
-		if !observed || wait.Status == herdrrun.WaitTimedOut {
+		if !observed {
 			return retireHerdrRestartRows(ctx, locked, journal, restarted, route, rows, deadline)
 		}
-		rows, err = processObservedHerdrRestartRows(
-			ctx, locked, journal, restarted, route, rows, wait.Panes, deadline,
-		)
+		rows, err = retireUnsupportedHerdrRestartRows(ctx, locked, journal, restarted, route, rows, deadline)
+		if err != nil {
+			return err
+		}
+		if wait.Status == herdrrun.WaitTimedOut {
+			return retireHerdrRestartRows(ctx, locked, journal, restarted, route, rows, deadline)
+		}
+		rows, err = processObservedHerdrRestartRows(ctx, locked, journal, restarted, route, rows, wait.Panes, deadline)
 		if err != nil {
 			return err
 		}
@@ -141,8 +140,11 @@ func waitForHerdrRestartRows(
 	rows []herdrRestartRow,
 	totalTimeout time.Duration,
 ) (herdrrun.WaitResult, error) {
+	waitForCandidate := slices.ContainsFunc(rows, func(row herdrRestartRow) bool {
+		return resumableSavedCodex(row.saved)
+	})
 	wait := restarted.WaitRestoredPanes(ctx, totalTimeout, func(live []backend.LivePane) bool {
-		return anyHerdrRestartRouteObserved(rows, live)
+		return !waitForCandidate || anyHerdrRestartRouteObserved(rows, live)
 	})
 	if wait.Status == herdrrun.WaitFailed || wait.Status == herdrrun.WaitCancelled {
 		return wait, fmt.Errorf("wait for restarted Herdr panes: %w", wait.Err)
