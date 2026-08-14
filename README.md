@@ -56,9 +56,9 @@ English and 日本語.
 
 ## Installation
 
-Requires **git**, **tmux 3.3+**, and — for GitHub issue / Project
-workflows and the PR status / cleanup views — the authenticated
-**GitHub CLI (`gh`)** (`gh auth status`). The
+Requires **git**, **tmux 3.3+** for the default backend, and — for GitHub
+issue / Project workflows and the PR status / cleanup views — the
+authenticated **GitHub CLI (`gh`)** (`gh auth status`). The
 agent CLI you fan out with (**`claude`** / **`codex`** / **`opencode`**) is
 not bundled; install it separately.
 
@@ -70,11 +70,11 @@ This installs the `fanout` binary (to `~/.local/bin` by default — make sure
 it is on your `PATH`) plus the bundled Claude/Codex integration files.
 Binary-only install, custom destinations, pinned versions, uninstall,
 building from a checkout, and the remaining prerequisite notes (Project
-mode's gh scope, the opt-in herdr backend) are covered in the
+mode's gh scope) are covered in the
 [installation docs](https://butaosuinu.github.io/fanout/docs/installation/).
 The opt-in [herdr backend](https://butaosuinu.github.io/fanout/docs/herdr-backend/)
-runs the same fan-out in a fanout-owned herdr session instead of tmux, from
-stable herdr 0.7.5 up.
+runs the same fan-out in a fanout-owned herdr session instead of tmux: it needs
+stable herdr 0.7.5 or newer, and no tmux.
 
 ## Quick start
 

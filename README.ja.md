@@ -57,9 +57,9 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
 
 ## インストール
 
-前提ツールは **git** と **tmux 3.3+**、GitHub issue / Project workflow と
-PR status / cleanup の確認には認証済みの **GitHub CLI(`gh`)**
-(`gh auth status`)も必要です。子を起動する
+前提ツールは **git** と、既定 backend では **tmux 3.3+**。GitHub issue /
+Project workflow と PR status / cleanup の確認には認証済みの
+**GitHub CLI(`gh`)**(`gh auth status`)も必要です。子を起動する
 agent CLI(**`claude`** / **`codex`** / **`opencode`**)は同梱されないため、
 別途インストールしてください。
 
@@ -70,12 +70,12 @@ curl -fsSL https://raw.githubusercontent.com/butaosuinu/fanout/main/install.sh |
 `fanout` バイナリ(既定で `~/.local/bin`。`PATH` に入れてください)と、同梱の
 Claude/Codex 連携ファイルを配置します。バイナリのみのインストール、配置先の
 変更、バージョン固定、アンインストール、チェックアウトからのビルド、そのほかの
-前提条件(Project モードの gh スコープ、opt-in の herdr backend)は
+前提条件(Project モードの gh スコープ)は
 [インストールドキュメント](https://butaosuinu.github.io/fanout/ja/docs/installation/)
 に記載しています。opt-in の
 [herdr backend](https://butaosuinu.github.io/fanout/ja/docs/herdr-backend/)
 は、tmux の代わりに fanout-owned な herdr session で同じファンアウトを実行します
-(stable herdr 0.7.5 以上)。
+(stable herdr 0.7.5 以上が必要で、tmux は不要)。
 
 ## クイックスタート
 

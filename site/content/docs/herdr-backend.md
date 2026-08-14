@@ -124,7 +124,7 @@ fanout herdr shutdown   # stop an empty owned server
 
 `restart` proceeds only after the saved supervisor lease, server process, and sockets are proven absent; a generation that is still running refuses with `herdr owned server generation is still live`. It then starts a fresh generation, replaces an owned `config.toml` written by an older fanout, and re-binds the recorded rows under the rules above. A cleanup interrupted mid-reopen becomes `manual_cleanup_required` and needs a manual pass in herdr.
 
-`shutdown` retires an empty server. It refuses while any herdr row remains in this repository's state — every linked worktree counts — while the owned session still holds workspaces, or while another herdr intent is pending. Close or clean up those rows first.
+`shutdown` retires an empty server. It refuses while any herdr row remains in this repository's state — every linked worktree counts — while the owned session still holds workspaces, or while another herdr intent is pending. Fan-out rows go away with `--close` / `--cleanup`. The console row a plain-shell TUI bootstrap records has no removal verb, so a checkout that has opened the console cannot reach `shutdown`.
 
 ## Sidebar tokens
 
