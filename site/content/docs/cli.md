@@ -391,7 +391,7 @@ Explicit lifecycle for this repository's fanout-owned [herdr]({{< relref "/docs/
 
 | Verb | What it does |
 |---|---|
-| `restart` | Replace the owned server once its saved supervisor lease, server process, and sockets are proven absent, then re-bind recorded rows: an exactly verified direct Codex row resumes and everything else stays `stale`. A generation that is still running refuses with `herdr owned server generation is still live`. |
+| `restart` | Replace the owned server once its saved supervisor lease, server process, and sockets are proven absent, then re-bind recorded rows: an exactly verified direct Codex row resumes and everything else — including an attached Codex and a Plan-mode row — stays `stale`. A generation that is still running refuses with `herdr owned server generation is still live`. |
 | `shutdown` | Retire an empty owned server. Refuses while a herdr row remains in this repository's state (every linked worktree counts), while the session still holds workspaces, or while another herdr intent is pending. The console row a plain-shell TUI bootstrap records and the coordinator row every fan-out records have no removal verb, so a checkout that has run the herdr backend cannot reach `shutdown` today. |
 
 Exits `0` on success, `1` on an environment or preflight failure, and `2` on bad invocation.

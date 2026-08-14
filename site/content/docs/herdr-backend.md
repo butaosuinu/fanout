@@ -109,7 +109,7 @@ v0.13.0's herdr backend was observation-only: you started a named herdr session 
 | TUI forms (settings, help) | tmux popups | Inline in-process forms |
 | Session resume | fanout's restore flow | An explicit `fanout herdr restart` resumes an exactly verified direct Codex session; every other provider or incomplete binding stays `stale` |
 
-An explicit `fanout herdr restart` re-binds a direct Codex row only when the restored shell placeholder has the exact saved `agent_session` and the launched process matches the saved absolute executable, `codex resume <session-id>` argv, cwd, ancestry, and foreground process group. Missing, duplicate, mismatched, or unverifiable data leaves the row `stale`; Claude, OpenCode, and Codex Plan / Team controllers are never resumed by this path. An `idle` placeholder does not prove process liveness or completion.
+An explicit `fanout herdr restart` re-binds a direct Codex row only when the restored shell placeholder has the exact saved `agent_session` and the launched process matches the saved absolute executable, `codex resume <session-id>` argv, cwd, ancestry, and foreground process group. Missing, duplicate, mismatched, or unverifiable data leaves the row `stale`; Claude, OpenCode, Codex Plan / Team controllers, and a Codex attached to an existing worktree from the TUI are never resumed by this path. An `idle` placeholder does not prove process liveness or completion.
 
 Because herdr keeps no exit status and drops the pane record on normal exit, a finished agent disappears from the herdr session instead of leaving a `✓ done` pane behind; the recorded fanout row stays and shows `stale`.
 

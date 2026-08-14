@@ -155,7 +155,7 @@ owned モデルへ移る手順は次のとおりです。
 
 明示的な `fanout herdr restart` は、復元された pane の `agent_session` が保存値と完全一致し、起動した process の絶対 executable、`codex resume <session-id>` argv、cwd、ancestry、foreground process group を検証できた direct Codex 行だけを再束縛します。
 値の欠落、重複、不一致、検証不能では行を `stale` のまま残します。
-Claude、OpenCode、Codex Plan / Team controller はこの経路で resume しません。
+Claude、OpenCode、Codex Plan / Team controller、TUI で既存 worktree に attach した Codex はこの経路で resume しません。
 復元直後の shell placeholder が `idle` と表示されても、process の生存や完了を示しません。
 
 herdr は exit status を残さず、正常終了で pane の記録も消します。
