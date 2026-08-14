@@ -127,9 +127,9 @@ CLI のファンアウトには attach も既存 session も不要です。
 v0.13.0 の herdr backend は観測専用でした。名前付き session は自分で起動し、fanout は herdr 0.7.3 に完全一致で固定し、launch と変更操作はすべて拒否していたため、herdr の行を自分で記録することもありません。
 owned モデルへ移る手順は次のとおりです。
 
-1. stable herdr 0.7.5 以上へ更新し、herdr server を再起動して CLI と server の version を揃えます。0.7.3 と 0.7.4 は `unsupported herdr CLI version …` で fail closed します。
+1. `herdr` CLI を stable 0.7.5 以上へ更新します。0.7.3 と 0.7.4 は `unsupported herdr CLI version …` で fail closed します。owned session は pin した CLI で自分の server を起動するため、既存の herdr server を再起動する必要はありません。
 2. 名前付き session を手で起動する手順をやめます。fanout が owner marker 配下に自分の session を作ります。fanout が所有しない session では対話操作は理由付きで無効のままです。
-3. 旧手順で残った `HERDR_SESSION` と `HERDR_SOCKET_PATH` を unset します。これらは foreign な行を読むときの接続先を決めますし、herdr pane の中では owned session と一致しないと TUI が警告付きで観測専用に落ちます。
+3. 旧 herdr pane から出て、`HERDR_SESSION` と `HERDR_SOCKET_PATH` を unset した素のシェルから bootstrap します。これらは foreign な行を読むときの接続先を決めますし、herdr pane の中では owned session と一致しないと TUI が警告付きで観測専用に落ちます。
 
 `.fanout/state.json` の変換は不要で、tmux の親もそのままです。
 

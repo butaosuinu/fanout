@@ -83,9 +83,9 @@ A CLI fan-out needs neither an attach nor an existing session. It creates or ado
 
 v0.13.0's herdr backend was observation-only: you started a named herdr session yourself, fanout pinned herdr 0.7.3 exactly, and every launch and mutation was refused — so it recorded no herdr rows of its own. To move to the owned model:
 
-1. Upgrade to stable herdr 0.7.5 or newer and restart the herdr server so the CLI and server report the same version. 0.7.3 and 0.7.4 now fail closed with `unsupported herdr CLI version …`.
+1. Upgrade the `herdr` CLI to stable 0.7.5 or newer; 0.7.3 and 0.7.4 now fail closed with `unsupported herdr CLI version …`. The owned session starts its own server from the pinned CLI, so your existing herdr server needs no restart.
 2. Stop starting and naming a session by hand. fanout creates its own under an owner marker; in a session it does not own, interactive actions stay disabled with a reason.
-3. Unset `HERDR_SESSION` and `HERDR_SOCKET_PATH` left over from that workflow. They still select the server fanout reads foreign rows from, and inside a herdr pane they must match the owned session or the TUI drops back to observation with a warning.
+3. Leave the old herdr pane and bootstrap from a plain shell, with `HERDR_SESSION` and `HERDR_SOCKET_PATH` unset. Those variables still select the server fanout reads foreign rows from, and inside a herdr pane they must match the owned session or the TUI drops back to observation with a warning.
 
 `.fanout/state.json` needs no conversion, and tmux parents are untouched.
 
