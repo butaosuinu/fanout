@@ -1478,6 +1478,33 @@ func TestRestartResumeResponseAllowsDocumentedEmptySuccess(t *testing.T) {
 	}
 }
 
+func TestIssueRestartResumeTokenDoesNotRunAfterJournalSaveExpires(t *testing.T) {
+	commandCalled := false
+	now := time.Now()
+	session := &OwnedSession{backend: &Backend{now: func() time.Time { return now }, output: func(
+		context.Context, string, []string, ...string,
+	) ([]byte, error) {
+		commandCalled = true
+		return nil, nil
+	}}}
+	marked := false
+	err := session.issueRestartResumeToken(
+		context.Background(), probeResult{}, "w1:p1", strings.Repeat("a", 32),
+		now.Add(time.Minute),
+		func() error {
+			marked = true
+			now = now.Add(time.Minute)
+			return nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "intent expired") {
+		t.Fatalf("expiry error = %v", err)
+	}
+	if !marked || commandCalled {
+		t.Fatalf("marked=%t commandCalled=%t", marked, commandCalled)
+	}
+}
+
 func TestRestartResumeTokenRequiresExactLifecycleAndIntentRoute(t *testing.T) {
 	session := &OwnedSession{
 		GitCommonDir: "/repo/.git", RuntimeDir: "/runtime", Session: "fanout-owned",
