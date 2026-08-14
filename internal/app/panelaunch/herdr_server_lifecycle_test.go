@@ -2,7 +2,6 @@ package panelaunch
 
 import (
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -139,44 +138,6 @@ func TestMarkPlannedHerdrReopenCleanupManual(t *testing.T) {
 		if got := journal.Intents[i+1].Status; got != want {
 			t.Fatalf("unaffected intent %d status = %q, want %q", i+1, got, want)
 		}
-	}
-}
-
-func TestFinishHerdrRestartRowsCompletesLifecycleAfterManualResume(t *testing.T) {
-	repo := newHerdrRealizeRepo(t)
-	locked, journal := lockHerdrRestartTest(t, repo)
-	defer func() {
-		if err := locked.Unlock(); err != nil {
-			t.Error(err)
-		}
-	}()
-	saved, live := restartCodexFixture()
-	recordIssuedHerdrResumeIntent(t, journal, saved, live)
-	resume, found := herdrResumeIntent(journal.Intents)
-	if !found {
-		t.Fatal("resume intent is absent")
-	}
-	resume.Status = state.HerdrIntentManualCleanupRequired
-	resume.Failure = "token outcome is ambiguous"
-	journal.UpsertIntent(resume)
-	if err := journal.Save(); err != nil {
-		t.Fatal(err)
-	}
-	serverID, err := state.HerdrServerIntentID(state.HerdrIntentRestart)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	manualErr := fmt.Errorf("%w: token outcome is ambiguous", ErrHerdrManualCleanupRequired)
-	if err = finishHerdrRestartRows(locked, journal, serverID, manualErr); !errors.Is(err, ErrHerdrManualCleanupRequired) {
-		t.Fatalf("finish error = %v, want manual cleanup", err)
-	}
-	if _, found, err := journal.ServerLifecycleIntent(); err != nil || found {
-		t.Fatalf("server lifecycle remains: found=%t err=%v", found, err)
-	}
-	got, found := journal.FindIntent(resume.ID)
-	if !found || got.Status != state.HerdrIntentManualCleanupRequired {
-		t.Fatalf("manual resume intent = (%+v, %t)", got, found)
 	}
 }
 

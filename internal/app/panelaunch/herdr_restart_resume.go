@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/app/herdrprocess"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -19,9 +18,18 @@ import (
 )
 
 type HerdrRestartRuntime interface {
-	HerdrLaunchRuntime
+	LaunchRoute() (herdrrun.OwnedLaunchRoute, error)
+	PrepareWorkloadEnvironment(string, []string) (string, int, error)
 	WaitRestoredPanes(context.Context, time.Duration, func([]backend.LivePane) bool) herdrrun.WaitResult
-	SendRestartResumeToken(context.Context, string, string) error
+	IssueRestartResume(
+		context.Context,
+		string,
+		string,
+		time.Duration,
+		func(herdrrun.PaneProcessInfo, []backend.LivePane) error,
+		func() error,
+	) error
+	ObserveRestartResume(context.Context, string) (herdrrun.PaneProcessInfo, []backend.LivePane, error)
 }
 
 type herdrRestartRow struct {
@@ -47,26 +55,61 @@ func resumeRestartedHerdrRows(
 	if err != nil {
 		return err
 	}
-	totalTimeout, err = herdrRestartWaitTimeout(totalTimeout)
-	if err != nil {
-		return err
-	}
-	wait := restarted.WaitRestoredPanes(ctx, totalTimeout, func(live []backend.LivePane) bool {
-		return allHerdrRestartRoutesObserved(rows, live)
-	})
-	if wait.Status == herdrrun.WaitFailed || wait.Status == herdrrun.WaitCancelled {
-		return fmt.Errorf("wait for restarted Herdr panes: %w", wait.Err)
-	}
-	rows, err = recoverIssuedHerdrResumes(ctx, locked, journal, restarted, rows, wait.Panes)
+	wait, totalTimeout, err := waitForHerdrRestartRows(ctx, restarted, rows, totalTimeout)
 	if err != nil {
 		return err
 	}
 	if err := validateRestartedTerminals(rows, wait.Panes); err != nil {
 		return err
 	}
-	candidates := restartedCodexCandidates(rows, wait.Panes)
+	return resumeObservedHerdrRows(
+		ctx, locked, journal, restarted, rows, wait.Panes, totalTimeout,
+	)
+}
+
+func resumeObservedHerdrRows(
+	ctx context.Context,
+	locked *state.LockedStore,
+	journal *state.LockedHerdrIntents,
+	restarted HerdrRestartRuntime,
+	rows []herdrRestartRow,
+	live []backend.LivePane,
+	totalTimeout time.Duration,
+) error {
+	route, err := restarted.LaunchRoute()
+	if err != nil {
+		return err
+	}
+	candidates := restartedCodexCandidates(rows, live)
 	deadline := herdrRestartResumeDeadline(ctx, totalTimeout)
-	return processRestartedHerdrRows(ctx, locked, journal, restarted, rows, candidates, deadline)
+	for _, row := range rows {
+		candidate, eligible := candidates[herdrRestartRouteKey(row.saved)]
+		if err := processRestartedHerdrRow(
+			ctx, locked, journal, restarted, route, row, candidate, eligible, deadline,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func waitForHerdrRestartRows(
+	ctx context.Context,
+	restarted HerdrRestartRuntime,
+	rows []herdrRestartRow,
+	totalTimeout time.Duration,
+) (herdrrun.WaitResult, time.Duration, error) {
+	totalTimeout, err := herdrRestartWaitTimeout(totalTimeout)
+	if err != nil {
+		return herdrrun.WaitResult{}, 0, err
+	}
+	wait := restarted.WaitRestoredPanes(ctx, totalTimeout, func(live []backend.LivePane) bool {
+		return allHerdrRestartRoutesObserved(rows, live)
+	})
+	if wait.Status == herdrrun.WaitFailed || wait.Status == herdrrun.WaitCancelled {
+		return wait, 0, fmt.Errorf("wait for restarted Herdr panes: %w", wait.Err)
+	}
+	return wait, totalTimeout, nil
 }
 
 func herdrRestartResumeDeadline(ctx context.Context, timeout time.Duration) time.Time {
@@ -117,6 +160,13 @@ func loadHerdrRestartRows(projectRoot string, locked *state.LockedStore) ([]herd
 	return rows, nil
 }
 
+func loadHerdrRestartStore(root string, current bool, locked *state.LockedStore) (state.Store, error) {
+	if current {
+		return locked.Store, nil
+	}
+	return state.LoadProject(root)
+}
+
 func herdrRestartRowsInStore(root string, current bool, store state.Store) []herdrRestartRow {
 	rows := make([]herdrRestartRow, 0, len(store.Panes))
 	for _, pane := range store.Panes {
@@ -125,13 +175,6 @@ func herdrRestartRowsInStore(root string, current bool, store state.Store) []her
 		}
 	}
 	return rows
-}
-
-func loadHerdrRestartStore(root string, current bool, locked *state.LockedStore) (state.Store, error) {
-	if current {
-		return locked.Store, nil
-	}
-	return state.LoadProject(root)
 }
 
 func allHerdrRestartRoutesObserved(rows []herdrRestartRow, live []backend.LivePane) bool {
@@ -161,10 +204,8 @@ func countHerdrRestartRoute(saved state.Pane, live []backend.LivePane) int {
 func validateRestartedTerminals(rows []herdrRestartRow, live []backend.LivePane) error {
 	for _, row := range rows {
 		for _, current := range live {
-			if !sameHerdrRestartRoute(row.saved, current) {
-				continue
-			}
-			if current.TerminalID == "" || current.TerminalID == row.saved.HerdrTerminalID {
+			if sameHerdrRestartRoute(row.saved, current) &&
+				(current.TerminalID == "" || current.TerminalID == row.saved.HerdrTerminalID) {
 				return fmt.Errorf("saved Herdr row terminal identity is not stale after restart")
 			}
 		}
@@ -194,125 +235,6 @@ func restartedCodexCandidates(
 	return candidates
 }
 
-func recoverIssuedHerdrResumes(
-	ctx context.Context,
-	locked *state.LockedStore,
-	journal *state.LockedHerdrIntents,
-	restarted HerdrRestartRuntime,
-	rows []herdrRestartRow,
-	live []backend.LivePane,
-) ([]herdrRestartRow, error) {
-	handled := map[string]bool{}
-	for _, intent := range slices.Clone(journal.Intents) {
-		if intent.Kind != state.HerdrIntentResume || intent.Launch == nil || !intent.Launch.TokenIssued {
-			continue
-		}
-		row, err := exactHerdrResumeIntentRow(rows, intent)
-		if err != nil {
-			return nil, err
-		}
-		if err := recoverIssuedHerdrResume(ctx, locked, journal, restarted, row, intent, live); err != nil {
-			return nil, err
-		}
-		handled[herdrRestartRowKey(row)] = true
-	}
-	return slices.DeleteFunc(slices.Clone(rows), func(row herdrRestartRow) bool {
-		return handled[herdrRestartRowKey(row)]
-	}), nil
-}
-
-func exactHerdrResumeIntentRow(rows []herdrRestartRow, intent state.HerdrIntent) (herdrRestartRow, error) {
-	var matched herdrRestartRow
-	matches := 0
-	for _, row := range rows {
-		if herdrResumeIntentTargetsRow(intent, row.saved) {
-			matched, matches = row, matches+1
-		}
-	}
-	if matches != 1 {
-		return herdrRestartRow{}, fmt.Errorf("issued Herdr resume intent has %d exact state rows", matches)
-	}
-	return matched, nil
-}
-
-func herdrResumeIntentTargetsRow(intent state.HerdrIntent, pane state.Pane) bool {
-	return intent.Parent == pane.Parent && intent.RuntimeParent == pane.RuntimeParent &&
-		intent.IssueNum == pane.IssueNum && intent.TaskID == pane.TaskID &&
-		intent.WorktreePath == pane.WorktreePath && intent.Session == pane.HerdrSession &&
-		intent.SocketPath == pane.HerdrSocketPath &&
-		intent.Resource.WorkspaceID == pane.HerdrWorkspaceID && intent.Resource.PaneID == pane.PaneID
-}
-
-func herdrRestartRowKey(row herdrRestartRow) string {
-	return row.root + "\x00" + row.saved.Parent + "\x00" + row.saved.TaskID + "\x00" +
-		fmt.Sprint(row.saved.IssueNum)
-}
-
-func recoverIssuedHerdrResume(
-	ctx context.Context,
-	locked *state.LockedStore,
-	journal *state.LockedHerdrIntents,
-	restarted HerdrRestartRuntime,
-	row herdrRestartRow,
-	intent state.HerdrIntent,
-	live []backend.LivePane,
-) error {
-	if intent.Status == state.HerdrIntentManualCleanupRequired {
-		return retainAmbiguousHerdrResume(ctx, locked, row, intent)
-	}
-	current, ok := restartedCodexPane(intent, live)
-	if !ok {
-		return preserveAmbiguousHerdrResume(ctx, locked, journal, row, intent,
-			fmt.Errorf("issued Herdr resume process is not observable"))
-	}
-	process, err := restarted.ProcessInfo(ctx, intent.Resource.PaneID)
-	if err == nil {
-		var identity backend.ProcessIdentity
-		identity, err = matchHerdrAgentProcess(process, intent)
-		if err == nil {
-			return finishRecoveredHerdrResume(ctx, locked, journal, row, intent, current, identity)
-		}
-	}
-	return preserveAmbiguousHerdrResume(ctx, locked, journal, row, intent,
-		fmt.Errorf("issued Herdr resume process identity is not exact"))
-}
-
-func finishRecoveredHerdrResume(
-	ctx context.Context,
-	locked *state.LockedStore,
-	journal *state.LockedHerdrIntents,
-	row herdrRestartRow,
-	intent state.HerdrIntent,
-	live backend.LivePane,
-	process backend.ProcessIdentity,
-) error {
-	if err := requireConsumedHerdrResumeEnvironment(intent); err != nil {
-		return preserveAmbiguousHerdrResume(ctx, locked, journal, row, intent, err)
-	}
-	if completedHerdrResumeBinding(row.saved, intent, live, process) {
-		return nil
-	}
-	return completeHerdrResumeRow(ctx, locked, journal, row, intent, live, process)
-}
-
-func completedHerdrResumeBinding(
-	pane state.Pane,
-	intent state.HerdrIntent,
-	live backend.LivePane,
-	process backend.ProcessIdentity,
-) bool {
-	requirements := []bool{
-		pane.HerdrTerminalID == live.TerminalID, pane.HerdrAgentID == live.AgentID,
-		reflect.DeepEqual(pane.HerdrAgentSession, live.AgentSession),
-		reflect.DeepEqual(pane.HerdrProcessIdentity, &process),
-		pane.HerdrLaunchExecutable == intent.Launch.Executable,
-		slices.Equal(pane.HerdrLaunchArgs, intent.Launch.Args), pane.ReportedState == "",
-		!pane.StateRefinement, pane.EmitterRowKey == "", pane.LaunchNonce == "",
-		pane.EmitterNonce != "",
-	}
-	return !slices.Contains(requirements, false)
-}
-
 func exactRestartedCodexPlaceholder(saved state.Pane, live []backend.LivePane) (backend.LivePane, bool) {
 	if !resumableSavedCodex(saved) || countExactAgentSession(live, saved.HerdrAgentSession) != 1 {
 		return backend.LivePane{}, false
@@ -328,39 +250,32 @@ func exactRestartedCodexPlaceholder(saved state.Pane, live []backend.LivePane) (
 }
 
 func resumableSavedCodex(saved state.Pane) bool {
-	ref := saved.HerdrAgentSession
 	requirements := []bool{
 		backend.NormalizeName(saved.Backend) == backend.Herdr,
+		saved.Kind != state.PaneKindAttachedAgent,
 		saved.Agent == "codex", saved.HerdrDirectAgentLaunch, !saved.PlanMode,
-		exactCodexSessionRef(ref), saved.HerdrAgentID != "",
+		exactCodexSessionRef(saved.HerdrAgentSession), saved.HerdrAgentID != "",
 		cleanAbsolutePath(saved.HerdrLaunchExecutable), cleanAbsolutePath(saved.WorktreePath),
-		validSavedHerdrRestartProvenance(saved),
+		saved.HerdrRepoKey != "", cleanAbsolutePath(saved.HerdrRepoRoot),
 		saved.HerdrProcessIdentity != nil && saved.HerdrProcessIdentity.Valid(),
 		completeHerdrRestartRoute(saved), saved.HerdrWorkspaceLabel != "",
 	}
 	return !slices.Contains(requirements, false)
 }
 
-func validSavedHerdrRestartProvenance(saved state.Pane) bool {
-	if saved.HerdrRepoKey == "" && saved.HerdrRepoRoot == "" {
-		return saved.Kind == state.PaneKindAttachedAgent
-	}
-	return saved.HerdrRepoKey != "" && cleanAbsolutePath(saved.HerdrRepoRoot)
-}
-
 func exactCodexSessionRef(ref *backend.AgentSessionRef) bool {
-	return ref != nil && ref.Valid() && ref.Source == "herdr:codex" &&
-		ref.Agent == "codex" && ref.Kind == "id"
+	return ref != nil && ref.Source == "herdr:codex" && ref.Agent == "codex" &&
+		ref.Kind == "id" && strings.TrimSpace(ref.Value) != "" && ref.Value == strings.TrimSpace(ref.Value)
 }
 
 func cleanAbsolutePath(path string) bool {
-	return filepath.IsAbs(path) && filepath.Clean(path) == path
+	return filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.ContainsRune(path, '\x00')
 }
 
 func countExactAgentSession(live []backend.LivePane, ref *backend.AgentSessionRef) int {
 	matches := 0
 	for _, current := range live {
-		if ref != nil && current.AgentSession != nil && *current.AgentSession == *ref {
+		if current.AgentSession != nil && ref != nil && *current.AgentSession == *ref {
 			matches++
 		}
 	}
@@ -368,24 +283,17 @@ func countExactAgentSession(live []backend.LivePane, ref *backend.AgentSessionRe
 }
 
 func restartedCodexPlaceholderMatches(saved state.Pane, current backend.LivePane) bool {
+	sameSession := current.AgentSession != nil && saved.HerdrAgentSession != nil &&
+		*current.AgentSession == *saved.HerdrAgentSession
 	requirements := []bool{
 		sameHerdrRestartRoute(saved, current), current.TerminalID != "",
 		current.TerminalID != saved.HerdrTerminalID,
-		current.WorkspaceLabel == saved.HerdrWorkspaceLabel,
-		!current.AgentPresent, current.AgentProvider == "", current.AgentID == "",
-		current.AgentSession != nil && *current.AgentSession == *saved.HerdrAgentSession,
-		herdrRestartProvenanceMatches(saved, current),
+		current.WorkspaceLabel == saved.HerdrWorkspaceLabel, sameSession,
+		!current.AgentPresent, current.AgentID == "", current.AgentProvider == "",
+		current.RepoKey == saved.HerdrRepoKey, current.ProjectRoot == saved.HerdrRepoRoot,
+		current.WorktreePath == saved.WorktreePath, current.CurrentPath == saved.WorktreePath,
 	}
 	return !slices.Contains(requirements, false)
-}
-
-func herdrRestartProvenanceMatches(saved state.Pane, current backend.LivePane) bool {
-	if saved.HerdrRepoKey == "" && saved.HerdrRepoRoot == "" {
-		return current.RepoKey == "" && current.ProjectRoot == "" && current.WorktreePath == "" &&
-			current.CurrentPath == saved.WorktreePath
-	}
-	return current.RepoKey == saved.HerdrRepoKey && current.ProjectRoot == saved.HerdrRepoRoot &&
-		current.WorktreePath == saved.WorktreePath && current.CurrentPath == saved.WorktreePath
 }
 
 func herdrRestartRouteKey(saved state.Pane) string {
@@ -393,165 +301,85 @@ func herdrRestartRouteKey(saved state.Pane) string {
 		saved.HerdrWorkspaceID + "\x00" + saved.PaneID
 }
 
-func processRestartedHerdrRows(
+func processRestartedHerdrRow(
 	ctx context.Context,
 	locked *state.LockedStore,
 	journal *state.LockedHerdrIntents,
 	restarted HerdrRestartRuntime,
-	rows []herdrRestartRow,
-	candidates map[string]herdrRestartCandidate,
-	deadline time.Time,
-) error {
-	if len(rows) == 0 {
-		return nil
-	}
-	route, err := restarted.LaunchRoute()
-	if err != nil {
-		return err
-	}
-	launcher := &Launcher{Herdr: restarted}
-	for _, row := range rows {
-		candidate, eligible := candidates[herdrRestartRouteKey(row.saved)]
-		if err := processOneRestartedHerdrRow(
-			ctx, locked, journal, restarted, launcher, route, row, candidate, eligible, deadline,
-		); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func processOneRestartedHerdrRow(
-	ctx context.Context,
-	locked *state.LockedStore,
-	journal *state.LockedHerdrIntents,
-	restarted HerdrRestartRuntime,
-	launcher *Launcher,
 	route herdrrun.OwnedLaunchRoute,
 	row herdrRestartRow,
 	candidate herdrRestartCandidate,
 	eligible bool,
 	deadline time.Time,
 ) error {
-	if !eligible || candidate.row.root != row.root {
-		if intent, found := existingHerdrResumeIntent(journal, row.saved); found {
-			if intent.Status == state.HerdrIntentManualCleanupRequired || intent.Launch.TokenIssued {
-				return retainAmbiguousHerdrResume(ctx, locked, row, intent)
-			}
-			return finalizeFailedHerdrResume(ctx, locked, journal, route.RuntimeDir, row, intent)
-		}
-		return persistHerdrRestartRow(ctx, locked, row, nil, nil, nil)
-	}
-	intent, err := prepareHerdrResumeIntent(journal, restarted, route, candidate, deadline)
+	intent, found, err := existingHerdrResumeIntent(journal, row.saved)
 	if err != nil {
 		return err
 	}
-	if intent.Status == state.HerdrIntentManualCleanupRequired || intent.Launch.TokenIssued {
-		return retainAmbiguousHerdrResume(ctx, locked, row, intent)
+	if found {
+		return finishHerdrResumeJournal(ctx, locked, journal, route.RuntimeDir, row, intent)
 	}
-	live, process, err := startRestartedCodex(ctx, restarted, launcher, journal, route, &intent)
+	if !eligible || candidate.row.root != row.root {
+		return persistHerdrRestartRow(ctx, locked, row, nil, nil, nil)
+	}
+	intent, err = prepareHerdrResumeIntent(journal, restarted, route, candidate, deadline)
 	if err != nil {
-		return failHerdrResumeRow(ctx, locked, journal, route.RuntimeDir, row, intent, err)
+		return errors.Join(err, persistHerdrRestartRow(ctx, locked, row, nil, nil, nil))
 	}
-	return completeHerdrResumeRow(ctx, locked, journal, row, intent, live, process)
+	launchErr := startRestartedCodex(ctx, restarted, journal, route, &intent)
+	if launchErr != nil {
+		return finishHerdrResumeJournal(ctx, locked, journal, route.RuntimeDir, row, intent)
+	}
+	return finishSuccessfulHerdrResume(
+		ctx, locked, journal, restarted, route.RuntimeDir, row, intent,
+	)
+}
+
+func finishSuccessfulHerdrResume(
+	ctx context.Context,
+	locked *state.LockedStore,
+	journal *state.LockedHerdrIntents,
+	restarted HerdrRestartRuntime,
+	runtimeDir string,
+	row herdrRestartRow,
+	intent state.HerdrIntent,
+) error {
+	if err := finishHerdrResumeIntent(journal, runtimeDir, intent); err != nil {
+		return err
+	}
+	live, process, err := observeRestartedCodexOnce(ctx, restarted, intent)
+	if err != nil {
+		return persistHerdrRestartRow(ctx, locked, row, nil, nil, nil)
+	}
+	return persistHerdrRestartRow(ctx, locked, row, &live, &process, intent.Launch)
 }
 
 func existingHerdrResumeIntent(
 	journal *state.LockedHerdrIntents,
 	pane state.Pane,
-) (state.HerdrIntent, bool) {
+) (state.HerdrIntent, bool, error) {
 	id, err := state.HerdrResumeIntentID(
 		pane.HerdrSession, pane.HerdrSocketPath, pane.HerdrWorkspaceID, pane.PaneID,
 	)
 	if err != nil {
-		return state.HerdrIntent{}, false
+		return state.HerdrIntent{}, false, nil
 	}
 	intent, found := journal.FindIntent(id)
-	return intent, found && intent.Kind == state.HerdrIntentResume
+	if !found {
+		return state.HerdrIntent{}, false, nil
+	}
+	if intent.Kind != state.HerdrIntentResume || !herdrResumeIntentTargetsRow(intent, pane) {
+		return state.HerdrIntent{}, false, fmt.Errorf("saved Herdr resume intent does not match its state row")
+	}
+	return intent, true, nil
 }
 
-func failHerdrResumeRow(
-	ctx context.Context,
-	locked *state.LockedStore,
-	journal *state.LockedHerdrIntents,
-	runtimeDir string,
-	row herdrRestartRow,
-	intent state.HerdrIntent,
-	cause error,
-) error {
-	if intent.Launch.TokenIssued {
-		return preserveAmbiguousHerdrResume(ctx, locked, journal, row, intent, cause)
-	}
-	if err := preserveFailedHerdrResume(journal, intent, cause); err != nil {
-		return err
-	}
-	return finalizeFailedHerdrResume(ctx, locked, journal, runtimeDir, row, intent)
-}
-
-func preserveAmbiguousHerdrResume(
-	ctx context.Context,
-	locked *state.LockedStore,
-	journal *state.LockedHerdrIntents,
-	row herdrRestartRow,
-	intent state.HerdrIntent,
-	cause error,
-) error {
-	intent.Status = state.HerdrIntentManualCleanupRequired
-	intent.Failure = cause.Error()
-	journal.UpsertIntent(intent)
-	if err := journal.Save(); err != nil {
-		return err
-	}
-	return retainAmbiguousHerdrResume(ctx, locked, row, intent)
-}
-
-func retainAmbiguousHerdrResume(
-	ctx context.Context,
-	locked *state.LockedStore,
-	row herdrRestartRow,
-	intent state.HerdrIntent,
-) error {
-	if err := persistHerdrRestartRow(ctx, locked, row, nil, nil, nil); err != nil {
-		return err
-	}
-	return herdrManualCleanupError(intent)
-}
-
-func finalizeFailedHerdrResume(
-	ctx context.Context,
-	locked *state.LockedStore,
-	journal *state.LockedHerdrIntents,
-	runtimeDir string,
-	row herdrRestartRow,
-	intent state.HerdrIntent,
-) error {
-	if !intent.Launch.TokenIssued {
-		if err := herdrrun.DiscardWorkloadEnvironment(runtimeDir, intent.Launch); err != nil {
-			return err
-		}
-	}
-	if err := persistHerdrRestartRow(ctx, locked, row, nil, nil, nil); err != nil {
-		return err
-	}
-	if !journal.RemoveIntent(intent.ID) {
-		return fmt.Errorf("Herdr failed resume intent %s disappeared before completion", intent.ID)
-	}
-	return journal.Save()
-}
-
-func completeHerdrResumeRow(
-	ctx context.Context,
-	locked *state.LockedStore,
-	journal *state.LockedHerdrIntents,
-	row herdrRestartRow,
-	intent state.HerdrIntent,
-	live backend.LivePane,
-	process backend.ProcessIdentity,
-) error {
-	if err := persistHerdrRestartRow(ctx, locked, row, &live, &process, intent.Launch); err != nil {
-		return err
-	}
-	return nil
+func herdrResumeIntentTargetsRow(intent state.HerdrIntent, pane state.Pane) bool {
+	return intent.Parent == pane.Parent && intent.RuntimeParent == pane.RuntimeParent &&
+		intent.IssueNum == pane.IssueNum && intent.TaskID == pane.TaskID &&
+		intent.WorktreePath == pane.WorktreePath && intent.Session == pane.HerdrSession &&
+		intent.SocketPath == pane.HerdrSocketPath &&
+		intent.Resource.WorkspaceID == pane.HerdrWorkspaceID && intent.Resource.PaneID == pane.PaneID
 }
 
 func prepareHerdrResumeIntent(
@@ -565,9 +393,6 @@ func prepareHerdrResumeIntent(
 	id, err := state.HerdrResumeIntentID(saved.HerdrSession, saved.HerdrSocketPath, saved.HerdrWorkspaceID, saved.PaneID)
 	if err != nil {
 		return state.HerdrIntent{}, err
-	}
-	if existing, found := journal.FindIntent(id); found {
-		return existing, nil
 	}
 	nonce, err := randomHerdrToken()
 	if err != nil {
@@ -614,9 +439,8 @@ func newHerdrResumeIntent(
 		Session: saved.HerdrSession, SocketPath: saved.HerdrSocketPath,
 		ExpiresUnixMS: deadline.UnixMilli(), ResumeAgentSession: &ref,
 		Launch: &state.HerdrLaunch{
-			Nonce: nonce, Agent: "codex",
-			Executable: saved.HerdrLaunchExecutable, Args: []string{"resume", ref.Value},
-			EnvFilePath: envPath, EnvNameCount: envCount,
+			Nonce: nonce, Agent: "codex", Executable: saved.HerdrLaunchExecutable,
+			Args: []string{"resume", ref.Value}, EnvFilePath: envPath, EnvNameCount: envCount,
 		},
 	}
 }
@@ -624,143 +448,60 @@ func newHerdrResumeIntent(
 func startRestartedCodex(
 	ctx context.Context,
 	restarted HerdrRestartRuntime,
-	launcher *Launcher,
-	journal *state.LockedHerdrIntents,
-	route herdrrun.OwnedLaunchRoute,
-	intent *state.HerdrIntent,
-) (backend.LivePane, backend.ProcessIdentity, error) {
-	if err := issueRestartedCodex(ctx, restarted, launcher, journal, route, intent); err != nil {
-		return backend.LivePane{}, backend.ProcessIdentity{}, err
-	}
-	process, err := waitForRestartedCodexProcess(ctx, launcher, *intent, route)
-	if err != nil {
-		return backend.LivePane{}, backend.ProcessIdentity{}, err
-	}
-	live, err := observeRestartedCodex(ctx, launcher, *intent)
-	if err != nil {
-		return backend.LivePane{}, backend.ProcessIdentity{}, err
-	}
-	if err := requireConsumedHerdrResumeEnvironment(*intent); err != nil {
-		return backend.LivePane{}, backend.ProcessIdentity{}, err
-	}
-	return live, process, nil
-}
-
-func requireConsumedHerdrResumeEnvironment(intent state.HerdrIntent) error {
-	if _, err := os.Lstat(intent.Launch.EnvFilePath); errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return fmt.Errorf("Herdr resume environment capsule was not consumed")
-}
-
-func issueRestartedCodex(
-	ctx context.Context,
-	restarted HerdrRestartRuntime,
-	launcher *Launcher,
 	journal *state.LockedHerdrIntents,
 	route herdrrun.OwnedLaunchRoute,
 	intent *state.HerdrIntent,
 ) error {
-	if err := admitHerdrResumeLauncher(ctx, launcher, journal, route, intent); err != nil {
-		return err
+	preflight := func(info herdrrun.PaneProcessInfo, panes []backend.LivePane) error {
+		if err := verifyHerdrLauncherProcess(info, *intent, route); err != nil {
+			return err
+		}
+		for _, pane := range panes {
+			if exactHerdrResumePlaceholder(*intent, pane) {
+				return nil
+			}
+		}
+		return fmt.Errorf("exact Herdr Codex resume placeholder is not live")
 	}
-	intent.Launch.TokenIssued = true
-	if err := saveHerdrLaunchPhase(journal, *intent); err != nil {
-		return err
+	markIssued := func() error {
+		intent.Launch.LauncherReady = true
+		intent.Launch.TokenIssued = true
+		return saveHerdrLaunchPhase(journal, *intent)
 	}
-	stepCtx, cancel, err := herdrLaunchStepContext(ctx, *intent)
-	if err != nil {
-		return err
-	}
-	return herdrLaunchStepResult(stepCtx, cancel, restarted.SendRestartResumeToken(
-		stepCtx, intent.Resource.PaneID, intent.Launch.Nonce,
-	))
-}
-
-func admitHerdrResumeLauncher(
-	ctx context.Context,
-	launcher *Launcher,
-	journal *state.LockedHerdrIntents,
-	route herdrrun.OwnedLaunchRoute,
-	intent *state.HerdrIntent,
-) error {
-	if err := launcher.Herdr.WaitForLauncher(
+	if err := restarted.IssueRestartResume(
 		ctx, intent.Resource.PaneID, intent.Launch.Nonce, remainingHerdrLaunchTime(*intent),
+		preflight, markIssued,
 	); err != nil {
 		return err
 	}
-	if err := retryHerdrObservation(ctx, *intent, func(observeCtx context.Context) error {
-		return verifyHerdrResumeLauncher(observeCtx, launcher, *intent, route)
-	}); err != nil {
-		return err
-	}
-	intent.Launch.LauncherReady = true
-	return saveHerdrLaunchPhase(journal, *intent)
-}
-
-func verifyHerdrResumeLauncher(
-	ctx context.Context,
-	launcher *Launcher,
-	intent state.HerdrIntent,
-	route herdrrun.OwnedLaunchRoute,
-) error {
-	process, err := launcher.Herdr.ProcessInfo(ctx, intent.Resource.PaneID)
-	if err != nil {
-		return err
-	}
-	if err := verifyHerdrLauncherProcess(process, intent, route); err != nil {
-		return err
-	}
-	panes, err := launcher.Herdr.LivePanes(ctx)
-	if err != nil {
-		return err
-	}
-	for _, pane := range panes {
-		if exactHerdrResumePlaceholder(intent, pane) {
-			return nil
-		}
-	}
-	return fmt.Errorf("exact Herdr Codex resume placeholder is not live")
-}
-
-func observeRestartedCodex(
-	ctx context.Context,
-	launcher *Launcher,
-	intent state.HerdrIntent,
-) (backend.LivePane, error) {
-	return launcher.waitForHerdrPane(ctx, intent, restartedCodexPane, "")
+	_, _, err := waitForRestartedCodexProcess(ctx, restarted, *intent)
+	return err
 }
 
 func waitForRestartedCodexProcess(
 	ctx context.Context,
-	launcher *Launcher,
+	restarted HerdrRestartRuntime,
 	intent state.HerdrIntent,
-	route herdrrun.OwnedLaunchRoute,
-) (backend.ProcessIdentity, error) {
-	var matched backend.ProcessIdentity
+) (backend.LivePane, backend.ProcessIdentity, error) {
+	var live backend.LivePane
+	var identity backend.ProcessIdentity
 	err := retryHerdrObservation(ctx, intent, func(observeCtx context.Context) error {
-		process, err := launcher.Herdr.ProcessInfo(observeCtx, intent.Resource.PaneID)
+		info, panes, err := restarted.ObserveRestartResume(observeCtx, intent.Resource.PaneID)
 		if err != nil {
 			return err
 		}
-		matched, err = matchHerdrAgentProcess(process, intent)
-		pending := verifyHerdrLauncherProcess(process, intent, route) == nil ||
-			herdrprocess.InterpreterLaunchPending(process, herdrLaunchProcessIdentity(intent))
-		if err == nil || !pending {
-			return err
+		var found bool
+		live, found = restartedCodexPane(intent, panes)
+		if !found {
+			return herdrLaunchTransitionPending{}
 		}
-		return herdrLaunchTransitionPending{}
+		identity, err = matchHerdrAgentProcess(info, intent)
+		if err != nil {
+			return herdrLaunchTransitionPending{}
+		}
+		return nil
 	})
-	return matched, err
-}
-
-func restartedCodexPane(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
-	for _, pane := range panes {
-		if exactResumedCodexPane(intent, pane) {
-			return pane, true
-		}
-	}
-	return backend.LivePane{}, false
+	return live, identity, err
 }
 
 func exactHerdrResumePlaceholder(intent state.HerdrIntent, pane backend.LivePane) bool {
@@ -768,9 +509,14 @@ func exactHerdrResumePlaceholder(intent state.HerdrIntent, pane backend.LivePane
 		pane.AgentID == "" && pane.AgentProvider == ""
 }
 
-func exactResumedCodexPane(intent state.HerdrIntent, pane backend.LivePane) bool {
-	return exactHerdrResumeRoute(intent, pane) && pane.AgentPresent &&
-		pane.AgentProvider == "codex" && pane.AgentID != ""
+func restartedCodexPane(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
+	for _, pane := range panes {
+		if exactHerdrResumeRoute(intent, pane) && pane.AgentPresent &&
+			pane.AgentProvider == "codex" && pane.AgentID != "" {
+			return pane, true
+		}
+	}
+	return backend.LivePane{}, false
 }
 
 func exactHerdrResumeRoute(intent state.HerdrIntent, pane backend.LivePane) bool {
@@ -781,21 +527,59 @@ func exactHerdrResumeRoute(intent state.HerdrIntent, pane backend.LivePane) bool
 		pane.Ref.Pane == intent.Resource.PaneID, pane.TerminalID == intent.Resource.TerminalID,
 		pane.WorkspaceLabel == intent.Resource.Label, pane.CurrentPath == intent.Resource.CurrentPath,
 		pane.RepoKey == intent.Resource.RepoKey, pane.ProjectRoot == intent.Resource.RepoRoot,
+		pane.WorktreePath == intent.WorktreePath,
 		pane.SessionID == intent.Session, pane.SocketPath == intent.SocketPath,
 		sameAgentSession,
 	}
 	return !slices.Contains(requirements, false)
 }
 
-func preserveFailedHerdrResume(
-	journal *state.LockedHerdrIntents,
+func observeRestartedCodexOnce(
+	ctx context.Context,
+	restarted HerdrRestartRuntime,
 	intent state.HerdrIntent,
-	cause error,
+) (backend.LivePane, backend.ProcessIdentity, error) {
+	info, panes, err := restarted.ObserveRestartResume(ctx, intent.Resource.PaneID)
+	if err != nil {
+		return backend.LivePane{}, backend.ProcessIdentity{}, err
+	}
+	live, found := restartedCodexPane(intent, panes)
+	if !found {
+		return backend.LivePane{}, backend.ProcessIdentity{}, fmt.Errorf("resumed Herdr Codex pane is not exact")
+	}
+	identity, err := matchHerdrAgentProcess(info, intent)
+	return live, identity, err
+}
+
+func finishHerdrResumeJournal(
+	ctx context.Context,
+	locked *state.LockedStore,
+	journal *state.LockedHerdrIntents,
+	runtimeDir string,
+	row herdrRestartRow,
+	intent state.HerdrIntent,
 ) error {
-	intent.Status = state.HerdrIntentManualCleanupRequired
-	intent.Failure = cause.Error()
-	journal.UpsertIntent(intent)
-	return journal.Save()
+	if err := finishHerdrResumeIntent(journal, runtimeDir, intent); err != nil {
+		return err
+	}
+	return persistHerdrRestartRow(ctx, locked, row, nil, nil, nil)
+}
+
+func finishHerdrResumeIntent(
+	journal *state.LockedHerdrIntents,
+	runtimeDir string,
+	intent state.HerdrIntent,
+) error {
+	if err := herdrrun.DiscardWorkloadEnvironment(runtimeDir, intent.Launch); err != nil {
+		return err
+	}
+	if !journal.RemoveIntent(intent.ID) {
+		return fmt.Errorf("Herdr resume intent %s disappeared before completion", intent.ID)
+	}
+	if err := journal.Save(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func persistHerdrRestartRow(

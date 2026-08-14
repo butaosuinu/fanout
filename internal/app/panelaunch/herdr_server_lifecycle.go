@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"slices"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/errs"
@@ -39,24 +38,14 @@ func RestartHerdrServer(
 	if err != nil {
 		return nil, releaseRejectedHerdrRestart(journal, intent, created, err)
 	}
-	rowErr := verifyRestartedHerdrRows(ctx, projectRoot, locked, journal, restarted)
-	if err = finishHerdrRestartRows(locked, journal, intent.ID, rowErr); err != nil {
+	if err = verifyRestartedHerdrRows(ctx, projectRoot, locked, journal, restarted); err != nil {
+		return nil, err
+	}
+	markPlannedHerdrReopenCleanupManual(journal)
+	if err = completeHerdrServerLifecycle(locked, journal, intent.ID); err != nil {
 		return nil, err
 	}
 	return restarted, nil
-}
-
-func finishHerdrRestartRows(
-	locked *state.LockedStore,
-	journal *state.LockedHerdrIntents,
-	intentID string,
-	rowErr error,
-) error {
-	if rowErr != nil && !errors.Is(rowErr, ErrHerdrManualCleanupRequired) {
-		return rowErr
-	}
-	markPlannedHerdrReopenCleanupManual(journal)
-	return errors.Join(rowErr, completeHerdrServerLifecycle(locked, journal, intentID))
 }
 
 func releaseRejectedHerdrRestart(
@@ -277,10 +266,6 @@ func completeHerdrServerLifecycle(
 	if !journal.RemoveIntent(intentID) {
 		return fmt.Errorf("herdr server lifecycle intent %s disappeared before completion", intentID)
 	}
-	journal.Intents = slices.DeleteFunc(journal.Intents, func(intent state.HerdrIntent) bool {
-		return intent.Kind == state.HerdrIntentResume &&
-			intent.Status != state.HerdrIntentManualCleanupRequired
-	})
 	return journal.Save()
 }
 

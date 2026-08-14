@@ -1457,22 +1457,24 @@ func TestObservationCommandErrorClassifiesOnlyTransientFailures(t *testing.T) {
 }
 
 func TestPaneRunResponseRequiresExactOKEnvelope(t *testing.T) {
-	for _, valid := range [][]byte{
-		nil,
-		[]byte(`{"id":"cli:pane:run","result":{"type":"ok"}}`),
-	} {
-		if err := validatePaneRunResponse(valid); err != nil {
-			t.Fatalf("valid pane run response %q: %v", valid, err)
-		}
+	valid := []byte(`{"id":"cli:pane:run","result":{"type":"ok"}}`)
+	if err := validatePaneRunResponse(valid); err != nil {
+		t.Fatalf("valid pane run response: %v", err)
 	}
 	for _, invalid := range [][]byte{
-		[]byte("\n"),
+		nil,
 		[]byte(`{"id":"cli:pane:get","result":{"type":"ok"}}`),
 		[]byte(`{"id":"cli:pane:run","result":{"type":"unexpected"}}`),
 	} {
 		if err := validatePaneRunResponse(invalid); err == nil {
 			t.Fatalf("invalid pane run response accepted: %s", invalid)
 		}
+	}
+}
+
+func TestRestartResumeResponseAllowsDocumentedEmptySuccess(t *testing.T) {
+	if err := validateRestartResumeResponse(nil); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1498,14 +1500,14 @@ func TestRestartResumeTokenRequiresExactLifecycleAndIntentRoute(t *testing.T) {
 		Kind: state.HerdrIntentResume, Status: state.HerdrIntentRealized,
 		Session: session.Session, SocketPath: session.SocketPath,
 		Resource: state.HerdrResource{PaneID: "w1:p1"},
-		Launch:   &state.HerdrLaunch{Nonce: nonce, LauncherReady: true, TokenIssued: true},
+		Launch:   &state.HerdrLaunch{Nonce: nonce},
 	}
 	if !exactRestartResumeTokenIntent(intent, session.Session, session.SocketPath, "w1:p1", nonce) {
 		t.Fatal("exact resume token intent did not match")
 	}
-	intent.Launch.TokenIssued = false
+	intent.Launch.TokenIssued = true
 	if exactRestartResumeTokenIntent(intent, session.Session, session.SocketPath, "w1:p1", nonce) {
-		t.Fatal("unissued resume token intent matched")
+		t.Fatal("issued resume token intent matched")
 	}
 }
 

@@ -79,7 +79,6 @@ func herdrAttachedPaneBuilder(req Request, live backend.LivePane, codexStatus co
 	return func(latest state.HerdrIntent) (state.Pane, error) {
 		pane := herdrAttachedStatePane(req, latest, live, codexStatus)
 		applyHerdrLaunchTelemetry(&pane, latest)
-		pane.HerdrDirectAgentLaunch = !req.CodexPlanMode() && !req.CodexTeamMode
 		return pane, nil
 	}
 }

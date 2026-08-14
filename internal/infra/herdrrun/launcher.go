@@ -84,12 +84,7 @@ func runWorkloadPaneLauncher(
 		fmt.Fprintf(errOut, "fanout herdr pane launcher: %v\n", err)
 		return 1
 	}
-	relaySocket, err := startCodexAgentSessionRelay(request, intent)
-	if err != nil {
-		fmt.Fprintf(errOut, "fanout herdr pane launcher: %v\n", err)
-		return 1
-	}
-	environment = workloadExecEnvironment(request, intent, environment, relaySocket)
+	environment = workloadExecEnvironment(request, intent, environment)
 	argv := append([]string{intent.Launch.Executable}, intent.Launch.Args...)
 	if err := syscall.Exec(intent.Launch.Executable, argv, environment); err != nil {
 		fmt.Fprintf(errOut, "fanout herdr pane launcher: exec workload: %v\n", err)
@@ -102,7 +97,6 @@ func workloadExecEnvironment(
 	request paneLauncherRequest,
 	intent state.HerdrIntent,
 	environment []string,
-	relaySocket string,
 ) []string {
 	if intent.Launch.Agent == "" {
 		return append(environment,
@@ -113,12 +107,19 @@ func workloadExecEnvironment(
 			paneIDEnv+"="+request.paneID,
 		)
 	}
-	if relaySocket != "" {
+	if directCodexIntegrationLaunch(intent) {
 		environment = append(environment,
-			"HERDR_ENV=1", socketEnv+"="+relaySocket, paneIDEnv+"="+request.paneID,
+			"HERDR_ENV=1", socketEnv+"="+request.socketPath, paneIDEnv+"="+request.paneID,
 		)
 	}
 	return bindHerdrEmitterEnvironment(intent, environment)
+}
+
+func directCodexIntegrationLaunch(intent state.HerdrIntent) bool {
+	launch := intent.Launch
+	directKind := intent.Kind == state.HerdrIntentWorktree || intent.Kind == state.HerdrIntentResume
+	return directKind && launch != nil && launch.Agent == "codex" &&
+		launch.CodexPlanStatusPath == "" && launch.CodexTeamStatusPath == ""
 }
 
 func bindHerdrEmitterEnvironment(intent state.HerdrIntent, environment []string) []string {

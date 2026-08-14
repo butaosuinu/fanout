@@ -3,6 +3,8 @@ package panelaunch
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -13,120 +15,90 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-func (f *fakeHerdrLaunchRuntime) WaitRestoredPanes(
+type restartRuntimeFake struct {
+	t               *testing.T
+	route           herdrrun.OwnedLaunchRoute
+	waitPanes       []backend.LivePane
+	resumedPanes    []backend.LivePane
+	launcherInfo    herdrrun.PaneProcessInfo
+	resumedInfo     herdrrun.PaneProcessInfo
+	waitTimeout     time.Duration
+	waitCalls       int
+	issueCalls      int
+	issueErr        error
+	onIssue         func()
+	preparedEnvPath string
+}
+
+func (f *restartRuntimeFake) LaunchRoute() (herdrrun.OwnedLaunchRoute, error) {
+	return f.route, nil
+}
+
+func (f *restartRuntimeFake) PrepareWorkloadEnvironment(
+	nonce string,
+	_ []string,
+) (string, int, error) {
+	f.t.Helper()
+	dir := filepath.Join(f.route.RuntimeDir, "workload-env")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", 0, err
+	}
+	f.preparedEnvPath = filepath.Join(dir, "env-"+nonce+".json")
+	if err := os.WriteFile(f.preparedEnvPath, []byte("{}\n"), 0o600); err != nil {
+		return "", 0, err
+	}
+	return f.preparedEnvPath, 1, nil
+}
+
+func (f *restartRuntimeFake) WaitRestoredPanes(
 	_ context.Context,
 	timeout time.Duration,
 	match func([]backend.LivePane) bool,
 ) herdrrun.WaitResult {
-	f.restartWaitCalls++
-	f.restartWaitTimeout = timeout
-	panes := append([]backend.LivePane(nil), f.live...)
+	f.waitCalls++
+	f.waitTimeout = timeout
 	status := herdrrun.WaitTimedOut
-	if match(panes) {
+	if match(f.waitPanes) {
 		status = herdrrun.WaitMatched
 	}
-	return herdrrun.WaitResult{Status: status, Panes: panes}
+	return herdrrun.WaitResult{Status: status, Panes: slices.Clone(f.waitPanes)}
 }
 
-func (f *fakeHerdrLaunchRuntime) SendRestartResumeToken(context.Context, string, string) error {
-	f.tokenCalls++
-	return f.restartTokenErr
+func (f *restartRuntimeFake) IssueRestartResume(
+	_ context.Context,
+	_, _ string,
+	_ time.Duration,
+	preflight func(herdrrun.PaneProcessInfo, []backend.LivePane) error,
+	markIssued func() error,
+) error {
+	if err := preflight(f.launcherInfo, slices.Clone(f.waitPanes)); err != nil {
+		return err
+	}
+	if err := markIssued(); err != nil {
+		return err
+	}
+	f.issueCalls++
+	if f.onIssue != nil {
+		f.onIssue()
+	}
+	return f.issueErr
+}
+
+func (f *restartRuntimeFake) ObserveRestartResume(
+	_ context.Context,
+	_ string,
+) (herdrrun.PaneProcessInfo, []backend.LivePane, error) {
+	return f.resumedInfo, slices.Clone(f.resumedPanes), nil
 }
 
 func TestResumeRestartedHerdrRowsRebindsExactCodexProcess(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	saved, placeholder := restartCodexFixture()
-	resumed := placeholder
-	resumed.AgentID, resumed.AgentProvider, resumed.AgentPresent = "restored-codex", "codex", true
+	placeholder.AgentState = backend.AgentIdle
+	resumed := resumedCodexPane(placeholder)
 	recordRestartStatePane(t, repo, saved)
-	runtime := &fakeHerdrLaunchRuntime{
-		live: []backend.LivePane{placeholder},
-		launchRoute: herdrrun.OwnedLaunchRoute{
-			RuntimeDir: "/runtime", Session: saved.HerdrSession, SocketPath: saved.HerdrSocketPath,
-			LauncherPath: "/runtime/launcher/fanout", ControlPath: "/repo/.git/fanout/herdr-intents.json",
-		},
-	}
-	runtime.listLive = func(context.Context) ([]backend.LivePane, error) {
-		if runtime.tokenCalls == 0 {
-			return []backend.LivePane{placeholder}, nil
-		}
-		return []backend.LivePane{resumed}, nil
-	}
-	runtime.process = func(_ context.Context, _ string) (herdrrun.PaneProcessInfo, error) {
-		if runtime.tokenCalls == 0 {
-			return restartProcessInfo(runtime.launchRoute.LauncherPath, nil, saved.WorktreePath), nil
-		}
-		return restartProcessInfo(
-			saved.HerdrLaunchExecutable,
-			[]string{"resume", saved.HerdrAgentSession.Value},
-			saved.WorktreePath,
-		), nil
-	}
 	locked, journal := lockHerdrRestartTest(t, repo)
-
-	if err := resumeRestartedHerdrRows(
-		context.Background(), repo, locked, journal, runtime, 3*time.Second,
-	); err != nil {
-		t.Fatal(err)
-	}
-	got, found := locked.Find(saved.Parent, saved.IssueNum)
-	if !found || got.HerdrTerminalID != resumed.TerminalID || got.HerdrProcessIdentity == nil ||
-		got.HerdrProcessIdentity.AgentPID != 10 || got.HerdrAgentID != resumed.AgentID || runtime.tokenCalls != 1 ||
-		runtime.restartWaitCalls != 1 || runtime.restartWaitTimeout != 3*time.Second {
-		t.Fatalf("rebound row/runtime = (%+v, %t, tokens=%d)", got, found, runtime.tokenCalls)
-	}
-	if len(got.HerdrLaunchArgs) != 2 || got.HerdrLaunchArgs[0] != "resume" ||
-		got.HerdrLaunchArgs[1] != saved.HerdrAgentSession.Value {
-		t.Fatalf("rebound argv = %#v", got.HerdrLaunchArgs)
-	}
-	if !containsHerdrResumeIntent(journal.Intents) {
-		t.Fatal("successful resume intent was removed before server lifecycle completion")
-	}
-	completeRestartLifecycleForTest(t, locked, journal)
-	if containsHerdrResumeIntent(journal.Intents) {
-		t.Fatal("successful resume intent remained after server lifecycle completion")
-	}
-}
-
-func TestResumeRestartedHerdrRowsResumesExactRowAfterWaitTimeout(t *testing.T) {
-	repo := newHerdrRealizeRepo(t)
-	saved, placeholder := restartCodexFixture()
-	resumed := placeholder
-	resumed.AgentID, resumed.AgentProvider, resumed.AgentPresent = "restored-codex", "codex", true
-	missing := saved
-	missing.IssueNum, missing.PaneID, missing.HerdrWorkspaceID = 533, "w2:p1", "w2"
-	missing.HerdrTerminalID, missing.WorktreePath = "term-missing", "/repo/missing"
-	missing.HerdrAgentSession = cloneAgentSession(saved.HerdrAgentSession)
-	missing.HerdrAgentSession.Value = "019f-missing"
-	recordRestartStatePane(t, repo, saved)
-	recordRestartStatePane(t, repo, missing)
-	runtime := &fakeHerdrLaunchRuntime{
-		live: []backend.LivePane{placeholder},
-		launchRoute: herdrrun.OwnedLaunchRoute{
-			RuntimeDir: "/runtime", Session: saved.HerdrSession, SocketPath: saved.HerdrSocketPath,
-			LauncherPath: "/runtime/launcher/fanout", ControlPath: "/repo/.git/fanout/herdr-intents.json",
-		},
-	}
-	runtime.listLive = func(context.Context) ([]backend.LivePane, error) {
-		if runtime.tokenCalls == 0 {
-			return []backend.LivePane{placeholder}, nil
-		}
-		return []backend.LivePane{resumed}, nil
-	}
-	runtime.process = func(_ context.Context, paneID string) (herdrrun.PaneProcessInfo, error) {
-		if paneID == missing.PaneID {
-			return herdrrun.PaneProcessInfo{}, errors.New("missing pane")
-		}
-		if runtime.tokenCalls == 0 {
-			return restartProcessInfo(runtime.launchRoute.LauncherPath, nil, saved.WorktreePath), nil
-		}
-		return restartProcessInfo(
-			saved.HerdrLaunchExecutable,
-			[]string{"resume", saved.HerdrAgentSession.Value},
-			saved.WorktreePath,
-		), nil
-	}
-	locked, journal := lockHerdrRestartTest(t, repo)
+	runtime := newRestartRuntimeFake(t, saved, placeholder, resumed)
 
 	if err := resumeRestartedHerdrRows(
 		context.Background(), repo, locked, journal, runtime, 3*time.Second,
@@ -135,167 +107,175 @@ func TestResumeRestartedHerdrRowsResumesExactRowAfterWaitTimeout(t *testing.T) {
 	}
 	got, found := locked.Find(saved.Parent, saved.IssueNum)
 	if !found || got.HerdrTerminalID != resumed.TerminalID || got.HerdrAgentID != resumed.AgentID ||
-		got.ReportedState != "" || got.StateRefinement || runtime.tokenCalls != 1 {
-		t.Fatalf("timed-out observed row = (%+v, %t, tokens=%d)", got, found, runtime.tokenCalls)
+		got.HerdrProcessIdentity == nil || got.HerdrProcessIdentity.AgentPID != 10 {
+		t.Fatalf("rebound row = (%+v, %t)", got, found)
 	}
-	stale, found := locked.Find(missing.Parent, missing.IssueNum)
-	if !found || stale.HerdrTerminalID != missing.HerdrTerminalID || stale.ReportedState != "" ||
-		stale.StateRefinement {
-		t.Fatalf("timed-out missing row = (%+v, %t)", stale, found)
+	if got.ReportedState != "" || got.StateRefinement || got.EmitterNonce == saved.EmitterNonce {
+		t.Fatalf("rebound telemetry = (%q, %t, %q)", got.ReportedState, got.StateRefinement, got.EmitterNonce)
 	}
-}
-
-func TestHerdrRestartResumeDeadlineUsesRemainingLifecycleBudget(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	got := herdrRestartResumeDeadline(ctx, 5*time.Minute)
-	want, ok := ctx.Deadline()
-	if !ok || !got.Equal(want) {
-		t.Fatalf("resume deadline = %s, want outer lifecycle deadline %s", got, want)
+	wantArgs := []string{"resume", saved.HerdrAgentSession.Value}
+	if !slices.Equal(got.HerdrLaunchArgs, wantArgs) || runtime.issueCalls != 1 ||
+		runtime.waitCalls != 1 || runtime.waitTimeout != 3*time.Second {
+		t.Fatalf("resume result args=%q issues=%d wait=%d/%s", got.HerdrLaunchArgs, runtime.issueCalls, runtime.waitCalls, runtime.waitTimeout)
+	}
+	if containsHerdrResumeIntent(journal.Intents) {
+		t.Fatal("successful resume intent remains")
 	}
 }
 
-func TestResumeRestartedHerdrRowsDoesNotRetryFailedToken(t *testing.T) {
-	repo := newHerdrRealizeRepo(t)
-	saved, placeholder := restartCodexFixture()
-	recordRestartStatePane(t, repo, saved)
-	runtime := &fakeHerdrLaunchRuntime{
-		live: []backend.LivePane{placeholder}, restartTokenErr: errors.New("token failed"),
-		launchRoute: herdrrun.OwnedLaunchRoute{
-			RuntimeDir: "/runtime", Session: saved.HerdrSession, SocketPath: saved.HerdrSocketPath,
-			LauncherPath: "/runtime/launcher/fanout", ControlPath: "/repo/.git/fanout/herdr-intents.json",
+func TestResumeRestartedHerdrRowsLeavesUnsupportedRowsStale(t *testing.T) {
+	tests := map[string]func(*state.Pane, *backend.LivePane, *[]backend.LivePane){
+		"missing ref": func(saved *state.Pane, _ *backend.LivePane, _ *[]backend.LivePane) {
+			saved.HerdrAgentSession = nil
+		},
+		"mismatched ref": func(_ *state.Pane, live *backend.LivePane, _ *[]backend.LivePane) {
+			live.AgentSession = &backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "other"}
+		},
+		"duplicate ref": func(_ *state.Pane, live *backend.LivePane, panes *[]backend.LivePane) {
+			duplicate := *live
+			duplicate.Ref.Pane = "w1:p2"
+			*panes = append(*panes, duplicate)
+		},
+		"unverified provider": func(saved *state.Pane, _ *backend.LivePane, _ *[]backend.LivePane) {
+			saved.Agent = "claude"
+		},
+		"attached row": func(saved *state.Pane, _ *backend.LivePane, _ *[]backend.LivePane) {
+			saved.Kind = state.PaneKindAttachedAgent
 		},
 	}
-	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
-		return restartProcessInfo(runtime.launchRoute.LauncherPath, nil, saved.WorktreePath), nil
-	}
-	locked, journal := lockHerdrRestartTest(t, repo)
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			repo := newHerdrRealizeRepo(t)
+			saved, placeholder := restartCodexFixture()
+			runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
+			panes := []backend.LivePane{placeholder}
+			mutate(&saved, &placeholder, &panes)
+			panes[0] = placeholder
+			recordRestartStatePane(t, repo, saved)
+			locked, journal := lockHerdrRestartTest(t, repo)
+			runtime.waitPanes = panes
 
-	if err := resumeRestartedHerdrRows(
-		context.Background(), repo, locked, journal, runtime, 3*time.Second,
-	); !errors.Is(err, ErrHerdrManualCleanupRequired) {
-		t.Fatalf("failed token error = %v, want manual cleanup", err)
-	}
-	got, found := locked.Find(saved.Parent, saved.IssueNum)
-	if !found || got.HerdrTerminalID != saved.HerdrTerminalID || got.ReportedState != "" ||
-		got.StateRefinement || got.EmitterNonce == "" || got.EmitterNonce == saved.EmitterNonce ||
-		runtime.tokenCalls != 1 {
-		t.Fatalf("failed resume state/runtime = (%+v, %t, tokens=%d)", got, found, runtime.tokenCalls)
-	}
-	resume, found := herdrResumeIntent(journal.Intents)
-	if !found || resume.Status != state.HerdrIntentManualCleanupRequired ||
-		!resume.Launch.TokenIssued || resume.Failure != "token failed" {
-		t.Fatalf("failed resume intent = (%+v, %t)", resume, found)
-	}
-	if err := resumeRestartedHerdrRows(
-		context.Background(), repo, locked, journal, runtime, 3*time.Second,
-	); !errors.Is(err, ErrHerdrManualCleanupRequired) {
-		t.Fatalf("ambiguous retry error = %v, want manual cleanup", err)
-	}
-	if runtime.tokenCalls != 1 {
-		t.Fatalf("ambiguous resume retried token %d times", runtime.tokenCalls)
-	}
-	completeRestartLifecycleForTest(t, locked, journal)
-	resume, found = herdrResumeIntent(journal.Intents)
-	if !found || resume.Status != state.HerdrIntentManualCleanupRequired {
-		t.Fatalf("manual resume intent after server completion = (%+v, %t)", resume, found)
+			if err := resumeRestartedHerdrRows(
+				context.Background(), repo, locked, journal, runtime, 3*time.Second,
+			); err != nil {
+				t.Fatal(err)
+			}
+			got, found := locked.Find(saved.Parent, saved.IssueNum)
+			if !found || got.HerdrTerminalID != saved.HerdrTerminalID ||
+				got.ReportedState != "" || got.StateRefinement || runtime.issueCalls != 0 {
+				t.Fatalf("stale row/runtime = (%+v, %t, issues=%d)", got, found, runtime.issueCalls)
+			}
+		})
 	}
 }
 
-func TestResumeRestartedHerdrRowsRecoversIssuedProcessWithoutResendingToken(t *testing.T) {
+func TestResumeRestartedHerdrRowsDoesNotReplayInterruptedIntent(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	saved, placeholder := restartCodexFixture()
-	resumed := placeholder
-	resumed.AgentID, resumed.AgentProvider, resumed.AgentPresent = "restored-codex", "codex", true
 	recordRestartStatePane(t, repo, saved)
-	runtime := &fakeHerdrLaunchRuntime{live: []backend.LivePane{resumed}}
-	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
-		return restartProcessInfo(
-			saved.HerdrLaunchExecutable,
-			[]string{"resume", saved.HerdrAgentSession.Value},
-			saved.WorktreePath,
-		), nil
-	}
 	locked, journal := lockHerdrRestartTest(t, repo)
-	recordIssuedHerdrResumeIntent(t, journal, saved, placeholder)
+	runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
+	candidate := herdrRestartCandidate{
+		row: herdrRestartRow{root: repo, current: true, saved: saved}, live: placeholder,
+	}
+	intent := newHerdrResumeIntent(
+		mustHerdrResumeID(t, saved), strings.Repeat("a", 32),
+		mustResumeEnvironment(t, runtime.route.RuntimeDir, strings.Repeat("a", 32)),
+		1, candidate, time.Now().Add(time.Minute),
+	)
+	intent.Launch.LauncherReady, intent.Launch.TokenIssued = true, true
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := resumeRestartedHerdrRows(
 		context.Background(), repo, locked, journal, runtime, 3*time.Second,
 	); err != nil {
 		t.Fatal(err)
 	}
-	got, found := locked.Find(saved.Parent, saved.IssueNum)
-	if !found || got.HerdrTerminalID != resumed.TerminalID || got.HerdrAgentID != resumed.AgentID ||
-		runtime.tokenCalls != 0 || !containsHerdrResumeIntent(journal.Intents) {
-		t.Fatalf("recovered resume = (%+v, %t, tokens=%d)", got, found, runtime.tokenCalls)
-	}
-	completeRestartLifecycleForTest(t, locked, journal)
-	if containsHerdrResumeIntent(journal.Intents) {
-		t.Fatal("recovered resume intent remained after server lifecycle completion")
+	got, _ := locked.Find(saved.Parent, saved.IssueNum)
+	if runtime.issueCalls != 0 || got.HerdrTerminalID != saved.HerdrTerminalID ||
+		containsHerdrResumeIntent(journal.Intents) {
+		t.Fatalf("interrupted resume was replayed: row=%+v calls=%d", got, runtime.issueCalls)
 	}
 }
 
-func TestResumeRestartedHerdrRowsCompletesAlreadySavedIssuedResume(t *testing.T) {
+func TestResumeRestartedHerdrRowsLeavesLostTokenResponseStale(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
-	saved, live := restartCodexFixture()
-	live.AgentID, live.AgentProvider, live.AgentPresent = "restored-codex", "codex", true
-	process := backend.ProcessIdentity{ShellPID: 10, ForegroundProcessGroup: 10, AgentPID: 10}
-	saved.HerdrTerminalID, saved.HerdrAgentID = live.TerminalID, live.AgentID
-	saved.HerdrProcessIdentity = &process
-	saved.HerdrLaunchArgs = []string{"resume", saved.HerdrAgentSession.Value}
-	saved.ReportedState, saved.StateRefinement = "", false
-	saved.EmitterRowKey, saved.LaunchNonce = "", ""
-	saved.EmitterNonce = strings.Repeat("c", 32)
+	saved, placeholder := restartCodexFixture()
 	recordRestartStatePane(t, repo, saved)
-	runtime := &fakeHerdrLaunchRuntime{live: []backend.LivePane{live}}
-	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
-		return restartProcessInfo(saved.HerdrLaunchExecutable, saved.HerdrLaunchArgs, saved.WorktreePath), nil
-	}
 	locked, journal := lockHerdrRestartTest(t, repo)
-	recordIssuedHerdrResumeIntent(t, journal, saved, live)
+	runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
+	runtime.issueErr = errors.New("pane run response was lost")
 
 	if err := resumeRestartedHerdrRows(
 		context.Background(), repo, locked, journal, runtime, 3*time.Second,
 	); err != nil {
 		t.Fatal(err)
 	}
-	got, found := locked.Find(saved.Parent, saved.IssueNum)
-	if !found || got.EmitterNonce != saved.EmitterNonce || runtime.tokenCalls != 0 ||
-		!containsHerdrResumeIntent(journal.Intents) {
-		t.Fatalf("completed saved resume = (%+v, %t, tokens=%d)", got, found, runtime.tokenCalls)
-	}
-	completeRestartLifecycleForTest(t, locked, journal)
-	if containsHerdrResumeIntent(journal.Intents) {
-		t.Fatal("saved resume intent remained after server lifecycle completion")
+	got, _ := locked.Find(saved.Parent, saved.IssueNum)
+	if runtime.issueCalls != 1 || got.HerdrTerminalID != saved.HerdrTerminalID ||
+		got.ReportedState != "" || got.StateRefinement || containsHerdrResumeIntent(journal.Intents) {
+		t.Fatalf("lost token response result: row=%+v calls=%d", got, runtime.issueCalls)
 	}
 }
 
-func TestResumeRestartedHerdrRowsLeavesClaudeStale(t *testing.T) {
+func TestResumeRestartedHerdrRowsRejectsIdentityChangeBeforeCommit(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	saved, placeholder := restartCodexFixture()
-	saved.Agent = "claude"
-	saved.HerdrAgentSession.Source, saved.HerdrAgentSession.Agent = "herdr:claude", "claude"
-	placeholder.AgentSession = cloneAgentSession(saved.HerdrAgentSession)
 	recordRestartStatePane(t, repo, saved)
-	runtime := &fakeHerdrLaunchRuntime{
-		live: []backend.LivePane{placeholder},
-		launchRoute: herdrrun.OwnedLaunchRoute{
-			RuntimeDir: "/runtime", Session: saved.HerdrSession, SocketPath: saved.HerdrSocketPath,
-			LauncherPath: "/runtime/launcher/fanout", ControlPath: "/repo/.git/fanout/herdr-intents.json",
+	locked, journal := lockHerdrRestartTest(t, repo)
+	runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
+	runtime.onIssue = func() {
+		pane, found := locked.Find(saved.Parent, saved.IssueNum)
+		if !found {
+			t.Fatal("saved row disappeared")
+		}
+		pane.HerdrTerminalID = "changed-concurrently"
+		locked.Store.Panes[0] = pane
+	}
+
+	err := resumeRestartedHerdrRows(context.Background(), repo, locked, journal, runtime, 3*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "changed before finalization") {
+		t.Fatalf("identity change error = %v", err)
+	}
+}
+
+func TestResumeRestartedHerdrRowsRejectsUnchangedTerminal(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	saved, placeholder := restartCodexFixture()
+	placeholder.TerminalID = saved.HerdrTerminalID
+	recordRestartStatePane(t, repo, saved)
+	locked, journal := lockHerdrRestartTest(t, repo)
+	runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
+
+	err := resumeRestartedHerdrRows(context.Background(), repo, locked, journal, runtime, 3*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "not stale after restart") {
+		t.Fatalf("unchanged terminal error = %v", err)
+	}
+}
+
+func newRestartRuntimeFake(
+	t *testing.T,
+	saved state.Pane,
+	placeholder, resumed backend.LivePane,
+) *restartRuntimeFake {
+	t.Helper()
+	runtimeDir := filepath.Join(t.TempDir(), "runtime")
+	launcher := filepath.Join(runtimeDir, "launcher", "fanout")
+	return &restartRuntimeFake{
+		t: t,
+		route: herdrrun.OwnedLaunchRoute{
+			RuntimeDir: runtimeDir, Session: saved.HerdrSession, SocketPath: saved.HerdrSocketPath,
+			LauncherPath: launcher, ControlPath: filepath.Join(runtimeDir, "herdr-intents.json"),
 		},
-	}
-	locked, journal := lockHerdrRestartTest(t, repo)
-
-	if err := resumeRestartedHerdrRows(
-		context.Background(), repo, locked, journal, runtime, 3*time.Second,
-	); err != nil {
-		t.Fatal(err)
-	}
-	got, found := locked.Find(saved.Parent, saved.IssueNum)
-	if !found || got.HerdrTerminalID != saved.HerdrTerminalID || got.ReportedState != "" ||
-		got.StateRefinement || runtime.tokenCalls != 0 {
-		t.Fatalf("Claude restart state/runtime = (%+v, %t, tokens=%d)", got, found, runtime.tokenCalls)
+		waitPanes:    []backend.LivePane{placeholder},
+		resumedPanes: []backend.LivePane{resumed},
+		launcherInfo: restartProcessInfo(launcher, nil, saved.WorktreePath),
+		resumedInfo: restartProcessInfo(
+			saved.HerdrLaunchExecutable, []string{"resume", saved.HerdrAgentSession.Value}, saved.WorktreePath,
+		),
 	}
 }
 
@@ -308,17 +288,13 @@ func lockHerdrRestartTest(
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = locked.Unlock() })
+	t.Cleanup(func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	})
 	journal, err := locked.HerdrIntents(repo)
 	if err != nil {
-		t.Fatal(err)
-	}
-	server, err := newHerdrServerIntent(state.HerdrIntentRestart, testHerdrServerIdentity())
-	if err != nil {
-		t.Fatal(err)
-	}
-	journal.UpsertIntent(server)
-	if err := journal.Save(); err != nil {
 		t.Fatal(err)
 	}
 	return locked, journal
@@ -326,198 +302,11 @@ func lockHerdrRestartTest(
 
 func restartProcessInfo(executable string, args []string, cwd string) herdrrun.PaneProcessInfo {
 	return herdrrun.PaneProcessInfo{
-		ShellPID: 10, ForegroundProcessGroup: 10,
+		PaneID: "w1:p1", ShellPID: 10, ForegroundProcessGroup: 10,
 		ForegroundProcesses: []herdrrun.PaneProcess{{
 			PID: 10, ParentPID: 1, ProcessGroup: 10, Executable: executable,
 			Argv0: executable, Argv: args, CWD: cwd,
 		}},
-	}
-}
-
-func recordIssuedHerdrResumeIntent(
-	t *testing.T,
-	journal *state.LockedHerdrIntents,
-	saved state.Pane,
-	live backend.LivePane,
-) {
-	t.Helper()
-	id, err := state.HerdrResumeIntentID(
-		saved.HerdrSession, saved.HerdrSocketPath, saved.HerdrWorkspaceID, saved.PaneID,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent := newHerdrResumeIntent(
-		id, strings.Repeat("d", 32), "/runtime/env.json", 3,
-		herdrRestartCandidate{row: herdrRestartRow{root: "/repo", saved: saved}, live: live},
-		testFutureDeadline(),
-	)
-	intent.Launch.LauncherReady, intent.Launch.TokenIssued = true, true
-	journal.UpsertIntent(intent)
-	if err := journal.Save(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func containsHerdrResumeIntent(intents []state.HerdrIntent) bool {
-	return slices.ContainsFunc(intents, func(intent state.HerdrIntent) bool {
-		return intent.Kind == state.HerdrIntentResume
-	})
-}
-
-func herdrResumeIntent(intents []state.HerdrIntent) (state.HerdrIntent, bool) {
-	for _, intent := range intents {
-		if intent.Kind == state.HerdrIntentResume {
-			return intent, true
-		}
-	}
-	return state.HerdrIntent{}, false
-}
-
-func completeRestartLifecycleForTest(
-	t *testing.T,
-	locked *state.LockedStore,
-	journal *state.LockedHerdrIntents,
-) {
-	t.Helper()
-	id, err := state.HerdrServerIntentID(state.HerdrIntentRestart)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := completeHerdrServerLifecycle(locked, journal, id); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestExactRestartedCodexPlaceholderAcceptsIdleWithoutTreatingItAsDone(t *testing.T) {
-	saved, live := restartCodexFixture()
-	live.AgentState = backend.AgentIdle
-
-	got, ok := exactRestartedCodexPlaceholder(saved, []backend.LivePane{live})
-	if !ok || got.AgentState != backend.AgentIdle {
-		t.Fatalf("placeholder = (%+v, %t), want exact idle candidate", got, ok)
-	}
-}
-
-func TestExactRestartedCodexPlaceholderAcceptsGenericAttachedAgent(t *testing.T) {
-	saved, live := restartCodexFixture()
-	saved.Kind = state.PaneKindAttachedAgent
-	saved.HerdrRepoKey, saved.HerdrRepoRoot = "", ""
-	live.RepoKey, live.ProjectRoot, live.WorktreePath = "", "", ""
-
-	got, ok := exactRestartedCodexPlaceholder(saved, []backend.LivePane{live})
-	if !ok || got.CurrentPath != saved.WorktreePath {
-		t.Fatalf("generic attached placeholder = (%+v, %t)", got, ok)
-	}
-}
-
-func TestExactHerdrResumePlaceholderRejectsMissingAgentSession(t *testing.T) {
-	saved, live := restartCodexFixture()
-	intent := state.HerdrIntent{
-		Session: saved.HerdrSession, SocketPath: saved.HerdrSocketPath,
-		Resource: state.HerdrResource{
-			WorkspaceID: live.Ref.Workspace, PaneID: live.Ref.Pane,
-			TerminalID: live.TerminalID, Label: live.WorkspaceLabel,
-			CurrentPath: live.CurrentPath, RepoKey: live.RepoKey, RepoRoot: live.ProjectRoot,
-		},
-		ResumeAgentSession: saved.HerdrAgentSession,
-	}
-	live.AgentSession = nil
-
-	if exactHerdrResumePlaceholder(intent, live) {
-		t.Fatal("placeholder without an agent session matched")
-	}
-}
-
-func TestExactRestartedCodexPlaceholderFailsClosed(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		mutate func(*state.Pane, *[]backend.LivePane)
-	}{
-		{name: "missing saved ref", mutate: func(saved *state.Pane, _ *[]backend.LivePane) {
-			saved.HerdrAgentSession = nil
-		}},
-		{name: "duplicate current ref", mutate: func(_ *state.Pane, live *[]backend.LivePane) {
-			duplicate := (*live)[0]
-			duplicate.Ref.Pane = "w1:p2"
-			*live = append(*live, duplicate)
-		}},
-		{name: "provider mismatch", mutate: func(_ *state.Pane, live *[]backend.LivePane) {
-			(*live)[0].AgentProvider = "claude"
-		}},
-		{name: "unverified saved process", mutate: func(saved *state.Pane, _ *[]backend.LivePane) {
-			saved.HerdrProcessIdentity = nil
-		}},
-		{name: "claude row", mutate: func(saved *state.Pane, _ *[]backend.LivePane) {
-			saved.Agent = "claude"
-		}},
-		{name: "controller launch", mutate: func(saved *state.Pane, _ *[]backend.LivePane) {
-			saved.HerdrDirectAgentLaunch = false
-		}},
-		{name: "partial saved provenance", mutate: func(saved *state.Pane, _ *[]backend.LivePane) {
-			saved.HerdrRepoKey = ""
-		}},
-		{name: "generic non-attached row", mutate: func(saved *state.Pane, live *[]backend.LivePane) {
-			saved.HerdrRepoKey, saved.HerdrRepoRoot = "", ""
-			(*live)[0].RepoKey, (*live)[0].ProjectRoot, (*live)[0].WorktreePath = "", "", ""
-		}},
-		{name: "generic partial live provenance", mutate: func(saved *state.Pane, live *[]backend.LivePane) {
-			saved.Kind = state.PaneKindAttachedAgent
-			saved.HerdrRepoKey, saved.HerdrRepoRoot = "", ""
-			(*live)[0].RepoKey, (*live)[0].ProjectRoot, (*live)[0].WorktreePath = "unexpected", "", ""
-		}},
-		{name: "worktree cwd mismatch", mutate: func(_ *state.Pane, live *[]backend.LivePane) {
-			(*live)[0].CurrentPath = "/repo/other"
-		}},
-		{name: "generic cwd mismatch", mutate: func(saved *state.Pane, live *[]backend.LivePane) {
-			saved.Kind = state.PaneKindAttachedAgent
-			saved.HerdrRepoKey, saved.HerdrRepoRoot = "", ""
-			(*live)[0].RepoKey, (*live)[0].ProjectRoot, (*live)[0].WorktreePath = "", "", ""
-			(*live)[0].CurrentPath = "/repo/other"
-		}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			saved, current := restartCodexFixture()
-			live := []backend.LivePane{current}
-			test.mutate(&saved, &live)
-			if _, ok := exactRestartedCodexPlaceholder(saved, live); ok {
-				t.Fatal("exactRestartedCodexPlaceholder() accepted an unsafe candidate")
-			}
-		})
-	}
-}
-
-func TestNewHerdrResumeIntentPinsExactCodexArgv(t *testing.T) {
-	saved, live := restartCodexFixture()
-	live.AgentID = "restored-codex"
-	intent := newHerdrResumeIntent(
-		"resume:"+strings.Repeat("a", 64), strings.Repeat("b", 32), "/runtime/env.json", 3,
-		herdrRestartCandidate{row: herdrRestartRow{root: "/repo", saved: saved}, live: live},
-		testFutureDeadline(),
-	)
-	if intent.Launch.Executable != saved.HerdrLaunchExecutable ||
-		intent.Launch.AgentName != "" ||
-		!slicesEqual(intent.Launch.Args, []string{"resume", saved.HerdrAgentSession.Value}) {
-		t.Fatalf("resume launch = %+v", intent.Launch)
-	}
-}
-
-func TestApplyHerdrRestartRowBindsTerminalAndProcessInOneMutation(t *testing.T) {
-	saved, live := restartCodexFixture()
-	live.AgentID, live.AgentProvider, live.AgentPresent = "restored-codex", "codex", true
-	store := state.Store{SchemaVersion: state.SchemaVersion, Panes: []state.Pane{saved}}
-	process := backend.ProcessIdentity{ShellPID: 100, ForegroundProcessGroup: 100, AgentPID: 101}
-	launch := state.HerdrLaunch{
-		Executable: saved.HerdrLaunchExecutable, Args: []string{"resume", saved.HerdrAgentSession.Value},
-	}
-
-	if err := applyHerdrRestartRow(&store, saved, &live, &process, &launch); err != nil {
-		t.Fatal(err)
-	}
-	got := store.Panes[0]
-	if got.HerdrTerminalID != live.TerminalID || got.HerdrProcessIdentity == nil ||
-		*got.HerdrProcessIdentity != process || got.ReportedState != "" || got.StateRefinement {
-		t.Fatalf("rebound row = %+v", got)
 	}
 }
 
@@ -534,31 +323,52 @@ func restartCodexFixture() (state.Pane, backend.LivePane) {
 		HerdrSession:         "fanout-owned", HerdrSocketPath: "/runtime/herdr.sock",
 		HerdrLaunchExecutable: "/opt/codex", HerdrLaunchArgs: []string{"prompt"},
 		HerdrDirectAgentLaunch: true, Agent: "codex", WorktreePath: "/repo/worktree",
-		ReportedState: "working", StateRefinement: true,
+		ReportedState: "working", StateRefinement: true, EmitterNonce: strings.Repeat("b", 32),
 	}
 	live := backend.LivePane{
 		Ref:         backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
-		CurrentPath: "/repo/worktree", WorktreePath: "/repo/worktree",
+		CurrentPath: saved.WorktreePath, WorktreePath: saved.WorktreePath,
 		WorkspaceLabel: saved.HerdrWorkspaceLabel, TerminalID: "term-new",
-		AgentSession: ref,
-		RepoKey:      saved.HerdrRepoKey, ProjectRoot: saved.HerdrRepoRoot,
+		AgentSession: ref, RepoKey: saved.HerdrRepoKey, ProjectRoot: saved.HerdrRepoRoot,
 		SessionID: saved.HerdrSession, SocketPath: saved.HerdrSocketPath,
 	}
 	return saved, live
 }
 
-func slicesEqual(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
+func resumedCodexPane(placeholder backend.LivePane) backend.LivePane {
+	resumed := placeholder
+	resumed.AgentID, resumed.AgentProvider, resumed.AgentPresent = "restored-codex", "codex", true
+	return resumed
 }
 
-func testFutureDeadline() time.Time {
-	return time.Now().Add(5 * time.Minute)
+func mustHerdrResumeID(t *testing.T, pane state.Pane) string {
+	t.Helper()
+	id, err := state.HerdrResumeIntentID(
+		pane.HerdrSession, pane.HerdrSocketPath, pane.HerdrWorkspaceID, pane.PaneID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func mustResumeEnvironment(t *testing.T, runtimeDir, nonce string) string {
+	t.Helper()
+	path := filepath.Join(runtimeDir, "workload-env", "env-"+nonce+".json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func containsHerdrResumeIntent(intents []state.HerdrIntent) bool {
+	for _, intent := range intents {
+		if intent.Kind == state.HerdrIntentResume {
+			return true
+		}
+	}
+	return false
 }

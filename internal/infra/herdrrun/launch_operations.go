@@ -148,23 +148,103 @@ func (s *OwnedSession) SendLaunchToken(ctx context.Context, paneID, nonce string
 	return validatePaneRunResponse(out)
 }
 
-// SendRestartResumeToken is the only pane mutation admitted while a server
-// restart intent is active. The lockless journal read is stable because the
-// caller holds the repository-common intent lock through token issuance.
-func (s *OwnedSession) SendRestartResumeToken(ctx context.Context, paneID, nonce string) error {
+// IssueRestartResume keeps one owned admission and probe from launcher
+// preflight through token issuance. The caller holds the repository state and
+// intent lock and persists markIssued immediately before the pane mutation.
+func (s *OwnedSession) IssueRestartResume(
+	ctx context.Context,
+	paneID, nonce string,
+	totalTimeout time.Duration,
+	preflight func(PaneProcessInfo, []corebackend.LivePane) error,
+	markIssued func() error,
+) error {
+	if totalTimeout <= 0 || preflight == nil || markIssued == nil {
+		return fmt.Errorf("invalid Herdr restart resume request")
+	}
 	if err := s.requireRestartResumeToken(paneID, nonce); err != nil {
 		return err
 	}
-	out, err := s.runOwnedLaunchCommand(ctx, commandTimeout, "pane", "run", paneID, launcherStartToken(nonce))
+	probed, lock, deadline, err := s.admitRestartResume(
+		ctx, paneID, nonce, totalTimeout, preflight,
+	)
 	if err != nil {
 		return err
 	}
-	return validatePaneRunResponse(out)
+	defer unlockPrivateFile(lock)
+	if err := markIssued(); err != nil {
+		return fmt.Errorf("persist issued Herdr restart resume token: %w", err)
+	}
+	out, err := s.backend.runContext(
+		ctx, restartResumeCallTimeout(deadline), probed.binary, probed.route,
+		"pane", "run", paneID, launcherStartToken(nonce),
+	)
+	if err != nil {
+		return err
+	}
+	return validateRestartResumeResponse(out)
+}
+
+func (s *OwnedSession) admitRestartResume(
+	ctx context.Context,
+	paneID, nonce string,
+	totalTimeout time.Duration,
+	preflight func(PaneProcessInfo, []corebackend.LivePane) error,
+) (probeResult, *os.File, time.Time, error) {
+	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	if err != nil {
+		return probeResult{}, nil, time.Time{}, err
+	}
+	probed, err := s.backend.probeOwned(ctx, admission)
+	if err != nil {
+		unlockPrivateFile(lock)
+		return probeResult{}, nil, time.Time{}, err
+	}
+	deadline := time.Now().Add(totalTimeout)
+	if err := s.waitForLauncherProbed(ctx, probed, paneID, nonce, totalTimeout); err != nil {
+		unlockPrivateFile(lock)
+		return probeResult{}, nil, time.Time{}, err
+	}
+	info, panes, err := s.observeRestartResumeProbed(ctx, probed, paneID, deadline)
+	if err == nil {
+		err = preflight(info, panes)
+	}
+	if err != nil {
+		unlockPrivateFile(lock)
+		return probeResult{}, nil, time.Time{}, err
+	}
+	return probed, lock, deadline, nil
+}
+
+func (s *OwnedSession) waitForLauncherProbed(
+	ctx context.Context,
+	probed probeResult,
+	paneID, nonce string,
+	totalTimeout time.Duration,
+) error {
+	marker := launcherReadyMarker(nonce)
+	out, err := s.backend.runContext(ctx, totalTimeout, probed.binary, probed.route,
+		"pane", "wait-output", paneID, "--match", marker,
+		"--source", "recent-unwrapped", "--timeout", strconv.FormatInt(totalTimeout.Milliseconds(), 10))
+	if err != nil {
+		return err
+	}
+	var envelope waitOutputEnvelope
+	if err := decodeOne(out, &envelope); err != nil || envelope.ID != "cli:pane:wait-output" ||
+		envelope.Result == nil || envelope.Result.Type != "output_matched" ||
+		envelope.Result.PaneID != paneID || !strings.Contains(envelope.Result.MatchedLine, marker) {
+		return fmt.Errorf("herdr pane wait-output returned an unexpected launcher marker response")
+	}
+	return nil
+}
+
+func restartResumeCallTimeout(deadline time.Time) time.Duration {
+	return min(commandTimeout, time.Until(deadline))
 }
 
 func (s *OwnedSession) requireRestartResumeToken(paneID, nonce string) error {
 	validRequest := !slices.Contains([]bool{
-		s != nil, s != nil && s.ControlPath != "", paneID != "", workloadLaunchNonce.MatchString(nonce),
+		s != nil, s != nil && s.backend != nil, s != nil && s.ControlPath != "",
+		paneID != "", workloadLaunchNonce.MatchString(nonce),
 	}, false)
 	if !validRequest {
 		return fmt.Errorf("invalid Herdr restart resume token request")
@@ -203,13 +283,10 @@ func exactRestartResumeTokenIntent(intent state.HerdrIntent, session, socketPath
 	return intent.Kind == state.HerdrIntentResume && intent.Status == state.HerdrIntentRealized &&
 		intent.Session == session && intent.SocketPath == socketPath &&
 		intent.Resource.PaneID == paneID && intent.Launch != nil && intent.Launch.Nonce == nonce &&
-		intent.Launch.LauncherReady && intent.Launch.TokenIssued
+		!intent.Launch.TokenIssued
 }
 
 func validatePaneRunResponse(out []byte) error {
-	if len(out) == 0 {
-		return nil
-	}
 	var envelope paneRunEnvelope
 	if err := decodeOne(out, &envelope); err != nil || envelope.ID != "cli:pane:run" ||
 		envelope.Result == nil || envelope.Result.Type != "ok" {
@@ -218,18 +295,47 @@ func validatePaneRunResponse(out []byte) error {
 	return nil
 }
 
+func validateRestartResumeResponse(out []byte) error {
+	if len(out) == 0 {
+		return nil
+	}
+	return validatePaneRunResponse(out)
+}
+
 func (s *OwnedSession) ProcessInfo(ctx context.Context, paneID string) (PaneProcessInfo, error) {
-	out, err := s.runOwnedLaunchCommand(ctx, commandTimeout, "pane", "process-info", "--pane", paneID)
+	if s == nil || s.backend == nil {
+		return PaneProcessInfo{}, fmt.Errorf("herdr owned session is nil")
+	}
+	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	if err != nil {
+		return PaneProcessInfo{}, err
+	}
+	defer unlockPrivateFile(lock)
+	probed, err := s.backend.probeOwned(ctx, admission)
+	if err != nil {
+		return PaneProcessInfo{}, err
+	}
+	return s.processInfoProbed(ctx, probed, paneID, commandTimeout)
+}
+
+func (s *OwnedSession) processInfoProbed(
+	ctx context.Context,
+	probed probeResult,
+	paneID string,
+	timeout time.Duration,
+) (PaneProcessInfo, error) {
+	if timeout <= 0 {
+		return PaneProcessInfo{}, context.DeadlineExceeded
+	}
+	out, err := s.backend.runContext(ctx, timeout, probed.binary, probed.route,
+		"pane", "process-info", "--pane", paneID)
 	if err != nil {
 		return PaneProcessInfo{}, observationCommandError("herdr pane process-info", err)
 	}
-	var envelope paneProcessInfoEnvelope
-	if decodeErr := decodeOne(out, &envelope); decodeErr != nil || envelope.ID != "cli:pane:process_info" ||
-		envelope.Result == nil || envelope.Result.Type != "pane_process_info" ||
-		envelope.Result.ProcessInfo.PaneID != paneID {
-		return PaneProcessInfo{}, fmt.Errorf("herdr pane process-info returned an unexpected response")
+	processInfo, err := decodePaneProcessInfo(out, paneID)
+	if err != nil {
+		return PaneProcessInfo{}, err
 	}
-	processInfo := envelope.Result.ProcessInfo
 	processes, err := s.inspectNormalizedPaneProcesses(ctx, processInfo.ForegroundProcesses)
 	if err != nil {
 		wrapped := fmt.Errorf("inspect herdr pane process ancestry: %w", err)
@@ -240,6 +346,50 @@ func (s *OwnedSession) ProcessInfo(ctx context.Context, paneID string) (PaneProc
 	}
 	processInfo.ForegroundProcesses = processes
 	return processInfo, nil
+}
+
+func decodePaneProcessInfo(out []byte, paneID string) (PaneProcessInfo, error) {
+	var envelope paneProcessInfoEnvelope
+	if decodeErr := decodeOne(out, &envelope); decodeErr != nil || envelope.ID != "cli:pane:process_info" ||
+		envelope.Result == nil || envelope.Result.Type != "pane_process_info" ||
+		envelope.Result.ProcessInfo.PaneID != paneID {
+		return PaneProcessInfo{}, fmt.Errorf("herdr pane process-info returned an unexpected response")
+	}
+	return envelope.Result.ProcessInfo, nil
+}
+
+// ObserveRestartResume returns process and pane identity from one owned probe.
+func (s *OwnedSession) ObserveRestartResume(
+	ctx context.Context,
+	paneID string,
+) (PaneProcessInfo, []corebackend.LivePane, error) {
+	if s == nil || s.backend == nil {
+		return PaneProcessInfo{}, nil, fmt.Errorf("herdr owned session is nil")
+	}
+	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	if err != nil {
+		return PaneProcessInfo{}, nil, err
+	}
+	defer unlockPrivateFile(lock)
+	probed, err := s.backend.probeOwned(ctx, admission)
+	if err != nil {
+		return PaneProcessInfo{}, nil, err
+	}
+	return s.observeRestartResumeProbed(ctx, probed, paneID, time.Now().Add(commandTimeout))
+}
+
+func (s *OwnedSession) observeRestartResumeProbed(
+	ctx context.Context,
+	probed probeResult,
+	paneID string,
+	deadline time.Time,
+) (PaneProcessInfo, []corebackend.LivePane, error) {
+	info, err := s.processInfoProbed(ctx, probed, paneID, restartResumeCallTimeout(deadline))
+	if err != nil {
+		return PaneProcessInfo{}, nil, err
+	}
+	panes, err := s.backend.snapshot(ctx, restartResumeCallTimeout(deadline), probed)
+	return info, panes, err
 }
 
 func (s *OwnedSession) RenameAgent(ctx context.Context, paneID, name string) error {

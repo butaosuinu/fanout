@@ -43,14 +43,14 @@ func TestWorkloadEnvironmentRejectsDuplicateNames(t *testing.T) {
 	}
 }
 
-func TestWorkloadExecEnvironmentKeepsAgentOffOwnedControlRoute(t *testing.T) {
+func TestWorkloadExecEnvironmentRoutesDirectCodexIntegration(t *testing.T) {
 	request := paneLauncherRequest{
 		session: "owned-session", socketPath: "/owned/herdr.sock",
 		workspaceID: "w1", paneID: "w1:p1",
 	}
 	base := []string{"PATH=/bin", "FANOUT_BACKEND=herdr"}
 	shell := state.HerdrIntent{Launch: &state.HerdrLaunch{}}
-	got := workloadExecEnvironment(request, shell, append([]string(nil), base...), "")
+	got := workloadExecEnvironment(request, shell, append([]string(nil), base...))
 	wantSuffix := []string{
 		"HERDR_ENV=1", "HERDR_SESSION=owned-session", "HERDR_SOCKET_PATH=/owned/herdr.sock",
 		"HERDR_WORKSPACE_ID=w1", "HERDR_PANE_ID=w1:p1",
@@ -59,20 +59,30 @@ func TestWorkloadExecEnvironmentKeepsAgentOffOwnedControlRoute(t *testing.T) {
 		t.Fatalf("shell route environment = %q, want suffix %q", got, wantSuffix)
 	}
 
-	agentIntent := state.HerdrIntent{Launch: &state.HerdrLaunch{Agent: "codex"}}
-	agentEnv := workloadExecEnvironment(
-		request, agentIntent, append([]string(nil), base...), "/runtime/agent-session.sock",
-	)
+	agentIntent := state.HerdrIntent{
+		Kind: state.HerdrIntentWorktree, Launch: &state.HerdrLaunch{Agent: "codex"},
+	}
+	agentEnv := workloadExecEnvironment(request, agentIntent, append([]string(nil), base...))
 	wantAgentSuffix := []string{
-		"HERDR_ENV=1", "HERDR_SOCKET_PATH=/runtime/agent-session.sock", "HERDR_PANE_ID=w1:p1",
+		"HERDR_ENV=1", "HERDR_SOCKET_PATH=/owned/herdr.sock", "HERDR_PANE_ID=w1:p1",
 	}
 	if !slices.Equal(agentEnv[len(base):], wantAgentSuffix) {
-		t.Fatalf("agent relay environment = %q, want suffix %q", agentEnv, wantAgentSuffix)
+		t.Fatalf("agent integration environment = %q, want suffix %q", agentEnv, wantAgentSuffix)
 	}
 	for _, entry := range agentEnv {
-		if entry == "HERDR_SESSION=owned-session" || entry == "HERDR_SOCKET_PATH=/owned/herdr.sock" ||
-			entry == "HERDR_WORKSPACE_ID=w1" {
-			t.Fatalf("agent environment exposes owned route: %q", agentEnv)
+		if entry == "HERDR_SESSION=owned-session" || entry == "HERDR_WORKSPACE_ID=w1" {
+			t.Fatalf("agent environment exposes unrelated route fields: %q", agentEnv)
+		}
+	}
+	for name, intent := range map[string]state.HerdrIntent{
+		"attached": {Kind: state.HerdrIntentCoordinator, Launch: &state.HerdrLaunch{Agent: "codex"}},
+		"plan": {
+			Kind:   state.HerdrIntentWorktree,
+			Launch: &state.HerdrLaunch{Agent: "codex", CodexPlanStatusPath: "/runtime/plan.json"},
+		},
+	} {
+		if got := workloadExecEnvironment(request, intent, append([]string(nil), base...)); !slices.Equal(got, base) {
+			t.Fatalf("%s environment = %q, want %q", name, got, base)
 		}
 	}
 }
@@ -96,7 +106,7 @@ func TestWorkloadExecEnvironmentBindsEmitterToRealizedCoordinator(t *testing.T) 
 		telemetry.TerminalIDEnv + "=", telemetry.AgentEnv + "=",
 		telemetry.AgentIDEnv + "=", "PATH=/bin",
 	}
-	got := workloadExecEnvironment(paneLauncherRequest{}, intent, environment, "")
+	got := workloadExecEnvironment(paneLauncherRequest{}, intent, environment)
 	want := map[string]string{
 		telemetry.RowKeyEnv: intent.ID, telemetry.LaunchNonceEnv: intent.Launch.Nonce,
 		telemetry.EmitterNonceEnv: intent.Launch.EmitterNonce, telemetry.BackendEnv: "herdr",

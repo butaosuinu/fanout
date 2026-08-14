@@ -296,15 +296,6 @@ func TestHerdrResumeIntentRequiresExactCodexSessionAndArgv(t *testing.T) {
 	}
 }
 
-func TestHerdrResumeIntentManualStatePreventsReplay(t *testing.T) {
-	intent := testHerdrResumeIntent()
-	intent.Status = HerdrIntentManualCleanupRequired
-	intent.Failure = "resume result is indeterminate"
-	if err := validateHerdrIntent(intent); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestHerdrServerLifecycleIntentRejectsAmbiguousOrIncompleteRows(t *testing.T) {
 	restart := testHerdrServerIntent(HerdrIntentRestart)
 	shutdown := testHerdrServerIntent(HerdrIntentShutdown)
@@ -446,27 +437,6 @@ func TestHerdrIntentIDsUseTmuxIssueAndTaskKeys(t *testing.T) {
 	}
 	if _, err := HerdrWorktreeIntentID("425", "", -1, ""); err == nil {
 		t.Fatal("negative issue number was accepted for a non-manual parent")
-	}
-}
-
-func TestHerdrResumeIntentIDBindsExactRoute(t *testing.T) {
-	first, err := HerdrResumeIntentID("owned", "/runtime/herdr.sock", "w1", "w1:p1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	repeated, err := HerdrResumeIntentID("owned", "/runtime/herdr.sock", "w1", "w1:p1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	other, err := HerdrResumeIntentID("owned", "/runtime/herdr.sock", "w1", "w1:p2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first != repeated || first == other || !strings.HasPrefix(first, "resume:") {
-		t.Fatalf("resume ids = %q, %q, %q", first, repeated, other)
-	}
-	if _, err := HerdrResumeIntentID("owned", "/runtime/herdr.sock", "w1", ""); err == nil {
-		t.Fatal("incomplete resume route received an id")
 	}
 }
 

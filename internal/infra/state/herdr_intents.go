@@ -886,7 +886,7 @@ func herdrLaunchAllowed(kind HerdrIntentKind, status HerdrIntentStatus) bool {
 		return status == HerdrIntentIssued || status == HerdrIntentRealized ||
 			status == HerdrIntentManualCleanupRequired
 	case HerdrIntentResume:
-		return status == HerdrIntentRealized || status == HerdrIntentManualCleanupRequired
+		return status == HerdrIntentRealized
 	default:
 		return false
 	}
