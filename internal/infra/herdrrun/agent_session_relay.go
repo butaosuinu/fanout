@@ -51,6 +51,12 @@ type agentSessionReport struct {
 	Params agentSessionReportParams `json:"params"`
 }
 
+type agentSessionReportResponse struct {
+	ID     string           `json:"id"`
+	Result *paneRunResult   `json:"result"`
+	Error  *json.RawMessage `json:"error"`
+}
+
 type agentSessionReportParams struct {
 	PaneID             string `json:"pane_id"`
 	Source             string `json:"source"`
@@ -320,8 +326,10 @@ func relayAgentSessionReport(
 	if err != nil {
 		return err
 	}
-	_, err = connection.Write(response)
-	return err
+	if _, err := connection.Write(response); err != nil {
+		return err
+	}
+	return validateAgentSessionReportResponse(response, report.ID)
 }
 
 func readAgentSessionReport(reader io.Reader) (agentSessionReport, error) {
@@ -490,6 +498,15 @@ func agentSessionRelayRowSessionMatches(pane state.Pane, report agentSessionRepo
 	ref := pane.HerdrAgentSession
 	return ref == nil || ref.Valid() && ref.Source == "herdr:codex" && ref.Agent == "codex" &&
 		ref.Kind == "id" && ref.Value == report.Params.AgentSessionID
+}
+
+func validateAgentSessionReportResponse(response []byte, requestID string) error {
+	var envelope agentSessionReportResponse
+	if err := decodeOne(response, &envelope); err != nil || envelope.ID != requestID ||
+		envelope.Result == nil || envelope.Result.Type != "ok" || envelope.Error != nil {
+		return fmt.Errorf("herdr agent-session report returned an unexpected response")
+	}
+	return nil
 }
 
 func forwardAgentSessionReport(socketPath string, report agentSessionReport) ([]byte, error) {

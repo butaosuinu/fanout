@@ -71,11 +71,11 @@ func (f *restartRuntimeFake) WaitRestoredPanes(
 func (f *restartRuntimeFake) IssueRestartResume(
 	_ context.Context,
 	_, _ string,
-	timeout time.Duration,
+	deadline time.Time,
 	preflight func(herdrrun.PaneProcessInfo, []backend.LivePane) error,
 	markIssued func() error,
 ) error {
-	f.issueTimeout = timeout
+	f.issueTimeout = time.Until(deadline)
 	panes := f.waitPanes
 	if f.issuePanes != nil {
 		panes = f.issuePanes

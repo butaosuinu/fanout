@@ -25,7 +25,7 @@ type HerdrRestartRuntime interface {
 		context.Context,
 		string,
 		string,
-		time.Duration,
+		time.Time,
 		func(herdrrun.PaneProcessInfo, []backend.LivePane) error,
 		func() error,
 	) error
@@ -590,7 +590,7 @@ func startRestartedCodex(
 		return saveHerdrLaunchPhase(journal, *intent)
 	}
 	if err := restarted.IssueRestartResume(
-		ctx, intent.Resource.PaneID, intent.Launch.Nonce, remainingHerdrLaunchTime(*intent),
+		ctx, intent.Resource.PaneID, intent.Launch.Nonce, time.UnixMilli(intent.ExpiresUnixMS),
 		preflight, markIssued,
 	); err != nil {
 		return err

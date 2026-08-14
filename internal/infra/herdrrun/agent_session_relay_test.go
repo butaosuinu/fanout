@@ -1,6 +1,8 @@
 package herdrrun
 
 import (
+	"bufio"
+	"encoding/json"
 	"io"
 	"net"
 	"os"
@@ -55,6 +57,147 @@ func TestReadAgentSessionReportRejectsExtraControlFields(t *testing.T) {
 	if _, err := readAgentSessionReport(strings.NewReader(input)); err == nil {
 		t.Fatal("agent-session relay accepted an extra control-plane field")
 	}
+}
+
+func TestValidateAgentSessionReportResponseRequiresMatchingSuccess(t *testing.T) {
+	valid := []byte(`{"id":"hook","result":{"type":"ok"}}` + "\n")
+	if err := validateAgentSessionReportResponse(valid, "hook"); err != nil {
+		t.Fatal(err)
+	}
+	invalid := [][]byte{
+		[]byte(`{"id":"other","result":{"type":"ok"}}` + "\n"),
+		[]byte(`{"id":"hook","result":{"type":"pane_info"}}` + "\n"),
+		[]byte(`{"id":"hook","error":{"code":"rejected","message":"no"}}` + "\n"),
+		[]byte(`{"id":"hook","result":{"type":"ok"},"error":{"code":"rejected"}}` + "\n"),
+		append(slices.Clone(valid), []byte(`{"id":"extra"}`)...),
+	}
+	for _, response := range invalid {
+		if err := validateAgentSessionReportResponse(response, "hook"); err == nil {
+			t.Fatalf("invalid agent-session response accepted: %s", response)
+		}
+	}
+}
+
+func TestAcceptAgentSessionReportRetriesRejectedForward(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "fasr-") //nolint:usetesting // Darwin Unix socket paths are limited to 103 bytes.
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir) // Best effort after the test releases both Unix listeners.
+	})
+	intent := testAgentSessionRelayIntent(filepath.Join(dir, "state.json"))
+	intent.SocketPath = filepath.Join(dir, "owned.sock")
+	controlPath := filepath.Join(dir, "herdr-intents.json")
+	journal, err := json.Marshal(state.HerdrIntents{
+		SchemaVersion: state.HerdrIntentsSchemaVersion, Intents: []state.HerdrIntent{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(controlPath, append(journal, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recordAgentSessionRelayPane(t, intent.Launch.AgentSessionStatePath, testAgentSessionRelayPane(intent))
+	owned := listenAgentSessionTestSocket(t, intent.SocketPath)
+	defer func() { _ = owned.Close() }()
+	relayPath := filepath.Join(dir, "relay.sock")
+	relay := listenAgentSessionTestSocket(t, relayPath)
+	defer func() { _ = relay.Close() }()
+	request := agentSessionRelayRequest{
+		controlPath: controlPath, intentID: intent.ID, nonce: intent.Launch.Nonce,
+		statePath: intent.Launch.AgentSessionStatePath,
+	}
+	if err := authorizeAgentSessionRelayReport(request, intent, testAgentSessionRelayReport()); err != nil {
+		t.Fatalf("authorize relay test report: %v", err)
+	}
+	ownedDone := serveAgentSessionTestResponses(owned, []string{
+		`{"id":"hook","error":{"code":"rejected","message":"retry"}}` + "\n",
+		`{"id":"hook","result":{"type":"ok"}}` + "\n",
+	})
+	relayDone := make(chan error, 1)
+	go func() { relayDone <- acceptAgentSessionReport(request, intent, relay) }()
+
+	first := sendAgentSessionTestReport(t, relayPath, testAgentSessionRelayReport())
+	if !strings.Contains(first, `"error"`) {
+		t.Fatalf("first relay response = %q", first)
+	}
+	select {
+	case err := <-relayDone:
+		t.Fatalf("relay ended after rejected response: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	second := sendAgentSessionTestReport(t, relayPath, testAgentSessionRelayReport())
+	if !strings.Contains(second, `"result"`) {
+		t.Fatalf("second relay response = %q", second)
+	}
+	if err := <-relayDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-ownedDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func listenAgentSessionTestSocket(t *testing.T, path string) *net.UnixListener {
+	t.Helper()
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := listener.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	return listener
+}
+
+func serveAgentSessionTestResponses(listener *net.UnixListener, responses []string) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		for _, response := range responses {
+			connection, err := listener.AcceptUnix()
+			if err == nil {
+				_, err = bufio.NewReader(connection).ReadBytes('\n')
+			}
+			if err == nil {
+				_, err = io.WriteString(connection, response)
+			}
+			if connection != nil {
+				_ = connection.Close()
+			}
+			if err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	return done
+}
+
+func sendAgentSessionTestReport(t *testing.T, path string, report agentSessionReport) string {
+	t.Helper()
+	connection, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = connection.Close() }()
+	if err := connection.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Write(append(payload, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	response, err := bufio.NewReader(connection).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
 }
 
 func TestAgentSessionRelayRequestRequiresAbsoluteStatePath(t *testing.T) {
