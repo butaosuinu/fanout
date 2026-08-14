@@ -286,6 +286,34 @@ func TestResumeRestartedHerdrRowsLeavesUnsupportedRowsStale(t *testing.T) {
 	}
 }
 
+func TestResumeRestartedHerdrRowsRejectsUnsupportedUnchangedTerminal(t *testing.T) {
+	for _, kind := range []string{"provider", "attached"} {
+		t.Run(kind, func(t *testing.T) {
+			repo := newHerdrRealizeRepo(t)
+			saved, placeholder := restartCodexFixture()
+			if kind == "provider" {
+				saved.Agent = "claude"
+			} else {
+				saved.Kind = state.PaneKindAttachedAgent
+			}
+			placeholder.TerminalID = saved.HerdrTerminalID
+			recordRestartStatePane(t, repo, saved)
+			locked, journal := lockHerdrRestartTest(t, repo)
+			runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
+
+			err := resumeRestartedHerdrRows(
+				context.Background(), repo, locked, journal, runtime, 3*time.Second,
+			)
+			if err == nil || !strings.Contains(err.Error(), "not stale after restart") {
+				t.Fatalf("unsupported unchanged terminal error = %v", err)
+			}
+			if runtime.issueCalls != 0 {
+				t.Fatalf("unsupported row resume calls = %d, want 0", runtime.issueCalls)
+			}
+		})
+	}
+}
+
 func TestResumeRestartedHerdrRowsDoesNotReplayInterruptedIntent(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	saved, placeholder := restartCodexFixture()
