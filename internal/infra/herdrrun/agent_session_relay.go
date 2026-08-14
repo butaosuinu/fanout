@@ -313,8 +313,8 @@ func relayAgentSessionReport(
 	if err != nil {
 		return err
 	}
-	if err := connection.SetDeadline(deadline); err != nil {
-		return fmt.Errorf("bound agent-session report: %w", err)
+	if deadlineErr := connection.SetDeadline(deadline); deadlineErr != nil {
+		return fmt.Errorf("bound agent-session report: %w", deadlineErr)
 	}
 	report, err := readAgentSessionReport(connection)
 	if err != nil {

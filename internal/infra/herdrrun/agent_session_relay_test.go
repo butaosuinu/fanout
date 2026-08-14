@@ -183,15 +183,15 @@ func sendAgentSessionTestReport(t *testing.T, path string, report agentSessionRe
 		t.Fatal(err)
 	}
 	defer func() { _ = connection.Close() }()
-	if err := connection.SetDeadline(time.Now().Add(time.Second)); err != nil {
-		t.Fatal(err)
+	if deadlineErr := connection.SetDeadline(time.Now().Add(time.Second)); deadlineErr != nil {
+		t.Fatal(deadlineErr)
 	}
 	payload, err := json.Marshal(report)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := connection.Write(append(payload, '\n')); err != nil {
-		t.Fatal(err)
+	if _, writeErr := connection.Write(append(payload, '\n')); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	response, err := bufio.NewReader(connection).ReadString('\n')
 	if err != nil {
