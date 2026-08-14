@@ -156,6 +156,34 @@ func TestResumeRestartedHerdrRowsDoesNotWaitForUnsupportedMissingRoute(t *testin
 	}
 }
 
+func TestResumeRestartedHerdrRowsDoesNotLetMissingCodexBlockExactCandidate(t *testing.T) {
+	repo := newHerdrRealizeRepo(t)
+	saved, placeholder := restartCodexFixture()
+	missing := saved
+	missing.IssueNum, missing.PaneID = 533, "w1:p2"
+	missing.HerdrAgentSession = &backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "other-session",
+	}
+	recordRestartStatePane(t, repo, saved)
+	recordRestartStatePane(t, repo, missing)
+	locked, journal := lockHerdrRestartTest(t, repo)
+	runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
+
+	if err := resumeRestartedHerdrRows(
+		context.Background(), repo, locked, journal, runtime, 3*time.Second,
+	); err != nil {
+		t.Fatal(err)
+	}
+	got, found := locked.Find(saved.Parent, saved.IssueNum)
+	if !found || got.HerdrTerminalID != placeholder.TerminalID || runtime.issueCalls != 1 {
+		t.Fatalf("exact row/runtime = (%+v, %t, issues=%d)", got, found, runtime.issueCalls)
+	}
+	stale, found := locked.Find(missing.Parent, missing.IssueNum)
+	if !found || stale.HerdrDirectAgentLaunch || runtime.waitCalls != 1 {
+		t.Fatalf("missing row/runtime = (%+v, %t, waits=%d)", stale, found, runtime.waitCalls)
+	}
+}
+
 func TestResumeRestartedHerdrRowsLeavesUnsupportedRowsStale(t *testing.T) {
 	tests := map[string]func(*state.Pane, *backend.LivePane, *[]backend.LivePane){
 		"missing ref": func(saved *state.Pane, _ *backend.LivePane, _ *[]backend.LivePane) {
