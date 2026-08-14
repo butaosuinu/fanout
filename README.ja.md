@@ -75,7 +75,10 @@ Claude/Codex 連携ファイルを配置します。バイナリのみのイン�
 に記載しています。opt-in の
 [herdr backend](https://butaosuinu.github.io/fanout/ja/docs/herdr-backend/)
 は、tmux の代わりに fanout-owned な herdr session で同じファンアウトを実行します
-(stable herdr 0.7.5 以上が必要で、tmux は不要)。
+(stable herdr 0.7.5 以上が必要で、tmux は不要)。issue / Project / plan /
+watcher の launch、TUI の launch / focus / peek、`--merge` / `--close` /
+`--cleanup`、`--team` のメッセージングは使えます。対話 send、restore、plan
+capture は使えません。
 
 ## クイックスタート
 

@@ -74,7 +74,10 @@ mode's gh scope) are covered in the
 [installation docs](https://butaosuinu.github.io/fanout/docs/installation/).
 The opt-in [herdr backend](https://butaosuinu.github.io/fanout/docs/herdr-backend/)
 runs the same fan-out in a fanout-owned herdr session instead of tmux: it needs
-stable herdr 0.7.5 or newer, and no tmux.
+stable herdr 0.7.5 or newer, and no tmux. Issue / Project / plan / watcher
+launches, TUI launch / focus / peek, `--merge` / `--close` / `--cleanup`, and
+`--team` messaging work there; interactive send, restore, and plan capture do
+not.
 
 ## Quick start
 
