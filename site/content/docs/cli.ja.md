@@ -397,7 +397,7 @@ fanout herdr <restart|shutdown>
 | verb | 動作 |
 |---|---|
 | `restart` | 保存済みの supervisor lease、server process、socket の不在を確認できたら owned server を置き換え、記録済みの行を再束縛する。完全に検証できた direct Codex の行だけが resume し、ほかは `stale` のまま。まだ動いている世代は `herdr owned server generation is still live` で拒否する。 |
-| `shutdown` | 空の owned server を retire する。このリポジトリの state に herdr の行が残っている間（linked worktree もすべて対象）、session に workspace が残っている間、別の herdr intent が保留中の間は拒否する。素のシェルからの TUI bootstrap が記録する console 行には削除する verb がないため、console を開いたことのある checkout は `shutdown` まで到達できない。 |
+| `shutdown` | 空の owned server を retire する。このリポジトリの state に herdr の行が残っている間（linked worktree もすべて対象）、session に workspace が残っている間、別の herdr intent が保留中の間は拒否する。素のシェルからの TUI bootstrap が記録する console 行と、ファンアウトが記録する coordinator 行には削除する verb がないため、herdr backend を動かした checkout は現状 `shutdown` まで到達できない。 |
 
 exit code は成功が `0`、環境や preflight の失敗が `1`、不正な呼び出しが `2` です。
 

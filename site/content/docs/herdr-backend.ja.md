@@ -175,7 +175,8 @@ fanout herdr shutdown   # 空の owned server を停止する
 reopen の途中で中断された cleanup は `manual_cleanup_required` になり、herdr 側での手動対応が必要です。
 
 `shutdown` は空の server を retire します。このリポジトリの state に herdr の行が残っている間(linked worktree もすべて対象)、owned session に workspace が残っている間、別の herdr intent が保留中の間は拒否します。
-ファンアウトの行は `--close` / `--cleanup` で消えます。素のシェルからの TUI bootstrap が記録する console 行には削除する verb がないため、console を開いたことのある checkout は `shutdown` まで到達できません。
+子の行は `--close` / `--cleanup` で消えますが、shell 行 2 種は残ります。素のシェルからの TUI bootstrap が記録する console 行と、issue / Project / plan のファンアウトが記録するプロジェクトルートの coordinator 行です。
+どちらにも削除する verb がないため、herdr backend を一度でも動かした checkout は現状 `shutdown` まで到達できません。
 
 ## sidebar token
 
