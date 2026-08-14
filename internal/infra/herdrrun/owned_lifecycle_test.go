@@ -179,8 +179,8 @@ func TestPrepareRestartedLauncherMigratesLegacyOwnedConfig(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("read current marker = (%+v, %t, %v)", marker, found, err)
 	}
-	if err := atomicfs.WriteFile(h.layout.configPath, legacyOwnedConfigContents(marker.LauncherPath), 0o600); err != nil {
-		t.Fatal(err)
+	if writeErr := atomicfs.WriteFile(h.layout.configPath, legacyOwnedConfigContents(marker.LauncherPath), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	expected := inspectOwnedServerForTest(t, h)
 	commonDir, commonIdentity, err := openCanonicalGitCommonDir(h.commonDir)

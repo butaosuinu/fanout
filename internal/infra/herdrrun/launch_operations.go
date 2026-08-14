@@ -171,8 +171,8 @@ func (s *OwnedSession) IssueRestartResume(
 		return err
 	}
 	defer unlockPrivateFile(lock)
-	if err := markIssued(); err != nil {
-		return fmt.Errorf("persist issued Herdr restart resume token: %w", err)
+	if markErr := markIssued(); markErr != nil {
+		return fmt.Errorf("persist issued Herdr restart resume token: %w", markErr)
 	}
 	out, err := s.backend.runContext(
 		ctx, restartResumeCallTimeout(deadline), probed.binary, probed.route,
@@ -200,9 +200,9 @@ func (s *OwnedSession) admitRestartResume(
 		return probeResult{}, nil, time.Time{}, err
 	}
 	deadline := time.Now().Add(totalTimeout)
-	if err := s.waitForLauncherProbed(ctx, probed, paneID, nonce, totalTimeout); err != nil {
+	if waitErr := s.waitForLauncherProbed(ctx, probed, paneID, nonce, totalTimeout); waitErr != nil {
 		unlockPrivateFile(lock)
-		return probeResult{}, nil, time.Time{}, err
+		return probeResult{}, nil, time.Time{}, waitErr
 	}
 	info, panes, err := s.observeRestartResumeProbed(ctx, probed, paneID, deadline)
 	if err == nil {
@@ -259,7 +259,7 @@ func (s *OwnedSession) requireRestartResumeToken(paneID, nonce string) error {
 		server.Server != nil, serverRestartTokenMatches(server.Server, s),
 	}, false)
 	if !validLifecycle {
-		return fmt.Errorf("Herdr restart resume token requires an active server restart intent")
+		return fmt.Errorf("herdr restart resume token requires an active server restart intent")
 	}
 	matches := 0
 	for _, intent := range journal.Intents {
@@ -268,7 +268,7 @@ func (s *OwnedSession) requireRestartResumeToken(paneID, nonce string) error {
 		}
 	}
 	if matches != 1 {
-		return fmt.Errorf("Herdr restart resume token has %d exact intents", matches)
+		return fmt.Errorf("herdr restart resume token has %d exact intents", matches)
 	}
 	return nil
 }

@@ -125,7 +125,7 @@ func herdrRestartWaitTimeout(totalTimeout time.Duration) (time.Duration, error) 
 		return herdrrun.DefaultWaitTimeout, nil
 	}
 	if totalTimeout < 3*time.Second || totalTimeout%time.Second != 0 {
-		return 0, fmt.Errorf("Herdr restart wait timeout must be whole seconds and at least 3s")
+		return 0, fmt.Errorf("herdr restart wait timeout must be whole seconds and at least 3s")
 	}
 	return totalTimeout, nil
 }
@@ -358,11 +358,14 @@ func existingHerdrResumeIntent(
 	journal *state.LockedHerdrIntents,
 	pane state.Pane,
 ) (state.HerdrIntent, bool, error) {
+	if !completeHerdrRestartRoute(pane) {
+		return state.HerdrIntent{}, false, nil
+	}
 	id, err := state.HerdrResumeIntentID(
 		pane.HerdrSession, pane.HerdrSocketPath, pane.HerdrWorkspaceID, pane.PaneID,
 	)
 	if err != nil {
-		return state.HerdrIntent{}, false, nil
+		return state.HerdrIntent{}, false, err
 	}
 	intent, found := journal.FindIntent(id)
 	if !found {
@@ -574,7 +577,7 @@ func finishHerdrResumeIntent(
 		return err
 	}
 	if !journal.RemoveIntent(intent.ID) {
-		return fmt.Errorf("Herdr resume intent %s disappeared before completion", intent.ID)
+		return fmt.Errorf("herdr resume intent %s disappeared before completion", intent.ID)
 	}
 	if err := journal.Save(); err != nil {
 		return err
@@ -591,8 +594,8 @@ func persistHerdrRestartRow(
 	launch *state.HerdrLaunch,
 ) (err error) {
 	if row.current {
-		if err := applyHerdrRestartRow(&locked.Store, row.saved, live, process, launch); err != nil {
-			return err
+		if applyErr := applyHerdrRestartRow(&locked.Store, row.saved, live, process, launch); applyErr != nil {
+			return applyErr
 		}
 		return locked.Save()
 	}

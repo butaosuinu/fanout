@@ -26,24 +26,21 @@ import (
 
 type fakeHerdrLaunchRuntime struct {
 	fakeHerdrRealizeRuntime
-	live               []backend.LivePane
-	metadataReports    []herdrrun.MetadataReport
-	metadataErr        error
-	removeCalls        []string
-	remove             func(string, string) error
-	launchRoute        herdrrun.OwnedLaunchRoute
-	processInfo        herdrrun.PaneProcessInfo
-	process            func(context.Context, string) (herdrrun.PaneProcessInfo, error)
-	listLive           func(context.Context) ([]backend.LivePane, error)
-	processErr         error
-	liveErr            error
-	wait               func(context.Context, string, string, time.Duration) error
-	liveCalls          int
-	renameCalls        int
-	tokenCalls         int
-	restartTokenErr    error
-	restartWaitCalls   int
-	restartWaitTimeout time.Duration
+	live            []backend.LivePane
+	metadataReports []herdrrun.MetadataReport
+	metadataErr     error
+	removeCalls     []string
+	remove          func(string, string) error
+	launchRoute     herdrrun.OwnedLaunchRoute
+	processInfo     herdrrun.PaneProcessInfo
+	process         func(context.Context, string) (herdrrun.PaneProcessInfo, error)
+	listLive        func(context.Context) ([]backend.LivePane, error)
+	processErr      error
+	liveErr         error
+	wait            func(context.Context, string, string, time.Duration) error
+	liveCalls       int
+	renameCalls     int
+	tokenCalls      int
 }
 
 type retryableHerdrObservationError struct{}

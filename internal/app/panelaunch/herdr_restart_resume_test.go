@@ -240,7 +240,7 @@ func TestResumeRestartedHerdrRowsRejectsIdentityChangeBeforeCommit(t *testing.T)
 			t.Fatal("saved row disappeared")
 		}
 		pane.HerdrTerminalID = "changed-concurrently"
-		locked.Store.Panes[0] = pane
+		locked.Panes[0] = pane
 	}
 
 	err := resumeRestartedHerdrRows(context.Background(), repo, locked, journal, runtime, 3*time.Second)
@@ -296,8 +296,8 @@ func lockHerdrRestartTest(
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := locked.Unlock(); err != nil {
-			t.Error(err)
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
 		}
 	})
 	journal, err := locked.HerdrIntents(repo)
