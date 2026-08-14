@@ -190,7 +190,7 @@ context. See the
 
 ## Development requirements
 
-Building from a checkout needs Go 1.26.6+, Node.js 24+, and pnpm 11+ (the
+Building from a checkout needs Go 1.26.5+, Node.js 24+, and pnpm 11+ (the
 curl install ships a prebuilt binary and needs none of these).
 
 ## Development

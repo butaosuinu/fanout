@@ -37,9 +37,6 @@ func main() {
 		handle func() exitcode.Code
 	}
 	table := []dispatch{
-		{func([]string) bool { return herdrrun.IsAgentSessionRelayRequest() }, func() exitcode.Code {
-			return exitcode.Code(herdrrun.RunAgentSessionRelay(os.Stderr))
-		}},
 		{func([]string) bool { return herdrrun.IsPaneLauncherRequest() }, func() exitcode.Code {
 			return exitcode.Code(herdrrun.RunPaneLauncher(os.Stdin, os.Stdout, os.Stderr))
 		}},

@@ -97,7 +97,7 @@ checkout の Makefile は Codex の `post-work-review` package を配置、置�
 `CODEX_DIR` または実効 `CODEX_HOME` に旧 driver が残る場合、`make install` と `make link` は binary の置換前に停止するので、release installer で旧 driver を移行してください。
 gate を変更する branch は trusted checkout または人がレビューしてください。
 
-ビルドには Go ツールチェイン(Go 1.26.6+)に加えて Node.js 24+ と pnpm 11+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。
+ビルドには Go ツールチェイン(Go 1.26.5+)に加えて Node.js 24+ と pnpm 11+ が必要です(`make install` はダッシュボード Web UI を先にビルドして embed するため)。
 curl インストールは prebuilt バイナリを配置するので、Go も Node も要りません。
 
 ## 更新を保つ

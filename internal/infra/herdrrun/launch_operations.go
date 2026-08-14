@@ -154,49 +154,28 @@ func (s *OwnedSession) SendLaunchToken(ctx context.Context, paneID, nonce string
 func (s *OwnedSession) IssueRestartResume(
 	ctx context.Context,
 	paneID, nonce string,
-	deadline time.Time,
+	totalTimeout time.Duration,
 	preflight func(PaneProcessInfo, []corebackend.LivePane) error,
 	markIssued func() error,
 ) error {
-	if preflight == nil || markIssued == nil {
+	if totalTimeout <= 0 || preflight == nil || markIssued == nil {
 		return fmt.Errorf("invalid Herdr restart resume request")
-	}
-	if _, err := remainingRestartResumeTime(deadline, time.Now()); err != nil {
-		return err
 	}
 	if err := s.requireRestartResumeToken(paneID, nonce); err != nil {
 		return err
 	}
-	probed, lock, err := s.admitRestartResume(
-		ctx, paneID, nonce, deadline, preflight,
+	probed, lock, deadline, err := s.admitRestartResume(
+		ctx, paneID, nonce, totalTimeout, preflight,
 	)
 	if err != nil {
 		return err
 	}
 	defer unlockPrivateFile(lock)
-	return s.issueRestartResumeToken(ctx, probed, paneID, nonce, deadline, markIssued)
-}
-
-func (s *OwnedSession) issueRestartResumeToken(
-	ctx context.Context,
-	probed probeResult,
-	paneID, nonce string,
-	deadline time.Time,
-	markIssued func() error,
-) error {
-	if _, err := remainingRestartResumeTime(deadline, s.backend.now()); err != nil {
-		return err
-	}
 	if markErr := markIssued(); markErr != nil {
 		return fmt.Errorf("persist issued Herdr restart resume token: %w", markErr)
 	}
-	remaining, err := remainingRestartResumeTime(deadline, s.backend.now())
-	if err != nil {
-		return err
-	}
-	callTimeout := min(commandTimeout, remaining)
 	out, err := s.backend.runContext(
-		ctx, callTimeout, probed.binary, probed.route,
+		ctx, restartResumeCallTimeout(deadline), probed.binary, probed.route,
 		"pane", "run", paneID, launcherStartToken(nonce),
 	)
 	if err != nil {
@@ -208,26 +187,22 @@ func (s *OwnedSession) issueRestartResumeToken(
 func (s *OwnedSession) admitRestartResume(
 	ctx context.Context,
 	paneID, nonce string,
-	deadline time.Time,
+	totalTimeout time.Duration,
 	preflight func(PaneProcessInfo, []corebackend.LivePane) error,
-) (probeResult, *os.File, error) {
+) (probeResult, *os.File, time.Time, error) {
 	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
 	if err != nil {
-		return probeResult{}, nil, err
+		return probeResult{}, nil, time.Time{}, err
 	}
 	probed, err := s.backend.probeOwned(ctx, admission)
 	if err != nil {
 		unlockPrivateFile(lock)
-		return probeResult{}, nil, err
+		return probeResult{}, nil, time.Time{}, err
 	}
-	remaining, err := remainingRestartResumeTime(deadline, s.backend.now())
-	if err != nil {
+	deadline := time.Now().Add(totalTimeout)
+	if waitErr := s.waitForLauncherProbed(ctx, probed, paneID, nonce, totalTimeout); waitErr != nil {
 		unlockPrivateFile(lock)
-		return probeResult{}, nil, err
-	}
-	if waitErr := s.waitForLauncherProbed(ctx, probed, paneID, nonce, remaining); waitErr != nil {
-		unlockPrivateFile(lock)
-		return probeResult{}, nil, waitErr
+		return probeResult{}, nil, time.Time{}, waitErr
 	}
 	info, panes, err := s.observeRestartResumeProbed(ctx, probed, paneID, deadline)
 	if err == nil {
@@ -235,9 +210,9 @@ func (s *OwnedSession) admitRestartResume(
 	}
 	if err != nil {
 		unlockPrivateFile(lock)
-		return probeResult{}, nil, err
+		return probeResult{}, nil, time.Time{}, err
 	}
-	return probed, lock, nil
+	return probed, lock, deadline, nil
 }
 
 func (s *OwnedSession) waitForLauncherProbed(
@@ -260,14 +235,6 @@ func (s *OwnedSession) waitForLauncherProbed(
 		return fmt.Errorf("herdr pane wait-output returned an unexpected launcher marker response")
 	}
 	return nil
-}
-
-func remainingRestartResumeTime(deadline, now time.Time) (time.Duration, error) {
-	remaining := deadline.Sub(now)
-	if deadline.IsZero() || remaining <= 0 {
-		return 0, fmt.Errorf("herdr restart resume intent expired")
-	}
-	return remaining, nil
 }
 
 func restartResumeCallTimeout(deadline time.Time) time.Duration {

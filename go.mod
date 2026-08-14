@@ -1,6 +1,6 @@
 module github.com/butaosuinu/fanout
 
-go 1.26.6
+go 1.26.5
 
 require (
 	github.com/butaosuinu/godep-cruiser v0.3.0

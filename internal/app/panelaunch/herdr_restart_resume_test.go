@@ -19,7 +19,6 @@ type restartRuntimeFake struct {
 	t               *testing.T
 	route           herdrrun.OwnedLaunchRoute
 	waitPanes       []backend.LivePane
-	issuePanes      []backend.LivePane
 	resumedPanes    []backend.LivePane
 	launcherInfo    herdrrun.PaneProcessInfo
 	resumedInfo     herdrrun.PaneProcessInfo
@@ -71,16 +70,12 @@ func (f *restartRuntimeFake) WaitRestoredPanes(
 func (f *restartRuntimeFake) IssueRestartResume(
 	_ context.Context,
 	_, _ string,
-	deadline time.Time,
+	timeout time.Duration,
 	preflight func(herdrrun.PaneProcessInfo, []backend.LivePane) error,
 	markIssued func() error,
 ) error {
-	f.issueTimeout = time.Until(deadline)
-	panes := f.waitPanes
-	if f.issuePanes != nil {
-		panes = f.issuePanes
-	}
-	if err := preflight(f.launcherInfo, slices.Clone(panes)); err != nil {
+	f.issueTimeout = timeout
+	if err := preflight(f.launcherInfo, slices.Clone(f.waitPanes)); err != nil {
 		return err
 	}
 	if err := markIssued(); err != nil {
@@ -161,55 +156,6 @@ func TestResumeRestartedHerdrRowsDoesNotWaitForUnsupportedMissingRoute(t *testin
 	}
 }
 
-func TestResumeRestartedHerdrRowsDoesNotLetMissingCodexBlockExactCandidate(t *testing.T) {
-	repo := newHerdrRealizeRepo(t)
-	saved, placeholder := restartCodexFixture()
-	missing := saved
-	missing.IssueNum, missing.PaneID = 533, "w1:p2"
-	missing.HerdrAgentSession = &backend.AgentSessionRef{
-		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "other-session",
-	}
-	recordRestartStatePane(t, repo, saved)
-	recordRestartStatePane(t, repo, missing)
-	locked, journal := lockHerdrRestartTest(t, repo)
-	runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
-
-	if err := resumeRestartedHerdrRows(
-		context.Background(), repo, locked, journal, runtime, 3*time.Second,
-	); err != nil {
-		t.Fatal(err)
-	}
-	got, found := locked.Find(saved.Parent, saved.IssueNum)
-	if !found || got.HerdrTerminalID != placeholder.TerminalID || runtime.issueCalls != 1 {
-		t.Fatalf("exact row/runtime = (%+v, %t, issues=%d)", got, found, runtime.issueCalls)
-	}
-	stale, found := locked.Find(missing.Parent, missing.IssueNum)
-	if !found || stale.HerdrDirectAgentLaunch || runtime.waitCalls != 1 {
-		t.Fatalf("missing row/runtime = (%+v, %t, waits=%d)", stale, found, runtime.waitCalls)
-	}
-}
-
-func TestResumeRestartedHerdrRowsRejectsDuplicateRefAddedBeforeToken(t *testing.T) {
-	repo := newHerdrRealizeRepo(t)
-	saved, placeholder := restartCodexFixture()
-	duplicate := placeholder
-	duplicate.Ref.Pane = "w1:p2"
-	recordRestartStatePane(t, repo, saved)
-	locked, journal := lockHerdrRestartTest(t, repo)
-	runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
-	runtime.issuePanes = []backend.LivePane{placeholder, duplicate}
-
-	if err := resumeRestartedHerdrRows(
-		context.Background(), repo, locked, journal, runtime, 3*time.Second,
-	); err != nil {
-		t.Fatal(err)
-	}
-	got, found := locked.Find(saved.Parent, saved.IssueNum)
-	if !found || got.HerdrDirectAgentLaunch || runtime.issueCalls != 0 {
-		t.Fatalf("duplicate preflight result = (%+v, %t, issues=%d)", got, found, runtime.issueCalls)
-	}
-}
-
 func TestResumeRestartedHerdrRowsLeavesUnsupportedRowsStale(t *testing.T) {
 	tests := map[string]func(*state.Pane, *backend.LivePane, *[]backend.LivePane){
 		"missing ref": func(saved *state.Pane, _ *backend.LivePane, _ *[]backend.LivePane) {
@@ -256,34 +202,6 @@ func TestResumeRestartedHerdrRowsLeavesUnsupportedRowsStale(t *testing.T) {
 	}
 }
 
-func TestResumeRestartedHerdrRowsRejectsUnsupportedUnchangedTerminal(t *testing.T) {
-	for _, kind := range []string{"provider", "attached"} {
-		t.Run(kind, func(t *testing.T) {
-			repo := newHerdrRealizeRepo(t)
-			saved, placeholder := restartCodexFixture()
-			if kind == "provider" {
-				saved.Agent = "claude"
-			} else {
-				saved.Kind = state.PaneKindAttachedAgent
-			}
-			placeholder.TerminalID = saved.HerdrTerminalID
-			recordRestartStatePane(t, repo, saved)
-			locked, journal := lockHerdrRestartTest(t, repo)
-			runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
-
-			err := resumeRestartedHerdrRows(
-				context.Background(), repo, locked, journal, runtime, 3*time.Second,
-			)
-			if err == nil || !strings.Contains(err.Error(), "not stale after restart") {
-				t.Fatalf("unsupported unchanged terminal error = %v", err)
-			}
-			if runtime.issueCalls != 0 {
-				t.Fatalf("unsupported row resume calls = %d, want 0", runtime.issueCalls)
-			}
-		})
-	}
-}
-
 func TestResumeRestartedHerdrRowsDoesNotReplayInterruptedIntent(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	saved, placeholder := restartCodexFixture()
@@ -298,9 +216,6 @@ func TestResumeRestartedHerdrRowsDoesNotReplayInterruptedIntent(t *testing.T) {
 		mustResumeEnvironment(t, runtime.route.RuntimeDir, strings.Repeat("a", 32)),
 		1, candidate, time.Now().Add(time.Minute),
 	)
-	if intent.Launch.AgentSessionStatePath != state.Path(repo) {
-		t.Fatalf("resume relay state path = %q, want %q", intent.Launch.AgentSessionStatePath, state.Path(repo))
-	}
 	intent.Launch.LauncherReady, intent.Launch.TokenIssued = true, true
 	journal.UpsertIntent(intent)
 	if err := journal.Save(); err != nil {

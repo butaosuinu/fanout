@@ -513,20 +513,11 @@ func (l *Launcher) prepareHerdrLaunchCapsule(
 		Nonce: resolved.nonce, EmitterNonce: resolved.emitter.nonce, Agent: req.Agent,
 		AgentName:  resolved.agentName,
 		Executable: resolved.spec.Executable, Args: resolved.spec.Args,
-		AgentSessionStatePath: newHerdrAgentSessionStatePath(req, intent, l.Info.ProjectRoot),
-		TeamDBPath:            req.TeamDBPath,
-		CodexTeamStatusPath:   newHerdrTeamStatusPath(req),
-		CodexPlanStatusPath:   newHerdrPlanStatusPath(req),
-		EnvFilePath:           envPath, EnvNameCount: envCount,
+		TeamDBPath:          req.TeamDBPath,
+		CodexTeamStatusPath: newHerdrTeamStatusPath(req),
+		CodexPlanStatusPath: newHerdrPlanStatusPath(req),
+		EnvFilePath:         envPath, EnvNameCount: envCount,
 	}, nil
-}
-
-func newHerdrAgentSessionStatePath(req Request, intent state.HerdrIntent, projectRoot string) string {
-	if intent.Kind == state.HerdrIntentWorktree && req.Agent == "codex" &&
-		!req.CodexPlanMode() && !req.CodexTeamMode {
-		return state.Path(projectRoot)
-	}
-	return ""
 }
 
 func buildHerdrLaunchSpec(req Request) (agent.LaunchSpec, error) {
