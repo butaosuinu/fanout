@@ -2,6 +2,8 @@
 
 2026-07-02 の open issue / PR 棚卸しで確定した方針と着手順。判断と順序だけをここに置き、実装詳細は各 issue に書く。次回棚卸しで本ファイルを更新する。
 
+web ダッシュボード系 4 epic(#675 / #659 / #628 / #321)の優先順位と wave 計画は [dashboard-roadmap.ja.md](dashboard-roadmap.ja.md) に分離した(2026-08-15 判定)。
+
 ## 方針: fan-out ツールから閉ループハーネスへ
 
 コーディングエージェントの価値はモデル単体ではなく、その周りの運用基盤 — ツールオーケストレーション・検証ループ・コンテキスト・ガードレール・可観測性の 5 層 — に移っている。fanout はオーケストレーション（tmux + worktree 隔離、wave、team msg）、検証ループ（post-work-review gate、pr-watch）、コンテキスト（issue 本文からの briefing 生成）、ガードレール（fail-fast、read-only dashboard、opt-in watcher）の 4 層が既に強く、**可観測性（トークン/コスト計測が無い）だけが弱い**。層の外にもう 1 つ、着信イベント（レビューコメント・blocker 解消・トリガーラベル）に応答してループを閉じる仕組みも薄い。着手順はこの 2 つを埋める順に組む。
