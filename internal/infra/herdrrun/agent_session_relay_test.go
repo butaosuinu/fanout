@@ -235,6 +235,15 @@ func TestAgentSessionRelayConnectionDeadlineDoesNotOutliveIntent(t *testing.T) {
 	}
 }
 
+func TestForwardAuthorizedAgentSessionReportRejectsExpiredIntent(t *testing.T) {
+	intent := testAgentSessionRelayIntent("/repo/.fanout/state.json")
+	intent.ExpiresUnixMS = time.Now().Add(-time.Second).UnixMilli()
+	if _, err := forwardAuthorizedAgentSessionReport(intent, testAgentSessionRelayReport()); err == nil ||
+		!strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired forward error = %v", err)
+	}
+}
+
 func TestWaitForAgentSessionRelayReadyRequiresChildMarker(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {

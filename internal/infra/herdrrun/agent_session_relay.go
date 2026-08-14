@@ -326,7 +326,7 @@ func relayAgentSessionReport(
 	if authErr := authorizeAgentSessionRelayReport(request, intent, report); authErr != nil {
 		return authErr
 	}
-	response, err := forwardAgentSessionReport(intent.SocketPath, report)
+	response, err := forwardAuthorizedAgentSessionReport(intent, report)
 	if err != nil {
 		return err
 	}
@@ -526,8 +526,23 @@ func validateAgentSessionReportResponse(response []byte, requestID string) error
 	return nil
 }
 
-func forwardAgentSessionReport(socketPath string, report agentSessionReport) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+func forwardAuthorizedAgentSessionReport(
+	intent state.HerdrIntent,
+	report agentSessionReport,
+) ([]byte, error) {
+	deadline, err := agentSessionRelayConnectionDeadline(intent, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	return forwardAgentSessionReport(intent.SocketPath, report, deadline)
+}
+
+func forwardAgentSessionReport(
+	socketPath string,
+	report agentSessionReport,
+	deadline time.Time,
+) ([]byte, error) {
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 	if err != nil {
@@ -536,7 +551,7 @@ func forwardAgentSessionReport(socketPath string, report agentSessionReport) ([]
 	defer func() {
 		_ = connection.Close() // The request result is more useful than a close error.
 	}()
-	if deadlineErr := connection.SetDeadline(time.Now().Add(commandTimeout)); deadlineErr != nil {
+	if deadlineErr := connection.SetDeadline(deadline); deadlineErr != nil {
 		return nil, fmt.Errorf("bound restricted agent-session report: %w", deadlineErr)
 	}
 	payload, err := json.Marshal(report)
