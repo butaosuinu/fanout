@@ -170,9 +170,10 @@ fanout herdr restart    # 停止済みの owned server を置き換え、検証�
 fanout herdr shutdown   # 空の owned server を停止する
 ```
 
-`restart` は、保存済みの supervisor lease、server process、socket の不在を確認できたときだけ進みます。まだ動いている世代は `herdr owned server generation is still live` で拒否します。
+`restart` は死んだ server 向けです。fanout は旧世代の supervisor process と socket の消失を確認できたときだけ置き換えます。まだ動いている世代は `herdr owned server generation is still live` で拒否します。
 その後は新しい世代を起動し、旧版の fanout が書いた owned `config.toml` を置き換え、記録済みの行を上記のルールで再束縛します。
 reopen の途中で中断された cleanup は `manual_cleanup_required` になり、herdr 側での手動対応が必要です。
+失敗した後にどちらの verb を再実行しても安全です。fanout は何をしようとしたかを記録しており、作業を繰り返すのではなくその結果を確認します。
 
 `shutdown` は空の server を retire します。このリポジトリの state に herdr の行が残っている間(linked worktree もすべて対象)、owned session に workspace が残っている間、別の herdr intent が保留中の間は拒否します。
 子の行は `--close` / `--cleanup` で消えますが、shell 行 2 種は残ります。素のシェルからの TUI bootstrap が記録する console 行と、issue / Project / plan のファンアウトが記録するプロジェクトルートの coordinator 行です。
