@@ -106,6 +106,11 @@ type poller struct {
 	cache       map[int]ghCacheEntry
 	branchCache map[string]branchPRCacheEntry
 	waveCache   map[string]waveCacheEntry // keyed by normalized parent
+
+	// refreshNow lets a completed merge pull the next GitHub tick forward
+	// instead of leaving the row rendering its pre-merge state for a full
+	// ghInterval. Buffered depth 1: a kick already queued covers any later one.
+	refreshNow chan struct{}
 }
 
 func newPollerBase(projectRoot string, h *hub) *poller {
@@ -119,6 +124,7 @@ func newPollerBase(projectRoot string, h *hub) *poller {
 		cache:         map[int]ghCacheEntry{},
 		branchCache:   map[string]branchPRCacheEntry{},
 		waveCache:     map[string]waveCacheEntry{},
+		refreshNow:    make(chan struct{}, 1),
 	}
 }
 
@@ -186,7 +192,56 @@ func (p *poller) ghLoop(ctx context.Context) {
 			return
 		case <-ghT.C:
 			p.runGHTick()
+		case <-p.refreshNow:
+			p.runGHTick()
 		}
+	}
+}
+
+// requestGHRefresh asks the gh goroutine to run a tick now. It never blocks, and
+// reports whether a kick is now queued: a full buffer means one is already
+// pending, which is the same outcome for the caller but not the same claim, so
+// the two are not conflated on the wire.
+//
+// It deliberately does not drop the row's cached PR state. refreshGH refetches
+// every recorded row on each tick, so invalidation buys no freshness — and it
+// would open a window where the 2-second cheap ticker broadcasts the row with no
+// PRs at all, which downstream reads as "this row lost its pull request".
+// prSettled reports whether the latest snapshot shows this pull request merged
+// or closed. It is how an unconfirmed merge stops blocking: once GitHub's answer
+// arrives through the normal poll, the claim on that PR can go.
+func (p *poller) prSettled(number int) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, session := range p.latest.Sessions {
+		for i := range session.Panes {
+			if settledPRRef(session.Panes[i].PRs, number) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func settledPRRef(prs []ghissue.PRRef, number int) bool {
+	for _, pr := range prs {
+		if pr.Number != number {
+			continue
+		}
+		if strings.EqualFold(pr.State, "MERGED") || strings.EqualFold(pr.State, "CLOSED") ||
+			pr.MergedAt != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *poller) requestGHRefresh() bool {
+	select {
+	case p.refreshNow <- struct{}{}:
+		return true
+	default:
+		return false
 	}
 }
 

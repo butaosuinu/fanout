@@ -32,6 +32,9 @@ import { sortPanes, type SortDir } from "../features/sessions/sort";
 import type { PaneView, Snapshot } from "../transport/types";
 import { ChunkBoundary } from "../ui/ChunkBoundary";
 import { Drawer } from "../features/drawer/Drawer";
+import { MergeSlot } from "../features/merge/MergeSlot";
+import { useMergeFlow, type MergeAffordance } from "../features/merge/useMergeFlow";
+
 import { FilterBar } from "../features/filter/FilterBar";
 import { Hud } from "../features/sessions/Hud";
 import { Nav } from "./Nav";
@@ -206,6 +209,7 @@ function Dashboard() {
   const [notice, setNotice] = useState<MessageDescriptor | null>(null);
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const merge = useMergeFlow(snap, token, diffTarget?.key ?? null);
   /* diff が背面を覆っているか。実寸に依存するのでオーバーレイから受け取る */
   const [diffCovering, setDiffCovering] = useState(false);
   const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
@@ -267,7 +271,6 @@ function Dashboard() {
   /* projectRoot は repo と違って最初の snapshot から入っていて動かない
    * (gh の解決を待たない)。確認済みの保存 scope はこちらで分ける。 */
   const { repo, projectRoot } = snap ?? { repo: "", projectRoot: "" };
-  const selectedEntry = findPaneEntry(snap, selected);
   const msgs = degradedMessages(snap?.degraded);
   const status = snap
     ? `${notice ? `${i18nCtx._(notice)} · ` : ""}telemetry @ ${clock(snap.generatedAt)}`
@@ -403,22 +406,20 @@ function Dashboard() {
             <footer className="status-line">
               <span id="status">{status}</span>
               <span className="grow"></span>
-              <span>read-only · 127.0.0.1</span>
+              <span>local only · 127.0.0.1</span>
             </footer>
           </div>
         </div>
-        {selectedEntry && selected && (
-          <Drawer
-            key={selected}
-            pane={selectedEntry.pane}
-            parent={selectedEntry.parent}
-            repo={repo}
-            token={token}
-            diffCovering={diffCovering}
-            onOpenDiff={openDiff}
-            onClose={closeDrawer}
-          />
-        )}
+        <DrawerSlot
+          snap={snap}
+          selected={selected}
+          repo={repo}
+          token={token}
+          diffCovering={diffCovering}
+          affordanceFor={merge.affordanceFor}
+          onOpenDiff={openDiff}
+          onClose={closeDrawer}
+        />
       </div>
       {diffTarget && (
         <DiffOverlaySlot
@@ -427,6 +428,8 @@ function Dashboard() {
           token={token}
           anchorKey={selected}
           settingsOpen={settingsOpen}
+          snap={snap}
+          affordanceFor={merge.affordanceFor}
           onCoveringChange={setDiffCovering}
           onOpenSettings={openSettings}
           onClose={closeDiff}
@@ -437,6 +440,10 @@ function Dashboard() {
   );
 }
 
+/* 行を渡してマージボタンの状態を得る。useMergeFlow の 1 インスタンスをドロワーと
+ * diff の両方へ配るため、slot 系コンポーネントに降ろす。 */
+type AffordanceFor = (parent: string, pane: PaneView) => MergeAffordance | null;
+
 /* diff オーバーレイの遅延読み込み境界。chunk の取得に失敗しても dashboard ごと
  * 落とさない — 境界は diffTarget と同じ寿命なので、閉じて開き直せばそのまま
  * 再試行になる。 */
@@ -446,6 +453,8 @@ function DiffOverlaySlot({
   token,
   anchorKey,
   settingsOpen,
+  snap,
+  affordanceFor,
   onCoveringChange,
   onOpenSettings,
   onClose,
@@ -458,26 +467,73 @@ function DiffOverlaySlot({
   anchorKey: string | null;
   /* 上に設定モーダルが重なっている。抑止と Escape の譲り先がこれで決まる */
   settingsOpen: boolean;
+  /* ツールバーのマージボタンを解決するための行データ。diff の wire に PR は
+   * 無いので、snapshot の行から引いて MergeSlot に載せる。 */
+  snap: Snapshot | null;
+  affordanceFor: AffordanceFor;
   onCoveringChange: (covering: boolean) => void;
   onOpenSettings: () => void;
   onClose: () => void;
 }) {
+  const entry = findPaneEntry(snap, target.key);
+  const merge = entry ? affordanceFor(entry.parent, entry.pane) : null;
   return (
     <ChunkBoundary fallback={<DiffLoadFailed onClose={onClose} />}>
       <Suspense fallback={<DiffPending enabled={!settingsOpen} onCancel={onClose} />}>
-        <DiffOverlay
-          title={target.title}
-          query={target.query}
-          token={token}
-          scopeKey={viewedScope(projectRoot, target.key)}
-          anchorKey={anchorKey}
-          suppressed={settingsOpen}
-          onCoveringChange={onCoveringChange}
-          escapeEnabled={!settingsOpen}
-          onOpenSettings={onOpenSettings}
-          onClose={onClose}
-        />
+        <MergeSlot value={merge}>
+          <DiffOverlay
+            title={target.title}
+            query={target.query}
+            token={token}
+            scopeKey={viewedScope(projectRoot, target.key)}
+            anchorKey={anchorKey}
+            suppressed={settingsOpen}
+            onCoveringChange={onCoveringChange}
+            escapeEnabled={!settingsOpen}
+            onOpenSettings={onOpenSettings}
+            onClose={onClose}
+          />
+        </MergeSlot>
       </Suspense>
     </ChunkBoundary>
+  );
+}
+
+/* ドロワーの器。選択行の解決とマージ状態の配布をここに閉じ込めて、Dashboard 本体
+ * (既に 240 行超)を伸ばさない。 */
+function DrawerSlot({
+  snap,
+  selected,
+  repo,
+  token,
+  diffCovering,
+  affordanceFor,
+  onOpenDiff,
+  onClose,
+}: {
+  snap: Snapshot | null;
+  selected: string | null;
+  repo: string;
+  token: string;
+  diffCovering: boolean;
+  affordanceFor: AffordanceFor;
+  onOpenDiff: (parent: string, pane: PaneView) => void;
+  onClose: () => void;
+}) {
+  const entry = findPaneEntry(snap, selected);
+  if (!entry || !selected) return null;
+  return (
+    <MergeSlot value={affordanceFor(entry.parent, entry.pane)}>
+      <Drawer
+        key={selected}
+        pane={entry.pane}
+        parent={entry.parent}
+        repo={repo}
+        token={token}
+        diffCovering={diffCovering}
+        onOpenDiff={onOpenDiff}
+        onClose={onClose}
+      />
+    </MergeSlot>
   );
 }

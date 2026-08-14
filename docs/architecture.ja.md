@@ -71,14 +71,17 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | app | `stateemitter` | launch に束縛した telemetry の検証と state lock 下の更新 | H |
 | app | `sessionbinding` | 遅延 Herdr agent session の初回束縛と state lock 下の保存 | H |
 | core | `telemetry` | emitter command と環境変数の wire contract | H |
-| ui | `dashboard`(`server.go`) | localhost web サーバの mux・token 検証 | H |
+| app | `prmerge` | dashboard から叩く GitHub PR merge の対象選択・事前検証・2 段実行 | H |
+| ui | `dashboard`(`server.go`) | localhost web サーバの mux(GET-only な読み取りと POST carve-out)・同一 origin 検証・token 検証 | H |
+| ui | `dashboard`(`merge.go`) | mutation 経路(merge)。PR 特定・事前検証・gh 失敗のステータス写像 | H |
+| ui | `dashboard`(`deletebranch.go`) | mutation 経路(マージ後の head ref 削除)。所有権検証 | H |
 | ui | `dashboard`(`runfile.go`) | token を含む `.fanout/dashboard.json`・reuse/trust ゲート | H |
 | ui | `dashboard`(`diff.go`) | snapshot の安定 row identity で選んだ worktree diff の read-only 配信・request-wide 上限 | H |
 | ui | `dashboard`(`peek.go` / `plan.go`) | capture-pane 前の検証チェーン(記録済み pane のみ。`plan.go` は plan mode かつ codex に限定) | H |
 | ui | `tui`(`actions.go`) | lifecycle(close/merge/cleanup)実行の配線と確認フロー | H |
 | cmd | `main.go` / `runtime_backend.go` / `tui_popup.go` / `tui_launch.go` / `worktree_action.go` / `codex_plan_tui.go` / `codex_team_tui.go` / `tui_restore.go` / `tui_watch.go` | dispatch・runtime backend 選択・self-exec・launch 配線・pane identity 検証・state 書き換えを伴う復元/watch 起動 | H |
 | cmd | 上記以外(`plancmd.go` / `status.go` / `lifecycle.go` / `msg.go` / `dashboard.go` / `tui_issue.go` / `deps.go` ほか) | フラグ検証と app 層への薄い dispatch | M |
-| infra | `ghissue` | GitHub issue/PR の読み書き(label swap・dashboard comment 投稿などの mutation を含む) | M |
+| infra | `ghissue` | GitHub issue/PR の読み書き(label swap・dashboard comment 投稿・PR merge などの mutation を含む) | M |
 | infra | `gitstat` | git 差分・状態取得 | M |
 | infra | `tmuxrun` | tmux 直接操作 | M |
 | infra | `tmuxbackend` | backend 契約から `tmuxrun` への adapter(window レイアウトの grid 方針と tmux custom layout 文字列、popup / global shortcut / viewer focus の host capability、console の session 入場 ConsoleHost、pane の中から自分の state を申告する AgentStateReporter と描画テキストを返す PlanCapture も担当) | M |
@@ -144,11 +147,52 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 - **watch のトリガーラベルはプロンプトインジェクション境界**: issue 本文が
   そのまま子 briefing になるため、`watcherTriggerLabel` の対象を広げる変更は
   攻撃面を広げる。
-- **dashboard は read-only・GET-only・localhost**: `127.0.0.1` バインドと
-  mutation エンドポイント禁止は全経路。token 必須は `/api/*` のみ
-  (`requireToken`)で、`/healthz` と SPA 配信は token-free(HTML shell が
-  `?token=` を読むため)。この token-free 範囲を広げる変更も狭める変更も
-  人間レビュー対象。
+- **dashboard は localhost 限定・読み取り既定・mutation は 1 本だけ**:
+  `127.0.0.1` バインドは全経路。読み取り endpoint(`/api/snapshot` /
+  `/api/stream` / `/api/peek` / `/api/plan` / `/api/diff`)は GET-only のままで、
+  `getOnly` を外す変更は人間レビュー対象。mutation は `POST /api/pr/merge`
+  ただ 1 本、変えてよいのは **GitHub 上の 1 つの PR の merge 状態と、その PR の
+  head ref(remote)** だけ。ローカル作業ツリー・ローカル git ref・worktree・
+  `.fanout/state.json`・ペイン入力は一切変えない(`gh` に `--admin` / `--auto` /
+  `--delete-branch` を渡さない。特に `--delete-branch` はローカルブランチも
+  消しにいき、linked worktree で checkout 済みの子ブランチでは失敗して、完了済み
+  merge をエラーに見せる)。対象 PR はクライアントが番号と head SHA を明示し、
+  サーバが snapshot 行の PR 集合との一致を確認し、GitHub 側が
+  `--match-head-commit` で再確認する 3 段照合を必ず通す — どれか 1 段を外すと
+  「画面で見ていた PR と実際にマージされる PR が違う」窓が開く。merged /
+  closed / draft / CONFLICTING は fanout が 409 で弾くが、レビュー承認と CI は
+  弾かない(branch protection の強制は GitHub の役目で、二重実装すると保護
+  ルールの無い repo でボタンが永久に死ぬ)。POST の入口は `postOnly` +
+  `sameOriginOnly`(`Host` の完全一致で DNS rebinding を塞ぐ / `Origin` は存在時
+  のみ自 origin と完全一致 / `Content-Type` が `application/json` でなければ
+  415。この Content-Type 要求が CSRF の主防御 — 単純リクエストではないので
+  クロスオリジン fetch は preflight され、mux は OPTIONS を持たない)、その後に
+  `requireToken`。token 必須は `/api/*` のみ(`requireToken`)で、`/healthz` と
+  SPA 配信は token-free(HTML shell が `?token=` を読むため)。token-free 範囲の
+  拡大も縮小も、mutation endpoint の追加も、この 1 本の作用範囲の拡大も人間
+  レビュー対象。token gate が無効(`--no-token`)なら merge だけは拒否する —
+  loopback ポートは同一マシンの全プロセスと他ローカルユーザから届くので、
+  「requireToken の後ろ」という条件が空になった状態で mutation を開けたままには
+  しない。削除対象の branch は PR の head ref からしか決めず、記録 branch への
+  フォールバックはしない(照合が自分自身との比較になって常に通るため)。
+  削除は実行直前に GitHub へ「本当にマージ済みか」を確認し(snapshot は最大 1
+  poll 古い)、head SHA を expected OID として fence する — ref が動いていたら
+  消さない(merge 後に pane が push した未マージ commit を巻き込まないため)。
+  head ref が不明なとき、および head が fork にあるときは削除しない。ref path の各セグメントは percent-encode する
+  (`feature/#123` のような合法 ref が fragment で切れ、その 404 が「既に無い」と
+  誤認されるのを防ぐ)。
+- **`gh pr merge` の exit 0 はマージの証拠ではない**: merge queue 必須の base では
+  gh は queue 投入で成功終了する。`PRState` で GitHub に実際の `mergedAt` を
+  確認できるまで merged と報告しない。確認自体が失敗したときは fail-closed。送信が transport 失敗
+  (deadline / 切断 / gh 不在)で終わり、かつ PR が未マージのままなら、queue が
+  受理済みかもしれないので Unknown として hold する — GitHub がはっきり断った
+  場合(clean な非ゼロ終了)だけ retryable として返す。
+- **merge 権限は URL の token に載っている**: mutation が入ったことで、
+  ダッシュボード URL の漏洩は「issue/PR データの閲覧」ではなく「PR の merge
+  実行」を渡すことになった。URL はブラウザ履歴・tmux ステータス行・
+  `.fanout/dashboard.json` に残る。外部への Referer 漏洩だけは `web/index.html`
+  の `no-referrer` が塞いでいる。同じ理由で SPA の XSS は権限昇格になるため、
+  `web/index.html` と `web/src/shared/github.ts` の class H/M は据え置き。
 - **briefing はエージェントに注入されるプロンプト本文**: `briefing.Render` /
   `RenderTask` の出力はそのままエージェントの入力になる。
 - **具象 backend の構築は `infra/paneruntime` に集約**: 選択入力の収集・

@@ -66,9 +66,10 @@ type diffWorktreeResult struct {
 	err   error
 }
 
-// diffNoStore wraps the whole endpoint, including GET-only and token errors,
-// because the diff contract forbids caching every /api/diff response.
-func diffNoStore(next http.HandlerFunc) http.HandlerFunc {
+// noStore wraps a whole endpoint, gate refusals included, for the routes whose
+// contract forbids caching any response: /api/diff, and the merge route, where
+// a cached 403 or 409 would misreport the state of a mutation.
+func noStore(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		next(w, r)

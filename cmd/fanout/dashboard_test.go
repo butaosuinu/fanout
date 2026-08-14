@@ -263,3 +263,14 @@ func stubDashboardOpenHooks(t *testing.T, browserErr error) (*dashboardBrowserSt
 	})
 	return browser, status
 }
+
+// TestDashboardMergePortIsWired pins the composition-root half of the merge
+// carve-out. dashboard.New deliberately has no default for Options.MergePR, so
+// dropping this grant would turn every merge into a 503 with nothing else to
+// notice — the server-side half of that contract is
+// dashboard.TestMergeUnavailableWhenNotWired.
+func TestDashboardMergePortIsWired(t *testing.T) {
+	if dashboardMergePort(t.TempDir()) == nil {
+		t.Fatal("dashboardMergePort() = nil, want the dashboard's merge capability")
+	}
+}

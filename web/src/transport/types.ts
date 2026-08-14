@@ -133,6 +133,21 @@ export interface PRRef {
   /* PullRequest.totalCommentsCount(会話コメント + inline レビューコメント)。
    * 0 件は omitempty で欠落する。 */
   comments?: number;
+  /* PR head の commit oid。マージ時にそのまま送り返し、サーバが
+   * --match-head-commit として GitHub に渡す。描画からクリックまでの間に
+   * push された PR は GitHub が拒否する。GraphQL 経路だけが値を持つ。 */
+  headSha?: string;
+  /* PR head の branch 名。マージ後の remote branch 削除の対象を、その PR が
+   * 実際に持つ branch に限るために使う。 */
+  headRef?: string;
+  /* head / base の repository(owner/name)。fork の head を base 側で消さない
+   * ため、また別 repository の issue を close する PR を番号だけで取り違えない
+   * ために、サーバが mutation 前に照合する。 */
+  headRepo?: string;
+  baseRepo?: string;
+  /* PR のマージ先 branch。head を動かさずに retarget できるので、head SHA だけでは
+   * 「どこへマージされるか」を固定できない。描画時の値を送り返して照合する。 */
+  baseRef?: string;
 }
 
 export interface BlockerStatus {

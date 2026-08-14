@@ -118,9 +118,9 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
 - `internal/app` orchestrates use cases on top of `core` and `infra`:
   `panelaunch` (pane creation), `lifecycle`, `watch` (the label-watcher
   cycle, pure at the package boundary via `watch.IO`), `agentprocess`
-  (matching a saved launch's argv against the live agent process), and
-  `briefing` (the
-  prompt text injected into agents) are class H; `sessionview` (the read-only
+  (matching a saved launch's argv against the live agent process), `briefing`
+  (the prompt text injected into agents), and `prmerge` (target selection and
+  preflight behind the dashboard's merge button) are class H; `sessionview` (the read-only
   `Snapshot` aggregator shared by the web dashboard and a future TUI),
   `run`, `statusreport`, `peermsg`, and `cliflags` (flag
   validation that decides main's lifecycle branches) are class M.
@@ -136,7 +136,8 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `paneruntime` (the one package allowed to name a concrete runtime adapter:
   selection inputs, precedence, construction, self-exec registry), and
   `herdrrun` are class H;
-  `ghissue` (GitHub reads and mutations: label swaps, dashboard comments),
+  `ghissue` (GitHub reads and mutations: label swaps, dashboard comments,
+  PR merges),
   `gitstat`, `tmuxrun` (direct tmux operations), `tmuxbackend` (the adapter
   from the backend contract to `tmuxrun`), `msgstore`, `notify`,
   `runtime` (git root + tmux target resolution), `displayname`, `codexapp`,
@@ -145,7 +146,9 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `tty`, `execx`, `browser`, and `backendtest` (the in-process fake of the
   core backend contract; test-only, never linked into the binary) are class A.
 - `internal/ui` holds the TUI (`tui`) and the web dashboard (`dashboard`):
-  `server.go` (GET-only mux, token middleware) and `runfile.go` (the tokened
+  `server.go` (the route mux — GET-only reads plus the single POST carve-out —
+  and the token/same-origin middleware), `merge.go` and `deletebranch.go` (the two
+  mutation handlers: PR selection, preflight, and gh failure mapping), `runfile.go` (the tokened
   `.fanout/dashboard.json` reuse/trust gate), `diff.go` (stable row identity,
   read-only worktree patch delivery, and request-wide limits), and `peek.go` /
   `plan.go` (the capture-pane validation chain) are class
@@ -233,19 +236,72 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   `FANOUT_STATE_PATH`. The plan variants load the spec first and then operate
   on `plan:<slug>` task rows.
 - `fanout dashboard --web` is the one HTTP surface, and it is deliberately
-  carved out: a read-only, `127.0.0.1`-bound, GET-only, token-gated localhost
-  server that only ever reads state/tmux/gh and never mutates repo or GitHub
-  state. `GET /api/diff` reads the recorded worktree through a stable snapshot
-  row identity without requiring a live pane. `GET /api/peek` and
-  `GET /api/plan` stay inside that boundary (both
-  are a read-only `tmux capture-pane` of a recorded pane; `/api/plan` is
-  further gated to plan-mode panes whose recorded agent is `codex`), and Google Fonts is
-  the single allowed external fetch from the SPA (loaded `no-referrer` so the
-  tokened URL never leaks). The "no HTTP/sockets" guidance elsewhere is about the legacy
-  notification path (outbound only); #137/#142 explicitly delegated the Web UI
-  decision to dashboard #117, which this implements standalone (no TUI
-  dependency — the future TUI just reuses `internal/app/sessionview`). Keep it
-  read-only: do not add mutation endpoints.
+  carved out: a `127.0.0.1`-bound, token-gated localhost server. Every read
+  endpoint is GET-only and mutates nothing: `GET /api/snapshot`, `/api/stream`,
+  `/api/peek`, `/api/plan`, and `/api/diff` (the last reads the recorded
+  worktree through a stable snapshot row identity without requiring a live pane;
+  `/api/peek` and `/api/plan` are a read-only `tmux capture-pane` of a recorded
+  pane, and `/api/plan` is further gated to plan-mode panes whose recorded agent
+  is `codex`). Google Fonts is the single allowed external fetch from the SPA
+  (loaded `no-referrer` so the tokened URL never leaks). The "no HTTP/sockets"
+  guidance elsewhere is about the legacy notification path (outbound only);
+  #137/#142 explicitly delegated the Web UI decision to dashboard #117, which
+  this implements standalone (no TUI dependency — the future TUI just reuses
+  `internal/app/sessionview`).
+- There are exactly two mutation endpoints, each scoped to one GitHub pull
+  request: `POST /api/pr/merge` changes that PR's merge state, and
+  `POST /api/pr/delete-branch` removes a merged PR's remote head ref. They are
+  separate for the same reason GitHub's own UI separates them — deleting the
+  branch is a button that appears *after* the merge — and the split is also what
+  keeps them simple: deleting a ref is idempotent, so none of the merge's
+  never-repeat-an-ambiguous-mutation machinery applies to it. Neither endpoint
+  changes anything else. It
+  never touches the local working tree, local git refs, worktrees,
+  `.fanout/state.json`, or pane input, and it never passes `--admin`, `--auto`,
+  or `--delete-branch` to `gh` (that last one would try to delete a local branch
+  fanout has checked out in a linked worktree). The client names the PR number,
+  head SHA, and base branch it rendered (GitHub can retarget a PR without moving
+  its head, so the SHA alone does not pin where the merge lands); both are
+  re-read live immediately before the merge, because the snapshot is up to one
+  poll stale; the server requires that PR to still be on the
+  addressed snapshot row and forwards the SHA as `--match-head-commit`, so a PR
+  that moved between render and click is refused by GitHub instead of merged
+  blind. merged/closed/draft/CONFLICTING are refused with 409, but review
+  approval and CI status are deliberately not gates — enforcing branch
+  protection is GitHub's job, and duplicating it would kill the button in a
+  repository that requires neither. POST requests pass `postOnly` +
+  `sameOriginOnly` (exact `Host` match pins DNS rebinding, `Origin` must match
+  when present, non-JSON `Content-Type` is 415) before `requireToken`. Adding a
+  second mutation endpoint, widening this one's blast radius, or relaxing those
+  gates each require human review. `--no-token` refuses merges outright: the
+  loopback port is reachable by every local process, so the route closes rather
+  than sit behind a vacuous token check. The branch to delete comes only from the
+  PR's own head ref in the base repository, and it is deleted only while the ref
+  still points at the PR's head SHA; a fork head, an unknown head ref, or a
+  moved ref drops the delete and reports why, so a cleanup precondition never
+  vetoes the merge itself. `gh pr merge` exiting 0 is not proof of a merge — a
+  merge-queue base enqueues and returns success — so the result is confirmed
+  against GitHub before anything is reported merged or deleted, and an
+  unconfirmable merge fails closed. Every row requires the PR's base repository to be this
+  one before it can be merged — `Fixes owner/repo#N` closes issues across
+  repositories, so a row's PR list is not proof the PR lives here. Issue-less
+  rows (plan tasks, `@manual`) additionally find their PRs by head branch NAME,
+  which a fork can collide with, so those rows also require the head repository
+  and head ref to match; issue rows attribute PRs through the closing-PR link and
+  keep accepting fork PRs. A merge whose outcome cannot be read comes back as
+  unknown rather than as an error, and the pull request is then held in
+  `.fanout/merge-claims.json` — cleared only when a poll shows the PR merged or
+  closed, since time is not evidence about an outcome; deleting the entry is the
+  documented manual way out — so another tab, a reload, or a dashboard restart
+  cannot fire a second one either — that file is the endpoint's only local write. The
+  diff toolbar additionally pins the PR head it opened with, so a push that
+  lands while you are reading blocks the merge instead of quietly merging
+  commits the displayed patch does not contain. Errors that
+  provably precede the send — the rate-limit gate — stay plain retryable
+  failures instead. The OID fence on the delete is not atomic — GitHub has no
+  conditional ref delete — so it catches a push that already landed, not one that
+  lands in the round trip after a confirmed merge. Note that the dashboard URL now carries merge authority, not
+  just read access: treat it accordingly.
 - The label watcher is a TUI-resident, opt-in launcher, not a cron/webhook
   service and not the #107 skill loop. Only user config or environment
   variables may enable `watcher`; repo config may set labels, interval, agent,

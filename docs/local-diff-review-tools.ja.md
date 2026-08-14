@@ -1445,6 +1445,11 @@ dashboard で diff を読み、指摘は TUI または GitHub PR で付ける。
 1 は difit の保留条件を満たすまで採れず、3 は別の認証、寿命管理、mutation
 境界を増やすため当面採らない。
 
+この 3 択は、後から入った PR merge ボタン(`POST /api/pr/merge`)とは独立で
+ある。あちらは GitHub 側の PR 状態を人間の 1 クリックで動かすだけで、指摘本文
+もレビュー state も fanout 側に保存しない。3(別プロセスの opt-in mutation
+サーバー)を採らない判断は維持する。
+
 ## 実装計画
 
 ### Phase 1: 起動導線(MVP)
@@ -1532,7 +1537,8 @@ skill / briefing 側に置く(CLI は LLM を呼ばない鉄則の維持)。
 
 既存の web dashboard SPA に表示専用パネルを追加し、上記の
 `GET /api/diff` から worktree の patch を読む。
-dashboard の read-only 境界(GET のみ、mutation なし)は変えない。
+`GET /api/diff` は読み取り専用の GET-only のままで、後から入った
+`POST /api/pr/merge` の carve-out はこの経路に影響しない。
 difit URL への導線は前提にせず、difit の保留記録も変更しない。
 指摘の還元は TUI の #518-521 または GitHub PR に委譲する。
 

@@ -2,10 +2,29 @@ import type {
   DiffFileEntry,
   DiffResponse,
   PaneView,
+  PRRef,
   Rollup,
   Session,
   Snapshot,
 } from "../transport/types";
+
+/* マージ可能な OPEN PR。makePane の既定は prs: null のまま — PR を既定にすると
+ * PR 列やドロワーの並び順を固定している既存テストが一斉に動く。PR が要るテスト
+ * だけが明示的に付ける。 */
+export function makePr(over: Partial<PRRef> = {}): PRRef {
+  return {
+    number: 701,
+    state: "OPEN",
+    mergedAt: null,
+    mergeable: "MERGEABLE",
+    headSha: "0123456789abcdef0123456789abcdef01234567",
+    headRef: "fanout/fix-thing",
+    headRepo: "octo/fanout",
+    baseRepo: "octo/fanout",
+    baseRef: "main",
+    ...over,
+  };
+}
 
 export function makeRollup(over: Partial<Rollup> = {}): Rollup {
   return {

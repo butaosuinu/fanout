@@ -599,6 +599,8 @@ effort routing、OpenAI Codex AGENTS.md Review guidelines、arXiv 2603.25773
    に倒す。「全シグナルが揃って全部クリア」のときだけ読まない側に倒せる。
 2. **承認とマージの分離** — どの案も自動マージはしない。マージボタンは常に
    人間が押す(Ona)。自動マージの解禁は運用実績が立ってからの別判断。
+   dashboard の `POST /api/pr/merge` はこの原則の実装であって例外ではない:
+   1 クリック 1 マージで、`gh` に `--auto` を渡さない。
 3. **自己申告シグナルは悪い方向にだけ効かせる** — 実装エージェントの自己申告
    (Review effort、findings 数)は「read 落ち」の根拠にはできるが、「読まなく
    てよい」の根拠にはしない。読まない判定は CLI の客観値のみで行う。
@@ -606,9 +608,12 @@ effort routing、OpenAI Codex AGENTS.md Review guidelines、arXiv 2603.25773
    られる。検証系の機能は「プローブ関連パスへの接触」を機械検出し、検証通過
    でも緑バッジを出さない。CI ゲーミング(テスト削除・skip 追加)は無条件で
    人間精読に落とす。
-5. **既存のレビュー面に内接** — 独立した専用 Web ビューアと mutation を伴う
-   レビュー UI は作らない。既存の read-only dashboard SPA に置く表示専用
-   パネルは例外とする。CodeSee の教訓が批判するのはコードベース全体の常設地図を
+5. **既存のレビュー面に内接** — 独立した専用 Web ビューアは作らない。既存の
+   dashboard SPA に置く表示専用パネルは例外とする。mutation は「GitHub 側の
+   状態を人間の 1 クリックで動かす最小面」に限り、dashboard 内では
+   `POST /api/pr/merge`(PR の merge と remote head ref 削除)だけを認める。
+   指摘本文・レビュー state・ローカルの状態を書き込む UI は引き続き作らない。
+   CodeSee の教訓が批判するのはコードベース全体の常設地図を
    専用製品へ分離する設計であり、既存 dashboard への worktree diff 表示は
    該当しない。表現は Markdown 表 + Mermaid + `<details>`、TUI + delta 委譲、
    dashboard の表示専用パネルの範囲に収める。

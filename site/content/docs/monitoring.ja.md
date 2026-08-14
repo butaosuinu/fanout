@@ -1,7 +1,7 @@
 ---
 title: 進捗モニタリング
 linkTitle: モニタリング
-description: "ファンアウトした全ペインの進捗を一望し、どこで止まっているかを見つける 3 つの窓。常駐 TUI コンソール、--status の JSON と table、読み取り専用の Web ダッシュボード。"
+description: "ファンアウトした全ペインの進捗を一望し、どこで止まっているかを見つける 3 つの窓。常駐 TUI コンソール、--status の JSON と table、Web ダッシュボード。"
 weight: 40
 kanji: 見
 yomi: monitoring
@@ -11,8 +11,8 @@ yomi: monitoring
 知りたいのは、どのペインが PR まで進み、どこで止まっているかです。
 
 fanout はこれを 3 つの窓で見ます。
-手元で常時眺めるなら**常駐 TUI コンソール**、automation に食わせるなら `--status` の **JSON**、チームやブラウザで共有するなら読み取り専用の **Web ダッシュボード**です。
-`--status` と Web ダッシュボードは読み取り専用で `.fanout/state.json`、選択中の runtime、GitHub を読むだけですが、TUI は選択中の runtime で検証済みの行に merge、close、cleanup も実行できます(`--merge` / `--close` / `--cleanup` と同じ処理です)。
+手元で常時眺めるなら**常駐 TUI コンソール**、automation に食わせるなら `--status` の **JSON**、チームやブラウザで共有するなら **Web ダッシュボード**です。
+`--status` は読み取り専用で `.fanout/state.json`、選択中の runtime、GitHub を読むだけです。TUI は選択中の runtime で検証済みの行に merge、close、cleanup も実行でき(`--merge` / `--close` / `--cleanup` と同じ処理です)、Web ダッシュボードは読み取りが基本で、PR のマージだけ実行できます。
 
 ## ペイン枠線ラベル
 
@@ -175,13 +175,14 @@ JSON の全 field と exit code は [CLI リファレンス]({{< relref "/docs/c
 
 ## Web ダッシュボード（fanout dashboard --web）
 
-チームやブラウザで全 Session を共有しながら見たいときは、`fanout dashboard --web` で読み取り専用の Web ダッシュボードを起動します。
+チームやブラウザで全 Session を共有しながら見たいときは、`fanout dashboard --web` で Web ダッシュボードを起動します。
 
 ```bash
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 ```
 
-サーバは `127.0.0.1` にのみバインドして GET 専用の endpoint だけを公開し、起動毎にランダムトークンを生成して URL に埋め込みます(単一ユーザ端末では `--no-token` で外せます)。
+サーバは `127.0.0.1` にのみバインドし、起動毎にランダムトークンを生成して URL に埋め込みます(単一ユーザ端末では `--no-token` で外せます)。
+読み取り系の endpoint はすべて GET 専用で、例外は後述のマージボタンだけです。
 埋め込みの SPA は、フィルタと詳細ドロワー、直近出力の live peek でライブの Session 一覧を見せます。
 Prompt Session の記録済み branch に PR があると、ダッシュボードに PR リンクと CI 状態も表示します。
 
@@ -207,6 +208,29 @@ conflict タグは GitHub が競合を報告したときだけ出ます。merge 
 Session の各行には runtime backend と pane の identity が出て、runtime の状態は `live` / `stale` / `unknown` / `unsupported` / `-` で示されます。フィルタは `backend:tmux` / `backend:herdr` を受け付けます。
 [herdr backend]({{< relref "/docs/herdr-backend" >}}) の行では、保存済みの行が fanout-owned session の pane と一致する場合だけ live peek が内容を返します。
 foreign または stale な行は 404 を返し、ダッシュボードは GET 専用のままです。
+
+### PR をマージする
+
+PR が紐付いている Session には**マージ**ボタンが出ます。置き場所は詳細ドロワーのヘッダと diff ビュアーのツールバーの 2 か所です。押すとその PR を GitHub 上でマージします。
+ローカルは何も変わりません。worktree もその branch も記録済みの状態もそのまま残り、ペインを畳むのは従来どおり `--close` / `--cleanup` の仕事です。
+
+`▾` を押すとマージ方式(squash / merge commit / rebase)が出ます。選ぶとその方式でマージし、次回の既定として覚えます。この選択はドロワーと diff ビュアーで共通です。
+
+マージが終わると、詳細ドロワーの PR の隣に**ブランチを削除**ボタンが現れます。GitHub 自身の "Delete branch" と同じ扱いです。消えるのは GitHub 側の branch だけで、worktree とローカル branch はそのまま残ります(それらは従来どおり `--cleanup` の担当)。fork の branch と、マージ後に動いた branch は対象外なので、未マージのコミットを巻き込むことはありません。
+
+マージが成立しない状態ではボタンが理由付きで無効になります。PR が無い、すでにマージ済み、close 済み、draft のまま、base branch と競合している、の 5 つです。
+CI の失敗やレビュー未承認では無効になりません。それらがマージを止めるかどうかは branch protection の設定次第なので、ボタンは押せるままにしてメニューに警告を出します。
+GitHub が拒否した場合はその旨をエラーで表示し、PR は変わりません。
+
+ダッシュボードは描画時に見ていた PR 番号と head commit を送り、サーバはその commit を `--match-head-commit` として GitHub に渡します。
+ページを開いてからクリックするまでの間に push された PR は、そのままマージされるのではなく拒否されます。
+
+diff ビュアーを開いている間は、開いた時点のコミットを固定します。読んでいる最中に push が入るとマージは塞がれ、diff を開き直すまで実行できません — 画面の差分に無い変更をマージすることはありません。
+
+merge queue が必要な base branch では、GitHub はリクエストを受け付けてもその場ではマージしません。その場合はボタンにその旨が出て、押せる状態のまま残ります。GitHub がマージを確認するまで、マージ済みとは報告せず、ブランチも削除しません。
+
+このボタンがある以上、ダッシュボードの URL は閲覧権限ではなくマージ権限を持ちます。URL に埋め込まれたトークンが、URL の共有と他人によるマージとの間に立つ唯一のものです。
+そのため `--no-token` を付けるとマージボタンは無効になります。単一ユーザ端末で読み取りを開けておくのは構いませんが、loopback ポートは同一マシンの全プロセスから届くので、マージだけは開けません。
 
 ### diff ビュアー
 

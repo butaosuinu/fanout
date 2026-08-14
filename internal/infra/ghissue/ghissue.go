@@ -55,6 +55,27 @@ type PRRef struct {
 	// inline review comments. Not comments.totalCount, which omits the inline
 	// ones. Only the GraphQL paths set it; the `gh pr list` path leaves it 0.
 	Comments int `json:"comments,omitempty"`
+	// HeadSha is the PR head commit oid. The dashboard echoes it back when it
+	// asks to merge and forwards it as --match-head-commit, so a PR that moved
+	// between render and click is refused by GitHub instead of merged blind.
+	// Only the GraphQL paths set it; the `gh pr list` path leaves it "".
+	HeadSha string `json:"headSha,omitempty"`
+	// HeadRef is the PR head branch name. It scopes the optional post-merge
+	// remote-ref delete to the branch the PR actually owns.
+	HeadRef string `json:"headRef,omitempty"`
+	// HeadRepo is the head repository as owner/name. A fork's head ref lives in
+	// another repository, so deleting by name alone in the base repo would remove
+	// a same-named branch this pull request never owned.
+	HeadRepo string `json:"headRepo,omitempty"`
+	// BaseRef is the branch the pull request merges into. A PR can be retargeted
+	// without its head moving, so the head SHA alone does not pin where the merge
+	// lands — the client echoes this back and the server compares.
+	BaseRef string `json:"baseRef,omitempty"`
+	// BaseRepo is the repository the pull request targets, as owner/name. A PR
+	// can close an issue in another repository ("Fixes owner/repo#N"), so a row's
+	// PR list is not proof that the PR lives here — and `gh pr merge <N> -R <this
+	// repo>` would resolve that number against the wrong repository.
+	BaseRepo string `json:"baseRepo,omitempty"`
 }
 
 func (pr PRRef) DisplayState() string {
@@ -584,6 +605,11 @@ const prRefNodeFields = `
   reviewDecision
   mergeable
   totalCommentsCount
+  headRefOid
+  headRefName
+  headRepository { nameWithOwner }
+  baseRepository { nameWithOwner }
+  baseRefName
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 `
 
@@ -878,7 +904,16 @@ type prRefGraphQL struct {
 	ReviewDecision     string  `json:"reviewDecision"`
 	Mergeable          string  `json:"mergeable"`
 	TotalCommentsCount int     `json:"totalCommentsCount"`
-	Commits            struct {
+	HeadRefOid         string  `json:"headRefOid"`
+	HeadRefName        string  `json:"headRefName"`
+	HeadRepository     struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"headRepository"`
+	BaseRepository struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"baseRepository"`
+	BaseRefName string `json:"baseRefName"`
+	Commits     struct {
 		Nodes []struct {
 			Commit struct {
 				StatusCheckRollup *struct {
@@ -908,6 +943,11 @@ func (pr prRefGraphQL) ref() PRRef {
 		CIStatus:       normalizeCIStatus(pr.statusCheckRollupState()),
 		Mergeable:      normalizeMergeable(pr.Mergeable),
 		Comments:       pr.TotalCommentsCount,
+		HeadSha:        pr.HeadRefOid,
+		HeadRef:        pr.HeadRefName,
+		HeadRepo:       pr.HeadRepository.NameWithOwner,
+		BaseRepo:       pr.BaseRepository.NameWithOwner,
+		BaseRef:        pr.BaseRefName,
 	}
 }
 

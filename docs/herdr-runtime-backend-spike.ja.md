@@ -48,7 +48,7 @@ tmux-parity は信頼モデルだけでなく機構の密度にも適用し、�
 2. herdr にしか無い失敗モードだけ最小の追加対処を許す。対象は socket mutation の応答喪失窓と server 再起動、対処は「mutation 直前の最小意図記録（単一 journal 行程度）+ 再実行時の存在確認 → 採用 or fail-closed `manual_cleanup_required`」までとする。
    一次障害（snapshot・Git 読取・観測の失敗）は intent を変更せず error を返して再実行の分類に委ね、証明の永続化や rollback 自体が失敗する二重障害窓は `manual_cleanup_required` で確定する。これ以深の crash window 対処は proof-grade tier とする。
 3. 次は撤廃または任意記録へ格下げし、「後続 issue への契約」の再評価条件表に proof-grade tier の再導入候補として残す: フル phase machine（`worktree-planned` 以降の多段遷移）、CAS provisional registry、exact request / pre-state の replay 契約、canonical bytes / digest / golden bytes、bundle / journal / epoch / tombstone 群、ownership nonce の二重照合、plan spec snapshot の SHA-256 束縛。
-4. 不変: tmux-parity 信頼モデル、capability gate、`--team` の registry 契約、`codexPlanMode` 対応方針、dashboard read-only 境界、proof-grade tier の再評価条件表。実測事実の節も変更しない。
+4. 不変: tmux-parity 信頼モデル、capability gate、`--team` の registry 契約、`codexPlanMode` 対応方針、dashboard の localhost 限定・読み取り既定境界(mutation carve-out の作用範囲を含む)、proof-grade tier の再評価条件表。実測事実の節も変更しない。
 
 本文の launch / worktree / cleanup / state 系契約はこの基準の適用後の形であり、各条項は tmux 水準（基準 1）か応答喪失窓・server 再起動への最小追加対処（基準 2）のどちらかに属する。
 

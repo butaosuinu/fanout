@@ -1,0 +1,120 @@
+import { useCallback, useEffect, useState } from "react";
+import type { Snapshot } from "../../transport/types";
+import type { MergeOutcome } from "../../transport/useMergePr";
+import { findPaneEntry } from "../sessions/pane";
+
+/* 送信済みだが snapshot がまだ追いつかない間、ボタンを押せなくしておく上限。
+ * サーバは merge 成功時に GitHub tick を 1 回前倒しするので通常は数秒で解ける。
+ * gh tick 6 回ぶんを過ぎても MERGED にならないなら、こちらの想定外(webhook 事故、
+ * 別経路での revert)なので通常判定へ戻す — 永久に押せないほうが困る。 */
+const PENDING_BACKSTOP_MS = 120_000;
+
+/* 送信した行・PR・時刻。PR 番号まで持つのは、同じ行に複数 PR があるとき「今
+ * マージしたやつ」が反映されたかだけを見るため。 */
+export type Pending = { key: string; prNumber: number; since: number } | null;
+
+/* 結果不明のマージ。行キーではなく PR 番号で持つ — 同じ PR が複数行に載る場合
+ * (複数 issue を close する PR)に、別の行から再送できてしまうのを防ぐ。 */
+export type Unknown = { prNumber: number } | null;
+
+/* 反映されたら pending を解除する。楽観更新はしない — snapshot を書き換えると、
+ * サーバ側で失敗したマージまで成功したように見せてしまう。 */
+export function usePendingRelease(
+  snap: Snapshot | null,
+  pending: Pending,
+  setPending: (p: Pending) => void,
+) {
+  useEffect(() => {
+    if (!snap || !pending) return;
+    if (pendingResolved(snap, pending)) setPending(null);
+  }, [snap, pending, setPending]);
+
+  /* backstop は実時間で切る。上の effect は snapshot が変わったときにしか走らず、
+   * SSE は内容が変わらない限り配信しないので、merge 後の GitHub refresh が失敗して
+   * 内容が動かないと 120 秒を過ぎても再評価されず、ボタンが永久に「反映待ち」で
+   * 固まる。 */
+  useEffect(() => {
+    if (!pending) return;
+    const left = Math.max(0, pending.since + PENDING_BACKSTOP_MS - Date.now());
+    const timer = setTimeout(() => setPending(null), left);
+    return () => clearTimeout(timer);
+  }, [pending, setPending]);
+}
+
+/* 見るのは「今マージした PR 番号」だけ。行の primary PR を見ると、同じ行に別の
+ * open PR が残っている間ずっと解除されない。行ごと消えた場合も解除する。 */
+function pendingResolved(snap: Snapshot, pending: NonNullable<Pending>): boolean {
+  const entry = findPaneEntry(snap, pending.key);
+  if (!entry) return true;
+  const pr = entry.pane.prs?.find((p) => p.number === pending.prNumber);
+  return !!pr && (pr.state === "MERGED" || !!pr.mergedAt);
+}
+
+/* 結果不明は GitHub の新しい状態でだけ決着する。時間では解除しない — 未確定の
+ * まま撃ち直させないことが目的なので、時間切れで再送を許すと意味がなくなる。 */
+export function useUnknownRelease(
+  snap: Snapshot | null,
+  unknown: Unknown,
+  setUnknown: (u: Unknown) => void,
+) {
+  useEffect(() => {
+    if (!snap || !unknown) return;
+    if (settledPR(snap, unknown.prNumber)) setUnknown(null);
+  }, [snap, unknown, setUnknown]);
+}
+
+function settledPR(snap: Snapshot, number: number): boolean {
+  const refs = (snap.sessions ?? [])
+    .flatMap((s) => s.panes ?? [])
+    .flatMap((p) => p.prs ?? [])
+    .filter((pr) => pr.number === number);
+  return refs.some((pr) => pr.state === "MERGED" || pr.state === "CLOSED" || !!pr.mergedAt);
+}
+
+/* 直近の送信の追跡先。行キー(pending)と PR 番号(unknown)で粒度が違うのは、
+ * 反映待ちは「その行の表示が追いつくまで」だが、結果不明は「その PR が決着する
+ * まで」だから — 同じ PR が複数行に載る場合、別の行から撃ち直させない。 */
+export type Notice = { key: string; kind: "queued" | "unknown" } | null;
+
+export interface MergeTracking {
+  lastKey: string | null;
+  pending: Pending;
+  unknown: Unknown;
+  notice: Notice;
+  /* 送信開始。結果の帰属先をこの行へ移す。 */
+  begin: (key: string) => void;
+  apply: (row: { key: string; prNumber: number }, res: MergeOutcome) => void;
+}
+
+/* 送信結果の追跡をまとめて持つ。queued は「受理されたがまだマージされていない」
+ * なので反映待ちにはしない — merge queue が流れるまでボタンが固まるため、押せる
+ * 状態のまま知らせる。unknown は逆で、結果が分からないまま再送させないよう
+ * 必ず塞ぐ。 */
+export function useMergeTracking(snap: Snapshot | null): MergeTracking {
+  const [lastKey, setLastKey] = useState<string | null>(null);
+  const [pending, setPending] = useState<Pending>(null);
+  const [unknown, setUnknown] = useState<Unknown>(null);
+  const [notice, setNotice] = useState<Notice>(null);
+
+  usePendingRelease(snap, pending, setPending);
+  useUnknownRelease(snap, unknown, setUnknown);
+
+  const begin = useCallback((key: string) => {
+    setLastKey(key);
+    setNotice(null);
+  }, []);
+
+  const apply = useCallback((row: { key: string; prNumber: number }, res: MergeOutcome) => {
+    if (res.unknown) setUnknown({ prNumber: row.prNumber });
+    else if (!res.queued) setPending({ ...row, since: Date.now() });
+    setNotice(noticeFor(row.key, res));
+  }, []);
+
+  return { lastKey, pending, unknown, notice, begin, apply };
+}
+
+function noticeFor(key: string, res: MergeOutcome): Notice {
+  if (res.unknown) return { key, kind: "unknown" };
+  if (res.queued) return { key, kind: "queued" };
+  return null;
+}
