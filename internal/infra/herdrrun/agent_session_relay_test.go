@@ -78,6 +78,24 @@ func TestValidateAgentSessionReportResponseRequiresMatchingSuccess(t *testing.T)
 	}
 }
 
+func TestCompleteAgentSessionRelayReportStopsAfterSuccessWhenClientClosed(t *testing.T) {
+	writer := closedAgentSessionRelayWriter{}
+	valid := []byte(`{"id":"hook","result":{"type":"ok"}}` + "\n")
+	if err := completeAgentSessionRelayReport(writer, valid, "hook"); err != nil {
+		t.Fatalf("successful upstream response error = %v", err)
+	}
+	invalid := []byte(`{"id":"hook","error":{"code":"rejected"}}` + "\n")
+	if err := completeAgentSessionRelayReport(writer, invalid, "hook"); err == nil {
+		t.Fatal("rejected upstream response ended the relay")
+	}
+}
+
+type closedAgentSessionRelayWriter struct{}
+
+func (closedAgentSessionRelayWriter) Write([]byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
+
 func TestAcceptAgentSessionReportRetriesRejectedForward(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "fasr-") //nolint:usetesting // Darwin Unix socket paths are limited to 103 bytes.
 	if err != nil {

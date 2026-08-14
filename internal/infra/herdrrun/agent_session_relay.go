@@ -330,10 +330,7 @@ func relayAgentSessionReport(
 	if err != nil {
 		return err
 	}
-	if _, err := connection.Write(response); err != nil {
-		return err
-	}
-	return validateAgentSessionReportResponse(response, report.ID)
+	return completeAgentSessionRelayReport(connection, response, report.ID)
 }
 
 func readAgentSessionReport(reader io.Reader) (agentSessionReport, error) {
@@ -524,6 +521,15 @@ func validateAgentSessionReportResponse(response []byte, requestID string) error
 		return fmt.Errorf("herdr agent-session report returned an unexpected response")
 	}
 	return nil
+}
+
+func completeAgentSessionRelayReport(writer io.Writer, response []byte, requestID string) error {
+	responseErr := validateAgentSessionReportResponse(response, requestID)
+	_, writeErr := writer.Write(response)
+	if responseErr != nil {
+		return errors.Join(responseErr, writeErr)
+	}
+	return nil // An upstream success is final even when the reporting client disconnected.
 }
 
 func forwardAuthorizedAgentSessionReport(
