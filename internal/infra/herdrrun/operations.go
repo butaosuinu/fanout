@@ -2,7 +2,6 @@ package herdrrun
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -16,37 +15,15 @@ import (
 )
 
 var (
-	ErrOwnedIdentityMismatch = errors.New("herdr owned pane identity mismatch")
-	ErrOwnedCheckoutRetained = errors.New("herdr owned checkout retained for manual reconciliation")
+	ErrOwnedIdentityMismatch = corebackend.ErrOwnedIdentityMismatch
+	ErrOwnedCheckoutRetained = corebackend.ErrOwnedCheckoutRetained
 )
 
-type OwnedPaneIdentity struct {
-	Ref            corebackend.PaneRef
-	SessionID      string
-	SocketPath     string
-	WorkspaceLabel string
-	TerminalID     string
-	RepoKey        string
-	WorktreePath   string
-	CurrentPath    string
-	AgentID        string
-	AgentSession   *corebackend.AgentSessionRef
-}
-
-// NudgeTarget binds one no-wait agent prompt to the route, pane, terminal,
-// agent, and provider session that the caller revalidated.
-type NudgeTarget struct {
-	Ref          corebackend.PaneRef
-	SessionID    string
-	SocketPath   string
-	TerminalID   string
-	AgentID      string
-	AgentSession *corebackend.AgentSessionRef
-}
-
-// NudgePrompt is one fully preflighted no-wait agent prompt. Callers issue it
-// at most once after their final cooperative-state gate.
-type NudgePrompt func(context.Context) error
+type (
+	OwnedPaneIdentity = corebackend.OwnedPaneIdentity
+	NudgeTarget       = corebackend.NudgeTarget
+	NudgePrompt       = corebackend.NudgePrompt
+)
 
 type OwnedCloseRequest struct {
 	Target                 OwnedPaneIdentity

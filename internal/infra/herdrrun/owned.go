@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/errs"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -48,9 +49,7 @@ const (
 	xdgCacheEnv             = "XDG_CACHE_HOME"
 )
 
-// ErrOwnedSessionNotFound reports that no persisted owned-session admission
-// exists for the requested repository identity.
-var ErrOwnedSessionNotFound = errors.New("fanout-owned herdr session does not exist")
+var ErrOwnedSessionNotFound = corebackend.ErrOwnedSessionNotFound
 
 var (
 	errOwnedSupervisorNotRunning    = errors.New("herdr owned supervisor is not running; refusing automatic recovery without proof that prior operations are quiescent")

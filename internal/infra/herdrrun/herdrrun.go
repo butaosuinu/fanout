@@ -81,23 +81,17 @@ type binaryAdmission struct {
 	version string
 }
 
-// WaitStatus is the terminal outcome of a bounded snapshot wait.
-type WaitStatus string
-
-const (
-	WaitMatched   WaitStatus = "matched"
-	WaitTimedOut  WaitStatus = "timed_out"
-	WaitCancelled WaitStatus = "cancelled" //nolint:misspell // The published terminal-result contract uses this spelling.
-	WaitFailed    WaitStatus = "failed"
+type (
+	WaitStatus = corebackend.WaitStatus
+	WaitResult = corebackend.WaitResult
 )
 
-// WaitResult reports one of the four terminal wait outcomes. Panes contains
-// the last compatible snapshot only for matched and timed-out results.
-type WaitResult struct {
-	Status WaitStatus
-	Panes  []corebackend.LivePane
-	Err    error
-}
+const (
+	WaitMatched   = corebackend.WaitMatched
+	WaitTimedOut  = corebackend.WaitTimedOut
+	WaitCancelled = corebackend.WaitCancelled
+	WaitFailed    = corebackend.WaitFailed
+)
 
 // New constructs a herdr backend for one named session. socketPath may be
 // empty on the first probe; CheckAvailable resolves it through an explicit

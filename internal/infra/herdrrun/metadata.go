@@ -15,6 +15,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 // MetadataSource is the fixed reporter ID on every fanout report. Herdr lets
@@ -22,10 +24,7 @@ import (
 // replacing its own values and never another reporter's.
 const MetadataSource = "fanout"
 
-// MaxMetadataTokenValue is Herdr's per-value character limit after trimming and
-// control-character removal. Herdr truncates silently, so callers shorten values
-// themselves and keep the reported value and the sidebar identical.
-const MaxMetadataTokenValue = 80
+const MaxMetadataTokenValue = corebackend.MaxMetadataTokenValue
 
 // maxMetadataTokensPerReport is Herdr's per-report token cap.
 const maxMetadataTokensPerReport = 16
@@ -40,33 +39,11 @@ const MetadataReportBudget = 4 * commandTimeout
 
 var metadataTokenName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
-// MetadataToken is one entry of a fanout-owned token patch. An empty Value
-// clears the token: a report always writes fanout's complete token set for a
-// resource, so a reused workspace or pane never keeps a stale fanout value.
-type MetadataToken struct {
-	Name  string
-	Value string
-}
-
-// MetadataTarget is the exact workspace and pane identity that must be live
-// immediately before and after a report.
-type MetadataTarget struct {
-	WorkspaceID  string
-	Label        string
-	RepoKey      string
-	RepoRoot     string
-	CheckoutPath string
-	PaneID       string
-	TerminalID   string
-}
-
-// MetadataReport is one target's token patch. Either patch may be empty, which
-// skips that resource; a report with no tokens at all is rejected.
-type MetadataReport struct {
-	Target          MetadataTarget
-	WorkspaceTokens []MetadataToken
-	PaneTokens      []MetadataToken
-}
+type (
+	MetadataToken  = corebackend.MetadataToken
+	MetadataTarget = corebackend.MetadataTarget
+	MetadataReport = corebackend.MetadataReport
+)
 
 // ReportMetadata publishes display-only tokens for one launched child.
 func (s *OwnedSession) ReportMetadata(ctx context.Context, report MetadataReport) error {

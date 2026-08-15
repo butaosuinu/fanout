@@ -15,34 +15,11 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-type PaneProcess struct {
-	PID          int      `json:"pid"`
-	ParentPID    int      `json:"-"`
-	ProcessGroup int      `json:"-"`
-	Executable   string   `json:"-"`
-	Name         string   `json:"name"`
-	Argv         []string `json:"argv"`
-	Argv0        string   `json:"argv0"`
-	Cmdline      string   `json:"cmdline"`
-	CWD          string   `json:"cwd"`
-}
-
-type PaneProcessInfo struct {
-	PaneID                 string        `json:"pane_id"`
-	ShellPID               int           `json:"shell_pid"`
-	ForegroundProcessGroup int           `json:"foreground_process_group_id"`
-	ForegroundProcesses    []PaneProcess `json:"foreground_processes"`
-}
-
-type OwnedLaunchRoute struct {
-	GitCommonDir string
-	RuntimeDir   string
-	Session      string
-	SocketPath   string
-	LauncherPath string
-	EmitterPath  string
-	ControlPath  string
-}
+type (
+	PaneProcess      = corebackend.PaneProcess
+	PaneProcessInfo  = corebackend.PaneProcessInfo
+	OwnedLaunchRoute = corebackend.OwnedLaunchRoute
+)
 
 type paneProcessInfoEnvelope struct {
 	ID     string                 `json:"id"`
