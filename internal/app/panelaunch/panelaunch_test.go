@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
+	"github.com/butaosuinu/fanout/internal/infra/backendtest"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
@@ -31,72 +33,14 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-type successfulNonTmuxBackend struct {
-	launches []backend.LaunchRequest
-	closed   []backend.PaneRef
-}
-
-func (*successfulNonTmuxBackend) Name() backend.Name    { return backend.Herdr }
-func (*successfulNonTmuxBackend) CheckAvailable() error { return nil }
-func (b *successfulNonTmuxBackend) Launch(req backend.LaunchRequest) (backend.PaneRef, error) {
-	b.launches = append(b.launches, req)
-	return backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"}, nil
-}
-func (*successfulNonTmuxBackend) ReleaseStartGate(string) error { return nil }
-func (*successfulNonTmuxBackend) ListLive() ([]backend.LivePane, error) {
-	return nil, nil
-}
-func (*successfulNonTmuxBackend) Read(backend.PaneRef, int) (string, error) { return "", nil }
-func (*successfulNonTmuxBackend) SendLine(backend.PaneRef, string) error    { return nil }
-func (*successfulNonTmuxBackend) Focus(backend.PaneRef) error               { return nil }
-func (b *successfulNonTmuxBackend) Close(ref backend.PaneRef) error {
-	b.closed = append(b.closed, ref)
-	return nil
-}
-
-func (b *successfulNonTmuxBackend) CloseFresh(ref backend.PaneRef) error {
-	b.closed = append(b.closed, ref)
-	return nil
-}
-
-type testTmuxBackend struct {
-	*tmuxbackend.Backend
-	releasedGates []string
-}
-
-func newTestTmuxBackend() *testTmuxBackend {
-	return &testTmuxBackend{Backend: tmuxbackend.New()}
-}
-
-func (*testTmuxBackend) CloseOwned(req backend.CloseRequest) (backend.CloseResult, error) {
-	result, err := closePaneForCleanup(req.Ref.Pane, req.WorktreePath, req.ShellKey)
-	mapped := backend.CloseResult{Status: backend.CloseFailed, ContainerID: result.WindowID}
-	switch result.Status {
-	case backend.ClosePaneClosed:
-		mapped.Status = backend.CloseConfirmed
-	case backend.ClosePaneStale:
-		mapped.Status = backend.CloseStale
-	case backend.ClosePaneFailed:
-		mapped.Status = backend.CloseFailed
-	}
-	return mapped, err
-}
-
-func (*testTmuxBackend) CloseFresh(ref backend.PaneRef) error {
-	return closeFreshPane(ref.Pane)
-}
-
-// stampShellKey is the liveness-stamp seam. Routing the capability through it
-// lets a test fail the stamp without a live tmux server.
-var stampShellKey = tmuxrun.SetPaneShellKey
-
-func (*testTmuxBackend) StampPaneShellKey(paneID, shellKey string) error {
-	return stampShellKey(paneID, shellKey)
-}
-
-func (b *testTmuxBackend) ReleaseStartGate(gate string) error {
-	b.releasedGates = append(b.releasedGates, gate)
-	return nil
+// newNonTmuxBackend is the herdr-shaped fake the non-tmux launch tests use: it
+// can roll a fresh pane back but exposes no liveness stamp, so the strict
+// identity lane must fail closed against it.
+func newNonTmuxBackend() *backendtest.FreshCloserFake {
+	return backendtest.NewFreshCloser(
+		backendtest.WithName(backend.Herdr),
+		backendtest.WithPanes("w1:p1"),
+	)
 }
 
 func TestManualPromptWithBriefingActionPreservesTrailingMention(t *testing.T) {
@@ -239,7 +183,7 @@ func TestSplitAndDecorateSkipsTmuxForSuccessfulNonTmuxBackend(t *testing.T) {
 	installFakeTmux(t, "%unexpected")
 	calls := filepath.Join(t.TempDir(), "tmux.calls")
 	t.Setenv("TMUX_CALLS", calls)
-	runtimeBackend := &successfulNonTmuxBackend{}
+	runtimeBackend := newNonTmuxBackend()
 	launcher := &Launcher{
 		Backend: runtimeBackend,
 		Info:    &fanoutruntime.Info{Session: "herdr-session", Target: "w1", ProjectRoot: "/repo"},
@@ -250,8 +194,8 @@ func TestSplitAndDecorateSkipsTmuxForSuccessfulNonTmuxBackend(t *testing.T) {
 	if !ok || paneID != "w1:p1" {
 		t.Fatalf("splitAndDecorate() = (%q, %t), want (w1:p1, true)", paneID, ok)
 	}
-	if len(runtimeBackend.launches) != 1 || len(runtimeBackend.closed) != 0 {
-		t.Fatalf("backend calls = launches:%d closed:%v", len(runtimeBackend.launches), runtimeBackend.closed)
+	if launches, closed := runtimeBackend.Launches(), runtimeBackend.ClosedRefs(); len(launches) != 1 || len(closed) != 0 {
+		t.Fatalf("backend calls = launches:%d closed:%v", len(launches), closed)
 	}
 	if body, err := os.ReadFile(calls); err == nil && len(body) > 0 {
 		t.Fatalf("non-tmux launch invoked tmux:\n%s", body)
@@ -264,7 +208,7 @@ func TestSplitAndDecorateRejectsStrictIdentityForNonTmuxBackend(t *testing.T) {
 	installFakeTmux(t, "%unexpected")
 	calls := filepath.Join(t.TempDir(), "tmux.calls")
 	t.Setenv("TMUX_CALLS", calls)
-	runtimeBackend := &successfulNonTmuxBackend{}
+	runtimeBackend := newNonTmuxBackend()
 	var stderr bytes.Buffer
 	launcher := &Launcher{
 		Backend: runtimeBackend,
@@ -276,8 +220,8 @@ func TestSplitAndDecorateRejectsStrictIdentityForNonTmuxBackend(t *testing.T) {
 	if ok || paneID != "" {
 		t.Fatalf("splitAndDecorate(strict) = (%q, %t), want (empty, false)", paneID, ok)
 	}
-	if len(runtimeBackend.closed) != 1 || runtimeBackend.closed[0].Pane != "w1:p1" {
-		t.Fatalf("closed refs = %#v, want launched non-tmux pane cleanup", runtimeBackend.closed)
+	if closed := runtimeBackend.ClosedRefs(); len(closed) != 1 || closed[0].Pane != "w1:p1" {
+		t.Fatalf("closed refs = %#v, want launched non-tmux pane cleanup", closed)
 	}
 	if !strings.Contains(stderr.String(), "strict pane liveness keys are not supported by the herdr backend") {
 		t.Fatalf("stderr = %q, want strict non-tmux identity rejection", stderr.String())
@@ -671,17 +615,15 @@ func TestLaunchWithResultDryRunHasNoPaneID(t *testing.T) {
 
 func TestAttachWithResultReturnsExactPaneID(t *testing.T) {
 	installFakeExecutable(t, "claude")
-	installFakeTmux(t, "%314")
-	tmuxCalls := filepath.Join(t.TempDir(), "tmux-calls")
-	t.Setenv("TMUX_CALLS", tmuxCalls)
 	targetPath := t.TempDir()
 	cfg := &cliflags.Config{Agent: "claude"}
 	recorder := &captureStateRecorder{}
+	runtimeBackend := backendtest.NewTmux(backendtest.WithPanes("%314"))
 	launcher := &Launcher{
 		Cfg:         cfg,
 		Log:         log.NewWith(io.Discard, io.Discard, false),
 		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: targetPath},
-		Backend:     tmuxbackend.New(),
+		Backend:     runtimeBackend,
 		Recorder:    recorder,
 		Palette:     log.Palette{},
 		CommandName: "fanout",
@@ -706,25 +648,21 @@ func TestAttachWithResultReturnsExactPaneID(t *testing.T) {
 	if len(recorder.panes) != 1 || !strings.HasPrefix(recorder.panes[0].ShellKey, "shell-") {
 		t.Fatalf("recorded panes = %+v, want generated liveness key", recorder.panes)
 	}
-	body, err := os.ReadFile(tmuxCalls)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(body), "set-option -p -t %314 @fanout_shell_key "+recorder.panes[0].ShellKey) {
-		t.Fatalf("tmux calls = %q, want recorded liveness key stamp", body)
+	wantStamps := []backendtest.PaneValue{{PaneID: "%314", Value: recorder.panes[0].ShellKey}}
+	if got := runtimeBackend.PaneValues(backendtest.MethodStampPaneShellKey); !reflect.DeepEqual(got, wantStamps) {
+		t.Fatalf("liveness stamps = %+v, want %+v", got, wantStamps)
 	}
 }
 
 func TestAttachRecordsRecoveryRowWhenLivenessStampAndFreshCloseFail(t *testing.T) {
 	installFakeExecutable(t, "claude")
-	installFakeTmux(t, "%315")
-	stubPaneLivenessOps(t,
-		func(string, string) error { return fmt.Errorf("stamp failed") },
-		func(string) error { return fmt.Errorf("pane still live") },
-	)
 	targetPath := t.TempDir()
 	recorder := &captureStateRecorder{}
-	runtimeBackend := newTestTmuxBackend()
+	runtimeBackend := backendtest.NewLiveness(
+		backendtest.WithPanes("%315"),
+		backendtest.WithStampError(fmt.Errorf("stamp failed")),
+		backendtest.WithFreshCloseError(fmt.Errorf("pane still live")),
+	)
 	launcher := &Launcher{
 		Cfg:         &cliflags.Config{Agent: "claude"},
 		Log:         log.NewWith(io.Discard, io.Discard, false),
@@ -755,19 +693,17 @@ func TestAttachRecordsRecoveryRowWhenLivenessStampAndFreshCloseFail(t *testing.T
 	if got.PaneID != "%315" || got.Kind != state.PaneKindAttachedAgent || !strings.HasPrefix(got.ShellKey, "shell-") {
 		t.Fatalf("recovery pane = %+v, want keyed attached pane %%315", got)
 	}
-	if len(runtimeBackend.releasedGates) != 0 {
-		t.Fatalf("released gates = %v, want gate held while pane close is unconfirmed", runtimeBackend.releasedGates)
+	if gates := runtimeBackend.ReleasedGates(); len(gates) != 0 {
+		t.Fatalf("released gates = %v, want gate held while pane close is unconfirmed", gates)
 	}
 }
 
 func TestAttachReleasesStartGateAfterConfirmedFreshCleanup(t *testing.T) {
 	installFakeExecutable(t, "claude")
-	installFakeTmux(t, "%315")
-	stubPaneLivenessOps(t,
-		func(string, string) error { return fmt.Errorf("stamp failed") },
-		func(string) error { return nil },
+	runtimeBackend := backendtest.NewLiveness(
+		backendtest.WithPanes("%315"),
+		backendtest.WithStampError(fmt.Errorf("stamp failed")),
 	)
-	runtimeBackend := newTestTmuxBackend()
 	launcher := &Launcher{
 		Cfg:         &cliflags.Config{Agent: "claude"},
 		Log:         log.NewWith(io.Discard, io.Discard, false),
@@ -790,17 +726,13 @@ func TestAttachReleasesStartGateAfterConfirmedFreshCleanup(t *testing.T) {
 	if ok || result.PaneID != "" {
 		t.Fatalf("AttachWithResult() = %+v, %v, want failed launch with confirmed cleanup", result, ok)
 	}
-	if got := runtimeBackend.releasedGates; len(got) != 1 || got[0] != "cleanup-gate" {
+	if got := runtimeBackend.ReleasedGates(); len(got) != 1 || got[0] != "cleanup-gate" {
 		t.Fatalf("released gates = %v, want [cleanup-gate]", got)
 	}
 }
 
 func TestAttachRecordsRecoveryRowWhenCodexStartupAndCloseFail(t *testing.T) {
 	installFakeExecutable(t, "codex")
-	installFakeTmux(t, "%316")
-	stubClosePaneForCleanup(t, func(string, string, string) (backend.ClosePaneResult, error) {
-		return backend.ClosePaneResult{Status: backend.ClosePaneFailed}, fmt.Errorf("pane still live")
-	})
 	targetPath := t.TempDir()
 	statusPath := filepath.Join(t.TempDir(), "codex-status.json")
 	if err := codexapp.WriteFailedStatus(statusPath, fmt.Errorf("startup failed")); err != nil {
@@ -808,10 +740,16 @@ func TestAttachRecordsRecoveryRowWhenCodexStartupAndCloseFail(t *testing.T) {
 	}
 	recorder := &captureStateRecorder{}
 	launcher := &Launcher{
-		Cfg:         &cliflags.Config{Agent: "codex"},
-		Log:         log.NewWith(io.Discard, io.Discard, false),
-		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: targetPath},
-		Backend:     newTestTmuxBackend(),
+		Cfg:  &cliflags.Config{Agent: "codex"},
+		Log:  log.NewWith(io.Discard, io.Discard, false),
+		Info: &fanoutruntime.Info{Target: "%caller", ProjectRoot: targetPath},
+		Backend: backendtest.NewTmux(
+			backendtest.WithPanes("%316"),
+			backendtest.WithOwnedClose(
+				backend.CloseResult{Status: backend.CloseFailed},
+				fmt.Errorf("pane still live"),
+			),
+		),
 		Recorder:    recorder,
 		CommandName: "fanout",
 	}
@@ -839,14 +777,13 @@ func TestAttachRecordsRecoveryRowWhenCodexStartupAndCloseFail(t *testing.T) {
 func TestShellRecordsRecoveryRowWhenLivenessStampAndFreshCloseFail(t *testing.T) {
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init")
+	// shellTmux splits through tmuxrun itself, so the pane id still comes from a
+	// tmux shim; only the liveness stamp and the rollback close are faked here.
 	installFakeTmux(t, "%317")
-	stubPaneLivenessOps(t,
-		func(string, string) error { return fmt.Errorf("stamp failed") },
-		func(string) error { return fmt.Errorf("pane still live") },
-	)
+	stubCloseFreshPane(t, func(string) error { return fmt.Errorf("pane still live") })
 	launcher := &Launcher{
 		Info:    &fanoutruntime.Info{Target: "%caller", ProjectRoot: repo},
-		Backend: newTestTmuxBackend(),
+		Backend: backendtest.NewLiveness(backendtest.WithStampError(fmt.Errorf("stamp failed"))),
 	}
 
 	err := launcher.Shell(ShellRequest{TargetPath: repo, Root: true})
@@ -948,16 +885,10 @@ func TestCodexTeamStartupFailureTearsDownPaneAndWorktree(t *testing.T) {
 	gitCmdTest(t, repo, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.invalid", "commit", "-m", "initial")
 
 	installFakeExecutable(t, "codex")
-	installFakeTmux(t, "%271")
-	tmuxCalls := filepath.Join(t.TempDir(), "tmux-calls")
-	t.Setenv("TMUX_CALLS", tmuxCalls)
-	var closedPaneID, closedWorktreePath, closedShellKey string
-	stubClosePaneForCleanup(t, func(paneID, worktreePath, shellKey string) (backend.ClosePaneResult, error) {
-		closedPaneID = paneID
-		closedWorktreePath = worktreePath
-		closedShellKey = shellKey
-		return backend.ClosePaneResult{Status: backend.ClosePaneClosed, WindowID: "@7"}, nil
-	})
+	runtimeBackend := backendtest.NewTmux(
+		backendtest.WithPanes("%271"),
+		backendtest.WithOwnedClose(backend.CloseResult{Status: backend.CloseConfirmed, ContainerID: "@7"}, nil),
+	)
 
 	cfg := &cliflags.Config{ParentRef: "100", Agent: "codex", BaseBranch: "main", NoRefresh: true}
 	teamCtx := &briefing.TeamContext{ParentLabel: "#100", DBPath: "/tmp/team.db"}
@@ -972,7 +903,7 @@ func TestCodexTeamStartupFailureTearsDownPaneAndWorktree(t *testing.T) {
 		Cfg:         cfg,
 		Log:         log.NewWith(io.Discard, &stderr, false),
 		Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: repo},
-		Backend:     newTestTmuxBackend(),
+		Backend:     runtimeBackend,
 		Palette:     log.Palette{},
 		CommandName: "fanout",
 	}
@@ -985,18 +916,20 @@ func TestCodexTeamStartupFailureTearsDownPaneAndWorktree(t *testing.T) {
 	if _, err := os.Stat(req.Worktree.WorktreePath); !os.IsNotExist(err) {
 		t.Fatalf("worktree still exists after failed startup: %s (%v)", req.Worktree.WorktreePath, err)
 	}
-	if closedPaneID != "%271" || closedWorktreePath != req.Worktree.WorktreePath {
-		t.Fatalf("safe close identity = (%q, %q), want (%q, %q)", closedPaneID, closedWorktreePath, "%271", req.Worktree.WorktreePath)
+	closes := runtimeBackend.CloseRequests()
+	if len(closes) != 1 {
+		t.Fatalf("identity-checked closes = %+v, want exactly one", closes)
 	}
-	if !strings.HasPrefix(closedShellKey, "shell-") {
-		t.Fatalf("safe close shell key = %q, want generated pane key", closedShellKey)
+	closed := closes[0]
+	if closed.Ref.Pane != "%271" || closed.WorktreePath != req.Worktree.WorktreePath {
+		t.Fatalf("safe close identity = (%q, %q), want (%q, %q)", closed.Ref.Pane, closed.WorktreePath, "%271", req.Worktree.WorktreePath)
 	}
-	tmuxBody, err := os.ReadFile(tmuxCalls)
-	if err != nil {
-		t.Fatal(err)
+	if !strings.HasPrefix(closed.ShellKey, "shell-") {
+		t.Fatalf("safe close shell key = %q, want generated pane key", closed.ShellKey)
 	}
-	if !strings.Contains(string(tmuxBody), "set-option -p -t %271 @fanout_shell_key "+closedShellKey) {
-		t.Fatalf("tmux calls = %q, want generated liveness key stamp", tmuxBody)
+	wantStamps := []backendtest.PaneValue{{PaneID: "%271", Value: closed.ShellKey}}
+	if got := runtimeBackend.PaneValues(backendtest.MethodStampPaneShellKey); !reflect.DeepEqual(got, wantStamps) {
+		t.Fatalf("liveness stamps = %+v, want %+v", got, wantStamps)
 	}
 	branch := exec.Command("git", "branch", "--list", req.BranchName)
 	branch.Dir = repo
@@ -1015,17 +948,21 @@ func TestFailCleanupPreservesWorktreeWhenPaneCloseCannotBeConfirmed(t *testing.T
 		ProjectRoot:  t.TempDir(),
 		WorktreePath: worktreePath,
 	}}
-	stubClosePaneForCleanup(t, func(paneID, expectedWorktreePath, shellKey string) (backend.ClosePaneResult, error) {
-		if paneID != "%271" || expectedWorktreePath != worktreePath || shellKey != "" {
-			t.Fatalf("safe close identity = (%q, %q, %q)", paneID, expectedWorktreePath, shellKey)
-		}
-		return backend.ClosePaneResult{Status: backend.ClosePaneFailed}, fmt.Errorf("pane still live")
-	})
+	runtimeBackend := backendtest.NewTmux(
+		backendtest.WithOwnedClose(backend.CloseResult{Status: backend.CloseFailed}, fmt.Errorf("pane still live")),
+	)
 
-	if failCleanup(newTestTmuxBackend(), "#101", "%caller", "%271", worktreePath, "", &prepared, nil) {
+	if failCleanup(runtimeBackend, "#101", "%caller", "%271", worktreePath, "", &prepared, nil) {
 		t.Fatal("failCleanup() = true, want unconfirmed pane close")
 	}
 
+	wantCloses := []backend.CloseRequest{{
+		Ref:          backend.PaneRef{Backend: backend.Tmux, Pane: "%271"},
+		WorktreePath: worktreePath,
+	}}
+	if got := runtimeBackend.CloseRequests(); !reflect.DeepEqual(got, wantCloses) {
+		t.Fatalf("safe close identity = %+v, want %+v", got, wantCloses)
+	}
 	if _, err := os.Stat(worktreePath); err != nil {
 		t.Fatalf("worktree was removed after unconfirmed pane close: %v", err)
 	}
@@ -1771,23 +1708,13 @@ func installClaudeVersionExecutable(t *testing.T, version string) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func stubClosePaneForCleanup(t *testing.T, fn func(string, string, string) (backend.ClosePaneResult, error)) {
+// stubCloseFreshPane replaces the shell lane's tmux-only rollback close. The
+// agent lanes go through the backend's FreshCloser capability instead.
+func stubCloseFreshPane(t *testing.T, fn func(string) error) {
 	t.Helper()
-	original := closePaneForCleanup
-	closePaneForCleanup = fn
-	t.Cleanup(func() { closePaneForCleanup = original })
-}
-
-func stubPaneLivenessOps(t *testing.T, set func(string, string) error, closeFresh func(string) error) {
-	t.Helper()
-	originalSet := stampShellKey
-	originalCloseFresh := closeFreshPane
-	stampShellKey = set
-	closeFreshPane = closeFresh
-	t.Cleanup(func() {
-		stampShellKey = originalSet
-		closeFreshPane = originalCloseFresh
-	})
+	original := closeFreshPane
+	closeFreshPane = fn
+	t.Cleanup(func() { closeFreshPane = original })
 }
 
 func installFakeTmux(t *testing.T, paneID string) {

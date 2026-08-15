@@ -10,6 +10,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/infra/backendtest"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
@@ -131,7 +132,8 @@ func TestExecutePlanPreservesCreatedPaneIDsOnFailFastError(t *testing.T) {
 	gitCmdTest(t, repo, "config", "user.name", "fanout test")
 	gitCmdTest(t, repo, "config", "user.email", "fanout@example.com")
 	gitCmdTest(t, repo, "commit", "--allow-empty", "-m", "initial")
-	installFakeIssueLaunchCommands(t)
+	installFakeIssueLaunchAgent(t)
+	runtimeBackend := backendtest.NewTmux(backendtest.WithPanes("%701", "%702", "%703"))
 
 	cfg := &cliflags.Config{
 		Agent:      "claude",
@@ -154,7 +156,7 @@ func TestExecutePlanPreservesCreatedPaneIDsOnFailFastError(t *testing.T) {
 		cfg,
 		log.NewWith(io.Discard, io.Discard, false),
 		info,
-		tmuxbackend.New(),
+		runtimeBackend,
 		nil,
 		targets,
 		nil,
@@ -178,29 +180,15 @@ func TestExecutePlanPreservesCreatedPaneIDsOnFailFastError(t *testing.T) {
 	}
 }
 
-func installFakeIssueLaunchCommands(t *testing.T) {
+// installFakeIssueLaunchAgent puts a no-op claude on PATH so the launch lane's
+// executable resolution succeeds. The pane runtime is faked in process, so no
+// tmux shim is needed; git must stay reachable for the worktree steps, hence
+// the prepend.
+func installFakeIssueLaunchAgent(t *testing.T) {
 	t.Helper()
 	binDir := t.TempDir()
-	statePath := filepath.Join(t.TempDir(), "tmux-splits")
-	t.Setenv("FANOUT_TEST_TMUX_STATE", statePath)
-	tmuxScript := `#!/bin/sh
-if [ "$1" = "split-window" ]; then
-  count=0
-  if [ -f "$FANOUT_TEST_TMUX_STATE" ]; then
-    count=$(cat "$FANOUT_TEST_TMUX_STATE")
-  fi
-  count=$((count + 1))
-  printf '%s\n' "$count" > "$FANOUT_TEST_TMUX_STATE"
-  printf '%%%s\n' "$((700 + count))"
-fi
-`
-	for name, body := range map[string]string{
-		"claude": "#!/bin/sh\nexit 0\n",
-		"tmux":   tmuxScript,
-	} {
-		if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o755); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
