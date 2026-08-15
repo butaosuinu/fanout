@@ -36,13 +36,152 @@ load helpers
   assert_status_golden scenario-herdr-status
 }
 
+# --- Herdr lifecycle gates --------------------------------------------------
+#
+# Every Herdr workspace / worktree / agent mutation sits behind a fanout-owned
+# session, whose admission needs a live server socket and a live supervisor
+# lock. Black-box runs have neither, so these cases pin the offline half: how
+# far each command gets, and that it issues no herdr command on the way.
+
+# Copy an in-tree Herdr fixture into the per-test tmpdir and rewrite the
+# placeholder repository paths in its state.json to the paths the git shim
+# reports for that copy. herdrRepoKey / herdrRepoRoot are compared against
+# `git rev-parse` output after symlink resolution, so both must be the
+# physical path (BATS_TEST_TMPDIR lives under a symlinked /var on macOS).
+materialize_herdr_fixture() {
+  local name="$1"
+  local source="$TESTS_DIR/fixtures/$name"
+  local dir="$BATS_TEST_TMPDIR/fixture"
+  local root common
+
+  cp -R "$source" "$dir"
+  export FIXTURE_DIR="$dir"
+  mkdir -p "$dir/project_root/.fixture-git-common"
+  root="$(cd "$dir/project_root" && pwd -P)"
+  common="$(cd "$dir/project_root/.fixture-git-common" && pwd -P)"
+  sed -e "s|/tmp/herdr-status-repo/.git|$common|" \
+      -e "s|/tmp/herdr-status-repo|$root|" \
+      -e "s|/tmp/herdr-status-child|$root/child|" \
+      "$source/project_root/.fanout/state.json" > "$root/.fanout/state.json"
+  export HERDR_SHIM_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
+}
+
+# Assert the herdr shim logged exactly these argv lines, in order. With no
+# arguments it asserts that fanout issued no herdr command at all.
+assert_herdr_argv() {
+  local expected="" actual
+  if [[ $# -gt 0 ]]; then
+    printf -v expected '%s\n' "$@"
+    expected="${expected%$'\n'}"
+  fi
+  actual="$(cat "$HERDR_SHIM_LOG" 2>/dev/null || true)"
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'herdr argv log mismatch\n--- want ---\n%s\n--- got ---\n%s\n' \
+      "$expected" "$actual" >&2
+    return 1
+  fi
+}
+
+@test "scenario-herdr-status: reporting a Herdr row issues no herdr command" {
+  use_fixture scenario-herdr-status
+  export HERDR_SHIM_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
+  run_fanout_status 524
+  assert_success
+  assert_herdr_argv
+}
+
 @test "scenario-herdr-cleanup-incomplete: cleanup rejects legacy identity before mutation" {
   use_fixture scenario-herdr-cleanup-incomplete
   cp -R "$FIXTURE_DIR" "$BATS_TEST_TMPDIR/fixture"
   export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  export HERDR_SHIM_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
   run_fanout 524 --cleanup
   [ "$status" -eq 1 ]
   assert_golden scenario-herdr-cleanup-incomplete cleanup
+  assert_herdr_argv
+}
+
+# scenario-herdr-owned-absent carries a complete Herdr identity whose repo key
+# and repo root match the checkout, so --cleanup / --close / --merge get past
+# every offline identity check and stop only because no fanout-owned Herdr
+# server exists. The mutation each command would issue next sits directly
+# behind that gate, so a reordering shows up here as a non-empty argv log.
+
+@test "scenario-herdr-owned-absent: cleanup stops at the owned-session gate" {
+  materialize_herdr_fixture scenario-herdr-owned-absent
+  run_fanout 524 --cleanup
+  [ "$status" -eq 1 ]
+  assert_golden scenario-herdr-owned-absent cleanup
+  assert_herdr_argv
+}
+
+@test "scenario-herdr-owned-absent: close stops at the owned-session gate" {
+  materialize_herdr_fixture scenario-herdr-owned-absent
+  run_fanout 524 --close 528
+  [ "$status" -eq 1 ]
+  assert_golden scenario-herdr-owned-absent close
+  assert_herdr_argv
+}
+
+@test "scenario-herdr-owned-absent: merge stops at the owned-session gate" {
+  materialize_herdr_fixture scenario-herdr-owned-absent
+  run_fanout 524 --merge 528
+  [ "$status" -eq 1 ]
+  assert_golden scenario-herdr-owned-absent merge
+  assert_herdr_argv
+}
+
+# --- herdr shim contract ----------------------------------------------------
+#
+# The cases above assert an empty argv log, so they only mean something if a
+# non-empty one fails and if the shim can in fact answer a mutation verb.
+# These pin both, and cover the verbs no black-box run reaches on its own.
+
+@test "herdr shim: a recorded command fails the empty-argv assertion" {
+  export HERDR_SHIM_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
+  printf 'workspace close workspace-528\n' > "$HERDR_SHIM_LOG"
+  run assert_herdr_argv
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"workspace close workspace-528"* ]]
+}
+
+@test "herdr shim: a mutation verb answers from its fixture and logs its argv" {
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  export HERDR_SHIM_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
+  mkdir -p "$FIXTURE_DIR"
+  printf '{"id":"cli:workspace:create"}\n' > "$FIXTURE_DIR/herdr-workspace-create.json"
+  run herdr --session fixture-session workspace create --cwd /repo --label child --no-focus
+  assert_success
+  [ "$output" = '{"id":"cli:workspace:create"}' ]
+  assert_herdr_argv "--session fixture-session workspace create --cwd /repo --label child --no-focus"
+}
+
+@test "herdr shim: the .exit override replays a rejection envelope" {
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  mkdir -p "$FIXTURE_DIR"
+  printf '{"error":{"code":"worktree_busy"}}\n' > "$FIXTURE_DIR/herdr-worktree-remove.json"
+  printf 'herdr: worktree is busy\n' > "$FIXTURE_DIR/herdr-worktree-remove.err"
+  printf '3\n' > "$FIXTURE_DIR/herdr-worktree-remove.exit"
+  run bash -c 'herdr worktree remove --workspace workspace-528 --json 2>&1'
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"herdr: worktree is busy"* ]]
+  [[ "$output" == *'"worktree_busy"'* ]]
+}
+
+@test "herdr shim: an unlisted verb is an error, not a silent success" {
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  mkdir -p "$FIXTURE_DIR"
+  run bash -c 'herdr session teleport 2>&1'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"unsupported command: session teleport"* ]]
+}
+
+@test "herdr shim: a verb without a fixture names the file it wanted" {
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  mkdir -p "$FIXTURE_DIR"
+  run bash -c 'herdr pane read %1 --source visible --format text 2>&1'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"missing fixture $FIXTURE_DIR/herdr-pane-read.json"* ]]
 }
 
 @test "scenario-status-mixed table: PR diff stats render in a human-readable table" {

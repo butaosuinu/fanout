@@ -323,7 +323,7 @@ lint-go: $(GOLANGCI_LINT_BIN)
 	$(GO_CACHE_ENV) GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" "$(GOLANGCI_LINT_BIN)" run
 
 lint-shell:
-	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bats/helpers.bash codex/skills/post-work-review/scripts/mark-reviewed-head.sh codex/skills/pr-watch/scripts/watch-pr.sh scripts/agent-hooks-lib.sh scripts/agent-push-gate.sh scripts/agent-stop-gate.sh scripts/agent-format-on-edit.sh scripts/agent-complexity-on-edit.sh scripts/complexity-branch.sh
+	shellcheck tests/bin/gh tests/bin/tmux tests/bin/git tests/bin/herdr tests/bats/helpers.bash codex/skills/post-work-review/scripts/mark-reviewed-head.sh codex/skills/pr-watch/scripts/watch-pr.sh scripts/agent-hooks-lib.sh scripts/agent-push-gate.sh scripts/agent-stop-gate.sh scripts/agent-format-on-edit.sh scripts/agent-complexity-on-edit.sh scripts/complexity-branch.sh
 
 fmt: $(GOLANGCI_LINT_BIN)
 	$(GO_CACHE_ENV) GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" "$(GOLANGCI_LINT_BIN)" fmt

@@ -1,0 +1,1 @@
+[err ] #528: Herdr lifecycle preflight failed; preserving workspace, worktree, and state: open owned Herdr session: fanout-owned herdr session does not exist

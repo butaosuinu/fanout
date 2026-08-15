@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "524",
+      "runtimeParent": "524",
+      "issueNum": 528,
+      "slug": "herdr-agent-start-528",
+      "branchName": "fanout/herdr-agent-start-528",
+      "backend": "herdr",
+      "paneId": "workspace-528:p1",
+      "herdrWorkspaceId": "workspace-528",
+      "herdrWorkspaceLabel": "fanout-worktree-528-nonce",
+      "herdrTerminalId": "terminal-528",
+      "herdrRepoKey": "/tmp/herdr-status-repo/.git",
+      "herdrRepoRoot": "/tmp/herdr-status-repo",
+      "herdrBranchCreated": true,
+      "herdrAgentId": "fanout-agent-528",
+      "herdrAgentSession": {
+        "source": "herdr:claude",
+        "agent": "claude",
+        "kind": "id",
+        "value": "conversation-528"
+      },
+      "herdrSession": "fixture-session",
+      "herdrSocketPath": "/tmp/herdr-fixture.sock",
+      "reported_state": "working",
+      "state_refinement": true,
+      "agent": "claude",
+      "displayName": "herdr-agent-start-528",
+      "worktreePath": "/tmp/herdr-status-child",
+      "createdAt": "2026-08-05T00:00:00Z"
+    }
+  ]
+}
