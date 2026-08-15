@@ -18,18 +18,18 @@ import (
 )
 
 type HerdrRestartRuntime interface {
-	LaunchRoute() (herdrrun.OwnedLaunchRoute, error)
+	LaunchRoute() (backend.OwnedLaunchRoute, error)
 	PrepareWorkloadEnvironment(string, []string) (string, int, error)
-	WaitRestoredPanes(context.Context, time.Duration, func([]backend.LivePane) bool) herdrrun.WaitResult
+	WaitRestoredPanes(context.Context, time.Duration, func([]backend.LivePane) bool) backend.WaitResult
 	IssueRestartResume(
 		context.Context,
 		string,
 		string,
 		time.Time,
-		func(herdrrun.PaneProcessInfo, []backend.LivePane) error,
+		func(backend.PaneProcessInfo, []backend.LivePane) error,
 		func() error,
 	) error
-	ObserveRestartResume(context.Context, string) (herdrrun.PaneProcessInfo, []backend.LivePane, error)
+	ObserveRestartResume(context.Context, string) (backend.PaneProcessInfo, []backend.LivePane, error)
 }
 
 type herdrRestartRow struct {
@@ -74,7 +74,7 @@ func resumePendingHerdrRestartRows(
 	locked *state.LockedStore,
 	journal *state.LockedHerdrIntents,
 	restarted HerdrRestartRuntime,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	rows []herdrRestartRow,
 	totalTimeout time.Duration,
 	deadline time.Time,
@@ -92,7 +92,7 @@ func resumePendingHerdrRestartRows(
 		if err != nil {
 			return err
 		}
-		if wait.Status == herdrrun.WaitTimedOut {
+		if wait.Status == backend.WaitTimedOut {
 			return retireHerdrRestartRows(ctx, locked, journal, restarted, route, rows, deadline)
 		}
 		rows, err = processObservedHerdrRestartRows(ctx, locked, journal, restarted, route, rows, wait.Panes, deadline)
@@ -111,10 +111,10 @@ func observePendingHerdrRestartRows(
 	totalTimeout time.Duration,
 	deadline time.Time,
 	first bool,
-) (herdrrun.WaitResult, bool, error) {
+) (backend.WaitResult, bool, error) {
 	waitTimeout, ok := nextHerdrRestartWaitTimeout(totalTimeout, deadline, first)
 	if !ok {
-		return herdrrun.WaitResult{}, false, nil
+		return backend.WaitResult{}, false, nil
 	}
 	wait, err := waitForHerdrRestartRows(ctx, restarted, rows, waitTimeout)
 	if err != nil {
@@ -139,14 +139,14 @@ func waitForHerdrRestartRows(
 	restarted HerdrRestartRuntime,
 	rows []herdrRestartRow,
 	totalTimeout time.Duration,
-) (herdrrun.WaitResult, error) {
+) (backend.WaitResult, error) {
 	waitForCandidate := slices.ContainsFunc(rows, func(row herdrRestartRow) bool {
 		return resumableSavedCodex(row.saved)
 	})
 	wait := restarted.WaitRestoredPanes(ctx, totalTimeout, func(live []backend.LivePane) bool {
 		return !waitForCandidate || anyHerdrRestartRouteObserved(rows, live)
 	})
-	if wait.Status == herdrrun.WaitFailed || wait.Status == herdrrun.WaitCancelled {
+	if wait.Status == backend.WaitFailed || wait.Status == backend.WaitCancelled {
 		return wait, fmt.Errorf("wait for restarted Herdr panes: %w", wait.Err)
 	}
 	return wait, nil
@@ -157,7 +157,7 @@ func retireUnsupportedHerdrRestartRows(
 	locked *state.LockedStore,
 	journal *state.LockedHerdrIntents,
 	restarted HerdrRestartRuntime,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	rows []herdrRestartRow,
 	deadline time.Time,
 ) ([]herdrRestartRow, error) {
@@ -181,7 +181,7 @@ func processObservedHerdrRestartRows(
 	locked *state.LockedStore,
 	journal *state.LockedHerdrIntents,
 	restarted HerdrRestartRuntime,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	rows []herdrRestartRow,
 	live []backend.LivePane,
 	deadline time.Time,
@@ -208,7 +208,7 @@ func retireHerdrRestartRows(
 	locked *state.LockedStore,
 	journal *state.LockedHerdrIntents,
 	restarted HerdrRestartRuntime,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	rows []herdrRestartRow,
 	deadline time.Time,
 ) error {
@@ -431,7 +431,7 @@ func processRestartedHerdrRow(
 	locked *state.LockedStore,
 	journal *state.LockedHerdrIntents,
 	restarted HerdrRestartRuntime,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	row herdrRestartRow,
 	candidate herdrRestartCandidate,
 	eligible bool,
@@ -513,7 +513,7 @@ func herdrResumeIntentTargetsRow(intent state.HerdrIntent, pane state.Pane) bool
 func prepareHerdrResumeIntent(
 	journal *state.LockedHerdrIntents,
 	restarted HerdrRestartRuntime,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	candidate herdrRestartCandidate,
 	deadline time.Time,
 ) (state.HerdrIntent, error) {
@@ -577,10 +577,10 @@ func startRestartedCodex(
 	ctx context.Context,
 	restarted HerdrRestartRuntime,
 	journal *state.LockedHerdrIntents,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	intent *state.HerdrIntent,
 ) error {
-	preflight := func(info herdrrun.PaneProcessInfo, panes []backend.LivePane) error {
+	preflight := func(info backend.PaneProcessInfo, panes []backend.LivePane) error {
 		return preflightRestartedCodex(info, panes, *intent, route)
 	}
 	markIssued := func() error {
@@ -599,10 +599,10 @@ func startRestartedCodex(
 }
 
 func preflightRestartedCodex(
-	info herdrrun.PaneProcessInfo,
+	info backend.PaneProcessInfo,
 	panes []backend.LivePane,
 	intent state.HerdrIntent,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 ) error {
 	if err := verifyHerdrLauncherProcess(info, intent, route); err != nil {
 		return err

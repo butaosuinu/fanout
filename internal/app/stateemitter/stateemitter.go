@@ -19,7 +19,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/errs"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -57,7 +56,7 @@ type RuntimeTarget struct {
 // changing.
 type Observation struct {
 	Panes        []backend.LivePane
-	ProcessInfo  herdrrun.PaneProcessInfo
+	ProcessInfo  backend.PaneProcessInfo
 	ProcessError error
 }
 

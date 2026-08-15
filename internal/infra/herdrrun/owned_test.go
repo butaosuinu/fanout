@@ -351,7 +351,7 @@ func (h *ownedHarness) backend() *Backend {
 	return b
 }
 
-func (h *ownedHarness) target() OwnedPaneIdentity {
+func (h *ownedHarness) target() corebackend.OwnedPaneIdentity {
 	h.t.Helper()
 	panes, err := h.session.Backend().ListLive()
 	if err != nil {
@@ -359,7 +359,7 @@ func (h *ownedHarness) target() OwnedPaneIdentity {
 	}
 	for _, pane := range panes {
 		if pane.Ref.Pane == "w2:p1" {
-			return OwnedPaneIdentity{
+			return corebackend.OwnedPaneIdentity{
 				Ref: pane.Ref, SessionID: pane.SessionID, SocketPath: pane.SocketPath,
 				WorkspaceLabel: h.nonce, TerminalID: pane.TerminalID, RepoKey: pane.RepoKey,
 				WorktreePath: pane.WorktreePath, CurrentPath: pane.CurrentPath,
@@ -368,10 +368,10 @@ func (h *ownedHarness) target() OwnedPaneIdentity {
 		}
 	}
 	h.t.Fatal("owned child pane not found")
-	return OwnedPaneIdentity{}
+	return corebackend.OwnedPaneIdentity{}
 }
 
-func (h *ownedHarness) closeRequest(target OwnedPaneIdentity) OwnedCloseRequest {
+func (h *ownedHarness) closeRequest(target corebackend.OwnedPaneIdentity) OwnedCloseRequest {
 	h.t.Helper()
 	marker := worktreeOwnershipMarker{
 		Nonce: h.nonce, WorkspaceID: target.Ref.Workspace, RepoKey: target.RepoKey,
@@ -412,7 +412,7 @@ func mutateSnapshot(source string, mutate func(*snapshotJSON)) string {
 	return string(data)
 }
 
-func agentPromptResponse(target OwnedPaneIdentity, mutate func(*agentJSON)) []byte {
+func agentPromptResponse(target corebackend.OwnedPaneIdentity, mutate func(*agentJSON)) []byte {
 	focused := false
 	revision := uint64(3)
 	name := target.AgentID
@@ -453,7 +453,7 @@ func TestOwnedSessionNudgeAllowsUnreportedAgentSession(t *testing.T) {
 		}
 		return agentPromptResponse(target, nil), nil
 	}
-	nudgeTarget := NudgeTarget{
+	nudgeTarget := corebackend.NudgeTarget{
 		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
 		TerminalID: target.TerminalID, AgentID: target.AgentID,
 	}
@@ -471,7 +471,7 @@ func TestPreparedNudgeIssuesOnlyPromptAfterPreparation(t *testing.T) {
 		}
 		return agentPromptResponse(target, nil), nil
 	}
-	nudgeTarget := NudgeTarget{
+	nudgeTarget := corebackend.NudgeTarget{
 		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
 		TerminalID: target.TerminalID, AgentID: target.AgentID, AgentSession: target.AgentSession,
 	}
@@ -546,8 +546,8 @@ func TestOpenOwnedMissingSessionIsReadOnly(t *testing.T) {
 		GitCommonDir: commonDir,
 		RuntimeBase:  runtimeBase,
 	})
-	if !errors.Is(err, ErrOwnedSessionNotFound) {
-		t.Fatalf("OpenOwned() error = %v, want ErrOwnedSessionNotFound", err)
+	if !errors.Is(err, corebackend.ErrOwnedSessionNotFound) {
+		t.Fatalf("OpenOwned() error = %v, want corebackend.ErrOwnedSessionNotFound", err)
 	}
 	if _, statErr := os.Lstat(runtimeBase); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("OpenOwned() created runtime path: %v", statErr)
@@ -1028,12 +1028,12 @@ func TestOwnedBindingsRejectForeignRouteAndImmutableTargetReplacement(t *testing
 	baseline := len(h.fake.commands)
 	foreign := target
 	foreign.SocketPath = filepath.Join(h.root, "foreign.sock")
-	if _, err := h.session.Backend().BindOwnedTarget(foreign); !errors.Is(err, ErrOwnedIdentityMismatch) {
+	if _, err := h.session.Backend().BindOwnedTarget(foreign); !errors.Is(err, corebackend.ErrOwnedIdentityMismatch) {
 		t.Fatalf("BindOwnedTarget(foreign) error = %v", err)
 	}
 	foreignClose := closeRequest
 	foreignClose.Target = foreign
-	if _, err := h.session.Backend().BindOwnedClose(foreignClose); !errors.Is(err, ErrOwnedIdentityMismatch) {
+	if _, err := h.session.Backend().BindOwnedClose(foreignClose); !errors.Is(err, corebackend.ErrOwnedIdentityMismatch) {
 		t.Fatalf("BindOwnedClose(foreign) error = %v", err)
 	}
 	if len(h.fake.commands) != baseline {
@@ -1062,7 +1062,7 @@ func TestOwnedBindingsRejectForeignRouteAndImmutableTargetReplacement(t *testing
 		},
 	}
 	for index, call := range calls {
-		if callErr := call(); !errors.Is(callErr, ErrOwnedIdentityMismatch) {
+		if callErr := call(); !errors.Is(callErr, corebackend.ErrOwnedIdentityMismatch) {
 			t.Errorf("immutable operation %d error = %v", index, callErr)
 		}
 	}
@@ -1122,7 +1122,7 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 	if err := bound.SendLine(target.Ref, "hello"); err != nil {
 		t.Fatal(err)
 	}
-	nudgeTarget := NudgeTarget{
+	nudgeTarget := corebackend.NudgeTarget{
 		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
 		TerminalID: target.TerminalID, AgentID: target.AgentID, AgentSession: target.AgentSession,
 	}
@@ -1141,22 +1141,22 @@ func TestBoundOwnedBackendReportsGenericUnavailableMethodErrors(t *testing.T) {
 	tests := []struct {
 		name   string
 		method string
-		call   func(*Backend, OwnedPaneIdentity) error
+		call   func(*Backend, corebackend.OwnedPaneIdentity) error
 	}{
 		{
 			name: "read", method: "pane.read",
-			call: func(bound *Backend, target OwnedPaneIdentity) error {
+			call: func(bound *Backend, target corebackend.OwnedPaneIdentity) error {
 				_, err := bound.Read(target.Ref, 1)
 				return err
 			},
 		},
-		{name: "send", method: "agent.prompt", call: func(bound *Backend, target OwnedPaneIdentity) error {
+		{name: "send", method: "agent.prompt", call: func(bound *Backend, target corebackend.OwnedPaneIdentity) error {
 			return bound.SendLine(target.Ref, "hello")
 		}},
-		{name: "focus", method: "agent.focus", call: func(bound *Backend, target OwnedPaneIdentity) error {
+		{name: "focus", method: "agent.focus", call: func(bound *Backend, target corebackend.OwnedPaneIdentity) error {
 			return bound.Focus(target.Ref)
 		}},
-		{name: "close", method: "pane.close", call: func(bound *Backend, target OwnedPaneIdentity) error {
+		{name: "close", method: "pane.close", call: func(bound *Backend, target corebackend.OwnedPaneIdentity) error {
 			return bound.Close(target.Ref)
 		}},
 	}
@@ -1191,7 +1191,7 @@ func TestBoundOwnedBackendRejectsAgentFocusWithoutTargetPaneFocus(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bound.Focus(target.Ref); !errors.Is(err, ErrOwnedIdentityMismatch) {
+	if err := bound.Focus(target.Ref); !errors.Is(err, corebackend.ErrOwnedIdentityMismatch) {
 		t.Fatalf("Focus() unfocused target error = %v", err)
 	}
 }
@@ -1270,7 +1270,7 @@ func TestBoundOwnedCloserClosesWorkspaceButRetainsCheckoutForManualReconciliatio
 		t.Fatal(err)
 	}
 	result, err := bound.CloseOwned(corebackend.CloseRequest{Ref: target.Ref, WorktreePath: target.WorktreePath, ShellKey: target.TerminalID})
-	if !errors.Is(err, ErrOwnedCheckoutRetained) || result.Status != corebackend.CloseFailed {
+	if !errors.Is(err, corebackend.ErrOwnedCheckoutRetained) || result.Status != corebackend.CloseFailed {
 		t.Fatalf("CloseOwned() = %+v, %v", result, err)
 	}
 	if _, err := os.Stat(h.checkout); err != nil {
@@ -1328,7 +1328,7 @@ func TestBoundOwnedWorkspaceCloserClosesExactGenericWorkspace(t *testing.T) {
 func TestBoundOwnedWorkspaceCloserRejectsWorktreeTarget(t *testing.T) {
 	h := newOwnedHarness(t)
 	_, err := h.session.Backend().BindOwnedWorkspaceClose(h.target())
-	if !errors.Is(err, ErrOwnedIdentityMismatch) {
+	if !errors.Is(err, corebackend.ErrOwnedIdentityMismatch) {
 		t.Fatalf("BindOwnedWorkspaceClose() error = %v", err)
 	}
 }

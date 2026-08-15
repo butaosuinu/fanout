@@ -25,15 +25,15 @@ import (
 type HerdrLaunchRuntime interface {
 	HerdrWorktreeRuntime
 	VerifyOwned(context.Context) error
-	LaunchRoute() (herdrrun.OwnedLaunchRoute, error)
+	LaunchRoute() (backend.OwnedLaunchRoute, error)
 	PrepareWorkloadEnvironment(string, []string) (string, int, error)
 	WaitForLauncher(context.Context, string, string, time.Duration) error
-	ProcessInfo(context.Context, string) (herdrrun.PaneProcessInfo, error)
+	ProcessInfo(context.Context, string) (backend.PaneProcessInfo, error)
 	SendLaunchToken(context.Context, string, string) error
 	LivePanes(context.Context) ([]backend.LivePane, error)
 	RenameAgent(context.Context, string, string) error
 	RemoveWorktree(context.Context, string, string) error
-	ReportMetadata(context.Context, herdrrun.MetadataReport) error
+	ReportMetadata(context.Context, backend.MetadataReport) error
 }
 
 var errHerdrLaunchResponseLost = errors.New("herdr agent launch response was lost; refusing automatic adoption")
@@ -75,7 +75,7 @@ func (l *Launcher) launchHerdr(req Request) (Result, bool) {
 type herdrLaunchOperation struct {
 	ctx         context.Context
 	locked      *state.LockedStore
-	route       herdrrun.OwnedLaunchRoute
+	route       backend.OwnedLaunchRoute
 	environment []string
 	cancel      context.CancelFunc
 }
@@ -212,7 +212,7 @@ func (l *Launcher) realizeHerdrCoordinator(
 	ctx context.Context,
 	req Request,
 	locked *state.LockedStore,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 ) (state.HerdrIntent, error) {
 	result, err := RealizeHerdrCoordinator(ctx, HerdrCoordinatorRequest{
 		Parent: req.ParentRef, IssueNum: herdrCoordinatorIssueNum(req), ProjectRoot: l.Info.ProjectRoot,
@@ -256,7 +256,7 @@ func (l *Launcher) realizeHerdrChild(
 	ctx context.Context,
 	req Request,
 	locked *state.LockedStore,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 ) (state.HerdrIntent, error) {
 	result, err := RealizeHerdrWorktree(ctx, HerdrWorktreeRequest{
 		Parent: req.ParentRef, IssueNum: req.Number, TaskID: req.TaskID,
@@ -275,7 +275,7 @@ func (l *Launcher) realizeHerdrChild(
 func (l *Launcher) recordHerdrCoordinator(
 	locked *state.LockedStore,
 	intent state.HerdrIntent,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 ) error {
 	runtimeParent := herdrCoordinatorRuntimeParent(intent)
 	recorded, err := l.findHerdrCoordinatorRow(locked, runtimeParent, intent, route)
@@ -288,7 +288,7 @@ func (l *Launcher) recordHerdrCoordinator(
 
 func herdrCoordinatorPane(
 	intent state.HerdrIntent,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	runtimeParent string,
 	number int,
 ) state.Pane {
@@ -308,7 +308,7 @@ func (l *Launcher) findHerdrCoordinatorRow(
 	locked *state.LockedStore,
 	runtimeParent string,
 	intent state.HerdrIntent,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 ) (bool, error) {
 	roots, err := herdrCoordinatorRowRoots(l.Info.ProjectRoot, runtimeParent, intent.OwnerProjectRoot)
 	if err != nil {
@@ -391,7 +391,7 @@ func herdrCoordinatorRuntimeParent(intent state.HerdrIntent) string {
 func validateHerdrCoordinatorPane(
 	pane state.Pane,
 	intent state.HerdrIntent,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 ) error {
 	requirements := []bool{
 		pane.Backend == backend.Herdr, pane.IssueNum < 0,
@@ -410,7 +410,7 @@ func validateHerdrCoordinatorPane(
 
 func (l *Launcher) prepareHerdrLaunch(
 	locked *state.LockedStore,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	intent state.HerdrIntent,
 	validate herdrLaunchValidator,
 	build herdrLaunchCapsuleBuilder,
@@ -464,7 +464,7 @@ type resolvedHerdrLaunch struct {
 
 func (l *Launcher) resolveHerdrLaunch(
 	req Request,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	intent state.HerdrIntent,
 ) (resolvedHerdrLaunch, error) {
 	nonce, err := randomHerdrToken()
@@ -492,7 +492,7 @@ func (l *Launcher) resolveHerdrLaunch(
 
 func (l *Launcher) prepareHerdrLaunchCapsule(
 	req Request,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	intent state.HerdrIntent,
 	callerEnvironment []string,
 ) (*state.HerdrLaunch, error) {

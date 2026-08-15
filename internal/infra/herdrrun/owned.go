@@ -21,6 +21,7 @@ import (
 	"time"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
+
 	"github.com/butaosuinu/fanout/internal/core/errs"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -48,8 +49,6 @@ const (
 	xdgDataEnv              = "XDG_DATA_HOME"
 	xdgCacheEnv             = "XDG_CACHE_HOME"
 )
-
-var ErrOwnedSessionNotFound = corebackend.ErrOwnedSessionNotFound
 
 var (
 	errOwnedSupervisorNotRunning    = errors.New("herdr owned supervisor is not running; refusing automatic recovery without proof that prior operations are quiescent")
@@ -252,7 +251,7 @@ func existingOwnedAdmission(
 		return "", ownedLayout{}, ownerMarker{}, binaryAdmission{}, err
 	}
 	if !found {
-		return "", ownedLayout{}, ownerMarker{}, binaryAdmission{}, ErrOwnedSessionNotFound
+		return "", ownedLayout{}, ownerMarker{}, binaryAdmission{}, corebackend.ErrOwnedSessionNotFound
 	}
 	admitted := binaryAdmission{
 		path: marker.BinaryPath, sha256: marker.BinarySHA256, version: marker.BinaryVersion,

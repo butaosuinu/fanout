@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -19,8 +18,8 @@ import (
 // herdrTestMutation flattens the typed mutation requests into one record so
 // assertions can inspect every issued mutation uniformly.
 type herdrTestMutation struct {
-	Kind                     herdrrun.WorktreeMutationKind
-	Coordinator              herdrrun.WorkspaceObservation
+	Kind                     backend.WorktreeMutationKind
+	Coordinator              backend.WorkspaceObservation
 	SourceRoot               string
 	SourceRepoKey            string
 	SourceRepoRoot           string
@@ -34,9 +33,9 @@ type herdrTestMutation struct {
 }
 
 type fakeHerdrRealizeRuntime struct {
-	workspaces []herdrrun.WorkspaceObservation
+	workspaces []backend.WorkspaceObservation
 	mutations  []herdrTestMutation
-	route      herdrrun.OwnedWorktreeRoute
+	route      backend.OwnedWorktreeRoute
 	routeErr   error
 
 	routeDeadline      time.Time
@@ -47,12 +46,12 @@ type fakeHerdrRealizeRuntime struct {
 	policyErr          error
 	observeErr         error
 	observeCalls       int
-	mutate             func(herdrTestMutation) (herdrrun.WorktreeMutationResult, error)
+	mutate             func(herdrTestMutation) (backend.WorktreeMutationResult, error)
 }
 
 func (f *fakeHerdrRealizeRuntime) WorktreeRoute(
 	ctx context.Context,
-) (herdrrun.OwnedWorktreeRoute, error) {
+) (backend.OwnedWorktreeRoute, error) {
 	f.routeCalls++
 	f.routeDeadline, f.routeHasDeadline = ctx.Deadline()
 	return f.route, f.routeErr
@@ -62,21 +61,21 @@ func (f *fakeHerdrRealizeRuntime) VerifyWorktreeSetupPolicy(context.Context) err
 	return f.policyErr
 }
 
-func (f *fakeHerdrRealizeRuntime) ObserveWorkspaces(ctx context.Context) ([]herdrrun.WorkspaceObservation, error) {
+func (f *fakeHerdrRealizeRuntime) ObserveWorkspaces(ctx context.Context) ([]backend.WorkspaceObservation, error) {
 	f.observeCalls++
 	f.observeDeadline, f.observeHasDeadline = ctx.Deadline()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return append([]herdrrun.WorkspaceObservation(nil), f.workspaces...), f.observeErr
+	return append([]backend.WorkspaceObservation(nil), f.workspaces...), f.observeErr
 }
 
 func (f *fakeHerdrRealizeRuntime) CreateWorkspace(
 	_ context.Context,
-	req herdrrun.WorkspaceCreateRequest,
-) (herdrrun.WorktreeMutationResult, error) {
+	req backend.WorkspaceCreateRequest,
+) (backend.WorktreeMutationResult, error) {
 	return f.record(herdrTestMutation{
-		Kind: herdrrun.WorkspaceCreate, CWD: req.CWD,
+		Kind: backend.WorkspaceCreate, CWD: req.CWD,
 		SourceRoot: req.CWD, SourceRepoKey: req.SourceRepoKey, SourceRepoRoot: req.CWD,
 		Label: req.Label,
 	})
@@ -84,10 +83,10 @@ func (f *fakeHerdrRealizeRuntime) CreateWorkspace(
 
 func (f *fakeHerdrRealizeRuntime) CreateWorktree(
 	_ context.Context,
-	req herdrrun.WorktreeCreateRequest,
-) (herdrrun.WorktreeMutationResult, error) {
+	req backend.WorktreeCreateRequest,
+) (backend.WorktreeMutationResult, error) {
 	return f.record(herdrTestMutation{
-		Kind: herdrrun.WorktreeCreate, Coordinator: req.Coordinator,
+		Kind: backend.WorktreeCreate, Coordinator: req.Coordinator,
 		SourceRoot: req.SourceRepoRoot, SourceRepoKey: req.SourceRepoKey,
 		SourceRepoRoot: req.SourceRepoRoot,
 		Branch:         req.Branch, Base: req.Base, Path: req.Path, Label: req.Label,
@@ -96,10 +95,10 @@ func (f *fakeHerdrRealizeRuntime) CreateWorktree(
 
 func (f *fakeHerdrRealizeRuntime) OpenWorktree(
 	_ context.Context,
-	req herdrrun.WorktreeOpenRequest,
-) (herdrrun.WorktreeMutationResult, error) {
+	req backend.WorktreeOpenRequest,
+) (backend.WorktreeMutationResult, error) {
 	return f.record(herdrTestMutation{
-		Kind: herdrrun.WorktreeOpen, Coordinator: req.Coordinator,
+		Kind: backend.WorktreeOpen, Coordinator: req.Coordinator,
 		SourceRoot: req.SourceRepoRoot, SourceRepoKey: req.SourceRepoKey,
 		SourceRepoRoot: req.SourceRepoRoot,
 		Path:           req.Path, Label: req.Label,
@@ -110,10 +109,10 @@ func (f *fakeHerdrRealizeRuntime) OpenWorktree(
 
 func (f *fakeHerdrRealizeRuntime) record(
 	m herdrTestMutation,
-) (herdrrun.WorktreeMutationResult, error) {
+) (backend.WorktreeMutationResult, error) {
 	f.mutations = append(f.mutations, m)
 	if f.mutate == nil {
-		return herdrrun.WorktreeMutationResult{}, errors.New("unexpected mutation")
+		return backend.WorktreeMutationResult{}, errors.New("unexpected mutation")
 	}
 	return f.mutate(m)
 }
@@ -220,9 +219,9 @@ func TestRealizeHerdrWorktreeLeavesIssuedIntentAfterRealizedSaveFailure(t *testi
 	successfulMutate := runtime.mutate
 	runtime.mutate = func(
 		mutationReq herdrTestMutation,
-	) (herdrrun.WorktreeMutationResult, error) {
+	) (backend.WorktreeMutationResult, error) {
 		result, mutateErr := successfulMutate(mutationReq)
-		if mutateErr == nil && mutationReq.Kind == herdrrun.WorktreeCreate {
+		if mutateErr == nil && mutationReq.Kind == backend.WorktreeCreate {
 			if chmodErr := os.Chmod(controlDir, 0o500); chmodErr != nil {
 				t.Fatalf("make Herdr control directory read-only: %v", chmodErr)
 			}
@@ -266,7 +265,7 @@ func TestRealizeHerdrWorktreeReopensVerifiedRealizedCheckout(t *testing.T) {
 		t.Fatalf("reopen error = %v", err)
 	}
 	if len(runtime.mutations) != mutationsBefore+1 ||
-		runtime.mutations[len(runtime.mutations)-1].Kind != herdrrun.WorktreeOpen {
+		runtime.mutations[len(runtime.mutations)-1].Kind != backend.WorktreeOpen {
 		t.Fatalf("reopen mutations = %+v", runtime.mutations[mutationsBefore:])
 	}
 	if reopened.Intent.Status != state.HerdrIntentRealized ||
@@ -292,9 +291,9 @@ func TestRealizeHerdrWorktreeKeepsRejectedOpenRetryable(t *testing.T) {
 	successfulMutate := runtime.mutate
 	runtime.mutate = func(
 		mutationReq herdrTestMutation,
-	) (herdrrun.WorktreeMutationResult, error) {
-		if mutationReq.Kind == herdrrun.WorktreeOpen {
-			return herdrrun.WorktreeMutationResult{}, herdrrun.MutationRejectedError{
+	) (backend.WorktreeMutationResult, error) {
+		if mutationReq.Kind == backend.WorktreeOpen {
+			return backend.WorktreeMutationResult{}, backend.MutationRejectedError{
 				Code: "worktree_open_failed", Message: "rejected before open",
 			}
 		}
@@ -302,7 +301,7 @@ func TestRealizeHerdrWorktreeKeepsRejectedOpenRetryable(t *testing.T) {
 	}
 
 	_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
-	if !errors.Is(err, herdrrun.ErrMutationRejected) {
+	if !errors.Is(err, backend.ErrMutationRejected) {
 		t.Fatalf("rejected reopen error = %v", err)
 	}
 	control, err := state.LoadHerdrIntents(repo)
@@ -468,8 +467,8 @@ func TestRealizeHerdrRollsBackMutationNotIssued(t *testing.T) {
 		installSuccessfulHerdrMutations(t, repo, runtime)
 		runtime.mutate = func(
 			herdrTestMutation,
-		) (herdrrun.WorktreeMutationResult, error) {
-			return herdrrun.WorktreeMutationResult{}, herdrrun.MutationNotIssuedError{
+		) (backend.WorktreeMutationResult, error) {
+			return backend.WorktreeMutationResult{}, backend.MutationNotIssuedError{
 				Cause: errors.New("owned admission failed"),
 			}
 		}
@@ -480,7 +479,7 @@ func TestRealizeHerdrRollsBackMutationNotIssued(t *testing.T) {
 			runtime,
 			deterministicHerdrRealizeHooks(),
 		)
-		if !errors.Is(err, herdrrun.ErrMutationNotIssued) {
+		if !errors.Is(err, backend.ErrMutationNotIssued) {
 			t.Fatalf("coordinator error = %v", err)
 		}
 		control, err := state.LoadHerdrIntents(repo)
@@ -500,15 +499,15 @@ func TestRealizeHerdrRollsBackMutationNotIssued(t *testing.T) {
 		realizeTestHerdrCoordinator(t, repo, runtime, hooks)
 		runtime.mutate = func(
 			herdrTestMutation,
-		) (herdrrun.WorktreeMutationResult, error) {
-			return herdrrun.WorktreeMutationResult{}, herdrrun.MutationNotIssuedError{
+		) (backend.WorktreeMutationResult, error) {
+			return backend.WorktreeMutationResult{}, backend.MutationNotIssuedError{
 				Cause: errors.New("owned admission failed"),
 			}
 		}
 
 		req := testHerdrWorktreeRequest(repo, "not-issued", 426)
 		_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
-		if !errors.Is(err, herdrrun.ErrMutationNotIssued) {
+		if !errors.Is(err, backend.ErrMutationNotIssued) {
 			t.Fatalf("worktree error = %v", err)
 		}
 		fullRef, err := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
@@ -542,10 +541,10 @@ func TestRealizeHerdrWorktreeRecoversCompletedUnissuedRollback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime.mutate = func(
 		req herdrTestMutation,
-	) (herdrrun.WorktreeMutationResult, error) {
-		if req.Kind == herdrrun.WorktreeCreate {
+	) (backend.WorktreeMutationResult, error) {
+		if req.Kind == backend.WorktreeCreate {
 			cancel()
-			return herdrrun.WorktreeMutationResult{}, context.DeadlineExceeded
+			return backend.WorktreeMutationResult{}, context.DeadlineExceeded
 		}
 		return successfulMutate(req)
 	}
@@ -783,12 +782,12 @@ func TestWorkspaceHasHerdrResourceMatchesSavedRootAmongMultiplePanes(t *testing.
 		TerminalID:  "term-1",
 		CurrentPath: "/repo",
 	}
-	observation := herdrrun.WorkspaceObservation{
+	observation := backend.WorkspaceObservation{
 		WorkspaceID: expected.WorkspaceID,
 		Label:       expected.Label,
 		RepoKey:     "/repo/.git",
 		RepoRoot:    "/repo",
-		Panes: []herdrrun.WorkspacePaneObservation{
+		Panes: []backend.WorkspacePaneObservation{
 			{
 				Pane: backend.PaneRef{
 					Backend: backend.Herdr, Workspace: expected.WorkspaceID, Pane: expected.PaneID,
@@ -871,13 +870,13 @@ func TestRealizeHerdrWorktreeAdoptsResponseLossPostcondition(t *testing.T) {
 	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
 
 	successfulMutate := runtime.mutate
-	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (backend.WorktreeMutationResult, error) {
 		result, err := successfulMutate(req)
 		if err != nil {
 			return result, err
 		}
-		if req.Kind == herdrrun.WorktreeCreate {
-			return herdrrun.WorktreeMutationResult{}, errors.New("injected response loss")
+		if req.Kind == backend.WorktreeCreate {
+			return backend.WorktreeMutationResult{}, errors.New("injected response loss")
 		}
 		return result, nil
 	}
@@ -951,7 +950,7 @@ func TestRealizeHerdrWorktreeDoesNotOpenExpiredRealizedIntent(t *testing.T) {
 	if !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
 		t.Fatalf("initial realization error = %v", err)
 	}
-	live := make([]herdrrun.WorkspaceObservation, 0, len(runtime.workspaces)-1)
+	live := make([]backend.WorkspaceObservation, 0, len(runtime.workspaces)-1)
 	for _, workspace := range runtime.workspaces {
 		if workspace.WorkspaceID != realized.Intent.Resource.WorkspaceID {
 			live = append(live, workspace)
@@ -1163,9 +1162,9 @@ func TestRealizeHerdrWorktreePreservesIssuedIntentWhenMutationContextIsCanceled(
 
 	successfulMutate := runtime.mutate
 	ctx, cancel := context.WithCancel(context.Background())
-	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (backend.WorktreeMutationResult, error) {
 		result, err := successfulMutate(req)
-		if req.Kind == herdrrun.WorktreeCreate {
+		if req.Kind == backend.WorktreeCreate {
 			cancel()
 			return result, context.DeadlineExceeded
 		}
@@ -1210,11 +1209,11 @@ func TestRealizeHerdrWorktreeFailsClosedOnAmbiguousResponseLoss(t *testing.T) {
 	installSuccessfulHerdrMutations(t, repo, runtime)
 	hooks := deterministicHerdrRealizeHooks()
 	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
-	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
-		if req.Kind == herdrrun.WorktreeCreate {
-			return herdrrun.WorktreeMutationResult{}, errors.New("injected response loss")
+	runtime.mutate = func(req herdrTestMutation) (backend.WorktreeMutationResult, error) {
+		if req.Kind == backend.WorktreeCreate {
+			return backend.WorktreeMutationResult{}, errors.New("injected response loss")
 		}
-		return herdrrun.WorktreeMutationResult{}, errors.New("unexpected mutation")
+		return backend.WorktreeMutationResult{}, errors.New("unexpected mutation")
 	}
 
 	req := testHerdrWorktreeRequest(repo, "ambiguous", 428)
@@ -1254,18 +1253,18 @@ func TestRealizeHerdrWorktreeDeletesBranchOnlyAfterStructuredRejection(t *testin
 	installSuccessfulHerdrMutations(t, repo, runtime)
 	hooks := deterministicHerdrRealizeHooks()
 	realizeTestHerdrCoordinator(t, repo, runtime, hooks)
-	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
-		if req.Kind == herdrrun.WorktreeCreate {
-			return herdrrun.WorktreeMutationResult{}, herdrrun.MutationRejectedError{
+	runtime.mutate = func(req herdrTestMutation) (backend.WorktreeMutationResult, error) {
+		if req.Kind == backend.WorktreeCreate {
+			return backend.WorktreeMutationResult{}, backend.MutationRejectedError{
 				Code: "worktree_create_failed", Message: "rejected before create",
 			}
 		}
-		return herdrrun.WorktreeMutationResult{}, errors.New("unexpected mutation")
+		return backend.WorktreeMutationResult{}, errors.New("unexpected mutation")
 	}
 
 	req := testHerdrWorktreeRequest(repo, "rejected", 429)
 	_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
-	if !errors.Is(err, herdrrun.ErrMutationRejected) {
+	if !errors.Is(err, backend.ErrMutationRejected) {
 		t.Fatalf("structured rejection error = %v", err)
 	}
 	fullRef, refErr := worktree.LocalBranchRef(context.Background(), repo, req.BranchName)
@@ -1305,19 +1304,19 @@ func TestRealizeHerdrWorktreeRejectionWithGitFailureFailsClosedOnRetry(t *testin
 	); err != nil {
 		t.Fatal(err)
 	}
-	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
-		if req.Kind != herdrrun.WorktreeCreate {
-			return herdrrun.WorktreeMutationResult{}, errors.New("unexpected mutation")
+	runtime.mutate = func(req herdrTestMutation) (backend.WorktreeMutationResult, error) {
+		if req.Kind != backend.WorktreeCreate {
+			return backend.WorktreeMutationResult{}, errors.New("unexpected mutation")
 		}
 		t.Setenv("PATH", failingBin)
-		return herdrrun.WorktreeMutationResult{}, herdrrun.MutationRejectedError{
+		return backend.WorktreeMutationResult{}, backend.MutationRejectedError{
 			Code: "worktree_create_failed", Message: "rejected before create",
 		}
 	}
 
 	req := testHerdrWorktreeRequest(repo, "rejected-retry", 438)
 	_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
-	if !errors.Is(err, herdrrun.ErrMutationRejected) || errors.Is(err, ErrHerdrManualCleanupRequired) {
+	if !errors.Is(err, backend.ErrMutationRejected) || errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("structured rejection with Git failure error = %v", err)
 	}
 	t.Setenv("PATH", originalPath)
@@ -1333,9 +1332,9 @@ func TestRealizeHerdrWorktreeRejectionWithGitFailureFailsClosedOnRetry(t *testin
 	}
 
 	mutationCount := len(runtime.mutations)
-	runtime.mutate = func(herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(herdrTestMutation) (backend.WorktreeMutationResult, error) {
 		t.Fatal("issued intent reissued the Herdr mutation")
-		return herdrrun.WorktreeMutationResult{}, nil
+		return backend.WorktreeMutationResult{}, nil
 	}
 	_, err = realizeHerdrWorktree(context.Background(), req, runtime, hooks)
 	if !errors.Is(err, ErrHerdrManualCleanupRequired) {
@@ -1374,12 +1373,12 @@ func TestRealizeHerdrCoordinatorAdoptsResponseLossAndNeverReissues(t *testing.T)
 	runtime := &fakeHerdrRealizeRuntime{}
 	installSuccessfulHerdrMutations(t, repo, runtime)
 	successfulMutate := runtime.mutate
-	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (backend.WorktreeMutationResult, error) {
 		result, err := successfulMutate(req)
 		if err != nil {
 			return result, err
 		}
-		return herdrrun.WorktreeMutationResult{}, errors.New("injected coordinator response loss")
+		return backend.WorktreeMutationResult{}, errors.New("injected coordinator response loss")
 	}
 	hooks := deterministicHerdrRealizeHooks()
 	req := testHerdrCoordinatorRequest(repo)
@@ -1411,13 +1410,13 @@ func TestRealizeHerdrCoordinatorRejectsIssuedRecoveryFromChangedRepoIdentity(t *
 	successfulMutate := runtime.mutate
 	snapshotErr := errors.New("injected coordinator recovery snapshot failure")
 	responseErr := errors.New("injected coordinator response loss")
-	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (backend.WorktreeMutationResult, error) {
 		result, mutationErr := successfulMutate(req)
 		if mutationErr != nil {
 			return result, mutationErr
 		}
 		runtime.observeErr = snapshotErr
-		return herdrrun.WorktreeMutationResult{}, responseErr
+		return backend.WorktreeMutationResult{}, responseErr
 	}
 	hooks := deterministicHerdrRealizeHooks()
 	if _, err := realizeHerdrCoordinator(
@@ -1588,9 +1587,9 @@ func TestRealizeHerdrReusesNumericParentCoordinatorAcrossLinkedWorktrees(t *test
 	successfulMutate := runtime.mutate
 	runtime.mutate = func(
 		mutationReq herdrTestMutation,
-	) (herdrrun.WorktreeMutationResult, error) {
+	) (backend.WorktreeMutationResult, error) {
 		result, mutateErr := successfulMutate(mutationReq)
-		if mutateErr == nil && mutationReq.Kind == herdrrun.WorktreeCreate {
+		if mutateErr == nil && mutationReq.Kind == backend.WorktreeCreate {
 			result.RepoRoot = coordinator.Resource.CurrentPath
 			runtime.workspaces[len(runtime.workspaces)-1] = result.WorkspaceObservation
 		}
@@ -1752,15 +1751,15 @@ func TestRealizeHerdrCoordinatorRejectedCreateReleasesEvenAfterContextExpiry(t *
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	runtime.mutate = func(herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(herdrTestMutation) (backend.WorktreeMutationResult, error) {
 		cancel()
-		return herdrrun.WorktreeMutationResult{}, herdrrun.MutationRejectedError{
+		return backend.WorktreeMutationResult{}, backend.MutationRejectedError{
 			Code: "workspace_create_failed", Message: "rejected after deadline",
 		}
 	}
 
 	_, err := realizeHerdrCoordinator(ctx, testHerdrCoordinatorRequest(repo), runtime, hooks)
-	if !errors.Is(err, herdrrun.ErrMutationRejected) || errors.Is(err, ErrHerdrManualCleanupRequired) {
+	if !errors.Is(err, backend.ErrMutationRejected) || errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("rejected+expired coordinator error = %v", err)
 	}
 	control, loadErr := state.LoadHerdrIntents(repo)
@@ -1787,8 +1786,8 @@ func TestRealizeHerdrWorktreeRejectionSaveFailureStillRollsBack(t *testing.T) {
 		t.Fatal(pathErr)
 	}
 	journalDir := filepath.Dir(journalPath)
-	runtime.mutate = func(m herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
-		if m.Kind != herdrrun.WorktreeCreate {
+	runtime.mutate = func(m herdrTestMutation) (backend.WorktreeMutationResult, error) {
+		if m.Kind != backend.WorktreeCreate {
 			t.Fatalf("unexpected mutation kind %q", m.Kind)
 		}
 		// Make the journal directory read-only so persisting the rejection
@@ -1796,7 +1795,7 @@ func TestRealizeHerdrWorktreeRejectionSaveFailureStillRollsBack(t *testing.T) {
 		if err := os.Chmod(journalDir, 0o500); err != nil {
 			t.Fatal(err)
 		}
-		return herdrrun.WorktreeMutationResult{}, herdrrun.MutationRejectedError{
+		return backend.WorktreeMutationResult{}, backend.MutationRejectedError{
 			Code: "worktree_create_failed", Message: "rejected with failing journal",
 		}
 	}
@@ -1808,7 +1807,7 @@ func TestRealizeHerdrWorktreeRejectionSaveFailureStillRollsBack(t *testing.T) {
 
 	req := testHerdrWorktreeRequest(repo, "rejected-save-failure", 438)
 	_, err := realizeHerdrWorktree(context.Background(), req, runtime, hooks)
-	if !errors.Is(err, herdrrun.ErrMutationRejected) || errors.Is(err, ErrHerdrManualCleanupRequired) {
+	if !errors.Is(err, backend.ErrMutationRejected) || errors.Is(err, ErrHerdrManualCleanupRequired) {
 		t.Fatalf("rejected create with failing journal error = %v", err)
 	}
 	requireHerdrBranch(t, repo, req, false)
@@ -2035,16 +2034,16 @@ func installSuccessfulHerdrMutations(
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime.route = herdrrun.OwnedWorktreeRoute{
+	runtime.route = backend.OwnedWorktreeRoute{
 		GitCommonDir: identity.RepoKey,
 		Session:      "fanout-test",
 		SocketPath:   "/private/tmp/fanout-test/herdr.sock",
 	}
 	nextWorkspace := 2
-	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
-		if req.Kind == herdrrun.WorkspaceCreate {
+	runtime.mutate = func(req herdrTestMutation) (backend.WorktreeMutationResult, error) {
+		if req.Kind == backend.WorkspaceCreate {
 			workspaceID := "w1"
-			observation := herdrrun.WorkspaceObservation{
+			observation := backend.WorkspaceObservation{
 				WorkspaceID: workspaceID,
 				Label:       req.Label,
 				Pane: backend.PaneRef{
@@ -2054,17 +2053,17 @@ func installSuccessfulHerdrMutations(
 				CWD:        req.CWD,
 			}
 			runtime.workspaces = append(runtime.workspaces, observation)
-			return herdrrun.WorktreeMutationResult{WorkspaceObservation: observation}, nil
+			return backend.WorktreeMutationResult{WorkspaceObservation: observation}, nil
 		}
-		if req.Kind != herdrrun.WorktreeCreate && req.Kind != herdrrun.WorktreeOpen {
-			return herdrrun.WorktreeMutationResult{}, errors.New("unsupported fake mutation")
+		if req.Kind != backend.WorktreeCreate && req.Kind != backend.WorktreeOpen {
+			return backend.WorktreeMutationResult{}, errors.New("unsupported fake mutation")
 		}
 		workspaceID := "w" + strconv.Itoa(nextWorkspace)
 		nextWorkspace++
-		if req.Kind == herdrrun.WorktreeCreate {
+		if req.Kind == backend.WorktreeCreate {
 			gitCmdTest(t, repo, "worktree", "add", req.Path, req.Branch)
 		}
-		observation := herdrrun.WorkspaceObservation{
+		observation := backend.WorkspaceObservation{
 			WorkspaceID: workspaceID,
 			Label:       req.Label,
 			Path:        req.Path,
@@ -2077,7 +2076,7 @@ func installSuccessfulHerdrMutations(
 			CWD:        req.Path,
 		}
 		runtime.workspaces = append(runtime.workspaces, observation)
-		return herdrrun.WorktreeMutationResult{WorkspaceObservation: observation}, nil
+		return backend.WorktreeMutationResult{WorkspaceObservation: observation}, nil
 	}
 }
 

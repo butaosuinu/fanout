@@ -11,7 +11,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 )
 
@@ -123,7 +122,7 @@ func TestBestEffortStateSinkDoesNotBlockController(t *testing.T) {
 
 func TestHerdrCodexPlanCaptureTargetRequiresExactLiveIdentity(t *testing.T) {
 	session := backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-554"}
-	base := herdrrun.OwnedPaneIdentity{
+	base := backend.OwnedPaneIdentity{
 		Ref:       backend.PaneRef{Backend: backend.Herdr, Workspace: "workspace-1", Pane: "workspace-1:pane-1"},
 		SessionID: "fanout-owned", SocketPath: "/tmp/herdr.sock", TerminalID: "terminal-1",
 		RepoKey: "/repo/.git", WorktreePath: "/repo/worktree", CurrentPath: "/repo/worktree",

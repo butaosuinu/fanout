@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -30,21 +29,21 @@ var (
 )
 
 type HerdrWorktreeRuntime interface {
-	WorktreeRoute(context.Context) (herdrrun.OwnedWorktreeRoute, error)
+	WorktreeRoute(context.Context) (backend.OwnedWorktreeRoute, error)
 	VerifyWorktreeSetupPolicy(context.Context) error
-	ObserveWorkspaces(context.Context) ([]herdrrun.WorkspaceObservation, error)
+	ObserveWorkspaces(context.Context) ([]backend.WorkspaceObservation, error)
 	CreateWorkspace(
 		context.Context,
-		herdrrun.WorkspaceCreateRequest,
-	) (herdrrun.WorktreeMutationResult, error)
+		backend.WorkspaceCreateRequest,
+	) (backend.WorktreeMutationResult, error)
 	CreateWorktree(
 		context.Context,
-		herdrrun.WorktreeCreateRequest,
-	) (herdrrun.WorktreeMutationResult, error)
+		backend.WorktreeCreateRequest,
+	) (backend.WorktreeMutationResult, error)
 	OpenWorktree(
 		context.Context,
-		herdrrun.WorktreeOpenRequest,
-	) (herdrrun.WorktreeMutationResult, error)
+		backend.WorktreeOpenRequest,
+	) (backend.WorktreeMutationResult, error)
 }
 
 type HerdrRealizeHooks struct {
@@ -319,19 +318,19 @@ func RealizeHerdrCoordinator(
 	if saveErr := locked.Save(); saveErr != nil {
 		return result, saveErr
 	}
-	mutation, mutationErr := runtime.CreateWorkspace(operationParent, herdrrun.WorkspaceCreateRequest{
+	mutation, mutationErr := runtime.CreateWorkspace(operationParent, backend.WorkspaceCreateRequest{
 		CWD:           intent.WorktreePath,
 		SourceRepoKey: setup.source.RepoKey,
 		Label:         intent.WorkspaceLabel,
 	})
 	if mutationErr != nil {
-		if errors.Is(mutationErr, herdrrun.ErrMutationNotIssued) {
+		if errors.Is(mutationErr, backend.ErrMutationNotIssued) {
 			return result, releaseHerdrIntent(locked, intent.ID, mutationErr)
 		}
 		// A structured rejection is a durable non-creation proof; classify it
 		// even when the operation context has already expired.
 		if operationErr := operationParent.Err(); operationErr != nil &&
-			!errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
+			!errors.Is(mutationErr, backend.ErrMutationRejected) {
 			return result, errors.Join(mutationErr, operationErr)
 		}
 		return recoverHerdrCoordinator(

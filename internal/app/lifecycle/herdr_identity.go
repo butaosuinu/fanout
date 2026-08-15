@@ -7,13 +7,12 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 type herdrCleanupObservation struct {
-	workspace *herdrrun.WorkspaceObservation
+	workspace *backend.WorkspaceObservation
 	checkout  worktree.CheckoutObservation
 }
 
@@ -56,7 +55,7 @@ func herdrResourceFromPane(pane state.Pane) state.HerdrResource {
 
 // This projection duplicates panelaunch.stateResource until a follow-up can
 // move the shared Herdr observation mapping below both app packages.
-func herdrResourceFromObservation(observation herdrrun.WorkspaceObservation) state.HerdrResource {
+func herdrResourceFromObservation(observation backend.WorkspaceObservation) state.HerdrResource {
 	return state.HerdrResource{
 		WorkspaceID: observation.WorkspaceID,
 		Label:       observation.Label,
@@ -106,7 +105,7 @@ func observeHerdrCleanupMatching(
 }
 
 func herdrWorkspacePredicate(resource state.HerdrResource) herdrWorkspacePredicateFunc {
-	return func(workspace herdrrun.WorkspaceObservation) (bool, bool) {
+	return func(workspace backend.WorkspaceObservation) (bool, bool) {
 		candidate := workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label ||
 			herdrWorkspaceMatchesProvenance(
 				workspace,
@@ -119,20 +118,20 @@ func herdrWorkspacePredicate(resource state.HerdrResource) herdrWorkspacePredica
 }
 
 func herdrWorkspaceLabelPredicate(label, path, repoKey, repoRoot string) herdrWorkspacePredicateFunc {
-	return func(workspace herdrrun.WorkspaceObservation) (bool, bool) {
+	return func(workspace backend.WorkspaceObservation) (bool, bool) {
 		provenance := herdrWorkspaceMatchesProvenance(workspace, path, repoKey, repoRoot)
 		return workspace.Label == label || provenance, workspace.Label == label && provenance
 	}
 }
 
-type herdrWorkspacePredicateFunc func(herdrrun.WorkspaceObservation) (candidate, exact bool)
+type herdrWorkspacePredicateFunc func(backend.WorkspaceObservation) (candidate, exact bool)
 
 func findUniqueWorkspace(
-	workspaces []herdrrun.WorkspaceObservation,
+	workspaces []backend.WorkspaceObservation,
 	allowAbsent bool,
 	predicate herdrWorkspacePredicateFunc,
-) (*herdrrun.WorkspaceObservation, error) {
-	var candidates []herdrrun.WorkspaceObservation
+) (*backend.WorkspaceObservation, error) {
+	var candidates []backend.WorkspaceObservation
 	for _, workspace := range workspaces {
 		candidate, _ := predicate(workspace)
 		if candidate {
@@ -153,7 +152,7 @@ func findUniqueWorkspace(
 }
 
 func herdrWorkspaceMatchesResource(
-	workspace herdrrun.WorkspaceObservation,
+	workspace backend.WorkspaceObservation,
 	resource state.HerdrResource,
 ) bool {
 	return workspace.WorkspaceID == resource.WorkspaceID &&
@@ -164,7 +163,7 @@ func herdrWorkspaceMatchesResource(
 }
 
 func herdrWorkspaceMatchesProvenance(
-	workspace herdrrun.WorkspaceObservation,
+	workspace backend.WorkspaceObservation,
 	path, repoKey, repoRoot string,
 ) bool {
 	return filepath.Clean(workspace.Path) == filepath.Clean(path) &&
@@ -173,7 +172,7 @@ func herdrWorkspaceMatchesProvenance(
 }
 
 func verifyHerdrTerminalInvalidation(
-	workspace herdrrun.WorkspaceObservation,
+	workspace backend.WorkspaceObservation,
 	resource state.HerdrResource,
 ) error {
 	for _, pane := range workspace.Panes {
@@ -268,24 +267,24 @@ func observeHerdrCoordinator(
 	ctx context.Context,
 	runtime HerdrRuntime,
 	resource state.HerdrResource,
-) (herdrrun.WorkspaceObservation, error) {
+) (backend.WorkspaceObservation, error) {
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
-		return herdrrun.WorkspaceObservation{}, err
+		return backend.WorkspaceObservation{}, err
 	}
 	workspace, err := findUniqueWorkspace(workspaces, false, herdrCoordinatorWorkspacePredicate(resource))
 	if err != nil {
-		return herdrrun.WorkspaceObservation{}, err
+		return backend.WorkspaceObservation{}, err
 	}
 	projected, ok := projectHerdrCoordinatorPane(*workspace, resource)
 	if !ok {
-		return herdrrun.WorkspaceObservation{}, fmt.Errorf("herdr coordinator pane projection changed after matching")
+		return backend.WorkspaceObservation{}, fmt.Errorf("herdr coordinator pane projection changed after matching")
 	}
 	return projected, nil
 }
 
 func herdrCoordinatorWorkspacePredicate(resource state.HerdrResource) herdrWorkspacePredicateFunc {
-	return func(workspace herdrrun.WorkspaceObservation) (bool, bool) {
+	return func(workspace backend.WorkspaceObservation) (bool, bool) {
 		candidate := workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label
 		_, exact := projectHerdrCoordinatorPane(workspace, resource)
 		return candidate, exact
@@ -293,11 +292,11 @@ func herdrCoordinatorWorkspacePredicate(resource state.HerdrResource) herdrWorks
 }
 
 func projectHerdrCoordinatorPane(
-	workspace herdrrun.WorkspaceObservation,
+	workspace backend.WorkspaceObservation,
 	resource state.HerdrResource,
-) (herdrrun.WorkspaceObservation, bool) {
+) (backend.WorkspaceObservation, bool) {
 	if workspace.WorkspaceID != resource.WorkspaceID || workspace.Label != resource.Label {
-		return herdrrun.WorkspaceObservation{}, false
+		return backend.WorkspaceObservation{}, false
 	}
 	want := backend.PaneRef{Backend: backend.Herdr, Workspace: resource.WorkspaceID, Pane: resource.PaneID}
 	for _, pane := range workspace.Panes {
@@ -308,5 +307,5 @@ func projectHerdrCoordinatorPane(
 		workspace.Pane, workspace.TerminalID, workspace.CWD = pane.Pane, pane.TerminalID, pane.CWD
 		return workspace, true
 	}
-	return herdrrun.WorkspaceObservation{}, false
+	return backend.WorkspaceObservation{}, false
 }

@@ -10,7 +10,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -240,12 +239,12 @@ type fakeHerdrNudger struct {
 	beforeLive func()
 	liveCalls  int
 	beforePrep func()
-	process    herdrrun.PaneProcessInfo
+	process    backend.PaneProcessInfo
 	processErr error
 	nudgeErr   error
 	nudged     bool
 	nudgeCalls int
-	target     herdrrun.NudgeTarget
+	target     backend.NudgeTarget
 	text       string
 }
 
@@ -257,11 +256,11 @@ func (f *fakeHerdrNudger) LivePanes(context.Context) ([]backend.LivePane, error)
 	return f.panes, f.panesErr
 }
 
-func (f *fakeHerdrNudger) ProcessInfo(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+func (f *fakeHerdrNudger) ProcessInfo(context.Context, string) (backend.PaneProcessInfo, error) {
 	return f.process, f.processErr
 }
 
-func (f *fakeHerdrNudger) PrepareNudge(_ context.Context, target herdrrun.NudgeTarget, text string) (herdrrun.NudgePrompt, error) {
+func (f *fakeHerdrNudger) PrepareNudge(_ context.Context, target backend.NudgeTarget, text string) (backend.NudgePrompt, error) {
 	if f.beforePrep != nil {
 		f.beforePrep()
 	}
@@ -368,7 +367,7 @@ func TestRunMsgNudgeHerdrFailsClosedBeforePrompt(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		mutateLive  func(*backend.LivePane)
-		mutateProc  func(*herdrrun.PaneProcessInfo)
+		mutateProc  func(*backend.PaneProcessInfo)
 		mutateRow   func(*state.Pane)
 		mutateStore func(*state.Store)
 		lockErr     error
@@ -376,7 +375,7 @@ func TestRunMsgNudgeHerdrFailsClosedBeforePrompt(t *testing.T) {
 	}{
 		{name: "worktree changed", mutateLive: func(p *backend.LivePane) { p.WorktreePath = "/repo/other" }, want: "provenance changed"},
 		{name: "terminal changed", mutateLive: func(p *backend.LivePane) { p.TerminalID = "term-new" }, want: "identity or worktree"},
-		{name: "process changed", mutateProc: func(p *herdrrun.PaneProcessInfo) { p.ForegroundProcesses[0].Argv = []string{"other"} }, want: "process identity"},
+		{name: "process changed", mutateProc: func(p *backend.PaneProcessInfo) { p.ForegroundProcesses[0].Argv = []string{"other"} }, want: "process identity"},
 		{name: "workspace ownership changed", mutateRow: func(p *state.Pane) { p.HerdrWorkspaceLabel = "fanout-worktree-replaced" }, want: "launch binding changed"},
 		{name: "emitter generation changed", mutateRow: func(p *state.Pane) { p.EmitterNonce = strings.Repeat("c", 32) }, want: "launch binding changed"},
 		{name: "recipient duplicated", mutateStore: appendDuplicateNudgeRecipient, want: "launch binding changed"},
@@ -485,17 +484,17 @@ func TestRunMsgNudgeHerdrAcceptsExactCodexPlanProcess(t *testing.T) {
 func TestRunMsgNudgeHerdrRejectsInexactCodexPlanProcessTrees(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		mutate func(*herdrrun.PaneProcessInfo)
+		mutate func(*backend.PaneProcessInfo)
 	}{
-		{name: "missing TUI", mutate: func(info *herdrrun.PaneProcessInfo) {
+		{name: "missing TUI", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses = info.ForegroundProcesses[:1]
 		}},
-		{name: "duplicate TUI", mutate: func(info *herdrrun.PaneProcessInfo) {
+		{name: "duplicate TUI", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses = append(info.ForegroundProcesses, herdrNudgeProcess(
 				121, 101, "/opt/codex", []string{"--remote", "ws://127.0.0.1:1234"},
 			))
 		}},
-		{name: "wrong remote", mutate: func(info *herdrrun.PaneProcessInfo) {
+		{name: "wrong remote", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses[1].Argv[1] = "ws://localhost:1234"
 		}},
 	} {
@@ -565,9 +564,9 @@ func herdrNudgeFixture(reportedState string, refined bool) (state.Store, *fakeHe
 		ProjectRoot: "/repo", WorktreePath: worktree, CurrentPath: worktree, AgentPresent: true,
 		AgentProvider: pane.Agent, AgentID: pane.HerdrAgentID, AgentSession: session,
 	}
-	process := herdrrun.PaneProcessInfo{
+	process := backend.PaneProcessInfo{
 		PaneID: pane.PaneID, ShellPID: 101, ForegroundProcessGroup: 101,
-		ForegroundProcesses: []herdrrun.PaneProcess{{
+		ForegroundProcesses: []backend.PaneProcess{{
 			PID: 101, ParentPID: 1, ProcessGroup: 101, Executable: "/usr/bin/claude",
 			Argv0: "/usr/bin/claude", Argv: args, CWD: worktree,
 		}},
@@ -588,9 +587,9 @@ func codexPlanNudgeFixture() (state.Store, *fakeHerdrNudger) {
 	pane.HerdrAgentSession = session
 	runtime.panes[0].AgentProvider = "codex"
 	runtime.panes[0].AgentSession = session
-	runtime.process = herdrrun.PaneProcessInfo{
+	runtime.process = backend.PaneProcessInfo{
 		PaneID: pane.PaneID, ShellPID: 101, ForegroundProcessGroup: 101,
-		ForegroundProcesses: []herdrrun.PaneProcess{
+		ForegroundProcesses: []backend.PaneProcess{
 			herdrNudgeProcess(101, 1, "/opt/fanout", pane.HerdrLaunchArgs),
 			herdrNudgeProcess(120, 101, "/opt/codex", []string{"--remote", "ws://127.0.0.1:1234"}),
 		},
@@ -598,8 +597,8 @@ func codexPlanNudgeFixture() (state.Store, *fakeHerdrNudger) {
 	return store, runtime
 }
 
-func herdrNudgeProcess(pid, parent int, executable string, args []string) herdrrun.PaneProcess {
-	return herdrrun.PaneProcess{
+func herdrNudgeProcess(pid, parent int, executable string, args []string) backend.PaneProcess {
+	return backend.PaneProcess{
 		PID: pid, ParentPID: parent, ProcessGroup: 101, Executable: executable,
 		Argv0: executable, Argv: args, CWD: "/repo/.fanout/worktrees/child",
 	}

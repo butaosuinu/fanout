@@ -14,25 +14,14 @@ import (
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
-var (
-	ErrOwnedIdentityMismatch = corebackend.ErrOwnedIdentityMismatch
-	ErrOwnedCheckoutRetained = corebackend.ErrOwnedCheckoutRetained
-)
-
-type (
-	OwnedPaneIdentity = corebackend.OwnedPaneIdentity
-	NudgeTarget       = corebackend.NudgeTarget
-	NudgePrompt       = corebackend.NudgePrompt
-)
-
 type OwnedCloseRequest struct {
-	Target                 OwnedPaneIdentity
+	Target                 corebackend.OwnedPaneIdentity
 	WorktreeOwnershipNonce string
 	WorktreeGitDir         string
 }
 
 type ownedTargetAdmission struct {
-	target           OwnedPaneIdentity
+	target           corebackend.OwnedPaneIdentity
 	closeRequest     *OwnedCloseRequest
 	workspaceClose   bool
 	closeFingerprint corebackend.CloseRequest
@@ -48,7 +37,7 @@ type agentPromptResult struct {
 	Agent agentJSON `json:"agent"`
 }
 
-func (b *Backend) BindOwnedTarget(target OwnedPaneIdentity) (*Backend, error) {
+func (b *Backend) BindOwnedTarget(target corebackend.OwnedPaneIdentity) (*Backend, error) {
 	return b.bindOwnedTarget(target, nil)
 }
 
@@ -60,9 +49,9 @@ func (b *Backend) BindOwnedClose(req OwnedCloseRequest) (*Backend, error) {
 // BindOwnedWorkspaceClose admits an exact generic workspace for close. It is
 // limited to checkout-free console/coordinator workspaces; worktree-backed
 // close must retain the stronger ownership proof used by BindOwnedClose.
-func (b *Backend) BindOwnedWorkspaceClose(target OwnedPaneIdentity) (*Backend, error) {
+func (b *Backend) BindOwnedWorkspaceClose(target corebackend.OwnedPaneIdentity) (*Backend, error) {
 	if target.RepoKey != "" || target.WorktreePath != "" {
-		return nil, fmt.Errorf("%w: generic workspace close cannot own a checkout", ErrOwnedIdentityMismatch)
+		return nil, fmt.Errorf("%w: generic workspace close cannot own a checkout", corebackend.ErrOwnedIdentityMismatch)
 	}
 	bound, err := b.bindOwnedTarget(target, nil)
 	if err != nil {
@@ -76,7 +65,7 @@ func (b *Backend) BindOwnedWorkspaceClose(target OwnedPaneIdentity) (*Backend, e
 	return bound, nil
 }
 
-func (b *Backend) bindOwnedTarget(target OwnedPaneIdentity, closeRequest *OwnedCloseRequest) (*Backend, error) {
+func (b *Backend) bindOwnedTarget(target corebackend.OwnedPaneIdentity, closeRequest *OwnedCloseRequest) (*Backend, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*commandTimeout)
 	defer cancel()
 	admission, lock, err := b.acquireOwnedOperation(ctx)
@@ -121,12 +110,12 @@ func (b *Backend) cloneWithTarget(target *ownedTargetAdmission) *Backend {
 	return clone
 }
 
-func (b *Backend) boundOwnedTarget(ref corebackend.PaneRef, operation string) (OwnedPaneIdentity, error) {
+func (b *Backend) boundOwnedTarget(ref corebackend.PaneRef, operation string) (corebackend.OwnedPaneIdentity, error) {
 	if b == nil || b.target == nil {
-		return OwnedPaneIdentity{}, corebackend.Unsupported(corebackend.Herdr, operation+" without an immutable target admission")
+		return corebackend.OwnedPaneIdentity{}, corebackend.Unsupported(corebackend.Herdr, operation+" without an immutable target admission")
 	}
 	if ref != b.target.target.Ref {
-		return OwnedPaneIdentity{}, fmt.Errorf("%w: %s reference does not match immutable admission", ErrOwnedIdentityMismatch, operation)
+		return corebackend.OwnedPaneIdentity{}, fmt.Errorf("%w: %s reference does not match immutable admission", corebackend.ErrOwnedIdentityMismatch, operation)
 	}
 	return cloneOwnedPaneIdentity(b.target.target), nil
 }
@@ -142,7 +131,7 @@ func (b *Backend) readCore(ref corebackend.PaneRef, lines int) (string, error) {
 }
 
 // ReadOwnedPane reads an identity-fenced pane within the caller's deadline.
-func (s *OwnedSession) ReadOwnedPane(ctx context.Context, target OwnedPaneIdentity, lines int) (string, error) {
+func (s *OwnedSession) ReadOwnedPane(ctx context.Context, target corebackend.OwnedPaneIdentity, lines int) (string, error) {
 	if s == nil || s.backend == nil {
 		return "", fmt.Errorf("herdr owned session is nil")
 	}
@@ -152,7 +141,7 @@ func (s *OwnedSession) ReadOwnedPane(ctx context.Context, target OwnedPaneIdenti
 	return s.backend.readOwned(ctx, target, lines)
 }
 
-func (b *Backend) readOwned(ctx context.Context, target OwnedPaneIdentity, lines int) (string, error) {
+func (b *Backend) readOwned(ctx context.Context, target corebackend.OwnedPaneIdentity, lines int) (string, error) {
 	if lines < 0 {
 		return "", fmt.Errorf("herdr read lines must be non-negative")
 	}
@@ -192,12 +181,12 @@ func (b *Backend) sendLineCore(ref corebackend.PaneRef, line string) error {
 	return b.sendLineOwned(ctx, target, line)
 }
 
-func (b *Backend) sendLineOwned(ctx context.Context, target OwnedPaneIdentity, line string) error {
+func (b *Backend) sendLineOwned(ctx context.Context, target corebackend.OwnedPaneIdentity, line string) error {
 	if strings.ContainsAny(line, "\x00\r\n") {
 		return fmt.Errorf("herdr send line contains a NUL, CR, or LF byte")
 	}
 	if target.AgentID == "" || target.AgentSession == nil {
-		return fmt.Errorf("%w: send line requires a saved live-agent identity", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: send line requires a saved live-agent identity", corebackend.ErrOwnedIdentityMismatch)
 	}
 	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
@@ -223,7 +212,7 @@ func (b *Backend) sendLineOwned(ctx context.Context, target OwnedPaneIdentity, l
 
 // PrepareNudge completes the owned-route preflight before the caller's final
 // cooperative-state gate. The returned function issues only agent prompt.
-func (s *OwnedSession) PrepareNudge(ctx context.Context, target NudgeTarget, line string) (NudgePrompt, error) {
+func (s *OwnedSession) PrepareNudge(ctx context.Context, target corebackend.NudgeTarget, line string) (corebackend.NudgePrompt, error) {
 	if err := validateNudgeRequest(s, line); err != nil {
 		return nil, err
 	}
@@ -233,7 +222,7 @@ func (s *OwnedSession) PrepareNudge(ctx context.Context, target NudgeTarget, lin
 	}
 	defer unlockPrivateFile(lock)
 	if !validNudgeTarget(target, admission) {
-		return nil, fmt.Errorf("%w: saved nudge target is incomplete or belongs to a foreign route", ErrOwnedIdentityMismatch)
+		return nil, fmt.Errorf("%w: saved nudge target is incomplete or belongs to a foreign route", corebackend.ErrOwnedIdentityMismatch)
 	}
 	target.AgentSession = cloneAgentSession(target.AgentSession)
 	probed, err := s.backend.probeOwned(ctx, admission)
@@ -247,7 +236,7 @@ func (s *OwnedSession) PrepareNudge(ctx context.Context, target NudgeTarget, lin
 
 // Nudge preserves the direct infra entrypoint for callers that do not have a
 // separate cooperative-state gate.
-func (s *OwnedSession) Nudge(ctx context.Context, target NudgeTarget, line string) error {
+func (s *OwnedSession) Nudge(ctx context.Context, target corebackend.NudgeTarget, line string) error {
 	prompt, err := s.PrepareNudge(ctx, target, line)
 	if err != nil {
 		return err
@@ -265,13 +254,13 @@ func validateNudgeRequest(session *OwnedSession, line string) error {
 	return nil
 }
 
-func (b *Backend) runNudgePrompt(ctx context.Context, probed probeResult, target NudgeTarget, line string) error {
+func (b *Backend) runNudgePrompt(ctx context.Context, probed probeResult, target corebackend.NudgeTarget, line string) error {
 	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route,
 		"agent", "prompt", target.Ref.Pane, line)
 	if err != nil {
 		return methodUnavailable("agent.prompt")
 	}
-	identity := OwnedPaneIdentity{
+	identity := corebackend.OwnedPaneIdentity{
 		Ref: target.Ref, TerminalID: target.TerminalID, AgentID: target.AgentID,
 		AgentSession: cloneAgentSession(target.AgentSession),
 	}
@@ -281,7 +270,7 @@ func (b *Backend) runNudgePrompt(ctx context.Context, probed probeResult, target
 	return nil
 }
 
-func validNudgeTarget(target NudgeTarget, admission ownedAdmission) bool {
+func validNudgeTarget(target corebackend.NudgeTarget, admission ownedAdmission) bool {
 	checks := []bool{
 		target.Ref.Backend == corebackend.Herdr,
 		target.SessionID == admission.marker.Session,
@@ -297,7 +286,7 @@ func validNudgeTarget(target NudgeTarget, admission ownedAdmission) bool {
 	return target.AgentSession == nil || target.AgentSession.Valid()
 }
 
-func validateAgentPromptResponse(data []byte, target OwnedPaneIdentity) error {
+func validateAgentPromptResponse(data []byte, target corebackend.OwnedPaneIdentity) error {
 	var envelope agentPromptEnvelope
 	if err := decodeOne(data, &envelope); err != nil {
 		return err
@@ -308,17 +297,17 @@ func validateAgentPromptResponse(data []byte, target OwnedPaneIdentity) error {
 	agent := envelope.Result.Agent
 	if agent.TerminalID != target.TerminalID || agent.WorkspaceID != target.Ref.Workspace || agent.TabID == "" ||
 		agent.PaneID != target.Ref.Pane || agent.Focused == nil || agent.Revision == nil {
-		return fmt.Errorf("%w: prompted agent identity changed", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: prompted agent identity changed", corebackend.ErrOwnedIdentityMismatch)
 	}
 	agentID := optionalString(agent.Name)
 	if agentID == "" {
 		agentID = optionalString(agent.Agent)
 	}
 	if agentID != target.AgentID {
-		return fmt.Errorf("%w: prompted agent name changed", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: prompted agent name changed", corebackend.ErrOwnedIdentityMismatch)
 	}
 	if !agentPromptSessionMatches(agent.AgentSession, target.AgentSession) {
-		return fmt.Errorf("%w: prompted agent session changed", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: prompted agent session changed", corebackend.ErrOwnedIdentityMismatch)
 	}
 	return nil
 }
@@ -346,9 +335,9 @@ func (b *Backend) focusCore(ref corebackend.PaneRef) error {
 	return b.focusOwned(ctx, target)
 }
 
-func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) error {
+func (b *Backend) focusOwned(ctx context.Context, target corebackend.OwnedPaneIdentity) error {
 	if (target.AgentID == "") != (target.AgentSession == nil) {
-		return fmt.Errorf("%w: focus target has a partial live-agent identity", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: focus target has a partial live-agent identity", corebackend.ErrOwnedIdentityMismatch)
 	}
 	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
@@ -375,7 +364,7 @@ func (b *Backend) focusOwned(ctx context.Context, target OwnedPaneIdentity) erro
 	}
 	current, ok := view.find(target.Ref)
 	if !ok || !ownedPaneMatches(target, current) || !current.paneFocused {
-		return fmt.Errorf("%w: focus did not select the admitted pane", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: focus did not select the admitted pane", corebackend.ErrOwnedIdentityMismatch)
 	}
 	return nil
 }
@@ -390,7 +379,7 @@ func (b *Backend) closeCore(ref corebackend.PaneRef) error {
 	return b.closePaneOwned(ctx, target)
 }
 
-func (b *Backend) closePaneOwned(ctx context.Context, target OwnedPaneIdentity) error {
+func (b *Backend) closePaneOwned(ctx context.Context, target corebackend.OwnedPaneIdentity) error {
 	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
 		return err
@@ -412,7 +401,7 @@ func (b *Backend) closePaneOwned(ctx context.Context, target OwnedPaneIdentity) 
 		if ownedPaneMatches(target, current) {
 			return fmt.Errorf("herdr pane close returned success but target remains live")
 		}
-		return fmt.Errorf("%w: pane id was reused after close", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: pane id was reused after close", corebackend.ErrOwnedIdentityMismatch)
 	}
 	return nil
 }
@@ -423,7 +412,7 @@ func (b *Backend) CloseOwned(req corebackend.CloseRequest) (corebackend.CloseRes
 		return failed, corebackend.Unsupported(corebackend.Herdr, "owned close without an immutable target admission")
 	}
 	if req != b.target.closeFingerprint {
-		return failed, fmt.Errorf("%w: close request does not match immutable admission", ErrOwnedIdentityMismatch)
+		return failed, fmt.Errorf("%w: close request does not match immutable admission", corebackend.ErrOwnedIdentityMismatch)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*commandTimeout)
 	defer cancel()
@@ -433,7 +422,7 @@ func (b *Backend) CloseOwned(req corebackend.CloseRequest) (corebackend.CloseRes
 	return b.closeOwnedSession(ctx, cloneOwnedCloseRequest(*b.target.closeRequest))
 }
 
-func (b *Backend) closeOwnedWorkspace(ctx context.Context, target OwnedPaneIdentity) (corebackend.CloseResult, error) {
+func (b *Backend) closeOwnedWorkspace(ctx context.Context, target corebackend.OwnedPaneIdentity) (corebackend.CloseResult, error) {
 	failed := corebackend.CloseResult{Status: corebackend.CloseFailed}
 	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
@@ -490,7 +479,7 @@ func (b *Backend) closeOwnedSession(ctx context.Context, req OwnedCloseRequest) 
 	if err := verifyWorktreeOwnership(req); err != nil {
 		return failed, fmt.Errorf("verify retained checkout after workspace close: %w", err)
 	}
-	return failed, fmt.Errorf("%w: workspace %s is closed but checkout %s was not removed", ErrOwnedCheckoutRetained, target.Ref.Workspace, target.WorktreePath)
+	return failed, fmt.Errorf("%w: workspace %s is closed but checkout %s was not removed", corebackend.ErrOwnedCheckoutRetained, target.Ref.Workspace, target.WorktreePath)
 }
 
 type ownedSnapshotView struct {
@@ -505,7 +494,7 @@ type ownedWorkspaceView struct {
 }
 
 type ownedPaneView struct {
-	identity    OwnedPaneIdentity
+	identity    corebackend.OwnedPaneIdentity
 	paneFocused bool
 }
 
@@ -537,7 +526,7 @@ func (b *Backend) ownedSnapshotView(ctx context.Context, admission ownedAdmissio
 	}
 	for _, pane := range panes {
 		workspace := view.workspaces[pane.Ref.Workspace]
-		identity := OwnedPaneIdentity{
+		identity := corebackend.OwnedPaneIdentity{
 			Ref: pane.Ref, SessionID: pane.SessionID, SocketPath: pane.SocketPath,
 			WorkspaceLabel: workspace.label, TerminalID: pane.TerminalID, RepoKey: pane.RepoKey,
 			WorktreePath: pane.WorktreePath, CurrentPath: pane.CurrentPath, AgentID: pane.AgentID,
@@ -558,51 +547,51 @@ func (v ownedSnapshotView) workspacePresent(id string) bool {
 	return ok
 }
 
-func (b *Backend) resolveOwnedTarget(ctx context.Context, admission ownedAdmission, expected OwnedPaneIdentity) (OwnedPaneIdentity, probeResult, error) {
+func (b *Backend) resolveOwnedTarget(ctx context.Context, admission ownedAdmission, expected corebackend.OwnedPaneIdentity) (corebackend.OwnedPaneIdentity, probeResult, error) {
 	if err := validateSavedTarget(expected, admission); err != nil {
-		return OwnedPaneIdentity{}, probeResult{}, err
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, err
 	}
 	view, err := b.ownedSnapshotView(ctx, admission)
 	if err != nil {
-		return OwnedPaneIdentity{}, probeResult{}, err
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, err
 	}
 	current, ok := view.find(expected.Ref)
 	if !ok || !ownedPaneMatches(expected, current) {
-		return OwnedPaneIdentity{}, probeResult{}, fmt.Errorf("%w: saved target is not live", ErrOwnedIdentityMismatch)
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, fmt.Errorf("%w: saved target is not live", corebackend.ErrOwnedIdentityMismatch)
 	}
 	probed, err := b.probeOwned(ctx, admission)
 	return cloneOwnedPaneIdentity(expected), probed, err
 }
 
-func (b *Backend) verifyOwnedTargetAfter(ctx context.Context, admission ownedAdmission, target OwnedPaneIdentity) error {
+func (b *Backend) verifyOwnedTargetAfter(ctx context.Context, admission ownedAdmission, target corebackend.OwnedPaneIdentity) error {
 	view, err := b.ownedSnapshotView(ctx, admission)
 	if err != nil {
 		return err
 	}
 	current, ok := view.find(target.Ref)
 	if !ok || !ownedPaneMatches(target, current) {
-		return ErrOwnedIdentityMismatch
+		return corebackend.ErrOwnedIdentityMismatch
 	}
 	return nil
 }
 
-func validateSavedTarget(target OwnedPaneIdentity, admission ownedAdmission) error {
+func validateSavedTarget(target corebackend.OwnedPaneIdentity, admission ownedAdmission) error {
 	if target.Ref.Backend != corebackend.Herdr || target.Ref.Workspace == "" || target.Ref.Pane == "" ||
 		target.SessionID != admission.marker.Session || target.SocketPath != admission.marker.SocketPath ||
 		target.WorkspaceLabel == "" || target.TerminalID == "" || target.CurrentPath == "" {
-		return fmt.Errorf("%w: saved target is incomplete or belongs to a foreign route", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: saved target is incomplete or belongs to a foreign route", corebackend.ErrOwnedIdentityMismatch)
 	}
 	if (target.RepoKey == "") != (target.WorktreePath == "") {
-		return fmt.Errorf("%w: saved worktree provenance is incomplete", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: saved worktree provenance is incomplete", corebackend.ErrOwnedIdentityMismatch)
 	}
 	return nil
 }
 
-func ownedPaneMatches(expected OwnedPaneIdentity, current ownedPaneView) bool {
+func ownedPaneMatches(expected corebackend.OwnedPaneIdentity, current ownedPaneView) bool {
 	return equalOwnedPane(expected, current.identity)
 }
 
-func equalOwnedPane(left, right OwnedPaneIdentity) bool {
+func equalOwnedPane(left, right corebackend.OwnedPaneIdentity) bool {
 	if left.Ref != right.Ref || left.SessionID != right.SessionID || left.SocketPath != right.SocketPath ||
 		left.WorkspaceLabel != right.WorkspaceLabel || left.TerminalID != right.TerminalID || left.RepoKey != right.RepoKey ||
 		left.WorktreePath != right.WorktreePath || left.CurrentPath != right.CurrentPath || left.AgentID != right.AgentID {
@@ -614,7 +603,7 @@ func equalOwnedPane(left, right OwnedPaneIdentity) bool {
 	return *left.AgentSession == *right.AgentSession
 }
 
-func cloneOwnedPaneIdentity(target OwnedPaneIdentity) OwnedPaneIdentity {
+func cloneOwnedPaneIdentity(target corebackend.OwnedPaneIdentity) corebackend.OwnedPaneIdentity {
 	target.AgentSession = cloneAgentSession(target.AgentSession)
 	return target
 }
@@ -645,7 +634,7 @@ type worktreeOwnershipMarker struct {
 func verifyWorktreeOwnership(req OwnedCloseRequest) error {
 	target := req.Target
 	if !validHexToken(req.WorktreeOwnershipNonce) || target.WorkspaceLabel != req.WorktreeOwnershipNonce || target.RepoKey == "" || target.WorktreePath == "" {
-		return fmt.Errorf("%w: owned close requires matching worktree ownership", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: owned close requires matching worktree ownership", corebackend.ErrOwnedIdentityMismatch)
 	}
 	paths := []struct {
 		description string
@@ -658,15 +647,15 @@ func verifyWorktreeOwnership(req OwnedCloseRequest) error {
 	for _, candidate := range paths {
 		description, path := candidate.description, candidate.path
 		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-			return fmt.Errorf("%w: %s path is not canonical", ErrOwnedIdentityMismatch, description)
+			return fmt.Errorf("%w: %s path is not canonical", corebackend.ErrOwnedIdentityMismatch, description)
 		}
 		resolved, err := filepath.EvalSymlinks(path)
 		if err != nil || resolved != path {
-			return fmt.Errorf("%w: %s path does not resolve to its saved identity", ErrOwnedIdentityMismatch, description)
+			return fmt.Errorf("%w: %s path does not resolve to its saved identity", corebackend.ErrOwnedIdentityMismatch, description)
 		}
 		info, err := os.Lstat(path)
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%w: %s path is not a real directory", ErrOwnedIdentityMismatch, description)
+			return fmt.Errorf("%w: %s path is not a real directory", corebackend.ErrOwnedIdentityMismatch, description)
 		}
 		if err := validateOwnerUID(path, info); err != nil {
 			return err
@@ -699,7 +688,7 @@ func verifyWorktreeOwnership(req OwnedCloseRequest) error {
 	}
 	want := worktreeOwnershipMarker{Nonce: req.WorktreeOwnershipNonce, WorkspaceID: target.Ref.Workspace, RepoKey: target.RepoKey, CheckoutPath: target.WorktreePath, GitDir: req.WorktreeGitDir}
 	if marker != want {
-		return fmt.Errorf("%w: worktree ownership marker does not match saved identity", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: worktree ownership marker does not match saved identity", corebackend.ErrOwnedIdentityMismatch)
 	}
 	return nil
 }

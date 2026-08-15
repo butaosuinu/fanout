@@ -14,7 +14,6 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
@@ -24,8 +23,8 @@ import (
 // nudge. Production opens it without creating or restarting a session.
 type HerdrNudger interface {
 	LivePanes(context.Context) ([]backend.LivePane, error)
-	ProcessInfo(context.Context, string) (herdrrun.PaneProcessInfo, error)
-	PrepareNudge(context.Context, herdrrun.NudgeTarget, string) (herdrrun.NudgePrompt, error)
+	ProcessInfo(context.Context, string) (backend.PaneProcessInfo, error)
+	PrepareNudge(context.Context, backend.NudgeTarget, string) (backend.NudgePrompt, error)
 }
 
 // Request is the parsed, validated form of a `fanout msg` invocation

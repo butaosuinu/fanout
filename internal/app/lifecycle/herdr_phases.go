@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -75,7 +75,7 @@ func adoptReopenedHerdrWorkspace(
 	opts Options,
 	journal *state.LockedHerdrIntents,
 	intent state.HerdrIntent,
-	workspace herdrrun.WorkspaceObservation,
+	workspace backend.WorkspaceObservation,
 	checkout worktree.CheckoutObservation,
 ) (state.HerdrIntent, error) {
 	resource := herdrResourceFromObservation(workspace)
@@ -128,14 +128,14 @@ func issueHerdrReopen(
 	ctx context.Context,
 	journal *state.LockedHerdrIntents,
 	runtime HerdrRuntime,
-	coordinator herdrrun.WorkspaceObservation,
+	coordinator backend.WorkspaceObservation,
 	intent *state.HerdrIntent,
 ) (bool, error) {
 	if err := runtime.VerifyWorktreeSetupPolicy(ctx); err != nil {
 		return false, err
 	}
 	return issueHerdrCleanupMutation(ctx, journal, intent, func() error {
-		_, err := runtime.OpenWorktree(ctx, herdrrun.WorktreeOpenRequest{
+		_, err := runtime.OpenWorktree(ctx, backend.WorktreeOpenRequest{
 			Coordinator: coordinator, SourceRepoKey: intent.Resource.RepoKey,
 			SourceRepoRoot: intent.Resource.RepoRoot, Path: intent.WorktreePath,
 			Label: intent.WorkspaceLabel,
@@ -170,14 +170,14 @@ func currentHerdrCoordinator(
 	ctx context.Context,
 	runtime HerdrRuntime,
 	resource state.HerdrResource,
-) (herdrrun.WorkspaceObservation, error) {
+) (backend.WorkspaceObservation, error) {
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
-		return herdrrun.WorkspaceObservation{}, err
+		return backend.WorkspaceObservation{}, err
 	}
 	workspace, err := findUniqueWorkspace(workspaces, false, herdrCoordinatorWorkspacePredicate(resource))
 	if err != nil {
-		return herdrrun.WorkspaceObservation{}, err
+		return backend.WorkspaceObservation{}, err
 	}
 	return *workspace, nil
 }
@@ -307,7 +307,7 @@ func verifyHerdrWorkspaceClosePreconditions(
 }
 
 func herdrMutationDefinitelyNotIssued(err error) bool {
-	return errors.Is(err, herdrrun.ErrMutationNotIssued) || errors.Is(err, herdrrun.ErrMutationRejected)
+	return errors.Is(err, backend.ErrMutationNotIssued) || errors.Is(err, backend.ErrMutationRejected)
 }
 
 func restorePlannedHerdrCleanup(

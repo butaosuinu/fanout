@@ -54,7 +54,7 @@ func releaseRejectedHerdrRestart(
 	created bool,
 	cause error,
 ) error {
-	if !created || !errors.Is(cause, herdrrun.ErrOwnedGenerationStillLive) {
+	if !created || !errors.Is(cause, backend.ErrOwnedGenerationStillLive) {
 		return cause
 	}
 	return releaseHerdrIntent(journal, intent.ID, cause)

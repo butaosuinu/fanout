@@ -13,7 +13,6 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
@@ -263,8 +262,8 @@ func (s *Server) handlePeek(w http.ResponseWriter, r *http.Request) {
 
 func paneReadErrorStatus(pv sessionview.PaneView, err error) int {
 	if backend.NormalizeName(pv.Backend) == backend.Herdr &&
-		(errors.Is(err, herdrrun.ErrOwnedIdentityMismatch) ||
-			errors.Is(err, herdrrun.ErrOwnedSessionNotFound)) {
+		(errors.Is(err, backend.ErrOwnedIdentityMismatch) ||
+			errors.Is(err, backend.ErrOwnedSessionNotFound)) {
 		return http.StatusNotFound
 	}
 	return http.StatusBadGateway

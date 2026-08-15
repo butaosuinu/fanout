@@ -15,7 +15,6 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
@@ -368,8 +367,8 @@ func TestPeekStaleHerdrPaneHeadIs404WithoutRead(t *testing.T) {
 
 func TestPeekHerdrIdentityLossDuringReadIs404(t *testing.T) {
 	for _, targetErr := range []error{
-		herdrrun.ErrOwnedIdentityMismatch,
-		herdrrun.ErrOwnedSessionNotFound,
+		backend.ErrOwnedIdentityMismatch,
+		backend.ErrOwnedSessionNotFound,
 	} {
 		srv := &Server{
 			poller:        &poller{},

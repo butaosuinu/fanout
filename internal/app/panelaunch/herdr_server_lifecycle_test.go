@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -93,7 +92,7 @@ func TestReleaseRejectedHerdrRestartDropsOnlyFreshLiveIntent(t *testing.T) {
 	if err = journal.Save(); err != nil {
 		t.Fatal(err)
 	}
-	cause := herdrrun.ErrOwnedGenerationStillLive
+	cause := backend.ErrOwnedGenerationStillLive
 	if err = releaseRejectedHerdrRestart(journal, intent, true, cause); !errors.Is(err, cause) {
 		t.Fatalf("release fresh live restart error = %v", err)
 	}

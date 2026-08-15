@@ -47,7 +47,7 @@ func (l *Launcher) startHerdrRequestAgent(
 	ctx context.Context,
 	req Request,
 	locked *state.LockedStore,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	intent state.HerdrIntent,
 	callerEnvironment []string,
 ) (backend.LivePane, error) {
@@ -71,7 +71,7 @@ func (l *Launcher) startHerdrRequestAgent(
 func (l *Launcher) startHerdrAgent(
 	ctx context.Context,
 	locked *state.LockedStore,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	intent state.HerdrIntent,
 	validate herdrLaunchValidator,
 	build herdrLaunchCapsuleBuilder,
@@ -120,7 +120,7 @@ func admitHerdrAgentStartDeadline(
 func (l *Launcher) admitHerdrLauncher(
 	ctx context.Context,
 	journal *state.LockedHerdrIntents,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	intent *state.HerdrIntent,
 ) error {
 	if err := l.Herdr.WaitForLauncher(ctx, intent.Resource.PaneID, intent.Launch.Nonce, remainingHerdrLaunchTime(*intent)); err != nil {
@@ -145,7 +145,7 @@ func (l *Launcher) admitHerdrLauncher(
 func (l *Launcher) finishIssuedHerdrAgent(
 	ctx context.Context,
 	locked *state.LockedStore,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	intent state.HerdrIntent,
 	expected herdrPaneSelector,
 	adopt herdrAgentAdoptFunc,
@@ -171,7 +171,7 @@ func (l *Launcher) finishIssuedHerdrAgent(
 func (l *Launcher) observeStartedHerdrPane(
 	ctx context.Context,
 	locked *state.LockedStore,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	intent state.HerdrIntent,
 	expected herdrPaneSelector,
 	adopt herdrAgentAdoptFunc,
@@ -318,7 +318,7 @@ func (l *Launcher) verifyAndRenameHerdrAgent(
 	ctx context.Context,
 	intent state.HerdrIntent,
 ) (backend.ProcessIdentity, error) {
-	var process herdrrun.PaneProcessInfo
+	var process backend.PaneProcessInfo
 	err := retryHerdrObservation(ctx, intent, func(observeCtx context.Context) error {
 		var processErr error
 		process, processErr = l.Herdr.ProcessInfo(observeCtx, intent.Resource.PaneID)
@@ -441,9 +441,9 @@ func waitForHerdrObservationRetry(ctx context.Context, intent state.HerdrIntent)
 }
 
 func verifyHerdrLauncherProcess(
-	info herdrrun.PaneProcessInfo,
+	info backend.PaneProcessInfo,
 	intent state.HerdrIntent,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 ) error {
 	if info.ShellPID <= 1 || info.ForegroundProcessGroup <= 1 {
 		return fmt.Errorf("herdr launcher process group is incomplete")
@@ -458,13 +458,13 @@ func verifyHerdrLauncherProcess(
 	return fmt.Errorf("herdr launcher process identity does not match the bundled fanout executable")
 }
 
-func verifyHerdrAgentProcess(info herdrrun.PaneProcessInfo, intent state.HerdrIntent) error {
+func verifyHerdrAgentProcess(info backend.PaneProcessInfo, intent state.HerdrIntent) error {
 	_, err := matchHerdrAgentProcess(info, intent)
 	return err
 }
 
 func matchHerdrAgentProcess(
-	info herdrrun.PaneProcessInfo,
+	info backend.PaneProcessInfo,
 	intent state.HerdrIntent,
 ) (backend.ProcessIdentity, error) {
 	identity, err := herdrprocess.MatchAgent(info, herdrLaunchProcessIdentity(intent))
@@ -487,7 +487,7 @@ func herdrLaunchProcessIdentity(intent state.HerdrIntent) herdrprocess.Identity 
 func (l *Launcher) waitForHerdrLaunchProcess(
 	ctx context.Context,
 	intent state.HerdrIntent,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 ) error {
 	return retryHerdrObservation(ctx, intent, func(observeCtx context.Context) error {
 		process, err := l.Herdr.ProcessInfo(observeCtx, intent.Resource.PaneID)

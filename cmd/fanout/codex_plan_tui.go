@@ -108,7 +108,7 @@ func codexPlanScreenCapture(getenv func(string) string) func() (string, error) {
 }
 
 func newHerdrCodexPlanCapture(getenv func(string) string) func() (string, error) {
-	base := herdrrun.OwnedPaneIdentity{
+	base := backend.OwnedPaneIdentity{
 		Ref: backend.PaneRef{
 			Backend:   backend.Herdr,
 			Workspace: getenv(telemetry.WorkspaceIDEnv), Pane: getenv(telemetry.PaneIDEnv),
@@ -130,7 +130,7 @@ func newHerdrCodexPlanCapture(getenv func(string) string) func() (string, error)
 	})
 }
 
-func openHerdrCodexPlanCapture(ctx context.Context, base herdrrun.OwnedPaneIdentity) (*herdrrun.OwnedSession, herdrrun.OwnedPaneIdentity, error) {
+func openHerdrCodexPlanCapture(ctx context.Context, base backend.OwnedPaneIdentity) (*herdrrun.OwnedSession, backend.OwnedPaneIdentity, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, base, fmt.Errorf("resolve Codex Plan controller cwd: %w", err)
@@ -144,7 +144,7 @@ func openHerdrCodexPlanCapture(ctx context.Context, base herdrrun.OwnedPaneIdent
 	return owned, base, err
 }
 
-func captureHerdrCodexPlanScreen(ctx context.Context, owned *herdrrun.OwnedSession, base herdrrun.OwnedPaneIdentity) (string, error) {
+func captureHerdrCodexPlanScreen(ctx context.Context, owned *herdrrun.OwnedSession, base backend.OwnedPaneIdentity) (string, error) {
 	panes, err := owned.LivePanes(ctx)
 	if err != nil {
 		return "", err
@@ -193,7 +193,7 @@ func (w *bestEffortScreenCapture) capture() (string, error) {
 	return result.screen, result.err
 }
 
-func herdrCodexPlanCaptureTarget(base herdrrun.OwnedPaneIdentity, panes []backend.LivePane) (herdrrun.OwnedPaneIdentity, error) {
+func herdrCodexPlanCaptureTarget(base backend.OwnedPaneIdentity, panes []backend.LivePane) (backend.OwnedPaneIdentity, error) {
 	matches := make([]backend.LivePane, 0, 1)
 	for _, pane := range panes {
 		identity := []bool{
@@ -207,7 +207,7 @@ func herdrCodexPlanCaptureTarget(base herdrrun.OwnedPaneIdentity, panes []backen
 		}
 	}
 	if len(matches) != 1 {
-		return herdrrun.OwnedPaneIdentity{}, fmt.Errorf("codex Plan controller pane does not match exactly one live Herdr target")
+		return backend.OwnedPaneIdentity{}, fmt.Errorf("codex Plan controller pane does not match exactly one live Herdr target")
 	}
 	base.AgentSession = matches[0].AgentSession
 	return base, nil

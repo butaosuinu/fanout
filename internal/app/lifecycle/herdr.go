@@ -24,8 +24,8 @@ var ErrHerdrManualCleanupRequired = errors.New("herdr lifecycle requires manual 
 type HerdrRuntime interface {
 	VerifyOwned(context.Context) error
 	VerifyWorktreeSetupPolicy(context.Context) error
-	ObserveWorkspaces(context.Context) ([]herdrrun.WorkspaceObservation, error)
-	OpenWorktree(context.Context, herdrrun.WorktreeOpenRequest) (herdrrun.WorktreeMutationResult, error)
+	ObserveWorkspaces(context.Context) ([]backend.WorkspaceObservation, error)
+	OpenWorktree(context.Context, backend.WorktreeOpenRequest) (backend.WorktreeMutationResult, error)
 	RemoveWorktree(context.Context, string, string) error
 	CloseWorkspace(context.Context, string) error
 }
@@ -362,7 +362,7 @@ func attachHerdrCleanupCoordinator(
 	return intent, nil
 }
 
-func herdrCoordinatorResource(workspace herdrrun.WorkspaceObservation) state.HerdrResource {
+func herdrCoordinatorResource(workspace backend.WorkspaceObservation) state.HerdrResource {
 	return state.HerdrResource{
 		WorkspaceID: workspace.WorkspaceID,
 		Label:       workspace.Label,

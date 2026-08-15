@@ -12,7 +12,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -46,7 +45,7 @@ func herdrNudgeCandidate(pane state.Pane) (string, string, bool) {
 	return observedState, "", true
 }
 
-func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (herdrrun.NudgePrompt, state.Pane, string, error) {
+func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (backend.NudgePrompt, state.Pane, string, error) {
 	if deps.ReadLockedState == nil {
 		return nil, state.Pane{}, "", fmt.Errorf("herdr nudge runtime is unavailable")
 	}
@@ -65,7 +64,7 @@ func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (herdrru
 	return prompt, final, finalState, nil
 }
 
-func prepareHerdrPrompt(ctx context.Context, pane state.Pane, open func(context.Context, string) (HerdrNudger, error)) (herdrrun.NudgePrompt, error) {
+func prepareHerdrPrompt(ctx context.Context, pane state.Pane, open func(context.Context, string) (HerdrNudger, error)) (backend.NudgePrompt, error) {
 	runtime, err := openHerdrNudgeRuntime(ctx, open, pane.HerdrRepoKey)
 	if err != nil {
 		return nil, err
@@ -215,8 +214,8 @@ func sameAgentSession(left, right *backend.AgentSessionRef) bool {
 	return *left == *right
 }
 
-func herdrNudgeTarget(pane state.Pane) herdrrun.NudgeTarget {
-	return herdrrun.NudgeTarget{
+func herdrNudgeTarget(pane state.Pane) backend.NudgeTarget {
+	return backend.NudgeTarget{
 		Ref: paneRef(pane), SessionID: pane.HerdrSession, SocketPath: pane.HerdrSocketPath,
 		TerminalID: pane.HerdrTerminalID, AgentID: pane.HerdrAgentID,
 		AgentSession: pane.HerdrAgentSession,

@@ -24,8 +24,6 @@ import (
 // replacing its own values and never another reporter's.
 const MetadataSource = "fanout"
 
-const MaxMetadataTokenValue = corebackend.MaxMetadataTokenValue
-
 // maxMetadataTokensPerReport is Herdr's per-report token cap.
 const maxMetadataTokensPerReport = 16
 
@@ -39,14 +37,8 @@ const MetadataReportBudget = 4 * commandTimeout
 
 var metadataTokenName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
-type (
-	MetadataToken  = corebackend.MetadataToken
-	MetadataTarget = corebackend.MetadataTarget
-	MetadataReport = corebackend.MetadataReport
-)
-
 // ReportMetadata publishes display-only tokens for one launched child.
-func (s *OwnedSession) ReportMetadata(ctx context.Context, report MetadataReport) error {
+func (s *OwnedSession) ReportMetadata(ctx context.Context, report corebackend.MetadataReport) error {
 	if s == nil || s.backend == nil {
 		return fmt.Errorf("herdr owned session is nil")
 	}
@@ -74,7 +66,7 @@ func (s *OwnedSession) ReportMetadata(ctx context.Context, report MetadataReport
 func (b *Backend) reportBracketedMetadata(
 	ctx context.Context,
 	probed probeResult,
-	report MetadataReport,
+	report corebackend.MetadataReport,
 ) error {
 	issued := 0
 	for _, args := range metadataCalls(report) {
@@ -119,7 +111,7 @@ func (b *Backend) runMetadataReport(ctx context.Context, probed probeResult, arg
 	return nil
 }
 
-func metadataCalls(report MetadataReport) [][]string {
+func metadataCalls(report corebackend.MetadataReport) [][]string {
 	calls := make([][]string, 0, 2)
 	if len(report.WorkspaceTokens) > 0 {
 		calls = append(calls, metadataArgs("workspace", report.Target.WorkspaceID, report.WorkspaceTokens))
@@ -133,7 +125,7 @@ func metadataCalls(report MetadataReport) [][]string {
 // metadataArgs pins the 0.7.5 report-metadata argv. The presentation fields —
 // title, display agent, state labels — are never passed: fanout owns its own
 // tokens and nothing else on the resource.
-func metadataArgs(resource, id string, tokens []MetadataToken) []string {
+func metadataArgs(resource, id string, tokens []corebackend.MetadataToken) []string {
 	args := make([]string, 0, 5+2*len(tokens))
 	args = append(args, resource, "report-metadata", id, "--source", MetadataSource)
 	for _, token := range tokens {
@@ -153,26 +145,26 @@ func metadataArgs(resource, id string, tokens []MetadataToken) []string {
 func (b *Backend) verifyMetadataTarget(
 	ctx context.Context,
 	probed probeResult,
-	target MetadataTarget,
+	target corebackend.MetadataTarget,
 ) error {
 	snapshot, err := b.observeOwnedSnapshot(ctx, probed)
 	if err != nil {
 		return err
 	}
 	if !metadataTargetLive(target, snapshot) {
-		return fmt.Errorf("%w: metadata target is not live", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: metadata target is not live", corebackend.ErrOwnedIdentityMismatch)
 	}
 	return nil
 }
 
 // metadataTargetLive relies on projectSnapshot having already rejected
 // duplicate workspace and pane IDs, so the first match is the only match.
-func metadataTargetLive(target MetadataTarget, snapshot snapshotJSON) bool {
+func metadataTargetLive(target corebackend.MetadataTarget, snapshot snapshotJSON) bool {
 	return metadataWorkspaceLive(target, *snapshot.Workspaces) &&
 		metadataPaneLive(target, *snapshot.Panes)
 }
 
-func metadataWorkspaceLive(target MetadataTarget, workspaces []workspaceJSON) bool {
+func metadataWorkspaceLive(target corebackend.MetadataTarget, workspaces []workspaceJSON) bool {
 	for _, workspace := range workspaces {
 		if workspace.WorkspaceID != target.WorkspaceID {
 			continue
@@ -184,13 +176,13 @@ func metadataWorkspaceLive(target MetadataTarget, workspaces []workspaceJSON) bo
 
 // metadataProvenanceLive compares the checkout path the way every other Herdr
 // identity check does, so a report cannot reject a target the launch accepted.
-func metadataProvenanceLive(target MetadataTarget, worktree *worktreeInfoJSON) bool {
+func metadataProvenanceLive(target corebackend.MetadataTarget, worktree *worktreeInfoJSON) bool {
 	return worktree != nil && worktree.RepoKey == target.RepoKey &&
 		worktree.RepoRoot == target.RepoRoot &&
 		filepath.Clean(worktree.CheckoutPath) == filepath.Clean(target.CheckoutPath)
 }
 
-func metadataPaneLive(target MetadataTarget, panes []paneJSON) bool {
+func metadataPaneLive(target corebackend.MetadataTarget, panes []paneJSON) bool {
 	for _, pane := range panes {
 		if pane.PaneID != target.PaneID {
 			continue
@@ -200,7 +192,7 @@ func metadataPaneLive(target MetadataTarget, panes []paneJSON) bool {
 	return false
 }
 
-func validateMetadataReport(report MetadataReport) error {
+func validateMetadataReport(report corebackend.MetadataReport) error {
 	if err := validateMetadataTarget(report.Target); err != nil {
 		return err
 	}
@@ -216,19 +208,19 @@ func validateMetadataReport(report MetadataReport) error {
 	return nil
 }
 
-func validateMetadataTarget(target MetadataTarget) error {
+func validateMetadataTarget(target corebackend.MetadataTarget) error {
 	identity := []string{target.WorkspaceID, target.Label, target.PaneID, target.TerminalID}
 	if slices.Contains(identity, "") {
-		return fmt.Errorf("%w: metadata target is incomplete", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: metadata target is incomplete", corebackend.ErrOwnedIdentityMismatch)
 	}
 	provenance := []string{target.RepoKey, target.RepoRoot, target.CheckoutPath}
 	if slices.Contains(provenance, "") {
-		return fmt.Errorf("%w: metadata target worktree provenance is incomplete", ErrOwnedIdentityMismatch)
+		return fmt.Errorf("%w: metadata target worktree provenance is incomplete", corebackend.ErrOwnedIdentityMismatch)
 	}
 	return nil
 }
 
-func validateMetadataTokens(tokens []MetadataToken) error {
+func validateMetadataTokens(tokens []corebackend.MetadataToken) error {
 	if len(tokens) > maxMetadataTokensPerReport {
 		return fmt.Errorf("a report updates at most %d tokens", maxMetadataTokensPerReport)
 	}
@@ -251,8 +243,8 @@ func validateMetadataTokens(tokens []MetadataToken) error {
 // validateMetadataValue fails closed on values Herdr would silently reshape,
 // so the reported value and the value the sidebar shows stay the same string.
 func validateMetadataValue(value string) error {
-	if len([]rune(value)) > MaxMetadataTokenValue {
-		return fmt.Errorf("value exceeds %d characters", MaxMetadataTokenValue)
+	if len([]rune(value)) > corebackend.MaxMetadataTokenValue {
+		return fmt.Errorf("value exceeds %d characters", corebackend.MaxMetadataTokenValue)
 	}
 	if strings.TrimSpace(value) != value || strings.ContainsFunc(value, unicode.IsControl) {
 		return fmt.Errorf("value is not trimmed control-free display text")

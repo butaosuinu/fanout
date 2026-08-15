@@ -12,15 +12,15 @@ import (
 
 const ownedHerdrUnavailable = "pane is not in this repository's fanout-owned Herdr session"
 
-func ownedHerdrPaneIdentity(pane state.Pane) (herdrrun.OwnedPaneIdentity, error) {
+func ownedHerdrPaneIdentity(pane state.Pane) (backend.OwnedPaneIdentity, error) {
 	if backend.NormalizeName(pane.Backend) != backend.Herdr {
-		return herdrrun.OwnedPaneIdentity{}, fmt.Errorf("%s", ownedHerdrUnavailable)
+		return backend.OwnedPaneIdentity{}, fmt.Errorf("%s", ownedHerdrUnavailable)
 	}
 	worktreePath := ""
 	if strings.TrimSpace(pane.HerdrRepoKey) != "" {
 		worktreePath = pane.WorktreePath
 	}
-	identity := herdrrun.OwnedPaneIdentity{
+	identity := backend.OwnedPaneIdentity{
 		Ref: backend.PaneRef{
 			Backend: backend.Herdr, Workspace: pane.HerdrWorkspaceID, Pane: pane.PaneID,
 		},
@@ -31,7 +31,7 @@ func ownedHerdrPaneIdentity(pane state.Pane) (herdrrun.OwnedPaneIdentity, error)
 		AgentSession: cloneAgentSessionRef(pane.HerdrAgentSession),
 	}
 	if strings.TrimSpace(identity.WorkspaceLabel) == "" {
-		return herdrrun.OwnedPaneIdentity{}, fmt.Errorf("saved Herdr pane has no ownership label")
+		return backend.OwnedPaneIdentity{}, fmt.Errorf("saved Herdr pane has no ownership label")
 	}
 	return identity, nil
 }

@@ -7,7 +7,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -21,7 +20,7 @@ const herdrClaudeExitReasons = "logout|prompt_input_exit|bypass_permissions_disa
 
 func newHerdrEmitterLaunch(
 	req Request,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	intent state.HerdrIntent,
 	launchNonce string,
 	agentID string,
@@ -76,7 +75,7 @@ func herdrClaudeHookSettings(fanoutPath string) (string, error) {
 func herdrEmitterEnvironment(
 	statePath string,
 	intent state.HerdrIntent,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	launchNonce string,
 	emitterNonce string,
 	agentName string,

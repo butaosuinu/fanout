@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -114,7 +113,7 @@ func TestStaleHerdrConsoleRecoveryRequiresIdentityMismatch(t *testing.T) {
 	if staleHerdrConsoleRecoverable(os.ErrDeadlineExceeded) {
 		t.Fatal("transient observation error qualified for destructive stale recovery")
 	}
-	mismatch := fmt.Errorf("bind saved console: %w", herdrrun.ErrOwnedIdentityMismatch)
+	mismatch := fmt.Errorf("bind saved console: %w", backend.ErrOwnedIdentityMismatch)
 	if !staleHerdrConsoleRecoverable(mismatch) {
 		t.Fatal("owned identity mismatch did not qualify for stale recovery")
 	}
@@ -150,7 +149,7 @@ func TestStaleHerdrConsoleTargetAdmitsOwnedRouteWithNewProcessIdentity(t *testin
 
 func TestStaleHerdrConsoleWorkspaceWithoutPaneRequiresManualCleanup(t *testing.T) {
 	saved := herdrConsoleTestPane("/repo", "workspace-root", "pane-old")
-	workspaces := []herdrrun.WorkspaceObservation{{
+	workspaces := []backend.WorkspaceObservation{{
 		WorkspaceID: saved.HerdrWorkspaceID,
 		Label:       saved.HerdrWorkspaceLabel,
 	}}

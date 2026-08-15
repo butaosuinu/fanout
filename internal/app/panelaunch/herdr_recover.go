@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -153,7 +153,7 @@ func recoverHerdrCoordinator(
 ) (HerdrRealizeResult, error) {
 	// A structured rejection proves the workspace was not created; release
 	// the intent without depending on a snapshot that may fail transiently.
-	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
+	if errors.Is(mutationErr, backend.ErrMutationRejected) {
 		return HerdrRealizeResult{}, releaseHerdrIntent(locked, intent.ID, mutationErr)
 	}
 	// A failed snapshot classifies nothing: keep the issued intent so the
@@ -210,7 +210,7 @@ func recoverHerdrWorktree(
 	// A structured rejection proves the mutation created nothing; classify
 	// from local Git state under an independent finite budget (the launch
 	// context may already be exhausted).
-	if errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
+	if errors.Is(mutationErr, backend.ErrMutationRejected) {
 		recoveryCtx, cancel := context.WithTimeout(
 			context.Background(),
 			maxHerdrRecoveryClassificationTimeout,
@@ -370,7 +370,7 @@ func finalizeHerdrWorktree(
 	req HerdrWorktreeRequest,
 	source worktree.RepoIdentity,
 	intent *state.HerdrIntent,
-	observation herdrrun.WorkspaceObservation,
+	observation backend.WorkspaceObservation,
 ) error {
 	if err := validateWorkspacePostcondition(*intent, &source, observation); err != nil {
 		// The snapshot succeeded, so the mismatch is confirmed.
@@ -512,7 +512,7 @@ func resumeRealizedHerdrWorktree(
 	if saveErr := locked.Save(); saveErr != nil {
 		return HerdrRealizeResult{}, saveErr
 	}
-	mutation, mutationErr := runtime.OpenWorktree(ctx, herdrrun.WorktreeOpenRequest{
+	mutation, mutationErr := runtime.OpenWorktree(ctx, backend.WorktreeOpenRequest{
 		Coordinator:              observationResource(intent.Coordinator),
 		SourceRepoKey:            source.RepoKey,
 		SourceRepoRoot:           source.RepoRoot,
@@ -522,7 +522,7 @@ func resumeRealizedHerdrWorktree(
 		ExpectedAlreadyOpenLabel: intent.Resource.Label,
 	})
 	if mutationErr != nil {
-		if errors.Is(mutationErr, herdrrun.ErrMutationNotIssued) {
+		if errors.Is(mutationErr, backend.ErrMutationNotIssued) {
 			intent.Status = state.HerdrIntentRealized
 			locked.UpsertIntent(intent)
 			if saveErr := locked.Save(); saveErr != nil {
@@ -531,7 +531,7 @@ func resumeRealizedHerdrWorktree(
 			return HerdrRealizeResult{}, mutationErr
 		}
 		if operationErr := ctx.Err(); operationErr != nil &&
-			!errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
+			!errors.Is(mutationErr, backend.ErrMutationRejected) {
 			return HerdrRealizeResult{}, errors.Join(mutationErr, operationErr)
 		}
 		return recoverHerdrWorktree(ctx, runtime, locked, req, source, intent, mutationErr)

@@ -81,18 +81,6 @@ type binaryAdmission struct {
 	version string
 }
 
-type (
-	WaitStatus = corebackend.WaitStatus
-	WaitResult = corebackend.WaitResult
-)
-
-const (
-	WaitMatched   = corebackend.WaitMatched
-	WaitTimedOut  = corebackend.WaitTimedOut
-	WaitCancelled = corebackend.WaitCancelled
-	WaitFailed    = corebackend.WaitFailed
-)
-
 // New constructs a herdr backend for one named session. socketPath may be
 // empty on the first probe; CheckAvailable resolves it through an explicit
 // --session status call, then pins subsequent probes to the returned path.
@@ -158,7 +146,7 @@ func (b *Backend) ListLive() ([]corebackend.LivePane, error) {
 // totalTimeout selects DefaultWaitTimeout; non-zero values must be whole
 // seconds and at least three seconds. match receives a cloned compatible
 // snapshot and should perform only bounded in-memory inspection.
-func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match func([]corebackend.LivePane) bool) WaitResult {
+func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match func([]corebackend.LivePane) bool) corebackend.WaitResult {
 	if ctx == nil {
 		return failedWait(fmt.Errorf("herdr wait requires a context"))
 	}
@@ -239,7 +227,7 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 			return finishWait(lastPanes, nil, true)
 		}
 		if matched {
-			return WaitResult{Status: WaitMatched, Panes: cloneLivePanes(panes)}
+			return corebackend.WaitResult{Status: corebackend.WaitMatched, Panes: cloneLivePanes(panes)}
 		}
 	}
 	return finishWait(lastPanes, lastErr, lastValid)
@@ -290,14 +278,14 @@ func (b *Backend) waitForNextSnapshot(
 	lastPanes []corebackend.LivePane,
 	lastErr error,
 	lastValid bool,
-) (WaitResult, bool) {
+) (corebackend.WaitResult, bool) {
 	now := b.now()
 	if !now.Before(deadline) {
 		return finishWait(lastPanes, lastErr, lastValid), true
 	}
 	nextStart := lastStart.Add(waitInterval)
 	if !now.Before(nextStart) {
-		return WaitResult{}, false
+		return corebackend.WaitResult{}, false
 	}
 	delay := nextStart.Sub(now)
 	if remaining := deadline.Sub(now); delay > remaining {
@@ -315,13 +303,13 @@ func (b *Backend) waitForNextSnapshot(
 	if !b.now().Before(deadline) {
 		return finishWait(lastPanes, lastErr, lastValid), true
 	}
-	return WaitResult{}, false
+	return corebackend.WaitResult{}, false
 }
 
-func finishWait(lastPanes []corebackend.LivePane, lastErr error, lastValid bool) WaitResult {
+func finishWait(lastPanes []corebackend.LivePane, lastErr error, lastValid bool) corebackend.WaitResult {
 	if lastValid {
-		return WaitResult{
-			Status: WaitTimedOut,
+		return corebackend.WaitResult{
+			Status: corebackend.WaitTimedOut,
 			Panes:  cloneLivePanes(lastPanes),
 		}
 	}
@@ -349,12 +337,12 @@ func cloneLivePanes(panes []corebackend.LivePane) []corebackend.LivePane {
 	return cloned
 }
 
-func failedWait(err error) WaitResult {
-	return WaitResult{Status: WaitFailed, Err: err}
+func failedWait(err error) corebackend.WaitResult {
+	return corebackend.WaitResult{Status: corebackend.WaitFailed, Err: err}
 }
 
-func cancelledWait(err error) WaitResult {
-	return WaitResult{Status: WaitCancelled, Err: err}
+func cancelledWait(err error) corebackend.WaitResult {
+	return corebackend.WaitResult{Status: corebackend.WaitCancelled, Err: err}
 }
 
 type retryableObservationError struct {

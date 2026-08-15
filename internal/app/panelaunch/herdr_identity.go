@@ -8,7 +8,6 @@ import (
 	"slices"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -17,7 +16,7 @@ var errHerdrLauncherIdentityChanged = errors.New("herdr launcher identity change
 func (l *Launcher) verifyHerdrIdleLauncher(
 	ctx context.Context,
 	intent state.HerdrIntent,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 ) error {
 	process, err := l.Herdr.ProcessInfo(ctx, intent.Resource.PaneID)
 	if err != nil {

@@ -9,9 +9,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
-type paneProcessInspector func(context.Context, []PaneProcess) ([]PaneProcess, error)
+type paneProcessInspector func(context.Context, []corebackend.PaneProcess) ([]corebackend.PaneProcess, error)
 
 var errPaneProcessChanged = errors.New("herdr pane process changed during identity inspection")
 
@@ -23,8 +25,8 @@ type processRelation struct {
 
 func (s *OwnedSession) inspectNormalizedPaneProcesses(
 	ctx context.Context,
-	processes []PaneProcess,
-) ([]PaneProcess, error) {
+	processes []corebackend.PaneProcess,
+) ([]corebackend.PaneProcess, error) {
 	normalized, err := normalizePaneProcessArgs(processes)
 	if err != nil {
 		return nil, err
@@ -32,7 +34,7 @@ func (s *OwnedSession) inspectNormalizedPaneProcesses(
 	return s.inspectPaneProcesses(ctx, normalized)
 }
 
-func normalizePaneProcessArgs(processes []PaneProcess) ([]PaneProcess, error) {
+func normalizePaneProcessArgs(processes []corebackend.PaneProcess) ([]corebackend.PaneProcess, error) {
 	normalized := slices.Clone(processes)
 	for i := range normalized {
 		process := &normalized[i]
@@ -48,8 +50,8 @@ func normalizePaneProcessArgs(processes []PaneProcess) ([]PaneProcess, error) {
 
 func (s *OwnedSession) inspectPaneProcesses(
 	ctx context.Context,
-	processes []PaneProcess,
-) ([]PaneProcess, error) {
+	processes []corebackend.PaneProcess,
+) ([]corebackend.PaneProcess, error) {
 	inspect := inspectPaneProcessRelations
 	if s.processInspector != nil {
 		inspect = s.processInspector
@@ -57,7 +59,7 @@ func (s *OwnedSession) inspectPaneProcesses(
 	return inspect(ctx, processes)
 }
 
-func inspectPaneProcessRelations(ctx context.Context, processes []PaneProcess) ([]PaneProcess, error) {
+func inspectPaneProcessRelations(ctx context.Context, processes []corebackend.PaneProcess) ([]corebackend.PaneProcess, error) {
 	pids, err := uniquePaneProcessIDs(processes)
 	if err != nil {
 		return nil, err
@@ -74,7 +76,7 @@ func inspectPaneProcessRelations(ctx context.Context, processes []PaneProcess) (
 	return bindProcessRelations(processes, relations)
 }
 
-func uniquePaneProcessIDs(processes []PaneProcess) ([]string, error) {
+func uniquePaneProcessIDs(processes []corebackend.PaneProcess) ([]string, error) {
 	seen := map[int]bool{}
 	pids := make([]string, 0, len(processes))
 	for _, process := range processes {
@@ -115,9 +117,9 @@ func parseProcessRelations(output string) (map[int]processRelation, error) {
 }
 
 func bindProcessRelations(
-	processes []PaneProcess,
+	processes []corebackend.PaneProcess,
 	relations map[int]processRelation,
-) ([]PaneProcess, error) {
+) ([]corebackend.PaneProcess, error) {
 	bound := slices.Clone(processes)
 	for i := range bound {
 		relation, found := relations[bound[i].PID]

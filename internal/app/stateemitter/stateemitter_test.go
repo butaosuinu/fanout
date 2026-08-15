@@ -13,7 +13,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -86,7 +85,7 @@ func TestEmitUpdatesCodexPlanRowThroughExactControllerProcess(t *testing.T) {
 	observer := exactObserver(pane)
 	observer.observation.ProcessInfo.ForegroundProcesses = append(
 		observer.observation.ProcessInfo.ForegroundProcesses,
-		herdrrun.PaneProcess{
+		backend.PaneProcess{
 			PID: 43, ParentPID: 42, ProcessGroup: 42, Executable: "/opt/codex",
 			Argv0: "/opt/codex", Argv: []string{"--remote", "ws://127.0.0.1:1234"},
 			CWD: pane.WorktreePath,
@@ -603,7 +602,7 @@ func signalForPane(repo string, pane state.Pane) telemetry.Signal {
 }
 
 func exactObserver(pane state.Pane) *fakeObserver {
-	process := herdrrun.PaneProcess{
+	process := backend.PaneProcess{
 		PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: pane.HerdrLaunchExecutable,
 		Argv0: pane.HerdrLaunchExecutable, Argv: pane.HerdrLaunchArgs, CWD: pane.WorktreePath,
 	}
@@ -618,9 +617,9 @@ func exactObserver(pane state.Pane) *fakeObserver {
 	}
 	return &fakeObserver{observation: Observation{
 		Panes: []backend.LivePane{live},
-		ProcessInfo: herdrrun.PaneProcessInfo{
+		ProcessInfo: backend.PaneProcessInfo{
 			PaneID: pane.PaneID, ShellPID: 42, ForegroundProcessGroup: 42,
-			ForegroundProcesses: []herdrrun.PaneProcess{process},
+			ForegroundProcesses: []backend.PaneProcess{process},
 		},
 	}}
 }

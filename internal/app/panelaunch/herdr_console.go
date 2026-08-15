@@ -141,7 +141,7 @@ func reuseHerdrConsole(
 }
 
 func staleHerdrConsoleRecoverable(err error) bool {
-	return errors.Is(err, herdrrun.ErrOwnedIdentityMismatch)
+	return errors.Is(err, backend.ErrOwnedIdentityMismatch)
 }
 
 func removeStaleHerdrConsole(
@@ -192,7 +192,7 @@ func removeStaleHerdrConsoleState(
 
 func savedHerdrConsoleWorkspacePresent(
 	saved state.Pane,
-	workspaces []herdrrun.WorkspaceObservation,
+	workspaces []backend.WorkspaceObservation,
 ) (bool, error) {
 	for _, workspace := range workspaces {
 		if workspace.WorkspaceID != saved.HerdrWorkspaceID {
@@ -238,7 +238,7 @@ func staleHerdrConsoleTarget(
 }
 
 func closeStaleHerdrConsole(owned *herdrrun.OwnedSession, current backend.LivePane) error {
-	identity := herdrrun.OwnedPaneIdentity{
+	identity := backend.OwnedPaneIdentity{
 		Ref: current.Ref, SessionID: current.SessionID, SocketPath: current.SocketPath,
 		WorkspaceLabel: current.WorkspaceLabel, TerminalID: current.TerminalID,
 		CurrentPath: current.CurrentPath,
@@ -323,21 +323,21 @@ func resolveHerdrConsoleInputs(projectRoot, shell string) (string, string, error
 func verifyHerdrConsoleRoute(
 	ctx context.Context,
 	owned HerdrLaunchRuntime,
-) (herdrrun.OwnedLaunchRoute, error) {
+) (backend.OwnedLaunchRoute, error) {
 	if err := owned.VerifyOwned(ctx); err != nil {
-		return herdrrun.OwnedLaunchRoute{}, err
+		return backend.OwnedLaunchRoute{}, err
 	}
 	route, err := owned.LaunchRoute()
 	if err != nil {
-		return herdrrun.OwnedLaunchRoute{}, err
+		return backend.OwnedLaunchRoute{}, err
 	}
 	if err := validateHerdrLaunchRoute(route); err != nil {
-		return herdrrun.OwnedLaunchRoute{}, err
+		return backend.OwnedLaunchRoute{}, err
 	}
 	return route, nil
 }
 
-func validateHerdrLaunchRoute(route herdrrun.OwnedLaunchRoute) error {
+func validateHerdrLaunchRoute(route backend.OwnedLaunchRoute) error {
 	if route.LauncherPath == "" || route.EmitterPath == "" {
 		return fmt.Errorf("owned Herdr launch route is incomplete")
 	}
@@ -351,7 +351,7 @@ func validateHerdrLaunchRoute(route herdrrun.OwnedLaunchRoute) error {
 
 func newHerdrShellLaunch(
 	owned HerdrLaunchRuntime,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	shell string,
 	callerEnvironment []string,
 ) (*state.HerdrLaunch, error) {
@@ -435,7 +435,7 @@ func verifySavedHerdrConsole(
 	if err := validateSavedHerdrConsoleShape(pane); err != nil {
 		return err
 	}
-	identity := herdrrun.OwnedPaneIdentity{
+	identity := backend.OwnedPaneIdentity{
 		Ref: backend.PaneRef{
 			Backend: backend.Herdr, Workspace: pane.HerdrWorkspaceID, Pane: pane.PaneID,
 		},
@@ -504,7 +504,7 @@ func completedHerdrConsoleIntentMatchesPane(intent state.HerdrIntent, pane state
 		intent.WorkspaceLabel != pane.HerdrWorkspaceLabel {
 		return false
 	}
-	route := herdrrun.OwnedLaunchRoute{Session: intent.Session, SocketPath: intent.SocketPath}
+	route := backend.OwnedLaunchRoute{Session: intent.Session, SocketPath: intent.SocketPath}
 	return validateHerdrCoordinatorPane(pane, intent, route) == nil
 }
 
