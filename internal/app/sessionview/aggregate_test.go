@@ -1352,9 +1352,9 @@ func TestBuildHerdrUsesPersistedIdentityWithoutRebinding(t *testing.T) {
 
 func TestDerivePaneEnablesHerdrReadButNotDashboardMutation(t *testing.T) {
 	derived := DerivePane("/repo", "425", PaneView{
-		Backend:   backend.Herdr,
-		PaneID:    "w1:p1",
-		Alive:     true,
+		Backend:     backend.Herdr,
+		PaneID:      "w1:p1",
+		Alive:       true,
 		LegacyState: "live",
 	})
 	if derived.CanFocus || !derived.CanPeek {

@@ -900,7 +900,7 @@ func TestRuntimeReadRoutesUseSharedHerdrControlIntents(t *testing.T) {
 	want := map[runtimeReadRoute]bool{
 		{name: backend.Tmux}: true,
 		{
-			name:            backend.Herdr,
+			name:       backend.Herdr,
 			sessionID:  "intent",
 			socketPath: "/tmp/intent.sock",
 		}: true,
