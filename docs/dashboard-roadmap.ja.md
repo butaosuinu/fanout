@@ -61,7 +61,7 @@ rebase 前提ペア — 並走できるが、先にマージされた側に他�
 ## Wave 計画
 
 最大 4 セッション並列。wave の起動は親 epic ごとに `/fanout #<parent>
---unblocked-only` を 1 回ずつ(2 epic にまたがる wave 1〜4 は 2 回)。epic 内の
+--unblocked-only` を 1 回ずつ(2 epic にまたがる wave 1〜5 は 2 回)。epic 内の
 blocked-by が wave 内の起動対象を絞る。
 
 | phase | wave | 並列起動 | 備考 |

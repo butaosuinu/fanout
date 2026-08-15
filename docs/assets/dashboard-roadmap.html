@@ -168,8 +168,8 @@
     <tr>
       <td class="track" style="color:var(--c-s)">#675-S<small>Go server</small></td>
       <td><a class="chip h" style="--ck:var(--c-s)" href="https://github.com/butaosuinu/fanout/issues/676" title="refactor(dashboard): route テーブル化 + server.go 分割 + SPA fallback"><b>#676</b> route 表化+分割</a></td>
-      <td><a class="chip" style="--ck:var(--c-s)" href="https://github.com/butaosuinu/fanout/issues/678" title="refactor(dashboard): エラー応答の JSON 統一"><b>#678</b> エラー JSON 統一</a></td>
-      <td><a class="chip" style="--ck:var(--c-s)" href="https://github.com/butaosuinu/fanout/issues/680" title="feat(typegen): tygo による Go→TS 型生成"><b>#680</b> tygo 型生成</a></td>
+      <td><a class="chip h" style="--ck:var(--c-s)" href="https://github.com/butaosuinu/fanout/issues/678" title="refactor(dashboard): エラー応答の JSON 統一"><b>#678</b> エラー JSON 統一</a></td>
+      <td><a class="chip h" style="--ck:var(--c-s)" href="https://github.com/butaosuinu/fanout/issues/680" title="feat(typegen): tygo による Go→TS 型生成"><b>#680</b> tygo 型生成</a></td>
       <td class="gate-col"></td><td></td><td></td><td></td><td></td>
     </tr>
     <tr>
@@ -197,18 +197,18 @@
       <td style="text-align:right"><span class="gate-flag">ゲート開放 →</span></td>
       <td class="gate-col">
         <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/518" title="peermsg: 人間レビュー指摘の配送経路"><b>#518</b> peermsg 配送</a>
-        <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/663" title="review: core/review 検証 + infra/reviewstore + 正典 docs"><b>#663</b> core+store+正典</a>
+        <a class="chip h" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/663" title="review: core/review 検証 + infra/reviewstore + 正典 docs"><b>#663</b> core+store+正典</a>
         <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/664" title="web: レビュー draft 基盤 (review.ts + reviewDraftStore)"><b>#664</b> draft 基盤</a>
       </td>
       <td>
         <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/665" title="app/review: Submit 編成 + NudgePeer の in-process 公開"><b>#665</b> Submit 編成</a>
-        <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/666" title="cli: fanout review verb (show / list / reply)"><b>#666</b> review verb</a>
+        <a class="chip h" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/666" title="cli: fanout review verb (show / list / reply)"><b>#666</b> review verb</a>
         <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/667" title="web: 行コメント記入 UI(コンポーザ / pending / ReviewPanel)"><b>#667</b> 記入 UI</a>
       </td>
       <td><a class="chip h" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/668" title="dashboard: POST /api/review carve-out と read-only 不変条件の改訂"><b>#668</b> POST carve-out</a></td>
       <td>
         <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/669" title="web: レビュー送信 + 双方向スレッド表示"><b>#669</b> 送信+スレッド</a>
-        <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/670" title="briefing/codex/README: review 案内と kind=review framing"><b>#670</b> briefing/docs</a>
+        <a class="chip h" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/670" title="briefing/codex/README: review 案内と kind=review framing"><b>#670</b> briefing/docs</a>
       </td>
       <td><a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/671" title="web: レビュー UI 磨き(件数表示・精密ジャンプ・キーボード)— 任意: #669/#670 の実運用フィードバック後に Go/No-Go"><b>#671</b> UI 磨き ⚑任意</a></td>
     </tr>
@@ -220,7 +220,7 @@
   <span><span class="sw" style="background:var(--c-f)"></span>#675-F web(#677→#679→#681→#682→#683)</span>
   <span><span class="sw" style="background:var(--c-restart)"></span>#659 自動再起動</span>
   <span><span class="sw" style="background:var(--c-review)"></span>#628 行コメントレビュー</span>
-  <span><span class="hmark">H</span>class H — 人間レビュー必須</span>
+  <span><span class="hmark">H</span>class H 面に触れる(人間レビュー必須)— 依存ファイル起因で H 判定になる #677 / #682 / #658 / #315 / #319 は「並走時の注意」参照</span>
 </div>
 
 <h2>Phase 4 — #321 Wails アプリ化(#659 完了後・任意)</h2>
@@ -295,7 +295,7 @@
 <ul class="notes">
   <li><strong>rebase 前提ペア</strong>(並走できるが、先にマージされた側へ他方が rebase する): <code>#655 ↔ #676</code>(同一パッケージの別ファイル。server.go の lifecycle 部で軽く交差)/ <code>#664 ↔ #682</code>(どちらも web/src。#682 は app 層、#664 は features 側)/ <code>#680 ↔ #681</code>(どちらも web/src。#680 は transport、#681 は features/app)/ <code>#658 ↔ #680</code>(どちらも Makefile にターゲット追加)/ <code>#667 ↔ #683</code>(どちらも DiffOverlay の開閉まわり)。</li>
   <li>class <strong>H</strong> に触れる PR は人間レビュー必須。<code>#655</code> / <code>#657</code> / <code>#676</code> / <code>#668</code> に加え、<code>#678</code>(requireToken の 403)・<code>#663</code>(reviewstore 新設)・<code>#666</code>(main.go dispatch)・<code>#670</code>(briefing)・<code>#680</code>(peek/plan/diff の rename)も H 面に触れる。Makefile / web/package.json / CI workflow を触る <code>#658</code> / <code>#677</code> / <code>#682</code> / <code>#315</code> / <code>#319</code> も reviewrisk 上は H 判定。この列挙は例示で、正は PR ごとの reviewrisk(<code>make review-risk</code>)。</li>
-  <li>wave の起動は親 epic ごとに <code>/fanout #親 --unblocked-only</code> を 1 回ずつ(2 epic にまたがる wave 1〜4 は 2 回)。epic 内の blocked-by が wave 内の起動対象を絞る。</li>
+  <li>wave の起動は親 epic ごとに <code>/fanout #親 --unblocked-only</code> を 1 回ずつ(2 epic にまたがる wave 1〜5 は 2 回)。epic 内の blocked-by が wave 内の起動対象を絞る。</li>
   <li>#628 本文の wave 記載(wave 3 = #668 + #669)は #669 の blocked-by(#668 完了が条件)と両立しないため、本ロードマップは #668 を単独 wave に置いた。wave 6〜8 は本書が正。</li>
 </ul>
 
