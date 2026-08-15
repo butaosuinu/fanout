@@ -151,7 +151,7 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 		return panelaunch.Result{}, err
 	}
 	req := panelaunch.NewWatchRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Managed, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.LaunchWithResult(req)
 	if !ok {
 		return panelaunch.Result{}, bufferedLaunchError(stdout, stderr, "create watch pane")
@@ -259,13 +259,13 @@ func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandNam
 	var runReady run.IssueReadyFunc
 	if ready != nil {
 		runReady = func(store state.Store, recorder panelaunch.StateRecorder) error {
-			return ready(store, recorder, rt.Backend, rt.Herdr)
+			return ready(store, recorder, rt.Backend, rt.Managed)
 		}
 	}
 	var runAfter run.IssueAfterFunc
 	if after != nil {
 		runAfter = func(store state.Store, recorder panelaunch.StateRecorder, progress run.IssueAfterContext) error {
-			return after(store, recorder, rt.Backend, rt.Herdr, progress)
+			return after(store, recorder, rt.Backend, rt.Managed, progress)
 		}
 	}
 	var execution run.IssueExecutionResult
@@ -279,7 +279,7 @@ func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandNam
 		CreatedPaneIDs: execution.CreatedPaneIDs,
 		Notice:         combinedLaunchNotice(execution.Notices, bufferedLaunchNotice(stderr)),
 		runtimeBackend: rt.Backend,
-		herdr:          rt.Herdr,
+		herdr:          rt.Managed,
 	}
 	if code != exitcode.OK {
 		return result, bufferedLaunchError(stdout, stderr, "launch parent")

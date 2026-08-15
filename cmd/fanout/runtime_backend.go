@@ -171,7 +171,7 @@ func bindLaunchBackend(runtime *run.Runtime, resolved launchBackendResolution) {
 				return
 			}
 			runtime.Backend = owned.Backend()
-			runtime.Herdr = owned
+			runtime.Managed = owned
 		})
 		return prepareErr
 	}

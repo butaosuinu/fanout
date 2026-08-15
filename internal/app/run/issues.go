@@ -236,7 +236,7 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 			issue.Body = detail.Body
 		}
 	}
-	result := executePlan(launchCfg, lg, rt.Info, rt.Backend, rt.Herdr, plan.Targets, hydrateLaunchBody, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
+	result := executePlan(launchCfg, lg, rt.Info, rt.Backend, rt.Managed, plan.Targets, hydrateLaunchBody, resolvedSettings, hookConfig, recorder, otherParentFanned, c, commandName, teamCtx)
 	printSummary(plan, result, cfg, lg, c, commandName)
 	progress := IssueAfterContext{
 		Created: result.Created,
@@ -333,8 +333,8 @@ func effectiveIssueLaunchConfig(cfg *cliflags.Config, resolvedSettings settings.
 	return &launchCfg
 }
 
-func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, runtimeBackend backend.Backend, herdr panelaunch.ManagedLaunchRuntime, targets []ghissue.Issue, hydrateBody func(*ghissue.Issue), resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Backend: runtimeBackend, Managed: herdr, Recorder: recorder, Palette: c, CommandName: commandName}
+func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, runtimeBackend backend.Backend, managed panelaunch.ManagedLaunchRuntime, targets []ghissue.Issue, hydrateBody func(*ghissue.Issue), resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Backend: runtimeBackend, Managed: managed, Recorder: recorder, Palette: c, CommandName: commandName}
 	var createdPaneIDs []string
 	var notices []string
 	created, failed := executeFailFast(
