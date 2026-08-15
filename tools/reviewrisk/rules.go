@@ -142,6 +142,7 @@ var prefixRules = []struct {
 	{"internal/infra/tty/", Rule{ID: "infra-tty", Class: ClassA, Source: SourceDocTable, Note: "端末判定"}},
 	{"internal/infra/execx/", Rule{ID: "infra-execx", Class: ClassA, Source: SourceDocTable, Note: "コマンド実行の薄いラッパ"}},
 	{"internal/infra/browser/", Rule{ID: "infra-browser", Class: ClassA, Source: SourceDocTable, Note: "ブラウザ起動"}},
+	{"internal/infra/backendtest/", Rule{ID: "infra-backendtest", Class: ClassA, Source: SourceDocTable, Note: "core backend 契約の in-process fake(テスト専用)"}},
 
 	// app H.
 	{"internal/app/watch/", Rule{ID: "app-watch", Class: ClassH, Source: SourceDocTable, Note: "ラベル watcher の 1 サイクル"}},
