@@ -70,6 +70,26 @@
       "to": { "dependencyTypes": ["local"], "pathNot": ["^internal/(core|app|infra|ui)(/|$)"] }
     },
     {
+      "name": "app-no-runtime-adapters",
+      "severity": "error",
+      "comment": "internal/app reaches a runtime only through the internal/core/backend ports (Backend, MutationModel, the As* capabilities). Importing a concrete adapter hardcodes one runtime back into orchestration. Route the call through an existing capability, or add a port to core/backend and implement it in every adapter; construction belongs to internal/infra/paneruntime. Test files are exempt so app tests may drive a real adapter directly.",
+      "from": { "path": ["^internal/app/"], "pathNot": ["_test\\.go$"] },
+      "to": {
+        "dependencyTypes": ["local"],
+        "path": ["^internal/infra/(tmuxrun|tmuxbackend|herdrrun)(/|$)"]
+      }
+    },
+    {
+      "name": "cmd-no-runtime-adapters",
+      "severity": "error",
+      "comment": "cmd/fanout composes through internal/infra/paneruntime, the one package that names a concrete runtime adapter. Naming tmuxrun/tmuxbackend/herdrrun here would spread runtime selection across the composition root. Test files are exempt so cmd tests may build a concrete backend as a fake.",
+      "from": { "path": ["^cmd/"], "pathNot": ["_test\\.go$"] },
+      "to": {
+        "dependencyTypes": ["local"],
+        "path": ["^internal/infra/(tmuxrun|tmuxbackend|herdrrun)(/|$)"]
+      }
+    },
+    {
       "name": "meta-no-module-imports",
       "severity": "error",
       "comment": "internal/arch is the test-only meta package and imports no module-internal packages, so the layer guard cannot depend on what it guards.",
