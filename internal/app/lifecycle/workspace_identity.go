@@ -16,6 +16,22 @@ type workspaceCleanupObservation struct {
 	checkout  worktree.CheckoutObservation
 }
 
+// workspaceRuntimeRow reports whether the recorded row has to be operated
+// through a WorkspaceRuntime: its runtime settles container mutations as
+// journaled requests rather than as one local atomic call, so closing the row
+// means driving the cleanup intent journal instead of closing a pane directly.
+//
+// The recorded runtime name is the row's own durable record of that lane, and
+// it is deliberately the criterion here. A row read back from state.json has no
+// Backend instance left to ask, and the row's identity fields cannot answer
+// either: a row naming the journaled runtime with an incomplete recorded
+// identity must still be refused by this lane rather than fall back to an
+// atomic pane close, and a row naming the atomic runtime must never be routed
+// at a journaled runtime because it happens to carry session fields.
+func workspaceRuntimeRow(pane state.Pane) bool {
+	return backend.NormalizeName(pane.Backend) == backend.Herdr
+}
+
 func validateWorkspacePaneIdentity(pane state.Pane) error {
 	required := []string{
 		pane.RuntimeParent,
@@ -35,7 +51,7 @@ func validateWorkspacePaneIdentity(pane state.Pane) error {
 			return fmt.Errorf("saved Herdr lifecycle identity is incomplete")
 		}
 	}
-	if backend.NormalizeName(pane.Backend) != backend.Herdr {
+	if !workspaceRuntimeRow(pane) {
 		return fmt.Errorf("saved pane is not a Herdr row")
 	}
 	return nil

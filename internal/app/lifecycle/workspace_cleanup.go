@@ -33,7 +33,7 @@ type WorkspaceRuntime interface {
 type WorkspaceRuntimeFactory func(context.Context, state.Pane) (WorkspaceRuntime, error)
 
 func validateWorkspaceMergeOperation(opts Options, pane state.Pane) error {
-	if backend.NormalizeName(pane.Backend) != backend.Herdr {
+	if !workspaceRuntimeRow(pane) {
 		return nil
 	}
 	if err := validateWorkspacePaneIdentity(pane); err != nil {

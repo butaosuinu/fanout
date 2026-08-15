@@ -29,7 +29,7 @@ type Options struct {
 	WatcherRunningLabel string
 	RemoveIssueLabel    func(issueNum int, label string) error
 	CloseOwned          func(backend.CloseRequest) (backend.CloseResult, error)
-	WorkspaceRuntime        WorkspaceRuntimeFactory
+	WorkspaceRuntime    WorkspaceRuntimeFactory
 }
 
 // Logger is the narrow logging surface lifecycle operations need.
@@ -455,7 +455,7 @@ func stateFileNeedsJournalLock(path string) bool {
 
 func storeNeedsJournalLock(store state.Store) bool {
 	for _, pane := range store.Panes {
-		if backend.NormalizeName(pane.Backend) == backend.Herdr {
+		if workspaceRuntimeRow(pane) {
 			return true
 		}
 	}
@@ -548,7 +548,7 @@ func runBeforeWorktreeRemoveHooks(opts Options, panes []state.Pane, mode CloseMo
 
 func closeRuntimePanes(opts Options, panes []state.Pane, mode CloseMode, lg Logger, windows map[string]struct{}) bool {
 	for _, pane := range panes {
-		if paneRefFromState(pane).Backend == backend.Herdr && mode.removesWorktree() {
+		if workspaceRuntimeRow(pane) && mode.removesWorktree() {
 			continue
 		}
 		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
@@ -573,7 +573,7 @@ func removeManagedWorktrees(opts Options, locked *state.LockedStore, panes []sta
 }
 
 func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.Pane, mode CloseMode, lg Logger) bool {
-	if paneRefFromState(pane).Backend == backend.Herdr {
+	if workspaceRuntimeRow(pane) {
 		hadWorktree := recordedWorktreeExists(pane)
 		skipHook, ok := verifyWorkspaceHookPreflight(opts, pane, mode, hooks.BeforePaneClose, lg)
 		if !ok {
@@ -606,7 +606,7 @@ func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.P
 }
 
 func verifyWorkspaceHookPreflight(opts Options, pane state.Pane, mode CloseMode, hook hooks.Type, lg Logger) (bool, bool) {
-	if paneRefFromState(pane).Backend != backend.Herdr || len(opts.Hooks.Events[hook]) == 0 {
+	if !workspaceRuntimeRow(pane) || len(opts.Hooks.Events[hook]) == 0 {
 		return false, true
 	}
 	cleanupStarted, err := inspectWorkspaceClosePreflight(opts, pane, mode)
@@ -620,12 +620,15 @@ func verifyWorkspaceHookPreflight(opts Options, pane state.Pane, mode CloseMode,
 func validateCloseOperations(opts Options, panes []state.Pane, mode CloseMode, lg Logger) bool {
 	for _, pane := range panes {
 		ref := paneRefFromState(pane)
-		if ref.Backend == backend.Herdr {
+		if workspaceRuntimeRow(pane) {
 			if !validateWorkspaceCloseOperation(opts, pane, mode, lg) {
 				return false
 			}
 			continue
 		}
+		// Every remaining row is closed by the atomic lane, which this build
+		// realizes on tmux alone. A row recording any other runtime is refused
+		// rather than closed through a runtime it never launched on.
 		if ref.Backend != backend.Tmux {
 			lg.Err("%s: runtime backend %s does not support lifecycle close", paneLabel(pane), ref.Backend)
 			return false
