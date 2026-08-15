@@ -22,6 +22,7 @@ var (
 	_ backend.FreshCloser     = (*Backend)(nil)
 	_ backend.PaneDecorator   = (*Backend)(nil)
 	_ backend.LivenessStamper = (*Backend)(nil)
+	_ backend.DryRunPreviewer = (*Backend)(nil)
 )
 
 // New constructs a tmux backend.
@@ -72,6 +73,43 @@ func (*Backend) Launch(req backend.LaunchRequest) (backend.PaneRef, error) {
 // ReleaseStartGate allows a successfully launched pane to start its command.
 func (*Backend) ReleaseStartGate(gate string) error {
 	return tmuxrun.UnlockWaitChannel(gate)
+}
+
+// PreviewLaunch renders the tmux commands Launch and the pane decoration that
+// follows it would run, one per line and without indentation or color. The
+// window re-layout is part of the preview because grid layout is a tmux-only
+// step. The exact text is pinned by the Tier 2 dry-run goldens.
+func (*Backend) PreviewLaunch(preview backend.LaunchPreview) []string {
+	lines := []string{previewSplitWindow(preview)}
+	if preview.PaneTitle != "" {
+		lines = append(lines, "$ tmux select-pane -t <pane_id> -T "+backend.PreviewQuote(preview.PaneTitle))
+	}
+	return append(lines,
+		"$ tmux set-option -p -t <pane_id> @fanout_pane_label "+backend.PreviewQuote(tmuxrun.NeutralizePaneLabel(preview.PaneLabel)),
+		"$ tmux set-option -w -t <pane_id> pane-border-status top",
+		"$ tmux set-option -w -t <pane_id> pane-border-format "+backend.PreviewQuote(tmuxrun.PaneBorderFormat()),
+		"$ tmux set-option -w -t <pane_id> pane-active-border-style "+backend.PreviewQuote(tmuxrun.PaneActiveBorderStyle()),
+		"$ tmux set-option -w -t <pane_id> pane-border-style "+backend.PreviewQuote(tmuxrun.PaneBorderStyle()),
+		"# would re-layout the window: fanout grid (sidebar + comfortable-width grid),",
+		"#   falling back to main-vertical then tiled",
+	)
+}
+
+// previewSplitWindow renders the split that starts the agent. A gated launch
+// shows the wait-for prefix in front of the agent command, exactly where
+// Launch injects it.
+func previewSplitWindow(preview backend.LaunchPreview) string {
+	command := preview.Command
+	if wait := tmuxrun.WaitForLockCommand(preview.StartGate); wait != "" {
+		command = wait + " && " + command
+	}
+	target := ""
+	if preview.Target != "" {
+		target = " -t " + backend.PreviewQuote(preview.Target)
+	}
+	return "$ tmux split-window" + target + " -d -h -P -F '#{pane_id}' -c " +
+		backend.PreviewQuote(preview.WorktreePath) + " " +
+		backend.PreviewQuote(tmuxrun.BuildPaneLaunchCommand(command))
 }
 
 // ListLive returns all live tmux panes mapped to the runtime-neutral view.

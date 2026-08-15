@@ -341,6 +341,38 @@ func TestBackendOffersNoTmuxOnlyPaneCapability(t *testing.T) {
 	}
 }
 
+// The dry-run preview is pinned byte-for-byte by
+// tests/golden/scenario-herdr-dry-run.dry-run.txt, so these expectations are
+// full lines, not substrings.
+func TestDryRunPreviewRendersHerdrCommands(t *testing.T) {
+	previewer, ok := corebackend.AsDryRunPreviewer(NewPreview())
+	if !ok {
+		t.Fatal("AsDryRunPreviewer(herdr backend) reported no capability")
+	}
+
+	got := previewer.PreviewLaunch(corebackend.LaunchPreview{
+		ProjectRoot:  "/repo/project root",
+		WorktreePath: "/repo/project root/.fanout/worktrees/first-child-101",
+		BranchName:   "fanout/first-child-101",
+		Command:      "claude --permission-mode auto '[fanout #101 of #100] first-child-101: begin.'",
+		// Pane title and label are tmux-only decoration; herdr must not echo them.
+		PaneTitle: "first-child-101",
+		PaneLabel: "#100 · first-child-101",
+	})
+
+	want := []string{
+		`$ herdr workspace create --cwd '/repo/project root' --label <coordinator_nonce> --no-focus`,
+		`$ herdr worktree create --workspace <coordinator_id> --branch fanout/first-child-101 --path '/repo/project root/.fanout/worktrees/first-child-101' --label <worktree_nonce> --no-focus`,
+		`# wait for the operation-bound fanout launcher marker, issue one token, and verify the exact agent session`,
+		`# agent argv: claude --permission-mode auto '[fanout #101 of #100] first-child-101: begin.'`,
+		`# would write coordinator and child Herdr identities to .fanout/state.json`,
+		`# would report display-only sidebar tokens with --source fanout to the child workspace and pane`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("PreviewLaunch() =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestCheckAvailablePinsVerifiedSocketAndVersion(t *testing.T) {
 	t.Setenv(sessionEnv, "ambient-wrong-session")
 	t.Setenv(socketEnv, "/tmp/ambient-wrong.sock")

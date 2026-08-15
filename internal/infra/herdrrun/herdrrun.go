@@ -36,8 +36,9 @@ const (
 )
 
 var (
-	_ corebackend.Backend     = (*Backend)(nil)
-	_ corebackend.OwnedCloser = (*Backend)(nil)
+	_ corebackend.Backend         = (*Backend)(nil)
+	_ corebackend.OwnedCloser     = (*Backend)(nil)
+	_ corebackend.DryRunPreviewer = (*Backend)(nil)
 )
 
 // Backend observes one named herdr session. New returns an unowned handle, so
@@ -129,6 +130,23 @@ func (b *Backend) checkPreviewAvailable() error {
 	}
 	_, err = parseAdmittedVersion(versionOut)
 	return err
+}
+
+// PreviewLaunch renders the herdr commands a launch would run, one per line
+// and without indentation or color. The workspace and worktree ids a real
+// launch resolves are shown as placeholders because a dry run creates nothing.
+// The exact text is pinned by the Tier 2 dry-run goldens.
+func (*Backend) PreviewLaunch(preview corebackend.LaunchPreview) []string {
+	return []string{
+		"$ herdr workspace create --cwd " + corebackend.PreviewQuote(preview.ProjectRoot) +
+			" --label <coordinator_nonce> --no-focus",
+		"$ herdr worktree create --workspace <coordinator_id> --branch " + corebackend.PreviewQuote(preview.BranchName) +
+			" --path " + corebackend.PreviewQuote(preview.WorktreePath) + " --label <worktree_nonce> --no-focus",
+		"# wait for the operation-bound fanout launcher marker, issue one token, and verify the exact agent session",
+		"# agent argv: " + preview.Command,
+		"# would write coordinator and child Herdr identities to .fanout/state.json",
+		"# would report display-only sidebar tokens with --source " + MetadataSource + " to the child workspace and pane",
+	}
 }
 
 // ListLive returns the aggregate session.snapshot projection. Connected status

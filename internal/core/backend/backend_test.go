@@ -215,6 +215,53 @@ func TestPaneCapabilityAccessors(t *testing.T) {
 	}
 }
 
+// previewCapableBackend offers the optional dry-run preview capability only.
+type previewCapableBackend struct{ Backend }
+
+func (previewCapableBackend) PreviewLaunch(LaunchPreview) []string { return nil }
+
+func TestDryRunPreviewerAccessor(t *testing.T) {
+	tests := []struct {
+		name    string
+		backend Backend
+		want    bool
+	}{
+		{name: "backend describing its launch commands", backend: previewCapableBackend{}, want: true},
+		{name: "backend offering the required surface only", backend: bareBackend{}, want: false},
+		{name: "unconfigured backend", backend: nil, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, ok := AsDryRunPreviewer(tt.backend); ok != tt.want {
+				t.Fatalf("AsDryRunPreviewer(%s) = %t, want %t", tt.name, ok, tt.want)
+			}
+		})
+	}
+}
+
+// The dry-run goldens pin these forms byte-for-byte: a bare token stays bare,
+// anything else is single-quoted, and an embedded quote is closed and reopened.
+func TestPreviewQuote(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty token becomes an explicit empty argument", in: "", want: "''"},
+		{name: "path characters stay unquoted", in: "/tmp/repo/.fanout/worktrees/api-client_1:2", want: "/tmp/repo/.fanout/worktrees/api-client_1:2"},
+		{name: "space forces quoting", in: "#12 · api", want: "'#12 · api'"},
+		{name: "tmux format token forces quoting", in: " #{?@fanout_pane_label,x} ", want: "' #{?@fanout_pane_label,x} '"},
+		{name: "embedded single quote is escaped", in: "don't", want: `'don'\''t'`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PreviewQuote(tt.in); got != tt.want {
+				t.Fatalf("PreviewQuote(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCloseResultZeroValueFailsClosed(t *testing.T) {
 	var result CloseResult
 	if result.Status != CloseFailed {
