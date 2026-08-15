@@ -17,6 +17,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -65,6 +66,23 @@ func TestVerifyHerdrConsoleRouteRejectsOutdatedLauncher(t *testing.T) {
 		!strings.Contains(err.Error(), "restart is required") {
 		t.Fatalf("verifyHerdrConsoleRoute() error = %v, want immediate restart requirement", err)
 	}
+}
+
+// fakeHerdrMetadataBudget stands in for the runtime-derived report budget; the
+// fake never blocks, so only a positive duration matters here.
+const fakeHerdrMetadataBudget = 20 * time.Second
+
+func (f *fakeHerdrLaunchRuntime) MetadataReportBudget() time.Duration {
+	return fakeHerdrMetadataBudget
+}
+
+// WorkloadEnvironment delegates to the real filter so capsule contents stay
+// exactly what a live launch would write.
+func (f *fakeHerdrLaunchRuntime) WorkloadEnvironment(
+	caller []string,
+	fanoutPath string,
+) ([]string, error) {
+	return herdrrun.WorkloadEnvironment(caller, fanoutPath)
 }
 
 func (f *fakeHerdrLaunchRuntime) PrepareWorkloadEnvironment(string, []string) (string, int, error) {
@@ -208,7 +226,7 @@ func TestUnpublishedHerdrLaunchRemovesEnvironmentCapsule(t *testing.T) {
 		t.Fatal(err)
 	}
 	intent := state.HerdrIntent{ID: "invalid", Launch: &state.HerdrLaunch{Nonce: nonce, EnvFilePath: envPath}}
-	if _, err := persistNewHerdrLaunch(journal, intent, runtimeDir); err == nil {
+	if _, err := persistNewHerdrLaunch(&fakeHerdrLaunchRuntime{}, journal, intent, runtimeDir); err == nil {
 		t.Fatal("invalid unpublished launch was saved")
 	}
 	if _, err := os.Stat(envPath); !errors.Is(err, os.ErrNotExist) {

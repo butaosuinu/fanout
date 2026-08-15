@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -85,9 +86,9 @@ func bindOwnedHerdrPane(
 }
 
 func bindOwnedHerdrWorkspaceClose(
-	owned *herdrrun.OwnedSession,
+	owned panelaunch.HerdrSessionRuntime,
 	pane state.Pane,
-) (*herdrrun.Backend, error) {
+) (backend.OwnedClosingBackend, error) {
 	if owned == nil {
 		return nil, fmt.Errorf("%s", ownedHerdrUnavailable)
 	}
@@ -95,5 +96,5 @@ func bindOwnedHerdrWorkspaceClose(
 	if err != nil {
 		return nil, err
 	}
-	return owned.Backend().BindOwnedWorkspaceClose(identity)
+	return owned.BindOwnedWorkspaceClose(identity)
 }

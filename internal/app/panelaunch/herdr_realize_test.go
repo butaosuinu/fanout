@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -2229,4 +2230,13 @@ func newHerdrRealizeRepo(t *testing.T) string {
 		"commit", "-m", "init",
 	)
 	return repo
+}
+
+// DiscardWorkloadEnvironment delegates to the real capsule removal so rollback
+// tests keep asserting the identity checks and the file that must disappear.
+func (f *fakeHerdrRealizeRuntime) DiscardWorkloadEnvironment(
+	runtimeDir string,
+	launch *state.HerdrLaunch,
+) error {
+	return herdrrun.DiscardWorkloadEnvironment(runtimeDir, launch)
 }

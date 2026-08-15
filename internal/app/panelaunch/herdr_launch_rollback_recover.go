@@ -164,12 +164,13 @@ func classifyIssuedHerdrLaunchRollback(
 		return failInterruptedHerdrRollback(locked, original, originalFound, rollback, err)
 	}
 	return finishAbsentHerdrLaunchRollback(
-		recoveryCtx, locked, req, original, originalFound, rollback,
+		recoveryCtx, runtime, locked, req, original, originalFound, rollback,
 	)
 }
 
 func finishAbsentHerdrLaunchRollback(
 	ctx context.Context,
+	runtime HerdrWorktreeRuntime,
 	locked *state.LockedHerdrIntents,
 	req HerdrWorktreeRequest,
 	original state.HerdrIntent,
@@ -177,7 +178,7 @@ func finishAbsentHerdrLaunchRollback(
 	rollback state.HerdrIntent,
 ) error {
 	if originalFound && original.Launch != nil {
-		if err := removeUnpublishedHerdrEnvironment(filepath.Dir(original.SocketPath), original.Launch); err != nil {
+		if err := removeUnpublishedHerdrEnvironment(runtime, filepath.Dir(original.SocketPath), original.Launch); err != nil {
 			return failInterruptedHerdrRollback(locked, original, true, rollback, err)
 		}
 	}

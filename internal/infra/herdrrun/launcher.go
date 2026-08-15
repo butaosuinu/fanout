@@ -340,6 +340,12 @@ func WorkloadEnvironment(caller []string, fanoutPath string) ([]string, error) {
 	return kept, nil
 }
 
+// WorkloadEnvironment lets a caller holding only this session build the
+// capsule contents through the same filter the package function applies.
+func (s *OwnedSession) WorkloadEnvironment(caller []string, fanoutPath string) ([]string, error) {
+	return WorkloadEnvironment(caller, fanoutPath)
+}
+
 func validateWorkloadExecutable(path string) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsRune(path, '\x00') {
 		return fmt.Errorf("fanout workload executable must be a canonical absolute path")
@@ -482,6 +488,13 @@ func DiscardWorkloadEnvironment(runtimeDir string, launch *state.HerdrLaunch) (e
 		return err
 	}
 	return os.Remove(launch.EnvFilePath)
+}
+
+// DiscardWorkloadEnvironment lets a caller holding only this session drop an
+// unconsumed capsule through the same identity checks the package function
+// applies.
+func (s *OwnedSession) DiscardWorkloadEnvironment(runtimeDir string, launch *state.HerdrLaunch) error {
+	return DiscardWorkloadEnvironment(runtimeDir, launch)
 }
 
 func validateWorkloadEnvironmentLocation(runtimeDir string, launch *state.HerdrLaunch) error {

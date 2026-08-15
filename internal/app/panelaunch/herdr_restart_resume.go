@@ -12,14 +12,15 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 type HerdrRestartRuntime interface {
 	LaunchRoute() (backend.OwnedLaunchRoute, error)
+	WorkloadEnvironment([]string, string) ([]string, error)
 	PrepareWorkloadEnvironment(string, []string) (string, int, error)
+	DiscardWorkloadEnvironment(string, *state.HerdrLaunch) error
 	WaitRestoredPanes(context.Context, time.Duration, func([]backend.LivePane) bool) backend.WaitResult
 	IssueRestartResume(
 		context.Context,
@@ -442,7 +443,7 @@ func processRestartedHerdrRow(
 		return err
 	}
 	if found {
-		return finishHerdrResumeJournal(ctx, locked, journal, route.RuntimeDir, row, intent)
+		return finishHerdrResumeJournal(ctx, locked, journal, restarted, route.RuntimeDir, row, intent)
 	}
 	if !eligible || candidate.row.root != row.root {
 		return persistHerdrRestartRow(ctx, locked, row, nil, nil, nil)
@@ -453,7 +454,7 @@ func processRestartedHerdrRow(
 	}
 	launchErr := startRestartedCodex(ctx, restarted, journal, route, &intent)
 	if launchErr != nil {
-		return finishHerdrResumeJournal(ctx, locked, journal, route.RuntimeDir, row, intent)
+		return finishHerdrResumeJournal(ctx, locked, journal, restarted, route.RuntimeDir, row, intent)
 	}
 	return finishSuccessfulHerdrResume(
 		ctx, locked, journal, restarted, route.RuntimeDir, row, intent,
@@ -469,7 +470,7 @@ func finishSuccessfulHerdrResume(
 	row herdrRestartRow,
 	intent state.HerdrIntent,
 ) error {
-	if err := finishHerdrResumeIntent(journal, runtimeDir, intent); err != nil {
+	if err := finishHerdrResumeIntent(journal, restarted, runtimeDir, intent); err != nil {
 		return err
 	}
 	live, process, err := observeRestartedCodexOnce(ctx, restarted, intent)
@@ -526,7 +527,7 @@ func prepareHerdrResumeIntent(
 	if err != nil {
 		return state.HerdrIntent{}, err
 	}
-	environment, err := herdrrun.WorkloadEnvironment(os.Environ(), route.LauncherPath)
+	environment, err := restarted.WorkloadEnvironment(os.Environ(), route.LauncherPath)
 	if err != nil {
 		return state.HerdrIntent{}, err
 	}
@@ -537,7 +538,9 @@ func prepareHerdrResumeIntent(
 	intent := newHerdrResumeIntent(id, nonce, envPath, envCount, candidate, deadline)
 	journal.UpsertIntent(intent)
 	if err := journal.Save(); err != nil {
-		return state.HerdrIntent{}, errors.Join(err, herdrrun.DiscardWorkloadEnvironment(route.RuntimeDir, intent.Launch))
+		return state.HerdrIntent{}, errors.Join(
+			err, restarted.DiscardWorkloadEnvironment(route.RuntimeDir, intent.Launch),
+		)
 	}
 	return intent, nil
 }
@@ -701,11 +704,12 @@ func finishHerdrResumeJournal(
 	ctx context.Context,
 	locked *state.LockedStore,
 	journal *state.LockedHerdrIntents,
+	restarted HerdrRestartRuntime,
 	runtimeDir string,
 	row herdrRestartRow,
 	intent state.HerdrIntent,
 ) error {
-	if err := finishHerdrResumeIntent(journal, runtimeDir, intent); err != nil {
+	if err := finishHerdrResumeIntent(journal, restarted, runtimeDir, intent); err != nil {
 		return err
 	}
 	return persistHerdrRestartRow(ctx, locked, row, nil, nil, nil)
@@ -713,10 +717,11 @@ func finishHerdrResumeJournal(
 
 func finishHerdrResumeIntent(
 	journal *state.LockedHerdrIntents,
+	restarted HerdrRestartRuntime,
 	runtimeDir string,
 	intent state.HerdrIntent,
 ) error {
-	if err := herdrrun.DiscardWorkloadEnvironment(runtimeDir, intent.Launch); err != nil {
+	if err := restarted.DiscardWorkloadEnvironment(runtimeDir, intent.Launch); err != nil {
 		return err
 	}
 	if !journal.RemoveIntent(intent.ID) {

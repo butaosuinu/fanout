@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -28,6 +27,7 @@ type HerdrRuntime interface {
 	OpenWorktree(context.Context, backend.WorktreeOpenRequest) (backend.WorktreeMutationResult, error)
 	RemoveWorktree(context.Context, string, string) error
 	CloseWorkspace(context.Context, string) error
+	DiscardWorkloadEnvironment(string, *state.HerdrLaunch) error
 }
 
 type HerdrRuntimeFactory func(context.Context, state.Pane) (HerdrRuntime, error)
@@ -518,7 +518,7 @@ func driveHerdrCleanup(
 	if err != nil {
 		return err
 	}
-	return finalizeHerdrCleanup(ctx, opts.ProjectRoot, journal, pane, intent, worktreeIntentID, lg)
+	return finalizeHerdrCleanup(ctx, opts.ProjectRoot, journal, runtime, pane, intent, worktreeIntentID, lg)
 }
 
 func resumeHerdrCleanup(
@@ -600,6 +600,7 @@ func finalizeHerdrCleanup(
 	ctx context.Context,
 	projectRoot string,
 	journal *state.LockedHerdrIntents,
+	runtime HerdrRuntime,
 	pane state.Pane,
 	intent state.HerdrIntent,
 	worktreeIntentID string,
@@ -611,7 +612,7 @@ func finalizeHerdrCleanup(
 	if branchErr := finishHerdrBranchCleanup(ctx, projectRoot, intent); branchErr != nil {
 		lg.Warn("%s: %v; leaving branch in place", paneLabel(pane), branchErr)
 	}
-	if err := discardSavedHerdrLaunchEnvironment(journal, worktreeIntentID); err != nil {
+	if err := discardSavedHerdrLaunchEnvironment(journal, runtime, worktreeIntentID); err != nil {
 		return err
 	}
 	journal.RemoveIntent(intent.ID)
@@ -619,12 +620,16 @@ func finalizeHerdrCleanup(
 	return journal.Save()
 }
 
-func discardSavedHerdrLaunchEnvironment(journal *state.LockedHerdrIntents, worktreeIntentID string) error {
+func discardSavedHerdrLaunchEnvironment(
+	journal *state.LockedHerdrIntents,
+	runtime HerdrRuntime,
+	worktreeIntentID string,
+) error {
 	intent, found := journal.FindIntent(worktreeIntentID)
 	if !found {
 		return nil
 	}
-	return herdrrun.DiscardWorkloadEnvironment(filepath.Dir(intent.SocketPath), intent.Launch)
+	return runtime.DiscardWorkloadEnvironment(filepath.Dir(intent.SocketPath), intent.Launch)
 }
 
 func executeHerdrCleanupPhase(

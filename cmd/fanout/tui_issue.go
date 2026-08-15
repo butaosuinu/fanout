@@ -13,7 +13,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -198,7 +197,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		store state.Store,
 		recorder panelaunch.StateRecorder,
 		runtimeBackend backend.Backend,
-		herdr *herdrrun.OwnedSession,
+		herdr panelaunch.HerdrSessionRuntime,
 	) error {
 		if runtimeBackend.Name() == backend.Herdr {
 			guardErr := guardLinkedIssueOrchestrator(projectRoot, store, issueNum)
@@ -218,7 +217,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		store state.Store,
 		recorder panelaunch.StateRecorder,
 		runtimeBackend backend.Backend,
-		herdr *herdrrun.OwnedSession,
+		herdr panelaunch.HerdrSessionRuntime,
 		progress run.IssueAfterContext,
 	) error {
 		if !launchHerdrOrchestratorAfterChildren(runtimeBackend.Name(), progress) {

@@ -41,6 +41,31 @@ func (b *Backend) BindOwnedTarget(target corebackend.OwnedPaneIdentity) (*Backen
 	return b.bindOwnedTarget(target, nil)
 }
 
+// VerifyOwnedTarget admits target on this session and keeps only the verdict,
+// so a caller that just revalidates a saved row never handles a bound backend.
+func (s *OwnedSession) VerifyOwnedTarget(target corebackend.OwnedPaneIdentity) error {
+	if s == nil || s.backend == nil {
+		return fmt.Errorf("herdr owned session is nil")
+	}
+	_, err := s.backend.BindOwnedTarget(target)
+	return err
+}
+
+// BindOwnedWorkspaceClose admits an exact generic workspace on this session and
+// returns the closer bound to it.
+func (s *OwnedSession) BindOwnedWorkspaceClose(
+	target corebackend.OwnedPaneIdentity,
+) (corebackend.OwnedClosingBackend, error) {
+	if s == nil || s.backend == nil {
+		return nil, fmt.Errorf("herdr owned session is nil")
+	}
+	bound, err := s.backend.BindOwnedWorkspaceClose(target)
+	if err != nil {
+		return nil, err
+	}
+	return bound, nil
+}
+
 func (b *Backend) BindOwnedClose(req OwnedCloseRequest) (*Backend, error) {
 	cloned := cloneOwnedCloseRequest(req)
 	return b.bindOwnedTarget(cloned.Target, &cloned)

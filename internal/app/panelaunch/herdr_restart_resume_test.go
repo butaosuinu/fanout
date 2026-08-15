@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -522,4 +523,20 @@ func containsHerdrResumeIntent(intents []state.HerdrIntent) bool {
 		}
 	}
 	return false
+}
+
+// WorkloadEnvironment and DiscardWorkloadEnvironment delegate to the real
+// implementations so resume tests keep the live capsule contract.
+func (f *restartRuntimeFake) WorkloadEnvironment(
+	caller []string,
+	fanoutPath string,
+) ([]string, error) {
+	return herdrrun.WorkloadEnvironment(caller, fanoutPath)
+}
+
+func (f *restartRuntimeFake) DiscardWorkloadEnvironment(
+	runtimeDir string,
+	launch *state.HerdrLaunch,
+) error {
+	return herdrrun.DiscardWorkloadEnvironment(runtimeDir, launch)
 }

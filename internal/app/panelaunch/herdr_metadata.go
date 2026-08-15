@@ -12,7 +12,6 @@ import (
 	"unicode"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -36,7 +35,7 @@ const (
 // line from a successful launch into its result banner (bufferedLaunchNotice),
 // and a cosmetic token failure must not read as a broken launch.
 func (l *Launcher) reportHerdrSidebarMetadata(req Request, intent state.HerdrIntent) {
-	ctx, cancel := context.WithTimeout(context.Background(), herdrrun.MetadataReportBudget)
+	ctx, cancel := context.WithTimeout(context.Background(), l.Herdr.MetadataReportBudget())
 	defer cancel()
 	if err := l.Herdr.ReportMetadata(ctx, herdrSidebarMetadata(req, intent)); err != nil {
 		l.Log.Dim("%s: Herdr sidebar metadata not reported: %v", paneLogLabel(req), err)

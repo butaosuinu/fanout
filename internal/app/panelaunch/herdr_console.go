@@ -10,13 +10,23 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 const HerdrConsoleRuntimeParent = "@console"
+
+// HerdrSessionRuntime is the whole owned-session surface the composition root
+// holds: the launch port plus the session-wide operations no single launch
+// needs — the attach command a plain terminal runs, the saved-row identity
+// recheck, and the bound backend a workspace is retired through.
+type HerdrSessionRuntime interface {
+	HerdrLaunchRuntime
+	AttachCommand() (string, error)
+	VerifyOwnedTarget(backend.OwnedPaneIdentity) error
+	BindOwnedWorkspaceClose(backend.OwnedPaneIdentity) (backend.OwnedClosingBackend, error)
+}
 
 // HerdrConsoleResult is the durable console pane plus the shell command a
 // plain terminal can run to attach the isolated owned Herdr client.
@@ -30,7 +40,7 @@ type HerdrConsoleResult struct {
 func EnsureHerdrConsole(
 	ctx context.Context,
 	projectRoot string,
-	owned *herdrrun.OwnedSession,
+	owned HerdrSessionRuntime,
 	callerEnvironment []string,
 	shell string,
 ) (result HerdrConsoleResult, retErr error) {
@@ -57,7 +67,7 @@ func EnsureHerdrConsole(
 func ensureHerdrConsoleLocked(
 	ctx context.Context,
 	root, shellPath string,
-	owned *herdrrun.OwnedSession,
+	owned HerdrSessionRuntime,
 	callerEnvironment []string,
 	locked *state.LockedStore,
 ) (HerdrConsoleResult, error) {
@@ -118,7 +128,7 @@ func reuseHerdrConsole(
 	ctx context.Context,
 	locked *state.LockedStore,
 	projectRoot string,
-	owned *herdrrun.OwnedSession,
+	owned HerdrSessionRuntime,
 	pane state.Pane,
 ) (HerdrConsoleResult, bool, error) {
 	if err := verifySavedHerdrConsole(owned, pane); err != nil {
@@ -148,7 +158,7 @@ func removeStaleHerdrConsole(
 	ctx context.Context,
 	locked *state.LockedStore,
 	projectRoot string,
-	owned *herdrrun.OwnedSession,
+	owned HerdrSessionRuntime,
 	pane state.Pane,
 ) error {
 	if err := validateSavedHerdrConsoleShape(pane); err != nil {
@@ -237,13 +247,13 @@ func staleHerdrConsoleTarget(
 	return matches[0], nil
 }
 
-func closeStaleHerdrConsole(owned *herdrrun.OwnedSession, current backend.LivePane) error {
+func closeStaleHerdrConsole(owned HerdrSessionRuntime, current backend.LivePane) error {
 	identity := backend.OwnedPaneIdentity{
 		Ref: current.Ref, SessionID: current.SessionID, SocketPath: current.SocketPath,
 		WorkspaceLabel: current.WorkspaceLabel, TerminalID: current.TerminalID,
 		CurrentPath: current.CurrentPath,
 	}
-	bound, err := owned.Backend().BindOwnedWorkspaceClose(identity)
+	bound, err := owned.BindOwnedWorkspaceClose(identity)
 	if err != nil {
 		return fmt.Errorf("bind stale Herdr console for close: %w", err)
 	}
@@ -359,7 +369,7 @@ func newHerdrShellLaunch(
 	if err != nil {
 		return nil, err
 	}
-	environment, err := herdrrun.WorkloadEnvironment(callerEnvironment, route.LauncherPath)
+	environment, err := owned.WorkloadEnvironment(callerEnvironment, route.LauncherPath)
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +439,7 @@ func herdrConsolePaneInStore(root string, store state.Store) (state.Pane, bool, 
 }
 
 func verifySavedHerdrConsole(
-	owned *herdrrun.OwnedSession,
+	owned HerdrSessionRuntime,
 	pane state.Pane,
 ) error {
 	if err := validateSavedHerdrConsoleShape(pane); err != nil {
@@ -443,8 +453,7 @@ func verifySavedHerdrConsole(
 		WorkspaceLabel: pane.HerdrWorkspaceLabel, TerminalID: pane.HerdrTerminalID,
 		CurrentPath: pane.WorktreePath,
 	}
-	_, err := owned.Backend().BindOwnedTarget(identity)
-	return err
+	return owned.VerifyOwnedTarget(identity)
 }
 
 func validateSavedHerdrConsoleShape(pane state.Pane) error {
@@ -509,7 +518,7 @@ func completedHerdrConsoleIntentMatchesPane(intent state.HerdrIntent, pane state
 }
 
 func herdrConsoleResult(
-	owned *herdrrun.OwnedSession,
+	owned HerdrSessionRuntime,
 	pane state.Pane,
 ) (HerdrConsoleResult, error) {
 	command, err := owned.AttachCommand()
