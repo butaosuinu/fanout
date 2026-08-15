@@ -15,19 +15,19 @@ func TestPaneViewsFromSnapshotRendersHerdrRuntimeAliases(t *testing.T) {
 			{
 				IssueNum: 101, Backend: backend.Herdr, PaneID: "w1:p1", Alive: true,
 				RuntimeState: "live", RuntimeTitle: "live child",
-				TmuxState: "live", TmuxTitle: "live child", AgentState: "working",
+				LegacyState: "live", LegacyTitle: "live child", AgentState: "working",
 			},
 			{
 				IssueNum: 102, Backend: backend.Herdr, PaneID: "w1:p2",
-				RuntimeState: "stale", TmuxState: "stale",
+				RuntimeState: "stale", LegacyState: "stale",
 			},
 			{
 				IssueNum: 103, Backend: backend.Herdr, PaneID: "w1:p3",
-				RuntimeState: "unknown", TmuxState: "unknown",
+				RuntimeState: "unknown", LegacyState: "unknown",
 			},
 			{
 				IssueNum: 104, Backend: backend.Herdr, PaneID: "w1:p4",
-				RuntimeState: "unsupported", TmuxState: "unknown",
+				RuntimeState: "unsupported", LegacyState: "unknown",
 			},
 		},
 	}}}

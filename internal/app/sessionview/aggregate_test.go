@@ -223,7 +223,7 @@ func TestBuildGroupsByParentSortedAndComputesRollups(t *testing.T) {
 	if snap.Rollup.AllMerged {
 		t.Fatal("repo AllMerged should be false")
 	}
-	if snap.Degraded.Tmux || snap.Degraded.GitHub {
+	if snap.Degraded.Legacy || snap.Degraded.GitHub {
 		t.Fatalf("degraded = %+v want clean", snap.Degraded)
 	}
 }
@@ -351,8 +351,8 @@ func TestBuildShellPaneRequiresShellKeyForLiveness(t *testing.T) {
 	})
 
 	got := snap.Sessions[0].Panes[0]
-	if got.Alive || got.TmuxState != "stale" {
-		t.Fatalf("shell pane alive=%v tmux=%q, want stale when shell key differs", got.Alive, got.TmuxState)
+	if got.Alive || got.LegacyState != "stale" {
+		t.Fatalf("shell pane alive=%v tmux=%q, want stale when shell key differs", got.Alive, got.LegacyState)
 	}
 }
 
@@ -407,8 +407,8 @@ func TestBuildCoordinatorPaneRequiresShellKeyForLiveness(t *testing.T) {
 				},
 			})
 			got := snap.Sessions[0].Panes[0]
-			if got.Alive != tt.wantAlive || got.TmuxState != tt.wantTmux {
-				t.Fatalf("Build() coordinator alive=%v tmux=%q, want alive=%v tmux=%q", got.Alive, got.TmuxState, tt.wantAlive, tt.wantTmux)
+			if got.Alive != tt.wantAlive || got.LegacyState != tt.wantTmux {
+				t.Fatalf("Build() coordinator alive=%v tmux=%q, want alive=%v tmux=%q", got.Alive, got.LegacyState, tt.wantAlive, tt.wantTmux)
 			}
 		})
 	}
@@ -594,8 +594,8 @@ func TestBuildDegradesWhenTmuxFails(t *testing.T) {
 		Waves:     wavesNone,
 	}
 	snap := Build("o/n", "/root", c)
-	if !snap.Degraded.Tmux {
-		t.Fatal("Degraded.Tmux should be set")
+	if !snap.Degraded.Legacy {
+		t.Fatal("Degraded.Legacy should be set")
 	}
 	if snap.Sessions[0].Panes[0].Alive {
 		t.Fatal("pane should be dead when tmux is down")
@@ -620,19 +620,19 @@ func TestBuildUsesPartialRuntimeSnapshotWhenCollectorDegrades(t *testing.T) {
 		Waves:    wavesNone,
 	}
 	snap := Build("o/n", "/root", c)
-	if !snap.Degraded.Tmux || !snap.Degraded.Runtime || !strings.Contains(snap.Degraded.Reason, "herdr session offline") {
+	if !snap.Degraded.Legacy || !snap.Degraded.Runtime || !strings.Contains(snap.Degraded.Reason, "herdr session offline") {
 		t.Fatalf("degraded = %+v, want partial runtime error", snap.Degraded)
 	}
 	if !snap.Sessions[0].Panes[0].Alive {
 		t.Fatal("successful tmux observation should remain live in a degraded mixed snapshot")
 	}
-	if got := snap.Sessions[0].Panes[0].TmuxState; got != "live" {
+	if got := snap.Sessions[0].Panes[0].LegacyState; got != "live" {
 		t.Fatalf("tmux state = %q, want live for successful observation in degraded mixed snapshot", got)
 	}
 	if snap.Sessions[0].Panes[1].Alive {
 		t.Fatal("unobserved pane should not be live in a degraded mixed snapshot")
 	}
-	if got := snap.Sessions[0].Panes[1].TmuxState; got != "unknown" {
+	if got := snap.Sessions[0].Panes[1].LegacyState; got != "unknown" {
 		t.Fatalf("unobserved tmux state = %q, want unknown in degraded mixed snapshot", got)
 	}
 	if got := snap.Sessions[0].Panes[1].RuntimeState; got != "unknown" {
@@ -672,7 +672,7 @@ func TestBuildScopesMixedBackendDegradationToFailedRoute(t *testing.T) {
 		[]backend.LivePane{tmuxObservation, herdrObservation},
 		routeErr,
 	)
-	if !snap.Degraded.Tmux || !snap.Degraded.Runtime || !strings.Contains(snap.Degraded.Reason, "session-b offline") {
+	if !snap.Degraded.Legacy || !snap.Degraded.Runtime || !strings.Contains(snap.Degraded.Reason, "session-b offline") {
 		t.Fatalf("degraded = %+v, want compatible tmux flag plus runtime route failure", snap.Degraded)
 	}
 
@@ -693,8 +693,8 @@ func TestBuildScopesMixedBackendDegradationToFailedRoute(t *testing.T) {
 	}
 	for i, want := range wants {
 		got := panes[i]
-		if got.IssueNum != want.issue || got.Alive != want.alive || got.RuntimeState != want.state || got.TmuxState != want.state {
-			t.Errorf("pane[%d] = issue:%d alive:%t runtime:%q tmux:%q, want issue:%d alive:%t state:%q", i, got.IssueNum, got.Alive, got.RuntimeState, got.TmuxState, want.issue, want.alive, want.state)
+		if got.IssueNum != want.issue || got.Alive != want.alive || got.RuntimeState != want.state || got.LegacyState != want.state {
+			t.Errorf("pane[%d] = issue:%d alive:%t runtime:%q tmux:%q, want issue:%d alive:%t state:%q", i, got.IssueNum, got.Alive, got.RuntimeState, got.LegacyState, want.issue, want.alive, want.state)
 		}
 	}
 	if panes[3].AgentState != "" || panes[4].AgentState != "" {
@@ -765,7 +765,7 @@ func TestBuildWorktreeStatErrorIsPerPane(t *testing.T) {
 	if got.WorktreeErr == "" {
 		t.Fatal("WorktreeErr should carry the per-pane gitstat failure")
 	}
-	if snap.Degraded.GitHub || snap.Degraded.Tmux {
+	if snap.Degraded.GitHub || snap.Degraded.Legacy {
 		t.Fatalf("worktree error should not mark gh/tmux degraded: %+v", snap.Degraded)
 	}
 }
@@ -1052,12 +1052,12 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 				wantTitle = "herdr child"
 				wantAgentState = "working"
 			}
-			wantTmuxState := compatibilityTmuxState(wantState)
-			if got.Alive != tt.wantAlive || got.RuntimeState != wantState || got.TmuxState != wantTmuxState {
-				t.Fatalf("Build() alive=%t runtime=%q tmux=%q, want alive=%t runtime=%q tmux=%q", got.Alive, got.RuntimeState, got.TmuxState, tt.wantAlive, wantState, wantTmuxState)
+			wantLegacyState := legacyRuntimeState(wantState)
+			if got.Alive != tt.wantAlive || got.RuntimeState != wantState || got.LegacyState != wantLegacyState {
+				t.Fatalf("Build() alive=%t runtime=%q tmux=%q, want alive=%t runtime=%q tmux=%q", got.Alive, got.RuntimeState, got.LegacyState, tt.wantAlive, wantState, wantLegacyState)
 			}
-			if got.RuntimeTitle != wantTitle || got.TmuxTitle != wantTitle || got.AgentState != wantAgentState {
-				t.Fatalf("Build() runtimeTitle=%q tmuxTitle=%q agentState=%q, want titles=%q agentState=%q", got.RuntimeTitle, got.TmuxTitle, got.AgentState, wantTitle, wantAgentState)
+			if got.RuntimeTitle != wantTitle || got.LegacyTitle != wantTitle || got.AgentState != wantAgentState {
+				t.Fatalf("Build() runtimeTitle=%q tmuxTitle=%q agentState=%q, want titles=%q agentState=%q", got.RuntimeTitle, got.LegacyTitle, got.AgentState, wantTitle, wantAgentState)
 			}
 		})
 	}
@@ -1168,8 +1168,8 @@ func TestBuildHerdrAgentRecordIsSeparateFromPaneLiveness(t *testing.T) {
 			observed := liveHerdrPane(row)
 			tt.mutateLive(&observed)
 			got := buildWithLivePanes([]state.Pane{row}, []backend.LivePane{observed}, nil).Sessions[0].Panes[0]
-			if !got.Alive || got.RuntimeState != "live" || got.TmuxState != "live" {
-				t.Fatalf("pane liveness = alive:%t runtime:%q tmux:%q, want live", got.Alive, got.RuntimeState, got.TmuxState)
+			if !got.Alive || got.RuntimeState != "live" || got.LegacyState != "live" {
+				t.Fatalf("pane liveness = alive:%t runtime:%q tmux:%q, want live", got.Alive, got.RuntimeState, got.LegacyState)
 			}
 			if got.AgentState != "" {
 				t.Fatalf("AgentState = %q, want unknown; recorded running must not leak into live herdr observation", got.AgentState)
@@ -1228,8 +1228,8 @@ func TestBuildHerdrDoneThenFocusedIdleRemainPublicDisplayStates(t *testing.T) {
 func TestBuildHerdrRuntimeFieldsAreAdditiveTmuxAliases(t *testing.T) {
 	row := herdrPane("1", 2, "workspace-a:p1")
 	got := buildWithLivePanes([]state.Pane{row}, []backend.LivePane{liveHerdrPane(row)}, nil).Sessions[0].Panes[0]
-	if got.RuntimeState != "live" || got.TmuxState != got.RuntimeState || got.RuntimeTitle != "herdr child" || got.TmuxTitle != got.RuntimeTitle {
-		t.Fatalf("runtime/tmux aliases = runtime:%q tmux:%q runtimeTitle:%q tmuxTitle:%q", got.RuntimeState, got.TmuxState, got.RuntimeTitle, got.TmuxTitle)
+	if got.RuntimeState != "live" || got.LegacyState != got.RuntimeState || got.RuntimeTitle != "herdr child" || got.LegacyTitle != got.RuntimeTitle {
+		t.Fatalf("runtime/tmux aliases = runtime:%q tmux:%q runtimeTitle:%q tmuxTitle:%q", got.RuntimeState, got.LegacyState, got.RuntimeTitle, got.LegacyTitle)
 	}
 	raw, err := json.Marshal(got)
 	if err != nil {
@@ -1243,8 +1243,8 @@ func TestBuildHerdrRuntimeFieldsAreAdditiveTmuxAliases(t *testing.T) {
 
 	row.TerminalID = ""
 	unsupported := buildWithLivePanes([]state.Pane{row}, nil, nil).Sessions[0].Panes[0]
-	if unsupported.RuntimeState != "unsupported" || unsupported.TmuxState != "unknown" {
-		t.Fatalf("unsupported compatibility projection = runtime:%q tmux:%q, want unsupported/unknown", unsupported.RuntimeState, unsupported.TmuxState)
+	if unsupported.RuntimeState != "unsupported" || unsupported.LegacyState != "unknown" {
+		t.Fatalf("unsupported compatibility projection = runtime:%q tmux:%q, want unsupported/unknown", unsupported.RuntimeState, unsupported.LegacyState)
 	}
 }
 
@@ -1338,8 +1338,8 @@ func TestBuildHerdrUsesPersistedIdentityWithoutRebinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = build(matching).Sessions[0].Panes[0]
-	if got.Alive || got.RuntimeState != "unsupported" || got.TmuxState != "unknown" {
-		t.Fatalf("unbound persisted identity = alive:%t runtime:%q tmux:%q, want false/unsupported/unknown", got.Alive, got.RuntimeState, got.TmuxState)
+	if got.Alive || got.RuntimeState != "unsupported" || got.LegacyState != "unknown" {
+		t.Fatalf("unbound persisted identity = alive:%t runtime:%q tmux:%q, want false/unsupported/unknown", got.Alive, got.RuntimeState, got.LegacyState)
 	}
 	unboundAfter, err := os.ReadFile(state.Path(root))
 	if err != nil {
@@ -1355,7 +1355,7 @@ func TestDerivePaneEnablesHerdrReadButNotDashboardMutation(t *testing.T) {
 		Backend:   backend.Herdr,
 		PaneID:    "w1:p1",
 		Alive:     true,
-		TmuxState: "live",
+		LegacyState: "live",
 	})
 	if derived.CanFocus || !derived.CanPeek {
 		t.Fatalf("herdr derived actions = focus:%t peek:%t, want false/true", derived.CanFocus, derived.CanPeek)
@@ -1427,7 +1427,7 @@ func TestBuildLoadStateErrorReturnsReason(t *testing.T) {
 	}
 }
 
-func TestBuildTmuxStateMatrix(t *testing.T) {
+func TestBuildLegacyStateMatrix(t *testing.T) {
 	noPane := pane("1", 2, "")
 	c := Collectors{
 		Now:       fixedNow,
@@ -1437,27 +1437,27 @@ func TestBuildTmuxStateMatrix(t *testing.T) {
 		Waves:     wavesNone,
 	}
 	panes := Build("o/n", "/root", c).Sessions[0].Panes
-	if panes[0].TmuxState != "-" {
-		t.Fatalf("no-pane TmuxState = %q want -", panes[0].TmuxState)
+	if panes[0].LegacyState != "-" {
+		t.Fatalf("no-pane LegacyState = %q want -", panes[0].LegacyState)
 	}
-	if panes[1].TmuxState != "live" {
-		t.Fatalf("live TmuxState = %q want live", panes[1].TmuxState)
+	if panes[1].LegacyState != "live" {
+		t.Fatalf("live LegacyState = %q want live", panes[1].LegacyState)
 	}
-	if panes[2].TmuxState != "stale" {
-		t.Fatalf("dead TmuxState = %q want stale", panes[2].TmuxState)
+	if panes[2].LegacyState != "stale" {
+		t.Fatalf("dead LegacyState = %q want stale", panes[2].LegacyState)
 	}
 
 	c.ListLive = func() ([]backend.LivePane, error) { return nil, errors.New("tmux not found") }
 	panes = Build("o/n", "/root", c).Sessions[0].Panes
-	if panes[0].TmuxState != "-" {
-		t.Fatalf("no-pane TmuxState under degraded tmux = %q want -", panes[0].TmuxState)
+	if panes[0].LegacyState != "-" {
+		t.Fatalf("no-pane LegacyState under degraded tmux = %q want -", panes[0].LegacyState)
 	}
-	if panes[1].TmuxState != "unknown" || panes[2].TmuxState != "unknown" {
-		t.Fatalf("degraded-tmux TmuxState = %q,%q want unknown,unknown", panes[1].TmuxState, panes[2].TmuxState)
+	if panes[1].LegacyState != "unknown" || panes[2].LegacyState != "unknown" {
+		t.Fatalf("degraded-tmux LegacyState = %q,%q want unknown,unknown", panes[1].LegacyState, panes[2].LegacyState)
 	}
 }
 
-func TestBuildTmuxTitleOnlyWhenAlive(t *testing.T) {
+func TestBuildLegacyTitleOnlyWhenAlive(t *testing.T) {
 	c := Collectors{
 		Now:       fixedNow,
 		LoadState: storeOf(pane("1", 2, "%1"), pane("1", 3, "%2")),
@@ -1469,11 +1469,11 @@ func TestBuildTmuxTitleOnlyWhenAlive(t *testing.T) {
 		Waves:    wavesNone,
 	}
 	panes := Build("o/n", "/root", c).Sessions[0].Panes
-	if panes[0].TmuxTitle != "two: child" {
-		t.Fatalf("alive TmuxTitle = %q want %q", panes[0].TmuxTitle, "two: child")
+	if panes[0].LegacyTitle != "two: child" {
+		t.Fatalf("alive LegacyTitle = %q want %q", panes[0].LegacyTitle, "two: child")
 	}
-	if panes[1].Alive || panes[1].TmuxTitle != "" {
-		t.Fatalf("dead pane must not carry a title: alive=%v title=%q", panes[1].Alive, panes[1].TmuxTitle)
+	if panes[1].Alive || panes[1].LegacyTitle != "" {
+		t.Fatalf("dead pane must not carry a title: alive=%v title=%q", panes[1].Alive, panes[1].LegacyTitle)
 	}
 }
 
@@ -1997,7 +1997,7 @@ func TestBuildAppendsSyntheticPanesForUnrecordedChildren(t *testing.T) {
 	if queued.DisplayName != "Queued child" {
 		t.Fatalf("DisplayName = %q want the issue title", queued.DisplayName)
 	}
-	if queued.IssueState != "CLOSED" || !queued.HasMergedPR || queued.TmuxState != "closed" {
+	if queued.IssueState != "CLOSED" || !queued.HasMergedPR || queued.LegacyState != "closed" {
 		t.Fatalf("PR-cache-backed synthetic pane = %+v", queued)
 	}
 	if queued.DiffSummary != "-" || queued.DirtyState != "-" {
@@ -2010,11 +2010,11 @@ func TestBuildAppendsSyntheticPanesForUnrecordedChildren(t *testing.T) {
 	if noTitle.DisplayName != "#104" {
 		t.Fatalf("DisplayName = %q want #104 fallback", noTitle.DisplayName)
 	}
-	if noTitle.IssueState != "OPEN" || noTitle.TmuxState != "queued" {
+	if noTitle.IssueState != "OPEN" || noTitle.LegacyState != "queued" {
 		t.Fatalf("PR cache miss must fall back to the graph issue state: %+v", noTitle)
 	}
 	blocked := panes[3]
-	if blocked.TmuxState != "deferred" || !blocked.Blocked || len(blocked.Blockers) != 1 {
+	if blocked.LegacyState != "deferred" || !blocked.Blocked || len(blocked.Blockers) != 1 {
 		t.Fatalf("blocked synthetic pane = %+v", blocked)
 	}
 	// rollup: OPEN/不明の synthetic 行は Total/Pending/Blocked と NotStarted に
@@ -2053,7 +2053,7 @@ func TestBuildClosedSyntheticChildDoesNotBlockAllMerged(t *testing.T) {
 	}
 	snap := Build("o/n", "/root", c)
 	panes := snap.Sessions[0].Panes
-	if len(panes) != 2 || panes[1].TmuxState != "closed" {
+	if len(panes) != 2 || panes[1].LegacyState != "closed" {
 		t.Fatalf("closed synthetic row must still render: %+v", panes)
 	}
 	r := snap.Sessions[0].Rollup
@@ -2160,7 +2160,7 @@ func TestBuildSyntheticEmittedOncePerAliasedParent(t *testing.T) {
 	}
 }
 
-func TestSyntheticTmuxStateMatchesTUIStrings(t *testing.T) {
+func TestSyntheticRuntimeStateMatchesTUIStrings(t *testing.T) {
 	tests := []struct {
 		name       string
 		issueState string
@@ -2177,8 +2177,8 @@ func TestSyntheticTmuxStateMatchesTUIStrings(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := SyntheticTmuxState(tt.issueState, tt.blocked); got != tt.want {
-				t.Errorf("SyntheticTmuxState(%q, %v) = %q, want %q", tt.issueState, tt.blocked, got, tt.want)
+			if got := SyntheticRuntimeState(tt.issueState, tt.blocked); got != tt.want {
+				t.Errorf("SyntheticRuntimeState(%q, %v) = %q, want %q", tt.issueState, tt.blocked, got, tt.want)
 			}
 		})
 	}

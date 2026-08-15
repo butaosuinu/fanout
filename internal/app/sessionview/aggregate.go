@@ -96,14 +96,14 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 	failedRuntimeRoutes := map[backend.ObservationRoute]bool{}
 	allRuntimeRoutesDegraded := false
 	if c.ListLive == nil {
-		snap.Degraded.Tmux = true
+		snap.Degraded.Legacy = true
 		snap.Degraded.Runtime = true
 		allRuntimeRoutesDegraded = true
 	} else {
 		set, err := c.ListLive()
 		live = indexLivePanes(set)
 		if err != nil {
-			snap.Degraded.Tmux = true
+			snap.Degraded.Legacy = true
 			snap.Degraded.Runtime = true
 			failedRuntimeRoutes, allRuntimeRoutesDegraded = backend.ClassifyObservationError(err)
 			snap.Degraded.Reason = appendReason(snap.Degraded.Reason, "runtime: "+err.Error())
@@ -269,7 +269,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				DirtyState:         worktreeStat.DirtyState,
 				WorktreeErr:        worktreeErr,
 				RuntimeState:       runtimeState,
-				TmuxState:          compatibilityTmuxState(runtimeState),
+				LegacyState:        legacyRuntimeState(runtimeState),
 				PlanMode:           p.PlanMode,
 				Prompt:             p.Prompt,
 				CIStatus:           strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
@@ -280,7 +280,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			}
 			if alive {
 				pv.RuntimeTitle = current.Title
-				pv.TmuxTitle = current.Title
+				pv.LegacyTitle = current.Title
 				pv.AgentState = liveAgentState(p, current)
 			} else if runtimeDegraded && backend.NormalizeName(p.Backend) == backend.Tmux {
 				// tmux 不通時は動的判定ができないので、起動時に state.json へ
@@ -318,7 +318,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 					closeUnconfirmed = strings.EqualFold(issueState, "CLOSED")
 				}
 				wi := graph.Info[child.Number]
-				runtimeState := SyntheticTmuxState(issueState, wi.Blocked)
+				runtimeState := SyntheticRuntimeState(issueState, wi.Blocked)
 				pv := PaneView{
 					IssueNum:         child.Number,
 					DisplayName:      issueDisplayName(child),
@@ -328,7 +328,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 					DiffSummary:      "-",
 					DirtyState:       "-",
 					RuntimeState:     runtimeState,
-					TmuxState:        runtimeState,
+					LegacyState:      runtimeState,
 					CIStatus:         strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
 					Wave:             wi.Wave,
 					WaveLabel:        wi.WaveLabel,
@@ -498,11 +498,11 @@ func issueDisplayName(child ghissue.Issue) string {
 	return "#" + strconv.Itoa(child.Number)
 }
 
-// SyntheticTmuxState は未開始子 issue の tmux 列値。internal/ui/tui の synthetic
-// 行もこれを呼ぶ単一実装(`state:queued` 等のフィルタが TUI と
+// SyntheticRuntimeState は未開始子 issue の runtime 列値。internal/ui/tui の
+// synthetic 行もこれを呼ぶ単一実装(`state:queued` 等のフィルタが TUI と
 // web で同じ意味を持つ): closed → deferred → queued の優先順で判定し、issue
 // 状態が取れないものは unknown。
-func SyntheticTmuxState(issueState string, blocked bool) string {
+func SyntheticRuntimeState(issueState string, blocked bool) string {
 	switch {
 	case strings.EqualFold(issueState, "CLOSED"):
 		return "closed"
@@ -699,11 +699,11 @@ func runtimeStateOf(paneID string, runtimeDegraded, runtimeUnsupported, alive bo
 	}
 }
 
-// compatibilityTmuxState keeps the pre-runtime-alias value set stable for
+// legacyRuntimeState keeps the pre-runtime-alias value set stable for
 // existing snapshot consumers. A legacy consumer cannot distinguish an
 // unsupported backend row from an unobservable one, so project it as unknown;
 // RuntimeState carries the precise backend-neutral value.
-func compatibilityTmuxState(runtimeState string) string {
+func legacyRuntimeState(runtimeState string) string {
 	if runtimeState == "unsupported" {
 		return "unknown"
 	}
@@ -811,7 +811,7 @@ func accumulate(r *Rollup, pv PaneView) {
 	if pv.Blocked {
 		r.Blocked++
 	}
-	if pv.NotStarted && pv.TmuxState != "closed" {
+	if pv.NotStarted && pv.LegacyState != "closed" {
 		// NotStarted は「まだ起動しうる作業」のカウンタ: merged 済みで閉じた
 		// synthetic 子は Total/Merged には入るがここには数えない。
 		r.NotStarted++
@@ -843,8 +843,8 @@ func appendReason(existing, add string) string {
 //
 //nolint:funlen // This is one pure projection of the complete pane wire model into derived display fields.
 func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
-	runtimeState := firstNonEmpty(pv.RuntimeState, pv.TmuxState)
-	runtimeTitle := firstNonEmpty(pv.RuntimeTitle, pv.TmuxTitle)
+	runtimeState := firstNonEmpty(pv.RuntimeState, pv.LegacyState)
+	runtimeTitle := firstNonEmpty(pv.RuntimeTitle, pv.LegacyTitle)
 	name := paneName(pv)
 	prSummary, prNum, prState := summarizePR(pv.PRs)
 	ci := paneCI(pv)
@@ -874,8 +874,8 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 		backendName,
 		runtimeState,
 		runtimeTitle,
-		pv.TmuxState,
-		pv.TmuxTitle,
+		pv.LegacyState,
+		pv.LegacyTitle,
 		pv.AgentState,
 		pv.IssueState,
 		prSummary,
@@ -927,7 +927,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 			Diff:     diffSortKey(diffTotal, diffParsed),
 			Dirty:    dirtyRank(pv.DirtyState),
 			CI:       ciRank(ci),
-			Tmux:     tmuxRank(pv),
+			Runtime:  runtimeRank(pv),
 			State:    strings.ToLower(pv.IssueState),
 			PR:       prRank(prState),
 		},
@@ -1096,9 +1096,9 @@ func RelativePath(root, path string) string {
 	return rel
 }
 
-func firstMatchingState(tmuxState, issueState string) string {
-	if strings.TrimSpace(tmuxState) != "" && tmuxState != "-" {
-		return tmuxState
+func firstMatchingState(runtimeState, issueState string) string {
+	if strings.TrimSpace(runtimeState) != "" && runtimeState != "-" {
+		return runtimeState
 	}
 	return issueState
 }
@@ -1150,7 +1150,7 @@ func ciRank(ci string) int {
 	}
 }
 
-func tmuxRank(pv PaneView) int {
+func runtimeRank(pv PaneView) int {
 	switch {
 	case pv.Alive:
 		return 0
@@ -1174,8 +1174,8 @@ func prRank(state string) int {
 	}
 }
 
-func canFocusPane(paneID, tmuxState string) bool {
-	return strings.TrimSpace(paneID) != "" && tmuxState != "stale" && tmuxState != "-"
+func canFocusPane(paneID, runtimeState string) bool {
+	return strings.TrimSpace(paneID) != "" && runtimeState != "stale" && runtimeState != "-"
 }
 
 // peekableRuntime reports whether the recorded runtime exposes the read-only

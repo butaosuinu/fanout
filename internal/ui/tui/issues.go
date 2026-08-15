@@ -692,8 +692,8 @@ func paneViewsFromSnapshot(projectRoot string, snap sessionview.Snapshot) []pane
 				SourceIssueNum:     pv.SourceIssueNum,
 				SourceTaskID:       pv.SourceTaskID,
 				SourceKey:          pv.SourceKey,
-				TmuxState:          firstNonEmpty(pv.RuntimeState, pv.TmuxState),
-				TmuxTitle:          firstNonEmpty(pv.RuntimeTitle, pv.TmuxTitle),
+				TmuxState:          firstNonEmpty(pv.RuntimeState, pv.LegacyState),
+				TmuxTitle:          firstNonEmpty(pv.RuntimeTitle, pv.LegacyTitle),
 				AgentState:         pv.AgentState,
 				IssueState:         dash(pv.IssueState),
 				PRSummary:          dash(derived.PRSummary),
@@ -794,8 +794,8 @@ func derivePaneView(projectRoot string, view paneView, prs []ghissue.PRRef, bloc
 		DiffSummary:  view.DiffSummary,
 		DirtyState:   view.DirtyState,
 		WorktreeErr:  view.WorktreeErr,
-		TmuxState:    view.TmuxState,
-		TmuxTitle:    view.TmuxTitle,
+		LegacyState:  view.TmuxState,
+		LegacyTitle:  view.TmuxTitle,
 		AgentState:   view.AgentState,
 		Prompt:       view.Prompt,
 		CIStatus:     strings.ToLower(strings.TrimSpace(view.CIStatus)),
@@ -825,7 +825,7 @@ func sortPaneViews(panes []paneView) {
 func syntheticTmuxState(status issueStatus) string {
 	// web ダッシュボードの synthetic 行と同一文字列を保証する単一実装に委譲
 	// (`state:queued` 等のフィルタ語彙が TUI / web で割れないように)。
-	return sessionview.SyntheticTmuxState(status.State, status.HasOpenBlockers)
+	return sessionview.SyntheticRuntimeState(status.State, status.HasOpenBlockers)
 }
 
 func cloneIssueStatuses(in map[issueKey]issueStatus) map[issueKey]issueStatus {

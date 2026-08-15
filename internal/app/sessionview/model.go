@@ -91,11 +91,12 @@ type PaneView struct {
 
 	RuntimeState string `json:"runtimeState"`           // "live" / "stale" / "unknown" / "unsupported" / "-"
 	RuntimeTitle string `json:"runtimeTitle,omitempty"` // live backend pane title; "" when dead
-	// TmuxState/TmuxTitle are compatibility aliases for existing snapshot
-	// consumers. TmuxState retains its old value set; unsupported runtime rows
-	// project to unknown. TmuxTitle mirrors RuntimeTitle.
-	TmuxState string `json:"tmuxState"`
-	TmuxTitle string `json:"tmuxTitle,omitempty"`
+	// LegacyState/LegacyTitle are compatibility aliases for existing snapshot
+	// consumers, and keep their original wire keys. LegacyState retains its old
+	// value set; unsupported runtime rows project to unknown. LegacyTitle
+	// mirrors RuntimeTitle.
+	LegacyState string `json:"tmuxState"`
+	LegacyTitle string `json:"tmuxTitle,omitempty"`
 	// AgentState は "running" / "working" / "plan" / "blocked" / "idle" /
 	// "done" / ""(pane 死亡・不明)。alive な pane は backend の live snapshot
 	// から動的判定する。tmux 不通時だけ state.json の起動時記録値
@@ -113,7 +114,7 @@ type PaneView struct {
 	Blocked   bool              `json:"blocked"`             // at least one blocker still OPEN
 	// NotStarted は state.json に記録 pane が無い「未開始」の子 issue を表す
 	// synthetic 行(TUI の synthetic 行の web 移植)。PaneID/Agent/Branch 等の
-	// pane 由来フィールドは zero、TmuxState は closed/deferred/queued/unknown。
+	// pane 由来フィールドは zero、LegacyState は closed/deferred/queued/unknown。
 	NotStarted bool `json:"notStarted,omitempty"`
 	// closeUnconfirmed は synthetic な CLOSED 行のうち PR 状態を確認できなかった
 	// もの(IssuePRs が miss/失敗し wave graph の状態へ fallback)を示す内部
@@ -159,7 +160,7 @@ type PaneSortKeys struct {
 	Diff     int    `json:"diff,omitempty"`
 	Dirty    int    `json:"dirty,omitempty"`
 	CI       int    `json:"ci,omitempty"`
-	Tmux     int    `json:"tmux,omitempty"`
+	Runtime  int    `json:"tmux,omitempty"`
 	State    string `json:"state,omitempty"`
 	PR       int    `json:"pr,omitempty"`
 }
@@ -182,7 +183,7 @@ type Rollup struct {
 // of silently presenting partial data as complete.
 type Degraded struct {
 	Runtime bool   `json:"runtime,omitempty"`
-	Tmux    bool   `json:"tmux"` // compatibility alias: true for any runtime route failure
+	Legacy  bool   `json:"tmux"` // compatibility alias: true for any runtime route failure
 	GitHub  bool   `json:"github"`
 	Reason  string `json:"reason,omitempty"`
 }
