@@ -56,6 +56,15 @@ type Config struct {
 // NewTmux constructs the tmux host runtime.
 func NewTmux() HostBackend { return tmuxbackend.New() }
 
+// PaneHost is the runtime a process running inside a pane talks to about that
+// pane: it publishes its own display telemetry there and reads its own screen
+// back from it. It is deliberately not the resolved launch selection — a
+// self-exec controller is already inside a pane, and only the runtime that
+// created that pane can answer for it. The owned-session lane never reaches
+// here: an owned pane publishes through its launch route's state emitter and
+// reads through the owned session, and this process carries neither route.
+func PaneHost() backend.Backend { return tmuxbackend.New() }
+
 // NewBackend constructs the runtime named by a resolved selection or a saved
 // observation route. session and socketPath are the Herdr route and are
 // ignored by every other runtime.

@@ -59,6 +59,23 @@ const (
 	MethodBindWorktreeActionShortcut   = "BindWorktreeActionShortcut"
 	MethodUnbindWorktreeActionShortcut = "UnbindWorktreeActionShortcut"
 	MethodFocusPaneForViewer           = "FocusPaneForViewer"
+
+	MethodInsideSession                = "InsideSession"
+	MethodCurrentSession               = "CurrentSession"
+	MethodHasSession                   = "HasSession"
+	MethodNewSession                   = "NewSession"
+	MethodNewWindow                    = "NewWindow"
+	MethodRunCommandInPane             = "RunCommandInPane"
+	MethodFocusPaneInSession           = "FocusPaneInSession"
+	MethodAttachOrSwitch               = "AttachOrSwitch"
+	MethodEnableInputExtensions        = "EnableInputExtensions"
+	MethodEnableInputExtensionsForTerm = "EnableInputExtensionsForTerm"
+	MethodActivePaneInWindow           = "ActivePaneInWindow"
+	MethodPaneTitle                    = "PaneTitle"
+	MethodSetPaneRole                  = "SetPaneRole"
+
+	MethodSetPaneAgentState = "SetPaneAgentState"
+	MethodCapturePlanSource = "CapturePlanSource"
 )
 
 // Call is one recorded invocation. Args holds the method's arguments in
@@ -79,6 +96,11 @@ type PaneValue struct {
 // so every backend.As* probe against it reports absence. Use it directly for
 // the "backend without this capability" cases and wrap it in one of the shapes
 // in capability.go otherwise.
+//
+// ListPanes is the one capability method that lives here rather than on a
+// mixin. Both RestoreOps and ConsoleHost name that same observation, and a
+// shape carrying both mixins would find it at equal depth in each and satisfy
+// neither. Holding it on the shared base leaves it at depth 1 for every shape.
 type Fake struct {
 	name         backend.Name
 	mutation     backend.MutationModel
@@ -106,6 +128,18 @@ type Fake struct {
 	popupErr        error
 	shortcutErr     error
 	focusViewerErr  error
+
+	currentSession   string
+	existingSessions []string
+	windowPane       backend.PaneInfo
+	activePane       string
+	activePaneErr    error
+	paneTitle        string
+	paneTitleErr     error
+	consoleErr       error
+	agentStateErr    error
+	planSource       string
+	planSourceErr    error
 
 	mu        sync.Mutex
 	calls     []Call
@@ -265,6 +299,66 @@ func WithFocusViewerError(err error) Option {
 	return func(f *Fake) { f.focusViewerErr = err }
 }
 
+// WithConsoleSession sets the session the ConsoleHost capability reports the
+// calling process to be running in. Empty (the default) means the process is
+// outside every session, which is what sends the console down its bootstrap
+// path.
+func WithConsoleSession(session string) Option {
+	return func(f *Fake) { f.currentSession = session }
+}
+
+// WithExistingSessions names the sessions ConsoleHost.HasSession answers true
+// for.
+func WithExistingSessions(sessions ...string) Option {
+	return func(f *Fake) { f.existingSessions = sessions }
+}
+
+// WithConsoleWindowPane sets the pane ConsoleHost.NewWindow returns.
+func WithConsoleWindowPane(pane backend.PaneInfo) Option {
+	return func(f *Fake) { f.windowPane = pane }
+}
+
+// WithActivePane sets the pane ConsoleHost.ActivePaneInWindow reports, and the
+// error it reports instead.
+func WithActivePane(paneID string, err error) Option {
+	return func(f *Fake) {
+		f.activePane = paneID
+		f.activePaneErr = err
+	}
+}
+
+// WithPaneTitle sets the title ConsoleHost.PaneTitle reads back, and the error
+// it reports instead.
+func WithPaneTitle(title string, err error) Option {
+	return func(f *Fake) {
+		f.paneTitle = title
+		f.paneTitleErr = err
+	}
+}
+
+// WithConsoleError fails the ConsoleHost calls that mutate a session — session
+// and window creation, the console relaunch, focus, attach, and the role stamp.
+// The observations have their own options because a test usually needs one to
+// fail while the rest keep answering.
+func WithConsoleError(err error) Option {
+	return func(f *Fake) { f.consoleErr = err }
+}
+
+// WithAgentStateError fails the AgentStateReporter capability, the way a pane
+// that disappeared under the controller reporting on it does.
+func WithAgentStateError(err error) Option {
+	return func(f *Fake) { f.agentStateErr = err }
+}
+
+// WithPlanSource sets the transcript the PlanCapture capability returns, and
+// the error it returns instead.
+func WithPlanSource(source string, err error) Option {
+	return func(f *Fake) {
+		f.planSource = source
+		f.planSourceErr = err
+	}
+}
+
 // Name reports the configured backend name.
 func (f *Fake) Name() backend.Name { return f.name }
 
@@ -311,6 +405,13 @@ func (f *Fake) ReleaseStartGate(gate string) error {
 func (f *Fake) ListLive() ([]backend.LivePane, error) {
 	f.record(MethodListLive)
 	return f.livePanes, f.livePanesErr
+}
+
+// ListPanes records the target-scoped listing and returns WithTargetPanes. It
+// serves both the RestoreOps and the ConsoleHost shapes; see the note on Fake.
+func (f *Fake) ListPanes(target string) ([]backend.PaneInfo, error) {
+	f.record(MethodListPanes, target)
+	return f.targetPanes, f.targetPanesErr
 }
 
 // Read returns empty pane output.
