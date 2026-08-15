@@ -4,7 +4,8 @@
 自動再起動 / #628 行コメントレビュー / #321 Wails アプリ化。子 issue 計 29 本・
 全 OPEN)の優先順位と並列 wave 計画をここに置き、実装詳細は各 issue に書く。
 全体の開発方針は [roadmap.ja.md](roadmap.ja.md)。同じ判定を図示した人間向け
-ビジュアル版が [assets/dashboard-roadmap.html](assets/dashboard-roadmap.html)。
+ビジュアル版が [assets/dashboard-roadmap.html](assets/dashboard-roadmap.html)
+(GitHub 上ではソース表示になるため、checkout してブラウザで開く)。
 
 ## 優先順位
 
@@ -23,7 +24,8 @@ epic ごとに主戦場が分かれているのが並走の根拠。
   を新設し server.go を縮小する。cmd 側は触らない。ただし #680 だけは生成物の
   反映で `web/src/transport/`(generated/ 新設 + types.ts の façade 化)と
   Makefile(`gen-types` ターゲット)にも触れる
-- #675-F(#677 → #679 → #681 → #682 → #683): `web/src` のみ
+- #675-F(#677 → #679 → #681 → #682 → #683): `web/src` と
+  `web/package.json` + lockfile(#677 / #682 が依存を追加)
 - #659: #655 = runfile.go + `cmd/fanout/dashboard.go`、#656 = infra レジストリ
   (atomicfs)。`web/` なし
 - #628: Go は core / app / infra の新設パッケージ中心。web は features 側の
