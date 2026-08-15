@@ -9,7 +9,6 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -65,14 +64,14 @@ func TestRunHerdrLifecycleDispatchesOnlySelectedAction(t *testing.T) {
 					}
 					return worktree.RepoIdentity{RepoKey: "/repo/.git", RepoRoot: root}, nil
 				},
-				restart: func(_ context.Context, root string, opts herdrrun.OwnedOptions) (string, error) {
+				restart: func(_ context.Context, root, repoKey string) (string, error) {
 					restarts++
-					assertHerdrLifecycleInputs(t, root, opts)
+					assertHerdrLifecycleInputs(t, root, repoKey)
 					return "fanout-owned", nil
 				},
-				shutdown: func(_ context.Context, root string, opts herdrrun.OwnedOptions) error {
+				shutdown: func(_ context.Context, root, repoKey string) error {
 					shutdowns++
-					assertHerdrLifecycleInputs(t, root, opts)
+					assertHerdrLifecycleInputs(t, root, repoKey)
 					return nil
 				},
 			}
@@ -91,9 +90,9 @@ func TestRunHerdrLifecycleDispatchesOnlySelectedAction(t *testing.T) {
 	}
 }
 
-func assertHerdrLifecycleInputs(t *testing.T, root string, opts herdrrun.OwnedOptions) {
+func assertHerdrLifecycleInputs(t *testing.T, root, repoKey string) {
 	t.Helper()
-	if root != "/repo" || opts.GitCommonDir != "/repo/.git" || opts.RuntimeBase != "" {
-		t.Fatalf("lifecycle inputs root=%q opts=%+v", root, opts)
+	if root != "/repo" || repoKey != "/repo/.git" {
+		t.Fatalf("lifecycle inputs root=%q repoKey=%q", root, repoKey)
 	}
 }

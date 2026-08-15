@@ -6,15 +6,14 @@ import (
 	"path/filepath"
 
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 func runtimeLifecycleOptions(projectRoot, statePath string, hookConfig hooks.Config) lifecycle.Options {
-	runtimeBackend := tmuxbackend.New()
+	runtimeBackend := paneruntime.NewTmux()
 	return lifecycle.Options{
 		ProjectRoot:      projectRoot,
 		StatePath:        statePath,
@@ -34,7 +33,7 @@ func newHerdrLifecycleFactory(projectRoot string) lifecycle.WorkspaceRuntimeFact
 			filepath.Clean(pane.RepoRoot) != identity.RepoRoot {
 			return nil, fmt.Errorf("saved Herdr row belongs to a different repository")
 		}
-		owned, err := herdrrun.OpenOwned(ctx, herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
+		owned, err := paneruntime.Open(ctx, identity.RepoKey)
 		if err != nil {
 			return nil, err
 		}

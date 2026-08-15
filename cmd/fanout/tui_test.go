@@ -24,6 +24,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
@@ -188,7 +189,7 @@ func TestCmdTUIHerdrContextSkipsTmuxComposition(t *testing.T) {
 	}()
 	includeTmux := true
 	runtimeListLiveForProject = func(root string, include bool) func() ([]backend.LivePane, error) {
-		if canonicalRuntimeRoot(root) != canonicalRuntimeRoot(repo) {
+		if paneruntime.CanonicalRoot(root) != paneruntime.CanonicalRoot(repo) {
 			t.Fatalf("runtime collector root = %q, want %q", root, repo)
 		}
 		includeTmux = include
@@ -279,7 +280,7 @@ func TestCmdTUIHerdrContextUsesOwnerRootFromChildWorktree(t *testing.T) {
 	if code := cmdTUI("fanout", discardLogger()); code != exitcode.OK {
 		t.Fatalf("cmdTUI() = %d, want OK", code)
 	}
-	if canonicalRuntimeRoot(opts.ProjectRoot) != canonicalRuntimeRoot(owner) {
+	if paneruntime.CanonicalRoot(opts.ProjectRoot) != paneruntime.CanonicalRoot(owner) {
 		t.Fatalf("ProjectRoot = %q, want owner %q", opts.ProjectRoot, owner)
 	}
 	if opts.BackendSelection.Name != backend.Herdr {
@@ -456,7 +457,7 @@ func TestCmdTUIWiresRuntimeBackendPorts(t *testing.T) {
 	compositeCalls := 0
 	var compositeIncludeTmux bool
 	runtimeListLiveForProject = func(root string, includeTmux bool) func() ([]backend.LivePane, error) {
-		if canonicalRuntimeRoot(root) != canonicalRuntimeRoot(repo) {
+		if paneruntime.CanonicalRoot(root) != paneruntime.CanonicalRoot(repo) {
 			t.Fatalf("runtime collector root = %q, want %q", root, repo)
 		}
 		compositeIncludeTmux = includeTmux

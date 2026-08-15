@@ -2,37 +2,37 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/butaosuinu/fanout/internal/app/stateemitter"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 )
 
-type herdrEmitterObserver struct {
-	openOwned func(context.Context, herdrrun.OwnedOptions) (*herdrrun.OwnedSession, error)
+// runtimeEmitterObserver adapts the runtime observation to the app's telemetry
+// port. The adapter lives in the composition root because the port is named in
+// app types the runtime layer must not import; observe carries only the
+// core-typed request paneruntime accepts.
+type runtimeEmitterObserver struct {
+	observe func(context.Context, paneruntime.ObservationRequest) (paneruntime.Observation, error)
 }
 
-func (o herdrEmitterObserver) Observe(
+func (o runtimeEmitterObserver) Observe(
 	ctx context.Context,
 	target stateemitter.RuntimeTarget,
 ) (stateemitter.Observation, error) {
-	openOwned := o.openOwned
-	if openOwned == nil {
-		openOwned = herdrrun.OpenOwned
+	observe := o.observe
+	if observe == nil {
+		observe = paneruntime.ObserveManaged
 	}
-	owned, err := openOwned(ctx, herdrrun.OwnedOptions{GitCommonDir: target.GitCommonDir})
+	got, err := observe(ctx, paneruntime.ObservationRequest{
+		GitCommonDir: target.GitCommonDir,
+		Session:      target.Session,
+		SocketPath:   target.SocketPath,
+		PaneID:       target.PaneID,
+	})
 	if err != nil {
 		return stateemitter.Observation{}, err
 	}
-	if owned.Session != target.Session || owned.SocketPath != target.SocketPath {
-		return stateemitter.Observation{}, fmt.Errorf("current Herdr owner route does not match launch binding")
-	}
-	panes, err := owned.LivePanes(ctx)
-	if err != nil {
-		return stateemitter.Observation{}, err
-	}
-	process, err := owned.ProcessInfo(ctx, target.PaneID)
 	return stateemitter.Observation{
-		Panes: panes, ProcessInfo: process, ProcessError: err,
+		Panes: got.Panes, ProcessInfo: got.ProcessInfo, ProcessError: got.ProcessError,
 	}, nil
 }

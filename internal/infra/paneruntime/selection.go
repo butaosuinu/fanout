@@ -1,6 +1,7 @@
 package paneruntime
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,6 +84,12 @@ func projectBindings(cfg Config, projectRoot string, store state.Store) []backen
 	return cfg.Bindings(projectRoot, store)
 }
 
+// errNoBindingProjection fails a selection closed rather than resolving against
+// silently empty rows: without the projection, parent stickiness would look
+// like a first-ever launch and could pick a runtime that conflicts with a
+// saved row.
+var errNoBindingProjection = errors.New("runtime backend selection needs a binding projection")
+
 // ResolveSelection applies the backend precedence rules to gathered inputs.
 func ResolveSelection(parent string, inputs Inputs) (backend.Selection, error) {
 	return backend.Resolve(backend.ResolveInput{
@@ -123,7 +130,7 @@ func Resolve(cfg Config, parent string, store state.Store, provisionalIntents []
 		Selection: selection,
 		Backend:   runtimeBackend,
 		Prepare:   prepare,
-		Verify:    selectionVerifier(cfg, selection, inputs),
+		Verify:    NewSelectionVerifier(cfg, selection, inputs),
 	}, nil
 }
 
@@ -140,11 +147,11 @@ func gatherInputs(cfg Config, store state.Store, provisionalIntents []backend.Bi
 	return inputs, nil
 }
 
-// selectionVerifier closes over the immutable non-state resolver inputs and
+// NewSelectionVerifier closes over the immutable non-state resolver inputs and
 // re-reads final rows from the store held under the launch lock. This catches a
 // parent binding created after the composition root's read-only preflight
 // without dropping caller-supplied provisional intents.
-func selectionVerifier(cfg Config, selection backend.Selection, inputs Inputs) func(string, state.Store) error {
+func NewSelectionVerifier(cfg Config, selection backend.Selection, inputs Inputs) func(string, state.Store) error {
 	return func(parent string, locked state.Store) error {
 		recheck := inputs
 		rows, err := CollectBindings(cfg, inputs.ProjectRoot, locked)
@@ -175,29 +182,46 @@ func selectionVerifier(cfg Config, selection backend.Selection, inputs Inputs) f
 // specs. The current store is supplied by the caller so the lock-time check
 // observes the exact state protected by that caller's launch lock.
 func CollectBindings(cfg Config, projectRoot string, current state.Store) ([]backend.Binding, error) {
-	stores, err := projectStores(projectRoot, current)
+	if cfg.Bindings == nil {
+		return nil, errNoBindingProjection
+	}
+	stores, err := ProjectStores(projectRoot, current)
 	if err != nil {
 		return nil, fmt.Errorf("list linked worktrees for runtime backend bindings: %w", err)
 	}
 	rows := make([]backend.Binding, 0)
 	for i, entry := range stores {
-		for _, binding := range projectBindings(cfg, entry.root, entry.store) {
-			if i > 0 && strings.HasPrefix(strings.TrimSpace(binding.Parent), "plan:") {
-				continue
-			}
-			rows = append(rows, binding)
-		}
+		rows = append(rows, ownerBindings(cfg, entry, i > 0)...)
 	}
 	return rows, nil
 }
 
-type projectStore struct {
-	root  string
-	store state.Store
+// ownerBindings projects one owner's rows. A sibling worktree's plan rows stay
+// worktree-local because sibling worktrees may use the same slug for unrelated
+// specs.
+func ownerBindings(cfg Config, owner ProjectStore, sibling bool) []backend.Binding {
+	rows := make([]backend.Binding, 0)
+	for _, binding := range projectBindings(cfg, owner.Root, owner.Store) {
+		if sibling && strings.HasPrefix(strings.TrimSpace(binding.Parent), "plan:") {
+			continue
+		}
+		rows = append(rows, binding)
+	}
+	return rows
 }
 
-func projectStores(projectRoot string, current state.Store) ([]projectStore, error) {
-	stores := []projectStore{{root: projectRoot, store: current}}
+// ProjectStore is one worktree root and the state it owns.
+type ProjectStore struct {
+	Root  string
+	Store state.Store
+}
+
+// ProjectStores is the set of linked worktrees that can own an independent
+// fanout session, current root first. Backend selection unions bindings over
+// it, and the launch guards walk the same set, so both decide against the same
+// owners.
+func ProjectStores(projectRoot string, current state.Store) ([]ProjectStore, error) {
+	stores := []ProjectStore{{Root: projectRoot, Store: current}}
 	if strings.TrimSpace(projectRoot) == "" {
 		return stores, nil
 	}
@@ -216,7 +240,7 @@ func projectStores(projectRoot string, current state.Store) ([]projectStore, err
 		if loadErr != nil {
 			return nil, fmt.Errorf("load linked worktree state from %s: %w", root, loadErr)
 		}
-		stores = append(stores, projectStore{root: root, store: store})
+		stores = append(stores, ProjectStore{Root: root, Store: store})
 	}
 	return stores, nil
 }

@@ -21,10 +21,10 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
@@ -323,12 +323,12 @@ func guardLinkedIssuePlanCoordinator(projectRoot string, current state.Store, is
 }
 
 func guardLinkedIssueSession(projectRoot string, current state.Store, guard func(string, state.Store) error) error {
-	stores, err := runtimeProjectStores(projectRoot, current)
+	stores, err := paneruntime.ProjectStores(projectRoot, current)
 	if err != nil {
 		return fmt.Errorf("inspect linked worktree issue sessions: %w", err)
 	}
 	for _, entry := range stores {
-		if guardErr := guard(entry.root, entry.store); guardErr != nil {
+		if guardErr := guard(entry.Root, entry.Store); guardErr != nil {
 			return guardErr
 		}
 	}
@@ -662,7 +662,7 @@ func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaun
 func launchShellPane(projectRoot, target string, req fanouttui.ShellLaunchRequest) error {
 	launcher := &panelaunch.Launcher{
 		Info:    &fanoutruntime.Info{Target: target, ProjectRoot: projectRoot},
-		Backend: tmuxbackend.New(),
+		Backend: paneruntime.NewTmux(),
 	}
 	return launcher.Shell(panelaunch.ShellRequest{TargetPath: req.TargetPath, Root: req.Root})
 }

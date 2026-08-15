@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -16,37 +15,13 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/gitroot"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
-	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
-
-type runtimeBackendInputs struct {
-	projectRoot        string
-	cli                backend.Name
-	environment        string
-	herdrEnvironment   bool
-	tmuxEnvironment    bool
-	userDefault        backend.Name
-	rows               []backend.Binding
-	provisionalIntents []backend.Binding
-	suppliedIntents    []backend.Binding
-
-	herdrSession    string
-	herdrSocketPath string
-}
-
-type launchBackendResolution struct {
-	selection backend.Selection
-	backend   backend.Backend
-	prepare   func() (*herdrrun.OwnedSession, error)
-	verify    func(parent string, locked state.Store) error
-}
 
 type runtimeReadRoute struct {
 	name            backend.Name
@@ -86,7 +61,7 @@ func resolveLaunchRuntime(cfg *cliflags.Config, provisionalIntents []backend.Bin
 		lg.Err("runtime backend: %v", err)
 		return nil, exitcode.Env
 	}
-	runtime, code := run.ResolveRuntime(cfg, resolved.selection, resolved.backend, resolved.verify, lg)
+	runtime, code := run.ResolveRuntime(cfg, resolved.Selection, resolved.Backend, resolved.Verify, lg)
 	if runtime != nil {
 		bindLaunchBackend(runtime, resolved)
 	}
@@ -117,55 +92,47 @@ func resolveTUILaunchRuntimeForTarget(projectRoot, session, target string, cfg *
 			ProjectRoot: projectRoot,
 		},
 		GH:               ghissue.Runner{Cwd: projectRoot},
-		Backend:          resolved.backend,
-		BackendSelection: resolved.selection,
-		VerifyBackend:    resolved.verify,
+		Backend:          resolved.Backend,
+		BackendSelection: resolved.Selection,
+		VerifyBackend:    resolved.Verify,
 	}
 	bindLaunchBackend(runtime, resolved)
 	return runtime, nil
 }
 
-// resolveLaunchBackend is the shared composition step for CLI and TUI launch
-// lanes. Owned Herdr launch lanes acquire the same repository runtime. verify
-// repeats parent stickiness against the store held under the launch lock.
-func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) (launchBackendResolution, error) {
-	inputs := loadRuntimeBackendInputs(cfg, projectRoot, store, provisionalIntents)
-	rows, err := runtimeBackendBindings(projectRoot, store)
-	if err != nil {
-		return launchBackendResolution{}, err
+// runtimeConfig maps CLI flags onto the neutral selection input. The two
+// callbacks stay here because the row projection is an app rule and the flag
+// combinations a runtime cannot serve are CLI vocabulary; paneruntime only
+// sequences them around selection.
+func runtimeConfig(cfg *cliflags.Config, projectRoot string) paneruntime.Config {
+	return paneruntime.Config{
+		ProjectRoot: projectRoot,
+		Backend:     cfg.Backend,
+		Session:     cfg.Session,
+		DryRun:      cfg.DryRun,
+		Bindings:    backendBindings,
+		Validate: func(selection backend.Selection) error {
+			return validateLaunchBackend(cfg, selection)
+		},
 	}
-	inputs.rows = rows
-	if refreshErr := refreshHerdrIntentBindings(&inputs); refreshErr != nil {
-		return launchBackendResolution{}, refreshErr
-	}
-	selection, err := resolveBackendSelection(cfg.ParentRef, inputs)
-	if err != nil {
-		return launchBackendResolution{}, err
-	}
-	if validateErr := validateLaunchBackend(cfg, selection); validateErr != nil {
-		return launchBackendResolution{}, validateErr
-	}
-	runtimeBackend, prepare, err := constructLaunchRuntimeBackend(cfg, selection.Name, inputs)
-	if err != nil {
-		return launchBackendResolution{}, err
-	}
-	return launchBackendResolution{
-		selection: selection,
-		backend:   runtimeBackend,
-		prepare:   prepare,
-		verify:    backendSelectionVerifier(selection, inputs),
-	}, nil
 }
 
-func bindLaunchBackend(runtime *run.Runtime, resolved launchBackendResolution) {
-	if resolved.prepare == nil {
+// resolveLaunchBackend is the shared composition step for CLI and TUI launch
+// lanes. Owned Herdr launch lanes acquire the same repository runtime. Verify
+// repeats parent stickiness against the store held under the launch lock.
+func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) (paneruntime.Resolution, error) {
+	return paneruntime.Resolve(runtimeConfig(cfg, projectRoot), cfg.ParentRef, store, provisionalIntents)
+}
+
+func bindLaunchBackend(runtime *run.Runtime, resolved paneruntime.Resolution) {
+	if resolved.Prepare == nil {
 		return
 	}
 	var once sync.Once
 	var prepareErr error
 	runtime.PrepareBackend = func() error {
 		once.Do(func() {
-			owned, err := resolved.prepare()
+			owned, err := resolved.Prepare()
 			if err != nil {
 				prepareErr = err
 				return
@@ -175,97 +142,6 @@ func bindLaunchBackend(runtime *run.Runtime, resolved launchBackendResolution) {
 		})
 		return prepareErr
 	}
-}
-
-// backendSelectionVerifier closes over the immutable non-state resolver inputs
-// and re-reads final rows from the store held under the launch lock. This
-// catches a parent binding created after the composition root's read-only
-// preflight without dropping caller-supplied provisional intents.
-func backendSelectionVerifier(selection backend.Selection, inputs runtimeBackendInputs) func(string, state.Store) error {
-	return func(parent string, locked state.Store) error {
-		recheck := inputs
-		rows, err := runtimeBackendBindings(inputs.projectRoot, locked)
-		if err != nil {
-			return err
-		}
-		recheck.rows = rows
-		if err := refreshHerdrIntentBindings(&recheck); err != nil {
-			return err
-		}
-		got, resolveErr := resolveBackendSelection(parent, recheck)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		if got.Name != selection.Name {
-			return fmt.Errorf("selection changed from %s to %s while acquiring the launch lock", selection.Name, got.Name)
-		}
-		return nil
-	}
-}
-
-// runtimeBackendBindings projects final rows from the current state plus every
-// linked worktree state that can represent an independent fanout owner. Actual
-// issue / Project stickiness is repository-wide: choosing from only the
-// invoking worktree could create a conflicting backend row that the merged TUI
-// detects only after the mutation. A plan without issue provenance remains
-// worktree-local because sibling worktrees may use the same slug for unrelated
-// specs. The current store is supplied by the caller so the lock-time check
-// observes the exact state protected by that caller's launch lock.
-func runtimeBackendBindings(projectRoot string, current state.Store) ([]backend.Binding, error) {
-	stores, err := runtimeProjectStores(projectRoot, current)
-	if err != nil {
-		return nil, fmt.Errorf("list linked worktrees for runtime backend bindings: %w", err)
-	}
-	rows := make([]backend.Binding, 0)
-	for i, entry := range stores {
-		for _, binding := range backendBindings(entry.root, entry.store) {
-			if i > 0 && strings.HasPrefix(strings.TrimSpace(binding.Parent), "plan:") {
-				continue
-			}
-			rows = append(rows, binding)
-		}
-	}
-	return rows, nil
-}
-
-type runtimeProjectStore struct {
-	root  string
-	store state.Store
-}
-
-func runtimeProjectStores(projectRoot string, current state.Store) ([]runtimeProjectStore, error) {
-	stores := []runtimeProjectStore{{root: projectRoot, store: current}}
-	if strings.TrimSpace(projectRoot) == "" {
-		return stores, nil
-	}
-	roots, err := worktree.ListRoots(projectRoot)
-	if err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{canonicalRuntimeRoot(projectRoot): true}
-	for _, root := range roots {
-		key := canonicalRuntimeRoot(root)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		store, loadErr := state.LoadProject(root)
-		if loadErr != nil {
-			return nil, fmt.Errorf("load linked worktree state from %s: %w", root, loadErr)
-		}
-		stores = append(stores, runtimeProjectStore{root: root, store: store})
-	}
-	return stores, nil
-}
-
-func canonicalRuntimeRoot(root string) string {
-	if resolved, err := filepath.EvalSymlinks(root); err == nil {
-		return filepath.Clean(resolved)
-	}
-	if absolute, err := filepath.Abs(root); err == nil {
-		return filepath.Clean(absolute)
-	}
-	return filepath.Clean(root)
 }
 
 func validateLaunchBackend(
@@ -302,100 +178,12 @@ func configHasLaunchAgent(cfg *cliflags.Config) bool {
 	return agentName != "" || len(cfg.AgentOverrides) > 0
 }
 
-func constructLaunchRuntimeBackend(
-	cfg *cliflags.Config,
-	name backend.Name,
-	inputs runtimeBackendInputs,
-) (backend.Backend, func() (*herdrrun.OwnedSession, error), error) {
-	if name != backend.Herdr {
-		runtimeBackend, err := constructRuntimeBackend(name, inputs)
-		return runtimeBackend, nil, err
-	}
-	if cfg.DryRun {
-		return herdrrun.NewPreview(), nil, nil
-	}
-	prepare := func() (*herdrrun.OwnedSession, error) {
-		identity, err := worktree.ResolveRepoIdentity(context.Background(), inputs.projectRoot)
-		if err != nil {
-			return nil, err
-		}
-		return herdrrun.EnsureOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
-	}
-	return herdrrun.NewPreview(), prepare, nil
+func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) paneruntime.Inputs {
+	return paneruntime.LoadInputs(runtimeConfig(cfg, projectRoot), store, provisionalIntents)
 }
 
-func openOwnedHerdrSession(projectRoot string) (*herdrrun.OwnedSession, error) {
-	identity, err := worktree.ResolveRepoIdentity(context.Background(), projectRoot)
-	if err != nil {
-		return nil, err
-	}
-	return herdrrun.OpenOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
-}
-
-func ensureOwnedHerdrSession(projectRoot string) (*herdrrun.OwnedSession, error) {
-	identity, err := worktree.ResolveRepoIdentity(context.Background(), projectRoot)
-	if err != nil {
-		return nil, err
-	}
-	return herdrrun.EnsureOwned(context.Background(), herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
-}
-
-func loadRuntimeBackendInputs(cfg *cliflags.Config, projectRoot string, store state.Store, provisionalIntents []backend.Binding) runtimeBackendInputs {
-	var cliOverride *backend.Name
-	if cfg.Backend != "" {
-		cliOverride = new(cfg.Backend)
-	}
-	// The launch lane resolves settings again after runtime preflight and owns
-	// tolerant configuration warnings. Suppress them here so the existing lane
-	// prints each diagnostic exactly once.
-	resolved := settings.Resolve(projectRoot, settings.CLIOverrides{RuntimeBackend: cliOverride}, nil)
-	userDefault := backend.Name("")
-	if resolved.RuntimeBackendSource == settings.RuntimeBackendSourceUserConfig {
-		userDefault = resolved.RuntimeBackend
-	}
-	return runtimeBackendInputs{
-		projectRoot:        projectRoot,
-		cli:                cfg.Backend,
-		environment:        os.Getenv("FANOUT_BACKEND"),
-		herdrEnvironment:   os.Getenv("HERDR_ENV") == "1",
-		tmuxEnvironment:    os.Getenv("TMUX") != "",
-		userDefault:        userDefault,
-		rows:               backendBindings(projectRoot, store),
-		provisionalIntents: append([]backend.Binding(nil), provisionalIntents...),
-		suppliedIntents:    append([]backend.Binding(nil), provisionalIntents...),
-		herdrSession:       os.Getenv("HERDR_SESSION"),
-		herdrSocketPath:    os.Getenv("HERDR_SOCKET_PATH"),
-	}
-}
-
-func refreshHerdrIntentBindings(inputs *runtimeBackendInputs) error {
-	if strings.TrimSpace(inputs.projectRoot) == "" {
-		inputs.provisionalIntents = append([]backend.Binding(nil), inputs.suppliedIntents...)
-		return nil
-	}
-	control, err := state.LoadLaunchJournal(inputs.projectRoot)
-	if err != nil {
-		return fmt.Errorf("load Herdr runtime bindings: %w", err)
-	}
-	ownerProjectRoot := canonicalRuntimeRoot(inputs.projectRoot)
-	inputs.provisionalIntents = append(
-		append([]backend.Binding(nil), inputs.suppliedIntents...),
-		control.ProvisionalBindings(ownerProjectRoot)...,
-	)
-	return nil
-}
-
-func resolveBackendSelection(parent string, inputs runtimeBackendInputs) (backend.Selection, error) {
-	return backend.Resolve(backend.ResolveInput{
-		Parent:             parent,
-		CLI:                string(inputs.cli),
-		Environment:        inputs.environment,
-		HerdrEnvironment:   inputs.herdrEnvironment,
-		TmuxEnvironment:    inputs.tmuxEnvironment,
-		UserDefault:        string(inputs.userDefault),
-		Rows:               inputs.rows,
-		ProvisionalIntents: inputs.provisionalIntents,
-	})
+func resolveBackendSelection(parent string, inputs paneruntime.Inputs) (backend.Selection, error) {
+	return paneruntime.ResolveSelection(parent, inputs)
 }
 
 // resolveDisplayBackendSelection resolves the ambient runtime for read-only
@@ -409,17 +197,6 @@ func resolveDisplayBackendSelection(projectRoot string) (backend.Selection, erro
 
 func backendBindings(projectRoot string, store state.Store) []backend.Binding {
 	return panelaunch.RuntimeBackendBindings(projectRoot, store)
-}
-
-func constructRuntimeBackend(name backend.Name, inputs runtimeBackendInputs) (backend.Backend, error) {
-	switch name {
-	case backend.Tmux:
-		return tmuxbackend.New(), nil
-	case backend.Herdr:
-		return herdrrun.New(inputs.herdrSession, inputs.herdrSocketPath), nil
-	default:
-		return nil, fmt.Errorf("unknown runtime backend %q", name)
-	}
 }
 
 // runtimeListLiveCollector builds the read-only runtime observation port used
@@ -438,10 +215,9 @@ func runtimeListLiveCollector(projectRoot string, includeTmux bool) func() ([]ba
 
 		routes, routeErr := runtimeReadRoutes(projectRoot, includeTmux)
 		return collectRuntimeLive(routes, routeErr, func(route runtimeReadRoute) ([]backend.LivePane, error) {
-			runtimeBackend, err := constructRuntimeBackend(route.name, runtimeBackendInputs{
-				herdrSession:    route.herdrSession,
-				herdrSocketPath: route.herdrSocketPath,
-			})
+			runtimeBackend, err := paneruntime.NewBackend(
+				route.name, route.herdrSession, route.herdrSocketPath,
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -473,14 +249,14 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 	seenRoots := map[string]bool{}
 	hasHerdrRoute := false
 	for _, root := range roots {
-		key := canonicalRuntimeRoot(root)
+		key := paneruntime.CanonicalRoot(root)
 		if seenRoots[key] {
 			continue
 		}
 		seenRoots[key] = true
 		store, err := state.LoadProject(root)
 		if err != nil {
-			if key == canonicalRuntimeRoot(projectRoot) {
+			if key == paneruntime.CanonicalRoot(projectRoot) {
 				routeErr = errors.Join(routeErr, err)
 			}
 			continue
@@ -553,8 +329,8 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 			if !hasHerdrRoute {
 				addRoute(runtimeReadRoute{
 					name:            backend.Herdr,
-					herdrSession:    strings.TrimSpace(inputs.herdrSession),
-					herdrSocketPath: strings.TrimSpace(inputs.herdrSocketPath),
+					herdrSession:    strings.TrimSpace(inputs.HerdrSession),
+					herdrSocketPath: strings.TrimSpace(inputs.HerdrSocketPath),
 				})
 			}
 		}
