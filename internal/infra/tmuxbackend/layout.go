@@ -64,90 +64,143 @@ func (*Backend) Relayout(target string, trigger backend.LayoutTrigger) error {
 	return defaultLayoutApplier.apply(target, trigger)
 }
 
+// apply serializes the whole relayout: it is invoked concurrently from
+// bubbletea command goroutines (resize, create, close), and its tmux ops (list,
+// split, kill, select-layout) would otherwise interleave on the same window.
+// Every helper it calls assumes a.mu is held.
 func (a *layoutApplier) apply(target string, trigger backend.LayoutTrigger) error {
-	// Serialize the whole apply: it is invoked concurrently from bubbletea
-	// command goroutines (resize, create, close), and its tmux ops (list, split,
-	// kill, select-layout) would otherwise interleave on the same window. The
-	// memo helpers below assume this lock is held.
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	geom, err := a.ops.WindowGeometry(target)
-	if err != nil {
-		// Window gone or tmux unavailable: best-effort no-op.
+	geom, ok := a.windowGeometry(target)
+	if !ok {
 		return nil
 	}
-	windowID := geom.WindowID
-	win := layoutWindow{Width: geom.Width, Height: geom.Height}
-
-	panes, err := a.ops.WindowPanes(windowID)
+	w, err := a.readWindow(geom)
 	if err != nil {
 		return err
 	}
-	console, grid, spacers := partition(panes)
 
 	// Resize dedup: our own relayout resizes the console pane, which makes the
 	// TUI emit a fresh resize. The window geometry and pane set are unchanged by
 	// that, so a matching signature means there is nothing to do. A create or a
 	// close always changed the pane set, so they bypass the check.
-	if trigger == backend.LayoutResize && a.memoMatch(windowID, win, console != nil, numericIDs(grid), numericIDs(spacers)) {
+	if trigger == backend.LayoutResize && a.memoMatch(w.ID, w.Win, w.hasConsole(), numericIDs(w.Grid), numericIDs(w.Spacers)) {
 		return nil
 	}
 
 	cfg := a.cfg
-	cfg.SidebarWidth = 0
-	if console != nil {
-		cfg.SidebarWidth = sidebarWidthDefault
-	}
+	cfg.SidebarWidth = w.sidebarWidth()
 
-	// No grid panes: nothing to arrange. Drop any leftover spacers and let the
-	// console (or lone pane) fill the window.
-	if len(grid) == 0 {
-		for _, s := range spacers {
-			_ = a.ops.KillPane(s.ID)
-		}
-		a.store(windowID, win, console != nil, nil, nil)
+	if len(w.Grid) == 0 {
+		a.clearGridlessWindow(w)
 		return nil
 	}
+	a.arrangeGrid(w, cfg)
+	return nil
+}
 
-	plan := decideLayoutPlan(win, len(grid), cfg)
-	// Spacers only earn their keep with a resident TUI (console present) that
-	// reconciles them on later relayouts; a one-shot batch run would leave the
-	// blank pane orphaned, so skip it there. Always drop pre-existing spacers.
-	desired := 0
-	if plan.Spacer.Needed && console != nil {
-		desired = 1
-	}
-	spacerIDs := a.reconcileSpacers(windowID, spacers, desired)
+// windowState is the live window a single relayout pass works on: its id, its
+// interior geometry, and its panes split by role.
+type windowState struct {
+	ID      string
+	Win     layoutWindow
+	Console *backend.WindowPane
+	Grid    []backend.WindowPane
+	Spacers []backend.WindowPane
+}
 
-	gridIDs := numericIDs(grid)
-	contentIDs := gridIDs
-	lastCellSpacer := false
-	if len(spacerIDs) > 0 {
-		contentIDs = append(append([]string(nil), gridIDs...), spacerIDs...)
-		lastCellSpacer = true
+func (w windowState) hasConsole() bool { return w.Console != nil }
+
+// sidebarWidth is the width the layout reserves for the console sidebar: the
+// default console width when the window has one, otherwise no reservation.
+func (w windowState) sidebarWidth() int {
+	if !w.hasConsole() {
+		return 0
 	}
+	return sidebarWidthDefault
+}
+
+// windowGeometry resolves the window that holds target. ok is false when there
+// is nothing to lay out — the window is gone or tmux is unavailable — which is
+// not an error: the relayout is best-effort and must never fail pane creation
+// or teardown.
+func (a *layoutApplier) windowGeometry(target string) (backend.Geometry, bool) {
+	geom, err := a.ops.WindowGeometry(target)
+	return geom, err == nil
+}
+
+// readWindow lists the window's panes and splits them by role.
+func (a *layoutApplier) readWindow(geom backend.Geometry) (windowState, error) {
+	panes, err := a.ops.WindowPanes(geom.WindowID)
+	if err != nil {
+		return windowState{}, err
+	}
+	console, grid, spacers := partition(panes)
+	return windowState{
+		ID:      geom.WindowID,
+		Win:     layoutWindow{Width: geom.Width, Height: geom.Height},
+		Console: console,
+		Grid:    grid,
+		Spacers: spacers,
+	}, nil
+}
+
+// clearGridlessWindow handles a window with no grid panes: there is nothing to
+// arrange, so drop any leftover spacer and let the console (or the lone pane)
+// fill the window.
+func (a *layoutApplier) clearGridlessWindow(w windowState) {
+	for _, s := range w.Spacers {
+		_ = a.ops.KillPane(s.ID)
+	}
+	a.store(w.ID, w.Win, w.hasConsole(), nil, nil)
+}
+
+// arrangeGrid lays the grid panes out: it reconciles the spacer pane against the
+// plan, applies the grid, and memoizes the window signature only when the custom
+// grid actually took effect. After a fallback we must not let an identical resize
+// short-circuit and leave the window stuck in the coarse layout — the next
+// relayout should retry the grid.
+func (a *layoutApplier) arrangeGrid(w windowState, cfg layoutConfig) {
+	plan := decideLayoutPlan(w.Win, len(w.Grid), cfg)
+	spacerIDs := a.reconcileSpacers(w.ID, w.Spacers, desiredSpacers(plan, w))
+
+	gridIDs := numericIDs(w.Grid)
+	contentIDs, lastCellSpacer := contentCells(gridIDs, spacerIDs)
 	sidebarID := ""
-	if console != nil {
-		sidebarID = console.NumericID
+	if w.hasConsole() {
+		sidebarID = w.Console.NumericID
 	}
 
-	applied := a.applyLayout(windowID, win, cfg, plan, sidebarID, contentIDs, lastCellSpacer)
-	if !applied && len(spacerIDs) > 0 {
+	if !a.applyLayout(w.ID, w.Win, cfg, plan, sidebarID, contentIDs, lastCellSpacer) {
 		// The coarse fallbacks do not place the spacer cell, so the blank pane
-		// would dangle; remove it and record no spacer.
+		// would dangle; remove it and record nothing.
 		for _, id := range spacerIDs {
 			_ = a.ops.KillPane("%" + id)
 		}
-		spacerIDs = nil
+		return
 	}
-	// Only memoize when the custom grid actually applied. After a fallback we must
-	// not let an identical resize short-circuit and leave the window stuck in the
-	// coarse layout — the next relayout should retry the grid.
-	if applied {
-		a.store(windowID, win, console != nil, gridIDs, spacerIDs)
+	a.store(w.ID, w.Win, w.hasConsole(), gridIDs, spacerIDs)
+}
+
+// desiredSpacers is how many spacer panes the window should end up with. Spacers
+// only earn their keep with a resident TUI (console present) that reconciles them
+// on later relayouts; a one-shot batch run would leave the blank pane orphaned,
+// so skip it there. Pre-existing spacers are always dropped.
+func desiredSpacers(plan layoutPlan, w windowState) int {
+	if plan.Spacer.Needed && w.hasConsole() {
+		return 1
 	}
-	return nil
+	return 0
+}
+
+// contentCells returns the grid's cell ids in row-major order — the grid panes,
+// then the spacer when one is used — and whether that trailing cell is a spacer.
+func contentCells(gridIDs, spacerIDs []string) (contentIDs []string, lastCellSpacer bool) {
+	if len(spacerIDs) == 0 {
+		return gridIDs, false
+	}
+	return append(append([]string(nil), gridIDs...), spacerIDs...), true
 }
 
 // applyLayout renders and applies the custom grid and reports whether that grid

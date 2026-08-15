@@ -74,37 +74,19 @@ func decideLayoutPlan(win layoutWindow, contentPaneCount int, cfg layoutConfig) 
 	if contentPaneCount <= 0 || win.Width <= 0 || win.Height <= 0 {
 		return layoutPlan{}
 	}
-	reserve := sidebarReserve(cfg)
-	minFeasibleW := max(1, min(cfg.MinComfortableWidth, cfg.MaxComfortableWidth))
-
 	var best, feasibleBest *layoutPlan
 	bestScore, feasibleScore := -1.0, -1.0
 
 	// Descend so that, on a score tie, the smaller column count (wider panes)
 	// is the one that ends up retained — matching dmux's tie-break.
 	for cols := contentPaneCount; cols >= 1; cols-- {
-		rows := ceilDiv(contentPaneCount, cols)
-		paneWidth := float64(win.Width-reserve-(cols-1)) / float64(cols) // not floored: score input
-		paneHeight := (win.Height - (rows - 1)) / rows                   // int division = floor
-
-		cand := layoutPlan{
-			Cols:             cols,
-			Rows:             rows,
-			PaneDistribution: distribute(contentPaneCount, cols, rows),
-		}
-		score := scoreLayout(cand, paneWidth, paneHeight, win.Height, cfg)
-
-		minReqW := reserve + cols*minFeasibleW + (cols - 1)
-		minReqH := rows*cfg.MinComfortableHeight + (rows - 1)
-		feasible := minReqW <= win.Width && minReqH <= win.Height
-		cand.Comfortable = feasible
-
+		cand, score := scoreColumnCount(win, contentPaneCount, cols, cfg)
 		if better(score, bestScore, cols, best) {
 			bestScore = score
 			c := cand
 			best = &c
 		}
-		if feasible && better(score, feasibleScore, cols, feasibleBest) {
+		if cand.Comfortable && better(score, feasibleScore, cols, feasibleBest) {
 			feasibleScore = score
 			c := cand
 			feasibleBest = &c
@@ -117,6 +99,33 @@ func decideLayoutPlan(win layoutWindow, contentPaneCount int, cfg layoutConfig) 
 	}
 	chosen.Spacer = decideSpacer(win, *chosen, cfg)
 	return *chosen
+}
+
+// scoreColumnCount builds the plan that arranges contentPaneCount panes in cols
+// columns and scores it. The returned plan carries whether the window can hold
+// that grid comfortably; the score ranks it against the other column counts.
+func scoreColumnCount(win layoutWindow, contentPaneCount, cols int, cfg layoutConfig) (layoutPlan, float64) {
+	rows := ceilDiv(contentPaneCount, cols)
+	paneWidth := float64(win.Width-sidebarReserve(cfg)-(cols-1)) / float64(cols) // not floored: score input
+	paneHeight := (win.Height - (rows - 1)) / rows                               // int division = floor
+
+	plan := layoutPlan{
+		Cols:             cols,
+		Rows:             rows,
+		PaneDistribution: distribute(contentPaneCount, cols, rows),
+	}
+	score := scoreLayout(plan, paneWidth, paneHeight, win.Height, cfg)
+	plan.Comfortable = fitsComfortably(win, plan, cfg)
+	return plan, score
+}
+
+// fitsComfortably reports whether the window can hold the plan's grid at the
+// minimum comfortable pane size, sidebar and borders included.
+func fitsComfortably(win layoutWindow, p layoutPlan, cfg layoutConfig) bool {
+	minFeasibleW := max(1, min(cfg.MinComfortableWidth, cfg.MaxComfortableWidth))
+	minReqW := sidebarReserve(cfg) + p.Cols*minFeasibleW + (p.Cols - 1)
+	minReqH := p.Rows*cfg.MinComfortableHeight + (p.Rows - 1)
+	return minReqW <= win.Width && minReqH <= win.Height
 }
 
 // scoreLayout reproduces dmux's balanceScore * heightScore * widthScore.
@@ -186,59 +195,18 @@ type renderLayoutInput struct {
 // no sidebar). It returns an error when the geometry cannot hold the panes so
 // the caller can fall back.
 func renderLayout(in renderLayoutInput) (string, error) {
-	n := len(in.ContentPaneIDs)
-	switch {
-	case n == 0:
-		return "", errors.New("tmux layout: no content panes")
-	case in.Cols < 1:
-		return "", errors.New("tmux layout: cols must be >= 1")
-	case in.Win.Width <= 0 || in.Win.Height <= 0:
-		return "", errors.New("tmux layout: window dimensions must be positive")
+	geom, err := contentGeometry(in)
+	if err != nil {
+		return "", err
 	}
-	reserve := sidebarReserve(in.Cfg)
-	contentWidth := in.Win.Width - reserve
-	contentStartX := reserve
-	if contentWidth <= 0 {
-		return "", errors.New("tmux layout: content width must be positive")
-	}
-	rows := ceilDiv(n, in.Cols)
-	paneHeight := (in.Win.Height - (rows - 1)) / rows
-	if paneHeight <= 0 {
-		return "", errors.New("tmux layout: pane height must be positive")
-	}
-
-	gridRows := make([]string, 0, rows)
-	idx, currentY := 0, 0
-	for r := range rows {
-		panesInRow := min(in.Cols, n-idx)
-		rowHeight := paneHeight
-		if r == rows-1 {
-			rowHeight = in.Win.Height - currentY // last row absorbs the remainder
-		}
-		lastRowSpacer := in.LastCellSpacer && r == rows-1
-		widths := rowWidths(contentWidth, panesInRow, lastRowSpacer, in.Cfg)
-
-		cells := make([]string, panesInRow)
-		x := contentStartX
-		for c := range panesInRow {
-			cells[c] = fmt.Sprintf("%dx%d,%d,%d,%s", widths[c], rowHeight, x, currentY, in.ContentPaneIDs[idx+c])
-			x += widths[c] + 1 // cell width plus one border column
-		}
-		idx += panesInRow
-
-		if panesInRow == 1 {
-			gridRows = append(gridRows, cells[0]) // a single pane needs no container
-		} else {
-			gridRows = append(gridRows, fmt.Sprintf("%dx%d,%d,%d{%s}", contentWidth, rowHeight, contentStartX, currentY, strings.Join(cells, ",")))
-		}
-		if r < rows-1 {
-			currentY += paneHeight + 1
-		}
+	gridRows := make([]string, 0, geom.Rows)
+	for _, row := range splitRows(in, geom) {
+		gridRows = append(gridRows, renderRow(row, geom, in.Cfg))
 	}
 
 	content := gridRows[0]
 	if len(gridRows) > 1 {
-		content = fmt.Sprintf("%dx%d,%d,0[%s]", contentWidth, in.Win.Height, contentStartX, strings.Join(gridRows, ","))
+		content = fmt.Sprintf("%dx%d,%d,0[%s]", geom.ContentWidth, in.Win.Height, geom.ContentStartX, strings.Join(gridRows, ","))
 	}
 
 	body := content
@@ -247,6 +215,96 @@ func renderLayout(in renderLayoutInput) (string, error) {
 		body = fmt.Sprintf("%dx%d,0,0{%s,%s}", in.Win.Width, in.Win.Height, sidebar, content)
 	}
 	return layoutChecksum(body) + "," + body, nil
+}
+
+// contentGeom is the validated area the grid is drawn into: the content width
+// and its left edge (after the sidebar reserve), the row count, and the height
+// every row but the last one gets.
+type contentGeom struct {
+	ContentWidth  int
+	ContentStartX int
+	Rows          int
+	PaneHeight    int
+}
+
+// contentGeometry validates the render input and derives the content area from
+// it. It errors when the window cannot hold the panes, so renderLayout's caller
+// can fall back to a coarser tmux layout.
+func contentGeometry(in renderLayoutInput) (contentGeom, error) {
+	n := len(in.ContentPaneIDs)
+	switch {
+	case n == 0:
+		return contentGeom{}, errors.New("tmux layout: no content panes")
+	case in.Cols < 1:
+		return contentGeom{}, errors.New("tmux layout: cols must be >= 1")
+	case in.Win.Width <= 0 || in.Win.Height <= 0:
+		return contentGeom{}, errors.New("tmux layout: window dimensions must be positive")
+	}
+	reserve := sidebarReserve(in.Cfg)
+	contentWidth := in.Win.Width - reserve
+	if contentWidth <= 0 {
+		return contentGeom{}, errors.New("tmux layout: content width must be positive")
+	}
+	rows := ceilDiv(n, in.Cols)
+	paneHeight := (in.Win.Height - (rows - 1)) / rows
+	if paneHeight <= 0 {
+		return contentGeom{}, errors.New("tmux layout: pane height must be positive")
+	}
+	return contentGeom{
+		ContentWidth:  contentWidth,
+		ContentStartX: reserve,
+		Rows:          rows,
+		PaneHeight:    paneHeight,
+	}, nil
+}
+
+// layoutRow is one row of the content grid: the panes it holds in left-to-right
+// order, where it sits vertically, and whether its trailing cell is the spacer.
+type layoutRow struct {
+	PaneIDs []string
+	Y       int
+	Height  int
+	Spacer  bool
+}
+
+// splitRows slices the content panes into rows of at most Cols and places each
+// row vertically. The last row absorbs the leftover height and carries the
+// spacer cell when one is used.
+func splitRows(in renderLayoutInput, geom contentGeom) []layoutRow {
+	rows := make([]layoutRow, 0, geom.Rows)
+	idx, y := 0, 0
+	for r := range geom.Rows {
+		panesInRow := min(in.Cols, len(in.ContentPaneIDs)-idx)
+		row := layoutRow{
+			PaneIDs: in.ContentPaneIDs[idx : idx+panesInRow],
+			Y:       y,
+			Height:  geom.PaneHeight,
+		}
+		if r == geom.Rows-1 {
+			row.Height = in.Win.Height - y // last row absorbs the remainder
+			row.Spacer = in.LastCellSpacer
+		}
+		rows = append(rows, row)
+		idx += panesInRow
+		y += geom.PaneHeight + 1
+	}
+	return rows
+}
+
+// renderRow emits one row's layout node: a cell per pane laid out left to right,
+// wrapped in a container unless the row holds a single pane.
+func renderRow(row layoutRow, geom contentGeom, cfg layoutConfig) string {
+	widths := rowWidths(geom.ContentWidth, len(row.PaneIDs), row.Spacer, cfg)
+	cells := make([]string, len(row.PaneIDs))
+	x := geom.ContentStartX
+	for c, id := range row.PaneIDs {
+		cells[c] = fmt.Sprintf("%dx%d,%d,%d,%s", widths[c], row.Height, x, row.Y, id)
+		x += widths[c] + 1 // cell width plus one border column
+	}
+	if len(cells) == 1 {
+		return cells[0] // a single pane needs no container
+	}
+	return fmt.Sprintf("%dx%d,%d,%d{%s}", geom.ContentWidth, row.Height, geom.ContentStartX, row.Y, strings.Join(cells, ","))
 }
 
 // rowWidths distributes contentWidth across panesInRow cells. Without a spacer

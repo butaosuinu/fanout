@@ -1062,47 +1062,8 @@ func repairAttachedPaneLayout(runtimeBackend backend.Backend, target, containerI
 // identity is verified, and a created worktree is preserved when that close
 // cannot be confirmed. A nil lg suppresses cleanup diagnostics.
 func failCleanup(runtimeBackend backend.Backend, label, relayoutTarget, paneID, expectedWorktreePath, shellKey string, prepared *worktree.Result, lg *log.Logger) bool {
-	if paneID != "" {
-		if runtimeBackend == nil {
-			if lg != nil {
-				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: runtime backend is not configured", label, paneID)
-			}
-			return false
-		}
-		closer, ok := runtimeBackend.(backend.OwnedCloser)
-		if !ok {
-			if lg != nil {
-				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: runtime backend %s does not support identity-aware pane close", label, paneID, runtimeBackend.Name())
-			}
-			return false
-		}
-		result, err := closer.CloseOwned(backend.CloseRequest{
-			Ref:          backend.PaneRef{Backend: runtimeBackend.Name(), Pane: paneID},
-			WorktreePath: expectedWorktreePath,
-			ShellKey:     strings.TrimSpace(shellKey),
-		})
-		if err != nil {
-			if lg != nil {
-				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: %v", label, paneID, err)
-			}
-			return false
-		}
-		switch result.Status {
-		case backend.CloseFailed:
-			if lg != nil {
-				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: close was not confirmed", label, paneID)
-			}
-			return false
-		case backend.CloseStale:
-			// The recorded identity is already gone; worktree cleanup is safe.
-		case backend.CloseConfirmed:
-			relayoutAfterFailedLaunch(runtimeBackend, label, relayoutTarget, result.ContainerID, lg)
-		default:
-			if lg != nil {
-				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: unknown close status %d", label, paneID, result.Status)
-			}
-			return false
-		}
+	if paneID != "" && !closeIncompletePane(runtimeBackend, label, relayoutTarget, paneID, expectedWorktreePath, shellKey, lg) {
+		return false
 	}
 	if prepared == nil {
 		return true
@@ -1111,6 +1072,61 @@ func failCleanup(runtimeBackend backend.Backend, label, relayoutTarget, paneID, 
 		lg.Warn("%s: cleanup incomplete worktree %s: %v", label, prepared.WorktreePath, err)
 	}
 	return true
+}
+
+// closeIncompletePane closes the pane a failed launch left behind and reports
+// whether its teardown is settled enough for the worktree to go too: the pane is
+// either confirmed gone (its layout container is then repaired) or was already
+// gone. Every other outcome is logged and keeps the worktree.
+func closeIncompletePane(runtimeBackend backend.Backend, label, relayoutTarget, paneID, expectedWorktreePath, shellKey string, lg *log.Logger) bool {
+	if runtimeBackend == nil {
+		warnPreservingWorktree(lg, label, paneID, "runtime backend is not configured")
+		return false
+	}
+	closer, ok := runtimeBackend.(backend.OwnedCloser)
+	if !ok {
+		warnPreservingWorktree(lg, label, paneID, fmt.Sprintf("runtime backend %s does not support identity-aware pane close", runtimeBackend.Name()))
+		return false
+	}
+	result, err := closer.CloseOwned(incompletePaneCloseRequest(runtimeBackend.Name(), paneID, expectedWorktreePath, shellKey))
+	if err != nil {
+		warnPreservingWorktree(lg, label, paneID, err.Error())
+		return false
+	}
+	switch result.Status {
+	case backend.CloseFailed:
+		warnPreservingWorktree(lg, label, paneID, "close was not confirmed")
+		return false
+	case backend.CloseStale:
+		// The recorded identity is already gone; worktree cleanup is safe.
+	case backend.CloseConfirmed:
+		relayoutAfterFailedLaunch(runtimeBackend, label, relayoutTarget, result.ContainerID, lg)
+	default:
+		warnPreservingWorktree(lg, label, paneID, fmt.Sprintf("unknown close status %d", result.Status))
+		return false
+	}
+	return true
+}
+
+// incompletePaneCloseRequest is the identity-checked close request for a pane a
+// failed launch left behind: the recorded worktree path and shell key are what
+// the runtime matches the live pane against.
+func incompletePaneCloseRequest(runtimeBackend backend.Name, paneID, expectedWorktreePath, shellKey string) backend.CloseRequest {
+	return backend.CloseRequest{
+		Ref:          backend.PaneRef{Backend: runtimeBackend, Pane: paneID},
+		WorktreePath: expectedWorktreePath,
+		ShellKey:     strings.TrimSpace(shellKey),
+	}
+}
+
+// warnPreservingWorktree records why an incomplete launch's pane teardown was
+// not settled, and therefore why its worktree is kept. A nil lg suppresses the
+// diagnostic.
+func warnPreservingWorktree(lg *log.Logger, label, paneID, reason string) {
+	if lg == nil {
+		return
+	}
+	lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: %s", label, paneID, reason)
 }
 
 // cleanupFreshPane is reserved for the split-time metadata failure before a
