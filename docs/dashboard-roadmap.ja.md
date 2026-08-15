@@ -3,7 +3,8 @@
 2026-08-15 の判定。web ダッシュボード系 4 epic(#675 技術スタック導入 / #659
 自動再起動 / #628 行コメントレビュー / #321 Wails アプリ化。子 issue 計 29 本・
 全 OPEN)の優先順位と並列 wave 計画をここに置き、実装詳細は各 issue に書く。
-全体の開発方針は [roadmap.ja.md](roadmap.ja.md)。
+全体の開発方針は [roadmap.ja.md](roadmap.ja.md)。同じ判定を図示した人間向け
+ビジュアル版が [assets/dashboard-roadmap.html](assets/dashboard-roadmap.html)。
 
 ## 優先順位
 

@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web ダッシュボード開発ロードマップ</title>
+<style>
+  /* PAPER BREEZE — 和紙ライト単一ルック(site/assets/css/main.css のトークンを踏襲) */
+  :root{
+    --washi:#F7F2E8; --sumi:#2A2E33; --ai:#165E83; --asagi:#00A3AF;
+    --byakugun:#C9E8EC; --suna:#E2D9C8; --paper:#FFFDF8;
+    --ink-60:rgba(42,46,51,.62); --ink-78:rgba(42,46,51,.78); --ai-deep:#11506E;
+    /* カテゴリ色(validate_palette.js 全 6 チェック PASS / light #F7F2E8) */
+    --c-s:#14639B;    /* #675-S Go server */
+    --c-f:#00A3AF;    /* #675-F web(contrast WARN → 全チップ直接ラベルで履行) */
+    --c-restart:#B07D2B; /* #659 */
+    --c-review:#745399;  /* #628 */
+    --c-app:#B4544D;     /* #321 */
+    --f-head:"Shippori Mincho B1","Hiragino Mincho ProN","Yu Mincho",serif;
+    --f-body:"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Hiragino Sans",sans-serif;
+    --f-code:"M PLUS 1 Code",ui-monospace,"SFMono-Regular",Menlo,monospace;
+  }
+  *,*::before,*::after{ box-sizing:border-box; margin:0; padding:0; }
+  body{
+    font-family:var(--f-body); font-size:15px; line-height:1.85;
+    color:var(--sumi); background-color:var(--washi);
+    background-image:
+      repeating-radial-gradient(circle at 14% -6%, rgba(22,94,131,.022) 0 1.5px, transparent 1.5px 110px),
+      repeating-linear-gradient(94deg, rgba(226,217,200,.16) 0 1px, transparent 1px 9px);
+    -webkit-font-smoothing:antialiased;
+  }
+  main{ max-width:1100px; margin:0 auto; padding:48px 28px 72px; }
+  a{ color:var(--ai); text-decoration:none; }
+  a:hover{ color:var(--asagi); }
+
+  header.hero{ margin-bottom:36px; }
+  .hero h1{ font-family:var(--f-head); font-weight:600; font-size:30px; letter-spacing:.04em; color:var(--sumi); }
+  .hero h1 .dot{ color:var(--asagi); }
+  .hero .meta{ margin-top:6px; color:var(--ink-60); font-size:13px; letter-spacing:.03em; }
+  .hero .lede{ margin-top:14px; max-width:56em; color:var(--ink-78); }
+
+  h2{ font-family:var(--f-head); font-weight:600; font-size:20px; letter-spacing:.05em;
+      margin:44px 0 16px; padding-left:12px; border-left:3px solid var(--asagi); }
+
+  /* ---- 優先度カード ---- */
+  .cards{ display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; }
+  .card{ background:var(--paper); border:1px solid var(--suna); border-radius:8px;
+         padding:16px 16px 14px; position:relative; border-top:3px solid var(--edge,var(--ai)); }
+  .card .rank{ font-family:var(--f-code); font-size:11px; font-weight:600; letter-spacing:.08em;
+               color:#fff; background:var(--edge,var(--ai)); border-radius:3px; padding:2px 8px; }
+  .card h3{ font-size:15.5px; font-weight:600; margin:10px 0 2px; line-height:1.5; }
+  .card h3 a{ color:var(--sumi); }
+  .card h3 a:hover{ color:var(--ai); }
+  .card .kids{ font-family:var(--f-code); font-size:11.5px; color:var(--ink-60); }
+  .card p{ margin-top:8px; font-size:13px; line-height:1.75; color:var(--ink-78); }
+  .card .gate-note{ margin-top:8px; font-size:12px; color:var(--ai-deep);
+                    background:var(--byakugun); border-radius:4px; padding:3px 8px; display:inline-block; }
+
+  /* ---- wave ガント ---- */
+  .gantt-scroll{ overflow-x:auto; background:var(--paper); border:1px solid var(--suna);
+                 border-radius:8px; padding:18px 18px 8px; }
+  table.gantt{ border-collapse:separate; border-spacing:0; min-width:940px; width:100%; }
+  .gantt th, .gantt td{ padding:4px 5px; vertical-align:top; }
+  .gantt thead th{ font-family:var(--f-code); font-size:11px; font-weight:500; color:var(--ink-60);
+                   text-align:left; border-bottom:1px solid var(--suna); padding-bottom:8px; }
+  .gantt thead th.ph{ color:var(--ai-deep); font-weight:600; }
+  .gantt .track{ font-size:12.5px; font-weight:600; white-space:nowrap; padding-right:14px; padding-top:8px; }
+  .gantt .track small{ display:block; font-weight:400; color:var(--ink-60); font-size:11px; }
+  .gantt tbody td{ border-bottom:1px dashed var(--suna); padding-top:8px; padding-bottom:10px; }
+  .gantt tbody tr:last-child td{ border-bottom:none; }
+  .gantt td.gate-col{ border-left:2px dashed var(--ai-deep); }
+  .chip{ display:block; font-family:var(--f-code); font-size:11px; line-height:1.45;
+         border-left:3px solid var(--ck,var(--ai)); background:color-mix(in srgb, var(--ck,var(--ai)) 9%, var(--paper));
+         color:var(--sumi); border-radius:0 4px 4px 0; padding:4px 7px; margin-bottom:5px;
+         white-space:nowrap; }
+  a.chip:hover{ background:color-mix(in srgb, var(--ck,var(--ai)) 20%, var(--paper)); color:var(--sumi); }
+  .chip b{ font-weight:600; color:var(--ck,var(--ai)); filter:brightness(.82); }
+  .chip.h::after{ content:"H"; float:right; margin-left:8px; font-size:9.5px; font-weight:700;
+                  color:#fff; background:var(--sumi); border-radius:2px; padding:0 4px; }
+  .gate-flag{ font-size:11px; color:var(--ai-deep); font-weight:600; white-space:nowrap; }
+  .legend{ display:flex; flex-wrap:wrap; gap:14px 22px; margin:14px 2px 0; font-size:12.5px; color:var(--ink-78); }
+  .legend .sw{ display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:6px; vertical-align:-1px; }
+  .legend .hmark{ font-size:9.5px; font-weight:700; color:#fff; background:var(--sumi); border-radius:2px; padding:0 4px; margin-right:6px; }
+
+  /* ---- 依存図 ---- */
+  .depfig{ background:var(--paper); border:1px solid var(--suna); border-radius:8px; padding:10px 14px; overflow-x:auto; }
+  .depfig svg{ display:block; min-width:760px; width:100%; height:auto; }
+  .fig-cap{ margin-top:10px; font-size:12.5px; color:var(--ink-60); }
+
+  /* ---- 注意事項・表 ---- */
+  ul.notes{ margin-left:1.3em; }
+  ul.notes li{ margin-bottom:6px; }
+  ul.notes code, td code, .cell-note code{ font-family:var(--f-code); font-size:.92em;
+    background:color-mix(in srgb, var(--suna) 40%, var(--paper)); border-radius:3px; padding:1px 5px; }
+  table.plain{ border-collapse:collapse; width:100%; background:var(--paper);
+               border:1px solid var(--suna); border-radius:8px; overflow:hidden; font-size:13px; }
+  .plain th{ text-align:left; font-weight:600; background:color-mix(in srgb, var(--suna) 35%, var(--paper));
+             padding:8px 12px; border-bottom:1px solid var(--suna); }
+  .plain td{ padding:7px 12px; border-bottom:1px dashed var(--suna); vertical-align:top; }
+  .plain tr:last-child td{ border-bottom:none; }
+  .plain td.mono, .plain th.mono{ font-family:var(--f-code); font-size:12px; white-space:nowrap; }
+  .table-wrap{ overflow-x:auto; }
+
+  footer{ margin-top:56px; padding-top:16px; border-top:1px solid var(--suna);
+          font-size:12px; color:var(--ink-60); }
+</style>
+</head>
+<body>
+<main>
+
+<header class="hero">
+  <h1>Web ダッシュボード開発ロードマップ<span class="dot">。</span></h1>
+  <div class="meta">2026-08-15 判定 — butaosuinu/fanout · epic 4 本 / 子 issue 29 本(全 OPEN)· 正典: docs/dashboard-roadmap.ja.md</div>
+  <p class="lede">
+    web ダッシュボード系の 4 epic を、優先順位・並列実装可否・wave(並列起動の単位)で整理した。
+    最大 4 セッション並列。wave の起動は親 epic ごとに <code style="font-family:var(--f-code)">/fanout #親 --unblocked-only</code> を 1 回ずつ(2 epic にまたがる wave は 2 回)。
+  </p>
+</header>
+
+<h2>優先順位</h2>
+<div class="cards">
+  <div class="card" style="--edge:var(--c-s)">
+    <span class="rank">PRIORITY 1</span>
+    <h3><a href="https://github.com/butaosuinu/fanout/issues/675">#675 技術スタック導入</a></h3>
+    <div class="kids">子 8 本 #676–683 — jotai / TanStack Router / net/http 整理 / tygo</div>
+    <p>#628 の着手ゲート(S-1〜S-3 と F-1〜F-3 の完了)であり、今後の画面追加すべての土台。Go server(S)と web(F)の 2 トラックで並行できる。</p>
+  </div>
+  <div class="card" style="--edge:var(--c-restart)">
+    <span class="rank">PRIORITY 2</span>
+    <h3><a href="https://github.com/butaosuinu/fanout/issues/659">#659 ダッシュボード自動再起動</a></h3>
+    <div class="kids">子 4 本 #655–658</div>
+    <p>2026-08-14 実測の運用痛点(install 後も旧バンドル配信・手動入れ替え 6 手順)。web/ を触らず #675 と並走できる。#657 の restart 導線は #658 の前提(登録済み)。#321 の #316 も #659 完了後が望ましい(本書の判断)。</p>
+  </div>
+  <div class="card" style="--edge:var(--c-review)">
+    <span class="rank">PRIORITY 3</span>
+    <h3><a href="https://github.com/butaosuinu/fanout/issues/628">#628 diff 行コメント双方向レビュー</a></h3>
+    <div class="kids">子 11 本 #518, #663–671</div>
+    <p>機能価値は最大だが着手ゲートが #675 側にある。#668 の POST carve-out は #676 の route テーブルへの 1 行追加になる設計で、待つ方が総工数が下がる。</p>
+    <span class="gate-note">着手ゲート: #675 の S-1〜S-3 / F-1〜F-3 完了後</span>
+  </div>
+  <div class="card" style="--edge:var(--c-app)">
+    <span class="rank">PRIORITY 4</span>
+    <h3><a href="https://github.com/butaosuinu/fanout/issues/321">#321 Wails ネイティブアプリ化</a></h3>
+    <div class="kids">子 7 本 #314–320 — macOS 先行・オプション配布</div>
+    <p>本体に同梱しない配布で緊急性がない。Wails v3 alpha と notarization($99/年)のリスク。#314 が #655 / #657 と cmd 側で交差し、#316 は #659 完了後の方が手戻りが少ない。</p>
+    <span class="gate-note">着手ゲート: #659 完了後(spike #315 で Go/No-Go)</span>
+  </div>
+</div>
+
+<h2>Wave 計画 — 何をいつ並列で走らせるか</h2>
+<div class="gantt-scroll">
+<table class="gantt">
+  <thead>
+    <tr>
+      <th></th>
+      <th class="ph">Phase 1</th><th></th><th></th>
+      <th class="ph">Phase 2</th><th></th>
+      <th class="ph">Phase 3</th><th></th><th></th>
+    </tr>
+    <tr>
+      <th>トラック</th>
+      <th>wave 1</th><th>wave 2</th><th>wave 3</th>
+      <th>wave 4</th><th>wave 5</th>
+      <th>wave 6</th><th>wave 7</th><th>wave 8</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="track" style="color:var(--c-s)">#675-S<small>Go server</small></td>
+      <td><a class="chip h" style="--ck:var(--c-s)" href="https://github.com/butaosuinu/fanout/issues/676" title="refactor(dashboard): route テーブル化 + server.go 分割 + SPA fallback"><b>#676</b> route 表化+分割</a></td>
+      <td><a class="chip" style="--ck:var(--c-s)" href="https://github.com/butaosuinu/fanout/issues/678" title="refactor(dashboard): エラー応答の JSON 統一"><b>#678</b> エラー JSON 統一</a></td>
+      <td><a class="chip" style="--ck:var(--c-s)" href="https://github.com/butaosuinu/fanout/issues/680" title="feat(typegen): tygo による Go→TS 型生成"><b>#680</b> tygo 型生成</a></td>
+      <td class="gate-col"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    <tr>
+      <td class="track" style="color:var(--c-f)">#675-F<small>web</small></td>
+      <td><a class="chip" style="--ck:var(--c-f)" href="https://github.com/butaosuinu/fanout/issues/677" title="feat(web): jotai 導入 + filter/sort の atom 化"><b>#677</b> jotai 導入</a></td>
+      <td><a class="chip" style="--ck:var(--c-f)" href="https://github.com/butaosuinu/fanout/issues/679" title="feat(web): settings/selected/notice の atom 化"><b>#679</b> atom 化 (settings)</a></td>
+      <td><a class="chip" style="--ck:var(--c-f)" href="https://github.com/butaosuinu/fanout/issues/681" title="refactor(web): diffTarget/covering atom 化 + SnapshotBridge/Reconciler 分離"><b>#681</b> atom 化 (diff)</a></td>
+      <td class="gate-col"><a class="chip" style="--ck:var(--c-f)" href="https://github.com/butaosuinu/fanout/issues/682" title="feat(web): TanStack Router 導入(history routing)"><b>#682</b> TanStack Router</a></td>
+      <td><a class="chip" style="--ck:var(--c-f)" href="https://github.com/butaosuinu/fanout/issues/683" title="feat(web): deep link(?pane= / ?diff=)と reload 復元"><b>#683</b> deep link</a></td>
+      <td></td><td></td><td></td>
+    </tr>
+    <tr>
+      <td class="track" style="color:var(--c-restart)">#659<small>自動再起動</small></td>
+      <td>
+        <a class="chip h" style="--ck:var(--c-restart)" href="https://github.com/butaosuinu/fanout/issues/655" title="feat(dashboard): 再起動しても URL が変わらないよう port / token を引き継ぐ"><b>#655</b> port/token 引継</a>
+        <a class="chip" style="--ck:var(--c-restart)" href="https://github.com/butaosuinu/fanout/issues/656" title="feat(dashboard): 稼働中ダッシュボードのユーザーレベル・レジストリ"><b>#656</b> 稼働レジストリ</a>
+      </td>
+      <td><a class="chip h" style="--ck:var(--c-restart)" href="https://github.com/butaosuinu/fanout/issues/657" title="feat(dashboard): fanout dashboard --restart / --stop / --all"><b>#657</b> restart 導線</a></td>
+      <td><a class="chip" style="--ck:var(--c-restart)" href="https://github.com/butaosuinu/fanout/issues/658" title="feat: fanout update / make install 後に自動再起動"><b>#658</b> install 後自動化</a></td>
+      <td class="gate-col"></td><td></td><td></td><td></td><td></td>
+    </tr>
+    <tr>
+      <td class="track" style="color:var(--c-review)">#628<small>行コメント</small></td>
+      <td></td><td></td>
+      <td style="text-align:right"><span class="gate-flag">ゲート開放 →</span></td>
+      <td class="gate-col">
+        <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/518" title="peermsg: 人間レビュー指摘の配送経路"><b>#518</b> peermsg 配送</a>
+        <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/663" title="review: core/review 検証 + infra/reviewstore + 正典 docs"><b>#663</b> core+store+正典</a>
+        <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/664" title="web: レビュー draft 基盤 (review.ts + reviewDraftStore)"><b>#664</b> draft 基盤</a>
+      </td>
+      <td>
+        <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/665" title="app/review: Submit 編成 + NudgePeer の in-process 公開"><b>#665</b> Submit 編成</a>
+        <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/666" title="cli: fanout review verb (show / list / reply)"><b>#666</b> review verb</a>
+        <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/667" title="web: 行コメント記入 UI(コンポーザ / pending / ReviewPanel)"><b>#667</b> 記入 UI</a>
+      </td>
+      <td><a class="chip h" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/668" title="dashboard: POST /api/review carve-out と read-only 不変条件の改訂"><b>#668</b> POST carve-out</a></td>
+      <td>
+        <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/669" title="web: レビュー送信 + 双方向スレッド表示"><b>#669</b> 送信+スレッド</a>
+        <a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/670" title="briefing/codex/README: review 案内と kind=review framing"><b>#670</b> briefing/docs</a>
+      </td>
+      <td><a class="chip" style="--ck:var(--c-review)" href="https://github.com/butaosuinu/fanout/issues/671" title="web: レビュー UI 磨き(件数表示・精密ジャンプ・キーボード)— 任意: #669/#670 の実運用フィードバック後に Go/No-Go"><b>#671</b> UI 磨き ⚑任意</a></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<div class="legend">
+  <span><span class="sw" style="background:var(--c-s)"></span>#675-S Go server(#676→#678→#680)</span>
+  <span><span class="sw" style="background:var(--c-f)"></span>#675-F web(#677→#679→#681→#682→#683)</span>
+  <span><span class="sw" style="background:var(--c-restart)"></span>#659 自動再起動</span>
+  <span><span class="sw" style="background:var(--c-review)"></span>#628 行コメントレビュー</span>
+  <span><span class="hmark">H</span>class H — 人間レビュー必須</span>
+</div>
+
+<h2>Phase 4 — #321 Wails アプリ化(#659 完了後・任意)</h2>
+<div class="gantt-scroll">
+<table class="gantt">
+  <thead><tr>
+    <th>トラック</th><th>wave A</th><th>wave B</th><th>wave C</th><th>wave D</th>
+  </tr></thead>
+  <tbody><tr>
+    <td class="track" style="color:var(--c-app)">#321<small>app/ 隔離</small></td>
+    <td><a class="chip" style="--ck:var(--c-app)" href="https://github.com/butaosuinu/fanout/issues/314" title="dashboard: --print-url と --root を追加"><b>#314</b> --print-url/--root</a></td>
+    <td><a class="chip" style="--ck:var(--c-app)" href="https://github.com/butaosuinu/fanout/issues/315" title="app: Wails v3 骨格 + webview 表示(spike)"><b>#315</b> Wails spike ⚑Go/No-Go</a></td>
+    <td>
+      <a class="chip" style="--ck:var(--c-app)" href="https://github.com/butaosuinu/fanout/issues/316" title="app: プロセスライフサイクル管理"><b>#316</b> ライフサイクル</a>
+      <a class="chip" style="--ck:var(--c-app)" href="https://github.com/butaosuinu/fanout/issues/317" title="app: 外部リンクを OS ブラウザに外出し"><b>#317</b> リンク外出し</a>
+      <a class="chip" style="--ck:var(--c-app)" href="https://github.com/butaosuinu/fanout/issues/318" title="app: repo root 解決 UX"><b>#318</b> root 解決 UX</a>
+    </td>
+    <td>
+      <a class="chip" style="--ck:var(--c-app)" href="https://github.com/butaosuinu/fanout/issues/319" title="app: macOS パッケージング + 署名/notarization"><b>#319</b> 署名/公証</a>
+      <a class="chip" style="--ck:var(--c-app)" href="https://github.com/butaosuinu/fanout/issues/320" title="docs: ネイティブアプリ版のドキュメント"><b>#320</b> docs</a>
+    </td>
+  </tr></tbody>
+</table>
+</div>
+
+<h2>epic 間の依存と並走の根拠</h2>
+<div class="depfig">
+<svg viewBox="0 0 860 300" role="img" aria-label="epic 間の依存関係図。#675 の S1-3 と F1-3 が #628 のゲート、#659 が #321 のゲート。#655 と #676、#664 と #682 が rebase 前提ペア。">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#11506E"/>
+    </marker>
+  </defs>
+  <!-- #675 box -->
+  <rect x="20" y="24" width="300" height="128" rx="8" fill="#FFFDF8" stroke="#E2D9C8"/>
+  <text x="36" y="50" font-size="14" font-weight="600" fill="#2A2E33" font-family="sans-serif">#675 技術スタック導入</text>
+  <rect x="36" y="66" width="128" height="30" rx="4" fill="#14639B" fill-opacity=".1" stroke="#14639B" stroke-width="1.6"/>
+  <text x="100" y="86" font-size="12" fill="#0F4C77" text-anchor="middle" font-family="monospace">S-1〜S-3 (Go)</text>
+  <rect x="36" y="104" width="128" height="30" rx="4" fill="#00A3AF" fill-opacity=".1" stroke="#00A3AF" stroke-width="1.6"/>
+  <text x="100" y="124" font-size="12" fill="#00707A" text-anchor="middle" font-family="monospace">F-1〜F-3 (web)</text>
+  <rect x="180" y="104" width="124" height="30" rx="4" fill="#00A3AF" fill-opacity=".06" stroke="#00A3AF" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="242" y="124" font-size="12" fill="#00707A" text-anchor="middle" font-family="monospace">F-4/F-5 Router</text>
+  <!-- #659 box -->
+  <rect x="20" y="188" width="300" height="64" rx="8" fill="#FFFDF8" stroke="#E2D9C8"/>
+  <rect x="20" y="188" width="4" height="64" rx="2" fill="#B07D2B"/>
+  <text x="36" y="214" font-size="14" font-weight="600" fill="#2A2E33" font-family="sans-serif">#659 自動再起動</text>
+  <text x="36" y="236" font-size="11.5" fill="rgba(42,46,51,.62)" font-family="sans-serif">web/ を触らない — #675 と全区間並走</text>
+  <!-- #628 box -->
+  <rect x="540" y="24" width="300" height="110" rx="8" fill="#FFFDF8" stroke="#E2D9C8"/>
+  <rect x="540" y="24" width="4" height="110" rx="2" fill="#745399"/>
+  <text x="556" y="50" font-size="14" font-weight="600" fill="#2A2E33" font-family="sans-serif">#628 行コメントレビュー</text>
+  <text x="556" y="72" font-size="11.5" fill="rgba(42,46,51,.62)" font-family="sans-serif">#668 は #676 の route 表に 1 行追加</text>
+  <text x="556" y="90" font-size="11.5" fill="rgba(42,46,51,.62)" font-family="sans-serif">#667 以降の UI は #682 Router の後に組込</text>
+  <text x="556" y="118" font-size="11.5" fill="#745399" font-family="sans-serif">wave 4 から着手(store 新設は並走可)</text>
+  <!-- #321 box -->
+  <rect x="540" y="188" width="300" height="64" rx="8" fill="#FFFDF8" stroke="#E2D9C8"/>
+  <rect x="540" y="188" width="4" height="64" rx="2" fill="#B4544D"/>
+  <text x="556" y="214" font-size="14" font-weight="600" fill="#2A2E33" font-family="sans-serif">#321 Wails アプリ化(任意)</text>
+  <text x="556" y="236" font-size="11.5" fill="rgba(42,46,51,.62)" font-family="sans-serif">#314 が cmd 側で #655/#657 と交差 → 後置</text>
+  <!-- gate arrows -->
+  <line x1="320" y1="88" x2="536" y2="70" stroke="#11506E" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="360" y="52" width="118" height="22" rx="11" fill="#C9E8EC"/>
+  <text x="419" y="67" font-size="11.5" font-weight="600" fill="#11506E" text-anchor="middle" font-family="sans-serif">着手ゲート ①</text>
+  <line x1="320" y1="220" x2="536" y2="220" stroke="#11506E" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="368" y="209" width="118" height="22" rx="11" fill="#C9E8EC"/>
+  <text x="427" y="224" font-size="11.5" font-weight="600" fill="#11506E" text-anchor="middle" font-family="sans-serif">着手ゲート ②</text>
+</svg>
+<p class="fig-cap">ゲート ① = S-1〜S-3 と F-1〜F-3 の完了が #628 の着手条件(#675 の Coordination notes に明記。#628 側には無い)。ゲート ② = #659 完了後に #321(spike #315 の結果次第で中止もあり得る)。この 2 つの epic 間ゲートは blocked-by 未登録 — 親 issue の Suggested command を無条件に打つとゲート前でも起動されるため、着手時期は本ロードマップに従う。F-4/F-5(点線)はゲートに含まれず、#628 の wave 4–5 と並走する。</p>
+</div>
+
+<h2>並走時の注意</h2>
+<ul class="notes">
+  <li><strong>rebase 前提ペア</strong>(並走できるが、先にマージされた側へ他方が rebase する): <code>#655 ↔ #676</code>(同一パッケージの別ファイル。server.go の lifecycle 部で軽く交差)/ <code>#664 ↔ #682</code>(どちらも web/src。#682 は app 層、#664 は features 側)/ <code>#680 ↔ #681</code>(どちらも web/src。#680 は transport、#681 は features/app)/ <code>#658 ↔ #680</code>(どちらも Makefile にターゲット追加)/ <code>#667 ↔ #683</code>(どちらも DiffOverlay の開閉まわり)。</li>
+  <li>class <strong>H</strong> に触れる PR は人間レビュー必須。<code>#655</code> / <code>#657</code> / <code>#676</code> / <code>#668</code> に加え、<code>#678</code>(requireToken の 403)・<code>#663</code>(reviewstore 新設)・<code>#666</code>(main.go dispatch)・<code>#670</code>(briefing)・<code>#680</code>(peek/plan/diff の rename)も H 面に触れる。Makefile / web/package.json / CI workflow を触る <code>#658</code> / <code>#677</code> / <code>#682</code> / <code>#315</code> / <code>#319</code> も reviewrisk 上は H 判定。この列挙は例示で、正は PR ごとの reviewrisk(<code>make review-risk</code>)。</li>
+  <li>wave の起動は親 epic ごとに <code>/fanout #親 --unblocked-only</code> を 1 回ずつ(2 epic にまたがる wave 1〜4 は 2 回)。epic 内の blocked-by が wave 内の起動対象を絞る。</li>
+  <li>#628 本文の wave 記載(wave 3 = #668 + #669)は #669 の blocked-by(#668 完了が条件)と両立しないため、本ロードマップは #668 を単独 wave に置いた。wave 6〜8 は本書が正。</li>
+</ul>
+
+<h2>wave 一覧(表)</h2>
+<div class="table-wrap">
+<table class="plain">
+  <thead><tr><th class="mono">phase</th><th class="mono">wave</th><th>並列起動</th><th>備考</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">1</td><td class="mono">1</td><td class="mono">#676 + #677 + #655 + #656</td><td>3 トラック同時開始(4 セッション)</td></tr>
+    <tr><td class="mono">1</td><td class="mono">2</td><td class="mono">#678 + #679 + #657</td><td></td></tr>
+    <tr><td class="mono">1</td><td class="mono">3</td><td class="mono">#680 + #681 + #658</td><td>完了で #628 の着手ゲートが開く</td></tr>
+    <tr><td class="mono">2</td><td class="mono">4</td><td class="mono">#518 + #663 + #664 + #682</td><td>#664 ↔ #682 は rebase 前提</td></tr>
+    <tr><td class="mono">2</td><td class="mono">5</td><td class="mono">#665 + #666 + #667 + #683</td><td></td></tr>
+    <tr><td class="mono">3</td><td class="mono">6</td><td class="mono">#668</td><td>不変条件改訂の単独 wave・人間レビュー必須</td></tr>
+    <tr><td class="mono">3</td><td class="mono">7</td><td class="mono">#669 + #670</td><td>双方向レビューの機能一式が完了</td></tr>
+    <tr><td class="mono">3</td><td class="mono">8</td><td class="mono">#671</td><td>任意。#669/#670 の実運用フィードバック後に Go/No-Go</td></tr>
+    <tr><td class="mono">4</td><td class="mono">A–D</td><td class="mono">#314 → #315 → #316+#317+#318 → #319+#320</td><td>#659 完了後・任意。#315 spike で Go/No-Go</td></tr>
+  </tbody>
+</table>
+</div>
+
+<footer>
+  2026-08-15 生成 · 判定の正典は <code style="font-family:var(--f-code)">docs/dashboard-roadmap.ja.md</code> ·
+  出典 epic: <a href="https://github.com/butaosuinu/fanout/issues/675">#675</a> ·
+  <a href="https://github.com/butaosuinu/fanout/issues/659">#659</a> ·
+  <a href="https://github.com/butaosuinu/fanout/issues/628">#628</a> ·
+  <a href="https://github.com/butaosuinu/fanout/issues/321">#321</a>
+</footer>
+
+</main>
+</body>
+</html>
