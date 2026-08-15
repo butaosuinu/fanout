@@ -333,7 +333,7 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 	if managedLocked != nil {
 		return l.attachManaged(req, targetPath, managedLocked)
 	}
-	return l.attachTmux(req, targetPath)
+	return l.attachDirect(req, targetPath)
 }
 
 func (l *Launcher) prepareAttachedLaunch(req *Request) (*state.LockedStore, bool) {
@@ -363,7 +363,7 @@ func prepareAttachedLiveness(model backend.MutationModel, req *Request) error {
 	return nil
 }
 
-func (l *Launcher) attachTmux(req Request, targetPath string) (Result, bool) {
+func (l *Launcher) attachDirect(req Request, targetPath string) (Result, bool) {
 	paneID, ok := l.splitAndDecorate(req, targetPath, decorateOpts{strictShellKey: true})
 	if !ok {
 		if paneID != "" {

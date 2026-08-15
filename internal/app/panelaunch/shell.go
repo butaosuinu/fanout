@@ -12,7 +12,6 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
@@ -23,11 +22,6 @@ type ShellRequest struct {
 	// Root marks the project-root terminal (names the pane "root terminal").
 	Root bool
 }
-
-var (
-	closePaneForCleanup = tmuxrun.ClosePaneIfOwned
-	closeFreshPane      = tmuxrun.CloseFreshPane
-)
 
 // relayoutShellWindow re-tiles the window a rolled-back terminal pane left
 // behind, through the launch's own runtime rather than a runtime this package
@@ -46,6 +40,9 @@ func relayoutShellWindow(runtimeBackend backend.Backend, target string) {
 // @manual shell row in l.Info.ProjectRoot's state. Tmux rows use a liveness
 // key; Herdr rows persist the exact owned-session identity.
 func (l *Launcher) Shell(req ShellRequest) error {
+	if l.Backend == nil {
+		return fmt.Errorf("runtime backend is not configured")
+	}
 	projectRoot := l.Info.ProjectRoot
 	targetPath, err := resolveShellTarget(req.TargetPath)
 	if err != nil {
@@ -66,13 +63,13 @@ func (l *Launcher) Shell(req ShellRequest) error {
 	number := NextSyntheticPaneNumber(recorder.Store, ManualParentRef)
 	slug := shellPaneSlug(targetPath, req.Root, number)
 	title := shellPaneTitle(targetPath, req.Root)
-	if l.Backend != nil && l.Backend.MutationModel() == backend.MutationJournaled {
+	if l.Backend.MutationModel() == backend.MutationJournaled {
 		if err := admitManagedCoordinatorLaunch(recorder, projectRoot, number); err != nil {
 			return err
 		}
 		return l.shellManaged(recorder, targetPath, number, slug, title)
 	}
-	return l.shellTmux(recorder, targetPath, number, slug, title)
+	return l.shellDirect(recorder, targetPath, number, slug, title)
 }
 
 func resolveShellTarget(rawPath string) (string, error) {
@@ -94,7 +91,10 @@ func resolveShellTarget(rawPath string) (string, error) {
 	return targetPath, nil
 }
 
-func (l *Launcher) shellTmux(
+// shellDirect opens the terminal pane on a runtime that realizes a launch
+// immediately. The pane runs no command, so the launch request carries neither
+// a command nor a start gate; the runtime hands back the pane id synchronously.
+func (l *Launcher) shellDirect(
 	recorder *state.LockedStore,
 	targetPath string,
 	number int,
@@ -105,10 +105,11 @@ func (l *Launcher) shellTmux(
 	if err != nil {
 		return err
 	}
-	paneID, err := tmuxrun.SplitPane(target, targetPath)
+	ref, err := l.Backend.Launch(backend.LaunchRequest{Target: target, WorktreePath: targetPath})
 	if err != nil {
 		return err
 	}
+	paneID := ref.Pane
 	entry := newShellPaneEntry(number, slug, paneID, shellKey, title, targetPath)
 	if err := stampShellPaneLiveness(l.Backend, paneID, shellKey); err != nil {
 		return recoverUnstampedShell(l.Backend, recorder, target, entry, err)
@@ -174,7 +175,7 @@ func recoverUnstampedShell(
 	stampCause error,
 ) error {
 	stampErr := fmt.Errorf("set terminal pane liveness key: %w", stampCause)
-	if cleanupErr := cleanupFreshShellPane(runtimeBackend, target, entry.PaneID); cleanupErr != nil {
+	if cleanupErr := cleanupFreshPane(runtimeBackend, target, entry.PaneID); cleanupErr != nil {
 		recoveryErr := recorder.RecordPane(entry)
 		if recoveryErr != nil {
 			recoveryErr = fmt.Errorf("preserve live terminal pane %s in fanout state: %w", entry.PaneID, recoveryErr)
@@ -218,27 +219,31 @@ func recoverUnrecordedShell(
 // reads and writes its intent journal under the same lock as the state row, so
 // it takes the combined launch lock rather than the plain state lock.
 func (l *Launcher) lockShellState(projectRoot string) (*state.LockedStore, error) {
-	if l.Backend != nil && l.Backend.MutationModel() == backend.MutationJournaled {
+	if l.Backend.MutationModel() == backend.MutationJournaled {
 		return state.LockProjectForLaunch(projectRoot)
 	}
 	return state.LockProject(projectRoot)
 }
 
-func cleanupFreshShellPane(runtimeBackend backend.Backend, relayoutTarget, paneID string) error {
-	if err := closeFreshPane(paneID); err != nil {
-		return err
-	}
-	relayoutShellWindow(runtimeBackend, relayoutTarget)
-	return nil
-}
-
+// cleanupShellPane rolls a recorded terminal pane back through the runtime's
+// identity-gated close and reports whether the pane is confirmed gone. A
+// runtime without that capability cannot prove the pane stopped, so the caller
+// keeps the state row rather than dropping a possibly-live terminal.
 func cleanupShellPane(runtimeBackend backend.Backend, relayoutTarget, paneID, expectedWorktreePath, shellKey string) bool {
-	result, err := closePaneForCleanup(paneID, expectedWorktreePath, shellKey)
-	if err != nil || result.Status == backend.ClosePaneFailed {
+	closer, ok := runtimeBackend.(backend.OwnedCloser)
+	if !ok {
 		return false
 	}
-	if result.Status == backend.ClosePaneClosed {
-		target := result.WindowID
+	result, err := closer.CloseOwned(backend.CloseRequest{
+		Ref:          backend.PaneRef{Backend: runtimeBackend.Name(), Pane: paneID},
+		WorktreePath: expectedWorktreePath,
+		ShellKey:     shellKey,
+	})
+	if err != nil || result.Status == backend.CloseFailed {
+		return false
+	}
+	if result.Status == backend.CloseConfirmed {
+		target := result.ContainerID
 		if target == "" {
 			target = relayoutTarget
 		}

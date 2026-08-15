@@ -829,13 +829,15 @@ func TestAttachRecordsRecoveryRowWhenCodexStartupAndCloseFail(t *testing.T) {
 func TestShellRecordsRecoveryRowWhenLivenessStampAndFreshCloseFail(t *testing.T) {
 	repo := t.TempDir()
 	gitCmdTest(t, repo, "init")
-	// shellTmux splits through tmuxrun itself, so the pane id still comes from a
-	// tmux shim; only the liveness stamp and the rollback close are faked here.
-	installFakeTmux(t, "%317")
-	stubCloseFreshPane(t, func(string) error { return fmt.Errorf("pane still live") })
+	// shellDirect splits through the backend's Launch, so the whole lane —
+	// pane id, liveness stamp, and rollback close — comes from the fake.
 	launcher := &Launcher{
-		Info:    &fanoutruntime.Info{Target: "%caller", ProjectRoot: repo},
-		Backend: backendtest.NewLiveness(backendtest.WithStampError(fmt.Errorf("stamp failed"))),
+		Info: &fanoutruntime.Info{Target: "%caller", ProjectRoot: repo},
+		Backend: backendtest.NewLiveness(
+			backendtest.WithPanes("%317"),
+			backendtest.WithStampError(fmt.Errorf("stamp failed")),
+			backendtest.WithFreshCloseError(fmt.Errorf("pane still live")),
+		),
 	}
 
 	err := launcher.Shell(ShellRequest{TargetPath: repo, Root: true})
@@ -1758,15 +1760,6 @@ func installClaudeVersionExecutable(t *testing.T, version string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-// stubCloseFreshPane replaces the shell lane's tmux-only rollback close. The
-// agent lanes go through the backend's FreshCloser capability instead.
-func stubCloseFreshPane(t *testing.T, fn func(string) error) {
-	t.Helper()
-	original := closeFreshPane
-	closeFreshPane = fn
-	t.Cleanup(func() { closeFreshPane = original })
 }
 
 func installFakeTmux(t *testing.T, paneID string) {
