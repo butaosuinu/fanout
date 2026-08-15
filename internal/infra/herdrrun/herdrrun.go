@@ -27,10 +27,6 @@ const (
 	minimumWaitTimeout  = 3 * time.Second
 	waitInterval        = 2 * time.Second
 
-	// DefaultWaitTimeout is the bounded wait used when a caller omits an
-	// explicit total timeout.
-	DefaultWaitTimeout = 300 * time.Second
-
 	sessionEnv = "HERDR_SESSION"
 	socketEnv  = "HERDR_SOCKET_PATH"
 )
@@ -161,8 +157,8 @@ func (b *Backend) ListLive() ([]corebackend.LivePane, error) {
 
 // Wait probes the exact compatibility tuple once, then polls only aggregate
 // snapshots until match succeeds or the fixed budget terminates. A zero
-// totalTimeout selects DefaultWaitTimeout; non-zero values must be whole
-// seconds and at least three seconds. match receives a cloned compatible
+// totalTimeout selects corebackend.DefaultWaitTimeout; non-zero values must be
+// whole seconds and at least three seconds. match receives a cloned compatible
 // snapshot and should perform only bounded in-memory inspection.
 func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match func([]corebackend.LivePane) bool) corebackend.WaitResult {
 	if ctx == nil {
@@ -222,7 +218,7 @@ func (b *Backend) Wait(ctx context.Context, totalTimeout time.Duration, match fu
 			lastPanes = nil
 			lastErr = snapshotErr
 			lastValid = false
-			if !IsRetryableObservationError(snapshotErr) {
+			if !corebackend.IsRetryableObservationError(snapshotErr) {
 				return failedWait(snapshotErr)
 			}
 			continue
@@ -277,7 +273,7 @@ func (b *Backend) Close(ref corebackend.PaneRef) error {
 
 func normalizeWaitTimeout(totalTimeout time.Duration) (time.Duration, error) {
 	if totalTimeout == 0 {
-		return DefaultWaitTimeout, nil
+		return corebackend.DefaultWaitTimeout, nil
 	}
 	if totalTimeout < minimumWaitTimeout || totalTimeout%time.Second != 0 {
 		return 0, fmt.Errorf("herdr wait total_timeout must be a whole number of seconds at least 3, got %s", totalTimeout)
@@ -373,17 +369,7 @@ func (e retryableObservationError) Unwrap() error { return e.err }
 
 func (e retryableObservationError) RetryableObservation() bool { return true }
 
-type retryableObservation interface {
-	error
-	RetryableObservation() bool
-}
-
-// IsRetryableObservationError reports whether a read-only Herdr command may be
-// retried within the caller's fixed observation budget.
-func IsRetryableObservationError(err error) bool {
-	retryable, ok := errors.AsType[retryableObservation](err)
-	return ok && retryable.RetryableObservation()
-}
+var _ corebackend.RetryableObservation = retryableObservationError{}
 
 type commandCleanupError struct {
 	err error

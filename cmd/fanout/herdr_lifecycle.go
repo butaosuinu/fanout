@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/gitroot"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
@@ -13,7 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-const herdrLifecycleTimeout = herdrrun.DefaultWaitTimeout + time.Minute
+const herdrLifecycleTimeout = backend.DefaultWaitTimeout + time.Minute
 
 type herdrLifecycleDeps struct {
 	projectRoot  func() (string, error)

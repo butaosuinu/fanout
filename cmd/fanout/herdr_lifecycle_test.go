@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
@@ -30,11 +31,11 @@ func TestIsHerdrLifecycleRequest(t *testing.T) {
 }
 
 func TestHerdrLifecycleTimeoutLeavesFinalizationBudget(t *testing.T) {
-	if herdrLifecycleTimeout <= herdrrun.DefaultWaitTimeout {
+	if herdrLifecycleTimeout <= backend.DefaultWaitTimeout {
 		t.Fatalf(
 			"herdr lifecycle timeout = %s, want greater than restart wait %s",
 			herdrLifecycleTimeout,
-			herdrrun.DefaultWaitTimeout,
+			backend.DefaultWaitTimeout,
 		)
 	}
 }

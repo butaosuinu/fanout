@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/errs"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -207,7 +208,7 @@ func launcherRuntimeDir(launcherPath string) string {
 }
 
 func waitForPaneLaunchIntent(request paneLauncherRequest) (state.HerdrIntent, error) {
-	deadline := time.Now().Add(DefaultWaitTimeout)
+	deadline := time.Now().Add(corebackend.DefaultWaitTimeout)
 	for time.Now().Before(deadline) {
 		store, err := state.LoadHerdrIntentsPath(request.controlPath)
 		if err != nil {

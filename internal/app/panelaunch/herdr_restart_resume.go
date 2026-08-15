@@ -232,7 +232,7 @@ func herdrRestartResumeDeadline(ctx context.Context, timeout time.Duration) time
 
 func herdrRestartWaitTimeout(totalTimeout time.Duration) (time.Duration, error) {
 	if totalTimeout == 0 {
-		return herdrrun.DefaultWaitTimeout, nil
+		return backend.DefaultWaitTimeout, nil
 	}
 	if totalTimeout < 3*time.Second || totalTimeout%time.Second != 0 {
 		return 0, fmt.Errorf("herdr restart wait timeout must be whole seconds and at least 3s")
