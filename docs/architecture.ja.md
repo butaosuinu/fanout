@@ -184,6 +184,18 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 - **`FANOUT_*` env 名は Go 外から文字列参照される**: シェルスクリプト・CI・
   ドキュメントが env 変数名を直接引用するため、リネームは全参照箇所の同時
   更新が要る。
+- **app / cmd は runtime 名を綴らない**: `cmd/fanout` と `internal/app` の
+  非 test コードは、識別子・import path・ファイル名・struct tag に `tmux` /
+  `herdr` を含めない(`TestRuntimeVocabulary`)。runtime の選択は
+  `core/backend` の capability と `MutationModel` で表現し、具象 adapter の
+  構築は `infra/paneruntime` が持つ。import の辺自体は godep-cruiser の
+  `app-no-runtime-adapters` / `cmd-no-runtime-adapters` が塞ぐ。
+  文字列リテラルとコメントは対象外 — 運用者に見せる文字列や runtime の
+  挙動を説明するコメントは正当で、数が桁違いに多い。例外は
+  `internal/arch/runtime-vocabulary-allow.json` に理由付きで登録する
+  (`fanout herdr` サブコマンド、data として読む `backend.Tmux`/`Herdr`、
+  `paneruntime.NewTmux`、PATH 上の実行ファイル名、凍結済みの dashboard
+  JSON wire key)。マッチしないエントリは stale として落ちる。
 
 ## 既知の残課題(burn-down リスト)
 
