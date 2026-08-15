@@ -336,6 +336,10 @@ func TestLivenessStampCapabilityWritesShellKeyOption(t *testing.T) {
 // The expected layout string is the one real tmux 3.6a accepted (see
 // layout_grid_test.go).
 func TestLayoutCapabilityAppliesCustomLayout(t *testing.T) {
+	// Relayout runs through the package-level applier; drop this test's memo
+	// entry afterwards so a later test seeing the same window signature still
+	// observes its select-layout call instead of a dedup no-op.
+	t.Cleanup(tmuxbackend.ResetLayoutMemoForTest)
 	logPath := installTmuxShim(t, `
 case "$1" in
   display-message) printf '@7\t200\t50\n' ;;
