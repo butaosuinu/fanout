@@ -6,40 +6,55 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
 // TestPickConsolePane pins the console-return selection order — project root
 // beats session beats listing order — and the role + title double match.
 func TestPickConsolePane(t *testing.T) {
-	console := func(id, root, session string) tmuxrun.LivePane {
-		return tmuxrun.LivePane{ID: id, Title: tuiPaneTitle, Role: backend.RoleConsole, ProjectRoot: root, SessionID: session}
+	// pressing is the pane the key was pressed in; only its recorded root and
+	// session steer the choice.
+	pressing := func(root, session string) backend.LivePane {
+		return backend.LivePane{
+			Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%1"}, ProjectRoot: root, SessionID: session,
+		}
+	}
+	console := func(id, root, session string) backend.LivePane {
+		return backend.LivePane{
+			Ref: backend.PaneRef{Backend: backend.Tmux, Pane: id}, Title: tuiPaneTitle,
+			Role: backend.RoleConsole, ProjectRoot: root, SessionID: session,
+		}
 	}
 	tests := []struct {
 		name  string
-		from  tmuxrun.LivePane
-		panes []tmuxrun.LivePane
+		from  backend.LivePane
+		panes []backend.LivePane
 		want  string // pane id; "" means no console found
 	}{
 		{
 			name:  "no live panes yields no console",
-			from:  tmuxrun.LivePane{ID: "%1", SessionID: "$1"},
+			from:  pressing("", "$1"),
 			panes: nil,
 			want:  "",
 		},
 		{
 			name: "console role without the TUI title is excluded",
-			from: tmuxrun.LivePane{ID: "%1", SessionID: "$1"},
-			panes: []tmuxrun.LivePane{
-				{ID: "%2", Title: "zsh", Role: backend.RoleConsole, SessionID: "$1"},
+			from: pressing("", "$1"),
+			panes: []backend.LivePane{
+				{
+					Ref:   backend.PaneRef{Backend: backend.Tmux, Pane: "%2"},
+					Title: "zsh", Role: backend.RoleConsole, SessionID: "$1",
+				},
 			},
 			want: "",
 		},
 		{
 			name: "TUI title without the console role is excluded",
-			from: tmuxrun.LivePane{ID: "%1", SessionID: "$1"},
-			panes: []tmuxrun.LivePane{
-				{ID: "%2", Title: tuiPaneTitle, SessionID: "$1"},
+			from: pressing("", "$1"),
+			panes: []backend.LivePane{
+				{
+					Ref:   backend.PaneRef{Backend: backend.Tmux, Pane: "%2"},
+					Title: tuiPaneTitle, SessionID: "$1",
+				},
 			},
 			want: "",
 		},
@@ -47,8 +62,8 @@ func TestPickConsolePane(t *testing.T) {
 			// Root outranks session: one global key must stay correct when
 			// consoles for several repos share a tmux session.
 			name: "root match in another session beats same-session other-repo console",
-			from: tmuxrun.LivePane{ID: "%1", ProjectRoot: "/repo/a", SessionID: "$1"},
-			panes: []tmuxrun.LivePane{
+			from: pressing("/repo/a", "$1"),
+			panes: []backend.LivePane{
 				console("%2", "/repo/b", "$1"),
 				console("%3", "/repo/a", "$2"),
 			},
@@ -56,8 +71,8 @@ func TestPickConsolePane(t *testing.T) {
 		},
 		{
 			name: "multiple root matches prefer the same session",
-			from: tmuxrun.LivePane{ID: "%1", ProjectRoot: "/repo/a", SessionID: "$1"},
-			panes: []tmuxrun.LivePane{
+			from: pressing("/repo/a", "$1"),
+			panes: []backend.LivePane{
 				console("%2", "/repo/a", "$2"),
 				console("%3", "/repo/a", "$1"),
 			},
@@ -65,8 +80,8 @@ func TestPickConsolePane(t *testing.T) {
 		},
 		{
 			name: "root matches all in other sessions fall back to the first of them",
-			from: tmuxrun.LivePane{ID: "%1", ProjectRoot: "/repo/a", SessionID: "$1"},
-			panes: []tmuxrun.LivePane{
+			from: pressing("/repo/a", "$1"),
+			panes: []backend.LivePane{
 				console("%2", "/repo/a", "$3"),
 				console("%3", "/repo/a", "$2"),
 			},
@@ -74,8 +89,8 @@ func TestPickConsolePane(t *testing.T) {
 		},
 		{
 			name: "unclean recorded root still matches", // samePath cleans both sides
-			from: tmuxrun.LivePane{ID: "%1", ProjectRoot: "/repo/a/", SessionID: "$1"},
-			panes: []tmuxrun.LivePane{
+			from: pressing("/repo/a/", "$1"),
+			panes: []backend.LivePane{
 				console("%2", "/repo/b", "$1"),
 				console("%3", "/repo/a", "$2"),
 			},
@@ -83,8 +98,8 @@ func TestPickConsolePane(t *testing.T) {
 		},
 		{
 			name: "pressing pane without a recorded root falls back to same session",
-			from: tmuxrun.LivePane{ID: "%1", SessionID: "$2"},
-			panes: []tmuxrun.LivePane{
+			from: pressing("", "$2"),
+			panes: []backend.LivePane{
 				console("%2", "/repo/a", "$1"),
 				console("%3", "/repo/b", "$2"),
 			},
@@ -92,8 +107,8 @@ func TestPickConsolePane(t *testing.T) {
 		},
 		{
 			name: "recorded root with no matching console falls back to same session",
-			from: tmuxrun.LivePane{ID: "%1", ProjectRoot: "/repo/c", SessionID: "$2"},
-			panes: []tmuxrun.LivePane{
+			from: pressing("/repo/c", "$2"),
+			panes: []backend.LivePane{
 				console("%2", "/repo/a", "$1"),
 				console("%3", "/repo/b", "$2"),
 			},
@@ -101,8 +116,8 @@ func TestPickConsolePane(t *testing.T) {
 		},
 		{
 			name: "no root and no session match falls back to the first candidate",
-			from: tmuxrun.LivePane{ID: "%1", SessionID: "$9"},
-			panes: []tmuxrun.LivePane{
+			from: pressing("", "$9"),
+			panes: []backend.LivePane{
 				console("%2", "/repo/a", "$1"),
 				console("%3", "/repo/b", "$2"),
 			},
@@ -110,8 +125,8 @@ func TestPickConsolePane(t *testing.T) {
 		},
 		{
 			name: "zero pressing pane still lands on the first candidate", // --from pane vanished between keypress and lookup
-			from: tmuxrun.LivePane{},
-			panes: []tmuxrun.LivePane{
+			from: backend.LivePane{},
+			panes: []backend.LivePane{
 				console("%2", "/repo/a", "$1"),
 			},
 			want: "%2",
@@ -126,8 +141,8 @@ func TestPickConsolePane(t *testing.T) {
 				}
 				return
 			}
-			if !ok || got.ID != tt.want {
-				t.Fatalf("pickConsolePane() = %q, %v, want %q", got.ID, ok, tt.want)
+			if !ok || got.Ref.Pane != tt.want {
+				t.Fatalf("pickConsolePane() = %q, %v, want %q", got.Ref.Pane, ok, tt.want)
 			}
 		})
 	}

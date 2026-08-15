@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"math"
@@ -16,7 +17,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutsettings "github.com/butaosuinu/fanout/internal/infra/settings"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
@@ -306,9 +306,63 @@ func writePopupJSON(path string, value any) error {
 	return nil
 }
 
-func newTUIHelpPopupFunc(projectRoot, commandName string) fanouttui.HelpPopupFunc {
+// errPopupHostUnavailable reports a runtime that draws no popups. The console
+// gates its popup-driven actions on the capability before offering them, so
+// reaching this means a pane outlived the runtime that created it.
+var errPopupHostUnavailable = errors.New("runtime backend does not draw popups")
+
+// tuiPopupHost is the console's popup drawing context: the runtime capability
+// that measures the terminal and draws the popup, plus the pane the console
+// itself runs in, which places each popup beside rather than over it.
+//
+// The popup layout arithmetic below stays here on purpose. It is entangled with
+// the shell command each popup runs and with the operator-facing minimum-size
+// messages, so only the three measure-and-draw calls cross into the runtime;
+// the math works on core DTOs and stays identical for every runtime.
+type tuiPopupHost struct {
+	display backend.PopupHost
+	// consolePane is the runtime-native id of the pane the console runs in, empty
+	// when the environment does not name one. Then popups fall back to centering.
+	consolePane string
+}
+
+// newTUIPopupHost resolves the popup capability of the console's runtime.
+func newTUIPopupHost(runtimeBackend backend.Backend, consolePane string) tuiPopupHost {
+	display, _ := backend.AsPopupHost(runtimeBackend)
+	return tuiPopupHost{display: display, consolePane: strings.TrimSpace(consolePane)}
+}
+
+func (h tuiPopupHost) clientSize() (backend.ClientSize, error) {
+	if h.display == nil {
+		return backend.ClientSize{}, errPopupHostUnavailable
+	}
+	return h.display.CurrentClientSize()
+}
+
+func (h tuiPopupHost) show(opts backend.PopupOptions) error {
+	if h.display == nil {
+		return errPopupHostUnavailable
+	}
+	return h.display.ShowPopup(opts)
+}
+
+// positionBesideConsole places a popup next to the console pane. Every failure
+// degrades to a nil position, which centers the popup — a popup that cannot be
+// placed precisely is still worth showing.
+func (h tuiPopupHost) positionBesideConsole(popupWidth, popupHeight int) *backend.PopupPosition {
+	if h.display == nil || h.consolePane == "" {
+		return nil
+	}
+	geom, err := h.display.PaneGeometryForPane(h.consolePane)
+	if err != nil {
+		return nil
+	}
+	return tuiPopupPositionAdjacentToPane(geom, popupWidth, popupHeight)
+}
+
+func newTUIHelpPopupFunc(host tuiPopupHost, projectRoot, commandName string) fanouttui.HelpPopupFunc {
 	return func() error {
-		size, err := tmuxrun.CurrentClientSize()
+		size, err := host.clientSize()
 		if err != nil {
 			return err
 		}
@@ -316,20 +370,20 @@ func newTUIHelpPopupFunc(projectRoot, commandName string) fanouttui.HelpPopupFun
 		if err != nil {
 			return err
 		}
-		return tmuxrun.DisplayPopup(backend.PopupOptions{
+		return host.show(backend.PopupOptions{
 			Width:    geometry.PopupWidth,
 			Height:   geometry.PopupHeight,
 			StartDir: projectRoot,
 			Title:    "Keyboard shortcuts",
 			Command:  tuiHelpPopupShellCommand(commandName, geometry.ContentWidth, geometry.ContentHeight),
-			Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth, geometry.PopupHeight),
+			Position: host.positionBesideConsole(geometry.PopupWidth, geometry.PopupHeight),
 		})
 	}
 }
 
-func newTUICloseChoicePopupFunc(projectRoot, commandName string) fanouttui.CloseChoicePopupFunc {
+func newTUICloseChoicePopupFunc(host tuiPopupHost, projectRoot, commandName string) fanouttui.CloseChoicePopupFunc {
 	return func(req fanouttui.CloseChoiceRequest) (lifecycle.CloseMode, bool, error) {
-		launch, err := startTUICloseChoicePopup(projectRoot, commandName, req)
+		launch, err := startTUICloseChoicePopup(host, projectRoot, commandName, req)
 		if err != nil {
 			return lifecycle.ClosePaneOnly, false, err
 		}
@@ -345,8 +399,8 @@ type tuiClosePopupLaunch struct {
 	cleanup    func()
 }
 
-func startTUICloseChoicePopup(projectRoot, commandName string, req fanouttui.CloseChoiceRequest) (tuiClosePopupLaunch, error) {
-	size, err := tmuxrun.CurrentClientSize()
+func startTUICloseChoicePopup(host tuiPopupHost, projectRoot, commandName string, req fanouttui.CloseChoiceRequest) (tuiClosePopupLaunch, error) {
+	size, err := host.clientSize()
 	if err != nil {
 		return tuiClosePopupLaunch{}, err
 	}
@@ -366,8 +420,8 @@ func startTUICloseChoicePopup(projectRoot, commandName string, req fanouttui.Clo
 		cleanup()
 		return tuiClosePopupLaunch{}, err
 	}
-	displayErr := tmuxrun.DisplayPopup(tuiClosePopupDisplayOptions(
-		projectRoot, commandName, requestFile, resultFile, doneFile, geometry,
+	displayErr := host.show(tuiClosePopupDisplayOptions(
+		host, projectRoot, commandName, requestFile, resultFile, doneFile, geometry,
 	))
 	return tuiClosePopupLaunch{
 		resultFile: resultFile, doneFile: doneFile, displayErr: displayErr, cleanup: cleanup,
@@ -375,6 +429,7 @@ func startTUICloseChoicePopup(projectRoot, commandName string, req fanouttui.Clo
 }
 
 func tuiClosePopupDisplayOptions(
+	host tuiPopupHost,
 	projectRoot, commandName, requestFile, resultFile, doneFile string,
 	geometry tuiClosePopupGeometry,
 ) backend.PopupOptions {
@@ -384,7 +439,7 @@ func tuiClosePopupDisplayOptions(
 		Command: tuiClosePopupShellCommand(
 			commandName, requestFile, resultFile, doneFile, geometry.ContentWidth, geometry.ContentHeight,
 		),
-		Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth, geometry.PopupHeight),
+		Position: host.positionBesideConsole(geometry.PopupWidth, geometry.PopupHeight),
 	}
 }
 
@@ -412,9 +467,9 @@ func finishTUICloseChoicePopup(launch tuiClosePopupLaunch) (lifecycle.CloseMode,
 	return mode, false, err
 }
 
-func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPanePromptFunc {
+func newTUINewPanePromptFunc(host tuiPopupHost, projectRoot, commandName string) fanouttui.NewPanePromptFunc {
 	return func(req fanouttui.NewPanePromptRequest) (fanouttui.LaunchRequest, bool, error) {
-		size, err := tmuxrun.CurrentClientSize()
+		size, err := host.clientSize()
 		if err != nil {
 			return fanouttui.LaunchRequest{}, false, err
 		}
@@ -436,13 +491,13 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 			geometry.PromptWidth,
 			geometry.PromptHeight,
 		)
-		displayErr := tmuxrun.DisplayPopup(backend.PopupOptions{
+		displayErr := host.show(backend.PopupOptions{
 			Width:    geometry.PopupWidth,
 			Height:   geometry.PopupHeight,
 			StartDir: projectRoot,
 			Title:    "New agent pane",
 			Command:  command,
-			Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth, geometry.PopupHeight),
+			Position: host.positionBesideConsole(geometry.PopupWidth, geometry.PopupHeight),
 		})
 		result, readErr := readTUINewPanePopupResult(resultFile)
 		if os.IsNotExist(readErr) && displayErr == nil {
@@ -476,9 +531,9 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 	}
 }
 
-func newTUISettingsPopupFunc(projectRoot, commandName string) fanouttui.SettingsPopupFunc {
+func newTUISettingsPopupFunc(host tuiPopupHost, projectRoot, commandName string) fanouttui.SettingsPopupFunc {
 	return func(fanouttui.SettingsPopupRequest) (fanouttui.SettingsPopupResult, bool, error) {
-		size, err := tmuxrun.CurrentClientSize()
+		size, err := host.clientSize()
 		if err != nil {
 			return fanouttui.SettingsPopupResult{}, false, err
 		}
@@ -499,13 +554,13 @@ func newTUISettingsPopupFunc(projectRoot, commandName string) fanouttui.Settings
 			geometry.PromptWidth,
 			geometry.PromptHeight,
 		)
-		displayErr := tmuxrun.DisplayPopup(backend.PopupOptions{
+		displayErr := host.show(backend.PopupOptions{
 			Width:    geometry.PopupWidth,
 			Height:   geometry.PopupHeight,
 			StartDir: projectRoot,
 			Title:    "Settings",
 			Command:  command,
-			Position: tuiPopupPositionForCurrentPane(geometry.PopupWidth, geometry.PopupHeight),
+			Position: host.positionBesideConsole(geometry.PopupWidth, geometry.PopupHeight),
 		})
 		result, readErr := readTUISettingsPopupResult(resultFile)
 		if os.IsNotExist(readErr) && displayErr == nil {
@@ -532,18 +587,6 @@ func newTUISettingsPopupFunc(projectRoot, commandName string) fanouttui.Settings
 			Path:  result.Path,
 		}, false, nil
 	}
-}
-
-func tuiPopupPositionForCurrentPane(popupWidth, popupHeight int) *backend.PopupPosition {
-	paneID := strings.TrimSpace(os.Getenv("TMUX_PANE"))
-	if paneID == "" {
-		return nil
-	}
-	geom, err := tmuxrun.PaneGeometryForPane(paneID)
-	if err != nil {
-		return nil
-	}
-	return tuiPopupPositionAdjacentToPane(geom, popupWidth, popupHeight)
 }
 
 func tuiPopupPositionAdjacentToPane(geom backend.PaneGeometry, popupWidth, popupHeight int) *backend.PopupPosition {

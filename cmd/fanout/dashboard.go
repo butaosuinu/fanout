@@ -20,7 +20,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 	"github.com/butaosuinu/fanout/internal/ui/dashboard"
 )
@@ -35,10 +34,20 @@ const defaultDashboardDirectKey = "F12"
 // focused pane's same-worktree action popup.
 const defaultWorktreeActionKey = "M"
 
+// dashboardHostRuntime is the runtime whose shortcut opened this dashboard: it
+// both registers the keys and carries the viewer the notice goes back to.
+var dashboardHostRuntime = func() backend.Backend { return paneruntime.NewTmux() }
+
 var (
 	openDashboardBrowser = openBrowser
 	showDashboardStatus  = func(msg string) error {
-		return tmuxrun.DisplayMessageToClient(os.Getenv(tmuxrun.DashboardNotifyClientEnv), msg)
+		host, ok := backend.AsPopupHost(dashboardHostRuntime())
+		if !ok {
+			return nil
+		}
+		// The viewer that pressed the key is named by the environment the shortcut
+		// set on this process; unset, the runtime picks its own current viewer.
+		return host.NotifyViewer(os.Getenv(backend.NotifyViewerEnv), msg)
 	}
 	openBrowserWaitPeriod = 2 * time.Second
 )
@@ -315,14 +324,13 @@ func bindDashboardKey(lg *log.Logger, enabled bool) {
 }
 
 func syncDashboardKey(lg *log.Logger, enabled bool, cleanupDisabled bool) {
+	binder, ok := backend.AsShortcutBinder(dashboardHostRuntime())
+	if !ok {
+		return
+	}
 	if !enabled {
 		if cleanupDisabled {
-			if err := tmuxrun.UnbindDashboardKeys(defaultDashboardKey, defaultDashboardDirectKey); err != nil {
-				lg.Debug("dashboard keybind cleanup: %v (not in tmux?)", err)
-			}
-			if err := tmuxrun.UnbindWorktreeActionKey(defaultWorktreeActionKey); err != nil {
-				lg.Debug("worktree action keybind cleanup: %v (not in tmux?)", err)
-			}
+			unbindDashboardKeys(binder, lg)
 		}
 		return
 	}
@@ -335,16 +343,25 @@ func syncDashboardKey(lg *log.Logger, enabled bool, cleanupDisabled bool) {
 	// (@fanout_project_root when fanout recorded it, otherwise
 	// #{pane_current_path}) and cmdDashboard maps that to the main worktree, so
 	// no repo root needs to be baked in here.
-	if err := tmuxrun.BindDashboardKeys(defaultDashboardKey, defaultDashboardDirectKey, bin); err != nil {
+	if err := binder.BindDashboardShortcuts(defaultDashboardKey, defaultDashboardDirectKey, bin); err != nil {
 		lg.Debug("dashboard keybind: %v (not in tmux?)", err)
 		return
 	}
 	lg.Info("tmux keybind: press %s or prefix + %s to open the dashboard", defaultDashboardDirectKey, defaultDashboardKey)
-	bindWorktreeActionKey(lg, bin)
+	bindWorktreeActionKey(binder, lg, bin)
 }
 
-func bindWorktreeActionKey(lg *log.Logger, bin string) {
-	if err := tmuxrun.BindWorktreeActionKey(defaultWorktreeActionKey, bin); err != nil {
+func unbindDashboardKeys(binder backend.ShortcutBinder, lg *log.Logger) {
+	if err := binder.UnbindDashboardShortcuts(defaultDashboardKey, defaultDashboardDirectKey); err != nil {
+		lg.Debug("dashboard keybind cleanup: %v (not in tmux?)", err)
+	}
+	if err := binder.UnbindWorktreeActionShortcut(defaultWorktreeActionKey); err != nil {
+		lg.Debug("worktree action keybind cleanup: %v (not in tmux?)", err)
+	}
+}
+
+func bindWorktreeActionKey(binder backend.ShortcutBinder, lg *log.Logger, bin string) {
+	if err := binder.BindWorktreeActionShortcut(defaultWorktreeActionKey, bin); err != nil {
 		lg.Debug("worktree action keybind: %v (tmux too old or not in tmux?)", err)
 		return
 	}

@@ -225,11 +225,12 @@ func wireTmuxTUI(
 	lg *log.Logger,
 ) func() {
 	runtimeBackend := paneruntime.NewTmux()
+	popupHost := newTUIPopupHost(runtimeBackend, os.Getenv("TMUX_PANE"))
 	opts.LaunchPane = newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig)
-	opts.NewPanePrompt = newTUINewPanePromptFunc(projectRoot, commandName)
-	opts.HelpPopup = newTUIHelpPopupFunc(projectRoot, commandName)
-	opts.CloseChoicePopup = newTUICloseChoicePopupFunc(projectRoot, commandName)
-	opts.SettingsPopup = newTUISettingsPopupFunc(projectRoot, commandName)
+	opts.NewPanePrompt = newTUINewPanePromptFunc(popupHost, projectRoot, commandName)
+	opts.HelpPopup = newTUIHelpPopupFunc(popupHost, projectRoot, commandName)
+	opts.CloseChoicePopup = newTUICloseChoicePopupFunc(popupHost, projectRoot, commandName)
+	opts.SettingsPopup = newTUISettingsPopupFunc(popupHost, projectRoot, commandName)
 	opts.LaunchAttach = newTUIAttachAgentFunc(projectRoot, session, commandName, hookConfig)
 	opts.ListOpenIssues = newTUIListOpenIssuesFunc(projectRoot)
 	opts.ListIssueChildren = newTUIListIssueChildrenFunc(projectRoot)

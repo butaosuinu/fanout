@@ -8,7 +8,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
 func TestParseWorktreeActionFlagsUsesPaneArg(t *testing.T) {
@@ -107,8 +106,8 @@ func TestFindRecordedPaneByIDRequiresLivePathUnderRecordedWorktree(t *testing.T)
 	})
 	orig := worktreeActionLivePanes
 	t.Cleanup(func() { worktreeActionLivePanes = orig })
-	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
-		return []tmuxrun.LivePane{{ID: "%42", CurrentPath: filepath.Join(worktree, "subdir")}}, nil
+	worktreeActionLivePanes = func() ([]backend.LivePane, error) {
+		return []backend.LivePane{{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%42"}, CurrentPath: filepath.Join(worktree, "subdir")}}, nil
 	}
 
 	got, err := findRecordedPaneByID(repo, "%42")
@@ -119,8 +118,8 @@ func TestFindRecordedPaneByIDRequiresLivePathUnderRecordedWorktree(t *testing.T)
 		t.Fatalf("IssueNum = %d, want 101", got.IssueNum)
 	}
 
-	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
-		return []tmuxrun.LivePane{{ID: "%42", CurrentPath: filepath.Join(repo, "other")}}, nil
+	worktreeActionLivePanes = func() ([]backend.LivePane, error) {
+		return []backend.LivePane{{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%42"}, CurrentPath: filepath.Join(repo, "other")}}, nil
 	}
 	_, err = findRecordedPaneByID(repo, "%42")
 	if err == nil || !strings.Contains(err.Error(), "is not under recorded worktree") {
@@ -154,8 +153,8 @@ func TestFindRecordedPaneByIDSearchesRawSiblingStores(t *testing.T) {
 	worktreeActionListRoots = func(string) ([]string, error) {
 		return []string{repo, sibling}, nil
 	}
-	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
-		return []tmuxrun.LivePane{{ID: "%sibling", CurrentPath: siblingWorktree, WorktreePath: siblingWorktree}}, nil
+	worktreeActionLivePanes = func() ([]backend.LivePane, error) {
+		return []backend.LivePane{{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%sibling"}, CurrentPath: siblingWorktree, WorktreePath: siblingWorktree}}, nil
 	}
 
 	got, err := findRecordedPaneByID(repo, "%sibling")
@@ -178,8 +177,8 @@ func TestFindRecordedPaneByIDAllowsProjectRootHintWhenCurrentPathIsStale(t *test
 	})
 	orig := worktreeActionLivePanes
 	t.Cleanup(func() { worktreeActionLivePanes = orig })
-	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
-		return []tmuxrun.LivePane{{ID: "%42", CurrentPath: repo, ProjectRoot: repo}}, nil
+	worktreeActionLivePanes = func() ([]backend.LivePane, error) {
+		return []backend.LivePane{{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%42"}, CurrentPath: repo, ProjectRoot: repo}}, nil
 	}
 
 	if _, err := findRecordedPaneByID(repo, "%42"); err != nil {
@@ -197,8 +196,8 @@ func TestFindRecordedPaneByIDRejectsProjectRootHintForDuplicatePaneID(t *testing
 	)
 	orig := worktreeActionLivePanes
 	t.Cleanup(func() { worktreeActionLivePanes = orig })
-	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
-		return []tmuxrun.LivePane{{ID: "%42", CurrentPath: repo, ProjectRoot: repo}}, nil
+	worktreeActionLivePanes = func() ([]backend.LivePane, error) {
+		return []backend.LivePane{{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%42"}, CurrentPath: repo, ProjectRoot: repo}}, nil
 	}
 
 	_, err := findRecordedPaneByID(repo, "%42")
@@ -219,8 +218,8 @@ func TestFindRecordedPaneByIDRequiresShellKeyForShellRows(t *testing.T) {
 	})
 	orig := worktreeActionLivePanes
 	t.Cleanup(func() { worktreeActionLivePanes = orig })
-	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
-		return []tmuxrun.LivePane{{ID: "%77", CurrentPath: repo, ShellKey: "shell-new"}}, nil
+	worktreeActionLivePanes = func() ([]backend.LivePane, error) {
+		return []backend.LivePane{{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%77"}, CurrentPath: repo, ShellKey: "shell-new"}}, nil
 	}
 
 	_, err := findRecordedPaneByID(repo, "%77")
@@ -247,16 +246,16 @@ func TestFindRecordedPaneByIDRequiresLivenessKeyForKeyedCoordinator(t *testing.T
 	orig := worktreeActionLivePanes
 	t.Cleanup(func() { worktreeActionLivePanes = orig })
 
-	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
-		return []tmuxrun.LivePane{{ID: "%88", CurrentPath: filepath.Join(repo, "subdir"), ShellKey: ""}}, nil
+	worktreeActionLivePanes = func() ([]backend.LivePane, error) {
+		return []backend.LivePane{{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%88"}, CurrentPath: filepath.Join(repo, "subdir"), ShellKey: ""}}, nil
 	}
 	_, err := findRecordedPaneByID(repo, "%88")
 	if err == nil || !strings.Contains(err.Error(), "identity changed") {
 		t.Fatalf("findRecordedPaneByID() error = %v, want keyed identity mismatch", err)
 	}
 
-	worktreeActionLivePanes = func() ([]tmuxrun.LivePane, error) {
-		return []tmuxrun.LivePane{{ID: "%88", CurrentPath: repo, ShellKey: "shell-coordinator"}}, nil
+	worktreeActionLivePanes = func() ([]backend.LivePane, error) {
+		return []backend.LivePane{{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%88"}, CurrentPath: repo, ShellKey: "shell-coordinator"}}, nil
 	}
 	got, err := findRecordedPaneByID(repo, "%88")
 	if err != nil {
