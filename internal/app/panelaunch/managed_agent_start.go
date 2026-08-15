@@ -585,5 +585,6 @@ func exactManagedLaunchPane(
 }
 
 func validOptionalManagedAgentSession(session *backend.AgentSessionRef, agentName string) bool {
-	return session == nil || session.Valid() && session.Agent == agentName && session.Source == "herdr:"+agentName
+	return session == nil || session.Valid() && session.Agent == agentName &&
+		session.Source == backend.AgentSessionSource(agentName)
 }

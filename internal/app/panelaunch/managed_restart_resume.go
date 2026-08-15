@@ -390,7 +390,7 @@ func resumableSavedCodex(saved state.Pane) bool {
 }
 
 func exactCodexSessionRef(ref *backend.AgentSessionRef) bool {
-	return ref != nil && ref.Source == "herdr:codex" && ref.Agent == "codex" &&
+	return ref != nil && ref.Source == backend.AgentSessionSource("codex") && ref.Agent == "codex" &&
 		ref.Kind == "id" && strings.TrimSpace(ref.Value) != "" && ref.Value == strings.TrimSpace(ref.Value)
 }
 

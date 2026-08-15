@@ -21,12 +21,12 @@ func StateLoader(
 ) func() (state.Store, error) {
 	return func() (state.Store, error) {
 		store, err := sessionview.MergedStateLoader(projectRoot, listLive)()
-		if err != nil || listLive == nil || !hasUnboundHerdrAgent(store.Panes) {
+		if err != nil || listLive == nil || !hasUnboundAgentSession(store.Panes) {
 			return store, err
 		}
 		live, _ := listLive()
 		for _, root := range bindingRoots(projectRoot, store.Panes) {
-			if err := bindOwnedHerdrAgentSessions(root, live); err != nil {
+			if err := bindOwnedAgentSessions(root, live); err != nil {
 				return state.Store{}, fmt.Errorf("bind Herdr agent session in %s: %w", root, err)
 			}
 		}
@@ -35,15 +35,15 @@ func StateLoader(
 	}
 }
 
-func hasUnboundHerdrAgent(panes []state.Pane) bool {
-	return slices.ContainsFunc(panes, herdrAgentSessionUnbound)
+func hasUnboundAgentSession(panes []state.Pane) bool {
+	return slices.ContainsFunc(panes, agentSessionUnbound)
 }
 
 func bindingRoots(projectRoot string, panes []state.Pane) []string {
 	seen := map[string]bool{}
 	var roots []string
 	for _, pane := range panes {
-		if !herdrAgentSessionUnbound(pane) {
+		if !agentSessionUnbound(pane) {
 			continue
 		}
 		for _, root := range paneBindingOwners(projectRoot, pane) {
@@ -68,7 +68,7 @@ func paneBindingOwners(projectRoot string, pane state.Pane) []string {
 	return []string{root}
 }
 
-func bindOwnedHerdrAgentSessions(projectRoot string, live []backend.LivePane) (err error) {
+func bindOwnedAgentSessions(projectRoot string, live []backend.LivePane) (err error) {
 	locked, err := state.LockProject(projectRoot)
 	if err != nil {
 		return err
@@ -76,7 +76,7 @@ func bindOwnedHerdrAgentSessions(projectRoot string, live []backend.LivePane) (e
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
 	changed := false
 	for i := range locked.Panes {
-		ref, ok := UniqueHerdrSessionBinding(locked.Panes, i, live)
+		ref, ok := UniqueSessionBinding(locked.Panes, i, live)
 		if !ok {
 			continue
 		}
@@ -89,18 +89,18 @@ func bindOwnedHerdrAgentSessions(projectRoot string, live []backend.LivePane) (e
 	return nil
 }
 
-// UniqueHerdrSessionBinding returns the first valid late session only when one
+// UniqueSessionBinding returns the first valid late session only when one
 // persisted row and one live observation share the same launch identity.
-func UniqueHerdrSessionBinding(
+func UniqueSessionBinding(
 	panes []state.Pane,
 	target int,
 	live []backend.LivePane,
 ) (*backend.AgentSessionRef, bool) {
-	if !herdrAgentSessionUnbound(panes[target]) {
+	if !agentSessionUnbound(panes[target]) {
 		return nil, false
 	}
-	current, ok := uniqueHerdrSessionObservation(panes[target], live)
-	if !ok || countHerdrRowsForObservation(panes, current) != 1 {
+	current, ok := uniqueSessionObservation(panes[target], live)
+	if !ok || countRowsForObservation(panes, current) != 1 {
 		return nil, false
 	}
 	ref := *current.AgentSession
@@ -124,14 +124,14 @@ func firstBindOptions() []backend.MatchOption {
 	}
 }
 
-func uniqueHerdrSessionObservation(
+func uniqueSessionObservation(
 	pane state.Pane,
 	live []backend.LivePane,
 ) (backend.LivePane, bool) {
 	return pane.RuntimeBinding().UniqueLive(live, firstBindOptions()...)
 }
 
-func countHerdrRowsForObservation(panes []state.Pane, current backend.LivePane) int {
+func countRowsForObservation(panes []state.Pane, current backend.LivePane) int {
 	count := 0
 	for _, pane := range panes {
 		if FirstBindMatches(pane, current) {
@@ -141,7 +141,7 @@ func countHerdrRowsForObservation(panes []state.Pane, current backend.LivePane) 
 	return count
 }
 
-func herdrAgentSessionUnbound(pane state.Pane) bool {
+func agentSessionUnbound(pane state.Pane) bool {
 	return backend.NormalizeName(pane.Backend) == backend.Herdr &&
 		strings.TrimSpace(pane.Agent) != "" && strings.TrimSpace(pane.AgentID) != "" &&
 		pane.AgentSession == nil
