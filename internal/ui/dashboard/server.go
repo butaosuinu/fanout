@@ -73,17 +73,17 @@ type Options struct {
 // port-in-use error surfaces synchronously) and computes the URL; Run serves
 // until the context is canceled.
 type Server struct {
-	listener      net.Listener
-	httpServer    *http.Server
-	poller        *poller
-	hub           *hub
-	token         string
-	base          string // http://127.0.0.1:<port>
-	serveErr      chan error
-	capturePane   func(paneID string, lines int) (string, error)
-	capturePlan   func(paneID string, lines int) (string, error)
-	diffWorktree  func(path, baseRef string) (gitstat.Patch, error)
-	verifyPane    func(sessionview.PaneView) error
+	listener        net.Listener
+	httpServer      *http.Server
+	poller          *poller
+	hub             *hub
+	token           string
+	base            string // http://127.0.0.1:<port>
+	serveErr        chan error
+	capturePane     func(paneID string, lines int) (string, error)
+	capturePlan     func(paneID string, lines int) (string, error)
+	diffWorktree    func(path, baseRef string) (gitstat.Patch, error)
+	verifyPane      func(sessionview.PaneView) error
 	ownsManagedPane func(sessionview.PaneView) bool
 	readManagedPane func(sessionview.PaneView, int) (string, error)
 }
@@ -120,16 +120,16 @@ func New(opts Options) (*Server, error) {
 	p := newLazyPoller(opts.ProjectRoot, opts.ResolveGH, h)
 	p.listLive = opts.ListLive
 	s := &Server{
-		listener:      ln,
-		hub:           h,
-		poller:        p,
-		token:         opts.Token,
-		base:          fmt.Sprintf("http://%s:%d", loopbackInterface, addr.Port),
-		serveErr:      make(chan error, 1),
-		capturePane:   capture,
-		capturePlan:   capturePlan,
-		diffWorktree:  opts.DiffWorktree,
-		verifyPane:    verify,
+		listener:        ln,
+		hub:             h,
+		poller:          p,
+		token:           opts.Token,
+		base:            fmt.Sprintf("http://%s:%d", loopbackInterface, addr.Port),
+		serveErr:        make(chan error, 1),
+		capturePane:     capture,
+		capturePlan:     capturePlan,
+		diffWorktree:    opts.DiffWorktree,
+		verifyPane:      verify,
 		ownsManagedPane: opts.OwnsManagedPane,
 		readManagedPane: opts.ReadManagedPane,
 	}

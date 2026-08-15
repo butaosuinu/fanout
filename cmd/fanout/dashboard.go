@@ -137,8 +137,8 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 		Token:       token,
 		// Resolved lazily on the poller's gh goroutine so a slow `gh repo view`
 		// never delays binding localhost or the state-only paint.
-		ResolveGH:     dashboardGHResolver(root, lg),
-		ListLive:      runtimeListLiveForProject(root, false),
+		ResolveGH:       dashboardGHResolver(root, lg),
+		ListLive:        runtimeListLiveForProject(root, false),
 		OwnsManagedPane: ownsManagedPane,
 		ReadManagedPane: readManagedPane,
 	})

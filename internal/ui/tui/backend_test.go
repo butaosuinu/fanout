@@ -245,10 +245,10 @@ func TestAutomaticHerdrFocusReloadsPersistedPaneIdentity(t *testing.T) {
 	)
 	m := newModel(Options{
 		ProjectRoot: root, BackendSelection: backend.Selection{Name: backend.Herdr},
-		ListLive:            func() ([]backend.LivePane, error) { return []backend.LivePane{live}, unrelated },
+		ListLive:              func() ([]backend.LivePane, error) { return []backend.LivePane{live}, unrelated },
 		ManagedActionDisabled: func(state.Pane) string { return "" },
 		FocusManagedPane:      func(pane state.Pane) error { focused = pane; return nil },
-		FocusPane:           func(string) error { t.Fatal("automatic Herdr focus routed through tmux"); return nil },
+		FocusPane:             func(string) error { t.Fatal("automatic Herdr focus routed through tmux"); return nil },
 	})
 	msg := m.focusPaneIDCmd("w1:p1", "launched")()
 	focusedMsg, ok := msg.(paneFocusedMsg)
@@ -278,8 +278,8 @@ func TestHerdrFocusRetainsTargetRouteObservationFailure(t *testing.T) {
 
 func TestHerdrRowEnablesLifecycleActionsAndDefaultsCloseToWorktree(t *testing.T) {
 	m := newModel(Options{
-		ProjectRoot:                  "/repo",
-		BackendSelection:             backend.Selection{Name: backend.Tmux},
+		ProjectRoot:                      "/repo",
+		BackendSelection:                 backend.Selection{Name: backend.Tmux},
 		LifecycleWorkspaceRuntimeForRoot: configuredHerdrRuntime,
 	})
 	m.allPanes = []paneView{
@@ -391,7 +391,7 @@ func TestLifecycleOptionsBuildsHerdrRuntimeForOwningRoot(t *testing.T) {
 
 func TestHelpKeepsHerdrInteractiveActionsDisabledButEnablesLifecycle(t *testing.T) {
 	m := newModel(Options{
-		BackendSelection:             backend.Selection{Name: backend.Tmux},
+		BackendSelection:                 backend.Selection{Name: backend.Tmux},
 		LifecycleWorkspaceRuntimeForRoot: configuredHerdrRuntime,
 	})
 	m.allPanes = []paneView{{IssueNum: 1, Backend: backend.Herdr, PaneID: "w1:p1"}}

@@ -321,7 +321,7 @@ func TestPeekOwnedHerdrPaneReadsThroughOwnedCapability(t *testing.T) {
 func TestPeekForeignHerdrPaneIs404WithoutRead(t *testing.T) {
 	read := 0
 	srv := &Server{
-		poller:        &poller{},
+		poller:          &poller{},
 		ownsManagedPane: func(sessionview.PaneView) bool { return false },
 		readManagedPane: func(sessionview.PaneView, int) (string, error) {
 			read++
@@ -345,7 +345,7 @@ func TestPeekForeignHerdrPaneIs404WithoutRead(t *testing.T) {
 func TestPeekStaleHerdrPaneHeadIs404WithoutRead(t *testing.T) {
 	read := 0
 	srv := &Server{
-		poller:        &poller{},
+		poller:          &poller{},
 		ownsManagedPane: func(sessionview.PaneView) bool { return false },
 		readManagedPane: func(sessionview.PaneView, int) (string, error) {
 			read++
@@ -371,7 +371,7 @@ func TestPeekHerdrIdentityLossDuringReadIs404(t *testing.T) {
 		backend.ErrOwnedSessionNotFound,
 	} {
 		srv := &Server{
-			poller:        &poller{},
+			poller:          &poller{},
 			ownsManagedPane: func(sessionview.PaneView) bool { return true },
 			readManagedPane: func(sessionview.PaneView, int) (string, error) {
 				return "", fmt.Errorf("request-time binding: %w", targetErr)
