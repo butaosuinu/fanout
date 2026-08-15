@@ -32,7 +32,7 @@ type Runtime struct {
 	Info             *fanoutruntime.Info
 	GH               ghissue.Runner
 	Backend          backend.Backend
-	Managed            panelaunch.ManagedSessionRuntime
+	Managed          panelaunch.ManagedSessionRuntime
 	BackendSelection backend.Selection
 	// VerifyBackend re-runs parent stickiness against the state held under the
 	// launch lock. cmd closes over the raw CLI/env/config inputs so backend

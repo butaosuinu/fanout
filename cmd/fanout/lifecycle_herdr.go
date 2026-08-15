@@ -16,10 +16,10 @@ import (
 func runtimeLifecycleOptions(projectRoot, statePath string, hookConfig hooks.Config) lifecycle.Options {
 	runtimeBackend := tmuxbackend.New()
 	return lifecycle.Options{
-		ProjectRoot:  projectRoot,
-		StatePath:    statePath,
-		Hooks:        hookConfig,
-		CloseOwned:   runtimeBackend.CloseOwned,
+		ProjectRoot:      projectRoot,
+		StatePath:        statePath,
+		Hooks:            hookConfig,
+		CloseOwned:       runtimeBackend.CloseOwned,
 		WorkspaceRuntime: newHerdrLifecycleFactory(projectRoot),
 	}
 }

@@ -607,7 +607,7 @@ func herdrNudgeProcess(pid, parent int, executable string, args []string) backen
 func managedNudgeDeps(initial, locked state.Store, runtime *fakeNudgeRuntime) Deps {
 	return Deps{
 		LoadState:       func() (state.Store, error) { return initial, nil },
-		OpenRuntime:       func(context.Context, string) (NudgeRuntime, error) { return runtime, nil },
+		OpenRuntime:     func(context.Context, string) (NudgeRuntime, error) { return runtime, nil },
 		ReadLockedState: func(_ context.Context, read func(state.Store) error) error { return read(locked) },
 	}
 }

@@ -454,12 +454,7 @@ func stateFileNeedsJournalLock(path string) bool {
 }
 
 func storeNeedsJournalLock(store state.Store) bool {
-	for _, pane := range store.Panes {
-		if workspaceRuntimeRow(pane) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(store.Panes, workspaceRuntimeRow)
 }
 
 func unlockState(mode string, locked *state.LockedStore, lg Logger) {
