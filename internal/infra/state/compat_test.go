@@ -183,10 +183,10 @@ func TestStateCompatRoundTripKeepsLegacyRowMinimal(t *testing.T) {
 // when no fixture covers it. Updating compatPersistedKeys is the deliberate
 // acknowledgement that .fanout/state.json changed shape across binary versions.
 func TestPaneJSONTagsAreFrozen(t *testing.T) {
-	paneType := reflect.TypeOf(Pane{})
+	paneType := reflect.TypeFor[Pane]()
 	got := make([]string, 0, paneType.NumField())
-	for i := range paneType.NumField() {
-		key, _, _ := strings.Cut(paneType.Field(i).Tag.Get("json"), ",")
+	for field := range paneType.Fields() {
+		key, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		got = append(got, key)
 	}
 	// SourceProjectRoot and SourceProjectRoots are the two non-persisted
