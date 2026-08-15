@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
@@ -12,7 +13,7 @@ import (
 // beats session beats listing order — and the role + title double match.
 func TestPickConsolePane(t *testing.T) {
 	console := func(id, root, session string) tmuxrun.LivePane {
-		return tmuxrun.LivePane{ID: id, Title: tuiPaneTitle, Role: tmuxrun.RoleConsole, ProjectRoot: root, SessionID: session}
+		return tmuxrun.LivePane{ID: id, Title: tuiPaneTitle, Role: backend.RoleConsole, ProjectRoot: root, SessionID: session}
 	}
 	tests := []struct {
 		name  string
@@ -30,7 +31,7 @@ func TestPickConsolePane(t *testing.T) {
 			name: "console role without the TUI title is excluded",
 			from: tmuxrun.LivePane{ID: "%1", SessionID: "$1"},
 			panes: []tmuxrun.LivePane{
-				{ID: "%2", Title: "zsh", Role: tmuxrun.RoleConsole, SessionID: "$1"},
+				{ID: "%2", Title: "zsh", Role: backend.RoleConsole, SessionID: "$1"},
 			},
 			want: "",
 		},

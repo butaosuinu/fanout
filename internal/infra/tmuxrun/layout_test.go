@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 // printArgsShim records argv and prints stdout via the given printf body.
@@ -20,7 +22,7 @@ func TestWindowGeometryParsesAndTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WindowGeometry: %v", err)
 	}
-	if geom != (Geometry{WindowID: "@5", Width: 208, Height: 60}) {
+	if geom != (corebackend.Geometry{WindowID: "@5", Width: 208, Height: 60}) {
 		t.Fatalf("geom = %+v", geom)
 	}
 	assertTmuxArgs(t, argsPath, []string{"display-message", "-p", "-t", "%1", "-F", windowGeomFormat})
@@ -95,7 +97,7 @@ printf -- '---\n' >> "$TMUXRUN_ARGS"
 
 func TestSetPaneRoleSetAndClear(t *testing.T) {
 	argsPath := printArgsShim(t, "")
-	if err := SetPaneRole("%2", RoleConsole); err != nil {
+	if err := SetPaneRole("%2", corebackend.RoleConsole); err != nil {
 		t.Fatalf("SetPaneRole set: %v", err)
 	}
 	assertTmuxArgs(t, argsPath, []string{"set-option", "-p", "-t", "%2", roleOption, "console"})
@@ -150,7 +152,7 @@ func TestWindowPanesParsing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WindowPanes: %v", err)
 	}
-	want := []WindowPane{
+	want := []corebackend.WindowPane{
 		{ID: "%1", NumericID: "1", Index: 0, Active: true, Role: "console", Spacer: false},
 		{ID: "%2", NumericID: "2", Index: 1, Active: false, Role: "", Spacer: false},
 		{ID: "%3", NumericID: "3", Index: 2, Active: false, Role: "", Spacer: true},

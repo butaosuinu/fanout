@@ -325,7 +325,7 @@ func loadTUIRestoreSnapshot(session string) (tuiRestoreSnapshot, error) {
 	return tuiRestoreSnapshot{Live: live, PanesByTitle: liveSessionPanesByTitle(sessionPanes, live), ServerStart: serverStart}, nil
 }
 
-func liveSessionPanesByTitle(sessionPanes []tmuxrun.PaneInfo, live map[string]tmuxrun.LivePane) map[string][]tmuxrun.LivePane {
+func liveSessionPanesByTitle(sessionPanes []backend.PaneInfo, live map[string]tmuxrun.LivePane) map[string][]tmuxrun.LivePane {
 	out := map[string][]tmuxrun.LivePane{}
 	for _, pane := range sessionPanes {
 		title := strings.TrimSpace(pane.Title)
@@ -415,7 +415,7 @@ func stopRestoredPane(paneID, shellKey string) error {
 	if err != nil {
 		return fmt.Errorf("stop restored pane %s: %w", paneID, err)
 	}
-	if result.Status == tmuxrun.ClosePaneFailed {
+	if result.Status == backend.ClosePaneFailed {
 		return fmt.Errorf("restored pane %s remained live after close", paneID)
 	}
 	return nil

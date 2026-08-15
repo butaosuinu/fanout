@@ -1030,8 +1030,8 @@ func TestRestoreTracksPaneWhenCodexStartupAndOwnedCloseFail(t *testing.T) {
 		func(string, time.Duration) (codexapp.Status, error) {
 			return codexapp.Status{}, errors.New("startup failed")
 		},
-		func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-			return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, errors.New("pane still live")
+		func(string, string, string) (backend.ClosePaneResult, error) {
+			return backend.ClosePaneResult{Status: backend.ClosePaneFailed}, errors.New("pane still live")
 		},
 	)
 	writeRestoreState(t, root, []state.Pane{{
@@ -1225,7 +1225,7 @@ func stubRestorePaneOps(
 	setKey func(string, string) error,
 	closeFresh func(string) error,
 	waitReady func(string, time.Duration) (codexapp.Status, error),
-	closeOwned func(string, string, string) (tmuxrun.ClosePaneResult, error),
+	closeOwned func(string, string, string) (backend.ClosePaneResult, error),
 ) {
 	t.Helper()
 	originalSetKey := setRestoredPaneLivenessKey

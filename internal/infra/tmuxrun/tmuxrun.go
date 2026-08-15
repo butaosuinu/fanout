@@ -80,14 +80,6 @@ const (
 // sweep.
 var paneIDPattern = regexp.MustCompile(`^%[0-9]+$`)
 
-type (
-	PaneInfo      = corebackend.PaneInfo
-	ClientSize    = corebackend.ClientSize
-	PopupPosition = corebackend.PopupPosition
-	PopupOptions  = corebackend.PopupOptions
-	PaneGeometry  = corebackend.PaneGeometry
-)
-
 type tmuxVersion struct {
 	Major int
 	Minor int
@@ -232,74 +224,74 @@ func parsePSElapsed(raw string) (time.Duration, error) {
 
 // CurrentClientSize returns the tmux client dimensions, not the current pane
 // dimensions. tmux display-popup is client-scoped, so pane width is irrelevant.
-func CurrentClientSize() (ClientSize, error) {
+func CurrentClientSize() (corebackend.ClientSize, error) {
 	out, err := exec.Command("tmux", "display-message", "-p", "#{client_width} #{client_height}").Output()
 	if err != nil {
-		return ClientSize{}, fmt.Errorf("tmux display-message client size: %w", err)
+		return corebackend.ClientSize{}, fmt.Errorf("tmux display-message client size: %w", err)
 	}
 	size, err := parseClientSize(string(out))
 	if err != nil {
-		return ClientSize{}, fmt.Errorf("parse tmux client size: %w", err)
+		return corebackend.ClientSize{}, fmt.Errorf("parse tmux client size: %w", err)
 	}
 	return size, nil
 }
 
-func parseClientSize(out string) (ClientSize, error) {
+func parseClientSize(out string) (corebackend.ClientSize, error) {
 	fields := strings.Fields(out)
 	if len(fields) != 2 {
-		return ClientSize{}, fmt.Errorf("expected 2 fields, got %d", len(fields))
+		return corebackend.ClientSize{}, fmt.Errorf("expected 2 fields, got %d", len(fields))
 	}
 	width, err := strconv.Atoi(fields[0])
 	if err != nil {
-		return ClientSize{}, fmt.Errorf("width: %w", err)
+		return corebackend.ClientSize{}, fmt.Errorf("width: %w", err)
 	}
 	height, err := strconv.Atoi(fields[1])
 	if err != nil {
-		return ClientSize{}, fmt.Errorf("height: %w", err)
+		return corebackend.ClientSize{}, fmt.Errorf("height: %w", err)
 	}
 	if width <= 0 || height <= 0 {
-		return ClientSize{}, fmt.Errorf("dimensions must be positive, got %dx%d", width, height)
+		return corebackend.ClientSize{}, fmt.Errorf("dimensions must be positive, got %dx%d", width, height)
 	}
-	return ClientSize{Width: width, Height: height}, nil
+	return corebackend.ClientSize{Width: width, Height: height}, nil
 }
 
 // PaneGeometryForPane returns pane bounds in client coordinates.
-func PaneGeometryForPane(paneID string) (PaneGeometry, error) {
+func PaneGeometryForPane(paneID string) (corebackend.PaneGeometry, error) {
 	paneID = strings.TrimSpace(paneID)
 	if !paneIDPattern.MatchString(paneID) {
-		return PaneGeometry{}, fmt.Errorf("pane id must be a tmux pane id (%%N), got %q", paneID)
+		return corebackend.PaneGeometry{}, fmt.Errorf("pane id must be a tmux pane id (%%N), got %q", paneID)
 	}
 	out, err := exec.Command("tmux", "display-message", "-p", "-t", paneID, "-F", paneGeometryFormat).Output()
 	if err != nil {
-		return PaneGeometry{}, fmt.Errorf("tmux display-message pane geometry: %w", err)
+		return corebackend.PaneGeometry{}, fmt.Errorf("tmux display-message pane geometry: %w", err)
 	}
 	geom, err := parsePaneGeometry(string(out))
 	if err != nil {
-		return PaneGeometry{}, fmt.Errorf("parse tmux pane geometry: %w", err)
+		return corebackend.PaneGeometry{}, fmt.Errorf("parse tmux pane geometry: %w", err)
 	}
 	return geom, nil
 }
 
-func parsePaneGeometry(out string) (PaneGeometry, error) {
+func parsePaneGeometry(out string) (corebackend.PaneGeometry, error) {
 	fields := strings.Split(strings.TrimRight(out, "\r\n"), "\t")
 	if len(fields) != 6 {
-		return PaneGeometry{}, fmt.Errorf("expected 6 fields, got %d", len(fields))
+		return corebackend.PaneGeometry{}, fmt.Errorf("expected 6 fields, got %d", len(fields))
 	}
 	values := make([]int, len(fields))
 	for i, field := range fields {
 		value, err := strconv.Atoi(field)
 		if err != nil {
-			return PaneGeometry{}, fmt.Errorf("field %d: %w", i+1, err)
+			return corebackend.PaneGeometry{}, fmt.Errorf("field %d: %w", i+1, err)
 		}
 		if value < 0 {
-			return PaneGeometry{}, fmt.Errorf("field %d must be non-negative, got %d", i+1, value)
+			return corebackend.PaneGeometry{}, fmt.Errorf("field %d must be non-negative, got %d", i+1, value)
 		}
 		values[i] = value
 	}
 	if values[2] <= 0 || values[3] <= 0 || values[4] <= 0 || values[5] <= 0 {
-		return PaneGeometry{}, fmt.Errorf("pane and client dimensions must be positive")
+		return corebackend.PaneGeometry{}, fmt.Errorf("pane and client dimensions must be positive")
 	}
-	return PaneGeometry{
+	return corebackend.PaneGeometry{
 		Left:         values[0],
 		Top:          values[1],
 		Width:        values[2],
@@ -310,7 +302,7 @@ func parsePaneGeometry(out string) (PaneGeometry, error) {
 }
 
 // DisplayPopup opens command in a tmux popup.
-func DisplayPopup(opts PopupOptions) error {
+func DisplayPopup(opts corebackend.PopupOptions) error {
 	args, err := displayPopupArgs(opts)
 	if err != nil {
 		return err
@@ -321,7 +313,7 @@ func DisplayPopup(opts PopupOptions) error {
 	return nil
 }
 
-func displayPopupArgs(opts PopupOptions) ([]string, error) {
+func displayPopupArgs(opts corebackend.PopupOptions) ([]string, error) {
 	if opts.Width <= 0 {
 		return nil, fmt.Errorf("popup width must be positive")
 	}
@@ -509,7 +501,7 @@ type LivePane struct {
 	// pane was created for. Degrades to "" when the listing fails.
 	Label string
 	// Role is @fanout_role, the auto-layout role fanout stamps on panes it
-	// manages (RoleConsole for the TUI console). Like every pane user option it
+	// manages (corebackend.RoleConsole for the TUI console). Like every pane user option it
 	// is settable by the process inside the pane, so it is a display/UX signal,
 	// not a security boundary. It can also degrade to "": a failed role
 	// listing, or a forged duplicate row reusing this pane's id (see
@@ -547,7 +539,7 @@ type LivePane struct {
 // fails entirely, panes are returned with empty titles rather than failing the
 // sweep — titles are cosmetic, liveness is not.
 //
-// Distinct from ListPanes(target), which returns richer PaneInfo for a single
+// Distinct from ListPanes(target), which returns richer corebackend.PaneInfo for a single
 // target; this one is the all-sessions id+cwd liveness sweep the dashboard needs.
 func ListLivePanes() ([]LivePane, error) {
 	return listLivePanes(false)
@@ -1070,7 +1062,7 @@ func SelectTiled(session string) error {
 }
 
 // ListPanes returns pane metadata for a target pane, window, or session.
-func ListPanes(target string) ([]PaneInfo, error) {
+func ListPanes(target string) ([]corebackend.PaneInfo, error) {
 	target = strings.TrimSpace(target)
 	args := []string{"list-panes"}
 	if target != "" {
@@ -1089,7 +1081,7 @@ func ListPanes(target string) ([]PaneInfo, error) {
 }
 
 // ListAllPanes returns pane metadata across every tmux session.
-func ListAllPanes() ([]PaneInfo, error) {
+func ListAllPanes() ([]corebackend.PaneInfo, error) {
 	out, err := exec.Command("tmux", "list-panes", "-a", "-F", paneListFormat).Output()
 	if err != nil {
 		return nil, fmt.Errorf("tmux list-panes -a: %w", err)
@@ -1120,10 +1112,10 @@ func ActivePaneInWindow(targetPaneID string) (string, error) {
 }
 
 // NewWindow creates a detached window in session and returns its initial pane.
-func NewWindow(session, name, startDir string) (PaneInfo, error) {
+func NewWindow(session, name, startDir string) (corebackend.PaneInfo, error) {
 	session = strings.TrimSpace(session)
 	if session == "" {
-		return PaneInfo{}, fmt.Errorf("session name is required")
+		return corebackend.PaneInfo{}, fmt.Errorf("session name is required")
 	}
 	args := []string{"new-window", "-d", "-P", "-F", paneListFormat, "-t", exactSessionTarget(session)}
 	if strings.TrimSpace(name) != "" {
@@ -1134,14 +1126,14 @@ func NewWindow(session, name, startDir string) (PaneInfo, error) {
 	}
 	out, err := exec.Command("tmux", args...).Output()
 	if err != nil {
-		return PaneInfo{}, fmt.Errorf("tmux new-window: %w", err)
+		return corebackend.PaneInfo{}, fmt.Errorf("tmux new-window: %w", err)
 	}
 	panes, err := parseListPanesOutput(string(out))
 	if err != nil {
-		return PaneInfo{}, err
+		return corebackend.PaneInfo{}, err
 	}
 	if len(panes) != 1 {
-		return PaneInfo{}, fmt.Errorf("tmux new-window returned %d panes, want 1", len(panes))
+		return corebackend.PaneInfo{}, fmt.Errorf("tmux new-window returned %d panes, want 1", len(panes))
 	}
 	return panes[0], nil
 }
@@ -1164,8 +1156,8 @@ func isQualifiedSessionTarget(name string) bool {
 		strings.ContainsAny(name, "*?[")
 }
 
-func parseListPanesOutput(out string) ([]PaneInfo, error) {
-	var panes []PaneInfo
+func parseListPanesOutput(out string) ([]corebackend.PaneInfo, error) {
+	var panes []corebackend.PaneInfo
 	for lineNum, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
 		if line == "" {
 			continue
@@ -1182,7 +1174,7 @@ func parseListPanesOutput(out string) ([]PaneInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse tmux list-panes line %d active: %w", lineNum+1, err)
 		}
-		panes = append(panes, PaneInfo{
+		panes = append(panes, corebackend.PaneInfo{
 			ID:       fields[0],
 			WindowID: fields[1],
 			Index:    index,
@@ -1345,7 +1337,7 @@ func SelectPaneForClient(clientName, paneID string) error {
 }
 
 // FocusPane makes pane active in its window and selects that window in the session.
-func FocusPane(pane PaneInfo) error {
+func FocusPane(pane corebackend.PaneInfo) error {
 	if strings.TrimSpace(pane.ID) == "" {
 		return fmt.Errorf("pane id is required")
 	}
@@ -1630,17 +1622,6 @@ func CloseFreshPane(paneID string) error {
 	return nil
 }
 
-type (
-	ClosePaneStatus = corebackend.ClosePaneStatus
-	ClosePaneResult = corebackend.ClosePaneResult
-)
-
-const (
-	ClosePaneClosed = corebackend.ClosePaneClosed
-	ClosePaneStale  = corebackend.ClosePaneStale
-	ClosePaneFailed = corebackend.ClosePaneFailed
-)
-
 // ClosePaneIfOwned closes paneID only when its live @fanout_shell_key matches
 // shellKey. expectedWorktreePath remains in the signature for callers that also
 // use it for diagnostics, but paths never prove ownership: multiple fanout
@@ -1650,22 +1631,22 @@ const (
 // kill-pane failures are rechecked because tmux can report an error after the
 // pane has concurrently disappeared. Conversely, even a successful kill is
 // rechecked before the caller is allowed to remove durable state.
-func ClosePaneIfOwned(paneID, _expectedWorktreePath, shellKey string) (ClosePaneResult, error) {
+func ClosePaneIfOwned(paneID, _expectedWorktreePath, shellKey string) (corebackend.ClosePaneResult, error) {
 	paneID = strings.TrimSpace(paneID)
 	if paneID == "" {
-		return ClosePaneResult{Status: ClosePaneStale}, nil
+		return corebackend.ClosePaneResult{Status: corebackend.ClosePaneStale}, nil
 	}
 
 	live, err := listClosePaneIdentity(paneID, strings.TrimSpace(shellKey) != "")
 	if err != nil {
-		return ClosePaneResult{Status: ClosePaneFailed}, fmt.Errorf("list pane identity: %w", err)
+		return corebackend.ClosePaneResult{Status: corebackend.ClosePaneFailed}, fmt.Errorf("list pane identity: %w", err)
 	}
 	identity := classifyOwnedPane(live, paneID, shellKey)
 	if identity == ownedPaneUnknown {
-		return ClosePaneResult{Status: ClosePaneFailed}, fmt.Errorf("pane %s identity cannot be verified from tmux", paneID)
+		return corebackend.ClosePaneResult{Status: corebackend.ClosePaneFailed}, fmt.Errorf("pane %s identity cannot be verified from tmux", paneID)
 	}
 	if identity != ownedPaneMatched {
-		return ClosePaneResult{Status: ClosePaneStale}, nil
+		return corebackend.ClosePaneResult{Status: corebackend.ClosePaneStale}, nil
 	}
 
 	windowID, _ := WindowOfPane(paneID) // cosmetic relayout hint; ownership is already confirmed
@@ -1674,25 +1655,25 @@ func ClosePaneIfOwned(paneID, _expectedWorktreePath, shellKey string) (ClosePane
 	live, err = listClosePaneIdentity(paneID, strings.TrimSpace(shellKey) != "")
 	if err != nil {
 		if killErr != nil {
-			return ClosePaneResult{Status: ClosePaneFailed, WindowID: windowID}, fmt.Errorf("tmux kill-pane: %w; recheck pane identity: %w", killErr, err)
+			return corebackend.ClosePaneResult{Status: corebackend.ClosePaneFailed, WindowID: windowID}, fmt.Errorf("tmux kill-pane: %w; recheck pane identity: %w", killErr, err)
 		}
-		return ClosePaneResult{Status: ClosePaneFailed, WindowID: windowID}, fmt.Errorf("recheck pane identity: %w", err)
+		return corebackend.ClosePaneResult{Status: corebackend.ClosePaneFailed, WindowID: windowID}, fmt.Errorf("recheck pane identity: %w", err)
 	}
 	identity = classifyOwnedPane(live, paneID, shellKey)
 	if identity == ownedPaneUnknown {
-		return ClosePaneResult{Status: ClosePaneFailed, WindowID: windowID}, fmt.Errorf("pane %s identity cannot be verified after kill-pane", paneID)
+		return corebackend.ClosePaneResult{Status: corebackend.ClosePaneFailed, WindowID: windowID}, fmt.Errorf("pane %s identity cannot be verified after kill-pane", paneID)
 	}
 	if identity != ownedPaneMatched {
 		if killErr != nil {
 			//nolint:nilerr // The authoritative recheck supersedes tmux's concurrent kill error.
-			return ClosePaneResult{Status: ClosePaneStale}, nil
+			return corebackend.ClosePaneResult{Status: corebackend.ClosePaneStale}, nil
 		}
-		return ClosePaneResult{Status: ClosePaneClosed, WindowID: windowID}, nil
+		return corebackend.ClosePaneResult{Status: corebackend.ClosePaneClosed, WindowID: windowID}, nil
 	}
 	if killErr != nil {
-		return ClosePaneResult{Status: ClosePaneFailed, WindowID: windowID}, killErr
+		return corebackend.ClosePaneResult{Status: corebackend.ClosePaneFailed, WindowID: windowID}, killErr
 	}
-	return ClosePaneResult{Status: ClosePaneFailed, WindowID: windowID}, fmt.Errorf("tmux kill-pane returned success but pane %s is still live", paneID)
+	return corebackend.ClosePaneResult{Status: corebackend.ClosePaneFailed, WindowID: windowID}, fmt.Errorf("tmux kill-pane returned success but pane %s is still live", paneID)
 }
 
 // listClosePaneIdentity returns a strict, target-only snapshot for destructive
