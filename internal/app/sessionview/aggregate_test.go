@@ -1076,7 +1076,7 @@ func TestHerdrPaneMatchesOwnedShellWithoutAgentIdentity(t *testing.T) {
 	live.AgentProvider = ""
 	live.AgentSession = nil
 	live.AgentPresent = false
-	if !HerdrPaneMatches(row, live) || herdrRowUnsupported(row) {
+	if !row.RuntimeBinding().MatchesLive(live) || herdrRowUnsupported(row) {
 		t.Fatalf("owned shell identity rejected: row=%+v live=%+v", row, live)
 	}
 }

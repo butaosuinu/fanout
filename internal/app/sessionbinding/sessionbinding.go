@@ -107,25 +107,34 @@ func UniqueHerdrSessionBinding(
 	return &ref, true
 }
 
+// FirstBindMatches reports whether current is the observation of pane's own
+// pane while the row's conversation is still unrecorded. The recorded
+// conversation is deliberately not consulted, so a row that already carries one
+// still counts as a claimant of the observation.
+func FirstBindMatches(pane state.Pane, current backend.LivePane) bool {
+	return pane.RuntimeBinding().MatchesLive(current, firstBindOptions()...)
+}
+
+// firstBindOptions is the variance the first binding runs under: the row must
+// be a runtime row of the same backend, and the observed conversation is
+// admitted on its own validity because the row has none to compare against.
+func firstBindOptions() []backend.MatchOption {
+	return []backend.MatchOption{
+		backend.RequireRuntime(backend.Herdr), backend.AllowUnboundAgentSession(),
+	}
+}
+
 func uniqueHerdrSessionObservation(
 	pane state.Pane,
 	live []backend.LivePane,
 ) (backend.LivePane, bool) {
-	var matched backend.LivePane
-	count := 0
-	for _, current := range live {
-		if sessionview.HerdrPaneMatchesForSessionBinding(pane, current) {
-			matched = current
-			count++
-		}
-	}
-	return matched, count == 1
+	return pane.RuntimeBinding().UniqueLive(live, firstBindOptions()...)
 }
 
 func countHerdrRowsForObservation(panes []state.Pane, current backend.LivePane) int {
 	count := 0
 	for _, pane := range panes {
-		if sessionview.HerdrPaneMatchesForSessionBinding(pane, current) {
+		if FirstBindMatches(pane, current) {
 			count++
 		}
 	}

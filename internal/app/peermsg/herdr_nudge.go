@@ -3,12 +3,10 @@ package peermsg
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/herdrprocess"
-	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
@@ -129,17 +127,8 @@ func verifyHerdrNudgeProcess(ctx context.Context, runtime HerdrNudger, pane stat
 }
 
 func uniqueHerdrNudgePane(recorded state.Pane, panes []backend.LivePane) bool {
-	matches := 0
-	for _, pane := range panes {
-		if herdrNudgePaneMatches(recorded, pane) {
-			matches++
-		}
-	}
-	return matches == 1
-}
-
-func herdrNudgePaneMatches(recorded state.Pane, current backend.LivePane) bool {
-	return sessionview.HerdrPaneMatches(recorded, current)
+	_, ok := recorded.RuntimeBinding().UniqueLive(panes)
+	return ok
 }
 
 func recheckHerdrNudgeState(ctx context.Context, recorded state.Pane, deps Deps) (state.Pane, string, error) {
@@ -189,35 +178,17 @@ func uniqueHerdrNudgeRow(store state.Store, rowKey string) (state.Pane, bool) {
 }
 
 func sameHerdrNudgeBinding(left, right state.Pane) bool {
-	checks := []bool{
-		left.Parent == right.Parent, left.IssueNum == right.IssueNum, left.TaskID == right.TaskID,
-		left.Backend == right.Backend, left.PaneID == right.PaneID,
-		left.HerdrWorkspaceID == right.HerdrWorkspaceID,
-		left.HerdrWorkspaceLabel == right.HerdrWorkspaceLabel,
-		left.HerdrTerminalID == right.HerdrTerminalID, left.HerdrRepoKey == right.HerdrRepoKey,
-		left.HerdrAgentID == right.HerdrAgentID, left.HerdrSession == right.HerdrSession,
-		left.HerdrSocketPath == right.HerdrSocketPath,
-		sameAgentSession(left.HerdrAgentSession, right.HerdrAgentSession),
-		left.Agent == right.Agent, left.WorktreePath == right.WorktreePath,
-		left.EmitterRowKey == right.EmitterRowKey, left.LaunchNonce == right.LaunchNonce,
-		left.EmitterNonce == right.EmitterNonce,
-		left.HerdrLaunchExecutable == right.HerdrLaunchExecutable,
-		slices.Equal(left.HerdrLaunchArgs, right.HerdrLaunchArgs),
-	}
-	return !slices.Contains(checks, false)
+	return left.RuntimeBinding().Equal(right.RuntimeBinding())
 }
 
-func sameAgentSession(left, right *backend.AgentSessionRef) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
-}
-
+// herdrNudgeTarget builds the runtime prompt target out of the same recorded
+// binding every preflight gate compared, so the prompt cannot be addressed to
+// an identity the gates never saw.
 func herdrNudgeTarget(pane state.Pane) backend.NudgeTarget {
+	binding := pane.RuntimeBinding()
 	return backend.NudgeTarget{
-		Ref: paneRef(pane), SessionID: pane.HerdrSession, SocketPath: pane.HerdrSocketPath,
-		TerminalID: pane.HerdrTerminalID, AgentID: pane.HerdrAgentID,
-		AgentSession: pane.HerdrAgentSession,
+		Ref: binding.Ref, SessionID: binding.SessionID, SocketPath: binding.SocketPath,
+		TerminalID: binding.TerminalID, AgentID: binding.AgentID,
+		AgentSession: binding.AgentSession,
 	}
 }
