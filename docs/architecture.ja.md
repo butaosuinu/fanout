@@ -169,11 +169,6 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 
 ## 既知の残課題(burn-down リスト)
 
-- `internal/infra/team/path_test.go` が `internal/app/briefing` を import
-  している(infra -> app)。DB パスと `briefing.Path` が同じ親 slug を導出する
-  ことを固定した副作用で、`internal/arch/godep-cruiser-baseline.json` に
-  登録済み。フィクスチャを decouple すれば解消できる(import が消えれば
-  baseline が stale エラーになり、エントリ削除を強制する)。
 - `state` パッケージは `Store` 型と `Load`/`Save` の IO が同居している。
 - `sessionview` は純粋な集約ロジックと `Collectors` の IO 束が同じパッケージ
   にある。

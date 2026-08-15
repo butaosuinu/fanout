@@ -29,10 +29,9 @@ import (
 // rule.
 //
 // godep-cruiser-baseline.json grandfathers violations that predate the rules;
-// entries whose violation is gone fail as stale, forcing deletion. Current
-// entries: internal/infra/team/path_test.go -> internal/app/briefing pins
-// that the team DB path and briefing.Path derive the same parent slug;
-// decouple that fixture to remove both entries.
+// entries whose violation is gone fail as stale, forcing deletion. It is
+// currently empty: every import satisfies the rules as written, so a new
+// violation fails the build instead of being suppressed.
 func TestArchitecture(t *testing.T) {
 	root, err := repoRoot()
 	if err != nil {

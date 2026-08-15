@@ -1,14 +1,3 @@
 {
-  "entries": [
-    {
-      "rule": "layer-infra-outward",
-      "from": "internal/infra/team/path_test.go",
-      "to": "github.com/butaosuinu/fanout/internal/app/briefing"
-    },
-    {
-      "rule": "not-in-allowed",
-      "from": "internal/infra/team/path_test.go",
-      "to": "github.com/butaosuinu/fanout/internal/app/briefing"
-    }
-  ]
+  "entries": []
 }
