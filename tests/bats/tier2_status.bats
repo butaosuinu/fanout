@@ -43,48 +43,11 @@ load helpers
 # lock. Black-box runs have neither, so these cases pin the offline half: how
 # far each command gets, and that it issues no herdr command on the way.
 
-# Copy an in-tree Herdr fixture into the per-test tmpdir and rewrite the
-# placeholder repository paths in its state.json to the paths the git shim
-# reports for that copy. herdrRepoKey / herdrRepoRoot are compared against
-# `git rev-parse` output after symlink resolution, so both must be the
-# physical path (BATS_TEST_TMPDIR lives under a symlinked /var on macOS).
-materialize_herdr_fixture() {
-  local name="$1"
-  local source="$TESTS_DIR/fixtures/$name"
-  local dir="$BATS_TEST_TMPDIR/fixture"
-  local root common
-
-  cp -R "$source" "$dir"
-  export FIXTURE_DIR="$dir"
-  mkdir -p "$dir/project_root/.fixture-git-common"
-  root="$(cd "$dir/project_root" && pwd -P)"
-  common="$(cd "$dir/project_root/.fixture-git-common" && pwd -P)"
-  sed -e "s|/tmp/herdr-status-repo/.git|$common|" \
-      -e "s|/tmp/herdr-status-repo|$root|" \
-      -e "s|/tmp/herdr-status-child|$root/child|" \
-      "$source/project_root/.fanout/state.json" > "$root/.fanout/state.json"
-  export HERDR_SHIM_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
-}
-
-# Assert the herdr shim logged exactly these argv lines, in order. With no
-# arguments it asserts that fanout issued no herdr command at all.
-assert_herdr_argv() {
-  local expected="" actual
-  if [[ $# -gt 0 ]]; then
-    printf -v expected '%s\n' "$@"
-    expected="${expected%$'\n'}"
-  fi
-  actual="$(cat "$HERDR_SHIM_LOG" 2>/dev/null || true)"
-  if [[ "$actual" != "$expected" ]]; then
-    printf 'herdr argv log mismatch\n--- want ---\n%s\n--- got ---\n%s\n' \
-      "$expected" "$actual" >&2
-    return 1
-  fi
-}
+# materialize_herdr_fixture and assert_herdr_argv live in helpers.bash, which
+# also arms HERDR_SHIM_LOG as an empty per-test file.
 
 @test "scenario-herdr-status: reporting a Herdr row issues no herdr command" {
   use_fixture scenario-herdr-status
-  export HERDR_SHIM_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
   run_fanout_status 524
   assert_success
   assert_herdr_argv
@@ -94,7 +57,6 @@ assert_herdr_argv() {
   use_fixture scenario-herdr-cleanup-incomplete
   cp -R "$FIXTURE_DIR" "$BATS_TEST_TMPDIR/fixture"
   export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
-  export HERDR_SHIM_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
   run_fanout 524 --cleanup
   [ "$status" -eq 1 ]
   assert_golden scenario-herdr-cleanup-incomplete cleanup
@@ -104,8 +66,15 @@ assert_herdr_argv() {
 # scenario-herdr-owned-absent carries a complete Herdr identity whose repo key
 # and repo root match the checkout, so --cleanup / --close / --merge get past
 # every offline identity check and stop only because no fanout-owned Herdr
-# server exists. The mutation each command would issue next sits directly
-# behind that gate, so a reordering shows up here as a non-empty argv log.
+# server exists. The golden's owned-session error text is what pins the gate:
+# it names the exact check each command stopped at.
+#
+# The argv log is a narrower guard. Owned-route calls exec the admitted binary
+# by absolute path under a hermetic control environment that carries neither
+# PATH nor HERDR_SHIM_LOG (internal/infra/herdrrun/herdrrun.go routeEnvironment),
+# so they would never reach this shim or this log in the first place. What an
+# empty log rules out is a PATH-reachable `herdr` invocation — a probe issued
+# before the owned session is opened.
 
 @test "scenario-herdr-owned-absent: cleanup stops at the owned-session gate" {
   materialize_herdr_fixture scenario-herdr-owned-absent
@@ -133,27 +102,102 @@ assert_herdr_argv() {
 
 # --- herdr shim contract ----------------------------------------------------
 #
-# The cases above assert an empty argv log, so they only mean something if a
-# non-empty one fails and if the shim can in fact answer a mutation verb.
-# These pin both, and cover the verbs no black-box run reaches on its own.
+# The cases above assert an empty argv log, so they only mean something if
+# every way that assertion could pass by accident fails instead — a recorded
+# command, an unarmed log, a blank line from a zero-argument call — and if the
+# shim can in fact answer the verbs it claims to. These pin both, and cover the
+# verbs and the failure injection no black-box run reaches on its own.
 
 @test "herdr shim: a recorded command fails the empty-argv assertion" {
-  export HERDR_SHIM_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
   printf 'workspace close workspace-528\n' > "$HERDR_SHIM_LOG"
   run assert_herdr_argv
   [ "$status" -ne 0 ]
   [[ "$output" == *"workspace close workspace-528"* ]]
 }
 
+@test "herdr shim: an unarmed argv log fails instead of passing vacuously" {
+  rm -f "$HERDR_SHIM_LOG"
+  run assert_herdr_argv
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"never armed"* ]]
+}
+
+@test "herdr shim: a zero-argument call is not an empty log" {
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  mkdir -p "$FIXTURE_DIR"
+  run bash -c 'herdr 2>&1'
+  [ "$status" -eq 1 ]
+  # The blank argv line the shim logged must not read as "no command issued".
+  run assert_herdr_argv
+  [ "$status" -ne 0 ]
+}
+
+# Mutations carry the session in HERDR_SESSION, so this pins the argv shape
+# production actually emits for one.
 @test "herdr shim: a mutation verb answers from its fixture and logs its argv" {
   export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
-  export HERDR_SHIM_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
+  export HERDR_SESSION=fixture-session
   mkdir -p "$FIXTURE_DIR"
   printf '{"id":"cli:workspace:create"}\n' > "$FIXTURE_DIR/herdr-workspace-create.json"
-  run herdr --session fixture-session workspace create --cwd /repo --label child --no-focus
+  run herdr workspace create --cwd /repo --label child --no-focus
   assert_success
   [ "$output" = '{"id":"cli:workspace:create"}' ]
-  assert_herdr_argv "--session fixture-session workspace create --cwd /repo --label child --no-focus"
+  assert_herdr_argv "workspace create --cwd /repo --label child --no-focus"
+}
+
+# The status probe is the one call site that passes the session as a flag
+# (internal/infra/herdrrun/herdrrun.go), so the strip has to survive it.
+@test "herdr shim: --session is stripped before the status probe dispatches" {
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  mkdir -p "$FIXTURE_DIR"
+  printf '{"id":"cli:status"}\n' > "$FIXTURE_DIR/herdr-status.json"
+  run herdr --session fixture-session status --json
+  assert_success
+  [ "$output" = '{"id":"cli:status"}' ]
+  assert_herdr_argv "--session fixture-session status --json"
+}
+
+@test "herdr shim: --version still answers behind a --session prefix" {
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  mkdir -p "$FIXTURE_DIR"
+  printf 'herdr 0.7.5\n' > "$FIXTURE_DIR/herdr-version.txt"
+  run herdr --session fixture-session --version
+  assert_success
+  [ "$output" = "herdr 0.7.5" ]
+}
+
+@test "herdr shim: --session without a value dies instead of eating the verb" {
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  mkdir -p "$FIXTURE_DIR"
+  run bash -c 'herdr --session 2>&1'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--session needs a value: --session"* ]]
+}
+
+# Failure injection reaches the named probes too, not just the verbs whose
+# fixture file name is derived from argv.
+@test "herdr shim: the .exit override can reject the status probe" {
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  mkdir -p "$FIXTURE_DIR"
+  printf '{"error":{"code":"server_unavailable"}}\n' > "$FIXTURE_DIR/herdr-status.json"
+  printf 'herdr: server unavailable\n' > "$FIXTURE_DIR/herdr-status.err"
+  printf '4\n' > "$FIXTURE_DIR/herdr-status.exit"
+  run bash -c 'herdr --session fixture-session status --json 2>&1'
+  [ "$status" -eq 4 ]
+  [[ "$output" == *"herdr: server unavailable"* ]]
+  [[ "$output" == *'"server_unavailable"'* ]]
+}
+
+# A .err with no .exit is a half-written injection: the verb would answer 0
+# with the rejection text on stderr, which reads as success to the Go side.
+@test "herdr shim: an orphan .err fails loudly instead of being ignored" {
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  mkdir -p "$FIXTURE_DIR"
+  printf '{"id":"cli:status"}\n' > "$FIXTURE_DIR/herdr-status.json"
+  printf 'herdr: server unavailable\n' > "$FIXTURE_DIR/herdr-status.err"
+  run bash -c 'herdr --session fixture-session status --json 2>&1'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"has no matching herdr-status.exit"* ]]
 }
 
 @test "herdr shim: the .exit override replays a rejection envelope" {

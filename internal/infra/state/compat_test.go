@@ -157,22 +157,35 @@ func TestStateCompatRoundTripWritesEveryJSONKey(t *testing.T) {
 	}
 }
 
-// TestStateCompatRoundTripKeepsLegacyRowMinimal pins omitempty on the additive
-// fields: rewriting an old store must not grow keys an older binary would
-// reject or misread.
+// TestStateCompatRoundTripKeepsLegacyRowMinimal pins omitempty on every
+// additive field at once: rewriting an old store must not grow a single key
+// beyond the ones that store already had, because an older binary would reject
+// or misread them. The absent set is derived from the fixture rather than
+// listed, so a new persisted field is covered the moment it is added.
 func TestStateCompatRoundTripKeepsLegacyRowMinimal(t *testing.T) {
 	root := stageCompatFixture(t)
+	before := fixturePaneKeys(t)[0]
 	saveCompatFixture(t, root)
 	rows := writtenPaneKeys(t, root)
 
-	for _, key := range []string{
-		"backend", "shellKey", "taskId", "baseBranch", "runtimeParent", "kind",
-		"herdrWorkspaceId", "herdrAgentSession", "herdrProcessIdentity",
-		"herdrLaunchArgs", "codexPlanMode", "reported_state",
-	} {
+	for _, key := range compatPersistedKeys {
+		if _, had := before[key]; had {
+			continue
+		}
 		t.Run(key, func(t *testing.T) {
 			if _, ok := rows[0][key]; ok {
 				t.Fatalf("save(state.json) panes[0] keys = %v, did not want %q",
+					slices.Sorted(maps.Keys(rows[0])), key)
+			}
+		})
+	}
+	// The keys the fixture did carry must survive; otherwise "no new keys"
+	// would also pass for a writer that dropped the row's contents. Sorted so
+	// the subtests run in a stable order.
+	for _, key := range slices.Sorted(maps.Keys(before)) {
+		t.Run("keeps "+key, func(t *testing.T) {
+			if _, ok := rows[0][key]; !ok {
+				t.Fatalf("save(state.json) panes[0] keys = %v, want %q",
 					slices.Sorted(maps.Keys(rows[0])), key)
 			}
 		})
@@ -187,14 +200,19 @@ func TestPaneJSONTagsAreFrozen(t *testing.T) {
 	got := make([]string, 0, paneType.NumField())
 	for field := range paneType.Fields() {
 		key, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		// json:"-" fields are never persisted (MergedStateLoader fills
+		// SourceProjectRoot / SourceProjectRoots in memory), so how many there
+		// are and where they sit is not part of the on-disk schema. An
+		// untagged exported field yields "" instead and stays in `got`, where
+		// it fails as an unaccounted persisted key.
+		if key == "-" {
+			continue
+		}
 		got = append(got, key)
 	}
-	// SourceProjectRoot and SourceProjectRoots are the two non-persisted
-	// aggregation fields MergedStateLoader fills in; they stay json:"-".
-	want := append(slices.Clone(compatPersistedKeys), "-", "-")
 
-	if !slices.Equal(got, want) {
-		t.Fatalf("json tags of Pane = %v, want %v", got, want)
+	if !slices.Equal(got, compatPersistedKeys) {
+		t.Fatalf("json tags of Pane = %v, want %v", got, compatPersistedKeys)
 	}
 }
 
@@ -248,7 +266,19 @@ func saveCompatFixture(t *testing.T, root string) {
 // the key bytes the writer emitted rather than the struct that produced them.
 func writtenPaneKeys(t *testing.T, root string) []map[string]json.RawMessage {
 	t.Helper()
-	data, err := os.ReadFile(Path(root))
+	return decodePaneKeys(t, Path(root))
+}
+
+// fixturePaneKeys decodes the committed fixture's rows, so a test can compare
+// against the key set an older binary actually wrote.
+func fixturePaneKeys(t *testing.T) []map[string]json.RawMessage {
+	t.Helper()
+	return decodePaneKeys(t, filepath.Join("testdata", compatFixture))
+}
+
+func decodePaneKeys(t *testing.T, path string) []map[string]json.RawMessage {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,11 +287,11 @@ func writtenPaneKeys(t *testing.T, root string) []map[string]json.RawMessage {
 		Panes         []map[string]json.RawMessage `json:"panes"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("save(%s) wrote invalid JSON: %v\n%s", Path(root), err, data)
+		t.Fatalf("%s is invalid JSON: %v\n%s", path, err, data)
 	}
 	if raw.SchemaVersion != SchemaVersion || len(raw.Panes) != 2 {
-		t.Fatalf("save(%s) = schemaVersion %d with %d panes, want %d with 2",
-			Path(root), raw.SchemaVersion, len(raw.Panes), SchemaVersion)
+		t.Fatalf("%s = schemaVersion %d with %d panes, want %d with 2",
+			path, raw.SchemaVersion, len(raw.Panes), SchemaVersion)
 	}
 	return raw.Panes
 }

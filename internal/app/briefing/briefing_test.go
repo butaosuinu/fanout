@@ -23,6 +23,18 @@ func TestTaskPathUsesPlanTaskNamespace(t *testing.T) {
 	}
 }
 
+// The briefing and the --team DB must agree on the repo slug so that operators
+// can correlate .fanout/briefings/fanout-<repo>-<N>.md with
+// /tmp/fanout-<repo>-<parent>.db. This is the app-side half of that pin; the
+// infra side is internal/infra/team.TestDBPathMatchesBriefingRepoSlug, which
+// inlines the format because infra must not import internal/app/briefing.
+func TestPathUsesRepoSlugSharedWithTeamDB(t *testing.T) {
+	got := filepath.Base(Path("/some/where/myrepo", 68))
+	if want := "fanout-myrepo-68.md"; got != want {
+		t.Fatalf("filepath.Base(Path(%q, 68)) = %q, want %q", "/some/where/myrepo", got, want)
+	}
+}
+
 func TestPRVisualizationSectionHonorsSettings(t *testing.T) {
 	defaults := settings.Defaults()
 	for _, agent := range []string{"claude", "codex"} {
