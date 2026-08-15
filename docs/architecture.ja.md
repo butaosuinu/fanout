@@ -155,9 +155,11 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   precedence 解決・具象構築・self-exec registry・telemetry observer をここに
   集める。`internal/app` は core の backend 型と自分の port しか名指さず、
   `cmd/fanout` は `paneruntime` 経由で組み立てる。別の層に `switch` を増やすと
-  runtime 追加のたびに散らばった分岐を数える羽目になる。残債は app shell lane
-  の `tmuxrun` 直呼び(後続フェーズで `Backend.Launch` / capability 経由化)
-  のみ。
+  runtime 追加のたびに散らばった分岐を数える羽目になる。`internal/app` と
+  `cmd` からの辺は godep-cruiser の `app-no-runtime-adapters` /
+  `cmd-no-runtime-adapters` が禁じる(test は対象外 — 実 adapter の挙動を
+  直接ドライブする test があるため)。`internal/ui` はまだ辺が残るので
+  ルール化していない(burn-down リスト参照)。
 - **runtime ごとの差は capability の有無で表す**: console の入場経路
   (`ConsoleHost` があれば session を立てて端末を繋ぐ、無ければ owned session の
   attach コマンドを渡す)、restore の配線(`RestoreOps`)、popup / global
@@ -202,10 +204,31 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 - `state` パッケージは `Store` 型と `Load`/`Save` の IO が同居している。
 - `sessionview` は純粋な集約ロジックと `Collectors` の IO 束が同じパッケージ
   にある。
-- `shellQuote` の実装が `app/run` / `app/panelaunch` / `infra/tmuxrun` の
-  3 箇所にある。
+- POSIX shell quote が同一アルゴリズムで 4 箇所にある:
+  `core/backend.PreviewQuote` / `core/agent.ShellQuote` / `app/run.ShellQuote`
+  / `infra/tmuxrun.shellQuote`。dry-run preview 側は解消済みで、
+  `app/panelaunch.shellQuote` は `PreviewQuote` への委譲 1 行になっている。
+  `infra/herdrrun.shellQuote` は常時 quote する別アルゴリズムで、これは重複
+  ではない。
+- `internal/ui` から `infra/tmuxrun` への直接 import が 4 本残る
+  (`ui/tui/{issues,tui}.go`、`ui/dashboard/{server,peek}.go`)。app / cmd は
+  capability 経由に寄せ切って godep-cruiser で塞いだが、ui は未着手のため
+  `ui-no-runtime-adapters` を入れていない。辺が消えた時点でルールを足す。
+- `LivePane` が `core/backend` と `infra/tmuxrun` に二重定義されている。
+  tmuxrun 側は tmux 固有 field を持つが、大半は core 側と同じ形なので
+  統合候補。
+- close の結果型が `backend.ClosePaneStatus`(Closed/Stale/Failed)と
+  `backend.CloseStatus`(Confirmed/Stale/Failed)に分かれている。
+  `tmuxbackend.CloseOwned` が 1 対 1 で写しているだけなので畳める。
+- `core/agent/claude_hooks.go` が `tmux set-option` のコマンド文字列を
+  `infra/tmuxrun.AgentStateSetCommand` と重複して持つ。core は infra を
+  import できないための意図的な重複で、両者は byte-exact テストで同期して
+  いる。backend が `AgentStateCommand` を capability として渡せるように
+  なれば解消できる。
 - `app` から `infra` への直接 import は既存分を容認するが、新規コードは
-  `watch.IO` のような port 経由を優先する。
+  `watch.IO` のような port 経由を優先する。具象 runtime adapter
+  (`tmuxrun` / `tmuxbackend` / `herdrrun`)への辺だけは容認をやめ、
+  godep-cruiser のルールで塞いだ。
 
 ## 新規パッケージの追加手順
 
