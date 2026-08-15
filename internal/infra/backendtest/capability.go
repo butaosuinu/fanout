@@ -86,6 +86,78 @@ func (m layoutMixin) Relayout(target string, trigger backend.LayoutTrigger) erro
 	return nil
 }
 
+type popupMixin struct{ *Fake }
+
+// CurrentClientSize records the measurement and returns WithClientSize.
+func (m popupMixin) CurrentClientSize() (backend.ClientSize, error) {
+	m.record(MethodCurrentClientSize)
+	return m.clientSize, m.clientSizeErr
+}
+
+// PaneGeometryForPane records the measured pane and returns WithPaneGeometry.
+func (m popupMixin) PaneGeometryForPane(paneID string) (backend.PaneGeometry, error) {
+	m.record(MethodPaneGeometryForPane, paneID)
+	return m.paneGeometry, m.paneGeometryErr
+}
+
+// ShowPopup records the popup invocation and applies WithPopupError.
+func (m popupMixin) ShowPopup(opts backend.PopupOptions) error {
+	m.record(MethodShowPopup, opts)
+	return m.popupErr
+}
+
+// NotifyViewer records the viewer-scoped status line message.
+func (m popupMixin) NotifyViewer(viewerID, message string) error {
+	m.record(MethodNotifyViewer, viewerID, message)
+	return nil
+}
+
+type shortcutMixin struct{ *Fake }
+
+// BindDashboardShortcuts records the dashboard shortcut registration.
+func (m shortcutMixin) BindDashboardShortcuts(prefixKey, directKey, fanoutBin string) error {
+	m.record(MethodBindDashboardShortcuts, prefixKey, directKey, fanoutBin)
+	return m.shortcutErr
+}
+
+// UnbindDashboardShortcuts records the dashboard shortcut removal.
+func (m shortcutMixin) UnbindDashboardShortcuts(prefixKey, directKey string) error {
+	m.record(MethodUnbindDashboardShortcuts, prefixKey, directKey)
+	return m.shortcutErr
+}
+
+// BindConsoleShortcuts records the console-return shortcut registration.
+func (m shortcutMixin) BindConsoleShortcuts(prefixKey, directKey, fanoutBin string) error {
+	m.record(MethodBindConsoleShortcuts, prefixKey, directKey, fanoutBin)
+	return m.shortcutErr
+}
+
+// UnbindConsoleShortcuts records the console-return shortcut removal.
+func (m shortcutMixin) UnbindConsoleShortcuts(prefixKey, directKey string) error {
+	m.record(MethodUnbindConsoleShortcuts, prefixKey, directKey)
+	return m.shortcutErr
+}
+
+// BindWorktreeActionShortcut records the worktree-action shortcut registration.
+func (m shortcutMixin) BindWorktreeActionShortcut(key, fanoutBin string) error {
+	m.record(MethodBindWorktreeActionShortcut, key, fanoutBin)
+	return m.shortcutErr
+}
+
+// UnbindWorktreeActionShortcut records the worktree-action shortcut removal.
+func (m shortcutMixin) UnbindWorktreeActionShortcut(key string) error {
+	m.record(MethodUnbindWorktreeActionShortcut, key)
+	return m.shortcutErr
+}
+
+type consoleFocusMixin struct{ *Fake }
+
+// FocusPaneForViewer records the viewer-scoped focus switch.
+func (m consoleFocusMixin) FocusPaneForViewer(viewerID string, ref backend.PaneRef) error {
+	m.record(MethodFocusPaneForViewer, viewerID, ref)
+	return m.focusViewerErr
+}
+
 // DecoratorFake is a backend whose only capability is PaneDecorator.
 type DecoratorFake struct {
 	*Fake
@@ -108,6 +180,16 @@ type LivenessFake struct {
 	freshCloseMixin
 }
 
+// HostFake carries the three console host capabilities and none of the launch
+// ones: it is the shape a runtime that only lends its terminal to fanout's own
+// console has.
+type HostFake struct {
+	*Fake
+	popupMixin
+	shortcutMixin
+	consoleFocusMixin
+}
+
 // TmuxFake carries every capability, matching the shape of the tmux backend.
 type TmuxFake struct {
 	*Fake
@@ -117,6 +199,9 @@ type TmuxFake struct {
 	ownedCloseMixin
 	previewMixin
 	layoutMixin
+	popupMixin
+	shortcutMixin
+	consoleFocusMixin
 }
 
 var (
@@ -124,12 +209,18 @@ var (
 	_ backend.FreshCloser     = FreshCloserFake{}
 	_ backend.LivenessStamper = LivenessFake{}
 	_ backend.FreshCloser     = LivenessFake{}
+	_ backend.PopupHost       = HostFake{}
+	_ backend.ShortcutBinder  = HostFake{}
+	_ backend.ConsoleFocus    = HostFake{}
 	_ backend.PaneDecorator   = TmuxFake{}
 	_ backend.LivenessStamper = TmuxFake{}
 	_ backend.FreshCloser     = TmuxFake{}
 	_ backend.OwnedCloser     = TmuxFake{}
 	_ backend.DryRunPreviewer = TmuxFake{}
 	_ backend.LayoutManager   = TmuxFake{}
+	_ backend.PopupHost       = TmuxFake{}
+	_ backend.ShortcutBinder  = TmuxFake{}
+	_ backend.ConsoleFocus    = TmuxFake{}
 )
 
 // NewDecorator returns a fake that decorates panes and nothing else.
@@ -151,16 +242,31 @@ func NewLiveness(opts ...Option) *LivenessFake {
 	return &LivenessFake{Fake: f, stampMixin: stampMixin{f}, freshCloseMixin: freshCloseMixin{f}}
 }
 
+// NewHost returns a fake that lends its terminal to fanout's console — popups,
+// global shortcuts, and viewer-scoped focus — and carries no launch capability.
+func NewHost(opts ...Option) *HostFake {
+	f := New(opts...)
+	return &HostFake{
+		Fake:              f,
+		popupMixin:        popupMixin{f},
+		shortcutMixin:     shortcutMixin{f},
+		consoleFocusMixin: consoleFocusMixin{f},
+	}
+}
+
 // NewTmux returns a fully capable, tmux-shaped fake.
 func NewTmux(opts ...Option) *TmuxFake {
 	f := New(opts...)
 	return &TmuxFake{
-		Fake:            f,
-		decorateMixin:   decorateMixin{f},
-		stampMixin:      stampMixin{f},
-		freshCloseMixin: freshCloseMixin{f},
-		ownedCloseMixin: ownedCloseMixin{f},
-		previewMixin:    previewMixin{f},
-		layoutMixin:     layoutMixin{f},
+		Fake:              f,
+		decorateMixin:     decorateMixin{f},
+		stampMixin:        stampMixin{f},
+		freshCloseMixin:   freshCloseMixin{f},
+		ownedCloseMixin:   ownedCloseMixin{f},
+		previewMixin:      previewMixin{f},
+		layoutMixin:       layoutMixin{f},
+		popupMixin:        popupMixin{f},
+		shortcutMixin:     shortcutMixin{f},
+		consoleFocusMixin: consoleFocusMixin{f},
 	}
 }

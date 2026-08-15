@@ -15,8 +15,9 @@ import (
 
 // Backend is the tmux implementation of backend.Backend.
 //
-// Popup/key bindings and session management are intentionally outside this
-// adapter. They remain tmux-only UI concerns.
+// Popups, global key shortcuts, and viewer-scoped focus are optional host
+// capabilities rather than part of the base contract; their tmux delegations
+// live in host.go. Session management stays outside the adapter entirely.
 type Backend struct{}
 
 var (

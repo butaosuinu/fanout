@@ -365,6 +365,23 @@ func TestBackendOffersNoTmuxOnlyPaneCapability(t *testing.T) {
 	}
 }
 
+// Popups, global key shortcuts, and viewer-scoped focus are the host surfaces
+// fanout's own console asks a runtime for. Herdr offers none, which is how the
+// console hides those actions instead of discovering at keypress time that the
+// tmux commands behind them do nothing.
+func TestBackendOffersNoConsoleHostCapability(t *testing.T) {
+	b := New("fanout-test", "/tmp/herdr.sock")
+	if _, ok := corebackend.AsPopupHost(b); ok {
+		t.Fatal("AsPopupHost(herdr backend) reported a capability, want absent")
+	}
+	if _, ok := corebackend.AsShortcutBinder(b); ok {
+		t.Fatal("AsShortcutBinder(herdr backend) reported a capability, want absent")
+	}
+	if _, ok := corebackend.AsConsoleFocus(b); ok {
+		t.Fatal("AsConsoleFocus(herdr backend) reported a capability, want absent")
+	}
+}
+
 // The dry-run preview is pinned byte-for-byte by
 // tests/golden/scenario-herdr-dry-run.dry-run.txt, so these expectations are
 // full lines, not substrings.

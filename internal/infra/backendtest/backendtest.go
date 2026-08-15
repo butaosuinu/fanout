@@ -40,6 +40,18 @@ const (
 	MethodStampPaneShellKey      = "StampPaneShellKey"
 	MethodPreviewLaunch          = "PreviewLaunch"
 	MethodRelayout               = "Relayout"
+
+	MethodCurrentClientSize            = "CurrentClientSize"
+	MethodPaneGeometryForPane          = "PaneGeometryForPane"
+	MethodShowPopup                    = "ShowPopup"
+	MethodNotifyViewer                 = "NotifyViewer"
+	MethodBindDashboardShortcuts       = "BindDashboardShortcuts"
+	MethodUnbindDashboardShortcuts     = "UnbindDashboardShortcuts"
+	MethodBindConsoleShortcuts         = "BindConsoleShortcuts"
+	MethodUnbindConsoleShortcuts       = "UnbindConsoleShortcuts"
+	MethodBindWorktreeActionShortcut   = "BindWorktreeActionShortcut"
+	MethodUnbindWorktreeActionShortcut = "UnbindWorktreeActionShortcut"
+	MethodFocusPaneForViewer           = "FocusPaneForViewer"
 )
 
 // Call is one recorded invocation. Args holds the method's arguments in
@@ -70,6 +82,16 @@ type Fake struct {
 	ownedResult  backend.CloseResult
 	ownedErr     error
 	previewLines []string
+
+	livePanes       []backend.LivePane
+	livePanesErr    error
+	clientSize      backend.ClientSize
+	clientSizeErr   error
+	paneGeometry    backend.PaneGeometry
+	paneGeometryErr error
+	popupErr        error
+	shortcutErr     error
+	focusViewerErr  error
 
 	mu        sync.Mutex
 	calls     []Call
@@ -147,6 +169,52 @@ func WithPreviewLines(lines ...string) Option {
 	return func(f *Fake) { f.previewLines = lines }
 }
 
+// WithLivePanes sets the observation ListLive reports. Unset, the fake reports
+// no live panes.
+func WithLivePanes(panes ...backend.LivePane) Option {
+	return func(f *Fake) { f.livePanes = panes }
+}
+
+// WithListLiveError fails every ListLive.
+func WithListLiveError(err error) Option {
+	return func(f *Fake) { f.livePanesErr = err }
+}
+
+// WithClientSize sets the viewer size the PopupHost capability measures, and
+// the error it reports instead. It is meaningful only on a shape that carries
+// that capability.
+func WithClientSize(size backend.ClientSize, err error) Option {
+	return func(f *Fake) {
+		f.clientSize = size
+		f.clientSizeErr = err
+	}
+}
+
+// WithPaneGeometry sets the pane bounds the PopupHost capability measures, and
+// the error it reports instead.
+func WithPaneGeometry(geometry backend.PaneGeometry, err error) Option {
+	return func(f *Fake) {
+		f.paneGeometry = geometry
+		f.paneGeometryErr = err
+	}
+}
+
+// WithPopupError fails every ShowPopup.
+func WithPopupError(err error) Option {
+	return func(f *Fake) { f.popupErr = err }
+}
+
+// WithShortcutError fails every bind and unbind on the ShortcutBinder
+// capability, the way an absent or too-old runtime server does.
+func WithShortcutError(err error) Option {
+	return func(f *Fake) { f.shortcutErr = err }
+}
+
+// WithFocusViewerError fails the ConsoleFocus capability.
+func WithFocusViewerError(err error) Option {
+	return func(f *Fake) { f.focusViewerErr = err }
+}
+
 // Name reports the configured backend name.
 func (f *Fake) Name() backend.Name { return f.name }
 
@@ -187,11 +255,12 @@ func (f *Fake) ReleaseStartGate(gate string) error {
 	return nil
 }
 
-// ListLive reports no live panes; liveness observation is out of scope for the
-// launch orchestration this fake serves.
+// ListLive reports the observation WithLivePanes configured. Unset, it reports
+// none, which is what the launch orchestration this fake was first written for
+// expects.
 func (f *Fake) ListLive() ([]backend.LivePane, error) {
 	f.record(MethodListLive)
-	return nil, nil
+	return f.livePanes, f.livePanesErr
 }
 
 // Read returns empty pane output.
