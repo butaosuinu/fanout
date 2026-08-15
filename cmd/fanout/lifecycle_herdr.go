@@ -20,12 +20,12 @@ func runtimeLifecycleOptions(projectRoot, statePath string, hookConfig hooks.Con
 		StatePath:    statePath,
 		Hooks:        hookConfig,
 		CloseOwned:   runtimeBackend.CloseOwned,
-		HerdrRuntime: newHerdrLifecycleFactory(projectRoot),
+		WorkspaceRuntime: newHerdrLifecycleFactory(projectRoot),
 	}
 }
 
-func newHerdrLifecycleFactory(projectRoot string) lifecycle.HerdrRuntimeFactory {
-	return func(ctx context.Context, pane state.Pane) (lifecycle.HerdrRuntime, error) {
+func newHerdrLifecycleFactory(projectRoot string) lifecycle.WorkspaceRuntimeFactory {
+	return func(ctx context.Context, pane state.Pane) (lifecycle.WorkspaceRuntime, error) {
 		identity, err := worktree.ResolveRepoIdentity(ctx, projectRoot)
 		if err != nil {
 			return nil, err

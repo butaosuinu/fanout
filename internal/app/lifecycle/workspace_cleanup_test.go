@@ -60,7 +60,7 @@ func (f *fakeHerdrLifecycleRuntime) ObserveWorkspaces(context.Context) ([]backen
 
 func (f *fakeHerdrLifecycleRuntime) OpenWorktree(_ context.Context, req backend.WorktreeOpenRequest) (backend.WorktreeMutationResult, error) {
 	f.openCalls++
-	if herdrMutationDefinitelyNotIssued(f.openErr) {
+	if mutationDefinitelyNotIssued(f.openErr) {
 		return backend.WorktreeMutationResult{}, f.openErr
 	}
 	workspace := herdrLifecycleWorkspace("w-reopened", req.Label, req.Path, req.SourceRepoKey, req.SourceRepoRoot)
@@ -71,7 +71,7 @@ func (f *fakeHerdrLifecycleRuntime) OpenWorktree(_ context.Context, req backend.
 
 func (f *fakeHerdrLifecycleRuntime) RemoveWorktree(ctx context.Context, workspaceID, path string) error {
 	f.removeCalls++
-	if herdrMutationDefinitelyNotIssued(f.removeErr) {
+	if mutationDefinitelyNotIssued(f.removeErr) {
 		return f.removeErr
 	}
 	cmd := exec.CommandContext(ctx, "git", "-C", f.projectRoot, "worktree", "remove", path)
@@ -87,7 +87,7 @@ func (f *fakeHerdrLifecycleRuntime) RemoveWorktree(ctx context.Context, workspac
 
 func (f *fakeHerdrLifecycleRuntime) CloseWorkspace(_ context.Context, workspaceID string) error {
 	f.closeCalls++
-	if herdrMutationDefinitelyNotIssued(f.closeErr) {
+	if mutationDefinitelyNotIssued(f.closeErr) {
 		return f.closeErr
 	}
 	f.mutationDispatched = true
@@ -323,7 +323,7 @@ func TestHerdrReopenMatcherRejectsForeignWorkspaceAtSavedCheckout(t *testing.T) 
 		fixture.pane.RepoKey, fixture.pane.RepoRoot,
 	)
 	foreign := foreignHerdrWorkspaceAtSameCheckout(fixture)
-	predicate := herdrWorkspaceLabelPredicate(
+	predicate := workspaceLabelPredicate(
 		fixture.workspace.Label,
 		fixture.worktreePath,
 		fixture.pane.RepoKey,
@@ -459,7 +459,7 @@ func TestFindHerdrCoordinatorIntentPreservesPlanOwnerScope(t *testing.T) {
 		}
 	}()
 
-	intent, err := findHerdrCoordinatorIntent(locked, fixture.projectRoot, target)
+	intent, err := findCoordinatorIntent(locked, fixture.projectRoot, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -713,7 +713,7 @@ func TestHerdrCloseDoesNotChainWorkspaceCloseAfterAmbiguousRemove(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, intentID, err := herdrCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -781,7 +781,7 @@ func TestHerdrCloseDoesNotReplayIssuedRemoveAfterCrash(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	head := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
 	runHerdrLifecycleGit(t, fixture.projectRoot, "worktree", "remove", fixture.worktreePath)
-	_, intentID, err := herdrCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -801,7 +801,7 @@ func TestHerdrCloseDoesNotReplayIssuedRemoveAfterCrash(t *testing.T) {
 		BranchName: fixture.branch, FullBranchRef: "refs/heads/" + fixture.branch,
 		BaseBranch: fixture.pane.BaseBranch, ExpectedHead: head,
 		WorktreePath: fixture.worktreePath, BranchExisted: true,
-		WorkspaceLabel: fixture.workspace.Label, Resource: herdrResourceFromPane(fixture.pane),
+		WorkspaceLabel: fixture.workspace.Label, Resource: resourceFromPane(fixture.pane),
 		Session: fixture.pane.SessionID, SocketPath: fixture.pane.SocketPath,
 		ExpiresUnixMS: time.Now().Add(time.Minute).UnixMilli(), CleanupPhase: state.CleanupRemove,
 	})
@@ -831,11 +831,11 @@ func TestSavedHerdrCleanupRejectsChangedRuntimeIdentity(t *testing.T) {
 		Slug: fixture.pane.Slug, BranchName: fixture.pane.BranchName,
 		FullBranchRef: "refs/heads/" + fixture.pane.BranchName, BaseBranch: fixture.pane.BaseBranch,
 		WorktreePath: fixture.pane.WorktreePath, BranchExisted: true,
-		WorkspaceLabel: fixture.pane.WorkspaceLabel, Resource: herdrResourceFromPane(fixture.pane),
+		WorkspaceLabel: fixture.pane.WorkspaceLabel, Resource: resourceFromPane(fixture.pane),
 		Session: fixture.pane.SessionID, SocketPath: fixture.pane.SocketPath,
 	}
 	intent.Resource.TerminalID = "reused-terminal"
-	if err := validateSavedHerdrCleanup(intent, fixture.projectRoot, fixture.pane, CloseWorktree); err == nil {
+	if err := validateSavedWorkspaceCleanup(intent, fixture.projectRoot, fixture.pane, CloseWorktree); err == nil {
 		t.Fatal("saved cleanup accepted a changed runtime identity")
 	}
 }
@@ -1058,12 +1058,12 @@ func TestHerdrCloseEverythingReapsTaskStateAfterResourcesAreAlreadyAbsent(t *tes
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
-func herdrLifecycleOptions(fixture herdrLifecycleFixture, runtime HerdrRuntime) Options {
+func herdrLifecycleOptions(fixture herdrLifecycleFixture, runtime WorkspaceRuntime) Options {
 	return Options{
 		ProjectRoot: fixture.projectRoot,
 		StatePath:   state.Path(fixture.projectRoot),
 		Hooks:       hooks.EmptyConfig(),
-		HerdrRuntime: func(context.Context, state.Pane) (HerdrRuntime, error) {
+		WorkspaceRuntime: func(context.Context, state.Pane) (WorkspaceRuntime, error) {
 			return runtime, nil
 		},
 	}
@@ -1212,7 +1212,7 @@ func recordExpiredHerdrCleanupIntent(
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, intentID, err := herdrCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1223,7 +1223,7 @@ func recordExpiredHerdrCleanupIntent(
 		BranchName: fixture.pane.BranchName, FullBranchRef: "refs/heads/" + fixture.pane.BranchName,
 		BaseBranch: fixture.pane.BaseBranch, WorktreePath: filepath.Clean(fixture.pane.WorktreePath),
 		BranchCreated: fixture.pane.BranchCreated, BranchExisted: !fixture.pane.BranchCreated,
-		WorkspaceLabel: fixture.pane.WorkspaceLabel, Resource: herdrResourceFromPane(fixture.pane),
+		WorkspaceLabel: fixture.pane.WorkspaceLabel, Resource: resourceFromPane(fixture.pane),
 		Session: fixture.pane.SessionID, SocketPath: fixture.pane.SocketPath,
 		ExpiresUnixMS: time.Now().Add(-time.Minute).UnixMilli(), CleanupPhase: phase,
 	}
@@ -1254,7 +1254,7 @@ func recordExpiredHerdrCleanupIntent(
 
 func expireSavedHerdrCleanupIntent(t *testing.T, fixture herdrLifecycleFixture) {
 	t.Helper()
-	_, intentID, err := herdrCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1288,7 +1288,7 @@ func recordResidualHerdrLaunchIntent(
 	runtimeDir string,
 ) (string, string) {
 	t.Helper()
-	worktreeIntentID, _, err := herdrCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	worktreeIntentID, _, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1320,7 +1320,7 @@ func recordResidualHerdrLaunchIntent(
 		WorktreePath: fixture.pane.WorktreePath, BranchExisted: true,
 		WorkspaceLabel: fixture.pane.WorkspaceLabel,
 		Coordinator:    state.RuntimeResource{WorkspaceID: "coordinator"},
-		Resource:       herdrResourceFromPane(fixture.pane),
+		Resource:       resourceFromPane(fixture.pane),
 		Session:        fixture.pane.SessionID, SocketPath: fixture.pane.SocketPath,
 		ExpiresUnixMS: time.Now().Add(time.Minute).UnixMilli(),
 		Launch: &state.LaunchCapsule{
@@ -1468,7 +1468,7 @@ func assertHerdrCleanupIntentStatus(
 	wantFound bool,
 ) {
 	t.Helper()
-	_, intentID, err := herdrCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
 	if err != nil {
 		t.Fatal(err)
 	}

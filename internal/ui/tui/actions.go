@@ -239,7 +239,7 @@ func (m model) lifecycleActionRoutes(pane paneView) lifecycleActionRoutes {
 }
 
 func (m model) lifecycleOptions(root string) lifecycle.Options {
-	var herdrRuntime lifecycle.HerdrRuntimeFactory
+	var herdrRuntime lifecycle.WorkspaceRuntimeFactory
 	if m.opts.LifecycleHerdrRuntimeForRoot != nil {
 		herdrRuntime = m.opts.LifecycleHerdrRuntimeForRoot(root)
 	}
@@ -250,7 +250,7 @@ func (m model) lifecycleOptions(root string) lifecycle.Options {
 		WatcherRunningLabel: m.opts.WatcherRunningLabel,
 		RemoveIssueLabel:    ghissue.Runner{Cwd: m.opts.ProjectRoot}.RemoveIssueLabel,
 		CloseOwned:          m.opts.LifecycleCloseOwned,
-		HerdrRuntime:        herdrRuntime,
+		WorkspaceRuntime:        herdrRuntime,
 	}
 }
 

@@ -91,7 +91,7 @@ type Options struct {
 	// for state-backed closes. It keeps identity verification isolated from the
 	// mixed-backend display collector.
 	LifecycleCloseOwned          func(backend.CloseRequest) (backend.CloseResult, error)
-	LifecycleHerdrRuntimeForRoot func(string) lifecycle.HerdrRuntimeFactory
+	LifecycleHerdrRuntimeForRoot func(string) lifecycle.WorkspaceRuntimeFactory
 	ListRepoFiles                func(root string) ([]string, error)
 	Notifier                     transitionNotifier
 	lifecycle                    lifecycleRunner
