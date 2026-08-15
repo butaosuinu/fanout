@@ -52,9 +52,9 @@ const (
 	ClosePaneFailed
 )
 
-// ClosePaneResult reports whether ClosePaneIfOwned killed a confirmed pane or
-// safely treated its state row as stale. WindowID is set only for a confirmed
-// pane and lets lifecycle callers repair that window after the close.
+// ClosePaneResult reports whether an identity-checked close killed a confirmed
+// pane or safely treated its state row as stale. WindowID is set only for a
+// confirmed pane and lets lifecycle callers repair that window after the close.
 type ClosePaneResult struct {
 	Status   ClosePaneStatus
 	WindowID string

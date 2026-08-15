@@ -501,7 +501,7 @@ type LivePane struct {
 	// pane was created for. Degrades to "" when the listing fails.
 	Label string
 	// Role is @fanout_role, the auto-layout role fanout stamps on panes it
-	// manages (corebackend.RoleConsole for the TUI console). Like every pane user option it
+	// manages (backend.RoleConsole for the TUI console). Like every pane user option it
 	// is settable by the process inside the pane, so it is a display/UX signal,
 	// not a security boundary. It can also degrade to "": a failed role
 	// listing, or a forged duplicate row reusing this pane's id (see
@@ -539,7 +539,7 @@ type LivePane struct {
 // fails entirely, panes are returned with empty titles rather than failing the
 // sweep — titles are cosmetic, liveness is not.
 //
-// Distinct from ListPanes(target), which returns richer corebackend.PaneInfo for a single
+// Distinct from ListPanes(target), which returns richer backend.PaneInfo for a single
 // target; this one is the all-sessions id+cwd liveness sweep the dashboard needs.
 func ListLivePanes() ([]LivePane, error) {
 	return listLivePanes(false)

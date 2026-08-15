@@ -162,7 +162,7 @@ func SelectMainVertical(target string, mainPaneWidth int) error {
 	return nil
 }
 
-// SetPaneRole stamps a pane's auto-layout role (e.g. corebackend.RoleConsole). Pass an empty
+// SetPaneRole stamps a pane's auto-layout role (e.g. backend.RoleConsole). Pass an empty
 // role to clear it (so a post-TUI shell is not mistaken for a console sidebar).
 func SetPaneRole(paneID, role string) error {
 	if strings.TrimSpace(paneID) == "" {
