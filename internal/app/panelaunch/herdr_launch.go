@@ -204,7 +204,7 @@ func (l *Launcher) dryRunHerdr(req Request) (Result, bool) {
 	}
 	req.AgentCommand = agentCmd
 	logPaneRequest(req, l.Log)
-	printHerdrPaneDryRun(req, l.Log, l.Palette)
+	printHerdrPaneDryRun(req, l.previewBackendLaunch(req), l.Log, l.Palette)
 	return Result{}, true
 }
 
@@ -847,16 +847,11 @@ func markHerdrFinalizationFailure(
 	return markHerdrIntentManual(journal, latest, fmt.Errorf("finalize Herdr launch: %w", cause))
 }
 
-func printHerdrPaneDryRun(req Request, lg *log.Logger, c log.Palette) {
+func printHerdrPaneDryRun(req Request, backendPreview []string, lg *log.Logger, c log.Palette) {
 	if req.BriefingPath != "" || req.BriefingBody != "" {
 		fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(req.BriefingBody))
 	}
-	fmt.Fprintf(lg.Stdout(), "    %s$ herdr workspace create --cwd %s --label <coordinator_nonce> --no-focus%s\n", c.Dim, shellQuote(req.Worktree.ProjectRoot), c.Reset)
-	fmt.Fprintf(lg.Stdout(), "    %s$ herdr worktree create --workspace <coordinator_id> --branch %s --path %s --label <worktree_nonce> --no-focus%s\n", c.Dim, shellQuote(req.BranchName), shellQuote(req.Worktree.WorktreePath), c.Reset)
-	fmt.Fprintf(lg.Stdout(), "    %s# wait for the operation-bound fanout launcher marker, issue one token, and verify the exact agent session%s\n", c.Dim, c.Reset)
-	fmt.Fprintf(lg.Stdout(), "    %s# agent argv: %s%s\n", c.Dim, req.AgentCommand, c.Reset)
-	fmt.Fprintf(lg.Stdout(), "    %s# would write coordinator and child Herdr identities to .fanout/state.json%s\n", c.Dim, c.Reset)
-	fmt.Fprintf(lg.Stdout(), "    %s# would report display-only sidebar tokens with --source %s to the child workspace and pane%s\n", c.Dim, herdrrun.MetadataSource, c.Reset)
+	printBackendDryRun(backendPreview, lg, c)
 	printPaneHookDryRun(req, lg, c)
 	lg.Ok("%s: dry-run complete", paneLogLabel(req))
 }
