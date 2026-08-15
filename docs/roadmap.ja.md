@@ -2,7 +2,7 @@
 
 2026-07-02 の open issue / PR 棚卸しで確定した方針と着手順。判断と順序だけをここに置き、実装詳細は各 issue に書く。次回棚卸しで本ファイルを更新する。
 
-web ダッシュボード系 4 epic(#675 / #659 / #628 / #321)の優先順位と wave 計画は [dashboard-roadmap.ja.md](dashboard-roadmap.ja.md) に分離した(2026-08-15 判定)。
+web ダッシュボード系 4 epic(#675 / #659 / #628 / #321)の優先順位と wave 計画は [dashboard-roadmap.ja.md](dashboard-roadmap.ja.md) に置く(2026-08-15 判定。Icebox の #321 は同判定で「#659 完了後・任意」の phase 4 に改訂)。
 
 ## 方針: fan-out ツールから閉ループハーネスへ
 
