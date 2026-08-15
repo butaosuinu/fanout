@@ -11,9 +11,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-var errHerdrLauncherIdentityChanged = errors.New("herdr launcher identity changed")
+var errManagedLauncherIdentityChanged = errors.New("herdr launcher identity changed")
 
-func (l *Launcher) verifyHerdrIdleLauncher(
+func (l *Launcher) verifyManagedIdleLauncher(
 	ctx context.Context,
 	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
@@ -22,20 +22,20 @@ func (l *Launcher) verifyHerdrIdleLauncher(
 	if err != nil {
 		return err
 	}
-	if verifyErr := verifyHerdrLauncherProcess(process, intent, route); verifyErr != nil {
-		return fmt.Errorf("%w: %w", errHerdrLauncherIdentityChanged, verifyErr)
+	if verifyErr := verifyManagedLauncherProcess(process, intent, route); verifyErr != nil {
+		return fmt.Errorf("%w: %w", errManagedLauncherIdentityChanged, verifyErr)
 	}
 	panes, err := l.Herdr.LivePanes(ctx)
 	if err != nil {
 		return err
 	}
-	if !herdrIdlePanePresent(intent, panes) {
-		return fmt.Errorf("%w: exact idle root pane is not live", errHerdrLauncherIdentityChanged)
+	if !managedIdlePanePresent(intent, panes) {
+		return fmt.Errorf("%w: exact idle root pane is not live", errManagedLauncherIdentityChanged)
 	}
 	return nil
 }
 
-func herdrIdlePanePresent(intent state.LaunchIntent, panes []backend.LivePane) bool {
+func managedIdlePanePresent(intent state.LaunchIntent, panes []backend.LivePane) bool {
 	for _, pane := range panes {
 		identity := []bool{
 			pane.Ref.Backend == backend.Herdr,
@@ -50,14 +50,14 @@ func herdrIdlePanePresent(intent state.LaunchIntent, panes []backend.LivePane) b
 			pane.AgentID == "",
 			pane.AgentSession == nil,
 		}
-		if !slices.Contains(identity, false) && herdrRepoIdentityMatches(intent.Resource, pane) {
+		if !slices.Contains(identity, false) && managedRepoIdentityMatches(intent.Resource, pane) {
 			return true
 		}
 	}
 	return false
 }
 
-func herdrRepoIdentityMatches(resource state.RuntimeResource, pane backend.LivePane) bool {
+func managedRepoIdentityMatches(resource state.RuntimeResource, pane backend.LivePane) bool {
 	if resource.RepoKey == "" {
 		return true
 	}

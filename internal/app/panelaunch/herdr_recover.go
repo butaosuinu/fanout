@@ -16,9 +16,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-// releaseHerdrIntent deletes an intent whose mutation is proven unissued or
+// releaseManagedIntent deletes an intent whose mutation is proven unissued or
 // whose rollback is proven complete, and returns cause after the journal save.
-func releaseHerdrIntent(
+func releaseManagedIntent(
 	locked *state.LockedLaunchJournal,
 	intentID string,
 	cause error,
@@ -30,10 +30,10 @@ func releaseHerdrIntent(
 	return cause
 }
 
-func ensureHerdrBranchReservation(
+func ensureManagedBranchReservation(
 	ctx context.Context,
 	locked *state.LockedLaunchJournal,
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
 	current, found, err := worktree.ObserveBranch(ctx, req.SourceRoot, intent.FullBranchRef)
@@ -44,7 +44,7 @@ func ensureHerdrBranchReservation(
 		if !found || current != intent.ExpectedHead {
 			// The adopted branch is not fanout-owned and the create was never
 			// issued; release so a fresh retry records the current tip.
-			return intent, releaseHerdrIntent(locked, intent.ID, fmt.Errorf(
+			return intent, releaseManagedIntent(locked, intent.ID, fmt.Errorf(
 				"adopted Herdr branch moved from %s; retry launch", intent.ExpectedHead,
 			))
 		}
@@ -57,12 +57,12 @@ func ensureHerdrBranchReservation(
 		if !found {
 			// The reserved branch is gone while the create was never issued:
 			// rollback is provably complete, so release and retry fresh.
-			return intent, releaseHerdrIntent(locked, intent.ID, fmt.Errorf(
+			return intent, releaseManagedIntent(locked, intent.ID, fmt.Errorf(
 				"reserved Herdr branch disappeared; retry launch",
 			))
 		}
 		if current != intent.ExpectedHead {
-			return intent, markHerdrIntentManual(
+			return intent, markManagedIntentManual(
 				locked,
 				intent,
 				fmt.Errorf("reserved Herdr branch moved from %s", intent.ExpectedHead),
@@ -71,7 +71,7 @@ func ensureHerdrBranchReservation(
 		return intent, nil
 	}
 	if found {
-		return intent, markHerdrIntentManual(
+		return intent, markManagedIntentManual(
 			locked,
 			intent,
 			fmt.Errorf("herdr branch appeared before reservation completed"),
@@ -84,13 +84,13 @@ func ensureHerdrBranchReservation(
 			return intent, errors.Join(err, observeErr)
 		}
 		if found {
-			return intent, markHerdrIntentManual(
+			return intent, markManagedIntentManual(
 				locked,
 				intent,
 				fmt.Errorf("herdr branch reservation result is ambiguous at %s", current),
 			)
 		}
-		return intent, releaseHerdrIntent(locked, intent.ID, err)
+		return intent, releaseManagedIntent(locked, intent.ID, err)
 	}
 	intent.BranchCreated = true
 	locked.UpsertIntent(intent)
@@ -100,15 +100,15 @@ func ensureHerdrBranchReservation(
 	return intent, nil
 }
 
-func rollbackUnissuedHerdrWorktree(
+func rollbackUnissuedManagedWorktree(
 	locked *state.LockedLaunchJournal,
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	intent state.LaunchIntent,
 	mutationErr error,
 ) error {
 	rollbackCtx, cancel := context.WithTimeout(
 		context.Background(),
-		maxHerdrRecoveryClassificationTimeout,
+		maxManagedRecoveryClassificationTimeout,
 	)
 	defer cancel()
 	if !intent.BranchExisted && !intent.BranchCreated {
@@ -120,7 +120,7 @@ func rollbackUnissuedHerdrWorktree(
 			return errors.Join(mutationErr, err)
 		}
 		if found {
-			return markHerdrIntentManual(locked, intent, errors.Join(
+			return markManagedIntentManual(locked, intent, errors.Join(
 				mutationErr,
 				fmt.Errorf("herdr branch exists without persisted ownership"),
 			))
@@ -134,34 +134,34 @@ func rollbackUnissuedHerdrWorktree(
 			intent.BaseSHA,
 		); err != nil {
 			if errors.Is(err, worktree.ErrBranchRollbackBlocked) {
-				return markHerdrIntentManual(locked, intent, errors.Join(mutationErr, err))
+				return markManagedIntentManual(locked, intent, errors.Join(mutationErr, err))
 			}
 			// The observation failed before the delete; retry later.
 			return errors.Join(mutationErr, err)
 		}
 	}
-	return releaseHerdrIntent(locked, intent.ID, mutationErr)
+	return releaseManagedIntent(locked, intent.ID, mutationErr)
 }
 
-func recoverHerdrCoordinator(
+func recoverManagedCoordinator(
 	ctx context.Context,
-	runtime HerdrWorktreeRuntime,
+	runtime ManagedWorktreeRuntime,
 	locked *state.LockedLaunchJournal,
 	intent state.LaunchIntent,
 	requestSource worktree.RepoIdentity,
 	mutationErr error,
-) (HerdrRealizeResult, error) {
+) (ManagedRealizeResult, error) {
 	// A structured rejection proves the workspace was not created; release
 	// the intent without depending on a snapshot that may fail transiently.
 	if errors.Is(mutationErr, backend.ErrMutationRejected) {
-		return HerdrRealizeResult{}, releaseHerdrIntent(locked, intent.ID, mutationErr)
+		return ManagedRealizeResult{}, releaseManagedIntent(locked, intent.ID, mutationErr)
 	}
 	// A failed snapshot classifies nothing: keep the issued intent so the
 	// next run can classify it (canon: adoption or fail-closed needs an
 	// observed state, not an observation failure).
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
-		return HerdrRealizeResult{}, errors.Join(
+		return ManagedRealizeResult{}, errors.Join(
 			mutationErr,
 			fmt.Errorf("observe Herdr coordinator recovery: %w", err),
 			ctx.Err(),
@@ -170,25 +170,25 @@ func recoverHerdrCoordinator(
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
 	if len(matches) == 1 {
 		if err := validateWorkspacePostcondition(intent, nil, matches[0]); err != nil {
-			return HerdrRealizeResult{}, markHerdrIntentManual(locked, intent, err)
+			return ManagedRealizeResult{}, markManagedIntentManual(locked, intent, err)
 		}
 		resource := stateResource(matches[0])
-		if _, sourceErr := herdrCoordinatorSource(ctx, resource, requestSource); sourceErr != nil {
-			if errors.Is(sourceErr, errHerdrRealizedIdentityChanged) {
-				return HerdrRealizeResult{}, markHerdrIntentManual(locked, intent, sourceErr)
+		if _, sourceErr := managedCoordinatorSource(ctx, resource, requestSource); sourceErr != nil {
+			if errors.Is(sourceErr, errManagedRealizedIdentityChanged) {
+				return ManagedRealizeResult{}, markManagedIntentManual(locked, intent, sourceErr)
 			}
-			return HerdrRealizeResult{}, errors.Join(mutationErr, sourceErr)
+			return ManagedRealizeResult{}, errors.Join(mutationErr, sourceErr)
 		}
 		intent.Resource = resource
 		intent.Status = state.IntentRealized
 		intent.Failure = ""
 		locked.UpsertIntent(intent)
 		if err := locked.Save(); err != nil {
-			return HerdrRealizeResult{}, err
+			return ManagedRealizeResult{}, err
 		}
 		return realizeDeferred(intent)
 	}
-	return HerdrRealizeResult{}, markHerdrIntentManual(
+	return ManagedRealizeResult{}, markManagedIntentManual(
 		locked,
 		intent,
 		errors.Join(
@@ -198,25 +198,25 @@ func recoverHerdrCoordinator(
 	)
 }
 
-func recoverHerdrWorktree(
+func recoverManagedWorktree(
 	ctx context.Context,
-	runtime HerdrWorktreeRuntime,
+	runtime ManagedWorktreeRuntime,
 	locked *state.LockedLaunchJournal,
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	source worktree.RepoIdentity,
 	intent state.LaunchIntent,
 	mutationErr error,
-) (HerdrRealizeResult, error) {
+) (ManagedRealizeResult, error) {
 	// A structured rejection proves the mutation created nothing; classify
 	// from local Git state under an independent finite budget (the launch
 	// context may already be exhausted).
 	if errors.Is(mutationErr, backend.ErrMutationRejected) {
 		recoveryCtx, cancel := context.WithTimeout(
 			context.Background(),
-			maxHerdrRecoveryClassificationTimeout,
+			maxManagedRecoveryClassificationTimeout,
 		)
 		defer cancel()
-		return HerdrRealizeResult{}, recoverRejectedHerdrWorktree(
+		return ManagedRealizeResult{}, recoverRejectedManagedWorktree(
 			recoveryCtx,
 			locked,
 			req,
@@ -229,7 +229,7 @@ func recoverHerdrWorktree(
 	// next run can classify it.
 	workspaces, observeErr := runtime.ObserveWorkspaces(ctx)
 	if observeErr != nil {
-		return HerdrRealizeResult{}, errors.Join(
+		return ManagedRealizeResult{}, errors.Join(
 			mutationErr,
 			fmt.Errorf("observe Herdr worktree recovery: %w", observeErr),
 			ctx.Err(),
@@ -237,21 +237,21 @@ func recoverHerdrWorktree(
 	}
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
 	if len(matches) == 1 {
-		if err := finalizeHerdrWorktree(ctx, locked, req, source, &intent, matches[0]); err != nil {
-			return HerdrRealizeResult{}, handleHerdrWorktreeFinalizeError(locked, intent, err)
+		if err := finalizeManagedWorktree(ctx, locked, req, source, &intent, matches[0]); err != nil {
+			return ManagedRealizeResult{}, handleManagedWorktreeFinalizeError(locked, intent, err)
 		}
 		return realizeDeferred(intent)
 	}
 	checkout, checkoutErr := worktree.ObserveCheckout(ctx, req.SourceRoot, intent.WorktreePath)
 	if checkoutErr != nil {
 		if errors.Is(checkoutErr, worktree.ErrCheckoutMismatch) {
-			return HerdrRealizeResult{}, markHerdrIntentManual(
+			return ManagedRealizeResult{}, markManagedIntentManual(
 				locked,
 				intent,
 				errors.Join(mutationErr, checkoutErr),
 			)
 		}
-		return HerdrRealizeResult{}, errors.Join(mutationErr, checkoutErr)
+		return ManagedRealizeResult{}, errors.Join(mutationErr, checkoutErr)
 	}
 	if mutationErr == nil && intent.BranchCreated && len(matches) == 0 &&
 		checkout.PathAbsent && !checkout.Registered {
@@ -262,15 +262,15 @@ func recoverHerdrWorktree(
 		)
 		if branchErr != nil {
 			// The branch state was not classified; keep the intent retryable.
-			return HerdrRealizeResult{}, branchErr
+			return ManagedRealizeResult{}, branchErr
 		}
 		if !branchFound {
-			return HerdrRealizeResult{}, releaseHerdrIntent(locked, intent.ID, fmt.Errorf(
+			return ManagedRealizeResult{}, releaseManagedIntent(locked, intent.ID, fmt.Errorf(
 				"recovered completed Herdr worktree rollback; retry launch",
 			))
 		}
 	}
-	return HerdrRealizeResult{}, markHerdrIntentManual(
+	return ManagedRealizeResult{}, markManagedIntentManual(
 		locked,
 		intent,
 		errors.Join(
@@ -285,13 +285,13 @@ func recoverHerdrWorktree(
 	)
 }
 
-// recoverRejectedHerdrWorktree classifies a structured rejection from local
+// recoverRejectedManagedWorktree classifies a structured rejection from local
 // Git state: restore a still-valid realized checkout, or release the reserved
 // branch and the intent when nothing was created.
-func recoverRejectedHerdrWorktree(
+func recoverRejectedManagedWorktree(
 	ctx context.Context,
 	locked *state.LockedLaunchJournal,
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	source worktree.RepoIdentity,
 	intent state.LaunchIntent,
 	mutationErr error,
@@ -319,7 +319,7 @@ func recoverRejectedHerdrWorktree(
 			// The verification itself failed; nothing was classified.
 			return errors.Join(mutationErr, verifyErr)
 		}
-		return markHerdrIntentManual(
+		return markManagedIntentManual(
 			locked,
 			intent,
 			errors.Join(mutationErr, verifyErr),
@@ -328,7 +328,7 @@ func recoverRejectedHerdrWorktree(
 	checkout, checkoutErr := worktree.ObserveCheckout(ctx, req.SourceRoot, intent.WorktreePath)
 	if checkoutErr != nil {
 		if errors.Is(checkoutErr, worktree.ErrCheckoutMismatch) {
-			return markHerdrIntentManual(
+			return markManagedIntentManual(
 				locked,
 				intent,
 				errors.Join(mutationErr, checkoutErr),
@@ -337,7 +337,7 @@ func recoverRejectedHerdrWorktree(
 		return errors.Join(mutationErr, checkoutErr)
 	}
 	if !checkout.PathAbsent || checkout.Registered {
-		return markHerdrIntentManual(
+		return markManagedIntentManual(
 			locked,
 			intent,
 			errors.Join(mutationErr, fmt.Errorf("checkout exists after rejected Herdr create")),
@@ -351,7 +351,7 @@ func recoverRejectedHerdrWorktree(
 			intent.BaseSHA,
 		); err != nil {
 			if errors.Is(err, worktree.ErrBranchRollbackBlocked) {
-				return markHerdrIntentManual(
+				return markManagedIntentManual(
 					locked,
 					intent,
 					errors.Join(mutationErr, err),
@@ -361,20 +361,20 @@ func recoverRejectedHerdrWorktree(
 			return errors.Join(mutationErr, err)
 		}
 	}
-	return releaseHerdrIntent(locked, intent.ID, mutationErr)
+	return releaseManagedIntent(locked, intent.ID, mutationErr)
 }
 
-func finalizeHerdrWorktree(
+func finalizeManagedWorktree(
 	ctx context.Context,
 	locked *state.LockedLaunchJournal,
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	source worktree.RepoIdentity,
 	intent *state.LaunchIntent,
 	observation backend.WorkspaceObservation,
 ) error {
 	if err := validateWorkspacePostcondition(*intent, &source, observation); err != nil {
 		// The snapshot succeeded, so the mismatch is confirmed.
-		return errors.Join(errHerdrRealizedIdentityChanged, err)
+		return errors.Join(errManagedRealizedIdentityChanged, err)
 	}
 	if _, err := worktree.VerifyCheckout(
 		ctx,
@@ -392,18 +392,18 @@ func finalizeHerdrWorktree(
 	intent.Failure = ""
 	locked.UpsertIntent(*intent)
 	if saveErr := locked.Save(); saveErr != nil {
-		return errors.Join(errHerdrRealizedIntentSave, saveErr)
+		return errors.Join(errManagedRealizedIntentSave, saveErr)
 	}
 	return nil
 }
 
-func handleHerdrWorktreeFinalizeError(
+func handleManagedWorktreeFinalizeError(
 	locked *state.LockedLaunchJournal,
 	intent state.LaunchIntent,
 	err error,
 ) error {
-	if errors.Is(err, errHerdrRealizedIdentityChanged) || errors.Is(err, worktree.ErrCheckoutMismatch) {
-		return markHerdrIntentManual(locked, intent, err)
+	if errors.Is(err, errManagedRealizedIdentityChanged) || errors.Is(err, worktree.ErrCheckoutMismatch) {
+		return markManagedIntentManual(locked, intent, err)
 	}
 	// Save failures and transient Git reads classified nothing; keep the
 	// intent retryable.
@@ -412,11 +412,11 @@ func handleHerdrWorktreeFinalizeError(
 
 func verifyRealizedCoordinator(
 	ctx context.Context,
-	runtime HerdrWorktreeRuntime,
+	runtime ManagedWorktreeRuntime,
 	intent state.LaunchIntent,
 	requestSource worktree.RepoIdentity,
 ) error {
-	if _, err := herdrCoordinatorSource(ctx, intent.Resource, requestSource); err != nil {
+	if _, err := managedCoordinatorSource(ctx, intent.Resource, requestSource); err != nil {
 		return err
 	}
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
@@ -424,32 +424,32 @@ func verifyRealizedCoordinator(
 		return err
 	}
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
-	if len(matches) != 1 || !workspaceHasHerdrResource(matches[0], intent.Resource) {
-		return fmt.Errorf("%w: coordinator", errHerdrRealizedIdentityChanged)
+	if len(matches) != 1 || !workspaceHasManagedResource(matches[0], intent.Resource) {
+		return fmt.Errorf("%w: coordinator", errManagedRealizedIdentityChanged)
 	}
 	return nil
 }
 
-func resumeRealizedHerdrWorktree(
+func resumeRealizedManagedWorktree(
 	ctx context.Context,
-	runtime HerdrWorktreeRuntime,
+	runtime ManagedWorktreeRuntime,
 	locked *state.LockedLaunchJournal,
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	source worktree.RepoIdentity,
 	intent state.LaunchIntent,
 	allowOpen bool,
-) (HerdrRealizeResult, error) {
+) (ManagedRealizeResult, error) {
 	// A failed snapshot classifies nothing: keep the realized intent
 	// retryable instead of pinning it to manual cleanup.
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
-		return HerdrRealizeResult{}, errors.Join(err, ctx.Err())
+		return ManagedRealizeResult{}, errors.Join(err, ctx.Err())
 	}
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
 	switch len(matches) {
 	case 1:
-		if !workspaceHasHerdrResource(matches[0], intent.Resource) {
-			return HerdrRealizeResult{}, markHerdrIntentManual(
+		if !workspaceHasManagedResource(matches[0], intent.Resource) {
+			return ManagedRealizeResult{}, markManagedIntentManual(
 				locked,
 				intent,
 				fmt.Errorf("realized Herdr worktree identity changed"),
@@ -465,14 +465,14 @@ func resumeRealizedHerdrWorktree(
 			source.RepoRoot,
 		); err != nil {
 			if errors.Is(err, worktree.ErrCheckoutMismatch) {
-				return HerdrRealizeResult{}, markHerdrIntentManual(locked, intent, err)
+				return ManagedRealizeResult{}, markManagedIntentManual(locked, intent, err)
 			}
-			return HerdrRealizeResult{}, err
+			return ManagedRealizeResult{}, err
 		}
 		return realizeDeferred(intent)
 	case 0:
 	default:
-		return HerdrRealizeResult{}, markHerdrIntentManual(
+		return ManagedRealizeResult{}, markManagedIntentManual(
 			locked,
 			intent,
 			fmt.Errorf("realized Herdr worktree label has %d live matches", len(matches)),
@@ -489,28 +489,28 @@ func resumeRealizedHerdrWorktree(
 		source.RepoRoot,
 	); err != nil {
 		if errors.Is(err, worktree.ErrCheckoutMismatch) {
-			return HerdrRealizeResult{}, markHerdrIntentManual(locked, intent, err)
+			return ManagedRealizeResult{}, markManagedIntentManual(locked, intent, err)
 		}
-		return HerdrRealizeResult{}, err
+		return ManagedRealizeResult{}, err
 	}
 	if coordinatorErr := verifyCoordinatorObservation(intent.Coordinator, workspaces); coordinatorErr != nil {
-		return HerdrRealizeResult{}, markHerdrIntentManual(locked, intent, coordinatorErr)
+		return ManagedRealizeResult{}, markManagedIntentManual(locked, intent, coordinatorErr)
 	}
 	if !allowOpen {
-		return HerdrRealizeResult{}, markHerdrIntentManual(
+		return ManagedRealizeResult{}, markManagedIntentManual(
 			locked,
 			intent,
 			fmt.Errorf("expired realized Herdr worktree has no live workspace"),
 		)
 	}
 	if policyErr := runtime.VerifyWorktreeSetupPolicy(ctx); policyErr != nil {
-		return HerdrRealizeResult{}, policyErr
+		return ManagedRealizeResult{}, policyErr
 	}
 
 	intent.Status = state.IntentIssued
 	locked.UpsertIntent(intent)
 	if saveErr := locked.Save(); saveErr != nil {
-		return HerdrRealizeResult{}, saveErr
+		return ManagedRealizeResult{}, saveErr
 	}
 	mutation, mutationErr := runtime.OpenWorktree(ctx, backend.WorktreeOpenRequest{
 		Coordinator:              observationResource(intent.Coordinator),
@@ -526,17 +526,17 @@ func resumeRealizedHerdrWorktree(
 			intent.Status = state.IntentRealized
 			locked.UpsertIntent(intent)
 			if saveErr := locked.Save(); saveErr != nil {
-				return HerdrRealizeResult{}, errors.Join(mutationErr, saveErr)
+				return ManagedRealizeResult{}, errors.Join(mutationErr, saveErr)
 			}
-			return HerdrRealizeResult{}, mutationErr
+			return ManagedRealizeResult{}, mutationErr
 		}
 		if operationErr := ctx.Err(); operationErr != nil &&
 			!errors.Is(mutationErr, backend.ErrMutationRejected) {
-			return HerdrRealizeResult{}, errors.Join(mutationErr, operationErr)
+			return ManagedRealizeResult{}, errors.Join(mutationErr, operationErr)
 		}
-		return recoverHerdrWorktree(ctx, runtime, locked, req, source, intent, mutationErr)
+		return recoverManagedWorktree(ctx, runtime, locked, req, source, intent, mutationErr)
 	}
-	if finalizeErr := finalizeHerdrWorktree(
+	if finalizeErr := finalizeManagedWorktree(
 		ctx,
 		locked,
 		req,
@@ -544,12 +544,12 @@ func resumeRealizedHerdrWorktree(
 		&intent,
 		mutation.WorkspaceObservation,
 	); finalizeErr != nil {
-		return HerdrRealizeResult{}, handleHerdrWorktreeFinalizeError(locked, intent, finalizeErr)
+		return ManagedRealizeResult{}, handleManagedWorktreeFinalizeError(locked, intent, finalizeErr)
 	}
 	return realizeDeferred(intent)
 }
 
-func markHerdrIntentManual(
+func markManagedIntentManual(
 	locked *state.LockedLaunchJournal,
 	intent state.LaunchIntent,
 	cause error,
@@ -563,13 +563,13 @@ func markHerdrIntentManual(
 	locked.UpsertIntent(intent)
 	if err := locked.Save(); err != nil {
 		return errors.Join(
-			fmt.Errorf("%w: %s", ErrHerdrManualCleanupRequired, reason),
+			fmt.Errorf("%w: %s", ErrManualCleanupRequired, reason),
 			err,
 		)
 	}
-	return fmt.Errorf("%w: %s", ErrHerdrManualCleanupRequired, reason)
+	return fmt.Errorf("%w: %s", ErrManualCleanupRequired, reason)
 }
 
-func herdrManualCleanupError(intent state.LaunchIntent) error {
-	return fmt.Errorf("%w: %s", ErrHerdrManualCleanupRequired, intent.Failure)
+func manualCleanupError(intent state.LaunchIntent) error {
+	return fmt.Errorf("%w: %s", ErrManualCleanupRequired, intent.Failure)
 }

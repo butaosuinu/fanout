@@ -12,9 +12,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-func TestFindHerdrConsolePaneAcrossLinkedWorktrees(t *testing.T) {
-	root, linked := herdrConsoleTestWorktrees(t)
-	pane := herdrConsoleTestPane(linked, "workspace-linked", "pane-linked")
+func TestFindManagedConsolePaneAcrossLinkedWorktrees(t *testing.T) {
+	root, linked := managedConsoleTestWorktrees(t)
+	pane := managedConsoleTestPane(linked, "workspace-linked", "pane-linked")
 	recorder, err := state.LockProject(linked)
 	if err != nil {
 		t.Fatal(err)
@@ -32,23 +32,23 @@ func TestFindHerdrConsolePaneAcrossLinkedWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, found, err := findHerdrConsolePane(root, current)
+	got, found, err := findManagedConsolePane(root, current)
 	if err != nil || !found {
-		t.Fatalf("findHerdrConsolePane() = %+v, %t, %v", got, found, err)
+		t.Fatalf("findManagedConsolePane() = %+v, %t, %v", got, found, err)
 	}
 	if got.PaneID != pane.PaneID || got.SourceProjectRoot != linked {
 		t.Fatalf("found pane = %+v, want pane %q from %q", got, pane.PaneID, linked)
 	}
 }
 
-func TestFindHerdrConsolePaneRejectsDuplicateAcrossWorktrees(t *testing.T) {
-	root, linked := herdrConsoleTestWorktrees(t)
+func TestFindManagedConsolePaneRejectsDuplicateAcrossWorktrees(t *testing.T) {
+	root, linked := managedConsoleTestWorktrees(t)
 	for _, item := range []struct {
 		root string
 		pane state.Pane
 	}{
-		{root: root, pane: herdrConsoleTestPane(root, "workspace-root", "pane-root")},
-		{root: linked, pane: herdrConsoleTestPane(linked, "workspace-linked", "pane-linked")},
+		{root: root, pane: managedConsoleTestPane(root, "workspace-root", "pane-root")},
+		{root: linked, pane: managedConsoleTestPane(linked, "workspace-linked", "pane-linked")},
 	} {
 		recorder, err := state.LockProject(item.root)
 		if err != nil {
@@ -65,26 +65,26 @@ func TestFindHerdrConsolePaneRejectsDuplicateAcrossWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := findHerdrConsolePane(root, current); err == nil {
-		t.Fatal("findHerdrConsolePane() accepted duplicate console rows")
+	if _, _, err := findManagedConsolePane(root, current); err == nil {
+		t.Fatal("findManagedConsolePane() accepted duplicate console rows")
 	}
 }
 
-func TestHerdrConsolePaneInStoreDoesNotIgnoreIncompleteIdentity(t *testing.T) {
-	pane := herdrConsoleTestPane("/repo", "workspace-root", "")
-	got, found, err := herdrConsolePaneInStore("/repo", state.Store{Panes: []state.Pane{pane}})
+func TestManagedConsolePaneInStoreDoesNotIgnoreIncompleteIdentity(t *testing.T) {
+	pane := managedConsoleTestPane("/repo", "workspace-root", "")
+	got, found, err := managedConsolePaneInStore("/repo", state.Store{Panes: []state.Pane{pane}})
 	if err != nil || !found {
-		t.Fatalf("herdrConsolePaneInStore() = %+v, %t, %v, want saved row", got, found, err)
+		t.Fatalf("managedConsolePaneInStore() = %+v, %t, %v, want saved row", got, found, err)
 	}
 	if got.PaneID != "" {
 		t.Fatalf("saved pane id = %q, want incomplete identity preserved for fail-closed validation", got.PaneID)
 	}
-	if err := validateSavedHerdrConsoleShape(got); err == nil {
+	if err := validateSavedManagedConsoleShape(got); err == nil {
 		t.Fatal("incomplete saved console identity was accepted for stale cleanup")
 	}
 }
 
-func TestHerdrShellStatePaneUsesAdmittedCanonicalPath(t *testing.T) {
+func TestManagedShellStatePaneUsesAdmittedCanonicalPath(t *testing.T) {
 	intent := state.LaunchIntent{WorktreePath: "/canonical/repo"}
 	live := backend.LivePane{
 		Ref:            backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
@@ -93,34 +93,34 @@ func TestHerdrShellStatePaneUsesAdmittedCanonicalPath(t *testing.T) {
 		SessionID:      "fanout-owned",
 		SocketPath:     "/tmp/fanout-owned.sock",
 	}
-	pane := herdrShellStatePane(intent, live, -1, "shell", "Shell", "")
+	pane := managedShellStatePane(intent, live, -1, "shell", "Shell", "")
 	if pane.WorktreePath != intent.WorktreePath {
 		t.Fatalf("saved path = %q, want admitted path %q", pane.WorktreePath, intent.WorktreePath)
 	}
 }
 
-func TestValidateHerdrConsoleIntentRootRejectsLinkedWorktreeRecovery(t *testing.T) {
+func TestValidateManagedConsoleIntentRootRejectsLinkedWorktreeRecovery(t *testing.T) {
 	intent := state.LaunchIntent{WorktreePath: "/repo/linked-a"}
-	if err := validateHerdrConsoleIntentRoot(intent, "/repo/linked-b"); err == nil {
+	if err := validateManagedConsoleIntentRoot(intent, "/repo/linked-b"); err == nil {
 		t.Fatal("console recovery accepted an intent owned by another linked worktree")
 	}
-	if err := validateHerdrConsoleIntentRoot(intent, intent.WorktreePath); err != nil {
+	if err := validateManagedConsoleIntentRoot(intent, intent.WorktreePath); err != nil {
 		t.Fatalf("console recovery rejected its owning worktree: %v", err)
 	}
 }
 
-func TestStaleHerdrConsoleRecoveryRequiresIdentityMismatch(t *testing.T) {
-	if staleHerdrConsoleRecoverable(os.ErrDeadlineExceeded) {
+func TestStaleManagedConsoleRecoveryRequiresIdentityMismatch(t *testing.T) {
+	if staleManagedConsoleRecoverable(os.ErrDeadlineExceeded) {
 		t.Fatal("transient observation error qualified for destructive stale recovery")
 	}
 	mismatch := fmt.Errorf("bind saved console: %w", backend.ErrOwnedIdentityMismatch)
-	if !staleHerdrConsoleRecoverable(mismatch) {
+	if !staleManagedConsoleRecoverable(mismatch) {
 		t.Fatal("owned identity mismatch did not qualify for stale recovery")
 	}
 }
 
-func TestStaleHerdrConsoleTargetAdmitsOwnedRouteWithNewProcessIdentity(t *testing.T) {
-	saved := herdrConsoleTestPane("/repo", "workspace-root", "pane-old")
+func TestStaleManagedConsoleTargetAdmitsOwnedRouteWithNewProcessIdentity(t *testing.T) {
+	saved := managedConsoleTestPane("/repo", "workspace-root", "pane-old")
 	saved.SourceProjectRoot = "/repo"
 	live := backend.LivePane{
 		Ref: backend.PaneRef{
@@ -133,50 +133,50 @@ func TestStaleHerdrConsoleTargetAdmitsOwnedRouteWithNewProcessIdentity(t *testin
 		CurrentPath:    saved.WorktreePath,
 	}
 
-	got, err := staleHerdrConsoleTarget(saved, []backend.LivePane{live})
+	got, err := staleManagedConsoleTarget(saved, []backend.LivePane{live})
 	if err != nil {
-		t.Fatalf("staleHerdrConsoleTarget() = %+v, %v", got, err)
+		t.Fatalf("staleManagedConsoleTarget() = %+v, %v", got, err)
 	}
 	if got.Ref.Pane != live.Ref.Pane || got.TerminalID != live.TerminalID {
 		t.Fatalf("stale target = %+v, want current process identity %+v", got, live)
 	}
 
 	live.WorkspaceLabel = "foreign"
-	if _, err := staleHerdrConsoleTarget(saved, []backend.LivePane{live}); err == nil {
-		t.Fatal("staleHerdrConsoleTarget() accepted a workspace with a foreign label")
+	if _, err := staleManagedConsoleTarget(saved, []backend.LivePane{live}); err == nil {
+		t.Fatal("staleManagedConsoleTarget() accepted a workspace with a foreign label")
 	}
 }
 
-func TestStaleHerdrConsoleWorkspaceWithoutPaneRequiresManualCleanup(t *testing.T) {
-	saved := herdrConsoleTestPane("/repo", "workspace-root", "pane-old")
+func TestStaleManagedConsoleWorkspaceWithoutPaneRequiresManualCleanup(t *testing.T) {
+	saved := managedConsoleTestPane("/repo", "workspace-root", "pane-old")
 	workspaces := []backend.WorkspaceObservation{{
 		WorkspaceID: saved.WorkspaceID,
 		Label:       saved.WorkspaceLabel,
 	}}
-	present, err := savedHerdrConsoleWorkspacePresent(saved, workspaces)
+	present, err := savedManagedConsoleWorkspacePresent(saved, workspaces)
 	if err != nil || !present {
-		t.Fatalf("savedHerdrConsoleWorkspacePresent() = %t, %v, want present", present, err)
+		t.Fatalf("savedManagedConsoleWorkspacePresent() = %t, %v, want present", present, err)
 	}
-	if _, err := staleHerdrConsoleTarget(saved, nil); !errors.Is(err, ErrHerdrManualCleanupRequired) {
-		t.Fatalf("staleHerdrConsoleTarget() error = %v, want manual cleanup", err)
+	if _, err := staleManagedConsoleTarget(saved, nil); !errors.Is(err, ErrManualCleanupRequired) {
+		t.Fatalf("staleManagedConsoleTarget() error = %v, want manual cleanup", err)
 	}
 	workspaces[0].Label = "foreign"
-	if _, err := savedHerdrConsoleWorkspacePresent(saved, workspaces); err == nil {
-		t.Fatal("savedHerdrConsoleWorkspacePresent() accepted a foreign workspace label")
+	if _, err := savedManagedConsoleWorkspacePresent(saved, workspaces); err == nil {
+		t.Fatal("savedManagedConsoleWorkspacePresent() accepted a foreign workspace label")
 	}
 }
 
-func TestAbsentHerdrConsoleWorkspaceAllowsSavedRowRemoval(t *testing.T) {
-	saved := herdrConsoleTestPane("/repo", "workspace-root", "pane-old")
-	present, err := savedHerdrConsoleWorkspacePresent(saved, nil)
+func TestAbsentManagedConsoleWorkspaceAllowsSavedRowRemoval(t *testing.T) {
+	saved := managedConsoleTestPane("/repo", "workspace-root", "pane-old")
+	present, err := savedManagedConsoleWorkspacePresent(saved, nil)
 	if err != nil || present {
-		t.Fatalf("savedHerdrConsoleWorkspacePresent() = %t, %v, want absent", present, err)
+		t.Fatalf("savedManagedConsoleWorkspacePresent() = %t, %v, want absent", present, err)
 	}
 }
 
-func TestRemoveSavedHerdrConsoleRowFromOwningLinkedWorktree(t *testing.T) {
-	root, linked := herdrConsoleTestWorktrees(t)
-	pane := herdrConsoleTestPane(linked, "workspace-linked", "pane-linked")
+func TestRemoveSavedManagedConsoleRowFromOwningLinkedWorktree(t *testing.T) {
+	root, linked := managedConsoleTestWorktrees(t)
+	pane := managedConsoleTestPane(linked, "workspace-linked", "pane-linked")
 	recorder, err := state.LockProject(linked)
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +195,7 @@ func TestRemoveSavedHerdrConsoleRowFromOwningLinkedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = removeSavedHerdrConsoleRow(locked, root, pane)
+	err = removeSavedManagedConsoleRow(locked, root, pane)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,9 +213,9 @@ func TestRemoveSavedHerdrConsoleRowFromOwningLinkedWorktree(t *testing.T) {
 	}
 }
 
-func TestRemoveStaleHerdrConsoleStateRemovesCompletedIntentBeforeRow(t *testing.T) {
-	root, _ := herdrConsoleTestWorktrees(t)
-	pane := herdrConsoleTestPane(root, "workspace-root", "pane-root")
+func TestRemoveStaleManagedConsoleStateRemovesCompletedIntentBeforeRow(t *testing.T) {
+	root, _ := managedConsoleTestWorktrees(t)
+	pane := managedConsoleTestPane(root, "workspace-root", "pane-root")
 	pane.SourceProjectRoot = root
 	locked, err := state.LockProjectForLaunch(root)
 	if err != nil {
@@ -233,13 +233,13 @@ func TestRemoveStaleHerdrConsoleStateRemovesCompletedIntentBeforeRow(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	intentID, err := state.CoordinatorIntentID(HerdrConsoleRuntimeParent, "", 0)
+	intentID, err := state.CoordinatorIntentID(ManagedConsoleRuntimeParent, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	journal.UpsertIntent(state.LaunchIntent{
 		ID: intentID, Kind: state.IntentCoordinator, Status: state.IntentRealized,
-		Parent: HerdrConsoleRuntimeParent, RuntimeParent: HerdrConsoleRuntimeParent,
+		Parent: ManagedConsoleRuntimeParent, RuntimeParent: ManagedConsoleRuntimeParent,
 		WorktreePath: pane.WorktreePath, WorkspaceLabel: pane.WorkspaceLabel,
 		Resource: state.RuntimeResource{
 			WorkspaceID: pane.WorkspaceID, Label: pane.WorkspaceLabel,
@@ -251,7 +251,7 @@ func TestRemoveStaleHerdrConsoleStateRemovesCompletedIntentBeforeRow(t *testing.
 	if err = journal.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if err = removeStaleHerdrConsoleState(locked, root, pane); err != nil {
+	if err = removeStaleManagedConsoleState(locked, root, pane); err != nil {
 		t.Fatal(err)
 	}
 	journal, err = locked.LaunchJournal(root)
@@ -266,7 +266,7 @@ func TestRemoveStaleHerdrConsoleStateRemovesCompletedIntentBeforeRow(t *testing.
 	}
 }
 
-func herdrConsoleTestWorktrees(t *testing.T) (string, string) {
+func managedConsoleTestWorktrees(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
 	gitCmdTest(t, root, "init", "-q")
@@ -290,9 +290,9 @@ func herdrConsoleTestWorktrees(t *testing.T) (string, string) {
 	return canonicalRoot, canonicalLinked
 }
 
-func herdrConsoleTestPane(root, workspace, paneID string) state.Pane {
+func managedConsoleTestPane(root, workspace, paneID string) state.Pane {
 	return state.Pane{
-		Parent: ManualParentRef, RuntimeParent: HerdrConsoleRuntimeParent,
+		Parent: ManualParentRef, RuntimeParent: ManagedConsoleRuntimeParent,
 		IssueNum: -1, Kind: state.PaneKindShell, Slug: "herdr-console",
 		Backend: backend.Herdr, PaneID: paneID,
 		WorkspaceID: workspace, WorkspaceLabel: "fanout-console-owned",

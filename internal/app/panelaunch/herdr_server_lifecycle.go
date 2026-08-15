@@ -12,36 +12,36 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-// HerdrServerIO is the owned-server lifecycle seam. The composition root binds
+// ManagedServerIO is the owned-server lifecycle seam. The composition root binds
 // every field to one repository's owned options, so the app drives the
 // journal-fenced transaction without naming the runtime that performs it.
-type HerdrServerIO struct {
+type ManagedServerIO struct {
 	// InspectServer reads the saved server identity without mutating it.
 	InspectServer func() (state.RuntimeServerIdentity, error)
 	// ObserveWorkspaces opens the owned server read-only and lists everything
 	// still holding a resource on it.
 	ObserveWorkspaces func(context.Context) ([]backend.WorkspaceObservation, error)
 	// RestartServer replaces the proven-dead generation named by the identity.
-	RestartServer func(context.Context, state.RuntimeServerIdentity) (HerdrRestartedServer, error)
+	RestartServer func(context.Context, state.RuntimeServerIdentity) (ManagedRestartedServer, error)
 	// ShutdownServer retires the empty generation, calling the callback once at
 	// the moment the signal becomes indeterminate.
 	ShutdownServer func(context.Context, state.RuntimeServerIdentity, func() error) error
 }
 
-// HerdrRestartedServer is the replacement generation a restart produced: the
+// ManagedRestartedServer is the replacement generation a restart produced: the
 // surface saved rows are rebound through, and the session name to report.
-type HerdrRestartedServer struct {
-	Runtime HerdrRestartRuntime
+type ManagedRestartedServer struct {
+	Runtime ManagedRestartRuntime
 	Session string
 }
 
-// RestartHerdrServer explicitly replaces a proven-dead owned server while the
+// RestartManagedServer explicitly replaces a proven-dead owned server while the
 // combined state/intent lock fences every other fanout mutation. It returns the
 // replacement session name.
-func RestartHerdrServer(
+func RestartManagedServer(
 	ctx context.Context,
 	projectRoot string,
-	io HerdrServerIO,
+	io ManagedServerIO,
 ) (_ string, err error) {
 	defer errs.Wrap(&err, "restart Herdr owned server")
 	locked, err := state.LockProjectForLaunchContext(ctx, projectRoot)
@@ -53,25 +53,25 @@ func RestartHerdrServer(
 	if err != nil {
 		return "", err
 	}
-	intent, created, err := ensureHerdrServerIntent(journal, state.IntentRestart, io)
+	intent, created, err := ensureManagedServerIntent(journal, state.IntentRestart, io)
 	if err != nil {
 		return "", err
 	}
 	restarted, err := io.RestartServer(ctx, *intent.Server)
 	if err != nil {
-		return "", releaseRejectedHerdrRestart(journal, intent, created, err)
+		return "", releaseRejectedManagedRestart(journal, intent, created, err)
 	}
-	if err = verifyRestartedHerdrRows(ctx, projectRoot, locked, journal, restarted.Runtime); err != nil {
+	if err = verifyRestartedManagedRows(ctx, projectRoot, locked, journal, restarted.Runtime); err != nil {
 		return "", err
 	}
-	markPlannedHerdrReopenCleanupManual(journal)
-	if err = completeHerdrServerLifecycle(locked, journal, intent.ID); err != nil {
+	markPlannedManagedReopenCleanupManual(journal)
+	if err = completeManagedServerLifecycle(locked, journal, intent.ID); err != nil {
 		return "", err
 	}
 	return restarted.Session, nil
 }
 
-func releaseRejectedHerdrRestart(
+func releaseRejectedManagedRestart(
 	journal *state.LockedLaunchJournal,
 	intent state.LaunchIntent,
 	created bool,
@@ -80,15 +80,15 @@ func releaseRejectedHerdrRestart(
 	if !created || !errors.Is(cause, backend.ErrOwnedGenerationStillLive) {
 		return cause
 	}
-	return releaseHerdrIntent(journal, intent.ID, cause)
+	return releaseManagedIntent(journal, intent.ID, cause)
 }
 
-// ShutdownHerdrServer explicitly retires an empty owned server. A saved intent
+// ShutdownManagedServer explicitly retires an empty owned server. A saved intent
 // retry confirms absence and never repeats an ambiguous shutdown signal.
-func ShutdownHerdrServer(
+func ShutdownManagedServer(
 	ctx context.Context,
 	projectRoot string,
-	io HerdrServerIO,
+	io ManagedServerIO,
 ) (err error) {
 	defer errs.Wrap(&err, "shutdown Herdr owned server")
 	locked, err := state.LockProjectForLaunchContext(ctx, projectRoot)
@@ -100,37 +100,37 @@ func ShutdownHerdrServer(
 	if err != nil {
 		return err
 	}
-	intent, err := prepareOrResumeHerdrShutdown(ctx, projectRoot, journal, io)
+	intent, err := prepareOrResumeManagedShutdown(ctx, projectRoot, journal, io)
 	if err != nil {
 		return err
 	}
-	markIssued, err := herdrShutdownIssueCallback(journal, intent)
+	markIssued, err := managedShutdownIssueCallback(journal, intent)
 	if err != nil {
 		return err
 	}
 	if err = io.ShutdownServer(ctx, *intent.Server, markIssued); err != nil {
 		return err
 	}
-	return completeHerdrServerLifecycle(locked, journal, intent.ID)
+	return completeManagedServerLifecycle(locked, journal, intent.ID)
 }
 
-func prepareOrResumeHerdrShutdown(
+func prepareOrResumeManagedShutdown(
 	ctx context.Context,
 	projectRoot string,
 	journal *state.LockedLaunchJournal,
-	io HerdrServerIO,
+	io ManagedServerIO,
 ) (state.LaunchIntent, error) {
-	intent, found, err := currentHerdrServerIntent(journal, state.IntentShutdown)
+	intent, found, err := currentManagedServerIntent(journal, state.IntentShutdown)
 	if err != nil || found {
 		return intent, err
 	}
-	if err := rejectActiveHerdrIntents(journal.LaunchJournal); err != nil {
+	if err := rejectActiveManagedIntents(journal.LaunchJournal); err != nil {
 		return state.LaunchIntent{}, err
 	}
-	return prepareHerdrShutdown(ctx, projectRoot, journal, io)
+	return prepareManagedShutdown(ctx, projectRoot, journal, io)
 }
 
-func herdrShutdownIssueCallback(
+func managedShutdownIssueCallback(
 	journal *state.LockedLaunchJournal,
 	intent state.LaunchIntent,
 ) (func() error, error) {
@@ -147,19 +147,19 @@ func herdrShutdownIssueCallback(
 	}, nil
 }
 
-func rejectActiveHerdrIntents(journal state.LaunchJournal) error {
+func rejectActiveManagedIntents(journal state.LaunchJournal) error {
 	if len(journal.Intents) != 0 {
 		return fmt.Errorf("%d active Herdr intent rows remain", len(journal.Intents))
 	}
 	return nil
 }
 
-func ensureHerdrServerIntent(
+func ensureManagedServerIntent(
 	journal *state.LockedLaunchJournal,
 	kind state.LaunchIntentKind,
-	io HerdrServerIO,
+	io ManagedServerIO,
 ) (state.LaunchIntent, bool, error) {
-	intent, found, err := currentHerdrServerIntent(journal, kind)
+	intent, found, err := currentManagedServerIntent(journal, kind)
 	if err != nil || found {
 		return intent, found, err
 	}
@@ -167,7 +167,7 @@ func ensureHerdrServerIntent(
 	if err != nil {
 		return state.LaunchIntent{}, false, err
 	}
-	intent, err = newHerdrServerIntent(kind, identity)
+	intent, err = newManagedServerIntent(kind, identity)
 	if err != nil {
 		return state.LaunchIntent{}, false, err
 	}
@@ -178,7 +178,7 @@ func ensureHerdrServerIntent(
 	return intent, true, nil
 }
 
-func currentHerdrServerIntent(
+func currentManagedServerIntent(
 	journal *state.LockedLaunchJournal,
 	kind state.LaunchIntentKind,
 ) (state.LaunchIntent, bool, error) {
@@ -189,13 +189,13 @@ func currentHerdrServerIntent(
 	if intent.Kind != kind {
 		return state.LaunchIntent{}, false, fmt.Errorf(
 			"herdr owned server %s is pending; refusing %s",
-			herdrServerAction(intent.Kind), herdrServerAction(kind),
+			managedServerAction(intent.Kind), managedServerAction(kind),
 		)
 	}
 	return intent, true, nil
 }
 
-func newHerdrServerIntent(
+func newManagedServerIntent(
 	kind state.LaunchIntentKind,
 	identity state.RuntimeServerIdentity,
 ) (state.LaunchIntent, error) {
@@ -208,17 +208,17 @@ func newHerdrServerIntent(
 	}, nil
 }
 
-func prepareHerdrShutdown(
+func prepareManagedShutdown(
 	ctx context.Context,
 	projectRoot string,
 	journal *state.LockedLaunchJournal,
-	io HerdrServerIO,
+	io ManagedServerIO,
 ) (state.LaunchIntent, error) {
 	identity, err := io.InspectServer()
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
-	err = rejectActiveHerdrRows(projectRoot)
+	err = rejectActiveManagedRows(projectRoot)
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
@@ -231,7 +231,7 @@ func prepareHerdrShutdown(
 			"herdr owned server has %d active or foreign workspace resources", len(workspaces),
 		)
 	}
-	intent, err := newHerdrServerIntent(state.IntentShutdown, identity)
+	intent, err := newManagedServerIntent(state.IntentShutdown, identity)
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
@@ -239,7 +239,7 @@ func prepareHerdrShutdown(
 	return intent, journal.Save()
 }
 
-func rejectActiveHerdrRows(projectRoot string) error {
+func rejectActiveManagedRows(projectRoot string) error {
 	roots, err := worktree.ListRoots(projectRoot)
 	if err != nil {
 		return fmt.Errorf("list linked worktrees before Herdr shutdown: %w", err)
@@ -258,23 +258,23 @@ func rejectActiveHerdrRows(projectRoot string) error {
 	return nil
 }
 
-func verifyRestartedHerdrRows(
+func verifyRestartedManagedRows(
 	ctx context.Context,
 	projectRoot string,
 	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
-	restarted HerdrRestartRuntime,
+	restarted ManagedRestartRuntime,
 ) error {
-	return resumeRestartedHerdrRows(ctx, projectRoot, locked, journal, restarted, 0)
+	return resumeRestartedManagedRows(ctx, projectRoot, locked, journal, restarted, 0)
 }
 
-func sameHerdrRestartRoute(saved state.Pane, current backend.LivePane) bool {
+func sameManagedRestartRoute(saved state.Pane, current backend.LivePane) bool {
 	return current.Ref.Backend == backend.Herdr &&
 		current.SessionID == saved.SessionID && current.SocketPath == saved.SocketPath &&
 		current.Ref.Workspace == saved.WorkspaceID && current.Ref.Pane == saved.PaneID
 }
 
-func completeHerdrServerLifecycle(
+func completeManagedServerLifecycle(
 	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	intentID string,
@@ -288,7 +288,7 @@ func completeHerdrServerLifecycle(
 	return journal.Save()
 }
 
-func markPlannedHerdrReopenCleanupManual(journal *state.LockedLaunchJournal) {
+func markPlannedManagedReopenCleanupManual(journal *state.LockedLaunchJournal) {
 	for i := range journal.Intents {
 		intent := &journal.Intents[i]
 		if intent.Kind != state.IntentCleanup || intent.CleanupPhase != state.CleanupReopen ||
@@ -300,7 +300,7 @@ func markPlannedHerdrReopenCleanupManual(journal *state.LockedLaunchJournal) {
 	}
 }
 
-func herdrServerAction(kind state.LaunchIntentKind) string {
+func managedServerAction(kind state.LaunchIntentKind) string {
 	if kind == state.IntentShutdown {
 		return "shutdown"
 	}

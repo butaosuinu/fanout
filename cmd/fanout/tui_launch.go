@@ -201,7 +201,7 @@ func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentNa
 // parent lane. That lane already owns the child fan-out lock when its validated
 // plan becomes ready, so it reuses that recorder instead of taking a nested
 // lock.
-func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr panelaunch.HerdrSessionRuntime, agentName, runtimeParent string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, string, error) {
+func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr panelaunch.ManagedSessionRuntime, agentName, runtimeParent string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, string, error) {
 	cfg := &cliflags.Config{Agent: agentName, ParentRef: runtimeParent}
 	return launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, runtimeBackend, herdr, cfg, store, recorder, guard,
 		func(store state.Store, livenessKey string, _ *cliflags.Config) panelaunch.Request {
@@ -211,7 +211,7 @@ func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runti
 
 // launchPlanCoordinatorLockedWithConfig carries a lane-specific launch mode
 // through the shared coordinator attach path.
-func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr panelaunch.HerdrSessionRuntime, cfg *cliflags.Config, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, string, error) {
+func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr panelaunch.ManagedSessionRuntime, cfg *cliflags.Config, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, string, error) {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	if guard != nil {

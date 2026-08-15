@@ -212,21 +212,21 @@ type parentIssueFanoutResult struct {
 	CreatedPaneIDs []string
 	Notice         string
 	runtimeBackend backend.Backend
-	herdr          panelaunch.HerdrSessionRuntime
+	herdr          panelaunch.ManagedSessionRuntime
 }
 
 type tuiIssueReadyFunc func(
 	state.Store,
 	panelaunch.StateRecorder,
 	backend.Backend,
-	panelaunch.HerdrSessionRuntime,
+	panelaunch.ManagedSessionRuntime,
 ) error
 
 type tuiIssueAfterFunc func(
 	state.Store,
 	panelaunch.StateRecorder,
 	backend.Backend,
-	panelaunch.HerdrSessionRuntime,
+	panelaunch.ManagedSessionRuntime,
 	run.IssueAfterContext,
 ) error
 

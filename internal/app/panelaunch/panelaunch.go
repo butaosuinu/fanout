@@ -126,7 +126,7 @@ type Launcher struct {
 	Log         *log.Logger
 	Info        *fanoutruntime.Info
 	Backend     backend.Backend
-	Herdr       HerdrLaunchRuntime
+	Herdr       ManagedLaunchRuntime
 	Recorder    StateRecorder
 	Palette     log.Palette
 	CommandName string
@@ -142,7 +142,7 @@ func (l *Launcher) LaunchOK(req Request) bool {
 // backend-native pane id. A successful dry run returns an empty Result.
 func (l *Launcher) LaunchWithResult(req Request) (Result, bool) {
 	if l.Backend != nil && l.Backend.MutationModel() == backend.MutationJournaled {
-		return l.launchHerdr(req)
+		return l.launchManaged(req)
 	}
 	return l.launch(req)
 }
@@ -308,7 +308,7 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		l.Log.Err("%s: runtime backend is not configured", paneLogLabel(req))
 		return Result{}, false
 	}
-	herdrLocked, ok := l.prepareAttachedLaunch(&req)
+	managedLocked, ok := l.prepareAttachedLaunch(&req)
 	if !ok {
 		return Result{}, false
 	}
@@ -330,8 +330,8 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		logPlanMode(req, l.Log)
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, l.Info.ProjectRoot, targetPath, ""), req.Hooks, l.Log)
-	if herdrLocked != nil {
-		return l.attachHerdr(req, targetPath, herdrLocked)
+	if managedLocked != nil {
+		return l.attachManaged(req, targetPath, managedLocked)
 	}
 	return l.attachTmux(req, targetPath)
 }
@@ -344,7 +344,7 @@ func (l *Launcher) prepareAttachedLaunch(req *Request) (*state.LockedStore, bool
 	if l.Backend.MutationModel() != backend.MutationJournaled {
 		return nil, true
 	}
-	return l.admitHerdrLaunchRequest(*req)
+	return l.admitManagedLaunchRequest(*req)
 }
 
 // prepareAttachedLiveness applies the identity contract of the launch lane the
@@ -574,11 +574,11 @@ func statePaneForBackend(req Request, paneID, worktreePath string, now time.Time
 	if runtimeBackend != backend.Tmux {
 		pane.Backend = runtimeBackend
 	}
-	applyHerdrStateIdentity(&pane, runtimeBackend, live)
+	applyManagedStateIdentity(&pane, runtimeBackend, live)
 	return pane
 }
 
-func applyHerdrStateIdentity(
+func applyManagedStateIdentity(
 	pane *state.Pane,
 	runtimeBackend backend.Name,
 	live []*backend.LivePane,

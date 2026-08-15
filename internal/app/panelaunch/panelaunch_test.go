@@ -136,7 +136,7 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 	}
 }
 
-func TestStatePaneForBackendCapturesExactHerdrIdentity(t *testing.T) {
+func TestStatePaneForBackendCapturesExactManagedIdentity(t *testing.T) {
 	session := &backend.AgentSessionRef{
 		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "thread-528",
 	}
@@ -158,7 +158,7 @@ func TestStatePaneForBackendCapturesExactHerdrIdentity(t *testing.T) {
 	}
 }
 
-func TestPrepareAttachedLivenessRejectsHerdrStartGate(t *testing.T) {
+func TestPrepareAttachedLivenessRejectsManagedStartGate(t *testing.T) {
 	req := Request{AgentStartGate: "tmux-only", ShellKey: "tmux-key"}
 	err := prepareAttachedLiveness(backend.MutationJournaled, &req)
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
@@ -221,7 +221,7 @@ func TestLaunchWithResultSelectsLaneByMutationModel(t *testing.T) {
 	}
 }
 
-func TestRuntimeBackendBindingsIncludeSyntheticHerdrCoordinatorOwner(t *testing.T) {
+func TestRuntimeBackendBindingsIncludeSyntheticManagedCoordinatorOwner(t *testing.T) {
 	store := state.Store{Panes: []state.Pane{{
 		Parent: ManualParentRef, RuntimeParent: "524", IssueNum: -1, Backend: backend.Herdr,
 	}}}

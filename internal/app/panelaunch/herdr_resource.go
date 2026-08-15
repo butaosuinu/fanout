@@ -15,13 +15,13 @@ import (
 )
 
 // realizeDeferred hands a realized workspace to the agent-start phase.
-func realizeDeferred(intent state.LaunchIntent) (HerdrRealizeResult, error) {
-	return HerdrRealizeResult{
+func realizeDeferred(intent state.LaunchIntent) (ManagedRealizeResult, error) {
+	return ManagedRealizeResult{
 		Intent: intent,
 		Pane: backend.PaneRef{
 			Backend: backend.Herdr, Workspace: intent.Resource.WorkspaceID, Pane: intent.Resource.PaneID,
 		},
-	}, ErrHerdrLauncherReadinessDeferred
+	}, ErrManagedLauncherReadinessDeferred
 }
 
 func workspacesWithLabel(
@@ -63,7 +63,7 @@ func observationResource(resource state.RuntimeResource) backend.WorkspaceObserv
 	}
 }
 
-func workspaceHasHerdrResource(
+func workspaceHasManagedResource(
 	observation backend.WorkspaceObservation,
 	expected state.RuntimeResource,
 ) bool {
@@ -95,7 +95,7 @@ func workspaceProvenanceMatches(
 		(expected.RepoRoot == "" || observation.RepoRoot == expected.RepoRoot)
 }
 
-func newHerdrWorkspaceLabel(
+func newManagedWorkspaceLabel(
 	kind string,
 	randomToken func() (string, error),
 ) (string, error) {
@@ -110,7 +110,7 @@ func newHerdrWorkspaceLabel(
 	return "fanout-" + kind + "-" + token, nil
 }
 
-func randomHerdrToken() (string, error) {
+func randomManagedToken() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
@@ -118,6 +118,6 @@ func randomHerdrToken() (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 
-func canonicalHerdrParent(parent string) string {
+func canonicalManagedParent(parent string) string {
 	return parentref.Canon(strings.TrimSpace(parent))
 }

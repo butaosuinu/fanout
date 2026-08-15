@@ -27,8 +27,8 @@ type herdrLifecycleDeps struct {
 // newHerdrServerIO binds the owned-server lifecycle seam to one repository's
 // options. Construction of the runtime stays in the composition root; the app
 // only drives the journal-fenced transaction around these calls.
-func newHerdrServerIO(opts herdrrun.OwnedOptions) panelaunch.HerdrServerIO {
-	return panelaunch.HerdrServerIO{
+func newHerdrServerIO(opts herdrrun.OwnedOptions) panelaunch.ManagedServerIO {
+	return panelaunch.ManagedServerIO{
 		InspectServer: func() (state.RuntimeServerIdentity, error) {
 			return herdrrun.InspectOwnedServer(opts)
 		},
@@ -42,12 +42,12 @@ func newHerdrServerIO(opts herdrrun.OwnedOptions) panelaunch.HerdrServerIO {
 		RestartServer: func(
 			ctx context.Context,
 			identity state.RuntimeServerIdentity,
-		) (panelaunch.HerdrRestartedServer, error) {
+		) (panelaunch.ManagedRestartedServer, error) {
 			restarted, err := herdrrun.RestartOwned(ctx, opts, identity)
 			if err != nil {
-				return panelaunch.HerdrRestartedServer{}, err
+				return panelaunch.ManagedRestartedServer{}, err
 			}
-			return panelaunch.HerdrRestartedServer{Runtime: restarted, Session: restarted.Session}, nil
+			return panelaunch.ManagedRestartedServer{Runtime: restarted, Session: restarted.Session}, nil
 		},
 		ShutdownServer: func(
 			ctx context.Context,
@@ -68,10 +68,10 @@ func cmdHerdrLifecycle(args []string, lg *log.Logger) exitcode.Code {
 		projectRoot:  func() (string, error) { return gitroot.Toplevel("") },
 		repoIdentity: worktree.ResolveRepoIdentity,
 		restart: func(ctx context.Context, root string, opts herdrrun.OwnedOptions) (string, error) {
-			return panelaunch.RestartHerdrServer(ctx, root, newHerdrServerIO(opts))
+			return panelaunch.RestartManagedServer(ctx, root, newHerdrServerIO(opts))
 		},
 		shutdown: func(ctx context.Context, root string, opts herdrrun.OwnedOptions) error {
-			return panelaunch.ShutdownHerdrServer(ctx, root, newHerdrServerIO(opts))
+			return panelaunch.ShutdownManagedServer(ctx, root, newHerdrServerIO(opts))
 		},
 	}
 	return runHerdrLifecycle(args, lg, deps)

@@ -33,7 +33,7 @@ var runTUI = fanouttui.Run
 
 var (
 	ensureOwnedHerdrForTUI   = ensureOwnedHerdrSession
-	ensureHerdrConsoleForTUI = panelaunch.EnsureHerdrConsole
+	ensureHerdrConsoleForTUI = panelaunch.EnsureManagedConsole
 )
 
 func isTUIRequest(args []string) bool {

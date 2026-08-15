@@ -1,10 +1,10 @@
 package panelaunch
 
-// RealizeHerdrWorktree: the child-checkout realization flow (branch
+// RealizeManagedWorktree: the child-checkout realization flow (branch
 // reservation, worktree create, response-loss recovery dispatch) and its
 // coordinator-resolution helpers. The shared prologue, the coordinator flow,
-// and the recovery classification live in the sibling herdr_realize.go and
-// herdr_recover.go.
+// and the recovery classification live in the sibling managed_realize.go and
+// managed_recover.go.
 
 import (
 	"context"
@@ -18,23 +18,23 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-// RealizeHerdrWorktree reserves the child branch, creates or recovers the
+// RealizeManagedWorktree reserves the child branch, creates or recovers the
 // Herdr checkout workspace under the caller-held combined launch lock and
 // stops before launcher readiness.
-func RealizeHerdrWorktree(
+func RealizeManagedWorktree(
 	ctx context.Context,
-	req HerdrWorktreeRequest,
-	runtime HerdrWorktreeRuntime,
+	req ManagedWorktreeRequest,
+	runtime ManagedWorktreeRuntime,
 	launchLock *state.LockedStore,
-	hooks HerdrRealizeHooks,
-) (result HerdrRealizeResult, retErr error) {
+	hooks ManagedRealizeHooks,
+) (result ManagedRealizeResult, retErr error) {
 	if ctx == nil || runtime == nil || launchLock == nil {
 		return result, fmt.Errorf("realize Herdr worktree requires context, runtime, and launch lock")
 	}
-	if validateErr := validateHerdrWorktreeRequest(req); validateErr != nil {
+	if validateErr := validateManagedWorktreeRequest(req); validateErr != nil {
 		return result, validateErr
 	}
-	setup, realizeCancel, setupErr := newHerdrRealizeSetup(
+	setup, realizeCancel, setupErr := newManagedRealizeSetup(
 		ctx,
 		req.Parent,
 		req.ProjectRoot,
@@ -61,7 +61,7 @@ func RealizeHerdrWorktree(
 	if intentIDErr != nil {
 		return result, intentIDErr
 	}
-	intent, found, loadErr := loadHerdrWorktreeIntentForRealization(
+	intent, found, loadErr := loadManagedWorktreeIntentForRealization(
 		setup.ctx, runtime, locked, req, source, ownerProjectRoot, runtimeParent, intentID,
 	)
 	if loadErr != nil {
@@ -71,14 +71,14 @@ func RealizeHerdrWorktree(
 	coordinatorID, coordinatorIDErr := state.CoordinatorIntentID(
 		runtimeParent,
 		runtimeOwnerProjectRoot,
-		herdrCoordinatorSyntheticIssueNum(runtimeParent, req.IssueNum),
+		managedCoordinatorSyntheticIssueNum(runtimeParent, req.IssueNum),
 	)
 	if coordinatorIDErr != nil {
 		return result, coordinatorIDErr
 	}
 
 	operationNow := setup.hooks.Now()
-	routeCtx, operationParent, routeCancel, routeContextErr := herdrRealizeRouteContext(
+	routeCtx, operationParent, routeCancel, routeContextErr := managedRealizeRouteContext(
 		setup.ctx,
 		intent,
 		found,
@@ -89,7 +89,7 @@ func RealizeHerdrWorktree(
 			return result, routeContextErr
 		}
 		if intent.Status == state.IntentPlanned {
-			return result, rollbackUnissuedHerdrWorktree(
+			return result, rollbackUnissuedManagedWorktree(
 				locked,
 				req,
 				intent,
@@ -101,16 +101,16 @@ func RealizeHerdrWorktree(
 		return result, routeContextErr
 	}
 	defer routeCancel()
-	if routeErr := verifyHerdrRealizeRoute(
+	if routeErr := verifyManagedRealizeRoute(
 		routeCtx,
 		runtime,
 		source.RepoKey,
-		req.HerdrSession,
+		req.ManagedSession,
 		req.SocketPath,
 	); routeErr != nil {
 		return result, routeErr
 	}
-	coordinator, coordinatorErr := resolvedHerdrCoordinator(
+	coordinator, coordinatorErr := resolvedManagedCoordinator(
 		locked,
 		coordinatorID,
 		req,
@@ -121,7 +121,7 @@ func RealizeHerdrWorktree(
 	if coordinatorErr != nil {
 		return result, coordinatorErr
 	}
-	coordinatorSource, sourceErr := herdrCoordinatorSource(setup.ctx, coordinator, source)
+	coordinatorSource, sourceErr := managedCoordinatorSource(setup.ctx, coordinator, source)
 	if sourceErr != nil {
 		return result, sourceErr
 	}
@@ -138,13 +138,13 @@ func RealizeHerdrWorktree(
 		); savedErr != nil {
 			return result, savedErr
 		}
-		savedProjectRoot, _, savedRootErr := savedHerdrWorktreeSource(setup.ctx, intent, source)
+		savedProjectRoot, _, savedRootErr := savedManagedWorktreeSource(setup.ctx, intent, source)
 		if savedRootErr != nil {
 			return result, savedRootErr
 		}
 		req.ProjectRoot = savedProjectRoot
 	} else {
-		intent, intentErr = plannedHerdrWorktreeIntent(setup, req, intentID, coordinator)
+		intent, intentErr = plannedManagedWorktreeIntent(setup, req, intentID, coordinator)
 		if intentErr != nil {
 			return result, intentErr
 		}
@@ -155,11 +155,11 @@ func RealizeHerdrWorktree(
 	}
 
 	classificationOnly := !operationNow.Before(time.UnixMilli(intent.ExpiresUnixMS))
-	operationCtx, cancel, contextErr := herdrIntentContext(operationParent, intent, operationNow)
+	operationCtx, cancel, contextErr := managedIntentContext(operationParent, intent, operationNow)
 	if contextErr != nil {
-		if errors.Is(contextErr, errHerdrIntentDeadlineExpired) &&
+		if errors.Is(contextErr, errManagedIntentDeadlineExpired) &&
 			intent.Status == state.IntentPlanned {
-			return result, rollbackUnissuedHerdrWorktree(locked, req, intent, contextErr)
+			return result, rollbackUnissuedManagedWorktree(locked, req, intent, contextErr)
 		}
 		return result, contextErr
 	}
@@ -167,7 +167,7 @@ func RealizeHerdrWorktree(
 
 	switch intent.Status {
 	case state.IntentRealized:
-		return resumeRealizedHerdrWorktree(
+		return resumeRealizedManagedWorktree(
 			operationCtx,
 			runtime,
 			locked,
@@ -177,10 +177,10 @@ func RealizeHerdrWorktree(
 			!classificationOnly,
 		)
 	case state.IntentIssued:
-		return recoverHerdrWorktree(operationCtx, runtime, locked, req, source, intent, nil)
+		return recoverManagedWorktree(operationCtx, runtime, locked, req, source, intent, nil)
 	case state.IntentPlanned:
 	default:
-		return result, markHerdrIntentManual(
+		return result, markManagedIntentManual(
 			locked,
 			intent,
 			fmt.Errorf("unknown Herdr worktree intent status %q", intent.Status),
@@ -190,7 +190,7 @@ func RealizeHerdrWorktree(
 	if policyErr := runtime.VerifyWorktreeSetupPolicy(operationCtx); policyErr != nil {
 		return result, policyErr
 	}
-	intent, reservationErr := ensureHerdrBranchReservation(operationCtx, locked, req, intent)
+	intent, reservationErr := ensureManagedBranchReservation(operationCtx, locked, req, intent)
 	if reservationErr != nil {
 		return result, reservationErr
 	}
@@ -201,21 +201,21 @@ func RealizeHerdrWorktree(
 	if coordinatorErr := verifyCoordinatorObservation(intent.Coordinator, workspaces); coordinatorErr != nil {
 		// The create was never issued (planned): release the child
 		// reservation instead of demanding manual cleanup.
-		return result, rollbackUnissuedHerdrWorktree(locked, req, intent, coordinatorErr)
+		return result, rollbackUnissuedManagedWorktree(locked, req, intent, coordinatorErr)
 	}
 	if matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel); len(matches) != 0 {
-		return result, markHerdrIntentManual(
+		return result, markManagedIntentManual(
 			locked,
 			intent,
 			fmt.Errorf("planned Herdr worktree label already has %d workspaces", len(matches)),
 		)
 	}
-	if preconditionErr := verifyHerdrWorktreePreconditions(operationCtx, req, source, intent); preconditionErr != nil {
+	if preconditionErr := verifyManagedWorktreePreconditions(operationCtx, req, source, intent); preconditionErr != nil {
 		// The mutation was never issued (planned), so release the reserved
 		// branch and the intent instead of demanding manual cleanup; the
 		// rollback itself fails closed when the branch ownership no longer
 		// verifies.
-		return result, rollbackUnissuedHerdrWorktree(locked, req, intent, preconditionErr)
+		return result, rollbackUnissuedManagedWorktree(locked, req, intent, preconditionErr)
 	}
 
 	intent.Status = state.IntentIssued
@@ -238,24 +238,24 @@ func RealizeHerdrWorktree(
 	})
 	if mutationErr != nil {
 		if errors.Is(mutationErr, backend.ErrMutationNotIssued) {
-			return result, rollbackUnissuedHerdrWorktree(locked, req, intent, mutationErr)
+			return result, rollbackUnissuedManagedWorktree(locked, req, intent, mutationErr)
 		}
 		if operationErr := operationCtx.Err(); operationErr != nil &&
 			!errors.Is(mutationErr, backend.ErrMutationRejected) {
 			return result, errors.Join(mutationErr, operationErr)
 		}
-		return recoverHerdrWorktree(operationCtx, runtime, locked, req, source, intent, mutationErr)
+		return recoverManagedWorktree(operationCtx, runtime, locked, req, source, intent, mutationErr)
 	}
-	if finalizeErr := finalizeHerdrWorktree(operationCtx, locked, req, source, &intent, mutation.WorkspaceObservation); finalizeErr != nil {
-		return result, handleHerdrWorktreeFinalizeError(locked, intent, finalizeErr)
+	if finalizeErr := finalizeManagedWorktree(operationCtx, locked, req, source, &intent, mutation.WorkspaceObservation); finalizeErr != nil {
+		return result, handleManagedWorktreeFinalizeError(locked, intent, finalizeErr)
 	}
 	return realizeDeferred(intent)
 }
 
-func resolvedHerdrCoordinator(
+func resolvedManagedCoordinator(
 	locked *state.LockedLaunchJournal,
 	coordinatorID string,
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	repoRoot string,
 	runtimeParent string,
 	runtimeOwnerProjectRoot string,
@@ -265,8 +265,8 @@ func resolvedHerdrCoordinator(
 		return state.RuntimeResource{}, fmt.Errorf("herdr coordinator %s is not realized", coordinatorID)
 	}
 	if intent.RuntimeParent != runtimeParent ||
-		intent.Session != req.HerdrSession || intent.SocketPath != req.SocketPath ||
-		!savedHerdrCoordinatorPathMatches(
+		intent.Session != req.ManagedSession || intent.SocketPath != req.SocketPath ||
+		!savedManagedCoordinatorPathMatches(
 			runtimeOwnerProjectRoot,
 			intent.WorktreePath,
 			repoRoot,
@@ -276,7 +276,7 @@ func resolvedHerdrCoordinator(
 	return intent.Resource, nil
 }
 
-func herdrCoordinatorSource(
+func managedCoordinatorSource(
 	ctx context.Context,
 	coordinator state.RuntimeResource,
 	requestSource worktree.RepoIdentity,
@@ -288,13 +288,13 @@ func herdrCoordinatorSource(
 	if source.RepoKey != requestSource.RepoKey {
 		return worktree.RepoIdentity{}, fmt.Errorf(
 			"%w: herdr coordinator source belongs to a different repository",
-			errHerdrRealizedIdentityChanged,
+			errManagedRealizedIdentityChanged,
 		)
 	}
 	return source, nil
 }
 
-func savedHerdrWorktreeSource(
+func savedManagedWorktreeSource(
 	ctx context.Context,
 	intent state.LaunchIntent,
 	source worktree.RepoIdentity,
@@ -318,8 +318,8 @@ func savedHerdrWorktreeSource(
 	return projectRoot, identity, nil
 }
 
-func herdrCoordinatorSyntheticIssueNum(parent string, issueNum int) int {
-	switch canonicalHerdrParent(parent) {
+func managedCoordinatorSyntheticIssueNum(parent string, issueNum int) int {
+	switch canonicalManagedParent(parent) {
 	case ManualParentRef, WatchParentRef:
 		return issueNum
 	default:
@@ -327,12 +327,12 @@ func herdrCoordinatorSyntheticIssueNum(parent string, issueNum int) int {
 	}
 }
 
-// plannedHerdrWorktreeIntent runs the fresh-launch Git preconditions (frozen
+// plannedManagedWorktreeIntent runs the fresh-launch Git preconditions (frozen
 // base, branch state, absent checkout) and builds the planned intent recorded
 // before the branch reservation.
-func plannedHerdrWorktreeIntent(
-	setup herdrRealizeSetup,
-	req HerdrWorktreeRequest,
+func plannedManagedWorktreeIntent(
+	setup managedRealizeSetup,
+	req ManagedWorktreeRequest,
 	intentID string,
 	coordinator state.RuntimeResource,
 ) (state.LaunchIntent, error) {
@@ -372,13 +372,13 @@ func plannedHerdrWorktreeIntent(
 	if !checkout.PathAbsent || checkout.Registered {
 		return state.LaunchIntent{}, fmt.Errorf("herdr worktree path already exists or is registered")
 	}
-	label, err := newHerdrWorkspaceLabel("worktree", setup.hooks.RandomToken)
+	label, err := newManagedWorkspaceLabel("worktree", setup.hooks.RandomToken)
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
 	return state.LaunchIntent{
 		ID: intentID, Kind: state.IntentWorktree, Status: state.IntentPlanned,
-		Parent: canonicalHerdrParent(req.Parent), RuntimeParent: setup.runtimeParent,
+		Parent: canonicalManagedParent(req.Parent), RuntimeParent: setup.runtimeParent,
 		OwnerProjectRoot: setup.ownerProjectRoot,
 		IssueNum:         req.IssueNum,
 		TaskID:           req.TaskID,
@@ -386,7 +386,7 @@ func plannedHerdrWorktreeIntent(
 		BaseBranch: base.BaseBranch, BaseSHA: base.SHA, ExpectedHead: head,
 		WorktreePath: filepath.Clean(req.WorktreePath), BranchExisted: branchExisted,
 		WorkspaceLabel: label, Coordinator: coordinator,
-		Session: req.HerdrSession, SocketPath: req.SocketPath,
+		Session: req.ManagedSession, SocketPath: req.SocketPath,
 		ExpiresUnixMS: setup.deadline.UnixMilli(),
 	}, nil
 }

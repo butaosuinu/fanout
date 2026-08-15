@@ -197,7 +197,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		store state.Store,
 		recorder panelaunch.StateRecorder,
 		runtimeBackend backend.Backend,
-		herdr panelaunch.HerdrSessionRuntime,
+		herdr panelaunch.ManagedSessionRuntime,
 	) error {
 		if runtimeBackend.Name() == backend.Herdr {
 			guardErr := guardLinkedIssueOrchestrator(projectRoot, store, issueNum)
@@ -217,7 +217,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		store state.Store,
 		recorder panelaunch.StateRecorder,
 		runtimeBackend backend.Backend,
-		herdr panelaunch.HerdrSessionRuntime,
+		herdr panelaunch.ManagedSessionRuntime,
 		progress run.IssueAfterContext,
 	) error {
 		if !launchHerdrOrchestratorAfterChildren(runtimeBackend.Name(), progress) {

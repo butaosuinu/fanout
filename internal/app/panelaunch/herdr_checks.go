@@ -15,9 +15,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-func verifyHerdrWorktreePreconditions(
+func verifyManagedWorktreePreconditions(
 	ctx context.Context,
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	source worktree.RepoIdentity,
 	intent state.LaunchIntent,
 ) error {
@@ -84,7 +84,7 @@ func verifyCoordinatorObservation(
 		if workspace.WorkspaceID != expected.WorkspaceID {
 			continue
 		}
-		if workspaceHasHerdrResource(workspace, expected) {
+		if workspaceHasManagedResource(workspace, expected) {
 			return nil
 		}
 		return fmt.Errorf("herdr coordinator identity changed before child mutation")
@@ -95,7 +95,7 @@ func verifyCoordinatorObservation(
 // validateSavedCoordinatorIntent re-verifies the intent the caller looked up
 // by its derived ID, so identity checks cover the stored fields only.
 func validateSavedCoordinatorIntent(
-	req HerdrCoordinatorRequest,
+	req ManagedCoordinatorRequest,
 	cwd string,
 	runtimeParent string,
 	runtimeOwnerProjectRoot string,
@@ -104,12 +104,12 @@ func validateSavedCoordinatorIntent(
 	if intent.Kind != state.IntentCoordinator ||
 		intent.RuntimeParent != runtimeParent ||
 		intent.IssueNum != req.IssueNum ||
-		!savedHerdrCoordinatorPathMatches(
+		!savedManagedCoordinatorPathMatches(
 			runtimeOwnerProjectRoot,
 			intent.WorktreePath,
 			cwd,
 		) ||
-		intent.Session != req.HerdrSession || intent.SocketPath != req.SocketPath {
+		intent.Session != req.ManagedSession || intent.SocketPath != req.SocketPath {
 		return fmt.Errorf("saved Herdr coordinator intent contradicts request")
 	}
 	return nil
@@ -118,7 +118,7 @@ func validateSavedCoordinatorIntent(
 // validateSavedWorktreeIntent re-verifies the intent the caller looked up by
 // its derived ID, so identity checks cover the stored fields only.
 func validateSavedWorktreeIntent(
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	source worktree.RepoIdentity,
 	coordinator state.RuntimeResource,
 	ownerProjectRoot string,
@@ -126,46 +126,46 @@ func validateSavedWorktreeIntent(
 	intent state.LaunchIntent,
 ) error {
 	if intent.Kind != state.IntentWorktree ||
-		intent.Parent != canonicalHerdrParent(req.Parent) ||
+		intent.Parent != canonicalManagedParent(req.Parent) ||
 		intent.RuntimeParent != runtimeParent ||
 		intent.OwnerProjectRoot != ownerProjectRoot ||
 		intent.IssueNum != req.IssueNum || intent.TaskID != req.TaskID ||
-		!savedHerdrWorktreePathValid(
+		!savedManagedWorktreePathValid(
 			ownerProjectRoot,
 			intent.Slug,
 			intent.WorktreePath,
 		) ||
-		intent.Session != req.HerdrSession || intent.SocketPath != req.SocketPath ||
+		intent.Session != req.ManagedSession || intent.SocketPath != req.SocketPath ||
 		intent.Coordinator != coordinator {
 		return fmt.Errorf("saved Herdr worktree intent contradicts request")
 	}
 	if intent.Resource.RepoKey != "" &&
-		!savedHerdrWorktreeRepoMatches(ownerProjectRoot, intent.Resource, source) {
+		!savedManagedWorktreeRepoMatches(ownerProjectRoot, intent.Resource, source) {
 		return fmt.Errorf("saved Herdr worktree intent belongs to a different repository")
 	}
 	return nil
 }
 
-func validateHerdrCoordinatorRequest(req HerdrCoordinatorRequest) error {
+func validateManagedCoordinatorRequest(req ManagedCoordinatorRequest) error {
 	if strings.TrimSpace(req.Parent) == "" || req.ProjectRoot == "" || req.SourceRoot == "" ||
-		req.CWD == "" || req.HerdrSession == "" || req.SocketPath == "" {
+		req.CWD == "" || req.ManagedSession == "" || req.SocketPath == "" {
 		return fmt.Errorf("herdr coordinator request is incomplete")
 	}
 	if req.RuntimeParent != "" &&
-		(canonicalHerdrParent(req.Parent) != ManualParentRef || req.IssueNum >= 0) {
+		(canonicalManagedParent(req.Parent) != ManualParentRef || req.IssueNum >= 0) {
 		return fmt.Errorf("explicit Herdr runtime parent requires a manual coordinator")
 	}
 	return nil
 }
 
-func validateHerdrWorktreeRequest(req HerdrWorktreeRequest) error {
+func validateManagedWorktreeRequest(req ManagedWorktreeRequest) error {
 	if strings.TrimSpace(req.Parent) == "" || req.ProjectRoot == "" || req.SourceRoot == "" ||
 		req.Slug == "" || req.BranchName == "" || req.WorktreePath == "" ||
-		req.HerdrSession == "" || req.SocketPath == "" {
+		req.ManagedSession == "" || req.SocketPath == "" {
 		return fmt.Errorf("herdr worktree request is incomplete")
 	}
 	issueKey := req.IssueNum > 0 ||
-		canonicalHerdrParent(req.Parent) == ManualParentRef && req.IssueNum < 0
+		canonicalManagedParent(req.Parent) == ManualParentRef && req.IssueNum < 0
 	if issueKey == (strings.TrimSpace(req.TaskID) != "") {
 		return fmt.Errorf("herdr worktree request requires exactly one issue number or task id")
 	}
@@ -176,7 +176,7 @@ func validateHerdrWorktreeRequest(req HerdrWorktreeRequest) error {
 	return nil
 }
 
-func savedHerdrCoordinatorPathMatches(ownerProjectRoot, savedPath, requestPath string) bool {
+func savedManagedCoordinatorPathMatches(ownerProjectRoot, savedPath, requestPath string) bool {
 	savedPath = filepath.Clean(savedPath)
 	if !filepath.IsAbs(savedPath) {
 		return false
@@ -184,7 +184,7 @@ func savedHerdrCoordinatorPathMatches(ownerProjectRoot, savedPath, requestPath s
 	return ownerProjectRoot == "" || savedPath == filepath.Clean(requestPath)
 }
 
-func savedHerdrWorktreePathValid(ownerProjectRoot, savedSlug, savedPath string) bool {
+func savedManagedWorktreePathValid(ownerProjectRoot, savedSlug, savedPath string) bool {
 	savedPath = filepath.Clean(savedPath)
 	if !filepath.IsAbs(savedPath) {
 		return false
@@ -202,7 +202,7 @@ func savedHerdrWorktreePathValid(ownerProjectRoot, savedSlug, savedPath string) 
 	return err == nil && filepath.Clean(savedRoot) == filepath.Clean(ownerProjectRoot)
 }
 
-func savedHerdrWorktreeRepoMatches(
+func savedManagedWorktreeRepoMatches(
 	ownerProjectRoot string,
 	resource state.RuntimeResource,
 	source worktree.RepoIdentity,

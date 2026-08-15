@@ -60,10 +60,10 @@ func (l *Launcher) Shell(req ShellRequest) error {
 	slug := shellPaneSlug(targetPath, req.Root, number)
 	title := shellPaneTitle(targetPath, req.Root)
 	if l.Backend != nil && l.Backend.MutationModel() == backend.MutationJournaled {
-		if err := admitHerdrCoordinatorLaunch(recorder, projectRoot, number); err != nil {
+		if err := admitManagedCoordinatorLaunch(recorder, projectRoot, number); err != nil {
 			return err
 		}
-		return l.shellHerdr(recorder, targetPath, number, slug, title)
+		return l.shellManaged(recorder, targetPath, number, slug, title)
 	}
 	return l.shellTmux(recorder, targetPath, number, slug, title)
 }
