@@ -19,17 +19,17 @@ func (l *Launcher) shellManaged(
 	number int,
 	slug, title string,
 ) error {
-	if l.Herdr == nil {
+	if l.Managed == nil {
 		return fmt.Errorf("herdr terminal launch requires an owned session")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), maxManagedRealizeTimeout)
 	defer cancel()
-	route, err := verifyManagedConsoleRoute(ctx, l.Herdr)
+	route, err := verifyManagedConsoleRoute(ctx, l.Managed)
 	if err != nil {
 		return err
 	}
 	intent, err := realizeManagedInteractive(
-		ctx, l.Herdr, locked, route,
+		ctx, l.Managed, locked, route,
 		manualManagedCoordinatorRequest(l.Info.ProjectRoot, targetPath, route, "", number),
 		func(state.LaunchIntent) (*state.LaunchCapsule, error) {
 			return l.newManualManagedShellLaunch(route)
@@ -53,7 +53,7 @@ func (l *Launcher) newManualManagedShellLaunch(
 	if err != nil {
 		return nil, err
 	}
-	return newManagedShellLaunch(l.Herdr, route, shell, os.Environ())
+	return newManagedShellLaunch(l.Managed, route, shell, os.Environ())
 }
 
 func managedShellStatePane(

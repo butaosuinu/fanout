@@ -494,7 +494,7 @@ func planTaskComplete(gh ghissue.Runner, cfg *cliflags.Config, projectRoot strin
 }
 
 func executeTaskPlan(cfg *cliflags.Config, lg *log.Logger, rt *Runtime, spec planspec.Spec, targets []planspec.Task, resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, c log.Palette, commandName string, teamCtx *briefing.TeamContext) TaskExecutionResult {
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: rt.Info, Backend: rt.Backend, Herdr: rt.Herdr, Recorder: recorder, Palette: c, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: rt.Info, Backend: rt.Backend, Managed: rt.Herdr, Recorder: recorder, Palette: c, CommandName: commandName}
 	created, failed := executeFailFast(
 		targets,
 		taskID,

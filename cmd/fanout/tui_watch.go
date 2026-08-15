@@ -151,7 +151,7 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 		return panelaunch.Result{}, err
 	}
 	req := panelaunch.NewWatchRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Herdr: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.LaunchWithResult(req)
 	if !ok {
 		return panelaunch.Result{}, bufferedLaunchError(stdout, stderr, "create watch pane")

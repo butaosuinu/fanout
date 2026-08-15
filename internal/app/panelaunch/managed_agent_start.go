@@ -122,7 +122,7 @@ func (l *Launcher) admitManagedLauncher(
 	route backend.OwnedLaunchRoute,
 	intent *state.LaunchIntent,
 ) error {
-	if err := l.Herdr.WaitForLauncher(ctx, intent.Resource.PaneID, intent.Launch.Nonce, remainingManagedLaunchTime(*intent)); err != nil {
+	if err := l.Managed.WaitForLauncher(ctx, intent.Resource.PaneID, intent.Launch.Nonce, remainingManagedLaunchTime(*intent)); err != nil {
 		return err
 	}
 	verifyErr := retryManagedObservation(ctx, *intent, func(observeCtx context.Context) error {
@@ -320,7 +320,7 @@ func (l *Launcher) verifyAndRenameManagedAgent(
 	var process backend.PaneProcessInfo
 	err := retryManagedObservation(ctx, intent, func(observeCtx context.Context) error {
 		var processErr error
-		process, processErr = l.Herdr.ProcessInfo(observeCtx, intent.Resource.PaneID)
+		process, processErr = l.Managed.ProcessInfo(observeCtx, intent.Resource.PaneID)
 		return processErr
 	})
 	if err != nil {
@@ -336,7 +336,7 @@ func (l *Launcher) verifyAndRenameManagedAgent(
 	}
 	err = managedLaunchStepResult(
 		stepCtx, cancel,
-		l.Herdr.RenameAgent(stepCtx, intent.Resource.PaneID, intent.Launch.AgentName),
+		l.Managed.RenameAgent(stepCtx, intent.Resource.PaneID, intent.Launch.AgentName),
 	)
 	return identity, err
 }
@@ -353,7 +353,7 @@ func (l *Launcher) sendManagedLaunchToken(ctx context.Context, intent state.Laun
 	}
 	return managedLaunchStepResult(
 		stepCtx, cancel,
-		l.Herdr.SendLaunchToken(stepCtx, intent.Resource.PaneID, intent.Launch.Nonce),
+		l.Managed.SendLaunchToken(stepCtx, intent.Resource.PaneID, intent.Launch.Nonce),
 	)
 }
 
@@ -489,7 +489,7 @@ func (l *Launcher) waitForManagedLaunchProcess(
 	route backend.OwnedLaunchRoute,
 ) error {
 	return retryManagedObservation(ctx, intent, func(observeCtx context.Context) error {
-		process, err := l.Herdr.ProcessInfo(observeCtx, intent.Resource.PaneID)
+		process, err := l.Managed.ProcessInfo(observeCtx, intent.Resource.PaneID)
 		if err != nil {
 			return err
 		}
@@ -544,7 +544,7 @@ func (l *Launcher) observeExactManagedPane(
 	if err != nil {
 		return backend.LivePane{}, false, err
 	}
-	panes, operationErr := l.Herdr.LivePanes(stepCtx)
+	panes, operationErr := l.Managed.LivePanes(stepCtx)
 	stepErr := managedLaunchStepResult(stepCtx, cancel, operationErr)
 	if err := ctx.Err(); err != nil {
 		return backend.LivePane{}, false, err

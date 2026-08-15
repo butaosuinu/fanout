@@ -126,7 +126,7 @@ type Launcher struct {
 	Log         *log.Logger
 	Info        *fanoutruntime.Info
 	Backend     backend.Backend
-	Herdr       ManagedLaunchRuntime
+	Managed     ManagedLaunchRuntime
 	Recorder    StateRecorder
 	Palette     log.Palette
 	CommandName string

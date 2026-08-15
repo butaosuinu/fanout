@@ -35,9 +35,9 @@ const (
 // line from a successful launch into its result banner (bufferedLaunchNotice),
 // and a cosmetic token failure must not read as a broken launch.
 func (l *Launcher) reportManagedSidebarMetadata(req Request, intent state.LaunchIntent) {
-	ctx, cancel := context.WithTimeout(context.Background(), l.Herdr.MetadataReportBudget())
+	ctx, cancel := context.WithTimeout(context.Background(), l.Managed.MetadataReportBudget())
 	defer cancel()
-	if err := l.Herdr.ReportMetadata(ctx, managedSidebarMetadata(req, intent)); err != nil {
+	if err := l.Managed.ReportMetadata(ctx, managedSidebarMetadata(req, intent)); err != nil {
 		l.Log.Dim("%s: Herdr sidebar metadata not reported: %v", paneLogLabel(req), err)
 	}
 }

@@ -97,7 +97,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 			launchStore = recorder.Store
 		}
 		paneReq := panelaunch.NewManualRequest(cfg, projectRoot, launchStore, hookConfig, manualPaneOptionsForTUI(prompt, agentName))
-		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Herdr: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 		if result, ok := launcher.LaunchWithResult(paneReq); ok {
 			if result.PaneID != "" {
 				createdPaneIDs = append(createdPaneIDs, result.PaneID)
@@ -230,7 +230,7 @@ func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName str
 		return panelaunch.Request{}, "", "", err
 	}
 	paneReq := coordinatorRuntimeRequest(runtimeBackend.Name(), cfg.ParentRef, buildReq(store, livenessKey, cfg))
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Backend: runtimeBackend, Herdr: herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Backend: runtimeBackend, Managed: herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.AttachWithResult(paneReq, projectRoot)
 	if !ok {
 		return panelaunch.Request{}, "", "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
@@ -512,7 +512,7 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 		cfg := newSessionConfigForTUIAgent(projectRoot, agentName, launchLogger.Warn)
 		cfg.ParentRef = resolverParent
 		paneReq := newAttachedPaneRequest(cfg, projectRoot, recorder.Store, hookConfig, prompt, targetPath, resolvedTarget)
-		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Herdr: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 		if launcher.Attach(paneReq, targetPath) {
 			createdCount++
 			continue
@@ -679,7 +679,7 @@ func newOwnedHerdrLaunchShellFunc(
 		launcher := &panelaunch.Launcher{
 			Info:    &fanoutruntime.Info{ProjectRoot: ownerRoot},
 			Backend: owned.Backend(),
-			Herdr:   owned,
+			Managed: owned,
 		}
 		return launcher.Shell(panelaunch.ShellRequest{
 			TargetPath: req.TargetPath,

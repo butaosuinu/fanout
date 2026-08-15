@@ -18,14 +18,14 @@ func (l *Launcher) verifyManagedIdleLauncher(
 	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
 ) error {
-	process, err := l.Herdr.ProcessInfo(ctx, intent.Resource.PaneID)
+	process, err := l.Managed.ProcessInfo(ctx, intent.Resource.PaneID)
 	if err != nil {
 		return err
 	}
 	if verifyErr := verifyManagedLauncherProcess(process, intent, route); verifyErr != nil {
 		return fmt.Errorf("%w: %w", errManagedLauncherIdentityChanged, verifyErr)
 	}
-	panes, err := l.Herdr.LivePanes(ctx)
+	panes, err := l.Managed.LivePanes(ctx)
 	if err != nil {
 		return err
 	}

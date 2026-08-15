@@ -92,11 +92,11 @@ func (l *Launcher) issueManagedWorktreeRemoval(
 		return err
 	}
 	if intent.Launch != nil {
-		if err := removeUnpublishedManagedEnvironment(l.Herdr, filepath.Dir(intent.SocketPath), intent.Launch); err != nil {
+		if err := removeUnpublishedManagedEnvironment(l.Managed, filepath.Dir(intent.SocketPath), intent.Launch); err != nil {
 			return err
 		}
 	}
-	removeErr := l.Herdr.RemoveWorktree(ctx, intent.Resource.WorkspaceID, intent.WorktreePath)
+	removeErr := l.Managed.RemoveWorktree(ctx, intent.Resource.WorkspaceID, intent.WorktreePath)
 	absentErr := l.verifyManagedRollbackAbsent(ctx, intent)
 	if absentErr != nil {
 		return errors.Join(removeErr, absentErr)
@@ -138,10 +138,10 @@ func beginManagedLaunchRollback(
 }
 
 func (l *Launcher) verifyManagedRollbackTarget(ctx context.Context, intent state.LaunchIntent) error {
-	if err := l.Herdr.VerifyOwned(ctx); err != nil {
+	if err := l.Managed.VerifyOwned(ctx); err != nil {
 		return err
 	}
-	workspaces, err := l.Herdr.ObserveWorkspaces(ctx)
+	workspaces, err := l.Managed.ObserveWorkspaces(ctx)
 	if err != nil {
 		return err
 	}
@@ -155,7 +155,7 @@ func (l *Launcher) verifyManagedRollbackTarget(ctx context.Context, intent state
 }
 
 func (l *Launcher) verifyManagedRollbackAbsent(ctx context.Context, intent state.LaunchIntent) error {
-	workspaces, err := l.Herdr.ObserveWorkspaces(ctx)
+	workspaces, err := l.Managed.ObserveWorkspaces(ctx)
 	if err != nil {
 		return err
 	}

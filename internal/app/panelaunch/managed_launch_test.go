@@ -177,7 +177,7 @@ func TestIssuedManagedLaunchWithMatchingNameStillFailsClosed(t *testing.T) {
 	}}
 	launcher := &Launcher{
 		Cfg: &cliflags.Config{}, Log: log.New(false),
-		Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime,
+		Info: &fanoutruntime.Info{ProjectRoot: repo}, Managed: runtime,
 	}
 	err = launcher.failClosedIssuedManagedLaunch(journal, intent, nil)
 	if !errors.Is(err, ErrManualCleanupRequired) ||
@@ -391,7 +391,7 @@ func TestFinalizeManagedAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
 		Number: -2, Slug: "orchestrator-issue-425-2", Agent: "claude", Prompt: "coordinate",
 	}
 	launcher := &Launcher{
-		Cfg: &cliflags.Config{}, Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime,
+		Cfg: &cliflags.Config{}, Info: &fanoutruntime.Info{ProjectRoot: repo}, Managed: runtime,
 	}
 	intent, err := launcher.prepareManagedAttachedIntent(
 		context.Background(), req, repo, locked, runtime.launchRoute,
@@ -506,7 +506,7 @@ func TestWaitForManagedAgentRevalidatesConcurrentIntentChanges(t *testing.T) {
 			runtime.listLive = func(context.Context) ([]backend.LivePane, error) {
 				return []backend.LivePane{live}, <-updated
 			}
-			launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
+			launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Managed: runtime}
 			_, err := launcher.waitForManagedPaneUnlocked(
 				context.Background(), locked, intent,
 				func(intent state.LaunchIntent, panes []backend.LivePane) (backend.LivePane, bool) {
@@ -561,7 +561,7 @@ func TestFinishIssuedManagedAgentPreservesObservedAgentAfterContextExpires(t *te
 		<-held
 		return []backend.LivePane{live}, nil
 	}
-	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Managed: runtime}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
@@ -977,7 +977,7 @@ func TestPrepareManagedLaunchRejectsTeamBindingChange(t *testing.T) {
 				Agent: "codex", TeamDBPath: tc.requestedDBPath, CodexTeamMode: tc.requestedCodex,
 				CodexTeamStatusPath: filepath.Join(t.TempDir(), "requested-status.json"),
 			}
-			_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).prepareManagedLaunch(
+			_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Managed: runtime}).prepareManagedLaunch(
 				locked, backend.OwnedLaunchRoute{}, intent,
 				func(launch *state.LaunchCapsule) error {
 					return validateManagedLaunchBinding(req, launch)
@@ -1268,7 +1268,7 @@ func TestRetryManagedObservationRetriesOnlyMarkedFailure(t *testing.T) {
 
 func TestObserveExactManagedPaneReturnsPermanentObservationError(t *testing.T) {
 	runtime := &fakeManagedLaunchRuntime{liveErr: errors.New("malformed snapshot")}
-	launcher := &Launcher{Herdr: runtime}
+	launcher := &Launcher{Managed: runtime}
 	intent := state.LaunchIntent{ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli()}
 
 	_, found, err := launcher.observeExactManagedPane(
@@ -1284,7 +1284,7 @@ func TestObserveExactManagedPaneReturnsPermanentObservationError(t *testing.T) {
 
 func TestObserveExactManagedPaneDefersRetryableObservationError(t *testing.T) {
 	runtime := &fakeManagedLaunchRuntime{liveErr: retryableManagedObservationError{}}
-	launcher := &Launcher{Herdr: runtime}
+	launcher := &Launcher{Managed: runtime}
 	intent := state.LaunchIntent{ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli()}
 
 	_, found, err := launcher.observeExactManagedPane(
@@ -1454,7 +1454,7 @@ func TestWaitForManagedLaunchProcessRetriesExactLauncherTransition(t *testing.T)
 			}},
 		}, nil
 	}
-	if err := (&Launcher{Herdr: runtime}).waitForManagedLaunchProcess(context.Background(), intent, route); err != nil {
+	if err := (&Launcher{Managed: runtime}).waitForManagedLaunchProcess(context.Background(), intent, route); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
@@ -1467,7 +1467,7 @@ func TestWaitForManagedLaunchProcessRetriesExactLauncherTransition(t *testing.T)
 		info.ForegroundProcesses[0].Executable = "/foreign/fanout"
 		return info, nil
 	}
-	if err := (&Launcher{Herdr: runtime}).waitForManagedLaunchProcess(context.Background(), intent, route); err == nil {
+	if err := (&Launcher{Managed: runtime}).waitForManagedLaunchProcess(context.Background(), intent, route); err == nil {
 		t.Fatal("foreign launcher transition was accepted")
 	}
 	if calls != 1 {
@@ -1602,7 +1602,7 @@ func TestManagedLaunchDoesNotIssueTokenAfterLauncherWaitExpires(t *testing.T) {
 		time.Sleep(60 * time.Millisecond)
 		return nil
 	}
-	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startManagedAgent(
+	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Managed: runtime}).startManagedAgent(
 		context.Background(), locked, backend.OwnedLaunchRoute{}, intent,
 		func(*state.LaunchCapsule) error { return nil }, nil,
 		func(state.LaunchIntent, []backend.LivePane) (backend.LivePane, bool) {
@@ -1667,7 +1667,7 @@ func TestManagedCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 		t.Fatal(statusErr)
 	}
 
-	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startManagedRequestAgent(
+	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Managed: runtime}).startManagedRequestAgent(
 		context.Background(), req, locked, route, intent, nil,
 	)
 	if !errors.Is(err, ErrManualCleanupRequired) || !strings.Contains(err.Error(), "owner mismatch") {
@@ -1705,7 +1705,7 @@ func TestManagedLaunchDoesNotRenameAfterProcessCheckExpires(t *testing.T) {
 			}},
 		}, nil
 	}
-	_, err := (&Launcher{Herdr: runtime}).verifyAndRenameManagedAgent(context.Background(), intent)
+	_, err := (&Launcher{Managed: runtime}).verifyAndRenameManagedAgent(context.Background(), intent)
 	if err == nil || runtime.renameCalls != 0 {
 		t.Fatalf("expired process check error/rename calls = %v/%d, want error/0", err, runtime.renameCalls)
 	}
@@ -1743,7 +1743,7 @@ func TestAdmitManagedLauncherFencesExactTerminalBeforeToken(t *testing.T) {
 	runtime.processInfo = testManagedLauncherProcess(intent, runtime.launchRoute.LauncherPath)
 	runtime.live = []backend.LivePane{testManagedIdlePane(intent)}
 	runtime.live[0].TerminalID = "reused-terminal"
-	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Managed: runtime}
 
 	err = launcher.admitManagedLauncher(context.Background(), journal, runtime.launchRoute, &intent)
 	if !errors.Is(err, ErrManualCleanupRequired) {
@@ -1788,7 +1788,7 @@ func TestManagedCoordinatorIdentityMismatchFailsBeforeStateRow(t *testing.T) {
 	defer func() { _ = locked.Unlock() }()
 	launcher := &Launcher{
 		Cfg: &cliflags.Config{}, Log: log.NewWith(io.Discard, io.Discard, false),
-		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Herdr: runtime,
+		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Managed: runtime,
 	}
 	_, err = launcher.realizeManagedCoordinator(
 		context.Background(), Request{ParentRef: "425"}, locked, runtime.launchRoute,
@@ -1838,7 +1838,7 @@ func TestManagedCoordinatorRetriesTransientIdentityObservation(t *testing.T) {
 	defer func() { _ = locked.Unlock() }()
 	launcher := &Launcher{
 		Cfg: &cliflags.Config{}, Log: log.NewWith(io.Discard, io.Discard, false),
-		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Herdr: runtime,
+		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Managed: runtime,
 	}
 	intent, err := launcher.realizeManagedCoordinator(
 		context.Background(), Request{ParentRef: "425"}, locked, runtime.launchRoute,
@@ -1877,7 +1877,7 @@ func TestManagedCoordinatorReusesExpiredIntentWithinCurrentObservationBudget(t *
 	defer func() { _ = locked.Unlock() }()
 	launcher := &Launcher{
 		Cfg: &cliflags.Config{}, Log: log.NewWith(io.Discard, io.Discard, false),
-		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Herdr: runtime,
+		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Managed: runtime,
 	}
 	intent, err := launcher.realizeManagedCoordinator(
 		context.Background(), Request{ParentRef: "425"}, locked, runtime.launchRoute,
@@ -1949,7 +1949,7 @@ func TestManagedCoordinatorRecordConflictRetainsManualCleanupIntent(t *testing.T
 	}
 	launcher := &Launcher{
 		Cfg: &cliflags.Config{}, Log: log.NewWith(io.Discard, io.Discard, false),
-		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Herdr: runtime,
+		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Managed: runtime,
 	}
 	intent, realizeErr := launcher.realizeManagedLaunch(Request{ParentRef: "425"}, managedLaunchOperation{
 		ctx: context.Background(), locked: locked, route: runtime.launchRoute,
@@ -2008,7 +2008,7 @@ func TestManagedLaunchRollbackUsesSavedIdentityAfterLauncherExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = locked.Unlock() }()
-	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Managed: runtime}
 	if rollbackErr := launcher.rollbackManagedLaunch(locked, intent, errors.New("launcher exited")); rollbackErr != nil {
 		t.Fatal(rollbackErr)
 	}
@@ -2043,7 +2043,7 @@ func TestPrepareManagedOperationSetsOneSharedLaunchDeadline(t *testing.T) {
 	}}
 	launcher := &Launcher{
 		Cfg: &cliflags.Config{}, Log: log.NewWith(io.Discard, io.Discard, false),
-		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Herdr: runtime,
+		Info: &fanoutruntime.Info{ProjectRoot: repo}, Recorder: locked, Managed: runtime,
 	}
 	operation, ok := launcher.prepareManagedOperation(Request{ParentRef: "425", Number: 528, Agent: "codex"})
 	if !ok {

@@ -102,7 +102,7 @@ func ensureManagedConsoleLocked(
 	if validationErr := validateManagedConsoleIntentRoot(intent, root); validationErr != nil {
 		return ManagedConsoleResult{}, validationErr
 	}
-	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: root}, Herdr: owned}
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: root}, Managed: owned}
 	live, err := launcher.startManagedAgent(ctx, locked, route, intent, validateManagedShellLaunch, nil, exactManagedShellPane, nil)
 	if err != nil {
 		return ManagedConsoleResult{}, err

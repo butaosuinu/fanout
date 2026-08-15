@@ -334,7 +334,7 @@ func effectiveIssueLaunchConfig(cfg *cliflags.Config, resolvedSettings settings.
 }
 
 func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, runtimeBackend backend.Backend, herdr panelaunch.ManagedLaunchRuntime, targets []ghissue.Issue, hydrateBody func(*ghissue.Issue), resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Backend: runtimeBackend, Herdr: herdr, Recorder: recorder, Palette: c, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Backend: runtimeBackend, Managed: herdr, Recorder: recorder, Palette: c, CommandName: commandName}
 	var createdPaneIDs []string
 	var notices []string
 	created, failed := executeFailFast(

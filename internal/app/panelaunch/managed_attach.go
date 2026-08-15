@@ -20,7 +20,7 @@ func (l *Launcher) attachManaged(
 ) (Result, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), maxManagedRealizeTimeout)
 	defer cancel()
-	route, err := verifyManagedConsoleRoute(ctx, l.Herdr)
+	route, err := verifyManagedConsoleRoute(ctx, l.Managed)
 	if err != nil {
 		return l.failManaged(req, "verify owned route", err)
 	}
@@ -56,7 +56,7 @@ func (l *Launcher) prepareManagedAttachedIntent(
 		return l.prepareManagedLaunchCapsule(req, route, intent, os.Environ())
 	}
 	return realizeManagedInteractive(
-		ctx, l.Herdr, locked, route,
+		ctx, l.Managed, locked, route,
 		manualManagedCoordinatorRequest(
 			l.Info.ProjectRoot, targetPath, route, req.RuntimeParent, req.Number,
 		), build,

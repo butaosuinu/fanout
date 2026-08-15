@@ -92,12 +92,12 @@ func (l *Launcher) prepareManagedOperation(req Request) (managedLaunchOperation,
 		ctx: context.Background(), locked: locked,
 		environment: append([]string(nil), os.Environ()...),
 	}
-	if err := l.Herdr.VerifyOwned(operation.ctx); err != nil {
+	if err := l.Managed.VerifyOwned(operation.ctx); err != nil {
 		l.Log.Err("%s: verify owned Herdr session: %v", paneLogLabel(req), err)
 		return managedLaunchOperation{}, false
 	}
 	var err error
-	operation.route, err = l.Herdr.LaunchRoute()
+	operation.route, err = l.Managed.LaunchRoute()
 	if err != nil {
 		l.Log.Err("%s: resolve owned Herdr route: %v", paneLogLabel(req), err)
 		return managedLaunchOperation{}, false
@@ -116,7 +116,7 @@ func (l *Launcher) prepareManagedOperation(req Request) (managedLaunchOperation,
 
 func (l *Launcher) admitManagedLaunchRequest(req Request) (*state.LockedStore, bool) {
 	locked, ok := l.Recorder.(*state.LockedStore)
-	if !ok || l.Herdr == nil {
+	if !ok || l.Managed == nil {
 		l.Log.Err("%s: Herdr launch requires an owned session and combined launch lock", paneLogLabel(req))
 		return nil, false
 	}
@@ -221,7 +221,7 @@ func (l *Launcher) realizeManagedCoordinator(
 		Parent: req.ParentRef, IssueNum: managedCoordinatorIssueNum(req), ProjectRoot: l.Info.ProjectRoot,
 		SourceRoot: l.Info.ProjectRoot, CWD: l.Info.ProjectRoot,
 		ManagedSession: route.Session, SocketPath: route.SocketPath,
-	}, l.Herdr, locked, ManagedRealizeHooks{})
+	}, l.Managed, locked, ManagedRealizeHooks{})
 	if err != nil && !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
 		return state.LaunchIntent{}, err
 	}
@@ -268,7 +268,7 @@ func (l *Launcher) realizeManagedChild(
 		NoRefresh: l.Cfg.NoRefresh, AllowMissingOrigin: req.Worktree.AllowMissingOrigin,
 		WorktreePath:   req.Worktree.WorktreePath,
 		ManagedSession: route.Session, SocketPath: route.SocketPath,
-	}, l.Herdr, locked, ManagedRealizeHooks{})
+	}, l.Managed, locked, ManagedRealizeHooks{})
 	if err != nil && !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
 		return state.LaunchIntent{}, err
 	}
@@ -426,7 +426,7 @@ func (l *Launcher) prepareManagedLaunch(
 		intent = saved
 	}
 	if intent.Launch == nil {
-		return buildAndPersistManagedLaunch(l.Herdr, journal, intent, route.RuntimeDir, validate, build)
+		return buildAndPersistManagedLaunch(l.Managed, journal, intent, route.RuntimeDir, validate, build)
 	}
 	if err := validate(intent.Launch); err != nil {
 		return intent, err
@@ -504,12 +504,12 @@ func (l *Launcher) prepareManagedLaunchCapsule(
 	if err != nil {
 		return nil, err
 	}
-	environment, err := l.Herdr.WorkloadEnvironment(callerEnvironment, route.LauncherPath)
+	environment, err := l.Managed.WorkloadEnvironment(callerEnvironment, route.LauncherPath)
 	if err != nil {
 		return nil, err
 	}
 	environment = append(environment, resolved.emitter.environment...)
-	envPath, envCount, err := l.Herdr.PrepareWorkloadEnvironment(resolved.nonce, environment)
+	envPath, envCount, err := l.Managed.PrepareWorkloadEnvironment(resolved.nonce, environment)
 	if err != nil {
 		return nil, err
 	}

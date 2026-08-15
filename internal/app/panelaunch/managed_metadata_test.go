@@ -163,7 +163,7 @@ func TestReportManagedSidebarMetadataNeverFailsALaunch(t *testing.T) {
 	var out, errOut strings.Builder
 	launcher := &Launcher{
 		Cfg: &cliflags.Config{}, Log: log.NewWith(&out, &errOut, false),
-		Info: &fanoutruntime.Info{ProjectRoot: "/repo"}, Herdr: runtime,
+		Info: &fanoutruntime.Info{ProjectRoot: "/repo"}, Managed: runtime,
 	}
 	req := Request{ParentRef: "524", Number: 494, Slug: "herdr-sidebar-494"}
 
