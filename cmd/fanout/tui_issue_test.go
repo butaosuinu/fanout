@@ -441,20 +441,20 @@ func TestLaunchIssueSessionFromTUIParentLaunchesOrchestratorFirst(t *testing.T) 
 func TestHerdrIssueOrchestratorStartsOnlyAfterAdmissibleChildOutcome(t *testing.T) {
 	tests := []struct {
 		name     string
-		backend  backend.Name
+		model    backend.MutationModel
 		progress run.IssueAfterContext
 		want     bool
 	}{
-		{name: "all children completed", backend: backend.Herdr, progress: run.IssueAfterContext{Created: 2}, want: true},
-		{name: "partial child success", backend: backend.Herdr, progress: run.IssueAfterContext{Created: 1, Failed: 1}, want: true},
-		{name: "children already existed", backend: backend.Herdr, want: true},
-		{name: "first child failed", backend: backend.Herdr, progress: run.IssueAfterContext{Failed: 1}},
-		{name: "tmux keeps wait-for path", backend: backend.Tmux, progress: run.IssueAfterContext{Created: 1}},
+		{name: "all children completed", model: backend.MutationJournaled, progress: run.IssueAfterContext{Created: 2}, want: true},
+		{name: "partial child success", model: backend.MutationJournaled, progress: run.IssueAfterContext{Created: 1, Failed: 1}, want: true},
+		{name: "children already existed", model: backend.MutationJournaled, want: true},
+		{name: "first child failed", model: backend.MutationJournaled, progress: run.IssueAfterContext{Failed: 1}},
+		{name: "atomic lane keeps wait-for path", model: backend.MutationAtomic, progress: run.IssueAfterContext{Created: 1}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := launchHerdrOrchestratorAfterChildren(tt.backend, tt.progress); got != tt.want {
-				t.Fatalf("launchHerdrOrchestratorAfterChildren() = %t, want %t", got, tt.want)
+			if got := launchOrchestratorAfterChildren(tt.model, tt.progress); got != tt.want {
+				t.Fatalf("launchOrchestratorAfterChildren() = %t, want %t", got, tt.want)
 			}
 		})
 	}

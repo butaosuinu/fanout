@@ -177,17 +177,17 @@ func TestOwnedHerdrPaneFocusAndPeekUsePersistedIdentityPorts(t *testing.T) {
 	focused, captured := false, false
 	m := newModel(Options{
 		BackendSelection: backend.Selection{Name: backend.Herdr},
-		HerdrActionDisabled: func(got state.Pane) string {
+		ManagedActionDisabled: func(got state.Pane) string {
 			if got.PaneID != saved.PaneID {
 				return "wrong identity"
 			}
 			return ""
 		},
-		FocusHerdrPane: func(got state.Pane) error {
+		FocusManagedPane: func(got state.Pane) error {
 			focused = got.PaneID == saved.PaneID
 			return nil
 		},
-		CaptureHerdrPane: func(got state.Pane, lines int) (string, error) {
+		CaptureManagedPane: func(got state.Pane, lines int) (string, error) {
 			captured = got.PaneID == saved.PaneID && lines == peekLines
 			return "owned output", nil
 		},
@@ -246,8 +246,8 @@ func TestAutomaticHerdrFocusReloadsPersistedPaneIdentity(t *testing.T) {
 	m := newModel(Options{
 		ProjectRoot: root, BackendSelection: backend.Selection{Name: backend.Herdr},
 		ListLive:            func() ([]backend.LivePane, error) { return []backend.LivePane{live}, unrelated },
-		HerdrActionDisabled: func(state.Pane) string { return "" },
-		FocusHerdrPane:      func(pane state.Pane) error { focused = pane; return nil },
+		ManagedActionDisabled: func(state.Pane) string { return "" },
+		FocusManagedPane:      func(pane state.Pane) error { focused = pane; return nil },
 		FocusPane:           func(string) error { t.Fatal("automatic Herdr focus routed through tmux"); return nil },
 	})
 	msg := m.focusPaneIDCmd("w1:p1", "launched")()
@@ -280,7 +280,7 @@ func TestHerdrRowEnablesLifecycleActionsAndDefaultsCloseToWorktree(t *testing.T)
 	m := newModel(Options{
 		ProjectRoot:                  "/repo",
 		BackendSelection:             backend.Selection{Name: backend.Tmux},
-		LifecycleHerdrRuntimeForRoot: configuredHerdrRuntime,
+		LifecycleWorkspaceRuntimeForRoot: configuredHerdrRuntime,
 	})
 	m.allPanes = []paneView{
 		{Parent: "1", IssueNum: 2, Backend: backend.Herdr, PaneID: "w1:p1", WorktreePath: "/repo/wt"},
@@ -353,13 +353,13 @@ func TestHerdrConsoleLifecycleActionsRequireAmbientOwnedSession(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newModel(Options{
 				BackendSelection: backend.Selection{Name: backend.Herdr},
-				HerdrActionDisabled: func(pane state.Pane) string {
+				ManagedActionDisabled: func(pane state.Pane) string {
 					if pane.PaneID != "w1:p1" {
 						return "lifecycle gate did not receive the saved pane identity"
 					}
 					return tt.reason
 				},
-				LifecycleHerdrRuntimeForRoot: configuredHerdrRuntime,
+				LifecycleWorkspaceRuntimeForRoot: configuredHerdrRuntime,
 			})
 			pane := paneView{
 				Backend: backend.Herdr, PaneID: "w1:p1", TmuxState: "stale", WorktreePath: "/repo/wt",
@@ -378,7 +378,7 @@ func TestLifecycleOptionsBuildsHerdrRuntimeForOwningRoot(t *testing.T) {
 	var gotRoot string
 	m := newModel(Options{
 		ProjectRoot: "/repo/home",
-		LifecycleHerdrRuntimeForRoot: func(root string) lifecycle.WorkspaceRuntimeFactory {
+		LifecycleWorkspaceRuntimeForRoot: func(root string) lifecycle.WorkspaceRuntimeFactory {
 			gotRoot = root
 			return nil
 		},
@@ -392,7 +392,7 @@ func TestLifecycleOptionsBuildsHerdrRuntimeForOwningRoot(t *testing.T) {
 func TestHelpKeepsHerdrInteractiveActionsDisabledButEnablesLifecycle(t *testing.T) {
 	m := newModel(Options{
 		BackendSelection:             backend.Selection{Name: backend.Tmux},
-		LifecycleHerdrRuntimeForRoot: configuredHerdrRuntime,
+		LifecycleWorkspaceRuntimeForRoot: configuredHerdrRuntime,
 	})
 	m.allPanes = []paneView{{IssueNum: 1, Backend: backend.Herdr, PaneID: "w1:p1"}}
 	m.refreshRows()
@@ -420,9 +420,9 @@ func TestLifecycleActionsRequireMatchingRuntimeCapability(t *testing.T) {
 		{name: "tmux child with close port", opts: Options{LifecycleCloseOwned: tmuxClose}, pane: paneView{Backend: backend.Tmux}, action: "close"},
 		{name: "tmux merge without close port", pane: paneView{Backend: backend.Tmux}, action: "merge"},
 		{name: "herdr child without runtime", pane: paneView{Backend: backend.Herdr}, action: "cleanup", want: true},
-		{name: "herdr child with nil factory", opts: Options{LifecycleHerdrRuntimeForRoot: func(string) lifecycle.WorkspaceRuntimeFactory { return nil }}, pane: paneView{Backend: backend.Herdr}, action: "merge", want: true},
-		{name: "herdr child with runtime", opts: Options{LifecycleHerdrRuntimeForRoot: herdrRuntime}, pane: paneView{Backend: backend.Herdr}, action: "cleanup"},
-		{name: "herdr shell close", opts: Options{LifecycleHerdrRuntimeForRoot: herdrRuntime}, pane: paneView{Backend: backend.Herdr, Kind: state.PaneKindShell}, action: "close", want: true},
+		{name: "herdr child with nil factory", opts: Options{LifecycleWorkspaceRuntimeForRoot: func(string) lifecycle.WorkspaceRuntimeFactory { return nil }}, pane: paneView{Backend: backend.Herdr}, action: "merge", want: true},
+		{name: "herdr child with runtime", opts: Options{LifecycleWorkspaceRuntimeForRoot: herdrRuntime}, pane: paneView{Backend: backend.Herdr}, action: "cleanup"},
+		{name: "herdr shell close", opts: Options{LifecycleWorkspaceRuntimeForRoot: herdrRuntime}, pane: paneView{Backend: backend.Herdr, Kind: state.PaneKindShell}, action: "close", want: true},
 		{name: "tmux shell cleanup", opts: Options{LifecycleCloseOwned: tmuxClose}, pane: paneView{Backend: backend.Tmux, Kind: state.PaneKindShell}, action: "cleanup", want: true},
 	}
 	for _, tt := range tests {
@@ -456,7 +456,7 @@ func TestLifecycleActionsDoNotStartWithoutMatchingRuntimeCapability(t *testing.T
 		},
 		{
 			name:   "herdr shell close",
-			opts:   Options{LifecycleHerdrRuntimeForRoot: configuredHerdrRuntime},
+			opts:   Options{LifecycleWorkspaceRuntimeForRoot: configuredHerdrRuntime},
 			pane:   paneView{Backend: backend.Herdr, Kind: state.PaneKindShell},
 			action: actionClose,
 		},

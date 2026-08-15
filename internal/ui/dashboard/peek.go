@@ -134,8 +134,8 @@ func (s *Server) requireOwnedHerdrPane(
 	w http.ResponseWriter,
 	pv sessionview.PaneView,
 ) (sessionview.PaneView, bool) {
-	owned := pv.Alive && s.ownsHerdrPane != nil && s.readHerdrPane != nil &&
-		s.ownsHerdrPane(pv)
+	owned := pv.Alive && s.ownsManagedPane != nil && s.readManagedPane != nil &&
+		s.ownsManagedPane(pv)
 	if !owned {
 		peekError(
 			w,
@@ -271,7 +271,7 @@ func paneReadErrorStatus(pv sessionview.PaneView, err error) int {
 
 func (s *Server) readPane(pv sessionview.PaneView, lines int) (string, error) {
 	if backend.NormalizeName(pv.Backend) == backend.Herdr {
-		out, err := s.readHerdrPane(pv, lines)
+		out, err := s.readManagedPane(pv, lines)
 		if err != nil {
 			return "", fmt.Errorf("herdr pane read: %w", err)
 		}

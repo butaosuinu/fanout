@@ -18,7 +18,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
@@ -201,9 +200,9 @@ func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentNa
 // parent lane. That lane already owns the child fan-out lock when its validated
 // plan becomes ready, so it reuses that recorder instead of taking a nested
 // lock.
-func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr panelaunch.ManagedSessionRuntime, agentName, runtimeParent string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, string, error) {
+func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, managed panelaunch.ManagedSessionRuntime, agentName, runtimeParent string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, string, error) {
 	cfg := &cliflags.Config{Agent: agentName, ParentRef: runtimeParent}
-	return launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, runtimeBackend, herdr, cfg, store, recorder, guard,
+	return launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, runtimeBackend, managed, cfg, store, recorder, guard,
 		func(store state.Store, livenessKey string, _ *cliflags.Config) panelaunch.Request {
 			return buildReq(store, livenessKey)
 		})
@@ -211,7 +210,7 @@ func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runti
 
 // launchPlanCoordinatorLockedWithConfig carries a lane-specific launch mode
 // through the shared coordinator attach path.
-func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr panelaunch.ManagedSessionRuntime, cfg *cliflags.Config, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, string, error) {
+func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName string, runtimeBackend backend.Backend, managed panelaunch.ManagedSessionRuntime, cfg *cliflags.Config, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, string, error) {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	if guard != nil {
@@ -229,8 +228,8 @@ func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName str
 	if err != nil {
 		return panelaunch.Request{}, "", "", err
 	}
-	paneReq := coordinatorRuntimeRequest(runtimeBackend.Name(), cfg.ParentRef, buildReq(store, livenessKey, cfg))
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Backend: runtimeBackend, Managed: herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+	paneReq := coordinatorRuntimeRequest(runtimeBackend.MutationModel(), cfg.ParentRef, buildReq(store, livenessKey, cfg))
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Backend: runtimeBackend, Managed: managed, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.AttachWithResult(paneReq, projectRoot)
 	if !ok {
 		return panelaunch.Request{}, "", "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
@@ -238,11 +237,13 @@ func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName str
 	return paneReq, result.PaneID, bufferedLaunchNotice(stderr), nil
 }
 
-func coordinatorRuntimeRequest(runtimeBackend backend.Name, runtimeParent string, req panelaunch.Request) panelaunch.Request {
-	if runtimeBackend != backend.Herdr {
+// coordinatorRuntimeRequest applies the identity contract of the launch lane
+// the mutation model selects, matching prepareAttachedLiveness.
+func coordinatorRuntimeRequest(model backend.MutationModel, runtimeParent string, req panelaunch.Request) panelaunch.Request {
+	if model != backend.MutationJournaled {
 		return req
 	}
-	// Herdr root-coordinator identity never uses the tmux liveness key. Its
+	// A journaled root coordinator never uses the atomic lane's liveness key. Its
 	// lifecycle binds to the actual parent while the display row stays manual.
 	req.ShellKey = ""
 	req.AgentStartGate = ""
@@ -667,9 +668,9 @@ func launchShellPane(projectRoot, target string, req fanouttui.ShellLaunchReques
 	return launcher.Shell(panelaunch.ShellRequest{TargetPath: req.TargetPath, Root: req.Root})
 }
 
-func newOwnedHerdrLaunchShellFunc(
+func newManagedLaunchShellFunc(
 	projectRoot string,
-	owned *herdrrun.OwnedSession,
+	owned paneruntime.ManagedSession,
 ) fanouttui.ShellLaunchFunc {
 	return func(req fanouttui.ShellLaunchRequest) error {
 		ownerRoot := projectRoot

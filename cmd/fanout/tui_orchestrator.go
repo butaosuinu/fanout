@@ -50,9 +50,9 @@ func guardLinkedIssueOrchestrator(projectRoot string, current state.Store, issue
 // the configured initial mode after child planning and agent validation. The
 // caller's locked recorder keeps the orchestrator row and child rows in one
 // launch transaction.
-func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr panelaunch.ManagedSessionRuntime, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string, orchestratorPlanMode bool) (panelaunch.Request, string, bool, string, error) {
+func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, runtimeBackend backend.Backend, managed panelaunch.ManagedSessionRuntime, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string, orchestratorPlanMode bool) (panelaunch.Request, string, bool, string, error) {
 	var fallbackNotice string
-	req, paneID, launchNotice, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, runtimeBackend, herdr, agentName, fmt.Sprintf("%d", issue.Number), store, recorder,
+	req, paneID, launchNotice, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, runtimeBackend, managed, agentName, fmt.Sprintf("%d", issue.Number), store, recorder,
 		func(store state.Store) error {
 			return guardLinkedIssueOrchestrator(projectRoot, store, issue.Number)
 		},
@@ -137,7 +137,7 @@ func cleanupIssueOrchestrator(
 		}
 	}()
 	recorded, found := recorder.Find(req.ParentRef, req.Number)
-	if issueOrchestratorIdentityChanged(runtimeBackend.Name(), recorded, found, req, paneID) {
+	if issueOrchestratorIdentityChanged(runtimeBackend.MutationModel(), recorded, found, req, paneID) {
 		return fmt.Errorf("recorded orchestrator identity changed for %s/%d", req.ParentRef, req.Number)
 	}
 	runtimeBackend, err = issueOrchestratorCloseBackend(runtimeBackend, owned, recorded, found, req)
@@ -153,19 +153,28 @@ func cleanupIssueOrchestrator(
 	return nil
 }
 
+// issueOrchestratorIdentityChanged applies the identity contract of the launch
+// lane the mutation model selects, matching prepareAttachedLiveness: the atomic
+// lane stamps a local liveness key and checks it alongside the pane id, while
+// the journaled lane records the remote identity instead and has no key to
+// compare.
 func issueOrchestratorIdentityChanged(
-	runtimeBackend backend.Name,
+	model backend.MutationModel,
 	recorded state.Pane,
 	found bool,
 	req panelaunch.Request,
 	paneID string,
 ) bool {
-	if !found || runtimeBackend == backend.Herdr {
+	if !found || model == backend.MutationJournaled {
 		return found && recorded.PaneID != paneID
 	}
 	return recorded.PaneID != paneID || recorded.ShellKey != req.ShellKey
 }
 
+// issueOrchestratorCloseBackend resolves the runtime the rollback closes
+// through. A journaled launch lives in a workspace of the repository-owned
+// session, so the close has to be bound to that workspace first; the atomic
+// lane closes through the runtime it launched on.
 func issueOrchestratorCloseBackend(
 	runtimeBackend backend.Backend,
 	owned panelaunch.ManagedSessionRuntime,
@@ -173,11 +182,11 @@ func issueOrchestratorCloseBackend(
 	found bool,
 	req panelaunch.Request,
 ) (backend.Backend, error) {
-	if runtimeBackend.Name() != backend.Herdr {
+	if runtimeBackend.MutationModel() != backend.MutationJournaled {
 		return runtimeBackend, nil
 	}
 	if !found {
 		return nil, fmt.Errorf("recorded Herdr orchestrator identity is missing for %s/%d", req.ParentRef, req.Number)
 	}
-	return bindOwnedHerdrWorkspaceClose(owned, recorded)
+	return bindManagedWorkspaceClose(owned, recorded)
 }

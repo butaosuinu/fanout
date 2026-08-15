@@ -33,20 +33,20 @@ import (
 )
 
 func TestEnterHerdrTUISessionBootstrapsConsoleAndPrintsAttachCommand(t *testing.T) {
-	originalEnsure := ensureOwnedHerdrForTUI
-	originalConsole := ensureHerdrConsoleForTUI
+	originalEnsure := ensureManagedSessionForTUI
+	originalConsole := ensureManagedConsoleForTUI
 	t.Cleanup(func() {
-		ensureOwnedHerdrForTUI = originalEnsure
-		ensureHerdrConsoleForTUI = originalConsole
+		ensureManagedSessionForTUI = originalEnsure
+		ensureManagedConsoleForTUI = originalConsole
 	})
 	owned := &herdrrun.OwnedSession{Session: "owned-session"}
-	ensureOwnedHerdrForTUI = func(root string) (*herdrrun.OwnedSession, error) {
+	ensureManagedSessionForTUI = func(root string) (*herdrrun.OwnedSession, error) {
 		if root != "/repo" {
 			t.Fatalf("ensure root = %q, want /repo", root)
 		}
 		return owned, nil
 	}
-	ensureHerdrConsoleForTUI = func(
+	ensureManagedConsoleForTUI = func(
 		_ context.Context,
 		root string,
 		got panelaunch.ManagedSessionRuntime,
@@ -63,13 +63,13 @@ func TestEnterHerdrTUISessionBootstrapsConsoleAndPrintsAttachCommand(t *testing.
 	}
 	var stdout, stderr bytes.Buffer
 	logger := log.NewWith(&stdout, &stderr, false)
-	code := enterHerdrTUISession(
+	code := enterManagedConsole(
 		"/repo",
 		backend.Selection{Name: backend.Herdr, Reason: backend.ReasonUserConfig},
 		logger,
 	)
 	if code != exitcode.OK || stderr.Len() != 0 {
-		t.Fatalf("enterHerdrTUISession() = %d stderr=%q", code, stderr.String())
+		t.Fatalf("enterManagedConsole() = %d stderr=%q", code, stderr.String())
 	}
 	if out := stdout.String(); !strings.Contains(out, "pane-1") ||
 		!strings.Contains(out, "HERDR_SESSION='owned-session' '/owned/herdr'") {
@@ -84,7 +84,7 @@ func TestEnterHerdrTUISessionBootstrapsConsoleAndPrintsAttachCommand(t *testing.
 func TestWireOwnedHerdrTUIEnablesScopedInteractivePorts(t *testing.T) {
 	opts := fanouttui.Options{}
 	owned := &herdrrun.OwnedSession{Session: "owned-session"}
-	wireOwnedHerdrTUI(
+	wireManagedConsoleTUI(
 		&opts,
 		"/repo",
 		"owned-session",
@@ -94,11 +94,11 @@ func TestWireOwnedHerdrTUIEnablesScopedInteractivePorts(t *testing.T) {
 		owned,
 	)
 	if opts.LaunchPane == nil || opts.LaunchAttach == nil || opts.LaunchIssue == nil ||
-		opts.LaunchIssuePlan == nil || opts.LaunchShell == nil || opts.FocusHerdrPane == nil ||
-		opts.CaptureHerdrPane == nil {
+		opts.LaunchIssuePlan == nil || opts.LaunchShell == nil || opts.FocusManagedPane == nil ||
+		opts.CaptureManagedPane == nil {
 		t.Fatalf("owned Herdr ports are incomplete: %+v", opts)
 	}
-	if reason := opts.HerdrActionDisabled(state.Pane{}); reason != "" {
+	if reason := opts.ManagedActionDisabled(state.Pane{}); reason != "" {
 		t.Fatalf("owned console launch disabled: %q", reason)
 	}
 	if opts.RestorePanes != nil || opts.LifecycleCloseOwned != nil {
@@ -120,7 +120,7 @@ func TestSettingsReloadPreservesOnlyAdmittedHerdrIssueLaunch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reload := newTUISettingsReloadFunc(
 				repo, "owned-session", "fanout", hooks.EmptyConfig(),
-				backend.Selection{Name: backend.Herdr}, tt.admitted, discardLogger(),
+				backend.Selection{Name: backend.Herdr}, false, tt.admitted, discardLogger(),
 			)
 			runtime, err := reload()
 			if err != nil {
@@ -134,7 +134,7 @@ func TestSettingsReloadPreservesOnlyAdmittedHerdrIssueLaunch(t *testing.T) {
 }
 
 func TestOwnedHerdrPaneIdentitySeparatesGenericCWDFromWorktreeProvenance(t *testing.T) {
-	identity, err := ownedHerdrPaneIdentity(state.Pane{
+	identity, err := managedPaneIdentity(state.Pane{
 		Backend: backend.Herdr, PaneID: "w1:p1", WorkspaceID: "w1",
 		WorkspaceLabel: "owned-label", TerminalID: "term-1",
 		SessionID: "owned", SocketPath: "/tmp/owned.sock",
@@ -313,17 +313,17 @@ func TestCmdTUIUserConfiguredHerdrOutsideContextBootstrapsWithoutTmux(t *testing
 	}
 
 	originalRunTUI := runTUI
-	originalEnsure := ensureOwnedHerdrForTUI
-	originalConsole := ensureHerdrConsoleForTUI
+	originalEnsure := ensureManagedSessionForTUI
+	originalConsole := ensureManagedConsoleForTUI
 	called := false
 	runTUI = func(fanouttui.Options) error {
 		called = true
 		return nil
 	}
-	ensureOwnedHerdrForTUI = func(string) (*herdrrun.OwnedSession, error) {
+	ensureManagedSessionForTUI = func(string) (*herdrrun.OwnedSession, error) {
 		return &herdrrun.OwnedSession{Session: "owned-session"}, nil
 	}
-	ensureHerdrConsoleForTUI = func(
+	ensureManagedConsoleForTUI = func(
 		context.Context,
 		string,
 		panelaunch.ManagedSessionRuntime,
@@ -337,8 +337,8 @@ func TestCmdTUIUserConfiguredHerdrOutsideContextBootstrapsWithoutTmux(t *testing
 	}
 	defer func() {
 		runTUI = originalRunTUI
-		ensureOwnedHerdrForTUI = originalEnsure
-		ensureHerdrConsoleForTUI = originalConsole
+		ensureManagedSessionForTUI = originalEnsure
+		ensureManagedConsoleForTUI = originalConsole
 	}()
 	var stdout, stderr strings.Builder
 	code := cmdTUI("fanout", log.NewWith(&stdout, &stderr, false))
@@ -509,12 +509,27 @@ func TestCmdTUIWiresRuntimeBackendPorts(t *testing.T) {
 func TestTUIActivePaneProviderIgnoresConsolePane(t *testing.T) {
 	installTUIActivePaneTmuxShim(t, "%tui")
 
-	got, err := newTUIActivePaneFunc("%tui")()
+	got, err := newTUIActivePaneFunc(tmuxbackend.New(), "%tui")()
 	if err != nil {
 		t.Fatalf("ActivePane() failed: %v", err)
 	}
 	if got != "" {
 		t.Fatalf("ActivePane() = %q, want empty for console pane", got)
+	}
+}
+
+// The console lane is chosen by capability, not by a backend name: a runtime
+// that owns its own sessions offers no ConsoleHost, and the console must then
+// take the managed entry path instead of trying to create and attach one.
+func TestAsConsoleRuntimeRequiresTheSessionCapability(t *testing.T) {
+	if _, ok := asConsoleRuntime(backendtest.New()); ok {
+		t.Fatal("asConsoleRuntime(bare backend) reported a console runtime, want absent")
+	}
+	if _, ok := asConsoleRuntime(herdrrun.New("owned-session", "/tmp/owned.sock")); ok {
+		t.Fatal("asConsoleRuntime(owned-session runtime) reported a console runtime, want absent")
+	}
+	if _, ok := asConsoleRuntime(tmuxbackend.New()); !ok {
+		t.Fatal("asConsoleRuntime(host runtime) reported no console runtime")
 	}
 }
 
@@ -622,7 +637,7 @@ func TestTUISettingsReloadCleansDisabledKeybinds(t *testing.T) {
 	}
 	argsPath := installTUISettingsReloadTmuxShim(t)
 
-	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux}, true, discardLogger())
+	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux}, true, true, discardLogger())
 	if _, err := reload(); err != nil {
 		t.Fatal(err)
 	}

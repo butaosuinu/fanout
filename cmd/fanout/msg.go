@@ -146,11 +146,11 @@ func cmdMsg(args []string, lg *log.Logger) exitcode.Code {
 		return code // help (OK) or a parse error; either way the message is out
 	}
 	deps := peermsg.DefaultDeps(paneruntime.NewTmux())
-	deps.OpenRuntime = openMsgHerdr
+	deps.OpenRuntime = openMsgManagedSession
 	return peermsg.Run(flags.request(), deps, lg)
 }
 
-func openMsgHerdr(ctx context.Context, repoKey string) (peermsg.NudgeRuntime, error) {
+func openMsgManagedSession(ctx context.Context, repoKey string) (peermsg.NudgeRuntime, error) {
 	return paneruntime.Open(ctx, repoKey)
 }
 

@@ -290,10 +290,10 @@ func TestPeekOwnedHerdrPaneReadsThroughOwnedCapability(t *testing.T) {
 	read := 0
 	srv := &Server{
 		poller: &poller{},
-		ownsHerdrPane: func(pv sessionview.PaneView) bool {
+		ownsManagedPane: func(pv sessionview.PaneView) bool {
 			return pv.SavedPane.WorkspaceLabel == "owned-label"
 		},
-		readHerdrPane: func(pv sessionview.PaneView, lines int) (string, error) {
+		readManagedPane: func(pv sessionview.PaneView, lines int) (string, error) {
 			read++
 			if pv.SavedPane.TerminalID != "terminal-1" || lines != 17 {
 				return "", fmt.Errorf("wrong persisted identity or line count")
@@ -322,8 +322,8 @@ func TestPeekForeignHerdrPaneIs404WithoutRead(t *testing.T) {
 	read := 0
 	srv := &Server{
 		poller:        &poller{},
-		ownsHerdrPane: func(sessionview.PaneView) bool { return false },
-		readHerdrPane: func(sessionview.PaneView, int) (string, error) {
+		ownsManagedPane: func(sessionview.PaneView) bool { return false },
+		readManagedPane: func(sessionview.PaneView, int) (string, error) {
 			read++
 			return "foreign", nil
 		},
@@ -346,8 +346,8 @@ func TestPeekStaleHerdrPaneHeadIs404WithoutRead(t *testing.T) {
 	read := 0
 	srv := &Server{
 		poller:        &poller{},
-		ownsHerdrPane: func(sessionview.PaneView) bool { return false },
-		readHerdrPane: func(sessionview.PaneView, int) (string, error) {
+		ownsManagedPane: func(sessionview.PaneView) bool { return false },
+		readManagedPane: func(sessionview.PaneView, int) (string, error) {
 			read++
 			return "stale", nil
 		},
@@ -372,8 +372,8 @@ func TestPeekHerdrIdentityLossDuringReadIs404(t *testing.T) {
 	} {
 		srv := &Server{
 			poller:        &poller{},
-			ownsHerdrPane: func(sessionview.PaneView) bool { return true },
-			readHerdrPane: func(sessionview.PaneView, int) (string, error) {
+			ownsManagedPane: func(sessionview.PaneView) bool { return true },
+			readManagedPane: func(sessionview.PaneView, int) (string, error) {
 				return "", fmt.Errorf("request-time binding: %w", targetErr)
 			},
 		}
@@ -395,11 +395,11 @@ func TestPeekDuplicateHerdrPaneIDIs404BeforeOwnershipCheck(t *testing.T) {
 	owned, read := 0, 0
 	srv := &Server{
 		poller: &poller{},
-		ownsHerdrPane: func(sessionview.PaneView) bool {
+		ownsManagedPane: func(sessionview.PaneView) bool {
 			owned++
 			return true
 		},
-		readHerdrPane: func(sessionview.PaneView, int) (string, error) {
+		readManagedPane: func(sessionview.PaneView, int) (string, error) {
 			read++
 			return "wrong generation", nil
 		},

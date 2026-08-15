@@ -20,11 +20,15 @@ func runtimeLifecycleOptions(projectRoot, statePath string, hookConfig hooks.Con
 		Hooks:            hookConfig,
 		CloseOwned:       runtimeBackend.CloseOwned,
 		Relayout:         runtimeBackend.Relayout,
-		WorkspaceRuntime: newHerdrLifecycleFactory(projectRoot),
+		WorkspaceRuntime: newWorkspaceLifecycleFactory(projectRoot),
 	}
 }
 
-func newHerdrLifecycleFactory(projectRoot string) lifecycle.WorkspaceRuntimeFactory {
+// newWorkspaceLifecycleFactory binds a saved row to the repository-owned
+// session that can retire its workspace. Every recheck below is an admission
+// gate, not a convenience: a row whose repository or owned route drifted names
+// a workspace this run must not close.
+func newWorkspaceLifecycleFactory(projectRoot string) lifecycle.WorkspaceRuntimeFactory {
 	return func(ctx context.Context, pane state.Pane) (lifecycle.WorkspaceRuntime, error) {
 		identity, err := worktree.ResolveRepoIdentity(ctx, projectRoot)
 		if err != nil {

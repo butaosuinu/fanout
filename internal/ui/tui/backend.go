@@ -72,14 +72,14 @@ func (m model) runtimeActionDisabledReason(pane *paneView, action string) string
 	if !herdrInteractiveActionSupported(action) {
 		return herdrActionDisabledReason(action)
 	}
-	if m.opts.HerdrActionDisabled == nil {
+	if m.opts.ManagedActionDisabled == nil {
 		return herdrActionDisabledReason(action)
 	}
 	saved := state.Pane{}
 	if pane != nil {
 		saved = pane.savedPane
 	}
-	if reason := strings.TrimSpace(m.opts.HerdrActionDisabled(saved)); reason != "" {
+	if reason := strings.TrimSpace(m.opts.ManagedActionDisabled(saved)); reason != "" {
 		return reason
 	}
 	return ""
@@ -130,10 +130,10 @@ func (m model) tmuxLifecycleActionDisabledReason(action string) string {
 
 func (m model) herdrLifecycleActionDisabledReason(pane paneView, action string) string {
 	if m.selectedBackend() == backend.Herdr {
-		if m.opts.HerdrActionDisabled == nil {
+		if m.opts.ManagedActionDisabled == nil {
 			return herdrActionDisabledReason(action)
 		}
-		if reason := strings.TrimSpace(m.opts.HerdrActionDisabled(pane.savedPane)); reason != "" {
+		if reason := strings.TrimSpace(m.opts.ManagedActionDisabled(pane.savedPane)); reason != "" {
 			return reason
 		}
 	}
@@ -144,7 +144,7 @@ func (m model) herdrLifecycleActionDisabledReason(pane paneView, action string) 
 }
 
 func (m model) herdrLifecycleConfigured(pane paneView, action string) bool {
-	if m.opts.LifecycleHerdrRuntimeForRoot == nil {
+	if m.opts.LifecycleWorkspaceRuntimeForRoot == nil {
 		return false
 	}
 	routes := m.lifecycleActionRoutes(pane)
@@ -156,7 +156,7 @@ func (m model) herdrLifecycleConfigured(pane paneView, action string) bool {
 		roots = []string{routes.paneRoot}
 	}
 	for _, root := range roots {
-		if m.opts.LifecycleHerdrRuntimeForRoot(root) == nil {
+		if m.opts.LifecycleWorkspaceRuntimeForRoot(root) == nil {
 			return false
 		}
 	}

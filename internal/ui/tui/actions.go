@@ -240,8 +240,8 @@ func (m model) lifecycleActionRoutes(pane paneView) lifecycleActionRoutes {
 
 func (m model) lifecycleOptions(root string) lifecycle.Options {
 	var herdrRuntime lifecycle.WorkspaceRuntimeFactory
-	if m.opts.LifecycleHerdrRuntimeForRoot != nil {
-		herdrRuntime = m.opts.LifecycleHerdrRuntimeForRoot(root)
+	if m.opts.LifecycleWorkspaceRuntimeForRoot != nil {
+		herdrRuntime = m.opts.LifecycleWorkspaceRuntimeForRoot(root)
 	}
 	return lifecycle.Options{
 		ProjectRoot:         root,

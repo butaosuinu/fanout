@@ -26,7 +26,7 @@ import (
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
-func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, includeHostTmux, interactiveLaunch bool) (fanouttui.WatcherRunner, time.Duration, string, error) {
+func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, includeAmbientRoute, interactiveLaunch bool) (fanouttui.WatcherRunner, time.Duration, string, error) {
 	if !resolvedSettings.Watcher || !interactiveLaunch {
 		return nil, 0, "", nil
 	}
@@ -38,7 +38,7 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 	if err := gh.EnsureLabel(resolvedSettings.WatcherRunningLabel); err != nil {
 		return nil, 0, "", fmt.Errorf("ensure running label %q: %w", resolvedSettings.WatcherRunningLabel, err)
 	}
-	livePanes := &watchLivePaneCache{list: runtimeListLiveForProject(projectRoot, includeHostTmux)}
+	livePanes := &watchLivePaneCache{list: runtimeListLiveForProject(projectRoot, includeAmbientRoute)}
 	watcher := &tuiWatcher{livePanes: livePanes}
 	io := watch.IO{
 		ListLabeled: gh.ListOpenIssuesWithLabel,
@@ -212,7 +212,7 @@ type parentIssueFanoutResult struct {
 	CreatedPaneIDs []string
 	Notice         string
 	runtimeBackend backend.Backend
-	herdr          panelaunch.ManagedSessionRuntime
+	managed        panelaunch.ManagedSessionRuntime
 }
 
 type tuiIssueReadyFunc func(
@@ -279,7 +279,7 @@ func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandNam
 		CreatedPaneIDs: execution.CreatedPaneIDs,
 		Notice:         combinedLaunchNotice(execution.Notices, bufferedLaunchNotice(stderr)),
 		runtimeBackend: rt.Backend,
-		herdr:          rt.Managed,
+		managed:        rt.Managed,
 	}
 	if code != exitcode.OK {
 		return result, bufferedLaunchError(stdout, stderr, "launch parent")
@@ -468,8 +468,10 @@ func watchPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
 	if backend.NormalizeName(pane.Backend) != backend.NormalizeName(live.Ref.Backend) || pane.PaneID != live.Ref.Pane {
 		return false
 	}
+	// The saved row records which runtime issued the pane, and an owned row is
+	// matched on its recorded binding rather than on a path the pane can change.
 	if backend.NormalizeName(pane.Backend) == backend.Herdr {
-		return watchHerdrPaneMatchesLive(pane, live)
+		return watchManagedPaneMatchesLive(pane, live)
 	}
 	if shellKey := strings.TrimSpace(pane.ShellKey); shellKey != "" {
 		return shellKey == live.ShellKey
@@ -486,7 +488,7 @@ func watchPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
 	return cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
 }
 
-func watchHerdrPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
+func watchManagedPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
 	if pane.AgentSession == nil && live.AgentSession != nil {
 		return sessionbinding.FirstBindMatches(pane, live)
 	}

@@ -246,11 +246,11 @@ func TestCleanupIssueOrchestratorHandlesStaleAndFailedPaneCleanup(t *testing.T) 
 func TestIssueOrchestratorIdentityUsesBackendNativeFields(t *testing.T) {
 	recorded := state.Pane{PaneID: "w1:p1", ShellKey: ""}
 	req := panelaunch.Request{ShellKey: "tmux-key"}
-	if issueOrchestratorIdentityChanged(backend.Herdr, recorded, true, req, "w1:p1") {
-		t.Fatal("Herdr identity treated the caller-only tmux ShellKey as authoritative")
+	if issueOrchestratorIdentityChanged(backend.MutationJournaled, recorded, true, req, "w1:p1") {
+		t.Fatal("journaled identity treated the caller-only liveness ShellKey as authoritative")
 	}
-	if !issueOrchestratorIdentityChanged(backend.Tmux, recorded, true, req, "w1:p1") {
-		t.Fatal("tmux identity ignored the liveness ShellKey")
+	if !issueOrchestratorIdentityChanged(backend.MutationAtomic, recorded, true, req, "w1:p1") {
+		t.Fatal("atomic identity ignored the liveness ShellKey")
 	}
 }
 
