@@ -204,7 +204,7 @@ func newOwnedHarness(t *testing.T) *ownedHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionName := naming.HerdrSessionName(commonIdentity.device, commonIdentity.inode)
+	sessionName := naming.ManagedSessionName(commonIdentity.device, commonIdentity.inode)
 	layout, err := prepareOwnedLayout(runtimeBase, sessionName)
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +236,7 @@ func newOwnedHarness(t *testing.T) *ownedHarness {
 
 func TestPrepareOwnedLayoutUsesShortDefaultWithLongTMPDIR(t *testing.T) {
 	t.Setenv("TMPDIR", filepath.Join("/private/var/folders", strings.Repeat("long-segment", 20)))
-	session := strings.Repeat("s", naming.MaxHerdrSessionNameLength)
+	session := strings.Repeat("s", naming.MaxManagedSessionNameLength)
 	layout, err := prepareOwnedLayout("", session)
 	if err != nil {
 		t.Fatal(err)
@@ -317,8 +317,8 @@ func TestPhysicalRepositoryAliasesShareOwnedSessionName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	direct := naming.HerdrSessionName(directIdentity.device, directIdentity.inode)
-	aliased := naming.HerdrSessionName(aliasIdentity.device, aliasIdentity.inode)
+	direct := naming.ManagedSessionName(directIdentity.device, directIdentity.inode)
+	aliased := naming.ManagedSessionName(aliasIdentity.device, aliasIdentity.inode)
 	if direct != aliased {
 		t.Fatalf("same repository aliases selected %q and %q", direct, aliased)
 	}
@@ -679,7 +679,7 @@ func newProcessOwnedHarness(t *testing.T) processOwnedHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session := naming.HerdrSessionName(identity.device, identity.inode)
+	session := naming.ManagedSessionName(identity.device, identity.inode)
 	layout, err := prepareOwnedLayout(runtimeBase, session)
 	if err != nil {
 		t.Fatal(err)
@@ -1011,7 +1011,7 @@ func TestEnsureOwnedRejectsRecreatedGitCommonDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replacementSession := naming.HerdrSessionName(replacementIdentity.device, replacementIdentity.inode)
+	replacementSession := naming.ManagedSessionName(replacementIdentity.device, replacementIdentity.inode)
 	if replacementSession == previous.Session {
 		t.Fatalf("recreated repository reused owned session %q", replacementSession)
 	}

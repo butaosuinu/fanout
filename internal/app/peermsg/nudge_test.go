@@ -330,7 +330,7 @@ func TestRunMsgNudgeHerdrRejectsInvalidLaunchGenerationBeforeRuntimeIO(t *testin
 		{name: "agent name", mutate: func(p *state.Pane) { p.AgentID = "fanout-corrupt" }},
 		{name: "launch nonce", mutate: func(p *state.Pane) {
 			p.LaunchNonce = "invalid"
-			p.AgentID = naming.HerdrAgentName(p.RepoKey, p.EmitterRowKey, p.LaunchNonce)
+			p.AgentID = naming.ManagedAgentName(p.RepoKey, p.EmitterRowKey, p.LaunchNonce)
 		}},
 		{name: "emitter nonce", mutate: func(p *state.Pane) { p.EmitterNonce = "invalid" }},
 	} {
@@ -551,7 +551,7 @@ func managedNudgeFixture(reportedState string, refined bool) (state.Store, *fake
 		Parent: "68", IssueNum: 71, Backend: backend.Herdr, PaneID: "w1:p1", Agent: "claude",
 		WorkspaceID: "w1", WorkspaceLabel: "fanout-worktree-owned",
 		TerminalID: "term-71", RepoKey: repoKey,
-		AgentID: naming.HerdrAgentName(repoKey, rowKey, launchNonce), AgentSession: session,
+		AgentID: naming.ManagedAgentName(repoKey, rowKey, launchNonce), AgentSession: session,
 		SessionID: "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",
 		WorktreePath: worktree, ReportedState: reportedState, StateRefinement: refined,
 		EmitterRowKey: rowKey, LaunchNonce: launchNonce,

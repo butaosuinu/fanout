@@ -176,7 +176,7 @@ func currentNudgeBinding(store state.Store, recorded state.Pane) (state.Pane, er
 
 func validNudgeGeneration(pane state.Pane) bool {
 	return telemetry.ValidNonce(pane.LaunchNonce) && telemetry.ValidNonce(pane.EmitterNonce) &&
-		pane.AgentID == naming.HerdrAgentName(pane.RepoKey, pane.EmitterRowKey, pane.LaunchNonce)
+		pane.AgentID == naming.ManagedAgentName(pane.RepoKey, pane.EmitterRowKey, pane.LaunchNonce)
 }
 
 func uniqueNudgeRow(store state.Store, rowKey string) (state.Pane, bool) {

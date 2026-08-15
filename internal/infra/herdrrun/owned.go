@@ -241,7 +241,7 @@ func existingOwnedAdmission(
 	if err != nil {
 		return "", ownedLayout{}, ownerMarker{}, binaryAdmission{}, err
 	}
-	session := naming.HerdrSessionName(commonIdentity.device, commonIdentity.inode)
+	session := naming.ManagedSessionName(commonIdentity.device, commonIdentity.inode)
 	layout, err := prepareOwnedLayout(opts.RuntimeBase, session)
 	if err != nil {
 		return "", ownedLayout{}, ownerMarker{}, binaryAdmission{}, err
@@ -389,7 +389,7 @@ func ensureOwned(
 	if err != nil {
 		return nil, err
 	}
-	session := naming.HerdrSessionName(commonIdentity.device, commonIdentity.inode)
+	session := naming.ManagedSessionName(commonIdentity.device, commonIdentity.inode)
 	layout, err := prepareOwnedLayout(opts.RuntimeBase, session)
 	if err != nil {
 		return nil, err

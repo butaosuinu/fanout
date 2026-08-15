@@ -475,7 +475,7 @@ func (l *Launcher) resolveManagedLaunch(
 	if err != nil {
 		return resolvedManagedLaunch{}, err
 	}
-	agentName := naming.HerdrAgentName(route.GitCommonDir, intent.ID, nonce)
+	agentName := naming.ManagedAgentName(route.GitCommonDir, intent.ID, nonce)
 	emitter, err := newManagedEmitterLaunch(
 		req, route, intent, nonce, agentName, state.Path(l.Info.ProjectRoot),
 	)

@@ -86,7 +86,7 @@ func switchViewerToConsole(runtimeBackend backend.Backend, flags focusConsoleFla
 	}
 	focus, ok := backend.AsConsoleFocus(runtimeBackend)
 	if !ok {
-		lg.Err("focus-console: %s", backend.HerdrObservationOnlyReason)
+		lg.Err("focus-console: %s", backend.ObservationOnlyReason)
 		return exitcode.Env
 	}
 	if err := focus.FocusPaneForViewer(flags.client, console.Ref); err != nil {

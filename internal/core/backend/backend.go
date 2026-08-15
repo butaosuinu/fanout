@@ -16,9 +16,9 @@ const (
 	Tmux  Name = "tmux"
 	Herdr Name = "herdr"
 
-	// HerdrObservationOnlyReason is the shared operator-facing explanation for
+	// ObservationOnlyReason is the shared operator-facing explanation for
 	// interactive TUI actions outside the admitted owned-session capability.
-	HerdrObservationOnlyReason = "herdr backend interactive TUI action is unavailable"
+	ObservationOnlyReason = "herdr backend interactive TUI action is unavailable"
 )
 
 // ParseName validates a configured backend name. An empty value means no

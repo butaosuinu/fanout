@@ -47,9 +47,9 @@ func (m model) selectedBackend() backend.Name {
 func herdrActionDisabledReason(action string) string {
 	action = strings.TrimSpace(action)
 	if action == "" {
-		return backend.HerdrObservationOnlyReason
+		return backend.ObservationOnlyReason
 	}
-	return fmt.Sprintf("%s; %s is unavailable", backend.HerdrObservationOnlyReason, action)
+	return fmt.Sprintf("%s; %s is unavailable", backend.ObservationOnlyReason, action)
 }
 
 func herdrInteractiveActionSupported(action string) bool {

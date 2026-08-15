@@ -12,27 +12,27 @@ import (
 )
 
 const (
-	DefaultBranchPrefix       = "fanout/"
-	MaxSlugLength             = 80
-	MaxHerdrSessionNameLength = 56
-	herdrSessionPrefix        = "fanout-"
-	herdrSessionHashLength    = 16
-	herdrAgentHashLength      = 24
+	DefaultBranchPrefix         = "fanout/"
+	MaxSlugLength               = 80
+	MaxManagedSessionNameLength = 56
+	managedSessionPrefix        = "fanout-"
+	managedSessionHashLength    = 16
+	managedAgentHashLength      = 24
 )
 
-// HerdrSessionName returns the stable per-repository name for a fanout-owned
-// herdr session. The physical identity makes path aliases coordinate on one
+// ManagedSessionName returns the stable per-repository name for a fanout-owned
+// runtime session. The physical identity makes path aliases coordinate on one
 // supervisor and socket namespace.
-func HerdrSessionName(device, inode uint64) string {
+func ManagedSessionName(device, inode uint64) string {
 	identity := fmt.Sprintf("%d:%d", device, inode)
 	sum := sha256.Sum256([]byte(identity))
-	hash := hex.EncodeToString(sum[:])[:herdrSessionHashLength]
-	return herdrSessionPrefix + "repo-" + hash
+	hash := hex.EncodeToString(sum[:])[:managedSessionHashLength]
+	return managedSessionPrefix + "repo-" + hash
 }
 
-// HerdrAgentName returns the operation-bound name used to adopt exactly one
-// agent inside a fanout-owned Herdr session.
-func HerdrAgentName(gitCommonDir, rowKey, launchNonce string) string {
+// ManagedAgentName returns the operation-bound name used to adopt exactly one
+// agent inside a fanout-owned runtime session.
+func ManagedAgentName(gitCommonDir, rowKey, launchNonce string) string {
 	var identity strings.Builder
 	for _, value := range []string{gitCommonDir, rowKey, launchNonce} {
 		identity.WriteString(strconv.Itoa(len(value)))
@@ -40,7 +40,7 @@ func HerdrAgentName(gitCommonDir, rowKey, launchNonce string) string {
 		identity.WriteString(value)
 	}
 	hash := sha256.Sum256([]byte(identity.String()))
-	return herdrSessionPrefix + hex.EncodeToString(hash[:])[:herdrAgentHashLength]
+	return managedSessionPrefix + hex.EncodeToString(hash[:])[:managedAgentHashLength]
 }
 
 // Slug returns a deterministic slug for an issue title and number.
