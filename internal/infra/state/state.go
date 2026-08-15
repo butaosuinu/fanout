@@ -123,6 +123,28 @@ type Pane struct {
 	SourceProjectRoots []string `json:"-"`
 }
 
+// RuntimeBinding projects the durable pane identity this row recorded. It is
+// read-only: no persisted field is normalized, so the projection can be
+// compared against a live observation and against another read of the same row
+// without changing what state.json stores.
+func (p Pane) RuntimeBinding() backend.PaneBinding {
+	return backend.PaneBinding{
+		Row: backend.PaneRowKey{Parent: p.Parent, IssueNum: p.IssueNum, TaskID: p.TaskID},
+		Ref: backend.PaneRef{
+			Backend: p.Backend, Workspace: p.HerdrWorkspaceID, Pane: p.PaneID,
+		},
+		SessionID: p.HerdrSession, SocketPath: p.HerdrSocketPath,
+		WorkspaceLabel: p.HerdrWorkspaceLabel, TerminalID: p.HerdrTerminalID,
+		Agent: p.Agent, AgentID: p.HerdrAgentID, AgentSession: p.HerdrAgentSession,
+		Shell:   p.IsShell(),
+		RepoKey: p.HerdrRepoKey, WorktreePath: p.WorktreePath,
+		Launch: backend.LaunchGeneration{
+			RowKey: p.EmitterRowKey, Nonce: p.LaunchNonce, EmitterNonce: p.EmitterNonce,
+			Executable: p.HerdrLaunchExecutable, Args: p.HerdrLaunchArgs,
+		},
+	}
+}
+
 func (p Pane) IsShell() bool {
 	return p.Kind == PaneKindShell
 }

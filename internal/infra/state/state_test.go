@@ -545,3 +545,46 @@ func TestLockedStoreRemoveTaskPane(t *testing.T) {
 		t.Fatalf("task-b = %+v (found=%v), want pane %%2", got, ok)
 	}
 }
+
+// RuntimeBinding must stay a verbatim projection: normalizing or cleaning any
+// component here would silently widen every liveness and rebinding gate.
+func TestRuntimeBindingProjectsRecordedIdentityVerbatim(t *testing.T) {
+	session := &backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-425",
+	}
+	pane := Pane{
+		Parent: "423", IssueNum: 425, TaskID: "task-a", Kind: PaneKindShell,
+		Backend: backend.Herdr, PaneID: "w1:p1",
+		HerdrWorkspaceID: "w1", HerdrWorkspaceLabel: "owned-label",
+		HerdrTerminalID: "term-425", HerdrRepoKey: "/repo/.git",
+		HerdrAgentID: "agent-425", HerdrAgentSession: session,
+		HerdrSession: "fanout-dev", HerdrSocketPath: "/tmp/herdr-fanout-dev.sock",
+		Agent: "codex", WorktreePath: "/repo/.fanout/worktrees/child/",
+		EmitterRowKey: "row-a", LaunchNonce: "nonce-a", EmitterNonce: "emitter-a",
+		HerdrLaunchExecutable: "/usr/bin/codex", HerdrLaunchArgs: []string{"--sandbox"},
+	}
+
+	want := backend.PaneBinding{
+		Row:       backend.PaneRowKey{Parent: "423", IssueNum: 425, TaskID: "task-a"},
+		Ref:       backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
+		SessionID: "fanout-dev", SocketPath: "/tmp/herdr-fanout-dev.sock",
+		WorkspaceLabel: "owned-label", TerminalID: "term-425",
+		Agent: "codex", AgentID: "agent-425", AgentSession: session, Shell: true,
+		RepoKey: "/repo/.git", WorktreePath: "/repo/.fanout/worktrees/child/",
+		Launch: backend.LaunchGeneration{
+			RowKey: "row-a", Nonce: "nonce-a", EmitterNonce: "emitter-a",
+			Executable: "/usr/bin/codex", Args: []string{"--sandbox"},
+		},
+	}
+	if got := pane.RuntimeBinding(); !got.Equal(want) || got.AgentSession != session {
+		t.Fatalf("RuntimeBinding() = %+v, want %+v", got, want)
+	}
+}
+
+func TestRuntimeBindingKeepsLegacyEmptyBackend(t *testing.T) {
+	pane := Pane{Parent: "423", IssueNum: 426, PaneID: "%42"}
+	got := pane.RuntimeBinding()
+	if got.Ref.Backend != "" || got.Ref.Pane != "%42" || got.Shell {
+		t.Fatalf("RuntimeBinding() = %+v, want the recorded empty backend", got)
+	}
+}
