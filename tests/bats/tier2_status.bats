@@ -200,6 +200,33 @@ load helpers
   [[ "$output" == *"has no matching herdr-status.exit"* ]]
 }
 
+# --version is the one probe with a success-path default, so the injection has
+# to win over it. Falling through to `herdr 0.7.5` would admit the binary and
+# let the run continue past the failure the scenario asked for.
+@test "herdr shim: the .exit override can reject the version probe" {
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  mkdir -p "$FIXTURE_DIR"
+  printf 'herdr: fatal: unable to initialize runtime\n' > "$FIXTURE_DIR/herdr-version.err"
+  printf '2\n' > "$FIXTURE_DIR/herdr-version.exit"
+  run bash -c 'herdr --version 2>&1'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unable to initialize runtime"* ]]
+  [[ "$output" != *"herdr 0.7.5"* ]]
+}
+
+# The default makes the orphan case worse here than for the other verbs: an
+# ignored .err would answer 0 with a healthy version string, which the Go side
+# reads as an admitted binary rather than a broken one.
+@test "herdr shim: an orphan .err on the version probe fails loudly" {
+  export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
+  mkdir -p "$FIXTURE_DIR"
+  printf 'herdr 0.7.5\n' > "$FIXTURE_DIR/herdr-version.txt"
+  printf 'herdr: fatal: unable to initialize runtime\n' > "$FIXTURE_DIR/herdr-version.err"
+  run bash -c 'herdr --version 2>&1'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"has no matching herdr-version.exit"* ]]
+}
+
 @test "herdr shim: the .exit override replays a rejection envelope" {
   export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
   mkdir -p "$FIXTURE_DIR"

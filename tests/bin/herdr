@@ -25,11 +25,14 @@
 #
 # Failure injection: writing $FIXTURE_DIR/herdr-<key>.exit (an integer) makes
 # that verb exit with that code, emitting $FIXTURE_DIR/herdr-<key>.err on
-# stderr and the .json body on stdout when either exists. This reproduces the
-# rejection envelopes Herdr returns on a non-zero exit. Every verb — the two
-# named probes included — goes through the same path, so a scenario can inject
-# a failure anywhere fanout talks to Herdr. A .err without its .exit is a
-# half-written injection that would otherwise pass as success, so it dies.
+# stderr and its body file on stdout when either exists. <key> is the stem
+# after `herdr-` above: version, status, snapshot, workspace-create. This
+# reproduces the rejection envelopes Herdr returns on a non-zero exit. Every
+# verb — the two named probes and --version included — goes through
+# apply_failure_injection, so a scenario can inject a failure anywhere fanout
+# talks to Herdr; the `herdr 0.7.5` default belongs to the success path and
+# does not leak into an injected --version failure. A .err without its .exit is
+# a half-written injection that would otherwise pass as success, so it dies.
 #
 # Argv log: with HERDR_SHIM_LOG set, every invocation appends one
 # space-joined argv line to that path so a test can assert which commands
@@ -66,25 +69,39 @@ emit_fixture() {
   cat "$path"
 }
 
+# Apply the herdr-<key>.exit / .err override when the scenario ships one, using
+# $2 as that verb's body file. Exits with the injected code; returns when there
+# is nothing to inject. Every verb routes through here, so the injection rules
+# are written once.
+apply_failure_injection() {
+  local key="$1"
+  local body="$2"
+
+  [[ -n "$fixture" ]] || return 0
+
+  local status_file="$fixture/herdr-$key.exit"
+  local stderr_file="$fixture/herdr-$key.err"
+
+  if [[ -f "$stderr_file" && ! -f "$status_file" ]]; then
+    die "$stderr_file has no matching herdr-$key.exit; failure injection needs both"
+  fi
+  [[ -f "$status_file" ]] || return 0
+
+  if [[ -f "$stderr_file" ]]; then
+    cat "$stderr_file" >&2
+  fi
+  if [[ -f "$body" ]]; then
+    cat "$body"
+  fi
+  exit "$(cat "$status_file")"
+}
+
 # Answer one verb from herdr-<key>.json, honoring the .exit / .err overrides.
 respond() {
   local key="$1"
   local body="$fixture/herdr-$key.json"
-  local status_file="$fixture/herdr-$key.exit"
-  local stderr_file="$fixture/herdr-$key.err"
 
-  if [[ -n "$fixture" && -f "$stderr_file" && ! -f "$status_file" ]]; then
-    die "$stderr_file has no matching herdr-$key.exit; failure injection needs both"
-  fi
-  if [[ -n "$fixture" && -f "$status_file" ]]; then
-    if [[ -f "$stderr_file" ]]; then
-      cat "$stderr_file" >&2
-    fi
-    if [[ -f "$body" ]]; then
-      cat "$body"
-    fi
-    exit "$(cat "$status_file")"
-  fi
+  apply_failure_injection "$key" "$body"
   emit_fixture "$body"
 }
 
@@ -94,6 +111,7 @@ if [[ "${1:-}" == "--session" ]]; then
 fi
 
 if [[ "${1:-}" == "--version" ]]; then
+  apply_failure_injection version "$fixture/herdr-version.txt"
   if [[ -n "$fixture" && -f "$fixture/herdr-version.txt" ]]; then
     cat "$fixture/herdr-version.txt"
   else
