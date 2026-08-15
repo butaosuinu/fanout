@@ -84,7 +84,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `tmuxbackend` | backend 契約から `tmuxrun` への adapter(window レイアウトの grid 方針と tmux custom layout 文字列も担当) | M |
 | infra | `msgstore` | send/post/inbox/board/mark-read | M |
 | infra | `notify` | 通知送出 | M |
-| infra | `runtime` | git root・選択済み backend の起動コンテキスト解決 | M |
+| infra | `runtime` | git root・選択済み backend の起動コンテキスト解決。具象 backend を持たない(env と `tmux` の探索だけ)ので `paneruntime` には畳まない — `Info` は `app/run` と `app/panelaunch` の型で、畳むと app が具象 backend を推移的に抱える | M |
 | infra | `displayname` | 表示名生成 | M |
 | infra | `codexapp` | Codex app-server クライアント(Plan Mode 制御・team メッセージブリッジ) | M |
 | infra | `atomicfs` | 原子的ファイル書き込み(state.json / token 入り dashboard.json の共通経路) | M |
