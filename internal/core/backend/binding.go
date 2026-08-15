@@ -134,6 +134,11 @@ func (b PaneBinding) UniqueLive(panes []LivePane, opts ...MatchOption) (LivePane
 
 // Equal reports whether two projections describe the same recorded row. It is
 // the gate that refuses to act on a row rewritten between two reads.
+//
+// Equal compares Shell (derived from the row's Kind), which the matcher it
+// consolidated did not. This is a deliberate fail-closed tightening: no code
+// path rewrites Kind on an existing row, so the extra comparison is
+// unreachable today and can only refuse, never admit, if that ever changes.
 func (b PaneBinding) Equal(other PaneBinding) bool {
 	same := []bool{
 		b.Row == other.Row, b.Ref == other.Ref,
@@ -228,7 +233,10 @@ func LiveAgentPresent(live LivePane) bool {
 }
 
 // ExpectedAgentSession reports whether ref is a valid conversation reference
-// the runtime issued for provider.
+// the runtime issued for provider. The source check is pinned to the herdr
+// runtime's frozen wire value ("herdr:<provider>") because it is the only
+// runtime that records agent sessions; a runtime that starts recording them
+// must widen this check alongside its persistence format.
 func ExpectedAgentSession(ref *AgentSessionRef, provider string) bool {
 	return ref != nil && ref.Valid() && ref.Agent == provider &&
 		ref.Source == string(Herdr)+":"+provider
