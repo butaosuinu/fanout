@@ -1,4 +1,4 @@
-package herdrprocess
+package agentprocess
 
 import (
 	"testing"

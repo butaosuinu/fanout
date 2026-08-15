@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/app/herdrprocess"
+	"github.com/butaosuinu/fanout/internal/app/agentprocess"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
@@ -128,7 +128,7 @@ func verifyNudgeProcess(ctx context.Context, runtime NudgeRuntime, pane state.Pa
 	if process.PaneID != pane.PaneID {
 		return fmt.Errorf("recipient process identity belongs to another pane")
 	}
-	err = herdrprocess.VerifyAgent(process, herdrprocess.Identity{
+	err = agentprocess.VerifyAgent(process, agentprocess.Identity{
 		WorktreePath: pane.WorktreePath,
 		Executable:   pane.LaunchExecutable,
 		Args:         pane.LaunchArgs,

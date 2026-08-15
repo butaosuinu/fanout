@@ -150,7 +150,7 @@ var prefixRules = []struct {
 	{"internal/app/briefing/", Rule{ID: "app-briefing", Class: ClassH, Source: SourceDocTable, Note: "エージェントに注入するプロンプト本文"}},
 	{"internal/app/lifecycle/", Rule{ID: "app-lifecycle", Class: ClassH, Source: SourceDocTable, Note: "close/merge/cleanup"}},
 	{"internal/app/panelaunch/", Rule{ID: "app-panelaunch", Class: ClassH, Source: SourceDocTable, Note: "pane 生成。MutationModel で atomic / journaled lane を選ぶ"}},
-	{"internal/app/herdrprocess/", Rule{ID: "app-herdrprocess", Class: ClassH, Source: SourceDocTable, Note: "保存済み Herdr launch と現在の process identity の照合"}},
+	{"internal/app/agentprocess/", Rule{ID: "app-agentprocess", Class: ClassH, Source: SourceDocTable, Note: "保存済み launch と現在の agent process identity の照合"}},
 	{"internal/app/stateemitter/", Rule{ID: "app-stateemitter", Class: ClassH, Source: SourceDocTable, Note: "launch に束縛した telemetry の検証と state lock 下の更新"}},
 	{"internal/app/sessionbinding/", Rule{ID: "app-sessionbinding", Class: ClassH, Source: SourceDocTable, Note: "遅延 Herdr agent session の初回束縛と state 保存"}},
 

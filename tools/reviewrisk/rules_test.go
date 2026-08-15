@@ -25,7 +25,7 @@ func TestClassifyPath(t *testing.T) {
 		{name: "infra browser is A", path: "internal/infra/browser/open.go", want: ClassA, found: true},
 		{name: "app briefing is H", path: "internal/app/briefing/render.go", want: ClassH, found: true},
 		{name: "app panelaunch is H", path: "internal/app/panelaunch/launch.go", want: ClassH, found: true},
-		{name: "app herdr process is H", path: "internal/app/herdrprocess/herdrprocess.go", want: ClassH, found: true},
+		{name: "app agent process is H", path: "internal/app/agentprocess/agentprocess.go", want: ClassH, found: true},
 		{name: "app state emitter is H", path: "internal/app/stateemitter/stateemitter.go", want: ClassH, found: true},
 		{name: "app sessionbinding is H", path: "internal/app/sessionbinding/sessionbinding.go", want: ClassH, found: true},
 		{name: "app run is M", path: "internal/app/run/run.go", want: ClassM, found: true},

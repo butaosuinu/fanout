@@ -67,7 +67,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
 | app | `panelaunch` | pane 生成のオーケストレーション。backend の MutationModel で atomic lane と journaled lane(coordinator/worktree/agent launch)を選ぶ | H |
-| app | `herdrprocess` | 保存済み Herdr launch と現在の process identity の照合 | H |
+| app | `agentprocess` | 保存済み launch と現在の agent process identity の照合 | H |
 | app | `stateemitter` | launch に束縛した telemetry の検証と state lock 下の更新 | H |
 | app | `sessionbinding` | 遅延 Herdr agent session の初回束縛と state lock 下の保存 | H |
 | core | `telemetry` | emitter command と環境変数の wire contract | H |
