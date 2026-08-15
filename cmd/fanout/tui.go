@@ -206,7 +206,7 @@ func runTUIConsole(
 	notifier, err := fanoutnotify.New(fanoutnotify.Config{
 		Channels:        resolvedSettings.Notifications,
 		RuntimeBackend:  selection.Name,
-		TmuxTarget:      session,
+		RuntimeTarget:   session,
 		NtfyURL:         resolvedSettings.NtfyURL,
 		SlackWebhookURL: resolvedSettings.SlackWebhookURL,
 		BellWriter:      os.Stdout,
@@ -421,7 +421,7 @@ func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConf
 		notifier, err := fanoutnotify.New(fanoutnotify.Config{
 			Channels:        resolvedSettings.Notifications,
 			RuntimeBackend:  selection.Name,
-			TmuxTarget:      session,
+			RuntimeTarget:   session,
 			NtfyURL:         resolvedSettings.NtfyURL,
 			SlackWebhookURL: resolvedSettings.SlackWebhookURL,
 			BellWriter:      os.Stdout,

@@ -48,7 +48,7 @@ type Context struct {
 	Slug         string
 	Prompt       string
 	Agent        string
-	TmuxPaneID   string
+	PaneID       string
 	WorktreePath string
 	Branch       string
 	BaseBranch   string
@@ -398,7 +398,9 @@ func Env(ctx Context) []string {
 	set("FANOUT_SLUG", ctx.Slug)
 	set("FANOUT_PROMPT", ctx.Prompt)
 	set("FANOUT_AGENT", ctx.Agent)
-	set("FANOUT_TMUX_PANE_ID", ctx.TmuxPaneID)
+	// The FANOUT_TMUX_PANE_ID / DMUX_TMUX_PANE_ID names are frozen: user hook
+	// scripts read them by name, whichever runtime the pane lives on.
+	set("FANOUT_TMUX_PANE_ID", ctx.PaneID)
 	set("FANOUT_WORKTREE_PATH", ctx.WorktreePath)
 	set("FANOUT_BRANCH", ctx.Branch)
 	set("FANOUT_BASE_BRANCH", ctx.BaseBranch)
@@ -409,7 +411,7 @@ func Env(ctx Context) []string {
 	set("DMUX_SLUG", ctx.Slug)
 	set("DMUX_PROMPT", ctx.Prompt)
 	set("DMUX_AGENT", ctx.Agent)
-	set("DMUX_TMUX_PANE_ID", ctx.TmuxPaneID)
+	set("DMUX_TMUX_PANE_ID", ctx.PaneID)
 	set("DMUX_WORKTREE_PATH", ctx.WorktreePath)
 	set("DMUX_BRANCH", ctx.Branch)
 	set("DMUX_TARGET_BRANCH", ctx.TargetBranch)

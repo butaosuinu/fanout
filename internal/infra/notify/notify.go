@@ -125,9 +125,11 @@ func prSuffix(num int) string {
 // endpoints. Channels is a comma/space separated list of bell, tmux, ntfy,
 // slack, or none. Empty means DefaultChannels.
 type Config struct {
-	Channels        string
-	RuntimeBackend  backend.Name
-	TmuxTarget      string
+	Channels       string
+	RuntimeBackend backend.Name
+	// RuntimeTarget is the runtime-native destination the host channel writes
+	// to. Empty keeps the runtime's own default destination.
+	RuntimeTarget   string
 	NtfyURL         string
 	SlackWebhookURL string
 	BellWriter      io.Writer
@@ -185,7 +187,7 @@ func New(cfg Config) (*Notifier, error) {
 			// Empty keeps the legacy/default tmux behavior. Herdr v1 has no
 			// notification sink; bell, ntfy, and Slack remain runtime-neutral.
 			if backend.NormalizeName(cfg.RuntimeBackend) == backend.Tmux {
-				sinks = append(sinks, tmuxSink{target: cfg.TmuxTarget})
+				sinks = append(sinks, tmuxSink{target: cfg.RuntimeTarget})
 			}
 		case ChannelNtfy:
 			if strings.TrimSpace(cfg.NtfyURL) == "" {

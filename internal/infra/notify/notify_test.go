@@ -112,7 +112,7 @@ func TestNotifierHerdrKeepsRuntimeNeutralChannelsAndSkipsTmux(t *testing.T) {
 	n, err := New(Config{
 		Channels:       "bell,tmux",
 		RuntimeBackend: backend.Herdr,
-		TmuxTarget:     "must-not-be-used",
+		RuntimeTarget:  "must-not-be-used",
 		BellWriter:     &bell,
 	})
 	if err != nil {
