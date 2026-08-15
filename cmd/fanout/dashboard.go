@@ -222,11 +222,29 @@ func dashboardManagedPeekPorts(
 	return owns, read
 }
 
+// bindDashboardKeyForBackend registers the shortcuts only when the resolved
+// runtime is one that owns global key shortcuts of its own. The binder below
+// always resolves the host runtime, because that is where the key table lives;
+// without this gate a console running on a runtime that registers no shortcuts
+// would still rewrite the host's bindings out from under it.
 func bindDashboardKeyForBackend(lg *log.Logger, enabled bool, selection backend.Selection) {
-	if selection.Name != backend.Tmux {
+	if !selectionBindsShortcuts(selection) {
 		return
 	}
 	bindDashboardKey(lg, enabled)
+}
+
+// selectionBindsShortcuts probes the resolved selection's runtime for the
+// global-shortcut capability. Constructing a runtime allocates only — it
+// acquires no session and starts no process — so the probe needs no route and
+// leaves nothing behind.
+func selectionBindsShortcuts(selection backend.Selection) bool {
+	selected, err := paneruntime.NewBackend(selection.Name, "", "")
+	if err != nil {
+		return false
+	}
+	_, ok := backend.AsShortcutBinder(selected)
+	return ok
 }
 
 // waitDashboardHealthy polls the token-free /healthz endpoint until it answers
