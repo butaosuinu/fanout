@@ -50,8 +50,10 @@ rebase 前提ペア — 並走できるが、先にマージされた側に他�
 - class H に触れる PR は人間レビュー必須。#655(runfile)/ #657 / #676(route
   表)/ #668(POST carve-out)に加え、#678(requireToken の 403)・#663
   (reviewstore 新設)・#666(main.go dispatch)・#670(briefing)・#680
-  (peek/plan/diff の rename)も H 面に触れる。最終判定は PR ごとの reviewrisk
-  (`make review-risk`)
+  (peek/plan/diff の rename)も H 面に触れる。Makefile / `web/package.json` /
+  CI workflow を触る PR(#658 / #677 / #682 / #315 / #319)も reviewrisk 上は
+  H 判定になる。この列挙は例示で、正は PR ごとの reviewrisk(`make
+  review-risk`)
 
 ## Wave 計画
 
@@ -67,8 +69,8 @@ blocked-by が wave 内の起動対象を絞る。
 | 2 | 4 | #518 + #663 + #664 + #682 | #664 ↔ #682 は rebase 前提 |
 | 2 | 5 | #665 + #666 + #667 + #683 | |
 | 3 | 6 | #668 | 不変条件改訂の単独 wave。人間レビュー必須 |
-| 3 | 7 | #669 + #670 | |
-| 3 | 8 | #671 | #628 完了 |
+| 3 | 7 | #669 + #670 | 双方向レビューの機能一式が完了 |
+| 3 | 8 | #671 | 任意。#669/#670 の実運用フィードバック後に Go/No-Go(issue 本文の取り決め) |
 | 4 | A〜D | #314 → #315 → #316 + #317 + #318 → #319 + #320 | #659 完了後・任意。#315 spike で Go/No-Go |
 
 phase 2 で #628 wave1 と #675-F の残り(#682 / #683)を並走させるのは、#664 が
