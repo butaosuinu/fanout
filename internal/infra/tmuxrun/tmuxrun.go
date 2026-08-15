@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 const (
@@ -78,47 +80,13 @@ const (
 // sweep.
 var paneIDPattern = regexp.MustCompile(`^%[0-9]+$`)
 
-// PaneInfo describes a pane currently known to tmux.
-type PaneInfo struct {
-	ID       string
-	WindowID string
-	Index    int
-	Active   bool
-	Title    string
-}
-
-// ClientSize is the current tmux client's drawable terminal size.
-type ClientSize struct {
-	Width  int
-	Height int
-}
-
-// PopupPosition describes an absolute tmux display-popup origin.
-type PopupPosition struct {
-	X int
-	Y int
-}
-
-// PopupOptions describes a tmux display-popup invocation.
-type PopupOptions struct {
-	Width    int
-	Height   int
-	StartDir string
-	Title    string
-	Command  string
-	Position *PopupPosition
-}
-
-// PaneGeometry is the absolute position and size of a tmux pane plus the
-// current client size used to clamp adjacent popups into view.
-type PaneGeometry struct {
-	Left         int
-	Top          int
-	Width        int
-	Height       int
-	ClientWidth  int
-	ClientHeight int
-}
+type (
+	PaneInfo      = corebackend.PaneInfo
+	ClientSize    = corebackend.ClientSize
+	PopupPosition = corebackend.PopupPosition
+	PopupOptions  = corebackend.PopupOptions
+	PaneGeometry  = corebackend.PaneGeometry
+)
 
 type tmuxVersion struct {
 	Major int
@@ -1662,29 +1630,16 @@ func CloseFreshPane(paneID string) error {
 	return nil
 }
 
-// ClosePaneStatus classifies an identity-checked pane close.
-type ClosePaneStatus int
-
-const (
-	// ClosePaneClosed means the recorded pane identity was confirmed and the
-	// pane disappeared after kill-pane.
-	ClosePaneClosed ClosePaneStatus = iota
-	// ClosePaneStale means the pane was already gone or its server-scoped id
-	// had been reused by a pane that did not match the recorded identity.
-	ClosePaneStale
-	// ClosePaneFailed means tmux could not be inspected or the confirmed pane
-	// remained live after kill-pane. Callers must preserve durable state so the
-	// close can be retried.
-	ClosePaneFailed
+type (
+	ClosePaneStatus = corebackend.ClosePaneStatus
+	ClosePaneResult = corebackend.ClosePaneResult
 )
 
-// ClosePaneResult reports whether ClosePaneIfOwned killed a confirmed pane or
-// safely treated its state row as stale. WindowID is set only for a confirmed
-// pane and lets lifecycle callers repair that window after the close.
-type ClosePaneResult struct {
-	Status   ClosePaneStatus
-	WindowID string
-}
+const (
+	ClosePaneClosed = corebackend.ClosePaneClosed
+	ClosePaneStale  = corebackend.ClosePaneStale
+	ClosePaneFailed = corebackend.ClosePaneFailed
+)
 
 // ClosePaneIfOwned closes paneID only when its live @fanout_shell_key matches
 // shellKey. expectedWorktreePath remains in the signature for callers that also

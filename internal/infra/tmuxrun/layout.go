@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 const (
@@ -16,30 +18,16 @@ const (
 	// in state.json and are reconciled away on every relayout.
 	spacerOption = "@fanout_spacer"
 	// RoleConsole is the roleOption value for the resident TUI console pane.
-	RoleConsole = "console"
+	RoleConsole = corebackend.RoleConsole
 
 	windowPaneFormat = "#{pane_id}\t#{pane_index}\t#{pane_active}\t#{" + roleOption + "}\t#{" + spacerOption + "}"
 	windowGeomFormat = "#{window_id}\t#{window_width}\t#{window_height}"
 )
 
-// Geometry is a tmux window's id and interior size (status bar excluded).
-type Geometry struct {
-	WindowID string
-	Width    int
-	Height   int
-}
-
-// WindowPane is one pane in a window as seen by the auto-layout orchestrator.
-// NumericID is the pane id without its leading '%', the form tmux custom layout
-// strings embed in each leaf cell.
-type WindowPane struct {
-	ID        string
-	NumericID string
-	Index     int
-	Active    bool
-	Role      string
-	Spacer    bool
-}
+type (
+	Geometry   = corebackend.Geometry
+	WindowPane = corebackend.WindowPane
+)
 
 // WindowGeometry resolves target (a pane id, window id, or session name) to the
 // window that holds it and returns that window's id and interior size. Callers
