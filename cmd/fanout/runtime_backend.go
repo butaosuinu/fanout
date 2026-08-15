@@ -23,17 +23,20 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
+// runtimeReadRoute is one independently queried observation route: the runtime
+// plus the managed route tuple that scopes it. The tmux host has a single route
+// and leaves sessionID and socketPath empty.
 type runtimeReadRoute struct {
-	name            backend.Name
-	herdrSession    string
-	herdrSocketPath string
+	name       backend.Name
+	sessionID  string
+	socketPath string
 }
 
 func (r runtimeReadRoute) observationRoute() backend.ObservationRoute {
 	return backend.ObservationRoute{
 		Backend:    backend.NormalizeName(r.name),
-		SessionID:  r.herdrSession,
-		SocketPath: r.herdrSocketPath,
+		SessionID:  r.sessionID,
+		SocketPath: r.socketPath,
 	}
 }
 
@@ -151,10 +154,10 @@ func validateLaunchBackend(
 	if selection.Name != backend.Herdr {
 		return nil
 	}
-	return validateHerdrLaunchBackend(cfg)
+	return validateManagedLaunchBackend(cfg)
 }
 
-func validateHerdrLaunchBackend(cfg *cliflags.Config) error {
+func validateManagedLaunchBackend(cfg *cliflags.Config) error {
 	if cfg.Team {
 		dbPath := os.Getenv(team.DBPathEnv)
 		if dbPath != "" && !filepath.IsAbs(dbPath) {
@@ -205,18 +208,18 @@ func backendBindings(projectRoot string, store state.Store) []backend.Binding {
 // route, the normal settings/env/context resolver can opt the read surface into
 // the ambient named session even though herdr v1 launch remains unsupported.
 //
-// includeTmux adds the host tmux route even when no saved row selects it.
+// includeHostRoute adds the host tmux route even when no saved row selects it.
 // Persisted rows still contribute their own routes for mixed-backend display.
-func runtimeListLiveCollector(projectRoot string, includeTmux bool) func() ([]backend.LivePane, error) {
+func runtimeListLiveCollector(projectRoot string, includeHostRoute bool) func() ([]backend.LivePane, error) {
 	var mu sync.Mutex
 	return func() ([]backend.LivePane, error) {
 		mu.Lock()
 		defer mu.Unlock()
 
-		routes, routeErr := runtimeReadRoutes(projectRoot, includeTmux)
+		routes, routeErr := runtimeReadRoutes(projectRoot, includeHostRoute)
 		return collectRuntimeLive(routes, routeErr, func(route runtimeReadRoute) ([]backend.LivePane, error) {
 			runtimeBackend, err := paneruntime.NewBackend(
-				route.name, route.herdrSession, route.herdrSocketPath,
+				route.name, route.sessionID, route.socketPath,
 			)
 			if err != nil {
 				return nil, err
@@ -226,18 +229,18 @@ func runtimeListLiveCollector(projectRoot string, includeTmux bool) func() ([]ba
 	}
 }
 
-func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute, error) {
+func runtimeReadRoutes(projectRoot string, includeHostRoute bool) ([]runtimeReadRoute, error) {
 	routes := make([]runtimeReadRoute, 0, 3)
 	seenRoutes := map[string]bool{}
 	addRoute := func(route runtimeReadRoute) {
-		key := string(route.name) + "\x00" + route.herdrSession + "\x00" + route.herdrSocketPath
+		key := string(route.name) + "\x00" + route.sessionID + "\x00" + route.socketPath
 		if seenRoutes[key] {
 			return
 		}
 		seenRoutes[key] = true
 		routes = append(routes, route)
 	}
-	if includeTmux {
+	if includeHostRoute {
 		addRoute(runtimeReadRoute{name: backend.Tmux})
 	}
 
@@ -247,7 +250,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 		routeErr = errors.Join(routeErr, fmt.Errorf("list linked worktrees for runtime observation: %w", listErr))
 	}
 	seenRoots := map[string]bool{}
-	hasHerdrRoute := false
+	hasManagedRoute := false
 	for _, root := range roots {
 		key := paneruntime.CanonicalRoot(root)
 		if seenRoots[key] {
@@ -266,7 +269,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 			case backend.Tmux:
 				addRoute(runtimeReadRoute{name: backend.Tmux})
 			case backend.Herdr:
-				hasHerdrRoute = true
+				hasManagedRoute = true
 				session := strings.TrimSpace(pane.SessionID)
 				socketPath := strings.TrimSpace(pane.SocketPath)
 				if session == "" || socketPath == "" {
@@ -279,7 +282,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 					))
 					continue
 				}
-				addRoute(runtimeReadRoute{name: backend.Herdr, herdrSession: session, herdrSocketPath: socketPath})
+				addRoute(runtimeReadRoute{name: backend.Herdr, sessionID: session, socketPath: socketPath})
 			default:
 				routeErr = errors.Join(routeErr, backend.ObservationRouteUnavailable(
 					backend.ObservationRoute{Backend: name},
@@ -294,12 +297,12 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 
 	control, controlErr := state.LoadLaunchJournal(projectRoot)
 	if controlErr != nil {
-		hasHerdrRoute = true
+		hasManagedRoute = true
 		routeErr = errors.Join(routeErr, fmt.Errorf("load Herdr control routes: %w", controlErr))
 	} else {
 		for i, intent := range control.Intents {
-			hasHerdrRoute = true
-			session, socketPath := herdrIntentRuntimeRoute(intent)
+			hasManagedRoute = true
+			session, socketPath := intentRuntimeRoute(intent)
 			if session == "" || socketPath == "" {
 				routeErr = errors.Join(routeErr, backend.ObservationRouteUnavailable(
 					backend.ObservationRoute{
@@ -310,9 +313,9 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 				continue
 			}
 			addRoute(runtimeReadRoute{
-				name:            backend.Herdr,
-				herdrSession:    session,
-				herdrSocketPath: socketPath,
+				name:       backend.Herdr,
+				sessionID:  session,
+				socketPath: socketPath,
 			})
 		}
 	}
@@ -326,11 +329,11 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 		case backend.Tmux:
 			addRoute(runtimeReadRoute{name: backend.Tmux})
 		case backend.Herdr:
-			if !hasHerdrRoute {
+			if !hasManagedRoute {
 				addRoute(runtimeReadRoute{
-					name:            backend.Herdr,
-					herdrSession:    strings.TrimSpace(inputs.HerdrSession),
-					herdrSocketPath: strings.TrimSpace(inputs.HerdrSocketPath),
+					name:       backend.Herdr,
+					sessionID:  strings.TrimSpace(inputs.SessionID),
+					socketPath: strings.TrimSpace(inputs.SocketPath),
 				})
 			}
 		}
@@ -338,7 +341,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 	return routes, routeErr
 }
 
-func herdrIntentRuntimeRoute(intent state.LaunchIntent) (string, string) {
+func intentRuntimeRoute(intent state.LaunchIntent) (string, string) {
 	if state.IsServerLifecycleKind(intent.Kind) && intent.Server != nil {
 		return strings.TrimSpace(intent.Server.Session), strings.TrimSpace(intent.Server.SocketPath)
 	}
@@ -374,8 +377,8 @@ func runtimeReadRouteLabel(route runtimeReadRoute) string {
 	if route.name != backend.Herdr {
 		return string(route.name)
 	}
-	if route.herdrSession == "" {
+	if route.sessionID == "" {
 		return string(route.name)
 	}
-	return fmt.Sprintf("%s session %q", route.name, route.herdrSession)
+	return fmt.Sprintf("%s session %q", route.name, route.sessionID)
 }
