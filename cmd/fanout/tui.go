@@ -250,6 +250,7 @@ func wireTmuxTUI(
 
 func wireTmuxPaneActions(opts *fanouttui.Options, runtimeBackend paneruntime.HostBackend) {
 	opts.LifecycleCloseOwned = runtimeBackend.CloseOwned
+	opts.LifecycleRelayout = runtimeBackend.Relayout
 	opts.ShellPaneAlive = runtimeShellPaneAlive(runtimeBackend.ListLive)
 	opts.FocusPane = func(paneID string) error {
 		return runtimeBackend.Focus(backend.PaneRef{Backend: backend.Tmux, Pane: paneID})

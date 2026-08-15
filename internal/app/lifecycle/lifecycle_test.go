@@ -63,24 +63,30 @@ type relayoutCall struct {
 	trig backend.LayoutTrigger
 }
 
+// testRelayout is the layout repair fakeRuntimeOptions injects. Options with no
+// Relayout skip the repair, which is what a runtime that arranges its own
+// workspace does, so only tests that assert on the repair install a recorder.
+var testRelayout func(string, backend.LayoutTrigger) error
+
 func stubRelayout(t *testing.T) *[]relayoutCall {
 	t.Helper()
 	var calls []relayoutCall
-	orig := relayoutWindow
-	relayoutWindow = func(id string, trig backend.LayoutTrigger) error {
+	orig := testRelayout
+	testRelayout = func(id string, trig backend.LayoutTrigger) error {
 		calls = append(calls, relayoutCall{id, trig})
 		return nil
 	}
-	t.Cleanup(func() { relayoutWindow = orig })
+	t.Cleanup(func() { testRelayout = orig })
 	return &calls
 }
 
 // closeAndRelayout mirrors the public entrypoints: capture windows during the
 // close, then relayout the accumulated set once.
 func closeAndRelayout(panes []state.Pane) {
+	opts := fakeRuntimeOptions()
 	windows := map[string]struct{}{}
-	closePaneRecordsLocked(fakeRuntimeOptions(), nil, panes, ClosePaneOnly, nopLogger{}, windows)
-	relayoutClosedWindows(windows, nopLogger{})
+	closePaneRecordsLocked(opts, nil, panes, ClosePaneOnly, nopLogger{}, windows)
+	relayoutClosedWindows(opts.Relayout, windows, nopLogger{})
 }
 
 func fakeRuntimeOptions() Options {
@@ -98,6 +104,12 @@ func fakeRuntimeOptions() Options {
 				mapped.Status = backend.CloseFailed
 			}
 			return mapped, err
+		},
+		Relayout: func(target string, trigger backend.LayoutTrigger) error {
+			if testRelayout == nil {
+				return nil
+			}
+			return testRelayout(target, trigger)
 		},
 	}
 }
@@ -154,7 +166,7 @@ func TestCleanupAccumulatesWindowsAcrossPanes(t *testing.T) {
 	windows := map[string]struct{}{}
 	cleanupPaneRecordsLocked(fakeRuntimeOptions(), nil, []state.Pane{{PaneID: "%1", IssueNum: 1}}, nopLogger{}, windows)
 	cleanupPaneRecordsLocked(fakeRuntimeOptions(), nil, []state.Pane{{PaneID: "%2", IssueNum: 2}}, nopLogger{}, windows)
-	relayoutClosedWindows(windows, nopLogger{})
+	relayoutClosedWindows(fakeRuntimeOptions().Relayout, windows, nopLogger{})
 
 	if len(*calls) != 1 || (*calls)[0].id != "@7" {
 		t.Fatalf("relayout calls = %+v, want one on @7", *calls)
