@@ -328,6 +328,19 @@ func TestName(t *testing.T) {
 	}
 }
 
+// Pane decoration and liveness stamps are tmux-only pane annotations the herdr
+// launch lane never reaches. The capabilities must stay unimplemented so the
+// launcher skips or fails closed by contract instead of at call time.
+func TestBackendOffersNoTmuxOnlyPaneCapability(t *testing.T) {
+	b := New("fanout-test", "/tmp/herdr.sock")
+	if _, ok := corebackend.AsPaneDecorator(b); ok {
+		t.Fatal("AsPaneDecorator(herdr backend) reported a capability, want absent")
+	}
+	if _, ok := corebackend.AsLivenessStamper(b); ok {
+		t.Fatal("AsLivenessStamper(herdr backend) reported a capability, want absent")
+	}
+}
+
 func TestCheckAvailablePinsVerifiedSocketAndVersion(t *testing.T) {
 	t.Setenv(sessionEnv, "ambient-wrong-session")
 	t.Setenv(socketEnv, "/tmp/ambient-wrong.sock")
