@@ -107,11 +107,11 @@ func uniqueNudgeRecipient(store state.Store, parent string, issueNum int, taskID
 }
 
 func deliverRuntimeNudge(pane state.Pane, deps Deps) (agentState, reason string, nudged bool) {
-	if backend.NormalizeName(pane.Backend) == backend.Herdr {
+	if managedNudgeRow(pane) {
 		if !agent.PaneStateRefined(pane.Agent) {
 			return "", fmt.Sprintf("agent %q has no agent-state refinement; nudge is disabled for its panes", pane.Agent), false
 		}
-		return deliverHerdrNudge(pane, deps)
+		return deliverManagedNudge(pane, deps)
 	}
 	return deliverNudge(pane, deps)
 }

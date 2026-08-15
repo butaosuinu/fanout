@@ -13,16 +13,30 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-const herdrNudgeTimeout = 30 * time.Second
+const managedNudgeTimeout = 30 * time.Second
 
-func deliverHerdrNudge(pane state.Pane, deps Deps) (agentState, reason string, nudged bool) {
-	observedState, reason, candidate := herdrNudgeCandidate(pane)
+// managedNudgeRow reports whether the recipient's hint must be prepared by its
+// runtime instead of typed into a terminal. The row's recorded runtime name is
+// deliberately the criterion. The recorded session route (session id plus
+// socket path) looks like a data-shape equivalent, but nothing validates
+// state.json on load, and this lane's identity gates compare a binding without
+// its runtime name — uniqueNudgePane calls UniqueLive with no RequireRuntime
+// option. Selecting the lane from route fields alone would let a row that
+// records the direct-send runtime, yet carries session fields, address a live
+// managed pane; the recorded name keeps the lane pinned to what the launch
+// actually recorded.
+func managedNudgeRow(pane state.Pane) bool {
+	return backend.NormalizeName(pane.Backend) == backend.Herdr
+}
+
+func deliverManagedNudge(pane state.Pane, deps Deps) (agentState, reason string, nudged bool) {
+	observedState, reason, candidate := managedNudgeCandidate(pane)
 	if !candidate {
 		return observedState, reason, false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), herdrNudgeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), managedNudgeTimeout)
 	defer cancel()
-	prompt, _, latestState, err := prepareHerdrNudge(ctx, pane, deps)
+	prompt, _, latestState, err := prepareManagedNudge(ctx, pane, deps)
 	if err != nil {
 		return latestState, err.Error(), false
 	}
@@ -32,7 +46,7 @@ func deliverHerdrNudge(pane state.Pane, deps Deps) (agentState, reason string, n
 	return latestState, "", true
 }
 
-func herdrNudgeCandidate(pane state.Pane) (string, string, bool) {
+func managedNudgeCandidate(pane state.Pane) (string, string, bool) {
 	observedState := strings.TrimSpace(pane.ReportedState)
 	if !pane.StateRefinement {
 		return observedState, "agent state is not refined for the current launch", false
@@ -43,35 +57,35 @@ func herdrNudgeCandidate(pane state.Pane) (string, string, bool) {
 	return observedState, "", true
 }
 
-func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (backend.NudgePrompt, state.Pane, string, error) {
+func prepareManagedNudge(ctx context.Context, pane state.Pane, deps Deps) (backend.NudgePrompt, state.Pane, string, error) {
 	if deps.ReadLockedState == nil {
 		return nil, state.Pane{}, "", fmt.Errorf("herdr nudge runtime is unavailable")
 	}
-	latest, latestState, err := recheckHerdrNudgeState(ctx, pane, deps)
+	latest, latestState, err := recheckManagedNudgeState(ctx, pane, deps)
 	if err != nil {
 		return nil, latest, latestState, err
 	}
-	prompt, err := prepareHerdrPrompt(ctx, latest, deps.OpenHerdr)
+	prompt, err := prepareRuntimePrompt(ctx, latest, deps.OpenRuntime)
 	if err != nil {
 		return nil, latest, latestState, err
 	}
-	final, finalState, err := recheckHerdrNudgeState(ctx, latest, deps)
+	final, finalState, err := recheckManagedNudgeState(ctx, latest, deps)
 	if err != nil {
 		return nil, final, finalState, err
 	}
 	return prompt, final, finalState, nil
 }
 
-func prepareHerdrPrompt(ctx context.Context, pane state.Pane, open func(context.Context, string) (HerdrNudger, error)) (backend.NudgePrompt, error) {
-	runtime, err := openHerdrNudgeRuntime(ctx, open, pane.RepoKey)
+func prepareRuntimePrompt(ctx context.Context, pane state.Pane, open func(context.Context, string) (NudgeRuntime, error)) (backend.NudgePrompt, error) {
+	runtime, err := openNudgeRuntime(ctx, open, pane.RepoKey)
 	if err != nil {
 		return nil, err
 	}
-	err = verifyHerdrNudgeRuntime(ctx, runtime, pane)
+	err = verifyNudgeRuntime(ctx, runtime, pane)
 	if err != nil {
 		return nil, err
 	}
-	prompt, err := runtime.PrepareNudge(ctx, herdrNudgeTarget(pane), nudgeText)
+	prompt, err := runtime.PrepareNudge(ctx, managedNudgeTarget(pane), nudgeText)
 	if err != nil {
 		return nil, fmt.Errorf("prepare agent prompt: %w", err)
 	}
@@ -81,7 +95,7 @@ func prepareHerdrPrompt(ctx context.Context, pane state.Pane, open func(context.
 	return prompt, nil
 }
 
-func openHerdrNudgeRuntime(ctx context.Context, open func(context.Context, string) (HerdrNudger, error), repoKey string) (HerdrNudger, error) {
+func openNudgeRuntime(ctx context.Context, open func(context.Context, string) (NudgeRuntime, error), repoKey string) (NudgeRuntime, error) {
 	if open == nil || strings.TrimSpace(repoKey) == "" {
 		return nil, fmt.Errorf("herdr nudge runtime is unavailable")
 	}
@@ -95,18 +109,18 @@ func openHerdrNudgeRuntime(ctx context.Context, open func(context.Context, strin
 	return runtime, nil
 }
 
-func verifyHerdrNudgeRuntime(ctx context.Context, runtime HerdrNudger, pane state.Pane) error {
+func verifyNudgeRuntime(ctx context.Context, runtime NudgeRuntime, pane state.Pane) error {
 	panes, err := runtime.LivePanes(ctx)
 	if err != nil {
 		return fmt.Errorf("read herdr panes: %w", err)
 	}
-	if !uniqueHerdrNudgePane(pane, panes) {
+	if !uniqueNudgePane(pane, panes) {
 		return fmt.Errorf("recipient pane identity or worktree provenance changed")
 	}
-	return verifyHerdrNudgeProcess(ctx, runtime, pane)
+	return verifyNudgeProcess(ctx, runtime, pane)
 }
 
-func verifyHerdrNudgeProcess(ctx context.Context, runtime HerdrNudger, pane state.Pane) error {
+func verifyNudgeProcess(ctx context.Context, runtime NudgeRuntime, pane state.Pane) error {
 	process, err := runtime.ProcessInfo(ctx, pane.PaneID)
 	if err != nil {
 		return fmt.Errorf("read recipient process identity: %w", err)
@@ -126,16 +140,16 @@ func verifyHerdrNudgeProcess(ctx context.Context, runtime HerdrNudger, pane stat
 	return nil
 }
 
-func uniqueHerdrNudgePane(recorded state.Pane, panes []backend.LivePane) bool {
+func uniqueNudgePane(recorded state.Pane, panes []backend.LivePane) bool {
 	_, ok := recorded.RuntimeBinding().UniqueLive(panes)
 	return ok
 }
 
-func recheckHerdrNudgeState(ctx context.Context, recorded state.Pane, deps Deps) (state.Pane, string, error) {
+func recheckManagedNudgeState(ctx context.Context, recorded state.Pane, deps Deps) (state.Pane, string, error) {
 	var latest state.Pane
 	err := deps.ReadLockedState(ctx, func(store state.Store) error {
 		var bindingErr error
-		latest, bindingErr = currentHerdrNudgeBinding(store, recorded)
+		latest, bindingErr = currentNudgeBinding(store, recorded)
 		if bindingErr != nil {
 			return bindingErr
 		}
@@ -150,22 +164,22 @@ func recheckHerdrNudgeState(ctx context.Context, recorded state.Pane, deps Deps)
 	return latest, strings.TrimSpace(latest.ReportedState), err
 }
 
-func currentHerdrNudgeBinding(store state.Store, recorded state.Pane) (state.Pane, error) {
+func currentNudgeBinding(store state.Store, recorded state.Pane) (state.Pane, error) {
 	latest, matches := uniqueNudgeRecipient(store, recorded.Parent, recorded.IssueNum, recorded.TaskID)
-	byRow, rowFound := uniqueHerdrNudgeRow(store, recorded.EmitterRowKey)
-	if matches != 1 || !rowFound || !sameHerdrNudgeBinding(latest, byRow) ||
-		!sameHerdrNudgeBinding(recorded, latest) || !validHerdrNudgeGeneration(latest) {
+	byRow, rowFound := uniqueNudgeRow(store, recorded.EmitterRowKey)
+	if matches != 1 || !rowFound || !sameNudgeBinding(latest, byRow) ||
+		!sameNudgeBinding(recorded, latest) || !validNudgeGeneration(latest) {
 		return state.Pane{}, fmt.Errorf("recipient launch binding changed before prompt")
 	}
 	return latest, nil
 }
 
-func validHerdrNudgeGeneration(pane state.Pane) bool {
+func validNudgeGeneration(pane state.Pane) bool {
 	return telemetry.ValidNonce(pane.LaunchNonce) && telemetry.ValidNonce(pane.EmitterNonce) &&
 		pane.AgentID == naming.HerdrAgentName(pane.RepoKey, pane.EmitterRowKey, pane.LaunchNonce)
 }
 
-func uniqueHerdrNudgeRow(store state.Store, rowKey string) (state.Pane, bool) {
+func uniqueNudgeRow(store state.Store, rowKey string) (state.Pane, bool) {
 	var matched state.Pane
 	count := 0
 	for _, pane := range store.Panes {
@@ -177,14 +191,14 @@ func uniqueHerdrNudgeRow(store state.Store, rowKey string) (state.Pane, bool) {
 	return matched, count == 1
 }
 
-func sameHerdrNudgeBinding(left, right state.Pane) bool {
+func sameNudgeBinding(left, right state.Pane) bool {
 	return left.RuntimeBinding().Equal(right.RuntimeBinding())
 }
 
-// herdrNudgeTarget builds the runtime prompt target out of the same recorded
+// managedNudgeTarget builds the runtime prompt target out of the same recorded
 // binding every preflight gate compared, so the prompt cannot be addressed to
 // an identity the gates never saw.
-func herdrNudgeTarget(pane state.Pane) backend.NudgeTarget {
+func managedNudgeTarget(pane state.Pane) backend.NudgeTarget {
 	binding := pane.RuntimeBinding()
 	return backend.NudgeTarget{
 		Ref: binding.Ref, SessionID: binding.SessionID, SocketPath: binding.SocketPath,
