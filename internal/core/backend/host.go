@@ -69,6 +69,15 @@ type ConsoleFocus interface {
 	FocusPaneForViewer(viewerID string, ref PaneRef) error
 }
 
+// PaneLocator is an optional capability for runtimes that report where one of
+// their panes currently sits on disk. fanout's console and dashboard read it
+// for the pane they were invoked from: a wrapper can leave their own process
+// cwd pointing somewhere other than the directory the operator is looking at,
+// and the pane's own path is the only evidence of which repository that is.
+type PaneLocator interface {
+	PaneCurrentPath(paneID string) (string, error)
+}
+
 // AsPopupHost resolves b's popup capability. ok=false means the runtime draws
 // no popups, so callers hide the popup-driven action instead of failing.
 func AsPopupHost(b Backend) (PopupHost, bool) {
@@ -89,4 +98,12 @@ func AsShortcutBinder(b Backend) (ShortcutBinder, bool) {
 func AsConsoleFocus(b Backend) (ConsoleFocus, bool) {
 	focus, ok := b.(ConsoleFocus)
 	return focus, ok
+}
+
+// AsPaneLocator resolves b's pane-location capability. ok=false means the
+// runtime does not report where a pane sits, so callers keep the project root
+// they resolved from their own process.
+func AsPaneLocator(b Backend) (PaneLocator, bool) {
+	locator, ok := b.(PaneLocator)
+	return locator, ok
 }

@@ -15,6 +15,7 @@ package backendtest
 
 import (
 	"sync"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 )
@@ -40,6 +41,12 @@ const (
 	MethodStampPaneShellKey      = "StampPaneShellKey"
 	MethodPreviewLaunch          = "PreviewLaunch"
 	MethodRelayout               = "Relayout"
+
+	MethodListLiveForIdentity = "ListLiveForIdentity"
+	MethodListPanes           = "ListPanes"
+	MethodServerStartTime     = "ServerStartTime"
+	MethodPaneStartTime       = "PaneStartTime"
+	MethodCanonicalPaneLabel  = "CanonicalPaneLabel"
 
 	MethodCurrentClientSize            = "CurrentClientSize"
 	MethodPaneGeometryForPane          = "PaneGeometryForPane"
@@ -85,6 +92,13 @@ type Fake struct {
 
 	livePanes       []backend.LivePane
 	livePanesErr    error
+	identityPanes   []backend.LivePane
+	identityErr     error
+	targetPanes     []backend.PaneInfo
+	targetPanesErr  error
+	serverStart     time.Time
+	serverStartErr  error
+	paneStart       func(paneID string) (time.Time, error)
 	clientSize      backend.ClientSize
 	clientSizeErr   error
 	paneGeometry    backend.PaneGeometry
@@ -178,6 +192,42 @@ func WithLivePanes(panes ...backend.LivePane) Option {
 // WithListLiveError fails every ListLive.
 func WithListLiveError(err error) Option {
 	return func(f *Fake) { f.livePanesErr = err }
+}
+
+// WithIdentityPanes sets the observation the RestoreOps strict sweep reports,
+// and the error it reports instead. It is deliberately separate from
+// WithLivePanes: the two sweeps have different failure contracts, and a test
+// that pins the strict one must be able to fail it alone.
+func WithIdentityPanes(panes []backend.LivePane, err error) Option {
+	return func(f *Fake) {
+		f.identityPanes = panes
+		f.identityErr = err
+	}
+}
+
+// WithTargetPanes sets the pane listing the RestoreOps target-scoped query
+// reports, and the error it reports instead.
+func WithTargetPanes(panes []backend.PaneInfo, err error) Option {
+	return func(f *Fake) {
+		f.targetPanes = panes
+		f.targetPanesErr = err
+	}
+}
+
+// WithServerStartTime sets the runtime generation start the RestoreOps
+// capability reports, and the error it reports instead. The zero instant is
+// what an unconfigured fake reports, which declines every adoption.
+func WithServerStartTime(at time.Time, err error) Option {
+	return func(f *Fake) {
+		f.serverStart = at
+		f.serverStartErr = err
+	}
+}
+
+// WithPaneStartTime sets the per-pane provenance clock the RestoreOps
+// capability answers with. A nil function reports the zero instant.
+func WithPaneStartTime(fn func(paneID string) (time.Time, error)) Option {
+	return func(f *Fake) { f.paneStart = fn }
 }
 
 // WithClientSize sets the viewer size the PopupHost capability measures, and

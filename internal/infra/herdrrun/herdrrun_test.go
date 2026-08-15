@@ -365,6 +365,21 @@ func TestBackendOffersNoTmuxOnlyPaneCapability(t *testing.T) {
 	}
 }
 
+// Console restore rebinds, recreates, and rewrites durable state rows against
+// evidence only a pane multiplexer can produce: a strict identity sweep and the
+// two clocks that prove a recorded pane id was never reused. Herdr persists and
+// rearranges its own sessions, so it offers none of that — which is what makes
+// restore structurally tmux-only instead of gated on a backend name check.
+func TestBackendOffersNoRestoreCapability(t *testing.T) {
+	b := New("fanout-test", "/tmp/herdr.sock")
+	if _, ok := corebackend.AsRestoreOps(b); ok {
+		t.Fatal("AsRestoreOps(herdr backend) reported a capability, want absent")
+	}
+	if _, ok := corebackend.AsPaneLocator(b); ok {
+		t.Fatal("AsPaneLocator(herdr backend) reported a capability, want absent")
+	}
+}
+
 // Popups, global key shortcuts, and viewer-scoped focus are the host surfaces
 // fanout's own console asks a runtime for. Herdr offers none, which is how the
 // console hides those actions instead of discovering at keypress time that the
