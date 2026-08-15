@@ -281,13 +281,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			if alive {
 				pv.RuntimeTitle = current.Title
 				pv.TmuxTitle = current.Title
-				if backend.NormalizeName(p.Backend) != backend.Herdr {
-					pv.AgentState = normalizeAgentState(string(current.AgentState))
-				} else if current.AgentPresent {
-					pv.AgentState = normalizeAgentState(string(backend.MapHerdrAgentState(
-						true, current.NativeAgentState, p.ReportedState,
-					)))
-				}
+				pv.AgentState = liveAgentState(p, current)
 			} else if runtimeDegraded && backend.NormalizeName(p.Backend) == backend.Tmux {
 				// tmux 不通時は動的判定ができないので、起動時に state.json へ
 				// 記録した値に fallback する(記録+動的の両方式を持つ利点)。
@@ -537,12 +531,17 @@ func indexLivePanes(panes []backend.LivePane) map[livePaneKey]backend.LivePane {
 	return live
 }
 
+// livePaneKeyForObservation and livePaneKeyForState must derive the same key
+// for the same pane from opposite sides, so both qualify the pane identifier by
+// its route on exactly the runtimes whose identifiers are route-scoped. A
+// runtime with one process-wide route records no route on the persisted row,
+// and qualifying only the observation would leave the two sides unable to meet.
 func livePaneKeyForObservation(pane backend.LivePane) livePaneKey {
 	key := livePaneKey{
 		backend: backend.NormalizeName(pane.Ref.Backend),
 		pane:    pane.Ref.Pane,
 	}
-	if key.backend == backend.Herdr {
+	if backend.RouteScopedPaneIDs(key.backend) {
 		key.workspace = pane.Ref.Workspace
 		key.session = strings.TrimSpace(pane.SessionID)
 		key.socket = strings.TrimSpace(pane.SocketPath)
@@ -555,7 +554,7 @@ func livePaneKeyForState(pane state.Pane) livePaneKey {
 		backend: backend.NormalizeName(pane.Backend),
 		pane:    pane.PaneID,
 	}
-	if key.backend == backend.Herdr {
+	if backend.RouteScopedPaneIDs(key.backend) {
 		key.workspace = pane.WorkspaceID
 		key.session = strings.TrimSpace(pane.SessionID)
 		key.socket = strings.TrimSpace(pane.SocketPath)
@@ -563,10 +562,12 @@ func livePaneKeyForState(pane state.Pane) livePaneKey {
 	return key
 }
 
+// observationRouteForState names the route a recorded row was observed through,
+// so a failure scoped to one route degrades only the rows that route serves.
 func observationRouteForState(pane state.Pane) backend.ObservationRoute {
 	name := backend.NormalizeName(pane.Backend)
 	route := backend.ObservationRoute{Backend: name}
-	if name == backend.Herdr {
+	if backend.RouteScopedPaneIDs(name) {
 		route.SessionID = strings.TrimSpace(pane.SessionID)
 		route.SocketPath = strings.TrimSpace(pane.SocketPath)
 	}
@@ -574,41 +575,69 @@ func observationRouteForState(pane state.Pane) backend.ObservationRoute {
 }
 
 // livePaneForState reports whether a recorded pane is live and returns the
-// matching backend-neutral observation. Runtime and pane identity must match.
-// Tmux agent panes accept their recorded worktree or a descendant, while herdr
-// requires exact worktree provenance (or exact saved cwd for generic
-// workspaces). Tmux shell panes use ShellKey because their repo-root path is too
-// broad to protect against pane-id reuse.
+// matching backend-neutral observation. Pane identity must match, and the
+// evidence compared beyond it is whatever the row's runtime publishes: a
+// recorded-binding runtime is held to its whole launch record, while a
+// foreground-path runtime is matched on the path its pane currently reports.
 func livePaneForState(live map[livePaneKey]backend.LivePane, pane state.Pane) (backend.LivePane, bool) {
 	if pane.PaneID == "" {
 		return backend.LivePane{}, false
 	}
-	name := backend.NormalizeName(pane.Backend)
 	cur, ok := live[livePaneKeyForState(pane)]
 	if !ok {
 		return backend.LivePane{}, false
 	}
-	switch name {
-	case backend.Herdr:
+	switch backend.LiveIdentityModelOf(pane.Backend) {
+	case backend.LiveIdentityRecordedBinding:
 		return cur, pane.RuntimeBinding().MatchesLive(cur)
-	case backend.Tmux:
-		if pane.IsShell() || pane.ShellKey != "" {
-			return cur, pane.ShellKey != "" && cur.ShellKey == pane.ShellKey
-		}
-		worktree := pane.WorktreePath
-		if strings.TrimSpace(worktree) == "" {
-			return cur, true
-		}
-		wt := filepath.Clean(worktree)
-		if optionPath := strings.TrimSpace(cur.WorktreePath); optionPath != "" {
-			opt := filepath.Clean(optionPath)
-			return cur, opt == wt || strings.HasPrefix(opt, wt+string(filepath.Separator))
-		}
-		cp := filepath.Clean(cur.CurrentPath)
-		return cur, cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+	case backend.LiveIdentityForegroundPath:
+		return cur, foregroundPathMatches(pane, cur)
 	default:
 		return backend.LivePane{}, false
 	}
+}
+
+// foregroundPathMatches compares a row against an observation that reports only
+// what its pane is doing now. A shell pane is matched on the key fanout stamped
+// on it, because its repo-root path is too broad to protect against pane-id
+// reuse. An agent pane accepts its recorded worktree or a directory beneath it:
+// the agent may descend into a subdirectory while it works.
+func foregroundPathMatches(pane state.Pane, cur backend.LivePane) bool {
+	if pane.IsShell() || pane.ShellKey != "" {
+		return pane.ShellKey != "" && cur.ShellKey == pane.ShellKey
+	}
+	worktree := pane.WorktreePath
+	if strings.TrimSpace(worktree) == "" {
+		return true
+	}
+	wt := filepath.Clean(worktree)
+	if optionPath := strings.TrimSpace(cur.WorktreePath); optionPath != "" {
+		opt := filepath.Clean(optionPath)
+		return opt == wt || strings.HasPrefix(opt, wt+string(filepath.Separator))
+	}
+	cp := filepath.Clean(cur.CurrentPath)
+	return cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+}
+
+// liveAgentState projects one live observation into the display vocabulary.
+//
+// A runtime whose observations carry the whole launch record also carries a
+// per-pane agent record, so the absence of that record is positive evidence
+// that no agent is running there and no earlier projected value may survive it.
+// Where a record is present, the row's own recorded self-report outranks the
+// runtime-native status. A runtime identified only by what its pane is doing
+// now publishes no such record, and its already-projected telemetry is the only
+// reading available.
+func liveAgentState(pane state.Pane, live backend.LivePane) string {
+	if backend.LiveIdentityModelOf(pane.Backend) != backend.LiveIdentityRecordedBinding {
+		return normalizeAgentState(string(live.AgentState))
+	}
+	if !live.AgentPresent {
+		return ""
+	}
+	return normalizeAgentState(string(backend.MapReportedAgentState(
+		true, live.NativeAgentState, pane.ReportedState,
+	)))
 }
 
 // runtimeRowUnsupported identifies persisted rows that predate the authoritative

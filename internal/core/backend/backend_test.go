@@ -51,7 +51,7 @@ func TestAgentSessionRefValidationPreservesExactTuple(t *testing.T) {
 	}
 }
 
-func TestMapHerdrAgentState(t *testing.T) {
+func TestMapReportedAgentState(t *testing.T) {
 	tests := []struct {
 		name         string
 		agentPresent bool
@@ -74,8 +74,8 @@ func TestMapHerdrAgentState(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := MapHerdrAgentState(tt.agentPresent, tt.native, tt.reported); got != tt.want {
-				t.Fatalf("MapHerdrAgentState(%t, %q, %q) = %q, want %q", tt.agentPresent, tt.native, tt.reported, got, tt.want)
+			if got := MapReportedAgentState(tt.agentPresent, tt.native, tt.reported); got != tt.want {
+				t.Fatalf("MapReportedAgentState(%t, %q, %q) = %q, want %q", tt.agentPresent, tt.native, tt.reported, got, tt.want)
 			}
 		})
 	}
@@ -83,8 +83,8 @@ func TestMapHerdrAgentState(t *testing.T) {
 	// Herdr exposes an unfocused idle agent as done, then idle after focus.
 	// These are display states only; neither mapping invents running/plan.
 	sequence := []LivePane{
-		{AgentState: MapHerdrAgentState(true, "done", ""), Focused: false},
-		{AgentState: MapHerdrAgentState(true, "idle", ""), Focused: true},
+		{AgentState: MapReportedAgentState(true, "done", ""), Focused: false},
+		{AgentState: MapReportedAgentState(true, "idle", ""), Focused: true},
 	}
 	if sequence[0].AgentState != AgentDone || sequence[0].Focused ||
 		sequence[1].AgentState != AgentIdle || !sequence[1].Focused {

@@ -116,10 +116,11 @@ func ParseAgentState(raw string) (AgentState, bool) {
 	}
 }
 
-// MapHerdrAgentState projects cooperative telemetry, then herdr's public
-// agent status, into fanout's six-value display vocabulary. Either value is
-// useful only while the snapshot contains the corresponding agent record.
-func MapHerdrAgentState(agentPresent bool, native, reported string) AgentState {
+// MapReportedAgentState projects a row's cooperative self-report, then the
+// runtime's own published agent status, into fanout's six-value display
+// vocabulary. Either value is useful only while the observation carries the
+// corresponding agent record, so an observation without one maps to no state.
+func MapReportedAgentState(agentPresent bool, native, reported string) AgentState {
 	if !agentPresent {
 		return ""
 	}
