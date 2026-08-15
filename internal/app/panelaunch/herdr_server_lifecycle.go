@@ -8,44 +8,67 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/errs"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
+// HerdrServerIO is the owned-server lifecycle seam. The composition root binds
+// every field to one repository's owned options, so the app drives the
+// journal-fenced transaction without naming the runtime that performs it.
+type HerdrServerIO struct {
+	// InspectServer reads the saved server identity without mutating it.
+	InspectServer func() (state.HerdrServerIdentity, error)
+	// ObserveWorkspaces opens the owned server read-only and lists everything
+	// still holding a resource on it.
+	ObserveWorkspaces func(context.Context) ([]backend.WorkspaceObservation, error)
+	// RestartServer replaces the proven-dead generation named by the identity.
+	RestartServer func(context.Context, state.HerdrServerIdentity) (HerdrRestartedServer, error)
+	// ShutdownServer retires the empty generation, calling the callback once at
+	// the moment the signal becomes indeterminate.
+	ShutdownServer func(context.Context, state.HerdrServerIdentity, func() error) error
+}
+
+// HerdrRestartedServer is the replacement generation a restart produced: the
+// surface saved rows are rebound through, and the session name to report.
+type HerdrRestartedServer struct {
+	Runtime HerdrRestartRuntime
+	Session string
+}
+
 // RestartHerdrServer explicitly replaces a proven-dead owned server while the
-// combined state/intent lock fences every other fanout mutation.
+// combined state/intent lock fences every other fanout mutation. It returns the
+// replacement session name.
 func RestartHerdrServer(
 	ctx context.Context,
 	projectRoot string,
-	opts herdrrun.OwnedOptions,
-) (_ *herdrrun.OwnedSession, err error) {
+	io HerdrServerIO,
+) (_ string, err error) {
 	defer errs.Wrap(&err, "restart Herdr owned server")
 	locked, err := state.LockProjectForLaunchContext(ctx, projectRoot)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
 	journal, err := locked.HerdrIntents(projectRoot)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	intent, created, err := ensureHerdrServerIntent(journal, state.HerdrIntentRestart, opts)
+	intent, created, err := ensureHerdrServerIntent(journal, state.HerdrIntentRestart, io)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	restarted, err := herdrrun.RestartOwned(ctx, opts, *intent.Server)
+	restarted, err := io.RestartServer(ctx, *intent.Server)
 	if err != nil {
-		return nil, releaseRejectedHerdrRestart(journal, intent, created, err)
+		return "", releaseRejectedHerdrRestart(journal, intent, created, err)
 	}
-	if err = verifyRestartedHerdrRows(ctx, projectRoot, locked, journal, restarted); err != nil {
-		return nil, err
+	if err = verifyRestartedHerdrRows(ctx, projectRoot, locked, journal, restarted.Runtime); err != nil {
+		return "", err
 	}
 	markPlannedHerdrReopenCleanupManual(journal)
 	if err = completeHerdrServerLifecycle(locked, journal, intent.ID); err != nil {
-		return nil, err
+		return "", err
 	}
-	return restarted, nil
+	return restarted.Session, nil
 }
 
 func releaseRejectedHerdrRestart(
@@ -65,7 +88,7 @@ func releaseRejectedHerdrRestart(
 func ShutdownHerdrServer(
 	ctx context.Context,
 	projectRoot string,
-	opts herdrrun.OwnedOptions,
+	io HerdrServerIO,
 ) (err error) {
 	defer errs.Wrap(&err, "shutdown Herdr owned server")
 	locked, err := state.LockProjectForLaunchContext(ctx, projectRoot)
@@ -77,7 +100,7 @@ func ShutdownHerdrServer(
 	if err != nil {
 		return err
 	}
-	intent, err := prepareOrResumeHerdrShutdown(ctx, projectRoot, journal, opts)
+	intent, err := prepareOrResumeHerdrShutdown(ctx, projectRoot, journal, io)
 	if err != nil {
 		return err
 	}
@@ -85,7 +108,7 @@ func ShutdownHerdrServer(
 	if err != nil {
 		return err
 	}
-	if err = herdrrun.ShutdownOwned(ctx, opts, *intent.Server, markIssued); err != nil {
+	if err = io.ShutdownServer(ctx, *intent.Server, markIssued); err != nil {
 		return err
 	}
 	return completeHerdrServerLifecycle(locked, journal, intent.ID)
@@ -95,7 +118,7 @@ func prepareOrResumeHerdrShutdown(
 	ctx context.Context,
 	projectRoot string,
 	journal *state.LockedHerdrIntents,
-	opts herdrrun.OwnedOptions,
+	io HerdrServerIO,
 ) (state.HerdrIntent, error) {
 	intent, found, err := currentHerdrServerIntent(journal, state.HerdrIntentShutdown)
 	if err != nil || found {
@@ -104,7 +127,7 @@ func prepareOrResumeHerdrShutdown(
 	if err := rejectActiveHerdrIntents(journal.HerdrIntents); err != nil {
 		return state.HerdrIntent{}, err
 	}
-	return prepareHerdrShutdown(ctx, projectRoot, journal, opts)
+	return prepareHerdrShutdown(ctx, projectRoot, journal, io)
 }
 
 func herdrShutdownIssueCallback(
@@ -134,13 +157,13 @@ func rejectActiveHerdrIntents(journal state.HerdrIntents) error {
 func ensureHerdrServerIntent(
 	journal *state.LockedHerdrIntents,
 	kind state.HerdrIntentKind,
-	opts herdrrun.OwnedOptions,
+	io HerdrServerIO,
 ) (state.HerdrIntent, bool, error) {
 	intent, found, err := currentHerdrServerIntent(journal, kind)
 	if err != nil || found {
 		return intent, found, err
 	}
-	identity, err := herdrrun.InspectOwnedServer(opts)
+	identity, err := io.InspectServer()
 	if err != nil {
 		return state.HerdrIntent{}, false, err
 	}
@@ -189,9 +212,9 @@ func prepareHerdrShutdown(
 	ctx context.Context,
 	projectRoot string,
 	journal *state.LockedHerdrIntents,
-	opts herdrrun.OwnedOptions,
+	io HerdrServerIO,
 ) (state.HerdrIntent, error) {
-	identity, err := herdrrun.InspectOwnedServer(opts)
+	identity, err := io.InspectServer()
 	if err != nil {
 		return state.HerdrIntent{}, err
 	}
@@ -199,11 +222,7 @@ func prepareHerdrShutdown(
 	if err != nil {
 		return state.HerdrIntent{}, err
 	}
-	owned, err := herdrrun.OpenOwned(ctx, opts)
-	if err != nil {
-		return state.HerdrIntent{}, err
-	}
-	workspaces, err := owned.ObserveWorkspaces(ctx)
+	workspaces, err := io.ObserveWorkspaces(ctx)
 	if err != nil {
 		return state.HerdrIntent{}, err
 	}
