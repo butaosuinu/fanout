@@ -328,6 +328,26 @@ func TestName(t *testing.T) {
 	}
 }
 
+// Every herdr mutation crosses the server, so the launch orchestration must
+// take the journaled lane. The preview backend declares the same model: a dry
+// run describes the mutations the journaled lane would issue.
+func TestMutationModelIsJournaled(t *testing.T) {
+	tests := []struct {
+		name    string
+		backend *Backend
+	}{
+		{name: "owned session backend", backend: New("fanout-test", "/tmp/herdr.sock")},
+		{name: "mutation-free preview backend", backend: NewPreview()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.backend.MutationModel(); got != corebackend.MutationJournaled {
+				t.Fatalf("MutationModel() = %d, want MutationJournaled", got)
+			}
+		})
+	}
+}
+
 // Pane decoration, liveness stamps, and the window grid are tmux-only pane
 // concerns the herdr launch lane never reaches — herdr arranges its own
 // workspace. The capabilities must stay unimplemented so the launcher skips or

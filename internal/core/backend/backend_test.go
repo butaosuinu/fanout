@@ -292,3 +292,15 @@ func TestCloseResultZeroValueFailsClosed(t *testing.T) {
 		t.Fatalf("zero-value CloseResult status = %d, want CloseFailed", result.Status)
 	}
 }
+
+// The mutation model is a two-value vocabulary an implementation declares, so
+// orchestration never has to infer the realization strategy from a name.
+func TestMutationModelVocabulary(t *testing.T) {
+	var zero MutationModel
+	if zero != MutationAtomic {
+		t.Fatalf("zero-value MutationModel = %d, want MutationAtomic", zero)
+	}
+	if MutationAtomic == MutationJournaled {
+		t.Fatal("MutationAtomic == MutationJournaled, want two distinct models")
+	}
+}

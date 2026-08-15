@@ -63,6 +63,14 @@ fi
 	}
 }
 
+// tmux mutations settle locally, so the launch orchestration must take the
+// atomic lane and never fall into the journaled one.
+func TestMutationModelIsAtomic(t *testing.T) {
+	if got := tmuxbackend.New().MutationModel(); got != backend.MutationAtomic {
+		t.Fatalf("MutationModel() = %d, want MutationAtomic", got)
+	}
+}
+
 func TestLaunchLocksGateAndPrefixesPaneCommand(t *testing.T) {
 	logPath := installTmuxShim(t, `
 if [ "$1" = "split-window" ]; then

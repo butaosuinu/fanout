@@ -39,6 +39,13 @@ func (*Backend) Name() backend.Name {
 	return backend.Tmux
 }
 
+// MutationModel reports that tmux mutations are atomic: split-window and
+// kill-pane are single local calls whose result the adapter observes before
+// returning, so a failed launch needs no intent journal to be reconciled.
+func (*Backend) MutationModel() backend.MutationModel {
+	return backend.MutationAtomic
+}
+
 // CheckAvailable verifies that the installed tmux satisfies fanout's minimum
 // version requirement.
 func (*Backend) CheckAvailable() error {

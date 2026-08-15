@@ -105,6 +105,14 @@ func NewPreview() *Backend {
 
 func (b *Backend) Name() corebackend.Name { return corebackend.Herdr }
 
+// MutationModel reports that herdr mutations are journaled: every workspace,
+// worktree, and agent mutation crosses the herdr server, so a request can be
+// issued without its response arriving. The caller must record the intent
+// before issuing it and reconcile the outcome afterwards.
+func (b *Backend) MutationModel() corebackend.MutationModel {
+	return corebackend.MutationJournaled
+}
+
 // CheckAvailable verifies the stable version floor. Normal backends also
 // require a connected server; preview backends stop after the CLI check.
 func (b *Backend) CheckAvailable() error {
