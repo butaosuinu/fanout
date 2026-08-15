@@ -1,4 +1,4 @@
-package panelayout
+package tmuxbackend
 
 import (
 	"fmt"
@@ -10,19 +10,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
-// Trigger is why a relayout was requested. It controls only the resize dedup:
-// Create and Close always reapply, Resize skips when nothing relevant changed.
-type Trigger int
-
-const (
-	Create Trigger = iota
-	Close
-	Resize
-)
-
-// ops is the tmux IO panelayout needs, injected so the orchestration is unit
-// testable without a real tmux.
-type ops interface {
+// layoutOps is the tmux IO the relayout needs, injected so the orchestration is
+// unit testable without a real tmux.
+type layoutOps interface {
 	WindowGeometry(target string) (backend.Geometry, error)
 	WindowPanes(windowID string) ([]backend.WindowPane, error)
 	SplitSpacer(windowID string) (string, error)
@@ -32,38 +22,49 @@ type ops interface {
 	SelectTiled(windowID string) error
 }
 
-type tmuxOps struct{}
+type tmuxLayoutOps struct{}
 
-func (tmuxOps) WindowGeometry(t string) (backend.Geometry, error)  { return tmuxrun.WindowGeometry(t) }
-func (tmuxOps) WindowPanes(w string) ([]backend.WindowPane, error) { return tmuxrun.WindowPanes(w) }
-func (tmuxOps) SplitSpacer(w string) (string, error)               { return tmuxrun.SplitSpacerPane(w) }
-func (tmuxOps) KillPane(p string) error                            { return tmuxrun.KillPane(p) }
-func (tmuxOps) ApplyLayout(w, l string) error                      { return tmuxrun.ApplyLayout(w, l) }
-func (tmuxOps) SelectMainVertical(w string, mw int) error          { return tmuxrun.SelectMainVertical(w, mw) }
-func (tmuxOps) SelectTiled(w string) error                         { return tmuxrun.SelectTiled(w) }
+func (tmuxLayoutOps) WindowGeometry(t string) (backend.Geometry, error) {
+	return tmuxrun.WindowGeometry(t)
+}
 
-// applier holds the tmux ops, the comfort config, and the per-window resize memo
-// that breaks the relayout-triggers-resize feedback loop.
-type applier struct {
-	ops  ops
-	cfg  Config
+func (tmuxLayoutOps) WindowPanes(w string) ([]backend.WindowPane, error) {
+	return tmuxrun.WindowPanes(w)
+}
+func (tmuxLayoutOps) SplitSpacer(w string) (string, error) { return tmuxrun.SplitSpacerPane(w) }
+func (tmuxLayoutOps) KillPane(p string) error              { return tmuxrun.KillPane(p) }
+func (tmuxLayoutOps) ApplyLayout(w, l string) error        { return tmuxrun.ApplyLayout(w, l) }
+func (tmuxLayoutOps) SelectMainVertical(w string, mw int) error {
+	return tmuxrun.SelectMainVertical(w, mw)
+}
+func (tmuxLayoutOps) SelectTiled(w string) error { return tmuxrun.SelectTiled(w) }
+
+// layoutApplier holds the tmux ops, the comfort config, and the per-window
+// resize memo that breaks the relayout-triggers-resize feedback loop.
+type layoutApplier struct {
+	ops  layoutOps
+	cfg  layoutConfig
 	mu   sync.Mutex
 	memo map[string]string
 }
 
-var defaultApplier = &applier{ops: tmuxOps{}, cfg: DefaultConfig(), memo: map[string]string{}}
-
-// Apply re-lays out the tmux window that holds target (a pane id, window id, or
-// session name) into the fanout grid: a console sidebar (when present) plus a
-// comfortable-width grid of the remaining panes, with an optional spacer. It is
-// best-effort — a missing window or a rejected custom layout degrades quietly
-// (main-vertical, then tiled) and never returns an error that should block pane
-// creation or teardown.
-func Apply(target string, trigger Trigger) error {
-	return defaultApplier.apply(target, trigger)
+var defaultLayoutApplier = &layoutApplier{
+	ops:  tmuxLayoutOps{},
+	cfg:  defaultLayoutConfig(),
+	memo: map[string]string{},
 }
 
-func (a *applier) apply(target string, trigger Trigger) error {
+// Relayout re-lays out the tmux window that holds target (a pane id, window id,
+// or session name) into the fanout grid: a console sidebar (when present) plus
+// a comfortable-width grid of the remaining panes, with an optional spacer. It
+// is best-effort — a missing window or a rejected custom layout degrades
+// quietly (main-vertical, then tiled) and never returns an error that should
+// block pane creation or teardown.
+func (*Backend) Relayout(target string, trigger backend.LayoutTrigger) error {
+	return defaultLayoutApplier.apply(target, trigger)
+}
+
+func (a *layoutApplier) apply(target string, trigger backend.LayoutTrigger) error {
 	// Serialize the whole apply: it is invoked concurrently from bubbletea
 	// command goroutines (resize, create, close), and its tmux ops (list, split,
 	// kill, select-layout) would otherwise interleave on the same window. The
@@ -77,7 +78,7 @@ func (a *applier) apply(target string, trigger Trigger) error {
 		return nil
 	}
 	windowID := geom.WindowID
-	win := Window{Width: geom.Width, Height: geom.Height}
+	win := layoutWindow{Width: geom.Width, Height: geom.Height}
 
 	panes, err := a.ops.WindowPanes(windowID)
 	if err != nil {
@@ -87,16 +88,16 @@ func (a *applier) apply(target string, trigger Trigger) error {
 
 	// Resize dedup: our own relayout resizes the console pane, which makes the
 	// TUI emit a fresh resize. The window geometry and pane set are unchanged by
-	// that, so a matching signature means there is nothing to do. Create/Close
-	// always changed the pane set, so they bypass the check.
-	if trigger == Resize && a.memoMatch(windowID, win, console != nil, numericIDs(grid), numericIDs(spacers)) {
+	// that, so a matching signature means there is nothing to do. A create or a
+	// close always changed the pane set, so they bypass the check.
+	if trigger == backend.LayoutResize && a.memoMatch(windowID, win, console != nil, numericIDs(grid), numericIDs(spacers)) {
 		return nil
 	}
 
 	cfg := a.cfg
 	cfg.SidebarWidth = 0
 	if console != nil {
-		cfg.SidebarWidth = SidebarWidthDefault
+		cfg.SidebarWidth = sidebarWidthDefault
 	}
 
 	// No grid panes: nothing to arrange. Drop any leftover spacers and let the
@@ -109,7 +110,7 @@ func (a *applier) apply(target string, trigger Trigger) error {
 		return nil
 	}
 
-	plan := DecidePlan(win, len(grid), cfg)
+	plan := decideLayoutPlan(win, len(grid), cfg)
 	// Spacers only earn their keep with a resident TUI (console present) that
 	// reconciles them on later relayouts; a one-shot batch run would leave the
 	// blank pane orphaned, so skip it there. Always drop pre-existing spacers.
@@ -154,9 +155,9 @@ func (a *applier) apply(target string, trigger Trigger) error {
 // main-vertical then tiled; an un-comfortable (too cramped) plan goes straight
 // to tiled, the layout that handles dense windows best. Both fallbacks return
 // false.
-func (a *applier) applyLayout(windowID string, win Window, cfg Config, plan Plan, sidebarID string, contentIDs []string, lastCellSpacer bool) bool {
+func (a *layoutApplier) applyLayout(windowID string, win layoutWindow, cfg layoutConfig, plan layoutPlan, sidebarID string, contentIDs []string, lastCellSpacer bool) bool {
 	if plan.Comfortable {
-		layout, err := Render(RenderInput{
+		layout, err := renderLayout(renderLayoutInput{
 			Win:            win,
 			SidebarPaneID:  sidebarID,
 			ContentPaneIDs: contentIDs,
@@ -180,7 +181,7 @@ func (a *applier) applyLayout(windowID string, win Window, cfg Config, plan Plan
 // (0 or 1), killing surplus and splitting deficit, and returns the numeric ids
 // of the spacers that remain. It is self-healing: stale spacers from a crashed
 // run are reconciled away.
-func (a *applier) reconcileSpacers(windowID string, existing []backend.WindowPane, desired int) []string {
+func (a *layoutApplier) reconcileSpacers(windowID string, existing []backend.WindowPane, desired int) []string {
 	for i := desired; i < len(existing); i++ {
 		_ = a.ops.KillPane(existing[i].ID)
 	}
@@ -225,13 +226,13 @@ const memoCap = 256
 
 // memoMatch reports whether the window's last applied signature is unchanged.
 // The caller must hold a.mu.
-func (a *applier) memoMatch(windowID string, win Window, hasConsole bool, gridIDs, spacerIDs []string) bool {
+func (a *layoutApplier) memoMatch(windowID string, win layoutWindow, hasConsole bool, gridIDs, spacerIDs []string) bool {
 	prev, ok := a.memo[windowID]
 	return ok && prev == layoutSignature(win, hasConsole, gridIDs, spacerIDs)
 }
 
 // store records the window's signature. The caller must hold a.mu.
-func (a *applier) store(windowID string, win Window, hasConsole bool, gridIDs, spacerIDs []string) {
+func (a *layoutApplier) store(windowID string, win layoutWindow, hasConsole bool, gridIDs, spacerIDs []string) {
 	if len(a.memo) >= memoCap {
 		a.memo = make(map[string]string)
 	}
@@ -241,7 +242,7 @@ func (a *applier) store(windowID string, win Window, hasConsole bool, gridIDs, s
 // layoutSignature is the resize-dedup key: window size, console presence, and
 // the sorted grid/spacer id sets. It deliberately ignores ordering so an
 // identical arrangement maps to one signature.
-func layoutSignature(win Window, hasConsole bool, gridIDs, spacerIDs []string) string {
+func layoutSignature(win layoutWindow, hasConsole bool, gridIDs, spacerIDs []string) string {
 	g := append([]string(nil), gridIDs...)
 	sort.Strings(g)
 	s := append([]string(nil), spacerIDs...)

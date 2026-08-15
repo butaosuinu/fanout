@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
-	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -97,7 +97,7 @@ func restoreRecordedPanes(projectRoot, session, commandName string) (tuiRestoreR
 		restoreErr = errors.Join(restoreErr, err)
 	}
 	if report.Changed() {
-		_ = panelayout.Apply(tuiLaunchTarget(session), panelayout.Create)
+		_ = tmuxbackend.New().Relayout(tuiLaunchTarget(session), backend.LayoutCreate)
 	}
 	return report, restoreErr
 }

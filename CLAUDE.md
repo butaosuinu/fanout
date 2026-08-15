@@ -120,7 +120,7 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   cycle, pure at the package boundary via `watch.IO`), and `briefing` (the
   prompt text injected into agents) are class H; `sessionview` (the read-only
   `Snapshot` aggregator shared by the web dashboard and a future TUI),
-  `panelayout`, `run`, `statusreport`, `peermsg`, and `cliflags` (flag
+  `run`, `statusreport`, `peermsg`, and `cliflags` (flag
   validation that decides main's lifecycle branches) are class M.
 - `internal/infra` talks to external processes, the filesystem, and the
   team SQLite bus: `state` (`.fanout/state.json` + its lock), `worktree`

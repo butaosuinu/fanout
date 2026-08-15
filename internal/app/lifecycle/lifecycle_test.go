@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
@@ -61,14 +60,14 @@ func stubPaneClose(t *testing.T, fn func(string, string, string) (backend.CloseP
 
 type relayoutCall struct {
 	id   string
-	trig panelayout.Trigger
+	trig backend.LayoutTrigger
 }
 
 func stubRelayout(t *testing.T) *[]relayoutCall {
 	t.Helper()
 	var calls []relayoutCall
 	orig := relayoutWindow
-	relayoutWindow = func(id string, trig panelayout.Trigger) error {
+	relayoutWindow = func(id string, trig backend.LayoutTrigger) error {
 		calls = append(calls, relayoutCall{id, trig})
 		return nil
 	}
@@ -114,7 +113,7 @@ func TestClosePaneRecordsRelayoutsAffectedWindowOnce(t *testing.T) {
 	if len(*calls) != 1 {
 		t.Fatalf("relayout calls = %+v, want one", *calls)
 	}
-	if (*calls)[0].id != "@1" || (*calls)[0].trig != panelayout.Close {
+	if (*calls)[0].id != "@1" || (*calls)[0].trig != backend.LayoutClose {
 		t.Fatalf("relayout = %+v, want Close on @1", (*calls)[0])
 	}
 }

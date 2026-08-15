@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -28,6 +28,11 @@ type ShellRequest struct {
 var (
 	closePaneForCleanup = tmuxrun.ClosePaneIfOwned
 	closeFreshPane      = tmuxrun.CloseFreshPane
+	// relayoutShellWindow re-tiles the window a rolled-back terminal pane left
+	// behind. The cleanup lane below is tmux-only — it pairs with the tmuxrun
+	// closes above — so it binds the tmux layout capability directly instead of
+	// asking the caller's runtime backend for one.
+	relayoutShellWindow = tmuxbackend.New().Relayout
 )
 
 // Shell opens a plain shell pane at req.TargetPath and records it as an
@@ -110,7 +115,9 @@ func (l *Launcher) shellTmux(
 	// Re-layout only after the pane is recorded, so a failed/rolled-back launch
 	// never leaves the window arranged around a pane that no longer exists or an
 	// orphaned spacer behind.
-	_ = panelayout.Apply(target, panelayout.Create)
+	if manager, ok := backend.AsLayoutManager(l.Backend); ok {
+		_ = manager.Relayout(target, backend.LayoutCreate)
+	}
 	return nil
 }
 
@@ -209,7 +216,7 @@ func cleanupFreshShellPane(relayoutTarget, paneID string) error {
 	if err := closeFreshPane(paneID); err != nil {
 		return err
 	}
-	_ = panelayout.Apply(relayoutTarget, panelayout.Close)
+	_ = relayoutShellWindow(relayoutTarget, backend.LayoutClose)
 	return nil
 }
 
@@ -223,7 +230,7 @@ func cleanupShellPane(relayoutTarget, paneID, expectedWorktreePath, shellKey str
 		if target == "" {
 			target = relayoutTarget
 		}
-		_ = panelayout.Apply(target, panelayout.Close)
+		_ = relayoutShellWindow(target, backend.LayoutClose)
 	}
 	return true
 }

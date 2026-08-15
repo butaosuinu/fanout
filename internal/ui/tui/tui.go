@@ -71,8 +71,8 @@ type Options struct {
 	LaunchIssuePlan   IssuePlanLaunchFunc
 	OpenIssue         IssueOpenFunc
 	// Relayout re-tiles the TUI's tmux window into the fanout grid. It is wired
-	// to panelayout.Apply(target, Resize) in production and left nil in tests
-	// (then resize handling is a no-op).
+	// to the tmux backend's LayoutResize relayout in production and left nil in
+	// tests (then resize handling is a no-op).
 	Relayout          func() error
 	FocusPane         func(string) error
 	ZoomPane          func(string) error

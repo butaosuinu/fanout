@@ -215,6 +215,30 @@ func TestPaneCapabilityAccessors(t *testing.T) {
 	}
 }
 
+// layoutCapableBackend offers the optional pane-layout capability only.
+type layoutCapableBackend struct{ Backend }
+
+func (layoutCapableBackend) Relayout(string, LayoutTrigger) error { return nil }
+
+func TestLayoutManagerAccessor(t *testing.T) {
+	tests := []struct {
+		name    string
+		backend Backend
+		want    bool
+	}{
+		{name: "backend arranging its own panes", backend: layoutCapableBackend{}, want: true},
+		{name: "backend offering the required surface only", backend: bareBackend{}, want: false},
+		{name: "unconfigured backend", backend: nil, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, ok := AsLayoutManager(tt.backend); ok != tt.want {
+				t.Fatalf("AsLayoutManager(%s) = %t, want %t", tt.name, ok, tt.want)
+			}
+		})
+	}
+}
+
 // previewCapableBackend offers the optional dry-run preview capability only.
 type previewCapableBackend struct{ Backend }
 

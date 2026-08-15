@@ -1,10 +1,10 @@
 # TUI compact 表示とペイン移動 — herdr switcher の取り込み設計
 
-ステータス: 設計。作成: 2026-07。kazuph 氏の herdr 運用記(参考節)と fanout 実コード(`internal/ui/tui` / `internal/app/panelayout` / `internal/infra/tmuxrun`)の検証に基づく。競合分析 `competitive-herdr.ja.md` の UI 面の続編で、TUI コンソールの縮小表示とペイン移動導線を設計する。
+ステータス: 設計。作成: 2026-07。kazuph 氏の herdr 運用記(参考節)と fanout 実コード(`internal/ui/tui` / `internal/infra/tmuxbackend` / `internal/infra/tmuxrun`)の検証に基づく。競合分析 `competitive-herdr.ja.md` の UI 面の続編で、TUI コンソールの縮小表示とペイン移動導線を設計する。
 
 ## 問題: 40 桁サイドバーで一覧が読めない
 
-agent ペインを作ると auto-layout が TUI コンソールペインを幅 40 桁の左サイドバーに固定する(`internal/app/panelayout/layout.go` の `SidebarWidthDefault = 40`)。一方 TUI の一覧は bubbles table の 15 列で、列幅の合計は最小でも約 129 桁ある(`internal/ui/tui/paneview.go` の `columnsForWidth`)。幅 40 では先頭の PARENT・ISSUE・WAVE あたりまでしか入らず、NAME・AGENT・STATE・PR・CI・BRANCH・PANE(ペイン ID)は画面外になる。fanout の主運用形態(コンソール + agent グリッド)で、コンソールの一覧はほぼ読めない。
+agent ペインを作ると auto-layout が TUI コンソールペインを幅 40 桁の左サイドバーに固定する(`internal/infra/tmuxbackend/layout_grid.go` の `sidebarWidthDefault = 40`)。一方 TUI の一覧は bubbles table の 15 列で、列幅の合計は最小でも約 129 桁ある(`internal/ui/tui/paneview.go` の `columnsForWidth`)。幅 40 では先頭の PARENT・ISSUE・WAVE あたりまでしか入らず、NAME・AGENT・STATE・PR・CI・BRANCH・PANE(ペイン ID)は画面外になる。fanout の主運用形態(コンソール + agent グリッド)で、コンソールの一覧はほぼ読めない。
 
 レイアウト分岐(`internal/ui/tui/view.go` の `monitorLayout`)は、幅 120 以上で Session サイドバー、それ未満はトップストリップ、高さが足りないときはストリップ自体を落とす、の 3 通りある。ただしどの分岐でもテーブル + 固定 13 行の詳細という形は変わらず、狭い幅で表示形態そのものを切り替える仕組みがない。
 
@@ -29,7 +29,7 @@ agent ペインを作ると auto-layout が TUI コンソールペインを幅 4
 
 - `monitorLayout` に `Compact` を追加し、幅 80 未満(新定数 `compactWidthAt`)で compact にする。80〜119 の帯は現行のトップストリップ + テーブルが辛うじて機能するので変えない(既存テスト `TestNarrowShortLayoutCollapsesTopStrip` は幅 90 を pin しており無変更で通る)
 - `v` キーで auto → compact → full をサイクルする手動オーバーライドを持つ(model に `viewOverride`、セッションローカルで永続化しない)。広い画面で switcher を流し見したい・狭くてもテーブルの生値を見たい、の両方向の脱出ハッチ
-- 表示切替は `monitorLayout()` の返り値が変わるだけで tmux を触らない。panelayout の relayout デバウンスとのフィードバックループは構造的に発生しない
+- 表示切替は `monitorLayout()` の返り値が変わるだけで tmux を触らない。tmuxbackend の relayout デバウンスとのフィードバックループは構造的に発生しない
 
 ### 描画: table は状態、描画は自前
 
@@ -87,7 +87,7 @@ monitor モードの `1`〜`9` を「表示リストの N 番目を選択して�
 
 ### zoom(`Z`)
 
-`Z` = focus + `resize-pane -Z` を opt-in の別キーとして足す。tmux 直接操作なのでヘルパーは `internal/infra/tmuxrun` に `ZoomPane` として置き、TUI へは Options で注入する。enter / o の挙動は変えない。auto-layout の comfortable 幅はベストエフォートで、ペインが増えたり custom layout が拒否されたりすると tiled へ縮退する(`internal/app/panelayout/apply.go` の fallback)。zoom が欲しくなるのはまさにその縮退時だが、v1 では「次の relayout(ペインの作成・削除)が zoom を解除する」を仕様として許容する — 再 zoom は 1 キーで済み、zoom 状態の relayout 越しの保持は relayout オーケストレーターへの状態追加に見合わない。
+`Z` = focus + `resize-pane -Z` を opt-in の別キーとして足す。tmux 直接操作なのでヘルパーは `internal/infra/tmuxrun` に `ZoomPane` として置き、TUI へは Options で注入する。enter / o の挙動は変えない。auto-layout の comfortable 幅はベストエフォートで、ペインが増えたり custom layout が拒否されたりすると tiled へ縮退する(`internal/infra/tmuxbackend/layout.go` の fallback)。zoom が欲しくなるのはまさにその縮退時だが、v1 では「次の relayout(ペインの作成・削除)が zoom を解除する」を仕様として許容する — 再 zoom は 1 キーで済み、zoom 状態の relayout 越しの保持は relayout オーケストレーターへの状態追加に見合わない。
 
 ## 実装分割
 
