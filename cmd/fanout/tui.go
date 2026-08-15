@@ -238,7 +238,7 @@ func wireTmuxTUI(
 	opts.LaunchIssuePlan = newTUIIssuePlanLaunchFunc(projectRoot, session, commandName, hookConfig)
 	opts.OpenIssue = newTUIOpenIssueFunc(projectRoot)
 	opts.LaunchShell = newTUILaunchShellFunc(projectRoot, session)
-	opts.RestorePanes = newTUIRestoreFunc(projectRoot, session, commandName)
+	opts.RestorePanes = newTUIRestoreFunc(runtimeBackend, projectRoot, session, commandName)
 	opts.Relayout = func() error {
 		return runtimeBackend.Relayout(tuiLaunchTarget(session), backend.LayoutResize)
 	}
