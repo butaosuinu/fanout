@@ -61,7 +61,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `team` | `--team` / `fanout msg` の SQLite バス | H |
 | infra | `settings` | 設定解決。repo config からの watcher・runtime backend 有効化と通知先設定を遮断する安全ゲート | H |
 | infra | `herdrrun` | herdr stable 0.7.5 以上の version gate、fanout-owned session lifecycle、non-shell agent launcher、workspace/worktree mutation・表示専用 metadata 報告・snapshot 投影の実装 (契約 DTO は `core/backend` 所在) | H |
-| infra | `paneruntime` | runtime backend の選択入力収集・解決・具象構築・self-exec registry・telemetry observer。具象 backend に依存する唯一の点 | H |
+| infra | `paneruntime` | runtime backend の選択入力収集・解決・具象構築・self-exec registry・telemetry observer。具象 backend 構築の集約点(型参照の残債は invariant 参照) | H |
 | core | `backend` | runtime backend 契約(mutation が局所原子か journaled かを宣言する MutationModel を含む)と中立 DTO 語彙 (launch route / workspace・worktree mutation / process・wait / metadata / nudge / owned pane identity と sentinel error 群)・親 stickiness・選択優先順位・矛盾時の fail-closed 判定 | H |
 | app | `watch` | ラベル watcher の 1 サイクル | H |
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
@@ -151,12 +151,12 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   人間レビュー対象。
 - **briefing はエージェントに注入されるプロンプト本文**: `briefing.Render` /
   `RenderTask` の出力はそのままエージェントの入力になる。
-- **具象 backend への依存点は `infra/paneruntime` だけ**: `tmuxbackend` /
-  `herdrrun` を import してよいのは `paneruntime` のみで、選択入力の収集・
+- **具象 backend の構築は `infra/paneruntime` に集約**: 選択入力の収集・
   precedence 解決・具象構築・self-exec registry・telemetry observer をここに
-  集める。`internal/app` は core の backend 型と自分の port しか名指さず、
-  `cmd/fanout` は `paneruntime` 経由で組み立てる。別の層に `switch` を増やすと
-  runtime 追加のたびに散らばった分岐を数える羽目になる。
+  集め、`cmd/fanout` は `paneruntime` 経由で組み立てる。別の層に `switch` を
+  増やすと runtime 追加のたびに散らばった分岐を数える羽目になる。既知の残債
+  (cmd TUI 配線の `*herdrrun.OwnedSession` 型参照、app の tmux relayout 直結
+  2 箇所)は後続フェーズで解消するまで本 invariant の適用範囲外。
 - **self-exec サブコマンド名の固定**: `__tui-new-pane-popup` /
   `__tui-help-popup` / `__tui-close-popup` / `__codex-plan-tui` /
   `__codex-team-tui` は

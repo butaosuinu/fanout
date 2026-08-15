@@ -1,12 +1,14 @@
-// Package paneruntime is the single place that depends on a concrete runtime
-// backend. It gathers the selection inputs, resolves which runtime a launch
+// Package paneruntime is the construction point for the concrete runtime
+// backends. It gathers the selection inputs, resolves which runtime a launch
 // runs on, constructs that runtime, publishes the hidden subcommands the
 // runtimes re-execute, and hands out the owned-session handle.
 //
-// Everything above it stays runtime-neutral: internal/app names only core
-// backend types and its own ports, and cmd/fanout composes through this
-// package instead of importing tmuxbackend or herdrrun. Adding a runtime means
-// editing this package and nothing else.
+// Everything above it composes through this package instead of constructing
+// tmuxbackend or herdrrun itself. Known residuals on the way to "adding a
+// runtime means editing this package and nothing else": cmd/fanout's TUI
+// wiring still names *herdrrun.OwnedSession, and internal/app carries two
+// direct tmuxbackend relayout bindings (panelaunch/shell.go, lifecycle) —
+// both are burned down by the popup/restore/TUI phases that follow.
 //
 // The package deliberately sits in infra, not app: the owned-session handle
 // carries infra state types (*state.LaunchCapsule, state.RuntimeServerIdentity)
