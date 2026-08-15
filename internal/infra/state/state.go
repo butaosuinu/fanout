@@ -56,28 +56,28 @@ type Pane struct {
 	// launch paths persist these authoritative values; observation never fills
 	// them from a snapshot. A row without a comparison baseline is unsupported
 	// rather than rebound by name, while a complete row whose identity differs is stale.
-	HerdrWorkspaceID     string                   `json:"herdrWorkspaceId,omitempty"`
-	HerdrWorkspaceLabel  string                   `json:"herdrWorkspaceLabel,omitempty"`
-	HerdrTerminalID      string                   `json:"herdrTerminalId,omitempty"`
-	HerdrRepoKey         string                   `json:"herdrRepoKey,omitempty"`
-	HerdrRepoRoot        string                   `json:"herdrRepoRoot,omitempty"`
-	HerdrBranchCreated   bool                     `json:"herdrBranchCreated,omitempty"`
-	HerdrAgentID         string                   `json:"herdrAgentId,omitempty"`
-	HerdrAgentSession    *backend.AgentSessionRef `json:"herdrAgentSession,omitempty"`
-	HerdrProcessIdentity *backend.ProcessIdentity `json:"herdrProcessIdentity,omitempty"`
-	HerdrSession         string                   `json:"herdrSession,omitempty"`
-	HerdrSocketPath      string                   `json:"herdrSocketPath,omitempty"`
+	WorkspaceID     string                   `json:"herdrWorkspaceId,omitempty"`
+	WorkspaceLabel  string                   `json:"herdrWorkspaceLabel,omitempty"`
+	TerminalID      string                   `json:"herdrTerminalId,omitempty"`
+	RepoKey         string                   `json:"herdrRepoKey,omitempty"`
+	RepoRoot        string                   `json:"herdrRepoRoot,omitempty"`
+	BranchCreated   bool                     `json:"herdrBranchCreated,omitempty"`
+	AgentID         string                   `json:"herdrAgentId,omitempty"`
+	AgentSession    *backend.AgentSessionRef `json:"herdrAgentSession,omitempty"`
+	ProcessIdentity *backend.ProcessIdentity `json:"herdrProcessIdentity,omitempty"`
+	SessionID       string                   `json:"herdrSession,omitempty"`
+	SocketPath      string                   `json:"herdrSocketPath,omitempty"`
 	// ReportedState is cooperative provider telemetry. The launch binding fields
 	// fence updates to one Herdr generation; none of these fields authorizes
 	// lifecycle, cleanup, completion, or nudge operations.
-	ReportedState          string   `json:"reported_state,omitempty"`
-	StateRefinement        bool     `json:"state_refinement,omitempty"`
-	EmitterRowKey          string   `json:"emitterRowKey,omitempty"`
-	LaunchNonce            string   `json:"launchNonce,omitempty"`
-	EmitterNonce           string   `json:"emitterNonce,omitempty"`
-	HerdrLaunchExecutable  string   `json:"herdrLaunchExecutable,omitempty"`
-	HerdrLaunchArgs        []string `json:"herdrLaunchArgs,omitempty"`
-	HerdrDirectAgentLaunch bool     `json:"herdrDirectAgentLaunch,omitempty"`
+	ReportedState     string   `json:"reported_state,omitempty"`
+	StateRefinement   bool     `json:"state_refinement,omitempty"`
+	EmitterRowKey     string   `json:"emitterRowKey,omitempty"`
+	LaunchNonce       string   `json:"launchNonce,omitempty"`
+	EmitterNonce      string   `json:"emitterNonce,omitempty"`
+	LaunchExecutable  string   `json:"herdrLaunchExecutable,omitempty"`
+	LaunchArgs        []string `json:"herdrLaunchArgs,omitempty"`
+	DirectAgentLaunch bool     `json:"herdrDirectAgentLaunch,omitempty"`
 	// ShellKey is the tmux pane user-option token that binds this state row to
 	// one live pane. Shell panes can share WorktreePath with the repo root or an
 	// agent worktree, so liveness uses this marker instead of path matching.
@@ -131,16 +131,16 @@ func (p Pane) RuntimeBinding() backend.PaneBinding {
 	return backend.PaneBinding{
 		Row: backend.PaneRowKey{Parent: p.Parent, IssueNum: p.IssueNum, TaskID: p.TaskID},
 		Ref: backend.PaneRef{
-			Backend: p.Backend, Workspace: p.HerdrWorkspaceID, Pane: p.PaneID,
+			Backend: p.Backend, Workspace: p.WorkspaceID, Pane: p.PaneID,
 		},
-		SessionID: p.HerdrSession, SocketPath: p.HerdrSocketPath,
-		WorkspaceLabel: p.HerdrWorkspaceLabel, TerminalID: p.HerdrTerminalID,
-		Agent: p.Agent, AgentID: p.HerdrAgentID, AgentSession: p.HerdrAgentSession,
+		SessionID: p.SessionID, SocketPath: p.SocketPath,
+		WorkspaceLabel: p.WorkspaceLabel, TerminalID: p.TerminalID,
+		Agent: p.Agent, AgentID: p.AgentID, AgentSession: p.AgentSession,
 		Shell:   p.IsShell(),
-		RepoKey: p.HerdrRepoKey, WorktreePath: p.WorktreePath,
+		RepoKey: p.RepoKey, WorktreePath: p.WorktreePath,
 		Launch: backend.LaunchGeneration{
 			RowKey: p.EmitterRowKey, Nonce: p.LaunchNonce, EmitterNonce: p.EmitterNonce,
-			Executable: p.HerdrLaunchExecutable, Args: p.HerdrLaunchArgs,
+			Executable: p.LaunchExecutable, Args: p.LaunchArgs,
 		},
 	}
 }
@@ -160,11 +160,11 @@ func (p Pane) IsAttachedAgent() bool {
 // (parent, issueNum) idempotency check and state update happen in one critical
 // section instead of racing through independent read-modify-write cycles.
 type LockedStore struct {
-	path             string
-	file             *os.File
-	herdrIntentsPath string
-	herdrIntentsFile *os.File
-	herdrProjectRoot string
+	path               string
+	file               *os.File
+	journalPath        string
+	journalFile        *os.File
+	journalProjectRoot string
 	Store
 }
 
@@ -216,17 +216,17 @@ func LockProjectForLaunchAt(projectRoot, statePath string) (*LockedStore, error)
 }
 
 func lockProjectForLaunch(ctx context.Context, projectRoot, statePath string, blocking bool) (*LockedStore, error) {
-	intentsPath, err := herdrIntentsPathContext(ctx, projectRoot)
+	intentsPath, err := launchJournalPathContext(ctx, projectRoot)
 	if err != nil {
 		return nil, err
 	}
-	herdrIntentsFile, err := lockHerdrIntentsPath(ctx, intentsPath, blocking)
+	journalFile, err := lockLaunchJournalPath(ctx, intentsPath, blocking)
 	if err != nil {
 		return nil, err
 	}
 	locked, err := lockStatePath(ctx, statePath, blocking)
 	if err != nil {
-		if unlockErr := unlockStateFile(herdrIntentsFile); unlockErr != nil {
+		if unlockErr := unlockStateFile(journalFile); unlockErr != nil {
 			return nil, errors.Join(
 				err,
 				fmt.Errorf("unlock Herdr intents after state lock failure: %w", unlockErr),
@@ -234,9 +234,9 @@ func lockProjectForLaunch(ctx context.Context, projectRoot, statePath string, bl
 		}
 		return nil, err
 	}
-	locked.herdrIntentsPath = intentsPath
-	locked.herdrIntentsFile = herdrIntentsFile
-	locked.herdrProjectRoot = filepath.Clean(projectRoot)
+	locked.journalPath = intentsPath
+	locked.journalFile = journalFile
+	locked.journalProjectRoot = filepath.Clean(projectRoot)
 	return locked, nil
 }
 
@@ -311,34 +311,34 @@ func (l *LockedStore) Unlock() error {
 	}
 	stateErr := unlockStateFile(l.file)
 	l.file = nil
-	intentsErr := unlockStateFile(l.herdrIntentsFile)
-	l.herdrIntentsPath = ""
-	l.herdrIntentsFile = nil
-	l.herdrProjectRoot = ""
+	intentsErr := unlockStateFile(l.journalFile)
+	l.journalPath = ""
+	l.journalFile = nil
+	l.journalProjectRoot = ""
 	if stateErr != nil {
 		return stateErr
 	}
 	return intentsErr
 }
 
-// HerdrIntents returns a journal view backed by this project's launch lock.
+// LaunchJournal returns a journal view backed by this project's launch lock.
 // The view cannot be unlocked; the caller keeps LockedStore held around it.
-func (l *LockedStore) HerdrIntents(projectRoot string) (*LockedHerdrIntents, error) {
-	if l == nil || l.herdrIntentsFile == nil || l.herdrIntentsPath == "" {
+func (l *LockedStore) LaunchJournal(projectRoot string) (*LockedLaunchJournal, error) {
+	if l == nil || l.journalFile == nil || l.journalPath == "" {
 		return nil, fmt.Errorf("herdr intents require the combined launch lock")
 	}
 	// The journal path was derived from the same project root at lock time;
 	// re-deriving it here would run git while both locks are held.
-	if l.herdrProjectRoot != filepath.Clean(projectRoot) {
+	if l.journalProjectRoot != filepath.Clean(projectRoot) {
 		return nil, fmt.Errorf("herdr intents launch lock belongs to a different project")
 	}
-	store, err := loadHerdrIntents(l.herdrIntentsPath)
+	store, err := loadLaunchJournal(l.journalPath)
 	if err != nil {
 		return nil, err
 	}
-	return &LockedHerdrIntents{
-		path:         l.herdrIntentsPath,
-		HerdrIntents: store,
+	return &LockedLaunchJournal{
+		path:          l.journalPath,
+		LaunchJournal: store,
 	}, nil
 }
 

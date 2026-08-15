@@ -18,18 +18,18 @@ func ownedHerdrPaneIdentity(pane state.Pane) (backend.OwnedPaneIdentity, error) 
 		return backend.OwnedPaneIdentity{}, fmt.Errorf("%s", ownedHerdrUnavailable)
 	}
 	worktreePath := ""
-	if strings.TrimSpace(pane.HerdrRepoKey) != "" {
+	if strings.TrimSpace(pane.RepoKey) != "" {
 		worktreePath = pane.WorktreePath
 	}
 	identity := backend.OwnedPaneIdentity{
 		Ref: backend.PaneRef{
-			Backend: backend.Herdr, Workspace: pane.HerdrWorkspaceID, Pane: pane.PaneID,
+			Backend: backend.Herdr, Workspace: pane.WorkspaceID, Pane: pane.PaneID,
 		},
-		SessionID: pane.HerdrSession, SocketPath: pane.HerdrSocketPath,
-		WorkspaceLabel: pane.HerdrWorkspaceLabel, TerminalID: pane.HerdrTerminalID,
-		RepoKey: pane.HerdrRepoKey, WorktreePath: worktreePath,
-		CurrentPath: pane.WorktreePath, AgentID: pane.HerdrAgentID,
-		AgentSession: cloneAgentSessionRef(pane.HerdrAgentSession),
+		SessionID: pane.SessionID, SocketPath: pane.SocketPath,
+		WorkspaceLabel: pane.WorkspaceLabel, TerminalID: pane.TerminalID,
+		RepoKey: pane.RepoKey, WorktreePath: worktreePath,
+		CurrentPath: pane.WorktreePath, AgentID: pane.AgentID,
+		AgentSession: cloneAgentSessionRef(pane.AgentSession),
 	}
 	if strings.TrimSpace(identity.WorkspaceLabel) == "" {
 		return backend.OwnedPaneIdentity{}, fmt.Errorf("saved Herdr pane has no ownership label")

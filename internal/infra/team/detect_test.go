@@ -278,7 +278,7 @@ func TestIdentifyPaneSynthesizesPlanTaskIdentity(t *testing.T) {
 func TestIdentifyPaneResolvesCanonicalHerdrRowFromWorktree(t *testing.T) {
 	pane := state.Pane{
 		Parent: "524", IssueNum: 568, Backend: backend.Herdr,
-		PaneID: "w1:p1", HerdrWorkspaceID: "w1", HerdrTerminalID: "terminal-568",
+		PaneID: "w1:p1", WorkspaceID: "w1", TerminalID: "terminal-568",
 		WorktreePath: "/repo/.fanout/worktrees/herdr-peer-568", Agent: "codex",
 	}
 
@@ -287,7 +287,7 @@ func TestIdentifyPaneResolvesCanonicalHerdrRowFromWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	if id.Issue != 568 || id.Parent != "524" || id.Pane.PaneID != pane.PaneID ||
-		id.Pane.HerdrWorkspaceID != pane.HerdrWorkspaceID || id.Pane.HerdrTerminalID != pane.HerdrTerminalID {
+		id.Pane.WorkspaceID != pane.WorkspaceID || id.Pane.TerminalID != pane.TerminalID {
 		t.Fatalf("Herdr identity = %+v, want canonical row %+v", id, pane)
 	}
 }

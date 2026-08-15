@@ -13,9 +13,9 @@ import (
 )
 
 func TestHerdrEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
-	intent := state.HerdrIntent{
+	intent := state.LaunchIntent{
 		ID: "issue:3:524:529",
-		Resource: state.HerdrResource{
+		Resource: state.RuntimeResource{
 			WorkspaceID: "workspace-1", PaneID: "workspace-1:pane-1", TerminalID: "terminal-1",
 		},
 	}
@@ -74,7 +74,7 @@ func TestHerdrEmitterLaunchUsesCurrentPinnedEmitterInsteadOfSessionLauncher(t *t
 		backend.OwnedLaunchRoute{
 			LauncherPath: "/owned/old-fanout", EmitterPath: "/owned/current-fanout",
 		},
-		state.HerdrIntent{}, strings.Repeat("a", 32), "agent", "/repo/.fanout/state.json",
+		state.LaunchIntent{}, strings.Repeat("a", 32), "agent", "/repo/.fanout/state.json",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestHerdrEmitterLaunchUsesCurrentPinnedEmitterInsteadOfSessionLauncher(t *t
 }
 
 func TestHerdrEmitterLaunchLeavesNonPlanCodexBare(t *testing.T) {
-	launch, err := newHerdrEmitterLaunch(Request{Agent: "codex"}, backend.OwnedLaunchRoute{}, state.HerdrIntent{}, "", "", "")
+	launch, err := newHerdrEmitterLaunch(Request{Agent: "codex"}, backend.OwnedLaunchRoute{}, state.LaunchIntent{}, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,9 +96,9 @@ func TestHerdrEmitterLaunchLeavesNonPlanCodexBare(t *testing.T) {
 }
 
 func TestHerdrEmitterLaunchInjectsCodexPlanIdentityWithoutBackendArgs(t *testing.T) {
-	intent := state.HerdrIntent{
+	intent := state.LaunchIntent{
 		ID: "issue:3:524:554", WorkspaceLabel: "fanout-codex-plan",
-		Resource: state.HerdrResource{
+		Resource: state.RuntimeResource{
 			WorkspaceID: "workspace-1", Label: "fanout-codex-plan",
 			PaneID: "workspace-1:pane-1", TerminalID: "terminal-1",
 		},
@@ -123,9 +123,9 @@ func TestHerdrEmitterLaunchInjectsCodexPlanIdentityWithoutBackendArgs(t *testing
 
 func TestApplyHerdrLaunchTelemetryStartsSyntheticRunningUnrefined(t *testing.T) {
 	pane := state.Pane{Backend: "herdr"}
-	intent := state.HerdrIntent{
+	intent := state.LaunchIntent{
 		ID: "issue:3:524:529",
-		Launch: &state.HerdrLaunch{
+		Launch: &state.LaunchCapsule{
 			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
 			Executable: "/opt/bin/claude", Args: []string{"prompt"},
 		},
@@ -141,14 +141,14 @@ func TestApplyHerdrLaunchTelemetryStartsSyntheticRunningUnrefined(t *testing.T) 
 
 func TestApplyHerdrLaunchTelemetryPersistsDirectLaunchWithoutEmitter(t *testing.T) {
 	pane := state.Pane{Backend: "herdr"}
-	intent := state.HerdrIntent{Launch: &state.HerdrLaunch{
+	intent := state.LaunchIntent{Launch: &state.LaunchCapsule{
 		Executable: "/opt/bin/codex", Args: []string{"prompt"},
 	}}
 
 	applyHerdrLaunchTelemetry(&pane, intent)
 
-	if pane.HerdrLaunchExecutable != intent.Launch.Executable ||
-		!slices.Equal(pane.HerdrLaunchArgs, intent.Launch.Args) || pane.ReportedState != "" {
+	if pane.LaunchExecutable != intent.Launch.Executable ||
+		!slices.Equal(pane.LaunchArgs, intent.Launch.Args) || pane.ReportedState != "" {
 		t.Fatalf("direct launch binding = %+v", pane)
 	}
 }
@@ -159,10 +159,10 @@ func TestApplyHerdrLaunchTelemetryDropsPendingStateFromReplacedSession(t *testin
 	}
 	current := pending
 	current.Value = "new-session"
-	pane := state.Pane{Backend: "herdr", HerdrAgentSession: &current, StateRefinement: true}
-	intent := state.HerdrIntent{
+	pane := state.Pane{Backend: "herdr", AgentSession: &current, StateRefinement: true}
+	intent := state.LaunchIntent{
 		ID: "issue:3:524:529",
-		Launch: &state.HerdrLaunch{
+		Launch: &state.LaunchCapsule{
 			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
 			PendingReportedState: "idle", PendingAgentSession: &pending,
 		},

@@ -556,9 +556,9 @@ func livePaneKeyForState(pane state.Pane) livePaneKey {
 		pane:    pane.PaneID,
 	}
 	if key.backend == backend.Herdr {
-		key.workspace = pane.HerdrWorkspaceID
-		key.session = strings.TrimSpace(pane.HerdrSession)
-		key.socket = strings.TrimSpace(pane.HerdrSocketPath)
+		key.workspace = pane.WorkspaceID
+		key.session = strings.TrimSpace(pane.SessionID)
+		key.socket = strings.TrimSpace(pane.SocketPath)
 	}
 	return key
 }
@@ -567,8 +567,8 @@ func observationRouteForState(pane state.Pane) backend.ObservationRoute {
 	name := backend.NormalizeName(pane.Backend)
 	route := backend.ObservationRoute{Backend: name}
 	if name == backend.Herdr {
-		route.SessionID = strings.TrimSpace(pane.HerdrSession)
-		route.SocketPath = strings.TrimSpace(pane.HerdrSocketPath)
+		route.SessionID = strings.TrimSpace(pane.SessionID)
+		route.SocketPath = strings.TrimSpace(pane.SocketPath)
 	}
 	return route
 }
@@ -622,11 +622,11 @@ func herdrRowUnsupported(pane state.Pane) bool {
 		return false
 	}
 	requiredBaseline := []bool{
-		strings.TrimSpace(pane.HerdrWorkspaceID) != "",
-		strings.TrimSpace(pane.HerdrWorkspaceLabel) != "",
-		strings.TrimSpace(pane.HerdrTerminalID) != "",
-		strings.TrimSpace(pane.HerdrSession) != "",
-		strings.TrimSpace(pane.HerdrSocketPath) != "",
+		strings.TrimSpace(pane.WorkspaceID) != "",
+		strings.TrimSpace(pane.WorkspaceLabel) != "",
+		strings.TrimSpace(pane.TerminalID) != "",
+		strings.TrimSpace(pane.SessionID) != "",
+		strings.TrimSpace(pane.SocketPath) != "",
 		strings.TrimSpace(pane.WorktreePath) != "",
 	}
 	if slices.Contains(requiredBaseline, false) {
@@ -636,12 +636,12 @@ func herdrRowUnsupported(pane state.Pane) bool {
 }
 
 func herdrAgentBaselineUnsupported(pane state.Pane) bool {
-	storedAgentID := strings.TrimSpace(pane.HerdrAgentID) != ""
+	storedAgentID := strings.TrimSpace(pane.AgentID) != ""
 	if pane.IsShell() {
-		return storedAgentID || pane.HerdrAgentSession != nil
+		return storedAgentID || pane.AgentSession != nil
 	}
-	if pane.HerdrAgentSession != nil {
-		return !storedAgentID || !backend.ExpectedAgentSession(pane.HerdrAgentSession, pane.Agent)
+	if pane.AgentSession != nil {
+		return !storedAgentID || !backend.ExpectedAgentSession(pane.AgentSession, pane.Agent)
 	}
 	return !storedAgentID && strings.TrimSpace(pane.Agent) != ""
 }

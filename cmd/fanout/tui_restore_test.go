@@ -797,16 +797,16 @@ func TestRestoreRecordedPanesSkipsHerdrRowWithoutMutation(t *testing.T) {
 	}
 	logPath := installRestoreTmuxAndAgentScripts(t, "codex")
 	writeRestoreState(t, root, []state.Pane{{
-		Parent:           "423",
-		IssueNum:         425,
-		Backend:          backend.Herdr,
-		PaneID:           "w1:p1",
-		HerdrWorkspaceID: "w1",
-		HerdrAgentID:     "fanout-child",
-		HerdrSession:     "fanout-test",
-		HerdrSocketPath:  "/private/tmp/fanout-test/herdr.sock",
-		Agent:            "codex",
-		WorktreePath:     wt,
+		Parent:       "423",
+		IssueNum:     425,
+		Backend:      backend.Herdr,
+		PaneID:       "w1:p1",
+		WorkspaceID:  "w1",
+		AgentID:      "fanout-child",
+		SessionID:    "fanout-test",
+		SocketPath:   "/private/tmp/fanout-test/herdr.sock",
+		Agent:        "codex",
+		WorktreePath: wt,
 	}})
 	statePath := state.Path(root)
 	before, err := os.ReadFile(statePath)

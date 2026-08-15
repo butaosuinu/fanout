@@ -11,7 +11,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-type herdrLaunchCapsuleBuilder func(state.HerdrIntent) (*state.HerdrLaunch, error)
+type herdrLaunchCapsuleBuilder func(state.LaunchIntent) (*state.LaunchCapsule, error)
 
 func (l *Launcher) attachHerdr(
 	req Request,
@@ -51,8 +51,8 @@ func (l *Launcher) prepareHerdrAttachedIntent(
 	targetPath string,
 	locked *state.LockedStore,
 	route backend.OwnedLaunchRoute,
-) (state.HerdrIntent, error) {
-	build := func(intent state.HerdrIntent) (*state.HerdrLaunch, error) {
+) (state.LaunchIntent, error) {
+	build := func(intent state.LaunchIntent) (*state.LaunchCapsule, error) {
 		return l.prepareHerdrLaunchCapsule(req, route, intent, os.Environ())
 	}
 	return realizeHerdrInteractive(
@@ -67,22 +67,22 @@ func finalizeHerdrAttachedAgent(
 	req Request,
 	locked *state.LockedStore,
 	projectRoot string,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	live backend.LivePane,
 	codexStatus codexapp.Status,
 ) error {
 	return finalizeHerdrPane(locked, projectRoot, intent, herdrAttachedPaneBuilder(req, live, codexStatus))
 }
 
-func herdrAttachedPaneBuilder(req Request, live backend.LivePane, codexStatus codexapp.Status) func(state.HerdrIntent) (state.Pane, error) {
-	return func(latest state.HerdrIntent) (state.Pane, error) {
+func herdrAttachedPaneBuilder(req Request, live backend.LivePane, codexStatus codexapp.Status) func(state.LaunchIntent) (state.Pane, error) {
+	return func(latest state.LaunchIntent) (state.Pane, error) {
 		pane := herdrAttachedStatePane(req, latest, live, codexStatus)
 		applyHerdrLaunchTelemetry(&pane, latest)
 		return pane, nil
 	}
 }
 
-func herdrAttachedStatePane(req Request, intent state.HerdrIntent, live backend.LivePane, codexStatus codexapp.Status) state.Pane {
+func herdrAttachedStatePane(req Request, intent state.LaunchIntent, live backend.LivePane, codexStatus codexapp.Status) state.Pane {
 	pane := statePaneForBackend(
 		req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(), codexStatus, backend.Herdr, &live,
 	)
@@ -111,23 +111,23 @@ func realizeHerdrInteractive(
 	route backend.OwnedLaunchRoute,
 	req HerdrCoordinatorRequest,
 	build herdrLaunchCapsuleBuilder,
-) (state.HerdrIntent, error) {
+) (state.LaunchIntent, error) {
 	intentID, err := herdrInteractiveIntentID(req)
 	if err != nil {
-		return state.HerdrIntent{}, err
+		return state.LaunchIntent{}, err
 	}
-	journal, err := locked.HerdrIntents(req.ProjectRoot)
+	journal, err := locked.LaunchJournal(req.ProjectRoot)
 	if err != nil {
-		return state.HerdrIntent{}, err
+		return state.LaunchIntent{}, err
 	}
-	var launch *state.HerdrLaunch
+	var launch *state.LaunchCapsule
 	prepared := false
 	if _, found := journal.FindIntent(intentID); !found {
-		launch, err = build(state.HerdrIntent{ID: intentID})
+		launch, err = build(state.LaunchIntent{ID: intentID})
 		prepared = err == nil
 	}
 	if err != nil {
-		return state.HerdrIntent{}, err
+		return state.LaunchIntent{}, err
 	}
 	req.Launch = launch
 	result, err := RealizeHerdrCoordinator(ctx, req, runtime, locked, HerdrRealizeHooks{})
@@ -147,7 +147,7 @@ func herdrInteractiveIntentID(req HerdrCoordinatorRequest) (string, error) {
 	if req.Parent == HerdrConsoleRuntimeParent {
 		ownerProjectRoot = ""
 	}
-	return state.HerdrCoordinatorIntentID(req.Parent, ownerProjectRoot, req.IssueNum)
+	return state.CoordinatorIntentID(req.Parent, ownerProjectRoot, req.IssueNum)
 }
 
 func discardRejectedHerdrLaunch(
@@ -156,13 +156,13 @@ func discardRejectedHerdrLaunch(
 	projectRoot string,
 	route backend.OwnedLaunchRoute,
 	intentID string,
-	launch *state.HerdrLaunch,
+	launch *state.LaunchCapsule,
 	prepared bool,
 ) error {
 	if !prepared {
 		return nil
 	}
-	journal, err := locked.HerdrIntents(projectRoot)
+	journal, err := locked.LaunchJournal(projectRoot)
 	if err != nil {
 		return err
 	}
@@ -175,8 +175,8 @@ func discardRejectedHerdrLaunch(
 func finalizeHerdrPane(
 	locked *state.LockedStore,
 	projectRoot string,
-	intent state.HerdrIntent,
-	build func(state.HerdrIntent) (state.Pane, error),
+	intent state.LaunchIntent,
+	build func(state.LaunchIntent) (state.Pane, error),
 ) (retErr error) {
 	defer func() {
 		if retErr != nil {
@@ -198,6 +198,6 @@ func finalizeHerdrPane(
 	return journal.Save()
 }
 
-func staticHerdrPane(pane state.Pane) func(state.HerdrIntent) (state.Pane, error) {
-	return func(state.HerdrIntent) (state.Pane, error) { return pane, nil }
+func staticHerdrPane(pane state.Pane) func(state.LaunchIntent) (state.Pane, error) {
+	return func(state.LaunchIntent) (state.Pane, error) { return pane, nil }
 }

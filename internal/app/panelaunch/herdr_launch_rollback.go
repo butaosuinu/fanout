@@ -13,7 +13,7 @@ import (
 
 func (l *Launcher) rollbackFailedHerdrLaunch(
 	locked *state.LockedStore,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	cause error,
 ) error {
 	if errors.Is(cause, errHerdrLaunchStatePreserved) {
@@ -22,8 +22,8 @@ func (l *Launcher) rollbackFailedHerdrLaunch(
 	if intent.ID == "" {
 		return cause
 	}
-	if intent.Kind == state.HerdrIntentCoordinator {
-		journal, err := locked.HerdrIntents(l.Info.ProjectRoot)
+	if intent.Kind == state.IntentCoordinator {
+		journal, err := locked.LaunchJournal(l.Info.ProjectRoot)
 		if err != nil {
 			return errors.Join(cause, err)
 		}
@@ -35,7 +35,7 @@ func (l *Launcher) rollbackFailedHerdrLaunch(
 
 func (l *Launcher) rollbackHerdrLaunch(
 	locked *state.LockedStore,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	cause error,
 ) error {
 	journal, latest, skip, err := loadHerdrRollbackTarget(locked, l.Info.ProjectRoot, intent.ID)
@@ -65,14 +65,14 @@ func (l *Launcher) rollbackHerdrLaunch(
 func loadHerdrRollbackTarget(
 	locked *state.LockedStore,
 	projectRoot, intentID string,
-) (*state.LockedHerdrIntents, state.HerdrIntent, bool, error) {
-	journal, err := locked.HerdrIntents(projectRoot)
+) (*state.LockedLaunchJournal, state.LaunchIntent, bool, error) {
+	journal, err := locked.LaunchJournal(projectRoot)
 	if err != nil {
-		return nil, state.HerdrIntent{}, false, err
+		return nil, state.LaunchIntent{}, false, err
 	}
 	latest, found := journal.FindIntent(intentID)
 	if !found {
-		return nil, state.HerdrIntent{}, false, fmt.Errorf("failed Herdr launch intent disappeared before rollback")
+		return nil, state.LaunchIntent{}, false, fmt.Errorf("failed Herdr launch intent disappeared before rollback")
 	}
 	if latest.Launch != nil && latest.Launch.TokenIssued {
 		return journal, latest, true, nil
@@ -82,11 +82,11 @@ func loadHerdrRollbackTarget(
 
 func (l *Launcher) issueHerdrWorktreeRemoval(
 	ctx context.Context,
-	journal *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
-	rollback *state.HerdrIntent,
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+	rollback *state.LaunchIntent,
 ) error {
-	rollback.Status = state.HerdrIntentIssued
+	rollback.Status = state.IntentIssued
 	journal.UpsertIntent(*rollback)
 	if err := journal.Save(); err != nil {
 		return err
@@ -104,7 +104,7 @@ func (l *Launcher) issueHerdrWorktreeRemoval(
 	return nil
 }
 
-func (l *Launcher) finishHerdrRollbackGit(ctx context.Context, intent state.HerdrIntent) error {
+func (l *Launcher) finishHerdrRollbackGit(ctx context.Context, intent state.LaunchIntent) error {
 	if !intent.BranchCreated {
 		return nil
 	}
@@ -112,32 +112,32 @@ func (l *Launcher) finishHerdrRollbackGit(ctx context.Context, intent state.Herd
 }
 
 func beginHerdrLaunchRollback(
-	journal *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
 	cause error,
-) (state.HerdrIntent, error) {
-	id, err := state.HerdrRollbackIntentID(intent.ID)
+) (state.LaunchIntent, error) {
+	id, err := state.RollbackIntentID(intent.ID)
 	if err != nil {
-		return state.HerdrIntent{}, err
+		return state.LaunchIntent{}, err
 	}
 	if _, found := journal.FindIntent(id); found {
-		return state.HerdrIntent{}, fmt.Errorf("%w: Herdr launch rollback is already recorded", ErrHerdrManualCleanupRequired)
+		return state.LaunchIntent{}, fmt.Errorf("%w: Herdr launch rollback is already recorded", ErrHerdrManualCleanupRequired)
 	}
 	rollback := intent
 	rollback.ID = id
-	rollback.Kind = state.HerdrIntentRollback
-	rollback.Status = state.HerdrIntentPlanned
+	rollback.Kind = state.IntentRollback
+	rollback.Status = state.IntentPlanned
 	rollback.ExpiresUnixMS = time.Now().Add(maxHerdrRealizeTimeout).UnixMilli()
 	rollback.Launch = nil
 	rollback.Failure = ""
-	intent.Status = state.HerdrIntentManualCleanupRequired
+	intent.Status = state.IntentManualCleanupRequired
 	intent.Failure = fmt.Sprintf("launch failed; rollback %s started: %v", id, cause)
 	journal.UpsertIntent(intent)
 	journal.UpsertIntent(rollback)
 	return rollback, journal.Save()
 }
 
-func (l *Launcher) verifyHerdrRollbackTarget(ctx context.Context, intent state.HerdrIntent) error {
+func (l *Launcher) verifyHerdrRollbackTarget(ctx context.Context, intent state.LaunchIntent) error {
 	if err := l.Herdr.VerifyOwned(ctx); err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ func (l *Launcher) verifyHerdrRollbackTarget(ctx context.Context, intent state.H
 	return err
 }
 
-func (l *Launcher) verifyHerdrRollbackAbsent(ctx context.Context, intent state.HerdrIntent) error {
+func (l *Launcher) verifyHerdrRollbackAbsent(ctx context.Context, intent state.LaunchIntent) error {
 	workspaces, err := l.Herdr.ObserveWorkspaces(ctx)
 	if err != nil {
 		return err
@@ -175,13 +175,13 @@ func (l *Launcher) verifyHerdrRollbackAbsent(ctx context.Context, intent state.H
 }
 
 func failHerdrRollback(
-	journal *state.LockedHerdrIntents,
-	original, rollback state.HerdrIntent,
+	journal *state.LockedLaunchJournal,
+	original, rollback state.LaunchIntent,
 	cause error,
 ) error {
 	reason := fmt.Sprintf("Herdr launch rollback requires manual cleanup: %v", cause)
-	for _, intent := range []*state.HerdrIntent{&original, &rollback} {
-		intent.Status = state.HerdrIntentManualCleanupRequired
+	for _, intent := range []*state.LaunchIntent{&original, &rollback} {
+		intent.Status = state.IntentManualCleanupRequired
 		intent.Failure = reason
 		journal.UpsertIntent(*intent)
 	}

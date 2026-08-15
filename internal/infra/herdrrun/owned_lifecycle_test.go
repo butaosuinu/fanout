@@ -20,7 +20,7 @@ import (
 func TestRestartOwnedRejectsLiveGenerationWithoutSpawning(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)
-	saveOwnedServerIntent(t, h, state.HerdrIntentRestart, expected)
+	saveOwnedServerIntent(t, h, state.IntentRestart, expected)
 	previous, found, err := readOwnerMarker(h.layout.markerPath)
 	if err != nil || !found {
 		t.Fatalf("read old marker = (%+v, %t, %v)", previous, found, err)
@@ -44,7 +44,7 @@ func TestRestartIntentAllowsReadsAndRejectsMutationsAndBootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := inspectOwnedServerForTest(t, h)
-	saveOwnedServerIntent(t, h, state.HerdrIntentRestart, expected)
+	saveOwnedServerIntent(t, h, state.IntentRestart, expected)
 
 	if _, err := h.session.LivePanes(context.Background()); err != nil {
 		t.Fatalf("read-only LivePanes() under restart intent: %v", err)
@@ -81,7 +81,7 @@ func TestRestartIntentAllowsReadsAndRejectsMutationsAndBootstrap(t *testing.T) {
 func TestRestartOwnedSpawnsOnceAfterOldGenerationIsAbsent(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)
-	saveOwnedServerIntent(t, h, state.HerdrIntentRestart, expected)
+	saveOwnedServerIntent(t, h, state.IntentRestart, expected)
 	retireFakeSupervisorForRestart(t, h, false)
 
 	restarted, err := restartOwned(context.Background(), h.ownedOptions(), expected, h.supervisor.start, h.session.backend)
@@ -106,7 +106,7 @@ func TestRestartOwnedSpawnsOnceAfterOldGenerationIsAbsent(t *testing.T) {
 func TestRestartOwnedRecoversAfterOldMarkerAndLeaseRemoval(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)
-	saveOwnedServerIntent(t, h, state.HerdrIntentRestart, expected)
+	saveOwnedServerIntent(t, h, state.IntentRestart, expected)
 	retireFakeSupervisorForRestart(t, h, true)
 
 	if _, err := restartOwned(context.Background(), h.ownedOptions(), expected, h.supervisor.start, h.session.backend); err != nil {
@@ -120,7 +120,7 @@ func TestRestartOwnedRecoversAfterOldMarkerAndLeaseRemoval(t *testing.T) {
 func TestRestartOwnedRecoversFromUnpublishedSupervisorLease(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)
-	saveOwnedServerIntent(t, h, state.HerdrIntentRestart, expected)
+	saveOwnedServerIntent(t, h, state.IntentRestart, expected)
 	retireFakeSupervisorForRestart(t, h, true)
 	if err := os.WriteFile(h.layout.supervisorLock, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestRestartOwnedPinsCurrentLauncherAndRecoversAfterConfigUpdate(t *testing.
 	}
 	previous := installLegacyOwnedLauncher(t, h)
 	expected := inspectOwnedServerForTest(t, h)
-	saveOwnedServerIntent(t, h, state.HerdrIntentRestart, expected)
+	saveOwnedServerIntent(t, h, state.IntentRestart, expected)
 	retireFakeSupervisorForRestart(t, h, true)
 
 	commonDir, commonIdentity, err := openCanonicalGitCommonDir(h.commonDir)
@@ -208,7 +208,7 @@ func TestPrepareRestartedLauncherMigratesLegacyOwnedConfig(t *testing.T) {
 func TestShutdownOwnedRejectsResourcesAndDoesNotSignalOnRetry(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)
-	saveOwnedServerIntent(t, h, state.HerdrIntentShutdown, expected)
+	saveOwnedServerIntent(t, h, state.IntentShutdown, expected)
 	issued := 0
 	signals := 0
 	signal := func(int) error { signals++; return nil }
@@ -227,7 +227,7 @@ func TestShutdownOwnedRejectsResourcesAndDoesNotSignalOnRetry(t *testing.T) {
 func TestShutdownOwnedDoesNotSignalWhenIssuedSaveFails(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)
-	saveOwnedServerIntent(t, h, state.HerdrIntentShutdown, expected)
+	saveOwnedServerIntent(t, h, state.IntentShutdown, expected)
 	h.fake.snapshot = emptyOwnedSnapshot(h.fake.snapshot)
 	injected := errors.New("save issued shutdown")
 	signals := 0
@@ -244,7 +244,7 @@ func TestShutdownOwnedDoesNotSignalWhenIssuedSaveFails(t *testing.T) {
 func TestShutdownOwnedStopsEmptyGenerationAndVerifiesRetirement(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)
-	saveOwnedServerIntent(t, h, state.HerdrIntentShutdown, expected)
+	saveOwnedServerIntent(t, h, state.IntentShutdown, expected)
 	h.fake.snapshot = emptyOwnedSnapshot(h.fake.snapshot)
 	issued := false
 	signals := 0
@@ -279,7 +279,7 @@ func TestShutdownOwnedAllowsCurrentLauncherBootstrapAfterUpdate(t *testing.T) {
 	}
 	previous := installLegacyOwnedLauncher(t, h)
 	expected := inspectOwnedServerForTest(t, h)
-	saveOwnedServerIntent(t, h, state.HerdrIntentShutdown, expected)
+	saveOwnedServerIntent(t, h, state.IntentShutdown, expected)
 	h.fake.snapshot = emptyOwnedSnapshot(h.fake.snapshot)
 
 	err = shutdownOwned(context.Background(), h.ownedOptions(), expected, func() error { return nil }, func(int) error {
@@ -307,7 +307,7 @@ func TestShutdownOwnedAllowsCurrentLauncherBootstrapAfterUpdate(t *testing.T) {
 func TestShutdownRetryCompletesAbsentGenerationWithoutSignal(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)
-	saveOwnedServerIntent(t, h, state.HerdrIntentShutdown, expected)
+	saveOwnedServerIntent(t, h, state.IntentShutdown, expected)
 	retireFakeSupervisorForRestart(t, h, false)
 	signals := 0
 
@@ -336,7 +336,7 @@ func TestShutdownRetryCompletesAbsentGenerationWithoutSignal(t *testing.T) {
 }
 
 func TestVerifySavedProcessesAbsentRejectsLiveServerProcessGroup(t *testing.T) {
-	identity := state.HerdrServerIdentity{SupervisorPID: 42, ServerPID: 43}
+	identity := state.RuntimeServerIdentity{SupervisorPID: 42, ServerPID: 43}
 	var targets []int
 	err := verifySavedProcessesAbsentWithProbe(identity, "restart", func(pid int) error {
 		targets = append(targets, pid)
@@ -358,7 +358,7 @@ func (h *ownedHarness) ownedOptions() OwnedOptions {
 	return OwnedOptions{GitCommonDir: h.commonDir, RuntimeBase: h.runtimeBase}
 }
 
-func inspectOwnedServerForTest(t *testing.T, h *ownedHarness) state.HerdrServerIdentity {
+func inspectOwnedServerForTest(t *testing.T, h *ownedHarness) state.RuntimeServerIdentity {
 	t.Helper()
 	identity, err := InspectOwnedServer(h.ownedOptions())
 	if err != nil {
@@ -397,18 +397,18 @@ func installLegacyOwnedLauncher(t *testing.T, h *ownedHarness) binaryAdmission {
 func saveOwnedServerIntent(
 	t *testing.T,
 	h *ownedHarness,
-	kind state.HerdrIntentKind,
-	identity state.HerdrServerIdentity,
+	kind state.LaunchIntentKind,
+	identity state.RuntimeServerIdentity,
 ) {
 	t.Helper()
-	id, err := state.HerdrServerIntentID(kind)
+	id, err := state.ServerIntentID(kind)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := state.HerdrIntents{
-		SchemaVersion: state.HerdrIntentsSchemaVersion,
-		Intents: []state.HerdrIntent{{
-			ID: id, Kind: kind, Status: state.HerdrIntentPlanned, Server: &identity,
+	store := state.LaunchJournal{
+		SchemaVersion: state.LaunchJournalSchemaVersion,
+		Intents: []state.LaunchIntent{{
+			ID: id, Kind: kind, Status: state.IntentPlanned, Server: &identity,
 		}},
 	}
 	data, err := json.Marshal(store)
@@ -426,9 +426,9 @@ func saveOwnedServerIntent(
 
 func clearOwnedServerIntents(t *testing.T, h *ownedHarness) {
 	t.Helper()
-	data, err := json.Marshal(state.HerdrIntents{
-		SchemaVersion: state.HerdrIntentsSchemaVersion,
-		Intents:       []state.HerdrIntent{},
+	data, err := json.Marshal(state.LaunchJournal{
+		SchemaVersion: state.LaunchJournalSchemaVersion,
+		Intents:       []state.LaunchIntent{},
 	})
 	if err != nil {
 		t.Fatal(err)

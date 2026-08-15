@@ -326,7 +326,7 @@ func TestSharedHerdrPlanIntentsRemainOwnerWorktreeLocal(t *testing.T) {
 	}
 
 	writeHerdrCoordinatorIntent(t, sibling, "plan:demo")
-	control, err := state.LoadHerdrIntents(repo)
+	control, err := state.LoadLaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +461,7 @@ func TestValidateLaunchBackendAllowsCodexChildPlanMode(t *testing.T) {
 
 func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 	t.Helper()
-	ownerProjectRoot, err := state.HerdrOwnerProjectRoot(parent, canonicalRuntimeRoot(repo))
+	ownerProjectRoot, err := state.IntentOwnerProjectRoot(parent, canonicalRuntimeRoot(repo))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,14 +469,14 @@ func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 	if planSlug, ok := strings.CutPrefix(parent, "plan:"); ok {
 		runtimeParent = panelaunch.SavedPlanRuntimeParentRef(repo, planSlug)
 	}
-	runtimeOwnerProjectRoot, err := state.HerdrOwnerProjectRoot(
+	runtimeOwnerProjectRoot, err := state.IntentOwnerProjectRoot(
 		runtimeParent,
 		canonicalRuntimeRoot(repo),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := state.HerdrCoordinatorIntentID(runtimeParent, runtimeOwnerProjectRoot, 0)
+	id, err := state.CoordinatorIntentID(runtimeParent, runtimeOwnerProjectRoot, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,10 +486,10 @@ func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 			t.Errorf("unlock Herdr control: %v", unlockErr)
 		}
 	})
-	locked.UpsertIntent(state.HerdrIntent{
+	locked.UpsertIntent(state.LaunchIntent{
 		ID:               id,
-		Kind:             state.HerdrIntentCoordinator,
-		Status:           state.HerdrIntentPlanned,
+		Kind:             state.IntentCoordinator,
+		Status:           state.IntentPlanned,
 		Parent:           parent,
 		RuntimeParent:    runtimeParent,
 		OwnerProjectRoot: ownerProjectRoot,
@@ -794,27 +794,27 @@ func TestRuntimeReadRoutesCombineTmuxAndDistinctSavedHerdrSessions(t *testing.T)
 	writeRawLifecycleState(t, repo,
 		state.Pane{Parent: "425", PaneID: "%1"},
 		state.Pane{
-			Parent:          "426",
-			Backend:         backend.Herdr,
-			PaneID:          "w1:p1",
-			HerdrSession:    "saved-a",
-			HerdrSocketPath: "/tmp/saved-a.sock",
+			Parent:     "426",
+			Backend:    backend.Herdr,
+			PaneID:     "w1:p1",
+			SessionID:  "saved-a",
+			SocketPath: "/tmp/saved-a.sock",
 		},
 	)
 	writeRawLifecycleState(t, sibling,
 		state.Pane{
-			Parent:          "427",
-			Backend:         backend.Herdr,
-			PaneID:          "w1:p2",
-			HerdrSession:    "saved-a",
-			HerdrSocketPath: "/tmp/saved-a.sock",
+			Parent:     "427",
+			Backend:    backend.Herdr,
+			PaneID:     "w1:p2",
+			SessionID:  "saved-a",
+			SocketPath: "/tmp/saved-a.sock",
 		},
 		state.Pane{
-			Parent:          "428",
-			Backend:         backend.Herdr,
-			PaneID:          "w1:p3",
-			HerdrSession:    "saved-b",
-			HerdrSocketPath: "/tmp/saved-b.sock",
+			Parent:     "428",
+			Backend:    backend.Herdr,
+			PaneID:     "w1:p3",
+			SessionID:  "saved-b",
+			SocketPath: "/tmp/saved-b.sock",
 		},
 	)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -912,9 +912,9 @@ func TestRuntimeReadRoutesUseSharedHerdrControlIntents(t *testing.T) {
 }
 
 func TestHerdrIntentRuntimeRouteUsesServerLifecycleIdentity(t *testing.T) {
-	intent := state.HerdrIntent{
-		Kind: state.HerdrIntentRestart,
-		Server: &state.HerdrServerIdentity{
+	intent := state.LaunchIntent{
+		Kind: state.IntentRestart,
+		Server: &state.RuntimeServerIdentity{
 			Session: "owned-server", SocketPath: "/tmp/owned-server.sock",
 		},
 	}
@@ -926,7 +926,7 @@ func TestHerdrIntentRuntimeRouteUsesServerLifecycleIdentity(t *testing.T) {
 
 func writeHerdrControlRouteIntent(t *testing.T, repo, session, socketPath string) {
 	t.Helper()
-	id, err := state.HerdrCoordinatorIntentID("426", "", 0)
+	id, err := state.CoordinatorIntentID("426", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -936,12 +936,12 @@ func writeHerdrControlRouteIntent(t *testing.T, repo, session, socketPath string
 			t.Errorf("unlock Herdr control: %v", unlockErr)
 		}
 	}()
-	locked.UpsertIntent(state.HerdrIntent{
-		ID: id, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentRealized,
+	locked.UpsertIntent(state.LaunchIntent{
+		ID: id, Kind: state.IntentCoordinator, Status: state.IntentRealized,
 		Parent: "426", RuntimeParent: "426",
 		WorktreePath:   repo,
 		WorkspaceLabel: "fanout-coordinator-intent-route",
-		Resource: state.HerdrResource{
+		Resource: state.RuntimeResource{
 			WorkspaceID: "w2", Label: "fanout-coordinator-intent-route",
 			PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: repo,
 		},
@@ -982,10 +982,10 @@ func TestRuntimeReadRoutesUseUserDefaultHerdrWithoutSavedRoute(t *testing.T) {
 func TestRuntimeReadRoutesDoNotAmbientFallbackForIncompleteSavedHerdrRoute(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	writeRawLifecycleState(t, repo, state.Pane{
-		Parent:       "425",
-		Backend:      backend.Herdr,
-		PaneID:       "w1:p1",
-		HerdrSession: "saved",
+		Parent:    "425",
+		Backend:   backend.Herdr,
+		PaneID:    "w1:p1",
+		SessionID: "saved",
 	})
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("FANOUT_BACKEND", "herdr")
@@ -1055,7 +1055,7 @@ func TestCollectRuntimeLiveCombinesSuccessesAndReportsRouteFailures(t *testing.T
 // shape the intent fixtures need.
 type testHerdrIntentsLock struct {
 	project *state.LockedStore
-	*state.LockedHerdrIntents
+	*state.LockedLaunchJournal
 }
 
 func (l *testHerdrIntentsLock) Unlock() error { return l.project.Unlock() }
@@ -1066,10 +1066,10 @@ func lockHerdrIntentsForTest(t *testing.T, repo string) *testHerdrIntentsLock {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view, err := project.HerdrIntents(repo)
+	view, err := project.LaunchJournal(repo)
 	if err != nil {
 		_ = project.Unlock()
 		t.Fatal(err)
 	}
-	return &testHerdrIntentsLock{project: project, LockedHerdrIntents: view}
+	return &testHerdrIntentsLock{project: project, LockedLaunchJournal: view}
 }

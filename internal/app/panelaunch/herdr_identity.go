@@ -15,7 +15,7 @@ var errHerdrLauncherIdentityChanged = errors.New("herdr launcher identity change
 
 func (l *Launcher) verifyHerdrIdleLauncher(
 	ctx context.Context,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
 ) error {
 	process, err := l.Herdr.ProcessInfo(ctx, intent.Resource.PaneID)
@@ -35,7 +35,7 @@ func (l *Launcher) verifyHerdrIdleLauncher(
 	return nil
 }
 
-func herdrIdlePanePresent(intent state.HerdrIntent, panes []backend.LivePane) bool {
+func herdrIdlePanePresent(intent state.LaunchIntent, panes []backend.LivePane) bool {
 	for _, pane := range panes {
 		identity := []bool{
 			pane.Ref.Backend == backend.Herdr,
@@ -57,7 +57,7 @@ func herdrIdlePanePresent(intent state.HerdrIntent, panes []backend.LivePane) bo
 	return false
 }
 
-func herdrRepoIdentityMatches(resource state.HerdrResource, pane backend.LivePane) bool {
+func herdrRepoIdentityMatches(resource state.RuntimeResource, pane backend.LivePane) bool {
 	if resource.RepoKey == "" {
 		return true
 	}

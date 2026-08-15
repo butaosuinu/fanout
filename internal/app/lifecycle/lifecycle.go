@@ -644,7 +644,7 @@ func validateCloseOperations(opts Options, panes []state.Pane, mode CloseMode, l
 func paneRefFromState(pane state.Pane) backend.PaneRef {
 	return backend.PaneRef{
 		Backend:   backend.NormalizeName(pane.Backend),
-		Workspace: pane.HerdrWorkspaceID,
+		Workspace: pane.WorkspaceID,
 		Pane:      pane.PaneID,
 	}
 }

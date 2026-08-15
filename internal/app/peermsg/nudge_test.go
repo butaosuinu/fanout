@@ -290,8 +290,8 @@ func TestRunMsgNudgeHerdrUsesTheTmuxStateAllowlist(t *testing.T) {
 			deps := herdrNudgeDeps(store, store, runtime)
 			deps.OpenHerdr = func(_ context.Context, repoKey string) (HerdrNudger, error) {
 				opened = true
-				if repoKey != store.Panes[0].HerdrRepoKey {
-					t.Fatalf("repo key = %q, want %q", repoKey, store.Panes[0].HerdrRepoKey)
+				if repoKey != store.Panes[0].RepoKey {
+					t.Fatalf("repo key = %q, want %q", repoKey, store.Panes[0].RepoKey)
 				}
 				return runtime, nil
 			}
@@ -312,7 +312,7 @@ func TestRunMsgNudgeHerdrUsesTheTmuxStateAllowlist(t *testing.T) {
 
 func TestRunMsgNudgeHerdrAllowsUnreportedAgentSession(t *testing.T) {
 	store, runtime := herdrNudgeFixture("idle", true)
-	store.Panes[0].HerdrAgentSession = nil
+	store.Panes[0].AgentSession = nil
 	runtime.panes[0].AgentSession = nil
 	deps := herdrNudgeDeps(store, store, runtime)
 	var out, errb strings.Builder
@@ -327,17 +327,17 @@ func TestRunMsgNudgeHerdrRejectsInvalidLaunchGenerationBeforeRuntimeIO(t *testin
 		name   string
 		mutate func(*state.Pane)
 	}{
-		{name: "agent name", mutate: func(p *state.Pane) { p.HerdrAgentID = "fanout-corrupt" }},
+		{name: "agent name", mutate: func(p *state.Pane) { p.AgentID = "fanout-corrupt" }},
 		{name: "launch nonce", mutate: func(p *state.Pane) {
 			p.LaunchNonce = "invalid"
-			p.HerdrAgentID = naming.HerdrAgentName(p.HerdrRepoKey, p.EmitterRowKey, p.LaunchNonce)
+			p.AgentID = naming.HerdrAgentName(p.RepoKey, p.EmitterRowKey, p.LaunchNonce)
 		}},
 		{name: "emitter nonce", mutate: func(p *state.Pane) { p.EmitterNonce = "invalid" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, runtime := herdrNudgeFixture("working", true)
 			test.mutate(&store.Panes[0])
-			runtime.panes[0].AgentID = store.Panes[0].HerdrAgentID
+			runtime.panes[0].AgentID = store.Panes[0].AgentID
 			runtime.beforeLive = func() { t.Fatal("invalid generation reached runtime IO") }
 			deps := herdrNudgeDeps(store, store, runtime)
 			var out, errb strings.Builder
@@ -376,7 +376,7 @@ func TestRunMsgNudgeHerdrFailsClosedBeforePrompt(t *testing.T) {
 		{name: "worktree changed", mutateLive: func(p *backend.LivePane) { p.WorktreePath = "/repo/other" }, want: "provenance changed"},
 		{name: "terminal changed", mutateLive: func(p *backend.LivePane) { p.TerminalID = "term-new" }, want: "identity or worktree"},
 		{name: "process changed", mutateProc: func(p *backend.PaneProcessInfo) { p.ForegroundProcesses[0].Argv = []string{"other"} }, want: "process identity"},
-		{name: "workspace ownership changed", mutateRow: func(p *state.Pane) { p.HerdrWorkspaceLabel = "fanout-worktree-replaced" }, want: "launch binding changed"},
+		{name: "workspace ownership changed", mutateRow: func(p *state.Pane) { p.WorkspaceLabel = "fanout-worktree-replaced" }, want: "launch binding changed"},
 		{name: "emitter generation changed", mutateRow: func(p *state.Pane) { p.EmitterNonce = strings.Repeat("c", 32) }, want: "launch binding changed"},
 		{name: "recipient duplicated", mutateStore: appendDuplicateNudgeRecipient, want: "launch binding changed"},
 		{name: "latest state blocked", mutateRow: func(p *state.Pane) { p.ReportedState = "blocked" }, want: "not nudgeable"},
@@ -514,7 +514,7 @@ func TestRunMsgNudgeHerdrRejectsInexactCodexPlanProcessTrees(t *testing.T) {
 func appendDuplicateNudgeRecipient(store *state.Store) {
 	duplicate := store.Panes[0]
 	duplicate.PaneID = "w1:p2"
-	duplicate.HerdrTerminalID = "term-duplicate"
+	duplicate.TerminalID = "term-duplicate"
 	duplicate.EmitterRowKey = "issue:68:71:duplicate"
 	store.Panes = append(store.Panes, duplicate)
 }
@@ -549,20 +549,20 @@ func herdrNudgeFixture(reportedState string, refined bool) (state.Store, *fakeHe
 	session := &backend.AgentSessionRef{Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-71"}
 	pane := state.Pane{
 		Parent: "68", IssueNum: 71, Backend: backend.Herdr, PaneID: "w1:p1", Agent: "claude",
-		HerdrWorkspaceID: "w1", HerdrWorkspaceLabel: "fanout-worktree-owned",
-		HerdrTerminalID: "term-71", HerdrRepoKey: repoKey,
-		HerdrAgentID: naming.HerdrAgentName(repoKey, rowKey, launchNonce), HerdrAgentSession: session,
-		HerdrSession: "fanout-owned", HerdrSocketPath: "/tmp/fanout-owned/herdr.sock",
+		WorkspaceID: "w1", WorkspaceLabel: "fanout-worktree-owned",
+		TerminalID: "term-71", RepoKey: repoKey,
+		AgentID: naming.HerdrAgentName(repoKey, rowKey, launchNonce), AgentSession: session,
+		SessionID: "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",
 		WorktreePath: worktree, ReportedState: reportedState, StateRefinement: refined,
 		EmitterRowKey: rowKey, LaunchNonce: launchNonce,
-		EmitterNonce: strings.Repeat("b", 32), HerdrLaunchExecutable: "/usr/bin/claude",
-		HerdrLaunchArgs: args,
+		EmitterNonce: strings.Repeat("b", 32), LaunchExecutable: "/usr/bin/claude",
+		LaunchArgs: args,
 	}
 	live := backend.LivePane{
-		Ref: paneRef(pane), TerminalID: pane.HerdrTerminalID, SessionID: pane.HerdrSession,
-		SocketPath: pane.HerdrSocketPath, WorkspaceLabel: pane.HerdrWorkspaceLabel, RepoKey: pane.HerdrRepoKey,
+		Ref: paneRef(pane), TerminalID: pane.TerminalID, SessionID: pane.SessionID,
+		SocketPath: pane.SocketPath, WorkspaceLabel: pane.WorkspaceLabel, RepoKey: pane.RepoKey,
 		ProjectRoot: "/repo", WorktreePath: worktree, CurrentPath: worktree, AgentPresent: true,
-		AgentProvider: pane.Agent, AgentID: pane.HerdrAgentID, AgentSession: session,
+		AgentProvider: pane.Agent, AgentID: pane.AgentID, AgentSession: session,
 	}
 	process := backend.PaneProcessInfo{
 		PaneID: pane.PaneID, ShellPID: 101, ForegroundProcessGroup: 101,
@@ -578,19 +578,19 @@ func codexPlanNudgeFixture() (state.Store, *fakeHerdrNudger) {
 	store, runtime := herdrNudgeFixture("plan", true)
 	pane := &store.Panes[0]
 	pane.Agent = "codex"
-	pane.HerdrLaunchExecutable = "/opt/fanout"
-	pane.HerdrLaunchArgs = []string{
+	pane.LaunchExecutable = "/opt/fanout"
+	pane.LaunchArgs = []string{
 		codexapp.PlanTUICommand, "--codex", "/opt/codex",
 		"--prompt", "plan it", "--status-file", "/tmp/status.json",
 	}
 	session := &backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-71"}
-	pane.HerdrAgentSession = session
+	pane.AgentSession = session
 	runtime.panes[0].AgentProvider = "codex"
 	runtime.panes[0].AgentSession = session
 	runtime.process = backend.PaneProcessInfo{
 		PaneID: pane.PaneID, ShellPID: 101, ForegroundProcessGroup: 101,
 		ForegroundProcesses: []backend.PaneProcess{
-			herdrNudgeProcess(101, 1, "/opt/fanout", pane.HerdrLaunchArgs),
+			herdrNudgeProcess(101, 1, "/opt/fanout", pane.LaunchArgs),
 			herdrNudgeProcess(120, 101, "/opt/codex", []string{"--remote", "ws://127.0.0.1:1234"}),
 		},
 	}
@@ -615,7 +615,7 @@ func herdrNudgeDeps(initial, locked state.Store, runtime *fakeHerdrNudger) Deps 
 func cloneNudgeStore(store state.Store) state.Store {
 	clone := store
 	clone.Panes = append([]state.Pane(nil), store.Panes...)
-	clone.Panes[0].HerdrLaunchArgs = append([]string(nil), store.Panes[0].HerdrLaunchArgs...)
+	clone.Panes[0].LaunchArgs = append([]string(nil), store.Panes[0].LaunchArgs...)
 	return clone
 }
 

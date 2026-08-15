@@ -227,20 +227,20 @@ func TestBackendMetadataRoundTripsAndOmitsWhenEmpty(t *testing.T) {
 	t.Cleanup(func() { _ = locked.Unlock() })
 
 	if err = locked.RecordPane(Pane{
-		Parent:              "423",
-		IssueNum:            425,
-		Backend:             backend.Herdr,
-		PaneID:              "w1:p1",
-		HerdrWorkspaceID:    "w1",
-		HerdrWorkspaceLabel: "owned-label",
-		HerdrTerminalID:     "term-425",
-		HerdrRepoKey:        "/repo/.git",
-		HerdrAgentID:        "agent-425",
-		HerdrAgentSession: &backend.AgentSessionRef{
+		Parent:         "423",
+		IssueNum:       425,
+		Backend:        backend.Herdr,
+		PaneID:         "w1:p1",
+		WorkspaceID:    "w1",
+		WorkspaceLabel: "owned-label",
+		TerminalID:     "term-425",
+		RepoKey:        "/repo/.git",
+		AgentID:        "agent-425",
+		AgentSession: &backend.AgentSessionRef{
 			Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-425",
 		},
-		HerdrSession:    "fanout-dev",
-		HerdrSocketPath: "/tmp/herdr-fanout-dev.sock",
+		SessionID:  "fanout-dev",
+		SocketPath: "/tmp/herdr-fanout-dev.sock",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -257,11 +257,11 @@ func TestBackendMetadataRoundTripsAndOmitsWhenEmpty(t *testing.T) {
 		t.Fatal("herdr pane not found after round trip")
 	}
 	if herdrPane.Backend != backend.Herdr || herdrPane.PaneID != "w1:p1" ||
-		herdrPane.HerdrWorkspaceID != "w1" || herdrPane.HerdrWorkspaceLabel != "owned-label" ||
-		herdrPane.HerdrTerminalID != "term-425" || herdrPane.HerdrRepoKey != "/repo/.git" ||
-		herdrPane.HerdrAgentID != "agent-425" || herdrPane.HerdrAgentSession == nil ||
-		*herdrPane.HerdrAgentSession != (backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-425"}) ||
-		herdrPane.HerdrSession != "fanout-dev" || herdrPane.HerdrSocketPath != "/tmp/herdr-fanout-dev.sock" {
+		herdrPane.WorkspaceID != "w1" || herdrPane.WorkspaceLabel != "owned-label" ||
+		herdrPane.TerminalID != "term-425" || herdrPane.RepoKey != "/repo/.git" ||
+		herdrPane.AgentID != "agent-425" || herdrPane.AgentSession == nil ||
+		*herdrPane.AgentSession != (backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-425"}) ||
+		herdrPane.SessionID != "fanout-dev" || herdrPane.SocketPath != "/tmp/herdr-fanout-dev.sock" {
 		t.Fatalf("herdr metadata = %+v", herdrPane)
 	}
 	legacyPane, ok := loaded.Find("423", 426)
@@ -555,13 +555,13 @@ func TestRuntimeBindingProjectsRecordedIdentityVerbatim(t *testing.T) {
 	pane := Pane{
 		Parent: "423", IssueNum: 425, TaskID: "task-a", Kind: PaneKindShell,
 		Backend: backend.Herdr, PaneID: "w1:p1",
-		HerdrWorkspaceID: "w1", HerdrWorkspaceLabel: "owned-label",
-		HerdrTerminalID: "term-425", HerdrRepoKey: "/repo/.git",
-		HerdrAgentID: "agent-425", HerdrAgentSession: session,
-		HerdrSession: "fanout-dev", HerdrSocketPath: "/tmp/herdr-fanout-dev.sock",
+		WorkspaceID: "w1", WorkspaceLabel: "owned-label",
+		TerminalID: "term-425", RepoKey: "/repo/.git",
+		AgentID: "agent-425", AgentSession: session,
+		SessionID: "fanout-dev", SocketPath: "/tmp/herdr-fanout-dev.sock",
 		Agent: "codex", WorktreePath: "/repo/.fanout/worktrees/child/",
 		EmitterRowKey: "row-a", LaunchNonce: "nonce-a", EmitterNonce: "emitter-a",
-		HerdrLaunchExecutable: "/usr/bin/codex", HerdrLaunchArgs: []string{"--sandbox"},
+		LaunchExecutable: "/usr/bin/codex", LaunchArgs: []string{"--sandbox"},
 	}
 
 	want := backend.PaneBinding{

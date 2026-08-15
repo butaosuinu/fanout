@@ -34,48 +34,48 @@ func herdrPane(parent string, num int, paneID string) state.Pane {
 	p := pane(parent, num, paneID)
 	p.Agent = "codex"
 	p.Backend = backend.Herdr
-	p.HerdrWorkspaceID = "workspace-a"
-	p.HerdrWorkspaceLabel = "owned-label-a"
-	p.HerdrTerminalID = "terminal-a"
-	p.HerdrRepoKey = "/repo/.git"
-	p.HerdrAgentID = "agent-a"
-	p.HerdrAgentSession = &backend.AgentSessionRef{
+	p.WorkspaceID = "workspace-a"
+	p.WorkspaceLabel = "owned-label-a"
+	p.TerminalID = "terminal-a"
+	p.RepoKey = "/repo/.git"
+	p.AgentID = "agent-a"
+	p.AgentSession = &backend.AgentSessionRef{
 		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-value-" + paneID,
 	}
-	p.HerdrSession = "session-a"
-	p.HerdrSocketPath = "/tmp/herdr-a.sock"
+	p.SessionID = "session-a"
+	p.SocketPath = "/tmp/herdr-a.sock"
 	p.WorktreePath = "/repo/.fanout/worktrees/child"
 	return p
 }
 
 func liveHerdrPane(p state.Pane) backend.LivePane {
 	var agentSession *backend.AgentSessionRef
-	if p.HerdrAgentSession != nil {
-		cloned := *p.HerdrAgentSession
+	if p.AgentSession != nil {
+		cloned := *p.AgentSession
 		agentSession = &cloned
 	}
 	return backend.LivePane{
 		Ref: backend.PaneRef{
 			Backend:   backend.Herdr,
-			Workspace: p.HerdrWorkspaceID,
+			Workspace: p.WorkspaceID,
 			Pane:      p.PaneID,
 		},
 		CurrentPath:      "/unrelated/saved-cwd",
 		Title:            "herdr child",
 		AgentState:       backend.AgentWorking,
 		NativeAgentState: "working",
-		WorkspaceLabel:   p.HerdrWorkspaceLabel,
-		TerminalID:       p.HerdrTerminalID,
-		AgentID:          p.HerdrAgentID,
+		WorkspaceLabel:   p.WorkspaceLabel,
+		TerminalID:       p.TerminalID,
+		AgentID:          p.AgentID,
 		AgentProvider:    p.Agent,
 		AgentSession:     agentSession,
 		AgentPresent:     true,
 		Focused:          true,
-		RepoKey:          p.HerdrRepoKey,
+		RepoKey:          p.RepoKey,
 		ProjectRoot:      "/repo",
 		WorktreePath:     p.WorktreePath,
-		SessionID:        p.HerdrSession,
-		SocketPath:       p.HerdrSocketPath,
+		SessionID:        p.SessionID,
+		SocketPath:       p.SocketPath,
 	}
 }
 
@@ -647,11 +647,11 @@ func TestBuildScopesMixedBackendDegradationToFailedRoute(t *testing.T) {
 	herdrMissing := herdrPane("1", 5, "workspace-a:p2")
 	herdrMissing.AgentStatus = "running"
 	herdrFailed := herdrPane("1", 6, "workspace-b:p1")
-	herdrFailed.HerdrWorkspaceID = "workspace-b"
-	herdrFailed.HerdrSession = "session-b"
-	herdrFailed.HerdrSocketPath = "/tmp/herdr-b.sock"
-	herdrFailed.HerdrTerminalID = "terminal-b"
-	herdrFailed.HerdrAgentID = "agent-b"
+	herdrFailed.WorkspaceID = "workspace-b"
+	herdrFailed.SessionID = "session-b"
+	herdrFailed.SocketPath = "/tmp/herdr-b.sock"
+	herdrFailed.TerminalID = "terminal-b"
+	herdrFailed.AgentID = "agent-b"
 	herdrFailed.WorktreePath = "/repo/.fanout/worktrees/failed"
 	herdrFailed.AgentStatus = "running"
 
@@ -663,8 +663,8 @@ func TestBuildScopesMixedBackendDegradationToFailedRoute(t *testing.T) {
 	herdrObservation := liveHerdrPane(herdrLive)
 	routeErr := backend.ObservationRouteUnavailable(backend.ObservationRoute{
 		Backend:    backend.Herdr,
-		SessionID:  herdrFailed.HerdrSession,
-		SocketPath: herdrFailed.HerdrSocketPath,
+		SessionID:  herdrFailed.SessionID,
+		SocketPath: herdrFailed.SocketPath,
 	}, errors.New("herdr session-b offline"))
 
 	snap := buildWithLivePanes(
@@ -805,7 +805,7 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 		{
 			name: "recorded workspace label missing",
 			mutateRow: func(p *state.Pane) {
-				p.HerdrWorkspaceLabel = ""
+				p.WorkspaceLabel = ""
 			},
 			include:   true,
 			wantState: "unsupported",
@@ -820,7 +820,7 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 		{
 			name: "recorded terminal id missing",
 			mutateRow: func(p *state.Pane) {
-				p.HerdrTerminalID = ""
+				p.TerminalID = ""
 			},
 			include:   true,
 			wantState: "unsupported",
@@ -828,7 +828,7 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 		{
 			name: "recorded workspace id missing",
 			mutateRow: func(p *state.Pane) {
-				p.HerdrWorkspaceID = ""
+				p.WorkspaceID = ""
 			},
 			include:   true,
 			wantState: "unsupported",
@@ -836,7 +836,7 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 		{
 			name: "recorded route session missing",
 			mutateRow: func(p *state.Pane) {
-				p.HerdrSession = ""
+				p.SessionID = ""
 			},
 			include:   true,
 			wantState: "unsupported",
@@ -844,7 +844,7 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 		{
 			name: "recorded route socket missing",
 			mutateRow: func(p *state.Pane) {
-				p.HerdrSocketPath = ""
+				p.SocketPath = ""
 			},
 			include:   true,
 			wantState: "unsupported",
@@ -920,8 +920,8 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 		{
 			name: "recorded agent identity missing",
 			mutateRow: func(p *state.Pane) {
-				p.HerdrAgentID = ""
-				p.HerdrAgentSession = nil
+				p.AgentID = ""
+				p.AgentSession = nil
 			},
 			include:   true,
 			wantState: "unsupported",
@@ -929,8 +929,8 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 		{
 			name: "recorded agent contract lacks runtime identity after process exit",
 			mutateRow: func(p *state.Pane) {
-				p.HerdrAgentID = ""
-				p.HerdrAgentSession = nil
+				p.AgentID = ""
+				p.AgentSession = nil
 			},
 			mutateLive: func(p *backend.LivePane) {
 				p.AgentID = ""
@@ -945,22 +945,22 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 			name: "agent appeared in recorded generic pane",
 			mutateRow: func(p *state.Pane) {
 				p.Agent = ""
-				p.HerdrAgentID = ""
-				p.HerdrAgentSession = nil
+				p.AgentID = ""
+				p.AgentSession = nil
 			},
 			include: true,
 		},
 		{
 			name: "unbound logical conversation requires state binding",
 			mutateRow: func(p *state.Pane) {
-				p.HerdrAgentSession = nil
+				p.AgentSession = nil
 			},
 			include: true,
 		},
 		{
 			name: "provider omitted logical conversation",
 			mutateRow: func(p *state.Pane) {
-				p.HerdrAgentSession = nil
+				p.AgentSession = nil
 			},
 			mutateLive: func(p *backend.LivePane) {
 				p.AgentSession = nil
@@ -971,7 +971,7 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 		{
 			name: "recorded logical conversation invalid",
 			mutateRow: func(p *state.Pane) {
-				p.HerdrAgentSession.Kind = "name"
+				p.AgentSession.Kind = "name"
 			},
 			include:   true,
 			wantState: "unsupported",
@@ -993,7 +993,7 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 		{
 			name: "recorded repository identity missing",
 			mutateRow: func(p *state.Pane) {
-				p.HerdrRepoKey = ""
+				p.RepoKey = ""
 			},
 			include: true,
 		},
@@ -1067,8 +1067,8 @@ func TestHerdrPaneMatchesOwnedShellWithoutAgentIdentity(t *testing.T) {
 	row := herdrPane("@manual", -1, "workspace-a:p1")
 	row.Kind = state.PaneKindShell
 	row.Agent = state.PaneKindShell
-	row.HerdrAgentID = ""
-	row.HerdrAgentSession = nil
+	row.AgentID = ""
+	row.AgentSession = nil
 	live := liveHerdrPane(row)
 	live.AgentState = ""
 	live.NativeAgentState = ""
@@ -1084,7 +1084,7 @@ func TestHerdrPaneMatchesOwnedShellWithoutAgentIdentity(t *testing.T) {
 func TestBuildHerdrWithoutWorktreeProvenanceUsesSavedCWDExactly(t *testing.T) {
 	row := herdrPane("1", 2, "workspace-a:p1")
 	row.WorktreePath = "/repo/saved-cwd"
-	row.HerdrRepoKey = ""
+	row.RepoKey = ""
 	base := liveHerdrPane(row)
 	base.RepoKey = ""
 	base.ProjectRoot = ""
@@ -1137,8 +1137,8 @@ func TestBuildHerdrAgentRecordIsSeparateFromPaneLiveness(t *testing.T) {
 			name: "generic pane without agent record",
 			mutateRow: func(p *state.Pane) {
 				p.Agent = ""
-				p.HerdrAgentID = ""
-				p.HerdrAgentSession = nil
+				p.AgentID = ""
+				p.AgentSession = nil
 			},
 			mutateLive: func(p *backend.LivePane) {
 				p.AgentID = ""
@@ -1241,7 +1241,7 @@ func TestBuildHerdrRuntimeFieldsAreAdditiveTmuxAliases(t *testing.T) {
 		}
 	}
 
-	row.HerdrTerminalID = ""
+	row.TerminalID = ""
 	unsupported := buildWithLivePanes([]state.Pane{row}, nil, nil).Sessions[0].Panes[0]
 	if unsupported.RuntimeState != "unsupported" || unsupported.TmuxState != "unknown" {
 		t.Fatalf("unsupported compatibility projection = runtime:%q tmux:%q, want unsupported/unknown", unsupported.RuntimeState, unsupported.TmuxState)
@@ -1306,8 +1306,8 @@ func TestBuildHerdrUsesPersistedIdentityWithoutRebinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	persisted, ok := loaded.Find("423", 427)
-	if !ok || persisted.HerdrTerminalID != row.HerdrTerminalID ||
-		persisted.HerdrAgentSession == nil || *persisted.HerdrAgentSession != *row.HerdrAgentSession {
+	if !ok || persisted.TerminalID != row.TerminalID ||
+		persisted.AgentSession == nil || *persisted.AgentSession != *row.AgentSession {
 		t.Fatalf("persisted herdr identity after stale observation = %+v (found=%t)", persisted, ok)
 	}
 
@@ -1315,9 +1315,9 @@ func TestBuildHerdrUsesPersistedIdentityWithoutRebinding(t *testing.T) {
 	// unsupported capability, not a stale match and not a candidate for
 	// snapshot-driven adoption.
 	unbound := row
-	unbound.HerdrTerminalID = ""
-	unbound.HerdrRepoKey = ""
-	unbound.HerdrAgentSession = nil
+	unbound.TerminalID = ""
+	unbound.RepoKey = ""
+	unbound.AgentSession = nil
 	unboundStore, err := state.LockProject(root)
 	if err != nil {
 		t.Fatal(err)

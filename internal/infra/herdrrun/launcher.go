@@ -59,7 +59,7 @@ func RunPaneLauncher(in io.Reader, out, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "fanout herdr pane launcher: %v\n", err)
 		return 1
 	}
-	if intent.Kind == state.HerdrIntentCoordinator && intent.Launch == nil {
+	if intent.Kind == state.IntentCoordinator && intent.Launch == nil {
 		return holdCoordinatorLauncher(in, errOut)
 	}
 	return runWorkloadPaneLauncher(in, out, errOut, request, intent)
@@ -69,7 +69,7 @@ func runWorkloadPaneLauncher(
 	in io.Reader,
 	out, errOut io.Writer,
 	request paneLauncherRequest,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 ) int {
 	marker := launcherReadyMarker(intent.Launch.Nonce)
 	if err := writeLauncherReady(out, marker); err != nil {
@@ -96,7 +96,7 @@ func runWorkloadPaneLauncher(
 
 func workloadExecEnvironment(
 	request paneLauncherRequest,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	environment []string,
 ) []string {
 	if intent.Launch.Agent == "" {
@@ -116,14 +116,14 @@ func workloadExecEnvironment(
 	return bindHerdrEmitterEnvironment(intent, environment)
 }
 
-func directCodexIntegrationLaunch(intent state.HerdrIntent) bool {
+func directCodexIntegrationLaunch(intent state.LaunchIntent) bool {
 	launch := intent.Launch
-	directKind := intent.Kind == state.HerdrIntentWorktree || intent.Kind == state.HerdrIntentResume
+	directKind := intent.Kind == state.IntentWorktree || intent.Kind == state.IntentResume
 	return directKind && launch != nil && launch.Agent == "codex" &&
 		launch.CodexPlanStatusPath == "" && launch.CodexTeamStatusPath == ""
 }
 
-func bindHerdrEmitterEnvironment(intent state.HerdrIntent, environment []string) []string {
+func bindHerdrEmitterEnvironment(intent state.LaunchIntent, environment []string) []string {
 	launch := intent.Launch
 	if launch == nil || launch.EmitterNonce == "" {
 		return environment
@@ -207,30 +207,30 @@ func launcherRuntimeDir(launcherPath string) string {
 	return filepath.Dir(filepath.Dir(launcherPath))
 }
 
-func waitForPaneLaunchIntent(request paneLauncherRequest) (state.HerdrIntent, error) {
+func waitForPaneLaunchIntent(request paneLauncherRequest) (state.LaunchIntent, error) {
 	deadline := time.Now().Add(corebackend.DefaultWaitTimeout)
 	for time.Now().Before(deadline) {
-		store, err := state.LoadHerdrIntentsPath(request.controlPath)
+		store, err := state.LoadLaunchJournalPath(request.controlPath)
 		if err != nil {
-			return state.HerdrIntent{}, fmt.Errorf("read launch intent: %w", err)
+			return state.LaunchIntent{}, fmt.Errorf("read launch intent: %w", err)
 		}
 		if intent, found := matchingPaneLaunchIntent(store, request); found {
 			if time.Now().UnixMilli() >= intent.ExpiresUnixMS {
-				return state.HerdrIntent{}, fmt.Errorf("launch intent expired")
+				return state.LaunchIntent{}, fmt.Errorf("launch intent expired")
 			}
 			return intent, nil
 		}
 		time.Sleep(launcherPollInterval)
 	}
-	return state.HerdrIntent{}, fmt.Errorf("timed out waiting for launch intent")
+	return state.LaunchIntent{}, fmt.Errorf("timed out waiting for launch intent")
 }
 
 func matchingPaneLaunchIntent(
-	store state.HerdrIntents,
+	store state.LaunchJournal,
 	request paneLauncherRequest,
-) (state.HerdrIntent, bool) {
+) (state.LaunchIntent, bool) {
 	for _, intent := range store.Intents {
-		if intent.Status == state.HerdrIntentRealized && paneLauncherIntentReady(intent) &&
+		if intent.Status == state.IntentRealized && paneLauncherIntentReady(intent) &&
 			intent.Session == request.session && intent.SocketPath == request.socketPath &&
 			intent.Resource.WorkspaceID == request.workspaceID &&
 			intent.Resource.PaneID == request.paneID &&
@@ -238,12 +238,12 @@ func matchingPaneLaunchIntent(
 			return intent, true
 		}
 	}
-	return state.HerdrIntent{}, false
+	return state.LaunchIntent{}, false
 }
 
-func paneLauncherIntentReady(intent state.HerdrIntent) bool {
-	return intent.Kind == state.HerdrIntentCoordinator ||
-		(intent.Kind == state.HerdrIntentWorktree || intent.Kind == state.HerdrIntentResume) &&
+func paneLauncherIntentReady(intent state.LaunchIntent) bool {
+	return intent.Kind == state.IntentCoordinator ||
+		(intent.Kind == state.IntentWorktree || intent.Kind == state.IntentResume) &&
 			intent.Launch != nil
 }
 
@@ -267,14 +267,14 @@ type launcherInput struct {
 	err  error
 }
 
-func waitForLaunchToken(in io.Reader, out io.Writer, intent state.HerdrIntent) error {
+func waitForLaunchToken(in io.Reader, out io.Writer, intent state.LaunchIntent) error {
 	return waitForLaunchTokenAtInterval(in, out, intent, launcherPollInterval)
 }
 
 func waitForLaunchTokenAtInterval(
 	in io.Reader,
 	out io.Writer,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	markerInterval time.Duration,
 ) error {
 	deadline := time.UnixMilli(intent.ExpiresUnixMS)
@@ -447,7 +447,7 @@ func writeAndSync(file *os.File, data []byte) error {
 	return errors.Join(writeErr, syncErr, closeErr)
 }
 
-func consumeWorkloadEnvironment(launch *state.HerdrLaunch, runtimeDir string) ([]string, error) {
+func consumeWorkloadEnvironment(launch *state.LaunchCapsule, runtimeDir string) ([]string, error) {
 	if err := validateWorkloadEnvironmentLocation(runtimeDir, launch); err != nil {
 		return nil, err
 	}
@@ -467,7 +467,7 @@ func consumeWorkloadEnvironment(launch *state.HerdrLaunch, runtimeDir string) ([
 
 // DiscardWorkloadEnvironment removes an unconsumed capsule only after its
 // persisted nonce, owned runtime location, and file identity all match.
-func DiscardWorkloadEnvironment(runtimeDir string, launch *state.HerdrLaunch) (err error) {
+func DiscardWorkloadEnvironment(runtimeDir string, launch *state.LaunchCapsule) (err error) {
 	defer errs.Wrap(&err, "discard Herdr workload environment")
 
 	if validationErr := validateWorkloadEnvironmentLocation(runtimeDir, launch); validationErr != nil {
@@ -493,11 +493,11 @@ func DiscardWorkloadEnvironment(runtimeDir string, launch *state.HerdrLaunch) (e
 // DiscardWorkloadEnvironment lets a caller holding only this session drop an
 // unconsumed capsule through the same identity checks the package function
 // applies.
-func (s *OwnedSession) DiscardWorkloadEnvironment(runtimeDir string, launch *state.HerdrLaunch) error {
+func (s *OwnedSession) DiscardWorkloadEnvironment(runtimeDir string, launch *state.LaunchCapsule) error {
 	return DiscardWorkloadEnvironment(runtimeDir, launch)
 }
 
-func validateWorkloadEnvironmentLocation(runtimeDir string, launch *state.HerdrLaunch) error {
+func validateWorkloadEnvironmentLocation(runtimeDir string, launch *state.LaunchCapsule) error {
 	if launch == nil || !filepath.IsAbs(runtimeDir) || filepath.Clean(runtimeDir) != runtimeDir ||
 		!workloadLaunchNonce.MatchString(launch.Nonce) {
 		return fmt.Errorf("workload environment capsule has an invalid owned runtime identity")
@@ -549,7 +549,7 @@ func readWorkloadEnvironmentCapsule(path string) ([]byte, error) {
 	return data, nil
 }
 
-func decodeWorkloadEnvironmentCapsule(data []byte, launch *state.HerdrLaunch) ([]string, error) {
+func decodeWorkloadEnvironmentCapsule(data []byte, launch *state.LaunchCapsule) ([]string, error) {
 	var capsule workloadEnvCapsule
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()

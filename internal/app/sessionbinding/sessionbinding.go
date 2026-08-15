@@ -80,7 +80,7 @@ func bindOwnedHerdrAgentSessions(projectRoot string, live []backend.LivePane) (e
 		if !ok {
 			continue
 		}
-		locked.Panes[i].HerdrAgentSession = ref
+		locked.Panes[i].AgentSession = ref
 		changed = true
 	}
 	if changed {
@@ -143,6 +143,6 @@ func countHerdrRowsForObservation(panes []state.Pane, current backend.LivePane) 
 
 func herdrAgentSessionUnbound(pane state.Pane) bool {
 	return backend.NormalizeName(pane.Backend) == backend.Herdr &&
-		strings.TrimSpace(pane.Agent) != "" && strings.TrimSpace(pane.HerdrAgentID) != "" &&
-		pane.HerdrAgentSession == nil
+		strings.TrimSpace(pane.Agent) != "" && strings.TrimSpace(pane.AgentID) != "" &&
+		pane.AgentSession == nil
 }

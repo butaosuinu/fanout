@@ -31,7 +31,7 @@ func (l *Launcher) shellHerdr(
 	intent, err := realizeHerdrInteractive(
 		ctx, l.Herdr, locked, route,
 		manualHerdrCoordinatorRequest(l.Info.ProjectRoot, targetPath, route, "", number),
-		func(state.HerdrIntent) (*state.HerdrLaunch, error) {
+		func(state.LaunchIntent) (*state.LaunchCapsule, error) {
 			return l.newManualHerdrShellLaunch(route)
 		},
 	)
@@ -48,7 +48,7 @@ func (l *Launcher) shellHerdr(
 
 func (l *Launcher) newManualHerdrShellLaunch(
 	route backend.OwnedLaunchRoute,
-) (*state.HerdrLaunch, error) {
+) (*state.LaunchCapsule, error) {
 	_, shell, err := resolveHerdrConsoleInputs(l.Info.ProjectRoot, os.Getenv("SHELL"))
 	if err != nil {
 		return nil, err
@@ -57,7 +57,7 @@ func (l *Launcher) newManualHerdrShellLaunch(
 }
 
 func herdrShellStatePane(
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	live backend.LivePane,
 	number int,
 	slug, title, runtimeParent string,
@@ -71,7 +71,7 @@ func herdrShellStatePane(
 	return pane
 }
 
-func validateHerdrShellLaunch(launch *state.HerdrLaunch) error {
+func validateHerdrShellLaunch(launch *state.LaunchCapsule) error {
 	if launch == nil || launch.Agent != "" || launch.AgentName != "" {
 		return fmt.Errorf("herdr shell intent has an invalid launch capsule")
 	}
@@ -79,7 +79,7 @@ func validateHerdrShellLaunch(launch *state.HerdrLaunch) error {
 }
 
 func exactHerdrShellPane(
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	panes []backend.LivePane,
 ) (backend.LivePane, bool) {
 	for _, pane := range panes {

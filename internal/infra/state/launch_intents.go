@@ -19,47 +19,47 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/execx"
 )
 
-const HerdrIntentsSchemaVersion = 1
+const LaunchJournalSchemaVersion = 1
 
 var (
-	herdrCommitSHA   = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
-	herdrLaunchNonce = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	herdrAgentName   = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-	herdrOwnerToken  = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	commitSHAPattern   = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+	launchNoncePattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	agentNamePattern   = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	ownerTokenPattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
-type HerdrIntentKind string
+type LaunchIntentKind string
 
 const (
-	HerdrIntentCoordinator HerdrIntentKind = "coordinator"
-	HerdrIntentWorktree    HerdrIntentKind = "worktree"
-	HerdrIntentRollback    HerdrIntentKind = "rollback"
-	HerdrIntentCleanup     HerdrIntentKind = "cleanup"
-	HerdrIntentResume      HerdrIntentKind = "agent-resume"
-	HerdrIntentRestart     HerdrIntentKind = "server-restart"
-	HerdrIntentShutdown    HerdrIntentKind = "server-shutdown"
+	IntentCoordinator LaunchIntentKind = "coordinator"
+	IntentWorktree    LaunchIntentKind = "worktree"
+	IntentRollback    LaunchIntentKind = "rollback"
+	IntentCleanup     LaunchIntentKind = "cleanup"
+	IntentResume      LaunchIntentKind = "agent-resume"
+	IntentRestart     LaunchIntentKind = "server-restart"
+	IntentShutdown    LaunchIntentKind = "server-shutdown"
 )
 
-type HerdrCleanupPhase string
+type CleanupPhase string
 
 const (
-	HerdrCleanupReopen         HerdrCleanupPhase = "reopen"
-	HerdrCleanupRemove         HerdrCleanupPhase = "remove"
-	HerdrCleanupWorkspaceClose HerdrCleanupPhase = "workspace-close"
+	CleanupReopen         CleanupPhase = "reopen"
+	CleanupRemove         CleanupPhase = "remove"
+	CleanupWorkspaceClose CleanupPhase = "workspace-close"
 )
 
-type HerdrIntentStatus string
+type LaunchIntentStatus string
 
 const (
-	HerdrIntentPlanned               HerdrIntentStatus = "planned"
-	HerdrIntentIssued                HerdrIntentStatus = "issued"
-	HerdrIntentRealized              HerdrIntentStatus = "realized"
-	HerdrIntentManualCleanupRequired HerdrIntentStatus = "manual_cleanup_required"
+	IntentPlanned               LaunchIntentStatus = "planned"
+	IntentIssued                LaunchIntentStatus = "issued"
+	IntentRealized              LaunchIntentStatus = "realized"
+	IntentManualCleanupRequired LaunchIntentStatus = "manual_cleanup_required"
 )
 
-// HerdrResource is the runtime and Git identity established by one Herdr
+// RuntimeResource is the runtime and Git identity established by one Herdr
 // workspace mutation. The workspace label is the ownership nonce.
-type HerdrResource struct {
+type RuntimeResource struct {
 	WorkspaceID string `json:"workspaceId"`
 	Label       string `json:"label"`
 	PaneID      string `json:"paneId"`
@@ -69,9 +69,9 @@ type HerdrResource struct {
 	RepoRoot    string `json:"repoRoot,omitempty"`
 }
 
-// HerdrServerIdentity is the persisted owner marker and supervisor lease
+// RuntimeServerIdentity is the persisted owner marker and supervisor lease
 // identity used to fence one explicit restart or shutdown.
-type HerdrServerIdentity struct {
+type RuntimeServerIdentity struct {
 	GitCommonDir         string `json:"gitCommonDir"`
 	RuntimeDir           string `json:"runtimeDir"`
 	Session              string `json:"session"`
@@ -88,18 +88,18 @@ type HerdrServerIdentity struct {
 	LauncherSHA256       string `json:"launcherSha256"`
 }
 
-// HerdrIntent is one minimal mutation journal row. Status records whether the
+// LaunchIntent is one minimal mutation journal row. Status records whether the
 // socket request may have been issued; recovery never reissues an issued
 // request and instead classifies the current workspace and checkout state.
-type HerdrIntent struct {
-	ID               string            `json:"id"`
-	Kind             HerdrIntentKind   `json:"kind"`
-	Status           HerdrIntentStatus `json:"status"`
-	Parent           string            `json:"parent"`
-	RuntimeParent    string            `json:"runtimeParent"`
-	OwnerProjectRoot string            `json:"ownerProjectRoot,omitempty"`
-	IssueNum         int               `json:"issueNum,omitempty"`
-	TaskID           string            `json:"taskId,omitempty"`
+type LaunchIntent struct {
+	ID               string             `json:"id"`
+	Kind             LaunchIntentKind   `json:"kind"`
+	Status           LaunchIntentStatus `json:"status"`
+	Parent           string             `json:"parent"`
+	RuntimeParent    string             `json:"runtimeParent"`
+	OwnerProjectRoot string             `json:"ownerProjectRoot,omitempty"`
+	IssueNum         int                `json:"issueNum,omitempty"`
+	TaskID           string             `json:"taskId,omitempty"`
 
 	Slug          string `json:"slug,omitempty"`
 	BranchName    string `json:"branchName,omitempty"`
@@ -111,29 +111,29 @@ type HerdrIntent struct {
 	BranchExisted bool   `json:"branchExisted,omitempty"`
 	BranchCreated bool   `json:"branchCreated,omitempty"`
 
-	WorkspaceLabel string        `json:"workspaceLabel"`
-	Resource       HerdrResource `json:"resource"`
-	Coordinator    HerdrResource `json:"coordinator"`
-	Session        string        `json:"session"`
-	SocketPath     string        `json:"socketPath"`
-	ExpiresUnixMS  int64         `json:"expiresUnixMs"`
+	WorkspaceLabel string          `json:"workspaceLabel"`
+	Resource       RuntimeResource `json:"resource"`
+	Coordinator    RuntimeResource `json:"coordinator"`
+	Session        string          `json:"session"`
+	SocketPath     string          `json:"socketPath"`
+	ExpiresUnixMS  int64           `json:"expiresUnixMs"`
 
-	Launch *HerdrLaunch         `json:"launch,omitempty"`
-	Server *HerdrServerIdentity `json:"server,omitempty"`
+	Launch *LaunchCapsule         `json:"launch,omitempty"`
+	Server *RuntimeServerIdentity `json:"server,omitempty"`
 	// ResumeAgentSession binds a cold-restart launch to one exact persisted
 	// Codex conversation. Other intent kinds must leave it empty.
 	ResumeAgentSession *backend.AgentSessionRef `json:"resumeAgentSession,omitempty"`
 
-	CleanupPhase        HerdrCleanupPhase `json:"cleanupPhase,omitempty"`
-	CleanupDeleteBranch bool              `json:"cleanupDeleteBranch,omitempty"`
+	CleanupPhase        CleanupPhase `json:"cleanupPhase,omitempty"`
+	CleanupDeleteBranch bool         `json:"cleanupDeleteBranch,omitempty"`
 
 	Failure string `json:"failure,omitempty"`
 }
 
-// HerdrLaunch is the non-secret launch capsule recorded before a coordinator
+// LaunchCapsule is the non-secret launch capsule recorded before a coordinator
 // workspace mutation or after child-worktree realization. The environment
 // itself lives in a one-shot owner-only file.
-type HerdrLaunch struct {
+type LaunchCapsule struct {
 	Nonce                string                   `json:"nonce"`
 	EmitterNonce         string                   `json:"emitterNonce,omitempty"`
 	PendingReportedState string                   `json:"pendingReportedState,omitempty"`
@@ -151,29 +151,29 @@ type HerdrLaunch struct {
 	TokenIssued          bool                     `json:"tokenIssued,omitempty"`
 }
 
-// HerdrIntents is the repository-common intent journal. It holds intents
+// LaunchJournal is the repository-common intent journal. It holds intents
 // only; a successful launch consumes the intent into the owning worktree's
 // state.json pane row.
-type HerdrIntents struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	Intents       []HerdrIntent `json:"intents"`
+type LaunchJournal struct {
+	SchemaVersion int            `json:"schemaVersion"`
+	Intents       []LaunchIntent `json:"intents"`
 }
 
-// LockedHerdrIntents is a journal view backed by the combined launch lock.
+// LockedLaunchJournal is a journal view backed by the combined launch lock.
 // The view has no unlock of its own: the lock file is owned by the
 // LockedStore that produced it.
-type LockedHerdrIntents struct {
+type LockedLaunchJournal struct {
 	path string
-	HerdrIntents
+	LaunchJournal
 }
 
-// HerdrIntentsPath returns the repository-common journal path shared by every
+// LaunchJournalPath returns the repository-common journal path shared by every
 // linked worktree.
-func HerdrIntentsPath(projectRoot string) (string, error) {
-	return herdrIntentsPathContext(context.Background(), projectRoot)
+func LaunchJournalPath(projectRoot string) (string, error) {
+	return launchJournalPathContext(context.Background(), projectRoot)
 }
 
-func herdrIntentsPathContext(ctx context.Context, projectRoot string) (string, error) {
+func launchJournalPathContext(ctx context.Context, projectRoot string) (string, error) {
 	out, err := execx.OutputContext(ctx, projectRoot, nil, "git", "rev-parse", "--git-common-dir")
 	if err != nil {
 		return "", fmt.Errorf("resolve Herdr intents git common directory: %w", err)
@@ -193,26 +193,26 @@ func herdrIntentsPathContext(ctx context.Context, projectRoot string) (string, e
 	return filepath.Join(filepath.Clean(commonDir), "fanout", "herdr-intents.json"), nil
 }
 
-func LoadHerdrIntents(projectRoot string) (HerdrIntents, error) {
-	path, err := HerdrIntentsPath(projectRoot)
+func LoadLaunchJournal(projectRoot string) (LaunchJournal, error) {
+	path, err := LaunchJournalPath(projectRoot)
 	if err != nil {
-		return HerdrIntents{}, err
+		return LaunchJournal{}, err
 	}
-	return loadHerdrIntents(path)
+	return loadLaunchJournal(path)
 }
 
-// LoadHerdrIntentsPath reads a journal without taking its launch lock. It is
+// LoadLaunchJournalPath reads a journal without taking its launch lock. It is
 // reserved for the pane launcher, which cannot acquire the lock held by its
 // parent launch operation while waiting for readiness.
-func LoadHerdrIntentsPath(path string) (HerdrIntents, error) {
+func LoadLaunchJournalPath(path string) (LaunchJournal, error) {
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path ||
 		filepath.Base(path) != "herdr-intents.json" {
-		return HerdrIntents{}, fmt.Errorf("invalid Herdr intents path")
+		return LaunchJournal{}, fmt.Errorf("invalid Herdr intents path")
 	}
-	return loadHerdrIntents(path)
+	return loadLaunchJournal(path)
 }
 
-func lockHerdrIntentsPath(ctx context.Context, path string, blocking bool) (*os.File, error) {
+func lockLaunchJournalPath(ctx context.Context, path string, blocking bool) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create Herdr intents directory: %w", err)
 	}
@@ -228,39 +228,39 @@ func lockHerdrIntentsPath(ctx context.Context, path string, blocking bool) (*os.
 	return file, nil
 }
 
-func (l *LockedHerdrIntents) Save() error {
+func (l *LockedLaunchJournal) Save() error {
 	if l == nil || l.path == "" {
 		return fmt.Errorf("save Herdr intents without a held lock")
 	}
 	l.normalize()
-	if validateErr := validateHerdrIntents(l.HerdrIntents); validateErr != nil {
+	if validateErr := validateLaunchJournal(l.LaunchJournal); validateErr != nil {
 		return validateErr
 	}
-	if writeErr := atomicfs.WriteJSON(l.path, l.HerdrIntents, 0o600); writeErr != nil {
+	if writeErr := atomicfs.WriteJSON(l.path, l.LaunchJournal, 0o600); writeErr != nil {
 		return fmt.Errorf("write Herdr intents %s: %w", l.path, writeErr)
 	}
 	return nil
 }
 
-func (s HerdrIntents) FindIntent(id string) (HerdrIntent, bool) {
+func (s LaunchJournal) FindIntent(id string) (LaunchIntent, bool) {
 	for _, intent := range s.Intents {
 		if intent.ID == id {
 			return intent, true
 		}
 	}
-	return HerdrIntent{}, false
+	return LaunchIntent{}, false
 }
 
 // ServerLifecycleIntent returns the single explicit server lifecycle row.
-func (s HerdrIntents) ServerLifecycleIntent() (HerdrIntent, bool, error) {
-	var found HerdrIntent
+func (s LaunchJournal) ServerLifecycleIntent() (LaunchIntent, bool, error) {
+	var found LaunchIntent
 	hasFound := false
 	for _, intent := range s.Intents {
-		if !IsHerdrServerLifecycleKind(intent.Kind) {
+		if !IsServerLifecycleKind(intent.Kind) {
 			continue
 		}
 		if hasFound {
-			return HerdrIntent{}, false, fmt.Errorf("multiple Herdr server lifecycle intents are pending")
+			return LaunchIntent{}, false, fmt.Errorf("multiple Herdr server lifecycle intents are pending")
 		}
 		found = intent
 		hasFound = true
@@ -268,20 +268,20 @@ func (s HerdrIntents) ServerLifecycleIntent() (HerdrIntent, bool, error) {
 	return found, hasFound, nil
 }
 
-// IsHerdrServerLifecycleKind reports whether kind fences the owned server.
-func IsHerdrServerLifecycleKind(kind HerdrIntentKind) bool {
-	return kind == HerdrIntentRestart || kind == HerdrIntentShutdown
+// IsServerLifecycleKind reports whether kind fences the owned server.
+func IsServerLifecycleKind(kind LaunchIntentKind) bool {
+	return kind == IntentRestart || kind == IntentShutdown
 }
 
-// HerdrServerIntentID returns the singleton ID for one server lifecycle kind.
-func HerdrServerIntentID(kind HerdrIntentKind) (string, error) {
-	if !IsHerdrServerLifecycleKind(kind) {
+// ServerIntentID returns the singleton ID for one server lifecycle kind.
+func ServerIntentID(kind LaunchIntentKind) (string, error) {
+	if !IsServerLifecycleKind(kind) {
 		return "", fmt.Errorf("invalid Herdr server lifecycle intent kind %q", kind)
 	}
 	return "server:" + string(kind), nil
 }
 
-func HerdrResumeIntentID(session, socketPath, workspaceID, paneID string) (string, error) {
+func ResumeIntentID(session, socketPath, workspaceID, paneID string) (string, error) {
 	parts := []string{session, socketPath, workspaceID, paneID}
 	if slices.Contains(parts, "") {
 		return "", fmt.Errorf("herdr resume intent requires a complete route")
@@ -290,7 +290,7 @@ func HerdrResumeIntentID(session, socketPath, workspaceID, paneID string) (strin
 	return "resume:" + hex.EncodeToString(digest[:]), nil
 }
 
-func (s *HerdrIntents) UpsertIntent(intent HerdrIntent) {
+func (s *LaunchJournal) UpsertIntent(intent LaunchIntent) {
 	for i := range s.Intents {
 		if s.Intents[i].ID == intent.ID {
 			s.Intents[i] = intent
@@ -300,7 +300,7 @@ func (s *HerdrIntents) UpsertIntent(intent HerdrIntent) {
 	s.Intents = append(s.Intents, intent)
 }
 
-func (s *HerdrIntents) RemoveIntent(id string) bool {
+func (s *LaunchJournal) RemoveIntent(id string) bool {
 	for i := range s.Intents {
 		if s.Intents[i].ID != id {
 			continue
@@ -311,15 +311,15 @@ func (s *HerdrIntents) RemoveIntent(id string) bool {
 	return false
 }
 
-func (s HerdrIntents) ProvisionalBindings(
+func (s LaunchJournal) ProvisionalBindings(
 	ownerProjectRoot string,
 ) []backend.Binding {
 	bindings := make([]backend.Binding, 0, len(s.Intents))
 	for _, intent := range s.Intents {
-		if IsHerdrServerLifecycleKind(intent.Kind) {
+		if IsServerLifecycleKind(intent.Kind) {
 			continue
 		}
-		parent, ok := herdrBindingParent(
+		parent, ok := bindingParent(
 			intent.RuntimeParent,
 			intent.IssueNum,
 			intent.OwnerProjectRoot,
@@ -333,7 +333,7 @@ func (s HerdrIntents) ProvisionalBindings(
 	return bindings
 }
 
-func herdrBindingParent(
+func bindingParent(
 	parent string,
 	issueNum int,
 	storedRoot, projectRoot string,
@@ -354,7 +354,7 @@ func herdrBindingParent(
 	return parent, storedRoot == filepath.Clean(projectRoot)
 }
 
-func HerdrOwnerProjectRoot(parent, projectRoot string) (string, error) {
+func IntentOwnerProjectRoot(parent, projectRoot string) (string, error) {
 	parent = parentref.Canon(strings.TrimSpace(parent))
 	if parent != "@manual" && !strings.HasPrefix(parent, "plan:") {
 		return "", nil
@@ -365,7 +365,7 @@ func HerdrOwnerProjectRoot(parent, projectRoot string) (string, error) {
 	return projectRoot, nil
 }
 
-func HerdrCoordinatorIntentID(parent, ownerProjectRoot string, issueNum int) (string, error) {
+func CoordinatorIntentID(parent, ownerProjectRoot string, issueNum int) (string, error) {
 	parent = parentref.Canon(strings.TrimSpace(parent))
 	if parent == "" {
 		return "", fmt.Errorf("herdr coordinator intent requires a parent")
@@ -384,27 +384,27 @@ func HerdrCoordinatorIntentID(parent, ownerProjectRoot string, issueNum int) (st
 			return "", fmt.Errorf("non-synthetic Herdr coordinator cannot use a synthetic issue number")
 		}
 	}
-	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, ownerProjectRoot)
+	ownerProjectRoot, err := IntentOwnerProjectRoot(parent, ownerProjectRoot)
 	if err != nil {
 		return "", err
 	}
-	id := "coordinator:" + herdrOwnerTuple(parent, ownerProjectRoot)
+	id := "coordinator:" + intentOwnerTuple(parent, ownerProjectRoot)
 	if issueNum != 0 {
 		id += ":" + strconv.Itoa(issueNum)
 	}
 	return id, nil
 }
 
-// HerdrWorktreeIntentID uses the same issue/task key as the tmux state store:
+// WorktreeIntentID uses the same issue/task key as the tmux state store:
 // (parent, issue number) or (plan parent, task id).
-func HerdrWorktreeIntentID(parent, ownerProjectRoot string, issueNum int, taskID string) (string, error) {
+func WorktreeIntentID(parent, ownerProjectRoot string, issueNum int, taskID string) (string, error) {
 	parent = parentref.Canon(strings.TrimSpace(parent))
 	taskID = strings.TrimSpace(taskID)
-	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, ownerProjectRoot)
+	ownerProjectRoot, err := IntentOwnerProjectRoot(parent, ownerProjectRoot)
 	if err != nil {
 		return "", err
 	}
-	owner := herdrOwnerTuple(parent, ownerProjectRoot)
+	owner := intentOwnerTuple(parent, ownerProjectRoot)
 	switch {
 	case parent == "":
 		return "", fmt.Errorf("herdr worktree intent requires a parent")
@@ -417,9 +417,9 @@ func HerdrWorktreeIntentID(parent, ownerProjectRoot string, issueNum int, taskID
 	}
 }
 
-// HerdrRollbackIntentID binds a one-shot launch rollback to the worktree
+// RollbackIntentID binds a one-shot launch rollback to the worktree
 // intent whose realized resource it removes.
-func HerdrRollbackIntentID(worktreeIntentID string) (string, error) {
+func RollbackIntentID(worktreeIntentID string) (string, error) {
 	worktreeIntentID = strings.TrimSpace(worktreeIntentID)
 	if worktreeIntentID == "" || strings.HasPrefix(worktreeIntentID, "rollback:") {
 		return "", fmt.Errorf("herdr rollback intent requires a worktree intent id")
@@ -427,8 +427,8 @@ func HerdrRollbackIntentID(worktreeIntentID string) (string, error) {
 	return "rollback:" + worktreeIntentID, nil
 }
 
-// HerdrCleanupIntentID binds lifecycle cleanup to the worktree row it removes.
-func HerdrCleanupIntentID(worktreeIntentID string) (string, error) {
+// CleanupIntentID binds lifecycle cleanup to the worktree row it removes.
+func CleanupIntentID(worktreeIntentID string) (string, error) {
 	worktreeIntentID = strings.TrimSpace(worktreeIntentID)
 	if worktreeIntentID == "" || strings.HasPrefix(worktreeIntentID, "cleanup:") {
 		return "", fmt.Errorf("herdr cleanup intent requires a worktree intent id")
@@ -436,7 +436,7 @@ func HerdrCleanupIntentID(worktreeIntentID string) (string, error) {
 	return "cleanup:" + worktreeIntentID, nil
 }
 
-func herdrOwnerTuple(parent, ownerProjectRoot string) string {
+func intentOwnerTuple(parent, ownerProjectRoot string) string {
 	identity := tuplePart(parent)
 	if ownerProjectRoot != "" {
 		identity += ":" + tuplePart(ownerProjectRoot)
@@ -444,59 +444,59 @@ func herdrOwnerTuple(parent, ownerProjectRoot string) string {
 	return identity
 }
 
-func loadHerdrIntents(path string) (HerdrIntents, error) {
+func loadLaunchJournal(path string) (LaunchJournal, error) {
 	// Intents decodes through a pointer so a truncated journal (missing or
 	// null intents) is distinguishable from a valid empty list.
 	var raw struct {
-		SchemaVersion int            `json:"schemaVersion"`
-		Intents       *[]HerdrIntent `json:"intents"`
+		SchemaVersion int             `json:"schemaVersion"`
+		Intents       *[]LaunchIntent `json:"intents"`
 	}
 	found, err := atomicfs.ReadJSON(path, &raw)
 	if err != nil {
 		if found {
-			return HerdrIntents{}, fmt.Errorf("parse Herdr intents %s: %w", path, err)
+			return LaunchJournal{}, fmt.Errorf("parse Herdr intents %s: %w", path, err)
 		}
-		return HerdrIntents{}, fmt.Errorf("read Herdr intents %s: %w", path, err)
+		return LaunchJournal{}, fmt.Errorf("read Herdr intents %s: %w", path, err)
 	}
 	if !found {
-		return emptyHerdrIntents(), nil
+		return emptyLaunchJournal(), nil
 	}
 	// Only a missing file starts a fresh v1 journal. An existing file missing
 	// its schema version or intents array is corrupt and must not be adopted
 	// as empty ownership.
-	if raw.SchemaVersion != HerdrIntentsSchemaVersion {
-		return HerdrIntents{}, fmt.Errorf(
+	if raw.SchemaVersion != LaunchJournalSchemaVersion {
+		return LaunchJournal{}, fmt.Errorf(
 			"validate Herdr intents %s: unsupported Herdr intents schema version %d", path, raw.SchemaVersion,
 		)
 	}
 	if raw.Intents == nil {
-		return HerdrIntents{}, fmt.Errorf("validate Herdr intents %s: journal is missing intents", path)
+		return LaunchJournal{}, fmt.Errorf("validate Herdr intents %s: journal is missing intents", path)
 	}
-	store := HerdrIntents{SchemaVersion: raw.SchemaVersion, Intents: *raw.Intents}
-	if err := validateHerdrIntents(store); err != nil {
-		return HerdrIntents{}, fmt.Errorf("validate Herdr intents %s: %w", path, err)
+	store := LaunchJournal{SchemaVersion: raw.SchemaVersion, Intents: *raw.Intents}
+	if err := validateLaunchJournal(store); err != nil {
+		return LaunchJournal{}, fmt.Errorf("validate Herdr intents %s: %w", path, err)
 	}
 	return store, nil
 }
 
-func emptyHerdrIntents() HerdrIntents {
-	return HerdrIntents{
-		SchemaVersion: HerdrIntentsSchemaVersion,
-		Intents:       []HerdrIntent{},
+func emptyLaunchJournal() LaunchJournal {
+	return LaunchJournal{
+		SchemaVersion: LaunchJournalSchemaVersion,
+		Intents:       []LaunchIntent{},
 	}
 }
 
-func (s *HerdrIntents) normalize() {
+func (s *LaunchJournal) normalize() {
 	if s.SchemaVersion == 0 {
-		s.SchemaVersion = HerdrIntentsSchemaVersion
+		s.SchemaVersion = LaunchJournalSchemaVersion
 	}
 	if s.Intents == nil {
-		s.Intents = []HerdrIntent{}
+		s.Intents = []LaunchIntent{}
 	}
 }
 
-func validateHerdrIntents(store HerdrIntents) error {
-	if store.SchemaVersion != HerdrIntentsSchemaVersion {
+func validateLaunchJournal(store LaunchJournal) error {
+	if store.SchemaVersion != LaunchJournalSchemaVersion {
 		return fmt.Errorf("unsupported Herdr intents schema version %d", store.SchemaVersion)
 	}
 	if _, _, err := store.ServerLifecycleIntent(); err != nil {
@@ -505,17 +505,17 @@ func validateHerdrIntents(store HerdrIntents) error {
 	ids := map[string]bool{}
 	reservations := map[string]string{}
 	for _, intent := range store.Intents {
-		if err := validateHerdrIntent(intent); err != nil {
+		if err := validateIntent(intent); err != nil {
 			return err
 		}
 		if ids[intent.ID] {
 			return fmt.Errorf("duplicate Herdr intent id %q", intent.ID)
 		}
 		ids[intent.ID] = true
-		if intent.Kind != HerdrIntentWorktree {
+		if intent.Kind != IntentWorktree {
 			continue
 		}
-		if err := reserveHerdrIntentIdentity(
+		if err := reserveIntentIdentity(
 			reservations,
 			intent.ID,
 			intent.FullBranchRef,
@@ -527,38 +527,38 @@ func validateHerdrIntents(store HerdrIntents) error {
 	return nil
 }
 
-func validateHerdrIntent(intent HerdrIntent) error {
-	if IsHerdrServerLifecycleKind(intent.Kind) {
-		return validateHerdrServerIntent(intent)
+func validateIntent(intent LaunchIntent) error {
+	if IsServerLifecycleKind(intent.Kind) {
+		return validateServerIntent(intent)
 	}
 	if intent.Server != nil {
 		return fmt.Errorf("herdr intent %s has an unrelated server identity", intent.ID)
 	}
-	if intent.Kind != HerdrIntentResume && intent.ResumeAgentSession != nil {
+	if intent.Kind != IntentResume && intent.ResumeAgentSession != nil {
 		return fmt.Errorf("herdr intent %s has an unrelated resume session", intent.ID)
 	}
-	if err := validateHerdrIntentIdentity(intent); err != nil {
+	if err := validateIntentIdentity(intent); err != nil {
 		return err
 	}
-	if err := validateHerdrIntentKind(intent); err != nil {
+	if err := validateIntentKind(intent); err != nil {
 		return fmt.Errorf("herdr intent %s: %w", intent.ID, err)
 	}
-	if err := validateHerdrIntentStatus(intent); err != nil {
+	if err := validateIntentStatus(intent); err != nil {
 		return fmt.Errorf("herdr intent %s: %w", intent.ID, err)
 	}
-	if err := validateHerdrIntentOwnership(intent); err != nil {
+	if err := validateIntentOwnership(intent); err != nil {
 		return fmt.Errorf("herdr intent %s: %w", intent.ID, err)
 	}
 	return nil
 }
 
-func validateHerdrServerIntent(intent HerdrIntent) error {
-	wantID, err := HerdrServerIntentID(intent.Kind)
+func validateServerIntent(intent LaunchIntent) error {
+	wantID, err := ServerIntentID(intent.Kind)
 	if err != nil {
 		return err
 	}
-	validStatus := intent.Status == HerdrIntentPlanned ||
-		intent.Kind == HerdrIntentShutdown && intent.Status == HerdrIntentIssued
+	validStatus := intent.Status == IntentPlanned ||
+		intent.Kind == IntentShutdown && intent.Status == IntentIssued
 	if intent.ID != wantID || !validStatus || intent.Server == nil {
 		return fmt.Errorf("herdr server lifecycle intent %q is incomplete", intent.ID)
 	}
@@ -567,18 +567,18 @@ func validateHerdrServerIntent(intent HerdrIntent) error {
 		intent.IssueNum == 0, intent.TaskID == "", intent.Slug == "", intent.BranchName == "",
 		intent.FullBranchRef == "", intent.BaseBranch == "", intent.BaseSHA == "",
 		intent.ExpectedHead == "", intent.WorktreePath == "", !intent.BranchExisted,
-		!intent.BranchCreated, intent.WorkspaceLabel == "", intent.Resource == (HerdrResource{}),
-		intent.Coordinator == (HerdrResource{}), intent.Session == "", intent.SocketPath == "",
+		!intent.BranchCreated, intent.WorkspaceLabel == "", intent.Resource == (RuntimeResource{}),
+		intent.Coordinator == (RuntimeResource{}), intent.Session == "", intent.SocketPath == "",
 		intent.ExpiresUnixMS == 0, intent.Launch == nil, intent.CleanupPhase == "",
 		intent.ResumeAgentSession == nil, !intent.CleanupDeleteBranch, intent.Failure == "",
 	}
 	if slices.Contains(empty, false) {
 		return fmt.Errorf("herdr server lifecycle intent %s has unrelated fields", intent.ID)
 	}
-	return validateHerdrServerIdentity(intent.Kind, *intent.Server)
+	return validateServerIdentity(intent.Kind, *intent.Server)
 }
 
-func validateHerdrServerIdentity(kind HerdrIntentKind, identity HerdrServerIdentity) error {
+func validateServerIdentity(kind LaunchIntentKind, identity RuntimeServerIdentity) error {
 	paths := []string{
 		identity.GitCommonDir, identity.RuntimeDir, identity.SocketPath, identity.ClientSocketPath,
 		identity.BinaryPath, identity.LauncherPath,
@@ -589,12 +589,12 @@ func validateHerdrServerIdentity(kind HerdrIntentKind, identity HerdrServerIdent
 		}
 	}
 	required := []bool{
-		identity.Session != "", herdrOwnerToken.MatchString(identity.OwnerNonce),
-		identity.SupervisorPID > 1, herdrOwnerToken.MatchString(identity.SupervisorStartToken),
-		herdrOwnerToken.MatchString(identity.BinarySHA256), identity.BinaryVersion != "",
-		herdrOwnerToken.MatchString(identity.LauncherSHA256),
+		identity.Session != "", ownerTokenPattern.MatchString(identity.OwnerNonce),
+		identity.SupervisorPID > 1, ownerTokenPattern.MatchString(identity.SupervisorStartToken),
+		ownerTokenPattern.MatchString(identity.BinarySHA256), identity.BinaryVersion != "",
+		ownerTokenPattern.MatchString(identity.LauncherSHA256),
 		identity.ServerPID == 0 || identity.ServerPID > 1,
-		kind != HerdrIntentRestart || identity.ServerPID > 1,
+		kind != IntentRestart || identity.ServerPID > 1,
 	}
 	if slices.Contains(required, false) {
 		return fmt.Errorf("herdr server lifecycle identity is incomplete")
@@ -602,7 +602,7 @@ func validateHerdrServerIdentity(kind HerdrIntentKind, identity HerdrServerIdent
 	return nil
 }
 
-func validateHerdrIntentIdentity(intent HerdrIntent) error {
+func validateIntentIdentity(intent LaunchIntent) error {
 	parent := parentref.Canon(strings.TrimSpace(intent.Parent))
 	runtimeParent := parentref.Canon(strings.TrimSpace(intent.RuntimeParent))
 	requirements := []bool{
@@ -614,23 +614,23 @@ func validateHerdrIntentIdentity(intent HerdrIntent) error {
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("herdr intent %q is incomplete", intent.ID)
 	}
-	if err := validateHerdrRuntimeParent(intent, parent, runtimeParent); err != nil {
+	if err := validateRuntimeParent(intent, parent, runtimeParent); err != nil {
 		return fmt.Errorf("herdr intent %s: %w", intent.ID, err)
 	}
-	ownerProjectRoot, ownerErr := HerdrOwnerProjectRoot(parent, intent.OwnerProjectRoot)
+	ownerProjectRoot, ownerErr := IntentOwnerProjectRoot(parent, intent.OwnerProjectRoot)
 	if ownerErr != nil || intent.OwnerProjectRoot != ownerProjectRoot {
 		return fmt.Errorf("herdr intent %s has invalid owner project root", intent.ID)
 	}
 	return nil
 }
 
-func validateHerdrIntentKind(intent HerdrIntent) error {
-	validators := map[HerdrIntentKind]func(HerdrIntent) error{
-		HerdrIntentCoordinator: validateHerdrCoordinatorFields,
-		HerdrIntentWorktree:    validateHerdrWorktreeFields,
-		HerdrIntentRollback:    validateHerdrRollbackFields,
-		HerdrIntentCleanup:     validateHerdrCleanupFields,
-		HerdrIntentResume:      validateHerdrResumeFields,
+func validateIntentKind(intent LaunchIntent) error {
+	validators := map[LaunchIntentKind]func(LaunchIntent) error{
+		IntentCoordinator: validateCoordinatorFields,
+		IntentWorktree:    validateWorktreeFields,
+		IntentRollback:    validateRollbackFields,
+		IntentCleanup:     validateCleanupFields,
+		IntentResume:      validateResumeFields,
 	}
 	validate, ok := validators[intent.Kind]
 	if !ok {
@@ -639,93 +639,93 @@ func validateHerdrIntentKind(intent HerdrIntent) error {
 	return validate(intent)
 }
 
-func validateHerdrCoordinatorFields(intent HerdrIntent) error {
-	return requireHerdrIntentFields(intent.Kind, []bool{
+func validateCoordinatorFields(intent LaunchIntent) error {
+	return requireIntentFields(intent.Kind, []bool{
 		intent.TaskID == "", intent.BranchName == "", intent.FullBranchRef == "",
 		intent.BaseSHA == "", intent.Coordinator.WorkspaceID == "",
 	})
 }
 
-func validateHerdrWorktreeFields(intent HerdrIntent) error {
-	return requireHerdrIntentFields(intent.Kind, []bool{
+func validateWorktreeFields(intent LaunchIntent) error {
+	return requireIntentFields(intent.Kind, []bool{
 		intent.Slug != "", intent.BranchName != "", intent.FullBranchRef != "",
 		intent.FullBranchRef == "refs/heads/"+intent.BranchName,
-		intent.BaseBranch != "", herdrCommitSHA.MatchString(intent.BaseSHA),
-		herdrCommitSHA.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
+		intent.BaseBranch != "", commitSHAPattern.MatchString(intent.BaseSHA),
+		commitSHAPattern.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
 	})
 }
 
-func validateHerdrRollbackFields(intent HerdrIntent) error {
-	return requireHerdrIntentFields(intent.Kind, []bool{
+func validateRollbackFields(intent LaunchIntent) error {
+	return requireIntentFields(intent.Kind, []bool{
 		strings.HasPrefix(intent.ID, "rollback:"), intent.Launch == nil,
 		intent.Slug != "", intent.BranchName != "", intent.FullBranchRef != "",
 		intent.FullBranchRef == "refs/heads/"+intent.BranchName,
-		intent.BaseBranch != "", herdrCommitSHA.MatchString(intent.BaseSHA),
-		herdrCommitSHA.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
+		intent.BaseBranch != "", commitSHAPattern.MatchString(intent.BaseSHA),
+		commitSHAPattern.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
 	})
 }
 
-func validateHerdrCleanupFields(intent HerdrIntent) error {
-	validPhases := map[HerdrCleanupPhase]bool{
-		HerdrCleanupReopen:         true,
-		HerdrCleanupRemove:         true,
-		HerdrCleanupWorkspaceClose: true,
+func validateCleanupFields(intent LaunchIntent) error {
+	validPhases := map[CleanupPhase]bool{
+		CleanupReopen:         true,
+		CleanupRemove:         true,
+		CleanupWorkspaceClose: true,
 	}
-	if err := requireHerdrIntentFields(intent.Kind, []bool{
+	if err := requireIntentFields(intent.Kind, []bool{
 		strings.HasPrefix(intent.ID, "cleanup:"), intent.Launch == nil,
 		intent.BranchName != "", intent.FullBranchRef == "refs/heads/"+intent.BranchName,
 		intent.Resource.WorkspaceID != "", intent.Resource.CurrentPath != "",
 		validPhases[intent.CleanupPhase],
-		intent.CleanupPhase != HerdrCleanupReopen || intent.Coordinator.WorkspaceID != "",
-		!intent.CleanupDeleteBranch || herdrCommitSHA.MatchString(intent.ExpectedHead),
+		intent.CleanupPhase != CleanupReopen || intent.Coordinator.WorkspaceID != "",
+		!intent.CleanupDeleteBranch || commitSHAPattern.MatchString(intent.ExpectedHead),
 	}); err != nil {
 		return err
 	}
-	if intent.CleanupPhase == HerdrCleanupReopen {
-		return validateHerdrResource(intent.Coordinator, false)
+	if intent.CleanupPhase == CleanupReopen {
+		return validateRuntimeResource(intent.Coordinator, false)
 	}
 	return nil
 }
 
-func validateHerdrResumeFields(intent HerdrIntent) error {
+func validateResumeFields(intent LaunchIntent) error {
 	ref := intent.ResumeAgentSession
-	expectedID, _ := HerdrResumeIntentID(
+	expectedID, _ := ResumeIntentID(
 		intent.Session, intent.SocketPath, intent.Resource.WorkspaceID, intent.Resource.PaneID,
 	)
-	return requireHerdrIntentFields(intent.Kind, []bool{
+	return requireIntentFields(intent.Kind, []bool{
 		intent.ID == expectedID,
-		validHerdrResumeLaunch(intent.Launch, ref),
+		validResumeLaunch(intent.Launch, ref),
 		intent.Resource.WorkspaceID != "", intent.Resource.PaneID != "",
 		intent.Resource.TerminalID != "", intent.Resource.CurrentPath != "",
-		intent.Coordinator == (HerdrResource{}), intent.CleanupPhase == "",
+		intent.Coordinator == (RuntimeResource{}), intent.CleanupPhase == "",
 		!intent.CleanupDeleteBranch, intent.Server == nil,
 	})
 }
 
-func validHerdrResumeLaunch(launch *HerdrLaunch, ref *backend.AgentSessionRef) bool {
-	return validHerdrCodexSessionRef(ref) && launch != nil && launch.Agent == "codex" &&
+func validResumeLaunch(launch *LaunchCapsule, ref *backend.AgentSessionRef) bool {
+	return validCodexSessionRef(ref) && launch != nil && launch.Agent == "codex" &&
 		launch.AgentName == "" && len(launch.Args) == 2 && launch.Args[0] == "resume" &&
 		launch.Args[1] == ref.Value
 }
 
-func validHerdrCodexSessionRef(ref *backend.AgentSessionRef) bool {
+func validCodexSessionRef(ref *backend.AgentSessionRef) bool {
 	return ref != nil && ref.Valid() && ref.Source == "herdr:codex" &&
 		ref.Agent == "codex" && ref.Kind == "id"
 }
 
-func requireHerdrIntentFields(kind HerdrIntentKind, requirements []bool) error {
+func requireIntentFields(kind LaunchIntentKind, requirements []bool) error {
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("%s fields are incomplete", kind)
 	}
 	return nil
 }
 
-func validateHerdrIntentStatus(intent HerdrIntent) error {
-	validators := map[HerdrIntentStatus]func(HerdrIntent) error{
-		HerdrIntentPlanned:               validateHerdrPlanned,
-		HerdrIntentIssued:                validateHerdrIssued,
-		HerdrIntentRealized:              validateHerdrRealized,
-		HerdrIntentManualCleanupRequired: validateHerdrManual,
+func validateIntentStatus(intent LaunchIntent) error {
+	validators := map[LaunchIntentStatus]func(LaunchIntent) error{
+		IntentPlanned:               validatePlanned,
+		IntentIssued:                validateIssued,
+		IntentRealized:              validateRealized,
+		IntentManualCleanupRequired: validateManual,
 	}
 	validate, ok := validators[intent.Status]
 	if !ok {
@@ -734,83 +734,83 @@ func validateHerdrIntentStatus(intent HerdrIntent) error {
 	return validate(intent)
 }
 
-func validateHerdrPlanned(intent HerdrIntent) error {
-	if intent.Kind == HerdrIntentRollback || intent.Kind == HerdrIntentCleanup {
-		return validateHerdrResource(intent.Resource, true)
+func validatePlanned(intent LaunchIntent) error {
+	if intent.Kind == IntentRollback || intent.Kind == IntentCleanup {
+		return validateRuntimeResource(intent.Resource, true)
 	}
-	if intent.Resource != (HerdrResource{}) {
+	if intent.Resource != (RuntimeResource{}) {
 		return fmt.Errorf("has a resource before realization")
 	}
 	return nil
 }
 
-func validateHerdrIssued(intent HerdrIntent) error {
-	if intent.Resource == (HerdrResource{}) {
+func validateIssued(intent LaunchIntent) error {
+	if intent.Resource == (RuntimeResource{}) {
 		return nil
 	}
 	// Worktree open recovery retains the realized resource while the
 	// replacement workspace mutation is in flight.
-	if intent.Kind != HerdrIntentWorktree && intent.Kind != HerdrIntentRollback && intent.Kind != HerdrIntentCleanup {
+	if intent.Kind != IntentWorktree && intent.Kind != IntentRollback && intent.Kind != IntentCleanup {
 		return fmt.Errorf("has a resource before realization")
 	}
-	return validateHerdrResource(intent.Resource, true)
+	return validateRuntimeResource(intent.Resource, true)
 }
 
-func validateHerdrRealized(intent HerdrIntent) error {
-	return validateHerdrResource(intent.Resource, intent.Kind != HerdrIntentCoordinator)
+func validateRealized(intent LaunchIntent) error {
+	return validateRuntimeResource(intent.Resource, intent.Kind != IntentCoordinator)
 }
 
-func validateHerdrManual(intent HerdrIntent) error {
+func validateManual(intent LaunchIntent) error {
 	if strings.TrimSpace(intent.Failure) == "" {
 		return fmt.Errorf("requires a failure reason")
 	}
 	return nil
 }
 
-func validateHerdrIntentOwnership(intent HerdrIntent) error {
-	branchKinds := map[HerdrIntentKind]bool{
-		HerdrIntentWorktree: true,
-		HerdrIntentRollback: true,
-		HerdrIntentCleanup:  true,
+func validateIntentOwnership(intent LaunchIntent) error {
+	branchKinds := map[LaunchIntentKind]bool{
+		IntentWorktree: true,
+		IntentRollback: true,
+		IntentCleanup:  true,
 	}
 	if intent.BranchCreated && (!branchKinds[intent.Kind] || intent.BranchExisted) {
 		return fmt.Errorf("has an invalid branch ownership record")
 	}
-	if intent.Resource != (HerdrResource{}) &&
+	if intent.Resource != (RuntimeResource{}) &&
 		filepath.Clean(intent.Resource.CurrentPath) != filepath.Clean(intent.WorktreePath) {
 		return fmt.Errorf("resource current path does not match worktree path")
 	}
-	if err := validateHerdrLaunch(intent); err != nil {
+	if err := validateLaunch(intent); err != nil {
 		return err
 	}
 	return nil
 }
 
-func validateHerdrLaunch(intent HerdrIntent) error {
+func validateLaunch(intent LaunchIntent) error {
 	launch := intent.Launch
 	if launch == nil {
 		return nil
 	}
-	if !herdrLaunchAllowed(intent.Kind, intent.Status) {
+	if !launchAllowed(intent.Kind, intent.Status) {
 		return fmt.Errorf("launch fields require an issued coordinator or realized worktree")
 	}
 	requirements := []bool{
-		herdrLaunchNonce.MatchString(launch.Nonce),
+		launchNoncePattern.MatchString(launch.Nonce),
 		cleanAbsolute(launch.Executable),
-		validHerdrCodexPaths(launch),
+		validCodexPaths(launch),
 		cleanAbsolute(launch.EnvFilePath),
 		launch.EnvNameCount > 0,
 	}
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("launch fields are incomplete")
 	}
-	if err := validateHerdrLaunchArgs(launch.Args); err != nil {
+	if err := validateLaunchArgs(launch.Args); err != nil {
 		return err
 	}
-	if err := validateHerdrLaunchAgentIdentity(intent.Kind, launch); err != nil {
+	if err := validateLaunchAgentIdentity(intent.Kind, launch); err != nil {
 		return err
 	}
-	if err := validateHerdrEmitter(launch); err != nil {
+	if err := validateEmitter(launch); err != nil {
 		return err
 	}
 	if launch.TokenIssued && !launch.LauncherReady {
@@ -819,27 +819,27 @@ func validateHerdrLaunch(intent HerdrIntent) error {
 	return nil
 }
 
-func validateHerdrLaunchAgentIdentity(kind HerdrIntentKind, launch *HerdrLaunch) error {
-	if kind == HerdrIntentResume && launch.Agent == "codex" && launch.AgentName == "" {
+func validateLaunchAgentIdentity(kind LaunchIntentKind, launch *LaunchCapsule) error {
+	if kind == IntentResume && launch.Agent == "codex" && launch.AgentName == "" {
 		return nil
 	}
 	if (launch.Agent == "") != (launch.AgentName == "") {
 		return fmt.Errorf("launch agent identity is partial")
 	}
-	if launch.AgentName != "" && !herdrAgentName.MatchString(launch.AgentName) {
+	if launch.AgentName != "" && !agentNamePattern.MatchString(launch.AgentName) {
 		return fmt.Errorf("launch agent name is invalid")
 	}
 	return nil
 }
 
-func validateHerdrEmitter(launch *HerdrLaunch) error {
+func validateEmitter(launch *LaunchCapsule) error {
 	if launch.EmitterNonce == "" {
 		if launch.PendingReportedState != "" {
 			return fmt.Errorf("pending telemetry requires an emitter nonce")
 		}
 		return nil
 	}
-	if !validHerdrEmitterAgent(launch) || !telemetry.ValidNonce(launch.EmitterNonce) {
+	if !validEmitterAgent(launch) || !telemetry.ValidNonce(launch.EmitterNonce) {
 		return fmt.Errorf("emitter fields require a Claude or Codex Plan launch and valid nonce")
 	}
 	if launch.PendingReportedState == "" {
@@ -852,11 +852,11 @@ func validateHerdrEmitter(launch *HerdrLaunch) error {
 	return nil
 }
 
-func validHerdrEmitterAgent(launch *HerdrLaunch) bool {
+func validEmitterAgent(launch *LaunchCapsule) bool {
 	return launch.Agent == "claude" || launch.Agent == "codex" && launch.CodexPlanStatusPath != ""
 }
 
-func validHerdrCodexPaths(launch *HerdrLaunch) bool {
+func validCodexPaths(launch *LaunchCapsule) bool {
 	checks := []bool{
 		launch.TeamDBPath == "" || cleanAbsolute(launch.TeamDBPath),
 		launch.CodexTeamStatusPath == "" ||
@@ -869,7 +869,7 @@ func validHerdrCodexPaths(launch *HerdrLaunch) bool {
 	return !slices.Contains(checks, false)
 }
 
-func validateHerdrLaunchArgs(args []string) error {
+func validateLaunchArgs(args []string) error {
 	for _, arg := range args {
 		if strings.ContainsRune(arg, '\x00') {
 			return fmt.Errorf("launch argv contains NUL")
@@ -878,15 +878,15 @@ func validateHerdrLaunchArgs(args []string) error {
 	return nil
 }
 
-func herdrLaunchAllowed(kind HerdrIntentKind, status HerdrIntentStatus) bool {
+func launchAllowed(kind LaunchIntentKind, status LaunchIntentStatus) bool {
 	switch kind {
-	case HerdrIntentWorktree:
-		return status == HerdrIntentRealized || status == HerdrIntentManualCleanupRequired
-	case HerdrIntentCoordinator:
-		return status == HerdrIntentIssued || status == HerdrIntentRealized ||
-			status == HerdrIntentManualCleanupRequired
-	case HerdrIntentResume:
-		return status == HerdrIntentRealized
+	case IntentWorktree:
+		return status == IntentRealized || status == IntentManualCleanupRequired
+	case IntentCoordinator:
+		return status == IntentIssued || status == IntentRealized ||
+			status == IntentManualCleanupRequired
+	case IntentResume:
+		return status == IntentRealized
 	default:
 		return false
 	}
@@ -896,15 +896,15 @@ func cleanAbsolute(path string) bool {
 	return filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.ContainsRune(path, '\x00')
 }
 
-func validateHerdrRuntimeParent(intent HerdrIntent, parent, runtimeParent string) error {
+func validateRuntimeParent(intent LaunchIntent, parent, runtimeParent string) error {
 	switch {
 	case strings.HasPrefix(runtimeParent, "plan:") && runtimeParent != parent:
-		if validGenericHerdrRuntimeParent(intent, parent, runtimeParent) {
+		if validGenericRuntimeParent(intent, parent, runtimeParent) {
 			return nil
 		}
 		return fmt.Errorf("runtime parent does not match plan parent")
 	case !strings.HasPrefix(parent, "plan:") && runtimeParent != parent:
-		if validGenericHerdrRuntimeParent(intent, parent, runtimeParent) {
+		if validGenericRuntimeParent(intent, parent, runtimeParent) {
 			return nil
 		}
 		return fmt.Errorf("runtime parent does not match parent")
@@ -913,18 +913,18 @@ func validateHerdrRuntimeParent(intent HerdrIntent, parent, runtimeParent string
 	}
 }
 
-func validGenericHerdrRuntimeParent(intent HerdrIntent, parent, runtimeParent string) bool {
-	validKind := intent.Kind == HerdrIntentCoordinator || intent.Kind == HerdrIntentResume
+func validGenericRuntimeParent(intent LaunchIntent, parent, runtimeParent string) bool {
+	validKind := intent.Kind == IntentCoordinator || intent.Kind == IntentResume
 	if !validKind || parent != "@manual" || intent.IssueNum >= 0 {
 		return false
 	}
-	_, ok := herdrBindingParent(
+	_, ok := bindingParent(
 		runtimeParent, intent.IssueNum, intent.OwnerProjectRoot, intent.OwnerProjectRoot,
 	)
 	return ok
 }
 
-func reserveHerdrIntentIdentity(
+func reserveIntentIdentity(
 	reservations map[string]string,
 	id, fullBranchRef, worktreePath string,
 ) error {
@@ -940,7 +940,7 @@ func reserveHerdrIntentIdentity(
 	return nil
 }
 
-func validateHerdrResource(resource HerdrResource, worktree bool) error {
+func validateRuntimeResource(resource RuntimeResource, worktree bool) error {
 	if resource.WorkspaceID == "" || resource.Label == "" || resource.PaneID == "" ||
 		resource.TerminalID == "" || resource.CurrentPath == "" {
 		return fmt.Errorf("herdr resource is incomplete")

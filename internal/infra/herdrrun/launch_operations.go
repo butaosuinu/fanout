@@ -253,13 +253,13 @@ func (s *OwnedSession) requireRestartResumeToken(paneID, nonce string) error {
 	if !validRequest {
 		return fmt.Errorf("invalid Herdr restart resume token request")
 	}
-	journal, err := state.LoadHerdrIntentsPath(s.ControlPath)
+	journal, err := state.LoadLaunchJournalPath(s.ControlPath)
 	if err != nil {
 		return err
 	}
 	server, found, err := journal.ServerLifecycleIntent()
 	validLifecycle := !slices.Contains([]bool{
-		err == nil, found, server.Kind == state.HerdrIntentRestart,
+		err == nil, found, server.Kind == state.IntentRestart,
 		server.Server != nil, serverRestartTokenMatches(server.Server, s),
 	}, false)
 	if !validLifecycle {
@@ -277,14 +277,14 @@ func (s *OwnedSession) requireRestartResumeToken(paneID, nonce string) error {
 	return nil
 }
 
-func serverRestartTokenMatches(server *state.HerdrServerIdentity, session *OwnedSession) bool {
+func serverRestartTokenMatches(server *state.RuntimeServerIdentity, session *OwnedSession) bool {
 	return server != nil && session != nil && server.GitCommonDir == session.GitCommonDir &&
 		server.RuntimeDir == session.RuntimeDir && server.Session == session.Session &&
 		server.SocketPath == session.SocketPath && server.ClientSocketPath == session.ClientSocketPath
 }
 
-func exactRestartResumeTokenIntent(intent state.HerdrIntent, session, socketPath, paneID, nonce string) bool {
-	return intent.Kind == state.HerdrIntentResume && intent.Status == state.HerdrIntentRealized &&
+func exactRestartResumeTokenIntent(intent state.LaunchIntent, session, socketPath, paneID, nonce string) bool {
+	return intent.Kind == state.IntentResume && intent.Status == state.IntentRealized &&
 		intent.Session == session && intent.SocketPath == socketPath &&
 		intent.Resource.PaneID == paneID && intent.Launch != nil && intent.Launch.Nonce == nonce &&
 		!intent.Launch.TokenIssued

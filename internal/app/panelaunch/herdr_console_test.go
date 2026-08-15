@@ -85,7 +85,7 @@ func TestHerdrConsolePaneInStoreDoesNotIgnoreIncompleteIdentity(t *testing.T) {
 }
 
 func TestHerdrShellStatePaneUsesAdmittedCanonicalPath(t *testing.T) {
-	intent := state.HerdrIntent{WorktreePath: "/canonical/repo"}
+	intent := state.LaunchIntent{WorktreePath: "/canonical/repo"}
 	live := backend.LivePane{
 		Ref:            backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
 		WorkspaceLabel: "fanout-manual-owned",
@@ -100,7 +100,7 @@ func TestHerdrShellStatePaneUsesAdmittedCanonicalPath(t *testing.T) {
 }
 
 func TestValidateHerdrConsoleIntentRootRejectsLinkedWorktreeRecovery(t *testing.T) {
-	intent := state.HerdrIntent{WorktreePath: "/repo/linked-a"}
+	intent := state.LaunchIntent{WorktreePath: "/repo/linked-a"}
 	if err := validateHerdrConsoleIntentRoot(intent, "/repo/linked-b"); err == nil {
 		t.Fatal("console recovery accepted an intent owned by another linked worktree")
 	}
@@ -124,12 +124,12 @@ func TestStaleHerdrConsoleTargetAdmitsOwnedRouteWithNewProcessIdentity(t *testin
 	saved.SourceProjectRoot = "/repo"
 	live := backend.LivePane{
 		Ref: backend.PaneRef{
-			Backend: backend.Herdr, Workspace: saved.HerdrWorkspaceID, Pane: "pane-new",
+			Backend: backend.Herdr, Workspace: saved.WorkspaceID, Pane: "pane-new",
 		},
-		WorkspaceLabel: saved.HerdrWorkspaceLabel,
+		WorkspaceLabel: saved.WorkspaceLabel,
 		TerminalID:     "terminal-new",
-		SessionID:      saved.HerdrSession,
-		SocketPath:     saved.HerdrSocketPath,
+		SessionID:      saved.SessionID,
+		SocketPath:     saved.SocketPath,
 		CurrentPath:    saved.WorktreePath,
 	}
 
@@ -150,8 +150,8 @@ func TestStaleHerdrConsoleTargetAdmitsOwnedRouteWithNewProcessIdentity(t *testin
 func TestStaleHerdrConsoleWorkspaceWithoutPaneRequiresManualCleanup(t *testing.T) {
 	saved := herdrConsoleTestPane("/repo", "workspace-root", "pane-old")
 	workspaces := []backend.WorkspaceObservation{{
-		WorkspaceID: saved.HerdrWorkspaceID,
-		Label:       saved.HerdrWorkspaceLabel,
+		WorkspaceID: saved.WorkspaceID,
+		Label:       saved.WorkspaceLabel,
 	}}
 	present, err := savedHerdrConsoleWorkspacePresent(saved, workspaces)
 	if err != nil || !present {
@@ -229,23 +229,23 @@ func TestRemoveStaleHerdrConsoleStateRemovesCompletedIntentBeforeRow(t *testing.
 	if err = locked.RecordPane(pane); err != nil {
 		t.Fatal(err)
 	}
-	journal, err := locked.HerdrIntents(root)
+	journal, err := locked.LaunchJournal(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intentID, err := state.HerdrCoordinatorIntentID(HerdrConsoleRuntimeParent, "", 0)
+	intentID, err := state.CoordinatorIntentID(HerdrConsoleRuntimeParent, "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal.UpsertIntent(state.HerdrIntent{
-		ID: intentID, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentRealized,
+	journal.UpsertIntent(state.LaunchIntent{
+		ID: intentID, Kind: state.IntentCoordinator, Status: state.IntentRealized,
 		Parent: HerdrConsoleRuntimeParent, RuntimeParent: HerdrConsoleRuntimeParent,
-		WorktreePath: pane.WorktreePath, WorkspaceLabel: pane.HerdrWorkspaceLabel,
-		Resource: state.HerdrResource{
-			WorkspaceID: pane.HerdrWorkspaceID, Label: pane.HerdrWorkspaceLabel,
-			PaneID: pane.PaneID, TerminalID: pane.HerdrTerminalID, CurrentPath: pane.WorktreePath,
+		WorktreePath: pane.WorktreePath, WorkspaceLabel: pane.WorkspaceLabel,
+		Resource: state.RuntimeResource{
+			WorkspaceID: pane.WorkspaceID, Label: pane.WorkspaceLabel,
+			PaneID: pane.PaneID, TerminalID: pane.TerminalID, CurrentPath: pane.WorktreePath,
 		},
-		Session: pane.HerdrSession, SocketPath: pane.HerdrSocketPath,
+		Session: pane.SessionID, SocketPath: pane.SocketPath,
 		ExpiresUnixMS: time.Now().Add(time.Minute).UnixMilli(),
 	})
 	if err = journal.Save(); err != nil {
@@ -254,7 +254,7 @@ func TestRemoveStaleHerdrConsoleStateRemovesCompletedIntentBeforeRow(t *testing.
 	if err = removeStaleHerdrConsoleState(locked, root, pane); err != nil {
 		t.Fatal(err)
 	}
-	journal, err = locked.HerdrIntents(root)
+	journal, err = locked.LaunchJournal(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,9 +295,9 @@ func herdrConsoleTestPane(root, workspace, paneID string) state.Pane {
 		Parent: ManualParentRef, RuntimeParent: HerdrConsoleRuntimeParent,
 		IssueNum: -1, Kind: state.PaneKindShell, Slug: "herdr-console",
 		Backend: backend.Herdr, PaneID: paneID,
-		HerdrWorkspaceID: workspace, HerdrWorkspaceLabel: "fanout-console-owned",
-		HerdrTerminalID: "terminal-" + paneID,
-		HerdrSession:    "fanout-owned", HerdrSocketPath: "/tmp/fanout-owned.sock",
+		WorkspaceID: workspace, WorkspaceLabel: "fanout-console-owned",
+		TerminalID: "terminal-" + paneID,
+		SessionID:  "fanout-owned", SocketPath: "/tmp/fanout-owned.sock",
 		Agent: state.PaneKindShell, DisplayName: "Herdr console",
 		WorktreePath: root, CreatedAt: time.Unix(0, 0).UTC().Format(time.RFC3339),
 	}

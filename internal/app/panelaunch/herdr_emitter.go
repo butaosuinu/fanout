@@ -21,7 +21,7 @@ const herdrClaudeExitReasons = "logout|prompt_input_exit|bypass_permissions_disa
 func newHerdrEmitterLaunch(
 	req Request,
 	route backend.OwnedLaunchRoute,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	launchNonce string,
 	agentID string,
 	statePath string,
@@ -74,7 +74,7 @@ func herdrClaudeHookSettings(fanoutPath string) (string, error) {
 
 func herdrEmitterEnvironment(
 	statePath string,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
 	launchNonce string,
 	emitterNonce string,

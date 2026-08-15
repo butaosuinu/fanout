@@ -171,8 +171,8 @@ func TestHerdrRowInteractiveActionsAreDisabledBeforePorts(t *testing.T) {
 
 func TestOwnedHerdrPaneFocusAndPeekUsePersistedIdentityPorts(t *testing.T) {
 	saved := state.Pane{
-		Backend: backend.Herdr, PaneID: "p1", HerdrWorkspaceID: "w1",
-		HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "t1",
+		Backend: backend.Herdr, PaneID: "p1", WorkspaceID: "w1",
+		WorkspaceLabel: "owned-label", TerminalID: "t1",
 	}
 	focused, captured := false, false
 	m := newModel(Options{
@@ -216,9 +216,9 @@ func TestAutomaticHerdrFocusReloadsPersistedPaneIdentity(t *testing.T) {
 	session := backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "thread-1"}
 	row := state.Pane{
 		Parent: "524", IssueNum: 530, Backend: backend.Herdr, PaneID: "w1:p1",
-		Agent: "codex", HerdrAgentID: "agent-1", HerdrAgentSession: &session,
-		HerdrWorkspaceID: "w1", HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "term-1",
-		HerdrRepoKey: "/repo/.git", HerdrSession: "owned-session", HerdrSocketPath: "/tmp/owned.sock",
+		Agent: "codex", AgentID: "agent-1", AgentSession: &session,
+		WorkspaceID: "w1", WorkspaceLabel: "owned-label", TerminalID: "term-1",
+		RepoKey: "/repo/.git", SessionID: "owned-session", SocketPath: "/tmp/owned.sock",
 		WorktreePath: root + "/child",
 	}
 	locked, err := state.LockProject(root)
@@ -252,7 +252,7 @@ func TestAutomaticHerdrFocusReloadsPersistedPaneIdentity(t *testing.T) {
 	})
 	msg := m.focusPaneIDCmd("w1:p1", "launched")()
 	focusedMsg, ok := msg.(paneFocusedMsg)
-	if !ok || focusedMsg.err != nil || focused.HerdrWorkspaceLabel != "owned-label" || focused.HerdrTerminalID != "term-1" {
+	if !ok || focusedMsg.err != nil || focused.WorkspaceLabel != "owned-label" || focused.TerminalID != "term-1" {
 		t.Fatalf("automatic Herdr focus = msg:%#v pane:%+v", msg, focused)
 	}
 }
@@ -261,7 +261,7 @@ func TestHerdrFocusRetainsTargetRouteObservationFailure(t *testing.T) {
 	pane := paneView{
 		Backend: backend.Herdr,
 		savedPane: state.Pane{
-			HerdrSession: "owned-session", HerdrSocketPath: "/tmp/owned.sock",
+			SessionID: "owned-session", SocketPath: "/tmp/owned.sock",
 		},
 	}
 	route := backend.ObservationRoute{

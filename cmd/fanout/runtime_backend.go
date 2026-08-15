@@ -373,7 +373,7 @@ func refreshHerdrIntentBindings(inputs *runtimeBackendInputs) error {
 		inputs.provisionalIntents = append([]backend.Binding(nil), inputs.suppliedIntents...)
 		return nil
 	}
-	control, err := state.LoadHerdrIntents(inputs.projectRoot)
+	control, err := state.LoadLaunchJournal(inputs.projectRoot)
 	if err != nil {
 		return fmt.Errorf("load Herdr runtime bindings: %w", err)
 	}
@@ -491,8 +491,8 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 				addRoute(runtimeReadRoute{name: backend.Tmux})
 			case backend.Herdr:
 				hasHerdrRoute = true
-				session := strings.TrimSpace(pane.HerdrSession)
-				socketPath := strings.TrimSpace(pane.HerdrSocketPath)
+				session := strings.TrimSpace(pane.SessionID)
+				socketPath := strings.TrimSpace(pane.SocketPath)
 				if session == "" || socketPath == "" {
 					routeErr = errors.Join(routeErr, backend.ObservationRouteUnavailable(
 						backend.ObservationRoute{Backend: backend.Herdr, SessionID: session, SocketPath: socketPath},
@@ -516,7 +516,7 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 		}
 	}
 
-	control, controlErr := state.LoadHerdrIntents(projectRoot)
+	control, controlErr := state.LoadLaunchJournal(projectRoot)
 	if controlErr != nil {
 		hasHerdrRoute = true
 		routeErr = errors.Join(routeErr, fmt.Errorf("load Herdr control routes: %w", controlErr))
@@ -562,8 +562,8 @@ func runtimeReadRoutes(projectRoot string, includeTmux bool) ([]runtimeReadRoute
 	return routes, routeErr
 }
 
-func herdrIntentRuntimeRoute(intent state.HerdrIntent) (string, string) {
-	if state.IsHerdrServerLifecycleKind(intent.Kind) && intent.Server != nil {
+func herdrIntentRuntimeRoute(intent state.LaunchIntent) (string, string) {
+	if state.IsServerLifecycleKind(intent.Kind) && intent.Server != nil {
 		return strings.TrimSpace(intent.Server.Session), strings.TrimSpace(intent.Server.SocketPath)
 	}
 	return strings.TrimSpace(intent.Session), strings.TrimSpace(intent.SocketPath)

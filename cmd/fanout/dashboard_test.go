@@ -46,9 +46,9 @@ func TestDashboardHerdrPeekAdmissionReopensAndBindsOwnedSessionPerRequest(t *tes
 	}
 	owns, _ := dashboardHerdrPeekPorts("/repo", opener)
 	pane := sessionview.PaneView{SavedPane: state.Pane{
-		Backend: backend.Herdr, PaneID: "w1:p1", HerdrWorkspaceID: "w1",
-		HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "term-1",
-		HerdrSession: "owned", HerdrSocketPath: "/tmp/owned.sock", WorktreePath: "/repo",
+		Backend: backend.Herdr, PaneID: "w1:p1", WorkspaceID: "w1",
+		WorkspaceLabel: "owned-label", TerminalID: "term-1",
+		SessionID: "owned", SocketPath: "/tmp/owned.sock", WorktreePath: "/repo",
 	}}
 	admitted := owns(pane)
 	if admitted {

@@ -180,10 +180,10 @@ func TestReportHerdrSidebarMetadataNeverFailsALaunch(t *testing.T) {
 	}
 }
 
-func testHerdrMetadataIntent() state.HerdrIntent {
-	return state.HerdrIntent{
+func testHerdrMetadataIntent() state.LaunchIntent {
+	return state.LaunchIntent{
 		WorktreePath: "/repo/.fanout/worktrees/child",
-		Resource: state.HerdrResource{
+		Resource: state.RuntimeResource{
 			WorkspaceID: "w2", Label: "fanout-worktree-abc",
 			PaneID: "w2:p1", TerminalID: "term-child",
 			CurrentPath: "/repo/.fanout/worktrees/child",

@@ -65,7 +65,7 @@ func (l *Launcher) launchHerdr(req Request) (Result, bool) {
 	if err != nil {
 		return l.failHerdr(req, "start Codex TUI controller", err)
 	}
-	if err := finalizeHerdrPane(operation.locked, l.Info.ProjectRoot, intent, func(latest state.HerdrIntent) (state.Pane, error) {
+	if err := finalizeHerdrPane(operation.locked, l.Info.ProjectRoot, intent, func(latest state.LaunchIntent) (state.Pane, error) {
 		return herdrAgentStatePane(req, latest, live, codexStatus)
 	}); err != nil {
 		return l.failHerdr(req, "finalize launch", err)
@@ -138,11 +138,11 @@ func admitHerdrCoordinatorLaunch(
 	if err != nil {
 		return fmt.Errorf("canonicalize Herdr coordinator launch owner: %w", err)
 	}
-	intentID, err := state.HerdrCoordinatorIntentID(ManualParentRef, filepath.Clean(ownerRoot), issueNum)
+	intentID, err := state.CoordinatorIntentID(ManualParentRef, filepath.Clean(ownerRoot), issueNum)
 	if err != nil {
 		return err
 	}
-	journal, err := locked.HerdrIntents(projectRoot)
+	journal, err := locked.LaunchJournal(projectRoot)
 	if err != nil {
 		return err
 	}
@@ -150,7 +150,7 @@ func admitHerdrCoordinatorLaunch(
 	if !found {
 		return nil
 	}
-	if intent.Status == state.HerdrIntentManualCleanupRequired {
+	if intent.Status == state.IntentManualCleanupRequired {
 		return herdrManualCleanupError(intent)
 	}
 	if intent.Launch == nil || !intent.Launch.TokenIssued {
@@ -174,17 +174,17 @@ func herdrCoordinatorIssueNum(req Request) int {
 func (l *Launcher) realizeHerdrLaunch(
 	req Request,
 	operation herdrLaunchOperation,
-) (state.HerdrIntent, error) {
+) (state.LaunchIntent, error) {
 	coordinator, err := l.realizeHerdrCoordinator(operation.ctx, req, operation.locked, operation.route)
 	if err != nil {
-		return state.HerdrIntent{}, fmt.Errorf("realize coordinator: %w", err)
+		return state.LaunchIntent{}, fmt.Errorf("realize coordinator: %w", err)
 	}
 	if recordErr := l.recordHerdrCoordinator(operation.locked, coordinator, operation.route); recordErr != nil {
 		return coordinator, fmt.Errorf("record coordinator: %w", recordErr)
 	}
 	intent, err := l.realizeHerdrChild(operation.ctx, req, operation.locked, operation.route)
 	if err != nil {
-		return state.HerdrIntent{}, fmt.Errorf("realize worktree: %w", err)
+		return state.LaunchIntent{}, fmt.Errorf("realize worktree: %w", err)
 	}
 	result := hooks.RunBlocking(hooks.WorktreeCreated, paneHookContext(req, l.Info.ProjectRoot, intent.WorktreePath, ""), req.Hooks, l.Log)
 	if !result.OK() {
@@ -216,14 +216,14 @@ func (l *Launcher) realizeHerdrCoordinator(
 	req Request,
 	locked *state.LockedStore,
 	route backend.OwnedLaunchRoute,
-) (state.HerdrIntent, error) {
+) (state.LaunchIntent, error) {
 	result, err := RealizeHerdrCoordinator(ctx, HerdrCoordinatorRequest{
 		Parent: req.ParentRef, IssueNum: herdrCoordinatorIssueNum(req), ProjectRoot: l.Info.ProjectRoot,
 		SourceRoot: l.Info.ProjectRoot, CWD: l.Info.ProjectRoot,
 		HerdrSession: route.Session, SocketPath: route.SocketPath,
 	}, l.Herdr, locked, HerdrRealizeHooks{})
 	if err != nil && !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
-		return state.HerdrIntent{}, err
+		return state.LaunchIntent{}, err
 	}
 	observationIntent := herdrCoordinatorObservationIntent(ctx, result.Intent)
 	verifyErr := retryHerdrObservation(ctx, observationIntent, func(observeCtx context.Context) error {
@@ -231,21 +231,21 @@ func (l *Launcher) realizeHerdrCoordinator(
 	})
 	if err := verifyErr; err != nil {
 		if !errors.Is(err, errHerdrLauncherIdentityChanged) {
-			return state.HerdrIntent{}, err
+			return state.LaunchIntent{}, err
 		}
-		journal, journalErr := locked.HerdrIntents(l.Info.ProjectRoot)
+		journal, journalErr := locked.LaunchJournal(l.Info.ProjectRoot)
 		if journalErr != nil {
-			return state.HerdrIntent{}, errors.Join(err, journalErr)
+			return state.LaunchIntent{}, errors.Join(err, journalErr)
 		}
-		return state.HerdrIntent{}, markHerdrIntentManual(journal, result.Intent, err)
+		return state.LaunchIntent{}, markHerdrIntentManual(journal, result.Intent, err)
 	}
 	return result.Intent, nil
 }
 
 func herdrCoordinatorObservationIntent(
 	ctx context.Context,
-	intent state.HerdrIntent,
-) state.HerdrIntent {
+	intent state.LaunchIntent,
+) state.LaunchIntent {
 	// A coordinator outlives its creating launch; only this observation uses the current budget.
 	deadline := time.Now().Add(maxHerdrRealizeTimeout)
 	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
@@ -260,7 +260,7 @@ func (l *Launcher) realizeHerdrChild(
 	req Request,
 	locked *state.LockedStore,
 	route backend.OwnedLaunchRoute,
-) (state.HerdrIntent, error) {
+) (state.LaunchIntent, error) {
 	result, err := RealizeHerdrWorktree(ctx, HerdrWorktreeRequest{
 		Parent: req.ParentRef, IssueNum: req.Number, TaskID: req.TaskID,
 		ProjectRoot: l.Info.ProjectRoot, SourceRoot: l.Info.ProjectRoot,
@@ -270,14 +270,14 @@ func (l *Launcher) realizeHerdrChild(
 		HerdrSession: route.Session, SocketPath: route.SocketPath,
 	}, l.Herdr, locked, HerdrRealizeHooks{})
 	if err != nil && !errors.Is(err, ErrHerdrLauncherReadinessDeferred) {
-		return state.HerdrIntent{}, err
+		return state.LaunchIntent{}, err
 	}
 	return result.Intent, nil
 }
 
 func (l *Launcher) recordHerdrCoordinator(
 	locked *state.LockedStore,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
 ) error {
 	runtimeParent := herdrCoordinatorRuntimeParent(intent)
@@ -290,7 +290,7 @@ func (l *Launcher) recordHerdrCoordinator(
 }
 
 func herdrCoordinatorPane(
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
 	runtimeParent string,
 	number int,
@@ -299,9 +299,9 @@ func herdrCoordinatorPane(
 		Parent: ManualParentRef, RuntimeParent: runtimeParent, IssueNum: number,
 		Kind: state.PaneKindShell, Slug: fmt.Sprintf("herdr-coordinator-%d", -number),
 		Backend: backend.Herdr, PaneID: intent.Resource.PaneID,
-		HerdrWorkspaceID: intent.Resource.WorkspaceID, HerdrWorkspaceLabel: intent.Resource.Label,
-		HerdrTerminalID: intent.Resource.TerminalID,
-		HerdrSession:    route.Session, HerdrSocketPath: route.SocketPath,
+		WorkspaceID: intent.Resource.WorkspaceID, WorkspaceLabel: intent.Resource.Label,
+		TerminalID: intent.Resource.TerminalID,
+		SessionID:  route.Session, SocketPath: route.SocketPath,
 		DisplayName: "Herdr coordinator: " + runtimeParent, WorktreePath: intent.Resource.CurrentPath,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
@@ -310,7 +310,7 @@ func herdrCoordinatorPane(
 func (l *Launcher) findHerdrCoordinatorRow(
 	locked *state.LockedStore,
 	runtimeParent string,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
 ) (bool, error) {
 	roots, err := herdrCoordinatorRowRoots(l.Info.ProjectRoot, runtimeParent, intent.OwnerProjectRoot)
@@ -331,7 +331,7 @@ func (l *Launcher) findHerdrCoordinatorRow(
 }
 
 func herdrCoordinatorRowRoots(projectRoot, runtimeParent, ownerProjectRoot string) ([]string, error) {
-	owner, err := state.HerdrOwnerProjectRoot(runtimeParent, ownerProjectRoot)
+	owner, err := state.IntentOwnerProjectRoot(runtimeParent, ownerProjectRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Herdr coordinator owner: %w", err)
 	}
@@ -384,7 +384,7 @@ func findHerdrCoordinatorPane(store state.Store, runtimeParent string) (state.Pa
 	return state.Pane{}, false
 }
 
-func herdrCoordinatorRuntimeParent(intent state.HerdrIntent) string {
+func herdrCoordinatorRuntimeParent(intent state.LaunchIntent) string {
 	if intent.RuntimeParent == WatchParentRef {
 		return strconv.Itoa(intent.IssueNum)
 	}
@@ -393,16 +393,16 @@ func herdrCoordinatorRuntimeParent(intent state.HerdrIntent) string {
 
 func validateHerdrCoordinatorPane(
 	pane state.Pane,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
 ) error {
 	requirements := []bool{
 		pane.Backend == backend.Herdr, pane.IssueNum < 0,
 		pane.PaneID == intent.Resource.PaneID,
-		pane.HerdrWorkspaceID == intent.Resource.WorkspaceID,
-		pane.HerdrWorkspaceLabel == intent.Resource.Label,
-		pane.HerdrTerminalID == intent.Resource.TerminalID,
-		pane.HerdrSession == route.Session, pane.HerdrSocketPath == route.SocketPath,
+		pane.WorkspaceID == intent.Resource.WorkspaceID,
+		pane.WorkspaceLabel == intent.Resource.Label,
+		pane.TerminalID == intent.Resource.TerminalID,
+		pane.SessionID == route.Session, pane.SocketPath == route.SocketPath,
 		filepath.Clean(pane.WorktreePath) == filepath.Clean(intent.Resource.CurrentPath),
 	}
 	if slices.Contains(requirements, false) {
@@ -414,11 +414,11 @@ func validateHerdrCoordinatorPane(
 func (l *Launcher) prepareHerdrLaunch(
 	locked *state.LockedStore,
 	route backend.OwnedLaunchRoute,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	validate herdrLaunchValidator,
 	build herdrLaunchCapsuleBuilder,
-) (state.HerdrIntent, error) {
-	journal, err := locked.HerdrIntents(l.Info.ProjectRoot)
+) (state.LaunchIntent, error) {
+	journal, err := locked.LaunchJournal(l.Info.ProjectRoot)
 	if err != nil {
 		return intent, err
 	}
@@ -439,12 +439,12 @@ func (l *Launcher) prepareHerdrLaunch(
 
 func buildAndPersistHerdrLaunch(
 	runtime HerdrLaunchRuntime,
-	journal *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
 	runtimeDir string,
 	validate herdrLaunchValidator,
 	build herdrLaunchCapsuleBuilder,
-) (state.HerdrIntent, error) {
+) (state.LaunchIntent, error) {
 	if build == nil {
 		return intent, validate(nil)
 	}
@@ -469,7 +469,7 @@ type resolvedHerdrLaunch struct {
 func (l *Launcher) resolveHerdrLaunch(
 	req Request,
 	route backend.OwnedLaunchRoute,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 ) (resolvedHerdrLaunch, error) {
 	nonce, err := randomHerdrToken()
 	if err != nil {
@@ -497,9 +497,9 @@ func (l *Launcher) resolveHerdrLaunch(
 func (l *Launcher) prepareHerdrLaunchCapsule(
 	req Request,
 	route backend.OwnedLaunchRoute,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	callerEnvironment []string,
-) (*state.HerdrLaunch, error) {
+) (*state.LaunchCapsule, error) {
 	resolved, err := l.resolveHerdrLaunch(req, route, intent)
 	if err != nil {
 		return nil, err
@@ -513,7 +513,7 @@ func (l *Launcher) prepareHerdrLaunchCapsule(
 	if err != nil {
 		return nil, err
 	}
-	return &state.HerdrLaunch{
+	return &state.LaunchCapsule{
 		Nonce: resolved.nonce, EmitterNonce: resolved.emitter.nonce, Agent: req.Agent,
 		AgentName:  resolved.agentName,
 		Executable: resolved.spec.Executable, Args: resolved.spec.Args,
@@ -556,7 +556,7 @@ func newHerdrPlanStatusPath(req Request) string {
 	return ""
 }
 
-func validateHerdrLaunchBinding(req Request, launch *state.HerdrLaunch) error {
+func validateHerdrLaunchBinding(req Request, launch *state.LaunchCapsule) error {
 	if err := validateHerdrTeamBinding(req, launch); err != nil {
 		return err
 	}
@@ -574,7 +574,7 @@ func validateHerdrLaunchBinding(req Request, launch *state.HerdrLaunch) error {
 	return nil
 }
 
-func validateHerdrTeamBinding(req Request, launch *state.HerdrLaunch) error {
+func validateHerdrTeamBinding(req Request, launch *state.LaunchCapsule) error {
 	requestedTeam := req.TeamDBPath != ""
 	savedTeam := launch.TeamDBPath != ""
 	switch {
@@ -590,7 +590,7 @@ func validateHerdrTeamBinding(req Request, launch *state.HerdrLaunch) error {
 	return nil
 }
 
-func waitForHerdrCodexTUI(req Request, intent state.HerdrIntent) (codexapp.Status, error) {
+func waitForHerdrCodexTUI(req Request, intent state.LaunchIntent) (codexapp.Status, error) {
 	statusPath := requestedHerdrCodexStatusPath(req)
 	if statusPath == "" {
 		return codexapp.Status{}, nil
@@ -619,7 +619,7 @@ func requestedHerdrCodexStatusPath(req Request) string {
 	return ""
 }
 
-func herdrCodexStatusPath(req Request, intent state.HerdrIntent) (string, error) {
+func herdrCodexStatusPath(req Request, intent state.LaunchIntent) (string, error) {
 	if intent.Launch != nil {
 		if err := validateHerdrTeamBinding(req, intent.Launch); err != nil {
 			return "", err
@@ -642,7 +642,7 @@ func awaitHerdrCodexTUI(
 	req Request,
 	locked *state.LockedStore,
 	projectRoot string,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 ) (codexapp.Status, error) {
 	if requestedHerdrCodexStatusPath(req) == "" {
 		return codexapp.Status{}, nil
@@ -671,7 +671,7 @@ func awaitHerdrCodexTUI(
 	))
 }
 
-func bindHerdrCodexStatusPath(req Request, intent state.HerdrIntent) (Request, error) {
+func bindHerdrCodexStatusPath(req Request, intent state.LaunchIntent) (Request, error) {
 	statusPath, err := herdrCodexStatusPath(req, intent)
 	if err != nil {
 		return req, err
@@ -689,8 +689,8 @@ func waitForHerdrCodexTUIUnlocked(
 	req Request,
 	locked *state.LockedStore,
 	projectRoot string,
-	intent state.HerdrIntent,
-) (codexapp.Status, *state.LockedHerdrIntents, state.HerdrIntent, error) {
+	intent state.LaunchIntent,
+) (codexapp.Status, *state.LockedLaunchJournal, state.LaunchIntent, error) {
 	if err := locked.Unlock(); err != nil {
 		return codexapp.Status{}, nil, intent, err
 	}
@@ -711,24 +711,24 @@ func waitForHerdrCodexTUIUnlocked(
 func loadHerdrCodexIntent(
 	locked *state.LockedStore,
 	projectRoot, intentID string,
-) (*state.LockedHerdrIntents, state.HerdrIntent, error) {
-	journal, err := locked.HerdrIntents(projectRoot)
+) (*state.LockedLaunchJournal, state.LaunchIntent, error) {
+	journal, err := locked.LaunchJournal(projectRoot)
 	if err != nil {
-		return nil, state.HerdrIntent{}, err
+		return nil, state.LaunchIntent{}, err
 	}
 	latest, found := journal.FindIntent(intentID)
 	if !found {
-		return nil, state.HerdrIntent{}, fmt.Errorf("codex launch intent %s disappeared", intentID)
+		return nil, state.LaunchIntent{}, fmt.Errorf("codex launch intent %s disappeared", intentID)
 	}
 	return journal, latest, nil
 }
 
 func persistNewHerdrLaunch(
 	runtime HerdrLaunchRuntime,
-	journal *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
 	runtimeDir string,
-) (state.HerdrIntent, error) {
+) (state.LaunchIntent, error) {
 	persisted, err := persistHerdrLaunch(journal, intent)
 	if err == nil {
 		return persisted, nil
@@ -739,15 +739,15 @@ func persistNewHerdrLaunch(
 func removeUnpublishedHerdrEnvironment(
 	runtime HerdrWorktreeRuntime,
 	runtimeDir string,
-	launch *state.HerdrLaunch,
+	launch *state.LaunchCapsule,
 ) error {
 	return runtime.DiscardWorkloadEnvironment(runtimeDir, launch)
 }
 
 func persistHerdrLaunch(
-	journal *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
-) (state.HerdrIntent, error) {
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
 	journal.UpsertIntent(intent)
 	if err := journal.Save(); err != nil {
 		return intent, err
@@ -756,8 +756,8 @@ func persistHerdrLaunch(
 }
 
 func (l *Launcher) failClosedIssuedHerdrLaunch(
-	journal *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
 	cause error,
 ) error {
 	responseLost := fmt.Errorf(
@@ -772,7 +772,7 @@ func (l *Launcher) failClosedIssuedHerdrLaunch(
 
 func herdrAgentStatePane(
 	req Request,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	live backend.LivePane,
 	codexStatus codexapp.Status,
 ) (state.Pane, error) {
@@ -788,7 +788,7 @@ func herdrAgentStatePane(
 	)
 	applyHerdrLaunchOwnership(&pane, intent)
 	applyHerdrLaunchTelemetry(&pane, intent)
-	pane.HerdrDirectAgentLaunch = !req.CodexPlanMode() && !req.CodexTeamMode
+	pane.DirectAgentLaunch = !req.CodexPlanMode() && !req.CodexTeamMode
 	return pane, nil
 }
 
@@ -796,25 +796,25 @@ func latestHerdrLaunchIntent(
 	locked *state.LockedStore,
 	projectRoot string,
 	intentID string,
-) (*state.LockedHerdrIntents, state.HerdrIntent, error) {
-	journal, err := locked.HerdrIntents(projectRoot)
+) (*state.LockedLaunchJournal, state.LaunchIntent, error) {
+	journal, err := locked.LaunchJournal(projectRoot)
 	if err != nil {
-		return nil, state.HerdrIntent{}, err
+		return nil, state.LaunchIntent{}, err
 	}
 	intent, found := journal.FindIntent(intentID)
 	if !found {
-		return nil, state.HerdrIntent{}, fmt.Errorf("finalize Herdr launch: intent %s disappeared", intentID)
+		return nil, state.LaunchIntent{}, fmt.Errorf("finalize Herdr launch: intent %s disappeared", intentID)
 	}
 	return journal, intent, nil
 }
 
-func applyHerdrLaunchTelemetry(pane *state.Pane, intent state.HerdrIntent) {
+func applyHerdrLaunchTelemetry(pane *state.Pane, intent state.LaunchIntent) {
 	launch := intent.Launch
 	if pane == nil || launch == nil {
 		return
 	}
-	pane.HerdrLaunchExecutable = launch.Executable
-	pane.HerdrLaunchArgs = slices.Clone(launch.Args)
+	pane.LaunchExecutable = launch.Executable
+	pane.LaunchArgs = slices.Clone(launch.Args)
 	if launch.EmitterNonce == "" {
 		return
 	}
@@ -824,28 +824,28 @@ func applyHerdrLaunchTelemetry(pane *state.Pane, intent state.HerdrIntent) {
 	pane.ReportedState = string(backend.AgentRunning)
 	pane.StateRefinement = false
 	if launch.PendingReportedState != "" && launch.PendingAgentSession != nil &&
-		pane.HerdrAgentSession != nil && *launch.PendingAgentSession == *pane.HerdrAgentSession {
+		pane.AgentSession != nil && *launch.PendingAgentSession == *pane.AgentSession {
 		pane.ReportedState = launch.PendingReportedState
 		pane.StateRefinement = true
 	}
 }
 
-func applyHerdrLaunchOwnership(pane *state.Pane, intent state.HerdrIntent) {
+func applyHerdrLaunchOwnership(pane *state.Pane, intent state.LaunchIntent) {
 	pane.RuntimeParent = intent.RuntimeParent
-	pane.HerdrWorkspaceLabel = intent.WorkspaceLabel
-	pane.HerdrBranchCreated = intent.BranchCreated
+	pane.WorkspaceLabel = intent.WorkspaceLabel
+	pane.BranchCreated = intent.BranchCreated
 }
 
 func markHerdrFinalizationFailure(
 	locked *state.LockedStore,
 	projectRoot string,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	cause error,
 ) error {
 	if errors.Is(cause, errHerdrLaunchStatePreserved) {
 		return cause
 	}
-	journal, err := locked.HerdrIntents(projectRoot)
+	journal, err := locked.LaunchJournal(projectRoot)
 	if err != nil {
 		return err
 	}

@@ -582,16 +582,16 @@ func applyHerdrStateIdentity(
 		return
 	}
 	identity := live[0]
-	pane.HerdrWorkspaceID = identity.Ref.Workspace
-	pane.HerdrWorkspaceLabel = identity.WorkspaceLabel
-	pane.HerdrTerminalID = identity.TerminalID
-	pane.HerdrRepoKey = identity.RepoKey
-	pane.HerdrRepoRoot = identity.ProjectRoot
-	pane.HerdrAgentID = identity.AgentID
-	pane.HerdrAgentSession = identity.AgentSession
-	pane.HerdrProcessIdentity = identity.ProcessIdentity
-	pane.HerdrSession = identity.SessionID
-	pane.HerdrSocketPath = identity.SocketPath
+	pane.WorkspaceID = identity.Ref.Workspace
+	pane.WorkspaceLabel = identity.WorkspaceLabel
+	pane.TerminalID = identity.TerminalID
+	pane.RepoKey = identity.RepoKey
+	pane.RepoRoot = identity.ProjectRoot
+	pane.AgentID = identity.AgentID
+	pane.AgentSession = identity.AgentSession
+	pane.ProcessIdentity = identity.ProcessIdentity
+	pane.SessionID = identity.SessionID
+	pane.SocketPath = identity.SocketPath
 }
 
 func ensurePaneLivenessKey(req *Request) error {

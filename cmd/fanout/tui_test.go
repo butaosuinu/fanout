@@ -133,9 +133,9 @@ func TestSettingsReloadPreservesOnlyAdmittedHerdrIssueLaunch(t *testing.T) {
 
 func TestOwnedHerdrPaneIdentitySeparatesGenericCWDFromWorktreeProvenance(t *testing.T) {
 	identity, err := ownedHerdrPaneIdentity(state.Pane{
-		Backend: backend.Herdr, PaneID: "w1:p1", HerdrWorkspaceID: "w1",
-		HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "term-1",
-		HerdrSession: "owned", HerdrSocketPath: "/tmp/owned.sock",
+		Backend: backend.Herdr, PaneID: "w1:p1", WorkspaceID: "w1",
+		WorkspaceLabel: "owned-label", TerminalID: "term-1",
+		SessionID: "owned", SocketPath: "/tmp/owned.sock",
 		WorktreePath: "/repo",
 	})
 	if err != nil {
@@ -1808,12 +1808,12 @@ func TestWatchPaneMatchesLiveRequiresBackendMatch(t *testing.T) {
 func TestWatchPaneMatchesLiveRequiresExactHerdrIdentity(t *testing.T) {
 	pane := state.Pane{
 		Backend: backend.Herdr, PaneID: "w1:p1", Agent: "codex",
-		WorktreePath: "/repo/.fanout/worktrees/child", HerdrWorkspaceID: "w1",
-		HerdrWorkspaceLabel: "owned-label-1",
-		HerdrTerminalID:     "term-1", HerdrRepoKey: "/repo/.git",
-		HerdrAgentID: "fanout-child", HerdrSession: "fanout-owned",
-		HerdrSocketPath: "/tmp/fanout-owned/herdr.sock",
-		HerdrAgentSession: &backend.AgentSessionRef{
+		WorktreePath: "/repo/.fanout/worktrees/child", WorkspaceID: "w1",
+		WorkspaceLabel: "owned-label-1",
+		TerminalID:     "term-1", RepoKey: "/repo/.git",
+		AgentID: "fanout-child", SessionID: "fanout-owned",
+		SocketPath: "/tmp/fanout-owned/herdr.sock",
+		AgentSession: &backend.AgentSessionRef{
 			Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "thread-1",
 		},
 	}
@@ -1839,11 +1839,11 @@ func TestWatchPaneMatchesLiveRequiresExactHerdrIdentity(t *testing.T) {
 func TestWatchPaneMatchesLiveAllowsLateHerdrSession(t *testing.T) {
 	pane := state.Pane{
 		Backend: backend.Herdr, PaneID: "w1:p1", Agent: "codex",
-		WorktreePath: "/repo/.fanout/worktrees/child", HerdrWorkspaceID: "w1",
-		HerdrWorkspaceLabel: "owned-label-1",
-		HerdrTerminalID:     "term-1", HerdrRepoKey: "/repo/.git",
-		HerdrAgentID: "fanout-child", HerdrSession: "fanout-owned",
-		HerdrSocketPath: "/tmp/fanout-owned/herdr.sock",
+		WorktreePath: "/repo/.fanout/worktrees/child", WorkspaceID: "w1",
+		WorkspaceLabel: "owned-label-1",
+		TerminalID:     "term-1", RepoKey: "/repo/.git",
+		AgentID: "fanout-child", SessionID: "fanout-owned",
+		SocketPath: "/tmp/fanout-owned/herdr.sock",
 	}
 	live := backend.LivePane{
 		Ref:         backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},

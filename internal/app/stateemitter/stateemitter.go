@@ -139,7 +139,7 @@ func runtimeTargetForSignal(
 	if row >= 0 {
 		return finalRuntimeTarget(locked.Panes[row], gitCommonDir, signal)
 	}
-	journal, err := locked.HerdrIntents(projectRoot)
+	journal, err := locked.LaunchJournal(projectRoot)
 	if err != nil {
 		return RuntimeTarget{}, err
 	}
@@ -219,14 +219,14 @@ func updateFinalRow(
 }
 
 func bindLateAgentSession(panes []state.Pane, index int, current backend.LivePane) error {
-	if panes[index].HerdrAgentSession != nil || current.AgentSession == nil {
+	if panes[index].AgentSession != nil || current.AgentSession == nil {
 		return nil
 	}
 	ref, ok := sessionbinding.UniqueHerdrSessionBinding(panes, index, []backend.LivePane{current})
 	if !ok {
 		return fmt.Errorf("late Herdr agent session does not match exactly one state row")
 	}
-	panes[index].HerdrAgentSession = ref
+	panes[index].AgentSession = ref
 	return nil
 }
 
@@ -256,7 +256,7 @@ func updatePendingIntent(
 	signal telemetry.Signal,
 	observation Observation,
 ) error {
-	journal, err := locked.HerdrIntents(projectRoot)
+	journal, err := locked.LaunchJournal(projectRoot)
 	if err != nil {
 		return err
 	}
@@ -298,40 +298,40 @@ func finalRuntimeTarget(pane state.Pane, gitCommonDir string, signal telemetry.S
 		pane.EmitterRowKey == signal.RowKey,
 		pane.LaunchNonce == signal.LaunchNonce,
 		pane.EmitterNonce == signal.EmitterNonce,
-		pane.HerdrSession == signal.Session,
-		pane.HerdrSocketPath == signal.SocketPath,
-		pane.HerdrWorkspaceID == signal.WorkspaceID,
+		pane.SessionID == signal.Session,
+		pane.SocketPath == signal.SocketPath,
+		pane.WorkspaceID == signal.WorkspaceID,
 		pane.PaneID == signal.PaneID,
-		pane.HerdrTerminalID == signal.TerminalID,
+		pane.TerminalID == signal.TerminalID,
 		pane.Agent == signal.Agent,
-		pane.HerdrAgentID == signal.AgentID,
+		pane.AgentID == signal.AgentID,
 	}
 	if slices.Contains(identity, false) {
 		return RuntimeTarget{}, fmt.Errorf("final row does not match emitter launch identity")
 	}
 	return RuntimeTarget{
-		Backend: backend.Herdr, Session: pane.HerdrSession,
-		SocketPath: pane.HerdrSocketPath, RepoKey: pane.HerdrRepoKey, GitCommonDir: gitCommonDir,
-		WorkspaceID: pane.HerdrWorkspaceID, WorkspaceLabel: pane.HerdrWorkspaceLabel,
+		Backend: backend.Herdr, Session: pane.SessionID,
+		SocketPath: pane.SocketPath, RepoKey: pane.RepoKey, GitCommonDir: gitCommonDir,
+		WorkspaceID: pane.WorkspaceID, WorkspaceLabel: pane.WorkspaceLabel,
 		PaneID:     pane.PaneID,
-		TerminalID: pane.HerdrTerminalID, Agent: pane.Agent,
-		AgentID: pane.HerdrAgentID, PlanMode: pane.PlanMode, AgentSession: pane.HerdrAgentSession,
-		AcceptUnboundSession: pane.HerdrAgentSession == nil,
-		WorktreePath:         pane.WorktreePath, Executable: pane.HerdrLaunchExecutable,
-		Args:             slices.Clone(pane.HerdrLaunchArgs),
-		GenericWorkspace: pane.Kind == state.PaneKindAttachedAgent && pane.HerdrRepoKey == "",
+		TerminalID: pane.TerminalID, Agent: pane.Agent,
+		AgentID: pane.AgentID, PlanMode: pane.PlanMode, AgentSession: pane.AgentSession,
+		AcceptUnboundSession: pane.AgentSession == nil,
+		WorktreePath:         pane.WorktreePath, Executable: pane.LaunchExecutable,
+		Args:             slices.Clone(pane.LaunchArgs),
+		GenericWorkspace: pane.Kind == state.PaneKindAttachedAgent && pane.RepoKey == "",
 	}, nil
 }
 
 func pendingRuntimeTarget(
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	gitCommonDir string,
 	signal telemetry.Signal,
 ) (RuntimeTarget, error) {
 	launch := intent.Launch
-	generic := intent.Kind == state.HerdrIntentCoordinator && intent.Resource.RepoKey == ""
-	if intent.Status != state.HerdrIntentRealized || launch == nil ||
-		(intent.Kind != state.HerdrIntentWorktree && !generic) {
+	generic := intent.Kind == state.IntentCoordinator && intent.Resource.RepoKey == ""
+	if intent.Status != state.IntentRealized || launch == nil ||
+		(intent.Kind != state.IntentWorktree && !generic) {
 		return RuntimeTarget{}, fmt.Errorf("matching provisional intent is not an active agent launch")
 	}
 	if !time.Now().Before(time.UnixMilli(intent.ExpiresUnixMS)) {
@@ -353,7 +353,7 @@ func pendingRuntimeTarget(
 	}, nil
 }
 
-func pendingSignalMatches(intent state.HerdrIntent, signal telemetry.Signal) bool {
+func pendingSignalMatches(intent state.LaunchIntent, signal telemetry.Signal) bool {
 	launch := intent.Launch
 	identity := []bool{
 		signal.Backend == backend.Herdr,

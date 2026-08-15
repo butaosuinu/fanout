@@ -1,6 +1,6 @@
 package panelaunch
 
-// Projections between the journal's HerdrResource identity and herdrrun's
+// Projections between the journal's RuntimeResource identity and herdrrun's
 // workspace observations, plus the ownership-nonce label and result shapes.
 
 import (
@@ -15,7 +15,7 @@ import (
 )
 
 // realizeDeferred hands a realized workspace to the agent-start phase.
-func realizeDeferred(intent state.HerdrIntent) (HerdrRealizeResult, error) {
+func realizeDeferred(intent state.LaunchIntent) (HerdrRealizeResult, error) {
 	return HerdrRealizeResult{
 		Intent: intent,
 		Pane: backend.PaneRef{
@@ -37,8 +37,8 @@ func workspacesWithLabel(
 	return matches
 }
 
-func stateResource(observation backend.WorkspaceObservation) state.HerdrResource {
-	return state.HerdrResource{
+func stateResource(observation backend.WorkspaceObservation) state.RuntimeResource {
+	return state.RuntimeResource{
 		WorkspaceID: observation.WorkspaceID,
 		Label:       observation.Label,
 		PaneID:      observation.Pane.Pane,
@@ -49,7 +49,7 @@ func stateResource(observation backend.WorkspaceObservation) state.HerdrResource
 	}
 }
 
-func observationResource(resource state.HerdrResource) backend.WorkspaceObservation {
+func observationResource(resource state.RuntimeResource) backend.WorkspaceObservation {
 	return backend.WorkspaceObservation{
 		WorkspaceID: resource.WorkspaceID,
 		Label:       resource.Label,
@@ -65,7 +65,7 @@ func observationResource(resource state.HerdrResource) backend.WorkspaceObservat
 
 func workspaceHasHerdrResource(
 	observation backend.WorkspaceObservation,
-	expected state.HerdrResource,
+	expected state.RuntimeResource,
 ) bool {
 	if observation.WorkspaceID != expected.WorkspaceID ||
 		observation.Label != expected.Label ||
@@ -89,7 +89,7 @@ func workspaceHasHerdrResource(
 
 func workspaceProvenanceMatches(
 	observation backend.WorkspaceObservation,
-	expected state.HerdrResource,
+	expected state.RuntimeResource,
 ) bool {
 	return (expected.RepoKey == "" || observation.RepoKey == expected.RepoKey) &&
 		(expected.RepoRoot == "" || observation.RepoRoot == expected.RepoRoot)

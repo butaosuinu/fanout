@@ -30,15 +30,15 @@ func newHerdrLifecycleFactory(projectRoot string) lifecycle.HerdrRuntimeFactory 
 		if err != nil {
 			return nil, err
 		}
-		if filepath.Clean(pane.HerdrRepoKey) != identity.RepoKey ||
-			filepath.Clean(pane.HerdrRepoRoot) != identity.RepoRoot {
+		if filepath.Clean(pane.RepoKey) != identity.RepoKey ||
+			filepath.Clean(pane.RepoRoot) != identity.RepoRoot {
 			return nil, fmt.Errorf("saved Herdr row belongs to a different repository")
 		}
 		owned, err := herdrrun.OpenOwned(ctx, herdrrun.OwnedOptions{GitCommonDir: identity.RepoKey})
 		if err != nil {
 			return nil, err
 		}
-		if owned.Session != pane.HerdrSession || owned.SocketPath != pane.HerdrSocketPath {
+		if owned.Session != pane.SessionID || owned.SocketPath != pane.SocketPath {
 			return nil, fmt.Errorf("saved Herdr row belongs to a different owned route")
 		}
 		return owned, nil

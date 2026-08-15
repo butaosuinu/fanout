@@ -34,7 +34,7 @@ const (
 // The note is dim rather than a warning on purpose: the TUI turns every [warn]
 // line from a successful launch into its result banner (bufferedLaunchNotice),
 // and a cosmetic token failure must not read as a broken launch.
-func (l *Launcher) reportHerdrSidebarMetadata(req Request, intent state.HerdrIntent) {
+func (l *Launcher) reportHerdrSidebarMetadata(req Request, intent state.LaunchIntent) {
 	ctx, cancel := context.WithTimeout(context.Background(), l.Herdr.MetadataReportBudget())
 	defer cancel()
 	if err := l.Herdr.ReportMetadata(ctx, herdrSidebarMetadata(req, intent)); err != nil {
@@ -42,7 +42,7 @@ func (l *Launcher) reportHerdrSidebarMetadata(req Request, intent state.HerdrInt
 	}
 }
 
-func herdrSidebarMetadata(req Request, intent state.HerdrIntent) backend.MetadataReport {
+func herdrSidebarMetadata(req Request, intent state.LaunchIntent) backend.MetadataReport {
 	return backend.MetadataReport{
 		Target: backend.MetadataTarget{
 			WorkspaceID: intent.Resource.WorkspaceID, Label: intent.Resource.Label,
