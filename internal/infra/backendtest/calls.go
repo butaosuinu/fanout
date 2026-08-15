@@ -55,13 +55,17 @@ func (f *Fake) ClosedRefs() []backend.PaneRef {
 // PaneValues returns the (paneID, value) pairs recorded for a two-string
 // metadata method such as MethodSetPaneProjectRoot or MethodStampPaneShellKey.
 // It is nil when the method was never called, so a table-driven want of nil
-// compares equal.
+// compares equal. A method recorded with fewer than two string arguments
+// (e.g. MethodEnablePaneBorderTitles) yields no pair instead of panicking.
 func (f *Fake) PaneValues(method string) []PaneValue {
 	calls := f.Calls()
 	paneIDs := argAt[string](calls, method, 0)
 	values := argAt[string](calls, method, 1)
 	var pairs []PaneValue
 	for i := range paneIDs {
+		if i >= len(values) {
+			break
+		}
 		pairs = append(pairs, PaneValue{PaneID: paneIDs[i], Value: values[i]})
 	}
 	return pairs

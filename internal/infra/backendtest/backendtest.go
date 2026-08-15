@@ -147,13 +147,24 @@ func (f *Fake) CheckAvailable() error {
 }
 
 // Launch records the request and returns the next configured pane id, scoped to
-// the workspace the caller asked for.
+// the workspace the caller asked for. Recording and pane-id consumption happen
+// under one lock acquisition so Launches()[i] pairs with the i-th returned ref
+// even under concurrent callers.
 func (f *Fake) Launch(req backend.LaunchRequest) (backend.PaneRef, error) {
-	f.record(MethodLaunch, req)
+	pane := f.recordLaunch(req)
 	if f.launchErr != nil {
 		return backend.PaneRef{}, f.launchErr
 	}
-	return backend.PaneRef{Backend: f.name, Workspace: req.Workspace, Pane: f.nextPane()}, nil
+	return backend.PaneRef{Backend: f.name, Workspace: req.Workspace, Pane: pane}, nil
+}
+
+func (f *Fake) recordLaunch(req backend.LaunchRequest) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, Call{Method: MethodLaunch, Args: []any{req}})
+	idx := min(f.launchIdx, len(f.panes)-1)
+	f.launchIdx++
+	return f.panes[idx]
 }
 
 // ReleaseStartGate records the released gate.
@@ -191,14 +202,6 @@ func (f *Fake) Focus(ref backend.PaneRef) error {
 func (f *Fake) Close(ref backend.PaneRef) error {
 	f.record(MethodClose, ref)
 	return nil
-}
-
-func (f *Fake) nextPane() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	idx := min(f.launchIdx, len(f.panes)-1)
-	f.launchIdx++
-	return f.panes[idx]
 }
 
 func (f *Fake) record(method string, args ...any) {
