@@ -15,6 +15,12 @@ type Info struct {
 	Session     string
 	Target      string
 	ProjectRoot string
+
+	// InvokingPane is the pane fanout itself runs in, as reported by TMUX_PANE.
+	// It stays distinct from Target, which --session points at a whole session,
+	// and is empty whenever the environment does not name a pane (every herdr
+	// run, and any tmux invocation without the variable).
+	InvokingPane string
 }
 
 // Resolve discovers the git repository root and the selected backend's launch
@@ -39,18 +45,19 @@ func Resolve(name backend.Name, sessionOverride string) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
+	pane := strings.TrimSpace(os.Getenv("TMUX_PANE"))
 	if sessionOverride != "" {
 		if err = validateTmuxSession(sessionOverride); err != nil {
 			return nil, err
 		}
 		session = sessionOverride
-		return &Info{Session: session, Target: sessionOverride, ProjectRoot: root}, nil
+		return &Info{Session: session, Target: sessionOverride, ProjectRoot: root, InvokingPane: pane}, nil
 	}
 	target, err := invokingPane()
 	if err != nil {
 		return nil, err
 	}
-	return &Info{Session: session, Target: target, ProjectRoot: root}, nil
+	return &Info{Session: session, Target: target, ProjectRoot: root, InvokingPane: pane}, nil
 }
 
 func tmuxSession() (string, error) {
