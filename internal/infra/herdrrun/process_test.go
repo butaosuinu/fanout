@@ -6,22 +6,24 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 func TestNormalizePaneProcessArgsSeparatesRawExecutable(t *testing.T) {
 	tests := []struct {
 		name string
-		raw  PaneProcess
+		raw  corebackend.PaneProcess
 		args []string
 	}{
-		{name: "launcher", raw: PaneProcess{Argv0: "fanout", Argv: []string{"/opt/fanout"}}},
-		{name: "codex", raw: PaneProcess{
+		{name: "launcher", raw: corebackend.PaneProcess{Argv0: "fanout", Argv: []string{"/opt/fanout"}}},
+		{name: "codex", raw: corebackend.PaneProcess{
 			Argv0: "codex", Argv: []string{"/opt/codex", "resume", "session-id"},
 		}, args: []string{"resume", "session-id"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			raw := []PaneProcess{test.raw}
+			raw := []corebackend.PaneProcess{test.raw}
 			got, err := normalizePaneProcessArgs(raw)
 			if err != nil {
 				t.Fatal(err)
@@ -37,11 +39,11 @@ func TestNormalizePaneProcessArgsSeparatesRawExecutable(t *testing.T) {
 }
 
 func TestNormalizePaneProcessArgsRejectsInconsistentArgv0(t *testing.T) {
-	for _, process := range []PaneProcess{
+	for _, process := range []corebackend.PaneProcess{
 		{Argv0: "codex"},
 		{Argv0: "claude", Argv: []string{"/opt/codex", "resume", "session-id"}},
 	} {
-		if _, err := normalizePaneProcessArgs([]PaneProcess{process}); err == nil {
+		if _, err := normalizePaneProcessArgs([]corebackend.PaneProcess{process}); err == nil {
 			t.Fatalf("inconsistent process accepted: %+v", process)
 		}
 	}
@@ -49,7 +51,7 @@ func TestNormalizePaneProcessArgsRejectsInconsistentArgv0(t *testing.T) {
 
 func TestInspectPaneProcessRelationsReadsCurrentProcess(t *testing.T) {
 	pid := os.Getpid()
-	processes, err := inspectPaneProcessRelations(context.Background(), []PaneProcess{{PID: pid}})
+	processes, err := inspectPaneProcessRelations(context.Background(), []corebackend.PaneProcess{{PID: pid}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +66,7 @@ func TestParseAndBindProcessRelations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bound, err := bindProcessRelations([]PaneProcess{{PID: 42}, {PID: 43}}, relations)
+	bound, err := bindProcessRelations([]corebackend.PaneProcess{{PID: 42}, {PID: 43}}, relations)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,14 +86,14 @@ func TestProcessRelationInspectionFailsClosed(t *testing.T) {
 		{
 			name: "duplicate pane pid",
 			run: func() error {
-				_, err := uniquePaneProcessIDs([]PaneProcess{{PID: 42}, {PID: 42}})
+				_, err := uniquePaneProcessIDs([]corebackend.PaneProcess{{PID: 42}, {PID: 42}})
 				return err
 			},
 		},
 		{
 			name: "missing ps row",
 			run: func() error {
-				_, err := bindProcessRelations([]PaneProcess{{PID: 42}}, map[int]processRelation{})
+				_, err := bindProcessRelations([]corebackend.PaneProcess{{PID: 42}}, map[int]processRelation{})
 				return err
 			},
 		},

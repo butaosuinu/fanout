@@ -10,7 +10,6 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -48,7 +47,7 @@ func (l *Launcher) shellHerdr(
 }
 
 func (l *Launcher) newManualHerdrShellLaunch(
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 ) (*state.HerdrLaunch, error) {
 	_, shell, err := resolveHerdrConsoleInputs(l.Info.ProjectRoot, os.Getenv("SHELL"))
 	if err != nil {

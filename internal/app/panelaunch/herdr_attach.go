@@ -51,7 +51,7 @@ func (l *Launcher) prepareHerdrAttachedIntent(
 	req Request,
 	targetPath string,
 	locked *state.LockedStore,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 ) (state.HerdrIntent, error) {
 	build := func(intent state.HerdrIntent) (*state.HerdrLaunch, error) {
 		return l.prepareHerdrLaunchCapsule(req, route, intent, os.Environ())
@@ -93,7 +93,7 @@ func herdrAttachedStatePane(req Request, intent state.HerdrIntent, live backend.
 
 func manualHerdrCoordinatorRequest(
 	projectRoot, targetPath string,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	runtimeParent string,
 	number int,
 ) HerdrCoordinatorRequest {
@@ -109,7 +109,7 @@ func realizeHerdrInteractive(
 	ctx context.Context,
 	runtime HerdrLaunchRuntime,
 	locked *state.LockedStore,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	req HerdrCoordinatorRequest,
 	build herdrLaunchCapsuleBuilder,
 ) (state.HerdrIntent, error) {
@@ -154,7 +154,7 @@ func herdrInteractiveIntentID(req HerdrCoordinatorRequest) (string, error) {
 func discardRejectedHerdrLaunch(
 	locked *state.LockedStore,
 	projectRoot string,
-	route herdrrun.OwnedLaunchRoute,
+	route backend.OwnedLaunchRoute,
 	intentID string,
 	launch *state.HerdrLaunch,
 	prepared bool,

@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
+
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -317,8 +319,8 @@ func TestOwnedCleanupMutationsClassifyPreDispatchFailures(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := mutation(); !errors.Is(err, ErrMutationNotIssued) {
-				t.Fatalf("error = %v, want ErrMutationNotIssued", err)
+			if err := mutation(); !errors.Is(err, corebackend.ErrMutationNotIssued) {
+				t.Fatalf("error = %v, want corebackend.ErrMutationNotIssued", err)
 			}
 		})
 	}
@@ -335,7 +337,7 @@ func TestOwnedCloseWorkspaceClassifiesRejection(t *testing.T) {
 	}
 
 	err := h.session.CloseWorkspace(context.Background(), "w2")
-	rejected, ok := errors.AsType[MutationRejectedError](err)
+	rejected, ok := errors.AsType[corebackend.MutationRejectedError](err)
 	if !ok || rejected.Code != "workspace_not_empty" || rejected.Message != "workspace still has panes" {
 		t.Fatalf("rejection = (%+v,%t), want decoded workspace close rejection", rejected, ok)
 	}

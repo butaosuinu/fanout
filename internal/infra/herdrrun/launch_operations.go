@@ -15,43 +15,14 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-type PaneProcess struct {
-	PID          int      `json:"pid"`
-	ParentPID    int      `json:"-"`
-	ProcessGroup int      `json:"-"`
-	Executable   string   `json:"-"`
-	Name         string   `json:"name"`
-	Argv         []string `json:"argv"`
-	Argv0        string   `json:"argv0"`
-	Cmdline      string   `json:"cmdline"`
-	CWD          string   `json:"cwd"`
-}
-
-type PaneProcessInfo struct {
-	PaneID                 string        `json:"pane_id"`
-	ShellPID               int           `json:"shell_pid"`
-	ForegroundProcessGroup int           `json:"foreground_process_group_id"`
-	ForegroundProcesses    []PaneProcess `json:"foreground_processes"`
-}
-
-type OwnedLaunchRoute struct {
-	GitCommonDir string
-	RuntimeDir   string
-	Session      string
-	SocketPath   string
-	LauncherPath string
-	EmitterPath  string
-	ControlPath  string
-}
-
 type paneProcessInfoEnvelope struct {
 	ID     string                 `json:"id"`
 	Result *paneProcessInfoResult `json:"result"`
 }
 
 type paneProcessInfoResult struct {
-	Type        string          `json:"type"`
-	ProcessInfo PaneProcessInfo `json:"process_info"`
+	Type        string                      `json:"type"`
+	ProcessInfo corebackend.PaneProcessInfo `json:"process_info"`
 }
 
 type waitOutputEnvelope struct {
@@ -106,11 +77,11 @@ func (s *OwnedSession) VerifyOwned(ctx context.Context) error {
 	return err
 }
 
-func (s *OwnedSession) LaunchRoute() (OwnedLaunchRoute, error) {
+func (s *OwnedSession) LaunchRoute() (corebackend.OwnedLaunchRoute, error) {
 	if s == nil || s.backend == nil {
-		return OwnedLaunchRoute{}, fmt.Errorf("herdr owned session is nil")
+		return corebackend.OwnedLaunchRoute{}, fmt.Errorf("herdr owned session is nil")
 	}
-	return OwnedLaunchRoute{
+	return corebackend.OwnedLaunchRoute{
 		GitCommonDir: s.GitCommonDir, RuntimeDir: s.RuntimeDir, Session: s.Session,
 		SocketPath: s.SocketPath, LauncherPath: s.LauncherPath,
 		EmitterPath: s.EmitterPath, ControlPath: s.ControlPath,
@@ -155,7 +126,7 @@ func (s *OwnedSession) IssueRestartResume(
 	ctx context.Context,
 	paneID, nonce string,
 	deadline time.Time,
-	preflight func(PaneProcessInfo, []corebackend.LivePane) error,
+	preflight func(corebackend.PaneProcessInfo, []corebackend.LivePane) error,
 	markIssued func() error,
 ) error {
 	if preflight == nil || markIssued == nil {
@@ -209,7 +180,7 @@ func (s *OwnedSession) admitRestartResume(
 	ctx context.Context,
 	paneID, nonce string,
 	deadline time.Time,
-	preflight func(PaneProcessInfo, []corebackend.LivePane) error,
+	preflight func(corebackend.PaneProcessInfo, []corebackend.LivePane) error,
 ) (probeResult, *os.File, error) {
 	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
 	if err != nil {
@@ -335,18 +306,18 @@ func validateRestartResumeResponse(out []byte) error {
 	return validatePaneRunResponse(out)
 }
 
-func (s *OwnedSession) ProcessInfo(ctx context.Context, paneID string) (PaneProcessInfo, error) {
+func (s *OwnedSession) ProcessInfo(ctx context.Context, paneID string) (corebackend.PaneProcessInfo, error) {
 	if s == nil || s.backend == nil {
-		return PaneProcessInfo{}, fmt.Errorf("herdr owned session is nil")
+		return corebackend.PaneProcessInfo{}, fmt.Errorf("herdr owned session is nil")
 	}
 	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
 	if err != nil {
-		return PaneProcessInfo{}, err
+		return corebackend.PaneProcessInfo{}, err
 	}
 	defer unlockPrivateFile(lock)
 	probed, err := s.backend.probeOwned(ctx, admission)
 	if err != nil {
-		return PaneProcessInfo{}, err
+		return corebackend.PaneProcessInfo{}, err
 	}
 	return s.processInfoProbed(ctx, probed, paneID, commandTimeout)
 }
@@ -356,37 +327,37 @@ func (s *OwnedSession) processInfoProbed(
 	probed probeResult,
 	paneID string,
 	timeout time.Duration,
-) (PaneProcessInfo, error) {
+) (corebackend.PaneProcessInfo, error) {
 	if timeout <= 0 {
-		return PaneProcessInfo{}, context.DeadlineExceeded
+		return corebackend.PaneProcessInfo{}, context.DeadlineExceeded
 	}
 	out, err := s.backend.runContext(ctx, timeout, probed.binary, probed.route,
 		"pane", "process-info", "--pane", paneID)
 	if err != nil {
-		return PaneProcessInfo{}, observationCommandError("herdr pane process-info", err)
+		return corebackend.PaneProcessInfo{}, observationCommandError("herdr pane process-info", err)
 	}
 	processInfo, err := decodePaneProcessInfo(out, paneID)
 	if err != nil {
-		return PaneProcessInfo{}, err
+		return corebackend.PaneProcessInfo{}, err
 	}
 	processes, err := s.inspectNormalizedPaneProcesses(ctx, processInfo.ForegroundProcesses)
 	if err != nil {
 		wrapped := fmt.Errorf("inspect herdr pane process ancestry: %w", err)
 		if errors.Is(err, errPaneProcessChanged) || retryableCommandError(err) {
-			return PaneProcessInfo{}, retryableObservationError{err: wrapped}
+			return corebackend.PaneProcessInfo{}, retryableObservationError{err: wrapped}
 		}
-		return PaneProcessInfo{}, wrapped
+		return corebackend.PaneProcessInfo{}, wrapped
 	}
 	processInfo.ForegroundProcesses = processes
 	return processInfo, nil
 }
 
-func decodePaneProcessInfo(out []byte, paneID string) (PaneProcessInfo, error) {
+func decodePaneProcessInfo(out []byte, paneID string) (corebackend.PaneProcessInfo, error) {
 	var envelope paneProcessInfoEnvelope
 	if decodeErr := decodeOne(out, &envelope); decodeErr != nil || envelope.ID != "cli:pane:process_info" ||
 		envelope.Result == nil || envelope.Result.Type != "pane_process_info" ||
 		envelope.Result.ProcessInfo.PaneID != paneID {
-		return PaneProcessInfo{}, fmt.Errorf("herdr pane process-info returned an unexpected response")
+		return corebackend.PaneProcessInfo{}, fmt.Errorf("herdr pane process-info returned an unexpected response")
 	}
 	return envelope.Result.ProcessInfo, nil
 }
@@ -395,18 +366,18 @@ func decodePaneProcessInfo(out []byte, paneID string) (PaneProcessInfo, error) {
 func (s *OwnedSession) ObserveRestartResume(
 	ctx context.Context,
 	paneID string,
-) (PaneProcessInfo, []corebackend.LivePane, error) {
+) (corebackend.PaneProcessInfo, []corebackend.LivePane, error) {
 	if s == nil || s.backend == nil {
-		return PaneProcessInfo{}, nil, fmt.Errorf("herdr owned session is nil")
+		return corebackend.PaneProcessInfo{}, nil, fmt.Errorf("herdr owned session is nil")
 	}
 	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
 	if err != nil {
-		return PaneProcessInfo{}, nil, err
+		return corebackend.PaneProcessInfo{}, nil, err
 	}
 	defer unlockPrivateFile(lock)
 	probed, err := s.backend.probeOwned(ctx, admission)
 	if err != nil {
-		return PaneProcessInfo{}, nil, err
+		return corebackend.PaneProcessInfo{}, nil, err
 	}
 	return s.observeRestartResumeProbed(ctx, probed, paneID, time.Now().Add(commandTimeout))
 }
@@ -416,10 +387,10 @@ func (s *OwnedSession) observeRestartResumeProbed(
 	probed probeResult,
 	paneID string,
 	deadline time.Time,
-) (PaneProcessInfo, []corebackend.LivePane, error) {
+) (corebackend.PaneProcessInfo, []corebackend.LivePane, error) {
 	info, err := s.processInfoProbed(ctx, probed, paneID, restartResumeCallTimeout(deadline))
 	if err != nil {
-		return PaneProcessInfo{}, nil, err
+		return corebackend.PaneProcessInfo{}, nil, err
 	}
 	panes, err := s.backend.snapshot(ctx, restartResumeCallTimeout(deadline), probed)
 	return info, panes, err
@@ -502,7 +473,7 @@ func (s *OwnedSession) WaitRestoredPanes(
 	ctx context.Context,
 	totalTimeout time.Duration,
 	match func([]corebackend.LivePane) bool,
-) WaitResult {
+) corebackend.WaitResult {
 	if s == nil || s.backend == nil {
 		return failedWait(fmt.Errorf("herdr owned session is nil"))
 	}

@@ -11,7 +11,6 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/parentref"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -26,10 +25,10 @@ func realizeDeferred(intent state.HerdrIntent) (HerdrRealizeResult, error) {
 }
 
 func workspacesWithLabel(
-	workspaces []herdrrun.WorkspaceObservation,
+	workspaces []backend.WorkspaceObservation,
 	label string,
-) []herdrrun.WorkspaceObservation {
-	var matches []herdrrun.WorkspaceObservation
+) []backend.WorkspaceObservation {
+	var matches []backend.WorkspaceObservation
 	for _, workspace := range workspaces {
 		if workspace.Label == label {
 			matches = append(matches, workspace)
@@ -38,7 +37,7 @@ func workspacesWithLabel(
 	return matches
 }
 
-func stateResource(observation herdrrun.WorkspaceObservation) state.HerdrResource {
+func stateResource(observation backend.WorkspaceObservation) state.HerdrResource {
 	return state.HerdrResource{
 		WorkspaceID: observation.WorkspaceID,
 		Label:       observation.Label,
@@ -50,8 +49,8 @@ func stateResource(observation herdrrun.WorkspaceObservation) state.HerdrResourc
 	}
 }
 
-func observationResource(resource state.HerdrResource) herdrrun.WorkspaceObservation {
-	return herdrrun.WorkspaceObservation{
+func observationResource(resource state.HerdrResource) backend.WorkspaceObservation {
+	return backend.WorkspaceObservation{
 		WorkspaceID: resource.WorkspaceID,
 		Label:       resource.Label,
 		RepoKey:     resource.RepoKey,
@@ -65,7 +64,7 @@ func observationResource(resource state.HerdrResource) herdrrun.WorkspaceObserva
 }
 
 func workspaceHasHerdrResource(
-	observation herdrrun.WorkspaceObservation,
+	observation backend.WorkspaceObservation,
 	expected state.HerdrResource,
 ) bool {
 	if observation.WorkspaceID != expected.WorkspaceID ||
@@ -89,7 +88,7 @@ func workspaceHasHerdrResource(
 }
 
 func workspaceProvenanceMatches(
-	observation herdrrun.WorkspaceObservation,
+	observation backend.WorkspaceObservation,
 	expected state.HerdrResource,
 ) bool {
 	return (expected.RepoKey == "" || observation.RepoKey == expected.RepoKey) &&

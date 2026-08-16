@@ -3,8 +3,8 @@ package herdrprocess
 import (
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 )
 
 const (
@@ -34,28 +34,28 @@ func TestVerifyAgentAcceptsCodexPlanInterpreterChain(t *testing.T) {
 func TestVerifyAgentRejectsInexactCodexPlanProcessTrees(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		mutate func(*herdrrun.PaneProcessInfo)
+		mutate func(*backend.PaneProcessInfo)
 	}{
-		{name: "missing TUI", mutate: func(info *herdrrun.PaneProcessInfo) {
+		{name: "missing TUI", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses = info.ForegroundProcesses[:1]
 		}},
-		{name: "duplicate TUI", mutate: func(info *herdrrun.PaneProcessInfo) {
+		{name: "duplicate TUI", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses = append(info.ForegroundProcesses, testProcess(
 				21, 10, testCodex, testCodex, []string{"--remote", "ws://127.0.0.1:1234"},
 			))
 		}},
-		{name: "nested duplicate TUI", mutate: func(info *herdrrun.PaneProcessInfo) {
+		{name: "nested duplicate TUI", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses = append(info.ForegroundProcesses, testProcess(
 				21, 20, testCodex, testCodex, []string{"--remote", "ws://127.0.0.1:1234"},
 			))
 		}},
-		{name: "wrong remote host", mutate: func(info *herdrrun.PaneProcessInfo) {
+		{name: "wrong remote host", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses[1].Argv[1] = "ws://localhost:1234"
 		}},
-		{name: "extra TUI argument", mutate: func(info *herdrrun.PaneProcessInfo) {
+		{name: "extra TUI argument", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses[1].Argv = append(info.ForegroundProcesses[1].Argv, "--dangerously-bypass-approvals-and-sandbox")
 		}},
-		{name: "indirect TUI root", mutate: func(info *herdrrun.PaneProcessInfo) {
+		{name: "indirect TUI root", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses[1].ParentPID = 19
 			info.ForegroundProcesses = append(info.ForegroundProcesses, testProcess(19, 10, "/bin/sh", "/bin/sh", nil))
 		}},
@@ -84,9 +84,9 @@ func TestMatchAgentReturnsExactCodexResumeProcessIdentity(t *testing.T) {
 		WorktreePath: testWorktree, Executable: testCodex,
 		Args: []string{"resume", "019f-session"}, Agent: "codex",
 	}
-	info := herdrrun.PaneProcessInfo{
+	info := backend.PaneProcessInfo{
 		ShellPID: 10, ForegroundProcessGroup: 99,
-		ForegroundProcesses: []herdrrun.PaneProcess{
+		ForegroundProcesses: []backend.PaneProcess{
 			testProcess(10, 1, "/usr/bin/node", "/usr/bin/node", []string{testCodex, "resume", "019f-session"}),
 			testProcess(20, 10, "/opt/lib/codex", "/opt/lib/codex", []string{"resume", "019f-session"}),
 		},
@@ -109,8 +109,8 @@ func TestInterpreterLaunchPendingAcceptsOnlyExactRootWithoutChildren(t *testing.
 	root := testProcess(
 		10, 1, "/usr/bin/node", "/usr/bin/node", []string{testCodex, "resume", "019f-session"},
 	)
-	info := herdrrun.PaneProcessInfo{
-		ShellPID: 10, ForegroundProcessGroup: 99, ForegroundProcesses: []herdrrun.PaneProcess{root},
+	info := backend.PaneProcessInfo{
+		ShellPID: 10, ForegroundProcessGroup: 99, ForegroundProcesses: []backend.PaneProcess{root},
 	}
 	if !InterpreterLaunchPending(info, identity) {
 		t.Fatal("exact interpreter-only transition was not pending")
@@ -127,32 +127,32 @@ func TestMatchAgentRejectsInexactCodexResumeProcess(t *testing.T) {
 		WorktreePath: testWorktree, Executable: testCodex,
 		Args: []string{"resume", "019f-session"}, Agent: "codex",
 	}
-	baseInfo := herdrrun.PaneProcessInfo{
+	baseInfo := backend.PaneProcessInfo{
 		ShellPID: 10, ForegroundProcessGroup: 99,
-		ForegroundProcesses: []herdrrun.PaneProcess{
+		ForegroundProcesses: []backend.PaneProcess{
 			testProcess(10, 1, testCodex, testCodex, []string{"resume", "019f-session"}),
 		},
 	}
 	for _, test := range []struct {
 		name   string
-		mutate func(*Identity, *herdrrun.PaneProcessInfo)
+		mutate func(*Identity, *backend.PaneProcessInfo)
 	}{
-		{name: "extra arg", mutate: func(_ *Identity, info *herdrrun.PaneProcessInfo) {
+		{name: "extra arg", mutate: func(_ *Identity, info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses[0].Argv = append(info.ForegroundProcesses[0].Argv, "--full-auto")
 		}},
-		{name: "wrong cwd", mutate: func(_ *Identity, info *herdrrun.PaneProcessInfo) {
+		{name: "wrong cwd", mutate: func(_ *Identity, info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses[0].CWD = "/repo/other"
 		}},
-		{name: "wrong process group", mutate: func(_ *Identity, info *herdrrun.PaneProcessInfo) {
+		{name: "wrong process group", mutate: func(_ *Identity, info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses[0].ProcessGroup = 100
 		}},
-		{name: "relative saved executable", mutate: func(identity *Identity, _ *herdrrun.PaneProcessInfo) {
+		{name: "relative saved executable", mutate: func(identity *Identity, _ *backend.PaneProcessInfo) {
 			identity.Executable = "codex"
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			identity, info := baseIdentity, baseInfo
-			info.ForegroundProcesses = append([]herdrrun.PaneProcess(nil), baseInfo.ForegroundProcesses...)
+			info.ForegroundProcesses = append([]backend.PaneProcess(nil), baseInfo.ForegroundProcesses...)
 			info.ForegroundProcesses[0].Argv = append([]string(nil), baseInfo.ForegroundProcesses[0].Argv...)
 			test.mutate(&identity, &info)
 			if _, err := MatchAgent(info, identity); err == nil {
@@ -162,15 +162,15 @@ func TestMatchAgentRejectsInexactCodexResumeProcess(t *testing.T) {
 	}
 }
 
-func codexPlanProcessFixture() (Identity, herdrrun.PaneProcessInfo) {
+func codexPlanProcessFixture() (Identity, backend.PaneProcessInfo) {
 	args := []string{
 		codexapp.PlanTUICommand, "--codex", testCodex,
 		"--prompt", "plan it", "--status-file", "/tmp/status.json",
 	}
 	identity := Identity{WorktreePath: testWorktree, Executable: testFanout, Args: args, Agent: "codex"}
-	info := herdrrun.PaneProcessInfo{
+	info := backend.PaneProcessInfo{
 		ShellPID: 10, ForegroundProcessGroup: 99,
-		ForegroundProcesses: []herdrrun.PaneProcess{
+		ForegroundProcesses: []backend.PaneProcess{
 			testProcess(10, 1, testFanout, testFanout, args),
 			testProcess(20, 10, testCodex, testCodex, []string{"--remote", "ws://127.0.0.1:1234"}),
 		},
@@ -178,8 +178,8 @@ func codexPlanProcessFixture() (Identity, herdrrun.PaneProcessInfo) {
 	return identity, info
 }
 
-func testProcess(pid, parent int, executable, argv0 string, args []string) herdrrun.PaneProcess {
-	return herdrrun.PaneProcess{
+func testProcess(pid, parent int, executable, argv0 string, args []string) backend.PaneProcess {
+	return backend.PaneProcess{
 		PID: pid, ParentPID: parent, ProcessGroup: 99,
 		Executable: executable, Argv0: argv0, Argv: args, CWD: testWorktree,
 	}

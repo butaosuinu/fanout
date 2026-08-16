@@ -9,7 +9,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -20,7 +19,7 @@ func TestHerdrEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
 			WorkspaceID: "workspace-1", PaneID: "workspace-1:pane-1", TerminalID: "terminal-1",
 		},
 	}
-	route := herdrrun.OwnedLaunchRoute{
+	route := backend.OwnedLaunchRoute{
 		Session: "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",
 		LauncherPath: "/opt/fanout build/fanout",
 		EmitterPath:  "/opt/current fanout/fanout",
@@ -72,7 +71,7 @@ func TestHerdrEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
 func TestHerdrEmitterLaunchUsesCurrentPinnedEmitterInsteadOfSessionLauncher(t *testing.T) {
 	launch, err := newHerdrEmitterLaunch(
 		Request{Agent: "claude"},
-		herdrrun.OwnedLaunchRoute{
+		backend.OwnedLaunchRoute{
 			LauncherPath: "/owned/old-fanout", EmitterPath: "/owned/current-fanout",
 		},
 		state.HerdrIntent{}, strings.Repeat("a", 32), "agent", "/repo/.fanout/state.json",
@@ -87,7 +86,7 @@ func TestHerdrEmitterLaunchUsesCurrentPinnedEmitterInsteadOfSessionLauncher(t *t
 }
 
 func TestHerdrEmitterLaunchLeavesNonPlanCodexBare(t *testing.T) {
-	launch, err := newHerdrEmitterLaunch(Request{Agent: "codex"}, herdrrun.OwnedLaunchRoute{}, state.HerdrIntent{}, "", "", "")
+	launch, err := newHerdrEmitterLaunch(Request{Agent: "codex"}, backend.OwnedLaunchRoute{}, state.HerdrIntent{}, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +103,7 @@ func TestHerdrEmitterLaunchInjectsCodexPlanIdentityWithoutBackendArgs(t *testing
 			PaneID: "workspace-1:pane-1", TerminalID: "terminal-1",
 		},
 	}
-	route := herdrrun.OwnedLaunchRoute{Session: "fanout-owned", SocketPath: "/tmp/herdr.sock"}
+	route := backend.OwnedLaunchRoute{Session: "fanout-owned", SocketPath: "/tmp/herdr.sock"}
 	launch, err := newHerdrEmitterLaunch(
 		Request{Agent: "codex", LaunchMode: agent.ModePlan}, route, intent,
 		strings.Repeat("a", 32), "fanout-agent", "/repo/.fanout/state.json",

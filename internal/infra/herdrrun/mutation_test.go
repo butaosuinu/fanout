@@ -18,7 +18,7 @@ func TestWorktreeMutationArgsPinHerdr075CLI(t *testing.T) {
 	}{
 		{
 			name: "coordinator",
-			args: workspaceCreateArgs(WorkspaceCreateRequest{
+			args: workspaceCreateArgs(corebackend.WorkspaceCreateRequest{
 				CWD: "/repo", SourceRepoKey: "/repo/.git", Label: "nonce",
 			}),
 			want: []string{
@@ -27,7 +27,7 @@ func TestWorktreeMutationArgsPinHerdr075CLI(t *testing.T) {
 		},
 		{
 			name: "fresh branch",
-			args: worktreeCreateArgs(WorktreeCreateRequest{
+			args: worktreeCreateArgs(corebackend.WorktreeCreateRequest{
 				Coordinator: coordinator,
 				Branch:      "fanout/child", Base: strings.Repeat("1", 40),
 				Path: "/repo/.fanout/worktrees/child", Label: "nonce",
@@ -41,7 +41,7 @@ func TestWorktreeMutationArgsPinHerdr075CLI(t *testing.T) {
 		},
 		{
 			name: "existing branch omits base",
-			args: worktreeCreateArgs(WorktreeCreateRequest{
+			args: worktreeCreateArgs(corebackend.WorktreeCreateRequest{
 				Coordinator: coordinator,
 				Branch:      "fanout/existing", Path: "/repo/.fanout/worktrees/existing",
 				Label: "nonce",
@@ -55,7 +55,7 @@ func TestWorktreeMutationArgsPinHerdr075CLI(t *testing.T) {
 		},
 		{
 			name: "open",
-			args: worktreeOpenArgs(WorktreeOpenRequest{
+			args: worktreeOpenArgs(corebackend.WorktreeOpenRequest{
 				Coordinator: coordinator,
 				Path:        "/repo/.fanout/worktrees/child", Label: "nonce",
 			}),
@@ -78,7 +78,7 @@ func TestWorktreeMutationArgsPinHerdr075CLI(t *testing.T) {
 func TestDecodeMutationRejectionRequiresExactEnvelope(t *testing.T) {
 	data := []byte(`{"id":"cli:worktree:create","error":{"code":"worktree_create_failed","message":"already exists"}}`)
 	got, ok := decodeMutationRejection(data, "cli:worktree:create")
-	if !ok || got.Code != "worktree_create_failed" || !errors.Is(got, ErrMutationRejected) {
+	if !ok || got.Code != "worktree_create_failed" || !errors.Is(got, corebackend.ErrMutationRejected) {
 		t.Fatalf("rejection = (%+v,%t)", got, ok)
 	}
 	if _, ok := decodeMutationRejection(data, "cli:workspace:create"); ok {
@@ -95,10 +95,10 @@ func TestDecodeMutationRejectionRequiresExactEnvelope(t *testing.T) {
 func TestMutationNotIssuedErrorPreservesClassificationAndCause(t *testing.T) {
 	cause := errors.New("owned admission failed")
 	err := mutationNotIssued(cause)
-	if !errors.Is(err, ErrMutationNotIssued) || !errors.Is(err, cause) {
+	if !errors.Is(err, corebackend.ErrMutationNotIssued) || !errors.Is(err, cause) {
 		t.Fatalf("mutation-not-issued error = %v", err)
 	}
-	var typed MutationNotIssuedError
+	var typed corebackend.MutationNotIssuedError
 	if !errors.As(err, &typed) || !errors.Is(typed.Cause, cause) {
 		t.Fatalf("mutation-not-issued type = %#v", typed)
 	}
@@ -142,7 +142,7 @@ func TestDecodeWorktreeMutationResponsePinsResultShape(t *testing.T) {
 
 func TestValidateAlreadyOpenRequiresIntentBoundWorkspaceAndLabel(t *testing.T) {
 	spec := mutationSpec{
-		kind:                     WorktreeOpen,
+		kind:                     corebackend.WorktreeOpen,
 		expectedAlreadyOpenID:    "w2",
 		expectedAlreadyOpenLabel: "nonce",
 	}
@@ -155,11 +155,11 @@ func TestValidateAlreadyOpenRequiresIntentBoundWorkspaceAndLabel(t *testing.T) {
 	if err := validateAlreadyOpen(spec, foreign, true); err == nil {
 		t.Fatal("foreign already_open workspace unexpectedly accepted")
 	}
-	unbound := mutationSpec{kind: WorktreeOpen}
+	unbound := mutationSpec{kind: corebackend.WorktreeOpen}
 	if err := validateAlreadyOpen(unbound, workspace, true); err == nil {
 		t.Fatal("already_open without an intent binding unexpectedly accepted")
 	}
-	if err := validateAlreadyOpen(mutationSpec{kind: WorktreeCreate}, workspace, true); err == nil {
+	if err := validateAlreadyOpen(mutationSpec{kind: corebackend.WorktreeCreate}, workspace, true); err == nil {
 		t.Fatal("worktree create already_open unexpectedly accepted")
 	}
 }
@@ -207,8 +207,8 @@ func TestWorkspaceObservationPreservesPanesWithoutGuessingRoot(t *testing.T) {
 	}
 }
 
-func testCoordinatorObservation() WorkspaceObservation {
-	return WorkspaceObservation{
+func testCoordinatorObservation() corebackend.WorkspaceObservation {
+	return corebackend.WorkspaceObservation{
 		WorkspaceID: "w1",
 		Label:       "coordinator",
 		Pane: corebackend.PaneRef{

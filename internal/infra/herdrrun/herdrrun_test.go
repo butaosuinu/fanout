@@ -778,8 +778,8 @@ func TestListLiveRejectsMalformedOrIncompatibleSnapshot(t *testing.T) {
 }
 
 func TestWaitStatusValues(t *testing.T) {
-	got := []WaitStatus{WaitMatched, WaitTimedOut, WaitCancelled, WaitFailed}
-	want := []WaitStatus{"matched", "timed_out", "cancelled", "failed"} //nolint:misspell // Herdr contract spells the terminal result "cancelled".
+	got := []corebackend.WaitStatus{corebackend.WaitMatched, corebackend.WaitTimedOut, corebackend.WaitCancelled, corebackend.WaitFailed}
+	want := []corebackend.WaitStatus{"matched", "timed_out", "cancelled", "failed"} //nolint:misspell // Herdr contract spells the terminal result "cancelled".
 	if !slices.Equal(got, want) {
 		t.Fatalf("wait statuses = %q, want %q", got, want)
 	}
@@ -837,7 +837,7 @@ func TestWaitRejectsInvalidInputsWithoutInvokingHerdr(t *testing.T) {
 
 			got := b.Wait(tt.ctx, tt.timeout, tt.match)
 
-			if got.Status != WaitFailed || got.Err == nil || !strings.Contains(got.Err.Error(), tt.wantErr) || got.Panes != nil {
+			if got.Status != corebackend.WaitFailed || got.Err == nil || !strings.Contains(got.Err.Error(), tt.wantErr) || got.Panes != nil {
 				t.Fatalf("Wait() = %#v, want failed with nil panes and error containing %q", got, tt.wantErr)
 			}
 			if len(fake.commands) != 0 {
@@ -869,7 +869,7 @@ func TestWaitImmediateMatchUsesVerifiedSocket(t *testing.T) {
 		return matched
 	})
 
-	if got.Status != WaitMatched || got.Err != nil || len(got.Panes) != 2 {
+	if got.Status != corebackend.WaitMatched || got.Err != nil || len(got.Panes) != 2 {
 		t.Fatalf("Wait() = %#v, want matched with two panes and no error", got)
 	}
 	if got.Panes[0].Ref.Pane != "w1:p1" || got.Panes[1].Title != "child title" ||
@@ -931,7 +931,7 @@ func TestWaitSnapshotCallLimitsIntervalsAndCommandTimeouts(t *testing.T) {
 				return false
 			})
 
-			if got.Status != WaitTimedOut || got.Err != nil || len(got.Panes) != 2 {
+			if got.Status != corebackend.WaitTimedOut || got.Err != nil || len(got.Panes) != 2 {
 				t.Fatalf("Wait() = %#v, want timed_out with last two panes and no error", got)
 			}
 			if got.Panes[1].AgentSession == nil || got.Panes[1].AgentSession.Value != "session-a" {
@@ -990,7 +990,7 @@ func TestWaitRetryableSnapshotErrorThenValidSnapshotTimesOut(t *testing.T) {
 		return false
 	})
 
-	if got.Status != WaitTimedOut || got.Err != nil || len(got.Panes) != 2 {
+	if got.Status != corebackend.WaitTimedOut || got.Err != nil || len(got.Panes) != 2 {
 		t.Fatalf("Wait() = %#v, want timed_out with recovered snapshot", got)
 	}
 	if matchCalls != 1 {
@@ -1020,7 +1020,7 @@ func TestWaitValidSnapshotThenFinalRetryableErrorFails(t *testing.T) {
 		return false
 	})
 
-	if got.Status != WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
+	if got.Status != corebackend.WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
 		t.Fatalf("Wait() = %#v, want generic unavailable error and nil panes", got)
 	}
 	if matchCalls != 1 {
@@ -1048,7 +1048,7 @@ func TestWaitPermanentCommandErrorFailsWithoutRetry(t *testing.T) {
 		return false
 	})
 
-	if got.Status != WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
+	if got.Status != corebackend.WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
 		t.Fatalf("Wait() = %#v, want immediate generic unavailable error", got)
 	}
 	if matchCalls != 0 || len(fake.commands) != 3 || len(clock.sleeps) != 0 {
@@ -1087,7 +1087,7 @@ func TestWaitCommandCleanupFailureOverridesRetryableCommandErrors(t *testing.T) 
 				return false
 			})
 
-			if got.Status != WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
+			if got.Status != corebackend.WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
 				t.Fatalf("Wait() = %#v, want immediate generic unavailable error", got)
 			}
 			if matchCalls != 0 || len(fake.commands) != 3 || len(clock.sleeps) != 0 {
@@ -1113,7 +1113,7 @@ func TestWaitMalformedSnapshotFailsImmediately(t *testing.T) {
 		return false
 	})
 
-	if got.Status != WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
+	if got.Status != corebackend.WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
 		t.Fatalf("Wait() = %#v, want immediate generic unavailable error with nil panes", got)
 	}
 	if matchCalls != 0 || len(fake.commands) != 3 || len(clock.sleeps) != 0 {
@@ -1136,7 +1136,7 @@ func TestWaitDoesNotPreflightSnapshotProtocol(t *testing.T) {
 		return true
 	})
 
-	if got.Status != WaitMatched || got.Err != nil || len(got.Panes) != 2 {
+	if got.Status != corebackend.WaitMatched || got.Err != nil || len(got.Panes) != 2 {
 		t.Fatalf("Wait() = %#v, want matched without protocol preflight", got)
 	}
 }
@@ -1158,7 +1158,7 @@ func TestWaitPreCancelledContextDoesNotInvokeHerdr(t *testing.T) {
 		return false
 	})
 
-	if got.Status != WaitCancelled || !errors.Is(got.Err, context.Canceled) || got.Panes != nil {
+	if got.Status != corebackend.WaitCancelled || !errors.Is(got.Err, context.Canceled) || got.Panes != nil {
 		t.Fatalf("Wait() = %#v, want canceled with context.Canceled and nil panes", got)
 	}
 	if matchCalls != 0 || len(fake.commands) != 0 || len(clock.sleeps) != 0 {
@@ -1189,7 +1189,7 @@ func TestWaitCancellationDuringSleepStopsBeforeNextSnapshot(t *testing.T) {
 		return false
 	})
 
-	if got.Status != WaitCancelled || !errors.Is(got.Err, context.Canceled) || got.Panes != nil {
+	if got.Status != corebackend.WaitCancelled || !errors.Is(got.Err, context.Canceled) || got.Panes != nil {
 		t.Fatalf("Wait() = %#v, want canceled with context.Canceled and nil panes", got)
 	}
 	if matchCalls != 1 || len(fake.commands) != 3 || !slices.Equal(clock.sleeps, []time.Duration{waitInterval}) {
@@ -1235,7 +1235,7 @@ func TestWaitCancellationAfterSnapshotOrPredicateCannotMatch(t *testing.T) {
 				return true
 			})
 
-			if got.Status != WaitCancelled || !errors.Is(got.Err, context.Canceled) || got.Panes != nil {
+			if got.Status != corebackend.WaitCancelled || !errors.Is(got.Err, context.Canceled) || got.Panes != nil {
 				t.Fatalf("Wait() = %#v, want canceled result instead of matched", got)
 			}
 			if matchCalls != tt.wantMatchCalls || len(fake.commands) != 3 {
@@ -1282,7 +1282,7 @@ func TestWaitDeadlineCrossingAfterSnapshotOrPredicateCannotMatch(t *testing.T) {
 				return true
 			})
 
-			if got.Status != WaitTimedOut || got.Err != nil || len(got.Panes) != 2 {
+			if got.Status != corebackend.WaitTimedOut || got.Err != nil || len(got.Panes) != 2 {
 				t.Fatalf("Wait() = %#v, want timed_out with the last compatible snapshot", got)
 			}
 			if matchCalls != tt.wantMatchCalls || len(fake.commands) != 3 {
@@ -1327,7 +1327,7 @@ func TestWaitCancellationStopsProbeOrSnapshotImmediately(t *testing.T) {
 				return false
 			})
 
-			if got.Status != WaitCancelled || !errors.Is(got.Err, context.Canceled) || got.Panes != nil {
+			if got.Status != corebackend.WaitCancelled || !errors.Is(got.Err, context.Canceled) || got.Panes != nil {
 				t.Fatalf("Wait() = %#v, want canceled with context.Canceled and nil panes", got)
 			}
 			if matchCalls != 0 || len(clock.sleeps) != 0 {

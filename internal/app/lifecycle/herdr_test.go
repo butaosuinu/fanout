@@ -12,7 +12,6 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
@@ -20,7 +19,7 @@ import (
 
 type fakeHerdrLifecycleRuntime struct {
 	projectRoot              string
-	workspaces               []herdrrun.WorkspaceObservation
+	workspaces               []backend.WorkspaceObservation
 	verifyErr                error
 	verifyErrAtCall          int
 	setupErr                 error
@@ -51,22 +50,22 @@ func (f *fakeHerdrLifecycleRuntime) VerifyWorktreeSetupPolicy(context.Context) e
 	return f.setupErr
 }
 
-func (f *fakeHerdrLifecycleRuntime) ObserveWorkspaces(context.Context) ([]herdrrun.WorkspaceObservation, error) {
+func (f *fakeHerdrLifecycleRuntime) ObserveWorkspaces(context.Context) ([]backend.WorkspaceObservation, error) {
 	if f.mutationDispatched && f.observeAfterMutationErr != nil {
 		return nil, f.observeAfterMutationErr
 	}
-	return append([]herdrrun.WorkspaceObservation(nil), f.workspaces...), nil
+	return append([]backend.WorkspaceObservation(nil), f.workspaces...), nil
 }
 
-func (f *fakeHerdrLifecycleRuntime) OpenWorktree(_ context.Context, req herdrrun.WorktreeOpenRequest) (herdrrun.WorktreeMutationResult, error) {
+func (f *fakeHerdrLifecycleRuntime) OpenWorktree(_ context.Context, req backend.WorktreeOpenRequest) (backend.WorktreeMutationResult, error) {
 	f.openCalls++
 	if herdrMutationDefinitelyNotIssued(f.openErr) {
-		return herdrrun.WorktreeMutationResult{}, f.openErr
+		return backend.WorktreeMutationResult{}, f.openErr
 	}
 	workspace := herdrLifecycleWorkspace("w-reopened", req.Label, req.Path, req.SourceRepoKey, req.SourceRepoRoot)
 	f.workspaces = append(f.workspaces, workspace)
 	f.mutationDispatched = true
-	return herdrrun.WorktreeMutationResult{WorkspaceObservation: workspace}, f.openErr
+	return backend.WorktreeMutationResult{WorkspaceObservation: workspace}, f.openErr
 }
 
 func (f *fakeHerdrLifecycleRuntime) RemoveWorktree(ctx context.Context, workspaceID, path string) error {
@@ -134,14 +133,14 @@ type herdrLifecycleFixture struct {
 	worktreePath string
 	branch       string
 	pane         state.Pane
-	workspace    herdrrun.WorkspaceObservation
+	workspace    backend.WorkspaceObservation
 }
 
 func TestHerdrCloseRemovesOwnedWorktreeAndStateButKeepsBranch(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 	}
 	opts := herdrLifecycleOptions(fixture, runtime)
 
@@ -166,7 +165,7 @@ func TestHerdrCloseRemovesCompletedPaneLessWorkspace(t *testing.T) {
 	workspace.Panes = nil
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{workspace},
+		workspaces:  []backend.WorkspaceObservation{workspace},
 	}
 
 	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
@@ -183,7 +182,7 @@ func TestHerdrCleanupRemovesEligibleOwnedWorktree(t *testing.T) {
 	installLifecycleCleanupGH(t)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 	}
 
 	if got := Cleanup(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, nopLogger{}); got != exitcode.OK {
@@ -200,7 +199,7 @@ func TestHerdrCloseHonorsCustomStatePath(t *testing.T) {
 	}
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 	}
 	opts := herdrLifecycleOptions(fixture, runtime)
 	opts.StatePath = customState
@@ -230,7 +229,7 @@ func TestHerdrMergeFastForwardsRecordedBranch(t *testing.T) {
 
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 	}
 	opts := herdrLifecycleOptions(fixture, runtime)
 	if got := Merge(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
@@ -254,7 +253,7 @@ func TestHerdrMergeRejectsIncompleteIdentityBeforeGitMutation(t *testing.T) {
 	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 	}
 	before := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", "HEAD"))
 
@@ -276,7 +275,7 @@ func TestHerdrMergeRejectsForeignWorkspaceAtSavedCheckout(t *testing.T) {
 	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "untrusted child")
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{foreignHerdrWorkspaceAtSameCheckout(fixture)},
+		workspaces:  []backend.WorkspaceObservation{foreignHerdrWorkspaceAtSameCheckout(fixture)},
 	}
 	before := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", "HEAD"))
 
@@ -295,7 +294,7 @@ func TestHerdrCloseRejectsForeignWorkspaceAtSavedCheckout(t *testing.T) {
 	t.Setenv("FANOUT_TEST_BEFORE_WORKTREE", hookPath)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{foreignHerdrWorkspaceAtSameCheckout(fixture)},
+		workspaces:  []backend.WorkspaceObservation{foreignHerdrWorkspaceAtSameCheckout(fixture)},
 	}
 	opts := herdrLifecycleOptions(fixture, runtime)
 	opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
@@ -329,7 +328,7 @@ func TestHerdrReopenMatcherRejectsForeignWorkspaceAtSavedCheckout(t *testing.T) 
 		fixture.pane.HerdrRepoKey,
 		fixture.pane.HerdrRepoRoot,
 	)
-	for name, workspaces := range map[string][]herdrrun.WorkspaceObservation{
+	for name, workspaces := range map[string][]backend.WorkspaceObservation{
 		"foreign only":         {foreign},
 		"expected and foreign": {expected, foreign},
 	} {
@@ -345,7 +344,7 @@ func TestHerdrCloseUsesResidualWorkspaceClose(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot:              fixture.projectRoot,
-		workspaces:               []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:               []backend.WorkspaceObservation{fixture.workspace},
 		keepWorkspaceAfterRemove: true,
 	}
 
@@ -366,11 +365,11 @@ func TestHerdrCloseReopensCheckoutOnlyStateWithMultiPaneCoordinator(t *testing.T
 	coordinator.Pane.Pane = "w-coordinator:p1"
 	coordinator.TerminalID = "terminal-coordinator"
 	coordinator.CWD = fixture.projectRoot
-	coordinator.Panes = []herdrrun.WorkspacePaneObservation{{
+	coordinator.Panes = []backend.WorkspacePaneObservation{{
 		Pane: coordinator.Pane, TerminalID: coordinator.TerminalID, CWD: fixture.projectRoot,
 	}}
 	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
-	coordinator.Panes = append(coordinator.Panes, herdrrun.WorkspacePaneObservation{
+	coordinator.Panes = append(coordinator.Panes, backend.WorkspacePaneObservation{
 		Pane:       backend.PaneRef{Backend: backend.Herdr, Workspace: coordinator.WorkspaceID, Pane: "w-coordinator:p2"},
 		TerminalID: "terminal-coordinator-extra", CWD: filepath.Join(fixture.projectRoot, "subdir"),
 	})
@@ -379,7 +378,7 @@ func TestHerdrCloseReopensCheckoutOnlyStateWithMultiPaneCoordinator(t *testing.T
 	coordinator.CWD = ""
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{coordinator},
+		workspaces:  []backend.WorkspaceObservation{coordinator},
 	}
 
 	lg := &captureLogger{}
@@ -429,7 +428,7 @@ func TestHerdrCloseReusesIssueCoordinatorAcrossLinkedPlanOwners(t *testing.T) {
 	recordLifecycleCoordinatorIntent(t, base.projectRoot, firstPlan, coordinator)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: secondRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{coordinator},
+		workspaces:  []backend.WorkspaceObservation{coordinator},
 	}
 
 	lg := &captureLogger{}
@@ -474,7 +473,7 @@ func TestHerdrCloseFailsClosedOnTerminalIdentityMismatch(t *testing.T) {
 	workspace.Panes[0].Pane.Pane = "w2:foreign"
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{workspace},
+		workspaces:  []backend.WorkspaceObservation{workspace},
 	}
 
 	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
@@ -493,7 +492,7 @@ func TestHerdrCloseVerifiesTerminalBeforeClosingResidualWorkspace(t *testing.T) 
 	workspace.Panes[0].Pane.Pane = "w2:foreign"
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{workspace},
+		workspaces:  []backend.WorkspaceObservation{workspace},
 	}
 
 	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
@@ -515,7 +514,7 @@ func TestHerdrCloseFailsClosedWhenOwnedSessionCannotBeVerified(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 		verifyErr:   errors.New("foreign owner marker"),
 	}
 
@@ -545,7 +544,7 @@ func TestHerdrHooksRequireFreshIdentityPreflight(t *testing.T) {
 			t.Setenv("FANOUT_TEST_BEFORE_PANE", paneHookPath)
 			runtime := &fakeHerdrLifecycleRuntime{
 				projectRoot:     fixture.projectRoot,
-				workspaces:      []herdrrun.WorkspaceObservation{fixture.workspace},
+				workspaces:      []backend.WorkspaceObservation{fixture.workspace},
 				verifyErr:       errors.New("owned route changed"),
 				verifyErrAtCall: tt.verifyErrAtCall,
 			}
@@ -593,7 +592,7 @@ func TestHerdrCleanupRetryDoesNotRepeatHooks(t *testing.T) {
 				}
 				return &fakeHerdrLifecycleRuntime{
 					projectRoot: fixture.projectRoot,
-					workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+					workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 				}
 			},
 			beforeTry: func(*fakeHerdrLifecycleRuntime) {},
@@ -658,7 +657,7 @@ func TestHerdrCloseDoesNotForceDirtyCheckout(t *testing.T) {
 	}
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 	}
 
 	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
@@ -681,7 +680,7 @@ func TestHerdrCloseAcceptsResponseLossOnlyAfterAbsence(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 		removeErr:   errors.New("response lost"),
 	}
 
@@ -698,7 +697,7 @@ func TestHerdrCloseDoesNotChainWorkspaceCloseAfterAmbiguousRemove(t *testing.T) 
 	fixture := newHerdrLifecycleFixture(t)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot:              fixture.projectRoot,
-		workspaces:               []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:               []backend.WorkspaceObservation{fixture.workspace},
 		removeErr:                errors.New("response lost"),
 		keepWorkspaceAfterRemove: true,
 	}
@@ -734,7 +733,7 @@ func TestHerdrCloseRemovesResidualLaunchIntentAndEnvironment(t *testing.T) {
 	worktreeIntentID, envPath := recordResidualHerdrLaunchIntent(t, fixture, runtimeDir)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 	}
 
 	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
@@ -765,7 +764,7 @@ func TestHerdrCloseRejectsResidualLaunchIntentForDifferentWorkspace(t *testing.T
 	rewriteResidualLaunchLabel(t, fixture.projectRoot, worktreeIntentID, "foreign-workspace")
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 	}
 
 	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
@@ -842,8 +841,8 @@ func TestSavedHerdrCleanupRejectsChangedRuntimeIdentity(t *testing.T) {
 
 func TestHerdrCleanupDiscardsPlanAfterDefiniteNonMutation(t *testing.T) {
 	errorsByName := map[string]error{
-		"not-issued": herdrrun.MutationNotIssuedError{Cause: errors.New("dispatch unavailable")},
-		"rejected":   herdrrun.MutationRejectedError{Code: "rejected", Message: "request refused"},
+		"not-issued": backend.MutationNotIssuedError{Cause: errors.New("dispatch unavailable")},
+		"rejected":   backend.MutationRejectedError{Code: "rejected", Message: "request refused"},
 	}
 	for _, phase := range []state.HerdrCleanupPhase{
 		state.HerdrCleanupReopen,
@@ -882,8 +881,8 @@ func TestHerdrCleanupReplansAfterRejectedRemoveAndHeadChange(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
-		removeErr:   herdrrun.MutationRejectedError{Code: "dirty", Message: "request refused"},
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+		removeErr:   backend.MutationRejectedError{Code: "dirty", Message: "request refused"},
 	}
 
 	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
@@ -949,7 +948,7 @@ func TestExpiredPlannedHerdrCleanupDoesNotIssueMutation(t *testing.T) {
 			recordExpiredHerdrCleanupIntent(t, fixture, phase)
 			runtime := &fakeHerdrLifecycleRuntime{
 				projectRoot: fixture.projectRoot,
-				workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+				workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 			}
 
 			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
@@ -987,7 +986,7 @@ func TestExpiredPlannedHerdrCleanupFinalizesAlreadyAbsentResources(t *testing.T)
 func TestExpiredReopenedHerdrCleanupPreservesReplacementIdentityAndRefreshesHead(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	runtime := prepareHerdrCleanupPhase(t, fixture, state.HerdrCleanupReopen)
-	runtime.removeErr = herdrrun.MutationNotIssuedError{Cause: errors.New("remove dispatch unavailable")}
+	runtime.removeErr = backend.MutationNotIssuedError{Cause: errors.New("remove dispatch unavailable")}
 
 	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
 		t.Fatalf("first Close() = %d, want %d", got, exitcode.Env)
@@ -1018,7 +1017,7 @@ func TestHerdrCloseEverythingCompareDeletesOnlyFanoutCreatedBranch(t *testing.T)
 	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []herdrrun.WorkspaceObservation{fixture.workspace},
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 	}
 
 	if got := CloseWithMode(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.OK {
@@ -1107,17 +1106,17 @@ func newHerdrLifecycleFixture(t *testing.T) herdrLifecycleFixture {
 	}
 }
 
-func herdrLifecycleWorkspace(id, label, path, repoKey, repoRoot string) herdrrun.WorkspaceObservation {
+func herdrLifecycleWorkspace(id, label, path, repoKey, repoRoot string) backend.WorkspaceObservation {
 	ref := backend.PaneRef{Backend: backend.Herdr, Workspace: id, Pane: id + ":p1"}
 	terminalID := "terminal-" + id
-	return herdrrun.WorkspaceObservation{
+	return backend.WorkspaceObservation{
 		WorkspaceID: id, Label: label, Path: path, RepoKey: repoKey, RepoRoot: repoRoot,
 		Pane: ref, TerminalID: terminalID, CWD: path,
-		Panes: []herdrrun.WorkspacePaneObservation{{Pane: ref, TerminalID: terminalID, CWD: path}},
+		Panes: []backend.WorkspacePaneObservation{{Pane: ref, TerminalID: terminalID, CWD: path}},
 	}
 }
 
-func foreignHerdrWorkspaceAtSameCheckout(fixture herdrLifecycleFixture) herdrrun.WorkspaceObservation {
+func foreignHerdrWorkspaceAtSameCheckout(fixture herdrLifecycleFixture) backend.WorkspaceObservation {
 	return herdrLifecycleWorkspace(
 		"w-foreign",
 		"foreign-label",
@@ -1141,12 +1140,12 @@ func prepareHerdrCleanupPhase(
 			fixture.pane.HerdrRepoKey, fixture.pane.HerdrRepoRoot,
 		)
 		recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
-		runtime.workspaces = []herdrrun.WorkspaceObservation{coordinator}
+		runtime.workspaces = []backend.WorkspaceObservation{coordinator}
 	case state.HerdrCleanupRemove:
-		runtime.workspaces = []herdrrun.WorkspaceObservation{fixture.workspace}
+		runtime.workspaces = []backend.WorkspaceObservation{fixture.workspace}
 	case state.HerdrCleanupWorkspaceClose:
 		runHerdrLifecycleGit(t, fixture.projectRoot, "worktree", "remove", fixture.worktreePath)
-		runtime.workspaces = []herdrrun.WorkspaceObservation{fixture.workspace}
+		runtime.workspaces = []backend.WorkspaceObservation{fixture.workspace}
 	default:
 		t.Fatalf("unsupported cleanup phase %q", phase)
 	}
@@ -1157,7 +1156,7 @@ func recordLifecycleCoordinatorIntent(
 	t *testing.T,
 	projectRoot string,
 	target state.Pane,
-	workspace herdrrun.WorkspaceObservation,
+	workspace backend.WorkspaceObservation,
 ) {
 	t.Helper()
 	locked, err := state.LockProjectForLaunch(projectRoot)

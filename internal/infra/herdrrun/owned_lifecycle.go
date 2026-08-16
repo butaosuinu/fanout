@@ -9,14 +9,12 @@ import (
 	"syscall"
 	"time"
 
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
+
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
-
-// ErrOwnedGenerationStillLive reports that the exact saved server generation
-// is still live, so an explicit restart has not issued an external mutation.
-var ErrOwnedGenerationStillLive = errors.New("herdr owned server generation is still live")
 
 // InspectOwnedServer returns the marker and lease identity that an explicit
 // restart or shutdown must persist before it changes the owned server.
@@ -362,7 +360,7 @@ func retireAbsentOwnedGeneration(
 		return err
 	}
 	if running {
-		return fmt.Errorf("%w; refusing %s", ErrOwnedGenerationStillLive, action)
+		return fmt.Errorf("%w; refusing %s", corebackend.ErrOwnedGenerationStillLive, action)
 	}
 	if err := verifySavedProcessesAbsent(expected, action); err != nil {
 		return err

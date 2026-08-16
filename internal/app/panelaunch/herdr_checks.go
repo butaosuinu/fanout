@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -58,7 +57,7 @@ func verifyHerdrWorktreePreconditions(
 func validateWorkspacePostcondition(
 	intent state.HerdrIntent,
 	source *worktree.RepoIdentity,
-	observation herdrrun.WorkspaceObservation,
+	observation backend.WorkspaceObservation,
 ) error {
 	kind := "coordinator"
 	provenanceOK := observation.Path == "" && observation.RepoKey == "" && observation.RepoRoot == ""
@@ -79,7 +78,7 @@ func validateWorkspacePostcondition(
 
 func verifyCoordinatorObservation(
 	expected state.HerdrResource,
-	workspaces []herdrrun.WorkspaceObservation,
+	workspaces []backend.WorkspaceObservation,
 ) error {
 	for _, workspace := range workspaces {
 		if workspace.WorkspaceID != expected.WorkspaceID {

@@ -17,7 +17,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -27,13 +26,13 @@ import (
 type fakeHerdrLaunchRuntime struct {
 	fakeHerdrRealizeRuntime
 	live            []backend.LivePane
-	metadataReports []herdrrun.MetadataReport
+	metadataReports []backend.MetadataReport
 	metadataErr     error
 	removeCalls     []string
 	remove          func(string, string) error
-	launchRoute     herdrrun.OwnedLaunchRoute
-	processInfo     herdrrun.PaneProcessInfo
-	process         func(context.Context, string) (herdrrun.PaneProcessInfo, error)
+	launchRoute     backend.OwnedLaunchRoute
+	processInfo     backend.PaneProcessInfo
+	process         func(context.Context, string) (backend.PaneProcessInfo, error)
 	listLive        func(context.Context) ([]backend.LivePane, error)
 	processErr      error
 	liveErr         error
@@ -50,7 +49,7 @@ func (retryableHerdrObservationError) Error() string { return "transient observa
 func (retryableHerdrObservationError) RetryableObservation() bool { return true }
 
 func (f *fakeHerdrLaunchRuntime) VerifyOwned(context.Context) error { return nil }
-func (f *fakeHerdrLaunchRuntime) LaunchRoute() (herdrrun.OwnedLaunchRoute, error) {
+func (f *fakeHerdrLaunchRuntime) LaunchRoute() (backend.OwnedLaunchRoute, error) {
 	route := f.launchRoute
 	if route.EmitterPath == "" {
 		route.EmitterPath = route.LauncherPath
@@ -59,7 +58,7 @@ func (f *fakeHerdrLaunchRuntime) LaunchRoute() (herdrrun.OwnedLaunchRoute, error
 }
 
 func TestVerifyHerdrConsoleRouteRejectsOutdatedLauncher(t *testing.T) {
-	runtime := &fakeHerdrLaunchRuntime{launchRoute: herdrrun.OwnedLaunchRoute{
+	runtime := &fakeHerdrLaunchRuntime{launchRoute: backend.OwnedLaunchRoute{
 		LauncherPath: "/owned/old-fanout", EmitterPath: "/owned/current-fanout",
 	}}
 	if _, err := verifyHerdrConsoleRoute(context.Background(), runtime); err == nil ||
@@ -79,7 +78,7 @@ func (f *fakeHerdrLaunchRuntime) WaitForLauncher(ctx context.Context, paneID, no
 	return nil
 }
 
-func (f *fakeHerdrLaunchRuntime) ProcessInfo(ctx context.Context, paneID string) (herdrrun.PaneProcessInfo, error) {
+func (f *fakeHerdrLaunchRuntime) ProcessInfo(ctx context.Context, paneID string) (backend.PaneProcessInfo, error) {
 	if f.process != nil {
 		return f.process(ctx, paneID)
 	}
@@ -104,7 +103,7 @@ func (f *fakeHerdrLaunchRuntime) RenameAgent(context.Context, string, string) er
 	return nil
 }
 
-func (f *fakeHerdrLaunchRuntime) ReportMetadata(_ context.Context, report herdrrun.MetadataReport) error {
+func (f *fakeHerdrLaunchRuntime) ReportMetadata(_ context.Context, report backend.MetadataReport) error {
 	f.metadataReports = append(f.metadataReports, report)
 	return f.metadataErr
 }
@@ -354,7 +353,7 @@ func TestFinalizeHerdrAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
 	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
 	hooks := deterministicHerdrRealizeHooks()
 	shared := realizeTestHerdrCoordinator(t, repo, &runtime.fakeHerdrRealizeRuntime, hooks)
-	runtime.launchRoute = herdrrun.OwnedLaunchRoute{
+	runtime.launchRoute = backend.OwnedLaunchRoute{
 		GitCommonDir: runtime.route.GitCommonDir,
 		Session:      runtime.route.Session, SocketPath: runtime.route.SocketPath,
 		LauncherPath: "/owned/fanout", RuntimeDir: t.TempDir(),
@@ -549,7 +548,7 @@ func TestFinishIssuedHerdrAgentPreservesObservedAgentAfterContextExpires(t *test
 	defer cancel()
 
 	_, err := launcher.finishIssuedHerdrAgent(
-		ctx, locked, herdrrun.OwnedLaunchRoute{}, intent,
+		ctx, locked, backend.OwnedLaunchRoute{}, intent,
 		func(intent state.HerdrIntent, panes []backend.LivePane) (backend.LivePane, bool) {
 			return exactHerdrLaunchPane(intent, panes, intent.Launch.AgentName)
 		},
@@ -961,7 +960,7 @@ func TestPrepareHerdrLaunchRejectsTeamBindingChange(t *testing.T) {
 				CodexTeamStatusPath: filepath.Join(t.TempDir(), "requested-status.json"),
 			}
 			_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).prepareHerdrLaunch(
-				locked, herdrrun.OwnedLaunchRoute{}, intent,
+				locked, backend.OwnedLaunchRoute{}, intent,
 				func(launch *state.HerdrLaunch) error {
 					return validateHerdrLaunchBinding(req, launch)
 				}, nil,
@@ -1108,7 +1107,7 @@ func TestHerdrLifecycleOwnershipIsPersistedInStateRows(t *testing.T) {
 		t.Fatalf("child lifecycle ownership = %+v", pane)
 	}
 
-	coordinator := herdrCoordinatorPane(intent, herdrrun.OwnedLaunchRoute{
+	coordinator := herdrCoordinatorPane(intent, backend.OwnedLaunchRoute{
 		Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock",
 	}, intent.RuntimeParent, -1)
 	if coordinator.HerdrWorkspaceLabel != intent.WorkspaceLabel {
@@ -1120,7 +1119,7 @@ func TestRecordHerdrCoordinatorReusesLinkedWorktreeStateRow(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	sibling := filepath.Join(t.TempDir(), "sibling")
 	gitCmdTest(t, repo, "worktree", "add", "-b", "linked-row", sibling, "HEAD")
-	route := herdrrun.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
+	route := backend.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
 	intent := state.HerdrIntent{
 		RuntimeParent: "528",
 		Resource: state.HerdrResource{
@@ -1170,7 +1169,7 @@ func TestRecordHerdrCoordinatorScopesPlanSlugToOwnerRoot(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	sibling := filepath.Join(t.TempDir(), "sibling")
 	gitCmdTest(t, repo, "worktree", "add", "-b", "linked-plan-row", sibling, "HEAD")
-	route := herdrrun.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
+	route := backend.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
 
 	for index, root := range []string{repo, sibling} {
 		locked, err := state.LockProjectForLaunch(root)
@@ -1317,9 +1316,9 @@ func TestVerifyHerdrAgentProcessAcceptsDirectAndInterpreterChains(t *testing.T) 
 			Args:       []string{"prompt with spaces"},
 		},
 	}
-	info := herdrrun.PaneProcessInfo{
+	info := backend.PaneProcessInfo{
 		ShellPID: 42, ForegroundProcessGroup: 42,
-		ForegroundProcesses: []herdrrun.PaneProcess{{
+		ForegroundProcesses: []backend.PaneProcess{{
 			PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: intent.Launch.Executable,
 			CWD:   intent.WorktreePath,
 			Argv0: intent.Launch.Executable, Argv: intent.Launch.Args,
@@ -1329,7 +1328,7 @@ func TestVerifyHerdrAgentProcessAcceptsDirectAndInterpreterChains(t *testing.T) 
 		t.Fatalf("exact process rejected: %v", err)
 	}
 
-	info.ForegroundProcesses = []herdrrun.PaneProcess{
+	info.ForegroundProcesses = []backend.PaneProcess{
 		{
 			PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: "/usr/bin/node",
 			CWD: intent.WorktreePath, Argv0: "/usr/bin/node",
@@ -1353,18 +1352,18 @@ func TestVerifyHerdrAgentProcessRejectsAmbiguousOrForeignChains(t *testing.T) {
 			Args:       []string{"prompt with spaces"},
 		},
 	}
-	root := herdrrun.PaneProcess{
+	root := backend.PaneProcess{
 		PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: "/usr/bin/node",
 		CWD: intent.WorktreePath, Argv0: "/usr/bin/node",
 		Argv: append([]string{intent.Launch.Executable}, intent.Launch.Args...),
 	}
-	child := herdrrun.PaneProcess{
+	child := backend.PaneProcess{
 		PID: 43, ParentPID: 42, ProcessGroup: 42, Executable: "/opt/lib/codex",
 		CWD: intent.WorktreePath, Argv0: "/opt/lib/codex", Argv: intent.Launch.Args,
 	}
-	info := herdrrun.PaneProcessInfo{
+	info := backend.PaneProcessInfo{
 		ShellPID: 42, ForegroundProcessGroup: 42,
-		ForegroundProcesses: []herdrrun.PaneProcess{root, child},
+		ForegroundProcesses: []backend.PaneProcess{root, child},
 	}
 
 	foreignRoot := root
@@ -1374,19 +1373,19 @@ func TestVerifyHerdrAgentProcessRejectsAmbiguousOrForeignChains(t *testing.T) {
 		t.Fatal("foreign interpreter entrypoint was accepted")
 	}
 
-	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child}
+	info.ForegroundProcesses = []backend.PaneProcess{root, child}
 	info.ForegroundProcesses[0].Executable = "/foreign/not-node"
 	if err := verifyHerdrAgentProcess(info, intent); err == nil {
 		t.Fatal("interpreter argv0 from a different OS executable was accepted")
 	}
 
-	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child}
+	info.ForegroundProcesses = []backend.PaneProcess{root, child}
 	info.ForegroundProcesses[1].Executable = "/foreign/not-codex"
 	if err := verifyHerdrAgentProcess(info, intent); err == nil {
 		t.Fatal("agent argv0 from a different OS executable was accepted")
 	}
 
-	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child}
+	info.ForegroundProcesses = []backend.PaneProcess{root, child}
 	info.ForegroundProcesses[1].ParentPID = 99
 	if err := verifyHerdrAgentProcess(info, intent); err == nil {
 		t.Fatal("unrelated child process was accepted")
@@ -1394,7 +1393,7 @@ func TestVerifyHerdrAgentProcessRejectsAmbiguousOrForeignChains(t *testing.T) {
 
 	duplicate := child
 	duplicate.PID = 44
-	info.ForegroundProcesses = []herdrrun.PaneProcess{root, child, duplicate}
+	info.ForegroundProcesses = []backend.PaneProcess{root, child, duplicate}
 	if err := verifyHerdrAgentProcess(info, intent); err == nil {
 		t.Fatal("ambiguous native children were accepted")
 	}
@@ -1402,10 +1401,10 @@ func TestVerifyHerdrAgentProcessRejectsAmbiguousOrForeignChains(t *testing.T) {
 
 func TestVerifyHerdrLauncherProcessRejectsForeignOSIdentity(t *testing.T) {
 	intent := state.HerdrIntent{WorktreePath: "/repo/worktree"}
-	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
-	for _, mutate := range []func(*herdrrun.PaneProcess){
-		func(process *herdrrun.PaneProcess) { process.Executable = "/foreign/fanout" },
-		func(process *herdrrun.PaneProcess) { process.ProcessGroup++ },
+	route := backend.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
+	for _, mutate := range []func(*backend.PaneProcess){
+		func(process *backend.PaneProcess) { process.Executable = "/foreign/fanout" },
+		func(process *backend.PaneProcess) { process.ProcessGroup++ },
 	} {
 		info := testHerdrLauncherProcess(intent, route.LauncherPath)
 		mutate(&info.ForegroundProcesses[0])
@@ -1421,17 +1420,17 @@ func TestWaitForHerdrLaunchProcessRetriesExactLauncherTransition(t *testing.T) {
 		Resource: state.HerdrResource{PaneID: "w1:p1"},
 		Launch:   &state.HerdrLaunch{Executable: "/bin/zsh"},
 	}
-	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
+	route := backend.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
 	runtime := &fakeHerdrLaunchRuntime{}
 	calls := 0
-	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+	runtime.process = func(context.Context, string) (backend.PaneProcessInfo, error) {
 		calls++
 		if calls == 1 {
 			return testHerdrLauncherProcess(intent, route.LauncherPath), nil
 		}
-		return herdrrun.PaneProcessInfo{
+		return backend.PaneProcessInfo{
 			ShellPID: 42, ForegroundProcessGroup: 42,
-			ForegroundProcesses: []herdrrun.PaneProcess{{
+			ForegroundProcesses: []backend.PaneProcess{{
 				PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: "/bin/zsh",
 				CWD: intent.WorktreePath, Argv0: "/bin/zsh",
 			}},
@@ -1444,7 +1443,7 @@ func TestWaitForHerdrLaunchProcessRetriesExactLauncherTransition(t *testing.T) {
 		t.Fatalf("process-info calls = %d, want 2", calls)
 	}
 	calls = 0
-	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+	runtime.process = func(context.Context, string) (backend.PaneProcessInfo, error) {
 		calls++
 		info := testHerdrLauncherProcess(intent, route.LauncherPath)
 		info.ForegroundProcesses[0].Executable = "/foreign/fanout"
@@ -1529,7 +1528,7 @@ func TestIssuedHerdrSyntheticReservationBlocksReuseWithoutManualizing(t *testing
 	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
 	_, prepareErr := launcher.prepareHerdrLaunch(
-		locked, herdrrun.OwnedLaunchRoute{}, intent,
+		locked, backend.OwnedLaunchRoute{}, intent,
 		func(*state.HerdrLaunch) error { return nil }, nil,
 	)
 	if !errors.Is(prepareErr, errHerdrLaunchStatePreserved) {
@@ -1586,7 +1585,7 @@ func TestHerdrLaunchDoesNotIssueTokenAfterLauncherWaitExpires(t *testing.T) {
 		return nil
 	}
 	_, err = (&Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}, Herdr: runtime}).startHerdrAgent(
-		context.Background(), locked, herdrrun.OwnedLaunchRoute{}, intent,
+		context.Background(), locked, backend.OwnedLaunchRoute{}, intent,
 		func(*state.HerdrLaunch) error { return nil }, nil,
 		func(state.HerdrIntent, []backend.LivePane) (backend.LivePane, bool) {
 			return backend.LivePane{}, false
@@ -1635,7 +1634,7 @@ func TestHerdrCodexTeamFailedStatusStopsAgentWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	intent.Launch.Executable, intent.Launch.Args = spec.Executable, spec.Args
-	route := herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
+	route := backend.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
 	runtime.processInfo = testHerdrLauncherProcess(intent, route.LauncherPath)
 	runtime.live = []backend.LivePane{testHerdrIdlePane(intent)}
 	journal, err := locked.HerdrIntents(repo)
@@ -1679,11 +1678,11 @@ func TestHerdrLaunchDoesNotRenameAfterProcessCheckExpires(t *testing.T) {
 			AgentName: "fanout-child", Executable: "/bin/claude", Args: []string{"prompt"},
 		},
 	}
-	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+	runtime.process = func(context.Context, string) (backend.PaneProcessInfo, error) {
 		time.Sleep(60 * time.Millisecond)
-		return herdrrun.PaneProcessInfo{
+		return backend.PaneProcessInfo{
 			ShellPID: 42, ForegroundProcessGroup: 42,
-			ForegroundProcesses: []herdrrun.PaneProcess{{
+			ForegroundProcesses: []backend.PaneProcess{{
 				PID: 42, CWD: intent.WorktreePath, Argv: []string{"/bin/claude", "prompt"},
 			}},
 		}, nil
@@ -1722,7 +1721,7 @@ func TestAdmitHerdrLauncherFencesExactTerminalBeforeToken(t *testing.T) {
 	if saveErr := journal.Save(); saveErr != nil {
 		t.Fatal(saveErr)
 	}
-	runtime.launchRoute = herdrrun.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
+	runtime.launchRoute = backend.OwnedLaunchRoute{LauncherPath: "/owned/fanout"}
 	runtime.processInfo = testHerdrLauncherProcess(intent, runtime.launchRoute.LauncherPath)
 	runtime.live = []backend.LivePane{testHerdrIdlePane(intent)}
 	runtime.live[0].TerminalID = "reused-terminal"
@@ -1745,14 +1744,14 @@ func TestHerdrCoordinatorIdentityMismatchFailsBeforeStateRow(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrLaunchRuntime{}
 	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
-	runtime.launchRoute = herdrrun.OwnedLaunchRoute{
+	runtime.launchRoute = backend.OwnedLaunchRoute{
 		Session: "fanout-test", SocketPath: "/private/tmp/fanout-test/herdr.sock",
 		LauncherPath: "/owned/fanout",
 	}
 	mutate := runtime.mutate
-	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (backend.WorktreeMutationResult, error) {
 		result, err := mutate(req)
-		if err == nil && req.Kind == herdrrun.WorkspaceCreate {
+		if err == nil && req.Kind == backend.WorkspaceCreate {
 			intent := state.HerdrIntent{
 				WorktreePath: result.CWD, Session: runtime.launchRoute.Session,
 				SocketPath: runtime.launchRoute.SocketPath,
@@ -1788,14 +1787,14 @@ func TestHerdrCoordinatorRetriesTransientIdentityObservation(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrLaunchRuntime{}
 	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
-	runtime.launchRoute = herdrrun.OwnedLaunchRoute{
+	runtime.launchRoute = backend.OwnedLaunchRoute{
 		Session: "fanout-test", SocketPath: "/private/tmp/fanout-test/herdr.sock",
 		LauncherPath: "/owned/fanout",
 	}
 	mutate := runtime.mutate
-	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (backend.WorktreeMutationResult, error) {
 		result, err := mutate(req)
-		if err == nil && req.Kind == herdrrun.WorkspaceCreate {
+		if err == nil && req.Kind == backend.WorkspaceCreate {
 			intent := state.HerdrIntent{
 				WorktreePath: result.CWD, Session: runtime.launchRoute.Session,
 				SocketPath: runtime.launchRoute.SocketPath,
@@ -1807,10 +1806,10 @@ func TestHerdrCoordinatorRetriesTransientIdentityObservation(t *testing.T) {
 		return result, err
 	}
 	processCalls := 0
-	runtime.process = func(context.Context, string) (herdrrun.PaneProcessInfo, error) {
+	runtime.process = func(context.Context, string) (backend.PaneProcessInfo, error) {
 		processCalls++
 		if processCalls == 1 {
-			return herdrrun.PaneProcessInfo{}, retryableHerdrObservationError{}
+			return backend.PaneProcessInfo{}, retryableHerdrObservationError{}
 		}
 		return runtime.processInfo, nil
 	}
@@ -1835,14 +1834,14 @@ func TestHerdrCoordinatorReusesExpiredIntentWithinCurrentObservationBudget(t *te
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrLaunchRuntime{}
 	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
-	runtime.launchRoute = herdrrun.OwnedLaunchRoute{
+	runtime.launchRoute = backend.OwnedLaunchRoute{
 		Session: "fanout-test", SocketPath: "/private/tmp/fanout-test/herdr.sock",
 		LauncherPath: "/owned/fanout",
 	}
 	mutate := runtime.mutate
-	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (backend.WorktreeMutationResult, error) {
 		result, err := mutate(req)
-		if err == nil && req.Kind == herdrrun.WorkspaceCreate {
+		if err == nil && req.Kind == backend.WorkspaceCreate {
 			intent := state.HerdrIntent{
 				WorktreePath: result.CWD, Session: runtime.launchRoute.Session,
 				SocketPath: runtime.launchRoute.SocketPath,
@@ -1897,15 +1896,15 @@ func TestHerdrCoordinatorRecordConflictRetainsManualCleanupIntent(t *testing.T) 
 	repo := newHerdrRealizeRepo(t)
 	runtime := &fakeHerdrLaunchRuntime{}
 	installSuccessfulHerdrMutations(t, repo, &runtime.fakeHerdrRealizeRuntime)
-	runtime.launchRoute = herdrrun.OwnedLaunchRoute{
+	runtime.launchRoute = backend.OwnedLaunchRoute{
 		GitCommonDir: runtime.route.GitCommonDir,
 		Session:      "fanout-test", SocketPath: "/private/tmp/fanout-test/herdr.sock",
 		LauncherPath: "/owned/fanout",
 	}
 	mutate := runtime.mutate
-	runtime.mutate = func(req herdrTestMutation) (herdrrun.WorktreeMutationResult, error) {
+	runtime.mutate = func(req herdrTestMutation) (backend.WorktreeMutationResult, error) {
 		result, err := mutate(req)
-		if err == nil && req.Kind == herdrrun.WorkspaceCreate {
+		if err == nil && req.Kind == backend.WorkspaceCreate {
 			intent := state.HerdrIntent{
 				WorktreePath: result.CWD, Session: runtime.launchRoute.Session,
 				SocketPath: runtime.launchRoute.SocketPath,
@@ -2021,7 +2020,7 @@ func TestPrepareHerdrOperationSetsOneSharedLaunchDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = locked.Unlock() }()
-	runtime := &fakeHerdrLaunchRuntime{launchRoute: herdrrun.OwnedLaunchRoute{
+	runtime := &fakeHerdrLaunchRuntime{launchRoute: backend.OwnedLaunchRoute{
 		LauncherPath: "/owned/fanout", EmitterPath: "/owned/fanout",
 	}}
 	launcher := &Launcher{
@@ -2054,10 +2053,10 @@ func TestLaunchHerdrRunsClaudeModePreflightBeforeBackendAdmission(t *testing.T) 
 	}
 }
 
-func testHerdrLauncherProcess(intent state.HerdrIntent, launcherPath string) herdrrun.PaneProcessInfo {
-	return herdrrun.PaneProcessInfo{
+func testHerdrLauncherProcess(intent state.HerdrIntent, launcherPath string) backend.PaneProcessInfo {
+	return backend.PaneProcessInfo{
 		PaneID: intent.Resource.PaneID, ShellPID: 42, ForegroundProcessGroup: 42,
-		ForegroundProcesses: []herdrrun.PaneProcess{{
+		ForegroundProcesses: []backend.PaneProcess{{
 			PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: launcherPath,
 			CWD: intent.WorktreePath, Argv0: launcherPath,
 		}},

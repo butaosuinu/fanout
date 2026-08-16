@@ -11,19 +11,18 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 type restartRuntimeFake struct {
 	t               *testing.T
-	route           herdrrun.OwnedLaunchRoute
+	route           backend.OwnedLaunchRoute
 	waitPanes       []backend.LivePane
 	issuePanes      []backend.LivePane
 	resumedPanes    []backend.LivePane
 	finalPanes      []backend.LivePane
-	launcherInfo    herdrrun.PaneProcessInfo
-	resumedInfo     herdrrun.PaneProcessInfo
+	launcherInfo    backend.PaneProcessInfo
+	resumedInfo     backend.PaneProcessInfo
 	waitTimeout     time.Duration
 	waitDelay       time.Duration
 	waitCalls       int
@@ -35,7 +34,7 @@ type restartRuntimeFake struct {
 	preparedEnvPath string
 }
 
-func (f *restartRuntimeFake) LaunchRoute() (herdrrun.OwnedLaunchRoute, error) {
+func (f *restartRuntimeFake) LaunchRoute() (backend.OwnedLaunchRoute, error) {
 	return f.route, nil
 }
 
@@ -59,22 +58,22 @@ func (f *restartRuntimeFake) WaitRestoredPanes(
 	_ context.Context,
 	timeout time.Duration,
 	match func([]backend.LivePane) bool,
-) herdrrun.WaitResult {
+) backend.WaitResult {
 	f.waitCalls++
 	f.waitTimeout = timeout
 	time.Sleep(f.waitDelay)
-	status := herdrrun.WaitTimedOut
+	status := backend.WaitTimedOut
 	if match(f.waitPanes) {
-		status = herdrrun.WaitMatched
+		status = backend.WaitMatched
 	}
-	return herdrrun.WaitResult{Status: status, Panes: slices.Clone(f.waitPanes)}
+	return backend.WaitResult{Status: status, Panes: slices.Clone(f.waitPanes)}
 }
 
 func (f *restartRuntimeFake) IssueRestartResume(
 	_ context.Context,
 	_, _ string,
 	deadline time.Time,
-	preflight func(herdrrun.PaneProcessInfo, []backend.LivePane) error,
+	preflight func(backend.PaneProcessInfo, []backend.LivePane) error,
 	markIssued func() error,
 ) error {
 	f.issueTimeout = time.Until(deadline)
@@ -98,7 +97,7 @@ func (f *restartRuntimeFake) IssueRestartResume(
 func (f *restartRuntimeFake) ObserveRestartResume(
 	_ context.Context,
 	_ string,
-) (herdrrun.PaneProcessInfo, []backend.LivePane, error) {
+) (backend.PaneProcessInfo, []backend.LivePane, error) {
 	f.observeCalls++
 	panes := f.resumedPanes
 	if f.observeCalls > 1 && f.finalPanes != nil {
@@ -418,7 +417,7 @@ func newRestartRuntimeFake(
 	launcher := filepath.Join(runtimeDir, "launcher", "fanout")
 	return &restartRuntimeFake{
 		t: t,
-		route: herdrrun.OwnedLaunchRoute{
+		route: backend.OwnedLaunchRoute{
 			RuntimeDir: runtimeDir, Session: saved.HerdrSession, SocketPath: saved.HerdrSocketPath,
 			LauncherPath: launcher, ControlPath: filepath.Join(runtimeDir, "herdr-intents.json"),
 		},
@@ -452,10 +451,10 @@ func lockHerdrRestartTest(
 	return locked, journal
 }
 
-func restartProcessInfo(executable string, args []string, cwd string) herdrrun.PaneProcessInfo {
-	return herdrrun.PaneProcessInfo{
+func restartProcessInfo(executable string, args []string, cwd string) backend.PaneProcessInfo {
+	return backend.PaneProcessInfo{
 		PaneID: "w1:p1", ShellPID: 10, ForegroundProcessGroup: 10,
-		ForegroundProcesses: []herdrrun.PaneProcess{{
+		ForegroundProcesses: []backend.PaneProcess{{
 			PID: 10, ParentPID: 1, ProcessGroup: 10, Executable: executable,
 			Argv0: executable, Argv: args, CWD: cwd,
 		}},

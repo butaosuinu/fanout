@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 func TestMetadataArgsPinHerdr075CLI(t *testing.T) {
@@ -12,12 +14,12 @@ func TestMetadataArgsPinHerdr075CLI(t *testing.T) {
 		name     string
 		resource string
 		id       string
-		tokens   []MetadataToken
+		tokens   []corebackend.MetadataToken
 		want     []string
 	}{
 		{
 			name: "workspace sets every value", resource: "workspace", id: "w2",
-			tokens: []MetadataToken{
+			tokens: []corebackend.MetadataToken{
 				{Name: "fanout_issue", Value: "#494"},
 				{Name: "fanout_slug", Value: "herdr-sidebar-494"},
 			},
@@ -31,7 +33,7 @@ func TestMetadataArgsPinHerdr075CLI(t *testing.T) {
 			// An empty value is the clear rule: it must become --clear-token,
 			// never a --token with an empty right-hand side.
 			name: "pane clears the values it has none for", resource: "pane", id: "w2:p1",
-			tokens: []MetadataToken{
+			tokens: []corebackend.MetadataToken{
 				{Name: "fanout_parent", Value: "#524"},
 				{Name: "fanout_pr"},
 				{Name: "fanout_ci"},
@@ -60,15 +62,15 @@ func TestMetadataArgsPinHerdr075CLI(t *testing.T) {
 }
 
 func TestMetadataCallsSkipResourcesWithoutAPatch(t *testing.T) {
-	report := MetadataReport{
+	report := corebackend.MetadataReport{
 		Target:     testMetadataTarget(),
-		PaneTokens: []MetadataToken{{Name: "fanout_parent", Value: "#524"}},
+		PaneTokens: []corebackend.MetadataToken{{Name: "fanout_parent", Value: "#524"}},
 	}
 	calls := metadataCalls(report)
 	if len(calls) != 1 || calls[0][0] != "pane" {
 		t.Fatalf("metadataCalls(pane-only report) = %#v, want one pane call", calls)
 	}
-	report.WorkspaceTokens = []MetadataToken{{Name: "fanout_issue", Value: "#494"}}
+	report.WorkspaceTokens = []corebackend.MetadataToken{{Name: "fanout_issue", Value: "#494"}}
 	calls = metadataCalls(report)
 	if len(calls) != 2 || calls[0][0] != "workspace" || calls[1][0] != "pane" {
 		t.Fatalf("metadataCalls(both patches) = %#v, want workspace then pane", calls)
@@ -76,50 +78,50 @@ func TestMetadataCallsSkipResourcesWithoutAPatch(t *testing.T) {
 }
 
 func TestValidateMetadataReportFailsClosed(t *testing.T) {
-	valid := []MetadataToken{{Name: "fanout_issue", Value: "#494"}}
+	valid := []corebackend.MetadataToken{{Name: "fanout_issue", Value: "#494"}}
 	tests := []struct {
 		name   string
-		report MetadataReport
+		report corebackend.MetadataReport
 		want   string
 	}{
 		{
 			name:   "accepts a complete report",
-			report: MetadataReport{Target: testMetadataTarget(), WorkspaceTokens: valid},
+			report: corebackend.MetadataReport{Target: testMetadataTarget(), WorkspaceTokens: valid},
 		},
 		{
 			name:   "rejects a report with no token patch at all",
-			report: MetadataReport{Target: testMetadataTarget()},
+			report: corebackend.MetadataReport{Target: testMetadataTarget()},
 			want:   "no token patch",
 		},
 		{
 			name: "rejects a target missing the terminal identity",
-			report: MetadataReport{
-				Target:     func() MetadataTarget { t := testMetadataTarget(); t.TerminalID = ""; return t }(),
+			report: corebackend.MetadataReport{
+				Target:     func() corebackend.MetadataTarget { t := testMetadataTarget(); t.TerminalID = ""; return t }(),
 				PaneTokens: valid,
 			},
 			want: "target is incomplete",
 		},
 		{
 			name: "rejects a target missing worktree provenance",
-			report: MetadataReport{
-				Target:     func() MetadataTarget { t := testMetadataTarget(); t.CheckoutPath = ""; return t }(),
+			report: corebackend.MetadataReport{
+				Target:     func() corebackend.MetadataTarget { t := testMetadataTarget(); t.CheckoutPath = ""; return t }(),
 				PaneTokens: valid,
 			},
 			want: "worktree provenance is incomplete",
 		},
 		{
 			name: "rejects a token name Herdr would refuse",
-			report: MetadataReport{
+			report: corebackend.MetadataReport{
 				Target:          testMetadataTarget(),
-				WorkspaceTokens: []MetadataToken{{Name: "fanout issue", Value: "#494"}},
+				WorkspaceTokens: []corebackend.MetadataToken{{Name: "fanout issue", Value: "#494"}},
 			},
 			want: "is invalid",
 		},
 		{
 			name: "rejects the same token twice in one patch",
-			report: MetadataReport{
+			report: corebackend.MetadataReport{
 				Target: testMetadataTarget(),
-				WorkspaceTokens: []MetadataToken{
+				WorkspaceTokens: []corebackend.MetadataToken{
 					{Name: "fanout_issue", Value: "#494"},
 					{Name: "fanout_issue", Value: "#495"},
 				},
@@ -130,23 +132,23 @@ func TestValidateMetadataReportFailsClosed(t *testing.T) {
 			// Herdr truncates past 80 characters instead of failing, so a
 			// value that long would display differently from what was sent.
 			name: "rejects a value Herdr would truncate",
-			report: MetadataReport{
+			report: corebackend.MetadataReport{
 				Target:          testMetadataTarget(),
-				WorkspaceTokens: []MetadataToken{{Name: "fanout_slug", Value: strings.Repeat("x", 81)}},
+				WorkspaceTokens: []corebackend.MetadataToken{{Name: "fanout_slug", Value: strings.Repeat("x", 81)}},
 			},
 			want: "exceeds 80 characters",
 		},
 		{
 			name: "rejects a value Herdr would strip",
-			report: MetadataReport{
+			report: corebackend.MetadataReport{
 				Target:          testMetadataTarget(),
-				WorkspaceTokens: []MetadataToken{{Name: "fanout_slug", Value: "child\tslug"}},
+				WorkspaceTokens: []corebackend.MetadataToken{{Name: "fanout_slug", Value: "child\tslug"}},
 			},
 			want: "control-free display text",
 		},
 		{
 			name: "rejects more tokens than one report may carry",
-			report: MetadataReport{
+			report: corebackend.MetadataReport{
 				Target:          testMetadataTarget(),
 				WorkspaceTokens: manyMetadataTokens(17),
 			},
@@ -309,28 +311,28 @@ func TestReportMetadataRejectsANilSessionAndAnEmptyTarget(t *testing.T) {
 	if err := session.ReportMetadata(t.Context(), snapshotMetadataReport()); err == nil {
 		t.Fatal("ReportMetadata() on a nil session unexpectedly succeeded")
 	}
-	err := validateMetadataReport(MetadataReport{Target: MetadataTarget{}})
-	if !errors.Is(err, ErrOwnedIdentityMismatch) {
+	err := validateMetadataReport(corebackend.MetadataReport{Target: corebackend.MetadataTarget{}})
+	if !errors.Is(err, corebackend.ErrOwnedIdentityMismatch) {
 		t.Fatalf("validateMetadataReport(empty target) = %v, want an identity mismatch", err)
 	}
 }
 
 // snapshotMetadataReport targets the child workspace of validSnapshot().
-func snapshotMetadataReport() MetadataReport {
-	return MetadataReport{
-		Target: MetadataTarget{
+func snapshotMetadataReport() corebackend.MetadataReport {
+	return corebackend.MetadataReport{
+		Target: corebackend.MetadataTarget{
 			WorkspaceID: "w2", Label: "child",
 			RepoKey: "/repo/.git", RepoRoot: "/repo",
 			CheckoutPath: "/repo/.fanout/worktrees/child",
 			PaneID:       "w2:p1", TerminalID: "term-child",
 		},
-		WorkspaceTokens: []MetadataToken{{Name: "fanout_issue", Value: "#494"}},
-		PaneTokens:      []MetadataToken{{Name: "fanout_pr"}},
+		WorkspaceTokens: []corebackend.MetadataToken{{Name: "fanout_issue", Value: "#494"}},
+		PaneTokens:      []corebackend.MetadataToken{{Name: "fanout_pr"}},
 	}
 }
 
-func testMetadataTarget() MetadataTarget {
-	return MetadataTarget{
+func testMetadataTarget() corebackend.MetadataTarget {
+	return corebackend.MetadataTarget{
 		WorkspaceID: "w2", Label: "fanout-worktree-abc",
 		RepoKey: "/repo/.git", RepoRoot: "/repo",
 		CheckoutPath: "/repo/.fanout/worktrees/child",
@@ -350,10 +352,10 @@ func testMetadataSnapshot() snapshotJSON {
 	return snapshotJSON{Workspaces: &workspaces, Panes: &panes}
 }
 
-func manyMetadataTokens(count int) []MetadataToken {
-	tokens := make([]MetadataToken, 0, count)
+func manyMetadataTokens(count int) []corebackend.MetadataToken {
+	tokens := make([]corebackend.MetadataToken, 0, count)
 	for i := range count {
-		tokens = append(tokens, MetadataToken{Name: "fanout_" + strings.Repeat("x", i+1), Value: "v"})
+		tokens = append(tokens, corebackend.MetadataToken{Name: "fanout_" + strings.Repeat("x", i+1), Value: "v"})
 	}
 	return tokens
 }

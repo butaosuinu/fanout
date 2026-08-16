@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
+
 	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -25,7 +27,7 @@ func TestRestartOwnedRejectsLiveGenerationWithoutSpawning(t *testing.T) {
 	}
 
 	_, err = restartOwned(context.Background(), h.ownedOptions(), expected, h.supervisor.start, h.session.backend)
-	if !errors.Is(err, ErrOwnedGenerationStillLive) {
+	if !errors.Is(err, corebackend.ErrOwnedGenerationStillLive) {
 		t.Fatalf("restart live generation error = %v", err)
 	}
 	current, found, readErr := readOwnerMarker(h.layout.markerPath)
@@ -50,7 +52,7 @@ func TestRestartIntentAllowsReadsAndRejectsMutationsAndBootstrap(t *testing.T) {
 	if err := bound.Focus(target.Ref); err == nil || !strings.Contains(err.Error(), "restart is pending") {
 		t.Fatalf("Focus() under restart intent error = %v", err)
 	}
-	if _, err := h.session.PrepareNudge(context.Background(), NudgeTarget{
+	if _, err := h.session.PrepareNudge(context.Background(), corebackend.NudgeTarget{
 		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
 		TerminalID: target.TerminalID, AgentID: target.AgentID, AgentSession: target.AgentSession,
 	}, "nudge"); err == nil || !strings.Contains(err.Error(), "restart is pending") {
@@ -66,7 +68,7 @@ func TestRestartIntentAllowsReadsAndRejectsMutationsAndBootstrap(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := mutation()
-			if !errors.Is(err, ErrMutationNotIssued) || !strings.Contains(err.Error(), "restart is pending") {
+			if !errors.Is(err, corebackend.ErrMutationNotIssued) || !strings.Contains(err.Error(), "restart is pending") {
 				t.Fatalf("cleanup mutation under restart intent error = %v", err)
 			}
 		})

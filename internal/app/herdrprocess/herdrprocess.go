@@ -11,7 +11,6 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 )
 
 // Identity is the process portion of one persisted Herdr launch binding.
@@ -24,7 +23,7 @@ type Identity struct {
 
 // MatchAgent accepts the direct agent process or one exact interpreter root
 // with exactly one matching native descendant in the foreground process group.
-func MatchAgent(info herdrrun.PaneProcessInfo, identity Identity) (backend.ProcessIdentity, error) {
+func MatchAgent(info backend.PaneProcessInfo, identity Identity) (backend.ProcessIdentity, error) {
 	root, processes, ok := agentProcessRoot(info, identity)
 	if !ok {
 		return backend.ProcessIdentity{}, mismatchError()
@@ -49,23 +48,23 @@ func MatchAgent(info herdrrun.PaneProcessInfo, identity Identity) (backend.Proce
 }
 
 // VerifyAgent preserves the error-only call contract for existing callers.
-func VerifyAgent(info herdrrun.PaneProcessInfo, identity Identity) error {
+func VerifyAgent(info backend.PaneProcessInfo, identity Identity) error {
 	_, err := MatchAgent(info, identity)
 	return err
 }
 
 // InterpreterLaunchPending reports the narrow process transition where the
 // exact interpreter root is live but has not exposed its native child yet.
-func InterpreterLaunchPending(info herdrrun.PaneProcessInfo, identity Identity) bool {
+func InterpreterLaunchPending(info backend.PaneProcessInfo, identity Identity) bool {
 	root, processes, ok := agentProcessRoot(info, identity)
 	return ok && len(processes) == 1 && interpreterAgentProcess(root, identity)
 }
 
 func verifyCodexPlanController(
-	info herdrrun.PaneProcessInfo,
+	info backend.PaneProcessInfo,
 	identity Identity,
-	root herdrrun.PaneProcess,
-	processes map[int]herdrrun.PaneProcess,
+	root backend.PaneProcess,
+	processes map[int]backend.PaneProcess,
 ) error {
 	codexPath, ok := codexPlanExecutable(identity.Args)
 	if !ok || !directAgentProcess(root, identity) ||
@@ -91,10 +90,10 @@ func codexPlanExecutable(args []string) (string, bool) {
 }
 
 func countCodexPlanTUIRoots(
-	info herdrrun.PaneProcessInfo,
+	info backend.PaneProcessInfo,
 	worktreePath, codexPath string,
-	root herdrrun.PaneProcess,
-	processes map[int]herdrrun.PaneProcess,
+	root backend.PaneProcess,
+	processes map[int]backend.PaneProcess,
 ) int {
 	matches := 0
 	for _, process := range processes {
@@ -106,10 +105,10 @@ func countCodexPlanTUIRoots(
 }
 
 func validCodexPlanTUIChain(
-	info herdrrun.PaneProcessInfo,
+	info backend.PaneProcessInfo,
 	worktreePath, codexPath string,
-	root, process herdrrun.PaneProcess,
-	processes map[int]herdrrun.PaneProcess,
+	root, process backend.PaneProcess,
+	processes map[int]backend.PaneProcess,
 ) bool {
 	if !codexPlanTUIRootCandidate(info, worktreePath, root, process, processes) {
 		return false
@@ -123,17 +122,17 @@ func validCodexPlanTUIChain(
 }
 
 func codexPlanTUIRootCandidate(
-	info herdrrun.PaneProcessInfo,
+	info backend.PaneProcessInfo,
 	worktreePath string,
-	root, process herdrrun.PaneProcess,
-	processes map[int]herdrrun.PaneProcess,
+	root, process backend.PaneProcess,
+	processes map[int]backend.PaneProcess,
 ) bool {
 	return process.ParentPID == root.PID && process.CWD == worktreePath &&
 		process.ProcessGroup == info.ForegroundProcessGroup &&
 		processDescendsFrom(process.PID, root.PID, processes)
 }
 
-func codexPlanTUIArgs(process herdrrun.PaneProcess, codexPath string) ([]string, bool, bool) {
+func codexPlanTUIArgs(process backend.PaneProcess, codexPath string) ([]string, bool, bool) {
 	if observedExecutableMatches(process.Executable, codexPath) && process.Argv0 == codexPath {
 		return process.Argv, true, true
 	}
@@ -162,11 +161,11 @@ func validCodexRemoteAddress(raw string) bool {
 }
 
 func countCodexNativeDescendants(
-	info herdrrun.PaneProcessInfo,
+	info backend.PaneProcessInfo,
 	worktreePath string,
-	root herdrrun.PaneProcess,
+	root backend.PaneProcess,
 	args []string,
-	processes map[int]herdrrun.PaneProcess,
+	processes map[int]backend.PaneProcess,
 ) int {
 	matches := 0
 	for _, process := range processes {
@@ -185,16 +184,16 @@ func mismatchError() error {
 }
 
 func agentProcessRoot(
-	info herdrrun.PaneProcessInfo,
+	info backend.PaneProcessInfo,
 	identity Identity,
-) (herdrrun.PaneProcess, map[int]herdrrun.PaneProcess, bool) {
+) (backend.PaneProcess, map[int]backend.PaneProcess, bool) {
 	if !cleanAbsolute(identity.Executable) || !cleanAbsolute(identity.WorktreePath) ||
 		info.ShellPID <= 1 || info.ForegroundProcessGroup <= 1 {
-		return herdrrun.PaneProcess{}, nil, false
+		return backend.PaneProcess{}, nil, false
 	}
 	processes, ok := indexAgentProcesses(info.ForegroundProcesses)
 	if !ok {
-		return herdrrun.PaneProcess{}, nil, false
+		return backend.PaneProcess{}, nil, false
 	}
 	root, found := processes[info.ShellPID]
 	valid := found && root.ProcessGroup == info.ForegroundProcessGroup &&
@@ -202,8 +201,8 @@ func agentProcessRoot(
 	return root, processes, valid
 }
 
-func indexAgentProcesses(observed []herdrrun.PaneProcess) (map[int]herdrrun.PaneProcess, bool) {
-	processes := make(map[int]herdrrun.PaneProcess, len(observed))
+func indexAgentProcesses(observed []backend.PaneProcess) (map[int]backend.PaneProcess, bool) {
+	processes := make(map[int]backend.PaneProcess, len(observed))
 	for _, process := range observed {
 		if !validObservedProcess(process) || processes[process.PID].PID != 0 {
 			return nil, false
@@ -213,27 +212,27 @@ func indexAgentProcesses(observed []herdrrun.PaneProcess) (map[int]herdrrun.Pane
 	return processes, true
 }
 
-func validObservedProcess(process herdrrun.PaneProcess) bool {
+func validObservedProcess(process backend.PaneProcess) bool {
 	return process.PID > 1 && process.ParentPID >= 0 &&
 		process.ProcessGroup > 1 && process.Executable != ""
 }
 
-func directAgentProcess(process herdrrun.PaneProcess, identity Identity) bool {
+func directAgentProcess(process backend.PaneProcess, identity Identity) bool {
 	return observedExecutableMatches(process.Executable, identity.Executable) &&
 		process.Argv0 == identity.Executable && slices.Equal(process.Argv, identity.Args)
 }
 
-func interpreterAgentProcess(process herdrrun.PaneProcess, identity Identity) bool {
+func interpreterAgentProcess(process backend.PaneProcess, identity Identity) bool {
 	want := append([]string{identity.Executable}, identity.Args...)
 	return observedExecutableMatches(process.Executable, process.Argv0) &&
 		process.Argv0 != identity.Executable && slices.Equal(process.Argv, want)
 }
 
 func matchingAgentDescendant(
-	info herdrrun.PaneProcessInfo,
+	info backend.PaneProcessInfo,
 	identity Identity,
-	root herdrrun.PaneProcess,
-	processes map[int]herdrrun.PaneProcess,
+	root backend.PaneProcess,
+	processes map[int]backend.PaneProcess,
 ) (int, int) {
 	agentPID, matches := 0, 0
 	for _, process := range processes {
@@ -246,10 +245,10 @@ func matchingAgentDescendant(
 }
 
 func matchesAgentDescendant(
-	info herdrrun.PaneProcessInfo,
+	info backend.PaneProcessInfo,
 	identity Identity,
-	root, process herdrrun.PaneProcess,
-	processes map[int]herdrrun.PaneProcess,
+	root, process backend.PaneProcess,
+	processes map[int]backend.PaneProcess,
 ) bool {
 	return process.PID != root.PID && process.CWD == identity.WorktreePath &&
 		process.ProcessGroup == info.ForegroundProcessGroup &&
@@ -267,13 +266,13 @@ func cleanAbsolute(path string) bool {
 	return filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.ContainsRune(path, '\x00')
 }
 
-func processIdentity(info herdrrun.PaneProcessInfo, agentPID int) backend.ProcessIdentity {
+func processIdentity(info backend.PaneProcessInfo, agentPID int) backend.ProcessIdentity {
 	return backend.ProcessIdentity{
 		ShellPID: info.ShellPID, ForegroundProcessGroup: info.ForegroundProcessGroup, AgentPID: agentPID,
 	}
 }
 
-func processDescendsFrom(pid, rootPID int, processes map[int]herdrrun.PaneProcess) bool {
+func processDescendsFrom(pid, rootPID int, processes map[int]backend.PaneProcess) bool {
 	seen := map[int]bool{}
 	for pid != rootPID {
 		if pid <= 1 || seen[pid] {

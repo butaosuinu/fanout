@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -227,7 +227,7 @@ func RealizeHerdrWorktree(
 	if intent.BranchCreated {
 		baseArg = intent.BaseSHA
 	}
-	mutation, mutationErr := runtime.CreateWorktree(operationCtx, herdrrun.WorktreeCreateRequest{
+	mutation, mutationErr := runtime.CreateWorktree(operationCtx, backend.WorktreeCreateRequest{
 		Coordinator:    observationResource(intent.Coordinator),
 		SourceRepoKey:  source.RepoKey,
 		SourceRepoRoot: source.RepoRoot,
@@ -237,11 +237,11 @@ func RealizeHerdrWorktree(
 		Label:          intent.WorkspaceLabel,
 	})
 	if mutationErr != nil {
-		if errors.Is(mutationErr, herdrrun.ErrMutationNotIssued) {
+		if errors.Is(mutationErr, backend.ErrMutationNotIssued) {
 			return result, rollbackUnissuedHerdrWorktree(locked, req, intent, mutationErr)
 		}
 		if operationErr := operationCtx.Err(); operationErr != nil &&
-			!errors.Is(mutationErr, herdrrun.ErrMutationRejected) {
+			!errors.Is(mutationErr, backend.ErrMutationRejected) {
 			return result, errors.Join(mutationErr, operationErr)
 		}
 		return recoverHerdrWorktree(operationCtx, runtime, locked, req, source, intent, mutationErr)

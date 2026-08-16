@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -20,17 +20,17 @@ func TestHerdrSidebarMetadataFixesTokenPlacement(t *testing.T) {
 	tests := []struct {
 		name          string
 		req           Request
-		wantWorkspace []herdrrun.MetadataToken
-		wantPane      []herdrrun.MetadataToken
+		wantWorkspace []backend.MetadataToken
+		wantPane      []backend.MetadataToken
 	}{
 		{
 			name: "issue child",
 			req:  Request{ParentRef: "524", Number: 494, Slug: "herdr-sidebar-494"},
-			wantWorkspace: []herdrrun.MetadataToken{
+			wantWorkspace: []backend.MetadataToken{
 				{Name: "fanout_issue", Value: "#494"},
 				{Name: "fanout_slug", Value: "herdr-sidebar-494"},
 			},
-			wantPane: []herdrrun.MetadataToken{
+			wantPane: []backend.MetadataToken{
 				{Name: "fanout_parent", Value: "#524"},
 				{Name: "fanout_pr"},
 				{Name: "fanout_ci"},
@@ -39,11 +39,11 @@ func TestHerdrSidebarMetadataFixesTokenPlacement(t *testing.T) {
 		{
 			name: "plan task uses the task id and the plan parent",
 			req:  Request{ParentRef: "plan:launch-plan", TaskID: "api-layer", Slug: "api-layer"},
-			wantWorkspace: []herdrrun.MetadataToken{
+			wantWorkspace: []backend.MetadataToken{
 				{Name: "fanout_issue", Value: "api-layer"},
 				{Name: "fanout_slug", Value: "api-layer"},
 			},
-			wantPane: []herdrrun.MetadataToken{
+			wantPane: []backend.MetadataToken{
 				{Name: "fanout_parent", Value: "plan:launch-plan"},
 				{Name: "fanout_pr"},
 				{Name: "fanout_ci"},
@@ -55,11 +55,11 @@ func TestHerdrSidebarMetadataFixesTokenPlacement(t *testing.T) {
 				ParentRef: "https://github.com/butaosuinu/fanout/projects/3",
 				Number:    494, Slug: "herdr-sidebar-494",
 			},
-			wantWorkspace: []herdrrun.MetadataToken{
+			wantWorkspace: []backend.MetadataToken{
 				{Name: "fanout_issue", Value: "#494"},
 				{Name: "fanout_slug", Value: "herdr-sidebar-494"},
 			},
-			wantPane: []herdrrun.MetadataToken{
+			wantPane: []backend.MetadataToken{
 				{Name: "fanout_parent", Value: "butaosuinu/fanout/projects/3"},
 				{Name: "fanout_pr"},
 				{Name: "fanout_ci"},
@@ -71,11 +71,11 @@ func TestHerdrSidebarMetadataFixesTokenPlacement(t *testing.T) {
 			// the marker would leave the Agent row unable to name any issue.
 			name: "watcher launch names the issue it picked up",
 			req:  Request{ParentRef: WatchParentRef, Number: 494, Slug: "herdr-sidebar-494"},
-			wantWorkspace: []herdrrun.MetadataToken{
+			wantWorkspace: []backend.MetadataToken{
 				{Name: "fanout_issue", Value: "#494"},
 				{Name: "fanout_slug", Value: "herdr-sidebar-494"},
 			},
-			wantPane: []herdrrun.MetadataToken{
+			wantPane: []backend.MetadataToken{
 				{Name: "fanout_parent", Value: "#494"},
 				{Name: "fanout_pr"},
 				{Name: "fanout_ci"},
@@ -86,11 +86,11 @@ func TestHerdrSidebarMetadataFixesTokenPlacement(t *testing.T) {
 			// id, so the name clears instead of showing a negative row number.
 			name: "synthetic manual row clears the child name",
 			req:  Request{ParentRef: ManualParentRef, Number: -3, Slug: "shell-3"},
-			wantWorkspace: []herdrrun.MetadataToken{
+			wantWorkspace: []backend.MetadataToken{
 				{Name: "fanout_issue"},
 				{Name: "fanout_slug", Value: "shell-3"},
 			},
-			wantPane: []herdrrun.MetadataToken{
+			wantPane: []backend.MetadataToken{
 				{Name: "fanout_parent", Value: ManualParentRef},
 				{Name: "fanout_pr"},
 				{Name: "fanout_ci"},
@@ -114,7 +114,7 @@ func TestHerdrSidebarMetadataFixesTokenPlacement(t *testing.T) {
 // the identity the launch verified, not to a freshly guessed one.
 func TestHerdrSidebarMetadataTargetsTheRealizedChild(t *testing.T) {
 	got := herdrSidebarMetadata(Request{Number: 494, ParentRef: "524"}, testHerdrMetadataIntent()).Target
-	want := herdrrun.MetadataTarget{
+	want := backend.MetadataTarget{
 		WorkspaceID: "w2", Label: "fanout-worktree-abc",
 		RepoKey: "/repo/.git", RepoRoot: "/repo",
 		CheckoutPath: "/repo/.fanout/worktrees/child",

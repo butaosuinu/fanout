@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -42,21 +43,21 @@ func (l *Launcher) reportHerdrSidebarMetadata(req Request, intent state.HerdrInt
 	}
 }
 
-func herdrSidebarMetadata(req Request, intent state.HerdrIntent) herdrrun.MetadataReport {
-	return herdrrun.MetadataReport{
-		Target: herdrrun.MetadataTarget{
+func herdrSidebarMetadata(req Request, intent state.HerdrIntent) backend.MetadataReport {
+	return backend.MetadataReport{
+		Target: backend.MetadataTarget{
 			WorkspaceID: intent.Resource.WorkspaceID, Label: intent.Resource.Label,
 			RepoKey: intent.Resource.RepoKey, RepoRoot: intent.Resource.RepoRoot,
 			CheckoutPath: intent.WorktreePath,
 			PaneID:       intent.Resource.PaneID, TerminalID: intent.Resource.TerminalID,
 		},
-		WorkspaceTokens: []herdrrun.MetadataToken{
+		WorkspaceTokens: []backend.MetadataToken{
 			{Name: metadataIssueToken, Value: herdrChildToken(req)},
 			{Name: metadataSlugToken, Value: herdrMetadataValue(req.Slug)},
 		},
 		// A launch has no PR or CI reading yet, and v1 has no later reporter,
 		// so both are cleared rather than left at whatever the resource held.
-		PaneTokens: []herdrrun.MetadataToken{
+		PaneTokens: []backend.MetadataToken{
 			{Name: metadataParentToken, Value: herdrParentToken(req)},
 			{Name: metadataPRToken},
 			{Name: metadataCIToken},
@@ -92,8 +93,8 @@ func herdrParentToken(req Request) string {
 func herdrMetadataValue(raw string) string {
 	cleaned := strings.TrimSpace(strings.Map(dropControlRune, raw))
 	runes := []rune(cleaned)
-	if len(runes) > herdrrun.MaxMetadataTokenValue {
-		return strings.TrimSpace(string(runes[:herdrrun.MaxMetadataTokenValue]))
+	if len(runes) > backend.MaxMetadataTokenValue {
+		return strings.TrimSpace(string(runes[:backend.MaxMetadataTokenValue]))
 	}
 	return cleaned
 }
