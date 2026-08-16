@@ -24,7 +24,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
@@ -186,11 +185,7 @@ func (l *Launcher) launch(req Request) (Result, bool) {
 	logPaneRequest(req, l.Log)
 
 	if l.Cfg.DryRun {
-		printReq := req
-		if l.Backend.Name() == backend.Tmux {
-			printReq.AgentCommand = withAgentStartGate(printReq.AgentCommand, printReq.AgentStartGate)
-		}
-		printPaneDryRun(printReq, l.Info.Target, l.Log, l.Palette)
+		printPaneDryRun(req, l.previewBackendLaunch(req), l.Log, l.Palette)
 		return Result{}, true
 	}
 
@@ -766,12 +761,25 @@ func codexTUILabel(req Request) string {
 	return "Codex team TUI"
 }
 
-func withAgentStartGate(command, gate string) string {
-	wait := tmuxrun.WaitForLockCommand(gate)
-	if wait == "" {
-		return command
+// previewBackendLaunch renders the runtime-specific half of a dry run: the
+// commands this backend would run to create the pane. A backend without the
+// capability contributes no lines, so the preview keeps describing the
+// briefing, worktree, and hooks instead of another runtime's commands.
+func (l *Launcher) previewBackendLaunch(req Request) []string {
+	previewer, ok := backend.AsDryRunPreviewer(l.Backend)
+	if !ok {
+		return nil
 	}
-	return wait + " && " + command
+	return previewer.PreviewLaunch(backend.LaunchPreview{
+		Target:       l.Info.Target,
+		ProjectRoot:  req.Worktree.ProjectRoot,
+		WorktreePath: req.Worktree.WorktreePath,
+		BranchName:   req.BranchName,
+		Command:      req.AgentCommand,
+		StartGate:    req.AgentStartGate,
+		PaneTitle:    paneTitle(req),
+		PaneLabel:    paneBorderLabel(req),
+	})
 }
 
 // ReleaseAgentStartGate lets a successfully attached gated pane start its
@@ -848,7 +856,7 @@ func planModeDescription(agentName string) string {
 	}
 }
 
-func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) {
+func printPaneDryRun(req Request, backendPreview []string, lg *log.Logger, c log.Palette) {
 	if req.BriefingPath != "" || req.BriefingBody != "" {
 		fmt.Fprintf(lg.Stdout(), "  %sbriefing size%s: %d bytes\n", c.Dim, c.Reset, len(req.BriefingBody))
 	}
@@ -858,39 +866,8 @@ func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) 
 	if req.CodexTeamMode && !req.PlanMode() {
 		fmt.Fprintf(lg.Stdout(), "  %scodex team%s: app-server TUI + idle-turn message bridge\n", c.Dim, c.Reset)
 	}
-	if req.Worktree.Refresh {
-		details := req.Worktree.RefreshDetails
-		fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s fetch --quiet --no-tags origin %s%s\n", c.Dim, shellQuote(req.Worktree.ProjectRoot), shellQuote(details.FetchBranch), c.Reset)
-		if details.LocalBranch != "" {
-			fmt.Fprintf(lg.Stdout(), "    %s# may fast-forward the local base before worktree creation%s\n", c.Dim, c.Reset)
-			fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s branch -f %s %s%s\n", c.Dim, shellQuote(req.Worktree.ProjectRoot), shellQuote(details.LocalBranch), shellQuote(details.OriginRef), c.Reset)
-			fmt.Fprintf(lg.Stdout(), "    %s# if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree%s\n", c.Dim, c.Reset)
-		}
-	} else if req.Worktree.RefreshSkippedReason != "" {
-		fmt.Fprintf(lg.Stdout(), "    %s# skip base refresh: %s%s\n", c.Dim, req.Worktree.RefreshSkippedReason, c.Reset)
-	}
-	fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s worktree add -b %s %s %s%s\n",
-		c.Dim,
-		shellQuote(req.Worktree.ProjectRoot),
-		shellQuote(req.Worktree.BranchName),
-		shellQuote(req.Worktree.WorktreePath),
-		shellQuote(req.Worktree.BaseBranch),
-		c.Reset)
-	if target != "" {
-		fmt.Fprintf(lg.Stdout(), "    %s$ tmux split-window -t %s -d -h -P -F '#{pane_id}' -c %s %s%s\n", c.Dim, shellQuote(target), shellQuote(req.Worktree.WorktreePath), shellQuote(tmuxrun.BuildPaneLaunchCommand(req.AgentCommand)), c.Reset)
-	} else {
-		fmt.Fprintf(lg.Stdout(), "    %s$ tmux split-window -d -h -P -F '#{pane_id}' -c %s %s%s\n", c.Dim, shellQuote(req.Worktree.WorktreePath), shellQuote(tmuxrun.BuildPaneLaunchCommand(req.AgentCommand)), c.Reset)
-	}
-	if title := paneTitle(req); title != "" {
-		fmt.Fprintf(lg.Stdout(), "    %s$ tmux select-pane -t <pane_id> -T %s%s\n", c.Dim, shellQuote(title), c.Reset)
-	}
-	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -p -t <pane_id> @fanout_pane_label %s%s\n", c.Dim, shellQuote(tmuxrun.NeutralizePaneLabel(paneBorderLabel(req))), c.Reset)
-	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -w -t <pane_id> pane-border-status top%s\n", c.Dim, c.Reset)
-	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -w -t <pane_id> pane-border-format %s%s\n", c.Dim, shellQuote(tmuxrun.PaneBorderFormat()), c.Reset)
-	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -w -t <pane_id> pane-active-border-style %s%s\n", c.Dim, shellQuote(tmuxrun.PaneActiveBorderStyle()), c.Reset)
-	fmt.Fprintf(lg.Stdout(), "    %s$ tmux set-option -w -t <pane_id> pane-border-style %s%s\n", c.Dim, shellQuote(tmuxrun.PaneBorderStyle()), c.Reset)
-	fmt.Fprintf(lg.Stdout(), "    %s# would re-layout the window: fanout grid (sidebar + comfortable-width grid),%s\n", c.Dim, c.Reset)
-	fmt.Fprintf(lg.Stdout(), "    %s#   falling back to main-vertical then tiled%s\n", c.Dim, c.Reset)
+	printWorktreeDryRun(req.Worktree, lg, c)
+	printBackendDryRun(backendPreview, lg, c)
 	if req.CodexPlanMode() {
 		fmt.Fprintf(lg.Stdout(), "    %s# fanout waits for Codex TUI attach and initial Plan turn acceptance before recording state%s\n", c.Dim, c.Reset)
 		fmt.Fprintf(lg.Stdout(), "    %s# status file: %s%s\n", c.Dim, shellQuote(req.CodexPlanStatusPath), c.Reset)
@@ -903,6 +880,38 @@ func printPaneDryRun(req Request, target string, lg *log.Logger, c log.Palette) 
 	fmt.Fprintf(lg.Stdout(), "    %s# would write .fanout/worktree-metadata.json in the child worktree%s\n", c.Dim, c.Reset)
 	printPaneHookDryRun(req, lg, c)
 	lg.Ok("%s: dry-run complete", paneLogLabel(req))
+}
+
+// printWorktreeDryRun renders the git commands the launch would run: the
+// optional base refresh and the worktree the pane would get.
+func printWorktreeDryRun(plan worktree.Plan, lg *log.Logger, c log.Palette) {
+	if plan.Refresh {
+		details := plan.RefreshDetails
+		fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s fetch --quiet --no-tags origin %s%s\n", c.Dim, shellQuote(plan.ProjectRoot), shellQuote(details.FetchBranch), c.Reset)
+		if details.LocalBranch != "" {
+			fmt.Fprintf(lg.Stdout(), "    %s# may fast-forward the local base before worktree creation%s\n", c.Dim, c.Reset)
+			fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s branch -f %s %s%s\n", c.Dim, shellQuote(plan.ProjectRoot), shellQuote(details.LocalBranch), shellQuote(details.OriginRef), c.Reset)
+			fmt.Fprintf(lg.Stdout(), "    %s# if the base is checked out elsewhere, fanout uses merge --ff-only in that worktree%s\n", c.Dim, c.Reset)
+		}
+	} else if plan.RefreshSkippedReason != "" {
+		fmt.Fprintf(lg.Stdout(), "    %s# skip base refresh: %s%s\n", c.Dim, plan.RefreshSkippedReason, c.Reset)
+	}
+	fmt.Fprintf(lg.Stdout(), "    %s$ git -C %s worktree add -b %s %s %s%s\n",
+		c.Dim,
+		shellQuote(plan.ProjectRoot),
+		shellQuote(plan.BranchName),
+		shellQuote(plan.WorktreePath),
+		shellQuote(plan.BaseBranch),
+		c.Reset)
+}
+
+// printBackendDryRun renders the runtime's own preview lines. The four-space
+// indent and dim framing are shared with the backend-neutral lines, and the
+// Tier 2 goldens pin the result byte-for-byte.
+func printBackendDryRun(lines []string, lg *log.Logger, c log.Palette) {
+	for _, line := range lines {
+		fmt.Fprintf(lg.Stdout(), "    %s%s%s\n", c.Dim, line, c.Reset)
+	}
 }
 
 func printPaneHookDryRun(req Request, lg *log.Logger, c log.Palette) {
@@ -1125,16 +1134,9 @@ func cleanupFreshPane(runtimeBackend backend.Backend, relayoutTarget, paneID str
 	return nil
 }
 
-// shellQuote mirrors cmd/fanout's dry-run quoting (report.go): the byte-exact
-// output of printPaneDryRun is pinned by the Tier 2 goldens.
+// shellQuote is the dry-run quoting shared with the backends' own preview
+// lines, so a launch preview reads the same whichever half produced a line.
+// The byte-exact output is pinned by the Tier 2 goldens.
 func shellQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	if strings.IndexFunc(s, func(r rune) bool {
-		return r != '/' && r != ':' && r != '.' && r != '-' && r != '_' && (r < '0' || r > '9') && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z')
-	}) < 0 {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+	return backend.PreviewQuote(s)
 }

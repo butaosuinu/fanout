@@ -329,3 +329,70 @@ func TestLivenessStampCapabilityWritesShellKeyOption(t *testing.T) {
 		t.Fatalf("tmux calls = %#v, want %#v", got, want)
 	}
 }
+
+// The dry-run preview is pinned byte-for-byte by the Tier 2 goldens
+// (tests/golden/scenario-*.dry-run.txt), so these expectations are full lines,
+// not substrings.
+func TestDryRunPreviewRendersLaunchCommands(t *testing.T) {
+	tests := []struct {
+		name    string
+		preview backend.LaunchPreview
+		want    []string
+	}{
+		{
+			name: "titled pane split into an explicit target",
+			preview: backend.LaunchPreview{
+				Target:       "%1",
+				WorktreePath: "/repo/.fanout/worktrees/api-client-12",
+				Command:      "claude --permission-mode auto 'begin'",
+				PaneTitle:    "api-client-12",
+				PaneLabel:    "#12 · api-client-12",
+			},
+			want: []string{
+				`$ tmux split-window -t '%1' -d -h -P -F '#{pane_id}' -c /repo/.fanout/worktrees/api-client-12 'exec /bin/sh -lc '\''tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state running 2>/dev/null; claude --permission-mode auto '\''\'\'''\''begin'\''\'\'''\''; __fanout_status=$?; tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state done 2>/dev/null; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''`,
+				`$ tmux select-pane -t <pane_id> -T api-client-12`,
+				`$ tmux set-option -p -t <pane_id> @fanout_pane_label '#12 · api-client-12'`,
+				`$ tmux set-option -w -t <pane_id> pane-border-status top`,
+				`$ tmux set-option -w -t <pane_id> pane-border-format ' #{?@fanout_pane_label,#{@fanout_pane_label},#{pane_title}} '`,
+				`$ tmux set-option -w -t <pane_id> pane-active-border-style 'fg=#00A3AF'`,
+				`$ tmux set-option -w -t <pane_id> pane-border-style 'fg=#165E83'`,
+				`# would re-layout the window: fanout grid (sidebar + comfortable-width grid),`,
+				`#   falling back to main-vertical then tiled`,
+			},
+		},
+		{
+			// No target, no title, a gated agent command, and a "#[" run in the
+			// label: the wait-for prefix sits in front of the agent command and the
+			// label reaches tmux neutralized.
+			name: "gated untitled pane with a hostile border label",
+			preview: backend.LaunchPreview{
+				WorktreePath: "/repo/.fanout/worktrees/api client-12",
+				Command:      "codex",
+				StartGate:    "fanout-gate-12",
+				PaneLabel:    "@manual · #[fg=red]api-client-12",
+			},
+			want: []string{
+				`$ tmux split-window -d -h -P -F '#{pane_id}' -c '/repo/.fanout/worktrees/api client-12' 'exec /bin/sh -lc '\''tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state running 2>/dev/null; tmux wait-for -L fanout-gate-12 && tmux wait-for -U fanout-gate-12 && codex; __fanout_status=$?; tmux set-option -p -t "$TMUX_PANE" @fanout_agent_state done 2>/dev/null; printf '\''\'\'''\''\n[fanout] agent exited with status %d; returning to shell.\n'\''\'\'''\'' "$__fanout_status"; exec "${SHELL:-/bin/sh}" -l'\'''`,
+				`$ tmux set-option -p -t <pane_id> @fanout_pane_label '@manual · [fg=red]api-client-12'`,
+				`$ tmux set-option -w -t <pane_id> pane-border-status top`,
+				`$ tmux set-option -w -t <pane_id> pane-border-format ' #{?@fanout_pane_label,#{@fanout_pane_label},#{pane_title}} '`,
+				`$ tmux set-option -w -t <pane_id> pane-active-border-style 'fg=#00A3AF'`,
+				`$ tmux set-option -w -t <pane_id> pane-border-style 'fg=#165E83'`,
+				`# would re-layout the window: fanout grid (sidebar + comfortable-width grid),`,
+				`#   falling back to main-vertical then tiled`,
+			},
+		},
+	}
+	previewer, ok := backend.AsDryRunPreviewer(tmuxbackend.New())
+	if !ok {
+		t.Fatal("AsDryRunPreviewer(tmux backend) reported no capability")
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := previewer.PreviewLaunch(tt.preview)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("PreviewLaunch(%s) =\n%s\nwant\n%s", tt.name, strings.Join(got, "\n"), strings.Join(tt.want, "\n"))
+			}
+		})
+	}
+}

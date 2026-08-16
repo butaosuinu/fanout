@@ -239,6 +239,47 @@ type LaunchRequest struct {
 	StartGate    string
 }
 
+// LaunchPreview describes the pane a dry run would have created. It carries
+// the runtime-neutral launch inputs plus the display metadata the decoration
+// step would apply, so a backend can render the commands it would have run
+// without the caller knowing that runtime's command vocabulary.
+type LaunchPreview struct {
+	// Target is the backend-native container the pane would be created in. It
+	// is empty when the runtime picks the container itself.
+	Target      string
+	ProjectRoot string
+	// WorktreePath is the worktree the pane would run in; the worktree itself is
+	// not created by a dry run.
+	WorktreePath string
+	BranchName   string
+	// Command is the agent command, before any runtime-specific wrapper.
+	Command string
+	// StartGate is the optional launch lock the pane's command would wait on.
+	StartGate string
+	// PaneTitle and PaneLabel are the display metadata the decoration step would
+	// apply. An empty PaneTitle means the pane would keep the runtime's own.
+	PaneTitle string
+	PaneLabel string
+}
+
+// previewBareRunes is the exact character class a preview token may carry
+// unquoted: ASCII letters and digits plus the path and flag punctuation that a
+// shell leaves alone.
+const previewBareRunes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/:._-"
+
+// PreviewQuote renders s as one copy-paste-safe POSIX shell token for dry-run
+// preview text. Backend-neutral and backend-specific preview lines are pinned
+// byte-for-byte by the Tier 2 goldens, so every producer must quote alike.
+func PreviewQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if strings.IndexFunc(s, func(r rune) bool { return !strings.ContainsRune(previewBareRunes, r) }) < 0 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
 // Backend is the minimum runtime surface. Implementations may expose
 // backend-specific helpers, but orchestration depends only on these methods.
 type Backend interface {
@@ -307,6 +348,15 @@ type PaneDecorator interface {
 	SetPaneWorktreePath(paneID, worktreePath string) error
 }
 
+// DryRunPreviewer is an optional capability for runtimes that describe the
+// commands a launch would have run. Each returned element is one preview line
+// carrying neither indentation nor color: the caller frames them alongside its
+// own backend-neutral lines, which keeps the runtime's command vocabulary out
+// of orchestration.
+type DryRunPreviewer interface {
+	PreviewLaunch(LaunchPreview) []string
+}
+
 // LivenessStamper is an optional capability for runtimes that stamp a durable
 // liveness token on a pane. Unlike decoration it is not best-effort: a state
 // row whose token never reached its pane can never be proven live again, so a
@@ -320,6 +370,14 @@ type LivenessStamper interface {
 func AsPaneDecorator(b Backend) (PaneDecorator, bool) {
 	decorator, ok := b.(PaneDecorator)
 	return decorator, ok
+}
+
+// AsDryRunPreviewer resolves b's dry-run preview capability. ok=false means the
+// backend cannot describe its own launch commands, so a dry run prints its
+// backend-neutral lines only rather than another runtime's commands.
+func AsDryRunPreviewer(b Backend) (DryRunPreviewer, bool) {
+	previewer, ok := b.(DryRunPreviewer)
+	return previewer, ok
 }
 
 // AsLivenessStamper resolves b's liveness-stamp capability. ok=false means the
