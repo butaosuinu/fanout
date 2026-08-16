@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -38,7 +37,7 @@ func TestStateLoaderBindsOnlyFirstLateSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	bound := assertStoredSession(t, store, first)
-	if sessionview.HerdrPaneMatches(bound, live) {
+	if bound.RuntimeBinding().MatchesLive(live) {
 		t.Fatal("later session matched the persisted first binding")
 	}
 }

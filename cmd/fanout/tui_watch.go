@@ -12,7 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
-	"github.com/butaosuinu/fanout/internal/app/sessionview"
+	"github.com/butaosuinu/fanout/internal/app/sessionbinding"
 	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -489,9 +489,9 @@ func watchPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
 
 func watchHerdrPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
 	if pane.HerdrAgentSession == nil && live.AgentSession != nil {
-		return sessionview.HerdrPaneMatchesForSessionBinding(pane, live)
+		return sessionbinding.FirstBindMatches(pane, live)
 	}
-	return sessionview.HerdrPaneMatches(pane, live)
+	return pane.RuntimeBinding().MatchesLive(live)
 }
 
 func watchParentLaunchResult(plan run.Plan, created []int) watch.ParentLaunchResult {
