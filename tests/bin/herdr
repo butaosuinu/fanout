@@ -1,37 +1,145 @@
 #!/usr/bin/env bash
-# Tier 2 shim for Herdr 0.7.5 status and snapshot reads.
+# Tier 2 shim for Herdr 0.7.5 CLI calls.
+#
+# Each Tier 2 test sets FIXTURE_DIR=tests/fixtures/<name>. Every verb below
+# answers from a per-scenario fixture file in that directory:
+#
+#   herdr [--session S] --version     -> $FIXTURE_DIR/herdr-version.txt, or
+#                                        `herdr 0.7.5` when absent
+#   herdr [--session S] status --json -> $FIXTURE_DIR/herdr-status.json
+#   herdr [--session S] api snapshot  -> $FIXTURE_DIR/herdr-snapshot.json
+#   herdr [--session S] <verb> <sub>  -> $FIXTURE_DIR/herdr-<verb>-<sub>.json
+#
+# The two named files keep the pre-existing scenario contract; every other
+# verb derives its file from the first two argv words (`workspace create` ->
+# herdr-workspace-create.json). A scenario that does not ship the file for a
+# verb it reaches fails loudly rather than inventing a response, because the
+# Go side validates each envelope's `id` and `result.type` and a silent empty
+# body would look like a protocol regression instead of a missing fixture.
+#
+# A leading `--session S` is stripped before dispatch so both argv shapes
+# fanout emits reach the same verb table: mutations carry the session in
+# HERDR_SESSION, while the status probe passes it as a flag
+# (internal/infra/herdrrun/herdrrun.go). `--session` without a value is a
+# malformed call and dies rather than silently dropping the next word.
+#
+# Failure injection: writing $FIXTURE_DIR/herdr-<key>.exit (an integer) makes
+# that verb exit with that code, emitting $FIXTURE_DIR/herdr-<key>.err on
+# stderr and its body file on stdout when either exists. <key> is the stem
+# after `herdr-` above: version, status, snapshot, workspace-create. This
+# reproduces the rejection envelopes Herdr returns on a non-zero exit. Every
+# verb — the two named probes and --version included — goes through
+# apply_failure_injection, so a scenario can inject a failure anywhere fanout
+# talks to Herdr; the `herdr 0.7.5` default belongs to the success path and
+# does not leak into an injected --version failure. A .err without its .exit is
+# a half-written injection that would otherwise pass as success, so it dies.
+#
+# Argv log: with HERDR_SHIM_LOG set, every invocation appends one
+# space-joined argv line to that path so a test can assert which commands
+# fanout issued, and in what order. The line is the argv as invoked, before
+# the --session strip. Arguments containing spaces are logged verbatim, so
+# assertions should match on the verb prefix rather than re-splitting the line.
+#
+# Tier 1 "force_missing herdr" still wins because helpers.bash rebuilds PATH
+# to a sanitized directory that excludes this shim.
 
 set -euo pipefail
 
 fixture="${FIXTURE_DIR:-}"
 
+# Captured before the --session strip so the log and every diagnostic name the
+# command as fanout actually issued it.
+invoked_argv="$*"
+
+if [[ -n "${HERDR_SHIM_LOG:-}" ]]; then
+  printf '%s\n' "$invoked_argv" >> "$HERDR_SHIM_LOG"
+fi
+
+die() {
+  echo "herdr shim: $1" >&2
+  exit 1
+}
+
+# Emit one fixture file, or fail loudly when the scenario did not ship it.
 emit_fixture() {
   local path="$1"
   if [[ -z "$fixture" || ! -f "$path" ]]; then
-    echo "herdr shim: missing fixture $path" >&2
-    exit 1
+    die "missing fixture $path"
   fi
   cat "$path"
 }
 
-if [[ "${1:-}" == "--version" ]]; then
-  printf 'herdr 0.7.5\n'
-  exit 0
-fi
+# Apply the herdr-<key>.exit / .err override when the scenario ships one, using
+# $2 as that verb's body file. Exits with the injected code; returns when there
+# is nothing to inject. Every verb routes through here, so the injection rules
+# are written once.
+apply_failure_injection() {
+  local key="$1"
+  local body="$2"
+
+  [[ -n "$fixture" ]] || return 0
+
+  local status_file="$fixture/herdr-$key.exit"
+  local stderr_file="$fixture/herdr-$key.err"
+
+  if [[ -f "$stderr_file" && ! -f "$status_file" ]]; then
+    die "$stderr_file has no matching herdr-$key.exit; failure injection needs both"
+  fi
+  [[ -f "$status_file" ]] || return 0
+
+  if [[ -f "$stderr_file" ]]; then
+    cat "$stderr_file" >&2
+  fi
+  if [[ -f "$body" ]]; then
+    cat "$body"
+  fi
+  exit "$(cat "$status_file")"
+}
+
+# Answer one verb from herdr-<key>.json, honoring the .exit / .err overrides.
+respond() {
+  local key="$1"
+  local body="$fixture/herdr-$key.json"
+
+  apply_failure_injection "$key" "$body"
+  emit_fixture "$body"
+}
 
 if [[ "${1:-}" == "--session" ]]; then
+  [[ $# -ge 2 ]] || die "--session needs a value: $invoked_argv"
   shift 2
+fi
+
+if [[ "${1:-}" == "--version" ]]; then
+  apply_failure_injection version "$fixture/herdr-version.txt"
+  if [[ -n "$fixture" && -f "$fixture/herdr-version.txt" ]]; then
+    cat "$fixture/herdr-version.txt"
+  else
+    printf 'herdr 0.7.5\n'
+  fi
+  exit 0
 fi
 
 case "${1:-} ${2:-}" in
   "status --json")
-    emit_fixture "$fixture/herdr-status.json"
+    respond status
     ;;
   "api snapshot")
-    emit_fixture "$fixture/herdr-snapshot.json"
+    respond snapshot
+    ;;
+  # Mutation and observation verbs fanout issues once it holds an owned
+  # session. Keep this list in sync with internal/infra/herdrrun; an
+  # unlisted verb must stay an error so a new call site surfaces here.
+  # `herdr server` is deliberately absent: it daemonizes and serves the
+  # socket, so a black-box run reaching it is a bug, not a missing fixture.
+  "workspace create" | "workspace close" | "workspace focus" | "workspace report-metadata" | \
+  "worktree create" | "worktree open" | "worktree remove" | \
+  "agent prompt" | "agent rename" | "agent focus" | \
+  "pane read" | "pane run" | "pane close" | "pane wait-output" | "pane process-info" | \
+  "pane report-metadata" | "plugin list")
+    respond "${1}-${2}"
     ;;
   *)
-    echo "herdr shim: unsupported command: $*" >&2
-    exit 1
+    die "unsupported command: $invoked_argv"
     ;;
 esac

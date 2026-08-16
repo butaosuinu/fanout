@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "panes": [
+    {
+      "parent": "81",
+      "issueNum": 83,
+      "slug": "legacy-tmux-83",
+      "branchName": "fanout/legacy-tmux-83",
+      "paneId": "%42",
+      "agent": "claude",
+      "displayName": "Legacy tmux row",
+      "worktreePath": "/repo/.fanout/worktrees/legacy-tmux-83",
+      "prompt": "[fanout #83 of #81] legacy-tmux-83: read /tmp/fanout-fanout-83.md and begin.",
+      "createdAt": "2026-06-04T00:00:00Z"
+    },
+    {
+      "parent": "524",
+      "runtimeParent": "500",
+      "issueNum": 531,
+      "taskId": "task-herdr-1",
+      "kind": "attached-agent",
+      "slug": "herdr-backend-531",
+      "branchName": "fanout/herdr-backend-531",
+      "baseBranch": "main",
+      "backend": "herdr",
+      "paneId": "w1:p1",
+      "herdrWorkspaceId": "w1",
+      "herdrWorkspaceLabel": "fanout-herdr-backend-531",
+      "herdrTerminalId": "t1",
+      "herdrRepoKey": "github.com/butaosuinu/fanout",
+      "herdrRepoRoot": "/repo",
+      "herdrBranchCreated": true,
+      "herdrAgentId": "codex-1",
+      "herdrAgentSession": {
+        "source": "herdr:codex",
+        "agent": "codex",
+        "kind": "id",
+        "value": "01JZ0000000000000000000000"
+      },
+      "herdrProcessIdentity": {
+        "shellPid": 4242,
+        "foregroundProcessGroup": 4243,
+        "agentPid": 4244
+      },
+      "herdrSession": "fhr-1a2b3c4d",
+      "herdrSocketPath": "/tmp/fhr-501/fhr-1a2b3c4d/herdr.sock",
+      "reported_state": "working",
+      "state_refinement": true,
+      "emitterRowKey": "524/531",
+      "launchNonce": "0123456789abcdef0123456789abcdef",
+      "emitterNonce": "fedcba9876543210fedcba9876543210",
+      "herdrLaunchExecutable": "/usr/local/bin/codex",
+      "herdrLaunchArgs": [
+        "--cd",
+        "/repo/.fanout/worktrees/herdr-backend-531"
+      ],
+      "herdrDirectAgentLaunch": true,
+      "shellKey": "fanout-shell-531",
+      "sourceParent": "524",
+      "sourceIssueNum": 530,
+      "sourceTaskId": "task-herdr-0",
+      "agent": "codex",
+      "codexPlanMode": true,
+      "codexThreadId": "thread-531",
+      "codexSessionId": "session-531",
+      "wave": "wave-2",
+      "displayName": "Herdr backend",
+      "worktreePath": "/repo/.fanout/worktrees/herdr-backend-531",
+      "prompt": "[fanout #531 of #524] herdr-backend-531: read /tmp/fanout-fanout-531.md and begin.",
+      "createdAt": "2026-08-15T09:30:00Z",
+      "agentStatus": "running"
+    }
+  ]
+}

@@ -31,6 +31,10 @@ load helpers
   run_fanout_dry 100 --backend herdr
   assert_success
   assert_golden scenario-herdr-dry-run
+  # --dry-run resolves the Herdr backend in preview mode, which admits the
+  # binary by version and stops. A status, snapshot, or any mutation verb
+  # appearing here means a dry run started talking to a live session.
+  assert_herdr_argv "--version"
 }
 
 @test "scenario-herdr-dry-run with --team: registry seed remains side-effect free" {
@@ -53,6 +57,19 @@ load helpers
   assert_success
   [[ "$output" == *"# agent argv: fanout-go __codex-team-tui"* ]]
   [[ "$output" == *"# would seed team registry: 2 peer(s)"* ]]
+}
+
+# Preview mode admits the herdr binary by --version before it reads anything
+# else, so a below-floor CLI stops the run there. The fixture carries only
+# herdr-version.txt and the project root the git shim needs — the gh, tmux,
+# and status files a scenario normally ships are unreachable past that stop,
+# and the argv log ending at --version is what proves it.
+@test "scenario-herdr-version-reject: a below-floor herdr CLI stops the run" {
+  use_fixture scenario-herdr-version-reject
+  run_fanout_dry 100 --backend herdr
+  [ "$status" -eq 1 ]
+  assert_golden scenario-herdr-version-reject
+  assert_herdr_argv "--version"
 }
 
 @test "scenario-body-task-list: children come only from parent body task-list" {

@@ -4,8 +4,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/butaosuinu/fanout/internal/app/briefing"
 )
 
 func TestParentDBSlug(t *testing.T) {
@@ -68,10 +66,13 @@ func TestDBPathOverrideWins(t *testing.T) {
 
 // The DB and the briefing must agree on the repo slug so that operators can
 // correlate .fanout/briefings/fanout-<repo>-<N>.md with /tmp/fanout-<repo>-<parent>.db.
+// briefingBase is inlined instead of calling briefing.Path: infra must not
+// import internal/app/briefing, and that format is pinned on the app side by
+// briefing.Path's doc comment and the Tier 2 dry-run goldens.
 func TestDBPathMatchesBriefingRepoSlug(t *testing.T) {
 	t.Setenv(DBPathEnv, "")
 	root := "/some/where/myrepo"
-	briefingBase := filepath.Base(briefing.Path(root, 68))
+	briefingBase := "fanout-myrepo-68.md"
 	briefingSlug := strings.TrimSuffix(strings.TrimPrefix(briefingBase, "fanout-"), "-68.md")
 	dbSlug := strings.TrimSuffix(strings.TrimPrefix(DBPath(root, "99"), "/tmp/fanout-"), "-99.db")
 	if briefingSlug != dbSlug {

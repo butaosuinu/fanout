@@ -8,6 +8,7 @@
 #   * run_fanout_dry   — Tier 2 wrapper that adds --dry-run and --agent defaults
 #   * assert_golden    — compare captured $output to tests/golden/<name>.dry-run.txt
 #   * use_fixture      — point FIXTURE_DIR at tests/fixtures/<name> for shims
+#   * materialize_herdr_fixture / assert_herdr_argv — Herdr fixture + argv log
 
 # Repo root (one level above tests/bats/).
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,6 +52,14 @@ setup() {
   unset HERDR_ENV
   unset HERDR_SESSION
   unset HERDR_SOCKET_PATH
+
+  # HERDR_SHIM_LOG is sanitized by replacement rather than by unset: every test
+  # gets its own empty log, so an ambient value from the caller's shell cannot
+  # leak in, and assert_herdr_argv can tell "fanout issued no herdr command"
+  # (empty file) from "the shim was never armed" (no file at all). Arming it
+  # here rather than per-test keeps that guarantee for every caller.
+  export HERDR_SHIM_LOG="$BATS_TEST_TMPDIR/herdr-argv.log"
+  : > "$HERDR_SHIM_LOG"
 
   # Most tests exercise the direct tmux runtime. Provide fake TMUX markers so
   # fanout targets the invoking pane instead of the session's active pane.
@@ -174,6 +183,84 @@ use_fixture() {
   local dir="$TESTS_DIR/fixtures/$name"
   [[ -d "$dir" ]] || { echo "use_fixture: missing $dir" >&2; return 1; }
   export FIXTURE_DIR="$dir"
+}
+
+# --- Herdr fixture helpers --------------------------------------------------
+
+# Copy an in-tree Herdr fixture into the per-test tmpdir and rewrite the
+# placeholder repository paths in its state.json to the paths the git shim
+# reports for that copy. herdrRepoKey / herdrRepoRoot are compared against
+# `git rev-parse` output after symlink resolution, so both must be the
+# physical path (BATS_TEST_TMPDIR lives under a symlinked /var on macOS).
+#
+# The rewrite is a single perl pass over an alternation sorted longest-first,
+# so /tmp/herdr-status-repo cannot eat the prefix of
+# /tmp/herdr-status-repo/.git no matter how the rules are ordered, and the
+# replacements come out of a hash so `&`, `\`, and `|` in a tmpdir path stay
+# literal. A leftover placeholder fails the test instead of reaching fanout as
+# a stale /tmp path.
+materialize_herdr_fixture() {
+  local name="$1"
+  local source="$TESTS_DIR/fixtures/$name"
+  local dir="$BATS_TEST_TMPDIR/fixture"
+  local root common state
+
+  cp -R "$source" "$dir"
+  export FIXTURE_DIR="$dir"
+  mkdir -p "$dir/project_root/.fixture-git-common"
+  root="$(cd "$dir/project_root" && pwd -P)"
+  common="$(cd "$dir/project_root/.fixture-git-common" && pwd -P)"
+  state="$root/.fanout/state.json"
+
+  HERDR_FIXTURE_COMMON="$common" HERDR_FIXTURE_ROOT="$root" HERDR_FIXTURE_CHILD="$root/child" \
+    perl -pe '
+      BEGIN {
+        %map = (
+          "/tmp/herdr-status-repo/.git" => $ENV{HERDR_FIXTURE_COMMON},
+          "/tmp/herdr-status-repo"      => $ENV{HERDR_FIXTURE_ROOT},
+          "/tmp/herdr-status-child"     => $ENV{HERDR_FIXTURE_CHILD},
+        );
+        $re = join "|", map { quotemeta } sort { length($b) <=> length($a) } keys %map;
+      }
+      s/($re)/$map{$1}/g;
+    ' "$source/project_root/.fanout/state.json" > "$state"
+
+  if grep -q '/tmp/herdr-status' "$state"; then
+    echo "materialize_herdr_fixture: unrewritten placeholder left in $state" >&2
+    grep -n '/tmp/herdr-status' "$state" >&2
+    return 1
+  fi
+}
+
+# Assert the herdr shim logged exactly these argv lines, in order. With no
+# arguments it asserts that fanout issued no herdr command at all.
+#
+# setup() arms HERDR_SHIM_LOG as an empty file, so a missing log means the
+# shim was never reachable and every assertion below would pass vacuously —
+# that is a harness failure, not a passing test. The comparison keeps the
+# trailing newline on both sides because a zero-argument herdr invocation logs
+# a blank line, which an empty log must not match.
+assert_herdr_argv() {
+  local expected="" actual
+  if [[ -z "${HERDR_SHIM_LOG:-}" ]]; then
+    echo "assert_herdr_argv: HERDR_SHIM_LOG is unset; the herdr argv log was never armed" >&2
+    return 1
+  fi
+  if [[ ! -f "$HERDR_SHIM_LOG" ]]; then
+    echo "assert_herdr_argv: $HERDR_SHIM_LOG does not exist; the herdr argv log was never armed" >&2
+    return 1
+  fi
+  if [[ $# -gt 0 ]]; then
+    printf -v expected '%s\n' "$@"
+  fi
+  # Command substitution strips trailing newlines; the x sentinel puts them back.
+  actual="$(cat "$HERDR_SHIM_LOG"; printf x)"
+  actual="${actual%x}"
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'herdr argv log mismatch\n--- want ---\n%s--- got ---\n%s--- end ---\n' \
+      "$expected" "$actual" >&2
+    return 1
+  fi
 }
 
 # Run fanout in --dry-run mode with a default --agent so the "WOULD FAIL:
