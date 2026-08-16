@@ -3,7 +3,9 @@ package ghissue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -316,4 +318,71 @@ func TestMergePRPropagatesContextCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("MergePR() error = %v, want context.Canceled", err)
 	}
+}
+
+// TestOpenHeadNumbers pins which rows count as "this branch is still in use".
+// `gh pr list --head` takes a bare branch name — the `owner:branch` form is not
+// supported — so the answer carries fork pull requests that merely share the
+// name, and it is capped by `--limit`.
+func TestOpenHeadNumbers(t *testing.T) {
+	row := func(num int, owner, name, ref string) string {
+		return fmt.Sprintf(
+			`{"number":%d,"headRefName":%q,"headRepository":{"name":%q},"headRepositoryOwner":{"login":%q}}`,
+			num, ref, name, owner)
+	}
+	tests := []struct {
+		name    string
+		rows    []string
+		want    []int
+		wantErr bool
+	}{
+		{
+			name: "counts this repository's own head",
+			rows: []string{row(9, "o", "r", "fanout/foo")},
+			want: []int{9},
+		},
+		{
+			// A fork's branch of the same name is a different branch; letting it
+			// veto would strand the delete on any popular branch name.
+			name: "drops a fork with the same branch name",
+			rows: []string{row(9, "stranger", "r", "fanout/foo")},
+			want: []int{},
+		},
+		{
+			name: "drops a same-named repository under another owner",
+			rows: []string{row(9, "stranger", "r", "fanout/foo"), row(10, "o", "r", "fanout/foo")},
+			want: []int{10},
+		},
+		{
+			name: "drops a row gh matched on a different branch",
+			rows: []string{row(9, "o", "r", "fanout/other")},
+			want: []int{},
+		},
+		{name: "no open pull request uses the branch", rows: nil, want: []int{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := []byte("[" + strings.Join(tt.rows, ",") + "]")
+			got, err := openHeadNumbers(out, "o", "r", "fanout/foo")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("openHeadNumbers() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("openHeadNumbers() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	// A truncated list reads as "nobody else uses this branch", which is the one
+	// answer that lets a live branch be deleted. Refuse instead.
+	t.Run("refuses a list that may be truncated", func(t *testing.T) {
+		rows := make([]string, openHeadListLimit)
+		for i := range rows {
+			rows[i] = row(i+1, "o", "r", "fanout/foo")
+		}
+		out := []byte("[" + strings.Join(rows, ",") + "]")
+		if _, err := openHeadNumbers(out, "o", "r", "fanout/foo"); err == nil {
+			t.Fatal("openHeadNumbers() error = nil, want the truncation refusal")
+		}
+	})
 }

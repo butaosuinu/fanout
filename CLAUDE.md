@@ -277,9 +277,12 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   loopback port is reachable by every local process, so the route closes rather
   than sit behind a vacuous token check. The branch to delete comes only from the
   PR's own head ref in the base repository, and it is deleted only while the ref
-  still points at the PR's head SHA and no other open PR is built on it — two PRs
-  can share one head branch with different bases, so one merge does not finish
-  that branch. A fork head, an unknown head ref, a moved ref, or a second open PR
+  still points at the PR's head SHA — as GitHub reports it on the live read, never
+  as the client named it, since fencing on a client-chosen SHA only proves the
+  client can name the ref's current tip — and no other open PR in this repository
+  is built on it (two PRs can share one head branch with different bases, so one
+  merge does not finish that branch; a `--limit`-capped listing is refused rather
+  than read as "nobody else uses it"). A fork head, an unknown head ref, a moved ref, or a second open PR
   drops the delete and reports why, so a cleanup precondition never
   vetoes the merge itself. `gh pr merge` exiting 0 is not proof of a merge — a
   merge-queue base enqueues and returns success — so the result is confirmed

@@ -6,7 +6,7 @@ import { useMergePr, type MergeState } from "../../transport/useMergePr";
 import type { MergeMethod } from "../settings/useSettings";
 import { rowKey, rowQuery } from "../sessions/pane";
 import { useMergeTracking, type MergeTracking, type Notice } from "./useMergeRelease";
-import { usePinnedHead } from "./usePinnedHead";
+import { usePinnedHead, type DiffSource } from "./usePinnedHead";
 import { mergeBlockReason, mergeTargetPr, mergeWarnings } from "./merge";
 
 /* 1 行ぶんのマージボタンの状態。Drawer と diff ツールバーが同じものを受け取る。 */
@@ -15,9 +15,11 @@ export interface MergeAffordance {
   /* 対象 PR の head commit。diff ビュアーは開いた時点の値を pin して、ズレたら
    * マージを塞ぐ(usePinnedHead)。 */
   headSha: string;
-  /* 対象 PR の head。diff ビュアーが読んでいる worktree と同じものかを判定する。 */
+  /* 対象 PR の head と base。diff ビュアーが読んでいる worktree と同じものかを
+   * 判定する。 */
   headRef: string;
   headRepo: string;
+  baseRef: string;
   blocked: MessageDescriptor | null;
   warnings: MessageDescriptor[];
   /* 直近の失敗。送信した行にだけ出す — 確認ダイアログを持たない導線なので、
@@ -76,7 +78,7 @@ export function useMergeFlow(
           ...resultsFor(key, track, state),
           onMerge: run({ key, query, pr }),
         }),
-        { repo, branch: pane.branchName ?? "" },
+        diffSource(pane, repo),
       );
     },
     [snap, track, run, state, token, pinDiffHead],
@@ -109,13 +111,25 @@ function resultsFor(
 }
 
 function mergeRequestFor(target: Target, method: MergeMethod) {
+  const { prNumber, headSha, baseRef } = prIdentity(target.pr);
+  return { query: target.query, method, prNumber, headSha, baseRef };
+}
+
+/* 対象 PR の identity。ボタンが撃つ先であり、diff の pin が照合する相手でもある
+ * ので、1 か所から配る。欠落は "" — 送らない値と「空」を区別しない。 */
+function prIdentity(pr: PRRef) {
   return {
-    query: target.query,
-    method,
-    prNumber: target.pr.number,
-    headSha: target.pr.headSha ?? "",
-    baseRef: target.pr.baseRef ?? "",
+    prNumber: pr.number,
+    headSha: pr.headSha ?? "",
+    headRef: pr.headRef ?? "",
+    headRepo: pr.headRepo ?? "",
+    baseRef: pr.baseRef ?? "",
   };
+}
+
+/* diff ビュアーがこの行で読んでいる worktree。 */
+function diffSource(pane: PaneView, repo: string): DiffSource {
+  return { repo, branch: pane.branchName ?? "", base: pane.baseBranch ?? "" };
 }
 
 function buildAffordance(input: {
@@ -134,10 +148,7 @@ function buildAffordance(input: {
     pending: input.pendingHere,
   });
   return {
-    prNumber: input.pr.number,
-    headSha: input.pr.headSha ?? "",
-    headRef: input.pr.headRef ?? "",
-    headRepo: input.pr.headRepo ?? "",
+    ...prIdentity(input.pr),
     blocked,
     /* 警告は「押せる操作をためらう理由」なので、押せない行では出さない。
      * merged PR は mergeable が常に欠落するため、そうしないと「競合の有無が

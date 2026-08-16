@@ -179,11 +179,18 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   しない。削除対象の branch は PR の head ref からしか決めず、記録 branch への
   フォールバックはしない(照合が自分自身との比較になって常に通るため)。
   削除は実行直前に GitHub へ「本当にマージ済みか」を確認し(snapshot は最大 1
-  poll 古い)、head SHA を expected OID として fence する — ref が動いていたら
-  消さない(merge 後に pane が push した未マージ commit を巻き込まないため)。
+  poll 古い)、**その live read が返す head** を expected OID として fence する —
+  ref が動いていたら消さない(merge 後に pane が push した未マージ commit を
+  巻き込まないため)。期待 OID をリクエスト本文から取ってはいけない。それでは
+  fence が「クライアントが現在の tip を名乗れるか」の確認に化け、守るはずの
+  commit ごと消せてしまう。本文の head SHA は echo として live read と一致する
+  ことだけを要求する。
   head ref が不明なとき、および head が fork にあるときは削除しない。同じ head
   branch を使う OPEN PR が他にも残っているときも削除しない — base 違いで 2 本
-  立てられるので、片方をマージした時点ではその branch はまだ終わっていない。ref path の各セグメントは percent-encode する
+  立てられるので、片方をマージした時点ではその branch はまだ終わっていない。
+  この列挙は自 repository の head だけを数え(`gh pr list --head` は branch 名
+  しか受け取らないので、同名 branch を持つ fork が混ざる)、`--limit` に達した
+  一覧は打ち切りの可能性があるので「他に誰も使っていない」と読まずに拒否する。ref path の各セグメントは percent-encode する
   (`feature/#123` のような合法 ref が fragment で切れ、その 404 が「既に無い」と
   誤認されるのを防ぐ)。
 - **`gh pr merge` の exit 0 はマージの証拠ではない**: merge queue 必須の base では

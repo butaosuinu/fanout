@@ -335,6 +335,15 @@ func (s Service) DeleteBranch(ctx context.Context, req DeleteRequest) error {
 	if !live.Merged {
 		return ErrNotMerged
 	}
+	// The expected OID comes from GitHub's own view of the merged pull request,
+	// not from the request body. Fencing on a client-named SHA would only prove
+	// the client can name the ref's current tip, so a commit pushed onto the
+	// branch after the merge would be deleted along with it. The body is kept as
+	// an echo: it has to agree with what the row rendered, or the click was aimed
+	// at a pull request that has since moved.
+	if req.HeadSha != live.HeadSha {
+		return ErrStaleHead
+	}
 	// Two pull requests can share a head branch when they target different bases.
 	// Merging one does not finish the branch: deleting it here would leave the
 	// other one unmergeable, with its commits gone.
@@ -347,5 +356,5 @@ func (s Service) DeleteBranch(ctx context.Context, req DeleteRequest) error {
 			return fmt.Errorf("%w: #%d", ErrBranchInUse, num)
 		}
 	}
-	return s.GH.DeleteRemoteBranch(ctx, req.Owner, req.Repo, req.Branch, req.HeadSha)
+	return s.GH.DeleteRemoteBranch(ctx, req.Owner, req.Repo, req.Branch, live.HeadSha)
 }

@@ -25,7 +25,7 @@ import type { MergeAffordance } from "./useMergeFlow";
 export function usePinnedHead(
   diffKey: string | null,
 ): (rowKey: string, merge: MergeAffordance | null, shows: DiffSource) => MergeAffordance | null {
-  const pinned = useRef<{ key: string; headSha: string } | null>(null);
+  const pinned = useRef<Pinned | null>(null);
 
   return useCallback(
     (rowKey, merge, shows) => {
@@ -35,34 +35,47 @@ export function usePinnedHead(
       if (diffKey === null) pinned.current = null;
       if (!merge || diffKey === null || rowKey !== diffKey) return merge;
       if (pinned.current?.key !== diffKey) {
-        pinned.current = { key: diffKey, headSha: merge.headSha };
+        pinned.current = { key: diffKey, prNumber: merge.prNumber, headSha: merge.headSha };
       }
-      const reason = mismatch(merge, shows, pinned.current.headSha);
+      const reason = mismatch(merge, shows, pinned.current);
       return reason ? { ...merge, blocked: reason, warnings: [] } : merge;
     },
     [diffKey],
   );
 }
 
-/* diff ビュアーが読んでいる worktree の repository / branch。 */
-export type DiffSource = { repo: string; branch: string };
+/* diff ビュアーが読んでいる worktree の repository / branch と、patch を計算した
+ * base branch。 */
+export type DiffSource = { repo: string; branch: string; base: string };
+
+/* diff を開いた時点の対象 PR。 */
+type Pinned = { key: string; prNumber: number; headSha: string };
 
 /* 画面の patch と、これからマージされるものがズレる 2 通り。塞がないなら null。 */
 function mismatch(
   merge: MergeAffordance,
   shows: DiffSource,
-  pinnedSha: string,
+  pin: Pinned,
 ): MessageDescriptor | null {
   /* 別物: 表示している patch は pane の worktree のもの。対象 PR の head がその
    * branch でないなら、画面の内容と別物をマージすることになる(issue 行に fork の
-   * closing PR が載っている場合など)。head が動いたかを見る pin では捕まらない。 */
-  if (shows.branch && !sameSource(merge, shows)) return MERGE_DIFF_MISMATCH;
+   * closing PR が載っている場合など)。head が動いたかを見る pin では捕まらない。
+   *
+   * base も同じ理由で見る。patch は worktree の base branch との差分なので、PR が
+   * 別の base へ retarget されると、head が 1 commit も動かないまま「画面に出て
+   * いない差分」がマージ対象になる。head だけの pin はこれを通してしまう。 */
+  if (!sameSource(merge, shows)) return MERGE_DIFF_MISMATCH;
+  /* すり替え: 行の対象 PR そのものが入れ替わった(新しい PR が open になった等)。 */
+  if (pin.prNumber !== merge.prNumber) return MERGE_DIFF_MISMATCH;
   /* 追い越し: 読んでいる間に push された。 */
-  if (pinnedSha !== merge.headSha) return MERGE_STALE_DIFF;
+  if (pin.headSha !== merge.headSha) return MERGE_STALE_DIFF;
   return null;
 }
 
+/* 空の記録は判定材料が無いという意味で、一致とみなす(塞ぐ根拠にしない)。 */
 function sameSource(merge: MergeAffordance, shows: DiffSource): boolean {
+  if (shows.base && merge.baseRef !== shows.base) return false;
+  if (!shows.branch) return true;
   if (merge.headRef !== shows.branch) return false;
   return !!merge.headRepo && merge.headRepo.toLowerCase() === shows.repo.toLowerCase();
 }

@@ -386,6 +386,28 @@ describe("表示中の差分との整合", () => {
     );
   });
 
+  /* patch は worktree の base branch との差分。retarget は head を 1 commit も
+   * 動かさないので、head だけを見る pin と 3 段照合はすべて素通りする。 */
+  it("PR が別の base へ retarget されたらツールバーのマージを塞ぐ", async () => {
+    const calls: MergeCall[] = [];
+    server.use(mergeHandler(calls));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(snapshotWithPR());
+
+    const overlay = await openDiff(user);
+    expect(within(overlay).getByRole("button", { name: "#701 をマージ" })).toBeInTheDocument();
+
+    streamSnapshot(snapshotWithPR({ baseRef: "release" }));
+
+    const blocked = await within(overlay).findByRole("button", {
+      name: /この PR のものではありません/,
+    });
+    expect(blocked).toHaveAttribute("aria-disabled", "true");
+    await user.click(blocked);
+    expect(calls).toHaveLength(0);
+  });
+
   /* /api/diff は pane の worktree を読む。issue 行には fork の closing PR が
    * 載りうるので、それを掴むと画面の patch と別物をマージすることになる。head が
    * 動いたかを見る pin では、この初手のズレは捕まらない。 */

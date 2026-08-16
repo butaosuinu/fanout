@@ -516,6 +516,19 @@ func TestServiceDeleteBranch(t *testing.T) {
 		}
 	})
 
+	/* fence の期待 OID を body から取ると、「クライアントが現在の tip を名乗れるか」
+	 * を確かめるだけになり、マージ後に push された commit ごと branch を消せる。 */
+	t.Run("fences on GitHub's head, not the one in the request", func(t *testing.T) {
+		port := &fakePort{alwaysMerged: true, liveHead: "def456"}
+		err := Service{GH: port}.DeleteBranch(context.Background(), req)
+		if !errors.Is(err, ErrStaleHead) {
+			t.Fatalf("DeleteBranch() error = %v, want ErrStaleHead", err)
+		}
+		if len(port.deleteCalls) != 0 {
+			t.Fatalf("delete calls = %#v, want none", port.deleteCalls)
+		}
+	})
+
 	t.Run("refuses when GitHub says the pull request is not merged", func(t *testing.T) {
 		port := &fakePort{notMerged: true}
 		err := Service{GH: port}.DeleteBranch(context.Background(), req)

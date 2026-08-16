@@ -168,9 +168,21 @@ func refPath(owner, repo, branch, verb string) string {
 		url.PathEscape(owner), url.PathEscape(repo), verb, strings.Join(segments, "/"))
 }
 
-// OpenPRNumbersForHead lists the OPEN pull requests whose head is this branch.
-// Two pull requests can share a head branch when they target different bases, so
-// "this PR is merged" is not proof the branch is finished with.
+// openHeadListLimit caps `gh pr list`, which otherwise answers with its own
+// default of 30. Hitting the cap is reported as an error rather than a short
+// list: a truncated answer here reads as "no other pull request uses this
+// branch", which is the one conclusion that lets a live branch be deleted.
+const openHeadListLimit = 100
+
+// OpenPRNumbersForHead lists the OPEN pull requests in this repository whose
+// head is this branch. Two pull requests can share a head branch when they
+// target different bases, so "this PR is merged" is not proof the branch is
+// finished with.
+//
+// The head repository is checked here rather than left to `gh`: `--head` takes a
+// bare branch name (the `owner:branch` form is not supported), so a fork with the
+// same branch name comes back in the same list and would veto a delete it has
+// nothing to do with.
 func (r Runner) OpenPRNumbersForHead(
 	ctx context.Context,
 	owner, repo, branch string,
@@ -178,21 +190,44 @@ func (r Runner) OpenPRNumbersForHead(
 	defer errs.Wrap(&err, "list open pull requests for %q", branch)
 
 	out, err := r.ghContext(ctx, "pr", "list", "-R", owner+"/"+repo,
-		"--head", branch, "--state", "open", "--json", "number")
+		"--head", branch, "--state", "open",
+		"--limit", strconv.Itoa(openHeadListLimit),
+		"--json", "number,headRefName,headRepository,headRepositoryOwner")
 	if err != nil {
 		return nil, err
 	}
-	var rows []struct {
-		Number int `json:"number"`
-	}
+	return openHeadNumbers(out, owner, repo, branch)
+}
+
+// headPRRow is one `gh pr list` row, narrowed to what decides whether the pull
+// request is built on this repository's copy of the branch.
+type headPRRow struct {
+	Number    int                    `json:"number"`
+	HeadRef   string                 `json:"headRefName"`
+	HeadRepo  struct{ Name string }  `json:"headRepository"`
+	HeadOwner struct{ Login string } `json:"headRepositoryOwner"`
+}
+
+func openHeadNumbers(out []byte, owner, repo, branch string) ([]int, error) {
+	var rows []headPRRow
 	if err := json.Unmarshal(out, &rows); err != nil {
 		return nil, err
 	}
+	if len(rows) >= openHeadListLimit {
+		return nil, fmt.Errorf("more than %d open pull requests listed", openHeadListLimit)
+	}
 	nums := make([]int, 0, len(rows))
 	for _, row := range rows {
-		nums = append(nums, row.Number)
+		if row.HeadRef == branch && sameRepo(row, owner, repo) {
+			nums = append(nums, row.Number)
+		}
 	}
 	return nums, nil
+}
+
+func sameRepo(row headPRRow, owner, repo string) bool {
+	return strings.EqualFold(row.HeadOwner.Login, owner) &&
+		strings.EqualFold(row.HeadRepo.Name, repo)
 }
 
 // BranchOID reads a branch's current commit. "" means the ref is already gone.
