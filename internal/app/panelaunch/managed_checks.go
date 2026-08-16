@@ -24,15 +24,8 @@ func verifyManagedWorktreePreconditions(
 	if err := worktree.VerifyWorktreeParentDir(req.ProjectRoot, intent.WorktreePath); err != nil {
 		return err
 	}
-	branch, found, branchErr := worktree.ObserveBranch(ctx, req.SourceRoot, intent.FullBranchRef)
-	if branchErr != nil {
-		return branchErr
-	}
-	if !found || branch != intent.ExpectedHead {
-		return fmt.Errorf("herdr branch %s does not match saved head", intent.FullBranchRef)
-	}
-	if availableErr := worktree.BranchAvailable(ctx, req.SourceRoot, intent.FullBranchRef); availableErr != nil {
-		return availableErr
+	if err := verifyManagedBranchPrecondition(ctx, req.SourceRoot, intent); err != nil {
+		return err
 	}
 	checkout, err := worktree.ObserveCheckout(ctx, req.SourceRoot, intent.WorktreePath)
 	if err != nil {
@@ -49,6 +42,24 @@ func verifyManagedWorktreePreconditions(
 		return fmt.Errorf("herdr source repository identity changed")
 	}
 	return nil
+}
+
+// verifyManagedBranchPrecondition re-checks the reserved branch immediately
+// before the mutation: it must still sit at the saved head and carry no
+// checkout.
+func verifyManagedBranchPrecondition(
+	ctx context.Context,
+	sourceRoot string,
+	intent state.LaunchIntent,
+) error {
+	branch, found, branchErr := worktree.ObserveBranch(ctx, sourceRoot, intent.FullBranchRef)
+	if branchErr != nil {
+		return branchErr
+	}
+	if !found || branch != intent.ExpectedHead {
+		return fmt.Errorf("herdr branch %s does not match saved head", intent.FullBranchRef)
+	}
+	return worktree.BranchAvailable(ctx, sourceRoot, intent.FullBranchRef)
 }
 
 // validateWorkspacePostcondition checks the created workspace against the
@@ -159,14 +170,10 @@ func validateManagedCoordinatorRequest(req ManagedCoordinatorRequest) error {
 }
 
 func validateManagedWorktreeRequest(req ManagedWorktreeRequest) error {
-	if strings.TrimSpace(req.Parent) == "" || req.ProjectRoot == "" || req.SourceRoot == "" ||
-		req.Slug == "" || req.BranchName == "" || req.WorktreePath == "" ||
-		req.ManagedSession == "" || req.SocketPath == "" {
+	if managedWorktreeRequestIncomplete(req) {
 		return fmt.Errorf("herdr worktree request is incomplete")
 	}
-	issueKey := req.IssueNum > 0 ||
-		canonicalManagedParent(req.Parent) == ManualParentRef && req.IssueNum < 0
-	if issueKey == (strings.TrimSpace(req.TaskID) != "") {
+	if managedWorktreeRequestHasIssueKey(req) == (strings.TrimSpace(req.TaskID) != "") {
 		return fmt.Errorf("herdr worktree request requires exactly one issue number or task id")
 	}
 	expected := filepath.Join(req.ProjectRoot, ".fanout", "worktrees", req.Slug)
@@ -174,6 +181,21 @@ func validateManagedWorktreeRequest(req ManagedWorktreeRequest) error {
 		return fmt.Errorf("herdr worktree path %s does not match slug %s", req.WorktreePath, req.Slug)
 	}
 	return nil
+}
+
+// managedWorktreeRequestIncomplete reports a request missing any field the
+// worktree realization needs.
+func managedWorktreeRequestIncomplete(req ManagedWorktreeRequest) bool {
+	return strings.TrimSpace(req.Parent) == "" || req.ProjectRoot == "" || req.SourceRoot == "" ||
+		req.Slug == "" || req.BranchName == "" || req.WorktreePath == "" ||
+		req.ManagedSession == "" || req.SocketPath == ""
+}
+
+// managedWorktreeRequestHasIssueKey reports whether the request is keyed by an
+// issue number: a real one, or the manual coordinator's negative sentinel.
+func managedWorktreeRequestHasIssueKey(req ManagedWorktreeRequest) bool {
+	return req.IssueNum > 0 ||
+		canonicalManagedParent(req.Parent) == ManualParentRef && req.IssueNum < 0
 }
 
 func savedManagedCoordinatorPathMatches(ownerProjectRoot, savedPath, requestPath string) bool {

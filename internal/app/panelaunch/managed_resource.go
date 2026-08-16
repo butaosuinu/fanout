@@ -76,15 +76,24 @@ func workspaceHasManagedResource(
 		return true
 	}
 	for _, pane := range observation.Panes {
-		if pane.Pane.Backend == backend.Herdr &&
-			pane.Pane.Workspace == expected.WorkspaceID &&
-			pane.Pane.Pane == expected.PaneID &&
-			pane.TerminalID == expected.TerminalID &&
-			pane.CWD == expected.CurrentPath {
+		if paneHasManagedResource(pane, expected) {
 			return true
 		}
 	}
 	return false
+}
+
+// paneHasManagedResource reports whether one observed pane still carries the
+// pane identity the journal recorded for the workspace.
+func paneHasManagedResource(
+	pane backend.WorkspacePaneObservation,
+	expected state.RuntimeResource,
+) bool {
+	return pane.Pane.Backend == backend.Herdr &&
+		pane.Pane.Workspace == expected.WorkspaceID &&
+		pane.Pane.Pane == expected.PaneID &&
+		pane.TerminalID == expected.TerminalID &&
+		pane.CWD == expected.CurrentPath
 }
 
 func workspaceProvenanceMatches(
