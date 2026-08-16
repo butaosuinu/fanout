@@ -12,6 +12,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
 	"github.com/butaosuinu/fanout/internal/app/run"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutsettings "github.com/butaosuinu/fanout/internal/infra/settings"
@@ -315,7 +316,7 @@ func newTUIHelpPopupFunc(projectRoot, commandName string) fanouttui.HelpPopupFun
 		if err != nil {
 			return err
 		}
-		return tmuxrun.DisplayPopup(tmuxrun.PopupOptions{
+		return tmuxrun.DisplayPopup(backend.PopupOptions{
 			Width:    geometry.PopupWidth,
 			Height:   geometry.PopupHeight,
 			StartDir: projectRoot,
@@ -376,8 +377,8 @@ func startTUICloseChoicePopup(projectRoot, commandName string, req fanouttui.Clo
 func tuiClosePopupDisplayOptions(
 	projectRoot, commandName, requestFile, resultFile, doneFile string,
 	geometry tuiClosePopupGeometry,
-) tmuxrun.PopupOptions {
-	return tmuxrun.PopupOptions{
+) backend.PopupOptions {
+	return backend.PopupOptions{
 		Width: geometry.PopupWidth, Height: geometry.PopupHeight,
 		StartDir: projectRoot, Title: "Close pane",
 		Command: tuiClosePopupShellCommand(
@@ -435,7 +436,7 @@ func newTUINewPanePromptFunc(projectRoot, commandName string) fanouttui.NewPaneP
 			geometry.PromptWidth,
 			geometry.PromptHeight,
 		)
-		displayErr := tmuxrun.DisplayPopup(tmuxrun.PopupOptions{
+		displayErr := tmuxrun.DisplayPopup(backend.PopupOptions{
 			Width:    geometry.PopupWidth,
 			Height:   geometry.PopupHeight,
 			StartDir: projectRoot,
@@ -498,7 +499,7 @@ func newTUISettingsPopupFunc(projectRoot, commandName string) fanouttui.Settings
 			geometry.PromptWidth,
 			geometry.PromptHeight,
 		)
-		displayErr := tmuxrun.DisplayPopup(tmuxrun.PopupOptions{
+		displayErr := tmuxrun.DisplayPopup(backend.PopupOptions{
 			Width:    geometry.PopupWidth,
 			Height:   geometry.PopupHeight,
 			StartDir: projectRoot,
@@ -533,7 +534,7 @@ func newTUISettingsPopupFunc(projectRoot, commandName string) fanouttui.Settings
 	}
 }
 
-func tuiPopupPositionForCurrentPane(popupWidth, popupHeight int) *tmuxrun.PopupPosition {
+func tuiPopupPositionForCurrentPane(popupWidth, popupHeight int) *backend.PopupPosition {
 	paneID := strings.TrimSpace(os.Getenv("TMUX_PANE"))
 	if paneID == "" {
 		return nil
@@ -545,7 +546,7 @@ func tuiPopupPositionForCurrentPane(popupWidth, popupHeight int) *tmuxrun.PopupP
 	return tuiPopupPositionAdjacentToPane(geom, popupWidth, popupHeight)
 }
 
-func tuiPopupPositionAdjacentToPane(geom tmuxrun.PaneGeometry, popupWidth, popupHeight int) *tmuxrun.PopupPosition {
+func tuiPopupPositionAdjacentToPane(geom backend.PaneGeometry, popupWidth, popupHeight int) *backend.PopupPosition {
 	if popupWidth <= 0 || popupHeight <= 0 || geom.ClientWidth <= 0 || geom.ClientHeight <= 0 {
 		return nil
 	}
@@ -561,13 +562,13 @@ func tuiPopupPositionAdjacentToPane(geom tmuxrun.PaneGeometry, popupWidth, popup
 	default:
 		x = nearestHorizontalPopupEdge(geom, popupWidth)
 	}
-	return &tmuxrun.PopupPosition{
+	return &backend.PopupPosition{
 		X: min(max(x, 0), maxX),
 		Y: min(max(geom.Top, 0), maxY),
 	}
 }
 
-func nearestHorizontalPopupEdge(geom tmuxrun.PaneGeometry, popupWidth int) int {
+func nearestHorizontalPopupEdge(geom backend.PaneGeometry, popupWidth int) int {
 	leftOverlap := overlapWidth(0, popupWidth, geom.Left, geom.Left+geom.Width)
 	rightX := max(geom.ClientWidth-popupWidth, 0)
 	rightOverlap := overlapWidth(rightX, rightX+popupWidth, geom.Left, geom.Left+geom.Width)
@@ -581,7 +582,7 @@ func overlapWidth(aStart, aEnd, bStart, bEnd int) int {
 	return max(0, min(aEnd, bEnd)-max(aStart, bStart))
 }
 
-func tuiHelpPopupGeometryForClient(size tmuxrun.ClientSize) (tuiHelpPopupGeometry, error) {
+func tuiHelpPopupGeometryForClient(size backend.ClientSize) (tuiHelpPopupGeometry, error) {
 	minPopupHeight := tuiHelpPopupMinHeight + tuiNewPanePopupBorderInset
 	if size.Width < 54 || size.Height < minPopupHeight {
 		return tuiHelpPopupGeometry{}, fmt.Errorf("tmux client is too small for the help popup: %dx%d", size.Width, size.Height)
@@ -598,7 +599,7 @@ func tuiHelpPopupGeometryForClient(size tmuxrun.ClientSize) (tuiHelpPopupGeometr
 	}, nil
 }
 
-func tuiClosePopupGeometryForClient(size tmuxrun.ClientSize) (tuiClosePopupGeometry, error) {
+func tuiClosePopupGeometryForClient(size backend.ClientSize) (tuiClosePopupGeometry, error) {
 	minPopupHeight := tuiClosePopupMinHeight + tuiNewPanePopupBorderInset
 	if size.Width < 54 || size.Height < minPopupHeight {
 		return tuiClosePopupGeometry{}, fmt.Errorf("tmux client is too small for the close popup: %dx%d", size.Width, size.Height)
@@ -614,7 +615,7 @@ func tuiClosePopupGeometryForClient(size tmuxrun.ClientSize) (tuiClosePopupGeome
 	}, nil
 }
 
-func tuiNewPanePopupGeometryForClient(size tmuxrun.ClientSize) (tuiNewPanePopupGeometry, error) {
+func tuiNewPanePopupGeometryForClient(size backend.ClientSize) (tuiNewPanePopupGeometry, error) {
 	minPopupHeight := tuiNewPanePopupMinHeight + tuiNewPanePopupBorderInset
 	minClientWidth := tuiNewPanePopupMinWidth + tuiNewPanePopupBorderInset + 4
 	if size.Width < minClientWidth || size.Height < minPopupHeight {
@@ -632,7 +633,7 @@ func tuiNewPanePopupGeometryForClient(size tmuxrun.ClientSize) (tuiNewPanePopupG
 	}, nil
 }
 
-func tuiSettingsPopupGeometryForClient(size tmuxrun.ClientSize) (tuiNewPanePopupGeometry, error) {
+func tuiSettingsPopupGeometryForClient(size backend.ClientSize) (tuiNewPanePopupGeometry, error) {
 	minPopupHeight := tuiSettingsPopupMinHeight + tuiNewPanePopupBorderInset
 	minClientWidth := tuiSettingsPopupMinWidth + tuiNewPanePopupBorderInset + 4
 	if size.Width < minClientWidth || size.Height < minPopupHeight {

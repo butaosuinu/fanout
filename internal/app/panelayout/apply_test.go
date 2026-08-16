@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 type fakeOps struct {
-	geom     tmuxrun.Geometry
+	geom     backend.Geometry
 	geomErr  error
-	panes    []tmuxrun.WindowPane
+	panes    []backend.WindowPane
 	panesErr error
 	applyErr error
 	mainvErr error
@@ -25,8 +25,8 @@ type fakeOps struct {
 	splits     int
 }
 
-func (f *fakeOps) WindowGeometry(string) (tmuxrun.Geometry, error) { return f.geom, f.geomErr }
-func (f *fakeOps) WindowPanes(string) ([]tmuxrun.WindowPane, error) {
+func (f *fakeOps) WindowGeometry(string) (backend.Geometry, error) { return f.geom, f.geomErr }
+func (f *fakeOps) WindowPanes(string) ([]backend.WindowPane, error) {
 	f.panesCalls++
 	return f.panes, f.panesErr
 }
@@ -48,14 +48,14 @@ func newTestApplier(f *fakeOps) *applier {
 	return &applier{ops: f, cfg: DefaultConfig(), memo: map[string]string{}}
 }
 
-func wp(num string, idx int, role string, spacer bool) tmuxrun.WindowPane {
-	return tmuxrun.WindowPane{ID: "%" + num, NumericID: num, Index: idx, Role: role, Spacer: spacer}
+func wp(num string, idx int, role string, spacer bool) backend.WindowPane {
+	return backend.WindowPane{ID: "%" + num, NumericID: num, Index: idx, Role: role, Spacer: spacer}
 }
 
 func TestApplyNoSidebarGrid(t *testing.T) {
 	f := &fakeOps{
-		geom:  tmuxrun.Geometry{WindowID: "@1", Width: 200, Height: 50},
-		panes: []tmuxrun.WindowPane{wp("1079", 0, "", false), wp("1080", 1, "", false)},
+		geom:  backend.Geometry{WindowID: "@1", Width: 200, Height: 50},
+		panes: []backend.WindowPane{wp("1079", 0, "", false), wp("1080", 1, "", false)},
 	}
 	a := newTestApplier(f)
 	if err := a.apply("%1079", Create); err != nil {
@@ -75,9 +75,9 @@ func TestApplyNoSidebarGrid(t *testing.T) {
 
 func TestApplySidebarGrid(t *testing.T) {
 	f := &fakeOps{
-		geom: tmuxrun.Geometry{WindowID: "@1", Width: 200, Height: 50},
-		panes: []tmuxrun.WindowPane{
-			wp("1093", 0, tmuxrun.RoleConsole, false),
+		geom: backend.Geometry{WindowID: "@1", Width: 200, Height: 50},
+		panes: []backend.WindowPane{
+			wp("1093", 0, backend.RoleConsole, false),
 			wp("1094", 1, "", false),
 			wp("1095", 2, "", false),
 		},
@@ -96,8 +96,8 @@ func TestApplyAddsSpacerWithConsole(t *testing.T) {
 	// A console + 5 grid panes on a wide window picks a short, wide last row that
 	// warrants a spacer; spacers are only created when a console is present.
 	f := &fakeOps{
-		geom:     tmuxrun.Geometry{WindowID: "@1", Width: 320, Height: 50},
-		panes:    append([]tmuxrun.WindowPane{wp("c", 0, tmuxrun.RoleConsole, false)}, panesN(5)...),
+		geom:     backend.Geometry{WindowID: "@1", Width: 320, Height: 50},
+		panes:    append([]backend.WindowPane{wp("c", 0, backend.RoleConsole, false)}, panesN(5)...),
 		spacerID: "%9",
 	}
 	a := newTestApplier(f)
@@ -117,7 +117,7 @@ func TestApplyNoSpacerWithoutConsole(t *testing.T) {
 	// Same spacer-warranting geometry but no console (batch run): no resident
 	// process would reconcile a spacer, so none is created.
 	f := &fakeOps{
-		geom:  tmuxrun.Geometry{WindowID: "@1", Width: 320, Height: 50},
+		geom:  backend.Geometry{WindowID: "@1", Width: 320, Height: 50},
 		panes: panesN(5),
 	}
 	a := newTestApplier(f)
@@ -131,8 +131,8 @@ func TestApplyNoSpacerWithoutConsole(t *testing.T) {
 
 func TestApplyRemovesStaleSpacer(t *testing.T) {
 	f := &fakeOps{
-		geom: tmuxrun.Geometry{WindowID: "@1", Width: 200, Height: 50},
-		panes: []tmuxrun.WindowPane{
+		geom: backend.Geometry{WindowID: "@1", Width: 200, Height: 50},
+		panes: []backend.WindowPane{
 			wp("1", 0, "", false),
 			wp("2", 1, "", false),
 			wp("8", 2, "", true), // stale spacer, no longer needed at this size
@@ -153,7 +153,7 @@ func TestApplyRemovesStaleSpacer(t *testing.T) {
 func TestApplyFallbackCascade(t *testing.T) {
 	// Custom layout rejected → main-vertical.
 	f := &fakeOps{
-		geom:     tmuxrun.Geometry{WindowID: "@1", Width: 200, Height: 50},
+		geom:     backend.Geometry{WindowID: "@1", Width: 200, Height: 50},
 		panes:    panesN(3),
 		applyErr: fmt.Errorf("tmux rejected layout"),
 	}
@@ -165,7 +165,7 @@ func TestApplyFallbackCascade(t *testing.T) {
 
 	// Main-vertical also fails → tiled.
 	f = &fakeOps{
-		geom:     tmuxrun.Geometry{WindowID: "@1", Width: 200, Height: 50},
+		geom:     backend.Geometry{WindowID: "@1", Width: 200, Height: 50},
 		panes:    panesN(3),
 		applyErr: fmt.Errorf("rejected"),
 		mainvErr: fmt.Errorf("rejected too"),
@@ -181,7 +181,7 @@ func TestApplyCrampedFallsBackToTiled(t *testing.T) {
 	// A window too small for a comfortable grid skips the custom layout and uses
 	// tiled (the layout that handles dense windows best), not main-vertical.
 	f := &fakeOps{
-		geom:  tmuxrun.Geometry{WindowID: "@1", Width: 50, Height: 10},
+		geom:  backend.Geometry{WindowID: "@1", Width: 50, Height: 10},
 		panes: panesN(3),
 	}
 	a := newTestApplier(f)
@@ -196,7 +196,7 @@ func TestApplyCrampedFallsBackToTiled(t *testing.T) {
 
 func TestApplyResizeMemoSkips(t *testing.T) {
 	f := &fakeOps{
-		geom:  tmuxrun.Geometry{WindowID: "@1", Width: 200, Height: 50},
+		geom:  backend.Geometry{WindowID: "@1", Width: 200, Height: 50},
 		panes: panesN(2),
 	}
 	a := newTestApplier(f)
@@ -222,7 +222,7 @@ func TestApplyResizeMemoSkips(t *testing.T) {
 
 func TestApplyCreateBypassesMemo(t *testing.T) {
 	f := &fakeOps{
-		geom:  tmuxrun.Geometry{WindowID: "@1", Width: 200, Height: 50},
+		geom:  backend.Geometry{WindowID: "@1", Width: 200, Height: 50},
 		panes: panesN(2),
 	}
 	a := newTestApplier(f)
@@ -246,8 +246,8 @@ func TestApplyWindowGone(t *testing.T) {
 
 func TestApplyConsoleOnly(t *testing.T) {
 	f := &fakeOps{
-		geom:  tmuxrun.Geometry{WindowID: "@1", Width: 200, Height: 50},
-		panes: []tmuxrun.WindowPane{wp("5", 0, tmuxrun.RoleConsole, false)},
+		geom:  backend.Geometry{WindowID: "@1", Width: 200, Height: 50},
+		panes: []backend.WindowPane{wp("5", 0, backend.RoleConsole, false)},
 	}
 	a := newTestApplier(f)
 	if err := a.apply("%5", Create); err != nil {
@@ -258,8 +258,8 @@ func TestApplyConsoleOnly(t *testing.T) {
 	}
 }
 
-func panesN(n int) []tmuxrun.WindowPane {
-	out := make([]tmuxrun.WindowPane, n)
+func panesN(n int) []backend.WindowPane {
+	out := make([]backend.WindowPane, n)
 	for i := range out {
 		out[i] = wp(fmt.Sprintf("%d", i+1), i, "", false)
 	}

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 func installTmuxShim(t *testing.T, script string) string {
@@ -75,7 +77,7 @@ printf '132 41\n'
 	if err != nil {
 		t.Fatalf("CurrentClientSize() failed: %v", err)
 	}
-	if got != (ClientSize{Width: 132, Height: 41}) {
+	if got != (corebackend.ClientSize{Width: 132, Height: 41}) {
 		t.Fatalf("CurrentClientSize() = %#v, want 132x41", got)
 	}
 	assertTmuxArgs(t, argsPath, []string{"display-message", "-p", "#{client_width} #{client_height}"})
@@ -90,7 +92,7 @@ printf '10\t2\t40\t20\t132\t41\n'
 	if err != nil {
 		t.Fatalf("PaneGeometryForPane() failed: %v", err)
 	}
-	want := PaneGeometry{Left: 10, Top: 2, Width: 40, Height: 20, ClientWidth: 132, ClientHeight: 41}
+	want := corebackend.PaneGeometry{Left: 10, Top: 2, Width: 40, Height: 20, ClientWidth: 132, ClientHeight: 41}
 	if got != want {
 		t.Fatalf("PaneGeometryForPane() = %#v, want %#v", got, want)
 	}
@@ -116,7 +118,7 @@ func TestDisplayPopupBuildsCenteredArgs(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 `)
 
-	err := DisplayPopup(PopupOptions{
+	err := DisplayPopup(corebackend.PopupOptions{
 		Width:    90,
 		Height:   32,
 		StartDir: "/tmp/work tree",
@@ -144,13 +146,13 @@ func TestDisplayPopupBuildsPositionedArgs(t *testing.T) {
 	argsPath := installTmuxShim(t, `printf '%s\n' "$@" > "$TMUXRUN_ARGS"
 `)
 
-	err := DisplayPopup(PopupOptions{
+	err := DisplayPopup(corebackend.PopupOptions{
 		Width:    76,
 		Height:   20,
 		StartDir: "/tmp/repo",
 		Title:    "Keyboard shortcuts",
 		Command:  "/tmp/fanout __tui-help-popup",
-		Position: &PopupPosition{X: 41, Y: 0},
+		Position: &corebackend.PopupPosition{X: 41, Y: 0},
 	})
 	if err != nil {
 		t.Fatalf("DisplayPopup() failed: %v", err)
@@ -1339,7 +1341,7 @@ func TestParseListPanesOutput(t *testing.T) {
 		t.Fatalf("parseListPanesOutput() failed: %v", err)
 	}
 
-	want := []PaneInfo{
+	want := []corebackend.PaneInfo{
 		{ID: "%1", WindowID: "@1", Index: 0, Active: true, Title: "main"},
 		{ID: "%2", WindowID: "@1", Index: 1, Active: false, Title: "title:with:colons"},
 	}
@@ -1370,7 +1372,7 @@ printf '%%3:@2:4:1:fanout pane\n'
 		t.Fatalf("ListPanes() failed: %v", err)
 	}
 
-	wantPanes := []PaneInfo{{ID: "%3", WindowID: "@2", Index: 4, Active: true, Title: "fanout pane"}}
+	wantPanes := []corebackend.PaneInfo{{ID: "%3", WindowID: "@2", Index: 4, Active: true, Title: "fanout pane"}}
 	if !reflect.DeepEqual(got, wantPanes) {
 		t.Fatalf("ListPanes() = %#v, want %#v", got, wantPanes)
 	}
@@ -1489,7 +1491,7 @@ printf '%%4:@3:2:0:other session pane\n'
 		t.Fatalf("ListAllPanes() failed: %v", err)
 	}
 
-	wantPanes := []PaneInfo{{ID: "%4", WindowID: "@3", Index: 2, Active: false, Title: "other session pane"}}
+	wantPanes := []corebackend.PaneInfo{{ID: "%4", WindowID: "@3", Index: 2, Active: false, Title: "other session pane"}}
 	if !reflect.DeepEqual(got, wantPanes) {
 		t.Fatalf("ListAllPanes() = %#v, want %#v", got, wantPanes)
 	}
@@ -1506,7 +1508,7 @@ printf '%%9:@7:0:1:fanout tui\n'
 		t.Fatalf("NewWindow() failed: %v", err)
 	}
 
-	wantPane := PaneInfo{ID: "%9", WindowID: "@7", Index: 0, Active: true, Title: "fanout tui"}
+	wantPane := corebackend.PaneInfo{ID: "%9", WindowID: "@7", Index: 0, Active: true, Title: "fanout tui"}
 	if !reflect.DeepEqual(got, wantPane) {
 		t.Fatalf("NewWindow() = %#v, want %#v", got, wantPane)
 	}
@@ -1820,7 +1822,7 @@ func TestFocusPaneSelectsWindowAndPane(t *testing.T) {
 printf '%s\n' '---' >> "$TMUXRUN_ARGS"
 `)
 
-	if err := FocusPane(PaneInfo{ID: "%9", WindowID: "@7"}); err != nil {
+	if err := FocusPane(corebackend.PaneInfo{ID: "%9", WindowID: "@7"}); err != nil {
 		t.Fatalf("FocusPane() failed: %v", err)
 	}
 
@@ -1973,7 +1975,7 @@ func TestClosePaneIfOwnedClosesMatchingKeyAndRechecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClosePaneIfOwned() failed: %v", err)
 	}
-	if result.Status != ClosePaneClosed || result.WindowID != "@9" {
+	if result.Status != corebackend.ClosePaneClosed || result.WindowID != "@9" {
 		t.Fatalf("ClosePaneIfOwned() = %+v, want closed in @9", result)
 	}
 	if _, err := os.Stat(killedPath); err != nil {
@@ -1989,7 +1991,7 @@ func TestClosePaneIfOwnedClosesFinalPaneWhenServerExits(t *testing.T) {
 	t.Setenv("CLOSE_PANE_GONE_ERROR", "no server running on /tmp/tmux-test/default")
 
 	result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-target")
-	if err != nil || result.Status != ClosePaneClosed || result.WindowID != "@9" {
+	if err != nil || result.Status != corebackend.ClosePaneClosed || result.WindowID != "@9" {
 		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want final pane closed in @9", result, err)
 	}
 }
@@ -2037,7 +2039,7 @@ func TestClosePaneIfOwnedTreatsAbsentTmuxScopeAsStaleOnRetry(t *testing.T) {
 			t.Setenv("CLOSE_PANE_GONE_ERROR", message)
 
 			result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-target")
-			if err != nil || result.Status != ClosePaneStale {
+			if err != nil || result.Status != corebackend.ClosePaneStale {
 				t.Fatalf("ClosePaneIfOwned() = %+v, %v; want stale", result, err)
 			}
 			if _, statErr := os.Stat(killedPath); !os.IsNotExist(statErr) {
@@ -2073,7 +2075,7 @@ func TestClosePaneIfOwnedFailsClosedOnOtherConnectionErrors(t *testing.T) {
 			t.Setenv("CLOSE_PANE_GONE_EXIT_CODE", tt.exitCode)
 
 			result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-target")
-			if err == nil || result.Status != ClosePaneFailed {
+			if err == nil || result.Status != corebackend.ClosePaneFailed {
 				t.Fatalf("ClosePaneIfOwned() = %+v, %v; want failed", result, err)
 			}
 			if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
@@ -2093,7 +2095,7 @@ func TestClosePaneIfOwnedDoesNotKillReusedPane(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClosePaneIfOwned() failed: %v", err)
 	}
-	if result.Status != ClosePaneStale {
+	if result.Status != corebackend.ClosePaneStale {
 		t.Fatalf("ClosePaneIfOwned() = %+v, want stale", result)
 	}
 	if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
@@ -2107,7 +2109,7 @@ func TestClosePaneIfOwnedFailsClosedWhenLiveLivenessKeyIsUnavailable(t *testing.
 	t.Setenv("CLOSE_PANE_SHELL_KEY", "")
 
 	result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-target")
-	if err == nil || result.Status != ClosePaneFailed {
+	if err == nil || result.Status != corebackend.ClosePaneFailed {
 		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want unknown identity failure", result, err)
 	}
 	if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
@@ -2122,7 +2124,7 @@ func TestClosePaneIfOwnedFailsClosedForLegacyLivePaneDespiteExactWorktree(t *tes
 	t.Setenv("CLOSE_PANE_SHELL_KEY", "")
 
 	result, err := ClosePaneIfOwned("%5", "/wt/target", "")
-	if err == nil || result.Status != ClosePaneFailed {
+	if err == nil || result.Status != corebackend.ClosePaneFailed {
 		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want failed", result, err)
 	}
 	if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
@@ -2137,7 +2139,7 @@ func TestClosePaneIfOwnedDoesNotUseCurrentPathAsLegacyOwnership(t *testing.T) {
 	t.Setenv("CLOSE_PANE_SHELL_KEY", "")
 
 	result, err := ClosePaneIfOwned("%5", "/wt/target", "")
-	if err == nil || result.Status != ClosePaneFailed {
+	if err == nil || result.Status != corebackend.ClosePaneFailed {
 		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want failed", result, err)
 	}
 	if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
@@ -2152,7 +2154,7 @@ func TestClosePaneIfOwnedFailsClosedWhenStampAndCurrentPathCannotVerifyIdentity(
 	t.Setenv("CLOSE_PANE_SHELL_KEY", "")
 
 	result, err := ClosePaneIfOwned("%5", "/wt/target", "")
-	if err == nil || result.Status != ClosePaneFailed {
+	if err == nil || result.Status != corebackend.ClosePaneFailed {
 		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want failed", result, err)
 	}
 	if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
@@ -2169,7 +2171,7 @@ func TestClosePaneIfOwnedFailsClosedOnStrictListingFailures(t *testing.T) {
 			t.Setenv("CLOSE_PANE_SHELL_KEY", "shell-token")
 			t.Setenv("CLOSE_PANE_FAIL_FIELD", field)
 			result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-token")
-			if err == nil || result.Status != ClosePaneFailed {
+			if err == nil || result.Status != corebackend.ClosePaneFailed {
 				t.Fatalf("ClosePaneIfOwned() = %+v, %v; want failed", result, err)
 			}
 			if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
@@ -2187,7 +2189,7 @@ func TestClosePaneIfOwnedFailsClosedOnDuplicateTargetPath(t *testing.T) {
 	t.Setenv("CLOSE_PANE_DUPLICATE_PATH", "1")
 
 	result, err := ClosePaneIfOwned("%5", "/wt/target", "")
-	if err == nil || result.Status != ClosePaneFailed {
+	if err == nil || result.Status != corebackend.ClosePaneFailed {
 		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want failed", result, err)
 	}
 	if _, err := os.Stat(killedPath); !os.IsNotExist(err) {
@@ -2202,7 +2204,7 @@ func TestClosePaneIfOwnedTreatsConcurrentGoneAfterKillErrorAsStale(t *testing.T)
 	t.Setenv("CLOSE_PANE_SHELL_KEY", "shell-token")
 
 	result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-token")
-	if err != nil || result.Status != ClosePaneStale {
+	if err != nil || result.Status != corebackend.ClosePaneStale {
 		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want stale", result, err)
 	}
 }
@@ -2214,7 +2216,7 @@ func TestClosePaneIfOwnedFailsWhenPaneRemainsAfterKill(t *testing.T) {
 	t.Setenv("CLOSE_PANE_SHELL_KEY", "shell-token")
 
 	result, err := ClosePaneIfOwned("%5", "/wt/target", "shell-token")
-	if err == nil || result.Status != ClosePaneFailed {
+	if err == nil || result.Status != corebackend.ClosePaneFailed {
 		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want failed", result, err)
 	}
 }
@@ -2226,7 +2228,7 @@ func TestClosePaneIfOwnedMatchesShellKey(t *testing.T) {
 	t.Setenv("CLOSE_PANE_SHELL_KEY", "shell-token")
 
 	result, err := ClosePaneIfOwned("%5", "/repo", "shell-token")
-	if err != nil || result.Status != ClosePaneClosed {
+	if err != nil || result.Status != corebackend.ClosePaneClosed {
 		t.Fatalf("ClosePaneIfOwned() = %+v, %v; want closed", result, err)
 	}
 }

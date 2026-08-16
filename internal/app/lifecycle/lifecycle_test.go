@@ -47,11 +47,11 @@ type paneCloseCall struct {
 
 var closeTmuxPane = tmuxrun.ClosePaneIfOwned
 
-func stubPaneClose(t *testing.T, fn func(string, string, string) (tmuxrun.ClosePaneResult, error)) *[]paneCloseCall {
+func stubPaneClose(t *testing.T, fn func(string, string, string) (backend.ClosePaneResult, error)) *[]paneCloseCall {
 	t.Helper()
 	var calls []paneCloseCall
 	orig := closeTmuxPane
-	closeTmuxPane = func(paneID, worktreePath, shellKey string) (tmuxrun.ClosePaneResult, error) {
+	closeTmuxPane = func(paneID, worktreePath, shellKey string) (backend.ClosePaneResult, error) {
 		calls = append(calls, paneCloseCall{paneID, worktreePath, shellKey})
 		return fn(paneID, worktreePath, shellKey)
 	}
@@ -91,11 +91,11 @@ func fakeRuntimeOptions() Options {
 			result, err := closeTmuxPane(req.Ref.Pane, req.WorktreePath, req.ShellKey)
 			mapped := backend.CloseResult{Status: backend.CloseFailed, ContainerID: result.WindowID}
 			switch result.Status {
-			case tmuxrun.ClosePaneClosed:
+			case backend.ClosePaneClosed:
 				mapped.Status = backend.CloseConfirmed
-			case tmuxrun.ClosePaneStale:
+			case backend.ClosePaneStale:
 				mapped.Status = backend.CloseStale
-			case tmuxrun.ClosePaneFailed:
+			case backend.ClosePaneFailed:
 				mapped.Status = backend.CloseFailed
 			}
 			return mapped, err
@@ -104,8 +104,8 @@ func fakeRuntimeOptions() Options {
 }
 
 func TestClosePaneRecordsRelayoutsAffectedWindowOnce(t *testing.T) {
-	stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed, WindowID: "@1"}, nil
+	stubPaneClose(t, func(string, string, string) (backend.ClosePaneResult, error) {
+		return backend.ClosePaneResult{Status: backend.ClosePaneClosed, WindowID: "@1"}, nil
 	})
 	calls := stubRelayout(t)
 
@@ -120,8 +120,8 @@ func TestClosePaneRecordsRelayoutsAffectedWindowOnce(t *testing.T) {
 }
 
 func TestClosePaneRecordsSkipsRelayoutWhenWindowUnknown(t *testing.T) {
-	stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed}, nil
+	stubPaneClose(t, func(string, string, string) (backend.ClosePaneResult, error) {
+		return backend.ClosePaneResult{Status: backend.ClosePaneClosed}, nil
 	})
 	calls := stubRelayout(t)
 
@@ -133,8 +133,8 @@ func TestClosePaneRecordsSkipsRelayoutWhenWindowUnknown(t *testing.T) {
 
 func TestClosePaneRecordsCapturesWindowBeforeKill(t *testing.T) {
 	// A pane with no recorded id can't be resolved to a window, so no relayout.
-	stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneStale}, nil
+	stubPaneClose(t, func(string, string, string) (backend.ClosePaneResult, error) {
+		return backend.ClosePaneResult{Status: backend.ClosePaneStale}, nil
 	})
 	calls := stubRelayout(t)
 
@@ -147,8 +147,8 @@ func TestClosePaneRecordsCapturesWindowBeforeKill(t *testing.T) {
 func TestCleanupAccumulatesWindowsAcrossPanes(t *testing.T) {
 	// Two panes cleaned in separate cleanupPaneRecords calls but sharing one
 	// window must relayout that window exactly once (the Cleanup-loop pattern).
-	stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed, WindowID: "@7"}, nil
+	stubPaneClose(t, func(string, string, string) (backend.ClosePaneResult, error) {
+		return backend.ClosePaneResult{Status: backend.ClosePaneClosed, WindowID: "@7"}, nil
 	})
 	calls := stubRelayout(t)
 
@@ -166,8 +166,8 @@ func TestCleanupAccumulatesWindowsAcrossPanes(t *testing.T) {
 // identity-checked kill: when no live pane carries its liveness key, the close
 // skips both the kill and the relayout instead of killing by pane id.
 func TestClosePaneRecordsKeyVerifiesKeyedAttachedAgent(t *testing.T) {
-	closeCalls := stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneStale}, nil
+	closeCalls := stubPaneClose(t, func(string, string, string) (backend.ClosePaneResult, error) {
+		return backend.ClosePaneResult{Status: backend.ClosePaneStale}, nil
 	})
 	calls := stubRelayout(t)
 
@@ -181,8 +181,8 @@ func TestClosePaneRecordsKeyVerifiesKeyedAttachedAgent(t *testing.T) {
 }
 
 func TestClosePaneRecordsPreservesLiveLegacyShellWithoutKey(t *testing.T) {
-	closeCalls := stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, errors.New("live pane has no liveness key")
+	closeCalls := stubPaneClose(t, func(string, string, string) (backend.ClosePaneResult, error) {
+		return backend.ClosePaneResult{Status: backend.ClosePaneFailed}, errors.New("live pane has no liveness key")
 	})
 	pane := state.Pane{
 		PaneID:       "%1",
@@ -200,8 +200,8 @@ func TestClosePaneRecordsPreservesLiveLegacyShellWithoutKey(t *testing.T) {
 }
 
 func TestClosePaneRecordsPreservesLiveLegacyAttachedAgentWithoutKey(t *testing.T) {
-	closeCalls := stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, errors.New("live pane has no liveness key")
+	closeCalls := stubPaneClose(t, func(string, string, string) (backend.ClosePaneResult, error) {
+		return backend.ClosePaneResult{Status: backend.ClosePaneFailed}, errors.New("live pane has no liveness key")
 	})
 	calls := stubRelayout(t)
 
@@ -217,8 +217,8 @@ func TestClosePaneRecordsPreservesLiveLegacyAttachedAgentWithoutKey(t *testing.T
 }
 
 func TestClosePaneRecordsPassesOrdinaryPaneLivenessKey(t *testing.T) {
-	closeCalls := stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed, WindowID: "@1"}, nil
+	closeCalls := stubPaneClose(t, func(string, string, string) (backend.ClosePaneResult, error) {
+		return backend.ClosePaneResult{Status: backend.ClosePaneClosed, WindowID: "@1"}, nil
 	})
 	stubRelayout(t)
 
@@ -243,9 +243,9 @@ func TestClosePaneRecordsStopsAllPanesBeforeRemovingWorktrees(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	stubPaneClose(t, func(paneID, _, _ string) (tmuxrun.ClosePaneResult, error) {
+	stubPaneClose(t, func(paneID, _, _ string) (backend.ClosePaneResult, error) {
 		appendEvent("close " + paneID)
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed}, nil
+		return backend.ClosePaneResult{Status: backend.ClosePaneClosed}, nil
 	})
 
 	binDir := t.TempDir()
@@ -292,12 +292,12 @@ func TestClosePaneRecordsStopsAllPanesBeforeRemovingWorktrees(t *testing.T) {
 
 func TestClosePaneRecordsFailurePreservesEveryWorktree(t *testing.T) {
 	closed := 0
-	stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
+	stubPaneClose(t, func(string, string, string) (backend.ClosePaneResult, error) {
 		closed++
 		if closed == 2 {
-			return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, errors.New("tmux unavailable")
+			return backend.ClosePaneResult{Status: backend.ClosePaneFailed}, errors.New("tmux unavailable")
 		}
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed}, nil
+		return backend.ClosePaneResult{Status: backend.ClosePaneClosed}, nil
 	})
 	wt1 := filepath.Join(t.TempDir(), "one")
 	wt2 := filepath.Join(t.TempDir(), "two")
@@ -324,8 +324,8 @@ func TestClosePaneRecordsFailurePreservesEveryWorktree(t *testing.T) {
 }
 
 func TestCloseWithModePaneFailurePreservesStateAndWorktree(t *testing.T) {
-	stubPaneClose(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, errors.New("pane still live")
+	stubPaneClose(t, func(string, string, string) (backend.ClosePaneResult, error) {
+		return backend.ClosePaneResult{Status: backend.ClosePaneFailed}, errors.New("pane still live")
 	})
 	projectRoot := t.TempDir()
 	if err := exec.Command("git", "init", "-q", projectRoot).Run(); err != nil {

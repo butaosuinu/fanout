@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
 const (
@@ -14,37 +16,15 @@ const (
 	// spacerOption marks a filler pane the orchestrator inserts to keep grid
 	// panes from stretching past a comfortable width. Spacers are never recorded
 	// in state.json and are reconciled away on every relayout.
-	spacerOption = "@fanout_spacer"
-	// RoleConsole is the roleOption value for the resident TUI console pane.
-	RoleConsole = "console"
-
+	spacerOption     = "@fanout_spacer"
 	windowPaneFormat = "#{pane_id}\t#{pane_index}\t#{pane_active}\t#{" + roleOption + "}\t#{" + spacerOption + "}"
 	windowGeomFormat = "#{window_id}\t#{window_width}\t#{window_height}"
 )
 
-// Geometry is a tmux window's id and interior size (status bar excluded).
-type Geometry struct {
-	WindowID string
-	Width    int
-	Height   int
-}
-
-// WindowPane is one pane in a window as seen by the auto-layout orchestrator.
-// NumericID is the pane id without its leading '%', the form tmux custom layout
-// strings embed in each leaf cell.
-type WindowPane struct {
-	ID        string
-	NumericID string
-	Index     int
-	Active    bool
-	Role      string
-	Spacer    bool
-}
-
 // WindowGeometry resolves target (a pane id, window id, or session name) to the
 // window that holds it and returns that window's id and interior size. Callers
 // use the returned WindowID as the canonical handle for the rest of a relayout.
-func WindowGeometry(target string) (Geometry, error) {
+func WindowGeometry(target string) (corebackend.Geometry, error) {
 	target = strings.TrimSpace(target)
 	args := []string{"display-message", "-p"}
 	if target != "" {
@@ -53,25 +33,25 @@ func WindowGeometry(target string) (Geometry, error) {
 	args = append(args, "-F", windowGeomFormat)
 	out, err := exec.Command("tmux", args...).Output()
 	if err != nil {
-		return Geometry{}, fmt.Errorf("tmux display-message window geometry: %w", err)
+		return corebackend.Geometry{}, fmt.Errorf("tmux display-message window geometry: %w", err)
 	}
 	fields := strings.Split(strings.TrimRight(string(out), "\r\n"), "\t")
 	if len(fields) != 3 {
-		return Geometry{}, fmt.Errorf("parse tmux window geometry: expected 3 fields, got %d", len(fields))
+		return corebackend.Geometry{}, fmt.Errorf("parse tmux window geometry: expected 3 fields, got %d", len(fields))
 	}
 	width, err := strconv.Atoi(fields[1])
 	if err != nil {
-		return Geometry{}, fmt.Errorf("parse tmux window width: %w", err)
+		return corebackend.Geometry{}, fmt.Errorf("parse tmux window width: %w", err)
 	}
 	height, err := strconv.Atoi(fields[2])
 	if err != nil {
-		return Geometry{}, fmt.Errorf("parse tmux window height: %w", err)
+		return corebackend.Geometry{}, fmt.Errorf("parse tmux window height: %w", err)
 	}
 	id := strings.TrimSpace(fields[0])
 	if id == "" {
-		return Geometry{}, fmt.Errorf("tmux did not report a window id")
+		return corebackend.Geometry{}, fmt.Errorf("tmux did not report a window id")
 	}
-	return Geometry{WindowID: id, Width: width, Height: height}, nil
+	return corebackend.Geometry{WindowID: id, Width: width, Height: height}, nil
 }
 
 // WindowOfPane returns the window id that contains paneID. Lifecycle captures
@@ -95,7 +75,7 @@ func WindowOfPane(paneID string) (string, error) {
 // WindowPanes lists the panes of one window with their auto-layout roles. It is
 // window-scoped on purpose: the dashboard's all-sessions ListLivePanes sweep
 // and its injection-defense join stay untouched.
-func WindowPanes(windowTarget string) ([]WindowPane, error) {
+func WindowPanes(windowTarget string) ([]corebackend.WindowPane, error) {
 	windowTarget = strings.TrimSpace(windowTarget)
 	args := []string{"list-panes"}
 	if windowTarget != "" {
@@ -106,7 +86,7 @@ func WindowPanes(windowTarget string) ([]WindowPane, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tmux list-panes window: %w", err)
 	}
-	var panes []WindowPane
+	var panes []corebackend.WindowPane
 	for lineNum, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
 		if line == "" {
 			continue
@@ -127,7 +107,7 @@ func WindowPanes(windowTarget string) ([]WindowPane, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse tmux window pane line %d active: %w", lineNum+1, err)
 		}
-		panes = append(panes, WindowPane{
+		panes = append(panes, corebackend.WindowPane{
 			ID:        id,
 			NumericID: strings.TrimPrefix(id, "%"),
 			Index:     index,
@@ -182,7 +162,7 @@ func SelectMainVertical(target string, mainPaneWidth int) error {
 	return nil
 }
 
-// SetPaneRole stamps a pane's auto-layout role (e.g. RoleConsole). Pass an empty
+// SetPaneRole stamps a pane's auto-layout role (e.g. backend.RoleConsole). Pass an empty
 // role to clear it (so a post-TUI shell is not mistaken for a console sidebar).
 func SetPaneRole(paneID, role string) error {
 	if strings.TrimSpace(paneID) == "" {

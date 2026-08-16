@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
@@ -137,7 +138,7 @@ func parseFocusConsoleFlags(args []string, lg *log.Logger) (focusConsoleFlags, e
 func pickConsolePane(from tmuxrun.LivePane, panes []tmuxrun.LivePane) (tmuxrun.LivePane, bool) {
 	var candidates []tmuxrun.LivePane
 	for _, pane := range panes {
-		if pane.Role == tmuxrun.RoleConsole && pane.Title == tuiPaneTitle {
+		if pane.Role == backend.RoleConsole && pane.Title == tuiPaneTitle {
 			candidates = append(candidates, pane)
 		}
 	}

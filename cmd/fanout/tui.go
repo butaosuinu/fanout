@@ -504,7 +504,7 @@ func markTUIRunning(projectRoot string) func() {
 	}
 	_ = tmuxrun.SetPaneProjectRoot(paneID, projectRoot) // Best-effort dashboard keybinding hint.
 	// Mark this pane as the console so the auto-layout reserves it as a sidebar.
-	_ = tmuxrun.SetPaneRole(paneID, tmuxrun.RoleConsole)
+	_ = tmuxrun.SetPaneRole(paneID, backend.RoleConsole)
 	originalTitle, err := tmuxrun.PaneTitle(paneID)
 	if err != nil {
 		originalTitle = "fanout"
@@ -519,26 +519,26 @@ func markTUIRunning(projectRoot string) func() {
 	}
 }
 
-func findTUIPane(session string) (tmuxrun.PaneInfo, bool, error) {
+func findTUIPane(session string) (backend.PaneInfo, bool, error) {
 	panes, err := tmuxrun.ListPanes(session)
 	if err != nil {
-		return tmuxrun.PaneInfo{}, false, err
+		return backend.PaneInfo{}, false, err
 	}
 	for _, pane := range panes {
 		if pane.Title == tuiPaneTitle {
 			return pane, true, nil
 		}
 	}
-	return tmuxrun.PaneInfo{}, false, nil
+	return backend.PaneInfo{}, false, nil
 }
 
-func firstSessionPane(session string) (tmuxrun.PaneInfo, error) {
+func firstSessionPane(session string) (backend.PaneInfo, error) {
 	panes, err := tmuxrun.ListPanes(session)
 	if err != nil {
-		return tmuxrun.PaneInfo{}, err
+		return backend.PaneInfo{}, err
 	}
 	if len(panes) == 0 {
-		return tmuxrun.PaneInfo{}, fmt.Errorf("tmux session %s has no panes", session)
+		return backend.PaneInfo{}, fmt.Errorf("tmux session %s has no panes", session)
 	}
 	return panes[0], nil
 }

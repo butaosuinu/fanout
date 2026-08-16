@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
@@ -22,8 +23,8 @@ const (
 // ops is the tmux IO panelayout needs, injected so the orchestration is unit
 // testable without a real tmux.
 type ops interface {
-	WindowGeometry(target string) (tmuxrun.Geometry, error)
-	WindowPanes(windowID string) ([]tmuxrun.WindowPane, error)
+	WindowGeometry(target string) (backend.Geometry, error)
+	WindowPanes(windowID string) ([]backend.WindowPane, error)
 	SplitSpacer(windowID string) (string, error)
 	KillPane(paneID string) error
 	ApplyLayout(windowID, layout string) error
@@ -33,8 +34,8 @@ type ops interface {
 
 type tmuxOps struct{}
 
-func (tmuxOps) WindowGeometry(t string) (tmuxrun.Geometry, error)  { return tmuxrun.WindowGeometry(t) }
-func (tmuxOps) WindowPanes(w string) ([]tmuxrun.WindowPane, error) { return tmuxrun.WindowPanes(w) }
+func (tmuxOps) WindowGeometry(t string) (backend.Geometry, error)  { return tmuxrun.WindowGeometry(t) }
+func (tmuxOps) WindowPanes(w string) ([]backend.WindowPane, error) { return tmuxrun.WindowPanes(w) }
 func (tmuxOps) SplitSpacer(w string) (string, error)               { return tmuxrun.SplitSpacerPane(w) }
 func (tmuxOps) KillPane(p string) error                            { return tmuxrun.KillPane(p) }
 func (tmuxOps) ApplyLayout(w, l string) error                      { return tmuxrun.ApplyLayout(w, l) }
@@ -179,7 +180,7 @@ func (a *applier) applyLayout(windowID string, win Window, cfg Config, plan Plan
 // (0 or 1), killing surplus and splitting deficit, and returns the numeric ids
 // of the spacers that remain. It is self-healing: stale spacers from a crashed
 // run are reconciled away.
-func (a *applier) reconcileSpacers(windowID string, existing []tmuxrun.WindowPane, desired int) []string {
+func (a *applier) reconcileSpacers(windowID string, existing []backend.WindowPane, desired int) []string {
 	for i := desired; i < len(existing); i++ {
 		_ = a.ops.KillPane(existing[i].ID)
 	}
@@ -199,13 +200,13 @@ func (a *applier) reconcileSpacers(windowID string, existing []tmuxrun.WindowPan
 
 // partition splits a window's panes into the console (if any), the grid panes in
 // stable pane-index order, and existing spacers.
-func partition(panes []tmuxrun.WindowPane) (console *tmuxrun.WindowPane, grid, spacers []tmuxrun.WindowPane) {
+func partition(panes []backend.WindowPane) (console *backend.WindowPane, grid, spacers []backend.WindowPane) {
 	for i := range panes {
 		p := panes[i]
 		switch {
 		case p.Spacer:
 			spacers = append(spacers, p)
-		case p.Role == tmuxrun.RoleConsole && console == nil:
+		case p.Role == backend.RoleConsole && console == nil:
 			c := p
 			console = &c
 		default:
@@ -248,7 +249,7 @@ func layoutSignature(win Window, hasConsole bool, gridIDs, spacerIDs []string) s
 	return fmt.Sprintf("%dx%d|c=%t|g=%s|sp=%s", win.Width, win.Height, hasConsole, strings.Join(g, ","), strings.Join(s, ","))
 }
 
-func numericIDs(panes []tmuxrun.WindowPane) []string {
+func numericIDs(panes []backend.WindowPane) []string {
 	out := make([]string, len(panes))
 	for i, p := range panes {
 		out[i] = p.NumericID

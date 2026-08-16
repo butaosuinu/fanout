@@ -72,11 +72,11 @@ func (*testTmuxBackend) CloseOwned(req backend.CloseRequest) (backend.CloseResul
 	result, err := closePaneForCleanup(req.Ref.Pane, req.WorktreePath, req.ShellKey)
 	mapped := backend.CloseResult{Status: backend.CloseFailed, ContainerID: result.WindowID}
 	switch result.Status {
-	case tmuxrun.ClosePaneClosed:
+	case backend.ClosePaneClosed:
 		mapped.Status = backend.CloseConfirmed
-	case tmuxrun.ClosePaneStale:
+	case backend.ClosePaneStale:
 		mapped.Status = backend.CloseStale
-	case tmuxrun.ClosePaneFailed:
+	case backend.ClosePaneFailed:
 		mapped.Status = backend.CloseFailed
 	}
 	return mapped, err
@@ -790,8 +790,8 @@ func TestAttachReleasesStartGateAfterConfirmedFreshCleanup(t *testing.T) {
 func TestAttachRecordsRecoveryRowWhenCodexStartupAndCloseFail(t *testing.T) {
 	installFakeExecutable(t, "codex")
 	installFakeTmux(t, "%316")
-	stubClosePaneForCleanup(t, func(string, string, string) (tmuxrun.ClosePaneResult, error) {
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, fmt.Errorf("pane still live")
+	stubClosePaneForCleanup(t, func(string, string, string) (backend.ClosePaneResult, error) {
+		return backend.ClosePaneResult{Status: backend.ClosePaneFailed}, fmt.Errorf("pane still live")
 	})
 	targetPath := t.TempDir()
 	statusPath := filepath.Join(t.TempDir(), "codex-status.json")
@@ -941,11 +941,11 @@ func TestCodexTeamStartupFailureTearsDownPaneAndWorktree(t *testing.T) {
 	tmuxCalls := filepath.Join(t.TempDir(), "tmux-calls")
 	t.Setenv("TMUX_CALLS", tmuxCalls)
 	var closedPaneID, closedWorktreePath, closedShellKey string
-	stubClosePaneForCleanup(t, func(paneID, worktreePath, shellKey string) (tmuxrun.ClosePaneResult, error) {
+	stubClosePaneForCleanup(t, func(paneID, worktreePath, shellKey string) (backend.ClosePaneResult, error) {
 		closedPaneID = paneID
 		closedWorktreePath = worktreePath
 		closedShellKey = shellKey
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneClosed, WindowID: "@7"}, nil
+		return backend.ClosePaneResult{Status: backend.ClosePaneClosed, WindowID: "@7"}, nil
 	})
 
 	cfg := &cliflags.Config{ParentRef: "100", Agent: "codex", BaseBranch: "main", NoRefresh: true}
@@ -1004,11 +1004,11 @@ func TestFailCleanupPreservesWorktreeWhenPaneCloseCannotBeConfirmed(t *testing.T
 		ProjectRoot:  t.TempDir(),
 		WorktreePath: worktreePath,
 	}}
-	stubClosePaneForCleanup(t, func(paneID, expectedWorktreePath, shellKey string) (tmuxrun.ClosePaneResult, error) {
+	stubClosePaneForCleanup(t, func(paneID, expectedWorktreePath, shellKey string) (backend.ClosePaneResult, error) {
 		if paneID != "%271" || expectedWorktreePath != worktreePath || shellKey != "" {
 			t.Fatalf("safe close identity = (%q, %q, %q)", paneID, expectedWorktreePath, shellKey)
 		}
-		return tmuxrun.ClosePaneResult{Status: tmuxrun.ClosePaneFailed}, fmt.Errorf("pane still live")
+		return backend.ClosePaneResult{Status: backend.ClosePaneFailed}, fmt.Errorf("pane still live")
 	})
 
 	if failCleanup(newTestTmuxBackend(), "#101", "%caller", "%271", worktreePath, "", &prepared, nil) {
@@ -1760,7 +1760,7 @@ func installClaudeVersionExecutable(t *testing.T, version string) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func stubClosePaneForCleanup(t *testing.T, fn func(string, string, string) (tmuxrun.ClosePaneResult, error)) {
+func stubClosePaneForCleanup(t *testing.T, fn func(string, string, string) (backend.ClosePaneResult, error)) {
 	t.Helper()
 	original := closePaneForCleanup
 	closePaneForCleanup = fn

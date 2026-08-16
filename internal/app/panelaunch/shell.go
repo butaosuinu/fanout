@@ -197,10 +197,10 @@ func cleanupFreshShellPane(relayoutTarget, paneID string) error {
 
 func cleanupShellPane(relayoutTarget, paneID, expectedWorktreePath, shellKey string) bool {
 	result, err := closePaneForCleanup(paneID, expectedWorktreePath, shellKey)
-	if err != nil || result.Status == tmuxrun.ClosePaneFailed {
+	if err != nil || result.Status == backend.ClosePaneFailed {
 		return false
 	}
-	if result.Status == tmuxrun.ClosePaneClosed {
+	if result.Status == backend.ClosePaneClosed {
 		target := result.WindowID
 		if target == "" {
 			target = relayoutTarget
