@@ -130,7 +130,7 @@ function PrRow({
   pr: PRRef;
   repo: string;
   /* マージ後の後片付け導線。出せる行にだけ渡る。 */
-  cleanup: { query: Record<string, string>; token: string } | null;
+  cleanup: { query: Record<string, string>; token: string; branch: string } | null;
 }) {
   return (
     <li>
@@ -139,7 +139,7 @@ function PrRow({
       <PrConflictTag pr={pr} />
       <PrCommentsTag pr={pr} />
       <PrReviewTag pr={pr} />
-      {cleanup && canDeleteBranch(pr, repo) && (
+      {cleanup && canDeleteBranch(pr, { repo, branch: cleanup.branch, token: cleanup.token }) && (
         <DeleteBranchButton
           id={`d-delete-branch-${pr.number}`}
           pr={pr}
@@ -164,7 +164,7 @@ function PrsSection({
 }) {
   const prs = pane.prs ?? [];
   const query = rowQuery(parent, pane);
-  const cleanup = query ? { query, token } : null;
+  const cleanup = query ? { query, token, branch: pane.branchName ?? "" } : null;
   return (
     <section className="d-sec">
       <h4>pull requests</h4>

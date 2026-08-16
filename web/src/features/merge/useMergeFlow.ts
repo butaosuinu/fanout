@@ -15,6 +15,9 @@ export interface MergeAffordance {
   /* 対象 PR の head commit。diff ビュアーは開いた時点の値を pin して、ズレたら
    * マージを塞ぐ(usePinnedHead)。 */
   headSha: string;
+  /* 対象 PR の head。diff ビュアーが読んでいる worktree と同じものかを判定する。 */
+  headRef: string;
+  headRepo: string;
   blocked: MessageDescriptor | null;
   warnings: MessageDescriptor[];
   /* 直近の失敗。送信した行にだけ出す — 確認ダイアログを持たない導線なので、
@@ -56,7 +59,8 @@ export function useMergeFlow(
 
   const affordanceFor = useCallback(
     (parent: string, pane: PaneView): MergeAffordance | null => {
-      const pr = mergeTargetPr(pane.prs, snap?.repo ?? "", branchOf(pane));
+      const repo = snap?.repo ?? "";
+      const pr = mergeTargetPr(pane.prs, repo, branchOf(pane));
       const query = rowQuery(parent, pane);
       /* PR も identity も無い行にはボタンごと出さない。無効なボタンを並べても
        * 「いつかマージできる行」ではないので、情報が増えない。 */
@@ -72,6 +76,7 @@ export function useMergeFlow(
           ...resultsFor(key, track, state),
           onMerge: run({ key, query, pr }),
         }),
+        { repo, branch: pane.branchName ?? "" },
       );
     },
     [snap, track, run, state, token, pinDiffHead],
@@ -131,6 +136,8 @@ function buildAffordance(input: {
   return {
     prNumber: input.pr.number,
     headSha: input.pr.headSha ?? "",
+    headRef: input.pr.headRef ?? "",
+    headRepo: input.pr.headRepo ?? "",
     blocked,
     /* 警告は「押せる操作をためらう理由」なので、押せない行では出さない。
      * merged PR は mergeable が常に欠落するため、そうしないと「競合の有無が

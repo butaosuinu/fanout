@@ -35,9 +35,18 @@ function prState(pr: PRRef): string {
   return (pr.state ?? "").trim().toUpperCase();
 }
 
+function isMerged(pr: PRRef): boolean {
+  return prState(pr) === "MERGED" || !!pr.mergedAt;
+}
+
 function isOpen(pr: PRRef): boolean {
-  const state = prState(pr);
-  return state !== "MERGED" && state !== "CLOSED" && !pr.mergedAt;
+  return !isMerged(pr) && prState(pr) !== "CLOSED";
+}
+
+/* サーバの Preflight を通る見込みがあるか。行に複数 open PR があるとき、先頭が
+ * draft や CONFLICTING だとそれだけが選ばれて唯一のボタンが永久に無効になる。 */
+function actionable(pr: PRRef): boolean {
+  return isOpen(pr) && !pr.isDraft && pr.mergeable !== "CONFLICTING";
 }
 
 /* サーバの VerifyRowOwns と同じ所有権規則。ここで揃えないと、行に載った他人の
@@ -62,17 +71,14 @@ export function mergeTargetPr(
   branch: string,
 ): PRRef | null {
   const owned = (prs ?? []).filter((pr) => ownedByRow(pr, repo, branch));
-  return owned.find(isOpen) ?? owned[0] ?? null;
+  return owned.find(actionable) ?? owned.find(isOpen) ?? owned[0] ?? null;
 }
 
 /* PR そのものを見て押せないと分かる状態。判定順は prDisplayState と揃える —
  * merged / closed / draft が conflict より先に決まる。CONFLICTING だけが
  * 「衝突あり」で、欠落は「不明」なので塞がず mergeWarnings に回す。 */
 const PR_BLOCKS: { when: (pr: PRRef) => boolean; reason: MessageDescriptor }[] = [
-  {
-    when: (pr) => prState(pr) === "MERGED" || !!pr.mergedAt,
-    reason: msg`この PR は既にマージ済みです`,
-  },
+  { when: isMerged, reason: msg`この PR は既にマージ済みです` },
   { when: (pr) => prState(pr) === "CLOSED", reason: msg`この PR は close 済みです` },
   {
     when: (pr) => !!pr.isDraft,
@@ -147,14 +153,28 @@ export async function mergeErrorMessage(res: Response): Promise<MessageDescripto
     : msg`マージに失敗しました (HTTP ${{ status: res.status }})`;
 }
 
-/* マージ済みの行にだけ出す、後片付けボタンの出せる条件。head branch が分かって
- * いて、それがこの repository のものであること — fork の head を base 側の同名
- * branch として消さないため(サーバの PlanDelete と同じ判定)。 */
-export function canDeleteBranch(pr: PRRef | null, repo: string): boolean {
-  if (!pr) return false;
-  const merged = prState(pr) === "MERGED" || !!pr.mergedAt;
-  if (!merged || !pr.headRef || !pr.headSha) return false;
-  return !!pr.headRepo && pr.headRepo.toLowerCase() === repo.toLowerCase();
+/* マージ済みの行にだけ出す、後片付けボタンの出せる条件。サーバの admission
+ * (mergeEnabled + PlanDelete)をそのまま写す — ここが緩いと、押すたびに必ず
+ * 403 / 409 になるボタンを表示してしまう。
+ *
+ * - token が無ければサーバは必ず 403(--no-token では mutation を開けない)
+ * - head branch が分かっていて、この repository のものであること(fork の head を
+ *   base 側の同名 branch として消さないため)
+ * - 記録 branch があるならそれと一致すること(サーバの PlanDelete は不一致を
+ *   必ず 409 にする) */
+export function canDeleteBranch(
+  pr: PRRef | null,
+  ctx: { repo: string; branch: string; token: string },
+): boolean {
+  if (!pr || !ctx.token) return false;
+  if (!isMerged(pr) || !pr.headSha) return false;
+  return headOwnedByRow(pr, ctx.repo, ctx.branch);
+}
+
+/* サーバの PlanDelete と同じ head の所有権規則。 */
+function headOwnedByRow(pr: PRRef, repo: string, branch: string): boolean {
+  if (!pr.headRef || pr.headRepo?.toLowerCase() !== repo.toLowerCase()) return false;
+  return !branch || pr.headRef === branch;
 }
 
 export async function deleteBranchErrorMessage(res: Response): Promise<MessageDescriptor> {
@@ -177,6 +197,11 @@ export const MERGE_NETWORK_ERROR = msg`マージに失敗しました(接続エ�
  * diff は明示的な再取得まで最初の patch を保持するので、その間に agent が push
  * すると、3 段照合はすべて新しい head で一致してしまい「見ていない変更」が
  * 通る。ズレている間はマージを塞ぐ。 */
+/* 表示中の patch と対象 PR が別物のときの理由。/api/diff は pane の worktree を
+ * 読むので、その branch を head に持たない PR(fork の closing PR など)を
+ * マージすると、画面に無い変更が入る。 */
+export const MERGE_DIFF_MISMATCH = msg`表示中の差分はこの PR のものではありません。PR のページで確認してください`;
+
 export const MERGE_STALE_DIFF = msg`表示中の差分より PR が進んでいます。再取得してから実行してください`;
 
 export const MERGE_METHOD_LABELS: Record<MergeMethod, MessageDescriptor> = {

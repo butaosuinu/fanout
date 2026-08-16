@@ -285,6 +285,10 @@ type fakePort struct {
 	// alwaysMerged reports merged on the very first read (the delete path has no
 	// pre-merge fence to skip past).
 	alwaysMerged bool
+	// openHeads is what OpenPRNumbersForHead answers: the OPEN pull requests
+	// sharing the head branch.
+	openHeads    []int
+	openHeadsErr error
 	mergedRead   int
 }
 
@@ -315,6 +319,10 @@ func cmpOr(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+func (f *fakePort) OpenPRNumbersForHead(_ context.Context, _, _, _ string) ([]int, error) {
+	return f.openHeads, f.openHeadsErr
 }
 
 func (f *fakePort) DeleteRemoteBranch(_ context.Context, _, _, branch, expectedOID string) error {
@@ -485,6 +493,29 @@ func TestServiceDeleteBranch(t *testing.T) {
 
 	/* snapshot は古くなりうる。未マージの head ref を消すと、どこにも無い commit
 	 * を捨てることになる。 */
+	/* 同じ head branch から base 違いで 2 本 PR が立つことがある。片方をマージ
+	 * しても branch は終わっていないので、消すともう片方がマージ不能になる。 */
+	t.Run("refuses while another open pull request still uses the branch", func(t *testing.T) {
+		port := &fakePort{alwaysMerged: true, openHeads: []int{9}}
+		err := Service{GH: port}.DeleteBranch(context.Background(), req)
+		if !errors.Is(err, ErrBranchInUse) {
+			t.Fatalf("DeleteBranch() error = %v, want ErrBranchInUse", err)
+		}
+		if len(port.deleteCalls) != 0 {
+			t.Fatalf("delete calls = %#v, want none", port.deleteCalls)
+		}
+	})
+
+	t.Run("its own still-listed number does not block the delete", func(t *testing.T) {
+		port := &fakePort{alwaysMerged: true, openHeads: []int{7}}
+		if err := (Service{GH: port}).DeleteBranch(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+		if len(port.deleteCalls) != 1 {
+			t.Fatalf("delete calls = %#v, want 1", port.deleteCalls)
+		}
+	})
+
 	t.Run("refuses when GitHub says the pull request is not merged", func(t *testing.T) {
 		port := &fakePort{notMerged: true}
 		err := Service{GH: port}.DeleteBranch(context.Background(), req)

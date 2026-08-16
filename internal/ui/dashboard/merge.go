@@ -102,10 +102,11 @@ func (s *Server) handleMerge(w http.ResponseWriter, r *http.Request) {
 		apiError(w, status, code, "GitHub refused the merge", redactGHDetail(err))
 		return
 	}
-	if res.Unknown {
-		// The command may have reached GitHub. One tab's in-memory guard cannot
-		// stop another tab or a reload, so the refusal has to live on the server
-		// until a poll settles the pull request.
+	if res.Unknown || res.Queued {
+		// Both states mean GitHub already changed something: Unknown may have
+		// merged, and a queued request has auto-merge armed. Losing only the
+		// response would otherwise let another tab or a reload send it again, so
+		// the refusal lives on the server until a poll settles the pull request.
 		s.holdUnconfirmed(rr, req.Number)
 	}
 	writeMergeResponse(w, req, res, s.poller.requestGHRefresh())
@@ -422,6 +423,7 @@ var mergePreflightSentinels = []struct {
 	{prmerge.ErrForkHead, "fork_head"},
 	{prmerge.ErrForeignPR, "pr_not_on_row"},
 	{prmerge.ErrNotMerged, "not_merged"},
+	{prmerge.ErrBranchInUse, "branch_in_use"},
 }
 
 // mergePreflightCode names the refusal. The status is always 409, so it is the

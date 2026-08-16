@@ -168,6 +168,33 @@ func refPath(owner, repo, branch, verb string) string {
 		url.PathEscape(owner), url.PathEscape(repo), verb, strings.Join(segments, "/"))
 }
 
+// OpenPRNumbersForHead lists the OPEN pull requests whose head is this branch.
+// Two pull requests can share a head branch when they target different bases, so
+// "this PR is merged" is not proof the branch is finished with.
+func (r Runner) OpenPRNumbersForHead(
+	ctx context.Context,
+	owner, repo, branch string,
+) (_ []int, err error) {
+	defer errs.Wrap(&err, "list open pull requests for %q", branch)
+
+	out, err := r.ghContext(ctx, "pr", "list", "-R", owner+"/"+repo,
+		"--head", branch, "--state", "open", "--json", "number")
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(out, &rows); err != nil {
+		return nil, err
+	}
+	nums := make([]int, 0, len(rows))
+	for _, row := range rows {
+		nums = append(nums, row.Number)
+	}
+	return nums, nil
+}
+
 // BranchOID reads a branch's current commit. "" means the ref is already gone.
 func (r Runner) BranchOID(ctx context.Context, owner, repo, branch string) (_ string, err error) {
 	defer errs.Wrap(&err, "read branch %q", branch)

@@ -235,6 +235,10 @@ msgid "ページを再読み込み"
 msgstr "ページを再読み込み"
 
 #: src/features/merge/merge.ts
+msgid "表示中の差分はこの PR のものではありません。PR のページで確認してください"
+msgstr "表示中の差分はこの PR のものではありません。PR のページで確認してください"
+
+#: src/features/merge/merge.ts
 msgid "マージできません"
 msgstr "マージできません"
 

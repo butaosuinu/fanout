@@ -147,12 +147,15 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 - **watch のトリガーラベルはプロンプトインジェクション境界**: issue 本文が
   そのまま子 briefing になるため、`watcherTriggerLabel` の対象を広げる変更は
   攻撃面を広げる。
-- **dashboard は localhost 限定・読み取り既定・mutation は 1 本だけ**:
+- **dashboard は localhost 限定・読み取り既定・mutation は 2 本だけ**:
   `127.0.0.1` バインドは全経路。読み取り endpoint(`/api/snapshot` /
   `/api/stream` / `/api/peek` / `/api/plan` / `/api/diff`)は GET-only のままで、
-  `getOnly` を外す変更は人間レビュー対象。mutation は `POST /api/pr/merge`
-  ただ 1 本、変えてよいのは **GitHub 上の 1 つの PR の merge 状態と、その PR の
-  head ref(remote)** だけ。ローカル作業ツリー・ローカル git ref・worktree・
+  `getOnly` を外す変更は人間レビュー対象。mutation は `POST /api/pr/merge` と
+  `POST /api/pr/delete-branch` の 2 本で、どちらも 1 つの GitHub PR に閉じる。
+  前者が変えてよいのは **その PR の merge 状態** だけ、後者は **マージ済み PR の
+  head ref(remote)** だけ。2 本に分けてあるのは GitHub の UI と同じ理由 —
+  branch 削除はマージの *後* に現れるボタンで、ref 削除は冪等なので merge 側の
+  「曖昧な mutation を二度撃たない」機構が一切要らない。ローカル作業ツリー・ローカル git ref・worktree・
   `.fanout/state.json`・ペイン入力は一切変えない(`gh` に `--admin` / `--auto` /
   `--delete-branch` を渡さない。特に `--delete-branch` はローカルブランチも
   消しにいき、linked worktree で checkout 済みの子ブランチでは失敗して、完了済み
@@ -178,7 +181,9 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   削除は実行直前に GitHub へ「本当にマージ済みか」を確認し(snapshot は最大 1
   poll 古い)、head SHA を expected OID として fence する — ref が動いていたら
   消さない(merge 後に pane が push した未マージ commit を巻き込まないため)。
-  head ref が不明なとき、および head が fork にあるときは削除しない。ref path の各セグメントは percent-encode する
+  head ref が不明なとき、および head が fork にあるときは削除しない。同じ head
+  branch を使う OPEN PR が他にも残っているときも削除しない — base 違いで 2 本
+  立てられるので、片方をマージした時点ではその branch はまだ終わっていない。ref path の各セグメントは percent-encode する
   (`feature/#123` のような合法 ref が fragment で切れ、その 404 が「既に無い」と
   誤認されるのを防ぐ)。
 - **`gh pr merge` の exit 0 はマージの証拠ではない**: merge queue 必須の base では

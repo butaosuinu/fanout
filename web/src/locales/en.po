@@ -235,6 +235,10 @@ msgid "ページを再読み込み"
 msgstr "Reload the page"
 
 #: src/features/merge/merge.ts
+msgid "表示中の差分はこの PR のものではありません。PR のページで確認してください"
+msgstr "The diff shown is not this pull request's. Check it on the PR page."
+
+#: src/features/merge/merge.ts
 msgid "マージできません"
 msgstr "Cannot merge"
 

@@ -1,5 +1,6 @@
+import type { MessageDescriptor } from "@lingui/core";
 import { useCallback, useRef } from "react";
-import { MERGE_STALE_DIFF } from "./merge";
+import { MERGE_DIFF_MISMATCH, MERGE_STALE_DIFF } from "./merge";
 import type { MergeAffordance } from "./useMergeFlow";
 
 /* diff ビュアーが開いた時点の PR head を固定し、ズレている間はその行のマージを
@@ -23,11 +24,11 @@ import type { MergeAffordance } from "./useMergeFlow";
  * 捕まえるのが目的で、それ以上を主張しない。 */
 export function usePinnedHead(
   diffKey: string | null,
-): (rowKey: string, merge: MergeAffordance | null) => MergeAffordance | null {
+): (rowKey: string, merge: MergeAffordance | null, shows: DiffSource) => MergeAffordance | null {
   const pinned = useRef<{ key: string; headSha: string } | null>(null);
 
   return useCallback(
-    (rowKey, merge) => {
+    (rowKey, merge, shows) => {
       /* 閉じたら捨てる。残すと、同じ行を新しい diff で開き直しても key が同じ
        * ままなので pin が更新されず、間に head が進んでいた行が永久に stale
        * 扱いになる(開き直せば実行できる、という契約に反する)。 */
@@ -36,9 +37,32 @@ export function usePinnedHead(
       if (pinned.current?.key !== diffKey) {
         pinned.current = { key: diffKey, headSha: merge.headSha };
       }
-      if (pinned.current.headSha === merge.headSha) return merge;
-      return { ...merge, blocked: MERGE_STALE_DIFF, warnings: [] };
+      const reason = mismatch(merge, shows, pinned.current.headSha);
+      return reason ? { ...merge, blocked: reason, warnings: [] } : merge;
     },
     [diffKey],
   );
+}
+
+/* diff ビュアーが読んでいる worktree の repository / branch。 */
+export type DiffSource = { repo: string; branch: string };
+
+/* 画面の patch と、これからマージされるものがズレる 2 通り。塞がないなら null。 */
+function mismatch(
+  merge: MergeAffordance,
+  shows: DiffSource,
+  pinnedSha: string,
+): MessageDescriptor | null {
+  /* 別物: 表示している patch は pane の worktree のもの。対象 PR の head がその
+   * branch でないなら、画面の内容と別物をマージすることになる(issue 行に fork の
+   * closing PR が載っている場合など)。head が動いたかを見る pin では捕まらない。 */
+  if (shows.branch && !sameSource(merge, shows)) return MERGE_DIFF_MISMATCH;
+  /* 追い越し: 読んでいる間に push された。 */
+  if (pinnedSha !== merge.headSha) return MERGE_STALE_DIFF;
+  return null;
+}
+
+function sameSource(merge: MergeAffordance, shows: DiffSource): boolean {
+  if (merge.headRef !== shows.branch) return false;
+  return !!merge.headRepo && merge.headRepo.toLowerCase() === shows.repo.toLowerCase();
 }

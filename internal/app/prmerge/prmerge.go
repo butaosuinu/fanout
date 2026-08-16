@@ -33,6 +33,7 @@ var (
 	ErrForkHead      = errors.New("the pull request head lives in another repository")
 	ErrForeignPR     = errors.New("pull request does not belong to this session row")
 	ErrNotMerged     = errors.New("pull request is not merged")
+	ErrBranchInUse   = errors.New("another open pull request still uses this branch")
 )
 
 // VerifyRowOwns rejects a pull request the row does not actually own.
@@ -183,6 +184,7 @@ func PlanDelete(pv sessionview.PaneView, ref ghissue.PRRef, repo string) (string
 type Port interface {
 	MergePR(ctx context.Context, req ghissue.MergePRRequest) error
 	PRState(ctx context.Context, owner, repo string, number int) (ghissue.PRTarget, error)
+	OpenPRNumbersForHead(ctx context.Context, owner, repo, branch string) ([]int, error)
 	DeleteRemoteBranch(ctx context.Context, owner, repo, branch, expectedOID string) error
 }
 
@@ -332,6 +334,18 @@ func (s Service) DeleteBranch(ctx context.Context, req DeleteRequest) error {
 	}
 	if !live.Merged {
 		return ErrNotMerged
+	}
+	// Two pull requests can share a head branch when they target different bases.
+	// Merging one does not finish the branch: deleting it here would leave the
+	// other one unmergeable, with its commits gone.
+	others, err := s.GH.OpenPRNumbersForHead(ctx, req.Owner, req.Repo, req.Branch)
+	if err != nil {
+		return err
+	}
+	for _, num := range others {
+		if num != req.Number {
+			return fmt.Errorf("%w: #%d", ErrBranchInUse, num)
+		}
 	}
 	return s.GH.DeleteRemoteBranch(ctx, req.Owner, req.Repo, req.Branch, req.HeadSha)
 }

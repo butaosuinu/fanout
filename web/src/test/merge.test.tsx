@@ -385,6 +385,31 @@ describe("表示中の差分との整合", () => {
       "true",
     );
   });
+
+  /* /api/diff は pane の worktree を読む。issue 行には fork の closing PR が
+   * 載りうるので、それを掴むと画面の patch と別物をマージすることになる。head が
+   * 動いたかを見る pin では、この初手のズレは捕まらない。 */
+  it("表示中の worktree の branch を head に持たない PR はツールバーから撃てない", async () => {
+    const calls: MergeCall[] = [];
+    server.use(mergeHandler(calls));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(snapshotWithPR({ headRepo: "stranger/fork", headRef: "their-branch" }));
+
+    const overlay = await openDiff(user);
+    const blocked = await within(overlay).findByRole("button", {
+      name: /この PR のものではありません/,
+    });
+    expect(blocked).toHaveAttribute("aria-disabled", "true");
+    await user.click(blocked);
+    expect(calls).toHaveLength(0);
+
+    /* 塞ぐのは行単位。隣に並ぶ Drawer から同じマージが撃てては意味がない。 */
+    const drawer = screen.getByRole("complementary", { name: "ペイン詳細" });
+    expect(
+      within(drawer).getByRole("button", { name: /この PR のものではありません/ }),
+    ).toHaveAttribute("aria-disabled", "true");
+  });
 });
 
 describe("pin の張り直し", () => {

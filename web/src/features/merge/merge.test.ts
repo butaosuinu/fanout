@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makePane, makePr, makeQueuedPane } from "../../test/fixtures";
 import { diffQuery, rowQuery } from "../sessions/pane";
-import { mergeBlockReason, mergeTargetPr, mergeWarnings } from "./merge";
+import { canDeleteBranch, mergeBlockReason, mergeTargetPr, mergeWarnings } from "./merge";
 
 const OK = { githubDegraded: false, pending: false, tokenless: false };
 
@@ -135,6 +135,67 @@ describe("mergeTargetPr", () => {
   it("issue 行では fork PR も対象にする", () => {
     const prs = [makePr({ number: 700, headRepo: "stranger/fork" })];
     expect(mergeTargetPr(prs, REPO, "")?.number).toBe(700);
+  });
+
+  /* 先頭の open を無条件に採ると、draft 1 本のせいで後続の実行可能な PR に
+   * 永久に手が届かない。 */
+  it("draft より preflight を通る open を先に採る", () => {
+    const prs = [makePr({ number: 700, isDraft: true }), makePr({ number: 701 })];
+    expect(mergeTargetPr(prs, REPO, "")?.number).toBe(701);
+  });
+
+  it("CONFLICTING より衝突していない open を先に採る", () => {
+    const prs = [makePr({ number: 700, mergeable: "CONFLICTING" }), makePr({ number: 701 })];
+    expect(mergeTargetPr(prs, REPO, "")?.number).toBe(701);
+  });
+
+  /* 全部 draft なら「draft はマージできません」を出すために draft を掴む。
+   * 対象なしにすると理由が「PR がありません」に化ける。 */
+  it("実行可能な open が無ければ open の先頭に落ちる", () => {
+    const prs = [makePr({ number: 700, isDraft: true })];
+    expect(mergeTargetPr(prs, REPO, "")?.number).toBe(700);
+  });
+});
+
+describe("canDeleteBranch", () => {
+  const REPO = "octo/fanout";
+  const BRANCH = "fanout/fix-thing";
+  const ctx = { repo: REPO, branch: BRANCH, token: "t" };
+  const merged = () =>
+    makePr({ state: "MERGED", headRepo: REPO, headRef: BRANCH, headSha: "abc123" });
+
+  it("記録 branch を head に持つマージ済み PR には出す", () => {
+    expect(canDeleteBranch(merged(), ctx)).toBe(true);
+  });
+
+  it("マージされていなければ出さない", () => {
+    expect(canDeleteBranch(makePr({ headRepo: REPO, headRef: BRANCH, headSha: "a" }), ctx)).toBe(
+      false,
+    );
+  });
+
+  /* --no-token のダッシュボードでは mutation 自体が開かない。押せば必ず 403。 */
+  it("token が無ければ出さない", () => {
+    expect(canDeleteBranch(merged(), { ...ctx, token: "" })).toBe(false);
+  });
+
+  /* サーバの PlanDelete は記録 branch と一致しない head を必ず 409 にする。 */
+  it("記録 branch と head が違えば出さない", () => {
+    expect(canDeleteBranch(merged(), { ...ctx, branch: "other" })).toBe(false);
+  });
+
+  it("issue 行(記録 branch なし)では head repository だけで判定する", () => {
+    expect(canDeleteBranch(merged(), { ...ctx, branch: "" })).toBe(true);
+  });
+
+  it("fork の head branch は消さない", () => {
+    const pr = makePr({
+      state: "MERGED",
+      headRepo: "stranger/fork",
+      headRef: BRANCH,
+      headSha: "abc123",
+    });
+    expect(canDeleteBranch(pr, { ...ctx, branch: "" })).toBe(false);
   });
 });
 
