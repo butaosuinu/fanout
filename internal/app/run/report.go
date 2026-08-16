@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/log"
@@ -210,15 +211,8 @@ func boolSettingFlag(onFlag, offFlag string, v *bool) string {
 }
 
 // ShellQuote renders s as a single copy-paste-safe POSIX shell token for the
-// --limit rerun hints.
+// --limit rerun hints. It is the same algorithm as the dry-run preview quote;
+// delegating keeps the goldens' two producers in sync.
 func ShellQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	if strings.IndexFunc(s, func(r rune) bool {
-		return r != '/' && r != ':' && r != '.' && r != '-' && r != '_' && (r < '0' || r > '9') && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z')
-	}) < 0 {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+	return backend.PreviewQuote(s)
 }

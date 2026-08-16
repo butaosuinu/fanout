@@ -40,6 +40,13 @@ func (g LaunchGeneration) Equal(other LaunchGeneration) bool {
 // PaneBinding is the durable identity of one recorded pane row: the row it was
 // persisted under, the route and terminal it was launched on, the agent and
 // conversation bound to it, the checkout it owns, and its launch generation.
+//
+// MatchesLive is the matcher for the recorded-binding evidence model
+// (LiveIdentityRecordedBinding): it requires the ownership label, terminal
+// record, and agent-session evidence that only such runtimes persist, so a
+// foreground-path runtime's rows (LiveIdentityForegroundPath — tmux) can never
+// satisfy it and match through sessionview's foreground-path arm instead. See
+// LiveIdentityModel for the lane split.
 type PaneBinding struct {
 	// Row is the persisted row this binding was projected from.
 	Row PaneRowKey
@@ -173,13 +180,13 @@ func (b PaneBinding) agentMatchesLive(live LivePane, cfg matchConfig) bool {
 		return ExpectedAgentSession(live.AgentSession, b.Agent) && b.observedAgentMatches(live)
 	}
 	if b.Shell {
-		return b.AgentID == "" && b.AgentSession == nil && !LiveAgentPresent(live)
+		return b.AgentID == "" && b.AgentSession == nil && !liveAgentPresent(live)
 	}
 	if strings.TrimSpace(b.Agent) == "" && b.AgentID == "" {
-		return !LiveAgentPresent(live)
+		return !liveAgentPresent(live)
 	}
 	same := []bool{
-		LiveAgentPresent(live), b.AgentID != "", b.observedAgentMatches(live),
+		liveAgentPresent(live), b.AgentID != "", b.observedAgentMatches(live),
 		boundAgentSessionMatches(b.AgentSession, live.AgentSession, b.Agent),
 	}
 	return !slices.Contains(same, false)
@@ -225,9 +232,9 @@ func exactCheckoutProvenance(repoKey, recorded string, live LivePane) bool {
 	return !slices.Contains(same, false)
 }
 
-// LiveAgentPresent reports whether an observation carries any agent evidence
+// liveAgentPresent reports whether an observation carries any agent evidence
 // at all. A row without a recorded agent must observe none of it.
-func LiveAgentPresent(live LivePane) bool {
+func liveAgentPresent(live LivePane) bool {
 	return live.AgentPresent || live.AgentID != "" || live.AgentProvider != "" ||
 		live.AgentSession != nil
 }

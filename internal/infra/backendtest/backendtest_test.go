@@ -214,10 +214,10 @@ func TestConfiguredCapabilityFailures(t *testing.T) {
 	if err := fake.StampPaneShellKey("%1", "key"); !errors.Is(err, stampErr) {
 		t.Fatalf("StampPaneShellKey() error = %v, want %v", err, stampErr)
 	}
-	if err := fake.CloseFresh(backend.PaneRef{Pane: "%1"}); !errors.Is(err, freshErr) {
+	if err := fake.CloseFresh(backend.PaneRef{Backend: backend.Tmux, Pane: "%1"}); !errors.Is(err, freshErr) {
 		t.Fatalf("CloseFresh() error = %v, want %v", err, freshErr)
 	}
-	req := backend.CloseRequest{Ref: backend.PaneRef{Pane: "%1"}, ShellKey: "key"}
+	req := backend.CloseRequest{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%1"}, ShellKey: "key"}
 	result, err := fake.CloseOwned(req)
 	if !errors.Is(err, ownedErr) || result.Status != backend.CloseStale || result.ContainerID != "@7" {
 		t.Fatalf("CloseOwned() = %+v, %v; want stale/@7 and %v", result, err, ownedErr)
@@ -225,7 +225,7 @@ func TestConfiguredCapabilityFailures(t *testing.T) {
 	if got := fake.CloseRequests(); !reflect.DeepEqual(got, []backend.CloseRequest{req}) {
 		t.Fatalf("CloseRequests() = %+v, want %+v", got, []backend.CloseRequest{req})
 	}
-	if got := fake.ClosedRefs(); !reflect.DeepEqual(got, []backend.PaneRef{{Pane: "%1"}}) {
+	if got := fake.ClosedRefs(); !reflect.DeepEqual(got, []backend.PaneRef{{Backend: backend.Tmux, Pane: "%1"}}) {
 		t.Fatalf("ClosedRefs() = %+v, want the CloseFresh ref only", got)
 	}
 }

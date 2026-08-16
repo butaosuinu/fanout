@@ -1,6 +1,7 @@
 package backendtest
 
 import (
+	"fmt"
 	"slices"
 	"time"
 
@@ -60,8 +61,13 @@ func (m stampMixin) StampPaneShellKey(paneID, shellKey string) error {
 
 type freshCloseMixin struct{ *Fake }
 
-// CloseFresh records the rollback close and applies WithFreshCloseError.
+// CloseFresh records the rollback close and applies WithFreshCloseError. A ref
+// naming another runtime is rejected before recording, mirroring the real
+// adapters' wrong-backend screening so routing bugs cannot pass only in tests.
 func (m freshCloseMixin) CloseFresh(ref backend.PaneRef) error {
+	if ref.Backend != m.name {
+		return fmt.Errorf("%s backend cannot close %s pane reference %s", m.name, ref.Backend, ref.Pane)
+	}
 	m.record(MethodCloseFresh, ref)
 	return m.freshErr
 }
@@ -69,8 +75,12 @@ func (m freshCloseMixin) CloseFresh(ref backend.PaneRef) error {
 type ownedCloseMixin struct{ *Fake }
 
 // CloseOwned records the identity-checked close request and applies
-// WithOwnedClose.
+// WithOwnedClose. A ref naming another runtime is rejected before recording,
+// mirroring the real adapters' wrong-backend screening.
 func (m ownedCloseMixin) CloseOwned(req backend.CloseRequest) (backend.CloseResult, error) {
+	if req.Ref.Backend != m.name {
+		return backend.CloseResult{}, fmt.Errorf("%s backend cannot close %s pane reference %s", m.name, req.Ref.Backend, req.Ref.Pane)
+	}
 	m.record(MethodCloseOwned, req)
 	return m.ownedResult, m.ownedErr
 }

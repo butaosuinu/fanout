@@ -90,6 +90,19 @@
       }
     },
     {
+      "name": "no-backendtest-in-production",
+      "severity": "error",
+      "comment": "internal/infra/backendtest is a test-only fake whose mixins satisfy every backend.As* capability probe. Linking it into the shipping binary would let the fake answer real capability probes, and its class-A (AI-review-only) rating rests on the package never reaching production. Import it from _test.go files only.",
+      "from": {
+        "path": ["^(internal/(app|infra|ui)|cmd)/"],
+        "pathNot": ["_test\\.go$", "^internal/infra/backendtest/"]
+      },
+      "to": {
+        "dependencyTypes": ["local"],
+        "path": ["^internal/infra/backendtest(/|$)"]
+      }
+    },
+    {
       "name": "meta-no-module-imports",
       "severity": "error",
       "comment": "internal/arch is the test-only meta package and imports no module-internal packages, so the layer guard cannot depend on what it guards.",

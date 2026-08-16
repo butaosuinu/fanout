@@ -376,6 +376,11 @@ func (f *Fake) CheckAvailable() error {
 // the workspace the caller asked for. Recording and pane-id consumption happen
 // under one lock acquisition so Launches()[i] pairs with the i-th returned ref
 // even under concurrent callers.
+//
+// Contract divergence, on purpose: the returned ref carries req.Workspace so a
+// workspace-scoped test can assert on it, while the real tmux adapter always
+// returns an empty Workspace. Code must not start reading Workspace off a
+// Launch ref on the strength of this fake alone.
 func (f *Fake) Launch(req backend.LaunchRequest) (backend.PaneRef, error) {
 	pane := f.recordLaunch(req)
 	if f.launchErr != nil {

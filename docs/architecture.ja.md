@@ -229,6 +229,20 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   `watch.IO` のような port 経由を優先する。具象 runtime adapter
   (`tmuxrun` / `tmuxbackend` / `herdrrun`)への辺だけは容認をやめ、
   godep-cruiser のルールで塞いだ。
+- `WorkspaceObservation` → `state.RuntimeResource` の投影が 3 箇所に
+  手書きされている(`panelaunch` の stateResource と `lifecycle` の 2 変種)。
+  path の `filepath.Clean` 有無が揃っておらず、共有投影を `state` 側に
+  1 本置けば畳める(コード内コメントでも追跡中)。
+- `PaneDecorator` は tmuxrun の setter 5 本の 1:1 転写で、呼び出し側が毎回
+  5 連続 best-effort 呼びを並べる。`DecoratePane(PaneDecoration{...})` の
+  構造体 1 発に畳む余地がある(tmux 側のみの整理で可)。
+- `PaneProcess` / `PaneProcessInfo` の JSON wire tag が core に同居している
+  (唯一の (de)serializer は herdrrun)。decoder 側の非公開 wire struct へ
+  移せば core から herdr のワイヤ形式が消える。
+- `ManagedLaunchRuntime.MetadataReportBudget()` は定数を返すだけの getter で、
+  呼び出し側は値をそのまま同じ runtime の `ReportMetadata` に返している。
+  budget の適用を `ReportMetadata` 内へ移せば port からメソッドを 1 本
+  減らせる。
 
 ## 新規パッケージの追加手順
 
