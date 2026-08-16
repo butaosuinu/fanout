@@ -273,3 +273,59 @@ func TestPaneOperationsAcceptLegacyEmptyBackendAsTmux(t *testing.T) {
 		t.Fatalf("tmux calls = %#v, want %#v", got, want)
 	}
 }
+
+func TestPaneDecorationCapabilityRunsTmuxOptions(t *testing.T) {
+	logPath := installTmuxShim(t, "")
+	decorator, ok := backend.AsPaneDecorator(tmuxbackend.New())
+	if !ok {
+		t.Fatal("AsPaneDecorator(tmux backend) reported no capability")
+	}
+	if err := decorator.SetPaneTitle("%7", "#12 api-client"); err != nil {
+		t.Fatalf("SetPaneTitle() failed: %v", err)
+	}
+	// A "#[" run in a display override must reach tmux neutralized, else the
+	// border renderer reads it as a style sequence.
+	if err := decorator.SetPaneLabel("%7", "#12 · #[fg=red]api"); err != nil {
+		t.Fatalf("SetPaneLabel() failed: %v", err)
+	}
+	if err := decorator.EnablePaneBorderTitles("%7"); err != nil {
+		t.Fatalf("EnablePaneBorderTitles() failed: %v", err)
+	}
+	if err := decorator.SetPaneProjectRoot("%7", "/tmp/repo"); err != nil {
+		t.Fatalf("SetPaneProjectRoot() failed: %v", err)
+	}
+	if err := decorator.SetPaneWorktreePath("%7", "/tmp/repo/.fanout/worktrees/api"); err != nil {
+		t.Fatalf("SetPaneWorktreePath() failed: %v", err)
+	}
+
+	want := [][]string{
+		{"select-pane", "-t", "%7", "-T", "#12 api-client"},
+		{"set-option", "-p", "-t", "%7", "@fanout_pane_label", "#12 · [fg=red]api"},
+		{"set-option", "-w", "-t", "%7", "pane-border-status", "top"},
+		// The shim logs one argument per line, so the format's trailing pad space
+		// is lost on the way back out; compare the trimmed value.
+		{"set-option", "-w", "-t", "%7", "pane-border-format", strings.TrimRight(tmuxrun.PaneBorderFormat(), " ")},
+		{"set-option", "-w", "-t", "%7", "pane-active-border-style", tmuxrun.PaneActiveBorderStyle()},
+		{"set-option", "-w", "-t", "%7", "pane-border-style", tmuxrun.PaneBorderStyle()},
+		{"set-option", "-p", "-t", "%7", "@fanout_project_root", "/tmp/repo"},
+		{"set-option", "-p", "-t", "%7", "@fanout_worktree_path", "/tmp/repo/.fanout/worktrees/api"},
+	}
+	if got := readCalls(t, logPath); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tmux calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestLivenessStampCapabilityWritesShellKeyOption(t *testing.T) {
+	logPath := installTmuxShim(t, "")
+	stamper, ok := backend.AsLivenessStamper(tmuxbackend.New())
+	if !ok {
+		t.Fatal("AsLivenessStamper(tmux backend) reported no capability")
+	}
+	if err := stamper.StampPaneShellKey("%7", "shell-9f2c"); err != nil {
+		t.Fatalf("StampPaneShellKey() failed: %v", err)
+	}
+	want := [][]string{{"set-option", "-p", "-t", "%7", "@fanout_shell_key", "shell-9f2c"}}
+	if got := readCalls(t, logPath); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tmux calls = %#v, want %#v", got, want)
+	}
+}

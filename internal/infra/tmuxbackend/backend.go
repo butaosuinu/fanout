@@ -12,14 +12,16 @@ import (
 
 // Backend is the tmux implementation of backend.Backend.
 //
-// Pane decoration, popup/key bindings, layout, and session management are
-// intentionally outside this adapter. They remain tmux-only UI concerns.
+// Popup/key bindings, layout, and session management are intentionally outside
+// this adapter. They remain tmux-only UI concerns.
 type Backend struct{}
 
 var (
-	_ backend.Backend     = (*Backend)(nil)
-	_ backend.OwnedCloser = (*Backend)(nil)
-	_ backend.FreshCloser = (*Backend)(nil)
+	_ backend.Backend         = (*Backend)(nil)
+	_ backend.OwnedCloser     = (*Backend)(nil)
+	_ backend.FreshCloser     = (*Backend)(nil)
+	_ backend.PaneDecorator   = (*Backend)(nil)
+	_ backend.LivenessStamper = (*Backend)(nil)
 )
 
 // New constructs a tmux backend.
@@ -175,6 +177,39 @@ func (*Backend) CloseFresh(ref backend.PaneRef) error {
 		return err
 	}
 	return tmuxrun.CloseFreshPane(paneID)
+}
+
+// SetPaneTitle sets the tmux pane title fanout displays for a pane.
+func (*Backend) SetPaneTitle(paneID, title string) error {
+	return tmuxrun.SetPaneTitle(paneID, title)
+}
+
+// SetPaneLabel records the border label fanout renders on a pane's top border.
+func (*Backend) SetPaneLabel(paneID, label string) error {
+	return tmuxrun.SetPaneLabel(paneID, label)
+}
+
+// EnablePaneBorderTitles turns on fanout's pane-border titles and border
+// styles for the window holding paneID.
+func (*Backend) EnablePaneBorderTitles(paneID string) error {
+	return tmuxrun.EnablePaneBorderTitles(paneID)
+}
+
+// SetPaneProjectRoot records the fanout state owner the dashboard keybinding
+// reads instead of the pane's (possibly stale) current path.
+func (*Backend) SetPaneProjectRoot(paneID, projectRoot string) error {
+	return tmuxrun.SetPaneProjectRoot(paneID, projectRoot)
+}
+
+// SetPaneWorktreePath records the worktree a fanout pane belongs to.
+func (*Backend) SetPaneWorktreePath(paneID, worktreePath string) error {
+	return tmuxrun.SetPaneWorktreePath(paneID, worktreePath)
+}
+
+// StampPaneShellKey records a pane's unique liveness token, the identity every
+// later close and staleness check verifies before acting on the pane.
+func (*Backend) StampPaneShellKey(paneID, shellKey string) error {
+	return tmuxrun.SetPaneShellKey(paneID, shellKey)
 }
 
 func tmuxPaneID(ref backend.PaneRef) (string, error) {

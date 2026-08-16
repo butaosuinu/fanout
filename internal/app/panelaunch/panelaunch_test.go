@@ -86,6 +86,14 @@ func (*testTmuxBackend) CloseFresh(ref backend.PaneRef) error {
 	return closeFreshPane(ref.Pane)
 }
 
+// stampShellKey is the liveness-stamp seam. Routing the capability through it
+// lets a test fail the stamp without a live tmux server.
+var stampShellKey = tmuxrun.SetPaneShellKey
+
+func (*testTmuxBackend) StampPaneShellKey(paneID, shellKey string) error {
+	return stampShellKey(paneID, shellKey)
+}
+
 func (b *testTmuxBackend) ReleaseStartGate(gate string) error {
 	b.releasedGates = append(b.releasedGates, gate)
 	return nil
@@ -836,7 +844,10 @@ func TestShellRecordsRecoveryRowWhenLivenessStampAndFreshCloseFail(t *testing.T)
 		func(string, string) error { return fmt.Errorf("stamp failed") },
 		func(string) error { return fmt.Errorf("pane still live") },
 	)
-	launcher := &Launcher{Info: &fanoutruntime.Info{Target: "%caller", ProjectRoot: repo}}
+	launcher := &Launcher{
+		Info:    &fanoutruntime.Info{Target: "%caller", ProjectRoot: repo},
+		Backend: newTestTmuxBackend(),
+	}
 
 	err := launcher.Shell(ShellRequest{TargetPath: repo, Root: true})
 
@@ -1769,12 +1780,12 @@ func stubClosePaneForCleanup(t *testing.T, fn func(string, string, string) (back
 
 func stubPaneLivenessOps(t *testing.T, set func(string, string) error, closeFresh func(string) error) {
 	t.Helper()
-	originalSet := setPaneLivenessKey
+	originalSet := stampShellKey
 	originalCloseFresh := closeFreshPane
-	setPaneLivenessKey = set
+	stampShellKey = set
 	closeFreshPane = closeFresh
 	t.Cleanup(func() {
-		setPaneLivenessKey = originalSet
+		stampShellKey = originalSet
 		closeFreshPane = originalCloseFresh
 	})
 }

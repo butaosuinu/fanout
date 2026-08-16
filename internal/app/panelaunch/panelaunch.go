@@ -436,11 +436,11 @@ type decorateOpts struct {
 	strictShellKey bool
 }
 
-// splitAndDecorate runs the tmux steps shared by launch and Attach: split the
-// window with the agent command, stamp the pane title/label/border/hints
-// (best-effort with a warning each), and re-layout the window. It logs the
-// error and returns ok=false when the split fails (the caller owns any
-// worktree cleanup); a failed strict shell key tears the pane down itself.
+// splitAndDecorate runs the post-launch steps shared by launch and Attach:
+// create the pane with the agent command, stamp its liveness key, and apply
+// the backend's pane decoration. It logs the error and returns ok=false when
+// the launch fails (the caller owns any worktree cleanup); a failed strict
+// shell key tears the pane down itself.
 func (l *Launcher) splitAndDecorate(req Request, workPath string, opts decorateOpts) (string, bool) {
 	ref, splitErr := l.Backend.Launch(backend.LaunchRequest{
 		Workspace:    l.Info.Session,
@@ -454,61 +454,81 @@ func (l *Launcher) splitAndDecorate(req Request, workPath string, opts decorateO
 		return "", false
 	}
 	paneID := ref.Pane
-	if l.Backend.Name() != backend.Tmux {
+	if opts.strictShellKey {
+		stamped, ok := l.stampPaneLiveness(req, paneID)
+		if !ok {
+			return stamped, false
+		}
+	}
+	decorator, ok := backend.AsPaneDecorator(l.Backend)
+	if !ok {
 		// Pane decoration and layout are tmux-only implementation details. A
 		// future non-tmux launcher may succeed through the neutral interface, but
-		// it must never pass its backend-native pane id to tmux. Attached panes
-		// still require a proven liveness identity, so keep that lane fail closed
-		// until its backend supplies an equivalent identity contract.
-		if opts.strictShellKey {
-			l.Log.Err("%s: strict pane liveness keys are not supported by the %s backend", paneLogLabel(req), l.Backend.Name())
-			cleanupErr := cleanupFreshPane(l.Backend, l.Info.Target, paneID)
-			if cleanupErr != nil {
-				l.Log.Warn("%s: stop unstamped pane %s: %v", paneLogLabel(req), paneID, cleanupErr)
-				return paneID, false
-			}
-			l.releaseStartGateAfterFailure(req)
-			return "", false
-		}
+		// it must never pass its backend-native pane id to tmux.
 		return paneID, true
 	}
-	if opts.strictShellKey && req.ShellKey != "" {
-		// The liveness key is not best-effort: a recorded key that never reaches
-		// the tmux pane would leave the row permanently stale.
-		if err := setPaneLivenessKey(paneID, req.ShellKey); err != nil {
-			l.Log.Err("%s: set pane liveness key: %v", paneLogLabel(req), err)
-			cleanupErr := cleanupFreshPane(l.Backend, l.Info.Target, paneID)
-			if cleanupErr != nil {
-				l.Log.Warn("%s: stop unstamped pane %s: %v", paneLogLabel(req), paneID, cleanupErr)
-				return paneID, false
-			}
-			l.releaseStartGateAfterFailure(req)
-			return "", false
-		}
+	l.decoratePane(decorator, req, paneID, workPath)
+	return paneID, true
+}
+
+// stampPaneLiveness applies the pane's durable liveness key. The key is not
+// best-effort: a recorded key that never reaches the pane would leave the row
+// permanently stale, so a failed stamp tears the pane down. It reports the
+// pane id the caller must keep — empty once the teardown confirmed the pane is
+// gone, and the still-live id when it could not.
+func (l *Launcher) stampPaneLiveness(req Request, paneID string) (string, bool) {
+	stamper, ok := backend.AsLivenessStamper(l.Backend)
+	if !ok {
+		// Attached panes require a proven liveness identity, so keep that lane
+		// fail closed until the backend supplies an equivalent identity contract.
+		l.Log.Err("%s: strict pane liveness keys are not supported by the %s backend", paneLogLabel(req), l.Backend.Name())
+		return l.stopUnstampedPane(req, paneID)
 	}
-	if err := tmuxrun.SetPaneTitle(paneID, paneTitle(req)); err != nil {
+	if req.ShellKey == "" {
+		return paneID, true
+	}
+	if err := stamper.StampPaneShellKey(paneID, req.ShellKey); err != nil {
+		l.Log.Err("%s: set pane liveness key: %v", paneLogLabel(req), err)
+		return l.stopUnstampedPane(req, paneID)
+	}
+	return paneID, true
+}
+
+func (l *Launcher) stopUnstampedPane(req Request, paneID string) (string, bool) {
+	if cleanupErr := cleanupFreshPane(l.Backend, l.Info.Target, paneID); cleanupErr != nil {
+		l.Log.Warn("%s: stop unstamped pane %s: %v", paneLogLabel(req), paneID, cleanupErr)
+		return paneID, false
+	}
+	l.releaseStartGateAfterFailure(req)
+	return "", false
+}
+
+// decoratePane annotates a freshly launched pane and sizes it into the grid.
+// Every step is best-effort with a warning: a pane that displays no fanout
+// title or hint is still a usable pane.
+func (l *Launcher) decoratePane(decorator backend.PaneDecorator, req Request, paneID, workPath string) {
+	if err := decorator.SetPaneTitle(paneID, paneTitle(req)); err != nil {
 		l.Log.Warn("%s: %v", paneLogLabel(req), err)
 	}
-	if err := tmuxrun.SetPaneLabel(paneID, paneBorderLabel(req)); err != nil {
+	if err := decorator.SetPaneLabel(paneID, paneBorderLabel(req)); err != nil {
 		l.Log.Warn("%s: pane border label: %v", paneLogLabel(req), err)
 	}
-	if err := tmuxrun.EnablePaneBorderTitles(paneID); err != nil {
+	if err := decorator.EnablePaneBorderTitles(paneID); err != nil {
 		l.Log.Warn("%s: pane border titles: %v", paneLogLabel(req), err)
 	}
-	if err := tmuxrun.SetPaneProjectRoot(paneID, l.Info.ProjectRoot); err != nil {
+	if err := decorator.SetPaneProjectRoot(paneID, l.Info.ProjectRoot); err != nil {
 		l.Log.Warn("%s: dashboard project root hint: %v", paneLogLabel(req), err)
 	}
-	if err := tmuxrun.SetPaneWorktreePath(paneID, workPath); err != nil {
+	if err := decorator.SetPaneWorktreePath(paneID, workPath); err != nil {
 		l.Log.Warn("%s: worktree path hint: %v", paneLogLabel(req), err)
 	}
 	// Re-layout right after the split so the new pane is sized into the grid
 	// immediately — a Codex Plan Mode pane otherwise sits at the ~half-width split
-	// for the whole startup handshake below. A failed launch reconciles any
+	// for the caller's whole startup handshake. A failed launch reconciles any
 	// spacer this created via failCleanup's relayout, so no orphan remains.
 	if err := panelayout.Apply(l.Info.Target, panelayout.Create); err != nil {
 		l.Log.Warn("%s: %v", paneLogLabel(req), err)
 	}
-	return paneID, true
 }
 
 func statePane(req Request, paneID, worktreePath string, now time.Time, codexTUIStatus codexapp.Status) state.Pane {
@@ -1017,8 +1037,6 @@ func repairAttachedPaneLayout(runtimeBackend backend.Name, target, containerID s
 	// The pane is confirmed gone; layout repair is cosmetic best-effort.
 	_ = panelayout.Apply(containerID, panelayout.Close)
 }
-
-var setPaneLivenessKey = tmuxrun.SetPaneShellKey
 
 // failCleanup tears down a partially created launch and reports whether the
 // pane is confirmed gone. A live pane is closed only after its liveness-key

@@ -3,7 +3,6 @@ package run
 import (
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
@@ -16,7 +15,6 @@ import (
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
@@ -106,8 +104,8 @@ func ResolveRuntime(cfg *cliflags.Config, selection backend.Selection, runtimeBa
 		lg.Err("project root %s is not a git work tree; cannot resolve GitHub repo", info.ProjectRoot)
 		return nil, exitcode.Env
 	}
-	if !cfg.DryRun && selection.Name == backend.Tmux {
-		markCurrentPaneProjectRoot(info.ProjectRoot, lg)
+	if !cfg.DryRun {
+		markCurrentPaneProjectRoot(runtimeBackend, info, lg)
 	}
 	return &Runtime{
 		Info:             info,
@@ -118,12 +116,16 @@ func ResolveRuntime(cfg *cliflags.Config, selection backend.Selection, runtimeBa
 	}, exitcode.OK
 }
 
-func markCurrentPaneProjectRoot(projectRoot string, lg *log.Logger) {
-	paneID := strings.TrimSpace(os.Getenv("TMUX_PANE"))
-	if paneID == "" {
+// markCurrentPaneProjectRoot records fanout's own pane as this project's state
+// owner so the dashboard keybinding resolves the repository from that pane. It
+// is a best-effort hint: backends without pane decoration, and runs whose
+// environment names no invoking pane, leave it unset.
+func markCurrentPaneProjectRoot(runtimeBackend backend.Backend, info *fanoutruntime.Info, lg *log.Logger) {
+	decorator, ok := backend.AsPaneDecorator(runtimeBackend)
+	if !ok || info.InvokingPane == "" {
 		return
 	}
-	if err := tmuxrun.SetPaneProjectRoot(paneID, projectRoot); err != nil {
+	if err := decorator.SetPaneProjectRoot(info.InvokingPane, info.ProjectRoot); err != nil {
 		lg.Debug("dashboard project root hint: %v", err)
 	}
 }

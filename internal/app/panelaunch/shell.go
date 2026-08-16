@@ -98,12 +98,12 @@ func (l *Launcher) shellTmux(
 		return err
 	}
 	entry := newShellPaneEntry(number, slug, paneID, shellKey, title, targetPath)
-	if err := setPaneLivenessKey(paneID, shellKey); err != nil {
+	if err := stampShellPaneLiveness(l.Backend, paneID, shellKey); err != nil {
 		return recoverUnstampedShell(recorder, target, entry, err)
 	}
 	// Shell pane ergonomics are best-effort; the recorded pane id is enough to
 	// keep the terminal usable when tmux metadata/layout updates fail.
-	decorateShellPane(paneID, title, l.Info.ProjectRoot, targetPath)
+	decorateShellPane(l.Backend, paneID, title, l.Info.ProjectRoot, targetPath)
 	if err := recorder.RecordPane(entry); err != nil {
 		return recoverUnrecordedShell(recorder, target, entry, err)
 	}
@@ -126,12 +126,30 @@ func newShellPaneEntry(
 	}
 }
 
-func decorateShellPane(paneID, title, projectRoot, targetPath string) {
-	_ = tmuxrun.SetPaneTitle(paneID, title)
-	_ = tmuxrun.SetPaneLabel(paneID, BorderLabel(ManualParentRef, title))
-	_ = tmuxrun.EnablePaneBorderTitles(paneID)
-	_ = tmuxrun.SetPaneProjectRoot(paneID, projectRoot)
-	_ = tmuxrun.SetPaneWorktreePath(paneID, targetPath)
+// stampShellPaneLiveness applies the terminal pane's liveness token. A backend
+// that cannot stamp one could never prove the recorded row live again, so the
+// caller treats the missing capability exactly like a failed stamp.
+func stampShellPaneLiveness(runtimeBackend backend.Backend, paneID, shellKey string) error {
+	stamper, ok := backend.AsLivenessStamper(runtimeBackend)
+	if !ok {
+		if runtimeBackend == nil {
+			return fmt.Errorf("runtime backend is not configured")
+		}
+		return backend.Unsupported(runtimeBackend.Name(), "pane liveness keys")
+	}
+	return stamper.StampPaneShellKey(paneID, shellKey)
+}
+
+func decorateShellPane(runtimeBackend backend.Backend, paneID, title, projectRoot, targetPath string) {
+	decorator, ok := backend.AsPaneDecorator(runtimeBackend)
+	if !ok {
+		return
+	}
+	_ = decorator.SetPaneTitle(paneID, title)
+	_ = decorator.SetPaneLabel(paneID, BorderLabel(ManualParentRef, title))
+	_ = decorator.EnablePaneBorderTitles(paneID)
+	_ = decorator.SetPaneProjectRoot(paneID, projectRoot)
+	_ = decorator.SetPaneWorktreePath(paneID, targetPath)
 }
 
 func recoverUnstampedShell(

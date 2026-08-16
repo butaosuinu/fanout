@@ -24,6 +24,7 @@ import (
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
@@ -660,7 +661,8 @@ func launchShellPaneFromTUI(projectRoot, session string, req fanouttui.ShellLaun
 
 func launchShellPane(projectRoot, target string, req fanouttui.ShellLaunchRequest) error {
 	launcher := &panelaunch.Launcher{
-		Info: &fanoutruntime.Info{Target: target, ProjectRoot: projectRoot},
+		Info:    &fanoutruntime.Info{Target: target, ProjectRoot: projectRoot},
+		Backend: tmuxbackend.New(),
 	}
 	return launcher.Shell(panelaunch.ShellRequest{TargetPath: req.TargetPath, Root: req.Root})
 }

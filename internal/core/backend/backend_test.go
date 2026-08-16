@@ -178,6 +178,43 @@ func TestUnsupportedMatchesSentinel(t *testing.T) {
 	}
 }
 
+// paneCapableBackend offers both optional pane capabilities. The embedded nil
+// Backend supplies the required surface without a runtime: the accessors only
+// type-assert, so no embedded method is ever called.
+type paneCapableBackend struct{ Backend }
+
+func (paneCapableBackend) SetPaneTitle(string, string) error        { return nil }
+func (paneCapableBackend) SetPaneLabel(string, string) error        { return nil }
+func (paneCapableBackend) EnablePaneBorderTitles(string) error      { return nil }
+func (paneCapableBackend) SetPaneProjectRoot(string, string) error  { return nil }
+func (paneCapableBackend) SetPaneWorktreePath(string, string) error { return nil }
+func (paneCapableBackend) StampPaneShellKey(string, string) error   { return nil }
+
+// bareBackend offers the required Backend surface and no optional capability.
+type bareBackend struct{ Backend }
+
+func TestPaneCapabilityAccessors(t *testing.T) {
+	tests := []struct {
+		name    string
+		backend Backend
+		want    bool
+	}{
+		{name: "backend implementing every pane capability", backend: paneCapableBackend{}, want: true},
+		{name: "backend offering the required surface only", backend: bareBackend{}, want: false},
+		{name: "unconfigured backend", backend: nil, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, ok := AsPaneDecorator(tt.backend); ok != tt.want {
+				t.Fatalf("AsPaneDecorator(%s) = %t, want %t", tt.name, ok, tt.want)
+			}
+			if _, ok := AsLivenessStamper(tt.backend); ok != tt.want {
+				t.Fatalf("AsLivenessStamper(%s) = %t, want %t", tt.name, ok, tt.want)
+			}
+		})
+	}
+}
+
 func TestCloseResultZeroValueFailsClosed(t *testing.T) {
 	var result CloseResult
 	if result.Status != CloseFailed {

@@ -293,6 +293,43 @@ type FreshCloser interface {
 	CloseFresh(PaneRef) error
 }
 
+// PaneDecorator is an optional capability for runtimes that annotate a pane
+// with fanout's display metadata. paneID is the runtime-native id the caller
+// already holds for a pane it just created or is running in. Every method is
+// display-only, so a backend without this capability still launches usable
+// panes: they simply carry no fanout title, border label, or dashboard hint,
+// and callers skip decoration silently instead of failing the launch.
+type PaneDecorator interface {
+	SetPaneTitle(paneID, title string) error
+	SetPaneLabel(paneID, label string) error
+	EnablePaneBorderTitles(paneID string) error
+	SetPaneProjectRoot(paneID, projectRoot string) error
+	SetPaneWorktreePath(paneID, worktreePath string) error
+}
+
+// LivenessStamper is an optional capability for runtimes that stamp a durable
+// liveness token on a pane. Unlike decoration it is not best-effort: a state
+// row whose token never reached its pane can never be proven live again, so a
+// caller that requires the stamp fails closed when the capability is absent.
+type LivenessStamper interface {
+	StampPaneShellKey(paneID, shellKey string) error
+}
+
+// AsPaneDecorator resolves b's pane-decoration capability. ok=false means the
+// backend leaves panes undecorated, which callers treat as skip, not failure.
+func AsPaneDecorator(b Backend) (PaneDecorator, bool) {
+	decorator, ok := b.(PaneDecorator)
+	return decorator, ok
+}
+
+// AsLivenessStamper resolves b's liveness-stamp capability. ok=false means the
+// backend cannot prove a pane's identity through a fanout token, so a caller
+// that records the pane in fanout state must fail closed.
+func AsLivenessStamper(b Backend) (LivenessStamper, bool) {
+	stamper, ok := b.(LivenessStamper)
+	return stamper, ok
+}
+
 // UnsupportedError reports an operation intentionally disabled by a backend.
 // Herdr v1 uses this fail-closed result for every mutation and targeted read.
 type UnsupportedError struct {
