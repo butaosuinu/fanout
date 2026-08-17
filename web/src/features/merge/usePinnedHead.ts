@@ -1,5 +1,5 @@
 import type { MessageDescriptor } from "@lingui/core";
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { MERGE_DIFF_MISMATCH, MERGE_STALE_DIFF } from "./merge";
 import type { MergeAffordance } from "./useMergeFlow";
 
@@ -27,12 +27,19 @@ export function usePinnedHead(
 ): (rowKey: string, merge: MergeAffordance | null, shows: DiffSource) => MergeAffordance | null {
   const pinned = useRef<Pinned | null>(null);
 
+  /* 閉じたら捨てる。残すと、同じ行を新しい diff で開き直しても key が同じままなので
+   * pin が更新されず、間に head が進んでいた行が永久に stale 扱いになる(開き直せば
+   * 実行できる、という契約に反する)。
+   *
+   * callback の中ではなく effect で捨てるのは、閉じた後にその行の callback が
+   * 呼ばれる保証が無いから — 表の diff セルから直接開いた行にはドロワーが無く、
+   * 閉じても誰もマージボタンを問い合わせない。 */
+  useEffect(() => {
+    if (diffKey === null) pinned.current = null;
+  }, [diffKey]);
+
   return useCallback(
     (rowKey, merge, shows) => {
-      /* 閉じたら捨てる。残すと、同じ行を新しい diff で開き直しても key が同じ
-       * ままなので pin が更新されず、間に head が進んでいた行が永久に stale
-       * 扱いになる(開き直せば実行できる、という契約に反する)。 */
-      if (diffKey === null) pinned.current = null;
       if (!merge || diffKey === null || rowKey !== diffKey) return merge;
       if (pinned.current?.key !== diffKey) {
         pinned.current = { key: diffKey, prNumber: merge.prNumber, headSha: merge.headSha };

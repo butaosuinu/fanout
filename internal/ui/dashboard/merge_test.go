@@ -799,6 +799,21 @@ func TestMergeErrorMapping(t *testing.T) {
 			name: "GitHub declined", err: errors.New("gh pr merge: Pull request is not mergeable"),
 			status: http.StatusUnprocessableEntity, code: "github_rejected",
 		},
+		// The live fence runs inside the merge call, so its refusals come back
+		// through this same path. They are fanout's, not GitHub's, and the client
+		// tells the two apart by the code.
+		{
+			name: "the head moved before the send", err: prmerge.ErrStaleHead,
+			status: http.StatusConflict, code: "stale_head",
+		},
+		{
+			name: "the base moved before the send", err: prmerge.ErrStaleBase,
+			status: http.StatusConflict, code: "stale_base",
+		},
+		{
+			name: "someone else merged it first", err: prmerge.ErrAlreadyMerged,
+			status: http.StatusConflict, code: "already_merged",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -295,10 +295,12 @@ func (s Service) fenceLive(ctx context.Context, req Request) error {
 // refusal with the pull request still unmerged is handed back as the original
 // error, because that is the one case where clicking again is correct.
 func (s Service) classifySendFailure(ctx context.Context, req Request, sendErr error) (Result, error) {
-	// The rate-limit gate refuses before running gh, so nothing reached GitHub and
-	// the request is plainly retryable. Probing would also hit the same cooldown
-	// and turn a clean 429 into an unknown outcome that never clears.
-	if errors.Is(sendErr, ghissue.ErrRateLimited) {
+	// Failures that provably precede the send are excluded before the probe: the
+	// rate-limit gate refuses before running gh, and a missing binary or rejected
+	// credentials never got as far as GitHub. Probing after one of these would
+	// fail the same way and turn a clear, retryable error into a hold that no
+	// poll can clear — the pull request stays OPEN, so nothing ever settles it.
+	if errors.Is(sendErr, ghissue.ErrRateLimited) || ghissue.IsPreSendFailure(sendErr) {
 		return Result{}, sendErr
 	}
 	live, probeErr := s.GH.PRState(ctx, req.Owner, req.Repo, req.Number)

@@ -4,11 +4,11 @@
 // worktree diffs). A per-start random token gates /api/* so other local
 // users/processes cannot read your issue/PR data off the loopback port.
 //
-// There is exactly one mutation endpoint, POST /api/pr/merge, and its reach is
-// fixed: it merges one GitHub pull request and may delete that PR's remote head
-// ref. It never touches the local working tree, local git refs, worktrees,
-// state.json, or pane input. It sits behind postOnly + sameOriginOnly in
-// addition to the token gate.
+// There are exactly two mutation endpoints, and each is scoped to one GitHub
+// pull request: POST /api/pr/merge merges it, and POST /api/pr/delete-branch
+// removes its remote head ref once it is merged. Neither touches the local
+// working tree, local git refs, worktrees, state.json, or pane input. Both sit
+// behind postOnly + sameOriginOnly in addition to the token gate.
 package dashboard
 
 import (

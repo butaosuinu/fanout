@@ -98,8 +98,12 @@ func (s *Server) handleMerge(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	res, err := s.mergePR(ctx, req)
 	if err != nil {
-		status, code := mergeFailureStatus(err)
-		apiError(w, status, code, "GitHub refused the merge", redactGHDetail(err))
+		// The live fence runs inside the merge call, so its refusals arrive here
+		// mixed with gh's. They are fanout's own — the pull request moved between
+		// admission and the send — and reporting them as "GitHub refused" would
+		// name the wrong cause and drop the code the client renders from.
+		status, code := mergeCallStatus(err)
+		apiError(w, status, code, mergeFailureTitle(status), redactGHDetail(err))
 		return
 	}
 	if res.Unknown || res.Queued {
@@ -435,6 +439,24 @@ func mergePreflightCode(err error) string {
 		}
 	}
 	return "preflight_failed"
+}
+
+// mergeCallStatus classifies everything Service.Merge can return: fanout's own
+// live-fence refusals first (409 with their own code), then gh's.
+func mergeCallStatus(err error) (int, string) {
+	for _, c := range mergePreflightSentinels {
+		if errors.Is(err, c.sentinel) {
+			return http.StatusConflict, c.code
+		}
+	}
+	return mergeFailureStatus(err)
+}
+
+func mergeFailureTitle(status int) string {
+	if status == http.StatusConflict {
+		return "the merge was refused"
+	}
+	return "GitHub refused the merge"
 }
 
 // mergeFailureStatus maps what came back from gh. A plain non-zero exit is 422

@@ -662,3 +662,39 @@ func runDiffGit(t *testing.T, repo string, args ...string) {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 	}
 }
+
+// TestStableWorktreePatch pins the fence around a slow collection: the commit
+// the response names has to be the commit the patch came from, or there is
+// nothing for the merge button's comparison to mean.
+func TestStableWorktreePatch(t *testing.T) {
+	patch := gitstat.Patch{MergeBase: "base", Patch: "diff"}
+	collect := func() (gitstat.Patch, error) { return patch, nil }
+	heads := func(seq ...string) func() (string, error) {
+		i := 0
+		return func() (string, error) {
+			out := seq[i]
+			i++
+			return out, nil
+		}
+	}
+
+	t.Run("carries the commit when the worktree stayed put", func(t *testing.T) {
+		got, err := stableWorktreePatch(heads("abc123", "abc123"), collect)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Head != "abc123" {
+			t.Fatalf("Head = %q, want %q", got.Head, "abc123")
+		}
+	})
+
+	t.Run("refuses a patch collected across a commit", func(t *testing.T) {
+		got, err := stableWorktreePatch(heads("abc123", "def456"), collect)
+		if err == nil {
+			t.Fatal("stableWorktreePatch() error = nil, want the refusal")
+		}
+		if got.Patch != "" {
+			t.Fatalf("patch = %#v, want it withheld", got)
+		}
+	})
+}

@@ -144,7 +144,7 @@ The dashboard sends the PR number and the head commit it drew, and the server pa
 
 While the diff viewer is open it pins the pull request it drew — number, head, and base — and requires the commit the patch came from to be the pull request's head. A push that lands while you are reading, a retarget that never moves the head, and a worktree that lags the remote all block the merge until you reopen the diff.
 
-On a base branch that requires a merge queue, GitHub accepts the request without merging. The button says so and stays available — nothing is reported as merged, and no branch is deleted, until GitHub confirms the merge.
+On a base branch that requires a merge queue, GitHub accepts the request without merging. The button says so and goes inactive, because the accepted request already has auto-merge armed and sending it twice would be sending it twice. Nothing is reported as merged, and no branch is deleted, until GitHub confirms the merge.
 
 Because the button exists, the dashboard URL now carries merge authority, not just read access. The token in it is what stands between a shared URL and someone else merging your work — which is why `--no-token` turns the merge button off. Reads stay open on a single-user machine, but the loopback port is reachable by every local process, so merging is not.
 

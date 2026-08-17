@@ -176,7 +176,7 @@ it discovers labeled issues across the repository and starts one-shot sessions.
 | `fanout plan spec.json --agent claude` | Fan out a local plan spec instead of GitHub child issues |
 | `fanout` | Start the persistent TUI console (Session jump, numeric jump 1-9, focus, zoom, peek, compact switcher below 80 columns (`v`), terminal, prompt / issue session launch, settings popup (`s`), same-worktree attach, restore, lifecycle keys) |
 | `fanout 123 --status` | Pane, PR review, and CI state as JSON or a table |
-| `fanout dashboard --web` | Serve the web dashboard on localhost (read-only apart from the PR merge button) |
+| `fanout dashboard --web` | Serve the web dashboard on localhost (read-only apart from merging a PR and deleting its remote branch) |
 | `fanout 123 --merge 4` | Fast-forward merge a child branch (`--close` / `--cleanup` fold panes away) |
 
 Fan-out runs need a child agent — pass `--agent claude` / `--agent codex` /

@@ -294,13 +294,42 @@ func TestIsTransportFailure(t *testing.T) {
 		{name: "deadline", err: context.DeadlineExceeded, want: true},
 		{name: "cancel", err: context.Canceled, want: true},
 		{name: "connection refused", err: errors.New("dial tcp: connection refused"), want: true},
-		{name: "gh missing", err: errors.New(`exec: "gh": executable file not found`), want: true},
 		{name: "a clean rejection is not transport", err: errors.New("Pull request is not mergeable")},
+		{
+			// gh never ran, so the outcome is known: nothing was sent.
+			name: "gh missing is not transport", err: errors.New(`exec: "gh": executable file not found`),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := IsTransportFailure(tt.err); got != tt.want {
 				t.Fatalf("IsTransportFailure(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsPreSendFailure pins what is provably retryable. These leave nothing for
+// GitHub to have accepted, so probing after one of them would run through the
+// same broken gh and hold the pull request on an outcome nobody can settle.
+func TestIsPreSendFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "gh missing", err: errors.New(`exec: "gh": executable file not found`), want: true},
+		{
+			name: "credentials refused",
+			err:  errors.New("gh: authentication failed; run gh auth login"), want: true,
+		},
+		{name: "a dropped connection is not pre-send", err: errors.New("dial tcp: connection reset")},
+		{name: "a clean rejection is not pre-send", err: errors.New("Pull request is not mergeable")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsPreSendFailure(tt.err); got != tt.want {
+				t.Fatalf("IsPreSendFailure(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
 	}

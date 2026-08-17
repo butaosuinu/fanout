@@ -149,10 +149,29 @@ func IsTransportFailure(err error) bool {
 }
 
 var transportMarkers = []string{
+	"connection refused", "no route to host", "dial tcp", "i/o timeout",
+	"connection reset", "eof", "broken pipe",
+}
+
+// IsPreSendFailure reports whether an error provably happened before gh could
+// send anything: there was no binary to run, or it refused the credentials it
+// had. The mutation cannot have reached GitHub, so the request is plainly
+// retryable — and treating it as unknown instead would be worse than useless,
+// because the probe that follows runs through the same broken gh and leaves a
+// hold that nothing can clear.
+func IsPreSendFailure(err error) bool {
+	msg := strings.ToLower(err.Error())
+	for _, marker := range preSendMarkers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+var preSendMarkers = []string{
 	"executable file not found", "no such file or directory",
-	"authentication", "gh auth login", "connection refused",
-	"no route to host", "dial tcp", "i/o timeout", "connection reset",
-	"eof", "broken pipe",
+	"authentication", "gh auth login",
 }
 
 // refPath builds the git-refs API path. Each branch segment is escaped

@@ -474,6 +474,36 @@ func TestServiceMerge(t *testing.T) {
 	})
 }
 
+// TestMergeKeepsPreSendFailuresRetryable pins the one thing a hold must never
+// swallow: a failure that never reached GitHub. Probing after one of these runs
+// through the same broken gh, and the resulting Unknown would hold a pull
+// request that stays OPEN — which no poll ever settles.
+func TestMergeKeepsPreSendFailuresRetryable(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "credentials refused", err: errors.New("gh: authentication failed; run gh auth login")},
+		{name: "no gh binary", err: errors.New(`exec: "gh": executable file not found`)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			port := &fakePort{mergeErr: tt.err}
+			res, err := Service{GH: port}.Merge(context.Background(), baseRequest())
+			if err == nil {
+				t.Fatalf("Merge() error = nil, want the send failure back")
+			}
+			if res.Unknown {
+				t.Fatal("Merge() reported Unknown for a failure that never reached GitHub")
+			}
+			// One read for the live fence, none for a probe.
+			if port.mergedRead != 1 {
+				t.Fatalf("PRState reads = %d, want 1 (no probe)", port.mergedRead)
+			}
+		})
+	}
+}
+
 // TestServiceDeleteBranch pins the separated cleanup. It is idempotent and
 // stateless, which is the whole reason it is its own action — but it still has
 // to prove the pull request actually merged before discarding its head ref.

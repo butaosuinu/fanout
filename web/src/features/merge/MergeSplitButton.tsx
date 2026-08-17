@@ -56,7 +56,7 @@ function useCloseOnTargetChange(
   useEffect(() => {
     if (open) close(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [merge.prNumber, merge.headSha]);
+  }, [merge.prNumber, merge.headSha, merge.baseRef]);
 }
 
 /* 分割ボタン。本体は現在の方式で即マージし、caret は方式メニューを開く。

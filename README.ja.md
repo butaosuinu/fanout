@@ -178,7 +178,7 @@ watcher は repo 全体から label 付き issue を探し、one-shot session �
 | `fanout plan spec.json --agent claude` | GitHub の子 issue でなくローカル plan spec をファンアウト |
 | `fanout` | 常駐 TUI コンソールを起動(Session ジャンプ・数字ジャンプ 1-9・focus・zoom・peek・幅 80 桁未満のコンパクト switcher(`v`)・terminal・prompt / issue からの Session 起動・設定 popup (`s`)・同一 worktree への追加・復元・lifecycle キー) |
 | `fanout 123 --status` | ペイン・PR review・CI 状態を JSON または table で |
-| `fanout dashboard --web` | localhost で Web ダッシュボードを配信(PR マージボタン以外は読み取り専用) |
+| `fanout dashboard --web` | localhost で Web ダッシュボードを配信(PR のマージと、そのリモートブランチの削除以外は読み取り専用) |
 | `fanout 123 --merge 4` | 子 branch を fast-forward merge(`--close` / `--cleanup` でペインを畳む) |
 
 ファンアウト系のコマンドは子の agent が必要です — `--agent claude` / `--agent codex` /

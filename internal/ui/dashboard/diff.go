@@ -275,12 +275,42 @@ func collectWorktreePatch(
 // this checkout, and a branch name is not proof that this checkout holds what
 // the pull request holds.
 func worktreePatchWithHead(r gitstat.Runner, path, baseRef string) (gitstat.Patch, error) {
-	patch, err := r.WorktreePatch(path, baseRef)
+	return stableWorktreePatch(
+		func() (string, error) { return r.WorktreeHead(path) },
+		func() (gitstat.Patch, error) { return r.WorktreePatch(path, baseRef) },
+	)
+}
+
+// stableWorktreePatch collects a patch between two reads of the worktree head
+// and refuses if it moved.
+//
+// Collecting a large diff is not instant. An agent committing halfway through
+// would otherwise produce a patch stitched from two states while the response
+// names only the later commit — and that commit is what the merge button
+// compares against, so the mismatch it exists to catch would pass. This is the
+// "a push landed while you were reading" case the button promises to refuse.
+func stableWorktreePatch(
+	head func() (string, error),
+	collect func() (gitstat.Patch, error),
+) (gitstat.Patch, error) {
+	before, err := head()
+	if err != nil {
+		return gitstat.Patch{}, err
+	}
+	patch, err := collect()
 	if err != nil {
 		return patch, err
 	}
-	patch.Head, err = r.WorktreeHead(path)
-	return patch, err
+	after, err := head()
+	if err != nil {
+		return patch, err
+	}
+	if before != after {
+		return gitstat.Patch{}, fmt.Errorf(
+			"worktree moved from %s to %s while the diff was being read", before, after)
+	}
+	patch.Head = after
+	return patch, nil
 }
 
 func marshalDiffResponse(
