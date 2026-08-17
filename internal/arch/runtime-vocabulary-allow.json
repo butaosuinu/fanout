@@ -2,7 +2,7 @@
   "files": [
     {
       "name": "cmd/fanout/herdr_lifecycle.go",
-      "reason": "`fanout herdr` is a user-facing subcommand: the runtime name is the command word operators type, so the file and every identifier in it must spell it. The file is exempt as a whole rather than one identifier at a time."
+      "reason": "`fanout herdr` is a user-facing subcommand: the runtime name is the command word operators type, so the FILE NAME spells it. This entry covers the file name finding only; every identifier inside the file is registered individually with a file scope, so new runtime-named code cannot ride in on this entry."
     }
   ],
   "identifiers": [
@@ -77,6 +77,7 @@
       "name": "isHerdrLifecycleRequest",
       "reason": "main.go's dispatch guard for the `fanout herdr` subcommand; it names the allowed command word across the file boundary.",
       "files": [
+        "cmd/fanout/herdr_lifecycle.go",
         "cmd/fanout/main.go"
       ]
     },
@@ -84,7 +85,50 @@
       "name": "cmdHerdrLifecycle",
       "reason": "main.go's dispatch-table entry for the `fanout herdr` subcommand; it names the allowed command word across the file boundary.",
       "files": [
+        "cmd/fanout/herdr_lifecycle.go",
         "cmd/fanout/main.go"
+      ]
+    },
+    {
+      "name": "runHerdrLifecycle",
+      "reason": "Implements the user-facing `fanout herdr` subcommand: the runtime name is the command word operators type, so the identifier spells it. Scoped to the subcommand implementation file.",
+      "files": [
+        "cmd/fanout/herdr_lifecycle.go"
+      ]
+    },
+    {
+      "name": "parseHerdrLifecycle",
+      "reason": "Implements the user-facing `fanout herdr` subcommand: the runtime name is the command word operators type, so the identifier spells it. Scoped to the subcommand implementation file.",
+      "files": [
+        "cmd/fanout/herdr_lifecycle.go"
+      ]
+    },
+    {
+      "name": "executeHerdrLifecycle",
+      "reason": "Implements the user-facing `fanout herdr` subcommand: the runtime name is the command word operators type, so the identifier spells it. Scoped to the subcommand implementation file.",
+      "files": [
+        "cmd/fanout/herdr_lifecycle.go"
+      ]
+    },
+    {
+      "name": "herdrLifecycleUsage",
+      "reason": "Implements the user-facing `fanout herdr` subcommand: the runtime name is the command word operators type, so the identifier spells it. Scoped to the subcommand implementation file.",
+      "files": [
+        "cmd/fanout/herdr_lifecycle.go"
+      ]
+    },
+    {
+      "name": "herdrLifecycleTimeout",
+      "reason": "Implements the user-facing `fanout herdr` subcommand: the runtime name is the command word operators type, so the identifier spells it. Scoped to the subcommand implementation file.",
+      "files": [
+        "cmd/fanout/herdr_lifecycle.go"
+      ]
+    },
+    {
+      "name": "herdrLifecycleDeps",
+      "reason": "Implements the user-facing `fanout herdr` subcommand: the runtime name is the command word operators type, so the identifier spells it. Scoped to the subcommand implementation file.",
+      "files": [
+        "cmd/fanout/herdr_lifecycle.go"
       ]
     }
   ],

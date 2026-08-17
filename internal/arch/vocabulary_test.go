@@ -297,12 +297,14 @@ func loadVocabularyAllowlist(path string) (*allowlistIndex, error) {
 }
 
 // covers reports whether the finding is exempt, recording the hit so an entry
-// that never fires can be reported as stale. A file entry exempts the file
-// name finding too, which shares the file's path. A file-scoped identifier
-// entry is consulted before the global form, so scoping a name never loosens
-// what an unscoped entry would have allowed.
+// that never fires can be reported as stale. A file entry exempts only the
+// file NAME finding: everything inside the file (identifiers, imports, tags)
+// still needs its own scoped entry, so a runtime-named file cannot quietly
+// grow a name-based branch under a blanket exemption. A file-scoped entry is
+// consulted before the global form, so scoping a name never loosens what an
+// unscoped entry would have allowed.
 func (a *allowlistIndex) covers(finding vocabularyFinding) bool {
-	return a.hit("file", finding.File) ||
+	return (finding.Kind == "file name" && a.hit("file", finding.File)) ||
 		a.hit(finding.Kind, finding.Text+"@"+finding.File) ||
 		a.hit(finding.Kind, finding.Text)
 }
