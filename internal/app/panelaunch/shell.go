@@ -12,7 +12,6 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -28,12 +27,20 @@ type ShellRequest struct {
 var (
 	closePaneForCleanup = tmuxrun.ClosePaneIfOwned
 	closeFreshPane      = tmuxrun.CloseFreshPane
-	// relayoutShellWindow re-tiles the window a rolled-back terminal pane left
-	// behind. The cleanup lane below is tmux-only — it pairs with the tmuxrun
-	// closes above — so it binds the tmux layout capability directly instead of
-	// asking the caller's runtime backend for one.
-	relayoutShellWindow = tmuxbackend.New().Relayout
 )
+
+// relayoutShellWindow re-tiles the window a rolled-back terminal pane left
+// behind, through the launch's own runtime rather than a runtime this package
+// constructs. A runtime that arranges its own workspace exposes no layout
+// capability and the repair is skipped — the same rule the successful launch
+// path above already follows.
+func relayoutShellWindow(runtimeBackend backend.Backend, target string) {
+	manager, ok := backend.AsLayoutManager(runtimeBackend)
+	if !ok {
+		return
+	}
+	_ = manager.Relayout(target, backend.LayoutClose)
+}
 
 // Shell opens a plain shell pane at req.TargetPath and records it as an
 // @manual shell row in l.Info.ProjectRoot's state. Tmux rows use a liveness
@@ -104,13 +111,13 @@ func (l *Launcher) shellTmux(
 	}
 	entry := newShellPaneEntry(number, slug, paneID, shellKey, title, targetPath)
 	if err := stampShellPaneLiveness(l.Backend, paneID, shellKey); err != nil {
-		return recoverUnstampedShell(recorder, target, entry, err)
+		return recoverUnstampedShell(l.Backend, recorder, target, entry, err)
 	}
 	// Shell pane ergonomics are best-effort; the recorded pane id is enough to
 	// keep the terminal usable when tmux metadata/layout updates fail.
 	decorateShellPane(l.Backend, paneID, title, l.Info.ProjectRoot, targetPath)
 	if err := recorder.RecordPane(entry); err != nil {
-		return recoverUnrecordedShell(recorder, target, entry, err)
+		return recoverUnrecordedShell(l.Backend, recorder, target, entry, err)
 	}
 	// Re-layout only after the pane is recorded, so a failed/rolled-back launch
 	// never leaves the window arranged around a pane that no longer exists or an
@@ -160,13 +167,14 @@ func decorateShellPane(runtimeBackend backend.Backend, paneID, title, projectRoo
 }
 
 func recoverUnstampedShell(
+	runtimeBackend backend.Backend,
 	recorder *state.LockedStore,
 	target string,
 	entry state.Pane,
 	stampCause error,
 ) error {
 	stampErr := fmt.Errorf("set terminal pane liveness key: %w", stampCause)
-	if cleanupErr := cleanupFreshShellPane(target, entry.PaneID); cleanupErr != nil {
+	if cleanupErr := cleanupFreshShellPane(runtimeBackend, target, entry.PaneID); cleanupErr != nil {
 		recoveryErr := recorder.RecordPane(entry)
 		if recoveryErr != nil {
 			recoveryErr = fmt.Errorf("preserve live terminal pane %s in fanout state: %w", entry.PaneID, recoveryErr)
@@ -181,13 +189,14 @@ func recoverUnstampedShell(
 }
 
 func recoverUnrecordedShell(
+	runtimeBackend backend.Backend,
 	recorder *state.LockedStore,
 	target string,
 	entry state.Pane,
 	recordCause error,
 ) error {
 	writeErr := fmt.Errorf("write fanout state: %w", recordCause)
-	if cleanupShellPane(target, entry.PaneID, entry.WorktreePath, entry.ShellKey) {
+	if cleanupShellPane(runtimeBackend, target, entry.PaneID, entry.WorktreePath, entry.ShellKey) {
 		removeErr := recorder.RemovePane(ManualParentRef, entry.IssueNum)
 		if removeErr != nil {
 			removeErr = fmt.Errorf("remove stopped terminal pane from fanout state: %w", removeErr)
@@ -215,15 +224,15 @@ func (l *Launcher) lockShellState(projectRoot string) (*state.LockedStore, error
 	return state.LockProject(projectRoot)
 }
 
-func cleanupFreshShellPane(relayoutTarget, paneID string) error {
+func cleanupFreshShellPane(runtimeBackend backend.Backend, relayoutTarget, paneID string) error {
 	if err := closeFreshPane(paneID); err != nil {
 		return err
 	}
-	_ = relayoutShellWindow(relayoutTarget, backend.LayoutClose)
+	relayoutShellWindow(runtimeBackend, relayoutTarget)
 	return nil
 }
 
-func cleanupShellPane(relayoutTarget, paneID, expectedWorktreePath, shellKey string) bool {
+func cleanupShellPane(runtimeBackend backend.Backend, relayoutTarget, paneID, expectedWorktreePath, shellKey string) bool {
 	result, err := closePaneForCleanup(paneID, expectedWorktreePath, shellKey)
 	if err != nil || result.Status == backend.ClosePaneFailed {
 		return false
@@ -233,7 +242,7 @@ func cleanupShellPane(relayoutTarget, paneID, expectedWorktreePath, shellKey str
 		if target == "" {
 			target = relayoutTarget
 		}
-		_ = relayoutShellWindow(target, backend.LayoutClose)
+		relayoutShellWindow(runtimeBackend, target)
 	}
 	return true
 }

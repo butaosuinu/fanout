@@ -129,7 +129,7 @@ var prefixRules = []struct {
 	{"internal/infra/ghissue/", Rule{ID: "infra-ghissue", Class: ClassM, Source: SourceDocTable, Note: "GitHub issue/PR 読み書き"}},
 	{"internal/infra/gitstat/", Rule{ID: "infra-gitstat", Class: ClassM, Source: SourceDocTable, Note: "git 差分・状態取得"}},
 	{"internal/infra/tmuxrun/", Rule{ID: "infra-tmuxrun", Class: ClassM, Source: SourceDocTable, Note: "tmux 直接操作"}},
-	{"internal/infra/tmuxbackend/", Rule{ID: "infra-tmuxbackend", Class: ClassM, Source: SourceDocTable, Note: "backend 契約から tmuxrun への adapter・window レイアウト"}},
+	{"internal/infra/tmuxbackend/", Rule{ID: "infra-tmuxbackend", Class: ClassM, Source: SourceDocTable, Note: "backend 契約から tmuxrun への adapter・window レイアウト・console host capability"}},
 	{"internal/infra/msgstore/", Rule{ID: "infra-msgstore", Class: ClassM, Source: SourceDocTable, Note: "send/post/inbox/board"}},
 	{"internal/infra/notify/", Rule{ID: "infra-notify", Class: ClassM, Source: SourceDocTable, Note: "通知送出"}},
 	{"internal/infra/runtime/", Rule{ID: "infra-runtime", Class: ClassM, Source: SourceDocTable, Note: "git root・選択済み backend の起動コンテキスト解決(具象 backend を持たないので paneruntime とは別)"}},

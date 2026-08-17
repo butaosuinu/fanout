@@ -19,6 +19,7 @@ func runtimeLifecycleOptions(projectRoot, statePath string, hookConfig hooks.Con
 		StatePath:        statePath,
 		Hooks:            hookConfig,
 		CloseOwned:       runtimeBackend.CloseOwned,
+		Relayout:         runtimeBackend.Relayout,
 		WorkspaceRuntime: newHerdrLifecycleFactory(projectRoot),
 	}
 }

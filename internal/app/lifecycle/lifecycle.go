@@ -17,7 +17,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
@@ -29,7 +28,11 @@ type Options struct {
 	WatcherRunningLabel string
 	RemoveIssueLabel    func(issueNum int, label string) error
 	CloseOwned          func(backend.CloseRequest) (backend.CloseResult, error)
-	WorkspaceRuntime    WorkspaceRuntimeFactory
+	// Relayout re-tiles a container after a pane is removed. It is nil for a
+	// runtime that arranges its own workspace, and the repair is then skipped —
+	// the same meaning an absent layout capability has on the launch side.
+	Relayout         func(target string, trigger backend.LayoutTrigger) error
+	WorkspaceRuntime WorkspaceRuntimeFactory
 }
 
 // Logger is the narrow logging surface lifecycle operations need.
@@ -92,7 +95,7 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 		return exitcode.Env
 	}
 	windows := map[string]struct{}{}
-	defer relayoutClosedWindows(windows, lg)
+	defer relayoutClosedWindows(opts.Relayout, windows, lg)
 	if mode.removesWorktree() && hasManagedWorktree(panes) {
 		if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
 			lg.Err("--close: prepare local git exclude: %v", err)
@@ -149,7 +152,7 @@ func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg L
 		return exitcode.Env
 	}
 	windows := map[string]struct{}{}
-	defer relayoutClosedWindows(windows, lg)
+	defer relayoutClosedWindows(opts.Relayout, windows, lg)
 	if mode.removesWorktree() && hasManagedWorktree(panes) {
 		if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
 			lg.Err("--close: prepare local git exclude: %v", err)
@@ -294,7 +297,7 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 	closed := 0
 	failed := 0
 	windows := map[string]struct{}{}
-	defer relayoutClosedWindows(windows, lg)
+	defer relayoutClosedWindows(opts.Relayout, windows, lg)
 	for _, issueNum := range sortedUnique(nums) {
 		if !eligible[issueNum] {
 			continue
@@ -380,7 +383,7 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	closed := 0
 	failed := 0
 	windows := map[string]struct{}{}
-	defer relayoutClosedWindows(windows, lg)
+	defer relayoutClosedWindows(opts.Relayout, windows, lg)
 	for _, taskID := range sortedTaskIDs(eligible) {
 		taskPanes := panesSharingManagedWorktrees(locked.Panes, panesForTask(panes, taskID))
 		if !cleanupPaneRecordsLocked(opts, locked, taskPanes, lg, windows) {
@@ -498,11 +501,6 @@ func statusChildren(projectRoot string, nums []int, mode string, lg Logger) ([]s
 func cleanupPaneRecordsLocked(opts Options, locked *state.LockedStore, panes []state.Pane, lg Logger, windows map[string]struct{}) bool {
 	return closePaneRecordsLocked(opts, locked, panes, CloseWorktree, lg, windows)
 }
-
-// relayoutWindow re-lays out a tmux window after a pane is removed. Only tmux
-// panes reach it, so it binds the tmux layout capability directly; it stays a
-// var so tests can stub it without a real tmux.
-var relayoutWindow = tmuxbackend.New().Relayout
 
 // closePaneRecords stops every target pane before removing any worktree. This
 // two-phase ordering prevents a partially failed close from deleting a cwd
@@ -649,10 +647,14 @@ func paneRefFromState(pane state.Pane) backend.PaneRef {
 
 // relayoutClosedWindows re-tiles each affected window into the fanout grid.
 // A window that emptied out (every pane killed) is gone, so the relayout
-// no-ops on it.
-func relayoutClosedWindows(windows map[string]struct{}, lg Logger) {
+// no-ops on it. A runtime that lays itself out supplies no Relayout and the
+// whole pass is skipped.
+func relayoutClosedWindows(relayout func(string, backend.LayoutTrigger) error, windows map[string]struct{}, lg Logger) {
+	if relayout == nil {
+		return
+	}
 	for id := range windows {
-		if err := relayoutWindow(id, backend.LayoutClose); err != nil {
+		if err := relayout(id, backend.LayoutClose); err != nil {
 			lg.Warn("relayout window %s: %v", id, err)
 		}
 	}

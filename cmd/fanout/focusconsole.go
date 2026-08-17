@@ -8,7 +8,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 )
 
 // defaultConsoleKey / defaultConsoleDirectKey are the tmux keys bindConsoleKey
@@ -19,6 +19,12 @@ const (
 	defaultConsoleKey       = "T"
 	defaultConsoleDirectKey = "F11"
 )
+
+// focusConsoleRuntime is the host runtime the console-return keys live in. Both
+// the shortcut registration and the command it spawns go through it, so a test
+// can stand in for the whole pair. It stays a func rather than a value so no
+// runtime is constructed just by loading this package.
+var focusConsoleRuntime = func() backend.Backend { return paneruntime.NewTmux() }
 
 func isFocusConsoleRequest(args []string) bool {
 	return len(args) > 0 && args[0] == "focus-console"
@@ -59,30 +65,61 @@ func cmdFocusConsole(args []string, lg *log.Logger) exitcode.Code {
 		fmt.Fprint(os.Stdout, focusConsoleUsage)
 		return exitcode.OK
 	}
-	panes, err := tmuxrun.ListLivePanes()
+	// The console-return keys exist only because a runtime registered them, so
+	// the process they spawn resolves that same host runtime rather than the
+	// ambient selection: the key would not be on screen otherwise.
+	return switchViewerToConsole(focusConsoleRuntime(), flags, lg)
+}
+
+// switchViewerToConsole picks the console the pressing pane's repo owns and
+// moves the pressing viewer to it.
+func switchViewerToConsole(runtimeBackend backend.Backend, flags focusConsoleFlags, lg *log.Logger) exitcode.Code {
+	panes, err := runtimeBackend.ListLive()
 	if err != nil {
 		lg.Err("focus-console: %v", err)
 		return exitcode.Env
 	}
-	var from tmuxrun.LivePane
-	for _, pane := range panes {
-		if pane.ID == flags.fromID {
-			from = pane
-			break
-		}
-	}
-	console, ok := pickConsolePane(from, panes)
+	console, ok := pickConsolePane(livePaneByID(panes, flags.fromID), panes)
 	if !ok {
-		if err := tmuxrun.DisplayMessageToClient(flags.client, "fanout: no live console; run 'fanout' to start one"); err != nil {
-			lg.Debug("focus-console: %v", err)
-		}
+		notifyFocusConsoleViewer(runtimeBackend, flags.client, lg)
 		return exitcode.OK
 	}
-	if err := tmuxrun.SelectPaneForClient(flags.client, console.ID); err != nil {
+	focus, ok := backend.AsConsoleFocus(runtimeBackend)
+	if !ok {
+		lg.Err("focus-console: %s", backend.HerdrObservationOnlyReason)
+		return exitcode.Env
+	}
+	if err := focus.FocusPaneForViewer(flags.client, console.Ref); err != nil {
 		lg.Err("focus-console: %v", err)
 		return exitcode.Env
 	}
 	return exitcode.OK
+}
+
+// livePaneByID returns the observation of one pane, or the zero value when it
+// is not live. The pressing pane only breaks ties between consoles, so a
+// missing one is a weaker choice, not an error.
+func livePaneByID(panes []backend.LivePane, paneID string) backend.LivePane {
+	for _, pane := range panes {
+		if pane.Ref.Pane == paneID {
+			return pane
+		}
+	}
+	return backend.LivePane{}
+}
+
+// notifyFocusConsoleViewer reports "no console" on the status line of the
+// terminal that pressed the key. It is best-effort on purpose: a non-zero exit
+// here would pop the runtime's error view over the pane the user was working
+// in, which is worse than a missing notice.
+func notifyFocusConsoleViewer(runtimeBackend backend.Backend, viewerID string, lg *log.Logger) {
+	host, ok := backend.AsPopupHost(runtimeBackend)
+	if !ok {
+		return
+	}
+	if err := host.NotifyViewer(viewerID, "fanout: no live console; run 'fanout' to start one"); err != nil {
+		lg.Debug("focus-console: %v", err)
+	}
 }
 
 func parseFocusConsoleFlags(args []string, lg *log.Logger) (focusConsoleFlags, exitcode.Code) {
@@ -135,18 +172,18 @@ func parseFocusConsoleFlags(args []string, lg *log.Logger) (focusConsoleFlags, e
 // (session ids are tmux-generated, so this comparison does not trust pane
 // contents); ③ the first candidate. A pressing pane with no recorded root
 // (e.g. a pane fanout never touched) starts at ②.
-func pickConsolePane(from tmuxrun.LivePane, panes []tmuxrun.LivePane) (tmuxrun.LivePane, bool) {
-	var candidates []tmuxrun.LivePane
+func pickConsolePane(from backend.LivePane, panes []backend.LivePane) (backend.LivePane, bool) {
+	var candidates []backend.LivePane
 	for _, pane := range panes {
 		if pane.Role == backend.RoleConsole && pane.Title == tuiPaneTitle {
 			candidates = append(candidates, pane)
 		}
 	}
 	if len(candidates) == 0 {
-		return tmuxrun.LivePane{}, false
+		return backend.LivePane{}, false
 	}
 	if fromRoot := strings.TrimSpace(from.ProjectRoot); fromRoot != "" {
-		var rootMatches []tmuxrun.LivePane
+		var rootMatches []backend.LivePane
 		for _, pane := range candidates {
 			if samePath(pane.ProjectRoot, fromRoot) {
 				rootMatches = append(rootMatches, pane)
@@ -165,17 +202,17 @@ func pickConsolePane(from tmuxrun.LivePane, panes []tmuxrun.LivePane) (tmuxrun.L
 	return candidates[0], true
 }
 
-func firstPaneInSession(panes []tmuxrun.LivePane, sessionID string) (tmuxrun.LivePane, bool) {
+func firstPaneInSession(panes []backend.LivePane, sessionID string) (backend.LivePane, bool) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
-		return tmuxrun.LivePane{}, false
+		return backend.LivePane{}, false
 	}
 	for _, pane := range panes {
 		if pane.SessionID == sessionID {
 			return pane, true
 		}
 	}
-	return tmuxrun.LivePane{}, false
+	return backend.LivePane{}, false
 }
 
 // bindConsoleKey registers the console-return tmux keys. Unlike
@@ -190,20 +227,28 @@ func bindConsoleKey(lg *log.Logger, enabled bool) {
 }
 
 func syncConsoleKey(lg *log.Logger, enabled bool, cleanupDisabled bool) {
+	binder, ok := backend.AsShortcutBinder(focusConsoleRuntime())
+	if !ok {
+		return
+	}
 	if !enabled {
 		if cleanupDisabled {
-			if err := tmuxrun.UnbindConsoleKeys(defaultConsoleKey, defaultConsoleDirectKey); err != nil {
+			if err := binder.UnbindConsoleShortcuts(defaultConsoleKey, defaultConsoleDirectKey); err != nil {
 				lg.Debug("console keybind cleanup: %v (not in tmux?)", err)
 			}
 		}
 		return
 	}
+	bindConsoleShortcuts(binder, lg)
+}
+
+func bindConsoleShortcuts(binder backend.ShortcutBinder, lg *log.Logger) {
 	bin, err := os.Executable()
 	if err != nil {
 		lg.Debug("console keybind: cannot resolve fanout binary path: %v", err)
 		return
 	}
-	if err := tmuxrun.BindConsoleKeys(defaultConsoleKey, defaultConsoleDirectKey, bin); err != nil {
+	if err := binder.BindConsoleShortcuts(defaultConsoleKey, defaultConsoleDirectKey, bin); err != nil {
 		lg.Debug("console keybind: %v (not in tmux?)", err)
 		return
 	}

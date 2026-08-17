@@ -250,6 +250,7 @@ func (m model) lifecycleOptions(root string) lifecycle.Options {
 		WatcherRunningLabel: m.opts.WatcherRunningLabel,
 		RemoveIssueLabel:    ghissue.Runner{Cwd: m.opts.ProjectRoot}.RemoveIssueLabel,
 		CloseOwned:          m.opts.LifecycleCloseOwned,
+		Relayout:            m.opts.LifecycleRelayout,
 		WorkspaceRuntime:    herdrRuntime,
 	}
 }

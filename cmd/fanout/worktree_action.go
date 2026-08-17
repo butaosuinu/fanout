@@ -9,11 +9,12 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
@@ -30,7 +31,10 @@ func isWorktreeActionRequest(args []string) bool {
 }
 
 var (
-	worktreeActionLivePanes = tmuxrun.ListLivePanes
+	// worktreeActionLivePanes observes the runtime the worktree-action key was
+	// registered in. The key is on screen only because that runtime registered
+	// it, so the spawned command reads back from the same one.
+	worktreeActionLivePanes = func() ([]backend.LivePane, error) { return paneruntime.NewTmux().ListLive() }
 	worktreeActionListRoots = worktree.ListRoots
 )
 
@@ -144,9 +148,9 @@ func findRecordedPaneByID(projectRoot, paneID string) (state.Pane, error) {
 	if err != nil {
 		return state.Pane{}, fmt.Errorf("list live tmux panes: %w", err)
 	}
-	liveByID := map[string]tmuxrun.LivePane{}
+	liveByID := map[string]backend.LivePane{}
 	for _, pane := range live {
-		liveByID[pane.ID] = pane
+		liveByID[pane.Ref.Pane] = pane
 	}
 	var candidates []state.Pane
 	for _, pane := range panes {
@@ -202,7 +206,7 @@ func rawActionStatePanes(projectRoot string) ([]state.Pane, error) {
 	return panes, nil
 }
 
-func recordedPaneMatchesLive(pane state.Pane, live tmuxrun.LivePane, projectRootFallback bool) (bool, string) {
+func recordedPaneMatchesLive(pane state.Pane, live backend.LivePane, projectRootFallback bool) (bool, string) {
 	// Any row recorded with a ShellKey is identified by @fanout_shell_key. The
 	// pane id and worktree path can both be reused by another live pane.
 	if pane.IsShell() || strings.TrimSpace(pane.ShellKey) != "" {

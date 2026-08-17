@@ -18,6 +18,9 @@ type capabilities struct {
 	layout    bool
 	owned     bool
 	fresh     bool
+	popup     bool
+	shortcut  bool
+	focus     bool
 }
 
 func probe(b backend.Backend) capabilities {
@@ -27,7 +30,10 @@ func probe(b backend.Backend) capabilities {
 	_, layout := backend.AsLayoutManager(b)
 	_, owned := b.(backend.OwnedCloser)
 	_, fresh := b.(backend.FreshCloser)
-	return capabilities{decorator, stamper, previewer, layout, owned, fresh}
+	_, popup := backend.AsPopupHost(b)
+	_, shortcut := backend.AsShortcutBinder(b)
+	_, focus := backend.AsConsoleFocus(b)
+	return capabilities{decorator, stamper, previewer, layout, owned, fresh, popup, shortcut, focus}
 }
 
 // TestShapeCapabilities is the reason the shapes exist: capability detection is
@@ -45,11 +51,17 @@ func TestShapeCapabilities(t *testing.T) {
 		{name: "fresh closer fake cannot stamp liveness", backend: NewFreshCloser(), want: capabilities{fresh: true}},
 		{name: "liveness fake stamps and rolls back", backend: NewLiveness(), want: capabilities{stamper: true, fresh: true}},
 		{
+			name:    "host fake lends its terminal but launches nothing",
+			backend: NewHost(),
+			want:    capabilities{popup: true, shortcut: true, focus: true},
+		},
+		{
 			name:    "tmux fake carries every capability",
 			backend: NewTmux(),
 			want: capabilities{
 				decorator: true, stamper: true, previewer: true,
 				layout: true, owned: true, fresh: true,
+				popup: true, shortcut: true, focus: true,
 			},
 		},
 	}

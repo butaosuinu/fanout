@@ -15,8 +15,11 @@ import (
 )
 
 const (
-	MinimumVersion           = "3.3"
-	DashboardNotifyClientEnv = "FANOUT_DASHBOARD_NOTIFY_CLIENT"
+	MinimumVersion = "3.3"
+	// DashboardNotifyClientEnv is the tmux spelling of the runtime-neutral
+	// viewer-notification variable. The name is shared with the process that
+	// reads it, so it is defined once in core and aliased here.
+	DashboardNotifyClientEnv = corebackend.NotifyViewerEnv
 	userShellExpr            = `"${SHELL:-/bin/sh}"`
 	paneListFormat           = "#{pane_id}:#{window_id}:#{pane_index}:#{pane_active}:#{pane_title}"
 	livePanePathFormat       = "#{pane_id}\t#{pane_current_path}"

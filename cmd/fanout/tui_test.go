@@ -19,6 +19,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/watch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/backendtest"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
@@ -815,15 +816,60 @@ func TestTUIPopupPositionChoosesLowerOverlapEdge(t *testing.T) {
 	}
 }
 
-func TestTUIPopupPositionFallsBackWithoutPane(t *testing.T) {
-	t.Setenv("TMUX_PANE", "")
-	if got := tuiPopupPositionForCurrentPane(90, 20); got != nil {
-		t.Fatalf("popup position = %#v, want centered fallback", got)
+// A popup that cannot be placed beside the console is still worth showing, so
+// every way of not knowing where the console is degrades to a nil position —
+// which centers the popup — rather than failing the action.
+func TestTUIPopupPositionFallsBackToCentering(t *testing.T) {
+	geometry := backend.PaneGeometry{Left: 0, Top: 3, Width: 40, Height: 20, ClientWidth: 160, ClientHeight: 50}
+	tests := []struct {
+		name string
+		host tuiPopupHost
+		want *backend.PopupPosition
+	}{
+		{
+			name: "runtime that draws no popups cannot measure a pane",
+			host: newTUIPopupHost(backendtest.New(), "%7"),
+		},
+		{
+			name: "unnamed console pane skips the measurement",
+			host: newTUIPopupHost(backendtest.NewHost(backendtest.WithPaneGeometry(geometry, nil)), ""),
+		},
+		{
+			name: "a pane the runtime cannot measure degrades quietly",
+			host: newTUIPopupHost(
+				backendtest.NewHost(backendtest.WithPaneGeometry(backend.PaneGeometry{}, errors.New("no such pane"))),
+				"%7",
+			),
+		},
+		{
+			name: "a measured console pane places the popup beside it",
+			host: newTUIPopupHost(backendtest.NewHost(backendtest.WithPaneGeometry(geometry, nil)), "%7"),
+			want: &backend.PopupPosition{X: 41, Y: 3},
+		},
 	}
 
-	t.Setenv("TMUX_PANE", "%tui")
-	if got := tuiPopupPositionForCurrentPane(90, 20); got != nil {
-		t.Fatalf("popup position with malformed pane id = %#v, want centered fallback", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.host.positionBesideConsole(90, 20)
+			switch {
+			case tt.want == nil && got != nil:
+				t.Fatalf("positionBesideConsole() = %#v, want centered fallback", got)
+			case tt.want != nil && (got == nil || *got != *tt.want):
+				t.Fatalf("positionBesideConsole() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// The console's popup actions are gated on the capability before they are
+// offered, so a runtime without it reports rather than silently no-opping.
+func TestTUIPopupWithoutCapabilityReportsUnavailable(t *testing.T) {
+	host := newTUIPopupHost(backendtest.New(), "%7")
+	if _, err := host.clientSize(); !errors.Is(err, errPopupHostUnavailable) {
+		t.Fatalf("clientSize() error = %v, want errPopupHostUnavailable", err)
+	}
+	if err := host.show(backend.PopupOptions{Width: 10, Height: 10, Command: "true"}); !errors.Is(err, errPopupHostUnavailable) {
+		t.Fatalf("show() error = %v, want errPopupHostUnavailable", err)
 	}
 }
 
@@ -860,7 +906,7 @@ esac
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("TMUX_PANE", "%7")
 
-	popup := newTUICloseChoicePopupFunc("/tmp/repo", "fanout")
+	popup := newTUICloseChoicePopupFunc(newTUIPopupHost(paneruntime.NewTmux(), "%7"), "/tmp/repo", "fanout")
 	mode, canceled, err := popup(fanouttui.CloseChoiceRequest{
 		PaneLabel:   "#101",
 		InitialMode: lifecycle.ClosePaneOnly,
