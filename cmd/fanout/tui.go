@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
-	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -239,7 +238,9 @@ func wireTmuxTUI(
 	opts.OpenIssue = newTUIOpenIssueFunc(projectRoot)
 	opts.LaunchShell = newTUILaunchShellFunc(projectRoot, session)
 	opts.RestorePanes = newTUIRestoreFunc(projectRoot, session, commandName)
-	opts.Relayout = func() error { return panelayout.Apply(tuiLaunchTarget(session), panelayout.Resize) }
+	opts.Relayout = func() error {
+		return runtimeBackend.Relayout(tuiLaunchTarget(session), backend.LayoutResize)
+	}
 	wireTmuxPaneActions(opts, runtimeBackend)
 	bindDashboardKey(lg, resolvedSettings.DashboardKeybind)
 	bindConsoleKey(lg, resolvedSettings.ConsoleKeybind)
@@ -515,7 +516,7 @@ func markTUIRunning(projectRoot string) func() {
 		_ = tmuxrun.SetPaneRole(paneID, "") // a post-TUI shell must not look like a sidebar
 		// Re-tile so the ex-console pane is not left stuck at the 40-col sidebar
 		// width beside full-size agent panes.
-		_ = panelayout.Apply(paneID, panelayout.Close)
+		_ = tmuxbackend.New().Relayout(paneID, backend.LayoutClose)
 	}
 }
 

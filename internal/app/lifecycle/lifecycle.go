@@ -12,12 +12,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
@@ -504,9 +504,10 @@ func cleanupPaneRecordsLocked(opts Options, locked *state.LockedStore, panes []s
 	return closePaneRecordsLocked(opts, locked, panes, CloseWorktree, lg, windows)
 }
 
-// relayoutWindow re-lays out a tmux window after a pane is removed. It is a var
-// so tests can stub it without a real tmux.
-var relayoutWindow = panelayout.Apply
+// relayoutWindow re-lays out a tmux window after a pane is removed. Only tmux
+// panes reach it, so it binds the tmux layout capability directly; it stays a
+// var so tests can stub it without a real tmux.
+var relayoutWindow = tmuxbackend.New().Relayout
 
 // closePaneRecords stops every target pane before removing any worktree. This
 // two-phase ordering prevents a partially failed close from deleting a cwd
@@ -649,10 +650,11 @@ func paneRefFromState(pane state.Pane) backend.PaneRef {
 }
 
 // relayoutClosedWindows re-tiles each affected window into the fanout grid.
-// A window that emptied out (every pane killed) is gone, so Apply no-ops on it.
+// A window that emptied out (every pane killed) is gone, so the relayout
+// no-ops on it.
 func relayoutClosedWindows(windows map[string]struct{}, lg Logger) {
 	for id := range windows {
-		if err := relayoutWindow(id, panelayout.Close); err != nil {
+		if err := relayoutWindow(id, backend.LayoutClose); err != nil {
 			lg.Warn("relayout window %s: %v", id, err)
 		}
 	}

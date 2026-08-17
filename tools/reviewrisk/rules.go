@@ -128,7 +128,7 @@ var prefixRules = []struct {
 	{"internal/infra/ghissue/", Rule{ID: "infra-ghissue", Class: ClassM, Source: SourceDocTable, Note: "GitHub issue/PR 読み書き"}},
 	{"internal/infra/gitstat/", Rule{ID: "infra-gitstat", Class: ClassM, Source: SourceDocTable, Note: "git 差分・状態取得"}},
 	{"internal/infra/tmuxrun/", Rule{ID: "infra-tmuxrun", Class: ClassM, Source: SourceDocTable, Note: "tmux 直接操作"}},
-	{"internal/infra/tmuxbackend/", Rule{ID: "infra-tmuxbackend", Class: ClassM, Source: SourceDocTable, Note: "backend 契約から tmuxrun への薄い adapter"}},
+	{"internal/infra/tmuxbackend/", Rule{ID: "infra-tmuxbackend", Class: ClassM, Source: SourceDocTable, Note: "backend 契約から tmuxrun への adapter・window レイアウト"}},
 	{"internal/infra/msgstore/", Rule{ID: "infra-msgstore", Class: ClassM, Source: SourceDocTable, Note: "send/post/inbox/board"}},
 	{"internal/infra/notify/", Rule{ID: "infra-notify", Class: ClassM, Source: SourceDocTable, Note: "通知送出"}},
 	{"internal/infra/runtime/", Rule{ID: "infra-runtime", Class: ClassM, Source: SourceDocTable, Note: "git root・選択済み backend の起動コンテキスト解決"}},
@@ -153,7 +153,6 @@ var prefixRules = []struct {
 	{"internal/app/sessionbinding/", Rule{ID: "app-sessionbinding", Class: ClassH, Source: SourceDocTable, Note: "遅延 Herdr agent session の初回束縛と state 保存"}},
 
 	// app M.
-	{"internal/app/panelayout/", Rule{ID: "app-panelayout", Class: ClassM, Source: SourceDocTable, Note: "ペインレイアウト計算"}},
 	{"internal/app/sessionview/", Rule{ID: "app-sessionview", Class: ClassM, Source: SourceDocTable, Note: "state+runtime backend+gh の Snapshot"}},
 	{"internal/app/run/", Rule{ID: "app-run", Class: ClassM, Source: SourceDocTable, Note: "executePlan の実行ロジック"}},
 	{"internal/app/statusreport/", Rule{ID: "app-statusreport", Class: ClassM, Source: SourceDocTable, Note: "--status レポート生成"}},

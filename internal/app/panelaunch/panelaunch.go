@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
-	"github.com/butaosuinu/fanout/internal/app/panelayout"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
@@ -517,11 +516,21 @@ func (l *Launcher) decoratePane(decorator backend.PaneDecorator, req Request, pa
 	if err := decorator.SetPaneWorktreePath(paneID, workPath); err != nil {
 		l.Log.Warn("%s: worktree path hint: %v", paneLogLabel(req), err)
 	}
-	// Re-layout right after the split so the new pane is sized into the grid
-	// immediately — a Codex Plan Mode pane otherwise sits at the ~half-width split
-	// for the caller's whole startup handshake. A failed launch reconciles any
-	// spacer this created via failCleanup's relayout, so no orphan remains.
-	if err := panelayout.Apply(l.Info.Target, panelayout.Create); err != nil {
+	l.relayoutAfterCreate(req)
+}
+
+// relayoutAfterCreate sizes a freshly created pane into the runtime's grid
+// right after the split — a Codex Plan Mode pane otherwise sits at the
+// ~half-width split for the caller's whole startup handshake. A failed launch
+// reconciles any spacer this created via failCleanup's relayout, so no orphan
+// remains. A backend that arranges its own panes exposes no layout capability
+// and the step is skipped.
+func (l *Launcher) relayoutAfterCreate(req Request) {
+	manager, ok := backend.AsLayoutManager(l.Backend)
+	if !ok {
+		return
+	}
+	if err := manager.Relayout(l.Info.Target, backend.LayoutCreate); err != nil {
 		l.Log.Warn("%s: %v", paneLogLabel(req), err)
 	}
 }
@@ -1017,11 +1026,11 @@ func KillAttachedPane(runtimeBackend backend.Backend, target, paneID, shellKey s
 	case backend.CloseStale:
 		return nil
 	case backend.CloseConfirmed:
-		// Continue below and repair tmux layout when applicable.
+		// Continue below and repair the runtime's layout when it manages one.
 	default:
 		return fmt.Errorf("attached pane %s close returned unknown status %d", paneID, result.Status)
 	}
-	repairAttachedPaneLayout(runtimeBackend.Name(), target, result.ContainerID)
+	repairAttachedPaneLayout(runtimeBackend, target, result.ContainerID)
 	return nil
 }
 
@@ -1036,15 +1045,16 @@ func attachedPaneCloseRequest(runtimeBackend backend.Name, paneID, shellKey stri
 	return request
 }
 
-func repairAttachedPaneLayout(runtimeBackend backend.Name, target, containerID string) {
-	if runtimeBackend != backend.Tmux {
+func repairAttachedPaneLayout(runtimeBackend backend.Backend, target, containerID string) {
+	manager, ok := backend.AsLayoutManager(runtimeBackend)
+	if !ok {
 		return
 	}
 	if containerID == "" {
 		containerID = target
 	}
 	// The pane is confirmed gone; layout repair is cosmetic best-effort.
-	_ = panelayout.Apply(containerID, panelayout.Close)
+	_ = manager.Relayout(containerID, backend.LayoutClose)
 }
 
 // failCleanup tears down a partially created launch and reports whether the
@@ -1052,58 +1062,8 @@ func repairAttachedPaneLayout(runtimeBackend backend.Name, target, containerID s
 // identity is verified, and a created worktree is preserved when that close
 // cannot be confirmed. A nil lg suppresses cleanup diagnostics.
 func failCleanup(runtimeBackend backend.Backend, label, relayoutTarget, paneID, expectedWorktreePath, shellKey string, prepared *worktree.Result, lg *log.Logger) bool {
-	if paneID != "" {
-		if runtimeBackend == nil {
-			if lg != nil {
-				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: runtime backend is not configured", label, paneID)
-			}
-			return false
-		}
-		closer, ok := runtimeBackend.(backend.OwnedCloser)
-		if !ok {
-			if lg != nil {
-				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: runtime backend %s does not support identity-aware pane close", label, paneID, runtimeBackend.Name())
-			}
-			return false
-		}
-		result, err := closer.CloseOwned(backend.CloseRequest{
-			Ref:          backend.PaneRef{Backend: runtimeBackend.Name(), Pane: paneID},
-			WorktreePath: expectedWorktreePath,
-			ShellKey:     strings.TrimSpace(shellKey),
-		})
-		if err != nil {
-			if lg != nil {
-				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: %v", label, paneID, err)
-			}
-			return false
-		}
-		switch result.Status {
-		case backend.CloseFailed:
-			if lg != nil {
-				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: close was not confirmed", label, paneID)
-			}
-			return false
-		case backend.CloseStale:
-			// The recorded identity is already gone; worktree cleanup is safe.
-		case backend.CloseConfirmed:
-			// Continue below and repair tmux layout when applicable.
-		default:
-			if lg != nil {
-				lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: unknown close status %d", label, paneID, result.Status)
-			}
-			return false
-		}
-		if result.Status == backend.CloseConfirmed && runtimeBackend.Name() == backend.Tmux {
-			target := result.ContainerID
-			if target == "" {
-				target = relayoutTarget
-			}
-			// The failed pane is gone; re-tile so neither it nor a spacer that an
-			// early/concurrent relayout may have created is left in the grid.
-			if err := panelayout.Apply(target, panelayout.Close); err != nil && lg != nil {
-				lg.Warn("%s: relayout after failed launch: %v", label, err)
-			}
-		}
+	if paneID != "" && !closeIncompletePane(runtimeBackend, label, relayoutTarget, paneID, expectedWorktreePath, shellKey, lg) {
+		return false
 	}
 	if prepared == nil {
 		return true
@@ -1112,6 +1072,61 @@ func failCleanup(runtimeBackend backend.Backend, label, relayoutTarget, paneID, 
 		lg.Warn("%s: cleanup incomplete worktree %s: %v", label, prepared.WorktreePath, err)
 	}
 	return true
+}
+
+// closeIncompletePane closes the pane a failed launch left behind and reports
+// whether its teardown is settled enough for the worktree to go too: the pane is
+// either confirmed gone (its layout container is then repaired) or was already
+// gone. Every other outcome is logged and keeps the worktree.
+func closeIncompletePane(runtimeBackend backend.Backend, label, relayoutTarget, paneID, expectedWorktreePath, shellKey string, lg *log.Logger) bool {
+	if runtimeBackend == nil {
+		warnPreservingWorktree(lg, label, paneID, "runtime backend is not configured")
+		return false
+	}
+	closer, ok := runtimeBackend.(backend.OwnedCloser)
+	if !ok {
+		warnPreservingWorktree(lg, label, paneID, fmt.Sprintf("runtime backend %s does not support identity-aware pane close", runtimeBackend.Name()))
+		return false
+	}
+	result, err := closer.CloseOwned(incompletePaneCloseRequest(runtimeBackend.Name(), paneID, expectedWorktreePath, shellKey))
+	if err != nil {
+		warnPreservingWorktree(lg, label, paneID, err.Error())
+		return false
+	}
+	switch result.Status {
+	case backend.CloseFailed:
+		warnPreservingWorktree(lg, label, paneID, "close was not confirmed")
+		return false
+	case backend.CloseStale:
+		// The recorded identity is already gone; worktree cleanup is safe.
+	case backend.CloseConfirmed:
+		relayoutAfterFailedLaunch(runtimeBackend, label, relayoutTarget, result.ContainerID, lg)
+	default:
+		warnPreservingWorktree(lg, label, paneID, fmt.Sprintf("unknown close status %d", result.Status))
+		return false
+	}
+	return true
+}
+
+// incompletePaneCloseRequest is the identity-checked close request for a pane a
+// failed launch left behind: the recorded worktree path and shell key are what
+// the runtime matches the live pane against.
+func incompletePaneCloseRequest(runtimeBackend backend.Name, paneID, expectedWorktreePath, shellKey string) backend.CloseRequest {
+	return backend.CloseRequest{
+		Ref:          backend.PaneRef{Backend: runtimeBackend, Pane: paneID},
+		WorktreePath: expectedWorktreePath,
+		ShellKey:     strings.TrimSpace(shellKey),
+	}
+}
+
+// warnPreservingWorktree records why an incomplete launch's pane teardown was
+// not settled, and therefore why its worktree is kept. A nil lg suppresses the
+// diagnostic.
+func warnPreservingWorktree(lg *log.Logger, label, paneID, reason string) {
+	if lg == nil {
+		return
+	}
+	lg.Warn("%s: cleanup incomplete pane %s; preserving worktree: %s", label, paneID, reason)
 }
 
 // cleanupFreshPane is reserved for the split-time metadata failure before a
@@ -1128,10 +1143,28 @@ func cleanupFreshPane(runtimeBackend backend.Backend, relayoutTarget, paneID str
 	if err := closer.CloseFresh(backend.PaneRef{Backend: runtimeBackend.Name(), Pane: paneID}); err != nil {
 		return err
 	}
-	if runtimeBackend.Name() == backend.Tmux {
-		_ = panelayout.Apply(relayoutTarget, panelayout.Close)
+	if manager, ok := backend.AsLayoutManager(runtimeBackend); ok {
+		_ = manager.Relayout(relayoutTarget, backend.LayoutClose)
 	}
 	return nil
+}
+
+// relayoutAfterFailedLaunch re-tiles the container the cleaned-up pane left
+// behind, so neither it nor a spacer an early or concurrent relayout created
+// stays in the grid. A runtime that arranges its own panes exposes no layout
+// capability and the repair is skipped.
+func relayoutAfterFailedLaunch(runtimeBackend backend.Backend, label, relayoutTarget, containerID string, lg *log.Logger) {
+	manager, ok := backend.AsLayoutManager(runtimeBackend)
+	if !ok {
+		return
+	}
+	target := containerID
+	if target == "" {
+		target = relayoutTarget
+	}
+	if err := manager.Relayout(target, backend.LayoutClose); err != nil && lg != nil {
+		lg.Warn("%s: relayout after failed launch: %v", label, err)
+	}
 }
 
 // shellQuote is the dry-run quoting shared with the backends' own preview

@@ -330,6 +330,39 @@ func TestLivenessStampCapabilityWritesShellKeyOption(t *testing.T) {
 	}
 }
 
+// The grid policy and the tmux custom-layout string it is applied through are
+// one mechanism, so the capability is pinned at the argv level: a relayout
+// resolves the window, lists its panes, and hands tmux the checksummed layout.
+// The expected layout string is the one real tmux 3.6a accepted (see
+// layout_grid_test.go).
+func TestLayoutCapabilityAppliesCustomLayout(t *testing.T) {
+	// Relayout runs through the package-level applier; drop this test's memo
+	// entry afterwards so a later test seeing the same window signature still
+	// observes its select-layout call instead of a dedup no-op.
+	t.Cleanup(tmuxbackend.ResetLayoutMemoForTest)
+	logPath := installTmuxShim(t, `
+case "$1" in
+  display-message) printf '@7\t200\t50\n' ;;
+  list-panes) printf '%%1079\t0\t1\t\t\n%%1080\t1\t0\t\t\n' ;;
+esac
+`)
+	manager, ok := backend.AsLayoutManager(tmuxbackend.New())
+	if !ok {
+		t.Fatal("AsLayoutManager(tmux backend) reported no capability")
+	}
+	if err := manager.Relayout("%1079", backend.LayoutCreate); err != nil {
+		t.Fatalf("Relayout() failed: %v", err)
+	}
+	want := [][]string{
+		{"display-message", "-p", "-t", "%1079", "-F", "#{window_id}\t#{window_width}\t#{window_height}"},
+		{"list-panes", "-t", "@7", "-F", "#{pane_id}\t#{pane_index}\t#{pane_active}\t#{@fanout_role}\t#{@fanout_spacer}"},
+		{"select-layout", "-t", "@7", "2cc9,200x50,0,0{100x50,0,0,1079,99x50,101,0,1080}"},
+	}
+	if got := readCalls(t, logPath); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tmux calls = %#v, want %#v", got, want)
+	}
+}
+
 // The dry-run preview is pinned byte-for-byte by the Tier 2 goldens
 // (tests/golden/scenario-*.dry-run.txt), so these expectations are full lines,
 // not substrings.

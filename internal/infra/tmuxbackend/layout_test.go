@@ -1,4 +1,4 @@
-package panelayout
+package tmuxbackend
 
 import (
 	"fmt"
@@ -44,8 +44,8 @@ func (f *fakeOps) ApplyLayout(_, l string) error        { f.applied = append(f.a
 func (f *fakeOps) SelectMainVertical(string, int) error { f.mainvCalls++; return f.mainvErr }
 func (f *fakeOps) SelectTiled(string) error             { f.tiledCalls++; return nil }
 
-func newTestApplier(f *fakeOps) *applier {
-	return &applier{ops: f, cfg: DefaultConfig(), memo: map[string]string{}}
+func newTestApplier(f *fakeOps) *layoutApplier {
+	return &layoutApplier{ops: f, cfg: defaultLayoutConfig(), memo: map[string]string{}}
 }
 
 func wp(num string, idx int, role string, spacer bool) backend.WindowPane {
@@ -58,7 +58,7 @@ func TestApplyNoSidebarGrid(t *testing.T) {
 		panes: []backend.WindowPane{wp("1079", 0, "", false), wp("1080", 1, "", false)},
 	}
 	a := newTestApplier(f)
-	if err := a.apply("%1079", Create); err != nil {
+	if err := a.apply("%1079", backend.LayoutCreate); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.applied) != 1 {
@@ -83,7 +83,7 @@ func TestApplySidebarGrid(t *testing.T) {
 		},
 	}
 	a := newTestApplier(f)
-	if err := a.apply("%1093", Create); err != nil {
+	if err := a.apply("%1093", backend.LayoutCreate); err != nil {
 		t.Fatal(err)
 	}
 	want := "fab2,200x50,0,0{40x50,0,0,1093,159x50,41,0{79x50,41,0,1094,79x50,121,0,1095}}"
@@ -101,7 +101,7 @@ func TestApplyAddsSpacerWithConsole(t *testing.T) {
 		spacerID: "%9",
 	}
 	a := newTestApplier(f)
-	if err := a.apply("%c", Create); err != nil {
+	if err := a.apply("%c", backend.LayoutCreate); err != nil {
 		t.Fatal(err)
 	}
 	if f.splits != 1 {
@@ -121,7 +121,7 @@ func TestApplyNoSpacerWithoutConsole(t *testing.T) {
 		panes: panesN(5),
 	}
 	a := newTestApplier(f)
-	if err := a.apply("%1", Create); err != nil {
+	if err := a.apply("%1", backend.LayoutCreate); err != nil {
 		t.Fatal(err)
 	}
 	if f.splits != 0 {
@@ -139,7 +139,7 @@ func TestApplyRemovesStaleSpacer(t *testing.T) {
 		},
 	}
 	a := newTestApplier(f)
-	if err := a.apply("%1", Create); err != nil {
+	if err := a.apply("%1", backend.LayoutCreate); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.killed) != 1 || f.killed[0] != "%8" {
@@ -158,7 +158,7 @@ func TestApplyFallbackCascade(t *testing.T) {
 		applyErr: fmt.Errorf("tmux rejected layout"),
 	}
 	a := newTestApplier(f)
-	_ = a.apply("%1", Create)
+	_ = a.apply("%1", backend.LayoutCreate)
 	if f.mainvCalls != 1 || f.tiledCalls != 0 {
 		t.Errorf("mainv=%d tiled=%d, want 1/0", f.mainvCalls, f.tiledCalls)
 	}
@@ -171,7 +171,7 @@ func TestApplyFallbackCascade(t *testing.T) {
 		mainvErr: fmt.Errorf("rejected too"),
 	}
 	a = newTestApplier(f)
-	_ = a.apply("%1", Create)
+	_ = a.apply("%1", backend.LayoutCreate)
 	if f.tiledCalls != 1 {
 		t.Errorf("tiled = %d, want 1", f.tiledCalls)
 	}
@@ -185,7 +185,7 @@ func TestApplyCrampedFallsBackToTiled(t *testing.T) {
 		panes: panesN(3),
 	}
 	a := newTestApplier(f)
-	_ = a.apply("%1", Create)
+	_ = a.apply("%1", backend.LayoutCreate)
 	if len(f.applied) != 0 {
 		t.Errorf("expected no custom layout for cramped window, got %v", f.applied)
 	}
@@ -200,11 +200,11 @@ func TestApplyResizeMemoSkips(t *testing.T) {
 		panes: panesN(2),
 	}
 	a := newTestApplier(f)
-	if err := a.apply("%1", Create); err != nil {
+	if err := a.apply("%1", backend.LayoutCreate); err != nil {
 		t.Fatal(err)
 	}
 	// Same geometry + pane set: a resize event should be a no-op.
-	if err := a.apply("%1", Resize); err != nil {
+	if err := a.apply("%1", backend.LayoutResize); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.applied) != 1 {
@@ -212,7 +212,7 @@ func TestApplyResizeMemoSkips(t *testing.T) {
 	}
 	// A changed window size must reapply.
 	f.geom.Width = 240
-	if err := a.apply("%1", Resize); err != nil {
+	if err := a.apply("%1", backend.LayoutResize); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.applied) != 2 {
@@ -226,17 +226,17 @@ func TestApplyCreateBypassesMemo(t *testing.T) {
 		panes: panesN(2),
 	}
 	a := newTestApplier(f)
-	_ = a.apply("%1", Create)
-	_ = a.apply("%1", Create)
+	_ = a.apply("%1", backend.LayoutCreate)
+	_ = a.apply("%1", backend.LayoutCreate)
 	if len(f.applied) != 2 {
-		t.Errorf("Create should not dedup: applied=%d", len(f.applied))
+		t.Errorf("LayoutCreate should not dedup: applied=%d", len(f.applied))
 	}
 }
 
 func TestApplyWindowGone(t *testing.T) {
 	f := &fakeOps{geomErr: fmt.Errorf("can't find window")}
 	a := newTestApplier(f)
-	if err := a.apply("%1", Create); err != nil {
+	if err := a.apply("%1", backend.LayoutCreate); err != nil {
 		t.Fatal(err)
 	}
 	if f.panesCalls != 0 || len(f.applied) != 0 {
@@ -250,7 +250,7 @@ func TestApplyConsoleOnly(t *testing.T) {
 		panes: []backend.WindowPane{wp("5", 0, backend.RoleConsole, false)},
 	}
 	a := newTestApplier(f)
-	if err := a.apply("%5", Create); err != nil {
+	if err := a.apply("%5", backend.LayoutCreate); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.applied) != 0 || f.mainvCalls != 0 {

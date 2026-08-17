@@ -1,4 +1,7 @@
 // Package tmuxbackend adapts the runtime-neutral backend contract to tmuxrun.
+// It also owns fanout's window layout: the grid policy and the tmux custom
+// layout string it is applied through are one mechanism, so both live behind
+// the LayoutManager capability here.
 package tmuxbackend
 
 import (
@@ -12,8 +15,8 @@ import (
 
 // Backend is the tmux implementation of backend.Backend.
 //
-// Popup/key bindings, layout, and session management are intentionally outside
-// this adapter. They remain tmux-only UI concerns.
+// Popup/key bindings and session management are intentionally outside this
+// adapter. They remain tmux-only UI concerns.
 type Backend struct{}
 
 var (
@@ -23,6 +26,7 @@ var (
 	_ backend.PaneDecorator   = (*Backend)(nil)
 	_ backend.LivenessStamper = (*Backend)(nil)
 	_ backend.DryRunPreviewer = (*Backend)(nil)
+	_ backend.LayoutManager   = (*Backend)(nil)
 )
 
 // New constructs a tmux backend.

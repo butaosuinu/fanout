@@ -1,4 +1,4 @@
-package panelayout
+package tmuxbackend
 
 import (
 	"fmt"
@@ -8,17 +8,17 @@ import (
 )
 
 // gridCfg is a no-sidebar config with dmux's comfort thresholds.
-func gridCfg() Config { return DefaultConfig() }
+func gridCfg() layoutConfig { return defaultLayoutConfig() }
 
 // sidebarCfg is the same with a console sidebar reserved.
-func sidebarCfg() Config {
-	c := DefaultConfig()
-	c.SidebarWidth = SidebarWidthDefault
+func sidebarCfg() layoutConfig {
+	c := defaultLayoutConfig()
+	c.SidebarWidth = sidebarWidthDefault
 	return c
 }
 
 // The two checksums below were captured from real tmux 3.6a (see the
-// layout-probe runs during development); they pin both Checksum and Render to
+// layout-probe runs during development); they pin both layoutChecksum and renderLayout to
 // tmux's actual algorithm and geometry, not just to our understanding of it.
 func TestChecksumMatchesRealTmux(t *testing.T) {
 	tests := []struct {
@@ -31,8 +31,8 @@ func TestChecksumMatchesRealTmux(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Checksum(tt.body); got != tt.want {
-				t.Errorf("Checksum(%q) = %q, want %q", tt.body, got, tt.want)
+			if got := layoutChecksum(tt.body); got != tt.want {
+				t.Errorf("layoutChecksum(%q) = %q, want %q", tt.body, got, tt.want)
 			}
 		})
 	}
@@ -41,14 +41,14 @@ func TestChecksumMatchesRealTmux(t *testing.T) {
 func TestRenderGolden(t *testing.T) {
 	cases := []struct {
 		name string
-		in   RenderInput
+		in   renderLayoutInput
 		want string
 	}{
 		{
 			// Real tmux: `tmux new -x200 -y50; split-window -h` → this exact string.
 			name: "no-sidebar 2 panes single row",
-			in: RenderInput{
-				Win:            Window{200, 50},
+			in: renderLayoutInput{
+				Win:            layoutWindow{200, 50},
 				ContentPaneIDs: []string{"1079", "1080"},
 				Cols:           2,
 				Cfg:            gridCfg(),
@@ -58,8 +58,8 @@ func TestRenderGolden(t *testing.T) {
 		{
 			// Real tmux accepted this verbatim (select-layout rc=0, identical echo).
 			name: "sidebar + 2-pane grid row",
-			in: RenderInput{
-				Win:            Window{200, 50},
+			in: renderLayoutInput{
+				Win:            layoutWindow{200, 50},
 				SidebarPaneID:  "1093",
 				ContentPaneIDs: []string{"1094", "1095"},
 				Cols:           2,
@@ -69,8 +69,8 @@ func TestRenderGolden(t *testing.T) {
 		},
 		{
 			name: "single pane no sidebar",
-			in: RenderInput{
-				Win:            Window{120, 40},
+			in: renderLayoutInput{
+				Win:            layoutWindow{120, 40},
 				ContentPaneIDs: []string{"7"},
 				Cols:           1,
 				Cfg:            gridCfg(),
@@ -80,12 +80,12 @@ func TestRenderGolden(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Render(tc.in)
+			got, err := renderLayout(tc.in)
 			if err != nil {
-				t.Fatalf("Render: %v", err)
+				t.Fatalf("renderLayout: %v", err)
 			}
 			if got != tc.want {
-				t.Errorf("Render = %q\nwant       %q", got, tc.want)
+				t.Errorf("renderLayout = %q\nwant       %q", got, tc.want)
 			}
 		})
 	}
@@ -96,18 +96,18 @@ func TestRenderMultiRowNesting(t *testing.T) {
 	// container wrapping a {} horizontal row and a bare leaf, with the height
 	// remainder on the last row. Verified accepted by real tmux 3.6a (rc=0,
 	// identical echo) with these pane ids.
-	got, err := Render(RenderInput{
-		Win:            Window{200, 50},
+	got, err := renderLayout(renderLayoutInput{
+		Win:            layoutWindow{200, 50},
 		ContentPaneIDs: []string{"1108", "1109", "1110"},
 		Cols:           2,
 		Cfg:            gridCfg(),
 	})
 	if err != nil {
-		t.Fatalf("Render: %v", err)
+		t.Fatalf("renderLayout: %v", err)
 	}
 	want := "7c6f,200x50,0,0[200x24,0,0{100x24,0,0,1108,99x24,101,0,1109},200x25,0,25,1110]"
 	if got != want {
-		t.Errorf("Render = %q\nwant       %q", got, want)
+		t.Errorf("renderLayout = %q\nwant       %q", got, want)
 	}
 }
 
@@ -115,20 +115,20 @@ func TestRenderSpacerRow(t *testing.T) {
 	// n=5 grid panes at 250x50 picks 3 cols / 2 rows with a short last row that
 	// would stretch past MaxComfortableWidth, so a spacer cell is appended.
 	// Verified accepted by real tmux 3.6a (rc=0) with these six pane ids.
-	got, err := Render(RenderInput{
-		Win:            Window{250, 50},
+	got, err := renderLayout(renderLayoutInput{
+		Win:            layoutWindow{250, 50},
 		ContentPaneIDs: []string{"1117", "1118", "1119", "1120", "1121", "1122"},
 		Cols:           3,
 		LastCellSpacer: true,
 		Cfg:            gridCfg(),
 	})
 	if err != nil {
-		t.Fatalf("Render: %v", err)
+		t.Fatalf("renderLayout: %v", err)
 	}
 	// Last row: two content panes capped at 100 plus a 48-wide spacer.
 	want := "0ea2,250x50,0,0[250x24,0,0{84x24,0,0,1117,82x24,85,0,1118,82x24,168,0,1119},250x25,0,25{100x25,0,25,1120,100x25,101,25,1121,48x25,202,25,1122}]"
 	if got != want {
-		t.Errorf("Render = %q\nwant       %q", got, want)
+		t.Errorf("renderLayout = %q\nwant       %q", got, want)
 	}
 }
 
@@ -136,18 +136,18 @@ func TestRenderErrors(t *testing.T) {
 	cfg := gridCfg()
 	tests := []struct {
 		name string
-		in   RenderInput
+		in   renderLayoutInput
 	}{
-		{name: "nil pane ids", in: RenderInput{Win: Window{200, 50}, ContentPaneIDs: nil, Cols: 1, Cfg: cfg}},
-		{name: "zero cols", in: RenderInput{Win: Window{200, 50}, ContentPaneIDs: []string{"1"}, Cols: 0, Cfg: cfg}},
-		{name: "zero-width window", in: RenderInput{Win: Window{0, 50}, ContentPaneIDs: []string{"1"}, Cols: 1, Cfg: cfg}},
+		{name: "nil pane ids", in: renderLayoutInput{Win: layoutWindow{200, 50}, ContentPaneIDs: nil, Cols: 1, Cfg: cfg}},
+		{name: "zero cols", in: renderLayoutInput{Win: layoutWindow{200, 50}, ContentPaneIDs: []string{"1"}, Cols: 0, Cfg: cfg}},
+		{name: "zero-width window", in: renderLayoutInput{Win: layoutWindow{0, 50}, ContentPaneIDs: []string{"1"}, Cols: 1, Cfg: cfg}},
 		// 60 grid panes in 1 column can't fit positive height in 50 rows.
-		{name: "60 panes cannot fit one column", in: RenderInput{Win: Window{200, 50}, ContentPaneIDs: ids(60), Cols: 1, Cfg: cfg}},
+		{name: "60 panes cannot fit one column", in: renderLayoutInput{Win: layoutWindow{200, 50}, ContentPaneIDs: ids(60), Cols: 1, Cfg: cfg}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := Render(tt.in); err == nil {
-				t.Errorf("Render(%+v) = nil error, want error", tt.in)
+			if _, err := renderLayout(tt.in); err == nil {
+				t.Errorf("renderLayout(%+v) = nil error, want error", tt.in)
 			}
 		})
 	}
@@ -156,9 +156,9 @@ func TestRenderErrors(t *testing.T) {
 func TestDecidePlan(t *testing.T) {
 	cases := []struct {
 		name    string
-		win     Window
+		win     layoutWindow
 		n       int
-		cfg     Config
+		cfg     layoutConfig
 		cols    int
 		rows    int
 		dist    []int
@@ -166,17 +166,17 @@ func TestDecidePlan(t *testing.T) {
 		spacer  bool
 		spacerW int
 	}{
-		{name: "1 pane", win: Window{200, 50}, n: 1, cfg: gridCfg(), cols: 1, rows: 1, dist: []int{1}, comfort: true},
-		{name: "2 panes one row", win: Window{200, 50}, n: 2, cfg: gridCfg(), cols: 2, rows: 1, dist: []int{2}, comfort: true},
-		{name: "3 panes one row", win: Window{200, 50}, n: 3, cfg: gridCfg(), cols: 3, rows: 1, dist: []int{3}, comfort: true},
-		{name: "4 panes 2x2", win: Window{200, 50}, n: 4, cfg: gridCfg(), cols: 2, rows: 2, dist: []int{2, 2}, comfort: true},
+		{name: "1 pane", win: layoutWindow{200, 50}, n: 1, cfg: gridCfg(), cols: 1, rows: 1, dist: []int{1}, comfort: true},
+		{name: "2 panes one row", win: layoutWindow{200, 50}, n: 2, cfg: gridCfg(), cols: 2, rows: 1, dist: []int{2}, comfort: true},
+		{name: "3 panes one row", win: layoutWindow{200, 50}, n: 3, cfg: gridCfg(), cols: 3, rows: 1, dist: []int{3}, comfort: true},
+		{name: "4 panes 2x2", win: layoutWindow{200, 50}, n: 4, cfg: gridCfg(), cols: 2, rows: 2, dist: []int{2, 2}, comfort: true},
 		// Short last row would stretch past the comfort width, so a 48-wide spacer is appended.
-		{name: "5 panes spacer", win: Window{250, 50}, n: 5, cfg: gridCfg(), cols: 3, rows: 2, dist: []int{3, 2}, comfort: true, spacer: true, spacerW: 48},
-		{name: "sidebar 2 panes", win: Window{200, 50}, n: 2, cfg: sidebarCfg(), cols: 2, rows: 1, dist: []int{2}, comfort: true},
+		{name: "5 panes spacer", win: layoutWindow{250, 50}, n: 5, cfg: gridCfg(), cols: 3, rows: 2, dist: []int{3, 2}, comfort: true, spacer: true, spacerW: 48},
+		{name: "sidebar 2 panes", win: layoutWindow{200, 50}, n: 2, cfg: sidebarCfg(), cols: 2, rows: 1, dist: []int{2}, comfort: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := DecidePlan(tc.win, tc.n, tc.cfg)
+			got := decideLayoutPlan(tc.win, tc.n, tc.cfg)
 			if got.Cols != tc.cols || got.Rows != tc.rows {
 				t.Errorf("cols/rows = %d/%d, want %d/%d", got.Cols, got.Rows, tc.cols, tc.rows)
 			}
@@ -199,7 +199,7 @@ func TestDecidePlan(t *testing.T) {
 func TestDecidePlanTieBreakPrefersFewerColumns(t *testing.T) {
 	// A square window where multiple column counts tie on score should resolve
 	// to the smaller column count (wider panes).
-	got := DecidePlan(Window{180, 50}, 2, gridCfg())
+	got := decideLayoutPlan(layoutWindow{180, 50}, 2, gridCfg())
 	if got.Cols != 2 { // 2 panes: one row (cols 2) beats stacked (cols 1)
 		t.Fatalf("cols = %d, want 2", got.Cols)
 	}
@@ -208,17 +208,17 @@ func TestDecidePlanTieBreakPrefersFewerColumns(t *testing.T) {
 func TestDecidePlanZero(t *testing.T) {
 	tests := []struct {
 		name string
-		w    Window
+		w    layoutWindow
 		n    int
 	}{
-		{name: "zero panes", w: Window{200, 50}, n: 0},
-		{name: "zero-width window", w: Window{0, 50}, n: 3},
-		{name: "zero-height window", w: Window{200, 0}, n: 3},
+		{name: "zero panes", w: layoutWindow{200, 50}, n: 0},
+		{name: "zero-width window", w: layoutWindow{0, 50}, n: 3},
+		{name: "zero-height window", w: layoutWindow{200, 0}, n: 3},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := DecidePlan(tt.w, tt.n, gridCfg()); got.Cols != 0 || got.Rows != 0 {
-				t.Errorf("DecidePlan(%v, %d) = %+v, want zero cols/rows", tt.w, tt.n, got)
+			if got := decideLayoutPlan(tt.w, tt.n, gridCfg()); got.Cols != 0 || got.Rows != 0 {
+				t.Errorf("decideLayoutPlan(%v, %d) = %+v, want zero cols/rows", tt.w, tt.n, got)
 			}
 		})
 	}
@@ -235,13 +235,13 @@ func TestRenderInvariants(t *testing.T) {
 		if sidebar {
 			cfg = sidebarCfg()
 		}
-		for _, win := range []Window{{120, 40}, {200, 50}, {320, 60}, {80, 24}} {
+		for _, win := range []layoutWindow{{120, 40}, {200, 50}, {320, 60}, {80, 24}} {
 			for n := 1; n <= 6; n++ {
-				plan := DecidePlan(win, n, cfg)
+				plan := decideLayoutPlan(win, n, cfg)
 				if plan.Cols == 0 {
 					continue
 				}
-				in := RenderInput{
+				in := renderLayoutInput{
 					Win:            win,
 					ContentPaneIDs: ids(n),
 					Cols:           plan.Cols,
@@ -250,7 +250,7 @@ func TestRenderInvariants(t *testing.T) {
 				if sidebar {
 					in.SidebarPaneID = "9"
 				}
-				out, err := Render(in)
+				out, err := renderLayout(in)
 				if err != nil {
 					continue // infeasible geometry is allowed to error; apply falls back
 				}
@@ -260,7 +260,7 @@ func TestRenderInvariants(t *testing.T) {
 	}
 }
 
-func assertLeavesWithinWindow(t *testing.T, layout string, win Window, sidebar bool, cfg Config) {
+func assertLeavesWithinWindow(t *testing.T, layout string, win layoutWindow, sidebar bool, cfg layoutConfig) {
 	t.Helper()
 	startX := 0
 	if sidebar {

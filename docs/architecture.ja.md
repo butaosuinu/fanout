@@ -80,7 +80,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `ghissue` | GitHub issue/PR の読み書き(label swap・dashboard comment 投稿などの mutation を含む) | M |
 | infra | `gitstat` | git 差分・状態取得 | M |
 | infra | `tmuxrun` | tmux 直接操作 | M |
-| infra | `tmuxbackend` | backend 契約から `tmuxrun` への薄い adapter | M |
+| infra | `tmuxbackend` | backend 契約から `tmuxrun` への adapter(window レイアウトの grid 方針と tmux custom layout 文字列も担当) | M |
 | infra | `msgstore` | send/post/inbox/board/mark-read | M |
 | infra | `notify` | 通知送出 | M |
 | infra | `runtime` | git root・選択済み backend の起動コンテキスト解決 | M |
@@ -88,7 +88,6 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `codexapp` | Codex app-server クライアント(Plan Mode 制御・team メッセージブリッジ) | M |
 | infra | `atomicfs` | 原子的ファイル書き込み(state.json / token 入り dashboard.json の共通経路) | M |
 | infra | `gitroot` | git root 探索(project root・state root・親 repo 判定の入力) | M |
-| app | `panelayout` | ペインレイアウト計算 | M |
 | app | `sessionview` | state + runtime backend + gh を集約する Snapshot | M |
 | app | `run` | `executePlan` の実行ロジック | M |
 | app | `statusreport` | `--status` のレポート生成 | M |

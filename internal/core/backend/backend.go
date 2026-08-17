@@ -365,6 +365,30 @@ type LivenessStamper interface {
 	StampPaneShellKey(paneID, shellKey string) error
 }
 
+// LayoutTrigger is why a relayout was requested. It carries the caller's
+// intent only: a create or a close changed the pane set, while a resize may
+// have changed nothing a runtime cares about.
+type LayoutTrigger int
+
+const (
+	// LayoutCreate follows a pane creation and LayoutClose a pane removal. Both
+	// changed the pane set, so a runtime must not skip them.
+	LayoutCreate LayoutTrigger = iota
+	LayoutClose
+	// LayoutResize follows a container geometry change, which a runtime may
+	// legitimately skip when the arrangement it would produce is unchanged.
+	LayoutResize
+)
+
+// LayoutManager is an optional capability for runtimes that arrange fanout's
+// panes themselves. target is the runtime-native pane, container, or session
+// address whose arrangement is stale. Every call is best-effort: a runtime
+// that cannot lay out the target degrades internally instead of failing the
+// launch or teardown that asked for the relayout.
+type LayoutManager interface {
+	Relayout(target string, trigger LayoutTrigger) error
+}
+
 // AsPaneDecorator resolves b's pane-decoration capability. ok=false means the
 // backend leaves panes undecorated, which callers treat as skip, not failure.
 func AsPaneDecorator(b Backend) (PaneDecorator, bool) {
@@ -386,6 +410,14 @@ func AsDryRunPreviewer(b Backend) (DryRunPreviewer, bool) {
 func AsLivenessStamper(b Backend) (LivenessStamper, bool) {
 	stamper, ok := b.(LivenessStamper)
 	return stamper, ok
+}
+
+// AsLayoutManager resolves b's pane-layout capability. ok=false means the
+// backend arranges its panes on its own, so callers skip the relayout silently
+// instead of failing.
+func AsLayoutManager(b Backend) (LayoutManager, bool) {
+	manager, ok := b.(LayoutManager)
+	return manager, ok
 }
 
 // UnsupportedError reports an operation intentionally disabled by a backend.
