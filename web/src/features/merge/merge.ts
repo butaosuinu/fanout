@@ -206,6 +206,10 @@ export const MERGE_DIFF_MISMATCH = msg`表示中の差分はこの PR のもの�
  * 差分なので未コミットの変更も描くが、GitHub に入るのは commit 済みまで。 */
 export const MERGE_DIFF_UNCOMMITTED = msg`表示中の差分に未コミットの変更が含まれています。commit して push してから実行してください`;
 
+/* 差分をまだ取得できていないときの理由。表示中の patch が無いのだから、それと
+ * 突き合わせて安全だとも言えない。 */
+export const MERGE_DIFF_UNKNOWN = msg`表示中の差分を取得できていません。再取得してから実行してください`;
+
 /* 表示中の patch の base が、remote に無い commit だったときの理由。ローカルの
  * base branch が push 前の commit を持っていると、その分が patch から落ちる。 */
 export const MERGE_DIFF_LOCAL_BASE = msg`表示中の差分は未 push の base commit を基準にしています。base branch を push してから実行してください`;

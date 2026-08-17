@@ -102,6 +102,7 @@ type PRTarget struct {
 	// nothing pending, a state no "is it merged yet" check can distinguish.
 	AutoMerge bool
 	BaseRef   string
+	HeadRef   string
 	HeadSha   string
 }
 
@@ -117,7 +118,7 @@ func (r Runner) PRState(ctx context.Context, owner, repo string, number int) (_ 
 	defer errs.Wrap(&err, "read state of pull request #%d", number)
 
 	out, err := r.ghContext(ctx, "pr", "view", strconv.Itoa(number),
-		"-R", owner+"/"+repo, "--json", "state,mergedAt,baseRefName,headRefOid,autoMergeRequest")
+		"-R", owner+"/"+repo, "--json", "state,mergedAt,baseRefName,headRefName,headRefOid,autoMergeRequest")
 	if err != nil {
 		return PRTarget{}, err
 	}
@@ -125,6 +126,7 @@ func (r Runner) PRState(ctx context.Context, owner, repo string, number int) (_ 
 		State       string  `json:"state"`
 		MergedAt    *string `json:"mergedAt"`
 		BaseRefName string  `json:"baseRefName"`
+		HeadRefName string  `json:"headRefName"`
 		HeadRefOid  string  `json:"headRefOid"`
 		AutoMerge   *struct {
 			EnabledAt *string `json:"enabledAt"`
@@ -136,6 +138,7 @@ func (r Runner) PRState(ctx context.Context, owner, repo string, number int) (_ 
 	return PRTarget{
 		Merged:    strings.EqualFold(view.State, "MERGED") || view.MergedAt != nil,
 		BaseRef:   view.BaseRefName,
+		HeadRef:   view.HeadRefName,
 		HeadSha:   view.HeadRefOid,
 		AutoMerge: view.AutoMerge != nil,
 	}, nil

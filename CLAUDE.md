@@ -312,7 +312,16 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   prefers the local base branch, so an unpushed commit there drops everything
   after it out of the patch). A push that lands while you are reading, a retarget
   that never moves the head, and a worktree that lags the remote all block the
-  merge instead of quietly merging commits the displayed patch does not contain. Errors that
+  merge instead of quietly merging commits the displayed patch does not contain.
+  Two gaps in that promise are deliberate and stay documented rather than closed.
+  The base check reads the local remote-tracking ref, so a base branch that was
+  force-pushed on GitHub since the last fetch is judged against stale local
+  state; requiring the tracking ref to equal GitHub's live base would instead
+  block every merge whenever the base merely moved, which is most of the time.
+  And the worktree is only pinned by commit-and-clean across a collection, so an
+  edit made and reverted inside that window can leave the patch showing work that
+  no longer exists — that direction shows more than the merge carries, never
+  less, which is the direction the fence exists to prevent. Errors that
   provably precede the send — the rate-limit gate — stay plain retryable
   failures instead. The OID fence on the delete is not atomic — GitHub has no
   conditional ref delete — so it catches a push that already landed, not one that

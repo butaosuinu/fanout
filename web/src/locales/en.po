@@ -419,6 +419,10 @@ msgstr "The patch does not cover everything under review — it is incomplete"
 msgid "base branch と競合しています"
 msgstr "Conflicts with the base branch"
 
+#: src/features/merge/merge.ts
+msgid "表示中の差分を取得できていません。再取得してから実行してください"
+msgstr "The diff could not be loaded. Reload it before merging."
+
 #: src/app/App.tsx
 msgid "filter — 自由語 or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"
 msgstr "filter — free text or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"

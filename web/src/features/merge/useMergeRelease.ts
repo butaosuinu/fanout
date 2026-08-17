@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Snapshot } from "../../transport/types";
+import type { PRRef, Snapshot } from "../../transport/types";
 import type { MergeOutcome } from "../../transport/useMergePr";
 import { findPaneEntry } from "../sessions/pane";
 
@@ -17,9 +17,13 @@ const PENDING_BACKSTOP_MS = 120_000;
  * live fence で必ず 409 を返すので、押せるのに必ず失敗するボタンになる)。 */
 export type Pending = { key: string; prNumber: number; since: number };
 
-/* 結果不明のマージ。行キーではなく PR 番号 + repository で持つ — 同じ PR が複数行に
- * 載る場合(複数 issue を close する PR)に、別の行から再送できてしまうのを防ぐ。 */
-export type Unknown = { prNumber: number; repo: string };
+/* 決着待ちのマージ。行キーではなく PR 番号 + repository で持つ — 同じ PR が複数行に
+ * 載る場合(複数 issue を close する PR)に、別の行から再送できてしまうのを防ぐ。
+ *
+ * queued(merge queue が受理した)は armed も持つ。auto-merge の取り消しは PR を
+ * OPEN のまま残すので、merged / closed だけを解除条件にすると hold が永久に残る。
+ * 結果不明の側はこの出口を使わない — 既にマージされている可能性があるため。 */
+export type Unknown = { prNumber: number; repo: string; queued?: boolean; armed?: boolean };
 
 /* 反映されたら pending を解除する。楽観更新はしない — snapshot を書き換えると、
  * サーバ側で失敗したマージまで成功したように見せてしまう。 */
@@ -71,21 +75,38 @@ export function useUnknownRelease(
 ) {
   useEffect(() => {
     if (!snap || !unknown.length) return;
-    const live = unknown.filter((u) => !settledPR(snap, u));
+    const live = unknown.filter((u) => !holdOver(snap, u));
     if (live.length !== unknown.length) setUnknown(() => live);
   }, [snap, unknown, setUnknown]);
+}
+
+/* サーバの claimOver と同じ規則。 */
+function holdOver(snap: Snapshot, held: Unknown): boolean {
+  if (settledPR(snap, held)) return true;
+  if (!held.queued || !held.armed) return false;
+  const pr = findPR(snap, held);
+  return !!pr && !pr.autoMerge;
 }
 
 /* repository も見る: `Fixes owner/repo#N` は別 repository の PR を行に載せるし、
  * PR 番号は repository ごとに重複する。よその merged #7 でこちらの #7 の hold を
  * 解いてしまうと、結果不明のマージを撃ち直せる(サーバの prSettled と同じ規則)。 */
 function settledPR(snap: Snapshot, held: { prNumber: number; repo: string }): boolean {
+  return refsOf(snap, held).some(
+    (pr) => pr.state === "MERGED" || pr.state === "CLOSED" || !!pr.mergedAt,
+  );
+}
+
+function findPR(snap: Snapshot, held: { prNumber: number; repo: string }): PRRef | undefined {
+  return refsOf(snap, held)[0];
+}
+
+function refsOf(snap: Snapshot, held: { prNumber: number; repo: string }): PRRef[] {
   const repo = held.repo.toLowerCase();
-  const refs = (snap.sessions ?? [])
+  return (snap.sessions ?? [])
     .flatMap((s) => s.panes ?? [])
     .flatMap((p) => p.prs ?? [])
     .filter((pr) => pr.number === held.prNumber && pr.baseRepo?.toLowerCase() === repo);
-  return refs.some((pr) => pr.state === "MERGED" || pr.state === "CLOSED" || !!pr.mergedAt);
 }
 
 /* 直近の送信の追跡先。行キー(pending)と PR 番号(unknown)で粒度が違うのは、
@@ -130,7 +151,10 @@ export function useMergeTracking(snap: Snapshot | null): MergeTracking {
     /* 追加であって置き換えではない。前の送信の hold を落とすと、まだ決着して
      * いない PR のボタンが押せる状態に戻る。 */
     if (res.unknown || res.queued) {
-      setUnknown((prev) => [...prev, { prNumber: row.prNumber, repo: row.repo }]);
+      setUnknown((prev) => [
+        ...prev,
+        { prNumber: row.prNumber, repo: row.repo, queued: res.queued, armed: res.autoMerge },
+      ]);
     } else {
       setPending((prev) => [...prev, { key: row.key, prNumber: row.prNumber, since: Date.now() }]);
     }

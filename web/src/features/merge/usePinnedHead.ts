@@ -1,6 +1,7 @@
 import type { MessageDescriptor } from "@lingui/core";
 import { useCallback, useEffect, useRef } from "react";
 import {
+  MERGE_DIFF_UNKNOWN,
   MERGE_DIFF_LOCAL_BASE,
   MERGE_DIFF_MISMATCH,
   MERGE_DIFF_UNCOMMITTED,
@@ -83,6 +84,8 @@ function mismatch(
    * base も同じ理由で見る。patch は worktree の base branch との差分なので、PR が
    * 別の base へ retarget されると、head が 1 commit も動かないまま「画面に出て
    * いない差分」がマージ対象になる。head だけの pin はこれを通してしまう。 */
+  /* 未取得: 何と比較可能かを言えないので、言えるまで塞ぐ。 */
+  if (!shows.facts.known) return MERGE_DIFF_UNKNOWN;
   if (!sameSource(merge, shows)) return MERGE_DIFF_MISMATCH;
   /* 過剰: /api/diff は staged / unstaged / untracked も描く。dirty な worktree では、
    * 画面で確認した修正のうち commit 済みの分だけがマージされる。 */
@@ -105,8 +108,11 @@ const SOURCE_CHECKS: ((merge: MergeAffordance, shows: DiffSource) => boolean)[] 
    * — 名前はすべて一致したまま、画面に無い commit がマージされる。 */
   (m, s) => !s.facts.commit || !m.headSha || m.headSha === s.facts.commit,
   /* patch は worktree の base branch との差分。retarget は head を 1 commit も
-   * 動かさないので、head だけを見ていると素通りする。 */
-  (m, s) => !s.base || m.baseRef === s.base,
+   * 動かさないので、head だけを見ていると素通りする。
+   *
+   * base が記録されていない行は判定材料が無い — サーバはそこで origin/HEAD を
+   * 使うので、別 base 向けの PR でも patch は既定 branch との差分になる。 */
+  (m, s) => !!s.base && baseName(m.baseRef) === baseName(s.base),
   /* head branch は worktree のもの(issue 行には fork の closing PR が載りうる)。 */
   (m, s) => !s.branch || m.headRef === s.branch,
   (m, s) => !s.branch || m.headRepo.toLowerCase() === s.repo.toLowerCase(),
@@ -114,4 +120,14 @@ const SOURCE_CHECKS: ((merge: MergeAffordance, shows: DiffSource) => boolean)[] 
 
 function sameSource(merge: MergeAffordance, shows: DiffSource): boolean {
   return SOURCE_CHECKS.every((check) => check(merge, shows));
+}
+
+/* base branch の書き方を GitHub の branch 名に揃える。`--base-branch origin/main`
+ * は記録どおり "origin/main" のまま state に載る一方、PR の baseRef は "main" なので、
+ * そのまま比べると同じ branch が永久に不一致になる。 */
+function baseName(ref: string): string {
+  return ref
+    .replace(/^refs\/remotes\/origin\//, "")
+    .replace(/^refs\/heads\//, "")
+    .replace(/^origin\//, "");
 }

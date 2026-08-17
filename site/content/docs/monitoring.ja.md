@@ -12,7 +12,7 @@ yomi: monitoring
 
 fanout はこれを 3 つの窓で見ます。
 手元で常時眺めるなら**常駐 TUI コンソール**、automation に食わせるなら `--status` の **JSON**、チームやブラウザで共有するなら **Web ダッシュボード**です。
-`--status` は読み取り専用で `.fanout/state.json`、選択中の runtime、GitHub を読むだけです。TUI は選択中の runtime で検証済みの行に merge、close、cleanup も実行でき(`--merge` / `--close` / `--cleanup` と同じ処理です)、Web ダッシュボードは読み取りが基本で、PR のマージだけ実行できます。
+`--status` は読み取り専用で `.fanout/state.json`、選択中の runtime、GitHub を読むだけです。TUI は選択中の runtime で検証済みの行に merge、close、cleanup も実行でき(`--merge` / `--close` / `--cleanup` と同じ処理です)、Web ダッシュボードは読み取りが基本で、PR のマージと、そのリモートブランチの削除だけ実行できます。
 
 ## ペイン枠線ラベル
 
@@ -182,7 +182,7 @@ fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 ```
 
 サーバは `127.0.0.1` にのみバインドし、起動毎にランダムトークンを生成して URL に埋め込みます(単一ユーザ端末では `--no-token` で外せます)。
-読み取り系の endpoint はすべて GET 専用で、例外は後述のマージボタンだけです。
+読み取り系の endpoint はすべて GET 専用です。例外は後述の 2 つ — PR のマージと、マージ後のリモートブランチ削除だけです。
 埋め込みの SPA は、フィルタと詳細ドロワー、直近出力の live peek でライブの Session 一覧を見せます。
 Prompt Session の記録済み branch に PR があると、ダッシュボードに PR リンクと CI 状態も表示します。
 

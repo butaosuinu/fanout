@@ -287,6 +287,7 @@ type fakePort struct {
 	alwaysMerged bool
 	// openHeads is what OpenPRNumbersForHead answers: the OPEN pull requests
 	// sharing the head branch.
+	liveHeadRef  string
 	openHeads    []int
 	openHeadsErr error
 	mergedRead   int
@@ -310,6 +311,7 @@ func (f *fakePort) PRState(_ context.Context, _, _ string, _ int) (ghissue.PRTar
 	return ghissue.PRTarget{
 		Merged:  merged,
 		BaseRef: cmpOr(f.liveBase, "main"),
+		HeadRef: cmpOr(f.liveHeadRef, "fanout/foo"),
 		HeadSha: cmpOr(f.liveHead, "abc123"),
 	}, nil
 }
@@ -543,6 +545,19 @@ func TestServiceDeleteBranch(t *testing.T) {
 		}
 		if len(port.deleteCalls) != 1 {
 			t.Fatalf("delete calls = %#v, want 1", port.deleteCalls)
+		}
+	})
+
+	/* rename は commit を動かさないので SHA の照合を通る。古い名前を消しにいくと
+	 * 404 が「既に無い」と読まれ、消えていない branch を消したと報告してしまう。 */
+	t.Run("refuses a head branch that was renamed", func(t *testing.T) {
+		port := &fakePort{alwaysMerged: true, liveHeadRef: "fanout/renamed"}
+		err := Service{GH: port}.DeleteBranch(context.Background(), req)
+		if !errors.Is(err, ErrStaleHead) {
+			t.Fatalf("DeleteBranch() error = %v, want ErrStaleHead", err)
+		}
+		if len(port.deleteCalls) != 0 {
+			t.Fatalf("delete calls = %#v, want none", port.deleteCalls)
 		}
 	})
 

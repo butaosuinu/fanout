@@ -6,13 +6,16 @@ import type { DiffResponse } from "../../transport/types";
  * snapshot 側の値(2 秒周期)ではなくこちらを使うのが要点 — 画面に出ている
  * patch そのものの性質でなければ、照合しても「今の worktree」の話にしかならない。 */
 export interface DiffFacts {
+  /* 応答が手元にあるか。初回ロード中・再取得中・取得失敗では false で、その間は
+   * patch について何も言えない。 */
+  known: boolean;
   commit: string;
   dirty: boolean;
   basePushed: boolean;
 }
 
 /* 取得できていない間は、いちばん厳しい側に倒す。 */
-const NO_DIFF: DiffFacts = { commit: "", dirty: true, basePushed: false };
+const NO_DIFF: DiffFacts = { known: false, commit: "", dirty: true, basePushed: false };
 
 /* diff オーバーレイが親へ返すもの。
  *
@@ -38,6 +41,7 @@ export function useDiffReport(key: string | null): DiffReport {
 
 function factsOf(diff: DiffResponse): DiffFacts {
   return {
+    known: true,
     commit: diff.headCommit ?? "",
     /* 欠落は「不明」。塞ぐ側に倒す — 旧いサーバの応答で照合が緩むと、
      * 新しい遮断が黙って無効になる。 */

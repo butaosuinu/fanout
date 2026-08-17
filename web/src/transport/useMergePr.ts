@@ -18,7 +18,7 @@ export type MergeState =
 
 /* 送信 1 回の結果。abort は "aborted"(unmount 済みなので何も表示しない)。 */
 type PostOutcome =
-  | { kind: "ok"; queued: boolean; unknown: boolean }
+  | { kind: "ok"; queued: boolean; unknown: boolean; autoMerge: boolean }
   | { kind: "failed"; message: MessageDescriptor }
   | { kind: "aborted" };
 
@@ -30,6 +30,9 @@ export interface MergeOutcome {
   /* merge コマンドは通ったが結果を確認できなかった。再送すると不明な状態に
    * 二度目のマージを撃つことになるので、snapshot で決着するまで塞ぐ。 */
   unknown: boolean;
+  /* GitHub が auto-merge を armed にしていた。queued の hold は、その取り消し
+   * (PR は OPEN のまま)でも解除する — サーバの claim と同じ規則。 */
+  autoMerge: boolean;
 }
 
 async function postMerge(
@@ -44,8 +47,17 @@ async function postMerge(
       signal,
     });
     if (!res.ok) return { kind: "failed", message: await mergeErrorMessage(res) };
-    const body = (await res.json()) as { queued?: unknown; unknown?: unknown };
-    return { kind: "ok", queued: body.queued === true, unknown: body.unknown === true };
+    const body = (await res.json()) as {
+      queued?: unknown;
+      unknown?: unknown;
+      autoMerge?: unknown;
+    };
+    return {
+      kind: "ok",
+      queued: body.queued === true,
+      unknown: body.unknown === true,
+      autoMerge: body.autoMerge === true,
+    };
   } catch (err) {
     if (signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
       return { kind: "aborted" };
@@ -54,7 +66,7 @@ async function postMerge(
   }
 }
 
-const NOT_SENT: MergeOutcome = { ok: false, queued: false, unknown: false };
+const NOT_SENT: MergeOutcome = { ok: false, queued: false, unknown: false, autoMerge: false };
 
 function applyOutcome(
   outcome: Extract<PostOutcome, { kind: "ok" | "failed" }>,
@@ -65,7 +77,12 @@ function applyOutcome(
     return NOT_SENT;
   }
   setState({ phase: "idle" });
-  return { ok: true, queued: outcome.queued, unknown: outcome.unknown };
+  return {
+    ok: true,
+    queued: outcome.queued,
+    unknown: outcome.unknown,
+    autoMerge: outcome.autoMerge,
+  };
 }
 
 /* ダッシュボード唯一の mutation。effect 駆動の useDiff と違いユーザー起動なので、

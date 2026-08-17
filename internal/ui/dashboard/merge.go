@@ -57,7 +57,12 @@ type mergeResponse struct {
 	Queued bool `json:"queued"`
 	// Unknown is the merge command succeeding without a confirmable outcome. The
 	// client must block a resend until a snapshot settles it.
-	Unknown       bool `json:"unknown"`
+	Unknown bool `json:"unknown"`
+	// AutoMerge says GitHub had an auto-merge armed when the outcome was read.
+	// The client holds the button on a queued merge until the PR settles, and
+	// this is what lets it also let go when the auto-merge is canceled instead —
+	// the same release the server applies to its own claim.
+	AutoMerge     bool `json:"autoMerge"`
 	RefreshQueued bool `json:"refreshQueued"`
 }
 
@@ -181,6 +186,7 @@ func writeMergeResponse(
 		Merged:        res.Merged,
 		Queued:        res.Queued,
 		Unknown:       res.Unknown,
+		AutoMerge:     res.AutoMerge,
 		RefreshQueued: refreshQueued,
 	})
 }

@@ -419,6 +419,10 @@ msgstr "レビュー対象が patch に揃っていません — patch は不完
 msgid "base branch と競合しています"
 msgstr "base branch と競合しています"
 
+#: src/features/merge/merge.ts
+msgid "表示中の差分を取得できていません。再取得してから実行してください"
+msgstr "表示中の差分を取得できていません。再取得してから実行してください"
+
 #: src/app/App.tsx
 msgid "filter — 自由語 or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"
 msgstr "filter — 自由語 or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"

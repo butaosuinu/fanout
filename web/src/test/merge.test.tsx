@@ -405,6 +405,87 @@ describe("表示中の差分との整合", () => {
     expect(calls).toHaveLength(0);
   });
 
+  /* patch がまだ無い間(初回ロード・再取得・取得失敗)は、その patch について
+   * 何も言えない。既定の facts はいちばん厳しい側に倒してある。 */
+  it("差分を取得できていない間はツールバーから撃てない", async () => {
+    const calls: MergeCall[] = [];
+    server.use(mergeHandler(calls));
+    server.use(http.get("/api/diff", () => HttpResponse.json({ error: "boom" }, { status: 500 })));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(snapshotWithPR());
+
+    const drawer = await openDrawer(user);
+    await user.click(within(drawer).getByRole("button", { name: "変更を表示" }));
+    const overlay = await screen.findByRole("dialog");
+    const blocked = await within(overlay).findByRole("button", {
+      name: /差分を取得できていません/,
+    });
+    expect(blocked).toHaveAttribute("aria-disabled", "true");
+    await user.click(blocked);
+    expect(calls).toHaveLength(0);
+  });
+
+  /* `--base-branch origin/main` は記録どおり "origin/main" のまま state に載る一方、
+   * PR の baseRef は "main"。書き方の違いで正当な diff を塞いではいけない。 */
+  it("origin/ 付きで記録された base は PR の base と同じものとして扱う", async () => {
+    server.use(mergeHandler([]));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            branchName: "fanout/fix-login",
+            baseBranch: "origin/main",
+            prs: [makePr({ headRef: "fanout/fix-login" })],
+          }),
+        ]),
+      ]),
+    );
+
+    const overlay = await openDiff(user);
+    expect(within(overlay).getByRole("button", { name: "#701 をマージ" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  /* base の記録が無い行では、サーバは origin/HEAD との差分を返す。別 base 向けの
+   * PR を、既定 branch 基準の patch で承認させない。 */
+  it("base が記録されていない行はツールバーから撃てない", async () => {
+    const calls: MergeCall[] = [];
+    server.use(mergeHandler(calls));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            branchName: "fanout/fix-login",
+            baseBranch: "",
+            prs: [makePr({ headRef: "fanout/fix-login" })],
+          }),
+        ]),
+      ]),
+    );
+
+    const overlay = await openDiff(user);
+    const blocked = await within(overlay).findByRole("button", {
+      name: /この PR のものではありません/,
+    });
+    expect(blocked).toHaveAttribute("aria-disabled", "true");
+    await user.click(blocked);
+    expect(calls).toHaveLength(0);
+  });
+
   /* MergeBase はローカル base branch を先に選ぶので、未 push の commit があると
    * その分が patch から落ちる一方、マージでは base に入る。 */
   it("未 push の base を基準にした差分を見ている間はツールバーから撃てない", async () => {
@@ -695,6 +776,42 @@ describe("複数 PR の同時待機", () => {
     expect(within(back).getByRole("button", { name: /反映を待っています/ })).toHaveAttribute(
       "aria-disabled",
       "true",
+    );
+  });
+});
+
+/* サーバは auto-merge の取り消しで claim を解除できる。クライアントが塞いだままだと
+ * その経路に到達できず、リロードするまでボタンが死ぬ。 */
+describe("queue の取り消し", () => {
+  it("auto-merge が消えたら queued の hold を解除する", async () => {
+    server.use(
+      http.post(MERGE_PATH, () =>
+        HttpResponse.json({
+          prNumber: 701,
+          method: "squash",
+          merged: false,
+          queued: true,
+          autoMerge: true,
+          refreshQueued: true,
+        }),
+      ),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(snapshotWithPR({ autoMerge: true }));
+
+    const drawer = await openDrawer(user);
+    await user.click(within(drawer).getByRole("button", { name: "#701 をマージ" }));
+    await waitFor(() =>
+      expect(
+        within(drawer).getByRole("button", { name: /反映を待っています/ }),
+      ).toBeInTheDocument(),
+    );
+
+    /* 取り消し: PR は OPEN のまま auto-merge だけ消える。 */
+    streamSnapshot(snapshotWithPR({ autoMerge: false }));
+    await waitFor(() =>
+      expect(within(drawer).getByRole("button", { name: "#701 をマージ" })).toBeInTheDocument(),
     );
   });
 });

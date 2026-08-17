@@ -148,6 +148,9 @@ export interface PRRef {
   /* PR のマージ先 branch。head を動かさずに retarget できるので、head SHA だけでは
    * 「どこへマージされるか」を固定できない。描画時の値を送り返して照合する。 */
   baseRef?: string;
+  /* GitHub が auto-merge を armed にしている。queue 受理後の取り消しは PR を
+   * OPEN のまま残すので、これが消えたことが取り消しの唯一の合図になる。 */
+  autoMerge?: boolean;
 }
 
 export interface BlockerStatus {

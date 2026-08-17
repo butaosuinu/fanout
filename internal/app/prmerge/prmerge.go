@@ -341,14 +341,8 @@ func (s Service) DeleteBranch(ctx context.Context, req DeleteRequest) error {
 	if !live.Merged {
 		return ErrNotMerged
 	}
-	// The expected OID comes from GitHub's own view of the merged pull request,
-	// not from the request body. Fencing on a client-named SHA would only prove
-	// the client can name the ref's current tip, so a commit pushed onto the
-	// branch after the merge would be deleted along with it. The body is kept as
-	// an echo: it has to agree with what the row rendered, or the click was aimed
-	// at a pull request that has since moved.
-	if req.HeadSha != live.HeadSha {
-		return ErrStaleHead
+	if err = req.stillAddressed(live); err != nil {
+		return err
 	}
 	// Two pull requests can share a head branch when they target different bases.
 	// Merging one does not finish the branch: deleting it here would leave the
@@ -363,4 +357,27 @@ func (s Service) DeleteBranch(ctx context.Context, req DeleteRequest) error {
 		}
 	}
 	return s.GH.DeleteRemoteBranch(ctx, req.Owner, req.Repo, req.Branch, live.HeadSha)
+}
+
+// stillAddressed checks that the merged pull request GitHub reports is the one
+// the click was aimed at.
+//
+// The head commit is compared against GitHub's own view, never taken from the
+// request body: fencing on a client-named SHA would only prove the client can
+// name the ref's current tip, so a commit pushed onto the branch after the merge
+// would be deleted along with it. The body is kept as an echo — it has to agree
+// with what the row rendered.
+//
+// The branch name is checked separately because a rename moves the ref without
+// moving the commit, so the SHA says nothing about it. Deleting the recorded
+// name would then 404 — which this package reads as "already gone" — and report
+// a cleanup that left the renamed branch standing.
+func (req DeleteRequest) stillAddressed(live ghissue.PRTarget) error {
+	if req.HeadSha != live.HeadSha {
+		return ErrStaleHead
+	}
+	if live.HeadRef != "" && live.HeadRef != req.Branch {
+		return fmt.Errorf("%w: head branch is now %q", ErrStaleHead, live.HeadRef)
+	}
+	return nil
 }
