@@ -7,6 +7,7 @@ import type { MergeMethod } from "../settings/useSettings";
 import { rowKey, rowQuery } from "../sessions/pane";
 import { useMergeTracking, type MergeTracking, type Notice, type Row } from "./useMergeRelease";
 import { usePinnedHead, type DiffSource } from "./usePinnedHead";
+import type { DiffFacts } from "../diff/useDiffReport";
 import { mergeBlockReason, mergeTargetPr, mergeWarnings } from "./merge";
 
 /* 1 行ぶんのマージボタンの状態。Drawer と diff ツールバーが同じものを受け取る。 */
@@ -39,7 +40,7 @@ export function useMergeFlow(
   token: string,
   /* 開いている diff。対象行のマージは、開いた時点の head に固定し、diff を
    * 取った worktree の commit と PR head の一致も要求する。 */
-  diff: { key: string | null; head: string },
+  diff: { key: string | null; facts: DiffFacts },
 ): { affordanceFor: (parent: string, pane: PaneView) => MergeAffordance | null } {
   const { state, submit, busy } = useMergePr(token);
   /* 送信結果の追跡(どの行が反映待ちか・どの PR が結果不明か)は 1 か所に持つ。 */
@@ -79,10 +80,10 @@ export function useMergeFlow(
           ...resultsFor(key, track, state),
           onMerge: run({ key, query, pr, repo }),
         }),
-        diffSource(pane, repo, diff.head),
+        diffSource(pane, repo, diff.facts),
       );
     },
-    [snap, track, run, state, token, pinDiffHead, diff.head],
+    [snap, track, run, state, token, pinDiffHead, diff.facts],
   );
 
   return { affordanceFor };
@@ -91,9 +92,10 @@ export function useMergeFlow(
 /* この行のボタンを塞ぐか。反映待ちは行単位、結果不明は PR 単位 — 同じ PR が
  * 複数行に載る場合に、別の行から不明なまま撃ち直せないようにする。 */
 function heldBack(row: Row, track: MergeTracking): boolean {
-  if (track.pending?.key === row.key) return true;
-  const held = track.unknown;
-  return held?.prNumber === row.prNumber && held.repo.toLowerCase() === row.repo.toLowerCase();
+  if (track.pending.some((p) => p.key === row.key)) return true;
+  return track.unknown.some(
+    (u) => u.prNumber === row.prNumber && u.repo.toLowerCase() === row.repo.toLowerCase(),
+  );
 }
 
 /* branch-backed 行だけ head branch まで所有権を要求する(サーバの VerifyRowOwns
@@ -131,14 +133,8 @@ function prIdentity(pr: PRRef) {
 }
 
 /* diff ビュアーがこの行で読んでいる worktree。 */
-function diffSource(pane: PaneView, repo: string, commit: string): DiffSource {
-  return {
-    repo,
-    commit,
-    branch: pane.branchName ?? "",
-    base: pane.baseBranch ?? "",
-    dirty: pane.dirtyState === "dirty",
-  };
+function diffSource(pane: PaneView, repo: string, facts: DiffFacts): DiffSource {
+  return { repo, facts, branch: pane.branchName ?? "", base: pane.baseBranch ?? "" };
 }
 
 function buildAffordance(input: {

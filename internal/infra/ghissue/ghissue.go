@@ -71,6 +71,10 @@ type PRRef struct {
 	// without its head moving, so the head SHA alone does not pin where the merge
 	// lands — the client echoes this back and the server compares.
 	BaseRef string `json:"baseRef,omitempty"`
+	// AutoMerge says GitHub has an auto-merge armed on this pull request. A
+	// dashboard merge onto a queue-required base arms one, so its disappearance
+	// while the PR is still open is how a canceled enqueue becomes visible.
+	AutoMerge bool `json:"autoMerge,omitempty"`
 	// BaseRepo is the repository the pull request targets, as owner/name. A PR
 	// can close an issue in another repository ("Fixes owner/repo#N"), so a row's
 	// PR list is not proof that the PR lives here — and `gh pr merge <N> -R <this
@@ -610,6 +614,7 @@ const prRefNodeFields = `
   headRepository { nameWithOwner }
   baseRepository { nameWithOwner }
   baseRefName
+  autoMergeRequest { enabledAt }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 `
 
@@ -912,8 +917,11 @@ type prRefGraphQL struct {
 	BaseRepository struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"baseRepository"`
-	BaseRefName string `json:"baseRefName"`
-	Commits     struct {
+	BaseRefName      string `json:"baseRefName"`
+	AutoMergeRequest *struct {
+		EnabledAt *string `json:"enabledAt"`
+	} `json:"autoMergeRequest"`
+	Commits struct {
 		Nodes []struct {
 			Commit struct {
 				StatusCheckRollup *struct {
@@ -948,6 +956,7 @@ func (pr prRefGraphQL) ref() PRRef {
 		HeadRepo:       pr.HeadRepository.NameWithOwner,
 		BaseRepo:       pr.BaseRepository.NameWithOwner,
 		BaseRef:        pr.BaseRefName,
+		AutoMerge:      pr.AutoMergeRequest != nil,
 	}
 }
 

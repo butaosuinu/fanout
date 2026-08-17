@@ -277,7 +277,7 @@ func TestPRStateAsksGitHubRatherThanTrustingTheExitCode(t *testing.T) {
 				t.Fatalf("PRState() = %#v, want %#v", got, tt.want)
 			}
 			assertFakeGHArgs(t, argsPath, []string{
-				"pr", "view", "7", "-R", "o/r", "--json", "state,mergedAt,baseRefName,headRefOid",
+				"pr", "view", "7", "-R", "o/r", "--json", "state,mergedAt,baseRefName,headRefOid,autoMergeRequest",
 			})
 		})
 	}

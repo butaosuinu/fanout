@@ -1,6 +1,12 @@
 import type { MessageDescriptor } from "@lingui/core";
 import { useCallback, useEffect, useRef } from "react";
-import { MERGE_DIFF_MISMATCH, MERGE_DIFF_UNCOMMITTED, MERGE_STALE_DIFF } from "./merge";
+import {
+  MERGE_DIFF_LOCAL_BASE,
+  MERGE_DIFF_MISMATCH,
+  MERGE_DIFF_UNCOMMITTED,
+  MERGE_STALE_DIFF,
+} from "./merge";
+import type { DiffFacts } from "../diff/useDiffReport";
 import type { MergeAffordance } from "./useMergeFlow";
 
 /* diff ビュアーが開いた時点の PR head を固定し、ズレている間はその行のマージを
@@ -57,10 +63,8 @@ export type DiffSource = {
   repo: string;
   branch: string;
   base: string;
-  commit: string;
-  /* worktree に未コミットの変更がある。patch はそれも描くが、マージされるのは
-   * commit 済みまでなので、画面と実際にマージされるものが食い違う。 */
-  dirty: boolean;
+  /* diff 応答が言う、その patch の素性(commit / dirty / basePushed)。 */
+  facts: DiffFacts;
 };
 
 /* diff を開いた時点の対象 PR。 */
@@ -82,7 +86,10 @@ function mismatch(
   if (!sameSource(merge, shows)) return MERGE_DIFF_MISMATCH;
   /* 過剰: /api/diff は staged / unstaged / untracked も描く。dirty な worktree では、
    * 画面で確認した修正のうち commit 済みの分だけがマージされる。 */
-  if (shows.dirty) return MERGE_DIFF_UNCOMMITTED;
+  if (shows.facts.dirty) return MERGE_DIFF_UNCOMMITTED;
+  /* 不足: patch の base が remote に無い commit だと、その commit までの差分が
+   * patch から落ちる一方、マージでは base に入る。 */
+  if (!shows.facts.basePushed) return MERGE_DIFF_LOCAL_BASE;
   /* すり替え: 行の対象 PR そのものが入れ替わった(新しい PR が open になった等)。 */
   if (pin.prNumber !== merge.prNumber) return MERGE_DIFF_MISMATCH;
   /* 追い越し: 読んでいる間に push された。 */
@@ -96,7 +103,7 @@ const SOURCE_CHECKS: ((merge: MergeAffordance, shows: DiffSource) => boolean)[] 
   /* patch を取ったローカル commit と PR head。branch 名の照合では、別の checkout
    * から PR branch へ push されてローカル worktree が遅れている場合を捕まえられない
    * — 名前はすべて一致したまま、画面に無い commit がマージされる。 */
-  (m, s) => !s.commit || !m.headSha || m.headSha === s.commit,
+  (m, s) => !s.facts.commit || !m.headSha || m.headSha === s.facts.commit,
   /* patch は worktree の base branch との差分。retarget は head を 1 commit も
    * 動かさないので、head だけを見ていると素通りする。 */
   (m, s) => !s.base || m.baseRef === s.base,

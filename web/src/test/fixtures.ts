@@ -132,6 +132,8 @@ export function makeDiffResponse(over: Partial<DiffResponse> = {}): DiffResponse
     branchName: "fanout/fix-thing",
     baseBranch: "main",
     mergeBase: "0123456789abcdef0123456789abcdef01234567",
+    dirty: false,
+    basePushed: true,
     capturedAt: "2026-07-29T01:23:45Z",
     files: [makeDiffFile()],
     patch: "",

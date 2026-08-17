@@ -29,6 +29,10 @@ msgstr "wave で絞り込み"
 msgid "マージ"
 msgstr "マージ"
 
+#: src/features/merge/merge.ts
+msgid "表示中の差分は未 push の base commit を基準にしています。base branch を push してから実行してください"
+msgstr "表示中の差分は未 push の base commit を基準にしています。base branch を push してから実行してください"
+
 #: src/features/diff/DiffBody.tsx
 msgid "merge-base からの変更はありません"
 msgstr "merge-base からの変更はありません"

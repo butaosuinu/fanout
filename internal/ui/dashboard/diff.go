@@ -37,11 +37,15 @@ type diffResponse struct {
 	BranchName string `json:"branchName"`
 	BaseBranch string `json:"baseBranch"`
 	MergeBase  string `json:"mergeBase"`
-	// HeadCommit is the commit this worktree was on. The client fences the merge
-	// button on it: a branch name is not proof that the local checkout holds what
-	// the pull request holds, so without it a patch read from a lagging worktree
-	// would pass every name-based check.
+	// HeadCommit is the commit this worktree was on, Dirty says the patch also
+	// carries work no commit holds, and BasePushed says its base is a commit the
+	// remote has. The client fences the merge button on all three: a branch name
+	// is not proof that the local checkout holds what the pull request holds, so
+	// without them a patch read from a lagging, edited, or locally-rebased
+	// worktree would pass every name-based check.
 	HeadCommit string          `json:"headCommit"`
+	Dirty      bool            `json:"dirty"`
+	BasePushed bool            `json:"basePushed"`
 	CapturedAt string          `json:"capturedAt"`
 	Files      []diffFileEntry `json:"files"`
 	Patch      string          `json:"patch"`
@@ -270,30 +274,52 @@ func collectWorktreePatch(
 	}
 }
 
-// worktreePatchWithHead reads the patch and the commit it was taken from. The
-// commit is what the client fences its merge button on: the patch is a diff of
-// this checkout, and a branch name is not proof that this checkout holds what
-// the pull request holds.
+// worktreePatchWithHead reads the patch together with everything a reader needs
+// to say what the patch is comparable to: the commit it was taken from, whether
+// it includes uncommitted work, and whether its base is a commit the remote has.
+// The client fences its merge button on all three — a branch name alone is not
+// proof that this checkout holds what the pull request holds.
 func worktreePatchWithHead(r gitstat.Runner, path, baseRef string) (gitstat.Patch, error) {
 	return stableWorktreePatch(
-		func() (string, error) { return r.WorktreeHead(path) },
+		func() (worktreeMark, error) { return readWorktreeMark(r, path) },
 		func() (gitstat.Patch, error) { return r.WorktreePatch(path, baseRef) },
+		func(p gitstat.Patch) (bool, error) { return r.BaseIsPushed(path, baseRef, p.MergeBase) },
 	)
 }
 
-// stableWorktreePatch collects a patch between two reads of the worktree head
+// worktreeMark is the pair that has to hold still across a collection: the
+// commit the patch is against, and whether uncommitted work is mixed into it.
+type worktreeMark struct {
+	head  string
+	dirty bool
+}
+
+func readWorktreeMark(r gitstat.Runner, path string) (worktreeMark, error) {
+	head, err := r.WorktreeHead(path)
+	if err != nil {
+		return worktreeMark{}, err
+	}
+	dirty, err := r.WorktreeDirty(path)
+	if err != nil {
+		return worktreeMark{}, err
+	}
+	return worktreeMark{head: head, dirty: dirty}, nil
+}
+
+// stableWorktreePatch collects a patch between two reads of the worktree mark
 // and refuses if it moved.
 //
-// Collecting a large diff is not instant. An agent committing halfway through
-// would otherwise produce a patch stitched from two states while the response
-// names only the later commit — and that commit is what the merge button
-// compares against, so the mismatch it exists to catch would pass. This is the
-// "a push landed while you were reading" case the button promises to refuse.
+// Collecting a large diff is not instant. An agent committing or editing halfway
+// through would otherwise produce a patch stitched from two states while the
+// response describes only the later one — and that description is what the merge
+// button compares against, so the mismatch it exists to catch would pass. This is
+// the "a push landed while you were reading" case the button promises to refuse.
 func stableWorktreePatch(
-	head func() (string, error),
+	mark func() (worktreeMark, error),
 	collect func() (gitstat.Patch, error),
+	basePushed func(gitstat.Patch) (bool, error),
 ) (gitstat.Patch, error) {
-	before, err := head()
+	before, err := mark()
 	if err != nil {
 		return gitstat.Patch{}, err
 	}
@@ -301,16 +327,28 @@ func stableWorktreePatch(
 	if err != nil {
 		return patch, err
 	}
-	after, err := head()
+	after, err := mark()
 	if err != nil {
 		return patch, err
 	}
 	if before != after {
 		return gitstat.Patch{}, fmt.Errorf(
-			"worktree moved from %s to %s while the diff was being read", before, after)
+			"the worktree changed while the diff was being read (%s%s -> %s%s)",
+			before.head, dirtySuffix(before.dirty), after.head, dirtySuffix(after.dirty))
 	}
-	patch.Head = after
+	pushed, err := basePushed(patch)
+	if err != nil {
+		return gitstat.Patch{}, err
+	}
+	patch.Head, patch.Dirty, patch.BasePushed = after.head, after.dirty, pushed
 	return patch, nil
+}
+
+func dirtySuffix(dirty bool) string {
+	if dirty {
+		return " (dirty)"
+	}
+	return ""
 }
 
 func marshalDiffResponse(
@@ -328,6 +366,8 @@ func marshalDiffResponse(
 		BaseBranch: pv.BaseBranch,
 		MergeBase:  patch.MergeBase,
 		HeadCommit: patch.Head,
+		Dirty:      patch.Dirty,
+		BasePushed: patch.BasePushed,
 		CapturedAt: capturedAt,
 		Files:      make([]diffFileEntry, len(patch.Files)),
 	}

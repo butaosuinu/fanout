@@ -10,40 +10,52 @@ import { findPaneEntry } from "../sessions/pane";
 const PENDING_BACKSTOP_MS = 120_000;
 
 /* 送信した行・PR・時刻。PR 番号まで持つのは、同じ行に複数 PR があるとき「今
- * マージしたやつ」が反映されたかだけを見るため。 */
-export type Pending = { key: string; prNumber: number; since: number } | null;
+ * マージしたやつ」が反映されたかだけを見るため。
+ *
+ * 単数ではなく集合で持つ: PR を続けて操作すると、後の送信が前の hold を上書きし、
+ * まだ決着していない PR のボタンが押せる状態に戻ってしまう(サーバは claim と
+ * live fence で必ず 409 を返すので、押せるのに必ず失敗するボタンになる)。 */
+export type Pending = { key: string; prNumber: number; since: number };
 
-/* 結果不明のマージ。行キーではなく PR 番号で持つ — 同じ PR が複数行に載る場合
- * (複数 issue を close する PR)に、別の行から再送できてしまうのを防ぐ。 */
-export type Unknown = { prNumber: number; repo: string } | null;
+/* 結果不明のマージ。行キーではなく PR 番号 + repository で持つ — 同じ PR が複数行に
+ * 載る場合(複数 issue を close する PR)に、別の行から再送できてしまうのを防ぐ。 */
+export type Unknown = { prNumber: number; repo: string };
 
 /* 反映されたら pending を解除する。楽観更新はしない — snapshot を書き換えると、
  * サーバ側で失敗したマージまで成功したように見せてしまう。 */
 export function usePendingRelease(
   snap: Snapshot | null,
-  pending: Pending,
-  setPending: (p: Pending) => void,
+  pending: Pending[],
+  setPending: (next: (prev: Pending[]) => Pending[]) => void,
 ) {
   useEffect(() => {
-    if (!snap || !pending) return;
-    if (pendingResolved(snap, pending)) setPending(null);
+    if (!snap || !pending.length) return;
+    const live = pending.filter((p) => !pendingResolved(snap, p));
+    if (live.length !== pending.length) setPending(() => live);
   }, [snap, pending, setPending]);
 
   /* backstop は実時間で切る。上の effect は snapshot が変わったときにしか走らず、
    * SSE は内容が変わらない限り配信しないので、merge 後の GitHub refresh が失敗して
    * 内容が動かないと 120 秒を過ぎても再評価されず、ボタンが永久に「反映待ち」で
    * 固まる。 */
+  const oldest = pending.length ? Math.min(...pending.map((p) => p.since)) : 0;
   useEffect(() => {
-    if (!pending) return;
-    const left = Math.max(0, pending.since + PENDING_BACKSTOP_MS - Date.now());
-    const timer = setTimeout(() => setPending(null), left);
+    if (!oldest) return;
+    const left = Math.max(0, oldest + PENDING_BACKSTOP_MS - Date.now());
+    const timer = setTimeout(() => setPending(dropExpired), left);
     return () => clearTimeout(timer);
-  }, [pending, setPending]);
+  }, [oldest, setPending]);
+}
+
+/* backstop を過ぎた反映待ちを落とす。 */
+function dropExpired(pending: Pending[]): Pending[] {
+  const cutoff = Date.now() - PENDING_BACKSTOP_MS;
+  return pending.filter((p) => p.since > cutoff);
 }
 
 /* 見るのは「今マージした PR 番号」だけ。行の primary PR を見ると、同じ行に別の
  * open PR が残っている間ずっと解除されない。行ごと消えた場合も解除する。 */
-function pendingResolved(snap: Snapshot, pending: NonNullable<Pending>): boolean {
+function pendingResolved(snap: Snapshot, pending: Pending): boolean {
   const entry = findPaneEntry(snap, pending.key);
   if (!entry) return true;
   const pr = entry.pane.prs?.find((p) => p.number === pending.prNumber);
@@ -54,12 +66,13 @@ function pendingResolved(snap: Snapshot, pending: NonNullable<Pending>): boolean
  * まま撃ち直させないことが目的なので、時間切れで再送を許すと意味がなくなる。 */
 export function useUnknownRelease(
   snap: Snapshot | null,
-  unknown: Unknown,
-  setUnknown: (u: Unknown) => void,
+  unknown: Unknown[],
+  setUnknown: (next: (prev: Unknown[]) => Unknown[]) => void,
 ) {
   useEffect(() => {
-    if (!snap || !unknown) return;
-    if (settledPR(snap, unknown)) setUnknown(null);
+    if (!snap || !unknown.length) return;
+    const live = unknown.filter((u) => !settledPR(snap, u));
+    if (live.length !== unknown.length) setUnknown(() => live);
   }, [snap, unknown, setUnknown]);
 }
 
@@ -86,8 +99,8 @@ export type Row = { key: string; prNumber: number; repo: string };
 
 export interface MergeTracking {
   lastKey: string | null;
-  pending: Pending;
-  unknown: Unknown;
+  pending: Pending[];
+  unknown: Unknown[];
   notice: Notice;
   /* 送信開始。結果の帰属先をこの行へ移す。 */
   begin: (key: string) => void;
@@ -101,8 +114,8 @@ export interface MergeTracking {
  * その PR が merged か closed になったとき。 */
 export function useMergeTracking(snap: Snapshot | null): MergeTracking {
   const [lastKey, setLastKey] = useState<string | null>(null);
-  const [pending, setPending] = useState<Pending>(null);
-  const [unknown, setUnknown] = useState<Unknown>(null);
+  const [pending, setPending] = useState<Pending[]>([]);
+  const [unknown, setUnknown] = useState<Unknown[]>([]);
   const [notice, setNotice] = useState<Notice>(null);
 
   usePendingRelease(snap, pending, setPending);
@@ -114,8 +127,13 @@ export function useMergeTracking(snap: Snapshot | null): MergeTracking {
   }, []);
 
   const apply = useCallback((row: Row, res: MergeOutcome) => {
-    if (res.unknown || res.queued) setUnknown({ prNumber: row.prNumber, repo: row.repo });
-    else setPending({ ...row, since: Date.now() });
+    /* 追加であって置き換えではない。前の送信の hold を落とすと、まだ決着して
+     * いない PR のボタンが押せる状態に戻る。 */
+    if (res.unknown || res.queued) {
+      setUnknown((prev) => [...prev, { prNumber: row.prNumber, repo: row.repo }]);
+    } else {
+      setPending((prev) => [...prev, { key: row.key, prNumber: row.prNumber, since: Date.now() }]);
+    }
     setNotice(noticeFor(row.key, res));
   }, []);
 

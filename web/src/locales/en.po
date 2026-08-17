@@ -29,6 +29,10 @@ msgstr "Filter by wave"
 msgid "マージ"
 msgstr "Merge"
 
+#: src/features/merge/merge.ts
+msgid "表示中の差分は未 push の base commit を基準にしています。base branch を push してから実行してください"
+msgstr "The diff shown is measured against an unpushed base commit. Push the base branch first."
+
 #: src/features/diff/DiffBody.tsx
 msgid "merge-base からの変更はありません"
 msgstr "No changes since the merge-base"

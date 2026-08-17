@@ -95,9 +95,14 @@ func (req MergePRRequest) validate() error {
 // is up to one poll stale, and a pull request can be retargeted or pushed to in
 // that window, so these come straight from GitHub.
 type PRTarget struct {
-	Merged  bool
-	BaseRef string
-	HeadSha string
+	Merged bool
+	// AutoMerge says an auto-merge is armed. `gh pr merge` arms one when the base
+	// requires a queue and the checks are not finished, and a user can cancel it
+	// with `gh pr merge --disable-auto` — which leaves the pull request open with
+	// nothing pending, a state no "is it merged yet" check can distinguish.
+	AutoMerge bool
+	BaseRef   string
+	HeadSha   string
 }
 
 // PRState reads the pull request as GitHub sees it right now.
@@ -112,7 +117,7 @@ func (r Runner) PRState(ctx context.Context, owner, repo string, number int) (_ 
 	defer errs.Wrap(&err, "read state of pull request #%d", number)
 
 	out, err := r.ghContext(ctx, "pr", "view", strconv.Itoa(number),
-		"-R", owner+"/"+repo, "--json", "state,mergedAt,baseRefName,headRefOid")
+		"-R", owner+"/"+repo, "--json", "state,mergedAt,baseRefName,headRefOid,autoMergeRequest")
 	if err != nil {
 		return PRTarget{}, err
 	}
@@ -121,14 +126,18 @@ func (r Runner) PRState(ctx context.Context, owner, repo string, number int) (_ 
 		MergedAt    *string `json:"mergedAt"`
 		BaseRefName string  `json:"baseRefName"`
 		HeadRefOid  string  `json:"headRefOid"`
+		AutoMerge   *struct {
+			EnabledAt *string `json:"enabledAt"`
+		} `json:"autoMergeRequest"`
 	}
 	if err := json.Unmarshal(out, &view); err != nil {
 		return PRTarget{}, err
 	}
 	return PRTarget{
-		Merged:  strings.EqualFold(view.State, "MERGED") || view.MergedAt != nil,
-		BaseRef: view.BaseRefName,
-		HeadSha: view.HeadRefOid,
+		Merged:    strings.EqualFold(view.State, "MERGED") || view.MergedAt != nil,
+		BaseRef:   view.BaseRefName,
+		HeadSha:   view.HeadRefOid,
+		AutoMerge: view.AutoMerge != nil,
 	}, nil
 }
 

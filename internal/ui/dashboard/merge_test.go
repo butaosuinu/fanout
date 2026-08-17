@@ -685,6 +685,70 @@ func TestMergeHoldIgnoresASameNumberedPRElsewhere(t *testing.T) {
 	}
 }
 
+// TestQueuedHoldEndsWhenTheAutoMergeIsCancelled pins the second ending of a
+// queued hold. `gh pr merge` arms an auto-merge on a queue-required base, and
+// `gh pr merge --disable-auto` cancels it without closing the pull request — a
+// state "is it merged yet" can never satisfy, so the row would stay unmergeable
+// forever.
+func TestQueuedHoldEndsWhenTheAutoMergeIsCancelled(t *testing.T) {
+	armed := openPR()
+	armed.AutoMerge = true
+	fake := &fakeMerger{res: prmerge.Result{Queued: true, AutoMerge: true}}
+	p := newPollerBase(t.TempDir(), newHub())
+	p.latest, p.repo, p.resolved = mergeSnapshot(armed), "owner/repo", true
+	s := &Server{
+		poller: p, hostPort: testHostPort, token: testToken,
+		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
+		mergeHeld: map[string]time.Time{},
+	}
+	h, err := s.handler()
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", code)
+	}
+
+	// Still armed: the enqueue is live, so the hold stands.
+	assertAPIError(t, requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
+		http.StatusConflict, "merge_unconfirmed")
+
+	p.mu.Lock()
+	p.latest = mergeSnapshot(openPR()) // auto-merge canceled, PR still open
+	p.mu.Unlock()
+
+	// The hold is gone; the merge is sent again because nothing is pending.
+	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
+		t.Fatalf("status after cancellation = %d, want 200", code)
+	}
+	if calls, _ := fake.snapshot(); calls != 2 {
+		t.Fatalf("merge calls = %d, want 2", calls)
+	}
+}
+
+// TestUnknownHoldIgnoresTheAutoMergeSignal keeps the cancellation escape on the
+// queued kind only. An unreadable outcome may already be a merge, so nothing
+// short of GitHub showing the pull request settled may release it.
+func TestUnknownHoldIgnoresTheAutoMergeSignal(t *testing.T) {
+	fake := &fakeMerger{res: prmerge.Result{Unknown: true}}
+	p := newPollerBase(t.TempDir(), newHub())
+	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
+	s := &Server{
+		poller: p, hostPort: testHostPort, token: testToken,
+		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
+		mergeHeld: map[string]time.Time{},
+	}
+	h, err := s.handler()
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", code)
+	}
+	assertAPIError(t, requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
+		http.StatusConflict, "merge_unconfirmed")
+}
+
 // TestMergeReportsAQueuedMergeAsNotMerged pins the merge-queue answer reaching
 // the wire: `gh pr merge` exits 0 after enqueueing, and calling that "merged"
 // would both lie to the user and hand the head ref to a delete.

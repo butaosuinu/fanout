@@ -228,6 +228,10 @@ type Result struct {
 	// present this as a failure to retry — resending would fire a second merge
 	// against an unknown state.
 	Unknown bool
+	// AutoMerge records whether GitHub had an auto-merge armed when the outcome
+	// was read. It is what makes a canceled enqueue recognizable later: the hold
+	// on a queued merge is otherwise waiting for a merge that will never happen.
+	AutoMerge bool
 }
 
 type Service struct{ GH Port }
@@ -266,7 +270,7 @@ func (s Service) Merge(ctx context.Context, req Request) (Result, error) {
 		// reported as a retryable failure.
 		return Result{Unknown: true}, nil
 	}
-	return Result{Merged: live.Merged, Queued: !live.Merged}, nil
+	return Result{Merged: live.Merged, Queued: !live.Merged, AutoMerge: live.AutoMerge}, nil
 }
 
 // fenceLive re-checks the fields the snapshot cannot keep fresh, immediately

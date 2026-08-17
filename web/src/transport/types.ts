@@ -191,10 +191,14 @@ export interface DiffResponse {
   branchName: string;
   baseBranch: string;
   mergeBase: string; // strict 解決済み commit SHA
-  /* patch を取った時点の worktree の commit。branch 名が同じでも、ローカル
-   * checkout が PR と同じものを持っている保証は無いので、マージボタンはこれと
-   * PR head の一致を要求する。unborn branch では欠落 */
+  /* この patch が何と比較可能かを言う 3 つ。マージボタンはこれで塞ぐ:
+   * headCommit は patch を取った worktree の commit(branch 名が同じでも、ローカル
+   * checkout が PR と同じものを持っている保証は無い。unborn branch では欠落)、
+   * dirty は commit されていない変更も描いていること、basePushed は patch の base が
+   * remote にある commit だということ。 */
   headCommit?: string;
+  dirty?: boolean;
+  basePushed?: boolean;
   capturedAt: string; // RFC3339 UTC
   files: DiffFileEntry[];
   patch: string;

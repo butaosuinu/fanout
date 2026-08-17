@@ -298,12 +298,21 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   `.fanout/merge-claims.json` — cleared only when a poll shows the PR merged or
   closed, since time is not evidence about an outcome; deleting the entry is the
   documented manual way out — so another tab, a reload, or a dashboard restart
-  cannot fire a second one either — that file is the endpoint's only local write. The
+  cannot fire a second one either — that file is the endpoint's only local write.
+  A queued merge is held the same way but has a second ending: it records that
+  GitHub had an auto-merge armed, and cancelling that (`--disable-auto`) leaves
+  the PR open with nothing pending, which no merged/closed check can ever
+  satisfy. The claim on an unreadable outcome never takes that exit — that merge
+  may already have happened. The
   diff toolbar additionally pins the PR it opened with — number, head, and base —
-  and requires the PR's head to be the commit `/api/diff` actually read, so a
-  push that lands while you are reading, a retarget that never moves the head, or
-  a worktree that lags the remote all block the merge instead of quietly merging
-  commits the displayed patch does not contain. Errors that
+  and requires the patch on screen to be comparable with what the merge would
+  bring in: the PR's head must be the commit `/api/diff` read, that read must be
+  of a clean worktree (the patch shows uncommitted work the merge would not
+  carry), and its merge base must be a commit the remote already has (`MergeBase`
+  prefers the local base branch, so an unpushed commit there drops everything
+  after it out of the patch). A push that lands while you are reading, a retarget
+  that never moves the head, and a worktree that lags the remote all block the
+  merge instead of quietly merging commits the displayed patch does not contain. Errors that
   provably precede the send — the rate-limit gate — stay plain retryable
   failures instead. The OID fence on the delete is not atomic — GitHub has no
   conditional ref delete — so it catches a push that already landed, not one that

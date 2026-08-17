@@ -49,9 +49,16 @@ type Patch struct {
 	// Head is the commit the worktree was on when the patch was taken. A reader
 	// needs it to tell what the patch is a diff *of*: the same branch name can
 	// sit on a different commit here than it does on the remote.
-	Head  string
-	Patch string
-	Files []FileStat
+	Head string
+	// Dirty says the patch includes work that is not committed anywhere. What is
+	// on screen is then more than any commit contains.
+	Dirty bool
+	// BasePushed says the merge base is reachable from the base branch's
+	// remote-tracking ref. When it is not, the patch was measured against a
+	// commit the remote has never seen, so it hides everything between the two.
+	BasePushed bool
+	Patch      string
+	Files      []FileStat
 }
 
 // Runner shells out to git. Cwd is optional and only affects process startup;
@@ -675,6 +682,62 @@ func (r Runner) WorktreePatch(path, baseRef string) (_ Patch, err error) {
 	}
 	result.Patch = patch.String()
 	return result, nil
+}
+
+// WorktreeDirty reports whether the worktree has changes no commit holds —
+// staged, unstaged, or untracked. The patch includes all three, so this is what
+// separates "the patch is a commit" from "the patch is a commit plus edits".
+func (r Runner) WorktreeDirty(path string) (bool, error) {
+	out, err := r.git("-C", path, "status", "--porcelain", "--untracked-files=normal")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}
+
+// BaseIsPushed reports whether commit is reachable from the base branch's
+// remote-tracking ref.
+//
+// MergeBase prefers the local branch, so a local `main` carrying an unpushed
+// commit becomes the base of the patch — and every commit between the remote's
+// base and that one drops out of the diff while staying in what a merge would
+// bring in. A missing remote-tracking ref answers false: nothing establishes
+// that the base is shared, so nothing may assume it.
+func (r Runner) BaseIsPushed(path, baseRef, commit string) (bool, error) {
+	remote := remoteBaseRef(baseRef)
+	if remote == "" || commit == "" {
+		return false, nil
+	}
+	if _, err := r.git("-C", path, "rev-parse", "--verify", "--end-of-options", remote+"^{commit}"); err != nil {
+		//nolint:nilerr // A missing remote-tracking ref is the answer, not a
+		// failure: nothing establishes that the base is shared, so the caller
+		// gets false. Reporting an error here would turn "not fetched yet" into
+		// a broken diff.
+		return false, nil
+	}
+	_, code, err := r.gitExitCode("-C", path, "merge-base", "--is-ancestor", commit, remote)
+	if err != nil {
+		return false, err
+	}
+	return code == 0, nil
+}
+
+// remoteBaseRef maps a recorded base branch to its remote-tracking ref. A base
+// already given as a ref path or an origin/ name is taken as written.
+func remoteBaseRef(baseRef string) string {
+	baseRef = strings.TrimSpace(baseRef)
+	switch {
+	case baseRef == "":
+		return ""
+	case strings.HasPrefix(baseRef, "refs/remotes/"):
+		return baseRef
+	case strings.HasPrefix(baseRef, "refs/"):
+		return ""
+	case strings.HasPrefix(baseRef, "origin/"):
+		return "refs/remotes/" + baseRef
+	default:
+		return "refs/remotes/origin/" + baseRef
+	}
 }
 
 // WorktreeHead resolves the commit a worktree is on. An unborn branch has no

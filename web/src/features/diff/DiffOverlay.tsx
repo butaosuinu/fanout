@@ -48,7 +48,7 @@ export function DiffOverlay({
   /* 設定モーダルが上に重なっている間は Escape を譲る(下の diff は開いたまま) */
   escapeEnabled?: boolean;
   /* 見た目からしか分からないことの報告先(useDiffReport に説明がある) */
-  report: Pick<DiffReport, "setCovering" | "setHeadCommit">;
+  report: Pick<DiffReport, "setCovering" | "setDiff">;
   /* 全画面表示中は Nav が inert なので、テーマ設定への入口をここにも置く */
   onOpenSettings: () => void;
   onClose: () => void;
@@ -85,7 +85,7 @@ export function DiffOverlay({
   useDiffAnchorSync({ view: viewMode, anchorKey, setAnchorRight, setContentLeft });
   useEscapeToClose(rootRef, { covering, enabled: escapeEnabled, onClose });
 
-  const diff = useDrawnDiff(state, report.setHeadCommit);
+  const diff = useDrawnDiff(state, report.setDiff);
   /* snapshot tick ごとの再レンダーで files 全走査をやり直さない */
   const view = useMemo(
     () => (diff ? { warning: diffWarning(diff), meta: diffMeta(diff) } : null),

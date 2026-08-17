@@ -1,20 +1,47 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import type { DiffResponse } from "../../transport/types";
+
+/* diff が返した patch の素性。マージボタンはこれと対象 PR を照合する。
+ *
+ * snapshot 側の値(2 秒周期)ではなくこちらを使うのが要点 — 画面に出ている
+ * patch そのものの性質でなければ、照合しても「今の worktree」の話にしかならない。 */
+export interface DiffFacts {
+  commit: string;
+  dirty: boolean;
+  basePushed: boolean;
+}
+
+/* 取得できていない間は、いちばん厳しい側に倒す。 */
+const NO_DIFF: DiffFacts = { commit: "", dirty: true, basePushed: false };
 
 /* diff オーバーレイが親へ返すもの。
  *
- * covering は隠れた peek のポーリングを止めるため、headCommit は表示中の patch を
- * 取った commit を行のマージボタンに渡すため。どちらもオーバーレイの中でしか
- * 分からないので、state はここに置いて setter を降ろす。 */
+ * covering は隠れた peek のポーリングを止めるため、facts は行のマージボタンの
+ * 照合材料。どちらもオーバーレイの中でしか分からないので、state はここに置いて
+ * setter を降ろす。 */
 export interface DiffReport {
   covering: boolean;
-  /* useMergeFlow に渡す形。開いている行と、その patch を取った commit。 */
-  shown: { key: string | null; head: string };
+  /* useMergeFlow に渡す形。開いている行と、その patch の素性。 */
+  shown: { key: string | null; facts: DiffFacts };
   setCovering: (covering: boolean) => void;
-  setHeadCommit: (commit: string) => void;
+  setDiff: (diff: DiffResponse | null) => void;
 }
 
 export function useDiffReport(key: string | null): DiffReport {
   const [covering, setCovering] = useState(false);
-  const [head, setHeadCommit] = useState("");
-  return { covering, shown: { key, head }, setCovering, setHeadCommit };
+  /* 応答そのものを持ち、facts は導出する。setter を包むと render ごとに identity が
+   * 変わり、報告する側の effect が毎 render 走って state を書き換え続ける。 */
+  const [diff, setDiff] = useState<DiffResponse | null>(null);
+  const facts = useMemo(() => (diff ? factsOf(diff) : NO_DIFF), [diff]);
+  return { covering, shown: { key, facts }, setCovering, setDiff };
+}
+
+function factsOf(diff: DiffResponse): DiffFacts {
+  return {
+    commit: diff.headCommit ?? "",
+    /* 欠落は「不明」。塞ぐ側に倒す — 旧いサーバの応答で照合が緩むと、
+     * 新しい遮断が黙って無効になる。 */
+    dirty: diff.dirty ?? true,
+    basePushed: diff.basePushed ?? false,
+  };
 }

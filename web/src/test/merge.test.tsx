@@ -396,24 +396,26 @@ describe("表示中の差分との整合", () => {
     server.use(mergeHandler(calls));
     const user = userEvent.setup();
     render(<App />);
-    streamSnapshot(
-      makeSnapshot([
-        makeSession("142", [
-          makePane({
-            issueNum: 101,
-            displayName: "Fix login",
-            slug: "fix-login",
-            paneId: "%1",
-            branchName: "fanout/fix-login",
-            dirtyState: "dirty",
-            prs: [makePr({ headRef: "fanout/fix-login" })],
-          }),
-        ]),
-      ]),
-    );
+    streamSnapshot(snapshotWithPR());
 
-    const overlay = await openDiff(user);
+    const overlay = await openDiff(user, { dirty: true });
     const blocked = await within(overlay).findByRole("button", { name: /未コミットの変更/ });
+    expect(blocked).toHaveAttribute("aria-disabled", "true");
+    await user.click(blocked);
+    expect(calls).toHaveLength(0);
+  });
+
+  /* MergeBase はローカル base branch を先に選ぶので、未 push の commit があると
+   * その分が patch から落ちる一方、マージでは base に入る。 */
+  it("未 push の base を基準にした差分を見ている間はツールバーから撃てない", async () => {
+    const calls: MergeCall[] = [];
+    server.use(mergeHandler(calls));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(snapshotWithPR());
+
+    const overlay = await openDiff(user, { basePushed: false });
+    const blocked = await within(overlay).findByRole("button", { name: /未 push の base/ });
     expect(blocked).toHaveAttribute("aria-disabled", "true");
     await user.click(blocked);
     expect(calls).toHaveLength(0);
@@ -629,6 +631,71 @@ describe("merge queue", () => {
     await screen.findByText(/merge queue 待ち/);
     const button = within(drawer).getByRole("button", { name: /反映を待っています/ });
     expect(button).toHaveAttribute("aria-disabled", "true");
+  });
+});
+
+/* PR を続けて操作したときに、前の hold が落ちないこと。落ちると、決着していない
+ * PR のボタンが押せる状態に戻り、押しても必ずサーバに 409 で弾かれる。 */
+describe("複数 PR の同時待機", () => {
+  it("2 本目の queued は 1 本目の hold を落とさない", async () => {
+    server.use(
+      http.post(MERGE_PATH, async ({ request }) => {
+        const body = (await request.json()) as { prNumber: number };
+        return HttpResponse.json({
+          prNumber: body.prNumber,
+          method: "squash",
+          merged: false,
+          queued: true,
+          refreshQueued: true,
+        });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            branchName: "fanout/fix-login",
+            prs: [makePr({ number: 701, headRef: "fanout/fix-login" })],
+          }),
+          makePane({
+            issueNum: 102,
+            displayName: "Add docs",
+            slug: "add-docs",
+            paneId: "%2",
+            branchName: "fanout/add-docs",
+            prs: [makePr({ number: 702, headRef: "fanout/add-docs" })],
+          }),
+        ]),
+      ]),
+    );
+
+    await user.click(screen.getByRole("cell", { name: "Fix login" }));
+    const drawer = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    await user.click(within(drawer).getByRole("button", { name: "#701 をマージ" }));
+    await screen.findByText(/merge queue 待ち/);
+
+    await user.click(screen.getByRole("cell", { name: "Add docs" }));
+    const second = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    await user.click(within(second).getByRole("button", { name: "#702 をマージ" }));
+    await waitFor(() =>
+      expect(
+        within(second).getByRole("button", { name: /反映を待っています/ }),
+      ).toBeInTheDocument(),
+    );
+
+    /* 1 本目へ戻ると、まだ塞がっている。 */
+    await user.click(screen.getByRole("cell", { name: "Fix login" }));
+    const back = await screen.findByRole("complementary", { name: "ペイン詳細" });
+    expect(within(back).getByRole("button", { name: /反映を待っています/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 });
 

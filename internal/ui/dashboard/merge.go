@@ -111,7 +111,7 @@ func (s *Server) handleMerge(w http.ResponseWriter, r *http.Request) {
 		// merged, and a queued request has auto-merge armed. Losing only the
 		// response would otherwise let another tab or a reload send it again, so
 		// the refusal lives on the server until a poll settles the pull request.
-		s.holdUnconfirmed(rr, req.Number)
+		s.holdUnconfirmed(rr, req.Number, res)
 	}
 	writeMergeResponse(w, req, res, s.poller.requestGHRefresh())
 }
@@ -198,10 +198,27 @@ func (s *Server) mergeClaimsPath() string {
 // readMergeClaims returns the recorded holds. A missing file reads as empty; a
 // corrupt one does too, which is the one gap the in-memory mirror covers for the
 // life of the process. Callers hold mergeMu.
-func (s *Server) readMergeClaims() map[string]string {
-	claims := map[string]string{}
+// mergeClaim is one held pull request. The kind decides what can release it:
+// an unknown outcome only settles when GitHub shows the PR merged or closed,
+// while a queued one is also over when the auto-merge that carried it is gone.
+type mergeClaim struct {
+	Kind string `json:"kind"`
+	At   string `json:"at"`
+	// Armed records that GitHub had an auto-merge on the PR when the merge was
+	// read. Without it, a missing auto-merge later says nothing: this base may
+	// never have used one.
+	Armed bool `json:"armed,omitempty"`
+}
+
+const (
+	claimUnknown = "unknown"
+	claimQueued  = "queued"
+)
+
+func (s *Server) readMergeClaims() map[string]mergeClaim {
+	claims := map[string]mergeClaim{}
 	if _, err := atomicfs.ReadJSON(s.mergeClaimsPath(), &claims); err != nil {
-		return map[string]string{}
+		return map[string]mergeClaim{}
 	}
 	return claims
 }
@@ -210,7 +227,7 @@ func (s *Server) readMergeClaims() map[string]string {
 // mirror already keeps this process fail-closed, and the only thing lost is the
 // cross-restart half of the guard, which there is no useful action to take on.
 // Callers hold mergeMu.
-func (s *Server) writeMergeClaims(claims map[string]string) {
+func (s *Server) writeMergeClaims(claims map[string]mergeClaim) {
 	path := s.mergeClaimsPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
@@ -220,8 +237,12 @@ func (s *Server) writeMergeClaims(claims map[string]string) {
 
 // holdUnconfirmed records a pull request whose merge outcome is unreadable, so
 // every entrypoint refuses a second attempt until GitHub settles it.
-func (s *Server) holdUnconfirmed(rr repoRef, number int) {
+func (s *Server) holdUnconfirmed(rr repoRef, number int, res prmerge.Result) {
 	key := claimKey(rr, number)
+	kind := claimUnknown
+	if !res.Unknown {
+		kind = claimQueued
+	}
 	s.mergeMu.Lock()
 	defer s.mergeMu.Unlock()
 	// The in-process hold is unconditional. A disk that cannot be written (full,
@@ -229,7 +250,11 @@ func (s *Server) holdUnconfirmed(rr repoRef, number int) {
 	// hand this process a way to fire the same merge again.
 	s.mergeHeld[key] = time.Now()
 	claims := s.readMergeClaims()
-	claims[key] = time.Now().UTC().Format(time.RFC3339)
+	claims[key] = mergeClaim{
+		Kind:  kind,
+		At:    time.Now().UTC().Format(time.RFC3339),
+		Armed: res.AutoMerge,
+	}
 	s.writeMergeClaims(claims)
 }
 
@@ -242,17 +267,38 @@ func (s *Server) unconfirmed(key string, rr repoRef, number int) bool {
 	}
 	// Only GitHub releases the hold. Time is not evidence about an outcome, so
 	// there is no TTL: a merge that may have happened stays un-repeatable until a
-	// poll shows the pull request merged or closed. The way out of a state that
-	// never resolves is to delete the entry from .fanout/merge-claims.json, which
-	// is the documented manual path.
-	if !s.poller.prSettled(rr.owner+"/"+rr.repo, number) {
+	// poll shows the pull request settled. The way out of a state that never
+	// resolves is to delete the entry from .fanout/merge-claims.json, which is
+	// the documented manual path.
+	claims := s.readMergeClaims()
+	if !s.claimOver(rr, number, claims[key]) {
 		return true
 	}
 	delete(s.mergeHeld, key)
-	claims := s.readMergeClaims()
 	delete(claims, key)
 	s.writeMergeClaims(claims)
 	return false
+}
+
+// claimOver reports whether GitHub has answered the question this hold was
+// waiting on.
+//
+// Merged or closed ends any hold. A queued merge has a second ending: `gh pr
+// merge` arms an auto-merge on a queue-required base, and canceling that
+// (`--disable-auto`) leaves the pull request open with nothing pending. Without
+// this, the hold outlives the thing it was protecting and the row can never be
+// merged again. The armed flag is what makes the absence meaningful — a base
+// that never used an auto-merge would otherwise look canceled from the start.
+func (s *Server) claimOver(rr repoRef, number int, claim mergeClaim) bool {
+	repo := rr.owner + "/" + rr.repo
+	if s.poller.prSettled(repo, number) {
+		return true
+	}
+	if claim.Kind != claimQueued || !claim.Armed {
+		return false
+	}
+	armed, found := s.poller.prAutoMerge(repo, number)
+	return found && !armed
 }
 
 // held reports whether a hold is recorded, in memory or on disk (a restart has
