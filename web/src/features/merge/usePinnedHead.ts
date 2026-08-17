@@ -46,7 +46,7 @@ export function usePinnedHead(
 
 /* diff ビュアーが読んでいる worktree の repository / branch と、patch を計算した
  * base branch。 */
-export type DiffSource = { repo: string; branch: string; base: string };
+export type DiffSource = { repo: string; branch: string; base: string; commit: string };
 
 /* diff を開いた時点の対象 PR。 */
 type Pinned = { key: string; prNumber: number; headSha: string };
@@ -72,10 +72,21 @@ function mismatch(
   return null;
 }
 
-/* 空の記録は判定材料が無いという意味で、一致とみなす(塞ぐ根拠にしない)。 */
+/* 表示中の patch と対象 PR が同じものを指しているかの照合。空の記録は「判定材料が
+ * 無い」であって不一致ではないので、塞ぐ根拠にしない。 */
+const SOURCE_CHECKS: ((merge: MergeAffordance, shows: DiffSource) => boolean)[] = [
+  /* patch を取ったローカル commit と PR head。branch 名の照合では、別の checkout
+   * から PR branch へ push されてローカル worktree が遅れている場合を捕まえられない
+   * — 名前はすべて一致したまま、画面に無い commit がマージされる。 */
+  (m, s) => !s.commit || !m.headSha || m.headSha === s.commit,
+  /* patch は worktree の base branch との差分。retarget は head を 1 commit も
+   * 動かさないので、head だけを見ていると素通りする。 */
+  (m, s) => !s.base || m.baseRef === s.base,
+  /* head branch は worktree のもの(issue 行には fork の closing PR が載りうる)。 */
+  (m, s) => !s.branch || m.headRef === s.branch,
+  (m, s) => !s.branch || m.headRepo.toLowerCase() === s.repo.toLowerCase(),
+];
+
 function sameSource(merge: MergeAffordance, shows: DiffSource): boolean {
-  if (shows.base && merge.baseRef !== shows.base) return false;
-  if (!shows.branch) return true;
-  if (merge.headRef !== shows.branch) return false;
-  return !!merge.headRepo && merge.headRepo.toLowerCase() === shows.repo.toLowerCase();
+  return SOURCE_CHECKS.every((check) => check(merge, shows));
 }

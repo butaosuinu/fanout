@@ -191,6 +191,10 @@ export interface DiffResponse {
   branchName: string;
   baseBranch: string;
   mergeBase: string; // strict 解決済み commit SHA
+  /* patch を取った時点の worktree の commit。branch 名が同じでも、ローカル
+   * checkout が PR と同じものを持っている保証は無いので、マージボタンはこれと
+   * PR head の一致を要求する。unborn branch では欠落 */
+  headCommit?: string;
   capturedAt: string; // RFC3339 UTC
   files: DiffFileEntry[];
   patch: string;

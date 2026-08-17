@@ -299,8 +299,10 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   closed, since time is not evidence about an outcome; deleting the entry is the
   documented manual way out — so another tab, a reload, or a dashboard restart
   cannot fire a second one either — that file is the endpoint's only local write. The
-  diff toolbar additionally pins the PR head it opened with, so a push that
-  lands while you are reading blocks the merge instead of quietly merging
+  diff toolbar additionally pins the PR it opened with — number, head, and base —
+  and requires the PR's head to be the commit `/api/diff` actually read, so a
+  push that lands while you are reading, a retarget that never moves the head, or
+  a worktree that lags the remote all block the merge instead of quietly merging
   commits the displayed patch does not contain. Errors that
   provably precede the send — the rate-limit gate — stay plain retryable
   failures instead. The OID fence on the delete is not atomic — GitHub has no

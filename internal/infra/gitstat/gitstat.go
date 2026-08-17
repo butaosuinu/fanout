@@ -46,8 +46,12 @@ type FileStat struct {
 // Patch is a merge-base-relative worktree patch and its complete file list.
 type Patch struct {
 	MergeBase string
-	Patch     string
-	Files     []FileStat
+	// Head is the commit the worktree was on when the patch was taken. A reader
+	// needs it to tell what the patch is a diff *of*: the same branch name can
+	// sit on a different commit here than it does on the remote.
+	Head  string
+	Patch string
+	Files []FileStat
 }
 
 // Runner shells out to git. Cwd is optional and only affects process startup;
@@ -536,7 +540,6 @@ func (r Runner) WorktreePatch(path, baseRef string) (_ Patch, err error) {
 	if err != nil {
 		return Patch{}, err
 	}
-
 	files, err := r.collectPatchFiles(path, mergeBase)
 	if err != nil {
 		return Patch{}, err
@@ -672,6 +675,20 @@ func (r Runner) WorktreePatch(path, baseRef string) (_ Patch, err error) {
 	}
 	result.Patch = patch.String()
 	return result, nil
+}
+
+// WorktreeHead resolves the commit a worktree is on. An unborn branch has no
+// commit yet, which is not an error: "" says there is no commit to compare
+// against, and the caller decides what that means.
+func (r Runner) WorktreeHead(path string) (string, error) {
+	out, code, err := r.gitExitCode("-C", path, "rev-parse", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	if code != 0 {
+		return "", nil
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (r Runner) resolveWorktreePath(path string) (string, error) {

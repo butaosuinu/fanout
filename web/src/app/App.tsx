@@ -33,6 +33,7 @@ import type { PaneView, Snapshot } from "../transport/types";
 import { ChunkBoundary } from "../ui/ChunkBoundary";
 import { Drawer } from "../features/drawer/Drawer";
 import { MergeSlot } from "../features/merge/MergeSlot";
+import { useDiffReport, type DiffReport } from "../features/diff/useDiffReport";
 import { useMergeFlow, type MergeAffordance } from "../features/merge/useMergeFlow";
 
 import { FilterBar } from "../features/filter/FilterBar";
@@ -209,9 +210,8 @@ function Dashboard() {
   const [notice, setNotice] = useState<MessageDescriptor | null>(null);
   const [diffTarget, setDiffTarget] = useState<DiffTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const merge = useMergeFlow(snap, token, diffTarget?.key ?? null);
-  /* diff が背面を覆っているか。実寸に依存するのでオーバーレイから受け取る */
-  const [diffCovering, setDiffCovering] = useState(false);
+  const diffReport = useDiffReport(diffTarget?.key ?? null);
+  const merge = useMergeFlow(snap, token, diffReport.shown);
   const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
   /* モーダルを開いた起点要素。閉じたときにフォーカスを戻す(diff は表のセル
    * からも Drawer のボタンからも開くので、ref 固定ではなく起点を控える)。
@@ -415,7 +415,7 @@ function Dashboard() {
           selected={selected}
           repo={repo}
           token={token}
-          diffCovering={diffCovering}
+          diffCovering={diffReport.covering}
           affordanceFor={merge.affordanceFor}
           onOpenDiff={openDiff}
           onClose={closeDrawer}
@@ -430,7 +430,7 @@ function Dashboard() {
           settingsOpen={settingsOpen}
           snap={snap}
           affordanceFor={merge.affordanceFor}
-          onCoveringChange={setDiffCovering}
+          report={diffReport}
           onOpenSettings={openSettings}
           onClose={closeDiff}
         />
@@ -455,7 +455,7 @@ function DiffOverlaySlot({
   settingsOpen,
   snap,
   affordanceFor,
-  onCoveringChange,
+  report,
   onOpenSettings,
   onClose,
 }: {
@@ -471,7 +471,7 @@ function DiffOverlaySlot({
    * 無いので、snapshot の行から引いて MergeSlot に載せる。 */
   snap: Snapshot | null;
   affordanceFor: AffordanceFor;
-  onCoveringChange: (covering: boolean) => void;
+  report: DiffReport;
   onOpenSettings: () => void;
   onClose: () => void;
 }) {
@@ -488,7 +488,7 @@ function DiffOverlaySlot({
             scopeKey={viewedScope(projectRoot, target.key)}
             anchorKey={anchorKey}
             suppressed={settingsOpen}
-            onCoveringChange={onCoveringChange}
+            report={report}
             escapeEnabled={!settingsOpen}
             onOpenSettings={onOpenSettings}
             onClose={onClose}

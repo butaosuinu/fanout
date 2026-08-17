@@ -142,7 +142,7 @@ The button greys out, with the reason, when the merge cannot work: no pull reque
 
 The dashboard sends the PR number and the head commit it drew, and the server passes that commit to GitHub as `--match-head-commit`. A PR that received a push between the page rendering and your click is refused rather than merged blind.
 
-While the diff viewer is open it pins the commit it drew, so a push that lands while you are reading blocks the merge until you reopen the diff — you never merge changes the patch on screen does not show.
+While the diff viewer is open it pins the pull request it drew — number, head, and base — and requires the commit the patch came from to be the pull request's head. A push that lands while you are reading, a retarget that never moves the head, and a worktree that lags the remote all block the merge until you reopen the diff.
 
 On a base branch that requires a merge queue, GitHub accepts the request without merging. The button says so and stays available — nothing is reported as merged, and no branch is deleted, until GitHub confirms the merge.
 

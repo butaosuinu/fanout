@@ -33,10 +33,15 @@ type diffIdentity struct {
 }
 
 type diffResponse struct {
-	PaneID     string          `json:"paneId"`
-	BranchName string          `json:"branchName"`
-	BaseBranch string          `json:"baseBranch"`
-	MergeBase  string          `json:"mergeBase"`
+	PaneID     string `json:"paneId"`
+	BranchName string `json:"branchName"`
+	BaseBranch string `json:"baseBranch"`
+	MergeBase  string `json:"mergeBase"`
+	// HeadCommit is the commit this worktree was on. The client fences the merge
+	// button on it: a branch name is not proof that the local checkout holds what
+	// the pull request holds, so without it a patch read from a lagging worktree
+	// would pass every name-based check.
+	HeadCommit string          `json:"headCommit"`
 	CapturedAt string          `json:"capturedAt"`
 	Files      []diffFileEntry `json:"files"`
 	Patch      string          `json:"patch"`
@@ -115,12 +120,12 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		diffWorktree = func(ctx context.Context, path, baseRef string) (gitstat.Patch, error) {
-			return (gitstat.Runner{
+			return worktreePatchWithHead(gitstat.Runner{
 				Cwd:           s.poller.projectRoot,
 				Context:       ctx,
 				MaxFiles:      diffMaxFiles,
 				MaxPatchBytes: diffCollectionMaxBytes,
-			}).WorktreePatch(path, baseRef)
+			}, path, baseRef)
 		}
 	}
 	patch, err := collectWorktreePatch(
@@ -265,6 +270,19 @@ func collectWorktreePatch(
 	}
 }
 
+// worktreePatchWithHead reads the patch and the commit it was taken from. The
+// commit is what the client fences its merge button on: the patch is a diff of
+// this checkout, and a branch name is not proof that this checkout holds what
+// the pull request holds.
+func worktreePatchWithHead(r gitstat.Runner, path, baseRef string) (gitstat.Patch, error) {
+	patch, err := r.WorktreePatch(path, baseRef)
+	if err != nil {
+		return patch, err
+	}
+	patch.Head, err = r.WorktreeHead(path)
+	return patch, err
+}
+
 func marshalDiffResponse(
 	pv sessionview.PaneView,
 	patch gitstat.Patch,
@@ -279,6 +297,7 @@ func marshalDiffResponse(
 		BranchName: pv.BranchName,
 		BaseBranch: pv.BaseBranch,
 		MergeBase:  patch.MergeBase,
+		HeadCommit: patch.Head,
 		CapturedAt: capturedAt,
 		Files:      make([]diffFileEntry, len(patch.Files)),
 	}

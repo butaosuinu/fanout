@@ -190,11 +190,29 @@ func TestDeleteBranchRefusesAForkHead(t *testing.T) {
 	}
 }
 
-func TestDeleteBranchSurfacesTheNotMergedRefusal(t *testing.T) {
-	fake := &fakeDeleter{err: prmerge.ErrNotMerged}
-	h := deleteHandler(t, mergedSnapshot(), fake)
-	assertAPIError(t, requestDeleteBranch(t, h, http.MethodPost, mergeQuery(testToken), deleteBody()),
-		http.StatusConflict, "not_merged")
+// TestDeleteBranchSurfacesItsOwnRefusals keeps fanout's refusals separable from
+// GitHub's. The delete has no separate preflight step, so these arrive mixed
+// with gh failures; reporting them as 422 "GitHub declined" would name the wrong
+// cause and drop the machine code the client renders from.
+func TestDeleteBranchSurfacesItsOwnRefusals(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "not merged yet", err: prmerge.ErrNotMerged, code: "not_merged"},
+		{name: "another open PR still uses the branch", err: prmerge.ErrBranchInUse, code: "branch_in_use"},
+		{name: "the head moved after the click", err: prmerge.ErrStaleHead, code: "stale_head"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeDeleter{err: tt.err}
+			h := deleteHandler(t, mergedSnapshot(), fake)
+			assertAPIError(t,
+				requestDeleteBranch(t, h, http.MethodPost, mergeQuery(testToken), deleteBody()),
+				http.StatusConflict, tt.code)
+		})
+	}
 }
 
 func TestDeleteBranchRedactsCredentials(t *testing.T) {

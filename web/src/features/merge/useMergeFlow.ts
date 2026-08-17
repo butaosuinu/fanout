@@ -37,13 +37,14 @@ type Target = { key: string; query: Record<string, string>; pr: PRRef };
 export function useMergeFlow(
   snap: Snapshot | null,
   token: string,
-  /* 開いている diff の対象行。その行のマージは、開いた時点の head に固定する。 */
-  diffKey: string | null,
+  /* 開いている diff。対象行のマージは、開いた時点の head に固定し、diff を
+   * 取った worktree の commit と PR head の一致も要求する。 */
+  diff: { key: string | null; head: string },
 ): { affordanceFor: (parent: string, pane: PaneView) => MergeAffordance | null } {
   const { state, submit, busy } = useMergePr(token);
   /* 送信結果の追跡(どの行が反映待ちか・どの PR が結果不明か)は 1 か所に持つ。 */
   const track = useMergeTracking(snap);
-  const pinDiffHead = usePinnedHead(diffKey);
+  const pinDiffHead = usePinnedHead(diff.key);
 
   const run = useCallback(
     (target: Target) => (method: MergeMethod) => {
@@ -78,10 +79,10 @@ export function useMergeFlow(
           ...resultsFor(key, track, state),
           onMerge: run({ key, query, pr }),
         }),
-        diffSource(pane, repo),
+        diffSource(pane, repo, diff.head),
       );
     },
-    [snap, track, run, state, token, pinDiffHead],
+    [snap, track, run, state, token, pinDiffHead, diff.head],
   );
 
   return { affordanceFor };
@@ -128,8 +129,8 @@ function prIdentity(pr: PRRef) {
 }
 
 /* diff ビュアーがこの行で読んでいる worktree。 */
-function diffSource(pane: PaneView, repo: string): DiffSource {
-  return { repo, branch: pane.branchName ?? "", base: pane.baseBranch ?? "" };
+function diffSource(pane: PaneView, repo: string, commit: string): DiffSource {
+  return { repo, commit, branch: pane.branchName ?? "", base: pane.baseBranch ?? "" };
 }
 
 function buildAffordance(input: {

@@ -86,10 +86,11 @@ export interface MergeTracking {
   apply: (row: { key: string; prNumber: number }, res: MergeOutcome) => void;
 }
 
-/* 送信結果の追跡をまとめて持つ。queued は「受理されたがまだマージされていない」
- * なので反映待ちにはしない — merge queue が流れるまでボタンが固まるため、押せる
- * 状態のまま知らせる。unknown は逆で、結果が分からないまま再送させないよう
- * 必ず塞ぐ。 */
+/* 送信結果の追跡をまとめて持つ。unknown も queued も、決着するまでその PR の
+ * ボタンを塞ぐ。queued(merge queue が受理した)は既に auto-merge が武装済みで、
+ * サーバも同じ理由で claim に載せるので、押せるままにしても 409 が返るだけ —
+ * しかも受理を伝えた notice がクリックで消える。解除条件はサーバの claim と同じで、
+ * その PR が merged か closed になったとき。 */
 export function useMergeTracking(snap: Snapshot | null): MergeTracking {
   const [lastKey, setLastKey] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending>(null);
@@ -105,8 +106,8 @@ export function useMergeTracking(snap: Snapshot | null): MergeTracking {
   }, []);
 
   const apply = useCallback((row: { key: string; prNumber: number }, res: MergeOutcome) => {
-    if (res.unknown) setUnknown({ prNumber: row.prNumber });
-    else if (!res.queued) setPending({ ...row, since: Date.now() });
+    if (res.unknown || res.queued) setUnknown({ prNumber: row.prNumber });
+    else setPending({ ...row, since: Date.now() });
     setNotice(noticeFor(row.key, res));
   }, []);
 

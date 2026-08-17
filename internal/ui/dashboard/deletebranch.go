@@ -119,9 +119,17 @@ func ownedBranch(
 	return ref, branch, err
 }
 
+// deleteBranchStatus separates fanout's own refusals from GitHub's. The delete
+// has no separate preflight step — its checks run inside the same call — so the
+// sentinels arrive here mixed with transport and gh failures. Falling through to
+// mergeFailureStatus would report every one of them as 422 "GitHub declined",
+// which is both the wrong cause and the wrong machine code for a client that
+// wants to tell "the branch is still in use" from "GitHub said no".
 func deleteBranchStatus(err error) (int, string) {
-	if errors.Is(err, prmerge.ErrNotMerged) {
-		return http.StatusConflict, "not_merged"
+	for _, c := range mergePreflightSentinels {
+		if errors.Is(err, c.sentinel) {
+			return http.StatusConflict, c.code
+		}
 	}
 	return mergeFailureStatus(err)
 }

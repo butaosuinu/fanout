@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "../app/App";
 import { DELETE_BRANCH_PATH, MERGE_PATH } from "../features/merge/merge";
-import type { PRRef } from "../transport/types";
+import type { DiffResponse, PRRef } from "../transport/types";
 import { installFakeEventSource, streamSnapshot } from "./fakeEventSource";
 import { makeDiffResponse, makePane, makePr, makeSession, makeSnapshot } from "./fixtures";
 import { server } from "./server";
@@ -89,8 +89,11 @@ const openDrawer = async (user: ReturnType<typeof userEvent.setup>) => {
   return await screen.findByRole("complementary", { name: "ペイン詳細" });
 };
 
-async function openDiff(user: ReturnType<typeof userEvent.setup>) {
-  server.use(http.get("/api/diff", () => HttpResponse.json(makeDiffResponse())));
+async function openDiff(
+  user: ReturnType<typeof userEvent.setup>,
+  diff: Partial<DiffResponse> = {},
+) {
+  server.use(http.get("/api/diff", () => HttpResponse.json(makeDiffResponse(diff))));
   const drawer = await openDrawer(user);
   await user.click(within(drawer).getByRole("button", { name: "変更を表示" }));
   return await screen.findByRole("dialog");
@@ -386,6 +389,41 @@ describe("表示中の差分との整合", () => {
     );
   });
 
+  /* branch 名は照合材料として弱い。別の checkout から PR branch へ push されると、
+   * ローカル worktree は遅れたまま名前だけ全部一致し、画面に無い commit が
+   * マージされる。patch を取った commit そのものを見る。 */
+  it("表示中の patch を取った commit と PR head が違えばツールバーから撃てない", async () => {
+    const calls: MergeCall[] = [];
+    server.use(mergeHandler(calls));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(snapshotWithPR());
+
+    const overlay = await openDiff(user, {
+      headCommit: "9999999999999999999999999999999999999999",
+    });
+    const blocked = await within(overlay).findByRole("button", {
+      name: /この PR のものではありません/,
+    });
+    expect(blocked).toHaveAttribute("aria-disabled", "true");
+    await user.click(blocked);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("patch の commit が PR head と同じなら塞がない", async () => {
+    server.use(mergeHandler([]));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(snapshotWithPR());
+
+    const overlay = await openDiff(user, {
+      headCommit: "0123456789abcdef0123456789abcdef01234567",
+    });
+    expect(within(overlay).getByRole("button", { name: "#701 をマージ" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
   /* patch は worktree の base branch との差分。retarget は head を 1 commit も
    * 動かさないので、head だけを見る pin と 3 段照合はすべて素通りする。 */
   it("PR が別の base へ retarget されたらツールバーのマージを塞ぐ", async () => {
@@ -537,8 +575,9 @@ describe("マージ対象の PR", () => {
 
 describe("merge queue", () => {
   /* `gh pr merge` は queue 必須の base で 0 終了する。merged 扱いにすると嘘に
-   * なるうえ、反映待ちで固まる。 */
-  it("queued はマージ済みにせず、その旨を伝えて押せる状態に戻す", async () => {
+   * なる。かといって押せる状態に戻すのも誤り — auto-merge は既に武装済みで、
+   * サーバも同じ理由で claim に載せるので、二度目は必ず 409 になる。 */
+  it("queued はマージ済みにせず、決着まで塞ぐ", async () => {
     server.use(
       http.post(MERGE_PATH, () =>
         HttpResponse.json({
@@ -558,9 +597,8 @@ describe("merge queue", () => {
     const drawer = await openDrawer(user);
     await user.click(within(drawer).getByRole("button", { name: "#701 をマージ" }));
     await screen.findByText(/merge queue 待ち/);
-    expect(within(drawer).getByRole("button", { name: "#701 をマージ" })).not.toHaveAttribute(
-      "aria-disabled",
-    );
+    const button = within(drawer).getByRole("button", { name: /反映を待っています/ });
+    expect(button).toHaveAttribute("aria-disabled", "true");
   });
 });
 
