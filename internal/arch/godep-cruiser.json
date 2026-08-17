@@ -103,6 +103,22 @@
       }
     },
     {
+      "name": "infra-no-new-adapter-importers",
+      "severity": "error",
+      "comment": "A neutral-named infra package that imports a concrete adapter and re-exports it as backend.Backend would launder the runtime past app-no-runtime-adapters and the vocabulary test (app would import only the neutral name). The packages that may import tmuxrun/tmuxbackend/herdrrun are closed: the adapters themselves, paneruntime (the construction point), and notify (the tmux notification channel sink). A new importer must be added here, which is the review gate.",
+      "from": {
+        "path": ["^internal/infra/"],
+        "pathNot": [
+          "_test\\.go$",
+          "^internal/infra/(tmuxrun|tmuxbackend|herdrrun|paneruntime|notify)/"
+        ]
+      },
+      "to": {
+        "dependencyTypes": ["local"],
+        "path": ["^internal/infra/(tmuxrun|tmuxbackend|herdrrun)(/|$)"]
+      }
+    },
+    {
       "name": "meta-no-module-imports",
       "severity": "error",
       "comment": "internal/arch is the test-only meta package and imports no module-internal packages, so the layer guard cannot depend on what it guards.",

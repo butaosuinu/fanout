@@ -51,19 +51,41 @@
     },
     {
       "name": "NewTmux",
-      "reason": "paneruntime.NewTmux is the documented host-runtime constructor. paneruntime is the one package allowed to name a concrete adapter, and a constructor that builds a specific runtime has to say which."
+      "reason": "paneruntime.NewTmux is the documented host-runtime constructor. paneruntime is the one package allowed to name a concrete adapter, and a constructor that builds a specific runtime has to say which.",
+      "files": [
+        "cmd/fanout/codex_team_tui.go",
+        "cmd/fanout/dashboard.go",
+        "cmd/fanout/deps.go",
+        "cmd/fanout/focusconsole.go",
+        "cmd/fanout/lifecycle_workspace.go",
+        "cmd/fanout/msg.go",
+        "cmd/fanout/state_runtime.go",
+        "cmd/fanout/tui_launch.go",
+        "cmd/fanout/worktree_action.go"
+      ]
     },
     {
       "name": "tmux",
-      "reason": "depNeeds.tmux names the executable the prerequisite probe looks for on PATH, not a launch lane."
+      "reason": "depNeeds.tmux names the executable the prerequisite probe looks for on PATH, not a launch lane.",
+      "files": [
+        "cmd/fanout/deps.go",
+        "cmd/fanout/main.go",
+        "cmd/fanout/tui.go"
+      ]
     },
     {
       "name": "isHerdrLifecycleRequest",
-      "reason": "main.go's dispatch guard for the `fanout herdr` subcommand; it names the allowed command word across the file boundary."
+      "reason": "main.go's dispatch guard for the `fanout herdr` subcommand; it names the allowed command word across the file boundary.",
+      "files": [
+        "cmd/fanout/main.go"
+      ]
     },
     {
       "name": "cmdHerdrLifecycle",
-      "reason": "main.go's dispatch-table entry for the `fanout herdr` subcommand; it names the allowed command word across the file boundary."
+      "reason": "main.go's dispatch-table entry for the `fanout herdr` subcommand; it names the allowed command word across the file boundary.",
+      "files": [
+        "cmd/fanout/main.go"
+      ]
     }
   ],
   "tags": [
