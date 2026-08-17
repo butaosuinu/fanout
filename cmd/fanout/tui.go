@@ -20,9 +20,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
@@ -32,7 +32,7 @@ const tuiPaneTitle = "fanout tui"
 var runTUI = fanouttui.Run
 
 var (
-	ensureOwnedHerdrForTUI   = ensureOwnedHerdrSession
+	ensureOwnedHerdrForTUI   = paneruntime.EnsureProject
 	ensureHerdrConsoleForTUI = panelaunch.EnsureManagedConsole
 )
 
@@ -101,7 +101,7 @@ func cmdHerdrTUI(
 	if os.Getenv("HERDR_ENV") != "1" {
 		return enterHerdrTUISession(projectRoot, selection, lg)
 	}
-	owned, openErr := openOwnedHerdrSession(projectRoot)
+	owned, openErr := paneruntime.OpenProject(projectRoot)
 	if openErr == nil && !ambientHerdrRouteMatches(owned) {
 		openErr = fmt.Errorf("%s", ownedHerdrUnavailable)
 		owned = nil
@@ -224,7 +224,7 @@ func wireTmuxTUI(
 	hookConfig hooks.Config,
 	lg *log.Logger,
 ) func() {
-	runtimeBackend := tmuxbackend.New()
+	runtimeBackend := paneruntime.NewTmux()
 	opts.LaunchPane = newTUILaunchPaneFunc(projectRoot, session, commandName, hookConfig)
 	opts.NewPanePrompt = newTUINewPanePromptFunc(projectRoot, commandName)
 	opts.HelpPopup = newTUIHelpPopupFunc(projectRoot, commandName)
@@ -247,7 +247,7 @@ func wireTmuxTUI(
 	return markTUIRunning(projectRoot)
 }
 
-func wireTmuxPaneActions(opts *fanouttui.Options, runtimeBackend *tmuxbackend.Backend) {
+func wireTmuxPaneActions(opts *fanouttui.Options, runtimeBackend paneruntime.HostBackend) {
 	opts.LifecycleCloseOwned = runtimeBackend.CloseOwned
 	opts.ShellPaneAlive = runtimeShellPaneAlive(runtimeBackend.ListLive)
 	opts.FocusPane = func(paneID string) error {
@@ -516,7 +516,7 @@ func markTUIRunning(projectRoot string) func() {
 		_ = tmuxrun.SetPaneRole(paneID, "") // a post-TUI shell must not look like a sidebar
 		// Re-tile so the ex-console pane is not left stuck at the 40-col sidebar
 		// width beside full-size agent panes.
-		_ = tmuxbackend.New().Relayout(paneID, backend.LayoutClose)
+		_ = paneruntime.NewTmux().Relayout(paneID, backend.LayoutClose)
 	}
 }
 

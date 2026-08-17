@@ -123,6 +123,7 @@ var prefixRules = []struct {
 	{"internal/infra/team/", Rule{ID: "infra-team", Class: ClassH, Source: SourceDocTable, Note: "team SQLite バス"}},
 	{"internal/infra/settings/", Rule{ID: "infra-settings", Class: ClassH, Source: SourceDocTable, Note: "設定解決の安全ゲート"}},
 	{"internal/infra/herdrrun/", Rule{ID: "infra-herdrrun", Class: ClassH, Source: SourceDocTable, Note: "herdr version gate、owned session lifecycle、non-shell agent launcher、workspace/worktree mutation、snapshot 投影"}},
+	{"internal/infra/paneruntime/", Rule{ID: "infra-paneruntime", Class: ClassH, Source: SourceDocTable, Note: "runtime backend の選択入力収集・解決・具象構築・self-exec registry・telemetry observer"}},
 
 	// infra M.
 	{"internal/infra/ghissue/", Rule{ID: "infra-ghissue", Class: ClassM, Source: SourceDocTable, Note: "GitHub issue/PR 読み書き"}},
@@ -131,7 +132,7 @@ var prefixRules = []struct {
 	{"internal/infra/tmuxbackend/", Rule{ID: "infra-tmuxbackend", Class: ClassM, Source: SourceDocTable, Note: "backend 契約から tmuxrun への adapter・window レイアウト"}},
 	{"internal/infra/msgstore/", Rule{ID: "infra-msgstore", Class: ClassM, Source: SourceDocTable, Note: "send/post/inbox/board"}},
 	{"internal/infra/notify/", Rule{ID: "infra-notify", Class: ClassM, Source: SourceDocTable, Note: "通知送出"}},
-	{"internal/infra/runtime/", Rule{ID: "infra-runtime", Class: ClassM, Source: SourceDocTable, Note: "git root・選択済み backend の起動コンテキスト解決"}},
+	{"internal/infra/runtime/", Rule{ID: "infra-runtime", Class: ClassM, Source: SourceDocTable, Note: "git root・選択済み backend の起動コンテキスト解決(具象 backend を持たないので paneruntime とは別)"}},
 	{"internal/infra/displayname/", Rule{ID: "infra-displayname", Class: ClassM, Source: SourceDocTable, Note: "表示名生成"}},
 	{"internal/infra/codexapp/", Rule{ID: "infra-codexapp", Class: ClassM, Source: SourceDocTable, Note: "Codex app-server クライアント"}},
 	{"internal/infra/atomicfs/", Rule{ID: "infra-atomicfs", Class: ClassM, Source: SourceDocTable, Note: "原子的ファイル書き込み"}},

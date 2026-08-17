@@ -16,8 +16,8 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -56,7 +56,7 @@ func codexPlanStateSink(getenv func(string) string) func(string) {
 	if codexPlanRuntimeBackend(getenv) == backend.Herdr {
 		return newBestEffortStateSink(func(state string) {
 			// Display telemetry is best-effort and must not affect the controller lifecycle.
-			_ = stateemitter.Run([]string{state}, codexPlanEmitterEnv(getenv), herdrEmitterObserver{}, io.Discard)
+			_ = stateemitter.Run([]string{state}, codexPlanEmitterEnv(getenv), runtimeEmitterObserver{}, io.Discard)
 		})
 	}
 	paneID := getenv("TMUX_PANE")
@@ -117,7 +117,7 @@ func newHerdrCodexPlanCapture(getenv func(string) string) func() (string, error)
 		WorkspaceLabel: getenv(telemetry.WorkspaceLabelEnv), TerminalID: getenv(telemetry.TerminalIDEnv),
 		AgentID: getenv(telemetry.AgentIDEnv),
 	}
-	var owned *herdrrun.OwnedSession
+	var owned paneruntime.ManagedSession
 	return newBestEffortScreenCapture(herdrCodexPlanCaptureTimeout, func(ctx context.Context) (string, error) {
 		if owned == nil {
 			var err error
@@ -130,7 +130,7 @@ func newHerdrCodexPlanCapture(getenv func(string) string) func() (string, error)
 	})
 }
 
-func openHerdrCodexPlanCapture(ctx context.Context, base backend.OwnedPaneIdentity) (*herdrrun.OwnedSession, backend.OwnedPaneIdentity, error) {
+func openHerdrCodexPlanCapture(ctx context.Context, base backend.OwnedPaneIdentity) (paneruntime.ManagedSession, backend.OwnedPaneIdentity, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, base, fmt.Errorf("resolve Codex Plan controller cwd: %w", err)
@@ -140,11 +140,11 @@ func openHerdrCodexPlanCapture(ctx context.Context, base backend.OwnedPaneIdenti
 		return nil, base, err
 	}
 	base.RepoKey, base.WorktreePath, base.CurrentPath = repo.RepoKey, cwd, cwd
-	owned, err := herdrrun.OpenOwned(ctx, herdrrun.OwnedOptions{GitCommonDir: repo.RepoKey})
+	owned, err := paneruntime.Open(ctx, repo.RepoKey)
 	return owned, base, err
 }
 
-func captureHerdrCodexPlanScreen(ctx context.Context, owned *herdrrun.OwnedSession, base backend.OwnedPaneIdentity) (string, error) {
+func captureHerdrCodexPlanScreen(ctx context.Context, owned paneruntime.ManagedSession, base backend.OwnedPaneIdentity) (string, error) {
 	panes, err := owned.LivePanes(ctx)
 	if err != nil {
 		return "", err

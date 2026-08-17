@@ -15,16 +15,17 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/team"
 )
 
 func TestResolveBackendSelectionCarriesParentStickiness(t *testing.T) {
-	got, err := resolveBackendSelection("0425", runtimeBackendInputs{
-		cli:         backend.Tmux,
-		environment: "tmux",
-		rows: []backend.Binding{
+	got, err := resolveBackendSelection("0425", paneruntime.Inputs{
+		CLI:         backend.Tmux,
+		Environment: "tmux",
+		Rows: []backend.Binding{
 			{Parent: "425", Backend: ""},
 			{Parent: "999", Backend: backend.Herdr},
 		},
@@ -38,9 +39,9 @@ func TestResolveBackendSelectionCarriesParentStickiness(t *testing.T) {
 }
 
 func TestResolveBackendSelectionNestedHerdrWinsTmuxContext(t *testing.T) {
-	got, err := resolveBackendSelection("425", runtimeBackendInputs{
-		herdrEnvironment: true,
-		tmuxEnvironment:  true,
+	got, err := resolveBackendSelection("425", paneruntime.Inputs{
+		HerdrEnvironment: true,
+		TmuxEnvironment:  true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -51,9 +52,9 @@ func TestResolveBackendSelectionNestedHerdrWinsTmuxContext(t *testing.T) {
 }
 
 func TestResolveBackendSelectionCarriesProvisionalIntents(t *testing.T) {
-	got, err := resolveBackendSelection("425", runtimeBackendInputs{
-		tmuxEnvironment: true,
-		provisionalIntents: []backend.Binding{{
+	got, err := resolveBackendSelection("425", paneruntime.Inputs{
+		TmuxEnvironment: true,
+		ProvisionalIntents: []backend.Binding{{
 			Parent:  "0425",
 			Backend: backend.Herdr,
 		}},
@@ -65,16 +66,16 @@ func TestResolveBackendSelectionCarriesProvisionalIntents(t *testing.T) {
 		t.Fatalf("selection = %+v, want sticky provisional herdr", got)
 	}
 
-	_, err = resolveBackendSelection("425", runtimeBackendInputs{
-		rows:               []backend.Binding{{Parent: "425"}},
-		provisionalIntents: []backend.Binding{{Parent: "425", Backend: backend.Herdr}},
+	_, err = resolveBackendSelection("425", paneruntime.Inputs{
+		Rows:               []backend.Binding{{Parent: "425"}},
+		ProvisionalIntents: []backend.Binding{{Parent: "425", Backend: backend.Herdr}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "mixed state") {
 		t.Fatalf("mixed row/intent error = %v, want mixed state", err)
 	}
 
-	_, err = resolveBackendSelection("425", runtimeBackendInputs{
-		provisionalIntents: []backend.Binding{{Parent: "425"}},
+	_, err = resolveBackendSelection("425", paneruntime.Inputs{
+		ProvisionalIntents: []backend.Binding{{Parent: "425"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "provisional intent for parent 425 has no backend") {
 		t.Fatalf("empty intent error = %v, want fail closed", err)
@@ -97,8 +98,8 @@ func TestBackendSelectionVerifierRejectsRowCreatedAfterPreflight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.selection.Name != backend.Tmux {
-		t.Fatalf("preflight selection = %+v, want tmux", resolved.selection)
+	if resolved.Selection.Name != backend.Tmux {
+		t.Fatalf("preflight selection = %+v, want tmux", resolved.Selection)
 	}
 
 	locked, err := state.LockProject(repo)
@@ -115,7 +116,7 @@ func TestBackendSelectionVerifierRejectsRowCreatedAfterPreflight(t *testing.T) {
 		Backend: backend.Herdr,
 		PaneID:  "w1:p1",
 	})
-	err = resolved.verify("425", locked.Store)
+	err = resolved.Verify("425", locked.Store)
 	if err == nil || !strings.Contains(err.Error(), "selection changed from tmux to herdr while acquiring the launch lock") {
 		t.Fatalf("locked recheck error = %v, want racing row rejection", err)
 	}
@@ -185,11 +186,11 @@ func TestRuntimeBackendBindingsKeepNonIssuePlansWorktreeLocal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rows, err := runtimeBackendBindings(tt.root, store)
+			rows, err := paneruntime.CollectBindings(paneruntime.Config{Bindings: backendBindings}, tt.root, store)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := resolveBackendSelection("plan:shared", runtimeBackendInputs{rows: rows})
+			got, err := resolveBackendSelection("plan:shared", paneruntime.Inputs{Rows: rows})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -227,11 +228,11 @@ func TestRuntimeBackendBindingsKeepIssueSourcedPlansRepositoryWide(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, err := runtimeBackendBindings(repo, store)
+	rows, err := paneruntime.CollectBindings(paneruntime.Config{Bindings: backendBindings}, repo, store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = resolveBackendSelection("425", runtimeBackendInputs{rows: rows})
+	_, err = resolveBackendSelection("425", paneruntime.Inputs{Rows: rows})
 	if err == nil || !strings.Contains(err.Error(), "mixed state: herdr, tmux") {
 		t.Fatalf("issue-sourced sibling plan error = %v, want repository-wide mixed-state rejection", err)
 	}
@@ -254,8 +255,8 @@ func TestBackendSelectionVerifierRechecksLinkedWorktreeRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.selection.Name != backend.Tmux {
-		t.Fatalf("preflight selection = %+v, want tmux", resolved.selection)
+	if resolved.Selection.Name != backend.Tmux {
+		t.Fatalf("preflight selection = %+v, want tmux", resolved.Selection)
 	}
 
 	writeLifecycleState(t, sibling, state.Pane{
@@ -263,21 +264,24 @@ func TestBackendSelectionVerifierRechecksLinkedWorktreeRows(t *testing.T) {
 		Backend: backend.Herdr,
 		PaneID:  "w1:p1",
 	})
-	if err := resolved.verify("425", store); err == nil || !strings.Contains(err.Error(), "selection changed from tmux to herdr while acquiring the launch lock") {
+	if err := resolved.Verify("425", store); err == nil || !strings.Contains(err.Error(), "selection changed from tmux to herdr while acquiring the launch lock") {
 		t.Fatalf("locked recheck error = %v, want linked-worktree racing row rejection", err)
 	}
 }
 
 func TestBackendSelectionVerifierKeepsProvisionalIntents(t *testing.T) {
-	inputs := runtimeBackendInputs{
-		provisionalIntents: []backend.Binding{{Parent: "425", Backend: backend.Herdr}},
-		suppliedIntents:    []backend.Binding{{Parent: "425", Backend: backend.Herdr}},
+	inputs := paneruntime.Inputs{
+		ProvisionalIntents: []backend.Binding{{Parent: "425", Backend: backend.Herdr}},
+		SuppliedIntents:    []backend.Binding{{Parent: "425", Backend: backend.Herdr}},
 	}
 	selection, err := resolveBackendSelection("425", inputs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = backendSelectionVerifier(selection, inputs)("425", state.Store{Panes: []state.Pane{{Parent: "425"}}})
+	verify := paneruntime.NewSelectionVerifier(
+		paneruntime.Config{Bindings: backendBindings}, selection, inputs,
+	)
+	err = verify("425", state.Store{Panes: []state.Pane{{Parent: "425"}}})
 	if err == nil || !strings.Contains(err.Error(), "mixed state") {
 		t.Fatalf("locked recheck error = %v, want mixed final row/provisional intent rejection", err)
 	}
@@ -296,8 +300,8 @@ func TestResolveLaunchBackendLoadsSharedHerdrProvisionalIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolved, err := resolveLaunchBackend(&cliflags.Config{ParentRef: "425", Agent: "claude", DryRun: true}, repo, store, nil)
-	if err != nil || resolved.selection.Name != backend.Herdr {
-		t.Fatalf("resolveLaunchBackend() = (%+v, %v), want provisional Herdr ownership", resolved.selection, err)
+	if err != nil || resolved.Selection.Name != backend.Herdr {
+		t.Fatalf("resolveLaunchBackend() = (%+v, %v), want provisional Herdr ownership", resolved.Selection, err)
 	}
 }
 
@@ -321,8 +325,8 @@ func TestSharedHerdrPlanIntentsRemainOwnerWorktreeLocal(t *testing.T) {
 		siblingStore,
 		nil,
 	)
-	if err != nil || resolved.selection.Name != backend.Tmux {
-		t.Fatalf("foreign plan binding selected %+v, err=%v", resolved.selection, err)
+	if err != nil || resolved.Selection.Name != backend.Tmux {
+		t.Fatalf("foreign plan binding selected %+v, err=%v", resolved.Selection, err)
 	}
 
 	writeHerdrCoordinatorIntent(t, sibling, "plan:demo")
@@ -370,8 +374,8 @@ func TestSharedHerdrIssueSourcedPlanIntentUsesActualParentAcrossWorktrees(t *tes
 		t.Fatal(err)
 	}
 	resolved, err := resolveLaunchBackend(&cliflags.Config{ParentRef: "425", Agent: "claude", DryRun: true}, sibling, store, nil)
-	if err != nil || resolved.selection.Name != backend.Herdr {
-		t.Fatalf("issue-sourced Herdr plan binding = (%+v, %v), want Herdr ownership", resolved.selection, err)
+	if err != nil || resolved.Selection.Name != backend.Herdr {
+		t.Fatalf("issue-sourced Herdr plan binding = (%+v, %v), want Herdr ownership", resolved.Selection, err)
 	}
 }
 
@@ -390,12 +394,12 @@ func TestBackendSelectionVerifierRechecksSharedHerdrProvisionalIntent(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.selection.Name != backend.Tmux {
-		t.Fatalf("preflight selection = %+v, want tmux", resolved.selection)
+	if resolved.Selection.Name != backend.Tmux {
+		t.Fatalf("preflight selection = %+v, want tmux", resolved.Selection)
 	}
 
 	writeHerdrCoordinatorIntent(t, repo, "425")
-	err = resolved.verify("425", store)
+	err = resolved.Verify("425", store)
 	if err == nil || !strings.Contains(err.Error(), "selection changed from tmux to herdr while acquiring the launch lock") {
 		t.Fatalf("locked recheck error = %v, want racing Herdr intent rejection", err)
 	}
@@ -461,7 +465,7 @@ func TestValidateLaunchBackendAllowsCodexChildPlanMode(t *testing.T) {
 
 func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 	t.Helper()
-	ownerProjectRoot, err := state.IntentOwnerProjectRoot(parent, canonicalRuntimeRoot(repo))
+	ownerProjectRoot, err := state.IntentOwnerProjectRoot(parent, paneruntime.CanonicalRoot(repo))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +475,7 @@ func writeHerdrCoordinatorIntent(t *testing.T, repo, parent string) {
 	}
 	runtimeOwnerProjectRoot, err := state.IntentOwnerProjectRoot(
 		runtimeParent,
-		canonicalRuntimeRoot(repo),
+		paneruntime.CanonicalRoot(repo),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -538,8 +542,8 @@ func TestConstructLaunchRuntimeBackendDefersLiveHerdrOwnership(t *testing.T) {
 	gitCmdTest(t, repo, "init", "-b", "main")
 	t.Setenv("PATH", t.TempDir())
 
-	runtimeBackend, prepare, err := constructLaunchRuntimeBackend(
-		&cliflags.Config{}, backend.Herdr, runtimeBackendInputs{projectRoot: repo},
+	runtimeBackend, prepare, err := paneruntime.NewLaunchBackend(
+		paneruntime.Config{ProjectRoot: repo}, backend.Herdr, paneruntime.Inputs{ProjectRoot: repo},
 	)
 	if err != nil || runtimeBackend == nil || runtimeBackend.Name() != backend.Herdr {
 		t.Fatalf("construct live Herdr backend = (%v, %v); want mutation-free preview", runtimeBackend, err)
@@ -683,9 +687,9 @@ func TestBackendBindingsActualIssueAliasKeepsLegacyTmuxSticky(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveBackendSelection("425", runtimeBackendInputs{
-				userDefault: backend.Herdr,
-				rows:        backendBindings("", state.Store{Panes: []state.Pane{tt.pane}}),
+			got, err := resolveBackendSelection("425", paneruntime.Inputs{
+				UserDefault: backend.Herdr,
+				Rows:        backendBindings("", state.Store{Panes: []state.Pane{tt.pane}}),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -759,7 +763,7 @@ func TestBackendBindingsActualIssueAliasesRejectMixedBackends(t *testing.T) {
 			Backend:  backend.Herdr,
 		},
 	}})
-	_, err := resolveBackendSelection("425", runtimeBackendInputs{rows: rows})
+	_, err := resolveBackendSelection("425", paneruntime.Inputs{Rows: rows})
 	if err == nil || !strings.Contains(err.Error(), "mixed state: herdr, tmux") {
 		t.Fatalf("mixed issue aliases error = %v, want fail closed", err)
 	}
@@ -775,9 +779,9 @@ func TestBackendBindingsIgnoreUnrelatedManualRows(t *testing.T) {
 	if len(rows) != 0 {
 		t.Fatalf("bindings = %+v, want unrelated @manual row omitted", rows)
 	}
-	got, err := resolveBackendSelection(panelaunch.ManualParentRef, runtimeBackendInputs{
-		userDefault: backend.Herdr,
-		rows:        rows,
+	got, err := resolveBackendSelection(panelaunch.ManualParentRef, paneruntime.Inputs{
+		UserDefault: backend.Herdr,
+		Rows:        rows,
 	})
 	if err != nil {
 		t.Fatal(err)

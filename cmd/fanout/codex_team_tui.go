@@ -10,7 +10,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/log"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
@@ -34,7 +34,7 @@ func cmdCodexTeamTUI(args []string, lg *log.Logger) exitcode.Code {
 	if self, err := strconv.Atoi(opts.self); err == nil {
 		watchReq.Self = self
 	}
-	watcher, watchCode := peermsg.OpenWatcher(watchReq, peermsg.DefaultDeps(tmuxbackend.New()), lg)
+	watcher, watchCode := peermsg.OpenWatcher(watchReq, peermsg.DefaultDeps(paneruntime.NewTmux()), lg)
 	if watchCode != exitcode.OK {
 		startupErr := fmt.Errorf("open Codex team message watcher (exit %d)", watchCode)
 		if err := codexapp.WriteFailedStatus(opts.config.StatusFile, startupErr); err != nil {

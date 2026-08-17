@@ -11,9 +11,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 )
 
 // version and commit are injected at build time via -ldflags (see release.yml,
@@ -23,6 +23,29 @@ var (
 	commit  = "none"
 )
 
+// dispatch is one row of the first-match-wins subcommand table.
+type dispatch struct {
+	match  func([]string) bool
+	handle func() exitcode.Code
+}
+
+// selfExecDispatch adapts the runtime-owned hidden subcommands to the dispatch
+// table so recognition stays a single ordered pass. The runtime layer owns the
+// tokens because it bakes them into the processes it spawns.
+func selfExecDispatch() []dispatch {
+	entries := paneruntime.Entries()
+	table := make([]dispatch, 0, len(entries))
+	for _, entry := range entries {
+		table = append(table, dispatch{
+			match: entry.Match,
+			handle: func() exitcode.Code {
+				return exitcode.Code(entry.Run(os.Stdin, os.Stdout, os.Stderr, os.Args[2:]))
+			},
+		})
+	}
+	return table
+}
+
 //nolint:funlen // The composition root keeps the first-match-wins dispatch and launch wiring visible together.
 func main() {
 	lg := log.New(false)
@@ -31,20 +54,14 @@ func main() {
 
 	// Subcommand dispatch: an ordered, first-match-wins table. The order is
 	// load-bearing (e.g. update before check-update, TUI before the popups) —
-	// keep it identical to preserve behavior.
-	type dispatch struct {
-		match  func([]string) bool
-		handle func() exitcode.Code
-	}
-	table := []dispatch{
-		{func([]string) bool { return herdrrun.IsPaneLauncherRequest() }, func() exitcode.Code {
-			return exitcode.Code(herdrrun.RunPaneLauncher(os.Stdin, os.Stdout, os.Stderr))
-		}},
+	// keep it identical to preserve behavior. The runtime-owned hidden
+	// subcommands lead it: each is recognized by an inherited environment
+	// variable or a reserved token, so none can shadow a user-facing verb.
+	table := append(selfExecDispatch(), []dispatch{
 		{telemetry.IsRequest, func() exitcode.Code {
-			return exitcode.Code(stateemitter.Run(os.Args[2:], os.Getenv, herdrEmitterObserver{}, os.Stderr))
+			return exitcode.Code(stateemitter.Run(os.Args[2:], os.Getenv, runtimeEmitterObserver{}, os.Stderr))
 		}},
 		{hooks.IsBackgroundRunnerRequest, func() exitcode.Code { return exitcode.Code(hooks.RunBackgroundRunner(os.Args[2:], os.Stderr)) }},
-		{herdrrun.IsSupervisorRequest, func() exitcode.Code { return exitcode.Code(herdrrun.RunSupervisor(os.Args[2:], os.Stderr)) }},
 		{isVersionRequest, func() exitcode.Code { fmt.Fprintln(os.Stdout, versionLine()); return exitcode.OK }},
 		{isUpdateRequest, func() exitcode.Code { return cmdUpdate(os.Args[2:], version, ghissue.Runner{}, lg) }},
 		{isCheckUpdateRequest, func() exitcode.Code { return cmdCheckUpdate(version, ghissue.Runner{}, lg) }},
@@ -61,7 +78,7 @@ func main() {
 		{isFocusConsoleRequest, func() exitcode.Code { return cmdFocusConsole(os.Args[2:], lg) }},
 		{isWorktreeActionRequest, func() exitcode.Code { return cmdWorktreeAction(os.Args[1:], lg, commandName) }},
 		{isMsgRequest, func() exitcode.Code { return cmdMsg(os.Args[2:], lg) }},
-	}
+	}...)
 	for _, d := range table {
 		if d.match(args) {
 			os.Exit(int(d.handle()))

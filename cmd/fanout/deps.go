@@ -5,7 +5,7 @@ import (
 	"os/exec"
 
 	"github.com/butaosuinu/fanout/internal/infra/log"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 )
 
 // depNeeds selects which external dependencies a command path requires.
@@ -33,7 +33,7 @@ func missingDeps(needs depNeeds) []string {
 		check("gh", "gh (brew install gh)")
 	}
 	if needs.tmux {
-		if err := tmuxrun.CheckMinimumVersion(); err != nil {
+		if err := paneruntime.NewTmux().CheckAvailable(); err != nil {
 			missing = append(missing, err.Error())
 		}
 	}

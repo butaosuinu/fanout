@@ -269,8 +269,8 @@ func TestWatcherLaunchConfigAllowsHerdrSelection(t *testing.T) {
 			cfg := newWatchLaunchConfig(resolved, 425, 0)
 			cfg.DryRun = true
 			selection, err := resolveLaunchBackend(cfg, repo, state.Store{}, nil)
-			if err != nil || selection.selection.Name != backend.Herdr {
-				t.Fatalf("watcher Herdr selection = (%+v, %v)", selection.selection, err)
+			if err != nil || selection.Selection.Name != backend.Herdr {
+				t.Fatalf("watcher Herdr selection = (%+v, %v)", selection.Selection, err)
 			}
 		})
 	}

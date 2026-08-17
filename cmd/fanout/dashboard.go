@@ -17,8 +17,8 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/browser"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
@@ -121,7 +121,7 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 			return exitcode.Env
 		}
 	}
-	ownsHerdrPane, readHerdrPane := dashboardHerdrPeekPorts(root, openOwnedHerdrSession)
+	ownsHerdrPane, readHerdrPane := dashboardHerdrPeekPorts(root, paneruntime.OpenProject)
 	srv, err := dashboard.New(dashboard.Options{
 		ProjectRoot: root,
 		Port:        flags.port,
@@ -190,9 +190,9 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 
 func dashboardHerdrPeekPorts(
 	projectRoot string,
-	open func(string) (*herdrrun.OwnedSession, error),
+	open func(string) (paneruntime.ManagedSession, error),
 ) (func(sessionview.PaneView) bool, func(sessionview.PaneView, int) (string, error)) {
-	bind := func(pv sessionview.PaneView) (*herdrrun.Backend, backend.PaneRef, error) {
+	bind := func(pv sessionview.PaneView) (backend.Backend, backend.PaneRef, error) {
 		owned, err := open(projectRoot)
 		if err != nil {
 			return nil, backend.PaneRef{}, err

@@ -9,9 +9,8 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/peermsg"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 )
 
 const msgUsage = `Usage: fanout msg <verb> [options] [body...]
@@ -146,13 +145,13 @@ func cmdMsg(args []string, lg *log.Logger) exitcode.Code {
 	if flags == nil {
 		return code // help (OK) or a parse error; either way the message is out
 	}
-	deps := peermsg.DefaultDeps(tmuxbackend.New())
+	deps := peermsg.DefaultDeps(paneruntime.NewTmux())
 	deps.OpenRuntime = openMsgHerdr
 	return peermsg.Run(flags.request(), deps, lg)
 }
 
 func openMsgHerdr(ctx context.Context, repoKey string) (peermsg.NudgeRuntime, error) {
-	return herdrrun.OpenOwned(ctx, herdrrun.OwnedOptions{GitCommonDir: repoKey})
+	return paneruntime.Open(ctx, repoKey)
 }
 
 // parseMsgFlags parses `msg` argv. A nil msgFlags means "stop with this

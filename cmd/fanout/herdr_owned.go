@@ -7,7 +7,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -45,7 +45,7 @@ func cloneAgentSessionRef(ref *backend.AgentSessionRef) *backend.AgentSessionRef
 	return &cloned
 }
 
-func ownedHerdrActionDisabled(owned *herdrrun.OwnedSession, pane state.Pane) string {
+func ownedHerdrActionDisabled(owned paneruntime.ManagedSession, pane state.Pane) string {
 	if owned == nil {
 		return ownedHerdrUnavailable
 	}
@@ -64,9 +64,9 @@ func ownedHerdrActionDisabled(owned *herdrrun.OwnedSession, pane state.Pane) str
 }
 
 func bindOwnedHerdrPane(
-	owned *herdrrun.OwnedSession,
+	owned paneruntime.ManagedSession,
 	pane state.Pane,
-) (*herdrrun.Backend, backend.PaneRef, error) {
+) (backend.Backend, backend.PaneRef, error) {
 	if reason := ownedHerdrActionDisabled(owned, pane); reason != "" {
 		return nil, backend.PaneRef{}, fmt.Errorf("%s", reason)
 	}
