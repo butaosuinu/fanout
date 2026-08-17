@@ -52,10 +52,15 @@ type vocabularyAllowlist struct {
 
 // vocabularyAllowEntry is one exemption. Name is a repo-relative path for a
 // file entry, an exact identifier for an identifier entry, and the exact tag
-// literal (backquotes included) for a tag entry.
+// literal (backquotes included) for a tag entry. Files, when present on an
+// identifier entry, scopes the exemption to those repo-relative files: a new
+// file spelling the identifier fails until it is listed here with the reason
+// re-reviewed. The runtime-name constants (Tmux, Herdr) use this so a new
+// name-based branch cannot ride in on the data-read exemption unseen.
 type vocabularyAllowEntry struct {
-	Name   string `json:"name"`
-	Reason string `json:"reason"`
+	Name   string   `json:"name"`
+	Reason string   `json:"reason"`
+	Files  []string `json:"files,omitempty"`
 }
 
 // vocabularyFinding is one place a runtime name is spelled in code.
@@ -119,9 +124,11 @@ func TestRuntimeVocabulary(t *testing.T) {
 			t.Errorf("scanned %d non-test .go files, want at least %d; the walk or the tree list is broken",
 				scan.files, minRuntimeVocabularyFiles)
 		}
-		for tree, count := range scan.perTree {
-			if count == 0 {
-				t.Errorf("tree %s contributed no files; it was renamed or removed", tree)
+		// Iterate the configured list, not the found keys: a tree that yielded
+		// nothing never gets a perTree key and would pass a found-key loop.
+		for _, tree := range runtimeVocabularyTrees {
+			if scan.perTree[tree.path] == 0 {
+				t.Errorf("tree %s contributed no files; it was renamed or removed", tree.path)
 			}
 		}
 	})
@@ -186,6 +193,12 @@ func inspectFileVocabulary(fset *token.FileSet, path, rel string) ([]vocabularyF
 	var findings []vocabularyFinding
 	if name := filepath.Base(rel); matchesRuntimeName(name) {
 		findings = append(findings, vocabularyFinding{File: rel, Line: 0, Kind: "file name", Text: name})
+	}
+	// The directory is the package's own import path. Checking it catches a
+	// runtime-named package (internal/app/herdrbridge/...) that no neutral
+	// code imports yet, which the import check alone would never see.
+	if dir := filepath.ToSlash(filepath.Dir(rel)); matchesRuntimeName(dir) {
+		findings = append(findings, vocabularyFinding{File: rel, Line: 0, Kind: "package path", Text: dir})
 	}
 	file, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
@@ -265,7 +278,18 @@ func loadVocabularyAllowlist(path string) (*allowlistIndex, error) {
 			if strings.TrimSpace(entry.Reason) == "" {
 				return nil, fmt.Errorf("%s entry %q has no reason", category.kind, entry.Name)
 			}
-			index.entries[category.kind+":"+entry.Name] = true
+			if len(entry.Files) == 0 {
+				index.entries[category.kind+":"+entry.Name] = true
+				continue
+			}
+			// A scoped entry exempts (name, file) pairs; each file must stay
+			// live on its own, so a rename cannot widen the exemption.
+			if category.kind != "identifier" {
+				return nil, fmt.Errorf("%s entry %q scopes by files, which only identifier entries support", category.kind, entry.Name)
+			}
+			for _, file := range entry.Files {
+				index.entries[category.kind+":"+entry.Name+"@"+file] = true
+			}
 		}
 	}
 	return index, nil
@@ -273,9 +297,13 @@ func loadVocabularyAllowlist(path string) (*allowlistIndex, error) {
 
 // covers reports whether the finding is exempt, recording the hit so an entry
 // that never fires can be reported as stale. A file entry exempts the file
-// name finding too, which shares the file's path.
+// name finding too, which shares the file's path. A file-scoped identifier
+// entry is consulted before the global form, so scoping a name never loosens
+// what an unscoped entry would have allowed.
 func (a *allowlistIndex) covers(finding vocabularyFinding) bool {
-	return a.hit("file", finding.File) || a.hit(finding.Kind, finding.Text)
+	return a.hit("file", finding.File) ||
+		a.hit(finding.Kind, finding.Text+"@"+finding.File) ||
+		a.hit(finding.Kind, finding.Text)
 }
 
 func (a *allowlistIndex) hit(kind, name string) bool {

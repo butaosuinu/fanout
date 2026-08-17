@@ -8,11 +8,46 @@
   "identifiers": [
     {
       "name": "Tmux",
-      "reason": "backend.Tmux is a persisted runtime name read back as data (state rows, PaneRef). Branching on it for lane selection is what MutationModel and the capabilities replaced; reading it is not."
+      "reason": "backend.Tmux is a persisted runtime name read back as data (state rows, PaneRef). Branching on it for lane selection is what MutationModel and the capabilities replaced; reading it is not. Scoped to the reviewed data-read sites: a new file spelling it must be added here, which is the review gate against a new name-based branch.",
+      "files": [
+        "cmd/fanout/codex_plan_tui.go",
+        "cmd/fanout/runtime_backend.go",
+        "internal/app/lifecycle/lifecycle.go",
+        "internal/app/panelaunch/panelaunch.go",
+        "internal/app/peermsg/nudge.go",
+        "internal/app/run/runtime.go",
+        "internal/app/sessionview/aggregate.go"
+      ]
     },
     {
       "name": "Herdr",
-      "reason": "backend.Herdr is a persisted runtime name read back as data (state rows, PaneRef). Branching on it for lane selection is what MutationModel and the capabilities replaced; reading it is not."
+      "reason": "backend.Herdr is a persisted runtime name read back as data (state rows, PaneRef). Branching on it for lane selection is what MutationModel and the capabilities replaced; reading it is not. Scoped to the reviewed data-read sites: a new file spelling it must be added here, which is the review gate against a new name-based branch.",
+      "files": [
+        "cmd/fanout/codex_plan_tui.go",
+        "cmd/fanout/managed_owned.go",
+        "cmd/fanout/plancmd.go",
+        "cmd/fanout/runtime_backend.go",
+        "cmd/fanout/status.go",
+        "cmd/fanout/tui_watch.go",
+        "internal/app/lifecycle/workspace_identity.go",
+        "internal/app/panelaunch/managed_agent_start.go",
+        "internal/app/panelaunch/managed_attach.go",
+        "internal/app/panelaunch/managed_checks.go",
+        "internal/app/panelaunch/managed_console.go",
+        "internal/app/panelaunch/managed_emitter.go",
+        "internal/app/panelaunch/managed_identity.go",
+        "internal/app/panelaunch/managed_launch.go",
+        "internal/app/panelaunch/managed_resource.go",
+        "internal/app/panelaunch/managed_restart_resume.go",
+        "internal/app/panelaunch/managed_server_lifecycle.go",
+        "internal/app/panelaunch/managed_shell.go",
+        "internal/app/panelaunch/panelaunch.go",
+        "internal/app/peermsg/managed_nudge.go",
+        "internal/app/peermsg/nudge.go",
+        "internal/app/sessionbinding/sessionbinding.go",
+        "internal/app/sessionview/aggregate.go",
+        "internal/app/stateemitter/stateemitter.go"
+      ]
     },
     {
       "name": "NewTmux",
