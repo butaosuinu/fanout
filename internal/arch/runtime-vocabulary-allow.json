@@ -332,5 +332,17 @@
         }
       ]
     }
+  ],
+  "comparisons": [
+    {
+      "name": "\"herdr\"",
+      "reason": "cmd/fanout/herdr_lifecycle.go's dispatch compares args[0] with the user-typed `fanout herdr` subcommand word. The literal names the command vocabulary, not a launch lane.",
+      "files": [
+        {
+          "path": "cmd/fanout/herdr_lifecycle.go",
+          "count": 1
+        }
+      ]
+    }
   ]
 }

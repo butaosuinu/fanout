@@ -41,13 +41,14 @@ var runtimeVocabularyTrees = []struct {
 	{name: "app layer", path: "internal/app"},
 }
 
-// vocabularyAllowlist is the on-disk exemption canon. Files exempt a whole
-// source file; Identifiers exempt one exact identifier name everywhere; Tags
-// exempt one exact struct tag value everywhere.
+// vocabularyAllowlist is the on-disk exemption canon. Files exempt one file's
+// NAME finding; Identifiers, Tags, and Comparisons exempt (name, file, count)
+// pins for identifier, struct tag, and comparison-literal findings.
 type vocabularyAllowlist struct {
 	Files       []vocabularyAllowEntry `json:"files"`
 	Identifiers []vocabularyAllowEntry `json:"identifiers"`
 	Tags        []vocabularyAllowEntry `json:"tags"`
+	Comparisons []vocabularyAllowEntry `json:"comparisons"`
 }
 
 // vocabularyAllowEntry is one exemption. Name is a repo-relative path for a
@@ -238,10 +239,44 @@ func inspectFileVocabulary(fset *token.FileSet, path, rel string) ([]vocabularyF
 					Kind: "struct tag", Text: node.Tag.Value,
 				})
 			}
+		case *ast.BinaryExpr:
+			// The blanket string exemption covers operator-facing text, not
+			// lane selection: a runtime name compared with == or != is a
+			// name-based branch spelled as a literal.
+			if node.Op == token.EQL || node.Op == token.NEQ {
+				for _, side := range []ast.Expr{node.X, node.Y} {
+					findings = append(findings, comparedRuntimeLiteral(fset, rel, side)...)
+				}
+			}
+		case *ast.SwitchStmt:
+			// A switch over a runtime-name string is the same branch in its
+			// other spelling.
+			for _, stmt := range node.Body.List {
+				clause, ok := stmt.(*ast.CaseClause)
+				if !ok {
+					continue
+				}
+				for _, expr := range clause.List {
+					findings = append(findings, comparedRuntimeLiteral(fset, rel, expr)...)
+				}
+			}
 		}
 		return true
 	})
 	return findings, nil
+}
+
+// comparedRuntimeLiteral reports expr when it is a string literal spelling a
+// runtime name in a comparison position (== / != operand or switch case).
+func comparedRuntimeLiteral(fset *token.FileSet, rel string, expr ast.Expr) []vocabularyFinding {
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING || !matchesRuntimeName(lit.Value) {
+		return nil
+	}
+	return []vocabularyFinding{{
+		File: rel, Line: fset.Position(lit.Pos()).Line,
+		Kind: "comparison literal", Text: lit.Value,
+	}}
 }
 
 func matchesRuntimeName(s string) bool {
@@ -296,6 +331,7 @@ func loadVocabularyAllowlist(path string) (*allowlistIndex, error) {
 	}{
 		{kind: "identifier", entries: parsed.Identifiers},
 		{kind: "struct tag", entries: parsed.Tags},
+		{kind: "comparison literal", entries: parsed.Comparisons},
 	}
 	for _, category := range categories {
 		for _, entry := range category.entries {
