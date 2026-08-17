@@ -487,7 +487,7 @@ func watchPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
 }
 
 func watchHerdrPaneMatchesLive(pane state.Pane, live backend.LivePane) bool {
-	if pane.HerdrAgentSession == nil && live.AgentSession != nil {
+	if pane.AgentSession == nil && live.AgentSession != nil {
 		return sessionbinding.FirstBindMatches(pane, live)
 	}
 	return pane.RuntimeBinding().MatchesLive(live)

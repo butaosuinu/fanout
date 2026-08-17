@@ -29,7 +29,7 @@ type herdrLifecycleDeps struct {
 // only drives the journal-fenced transaction around these calls.
 func newHerdrServerIO(opts herdrrun.OwnedOptions) panelaunch.HerdrServerIO {
 	return panelaunch.HerdrServerIO{
-		InspectServer: func() (state.HerdrServerIdentity, error) {
+		InspectServer: func() (state.RuntimeServerIdentity, error) {
 			return herdrrun.InspectOwnedServer(opts)
 		},
 		ObserveWorkspaces: func(ctx context.Context) ([]backend.WorkspaceObservation, error) {
@@ -41,7 +41,7 @@ func newHerdrServerIO(opts herdrrun.OwnedOptions) panelaunch.HerdrServerIO {
 		},
 		RestartServer: func(
 			ctx context.Context,
-			identity state.HerdrServerIdentity,
+			identity state.RuntimeServerIdentity,
 		) (panelaunch.HerdrRestartedServer, error) {
 			restarted, err := herdrrun.RestartOwned(ctx, opts, identity)
 			if err != nil {
@@ -51,7 +51,7 @@ func newHerdrServerIO(opts herdrrun.OwnedOptions) panelaunch.HerdrServerIO {
 		},
 		ShutdownServer: func(
 			ctx context.Context,
-			identity state.HerdrServerIdentity,
+			identity state.RuntimeServerIdentity,
 			markIssued func() error,
 		) error {
 			return herdrrun.ShutdownOwned(ctx, opts, identity, markIssued)

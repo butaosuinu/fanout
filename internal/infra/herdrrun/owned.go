@@ -738,7 +738,7 @@ func (b *Backend) acquireOwnedMutation(ctx context.Context) (ownedAdmission, *os
 
 func rejectOwnedServerLifecycle(gitCommonDir string) error {
 	path := filepath.Join(gitCommonDir, "fanout", "herdr-intents.json")
-	journal, err := state.LoadHerdrIntentsPath(path)
+	journal, err := state.LoadLaunchJournalPath(path)
 	if err != nil {
 		return fmt.Errorf("load Herdr server lifecycle fence: %w", err)
 	}
@@ -750,7 +750,7 @@ func rejectOwnedServerLifecycle(gitCommonDir string) error {
 		return nil
 	}
 	action := "restart"
-	if intent.Kind == state.HerdrIntentShutdown {
+	if intent.Kind == state.IntentShutdown {
 		action = "shutdown"
 	}
 	return fmt.Errorf("herdr owned server %s is pending; only %s and read-only operations are allowed", action, action)

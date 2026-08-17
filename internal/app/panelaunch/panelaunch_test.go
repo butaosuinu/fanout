@@ -148,12 +148,12 @@ func TestStatePaneForBackendCapturesExactHerdrIdentity(t *testing.T) {
 	}
 	req := Request{ParentRef: "524", Number: 528, Slug: "herdr-528", Agent: "codex"}
 	got := statePaneForBackend(req, "w2:p1", "/repo/child", time.Unix(0, 0).UTC(), codexapp.Status{}, backend.Herdr, live)
-	if got.Backend != backend.Herdr || got.HerdrWorkspaceID != "w2" ||
-		got.HerdrTerminalID != "term-child" || got.HerdrRepoKey != "/repo/.git" ||
-		got.HerdrAgentID != live.AgentID || got.HerdrAgentSession == nil ||
-		*got.HerdrAgentSession != *session || got.HerdrSession != "fanout-repo-abcd" ||
-		got.HerdrSocketPath != "/tmp/herdr.sock" || got.HerdrProcessIdentity == nil ||
-		*got.HerdrProcessIdentity != *live.ProcessIdentity {
+	if got.Backend != backend.Herdr || got.WorkspaceID != "w2" ||
+		got.TerminalID != "term-child" || got.RepoKey != "/repo/.git" ||
+		got.AgentID != live.AgentID || got.AgentSession == nil ||
+		*got.AgentSession != *session || got.SessionID != "fanout-repo-abcd" ||
+		got.SocketPath != "/tmp/herdr.sock" || got.ProcessIdentity == nil ||
+		*got.ProcessIdentity != *live.ProcessIdentity {
 		t.Fatalf("Herdr state identity = %+v", got)
 	}
 }

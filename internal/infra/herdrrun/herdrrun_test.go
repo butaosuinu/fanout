@@ -1559,7 +1559,7 @@ func TestRestartResumeTokenRequiresExactLifecycleAndIntentRoute(t *testing.T) {
 		GitCommonDir: "/repo/.git", RuntimeDir: "/runtime", Session: "fanout-owned",
 		SocketPath: "/runtime/herdr.sock", ClientSocketPath: "/runtime/client.sock",
 	}
-	server := &state.HerdrServerIdentity{
+	server := &state.RuntimeServerIdentity{
 		GitCommonDir: session.GitCommonDir, RuntimeDir: session.RuntimeDir, Session: session.Session,
 		SocketPath: session.SocketPath, ClientSocketPath: session.ClientSocketPath,
 	}
@@ -1572,11 +1572,11 @@ func TestRestartResumeTokenRequiresExactLifecycleAndIntentRoute(t *testing.T) {
 	}
 
 	nonce := strings.Repeat("a", 32)
-	intent := state.HerdrIntent{
-		Kind: state.HerdrIntentResume, Status: state.HerdrIntentRealized,
+	intent := state.LaunchIntent{
+		Kind: state.IntentResume, Status: state.IntentRealized,
 		Session: session.Session, SocketPath: session.SocketPath,
-		Resource: state.HerdrResource{PaneID: "w1:p1"},
-		Launch:   &state.HerdrLaunch{Nonce: nonce},
+		Resource: state.RuntimeResource{PaneID: "w1:p1"},
+		Launch:   &state.LaunchCapsule{Nonce: nonce},
 	}
 	if !exactRestartResumeTokenIntent(intent, session.Session, session.SocketPath, "w1:p1", nonce) {
 		t.Fatal("exact resume token intent did not match")

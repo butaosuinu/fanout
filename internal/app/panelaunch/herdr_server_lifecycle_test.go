@@ -56,9 +56,9 @@ func TestRejectActiveHerdrRowsLeavesTmuxStateUnchanged(t *testing.T) {
 }
 
 func TestRejectActiveHerdrIntentsRequiresEmptyJournal(t *testing.T) {
-	journal := state.HerdrIntents{
-		SchemaVersion: state.HerdrIntentsSchemaVersion,
-		Intents:       []state.HerdrIntent{{ID: "pending"}},
+	journal := state.LaunchJournal{
+		SchemaVersion: state.LaunchJournalSchemaVersion,
+		Intents:       []state.LaunchIntent{{ID: "pending"}},
 	}
 	if err := rejectActiveHerdrIntents(journal); err == nil || !strings.Contains(err.Error(), "1 active") {
 		t.Fatalf("rejectActiveHerdrIntents() error = %v", err)
@@ -80,11 +80,11 @@ func TestReleaseRejectedHerdrRestartDropsOnlyFreshLiveIntent(t *testing.T) {
 			t.Error(unlockErr)
 		}
 	}()
-	journal, err := locked.HerdrIntents(repo)
+	journal, err := locked.LaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := newHerdrServerIntent(state.HerdrIntentRestart, testHerdrServerIdentity())
+	intent, err := newHerdrServerIntent(state.IntentRestart, testHerdrServerIdentity())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,25 +113,25 @@ func TestReleaseRejectedHerdrRestartDropsOnlyFreshLiveIntent(t *testing.T) {
 }
 
 func TestMarkPlannedHerdrReopenCleanupManual(t *testing.T) {
-	journal := &state.LockedHerdrIntents{HerdrIntents: state.HerdrIntents{
-		SchemaVersion: state.HerdrIntentsSchemaVersion,
-		Intents: []state.HerdrIntent{
-			{Kind: state.HerdrIntentCleanup, CleanupPhase: state.HerdrCleanupReopen, Status: state.HerdrIntentPlanned},
-			{Kind: state.HerdrIntentCleanup, CleanupPhase: state.HerdrCleanupReopen, Status: state.HerdrIntentIssued},
-			{Kind: state.HerdrIntentCleanup, CleanupPhase: state.HerdrCleanupRemove, Status: state.HerdrIntentPlanned},
-			{Kind: state.HerdrIntentRestart, Status: state.HerdrIntentPlanned},
+	journal := &state.LockedLaunchJournal{LaunchJournal: state.LaunchJournal{
+		SchemaVersion: state.LaunchJournalSchemaVersion,
+		Intents: []state.LaunchIntent{
+			{Kind: state.IntentCleanup, CleanupPhase: state.CleanupReopen, Status: state.IntentPlanned},
+			{Kind: state.IntentCleanup, CleanupPhase: state.CleanupReopen, Status: state.IntentIssued},
+			{Kind: state.IntentCleanup, CleanupPhase: state.CleanupRemove, Status: state.IntentPlanned},
+			{Kind: state.IntentRestart, Status: state.IntentPlanned},
 		},
 	}}
 
 	markPlannedHerdrReopenCleanupManual(journal)
 
 	got := journal.Intents[0]
-	if got.Status != state.HerdrIntentManualCleanupRequired ||
+	if got.Status != state.IntentManualCleanupRequired ||
 		!strings.Contains(got.Failure, "invalidated the saved cleanup coordinator identity") {
 		t.Fatalf("planned reopen cleanup = %+v", got)
 	}
-	wantStatuses := []state.HerdrIntentStatus{
-		state.HerdrIntentIssued, state.HerdrIntentPlanned, state.HerdrIntentPlanned,
+	wantStatuses := []state.LaunchIntentStatus{
+		state.IntentIssued, state.IntentPlanned, state.IntentPlanned,
 	}
 	for i, want := range wantStatuses {
 		if got := journal.Intents[i+1].Status; got != want {
@@ -146,12 +146,12 @@ func TestHerdrShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal, err := locked.HerdrIntents(repo)
+	journal, err := locked.LaunchJournal(repo)
 	if err != nil {
 		_ = locked.Unlock() // The journal error is authoritative.
 		t.Fatal(err)
 	}
-	intent, err := newHerdrServerIntent(state.HerdrIntentShutdown, testHerdrServerIdentity())
+	intent, err := newHerdrServerIntent(state.IntentShutdown, testHerdrServerIdentity())
 	if err != nil {
 		_ = locked.Unlock() // The intent construction error is authoritative.
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestHerdrShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t *t
 		t.Fatal(err)
 	}
 	markIssued, err := herdrShutdownIssueCallback(journal, intent)
-	if err != nil || markIssued == nil || intent.Status != state.HerdrIntentPlanned {
+	if err != nil || markIssued == nil || intent.Status != state.IntentPlanned {
 		_ = locked.Unlock() // The callback assertion below is authoritative.
 		t.Fatalf("planned callback = (%+v, %t, %v)", intent, markIssued != nil, err)
 	}
@@ -174,12 +174,12 @@ func TestHerdrShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t *t
 		t.Fatal(err)
 	}
 
-	stored, err := state.LoadHerdrIntents(repo)
+	stored, err := state.LoadLaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
 	intent, found, err := stored.ServerLifecycleIntent()
-	if err != nil || !found || intent.Status != state.HerdrIntentIssued {
+	if err != nil || !found || intent.Status != state.IntentIssued {
 		t.Fatalf("stored issued shutdown = (%+v, %t, %v)", intent, found, err)
 	}
 	locked, err = state.LockProjectForLaunch(repo)
@@ -191,7 +191,7 @@ func TestHerdrShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t *t
 			t.Error(unlockErr)
 		}
 	}()
-	journal, err = locked.HerdrIntents(repo)
+	journal, err = locked.LaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,8 +201,8 @@ func TestHerdrShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t *t
 	}
 }
 
-func testHerdrServerIdentity() state.HerdrServerIdentity {
-	return state.HerdrServerIdentity{
+func testHerdrServerIdentity() state.RuntimeServerIdentity {
+	return state.RuntimeServerIdentity{
 		GitCommonDir: "/repo/.git", RuntimeDir: "/tmp/fanout-herdr", Session: "fanout-owned",
 		SocketPath: "/tmp/fanout-herdr/herdr.sock", ClientSocketPath: "/tmp/fanout-herdr/herdr-client.sock",
 		OwnerNonce: strings.Repeat("a", 64), SupervisorPID: 42,

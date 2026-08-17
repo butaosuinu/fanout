@@ -75,8 +75,8 @@ func TestEmitUpdatesCodexPlanRowThroughExactControllerProcess(t *testing.T) {
 	pane, _, _ := finalEmitterFixture(t, repo)
 	pane.Agent = "codex"
 	pane.PlanMode = true
-	pane.HerdrLaunchExecutable = "/opt/fanout"
-	pane.HerdrLaunchArgs = []string{
+	pane.LaunchExecutable = "/opt/fanout"
+	pane.LaunchArgs = []string{
 		codexapp.PlanTUICommand, "--codex", "/opt/codex",
 		"--prompt", "plan it", "--status-file", "/tmp/status.json",
 	}
@@ -292,7 +292,7 @@ func TestEmitFinalRowBindsOnlyFirstLateSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := loadEmitterPane(t, repo)
-	if got.HerdrAgentSession == nil || *got.HerdrAgentSession != first || got.ReportedState != "working" {
+	if got.AgentSession == nil || *got.AgentSession != first || got.ReportedState != "working" {
 		t.Fatalf("late-bound telemetry row = %+v", got)
 	}
 
@@ -304,7 +304,7 @@ func TestEmitFinalRowBindsOnlyFirstLateSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = loadEmitterPane(t, repo)
-	if got.HerdrAgentSession == nil || *got.HerdrAgentSession != first || got.ReportedState != "" ||
+	if got.AgentSession == nil || *got.AgentSession != first || got.ReportedState != "" ||
 		got.StateRefinement || got.EmitterNonce == pane.EmitterNonce {
 		t.Fatalf("replacement session did not stale telemetry row = %+v", got)
 	}
@@ -326,7 +326,7 @@ func TestEmitFinalRowRejectsLateSessionSharedByMultipleRows(t *testing.T) {
 		t.Fatal("Emit() accepted a late session shared by multiple rows")
 	}
 	got := loadEmitterPane(t, repo)
-	if got.HerdrAgentSession != nil || got.ReportedState != "running" {
+	if got.AgentSession != nil || got.ReportedState != "running" {
 		t.Fatalf("ambiguous late session changed telemetry row = %+v", got)
 	}
 }
@@ -390,7 +390,7 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal, err := locked.HerdrIntents(repo)
+	journal, err := locked.LaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	stored, err := state.LoadHerdrIntents(repo)
+	stored, err := state.LoadLaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +431,7 @@ func TestEmitUpdatesGenericWorkspacePendingIntent(t *testing.T) {
 	if err := Emit(context.Background(), signal, observer); err != nil {
 		t.Fatal(err)
 	}
-	stored, err := state.LoadHerdrIntents(repo)
+	stored, err := state.LoadLaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func TestEmitPendingIntentRejectsIncompleteIdentityMatch(t *testing.T) {
 	if err := Emit(context.Background(), signal, observer); err == nil {
 		t.Fatal("Emit() succeeded with a mismatched provisional terminal")
 	}
-	stored, err := state.LoadHerdrIntents(repo)
+	stored, err := state.LoadLaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +469,7 @@ func TestEmitPendingIntentRejectsWorkspaceLabelReplacement(t *testing.T) {
 	if err := Emit(context.Background(), signal, observer); err == nil {
 		t.Fatal("Emit() succeeded with a replaced provisional workspace label")
 	}
-	stored, err := state.LoadHerdrIntents(repo)
+	stored, err := state.LoadLaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func TestEmitPendingIntentRejectsExpiredLaunchWithoutMutation(t *testing.T) {
 	if err := Emit(context.Background(), signal, observer); err == nil {
 		t.Fatal("Emit() succeeded with an expired provisional intent")
 	}
-	stored, err := state.LoadHerdrIntents(repo)
+	stored, err := state.LoadLaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,13 +512,13 @@ func finalEmitterFixture(t *testing.T, repo string) (state.Pane, telemetry.Signa
 		Parent: "524", IssueNum: 529, Slug: "telemetry", BranchName: "fanout/telemetry",
 		Backend: backend.Herdr, PaneID: "workspace-1:pane-1", Agent: "claude",
 		WorktreePath: worktree, AgentStatus: "running", ReportedState: "running",
-		HerdrWorkspaceID: "workspace-1", HerdrWorkspaceLabel: "owned-label-1",
-		HerdrTerminalID: "terminal-1",
-		HerdrRepoKey:    repoKey, HerdrAgentID: "fanout-agent",
-		HerdrSession: "fanout-owned", HerdrSocketPath: "/tmp/fanout-owned/herdr.sock",
+		WorkspaceID: "workspace-1", WorkspaceLabel: "owned-label-1",
+		TerminalID: "terminal-1",
+		RepoKey:    repoKey, AgentID: "fanout-agent",
+		SessionID: "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",
 		EmitterRowKey: "issue:3:524:529", LaunchNonce: strings.Repeat("a", 32),
-		EmitterNonce: strings.Repeat("b", 32), HerdrLaunchExecutable: "/opt/bin/claude",
-		HerdrLaunchArgs: []string{"--settings", "{}", "prompt"},
+		EmitterNonce: strings.Repeat("b", 32), LaunchExecutable: "/opt/bin/claude",
+		LaunchArgs: []string{"--settings", "{}", "prompt"},
 	}
 	signal := signalForPane(repo, pane)
 	return pane, signal, exactObserver(pane)
@@ -529,41 +529,41 @@ func genericFinalEmitterFixture(t *testing.T, repo string) (state.Pane, telemetr
 	pane, _, _ := finalEmitterFixture(t, repo)
 	pane.Parent, pane.RuntimeParent, pane.IssueNum = "@manual", "524", -1
 	pane.Kind = state.PaneKindAttachedAgent
-	pane.Slug, pane.BranchName, pane.WorktreePath, pane.HerdrRepoKey = "orchestrator-524", "", repo, ""
-	pane.EmitterRowKey, _ = state.HerdrCoordinatorIntentID("@manual", repo, pane.IssueNum)
+	pane.Slug, pane.BranchName, pane.WorktreePath, pane.RepoKey = "orchestrator-524", "", repo, ""
+	pane.EmitterRowKey, _ = state.CoordinatorIntentID("@manual", repo, pane.IssueNum)
 	observer := exactObserver(pane)
 	observer.observation.Panes[0].WorktreePath = ""
 	return pane, signalForPane(repo, pane), observer
 }
 
-func pendingEmitterFixture(t *testing.T, repo string) (state.HerdrIntent, telemetry.Signal, *fakeObserver) {
+func pendingEmitterFixture(t *testing.T, repo string) (state.LaunchIntent, telemetry.Signal, *fakeObserver) {
 	t.Helper()
 	pane, signal, observer := finalEmitterFixture(t, repo)
 	session := backend.AgentSessionRef{
 		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "pending-session",
 	}
 	observer.observation.Panes[0].AgentSession = &session
-	intent := state.HerdrIntent{
-		ID: signal.RowKey, Kind: state.HerdrIntentWorktree, Status: state.HerdrIntentRealized,
+	intent := state.LaunchIntent{
+		ID: signal.RowKey, Kind: state.IntentWorktree, Status: state.IntentRealized,
 		Parent: "524", RuntimeParent: "524", IssueNum: 529,
 		Slug: pane.Slug, BranchName: pane.BranchName, FullBranchRef: "refs/heads/" + pane.BranchName,
 		BaseBranch: "main", BaseSHA: strings.Repeat("1", 40), ExpectedHead: strings.Repeat("1", 40),
 		WorktreePath: pane.WorktreePath, WorkspaceLabel: "fanout-worktree-telemetry",
-		Resource: state.HerdrResource{
-			WorkspaceID: pane.HerdrWorkspaceID, Label: "fanout-worktree-telemetry",
-			PaneID: pane.PaneID, TerminalID: pane.HerdrTerminalID, CurrentPath: pane.WorktreePath,
-			RepoKey: pane.HerdrRepoKey, RepoRoot: pane.WorktreePath,
+		Resource: state.RuntimeResource{
+			WorkspaceID: pane.WorkspaceID, Label: "fanout-worktree-telemetry",
+			PaneID: pane.PaneID, TerminalID: pane.TerminalID, CurrentPath: pane.WorktreePath,
+			RepoKey: pane.RepoKey, RepoRoot: pane.WorktreePath,
 		},
-		Coordinator: state.HerdrResource{
+		Coordinator: state.RuntimeResource{
 			WorkspaceID: "coordinator", Label: "fanout-coordinator",
 			PaneID: "coordinator:pane", TerminalID: "coordinator-terminal", CurrentPath: repo,
 		},
-		Session: pane.HerdrSession, SocketPath: pane.HerdrSocketPath,
+		Session: pane.SessionID, SocketPath: pane.SocketPath,
 		ExpiresUnixMS: time.Now().Add(time.Hour).UnixMilli(),
-		Launch: &state.HerdrLaunch{
+		Launch: &state.LaunchCapsule{
 			Nonce: pane.LaunchNonce, EmitterNonce: pane.EmitterNonce,
-			Agent: pane.Agent, AgentName: pane.HerdrAgentID,
-			Executable: pane.HerdrLaunchExecutable, Args: pane.HerdrLaunchArgs,
+			Agent: pane.Agent, AgentName: pane.AgentID,
+			Executable: pane.LaunchExecutable, Args: pane.LaunchArgs,
 			EnvFilePath: "/tmp/fanout-env.json", EnvNameCount: 1,
 			LauncherReady: true, TokenIssued: true,
 		},
@@ -572,17 +572,17 @@ func pendingEmitterFixture(t *testing.T, repo string) (state.HerdrIntent, teleme
 	return intent, signal, observer
 }
 
-func genericPendingEmitterFixture(t *testing.T, repo string) (state.HerdrIntent, telemetry.Signal, *fakeObserver) {
+func genericPendingEmitterFixture(t *testing.T, repo string) (state.LaunchIntent, telemetry.Signal, *fakeObserver) {
 	t.Helper()
 	intent, signal, observer := pendingEmitterFixture(t, repo)
-	intent.ID, _ = state.HerdrCoordinatorIntentID("@manual", repo, -1)
-	intent.Kind, intent.Parent, intent.RuntimeParent, intent.IssueNum = state.HerdrIntentCoordinator, "@manual", "524", -1
+	intent.ID, _ = state.CoordinatorIntentID("@manual", repo, -1)
+	intent.Kind, intent.Parent, intent.RuntimeParent, intent.IssueNum = state.IntentCoordinator, "@manual", "524", -1
 	intent.OwnerProjectRoot = repo
 	intent.Slug, intent.BranchName, intent.FullBranchRef = "", "", ""
 	intent.BaseBranch, intent.BaseSHA, intent.ExpectedHead = "", "", ""
 	intent.WorktreePath, intent.WorkspaceLabel = repo, intent.Resource.Label
 	intent.Resource.CurrentPath, intent.Resource.RepoKey, intent.Resource.RepoRoot = repo, "", ""
-	intent.Coordinator = state.HerdrResource{}
+	intent.Coordinator = state.RuntimeResource{}
 	signal.RowKey = intent.ID
 	live := &observer.observation.Panes[0]
 	live.CurrentPath, live.WorktreePath, live.RepoKey, live.ProjectRoot = repo, "", "", ""
@@ -594,26 +594,26 @@ func signalForPane(repo string, pane state.Pane) telemetry.Signal {
 	return telemetry.Signal{
 		StatePath: state.Path(repo), RowKey: pane.EmitterRowKey,
 		LaunchNonce: pane.LaunchNonce, EmitterNonce: pane.EmitterNonce,
-		Backend: backend.Herdr, Session: pane.HerdrSession, SocketPath: pane.HerdrSocketPath,
-		WorkspaceID: pane.HerdrWorkspaceID, PaneID: pane.PaneID,
-		TerminalID: pane.HerdrTerminalID, Agent: pane.Agent, AgentID: pane.HerdrAgentID,
+		Backend: backend.Herdr, Session: pane.SessionID, SocketPath: pane.SocketPath,
+		WorkspaceID: pane.WorkspaceID, PaneID: pane.PaneID,
+		TerminalID: pane.TerminalID, Agent: pane.Agent, AgentID: pane.AgentID,
 		State: backend.AgentWorking,
 	}
 }
 
 func exactObserver(pane state.Pane) *fakeObserver {
 	process := backend.PaneProcess{
-		PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: pane.HerdrLaunchExecutable,
-		Argv0: pane.HerdrLaunchExecutable, Argv: pane.HerdrLaunchArgs, CWD: pane.WorktreePath,
+		PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: pane.LaunchExecutable,
+		Argv0: pane.LaunchExecutable, Argv: pane.LaunchArgs, CWD: pane.WorktreePath,
 	}
 	live := backend.LivePane{
-		Ref:         backend.PaneRef{Backend: backend.Herdr, Workspace: pane.HerdrWorkspaceID, Pane: pane.PaneID},
+		Ref:         backend.PaneRef{Backend: backend.Herdr, Workspace: pane.WorkspaceID, Pane: pane.PaneID},
 		CurrentPath: pane.WorktreePath, WorktreePath: pane.WorktreePath,
-		WorkspaceLabel: pane.HerdrWorkspaceLabel,
-		TerminalID:     pane.HerdrTerminalID, RepoKey: pane.HerdrRepoKey,
-		ProjectRoot:  filepath.Dir(pane.HerdrRepoKey),
-		AgentPresent: true, AgentProvider: pane.Agent, AgentID: pane.HerdrAgentID,
-		SessionID: pane.HerdrSession, SocketPath: pane.HerdrSocketPath,
+		WorkspaceLabel: pane.WorkspaceLabel,
+		TerminalID:     pane.TerminalID, RepoKey: pane.RepoKey,
+		ProjectRoot:  filepath.Dir(pane.RepoKey),
+		AgentPresent: true, AgentProvider: pane.Agent, AgentID: pane.AgentID,
+		SessionID: pane.SessionID, SocketPath: pane.SocketPath,
 	}
 	return &fakeObserver{observation: Observation{
 		Panes: []backend.LivePane{live},
@@ -639,13 +639,13 @@ func saveEmitterPanes(t *testing.T, repo string, panes ...state.Pane) {
 	}
 }
 
-func saveEmitterIntent(t *testing.T, repo string, intent state.HerdrIntent) {
+func saveEmitterIntent(t *testing.T, repo string, intent state.LaunchIntent) {
 	t.Helper()
 	locked, err := state.LockProjectForLaunch(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal, err := locked.HerdrIntents(repo)
+	journal, err := locked.LaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}

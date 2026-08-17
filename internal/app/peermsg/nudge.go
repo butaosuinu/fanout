@@ -203,7 +203,7 @@ func paneRef(pane state.Pane) backend.PaneRef {
 	name := backend.NormalizeName(pane.Backend)
 	ref := backend.PaneRef{Backend: name, Pane: pane.PaneID}
 	if name == backend.Herdr {
-		ref.Workspace = pane.HerdrWorkspaceID
+		ref.Workspace = pane.WorkspaceID
 	}
 	return ref
 }

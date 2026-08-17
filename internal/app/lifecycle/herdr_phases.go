@@ -14,11 +14,11 @@ import (
 func recoverHerdrCleanup(
 	ctx context.Context,
 	opts Options,
-	journal *state.LockedHerdrIntents,
+	journal *state.LockedLaunchJournal,
 	runtime HerdrRuntime,
-	intent state.HerdrIntent,
-) (state.HerdrIntent, error) {
-	if intent.Status == state.HerdrIntentIssued && intent.CleanupPhase == state.HerdrCleanupReopen {
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
+	if intent.Status == state.IntentIssued && intent.CleanupPhase == state.CleanupReopen {
 		return recoverIssuedHerdrReopen(ctx, opts, journal, runtime, intent)
 	}
 	observation, err := observeHerdrCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
@@ -28,7 +28,7 @@ func recoverHerdrCleanup(
 	if herdrCleanupAbsent(observation) {
 		return realizeHerdrCleanup(journal, intent)
 	}
-	if intent.Status == state.HerdrIntentManualCleanupRequired {
+	if intent.Status == state.IntentManualCleanupRequired {
 		return intent, fmt.Errorf("%w: %s", ErrHerdrManualCleanupRequired, intent.Failure)
 	}
 	cause := fmt.Errorf("issued Herdr %s outcome remains ambiguous", intent.CleanupPhase)
@@ -38,10 +38,10 @@ func recoverHerdrCleanup(
 func recoverIssuedHerdrReopen(
 	ctx context.Context,
 	opts Options,
-	journal *state.LockedHerdrIntents,
+	journal *state.LockedLaunchJournal,
 	runtime HerdrRuntime,
-	intent state.HerdrIntent,
-) (state.HerdrIntent, error) {
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
 		return intent, err
@@ -73,11 +73,11 @@ func recoverIssuedHerdrReopen(
 func adoptReopenedHerdrWorkspace(
 	ctx context.Context,
 	opts Options,
-	journal *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
 	workspace backend.WorkspaceObservation,
 	checkout worktree.CheckoutObservation,
-) (state.HerdrIntent, error) {
+) (state.LaunchIntent, error) {
 	resource := herdrResourceFromObservation(workspace)
 	if err := verifyHerdrCheckout(ctx, opts.ProjectRoot, intent.FullBranchRef, intent.ExpectedHead, resource); err != nil {
 		return intent, markHerdrCleanupManual(journal, intent, err)
@@ -87,8 +87,8 @@ func adoptReopenedHerdrWorkspace(
 		return intent, markHerdrCleanupManual(journal, intent, cause)
 	}
 	intent.Resource = resource
-	intent.CleanupPhase = state.HerdrCleanupRemove
-	intent.Status = state.HerdrIntentPlanned
+	intent.CleanupPhase = state.CleanupRemove
+	intent.Status = state.IntentPlanned
 	intent.Failure = ""
 	return intent, saveHerdrCleanupIntent(journal, intent)
 }
@@ -96,10 +96,10 @@ func adoptReopenedHerdrWorkspace(
 func executeHerdrReopen(
 	ctx context.Context,
 	opts Options,
-	journal *state.LockedHerdrIntents,
+	journal *state.LockedLaunchJournal,
 	runtime HerdrRuntime,
-	intent state.HerdrIntent,
-) (state.HerdrIntent, error) {
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
 	if err := verifyHerdrReopenPreconditions(ctx, opts, runtime, intent); err != nil {
 		return intent, err
 	}
@@ -118,7 +118,7 @@ func executeHerdrReopen(
 	if err != nil {
 		return intent, errors.Join(mutationErr, err)
 	}
-	if recovered.Status == state.HerdrIntentRealized {
+	if recovered.Status == state.IntentRealized {
 		return recovered, nil
 	}
 	return executeHerdrRemove(ctx, opts, journal, runtime, recovered)
@@ -126,10 +126,10 @@ func executeHerdrReopen(
 
 func issueHerdrReopen(
 	ctx context.Context,
-	journal *state.LockedHerdrIntents,
+	journal *state.LockedLaunchJournal,
 	runtime HerdrRuntime,
 	coordinator backend.WorkspaceObservation,
-	intent *state.HerdrIntent,
+	intent *state.LaunchIntent,
 ) (bool, error) {
 	if err := runtime.VerifyWorktreeSetupPolicy(ctx); err != nil {
 		return false, err
@@ -148,7 +148,7 @@ func verifyHerdrReopenPreconditions(
 	ctx context.Context,
 	opts Options,
 	runtime HerdrRuntime,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 ) error {
 	observation, err := observeHerdrCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
 	if err != nil {
@@ -169,7 +169,7 @@ func verifyHerdrReopenPreconditions(
 func currentHerdrCoordinator(
 	ctx context.Context,
 	runtime HerdrRuntime,
-	resource state.HerdrResource,
+	resource state.RuntimeResource,
 ) (backend.WorkspaceObservation, error) {
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
@@ -185,10 +185,10 @@ func currentHerdrCoordinator(
 func executeHerdrRemove(
 	ctx context.Context,
 	opts Options,
-	journal *state.LockedHerdrIntents,
+	journal *state.LockedLaunchJournal,
 	runtime HerdrRuntime,
-	intent state.HerdrIntent,
-) (state.HerdrIntent, error) {
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
 	if err := verifyHerdrRemovePreconditions(ctx, opts, runtime, intent); err != nil {
 		return intent, err
 	}
@@ -207,11 +207,11 @@ func executeHerdrRemove(
 func recoverHerdrRemoveMutation(
 	ctx context.Context,
 	opts Options,
-	journal *state.LockedHerdrIntents,
+	journal *state.LockedLaunchJournal,
 	runtime HerdrRuntime,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	mutationErr error,
-) (state.HerdrIntent, error) {
+) (state.LaunchIntent, error) {
 	observation, observeErr := observeHerdrCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
 	if observeErr != nil {
 		return intent, errors.Join(mutationErr, observeErr)
@@ -224,8 +224,8 @@ func recoverHerdrRemoveMutation(
 			cause := errors.Join(mutationErr, fmt.Errorf("ambiguous Herdr worktree remove left a residual workspace"))
 			return intent, markHerdrCleanupManual(journal, intent, cause)
 		}
-		intent.Status = state.HerdrIntentPlanned
-		intent.CleanupPhase = state.HerdrCleanupWorkspaceClose
+		intent.Status = state.IntentPlanned
+		intent.CleanupPhase = state.CleanupWorkspaceClose
 		if err := saveHerdrCleanupIntent(journal, intent); err != nil {
 			return intent, err
 		}
@@ -239,7 +239,7 @@ func verifyHerdrRemovePreconditions(
 	ctx context.Context,
 	opts Options,
 	runtime HerdrRuntime,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 ) error {
 	observation, err := observeHerdrCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
 	if err != nil {
@@ -263,10 +263,10 @@ func verifyHerdrRemovePreconditions(
 func executeHerdrWorkspaceClose(
 	ctx context.Context,
 	opts Options,
-	journal *state.LockedHerdrIntents,
+	journal *state.LockedLaunchJournal,
 	runtime HerdrRuntime,
-	intent state.HerdrIntent,
-) (state.HerdrIntent, error) {
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
 	if err := verifyHerdrWorkspaceClosePreconditions(ctx, opts, runtime, intent); err != nil {
 		return intent, err
 	}
@@ -294,7 +294,7 @@ func verifyHerdrWorkspaceClosePreconditions(
 	ctx context.Context,
 	opts Options,
 	runtime HerdrRuntime,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 ) error {
 	observation, err := observeHerdrCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
 	if err != nil {
@@ -311,25 +311,25 @@ func herdrMutationDefinitelyNotIssued(err error) bool {
 }
 
 func restorePlannedHerdrCleanup(
-	journal *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
 	cause error,
-) (state.HerdrIntent, error) {
-	intent.Status = state.HerdrIntentPlanned
+) (state.LaunchIntent, error) {
+	intent.Status = state.IntentPlanned
 	intent.Failure = ""
 	return intent, errors.Join(cause, saveHerdrCleanupIntent(journal, intent))
 }
 
 func resetUnissuedHerdrCleanup(
-	journal *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
 	cause error,
-) (state.HerdrIntent, error) {
-	if intent.Coordinator == (state.HerdrResource{}) || intent.CleanupPhase == state.HerdrCleanupReopen {
+) (state.LaunchIntent, error) {
+	if intent.Coordinator == (state.RuntimeResource{}) || intent.CleanupPhase == state.CleanupReopen {
 		journal.RemoveIntent(intent.ID)
 		return intent, errors.Join(cause, journal.Save())
 	}
-	intent.Status = state.HerdrIntentPlanned
+	intent.Status = state.IntentPlanned
 	intent.ExpiresUnixMS = time.Now().UnixMilli()
 	intent.Failure = ""
 	return intent, errors.Join(cause, saveHerdrCleanupIntent(journal, intent))
@@ -337,27 +337,27 @@ func resetUnissuedHerdrCleanup(
 
 func issueHerdrCleanupMutation(
 	ctx context.Context,
-	journal *state.LockedHerdrIntents,
-	intent *state.HerdrIntent,
+	journal *state.LockedLaunchJournal,
+	intent *state.LaunchIntent,
 	mutate func() error,
 ) (bool, error) {
 	if err := ensureHerdrCleanupMutationFresh(ctx, *intent); err != nil {
 		return false, err
 	}
-	intent.Status = state.HerdrIntentIssued
+	intent.Status = state.IntentIssued
 	if err := saveHerdrCleanupIntent(journal, *intent); err != nil {
-		intent.Status = state.HerdrIntentPlanned
+		intent.Status = state.IntentPlanned
 		return false, err
 	}
 	if err := ensureHerdrCleanupMutationFresh(ctx, *intent); err != nil {
-		intent.Status = state.HerdrIntentPlanned
+		intent.Status = state.IntentPlanned
 		_, restoreErr := restorePlannedHerdrCleanup(journal, *intent, err)
 		return false, restoreErr
 	}
 	return true, mutate()
 }
 
-func ensureHerdrCleanupMutationFresh(ctx context.Context, intent state.HerdrIntent) error {
+func ensureHerdrCleanupMutationFresh(ctx context.Context, intent state.LaunchIntent) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("herdr cleanup mutation context ended: %w", err)
 	}
@@ -368,10 +368,10 @@ func ensureHerdrCleanupMutationFresh(ctx context.Context, intent state.HerdrInte
 }
 
 func realizeHerdrCleanup(
-	journal *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
-) (state.HerdrIntent, error) {
-	intent.Status = state.HerdrIntentRealized
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
+	intent.Status = state.IntentRealized
 	intent.Failure = ""
 	return intent, saveHerdrCleanupIntent(journal, intent)
 }

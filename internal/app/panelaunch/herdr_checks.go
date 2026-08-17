@@ -19,7 +19,7 @@ func verifyHerdrWorktreePreconditions(
 	ctx context.Context,
 	req HerdrWorktreeRequest,
 	source worktree.RepoIdentity,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 ) error {
 	if err := worktree.VerifyWorktreeParentDir(req.ProjectRoot, intent.WorktreePath); err != nil {
 		return err
@@ -55,7 +55,7 @@ func verifyHerdrWorktreePreconditions(
 // intent. source is nil for the coordinator (whose workspace must carry no
 // worktree provenance) and set for the child checkout.
 func validateWorkspacePostcondition(
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	source *worktree.RepoIdentity,
 	observation backend.WorkspaceObservation,
 ) error {
@@ -77,7 +77,7 @@ func validateWorkspacePostcondition(
 }
 
 func verifyCoordinatorObservation(
-	expected state.HerdrResource,
+	expected state.RuntimeResource,
 	workspaces []backend.WorkspaceObservation,
 ) error {
 	for _, workspace := range workspaces {
@@ -99,9 +99,9 @@ func validateSavedCoordinatorIntent(
 	cwd string,
 	runtimeParent string,
 	runtimeOwnerProjectRoot string,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 ) error {
-	if intent.Kind != state.HerdrIntentCoordinator ||
+	if intent.Kind != state.IntentCoordinator ||
 		intent.RuntimeParent != runtimeParent ||
 		intent.IssueNum != req.IssueNum ||
 		!savedHerdrCoordinatorPathMatches(
@@ -120,12 +120,12 @@ func validateSavedCoordinatorIntent(
 func validateSavedWorktreeIntent(
 	req HerdrWorktreeRequest,
 	source worktree.RepoIdentity,
-	coordinator state.HerdrResource,
+	coordinator state.RuntimeResource,
 	ownerProjectRoot string,
 	runtimeParent string,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 ) error {
-	if intent.Kind != state.HerdrIntentWorktree ||
+	if intent.Kind != state.IntentWorktree ||
 		intent.Parent != canonicalHerdrParent(req.Parent) ||
 		intent.RuntimeParent != runtimeParent ||
 		intent.OwnerProjectRoot != ownerProjectRoot ||
@@ -204,7 +204,7 @@ func savedHerdrWorktreePathValid(ownerProjectRoot, savedSlug, savedPath string) 
 
 func savedHerdrWorktreeRepoMatches(
 	ownerProjectRoot string,
-	resource state.HerdrResource,
+	resource state.RuntimeResource,
 	source worktree.RepoIdentity,
 ) bool {
 	if resource.RepoKey != source.RepoKey {

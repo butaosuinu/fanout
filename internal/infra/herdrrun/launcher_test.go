@@ -51,7 +51,7 @@ func TestWorkloadExecEnvironmentRoutesDirectCodexIntegration(t *testing.T) {
 		workspaceID: "w1", paneID: "w1:p1",
 	}
 	base := []string{"PATH=/bin", "FANOUT_BACKEND=herdr"}
-	shell := state.HerdrIntent{Launch: &state.HerdrLaunch{}}
+	shell := state.LaunchIntent{Launch: &state.LaunchCapsule{}}
 	got := workloadExecEnvironment(request, shell, append([]string(nil), base...))
 	wantSuffix := []string{
 		"HERDR_ENV=1", "HERDR_SESSION=owned-session", "HERDR_SOCKET_PATH=/owned/herdr.sock",
@@ -61,8 +61,8 @@ func TestWorkloadExecEnvironmentRoutesDirectCodexIntegration(t *testing.T) {
 		t.Fatalf("shell route environment = %q, want suffix %q", got, wantSuffix)
 	}
 
-	agentIntent := state.HerdrIntent{
-		Kind: state.HerdrIntentWorktree, Launch: &state.HerdrLaunch{Agent: "codex"},
+	agentIntent := state.LaunchIntent{
+		Kind: state.IntentWorktree, Launch: &state.LaunchCapsule{Agent: "codex"},
 	}
 	agentEnv := workloadExecEnvironment(request, agentIntent, append([]string(nil), base...))
 	wantAgentSuffix := []string{
@@ -76,11 +76,11 @@ func TestWorkloadExecEnvironmentRoutesDirectCodexIntegration(t *testing.T) {
 			t.Fatalf("agent environment exposes unrelated route fields: %q", agentEnv)
 		}
 	}
-	for name, intent := range map[string]state.HerdrIntent{
-		"attached": {Kind: state.HerdrIntentCoordinator, Launch: &state.HerdrLaunch{Agent: "codex"}},
+	for name, intent := range map[string]state.LaunchIntent{
+		"attached": {Kind: state.IntentCoordinator, Launch: &state.LaunchCapsule{Agent: "codex"}},
 		"plan": {
-			Kind:   state.HerdrIntentWorktree,
-			Launch: &state.HerdrLaunch{Agent: "codex", CodexPlanStatusPath: "/runtime/plan.json"},
+			Kind:   state.IntentWorktree,
+			Launch: &state.LaunchCapsule{Agent: "codex", CodexPlanStatusPath: "/runtime/plan.json"},
 		},
 	} {
 		if got := workloadExecEnvironment(request, intent, append([]string(nil), base...)); !slices.Equal(got, base) {
@@ -90,12 +90,12 @@ func TestWorkloadExecEnvironmentRoutesDirectCodexIntegration(t *testing.T) {
 }
 
 func TestWorkloadExecEnvironmentBindsEmitterToRealizedCoordinator(t *testing.T) {
-	intent := state.HerdrIntent{
+	intent := state.LaunchIntent{
 		ID: "coordinator:manual:/repo:530", Session: "owned-session", SocketPath: "/owned/herdr.sock",
-		Resource: state.HerdrResource{
+		Resource: state.RuntimeResource{
 			WorkspaceID: "w1", PaneID: "w1:p1", TerminalID: "terminal-1",
 		},
-		Launch: &state.HerdrLaunch{
+		Launch: &state.LaunchCapsule{
 			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
 			Agent: "claude", AgentName: "fanout-agent",
 		},
@@ -144,7 +144,7 @@ func TestWorkloadEnvironmentCapsuleIsOwnerOnlyAndOneShot(t *testing.T) {
 	if info.Mode().Perm() != 0o600 || !info.Mode().IsRegular() {
 		t.Fatalf("capsule mode = %v, want owner-only regular", info.Mode())
 	}
-	got, err := consumeWorkloadEnvironment(&state.HerdrLaunch{
+	got, err := consumeWorkloadEnvironment(&state.LaunchCapsule{
 		Nonce: nonce, EnvFilePath: path, EnvNameCount: count,
 	}, runtimeDir)
 	if err != nil {
@@ -178,7 +178,7 @@ func TestPrepareWorkloadEnvironmentRejectsOversizeBeforePublish(t *testing.T) {
 
 func TestConsumeWorkloadEnvironmentRejectsPathOutsideOwnedRuntime(t *testing.T) {
 	runtimeDir := t.TempDir()
-	launch := &state.HerdrLaunch{
+	launch := &state.LaunchCapsule{
 		Nonce: strings.Repeat("a", 32), EnvFilePath: filepath.Join(t.TempDir(), "capsule.json"), EnvNameCount: 1,
 	}
 	if _, err := consumeWorkloadEnvironment(launch, runtimeDir); err == nil ||
@@ -197,7 +197,7 @@ func TestDiscardWorkloadEnvironmentRequiresOwnedPathAndFileIdentity(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	launch := &state.HerdrLaunch{Nonce: nonce, EnvFilePath: path, EnvNameCount: count}
+	launch := &state.LaunchCapsule{Nonce: nonce, EnvFilePath: path, EnvNameCount: count}
 	if err := DiscardWorkloadEnvironment(runtimeDir, launch); err != nil {
 		t.Fatal(err)
 	}
@@ -223,25 +223,25 @@ func TestMatchingPaneLaunchIntentRequiresExactWorkspacePaneAndCWD(t *testing.T) 
 		session: "owned-session", socketPath: "/owned/herdr.sock",
 		workspaceID: "w1", paneID: "w1:p1", cwd: "/repo/child",
 	}
-	intent := state.HerdrIntent{
-		Kind: state.HerdrIntentWorktree, Status: state.HerdrIntentRealized,
+	intent := state.LaunchIntent{
+		Kind: state.IntentWorktree, Status: state.IntentRealized,
 		Session: "owned-session", SocketPath: "/owned/herdr.sock",
-		Resource: state.HerdrResource{
+		Resource: state.RuntimeResource{
 			WorkspaceID: "w1", PaneID: "w1:p1", CurrentPath: "/repo/child",
 		},
-		Launch: &state.HerdrLaunch{Nonce: strings.Repeat("a", 32)},
+		Launch: &state.LaunchCapsule{Nonce: strings.Repeat("a", 32)},
 	}
-	got, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request)
+	got, found := matchingPaneLaunchIntent(state.LaunchJournal{Intents: []state.LaunchIntent{intent}}, request)
 	if !found || got.Resource.PaneID != "w1:p1" {
 		t.Fatalf("match = (%+v, %t)", got, found)
 	}
 	request.cwd = filepath.Clean("/repo/other")
-	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); found {
+	if _, found := matchingPaneLaunchIntent(state.LaunchJournal{Intents: []state.LaunchIntent{intent}}, request); found {
 		t.Fatal("mismatched cwd was adopted")
 	}
 	request.cwd = "/repo/child"
 	request.socketPath = "/foreign/herdr.sock"
-	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); found {
+	if _, found := matchingPaneLaunchIntent(state.LaunchJournal{Intents: []state.LaunchIntent{intent}}, request); found {
 		t.Fatal("mismatched owned route was adopted")
 	}
 }
@@ -251,22 +251,22 @@ func TestMatchingPaneLaunchIntentAcceptsRealizedCoordinatorWithoutAgentLaunch(t 
 		session: "owned-session", socketPath: "/owned/herdr.sock",
 		workspaceID: "w1", paneID: "w1:p1", cwd: "/repo",
 	}
-	intent := state.HerdrIntent{
-		Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentRealized,
+	intent := state.LaunchIntent{
+		Kind: state.IntentCoordinator, Status: state.IntentRealized,
 		Session: "owned-session", SocketPath: "/owned/herdr.sock",
-		Resource: state.HerdrResource{
+		Resource: state.RuntimeResource{
 			WorkspaceID: "w1", PaneID: "w1:p1", CurrentPath: "/repo",
 		},
 	}
-	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); !found {
+	if _, found := matchingPaneLaunchIntent(state.LaunchJournal{Intents: []state.LaunchIntent{intent}}, request); !found {
 		t.Fatal("realized coordinator was not assigned to its launcher")
 	}
-	intent.Launch = &state.HerdrLaunch{Nonce: strings.Repeat("a", 32)}
-	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); !found {
+	intent.Launch = &state.LaunchCapsule{Nonce: strings.Repeat("a", 32)}
+	if _, found := matchingPaneLaunchIntent(state.LaunchJournal{Intents: []state.LaunchIntent{intent}}, request); !found {
 		t.Fatal("launch-bearing coordinator was not assigned to its launcher")
 	}
-	intent.Kind = state.HerdrIntentRollback
-	if _, found := matchingPaneLaunchIntent(state.HerdrIntents{Intents: []state.HerdrIntent{intent}}, request); found {
+	intent.Kind = state.IntentRollback
+	if _, found := matchingPaneLaunchIntent(state.LaunchJournal{Intents: []state.LaunchIntent{intent}}, request); found {
 		t.Fatal("rollback intent was assigned to a pane launcher")
 	}
 }
@@ -344,9 +344,9 @@ func TestOwnedCloseWorkspaceClassifiesRejection(t *testing.T) {
 }
 
 func TestWaitForLaunchTokenRequiresExactInput(t *testing.T) {
-	intent := state.HerdrIntent{
+	intent := state.LaunchIntent{
 		ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli(),
-		Launch:        &state.HerdrLaunch{Nonce: strings.Repeat("b", 32)},
+		Launch:        &state.LaunchCapsule{Nonce: strings.Repeat("b", 32)},
 	}
 	input := strings.NewReader(launcherStartToken(intent.Launch.Nonce) + "\n")
 	if err := waitForLaunchToken(input, io.Discard, intent); err != nil {
@@ -355,9 +355,9 @@ func TestWaitForLaunchTokenRequiresExactInput(t *testing.T) {
 }
 
 func TestWaitForLaunchTokenRejectsUnexpectedInput(t *testing.T) {
-	intent := state.HerdrIntent{
+	intent := state.LaunchIntent{
 		ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli(),
-		Launch:        &state.HerdrLaunch{Nonce: strings.Repeat("b", 32)},
+		Launch:        &state.LaunchCapsule{Nonce: strings.Repeat("b", 32)},
 	}
 	err := waitForLaunchToken(strings.NewReader("wrong\n"), io.Discard, intent)
 	if err == nil || !strings.Contains(err.Error(), "unexpected") {
@@ -366,9 +366,9 @@ func TestWaitForLaunchTokenRejectsUnexpectedInput(t *testing.T) {
 }
 
 func TestWaitForLaunchTokenResendsReadyMarker(t *testing.T) {
-	intent := state.HerdrIntent{
+	intent := state.LaunchIntent{
 		ExpiresUnixMS: time.Now().Add(time.Second).UnixMilli(),
-		Launch:        &state.HerdrLaunch{Nonce: strings.Repeat("b", 32)},
+		Launch:        &state.LaunchCapsule{Nonce: strings.Repeat("b", 32)},
 	}
 	reader, writer := io.Pipe()
 	t.Cleanup(func() {

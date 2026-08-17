@@ -19,7 +19,7 @@ import (
 // releaseHerdrIntent deletes an intent whose mutation is proven unissued or
 // whose rollback is proven complete, and returns cause after the journal save.
 func releaseHerdrIntent(
-	locked *state.LockedHerdrIntents,
+	locked *state.LockedLaunchJournal,
 	intentID string,
 	cause error,
 ) error {
@@ -32,10 +32,10 @@ func releaseHerdrIntent(
 
 func ensureHerdrBranchReservation(
 	ctx context.Context,
-	locked *state.LockedHerdrIntents,
+	locked *state.LockedLaunchJournal,
 	req HerdrWorktreeRequest,
-	intent state.HerdrIntent,
-) (state.HerdrIntent, error) {
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
 	current, found, err := worktree.ObserveBranch(ctx, req.SourceRoot, intent.FullBranchRef)
 	if err != nil {
 		return intent, err
@@ -101,9 +101,9 @@ func ensureHerdrBranchReservation(
 }
 
 func rollbackUnissuedHerdrWorktree(
-	locked *state.LockedHerdrIntents,
+	locked *state.LockedLaunchJournal,
 	req HerdrWorktreeRequest,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	mutationErr error,
 ) error {
 	rollbackCtx, cancel := context.WithTimeout(
@@ -146,8 +146,8 @@ func rollbackUnissuedHerdrWorktree(
 func recoverHerdrCoordinator(
 	ctx context.Context,
 	runtime HerdrWorktreeRuntime,
-	locked *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
+	locked *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
 	requestSource worktree.RepoIdentity,
 	mutationErr error,
 ) (HerdrRealizeResult, error) {
@@ -180,7 +180,7 @@ func recoverHerdrCoordinator(
 			return HerdrRealizeResult{}, errors.Join(mutationErr, sourceErr)
 		}
 		intent.Resource = resource
-		intent.Status = state.HerdrIntentRealized
+		intent.Status = state.IntentRealized
 		intent.Failure = ""
 		locked.UpsertIntent(intent)
 		if err := locked.Save(); err != nil {
@@ -201,10 +201,10 @@ func recoverHerdrCoordinator(
 func recoverHerdrWorktree(
 	ctx context.Context,
 	runtime HerdrWorktreeRuntime,
-	locked *state.LockedHerdrIntents,
+	locked *state.LockedLaunchJournal,
 	req HerdrWorktreeRequest,
 	source worktree.RepoIdentity,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	mutationErr error,
 ) (HerdrRealizeResult, error) {
 	// A structured rejection proves the mutation created nothing; classify
@@ -290,10 +290,10 @@ func recoverHerdrWorktree(
 // branch and the intent when nothing was created.
 func recoverRejectedHerdrWorktree(
 	ctx context.Context,
-	locked *state.LockedHerdrIntents,
+	locked *state.LockedLaunchJournal,
 	req HerdrWorktreeRequest,
 	source worktree.RepoIdentity,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	mutationErr error,
 ) error {
 	if intent.Resource.WorkspaceID != "" {
@@ -307,7 +307,7 @@ func recoverRejectedHerdrWorktree(
 			source.RepoRoot,
 		)
 		if verifyErr == nil {
-			intent.Status = state.HerdrIntentRealized
+			intent.Status = state.IntentRealized
 			intent.Failure = ""
 			locked.UpsertIntent(intent)
 			if saveErr := locked.Save(); saveErr != nil {
@@ -366,10 +366,10 @@ func recoverRejectedHerdrWorktree(
 
 func finalizeHerdrWorktree(
 	ctx context.Context,
-	locked *state.LockedHerdrIntents,
+	locked *state.LockedLaunchJournal,
 	req HerdrWorktreeRequest,
 	source worktree.RepoIdentity,
-	intent *state.HerdrIntent,
+	intent *state.LaunchIntent,
 	observation backend.WorkspaceObservation,
 ) error {
 	if err := validateWorkspacePostcondition(*intent, &source, observation); err != nil {
@@ -388,7 +388,7 @@ func finalizeHerdrWorktree(
 		return err
 	}
 	intent.Resource = stateResource(observation)
-	intent.Status = state.HerdrIntentRealized
+	intent.Status = state.IntentRealized
 	intent.Failure = ""
 	locked.UpsertIntent(*intent)
 	if saveErr := locked.Save(); saveErr != nil {
@@ -398,8 +398,8 @@ func finalizeHerdrWorktree(
 }
 
 func handleHerdrWorktreeFinalizeError(
-	locked *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
+	locked *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
 	err error,
 ) error {
 	if errors.Is(err, errHerdrRealizedIdentityChanged) || errors.Is(err, worktree.ErrCheckoutMismatch) {
@@ -413,7 +413,7 @@ func handleHerdrWorktreeFinalizeError(
 func verifyRealizedCoordinator(
 	ctx context.Context,
 	runtime HerdrWorktreeRuntime,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	requestSource worktree.RepoIdentity,
 ) error {
 	if _, err := herdrCoordinatorSource(ctx, intent.Resource, requestSource); err != nil {
@@ -433,10 +433,10 @@ func verifyRealizedCoordinator(
 func resumeRealizedHerdrWorktree(
 	ctx context.Context,
 	runtime HerdrWorktreeRuntime,
-	locked *state.LockedHerdrIntents,
+	locked *state.LockedLaunchJournal,
 	req HerdrWorktreeRequest,
 	source worktree.RepoIdentity,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	allowOpen bool,
 ) (HerdrRealizeResult, error) {
 	// A failed snapshot classifies nothing: keep the realized intent
@@ -507,7 +507,7 @@ func resumeRealizedHerdrWorktree(
 		return HerdrRealizeResult{}, policyErr
 	}
 
-	intent.Status = state.HerdrIntentIssued
+	intent.Status = state.IntentIssued
 	locked.UpsertIntent(intent)
 	if saveErr := locked.Save(); saveErr != nil {
 		return HerdrRealizeResult{}, saveErr
@@ -523,7 +523,7 @@ func resumeRealizedHerdrWorktree(
 	})
 	if mutationErr != nil {
 		if errors.Is(mutationErr, backend.ErrMutationNotIssued) {
-			intent.Status = state.HerdrIntentRealized
+			intent.Status = state.IntentRealized
 			locked.UpsertIntent(intent)
 			if saveErr := locked.Save(); saveErr != nil {
 				return HerdrRealizeResult{}, errors.Join(mutationErr, saveErr)
@@ -550,15 +550,15 @@ func resumeRealizedHerdrWorktree(
 }
 
 func markHerdrIntentManual(
-	locked *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
+	locked *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
 	cause error,
 ) error {
 	reason := "result is indeterminate"
 	if cause != nil {
 		reason = cause.Error()
 	}
-	intent.Status = state.HerdrIntentManualCleanupRequired
+	intent.Status = state.IntentManualCleanupRequired
 	intent.Failure = reason
 	locked.UpsertIntent(intent)
 	if err := locked.Save(); err != nil {
@@ -570,6 +570,6 @@ func markHerdrIntentManual(
 	return fmt.Errorf("%w: %s", ErrHerdrManualCleanupRequired, reason)
 }
 
-func herdrManualCleanupError(intent state.HerdrIntent) error {
+func herdrManualCleanupError(intent state.LaunchIntent) error {
 	return fmt.Errorf("%w: %s", ErrHerdrManualCleanupRequired, intent.Failure)
 }

@@ -46,7 +46,7 @@ type HerdrWorktreeRuntime interface {
 	) (backend.WorktreeMutationResult, error)
 	// DiscardWorkloadEnvironment drops a capsule the realization never
 	// published, so every rollback path reaches it through this surface.
-	DiscardWorkloadEnvironment(string, *state.HerdrLaunch) error
+	DiscardWorkloadEnvironment(string, *state.LaunchCapsule) error
 }
 
 type HerdrRealizeHooks struct {
@@ -67,13 +67,13 @@ type HerdrCoordinatorRequest struct {
 	// Launch, when non-nil, is journaled before workspace creation so the pane
 	// launcher can start a console or attached workload without an unfenced
 	// post-create mutation window. Normal coordinators leave it nil and idle.
-	Launch *state.HerdrLaunch
+	Launch *state.LaunchCapsule
 }
 
 // HerdrRealizeResult is the realized outcome shared by the coordinator and
 // worktree flows before the agent-start phase.
 type HerdrRealizeResult struct {
-	Intent state.HerdrIntent
+	Intent state.LaunchIntent
 	Pane   backend.PaneRef
 }
 
@@ -105,7 +105,7 @@ type herdrRealizeSetup struct {
 	ownerProjectRoot        string
 	runtimeParent           string
 	runtimeOwnerProjectRoot string
-	locked                  *state.LockedHerdrIntents
+	locked                  *state.LockedLaunchJournal
 	hooks                   HerdrRealizeHooks
 }
 
@@ -143,12 +143,12 @@ func newHerdrRealizeSetup(
 		return fail(fmt.Errorf("herdr project and source roots belong to different repositories"))
 	}
 	setup.source = source
-	ownerProjectRoot, ownerErr := state.HerdrOwnerProjectRoot(parent, project.RepoRoot)
+	ownerProjectRoot, ownerErr := state.IntentOwnerProjectRoot(parent, project.RepoRoot)
 	if ownerErr != nil {
 		return fail(ownerErr)
 	}
 	setup.ownerProjectRoot = ownerProjectRoot
-	locked, lockedErr := launchLock.HerdrIntents(projectRoot)
+	locked, lockedErr := launchLock.LaunchJournal(projectRoot)
 	if lockedErr != nil {
 		return fail(lockedErr)
 	}
@@ -157,13 +157,13 @@ func newHerdrRealizeSetup(
 		projectRoot,
 		parent,
 		ownerProjectRoot,
-		herdrCoordinatorIdentityIntents(parent, locked.HerdrIntents),
+		herdrCoordinatorIdentityIntents(parent, locked.LaunchJournal),
 	)
 	if runtimeParentErr != nil {
 		return fail(runtimeParentErr)
 	}
 	setup.runtimeParent = runtimeParent
-	runtimeOwnerProjectRoot, runtimeOwnerErr := state.HerdrOwnerProjectRoot(
+	runtimeOwnerProjectRoot, runtimeOwnerErr := state.IntentOwnerProjectRoot(
 		runtimeParent,
 		project.RepoRoot,
 	)
@@ -214,7 +214,7 @@ func RealizeHerdrCoordinator(
 	if cwd != setup.source.RepoRoot {
 		return result, fmt.Errorf("herdr coordinator cwd %s does not match source root %s", cwd, setup.source.RepoRoot)
 	}
-	intentID, intentIDErr := state.HerdrCoordinatorIntentID(
+	intentID, intentIDErr := state.CoordinatorIntentID(
 		setup.runtimeParent,
 		setup.runtimeOwnerProjectRoot,
 		req.IssueNum,
@@ -224,7 +224,7 @@ func RealizeHerdrCoordinator(
 	}
 
 	intent, found := locked.FindIntent(intentID)
-	if found && intent.Status == state.HerdrIntentManualCleanupRequired {
+	if found && intent.Status == state.IntentManualCleanupRequired {
 		// Terminal regardless of expiry: surface the saved failure.
 		return result, herdrManualCleanupError(intent)
 	}
@@ -266,7 +266,7 @@ func RealizeHerdrCoordinator(
 		}
 		defer cancel()
 		switch intent.Status {
-		case state.HerdrIntentRealized:
+		case state.IntentRealized:
 			if verifyErr := verifyRealizedCoordinator(
 				operationCtx,
 				runtime,
@@ -281,7 +281,7 @@ func RealizeHerdrCoordinator(
 				return result, verifyErr
 			}
 			return realizeDeferred(intent)
-		case state.HerdrIntentIssued:
+		case state.IntentIssued:
 			return recoverHerdrCoordinator(
 				operationCtx,
 				runtime,
@@ -306,8 +306,8 @@ func RealizeHerdrCoordinator(
 	if labelErr != nil {
 		return result, labelErr
 	}
-	intent = state.HerdrIntent{
-		ID: intentID, Kind: state.HerdrIntentCoordinator, Status: state.HerdrIntentIssued,
+	intent = state.LaunchIntent{
+		ID: intentID, Kind: state.IntentCoordinator, Status: state.IntentIssued,
 		Parent:           canonicalHerdrParent(req.Parent),
 		RuntimeParent:    herdrCoordinatorRequestRuntimeParent(req, setup.runtimeParent),
 		OwnerProjectRoot: setup.ownerProjectRoot,
@@ -349,7 +349,7 @@ func RealizeHerdrCoordinator(
 		return result, markHerdrIntentManual(locked, intent, err)
 	}
 	intent.Resource = stateResource(mutation.WorkspaceObservation)
-	intent.Status = state.HerdrIntentRealized
+	intent.Status = state.IntentRealized
 	locked.UpsertIntent(intent)
 	if err := locked.Save(); err != nil {
 		return result, err
@@ -373,7 +373,7 @@ func herdrCoordinatorWorkspaceLabel(
 	})
 }
 
-func cloneHerdrLaunch(launch *state.HerdrLaunch) *state.HerdrLaunch {
+func cloneHerdrLaunch(launch *state.LaunchCapsule) *state.LaunchCapsule {
 	if launch == nil {
 		return nil
 	}
@@ -399,7 +399,7 @@ func verifyHerdrRealizeRoute(
 
 func herdrRealizeRouteContext(
 	parent context.Context,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	found bool,
 	now time.Time,
 ) (context.Context, context.Context, context.CancelFunc, error) {
@@ -426,7 +426,7 @@ func herdrRealizeRouteContext(
 
 func resolveHerdrRuntimeParent(
 	projectRoot, parent, ownerProjectRoot string,
-	control state.HerdrIntents,
+	control state.LaunchJournal,
 ) (string, error) {
 	parent = canonicalHerdrParent(parent)
 	saved := ""
@@ -466,12 +466,12 @@ func resolveHerdrRuntimeParent(
 	return parent, nil
 }
 
-func herdrCoordinatorIdentityIntents(parent string, control state.HerdrIntents) state.HerdrIntents {
+func herdrCoordinatorIdentityIntents(parent string, control state.LaunchJournal) state.LaunchJournal {
 	if canonicalHerdrParent(parent) != ManualParentRef {
 		return control
 	}
 	identity := control
-	identity.Intents = slices.DeleteFunc(slices.Clone(control.Intents), func(intent state.HerdrIntent) bool {
+	identity.Intents = slices.DeleteFunc(slices.Clone(control.Intents), func(intent state.LaunchIntent) bool {
 		return intent.Parent == ManualParentRef && intent.RuntimeParent != ManualParentRef
 	})
 	return identity
@@ -507,15 +507,15 @@ func normalizeHerdrRealizeTimeout(timeout time.Duration) (time.Duration, error) 
 
 func herdrIntentContext(
 	parent context.Context,
-	intent state.HerdrIntent,
+	intent state.LaunchIntent,
 	now time.Time,
 ) (context.Context, context.CancelFunc, error) {
 	deadline := time.UnixMilli(intent.ExpiresUnixMS)
 	if !now.Before(deadline) {
 		switch intent.Status {
-		case state.HerdrIntentPlanned:
+		case state.IntentPlanned:
 			return nil, nil, errHerdrIntentDeadlineExpired
-		case state.HerdrIntentIssued, state.HerdrIntentRealized:
+		case state.IntentIssued, state.IntentRealized:
 			// An expired launch never receives another full total_timeout.
 			// Bound this invocation to a short existence classification.
 			ctx, cancel := context.WithTimeout(parent, maxHerdrRecoveryClassificationTimeout)

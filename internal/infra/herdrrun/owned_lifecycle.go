@@ -18,17 +18,17 @@ import (
 
 // InspectOwnedServer returns the marker and lease identity that an explicit
 // restart or shutdown must persist before it changes the owned server.
-func InspectOwnedServer(opts OwnedOptions) (state.HerdrServerIdentity, error) {
+func InspectOwnedServer(opts OwnedOptions) (state.RuntimeServerIdentity, error) {
 	commonDir, layout, marker, _, err := existingOwnedAdmission(opts)
 	if err != nil {
-		return state.HerdrServerIdentity{}, err
+		return state.RuntimeServerIdentity{}, err
 	}
 	lease, _, err := inspectExistingSupervisorLease(layout.supervisorLock)
 	if err != nil {
-		return state.HerdrServerIdentity{}, fmt.Errorf("inspect Herdr owned supervisor lease: %w", err)
+		return state.RuntimeServerIdentity{}, fmt.Errorf("inspect Herdr owned supervisor lease: %w", err)
 	}
 	if err := validateSupervisorLease(marker, lease); err != nil {
-		return state.HerdrServerIdentity{}, err
+		return state.RuntimeServerIdentity{}, err
 	}
 	return serverIdentity(commonDir, marker, lease.ServerPID), nil
 }
@@ -38,7 +38,7 @@ func InspectOwnedServer(opts OwnedOptions) (state.HerdrServerIdentity, error) {
 func RestartOwned(
 	ctx context.Context,
 	opts OwnedOptions,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 ) (*OwnedSession, error) {
 	return restartOwned(ctx, opts, expected, startOwnedSupervisor, nil)
 }
@@ -46,7 +46,7 @@ func RestartOwned(
 func restartOwned(
 	ctx context.Context,
 	opts OwnedOptions,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	start supervisorStarter,
 	backend *Backend,
 ) (_ *OwnedSession, err error) {
@@ -54,7 +54,7 @@ func restartOwned(
 	if err != nil {
 		return nil, err
 	}
-	err = requireOwnedServerIntent(commonDir, state.HerdrIntentRestart, expected)
+	err = requireOwnedServerIntent(commonDir, state.IntentRestart, expected)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func reconcileOwnedRestart(
 	commonDir string,
 	commonIdentity pathIdentity,
 	layout ownedLayout,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	backend *Backend,
 ) (*OwnedSession, error) {
 	current, found, err := readOwnerMarker(layout.markerPath)
@@ -98,7 +98,7 @@ func spawnRestartedOwned(
 	commonDir string,
 	commonIdentity pathIdentity,
 	layout ownedLayout,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	start supervisorStarter,
 	backend *Backend,
 ) (*OwnedSession, error) {
@@ -129,7 +129,7 @@ func spawnRestartedOwned(
 }
 
 func prepareRestartedLauncher(
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	commonDir string,
 	commonIdentity pathIdentity,
 	layout ownedLayout,
@@ -161,7 +161,7 @@ func prepareRestartedLauncher(
 func ShutdownOwned(
 	ctx context.Context,
 	opts OwnedOptions,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	markIssued func() error,
 ) error {
 	return shutdownOwned(ctx, opts, expected, markIssued, signalOwnedSupervisor, nil)
@@ -170,7 +170,7 @@ func ShutdownOwned(
 func shutdownOwned(
 	ctx context.Context,
 	opts OwnedOptions,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	markIssued func() error,
 	signal func(int) error,
 	backend *Backend,
@@ -179,7 +179,7 @@ func shutdownOwned(
 	if err != nil {
 		return err
 	}
-	err = requireOwnedServerIntent(commonDir, state.HerdrIntentShutdown, expected)
+	err = requireOwnedServerIntent(commonDir, state.IntentShutdown, expected)
 	if err != nil {
 		return err
 	}
@@ -195,7 +195,7 @@ func beginOwnedShutdown(
 	commonDir string,
 	commonIdentity pathIdentity,
 	layout ownedLayout,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	markIssued func() error,
 	signal func(int) error,
 	backend *Backend,
@@ -225,7 +225,7 @@ func issueVerifiedOwnedShutdown(
 	ctx context.Context,
 	layout ownedLayout,
 	current ownerMarker,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	markIssued func() error,
 	signal func(int) error,
 	backend *Backend,
@@ -239,7 +239,7 @@ func issueVerifiedOwnedShutdown(
 	return signal(expected.SupervisorPID), nil
 }
 
-func reconcileRetriedOwnedShutdown(layout ownedLayout, expected state.HerdrServerIdentity) error {
+func reconcileRetriedOwnedShutdown(layout ownedLayout, expected state.RuntimeServerIdentity) error {
 	if err := retireAbsentOwnedGeneration(layout, expected, true, "shutdown"); err != nil {
 		return fmt.Errorf("herdr owned server shutdown result is unresolved; refusing to repeat the shutdown signal: %w", err)
 	}
@@ -248,7 +248,7 @@ func reconcileRetriedOwnedShutdown(layout ownedLayout, expected state.HerdrServe
 
 func ownedLifecycleLayout(
 	opts OwnedOptions,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 ) (string, pathIdentity, ownedLayout, error) {
 	commonDir, commonIdentity, err := openCanonicalGitCommonDir(opts.GitCommonDir)
 	if err != nil {
@@ -274,10 +274,10 @@ func ownedLifecycleLayout(
 
 func requireOwnedServerIntent(
 	commonDir string,
-	kind state.HerdrIntentKind,
-	expected state.HerdrServerIdentity,
+	kind state.LaunchIntentKind,
+	expected state.RuntimeServerIdentity,
 ) error {
-	journal, err := state.LoadHerdrIntentsPath(filepath.Join(commonDir, "fanout", "herdr-intents.json"))
+	journal, err := state.LoadLaunchJournalPath(filepath.Join(commonDir, "fanout", "herdr-intents.json"))
 	if err != nil {
 		return err
 	}
@@ -291,8 +291,8 @@ func requireOwnedServerIntent(
 	return nil
 }
 
-func lifecycleAction(kind state.HerdrIntentKind) string {
-	if kind == state.HerdrIntentShutdown {
+func lifecycleAction(kind state.LaunchIntentKind) string {
+	if kind == state.IntentShutdown {
 		return "shutdown"
 	}
 	return "restart"
@@ -302,8 +302,8 @@ func serverIdentity(
 	commonDir string,
 	marker ownerMarker,
 	serverPID int,
-) state.HerdrServerIdentity {
-	return state.HerdrServerIdentity{
+) state.RuntimeServerIdentity {
+	return state.RuntimeServerIdentity{
 		GitCommonDir: commonDir, RuntimeDir: marker.RuntimeDir, Session: marker.Session,
 		SocketPath: marker.SocketPath, ClientSocketPath: marker.ClientSocketPath,
 		OwnerNonce: marker.OwnerNonce, SupervisorPID: marker.SupervisorPID,
@@ -314,7 +314,7 @@ func serverIdentity(
 	}
 }
 
-func serverIdentityMatchesMarker(expected state.HerdrServerIdentity, marker ownerMarker) bool {
+func serverIdentityMatchesMarker(expected state.RuntimeServerIdentity, marker ownerMarker) bool {
 	return expected == serverIdentity(marker.GitCommonDir, marker, expected.ServerPID)
 }
 
@@ -330,7 +330,7 @@ func validateSupervisorLease(marker ownerMarker, lease supervisorLease) error {
 }
 
 func validateExpectedOwnedMarker(
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	commonDir string,
 	commonIdentity pathIdentity,
 	layout ownedLayout,
@@ -348,7 +348,7 @@ func validateExpectedOwnedMarker(
 
 func retireAbsentOwnedGeneration(
 	layout ownedLayout,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	markerFound bool,
 	action string,
 ) error {
@@ -380,7 +380,7 @@ func retireAbsentOwnedGeneration(
 }
 
 func validateRetiredServerLease(
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	lease supervisorLease,
 	found bool,
 	markerFound bool,
@@ -413,14 +413,14 @@ func inspectLifecycleLease(path string) (supervisorLease, bool, bool, error) {
 	return lease, err == nil, running, err
 }
 
-func verifySavedProcessesAbsent(identity state.HerdrServerIdentity, action string) error {
+func verifySavedProcessesAbsent(identity state.RuntimeServerIdentity, action string) error {
 	return verifySavedProcessesAbsentWithProbe(identity, action, func(pid int) error {
 		return syscall.Kill(pid, 0)
 	})
 }
 
 func verifySavedProcessesAbsentWithProbe(
-	identity state.HerdrServerIdentity,
+	identity state.RuntimeServerIdentity,
 	action string,
 	probe func(int) error,
 ) error {
@@ -449,7 +449,7 @@ func verifySavedProcessesAbsentWithProbe(
 	return nil
 }
 
-func verifyOwnedSocketsAbsent(identity state.HerdrServerIdentity, action string) error {
+func verifyOwnedSocketsAbsent(identity state.RuntimeServerIdentity, action string) error {
 	for _, path := range []string{identity.SocketPath, identity.ClientSocketPath} {
 		_, err := os.Lstat(path)
 		if errors.Is(err, os.ErrNotExist) {
@@ -463,7 +463,7 @@ func verifyOwnedSocketsAbsent(identity state.HerdrServerIdentity, action string)
 	return nil
 }
 
-func markerFromServerIdentity(identity state.HerdrServerIdentity) ownerMarker {
+func markerFromServerIdentity(identity state.RuntimeServerIdentity) ownerMarker {
 	configHome := filepath.Join(identity.RuntimeDir, "xdg-config")
 	return ownerMarker{
 		SchemaID: ownedMarkerSchemaID, GitCommonDir: identity.GitCommonDir,
@@ -481,7 +481,7 @@ func markerFromServerIdentity(identity state.HerdrServerIdentity) ownerMarker {
 }
 
 func validateRestartBundle(
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	commonDir string,
 	commonIdentity pathIdentity,
 	layout ownedLayout,
@@ -528,7 +528,7 @@ func verifyEmptyOwnedServer(
 	ctx context.Context,
 	layout ownedLayout,
 	marker ownerMarker,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	backend *Backend,
 ) error {
 	lease, running, err := inspectExistingSupervisorLease(layout.supervisorLock)
@@ -569,7 +569,7 @@ func signalOwnedSupervisor(pid int) error {
 func waitForOwnedRetirement(
 	ctx context.Context,
 	layout ownedLayout,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	signalErr error,
 	configMayBeAbsent bool,
 ) error {
@@ -596,7 +596,7 @@ func waitForOwnedRetirement(
 
 func removeRetiredOwnedConfig(
 	layout ownedLayout,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 	mayBeAbsent bool,
 ) error {
 	_, err := os.Lstat(layout.configPath)
@@ -623,7 +623,7 @@ func removeRetiredOwnedConfig(
 
 func verifyRetiredOwnedIdentity(
 	layout ownedLayout,
-	expected state.HerdrServerIdentity,
+	expected state.RuntimeServerIdentity,
 ) error {
 	if err := validateRetiredOwnedSession(layout); err != nil {
 		return err

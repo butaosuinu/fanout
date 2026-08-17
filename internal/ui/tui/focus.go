@@ -193,8 +193,8 @@ func observationErrorForPane(err error, pane paneView) error {
 	}
 	route := backend.ObservationRoute{Backend: backend.NormalizeName(pane.Backend)}
 	if route.Backend == backend.Herdr {
-		route.SessionID = strings.TrimSpace(pane.savedPane.HerdrSession)
-		route.SocketPath = strings.TrimSpace(pane.savedPane.HerdrSocketPath)
+		route.SessionID = strings.TrimSpace(pane.savedPane.SessionID)
+		route.SocketPath = strings.TrimSpace(pane.savedPane.SocketPath)
 	}
 	if failedRoutes[route] {
 		return err

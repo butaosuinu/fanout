@@ -56,7 +56,7 @@ func TestSeedTeamRegistryUpsertsCreatedPanes(t *testing.T) {
 		{Parent: "100", IssueNum: 101, PaneID: "%5", Slug: "first-child-101", Agent: "claude", DisplayName: "first-child-101", WorktreePath: "/repo/.fanout/worktrees/first-child-101"},
 		{
 			Parent: "100", IssueNum: 102, Backend: backend.Herdr,
-			PaneID: "w2:p1", HerdrWorkspaceID: "w2", HerdrTerminalID: "terminal-102",
+			PaneID: "w2:p1", WorkspaceID: "w2", TerminalID: "terminal-102",
 			Slug: "second-child-102", Agent: "claude", DisplayName: "second-child-102",
 			WorktreePath: "/repo/.fanout/worktrees/second-child-102",
 		},

@@ -61,7 +61,7 @@ func TestStateLoaderRejectsInvalidOrAmbiguousBinding(t *testing.T) {
 				t.Fatal(err)
 			}
 			unbound, ok := store.Find("528", 529)
-			if !ok || unbound.HerdrAgentSession != nil {
+			if !ok || unbound.AgentSession != nil {
 				t.Fatalf("unsafe late session was persisted: %+v", unbound)
 			}
 		})
@@ -81,25 +81,25 @@ func TestBindingRootsIncludesEveryOwningStore(t *testing.T) {
 func testHerdrPane(root string) state.Pane {
 	return state.Pane{
 		Parent: "528", IssueNum: 529, Backend: backend.Herdr,
-		PaneID: "workspace-a:p1", Agent: "codex", HerdrAgentID: "agent-a",
-		HerdrWorkspaceID: "workspace-a", HerdrWorkspaceLabel: "owned-label-a",
-		HerdrTerminalID: "terminal-a",
-		HerdrRepoKey:    "/repo/.git", HerdrSession: "session-a",
-		HerdrSocketPath: "/tmp/herdr-a.sock", WorktreePath: filepath.Join(root, "child"),
+		PaneID: "workspace-a:p1", Agent: "codex", AgentID: "agent-a",
+		WorkspaceID: "workspace-a", WorkspaceLabel: "owned-label-a",
+		TerminalID: "terminal-a",
+		RepoKey:    "/repo/.git", SessionID: "session-a",
+		SocketPath: "/tmp/herdr-a.sock", WorktreePath: filepath.Join(root, "child"),
 	}
 }
 
 func testLiveHerdrPane(row state.Pane, session backend.AgentSessionRef) backend.LivePane {
 	return backend.LivePane{
 		Ref: backend.PaneRef{
-			Backend: backend.Herdr, Workspace: row.HerdrWorkspaceID, Pane: row.PaneID,
+			Backend: backend.Herdr, Workspace: row.WorkspaceID, Pane: row.PaneID,
 		},
-		WorkspaceLabel: row.HerdrWorkspaceLabel,
-		TerminalID:     row.HerdrTerminalID, AgentID: row.HerdrAgentID,
+		WorkspaceLabel: row.WorkspaceLabel,
+		TerminalID:     row.TerminalID, AgentID: row.AgentID,
 		AgentProvider: row.Agent, AgentSession: &session, AgentPresent: true,
-		RepoKey: row.HerdrRepoKey, ProjectRoot: filepath.Dir(row.WorktreePath),
-		WorktreePath: row.WorktreePath, SessionID: row.HerdrSession,
-		SocketPath: row.HerdrSocketPath,
+		RepoKey: row.RepoKey, ProjectRoot: filepath.Dir(row.WorktreePath),
+		WorktreePath: row.WorktreePath, SessionID: row.SessionID,
+		SocketPath: row.SocketPath,
 	}
 }
 
@@ -120,8 +120,8 @@ func recordTestPane(t *testing.T, root string, pane state.Pane) {
 func assertStoredSession(t *testing.T, store state.Store, want backend.AgentSessionRef) state.Pane {
 	t.Helper()
 	pane, ok := store.Find("528", 529)
-	if !ok || pane.HerdrAgentSession == nil || *pane.HerdrAgentSession != want {
-		t.Fatalf("stored session = %+v, want %+v", pane.HerdrAgentSession, want)
+	if !ok || pane.AgentSession == nil || *pane.AgentSession != want {
+		t.Fatalf("stored session = %+v, want %+v", pane.AgentSession, want)
 	}
 	return pane
 }

@@ -92,7 +92,7 @@ func ensureHerdrConsoleLocked(
 			ProjectRoot: root, SourceRoot: root, CWD: root,
 			HerdrSession: route.Session, SocketPath: route.SocketPath,
 		},
-		func(state.HerdrIntent) (*state.HerdrLaunch, error) {
+		func(state.LaunchIntent) (*state.LaunchCapsule, error) {
 			return newHerdrShellLaunch(owned, route, shellPath, callerEnvironment)
 		},
 	)
@@ -117,7 +117,7 @@ func ensureHerdrConsoleLocked(
 	return herdrConsoleResult(owned, pane)
 }
 
-func validateHerdrConsoleIntentRoot(intent state.HerdrIntent, projectRoot string) error {
+func validateHerdrConsoleIntentRoot(intent state.LaunchIntent, projectRoot string) error {
 	if filepath.Clean(intent.WorktreePath) != filepath.Clean(projectRoot) {
 		return fmt.Errorf("saved Herdr console intent belongs to another worktree")
 	}
@@ -205,10 +205,10 @@ func savedHerdrConsoleWorkspacePresent(
 	workspaces []backend.WorkspaceObservation,
 ) (bool, error) {
 	for _, workspace := range workspaces {
-		if workspace.WorkspaceID != saved.HerdrWorkspaceID {
+		if workspace.WorkspaceID != saved.WorkspaceID {
 			continue
 		}
-		if workspace.Label != saved.HerdrWorkspaceLabel || workspace.Path != "" ||
+		if workspace.Label != saved.WorkspaceLabel || workspace.Path != "" ||
 			workspace.RepoKey != "" || workspace.RepoRoot != "" {
 			return false, fmt.Errorf("saved Herdr console workspace identity changed")
 		}
@@ -223,14 +223,14 @@ func staleHerdrConsoleTarget(
 ) (backend.LivePane, error) {
 	var matches []backend.LivePane
 	for _, current := range live {
-		if current.Ref.Workspace != saved.HerdrWorkspaceID {
+		if current.Ref.Workspace != saved.WorkspaceID {
 			continue
 		}
 		identity := []bool{
 			current.Ref.Backend == backend.Herdr,
-			current.WorkspaceLabel == saved.HerdrWorkspaceLabel,
-			current.SessionID == saved.HerdrSession,
-			filepath.Clean(current.SocketPath) == filepath.Clean(saved.HerdrSocketPath),
+			current.WorkspaceLabel == saved.WorkspaceLabel,
+			current.SessionID == saved.SessionID,
+			filepath.Clean(current.SocketPath) == filepath.Clean(saved.SocketPath),
 			filepath.Clean(current.CurrentPath) == filepath.Clean(saved.WorktreePath),
 			current.Ref.Pane != "", current.TerminalID != "", !current.AgentPresent,
 		}
@@ -293,11 +293,11 @@ func sameSavedHerdrConsole(expected, actual state.Pane) bool {
 		actual.Kind == expected.Kind,
 		backend.NormalizeName(actual.Backend) == backend.Herdr,
 		actual.PaneID == expected.PaneID,
-		actual.HerdrWorkspaceID == expected.HerdrWorkspaceID,
-		actual.HerdrWorkspaceLabel == expected.HerdrWorkspaceLabel,
-		actual.HerdrTerminalID == expected.HerdrTerminalID,
-		actual.HerdrSession == expected.HerdrSession,
-		filepath.Clean(actual.HerdrSocketPath) == filepath.Clean(expected.HerdrSocketPath),
+		actual.WorkspaceID == expected.WorkspaceID,
+		actual.WorkspaceLabel == expected.WorkspaceLabel,
+		actual.TerminalID == expected.TerminalID,
+		actual.SessionID == expected.SessionID,
+		filepath.Clean(actual.SocketPath) == filepath.Clean(expected.SocketPath),
 		filepath.Clean(actual.WorktreePath) == filepath.Clean(expected.WorktreePath),
 	}
 	return !slices.Contains(requirements, false)
@@ -364,7 +364,7 @@ func newHerdrShellLaunch(
 	route backend.OwnedLaunchRoute,
 	shell string,
 	callerEnvironment []string,
-) (*state.HerdrLaunch, error) {
+) (*state.LaunchCapsule, error) {
 	nonce, err := randomHerdrToken()
 	if err != nil {
 		return nil, err
@@ -377,7 +377,7 @@ func newHerdrShellLaunch(
 	if err != nil {
 		return nil, err
 	}
-	return &state.HerdrLaunch{
+	return &state.LaunchCapsule{
 		Nonce: nonce, Executable: shell, EnvFilePath: envPath, EnvNameCount: envCount,
 	}, nil
 }
@@ -447,10 +447,10 @@ func verifySavedHerdrConsole(
 	}
 	identity := backend.OwnedPaneIdentity{
 		Ref: backend.PaneRef{
-			Backend: backend.Herdr, Workspace: pane.HerdrWorkspaceID, Pane: pane.PaneID,
+			Backend: backend.Herdr, Workspace: pane.WorkspaceID, Pane: pane.PaneID,
 		},
-		SessionID: pane.HerdrSession, SocketPath: pane.HerdrSocketPath,
-		WorkspaceLabel: pane.HerdrWorkspaceLabel, TerminalID: pane.HerdrTerminalID,
+		SessionID: pane.SessionID, SocketPath: pane.SocketPath,
+		WorkspaceLabel: pane.WorkspaceLabel, TerminalID: pane.TerminalID,
 		CurrentPath: pane.WorktreePath,
 	}
 	return owned.VerifyOwnedTarget(identity)
@@ -467,14 +467,14 @@ func validateSavedHerdrConsoleShape(pane state.Pane) error {
 		projectRoot != "",
 		filepath.Clean(pane.WorktreePath) == filepath.Clean(projectRoot),
 		pane.PaneID != "",
-		pane.HerdrWorkspaceID != "",
-		pane.HerdrWorkspaceLabel != "",
-		pane.HerdrTerminalID != "",
-		pane.HerdrSession != "",
-		pane.HerdrSocketPath != "",
-		pane.HerdrRepoKey == "",
-		pane.HerdrAgentID == "",
-		pane.HerdrAgentSession == nil,
+		pane.WorkspaceID != "",
+		pane.WorkspaceLabel != "",
+		pane.TerminalID != "",
+		pane.SessionID != "",
+		pane.SocketPath != "",
+		pane.RepoKey == "",
+		pane.AgentID == "",
+		pane.AgentSession == nil,
 	}
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("saved Herdr console role is invalid")
@@ -487,11 +487,11 @@ func removeCompletedHerdrConsoleIntent(
 	projectRoot string,
 	pane state.Pane,
 ) error {
-	journal, err := locked.HerdrIntents(projectRoot)
+	journal, err := locked.LaunchJournal(projectRoot)
 	if err != nil {
 		return err
 	}
-	intentID, err := state.HerdrCoordinatorIntentID(HerdrConsoleRuntimeParent, "", 0)
+	intentID, err := state.CoordinatorIntentID(HerdrConsoleRuntimeParent, "", 0)
 	if err != nil {
 		return err
 	}
@@ -506,11 +506,11 @@ func removeCompletedHerdrConsoleIntent(
 	return journal.Save()
 }
 
-func completedHerdrConsoleIntentMatchesPane(intent state.HerdrIntent, pane state.Pane) bool {
-	if intent.Kind != state.HerdrIntentCoordinator || intent.Status != state.HerdrIntentRealized ||
+func completedHerdrConsoleIntentMatchesPane(intent state.LaunchIntent, pane state.Pane) bool {
+	if intent.Kind != state.IntentCoordinator || intent.Status != state.IntentRealized ||
 		intent.Parent != HerdrConsoleRuntimeParent || intent.RuntimeParent != HerdrConsoleRuntimeParent ||
 		filepath.Clean(intent.WorktreePath) != filepath.Clean(pane.WorktreePath) ||
-		intent.WorkspaceLabel != pane.HerdrWorkspaceLabel {
+		intent.WorkspaceLabel != pane.WorkspaceLabel {
 		return false
 	}
 	route := backend.OwnedLaunchRoute{Session: intent.Session, SocketPath: intent.SocketPath}

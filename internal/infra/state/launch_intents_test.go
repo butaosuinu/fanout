@@ -18,12 +18,12 @@ import (
 )
 
 func TestHerdrIntentsAreSharedAcrossLinkedWorktrees(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
+	repo := newLaunchJournalRepo(t)
 	sibling := filepath.Join(t.TempDir(), "sibling")
-	runHerdrIntentsGit(t, repo, "worktree", "add", "-b", "sibling", sibling, "HEAD")
+	runLaunchJournalGit(t, repo, "worktree", "add", "-b", "sibling", sibling, "HEAD")
 
-	project, view := lockHerdrIntentsForTest(t, repo)
-	intent := testHerdrCoordinatorIntent(repo, "0425")
+	project, view := lockLaunchJournalForTest(t, repo)
+	intent := testCoordinatorIntent(repo, "0425")
 	view.UpsertIntent(intent)
 	if err := view.Save(); err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestHerdrIntentsAreSharedAcrossLinkedWorktrees(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fromSibling, err := LoadHerdrIntents(sibling)
+	fromSibling, err := LoadLaunchJournal(sibling)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,11 +40,11 @@ func TestHerdrIntentsAreSharedAcrossLinkedWorktrees(t *testing.T) {
 	if !ok || got.Parent != "425" {
 		t.Fatalf("shared intent = (%+v, %t), want saved coordinator", got, ok)
 	}
-	repoPath, err := HerdrIntentsPath(repo)
+	repoPath, err := LaunchJournalPath(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	siblingPath, err := HerdrIntentsPath(sibling)
+	siblingPath, err := LaunchJournalPath(sibling)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestHerdrIntentsAreSharedAcrossLinkedWorktrees(t *testing.T) {
 // the combined launch lock: the journal follows state.json parity and has no
 // namespace hardening of its own.
 func TestLockProjectForLaunchAcceptsGroupWritableCommonDir(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
+	repo := newLaunchJournalRepo(t)
 	if err := os.Chmod(filepath.Join(repo, ".git"), 0o775); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestLockProjectForLaunchAcceptsGroupWritableCommonDir(t *testing.T) {
 }
 
 func TestLockProjectForLaunchContextReleasesIntentsAfterStateTimeout(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
+	repo := newLaunchJournalRepo(t)
 	stateOnly, err := Lock(Path(repo))
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestLockProjectForLaunchContextReleasesIntentsAfterStateTimeout(t *testing.
 	if _, lockErr := LockProjectForLaunchContext(ctx, repo); !errors.Is(lockErr, context.DeadlineExceeded) {
 		t.Fatalf("LockProjectForLaunchContext() error = %v, want context deadline", lockErr)
 	}
-	intentsPath, err := HerdrIntentsPath(repo)
+	intentsPath, err := LaunchJournalPath(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,17 +101,17 @@ func TestLockProjectForLaunchContextReleasesIntentsAfterStateTimeout(t *testing.
 }
 
 func TestLockProjectForLaunchAtCombinesCustomStateAndIntentLocks(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
+	repo := newLaunchJournalRepo(t)
 	customState := filepath.Join(t.TempDir(), "state.json")
 	project, err := LockProjectForLaunchAt(repo, customState)
 	if err != nil {
 		t.Fatal(err)
 	}
-	view, err := project.HerdrIntents(repo)
+	view, err := project.LaunchJournal(repo)
 	if err != nil {
 		t.Fatal(errors.Join(err, project.Unlock()))
 	}
-	intent := testHerdrCoordinatorIntent(repo, "425")
+	intent := testCoordinatorIntent(repo, "425")
 	view.UpsertIntent(intent)
 	if saveErr := view.Save(); saveErr != nil {
 		t.Fatal(errors.Join(saveErr, project.Unlock()))
@@ -119,7 +119,7 @@ func TestLockProjectForLaunchAtCombinesCustomStateAndIntentLocks(t *testing.T) {
 	if unlockErr := project.Unlock(); unlockErr != nil {
 		t.Fatal(unlockErr)
 	}
-	loaded, err := LoadHerdrIntents(repo)
+	loaded, err := LoadLaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,8 +131,8 @@ func TestLockProjectForLaunchAtCombinesCustomStateAndIntentLocks(t *testing.T) {
 func TestHerdrIntentsRejectExistingJournalWithoutSchemaVersion(t *testing.T) {
 	for _, contents := range []string{`{}`, `{"schemaVersion":0}`} {
 		t.Run(contents, func(t *testing.T) {
-			repo := newHerdrIntentsRepo(t)
-			path, err := HerdrIntentsPath(repo)
+			repo := newLaunchJournalRepo(t)
+			path, err := LaunchJournalPath(repo)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -142,7 +142,7 @@ func TestHerdrIntentsRejectExistingJournalWithoutSchemaVersion(t *testing.T) {
 			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := LoadHerdrIntents(repo); err == nil ||
+			if _, err := LoadLaunchJournal(repo); err == nil ||
 				!strings.Contains(err.Error(), "unsupported Herdr intents schema version 0") {
 				t.Fatalf("schema-less journal error = %v", err)
 			}
@@ -151,8 +151,8 @@ func TestHerdrIntentsRejectExistingJournalWithoutSchemaVersion(t *testing.T) {
 }
 
 func TestHerdrIntentsRejectFutureSchemaVersion(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	path, err := HerdrIntentsPath(repo)
+	repo := newLaunchJournalRepo(t)
+	path, err := LaunchJournalPath(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,19 +162,19 @@ func TestHerdrIntentsRejectFutureSchemaVersion(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"schemaVersion":2}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadHerdrIntents(repo); err == nil ||
+	if _, err := LoadLaunchJournal(repo); err == nil ||
 		!strings.Contains(err.Error(), "unsupported Herdr intents schema version 2") {
 		t.Fatalf("future schema error = %v", err)
 	}
 }
 
 func TestProjectStateLockSerializesHerdrControlWriter(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
+	repo := newLaunchJournalRepo(t)
 	project, err := LockProjectForLaunch(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	controlPath, err := HerdrIntentsPath(repo)
+	controlPath, err := LaunchJournalPath(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,26 +200,26 @@ func TestProjectStateLockSerializesHerdrControlWriter(t *testing.T) {
 }
 
 func TestHerdrControlBindingsIncludeEveryIntentStatus(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	store := emptyHerdrIntents()
-	statuses := []HerdrIntentStatus{
-		HerdrIntentPlanned,
-		HerdrIntentIssued,
-		HerdrIntentRealized,
-		HerdrIntentManualCleanupRequired,
+	repo := newLaunchJournalRepo(t)
+	store := emptyLaunchJournal()
+	statuses := []LaunchIntentStatus{
+		IntentPlanned,
+		IntentIssued,
+		IntentRealized,
+		IntentManualCleanupRequired,
 	}
 	for i, status := range statuses {
-		intent := testHerdrCoordinatorIntent(repo, strconv.Itoa(500+i))
+		intent := testCoordinatorIntent(repo, strconv.Itoa(500+i))
 		intent.Status = status
-		if status == HerdrIntentRealized {
-			intent.Resource = testHerdrCoordinatorResource(repo)
+		if status == IntentRealized {
+			intent.Resource = testCoordinatorResource(repo)
 		}
-		if status == HerdrIntentManualCleanupRequired {
+		if status == IntentManualCleanupRequired {
 			intent.Failure = "response loss"
 		}
 		store.Intents = append(store.Intents, intent)
 	}
-	if err := validateHerdrIntents(store); err != nil {
+	if err := validateLaunchJournal(store); err != nil {
 		t.Fatal(err)
 	}
 
@@ -237,12 +237,12 @@ func TestHerdrControlBindingsIncludeEveryIntentStatus(t *testing.T) {
 }
 
 func TestHerdrServerLifecycleIntentValidatesExactIdentity(t *testing.T) {
-	for _, kind := range []HerdrIntentKind{HerdrIntentRestart, HerdrIntentShutdown} {
+	for _, kind := range []LaunchIntentKind{IntentRestart, IntentShutdown} {
 		t.Run(string(kind), func(t *testing.T) {
-			intent := testHerdrServerIntent(kind)
-			store := emptyHerdrIntents()
+			intent := testServerIntent(kind)
+			store := emptyLaunchJournal()
 			store.Intents = append(store.Intents, intent)
-			if err := validateHerdrIntents(store); err != nil {
+			if err := validateLaunchJournal(store); err != nil {
 				t.Fatal(err)
 			}
 			got, found, err := store.ServerLifecycleIntent()
@@ -257,82 +257,82 @@ func TestHerdrServerLifecycleIntentValidatesExactIdentity(t *testing.T) {
 }
 
 func TestHerdrServerLifecycleIntentAllowsOnlyIssuedShutdown(t *testing.T) {
-	shutdown := testHerdrServerIntent(HerdrIntentShutdown)
-	shutdown.Status = HerdrIntentIssued
-	if err := validateHerdrIntent(shutdown); err != nil {
+	shutdown := testServerIntent(IntentShutdown)
+	shutdown.Status = IntentIssued
+	if err := validateIntent(shutdown); err != nil {
 		t.Fatal(err)
 	}
-	restart := testHerdrServerIntent(HerdrIntentRestart)
-	restart.Status = HerdrIntentIssued
-	if err := validateHerdrIntent(restart); err == nil || !strings.Contains(err.Error(), "incomplete") {
+	restart := testServerIntent(IntentRestart)
+	restart.Status = IntentIssued
+	if err := validateIntent(restart); err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("issued restart error = %v", err)
 	}
 }
 
 func TestHerdrResumeIntentRequiresExactCodexSessionAndArgv(t *testing.T) {
-	valid := testHerdrResumeIntent()
-	if err := validateHerdrIntent(valid); err != nil {
+	valid := testResumeIntent()
+	if err := validateIntent(valid); err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
 		name   string
-		mutate func(*HerdrIntent)
+		mutate func(*LaunchIntent)
 	}{
-		{name: "wrong id", mutate: func(intent *HerdrIntent) { intent.ID = "resume:" + strings.Repeat("0", 64) }},
-		{name: "missing ref", mutate: func(intent *HerdrIntent) { intent.ResumeAgentSession = nil }},
-		{name: "path ref", mutate: func(intent *HerdrIntent) { intent.ResumeAgentSession.Kind = "path" }},
-		{name: "wrong session", mutate: func(intent *HerdrIntent) { intent.Launch.Args[1] = "other" }},
-		{name: "extra arg", mutate: func(intent *HerdrIntent) { intent.Launch.Args = append(intent.Launch.Args, "--full-auto") }},
-		{name: "wrong provider", mutate: func(intent *HerdrIntent) { intent.Launch.Agent = "claude" }},
-		{name: "preassigned agent name", mutate: func(intent *HerdrIntent) { intent.Launch.AgentName = "fanout-codex" }},
+		{name: "wrong id", mutate: func(intent *LaunchIntent) { intent.ID = "resume:" + strings.Repeat("0", 64) }},
+		{name: "missing ref", mutate: func(intent *LaunchIntent) { intent.ResumeAgentSession = nil }},
+		{name: "path ref", mutate: func(intent *LaunchIntent) { intent.ResumeAgentSession.Kind = "path" }},
+		{name: "wrong session", mutate: func(intent *LaunchIntent) { intent.Launch.Args[1] = "other" }},
+		{name: "extra arg", mutate: func(intent *LaunchIntent) { intent.Launch.Args = append(intent.Launch.Args, "--full-auto") }},
+		{name: "wrong provider", mutate: func(intent *LaunchIntent) { intent.Launch.Agent = "claude" }},
+		{name: "preassigned agent name", mutate: func(intent *LaunchIntent) { intent.Launch.AgentName = "fanout-codex" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			intent := testHerdrResumeIntent()
+			intent := testResumeIntent()
 			test.mutate(&intent)
-			if err := validateHerdrIntent(intent); err == nil {
-				t.Fatal("validateHerdrIntent() accepted an inexact resume")
+			if err := validateIntent(intent); err == nil {
+				t.Fatal("validateIntent() accepted an inexact resume")
 			}
 		})
 	}
 }
 
 func TestHerdrServerLifecycleIntentRejectsAmbiguousOrIncompleteRows(t *testing.T) {
-	restart := testHerdrServerIntent(HerdrIntentRestart)
-	shutdown := testHerdrServerIntent(HerdrIntentShutdown)
-	store := emptyHerdrIntents()
-	store.Intents = []HerdrIntent{restart, shutdown}
-	if err := validateHerdrIntents(store); err == nil || !strings.Contains(err.Error(), "multiple") {
+	restart := testServerIntent(IntentRestart)
+	shutdown := testServerIntent(IntentShutdown)
+	store := emptyLaunchJournal()
+	store.Intents = []LaunchIntent{restart, shutdown}
+	if err := validateLaunchJournal(store); err == nil || !strings.Contains(err.Error(), "multiple") {
 		t.Fatalf("multiple lifecycle intents error = %v", err)
 	}
 
 	restart.Server.ServerPID = 0
-	store.Intents = []HerdrIntent{restart}
-	if err := validateHerdrIntents(store); err == nil || !strings.Contains(err.Error(), "incomplete") {
+	store.Intents = []LaunchIntent{restart}
+	if err := validateLaunchJournal(store); err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("restart without server pid error = %v", err)
 	}
 
-	regular := testHerdrCoordinatorIntent("/repo", "637")
+	regular := testCoordinatorIntent("/repo", "637")
 	regular.Server = shutdown.Server
-	if err := validateHerdrIntent(regular); err == nil || !strings.Contains(err.Error(), "unrelated server identity") {
+	if err := validateIntent(regular); err == nil || !strings.Contains(err.Error(), "unrelated server identity") {
 		t.Fatalf("regular intent with server identity error = %v", err)
 	}
 
-	restart = testHerdrServerIntent(HerdrIntentRestart)
-	restart.CleanupPhase = HerdrCleanupRemove
-	if err := validateHerdrIntent(restart); err == nil || !strings.Contains(err.Error(), "unrelated fields") {
+	restart = testServerIntent(IntentRestart)
+	restart.CleanupPhase = CleanupRemove
+	if err := validateIntent(restart); err == nil || !strings.Contains(err.Error(), "unrelated fields") {
 		t.Fatalf("server intent with cleanup phase error = %v", err)
 	}
 }
 
 func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
-	first := testHerdrCoordinatorIntent("/repo/one", "plan:demo")
-	second := testHerdrCoordinatorIntent("/repo/two", "plan:demo")
+	first := testCoordinatorIntent("/repo/one", "plan:demo")
+	second := testCoordinatorIntent("/repo/two", "plan:demo")
 	if first.ID == second.ID {
 		t.Fatalf("plan intent IDs collide across owner roots: %s", first.ID)
 	}
-	intents := emptyHerdrIntents()
-	intents.Intents = []HerdrIntent{first, second}
-	if err := validateHerdrIntents(intents); err != nil {
+	intents := emptyLaunchJournal()
+	intents.Intents = []LaunchIntent{first, second}
+	if err := validateLaunchJournal(intents); err != nil {
 		t.Fatal(err)
 	}
 	if got := intents.ProvisionalBindings("/repo/one"); len(got) != 1 ||
@@ -346,10 +346,10 @@ func TestHerdrPlanBindingsAreOwnerWorktreeLocal(t *testing.T) {
 }
 
 func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testing.T) {
-	intent := testHerdrCoordinatorIntent("/repo/one", "plan:demo")
+	intent := testCoordinatorIntent("/repo/one", "plan:demo")
 	intent.RuntimeParent = "425"
-	intent.ID, _ = HerdrCoordinatorIntentID(intent.RuntimeParent, "", 0)
-	store := emptyHerdrIntents()
+	intent.ID, _ = CoordinatorIntentID(intent.RuntimeParent, "", 0)
+	store := emptyLaunchJournal()
 	store.Intents = append(store.Intents, intent)
 
 	got := store.ProvisionalBindings("/repo/two")
@@ -359,8 +359,8 @@ func TestHerdrIssueSourcedPlanBindingsUseResolvedParentAcrossWorktrees(t *testin
 }
 
 func TestHerdrSyntheticBindingsProjectWatcherIssuesAndKeepResolvedParents(t *testing.T) {
-	store := emptyHerdrIntents()
-	store.Intents = []HerdrIntent{
+	store := emptyLaunchJournal()
+	store.Intents = []LaunchIntent{
 		{RuntimeParent: "@manual", IssueNum: 424},
 		{RuntimeParent: "@watch", IssueNum: 426},
 		{RuntimeParent: "428"},
@@ -377,18 +377,18 @@ func TestHerdrSyntheticBindingsProjectWatcherIssuesAndKeepResolvedParents(t *tes
 }
 
 func TestHerdrIntentsRejectDuplicateBranchAndPathReservations(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	project, view := lockHerdrIntentsForTest(t, repo)
+	repo := newLaunchJournalRepo(t)
+	project, view := lockLaunchJournalForTest(t, repo)
 	t.Cleanup(func() {
 		if err := project.Unlock(); err != nil {
 			t.Errorf("unlock: %v", err)
 		}
 	})
-	first := testHerdrWorktreeIntent(repo, "425", 426, "first")
-	second := testHerdrWorktreeIntent(repo, "425", 427, "second")
+	first := testWorktreeIntent(repo, "425", 426, "first")
+	second := testWorktreeIntent(repo, "425", 427, "second")
 	second.BranchName = first.BranchName
 	second.FullBranchRef = first.FullBranchRef
-	view.Intents = []HerdrIntent{first, second}
+	view.Intents = []LaunchIntent{first, second}
 	if err := view.Save(); err == nil || !strings.Contains(err.Error(), "reserve the same branch:") {
 		t.Fatalf("duplicate branch save error = %v", err)
 	}
@@ -396,154 +396,154 @@ func TestHerdrIntentsRejectDuplicateBranchAndPathReservations(t *testing.T) {
 	second.BranchName = "fanout/second"
 	second.FullBranchRef = "refs/heads/" + second.BranchName
 	second.WorktreePath = first.WorktreePath
-	view.Intents = []HerdrIntent{first, second}
+	view.Intents = []LaunchIntent{first, second}
 	if err := view.Save(); err == nil || !strings.Contains(err.Error(), "reserve the same path:") {
 		t.Fatalf("duplicate path save error = %v", err)
 	}
 }
 
 func TestHerdrIntentIDsUseTmuxIssueAndTaskKeys(t *testing.T) {
-	issue, err := HerdrWorktreeIntentID("00425", "", 426, "")
+	issue, err := WorktreeIntentID("00425", "", 426, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	alias, err := HerdrWorktreeIntentID("425", "", 426, "")
+	alias, err := WorktreeIntentID("425", "", 426, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if issue != alias {
 		t.Fatalf("numeric parent aliases differ: %q != %q", issue, alias)
 	}
-	task, err := HerdrWorktreeIntentID("plan:demo", "/repo/one", 0, "api:client")
+	task, err := WorktreeIntentID("plan:demo", "/repo/one", 0, "api:client")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(task, "plan:demo") || !strings.Contains(task, "api:client") {
 		t.Fatalf("task id = %q, want length-prefixed plan/task identity", task)
 	}
-	if _, mixedErr := HerdrWorktreeIntentID("plan:demo", "/repo/one", 1, "task"); mixedErr == nil {
+	if _, mixedErr := WorktreeIntentID("plan:demo", "/repo/one", 1, "task"); mixedErr == nil {
 		t.Fatal("issue and task identity unexpectedly accepted together")
 	}
-	manual, err := HerdrWorktreeIntentID("@manual", "/repo/one", -1, "")
+	manual, err := WorktreeIntentID("@manual", "/repo/one", -1, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherManual, err := HerdrWorktreeIntentID("@manual", "/repo/two", -1, "")
+	otherManual, err := WorktreeIntentID("@manual", "/repo/two", -1, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if manual == otherManual {
 		t.Fatalf("manual worktree IDs collide across owner roots: %q", manual)
 	}
-	if _, err := HerdrWorktreeIntentID("425", "", -1, ""); err == nil {
+	if _, err := WorktreeIntentID("425", "", -1, ""); err == nil {
 		t.Fatal("negative issue number was accepted for a non-manual parent")
 	}
 }
 
 func TestHerdrRollbackIntentKeepsIndependentMutationRecord(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	original := testHerdrWorktreeIntent(repo, "425", 426, "rollback")
-	original.Status = HerdrIntentRealized
-	original.Resource = HerdrResource{
+	repo := newLaunchJournalRepo(t)
+	original := testWorktreeIntent(repo, "425", 426, "rollback")
+	original.Status = IntentRealized
+	original.Resource = RuntimeResource{
 		WorkspaceID: "w2", Label: original.WorkspaceLabel,
 		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: original.WorktreePath,
 		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
 	}
 	rollback := original
-	rollback.ID, _ = HerdrRollbackIntentID(original.ID)
-	rollback.Kind = HerdrIntentRollback
-	rollback.Status = HerdrIntentPlanned
-	store := emptyHerdrIntents()
-	store.Intents = []HerdrIntent{original, rollback}
-	if err := validateHerdrIntents(store); err != nil {
+	rollback.ID, _ = RollbackIntentID(original.ID)
+	rollback.Kind = IntentRollback
+	rollback.Status = IntentPlanned
+	store := emptyLaunchJournal()
+	store.Intents = []LaunchIntent{original, rollback}
+	if err := validateLaunchJournal(store); err != nil {
 		t.Fatal(err)
 	}
-	rollback.Launch = &HerdrLaunch{}
-	if err := validateHerdrIntent(rollback); err == nil {
+	rollback.Launch = &LaunchCapsule{}
+	if err := validateIntent(rollback); err == nil {
 		t.Fatal("rollback intent accepted an agent launch capsule")
 	}
 }
 
 func TestHerdrLaunchRequiresAbsoluteTeamPaths(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	intent := testHerdrWorktreeIntent(repo, "425", 426, "team-status")
-	intent.Status = HerdrIntentRealized
-	intent.Resource = HerdrResource{
+	repo := newLaunchJournalRepo(t)
+	intent := testWorktreeIntent(repo, "425", 426, "team-status")
+	intent.Status = IntentRealized
+	intent.Resource = RuntimeResource{
 		WorkspaceID: "w2", Label: intent.WorkspaceLabel,
 		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: intent.WorktreePath,
 		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
 	}
-	intent.Launch = &HerdrLaunch{
+	intent.Launch = &LaunchCapsule{
 		Nonce: strings.Repeat("a", 32), Agent: "codex",
 		AgentName: "fanout-0123456789abcdef01234567", Executable: "/bin/fanout",
 		TeamDBPath: "relative-team.db", EnvFilePath: "/tmp/env", EnvNameCount: 1,
 	}
-	if err := validateHerdrIntent(intent); err == nil || !strings.Contains(err.Error(), "launch fields are incomplete") {
+	if err := validateIntent(intent); err == nil || !strings.Contains(err.Error(), "launch fields are incomplete") {
 		t.Fatalf("relative team DB path error = %v", err)
 	}
 	intent.Launch.TeamDBPath = "/tmp/team.db"
 	intent.Launch.CodexTeamStatusPath = "relative-status.json"
-	if err := validateHerdrIntent(intent); err == nil || !strings.Contains(err.Error(), "launch fields are incomplete") {
+	if err := validateIntent(intent); err == nil || !strings.Contains(err.Error(), "launch fields are incomplete") {
 		t.Fatalf("relative team status path error = %v", err)
 	}
 	intent.Launch.CodexTeamStatusPath = "/tmp/team-status.json"
-	if err := validateHerdrIntent(intent); err != nil {
+	if err := validateIntent(intent); err != nil {
 		t.Fatalf("absolute team status path error = %v", err)
 	}
 }
 
 func TestHerdrCoordinatorLaunchAllowsShellAndRejectsPartialAgentIdentity(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	intent := testHerdrCoordinatorIntent(repo, "425")
-	intent.Status = HerdrIntentIssued
-	intent.Launch = &HerdrLaunch{
+	repo := newLaunchJournalRepo(t)
+	intent := testCoordinatorIntent(repo, "425")
+	intent.Status = IntentIssued
+	intent.Launch = &LaunchCapsule{
 		Nonce:        strings.Repeat("a", 32),
 		Executable:   "/bin/zsh",
 		EnvFilePath:  "/private/tmp/fanout-test/env.json",
 		EnvNameCount: 1,
 	}
-	if err := validateHerdrIntent(intent); err != nil {
+	if err := validateIntent(intent); err != nil {
 		t.Fatalf("issued coordinator shell launch = %v, want success", err)
 	}
 
 	intent.Launch.Agent = "codex"
-	if err := validateHerdrIntent(intent); err == nil ||
+	if err := validateIntent(intent); err == nil ||
 		!strings.Contains(err.Error(), "launch agent identity is partial") {
 		t.Fatalf("partial agent identity error = %v", err)
 	}
 }
 
 func TestHerdrCleanupIntentKeepsIndependentMutationRecord(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	cleanup := testHerdrCleanupIntent(repo, HerdrCleanupRemove, HerdrIntentPlanned)
-	store := emptyHerdrIntents()
-	store.Intents = []HerdrIntent{cleanup}
-	if err := validateHerdrIntents(store); err != nil {
+	repo := newLaunchJournalRepo(t)
+	cleanup := testCleanupIntent(repo, CleanupRemove, IntentPlanned)
+	store := emptyLaunchJournal()
+	store.Intents = []LaunchIntent{cleanup}
+	if err := validateLaunchJournal(store); err != nil {
 		t.Fatal(err)
 	}
 	cleanup.CleanupPhase = "unknown"
-	if err := validateHerdrIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {
+	if err := validateIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {
 		t.Fatalf("unknown cleanup phase error = %v", err)
 	}
 }
 
 func TestHerdrCleanupIntentCoexistsWithServerRestart(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	phases := []HerdrCleanupPhase{HerdrCleanupReopen, HerdrCleanupRemove, HerdrCleanupWorkspaceClose}
-	statuses := []HerdrIntentStatus{
-		HerdrIntentPlanned, HerdrIntentIssued, HerdrIntentManualCleanupRequired, HerdrIntentRealized,
+	repo := newLaunchJournalRepo(t)
+	phases := []CleanupPhase{CleanupReopen, CleanupRemove, CleanupWorkspaceClose}
+	statuses := []LaunchIntentStatus{
+		IntentPlanned, IntentIssued, IntentManualCleanupRequired, IntentRealized,
 	}
 	for _, phase := range phases {
 		for _, status := range statuses {
 			t.Run(string(phase)+"/"+string(status), func(t *testing.T) {
-				cleanup := testHerdrCleanupIntent(repo, phase, status)
-				store := emptyHerdrIntents()
-				store.Intents = []HerdrIntent{cleanup, testHerdrServerIntent(HerdrIntentRestart)}
-				if err := validateHerdrIntents(store); err != nil {
+				cleanup := testCleanupIntent(repo, phase, status)
+				store := emptyLaunchJournal()
+				store.Intents = []LaunchIntent{cleanup, testServerIntent(IntentRestart)}
+				if err := validateLaunchJournal(store); err != nil {
 					t.Fatal(err)
 				}
 				got, found, err := store.ServerLifecycleIntent()
-				if err != nil || !found || got.Kind != HerdrIntentRestart {
+				if err != nil || !found || got.Kind != IntentRestart {
 					t.Fatalf("ServerLifecycleIntent() = (%+v, %t, %v)", got, found, err)
 				}
 			})
@@ -551,54 +551,54 @@ func TestHerdrCleanupIntentCoexistsWithServerRestart(t *testing.T) {
 	}
 }
 
-func testHerdrCleanupIntent(
+func testCleanupIntent(
 	repo string,
-	phase HerdrCleanupPhase,
-	status HerdrIntentStatus,
-) HerdrIntent {
-	cleanup := testHerdrWorktreeIntent(repo, "425", 426, "cleanup")
-	cleanup.ID, _ = HerdrCleanupIntentID(cleanup.ID)
-	cleanup.Kind = HerdrIntentCleanup
+	phase CleanupPhase,
+	status LaunchIntentStatus,
+) LaunchIntent {
+	cleanup := testWorktreeIntent(repo, "425", 426, "cleanup")
+	cleanup.ID, _ = CleanupIntentID(cleanup.ID)
+	cleanup.Kind = IntentCleanup
 	cleanup.Status = status
 	cleanup.CleanupPhase = phase
-	cleanup.Resource = HerdrResource{
+	cleanup.Resource = RuntimeResource{
 		WorkspaceID: "w2", Label: cleanup.WorkspaceLabel,
 		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: cleanup.WorktreePath,
 		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
 	}
-	if status == HerdrIntentManualCleanupRequired {
+	if status == IntentManualCleanupRequired {
 		cleanup.Failure = "server unavailable"
 	}
 	return cleanup
 }
 
 func TestHerdrCleanupIntentIDRejectsNestedCleanup(t *testing.T) {
-	id, err := HerdrCleanupIntentID("issue:3:425:426")
+	id, err := CleanupIntentID("issue:3:425:426")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if id != "cleanup:issue:3:425:426" {
 		t.Fatalf("cleanup id = %q", id)
 	}
-	if _, err := HerdrCleanupIntentID(id); err == nil {
+	if _, err := CleanupIntentID(id); err == nil {
 		t.Fatal("nested cleanup intent id was accepted")
 	}
 }
 
 func TestHerdrCoordinatorIntentIDsUseSyntheticIssueNumbers(t *testing.T) {
-	firstManual, err := HerdrCoordinatorIntentID("@manual", "/repo/one", -1)
+	firstManual, err := CoordinatorIntentID("@manual", "/repo/one", -1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondManual, err := HerdrCoordinatorIntentID("@manual", "/repo/one", -2)
+	secondManual, err := CoordinatorIntentID("@manual", "/repo/one", -2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherOwner, err := HerdrCoordinatorIntentID("@manual", "/repo/two", -1)
+	otherOwner, err := CoordinatorIntentID("@manual", "/repo/two", -1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	watch, err := HerdrCoordinatorIntentID("@watch", "", 425)
+	watch, err := CoordinatorIntentID("@watch", "", 425)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,89 +612,89 @@ func TestHerdrCoordinatorIntentIDsUseSyntheticIssueNumbers(t *testing.T) {
 			watch,
 		)
 	}
-	if _, err := HerdrCoordinatorIntentID("@manual", "/repo/one", 0); err == nil {
+	if _, err := CoordinatorIntentID("@manual", "/repo/one", 0); err == nil {
 		t.Fatal("manual coordinator without synthetic issue number was accepted")
 	}
-	if _, err := HerdrCoordinatorIntentID("@watch", "", 0); err == nil {
+	if _, err := CoordinatorIntentID("@watch", "", 0); err == nil {
 		t.Fatal("watch coordinator without issue number was accepted")
 	}
-	if _, err := HerdrCoordinatorIntentID("425", "", 426); err == nil {
+	if _, err := CoordinatorIntentID("425", "", 426); err == nil {
 		t.Fatal("numeric coordinator with synthetic issue number was accepted")
 	}
 }
 
 func TestHerdrControlRejectsIncompleteRealizedIntent(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	intent := testHerdrCoordinatorIntent(repo, "425")
-	intent.Status = HerdrIntentRealized
-	store := emptyHerdrIntents()
+	repo := newLaunchJournalRepo(t)
+	intent := testCoordinatorIntent(repo, "425")
+	intent.Status = IntentRealized
+	store := emptyLaunchJournal()
 	store.Intents = append(store.Intents, intent)
-	if err := validateHerdrIntents(store); err == nil || !strings.Contains(err.Error(), "resource is incomplete") {
+	if err := validateLaunchJournal(store); err == nil || !strings.Contains(err.Error(), "resource is incomplete") {
 		t.Fatalf("realized intent validation error = %v", err)
 	}
 }
 
 func TestHerdrControlAcceptsSHA256ObjectIDs(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	intent := testHerdrWorktreeIntent(repo, "425", 426, "sha256")
+	repo := newLaunchJournalRepo(t)
+	intent := testWorktreeIntent(repo, "425", 426, "sha256")
 	intent.BaseSHA = strings.Repeat("1", 64)
 	intent.ExpectedHead = strings.Repeat("2", 64)
-	store := emptyHerdrIntents()
+	store := emptyLaunchJournal()
 	store.Intents = append(store.Intents, intent)
-	if err := validateHerdrIntents(store); err != nil {
+	if err := validateLaunchJournal(store); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestHerdrControlIssuedWorktreeMayRetainRealizedResourceForOpenRecovery(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	intent := testHerdrWorktreeIntent(repo, "425", 426, "reopen")
-	intent.Status = HerdrIntentIssued
-	intent.Resource = HerdrResource{
+	repo := newLaunchJournalRepo(t)
+	intent := testWorktreeIntent(repo, "425", 426, "reopen")
+	intent.Status = IntentIssued
+	intent.Resource = RuntimeResource{
 		WorkspaceID: "w2", Label: intent.WorkspaceLabel,
 		PaneID: "w2:p1", TerminalID: "term-2",
 		CurrentPath: intent.WorktreePath,
 		RepoKey:     filepath.Join(repo, ".git"), RepoRoot: repo,
 	}
-	if err := validateHerdrIntent(intent); err != nil {
+	if err := validateIntent(intent); err != nil {
 		t.Fatalf("issued worktree open intent: %v", err)
 	}
 
-	coordinator := testHerdrCoordinatorIntent(repo, "425")
-	coordinator.Status = HerdrIntentIssued
-	coordinator.Resource = testHerdrCoordinatorResource(repo)
-	if err := validateHerdrIntent(coordinator); err == nil ||
+	coordinator := testCoordinatorIntent(repo, "425")
+	coordinator.Status = IntentIssued
+	coordinator.Resource = testCoordinatorResource(repo)
+	if err := validateIntent(coordinator); err == nil ||
 		!strings.Contains(err.Error(), "resource before realization") {
 		t.Fatalf("issued coordinator resource error = %v", err)
 	}
 }
 
 func TestHerdrControlRejectsResourceCurrentPathMismatch(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	intent := testHerdrWorktreeIntent(repo, "425", 426, "mismatch")
-	intent.Status = HerdrIntentRealized
-	intent.Resource = HerdrResource{
+	repo := newLaunchJournalRepo(t)
+	intent := testWorktreeIntent(repo, "425", 426, "mismatch")
+	intent.Status = IntentRealized
+	intent.Resource = RuntimeResource{
 		WorkspaceID: "w2", Label: intent.WorkspaceLabel,
 		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: repo,
 		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
 	}
-	err := validateHerdrIntent(intent)
+	err := validateIntent(intent)
 	if err == nil || !strings.Contains(err.Error(), "current path") {
 		t.Fatalf("error = %v, want current-path rejection", err)
 	}
 }
 
 func TestHerdrControlValidatesEmitterLaunchFields(t *testing.T) {
-	repo := newHerdrIntentsRepo(t)
-	valid := func() HerdrIntent {
-		intent := testHerdrWorktreeIntent(repo, "425", 426, "telemetry")
-		intent.Status = HerdrIntentRealized
-		intent.Resource = HerdrResource{
+	repo := newLaunchJournalRepo(t)
+	valid := func() LaunchIntent {
+		intent := testWorktreeIntent(repo, "425", 426, "telemetry")
+		intent.Status = IntentRealized
+		intent.Resource = RuntimeResource{
 			WorkspaceID: "w2", Label: intent.WorkspaceLabel,
 			PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: intent.WorktreePath,
 			RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
 		}
-		intent.Launch = &HerdrLaunch{
+		intent.Launch = &LaunchCapsule{
 			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
 			PendingReportedState: "working", Agent: "claude", AgentName: "fanout-agent",
 			Executable: "/opt/bin/claude", Args: []string{"prompt"},
@@ -702,45 +702,45 @@ func TestHerdrControlValidatesEmitterLaunchFields(t *testing.T) {
 		}
 		return intent
 	}
-	if err := validateHerdrIntent(valid()); err != nil {
+	if err := validateIntent(valid()); err != nil {
 		t.Fatal(err)
 	}
 	codex := valid()
 	codex.Launch.Agent = "codex"
 	codex.Launch.CodexPlanStatusPath = filepath.Join(t.TempDir(), "status.json")
-	if err := validateHerdrIntent(codex); err != nil {
+	if err := validateIntent(codex); err != nil {
 		t.Fatalf("Codex Plan emitter fields: %v", err)
 	}
 	for _, test := range []struct {
 		name   string
-		mutate func(*HerdrLaunch)
+		mutate func(*LaunchCapsule)
 	}{
-		{name: "pending without nonce", mutate: func(launch *HerdrLaunch) { launch.EmitterNonce = "" }},
-		{name: "Codex emitter without Plan mode", mutate: func(launch *HerdrLaunch) { launch.Agent = "codex" }},
-		{name: "unsupported emitter", mutate: func(launch *HerdrLaunch) { launch.Agent = "opencode" }},
-		{name: "synthetic pending", mutate: func(launch *HerdrLaunch) { launch.PendingReportedState = "running" }},
+		{name: "pending without nonce", mutate: func(launch *LaunchCapsule) { launch.EmitterNonce = "" }},
+		{name: "Codex emitter without Plan mode", mutate: func(launch *LaunchCapsule) { launch.Agent = "codex" }},
+		{name: "unsupported emitter", mutate: func(launch *LaunchCapsule) { launch.Agent = "opencode" }},
+		{name: "synthetic pending", mutate: func(launch *LaunchCapsule) { launch.PendingReportedState = "running" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			intent := valid()
 			test.mutate(intent.Launch)
-			if err := validateHerdrIntent(intent); err == nil {
-				t.Fatal("validateHerdrIntent() accepted invalid emitter fields")
+			if err := validateIntent(intent); err == nil {
+				t.Fatal("validateIntent() accepted invalid emitter fields")
 			}
 		})
 	}
 }
 
-func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
-	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, repo)
+func testCoordinatorIntent(repo, parent string) LaunchIntent {
+	ownerProjectRoot, err := IntentOwnerProjectRoot(parent, repo)
 	if err != nil {
 		panic(err)
 	}
-	id, err := HerdrCoordinatorIntentID(parent, ownerProjectRoot, 0)
+	id, err := CoordinatorIntentID(parent, ownerProjectRoot, 0)
 	if err != nil {
 		panic(err)
 	}
-	return HerdrIntent{
-		ID: id, Kind: HerdrIntentCoordinator, Status: HerdrIntentPlanned,
+	return LaunchIntent{
+		ID: id, Kind: IntentCoordinator, Status: IntentPlanned,
 		Parent:           parentref.Canon(strings.TrimSpace(parent)),
 		RuntimeParent:    parentref.Canon(strings.TrimSpace(parent)),
 		OwnerProjectRoot: ownerProjectRoot,
@@ -751,14 +751,14 @@ func testHerdrCoordinatorIntent(repo, parent string) HerdrIntent {
 	}
 }
 
-func testHerdrServerIntent(kind HerdrIntentKind) HerdrIntent {
-	id, err := HerdrServerIntentID(kind)
+func testServerIntent(kind LaunchIntentKind) LaunchIntent {
+	id, err := ServerIntentID(kind)
 	if err != nil {
 		panic(err)
 	}
-	return HerdrIntent{
-		ID: id, Kind: kind, Status: HerdrIntentPlanned,
-		Server: &HerdrServerIdentity{
+	return LaunchIntent{
+		ID: id, Kind: kind, Status: IntentPlanned,
+		Server: &RuntimeServerIdentity{
 			GitCommonDir: "/repo/.git", RuntimeDir: "/tmp/fanout-herdr",
 			Session: "fanout-owned", SocketPath: "/tmp/fanout-herdr/herdr.sock",
 			ClientSocketPath: "/tmp/fanout-herdr/herdr-client.sock",
@@ -771,26 +771,26 @@ func testHerdrServerIntent(kind HerdrIntentKind) HerdrIntent {
 	}
 }
 
-func testHerdrResumeIntent() HerdrIntent {
+func testResumeIntent() LaunchIntent {
 	ref := &backend.AgentSessionRef{
 		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "019f-session",
 	}
-	id, err := HerdrResumeIntentID("fanout-owned", "/runtime/herdr.sock", "w1", "w1:p1")
+	id, err := ResumeIntentID("fanout-owned", "/runtime/herdr.sock", "w1", "w1:p1")
 	if err != nil {
 		panic(err)
 	}
-	return HerdrIntent{
-		ID: id, Kind: HerdrIntentResume, Status: HerdrIntentRealized,
+	return LaunchIntent{
+		ID: id, Kind: IntentResume, Status: IntentRealized,
 		Parent: "524", RuntimeParent: "524", IssueNum: 532,
 		WorktreePath: "/repo/worktree", WorkspaceLabel: "fanout-workspace-token",
-		Resource: HerdrResource{
+		Resource: RuntimeResource{
 			WorkspaceID: "w1", Label: "fanout-workspace-token", PaneID: "w1:p1",
 			TerminalID: "term-new", CurrentPath: "/repo/worktree",
 			RepoKey: "/repo/.git", RepoRoot: "/repo",
 		},
 		Session: "fanout-owned", SocketPath: "/runtime/herdr.sock",
 		ExpiresUnixMS: 2000000000000, ResumeAgentSession: ref,
-		Launch: &HerdrLaunch{
+		Launch: &LaunchCapsule{
 			Nonce: strings.Repeat("b", 32), Agent: "codex",
 			Executable: "/opt/codex", Args: []string{"resume", ref.Value},
 			EnvFilePath: "/runtime/env.json", EnvNameCount: 3,
@@ -798,13 +798,13 @@ func testHerdrResumeIntent() HerdrIntent {
 	}
 }
 
-func lockHerdrIntentsForTest(t *testing.T, repo string) (*LockedStore, *LockedHerdrIntents) {
+func lockLaunchJournalForTest(t *testing.T, repo string) (*LockedStore, *LockedLaunchJournal) {
 	t.Helper()
 	project, err := LockProjectForLaunch(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	view, err := project.HerdrIntents(repo)
+	view, err := project.LaunchJournal(repo)
 	if err != nil {
 		_ = project.Unlock()
 		t.Fatal(err)
@@ -812,17 +812,17 @@ func lockHerdrIntentsForTest(t *testing.T, repo string) (*LockedStore, *LockedHe
 	return project, view
 }
 
-func testHerdrWorktreeIntent(repo, parent string, issue int, slug string) HerdrIntent {
-	ownerProjectRoot, err := HerdrOwnerProjectRoot(parent, repo)
+func testWorktreeIntent(repo, parent string, issue int, slug string) LaunchIntent {
+	ownerProjectRoot, err := IntentOwnerProjectRoot(parent, repo)
 	if err != nil {
 		panic(err)
 	}
-	id, err := HerdrWorktreeIntentID(parent, ownerProjectRoot, issue, "")
+	id, err := WorktreeIntentID(parent, ownerProjectRoot, issue, "")
 	if err != nil {
 		panic(err)
 	}
-	return HerdrIntent{
-		ID: id, Kind: HerdrIntentWorktree, Status: HerdrIntentPlanned,
+	return LaunchIntent{
+		ID: id, Kind: IntentWorktree, Status: IntentPlanned,
 		Parent:           parentref.Canon(strings.TrimSpace(parent)),
 		RuntimeParent:    parentref.Canon(strings.TrimSpace(parent)),
 		OwnerProjectRoot: ownerProjectRoot,
@@ -832,32 +832,32 @@ func testHerdrWorktreeIntent(repo, parent string, issue int, slug string) HerdrI
 		BaseBranch:    "main", BaseSHA: strings.Repeat("1", 40), ExpectedHead: strings.Repeat("1", 40),
 		WorktreePath:   filepath.Join(repo, ".fanout", "worktrees", slug),
 		WorkspaceLabel: "fanout-worktree-" + slug,
-		Coordinator:    testHerdrCoordinatorResource(repo),
+		Coordinator:    testCoordinatorResource(repo),
 		Session:        "fanout-test", SocketPath: "/private/tmp/fanout-test/herdr.sock",
 		ExpiresUnixMS: 2000000000000,
 	}
 }
 
-func testHerdrCoordinatorResource(repo string) HerdrResource {
-	return HerdrResource{
+func testCoordinatorResource(repo string) RuntimeResource {
+	return RuntimeResource{
 		WorkspaceID: "w1", Label: "fanout-coordinator-token",
 		PaneID: "w1:p1", TerminalID: "term-1", CurrentPath: repo,
 	}
 }
 
-func newHerdrIntentsRepo(t *testing.T) string {
+func newLaunchJournalRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
-	runHerdrIntentsGit(t, repo, "init", "-b", "main")
+	runLaunchJournalGit(t, repo, "init", "-b", "main")
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runHerdrIntentsGit(t, repo, "add", "README.md")
-	runHerdrIntentsGit(t, repo, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.test", "commit", "-m", "init")
+	runLaunchJournalGit(t, repo, "add", "README.md")
+	runLaunchJournalGit(t, repo, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.test", "commit", "-m", "init")
 	return repo
 }
 
-func runHerdrIntentsGit(t *testing.T, dir string, args ...string) string {
+func runLaunchJournalGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir

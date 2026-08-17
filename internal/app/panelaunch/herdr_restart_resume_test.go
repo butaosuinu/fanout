@@ -123,17 +123,17 @@ func TestResumeRestartedHerdrRowsRebindsExactCodexProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, found := locked.Find(saved.Parent, saved.IssueNum)
-	if !found || got.HerdrTerminalID != resumed.TerminalID || got.HerdrAgentID != resumed.AgentID ||
-		got.HerdrProcessIdentity == nil || got.HerdrProcessIdentity.AgentPID != 10 {
+	if !found || got.TerminalID != resumed.TerminalID || got.AgentID != resumed.AgentID ||
+		got.ProcessIdentity == nil || got.ProcessIdentity.AgentPID != 10 {
 		t.Fatalf("rebound row = (%+v, %t)", got, found)
 	}
 	if got.ReportedState != "" || got.StateRefinement || got.EmitterNonce == saved.EmitterNonce {
 		t.Fatalf("rebound telemetry = (%q, %t, %q)", got.ReportedState, got.StateRefinement, got.EmitterNonce)
 	}
-	wantArgs := []string{"resume", saved.HerdrAgentSession.Value}
-	if !slices.Equal(got.HerdrLaunchArgs, wantArgs) || runtime.issueCalls != 1 ||
+	wantArgs := []string{"resume", saved.AgentSession.Value}
+	if !slices.Equal(got.LaunchArgs, wantArgs) || runtime.issueCalls != 1 ||
 		runtime.waitCalls != 1 || runtime.waitTimeout != 3*time.Second {
-		t.Fatalf("resume result args=%q issues=%d wait=%d/%s", got.HerdrLaunchArgs, runtime.issueCalls, runtime.waitCalls, runtime.waitTimeout)
+		t.Fatalf("resume result args=%q issues=%d wait=%d/%s", got.LaunchArgs, runtime.issueCalls, runtime.waitCalls, runtime.waitTimeout)
 	}
 	if runtime.issueTimeout <= 0 || runtime.issueTimeout >= 2750*time.Millisecond {
 		t.Fatalf("resume issue timeout = %s, want wait time deducted from 3s budget", runtime.issueTimeout)
@@ -163,7 +163,7 @@ func TestResumeRestartedHerdrRowsDoesNotWaitForUnsupportedMissingRoute(t *testin
 		t.Fatalf("restart calls = (wait=%d, issue=%d), want (1, 1)", runtime.waitCalls, runtime.issueCalls)
 	}
 	got, found := locked.Find(unsupported.Parent, unsupported.IssueNum)
-	if !found || got.HerdrDirectAgentLaunch || got.ReportedState != "" || got.StateRefinement {
+	if !found || got.DirectAgentLaunch || got.ReportedState != "" || got.StateRefinement {
 		t.Fatalf("unsupported missing row = (%+v, %t), want stale", got, found)
 	}
 }
@@ -173,7 +173,7 @@ func TestResumeRestartedHerdrRowsDoesNotLetMissingCodexBlockExactCandidate(t *te
 	saved, placeholder := restartCodexFixture()
 	missing := saved
 	missing.IssueNum, missing.PaneID = 533, "w1:p2"
-	missing.HerdrAgentSession = &backend.AgentSessionRef{
+	missing.AgentSession = &backend.AgentSessionRef{
 		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "other-session",
 	}
 	recordRestartStatePane(t, repo, saved)
@@ -187,11 +187,11 @@ func TestResumeRestartedHerdrRowsDoesNotLetMissingCodexBlockExactCandidate(t *te
 		t.Fatal(err)
 	}
 	got, found := locked.Find(saved.Parent, saved.IssueNum)
-	if !found || got.HerdrTerminalID != placeholder.TerminalID || runtime.issueCalls != 1 {
+	if !found || got.TerminalID != placeholder.TerminalID || runtime.issueCalls != 1 {
 		t.Fatalf("exact row/runtime = (%+v, %t, issues=%d)", got, found, runtime.issueCalls)
 	}
 	stale, found := locked.Find(missing.Parent, missing.IssueNum)
-	if !found || stale.HerdrDirectAgentLaunch || runtime.waitCalls != 1 {
+	if !found || stale.DirectAgentLaunch || runtime.waitCalls != 1 {
 		t.Fatalf("missing row/runtime = (%+v, %t, waits=%d)", stale, found, runtime.waitCalls)
 	}
 }
@@ -212,7 +212,7 @@ func TestResumeRestartedHerdrRowsRejectsDuplicateRefAddedBeforeToken(t *testing.
 		t.Fatal(err)
 	}
 	got, found := locked.Find(saved.Parent, saved.IssueNum)
-	if !found || got.HerdrDirectAgentLaunch || runtime.issueCalls != 0 {
+	if !found || got.DirectAgentLaunch || runtime.issueCalls != 0 {
 		t.Fatalf("duplicate preflight result = (%+v, %t, issues=%d)", got, found, runtime.issueCalls)
 	}
 }
@@ -234,7 +234,7 @@ func TestResumeRestartedHerdrRowsRejectsDuplicateRefBeforeCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, found := locked.Find(saved.Parent, saved.IssueNum)
-	if !found || got.HerdrDirectAgentLaunch || got.HerdrTerminalID != saved.HerdrTerminalID ||
+	if !found || got.DirectAgentLaunch || got.TerminalID != saved.TerminalID ||
 		runtime.issueCalls != 1 {
 		t.Fatalf("duplicate final result = (%+v, %t, issues=%d)", got, found, runtime.issueCalls)
 	}
@@ -243,7 +243,7 @@ func TestResumeRestartedHerdrRowsRejectsDuplicateRefBeforeCommit(t *testing.T) {
 func TestResumeRestartedHerdrRowsLeavesUnsupportedRowsStale(t *testing.T) {
 	tests := map[string]func(*state.Pane, *backend.LivePane, *[]backend.LivePane){
 		"missing ref": func(saved *state.Pane, _ *backend.LivePane, _ *[]backend.LivePane) {
-			saved.HerdrAgentSession = nil
+			saved.AgentSession = nil
 		},
 		"mismatched ref": func(_ *state.Pane, live *backend.LivePane, _ *[]backend.LivePane) {
 			live.AgentSession = &backend.AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "other"}
@@ -278,7 +278,7 @@ func TestResumeRestartedHerdrRowsLeavesUnsupportedRowsStale(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, found := locked.Find(saved.Parent, saved.IssueNum)
-			if !found || got.HerdrTerminalID != saved.HerdrTerminalID ||
+			if !found || got.TerminalID != saved.TerminalID ||
 				got.ReportedState != "" || got.StateRefinement || runtime.issueCalls != 0 {
 				t.Fatalf("stale row/runtime = (%+v, %t, issues=%d)", got, found, runtime.issueCalls)
 			}
@@ -296,7 +296,7 @@ func TestResumeRestartedHerdrRowsRejectsUnsupportedUnchangedTerminal(t *testing.
 			} else {
 				saved.Kind = state.PaneKindAttachedAgent
 			}
-			placeholder.TerminalID = saved.HerdrTerminalID
+			placeholder.TerminalID = saved.TerminalID
 			recordRestartStatePane(t, repo, saved)
 			locked, journal := lockHerdrRestartTest(t, repo)
 			runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
@@ -340,7 +340,7 @@ func TestResumeRestartedHerdrRowsDoesNotReplayInterruptedIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := locked.Find(saved.Parent, saved.IssueNum)
-	if runtime.issueCalls != 0 || got.HerdrTerminalID != saved.HerdrTerminalID ||
+	if runtime.issueCalls != 0 || got.TerminalID != saved.TerminalID ||
 		containsHerdrResumeIntent(journal.Intents) {
 		t.Fatalf("interrupted resume was replayed: row=%+v calls=%d", got, runtime.issueCalls)
 	}
@@ -360,8 +360,8 @@ func TestResumeRestartedHerdrRowsLeavesLostTokenResponseStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := locked.Find(saved.Parent, saved.IssueNum)
-	if runtime.issueCalls != 1 || got.HerdrTerminalID != saved.HerdrTerminalID ||
-		got.HerdrDirectAgentLaunch || got.ReportedState != "" || got.StateRefinement ||
+	if runtime.issueCalls != 1 || got.TerminalID != saved.TerminalID ||
+		got.DirectAgentLaunch || got.ReportedState != "" || got.StateRefinement ||
 		containsHerdrResumeIntent(journal.Intents) {
 		t.Fatalf("lost token response result: row=%+v calls=%d", got, runtime.issueCalls)
 	}
@@ -384,7 +384,7 @@ func TestResumeRestartedHerdrRowsRejectsIdentityChangeBeforeCommit(t *testing.T)
 		if !found {
 			t.Fatal("saved row disappeared")
 		}
-		pane.HerdrTerminalID = "changed-concurrently"
+		pane.TerminalID = "changed-concurrently"
 		locked.Panes[0] = pane
 	}
 
@@ -397,7 +397,7 @@ func TestResumeRestartedHerdrRowsRejectsIdentityChangeBeforeCommit(t *testing.T)
 func TestResumeRestartedHerdrRowsRejectsUnchangedTerminal(t *testing.T) {
 	repo := newHerdrRealizeRepo(t)
 	saved, placeholder := restartCodexFixture()
-	placeholder.TerminalID = saved.HerdrTerminalID
+	placeholder.TerminalID = saved.TerminalID
 	recordRestartStatePane(t, repo, saved)
 	locked, journal := lockHerdrRestartTest(t, repo)
 	runtime := newRestartRuntimeFake(t, saved, placeholder, resumedCodexPane(placeholder))
@@ -419,14 +419,14 @@ func newRestartRuntimeFake(
 	return &restartRuntimeFake{
 		t: t,
 		route: backend.OwnedLaunchRoute{
-			RuntimeDir: runtimeDir, Session: saved.HerdrSession, SocketPath: saved.HerdrSocketPath,
+			RuntimeDir: runtimeDir, Session: saved.SessionID, SocketPath: saved.SocketPath,
 			LauncherPath: launcher, ControlPath: filepath.Join(runtimeDir, "herdr-intents.json"),
 		},
 		waitPanes:    []backend.LivePane{placeholder},
 		resumedPanes: []backend.LivePane{resumed},
 		launcherInfo: restartProcessInfo(launcher, nil, saved.WorktreePath),
 		resumedInfo: restartProcessInfo(
-			saved.HerdrLaunchExecutable, []string{"resume", saved.HerdrAgentSession.Value}, saved.WorktreePath,
+			saved.LaunchExecutable, []string{"resume", saved.AgentSession.Value}, saved.WorktreePath,
 		),
 	}
 }
@@ -434,7 +434,7 @@ func newRestartRuntimeFake(
 func lockHerdrRestartTest(
 	t *testing.T,
 	repo string,
-) (*state.LockedStore, *state.LockedHerdrIntents) {
+) (*state.LockedStore, *state.LockedLaunchJournal) {
 	t.Helper()
 	locked, err := state.LockProjectForLaunch(repo)
 	if err != nil {
@@ -445,7 +445,7 @@ func lockHerdrRestartTest(
 			t.Error(unlockErr)
 		}
 	})
-	journal, err := locked.HerdrIntents(repo)
+	journal, err := locked.LaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,21 +468,21 @@ func restartCodexFixture() (state.Pane, backend.LivePane) {
 	}
 	saved := state.Pane{
 		Parent: "524", RuntimeParent: "524", IssueNum: 532, Backend: backend.Herdr,
-		PaneID: "w1:p1", HerdrWorkspaceID: "w1", HerdrWorkspaceLabel: "fanout-workspace-token",
-		HerdrTerminalID: "term-old", HerdrRepoKey: "/repo/.git", HerdrRepoRoot: "/repo",
-		HerdrAgentID: "fanout-codex", HerdrAgentSession: ref,
-		HerdrProcessIdentity: &backend.ProcessIdentity{ShellPID: 10, ForegroundProcessGroup: 10, AgentPID: 10},
-		HerdrSession:         "fanout-owned", HerdrSocketPath: "/runtime/herdr.sock",
-		HerdrLaunchExecutable: "/opt/codex", HerdrLaunchArgs: []string{"prompt"},
-		HerdrDirectAgentLaunch: true, Agent: "codex", WorktreePath: "/repo/worktree",
+		PaneID: "w1:p1", WorkspaceID: "w1", WorkspaceLabel: "fanout-workspace-token",
+		TerminalID: "term-old", RepoKey: "/repo/.git", RepoRoot: "/repo",
+		AgentID: "fanout-codex", AgentSession: ref,
+		ProcessIdentity: &backend.ProcessIdentity{ShellPID: 10, ForegroundProcessGroup: 10, AgentPID: 10},
+		SessionID:       "fanout-owned", SocketPath: "/runtime/herdr.sock",
+		LaunchExecutable: "/opt/codex", LaunchArgs: []string{"prompt"},
+		DirectAgentLaunch: true, Agent: "codex", WorktreePath: "/repo/worktree",
 		ReportedState: "working", StateRefinement: true, EmitterNonce: strings.Repeat("b", 32),
 	}
 	live := backend.LivePane{
 		Ref:         backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"},
 		CurrentPath: saved.WorktreePath, WorktreePath: saved.WorktreePath,
-		WorkspaceLabel: saved.HerdrWorkspaceLabel, TerminalID: "term-new",
-		AgentSession: ref, RepoKey: saved.HerdrRepoKey, ProjectRoot: saved.HerdrRepoRoot,
-		SessionID: saved.HerdrSession, SocketPath: saved.HerdrSocketPath,
+		WorkspaceLabel: saved.WorkspaceLabel, TerminalID: "term-new",
+		AgentSession: ref, RepoKey: saved.RepoKey, ProjectRoot: saved.RepoRoot,
+		SessionID: saved.SessionID, SocketPath: saved.SocketPath,
 	}
 	return saved, live
 }
@@ -495,8 +495,8 @@ func resumedCodexPane(placeholder backend.LivePane) backend.LivePane {
 
 func mustHerdrResumeID(t *testing.T, pane state.Pane) string {
 	t.Helper()
-	id, err := state.HerdrResumeIntentID(
-		pane.HerdrSession, pane.HerdrSocketPath, pane.HerdrWorkspaceID, pane.PaneID,
+	id, err := state.ResumeIntentID(
+		pane.SessionID, pane.SocketPath, pane.WorkspaceID, pane.PaneID,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -516,9 +516,9 @@ func mustResumeEnvironment(t *testing.T, runtimeDir, nonce string) string {
 	return path
 }
 
-func containsHerdrResumeIntent(intents []state.HerdrIntent) bool {
+func containsHerdrResumeIntent(intents []state.LaunchIntent) bool {
 	for _, intent := range intents {
-		if intent.Kind == state.HerdrIntentResume {
+		if intent.Kind == state.IntentResume {
 			return true
 		}
 	}
@@ -536,7 +536,7 @@ func (f *restartRuntimeFake) WorkloadEnvironment(
 
 func (f *restartRuntimeFake) DiscardWorkloadEnvironment(
 	runtimeDir string,
-	launch *state.HerdrLaunch,
+	launch *state.LaunchCapsule,
 ) error {
 	return herdrrun.DiscardWorkloadEnvironment(runtimeDir, launch)
 }

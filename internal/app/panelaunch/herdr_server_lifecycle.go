@@ -17,15 +17,15 @@ import (
 // journal-fenced transaction without naming the runtime that performs it.
 type HerdrServerIO struct {
 	// InspectServer reads the saved server identity without mutating it.
-	InspectServer func() (state.HerdrServerIdentity, error)
+	InspectServer func() (state.RuntimeServerIdentity, error)
 	// ObserveWorkspaces opens the owned server read-only and lists everything
 	// still holding a resource on it.
 	ObserveWorkspaces func(context.Context) ([]backend.WorkspaceObservation, error)
 	// RestartServer replaces the proven-dead generation named by the identity.
-	RestartServer func(context.Context, state.HerdrServerIdentity) (HerdrRestartedServer, error)
+	RestartServer func(context.Context, state.RuntimeServerIdentity) (HerdrRestartedServer, error)
 	// ShutdownServer retires the empty generation, calling the callback once at
 	// the moment the signal becomes indeterminate.
-	ShutdownServer func(context.Context, state.HerdrServerIdentity, func() error) error
+	ShutdownServer func(context.Context, state.RuntimeServerIdentity, func() error) error
 }
 
 // HerdrRestartedServer is the replacement generation a restart produced: the
@@ -49,11 +49,11 @@ func RestartHerdrServer(
 		return "", err
 	}
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
-	journal, err := locked.HerdrIntents(projectRoot)
+	journal, err := locked.LaunchJournal(projectRoot)
 	if err != nil {
 		return "", err
 	}
-	intent, created, err := ensureHerdrServerIntent(journal, state.HerdrIntentRestart, io)
+	intent, created, err := ensureHerdrServerIntent(journal, state.IntentRestart, io)
 	if err != nil {
 		return "", err
 	}
@@ -72,8 +72,8 @@ func RestartHerdrServer(
 }
 
 func releaseRejectedHerdrRestart(
-	journal *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
 	created bool,
 	cause error,
 ) error {
@@ -96,7 +96,7 @@ func ShutdownHerdrServer(
 		return err
 	}
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
-	journal, err := locked.HerdrIntents(projectRoot)
+	journal, err := locked.LaunchJournal(projectRoot)
 	if err != nil {
 		return err
 	}
@@ -117,37 +117,37 @@ func ShutdownHerdrServer(
 func prepareOrResumeHerdrShutdown(
 	ctx context.Context,
 	projectRoot string,
-	journal *state.LockedHerdrIntents,
+	journal *state.LockedLaunchJournal,
 	io HerdrServerIO,
-) (state.HerdrIntent, error) {
-	intent, found, err := currentHerdrServerIntent(journal, state.HerdrIntentShutdown)
+) (state.LaunchIntent, error) {
+	intent, found, err := currentHerdrServerIntent(journal, state.IntentShutdown)
 	if err != nil || found {
 		return intent, err
 	}
-	if err := rejectActiveHerdrIntents(journal.HerdrIntents); err != nil {
-		return state.HerdrIntent{}, err
+	if err := rejectActiveHerdrIntents(journal.LaunchJournal); err != nil {
+		return state.LaunchIntent{}, err
 	}
 	return prepareHerdrShutdown(ctx, projectRoot, journal, io)
 }
 
 func herdrShutdownIssueCallback(
-	journal *state.LockedHerdrIntents,
-	intent state.HerdrIntent,
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
 ) (func() error, error) {
-	if intent.Status == state.HerdrIntentIssued {
+	if intent.Status == state.IntentIssued {
 		return nil, nil
 	}
-	if intent.Status != state.HerdrIntentPlanned {
+	if intent.Status != state.IntentPlanned {
 		return nil, fmt.Errorf("herdr shutdown intent has invalid status %q", intent.Status)
 	}
 	return func() error {
-		intent.Status = state.HerdrIntentIssued
+		intent.Status = state.IntentIssued
 		journal.UpsertIntent(intent)
 		return journal.Save()
 	}, nil
 }
 
-func rejectActiveHerdrIntents(journal state.HerdrIntents) error {
+func rejectActiveHerdrIntents(journal state.LaunchJournal) error {
 	if len(journal.Intents) != 0 {
 		return fmt.Errorf("%d active Herdr intent rows remain", len(journal.Intents))
 	}
@@ -155,39 +155,39 @@ func rejectActiveHerdrIntents(journal state.HerdrIntents) error {
 }
 
 func ensureHerdrServerIntent(
-	journal *state.LockedHerdrIntents,
-	kind state.HerdrIntentKind,
+	journal *state.LockedLaunchJournal,
+	kind state.LaunchIntentKind,
 	io HerdrServerIO,
-) (state.HerdrIntent, bool, error) {
+) (state.LaunchIntent, bool, error) {
 	intent, found, err := currentHerdrServerIntent(journal, kind)
 	if err != nil || found {
 		return intent, found, err
 	}
 	identity, err := io.InspectServer()
 	if err != nil {
-		return state.HerdrIntent{}, false, err
+		return state.LaunchIntent{}, false, err
 	}
 	intent, err = newHerdrServerIntent(kind, identity)
 	if err != nil {
-		return state.HerdrIntent{}, false, err
+		return state.LaunchIntent{}, false, err
 	}
 	journal.UpsertIntent(intent)
 	if err := journal.Save(); err != nil {
-		return state.HerdrIntent{}, false, err
+		return state.LaunchIntent{}, false, err
 	}
 	return intent, true, nil
 }
 
 func currentHerdrServerIntent(
-	journal *state.LockedHerdrIntents,
-	kind state.HerdrIntentKind,
-) (state.HerdrIntent, bool, error) {
+	journal *state.LockedLaunchJournal,
+	kind state.LaunchIntentKind,
+) (state.LaunchIntent, bool, error) {
 	intent, found, err := journal.ServerLifecycleIntent()
 	if err != nil || !found {
 		return intent, found, err
 	}
 	if intent.Kind != kind {
-		return state.HerdrIntent{}, false, fmt.Errorf(
+		return state.LaunchIntent{}, false, fmt.Errorf(
 			"herdr owned server %s is pending; refusing %s",
 			herdrServerAction(intent.Kind), herdrServerAction(kind),
 		)
@@ -196,44 +196,44 @@ func currentHerdrServerIntent(
 }
 
 func newHerdrServerIntent(
-	kind state.HerdrIntentKind,
-	identity state.HerdrServerIdentity,
-) (state.HerdrIntent, error) {
-	id, err := state.HerdrServerIntentID(kind)
+	kind state.LaunchIntentKind,
+	identity state.RuntimeServerIdentity,
+) (state.LaunchIntent, error) {
+	id, err := state.ServerIntentID(kind)
 	if err != nil {
-		return state.HerdrIntent{}, err
+		return state.LaunchIntent{}, err
 	}
-	return state.HerdrIntent{
-		ID: id, Kind: kind, Status: state.HerdrIntentPlanned, Server: &identity,
+	return state.LaunchIntent{
+		ID: id, Kind: kind, Status: state.IntentPlanned, Server: &identity,
 	}, nil
 }
 
 func prepareHerdrShutdown(
 	ctx context.Context,
 	projectRoot string,
-	journal *state.LockedHerdrIntents,
+	journal *state.LockedLaunchJournal,
 	io HerdrServerIO,
-) (state.HerdrIntent, error) {
+) (state.LaunchIntent, error) {
 	identity, err := io.InspectServer()
 	if err != nil {
-		return state.HerdrIntent{}, err
+		return state.LaunchIntent{}, err
 	}
 	err = rejectActiveHerdrRows(projectRoot)
 	if err != nil {
-		return state.HerdrIntent{}, err
+		return state.LaunchIntent{}, err
 	}
 	workspaces, err := io.ObserveWorkspaces(ctx)
 	if err != nil {
-		return state.HerdrIntent{}, err
+		return state.LaunchIntent{}, err
 	}
 	if len(workspaces) != 0 {
-		return state.HerdrIntent{}, fmt.Errorf(
+		return state.LaunchIntent{}, fmt.Errorf(
 			"herdr owned server has %d active or foreign workspace resources", len(workspaces),
 		)
 	}
-	intent, err := newHerdrServerIntent(state.HerdrIntentShutdown, identity)
+	intent, err := newHerdrServerIntent(state.IntentShutdown, identity)
 	if err != nil {
-		return state.HerdrIntent{}, err
+		return state.LaunchIntent{}, err
 	}
 	journal.UpsertIntent(intent)
 	return intent, journal.Save()
@@ -262,7 +262,7 @@ func verifyRestartedHerdrRows(
 	ctx context.Context,
 	projectRoot string,
 	locked *state.LockedStore,
-	journal *state.LockedHerdrIntents,
+	journal *state.LockedLaunchJournal,
 	restarted HerdrRestartRuntime,
 ) error {
 	return resumeRestartedHerdrRows(ctx, projectRoot, locked, journal, restarted, 0)
@@ -270,13 +270,13 @@ func verifyRestartedHerdrRows(
 
 func sameHerdrRestartRoute(saved state.Pane, current backend.LivePane) bool {
 	return current.Ref.Backend == backend.Herdr &&
-		current.SessionID == saved.HerdrSession && current.SocketPath == saved.HerdrSocketPath &&
-		current.Ref.Workspace == saved.HerdrWorkspaceID && current.Ref.Pane == saved.PaneID
+		current.SessionID == saved.SessionID && current.SocketPath == saved.SocketPath &&
+		current.Ref.Workspace == saved.WorkspaceID && current.Ref.Pane == saved.PaneID
 }
 
 func completeHerdrServerLifecycle(
 	locked *state.LockedStore,
-	journal *state.LockedHerdrIntents,
+	journal *state.LockedLaunchJournal,
 	intentID string,
 ) error {
 	if err := locked.Save(); err != nil {
@@ -288,20 +288,20 @@ func completeHerdrServerLifecycle(
 	return journal.Save()
 }
 
-func markPlannedHerdrReopenCleanupManual(journal *state.LockedHerdrIntents) {
+func markPlannedHerdrReopenCleanupManual(journal *state.LockedLaunchJournal) {
 	for i := range journal.Intents {
 		intent := &journal.Intents[i]
-		if intent.Kind != state.HerdrIntentCleanup || intent.CleanupPhase != state.HerdrCleanupReopen ||
-			intent.Status != state.HerdrIntentPlanned {
+		if intent.Kind != state.IntentCleanup || intent.CleanupPhase != state.CleanupReopen ||
+			intent.Status != state.IntentPlanned {
 			continue
 		}
-		intent.Status = state.HerdrIntentManualCleanupRequired
+		intent.Status = state.IntentManualCleanupRequired
 		intent.Failure = "Herdr server restart invalidated the saved cleanup coordinator identity"
 	}
 }
 
-func herdrServerAction(kind state.HerdrIntentKind) string {
-	if kind == state.HerdrIntentShutdown {
+func herdrServerAction(kind state.LaunchIntentKind) string {
+	if kind == state.IntentShutdown {
 		return "shutdown"
 	}
 	return "restart"

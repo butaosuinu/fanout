@@ -291,11 +291,11 @@ func TestPeekOwnedHerdrPaneReadsThroughOwnedCapability(t *testing.T) {
 	srv := &Server{
 		poller: &poller{},
 		ownsHerdrPane: func(pv sessionview.PaneView) bool {
-			return pv.SavedPane.HerdrWorkspaceLabel == "owned-label"
+			return pv.SavedPane.WorkspaceLabel == "owned-label"
 		},
 		readHerdrPane: func(pv sessionview.PaneView, lines int) (string, error) {
 			read++
-			if pv.SavedPane.HerdrTerminalID != "terminal-1" || lines != 17 {
+			if pv.SavedPane.TerminalID != "terminal-1" || lines != 17 {
 				return "", fmt.Errorf("wrong persisted identity or line count")
 			}
 			return "owned output", nil
@@ -306,7 +306,7 @@ func TestPeekOwnedHerdrPaneReadsThroughOwnedCapability(t *testing.T) {
 	snap.Sessions[0].Panes[0].PaneID = "pane-1"
 	snap.Sessions[0].Panes[0].SavedPane = state.Pane{
 		Backend: backend.Herdr, PaneID: "pane-1",
-		HerdrWorkspaceLabel: "owned-label", HerdrTerminalID: "terminal-1",
+		WorkspaceLabel: "owned-label", TerminalID: "terminal-1",
 	}
 	publishSnapshot(srv, snap)
 	req := httptest.NewRequest(http.MethodGet, "/api/peek?pane=pane-1&lines=17", nil)
@@ -408,7 +408,7 @@ func TestPeekDuplicateHerdrPaneIDIs404BeforeOwnershipCheck(t *testing.T) {
 	snap.Sessions[0].Panes[0].Backend = backend.Herdr
 	snap.Sessions[0].Panes[0].PaneID = "shared-pane"
 	duplicate := snap.Sessions[0].Panes[0]
-	duplicate.SavedPane.HerdrWorkspaceLabel = "owned-generation"
+	duplicate.SavedPane.WorkspaceLabel = "owned-generation"
 	snap.Sessions = append(snap.Sessions, sessionview.Session{
 		Parent: "#2", Panes: []sessionview.PaneView{duplicate},
 	})

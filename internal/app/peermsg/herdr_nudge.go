@@ -63,7 +63,7 @@ func prepareHerdrNudge(ctx context.Context, pane state.Pane, deps Deps) (backend
 }
 
 func prepareHerdrPrompt(ctx context.Context, pane state.Pane, open func(context.Context, string) (HerdrNudger, error)) (backend.NudgePrompt, error) {
-	runtime, err := openHerdrNudgeRuntime(ctx, open, pane.HerdrRepoKey)
+	runtime, err := openHerdrNudgeRuntime(ctx, open, pane.RepoKey)
 	if err != nil {
 		return nil, err
 	}
@@ -116,8 +116,8 @@ func verifyHerdrNudgeProcess(ctx context.Context, runtime HerdrNudger, pane stat
 	}
 	err = herdrprocess.VerifyAgent(process, herdrprocess.Identity{
 		WorktreePath: pane.WorktreePath,
-		Executable:   pane.HerdrLaunchExecutable,
-		Args:         pane.HerdrLaunchArgs,
+		Executable:   pane.LaunchExecutable,
+		Args:         pane.LaunchArgs,
 		Agent:        pane.Agent,
 	})
 	if err != nil {
@@ -162,7 +162,7 @@ func currentHerdrNudgeBinding(store state.Store, recorded state.Pane) (state.Pan
 
 func validHerdrNudgeGeneration(pane state.Pane) bool {
 	return telemetry.ValidNonce(pane.LaunchNonce) && telemetry.ValidNonce(pane.EmitterNonce) &&
-		pane.HerdrAgentID == naming.HerdrAgentName(pane.HerdrRepoKey, pane.EmitterRowKey, pane.LaunchNonce)
+		pane.AgentID == naming.HerdrAgentName(pane.RepoKey, pane.EmitterRowKey, pane.LaunchNonce)
 }
 
 func uniqueHerdrNudgeRow(store state.Store, rowKey string) (state.Pane, bool) {
