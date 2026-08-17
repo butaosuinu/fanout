@@ -798,7 +798,7 @@ describe("queue の取り消し", () => {
     );
     const user = userEvent.setup();
     render(<App />);
-    streamSnapshot(snapshotWithPR({ autoMerge: true }));
+    streamSnapshot(snapshotWithPR());
 
     const drawer = await openDrawer(user);
     await user.click(within(drawer).getByRole("button", { name: "#701 をマージ" }));
@@ -808,7 +808,16 @@ describe("queue の取り消し", () => {
       ).toBeInTheDocument(),
     );
 
-    /* 取り消し: PR は OPEN のまま auto-merge だけ消える。 */
+    /* マージ前の snapshot はまだ armed ではない。これを取り消しと読むと hold を
+     * 取った直後に落ちるので、観測前の false では解除しない。 */
+    streamSnapshot(snapshotWithPR({ autoMerge: false }));
+    expect(within(drawer).getByRole("button", { name: /反映を待っています/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    /* poll が armed を観測し、そのあと消えたときだけ取り消し。 */
+    streamSnapshot(snapshotWithPR({ autoMerge: true }));
     streamSnapshot(snapshotWithPR({ autoMerge: false }));
     await waitFor(() =>
       expect(within(drawer).getByRole("button", { name: "#701 をマージ" })).toBeInTheDocument(),

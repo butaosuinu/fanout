@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -35,12 +34,19 @@ type fakeMerger struct {
 	res     prmerge.Result
 	err     error
 	release chan struct{} // when non-nil, merge blocks until it is closed
+	// entered is closed as the first call arrives. Waiting on it is how a test
+	// knows a merge is in flight; polling the counter instead only ever
+	// approximates that, and on a loaded runner the approximation is wrong.
+	entered chan struct{}
 }
 
 func (f *fakeMerger) merge(_ context.Context, req prmerge.Request) (prmerge.Result, error) {
 	f.mu.Lock()
 	f.calls++
 	f.last = req
+	if f.entered != nil && f.calls == 1 {
+		close(f.entered)
+	}
 	release, res, err := f.release, f.res, f.err
 	f.mu.Unlock()
 	if release != nil {
@@ -726,6 +732,35 @@ func TestQueuedHoldEndsWhenTheAutoMergeIsCancelled(t *testing.T) {
 	}
 }
 
+// TestQueuedHoldSurvivesTheSnapshotThatPredatesIt pins the ordering the release
+// depends on. `gh pr merge` is what arms the auto-merge, so the snapshot taken
+// before the click still says there is none — reading that as a cancellation
+// would drop the hold seconds after taking it, which is exactly when an
+// impatient second click lands.
+func TestQueuedHoldSurvivesTheSnapshotThatPredatesIt(t *testing.T) {
+	fake := &fakeMerger{res: prmerge.Result{Queued: true, AutoMerge: true}}
+	p := newPollerBase(t.TempDir(), newHub())
+	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true // not armed yet
+	s := &Server{
+		poller: p, hostPort: testHostPort, token: testToken,
+		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
+		mergeHeld: map[string]time.Time{},
+	}
+	h, err := s.handler()
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", code)
+	}
+
+	assertAPIError(t, requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
+		http.StatusConflict, "merge_unconfirmed")
+	if calls, _ := fake.snapshot(); calls != 1 {
+		t.Fatalf("merge calls = %d, want 1", calls)
+	}
+}
+
 // TestUnknownHoldIgnoresTheAutoMergeSignal keeps the cancellation escape on the
 // queued kind only. An unreadable outcome may already be a merge, so nothing
 // short of GitHub showing the pull request settled may release it.
@@ -944,14 +979,22 @@ func TestMergeRedactsCredentialsFromDetail(t *testing.T) {
 }
 
 func TestMergeInFlightLock(t *testing.T) {
-	fake := &fakeMerger{res: prmerge.Result{Merged: true}, release: make(chan struct{})}
+	fake := &fakeMerger{
+		res:     prmerge.Result{Merged: true},
+		release: make(chan struct{}),
+		entered: make(chan struct{}),
+	}
 	h := mergeHandler(t, testToken, mergeSnapshot(), fake)
 
 	first := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		first <- requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON())
 	}()
-	waitForMergeCall(t, fake)
+	select {
+	case <-fake.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first merge never reached the fake")
+	}
 
 	second := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON())
 	assertAPIError(t, second, http.StatusConflict, "merge_in_flight")
@@ -963,17 +1006,6 @@ func TestMergeInFlightLock(t *testing.T) {
 	if calls, _ := fake.snapshot(); calls != 1 {
 		t.Fatalf("merge calls = %d, want 1", calls)
 	}
-}
-
-func waitForMergeCall(t *testing.T, fake *fakeMerger) {
-	t.Helper()
-	for range 2000 {
-		if calls, _ := fake.snapshot(); calls > 0 {
-			return
-		}
-		runtime.Gosched()
-	}
-	t.Fatal("the first merge never reached the fake")
 }
 
 // TestMergeKicksThePollerWithoutDroppingTheRow pins both halves: the merge pulls

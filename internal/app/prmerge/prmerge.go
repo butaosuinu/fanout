@@ -86,11 +86,27 @@ func VerifyRowOwns(pv sessionview.PaneView, ref ghissue.PRRef, repo string) erro
 // It deliberately does not fall back to ghissue.PrimaryPR: that helper prefers
 // the first MERGED ref, which is the wrong PR to act on — it would pick an old
 // merged PR over the open one the button was drawn next to.
-func SelectRef(pv sessionview.PaneView, number int) (ghissue.PRRef, error) {
-	for _, pr := range pv.PRs {
-		if pr.Number == number {
+func SelectRef(pv sessionview.PaneView, repo string, number int) (ghissue.PRRef, error) {
+	// Numbers repeat across repositories, and `Fixes owner/repo#N` puts other
+	// repositories' pull requests on a row. Taking the first match by number
+	// alone can hand back a foreign #7 while this repository's #7 sits behind
+	// it — VerifyRowOwns then refuses a request that was right all along.
+	var fallback *ghissue.PRRef
+	for i, pr := range pv.PRs {
+		if pr.Number != number {
+			continue
+		}
+		if strings.EqualFold(pr.BaseRepo, repo) {
 			return pr, nil
 		}
+		if fallback == nil {
+			fallback = &pv.PRs[i]
+		}
+	}
+	if fallback != nil {
+		// Kept so the caller's ownership check reports why, rather than this
+		// reporting the number as absent from a row that carries it.
+		return *fallback, nil
 	}
 	return ghissue.PRRef{}, fmt.Errorf("%w: #%d", ErrPRNotOnRow, number)
 }

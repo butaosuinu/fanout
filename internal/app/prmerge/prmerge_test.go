@@ -15,11 +15,12 @@ func TestSelectRef(t *testing.T) {
 		{Number: 11, State: "OPEN"},
 	}}
 	tests := []struct {
-		name    string
-		pv      sessionview.PaneView
-		number  int
-		want    int
-		wantErr bool
+		name     string
+		pv       sessionview.PaneView
+		number   int
+		want     int
+		wantRepo string
+		wantErr  bool
 	}{
 		{
 			// PrimaryPR would answer #10 here; a merge action must not.
@@ -28,10 +29,21 @@ func TestSelectRef(t *testing.T) {
 		{name: "picks a merged ref when named", pv: row, number: 10, want: 10},
 		{name: "rejects a number the row does not carry", pv: row, number: 12, wantErr: true},
 		{name: "rejects a row with no PRs", pv: sessionview.PaneView{}, number: 11, wantErr: true},
+		{
+			// `Fixes owner/repo#N` puts other repositories' PRs on a row, and
+			// numbers repeat. Taking the first match by number would hand back
+			// the foreign one and refuse a request that was right all along.
+			name: "prefers this repository's PR over a same-numbered foreign one",
+			pv: sessionview.PaneView{PRs: []ghissue.PRRef{
+				{Number: 7, BaseRepo: "other/repo"},
+				{Number: 7, BaseRepo: "o/r", State: "OPEN"},
+			}},
+			number: 7, want: 7, wantRepo: "o/r",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := SelectRef(tt.pv, tt.number)
+			got, err := SelectRef(tt.pv, "o/r", tt.number)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("SelectRef(pv, %d) error = %v, wantErr %v", tt.number, err, tt.wantErr)
 			}
@@ -43,6 +55,9 @@ func TestSelectRef(t *testing.T) {
 			}
 			if got.Number != tt.want {
 				t.Fatalf("SelectRef(pv, %d) = #%d, want #%d", tt.number, got.Number, tt.want)
+			}
+			if tt.wantRepo != "" && got.BaseRepo != tt.wantRepo {
+				t.Fatalf("SelectRef(pv, %d) base repo = %q, want %q", tt.number, got.BaseRepo, tt.wantRepo)
 			}
 		})
 	}

@@ -108,7 +108,7 @@ func ownedBranch(
 	number int,
 ) (ghissue.PRRef, string, error) {
 	repo := rr.owner + "/" + rr.repo
-	ref, err := prmerge.SelectRef(pv, number)
+	ref, err := prmerge.SelectRef(pv, repo, number)
 	if err != nil {
 		return ghissue.PRRef{}, "", err
 	}

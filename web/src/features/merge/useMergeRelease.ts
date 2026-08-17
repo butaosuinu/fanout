@@ -23,7 +23,15 @@ export type Pending = { key: string; prNumber: number; since: number };
  * queued(merge queue が受理した)は armed も持つ。auto-merge の取り消しは PR を
  * OPEN のまま残すので、merged / closed だけを解除条件にすると hold が永久に残る。
  * 結果不明の側はこの出口を使わない — 既にマージされている可能性があるため。 */
-export type Unknown = { prNumber: number; repo: string; queued?: boolean; armed?: boolean };
+export type Unknown = {
+  prNumber: number;
+  repo: string;
+  queued?: boolean;
+  armed?: boolean;
+  /* poll がその auto-merge を実際に見た。マージ前の snapshot はまだ armed では
+   * ないので、その false を取り消しと読むと hold を取った直後に落としてしまう。 */
+  seen?: boolean;
+};
 
 /* 反映されたら pending を解除する。楽観更新はしない — snapshot を書き換えると、
  * サーバ側で失敗したマージまで成功したように見せてしまう。 */
@@ -75,17 +83,32 @@ export function useUnknownRelease(
 ) {
   useEffect(() => {
     if (!snap || !unknown.length) return;
-    const live = unknown.filter((u) => !holdOver(snap, u));
-    if (live.length !== unknown.length) setUnknown(() => live);
+    const next = advanceHolds(snap, unknown);
+    if (changed(unknown, next)) setUnknown(() => next);
   }, [snap, unknown, setUnknown]);
 }
 
-/* サーバの claimOver と同じ規則。 */
+/* 観測を書き込んでから、終わったものを外す。順序に意味がある — armed を見た
+ * 直後の要素は取り消しではない。サーバの claimOver と同じ規則。 */
+function advanceHolds(snap: Snapshot, holds: Unknown[]): Unknown[] {
+  return holds.map((held) => armedSeen(snap, held)).filter((held) => !holdOver(snap, held));
+}
+
+function armedSeen(snap: Snapshot, held: Unknown): Unknown {
+  if (!held.queued || !held.armed || held.seen) return held;
+  return findPR(snap, held)?.autoMerge ? { ...held, seen: true } : held;
+}
+
+/* 取り消しは true -> false の遷移だけ。観測前の false はマージ前の snapshot。 */
 function holdOver(snap: Snapshot, held: Unknown): boolean {
   if (settledPR(snap, held)) return true;
-  if (!held.queued || !held.armed) return false;
+  if (!held.queued || !held.seen) return false;
   const pr = findPR(snap, held);
   return !!pr && !pr.autoMerge;
+}
+
+function changed(prev: Unknown[], next: Unknown[]): boolean {
+  return prev.length !== next.length || next.some((u, i) => u !== prev[i]);
 }
 
 /* repository も見る: `Fixes owner/repo#N` は別 repository の PR を行に載せるし、

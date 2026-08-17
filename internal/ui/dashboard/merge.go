@@ -214,6 +214,11 @@ type mergeClaim struct {
 	// read. Without it, a missing auto-merge later says nothing: this base may
 	// never have used one.
 	Armed bool `json:"armed,omitempty"`
+	// Seen records that a poll has since shown that auto-merge too. Only a
+	// true-to-false transition is a cancellation; the snapshot taken before the
+	// merge still says false, and reading that as "canceled" would drop the hold
+	// seconds after taking it — which is exactly when a second click is likely.
+	Seen bool `json:"seen,omitempty"`
 }
 
 const (
@@ -277,7 +282,7 @@ func (s *Server) unconfirmed(key string, rr repoRef, number int) bool {
 	// resolves is to delete the entry from .fanout/merge-claims.json, which is
 	// the documented manual path.
 	claims := s.readMergeClaims()
-	if !s.claimOver(rr, number, claims[key]) {
+	if !s.claimOver(key, rr, claims, number) {
 		return true
 	}
 	delete(s.mergeHeld, key)
@@ -295,16 +300,30 @@ func (s *Server) unconfirmed(key string, rr repoRef, number int) bool {
 // this, the hold outlives the thing it was protecting and the row can never be
 // merged again. The armed flag is what makes the absence meaningful — a base
 // that never used an auto-merge would otherwise look canceled from the start.
-func (s *Server) claimOver(rr repoRef, number int, claim mergeClaim) bool {
+func (s *Server) claimOver(key string, rr repoRef, claims map[string]mergeClaim, number int) bool {
 	repo := rr.owner + "/" + rr.repo
 	if s.poller.prSettled(repo, number) {
 		return true
 	}
+	claim := claims[key]
 	if claim.Kind != claimQueued || !claim.Armed {
 		return false
 	}
 	armed, found := s.poller.prAutoMerge(repo, number)
-	return found && !armed
+	if !found {
+		return false
+	}
+	if armed {
+		// First sighting through the poller. Record it, because the absence that
+		// follows is only meaningful once a presence came before it.
+		if !claim.Seen {
+			claim.Seen = true
+			claims[key] = claim
+			s.writeMergeClaims(claims)
+		}
+		return false
+	}
+	return claim.Seen
 }
 
 // held reports whether a hold is recorded, in memory or on disk (a restart has
@@ -384,7 +403,7 @@ func selectMergeRef(
 	body mergeBody,
 	rr repoRef,
 ) (ghissue.PRRef, error) {
-	ref, err := prmerge.SelectRef(pv, body.prNumber)
+	ref, err := prmerge.SelectRef(pv, rr.owner+"/"+rr.repo, body.prNumber)
 	if err != nil {
 		return ghissue.PRRef{}, err
 	}

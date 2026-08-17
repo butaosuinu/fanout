@@ -23,6 +23,7 @@ var localExcludePatterns = []string{
 	".fanout/worktree-metadata.json",
 	".fanout/dashboard.json",
 	".fanout/dashboard.json.lock",
+	".fanout/merge-claims.json",
 	".fanout/plans/",
 	".fanout/briefings/",
 	localExcludePattern,
