@@ -24,7 +24,7 @@
         },
         {
           "path": "internal/app/panelaunch/panelaunch.go",
-          "count": 5
+          "count": 3
         },
         {
           "path": "internal/app/peermsg/nudge.go",
@@ -32,7 +32,7 @@
         },
         {
           "path": "internal/app/run/runtime.go",
-          "count": 3
+          "count": 2
         },
         {
           "path": "internal/app/sessionview/aggregate.go",

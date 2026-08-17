@@ -251,7 +251,7 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 	// fanout pane. The bindings resolve the repo from the pressing pane at
 	// keypress, so they work from child worktree panes and across repos.
 	// Best-effort, live runs only.
-	if shouldBindRuntimeKeys(cfg.DryRun, result.Created, rt.BackendSelection.Name) {
+	if shouldBindRuntimeKeys(cfg.DryRun, result.Created, rt.Backend) {
 		bindKeys(lg, resolvedSettings.DashboardKeybind)
 	}
 

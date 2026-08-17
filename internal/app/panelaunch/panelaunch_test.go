@@ -424,7 +424,7 @@ func TestNewManualRequestPlanModeUsesPlanControllerAndPlanPrompt(t *testing.T) {
 		}
 	}
 
-	cmd, err := buildAgentCommand(cfg, req, "fanout-go")
+	cmd, err := buildAgentCommandForBackend(cfg, req, "fanout-go", backend.Tmux)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +459,7 @@ func TestNewManualRequestPlanModePreservesMultilinePrompt(t *testing.T) {
 	if !strings.Contains(req.Prompt, "<proposed_plan>...</proposed_plan>") {
 		t.Fatalf("manual plan prompt = %q, want plan action", req.Prompt)
 	}
-	cmd, err := buildAgentCommand(cfg, req, "fanout-go")
+	cmd, err := buildAgentCommandForBackend(cfg, req, "fanout-go", backend.Tmux)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +506,7 @@ func TestNewManualRequestUsesAgentIndependentBriefingAndExplicitModes(t *testing
 			if strings.Contains(req.BriefingBody, "<proposed_plan>...</proposed_plan>") || strings.Contains(req.Prompt, "<proposed_plan>...</proposed_plan>") {
 				t.Fatalf("non-Codex-plan request contains Codex plan contract: prompt %q body %q", req.Prompt, req.BriefingBody)
 			}
-			command, err := buildAgentCommand(cfg, req, "fanout-go")
+			command, err := buildAgentCommandForBackend(cfg, req, "fanout-go", backend.Tmux)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -529,7 +529,7 @@ func TestMaxInlineManualPromptFitsLinuxSingleArgumentBudget(t *testing.T) {
 		Agent:  "codex",
 		Prompt: prompt,
 	})
-	command, err := buildAgentCommand(cfg, req, "fanout-go")
+	command, err := buildAgentCommandForBackend(cfg, req, "fanout-go", backend.Tmux)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -579,7 +579,7 @@ func TestNewAttachedRequestRoutesOversizedPromptThroughBriefing(t *testing.T) {
 			if got := strings.Contains(req.BriefingBody, "<proposed_plan>...</proposed_plan>"); got != tc.wantCodexContract {
 				t.Fatalf("briefing Codex plan instructions = %t, want %t", got, tc.wantCodexContract)
 			}
-			command, err := buildAgentCommand(tc.cfg, req, "fanout-go")
+			command, err := buildAgentCommandForBackend(tc.cfg, req, "fanout-go", backend.Tmux)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1477,14 +1477,14 @@ func TestBuildAgentCommandStartsCodexPlanTUIControllerInPlanModeDryRun(t *testin
 		CodexPlanStatusPath: "/tmp/fanout-codex-plan-repo-1.json",
 	}
 
-	got, err := buildAgentCommand(cfg, req, "fanout-go")
+	got, err := buildAgentCommandForBackend(cfg, req, "fanout-go", backend.Tmux)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	want := "fanout-go __codex-plan-tui --codex codex --prompt '[fanout #1] plan' --status-file /tmp/fanout-codex-plan-repo-1.json"
 	if got != want {
-		t.Fatalf("buildAgentCommand() = %q, want %q", got, want)
+		t.Fatalf("buildAgentCommandForBackend() = %q, want %q", got, want)
 	}
 }
 
@@ -1497,16 +1497,17 @@ func TestBuildAgentCommandInjectsPlanModeForNonCodexAgents(t *testing.T) {
 		{agent: "opencode", want: "--agent plan"},
 	} {
 		t.Run(tc.agent, func(t *testing.T) {
-			got, err := buildAgentCommand(
+			got, err := buildAgentCommandForBackend(
 				&cliflags.Config{DryRun: true},
 				Request{Agent: tc.agent, Prompt: "plan", LaunchMode: agent.ModePlan},
 				"fanout-go",
+				backend.Tmux,
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !strings.Contains(got, tc.want) {
-				t.Fatalf("buildAgentCommand() = %q, want %q", got, tc.want)
+				t.Fatalf("buildAgentCommandForBackend() = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -1521,16 +1522,17 @@ func TestBuildAgentCommandInjectsBuildModeForIssueAgents(t *testing.T) {
 		{agent: "opencode", want: "--agent build"},
 	} {
 		t.Run(tc.agent, func(t *testing.T) {
-			got, err := buildAgentCommand(
+			got, err := buildAgentCommandForBackend(
 				&cliflags.Config{DryRun: true},
 				Request{Agent: tc.agent, Prompt: "work", LaunchMode: agent.ModeBuild},
 				"fanout-go",
+				backend.Tmux,
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !strings.Contains(got, tc.want) {
-				t.Fatalf("buildAgentCommand() = %q, want %q", got, tc.want)
+				t.Fatalf("buildAgentCommandForBackend() = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -1593,38 +1595,40 @@ func TestBuildAgentCommandStartsCodexTeamTUIControllerInDryRun(t *testing.T) {
 		CodexTeamStatusPath: "/tmp/fanout-codex-team-repo-501.json",
 	}
 
-	got, err := buildAgentCommand(cfg, req, "fanout-go")
+	got, err := buildAgentCommandForBackend(cfg, req, "fanout-go", backend.Tmux)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "fanout-go __codex-team-tui --codex codex --prompt '[fanout #501 of #100] begin' --self 501 --parent 100 --status-file /tmp/fanout-codex-team-repo-501.json"
 	if got != want {
-		t.Fatalf("buildAgentCommand() = %q, want %q", got, want)
+		t.Fatalf("buildAgentCommandForBackend() = %q, want %q", got, want)
 	}
 }
 
 func TestBuildAgentCommandLeavesStartGateToBackend(t *testing.T) {
-	got, err := buildAgentCommand(
+	got, err := buildAgentCommandForBackend(
 		&cliflags.Config{Agent: "claude", DryRun: true},
 		Request{Agent: "claude", Prompt: "review", AgentStartGate: "gate; touch /tmp/untrusted"},
 		"fanout-go",
+		backend.Tmux,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(got, "tmux wait-for") || !strings.Contains(got, "claude") {
-		t.Fatalf("buildAgentCommand() = %q, want ungated agent command", got)
+		t.Fatalf("buildAgentCommandForBackend() = %q, want ungated agent command", got)
 	}
 }
 
 func TestBuildAgentCommandRejectsStartGateInPlanMode(t *testing.T) {
-	_, err := buildAgentCommand(
+	_, err := buildAgentCommandForBackend(
 		&cliflags.Config{Agent: "codex", DryRun: true, PlanMode: new(true)},
 		Request{Agent: "codex", LaunchMode: agent.ModePlan, AgentStartGate: "gate"},
 		"fanout-go",
+		backend.Tmux,
 	)
 	if err == nil || !strings.Contains(err.Error(), "agent start gate is not supported in Codex Plan Mode") {
-		t.Fatalf("buildAgentCommand() error = %v, want start-gate rejection", err)
+		t.Fatalf("buildAgentCommandForBackend() error = %v, want start-gate rejection", err)
 	}
 }
 
@@ -1670,12 +1674,12 @@ func TestBuildAgentCommandPinsFanoutBinaryForLiveModes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			installFakeExecutable(t, tc.req.Agent)
-			got, buildErr := buildAgentCommand(tc.cfg, tc.req, "fanout-go")
+			got, buildErr := buildAgentCommandForBackend(tc.cfg, tc.req, "fanout-go", backend.Tmux)
 			if buildErr != nil {
 				t.Fatal(buildErr)
 			}
 			if !strings.HasPrefix(got, wantPrefix) {
-				t.Fatalf("buildAgentCommand() = %q, want prefix %q", got, wantPrefix)
+				t.Fatalf("buildAgentCommandForBackend() = %q, want prefix %q", got, wantPrefix)
 			}
 		})
 	}

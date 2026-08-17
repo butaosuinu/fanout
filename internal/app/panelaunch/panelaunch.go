@@ -680,15 +680,11 @@ func compareVersion(left, right [3]int) int {
 	return 0
 }
 
-func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (string, error) {
-	return buildAgentCommandForRuntime(cfg, req, commandName, backend.Tmux)
-}
-
+// buildAgentCommandForBackend normalizes the legacy empty backend name and
+// builds the command for that runtime. The runtime name is data handed to the
+// core command builder, never a branch here.
 func buildAgentCommandForBackend(cfg *cliflags.Config, req Request, commandName string, runtimeBackend backend.Name) (string, error) {
-	if backend.NormalizeName(runtimeBackend) == backend.Tmux {
-		return buildAgentCommand(cfg, req, commandName)
-	}
-	return buildAgentCommandForRuntime(cfg, req, commandName, runtimeBackend)
+	return buildAgentCommandForRuntime(cfg, req, commandName, backend.NormalizeName(runtimeBackend))
 }
 
 func buildAgentCommandForRuntime(cfg *cliflags.Config, req Request, commandName string, runtimeBackend backend.Name) (string, error) {

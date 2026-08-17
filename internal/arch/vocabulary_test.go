@@ -254,6 +254,18 @@ func inspectFileVocabulary(fset *token.FileSet, path, rel string) ([]vocabularyF
 					Kind: "runtime name literal", Text: node.Value,
 				})
 			}
+		case *ast.BinaryExpr:
+			// Go folds "t"+"mux" to "tmux" at compile time; folding the
+			// constant expression here keeps concatenation from hiding the
+			// value the per-literal check would have caught. Sub-literals of
+			// a flagged chain never match on their own, so nothing is
+			// double-counted.
+			if folded, ok := foldConstString(node); ok && exactRuntimeName(strconv.Quote(folded)) {
+				findings = append(findings, vocabularyFinding{
+					File: rel, Line: fset.Position(node.Pos()).Line,
+					Kind: "runtime name literal", Text: strconv.Quote(folded),
+				})
+			}
 		}
 		return true
 	})
@@ -269,6 +281,31 @@ func exactRuntimeName(quoted string) bool {
 		return false
 	}
 	return slices.Contains(runtimeVocabularyNames, strings.ToLower(value))
+}
+
+// foldConstString evaluates a constant string expression built from literals,
+// +, and parentheses. Anything else (an identifier, a call) is not foldable
+// here and reports false.
+func foldConstString(expr ast.Expr) (string, bool) {
+	switch node := expr.(type) {
+	case *ast.BasicLit:
+		if node.Kind != token.STRING {
+			return "", false
+		}
+		value, err := strconv.Unquote(node.Value)
+		return value, err == nil
+	case *ast.ParenExpr:
+		return foldConstString(node.X)
+	case *ast.BinaryExpr:
+		if node.Op != token.ADD {
+			return "", false
+		}
+		left, okLeft := foldConstString(node.X)
+		right, okRight := foldConstString(node.Y)
+		return left + right, okLeft && okRight
+	default:
+		return "", false
+	}
 }
 
 func matchesRuntimeName(s string) bool {

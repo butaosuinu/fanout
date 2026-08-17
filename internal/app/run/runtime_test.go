@@ -20,13 +20,14 @@ func TestShouldBindRuntimeKeys(t *testing.T) {
 		name           string
 		dryRun         bool
 		created        int
-		runtimeBackend backend.Name
+		runtimeBackend backend.Backend
 		want           bool
 	}{
-		{name: "live tmux launch", created: 1, runtimeBackend: backend.Tmux, want: true},
-		{name: "dry run", dryRun: true, created: 1, runtimeBackend: backend.Tmux},
-		{name: "no created panes", runtimeBackend: backend.Tmux},
-		{name: "herdr launch", created: 1, runtimeBackend: backend.Herdr},
+		{name: "live launch on a shortcut-capable backend", created: 1, runtimeBackend: backendtest.NewTmux(), want: true},
+		{name: "dry run", dryRun: true, created: 1, runtimeBackend: backendtest.NewTmux()},
+		{name: "no created panes", runtimeBackend: backendtest.NewTmux()},
+		{name: "backend without global shortcuts", created: 1, runtimeBackend: backendtest.New()},
+		{name: "nil backend", created: 1, runtimeBackend: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
