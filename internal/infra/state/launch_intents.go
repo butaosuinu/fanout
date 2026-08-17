@@ -941,17 +941,24 @@ func reserveIntentIdentity(
 }
 
 func validateRuntimeResource(resource RuntimeResource, worktree bool) error {
-	if resource.WorkspaceID == "" || resource.Label == "" || resource.PaneID == "" ||
-		resource.TerminalID == "" || resource.CurrentPath == "" {
+	if runtimeResourceIncomplete(resource) {
 		return fmt.Errorf("herdr resource is incomplete")
 	}
-	if worktree && (resource.RepoKey == "" || resource.RepoRoot == "") {
+	hasProvenance := resource.RepoKey != "" && resource.RepoRoot != ""
+	if worktree && !hasProvenance {
 		return fmt.Errorf("herdr worktree resource has incomplete Git provenance")
 	}
 	if !worktree && (resource.RepoKey != "" || resource.RepoRoot != "") {
 		return fmt.Errorf("herdr coordinator resource unexpectedly has Git provenance")
 	}
 	return nil
+}
+
+// runtimeResourceIncomplete reports a resource missing any identity component
+// every runtime row must carry, regardless of worktree/coordinator kind.
+func runtimeResourceIncomplete(resource RuntimeResource) bool {
+	return resource.WorkspaceID == "" || resource.Label == "" || resource.PaneID == "" ||
+		resource.TerminalID == "" || resource.CurrentPath == ""
 }
 
 func tuplePart(value string) string {
