@@ -108,9 +108,9 @@ func TestStateCompatDecodesLegacyTmuxRow(t *testing.T) {
 		{name: "backend stays empty when the key is absent", got: legacy.Backend, want: backend.Name("")},
 		{name: "baseBranch stays empty when the key is absent", got: legacy.BaseBranch, want: ""},
 		{name: "shellKey stays empty when the key is absent", got: legacy.ShellKey, want: ""},
-		{name: "herdrWorkspaceId stays empty when the key is absent", got: legacy.HerdrWorkspaceID, want: ""},
-		{name: "herdrAgentSession stays nil when the key is absent", got: legacy.HerdrAgentSession, want: (*backend.AgentSessionRef)(nil)},
-		{name: "herdrProcessIdentity stays nil when the key is absent", got: legacy.HerdrProcessIdentity, want: (*backend.ProcessIdentity)(nil)},
+		{name: "herdrWorkspaceId stays empty when the key is absent", got: legacy.WorkspaceID, want: ""},
+		{name: "herdrAgentSession stays nil when the key is absent", got: legacy.AgentSession, want: (*backend.AgentSessionRef)(nil)},
+		{name: "herdrProcessIdentity stays nil when the key is absent", got: legacy.ProcessIdentity, want: (*backend.ProcessIdentity)(nil)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if !reflect.DeepEqual(tt.got, tt.want) {
@@ -310,31 +310,31 @@ func herdrRowFields(p Pane) []fieldCase {
 		{name: "baseBranch", got: p.BaseBranch, want: "main"},
 		{name: "backend", got: p.Backend, want: backend.Herdr},
 		{name: "paneId", got: p.PaneID, want: "w1:p1"},
-		{name: "herdrWorkspaceId", got: p.HerdrWorkspaceID, want: "w1"},
-		{name: "herdrWorkspaceLabel", got: p.HerdrWorkspaceLabel, want: "fanout-herdr-backend-531"},
-		{name: "herdrTerminalId", got: p.HerdrTerminalID, want: "t1"},
-		{name: "herdrRepoKey", got: p.HerdrRepoKey, want: "github.com/butaosuinu/fanout"},
-		{name: "herdrRepoRoot", got: p.HerdrRepoRoot, want: "/repo"},
-		{name: "herdrBranchCreated", got: p.HerdrBranchCreated, want: true},
-		{name: "herdrAgentId", got: p.HerdrAgentID, want: "codex-1"},
-		{name: "herdrAgentSession", got: p.HerdrAgentSession, want: &backend.AgentSessionRef{
+		{name: "herdrWorkspaceId", got: p.WorkspaceID, want: "w1"},
+		{name: "herdrWorkspaceLabel", got: p.WorkspaceLabel, want: "fanout-herdr-backend-531"},
+		{name: "herdrTerminalId", got: p.TerminalID, want: "t1"},
+		{name: "herdrRepoKey", got: p.RepoKey, want: "github.com/butaosuinu/fanout"},
+		{name: "herdrRepoRoot", got: p.RepoRoot, want: "/repo"},
+		{name: "herdrBranchCreated", got: p.BranchCreated, want: true},
+		{name: "herdrAgentId", got: p.AgentID, want: "codex-1"},
+		{name: "herdrAgentSession", got: p.AgentSession, want: &backend.AgentSessionRef{
 			Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "01JZ0000000000000000000000",
 		}},
-		{name: "herdrProcessIdentity", got: p.HerdrProcessIdentity, want: &backend.ProcessIdentity{
+		{name: "herdrProcessIdentity", got: p.ProcessIdentity, want: &backend.ProcessIdentity{
 			ShellPID: 4242, ForegroundProcessGroup: 4243, AgentPID: 4244,
 		}},
-		{name: "herdrSession", got: p.HerdrSession, want: "fhr-1a2b3c4d"},
-		{name: "herdrSocketPath", got: p.HerdrSocketPath, want: "/tmp/fhr-501/fhr-1a2b3c4d/herdr.sock"},
+		{name: "herdrSession", got: p.SessionID, want: "fhr-1a2b3c4d"},
+		{name: "herdrSocketPath", got: p.SocketPath, want: "/tmp/fhr-501/fhr-1a2b3c4d/herdr.sock"},
 		{name: "reported_state", got: p.ReportedState, want: "working"},
 		{name: "state_refinement", got: p.StateRefinement, want: true},
 		{name: "emitterRowKey", got: p.EmitterRowKey, want: "524/531"},
 		{name: "launchNonce", got: p.LaunchNonce, want: "0123456789abcdef0123456789abcdef"},
 		{name: "emitterNonce", got: p.EmitterNonce, want: "fedcba9876543210fedcba9876543210"},
-		{name: "herdrLaunchExecutable", got: p.HerdrLaunchExecutable, want: "/usr/local/bin/codex"},
-		{name: "herdrLaunchArgs", got: p.HerdrLaunchArgs, want: []string{
+		{name: "herdrLaunchExecutable", got: p.LaunchExecutable, want: "/usr/local/bin/codex"},
+		{name: "herdrLaunchArgs", got: p.LaunchArgs, want: []string{
 			"--cd", "/repo/.fanout/worktrees/herdr-backend-531",
 		}},
-		{name: "herdrDirectAgentLaunch", got: p.HerdrDirectAgentLaunch, want: true},
+		{name: "herdrDirectAgentLaunch", got: p.DirectAgentLaunch, want: true},
 		{name: "shellKey", got: p.ShellKey, want: "fanout-shell-531"},
 		{name: "sourceParent", got: p.SourceParent, want: "524"},
 		{name: "sourceIssueNum", got: p.SourceIssueNum, want: 530},
