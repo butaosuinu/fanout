@@ -92,7 +92,7 @@ func (l *Launcher) issueHerdrWorktreeRemoval(
 		return err
 	}
 	if intent.Launch != nil {
-		if err := removeUnpublishedHerdrEnvironment(filepath.Dir(intent.SocketPath), intent.Launch); err != nil {
+		if err := removeUnpublishedHerdrEnvironment(l.Herdr, filepath.Dir(intent.SocketPath), intent.Launch); err != nil {
 			return err
 		}
 	}

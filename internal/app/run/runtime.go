@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/gitroot"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
@@ -32,7 +32,7 @@ type Runtime struct {
 	Info             *fanoutruntime.Info
 	GH               ghissue.Runner
 	Backend          backend.Backend
-	Herdr            *herdrrun.OwnedSession
+	Herdr            panelaunch.HerdrSessionRuntime
 	BackendSelection backend.Selection
 	// VerifyBackend re-runs parent stickiness against the state held under the
 	// launch lock. cmd closes over the raw CLI/env/config inputs so backend

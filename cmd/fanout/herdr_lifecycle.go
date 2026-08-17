@@ -6,20 +6,57 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/gitroot"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-const herdrLifecycleTimeout = herdrrun.DefaultWaitTimeout + time.Minute
+const herdrLifecycleTimeout = backend.DefaultWaitTimeout + time.Minute
 
 type herdrLifecycleDeps struct {
 	projectRoot  func() (string, error)
 	repoIdentity func(context.Context, string) (worktree.RepoIdentity, error)
-	restart      func(context.Context, string, herdrrun.OwnedOptions) (*herdrrun.OwnedSession, error)
+	restart      func(context.Context, string, herdrrun.OwnedOptions) (string, error)
 	shutdown     func(context.Context, string, herdrrun.OwnedOptions) error
+}
+
+// newHerdrServerIO binds the owned-server lifecycle seam to one repository's
+// options. Construction of the runtime stays in the composition root; the app
+// only drives the journal-fenced transaction around these calls.
+func newHerdrServerIO(opts herdrrun.OwnedOptions) panelaunch.HerdrServerIO {
+	return panelaunch.HerdrServerIO{
+		InspectServer: func() (state.HerdrServerIdentity, error) {
+			return herdrrun.InspectOwnedServer(opts)
+		},
+		ObserveWorkspaces: func(ctx context.Context) ([]backend.WorkspaceObservation, error) {
+			owned, err := herdrrun.OpenOwned(ctx, opts)
+			if err != nil {
+				return nil, err
+			}
+			return owned.ObserveWorkspaces(ctx)
+		},
+		RestartServer: func(
+			ctx context.Context,
+			identity state.HerdrServerIdentity,
+		) (panelaunch.HerdrRestartedServer, error) {
+			restarted, err := herdrrun.RestartOwned(ctx, opts, identity)
+			if err != nil {
+				return panelaunch.HerdrRestartedServer{}, err
+			}
+			return panelaunch.HerdrRestartedServer{Runtime: restarted, Session: restarted.Session}, nil
+		},
+		ShutdownServer: func(
+			ctx context.Context,
+			identity state.HerdrServerIdentity,
+			markIssued func() error,
+		) error {
+			return herdrrun.ShutdownOwned(ctx, opts, identity, markIssued)
+		},
+	}
 }
 
 func isHerdrLifecycleRequest(args []string) bool {
@@ -30,8 +67,12 @@ func cmdHerdrLifecycle(args []string, lg *log.Logger) exitcode.Code {
 	deps := herdrLifecycleDeps{
 		projectRoot:  func() (string, error) { return gitroot.Toplevel("") },
 		repoIdentity: worktree.ResolveRepoIdentity,
-		restart:      panelaunch.RestartHerdrServer,
-		shutdown:     panelaunch.ShutdownHerdrServer,
+		restart: func(ctx context.Context, root string, opts herdrrun.OwnedOptions) (string, error) {
+			return panelaunch.RestartHerdrServer(ctx, root, newHerdrServerIO(opts))
+		},
+		shutdown: func(ctx context.Context, root string, opts herdrrun.OwnedOptions) error {
+			return panelaunch.ShutdownHerdrServer(ctx, root, newHerdrServerIO(opts))
+		},
 	}
 	return runHerdrLifecycle(args, lg, deps)
 }
@@ -84,7 +125,7 @@ func executeHerdrLifecycle(
 			lg.Err("herdr restart: %v", err)
 			return exitcode.Env
 		}
-		lg.Ok("Herdr owned server restarted: %s", session.Session)
+		lg.Ok("Herdr owned server restarted: %s", session)
 		return exitcode.OK
 	}
 	if err := deps.shutdown(ctx, root, opts); err != nil {

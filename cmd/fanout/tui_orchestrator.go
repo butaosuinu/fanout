@@ -10,7 +10,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -51,7 +50,7 @@ func guardLinkedIssueOrchestrator(projectRoot string, current state.Store, issue
 // the configured initial mode after child planning and agent validation. The
 // caller's locked recorder keeps the orchestrator row and child rows in one
 // launch transaction.
-func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr *herdrrun.OwnedSession, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string, orchestratorPlanMode bool) (panelaunch.Request, string, bool, string, error) {
+func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, runtimeBackend backend.Backend, herdr panelaunch.HerdrSessionRuntime, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string, orchestratorPlanMode bool) (panelaunch.Request, string, bool, string, error) {
 	var fallbackNotice string
 	req, paneID, launchNotice, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, runtimeBackend, herdr, agentName, fmt.Sprintf("%d", issue.Number), store, recorder,
 		func(store state.Store) error {
@@ -124,7 +123,7 @@ func orchestratorIssueBriefingPath(projectRoot string, issueNum, number int) str
 func cleanupIssueOrchestrator(
 	projectRoot, session string,
 	runtimeBackend backend.Backend,
-	owned *herdrrun.OwnedSession,
+	owned panelaunch.HerdrSessionRuntime,
 	req panelaunch.Request,
 	paneID string,
 ) (err error) {
@@ -169,7 +168,7 @@ func issueOrchestratorIdentityChanged(
 
 func issueOrchestratorCloseBackend(
 	runtimeBackend backend.Backend,
-	owned *herdrrun.OwnedSession,
+	owned panelaunch.HerdrSessionRuntime,
 	recorded state.Pane,
 	found bool,
 	req panelaunch.Request,

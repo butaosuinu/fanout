@@ -8,7 +8,6 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -136,7 +135,7 @@ func realizeHerdrInteractive(
 		return result.Intent, errors.Join(
 			err,
 			discardRejectedHerdrLaunch(
-				locked, req.ProjectRoot, route, intentID, launch, prepared,
+				runtime, locked, req.ProjectRoot, route, intentID, launch, prepared,
 			),
 		)
 	}
@@ -152,6 +151,7 @@ func herdrInteractiveIntentID(req HerdrCoordinatorRequest) (string, error) {
 }
 
 func discardRejectedHerdrLaunch(
+	runtime HerdrLaunchRuntime,
 	locked *state.LockedStore,
 	projectRoot string,
 	route backend.OwnedLaunchRoute,
@@ -169,7 +169,7 @@ func discardRejectedHerdrLaunch(
 	if _, found := journal.FindIntent(intentID); found {
 		return nil
 	}
-	return herdrrun.DiscardWorkloadEnvironment(route.RuntimeDir, launch)
+	return runtime.DiscardWorkloadEnvironment(route.RuntimeDir, launch)
 }
 
 func finalizeHerdrPane(

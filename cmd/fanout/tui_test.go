@@ -47,11 +47,11 @@ func TestEnterHerdrTUISessionBootstrapsConsoleAndPrintsAttachCommand(t *testing.
 	ensureHerdrConsoleForTUI = func(
 		_ context.Context,
 		root string,
-		got *herdrrun.OwnedSession,
+		got panelaunch.HerdrSessionRuntime,
 		_ []string,
 		_ string,
 	) (panelaunch.HerdrConsoleResult, error) {
-		if root != "/repo" || got != owned {
+		if root != "/repo" || got != panelaunch.HerdrSessionRuntime(owned) {
 			t.Fatalf("console input = root:%q session:%p", root, got)
 		}
 		return panelaunch.HerdrConsoleResult{
@@ -324,7 +324,7 @@ func TestCmdTUIUserConfiguredHerdrOutsideContextBootstrapsWithoutTmux(t *testing
 	ensureHerdrConsoleForTUI = func(
 		context.Context,
 		string,
-		*herdrrun.OwnedSession,
+		panelaunch.HerdrSessionRuntime,
 		[]string,
 		string,
 	) (panelaunch.HerdrConsoleResult, error) {

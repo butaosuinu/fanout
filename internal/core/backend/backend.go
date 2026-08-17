@@ -328,6 +328,14 @@ type OwnedCloser interface {
 	CloseOwned(CloseRequest) (CloseResult, error)
 }
 
+// OwnedClosingBackend is a runtime backend already bound to one admitted owned
+// target: a full backend that also issues the identity-gated close. Binding
+// returns it so the caller never re-derives the admission it just proved.
+type OwnedClosingBackend interface {
+	Backend
+	OwnedCloser
+}
+
 // FreshCloser is an optional capability for a pane returned by the immediately
 // preceding Launch call, before its durable identity has been stamped.
 type FreshCloser interface {

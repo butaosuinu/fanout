@@ -15,7 +15,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/displayname"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -26,6 +25,7 @@ type HerdrLaunchRuntime interface {
 	HerdrWorktreeRuntime
 	VerifyOwned(context.Context) error
 	LaunchRoute() (backend.OwnedLaunchRoute, error)
+	WorkloadEnvironment([]string, string) ([]string, error)
 	PrepareWorkloadEnvironment(string, []string) (string, int, error)
 	WaitForLauncher(context.Context, string, string, time.Duration) error
 	ProcessInfo(context.Context, string) (backend.PaneProcessInfo, error)
@@ -34,6 +34,9 @@ type HerdrLaunchRuntime interface {
 	RenameAgent(context.Context, string, string) error
 	RemoveWorktree(context.Context, string, string) error
 	ReportMetadata(context.Context, backend.MetadataReport) error
+	// MetadataReportBudget bounds one ReportMetadata call. The runtime derives
+	// it from its own command timeout; the app only spends it.
+	MetadataReportBudget() time.Duration
 }
 
 var errHerdrLaunchResponseLost = errors.New("herdr agent launch response was lost; refusing automatic adoption")
@@ -423,7 +426,7 @@ func (l *Launcher) prepareHerdrLaunch(
 		intent = saved
 	}
 	if intent.Launch == nil {
-		return buildAndPersistHerdrLaunch(journal, intent, route.RuntimeDir, validate, build)
+		return buildAndPersistHerdrLaunch(l.Herdr, journal, intent, route.RuntimeDir, validate, build)
 	}
 	if err := validate(intent.Launch); err != nil {
 		return intent, err
@@ -435,6 +438,7 @@ func (l *Launcher) prepareHerdrLaunch(
 }
 
 func buildAndPersistHerdrLaunch(
+	runtime HerdrLaunchRuntime,
 	journal *state.LockedHerdrIntents,
 	intent state.HerdrIntent,
 	runtimeDir string,
@@ -450,9 +454,9 @@ func buildAndPersistHerdrLaunch(
 	}
 	intent.Launch = launch
 	if err := validate(launch); err != nil {
-		return intent, errors.Join(err, removeUnpublishedHerdrEnvironment(runtimeDir, launch))
+		return intent, errors.Join(err, removeUnpublishedHerdrEnvironment(runtime, runtimeDir, launch))
 	}
-	return persistNewHerdrLaunch(journal, intent, runtimeDir)
+	return persistNewHerdrLaunch(runtime, journal, intent, runtimeDir)
 }
 
 type resolvedHerdrLaunch struct {
@@ -500,7 +504,7 @@ func (l *Launcher) prepareHerdrLaunchCapsule(
 	if err != nil {
 		return nil, err
 	}
-	environment, err := herdrrun.WorkloadEnvironment(callerEnvironment, route.LauncherPath)
+	environment, err := l.Herdr.WorkloadEnvironment(callerEnvironment, route.LauncherPath)
 	if err != nil {
 		return nil, err
 	}
@@ -720,6 +724,7 @@ func loadHerdrCodexIntent(
 }
 
 func persistNewHerdrLaunch(
+	runtime HerdrLaunchRuntime,
 	journal *state.LockedHerdrIntents,
 	intent state.HerdrIntent,
 	runtimeDir string,
@@ -728,11 +733,15 @@ func persistNewHerdrLaunch(
 	if err == nil {
 		return persisted, nil
 	}
-	return intent, errors.Join(err, removeUnpublishedHerdrEnvironment(runtimeDir, intent.Launch))
+	return intent, errors.Join(err, removeUnpublishedHerdrEnvironment(runtime, runtimeDir, intent.Launch))
 }
 
-func removeUnpublishedHerdrEnvironment(runtimeDir string, launch *state.HerdrLaunch) error {
-	return herdrrun.DiscardWorkloadEnvironment(runtimeDir, launch)
+func removeUnpublishedHerdrEnvironment(
+	runtime HerdrWorktreeRuntime,
+	runtimeDir string,
+	launch *state.HerdrLaunch,
+) error {
+	return runtime.DiscardWorkloadEnvironment(runtimeDir, launch)
 }
 
 func persistHerdrLaunch(

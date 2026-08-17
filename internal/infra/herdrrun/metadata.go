@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
@@ -27,13 +28,17 @@ const MetadataSource = "fanout"
 // maxMetadataTokensPerReport is Herdr's per-report token cap.
 const maxMetadataTokensPerReport = 16
 
-// MetadataReportBudget bounds one ReportMetadata end to end. The call makes
+// metadataReportBudget bounds one ReportMetadata end to end. The call makes
 // several commandTimeout-bounded Herdr calls — the owned probe, an identity
 // snapshot around every report, and the reports themselves — and the budget is
 // deliberately shorter than their sum: metadata is display-only and runs after
 // a launch already succeeded, so a slow Herdr must skip the report rather than
 // hold up the next child.
-const MetadataReportBudget = 4 * commandTimeout
+const metadataReportBudget = 4 * commandTimeout
+
+// MetadataReportBudget publishes the derived budget so the caller can bound its
+// own ReportMetadata context without naming this adapter's command timeout.
+func (s *OwnedSession) MetadataReportBudget() time.Duration { return metadataReportBudget }
 
 var metadataTokenName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 

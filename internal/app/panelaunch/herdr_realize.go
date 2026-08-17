@@ -44,6 +44,9 @@ type HerdrWorktreeRuntime interface {
 		context.Context,
 		backend.WorktreeOpenRequest,
 	) (backend.WorktreeMutationResult, error)
+	// DiscardWorkloadEnvironment drops a capsule the realization never
+	// published, so every rollback path reaches it through this surface.
+	DiscardWorkloadEnvironment(string, *state.HerdrLaunch) error
 }
 
 type HerdrRealizeHooks struct {

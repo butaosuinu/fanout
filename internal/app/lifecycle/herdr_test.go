@@ -12,6 +12,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
@@ -1482,4 +1483,13 @@ func assertHerdrCleanupIntentStatus(
 	if found && (intent.Status != want || intent.Failure != "") {
 		t.Fatalf("cleanup intent status/failure = %q/%q, want %q/empty", intent.Status, intent.Failure, want)
 	}
+}
+
+// DiscardWorkloadEnvironment delegates to the real capsule removal so cleanup
+// tests keep asserting the identity checks the live path performs.
+func (f *fakeHerdrLifecycleRuntime) DiscardWorkloadEnvironment(
+	runtimeDir string,
+	launch *state.HerdrLaunch,
+) error {
+	return herdrrun.DiscardWorkloadEnvironment(runtimeDir, launch)
 }

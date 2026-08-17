@@ -13,7 +13,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/herdrprocess"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -363,8 +362,8 @@ func remainingHerdrLaunchTime(intent state.HerdrIntent) time.Duration {
 	if remaining <= 0 {
 		return 0
 	}
-	if remaining > herdrrun.DefaultWaitTimeout {
-		return herdrrun.DefaultWaitTimeout
+	if remaining > backend.DefaultWaitTimeout {
+		return backend.DefaultWaitTimeout
 	}
 	return remaining
 }
@@ -416,7 +415,7 @@ func retryHerdrObservation(
 			return err
 		}
 		stepErr := herdrLaunchStepResult(stepCtx, cancel, observe(stepCtx))
-		if stepErr == nil || !herdrrun.IsRetryableObservationError(stepErr) {
+		if stepErr == nil || !backend.IsRetryableObservationError(stepErr) {
 			return stepErr
 		}
 		if err := waitForHerdrObservationRetry(ctx, intent); err != nil {
@@ -551,7 +550,7 @@ func (l *Launcher) observeExactHerdrPane(
 		return backend.LivePane{}, false, err
 	}
 	if stepErr != nil {
-		if herdrrun.IsRetryableObservationError(stepErr) {
+		if backend.IsRetryableObservationError(stepErr) {
 			return backend.LivePane{}, false, nil
 		}
 		return backend.LivePane{}, false, stepErr

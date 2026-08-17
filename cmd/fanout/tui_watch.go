@@ -19,7 +19,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/fanset"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
-	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
@@ -213,21 +212,21 @@ type parentIssueFanoutResult struct {
 	CreatedPaneIDs []string
 	Notice         string
 	runtimeBackend backend.Backend
-	herdr          *herdrrun.OwnedSession
+	herdr          panelaunch.HerdrSessionRuntime
 }
 
 type tuiIssueReadyFunc func(
 	state.Store,
 	panelaunch.StateRecorder,
 	backend.Backend,
-	*herdrrun.OwnedSession,
+	panelaunch.HerdrSessionRuntime,
 ) error
 
 type tuiIssueAfterFunc func(
 	state.Store,
 	panelaunch.StateRecorder,
 	backend.Backend,
-	*herdrrun.OwnedSession,
+	panelaunch.HerdrSessionRuntime,
 	run.IssueAfterContext,
 ) error
 
