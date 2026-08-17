@@ -10,6 +10,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/infra/backendtest"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 )
@@ -62,46 +63,26 @@ func TestLoadStateIgnoresLockFileWhenNoWorktreeIsPrepared(t *testing.T) {
 	}
 }
 
-// recordingDecorator captures the dashboard hint a run writes on its own pane.
-// The embedded nil Backend supplies the required surface: only the decoration
-// methods are ever called.
-type recordingDecorator struct {
-	backend.Backend
-	projectRoots [][2]string
-}
-
-func (*recordingDecorator) SetPaneTitle(string, string) error        { return nil }
-func (*recordingDecorator) SetPaneLabel(string, string) error        { return nil }
-func (*recordingDecorator) EnablePaneBorderTitles(string) error      { return nil }
-func (*recordingDecorator) SetPaneWorktreePath(string, string) error { return nil }
-
-func (b *recordingDecorator) SetPaneProjectRoot(paneID, projectRoot string) error {
-	b.projectRoots = append(b.projectRoots, [2]string{paneID, projectRoot})
-	return nil
-}
-
-// undecoratedBackend stands in for a runtime with no pane decoration, herdr today.
-type undecoratedBackend struct{ backend.Backend }
-
 func TestMarkCurrentPaneProjectRoot(t *testing.T) {
 	tests := []struct {
 		name        string
 		undecorated bool
 		info        *fanoutruntime.Info
-		want        [][2]string
+		want        []backendtest.PaneValue
 	}{
 		{
 			// --session points Target at a whole session, so the hint must follow
 			// the invoking pane instead.
 			name: "annotates the invoking pane, not the session target",
 			info: &fanoutruntime.Info{Target: "fanout-repo", ProjectRoot: "/repo", InvokingPane: "%9"},
-			want: [][2]string{{"%9", "/repo"}},
+			want: []backendtest.PaneValue{{PaneID: "%9", Value: "/repo"}},
 		},
 		{
 			name: "environment names no invoking pane",
 			info: &fanoutruntime.Info{Target: "%1", ProjectRoot: "/repo"},
 		},
 		{
+			// A bare fake exposes no PaneDecorator, standing in for herdr today.
 			name:        "backend without pane decoration",
 			undecorated: true,
 			info:        &fanoutruntime.Info{ProjectRoot: "/repo", InvokingPane: "%9"},
@@ -110,16 +91,17 @@ func TestMarkCurrentPaneProjectRoot(t *testing.T) {
 	lg := log.NewWith(io.Discard, io.Discard, false)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decorator := &recordingDecorator{}
+			decorator := backendtest.NewDecorator()
 			runtimeBackend := backend.Backend(decorator)
 			if tt.undecorated {
-				runtimeBackend = undecoratedBackend{}
+				runtimeBackend = backendtest.New()
 			}
 
 			markCurrentPaneProjectRoot(runtimeBackend, tt.info, lg)
 
-			if !reflect.DeepEqual(decorator.projectRoots, tt.want) {
-				t.Fatalf("markCurrentPaneProjectRoot() hints = %v, want %v", decorator.projectRoots, tt.want)
+			got := decorator.PaneValues(backendtest.MethodSetPaneProjectRoot)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("markCurrentPaneProjectRoot() hints = %v, want %v", got, tt.want)
 			}
 		})
 	}

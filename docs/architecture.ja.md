@@ -109,6 +109,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `tty` | 端末判定 | A |
 | infra | `execx` | コマンド実行の薄いラッパ | A |
 | infra | `browser` | ブラウザ起動 | A |
+| infra | `backendtest` | core backend 契約の in-process fake(テスト専用・本体にはリンクされない) | A |
 | tools | `tools/reviewrisk` | PR review risk 判定(物差し。ルール変更はレビュー配線を変える) | H |
 | web | `web/index.html` | no-referrer・外部 fetch 方針(token 漏洩境界) | H |
 | web | `web/src/transport` | SSE/polling transport・token 付き `/api/*` 呼び出し | M |
