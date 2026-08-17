@@ -1,6 +1,7 @@
 package backendtest
 
 import (
+	"slices"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -96,12 +97,6 @@ type restoreMixin struct{ *Fake }
 func (m restoreMixin) ListLiveForIdentity() ([]backend.LivePane, error) {
 	m.record(MethodListLiveForIdentity)
 	return m.identityPanes, m.identityErr
-}
-
-// ListPanes records the target-scoped listing and returns WithTargetPanes.
-func (m restoreMixin) ListPanes(target string) ([]backend.PaneInfo, error) {
-	m.record(MethodListPanes, target)
-	return m.targetPanes, m.targetPanesErr
 }
 
 // ServerStartTime records the generation-clock read and returns
@@ -200,6 +195,99 @@ func (m consoleFocusMixin) FocusPaneForViewer(viewerID string, ref backend.PaneR
 	return m.focusViewerErr
 }
 
+type consoleMixin struct{ *Fake }
+
+// InsideSession reports whether WithConsoleSession named a session.
+func (m consoleMixin) InsideSession() bool {
+	m.record(MethodInsideSession)
+	return m.currentSession != ""
+}
+
+// CurrentSession records the query and returns WithConsoleSession.
+func (m consoleMixin) CurrentSession() (string, error) {
+	m.record(MethodCurrentSession)
+	return m.currentSession, m.consoleErr
+}
+
+// HasSession records the query and answers from WithExistingSessions.
+func (m consoleMixin) HasSession(session string) bool {
+	m.record(MethodHasSession, session)
+	return slices.Contains(m.existingSessions, session)
+}
+
+// NewSession records the session creation and applies WithConsoleError.
+func (m consoleMixin) NewSession(session, startDir string) error {
+	m.record(MethodNewSession, session, startDir)
+	return m.consoleErr
+}
+
+// NewWindow records the container creation and returns WithConsoleWindowPane.
+func (m consoleMixin) NewWindow(session, title, startDir string) (backend.PaneInfo, error) {
+	m.record(MethodNewWindow, session, title, startDir)
+	return m.windowPane, m.consoleErr
+}
+
+// RunCommandInPane records the command submitted to a pane's shell.
+func (m consoleMixin) RunCommandInPane(paneID, command string) error {
+	m.record(MethodRunCommandInPane, paneID, command)
+	return m.consoleErr
+}
+
+// FocusPaneInSession records the pane brought into view inside its session.
+func (m consoleMixin) FocusPaneInSession(pane backend.PaneInfo) error {
+	m.record(MethodFocusPaneInSession, pane)
+	return m.consoleErr
+}
+
+// AttachOrSwitch records the terminal attach and applies WithConsoleError.
+func (m consoleMixin) AttachOrSwitch(session string) error {
+	m.record(MethodAttachOrSwitch, session)
+	return m.consoleErr
+}
+
+// EnableInputExtensions records the modified-key request for the attached
+// terminal.
+func (m consoleMixin) EnableInputExtensions() {
+	m.record(MethodEnableInputExtensions)
+}
+
+// EnableInputExtensionsForTerm records the same request for a named terminal.
+func (m consoleMixin) EnableInputExtensionsForTerm(term string) {
+	m.record(MethodEnableInputExtensionsForTerm, term)
+}
+
+// ActivePaneInWindow records the focus query and returns WithActivePane.
+func (m consoleMixin) ActivePaneInWindow(paneID string) (string, error) {
+	m.record(MethodActivePaneInWindow, paneID)
+	return m.activePane, m.activePaneErr
+}
+
+// PaneTitle records the title read-back and returns WithPaneTitle.
+func (m consoleMixin) PaneTitle(paneID string) (string, error) {
+	m.record(MethodPaneTitle, paneID)
+	return m.paneTitle, m.paneTitleErr
+}
+
+// SetPaneRole records the layout-role stamp.
+func (m consoleMixin) SetPaneRole(paneID, role string) error {
+	m.record(MethodSetPaneRole, paneID, role)
+	return m.consoleErr
+}
+
+type paneSelfMixin struct{ *Fake }
+
+// SetPaneAgentState records the state a pane published about itself.
+func (m paneSelfMixin) SetPaneAgentState(paneID, state string) error {
+	m.record(MethodSetPaneAgentState, paneID, state)
+	return m.agentStateErr
+}
+
+// CapturePlanSource records the transcript request and returns WithPlanSource.
+func (m paneSelfMixin) CapturePlanSource(paneID string, lines int) (string, error) {
+	m.record(MethodCapturePlanSource, paneID, lines)
+	return m.planSource, m.planSourceErr
+}
+
 // DecoratorFake is a backend whose only capability is PaneDecorator.
 type DecoratorFake struct {
 	*Fake
@@ -246,10 +334,31 @@ type RestoreFake struct {
 	layoutMixin
 }
 
+// ConsoleFake carries exactly the capabilities the resident console's own
+// session entry and pane bookkeeping call. It stops short of restore and the
+// popup set so a console-entry test cannot accidentally depend on either.
+type ConsoleFake struct {
+	*Fake
+	consoleMixin
+	decorateMixin
+	ownedCloseMixin
+	layoutMixin
+}
+
+// PaneSelfFake carries the two capabilities a controller running inside a pane
+// uses about that pane, and nothing else: it is the shape a self-exec process
+// resolves, which never launches or lays anything out.
+type PaneSelfFake struct {
+	*Fake
+	paneSelfMixin
+}
+
 // TmuxFake carries every capability, matching the shape of the tmux backend.
 type TmuxFake struct {
 	*Fake
 	restoreMixin
+	consoleMixin
+	paneSelfMixin
 	decorateMixin
 	stampMixin
 	freshCloseMixin
@@ -275,16 +384,27 @@ var (
 	_ backend.FreshCloser     = RestoreFake{}
 	_ backend.OwnedCloser     = RestoreFake{}
 	_ backend.LayoutManager   = RestoreFake{}
-	_ backend.RestoreOps      = TmuxFake{}
-	_ backend.PaneDecorator   = TmuxFake{}
-	_ backend.LivenessStamper = TmuxFake{}
-	_ backend.FreshCloser     = TmuxFake{}
-	_ backend.OwnedCloser     = TmuxFake{}
-	_ backend.DryRunPreviewer = TmuxFake{}
-	_ backend.LayoutManager   = TmuxFake{}
-	_ backend.PopupHost       = TmuxFake{}
-	_ backend.ShortcutBinder  = TmuxFake{}
-	_ backend.ConsoleFocus    = TmuxFake{}
+	_ backend.ConsoleHost     = ConsoleFake{}
+	_ backend.PaneDecorator   = ConsoleFake{}
+	_ backend.OwnedCloser     = ConsoleFake{}
+	_ backend.LayoutManager   = ConsoleFake{}
+
+	_ backend.AgentStateReporter = PaneSelfFake{}
+	_ backend.PlanCapture        = PaneSelfFake{}
+
+	_ backend.RestoreOps         = TmuxFake{}
+	_ backend.ConsoleHost        = TmuxFake{}
+	_ backend.AgentStateReporter = TmuxFake{}
+	_ backend.PlanCapture        = TmuxFake{}
+	_ backend.PaneDecorator      = TmuxFake{}
+	_ backend.LivenessStamper    = TmuxFake{}
+	_ backend.FreshCloser        = TmuxFake{}
+	_ backend.OwnedCloser        = TmuxFake{}
+	_ backend.DryRunPreviewer    = TmuxFake{}
+	_ backend.LayoutManager      = TmuxFake{}
+	_ backend.PopupHost          = TmuxFake{}
+	_ backend.ShortcutBinder     = TmuxFake{}
+	_ backend.ConsoleFocus       = TmuxFake{}
 )
 
 // NewDecorator returns a fake that decorates panes and nothing else.
@@ -333,12 +453,34 @@ func NewRestore(opts ...Option) *RestoreFake {
 	}
 }
 
+// NewConsole returns a fake carrying the capability set the resident console's
+// session entry requires and nothing else.
+func NewConsole(opts ...Option) *ConsoleFake {
+	f := New(opts...)
+	return &ConsoleFake{
+		Fake:            f,
+		consoleMixin:    consoleMixin{f},
+		decorateMixin:   decorateMixin{f},
+		ownedCloseMixin: ownedCloseMixin{f},
+		layoutMixin:     layoutMixin{f},
+	}
+}
+
+// NewPaneSelf returns a fake that only answers for the pane a controller is
+// running in: its state report and its rendered transcript.
+func NewPaneSelf(opts ...Option) *PaneSelfFake {
+	f := New(opts...)
+	return &PaneSelfFake{Fake: f, paneSelfMixin: paneSelfMixin{f}}
+}
+
 // NewTmux returns a fully capable, tmux-shaped fake.
 func NewTmux(opts ...Option) *TmuxFake {
 	f := New(opts...)
 	return &TmuxFake{
 		Fake:              f,
 		restoreMixin:      restoreMixin{f},
+		consoleMixin:      consoleMixin{f},
+		paneSelfMixin:     paneSelfMixin{f},
 		decorateMixin:     decorateMixin{f},
 		stampMixin:        stampMixin{f},
 		freshCloseMixin:   freshCloseMixin{f},

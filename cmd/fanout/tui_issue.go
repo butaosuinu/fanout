@@ -197,9 +197,9 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		store state.Store,
 		recorder panelaunch.StateRecorder,
 		runtimeBackend backend.Backend,
-		herdr panelaunch.ManagedSessionRuntime,
+		managed panelaunch.ManagedSessionRuntime,
 	) error {
-		if runtimeBackend.Name() == backend.Herdr {
+		if runtimeBackend.MutationModel() == backend.MutationJournaled {
 			guardErr := guardLinkedIssueOrchestrator(projectRoot, store, issueNum)
 			if errors.Is(guardErr, errIssueOrchestratorRecorded) {
 				return nil
@@ -208,7 +208,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		}
 		var launchErr error
 		orchestratorReq, orchestratorPaneID, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
-			projectRoot, session, commandName, runtimeBackend, herdr, store, recorder,
+			projectRoot, session, commandName, runtimeBackend, managed, store, recorder,
 			hookConfig, detail, defaultAgent, resolvedSettings.OrchestratorPlanMode,
 		)
 		return launchErr
@@ -217,15 +217,15 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 		store state.Store,
 		recorder panelaunch.StateRecorder,
 		runtimeBackend backend.Backend,
-		herdr panelaunch.ManagedSessionRuntime,
+		managed panelaunch.ManagedSessionRuntime,
 		progress run.IssueAfterContext,
 	) error {
-		if !launchHerdrOrchestratorAfterChildren(runtimeBackend.Name(), progress) {
+		if !launchOrchestratorAfterChildren(runtimeBackend.MutationModel(), progress) {
 			return nil
 		}
 		var launchErr error
 		orchestratorReq, orchestratorPaneID, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
-			projectRoot, session, commandName, runtimeBackend, herdr, store, recorder,
+			projectRoot, session, commandName, runtimeBackend, managed, store, recorder,
 			hookConfig, detail, defaultAgent, resolvedSettings.OrchestratorPlanMode,
 		)
 		return launchErr
@@ -233,7 +233,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	result, err := launchParentIssueFanoutWithCallbacks(projectRoot, session, commandName, cfg, ready, after)
 	runtimeBackend := result.runtimeBackend
 	if err != nil && len(result.CreatedPaneIDs) == 0 && orchestratorCreated {
-		if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, result.herdr, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
+		if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, result.managed, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("cleanup issue orchestrator: %w", cleanupErr))
 		} else {
 			orchestratorPaneID = ""
@@ -244,7 +244,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	} else if orchestratorCreated {
 		if releaseErr := panelaunch.ReleaseAgentStartGate(runtimeBackend, orchestratorReq); releaseErr != nil {
 			err = errors.Join(err, fmt.Errorf("release issue orchestrator gate: %w", releaseErr))
-			if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, result.herdr, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
+			if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, result.managed, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
 				err = errors.Join(err, fmt.Errorf("cleanup gated issue orchestrator: %w", cleanupErr))
 			} else {
 				orchestratorPaneID = ""
@@ -258,16 +258,24 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			result.Notice = orchestratorNotice + "; " + result.Notice
 		}
 	}
-	orchestratorAfterChildren := runtimeBackend != nil && runtimeBackend.Name() == backend.Herdr
+	orchestratorAfterChildren := runtimeBackend != nil &&
+		runtimeBackend.MutationModel() == backend.MutationJournaled
 	return finishTUIIssueParentLaunch(issueNum, orchestratorAfterChildren, orchestratorPaneID, result, err)
 }
 
-func launchHerdrOrchestratorAfterChildren(runtimeBackend backend.Name, progress run.IssueAfterContext) bool {
-	return runtimeBackend == backend.Herdr && (progress.Failed == 0 || progress.Created > 0)
+// launchOrchestratorAfterChildren reports whether this launch defers the
+// orchestrator until the children exist. The journaled lane cannot hold a start
+// gate across a remote mutation, so its orchestrator is attached afterwards and
+// only once the fan-out actually produced something to coordinate.
+func launchOrchestratorAfterChildren(model backend.MutationModel, progress run.IssueAfterContext) bool {
+	return model == backend.MutationJournaled && (progress.Failed == 0 || progress.Created > 0)
 }
 
+// releaseCleanedIssueOrchestratorGate releases the start gate a rolled-back
+// orchestrator was holding. Only the atomic lane takes one: the journaled lane
+// rejects a start gate at request time, so there is nothing to release.
 func releaseCleanedIssueOrchestratorGate(runtimeBackend backend.Backend, req panelaunch.Request) error {
-	if runtimeBackend.Name() != backend.Tmux {
+	if runtimeBackend.MutationModel() != backend.MutationAtomic {
 		return nil
 	}
 	return panelaunch.ReleaseAgentStartGate(runtimeBackend, req)

@@ -7,11 +7,11 @@ import (
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/peermsg"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
 type codexTeamTUIOptions struct {
@@ -45,11 +45,7 @@ func cmdCodexTeamTUI(args []string, lg *log.Logger) exitcode.Code {
 	defer watcher.Close()
 
 	opts.config.Version = version
-	opts.config.SetAgentState = func(state string) {
-		// Pane state is best-effort display telemetry; launch readiness uses the
-		// status-file handshake below.
-		_ = tmuxrun.SetPaneAgentState(os.Getenv("TMUX_PANE"), state)
-	}
+	opts.config.SetAgentState = codexTeamStateSink(os.Getenv)
 	opts.config.FetchMessages = func() ([]codexapp.InboundMessage, error) {
 		events, err := watcher.Poll()
 		if err != nil {
@@ -69,6 +65,22 @@ func cmdCodexTeamTUI(args []string, lg *log.Logger) exitcode.Code {
 		return exitcode.Env
 	}
 	return exitcode.OK
+}
+
+// codexTeamStateSink publishes the bridge's own pane state to the host runtime
+// it is running in. Pane state is best-effort display telemetry; launch
+// readiness uses the status-file handshake instead, so a host that accepts no
+// self-report — and an owned session, whose panes report through their launch
+// route's emitter and leave the invoking-pane variable unset — only lose a
+// badge here.
+func codexTeamStateSink(getenv func(string) string) func(string) {
+	reporter, ok := backend.AsAgentStateReporter(paneruntime.PaneHost())
+	if !ok {
+		return func(string) {}
+	}
+	return func(state string) {
+		_ = reporter.SetPaneAgentState(getenv(invokingPaneEnv), state)
+	}
 }
 
 func parseCodexTeamTUIArgs(args []string, lg *log.Logger) (opts codexTeamTUIOptions, help bool, code exitcode.Code) {

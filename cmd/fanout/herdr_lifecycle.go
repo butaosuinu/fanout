@@ -24,10 +24,10 @@ type herdrLifecycleDeps struct {
 	shutdown     func(ctx context.Context, projectRoot, repoKey string) error
 }
 
-// newHerdrServerIO adapts the runtime's owned-server lifecycle calls to the app
-// port. Construction stays behind paneruntime; the app only drives the
+// newManagedServerIO adapts the runtime's owned-server lifecycle calls to the
+// app port. Construction stays behind paneruntime; the app only drives the
 // journal-fenced transaction around these calls.
-func newHerdrServerIO(repoKey string) panelaunch.ManagedServerIO {
+func newManagedServerIO(repoKey string) panelaunch.ManagedServerIO {
 	ops := paneruntime.NewServerOps(repoKey)
 	return panelaunch.ManagedServerIO{
 		InspectServer:     ops.Inspect,
@@ -55,10 +55,10 @@ func cmdHerdrLifecycle(args []string, lg *log.Logger) exitcode.Code {
 		projectRoot:  func() (string, error) { return gitroot.Toplevel("") },
 		repoIdentity: worktree.ResolveRepoIdentity,
 		restart: func(ctx context.Context, root, repoKey string) (string, error) {
-			return panelaunch.RestartManagedServer(ctx, root, newHerdrServerIO(repoKey))
+			return panelaunch.RestartManagedServer(ctx, root, newManagedServerIO(repoKey))
 		},
 		shutdown: func(ctx context.Context, root, repoKey string) error {
-			return panelaunch.ShutdownManagedServer(ctx, root, newHerdrServerIO(repoKey))
+			return panelaunch.ShutdownManagedServer(ctx, root, newManagedServerIO(repoKey))
 		},
 	}
 	return runHerdrLifecycle(args, lg, deps)

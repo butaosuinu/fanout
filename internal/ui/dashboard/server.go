@@ -47,7 +47,7 @@ type Options struct {
 	// partial observations may accompany an error from another route.
 	ListLive func() ([]backend.LivePane, error)
 	// CapturePane is the read-only tmux pane capture behind GET /api/peek.
-	// Owned Herdr rows use ReadHerdrPane instead. nil defaults to
+	// Owned Herdr rows use ReadManagedPane instead. nil defaults to
 	// tmuxrun.CapturePaneOutput; tests inject a fake.
 	CapturePane func(paneID string, lines int) (string, error)
 	// CapturePlan is the read-only tmux capture behind GET /api/plan (scrollback
@@ -63,29 +63,29 @@ type Options struct {
 	// tmuxrun.ListLivePanes-backed check; tests inject a fake.
 	VerifyPane func(sessionview.PaneView) error
 	// Owned Herdr peek is read-only but uses persisted ownership identity rather
-	// than a tmux pane id. OwnsHerdrPane performs request-time immutable admission;
-	// ReadHerdrPane repeats that binding immediately before the read.
-	OwnsHerdrPane func(sessionview.PaneView) bool
-	ReadHerdrPane func(sessionview.PaneView, int) (string, error)
+	// than a tmux pane id. OwnsManagedPane performs request-time immutable admission;
+	// ReadManagedPane repeats that binding immediately before the read.
+	OwnsManagedPane func(sessionview.PaneView) bool
+	ReadManagedPane func(sessionview.PaneView, int) (string, error)
 }
 
 // Server is a bound, ready-to-run dashboard. New binds the listener (so a
 // port-in-use error surfaces synchronously) and computes the URL; Run serves
 // until the context is canceled.
 type Server struct {
-	listener      net.Listener
-	httpServer    *http.Server
-	poller        *poller
-	hub           *hub
-	token         string
-	base          string // http://127.0.0.1:<port>
-	serveErr      chan error
-	capturePane   func(paneID string, lines int) (string, error)
-	capturePlan   func(paneID string, lines int) (string, error)
-	diffWorktree  func(path, baseRef string) (gitstat.Patch, error)
-	verifyPane    func(sessionview.PaneView) error
-	ownsHerdrPane func(sessionview.PaneView) bool
-	readHerdrPane func(sessionview.PaneView, int) (string, error)
+	listener        net.Listener
+	httpServer      *http.Server
+	poller          *poller
+	hub             *hub
+	token           string
+	base            string // http://127.0.0.1:<port>
+	serveErr        chan error
+	capturePane     func(paneID string, lines int) (string, error)
+	capturePlan     func(paneID string, lines int) (string, error)
+	diffWorktree    func(path, baseRef string) (gitstat.Patch, error)
+	verifyPane      func(sessionview.PaneView) error
+	ownsManagedPane func(sessionview.PaneView) bool
+	readManagedPane func(sessionview.PaneView, int) (string, error)
 }
 
 // New binds the loopback listener and assembles the handler. The returned
@@ -120,18 +120,18 @@ func New(opts Options) (*Server, error) {
 	p := newLazyPoller(opts.ProjectRoot, opts.ResolveGH, h)
 	p.listLive = opts.ListLive
 	s := &Server{
-		listener:      ln,
-		hub:           h,
-		poller:        p,
-		token:         opts.Token,
-		base:          fmt.Sprintf("http://%s:%d", loopbackInterface, addr.Port),
-		serveErr:      make(chan error, 1),
-		capturePane:   capture,
-		capturePlan:   capturePlan,
-		diffWorktree:  opts.DiffWorktree,
-		verifyPane:    verify,
-		ownsHerdrPane: opts.OwnsHerdrPane,
-		readHerdrPane: opts.ReadHerdrPane,
+		listener:        ln,
+		hub:             h,
+		poller:          p,
+		token:           opts.Token,
+		base:            fmt.Sprintf("http://%s:%d", loopbackInterface, addr.Port),
+		serveErr:        make(chan error, 1),
+		capturePane:     capture,
+		capturePlan:     capturePlan,
+		diffWorktree:    opts.DiffWorktree,
+		verifyPane:      verify,
+		ownsManagedPane: opts.OwnsManagedPane,
+		readManagedPane: opts.ReadManagedPane,
 	}
 	handler, err := s.handler()
 	if err != nil {

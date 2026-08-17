@@ -134,7 +134,7 @@ func TestHerdrCodexPlanCaptureTargetRequiresExactLiveIdentity(t *testing.T) {
 		WorktreePath: base.WorktreePath, CurrentPath: base.CurrentPath,
 		AgentPresent: true, AgentProvider: "codex", AgentID: "fanout-agent", AgentSession: &session,
 	}
-	got, err := herdrCodexPlanCaptureTarget(base, []backend.LivePane{live})
+	got, err := managedCodexPlanCaptureTarget(base, []backend.LivePane{live})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestHerdrCodexPlanCaptureTargetRequiresExactLiveIdentity(t *testing.T) {
 		"missing": nil, "mismatch": {wrong}, "duplicate": {live, live},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := herdrCodexPlanCaptureTarget(base, panes); err == nil {
+			if _, err := managedCodexPlanCaptureTarget(base, panes); err == nil {
 				t.Fatal("capture target accepted ambiguous or mismatched live identity")
 			}
 		})
@@ -165,12 +165,12 @@ func TestBestEffortScreenCaptureDoesNotBlockController(t *testing.T) {
 		return "", ctx.Err()
 	})
 
-	if _, err := capture(); !errors.Is(err, errHerdrCodexPlanCapturePending) {
+	if _, err := capture(); !errors.Is(err, errManagedCodexPlanCapturePending) {
 		t.Fatalf("initial capture error = %v, want pending", err)
 	}
 	<-started
 	before := time.Now()
-	if _, err := capture(); !errors.Is(err, errHerdrCodexPlanCapturePending) {
+	if _, err := capture(); !errors.Is(err, errManagedCodexPlanCapturePending) {
 		t.Fatalf("busy capture error = %v, want cached pending", err)
 	}
 	if elapsed := time.Since(before); elapsed > 100*time.Millisecond {
@@ -198,7 +198,7 @@ func TestBestEffortScreenCaptureReturnsCacheDuringRefresh(t *testing.T) {
 		return "working viewport", nil
 	})
 
-	if _, err := capture(); !errors.Is(err, errHerdrCodexPlanCapturePending) {
+	if _, err := capture(); !errors.Is(err, errManagedCodexPlanCapturePending) {
 		t.Fatalf("initial capture error = %v, want pending", err)
 	}
 	deadline := time.After(time.Second)

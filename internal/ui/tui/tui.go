@@ -80,25 +80,26 @@ type Options struct {
 	PaneAlive         func(string) bool
 	ShellPaneAlive    func(paneID, shellKey string) bool
 	CapturePaneOutput func(string, int) (string, error)
-	// Herdr capabilities receive the exact persisted identity. The composition
-	// root must bind it to this repository's owned session before each action.
-	HerdrActionDisabled func(state.Pane) string
-	FocusHerdrPane      func(state.Pane) error
-	CaptureHerdrPane    func(state.Pane, int) (string, error)
-	ListLive            func() ([]backend.LivePane, error)
-	ClosePane           func(backend.PaneRef) error
+	// The owned-session ports receive the exact persisted identity. The
+	// composition root must bind it to this repository's owned session before
+	// each action.
+	ManagedActionDisabled func(state.Pane) string
+	FocusManagedPane      func(state.Pane) error
+	CaptureManagedPane    func(state.Pane, int) (string, error)
+	ListLive              func() ([]backend.LivePane, error)
+	ClosePane             func(backend.PaneRef) error
 	// LifecycleCloseOwned is the runtime-specific destructive capability used
 	// for state-backed closes. It keeps identity verification isolated from the
 	// mixed-backend display collector.
 	LifecycleCloseOwned func(backend.CloseRequest) (backend.CloseResult, error)
 	// LifecycleRelayout re-tiles a container after a lifecycle close removed a
 	// pane from it. Nil for a runtime that arranges its own workspace.
-	LifecycleRelayout            func(target string, trigger backend.LayoutTrigger) error
-	LifecycleHerdrRuntimeForRoot func(string) lifecycle.WorkspaceRuntimeFactory
-	ListRepoFiles                func(root string) ([]string, error)
-	Notifier                     transitionNotifier
-	lifecycle                    lifecycleRunner
-	keyboard                     keyboardProtocols
+	LifecycleRelayout                func(target string, trigger backend.LayoutTrigger) error
+	LifecycleWorkspaceRuntimeForRoot func(string) lifecycle.WorkspaceRuntimeFactory
+	ListRepoFiles                    func(root string) ([]string, error)
+	Notifier                         transitionNotifier
+	lifecycle                        lifecycleRunner
+	keyboard                         keyboardProtocols
 }
 
 type viewMode int

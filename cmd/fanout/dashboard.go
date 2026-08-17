@@ -130,17 +130,17 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 			return exitcode.Env
 		}
 	}
-	ownsHerdrPane, readHerdrPane := dashboardHerdrPeekPorts(root, paneruntime.OpenProject)
+	ownsManagedPane, readManagedPane := dashboardManagedPeekPorts(root, paneruntime.OpenProject)
 	srv, err := dashboard.New(dashboard.Options{
 		ProjectRoot: root,
 		Port:        flags.port,
 		Token:       token,
 		// Resolved lazily on the poller's gh goroutine so a slow `gh repo view`
 		// never delays binding localhost or the state-only paint.
-		ResolveGH:     dashboardGHResolver(root, lg),
-		ListLive:      runtimeListLiveForProject(root, false),
-		OwnsHerdrPane: ownsHerdrPane,
-		ReadHerdrPane: readHerdrPane,
+		ResolveGH:       dashboardGHResolver(root, lg),
+		ListLive:        runtimeListLiveForProject(root, false),
+		OwnsManagedPane: ownsManagedPane,
+		ReadManagedPane: readManagedPane,
 	})
 	if err != nil {
 		lg.Err("dashboard: bind 127.0.0.1: %v", err)
@@ -197,7 +197,7 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 	return exitcode.OK
 }
 
-func dashboardHerdrPeekPorts(
+func dashboardManagedPeekPorts(
 	projectRoot string,
 	open func(string) (paneruntime.ManagedSession, error),
 ) (func(sessionview.PaneView) bool, func(sessionview.PaneView, int) (string, error)) {
@@ -206,7 +206,7 @@ func dashboardHerdrPeekPorts(
 		if err != nil {
 			return nil, backend.PaneRef{}, err
 		}
-		return bindOwnedHerdrPane(owned, pv.SavedPane)
+		return bindManagedPane(owned, pv.SavedPane)
 	}
 	owns := func(pv sessionview.PaneView) bool {
 		_, _, err := bind(pv)

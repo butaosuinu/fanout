@@ -397,6 +397,32 @@ func TestBackendOffersNoConsoleHostCapability(t *testing.T) {
 	}
 }
 
+// The console's session entry — create a session, put the console pane in it,
+// attach the operator's terminal — has no herdr counterpart: the repository
+// owns a session that outlives the run, and fanout hands out an attach command
+// for it instead. The absent capability is what routes the console to that
+// managed path instead of a backend name check.
+func TestBackendOffersNoConsoleSessionCapability(t *testing.T) {
+	b := New("fanout-test", "/tmp/herdr.sock")
+	if _, ok := corebackend.AsConsoleHost(b); ok {
+		t.Fatal("AsConsoleHost(herdr backend) reported a capability, want absent")
+	}
+}
+
+// A pane in an owned session reports its state through the launch route's
+// emitter and is read back through the owned session, both of which need a
+// route a self-exec controller does not carry. Offering neither capability
+// keeps a controller from reporting into a pane it cannot address.
+func TestBackendOffersNoPaneSelfCapability(t *testing.T) {
+	b := New("fanout-test", "/tmp/herdr.sock")
+	if _, ok := corebackend.AsAgentStateReporter(b); ok {
+		t.Fatal("AsAgentStateReporter(herdr backend) reported a capability, want absent")
+	}
+	if _, ok := corebackend.AsPlanCapture(b); ok {
+		t.Fatal("AsPlanCapture(herdr backend) reported a capability, want absent")
+	}
+}
+
 // The dry-run preview is pinned byte-for-byte by
 // tests/golden/scenario-herdr-dry-run.dry-run.txt, so these expectations are
 // full lines, not substrings.

@@ -23,6 +23,9 @@ type capabilities struct {
 	shortcut  bool
 	focus     bool
 	restore   bool
+	console   bool
+	reporter  bool
+	plan      bool
 }
 
 func probe(b backend.Backend) capabilities {
@@ -36,7 +39,13 @@ func probe(b backend.Backend) capabilities {
 	_, shortcut := backend.AsShortcutBinder(b)
 	_, focus := backend.AsConsoleFocus(b)
 	_, restore := backend.AsRestoreOps(b)
-	return capabilities{decorator, stamper, previewer, layout, owned, fresh, popup, shortcut, focus, restore}
+	_, console := backend.AsConsoleHost(b)
+	_, reporter := backend.AsAgentStateReporter(b)
+	_, plan := backend.AsPlanCapture(b)
+	return capabilities{
+		decorator, stamper, previewer, layout, owned, fresh,
+		popup, shortcut, focus, restore, console, reporter, plan,
+	}
 }
 
 // TestShapeCapabilities is the reason the shapes exist: capability detection is
@@ -67,12 +76,23 @@ func TestShapeCapabilities(t *testing.T) {
 			},
 		},
 		{
+			name:    "console fake enters a session without the restore lane",
+			backend: NewConsole(),
+			want:    capabilities{console: true, decorator: true, owned: true, layout: true},
+		},
+		{
+			name:    "pane self fake answers only for its own pane",
+			backend: NewPaneSelf(),
+			want:    capabilities{reporter: true, plan: true},
+		},
+		{
 			name:    "tmux fake carries every capability",
 			backend: NewTmux(),
 			want: capabilities{
 				decorator: true, stamper: true, previewer: true,
 				layout: true, owned: true, fresh: true,
 				popup: true, shortcut: true, focus: true, restore: true,
+				console: true, reporter: true, plan: true,
 			},
 		},
 	}

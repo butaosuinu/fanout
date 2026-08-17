@@ -18,7 +18,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
@@ -26,9 +25,9 @@ const codexPlanTUIScreenCaptureLines = 2000
 
 const codexPlanTelemetryQueueSize = 8
 
-const herdrCodexPlanCaptureTimeout = time.Second
+const managedCodexPlanCaptureTimeout = time.Second
 
-var errHerdrCodexPlanCapturePending = errors.New("herdr Codex Plan screen capture is pending")
+var errManagedCodexPlanCapturePending = errors.New("herdr Codex Plan screen capture is pending")
 
 func isCodexPlanTUIRequest(args []string) bool {
 	return len(args) > 0 && args[0] == codexapp.PlanTUICommand
@@ -59,15 +58,24 @@ func codexPlanStateSink(getenv func(string) string) func(string) {
 			_ = stateemitter.Run([]string{state}, codexPlanEmitterEnv(getenv), runtimeEmitterObserver{}, io.Discard)
 		})
 	}
-	paneID := getenv("TMUX_PANE")
+	reporter, ok := backend.AsAgentStateReporter(paneruntime.PaneHost())
+	if !ok {
+		// A host that takes no self-report only loses display telemetry.
+		return func(string) {}
+	}
+	paneID := getenv(invokingPaneEnv)
 	return func(state string) {
 		// A missing/replaced pane only loses display telemetry.
-		_ = tmuxrun.SetPaneAgentState(paneID, state)
+		_ = reporter.SetPaneAgentState(paneID, state)
 	}
 }
 
+// codexPlanRuntimeBackend reads which runtime owns the pane this controller is
+// running in. The launch environment is the only evidence available here: the
+// host runtime names the invoking pane, and an owned session hands its own
+// backend name down through the telemetry environment.
 func codexPlanRuntimeBackend(getenv func(string) string) backend.Name {
-	if strings.TrimSpace(getenv("TMUX_PANE")) != "" {
+	if strings.TrimSpace(getenv(invokingPaneEnv)) != "" {
 		return backend.Tmux
 	}
 	return backend.Name(getenv(telemetry.BackendEnv))
@@ -98,16 +106,26 @@ func codexPlanEmitterEnv(getenv func(string) string) func(string) string {
 }
 
 func codexPlanScreenCapture(getenv func(string) string) func() (string, error) {
-	if codexPlanRuntimeBackend(getenv) != backend.Herdr {
-		paneID := getenv("TMUX_PANE")
+	if codexPlanRuntimeBackend(getenv) == backend.Herdr {
+		return newManagedCodexPlanCapture(getenv)
+	}
+	capture, ok := backend.AsPlanCapture(paneruntime.PaneHost())
+	if !ok {
 		return func() (string, error) {
-			return tmuxrun.CapturePlanSource(paneID, codexPlanTUIScreenCaptureLines)
+			return "", fmt.Errorf("runtime backend plan capture is not configured")
 		}
 	}
-	return newHerdrCodexPlanCapture(getenv)
+	paneID := getenv(invokingPaneEnv)
+	return func() (string, error) {
+		return capture.CapturePlanSource(paneID, codexPlanTUIScreenCaptureLines)
+	}
 }
 
-func newHerdrCodexPlanCapture(getenv func(string) string) func() (string, error) {
+// newManagedCodexPlanCapture reads the controller's own pane back through the
+// repository-owned session. backend.Herdr appears here as the identity of the
+// pane the launch environment describes, not as a lane choice: only a pane the
+// owned session issued can be addressed this way.
+func newManagedCodexPlanCapture(getenv func(string) string) func() (string, error) {
 	base := backend.OwnedPaneIdentity{
 		Ref: backend.PaneRef{
 			Backend:   backend.Herdr,
@@ -118,19 +136,19 @@ func newHerdrCodexPlanCapture(getenv func(string) string) func() (string, error)
 		AgentID: getenv(telemetry.AgentIDEnv),
 	}
 	var owned paneruntime.ManagedSession
-	return newBestEffortScreenCapture(herdrCodexPlanCaptureTimeout, func(ctx context.Context) (string, error) {
+	return newBestEffortScreenCapture(managedCodexPlanCaptureTimeout, func(ctx context.Context) (string, error) {
 		if owned == nil {
 			var err error
-			owned, base, err = openHerdrCodexPlanCapture(ctx, base)
+			owned, base, err = openManagedCodexPlanCapture(ctx, base)
 			if err != nil {
 				return "", err
 			}
 		}
-		return captureHerdrCodexPlanScreen(ctx, owned, base)
+		return captureManagedCodexPlanScreen(ctx, owned, base)
 	})
 }
 
-func openHerdrCodexPlanCapture(ctx context.Context, base backend.OwnedPaneIdentity) (paneruntime.ManagedSession, backend.OwnedPaneIdentity, error) {
+func openManagedCodexPlanCapture(ctx context.Context, base backend.OwnedPaneIdentity) (paneruntime.ManagedSession, backend.OwnedPaneIdentity, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, base, fmt.Errorf("resolve Codex Plan controller cwd: %w", err)
@@ -144,12 +162,12 @@ func openHerdrCodexPlanCapture(ctx context.Context, base backend.OwnedPaneIdenti
 	return owned, base, err
 }
 
-func captureHerdrCodexPlanScreen(ctx context.Context, owned paneruntime.ManagedSession, base backend.OwnedPaneIdentity) (string, error) {
+func captureManagedCodexPlanScreen(ctx context.Context, owned paneruntime.ManagedSession, base backend.OwnedPaneIdentity) (string, error) {
 	panes, err := owned.LivePanes(ctx)
 	if err != nil {
 		return "", err
 	}
-	target, err := herdrCodexPlanCaptureTarget(base, panes)
+	target, err := managedCodexPlanCaptureTarget(base, panes)
 	if err != nil {
 		return "", err
 	}
@@ -188,12 +206,12 @@ func (w *bestEffortScreenCapture) capture() (string, error) {
 	}
 	result := w.result.Load()
 	if result == nil {
-		return "", errHerdrCodexPlanCapturePending
+		return "", errManagedCodexPlanCapturePending
 	}
 	return result.screen, result.err
 }
 
-func herdrCodexPlanCaptureTarget(base backend.OwnedPaneIdentity, panes []backend.LivePane) (backend.OwnedPaneIdentity, error) {
+func managedCodexPlanCaptureTarget(base backend.OwnedPaneIdentity, panes []backend.LivePane) (backend.OwnedPaneIdentity, error) {
 	matches := make([]backend.LivePane, 0, 1)
 	for _, pane := range panes {
 		identity := []bool{

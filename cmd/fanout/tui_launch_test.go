@@ -29,14 +29,14 @@ func TestBufferedLaunchNoticeCollectsAndDeduplicatesWarnings(t *testing.T) {
 
 func TestCoordinatorRuntimeRequestRemovesTmuxIdentityForHerdr(t *testing.T) {
 	req := panelaunch.Request{ShellKey: "tmux-key", AgentStartGate: "tmux-gate"}
-	herdrReq := coordinatorRuntimeRequest(backend.Herdr, "500", req)
+	herdrReq := coordinatorRuntimeRequest(backend.MutationJournaled, "500", req)
 	if herdrReq.ShellKey != "" || herdrReq.AgentStartGate != "" || herdrReq.RuntimeParent != "500" {
 		t.Fatalf("Herdr coordinator request = %+v, want no tmux identity", herdrReq)
 	}
-	if tmuxReq := coordinatorRuntimeRequest(backend.Tmux, "500", req); tmuxReq.ShellKey != req.ShellKey || tmuxReq.AgentStartGate != req.AgentStartGate || tmuxReq.RuntimeParent != "" {
+	if tmuxReq := coordinatorRuntimeRequest(backend.MutationAtomic, "500", req); tmuxReq.ShellKey != req.ShellKey || tmuxReq.AgentStartGate != req.AgentStartGate || tmuxReq.RuntimeParent != "" {
 		t.Fatalf("tmux coordinator request = %+v, want unchanged tmux identity", tmuxReq)
 	}
-	if manualReq := coordinatorRuntimeRequest(backend.Herdr, panelaunch.ManualParentRef, req); manualReq.RuntimeParent != "" {
+	if manualReq := coordinatorRuntimeRequest(backend.MutationJournaled, panelaunch.ManualParentRef, req); manualReq.RuntimeParent != "" {
 		t.Fatalf("manual Herdr coordinator request = %+v, want independent synthetic identity", manualReq)
 	}
 }

@@ -167,7 +167,7 @@ func (m model) focusFreshHerdrPaneIDCmd(paneID, contextNotice string) tea.Cmd {
 		if err != nil {
 			return paneFocusedMsg{paneID: paneID, err: err, contextNotice: contextNotice}
 		}
-		return focusFreshHerdrPane(m.opts.FocusHerdrPane, m.opts.keyboard, pane, contextNotice)
+		return focusFreshHerdrPane(m.opts.FocusManagedPane, m.opts.keyboard, pane, contextNotice)
 	}
 }
 
@@ -252,7 +252,7 @@ func (m *model) focusPaneCmd(pane paneView, zoom bool, contextNotice string) tea
 }
 
 func (m *model) focusHerdrPaneCmd(pane paneView, contextNotice string) tea.Cmd {
-	focus := m.opts.FocusHerdrPane
+	focus := m.opts.FocusManagedPane
 	keyboard := m.opts.keyboard
 	return func() tea.Msg {
 		keyboard.Disable()
@@ -330,7 +330,7 @@ func (m *model) capturePaneCmd(pane paneView) tea.Cmd {
 }
 
 func (m *model) captureHerdrPaneCmd(pane paneView) tea.Cmd {
-	capture := m.opts.CaptureHerdrPane
+	capture := m.opts.CaptureManagedPane
 	return func() tea.Msg {
 		if capture == nil {
 			return panePeekLoadedMsg{paneID: pane.PaneID, at: time.Now(), err: fmt.Errorf("owned Herdr read is not configured")}

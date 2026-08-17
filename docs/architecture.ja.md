@@ -81,7 +81,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `ghissue` | GitHub issue/PR の読み書き(label swap・dashboard comment 投稿などの mutation を含む) | M |
 | infra | `gitstat` | git 差分・状態取得 | M |
 | infra | `tmuxrun` | tmux 直接操作 | M |
-| infra | `tmuxbackend` | backend 契約から `tmuxrun` への adapter(window レイアウトの grid 方針と tmux custom layout 文字列、popup / global shortcut / viewer focus の console host capability も担当) | M |
+| infra | `tmuxbackend` | backend 契約から `tmuxrun` への adapter(window レイアウトの grid 方針と tmux custom layout 文字列、popup / global shortcut / viewer focus の host capability、console の session 入場 ConsoleHost、pane の中から自分の state を申告する AgentStateReporter と描画テキストを返す PlanCapture も担当) | M |
 | infra | `msgstore` | send/post/inbox/board/mark-read | M |
 | infra | `notify` | 通知送出 | M |
 | infra | `runtime` | git root・選択済み backend の起動コンテキスト解決。具象 backend を持たない(env と `tmux` の探索だけ)ので `paneruntime` には畳まない — `Info` は `app/run` と `app/panelaunch` の型で、畳むと app が具象 backend を推移的に抱える | M |
@@ -153,10 +153,21 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   `RenderTask` の出力はそのままエージェントの入力になる。
 - **具象 backend の構築は `infra/paneruntime` に集約**: 選択入力の収集・
   precedence 解決・具象構築・self-exec registry・telemetry observer をここに
-  集め、`cmd/fanout` は `paneruntime` 経由で組み立てる。別の層に `switch` を
-  増やすと runtime 追加のたびに散らばった分岐を数える羽目になる。既知の残債
-  (cmd TUI 配線の `*herdrrun.OwnedSession` 型参照、app の tmux relayout 直結
-  2 箇所)は後続フェーズで解消するまで本 invariant の適用範囲外。
+  集める。`internal/app` は core の backend 型と自分の port しか名指さず、
+  `cmd/fanout` は `paneruntime` 経由で組み立てる。別の層に `switch` を増やすと
+  runtime 追加のたびに散らばった分岐を数える羽目になる。残債は app shell lane
+  の `tmuxrun` 直呼び(後続フェーズで `Backend.Launch` / capability 経由化)
+  のみ。
+- **runtime ごとの差は capability の有無で表す**: console の入場経路
+  (`ConsoleHost` があれば session を立てて端末を繋ぐ、無ければ owned session の
+  attach コマンドを渡す)、restore の配線(`RestoreOps`)、popup / global
+  shortcut / viewer focus、pane の中からの自己申告(`AgentStateReporter` /
+  `PlanCapture`)はいずれも backend 名の判定ではなく capability の有無で選ぶ。
+  launch lane そのものは名前でも capability でもなく backend が宣言する
+  `MutationModel` が選ぶ — liveness key・start gate・workspace close はどれも
+  lane の identity 契約であって runtime の表示名ではない。`backend.Tmux` /
+  `backend.Herdr` の比較が残ってよいのは、保存済み行や launch 環境が記録した
+  runtime 名を読む場所だけ。
 - **self-exec サブコマンド名の固定**: `__tui-new-pane-popup` /
   `__tui-help-popup` / `__tui-close-popup` / `__codex-plan-tui` /
   `__codex-team-tui` は
