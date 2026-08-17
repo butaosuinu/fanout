@@ -91,19 +91,31 @@
   "tags": [
     {
       "name": "`json:\"tmuxState\"`",
-      "reason": "frozen dashboard wire key. The Go field is already neutral (LegacyState); the JSON key is consumed by web/src/transport/types.ts and renaming it breaks existing snapshot consumers."
+      "reason": "frozen dashboard wire key. The Go field is already neutral (LegacyState); the JSON key is consumed by web/src/transport/types.ts and renaming it breaks existing snapshot consumers.",
+      "files": [
+        "internal/app/sessionview/model.go"
+      ]
     },
     {
       "name": "`json:\"tmuxTitle,omitempty\"`",
-      "reason": "frozen dashboard wire key. The Go field is already neutral (LegacyTitle); the JSON key is consumed by web/src/transport/types.ts and renaming it breaks existing snapshot consumers."
+      "reason": "frozen dashboard wire key. The Go field is already neutral (LegacyTitle); the JSON key is consumed by web/src/transport/types.ts and renaming it breaks existing snapshot consumers.",
+      "files": [
+        "internal/app/sessionview/model.go"
+      ]
     },
     {
       "name": "`json:\"tmux,omitempty\"`",
-      "reason": "frozen dashboard wire key for the runtime column count. The Go field is already neutral (Runtime); the JSON key is consumed by web/src/transport/types.ts."
+      "reason": "frozen dashboard wire key for the runtime column count. The Go field is already neutral (Runtime); the JSON key is consumed by web/src/transport/types.ts.",
+      "files": [
+        "internal/app/sessionview/model.go"
+      ]
     },
     {
       "name": "`json:\"tmux\"`",
-      "reason": "frozen dashboard wire key for the runtime degraded flag. The Go field is already neutral (Legacy); the JSON key is consumed by web/src/transport/types.ts."
+      "reason": "frozen dashboard wire key for the runtime degraded flag. The Go field is already neutral (Legacy); the JSON key is consumed by web/src/transport/types.ts.",
+      "files": [
+        "internal/app/sessionview/model.go"
+      ]
     }
   ]
 }

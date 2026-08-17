@@ -52,11 +52,11 @@ type vocabularyAllowlist struct {
 
 // vocabularyAllowEntry is one exemption. Name is a repo-relative path for a
 // file entry, an exact identifier for an identifier entry, and the exact tag
-// literal (backquotes included) for a tag entry. Files, when present on an
-// identifier entry, scopes the exemption to those repo-relative files: a new
-// file spelling the identifier fails until it is listed here with the reason
-// re-reviewed. The runtime-name constants (Tmux, Herdr) use this so a new
-// name-based branch cannot ride in on the data-read exemption unseen.
+// literal (backquotes included) for a tag entry. Files, on an identifier or
+// tag entry, scopes the exemption to those repo-relative files: a new file
+// spelling the name fails until it is listed here with the reason
+// re-reviewed. Every identifier and tag entry is scoped; an unscoped
+// exemption would let a new name-based branch or wire field ride in unseen.
 type vocabularyAllowEntry struct {
 	Name   string   `json:"name"`
 	Reason string   `json:"reason"`
@@ -283,9 +283,10 @@ func loadVocabularyAllowlist(path string) (*allowlistIndex, error) {
 				continue
 			}
 			// A scoped entry exempts (name, file) pairs; each file must stay
-			// live on its own, so a rename cannot widen the exemption.
-			if category.kind != "identifier" {
-				return nil, fmt.Errorf("%s entry %q scopes by files, which only identifier entries support", category.kind, entry.Name)
+			// live on its own, so a rename cannot widen the exemption. File
+			// entries already name a path, so scoping them again is a mistake.
+			if category.kind == "file" {
+				return nil, fmt.Errorf("file entry %q scopes by files; a file entry is its own scope", entry.Name)
 			}
 			for _, file := range entry.Files {
 				index.entries[category.kind+":"+entry.Name+"@"+file] = true

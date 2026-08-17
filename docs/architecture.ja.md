@@ -159,9 +159,11 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   `cmd` からの辺は godep-cruiser の `app-no-runtime-adapters` /
   `cmd-no-runtime-adapters` が禁じる(test は対象外 — 実 adapter の挙動を
   直接ドライブする test があるため)。infra 内で adapter を import できる
-  package も `infra-no-new-adapter-importers` で閉じている
-  (paneruntime・tmuxbackend・notify のみ)ので、中立名の中継 package で
-  具象 backend を app へ運ぶ迂回も新規 importer の登録なしには通らない。
+  package も `infra-no-new-adapter-importers` /
+  `infra-no-new-tmuxrun-importers` で閉じている(backend 形の adapter は
+  paneruntime と adapter 自身のみ、tmuxrun はさらに notify の通知送出
+  `notify.go` の 1 辺だけ)ので、中立名の中継 package で具象 backend を
+  app へ運ぶ迂回も新規 importer の登録なしには通らない。
   `internal/ui` はまだ辺が残るのでルール化していない(burn-down リスト参照)。
 - **runtime ごとの差は capability の有無で表す**: console の入場経路
   (`ConsoleHost` があれば session を立てて端末を繋ぐ、無ければ owned session の

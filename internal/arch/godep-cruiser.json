@@ -105,17 +105,34 @@
     {
       "name": "infra-no-new-adapter-importers",
       "severity": "error",
-      "comment": "A neutral-named infra package that imports a concrete adapter and re-exports it as backend.Backend would launder the runtime past app-no-runtime-adapters and the vocabulary test (app would import only the neutral name). The packages that may import tmuxrun/tmuxbackend/herdrrun are closed: the adapters themselves, paneruntime (the construction point), and notify (the tmux notification channel sink). A new importer must be added here, which is the review gate.",
+      "comment": "A neutral-named infra package that imports a concrete adapter and re-exports it as backend.Backend would launder the runtime past app-no-runtime-adapters and the vocabulary test (app would import only the neutral name). The packages that may import a backend-shaped adapter (tmuxbackend, herdrrun) are closed: the adapters themselves and paneruntime (the construction point). A new importer must be added here, which is the review gate. The tmuxrun edge has its own rule below because notify legitimately reaches it.",
       "from": {
         "path": ["^internal/infra/"],
         "pathNot": [
           "_test\\.go$",
-          "^internal/infra/(tmuxrun|tmuxbackend|herdrrun|paneruntime|notify)/"
+          "^internal/infra/(tmuxrun|tmuxbackend|herdrrun|paneruntime)/"
         ]
       },
       "to": {
         "dependencyTypes": ["local"],
-        "path": ["^internal/infra/(tmuxrun|tmuxbackend|herdrrun)(/|$)"]
+        "path": ["^internal/infra/(tmuxbackend|herdrrun)(/|$)"]
+      }
+    },
+    {
+      "name": "infra-no-new-tmuxrun-importers",
+      "severity": "error",
+      "comment": "Same laundering guard for the low-level tmuxrun edge. Beyond the adapters and paneruntime, the only reviewed importer is notify's notification sink (notify.go sends display-message to a recorded tmux target); pinning that single file keeps a new backend.Backend-returning helper elsewhere in notify from smuggling a runtime past the app rules.",
+      "from": {
+        "path": ["^internal/infra/"],
+        "pathNot": [
+          "_test\\.go$",
+          "^internal/infra/(tmuxrun|tmuxbackend|herdrrun|paneruntime)/",
+          "^internal/infra/notify/notify\\.go$"
+        ]
+      },
+      "to": {
+        "dependencyTypes": ["local"],
+        "path": ["^internal/infra/tmuxrun(/|$)"]
       }
     },
     {
