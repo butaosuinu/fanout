@@ -389,6 +389,36 @@ describe("表示中の差分との整合", () => {
     );
   });
 
+  /* /api/diff は staged / unstaged / untracked も描く。dirty な worktree では、
+   * 画面で確認した修正のうち commit 済みの分しかマージされない。 */
+  it("未コミットの変更を含む差分を見ている間はツールバーから撃てない", async () => {
+    const calls: MergeCall[] = [];
+    server.use(mergeHandler(calls));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            branchName: "fanout/fix-login",
+            dirtyState: "dirty",
+            prs: [makePr({ headRef: "fanout/fix-login" })],
+          }),
+        ]),
+      ]),
+    );
+
+    const overlay = await openDiff(user);
+    const blocked = await within(overlay).findByRole("button", { name: /未コミットの変更/ });
+    expect(blocked).toHaveAttribute("aria-disabled", "true");
+    await user.click(blocked);
+    expect(calls).toHaveLength(0);
+  });
+
   /* branch 名は照合材料として弱い。別の checkout から PR branch へ push されると、
    * ローカル worktree は遅れたまま名前だけ全部一致し、画面に無い commit が
    * マージされる。patch を取った commit そのものを見る。 */

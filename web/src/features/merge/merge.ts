@@ -202,6 +202,10 @@ export const MERGE_NETWORK_ERROR = msg`マージに失敗しました(接続エ�
  * マージすると、画面に無い変更が入る。 */
 export const MERGE_DIFF_MISMATCH = msg`表示中の差分はこの PR のものではありません。PR のページで確認してください`;
 
+/* 表示中の patch に、マージされない変更が混ざっているときの理由。diff は worktree の
+ * 差分なので未コミットの変更も描くが、GitHub に入るのは commit 済みまで。 */
+export const MERGE_DIFF_UNCOMMITTED = msg`表示中の差分に未コミットの変更が含まれています。commit して push してから実行してください`;
+
 export const MERGE_STALE_DIFF = msg`表示中の差分より PR が進んでいます。再取得してから実行してください`;
 
 export const MERGE_METHOD_LABELS: Record<MergeMethod, MessageDescriptor> = {

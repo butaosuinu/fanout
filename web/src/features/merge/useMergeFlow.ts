@@ -5,7 +5,7 @@ import type { PaneView, PRRef, Snapshot } from "../../transport/types";
 import { useMergePr, type MergeState } from "../../transport/useMergePr";
 import type { MergeMethod } from "../settings/useSettings";
 import { rowKey, rowQuery } from "../sessions/pane";
-import { useMergeTracking, type MergeTracking, type Notice } from "./useMergeRelease";
+import { useMergeTracking, type MergeTracking, type Notice, type Row } from "./useMergeRelease";
 import { usePinnedHead, type DiffSource } from "./usePinnedHead";
 import { mergeBlockReason, mergeTargetPr, mergeWarnings } from "./merge";
 
@@ -32,7 +32,7 @@ export interface MergeAffordance {
   onMerge: (method: MergeMethod) => void;
 }
 
-type Target = { key: string; query: Record<string, string>; pr: PRRef };
+type Target = { key: string; query: Record<string, string>; pr: PRRef; repo: string };
 
 export function useMergeFlow(
   snap: Snapshot | null,
@@ -51,7 +51,7 @@ export function useMergeFlow(
       /* 別の行の送信中なら撃たない。ここで帰属先を進めてしまうと、前の行の
        * 「マージ中…」やエラーがこの行のボタンに付け替わって見える。 */
       if (busy()) return;
-      const row = { key: target.key, prNumber: target.pr.number };
+      const row = { key: target.key, prNumber: target.pr.number, repo: target.repo };
       track.begin(row.key);
       void submit(mergeRequestFor(target, method)).then((res) => {
         if (res.ok) track.apply(row, res);
@@ -75,9 +75,9 @@ export function useMergeFlow(
           pr,
           githubDegraded: snap?.degraded?.github === true,
           tokenless: token === "",
-          pendingHere: heldBack({ key, prNumber: pr.number }, track),
+          pendingHere: heldBack({ key, prNumber: pr.number, repo }, track),
           ...resultsFor(key, track, state),
-          onMerge: run({ key, query, pr }),
+          onMerge: run({ key, query, pr, repo }),
         }),
         diffSource(pane, repo, diff.head),
       );
@@ -90,8 +90,10 @@ export function useMergeFlow(
 
 /* この行のボタンを塞ぐか。反映待ちは行単位、結果不明は PR 単位 — 同じ PR が
  * 複数行に載る場合に、別の行から不明なまま撃ち直せないようにする。 */
-function heldBack(row: { key: string; prNumber: number }, track: MergeTracking): boolean {
-  return track.pending?.key === row.key || track.unknown?.prNumber === row.prNumber;
+function heldBack(row: Row, track: MergeTracking): boolean {
+  if (track.pending?.key === row.key) return true;
+  const held = track.unknown;
+  return held?.prNumber === row.prNumber && held.repo.toLowerCase() === row.repo.toLowerCase();
 }
 
 /* branch-backed 行だけ head branch まで所有権を要求する(サーバの VerifyRowOwns
@@ -130,7 +132,13 @@ function prIdentity(pr: PRRef) {
 
 /* diff ビュアーがこの行で読んでいる worktree。 */
 function diffSource(pane: PaneView, repo: string, commit: string): DiffSource {
-  return { repo, commit, branch: pane.branchName ?? "", base: pane.baseBranch ?? "" };
+  return {
+    repo,
+    commit,
+    branch: pane.branchName ?? "",
+    base: pane.baseBranch ?? "",
+    dirty: pane.dirtyState === "dirty",
+  };
 }
 
 function buildAffordance(input: {

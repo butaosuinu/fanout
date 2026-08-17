@@ -15,7 +15,7 @@ export type Pending = { key: string; prNumber: number; since: number } | null;
 
 /* 結果不明のマージ。行キーではなく PR 番号で持つ — 同じ PR が複数行に載る場合
  * (複数 issue を close する PR)に、別の行から再送できてしまうのを防ぐ。 */
-export type Unknown = { prNumber: number } | null;
+export type Unknown = { prNumber: number; repo: string } | null;
 
 /* 反映されたら pending を解除する。楽観更新はしない — snapshot を書き換えると、
  * サーバ側で失敗したマージまで成功したように見せてしまう。 */
@@ -59,15 +59,19 @@ export function useUnknownRelease(
 ) {
   useEffect(() => {
     if (!snap || !unknown) return;
-    if (settledPR(snap, unknown.prNumber)) setUnknown(null);
+    if (settledPR(snap, unknown)) setUnknown(null);
   }, [snap, unknown, setUnknown]);
 }
 
-function settledPR(snap: Snapshot, number: number): boolean {
+/* repository も見る: `Fixes owner/repo#N` は別 repository の PR を行に載せるし、
+ * PR 番号は repository ごとに重複する。よその merged #7 でこちらの #7 の hold を
+ * 解いてしまうと、結果不明のマージを撃ち直せる(サーバの prSettled と同じ規則)。 */
+function settledPR(snap: Snapshot, held: { prNumber: number; repo: string }): boolean {
+  const repo = held.repo.toLowerCase();
   const refs = (snap.sessions ?? [])
     .flatMap((s) => s.panes ?? [])
     .flatMap((p) => p.prs ?? [])
-    .filter((pr) => pr.number === number);
+    .filter((pr) => pr.number === held.prNumber && pr.baseRepo?.toLowerCase() === repo);
   return refs.some((pr) => pr.state === "MERGED" || pr.state === "CLOSED" || !!pr.mergedAt);
 }
 
@@ -76,6 +80,10 @@ function settledPR(snap: Snapshot, number: number): boolean {
  * まで」だから — 同じ PR が複数行に載る場合、別の行から撃ち直させない。 */
 export type Notice = { key: string; kind: "queued" | "unknown" } | null;
 
+/* 送信した行の識別子。repo は hold の解除条件に要る(番号は repository ごとに
+ * 重複する)。 */
+export type Row = { key: string; prNumber: number; repo: string };
+
 export interface MergeTracking {
   lastKey: string | null;
   pending: Pending;
@@ -83,7 +91,7 @@ export interface MergeTracking {
   notice: Notice;
   /* 送信開始。結果の帰属先をこの行へ移す。 */
   begin: (key: string) => void;
-  apply: (row: { key: string; prNumber: number }, res: MergeOutcome) => void;
+  apply: (row: Row, res: MergeOutcome) => void;
 }
 
 /* 送信結果の追跡をまとめて持つ。unknown も queued も、決着するまでその PR の
@@ -105,8 +113,8 @@ export function useMergeTracking(snap: Snapshot | null): MergeTracking {
     setNotice(null);
   }, []);
 
-  const apply = useCallback((row: { key: string; prNumber: number }, res: MergeOutcome) => {
-    if (res.unknown || res.queued) setUnknown({ prNumber: row.prNumber });
+  const apply = useCallback((row: Row, res: MergeOutcome) => {
+    if (res.unknown || res.queued) setUnknown({ prNumber: row.prNumber, repo: row.repo });
     else setPending({ ...row, since: Date.now() });
     setNotice(noticeFor(row.key, res));
   }, []);

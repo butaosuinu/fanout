@@ -1,6 +1,6 @@
 import type { MessageDescriptor } from "@lingui/core";
 import { useCallback, useEffect, useRef } from "react";
-import { MERGE_DIFF_MISMATCH, MERGE_STALE_DIFF } from "./merge";
+import { MERGE_DIFF_MISMATCH, MERGE_DIFF_UNCOMMITTED, MERGE_STALE_DIFF } from "./merge";
 import type { MergeAffordance } from "./useMergeFlow";
 
 /* diff ビュアーが開いた時点の PR head を固定し、ズレている間はその行のマージを
@@ -53,7 +53,15 @@ export function usePinnedHead(
 
 /* diff ビュアーが読んでいる worktree の repository / branch と、patch を計算した
  * base branch。 */
-export type DiffSource = { repo: string; branch: string; base: string; commit: string };
+export type DiffSource = {
+  repo: string;
+  branch: string;
+  base: string;
+  commit: string;
+  /* worktree に未コミットの変更がある。patch はそれも描くが、マージされるのは
+   * commit 済みまでなので、画面と実際にマージされるものが食い違う。 */
+  dirty: boolean;
+};
 
 /* diff を開いた時点の対象 PR。 */
 type Pinned = { key: string; prNumber: number; headSha: string };
@@ -72,6 +80,9 @@ function mismatch(
    * 別の base へ retarget されると、head が 1 commit も動かないまま「画面に出て
    * いない差分」がマージ対象になる。head だけの pin はこれを通してしまう。 */
   if (!sameSource(merge, shows)) return MERGE_DIFF_MISMATCH;
+  /* 過剰: /api/diff は staged / unstaged / untracked も描く。dirty な worktree では、
+   * 画面で確認した修正のうち commit 済みの分だけがマージされる。 */
+  if (shows.dirty) return MERGE_DIFF_UNCOMMITTED;
   /* すり替え: 行の対象 PR そのものが入れ替わった(新しい PR が open になった等)。 */
   if (pin.prNumber !== merge.prNumber) return MERGE_DIFF_MISMATCH;
   /* 追い越し: 読んでいる間に push された。 */

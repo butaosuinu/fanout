@@ -643,6 +643,48 @@ func TestMergeReleasesTheHoldOnceGitHubSettles(t *testing.T) {
 		http.StatusConflict, "already_merged")
 }
 
+// TestMergeHoldIgnoresASameNumberedPRElsewhere pins the claim to a repository.
+// `Fixes owner/repo#N` puts other repositories' pull requests on a row, and
+// numbers repeat across repositories — so a merged #7 somewhere else must not
+// release the hold on this repository's #7 and let the merge be sent again.
+func TestMergeHoldIgnoresASameNumberedPRElsewhere(t *testing.T) {
+	fake := &fakeMerger{res: prmerge.Result{Unknown: true}}
+	p := newPollerBase(t.TempDir(), newHub())
+	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
+	s := &Server{
+		poller: p, hostPort: testHostPort, token: testToken,
+		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
+		mergeHeld: map[string]time.Time{},
+	}
+	h, err := s.handler()
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", code)
+	}
+
+	// The addressed row keeps its own open PR; a neighboring row carries a
+	// merged pull request that only shares the number.
+	elsewhere := openPR()
+	elsewhere.State, elsewhere.BaseRepo = "MERGED", "other/repo"
+	withNeighbour := mergeSnapshot()
+	session := &withNeighbour.Sessions[0]
+	neighbor := session.Panes[0]
+	neighbor.IssueNum, neighbor.Slug, neighbor.BranchName = 579, "other", "fanout/other"
+	neighbor.PRs = []ghissue.PRRef{elsewhere}
+	session.Panes = append(session.Panes, neighbor)
+	p.mu.Lock()
+	p.latest = withNeighbour
+	p.mu.Unlock()
+
+	assertAPIError(t, requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
+		http.StatusConflict, "merge_unconfirmed")
+	if calls, _ := fake.snapshot(); calls != 1 {
+		t.Fatalf("merge calls = %d, want 1 (the hold must still block)", calls)
+	}
+}
+
 // TestMergeReportsAQueuedMergeAsNotMerged pins the merge-queue answer reaching
 // the wire: `gh pr merge` exits 0 after enqueueing, and calling that "merged"
 // would both lie to the user and hand the head ref to a delete.

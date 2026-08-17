@@ -210,12 +210,16 @@ func (p *poller) ghLoop(ctx context.Context) {
 // prSettled reports whether the latest snapshot shows this pull request merged
 // or closed. It is how an unconfirmed merge stops blocking: once GitHub's answer
 // arrives through the normal poll, the claim on that PR can go.
-func (p *poller) prSettled(number int) bool {
+//
+// repo is required: `Fixes owner/repo#N` puts pull requests from other
+// repositories on a row, and numbers repeat across repositories. A merged #7
+// somewhere else must not release the hold on this repository's #7.
+func (p *poller) prSettled(repo string, number int) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for _, session := range p.latest.Sessions {
 		for i := range session.Panes {
-			if settledPRRef(session.Panes[i].PRs, number) {
+			if settledPRRef(session.Panes[i].PRs, repo, number) {
 				return true
 			}
 		}
@@ -223,9 +227,9 @@ func (p *poller) prSettled(number int) bool {
 	return false
 }
 
-func settledPRRef(prs []ghissue.PRRef, number int) bool {
+func settledPRRef(prs []ghissue.PRRef, repo string, number int) bool {
 	for _, pr := range prs {
-		if pr.Number != number {
+		if pr.Number != number || !strings.EqualFold(pr.BaseRepo, repo) {
 			continue
 		}
 		if strings.EqualFold(pr.State, "MERGED") || strings.EqualFold(pr.State, "CLOSED") ||

@@ -361,6 +361,10 @@ msgid "表示中の差分より PR が進んでいます。再取得してから
 msgstr "表示中の差分より PR が進んでいます。再取得してから実行してください"
 
 #: src/features/merge/merge.ts
+msgid "表示中の差分に未コミットの変更が含まれています。commit して push してから実行してください"
+msgstr "表示中の差分に未コミットの変更が含まれています。commit して push してから実行してください"
+
+#: src/features/merge/merge.ts
 msgid "GitHub の情報を取得できていません"
 msgstr "GitHub の情報を取得できていません"
 

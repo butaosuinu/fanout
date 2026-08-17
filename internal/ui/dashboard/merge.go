@@ -236,7 +236,7 @@ func (s *Server) holdUnconfirmed(rr repoRef, number int) {
 // unconfirmed reports whether an earlier unreadable merge still blocks this pull
 // request, clearing the hold once a poll shows the PR settled or the TTL passes.
 // Callers hold mergeMu.
-func (s *Server) unconfirmed(key string, number int) bool {
+func (s *Server) unconfirmed(key string, rr repoRef, number int) bool {
 	if !s.held(key) {
 		return false
 	}
@@ -245,7 +245,7 @@ func (s *Server) unconfirmed(key string, number int) bool {
 	// poll shows the pull request merged or closed. The way out of a state that
 	// never resolves is to delete the entry from .fanout/merge-claims.json, which
 	// is the documented manual path.
-	if !s.poller.prSettled(number) {
+	if !s.poller.prSettled(rr.owner+"/"+rr.repo, number) {
 		return true
 	}
 	delete(s.mergeHeld, key)
@@ -539,7 +539,7 @@ func (s *Server) claimMerge(w http.ResponseWriter, rr repoRef, number int) (func
 			"a merge for this pull request is already running", "")
 		return nil, false
 	}
-	if s.unconfirmed(key, number) {
+	if s.unconfirmed(key, rr, number) {
 		apiError(w, http.StatusConflict, "merge_unconfirmed",
 			"an earlier merge for this pull request has not been confirmed yet", "")
 		return nil, false

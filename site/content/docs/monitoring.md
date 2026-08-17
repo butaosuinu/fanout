@@ -136,7 +136,7 @@ A Session whose row carries a pull request gets a **Merge** button, in the detai
 
 The caret opens the strategy menu — squash, merge commit, or rebase. Picking one merges with it and remembers it as the default for next time. The choice is shared between the drawer and the diff viewer.
 
-Once the PR is merged, a **Delete branch** button appears next to it in the detail drawer, the way GitHub's own does. It removes the branch on GitHub only — your worktree and its local branch stay put, and `--cleanup` still owns those. It is skipped for a fork's branch, and for a branch that moved after the merge, so it never takes unmerged commits with it.
+Once the PR is merged, a **Delete branch** button appears next to it in the detail drawer, the way GitHub's own does. It removes the branch on GitHub only — your worktree and its local branch stay put, and `--cleanup` still owns those. It is skipped for a fork's branch, and for a branch that moved after the merge. That check is not atomic — GitHub has no conditional ref delete — so it catches a push that already landed, not one that lands between the check and the delete.
 
 The button greys out, with the reason, when the merge cannot work: no pull request on the row, already merged, closed, still a draft, or conflicting with its base branch. A failing check or an unfinished review does not disable it — whether those block a merge is your branch protection's call, so the button stays live and shows a warning in the menu instead. If GitHub declines, the error says so and the PR is untouched.
 
