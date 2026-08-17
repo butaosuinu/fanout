@@ -257,10 +257,13 @@ touching only class-A packages can rely on AI review.
   `cmd-no-runtime-adapters` forbid outside test files — and construct through
   `infra/paneruntime`. `TestRuntimeVocabulary` extends that to naming: those
   two trees must not spell `tmux` or `herdr` in an identifier, import path,
-  file name, or struct tag. String literals and comments are exempt
-  wholesale; reviewed exceptions live in
-  `internal/arch/runtime-vocabulary-allow.json` with a reason, and an entry
-  that matches nothing fails as stale. `internal/ui` still imports `tmuxrun`
+  file name, or struct tag. Comments and prose string literals are exempt,
+  but a literal whose whole value IS a runtime name (`"tmux"` / `"herdr"`,
+  the shape an equality branch needs, even via a neutral constant) is
+  checked; reviewed exceptions live in
+  `internal/arch/runtime-vocabulary-allow.json` with a reason, pinned to
+  (file, occurrence count), and an entry that matches nothing or overcounts
+  fails as stale. `internal/ui` still imports `tmuxrun`
   directly and is not covered yet.
 - Runtime discovery (`internal/infra/runtime`) resolves the git repo root with
   `git rev-parse --show-toplevel`, requires the caller to be inside tmux for

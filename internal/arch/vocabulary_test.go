@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -42,19 +43,19 @@ var runtimeVocabularyTrees = []struct {
 }
 
 // vocabularyAllowlist is the on-disk exemption canon. Files exempt one file's
-// NAME finding; Identifiers, Tags, and Comparisons exempt (name, file, count)
-// pins for identifier, struct tag, and comparison-literal findings.
+// NAME finding; Identifiers, Tags, and Literals exempt (name, file, count)
+// pins for identifier, struct tag, and runtime-name-literal findings.
 type vocabularyAllowlist struct {
 	Files       []vocabularyAllowEntry `json:"files"`
 	Identifiers []vocabularyAllowEntry `json:"identifiers"`
 	Tags        []vocabularyAllowEntry `json:"tags"`
-	Comparisons []vocabularyAllowEntry `json:"comparisons"`
+	Literals    []vocabularyAllowEntry `json:"literals"`
 }
 
 // vocabularyAllowEntry is one exemption. Name is a repo-relative path for a
 // file entry, an exact identifier for an identifier entry, and the exact tag
 // literal (backquotes included) for a tag entry. Files, mandatory on an
-// identifier or tag entry, pins the exemption to (file, occurrence count)
+// identifier, tag, or literal entry, pins the exemption to (file, occurrence count)
 // pairs: a new file spelling the name AND a new occurrence in an already
 // listed file both fail until the entry is updated with the reason
 // re-reviewed. Count pinning is what keeps an exempted data-read constant
@@ -90,12 +91,14 @@ func (f vocabularyFinding) String() string {
 // core/backend's capabilities and MutationModel, so a runtime name in an
 // identifier means a lane is branching on the runtime again.
 //
-// String literals and comments are exempt wholesale, and deliberately so.
+// Comments and prose string literals are exempt, and deliberately so.
 // Operator-facing strings (command names, env vars, error text) and comments
 // that describe how a runtime behaves are legitimate and outnumber the code
 // findings several times over; allowlisting them one by one would be hundreds
-// of entries of pure friction for no enforcement value. Struct tags are
-// checked despite being literals, because a tag names a wire field.
+// of entries of pure friction for no enforcement value. Two literal forms ARE
+// checked: struct tags (a tag names a wire field) and literals whose whole
+// value is a runtime name (equality is what a name-based branch needs, with
+// or without a neutral constant in between).
 //
 // The complement rules app-no-runtime-adapters / cmd-no-runtime-adapters in
 // godep-cruiser.json cover the import edge; this test covers the naming.
@@ -239,26 +242,17 @@ func inspectFileVocabulary(fset *token.FileSet, path, rel string) ([]vocabularyF
 					Kind: "struct tag", Text: node.Tag.Value,
 				})
 			}
-		case *ast.BinaryExpr:
-			// The blanket string exemption covers operator-facing text, not
-			// lane selection: a runtime name compared with == or != is a
-			// name-based branch spelled as a literal.
-			if node.Op == token.EQL || node.Op == token.NEQ {
-				for _, side := range []ast.Expr{node.X, node.Y} {
-					findings = append(findings, comparedRuntimeLiteral(fset, rel, side)...)
-				}
-			}
-		case *ast.SwitchStmt:
-			// A switch over a runtime-name string is the same branch in its
-			// other spelling.
-			for _, stmt := range node.Body.List {
-				clause, ok := stmt.(*ast.CaseClause)
-				if !ok {
-					continue
-				}
-				for _, expr := range clause.List {
-					findings = append(findings, comparedRuntimeLiteral(fset, rel, expr)...)
-				}
+		case *ast.BasicLit:
+			// The blanket string exemption covers operator-facing prose, not
+			// lane selection: a literal whose whole value IS a runtime name
+			// exists to be compared, directly or laundered through a neutral
+			// constant (const kind = "tmux"), so it is checked wherever it
+			// appears. Prose merely containing the word stays exempt.
+			if node.Kind == token.STRING && exactRuntimeName(node.Value) {
+				findings = append(findings, vocabularyFinding{
+					File: rel, Line: fset.Position(node.Pos()).Line,
+					Kind: "runtime name literal", Text: node.Value,
+				})
 			}
 		}
 		return true
@@ -266,17 +260,15 @@ func inspectFileVocabulary(fset *token.FileSet, path, rel string) ([]vocabularyF
 	return findings, nil
 }
 
-// comparedRuntimeLiteral reports expr when it is a string literal spelling a
-// runtime name in a comparison position (== / != operand or switch case).
-func comparedRuntimeLiteral(fset *token.FileSet, rel string, expr ast.Expr) []vocabularyFinding {
-	lit, ok := expr.(*ast.BasicLit)
-	if !ok || lit.Kind != token.STRING || !matchesRuntimeName(lit.Value) {
-		return nil
+// exactRuntimeName reports whether the quoted literal's whole value is a
+// runtime name. Equality is what a name-based branch needs, so exact values
+// are code; anything longer is operator-facing text.
+func exactRuntimeName(quoted string) bool {
+	value, err := strconv.Unquote(quoted)
+	if err != nil {
+		return false
 	}
-	return []vocabularyFinding{{
-		File: rel, Line: fset.Position(lit.Pos()).Line,
-		Kind: "comparison literal", Text: lit.Value,
-	}}
+	return slices.Contains(runtimeVocabularyNames, strings.ToLower(value))
 }
 
 func matchesRuntimeName(s string) bool {
@@ -331,7 +323,7 @@ func loadVocabularyAllowlist(path string) (*allowlistIndex, error) {
 	}{
 		{kind: "identifier", entries: parsed.Identifiers},
 		{kind: "struct tag", entries: parsed.Tags},
-		{kind: "comparison literal", entries: parsed.Comparisons},
+		{kind: "runtime name literal", entries: parsed.Literals},
 	}
 	for _, category := range categories {
 		for _, entry := range category.entries {

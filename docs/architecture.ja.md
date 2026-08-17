@@ -197,10 +197,11 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   `core/backend` の capability と `MutationModel` で表現し、具象 adapter の
   構築は `infra/paneruntime` が持つ。import の辺自体は godep-cruiser の
   `app-no-runtime-adapters` / `cmd-no-runtime-adapters` が塞ぐ。
-  文字列リテラルとコメントは対象外 — 運用者に見せる文字列や runtime の
-  挙動を説明するコメントは正当で、数が桁違いに多い。ただし比較式(`==` /
-  `!=`)と `switch` の case に現れる runtime 名リテラルは名前分岐の別表記
-  なので検査対象(`fanout herdr` のコマンド語 dispatch だけを例外登録)。例外は
+  文字列リテラルとコメントは原則対象外 — 運用者に見せる文字列や runtime の
+  挙動を説明するコメントは正当で、数が桁違いに多い。ただし**値全体が
+  runtime 名そのもの**のリテラル(`"tmux"` / `"herdr"`)は等値分岐の材料
+  (中立な定数を挟む間接化を含む)なので出現位置を問わず検査対象
+  (`fanout herdr` のコマンド語 dispatch だけを例外登録)。例外は
   `internal/arch/runtime-vocabulary-allow.json` に理由付きで登録する
   (`fanout herdr` サブコマンド、data として読む `backend.Tmux`/`Herdr`、
   `paneruntime.NewTmux`、PATH 上の実行ファイル名、凍結済みの dashboard
