@@ -162,7 +162,7 @@ func TestPollerBuildProjectsMatchingHerdrRuntimeObservation(t *testing.T) {
 	if called == 0 {
 		t.Fatal("runtime ListLive collector was not called")
 	}
-	if snap.Degraded.Tmux {
+	if snap.Degraded.Legacy {
 		t.Fatalf("runtime collector unexpectedly degraded: %+v", snap.Degraded)
 	}
 	if len(snap.Sessions) != 1 || len(snap.Sessions[0].Panes) != 1 {
@@ -175,8 +175,8 @@ func TestPollerBuildProjectsMatchingHerdrRuntimeObservation(t *testing.T) {
 	if got.RuntimeState != "live" || got.RuntimeTitle != "herdr child" {
 		t.Fatalf("runtime projection = %q/%q, want live/herdr child", got.RuntimeState, got.RuntimeTitle)
 	}
-	if got.TmuxState != got.RuntimeState || got.TmuxTitle != got.RuntimeTitle {
-		t.Fatalf("legacy tmux aliases = %q/%q, want runtime %q/%q", got.TmuxState, got.TmuxTitle, got.RuntimeState, got.RuntimeTitle)
+	if got.LegacyState != got.RuntimeState || got.LegacyTitle != got.RuntimeTitle {
+		t.Fatalf("legacy tmux aliases = %q/%q, want runtime %q/%q", got.LegacyState, got.LegacyTitle, got.RuntimeState, got.RuntimeTitle)
 	}
 }
 

@@ -254,7 +254,7 @@ func ownedLifecycleLayout(
 	if err != nil {
 		return "", pathIdentity{}, ownedLayout{}, err
 	}
-	session := naming.HerdrSessionName(commonIdentity.device, commonIdentity.inode)
+	session := naming.ManagedSessionName(commonIdentity.device, commonIdentity.inode)
 	layout, err := prepareOwnedLayout(opts.RuntimeBase, session)
 	if err != nil {
 		return "", pathIdentity{}, ownedLayout{}, err

@@ -96,14 +96,14 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 	failedRuntimeRoutes := map[backend.ObservationRoute]bool{}
 	allRuntimeRoutesDegraded := false
 	if c.ListLive == nil {
-		snap.Degraded.Tmux = true
+		snap.Degraded.Legacy = true
 		snap.Degraded.Runtime = true
 		allRuntimeRoutesDegraded = true
 	} else {
 		set, err := c.ListLive()
 		live = indexLivePanes(set)
 		if err != nil {
-			snap.Degraded.Tmux = true
+			snap.Degraded.Legacy = true
 			snap.Degraded.Runtime = true
 			failedRuntimeRoutes, allRuntimeRoutesDegraded = backend.ClassifyObservationError(err)
 			snap.Degraded.Reason = appendReason(snap.Degraded.Reason, "runtime: "+err.Error())
@@ -269,7 +269,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 				DirtyState:         worktreeStat.DirtyState,
 				WorktreeErr:        worktreeErr,
 				RuntimeState:       runtimeState,
-				TmuxState:          compatibilityTmuxState(runtimeState),
+				LegacyState:        legacyRuntimeState(runtimeState),
 				PlanMode:           p.PlanMode,
 				Prompt:             p.Prompt,
 				CIStatus:           strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
@@ -280,14 +280,8 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			}
 			if alive {
 				pv.RuntimeTitle = current.Title
-				pv.TmuxTitle = current.Title
-				if backend.NormalizeName(p.Backend) != backend.Herdr {
-					pv.AgentState = normalizeAgentState(string(current.AgentState))
-				} else if current.AgentPresent {
-					pv.AgentState = normalizeAgentState(string(backend.MapHerdrAgentState(
-						true, current.NativeAgentState, p.ReportedState,
-					)))
-				}
+				pv.LegacyTitle = current.Title
+				pv.AgentState = liveAgentState(p, current)
 			} else if runtimeDegraded && backend.NormalizeName(p.Backend) == backend.Tmux {
 				// tmux 不通時は動的判定ができないので、起動時に state.json へ
 				// 記録した値に fallback する(記録+動的の両方式を持つ利点)。
@@ -324,7 +318,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 					closeUnconfirmed = strings.EqualFold(issueState, "CLOSED")
 				}
 				wi := graph.Info[child.Number]
-				runtimeState := SyntheticTmuxState(issueState, wi.Blocked)
+				runtimeState := SyntheticRuntimeState(issueState, wi.Blocked)
 				pv := PaneView{
 					IssueNum:         child.Number,
 					DisplayName:      issueDisplayName(child),
@@ -334,7 +328,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 					DiffSummary:      "-",
 					DirtyState:       "-",
 					RuntimeState:     runtimeState,
-					TmuxState:        runtimeState,
+					LegacyState:      runtimeState,
 					CIStatus:         strings.ToLower(strings.TrimSpace(ghissue.SummarizeCI(prs))),
 					Wave:             wi.Wave,
 					WaveLabel:        wi.WaveLabel,
@@ -504,11 +498,11 @@ func issueDisplayName(child ghissue.Issue) string {
 	return "#" + strconv.Itoa(child.Number)
 }
 
-// SyntheticTmuxState は未開始子 issue の tmux 列値。internal/ui/tui の synthetic
-// 行もこれを呼ぶ単一実装(`state:queued` 等のフィルタが TUI と
+// SyntheticRuntimeState は未開始子 issue の runtime 列値。internal/ui/tui の
+// synthetic 行もこれを呼ぶ単一実装(`state:queued` 等のフィルタが TUI と
 // web で同じ意味を持つ): closed → deferred → queued の優先順で判定し、issue
 // 状態が取れないものは unknown。
-func SyntheticTmuxState(issueState string, blocked bool) string {
+func SyntheticRuntimeState(issueState string, blocked bool) string {
 	switch {
 	case strings.EqualFold(issueState, "CLOSED"):
 		return "closed"
@@ -537,12 +531,17 @@ func indexLivePanes(panes []backend.LivePane) map[livePaneKey]backend.LivePane {
 	return live
 }
 
+// livePaneKeyForObservation and livePaneKeyForState must derive the same key
+// for the same pane from opposite sides, so both qualify the pane identifier by
+// its route on exactly the runtimes whose identifiers are route-scoped. A
+// runtime with one process-wide route records no route on the persisted row,
+// and qualifying only the observation would leave the two sides unable to meet.
 func livePaneKeyForObservation(pane backend.LivePane) livePaneKey {
 	key := livePaneKey{
 		backend: backend.NormalizeName(pane.Ref.Backend),
 		pane:    pane.Ref.Pane,
 	}
-	if key.backend == backend.Herdr {
+	if backend.RouteScopedPaneIDs(key.backend) {
 		key.workspace = pane.Ref.Workspace
 		key.session = strings.TrimSpace(pane.SessionID)
 		key.socket = strings.TrimSpace(pane.SocketPath)
@@ -555,7 +554,7 @@ func livePaneKeyForState(pane state.Pane) livePaneKey {
 		backend: backend.NormalizeName(pane.Backend),
 		pane:    pane.PaneID,
 	}
-	if key.backend == backend.Herdr {
+	if backend.RouteScopedPaneIDs(key.backend) {
 		key.workspace = pane.WorkspaceID
 		key.session = strings.TrimSpace(pane.SessionID)
 		key.socket = strings.TrimSpace(pane.SocketPath)
@@ -563,10 +562,12 @@ func livePaneKeyForState(pane state.Pane) livePaneKey {
 	return key
 }
 
+// observationRouteForState names the route a recorded row was observed through,
+// so a failure scoped to one route degrades only the rows that route serves.
 func observationRouteForState(pane state.Pane) backend.ObservationRoute {
 	name := backend.NormalizeName(pane.Backend)
 	route := backend.ObservationRoute{Backend: name}
-	if name == backend.Herdr {
+	if backend.RouteScopedPaneIDs(name) {
 		route.SessionID = strings.TrimSpace(pane.SessionID)
 		route.SocketPath = strings.TrimSpace(pane.SocketPath)
 	}
@@ -574,41 +575,69 @@ func observationRouteForState(pane state.Pane) backend.ObservationRoute {
 }
 
 // livePaneForState reports whether a recorded pane is live and returns the
-// matching backend-neutral observation. Runtime and pane identity must match.
-// Tmux agent panes accept their recorded worktree or a descendant, while herdr
-// requires exact worktree provenance (or exact saved cwd for generic
-// workspaces). Tmux shell panes use ShellKey because their repo-root path is too
-// broad to protect against pane-id reuse.
+// matching backend-neutral observation. Pane identity must match, and the
+// evidence compared beyond it is whatever the row's runtime publishes: a
+// recorded-binding runtime is held to its whole launch record, while a
+// foreground-path runtime is matched on the path its pane currently reports.
 func livePaneForState(live map[livePaneKey]backend.LivePane, pane state.Pane) (backend.LivePane, bool) {
 	if pane.PaneID == "" {
 		return backend.LivePane{}, false
 	}
-	name := backend.NormalizeName(pane.Backend)
 	cur, ok := live[livePaneKeyForState(pane)]
 	if !ok {
 		return backend.LivePane{}, false
 	}
-	switch name {
-	case backend.Herdr:
+	switch backend.LiveIdentityModelOf(pane.Backend) {
+	case backend.LiveIdentityRecordedBinding:
 		return cur, pane.RuntimeBinding().MatchesLive(cur)
-	case backend.Tmux:
-		if pane.IsShell() || pane.ShellKey != "" {
-			return cur, pane.ShellKey != "" && cur.ShellKey == pane.ShellKey
-		}
-		worktree := pane.WorktreePath
-		if strings.TrimSpace(worktree) == "" {
-			return cur, true
-		}
-		wt := filepath.Clean(worktree)
-		if optionPath := strings.TrimSpace(cur.WorktreePath); optionPath != "" {
-			opt := filepath.Clean(optionPath)
-			return cur, opt == wt || strings.HasPrefix(opt, wt+string(filepath.Separator))
-		}
-		cp := filepath.Clean(cur.CurrentPath)
-		return cur, cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+	case backend.LiveIdentityForegroundPath:
+		return cur, foregroundPathMatches(pane, cur)
 	default:
 		return backend.LivePane{}, false
 	}
+}
+
+// foregroundPathMatches compares a row against an observation that reports only
+// what its pane is doing now. A shell pane is matched on the key fanout stamped
+// on it, because its repo-root path is too broad to protect against pane-id
+// reuse. An agent pane accepts its recorded worktree or a directory beneath it:
+// the agent may descend into a subdirectory while it works.
+func foregroundPathMatches(pane state.Pane, cur backend.LivePane) bool {
+	if pane.IsShell() || pane.ShellKey != "" {
+		return pane.ShellKey != "" && cur.ShellKey == pane.ShellKey
+	}
+	worktree := pane.WorktreePath
+	if strings.TrimSpace(worktree) == "" {
+		return true
+	}
+	wt := filepath.Clean(worktree)
+	if optionPath := strings.TrimSpace(cur.WorktreePath); optionPath != "" {
+		opt := filepath.Clean(optionPath)
+		return opt == wt || strings.HasPrefix(opt, wt+string(filepath.Separator))
+	}
+	cp := filepath.Clean(cur.CurrentPath)
+	return cp == wt || strings.HasPrefix(cp, wt+string(filepath.Separator))
+}
+
+// liveAgentState projects one live observation into the display vocabulary.
+//
+// A runtime whose observations carry the whole launch record also carries a
+// per-pane agent record, so the absence of that record is positive evidence
+// that no agent is running there and no earlier projected value may survive it.
+// Where a record is present, the row's own recorded self-report outranks the
+// runtime-native status. A runtime identified only by what its pane is doing
+// now publishes no such record, and its already-projected telemetry is the only
+// reading available.
+func liveAgentState(pane state.Pane, live backend.LivePane) string {
+	if backend.LiveIdentityModelOf(pane.Backend) != backend.LiveIdentityRecordedBinding {
+		return normalizeAgentState(string(live.AgentState))
+	}
+	if !live.AgentPresent {
+		return ""
+	}
+	return normalizeAgentState(string(backend.MapReportedAgentState(
+		true, live.NativeAgentState, pane.ReportedState,
+	)))
 }
 
 // runtimeRowUnsupported identifies persisted rows that predate the authoritative
@@ -670,11 +699,11 @@ func runtimeStateOf(paneID string, runtimeDegraded, runtimeUnsupported, alive bo
 	}
 }
 
-// compatibilityTmuxState keeps the pre-runtime-alias value set stable for
+// legacyRuntimeState keeps the pre-runtime-alias value set stable for
 // existing snapshot consumers. A legacy consumer cannot distinguish an
 // unsupported backend row from an unobservable one, so project it as unknown;
 // RuntimeState carries the precise backend-neutral value.
-func compatibilityTmuxState(runtimeState string) string {
+func legacyRuntimeState(runtimeState string) string {
 	if runtimeState == "unsupported" {
 		return "unknown"
 	}
@@ -782,7 +811,7 @@ func accumulate(r *Rollup, pv PaneView) {
 	if pv.Blocked {
 		r.Blocked++
 	}
-	if pv.NotStarted && pv.TmuxState != "closed" {
+	if pv.NotStarted && pv.LegacyState != "closed" {
 		// NotStarted は「まだ起動しうる作業」のカウンタ: merged 済みで閉じた
 		// synthetic 子は Total/Merged には入るがここには数えない。
 		r.NotStarted++
@@ -814,8 +843,8 @@ func appendReason(existing, add string) string {
 //
 //nolint:funlen // This is one pure projection of the complete pane wire model into derived display fields.
 func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
-	runtimeState := firstNonEmpty(pv.RuntimeState, pv.TmuxState)
-	runtimeTitle := firstNonEmpty(pv.RuntimeTitle, pv.TmuxTitle)
+	runtimeState := firstNonEmpty(pv.RuntimeState, pv.LegacyState)
+	runtimeTitle := firstNonEmpty(pv.RuntimeTitle, pv.LegacyTitle)
 	name := paneName(pv)
 	prSummary, prNum, prState := summarizePR(pv.PRs)
 	ci := paneCI(pv)
@@ -845,8 +874,8 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 		backendName,
 		runtimeState,
 		runtimeTitle,
-		pv.TmuxState,
-		pv.TmuxTitle,
+		pv.LegacyState,
+		pv.LegacyTitle,
 		pv.AgentState,
 		pv.IssueState,
 		prSummary,
@@ -898,7 +927,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 			Diff:     diffSortKey(diffTotal, diffParsed),
 			Dirty:    dirtyRank(pv.DirtyState),
 			CI:       ciRank(ci),
-			Tmux:     tmuxRank(pv),
+			Runtime:  runtimeRank(pv),
 			State:    strings.ToLower(pv.IssueState),
 			PR:       prRank(prState),
 		},
@@ -1067,9 +1096,9 @@ func RelativePath(root, path string) string {
 	return rel
 }
 
-func firstMatchingState(tmuxState, issueState string) string {
-	if strings.TrimSpace(tmuxState) != "" && tmuxState != "-" {
-		return tmuxState
+func firstMatchingState(runtimeState, issueState string) string {
+	if strings.TrimSpace(runtimeState) != "" && runtimeState != "-" {
+		return runtimeState
 	}
 	return issueState
 }
@@ -1121,7 +1150,7 @@ func ciRank(ci string) int {
 	}
 }
 
-func tmuxRank(pv PaneView) int {
+func runtimeRank(pv PaneView) int {
 	switch {
 	case pv.Alive:
 		return 0
@@ -1145,8 +1174,8 @@ func prRank(state string) int {
 	}
 }
 
-func canFocusPane(paneID, tmuxState string) bool {
-	return strings.TrimSpace(paneID) != "" && tmuxState != "stale" && tmuxState != "-"
+func canFocusPane(paneID, runtimeState string) bool {
+	return strings.TrimSpace(paneID) != "" && runtimeState != "stale" && runtimeState != "-"
 }
 
 // peekableRuntime reports whether the recorded runtime exposes the read-only

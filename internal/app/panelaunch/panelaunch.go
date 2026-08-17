@@ -948,7 +948,7 @@ func paneHookContext(req Request, projectRoot, worktreePath, paneID string) hook
 		Slug:         req.Slug,
 		Prompt:       req.Prompt,
 		Agent:        req.Agent,
-		TmuxPaneID:   paneID,
+		PaneID:       paneID,
 		WorktreePath: worktreePath,
 		Branch:       req.BranchName,
 		BaseBranch:   req.Worktree.BaseBranch,

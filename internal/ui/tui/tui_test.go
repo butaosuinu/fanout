@@ -2855,7 +2855,7 @@ func TestPaneViewsFromSnapshotCarriesShellKey(t *testing.T) {
 				PaneID:       "%9",
 				ShellKey:     "shell-root",
 				WorktreePath: "/repo",
-				TmuxState:    "live",
+				LegacyState:  "live",
 				Derived:      sessionview.PaneDerived{Name: "root terminal"},
 			}},
 		}},

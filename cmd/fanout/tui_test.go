@@ -188,12 +188,12 @@ func TestCmdTUIHerdrContextSkipsTmuxComposition(t *testing.T) {
 		runTUI = originalRunTUI
 		runtimeListLiveForProject = originalListLive
 	}()
-	includeTmux := true
+	includeHostRoute := true
 	runtimeListLiveForProject = func(root string, include bool) func() ([]backend.LivePane, error) {
 		if paneruntime.CanonicalRoot(root) != paneruntime.CanonicalRoot(repo) {
 			t.Fatalf("runtime collector root = %q, want %q", root, repo)
 		}
-		includeTmux = include
+		includeHostRoute = include
 		return func() ([]backend.LivePane, error) { return nil, nil }
 	}
 	var opts fanouttui.Options
@@ -217,8 +217,8 @@ func TestCmdTUIHerdrContextSkipsTmuxComposition(t *testing.T) {
 	if opts.Session != "dev-session" {
 		t.Fatalf("Session = %q, want herdr session label", opts.Session)
 	}
-	if includeTmux {
-		t.Fatal("runtime collector includeTmux = true, want false for herdr host")
+	if includeHostRoute {
+		t.Fatal("runtime collector includeHostRoute = true, want false for herdr host")
 	}
 	if opts.Watcher != nil || opts.RestorePanes != nil || opts.Relayout != nil || opts.ActivePane != nil ||
 		opts.FocusPane != nil || opts.CapturePaneOutput != nil || opts.ClosePane != nil || opts.LifecycleCloseOwned != nil ||
@@ -456,12 +456,12 @@ func TestCmdTUIWiresRuntimeBackendPorts(t *testing.T) {
 	original := runTUI
 	originalListLive := runtimeListLiveForProject
 	compositeCalls := 0
-	var compositeIncludeTmux bool
-	runtimeListLiveForProject = func(root string, includeTmux bool) func() ([]backend.LivePane, error) {
+	var compositeIncludeHostRoute bool
+	runtimeListLiveForProject = func(root string, includeHostRoute bool) func() ([]backend.LivePane, error) {
 		if paneruntime.CanonicalRoot(root) != paneruntime.CanonicalRoot(repo) {
 			t.Fatalf("runtime collector root = %q, want %q", root, repo)
 		}
-		compositeIncludeTmux = includeTmux
+		compositeIncludeHostRoute = includeHostRoute
 		return func() ([]backend.LivePane, error) {
 			compositeCalls++
 			return []backend.LivePane{{Ref: backend.PaneRef{Backend: backend.Herdr, Pane: "w1:p1"}}}, nil
@@ -487,8 +487,8 @@ func TestCmdTUIWiresRuntimeBackendPorts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !compositeIncludeTmux || len(observed) != 1 || observed[0].Ref.Backend != backend.Herdr {
-		t.Fatalf("composite ListLive = %+v (includeTmux=%v), want herdr observation with tmux host", observed, compositeIncludeTmux)
+	if !compositeIncludeHostRoute || len(observed) != 1 || observed[0].Ref.Backend != backend.Herdr {
+		t.Fatalf("composite ListLive = %+v (includeHostRoute=%v), want herdr observation with tmux host", observed, compositeIncludeHostRoute)
 	}
 	_ = opts.ShellPaneAlive("%2", "shell-key")
 	_ = opts.PaneAlive("%2")

@@ -6,36 +6,36 @@ import (
 	"testing"
 )
 
-func TestHerdrSessionNameUsesPhysicalGitCommonDirectoryIdentity(t *testing.T) {
-	got := HerdrSessionName(42, 81)
-	if got != HerdrSessionName(42, 81) {
-		t.Fatal("HerdrSessionName is not deterministic")
+func TestManagedSessionNameUsesPhysicalGitCommonDirectoryIdentity(t *testing.T) {
+	got := ManagedSessionName(42, 81)
+	if got != ManagedSessionName(42, 81) {
+		t.Fatal("ManagedSessionName is not deterministic")
 	}
-	if got == HerdrSessionName(42, 82) || got == HerdrSessionName(43, 81) {
+	if got == ManagedSessionName(42, 82) || got == ManagedSessionName(43, 81) {
 		t.Fatalf("independent clones share session name %q", got)
 	}
-	if len(got) > MaxHerdrSessionNameLength || !regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(got) {
+	if len(got) > MaxManagedSessionNameLength || !regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(got) {
 		t.Fatalf("invalid herdr session name %q", got)
 	}
 }
 
-func TestHerdrSessionNameIgnoresPathAliasesForSameIdentity(t *testing.T) {
-	first := HerdrSessionName(42, 81)
-	second := HerdrSessionName(42, 81)
-	if first != second || len(first) > MaxHerdrSessionNameLength {
+func TestManagedSessionNameIgnoresPathAliasesForSameIdentity(t *testing.T) {
+	first := ManagedSessionName(42, 81)
+	second := ManagedSessionName(42, 81)
+	if first != second || len(first) > MaxManagedSessionNameLength {
 		t.Fatalf("physical identity aliases = %q, %q", first, second)
 	}
 }
 
-func TestHerdrAgentNameBindsEveryTuplePart(t *testing.T) {
-	got := HerdrAgentName("/repo/.git", "issue:3:524:528", "nonce")
-	if got != HerdrAgentName("/repo/.git", "issue:3:524:528", "nonce") {
-		t.Fatal("HerdrAgentName is not deterministic")
+func TestManagedAgentNameBindsEveryTuplePart(t *testing.T) {
+	got := ManagedAgentName("/repo/.git", "issue:3:524:528", "nonce")
+	if got != ManagedAgentName("/repo/.git", "issue:3:524:528", "nonce") {
+		t.Fatal("ManagedAgentName is not deterministic")
 	}
 	for _, changed := range []string{
-		HerdrAgentName("/other/.git", "issue:3:524:528", "nonce"),
-		HerdrAgentName("/repo/.git", "issue:3:524:529", "nonce"),
-		HerdrAgentName("/repo/.git", "issue:3:524:528", "other"),
+		ManagedAgentName("/other/.git", "issue:3:524:528", "nonce"),
+		ManagedAgentName("/repo/.git", "issue:3:524:529", "nonce"),
+		ManagedAgentName("/repo/.git", "issue:3:524:528", "other"),
 	} {
 		if changed == got {
 			t.Fatalf("changed tuple reused Herdr agent name %q", got)

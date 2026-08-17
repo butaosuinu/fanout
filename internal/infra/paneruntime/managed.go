@@ -66,7 +66,7 @@ func NewLaunchBackend(
 	inputs Inputs,
 ) (backend.Backend, func() (ManagedSession, error), error) {
 	if name != backend.Herdr {
-		runtimeBackend, err := NewBackend(name, inputs.HerdrSession, inputs.HerdrSocketPath)
+		runtimeBackend, err := NewBackend(name, inputs.SessionID, inputs.SocketPath)
 		return runtimeBackend, nil, err
 	}
 	if cfg.DryRun {

@@ -834,8 +834,8 @@ func TestRuntimeReadRoutesCombineTmuxAndDistinctSavedHerdrSessions(t *testing.T)
 	}
 	want := map[runtimeReadRoute]bool{
 		{name: backend.Tmux}: true,
-		{name: backend.Herdr, herdrSession: "saved-a", herdrSocketPath: "/tmp/saved-a.sock"}: true,
-		{name: backend.Herdr, herdrSession: "saved-b", herdrSocketPath: "/tmp/saved-b.sock"}: true,
+		{name: backend.Herdr, sessionID: "saved-a", socketPath: "/tmp/saved-a.sock"}: true,
+		{name: backend.Herdr, sessionID: "saved-b", socketPath: "/tmp/saved-b.sock"}: true,
 	}
 	if len(routes) != len(want) {
 		t.Fatalf("routes = %+v, want %d distinct persisted routes", routes, len(want))
@@ -860,7 +860,7 @@ func TestRuntimeReadRoutesUseAmbientHerdrWithoutSavedRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := runtimeReadRoute{name: backend.Herdr, herdrSession: "ambient", herdrSocketPath: "/tmp/ambient.sock"}
+	want := runtimeReadRoute{name: backend.Herdr, sessionID: "ambient", socketPath: "/tmp/ambient.sock"}
 	if len(routes) != 1 || routes[0] != want {
 		t.Fatalf("routes = %+v, want [%+v]", routes, want)
 	}
@@ -900,9 +900,9 @@ func TestRuntimeReadRoutesUseSharedHerdrControlIntents(t *testing.T) {
 	want := map[runtimeReadRoute]bool{
 		{name: backend.Tmux}: true,
 		{
-			name:            backend.Herdr,
-			herdrSession:    "intent",
-			herdrSocketPath: "/tmp/intent.sock",
+			name:       backend.Herdr,
+			sessionID:  "intent",
+			socketPath: "/tmp/intent.sock",
 		}: true,
 	}
 	if len(routes) != len(want) {
@@ -922,9 +922,9 @@ func TestHerdrIntentRuntimeRouteUsesServerLifecycleIdentity(t *testing.T) {
 			Session: "owned-server", SocketPath: "/tmp/owned-server.sock",
 		},
 	}
-	session, socketPath := herdrIntentRuntimeRoute(intent)
+	session, socketPath := intentRuntimeRoute(intent)
 	if session != "owned-server" || socketPath != "/tmp/owned-server.sock" {
-		t.Fatalf("herdrIntentRuntimeRoute() = (%q, %q)", session, socketPath)
+		t.Fatalf("intentRuntimeRoute() = (%q, %q)", session, socketPath)
 	}
 }
 
@@ -977,7 +977,7 @@ func TestRuntimeReadRoutesUseUserDefaultHerdrWithoutSavedRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := runtimeReadRoute{name: backend.Herdr, herdrSession: "user-default", herdrSocketPath: "/tmp/user-default.sock"}
+	want := runtimeReadRoute{name: backend.Herdr, sessionID: "user-default", socketPath: "/tmp/user-default.sock"}
 	if len(routes) != 1 || routes[0] != want {
 		t.Fatalf("routes = %+v, want [%+v]", routes, want)
 	}
@@ -1015,13 +1015,13 @@ func TestRuntimeReadRoutesDoNotAmbientFallbackForIncompleteSavedHerdrRoute(t *te
 func TestCollectRuntimeLiveCombinesSuccessesAndReportsRouteFailures(t *testing.T) {
 	routes := []runtimeReadRoute{
 		{name: backend.Tmux},
-		{name: backend.Herdr, herdrSession: "saved-a", herdrSocketPath: "/tmp/a.sock"},
-		{name: backend.Herdr, herdrSession: "saved-b", herdrSocketPath: "/tmp/b.sock"},
+		{name: backend.Herdr, sessionID: "saved-a", socketPath: "/tmp/a.sock"},
+		{name: backend.Herdr, sessionID: "saved-b", socketPath: "/tmp/b.sock"},
 	}
 	calls := map[runtimeReadRoute]int{}
 	panes, err := collectRuntimeLive(routes, errors.New("route discovery degraded"), func(route runtimeReadRoute) ([]backend.LivePane, error) {
 		calls[route]++
-		if route.herdrSession == "saved-b" {
+		if route.sessionID == "saved-b" {
 			return nil, errors.New("offline")
 		}
 		return []backend.LivePane{{Ref: backend.PaneRef{Backend: route.name, Pane: runtimeReadRouteLabel(route)}}}, nil

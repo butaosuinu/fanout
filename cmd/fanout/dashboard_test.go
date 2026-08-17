@@ -109,7 +109,7 @@ func TestNoKeybindOverride(t *testing.T) {
 	}
 }
 
-func TestBindDashboardKeyForBackendIsTmuxOnly(t *testing.T) {
+func TestBindDashboardKeyForBackendNeedsShortcutCapability(t *testing.T) {
 	argsPath := installTUIDashboardTmuxShim(t)
 	bindDashboardKeyForBackend(discardLogger(), true, backend.Selection{Name: backend.Herdr})
 	if body, err := os.ReadFile(argsPath); err == nil {

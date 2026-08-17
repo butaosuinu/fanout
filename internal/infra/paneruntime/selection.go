@@ -28,8 +28,10 @@ type Inputs struct {
 	ProvisionalIntents []backend.Binding
 	SuppliedIntents    []backend.Binding
 
-	HerdrSession    string
-	HerdrSocketPath string
+	// SessionID and SocketPath are the ambient managed route the environment
+	// advertises. The tmux host publishes neither and leaves both empty.
+	SessionID  string
+	SocketPath string
 }
 
 // Resolution is the resolved launch runtime. Prepare is nil for every runtime
@@ -56,8 +58,8 @@ func LoadInputs(cfg Config, store state.Store, provisionalIntents []backend.Bind
 		Rows:               projectBindings(cfg, cfg.ProjectRoot, store),
 		ProvisionalIntents: append([]backend.Binding(nil), provisionalIntents...),
 		SuppliedIntents:    append([]backend.Binding(nil), provisionalIntents...),
-		HerdrSession:       os.Getenv("HERDR_SESSION"),
-		HerdrSocketPath:    os.Getenv("HERDR_SOCKET_PATH"),
+		SessionID:          os.Getenv("HERDR_SESSION"),
+		SocketPath:         os.Getenv("HERDR_SOCKET_PATH"),
 	}
 }
 

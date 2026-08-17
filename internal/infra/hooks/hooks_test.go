@@ -122,7 +122,7 @@ func TestEnvIncludesFanoutAndDMUXCompatibility(t *testing.T) {
 		Slug:         "api-client-101",
 		Prompt:       "begin",
 		Agent:        "codex",
-		TmuxPaneID:   "%42",
+		PaneID:       "%42",
 		WorktreePath: "/repo/.fanout/worktrees/api-client-101",
 		Branch:       "fanout/api-client-101",
 		BaseBranch:   "main",

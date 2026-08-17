@@ -48,7 +48,7 @@ func TestHelpDimsHerdrActionsAndShowsSharedReason(t *testing.T) {
 	if !strings.Contains(got, "New agent pane") || !strings.Contains(got, "[disabled]") {
 		t.Fatalf("helpView() missing disabled launch row:\n%s", got)
 	}
-	if !strings.Contains(got, "disabled: "+backend.HerdrObservationOnlyReason) {
+	if !strings.Contains(got, "disabled: "+backend.ObservationOnlyReason) {
 		t.Fatalf("helpView() missing shared herdr reason:\n%s", got)
 	}
 }
@@ -161,7 +161,7 @@ func TestHerdrRowInteractiveActionsAreDisabledBeforePorts(t *testing.T) {
 				t.Fatalf("key %q called runtime ports %d time(s)", tt.key, calls)
 			}
 			message := strings.Join([]string{m.notice, m.actionMessage, m.peek.Err}, " ")
-			wantReason := backend.HerdrObservationOnlyReason
+			wantReason := backend.ObservationOnlyReason
 			if !strings.Contains(message, wantReason) {
 				t.Fatalf("key %q reason = %q, want explicit herdr action reason", tt.key, message)
 			}
@@ -313,7 +313,7 @@ func TestHerdrRowEnablesLifecycleActionsAndDefaultsCloseToWorktree(t *testing.T)
 	if cmd != nil || m.pendingAction == nil {
 		t.Fatal("Herdr cleanup was not admitted to confirmation")
 	}
-	if strings.Contains(m.actionMessage, backend.HerdrObservationOnlyReason) {
+	if strings.Contains(m.actionMessage, backend.ObservationOnlyReason) {
 		t.Fatalf("Herdr cleanup remained disabled: %q", m.actionMessage)
 	}
 
@@ -507,7 +507,7 @@ func TestHerdrConsoleLaunchesAreDisabledBeforePorts(t *testing.T) {
 		if cmd != nil {
 			t.Fatalf("key %q returned a command, want disabled no-op", key)
 		}
-		if !strings.Contains(m.notice, backend.HerdrObservationOnlyReason) {
+		if !strings.Contains(m.notice, backend.ObservationOnlyReason) {
 			t.Fatalf("key %q notice = %q, want herdr reason", key, m.notice)
 		}
 	}

@@ -877,7 +877,7 @@ func hookContext(projectRoot string, pane state.Pane, targetBranch string) hooks
 		Slug:         pane.Slug,
 		Prompt:       pane.Prompt,
 		Agent:        pane.Agent,
-		TmuxPaneID:   pane.PaneID,
+		PaneID:       pane.PaneID,
 		WorktreePath: pane.WorktreePath,
 		Branch:       pane.BranchName,
 		BaseBranch:   pane.BaseBranch,
