@@ -52,15 +52,23 @@ type vocabularyAllowlist struct {
 
 // vocabularyAllowEntry is one exemption. Name is a repo-relative path for a
 // file entry, an exact identifier for an identifier entry, and the exact tag
-// literal (backquotes included) for a tag entry. Files, on an identifier or
-// tag entry, scopes the exemption to those repo-relative files: a new file
-// spelling the name fails until it is listed here with the reason
-// re-reviewed. Every identifier and tag entry is scoped; an unscoped
-// exemption would let a new name-based branch or wire field ride in unseen.
+// literal (backquotes included) for a tag entry. Files, mandatory on an
+// identifier or tag entry, pins the exemption to (file, occurrence count)
+// pairs: a new file spelling the name AND a new occurrence in an already
+// listed file both fail until the entry is updated with the reason
+// re-reviewed. Count pinning is what keeps an exempted data-read constant
+// (backend.Tmux) from quietly gaining a new name-based branch in a file that
+// already reads it.
 type vocabularyAllowEntry struct {
-	Name   string   `json:"name"`
-	Reason string   `json:"reason"`
-	Files  []string `json:"files,omitempty"`
+	Name   string                `json:"name"`
+	Reason string                `json:"reason"`
+	Files  []vocabularyAllowFile `json:"files,omitempty"`
+}
+
+// vocabularyAllowFile is one (file, expected occurrence count) pin.
+type vocabularyAllowFile struct {
+	Path  string `json:"path"`
+	Count int    `json:"count"`
 }
 
 // vocabularyFinding is one place a runtime name is spelled in code.
@@ -113,9 +121,9 @@ func TestRuntimeVocabulary(t *testing.T) {
 		}
 	})
 
-	t.Run("every allowlist entry is live", func(t *testing.T) {
-		for _, entry := range allow.unused() {
-			t.Errorf("%s entry %q matches nothing; delete it", runtimeVocabularyAllowFile, entry)
+	t.Run("every allowlist entry is live and counts match", func(t *testing.T) {
+		for _, drift := range allow.drifted() {
+			t.Errorf("%s: %s", runtimeVocabularyAllowFile, drift)
 		}
 	})
 
@@ -246,12 +254,14 @@ func matchesRuntimeName(s string) bool {
 	return false
 }
 
-// allowlistIndex is the loaded allowlist plus the hit tracking the stale-entry
-// check reads back. Entries are keyed "<kind>:<name>" in one map so a hit and
-// a staleness question are the same lookup.
+// allowlistIndex is the loaded allowlist plus the observation tracking the
+// drift check reads back. Scoped entries are keyed "<kind>:<name>@<path>" with
+// an expected occurrence count; file entries cover only the file-name finding.
 type allowlistIndex struct {
-	entries map[string]bool
-	used    map[string]bool
+	fileEntries map[string]bool
+	fileUsed    map[string]bool
+	expected    map[string]int
+	observed    map[string]int
 }
 
 func loadVocabularyAllowlist(path string) (*allowlistIndex, error) {
@@ -260,15 +270,30 @@ func loadVocabularyAllowlist(path string) (*allowlistIndex, error) {
 		return nil, err
 	}
 	var parsed vocabularyAllowlist
-	if err := json.Unmarshal(raw, &parsed); err != nil {
+	// An unknown field is a typo (e.g. "file" for "files") that would
+	// silently widen an exemption back to unscoped; reject it.
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&parsed); err != nil {
 		return nil, err
 	}
-	index := &allowlistIndex{entries: map[string]bool{}, used: map[string]bool{}}
+	index := &allowlistIndex{
+		fileEntries: map[string]bool{}, fileUsed: map[string]bool{},
+		expected: map[string]int{}, observed: map[string]int{},
+	}
+	for _, entry := range parsed.Files {
+		if strings.TrimSpace(entry.Reason) == "" {
+			return nil, fmt.Errorf("file entry %q has no reason", entry.Name)
+		}
+		if len(entry.Files) != 0 {
+			return nil, fmt.Errorf("file entry %q scopes by files; a file entry is its own scope", entry.Name)
+		}
+		index.fileEntries[entry.Name] = true
+	}
 	categories := []struct {
 		kind    string
 		entries []vocabularyAllowEntry
 	}{
-		{kind: "file", entries: parsed.Files},
 		{kind: "identifier", entries: parsed.Identifiers},
 		{kind: "struct tag", entries: parsed.Tags},
 	}
@@ -278,56 +303,64 @@ func loadVocabularyAllowlist(path string) (*allowlistIndex, error) {
 			if strings.TrimSpace(entry.Reason) == "" {
 				return nil, fmt.Errorf("%s entry %q has no reason", category.kind, entry.Name)
 			}
+			// An unscoped exemption would be valid in every file forever;
+			// every entry pins (file, count) pairs.
 			if len(entry.Files) == 0 {
-				index.entries[category.kind+":"+entry.Name] = true
-				continue
-			}
-			// A scoped entry exempts (name, file) pairs; each file must stay
-			// live on its own, so a rename cannot widen the exemption. File
-			// entries already name a path, so scoping them again is a mistake.
-			if category.kind == "file" {
-				return nil, fmt.Errorf("file entry %q scopes by files; a file entry is its own scope", entry.Name)
+				return nil, fmt.Errorf("%s entry %q has no files; scope it to (path, count) pins", category.kind, entry.Name)
 			}
 			for _, file := range entry.Files {
-				index.entries[category.kind+":"+entry.Name+"@"+file] = true
+				if file.Path == "" || file.Count < 1 {
+					return nil, fmt.Errorf("%s entry %q pins %q with count %d; want a path and a count >= 1",
+						category.kind, entry.Name, file.Path, file.Count)
+				}
+				index.expected[category.kind+":"+entry.Name+"@"+file.Path] = file.Count
 			}
 		}
 	}
 	return index, nil
 }
 
-// covers reports whether the finding is exempt, recording the hit so an entry
-// that never fires can be reported as stale. A file entry exempts only the
+// covers reports whether the finding is exempt. A file entry exempts only the
 // file NAME finding: everything inside the file (identifiers, imports, tags)
 // still needs its own scoped entry, so a runtime-named file cannot quietly
-// grow a name-based branch under a blanket exemption. A file-scoped entry is
-// consulted before the global form, so scoping a name never loosens what an
-// unscoped entry would have allowed.
+// grow a name-based branch under a blanket exemption. A scoped entry admits
+// occurrences up to its pinned count; extra occurrences overflow and are
+// reported as ordinary findings, so a new use of an exempted name in an
+// already listed file still fails.
 func (a *allowlistIndex) covers(finding vocabularyFinding) bool {
-	return (finding.Kind == "file name" && a.hit("file", finding.File)) ||
-		a.hit(finding.Kind, finding.Text+"@"+finding.File) ||
-		a.hit(finding.Kind, finding.Text)
-}
-
-func (a *allowlistIndex) hit(kind, name string) bool {
-	key := kind + ":" + name
-	if !a.entries[key] {
-		return false
+	if finding.Kind == "file name" && a.fileEntries[finding.File] {
+		a.fileUsed[finding.File] = true
+		return true
 	}
-	a.used[key] = true
-	return true
+	key := finding.Kind + ":" + finding.Text + "@" + finding.File
+	if a.observed[key] < a.expected[key] {
+		a.observed[key]++
+		return true
+	}
+	return false
 }
 
-// unused returns the entries that matched nothing, so a rename cannot leave a
-// silent exemption behind.
-func (a *allowlistIndex) unused() []string {
-	var stale []string
-	for key := range a.entries {
-		if !a.used[key] {
-			stale = append(stale, key)
+// drifted returns every entry whose reality no longer matches the pin: a file
+// entry that matched nothing, a scoped entry that matched nothing (stale), and
+// a scoped entry whose observed count fell below the pin (the count must be
+// lowered so the exemption cannot cover a future new occurrence). Overflowing
+// occurrences already failed as findings in covers.
+func (a *allowlistIndex) drifted() []string {
+	var drift []string
+	for path := range a.fileEntries {
+		if !a.fileUsed[path] {
+			drift = append(drift, fmt.Sprintf("file entry %q matches nothing; delete it", path))
+		}
+	}
+	for key, want := range a.expected {
+		switch got := a.observed[key]; {
+		case got == 0:
+			drift = append(drift, fmt.Sprintf("entry %q matches nothing; delete it", key))
+		case got < want:
+			drift = append(drift, fmt.Sprintf("entry %q pins %d occurrences but only %d remain; lower the count", key, want, got))
 		}
 	}
 	// Map iteration is unordered; sort so a failure reports the same list twice.
-	slices.Sort(stale)
-	return stale
+	slices.Sort(drift)
+	return drift
 }

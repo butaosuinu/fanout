@@ -136,6 +136,19 @@
       }
     },
     {
+      "name": "paneruntime-is-cmd-only",
+      "severity": "error",
+      "comment": "paneruntime constructs concrete backends, so a neutral-named app or infra package importing it could hand a concrete runtime to orchestration past every adapter rule (e.g. a bridge re-exporting paneruntime.NewTmux). Construction belongs to the composition root: only cmd/fanout may import paneruntime. internal/ui is knowingly outside the runtime rules for now (burn-down list).",
+      "from": {
+        "path": ["^internal/(app|infra)/"],
+        "pathNot": ["_test\\.go$", "^internal/infra/paneruntime/"]
+      },
+      "to": {
+        "dependencyTypes": ["local"],
+        "path": ["^internal/infra/paneruntime(/|$)"]
+      }
+    },
+    {
       "name": "meta-no-module-imports",
       "severity": "error",
       "comment": "internal/arch is the test-only meta package and imports no module-internal packages, so the layer guard cannot depend on what it guards.",

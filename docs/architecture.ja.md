@@ -202,7 +202,11 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   `internal/arch/runtime-vocabulary-allow.json` に理由付きで登録する
   (`fanout herdr` サブコマンド、data として読む `backend.Tmux`/`Herdr`、
   `paneruntime.NewTmux`、PATH 上の実行ファイル名、凍結済みの dashboard
-  JSON wire key)。マッチしないエントリは stale として落ちる。
+  JSON wire key)。識別子と tag の例外は (ファイル, 出現数) 単位でピンされ、
+  許可済みファイルへの新しい出現も検査に落ちる。マッチしないエントリと
+  出現数の減少は stale として落ちる。`paneruntime` の import は
+  `paneruntime-is-cmd-only` で composition root に限定され、中継 package で
+  構築関数を app へ運ぶ経路も塞がれている。
 
 ## 既知の残課題(burn-down リスト)
 
