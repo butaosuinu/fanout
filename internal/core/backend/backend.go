@@ -62,6 +62,14 @@ type AgentSessionRef struct {
 	Value  string `json:"value"`
 }
 
+// AgentSessionSource returns the Source value a runtime stamps on a
+// conversation it issued for provider. The "<runtime>:<provider>" shape is a
+// persisted wire value: rows carry it in state.json and every rebinding gate
+// compares it byte-for-byte, so it is frozen and built only here.
+func AgentSessionSource(provider string) string {
+	return string(Herdr) + ":" + provider
+}
+
 // ProcessIdentity binds one OS-verified agent process to its shell root and
 // foreground process group. It is an observation result, not a portable PID.
 type ProcessIdentity struct {

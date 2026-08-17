@@ -239,7 +239,7 @@ func LiveAgentPresent(live LivePane) bool {
 // must widen this check alongside its persistence format.
 func ExpectedAgentSession(ref *AgentSessionRef, provider string) bool {
 	return ref != nil && ref.Valid() && ref.Agent == provider &&
-		ref.Source == string(Herdr)+":"+provider
+		ref.Source == AgentSessionSource(provider)
 }
 
 // SameAgentSession compares two optional conversation references by value.

@@ -11,12 +11,28 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-type herdrCleanupObservation struct {
+type workspaceCleanupObservation struct {
 	workspace *backend.WorkspaceObservation
 	checkout  worktree.CheckoutObservation
 }
 
-func validateHerdrPaneIdentity(pane state.Pane) error {
+// workspaceRuntimeRow reports whether the recorded row has to be operated
+// through a WorkspaceRuntime: its runtime settles container mutations as
+// journaled requests rather than as one local atomic call, so closing the row
+// means driving the cleanup intent journal instead of closing a pane directly.
+//
+// The recorded runtime name is the row's own durable record of that lane, and
+// it is deliberately the criterion here. A row read back from state.json has no
+// Backend instance left to ask, and the row's identity fields cannot answer
+// either: a row naming the journaled runtime with an incomplete recorded
+// identity must still be refused by this lane rather than fall back to an
+// atomic pane close, and a row naming the atomic runtime must never be routed
+// at a journaled runtime because it happens to carry session fields.
+func workspaceRuntimeRow(pane state.Pane) bool {
+	return backend.NormalizeName(pane.Backend) == backend.Herdr
+}
+
+func validateWorkspacePaneIdentity(pane state.Pane) error {
 	required := []string{
 		pane.RuntimeParent,
 		pane.PaneID,
@@ -35,13 +51,13 @@ func validateHerdrPaneIdentity(pane state.Pane) error {
 			return fmt.Errorf("saved Herdr lifecycle identity is incomplete")
 		}
 	}
-	if backend.NormalizeName(pane.Backend) != backend.Herdr {
+	if !workspaceRuntimeRow(pane) {
 		return fmt.Errorf("saved pane is not a Herdr row")
 	}
 	return nil
 }
 
-func herdrResourceFromPane(pane state.Pane) state.RuntimeResource {
+func resourceFromPane(pane state.Pane) state.RuntimeResource {
 	return state.RuntimeResource{
 		WorkspaceID: pane.WorkspaceID,
 		Label:       pane.WorkspaceLabel,
@@ -55,7 +71,7 @@ func herdrResourceFromPane(pane state.Pane) state.RuntimeResource {
 
 // This projection duplicates panelaunch.stateResource until a follow-up can
 // move the shared Herdr observation mapping below both app packages.
-func herdrResourceFromObservation(observation backend.WorkspaceObservation) state.RuntimeResource {
+func resourceFromObservation(observation backend.WorkspaceObservation) state.RuntimeResource {
 	return state.RuntimeResource{
 		WorkspaceID: observation.WorkspaceID,
 		Label:       observation.Label,
@@ -67,69 +83,69 @@ func herdrResourceFromObservation(observation backend.WorkspaceObservation) stat
 	}
 }
 
-func observeHerdrCleanup(
+func observeWorkspaceCleanup(
 	ctx context.Context,
-	runtime HerdrRuntime,
+	runtime WorkspaceRuntime,
 	projectRoot string,
 	resource state.RuntimeResource,
-) (herdrCleanupObservation, error) {
-	return observeHerdrCleanupMatching(
+) (workspaceCleanupObservation, error) {
+	return observeWorkspaceCleanupMatching(
 		ctx,
 		runtime,
 		projectRoot,
 		resource,
-		herdrWorkspacePredicate(resource),
+		workspacePredicate(resource),
 	)
 }
 
-func observeHerdrCleanupMatching(
+func observeWorkspaceCleanupMatching(
 	ctx context.Context,
-	runtime HerdrRuntime,
+	runtime WorkspaceRuntime,
 	projectRoot string,
 	resource state.RuntimeResource,
-	predicate herdrWorkspacePredicateFunc,
-) (herdrCleanupObservation, error) {
+	predicate workspacePredicateFunc,
+) (workspaceCleanupObservation, error) {
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
-		return herdrCleanupObservation{}, err
+		return workspaceCleanupObservation{}, err
 	}
 	workspace, err := findUniqueWorkspace(workspaces, true, predicate)
 	if err != nil {
-		return herdrCleanupObservation{}, err
+		return workspaceCleanupObservation{}, err
 	}
 	checkout, err := worktree.ObserveCheckout(ctx, projectRoot, resource.CurrentPath)
 	if err != nil {
-		return herdrCleanupObservation{}, err
+		return workspaceCleanupObservation{}, err
 	}
-	return herdrCleanupObservation{workspace: workspace, checkout: checkout}, nil
+	return workspaceCleanupObservation{workspace: workspace, checkout: checkout}, nil
 }
 
-func herdrWorkspacePredicate(resource state.RuntimeResource) herdrWorkspacePredicateFunc {
+func workspacePredicate(resource state.RuntimeResource) workspacePredicateFunc {
 	return func(workspace backend.WorkspaceObservation) (bool, bool) {
 		candidate := workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label ||
-			herdrWorkspaceMatchesProvenance(
+			workspaceMatchesProvenance(
 				workspace,
 				resource.CurrentPath,
 				resource.RepoKey,
 				resource.RepoRoot,
 			)
-		return candidate, herdrWorkspaceMatchesResource(workspace, resource)
+		return candidate, workspaceMatchesResource(workspace, resource)
 	}
 }
 
-func herdrWorkspaceLabelPredicate(label, path, repoKey, repoRoot string) herdrWorkspacePredicateFunc {
+func workspaceLabelPredicate(label, path, repoKey, repoRoot string) workspacePredicateFunc {
 	return func(workspace backend.WorkspaceObservation) (bool, bool) {
-		provenance := herdrWorkspaceMatchesProvenance(workspace, path, repoKey, repoRoot)
+		provenance := workspaceMatchesProvenance(workspace, path, repoKey, repoRoot)
 		return workspace.Label == label || provenance, workspace.Label == label && provenance
 	}
 }
 
-type herdrWorkspacePredicateFunc func(backend.WorkspaceObservation) (candidate, exact bool)
+type workspacePredicateFunc func(backend.WorkspaceObservation) (candidate, exact bool)
 
 func findUniqueWorkspace(
 	workspaces []backend.WorkspaceObservation,
 	allowAbsent bool,
-	predicate herdrWorkspacePredicateFunc,
+	predicate workspacePredicateFunc,
 ) (*backend.WorkspaceObservation, error) {
 	var candidates []backend.WorkspaceObservation
 	for _, workspace := range workspaces {
@@ -151,7 +167,7 @@ func findUniqueWorkspace(
 	return &candidates[0], nil
 }
 
-func herdrWorkspaceMatchesResource(
+func workspaceMatchesResource(
 	workspace backend.WorkspaceObservation,
 	resource state.RuntimeResource,
 ) bool {
@@ -162,7 +178,7 @@ func herdrWorkspaceMatchesResource(
 		filepath.Clean(workspace.RepoRoot) == filepath.Clean(resource.RepoRoot)
 }
 
-func herdrWorkspaceMatchesProvenance(
+func workspaceMatchesProvenance(
 	workspace backend.WorkspaceObservation,
 	path, repoKey, repoRoot string,
 ) bool {
@@ -171,7 +187,7 @@ func herdrWorkspaceMatchesProvenance(
 		filepath.Clean(workspace.RepoRoot) == filepath.Clean(repoRoot)
 }
 
-func verifyHerdrTerminalInvalidation(
+func verifyTerminalInvalidation(
 	workspace backend.WorkspaceObservation,
 	resource state.RuntimeResource,
 ) error {
@@ -188,7 +204,7 @@ func verifyHerdrTerminalInvalidation(
 	return nil
 }
 
-func verifyHerdrCheckout(
+func verifyCleanupCheckout(
 	ctx context.Context,
 	projectRoot, fullRef, expectedHead string,
 	resource state.RuntimeResource,
@@ -205,12 +221,12 @@ func verifyHerdrCheckout(
 	return err
 }
 
-func findHerdrCoordinatorIntent(
+func findCoordinatorIntent(
 	locked *state.LockedStore,
 	projectRoot string,
 	target state.Pane,
 ) (state.LaunchIntent, error) {
-	id, runtimeOwnerRoot, err := herdrCoordinatorIntentIdentity(projectRoot, target)
+	id, runtimeOwnerRoot, err := coordinatorIntentIdentity(projectRoot, target)
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
@@ -222,13 +238,13 @@ func findHerdrCoordinatorIntent(
 	if !found {
 		return state.LaunchIntent{}, fmt.Errorf("saved Herdr coordinator intent is not recorded")
 	}
-	if !herdrCoordinatorIntentMatches(intent, target, runtimeOwnerRoot, projectRoot) {
+	if !coordinatorIntentMatches(intent, target, runtimeOwnerRoot, projectRoot) {
 		return state.LaunchIntent{}, fmt.Errorf("saved Herdr coordinator intent does not match the child row")
 	}
 	return intent, nil
 }
 
-func herdrCoordinatorIntentIdentity(projectRoot string, target state.Pane) (string, string, error) {
+func coordinatorIntentIdentity(projectRoot string, target state.Pane) (string, string, error) {
 	projectRoot = filepath.Clean(projectRoot)
 	runtimeOwnerRoot, err := state.IntentOwnerProjectRoot(target.RuntimeParent, projectRoot)
 	if err != nil {
@@ -242,7 +258,7 @@ func herdrCoordinatorIntentIdentity(projectRoot string, target state.Pane) (stri
 	return id, runtimeOwnerRoot, err
 }
 
-func herdrCoordinatorIntentMatches(
+func coordinatorIntentMatches(
 	intent state.LaunchIntent,
 	target state.Pane,
 	runtimeOwnerRoot, projectRoot string,
@@ -250,12 +266,12 @@ func herdrCoordinatorIntentMatches(
 	return intent.Kind == state.IntentCoordinator &&
 		intent.Status == state.IntentRealized &&
 		intent.RuntimeParent == target.RuntimeParent &&
-		savedHerdrCoordinatorPathMatches(runtimeOwnerRoot, intent.WorktreePath, projectRoot) &&
+		savedCoordinatorPathMatches(runtimeOwnerRoot, intent.WorktreePath, projectRoot) &&
 		intent.Session == target.SessionID &&
 		intent.SocketPath == target.SocketPath
 }
 
-func savedHerdrCoordinatorPathMatches(ownerProjectRoot, savedPath, projectRoot string) bool {
+func savedCoordinatorPathMatches(ownerProjectRoot, savedPath, projectRoot string) bool {
 	savedPath = filepath.Clean(savedPath)
 	if !filepath.IsAbs(savedPath) {
 		return false
@@ -263,35 +279,35 @@ func savedHerdrCoordinatorPathMatches(ownerProjectRoot, savedPath, projectRoot s
 	return ownerProjectRoot == "" || savedPath == filepath.Clean(projectRoot)
 }
 
-func observeHerdrCoordinator(
+func observeCoordinator(
 	ctx context.Context,
-	runtime HerdrRuntime,
+	runtime WorkspaceRuntime,
 	resource state.RuntimeResource,
 ) (backend.WorkspaceObservation, error) {
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
 		return backend.WorkspaceObservation{}, err
 	}
-	workspace, err := findUniqueWorkspace(workspaces, false, herdrCoordinatorWorkspacePredicate(resource))
+	workspace, err := findUniqueWorkspace(workspaces, false, coordinatorWorkspacePredicate(resource))
 	if err != nil {
 		return backend.WorkspaceObservation{}, err
 	}
-	projected, ok := projectHerdrCoordinatorPane(*workspace, resource)
+	projected, ok := projectCoordinatorPane(*workspace, resource)
 	if !ok {
 		return backend.WorkspaceObservation{}, fmt.Errorf("herdr coordinator pane projection changed after matching")
 	}
 	return projected, nil
 }
 
-func herdrCoordinatorWorkspacePredicate(resource state.RuntimeResource) herdrWorkspacePredicateFunc {
+func coordinatorWorkspacePredicate(resource state.RuntimeResource) workspacePredicateFunc {
 	return func(workspace backend.WorkspaceObservation) (bool, bool) {
 		candidate := workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label
-		_, exact := projectHerdrCoordinatorPane(workspace, resource)
+		_, exact := projectCoordinatorPane(workspace, resource)
 		return candidate, exact
 	}
 }
 
-func projectHerdrCoordinatorPane(
+func projectCoordinatorPane(
 	workspace backend.WorkspaceObservation,
 	resource state.RuntimeResource,
 ) (backend.WorkspaceObservation, bool) {

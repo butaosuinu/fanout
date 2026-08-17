@@ -97,7 +97,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 			launchStore = recorder.Store
 		}
 		paneReq := panelaunch.NewManualRequest(cfg, projectRoot, launchStore, hookConfig, manualPaneOptionsForTUI(prompt, agentName))
-		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Managed, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 		if result, ok := launcher.LaunchWithResult(paneReq); ok {
 			if result.PaneID != "" {
 				createdPaneIDs = append(createdPaneIDs, result.PaneID)
@@ -192,7 +192,7 @@ func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentNa
 		return panelaunch.Request{}, "", "", fmt.Errorf("runtime backend: %w", err)
 	}
 	return launchPlanCoordinatorLockedWithConfig(
-		projectRoot, session, commandName, rt.Backend, rt.Herdr,
+		projectRoot, session, commandName, rt.Backend, rt.Managed,
 		cfg, recorder.Store, recorder, guard, buildReq,
 	)
 }
@@ -512,7 +512,7 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 		cfg := newSessionConfigForTUIAgent(projectRoot, agentName, launchLogger.Warn)
 		cfg.ParentRef = resolverParent
 		paneReq := newAttachedPaneRequest(cfg, projectRoot, recorder.Store, hookConfig, prompt, targetPath, resolvedTarget)
-		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Managed, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 		if launcher.Attach(paneReq, targetPath) {
 			createdCount++
 			continue

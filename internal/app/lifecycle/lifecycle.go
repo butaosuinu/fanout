@@ -29,7 +29,7 @@ type Options struct {
 	WatcherRunningLabel string
 	RemoveIssueLabel    func(issueNum int, label string) error
 	CloseOwned          func(backend.CloseRequest) (backend.CloseResult, error)
-	HerdrRuntime        HerdrRuntimeFactory
+	WorkspaceRuntime    WorkspaceRuntimeFactory
 }
 
 // Logger is the narrow logging surface lifecycle operations need.
@@ -222,7 +222,7 @@ func mergeRecordedPane(opts Options, pane state.Pane, subject string, lg Logger)
 		lg.Err("--merge: %s has no branchName recorded in %s", subject, opts.StatePath)
 		return exitcode.Invocation
 	}
-	if err := validateHerdrMergeOperation(opts, pane); err != nil {
+	if err := validateWorkspaceMergeOperation(opts, pane); err != nil {
 		lg.Err("--merge: %s Herdr identity check failed: %v", subject, err)
 		return exitcode.Env
 	}
@@ -423,7 +423,7 @@ func lockStateOnly(mode string, opts Options, lg Logger) (*state.LockedStore, ex
 		lg.Err("%s: project_root is not a directory: %s (state=%s)", mode, emptyLabel(opts.ProjectRoot), opts.StatePath)
 		return nil, exitcode.Invocation
 	}
-	locked, err := lockStateAfterHerdrPrecheck(opts, stateFileHasHerdr(opts.StatePath))
+	locked, err := lockStateAfterJournalPrecheck(opts, stateFileNeedsJournalLock(opts.StatePath))
 	if err != nil {
 		lg.Err("%s: %v", mode, err)
 		return nil, exitcode.Env
@@ -431,12 +431,12 @@ func lockStateOnly(mode string, opts Options, lg Logger) (*state.LockedStore, ex
 	return locked, exitcode.OK
 }
 
-func lockStateAfterHerdrPrecheck(opts Options, precheckedHerdr bool) (*state.LockedStore, error) {
-	if precheckedHerdr {
+func lockStateAfterJournalPrecheck(opts Options, prechecked bool) (*state.LockedStore, error) {
+	if prechecked {
 		return state.LockProjectForLaunchAt(opts.ProjectRoot, opts.StatePath)
 	}
 	locked, err := state.Lock(opts.StatePath)
-	if err != nil || !storeHasHerdr(locked.Store) {
+	if err != nil || !storeNeedsJournalLock(locked.Store) {
 		return locked, err
 	}
 	if err := locked.Unlock(); err != nil {
@@ -445,21 +445,16 @@ func lockStateAfterHerdrPrecheck(opts Options, precheckedHerdr bool) (*state.Loc
 	return state.LockProjectForLaunchAt(opts.ProjectRoot, opts.StatePath)
 }
 
-func stateFileHasHerdr(path string) bool {
+func stateFileNeedsJournalLock(path string) bool {
 	store, err := state.Load(path)
 	if err != nil {
 		return false
 	}
-	return storeHasHerdr(store)
+	return storeNeedsJournalLock(store)
 }
 
-func storeHasHerdr(store state.Store) bool {
-	for _, pane := range store.Panes {
-		if backend.NormalizeName(pane.Backend) == backend.Herdr {
-			return true
-		}
-	}
-	return false
+func storeNeedsJournalLock(store state.Store) bool {
+	return slices.ContainsFunc(store.Panes, workspaceRuntimeRow)
 }
 
 func unlockState(mode string, locked *state.LockedStore, lg Logger) {
@@ -532,7 +527,7 @@ func runBeforeWorktreeRemoveHooks(opts Options, panes []state.Pane, mode CloseMo
 		if pane.IsShell() || pane.IsAttachedAgent() || !recordedWorktreeExists(pane) {
 			continue
 		}
-		skipHook, ok := verifyHerdrHookPreflight(opts, pane, mode, hooks.BeforeWorktreeRemove, lg)
+		skipHook, ok := verifyWorkspaceHookPreflight(opts, pane, mode, hooks.BeforeWorktreeRemove, lg)
 		if !ok {
 			return false
 		}
@@ -548,7 +543,7 @@ func runBeforeWorktreeRemoveHooks(opts Options, panes []state.Pane, mode CloseMo
 
 func closeRuntimePanes(opts Options, panes []state.Pane, mode CloseMode, lg Logger, windows map[string]struct{}) bool {
 	for _, pane := range panes {
-		if paneRefFromState(pane).Backend == backend.Herdr && mode.removesWorktree() {
+		if workspaceRuntimeRow(pane) && mode.removesWorktree() {
 			continue
 		}
 		runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
@@ -573,16 +568,16 @@ func removeManagedWorktrees(opts Options, locked *state.LockedStore, panes []sta
 }
 
 func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.Pane, mode CloseMode, lg Logger) bool {
-	if paneRefFromState(pane).Backend == backend.Herdr {
+	if workspaceRuntimeRow(pane) {
 		hadWorktree := recordedWorktreeExists(pane)
-		skipHook, ok := verifyHerdrHookPreflight(opts, pane, mode, hooks.BeforePaneClose, lg)
+		skipHook, ok := verifyWorkspaceHookPreflight(opts, pane, mode, hooks.BeforePaneClose, lg)
 		if !ok {
 			return false
 		}
 		if !skipHook {
 			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
 		}
-		if !closeHerdrWorktree(opts, locked, pane, mode, lg) {
+		if !closeWorkspaceWorktree(opts, locked, pane, mode, lg) {
 			return false
 		}
 		runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
@@ -605,11 +600,11 @@ func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.P
 	return true
 }
 
-func verifyHerdrHookPreflight(opts Options, pane state.Pane, mode CloseMode, hook hooks.Type, lg Logger) (bool, bool) {
-	if paneRefFromState(pane).Backend != backend.Herdr || len(opts.Hooks.Events[hook]) == 0 {
+func verifyWorkspaceHookPreflight(opts Options, pane state.Pane, mode CloseMode, hook hooks.Type, lg Logger) (bool, bool) {
+	if !workspaceRuntimeRow(pane) || len(opts.Hooks.Events[hook]) == 0 {
 		return false, true
 	}
-	cleanupStarted, err := inspectHerdrClosePreflight(opts, pane, mode)
+	cleanupStarted, err := inspectWorkspaceClosePreflight(opts, pane, mode)
 	if err != nil {
 		lg.Err("%s: Herdr %s hook preflight failed: %v", paneLabel(pane), hook, err)
 		return false, false
@@ -620,12 +615,15 @@ func verifyHerdrHookPreflight(opts Options, pane state.Pane, mode CloseMode, hoo
 func validateCloseOperations(opts Options, panes []state.Pane, mode CloseMode, lg Logger) bool {
 	for _, pane := range panes {
 		ref := paneRefFromState(pane)
-		if ref.Backend == backend.Herdr {
-			if !validateHerdrCloseOperation(opts, pane, mode, lg) {
+		if workspaceRuntimeRow(pane) {
+			if !validateWorkspaceCloseOperation(opts, pane, mode, lg) {
 				return false
 			}
 			continue
 		}
+		// Every remaining row is closed by the atomic lane, which this build
+		// realizes on tmux alone. A row recording any other runtime is refused
+		// rather than closed through a runtime it never launched on.
 		if ref.Backend != backend.Tmux {
 			lg.Err("%s: runtime backend %s does not support lifecycle close", paneLabel(pane), ref.Backend)
 			return false

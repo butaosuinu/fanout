@@ -11,8 +11,8 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-func configuredHerdrRuntime(string) lifecycle.HerdrRuntimeFactory {
-	return func(context.Context, state.Pane) (lifecycle.HerdrRuntime, error) { return nil, errBoom }
+func configuredHerdrRuntime(string) lifecycle.WorkspaceRuntimeFactory {
+	return func(context.Context, state.Pane) (lifecycle.WorkspaceRuntime, error) { return nil, errBoom }
 }
 
 func configuredTmuxClose(backend.CloseRequest) (backend.CloseResult, error) {
@@ -378,7 +378,7 @@ func TestLifecycleOptionsBuildsHerdrRuntimeForOwningRoot(t *testing.T) {
 	var gotRoot string
 	m := newModel(Options{
 		ProjectRoot: "/repo/home",
-		LifecycleHerdrRuntimeForRoot: func(root string) lifecycle.HerdrRuntimeFactory {
+		LifecycleHerdrRuntimeForRoot: func(root string) lifecycle.WorkspaceRuntimeFactory {
 			gotRoot = root
 			return nil
 		},
@@ -420,7 +420,7 @@ func TestLifecycleActionsRequireMatchingRuntimeCapability(t *testing.T) {
 		{name: "tmux child with close port", opts: Options{LifecycleCloseOwned: tmuxClose}, pane: paneView{Backend: backend.Tmux}, action: "close"},
 		{name: "tmux merge without close port", pane: paneView{Backend: backend.Tmux}, action: "merge"},
 		{name: "herdr child without runtime", pane: paneView{Backend: backend.Herdr}, action: "cleanup", want: true},
-		{name: "herdr child with nil factory", opts: Options{LifecycleHerdrRuntimeForRoot: func(string) lifecycle.HerdrRuntimeFactory { return nil }}, pane: paneView{Backend: backend.Herdr}, action: "merge", want: true},
+		{name: "herdr child with nil factory", opts: Options{LifecycleHerdrRuntimeForRoot: func(string) lifecycle.WorkspaceRuntimeFactory { return nil }}, pane: paneView{Backend: backend.Herdr}, action: "merge", want: true},
 		{name: "herdr child with runtime", opts: Options{LifecycleHerdrRuntimeForRoot: herdrRuntime}, pane: paneView{Backend: backend.Herdr}, action: "cleanup"},
 		{name: "herdr shell close", opts: Options{LifecycleHerdrRuntimeForRoot: herdrRuntime}, pane: paneView{Backend: backend.Herdr, Kind: state.PaneKindShell}, action: "close", want: true},
 		{name: "tmux shell cleanup", opts: Options{LifecycleCloseOwned: tmuxClose}, pane: paneView{Backend: backend.Tmux, Kind: state.PaneKindShell}, action: "cleanup", want: true},

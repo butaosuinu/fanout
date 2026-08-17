@@ -1033,7 +1033,7 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 			if tt.mutateLive != nil {
 				tt.mutateLive(&observed)
 			}
-			if tt.wantAlive && herdrRowUnsupported(row) {
+			if tt.wantAlive && runtimeRowUnsupported(row) {
 				t.Fatalf("matching fixture is unexpectedly unsupported: %+v", row)
 			}
 			var live []backend.LivePane
@@ -1076,7 +1076,7 @@ func TestHerdrPaneMatchesOwnedShellWithoutAgentIdentity(t *testing.T) {
 	live.AgentProvider = ""
 	live.AgentSession = nil
 	live.AgentPresent = false
-	if !row.RuntimeBinding().MatchesLive(live) || herdrRowUnsupported(row) {
+	if !row.RuntimeBinding().MatchesLive(live) || runtimeRowUnsupported(row) {
 		t.Fatalf("owned shell identity rejected: row=%+v live=%+v", row, live)
 	}
 }

@@ -147,11 +147,11 @@ func cmdMsg(args []string, lg *log.Logger) exitcode.Code {
 		return code // help (OK) or a parse error; either way the message is out
 	}
 	deps := peermsg.DefaultDeps(tmuxbackend.New())
-	deps.OpenHerdr = openMsgHerdr
+	deps.OpenRuntime = openMsgHerdr
 	return peermsg.Run(flags.request(), deps, lg)
 }
 
-func openMsgHerdr(ctx context.Context, repoKey string) (peermsg.HerdrNudger, error) {
+func openMsgHerdr(ctx context.Context, repoKey string) (peermsg.NudgeRuntime, error) {
 	return herdrrun.OpenOwned(ctx, herdrrun.OwnedOptions{GitCommonDir: repoKey})
 }
 

@@ -16,16 +16,16 @@ import (
 func runtimeLifecycleOptions(projectRoot, statePath string, hookConfig hooks.Config) lifecycle.Options {
 	runtimeBackend := tmuxbackend.New()
 	return lifecycle.Options{
-		ProjectRoot:  projectRoot,
-		StatePath:    statePath,
-		Hooks:        hookConfig,
-		CloseOwned:   runtimeBackend.CloseOwned,
-		HerdrRuntime: newHerdrLifecycleFactory(projectRoot),
+		ProjectRoot:      projectRoot,
+		StatePath:        statePath,
+		Hooks:            hookConfig,
+		CloseOwned:       runtimeBackend.CloseOwned,
+		WorkspaceRuntime: newHerdrLifecycleFactory(projectRoot),
 	}
 }
 
-func newHerdrLifecycleFactory(projectRoot string) lifecycle.HerdrRuntimeFactory {
-	return func(ctx context.Context, pane state.Pane) (lifecycle.HerdrRuntime, error) {
+func newHerdrLifecycleFactory(projectRoot string) lifecycle.WorkspaceRuntimeFactory {
+	return func(ctx context.Context, pane state.Pane) (lifecycle.WorkspaceRuntime, error) {
 		identity, err := worktree.ResolveRepoIdentity(ctx, projectRoot)
 		if err != nil {
 			return nil, err

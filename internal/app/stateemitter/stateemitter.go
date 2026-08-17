@@ -60,7 +60,7 @@ type Observation struct {
 	ProcessError error
 }
 
-// Observer reads current Herdr state for a persisted launch target.
+// Observer reads the current runtime state for a persisted launch target.
 type Observer interface {
 	Observe(context.Context, RuntimeTarget) (Observation, error)
 }
@@ -222,7 +222,7 @@ func bindLateAgentSession(panes []state.Pane, index int, current backend.LivePan
 	if panes[index].AgentSession != nil || current.AgentSession == nil {
 		return nil
 	}
-	ref, ok := sessionbinding.UniqueHerdrSessionBinding(panes, index, []backend.LivePane{current})
+	ref, ok := sessionbinding.UniqueSessionBinding(panes, index, []backend.LivePane{current})
 	if !ok {
 		return fmt.Errorf("late Herdr agent session does not match exactly one state row")
 	}
@@ -291,35 +291,41 @@ func nextReportedState(current, next string) string {
 	return next
 }
 
+// finalRuntimeTarget builds the observation target out of the row's own durable
+// binding projection, so the identity the emitter compares and the identity it
+// observes against come from one place. PlanMode and the generic-workspace flag
+// stay read from the row: they describe the launch mode and the row kind, not
+// the pane identity the projection carries.
 func finalRuntimeTarget(pane state.Pane, gitCommonDir string, signal telemetry.Signal) (RuntimeTarget, error) {
+	binding := pane.RuntimeBinding()
 	identity := []bool{
 		signal.Backend == backend.Herdr,
-		pane.Backend == backend.Herdr,
-		pane.EmitterRowKey == signal.RowKey,
-		pane.LaunchNonce == signal.LaunchNonce,
-		pane.EmitterNonce == signal.EmitterNonce,
-		pane.SessionID == signal.Session,
-		pane.SocketPath == signal.SocketPath,
-		pane.WorkspaceID == signal.WorkspaceID,
-		pane.PaneID == signal.PaneID,
-		pane.TerminalID == signal.TerminalID,
-		pane.Agent == signal.Agent,
-		pane.AgentID == signal.AgentID,
+		binding.Ref.Backend == backend.Herdr,
+		binding.Launch.RowKey == signal.RowKey,
+		binding.Launch.Nonce == signal.LaunchNonce,
+		binding.Launch.EmitterNonce == signal.EmitterNonce,
+		binding.SessionID == signal.Session,
+		binding.SocketPath == signal.SocketPath,
+		binding.Ref.Workspace == signal.WorkspaceID,
+		binding.Ref.Pane == signal.PaneID,
+		binding.TerminalID == signal.TerminalID,
+		binding.Agent == signal.Agent,
+		binding.AgentID == signal.AgentID,
 	}
 	if slices.Contains(identity, false) {
 		return RuntimeTarget{}, fmt.Errorf("final row does not match emitter launch identity")
 	}
 	return RuntimeTarget{
-		Backend: backend.Herdr, Session: pane.SessionID,
-		SocketPath: pane.SocketPath, RepoKey: pane.RepoKey, GitCommonDir: gitCommonDir,
-		WorkspaceID: pane.WorkspaceID, WorkspaceLabel: pane.WorkspaceLabel,
-		PaneID:     pane.PaneID,
-		TerminalID: pane.TerminalID, Agent: pane.Agent,
-		AgentID: pane.AgentID, PlanMode: pane.PlanMode, AgentSession: pane.AgentSession,
-		AcceptUnboundSession: pane.AgentSession == nil,
-		WorktreePath:         pane.WorktreePath, Executable: pane.LaunchExecutable,
-		Args:             slices.Clone(pane.LaunchArgs),
-		GenericWorkspace: pane.Kind == state.PaneKindAttachedAgent && pane.RepoKey == "",
+		Backend: binding.Ref.Backend, Session: binding.SessionID,
+		SocketPath: binding.SocketPath, RepoKey: binding.RepoKey, GitCommonDir: gitCommonDir,
+		WorkspaceID: binding.Ref.Workspace, WorkspaceLabel: binding.WorkspaceLabel,
+		PaneID:     binding.Ref.Pane,
+		TerminalID: binding.TerminalID, Agent: binding.Agent,
+		AgentID: binding.AgentID, PlanMode: pane.PlanMode, AgentSession: binding.AgentSession,
+		AcceptUnboundSession: binding.AgentSession == nil,
+		WorktreePath:         binding.WorktreePath, Executable: binding.Launch.Executable,
+		Args:             slices.Clone(binding.Launch.Args),
+		GenericWorkspace: pane.Kind == state.PaneKindAttachedAgent && binding.RepoKey == "",
 	}, nil
 }
 
@@ -488,7 +494,7 @@ func validTelemetryAgent(target RuntimeTarget) bool {
 
 func invalidAgentSession(target RuntimeTarget) bool {
 	ref := target.AgentSession
-	return ref != nil && (!ref.Valid() || ref.Agent != target.Agent || ref.Source != "herdr:"+target.Agent)
+	return ref != nil && !backend.ExpectedAgentSession(ref, target.Agent)
 }
 
 func invalidIdentityValue(value string) bool {
@@ -537,8 +543,7 @@ func agentSessionMatches(target RuntimeTarget, current *backend.AgentSessionRef)
 	if !target.AcceptUnboundSession {
 		return current == nil
 	}
-	return current == nil || current.Valid() &&
-		current.Agent == target.Agent && current.Source == "herdr:"+target.Agent
+	return current == nil || backend.ExpectedAgentSession(current, target.Agent)
 }
 
 // ReportedState returns a sanitized persisted telemetry value for read-only

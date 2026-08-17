@@ -19,9 +19,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/team"
 )
 
-// HerdrNudger is the already-owned runtime surface used by one best-effort
+// NudgeRuntime is the already-owned runtime surface used by one best-effort
 // nudge. Production opens it without creating or restarting a session.
-type HerdrNudger interface {
+type NudgeRuntime interface {
 	LivePanes(context.Context) ([]backend.LivePane, error)
 	ProcessInfo(context.Context, string) (backend.PaneProcessInfo, error)
 	PrepareNudge(context.Context, backend.NudgeTarget, string) (backend.NudgePrompt, error)
@@ -61,10 +61,10 @@ type Deps struct {
 	// ListLive and SendLine are the tmux runtime seams nudge drives.
 	ListLive func() ([]backend.LivePane, error)
 	SendLine func(backend.PaneRef, string) error
-	// OpenHerdr opens the existing owned Herdr runtime named by the recipient's
+	// OpenRuntime opens the existing owned runtime named by the recipient's
 	// saved repo key. ReadLockedState performs the initial and final telemetry
 	// reads under the owning state lock and call deadline.
-	OpenHerdr       func(context.Context, string) (HerdrNudger, error)
+	OpenRuntime     func(context.Context, string) (NudgeRuntime, error)
 	ReadLockedState func(context.Context, func(state.Store) error) error
 	// LoadState resolves and loads the owner checkout's .fanout/state.json
 	// read-only — the recipient's recorded pane id lives there, not in the

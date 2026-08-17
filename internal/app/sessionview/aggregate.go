@@ -234,7 +234,7 @@ func Build(repo, projectRoot string, c Collectors) Snapshot {
 			worktreeStat, worktreeErr := fetchWorktree(p.WorktreePath, p.BaseBranch)
 			current, alive := livePaneForState(live, p)
 			runtimeDegraded := allRuntimeRoutesDegraded || failedRuntimeRoutes[observationRouteForState(p)]
-			runtimeUnsupported := herdrRowUnsupported(p)
+			runtimeUnsupported := runtimeRowUnsupported(p)
 			if runtimeUnsupported {
 				alive = false
 			}
@@ -611,13 +611,13 @@ func livePaneForState(live map[livePaneKey]backend.LivePane, pane state.Pane) (b
 	}
 }
 
-// herdrRowUnsupported identifies persisted rows that predate the authoritative
+// runtimeRowUnsupported identifies persisted rows that predate the authoritative
 // identity baseline required by the Herdr runtime matcher. These rows are
 // not stale: without the saved baseline there is no prior terminal or logical
 // conversation to compare. They remain explicitly unsupported and are never
 // filled from the current snapshot, which would adopt a potentially reused
 // public pane ID.
-func herdrRowUnsupported(pane state.Pane) bool {
+func runtimeRowUnsupported(pane state.Pane) bool {
 	if backend.NormalizeName(pane.Backend) != backend.Herdr || strings.TrimSpace(pane.PaneID) == "" {
 		return false
 	}
@@ -632,10 +632,10 @@ func herdrRowUnsupported(pane state.Pane) bool {
 	if slices.Contains(requiredBaseline, false) {
 		return true
 	}
-	return herdrAgentBaselineUnsupported(pane)
+	return agentBaselineUnsupported(pane)
 }
 
-func herdrAgentBaselineUnsupported(pane state.Pane) bool {
+func agentBaselineUnsupported(pane state.Pane) bool {
 	storedAgentID := strings.TrimSpace(pane.AgentID) != ""
 	if pane.IsShell() {
 		return storedAgentID || pane.AgentSession != nil
@@ -869,9 +869,7 @@ func DerivePane(projectRoot, parent string, pv PaneView) PaneDerived {
 	}, "\n"))
 
 	canFocus := backend.NormalizeName(pv.Backend) == backend.Tmux && canFocusPane(pv.PaneID, runtimeState)
-	canPeek := (backend.NormalizeName(pv.Backend) == backend.Tmux ||
-		backend.NormalizeName(pv.Backend) == backend.Herdr) &&
-		canFocusPane(pv.PaneID, runtimeState)
+	canPeek := peekableRuntime(pv.Backend) && canFocusPane(pv.PaneID, runtimeState)
 	return PaneDerived{
 		Name:             name,
 		PRSummary:        prSummary,
@@ -1149,6 +1147,14 @@ func prRank(state string) int {
 
 func canFocusPane(paneID, tmuxState string) bool {
 	return strings.TrimSpace(paneID) != "" && tmuxState != "stale" && tmuxState != "-"
+}
+
+// peekableRuntime reports whether the recorded runtime exposes the read-only
+// capture the peek surfaces read. Every runtime fanout admits does; a row whose
+// recorded runtime is not one of them exposes nothing to capture.
+func peekableRuntime(name backend.Name) bool {
+	_, err := backend.ParseName(string(backend.NormalizeName(name)))
+	return err == nil
 }
 
 func nonDashStrings(values ...string) []string {

@@ -439,7 +439,7 @@ func TestLockStateAfterHerdrPrecheckReacquiresCombinedLockWhenHerdrAppears(t *te
 	})
 	opts := Options{ProjectRoot: projectRoot, StatePath: state.Path(projectRoot)}
 
-	locked, err := lockStateAfterHerdrPrecheck(opts, false)
+	locked, err := lockStateAfterJournalPrecheck(opts, false)
 	if err != nil {
 		t.Fatal(err)
 	}
