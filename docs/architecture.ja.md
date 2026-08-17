@@ -61,11 +61,11 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | infra | `team` | `--team` / `fanout msg` の SQLite バス | H |
 | infra | `settings` | 設定解決。repo config からの watcher・runtime backend 有効化と通知先設定を遮断する安全ゲート | H |
 | infra | `herdrrun` | herdr stable 0.7.5 以上の version gate、fanout-owned session lifecycle、non-shell agent launcher、workspace/worktree mutation・表示専用 metadata 報告・snapshot 投影の実装 (契約 DTO は `core/backend` 所在) | H |
-| core | `backend` | runtime backend 契約と中立 DTO 語彙 (launch route / workspace・worktree mutation / process・wait / metadata / nudge / owned pane identity と sentinel error 群)・親 stickiness・選択優先順位・矛盾時の fail-closed 判定 | H |
+| core | `backend` | runtime backend 契約(mutation が局所原子か journaled かを宣言する MutationModel を含む)と中立 DTO 語彙 (launch route / workspace・worktree mutation / process・wait / metadata / nudge / owned pane identity と sentinel error 群)・親 stickiness・選択優先順位・矛盾時の fail-closed 判定 | H |
 | app | `watch` | ラベル watcher の 1 サイクル | H |
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
-| app | `panelaunch` | tmux pane 生成と Herdr coordinator/worktree/agent launch のオーケストレーション | H |
+| app | `panelaunch` | pane 生成のオーケストレーション。backend の MutationModel で atomic lane と journaled lane(coordinator/worktree/agent launch)を選ぶ | H |
 | app | `herdrprocess` | 保存済み Herdr launch と現在の process identity の照合 | H |
 | app | `stateemitter` | launch に束縛した telemetry の検証と state lock 下の更新 | H |
 | app | `sessionbinding` | 遅延 Herdr agent session の初回束縛と state lock 下の保存 | H |

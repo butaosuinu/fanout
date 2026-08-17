@@ -13,50 +13,50 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-func (l *Launcher) shellHerdr(
+func (l *Launcher) shellManaged(
 	locked *state.LockedStore,
 	targetPath string,
 	number int,
 	slug, title string,
 ) error {
-	if l.Herdr == nil {
+	if l.Managed == nil {
 		return fmt.Errorf("herdr terminal launch requires an owned session")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), maxHerdrRealizeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), maxManagedRealizeTimeout)
 	defer cancel()
-	route, err := verifyHerdrConsoleRoute(ctx, l.Herdr)
+	route, err := verifyManagedConsoleRoute(ctx, l.Managed)
 	if err != nil {
 		return err
 	}
-	intent, err := realizeHerdrInteractive(
-		ctx, l.Herdr, locked, route,
-		manualHerdrCoordinatorRequest(l.Info.ProjectRoot, targetPath, route, "", number),
+	intent, err := realizeManagedInteractive(
+		ctx, l.Managed, locked, route,
+		manualManagedCoordinatorRequest(l.Info.ProjectRoot, targetPath, route, "", number),
 		func(state.LaunchIntent) (*state.LaunchCapsule, error) {
-			return l.newManualHerdrShellLaunch(route)
+			return l.newManualManagedShellLaunch(route)
 		},
 	)
 	if err != nil {
 		return err
 	}
-	live, err := l.startHerdrAgent(ctx, locked, route, intent, validateHerdrShellLaunch, nil, exactHerdrShellPane, nil)
+	live, err := l.startManagedAgent(ctx, locked, route, intent, validateManagedShellLaunch, nil, exactManagedShellPane, nil)
 	if err != nil {
-		return markHerdrFinalizationFailure(locked, l.Info.ProjectRoot, intent, err)
+		return markManagedFinalizationFailure(locked, l.Info.ProjectRoot, intent, err)
 	}
-	pane := herdrShellStatePane(intent, live, number, slug, title, "")
-	return finalizeHerdrPane(locked, l.Info.ProjectRoot, intent, staticHerdrPane(pane))
+	pane := managedShellStatePane(intent, live, number, slug, title, "")
+	return finalizeManagedPane(locked, l.Info.ProjectRoot, intent, staticManagedPane(pane))
 }
 
-func (l *Launcher) newManualHerdrShellLaunch(
+func (l *Launcher) newManualManagedShellLaunch(
 	route backend.OwnedLaunchRoute,
 ) (*state.LaunchCapsule, error) {
-	_, shell, err := resolveHerdrConsoleInputs(l.Info.ProjectRoot, os.Getenv("SHELL"))
+	_, shell, err := resolveManagedConsoleInputs(l.Info.ProjectRoot, os.Getenv("SHELL"))
 	if err != nil {
 		return nil, err
 	}
-	return newHerdrShellLaunch(l.Herdr, route, shell, os.Environ())
+	return newManagedShellLaunch(l.Managed, route, shell, os.Environ())
 }
 
-func herdrShellStatePane(
+func managedShellStatePane(
 	intent state.LaunchIntent,
 	live backend.LivePane,
 	number int,
@@ -71,14 +71,14 @@ func herdrShellStatePane(
 	return pane
 }
 
-func validateHerdrShellLaunch(launch *state.LaunchCapsule) error {
+func validateManagedShellLaunch(launch *state.LaunchCapsule) error {
 	if launch == nil || launch.Agent != "" || launch.AgentName != "" {
 		return fmt.Errorf("herdr shell intent has an invalid launch capsule")
 	}
 	return nil
 }
 
-func exactHerdrShellPane(
+func exactManagedShellPane(
 	intent state.LaunchIntent,
 	panes []backend.LivePane,
 ) (backend.LivePane, bool) {

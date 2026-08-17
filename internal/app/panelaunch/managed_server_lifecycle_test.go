@@ -10,8 +10,8 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-func TestRejectActiveHerdrRowsChecksLinkedWorktrees(t *testing.T) {
-	repo := newHerdrRealizeRepo(t)
+func TestRejectActiveManagedRowsChecksLinkedWorktrees(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
 	sibling := filepath.Join(t.TempDir(), "sibling")
 	gitCmdTest(t, repo, "worktree", "add", "-b", "sibling", sibling, "HEAD")
 	locked, err := state.Lock(state.Path(sibling))
@@ -29,14 +29,14 @@ func TestRejectActiveHerdrRowsChecksLinkedWorktrees(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = rejectActiveHerdrRows(repo)
+	err = rejectActiveManagedRows(repo)
 	if err == nil || !strings.Contains(err.Error(), filepath.Clean(sibling)) {
-		t.Fatalf("rejectActiveHerdrRows() error = %v", err)
+		t.Fatalf("rejectActiveManagedRows() error = %v", err)
 	}
 }
 
-func TestRejectActiveHerdrRowsLeavesTmuxStateUnchanged(t *testing.T) {
-	repo := newHerdrRealizeRepo(t)
+func TestRejectActiveManagedRowsLeavesTmuxStateUnchanged(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
 	locked, err := state.Lock(state.Path(repo))
 	if err != nil {
 		t.Fatal(err)
@@ -50,27 +50,27 @@ func TestRejectActiveHerdrRowsLeavesTmuxStateUnchanged(t *testing.T) {
 	if err := locked.Unlock(); err != nil {
 		t.Fatal(err)
 	}
-	if err := rejectActiveHerdrRows(repo); err != nil {
+	if err := rejectActiveManagedRows(repo); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestRejectActiveHerdrIntentsRequiresEmptyJournal(t *testing.T) {
+func TestRejectActiveManagedIntentsRequiresEmptyJournal(t *testing.T) {
 	journal := state.LaunchJournal{
 		SchemaVersion: state.LaunchJournalSchemaVersion,
 		Intents:       []state.LaunchIntent{{ID: "pending"}},
 	}
-	if err := rejectActiveHerdrIntents(journal); err == nil || !strings.Contains(err.Error(), "1 active") {
-		t.Fatalf("rejectActiveHerdrIntents() error = %v", err)
+	if err := rejectActiveManagedIntents(journal); err == nil || !strings.Contains(err.Error(), "1 active") {
+		t.Fatalf("rejectActiveManagedIntents() error = %v", err)
 	}
 	journal.Intents = nil
-	if err := rejectActiveHerdrIntents(journal); err != nil {
+	if err := rejectActiveManagedIntents(journal); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestReleaseRejectedHerdrRestartDropsOnlyFreshLiveIntent(t *testing.T) {
-	repo := newHerdrRealizeRepo(t)
+func TestReleaseRejectedManagedRestartDropsOnlyFreshLiveIntent(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
 	locked, err := state.LockProjectForLaunch(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestReleaseRejectedHerdrRestartDropsOnlyFreshLiveIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent, err := newHerdrServerIntent(state.IntentRestart, testHerdrServerIdentity())
+	intent, err := newManagedServerIntent(state.IntentRestart, testManagedServerIdentity())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestReleaseRejectedHerdrRestartDropsOnlyFreshLiveIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	cause := backend.ErrOwnedGenerationStillLive
-	if err = releaseRejectedHerdrRestart(journal, intent, true, cause); !errors.Is(err, cause) {
+	if err = releaseRejectedManagedRestart(journal, intent, true, cause); !errors.Is(err, cause) {
 		t.Fatalf("release fresh live restart error = %v", err)
 	}
 	if _, found, intentErr := journal.ServerLifecycleIntent(); intentErr != nil || found {
@@ -104,7 +104,7 @@ func TestReleaseRejectedHerdrRestartDropsOnlyFreshLiveIntent(t *testing.T) {
 	if err = journal.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if err = releaseRejectedHerdrRestart(journal, intent, false, cause); !errors.Is(err, cause) {
+	if err = releaseRejectedManagedRestart(journal, intent, false, cause); !errors.Is(err, cause) {
 		t.Fatalf("release resumed live restart error = %v", err)
 	}
 	if _, found, err := journal.ServerLifecycleIntent(); err != nil || !found {
@@ -112,7 +112,7 @@ func TestReleaseRejectedHerdrRestartDropsOnlyFreshLiveIntent(t *testing.T) {
 	}
 }
 
-func TestMarkPlannedHerdrReopenCleanupManual(t *testing.T) {
+func TestMarkPlannedManagedReopenCleanupManual(t *testing.T) {
 	journal := &state.LockedLaunchJournal{LaunchJournal: state.LaunchJournal{
 		SchemaVersion: state.LaunchJournalSchemaVersion,
 		Intents: []state.LaunchIntent{
@@ -123,7 +123,7 @@ func TestMarkPlannedHerdrReopenCleanupManual(t *testing.T) {
 		},
 	}}
 
-	markPlannedHerdrReopenCleanupManual(journal)
+	markPlannedManagedReopenCleanupManual(journal)
 
 	got := journal.Intents[0]
 	if got.Status != state.IntentManualCleanupRequired ||
@@ -140,8 +140,8 @@ func TestMarkPlannedHerdrReopenCleanupManual(t *testing.T) {
 	}
 }
 
-func TestHerdrShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t *testing.T) {
-	repo := newHerdrRealizeRepo(t)
+func TestManagedShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
 	locked, err := state.LockProjectForLaunch(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestHerdrShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t *t
 		_ = locked.Unlock() // The journal error is authoritative.
 		t.Fatal(err)
 	}
-	intent, err := newHerdrServerIntent(state.IntentShutdown, testHerdrServerIdentity())
+	intent, err := newManagedServerIntent(state.IntentShutdown, testManagedServerIdentity())
 	if err != nil {
 		_ = locked.Unlock() // The intent construction error is authoritative.
 		t.Fatal(err)
@@ -161,7 +161,7 @@ func TestHerdrShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t *t
 		_ = locked.Unlock() // The journal save error is authoritative.
 		t.Fatal(err)
 	}
-	markIssued, err := herdrShutdownIssueCallback(journal, intent)
+	markIssued, err := managedShutdownIssueCallback(journal, intent)
 	if err != nil || markIssued == nil || intent.Status != state.IntentPlanned {
 		_ = locked.Unlock() // The callback assertion below is authoritative.
 		t.Fatalf("planned callback = (%+v, %t, %v)", intent, markIssued != nil, err)
@@ -195,13 +195,13 @@ func TestHerdrShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	markIssued, err = herdrShutdownIssueCallback(journal, intent)
+	markIssued, err = managedShutdownIssueCallback(journal, intent)
 	if err != nil || markIssued != nil {
 		t.Fatalf("issued retry callback = (%t, %v), want nil", markIssued != nil, err)
 	}
 }
 
-func testHerdrServerIdentity() state.RuntimeServerIdentity {
+func testManagedServerIdentity() state.RuntimeServerIdentity {
 	return state.RuntimeServerIdentity{
 		GitCommonDir: "/repo/.git", RuntimeDir: "/tmp/fanout-herdr", Session: "fanout-owned",
 		SocketPath: "/tmp/fanout-herdr/herdr.sock", ClientSocketPath: "/tmp/fanout-herdr/herdr-client.sock",

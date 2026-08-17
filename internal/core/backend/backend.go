@@ -280,10 +280,36 @@ func PreviewQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
+// MutationModel is the domain property that decides how fanout must realize a
+// launch on a runtime: whether one container mutation settles locally and
+// atomically, or has to be carried through fanout's own durable intent journal.
+//
+// It is a declared property rather than something orchestration discovers by
+// trying the cheap path first and degrading, because a wrong guess is not
+// recoverable: issuing a journaled mutation without having recorded the intent
+// leaves remote state that no later run can attribute or roll back.
+type MutationModel int
+
+const (
+	// MutationAtomic means one container mutation is a single local call whose
+	// outcome is observed synchronously. A failure leaves nothing behind, so the
+	// launch, its decoration, and its state row need no external journal.
+	MutationAtomic MutationModel = iota
+	// MutationJournaled means container mutations are remote and non-atomic: a
+	// request can be issued without its response ever arriving. Fanout records
+	// the intent before issuing it and reconciles the outcome afterwards, so
+	// this lane owns a launch lock, a rollback journal, and a recovery pass.
+	MutationJournaled
+)
+
 // Backend is the minimum runtime surface. Implementations may expose
 // backend-specific helpers, but orchestration depends only on these methods.
 type Backend interface {
 	Name() Name
+	// MutationModel reports how this runtime's container mutations settle. It
+	// selects the realization strategy orchestration runs; it is not a display
+	// value and must not be derived from Name by callers.
+	MutationModel() MutationModel
 	CheckAvailable() error
 	Launch(LaunchRequest) (PaneRef, error)
 	ReleaseStartGate(string) error

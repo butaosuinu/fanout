@@ -62,6 +62,7 @@ type PaneValue struct {
 // in capability.go otherwise.
 type Fake struct {
 	name         backend.Name
+	mutation     backend.MutationModel
 	panes        []string
 	launchErr    error
 	stampErr     error
@@ -81,9 +82,10 @@ var _ backend.Backend = (*Fake)(nil)
 type Option func(*Fake)
 
 // New returns a bare fake with no capabilities. Defaults: the tmux backend
-// name, pane id "%1" for every launch, and no configured failure.
+// name, the atomic mutation model, pane id "%1" for every launch, and no
+// configured failure.
 func New(opts ...Option) *Fake {
-	f := &Fake{name: backend.Tmux, panes: []string{"%1"}}
+	f := &Fake{name: backend.Tmux, mutation: backend.MutationAtomic, panes: []string{"%1"}}
 	for _, opt := range opts {
 		opt(f)
 	}
@@ -91,9 +93,17 @@ func New(opts ...Option) *Fake {
 }
 
 // WithName sets the name the fake reports, which decides the backend recorded
-// on every PaneRef it returns.
+// on every PaneRef it returns. It deliberately leaves the mutation model
+// alone: the two are independent properties, and a test that needs the
+// journaled lane says so with WithMutationModel.
 func WithName(name backend.Name) Option {
 	return func(f *Fake) { f.name = name }
+}
+
+// WithMutationModel sets the realization strategy the fake declares, so a test
+// can drive the journaled launch lane without a live herdr server.
+func WithMutationModel(model backend.MutationModel) Option {
+	return func(f *Fake) { f.mutation = model }
 }
 
 // WithPanes sets the pane ids successive launches return. The last id repeats
@@ -139,6 +149,10 @@ func WithPreviewLines(lines ...string) Option {
 
 // Name reports the configured backend name.
 func (f *Fake) Name() backend.Name { return f.name }
+
+// MutationModel reports the configured realization strategy (atomic unless a
+// test asked for another one).
+func (f *Fake) MutationModel() backend.MutationModel { return f.mutation }
 
 // CheckAvailable always succeeds; an in-process fake is always installed.
 func (f *Fake) CheckAvailable() error {

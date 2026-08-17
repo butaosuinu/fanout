@@ -15,39 +15,39 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-const HerdrConsoleRuntimeParent = "@console"
+const ManagedConsoleRuntimeParent = "@console"
 
-// HerdrSessionRuntime is the whole owned-session surface the composition root
+// ManagedSessionRuntime is the whole owned-session surface the composition root
 // holds: the launch port plus the session-wide operations no single launch
 // needs — the attach command a plain terminal runs, the saved-row identity
 // recheck, and the bound backend a workspace is retired through.
-type HerdrSessionRuntime interface {
-	HerdrLaunchRuntime
+type ManagedSessionRuntime interface {
+	ManagedLaunchRuntime
 	AttachCommand() (string, error)
 	VerifyOwnedTarget(backend.OwnedPaneIdentity) error
 	BindOwnedWorkspaceClose(backend.OwnedPaneIdentity) (backend.OwnedClosingBackend, error)
 }
 
-// HerdrConsoleResult is the durable console pane plus the shell command a
+// ManagedConsoleResult is the durable console pane plus the shell command a
 // plain terminal can run to attach the isolated owned Herdr client.
-type HerdrConsoleResult struct {
+type ManagedConsoleResult struct {
 	Pane          state.Pane
 	AttachCommand string
 }
 
-// EnsureHerdrConsole creates or adopts the one repo-root console workspace for
+// EnsureManagedConsole creates or adopts the one repo-root console workspace for
 // an owned session. It owns the combined state/intent lock through finalization.
-func EnsureHerdrConsole(
+func EnsureManagedConsole(
 	ctx context.Context,
 	projectRoot string,
-	owned HerdrSessionRuntime,
+	owned ManagedSessionRuntime,
 	callerEnvironment []string,
 	shell string,
-) (result HerdrConsoleResult, retErr error) {
+) (result ManagedConsoleResult, retErr error) {
 	if ctx == nil || owned == nil {
 		return result, fmt.Errorf("ensure Herdr console requires context and owned session")
 	}
-	root, shellPath, err := resolveHerdrConsoleInputs(projectRoot, shell)
+	root, shellPath, err := resolveManagedConsoleInputs(projectRoot, shell)
 	if err != nil {
 		return result, err
 	}
@@ -60,147 +60,147 @@ func EnsureHerdrConsole(
 		return result, err
 	}
 	defer func() { retErr = errors.Join(retErr, locked.Unlock()) }()
-	return ensureHerdrConsoleLocked(ctx, root, shellPath, owned, callerEnvironment, locked)
+	return ensureManagedConsoleLocked(ctx, root, shellPath, owned, callerEnvironment, locked)
 }
 
 //nolint:funlen // Keep the lock-held reuse-or-realize console transaction visible as one ordered state machine.
-func ensureHerdrConsoleLocked(
+func ensureManagedConsoleLocked(
 	ctx context.Context,
 	root, shellPath string,
-	owned HerdrSessionRuntime,
+	owned ManagedSessionRuntime,
 	callerEnvironment []string,
 	locked *state.LockedStore,
-) (HerdrConsoleResult, error) {
-	route, err := verifyHerdrConsoleRoute(ctx, owned)
+) (ManagedConsoleResult, error) {
+	route, err := verifyManagedConsoleRoute(ctx, owned)
 	if err != nil {
-		return HerdrConsoleResult{}, err
+		return ManagedConsoleResult{}, err
 	}
-	pane, found, err := findHerdrConsolePane(root, locked.Store)
+	pane, found, err := findManagedConsolePane(root, locked.Store)
 	if err != nil {
-		return HerdrConsoleResult{}, err
+		return ManagedConsoleResult{}, err
 	}
 	if found {
-		result, reused, reuseErr := reuseHerdrConsole(ctx, locked, root, owned, pane)
+		result, reused, reuseErr := reuseManagedConsole(ctx, locked, root, owned, pane)
 		if reuseErr != nil || reused {
 			return result, reuseErr
 		}
 	}
-	intent, err := realizeHerdrInteractive(
+	intent, err := realizeManagedInteractive(
 		ctx, owned, locked, route,
-		HerdrCoordinatorRequest{
-			Parent:      HerdrConsoleRuntimeParent,
+		ManagedCoordinatorRequest{
+			Parent:      ManagedConsoleRuntimeParent,
 			ProjectRoot: root, SourceRoot: root, CWD: root,
-			HerdrSession: route.Session, SocketPath: route.SocketPath,
+			ManagedSession: route.Session, SocketPath: route.SocketPath,
 		},
 		func(state.LaunchIntent) (*state.LaunchCapsule, error) {
-			return newHerdrShellLaunch(owned, route, shellPath, callerEnvironment)
+			return newManagedShellLaunch(owned, route, shellPath, callerEnvironment)
 		},
 	)
 	if err != nil {
-		return HerdrConsoleResult{}, err
+		return ManagedConsoleResult{}, err
 	}
-	if validationErr := validateHerdrConsoleIntentRoot(intent, root); validationErr != nil {
-		return HerdrConsoleResult{}, validationErr
+	if validationErr := validateManagedConsoleIntentRoot(intent, root); validationErr != nil {
+		return ManagedConsoleResult{}, validationErr
 	}
-	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: root}, Herdr: owned}
-	live, err := launcher.startHerdrAgent(ctx, locked, route, intent, validateHerdrShellLaunch, nil, exactHerdrShellPane, nil)
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: root}, Managed: owned}
+	live, err := launcher.startManagedAgent(ctx, locked, route, intent, validateManagedShellLaunch, nil, exactManagedShellPane, nil)
 	if err != nil {
-		return HerdrConsoleResult{}, err
+		return ManagedConsoleResult{}, err
 	}
-	pane = herdrShellStatePane(
+	pane = managedShellStatePane(
 		intent, live, NextSyntheticPaneNumber(locked.Store, ManualParentRef),
-		"herdr-console", "Herdr console", HerdrConsoleRuntimeParent,
+		"herdr-console", "Herdr console", ManagedConsoleRuntimeParent,
 	)
-	if err := finalizeHerdrPane(locked, root, intent, staticHerdrPane(pane)); err != nil {
-		return HerdrConsoleResult{}, err
+	if err := finalizeManagedPane(locked, root, intent, staticManagedPane(pane)); err != nil {
+		return ManagedConsoleResult{}, err
 	}
-	return herdrConsoleResult(owned, pane)
+	return managedConsoleResult(owned, pane)
 }
 
-func validateHerdrConsoleIntentRoot(intent state.LaunchIntent, projectRoot string) error {
+func validateManagedConsoleIntentRoot(intent state.LaunchIntent, projectRoot string) error {
 	if filepath.Clean(intent.WorktreePath) != filepath.Clean(projectRoot) {
 		return fmt.Errorf("saved Herdr console intent belongs to another worktree")
 	}
 	return nil
 }
 
-func reuseHerdrConsole(
+func reuseManagedConsole(
 	ctx context.Context,
 	locked *state.LockedStore,
 	projectRoot string,
-	owned HerdrSessionRuntime,
+	owned ManagedSessionRuntime,
 	pane state.Pane,
-) (HerdrConsoleResult, bool, error) {
-	if err := verifySavedHerdrConsole(owned, pane); err != nil {
-		if !staleHerdrConsoleRecoverable(err) {
-			return HerdrConsoleResult{}, false, err
+) (ManagedConsoleResult, bool, error) {
+	if err := verifySavedManagedConsole(owned, pane); err != nil {
+		if !staleManagedConsoleRecoverable(err) {
+			return ManagedConsoleResult{}, false, err
 		}
-		if staleErr := removeStaleHerdrConsole(ctx, locked, projectRoot, owned, pane); staleErr != nil {
-			return HerdrConsoleResult{}, false, errors.Join(
+		if staleErr := removeStaleManagedConsole(ctx, locked, projectRoot, owned, pane); staleErr != nil {
+			return ManagedConsoleResult{}, false, errors.Join(
 				fmt.Errorf("saved Herdr console is not safely reusable: %w", err),
 				staleErr,
 			)
 		}
-		return HerdrConsoleResult{}, false, nil
+		return ManagedConsoleResult{}, false, nil
 	}
-	if err := removeCompletedHerdrConsoleIntent(locked, projectRoot, pane); err != nil {
-		return HerdrConsoleResult{}, false, err
+	if err := removeCompletedManagedConsoleIntent(locked, projectRoot, pane); err != nil {
+		return ManagedConsoleResult{}, false, err
 	}
-	result, err := herdrConsoleResult(owned, pane)
+	result, err := managedConsoleResult(owned, pane)
 	return result, true, err
 }
 
-func staleHerdrConsoleRecoverable(err error) bool {
+func staleManagedConsoleRecoverable(err error) bool {
 	return errors.Is(err, backend.ErrOwnedIdentityMismatch)
 }
 
-func removeStaleHerdrConsole(
+func removeStaleManagedConsole(
 	ctx context.Context,
 	locked *state.LockedStore,
 	projectRoot string,
-	owned HerdrSessionRuntime,
+	owned ManagedSessionRuntime,
 	pane state.Pane,
 ) error {
-	if err := validateSavedHerdrConsoleShape(pane); err != nil {
+	if err := validateSavedManagedConsoleShape(pane); err != nil {
 		return err
 	}
 	workspaces, err := owned.ObserveWorkspaces(ctx)
 	if err != nil {
 		return fmt.Errorf("observe saved Herdr console workspace: %w", err)
 	}
-	present, err := savedHerdrConsoleWorkspacePresent(pane, workspaces)
+	present, err := savedManagedConsoleWorkspacePresent(pane, workspaces)
 	if err != nil {
 		return err
 	}
 	if !present {
-		return removeStaleHerdrConsoleState(locked, projectRoot, pane)
+		return removeStaleManagedConsoleState(locked, projectRoot, pane)
 	}
 	live, err := owned.LivePanes(ctx)
 	if err != nil {
 		return fmt.Errorf("recheck saved Herdr console panes: %w", err)
 	}
-	current, err := staleHerdrConsoleTarget(pane, live)
+	current, err := staleManagedConsoleTarget(pane, live)
 	if err != nil {
 		return err
 	}
-	if err := closeStaleHerdrConsole(owned, current); err != nil {
+	if err := closeStaleManagedConsole(owned, current); err != nil {
 		return err
 	}
-	return removeStaleHerdrConsoleState(locked, projectRoot, pane)
+	return removeStaleManagedConsoleState(locked, projectRoot, pane)
 }
 
-func removeStaleHerdrConsoleState(
+func removeStaleManagedConsoleState(
 	locked *state.LockedStore,
 	projectRoot string,
 	pane state.Pane,
 ) error {
-	if err := removeCompletedHerdrConsoleIntent(locked, projectRoot, pane); err != nil {
+	if err := removeCompletedManagedConsoleIntent(locked, projectRoot, pane); err != nil {
 		return err
 	}
-	return removeSavedHerdrConsoleRow(locked, projectRoot, pane)
+	return removeSavedManagedConsoleRow(locked, projectRoot, pane)
 }
 
-func savedHerdrConsoleWorkspacePresent(
+func savedManagedConsoleWorkspacePresent(
 	saved state.Pane,
 	workspaces []backend.WorkspaceObservation,
 ) (bool, error) {
@@ -217,7 +217,7 @@ func savedHerdrConsoleWorkspacePresent(
 	return false, nil
 }
 
-func staleHerdrConsoleTarget(
+func staleManagedConsoleTarget(
 	saved state.Pane,
 	live []backend.LivePane,
 ) (backend.LivePane, error) {
@@ -241,13 +241,13 @@ func staleHerdrConsoleTarget(
 	if len(matches) != 1 {
 		return backend.LivePane{}, fmt.Errorf(
 			"%w: saved Herdr console workspace has %d closeable pane matches",
-			ErrHerdrManualCleanupRequired, len(matches),
+			ErrManualCleanupRequired, len(matches),
 		)
 	}
 	return matches[0], nil
 }
 
-func closeStaleHerdrConsole(owned HerdrSessionRuntime, current backend.LivePane) error {
+func closeStaleManagedConsole(owned ManagedSessionRuntime, current backend.LivePane) error {
 	identity := backend.OwnedPaneIdentity{
 		Ref: current.Ref, SessionID: current.SessionID, SocketPath: current.SocketPath,
 		WorkspaceLabel: current.WorkspaceLabel, TerminalID: current.TerminalID,
@@ -266,7 +266,7 @@ func closeStaleHerdrConsole(owned HerdrSessionRuntime, current backend.LivePane)
 	return nil
 }
 
-func removeSavedHerdrConsoleRow(
+func removeSavedManagedConsoleRow(
 	locked *state.LockedStore,
 	projectRoot string,
 	pane state.Pane,
@@ -281,13 +281,13 @@ func removeSavedHerdrConsoleRow(
 	}
 	defer func() { retErr = errors.Join(retErr, owner.Unlock()) }()
 	saved, found := owner.Find(pane.Parent, pane.IssueNum)
-	if !found || !sameSavedHerdrConsole(pane, saved) {
+	if !found || !sameSavedManagedConsole(pane, saved) {
 		return fmt.Errorf("saved Herdr console row changed before cleanup")
 	}
 	return owner.RemovePane(pane.Parent, pane.IssueNum)
 }
 
-func sameSavedHerdrConsole(expected, actual state.Pane) bool {
+func sameSavedManagedConsole(expected, actual state.Pane) bool {
 	requirements := []bool{
 		actual.RuntimeParent == expected.RuntimeParent,
 		actual.Kind == expected.Kind,
@@ -303,7 +303,7 @@ func sameSavedHerdrConsole(expected, actual state.Pane) bool {
 	return !slices.Contains(requirements, false)
 }
 
-func resolveHerdrConsoleInputs(projectRoot, shell string) (string, string, error) {
+func resolveManagedConsoleInputs(projectRoot, shell string) (string, string, error) {
 	root, err := filepath.EvalSymlinks(projectRoot)
 	if err != nil {
 		return "", "", fmt.Errorf("canonicalize Herdr console root: %w", err)
@@ -330,9 +330,9 @@ func resolveHerdrConsoleInputs(projectRoot, shell string) (string, string, error
 	return root, filepath.Clean(shell), nil
 }
 
-func verifyHerdrConsoleRoute(
+func verifyManagedConsoleRoute(
 	ctx context.Context,
-	owned HerdrLaunchRuntime,
+	owned ManagedLaunchRuntime,
 ) (backend.OwnedLaunchRoute, error) {
 	if err := owned.VerifyOwned(ctx); err != nil {
 		return backend.OwnedLaunchRoute{}, err
@@ -341,13 +341,13 @@ func verifyHerdrConsoleRoute(
 	if err != nil {
 		return backend.OwnedLaunchRoute{}, err
 	}
-	if err := validateHerdrLaunchRoute(route); err != nil {
+	if err := validateManagedLaunchRoute(route); err != nil {
 		return backend.OwnedLaunchRoute{}, err
 	}
 	return route, nil
 }
 
-func validateHerdrLaunchRoute(route backend.OwnedLaunchRoute) error {
+func validateManagedLaunchRoute(route backend.OwnedLaunchRoute) error {
 	if route.LauncherPath == "" || route.EmitterPath == "" {
 		return fmt.Errorf("owned Herdr launch route is incomplete")
 	}
@@ -359,13 +359,13 @@ func validateHerdrLaunchRoute(route backend.OwnedLaunchRoute) error {
 	return nil
 }
 
-func newHerdrShellLaunch(
-	owned HerdrLaunchRuntime,
+func newManagedShellLaunch(
+	owned ManagedLaunchRuntime,
 	route backend.OwnedLaunchRoute,
 	shell string,
 	callerEnvironment []string,
 ) (*state.LaunchCapsule, error) {
-	nonce, err := randomHerdrToken()
+	nonce, err := randomManagedToken()
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +382,7 @@ func newHerdrShellLaunch(
 	}, nil
 }
 
-func findHerdrConsolePane(projectRoot string, current state.Store) (state.Pane, bool, error) {
+func findManagedConsolePane(projectRoot string, current state.Store) (state.Pane, bool, error) {
 	roots, err := worktree.ListRoots(projectRoot)
 	if err != nil {
 		return state.Pane{}, false, fmt.Errorf("list worktrees for Herdr console: %w", err)
@@ -390,11 +390,11 @@ func findHerdrConsolePane(projectRoot string, current state.Store) (state.Pane, 
 	var found state.Pane
 	hasFound := false
 	for _, root := range roots {
-		store, err := loadHerdrConsoleStore(root, projectRoot, current)
+		store, err := loadManagedConsoleStore(root, projectRoot, current)
 		if err != nil {
 			return state.Pane{}, false, err
 		}
-		pane, ok, err := herdrConsolePaneInStore(root, store)
+		pane, ok, err := managedConsolePaneInStore(root, store)
 		if err != nil || !ok {
 			if err != nil {
 				return state.Pane{}, false, err
@@ -410,7 +410,7 @@ func findHerdrConsolePane(projectRoot string, current state.Store) (state.Pane, 
 	return found, hasFound, nil
 }
 
-func loadHerdrConsoleStore(root, currentRoot string, current state.Store) (state.Store, error) {
+func loadManagedConsoleStore(root, currentRoot string, current state.Store) (state.Store, error) {
 	if root == currentRoot {
 		return current, nil
 	}
@@ -421,11 +421,11 @@ func loadHerdrConsoleStore(root, currentRoot string, current state.Store) (state
 	return store, nil
 }
 
-func herdrConsolePaneInStore(root string, store state.Store) (state.Pane, bool, error) {
+func managedConsolePaneInStore(root string, store state.Store) (state.Pane, bool, error) {
 	var found state.Pane
 	hasFound := false
 	for _, pane := range store.Panes {
-		if pane.RuntimeParent != HerdrConsoleRuntimeParent {
+		if pane.RuntimeParent != ManagedConsoleRuntimeParent {
 			continue
 		}
 		if hasFound {
@@ -438,11 +438,11 @@ func herdrConsolePaneInStore(root string, store state.Store) (state.Pane, bool, 
 	return found, hasFound, nil
 }
 
-func verifySavedHerdrConsole(
-	owned HerdrSessionRuntime,
+func verifySavedManagedConsole(
+	owned ManagedSessionRuntime,
 	pane state.Pane,
 ) error {
-	if err := validateSavedHerdrConsoleShape(pane); err != nil {
+	if err := validateSavedManagedConsoleShape(pane); err != nil {
 		return err
 	}
 	identity := backend.OwnedPaneIdentity{
@@ -456,12 +456,12 @@ func verifySavedHerdrConsole(
 	return owned.VerifyOwnedTarget(identity)
 }
 
-func validateSavedHerdrConsoleShape(pane state.Pane) error {
+func validateSavedManagedConsoleShape(pane state.Pane) error {
 	projectRoot := strings.TrimSpace(pane.SourceProjectRoot)
 	requirements := []bool{
 		pane.Parent == ManualParentRef,
 		pane.Kind == state.PaneKindShell,
-		pane.RuntimeParent == HerdrConsoleRuntimeParent,
+		pane.RuntimeParent == ManagedConsoleRuntimeParent,
 		backend.NormalizeName(pane.Backend) == backend.Herdr,
 		pane.Agent == state.PaneKindShell,
 		projectRoot != "",
@@ -482,7 +482,7 @@ func validateSavedHerdrConsoleShape(pane state.Pane) error {
 	return nil
 }
 
-func removeCompletedHerdrConsoleIntent(
+func removeCompletedManagedConsoleIntent(
 	locked *state.LockedStore,
 	projectRoot string,
 	pane state.Pane,
@@ -491,7 +491,7 @@ func removeCompletedHerdrConsoleIntent(
 	if err != nil {
 		return err
 	}
-	intentID, err := state.CoordinatorIntentID(HerdrConsoleRuntimeParent, "", 0)
+	intentID, err := state.CoordinatorIntentID(ManagedConsoleRuntimeParent, "", 0)
 	if err != nil {
 		return err
 	}
@@ -499,31 +499,31 @@ func removeCompletedHerdrConsoleIntent(
 	if !found {
 		return nil
 	}
-	if !completedHerdrConsoleIntentMatchesPane(intent, pane) {
+	if !completedManagedConsoleIntentMatchesPane(intent, pane) {
 		return fmt.Errorf("completed Herdr console intent does not match saved pane")
 	}
 	journal.RemoveIntent(intentID)
 	return journal.Save()
 }
 
-func completedHerdrConsoleIntentMatchesPane(intent state.LaunchIntent, pane state.Pane) bool {
+func completedManagedConsoleIntentMatchesPane(intent state.LaunchIntent, pane state.Pane) bool {
 	if intent.Kind != state.IntentCoordinator || intent.Status != state.IntentRealized ||
-		intent.Parent != HerdrConsoleRuntimeParent || intent.RuntimeParent != HerdrConsoleRuntimeParent ||
+		intent.Parent != ManagedConsoleRuntimeParent || intent.RuntimeParent != ManagedConsoleRuntimeParent ||
 		filepath.Clean(intent.WorktreePath) != filepath.Clean(pane.WorktreePath) ||
 		intent.WorkspaceLabel != pane.WorkspaceLabel {
 		return false
 	}
 	route := backend.OwnedLaunchRoute{Session: intent.Session, SocketPath: intent.SocketPath}
-	return validateHerdrCoordinatorPane(pane, intent, route) == nil
+	return validateManagedCoordinatorPane(pane, intent, route) == nil
 }
 
-func herdrConsoleResult(
-	owned HerdrSessionRuntime,
+func managedConsoleResult(
+	owned ManagedSessionRuntime,
 	pane state.Pane,
-) (HerdrConsoleResult, error) {
+) (ManagedConsoleResult, error) {
 	command, err := owned.AttachCommand()
 	if err != nil {
-		return HerdrConsoleResult{}, err
+		return ManagedConsoleResult{}, err
 	}
-	return HerdrConsoleResult{Pane: pane, AttachCommand: command}, nil
+	return ManagedConsoleResult{Pane: pane, AttachCommand: command}, nil
 }

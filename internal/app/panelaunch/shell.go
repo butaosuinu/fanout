@@ -59,11 +59,11 @@ func (l *Launcher) Shell(req ShellRequest) error {
 	number := NextSyntheticPaneNumber(recorder.Store, ManualParentRef)
 	slug := shellPaneSlug(targetPath, req.Root, number)
 	title := shellPaneTitle(targetPath, req.Root)
-	if l.Backend != nil && l.Backend.Name() == backend.Herdr {
-		if err := admitHerdrCoordinatorLaunch(recorder, projectRoot, number); err != nil {
+	if l.Backend != nil && l.Backend.MutationModel() == backend.MutationJournaled {
+		if err := admitManagedCoordinatorLaunch(recorder, projectRoot, number); err != nil {
 			return err
 		}
-		return l.shellHerdr(recorder, targetPath, number, slug, title)
+		return l.shellManaged(recorder, targetPath, number, slug, title)
 	}
 	return l.shellTmux(recorder, targetPath, number, slug, title)
 }
@@ -205,8 +205,11 @@ func recoverUnrecordedShell(
 	)
 }
 
+// lockShellState takes the lock the launch lane needs. The journaled lane
+// reads and writes its intent journal under the same lock as the state row, so
+// it takes the combined launch lock rather than the plain state lock.
 func (l *Launcher) lockShellState(projectRoot string) (*state.LockedStore, error) {
-	if l.Backend != nil && l.Backend.Name() == backend.Herdr {
+	if l.Backend != nil && l.Backend.MutationModel() == backend.MutationJournaled {
 		return state.LockProjectForLaunch(projectRoot)
 	}
 	return state.LockProject(projectRoot)

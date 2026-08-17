@@ -136,7 +136,7 @@ func TestStatePaneCapturesCreatedPaneFields(t *testing.T) {
 	}
 }
 
-func TestStatePaneForBackendCapturesExactHerdrIdentity(t *testing.T) {
+func TestStatePaneForBackendCapturesExactManagedIdentity(t *testing.T) {
 	session := &backend.AgentSessionRef{
 		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "thread-528",
 	}
@@ -158,9 +158,9 @@ func TestStatePaneForBackendCapturesExactHerdrIdentity(t *testing.T) {
 	}
 }
 
-func TestPrepareAttachedLivenessRejectsHerdrStartGate(t *testing.T) {
+func TestPrepareAttachedLivenessRejectsManagedStartGate(t *testing.T) {
 	req := Request{AgentStartGate: "tmux-only", ShellKey: "tmux-key"}
-	err := prepareAttachedLiveness(backend.Herdr, &req)
+	err := prepareAttachedLiveness(backend.MutationJournaled, &req)
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("prepareAttachedLiveness() error = %v, want Herdr rejection", err)
 	}
@@ -169,7 +169,59 @@ func TestPrepareAttachedLivenessRejectsHerdrStartGate(t *testing.T) {
 	}
 }
 
-func TestRuntimeBackendBindingsIncludeSyntheticHerdrCoordinatorOwner(t *testing.T) {
+// The launch lane follows the backend's declared mutation model, not its name:
+// a journaled runtime reaches the intent-journal lane and an atomic one the
+// direct lane, whichever name each reports. The atomic lane is the only one
+// that writes a state row straight after the split, so its dry run is the
+// marker that separates the two.
+func TestLaunchWithResultSelectsLaneByMutationModel(t *testing.T) {
+	const atomicLaneMarker = "would write .fanout/state.json with paneId <pane_id>"
+	tests := []struct {
+		name           string
+		backend        backend.Backend
+		wantAtomicLane bool
+	}{
+		{
+			name: "journaled backend takes the intent-journal lane",
+			backend: backendtest.New(
+				backendtest.WithName(backend.Herdr),
+				backendtest.WithMutationModel(backend.MutationJournaled),
+			),
+		},
+		{
+			name:           "herdr-named atomic backend still takes the direct lane",
+			backend:        backendtest.New(backendtest.WithName(backend.Herdr)),
+			wantAtomicLane: true,
+		},
+		{
+			name:           "tmux backend takes the direct lane",
+			backend:        tmuxbackend.New(),
+			wantAtomicLane: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			launcher := &Launcher{
+				Cfg:         &cliflags.Config{Agent: "claude", DryRun: true, NoRefresh: true},
+				Log:         log.NewWith(&stdout, &stderr, false),
+				Info:        &fanoutruntime.Info{Target: "%caller", ProjectRoot: "/repo"},
+				Backend:     tt.backend,
+				CommandName: "fanout",
+			}
+			if _, ok := launcher.LaunchWithResult(Request{
+				ParentRef: "100", Number: 101, Slug: "child-101", Agent: "claude",
+			}); !ok {
+				t.Fatalf("LaunchWithResult() = false, stderr:\n%s", stderr.String())
+			}
+			if got := strings.Contains(stdout.String(), atomicLaneMarker); got != tt.wantAtomicLane {
+				t.Fatalf("atomic lane reached = %t, want %t; stdout:\n%s", got, tt.wantAtomicLane, stdout.String())
+			}
+		})
+	}
+}
+
+func TestRuntimeBackendBindingsIncludeSyntheticManagedCoordinatorOwner(t *testing.T) {
 	store := state.Store{Panes: []state.Pane{{
 		Parent: ManualParentRef, RuntimeParent: "524", IssueNum: -1, Backend: backend.Herdr,
 	}}}

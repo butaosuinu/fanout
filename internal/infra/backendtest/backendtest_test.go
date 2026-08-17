@@ -89,6 +89,28 @@ func TestLaunchReturnsConfiguredPanesInOrder(t *testing.T) {
 	}
 }
 
+// Name and mutation model are independent properties: naming a fake herdr must
+// not silently move it onto the journaled launch lane, because the tests that
+// pin the atomic lane's fail-closed branches use a non-tmux name on purpose.
+func TestMutationModelDefaultsToAtomicAndIsIndependentOfName(t *testing.T) {
+	tests := []struct {
+		name string
+		fake *Fake
+		want backend.MutationModel
+	}{
+		{name: "unconfigured fake", fake: New(), want: backend.MutationAtomic},
+		{name: "herdr-named fake keeps the atomic default", fake: New(WithName(backend.Herdr)), want: backend.MutationAtomic},
+		{name: "explicitly journaled fake", fake: New(WithMutationModel(backend.MutationJournaled)), want: backend.MutationJournaled},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.fake.MutationModel(); got != tt.want {
+				t.Fatalf("MutationModel() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLaunchErrorLeavesNoPaneRef(t *testing.T) {
 	wantErr := errors.New("no workspace")
 	fake := New(WithLaunchError(wantErr))

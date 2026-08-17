@@ -86,7 +86,7 @@ func bindOwnedHerdrPane(
 }
 
 func bindOwnedHerdrWorkspaceClose(
-	owned panelaunch.HerdrSessionRuntime,
+	owned panelaunch.ManagedSessionRuntime,
 	pane state.Pane,
 ) (backend.OwnedClosingBackend, error) {
 	if owned == nil {

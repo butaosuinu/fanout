@@ -12,7 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-func TestHerdrEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
+func TestManagedEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
 	intent := state.LaunchIntent{
 		ID: "issue:3:524:529",
 		Resource: state.RuntimeResource{
@@ -24,7 +24,7 @@ func TestHerdrEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
 		LauncherPath: "/opt/fanout build/fanout",
 		EmitterPath:  "/opt/current fanout/fanout",
 	}
-	launch, err := newHerdrEmitterLaunch(
+	launch, err := newManagedEmitterLaunch(
 		Request{Agent: "claude"}, route, intent, strings.Repeat("a", 32),
 		"fanout-agent", "/repo/.fanout/state.json",
 	)
@@ -35,7 +35,7 @@ func TestHerdrEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
 		t.Fatalf("backend args = %#v", launch.backendArgs)
 	}
 	settings := launch.backendArgs[1]
-	if !strings.Contains(settings, `"matcher":"`+herdrClaudeExitReasons+`"`) ||
+	if !strings.Contains(settings, `"matcher":"`+managedClaudeExitReasons+`"`) ||
 		!strings.Contains(settings, `"timeout":15`) ||
 		strings.Contains(settings, "clear") || strings.Contains(settings, "resume") {
 		t.Fatalf("SessionEnd settings = %s", settings)
@@ -68,8 +68,8 @@ func TestHerdrEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
 	}
 }
 
-func TestHerdrEmitterLaunchUsesCurrentPinnedEmitterInsteadOfSessionLauncher(t *testing.T) {
-	launch, err := newHerdrEmitterLaunch(
+func TestManagedEmitterLaunchUsesCurrentPinnedEmitterInsteadOfSessionLauncher(t *testing.T) {
+	launch, err := newManagedEmitterLaunch(
 		Request{Agent: "claude"},
 		backend.OwnedLaunchRoute{
 			LauncherPath: "/owned/old-fanout", EmitterPath: "/owned/current-fanout",
@@ -85,8 +85,8 @@ func TestHerdrEmitterLaunchUsesCurrentPinnedEmitterInsteadOfSessionLauncher(t *t
 	}
 }
 
-func TestHerdrEmitterLaunchLeavesNonPlanCodexBare(t *testing.T) {
-	launch, err := newHerdrEmitterLaunch(Request{Agent: "codex"}, backend.OwnedLaunchRoute{}, state.LaunchIntent{}, "", "", "")
+func TestManagedEmitterLaunchLeavesNonPlanCodexBare(t *testing.T) {
+	launch, err := newManagedEmitterLaunch(Request{Agent: "codex"}, backend.OwnedLaunchRoute{}, state.LaunchIntent{}, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestHerdrEmitterLaunchLeavesNonPlanCodexBare(t *testing.T) {
 	}
 }
 
-func TestHerdrEmitterLaunchInjectsCodexPlanIdentityWithoutBackendArgs(t *testing.T) {
+func TestManagedEmitterLaunchInjectsCodexPlanIdentityWithoutBackendArgs(t *testing.T) {
 	intent := state.LaunchIntent{
 		ID: "issue:3:524:554", WorkspaceLabel: "fanout-codex-plan",
 		Resource: state.RuntimeResource{
@@ -104,7 +104,7 @@ func TestHerdrEmitterLaunchInjectsCodexPlanIdentityWithoutBackendArgs(t *testing
 		},
 	}
 	route := backend.OwnedLaunchRoute{Session: "fanout-owned", SocketPath: "/tmp/herdr.sock"}
-	launch, err := newHerdrEmitterLaunch(
+	launch, err := newManagedEmitterLaunch(
 		Request{Agent: "codex", LaunchMode: agent.ModePlan}, route, intent,
 		strings.Repeat("a", 32), "fanout-agent", "/repo/.fanout/state.json",
 	)
@@ -121,7 +121,7 @@ func TestHerdrEmitterLaunchInjectsCodexPlanIdentityWithoutBackendArgs(t *testing
 	}
 }
 
-func TestApplyHerdrLaunchTelemetryStartsSyntheticRunningUnrefined(t *testing.T) {
+func TestApplyManagedLaunchTelemetryStartsSyntheticRunningUnrefined(t *testing.T) {
 	pane := state.Pane{Backend: "herdr"}
 	intent := state.LaunchIntent{
 		ID: "issue:3:524:529",
@@ -130,7 +130,7 @@ func TestApplyHerdrLaunchTelemetryStartsSyntheticRunningUnrefined(t *testing.T) 
 			Executable: "/opt/bin/claude", Args: []string{"prompt"},
 		},
 	}
-	applyHerdrLaunchTelemetry(&pane, intent)
+	applyManagedLaunchTelemetry(&pane, intent)
 	if pane.ReportedState != "running" || pane.StateRefinement {
 		t.Fatalf("initial telemetry = (%q, %t), want synthetic running without refinement", pane.ReportedState, pane.StateRefinement)
 	}
@@ -139,13 +139,13 @@ func TestApplyHerdrLaunchTelemetryStartsSyntheticRunningUnrefined(t *testing.T) 
 	}
 }
 
-func TestApplyHerdrLaunchTelemetryPersistsDirectLaunchWithoutEmitter(t *testing.T) {
+func TestApplyManagedLaunchTelemetryPersistsDirectLaunchWithoutEmitter(t *testing.T) {
 	pane := state.Pane{Backend: "herdr"}
 	intent := state.LaunchIntent{Launch: &state.LaunchCapsule{
 		Executable: "/opt/bin/codex", Args: []string{"prompt"},
 	}}
 
-	applyHerdrLaunchTelemetry(&pane, intent)
+	applyManagedLaunchTelemetry(&pane, intent)
 
 	if pane.LaunchExecutable != intent.Launch.Executable ||
 		!slices.Equal(pane.LaunchArgs, intent.Launch.Args) || pane.ReportedState != "" {
@@ -153,7 +153,7 @@ func TestApplyHerdrLaunchTelemetryPersistsDirectLaunchWithoutEmitter(t *testing.
 	}
 }
 
-func TestApplyHerdrLaunchTelemetryDropsPendingStateFromReplacedSession(t *testing.T) {
+func TestApplyManagedLaunchTelemetryDropsPendingStateFromReplacedSession(t *testing.T) {
 	pending := backend.AgentSessionRef{
 		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "old-session",
 	}
@@ -168,7 +168,7 @@ func TestApplyHerdrLaunchTelemetryDropsPendingStateFromReplacedSession(t *testin
 		},
 	}
 
-	applyHerdrLaunchTelemetry(&pane, intent)
+	applyManagedLaunchTelemetry(&pane, intent)
 
 	if pane.ReportedState != "running" || pane.StateRefinement {
 		t.Fatalf("replaced-session telemetry = (%q, %t), want synthetic running", pane.ReportedState, pane.StateRefinement)

@@ -151,7 +151,7 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 		return panelaunch.Result{}, err
 	}
 	req := panelaunch.NewWatchRequest(cfg, projectRoot, issue, resolvedSettings, hookConfig)
-	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Herdr: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
+	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Herdr, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.LaunchWithResult(req)
 	if !ok {
 		return panelaunch.Result{}, bufferedLaunchError(stdout, stderr, "create watch pane")
@@ -212,21 +212,21 @@ type parentIssueFanoutResult struct {
 	CreatedPaneIDs []string
 	Notice         string
 	runtimeBackend backend.Backend
-	herdr          panelaunch.HerdrSessionRuntime
+	herdr          panelaunch.ManagedSessionRuntime
 }
 
 type tuiIssueReadyFunc func(
 	state.Store,
 	panelaunch.StateRecorder,
 	backend.Backend,
-	panelaunch.HerdrSessionRuntime,
+	panelaunch.ManagedSessionRuntime,
 ) error
 
 type tuiIssueAfterFunc func(
 	state.Store,
 	panelaunch.StateRecorder,
 	backend.Backend,
-	panelaunch.HerdrSessionRuntime,
+	panelaunch.ManagedSessionRuntime,
 	run.IssueAfterContext,
 ) error
 

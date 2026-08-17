@@ -13,10 +13,10 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-// TestHerdrSidebarMetadataFixesTokenPlacement pins which resource owns which
+// TestManagedSidebarMetadataFixesTokenPlacement pins which resource owns which
 // token: the workspace names the child, the pane carries the fan-out and the
 // work status. Moving a token between the two silently blanks a sidebar row.
-func TestHerdrSidebarMetadataFixesTokenPlacement(t *testing.T) {
+func TestManagedSidebarMetadataFixesTokenPlacement(t *testing.T) {
 	tests := []struct {
 		name          string
 		req           Request
@@ -99,7 +99,7 @@ func TestHerdrSidebarMetadataFixesTokenPlacement(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := herdrSidebarMetadata(tt.req, testHerdrMetadataIntent())
+			got := managedSidebarMetadata(tt.req, testManagedMetadataIntent())
 			if !reflect.DeepEqual(got.WorkspaceTokens, tt.wantWorkspace) {
 				t.Errorf("workspace tokens = %#v, want %#v", got.WorkspaceTokens, tt.wantWorkspace)
 			}
@@ -110,10 +110,10 @@ func TestHerdrSidebarMetadataFixesTokenPlacement(t *testing.T) {
 	}
 }
 
-// TestHerdrSidebarMetadataTargetsTheRealizedChild keeps the recheck bound to
+// TestManagedSidebarMetadataTargetsTheRealizedChild keeps the recheck bound to
 // the identity the launch verified, not to a freshly guessed one.
-func TestHerdrSidebarMetadataTargetsTheRealizedChild(t *testing.T) {
-	got := herdrSidebarMetadata(Request{Number: 494, ParentRef: "524"}, testHerdrMetadataIntent()).Target
+func TestManagedSidebarMetadataTargetsTheRealizedChild(t *testing.T) {
+	got := managedSidebarMetadata(Request{Number: 494, ParentRef: "524"}, testManagedMetadataIntent()).Target
 	want := backend.MetadataTarget{
 		WorkspaceID: "w2", Label: "fanout-worktree-abc",
 		RepoKey: "/repo/.git", RepoRoot: "/repo",
@@ -125,7 +125,7 @@ func TestHerdrSidebarMetadataTargetsTheRealizedChild(t *testing.T) {
 	}
 }
 
-func TestHerdrMetadataValueMatchesHerdrStorage(t *testing.T) {
+func TestManagedMetadataValueMatchesManagedStorage(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
@@ -147,27 +147,27 @@ func TestHerdrMetadataValueMatchesHerdrStorage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := herdrMetadataValue(tt.raw); got != tt.want {
-				t.Errorf("herdrMetadataValue(%q) = %q, want %q", tt.raw, got, tt.want)
+			if got := managedMetadataValue(tt.raw); got != tt.want {
+				t.Errorf("managedMetadataValue(%q) = %q, want %q", tt.raw, got, tt.want)
 			}
 		})
 	}
 }
 
-// TestReportHerdrSidebarMetadataNeverFailsALaunch keeps metadata display-only:
+// TestReportManagedSidebarMetadataNeverFailsALaunch keeps metadata display-only:
 // the report runs once after the row is recorded, is not retried, and stays out
 // of stderr so cmd/fanout's bufferedLaunchNotice cannot turn a cosmetic token
 // failure into the TUI's launch banner.
-func TestReportHerdrSidebarMetadataNeverFailsALaunch(t *testing.T) {
-	runtime := &fakeHerdrLaunchRuntime{metadataErr: errors.New("target is not live")}
+func TestReportManagedSidebarMetadataNeverFailsALaunch(t *testing.T) {
+	runtime := &fakeManagedLaunchRuntime{metadataErr: errors.New("target is not live")}
 	var out, errOut strings.Builder
 	launcher := &Launcher{
 		Cfg: &cliflags.Config{}, Log: log.NewWith(&out, &errOut, false),
-		Info: &fanoutruntime.Info{ProjectRoot: "/repo"}, Herdr: runtime,
+		Info: &fanoutruntime.Info{ProjectRoot: "/repo"}, Managed: runtime,
 	}
 	req := Request{ParentRef: "524", Number: 494, Slug: "herdr-sidebar-494"}
 
-	launcher.reportHerdrSidebarMetadata(req, testHerdrMetadataIntent())
+	launcher.reportManagedSidebarMetadata(req, testManagedMetadataIntent())
 
 	if len(runtime.metadataReports) != 1 {
 		t.Fatalf("metadata reports = %d, want exactly one attempt", len(runtime.metadataReports))
@@ -180,7 +180,7 @@ func TestReportHerdrSidebarMetadataNeverFailsALaunch(t *testing.T) {
 	}
 }
 
-func testHerdrMetadataIntent() state.LaunchIntent {
+func testManagedMetadataIntent() state.LaunchIntent {
 	return state.LaunchIntent{
 		WorktreePath: "/repo/.fanout/worktrees/child",
 		Resource: state.RuntimeResource{

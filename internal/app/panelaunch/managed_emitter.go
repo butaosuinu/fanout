@@ -10,50 +10,50 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-type herdrEmitterLaunch struct {
+type managedEmitterLaunch struct {
 	backendArgs []string
 	environment []string
 	nonce       string
 }
 
-const herdrClaudeExitReasons = "logout|prompt_input_exit|bypass_permissions_disabled|other"
+const managedClaudeExitReasons = "logout|prompt_input_exit|bypass_permissions_disabled|other"
 
-func newHerdrEmitterLaunch(
+func newManagedEmitterLaunch(
 	req Request,
 	route backend.OwnedLaunchRoute,
 	intent state.LaunchIntent,
 	launchNonce string,
 	agentID string,
 	statePath string,
-) (herdrEmitterLaunch, error) {
+) (managedEmitterLaunch, error) {
 	if req.Agent != "claude" && !req.CodexPlanMode() {
-		return herdrEmitterLaunch{}, nil
+		return managedEmitterLaunch{}, nil
 	}
-	emitterNonce, err := randomHerdrToken()
+	emitterNonce, err := randomManagedToken()
 	if err != nil {
-		return herdrEmitterLaunch{}, err
+		return managedEmitterLaunch{}, err
 	}
 	emitterPath := route.EmitterPath
 	if emitterPath == "" {
 		emitterPath = route.LauncherPath
 	}
-	launch := herdrEmitterLaunch{
-		environment: herdrEmitterEnvironment(
+	launch := managedEmitterLaunch{
+		environment: managedEmitterEnvironment(
 			statePath, intent, route, launchNonce, emitterNonce, req.Agent, agentID,
 		),
 		nonce: emitterNonce,
 	}
 	if req.Agent == "claude" {
-		settings, err := herdrClaudeHookSettings(emitterPath)
+		settings, err := managedClaudeHookSettings(emitterPath)
 		if err != nil {
-			return herdrEmitterLaunch{}, err
+			return managedEmitterLaunch{}, err
 		}
 		launch.backendArgs = []string{"--settings", settings}
 	}
 	return launch, nil
 }
 
-func herdrClaudeHookSettings(fanoutPath string) (string, error) {
+func managedClaudeHookSettings(fanoutPath string) (string, error) {
 	if !filepath.IsAbs(fanoutPath) || filepath.Clean(fanoutPath) != fanoutPath {
 		return "", fmt.Errorf("telemetry emitter executable must be canonical and absolute")
 	}
@@ -67,12 +67,12 @@ func herdrClaudeHookSettings(fanoutPath string) (string, error) {
 		Working: emit(string(backend.AgentWorking)),
 		Blocked: emit(string(backend.AgentBlocked)),
 		Idle:    emit(string(backend.AgentIdle)), Done: emit(string(backend.AgentDone)),
-		DoneMatcher: herdrClaudeExitReasons, DoneTimeoutSeconds: telemetry.EmitterTimeoutSeconds,
+		DoneMatcher: managedClaudeExitReasons, DoneTimeoutSeconds: telemetry.EmitterTimeoutSeconds,
 		Background: true,
 	}), nil
 }
 
-func herdrEmitterEnvironment(
+func managedEmitterEnvironment(
 	statePath string,
 	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,

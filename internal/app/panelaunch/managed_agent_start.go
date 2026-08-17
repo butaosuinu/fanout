@@ -16,33 +16,33 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-const herdrLaunchStepTimeout = 5 * time.Second
+const managedLaunchStepTimeout = 5 * time.Second
 
-const herdrLaunchObservationInterval = 2 * time.Second
+const managedLaunchObservationInterval = 2 * time.Second
 
-const herdrLaunchLockReacquireTimeout = maxHerdrRealizeTimeout
+const managedLaunchLockReacquireTimeout = maxManagedRealizeTimeout
 
-var errHerdrLaunchStatePreserved = errors.New("issued Herdr launch state preserved")
+var errManagedLaunchStatePreserved = errors.New("issued Herdr launch state preserved")
 
-type herdrLaunchValidator func(*state.LaunchCapsule) error
+type managedLaunchValidator func(*state.LaunchCapsule) error
 
-type herdrPaneSelector func(state.LaunchIntent, []backend.LivePane) (backend.LivePane, bool)
+type managedPaneSelector func(state.LaunchIntent, []backend.LivePane) (backend.LivePane, bool)
 
-type herdrAgentAdoptFunc func(
+type managedAgentAdoptFunc func(
 	context.Context,
 	*state.LockedStore,
 	state.LaunchIntent,
 ) (backend.LivePane, error)
 
-type herdrLaunchTransitionPending struct{}
+type managedLaunchTransitionPending struct{}
 
-func (herdrLaunchTransitionPending) Error() string {
+func (managedLaunchTransitionPending) Error() string {
 	return "herdr launcher is still starting the workload"
 }
 
-func (herdrLaunchTransitionPending) RetryableObservation() bool { return true }
+func (managedLaunchTransitionPending) RetryableObservation() bool { return true }
 
-func (l *Launcher) startHerdrRequestAgent(
+func (l *Launcher) startManagedRequestAgent(
 	ctx context.Context,
 	req Request,
 	locked *state.LockedStore,
@@ -50,37 +50,37 @@ func (l *Launcher) startHerdrRequestAgent(
 	intent state.LaunchIntent,
 	callerEnvironment []string,
 ) (backend.LivePane, error) {
-	return l.startHerdrAgent(
+	return l.startManagedAgent(
 		ctx, locked, route, intent,
 		func(launch *state.LaunchCapsule) error {
-			return validateHerdrLaunchBinding(req, launch)
+			return validateManagedLaunchBinding(req, launch)
 		},
 		func(intent state.LaunchIntent) (*state.LaunchCapsule, error) {
-			return l.prepareHerdrLaunchCapsule(req, route, intent, callerEnvironment)
+			return l.prepareManagedLaunchCapsule(req, route, intent, callerEnvironment)
 		},
 		func(intent state.LaunchIntent, panes []backend.LivePane) (backend.LivePane, bool) {
-			return exactHerdrLaunchPane(intent, panes, intent.Launch.AgentName)
+			return exactManagedLaunchPane(intent, panes, intent.Launch.AgentName)
 		},
 		func(ctx context.Context, locked *state.LockedStore, intent state.LaunchIntent) (backend.LivePane, error) {
-			return l.adoptHerdrAgent(ctx, req, locked, intent)
+			return l.adoptManagedAgent(ctx, req, locked, intent)
 		},
 	)
 }
 
-func (l *Launcher) startHerdrAgent(
+func (l *Launcher) startManagedAgent(
 	ctx context.Context,
 	locked *state.LockedStore,
 	route backend.OwnedLaunchRoute,
 	intent state.LaunchIntent,
-	validate herdrLaunchValidator,
-	build herdrLaunchCapsuleBuilder,
-	expected herdrPaneSelector,
-	adopt herdrAgentAdoptFunc,
+	validate managedLaunchValidator,
+	build managedLaunchCapsuleBuilder,
+	expected managedPaneSelector,
+	adopt managedAgentAdoptFunc,
 ) (live backend.LivePane, retErr error) {
-	if err := admitHerdrAgentStartDeadline(locked, l.Info.ProjectRoot, intent); err != nil {
+	if err := admitManagedAgentStartDeadline(locked, l.Info.ProjectRoot, intent); err != nil {
 		return live, err
 	}
-	intent, err := l.prepareHerdrLaunch(locked, route, intent, validate, build)
+	intent, err := l.prepareManagedLaunch(locked, route, intent, validate, build)
 	if err != nil {
 		return live, err
 	}
@@ -88,76 +88,76 @@ func (l *Launcher) startHerdrAgent(
 	if err != nil {
 		return live, err
 	}
-	if err := l.admitHerdrLauncher(ctx, journal, route, &intent); err != nil {
+	if err := l.admitManagedLauncher(ctx, journal, route, &intent); err != nil {
 		return live, err
 	}
-	if err := ensureHerdrLaunchActive(ctx, intent); err != nil {
+	if err := ensureManagedLaunchActive(ctx, intent); err != nil {
 		return live, err
 	}
 	intent.Launch.TokenIssued = true
-	if err := saveHerdrLaunchPhase(journal, intent); err != nil {
+	if err := saveManagedLaunchPhase(journal, intent); err != nil {
 		return live, err
 	}
-	return l.finishIssuedHerdrAgent(ctx, locked, route, intent, expected, adopt)
+	return l.finishIssuedManagedAgent(ctx, locked, route, intent, expected, adopt)
 }
 
-func admitHerdrAgentStartDeadline(
+func admitManagedAgentStartDeadline(
 	locked *state.LockedStore,
 	projectRoot string,
 	intent state.LaunchIntent,
 ) error {
-	if remainingHerdrLaunchTime(intent) > 0 {
+	if remainingManagedLaunchTime(intent) > 0 {
 		return nil
 	}
 	journal, err := locked.LaunchJournal(projectRoot)
 	if err != nil {
 		return err
 	}
-	return markHerdrIntentManual(journal, intent, fmt.Errorf("herdr agent-start intent expired before launcher admission"))
+	return markManagedIntentManual(journal, intent, fmt.Errorf("herdr agent-start intent expired before launcher admission"))
 }
 
-func (l *Launcher) admitHerdrLauncher(
+func (l *Launcher) admitManagedLauncher(
 	ctx context.Context,
 	journal *state.LockedLaunchJournal,
 	route backend.OwnedLaunchRoute,
 	intent *state.LaunchIntent,
 ) error {
-	if err := l.Herdr.WaitForLauncher(ctx, intent.Resource.PaneID, intent.Launch.Nonce, remainingHerdrLaunchTime(*intent)); err != nil {
+	if err := l.Managed.WaitForLauncher(ctx, intent.Resource.PaneID, intent.Launch.Nonce, remainingManagedLaunchTime(*intent)); err != nil {
 		return err
 	}
-	verifyErr := retryHerdrObservation(ctx, *intent, func(observeCtx context.Context) error {
-		return l.verifyHerdrIdleLauncher(observeCtx, *intent, route)
+	verifyErr := retryManagedObservation(ctx, *intent, func(observeCtx context.Context) error {
+		return l.verifyManagedIdleLauncher(observeCtx, *intent, route)
 	})
 	if verifyErr != nil {
-		if errors.Is(verifyErr, errHerdrLauncherIdentityChanged) {
-			return markHerdrIntentManual(journal, *intent, verifyErr)
+		if errors.Is(verifyErr, errManagedLauncherIdentityChanged) {
+			return markManagedIntentManual(journal, *intent, verifyErr)
 		}
 		return verifyErr
 	}
-	if err := ensureHerdrLaunchActive(ctx, *intent); err != nil {
+	if err := ensureManagedLaunchActive(ctx, *intent); err != nil {
 		return err
 	}
 	intent.Launch.LauncherReady = true
-	return saveHerdrLaunchPhase(journal, *intent)
+	return saveManagedLaunchPhase(journal, *intent)
 }
 
-func (l *Launcher) finishIssuedHerdrAgent(
+func (l *Launcher) finishIssuedManagedAgent(
 	ctx context.Context,
 	locked *state.LockedStore,
 	route backend.OwnedLaunchRoute,
 	intent state.LaunchIntent,
-	expected herdrPaneSelector,
-	adopt herdrAgentAdoptFunc,
+	expected managedPaneSelector,
+	adopt managedAgentAdoptFunc,
 ) (live backend.LivePane, retErr error) {
 	defer func() {
-		if retErr != nil && !errors.Is(retErr, errHerdrLaunchStatePreserved) {
-			retErr = errors.Join(retErr, l.failClosedLatestIssuedHerdrLaunch(locked, intent, retErr))
+		if retErr != nil && !errors.Is(retErr, errManagedLaunchStatePreserved) {
+			retErr = errors.Join(retErr, l.failClosedLatestIssuedManagedLaunch(locked, intent, retErr))
 		}
 	}()
-	if err := l.sendHerdrLaunchToken(ctx, intent); err != nil {
+	if err := l.sendManagedLaunchToken(ctx, intent); err != nil {
 		return live, err
 	}
-	live, err := l.observeStartedHerdrPane(ctx, locked, route, intent, expected, adopt)
+	live, err := l.observeStartedManagedPane(ctx, locked, route, intent, expected, adopt)
 	if err != nil {
 		return live, err
 	}
@@ -167,45 +167,45 @@ func (l *Launcher) finishIssuedHerdrAgent(
 	return live, nil
 }
 
-func (l *Launcher) observeStartedHerdrPane(
+func (l *Launcher) observeStartedManagedPane(
 	ctx context.Context,
 	locked *state.LockedStore,
 	route backend.OwnedLaunchRoute,
 	intent state.LaunchIntent,
-	expected herdrPaneSelector,
-	adopt herdrAgentAdoptFunc,
+	expected managedPaneSelector,
+	adopt managedAgentAdoptFunc,
 ) (backend.LivePane, error) {
 	if adopt != nil {
 		return adopt(ctx, locked, intent)
 	}
-	if err := l.waitForHerdrLaunchProcess(ctx, intent, route); err != nil {
+	if err := l.waitForManagedLaunchProcess(ctx, intent, route); err != nil {
 		return backend.LivePane{}, err
 	}
-	return l.waitForHerdrPane(ctx, intent, expected, intent.Launch.CodexTeamStatusPath)
+	return l.waitForManagedPane(ctx, intent, expected, intent.Launch.CodexTeamStatusPath)
 }
 
-func (l *Launcher) adoptHerdrAgent(
+func (l *Launcher) adoptManagedAgent(
 	ctx context.Context,
 	req Request,
 	locked *state.LockedStore,
 	intent state.LaunchIntent,
 ) (backend.LivePane, error) {
-	statusPath, err := herdrCodexStatusPath(req, intent)
+	statusPath, err := managedCodexStatusPath(req, intent)
 	if err != nil {
 		return backend.LivePane{}, err
 	}
-	live, err := l.waitForHerdrPaneUnlocked(ctx, locked, intent, func(intent state.LaunchIntent, panes []backend.LivePane) (backend.LivePane, bool) {
-		return exactHerdrLaunchPane(intent, panes, req.Agent)
+	live, err := l.waitForManagedPaneUnlocked(ctx, locked, intent, func(intent state.LaunchIntent, panes []backend.LivePane) (backend.LivePane, bool) {
+		return exactManagedLaunchPane(intent, panes, req.Agent)
 	}, statusPath)
 	if err != nil {
 		return live, err
 	}
-	processIdentity, err := l.verifyAndRenameHerdrAgent(ctx, intent)
+	processIdentity, err := l.verifyAndRenameManagedAgent(ctx, intent)
 	if err != nil {
 		return live, err
 	}
-	live, err = l.waitForHerdrPaneUnlocked(ctx, locked, intent, func(intent state.LaunchIntent, panes []backend.LivePane) (backend.LivePane, bool) {
-		return exactHerdrLaunchPane(intent, panes, intent.Launch.AgentName)
+	live, err = l.waitForManagedPaneUnlocked(ctx, locked, intent, func(intent state.LaunchIntent, panes []backend.LivePane) (backend.LivePane, bool) {
+		return exactManagedLaunchPane(intent, panes, intent.Launch.AgentName)
 	}, statusPath)
 	if err == nil {
 		live.ProcessIdentity = &processIdentity
@@ -213,51 +213,51 @@ func (l *Launcher) adoptHerdrAgent(
 	return live, err
 }
 
-func (l *Launcher) waitForHerdrPaneUnlocked(
+func (l *Launcher) waitForManagedPaneUnlocked(
 	ctx context.Context,
 	locked *state.LockedStore,
 	intent state.LaunchIntent,
-	expected herdrPaneSelector,
+	expected managedPaneSelector,
 	codexTeamStatusPath string,
 ) (backend.LivePane, error) {
 	if intent.Launch == nil || intent.Launch.EmitterNonce == "" {
-		return l.waitForHerdrPane(ctx, intent, expected, codexTeamStatusPath)
+		return l.waitForManagedPane(ctx, intent, expected, codexTeamStatusPath)
 	}
 	if err := locked.Unlock(); err != nil {
 		return backend.LivePane{}, err
 	}
-	live, waitErr := l.waitForHerdrPane(ctx, intent, expected, codexTeamStatusPath)
-	lockErr := reacquireHerdrLaunchLock(locked, l.Info.ProjectRoot, intent)
+	live, waitErr := l.waitForManagedPane(ctx, intent, expected, codexTeamStatusPath)
+	lockErr := reacquireManagedLaunchLock(locked, l.Info.ProjectRoot, intent)
 	if waitErr == nil && lockErr == nil && ctx.Err() != nil {
 		waitErr = fmt.Errorf(
 			"%w: launch context expired after current agent observation: %w",
-			errHerdrLaunchStatePreserved,
+			errManagedLaunchStatePreserved,
 			ctx.Err(),
 		)
 	}
 	return live, errors.Join(waitErr, lockErr)
 }
 
-func reacquireHerdrLaunchLock(
+func reacquireManagedLaunchLock(
 	locked *state.LockedStore,
 	projectRoot string,
 	intent state.LaunchIntent,
 ) error {
-	ctx, cancel := context.WithTimeout(context.Background(), herdrLaunchLockReacquireTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), managedLaunchLockReacquireTimeout)
 	defer cancel()
 	reloaded, err := state.LockProjectForLaunchContext(ctx, projectRoot)
 	if err != nil {
 		return fmt.Errorf(
 			"%w: reacquire Herdr launch lock after runtime wait: %w",
-			errHerdrLaunchStatePreserved,
+			errManagedLaunchStatePreserved,
 			err,
 		)
 	}
 	*locked = *reloaded
-	return validateReacquiredHerdrLaunch(locked, projectRoot, intent)
+	return validateReacquiredManagedLaunch(locked, projectRoot, intent)
 }
 
-func validateReacquiredHerdrLaunch(
+func validateReacquiredManagedLaunch(
 	locked *state.LockedStore,
 	projectRoot string,
 	want state.LaunchIntent,
@@ -271,15 +271,15 @@ func validateReacquiredHerdrLaunch(
 		return fmt.Errorf("issued Herdr launch intent disappeared during runtime wait")
 	}
 	if latest.Status == state.IntentManualCleanupRequired {
-		return herdrManualCleanupError(latest)
+		return manualCleanupError(latest)
 	}
-	if !sameHerdrLaunchGeneration(latest, want) {
+	if !sameManagedLaunchGeneration(latest, want) {
 		return fmt.Errorf("issued Herdr launch identity changed during runtime wait")
 	}
 	return nil
 }
 
-func sameHerdrLaunchGeneration(latest, want state.LaunchIntent) bool {
+func sameManagedLaunchGeneration(latest, want state.LaunchIntent) bool {
 	if latest.Status != state.IntentRealized || latest.Launch == nil || want.Launch == nil {
 		return false
 	}
@@ -294,7 +294,7 @@ func sameHerdrLaunchGeneration(latest, want state.LaunchIntent) bool {
 	return reflect.DeepEqual(latest, want)
 }
 
-func (l *Launcher) failClosedLatestIssuedHerdrLaunch(
+func (l *Launcher) failClosedLatestIssuedManagedLaunch(
 	locked *state.LockedStore,
 	intent state.LaunchIntent,
 	cause error,
@@ -308,56 +308,56 @@ func (l *Launcher) failClosedLatestIssuedHerdrLaunch(
 		return fmt.Errorf("issued Herdr launch intent disappeared during agent wait")
 	}
 	if latest.Status == state.IntentManualCleanupRequired {
-		return herdrManualCleanupError(latest)
+		return manualCleanupError(latest)
 	}
-	return l.failClosedIssuedHerdrLaunch(journal, latest, cause)
+	return l.failClosedIssuedManagedLaunch(journal, latest, cause)
 }
 
-func (l *Launcher) verifyAndRenameHerdrAgent(
+func (l *Launcher) verifyAndRenameManagedAgent(
 	ctx context.Context,
 	intent state.LaunchIntent,
 ) (backend.ProcessIdentity, error) {
 	var process backend.PaneProcessInfo
-	err := retryHerdrObservation(ctx, intent, func(observeCtx context.Context) error {
+	err := retryManagedObservation(ctx, intent, func(observeCtx context.Context) error {
 		var processErr error
-		process, processErr = l.Herdr.ProcessInfo(observeCtx, intent.Resource.PaneID)
+		process, processErr = l.Managed.ProcessInfo(observeCtx, intent.Resource.PaneID)
 		return processErr
 	})
 	if err != nil {
 		return backend.ProcessIdentity{}, err
 	}
-	identity, verifyErr := matchHerdrAgentProcess(process, intent)
+	identity, verifyErr := matchManagedAgentProcess(process, intent)
 	if verifyErr != nil {
 		return backend.ProcessIdentity{}, verifyErr
 	}
-	stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)
+	stepCtx, cancel, err := managedLaunchStepContext(ctx, intent)
 	if err != nil {
 		return backend.ProcessIdentity{}, err
 	}
-	err = herdrLaunchStepResult(
+	err = managedLaunchStepResult(
 		stepCtx, cancel,
-		l.Herdr.RenameAgent(stepCtx, intent.Resource.PaneID, intent.Launch.AgentName),
+		l.Managed.RenameAgent(stepCtx, intent.Resource.PaneID, intent.Launch.AgentName),
 	)
 	return identity, err
 }
 
-func saveHerdrLaunchPhase(journal *state.LockedLaunchJournal, intent state.LaunchIntent) error {
+func saveManagedLaunchPhase(journal *state.LockedLaunchJournal, intent state.LaunchIntent) error {
 	journal.UpsertIntent(intent)
 	return journal.Save()
 }
 
-func (l *Launcher) sendHerdrLaunchToken(ctx context.Context, intent state.LaunchIntent) error {
-	stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)
+func (l *Launcher) sendManagedLaunchToken(ctx context.Context, intent state.LaunchIntent) error {
+	stepCtx, cancel, err := managedLaunchStepContext(ctx, intent)
 	if err != nil {
 		return err
 	}
-	return herdrLaunchStepResult(
+	return managedLaunchStepResult(
 		stepCtx, cancel,
-		l.Herdr.SendLaunchToken(stepCtx, intent.Resource.PaneID, intent.Launch.Nonce),
+		l.Managed.SendLaunchToken(stepCtx, intent.Resource.PaneID, intent.Launch.Nonce),
 	)
 }
 
-func remainingHerdrLaunchTime(intent state.LaunchIntent) time.Duration {
+func remainingManagedLaunchTime(intent state.LaunchIntent) time.Duration {
 	remaining := time.Until(time.UnixMilli(intent.ExpiresUnixMS))
 	if remaining <= 0 {
 		return 0
@@ -368,7 +368,7 @@ func remainingHerdrLaunchTime(intent state.LaunchIntent) time.Duration {
 	return remaining
 }
 
-func ensureHerdrLaunchActive(ctx context.Context, intent state.LaunchIntent) error {
+func ensureManagedLaunchActive(ctx context.Context, intent state.LaunchIntent) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -378,14 +378,14 @@ func ensureHerdrLaunchActive(ctx context.Context, intent state.LaunchIntent) err
 	return nil
 }
 
-func herdrLaunchStepContext(
+func managedLaunchStepContext(
 	ctx context.Context,
 	intent state.LaunchIntent,
 ) (context.Context, context.CancelFunc, error) {
-	if err := ensureHerdrLaunchActive(ctx, intent); err != nil {
+	if err := ensureManagedLaunchActive(ctx, intent); err != nil {
 		return nil, nil, err
 	}
-	deadline := time.Now().Add(herdrLaunchStepTimeout)
+	deadline := time.Now().Add(managedLaunchStepTimeout)
 	expires := time.UnixMilli(intent.ExpiresUnixMS)
 	if expires.Before(deadline) {
 		deadline = expires
@@ -394,7 +394,7 @@ func herdrLaunchStepContext(
 	return stepCtx, cancel, nil
 }
 
-func herdrLaunchStepResult(
+func managedLaunchStepResult(
 	stepCtx context.Context,
 	cancel context.CancelFunc,
 	operationErr error,
@@ -404,42 +404,42 @@ func herdrLaunchStepResult(
 	return errors.Join(operationErr, contextErr)
 }
 
-func retryHerdrObservation(
+func retryManagedObservation(
 	ctx context.Context,
 	intent state.LaunchIntent,
 	observe func(context.Context) error,
 ) error {
 	for {
-		stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)
+		stepCtx, cancel, err := managedLaunchStepContext(ctx, intent)
 		if err != nil {
 			return err
 		}
-		stepErr := herdrLaunchStepResult(stepCtx, cancel, observe(stepCtx))
+		stepErr := managedLaunchStepResult(stepCtx, cancel, observe(stepCtx))
 		if stepErr == nil || !backend.IsRetryableObservationError(stepErr) {
 			return stepErr
 		}
-		if err := waitForHerdrObservationRetry(ctx, intent); err != nil {
+		if err := waitForManagedObservationRetry(ctx, intent); err != nil {
 			return err
 		}
 	}
 }
 
-func waitForHerdrObservationRetry(ctx context.Context, intent state.LaunchIntent) error {
-	remaining := remainingHerdrLaunchTime(intent)
+func waitForManagedObservationRetry(ctx context.Context, intent state.LaunchIntent) error {
+	remaining := remainingManagedLaunchTime(intent)
 	if remaining <= 0 {
 		return fmt.Errorf("herdr agent-start intent expired")
 	}
-	timer := time.NewTimer(min(herdrLaunchObservationInterval, remaining))
+	timer := time.NewTimer(min(managedLaunchObservationInterval, remaining))
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-timer.C:
-		return ensureHerdrLaunchActive(ctx, intent)
+		return ensureManagedLaunchActive(ctx, intent)
 	}
 }
 
-func verifyHerdrLauncherProcess(
+func verifyManagedLauncherProcess(
 	info backend.PaneProcessInfo,
 	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
@@ -457,23 +457,23 @@ func verifyHerdrLauncherProcess(
 	return fmt.Errorf("herdr launcher process identity does not match the bundled fanout executable")
 }
 
-func verifyHerdrAgentProcess(info backend.PaneProcessInfo, intent state.LaunchIntent) error {
-	_, err := matchHerdrAgentProcess(info, intent)
+func verifyManagedAgentProcess(info backend.PaneProcessInfo, intent state.LaunchIntent) error {
+	_, err := matchManagedAgentProcess(info, intent)
 	return err
 }
 
-func matchHerdrAgentProcess(
+func matchManagedAgentProcess(
 	info backend.PaneProcessInfo,
 	intent state.LaunchIntent,
 ) (backend.ProcessIdentity, error) {
-	identity, err := herdrprocess.MatchAgent(info, herdrLaunchProcessIdentity(intent))
+	identity, err := herdrprocess.MatchAgent(info, managedLaunchProcessIdentity(intent))
 	if err != nil {
 		return backend.ProcessIdentity{}, fmt.Errorf("herdr agent process identity does not match launch intent")
 	}
 	return identity, nil
 }
 
-func herdrLaunchProcessIdentity(intent state.LaunchIntent) herdrprocess.Identity {
+func managedLaunchProcessIdentity(intent state.LaunchIntent) herdrprocess.Identity {
 	if intent.Launch == nil {
 		return herdrprocess.Identity{}
 	}
@@ -483,30 +483,30 @@ func herdrLaunchProcessIdentity(intent state.LaunchIntent) herdrprocess.Identity
 	}
 }
 
-func (l *Launcher) waitForHerdrLaunchProcess(
+func (l *Launcher) waitForManagedLaunchProcess(
 	ctx context.Context,
 	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
 ) error {
-	return retryHerdrObservation(ctx, intent, func(observeCtx context.Context) error {
-		process, err := l.Herdr.ProcessInfo(observeCtx, intent.Resource.PaneID)
+	return retryManagedObservation(ctx, intent, func(observeCtx context.Context) error {
+		process, err := l.Managed.ProcessInfo(observeCtx, intent.Resource.PaneID)
 		if err != nil {
 			return err
 		}
-		processErr := verifyHerdrAgentProcess(process, intent)
-		pending := verifyHerdrLauncherProcess(process, intent, route) == nil ||
-			herdrprocess.InterpreterLaunchPending(process, herdrLaunchProcessIdentity(intent))
+		processErr := verifyManagedAgentProcess(process, intent)
+		pending := verifyManagedLauncherProcess(process, intent, route) == nil ||
+			herdrprocess.InterpreterLaunchPending(process, managedLaunchProcessIdentity(intent))
 		if processErr == nil || !pending {
 			return processErr
 		}
-		return herdrLaunchTransitionPending{}
+		return managedLaunchTransitionPending{}
 	})
 }
 
-func (l *Launcher) waitForHerdrPane(
+func (l *Launcher) waitForManagedPane(
 	ctx context.Context,
 	intent state.LaunchIntent,
-	expected herdrPaneSelector,
+	expected managedPaneSelector,
 	codexTeamStatusPath string,
 ) (backend.LivePane, error) {
 	deadline := time.UnixMilli(intent.ExpiresUnixMS)
@@ -514,7 +514,7 @@ func (l *Launcher) waitForHerdrPane(
 		if err := codexapp.StartupFailure(codexTeamStatusPath); err != nil {
 			return backend.LivePane{}, err
 		}
-		live, found, err := l.observeExactHerdrPane(ctx, intent, expected)
+		live, found, err := l.observeExactManagedPane(ctx, intent, expected)
 		if err != nil {
 			return backend.LivePane{}, err
 		}
@@ -525,7 +525,7 @@ func (l *Launcher) waitForHerdrPane(
 		if remaining <= 0 {
 			break
 		}
-		pause := min(herdrLaunchObservationInterval, remaining)
+		pause := min(managedLaunchObservationInterval, remaining)
 		select {
 		case <-ctx.Done():
 			return backend.LivePane{}, ctx.Err()
@@ -535,17 +535,17 @@ func (l *Launcher) waitForHerdrPane(
 	return backend.LivePane{}, fmt.Errorf("timed out waiting for exact Herdr pane identity")
 }
 
-func (l *Launcher) observeExactHerdrPane(
+func (l *Launcher) observeExactManagedPane(
 	ctx context.Context,
 	intent state.LaunchIntent,
-	expected herdrPaneSelector,
+	expected managedPaneSelector,
 ) (backend.LivePane, bool, error) {
-	stepCtx, cancel, err := herdrLaunchStepContext(ctx, intent)
+	stepCtx, cancel, err := managedLaunchStepContext(ctx, intent)
 	if err != nil {
 		return backend.LivePane{}, false, err
 	}
-	panes, operationErr := l.Herdr.LivePanes(stepCtx)
-	stepErr := herdrLaunchStepResult(stepCtx, cancel, operationErr)
+	panes, operationErr := l.Managed.LivePanes(stepCtx)
+	stepErr := managedLaunchStepResult(stepCtx, cancel, operationErr)
 	if err := ctx.Err(); err != nil {
 		return backend.LivePane{}, false, err
 	}
@@ -559,7 +559,7 @@ func (l *Launcher) observeExactHerdrPane(
 	return live, found, nil
 }
 
-func exactHerdrLaunchPane(
+func exactManagedLaunchPane(
 	intent state.LaunchIntent,
 	panes []backend.LivePane,
 	wantAgentID string,
@@ -577,13 +577,13 @@ func exactHerdrLaunchPane(
 			pane.AgentPresent, pane.AgentID == wantAgentID,
 			pane.AgentProvider == intent.Launch.Agent,
 		}
-		if !slices.Contains(identity, false) && validOptionalHerdrAgentSession(pane.AgentSession, intent.Launch.Agent) {
+		if !slices.Contains(identity, false) && validOptionalManagedAgentSession(pane.AgentSession, intent.Launch.Agent) {
 			return pane, true
 		}
 	}
 	return backend.LivePane{}, false
 }
 
-func validOptionalHerdrAgentSession(session *backend.AgentSessionRef, agentName string) bool {
+func validOptionalManagedAgentSession(session *backend.AgentSessionRef, agentName string) bool {
 	return session == nil || session.Valid() && session.Agent == agentName && session.Source == "herdr:"+agentName
 }

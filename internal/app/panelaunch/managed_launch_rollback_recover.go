@@ -9,11 +9,11 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-func loadHerdrWorktreeIntentForRealization(
+func loadManagedWorktreeIntentForRealization(
 	ctx context.Context,
-	runtime HerdrWorktreeRuntime,
+	runtime ManagedWorktreeRuntime,
 	locked *state.LockedLaunchJournal,
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	source worktree.RepoIdentity,
 	ownerProjectRoot, runtimeParent, intentID string,
 ) (state.LaunchIntent, bool, error) {
@@ -23,7 +23,7 @@ func loadHerdrWorktreeIntentForRealization(
 		return state.LaunchIntent{}, false, err
 	}
 	if rollback, rollbackFound := locked.FindIntent(rollbackID); rollbackFound {
-		if err := recoverInterruptedHerdrLaunchRollback(
+		if err := recoverInterruptedManagedLaunchRollback(
 			ctx, runtime, locked, req, source, ownerProjectRoot,
 			runtimeParent, original, found, rollback,
 		); err != nil {
@@ -32,44 +32,44 @@ func loadHerdrWorktreeIntentForRealization(
 		original, found = locked.FindIntent(intentID)
 	}
 	if found && original.Status == state.IntentManualCleanupRequired {
-		return state.LaunchIntent{}, false, herdrManualCleanupError(original)
+		return state.LaunchIntent{}, false, manualCleanupError(original)
 	}
 	return original, found, nil
 }
 
-func recoverInterruptedHerdrLaunchRollback(
+func recoverInterruptedManagedLaunchRollback(
 	ctx context.Context,
-	runtime HerdrWorktreeRuntime,
+	runtime ManagedWorktreeRuntime,
 	locked *state.LockedLaunchJournal,
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	source worktree.RepoIdentity,
 	ownerProjectRoot, runtimeParent string,
 	original state.LaunchIntent,
 	originalFound bool,
 	rollback state.LaunchIntent,
 ) error {
-	if err := validateInterruptedHerdrRollback(
+	if err := validateInterruptedManagedRollback(
 		req, ownerProjectRoot, runtimeParent, original, originalFound, rollback,
 	); err != nil {
-		return failInterruptedHerdrRollback(locked, original, originalFound, rollback, err)
+		return failInterruptedManagedRollback(locked, original, originalFound, rollback, err)
 	}
 	switch rollback.Status {
 	case state.IntentPlanned:
-		return restoreUnissuedHerdrLaunchRollback(locked, original, originalFound, rollback)
+		return restoreUnissuedManagedLaunchRollback(locked, original, originalFound, rollback)
 	case state.IntentIssued:
-		return classifyIssuedHerdrLaunchRollback(ctx, runtime, locked, req, source, original, originalFound, rollback)
+		return classifyIssuedManagedLaunchRollback(ctx, runtime, locked, req, source, original, originalFound, rollback)
 	case state.IntentManualCleanupRequired:
-		return herdrManualCleanupError(rollback)
+		return manualCleanupError(rollback)
 	default:
-		return failInterruptedHerdrRollback(
+		return failInterruptedManagedRollback(
 			locked, original, originalFound, rollback,
 			fmt.Errorf("unknown Herdr launch rollback status %q", rollback.Status),
 		)
 	}
 }
 
-func validateInterruptedHerdrRollback(
-	req HerdrWorktreeRequest,
+func validateInterruptedManagedRollback(
+	req ManagedWorktreeRequest,
 	ownerProjectRoot, runtimeParent string,
 	original state.LaunchIntent,
 	originalFound bool,
@@ -77,32 +77,32 @@ func validateInterruptedHerdrRollback(
 ) error {
 	requirements := []bool{
 		rollback.Kind == state.IntentRollback,
-		rollback.Parent == canonicalHerdrParent(req.Parent),
+		rollback.Parent == canonicalManagedParent(req.Parent),
 		rollback.RuntimeParent == runtimeParent,
 		rollback.OwnerProjectRoot == ownerProjectRoot,
 		rollback.IssueNum == req.IssueNum, rollback.TaskID == req.TaskID,
 		rollback.Slug == req.Slug, rollback.BranchName == req.BranchName,
 		filepath.Clean(rollback.WorktreePath) == filepath.Clean(req.WorktreePath),
-		rollback.Session == req.HerdrSession, rollback.SocketPath == req.SocketPath,
+		rollback.Session == req.ManagedSession, rollback.SocketPath == req.SocketPath,
 	}
 	for _, requirement := range requirements {
 		if !requirement {
 			return fmt.Errorf("saved Herdr launch rollback contradicts request")
 		}
 	}
-	if originalFound && !herdrRollbackMatchesOriginal(original, rollback) {
+	if originalFound && !managedRollbackMatchesOriginal(original, rollback) {
 		return fmt.Errorf("saved Herdr launch rollback contradicts its worktree intent")
 	}
 	return nil
 }
 
-func herdrRollbackMatchesOriginal(original, rollback state.LaunchIntent) bool {
+func managedRollbackMatchesOriginal(original, rollback state.LaunchIntent) bool {
 	return original.Kind == state.IntentWorktree &&
 		original.Status == state.IntentManualCleanupRequired &&
-		herdrLaunchRollbackIdentity(original) == herdrLaunchRollbackIdentity(rollback)
+		managedLaunchRollbackIdentity(original) == managedLaunchRollbackIdentity(rollback)
 }
 
-type herdrRollbackIdentity struct {
+type managedRollbackIdentity struct {
 	parent, runtimeParent, ownerProjectRoot, taskID        string
 	slug, branchName, fullBranchRef, baseSHA, expectedHead string
 	worktreePath, workspaceLabel, session, socketPath      string
@@ -111,8 +111,8 @@ type herdrRollbackIdentity struct {
 	resource, coordinator                                  state.RuntimeResource
 }
 
-func herdrLaunchRollbackIdentity(intent state.LaunchIntent) herdrRollbackIdentity {
-	return herdrRollbackIdentity{
+func managedLaunchRollbackIdentity(intent state.LaunchIntent) managedRollbackIdentity {
+	return managedRollbackIdentity{
 		parent: intent.Parent, runtimeParent: intent.RuntimeParent,
 		ownerProjectRoot: intent.OwnerProjectRoot, taskID: intent.TaskID,
 		slug: intent.Slug, branchName: intent.BranchName, fullBranchRef: intent.FullBranchRef,
@@ -124,14 +124,14 @@ func herdrLaunchRollbackIdentity(intent state.LaunchIntent) herdrRollbackIdentit
 	}
 }
 
-func restoreUnissuedHerdrLaunchRollback(
+func restoreUnissuedManagedLaunchRollback(
 	locked *state.LockedLaunchJournal,
 	original state.LaunchIntent,
 	originalFound bool,
 	rollback state.LaunchIntent,
 ) error {
 	if !originalFound {
-		return markHerdrIntentManual(
+		return markManagedIntentManual(
 			locked, rollback,
 			fmt.Errorf("planned Herdr launch rollback lost its worktree intent"),
 		)
@@ -143,50 +143,50 @@ func restoreUnissuedHerdrLaunchRollback(
 	return locked.Save()
 }
 
-func classifyIssuedHerdrLaunchRollback(
+func classifyIssuedManagedLaunchRollback(
 	ctx context.Context,
-	runtime HerdrWorktreeRuntime,
+	runtime ManagedWorktreeRuntime,
 	locked *state.LockedLaunchJournal,
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	source worktree.RepoIdentity,
 	original state.LaunchIntent,
 	originalFound bool,
 	rollback state.LaunchIntent,
 ) error {
-	recoveryCtx, cancel := context.WithTimeout(ctx, maxHerdrRecoveryClassificationTimeout)
+	recoveryCtx, cancel := context.WithTimeout(ctx, maxManagedRecoveryClassificationTimeout)
 	defer cancel()
-	if err := verifyHerdrRealizeRoute(
-		recoveryCtx, runtime, source.RepoKey, req.HerdrSession, req.SocketPath,
+	if err := verifyManagedRealizeRoute(
+		recoveryCtx, runtime, source.RepoKey, req.ManagedSession, req.SocketPath,
 	); err != nil {
-		return failInterruptedHerdrRollback(locked, original, originalFound, rollback, err)
+		return failInterruptedManagedRollback(locked, original, originalFound, rollback, err)
 	}
-	if err := verifyIssuedHerdrRollbackAbsent(recoveryCtx, runtime, req, rollback); err != nil {
-		return failInterruptedHerdrRollback(locked, original, originalFound, rollback, err)
+	if err := verifyIssuedManagedRollbackAbsent(recoveryCtx, runtime, req, rollback); err != nil {
+		return failInterruptedManagedRollback(locked, original, originalFound, rollback, err)
 	}
-	return finishAbsentHerdrLaunchRollback(
+	return finishAbsentManagedLaunchRollback(
 		recoveryCtx, runtime, locked, req, original, originalFound, rollback,
 	)
 }
 
-func finishAbsentHerdrLaunchRollback(
+func finishAbsentManagedLaunchRollback(
 	ctx context.Context,
-	runtime HerdrWorktreeRuntime,
+	runtime ManagedWorktreeRuntime,
 	locked *state.LockedLaunchJournal,
-	req HerdrWorktreeRequest,
+	req ManagedWorktreeRequest,
 	original state.LaunchIntent,
 	originalFound bool,
 	rollback state.LaunchIntent,
 ) error {
 	if originalFound && original.Launch != nil {
-		if err := removeUnpublishedHerdrEnvironment(runtime, filepath.Dir(original.SocketPath), original.Launch); err != nil {
-			return failInterruptedHerdrRollback(locked, original, true, rollback, err)
+		if err := removeUnpublishedManagedEnvironment(runtime, filepath.Dir(original.SocketPath), original.Launch); err != nil {
+			return failInterruptedManagedRollback(locked, original, true, rollback, err)
 		}
 	}
 	if rollback.BranchCreated {
 		if err := worktree.DeleteReservedBranch(
 			ctx, req.SourceRoot, rollback.FullBranchRef, rollback.BaseSHA,
 		); err != nil {
-			return failInterruptedHerdrRollback(locked, original, originalFound, rollback, err)
+			return failInterruptedManagedRollback(locked, original, originalFound, rollback, err)
 		}
 	}
 	if originalFound {
@@ -196,10 +196,10 @@ func finishAbsentHerdrLaunchRollback(
 	return locked.Save()
 }
 
-func verifyIssuedHerdrRollbackAbsent(
+func verifyIssuedManagedRollbackAbsent(
 	ctx context.Context,
-	runtime HerdrWorktreeRuntime,
-	req HerdrWorktreeRequest,
+	runtime ManagedWorktreeRuntime,
+	req ManagedWorktreeRequest,
 	rollback state.LaunchIntent,
 ) error {
 	workspaces, err := runtime.ObserveWorkspaces(ctx)
@@ -221,7 +221,7 @@ func verifyIssuedHerdrRollbackAbsent(
 	return nil
 }
 
-func failInterruptedHerdrRollback(
+func failInterruptedManagedRollback(
 	locked *state.LockedLaunchJournal,
 	original state.LaunchIntent,
 	originalFound bool,
@@ -229,7 +229,7 @@ func failInterruptedHerdrRollback(
 	cause error,
 ) error {
 	if !originalFound {
-		return markHerdrIntentManual(locked, rollback, cause)
+		return markManagedIntentManual(locked, rollback, cause)
 	}
-	return failHerdrRollback(locked, original, rollback, cause)
+	return failManagedRollback(locked, original, rollback, cause)
 }

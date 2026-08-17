@@ -126,7 +126,7 @@ type Launcher struct {
 	Log         *log.Logger
 	Info        *fanoutruntime.Info
 	Backend     backend.Backend
-	Herdr       HerdrLaunchRuntime
+	Managed     ManagedLaunchRuntime
 	Recorder    StateRecorder
 	Palette     log.Palette
 	CommandName string
@@ -141,8 +141,8 @@ func (l *Launcher) LaunchOK(req Request) bool {
 // LaunchWithResult creates one worktree-backed agent pane and returns its exact
 // backend-native pane id. A successful dry run returns an empty Result.
 func (l *Launcher) LaunchWithResult(req Request) (Result, bool) {
-	if l.Backend != nil && l.Backend.Name() == backend.Herdr {
-		return l.launchHerdr(req)
+	if l.Backend != nil && l.Backend.MutationModel() == backend.MutationJournaled {
+		return l.launchManaged(req)
 	}
 	return l.launch(req)
 }
@@ -308,7 +308,7 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		l.Log.Err("%s: runtime backend is not configured", paneLogLabel(req))
 		return Result{}, false
 	}
-	herdrLocked, ok := l.prepareAttachedLaunch(&req)
+	managedLocked, ok := l.prepareAttachedLaunch(&req)
 	if !ok {
 		return Result{}, false
 	}
@@ -330,25 +330,30 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 		logPlanMode(req, l.Log)
 	}
 	hooks.RunBackground(hooks.BeforePaneCreate, paneHookContext(req, l.Info.ProjectRoot, targetPath, ""), req.Hooks, l.Log)
-	if herdrLocked != nil {
-		return l.attachHerdr(req, targetPath, herdrLocked)
+	if managedLocked != nil {
+		return l.attachManaged(req, targetPath, managedLocked)
 	}
 	return l.attachTmux(req, targetPath)
 }
 
 func (l *Launcher) prepareAttachedLaunch(req *Request) (*state.LockedStore, bool) {
-	if err := prepareAttachedLiveness(l.Backend.Name(), req); err != nil {
+	if err := prepareAttachedLiveness(l.Backend.MutationModel(), req); err != nil {
 		l.Log.Err("%s: %v", paneLogLabel(*req), err)
 		return nil, false
 	}
-	if l.Backend.Name() != backend.Herdr {
+	if l.Backend.MutationModel() != backend.MutationJournaled {
 		return nil, true
 	}
-	return l.admitHerdrLaunchRequest(*req)
+	return l.admitManagedLaunchRequest(*req)
 }
 
-func prepareAttachedLiveness(runtimeBackend backend.Name, req *Request) error {
-	if runtimeBackend != backend.Herdr {
+// prepareAttachedLiveness applies the identity contract of the launch lane the
+// mutation model selects. The atomic lane proves a pane live through a local
+// liveness token; the journaled lane records the remote identity instead, and
+// its ordering is structural, so it rejects the start gate rather than holding
+// one across a remote mutation.
+func prepareAttachedLiveness(model backend.MutationModel, req *Request) error {
+	if model != backend.MutationJournaled {
 		return ensurePaneLivenessKey(req)
 	}
 	if strings.TrimSpace(req.AgentStartGate) != "" {
@@ -569,11 +574,11 @@ func statePaneForBackend(req Request, paneID, worktreePath string, now time.Time
 	if runtimeBackend != backend.Tmux {
 		pane.Backend = runtimeBackend
 	}
-	applyHerdrStateIdentity(&pane, runtimeBackend, live)
+	applyManagedStateIdentity(&pane, runtimeBackend, live)
 	return pane
 }
 
-func applyHerdrStateIdentity(
+func applyManagedStateIdentity(
 	pane *state.Pane,
 	runtimeBackend backend.Name,
 	live []*backend.LivePane,
@@ -797,7 +802,7 @@ func ReleaseAgentStartGate(runtimeBackend backend.Backend, req Request) error {
 	if runtimeBackend == nil {
 		return fmt.Errorf("runtime backend is not configured")
 	}
-	if runtimeBackend.Name() == backend.Herdr {
+	if runtimeBackend.MutationModel() == backend.MutationJournaled {
 		if strings.TrimSpace(req.AgentStartGate) == "" {
 			return nil
 		}
@@ -1016,7 +1021,7 @@ func KillAttachedPane(runtimeBackend backend.Backend, target, paneID, shellKey s
 	if !ok {
 		return fmt.Errorf("runtime backend %s does not support identity-aware pane close", runtimeBackend.Name())
 	}
-	result, err := closer.CloseOwned(attachedPaneCloseRequest(runtimeBackend.Name(), paneID, shellKey))
+	result, err := closer.CloseOwned(attachedPaneCloseRequest(runtimeBackend, paneID, shellKey))
 	if err != nil {
 		return err
 	}
@@ -1034,12 +1039,14 @@ func KillAttachedPane(runtimeBackend backend.Backend, target, paneID, shellKey s
 	return nil
 }
 
-func attachedPaneCloseRequest(runtimeBackend backend.Name, paneID, shellKey string) backend.CloseRequest {
+func attachedPaneCloseRequest(runtimeBackend backend.Backend, paneID, shellKey string) backend.CloseRequest {
 	request := backend.CloseRequest{
-		Ref:      backend.PaneRef{Backend: runtimeBackend, Pane: paneID},
+		Ref:      backend.PaneRef{Backend: runtimeBackend.Name(), Pane: paneID},
 		ShellKey: shellKey,
 	}
-	if runtimeBackend == backend.Herdr {
+	// The journaled lane never stamps a local liveness token; its close is
+	// gated on the recorded remote identity instead.
+	if runtimeBackend.MutationModel() == backend.MutationJournaled {
 		request.ShellKey = ""
 	}
 	return request
