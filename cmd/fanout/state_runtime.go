@@ -6,14 +6,21 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/gitroot"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
-	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
 const fanoutStatePathEnv = "FANOUT_STATE_PATH"
+
+// invokingPaneEnv is the variable a runtime sets on the process it starts
+// inside one of its panes, naming that pane. It is a wire contract with the
+// runtime — the pane may have been created by an earlier fanout run — so the
+// name is frozen.
+const invokingPaneEnv = "TMUX_PANE"
 
 type fanoutStateRuntime struct {
 	projectRoot string
@@ -69,24 +76,24 @@ func resolveDisplayProjectRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return resolveDisplayProjectRootFrom(top, tmuxPaneGitToplevel, projectHasState), nil
+	return resolveDisplayProjectRootFrom(top, invokingPaneGitToplevel, projectHasState), nil
 }
 
-func resolveDisplayProjectRootFrom(cwdTop string, tmuxTop func() (string, error), hasState func(string) bool) string {
+func resolveDisplayProjectRootFrom(cwdTop string, paneTop func() (string, error), hasState func(string) bool) string {
 	cwdRoot := resolveRootFromTop(cwdTop, hasState)
 	if hasState(cwdRoot) {
 		return cwdRoot
 	}
-	if tmuxTop == nil {
+	if paneTop == nil {
 		return cwdRoot
 	}
-	top, err := tmuxTop()
+	top, err := paneTop()
 	if err != nil || strings.TrimSpace(top) == "" {
 		return cwdRoot
 	}
-	tmuxRoot := resolveRootFromTop(top, hasState)
-	if hasState(tmuxRoot) {
-		return tmuxRoot
+	paneRoot := resolveRootFromTop(top, hasState)
+	if hasState(paneRoot) {
+		return paneRoot
 	}
 	return cwdRoot
 }
@@ -95,12 +102,20 @@ func projectHasState(dir string) bool {
 	return fileExists(state.Path(dir))
 }
 
-func tmuxPaneGitToplevel() (string, error) {
-	pane := strings.TrimSpace(os.Getenv("TMUX_PANE"))
+// invokingPaneGitToplevel resolves the repository root of the pane fanout was
+// invoked from. It needs both an environment that names that pane and a runtime
+// that reports where a pane sits; either absence leaves the caller with the
+// root it resolved from its own process.
+func invokingPaneGitToplevel() (string, error) {
+	pane := strings.TrimSpace(os.Getenv(invokingPaneEnv))
 	if pane == "" {
-		return "", fmt.Errorf("not inside a tmux pane")
+		return "", fmt.Errorf("the environment does not name an invoking pane")
 	}
-	path, err := tmuxrun.PaneCurrentPath(pane)
+	locator, ok := backend.AsPaneLocator(paneruntime.NewTmux())
+	if !ok {
+		return "", fmt.Errorf("the runtime does not report pane locations")
+	}
+	path, err := locator.PaneCurrentPath(pane)
 	if err != nil {
 		return "", err
 	}

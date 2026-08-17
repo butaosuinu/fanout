@@ -1,6 +1,10 @@
 package backendtest
 
-import "github.com/butaosuinu/fanout/internal/core/backend"
+import (
+	"time"
+
+	"github.com/butaosuinu/fanout/internal/core/backend"
+)
 
 // Capability method sets are attached through the unexported mixins below.
 // Each mixin embeds the same *Fake, so it records into the one shared call log;
@@ -84,6 +88,44 @@ type layoutMixin struct{ *Fake }
 func (m layoutMixin) Relayout(target string, trigger backend.LayoutTrigger) error {
 	m.record(MethodRelayout, target, trigger)
 	return nil
+}
+
+type restoreMixin struct{ *Fake }
+
+// ListLiveForIdentity records the strict sweep and returns WithIdentityPanes.
+func (m restoreMixin) ListLiveForIdentity() ([]backend.LivePane, error) {
+	m.record(MethodListLiveForIdentity)
+	return m.identityPanes, m.identityErr
+}
+
+// ListPanes records the target-scoped listing and returns WithTargetPanes.
+func (m restoreMixin) ListPanes(target string) ([]backend.PaneInfo, error) {
+	m.record(MethodListPanes, target)
+	return m.targetPanes, m.targetPanesErr
+}
+
+// ServerStartTime records the generation-clock read and returns
+// WithServerStartTime.
+func (m restoreMixin) ServerStartTime() (time.Time, error) {
+	m.record(MethodServerStartTime)
+	return m.serverStart, m.serverStartErr
+}
+
+// PaneStartTime records the per-pane provenance read and answers with
+// WithPaneStartTime.
+func (m restoreMixin) PaneStartTime(paneID string) (time.Time, error) {
+	m.record(MethodPaneStartTime, paneID)
+	if m.paneStart == nil {
+		return time.Time{}, nil
+	}
+	return m.paneStart(paneID)
+}
+
+// CanonicalPaneLabel records the query and returns the label unchanged: the
+// fake stores labels verbatim, so its canonical form is the input.
+func (m restoreMixin) CanonicalPaneLabel(label string) string {
+	m.record(MethodCanonicalPaneLabel, label)
+	return label
 }
 
 type popupMixin struct{ *Fake }
@@ -190,9 +232,24 @@ type HostFake struct {
 	consoleFocusMixin
 }
 
+// RestoreFake carries exactly the capabilities console restore calls: the
+// restore observations plus the stamp, rollback, identity-checked close,
+// decoration, and relayout it drives them with. It stops short of the console
+// host set so a restore test cannot accidentally depend on a popup.
+type RestoreFake struct {
+	*Fake
+	restoreMixin
+	decorateMixin
+	stampMixin
+	freshCloseMixin
+	ownedCloseMixin
+	layoutMixin
+}
+
 // TmuxFake carries every capability, matching the shape of the tmux backend.
 type TmuxFake struct {
 	*Fake
+	restoreMixin
 	decorateMixin
 	stampMixin
 	freshCloseMixin
@@ -212,6 +269,13 @@ var (
 	_ backend.PopupHost       = HostFake{}
 	_ backend.ShortcutBinder  = HostFake{}
 	_ backend.ConsoleFocus    = HostFake{}
+	_ backend.RestoreOps      = RestoreFake{}
+	_ backend.PaneDecorator   = RestoreFake{}
+	_ backend.LivenessStamper = RestoreFake{}
+	_ backend.FreshCloser     = RestoreFake{}
+	_ backend.OwnedCloser     = RestoreFake{}
+	_ backend.LayoutManager   = RestoreFake{}
+	_ backend.RestoreOps      = TmuxFake{}
 	_ backend.PaneDecorator   = TmuxFake{}
 	_ backend.LivenessStamper = TmuxFake{}
 	_ backend.FreshCloser     = TmuxFake{}
@@ -254,11 +318,27 @@ func NewHost(opts ...Option) *HostFake {
 	}
 }
 
+// NewRestore returns a fake carrying the capability set console restore
+// requires and nothing else.
+func NewRestore(opts ...Option) *RestoreFake {
+	f := New(opts...)
+	return &RestoreFake{
+		Fake:            f,
+		restoreMixin:    restoreMixin{f},
+		decorateMixin:   decorateMixin{f},
+		stampMixin:      stampMixin{f},
+		freshCloseMixin: freshCloseMixin{f},
+		ownedCloseMixin: ownedCloseMixin{f},
+		layoutMixin:     layoutMixin{f},
+	}
+}
+
 // NewTmux returns a fully capable, tmux-shaped fake.
 func NewTmux(opts ...Option) *TmuxFake {
 	f := New(opts...)
 	return &TmuxFake{
 		Fake:              f,
+		restoreMixin:      restoreMixin{f},
 		decorateMixin:     decorateMixin{f},
 		stampMixin:        stampMixin{f},
 		freshCloseMixin:   freshCloseMixin{f},

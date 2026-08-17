@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 )
@@ -21,6 +22,7 @@ type capabilities struct {
 	popup     bool
 	shortcut  bool
 	focus     bool
+	restore   bool
 }
 
 func probe(b backend.Backend) capabilities {
@@ -33,7 +35,8 @@ func probe(b backend.Backend) capabilities {
 	_, popup := backend.AsPopupHost(b)
 	_, shortcut := backend.AsShortcutBinder(b)
 	_, focus := backend.AsConsoleFocus(b)
-	return capabilities{decorator, stamper, previewer, layout, owned, fresh, popup, shortcut, focus}
+	_, restore := backend.AsRestoreOps(b)
+	return capabilities{decorator, stamper, previewer, layout, owned, fresh, popup, shortcut, focus, restore}
 }
 
 // TestShapeCapabilities is the reason the shapes exist: capability detection is
@@ -56,12 +59,20 @@ func TestShapeCapabilities(t *testing.T) {
 			want:    capabilities{popup: true, shortcut: true, focus: true},
 		},
 		{
+			name:    "restore fake carries the restore lane without the host surfaces",
+			backend: NewRestore(),
+			want: capabilities{
+				decorator: true, stamper: true, layout: true,
+				owned: true, fresh: true, restore: true,
+			},
+		},
+		{
 			name:    "tmux fake carries every capability",
 			backend: NewTmux(),
 			want: capabilities{
 				decorator: true, stamper: true, previewer: true,
 				layout: true, owned: true, fresh: true,
-				popup: true, shortcut: true, focus: true,
+				popup: true, shortcut: true, focus: true, restore: true,
 			},
 		},
 	}
@@ -207,5 +218,43 @@ func TestPreviewLaunchReturnsConfiguredLines(t *testing.T) {
 	want := []string{"$ fake split", "# would re-layout"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("PreviewLaunch() = %v, want %v", got, want)
+	}
+}
+
+func TestRestoreOpsReturnConfiguredObservations(t *testing.T) {
+	identityErr := errors.New("ambiguous identity rows")
+	serverStart := time.Unix(1_700_000_000, 0)
+	paneStart := time.Unix(1_700_000_030, 0)
+	panes := []backend.PaneInfo{{ID: "%3", WindowID: "@1", Title: "Restore API"}}
+	fake := NewRestore(
+		WithIdentityPanes(nil, identityErr),
+		WithTargetPanes(panes, nil),
+		WithServerStartTime(serverStart, nil),
+		WithPaneStartTime(func(string) (time.Time, error) { return paneStart, nil }),
+	)
+
+	if _, err := fake.ListLiveForIdentity(); !errors.Is(err, identityErr) {
+		t.Fatalf("ListLiveForIdentity() error = %v, want %v", err, identityErr)
+	}
+	got, err := fake.ListPanes("fanout")
+	if err != nil || !reflect.DeepEqual(got, panes) {
+		t.Fatalf("ListPanes() = %+v, %v; want %+v", got, err, panes)
+	}
+	if at, startErr := fake.ServerStartTime(); startErr != nil || !at.Equal(serverStart) {
+		t.Fatalf("ServerStartTime() = %v, %v; want %v", at, startErr, serverStart)
+	}
+	if at, startErr := fake.PaneStartTime("%3"); startErr != nil || !at.Equal(paneStart) {
+		t.Fatalf("PaneStartTime() = %v, %v; want %v", at, startErr, paneStart)
+	}
+	// The fake stores labels verbatim, so its canonical form is the input.
+	if label := fake.CanonicalPaneLabel("#81 · Restore API"); label != "#81 · Restore API" {
+		t.Fatalf("CanonicalPaneLabel() = %q, want the input unchanged", label)
+	}
+	want := []string{
+		MethodListLiveForIdentity, MethodListPanes,
+		MethodServerStartTime, MethodPaneStartTime, MethodCanonicalPaneLabel,
+	}
+	if methods := fake.Methods(); !reflect.DeepEqual(methods, want) {
+		t.Fatalf("Methods() = %v, want %v", methods, want)
 	}
 }

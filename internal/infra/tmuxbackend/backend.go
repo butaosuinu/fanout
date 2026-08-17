@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
@@ -28,6 +29,8 @@ var (
 	_ backend.LivenessStamper = (*Backend)(nil)
 	_ backend.DryRunPreviewer = (*Backend)(nil)
 	_ backend.LayoutManager   = (*Backend)(nil)
+	_ backend.RestoreOps      = (*Backend)(nil)
+	_ backend.PaneLocator     = (*Backend)(nil)
 )
 
 // New constructs a tmux backend.
@@ -143,6 +146,35 @@ func (*Backend) ListLiveForIdentity() ([]backend.LivePane, error) {
 	return mapLivePanes(panes), nil
 }
 
+// ListPanes reports the panes of one tmux target (a pane, window, or session).
+func (*Backend) ListPanes(target string) ([]backend.PaneInfo, error) {
+	return tmuxrun.ListPanes(target)
+}
+
+// ServerStartTime reports when the tmux server fanout is talking to started.
+func (*Backend) ServerStartTime() (time.Time, error) {
+	return tmuxrun.ServerStartTime()
+}
+
+// PaneStartTime reports when the pane's root process — and therefore the pane
+// itself — was created.
+func (*Backend) PaneStartTime(paneID string) (time.Time, error) {
+	return tmuxrun.PaneStartTime(paneID)
+}
+
+// CanonicalPaneLabel returns the label form SetPaneLabel stores, so a caller
+// comparing a label it built itself against a live pane's compares like for
+// like.
+func (*Backend) CanonicalPaneLabel(label string) string {
+	return tmuxrun.NeutralizePaneLabel(label)
+}
+
+// PaneCurrentPath reports the working directory of the pane's foreground
+// process.
+func (*Backend) PaneCurrentPath(paneID string) (string, error) {
+	return tmuxrun.PaneCurrentPath(paneID)
+}
+
 func mapLivePanes(panes []tmuxrun.LivePane) []backend.LivePane {
 	live := make([]backend.LivePane, len(panes))
 	for i, pane := range panes {
@@ -153,6 +185,7 @@ func mapLivePanes(panes []tmuxrun.LivePane) []backend.LivePane {
 			Title:            pane.Title,
 			AgentState:       state,
 			NativeAgentState: pane.AgentState,
+			PaneLabel:        pane.Label,
 			ShellKey:         pane.ShellKey,
 			ProjectRoot:      pane.ProjectRoot,
 			WorktreePath:     pane.WorktreePath,

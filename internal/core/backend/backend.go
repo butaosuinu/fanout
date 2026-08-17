@@ -221,20 +221,25 @@ type LivePane struct {
 
 	AgentState       AgentState
 	NativeAgentState string
-	WorkspaceLabel   string
-	TerminalID       string
-	AgentID          string
-	AgentProvider    string
-	AgentSession     *AgentSessionRef
-	ProcessIdentity  *ProcessIdentity
-	AgentPresent     bool
-	ShellKey         string
-	RepoKey          string
-	ProjectRoot      string
-	WorktreePath     string
-	Role             string
-	SessionID        string
-	SocketPath       string
+	// PaneLabel is the border label fanout stamped on the pane at launch. It is
+	// display metadata like Title, but a runtime that offers it never lets the
+	// pane's own process rewrite it, so it says which fanout session the pane
+	// was created for. Empty when the runtime does not carry one.
+	PaneLabel       string
+	WorkspaceLabel  string
+	TerminalID      string
+	AgentID         string
+	AgentProvider   string
+	AgentSession    *AgentSessionRef
+	ProcessIdentity *ProcessIdentity
+	AgentPresent    bool
+	ShellKey        string
+	RepoKey         string
+	ProjectRoot     string
+	WorktreePath    string
+	Role            string
+	SessionID       string
+	SocketPath      string
 }
 
 // LaunchRequest contains only runtime-neutral launch inputs. Popup, keybind,
