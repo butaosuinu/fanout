@@ -716,6 +716,12 @@ func (r Runner) BaseIsPushed(path, baseRef, commit string) (bool, error) {
 		return false, nil
 	}
 	_, code, err := r.gitExitCode("-C", path, "merge-base", "--is-ancestor", commit, remote)
+	// `--is-ancestor` answers "no" with exit 1, which arrives here as an error
+	// like any other non-zero exit. Reporting it would fail the whole diff for
+	// the very case this exists to describe: a local base ahead of the remote.
+	if code == 1 {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
