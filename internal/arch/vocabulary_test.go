@@ -261,11 +261,14 @@ func inspectFileVocabulary(fset *token.FileSet, path, rel string) ([]vocabularyF
 			// value the per-literal check would have caught. Sub-literals of
 			// a flagged chain never match on their own, so nothing is
 			// double-counted.
-			if folded, ok := foldConstString(node, consts); ok && exactRuntimeName(strconv.Quote(folded)) {
-				findings = append(findings, vocabularyFinding{
-					File: rel, Line: fset.Position(node.Pos()).Line,
-					Kind: "runtime name literal", Text: strconv.Quote(folded),
-				})
+			for _, folded := range foldConstStrings(node, consts) {
+				if exactRuntimeName(strconv.Quote(folded)) {
+					findings = append(findings, vocabularyFinding{
+						File: rel, Line: fset.Position(node.Pos()).Line,
+						Kind: "runtime name literal", Text: strconv.Quote(folded),
+					})
+					break
+				}
 			}
 		}
 		return true
@@ -284,42 +287,66 @@ func exactRuntimeName(quoted string) bool {
 	return slices.Contains(runtimeVocabularyNames, strings.ToLower(value))
 }
 
-// foldConstString evaluates a constant string expression built from literals,
-// +, parentheses, and same-file string constants. A call or a constant from
-// another file is not foldable here and reports false; the remaining
-// cross-file composition would need full type checking, and each piece still
-// has to live somewhere this test scans.
-func foldConstString(expr ast.Expr, consts map[string]string) (string, bool) {
+// foldConstStrings evaluates a constant string expression built from
+// literals, +, parentheses, and same-file string constants, returning every
+// value it may fold to (nil when not foldable). A call or a constant from
+// another file is not foldable here; the remaining cross-file composition
+// would need full type checking, and each piece still has to live somewhere
+// this test scans.
+//
+// maxFoldCandidates bounds the possible-value set a folded expression may
+// carry. Same-name constants in different scopes are tracked as candidate
+// SETS rather than scoped bindings, so folding over-approximates: if any
+// combination spells a runtime name the expression is flagged. Fail-closed is
+// the right direction for a gate; a pathological file that overflows the cap
+// stops folding, and its pieces are still individually checked.
+const maxFoldCandidates = 16
+
+func foldConstStrings(expr ast.Expr, consts map[string][]string) []string {
 	switch node := expr.(type) {
 	case *ast.BasicLit:
 		if node.Kind != token.STRING {
-			return "", false
+			return nil
 		}
 		value, err := strconv.Unquote(node.Value)
-		return value, err == nil
+		if err != nil {
+			return nil
+		}
+		return []string{value}
 	case *ast.Ident:
-		value, ok := consts[node.Name]
-		return value, ok
+		return consts[node.Name]
 	case *ast.ParenExpr:
-		return foldConstString(node.X, consts)
+		return foldConstStrings(node.X, consts)
 	case *ast.BinaryExpr:
 		if node.Op != token.ADD {
-			return "", false
+			return nil
 		}
-		left, okLeft := foldConstString(node.X, consts)
-		right, okRight := foldConstString(node.Y, consts)
-		return left + right, okLeft && okRight
+		left := foldConstStrings(node.X, consts)
+		right := foldConstStrings(node.Y, consts)
+		if left == nil || right == nil || len(left)*len(right) > maxFoldCandidates {
+			return nil
+		}
+		var combined []string
+		for _, l := range left {
+			for _, r := range right {
+				combined = append(combined, l+r)
+			}
+		}
+		return combined
 	default:
-		return "", false
+		return nil
 	}
 }
 
 // fileStringConsts maps the file's string-constant names (top level and
-// function local) to their folded values. Package-level constants may
+// function local) to every value a declaration of that name may fold to. The
+// name is deliberately NOT scoped: two same-name constants in different
+// functions both contribute candidates, so shadowing cannot mask the
+// combination that spells a runtime name. Package-level constants may
 // reference ones declared later in the file, so resolution iterates to a
 // fixed point.
-func fileStringConsts(file *ast.File) map[string]string {
-	consts := map[string]string{}
+func fileStringConsts(file *ast.File) map[string][]string {
+	consts := map[string][]string{}
 	for {
 		grew := false
 		ast.Inspect(file, func(n ast.Node) bool {
@@ -333,11 +360,14 @@ func fileStringConsts(file *ast.File) map[string]string {
 					continue
 				}
 				for i, name := range valueSpec.Names {
-					if _, done := consts[name.Name]; done {
-						continue
-					}
-					if value, folded := foldConstString(valueSpec.Values[i], consts); folded {
-						consts[name.Name] = value
+					for _, value := range foldConstStrings(valueSpec.Values[i], consts) {
+						if slices.Contains(consts[name.Name], value) {
+							continue
+						}
+						if len(consts[name.Name]) >= maxFoldCandidates {
+							break
+						}
+						consts[name.Name] = append(consts[name.Name], value)
 						grew = true
 					}
 				}
