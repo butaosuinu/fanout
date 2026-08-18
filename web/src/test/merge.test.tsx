@@ -783,7 +783,7 @@ describe("複数 PR の同時待機", () => {
 /* サーバは auto-merge の取り消しで claim を解除できる。クライアントが塞いだままだと
  * その経路に到達できず、リロードするまでボタンが死ぬ。 */
 describe("queue の取り消し", () => {
-  it("保留が消えたら queued の hold を解除する", async () => {
+  it("後から届いた snapshot に保留が無ければ hold を解除する", async () => {
     server.use(
       http.post(MERGE_PATH, () =>
         HttpResponse.json({
@@ -801,32 +801,24 @@ describe("queue の取り消し", () => {
 
     const drawer = await openDrawer(user);
     await user.click(within(drawer).getByRole("button", { name: "#701 をマージ" }));
+
+    /* 送信直後は、この行を描いた snapshot しか無い。その「保留なし」はマージ前の
+     * 状態でしかないので、hold は残る。 */
     await waitFor(() =>
       expect(
         within(drawer).getByRole("button", { name: /反映を待っています/ }),
       ).toBeInTheDocument(),
     );
 
-    /* マージ前の snapshot はまだ armed ではない。これを取り消しと読むと hold を
-     * 取った直後に落ちるので、観測前の false では解除しない。 */
-    streamSnapshot(snapshotWithPR({ autoMerge: false }));
-    expect(within(drawer).getByRole("button", { name: /反映を待っています/ })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
-
-    /* poll が保留を観測し、そのあと消えたときだけ取り消し。checks 済みで直接
-     * queue に入った場合は auto-merge ではなく queue entry が保留の印になる。 */
-    streamSnapshot(snapshotWithPR({ queued: true }));
-    streamSnapshot(snapshotWithPR({ queued: false }));
+    /* hold より後に届いた poll が保留を持たない = 取り消し。サーバも claim 後の
+     * GH refresh で同じ判定をする。 */
+    streamSnapshot(snapshotWithPR());
     await waitFor(() =>
       expect(within(drawer).getByRole("button", { name: "#701 をマージ" })).toBeInTheDocument(),
     );
   });
 });
 
-/* 行には別 repository の PR も載る(`Fixes owner/repo#N`)。番号だけで反映済みと
- * 判定すると、まだ反映されていないマージのボタンが押せる状態に戻る。 */
 describe("同番号の別 repository PR", () => {
   it("よその merged #701 では反映待ちを解除しない", async () => {
     server.use(mergeHandler([]));

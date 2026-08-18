@@ -27,10 +27,11 @@ export type Unknown = {
   prNumber: number;
   repo: string;
   queued?: boolean;
-  /* poll が「GitHub がまだ保留している」ことを実際に見た。マージ前の snapshot は
-   * まだ保留を持たないので、その不在を取り消しと読むと hold を取った直後に
-   * 落としてしまう。 */
-  seen?: boolean;
+  /* hold を取った時点で見えていた snapshot。これと違う snapshot が届いて初めて、
+   * 「保留が無い」が意味を持つ — マージ前の snapshot はまだ保留を持たないので、
+   * その不在を取り消しと読むと hold を取った直後に落としてしまう。サーバが
+   * claim 後の GH refresh を待つのと同じ規則。 */
+  at?: string;
 };
 
 /* 反映されたら pending を解除する。楽観更新はしない — snapshot を書き換えると、
@@ -88,20 +89,9 @@ export function useUnknownRelease(
 ) {
   useEffect(() => {
     if (!snap || !unknown.length) return;
-    const next = advanceHolds(snap, unknown);
+    const next = unknown.filter((held) => !holdOver(snap, held));
     if (changed(unknown, next)) setUnknown(() => next);
   }, [snap, unknown, setUnknown]);
-}
-
-/* 観測を書き込んでから、終わったものを外す。順序に意味がある — armed を見た
- * 直後の要素は取り消しではない。サーバの claimOver と同じ規則。 */
-function advanceHolds(snap: Snapshot, holds: Unknown[]): Unknown[] {
-  return holds.map((held) => armedSeen(snap, held)).filter((held) => !holdOver(snap, held));
-}
-
-function armedSeen(snap: Snapshot, held: Unknown): Unknown {
-  if (!held.queued || held.seen) return held;
-  return mergePending(snap, held) ? { ...held, seen: true } : held;
 }
 
 /* GitHub がまだこのマージを保留しているか。gh は checks 未完了なら auto-merge を
@@ -114,15 +104,17 @@ function mergePending(snap: Snapshot, held: Unknown): boolean {
   return refsOf(snap, held).some((pr) => !!pr.autoMerge || !!pr.queued);
 }
 
-/* 取り消しは true -> false の遷移だけ。観測前の false はマージ前の snapshot。 */
+/* 取り消しと言えるのは、hold より後に届いた snapshot が保留を持たないとき。
+ * hold と同じ snapshot の「保留なし」はマージ前の状態でしかない(サーバが claim 後の
+ * GH refresh を待つのと同じ規則)。 */
 function holdOver(snap: Snapshot, held: Unknown): boolean {
   if (settledPR(snap, held)) return true;
-  if (!held.queued || !held.seen) return false;
+  if (!held.queued || snap.generatedAt === held.at) return false;
   return refsOf(snap, held).length > 0 && !mergePending(snap, held);
 }
 
 function changed(prev: Unknown[], next: Unknown[]): boolean {
-  return prev.length !== next.length || next.some((u, i) => u !== prev[i]);
+  return prev.length !== next.length;
 }
 
 /* repository も見る: `Fixes owner/repo#N` は別 repository の PR を行に載せるし、
@@ -186,22 +178,26 @@ export function useMergeTracking(snap: Snapshot | null): MergeTracking {
     setNotice(null);
   }, []);
 
-  const apply = useCallback((row: Row, res: MergeOutcome) => {
-    /* 追加であって置き換えではない。前の送信の hold を落とすと、まだ決着して
-     * いない PR のボタンが押せる状態に戻る。 */
-    if (res.unknown || res.queued) {
-      setUnknown((prev) => [
-        ...prev,
-        { prNumber: row.prNumber, repo: row.repo, queued: res.queued },
-      ]);
-    } else {
-      setPending((prev) => [
-        ...prev,
-        { key: row.key, prNumber: row.prNumber, repo: row.repo, since: Date.now() },
-      ]);
-    }
-    setNotice(noticeFor(row.key, res));
-  }, []);
+  const at = snap?.generatedAt;
+  const apply = useCallback(
+    (row: Row, res: MergeOutcome) => {
+      /* 追加であって置き換えではない。前の送信の hold を落とすと、まだ決着して
+       * いない PR のボタンが押せる状態に戻る。 */
+      if (res.unknown || res.queued) {
+        setUnknown((prev) => [
+          ...prev,
+          { prNumber: row.prNumber, repo: row.repo, queued: res.queued, at },
+        ]);
+      } else {
+        setPending((prev) => [
+          ...prev,
+          { key: row.key, prNumber: row.prNumber, repo: row.repo, since: Date.now() },
+        ]);
+      }
+      setNotice(noticeFor(row.key, res));
+    },
+    [at],
+  );
 
   return { lastKey, pending, unknown, notice, begin, apply };
 }

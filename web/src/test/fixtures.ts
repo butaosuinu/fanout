@@ -100,12 +100,17 @@ export function makeSession(
   return { parent, panes, rollup: makeRollup({ total: panes.length, ...rollup }) };
 }
 
+/* poll ごとに進む刻印。固定値だと「hold より後に届いた snapshot か」を見る判定が
+ * 現実と違う挙動になる — poller は毎回新しい時刻を打つ。 */
+let snapshotSeq = 0;
+
 export function makeSnapshot(sessions: Session[], over: Partial<Snapshot> = {}): Snapshot {
   const total = sessions.reduce((n, s) => n + (s.panes?.length ?? 0), 0);
+  snapshotSeq += 1;
   return {
     repo: "octo/fanout",
     projectRoot: "/tmp/repo",
-    generatedAt: "2026-06-13T01:23:45Z",
+    generatedAt: new Date(Date.UTC(2026, 5, 13, 1, 23, snapshotSeq)).toISOString(),
     sessions,
     rollup: makeRollup({ total }),
     degraded: { tmux: false, github: false },
