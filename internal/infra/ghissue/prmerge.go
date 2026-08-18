@@ -157,10 +157,13 @@ query($owner:String!,$name:String!,$number:Int!){
 func (r Runner) PRState(ctx context.Context, owner, repo string, number int) (_ PRTarget, err error) {
 	defer errs.Wrap(&err, "read state of pull request #%d", number)
 
+	// owner and name go through -f: -F applies gh's magic type conversion, so a
+	// repository named `2048`, `true`, or `null` would arrive as a JSON number,
+	// boolean, or null and fail the query's String! types.
 	out, err := r.ghContext(ctx, "api", "graphql",
 		"-f", "query="+prStateQuery,
-		"-F", "owner="+owner,
-		"-F", "name="+repo,
+		"-f", "owner="+owner,
+		"-f", "name="+repo,
 		"-F", "number="+strconv.Itoa(number))
 	if err != nil {
 		return PRTarget{}, err

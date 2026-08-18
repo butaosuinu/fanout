@@ -308,7 +308,12 @@ func TestPRStateAsksGitHubRatherThanTrustingTheExitCode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{"api", "graphql", "mergeQueueEntry", "number=7"} {
+			// owner and name go through -f so gh does not convert a repository
+			// named `2048` or `true` into a JSON number or boolean.
+			for _, want := range []string{
+				"api", "graphql", "mergeQueueEntry",
+				"-f\nowner=o", "-f\nname=r", "-F\nnumber=7",
+			} {
 				if !strings.Contains(string(args), want) {
 					t.Fatalf("gh args = %q, want them to carry %q", args, want)
 				}

@@ -389,10 +389,11 @@ func (s Service) classifySendFailure(ctx context.Context, req Request, sendErr e
 		return Result{Unknown: true}, nil
 	case live.Merged:
 		return Result{Merged: true}, nil
-	case live.AutoMerge:
-		// GitHub is holding a merge that only this command can have armed, so the
-		// request landed and the failure was in the response. Reporting it as a
-		// plain error would invite a click that sends the same mutation again.
+	case live.AutoMerge || live.Queued:
+		// GitHub is holding a merge that only this command can have started —
+		// armed as an auto-merge, or sitting in the queue — so the request landed
+		// and the failure was in the response. Reporting it as a plain error would
+		// invite a click that sends the same mutation again.
 		return Result{Queued: true}, nil
 	case ghissue.IsTransportFailure(sendErr):
 		// Not merged yet, but the connection dropped rather than GitHub saying no.

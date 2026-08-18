@@ -302,11 +302,16 @@ type fakePort struct {
 	alwaysMerged bool
 	// openHeads is what OpenPRNumbersForHead answers: the OPEN pull requests
 	// sharing the head branch.
-	liveHeadRef  string
-	liveCloses   []ghissue.ClosingIssue
-	openHeads    []int
-	openHeadsErr error
-	mergedRead   int
+	liveHeadRef string
+	// probeAutoMerge and probeQueued describe the read that follows the send. The
+	// pre-send fence reads first and sees neither, which is the ordering a real
+	// merge has: gh is what puts GitHub in that state.
+	probeAutoMerge bool
+	probeQueued    bool
+	liveCloses     []ghissue.ClosingIssue
+	openHeads      []int
+	openHeadsErr   error
+	mergedRead     int
 }
 
 func (f *fakePort) MergePR(_ context.Context, req ghissue.MergePRRequest) error {
@@ -328,6 +333,8 @@ func (f *fakePort) PRState(_ context.Context, _, _ string, _ int) (ghissue.PRTar
 		Merged:       merged,
 		BaseRef:      cmpOr(f.liveBase, "main"),
 		HeadRef:      cmpOr(f.liveHeadRef, "fanout/foo"),
+		AutoMerge:    f.probeAutoMerge && f.mergedRead > 1,
+		Queued:       f.probeQueued && f.mergedRead > 1,
 		ClosesIssues: f.liveCloses,
 		HeadSha:      cmpOr(f.liveHead, "abc123"),
 	}, nil
@@ -491,6 +498,33 @@ func TestServiceMerge(t *testing.T) {
 			t.Fatal("Merge() error = nil, want a configuration error")
 		}
 	})
+}
+
+// TestMergeHoldsWhatGitHubIsAlreadyHolding covers a send whose response was
+// lost. GitHub holding a merge — armed, or queued — is evidence the request
+// landed, so the outcome is not a retryable failure: returning the error would
+// release the reserved hold and invite a click that sends it again.
+func TestMergeHoldsWhatGitHubIsAlreadyHolding(t *testing.T) {
+	tests := []struct {
+		name string
+		live fakePort
+	}{
+		{name: "auto-merge armed", live: fakePort{notMerged: true, probeAutoMerge: true}},
+		{name: "sitting in the merge queue", live: fakePort{notMerged: true, probeQueued: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			port := tt.live
+			port.mergeErr = errors.New("stream error: stream ID 7; INTERNAL_ERROR")
+			res, err := Service{GH: &port}.Merge(context.Background(), baseRequest())
+			if err != nil {
+				t.Fatalf("Merge() error = %v, want the send treated as landed", err)
+			}
+			if !res.Queued || res.Merged {
+				t.Fatalf("Merge() = %+v, want queued", res)
+			}
+		})
+	}
 }
 
 // TestMergeKeepsPreSendFailuresRetryable pins the one thing a hold must never
