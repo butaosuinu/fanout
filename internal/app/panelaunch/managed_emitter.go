@@ -10,8 +10,10 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
+// managedEmitterLaunch carries what the telemetry emitter contributes to a
+// launch beyond its argv. The argv side lives in managedEmitterBackendArgs so
+// that recording a launch and verifying it later share one source.
 type managedEmitterLaunch struct {
-	backendArgs []string
 	environment []string
 	nonce       string
 }
@@ -33,18 +35,12 @@ func newManagedEmitterLaunch(
 	if err != nil {
 		return managedEmitterLaunch{}, err
 	}
-	launch := managedEmitterLaunch{
+	return managedEmitterLaunch{
 		environment: managedEmitterEnvironment(
 			statePath, intent, route, launchNonce, emitterNonce, req.Agent, agentID,
 		),
 		nonce: emitterNonce,
-	}
-	backendArgs, err := managedEmitterBackendArgs(req, route)
-	if err != nil {
-		return managedEmitterLaunch{}, err
-	}
-	launch.backendArgs = backendArgs
-	return launch, nil
+	}, nil
 }
 
 // managedEmitterBackendArgs returns the launch arguments the telemetry emitter

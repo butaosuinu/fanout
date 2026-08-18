@@ -54,7 +54,8 @@ cleanup intent を保存してから non-force の `herdr worktree remove` を�
 dirty checkout、所有不一致、応答結果を確定できない状態では行と intent を残し、再試行または手動 cleanup を求めます。
 branch は fanout-created と記録されたものだけを compare-and-delete します。
 
-未対応の経路は明確なエラーで fail closed します。
+未対応の経路は明確なエラーで fail closed します。TUI の `Z` (zoom) だけは例外で、focus のみ実行して
+zoom を黙って飛ばします([#713](https://github.com/butaosuinu/fanout/issues/713))。
 
 - 対話 send、restore、plan capture は herdr 行では使えません。
 - TUI の focus、launch、peek には、fanout-owned session に属する完全な保存済み identity が必要です。foreign、stale、legacy の行は理由付きで無効になります。
@@ -173,6 +174,13 @@ fanout herdr shutdown   # 空の owned server を停止する
 `restart` は死んだ server 向けです。fanout は旧世代の supervisor process と socket の消失を確認できたときだけ置き換えます。まだ動いている世代は `herdr owned server generation is still live` で拒否します。
 その後は新しい世代を起動し、旧版の fanout が書いた owned `config.toml` を置き換え、記録済みの行を上記のルールで再束縛します。
 失敗した後にどちらの verb を再実行しても安全です。fanout は何をしようとしたかを記録しており、作業を繰り返すのではなくその結果を確認します。
+
+ただし現状、再実行しても回復できない状態が 2 つあります([#710](https://github.com/butaosuinu/fanout/issues/710))。
+fanout 自体を更新すると owned session に pin した launcher と一致しなくなり、launch は
+`owned Herdr launcher predates the current fanout` で拒否されます。このとき `restart` は生存世代を、
+`shutdown` は後述の残る 2 行を拒否するため、3 つの経路がすべて閉じます。
+また launcher の起動に失敗すると `realized` の intent が残り、指す pane が消えていても `shutdown` が拒否し続けます。
+どちらも owned runtime ディレクトリを手で削除する以外に回復手段がありません。
 
 `shutdown` は空の server を retire します。このリポジトリの state に herdr の行が残っている間(linked worktree もすべて対象)、owned session に workspace が残っている間、別の herdr intent が保留中の間は拒否します。
 子の行は `--close` / `--cleanup` で消えますが、shell 行 2 種は残ります。素のシェルからの TUI bootstrap が記録する console 行と、issue / Project / plan のファンアウトが記録するプロジェクトルートの coordinator 行です。

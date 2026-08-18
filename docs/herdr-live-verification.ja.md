@@ -69,14 +69,16 @@ emitter を使わない直 codex だけが通っていました。
   呼びません。1 の panic は `handle` の中で起きます。
 - `pane run` の応答は Go 単体テストが期待値を自分で書いており、実機と照合された
   ことがありません。bats の `tests/bin/herdr` shim には `herdr-pane-run.json` fixture
-  自体が無く、dry-run しか通らないのでこの経路に到達しません。
+  自体が無く、dry-run しか通らないのでこの経路に到達しません (#714)。
 - 3 は保存側と検証側が別々に argv を組み立てており、テストも同じ非対称を再現して
   いたため一致していました。
 
 修正では、認識ではなく起動をテストする回帰テスト
 (`TestSelfExecDispatchRunsTokenlessEntry`)、実機応答を provenance 付きで固定する
 テスト (`TestPaneRunResponse`)、emitter args を含めた binding テスト
-(`TestValidateManagedLaunchBindingAcceptsEmitterArgs`) を追加しました。
+(`TestValidateManagedLaunchBindingAcceptsRecordedEmitterLaunch`) を追加しました。
+最後のものは記録側の実経路 (`resolveManagedLaunch`) が作った argv を検証側へ通します。
+手元で組み直した spec と突き合わせると、同じ関数を往復するだけで元の欠陥を再現できません。
 
 ## herdr CLI の応答契約 (0.7.5 / 0.8.0 実測)
 
@@ -96,7 +98,7 @@ emitter を使わない直 codex だけが通っていました。
 (`internal/infra/herdrrun/mutation.go`) は stdout だけを見るため、
 `MutationRejectedError` への分類は現状効きません。失敗自体は非 0 exit で検出
 できるので launch は fail closed のままですが、rollback の判断材料が 1 つ欠けます。
-別 issue として起票しました。
+別 issue として起票しました ([#711](https://github.com/butaosuinu/fanout/issues/711))。
 
 ## 検証マトリクス
 
@@ -163,14 +165,14 @@ emitter を使わない直 codex だけが通っていました。
 
 ## docs と食い違った点
 
-### TUI の `Z` (zoom)
+### TUI の `Z` (zoom) — #713
 
 `site/content/docs/herdr-backend.ja.md` は「未対応の経路は明確なエラーで fail
 closed します」と書いていますが、`Z` は herdr 行で focus だけ実行し、zoom を
 黙ってスキップします。notice は `focusing w3:p1...` だけで、zoom が効かないこと
-は画面に出ません。差分表にも zoom の行がありません。
+は画面に出ません。差分表にも zoom の行がなかったため、本 PR で例外として追記しました。
 
-### fanout を更新すると launch できなくなる
+### fanout を更新すると launch できなくなる — #710
 
 owned session は launcher バイナリを SHA で pin します。`fanout update` や再ビルド
 の後は launcher が一致せず launch が fail closed になり、`herdr restart` は生存
@@ -178,14 +180,14 @@ owned session は launcher バイナリを SHA で pin します。`fanout updat
 3 つの verb がすべて閉じ、owned runtime ディレクトリを手で消す以外に復旧路が
 ありません。
 
-### 失敗した launch が intent を残す
+### 失敗した launch が intent を残す — #710
 
 launcher が起動に失敗すると `realized` の intent が journal に残り、その pane は
 既に存在しないのに `shutdown` / `restart` が拒否され続けます。docs は「失敗した
 後にどちらの verb を再実行しても安全です」と書いていますが、この状態からは
 回収できません。
 
-### codex `--team` が 10 秒で諦める
+### codex `--team` が 10 秒で諦める — #712
 
 `codex TUI did not report an active thread within 10s` で launch が失敗しました。
 `--team` なしの直 codex は成功するので、app-server ブリッジの readiness 待ちに

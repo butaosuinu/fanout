@@ -890,27 +890,36 @@ func TestValidateManagedLaunchBindingRejectsCodexPlanModeChange(t *testing.T) {
 	}
 }
 
-// TestValidateManagedLaunchBindingAcceptsEmitterArgs pins that the binding check
-// rebuilds the emitter's own launch arguments. A claude launch records
-// `--settings <hooks>`; rebuilding the command without it made the check reject
-// the launch it had just written, so no claude pane could ever start on Herdr.
-func TestValidateManagedLaunchBindingAcceptsEmitterArgs(t *testing.T) {
+// TestValidateManagedLaunchBindingAcceptsRecordedEmitterLaunch runs the argv the
+// launch path actually records through the check that later verifies it. The
+// shipped bug was exactly this pair disagreeing: the record side added the
+// emitter's `--settings <hooks>` and the verify side rebuilt the command
+// without it, so every claude launch was rejected by its own binding check.
+// Going through resolveManagedLaunch keeps the test honest — asserting against
+// a locally rebuilt spec would compare a function with itself.
+func TestValidateManagedLaunchBindingAcceptsRecordedEmitterLaunch(t *testing.T) {
 	binDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)
-	route := backend.OwnedLaunchRoute{LauncherPath: filepath.Join(binDir, "launcher", "fanout")}
+	launcherPath := filepath.Join(binDir, "launcher", "fanout")
+	// A live route always carries both paths and keeps them equal
+	// (validateManagedLaunchRoute enforces it), so pin that shape here.
+	route := backend.OwnedLaunchRoute{LauncherPath: launcherPath, EmitterPath: launcherPath}
 	req := Request{Agent: "claude", Prompt: "probe", LaunchMode: agent.ModeBuild}
 
-	spec, err := buildManagedLaunchSpecForRoute(req, route)
+	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: t.TempDir()}}
+	resolved, err := launcher.resolveManagedLaunch(req, route, state.LaunchIntent{ID: "plan:probe"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(spec.Args, "--settings") {
-		t.Fatalf("buildManagedLaunchSpecForRoute(claude) args = %q, want the emitter --settings pair", spec.Args)
+	if !slices.Contains(resolved.spec.Args, "--settings") {
+		t.Fatalf("recorded claude argv = %q, want the emitter --settings pair", resolved.spec.Args)
 	}
-	launch := &state.LaunchCapsule{Agent: req.Agent, Executable: spec.Executable, Args: spec.Args}
+	launch := &state.LaunchCapsule{
+		Agent: req.Agent, Executable: resolved.spec.Executable, Args: resolved.spec.Args,
+	}
 	if err := validateManagedLaunchBinding(req, launch, route); err != nil {
 		t.Fatalf("validateManagedLaunchBinding(recorded claude launch) = %v, want accepted", err)
 	}
@@ -923,7 +932,8 @@ func TestValidateManagedLaunchBindingRejectsRequestChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)
-	route := backend.OwnedLaunchRoute{LauncherPath: filepath.Join(binDir, "launcher", "fanout")}
+	launcherPath := filepath.Join(binDir, "launcher", "fanout")
+	route := backend.OwnedLaunchRoute{LauncherPath: launcherPath, EmitterPath: launcherPath}
 	req := Request{Agent: "claude", Prompt: "original", LaunchMode: agent.ModeBuild}
 	spec, err := buildManagedLaunchSpecForRoute(req, route)
 	if err != nil {

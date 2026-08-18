@@ -124,9 +124,13 @@ func TestSelfExecArgs(t *testing.T) {
 		},
 		{name: "token with nothing trailing it", argv: []string{"fanout", herdrSupervisorCommand}, want: nil},
 		{
+			// The supervisor's real argv: marker path, nonce, start token, ready fd.
 			name: "token forwards everything after it",
-			argv: []string{"fanout", herdrSupervisorCommand, "/run/fhr-501/fhr-abc/owner.json", "nonce", "3"},
-			want: []string{"/run/fhr-501/fhr-abc/owner.json", "nonce", "3"},
+			argv: []string{
+				"fanout", herdrSupervisorCommand,
+				"/run/fhr-501/fhr-abc/owner.json", "nonce", "start", "3",
+			},
+			want: []string{"/run/fhr-501/fhr-abc/owner.json", "nonce", "start", "3"},
 		},
 		{name: "empty argv", argv: nil, want: nil},
 	} {
