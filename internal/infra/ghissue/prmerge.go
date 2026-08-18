@@ -107,7 +107,15 @@ type PRTarget struct {
 	// ClosesIssues is the set of issues this pull request currently closes. An
 	// issue row owns a PR through that link and nothing else, and the link can be
 	// edited away without moving a single commit.
-	ClosesIssues []int
+	ClosesIssues []ClosingIssue
+}
+
+// ClosingIssue is one issue a pull request closes. The repository is part of the
+// identity: `Fixes owner/repo#N` closes issues elsewhere, and issue numbers
+// repeat across repositories.
+type ClosingIssue struct {
+	Repo   string
+	Number int
 }
 
 // PRState reads the pull request as GitHub sees it right now.
@@ -135,9 +143,7 @@ func (r Runner) PRState(ctx context.Context, owner, repo string, number int) (_ 
 		AutoMerge   *struct {
 			EnabledAt *string `json:"enabledAt"`
 		} `json:"autoMergeRequest"`
-		ClosingIssues []struct {
-			Number int `json:"number"`
-		} `json:"closingIssuesReferences"`
+		ClosingIssues []closingIssueJSON `json:"closingIssuesReferences"`
 	}
 	if err := json.Unmarshal(out, &view); err != nil {
 		return PRTarget{}, err
@@ -148,7 +154,7 @@ func (r Runner) PRState(ctx context.Context, owner, repo string, number int) (_ 
 		HeadRef:      view.HeadRefName,
 		HeadSha:      view.HeadRefOid,
 		AutoMerge:    view.AutoMerge != nil,
-		ClosesIssues: closingIssueNumbers(view.ClosingIssues),
+		ClosesIssues: closingIssues(view.ClosingIssues),
 	}, nil
 }
 
@@ -194,18 +200,27 @@ var preSendMarkers = []string{
 	"authentication", "gh auth login",
 }
 
-func closingIssueNumbers(rows []struct {
-	Number int `json:"number"`
-},
-) []int {
+// closingIssueJSON is one `closingIssuesReferences` node as gh projects it.
+type closingIssueJSON struct {
+	Number     int `json:"number"`
+	Repository struct {
+		Name  string `json:"name"`
+		Owner struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+	} `json:"repository"`
+}
+
+func closingIssues(rows []closingIssueJSON) []ClosingIssue {
 	if len(rows) == 0 {
-		// nil, not an empty slice: "GitHub did not say" and "closes nothing" are
-		// the same wire shape here, and the caller reads emptiness as the former.
 		return nil
 	}
-	out := make([]int, 0, len(rows))
+	out := make([]ClosingIssue, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, row.Number)
+		out = append(out, ClosingIssue{
+			Repo:   row.Repository.Owner.Login + "/" + row.Repository.Name,
+			Number: row.Number,
+		})
 	}
 	return out
 }

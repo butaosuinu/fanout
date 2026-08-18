@@ -231,3 +231,18 @@ func TestDeleteBranchUnavailableWhenNotWired(t *testing.T) {
 	assertAPIError(t, requestDeleteBranch(t, h, http.MethodPost, mergeQuery(testToken), deleteBody()),
 		http.StatusServiceUnavailable, "merge_unavailable")
 }
+
+// TestDeleteBranchRefusesACommitTheRowDoesNotShow keeps the body an echo of the
+// row rather than a free choice of commit. Naming the branch's current tip —
+// work pushed after the merge — would otherwise satisfy both the live check and
+// the OID fence, and take that work with it.
+func TestDeleteBranchRefusesACommitTheRowDoesNotShow(t *testing.T) {
+	fake := &fakeDeleter{}
+	h := deleteHandler(t, mergedSnapshot(), fake)
+	body := `{"prNumber":701,"headSha":"9999999999999999999999999999999999999999"}`
+	assertAPIError(t, requestDeleteBranch(t, h, http.MethodPost, mergeQuery(testToken), body),
+		http.StatusConflict, "stale_head")
+	if calls, _ := fake.snapshot(); calls != 0 {
+		t.Fatalf("delete calls = %d, want 0", calls)
+	}
+}

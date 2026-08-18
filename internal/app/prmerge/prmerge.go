@@ -307,7 +307,7 @@ func (s Service) fenceLive(ctx context.Context, req Request) error {
 	if live.Merged {
 		return ErrAlreadyMerged
 	}
-	if err := req.Row.stillOwns(live, req.Number); err != nil {
+	if err := req.stillOwns(live); err != nil {
 		return err
 	}
 	return RenderedRef{HeadSha: req.HeadSha, BaseRef: req.BaseRef}.check(ghissue.PRRef{
@@ -323,19 +323,31 @@ func (s Service) fenceLive(ctx context.Context, req Request) error {
 // neither way of losing the claim moves a commit: an issue row loses it when the
 // closing keyword is edited out of the body, and a branch row loses it when the
 // head branch is renamed. The head SHA and base fences see neither.
-func (row RowIdentity) stillOwns(live ghissue.PRTarget, number int) error {
+//
+// The issue side asks for the whole reference, repository included. `Fixes
+// owner/repo#N` closes issues elsewhere and numbers repeat, so a link retargeted
+// to another repository's #7 would otherwise read as unchanged. An empty list is
+// a refusal, not a pass: the field is always requested here, so nothing coming
+// back means this pull request closes nothing.
+func (req Request) stillOwns(live ghissue.PRTarget) error {
+	row := req.Row
 	if row.IssueNum > 0 {
-		if len(live.ClosesIssues) == 0 || slices.Contains(live.ClosesIssues, row.IssueNum) {
-			// An empty list is "GitHub did not say", not "closes nothing": the
-			// field is absent on the gh pr list path this row may have come from.
+		if slices.ContainsFunc(live.ClosesIssues, req.closes) {
 			return nil
 		}
-		return fmt.Errorf("%w: #%d no longer closes #%d", ErrForeignPR, number, row.IssueNum)
+		return fmt.Errorf("%w: #%d no longer closes %s#%d",
+			ErrForeignPR, req.Number, req.Owner+"/"+req.Repo, row.IssueNum)
 	}
 	if row.Branch == "" || live.HeadRef == "" || live.HeadRef == row.Branch {
 		return nil
 	}
-	return fmt.Errorf("%w: #%d now heads %q, not %q", ErrForeignPR, number, live.HeadRef, row.Branch)
+	return fmt.Errorf("%w: #%d now heads %q, not %q",
+		ErrForeignPR, req.Number, live.HeadRef, row.Branch)
+}
+
+func (req Request) closes(issue ghissue.ClosingIssue) bool {
+	return issue.Number == req.Row.IssueNum &&
+		strings.EqualFold(issue.Repo, req.Owner+"/"+req.Repo)
 }
 
 // classifySendFailure decides whether a failed merge command is safe to retry.

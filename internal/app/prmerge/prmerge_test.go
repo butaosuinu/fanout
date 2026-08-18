@@ -303,7 +303,7 @@ type fakePort struct {
 	// openHeads is what OpenPRNumbersForHead answers: the OPEN pull requests
 	// sharing the head branch.
 	liveHeadRef  string
-	liveCloses   []int
+	liveCloses   []ghissue.ClosingIssue
 	openHeads    []int
 	openHeadsErr error
 	mergedRead   int
@@ -535,20 +535,29 @@ func TestMergeRefusesAPullRequestTheRowNoLongerOwns(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "issue row whose closing keyword was edited out",
-			row:  RowIdentity{IssueNum: 578},
-			live: fakePort{liveCloses: []int{99}}, wantErr: true,
+			name:    "issue row whose closing keyword was edited out",
+			row:     RowIdentity{IssueNum: 578},
+			live:    fakePort{liveCloses: []ghissue.ClosingIssue{{Repo: "o/r", Number: 99}}},
+			wantErr: true,
 		},
 		{
 			name: "issue row still closed by the pull request",
 			row:  RowIdentity{IssueNum: 578},
-			live: fakePort{liveCloses: []int{578}},
+			live: fakePort{liveCloses: []ghissue.ClosingIssue{{Repo: "o/r", Number: 578}}},
 		},
 		{
-			// The gh pr list path does not carry the link at all; absence is not
-			// evidence that the pull request stopped closing anything.
-			name: "issue row when GitHub reports no closing issues",
-			row:  RowIdentity{IssueNum: 578},
+			// The field is always requested, so nothing coming back means this
+			// pull request closes nothing — the row's claim is gone.
+			name: "issue row when the pull request closes nothing",
+			row:  RowIdentity{IssueNum: 578}, wantErr: true,
+		},
+		{
+			// `Fixes owner/repo#N` closes issues elsewhere and numbers repeat, so
+			// the number alone does not say the link still points at this row.
+			name:    "issue row whose link moved to another repository",
+			row:     RowIdentity{IssueNum: 578},
+			live:    fakePort{liveCloses: []ghissue.ClosingIssue{{Repo: "other/repo", Number: 578}}},
+			wantErr: true,
 		},
 		{
 			name: "branch row whose head was renamed",

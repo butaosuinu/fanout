@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/butaosuinu/fanout/internal/app/prmerge"
@@ -90,6 +91,9 @@ func deleteBranchPayload(
 		return prmerge.DeleteRequest{}, false
 	}
 	ref, branch, err := ownedBranch(pv, rr, body.PRNumber)
+	if err == nil {
+		err = echoesRowHead(body, ref)
+	}
 	if err != nil {
 		apiError(w, http.StatusConflict, mergePreflightCode(err), err.Error(), "")
 		return prmerge.DeleteRequest{}, false
@@ -98,6 +102,18 @@ func deleteBranchPayload(
 		Owner: rr.owner, Repo: rr.repo, Number: ref.Number,
 		Branch: branch, HeadSha: body.HeadSha,
 	}, true
+}
+
+// echoesRowHead keeps the body an echo of the row rather than a free choice of
+// commit. Without it the caller could point the delete at the branch's current
+// tip — a commit pushed after the merge — and both the live check and the OID
+// fence would agree with it, taking that work along.
+func echoesRowHead(body deleteBranchRequestBody, ref ghissue.PRRef) error {
+	if ref.HeadSha == "" || body.HeadSha == ref.HeadSha {
+		return nil
+	}
+	return fmt.Errorf("%w: this row shows #%d at a different commit",
+		prmerge.ErrStaleHead, ref.Number)
 }
 
 // ownedBranch resolves the ref this row may delete: the pull request has to be
