@@ -216,6 +216,7 @@ func inspectFileVocabulary(fset *token.FileSet, path, rel string) ([]vocabularyF
 	if err != nil {
 		return nil, err
 	}
+	consts := fileStringConsts(file)
 	for _, spec := range file.Imports {
 		if matchesRuntimeName(spec.Path.Value) {
 			findings = append(findings, vocabularyFinding{
@@ -260,7 +261,7 @@ func inspectFileVocabulary(fset *token.FileSet, path, rel string) ([]vocabularyF
 			// value the per-literal check would have caught. Sub-literals of
 			// a flagged chain never match on their own, so nothing is
 			// double-counted.
-			if folded, ok := foldConstString(node); ok && exactRuntimeName(strconv.Quote(folded)) {
+			if folded, ok := foldConstString(node, consts); ok && exactRuntimeName(strconv.Quote(folded)) {
 				findings = append(findings, vocabularyFinding{
 					File: rel, Line: fset.Position(node.Pos()).Line,
 					Kind: "runtime name literal", Text: strconv.Quote(folded),
@@ -284,9 +285,11 @@ func exactRuntimeName(quoted string) bool {
 }
 
 // foldConstString evaluates a constant string expression built from literals,
-// +, and parentheses. Anything else (an identifier, a call) is not foldable
-// here and reports false.
-func foldConstString(expr ast.Expr) (string, bool) {
+// +, parentheses, and same-file string constants. A call or a constant from
+// another file is not foldable here and reports false; the remaining
+// cross-file composition would need full type checking, and each piece still
+// has to live somewhere this test scans.
+func foldConstString(expr ast.Expr, consts map[string]string) (string, bool) {
 	switch node := expr.(type) {
 	case *ast.BasicLit:
 		if node.Kind != token.STRING {
@@ -294,17 +297,56 @@ func foldConstString(expr ast.Expr) (string, bool) {
 		}
 		value, err := strconv.Unquote(node.Value)
 		return value, err == nil
+	case *ast.Ident:
+		value, ok := consts[node.Name]
+		return value, ok
 	case *ast.ParenExpr:
-		return foldConstString(node.X)
+		return foldConstString(node.X, consts)
 	case *ast.BinaryExpr:
 		if node.Op != token.ADD {
 			return "", false
 		}
-		left, okLeft := foldConstString(node.X)
-		right, okRight := foldConstString(node.Y)
+		left, okLeft := foldConstString(node.X, consts)
+		right, okRight := foldConstString(node.Y, consts)
 		return left + right, okLeft && okRight
 	default:
 		return "", false
+	}
+}
+
+// fileStringConsts maps the file's string-constant names (top level and
+// function local) to their folded values. Package-level constants may
+// reference ones declared later in the file, so resolution iterates to a
+// fixed point.
+func fileStringConsts(file *ast.File) map[string]string {
+	consts := map[string]string{}
+	for {
+		grew := false
+		ast.Inspect(file, func(n ast.Node) bool {
+			decl, ok := n.(*ast.GenDecl)
+			if !ok || decl.Tok != token.CONST {
+				return true
+			}
+			for _, spec := range decl.Specs {
+				valueSpec, ok := spec.(*ast.ValueSpec)
+				if !ok || len(valueSpec.Names) != len(valueSpec.Values) {
+					continue
+				}
+				for i, name := range valueSpec.Names {
+					if _, done := consts[name.Name]; done {
+						continue
+					}
+					if value, folded := foldConstString(valueSpec.Values[i], consts); folded {
+						consts[name.Name] = value
+						grew = true
+					}
+				}
+			}
+			return true
+		})
+		if !grew {
+			return consts
+		}
 	}
 }
 
