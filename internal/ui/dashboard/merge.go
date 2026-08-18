@@ -300,6 +300,12 @@ type mergeClaim struct {
 	At   string `json:"at"`
 }
 
+// claimTimeFormat keeps sub-second precision. RFC3339 truncates to whole
+// seconds, and the hold is compared against the GitHub refresh time: a read
+// taken earlier in the same second as the claim would then compare as later, and
+// release a hold that has never seen a post-merge refresh.
+const claimTimeFormat = time.RFC3339Nano
+
 const (
 	// claimInflight is written before gh runs. A dashboard killed mid-merge
 	// leaves it behind, which is the honest state: the merge may have reached
@@ -347,7 +353,7 @@ func (s *Server) writeMergeClaims(claims map[string]mergeClaim) error {
 // file that cannot be written is a guard that would not survive a restart, so
 // the merge does not run at all rather than run unprotected.
 func (s *Server) reserveClaim(key string, claims map[string]mergeClaim) error {
-	claims[key] = mergeClaim{Kind: claimInflight, At: time.Now().UTC().Format(time.RFC3339)}
+	claims[key] = mergeClaim{Kind: claimInflight, At: time.Now().UTC().Format(claimTimeFormat)}
 	if err := s.writeMergeClaims(claims); err != nil {
 		return err
 	}
@@ -404,7 +410,7 @@ func (s *Server) holdUnconfirmed(rr repoRef, number int, res prmerge.Result) {
 }
 
 func (s *Server) upgradeClaim(claims map[string]mergeClaim, key, kind string) {
-	claims[key] = mergeClaim{Kind: kind, At: time.Now().UTC().Format(time.RFC3339)}
+	claims[key] = mergeClaim{Kind: kind, At: time.Now().UTC().Format(claimTimeFormat)}
 	_ = s.writeMergeClaims(claims)
 }
 
@@ -465,7 +471,7 @@ func (s *Server) claimOver(key string, rr repoRef, claims map[string]mergeClaim,
 // which keeps the hold until GitHub is read again rather than releasing it on a
 // timestamp nobody wrote.
 func claimedAt(claim mergeClaim) time.Time {
-	at, err := time.Parse(time.RFC3339, claim.At)
+	at, err := time.Parse(claimTimeFormat, claim.At)
 	if err != nil {
 		return time.Now()
 	}

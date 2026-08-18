@@ -1311,3 +1311,19 @@ func TestQueuedHoldReleasesWithoutAnInterveningPost(t *testing.T) {
 		t.Fatalf("status after the dequeue = %d, want 200", code)
 	}
 }
+
+// TestClaimTimestampKeepsSubSecondOrder pins the precision the hold depends on.
+// The stamp is compared against the GitHub refresh time, so truncating it to a
+// whole second would make a read taken earlier in that same second compare as
+// later — releasing a hold that never saw a post-merge refresh.
+func TestClaimTimestampKeepsSubSecondOrder(t *testing.T) {
+	now := time.Date(2026, 8, 18, 21, 55, 54, 500_000_000, time.UTC)
+	stamped := claimedAt(mergeClaim{At: now.Format(claimTimeFormat)})
+	if !stamped.Equal(now) {
+		t.Fatalf("claimedAt() = %v, want %v", stamped, now)
+	}
+	earlier := now.Add(-100 * time.Millisecond)
+	if earlier.After(stamped) {
+		t.Fatalf("a refresh at %v reads as later than the claim at %v", earlier, stamped)
+	}
+}
