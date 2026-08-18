@@ -53,7 +53,7 @@ func (l *Launcher) startManagedRequestAgent(
 	return l.startManagedAgent(
 		ctx, locked, route, intent,
 		func(launch *state.LaunchCapsule) error {
-			return validateManagedLaunchBinding(req, launch)
+			return validateManagedLaunchBinding(req, launch, route)
 		},
 		func(intent state.LaunchIntent) (*state.LaunchCapsule, error) {
 			return l.prepareManagedLaunchCapsule(req, route, intent, callerEnvironment)

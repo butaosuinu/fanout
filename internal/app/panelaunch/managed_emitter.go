@@ -33,24 +33,38 @@ func newManagedEmitterLaunch(
 	if err != nil {
 		return managedEmitterLaunch{}, err
 	}
-	emitterPath := route.EmitterPath
-	if emitterPath == "" {
-		emitterPath = route.LauncherPath
-	}
 	launch := managedEmitterLaunch{
 		environment: managedEmitterEnvironment(
 			statePath, intent, route, launchNonce, emitterNonce, req.Agent, agentID,
 		),
 		nonce: emitterNonce,
 	}
-	if req.Agent == "claude" {
-		settings, err := managedClaudeHookSettings(emitterPath)
-		if err != nil {
-			return managedEmitterLaunch{}, err
-		}
-		launch.backendArgs = []string{"--settings", settings}
+	backendArgs, err := managedEmitterBackendArgs(req, route)
+	if err != nil {
+		return managedEmitterLaunch{}, err
 	}
+	launch.backendArgs = backendArgs
 	return launch, nil
+}
+
+// managedEmitterBackendArgs returns the launch arguments the telemetry emitter
+// contributes to the agent command. They derive from the route alone — never
+// from a nonce — so recording a launch and verifying it later rebuild the same
+// argv. Both paths must call this; building the command without it made every
+// emitter-bearing launch fail its own binding check.
+func managedEmitterBackendArgs(req Request, route backend.OwnedLaunchRoute) ([]string, error) {
+	if req.Agent != "claude" {
+		return nil, nil
+	}
+	emitterPath := route.EmitterPath
+	if emitterPath == "" {
+		emitterPath = route.LauncherPath
+	}
+	settings, err := managedClaudeHookSettings(emitterPath)
+	if err != nil {
+		return nil, err
+	}
+	return []string{"--settings", settings}, nil
 }
 
 func managedClaudeHookSettings(fanoutPath string) (string, error) {
