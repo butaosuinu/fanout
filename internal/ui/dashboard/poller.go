@@ -300,10 +300,14 @@ func (p *poller) runGHTick() {
 	}
 	p.ensureResolved()
 	p.refreshGH()
-	p.mu.Lock()
-	p.ghRefreshedAt = time.Now()
-	p.mu.Unlock()
-	p.rebuildAndBroadcast()
+	// The stamp is published with the snapshot it describes, not before it: a
+	// hold reads both, and a new time next to the old rows would say "GitHub has
+	// been read since your merge" about data taken before it.
+	p.publishGHRefresh(time.Now())
+}
+
+func (p *poller) publishGHRefresh(at time.Time) {
+	p.rebuild(func() { p.ghRefreshedAt = at })
 }
 
 // ghFreshAfter reports whether GitHub data has been refetched since t. It is how
@@ -617,6 +621,13 @@ func (p *poller) build() sessionview.Snapshot {
 }
 
 func (p *poller) rebuildAndBroadcast() {
+	p.rebuild(nil)
+}
+
+// rebuild stores the newest snapshot and broadcasts it when the content moved.
+// commit runs inside the same lock section, so anything it publishes and the
+// snapshot become visible together.
+func (p *poller) rebuild(commit func()) {
 	snap := p.build()
 	data, err := json.Marshal(snap)
 	if err != nil {
@@ -629,6 +640,9 @@ func (p *poller) rebuildAndBroadcast() {
 	p.latest = snap
 	p.latestJSON = data
 	p.lastKey = key
+	if commit != nil {
+		commit()
+	}
 	p.mu.Unlock()
 
 	if changed {

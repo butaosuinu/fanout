@@ -188,6 +188,19 @@ describe("canDeleteBranch", () => {
     expect(canDeleteBranch(merged(), { ...ctx, branch: "" })).toBe(true);
   });
 
+  /* fork の checkout から upstream へ出した PR は、head がこの行と一致しても
+   * base が別 repository。サーバの VerifyRowOwns が必ず 409 にする。 */
+  it("別 repository を base にする PR には出さない", () => {
+    const pr = makePr({
+      state: "MERGED",
+      headRepo: REPO,
+      headRef: BRANCH,
+      headSha: "abc123",
+      baseRepo: "upstream/fanout",
+    });
+    expect(canDeleteBranch(pr, ctx)).toBe(false);
+  });
+
   it("fork の head branch は消さない", () => {
     const pr = makePr({
       state: "MERGED",

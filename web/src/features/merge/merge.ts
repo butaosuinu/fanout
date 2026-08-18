@@ -175,6 +175,11 @@ export function canDeleteBranch(
 ): boolean {
   if (!pr || !ctx.token) return false;
   if (!isMerged(pr) || !pr.headSha) return false;
+  /* サーバの VerifyRowOwns は base repository がこの repository であることを要求する。
+   * fork の checkout から upstream へ出した PR が closing keyword でこちらの issue を
+   * 閉じている場合、head はこの行と一致するので、これが無いと押すたびに 409 になる
+   * ボタンが出る。 */
+  if (pr.baseRepo?.toLowerCase() !== ctx.repo.toLowerCase()) return false;
   return headOwnedByRow(pr, ctx.repo, ctx.branch);
 }
 
