@@ -159,11 +159,11 @@ type vocabularyScan struct {
 func scanRuntimeVocabulary(t *testing.T, root string) vocabularyScan {
 	t.Helper()
 	scan := vocabularyScan{perTree: map[string]int{}}
-	fset := token.NewFileSet()
-	consts, constsErr := collectStringConsts(root)
-	if constsErr != nil {
-		t.Fatalf("collectStringConsts() = %v, want nil", constsErr)
+	loader, loaderErr := newModuleConstLoader(root)
+	if loaderErr != nil {
+		t.Fatalf("newModuleConstLoader() = %v, want nil", loaderErr)
 	}
+	fset := loader.fset
 	type parsedFile struct {
 		file *ast.File
 		rel  string
@@ -184,7 +184,7 @@ func scanRuntimeVocabulary(t *testing.T, root string) vocabularyScan {
 			if relErr != nil {
 				return relErr
 			}
-			file, parseErr := parser.ParseFile(fset, path, nil, 0)
+			file, parseErr := loader.parse(path)
 			if parseErr != nil {
 				return parseErr
 			}
@@ -198,41 +198,122 @@ func scanRuntimeVocabulary(t *testing.T, root string) vocabularyScan {
 			t.Fatalf("walk %s = %v, want nil", tree.path, walkErr)
 		}
 		for dir, parsed := range perDir {
-			var files []*ast.File
+			loader.check(dir)
 			for _, pf := range parsed {
-				files = append(files, pf.file)
-			}
-			info := typeCheckConstants(dir, fset, files)
-			for _, pf := range parsed {
-				scan.findings = append(scan.findings, inspectFileVocabulary(fset, pf.file, pf.rel, consts, info)...)
+				scan.findings = append(scan.findings, inspectFileVocabulary(fset, pf.file, pf.rel, loader.info)...)
 			}
 		}
 	}
 	return scan
 }
 
-// typeCheckConstants type-checks one directory's files just far enough to
-// compute constant values: the importer hands back empty stub packages and
-// every error is swallowed, so in-package constant expressions (including
-// conversions like string('t')) get values while imported names simply stay
-// valueless. Constants that reach across packages are covered by the
-// name-keyed candidate table instead.
-func typeCheckConstants(dir string, fset *token.FileSet, files []*ast.File) *types.Info {
-	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}}
-	conf := types.Config{
-		Error:    func(error) {},
-		Importer: stubImporter{},
-	}
-	_, _ = conf.Check(dir, fset, files, info)
-	return info
+// moduleConstLoader type-checks module packages from source so constant
+// expressions evaluate exactly - conversions, cross-file, and cross-package
+// references included. Imports inside the module resolve recursively to the
+// real package; anything outside the module gets an empty stub, every error
+// is swallowed, and only constant VALUES are consumed, so the check never has
+// to fully succeed. A constant exported by an external dependency therefore
+// stays invisible; pulling a runtime name in through go.mod is a reviewable
+// event of its own.
+type moduleConstLoader struct {
+	root     string
+	module   string
+	fset     *token.FileSet
+	info     *types.Info
+	parsed   map[string]*ast.File
+	dirFiles map[string][]*ast.File
+	pkgs     map[string]*types.Package
+	checking map[string]bool
 }
 
-// stubImporter satisfies every import with an empty package so type checking
-// can proceed without resolving the module graph.
-type stubImporter struct{}
+func newModuleConstLoader(root string) (*moduleConstLoader, error) {
+	raw, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return nil, err
+	}
+	module := ""
+	for line := range strings.Lines(string(raw)) {
+		if name, ok := strings.CutPrefix(line, "module "); ok {
+			module = strings.TrimSpace(name)
+			break
+		}
+	}
+	if module == "" {
+		return nil, fmt.Errorf("go.mod has no module line")
+	}
+	return &moduleConstLoader{
+		root: root, module: module, fset: token.NewFileSet(),
+		info:   &types.Info{Types: map[ast.Expr]types.TypeAndValue{}},
+		parsed: map[string]*ast.File{}, dirFiles: map[string][]*ast.File{},
+		pkgs: map[string]*types.Package{}, checking: map[string]bool{},
+	}, nil
+}
 
-func (stubImporter) Import(path string) (*types.Package, error) {
-	return types.NewPackage(path, "_"), nil
+// parse memoizes one file so the scan and the type checker share ASTs and
+// positions.
+func (l *moduleConstLoader) parse(path string) (*ast.File, error) {
+	if file, ok := l.parsed[path]; ok {
+		return file, nil
+	}
+	file, err := parser.ParseFile(l.fset, path, nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	l.parsed[path] = file
+	return file, nil
+}
+
+// check type-checks one directory's package, memoized, resolving in-module
+// imports through the loader itself.
+func (l *moduleConstLoader) check(dir string) *types.Package {
+	if pkg, ok := l.pkgs[dir]; ok {
+		return pkg
+	}
+	if l.checking[dir] {
+		return types.NewPackage(dir, "_")
+	}
+	l.checking[dir] = true
+	defer func() { l.checking[dir] = false }()
+	files := l.dirGoFiles(dir)
+	conf := types.Config{Error: func(error) {}, Importer: l}
+	pkg, _ := conf.Check(dir, l.fset, files, l.info)
+	if pkg == nil {
+		pkg = types.NewPackage(dir, "_")
+	}
+	l.pkgs[dir] = pkg
+	return pkg
+}
+
+// dirGoFiles parses one directory's non-test Go files, memoized.
+func (l *moduleConstLoader) dirGoFiles(dir string) []*ast.File {
+	if files, ok := l.dirFiles[dir]; ok {
+		return files
+	}
+	var files []*ast.File
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			if file, parseErr := l.parse(filepath.Join(dir, name)); parseErr == nil {
+				files = append(files, file)
+			}
+		}
+	}
+	l.dirFiles[dir] = files
+	return files
+}
+
+// Import resolves an in-module import to its really-checked package and
+// everything else to an empty stub.
+func (l *moduleConstLoader) Import(path string) (*types.Package, error) {
+	rel, ok := strings.CutPrefix(path, l.module+"/")
+	if !ok {
+		return types.NewPackage(path, "_"), nil
+	}
+	return l.check(filepath.Join(l.root, filepath.FromSlash(rel))), nil
 }
 
 // skipScannedDir applies godep-cruiser's own skip rules so the two scans agree
@@ -247,7 +328,7 @@ func skipScannedDir(name string) error {
 // inspectFileVocabulary reports the runtime names one file spells in code. The
 // file was parsed without parser.ParseComments, so comments never reach the
 // AST and cannot be flagged.
-func inspectFileVocabulary(fset *token.FileSet, file *ast.File, rel string, consts map[string][]string, info *types.Info) []vocabularyFinding {
+func inspectFileVocabulary(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []vocabularyFinding {
 	var findings []vocabularyFinding
 	if name := filepath.Base(rel); matchesRuntimeName(name) {
 		findings = append(findings, vocabularyFinding{File: rel, Line: 0, Kind: "file name", Text: name})
@@ -266,7 +347,11 @@ func inspectFileVocabulary(fset *token.FileSet, file *ast.File, rel string, cons
 			})
 		}
 	}
-	flaggedConstants := map[string]bool{}
+	type flaggedSpan struct {
+		start, end token.Pos
+		value      string
+	}
+	var flaggedConstants []flaggedSpan
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.Ident:
@@ -295,53 +380,60 @@ func inspectFileVocabulary(fset *token.FileSet, file *ast.File, rel string, cons
 		// Parents are visited before children and each (line, value) reports
 		// once, so a flagged chain does not also report its pieces.
 		if expr, ok := n.(ast.Expr); ok {
-			if spellsRuntimeIdentifier(expr) {
+			if containsRuntimeIdentifier(expr) {
 				return true
 			}
-			for _, value := range constantStringValues(expr, consts, info) {
-				if !exactRuntimeName(strconv.Quote(value)) {
-					continue
-				}
-				key := fmt.Sprintf("%d:%s", fset.Position(expr.Pos()).Line, value)
-				if flaggedConstants[key] {
-					break
-				}
-				flaggedConstants[key] = true
-				findings = append(findings, vocabularyFinding{
-					File: rel, Line: fset.Position(expr.Pos()).Line,
-					Kind: "runtime name literal", Text: strconv.Quote(value),
-				})
-				break
+			value, ok := constantStringValue(expr, info)
+			if !ok || !exactRuntimeName(strconv.Quote(value)) {
+				return true
 			}
+			// Parents are visited before children, so a chain that already
+			// reported this value swallows only the pieces INSIDE it; a
+			// second same-value literal elsewhere on the same line is its own
+			// site and reports separately.
+			for _, span := range flaggedConstants {
+				if span.value == value && span.start <= expr.Pos() && expr.End() <= span.end {
+					return true
+				}
+			}
+			flaggedConstants = append(flaggedConstants, flaggedSpan{start: expr.Pos(), end: expr.End(), value: value})
+			findings = append(findings, vocabularyFinding{
+				File: rel, Line: fset.Position(expr.Pos()).Line,
+				Kind: "runtime name literal", Text: strconv.Quote(value),
+			})
 		}
 		return true
 	})
 	return findings
 }
 
-// spellsRuntimeIdentifier reports an expression whose own spelling already
-// names a runtime (backend.Tmux, a herdr-named ident). Those sites are
-// governed - and pinned - by the identifier check; re-reporting their VALUE
-// would double every data-read pin without adding enforcement. A
-// neutral-named constant carrying a runtime value stays subject to the value
-// check, which is the laundering this exists to catch.
-func spellsRuntimeIdentifier(expr ast.Expr) bool {
-	switch node := expr.(type) {
-	case *ast.Ident:
-		return matchesRuntimeName(node.Name)
-	case *ast.SelectorExpr:
-		return matchesRuntimeName(node.Sel.Name)
-	}
-	return false
+// containsRuntimeIdentifier reports an expression that spells a runtime name
+// in some identifier inside it (backend.Tmux, string(backend.Herdr), a
+// herdr-named const). Those sites are governed - and pinned - by the
+// identifier check; re-reporting their VALUE would double every data
+// read/write pin without adding enforcement. Laundering by definition avoids
+// runtime-named identifiers - hiding the name is its whole point - so a
+// neutral-spelling expression carrying a runtime value stays subject to the
+// value check.
+func containsRuntimeIdentifier(expr ast.Expr) bool {
+	found := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && matchesRuntimeName(id.Name) {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
-// constantStringValues returns every string value expr may evaluate to: the
-// type checker's answer when it has one, else the syntactic fold candidates.
-func constantStringValues(expr ast.Expr, consts map[string][]string, info *types.Info) []string {
-	if tv, ok := info.Types[expr]; ok && tv.Value != nil && tv.Value.Kind() == constant.String {
-		return []string{constant.StringVal(tv.Value)}
+// constantStringValue returns the string value expr evaluates to, when the
+// type checker computed one.
+func constantStringValue(expr ast.Expr, info *types.Info) (string, bool) {
+	tv, ok := info.Types[expr]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+		return "", false
 	}
-	return foldConstStrings(expr, consts)
+	return constant.StringVal(tv.Value), true
 }
 
 // exactRuntimeName reports whether the quoted literal's whole value is a
@@ -353,161 +445,6 @@ func exactRuntimeName(quoted string) bool {
 		return false
 	}
 	return slices.Contains(runtimeVocabularyNames, strings.ToLower(value))
-}
-
-// foldConstStrings evaluates a constant string expression built from
-// literals, +, parentheses, and same-file string constants, returning every
-// value it may fold to (nil when not foldable). A call or a constant from
-// another file is not foldable here; the remaining cross-file composition
-// would need full type checking, and each piece still has to live somewhere
-// this test scans.
-//
-// maxFoldCandidates bounds the possible-value set a folded expression may
-// carry. Same-name constants in different scopes are tracked as candidate
-// SETS rather than scoped bindings, so folding over-approximates: if any
-// combination spells a runtime name the expression is flagged. Fail-closed is
-// the right direction for a gate; a pathological file that overflows the cap
-// stops folding, and its pieces are still individually checked.
-const maxFoldCandidates = 16
-
-func foldConstStrings(expr ast.Expr, consts map[string][]string) []string {
-	switch node := expr.(type) {
-	case *ast.BasicLit:
-		if node.Kind != token.STRING {
-			return nil
-		}
-		value, err := strconv.Unquote(node.Value)
-		if err != nil {
-			return nil
-		}
-		return []string{value}
-	case *ast.Ident:
-		// A bare identifier resolves through the type checker (which honors
-		// real Go scoping); the name-keyed table would collide with local
-		// variables that happen to share a name with some package's constant.
-		return nil
-	case *ast.SelectorExpr:
-		// pkg.Name resolves by bare name against the shared table - the
-		// package qualifier is ignored on purpose (over-approximation).
-		return consts[node.Sel.Name]
-	case *ast.ParenExpr:
-		return foldConstStrings(node.X, consts)
-	case *ast.BinaryExpr:
-		if node.Op != token.ADD {
-			return nil
-		}
-		left := foldConstStrings(node.X, consts)
-		right := foldConstStrings(node.Y, consts)
-		if left == nil || right == nil || len(left)*len(right) > maxFoldCandidates {
-			return nil
-		}
-		var combined []string
-		for _, l := range left {
-			for _, r := range right {
-				combined = append(combined, l+r)
-			}
-		}
-		return combined
-	default:
-		return nil
-	}
-}
-
-// collectStringConsts maps EXPORTED string-constant names to every value a
-// declaration of that name may fold to, across ALL non-test Go files under
-// cmd/ and internal/ - not just the scanned trees, so a piece parked in an
-// unscanned layer still resolves at its use site. The table serves selector
-// references (pkg.Name), which the stub-importer type check cannot value;
-// names are deliberately not package-qualified, so every same-name exported
-// constant contributes candidates and a package boundary cannot mask the
-// combination that spells a runtime name. In-package references are resolved
-// exactly (scoping included) by the type checker instead, and unexported
-// constants cannot cross a package boundary at all. Constants may reference
-// ones declared later or in another file, so resolution iterates to a fixed
-// point.
-func collectStringConsts(root string) (map[string][]string, error) {
-	fset := token.NewFileSet()
-	var files []*ast.File
-	for _, tree := range []string{"cmd", "internal"} {
-		walkErr := filepath.WalkDir(filepath.Join(root, tree), func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				return skipScannedDir(d.Name())
-			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			file, parseErr := parser.ParseFile(fset, path, nil, 0)
-			if parseErr != nil {
-				return parseErr
-			}
-			files = append(files, file)
-			return nil
-		})
-		if walkErr != nil {
-			return nil, walkErr
-		}
-	}
-	consts := map[string][]string{}
-	for {
-		grew := false
-		for _, file := range files {
-			if collectFileConsts(file, consts) {
-				grew = true
-			}
-		}
-		if !grew {
-			return consts, nil
-		}
-	}
-}
-
-// collectFileConsts folds one file's const declarations into the shared
-// table, reporting whether anything new resolved.
-func collectFileConsts(file *ast.File, consts map[string][]string) bool {
-	grew := false
-	ast.Inspect(file, func(n ast.Node) bool {
-		decl, ok := n.(*ast.GenDecl)
-		if !ok || decl.Tok != token.CONST {
-			return true
-		}
-		// A const-group spec with no initializer repeats the previous
-		// spec's expressions (const (part = "t"; prefix; suffix = ...)),
-		// so the last expression list is carried forward exactly as the
-		// spec says.
-		var lastValues []ast.Expr
-		for _, spec := range decl.Specs {
-			valueSpec, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			values := valueSpec.Values
-			if len(values) == 0 {
-				values = lastValues
-			} else {
-				lastValues = values
-			}
-			if len(valueSpec.Names) != len(values) {
-				continue
-			}
-			for i, name := range valueSpec.Names {
-				for _, value := range foldConstStrings(values[i], consts) {
-					if slices.Contains(consts[name.Name], value) {
-						continue
-					}
-					if len(consts[name.Name]) >= maxFoldCandidates {
-						break
-					}
-					consts[name.Name] = append(consts[name.Name], value)
-					grew = true
-				}
-			}
-		}
-		return true
-	})
-	return grew
 }
 
 func matchesRuntimeName(s string) bool {
