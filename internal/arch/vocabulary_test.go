@@ -354,13 +354,27 @@ func fileStringConsts(file *ast.File) map[string][]string {
 			if !ok || decl.Tok != token.CONST {
 				return true
 			}
+			// A const-group spec with no initializer repeats the previous
+			// spec's expressions (const (part = "t"; prefix; suffix = ...)),
+			// so the last expression list is carried forward exactly as the
+			// spec says.
+			var lastValues []ast.Expr
 			for _, spec := range decl.Specs {
 				valueSpec, ok := spec.(*ast.ValueSpec)
-				if !ok || len(valueSpec.Names) != len(valueSpec.Values) {
+				if !ok {
+					continue
+				}
+				values := valueSpec.Values
+				if len(values) == 0 {
+					values = lastValues
+				} else {
+					lastValues = values
+				}
+				if len(valueSpec.Names) != len(values) {
 					continue
 				}
 				for i, name := range valueSpec.Names {
-					for _, value := range foldConstStrings(valueSpec.Values[i], consts) {
+					for _, value := range foldConstStrings(values[i], consts) {
 						if slices.Contains(consts[name.Name], value) {
 							continue
 						}
