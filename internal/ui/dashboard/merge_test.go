@@ -106,7 +106,13 @@ func mergeHandler(t *testing.T, token string, snap sessionview.Snapshot, m *fake
 	t.Helper()
 	p := newPollerBase(t.TempDir(), newHub())
 	p.latest, p.repo, p.resolved = snap, "owner/repo", true
-	s := &Server{poller: p, token: token, hostPort: testHostPort, mergeInFlight: map[string]struct{}{}, mergeHeld: map[string]time.Time{}}
+	s := &Server{
+		poller: p, token: token, hostPort: testHostPort,
+		mergeInFlight: map[string]struct{}{}, mergeHeld: map[string]time.Time{},
+		// Production resolves this from the git common dir; a temp dir is not a
+		// repository, so the test names the file directly.
+		claimsPath: filepath.Join(t.TempDir(), mergeClaimsFile),
+	}
 	if m != nil {
 		s.mergePR = m.merge
 	}
@@ -279,7 +285,11 @@ func TestMergeFailsClosedWithoutABoundHost(t *testing.T) {
 	p := newPollerBase(t.TempDir(), newHub())
 	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
 	fake := &fakeMerger{}
-	s := &Server{poller: p, token: testToken, mergePR: fake.merge, mergeInFlight: map[string]struct{}{}, mergeHeld: map[string]time.Time{}}
+	s := &Server{
+		poller: p, token: testToken, mergePR: fake.merge,
+		mergeInFlight: map[string]struct{}{}, mergeHeld: map[string]time.Time{},
+		claimsPath: filepath.Join(t.TempDir(), mergeClaimsFile),
+	}
 	h, err := s.handler()
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -595,13 +605,15 @@ func TestMergeHoldsAnUnconfirmedPullRequest(t *testing.T) {
 // already have reached GitHub, and a stale OPEN snapshot would let it fire again.
 func TestMergeHoldSurvivesARestart(t *testing.T) {
 	root := t.TempDir()
+	claims := filepath.Join(root, mergeClaimsFile)
 	newServer := func(m *fakeMerger) http.Handler {
 		p := newPollerBase(root, newHub())
 		p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
 		s := &Server{
 			poller: p, hostPort: testHostPort, token: testToken,
 			mergePR: m.merge, mergeInFlight: map[string]struct{}{},
-			mergeHeld: map[string]time.Time{},
+			mergeHeld:  map[string]time.Time{},
+			claimsPath: claims,
 		}
 		h, err := s.handler()
 		if err != nil {
@@ -630,11 +642,13 @@ func TestMergeHoldSurvivesARestart(t *testing.T) {
 func TestMergeReleasesTheHoldOnceGitHubSettles(t *testing.T) {
 	fake := &fakeMerger{res: prmerge.Result{Unknown: true}}
 	p := newPollerBase(t.TempDir(), newHub())
+	claims := filepath.Join(t.TempDir(), mergeClaimsFile)
 	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
 	s := &Server{
 		poller: p, hostPort: testHostPort, token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
-		mergeHeld: map[string]time.Time{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: claims,
 	}
 	h, err := s.handler()
 	if err != nil {
@@ -662,11 +676,13 @@ func TestMergeReleasesTheHoldOnceGitHubSettles(t *testing.T) {
 func TestMergeHoldIgnoresASameNumberedPRElsewhere(t *testing.T) {
 	fake := &fakeMerger{res: prmerge.Result{Unknown: true}}
 	p := newPollerBase(t.TempDir(), newHub())
+	claims := filepath.Join(t.TempDir(), mergeClaimsFile)
 	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
 	s := &Server{
 		poller: p, hostPort: testHostPort, token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
-		mergeHeld: map[string]time.Time{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: claims,
 	}
 	h, err := s.handler()
 	if err != nil {
@@ -707,11 +723,13 @@ func TestQueuedHoldEndsWhenTheAutoMergeIsCancelled(t *testing.T) {
 	armed.AutoMerge = true
 	fake := &fakeMerger{res: prmerge.Result{Queued: true}}
 	p := newPollerBase(t.TempDir(), newHub())
+	claims := filepath.Join(t.TempDir(), mergeClaimsFile)
 	p.latest, p.repo, p.resolved = mergeSnapshot(armed), "owner/repo", true
 	s := &Server{
 		poller: p, hostPort: testHostPort, token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
-		mergeHeld: map[string]time.Time{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: claims,
 	}
 	h, err := s.handler()
 	if err != nil {
@@ -747,11 +765,13 @@ func TestQueuedHoldEndsWhenTheQueueEntryGoes(t *testing.T) {
 	enqueued.Queued = true
 	fake := &fakeMerger{res: prmerge.Result{Queued: true}}
 	p := newPollerBase(t.TempDir(), newHub())
+	claims := filepath.Join(t.TempDir(), mergeClaimsFile)
 	p.latest, p.repo, p.resolved = mergeSnapshot(enqueued), "owner/repo", true
 	s := &Server{
 		poller: p, hostPort: testHostPort, token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
-		mergeHeld: map[string]time.Time{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: claims,
 	}
 	h, err := s.handler()
 	if err != nil {
@@ -780,11 +800,13 @@ func TestQueuedHoldEndsWhenTheQueueEntryGoes(t *testing.T) {
 func TestQueuedHoldSurvivesTheSnapshotThatPredatesIt(t *testing.T) {
 	fake := &fakeMerger{res: prmerge.Result{Queued: true}}
 	p := newPollerBase(t.TempDir(), newHub())
+	claims := filepath.Join(t.TempDir(), mergeClaimsFile)
 	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true // not armed yet
 	s := &Server{
 		poller: p, hostPort: testHostPort, token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
-		mergeHeld: map[string]time.Time{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: claims,
 	}
 	h, err := s.handler()
 	if err != nil {
@@ -807,11 +829,13 @@ func TestQueuedHoldSurvivesTheSnapshotThatPredatesIt(t *testing.T) {
 func TestUnknownHoldIgnoresTheAutoMergeSignal(t *testing.T) {
 	fake := &fakeMerger{res: prmerge.Result{Unknown: true}}
 	p := newPollerBase(t.TempDir(), newHub())
+	claims := filepath.Join(t.TempDir(), mergeClaimsFile)
 	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
 	s := &Server{
 		poller: p, hostPort: testHostPort, token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
-		mergeHeld: map[string]time.Time{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: claims,
 	}
 	h, err := s.handler()
 	if err != nil {
@@ -864,12 +888,14 @@ func TestMergeRefusesARetargetedPullRequest(t *testing.T) {
 // while the page itself loaded fine.
 func TestMergeAcceptsTheDefaultHTTPPort(t *testing.T) {
 	p := newPollerBase(t.TempDir(), newHub())
+	claims := filepath.Join(t.TempDir(), mergeClaimsFile)
 	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
 	fake := &fakeMerger{res: prmerge.Result{Merged: true}}
 	s := &Server{
 		poller: p, hostPort: "127.0.0.1:80", token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
-		mergeHeld: map[string]time.Time{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: claims,
 	}
 	h, err := s.handler()
 	if err != nil {
@@ -943,12 +969,14 @@ func TestMergeRefusesWhenGitHubIsUnresolved(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := newPollerBase(t.TempDir(), newHub())
+			claims := filepath.Join(t.TempDir(), mergeClaimsFile)
 			p.latest, p.repo, p.ghErr, p.resolved = mergeSnapshot(), tt.repo, tt.ghErr, true
 			fake := &fakeMerger{}
 			s := &Server{
 				poller: p, hostPort: testHostPort, token: testToken,
 				mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
-				mergeHeld: map[string]time.Time{},
+				mergeHeld:  map[string]time.Time{},
+				claimsPath: claims,
 			}
 			h, err := s.handler()
 			if err != nil {
@@ -1055,12 +1083,14 @@ func TestMergeInFlightLock(t *testing.T) {
 func TestMergeKicksThePollerWithoutDroppingTheRow(t *testing.T) {
 	fake := &fakeMerger{res: prmerge.Result{Merged: true}}
 	p := newPollerBase(t.TempDir(), newHub())
+	claims := filepath.Join(t.TempDir(), mergeClaimsFile)
 	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
 	p.cache[578] = ghCacheEntry{state: "OPEN"}
 	s := &Server{
 		poller: p, hostPort: testHostPort, token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
-		mergeHeld: map[string]time.Time{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: claims,
 	}
 	h, err := s.handler()
 	if err != nil {
@@ -1104,6 +1134,7 @@ func TestMergeRefusesWithoutATokenGate(t *testing.T) {
 // merge does not run at all.
 func TestMergeRefusesWhenTheClaimCannotBePersisted(t *testing.T) {
 	root := t.TempDir()
+	claims := filepath.Join(root, ".fanout", mergeClaimsFile)
 	// .fanout as a file, so creating the directory for the claims fails.
 	if err := os.WriteFile(filepath.Join(root, ".fanout"), []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1114,7 +1145,8 @@ func TestMergeRefusesWhenTheClaimCannotBePersisted(t *testing.T) {
 	s := &Server{
 		poller: p, hostPort: testHostPort, token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
-		mergeHeld: map[string]time.Time{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: claims,
 	}
 	h, err := s.handler()
 	if err != nil {
@@ -1132,13 +1164,15 @@ func TestMergeRefusesWhenTheClaimCannotBePersisted(t *testing.T) {
 // another pull request on the same row must not meet a stale hold.
 func TestConfirmedMergeLeavesNoClaim(t *testing.T) {
 	root := t.TempDir()
+	claims := filepath.Join(root, mergeClaimsFile)
 	fake := &fakeMerger{res: prmerge.Result{Merged: true}}
 	p := newPollerBase(root, newHub())
 	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
 	s := &Server{
 		poller: p, hostPort: testHostPort, token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
-		mergeHeld: map[string]time.Time{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: claims,
 	}
 	h, err := s.handler()
 	if err != nil {
@@ -1147,10 +1181,10 @@ func TestConfirmedMergeLeavesNoClaim(t *testing.T) {
 	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", code)
 	}
-	claims := map[string]any{}
-	if _, err := atomicfs.ReadJSON(filepath.Join(root, ".fanout", mergeClaimsFile), &claims); err == nil {
-		if len(claims) != 0 {
-			t.Fatalf("claims = %v, want none after a confirmed merge", claims)
+	recorded := map[string]any{}
+	if _, err := atomicfs.ReadJSON(claims, &recorded); err == nil {
+		if len(recorded) != 0 {
+			t.Fatalf("claims = %v, want none after a confirmed merge", recorded)
 		}
 	}
 	if len(s.mergeHeld) != 0 {
@@ -1164,10 +1198,7 @@ func TestConfirmedMergeLeavesNoClaim(t *testing.T) {
 // it — which is precisely the resend the hold exists to stop.
 func TestMergeRefusesWhenClaimsCannotBeRead(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".fanout"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	corrupt := filepath.Join(root, ".fanout", mergeClaimsFile)
+	corrupt := filepath.Join(root, mergeClaimsFile)
 	if err := os.WriteFile(corrupt, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1177,7 +1208,8 @@ func TestMergeRefusesWhenClaimsCannotBeRead(t *testing.T) {
 	s := &Server{
 		poller: p, hostPort: testHostPort, token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
-		mergeHeld: map[string]time.Time{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: corrupt,
 	}
 	h, err := s.handler()
 	if err != nil {

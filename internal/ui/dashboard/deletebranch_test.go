@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -45,6 +46,7 @@ func deleteHandler(t *testing.T, snap sessionview.Snapshot, d *fakeDeleter) http
 	s := &Server{
 		poller: p, token: testToken, hostPort: testHostPort,
 		mergeInFlight: map[string]struct{}{}, mergeHeld: map[string]time.Time{},
+		claimsPath: filepath.Join(t.TempDir(), mergeClaimsFile),
 		// The delete route shares mergeEnabled's wiring gate.
 		mergePR: (&fakeMerger{}).merge,
 	}

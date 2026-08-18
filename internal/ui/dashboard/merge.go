@@ -237,10 +237,15 @@ func writeMergeResponse(
 	})
 }
 
-// mergeClaimsFile is where unconfirmed merges are remembered. It sits next to
-// dashboard.json rather than in memory because the guard has to outlive the
-// process: a dashboard restarted after a lost response would otherwise let the
-// same merge be fired again.
+// mergeClaimsFile is where unconfirmed merges are remembered. It is on disk
+// rather than in memory because the guard has to outlive the process: a
+// dashboard restarted after a lost response would otherwise let the same merge
+// be fired again.
+//
+// It lives in the repository-common fanout directory, not in a worktree's own
+// .fanout. The dashboard shows every linked worktree's sessions, so two
+// dashboards started in sibling worktrees list the same pull requests — and a
+// claim written to one worktree does not exist for the other.
 const mergeClaimsFile = "merge-claims.json"
 
 // claimLockWait bounds how long one request waits for another process to finish
@@ -256,7 +261,11 @@ const claimLockWait = 2 * time.Second
 // time out — and an atomic write does not make read-decide-write atomic, so
 // without this both could read "no claim here" and both send the merge.
 func (s *Server) withClaimLock(fn func()) error {
-	release, err := atomicfs.Lock(s.mergeClaimsPath(), claimLockWait)
+	path, err := s.mergeClaimsPath()
+	if err != nil {
+		return err
+	}
+	release, err := atomicfs.Lock(path, claimLockWait)
 	if err != nil {
 		return err
 	}
@@ -265,8 +274,16 @@ func (s *Server) withClaimLock(fn func()) error {
 	return nil
 }
 
-func (s *Server) mergeClaimsPath() string {
-	return filepath.Join(s.poller.projectRoot, ".fanout", mergeClaimsFile)
+// mergeClaimsPath resolves the claims file once and remembers the answer,
+// including a failure: it costs a git call, and every caller already holds
+// mergeMu. A failure closes the mutation rather than falling back to a
+// worktree-local path, which would be a guard that silently protects less than
+// it claims. Callers hold mergeMu.
+func (s *Server) mergeClaimsPath() (string, error) {
+	if s.claimsPath == "" && s.claimsErr == nil {
+		s.claimsPath, s.claimsErr = state.RepoCommonPath(s.poller.projectRoot, mergeClaimsFile)
+	}
+	return s.claimsPath, s.claimsErr
 }
 
 // readMergeClaims returns the recorded holds. Callers hold mergeMu.
@@ -300,8 +317,12 @@ const (
 )
 
 func (s *Server) readMergeClaims() (map[string]mergeClaim, error) {
+	path, err := s.mergeClaimsPath()
+	if err != nil {
+		return nil, err
+	}
 	claims := map[string]mergeClaim{}
-	if _, err := atomicfs.ReadJSON(s.mergeClaimsPath(), &claims); err != nil {
+	if _, err := atomicfs.ReadJSON(path, &claims); err != nil {
 		return nil, err
 	}
 	return claims, nil
@@ -314,7 +335,10 @@ func (s *Server) readMergeClaims() (map[string]mergeClaim, error) {
 // merge is refused instead. Everywhere else the write is an update to a hold
 // that already exists, and failing it leaves the stricter state in place.
 func (s *Server) writeMergeClaims(claims map[string]mergeClaim) error {
-	path := s.mergeClaimsPath()
+	path, err := s.mergeClaimsPath()
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

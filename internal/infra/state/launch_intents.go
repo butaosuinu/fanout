@@ -170,27 +170,37 @@ type LockedLaunchJournal struct {
 // LaunchJournalPath returns the repository-common journal path shared by every
 // linked worktree.
 func LaunchJournalPath(projectRoot string) (string, error) {
-	return launchJournalPathContext(context.Background(), projectRoot)
+	return RepoCommonPath(projectRoot, "herdr-intents.json")
 }
 
-func launchJournalPathContext(ctx context.Context, projectRoot string) (string, error) {
+// RepoCommonPath resolves one file under the repository-common fanout directory
+// — the git common dir, which every linked worktree shares.
+//
+// State that must be one thing per repository goes here rather than in a
+// worktree's own .fanout, because sibling worktrees are separate directories
+// and a guard written to one of them does not exist for the others.
+func RepoCommonPath(projectRoot, name string) (string, error) {
+	return repoCommonPathContext(context.Background(), projectRoot, name)
+}
+
+func repoCommonPathContext(ctx context.Context, projectRoot, name string) (string, error) {
 	out, err := execx.OutputContext(ctx, projectRoot, nil, "git", "rev-parse", "--git-common-dir")
 	if err != nil {
-		return "", fmt.Errorf("resolve Herdr intents git common directory: %w", err)
+		return "", fmt.Errorf("resolve git common directory for %s: %w", name, err)
 	}
 	// Strip exactly the newline git appends; a path's own whitespace is data.
 	commonDir := strings.TrimSuffix(string(out), "\n")
 	if commonDir == "" {
-		return "", fmt.Errorf("resolve Herdr intents git common directory: invalid path %q", commonDir)
+		return "", fmt.Errorf("resolve git common directory for %s: invalid path %q", name, commonDir)
 	}
 	if !filepath.IsAbs(commonDir) {
 		commonDir = filepath.Join(projectRoot, commonDir)
 	}
 	commonDir, err = filepath.EvalSymlinks(commonDir)
 	if err != nil {
-		return "", fmt.Errorf("canonicalize Herdr intents git common directory: %w", err)
+		return "", fmt.Errorf("canonicalize git common directory for %s: %w", name, err)
 	}
-	return filepath.Join(filepath.Clean(commonDir), "fanout", "herdr-intents.json"), nil
+	return filepath.Join(filepath.Clean(commonDir), "fanout", name), nil
 }
 
 func LoadLaunchJournal(projectRoot string) (LaunchJournal, error) {

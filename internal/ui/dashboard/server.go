@@ -117,7 +117,12 @@ type Server struct {
 	// processes on the same pull request; the claims file holds a PR whose merge
 	// command may have reached GitHub without a readable outcome, because one
 	// tab's in-memory guard cannot stop another tab, a reload, or a restart.
-	mergeMu       sync.Mutex
+	mergeMu sync.Mutex
+	// claimsPath is the repository-common claims file, resolved on first use.
+	// claimsErr remembers a failed resolution so the mutation stays closed
+	// instead of retrying a git call per request.
+	claimsPath    string
+	claimsErr     error
 	mergeInFlight map[string]struct{}
 	// mergeHeld mirrors the claims file in memory so a failed write still blocks
 	// a repeat within this process.

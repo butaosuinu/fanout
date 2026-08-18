@@ -216,7 +216,7 @@ func LockProjectForLaunchAt(projectRoot, statePath string) (*LockedStore, error)
 }
 
 func lockProjectForLaunch(ctx context.Context, projectRoot, statePath string, blocking bool) (*LockedStore, error) {
-	intentsPath, err := launchJournalPathContext(ctx, projectRoot)
+	intentsPath, err := repoCommonPathContext(ctx, projectRoot, "herdr-intents.json")
 	if err != nil {
 		return nil, err
 	}

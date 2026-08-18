@@ -328,7 +328,12 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   than retryable: only this command could have armed it. The whole
   read-check-reserve sequence runs under a lock on the claims file, because two
   dashboards can run against one repository and an atomic write makes each write
-  indivisible, not the decision around it. The
+  indivisible, not the decision around it. Both file and lock live in the
+  repository-common fanout directory (the git common dir, as the Herdr intent
+  journal does), not in a worktree's own `.fanout`: the dashboard lists every
+  linked worktree's sessions, so dashboards started in sibling worktrees show the
+  same pull requests and a claim written to one of them would not exist for the
+  other. The
   diff toolbar additionally pins the PR it opened with — number, head, and base —
   and requires the patch on screen to be comparable with what the merge would
   bring in: the PR's head must be the commit `/api/diff` read, that read must be
