@@ -104,6 +104,8 @@ func TestDeleteBranchPassesTheOwnedRefThrough(t *testing.T) {
 	want := prmerge.DeleteRequest{
 		Owner: "owner", Repo: "repo", Number: 701,
 		Branch: "fanout/dashboard-merge", HeadSha: testHeadSha,
+		// The row's claim travels with the delete too, to be re-checked live.
+		Row: prmerge.RowIdentity{IssueNum: 578},
 	}
 	if got != want {
 		t.Fatalf("delete request = %#v, want %#v", got, want)

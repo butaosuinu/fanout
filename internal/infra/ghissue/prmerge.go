@@ -136,7 +136,7 @@ type ClosingIssue struct {
 // visible here: gh has no field for mergeQueueEntry, and "GitHub is already
 // holding this merge" is exactly what the fence has to see.
 const prStateQuery = `
-query($owner:String!,$name:String!,$number:Int!){
+query($owner:String!,$name:String!,$number:Int!,$after:String){
   repository(owner:$owner,name:$name){
     pullRequest(number:$number){
       state
@@ -146,7 +146,8 @@ query($owner:String!,$name:String!,$number:Int!){
       headRefOid
       autoMergeRequest { enabledAt }
       mergeQueueEntry { state }
-      closingIssuesReferences(first: 50) {
+      closingIssuesReferences(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
         nodes { number repository { nameWithOwner } }
       }
     }
@@ -154,21 +155,56 @@ query($owner:String!,$name:String!,$number:Int!){
 }
 `
 
+// closingIssuePageCap bounds the walk over closingIssuesReferences. A pull
+// request closing more issues than this exists only in theory; refusing there is
+// better than paging forever.
+const closingIssuePageCap = 10
+
 func (r Runner) PRState(ctx context.Context, owner, repo string, number int) (_ PRTarget, err error) {
 	defer errs.Wrap(&err, "read state of pull request #%d", number)
 
-	// owner and name go through -f: -F applies gh's magic type conversion, so a
-	// repository named `2048`, `true`, or `null` would arrive as a JSON number,
-	// boolean, or null and fail the query's String! types.
-	out, err := r.ghContext(ctx, "api", "graphql",
-		"-f", "query="+prStateQuery,
-		"-f", "owner="+owner,
-		"-f", "name="+repo,
-		"-F", "number="+strconv.Itoa(number))
-	if err != nil {
-		return PRTarget{}, err
+	var target PRTarget
+	var closing []ClosingIssue
+	cursor := ""
+	for range closingIssuePageCap {
+		out, err := r.ghContext(ctx, prStateArgs(owner, repo, number, cursor)...)
+		if err != nil {
+			return PRTarget{}, err
+		}
+		got, more, next, err := parsePRState(out)
+		if err != nil {
+			return PRTarget{}, err
+		}
+		// The pull request's own fields repeat on every page; only the closing
+		// issues accumulate. An issue row's claim is checked against the whole
+		// set, so a row whose issue sits on a later page must not read as gone.
+		target = got
+		closing = append(closing, got.ClosesIssues...)
+		if !more {
+			target.ClosesIssues = closing
+			return target, nil
+		}
+		cursor = next
 	}
-	return parsePRState(out)
+	return PRTarget{}, fmt.Errorf("closing issues span more than %d pages", closingIssuePageCap)
+}
+
+// prStateArgs builds one page's gh invocation. owner and name go through -f:
+// -F applies gh's magic type conversion, so a repository named `2048`, `true`,
+// or `null` would arrive as a JSON number, boolean, or null and fail the query's
+// String! types.
+func prStateArgs(owner, repo string, number int, cursor string) []string {
+	args := []string{
+		"api", "graphql",
+		"-f", "query=" + prStateQuery,
+		"-f", "owner=" + owner,
+		"-f", "name=" + repo,
+		"-F", "number=" + strconv.Itoa(number),
+	}
+	if cursor != "" {
+		args = append(args, "-f", "after="+cursor)
+	}
+	return args
 }
 
 // prStateNode is the pull request as prStateQuery selects it.
@@ -185,11 +221,15 @@ type prStateNode struct {
 		State string `json:"state"`
 	} `json:"mergeQueueEntry"`
 	ClosingIssues struct {
+		PageInfo struct {
+			HasNextPage bool   `json:"hasNextPage"`
+			EndCursor   string `json:"endCursor"`
+		} `json:"pageInfo"`
 		Nodes []closingIssueNode `json:"nodes"`
 	} `json:"closingIssuesReferences"`
 }
 
-func parsePRState(out []byte) (PRTarget, error) {
+func parsePRState(out []byte) (_ PRTarget, more bool, cursor string, err error) {
 	var payload struct {
 		Data struct {
 			Repository struct {
@@ -198,11 +238,11 @@ func parsePRState(out []byte) (PRTarget, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out, &payload); err != nil {
-		return PRTarget{}, err
+		return PRTarget{}, false, "", err
 	}
 	pr := payload.Data.Repository.PullRequest
 	if pr == nil {
-		return PRTarget{}, errors.New("pull request not found in response")
+		return PRTarget{}, false, "", errors.New("pull request not found in response")
 	}
 	return PRTarget{
 		Merged:       strings.EqualFold(pr.State, "MERGED") || pr.MergedAt != nil,
@@ -212,7 +252,7 @@ func parsePRState(out []byte) (PRTarget, error) {
 		HeadRef:      pr.HeadRefName,
 		HeadSha:      pr.HeadRefOid,
 		ClosesIssues: closingIssues(pr.ClosingIssues.Nodes),
-	}, nil
+	}, pr.ClosingIssues.PageInfo.HasNextPage, pr.ClosingIssues.PageInfo.EndCursor, nil
 }
 
 // IsTransportFailure reports whether an error leaves the outcome unknown: gh

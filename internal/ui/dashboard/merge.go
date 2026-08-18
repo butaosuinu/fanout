@@ -298,13 +298,6 @@ func (s *Server) mergeClaimsPath() (string, error) {
 type mergeClaim struct {
 	Kind string `json:"kind"`
 	At   string `json:"at"`
-	// Seen records that a poll has shown GitHub still holding this merge —
-	// an auto-merge armed, or an entry in the merge queue. Only a true-to-false
-	// transition is a cancellation: the snapshot taken before the merge says
-	// false because the merge had not happened yet, and reading that as "canceled"
-	// would drop the hold seconds after taking it, which is exactly when a second
-	// click is likely.
-	Seen bool `json:"seen,omitempty"`
 }
 
 const (
@@ -446,9 +439,8 @@ func (s *Server) unconfirmed(key string, rr repoRef, claims map[string]mergeClai
 // this the hold outlives the thing it was protecting and the row can never be
 // merged again.
 //
-// The sighting is what makes the absence mean something. Before the poller has
-// seen GitHub holding the merge, "nothing pending" is just the snapshot that
-// predates the click.
+// A GitHub read taken after the hold is what makes the absence mean something.
+// Before that, "nothing pending" is just data from before the click.
 func (s *Server) claimOver(key string, rr repoRef, claims map[string]mergeClaim, number int) bool {
 	repo := rr.owner + "/" + rr.repo
 	if s.poller.prSettled(repo, number) {
@@ -459,18 +451,25 @@ func (s *Server) claimOver(key string, rr repoRef, claims map[string]mergeClaim,
 		return false
 	}
 	pending, found := s.poller.prMergePending(repo, number)
-	if !found {
+	if !found || pending {
 		return false
 	}
-	if pending {
-		if !claim.Seen {
-			claim.Seen = true
-			claims[key] = claim
-			_ = s.writeMergeClaims(claims)
-		}
-		return false
+	// "Not pending" only means something once GitHub has been read since the
+	// merge: gh is what put the pull request in that state, so every read taken
+	// before the click shows nothing pending. Waiting for a fresher read is a
+	// statement about the age of the data, not about the outcome.
+	return s.poller.ghFreshAfter(claimedAt(claim))
+}
+
+// claimedAt is when the hold was taken. An unparsable stamp reads as "now",
+// which keeps the hold until GitHub is read again rather than releasing it on a
+// timestamp nobody wrote.
+func claimedAt(claim mergeClaim) time.Time {
+	at, err := time.Parse(time.RFC3339, claim.At)
+	if err != nil {
+		return time.Now()
 	}
-	return claim.Seen
+	return at
 }
 
 // holdsClaim reports whether this dashboard already has a hold on the pull

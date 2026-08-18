@@ -322,6 +322,42 @@ func TestPRStateAsksGitHubRatherThanTrustingTheExitCode(t *testing.T) {
 	}
 }
 
+// TestPRStateWalksEveryClosingIssuePage pins the reason for the walk: an issue
+// row's claim is checked against the whole set, so a row whose issue sits on a
+// later page would otherwise read as "this pull request no longer closes it" and
+// refuse a legitimate merge forever.
+func TestPRStateWalksEveryClosingIssuePage(t *testing.T) {
+	first := `{"data":{"repository":{"pullRequest":{"state":"OPEN","baseRefName":"main","headRefOid":"abc",` +
+		`"closingIssuesReferences":{"pageInfo":{"hasNextPage":true,"endCursor":"C1"},` +
+		`"nodes":[{"number":1,"repository":{"nameWithOwner":"o/r"}}]}}}}}`
+	second := `{"data":{"repository":{"pullRequest":{"state":"OPEN","baseRefName":"main","headRefOid":"abc",` +
+		`"closingIssuesReferences":{"pageInfo":{"hasNextPage":false,"endCursor":""},` +
+		`"nodes":[{"number":578,"repository":{"nameWithOwner":"o/r"}}]}}}}}`
+	argsPath := installFakeGHScript(t, `
+printf '%s
+' "$*" >> "$GH_FAKE_ARGS"
+case "$*" in
+  *after=C1*) printf '%s' '`+second+`' ;;
+  *) printf '%s' '`+first+`' ;;
+esac
+`)
+	got, err := (Runner{}).PRState(context.Background(), "o", "r", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ClosingIssue{{Repo: "o/r", Number: 1}, {Repo: "o/r", Number: 578}}
+	if !reflect.DeepEqual(got.ClosesIssues, want) {
+		t.Fatalf("PRState() closing issues = %#v, want %#v", got.ClosesIssues, want)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "after=C1") {
+		t.Fatalf("gh args = %q, want the cursor followed", args)
+	}
+}
+
 // TestPRStateRefusesAMissingPullRequest keeps a null answer from reading as an
 // open, unheld, unmerged pull request — which every fence would wave through.
 func TestPRStateRefusesAMissingPullRequest(t *testing.T) {

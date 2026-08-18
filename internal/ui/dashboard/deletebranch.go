@@ -100,7 +100,7 @@ func deleteBranchPayload(
 	}
 	return prmerge.DeleteRequest{
 		Owner: rr.owner, Repo: rr.repo, Number: ref.Number,
-		Branch: branch, HeadSha: body.HeadSha,
+		Branch: branch, HeadSha: body.HeadSha, Row: rowIdentity(pv),
 	}, true
 }
 

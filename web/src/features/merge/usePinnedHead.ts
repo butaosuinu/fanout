@@ -112,7 +112,7 @@ const SOURCE_CHECKS: ((merge: MergeAffordance, shows: DiffSource) => boolean)[] 
    *
    * base が記録されていない行は判定材料が無い — サーバはそこで origin/HEAD を
    * 使うので、別 base 向けの PR でも patch は既定 branch との差分になる。 */
-  (m, s) => !!s.base && baseName(m.baseRef) === baseName(s.base),
+  (m, s) => !!s.base && m.baseRef === baseName(s.base),
   /* head branch は worktree のもの(issue 行には fork の closing PR が載りうる)。 */
   (m, s) => !s.branch || m.headRef === s.branch,
   (m, s) => !s.branch || m.headRepo.toLowerCase() === s.repo.toLowerCase(),
@@ -122,9 +122,12 @@ function sameSource(merge: MergeAffordance, shows: DiffSource): boolean {
   return SOURCE_CHECKS.every((check) => check(merge, shows));
 }
 
-/* base branch の書き方を GitHub の branch 名に揃える。`--base-branch origin/main`
+/* 記録された base の書き方を GitHub の branch 名に揃える。`--base-branch origin/main`
  * は記録どおり "origin/main" のまま state に載る一方、PR の baseRef は "main" なので、
- * そのまま比べると同じ branch が永久に不一致になる。 */
+ * そのまま比べると同じ branch が永久に不一致になる。
+ *
+ * 揃えるのはローカルの記録だけ。GitHub 側の値にも同じことをすると、`origin/main`
+ * という名前の branch(GitHub 上では合法)を `main` と同一視してしまう。 */
 function baseName(ref: string): string {
   return ref
     .replace(/^refs\/remotes\/origin\//, "")

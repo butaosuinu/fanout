@@ -248,6 +248,11 @@ type DeleteRequest struct {
 	Number  int
 	Branch  string
 	HeadSha string
+	// Row is how the snapshot row claimed this pull request. The delete re-checks
+	// it live for the same reason the merge does: a closing keyword edited out of
+	// a body drops the claim without moving a commit, and this endpoint would
+	// otherwise remove the branch of a pull request the row no longer owns.
+	Row RowIdentity
 }
 
 // Result reports what actually happened. Merged is GitHub's own answer, not
@@ -320,7 +325,7 @@ func (s Service) fenceLive(ctx context.Context, req Request) error {
 		// the queue.
 		return ErrPRPending
 	}
-	if err := req.stillOwns(live); err != nil {
+	if err := req.Row.stillOwns(live, req.Owner+"/"+req.Repo, req.Number); err != nil {
 		return err
 	}
 	return RenderedRef{HeadSha: req.HeadSha, BaseRef: req.BaseRef}.check(ghissue.PRRef{
@@ -342,25 +347,20 @@ func (s Service) fenceLive(ctx context.Context, req Request) error {
 // to another repository's #7 would otherwise read as unchanged. An empty list is
 // a refusal, not a pass: the field is always requested here, so nothing coming
 // back means this pull request closes nothing.
-func (req Request) stillOwns(live ghissue.PRTarget) error {
-	row := req.Row
+func (row RowIdentity) stillOwns(live ghissue.PRTarget, repo string, number int) error {
 	if row.IssueNum > 0 {
-		if slices.ContainsFunc(live.ClosesIssues, req.closes) {
+		closes := func(issue ghissue.ClosingIssue) bool {
+			return issue.Number == row.IssueNum && strings.EqualFold(issue.Repo, repo)
+		}
+		if slices.ContainsFunc(live.ClosesIssues, closes) {
 			return nil
 		}
-		return fmt.Errorf("%w: #%d no longer closes %s#%d",
-			ErrForeignPR, req.Number, req.Owner+"/"+req.Repo, row.IssueNum)
+		return fmt.Errorf("%w: #%d no longer closes %s#%d", ErrForeignPR, number, repo, row.IssueNum)
 	}
 	if row.Branch == "" || live.HeadRef == "" || live.HeadRef == row.Branch {
 		return nil
 	}
-	return fmt.Errorf("%w: #%d now heads %q, not %q",
-		ErrForeignPR, req.Number, live.HeadRef, row.Branch)
-}
-
-func (req Request) closes(issue ghissue.ClosingIssue) bool {
-	return issue.Number == req.Row.IssueNum &&
-		strings.EqualFold(issue.Repo, req.Owner+"/"+req.Repo)
+	return fmt.Errorf("%w: #%d now heads %q, not %q", ErrForeignPR, number, live.HeadRef, row.Branch)
 }
 
 // classifySendFailure decides whether a failed merge command is safe to retry.
@@ -422,6 +422,9 @@ func (s Service) DeleteBranch(ctx context.Context, req DeleteRequest) error {
 		return ErrNotMerged
 	}
 	if err = req.stillAddressed(live); err != nil {
+		return err
+	}
+	if err = req.Row.stillOwns(live, req.Owner+"/"+req.Repo, req.Number); err != nil {
 		return err
 	}
 	// Two pull requests can share a head branch when they target different bases.

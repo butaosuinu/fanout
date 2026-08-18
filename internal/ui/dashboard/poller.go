@@ -93,10 +93,13 @@ type poller struct {
 	resolve  func() (string, GHProvider, error)
 	resolved bool
 
-	mu         sync.RWMutex
-	latest     sessionview.Snapshot
-	latestJSON []byte
-	lastKey    []byte
+	mu sync.RWMutex
+	// ghRefreshedAt is when the GitHub tier last completed a refresh. Zero until
+	// the first one lands.
+	ghRefreshedAt time.Time
+	latest        sessionview.Snapshot
+	latestJSON    []byte
+	lastKey       []byte
 
 	// worktreeStat is built once: it owns the untracked-file cache that keeps
 	// the 2-second tick off a per-file git process for every un-ignored file.
@@ -297,7 +300,20 @@ func (p *poller) runGHTick() {
 	}
 	p.ensureResolved()
 	p.refreshGH()
+	p.mu.Lock()
+	p.ghRefreshedAt = time.Now()
+	p.mu.Unlock()
 	p.rebuildAndBroadcast()
+}
+
+// ghFreshAfter reports whether GitHub data has been refetched since t. It is how
+// a hold tells "GitHub is not holding this merge" from "the last GitHub read
+// predates the merge, so of course it isn't". That is a statement about the age
+// of the data, not about the outcome — the outcome still only comes from GitHub.
+func (p *poller) ghFreshAfter(t time.Time) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.ghRefreshedAt.After(t)
 }
 
 // ensureResolved runs the deferred GitHub resolution exactly once. It is only

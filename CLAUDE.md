@@ -316,9 +316,10 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   have seen that pending state before its absence counts, since the snapshot from
   before the click shows nothing pending either, and every copy of the PR in the
   snapshot is consulted — one pull request sits on several rows and the issue and
-  branch fetches land at different times. The live re-read also re-checks how the
+  branch fetches land at different times. Both the merge and the branch delete also re-check how the
   row claimed the PR in the first place (the closing-issue link with its
-  repository, or the head branch), because editing a closing keyword out of a
+  repository — walked across every page, since a row's issue may sit past the
+  first — or the head branch), because editing a closing keyword out of a
   body, retargeting it at another repository's same-numbered issue, and renaming
   a head branch all drop the claim without moving a commit; a PR that closes
   nothing is refused rather than waved through. The delete's head SHA is an echo

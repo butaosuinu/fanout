@@ -744,7 +744,7 @@ func TestQueuedHoldEndsWhenTheAutoMergeIsCancelled(t *testing.T) {
 	// hold answers rather than the pending refusal — and the sighting is what
 	// later lets the cancellation release it.
 	p.mu.Lock()
-	p.latest = mergeSnapshot(armed)
+	p.latest, p.ghRefreshedAt = mergeSnapshot(armed), time.Now()
 	p.mu.Unlock()
 	assertAPIError(t, requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
 		http.StatusConflict, "merge_unconfirmed")
@@ -788,13 +788,13 @@ func TestQueuedHoldEndsWhenTheQueueEntryGoes(t *testing.T) {
 		t.Fatalf("first status = %d, want 200", code)
 	}
 	p.mu.Lock()
-	p.latest = mergeSnapshot(enqueued)
+	p.latest, p.ghRefreshedAt = mergeSnapshot(enqueued), time.Now()
 	p.mu.Unlock()
 	assertAPIError(t, requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
 		http.StatusConflict, "merge_unconfirmed")
 
 	p.mu.Lock()
-	p.latest = mergeSnapshot(openPR()) // dequeued, still open
+	p.latest, p.ghRefreshedAt = mergeSnapshot(openPR()), time.Now() // dequeued, still open
 	p.mu.Unlock()
 
 	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
@@ -1274,5 +1274,40 @@ func TestMergeRefusesAPullRequestGitHubAlreadyHolds(t *testing.T) {
 				t.Fatalf("merge calls = %d, want 0", calls)
 			}
 		})
+	}
+}
+
+// TestQueuedHoldReleasesWithoutAnInterveningPost pins the release path that the
+// UI actually produces. While GitHub holds the merge the button is inactive, so
+// no request arrives to notice the sighting — the hold has to be releasable from
+// what the poller alone observed, or a dequeued pull request stays unmergeable
+// until someone edits the claims file.
+func TestQueuedHoldReleasesWithoutAnInterveningPost(t *testing.T) {
+	fake := &fakeMerger{res: prmerge.Result{Queued: true}}
+	p := newPollerBase(t.TempDir(), newHub())
+	claims := filepath.Join(t.TempDir(), mergeClaimsFile)
+	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
+	s := &Server{
+		poller: p, hostPort: testHostPort, token: testToken,
+		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: claims,
+	}
+	h, err := s.handler()
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", code)
+	}
+
+	// One GitHub read after the merge, showing the queue entry gone. No request
+	// was made in between.
+	p.mu.Lock()
+	p.latest, p.ghRefreshedAt = mergeSnapshot(openPR()), time.Now()
+	p.mu.Unlock()
+
+	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
+		t.Fatalf("status after the dequeue = %d, want 200", code)
 	}
 }
