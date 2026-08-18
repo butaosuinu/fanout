@@ -67,7 +67,7 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 | app | `briefing` | エージェントに注入するプロンプト本文の生成 | H |
 | app | `lifecycle` | `--close` / `--merge` / `--cleanup` | H |
 | app | `panelaunch` | pane 生成のオーケストレーション。backend の MutationModel で atomic lane と journaled lane(coordinator/worktree/agent launch)を選ぶ | H |
-| app | `herdrprocess` | 保存済み Herdr launch と現在の process identity の照合 | H |
+| app | `agentprocess` | 保存済み launch と現在の agent process identity の照合 | H |
 | app | `stateemitter` | launch に束縛した telemetry の検証と state lock 下の更新 | H |
 | app | `sessionbinding` | 遅延 Herdr agent session の初回束縛と state lock 下の保存 | H |
 | core | `telemetry` | emitter command と環境変数の wire contract | H |
@@ -155,9 +155,16 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   precedence 解決・具象構築・self-exec registry・telemetry observer をここに
   集める。`internal/app` は core の backend 型と自分の port しか名指さず、
   `cmd/fanout` は `paneruntime` 経由で組み立てる。別の層に `switch` を増やすと
-  runtime 追加のたびに散らばった分岐を数える羽目になる。残債は app shell lane
-  の `tmuxrun` 直呼び(後続フェーズで `Backend.Launch` / capability 経由化)
-  のみ。
+  runtime 追加のたびに散らばった分岐を数える羽目になる。`internal/app` と
+  `cmd` からの辺は godep-cruiser の `app-no-runtime-adapters` /
+  `cmd-no-runtime-adapters` が禁じる(test は対象外 — 実 adapter の挙動を
+  直接ドライブする test があるため)。infra 内で adapter を import できる
+  package も `infra-no-new-adapter-importers` /
+  `infra-no-new-tmuxrun-importers` で閉じている(backend 形の adapter は
+  paneruntime と adapter 自身のみ、tmuxrun はさらに notify の通知送出
+  `notify.go` の 1 辺だけ)ので、中立名の中継 package で具象 backend を
+  app へ運ぶ迂回も新規 importer の登録なしには通らない。
+  `internal/ui` はまだ辺が残るのでルール化していない(burn-down リスト参照)。
 - **runtime ごとの差は capability の有無で表す**: console の入場経路
   (`ConsoleHost` があれば session を立てて端末を繋ぐ、無ければ owned session の
   attach コマンドを渡す)、restore の配線(`RestoreOps`)、popup / global
@@ -184,16 +191,70 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
 - **`FANOUT_*` env 名は Go 外から文字列参照される**: シェルスクリプト・CI・
   ドキュメントが env 変数名を直接引用するため、リネームは全参照箇所の同時
   更新が要る。
+- **app / cmd は runtime 名を綴らない**: `cmd/fanout` と `internal/app` の
+  非 test コードは、識別子・import path・ファイル名・struct tag に `tmux` /
+  `herdr` を含めない(`TestRuntimeVocabulary`)。runtime の選択は
+  `core/backend` の capability と `MutationModel` で表現し、具象 adapter の
+  構築は `infra/paneruntime` が持つ。import の辺自体は godep-cruiser の
+  `app-no-runtime-adapters` / `cmd-no-runtime-adapters` が塞ぐ。
+  文字列リテラルとコメントは原則対象外 — 運用者に見せる文字列や runtime の
+  挙動を説明するコメントは正当で、数が桁違いに多い。ただし**値全体が
+  runtime 名そのもの**のリテラル(`"tmux"` / `"herdr"`)は等値分岐の材料
+  (中立な定数を挟む間接化を含む)なので出現位置を問わず検査対象
+  (`fanout herdr` のコマンド語 dispatch だけを例外登録)。例外は
+  `internal/arch/runtime-vocabulary-allow.json` に理由付きで登録する
+  (`fanout herdr` サブコマンド、data として読む `backend.Tmux`/`Herdr`、
+  `paneruntime.NewTmux`、PATH 上の実行ファイル名、凍結済みの dashboard
+  JSON wire key)。識別子と tag の例外は (ファイル, 出現数) 単位でピンされ、
+  許可済みファイルへの新しい出現も検査に落ちる。マッチしないエントリと
+  出現数の減少は stale として落ちる。`paneruntime` の import は
+  `paneruntime-is-cmd-only` で composition root に限定され、中継 package で
+  構築関数を app へ運ぶ経路も塞がれている。
 
 ## 既知の残課題(burn-down リスト)
 
 - `state` パッケージは `Store` 型と `Load`/`Save` の IO が同居している。
 - `sessionview` は純粋な集約ロジックと `Collectors` の IO 束が同じパッケージ
   にある。
-- `shellQuote` の実装が `app/run` / `app/panelaunch` / `infra/tmuxrun` の
-  3 箇所にある。
+- POSIX shell quote が同一アルゴリズムで 4 箇所にある:
+  `core/backend.PreviewQuote` / `core/agent.ShellQuote` / `app/run.ShellQuote`
+  / `infra/tmuxrun.shellQuote`。dry-run preview 側は解消済みで、
+  `app/panelaunch.shellQuote` は `PreviewQuote` への委譲 1 行になっている。
+  `infra/herdrrun.shellQuote` は常時 quote する別アルゴリズムで、これは重複
+  ではない。
+- `internal/ui` から `infra/tmuxrun` への直接 import が 4 本残る
+  (`ui/tui/{issues,tui}.go`、`ui/dashboard/{server,peek}.go`)。app / cmd は
+  capability 経由に寄せ切って godep-cruiser で塞いだが、ui は未着手のため
+  `ui-no-runtime-adapters` を入れていない。辺が消えた時点でルールを足す。
+- `LivePane` が `core/backend` と `infra/tmuxrun` に二重定義されている。
+  tmuxrun 側は tmux 固有 field を持つが、大半は core 側と同じ形なので
+  統合候補。
+- close の結果型が `backend.ClosePaneStatus`(Closed/Stale/Failed)と
+  `backend.CloseStatus`(Confirmed/Stale/Failed)に分かれている。
+  `tmuxbackend.CloseOwned` が 1 対 1 で写しているだけなので畳める。
+- `core/agent/claude_hooks.go` が `tmux set-option` のコマンド文字列を
+  `infra/tmuxrun.AgentStateSetCommand` と重複して持つ。core は infra を
+  import できないための意図的な重複で、両者は byte-exact テストで同期して
+  いる。backend が `AgentStateCommand` を capability として渡せるように
+  なれば解消できる。
 - `app` から `infra` への直接 import は既存分を容認するが、新規コードは
-  `watch.IO` のような port 経由を優先する。
+  `watch.IO` のような port 経由を優先する。具象 runtime adapter
+  (`tmuxrun` / `tmuxbackend` / `herdrrun`)への辺だけは容認をやめ、
+  godep-cruiser のルールで塞いだ。
+- `WorkspaceObservation` → `state.RuntimeResource` の投影が 3 箇所に
+  手書きされている(`panelaunch` の stateResource と `lifecycle` の 2 変種)。
+  path の `filepath.Clean` 有無が揃っておらず、共有投影を `state` 側に
+  1 本置けば畳める(コード内コメントでも追跡中)。
+- `PaneDecorator` は tmuxrun の setter 5 本の 1:1 転写で、呼び出し側が毎回
+  5 連続 best-effort 呼びを並べる。`DecoratePane(PaneDecoration{...})` の
+  構造体 1 発に畳む余地がある(tmux 側のみの整理で可)。
+- `PaneProcess` / `PaneProcessInfo` の JSON wire tag が core に同居している
+  (唯一の (de)serializer は herdrrun)。decoder 側の非公開 wire struct へ
+  移せば core から herdr のワイヤ形式が消える。
+- `ManagedLaunchRuntime.MetadataReportBudget()` は定数を返すだけの getter で、
+  呼び出し側は値をそのまま同じ runtime の `ReportMetadata` に返している。
+  budget の適用を `ReportMetadata` 内へ移せば port からメソッドを 1 本
+  減らせる。
 
 ## 新規パッケージの追加手順
 

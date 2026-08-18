@@ -51,8 +51,15 @@ func (r *Runtime) PrepareLaunchBackend() error {
 	return r.PrepareBackend()
 }
 
-func shouldBindRuntimeKeys(dryRun bool, created int, runtimeBackend backend.Name) bool {
-	return !dryRun && created > 0 && runtimeBackend == backend.Tmux
+// shouldBindRuntimeKeys gates the dashboard keybind side effect on the
+// runtime actually offering global shortcuts, not on its name: only a live
+// run that created panes on a ShortcutBinder-capable backend binds keys.
+func shouldBindRuntimeKeys(dryRun bool, created int, runtimeBackend backend.Backend) bool {
+	if dryRun || created == 0 {
+		return false
+	}
+	_, ok := backend.AsShortcutBinder(runtimeBackend)
+	return ok
 }
 
 // ResolveRuntime resolves the tmux target and git project root, validates the

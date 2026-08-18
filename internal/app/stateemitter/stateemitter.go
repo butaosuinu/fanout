@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/app/herdrprocess"
+	"github.com/butaosuinu/fanout/internal/app/agentprocess"
 	"github.com/butaosuinu/fanout/internal/app/sessionbinding"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/errs"
@@ -418,7 +418,7 @@ func verifyRuntimeObservation(target RuntimeTarget, observation Observation) (ba
 			errRuntimeIdentityChanged,
 		)
 	}
-	err := herdrprocess.VerifyAgent(observation.ProcessInfo, herdrprocess.Identity{
+	err := agentprocess.VerifyAgent(observation.ProcessInfo, agentprocess.Identity{
 		WorktreePath: target.WorktreePath,
 		Executable:   target.Executable, Args: target.Args, Agent: target.Agent,
 	})

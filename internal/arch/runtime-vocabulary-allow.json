@@ -1,0 +1,348 @@
+{
+  "files": [
+    {
+      "name": "cmd/fanout/herdr_lifecycle.go",
+      "reason": "`fanout herdr` is a user-facing subcommand: the runtime name is the command word operators type, so the FILE NAME spells it. This entry covers the file name finding only; every identifier inside the file is registered individually with a file scope, so new runtime-named code cannot ride in on this entry."
+    }
+  ],
+  "identifiers": [
+    {
+      "name": "Tmux",
+      "reason": "backend.Tmux is a persisted runtime name read back as data (state rows, PaneRef). Branching on it for lane selection is what MutationModel and the capabilities replaced; reading it is not. Scoped to the reviewed data-read sites: a new file spelling it must be added here, which is the review gate against a new name-based branch.",
+      "files": [
+        {
+          "path": "cmd/fanout/codex_plan_tui.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/runtime_backend.go",
+          "count": 5
+        },
+        {
+          "path": "internal/app/lifecycle/lifecycle.go",
+          "count": 1
+        },
+        {
+          "path": "internal/app/panelaunch/panelaunch.go",
+          "count": 3
+        },
+        {
+          "path": "internal/app/peermsg/nudge.go",
+          "count": 1
+        },
+        {
+          "path": "internal/app/run/runtime.go",
+          "count": 2
+        },
+        {
+          "path": "internal/app/sessionview/aggregate.go",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "name": "Herdr",
+      "reason": "backend.Herdr is a persisted runtime name read back as data (state rows, PaneRef). Branching on it for lane selection is what MutationModel and the capabilities replaced; reading it is not. Scoped to the reviewed data-read sites: a new file spelling it must be added here, which is the review gate against a new name-based branch.",
+      "files": [
+        {
+          "path": "cmd/fanout/codex_plan_tui.go",
+          "count": 3
+        },
+        {
+          "path": "cmd/fanout/managed_owned.go",
+          "count": 2
+        },
+        {
+          "path": "cmd/fanout/plancmd.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/runtime_backend.go",
+          "count": 9
+        },
+        {
+          "path": "cmd/fanout/status.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/tui_watch.go",
+          "count": 1
+        },
+        {
+          "path": "internal/app/lifecycle/workspace_identity.go",
+          "count": 3
+        },
+        {
+          "path": "internal/app/panelaunch/managed_agent_start.go",
+          "count": 1
+        },
+        {
+          "path": "internal/app/panelaunch/managed_attach.go",
+          "count": 1
+        },
+        {
+          "path": "internal/app/panelaunch/managed_checks.go",
+          "count": 1
+        },
+        {
+          "path": "internal/app/panelaunch/managed_console.go",
+          "count": 5
+        },
+        {
+          "path": "internal/app/panelaunch/managed_emitter.go",
+          "count": 1
+        },
+        {
+          "path": "internal/app/panelaunch/managed_identity.go",
+          "count": 1
+        },
+        {
+          "path": "internal/app/panelaunch/managed_launch.go",
+          "count": 6
+        },
+        {
+          "path": "internal/app/panelaunch/managed_resource.go",
+          "count": 3
+        },
+        {
+          "path": "internal/app/panelaunch/managed_restart_resume.go",
+          "count": 3
+        },
+        {
+          "path": "internal/app/panelaunch/managed_server_lifecycle.go",
+          "count": 2
+        },
+        {
+          "path": "internal/app/panelaunch/managed_shell.go",
+          "count": 2
+        },
+        {
+          "path": "internal/app/panelaunch/panelaunch.go",
+          "count": 1
+        },
+        {
+          "path": "internal/app/peermsg/managed_nudge.go",
+          "count": 1
+        },
+        {
+          "path": "internal/app/peermsg/nudge.go",
+          "count": 1
+        },
+        {
+          "path": "internal/app/sessionbinding/sessionbinding.go",
+          "count": 2
+        },
+        {
+          "path": "internal/app/sessionview/aggregate.go",
+          "count": 1
+        },
+        {
+          "path": "internal/app/stateemitter/stateemitter.go",
+          "count": 5
+        }
+      ]
+    },
+    {
+      "name": "NewTmux",
+      "reason": "paneruntime.NewTmux is the documented host-runtime constructor. paneruntime is the one package allowed to name a concrete adapter, and a constructor that builds a specific runtime has to say which.",
+      "files": [
+        {
+          "path": "cmd/fanout/codex_team_tui.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/dashboard.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/deps.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/focusconsole.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/lifecycle_workspace.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/msg.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/state_runtime.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/tui_launch.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/worktree_action.go",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "tmux",
+      "reason": "depNeeds.tmux names the executable the prerequisite probe looks for on PATH, not a launch lane.",
+      "files": [
+        {
+          "path": "cmd/fanout/deps.go",
+          "count": 2
+        },
+        {
+          "path": "cmd/fanout/main.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/tui.go",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "isHerdrLifecycleRequest",
+      "reason": "main.go's dispatch guard for the `fanout herdr` subcommand; it names the allowed command word across the file boundary.",
+      "files": [
+        {
+          "path": "cmd/fanout/herdr_lifecycle.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/main.go",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "cmdHerdrLifecycle",
+      "reason": "main.go's dispatch-table entry for the `fanout herdr` subcommand; it names the allowed command word across the file boundary.",
+      "files": [
+        {
+          "path": "cmd/fanout/herdr_lifecycle.go",
+          "count": 1
+        },
+        {
+          "path": "cmd/fanout/main.go",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "runHerdrLifecycle",
+      "reason": "Implements the user-facing `fanout herdr` subcommand: the runtime name is the command word operators type, so the identifier spells it. Scoped to the subcommand implementation file.",
+      "files": [
+        {
+          "path": "cmd/fanout/herdr_lifecycle.go",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "name": "parseHerdrLifecycle",
+      "reason": "Implements the user-facing `fanout herdr` subcommand: the runtime name is the command word operators type, so the identifier spells it. Scoped to the subcommand implementation file.",
+      "files": [
+        {
+          "path": "cmd/fanout/herdr_lifecycle.go",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "name": "executeHerdrLifecycle",
+      "reason": "Implements the user-facing `fanout herdr` subcommand: the runtime name is the command word operators type, so the identifier spells it. Scoped to the subcommand implementation file.",
+      "files": [
+        {
+          "path": "cmd/fanout/herdr_lifecycle.go",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "name": "herdrLifecycleUsage",
+      "reason": "Implements the user-facing `fanout herdr` subcommand: the runtime name is the command word operators type, so the identifier spells it. Scoped to the subcommand implementation file.",
+      "files": [
+        {
+          "path": "cmd/fanout/herdr_lifecycle.go",
+          "count": 3
+        }
+      ]
+    },
+    {
+      "name": "herdrLifecycleTimeout",
+      "reason": "Implements the user-facing `fanout herdr` subcommand: the runtime name is the command word operators type, so the identifier spells it. Scoped to the subcommand implementation file.",
+      "files": [
+        {
+          "path": "cmd/fanout/herdr_lifecycle.go",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "name": "herdrLifecycleDeps",
+      "reason": "Implements the user-facing `fanout herdr` subcommand: the runtime name is the command word operators type, so the identifier spells it. Scoped to the subcommand implementation file.",
+      "files": [
+        {
+          "path": "cmd/fanout/herdr_lifecycle.go",
+          "count": 4
+        }
+      ]
+    }
+  ],
+  "tags": [
+    {
+      "name": "`json:\"tmuxState\"`",
+      "reason": "frozen dashboard wire key. The Go field is already neutral (LegacyState); the JSON key is consumed by web/src/transport/types.ts and renaming it breaks existing snapshot consumers.",
+      "files": [
+        {
+          "path": "internal/app/sessionview/model.go",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "`json:\"tmuxTitle,omitempty\"`",
+      "reason": "frozen dashboard wire key. The Go field is already neutral (LegacyTitle); the JSON key is consumed by web/src/transport/types.ts and renaming it breaks existing snapshot consumers.",
+      "files": [
+        {
+          "path": "internal/app/sessionview/model.go",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "`json:\"tmux,omitempty\"`",
+      "reason": "frozen dashboard wire key for the runtime column count. The Go field is already neutral (Runtime); the JSON key is consumed by web/src/transport/types.ts.",
+      "files": [
+        {
+          "path": "internal/app/sessionview/model.go",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "`json:\"tmux\"`",
+      "reason": "frozen dashboard wire key for the runtime degraded flag. The Go field is already neutral (Legacy); the JSON key is consumed by web/src/transport/types.ts.",
+      "files": [
+        {
+          "path": "internal/app/sessionview/model.go",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "literals": [
+    {
+      "name": "\"herdr\"",
+      "reason": "cmd/fanout/herdr_lifecycle.go's dispatch compares args[0] with the user-typed `fanout herdr` subcommand word. The literal names the command vocabulary, not a launch lane.",
+      "files": [
+        {
+          "path": "cmd/fanout/herdr_lifecycle.go",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

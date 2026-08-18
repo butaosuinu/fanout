@@ -622,10 +622,7 @@ func equalOwnedPane(left, right corebackend.OwnedPaneIdentity) bool {
 		left.WorktreePath != right.WorktreePath || left.CurrentPath != right.CurrentPath || left.AgentID != right.AgentID {
 		return false
 	}
-	if left.AgentSession == nil || right.AgentSession == nil {
-		return left.AgentSession == nil && right.AgentSession == nil
-	}
-	return *left.AgentSession == *right.AgentSession
+	return corebackend.SameAgentSession(left.AgentSession, right.AgentSession)
 }
 
 func cloneOwnedPaneIdentity(target corebackend.OwnedPaneIdentity) corebackend.OwnedPaneIdentity {

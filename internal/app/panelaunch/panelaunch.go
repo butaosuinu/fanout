@@ -333,7 +333,7 @@ func (l *Launcher) AttachWithResult(req Request, targetPath string) (Result, boo
 	if managedLocked != nil {
 		return l.attachManaged(req, targetPath, managedLocked)
 	}
-	return l.attachTmux(req, targetPath)
+	return l.attachDirect(req, targetPath)
 }
 
 func (l *Launcher) prepareAttachedLaunch(req *Request) (*state.LockedStore, bool) {
@@ -363,7 +363,7 @@ func prepareAttachedLiveness(model backend.MutationModel, req *Request) error {
 	return nil
 }
 
-func (l *Launcher) attachTmux(req Request, targetPath string) (Result, bool) {
+func (l *Launcher) attachDirect(req Request, targetPath string) (Result, bool) {
 	paneID, ok := l.splitAndDecorate(req, targetPath, decorateOpts{strictShellKey: true})
 	if !ok {
 		if paneID != "" {
@@ -680,15 +680,11 @@ func compareVersion(left, right [3]int) int {
 	return 0
 }
 
-func buildAgentCommand(cfg *cliflags.Config, req Request, commandName string) (string, error) {
-	return buildAgentCommandForRuntime(cfg, req, commandName, backend.Tmux)
-}
-
+// buildAgentCommandForBackend normalizes the legacy empty backend name and
+// builds the command for that runtime. The runtime name is data handed to the
+// core command builder, never a branch here.
 func buildAgentCommandForBackend(cfg *cliflags.Config, req Request, commandName string, runtimeBackend backend.Name) (string, error) {
-	if backend.NormalizeName(runtimeBackend) == backend.Tmux {
-		return buildAgentCommand(cfg, req, commandName)
-	}
-	return buildAgentCommandForRuntime(cfg, req, commandName, runtimeBackend)
+	return buildAgentCommandForRuntime(cfg, req, commandName, backend.NormalizeName(runtimeBackend))
 }
 
 func buildAgentCommandForRuntime(cfg *cliflags.Config, req Request, commandName string, runtimeBackend backend.Name) (string, error) {
@@ -1035,7 +1031,7 @@ func KillAttachedPane(runtimeBackend backend.Backend, target, paneID, shellKey s
 	default:
 		return fmt.Errorf("attached pane %s close returned unknown status %d", paneID, result.Status)
 	}
-	repairAttachedPaneLayout(runtimeBackend, target, result.ContainerID)
+	relayoutAfterPaneClose(runtimeBackend, "", target, result.ContainerID, nil)
 	return nil
 }
 
@@ -1050,18 +1046,6 @@ func attachedPaneCloseRequest(runtimeBackend backend.Backend, paneID, shellKey s
 		request.ShellKey = ""
 	}
 	return request
-}
-
-func repairAttachedPaneLayout(runtimeBackend backend.Backend, target, containerID string) {
-	manager, ok := backend.AsLayoutManager(runtimeBackend)
-	if !ok {
-		return
-	}
-	if containerID == "" {
-		containerID = target
-	}
-	// The pane is confirmed gone; layout repair is cosmetic best-effort.
-	_ = manager.Relayout(containerID, backend.LayoutClose)
 }
 
 // failCleanup tears down a partially created launch and reports whether the
@@ -1107,7 +1091,7 @@ func closeIncompletePane(runtimeBackend backend.Backend, label, relayoutTarget, 
 	case backend.CloseStale:
 		// The recorded identity is already gone; worktree cleanup is safe.
 	case backend.CloseConfirmed:
-		relayoutAfterFailedLaunch(runtimeBackend, label, relayoutTarget, result.ContainerID, lg)
+		relayoutAfterPaneClose(runtimeBackend, label, relayoutTarget, result.ContainerID, lg)
 	default:
 		warnPreservingWorktree(lg, label, paneID, fmt.Sprintf("unknown close status %d", result.Status))
 		return false
@@ -1156,11 +1140,12 @@ func cleanupFreshPane(runtimeBackend backend.Backend, relayoutTarget, paneID str
 	return nil
 }
 
-// relayoutAfterFailedLaunch re-tiles the container the cleaned-up pane left
-// behind, so neither it nor a spacer an early or concurrent relayout created
-// stays in the grid. A runtime that arranges its own panes exposes no layout
-// capability and the repair is skipped.
-func relayoutAfterFailedLaunch(runtimeBackend backend.Backend, label, relayoutTarget, containerID string, lg *log.Logger) {
+// relayoutAfterPaneClose re-tiles the container a closed pane left behind, so
+// neither it nor a spacer an early or concurrent relayout created stays in the
+// grid. A runtime that arranges its own panes exposes no layout capability and
+// the repair is skipped. A nil lg makes the repair silent (it is cosmetic
+// best-effort on the attach-close path).
+func relayoutAfterPaneClose(runtimeBackend backend.Backend, label, relayoutTarget, containerID string, lg *log.Logger) {
 	manager, ok := backend.AsLayoutManager(runtimeBackend)
 	if !ok {
 		return

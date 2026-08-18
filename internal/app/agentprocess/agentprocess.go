@@ -1,5 +1,7 @@
-// Package herdrprocess verifies a live Herdr agent process against its saved launch argv.
-package herdrprocess
+// Package agentprocess verifies a live agent process against the launch argv
+// recorded for it. Only a runtime that persists a launch binding — today the
+// journaled lane — has the saved argv to check against.
+package agentprocess
 
 import (
 	"fmt"
@@ -13,7 +15,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 )
 
-// Identity is the process portion of one persisted Herdr launch binding.
+// Identity is the process portion of one persisted launch binding.
 type Identity struct {
 	WorktreePath string
 	Executable   string

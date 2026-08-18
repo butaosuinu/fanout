@@ -17,9 +17,12 @@ import (
 // TestArchitecture enforces the layer dependency rules via godep-cruiser.
 // The rule canon is godep-cruiser.json in this directory: the layer direction
 // matrix (allowed rules, fail-closed - an import matching no allowed rule is
-// an error), the per-layer complement rules with fix guidance, core stdlib
-// purity, the tools/ stdlib-only pin, the cmd/... import ban, the package
-// main location check, and the ban on bare *.go files at tree/layer roots.
+// an error), the per-layer complement rules with fix guidance, the ban on
+// app/ and cmd/ naming a concrete runtime adapter (tmuxrun, tmuxbackend,
+// herdrrun - they go through core/backend ports, constructed by
+// internal/infra/paneruntime; test files are exempt), core stdlib purity, the
+// tools/ stdlib-only pin, the cmd/... import ban, the package main location
+// check, and the ban on bare *.go files at tree/layer roots.
 // godep-cruiser scans every *.go file under the whole repo root (tests
 // included, build constraints not evaluated, skipping testdata/, vendor/, and
 // dot- or underscore-prefixed directories). That is deliberately wider than

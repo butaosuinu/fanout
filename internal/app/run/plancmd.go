@@ -201,7 +201,7 @@ func PlanTasks(cfg PlanCommandConfig, rt *Runtime, lg *log.Logger, commandName s
 	result := executeTaskPlan(cliCfg, lg, rt, spec, plan.Targets, resolvedSettings, hookConfig, recorder, c, commandName, teamCtx)
 	printTaskSummary(plan, result, cfg, lg, c, commandName)
 
-	if shouldBindRuntimeKeys(cfg.DryRun, result.Created, rt.BackendSelection.Name) {
+	if shouldBindRuntimeKeys(cfg.DryRun, result.Created, rt.Backend) {
 		bindKeys(lg, resolvedSettings.DashboardKeybind)
 	}
 

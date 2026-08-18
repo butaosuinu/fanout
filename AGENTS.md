@@ -210,7 +210,9 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   only core, so a helper every layer needs has nowhere else to live.
 - `internal/app` orchestrates use cases on top of `core` and `infra`:
   `panelaunch`, `lifecycle`, `watch` (the label-watcher cycle, pure at the
-  package boundary via `watch.IO`), and `briefing` (the prompt text injected
+  package boundary via `watch.IO`), `agentprocess` (matching a saved launch's
+  argv against the live agent process), and `briefing` (the prompt text
+  injected
   into agents) are class H; `sessionview` (the read-only `Snapshot`
   aggregator shared by the web dashboard and a future TUI), `panelayout`,
   `run`, `statusreport`, `peermsg`, and `cliflags` (flag validation that
@@ -222,14 +224,19 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `modernc.org/sqlite`, WAL mode, file mode `0600`, DB scoped to
   `/tmp/fanout-<repo>-<parent_key>.db` with `FANOUT_DB_PATH` override; pane
   identity resolves from `.fanout/state.json` with the `[fanout #N of #P]`
-  prompt prefix as fallback), and `settings` (the safety gate that blocks
-  repo config from enabling the watcher or notification targets) are class H;
+  prompt prefix as fallback), `settings` (the safety gate that blocks
+  repo config from enabling the watcher or notification targets),
+  `paneruntime` (the one package allowed to name a concrete runtime adapter:
+  selection inputs, precedence, construction, self-exec registry), and
+  `herdrrun` are class H;
   `ghissue`
   (GitHub reads and mutations: label swaps, dashboard
-  comments), `gitstat`, `tmuxrun` (direct tmux operations), `msgstore`, `notify`, `runtime` (git root + tmux target resolution), `displayname`, `codexapp`,
+  comments), `gitstat`, `tmuxrun` (direct tmux operations), `tmuxbackend` (the
+  adapter from the backend contract to `tmuxrun`), `msgstore`, `notify`, `runtime` (git root + tmux target resolution), `displayname`, `codexapp`,
   and `atomicfs` (the shared write path for state.json and the tokened
   dashboard.json) and `gitroot` (project/state-root resolution input) are class M; `log`,
-  `tty`, `execx`, and `browser` are class A.
+  `tty`, `execx`, `browser`, and `backendtest` (the in-process fake of the
+  core backend contract; test-only, never linked into the binary) are class A.
 - `internal/ui` holds the TUI (`tui`) and the web dashboard (`dashboard`):
   `server.go` (GET-only mux, token middleware) and `runfile.go` (the tokened
   `.fanout/dashboard.json` reuse/trust gate) and `peek.go` / `plan.go` (the capture-pane validation chain) are class
@@ -240,13 +247,32 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
 Rule of thumb: a PR that touches a class-H package needs human review; a PR
 touching only class-A packages can rely on AI review.
 
+- Runtime differences are expressed as capabilities, never as a backend-name
+  `switch`. `internal/core/backend` holds the ports: `Backend` plus the
+  optional `As*` capabilities (decoration, liveness stamping, layout, popup
+  host, restore, console), and `MutationModel` (`MutationAtomic` /
+  `MutationJournaled`) picks the launch lane. `internal/app` and `cmd/fanout`
+  name only those core types — never `tmuxrun` / `tmuxbackend` / `herdrrun`,
+  which godep-cruiser's `app-no-runtime-adapters` /
+  `cmd-no-runtime-adapters` forbid outside test files — and construct through
+  `infra/paneruntime`. `TestRuntimeVocabulary` extends that to naming: those
+  two trees must not spell `tmux` or `herdr` in an identifier, import path,
+  file name, or struct tag. Comments and prose string literals are exempt,
+  but a literal whose whole value IS a runtime name (`"tmux"` / `"herdr"`,
+  the shape an equality branch needs, even via a neutral constant) is
+  checked; reviewed exceptions live in
+  `internal/arch/runtime-vocabulary-allow.json` with a reason, pinned to
+  (file, occurrence count), and an entry that matches nothing or overcounts
+  fails as stale. `internal/ui` still imports `tmuxrun`
+  directly and is not covered yet.
 - Runtime discovery (`internal/infra/runtime`) resolves the git repo root with
   `git rev-parse --show-toplevel`, requires the caller to be inside tmux for
   batch pane creation, and targets the invoking pane (`$TMUX_PANE`) unless
   `--session` is supplied. No-argument TUI mode can start from a plain shell by
   creating or attaching a fanout-managed tmux session for the repository.
-- Pane creation is direct: `worktree.Prepare` creates
-  `.fanout/worktrees/<slug>/`, `tmuxrun.SplitPaneWithAgentCommand` runs
+- Pane creation goes through the backend port: `worktree.Prepare` creates
+  `.fanout/worktrees/<slug>/` and `panelaunch` calls `Backend.Launch`. On the
+  tmux adapter that lands in `tmuxrun.SplitPaneWithAgentCommand`, which runs
   `tmux split-window -d -h -P -F '#{pane_id}'`, and
   `tmuxrun.BuildPaneLaunchCommand` launches the selected agent through a POSIX
   wrapper while leaving the user's shell after exit.

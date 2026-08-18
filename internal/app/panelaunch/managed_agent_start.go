@@ -10,7 +10,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/butaosuinu/fanout/internal/app/herdrprocess"
+	"github.com/butaosuinu/fanout/internal/app/agentprocess"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -466,18 +466,18 @@ func matchManagedAgentProcess(
 	info backend.PaneProcessInfo,
 	intent state.LaunchIntent,
 ) (backend.ProcessIdentity, error) {
-	identity, err := herdrprocess.MatchAgent(info, managedLaunchProcessIdentity(intent))
+	identity, err := agentprocess.MatchAgent(info, managedLaunchProcessIdentity(intent))
 	if err != nil {
 		return backend.ProcessIdentity{}, fmt.Errorf("herdr agent process identity does not match launch intent")
 	}
 	return identity, nil
 }
 
-func managedLaunchProcessIdentity(intent state.LaunchIntent) herdrprocess.Identity {
+func managedLaunchProcessIdentity(intent state.LaunchIntent) agentprocess.Identity {
 	if intent.Launch == nil {
-		return herdrprocess.Identity{}
+		return agentprocess.Identity{}
 	}
-	return herdrprocess.Identity{
+	return agentprocess.Identity{
 		WorktreePath: intent.WorktreePath,
 		Executable:   intent.Launch.Executable, Args: intent.Launch.Args, Agent: intent.Launch.Agent,
 	}
@@ -495,7 +495,7 @@ func (l *Launcher) waitForManagedLaunchProcess(
 		}
 		processErr := verifyManagedAgentProcess(process, intent)
 		pending := verifyManagedLauncherProcess(process, intent, route) == nil ||
-			herdrprocess.InterpreterLaunchPending(process, managedLaunchProcessIdentity(intent))
+			agentprocess.InterpreterLaunchPending(process, managedLaunchProcessIdentity(intent))
 		if processErr == nil || !pending {
 			return processErr
 		}
