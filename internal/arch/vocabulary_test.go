@@ -158,6 +158,10 @@ func scanRuntimeVocabulary(t *testing.T, root string) vocabularyScan {
 	t.Helper()
 	scan := vocabularyScan{perTree: map[string]int{}}
 	fset := token.NewFileSet()
+	consts, constsErr := collectStringConsts(root)
+	if constsErr != nil {
+		t.Fatalf("collectStringConsts() = %v, want nil", constsErr)
+	}
 	for _, tree := range runtimeVocabularyTrees {
 		walkErr := filepath.WalkDir(filepath.Join(root, tree.path), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -175,7 +179,7 @@ func scanRuntimeVocabulary(t *testing.T, root string) vocabularyScan {
 			}
 			scan.files++
 			scan.perTree[tree.path]++
-			found, parseErr := inspectFileVocabulary(fset, path, filepath.ToSlash(rel))
+			found, parseErr := inspectFileVocabulary(fset, path, filepath.ToSlash(rel), consts)
 			if parseErr != nil {
 				return parseErr
 			}
@@ -201,7 +205,7 @@ func skipScannedDir(name string) error {
 // inspectFileVocabulary reports the runtime names one file spells in code. The
 // file is parsed without parser.ParseComments, so comments never reach the AST
 // and cannot be flagged.
-func inspectFileVocabulary(fset *token.FileSet, path, rel string) ([]vocabularyFinding, error) {
+func inspectFileVocabulary(fset *token.FileSet, path, rel string, consts map[string][]string) ([]vocabularyFinding, error) {
 	var findings []vocabularyFinding
 	if name := filepath.Base(rel); matchesRuntimeName(name) {
 		findings = append(findings, vocabularyFinding{File: rel, Line: 0, Kind: "file name", Text: name})
@@ -216,7 +220,6 @@ func inspectFileVocabulary(fset *token.FileSet, path, rel string) ([]vocabularyF
 	if err != nil {
 		return nil, err
 	}
-	consts := fileStringConsts(file)
 	for _, spec := range file.Imports {
 		if matchesRuntimeName(spec.Path.Value) {
 			findings = append(findings, vocabularyFinding{
@@ -315,6 +318,10 @@ func foldConstStrings(expr ast.Expr, consts map[string][]string) []string {
 		return []string{value}
 	case *ast.Ident:
 		return consts[node.Name]
+	case *ast.SelectorExpr:
+		// pkg.Name resolves by bare name against the shared table - the
+		// package qualifier is ignored on purpose (over-approximation).
+		return consts[node.Sel.Name]
 	case *ast.ParenExpr:
 		return foldConstStrings(node.X, consts)
 	case *ast.BinaryExpr:
@@ -338,60 +345,98 @@ func foldConstStrings(expr ast.Expr, consts map[string][]string) []string {
 	}
 }
 
-// fileStringConsts maps the file's string-constant names (top level and
-// function local) to every value a declaration of that name may fold to. The
-// name is deliberately NOT scoped: two same-name constants in different
-// functions both contribute candidates, so shadowing cannot mask the
-// combination that spells a runtime name. Package-level constants may
-// reference ones declared later in the file, so resolution iterates to a
-// fixed point.
-func fileStringConsts(file *ast.File) map[string][]string {
+// collectStringConsts maps string-constant names (top level and function
+// local) to every value a declaration of that name may fold to, across ALL
+// non-test Go files under cmd/ and internal/ - not just the scanned trees, so
+// a piece parked in an unscanned layer still resolves at its use site. Names
+// are deliberately NOT scoped or package-qualified: every same-name constant
+// contributes candidates, and a selector reference (pkg.Name) resolves by its
+// bare name, so neither shadowing nor a package boundary can mask the
+// combination that spells a runtime name. Constants may reference ones
+// declared later or in another file, so resolution iterates to a fixed point.
+func collectStringConsts(root string) (map[string][]string, error) {
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for _, tree := range []string{"cmd", "internal"} {
+		walkErr := filepath.WalkDir(filepath.Join(root, tree), func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return skipScannedDir(d.Name())
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			file, parseErr := parser.ParseFile(fset, path, nil, 0)
+			if parseErr != nil {
+				return parseErr
+			}
+			files = append(files, file)
+			return nil
+		})
+		if walkErr != nil {
+			return nil, walkErr
+		}
+	}
 	consts := map[string][]string{}
 	for {
 		grew := false
-		ast.Inspect(file, func(n ast.Node) bool {
-			decl, ok := n.(*ast.GenDecl)
-			if !ok || decl.Tok != token.CONST {
-				return true
+		for _, file := range files {
+			if collectFileConsts(file, consts) {
+				grew = true
 			}
-			// A const-group spec with no initializer repeats the previous
-			// spec's expressions (const (part = "t"; prefix; suffix = ...)),
-			// so the last expression list is carried forward exactly as the
-			// spec says.
-			var lastValues []ast.Expr
-			for _, spec := range decl.Specs {
-				valueSpec, ok := spec.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				values := valueSpec.Values
-				if len(values) == 0 {
-					values = lastValues
-				} else {
-					lastValues = values
-				}
-				if len(valueSpec.Names) != len(values) {
-					continue
-				}
-				for i, name := range valueSpec.Names {
-					for _, value := range foldConstStrings(values[i], consts) {
-						if slices.Contains(consts[name.Name], value) {
-							continue
-						}
-						if len(consts[name.Name]) >= maxFoldCandidates {
-							break
-						}
-						consts[name.Name] = append(consts[name.Name], value)
-						grew = true
-					}
-				}
-			}
-			return true
-		})
+		}
 		if !grew {
-			return consts
+			return consts, nil
 		}
 	}
+}
+
+// collectFileConsts folds one file's const declarations into the shared
+// table, reporting whether anything new resolved.
+func collectFileConsts(file *ast.File, consts map[string][]string) bool {
+	grew := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		decl, ok := n.(*ast.GenDecl)
+		if !ok || decl.Tok != token.CONST {
+			return true
+		}
+		// A const-group spec with no initializer repeats the previous
+		// spec's expressions (const (part = "t"; prefix; suffix = ...)),
+		// so the last expression list is carried forward exactly as the
+		// spec says.
+		var lastValues []ast.Expr
+		for _, spec := range decl.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			values := valueSpec.Values
+			if len(values) == 0 {
+				values = lastValues
+			} else {
+				lastValues = values
+			}
+			if len(valueSpec.Names) != len(values) {
+				continue
+			}
+			for i, name := range valueSpec.Names {
+				for _, value := range foldConstStrings(values[i], consts) {
+					if slices.Contains(consts[name.Name], value) {
+						continue
+					}
+					if len(consts[name.Name]) >= maxFoldCandidates {
+						break
+					}
+					consts[name.Name] = append(consts[name.Name], value)
+					grew = true
+				}
+			}
+		}
+		return true
+	})
+	return grew
 }
 
 func matchesRuntimeName(s string) bool {
