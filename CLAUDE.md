@@ -318,7 +318,11 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   `$(git rev-parse --git-dir)/fanout-check-passed`, which only a successful
   `make check` on a clean tree writes. When denied, commit the candidate, run
   `make check`, then push again — do not reach for `--no-verify` or retry
-  unchanged. Branch deletions and tag pushes stay ungated; `gh pr create`
+  unchanged. Never chain the push after a ref-mutating command in the same
+  Bash call (`git commit … && git push`, rebase-then-push): the gate verifies
+  only the pre-execution state and always denies the chained form — run
+  `git push` as its own command. Branch deletions and tag pushes stay
+  ungated; `gh pr create`
   (gh pushes an unpushed branch itself) requires the same marker, and forms
   the gate cannot trace (`bash -c '… git push …'`, `--mirror`) fail closed.
   Escape hatch: `FANOUT_SKIP_PUSH_CHECK=1`. Edits are auto-formatted by a

@@ -369,7 +369,11 @@ touching only class-A packages can rely on AI review.
   per-worktree marker `$(git rev-parse --git-dir)/fanout-check-passed`, which
   only a successful `make check` on a clean tree writes (`check-marker`). When
   a push is denied, commit the candidate, run `make check`, then push again;
-  never bypass with `--no-verify`. Branch deletions and tag pushes stay
+  never bypass with `--no-verify`. Never chain the push after a ref-mutating
+  command in the same shell call (`git commit … && git push`,
+  rebase-then-push): the gate verifies only the pre-execution state and
+  always denies the chained form — run `git push` as its own command.
+  Branch deletions and tag pushes stay
   ungated; `gh pr create` (gh pushes an unpushed branch itself) requires the
   same marker, and untraceable forms (`bash -c '… git push …'`, `--mirror`)
   fail closed. Escape hatch: `FANOUT_SKIP_PUSH_CHECK=1`. Codex additionally runs
