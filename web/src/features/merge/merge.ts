@@ -46,7 +46,8 @@ function isOpen(pr: PRRef): boolean {
 /* サーバの Preflight を通る見込みがあるか。行に複数 open PR があるとき、先頭が
  * draft や CONFLICTING だとそれだけが選ばれて唯一のボタンが永久に無効になる。 */
 function actionable(pr: PRRef): boolean {
-  return isOpen(pr) && !pr.isDraft && pr.mergeable !== "CONFLICTING";
+  if (!isOpen(pr) || pr.isDraft || pr.mergeable === "CONFLICTING") return false;
+  return !pr.autoMerge && !pr.queued;
 }
 
 /* サーバの VerifyRowOwns と同じ所有権規則。ここで揃えないと、行に載った他人の
@@ -85,6 +86,12 @@ const PR_BLOCKS: { when: (pr: PRRef) => boolean; reason: MessageDescriptor }[] =
     reason: msg`draft PR はマージできません(Ready for review にしてください)`,
   },
   { when: (pr) => pr.mergeable === "CONFLICTING", reason: msg`base branch と競合しています` },
+  /* GitHub が既にこの PR のマージを保持している(auto-merge 武装済み、または
+   * merge queue 内)。もう一度送っても早くはならない。 */
+  {
+    when: (pr) => !!pr.autoMerge || !!pr.queued,
+    reason: msg`GitHub がこの PR のマージを保留中です`,
+  },
 ];
 
 /* 押せない理由。押せるなら null。 */

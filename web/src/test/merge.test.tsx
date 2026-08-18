@@ -866,6 +866,39 @@ describe("同番号の別 repository PR", () => {
   });
 });
 
+/* GitHub が既に保持しているマージ(UI や別の gh で武装/投入されたもの)は、
+ * こちらから送り直しても早くならない。サーバも 409 で拒否する。 */
+describe("GitHub が保留中の PR", () => {
+  it("auto-merge 武装済みの PR はボタンから撃てない", async () => {
+    const calls: MergeCall[] = [];
+    server.use(mergeHandler(calls));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(snapshotWithPR({ autoMerge: true }));
+
+    const drawer = await openDrawer(user);
+    const blocked = within(drawer).getByRole("button", { name: /マージを保留中/ });
+    expect(blocked).toHaveAttribute("aria-disabled", "true");
+    await user.click(blocked);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("merge queue に入っている PR もボタンから撃てない", async () => {
+    const calls: MergeCall[] = [];
+    server.use(mergeHandler(calls));
+    const user = userEvent.setup();
+    render(<App />);
+    streamSnapshot(snapshotWithPR({ queued: true }));
+
+    const drawer = await openDrawer(user);
+    expect(within(drawer).getByRole("button", { name: /マージを保留中/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("結果不明", () => {
   /* merge コマンドは通っているので、確認できないことを失敗として見せると再送を
    * 誘う。塞いだうえで状態確認を促す。 */

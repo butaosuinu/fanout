@@ -254,6 +254,10 @@ msgstr "diff を取得できません — worktree の記録が見つかりま�
 msgid "すべて展開"
 msgstr "すべて展開"
 
+#: src/features/merge/merge.ts
+msgid "GitHub がこの PR のマージを保留中です"
+msgstr "GitHub がこの PR のマージを保留中です"
+
 #: src/features/settings/SettingsModal.tsx
 msgid "ライトテーマ"
 msgstr "ライトテーマ"

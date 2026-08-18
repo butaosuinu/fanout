@@ -266,7 +266,9 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   poll stale; the server requires that PR to still be on the
   addressed snapshot row and forwards the SHA as `--match-head-commit`, so a PR
   that moved between render and click is refused by GitHub instead of merged
-  blind. merged/closed/draft/CONFLICTING are refused with 409, but review
+  blind. merged/closed/draft/CONFLICTING are refused with 409 — as is a
+  pull request GitHub is already holding a merge for, armed or queued by anyone,
+  since a second request would not make it merge sooner — but review
   approval and CI status are deliberately not gates — enforcing branch
   protection is GitHub's job, and duplicating it would kill the button in a
   repository that requires neither. POST requests pass `postOnly` +
@@ -296,8 +298,8 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   keep accepting fork PRs. A merge whose outcome cannot be read comes back as
   unknown rather than as an error, and the pull request is then held in
   `.fanout/merge-claims.json` — cleared only when a poll shows the PR merged or
-  closed, since time is not evidence about an outcome; deleting the entry is the
-  documented manual way out — so another tab, a reload, or a dashboard restart
+  closed, since time is not evidence about an outcome; deleting the entry from that file (under the git
+  common dir, not the worktree) is the documented manual way out — so another tab, a reload, or a dashboard restart
   cannot fire a second one either — that file is the endpoint's only local write.
   The hold is taken *before* gh runs and released once the outcome is known,
   because the answer that never arrives is the one that would have told us to

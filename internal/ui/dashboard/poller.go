@@ -217,14 +217,31 @@ func (p *poller) ghLoop(ctx context.Context) {
 func (p *poller) prSettled(repo string, number int) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	for _, session := range p.latest.Sessions {
-		for i := range session.Panes {
-			if settledPRRef(session.Panes[i].PRs, repo, number) {
-				return true
-			}
+	return settled(p.prRefs(repo, number))
+}
+
+// settled reports whether every copy of one pull request agrees it is over.
+//
+// One copy saying so is not enough. The same pull request appears on several
+// rows, the issue and branch fetches land at different times, and a pull request
+// that was closed and reopened leaves one stale CLOSED copy next to a live OPEN
+// one — releasing on the stale copy would hand back a merge that is still in
+// flight. No copies at all is not evidence either.
+func settled(refs []ghissue.PRRef) bool {
+	if len(refs) == 0 {
+		return false
+	}
+	for _, pr := range refs {
+		if !settledRef(pr) {
+			return false
 		}
 	}
-	return false
+	return true
+}
+
+func settledRef(pr ghissue.PRRef) bool {
+	return strings.EqualFold(pr.State, "MERGED") || strings.EqualFold(pr.State, "CLOSED") ||
+		pr.MergedAt != nil
 }
 
 // prMergePending reports whether the latest snapshot shows GitHub still holding
@@ -263,19 +280,6 @@ func (p *poller) prRefs(repo string, number int) []ghissue.PRRef {
 		}
 	}
 	return out
-}
-
-func settledPRRef(prs []ghissue.PRRef, repo string, number int) bool {
-	for _, pr := range prs {
-		if pr.Number != number || !strings.EqualFold(pr.BaseRepo, repo) {
-			continue
-		}
-		if strings.EqualFold(pr.State, "MERGED") || strings.EqualFold(pr.State, "CLOSED") ||
-			pr.MergedAt != nil {
-			return true
-		}
-	}
-	return false
 }
 
 func (p *poller) requestGHRefresh() bool {

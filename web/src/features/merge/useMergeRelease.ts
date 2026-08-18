@@ -128,9 +128,15 @@ function changed(prev: Unknown[], next: Unknown[]): boolean {
 /* repository も見る: `Fixes owner/repo#N` は別 repository の PR を行に載せるし、
  * PR 番号は repository ごとに重複する。よその merged #7 でこちらの #7 の hold を
  * 解いてしまうと、結果不明のマージを撃ち直せる(サーバの prSettled と同じ規則)。 */
+/* 全コピーが「終わった」と言っていること。1 つでは足りない — 同じ PR は複数行に
+ * 載り、issue 行と branch 行の取得は別々に走る。close して reopen した PR は、
+ * 古い CLOSED のコピーが生きた OPEN の隣に残るので、そちらで解除すると、まだ
+ * 進行中のマージを撃ち直せる(サーバの settled と同じ規則)。 */
 function settledPR(snap: Snapshot, held: { prNumber: number; repo: string }): boolean {
-  return refsOf(snap, held).some(
-    (pr) => pr.state === "MERGED" || pr.state === "CLOSED" || !!pr.mergedAt,
+  const refs = refsOf(snap, held);
+  return (
+    refs.length > 0 &&
+    refs.every((pr) => pr.state === "MERGED" || pr.state === "CLOSED" || !!pr.mergedAt)
   );
 }
 

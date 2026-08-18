@@ -147,7 +147,7 @@ func (s *Server) admitMerge(
 	if !ok {
 		return prmerge.Request{}, repoRef{}, nil, false
 	}
-	req, ok := mergePayload(w, r, pv, rr)
+	req, ok := s.mergePayload(w, r, pv, rr)
 	if !ok {
 		return prmerge.Request{}, repoRef{}, nil, false
 	}
@@ -425,8 +425,8 @@ func (s *Server) unconfirmed(key string, rr repoRef, claims map[string]mergeClai
 	// Only GitHub releases the hold. Time is not evidence about an outcome, so
 	// there is no TTL: a merge that may have happened stays un-repeatable until a
 	// poll shows the pull request settled. The way out of a state that never
-	// resolves is to delete the entry from .fanout/merge-claims.json, which is
-	// the documented manual path.
+	// resolves is to delete the entry from the claims file under the git common
+	// dir (mergeClaimsFile), which is the documented manual path.
 	if !s.claimOver(key, rr, claims, number) {
 		return true
 	}
@@ -471,6 +471,24 @@ func (s *Server) claimOver(key string, rr repoRef, claims map[string]mergeClaim,
 		return false
 	}
 	return claim.Seen
+}
+
+// holdsClaim reports whether this dashboard already has a hold on the pull
+// request, without disturbing it.
+func (s *Server) holdsClaim(rr repoRef, number int) bool {
+	key := claimKey(rr, number)
+	s.mergeMu.Lock()
+	defer s.mergeMu.Unlock()
+	if _, ok := s.mergeHeld[key]; ok {
+		return true
+	}
+	claims, err := s.readMergeClaims()
+	if err != nil {
+		// Unreadable claims close the mutation a step later; say nothing here.
+		return false
+	}
+	_, ok := claims[key]
+	return ok
 }
 
 // held reports whether a hold is recorded, in memory or on disk (a restart has
@@ -527,7 +545,12 @@ func (s *Server) mergeRow(w http.ResponseWriter, r *http.Request) (sessionview.P
 // be on it, and its state must be one fanout acts on. The client names the PR
 // and the head SHA it rendered, so a row whose PR set changed under the page is
 // refused here rather than merged by number alone.
-func mergePayload(w http.ResponseWriter, r *http.Request, pv sessionview.PaneView, rr repoRef) (prmerge.Request, bool) {
+func (s *Server) mergePayload(
+	w http.ResponseWriter,
+	r *http.Request,
+	pv sessionview.PaneView,
+	rr repoRef,
+) (prmerge.Request, bool) {
 	body, err := decodeMergeBody(w, r)
 	if err != nil {
 		status, code := mergeBodyStatus(err)
@@ -535,6 +558,13 @@ func mergePayload(w http.ResponseWriter, r *http.Request, pv sessionview.PaneVie
 		return prmerge.Request{}, false
 	}
 	ref, err := selectMergeRef(pv, body, rr)
+	// A merge GitHub is already holding is refused — unless it is the one this
+	// dashboard sent. That one is the hold's business: it answers with
+	// merge_unconfirmed and, on the way, records having seen GitHub holding it,
+	// which is what later lets a cancellation release the hold.
+	if errors.Is(err, prmerge.ErrPRPending) && s.holdsClaim(rr, body.prNumber) {
+		err = nil
+	}
 	if err != nil {
 		apiError(w, http.StatusConflict, mergePreflightCode(err), err.Error(), "")
 		return prmerge.Request{}, false
@@ -655,6 +685,7 @@ var mergePreflightSentinels = []struct {
 	{prmerge.ErrPRClosed, "pr_closed"},
 	{prmerge.ErrPRDraft, "pr_draft"},
 	{prmerge.ErrPRConflicting, "pr_conflicting"},
+	{prmerge.ErrPRPending, "pr_pending"},
 	{prmerge.ErrStaleHead, "stale_head"},
 	{prmerge.ErrStaleBase, "stale_base"},
 	{prmerge.ErrNoBranch, "no_branch"},

@@ -28,6 +28,7 @@ var (
 	ErrPRClosed      = errors.New("pull request is closed")
 	ErrPRDraft       = errors.New("pull request is a draft")
 	ErrPRConflicting = errors.New("pull request conflicts with its base branch")
+	ErrPRPending     = errors.New("GitHub is already holding a merge for this pull request")
 	ErrStaleHead     = errors.New("pull request head moved since the page rendered")
 	ErrStaleBase     = errors.New("pull request was retargeted since the page rendered")
 	ErrNoBranch      = errors.New("no remote branch to delete for this pull request")
@@ -137,6 +138,12 @@ func Preflight(ref ghissue.PRRef, rendered RenderedRef) error {
 		return ErrPRDraft
 	case ref.HasConflict():
 		return ErrPRConflicting
+	case ref.AutoMerge || ref.Queued:
+		// Someone already asked GitHub to merge this — the web UI, another gh, or
+		// an earlier click here. Sending a second request would not make it merge
+		// any sooner, and the button promises to be inactive while GitHub holds
+		// one.
+		return ErrPRPending
 	}
 	return rendered.check(ref)
 }
@@ -306,6 +313,13 @@ func (s Service) fenceLive(ctx context.Context, req Request) error {
 	}
 	if live.Merged {
 		return ErrAlreadyMerged
+	}
+	if live.AutoMerge {
+		// The snapshot is up to one poll old, so an auto-merge armed since then
+		// only shows up here. (A direct queue entry does not: gh pr view has no
+		// field for it, and the snapshot's GraphQL read is the only place it is
+		// visible.)
+		return ErrPRPending
 	}
 	if err := req.stillOwns(live); err != nil {
 		return err

@@ -254,6 +254,10 @@ msgstr "Cannot load the diff — no worktree on record (cleaned up, or the serve
 msgid "すべて展開"
 msgstr "Expand all"
 
+#: src/features/merge/merge.ts
+msgid "GitHub がこの PR のマージを保留中です"
+msgstr "GitHub already has a merge pending for this pull request."
+
 #: src/features/settings/SettingsModal.tsx
 msgid "ライトテーマ"
 msgstr "Light theme"

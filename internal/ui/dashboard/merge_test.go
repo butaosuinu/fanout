@@ -724,7 +724,8 @@ func TestQueuedHoldEndsWhenTheAutoMergeIsCancelled(t *testing.T) {
 	fake := &fakeMerger{res: prmerge.Result{Queued: true}}
 	p := newPollerBase(t.TempDir(), newHub())
 	claims := filepath.Join(t.TempDir(), mergeClaimsFile)
-	p.latest, p.repo, p.resolved = mergeSnapshot(armed), "owner/repo", true
+	// Nothing pending yet: gh is what arms the auto-merge.
+	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
 	s := &Server{
 		poller: p, hostPort: testHostPort, token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
@@ -739,7 +740,12 @@ func TestQueuedHoldEndsWhenTheAutoMergeIsCancelled(t *testing.T) {
 		t.Fatalf("first status = %d, want 200", code)
 	}
 
-	// Still armed: the enqueue is live, so the hold stands.
+	// The poll now shows GitHub holding it. This dashboard put it there, so the
+	// hold answers rather than the pending refusal — and the sighting is what
+	// later lets the cancellation release it.
+	p.mu.Lock()
+	p.latest = mergeSnapshot(armed)
+	p.mu.Unlock()
 	assertAPIError(t, requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
 		http.StatusConflict, "merge_unconfirmed")
 
@@ -766,7 +772,8 @@ func TestQueuedHoldEndsWhenTheQueueEntryGoes(t *testing.T) {
 	fake := &fakeMerger{res: prmerge.Result{Queued: true}}
 	p := newPollerBase(t.TempDir(), newHub())
 	claims := filepath.Join(t.TempDir(), mergeClaimsFile)
-	p.latest, p.repo, p.resolved = mergeSnapshot(enqueued), "owner/repo", true
+	// Nothing pending yet: this merge is what puts it in the queue.
+	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
 	s := &Server{
 		poller: p, hostPort: testHostPort, token: testToken,
 		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
@@ -780,6 +787,9 @@ func TestQueuedHoldEndsWhenTheQueueEntryGoes(t *testing.T) {
 	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
 		t.Fatalf("first status = %d, want 200", code)
 	}
+	p.mu.Lock()
+	p.latest = mergeSnapshot(enqueued)
+	p.mu.Unlock()
 	assertAPIError(t, requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
 		http.StatusConflict, "merge_unconfirmed")
 
@@ -1224,5 +1234,45 @@ func TestMergeRefusesWhenClaimsCannotBeRead(t *testing.T) {
 	data, err := os.ReadFile(corrupt)
 	if err != nil || string(data) != "{not json" {
 		t.Fatalf("claims file = %q (%v), want it untouched", data, err)
+	}
+}
+
+// TestMergeRefusesAPullRequestGitHubAlreadyHolds covers a merge this dashboard
+// did not send: armed from the GitHub UI or another gh. Sending a second request
+// would not make it merge sooner, and the button promises to be inactive while
+// GitHub holds one.
+func TestMergeRefusesAPullRequestGitHubAlreadyHolds(t *testing.T) {
+	tests := []struct {
+		name string
+		pr   func() ghissue.PRRef
+	}{
+		{
+			name: "auto-merge armed elsewhere",
+			pr: func() ghissue.PRRef {
+				pr := openPR()
+				pr.AutoMerge = true
+				return pr
+			},
+		},
+		{
+			name: "already in the merge queue",
+			pr: func() ghissue.PRRef {
+				pr := openPR()
+				pr.Queued = true
+				return pr
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeMerger{}
+			h := mergeHandler(t, testToken, mergeSnapshot(tt.pr()), fake)
+			assertAPIError(t,
+				requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
+				http.StatusConflict, "pr_pending")
+			if calls, _ := fake.snapshot(); calls != 0 {
+				t.Fatalf("merge calls = %d, want 0", calls)
+			}
+		})
 	}
 }
