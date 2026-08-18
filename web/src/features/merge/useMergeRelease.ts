@@ -15,7 +15,7 @@ const PENDING_BACKSTOP_MS = 120_000;
  * 単数ではなく集合で持つ: PR を続けて操作すると、後の送信が前の hold を上書きし、
  * まだ決着していない PR のボタンが押せる状態に戻ってしまう(サーバは claim と
  * live fence で必ず 409 を返すので、押せるのに必ず失敗するボタンになる)。 */
-export type Pending = { key: string; prNumber: number; since: number };
+export type Pending = { key: string; prNumber: number; repo: string; since: number };
 
 /* 決着待ちのマージ。行キーではなく PR 番号 + repository で持つ — 同じ PR が複数行に
  * 載る場合(複数 issue を close する PR)に、別の行から再送できてしまうのを防ぐ。
@@ -70,7 +70,12 @@ function dropExpired(pending: Pending[]): Pending[] {
 function pendingResolved(snap: Snapshot, pending: Pending): boolean {
   const entry = findPaneEntry(snap, pending.key);
   if (!entry) return true;
-  const pr = entry.pane.prs?.find((p) => p.number === pending.prNumber);
+  /* repository も見る: 同じ行に別 repository の同番号 PR が載ると、そちらの状態で
+   * 反映済みと判定してしまう(サーバの prSettled と同じ規則)。 */
+  const repo = pending.repo.toLowerCase();
+  const pr = entry.pane.prs?.find(
+    (p) => p.number === pending.prNumber && p.baseRepo?.toLowerCase() === repo,
+  );
   return !!pr && (pr.state === "MERGED" || !!pr.mergedAt);
 }
 
@@ -179,7 +184,10 @@ export function useMergeTracking(snap: Snapshot | null): MergeTracking {
         { prNumber: row.prNumber, repo: row.repo, queued: res.queued, armed: res.autoMerge },
       ]);
     } else {
-      setPending((prev) => [...prev, { key: row.key, prNumber: row.prNumber, since: Date.now() }]);
+      setPending((prev) => [
+        ...prev,
+        { key: row.key, prNumber: row.prNumber, repo: row.repo, since: Date.now() },
+      ]);
     }
     setNotice(noticeFor(row.key, res));
   }, []);

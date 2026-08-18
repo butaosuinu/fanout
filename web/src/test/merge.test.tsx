@@ -825,6 +825,47 @@ describe("queue の取り消し", () => {
   });
 });
 
+/* 行には別 repository の PR も載る(`Fixes owner/repo#N`)。番号だけで反映済みと
+ * 判定すると、まだ反映されていないマージのボタンが押せる状態に戻る。 */
+describe("同番号の別 repository PR", () => {
+  it("よその merged #701 では反映待ちを解除しない", async () => {
+    server.use(mergeHandler([]));
+    const user = userEvent.setup();
+    render(<App />);
+    /* よその merged #701 が先に載っている行。番号だけで探すと、こちらの OPEN な
+     * #701 ではなくそちらを掴んで「反映済み」と読んでしまう。 */
+    streamSnapshot(
+      makeSnapshot([
+        makeSession("142", [
+          makePane({
+            issueNum: 101,
+            displayName: "Fix login",
+            slug: "fix-login",
+            paneId: "%1",
+            branchName: "fanout/fix-login",
+            prs: [
+              makePr({ number: 701, state: "MERGED", baseRepo: "other/repo" }),
+              makePr({ number: 701, headRef: "fanout/fix-login" }),
+            ],
+          }),
+        ]),
+      ]),
+    );
+
+    const drawer = await openDrawer(user);
+    await user.click(within(drawer).getByRole("button", { name: "#701 をマージ" }));
+    await waitFor(() =>
+      expect(
+        within(drawer).getByRole("button", { name: /反映を待っています/ }),
+      ).toBeInTheDocument(),
+    );
+    expect(within(drawer).getByRole("button", { name: /反映を待っています/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+});
+
 describe("結果不明", () => {
   /* merge コマンドは通っているので、確認できないことを失敗として見せると再送を
    * 誘う。塞いだうえで状態確認を促す。 */

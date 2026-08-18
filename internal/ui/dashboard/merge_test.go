@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/prmerge"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
+	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -1054,5 +1057,66 @@ func TestMergeRefusesWithoutATokenGate(t *testing.T) {
 		http.StatusForbidden, "token_required")
 	if calls, _ := fake.snapshot(); calls != 0 {
 		t.Fatalf("merge calls = %d, want 0", calls)
+	}
+}
+
+// TestMergeRefusesWhenTheClaimCannotBePersisted pins the ordering the guard
+// depends on. The hold is written before gh runs, because the answer that never
+// arrives is exactly the one that would have told us to write it — and a hold
+// that cannot be written would not survive the restart it exists for, so the
+// merge does not run at all.
+func TestMergeRefusesWhenTheClaimCannotBePersisted(t *testing.T) {
+	root := t.TempDir()
+	// .fanout as a file, so creating the directory for the claims fails.
+	if err := os.WriteFile(filepath.Join(root, ".fanout"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeMerger{res: prmerge.Result{Merged: true}}
+	p := newPollerBase(root, newHub())
+	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
+	s := &Server{
+		poller: p, hostPort: testHostPort, token: testToken,
+		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
+		mergeHeld: map[string]time.Time{},
+	}
+	h, err := s.handler()
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	assertAPIError(t, requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
+		http.StatusServiceUnavailable, "claim_unavailable")
+	if calls, _ := fake.snapshot(); calls != 0 {
+		t.Fatalf("merge calls = %d, want 0", calls)
+	}
+}
+
+// TestConfirmedMergeLeavesNoClaim keeps the reservation from becoming a leak: a
+// merge GitHub confirmed has nothing unresolved about it, so a later merge of
+// another pull request on the same row must not meet a stale hold.
+func TestConfirmedMergeLeavesNoClaim(t *testing.T) {
+	root := t.TempDir()
+	fake := &fakeMerger{res: prmerge.Result{Merged: true}}
+	p := newPollerBase(root, newHub())
+	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
+	s := &Server{
+		poller: p, hostPort: testHostPort, token: testToken,
+		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
+		mergeHeld: map[string]time.Time{},
+	}
+	h, err := s.handler()
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	claims := map[string]any{}
+	if _, err := atomicfs.ReadJSON(filepath.Join(root, ".fanout", mergeClaimsFile), &claims); err == nil {
+		if len(claims) != 0 {
+			t.Fatalf("claims = %v, want none after a confirmed merge", claims)
+		}
+	}
+	if len(s.mergeHeld) != 0 {
+		t.Fatalf("in-memory holds = %v, want none", s.mergeHeld)
 	}
 }

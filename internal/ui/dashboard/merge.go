@@ -103,6 +103,10 @@ func (s *Server) handleMerge(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	res, err := s.mergePR(ctx, req)
 	if err != nil {
+		// Every error path here is one where nothing merged: a fence refusal or a
+		// pre-send failure never reached GitHub, and a clean refusal left the pull
+		// request open. The reserved hold has nothing left to protect.
+		s.releaseClaim(rr, req.Number)
 		// The live fence runs inside the merge call, so its refusals arrive here
 		// mixed with gh's. They are fanout's own — the pull request moved between
 		// admission and the send — and reporting them as "GitHub refused" would
@@ -111,14 +115,23 @@ func (s *Server) handleMerge(w http.ResponseWriter, r *http.Request) {
 		apiError(w, status, code, mergeFailureTitle(status), redactGHDetail(err))
 		return
 	}
-	if res.Unknown || res.Queued {
-		// Both states mean GitHub already changed something: Unknown may have
-		// merged, and a queued request has auto-merge armed. Losing only the
-		// response would otherwise let another tab or a reload send it again, so
-		// the refusal lives on the server until a poll settles the pull request.
-		s.holdUnconfirmed(rr, req.Number, res)
-	}
+	s.settleClaim(rr, req.Number, res)
 	writeMergeResponse(w, req, res, s.poller.requestGHRefresh())
+}
+
+// settleClaim decides what becomes of the hold reserved before the merge.
+//
+// Unknown and Queued both mean GitHub already changed something: Unknown may
+// have merged, and a queued request has auto-merge armed. Losing only the
+// response would otherwise let another tab or a reload send it again, so the
+// hold is upgraded to say which and stays until a poll settles the pull
+// request. A confirmed merge leaves nothing unresolved, so its hold goes.
+func (s *Server) settleClaim(rr repoRef, number int, res prmerge.Result) {
+	if res.Unknown || res.Queued {
+		s.holdUnconfirmed(rr, number, res)
+		return
+	}
+	s.releaseClaim(rr, number)
 }
 
 // admitMerge runs every check that must pass before gh is invoked, in cost
@@ -222,8 +235,12 @@ type mergeClaim struct {
 }
 
 const (
-	claimUnknown = "unknown"
-	claimQueued  = "queued"
+	// claimInflight is written before gh runs. A dashboard killed mid-merge
+	// leaves it behind, which is the honest state: the merge may have reached
+	// GitHub, and nothing local knows.
+	claimInflight = "inflight"
+	claimUnknown  = "unknown"
+	claimQueued   = "queued"
 )
 
 func (s *Server) readMergeClaims() map[string]mergeClaim {
@@ -234,16 +251,50 @@ func (s *Server) readMergeClaims() map[string]mergeClaim {
 	return claims
 }
 
-// writeMergeClaims persists the holds. A failure is not reported: the in-memory
-// mirror already keeps this process fail-closed, and the only thing lost is the
-// cross-restart half of the guard, which there is no useful action to take on.
-// Callers hold mergeMu.
-func (s *Server) writeMergeClaims(claims map[string]mergeClaim) {
+// writeMergeClaims persists the holds. Callers hold mergeMu.
+//
+// The error matters at exactly one point — reserving a claim before the merge,
+// where an unwritable file means the guard would not survive a restart and the
+// merge is refused instead. Everywhere else the write is an update to a hold
+// that already exists, and failing it leaves the stricter state in place.
+func (s *Server) writeMergeClaims(claims map[string]mergeClaim) error {
 	path := s.mergeClaimsPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
+		return err
 	}
-	_ = atomicfs.WriteJSON(path, claims, 0o600)
+	return atomicfs.WriteJSON(path, claims, 0o600)
+}
+
+// reserveClaim records the hold before gh is invoked, and reports whether it is
+// durable.
+//
+// Writing it afterwards is too late: the answer that never arrives is exactly
+// the one that would have told us to write. Taking the claim first means a
+// crash, a kill, or a lost response all leave the same evidence behind — and a
+// file that cannot be written is a guard that would not survive a restart, so
+// the merge does not run at all rather than run unprotected.
+func (s *Server) reserveClaim(key string) error {
+	claims := s.readMergeClaims()
+	claims[key] = mergeClaim{Kind: claimInflight, At: time.Now().UTC().Format(time.RFC3339)}
+	if err := s.writeMergeClaims(claims); err != nil {
+		return err
+	}
+	s.mergeHeld[key] = time.Now()
+	return nil
+}
+
+// releaseClaim drops a hold whose outcome is known: the merge landed, or it
+// never left. A write failure keeps the recorded hold, which refuses later
+// attempts — the safe direction, and the documented manual way out is to delete
+// the entry.
+func (s *Server) releaseClaim(rr repoRef, number int) {
+	key := claimKey(rr, number)
+	s.mergeMu.Lock()
+	defer s.mergeMu.Unlock()
+	delete(s.mergeHeld, key)
+	claims := s.readMergeClaims()
+	delete(claims, key)
+	_ = s.writeMergeClaims(claims)
 }
 
 // holdUnconfirmed records a pull request whose merge outcome is unreadable, so
@@ -266,7 +317,7 @@ func (s *Server) holdUnconfirmed(rr repoRef, number int, res prmerge.Result) {
 		At:    time.Now().UTC().Format(time.RFC3339),
 		Armed: res.AutoMerge,
 	}
-	s.writeMergeClaims(claims)
+	_ = s.writeMergeClaims(claims)
 }
 
 // unconfirmed reports whether an earlier unreadable merge still blocks this pull
@@ -287,7 +338,7 @@ func (s *Server) unconfirmed(key string, rr repoRef, number int) bool {
 	}
 	delete(s.mergeHeld, key)
 	delete(claims, key)
-	s.writeMergeClaims(claims)
+	_ = s.writeMergeClaims(claims)
 	return false
 }
 
@@ -319,7 +370,7 @@ func (s *Server) claimOver(key string, rr repoRef, claims map[string]mergeClaim,
 		if !claim.Seen {
 			claim.Seen = true
 			claims[key] = claim
-			s.writeMergeClaims(claims)
+			_ = s.writeMergeClaims(claims)
 		}
 		return false
 	}
@@ -613,6 +664,11 @@ func (s *Server) claimMerge(w http.ResponseWriter, rr repoRef, number int) (func
 	if s.unconfirmed(key, rr, number) {
 		apiError(w, http.StatusConflict, "merge_unconfirmed",
 			"an earlier merge for this pull request has not been confirmed yet", "")
+		return nil, false
+	}
+	if err := s.reserveClaim(key); err != nil {
+		apiError(w, http.StatusServiceUnavailable, "claim_unavailable",
+			"the merge was not started: its hold could not be recorded", redactGHDetail(err))
 		return nil, false
 	}
 	s.mergeInFlight[key] = struct{}{}

@@ -299,6 +299,11 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   closed, since time is not evidence about an outcome; deleting the entry is the
   documented manual way out — so another tab, a reload, or a dashboard restart
   cannot fire a second one either — that file is the endpoint's only local write.
+  The hold is taken *before* gh runs and released once the outcome is known,
+  because the answer that never arrives is the one that would have told us to
+  write it; a crash mid-merge therefore leaves the same evidence a lost response
+  does, and a claims file that cannot be written refuses the merge outright
+  rather than running it with a guard that would not survive a restart.
   A queued merge is held the same way but has a second ending: it records that
   GitHub had an auto-merge armed, and cancelling that (`--disable-auto`) leaves
   the PR open with nothing pending, which no merged/closed check can ever
