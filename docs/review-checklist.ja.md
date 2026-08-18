@@ -72,9 +72,9 @@ issue #373 の旧集計は、セッション履歴 102 件、CI 失敗 22 run、
 - branch への `git push` は agent hook でゲートされる。clean tree での
   `make check` 成功が marker を書き、push はそのまま通る。deny の理由が
   marker 不一致なら `make check` を通し直す。commit や rebase と連結した
-  push は marker が正しくても deny される。push を単独コマンドに分けて
-  再実行する。`--no-verify` での回避は禁止。緊急回避は
-  `FANOUT_SKIP_PUSH_CHECK=1`。
+  push は連結だけで deny され、連結された commit も未実行のまま止まる。
+  commit、`make check`、push を 1 コマンドずつに分けて再実行する。
+  `--no-verify` での回避は禁止。緊急回避は `FANOUT_SKIP_PUSH_CHECK=1`。
 - dry-run / status 出力を変えたら `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で
   golden を regen して diff を目視する。
 

@@ -250,8 +250,10 @@ contract invalidates its rationale.
   with `--no-verify` or by rewriting the hooks configuration. A denied push
   usually means the pushed tip has not passed the repository gate; run the
   canonical full gate on the final commit and push again. When the deny says
-  the push was chained after a ref-mutating command, re-run `git push` as
-  its own command instead.
+  the push was chained after a ref-mutating command, the whole call was
+  blocked before anything ran: re-run the ref-mutating command on its own,
+  run the canonical full gate if HEAD changed, then `git push` as its own
+  command.
 
 ## Limits and stop conditions
 
