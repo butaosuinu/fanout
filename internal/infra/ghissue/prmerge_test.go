@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -273,11 +274,11 @@ func TestPRStateAsksGitHubRatherThanTrustingTheExitCode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("PRState() = %#v, want %#v", got, tt.want)
 			}
 			assertFakeGHArgs(t, argsPath, []string{
-				"pr", "view", "7", "-R", "o/r", "--json", "state,mergedAt,baseRefName,headRefName,headRefOid,autoMergeRequest",
+				"pr", "view", "7", "-R", "o/r", "--json", "state,mergedAt,baseRefName,headRefName,headRefOid,autoMergeRequest,closingIssuesReferences",
 			})
 		})
 	}

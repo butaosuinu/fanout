@@ -101,21 +101,24 @@ function advanceHolds(snap: Snapshot, holds: Unknown[]): Unknown[] {
 
 function armedSeen(snap: Snapshot, held: Unknown): Unknown {
   if (!held.queued || held.seen) return held;
-  return mergePending(findPR(snap, held)) ? { ...held, seen: true } : held;
+  return mergePending(snap, held) ? { ...held, seen: true } : held;
 }
 
 /* GitHub がまだこのマージを保留しているか。gh は checks 未完了なら auto-merge を
- * 武装し、完了済みなら直接 queue に入れるので、両方を見る。 */
-function mergePending(pr: PRRef | undefined): boolean {
-  return !!pr && (!!pr.autoMerge || !!pr.queued);
+ * 武装し、完了済みなら直接 queue に入れるので、両方を見る。
+ *
+ * 同じ PR が複数行に載る場合は全部を見る。issue 行と branch 行の取得は別々に走る
+ * ので、片方だけが再投入前の状態を映していることがある(サーバの prMergePending と
+ * 同じ規則)。 */
+function mergePending(snap: Snapshot, held: Unknown): boolean {
+  return refsOf(snap, held).some((pr) => !!pr.autoMerge || !!pr.queued);
 }
 
 /* 取り消しは true -> false の遷移だけ。観測前の false はマージ前の snapshot。 */
 function holdOver(snap: Snapshot, held: Unknown): boolean {
   if (settledPR(snap, held)) return true;
   if (!held.queued || !held.seen) return false;
-  const pr = findPR(snap, held);
-  return !!pr && !mergePending(pr);
+  return refsOf(snap, held).length > 0 && !mergePending(snap, held);
 }
 
 function changed(prev: Unknown[], next: Unknown[]): boolean {
@@ -129,10 +132,6 @@ function settledPR(snap: Snapshot, held: { prNumber: number; repo: string }): bo
   return refsOf(snap, held).some(
     (pr) => pr.state === "MERGED" || pr.state === "CLOSED" || !!pr.mergedAt,
   );
-}
-
-function findPR(snap: Snapshot, held: { prNumber: number; repo: string }): PRRef | undefined {
-  return refsOf(snap, held)[0];
 }
 
 function refsOf(snap: Snapshot, held: { prNumber: number; repo: string }): PRRef[] {

@@ -104,6 +104,10 @@ type PRTarget struct {
 	BaseRef   string
 	HeadRef   string
 	HeadSha   string
+	// ClosesIssues is the set of issues this pull request currently closes. An
+	// issue row owns a PR through that link and nothing else, and the link can be
+	// edited away without moving a single commit.
+	ClosesIssues []int
 }
 
 // PRState reads the pull request as GitHub sees it right now.
@@ -118,7 +122,7 @@ func (r Runner) PRState(ctx context.Context, owner, repo string, number int) (_ 
 	defer errs.Wrap(&err, "read state of pull request #%d", number)
 
 	out, err := r.ghContext(ctx, "pr", "view", strconv.Itoa(number),
-		"-R", owner+"/"+repo, "--json", "state,mergedAt,baseRefName,headRefName,headRefOid,autoMergeRequest")
+		"-R", owner+"/"+repo, "--json", "state,mergedAt,baseRefName,headRefName,headRefOid,autoMergeRequest,closingIssuesReferences")
 	if err != nil {
 		return PRTarget{}, err
 	}
@@ -131,16 +135,20 @@ func (r Runner) PRState(ctx context.Context, owner, repo string, number int) (_ 
 		AutoMerge   *struct {
 			EnabledAt *string `json:"enabledAt"`
 		} `json:"autoMergeRequest"`
+		ClosingIssues []struct {
+			Number int `json:"number"`
+		} `json:"closingIssuesReferences"`
 	}
 	if err := json.Unmarshal(out, &view); err != nil {
 		return PRTarget{}, err
 	}
 	return PRTarget{
-		Merged:    strings.EqualFold(view.State, "MERGED") || view.MergedAt != nil,
-		BaseRef:   view.BaseRefName,
-		HeadRef:   view.HeadRefName,
-		HeadSha:   view.HeadRefOid,
-		AutoMerge: view.AutoMerge != nil,
+		Merged:       strings.EqualFold(view.State, "MERGED") || view.MergedAt != nil,
+		BaseRef:      view.BaseRefName,
+		HeadRef:      view.HeadRefName,
+		HeadSha:      view.HeadRefOid,
+		AutoMerge:    view.AutoMerge != nil,
+		ClosesIssues: closingIssueNumbers(view.ClosingIssues),
 	}, nil
 }
 
@@ -184,6 +192,22 @@ func IsPreSendFailure(err error) bool {
 var preSendMarkers = []string{
 	"executable file not found", "no such file or directory",
 	"authentication", "gh auth login",
+}
+
+func closingIssueNumbers(rows []struct {
+	Number int `json:"number"`
+},
+) []int {
+	if len(rows) == 0 {
+		// nil, not an empty slice: "GitHub did not say" and "closes nothing" are
+		// the same wire shape here, and the caller reads emptiness as the former.
+		return nil
+	}
+	out := make([]int, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.Number)
+	}
+	return out
 }
 
 // refPath builds the git-refs API path. Each branch segment is escaped

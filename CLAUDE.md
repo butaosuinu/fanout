@@ -312,7 +312,12 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   an entry in the merge queue — can be taken away again, leaving the PR open with
   nothing pending, which no merged/closed check can ever satisfy. A poll has to
   have seen that pending state before its absence counts, since the snapshot from
-  before the click shows nothing pending either. The claim on an unreadable
+  before the click shows nothing pending either, and every copy of the PR in the
+  snapshot is consulted — one pull request sits on several rows and the issue and
+  branch fetches land at different times. The live re-read also re-checks how the
+  row claimed the PR in the first place (the closing-issue link, or the head
+  branch), because editing a closing keyword out of a body and renaming a head
+  branch both drop the claim without moving a commit. The claim on an unreadable
   outcome never takes that exit — that merge may already have happened. A send
   failure that leaves an auto-merge armed is likewise treated as landed rather
   than retryable: only this command could have armed it. The whole

@@ -399,6 +399,9 @@ func TestMergePassesRequestThrough(t *testing.T) {
 	want := prmerge.Request{
 		Owner: "owner", Repo: "repo", Number: 701,
 		Method: ghissue.MergeRebase, HeadSha: testHeadSha, BaseRef: "main",
+		// The row's claim on the PR travels with the request, to be re-checked
+		// live: a snapshot is up to one poll old and the claim can be edited away.
+		Row: prmerge.RowIdentity{IssueNum: 578},
 	}
 	if got != want {
 		t.Fatalf("merge request = %#v, want %#v", got, want)

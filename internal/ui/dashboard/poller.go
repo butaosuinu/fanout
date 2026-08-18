@@ -232,19 +232,37 @@ func (p *poller) prSettled(repo string, number int) bool {
 // queue — and whether the pull request was found at all. The two are separate
 // answers: "nothing pending" and "not in the snapshot" must not release the same
 // hold.
+//
+// Every copy is checked, not just the first. One pull request can sit on several
+// rows, and the issue and branch fetches land at different times, so one copy can
+// still show the state before a re-enqueue that another already reflects. Any
+// copy showing the merge pending is enough to keep the hold.
 func (p *poller) prMergePending(repo string, number int) (pending, found bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	for _, pr := range p.prRefs(repo, number) {
+		found = true
+		if pr.AutoMerge || pr.Queued {
+			return true, true
+		}
+	}
+	return false, found
+}
+
+// prRefs collects every copy of one pull request in the latest snapshot. Callers
+// hold p.mu.
+func (p *poller) prRefs(repo string, number int) []ghissue.PRRef {
+	var out []ghissue.PRRef
 	for _, session := range p.latest.Sessions {
 		for i := range session.Panes {
 			for _, pr := range session.Panes[i].PRs {
 				if pr.Number == number && strings.EqualFold(pr.BaseRepo, repo) {
-					return pr.AutoMerge || pr.Queued, true
+					out = append(out, pr)
 				}
 			}
 		}
 	}
-	return false, false
+	return out
 }
 
 func settledPRRef(prs []ghissue.PRRef, repo string, number int) bool {

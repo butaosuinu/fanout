@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
@@ -215,6 +216,17 @@ type Request struct {
 	// BaseRef is the merge target the client rendered, re-checked live before the
 	// merge: a retarget does not move the head, so the SHA cannot pin it.
 	BaseRef string
+	// Row is how the snapshot row claimed this pull request, re-checked live for
+	// the same reason: the claim can be edited away without moving a commit.
+	Row RowIdentity
+}
+
+// RowIdentity is what makes a pull request this row's to merge. An issue row
+// owns it through the closing-issue link; a branch-backed row owns it by heading
+// that branch in this repository. Exactly one applies.
+type RowIdentity struct {
+	IssueNum int
+	Branch   string
 }
 
 // DeleteRequest is one remote head-ref delete, which is a separate action taken
@@ -295,10 +307,35 @@ func (s Service) fenceLive(ctx context.Context, req Request) error {
 	if live.Merged {
 		return ErrAlreadyMerged
 	}
+	if err := req.Row.stillOwns(live, req.Number); err != nil {
+		return err
+	}
 	return RenderedRef{HeadSha: req.HeadSha, BaseRef: req.BaseRef}.check(ghissue.PRRef{
 		HeadSha: live.HeadSha,
 		BaseRef: live.BaseRef,
 	})
+}
+
+// stillOwns re-checks the link that made this pull request the row's, against
+// what GitHub says now.
+//
+// Admission checked it against the snapshot, which is up to one poll old, and
+// neither way of losing the claim moves a commit: an issue row loses it when the
+// closing keyword is edited out of the body, and a branch row loses it when the
+// head branch is renamed. The head SHA and base fences see neither.
+func (row RowIdentity) stillOwns(live ghissue.PRTarget, number int) error {
+	if row.IssueNum > 0 {
+		if len(live.ClosesIssues) == 0 || slices.Contains(live.ClosesIssues, row.IssueNum) {
+			// An empty list is "GitHub did not say", not "closes nothing": the
+			// field is absent on the gh pr list path this row may have come from.
+			return nil
+		}
+		return fmt.Errorf("%w: #%d no longer closes #%d", ErrForeignPR, number, row.IssueNum)
+	}
+	if row.Branch == "" || live.HeadRef == "" || live.HeadRef == row.Branch {
+		return nil
+	}
+	return fmt.Errorf("%w: #%d now heads %q, not %q", ErrForeignPR, number, live.HeadRef, row.Branch)
 }
 
 // classifySendFailure decides whether a failed merge command is safe to retry.

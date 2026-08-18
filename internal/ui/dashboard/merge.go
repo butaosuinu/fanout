@@ -515,7 +515,7 @@ func mergePayload(w http.ResponseWriter, r *http.Request, pv sessionview.PaneVie
 		apiError(w, http.StatusConflict, mergePreflightCode(err), err.Error(), "")
 		return prmerge.Request{}, false
 	}
-	return mergeRequestFor(rr, ref, body), true
+	return mergeRequestFor(rr, ref, body, pv), true
 }
 
 // selectMergeRef resolves the addressed pull request and runs every check that
@@ -540,11 +540,27 @@ func selectMergeRef(
 // ref rather than the client's echo: a caller that omits baseRef would otherwise
 // switch the retarget fence off. The echo is still compared against this value
 // in Preflight.
-func mergeRequestFor(rr repoRef, ref ghissue.PRRef, body mergeBody) prmerge.Request {
+func mergeRequestFor(
+	rr repoRef,
+	ref ghissue.PRRef,
+	body mergeBody,
+	pv sessionview.PaneView,
+) prmerge.Request {
 	return prmerge.Request{
 		Owner: rr.owner, Repo: rr.repo, Number: ref.Number,
 		Method: body.method, HeadSha: ref.HeadSha, BaseRef: ref.BaseRef,
+		Row: rowIdentity(pv),
 	}
+}
+
+// rowIdentity is how this row claims a pull request, carried to the live fence
+// so the claim is re-checked against GitHub rather than only against the
+// snapshot the click was aimed at.
+func rowIdentity(pv sessionview.PaneView) prmerge.RowIdentity {
+	if pv.IssueNum > 0 {
+		return prmerge.RowIdentity{IssueNum: pv.IssueNum}
+	}
+	return prmerge.RowIdentity{Branch: strings.TrimSpace(pv.BranchName)}
 }
 
 var errMergeBodyTooLarge = errors.New("request body is too large")

@@ -303,6 +303,7 @@ type fakePort struct {
 	// openHeads is what OpenPRNumbersForHead answers: the OPEN pull requests
 	// sharing the head branch.
 	liveHeadRef  string
+	liveCloses   []int
 	openHeads    []int
 	openHeadsErr error
 	mergedRead   int
@@ -324,10 +325,11 @@ func (f *fakePort) PRState(_ context.Context, _, _ string, _ int) (ghissue.PRTar
 	// The pre-merge fence reads first; only later reads report the merge.
 	merged := f.alwaysMerged || (!f.notMerged && f.mergedRead > 1)
 	return ghissue.PRTarget{
-		Merged:  merged,
-		BaseRef: cmpOr(f.liveBase, "main"),
-		HeadRef: cmpOr(f.liveHeadRef, "fanout/foo"),
-		HeadSha: cmpOr(f.liveHead, "abc123"),
+		Merged:       merged,
+		BaseRef:      cmpOr(f.liveBase, "main"),
+		HeadRef:      cmpOr(f.liveHeadRef, "fanout/foo"),
+		ClosesIssues: f.liveCloses,
+		HeadSha:      cmpOr(f.liveHead, "abc123"),
 	}, nil
 }
 
@@ -516,6 +518,66 @@ func TestMergeKeepsPreSendFailuresRetryable(t *testing.T) {
 			// One read for the live fence, none for a probe.
 			if port.mergedRead != 1 {
 				t.Fatalf("PRState reads = %d, want 1 (no probe)", port.mergedRead)
+			}
+		})
+	}
+}
+
+// TestMergeRefusesAPullRequestTheRowNoLongerOwns pins the live half of the
+// ownership check. Admission compares against a snapshot up to one poll old, and
+// neither way of losing the claim moves a commit — so the head and base fences
+// see nothing.
+func TestMergeRefusesAPullRequestTheRowNoLongerOwns(t *testing.T) {
+	tests := []struct {
+		name    string
+		row     RowIdentity
+		live    fakePort
+		wantErr bool
+	}{
+		{
+			name: "issue row whose closing keyword was edited out",
+			row:  RowIdentity{IssueNum: 578},
+			live: fakePort{liveCloses: []int{99}}, wantErr: true,
+		},
+		{
+			name: "issue row still closed by the pull request",
+			row:  RowIdentity{IssueNum: 578},
+			live: fakePort{liveCloses: []int{578}},
+		},
+		{
+			// The gh pr list path does not carry the link at all; absence is not
+			// evidence that the pull request stopped closing anything.
+			name: "issue row when GitHub reports no closing issues",
+			row:  RowIdentity{IssueNum: 578},
+		},
+		{
+			name: "branch row whose head was renamed",
+			row:  RowIdentity{Branch: "fanout/foo"},
+			live: fakePort{liveHeadRef: "fanout/renamed"}, wantErr: true,
+		},
+		{
+			name: "branch row still heading its branch",
+			row:  RowIdentity{Branch: "fanout/foo"},
+			live: fakePort{liveHeadRef: "fanout/foo"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			port := tt.live
+			req := baseRequest()
+			req.Row = tt.row
+			_, err := Service{GH: &port}.Merge(context.Background(), req)
+			if tt.wantErr {
+				if !errors.Is(err, ErrForeignPR) {
+					t.Fatalf("Merge() error = %v, want ErrForeignPR", err)
+				}
+				if len(port.mergeCalls) != 0 {
+					t.Fatalf("merge calls = %#v, want none", port.mergeCalls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
 			}
 		})
 	}
