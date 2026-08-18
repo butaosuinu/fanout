@@ -783,7 +783,7 @@ describe("複数 PR の同時待機", () => {
 /* サーバは auto-merge の取り消しで claim を解除できる。クライアントが塞いだままだと
  * その経路に到達できず、リロードするまでボタンが死ぬ。 */
 describe("queue の取り消し", () => {
-  it("auto-merge が消えたら queued の hold を解除する", async () => {
+  it("保留が消えたら queued の hold を解除する", async () => {
     server.use(
       http.post(MERGE_PATH, () =>
         HttpResponse.json({
@@ -791,7 +791,6 @@ describe("queue の取り消し", () => {
           method: "squash",
           merged: false,
           queued: true,
-          autoMerge: true,
           refreshQueued: true,
         }),
       ),
@@ -816,9 +815,10 @@ describe("queue の取り消し", () => {
       "true",
     );
 
-    /* poll が armed を観測し、そのあと消えたときだけ取り消し。 */
-    streamSnapshot(snapshotWithPR({ autoMerge: true }));
-    streamSnapshot(snapshotWithPR({ autoMerge: false }));
+    /* poll が保留を観測し、そのあと消えたときだけ取り消し。checks 済みで直接
+     * queue に入った場合は auto-merge ではなく queue entry が保留の印になる。 */
+    streamSnapshot(snapshotWithPR({ queued: true }));
+    streamSnapshot(snapshotWithPR({ queued: false }));
     await waitFor(() =>
       expect(within(drawer).getByRole("button", { name: "#701 をマージ" })).toBeInTheDocument(),
     );

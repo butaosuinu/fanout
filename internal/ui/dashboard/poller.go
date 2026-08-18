@@ -227,18 +227,19 @@ func (p *poller) prSettled(repo string, number int) bool {
 	return false
 }
 
-// prAutoMerge reports whether the latest snapshot shows an auto-merge armed on
-// this pull request, and whether the pull request was found at all. The two are
-// separate answers: "no auto-merge" and "not in the snapshot" must not release
-// the same hold.
-func (p *poller) prAutoMerge(repo string, number int) (armed, found bool) {
+// prMergePending reports whether the latest snapshot shows GitHub still holding
+// a merge for this pull request — an auto-merge armed, or an entry in the merge
+// queue — and whether the pull request was found at all. The two are separate
+// answers: "nothing pending" and "not in the snapshot" must not release the same
+// hold.
+func (p *poller) prMergePending(repo string, number int) (pending, found bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for _, session := range p.latest.Sessions {
 		for i := range session.Panes {
 			for _, pr := range session.Panes[i].PRs {
 				if pr.Number == number && strings.EqualFold(pr.BaseRepo, repo) {
-					return pr.AutoMerge, true
+					return pr.AutoMerge || pr.Queued, true
 				}
 			}
 		}

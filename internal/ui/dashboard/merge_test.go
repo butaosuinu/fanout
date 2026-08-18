@@ -702,7 +702,7 @@ func TestMergeHoldIgnoresASameNumberedPRElsewhere(t *testing.T) {
 func TestQueuedHoldEndsWhenTheAutoMergeIsCancelled(t *testing.T) {
 	armed := openPR()
 	armed.AutoMerge = true
-	fake := &fakeMerger{res: prmerge.Result{Queued: true, AutoMerge: true}}
+	fake := &fakeMerger{res: prmerge.Result{Queued: true}}
 	p := newPollerBase(t.TempDir(), newHub())
 	p.latest, p.repo, p.resolved = mergeSnapshot(armed), "owner/repo", true
 	s := &Server{
@@ -735,13 +735,47 @@ func TestQueuedHoldEndsWhenTheAutoMergeIsCancelled(t *testing.T) {
 	}
 }
 
+// TestQueuedHoldEndsWhenTheQueueEntryGoes covers the other shape of a queued
+// merge. gh enqueues directly when the checks are already finished, so there is
+// no auto-merge to watch — the entry in the merge queue is what GitHub is
+// holding, and its removal is the same cancellation.
+func TestQueuedHoldEndsWhenTheQueueEntryGoes(t *testing.T) {
+	enqueued := openPR()
+	enqueued.Queued = true
+	fake := &fakeMerger{res: prmerge.Result{Queued: true}}
+	p := newPollerBase(t.TempDir(), newHub())
+	p.latest, p.repo, p.resolved = mergeSnapshot(enqueued), "owner/repo", true
+	s := &Server{
+		poller: p, hostPort: testHostPort, token: testToken,
+		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
+		mergeHeld: map[string]time.Time{},
+	}
+	h, err := s.handler()
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", code)
+	}
+	assertAPIError(t, requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
+		http.StatusConflict, "merge_unconfirmed")
+
+	p.mu.Lock()
+	p.latest = mergeSnapshot(openPR()) // dequeued, still open
+	p.mu.Unlock()
+
+	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
+		t.Fatalf("status after dequeue = %d, want 200", code)
+	}
+}
+
 // TestQueuedHoldSurvivesTheSnapshotThatPredatesIt pins the ordering the release
 // depends on. `gh pr merge` is what arms the auto-merge, so the snapshot taken
 // before the click still says there is none — reading that as a cancellation
 // would drop the hold seconds after taking it, which is exactly when an
 // impatient second click lands.
 func TestQueuedHoldSurvivesTheSnapshotThatPredatesIt(t *testing.T) {
-	fake := &fakeMerger{res: prmerge.Result{Queued: true, AutoMerge: true}}
+	fake := &fakeMerger{res: prmerge.Result{Queued: true}}
 	p := newPollerBase(t.TempDir(), newHub())
 	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true // not armed yet
 	s := &Server{

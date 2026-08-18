@@ -57,12 +57,7 @@ type mergeResponse struct {
 	Queued bool `json:"queued"`
 	// Unknown is the merge command succeeding without a confirmable outcome. The
 	// client must block a resend until a snapshot settles it.
-	Unknown bool `json:"unknown"`
-	// AutoMerge says GitHub had an auto-merge armed when the outcome was read.
-	// The client holds the button on a queued merge until the PR settles, and
-	// this is what lets it also let go when the auto-merge is canceled instead —
-	// the same release the server applies to its own claim.
-	AutoMerge     bool `json:"autoMerge"`
+	Unknown       bool `json:"unknown"`
 	RefreshQueued bool `json:"refreshQueued"`
 }
 
@@ -171,6 +166,18 @@ func (s *Server) admitMerge(
 // that cannot be read may still describe an unresolved merge, and one that
 // cannot be written leaves a guard that would not survive a restart.
 func (s *Server) takeClaim(w http.ResponseWriter, key string, rr repoRef, number int) bool {
+	var claimed bool
+	if lockErr := s.withClaimLock(func() {
+		claimed = s.takeClaimLocked(w, key, rr, number)
+	}); lockErr != nil {
+		apiError(w, http.StatusServiceUnavailable, "claim_unavailable",
+			"the merge was not started: another dashboard holds the claim file", redactGHDetail(lockErr))
+		return false
+	}
+	return claimed
+}
+
+func (s *Server) takeClaimLocked(w http.ResponseWriter, key string, rr repoRef, number int) bool {
 	claims, err := s.readMergeClaims()
 	if err != nil {
 		apiError(w, http.StatusServiceUnavailable, "claim_unavailable",
@@ -226,7 +233,6 @@ func writeMergeResponse(
 		Merged:        res.Merged,
 		Queued:        res.Queued,
 		Unknown:       res.Unknown,
-		AutoMerge:     res.AutoMerge,
 		RefreshQueued: refreshQueued,
 	})
 }
@@ -236,6 +242,28 @@ func writeMergeResponse(
 // process: a dashboard restarted after a lost response would otherwise let the
 // same merge be fired again.
 const mergeClaimsFile = "merge-claims.json"
+
+// claimLockWait bounds how long one request waits for another process to finish
+// its own read-decide-write on the claims file. The section is a read, a
+// decision, and one atomic write, so a wait this long already means something is
+// wrong rather than busy.
+const claimLockWait = 2 * time.Second
+
+// withClaimLock runs fn while holding the cross-process lock on the claims file.
+//
+// mergeMu only orders the goroutines inside one dashboard. Two dashboards can
+// run against the same repository — the startup probe for an existing one can
+// time out — and an atomic write does not make read-decide-write atomic, so
+// without this both could read "no claim here" and both send the merge.
+func (s *Server) withClaimLock(fn func()) error {
+	release, err := atomicfs.Lock(s.mergeClaimsPath(), claimLockWait)
+	if err != nil {
+		return err
+	}
+	defer release()
+	fn()
+	return nil
+}
 
 func (s *Server) mergeClaimsPath() string {
 	return filepath.Join(s.poller.projectRoot, ".fanout", mergeClaimsFile)
@@ -253,14 +281,12 @@ func (s *Server) mergeClaimsPath() string {
 type mergeClaim struct {
 	Kind string `json:"kind"`
 	At   string `json:"at"`
-	// Armed records that GitHub had an auto-merge on the PR when the merge was
-	// read. Without it, a missing auto-merge later says nothing: this base may
-	// never have used one.
-	Armed bool `json:"armed,omitempty"`
-	// Seen records that a poll has since shown that auto-merge too. Only a
-	// true-to-false transition is a cancellation; the snapshot taken before the
-	// merge still says false, and reading that as "canceled" would drop the hold
-	// seconds after taking it — which is exactly when a second click is likely.
+	// Seen records that a poll has shown GitHub still holding this merge —
+	// an auto-merge armed, or an entry in the merge queue. Only a true-to-false
+	// transition is a cancellation: the snapshot taken before the merge says
+	// false because the merge had not happened yet, and reading that as "canceled"
+	// would drop the hold seconds after taking it, which is exactly when a second
+	// click is likely.
 	Seen bool `json:"seen,omitempty"`
 }
 
@@ -321,14 +347,18 @@ func (s *Server) releaseClaim(rr repoRef, number int) {
 	s.mergeMu.Lock()
 	defer s.mergeMu.Unlock()
 	delete(s.mergeHeld, key)
-	claims, err := s.readMergeClaims()
-	if err != nil {
-		// Rewriting a file that cannot be read would discard whatever it still
-		// says. The recorded hold stays, which refuses later attempts.
-		return
-	}
-	delete(claims, key)
-	_ = s.writeMergeClaims(claims)
+	// A lock failure leaves the recorded hold in place, which refuses later
+	// attempts — the safe direction for a merge that is already done.
+	_ = s.withClaimLock(func() {
+		claims, err := s.readMergeClaims()
+		if err != nil {
+			// Rewriting a file that cannot be read would discard whatever it
+			// still says.
+			return
+		}
+		delete(claims, key)
+		_ = s.writeMergeClaims(claims)
+	})
 }
 
 // holdUnconfirmed records a pull request whose merge outcome is unreadable, so
@@ -345,17 +375,19 @@ func (s *Server) holdUnconfirmed(rr repoRef, number int, res prmerge.Result) {
 	// read-only) costs the cross-restart half of the guard, but it must not also
 	// hand this process a way to fire the same merge again.
 	s.mergeHeld[key] = time.Now()
-	claims, err := s.readMergeClaims()
-	if err != nil {
-		// The in-memory hold above already blocks this process; overwriting an
-		// unreadable file would drop the other holds it may still carry.
-		return
-	}
-	claims[key] = mergeClaim{
-		Kind:  kind,
-		At:    time.Now().UTC().Format(time.RFC3339),
-		Armed: res.AutoMerge,
-	}
+	_ = s.withClaimLock(func() {
+		claims, err := s.readMergeClaims()
+		if err != nil {
+			// The in-memory hold above already blocks this process; overwriting
+			// an unreadable file would drop the other holds it may still carry.
+			return
+		}
+		s.upgradeClaim(claims, key, kind)
+	})
+}
+
+func (s *Server) upgradeClaim(claims map[string]mergeClaim, key, kind string) {
+	claims[key] = mergeClaim{Kind: kind, At: time.Now().UTC().Format(time.RFC3339)}
 	_ = s.writeMergeClaims(claims)
 }
 
@@ -383,28 +415,30 @@ func (s *Server) unconfirmed(key string, rr repoRef, claims map[string]mergeClai
 // claimOver reports whether GitHub has answered the question this hold was
 // waiting on.
 //
-// Merged or closed ends any hold. A queued merge has a second ending: `gh pr
-// merge` arms an auto-merge on a queue-required base, and canceling that
-// (`--disable-auto`) leaves the pull request open with nothing pending. Without
-// this, the hold outlives the thing it was protecting and the row can never be
-// merged again. The armed flag is what makes the absence meaningful — a base
-// that never used an auto-merge would otherwise look canceled from the start.
+// Merged or closed ends any hold. A queued merge has a second ending: what `gh
+// pr merge` produced on a queue-required base — an armed auto-merge, or an entry
+// in the merge queue — can be taken away again (`--disable-auto`, or removal
+// from the queue), leaving the pull request open with nothing pending. Without
+// this the hold outlives the thing it was protecting and the row can never be
+// merged again.
+//
+// The sighting is what makes the absence mean something. Before the poller has
+// seen GitHub holding the merge, "nothing pending" is just the snapshot that
+// predates the click.
 func (s *Server) claimOver(key string, rr repoRef, claims map[string]mergeClaim, number int) bool {
 	repo := rr.owner + "/" + rr.repo
 	if s.poller.prSettled(repo, number) {
 		return true
 	}
 	claim := claims[key]
-	if claim.Kind != claimQueued || !claim.Armed {
+	if claim.Kind != claimQueued {
 		return false
 	}
-	armed, found := s.poller.prAutoMerge(repo, number)
+	pending, found := s.poller.prMergePending(repo, number)
 	if !found {
 		return false
 	}
-	if armed {
-		// First sighting through the poller. Record it, because the absence that
-		// follows is only meaningful once a presence came before it.
+	if pending {
 		if !claim.Seen {
 			claim.Seen = true
 			claims[key] = claim

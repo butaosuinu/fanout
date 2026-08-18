@@ -27,9 +27,9 @@ export type Unknown = {
   prNumber: number;
   repo: string;
   queued?: boolean;
-  armed?: boolean;
-  /* poll がその auto-merge を実際に見た。マージ前の snapshot はまだ armed では
-   * ないので、その false を取り消しと読むと hold を取った直後に落としてしまう。 */
+  /* poll が「GitHub がまだ保留している」ことを実際に見た。マージ前の snapshot は
+   * まだ保留を持たないので、その不在を取り消しと読むと hold を取った直後に
+   * 落としてしまう。 */
   seen?: boolean;
 };
 
@@ -100,8 +100,14 @@ function advanceHolds(snap: Snapshot, holds: Unknown[]): Unknown[] {
 }
 
 function armedSeen(snap: Snapshot, held: Unknown): Unknown {
-  if (!held.queued || !held.armed || held.seen) return held;
-  return findPR(snap, held)?.autoMerge ? { ...held, seen: true } : held;
+  if (!held.queued || held.seen) return held;
+  return mergePending(findPR(snap, held)) ? { ...held, seen: true } : held;
+}
+
+/* GitHub がまだこのマージを保留しているか。gh は checks 未完了なら auto-merge を
+ * 武装し、完了済みなら直接 queue に入れるので、両方を見る。 */
+function mergePending(pr: PRRef | undefined): boolean {
+  return !!pr && (!!pr.autoMerge || !!pr.queued);
 }
 
 /* 取り消しは true -> false の遷移だけ。観測前の false はマージ前の snapshot。 */
@@ -109,7 +115,7 @@ function holdOver(snap: Snapshot, held: Unknown): boolean {
   if (settledPR(snap, held)) return true;
   if (!held.queued || !held.seen) return false;
   const pr = findPR(snap, held);
-  return !!pr && !pr.autoMerge;
+  return !!pr && !mergePending(pr);
 }
 
 function changed(prev: Unknown[], next: Unknown[]): boolean {
@@ -181,7 +187,7 @@ export function useMergeTracking(snap: Snapshot | null): MergeTracking {
     if (res.unknown || res.queued) {
       setUnknown((prev) => [
         ...prev,
-        { prNumber: row.prNumber, repo: row.repo, queued: res.queued, armed: res.autoMerge },
+        { prNumber: row.prNumber, repo: row.repo, queued: res.queued },
       ]);
     } else {
       setPending((prev) => [

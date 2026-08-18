@@ -308,10 +308,17 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   would lose an unresolved merge and let the next reservation overwrite the only
   record of it.
   A queued merge is held the same way but has a second ending: it records that
-  GitHub had an auto-merge armed, and cancelling that (`--disable-auto`) leaves
-  the PR open with nothing pending, which no merged/closed check can ever
-  satisfy. The claim on an unreadable outcome never takes that exit — that merge
-  may already have happened. The
+  what `gh pr merge` produced on a queue-required base — an armed auto-merge, or
+  an entry in the merge queue — can be taken away again, leaving the PR open with
+  nothing pending, which no merged/closed check can ever satisfy. A poll has to
+  have seen that pending state before its absence counts, since the snapshot from
+  before the click shows nothing pending either. The claim on an unreadable
+  outcome never takes that exit — that merge may already have happened. A send
+  failure that leaves an auto-merge armed is likewise treated as landed rather
+  than retryable: only this command could have armed it. The whole
+  read-check-reserve sequence runs under a lock on the claims file, because two
+  dashboards can run against one repository and an atomic write makes each write
+  indivisible, not the decision around it. The
   diff toolbar additionally pins the PR it opened with — number, head, and base —
   and requires the patch on screen to be comparable with what the merge would
   bring in: the PR's head must be the commit `/api/diff` read, that read must be
