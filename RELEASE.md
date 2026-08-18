@@ -63,13 +63,19 @@ auto-generated notes. There is no `make release` target and no goreleaser config
 
    ```bash
    git tag -a vX.Y.Z origin/main -m "vX.Y.Z"
+   ```
+
+   ```bash
    git push origin vX.Y.Z                 # this starts the public release
    ```
 
-   The tag does not have to be created from the `main` branch checkout —
-   `origin/main` is named explicitly, so any clean worktree works. Note the PR
-   review gate (`.claude/hooks/pre-pr-review-gate.sh`) only intercepts
-   `gh pr create`; **a tag push is not gated.**
+   Run the two commands as separate calls: the agent push gate denies a push
+   chained after `git tag` in the same call (the tag does not exist yet when
+   the hook inspects the command, so its tag exemption cannot apply). The tag
+   does not have to be created from the `main` branch checkout —
+   `origin/main` is named explicitly, so any clean worktree works. Note the
+   PR review gate (`.claude/hooks/pre-pr-review-gate.sh`) only intercepts
+   `gh pr create`; **a tag push on its own is not gated.**
 
 5. **Watch the build.**
 

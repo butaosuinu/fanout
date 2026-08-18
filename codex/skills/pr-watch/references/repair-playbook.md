@@ -257,7 +257,9 @@ once against that final commit (prefer an umbrella target such as `make check`
 when the project defines one; otherwise resolve it from AGENTS.md, CLAUDE.md,
 or the build files). A CI failure that reproduces locally recurs on the next
 push unless the full gate passed. Repositories may enforce this with a push
-gate; never bypass it with `--no-verify`. Then push with an explicit refspec:
+gate; never bypass it with `--no-verify`, and run the push as its own
+command — a gate may deny a push chained after commit or rebase in the same
+call. Then push with an explicit refspec:
 
 ```bash
 git push "$head_remote" HEAD:"$head"

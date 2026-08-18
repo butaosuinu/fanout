@@ -46,9 +46,9 @@ issue #373 の旧集計は、セッション履歴 102 件、CI 失敗 22 run、
    表示幅を使っているか。
 9. **契約文書を実装と照合する**：`README*.md` と `site/content/docs/**` の英日ペア、
    schema、コマンド例、既定値を正典と突き合わせたか。
-10. **失敗と空を「対象なし」と同一視しない**：外部コマンドのエラー、timeout、
-    空出力を、成功時の「0 件」「チェックなし」「完了」と同じ分岐に落として
-    いないか。失敗は unknown または blocked として伝播させる。
+10. **失敗を「対象なし」と同一視しない**：外部コマンドの非ゼロ終了や timeout を、
+    成功時の「0 件」「完了」と同じ分岐に落としていないか。空出力は終了コードを
+    見てから解釈し、意図した fail-open は根拠を明示する。
 
 ## 機械チェック
 
@@ -70,8 +70,10 @@ issue #373 の旧集計は、セッション履歴 102 件、CI 失敗 22 run、
 - `make test`、`make lint`、`make lint-web` は失敗の切り分けに使う。
   同じ最終ゲートで個別に重ねて実行しない。
 - branch への `git push` は agent hook でゲートされる。clean tree での
-  `make check` 成功が marker を書き、push はそのまま通る。deny されたら
-  `make check` を通し直す。`--no-verify` での回避は禁止。緊急回避は
+  `make check` 成功が marker を書き、push はそのまま通る。deny の理由が
+  marker 不一致なら `make check` を通し直す。commit や rebase と連結した
+  push は marker が正しくても deny される。push を単独コマンドに分けて
+  再実行する。`--no-verify` での回避は禁止。緊急回避は
   `FANOUT_SKIP_PUSH_CHECK=1`。
 - dry-run / status 出力を変えたら `FANOUT_GOLDEN_UPDATE=1 make test-tier2` で
   golden を regen して diff を目視する。

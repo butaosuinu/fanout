@@ -668,7 +668,9 @@ done
 - CI を通すためにテストや必須チェックを弱めない。
 - リポジトリの push ゲート(pre-push 系 hook や PreToolUse gate)を `--no-verify` や
   hooks 設定の書き換えで回避しない。push が deny されたら、指示されたコマンド
-  (canonical full gate)を最終 commit で通してから push し直す。
+  (canonical full gate)を最終 commit で通してから push し直す。deny 理由が
+  「ref を変更するコマンドとの連結」なら gate の再実行は不要で、push を
+  単独コマンドに分けて再実行する。
 - GitHub の古い thread や push 前の CI log を根拠に、push 後も同じ pass で修正を続けない。
 - approval / `:+1:` 待ちだけのために full One Pass を繰り返さない。
 - unchanged cheap snapshot をモデルに何度も読ませない。
