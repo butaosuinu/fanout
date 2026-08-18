@@ -100,8 +100,9 @@ export function makeSession(
   return { parent, panes, rollup: makeRollup({ total: panes.length, ...rollup }) };
 }
 
-/* poll ごとに進む刻印。固定値だと「hold より後に届いた snapshot か」を見る判定が
- * 現実と違う挙動になる — poller は毎回新しい時刻を打つ。 */
+/* GitHub 読み取りごとに進む刻印。固定値だと「hold より後に GitHub を読んだか」を
+ * 見る判定が現実と違う挙動になる。generatedAt は据え置き — あちらは 2 秒ごとの
+ * cheap tick でも動く値で、区別できることがこの型の要点。 */
 let snapshotSeq = 0;
 
 export function makeSnapshot(sessions: Session[], over: Partial<Snapshot> = {}): Snapshot {
@@ -110,7 +111,8 @@ export function makeSnapshot(sessions: Session[], over: Partial<Snapshot> = {}):
   return {
     repo: "octo/fanout",
     projectRoot: "/tmp/repo",
-    generatedAt: new Date(Date.UTC(2026, 5, 13, 1, 23, snapshotSeq)).toISOString(),
+    generatedAt: "2026-06-13T01:23:45Z",
+    ghRefreshedAt: new Date(Date.UTC(2026, 5, 13, 1, 23, snapshotSeq)).toISOString(),
     sessions,
     rollup: makeRollup({ total }),
     degraded: { tmux: false, github: false },

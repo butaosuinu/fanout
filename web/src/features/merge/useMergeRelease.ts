@@ -27,10 +27,11 @@ export type Unknown = {
   prNumber: number;
   repo: string;
   queued?: boolean;
-  /* hold を取った時点で見えていた snapshot。これと違う snapshot が届いて初めて、
-   * 「保留が無い」が意味を持つ — マージ前の snapshot はまだ保留を持たないので、
-   * その不在を取り消しと読むと hold を取った直後に落としてしまう。サーバが
-   * claim 後の GH refresh を待つのと同じ規則。 */
+  /* hold を取った時点の GitHub 読み取り世代。これと違う世代が届いて初めて、
+   * 「保留が無い」が意味を持つ — マージ前の読み取りはまだ保留を持たないので、
+   * その不在を取り消しと読むと hold を取った直後に落としてしまう。generatedAt では
+   * なく ghRefreshedAt を見るのが要点で、前者は 2 秒ごとの cheap tick でも動く。
+   * サーバが claim 後の GH refresh を待つのと同じ規則。 */
   at?: string;
 };
 
@@ -109,7 +110,7 @@ function mergePending(snap: Snapshot, held: Unknown): boolean {
  * GH refresh を待つのと同じ規則)。 */
 function holdOver(snap: Snapshot, held: Unknown): boolean {
   if (settledPR(snap, held)) return true;
-  if (!held.queued || snap.generatedAt === held.at) return false;
+  if (!held.queued || snap.ghRefreshedAt === held.at) return false;
   return refsOf(snap, held).length > 0 && !mergePending(snap, held);
 }
 
@@ -178,7 +179,7 @@ export function useMergeTracking(snap: Snapshot | null): MergeTracking {
     setNotice(null);
   }, []);
 
-  const at = snap?.generatedAt;
+  const at = snap?.ghRefreshedAt;
   const apply = useCallback(
     (row: Row, res: MergeOutcome) => {
       /* 追加であって置き換えではない。前の送信の hold を落とすと、まだ決着して

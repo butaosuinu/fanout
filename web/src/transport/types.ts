@@ -9,6 +9,10 @@ export interface Snapshot {
   repo: string; // "owner/name"; 未解決時 ""
   projectRoot: string;
   generatedAt: string; // RFC3339
+  /* GitHub 層が最後に読み取りを開始した時刻(RFC3339)。generatedAt とは別物で、
+   * snapshot は 2 秒ごとにローカル state だけから作り直される。「あの時点より後に
+   * GitHub を読んだか」はこちらでしか判定できない。初回 refresh 前は欠落 */
+  ghRefreshedAt?: string;
   sessions: Session[] | null;
   rollup: Rollup;
   degraded: Degraded;

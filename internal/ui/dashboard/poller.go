@@ -298,22 +298,37 @@ func (p *poller) runGHTick() {
 	if p.hub.subscriberCount() == 0 && !p.hub.snapshotRecentlyRequested(time.Now()) {
 		return
 	}
+	// The stamp is when the reads began, not when they finished. A merge landing
+	// mid-tick would otherwise be older than a stamp taken at the end, and its
+	// hold would treat a pull request read before the click as evidence taken
+	// after it. Starting-time is the conservative end of that window.
+	startedAt := time.Now()
 	p.ensureResolved()
 	p.refreshGH()
-	// The stamp is published with the snapshot it describes, not before it: a
-	// hold reads both, and a new time next to the old rows would say "GitHub has
-	// been read since your merge" about data taken before it.
-	p.publishGHRefresh(time.Now())
-}
-
-func (p *poller) publishGHRefresh(at time.Time) {
-	p.rebuild(func() { p.ghRefreshedAt = at })
+	// The stamp is published with the snapshot it describes: a hold reads both,
+	// and a new time next to the old rows would say "GitHub has been read since
+	// your merge" about data taken before it.
+	p.publishGHRefresh(startedAt)
 }
 
 // ghFreshAfter reports whether GitHub data has been refetched since t. It is how
 // a hold tells "GitHub is not holding this merge" from "the last GitHub read
 // predates the merge, so of course it isn't". That is a statement about the age
 // of the data, not about the outcome — the outcome still only comes from GitHub.
+// ghStamp formats the refresh this rebuild publishes: the one passed in, or the
+// one already recorded when this is a cheap rebuild.
+func (p *poller) ghStamp(at time.Time) string {
+	if at.IsZero() {
+		p.mu.RLock()
+		at = p.ghRefreshedAt
+		p.mu.RUnlock()
+	}
+	if at.IsZero() {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339Nano)
+}
+
 func (p *poller) ghFreshAfter(t time.Time) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -621,14 +636,21 @@ func (p *poller) build() sessionview.Snapshot {
 }
 
 func (p *poller) rebuildAndBroadcast() {
-	p.rebuild(nil)
+	p.rebuild(time.Time{})
+}
+
+func (p *poller) publishGHRefresh(at time.Time) {
+	p.rebuild(at)
 }
 
 // rebuild stores the newest snapshot and broadcasts it when the content moved.
-// commit runs inside the same lock section, so anything it publishes and the
-// snapshot become visible together.
-func (p *poller) rebuild(commit func()) {
+//
+// ghAt is the GitHub refresh this snapshot describes; the zero value keeps the
+// one already published. It travels inside the snapshot so that a client reading
+// the rows and the refresh time can never see them disagree.
+func (p *poller) rebuild(ghAt time.Time) {
 	snap := p.build()
+	snap.GHRefreshedAt = p.ghStamp(ghAt)
 	data, err := json.Marshal(snap)
 	if err != nil {
 		return
@@ -640,8 +662,8 @@ func (p *poller) rebuild(commit func()) {
 	p.latest = snap
 	p.latestJSON = data
 	p.lastKey = key
-	if commit != nil {
-		commit()
+	if !ghAt.IsZero() {
+		p.ghRefreshedAt = ghAt
 	}
 	p.mu.Unlock()
 

@@ -184,6 +184,12 @@ func (s *Server) takeClaimLocked(w http.ResponseWriter, key string, rr repoRef, 
 			"the merge was not started: existing holds could not be read", redactGHDetail(err))
 		return false
 	}
+	// The file is the record of record. Deleting an entry from it is the
+	// documented way out of a hold that never resolves, and that has to work on a
+	// running dashboard — otherwise the instructions only take effect on restart.
+	if _, onDisk := claims[key]; !onDisk {
+		delete(s.mergeHeld, key)
+	}
 	if s.unconfirmed(key, rr, claims, number) {
 		apiError(w, http.StatusConflict, "merge_unconfirmed",
 			"an earlier merge for this pull request has not been confirmed yet", "")

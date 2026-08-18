@@ -312,9 +312,11 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   A queued merge is held the same way but has a second ending: it records that
   what `gh pr merge` produced on a queue-required base — an armed auto-merge, or
   an entry in the merge queue — can be taken away again, leaving the PR open with
-  nothing pending, which no merged/closed check can ever satisfy. A poll has to
-  have seen that pending state before its absence counts, since the snapshot from
-  before the click shows nothing pending either, and every copy of the PR in the
+  nothing pending, which no merged/closed check can ever satisfy. A GitHub read that began after the hold has to
+  have happened before its absence counts, since a read from before the click
+  shows nothing pending either — and that read is what the snapshot's
+  `ghRefreshedAt` names, which the client needs too because snapshots are rebuilt
+  from local state every couple of seconds without GitHub in it, and every copy of the PR in the
   snapshot is consulted — one pull request sits on several rows and the issue and
   branch fetches land at different times. Both the merge and the branch delete also re-check how the
   row claimed the PR in the first place (the closing-issue link with its

@@ -1327,3 +1327,38 @@ func TestClaimTimestampKeepsSubSecondOrder(t *testing.T) {
 		t.Fatalf("a refresh at %v reads as later than the claim at %v", earlier, stamped)
 	}
 }
+
+// TestManualClaimDeletionTakesEffectImmediately pins the documented way out of a
+// hold that never resolves. The instructions say to delete the entry, so that
+// has to work on a running dashboard — an in-memory copy that outlives the file
+// would make them true only after a restart.
+func TestManualClaimDeletionTakesEffectImmediately(t *testing.T) {
+	fake := &fakeMerger{res: prmerge.Result{Unknown: true}}
+	p := newPollerBase(t.TempDir(), newHub())
+	claims := filepath.Join(t.TempDir(), mergeClaimsFile)
+	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
+	s := &Server{
+		poller: p, hostPort: testHostPort, token: testToken,
+		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
+		mergeHeld:  map[string]time.Time{},
+		claimsPath: claims,
+	}
+	h, err := s.handler()
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", code)
+	}
+	assertAPIError(t, requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
+		http.StatusConflict, "merge_unconfirmed")
+
+	// What the documentation tells a user to do.
+	if err := os.WriteFile(claims, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()).Code; code != http.StatusOK {
+		t.Fatalf("status after deleting the entry = %d, want 200", code)
+	}
+}
