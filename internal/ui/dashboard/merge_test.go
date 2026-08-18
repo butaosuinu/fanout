@@ -1120,3 +1120,40 @@ func TestConfirmedMergeLeavesNoClaim(t *testing.T) {
 		t.Fatalf("in-memory holds = %v, want none", s.mergeHeld)
 	}
 }
+
+// TestMergeRefusesWhenClaimsCannotBeRead pins the difference between "no file"
+// and "unreadable file". Reading a corrupt claims file as empty would lose an
+// unresolved merge and let the next reservation overwrite the only record of
+// it — which is precisely the resend the hold exists to stop.
+func TestMergeRefusesWhenClaimsCannotBeRead(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".fanout"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := filepath.Join(root, ".fanout", mergeClaimsFile)
+	if err := os.WriteFile(corrupt, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeMerger{res: prmerge.Result{Merged: true}}
+	p := newPollerBase(root, newHub())
+	p.latest, p.repo, p.resolved = mergeSnapshot(), "owner/repo", true
+	s := &Server{
+		poller: p, hostPort: testHostPort, token: testToken,
+		mergePR: fake.merge, mergeInFlight: map[string]struct{}{},
+		mergeHeld: map[string]time.Time{},
+	}
+	h, err := s.handler()
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	assertAPIError(t, requestMerge(t, h, http.MethodPost, mergeQuery(testToken), mergeBodyJSON()),
+		http.StatusServiceUnavailable, "claim_unavailable")
+	if calls, _ := fake.snapshot(); calls != 0 {
+		t.Fatalf("merge calls = %d, want 0", calls)
+	}
+	// The unreadable record is left exactly as it was.
+	data, err := os.ReadFile(corrupt)
+	if err != nil || string(data) != "{not json" {
+		t.Fatalf("claims file = %q (%v), want it untouched", data, err)
+	}
+}
