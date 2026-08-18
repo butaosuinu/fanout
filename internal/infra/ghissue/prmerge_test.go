@@ -245,6 +245,11 @@ func TestDeleteRemoteBranchRejectsInvalidInput(t *testing.T) {
 // `gh pr merge` exits 0 after enqueueing, so the exit code alone would report an
 // unmerged pull request as merged. The same read also carries the base branch,
 // which --match-head-commit does not pin.
+// prStateJSON wraps one pull request in the GraphQL envelope PRState reads.
+func prStateJSON(fields string) string {
+	return `{"data":{"repository":{"pullRequest":{` + fields + `}}}}`
+}
+
 func TestPRStateAsksGitHubRatherThanTrustingTheExitCode(t *testing.T) {
 	tests := []struct {
 		name string
@@ -253,18 +258,40 @@ func TestPRStateAsksGitHubRatherThanTrustingTheExitCode(t *testing.T) {
 	}{
 		{
 			name: "merged by state",
-			out:  `{"state":"MERGED","mergedAt":"2026-08-15T00:00:00Z","baseRefName":"main","headRefOid":"abc"}`,
+			out:  prStateJSON(`"state":"MERGED","mergedAt":"2026-08-15T00:00:00Z","baseRefName":"main","headRefOid":"abc"`),
 			want: PRTarget{Merged: true, BaseRef: "main", HeadSha: "abc"},
 		},
 		{
 			name: "merged by mergedAt alone",
-			out:  `{"state":"OPEN","mergedAt":"2026-08-15T00:00:00Z","baseRefName":"main","headRefOid":"abc"}`,
+			out:  prStateJSON(`"state":"OPEN","mergedAt":"2026-08-15T00:00:00Z","baseRefName":"main","headRefOid":"abc"`),
 			want: PRTarget{Merged: true, BaseRef: "main", HeadSha: "abc"},
 		},
 		{
-			name: "queued is not merged",
-			out:  `{"state":"OPEN","mergedAt":null,"baseRefName":"release","headRefOid":"def"}`,
+			name: "open and unheld",
+			out:  prStateJSON(`"state":"OPEN","mergedAt":null,"baseRefName":"release","headRefOid":"def"`),
 			want: PRTarget{Merged: false, BaseRef: "release", HeadSha: "def"},
+		},
+		{
+			// gh arms an auto-merge when the checks are unfinished...
+			name: "auto-merge armed",
+			out:  prStateJSON(`"state":"OPEN","baseRefName":"main","headRefOid":"abc","autoMergeRequest":{"enabledAt":"2026-08-15T00:00:00Z"}`),
+			want: PRTarget{BaseRef: "main", HeadSha: "abc", AutoMerge: true},
+		},
+		{
+			// ...and enqueues directly when they are not. Only GraphQL shows this,
+			// which is why PRState does not use `gh pr view --json`.
+			name: "sitting in the merge queue",
+			out:  prStateJSON(`"state":"OPEN","baseRefName":"main","headRefOid":"abc","mergeQueueEntry":{"state":"QUEUED"}`),
+			want: PRTarget{BaseRef: "main", HeadSha: "abc", Queued: true},
+		},
+		{
+			name: "closing issues carry their repository",
+			out: prStateJSON(`"state":"OPEN","baseRefName":"main","headRefOid":"abc",` +
+				`"closingIssuesReferences":{"nodes":[{"number":578,"repository":{"nameWithOwner":"o/r"}}]}`),
+			want: PRTarget{
+				BaseRef: "main", HeadSha: "abc",
+				ClosesIssues: []ClosingIssue{{Repo: "o/r", Number: 578}},
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -277,10 +304,25 @@ func TestPRStateAsksGitHubRatherThanTrustingTheExitCode(t *testing.T) {
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("PRState() = %#v, want %#v", got, tt.want)
 			}
-			assertFakeGHArgs(t, argsPath, []string{
-				"pr", "view", "7", "-R", "o/r", "--json", "state,mergedAt,baseRefName,headRefName,headRefOid,autoMergeRequest,closingIssuesReferences",
-			})
+			args, err := os.ReadFile(argsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"api", "graphql", "mergeQueueEntry", "number=7"} {
+				if !strings.Contains(string(args), want) {
+					t.Fatalf("gh args = %q, want them to carry %q", args, want)
+				}
+			}
 		})
+	}
+}
+
+// TestPRStateRefusesAMissingPullRequest keeps a null answer from reading as an
+// open, unheld, unmerged pull request — which every fence would wave through.
+func TestPRStateRefusesAMissingPullRequest(t *testing.T) {
+	installFakeGH(t, `{"data":{"repository":{"pullRequest":null}}}`)
+	if _, err := (Runner{}).PRState(context.Background(), "o", "r", 7); err == nil {
+		t.Fatal("PRState() error = nil, want the missing pull request reported")
 	}
 }
 

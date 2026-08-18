@@ -314,11 +314,10 @@ func (s Service) fenceLive(ctx context.Context, req Request) error {
 	if live.Merged {
 		return ErrAlreadyMerged
 	}
-	if live.AutoMerge {
-		// The snapshot is up to one poll old, so an auto-merge armed since then
-		// only shows up here. (A direct queue entry does not: gh pr view has no
-		// field for it, and the snapshot's GraphQL read is the only place it is
-		// visible.)
+	if live.AutoMerge || live.Queued {
+		// The snapshot is up to one poll old, so a merge GitHub started holding
+		// since then only shows up here — armed as an auto-merge, or sitting in
+		// the queue.
 		return ErrPRPending
 	}
 	if err := req.stillOwns(live); err != nil {

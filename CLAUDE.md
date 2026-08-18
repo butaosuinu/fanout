@@ -297,9 +297,9 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   and head ref to match; issue rows attribute PRs through the closing-PR link and
   keep accepting fork PRs. A merge whose outcome cannot be read comes back as
   unknown rather than as an error, and the pull request is then held in
-  `.fanout/merge-claims.json` — cleared only when a poll shows the PR merged or
-  closed, since time is not evidence about an outcome; deleting the entry from that file (under the git
-  common dir, not the worktree) is the documented manual way out — so another tab, a reload, or a dashboard restart
+  `<git-common-dir>/fanout/merge-claims.json` — cleared only when a poll shows the
+  PR merged or closed, since time is not evidence about an outcome; deleting the
+  entry from that file is the documented manual way out — so another tab, a reload, or a dashboard restart
   cannot fire a second one either — that file is the endpoint's only local write.
   The hold is taken *before* gh runs and released once the outcome is known,
   because the answer that never arrives is the one that would have told us to
@@ -327,7 +327,10 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   after the merge with it. The claim on an unreadable
   outcome never takes that exit — that merge may already have happened. A send
   failure that leaves an auto-merge armed is likewise treated as landed rather
-  than retryable: only this command could have armed it. The whole
+  than retryable: only this command could have armed it. The live read is GraphQL
+  rather than `gh pr view --json` because the merge queue is only visible there,
+  and "GitHub is already holding this merge" is exactly what the fence has to
+  see. The whole
   read-check-reserve sequence runs under a lock on the claims file, because two
   dashboards can run against one repository and an atomic write makes each write
   indivisible, not the decision around it. Both file and lock live in the

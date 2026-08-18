@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { DiffResponse } from "../../transport/types";
 
 /* diff が返した patch の素性。マージボタンはこれと対象 PR を照合する。
@@ -32,10 +32,26 @@ export interface DiffReport {
 
 export function useDiffReport(key: string | null): DiffReport {
   const [covering, setCovering] = useState(false);
-  /* 応答そのものを持ち、facts は導出する。setter を包むと render ごとに identity が
-   * 変わり、報告する側の effect が毎 render 走って state を書き換え続ける。 */
-  const [diff, setDiff] = useState<DiffResponse | null>(null);
-  const facts = useMemo(() => (diff ? factsOf(diff) : NO_DIFF), [diff]);
+  /* 応答そのものを、どの行のものかと一緒に持つ。facts は導出する — setter を
+   * 包むと render ごとに identity が変わり、報告する側の effect が毎 render 走って
+   * state を書き換え続ける。 */
+  const [shown, setShown] = useState<{ key: string | null; diff: DiffResponse | null }>({
+    key: null,
+    diff: null,
+  });
+  /* 行が変わった瞬間に、まだ前の行の応答しか無い render が挟まる。setDiff を呼ぶ
+   * のは effect なので 1 コミット遅く、その間に前の行の facts を新しい行の
+   * branch/base と組み合わせると、両者が同じ commit を指していれば照合を全部
+   * 通ってしまう。key を持たせて、その render で同期的に捨てる。 */
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  const setDiff = useCallback((diff: DiffResponse | null) => {
+    setShown({ key: keyRef.current, diff });
+  }, []);
+  const facts = useMemo(
+    () => (shown.key === key && shown.diff ? factsOf(shown.diff) : NO_DIFF),
+    [shown, key],
+  );
   return { covering, shown: { key, facts }, setCovering, setDiff };
 }
 

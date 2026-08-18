@@ -101,9 +101,13 @@ type PRTarget struct {
 	// with `gh pr merge --disable-auto` — which leaves the pull request open with
 	// nothing pending, a state no "is it merged yet" check can distinguish.
 	AutoMerge bool
-	BaseRef   string
-	HeadRef   string
-	HeadSha   string
+	// Queued says the pull request sits in a merge queue. gh arms an auto-merge
+	// when the checks are unfinished and enqueues directly when they are not, so
+	// both have to be read to know GitHub is holding a merge.
+	Queued  bool
+	BaseRef string
+	HeadRef string
+	HeadSha string
 	// ClosesIssues is the set of issues this pull request currently closes. An
 	// issue row owns a PR through that link and nothing else, and the link can be
 	// edited away without moving a single commit.
@@ -126,35 +130,85 @@ type ClosingIssue struct {
 // exiting 0 does not mean "merged" — a merge-queue base enqueues and returns
 // success, and treating that as merged would report a lie and hand the head ref
 // to a delete while its commits live only on that branch.
+// prStateQuery reads everything the fences need in one go.
+//
+// It is GraphQL rather than `gh pr view --json` because the merge queue is only
+// visible here: gh has no field for mergeQueueEntry, and "GitHub is already
+// holding this merge" is exactly what the fence has to see.
+const prStateQuery = `
+query($owner:String!,$name:String!,$number:Int!){
+  repository(owner:$owner,name:$name){
+    pullRequest(number:$number){
+      state
+      mergedAt
+      baseRefName
+      headRefName
+      headRefOid
+      autoMergeRequest { enabledAt }
+      mergeQueueEntry { state }
+      closingIssuesReferences(first: 50) {
+        nodes { number repository { nameWithOwner } }
+      }
+    }
+  }
+}
+`
+
 func (r Runner) PRState(ctx context.Context, owner, repo string, number int) (_ PRTarget, err error) {
 	defer errs.Wrap(&err, "read state of pull request #%d", number)
 
-	out, err := r.ghContext(ctx, "pr", "view", strconv.Itoa(number),
-		"-R", owner+"/"+repo, "--json", "state,mergedAt,baseRefName,headRefName,headRefOid,autoMergeRequest,closingIssuesReferences")
+	out, err := r.ghContext(ctx, "api", "graphql",
+		"-f", "query="+prStateQuery,
+		"-F", "owner="+owner,
+		"-F", "name="+repo,
+		"-F", "number="+strconv.Itoa(number))
 	if err != nil {
 		return PRTarget{}, err
 	}
-	var view struct {
-		State       string  `json:"state"`
-		MergedAt    *string `json:"mergedAt"`
-		BaseRefName string  `json:"baseRefName"`
-		HeadRefName string  `json:"headRefName"`
-		HeadRefOid  string  `json:"headRefOid"`
-		AutoMerge   *struct {
-			EnabledAt *string `json:"enabledAt"`
-		} `json:"autoMergeRequest"`
-		ClosingIssues []closingIssueJSON `json:"closingIssuesReferences"`
+	return parsePRState(out)
+}
+
+// prStateNode is the pull request as prStateQuery selects it.
+type prStateNode struct {
+	State       string  `json:"state"`
+	MergedAt    *string `json:"mergedAt"`
+	BaseRefName string  `json:"baseRefName"`
+	HeadRefName string  `json:"headRefName"`
+	HeadRefOid  string  `json:"headRefOid"`
+	AutoMerge   *struct {
+		EnabledAt *string `json:"enabledAt"`
+	} `json:"autoMergeRequest"`
+	MergeQueueEntry *struct {
+		State string `json:"state"`
+	} `json:"mergeQueueEntry"`
+	ClosingIssues struct {
+		Nodes []closingIssueNode `json:"nodes"`
+	} `json:"closingIssuesReferences"`
+}
+
+func parsePRState(out []byte) (PRTarget, error) {
+	var payload struct {
+		Data struct {
+			Repository struct {
+				PullRequest *prStateNode `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
 	}
-	if err := json.Unmarshal(out, &view); err != nil {
+	if err := json.Unmarshal(out, &payload); err != nil {
 		return PRTarget{}, err
 	}
+	pr := payload.Data.Repository.PullRequest
+	if pr == nil {
+		return PRTarget{}, errors.New("pull request not found in response")
+	}
 	return PRTarget{
-		Merged:       strings.EqualFold(view.State, "MERGED") || view.MergedAt != nil,
-		BaseRef:      view.BaseRefName,
-		HeadRef:      view.HeadRefName,
-		HeadSha:      view.HeadRefOid,
-		AutoMerge:    view.AutoMerge != nil,
-		ClosesIssues: closingIssues(view.ClosingIssues),
+		Merged:       strings.EqualFold(pr.State, "MERGED") || pr.MergedAt != nil,
+		AutoMerge:    pr.AutoMerge != nil,
+		Queued:       pr.MergeQueueEntry != nil,
+		BaseRef:      pr.BaseRefName,
+		HeadRef:      pr.HeadRefName,
+		HeadSha:      pr.HeadRefOid,
+		ClosesIssues: closingIssues(pr.ClosingIssues.Nodes),
 	}, nil
 }
 
@@ -200,27 +254,21 @@ var preSendMarkers = []string{
 	"authentication", "gh auth login",
 }
 
-// closingIssueJSON is one `closingIssuesReferences` node as gh projects it.
-type closingIssueJSON struct {
+// closingIssueNode is one `closingIssuesReferences` node.
+type closingIssueNode struct {
 	Number     int `json:"number"`
 	Repository struct {
-		Name  string `json:"name"`
-		Owner struct {
-			Login string `json:"login"`
-		} `json:"owner"`
+		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
 }
 
-func closingIssues(rows []closingIssueJSON) []ClosingIssue {
+func closingIssues(rows []closingIssueNode) []ClosingIssue {
 	if len(rows) == 0 {
 		return nil
 	}
 	out := make([]ClosingIssue, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, ClosingIssue{
-			Repo:   row.Repository.Owner.Login + "/" + row.Repository.Name,
-			Number: row.Number,
-		})
+		out = append(out, ClosingIssue{Repo: row.Repository.NameWithOwner, Number: row.Number})
 	}
 	return out
 }
