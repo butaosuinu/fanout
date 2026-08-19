@@ -10,8 +10,10 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
+// managedEmitterLaunch carries what the telemetry emitter contributes to a
+// launch beyond its argv. The argv side lives in managedEmitterBackendArgs so
+// that recording a launch and verifying it later share one source.
 type managedEmitterLaunch struct {
-	backendArgs []string
 	environment []string
 	nonce       string
 }
@@ -33,24 +35,33 @@ func newManagedEmitterLaunch(
 	if err != nil {
 		return managedEmitterLaunch{}, err
 	}
-	emitterPath := route.EmitterPath
-	if emitterPath == "" {
-		emitterPath = route.LauncherPath
-	}
-	launch := managedEmitterLaunch{
+	return managedEmitterLaunch{
 		environment: managedEmitterEnvironment(
 			statePath, intent, route, launchNonce, emitterNonce, req.Agent, agentID,
 		),
 		nonce: emitterNonce,
+	}, nil
+}
+
+// managedEmitterBackendArgs returns the launch arguments the telemetry emitter
+// contributes to the agent command. Only claude has any: the others carry the
+// emitter through the environment alone. They derive from the route — never
+// from a nonce — so recording a launch and verifying it later rebuild the same
+// argv. Both paths must call this; building the command without it made every
+// claude launch fail its own binding check.
+func managedEmitterBackendArgs(req Request, route backend.OwnedLaunchRoute) ([]string, error) {
+	if req.Agent != "claude" {
+		return nil, nil
 	}
-	if req.Agent == "claude" {
-		settings, err := managedClaudeHookSettings(emitterPath)
-		if err != nil {
-			return managedEmitterLaunch{}, err
-		}
-		launch.backendArgs = []string{"--settings", settings}
+	emitterPath := route.EmitterPath
+	if emitterPath == "" {
+		emitterPath = route.LauncherPath
 	}
-	return launch, nil
+	settings, err := managedClaudeHookSettings(emitterPath)
+	if err != nil {
+		return nil, err
+	}
+	return []string{"--settings", settings}, nil
 }
 
 func managedClaudeHookSettings(fanoutPath string) (string, error) {

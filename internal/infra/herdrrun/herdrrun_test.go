@@ -1583,25 +1583,52 @@ func TestObservationCommandErrorClassifiesOnlyTransientFailures(t *testing.T) {
 	}
 }
 
-func TestPaneRunResponseRequiresExactOKEnvelope(t *testing.T) {
-	valid := []byte(`{"id":"cli:pane:run","result":{"type":"ok"}}`)
-	if err := validatePaneRunResponse(valid); err != nil {
-		t.Fatalf("valid pane run response: %v", err)
-	}
-	for _, invalid := range [][]byte{
-		nil,
-		[]byte(`{"id":"cli:pane:get","result":{"type":"ok"}}`),
-		[]byte(`{"id":"cli:pane:run","result":{"type":"unexpected"}}`),
+// TestPaneRunResponse pins how Herdr answers `pane run`, the call that hands a
+// launcher its start token. The empty success body is captured from real herdr
+// 0.7.5 and 0.8.0: both exit 0 and write nothing at all. Demanding an envelope
+// rejected every launch, and no test caught it because the envelope this file
+// used to assert on was invented here rather than observed.
+func TestPaneRunResponse(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		out      []byte
+		accepted bool
+	}{
+		{name: "silent success is what 0.7.5 and 0.8.0 return", out: nil, accepted: true},
+		{name: "a blank body is a silent success too", out: []byte("  \n"), accepted: true},
+		{
+			name:     "an explicit ok envelope stays acceptable",
+			out:      []byte(`{"id":"cli:pane:run","result":{"type":"ok"}}`),
+			accepted: true,
+		},
+		{
+			name:     "another verb's envelope is rejected",
+			out:      []byte(`{"id":"cli:pane:get","result":{"type":"ok"}}`),
+			accepted: false,
+		},
+		{
+			name:     "a result type other than ok is rejected",
+			out:      []byte(`{"id":"cli:pane:run","result":{"type":"unexpected"}}`),
+			accepted: false,
+		},
+		{
+			name:     "a rejection envelope carries no result and is rejected",
+			out:      []byte(`{"id":"cli:pane:run","error":{"code":"pane_not_found"}}`),
+			accepted: false,
+		},
+		{
+			name:     "trailing JSON after the envelope is rejected",
+			out:      []byte(`{"id":"cli:pane:run","result":{"type":"ok"}} {"id":"x"}`),
+			accepted: false,
+		},
 	} {
-		if err := validatePaneRunResponse(invalid); err == nil {
-			t.Fatalf("invalid pane run response accepted: %s", invalid)
-		}
-	}
-}
-
-func TestRestartResumeResponseAllowsDocumentedEmptySuccess(t *testing.T) {
-	if err := validateRestartResumeResponse(nil); err != nil {
-		t.Fatal(err)
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePaneRunResponse(tt.out)
+			if accepted := err == nil; accepted != tt.accepted {
+				t.Fatalf("validatePaneRunResponse(%q) accepted = %v, want %v (err = %v)",
+					tt.out, accepted, tt.accepted, err)
+			}
+		})
 	}
 }
 

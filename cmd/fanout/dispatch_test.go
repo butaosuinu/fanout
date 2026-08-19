@@ -2,8 +2,10 @@ package main
 
 import (
 	"os"
+	"slices"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 )
@@ -103,5 +105,70 @@ func TestHerdrPaneLauncherEnvMarker(t *testing.T) {
 					herdrPaneLauncherEnv, tt.value, tt.set, got, tt.want, upgradeContract)
 			}
 		})
+	}
+}
+
+// TestSelfExecArgs covers the argv shapes the two self-exec entries arrive
+// with. The env-recognized launcher carries no token at all, so the slice that
+// forwards a token's trailing arguments has to tolerate a one-element argv.
+func TestSelfExecArgs(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		argv []string
+		want []string
+	}{
+		{
+			name: "env-recognized entry runs as a shell with no token",
+			argv: []string{"/run/fhr-501/fhr-abc/launcher/fanout"},
+			want: nil,
+		},
+		{name: "token with nothing trailing it", argv: []string{"fanout", herdrSupervisorCommand}, want: nil},
+		{
+			// The supervisor's real argv: marker path, nonce, start token, ready fd.
+			name: "token forwards everything after it",
+			argv: []string{
+				"fanout", herdrSupervisorCommand,
+				"/run/fhr-501/fhr-abc/owner.json", "nonce", "start", "3",
+			},
+			want: []string{"/run/fhr-501/fhr-abc/owner.json", "nonce", "start", "3"},
+		},
+		{name: "empty argv", argv: nil, want: nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := selfExecArgs(tt.argv); !slices.Equal(got, tt.want) {
+				t.Fatalf("selfExecArgs(%q) = %q, want %q", tt.argv, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSelfExecDispatchRunsTokenlessEntry runs the dispatch path itself, not just
+// the recognition predicate the tests above pin. Herdr starts the pane launcher
+// as the configured shell, so argv holds only the executable path; a dispatch
+// that slices past an absent token panics before the entry runs, and every
+// launched pane dies with the shell. The launcher rejects the incomplete
+// environment here — reaching that rejection at all is the guarantee.
+func TestSelfExecDispatchRunsTokenlessEntry(t *testing.T) {
+	original := os.Args
+	t.Cleanup(func() { os.Args = original })
+	os.Args = []string{"/run/fhr-501/fhr-abc/launcher/fanout"}
+	t.Setenv(herdrPaneLauncherEnv, "1")
+	// An inherited launcher environment would make the entry wait for an intent
+	// instead of returning, so blank the rest of the contract.
+	t.Setenv("FANOUT_HERDR_LAUNCHER_PATH", "")
+	t.Setenv("FANOUT_HERDR_CONTROL_PATH", "")
+
+	var launcher func() exitcode.Code
+	for _, entry := range selfExecDispatch() {
+		if entry.match(nil) {
+			launcher = entry.handle
+			break
+		}
+	}
+	if launcher == nil {
+		t.Fatal("selfExecDispatch() has no entry matching a tokenless launcher invocation")
+	}
+	if got := launcher(); got == exitcode.OK {
+		t.Fatalf("launcher handle() = %v, want non-zero for an incomplete launcher environment", got)
 	}
 }

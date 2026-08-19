@@ -23,7 +23,8 @@ The TUI console and web dashboard use `reported_state` only while the matching p
 
 `--merge`, `--close`, `--cleanup`, and their TUI actions operate only on complete rows from that owned session. fanout compares the saved workspace ID, label, terminal, repository, path, and branch before mutation. It records a cleanup intent, issues non-force `herdr worktree remove`, verifies that the checkout and workspace are absent, and closes a residual workspace when needed. A checkout left after an earlier workspace close is re-registered only after the owned plugin registry passes the empty-registry preflight. Dirty checkouts, ownership mismatches, and ambiguous responses preserve the row and intent for retry or manual cleanup. Branch deletion uses fanout's compare-and-delete and applies only to a branch recorded as fanout-created.
 
-The unsupported paths still fail closed:
+The unsupported paths still fail closed, with one exception: the TUI's `Z` (zoom) runs the focus half
+and silently skips the zoom ([#713](https://github.com/butaosuinu/fanout/issues/713)).
 
 - Interactive send, restore, and plan capture remain unavailable for herdr rows.
 - TUI focus, launch, and peek require a complete saved identity in fanout's owned session. Foreign, stale, and legacy rows stay disabled with a reason.
@@ -123,6 +124,8 @@ fanout herdr shutdown   # stop an empty owned server
 ```
 
 `restart` is for a server that died. fanout replaces it only after proving the old supervisor process and its sockets are gone — a generation that is still running refuses with `herdr owned server generation is still live` — then starts a fresh one, replaces an owned `config.toml` written by an older fanout, and re-binds the recorded rows under the rules above. Rerunning either verb after a failure is safe: fanout records what it set out to do and confirms that outcome rather than repeating the work.
+
+Two states do not recover on a rerun ([#710](https://github.com/butaosuinu/fanout/issues/710)). Updating fanout itself leaves the owned session pinned to the previous launcher, so a launch refuses with `owned Herdr launcher predates the current fanout` while `restart` refuses a live generation and `shutdown` refuses the two shell rows described below — all three paths close at once. A launcher that fails to start also leaves a `realized` intent whose pane is already gone, and `shutdown` keeps refusing it. Both need the owned runtime directory removed by hand.
 
 `shutdown` retires an empty server. It refuses while any herdr row remains in this repository's state — every linked worktree counts — while the owned session still holds workspaces, or while another herdr intent is pending. Child rows go away with `--close` / `--cleanup`, but the two shell rows do not: the console row a plain-shell TUI bootstrap records, and the project-root coordinator row every issue / Project / plan fan-out records. Neither has a removal verb, so a checkout that has run the herdr backend at all cannot reach `shutdown` today.
 

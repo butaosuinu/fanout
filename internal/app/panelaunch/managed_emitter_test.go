@@ -31,10 +31,14 @@ func TestManagedEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(launch.backendArgs) != 2 || launch.backendArgs[0] != "--settings" || !json.Valid([]byte(launch.backendArgs[1])) {
-		t.Fatalf("backend args = %#v", launch.backendArgs)
+	backendArgs, err := managedEmitterBackendArgs(Request{Agent: "claude"}, route)
+	if err != nil {
+		t.Fatal(err)
 	}
-	settings := launch.backendArgs[1]
+	if len(backendArgs) != 2 || backendArgs[0] != "--settings" || !json.Valid([]byte(backendArgs[1])) {
+		t.Fatalf("backend args = %#v", backendArgs)
+	}
+	settings := backendArgs[1]
 	if !strings.Contains(settings, `"matcher":"`+managedClaudeExitReasons+`"`) ||
 		!strings.Contains(settings, `"timeout":15`) ||
 		strings.Contains(settings, "clear") || strings.Contains(settings, "resume") {
@@ -69,17 +73,16 @@ func TestManagedEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T)
 }
 
 func TestManagedEmitterLaunchUsesCurrentPinnedEmitterInsteadOfSessionLauncher(t *testing.T) {
-	launch, err := newManagedEmitterLaunch(
+	backendArgs, err := managedEmitterBackendArgs(
 		Request{Agent: "claude"},
 		backend.OwnedLaunchRoute{
 			LauncherPath: "/owned/old-fanout", EmitterPath: "/owned/current-fanout",
 		},
-		state.LaunchIntent{}, strings.Repeat("a", 32), "agent", "/repo/.fanout/state.json",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings := launch.backendArgs[1]
+	settings := backendArgs[1]
 	if !strings.Contains(settings, "/owned/current-fanout") || strings.Contains(settings, "old-fanout") {
 		t.Fatalf("settings use stale session launcher: %s", settings)
 	}
@@ -90,8 +93,12 @@ func TestManagedEmitterLaunchLeavesNonPlanCodexBare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if launch.nonce != "" || len(launch.backendArgs) != 0 || len(launch.environment) != 0 {
+	if launch.nonce != "" || len(launch.environment) != 0 {
 		t.Fatalf("codex emitter launch = %+v", launch)
+	}
+	backendArgs, err := managedEmitterBackendArgs(Request{Agent: "codex"}, backend.OwnedLaunchRoute{})
+	if err != nil || len(backendArgs) != 0 {
+		t.Fatalf("managedEmitterBackendArgs(codex) = %#v, %v; want no arguments", backendArgs, err)
 	}
 }
 
@@ -111,8 +118,12 @@ func TestManagedEmitterLaunchInjectsCodexPlanIdentityWithoutBackendArgs(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !telemetry.ValidNonce(launch.nonce) || len(launch.backendArgs) != 0 {
+	if !telemetry.ValidNonce(launch.nonce) {
 		t.Fatalf("Codex Plan emitter launch = %+v", launch)
+	}
+	backendArgs, err := managedEmitterBackendArgs(Request{Agent: "codex", LaunchMode: agent.ModePlan}, route)
+	if err != nil || len(backendArgs) != 0 {
+		t.Fatalf("managedEmitterBackendArgs(Codex Plan) = %#v, %v; want no arguments", backendArgs, err)
 	}
 	environment := environmentMap(t, launch.environment)
 	if environment[telemetry.AgentEnv] != "codex" ||

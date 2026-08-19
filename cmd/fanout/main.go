@@ -39,11 +39,22 @@ func selfExecDispatch() []dispatch {
 		table = append(table, dispatch{
 			match: entry.Match,
 			handle: func() exitcode.Code {
-				return exitcode.Code(entry.Run(os.Stdin, os.Stdout, os.Stderr, os.Args[2:]))
+				return exitcode.Code(entry.Run(os.Stdin, os.Stdout, os.Stderr, selfExecArgs(os.Args)))
 			},
 		})
 	}
 	return table
+}
+
+// selfExecArgs returns the arguments trailing a self-exec token. An entry
+// recognized by an inherited environment variable is started without one — the
+// Herdr pane launcher runs as the configured shell, so argv holds only the
+// executable path — and slicing past it would panic before the entry runs.
+func selfExecArgs(argv []string) []string {
+	if len(argv) < 2 {
+		return nil
+	}
+	return argv[2:]
 }
 
 //nolint:funlen // The composition root keeps the first-match-wins dispatch and launch wiring visible together.

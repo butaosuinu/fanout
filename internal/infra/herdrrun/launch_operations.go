@@ -173,7 +173,7 @@ func (s *OwnedSession) issueRestartResumeToken(
 	if err != nil {
 		return err
 	}
-	return validateRestartResumeResponse(out)
+	return validatePaneRunResponse(out)
 }
 
 func (s *OwnedSession) admitRestartResume(
@@ -290,20 +290,20 @@ func exactRestartResumeTokenIntent(intent state.LaunchIntent, session, socketPat
 		!intent.Launch.TokenIssued
 }
 
+// validatePaneRunResponse accepts what Herdr actually answers `pane run` with.
+// Both 0.7.5 and 0.8.0 succeed silently — exit 0 with an empty stdout — and
+// report a rejection as a non-zero exit the caller already surfaces, so only a
+// body that is present has to match the success envelope.
 func validatePaneRunResponse(out []byte) error {
+	if strings.TrimSpace(string(out)) == "" {
+		return nil
+	}
 	var envelope paneRunEnvelope
 	if err := decodeOne(out, &envelope); err != nil || envelope.ID != "cli:pane:run" ||
 		envelope.Result == nil || envelope.Result.Type != "ok" {
 		return fmt.Errorf("herdr pane run returned an unexpected response")
 	}
 	return nil
-}
-
-func validateRestartResumeResponse(out []byte) error {
-	if len(out) == 0 {
-		return nil
-	}
-	return validatePaneRunResponse(out)
 }
 
 func (s *OwnedSession) ProcessInfo(ctx context.Context, paneID string) (corebackend.PaneProcessInfo, error) {

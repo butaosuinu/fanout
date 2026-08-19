@@ -1434,6 +1434,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
 - [Config reference](https://herdr.dev/docs/config-reference/)
 - [Session state](https://herdr.dev/docs/session-state/)
 - 関連分析: [herdr 競合分析](competitive-herdr.ja.md)
+- wave 2 完了後の実機検証 (0.7.5 / 0.8.0): [herdr backend 実機検証記録](herdr-live-verification.ja.md)
 - 親設計: [#423](https://github.com/butaosuinu/fanout/issues/423)
 - 親設計の承認: [#424 spike 反映](https://github.com/butaosuinu/fanout/issues/423#issuecomment-4986704437)
 - 検証 issue: [#424](https://github.com/butaosuinu/fanout/issues/424)

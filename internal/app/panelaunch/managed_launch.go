@@ -482,12 +482,7 @@ func (l *Launcher) resolveManagedLaunch(
 	if err != nil {
 		return resolvedManagedLaunch{}, err
 	}
-	spec, err := buildManagedLaunchSpec(req)
-	if len(emitter.backendArgs) != 0 {
-		spec, err = agent.BuildResolvedLaunchSpecWithBackendArgs(
-			req.Agent, req.Prompt, backend.Herdr, req.LaunchMode, emitter.backendArgs,
-		)
-	}
+	spec, err := buildManagedLaunchSpecForRoute(req, route)
 	if err != nil {
 		return resolvedManagedLaunch{}, err
 	}
@@ -524,6 +519,23 @@ func (l *Launcher) prepareManagedLaunchCapsule(
 	}, nil
 }
 
+// buildManagedLaunchSpecForRoute builds the agent command a managed launch
+// records, including the arguments the telemetry emitter contributes. Recording
+// a launch and verifying it later both go through here so the two can never
+// disagree.
+func buildManagedLaunchSpecForRoute(req Request, route backend.OwnedLaunchRoute) (agent.LaunchSpec, error) {
+	backendArgs, err := managedEmitterBackendArgs(req, route)
+	if err != nil {
+		return agent.LaunchSpec{}, err
+	}
+	if len(backendArgs) == 0 {
+		return buildManagedLaunchSpec(req)
+	}
+	return agent.BuildResolvedLaunchSpecWithBackendArgs(
+		req.Agent, req.Prompt, backend.Herdr, req.LaunchMode, backendArgs,
+	)
+}
+
 func buildManagedLaunchSpec(req Request) (agent.LaunchSpec, error) {
 	if !req.CodexPlanMode() && !req.CodexTeamMode {
 		return agent.BuildResolvedLaunchSpec(req.Agent, req.Prompt, backend.Herdr, req.LaunchMode)
@@ -556,14 +568,18 @@ func newManagedPlanStatusPath(req Request) string {
 	return ""
 }
 
-func validateManagedLaunchBinding(req Request, launch *state.LaunchCapsule) error {
+func validateManagedLaunchBinding(
+	req Request,
+	launch *state.LaunchCapsule,
+	route backend.OwnedLaunchRoute,
+) error {
 	if err := validateManagedTeamBinding(req, launch); err != nil {
 		return err
 	}
 	boundReq := req
 	boundReq.CodexTeamStatusPath = launch.CodexTeamStatusPath
 	boundReq.CodexPlanStatusPath = launch.CodexPlanStatusPath
-	spec, err := buildManagedLaunchSpec(boundReq)
+	spec, err := buildManagedLaunchSpecForRoute(boundReq, route)
 	if err != nil {
 		return err
 	}
