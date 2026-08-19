@@ -198,10 +198,17 @@ Immediately before push, fetch again and compare with the saved SHA.
 ```bash
 git fetch "$head_remote" "$head"
 test "$(git rev-parse FETCH_HEAD)" = "$pr_head_before_work"
+```
+
+```bash
 git push \
   --force-with-lease="refs/heads/$head:$pr_head_before_work" \
   "$head_remote" HEAD:"$head"
 ```
+
+Run the push as a separate call: a push gate that rejects ref mutation
+chained before a push denies the combined form (`git fetch` counts as a ref
+mutation).
 
 Do not redo the ancestry test after rebase: the old tip need not be an ancestor
 of rewritten HEAD. The saved SHA comparison is the concurrency guard.

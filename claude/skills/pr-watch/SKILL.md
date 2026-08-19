@@ -333,8 +333,14 @@ git merge-base --is-ancestor "$pr_head_before_work" HEAD
 ```bash
 git fetch "<head-remote>" "$head"
 test "$(git rev-parse FETCH_HEAD)" = "$pr_head_before_work"
+```
+
+```bash
 git push --force-with-lease="refs/heads/$head:$pr_head_before_work" "<head-remote>" HEAD:"$head"
 ```
+
+push は別 call で実行する。ref 変更と push の連結を拒否する push gate は
+`git fetch` を含む連結形も deny する。
 
 無印 `--force`、refspec なしの `git push --force-with-lease`、保護ブランチや他者 PR
 への force push は使わない。
@@ -670,8 +676,9 @@ done
   hooks 設定の書き換えで回避しない。push が deny されたら、指示されたコマンド
   (canonical full gate)を最終 commit で通してから push し直す。deny 理由が
   「ref を変更するコマンドとの連結」なら call 全体が実行前に止まっている:
-  まず ref 変更 (commit / rebase) を単独で再実行し、HEAD が変わったら
-  canonical full gate を通し、最後に push を単独コマンドで再実行する。
+  止められた call の各ステップ — ref 変更、そこに含まれていた push 前の
+  確認 (保存 SHA と remote tip の比較など)、HEAD が変わった場合の canonical
+  full gate — を 1 コマンドずつ再実行し、最後に push を単独で実行する。
 - GitHub の古い thread や push 前の CI log を根拠に、push 後も同じ pass で修正を続けない。
 - approval / `:+1:` 待ちだけのために full One Pass を繰り返さない。
 - unchanged cheap snapshot をモデルに何度も読ませない。
