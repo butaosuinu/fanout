@@ -1,6 +1,8 @@
 # Isolated from the required lint gate on purpose: govulncheck fetches the
 # vulnerability DB over the network and can fail on new CVEs without any code
-# change. Do not add this workflow to branch-protection required checks.
+# change. Branch protection requires the `govulncheck` check, and a workflow
+# skipped by its paths filter never reports one, so vuln-noop.yml reports the
+# same check for PRs outside the paths below — keep both path lists identical.
 # `make vuln` (go.mod tool directive) keeps the local/CI versions identical.
 name: vuln
 
