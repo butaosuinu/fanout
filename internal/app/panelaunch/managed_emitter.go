@@ -44,10 +44,11 @@ func newManagedEmitterLaunch(
 }
 
 // managedEmitterBackendArgs returns the launch arguments the telemetry emitter
-// contributes to the agent command. They derive from the route alone — never
+// contributes to the agent command. Only claude has any: the others carry the
+// emitter through the environment alone. They derive from the route — never
 // from a nonce — so recording a launch and verifying it later rebuild the same
 // argv. Both paths must call this; building the command without it made every
-// emitter-bearing launch fail its own binding check.
+// claude launch fail its own binding check.
 func managedEmitterBackendArgs(req Request, route backend.OwnedLaunchRoute) ([]string, error) {
 	if req.Agent != "claude" {
 		return nil, nil

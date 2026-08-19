@@ -55,12 +55,15 @@ launcher は herdr の `default_shell` なので、pane は生成の 290ms 後�
 同じファイルの `validateRestartResumeResponse` だけが空応答を許容しており、
 launch 経路と restart resume 経路で扱いが割れていたのが手掛かりです。
 
-### 3. emitter を使う agent が自分の launch を拒否する
+### 3. claude が自分の launch を拒否する
 
 launch を記録するときは emitter の `--settings` を含む argv を作り、後で検証する
-ときは含めずに再構築していました。claude と Codex Plan Mode は emitter を使うため、
-`saved Herdr launch does not match the current agent command` で必ず失敗します。
-emitter を使わない直 codex だけが通っていました。
+ときは含めずに再構築していました。`saved Herdr launch does not match the current
+agent command` で必ず失敗します。
+
+影響は claude だけです。`--settings` を足すのは claude の launch に限られ
+(`managedEmitterBackendArgs`)、Codex Plan Mode は emitter を環境変数だけで運ぶため、
+記録側も検証側も同じ argv を組んでいました。直 codex も同じく無傷です。
 
 ## なぜテストが素通りしたか
 
