@@ -31,11 +31,22 @@ jobs:
             echo "go=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # The files API caps the response at 3000 files; when the PR exceeds
+          # that, the listing is incomplete, so fail toward running the check.
+          if [ "${{ github.event.pull_request.changed_files }}" -gt 3000 ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # previous_filename covers renames away from Go paths (x.go -> x.txt),
+          # which change the Go build without a .go entry in filename.
           files=$(gh api --paginate \
             "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files?per_page=100" \
-            --jq '.[].filename')
-          if printf '%s\n' "$files" | grep -Eq \
-            '^go\.mod$|^go\.sum$|\.go$|^Makefile$|^\.github/workflows/vuln\.yml$'; then
+            --jq '.[] | .filename, (.previous_filename // empty)')
+          # here-string, not a pipe: grep -q exits at the first match, and under
+          # the default pipefail shell the writer's SIGPIPE would fail the step.
+          if grep -Eq \
+            '^go\.mod$|^go\.sum$|\.go$|^Makefile$|^\.github/workflows/vuln\.yml$' \
+            <<< "$files"; then
             echo "go=true" >> "$GITHUB_OUTPUT"
           else
             echo "go=false" >> "$GITHUB_OUTPUT"
