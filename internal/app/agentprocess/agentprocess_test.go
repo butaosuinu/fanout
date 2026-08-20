@@ -41,16 +41,22 @@ func TestVerifyAgentRejectsInexactCodexPlanProcessTrees(t *testing.T) {
 		}},
 		{name: "duplicate TUI", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses = append(info.ForegroundProcesses, testProcess(
-				21, 10, testCodex, testCodex, []string{"--remote", "ws://127.0.0.1:1234"},
+				21, 10, testCodex, testCodex, codexRemoteTUIFixtureArgs(),
 			))
 		}},
 		{name: "nested duplicate TUI", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses = append(info.ForegroundProcesses, testProcess(
-				21, 20, testCodex, testCodex, []string{"--remote", "ws://127.0.0.1:1234"},
+				21, 20, testCodex, testCodex, codexRemoteTUIFixtureArgs(),
 			))
 		}},
+		{name: "legacy remote arguments", mutate: func(info *backend.PaneProcessInfo) {
+			info.ForegroundProcesses[1].Argv = []string{"--remote", "ws://127.0.0.1:1234"}
+		}},
+		{name: "wrong config override", mutate: func(info *backend.PaneProcessInfo) {
+			info.ForegroundProcesses[1].Argv[1] = "check_for_update_on_startup=true"
+		}},
 		{name: "wrong remote host", mutate: func(info *backend.PaneProcessInfo) {
-			info.ForegroundProcesses[1].Argv[1] = "ws://localhost:1234"
+			info.ForegroundProcesses[1].Argv[3] = "ws://localhost:1234"
 		}},
 		{name: "extra TUI argument", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses[1].Argv = append(info.ForegroundProcesses[1].Argv, "--dangerously-bypass-approvals-and-sandbox")
@@ -172,10 +178,14 @@ func codexPlanProcessFixture() (Identity, backend.PaneProcessInfo) {
 		ShellPID: 10, ForegroundProcessGroup: 99,
 		ForegroundProcesses: []backend.PaneProcess{
 			testProcess(10, 1, testFanout, testFanout, args),
-			testProcess(20, 10, testCodex, testCodex, []string{"--remote", "ws://127.0.0.1:1234"}),
+			testProcess(20, 10, testCodex, testCodex, codexRemoteTUIFixtureArgs()),
 		},
 	}
 	return identity, info
+}
+
+func codexRemoteTUIFixtureArgs() []string {
+	return []string{"-c", "check_for_update_on_startup=false", "--remote", "ws://127.0.0.1:1234"}
 }
 
 func testProcess(pid, parent int, executable, argv0 string, args []string) backend.PaneProcess {

@@ -87,7 +87,9 @@ func TestEmitUpdatesCodexPlanRowThroughExactControllerProcess(t *testing.T) {
 		observer.observation.ProcessInfo.ForegroundProcesses,
 		backend.PaneProcess{
 			PID: 43, ParentPID: 42, ProcessGroup: 42, Executable: "/opt/codex",
-			Argv0: "/opt/codex", Argv: []string{"--remote", "ws://127.0.0.1:1234"},
+			Argv0: "/opt/codex", Argv: []string{
+				"-c", "check_for_update_on_startup=false", "--remote", "ws://127.0.0.1:1234",
+			},
 			CWD: pane.WorktreePath,
 		},
 	)

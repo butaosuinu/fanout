@@ -22,7 +22,8 @@ const (
 	codexPlanApprovalUIPollInterval    = 250 * time.Millisecond
 	codexPlanApprovalUIPrompt          = "Implement this plan?"
 	codexPlanTUIWorkingPrompt          = "esc to interrupt"
-	codexRemoteTUIUpdateCheckOverride  = "check_for_update_on_startup=false"
+	// RemoteTUIUpdateCheckOverride is part of the process identity contract.
+	RemoteTUIUpdateCheckOverride = "check_for_update_on_startup=false"
 )
 
 // TUIConfig configures one RunPlanTUI invocation. Version is the fanout
@@ -868,7 +869,7 @@ func startCodexRemoteTUI(codexPath, remoteAddr, resumeID string, stdout, stderr 
 func codexRemoteTUIArgs(remoteAddr, resumeID string) []string {
 	// The controller cannot answer Codex's interactive update dialog, which is
 	// shown before a fresh remote TUI reports thread/started.
-	args := []string{"-c", codexRemoteTUIUpdateCheckOverride, "--remote", remoteAddr}
+	args := []string{"-c", RemoteTUIUpdateCheckOverride, "--remote", remoteAddr}
 	if strings.TrimSpace(resumeID) != "" {
 		args = append(args, "resume", resumeID)
 	}
