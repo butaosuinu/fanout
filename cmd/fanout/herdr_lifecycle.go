@@ -30,8 +30,9 @@ type herdrLifecycleDeps struct {
 func newManagedServerIO(repoKey string) panelaunch.ManagedServerIO {
 	ops := paneruntime.NewServerOps(repoKey)
 	return panelaunch.ManagedServerIO{
-		InspectServer:     ops.Inspect,
-		ObserveWorkspaces: ops.Observe,
+		InspectServer:      ops.Inspect,
+		ObserveWorkspaces:  ops.Observe,
+		DiscardEnvironment: ops.DiscardEnvironment,
 		RestartServer: func(
 			ctx context.Context,
 			identity state.RuntimeServerIdentity,
