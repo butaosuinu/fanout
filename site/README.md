@@ -13,19 +13,35 @@ on two events only:
 - a `v*` tag push — the release tag publishes the site as of that tag, so the
   changelog entry and the pinned `FANOUT_VERSION` go live with the Release (see
   `RELEASE.md`);
-- `gh workflow run pages.yml --ref main` — an out-of-band publish for docs that
-  should not wait for the next release.
+- `gh workflow run pages.yml --ref <ref>` — an out-of-band publish for docs
+  that should not wait for the next release.
+
+The out-of-band publish takes the whole ref, so `--ref main` also ships release
+docs staged for a tag nobody has cut yet: a changelog entry naming a version
+whose Release does not exist, and a pinned `FANOUT_VERSION` nobody can install.
+Check what `main` is carrying before reaching for it, and pass `--ref <tag>`
+when you only want the last release's site back.
+
+The same staging window is why a PR that adds or renames a page under
+`content/docs/` and links to it from `README.md` leaves that link 404 on the
+repo front page until the next publish. Run the out-of-band publish after
+merging one.
 
 Pull request and `main` runs stop after the Hugo + Pagefind build: they skip
 `configure-pages`, upload no artifact, and never deploy. The `github-pages`
 environment allows deployments from `main` and from `v*` tags; any other ref
 fails the deploy job instead of publishing.
 
-To see what is merged but not yet live:
+To see what is merged but not yet live — walking back to the newest deployment
+that actually succeeded, since a rejected or failed one still leaves a record:
 
 ```bash
-last="$(gh api "repos/butaosuinu/fanout/deployments?environment=github-pages&per_page=1" \
-  --jq '.[0].sha')"
+git fetch origin main --quiet
+last="$(gh api "repos/butaosuinu/fanout/deployments?environment=github-pages&per_page=10" \
+  --jq '.[] | [.sha, .statuses_url] | @tsv' |
+  while IFS="$(printf '\t')" read -r sha url; do
+    [ "$(gh api "$url" --jq '.[0].state')" = "success" ] && { echo "$sha"; break; }
+  done)"
 git log --oneline "$last"..origin/main -- site/
 ```
 

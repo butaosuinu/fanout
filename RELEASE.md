@@ -88,16 +88,28 @@ and no goreleaser config — the workflow is the whole pipeline.
    gh run watch "$run_id" --exit-status
    ```
 
-   The tag starts `pages.yml` too:
+   The tag starts `pages.yml` too. Give up after a minute rather than waiting
+   forever — the point of the wait is to find out whether the run exists:
 
    ```bash
-   until pages_id="$(gh run list --workflow pages.yml --branch vX.Y.Z --limit 1 \
-     --json databaseId -q '.[0].databaseId')" && [ -n "$pages_id" ]; do sleep 5; done
-   gh run watch "$pages_id" --exit-status
+   pages_id=""
+   for _ in $(seq 12); do
+     pages_id="$(gh run list --workflow pages.yml --branch vX.Y.Z --limit 1 \
+       --json databaseId -q '.[0].databaseId')"
+     [ -n "$pages_id" ] && break
+     sleep 5
+   done
+   [ -n "$pages_id" ] && gh run watch "$pages_id" --exit-status
    ```
 
-   If no `pages.yml` run appears within a minute, publish by hand:
-   `gh workflow run pages.yml --ref main`.
+   If no run appeared, publish the tag by hand:
+
+   ```bash
+   gh workflow run pages.yml --ref vX.Y.Z
+   ```
+
+   Name the tag, not `main` — `--ref main` would publish whatever else has
+   landed on `main` since, including release docs staged for the *next* tag.
 
 6. **Verify the Release.**
 
@@ -121,8 +133,12 @@ and no goreleaser config — the workflow is the whole pipeline.
    until the Release is published a few minutes in:
 
    ```bash
-   curl -fsS https://butaosuinu.github.io/fanout/docs/changelog/ | grep -q vX.Y.Z
+   curl -fsS https://butaosuinu.github.io/fanout/docs/changelog/ | grep -qF 'vX.Y.Z'
    ```
+
+   Pages serves through a CDN, so a miss right after the deploy job goes green
+   can be propagation rather than a failed publish. Wait a minute and re-run
+   before treating it as one.
 
 ## If something goes wrong
 
@@ -139,19 +155,22 @@ and no goreleaser config — the workflow is the whole pipeline.
 
 - **Wrong commit tagged.** Same delete dance, then re-tag the intended commit.
   Avoid moving a tag that has already published a Release; bump to the next patch
-  instead. If the tagged commit was not `main`'s tip, the docs site rolls back to
-  it — restore it with `gh workflow run pages.yml --ref main` once the Release is
-  out.
+  instead. If the tagged commit was not `main`'s tip, the docs site rolls back
+  to it; re-cutting the tag republishes the site along with the Release.
 
 - **Docs deploy rejected.** `not allowed to deploy to github-pages due to
   environment protection rules` means the `github-pages` environment lost its tag
   policy. Restore it, then re-run the failed job:
 
   ```bash
-  gh api --method POST \
-    repos/butaosuinu/fanout/environments/github-pages/deployment-branch-policies \
-    -f name='v*' -f type='tag'
+  policies=repos/butaosuinu/fanout/environments/github-pages/deployment-branch-policies
+  gh api --method POST "$policies" -f name='main' -f type='branch'
+  gh api --method POST "$policies" -f name='v*' -f type='tag'
   ```
 
-  The Release itself is unaffected — `pages.yml` and `release.yml` fail
+  Both entries are needed: the tag publishes releases, `main` backs every
+  `gh workflow run pages.yml --ref main`. The POST only works while the
+  environment is set to *selected branches and tags*; if it was reset to
+  another mode, switch it back in Settings → Environments → github-pages
+  first. The Release itself is unaffected — `pages.yml` and `release.yml` fail
   independently.

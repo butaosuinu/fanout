@@ -25,12 +25,14 @@ permissions:
   id-token: write
 
 concurrency:
-  # Publishing runs share one queue so two deploys never race for the Pages
-  # environment. Validation runs get a per-ref group instead: queueing a run
-  # cancels the run already pending in its group, so one shared group would
-  # let a PR silently cancel a release deploy waiting behind it.
+  # Queueing a run cancels the one already pending in its group. Validation
+  # runs therefore get a per-ref group: sharing one group with the publishes
+  # would let a PR cancel a release deploy waiting behind it. Publishes still
+  # share a queue so two deploys never race for the Pages environment — two
+  # tags cut minutes apart drop the middle deploy, the same trade GitHub's own
+  # Pages template makes, and the newest publish always wins.
   group: pages-${{ (github.event_name == 'workflow_dispatch' || github.ref_type == 'tag') && 'publish' || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' || github.ref_type == 'tag') }}
 
 jobs:
   build:
@@ -69,7 +71,9 @@ jobs:
         uses: actions/configure-pages@v6.0.0
       # Never conditional: a check run must build the same site a deploy would.
       # When Setup Pages is skipped its output is empty and the literal
-      # fallback applies — the same URL configure-pages returns.
+      # fallback applies — the value configure-pages returns while Pages serves
+      # from the default github.io domain. Point Pages at a custom domain and
+      # the two diverge; put the new domain in this literal too.
       - name: Build with Hugo
         env:
           HUGO_ENVIRONMENT: production
