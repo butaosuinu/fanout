@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
+import { alignedScrollTop } from "./scrollAlign";
 
 /* このモジュールは 1 つの関心の集まり — ライブラリの virtualizer が持つ file ごとの
  * オフセットは resize でしか更新されないので、スクロール中の空白も、サイドバーから
- * のジャンプも、レイアウト変更も、すべて同じ nudge で直す。個々の hook を呼び出し側
- * に並べると、どれか 1 本を張り忘れた瞬間に「行はあるのに画面が空白」に戻る。
+ * のジャンプも、確認済みを付けたあとの送りも、レイアウト変更も、すべて同じ nudge で
+ * 直す。個々の hook を呼び出し側に並べると、どれか 1 本を張り忘れた瞬間に「行はある
+ * のに画面が空白」に戻る。
  * useDiffScrolling(末尾)がその束ね役で、DiffOverlay はこれだけを呼ぶ。 */
+
+/* 2 フレーム後に呼ぶ。resize の観測もレイアウトの確定もフレーム末なので、直前に
+ * 書き換えた分がそこに乗るのを待ってから次を当てる。 */
+function afterTwoFrames(fn: () => void): void {
+  requestAnimationFrame(() => requestAnimationFrame(fn));
+}
 
 /* 空白の修復判定: この高さ以上が見えている file だけを対象にする。 */
 const BLANK_REPAIR_MIN_PX = 120;
@@ -26,15 +34,46 @@ type Hosts = RefObject<Map<number, HTMLDivElement>>;
  * (isContainerManaged)ため cleanUp は shadow root の placeholder / buffer を
  * 残したまま参照だけ捨て、作り直した instance がその上に重ねて描く。実測で
  * 1 回の作り直しだけで全 file の高さが 2 倍になり、文書長が 92,098px →
- * 184,042px に膨らんで広範囲が空白になった。 */
+ * 184,042px に膨らんで広範囲が空白になった。
+ *
+ * 書き換えの間隔がこの hook の本体。resize が観測されるのはフレーム末なので、
+ * 1px にしてから同じフレーム内で 0px へ戻すと border-box は元のままになり、
+ * 「何も変わっていない」ことになってオフセットが古いまま残る。重なった要求は
+ * 捨てずに、直前の書き換えが観測されてから当てる:
+ *
+ * - 重なるのは実際にある。「確認済みを隠す」では、隠れる集合が動いた
+ *   useNudgeOnLayoutChange と、送り先を合わせる useAlignToFile が同じフレームで
+ *   両方呼ぶ。
+ * - 捨ててもいけない。背面タブは rAF も resize の観測も止まるので、その間に来た
+ *   要求(別タブの確認済みが storage 経由で届く)がまるごと消え、表へ戻ったときに
+ *   空白のまま残る。 */
 function useDiffNudge(rootRef: RefObject<HTMLElement | null>): () => void {
   const nudgedRef = useRef(false);
-  return useCallback(() => {
+  const busyRef = useRef(false);
+  const pendingRef = useRef(false);
+  const toggle = useCallback(() => {
     const scroller = rootRef.current?.querySelector<HTMLElement>(".diff-body");
     if (!scroller) return;
     nudgedRef.current = !nudgedRef.current;
     scroller.style.marginBottom = nudgedRef.current ? "1px" : "0px";
   }, [rootRef]);
+  return useCallback(
+    function run() {
+      if (busyRef.current) {
+        pendingRef.current = true;
+        return;
+      }
+      busyRef.current = true;
+      toggle();
+      afterTwoFrames(() => {
+        busyRef.current = false;
+        if (!pendingRef.current) return;
+        pendingRef.current = false;
+        run();
+      });
+    },
+    [toggle],
+  );
 }
 
 /* 表示モードの切替も並べ方の切替も、全 file の高さが変わる。幅の変化だけでは
@@ -116,42 +155,74 @@ function useBlankRepair({
   }, [hostsRef, nudge, patch, rootRef]);
 }
 
-/* サイドバーから本文へ飛ぶ。スクロールだけでは着地先の file が placeholder の
- * まま残るので、nudge で全 file のオフセットと描画範囲を取り直させる。高さが
- * 確定すると位置がずれるので、次フレームでもう一度合わせる。 */
+/* file の上端を本文スクロール領域の上端へ。スクロールだけでは着地先の file が
+ * placeholder のまま残るので、nudge で全 file のオフセットと描画範囲を取り直させる。
+ * 高さが確定すると位置がずれるので、次フレームでもう一度合わせる。
+ * サイドバーからのジャンプと確認済みの送りが同じ経路を通る。 */
+function useAlignToFile({ hostsRef, nudge }: { hostsRef: Hosts; nudge: () => void }) {
+  return useCallback(
+    (index: number) => {
+      const target = hostsRef.current.get(index);
+      const scroller = target?.closest<HTMLElement>(".diff-body");
+      if (!target || !scroller) return;
+      const align = () => {
+        scroller.scrollTop = alignedScrollTop({
+          scrollTop: scroller.scrollTop,
+          targetTop: target.getBoundingClientRect().top,
+          scrollerTop: scroller.getBoundingClientRect().top,
+        });
+      };
+      align();
+      nudge();
+      afterTwoFrames(align);
+    },
+    [hostsRef, nudge],
+  );
+}
+
+/* サイドバーから本文へ飛ぶ。 */
 function useScrollToFile({
   byPath,
-  hostsRef,
   expand,
-  nudge,
+  alignToFile,
 }: {
   byPath: Map<string, number[]>;
-  hostsRef: Hosts;
   /* 着地先が折りたたまれていたら開く */
   expand: (i: number) => void;
-  nudge: () => void;
+  alignToFile: (index: number) => void;
 }): (path: string) => void {
   return useCallback(
     (path: string) => {
       const i = byPath.get(path)?.[0];
       if (i === undefined) return;
-      const target = hostsRef.current.get(i);
-      const scroller = target?.closest<HTMLElement>(".diff-body");
-      if (!target || !scroller) return;
       expand(i);
-      const align = () => {
-        scroller.scrollTop +=
-          target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      };
-      align();
-      nudge();
-      requestAnimationFrame(() => requestAnimationFrame(align));
+      alignToFile(i);
     },
-    [byPath, expand, hostsRef, nudge],
+    [alignToFile, byPath, expand],
   );
 }
 
-/* 上の 4 本をまとめて張る。host の台帳(index -> .diff-file)もここが持つ —
+/* 確認済みを付けた直後の送り。押した file はその場で畳まれ(「確認済みを隠す」なら
+ * 行ごと消え)、文書の高さが縮む。何もしないとブラウザのスクロールアンカリング任せに
+ * なって読んでいた位置が飛ぶので、呼び出し側が決めた「次に読む file」の上端へ明示的に
+ * 合わせる。行が入れ替わるのは commit 後なので、測るのは次フレーム。
+ *
+ * どの file へ送るかを決めるのはここではない — 焦点の拾い直しも同じ答えを要るので、
+ * 選ぶのは DiffBody で 1 回だけ(scrollAlign の nextFileToRead)。 */
+function useAlignAfterCommit({
+  alignToFile,
+}: {
+  alignToFile: (index: number) => void;
+}): (index: number) => void {
+  return useCallback(
+    (index) => {
+      requestAnimationFrame(() => alignToFile(index));
+    },
+    [alignToFile],
+  );
+}
+
+/* 上をまとめて張る。host の台帳(index -> .diff-file)もここが持つ —
  * 空白判定もジャンプも同じ台帳を見るので、持ち主を呼び出し側に置く理由がない。 */
 export function useDiffScrolling({
   rootRef,
@@ -169,6 +240,7 @@ export function useDiffScrolling({
 }): {
   registerHost: (index: number, el: HTMLDivElement | null) => void;
   onSelectFile: (path: string) => void;
+  alignAfterCommit: (index: number) => void;
 } {
   const hostsRef = useRef(new Map<number, HTMLDivElement>());
   const nudge = useDiffNudge(rootRef);
@@ -176,8 +248,10 @@ export function useDiffScrolling({
     if (el) hostsRef.current.set(i, el);
     else hostsRef.current.delete(i);
   }, []);
-  const onSelectFile = useScrollToFile({ byPath, hostsRef, expand, nudge });
+  const alignToFile = useAlignToFile({ hostsRef, nudge });
+  const onSelectFile = useScrollToFile({ byPath, expand, alignToFile });
+  const alignAfterCommit = useAlignAfterCommit({ alignToFile });
   useNudgeOnLayoutChange(layoutKey, nudge);
   useBlankRepair({ rootRef, hostsRef, patch, nudge });
-  return { registerHost, onSelectFile };
+  return { registerHost, onSelectFile, alignAfterCommit };
 }

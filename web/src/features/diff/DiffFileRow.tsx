@@ -31,14 +31,47 @@ const HEADER_EDGE_CSS = [
   "}",
 ].join("\n");
 
+/* 横スクロールの封じ。本文はどこにも横スクロール箱を持たせず、長い行は折り返しで
+ * 読ませる(アプリ側は styles/diff.css の .diff-body が対で閉じる)。3 つ要る:
+ *
+ * - コードセルはスクロール箱を持つ(既定 `overflow: scroll clip`)。箱が消えるのは
+ *   split + 折り返しのときだけで、縦積み表示と片側しかない file には残り、
+ *   スクロールバーはライブラリ側が潰しているので触るまで気付けない。
+ *   `--diffs-overflow-override` を立てる手もあるが、その変数はライブラリ自身が
+ *   Mobile Safari のスクロール中に inline で書き、戻すときに `auto` を残す
+ *   (CodeView.js)。継承より強い足場を取って overflow を直接書く。
+ * - コード列のトラックは既定が `1fr`(= minmax(auto,1fr))で、min は min-content。
+ *   折り返さないトークンが 1 行あるだけでトラックごと container より広くなる。
+ *   ライブラリが [data-dehydrated] にだけ与えている minmax(0,1fr) を常時にする。
+ * - 行の折り返しはライブラリ側が `word-break:break-word` だけで指定している。
+ *   仕様上これは `word-break:normal` + `overflow-wrap:anywhere` と同義だが、
+ *   min-content 幅を縮めない実装があるので、その展開形を明示して書く。
+ *   同じ指定は注釈(`[data-annotation-content]`)にも掛かっているが、fanout は
+ *   注釈を渡していないので触らない。渡すようになったらここも要る。
+ *
+ * 後ろ 2 つは飾りではない。箱だけ消すと、はみ出したトークンが見えないまま
+ * 切り落とされる。
+ *
+ * スクロールバーの取り置きも一緒に 0 にする。ライブラリはコードセルの下余白を
+ * 「gap - スクロールバー実測」で出すが、その実測は connectedCallback 時点 —
+ * unsafeCSS が刺さる前 — に走るので、箱を消しても実測値は残り、取り置きだけが
+ * 消えて下余白が gap より狭くなる。 */
+const NO_OVERFLOW_CSS = [
+  "[data-code]{ overflow: clip; --diffs-scrollbar-gutter: 0px; }",
+  "[data-diff],[data-file]{",
+  "  --diffs-code-grid: var(--diffs-grid-number-column-width) minmax(0, 1fr);",
+  "}",
+  '[data-overflow="wrap"] [data-line]{ word-break: normal; overflow-wrap: anywhere; }',
+].join("\n");
+
 /* shadow DOM 内はライブラリの unsafeCSS からしか触れない。入れるのはこの固定文字列
  * だけで、patch 由来の値は一切混ぜない(敵性入力規約)。
  * split / stack それぞれの完成品を定数で持つ — render ごとに組み立てると文字列が
  * 変わったと見なされ、ライブラリが file を丸ごと描き直す。
  * 片側寄せは split のときだけ。stack も data-diff-type="single" になるので、
  * 渡したままだと本文が半分幅に潰れる。 */
-const SPLIT_CSS = `${HEADER_EDGE_CSS}\n${SINGLE_SIDE_CSS}`;
-const STACK_CSS = HEADER_EDGE_CSS;
+const SPLIT_CSS = [HEADER_EDGE_CSS, NO_OVERFLOW_CSS, SINGLE_SIDE_CSS].join("\n");
+const STACK_CSS = [HEADER_EDGE_CSS, NO_OVERFLOW_CSS].join("\n");
 
 /* ファイル名ヘッダの右側に並ぶ操作。ラベルに file 名を入れるのは、入れないと
  * 全 file のボタンとチェックが同名で並び、支援技術の要素一覧から区別できないため。 */
@@ -176,8 +209,10 @@ export const DiffFileRow = memo(function DiffFileRow({
     <div
       className="diff-file"
       /* data-collapsed は飾りではない — useDiffScroller の空白判定が、行が
-         無くて当然の file をこれで除外する。属性を足すならそこまで見ること。 */
+         無くて当然の file をこれで除外する。属性を足すならそこまで見ること。
+         data-index は確認済みを付けたあとの焦点の行き先(DiffBody)。 */
       data-collapsed={collapsed ? "" : undefined}
+      data-index={index}
       ref={(el) => registerHost(index, el)}
     >
       {/* key を付けて作り直さないこと — shadow root に前の placeholder /
