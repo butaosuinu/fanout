@@ -263,9 +263,16 @@ issue モードの実 launch を今回初めて通しました (dry-run で GitH
 
 `focusOwned` (`internal/infra/herdrrun/operations.go:365`) は
 `AgentID` と `AgentSession` の片方だけが埋まった identity を
-`focus target has a partial live-agent identity` で拒否します。ところが
-`herdrAgentSession` を書くのは codex だけです。claude の launch は
-`herdrAgentId` しか記録しないため、この条件を必ず踏みます。
+`focus target has a partial live-agent identity` で拒否します。fanout は
+herdr が返した `agent_session` をそのまま保存し、launch 後に現れた session も
+`bindLateAgentSession` (`internal/app/stateemitter/stateemitter.go:221`) が
+telemetry のたびに拾います。つまり session さえ返れば claude でも focus は通ります。
+
+問題は、それを返す実装が今どこにも無いことです。`report-agent-session` を呼ぶのは
+codex 用の controller だけで、`herdr:claude` という source は
+テストにしか出てきません。実測でも herdr 0.8.2 は claude ペインに
+`agent_session: null` を返し続けました。結果として claude 行は
+`herdrAgentId` だけの片側 identity のまま固定されます。
 
 ```
 focus skipped for w3:p1: herdr owned pane identity mismatch:
@@ -273,9 +280,10 @@ focus skipped for w3:p1: herdr owned pane identity mismatch:
 ```
 
 TUI の Enter / `o` / `Z`、launch 直後の自動 focus がすべて claude 行で無効です。
-同じ操作を codex 行で行うと通ります (`focused w7:p1`)。ガードは #635 から
-あるので、herdr backend の focus は claude では一度も動いていません。
+同じ操作を codex 行で行うと通ります (`focused w7:p1`)。
 `site/content/docs/herdr-backend.ja.md` は focus を対応済みと書いているので乖離です。
+herdr の claude integration が session を報告するようになれば
+`bindLateAgentSession` が遅れて束縛して直りますが、現状その経路はありません。
 
 #### `--close` が herdr レーンで worktree を消せない — [#721](https://github.com/butaosuinu/fanout/issues/721)
 
@@ -291,12 +299,20 @@ agent がファイルを触った子で `--close` すると次を返して state
   {"error":{"code":"dirty_worktree_requires_force", …}}
 ```
 
-worktree を clean にしても、`git worktree remove` でパスごと消しても、
-fanout 経由では同じ `dirty_worktree_requires_force` が返り続けます。
-同じタイミングで `herdr worktree remove --workspace <id>` を直接叩くと
-現在の状態 (`is not a working tree`) を正しく返すので、fanout 側の経路の問題です。
-ユーザー work を強制削除しない方針自体は正しいので、force ではなく
-再判定と ignored-only の扱いを決める必要があります。
+固定化するのはここからです。`markWorkspaceCleanupManual` が intent を
+`IntentManualCleanupRequired` にして失敗文字列を journal へ保存し、以後の
+`--close` は `workspaceCleanupAbsent` が偽である限り保存済みの文字列を
+そのまま返します (`internal/app/lifecycle/workspace_phases.go:31-33`)。
+そのため worktree を clean にしても、`git worktree remove` でパスごと消しても、
+同じ `dirty_worktree_requires_force` が出続けます。同じタイミングで
+`herdr worktree remove --workspace <id>` を直接叩くと現在の状態
+(`is not a working tree`) を正しく返します。
+
+回復には workspace と checkout の両方を消す必要があります
+(`workspaceCleanupAbsent` は `workspace == nil` かつ path 不在かつ未登録)。
+手で `herdr workspace close` まで行けば次の `--close` が
+`realizeWorkspaceCleanup` に入ります。ユーザー work を強制削除しない方針自体は
+正しいので、force ではなく再判定の導線を決める必要があります。
 
 #### dashboard のエラー文が herdr セッションで tmux を名乗る
 
