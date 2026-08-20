@@ -33,6 +33,14 @@ import (
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
+func TestMain(m *testing.M) {
+	// A developer shell inside a fanout console exports the hand-off name;
+	// left set, any cmdTUI-driving test would exec that shell mid-run through
+	// the real seam instead of finishing the package.
+	os.Unsetenv(backend.ConsoleShellEnv)
+	os.Exit(m.Run())
+}
+
 // stubManagedConsoleBootstrap pins the session/console bootstrap seams to a
 // fixed result and restores them when the test ends.
 func stubManagedConsoleBootstrap(t *testing.T, result panelaunch.ManagedConsoleResult) {
@@ -177,6 +185,9 @@ func TestHandoffConsoleShellExecsRecordedShellWithoutTheHandoffName(t *testing.T
 	// The exec only returns on failure, and a failed hand-off keeps the code.
 	if !strings.Contains(stderr.String(), "exec refused by test") {
 		t.Fatalf("hand-off failure warning missing: %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "run 'fanout' here to reopen") {
+		t.Fatalf("reopen hint missing from pane output: %q", stdout.String())
 	}
 }
 

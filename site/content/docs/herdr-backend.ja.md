@@ -150,8 +150,10 @@ fanout
 この実行で owned session と repository root の console workspace が 1 つ起動または再採用され、fanout プロセスは pin 済みの herdr client に置き換わります。端末は attach 済みで、コピーするものはありません。
 console ペインでは fanout の TUI コンソールが最初から動いているので、session に入ればそのままコンソールに着地します。
 client は session が最後に選択していた workspace を開くため、CLI ファンアウト後は agent ペインに先に着地することがあります。console workspace は sidebar の issue を持たない行です。
-TUI を quit するとペインはシェルに落ちます。そのシェルで `fanout` を実行すれば再び開きます(ペインには herdr が `HERDR_ENV=1` を設定しています)。
+TUI を quit するとペインはシェルに落ちます。そのシェルで `fanout` を実行すれば再び開きます(ペインには herdr が `HERDR_ENV=1` を設定しています)。quit 後に再利用した session は、再実行するまでシェルのままです。
 linked worktree 間では同じ console 行を共有します。
+
+detached の tmux コンソールと同じく、console TUI は誰も attach していない間も owned session に常駐します。state と GitHub の更新は続き、user config で有効化した watcher も動き続けます。
 
 端末がない場合 — stdin か stdout がパイプ、つまりスクリプトや CI — は attach せず、stdout の最終行に attach command を表示します。exec に失敗したときも同じ表示に落ちるので、手で実行する command は常に残ります。
 

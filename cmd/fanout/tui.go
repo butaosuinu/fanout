@@ -76,7 +76,16 @@ func isTUIRequest(args []string) bool {
 	return len(args) == 0
 }
 
+// cmdTUI wraps the whole resident-console run in the console-shell hand-off:
+// inside the owned console pane every exit — an early environment failure as
+// much as a TUI quit — must land in the operator shell, or the runtime folds
+// the pane and the console row goes stale. Outside that pane the hand-off
+// name is unset and the wrap is a no-op.
 func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
+	return handoffConsoleShell(runResidentTUI(commandName, lg), lg)
+}
+
+func runResidentTUI(commandName string, lg *log.Logger) exitcode.Code {
 	stateRuntime, err := resolveStateRuntime()
 	if err != nil {
 		lg.Err("%s", err.Error())
@@ -163,7 +172,7 @@ func cmdManagedConsoleTUI(
 	if openErr != nil {
 		lg.Warn("tui: owned Herdr actions disabled: %v", openErr)
 	}
-	code := runTUIConsole(
+	return runTUIConsole(
 		projectRoot,
 		strings.TrimSpace(os.Getenv("HERDR_SESSION")),
 		commandName,
@@ -172,7 +181,6 @@ func cmdManagedConsoleTUI(
 		owned,
 		lg,
 	)
-	return handoffConsoleShell(code, lg)
 }
 
 // handoffConsoleShell execs the operator shell the console bootstrap recorded
@@ -186,29 +194,18 @@ func handoffConsoleShell(code exitcode.Code, lg *log.Logger) exitcode.Code {
 	if shell == "" {
 		return code
 	}
-	if err := validateConsoleShellHandoff(shell); err != nil {
+	if err := panelaunch.RunnableConsoleShell(shell); err != nil {
 		lg.Warn("tui: console shell hand-off skipped: %v", err)
 		return code
 	}
+	// The line lands in the pane right above the new shell prompt, so a later
+	// attach that finds a shell here also finds the way back in.
+	fmt.Fprintln(lg.Stdout(), "fanout console closed; run 'fanout' here to reopen it")
 	if err := execConsoleShell(shell, []string{shell}, environmentWithout(backend.ConsoleShellEnv)); err != nil {
 		lg.Warn("tui: console shell hand-off failed: %v", err)
 		return code
 	}
 	panic("unreachable")
-}
-
-func validateConsoleShellHandoff(shell string) error {
-	if !filepath.IsAbs(shell) {
-		return fmt.Errorf("%s is not an absolute path", shell)
-	}
-	info, err := os.Stat(shell)
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return fmt.Errorf("%s is not executable", shell)
-	}
-	return nil
 }
 
 func environmentWithout(name string) []string {

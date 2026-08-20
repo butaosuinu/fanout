@@ -103,7 +103,9 @@ export FANOUT_BACKEND=herdr
 fanout
 ```
 
-That starts or adopts the owned session and one repository-root console workspace, then replaces the fanout process with the pinned herdr client — the terminal is attached, nothing to copy. The console pane runs fanout's TUI console directly, so entering the session lands you in the console. The client opens on the session's last selected workspace, so after a CLI fan-out you may land on an agent pane first; the console workspace is the sidebar row without an issue. Quitting the TUI drops the pane to your shell — run `fanout` there to reopen it (herdr sets `HERDR_ENV=1` in the pane). Linked worktrees share the one console row.
+That starts or adopts the owned session and one repository-root console workspace, then replaces the fanout process with the pinned herdr client — the terminal is attached, nothing to copy. The console pane runs fanout's TUI console directly, so entering the session lands you in the console. The client opens on the session's last selected workspace, so after a CLI fan-out you may land on an agent pane first; the console workspace is the sidebar row without an issue. Quitting the TUI drops the pane to your shell — run `fanout` there to reopen it (herdr sets `HERDR_ENV=1` in the pane); a session reused after a quit keeps that shell until you do. Linked worktrees share the one console row.
+
+Like the detached tmux console, the console TUI stays resident in the owned session while nobody is attached: it keeps refreshing state and GitHub, and a watcher enabled in user config keeps running.
 
 Without a terminal — stdin or stdout is a pipe, as in scripts and CI — fanout prints the attach command as the last stdout line instead of attaching. A failed exec falls back to the same print, so the command is always there to run by hand.
 

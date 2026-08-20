@@ -326,11 +326,25 @@ func resolveManagedConsoleInputs(projectRoot, shell string) (string, string, err
 	if err != nil {
 		return "", "", fmt.Errorf("canonicalize Herdr console shell: %w", err)
 	}
-	info, err := os.Stat(shell)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return "", "", fmt.Errorf("herdr console shell is not executable: %s", shell)
+	if err := RunnableConsoleShell(shell); err != nil {
+		return "", "", err
 	}
 	return root, filepath.Clean(shell), nil
+}
+
+// RunnableConsoleShell is the one check both ends of the ConsoleShellEnv
+// contract apply: the bootstrap before recording the shell, and the console
+// TUI before exec'ing it on exit — the value crosses a process boundary, so
+// the consumer re-checks rather than trusting the record.
+func RunnableConsoleShell(shell string) error {
+	if !filepath.IsAbs(shell) {
+		return fmt.Errorf("herdr console shell must be an absolute path")
+	}
+	info, err := os.Stat(shell)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("herdr console shell is not executable: %s", shell)
+	}
+	return nil
 }
 
 func verifyManagedConsoleRoute(
@@ -368,6 +382,20 @@ func newManagedShellLaunch(
 	shell string,
 	callerEnvironment []string,
 ) (*state.LaunchCapsule, error) {
+	return newManagedWorkloadLaunch(owned, route, shell, callerEnvironment)
+}
+
+// newManagedWorkloadLaunch is the one capsule builder both interactive lanes
+// share: nonce, filtered workload environment, one-shot capsule, executable.
+// extraEnvironment entries are appended after the filtered environment, so a
+// lane can record contract values (ConsoleShellEnv) the caller filter blocks.
+func newManagedWorkloadLaunch(
+	owned ManagedLaunchRuntime,
+	route backend.OwnedLaunchRoute,
+	executable string,
+	callerEnvironment []string,
+	extraEnvironment ...string,
+) (*state.LaunchCapsule, error) {
 	nonce, err := randomManagedToken()
 	if err != nil {
 		return nil, err
@@ -376,12 +404,13 @@ func newManagedShellLaunch(
 	if err != nil {
 		return nil, err
 	}
+	environment = append(environment, extraEnvironment...)
 	envPath, envCount, err := owned.PrepareWorkloadEnvironment(nonce, environment)
 	if err != nil {
 		return nil, err
 	}
 	return &state.LaunchCapsule{
-		Nonce: nonce, Executable: shell, EnvFilePath: envPath, EnvNameCount: envCount,
+		Nonce: nonce, Executable: executable, EnvFilePath: envPath, EnvNameCount: envCount,
 	}, nil
 }
 
@@ -396,22 +425,10 @@ func newManagedConsoleLaunch(
 	shell string,
 	callerEnvironment []string,
 ) (*state.LaunchCapsule, error) {
-	nonce, err := randomManagedToken()
-	if err != nil {
-		return nil, err
-	}
-	environment, err := owned.WorkloadEnvironment(callerEnvironment, route.LauncherPath)
-	if err != nil {
-		return nil, err
-	}
-	environment = append(environment, backend.ConsoleShellEnv+"="+shell)
-	envPath, envCount, err := owned.PrepareWorkloadEnvironment(nonce, environment)
-	if err != nil {
-		return nil, err
-	}
-	return &state.LaunchCapsule{
-		Nonce: nonce, Executable: route.LauncherPath, EnvFilePath: envPath, EnvNameCount: envCount,
-	}, nil
+	return newManagedWorkloadLaunch(
+		owned, route, route.LauncherPath, callerEnvironment,
+		backend.ConsoleShellEnv+"="+shell,
+	)
 }
 
 func findManagedConsolePane(projectRoot string, current state.Store) (state.Pane, bool, error) {

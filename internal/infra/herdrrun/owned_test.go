@@ -519,12 +519,12 @@ func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
 	if third.Session != first.Session || third.SocketPath != first.SocketPath {
 		t.Fatalf("lifecycle re-adopted session differs: first=%+v third=%+v", first, third)
 	}
-	command, err := second.AttachCommand()
+	command, _, err := second.AttachForms(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(command, "session attach") || !strings.Contains(command, socketEnv+"='") || !strings.Contains(command, h.layout.binaryDir) {
-		t.Fatalf("AttachCommand() = %q", command)
+		t.Fatalf("AttachForms() command = %q", command)
 	}
 }
 
