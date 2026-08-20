@@ -12,7 +12,8 @@ yomi: changelog
 ## v0.17.0 (2026-08-21)
 
 - **fanout-owned な herdr ワークフロー。** opt-in の herdr backend は repository-owned session を作成または再利用し、workspace と worktree を用意して issue / Project / plan / watcher を検証済みの非 shell 経路で起動します。
-  TUI は session の bootstrap、launch、focus、peek に対応し、ownership を検証できた行では `--team`、Codex Plan Mode、自動 nudge、merge / close / cleanup を実行できます。
+  TUI は session の bootstrap、launch、focus、peek に対応し、ownership を検証できた行では merge / close / cleanup を実行できます。
+  CLI launch は `--team` と Codex Plan Mode にも対応し、`fanout msg nudge` は fresh telemetry と identity check を通った live peer だけに prompt を送ります。
   [herdr backend]({{< relref "/docs/herdr-backend" >}}) と [モニタリング]({{< relref "/docs/monitoring" >}}) を参照。
 - **herdr の明示 restart と復旧。** `fanout herdr restart` は停止した owned server を置き換え、保存済みの session と process identity が完全に一致する direct Codex session だけを resume します。
   曖昧または未対応の行は `stale` のまま残します。

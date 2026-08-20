@@ -12,7 +12,8 @@ Release highlights, newest first. Every tag also has a [GitHub release](https://
 ## v0.17.0 (2026-08-21)
 
 - **fanout-owned herdr workflows.** The opt-in herdr backend now creates or adopts a repository-owned session, provisions its workspaces and worktrees, and launches issue, Project, plan, and watcher work through a verified non-shell path.
-  The TUI can bootstrap the session, launch, focus, and peek; `--team`, Codex Plan Mode, automatic nudge, and merge / close / cleanup work for ownership-verified rows.
+  The TUI can bootstrap the session, launch, focus, and peek, and it can merge, close, or clean up ownership-verified rows.
+  CLI launches also support `--team` and Codex Plan Mode, while `fanout msg nudge` prompts only a live eligible peer after fresh telemetry and identity checks.
   See [herdr backend]({{< relref "/docs/herdr-backend" >}}) and [Monitoring]({{< relref "/docs/monitoring" >}}).
 - **Explicit herdr restart and recovery.** `fanout herdr restart` replaces a dead owned server and resumes only a direct Codex session whose saved session and process identity match exactly; every ambiguous or unsupported row stays `stale`.
   `fanout herdr shutdown` retires an empty owned server and reconciles completed launch intents without repeating an uncertain mutation.
