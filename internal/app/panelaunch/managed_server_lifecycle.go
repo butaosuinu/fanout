@@ -126,13 +126,11 @@ func prepareOrResumeManagedShutdown(
 	if err != nil || found {
 		return intent, err
 	}
-	if err := pruneAbsentRealizedManagedIntents(ctx, journal, io.ObserveWorkspaces); err != nil {
-		return state.LaunchIntent{}, err
+	absent, allAbsent := absentRealizedManagedIntents(ctx, journal.LaunchJournal, io.ObserveWorkspaces)
+	if !allAbsent {
+		return state.LaunchIntent{}, rejectActiveManagedIntents(journal.LaunchJournal)
 	}
-	if err := rejectActiveManagedIntents(journal.LaunchJournal); err != nil {
-		return state.LaunchIntent{}, err
-	}
-	return prepareManagedShutdown(ctx, projectRoot, locked, journal, io)
+	return prepareManagedShutdown(ctx, projectRoot, locked, journal, io, absent)
 }
 
 func managedShutdownIssueCallback(
@@ -219,6 +217,7 @@ func prepareManagedShutdown(
 	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	io ManagedServerIO,
+	absent []state.LaunchIntent,
 ) (state.LaunchIntent, error) {
 	identity, err := io.InspectServer()
 	if err != nil {
@@ -231,10 +230,23 @@ func prepareManagedShutdown(
 	if err := requireEmptyManagedShutdown(ctx, io); err != nil {
 		return state.LaunchIntent{}, err
 	}
+	if err := releaseManagedShutdownIntents(journal, absent); err != nil {
+		return state.LaunchIntent{}, err
+	}
 	if err := retireManagedShutdownScaffolds(projectRoot, locked, scaffolds); err != nil {
 		return state.LaunchIntent{}, err
 	}
 	return persistManagedShutdownIntent(journal, identity)
+}
+
+func releaseManagedShutdownIntents(
+	journal *state.LockedLaunchJournal,
+	absent []state.LaunchIntent,
+) error {
+	if err := releaseAbsentManagedIntents(journal, absent); err != nil {
+		return err
+	}
+	return rejectActiveManagedIntents(journal.LaunchJournal)
 }
 
 func requireEmptyManagedShutdown(ctx context.Context, io ManagedServerIO) error {

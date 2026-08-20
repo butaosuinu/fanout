@@ -253,6 +253,59 @@ func TestShutdownManagedServerRetainsRealizedIntentWhenObservationFails(t *testi
 	}
 }
 
+func TestShutdownManagedServerRetainsAllRealizedIntentsWhenOneResourceRemains(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	runtime := &fakeManagedRealizeRuntime{}
+	installSuccessfulManagedMutations(t, repo, runtime)
+	hooks := deterministicManagedRealizeHooks()
+	coordinator := realizeTestManagedCoordinator(t, repo, runtime, hooks)
+	req := testManagedWorktreeRequest(repo, "retained-child", 712)
+	child, err := realizeManagedWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	harness := &managedServerTestHarness{}
+
+	err = ShutdownManagedServer(context.Background(), repo, harness.io())
+	if err == nil || !strings.Contains(err.Error(), "2 active Herdr intent rows remain") {
+		t.Fatalf("ShutdownManagedServer() error = %v, want two-intent rejection", err)
+	}
+	journal, loadErr := state.LoadLaunchJournal(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	for _, intentID := range []string{coordinator.ID, child.Intent.ID} {
+		if _, found := journal.FindIntent(intentID); !found {
+			t.Fatalf("ShutdownManagedServer() removed retained intent %s", intentID)
+		}
+	}
+	if harness.shutdownCalls != 0 {
+		t.Fatalf("ShutdownManagedServer() shutdown calls = %d, want 0", harness.shutdownCalls)
+	}
+}
+
+func TestShutdownManagedServerRetainsRealizedIntentOnWorkspaceIdentityMismatch(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	intent := managedLifecycleTestCoordinatorIntent(t, repo)
+	saveManagedLifecycleTestIntent(t, repo, intent)
+	harness := &managedServerTestHarness{workspaces: []backend.WorkspaceObservation{{
+		WorkspaceID: intent.Resource.WorkspaceID,
+		Label:       "foreign-label",
+	}}}
+
+	err := ShutdownManagedServer(context.Background(), repo, harness.io())
+	if err == nil || !strings.Contains(err.Error(), "1 active Herdr intent rows remain") {
+		t.Fatalf("ShutdownManagedServer() error = %v, want identity-mismatch rejection", err)
+	}
+	journal, loadErr := state.LoadLaunchJournal(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if _, found := journal.FindIntent(intent.ID); !found || harness.shutdownCalls != 0 {
+		t.Fatalf("ShutdownManagedServer() retained = %t, shutdown calls = %d, want true/0", found, harness.shutdownCalls)
+	}
+}
+
 func TestShutdownManagedServerRetiresConsoleAndCoordinatorScaffolds(t *testing.T) {
 	repo, sibling := managedConsoleTestWorktrees(t)
 	console := managedConsoleTestPane(repo, "workspace-console", "pane-console")

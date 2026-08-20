@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -30,32 +31,49 @@ func releaseManagedIntent(
 	return cause
 }
 
-// pruneAbsentRealizedManagedIntents releases only realized launch resources
-// whose runtime and kind-specific local postconditions are both absent. A
-// failed runtime snapshot classifies nothing, so the caller retains every row
-// and applies the existing active-intent rejection.
-func pruneAbsentRealizedManagedIntents(
+// absentRealizedManagedIntents classifies the whole active journal without
+// writing it. Shutdown may release the returned set only after every later
+// state and workspace preflight also succeeds, so a rejected shutdown never
+// leaves a partially consumed recovery journal.
+func absentRealizedManagedIntents(
 	ctx context.Context,
-	locked *state.LockedLaunchJournal,
+	journal state.LaunchJournal,
 	observe func(context.Context) ([]backend.WorkspaceObservation, error),
-) error {
-	candidates := realizedManagedIntents(locked.LaunchJournal)
+) ([]state.LaunchIntent, bool) {
+	candidates, allRealized := allManagedIntentsRealized(journal)
+	if !allRealized {
+		return nil, false
+	}
 	if len(candidates) == 0 {
-		return nil
+		return nil, true
 	}
 	workspaces, err := observe(ctx)
 	if err != nil {
-		return nil //nolint:nilerr // Keep every row so the caller reports the active-intent rejection.
+		return nil, false
 	}
-	for _, intent := range candidates {
-		absent, _ := realizedManagedIntentAbsent(ctx, intent, workspaces)
-		if absent {
-			if err := releaseManagedIntent(locked, intent.ID, nil); err != nil {
-				return err
-			}
+	if !allRealizedManagedIntentsAbsent(ctx, candidates, workspaces) {
+		return nil, false
+	}
+	return candidates, true
+}
+
+func allRealizedManagedIntentsAbsent(
+	ctx context.Context,
+	intents []state.LaunchIntent,
+	workspaces []backend.WorkspaceObservation,
+) bool {
+	for _, intent := range intents {
+		absent, classifyErr := realizedManagedIntentAbsent(ctx, intent, workspaces)
+		if classifyErr != nil || !absent {
+			return false
 		}
 	}
-	return nil
+	return true
+}
+
+func allManagedIntentsRealized(journal state.LaunchJournal) ([]state.LaunchIntent, bool) {
+	candidates := realizedManagedIntents(journal)
+	return candidates, len(candidates) == len(journal.Intents)
 }
 
 func realizedManagedIntents(journal state.LaunchJournal) []state.LaunchIntent {
@@ -73,7 +91,7 @@ func realizedManagedIntentAbsent(
 	intent state.LaunchIntent,
 	workspaces []backend.WorkspaceObservation,
 ) (bool, error) {
-	if len(workspacesWithLabel(workspaces, intent.WorkspaceLabel)) != 0 {
+	if realizedManagedRuntimePresent(workspaces, intent) {
 		return false, nil
 	}
 	switch intent.Kind {
@@ -85,6 +103,38 @@ func realizedManagedIntentAbsent(
 	default:
 		return false, nil
 	}
+}
+
+func realizedManagedRuntimePresent(
+	workspaces []backend.WorkspaceObservation,
+	intent state.LaunchIntent,
+) bool {
+	return len(workspacesWithLabel(workspaces, intent.WorkspaceLabel)) != 0 ||
+		managedWorkspaceIDPresent(workspaces, intent.Resource.WorkspaceID)
+}
+
+func managedWorkspaceIDPresent(
+	workspaces []backend.WorkspaceObservation,
+	workspaceID string,
+) bool {
+	return slices.ContainsFunc(workspaces, func(workspace backend.WorkspaceObservation) bool {
+		return workspace.WorkspaceID == workspaceID
+	})
+}
+
+func releaseAbsentManagedIntents(
+	locked *state.LockedLaunchJournal,
+	intents []state.LaunchIntent,
+) error {
+	if len(intents) == 0 {
+		return nil
+	}
+	for _, intent := range intents {
+		if !locked.RemoveIntent(intent.ID) {
+			return fmt.Errorf("realized Herdr intent %s disappeared before release", intent.ID)
+		}
+	}
+	return locked.Save()
 }
 
 func ensureManagedBranchReservation(

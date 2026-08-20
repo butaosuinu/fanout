@@ -24,13 +24,14 @@ func TestPruneAbsentRealizedManagedWorktreeRequiresAbsentCheckout(t *testing.T) 
 			runtime := &fakeManagedRealizeRuntime{}
 			installSuccessfulManagedMutations(t, repo, runtime)
 			hooks := deterministicManagedRealizeHooks()
-			realizeTestManagedCoordinator(t, repo, runtime, hooks)
+			coordinator := realizeTestManagedCoordinator(t, repo, runtime, hooks)
 			req := testManagedWorktreeRequest(repo, "prune-child", 710)
 			result, err := realizeManagedWorktree(context.Background(), req, runtime, hooks)
 			if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
 				t.Fatal(err)
 			}
-			runtime.workspaces = runtime.workspaces[:1]
+			removeManagedTestIntent(t, repo, coordinator.ID)
+			runtime.workspaces = nil
 			if test.removeCheckout {
 				gitCmdTest(t, repo, "worktree", "remove", req.WorktreePath)
 			}
@@ -41,7 +42,7 @@ func TestPruneAbsentRealizedManagedWorktreeRequiresAbsentCheckout(t *testing.T) 
 			}
 			_, found := journal.FindIntent(result.Intent.ID)
 			if found != test.wantFound {
-				t.Fatalf("pruneAbsentRealizedManagedIntents(removeCheckout=%t) found = %t, want %t", test.removeCheckout, found, test.wantFound)
+				t.Fatalf("absentRealizedManagedIntents(removeCheckout=%t) found = %t, want %t", test.removeCheckout, found, test.wantFound)
 			}
 		})
 	}
@@ -65,7 +66,7 @@ func TestPruneAbsentRealizedManagedIntentsRetainsAllOnSnapshotFailure(t *testing
 		t.Fatal(err)
 	}
 	if len(journal.Intents) != 2 {
-		t.Fatalf("pruneAbsentRealizedManagedIntents(snapshot failure) intents = %d, want 2", len(journal.Intents))
+		t.Fatalf("absentRealizedManagedIntents(snapshot failure) intents = %d, want 2", len(journal.Intents))
 	}
 }
 
@@ -81,7 +82,31 @@ func pruneManagedTestIntents(
 	}
 	journal, err := locked.LaunchJournal(repo)
 	if err == nil {
-		err = pruneAbsentRealizedManagedIntents(context.Background(), journal, observe)
+		var absent []state.LaunchIntent
+		var allAbsent bool
+		absent, allAbsent = absentRealizedManagedIntents(context.Background(), journal.LaunchJournal, observe)
+		if allAbsent {
+			err = releaseAbsentManagedIntents(journal, absent)
+		}
+	}
+	err = errors.Join(err, locked.Unlock())
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func removeManagedTestIntent(t *testing.T, repo, intentID string) {
+	t.Helper()
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := locked.LaunchJournal(repo)
+	if err == nil && !journal.RemoveIntent(intentID) {
+		err = errors.New("managed test intent not found")
+	}
+	if err == nil {
+		err = journal.Save()
 	}
 	err = errors.Join(err, locked.Unlock())
 	if err != nil {
