@@ -257,10 +257,42 @@ func SameAgentSession(left, right *AgentSessionRef) bool {
 	return *left == *right
 }
 
+// AgentSessionAdmits reports whether a row that recorded `recorded` may still
+// act on a pane now reporting `live`, for the callers that hold no separate
+// provider name and must read it off the references themselves.
+//
+// The conversation is evidence about a pane, not the fence on it. A provider
+// replaces its own conversation id while the pane, terminal, agent record, and
+// launch stay put — Claude's /clear and Codex's /new both do — so freezing the
+// first observed id would lock the row out of focus, peek, close, and cleanup
+// for the life of that pane, with no way back. What fences these rows is
+// everything around the conversation: route, terminal, checkout, and the
+// per-launch AgentID, none of which another launch can reproduce. So a
+// conversation may be replaced only by another one the same runtime issued for
+// the same provider, and a row that has not bound one yet admits the
+// provider's current one rather than reading it as drift.
+func AgentSessionAdmits(recorded, live *AgentSessionRef) bool {
+	if recorded == nil {
+		return live == nil || issuedAgentSession(live)
+	}
+	if SameAgentSession(recorded, live) {
+		return true
+	}
+	return issuedAgentSession(recorded) && issuedAgentSession(live) && recorded.Agent == live.Agent
+}
+
+// issuedAgentSession reports whether ref is a well-formed reference a runtime
+// issued for its own provider, checked without naming that provider
+// separately: the source has to be the frozen value built for ref's own agent.
+func issuedAgentSession(ref *AgentSessionRef) bool {
+	return ref != nil && ref.Valid() && ref.Source == AgentSessionSource(ref.Agent)
+}
+
+// boundAgentSessionMatches is AgentSessionAdmits for the callers that do know
+// the recorded provider, so both sides are pinned to it by name.
 func boundAgentSessionMatches(recorded, live *AgentSessionRef, provider string) bool {
 	if recorded == nil {
-		return live == nil
+		return live == nil || ExpectedAgentSession(live, provider)
 	}
-	return ExpectedAgentSession(recorded, provider) && ExpectedAgentSession(live, provider) &&
-		SameAgentSession(recorded, live)
+	return ExpectedAgentSession(recorded, provider) && ExpectedAgentSession(live, provider)
 }

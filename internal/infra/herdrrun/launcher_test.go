@@ -124,6 +124,29 @@ func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 			},
 		},
 		{
+			name: "resumed claude carries the integration route only",
+			intent: state.LaunchIntent{
+				Kind: state.IntentResume, Launch: &state.LaunchCapsule{Agent: "claude"},
+			},
+			want: integrationRoute,
+		},
+		{
+			// The controller exclusion is checked before the agent allowlist, so
+			// a claude capsule carrying one is excluded the same way codex is.
+			name: "claude plan controller carries nothing",
+			intent: state.LaunchIntent{
+				Kind:   state.IntentWorktree,
+				Launch: &state.LaunchCapsule{Agent: "claude", CodexPlanStatusPath: "/runtime/plan.json"},
+			},
+		},
+		{
+			name: "claude team controller carries nothing",
+			intent: state.LaunchIntent{
+				Kind:   state.IntentWorktree,
+				Launch: &state.LaunchCapsule{Agent: "claude", CodexTeamStatusPath: "/runtime/team.json"},
+			},
+		},
+		{
 			// opencode's integration is not verified against this launch path.
 			name: "opencode carries nothing",
 			intent: state.LaunchIntent{

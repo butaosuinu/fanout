@@ -281,7 +281,10 @@ func TestEmitFinalRowFailsClosedOnBindingMismatch(t *testing.T) {
 	}
 }
 
-func TestEmitFinalRowBindsOnlyFirstLateSession(t *testing.T) {
+// A provider that replaces its conversation mid-pane keeps reporting state:
+// the row follows the replacement instead of being invalidated into a rotated
+// emitter nonce the live agent can never match again.
+func TestEmitFinalRowRebindsReplacedSession(t *testing.T) {
 	repo := newEmitterRepo(t)
 	pane, signal, observer := finalEmitterFixture(t, repo)
 	first := backend.AgentSessionRef{
@@ -306,9 +309,24 @@ func TestEmitFinalRowBindsOnlyFirstLateSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = loadEmitterPane(t, repo)
-	if got.AgentSession == nil || *got.AgentSession != first || got.ReportedState != "" ||
+	if got.AgentSession == nil || *got.AgentSession != second || got.ReportedState != "idle" ||
+		!got.StateRefinement || got.EmitterNonce != pane.EmitterNonce {
+		t.Fatalf("replacement session did not rebind telemetry row = %+v", got)
+	}
+
+	// A conversation from another provider is not a replacement: it stales the
+	// row exactly as an identity change always has.
+	foreign := backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-foreign",
+	}
+	observer.observation.Panes[0].AgentSession = &foreign
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got = loadEmitterPane(t, repo)
+	if got.AgentSession == nil || *got.AgentSession != second || got.ReportedState != "" ||
 		got.StateRefinement || got.EmitterNonce == pane.EmitterNonce {
-		t.Fatalf("replacement session did not stale telemetry row = %+v", got)
+		t.Fatalf("foreign-provider session did not stale telemetry row = %+v", got)
 	}
 }
 

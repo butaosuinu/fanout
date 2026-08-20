@@ -88,10 +88,37 @@ func TestPaneBindingMatchesLive(t *testing.T) {
 			},
 		},
 		{
-			name: "conversation changed",
+			// The provider replaced its own conversation in a pane this launch
+			// still owns, which is what /clear and /new do.
+			name: "conversation replaced by the same provider",
 			mutateLive: func(l *LivePane) {
 				changed := *l.AgentSession
 				changed.Value = "session-value-reused"
+				l.AgentSession = &changed
+			},
+			want: true,
+		},
+		{
+			name: "conversation replaced by another provider",
+			mutateLive: func(l *LivePane) {
+				changed := *l.AgentSession
+				changed.Agent, changed.Source, changed.Value = "claude", "herdr:claude", "other"
+				l.AgentSession = &changed
+			},
+		},
+		{
+			name: "replacement conversation is not one the runtime issued",
+			mutateLive: func(l *LivePane) {
+				changed := *l.AgentSession
+				changed.Source, changed.Value = "foreign:codex", "other"
+				l.AgentSession = &changed
+			},
+		},
+		{
+			name: "replacement conversation is malformed",
+			mutateLive: func(l *LivePane) {
+				changed := *l.AgentSession
+				changed.Kind, changed.Value = "thread", "other"
 				l.AgentSession = &changed
 			},
 		},
@@ -102,8 +129,21 @@ func TestPaneBindingMatchesLive(t *testing.T) {
 			mutateBound: func(b *PaneBinding) { b.AgentID, b.AgentSession = "", nil },
 		},
 		{
+			// The row has not bound a conversation yet; the launch identity
+			// around it is what fences the row, so the provider's current
+			// conversation is admitted instead of read as drift.
 			name:        "recorded conversation unbound but observed",
 			mutateBound: func(b *PaneBinding) { b.AgentSession = nil },
+			want:        true,
+		},
+		{
+			name:        "unbound row still rejects another provider's conversation",
+			mutateBound: func(b *PaneBinding) { b.AgentSession = nil },
+			mutateLive: func(l *LivePane) {
+				changed := *l.AgentSession
+				changed.Agent, changed.Source = "claude", "herdr:claude"
+				l.AgentSession = &changed
+			},
 		},
 		{
 			name:        "neither side recorded a conversation",

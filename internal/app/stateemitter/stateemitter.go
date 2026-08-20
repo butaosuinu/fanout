@@ -207,7 +207,7 @@ func updateFinalRow(
 		}
 		return err
 	}
-	if err := bindLateAgentSession(locked.Panes, index, current); err != nil {
+	if err := bindAgentSession(locked.Panes, index, current); err != nil {
 		return err
 	}
 	locked.Panes[index].ReportedState = nextReportedState(
@@ -218,10 +218,28 @@ func updateFinalRow(
 	return locked.Save()
 }
 
-func bindLateAgentSession(panes []state.Pane, index int, current backend.LivePane) error {
-	if panes[index].AgentSession != nil || current.AgentSession == nil {
+// bindAgentSession records the conversation the pane currently reports. It
+// covers both the first bind, where the row carries none yet, and the rebind
+// after the provider replaced its conversation in a pane this launch still
+// owns. Recording the replacement is what keeps the row truthful for the one
+// consumer that reads the value rather than comparing it — resume, which
+// restores the conversation the pane is actually on.
+func bindAgentSession(panes []state.Pane, index int, current backend.LivePane) error {
+	recorded := panes[index].AgentSession
+	if current.AgentSession == nil || backend.SameAgentSession(recorded, current.AgentSession) {
 		return nil
 	}
+	if recorded == nil {
+		return bindFirstAgentSession(panes, index, current)
+	}
+	// Reaching here means agentSessionMatches already admitted the observation
+	// against the recorded provider, so the replacement is proven, not assumed.
+	ref := *current.AgentSession
+	panes[index].AgentSession = &ref
+	return nil
+}
+
+func bindFirstAgentSession(panes []state.Pane, index int, current backend.LivePane) error {
 	ref, ok := sessionbinding.UniqueSessionBinding(panes, index, []backend.LivePane{current})
 	if !ok {
 		return fmt.Errorf("late Herdr agent session does not match exactly one state row")
@@ -538,7 +556,11 @@ func livePaneMatches(target RuntimeTarget, pane backend.LivePane) bool {
 
 func agentSessionMatches(target RuntimeTarget, current *backend.AgentSessionRef) bool {
 	if target.AgentSession != nil {
-		return current != nil && *current == *target.AgentSession
+		// A recorded conversation admits the provider's current one, so a row
+		// whose agent started a new conversation keeps reporting state instead
+		// of being invalidated into a rotated emitter nonce it can never match.
+		return backend.SameAgentSession(current, target.AgentSession) ||
+			backend.ExpectedAgentSession(current, target.Agent)
 	}
 	if !target.AcceptUnboundSession {
 		return current == nil

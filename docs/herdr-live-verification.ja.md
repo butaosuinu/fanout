@@ -293,7 +293,7 @@ integration は SessionStart hook から `pane.report_agent_session` を送る)�
 fanout はこれを呼びません。ところが pane launcher の
 `workloadExecEnvironment` (`internal/infra/herdrrun/launcher.go:97-116`) が
 `HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` を渡すのは、shell pane と
-`directCodexIntegrationLaunch` に限られます。claude の workload はこの 3 つを
+当時の `directCodexIntegrationLaunch` に限られます。claude の workload はこの 3 つを
 持たずに起動するので、integration が socket に到達できず session を報告できません。
 実測でも herdr 0.8.2 は claude ペインに `agent_session: null` を返し続けました。
 結果として claude 行は `herdrAgentId` だけの片側 identity のまま固定されます。
@@ -319,6 +319,16 @@ codex から direct agent へ広げました (`directAgentIntegrationLaunch`)。
 XDG root の外なので移設は要りません。attach で起動した agent は coordinator
 workspace で動き、この grant の対象外のままです。owned session を通した
 claude focus の実測は次回の再検証まで未取得です。
+
+session を束縛すると別の問題が出るので同時に直しました。行が conversation を
+保存すると、以後は完全一致が要求されていました (`docs/herdr-runtime-backend-spike.ja.md`)。
+claude の `/clear` は同じ pane で session id を変えるので、その一致は破れ、
+focus だけでなく peek・`--close`・`--cleanup`・telemetry まで恒久的に止まります
+(telemetry は `invalidateFinalRowTelemetry` が emitter nonce を回し、live agent は
+古い nonce のままなので二度と一致しません)。conversation を fence から観測値へ
+格下げし、同じ runtime が同じ provider 向けに発行した別 ref への差し替えだけを
+受理するようにしました (`AgentSessionAdmits`)。fence は route・terminal・checkout と
+launch 単位の `AgentID` が引き続き担います。codex 側の同じ問題も併せて解消します。
 
 #### `--close` / `--cleanup` が herdr レーンで worktree を消せない — [#721](https://github.com/butaosuinu/fanout/issues/721)
 

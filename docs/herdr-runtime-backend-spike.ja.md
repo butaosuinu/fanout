@@ -1107,7 +1107,13 @@ success と error の envelope は次の形だった。
 
 `herdr api snapshot` は raw method `session.snapshot` を CLI から呼び、workspace、tab、pane、layout、agent、focused ID を一つの `session_snapshot` で返す。
 worktree provenance は workspace に入るが、parent workspace ID と session UUID は入らない。
-pane と agent の `agent_session` は optional で、存在する場合は `source`、`agent`、`kind`、`value` を必須にする。final row に ref を保存済みなら以後は完全一致を要求する。launch 時点で未報告なら nil を保存し、後から expected provider の valid ref が一つ現れる遷移だけを受理する。
+pane と agent の `agent_session` は optional で、存在する場合は `source`、`agent`、`kind`、`value` を必須にする。
+launch 時点で未報告なら nil を保存し、後から expected provider の valid ref が一つ現れる遷移を受理する。
+**この段落の「保存済みなら以後は完全一致を要求する」は #720 で撤回した。**
+provider は pane を保ったまま自分の conversation を差し替える (claude の `/clear`、codex の `/new`) ので、
+最初に観測した ref を凍結すると、その pane は focus・peek・close・cleanup から恒久的に締め出される。
+現在の contract は、同じ runtime が同じ provider 向けに発行した別 ref への差し替えだけを受理し、
+route・terminal・checkout・launch 単位の `AgentID` を fence として据え置く (`AgentSessionAdmits`)。
 `kind` は `id` または `path` である。
 `pane.report_agent_session` は公式 integration が Socket method として使い、fanout は呼ばない。
 fanout は snapshot の ref を読むだけにし、同じ ref を重複報告しない。

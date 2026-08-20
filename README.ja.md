@@ -80,7 +80,8 @@ Claude/Codex 連携ファイルを配置します。バイナリのみのイン�
 watcher の launch、TUI の launch / focus / peek、`--merge` / `--close` /
 `--cleanup`、`--team` のメッセージングは使えます。対話 send、restore、plan
 capture は使えません。focus には `herdr integration install claude` / `codex`
-も必要です。照合する agent session を報告するのがこの hook だからです。
+も必要です。照合する agent session を報告するのは、このコマンドが agent 設定へ
+書き込む hook だからです。
 
 ## クイックスタート
 

@@ -909,9 +909,22 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 			include: true,
 		},
 		{
-			name: "logical conversation changed",
+			// The provider replaced its own conversation in a pane this launch
+			// still owns; the row stays live and follows it.
+			name: "logical conversation replaced by the same provider",
 			mutateLive: func(p *backend.LivePane) {
 				changed := *p.AgentSession
+				changed.Value = "session-value-reused"
+				p.AgentSession = &changed
+			},
+			include:   true,
+			wantAlive: true,
+		},
+		{
+			name: "logical conversation replaced by another provider",
+			mutateLive: func(p *backend.LivePane) {
+				changed := *p.AgentSession
+				changed.Agent, changed.Source = "claude", "herdr:claude"
 				changed.Value = "session-value-reused"
 				p.AgentSession = &changed
 			},
@@ -951,9 +964,25 @@ func TestBuildHerdrLivenessRequiresFullIdentityAndProvenance(t *testing.T) {
 			include: true,
 		},
 		{
-			name: "unbound logical conversation requires state binding",
+			// The row has not bound a conversation yet. The launch identity
+			// around it still fences the row, so the provider's current
+			// conversation keeps it live while the binding catches up.
+			name: "unbound logical conversation admits the provider's own",
 			mutateRow: func(p *state.Pane) {
 				p.AgentSession = nil
+			},
+			include:   true,
+			wantAlive: true,
+		},
+		{
+			name: "unbound row rejects another provider's conversation",
+			mutateRow: func(p *state.Pane) {
+				p.AgentSession = nil
+			},
+			mutateLive: func(p *backend.LivePane) {
+				changed := *p.AgentSession
+				changed.Agent, changed.Source = "claude", "herdr:claude"
+				p.AgentSession = &changed
 			},
 			include: true,
 		},

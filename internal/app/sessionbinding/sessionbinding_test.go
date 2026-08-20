@@ -29,6 +29,11 @@ func TestStateLoaderBindsOnlyFirstLateSession(t *testing.T) {
 	}
 	assertStoredSession(t, persisted, first)
 
+	// This loader owns the first bind only. A conversation the provider
+	// replaces afterwards is rebound by the telemetry path, which holds the
+	// same lock and observes the pane on every emit; here the row keeps its
+	// recorded value and, crucially, stays live rather than falling out of
+	// every identity gate until the pane exits.
 	second := first
 	second.Value = "session-second"
 	live.AgentSession = &second
@@ -37,8 +42,15 @@ func TestStateLoaderBindsOnlyFirstLateSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	bound := assertStoredSession(t, store, first)
+	if !bound.RuntimeBinding().MatchesLive(live) {
+		t.Fatal("replaced session dropped the persisted binding")
+	}
+
+	foreign := first
+	foreign.Source, foreign.Agent, foreign.Value = "herdr:claude", "claude", "session-foreign"
+	live.AgentSession = &foreign
 	if bound.RuntimeBinding().MatchesLive(live) {
-		t.Fatal("later session matched the persisted first binding")
+		t.Fatal("another provider's session matched the persisted binding")
 	}
 }
 

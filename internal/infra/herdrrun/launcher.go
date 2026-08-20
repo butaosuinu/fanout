@@ -136,11 +136,15 @@ func directAgentIntegrationLaunch(intent state.LaunchIntent) bool {
 	if !directKind || launch == nil {
 		return false
 	}
+	// A controller-bearing capsule execs fanout rather than the provider, so it
+	// is excluded ahead of the allowlist: the property belongs to the workload,
+	// not to the agent name that happens to carry it today.
+	if launch.CodexPlanStatusPath != "" || launch.CodexTeamStatusPath != "" {
+		return false
+	}
 	switch launch.Agent {
-	case "claude":
+	case "claude", "codex":
 		return true
-	case "codex":
-		return launch.CodexPlanStatusPath == "" && launch.CodexTeamStatusPath == ""
 	default:
 		return false
 	}

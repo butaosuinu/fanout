@@ -622,7 +622,10 @@ func equalOwnedPane(left, right corebackend.OwnedPaneIdentity) bool {
 		left.WorktreePath != right.WorktreePath || left.CurrentPath != right.CurrentPath || left.AgentID != right.AgentID {
 		return false
 	}
-	return corebackend.SameAgentSession(left.AgentSession, right.AgentSession)
+	// The conversation admits the provider's current one rather than freezing
+	// the first observed id; every other component above still compares exactly,
+	// and AgentID is per-launch, so the pane stays fenced to this launch.
+	return corebackend.AgentSessionAdmits(left.AgentSession, right.AgentSession)
 }
 
 func cloneOwnedPaneIdentity(target corebackend.OwnedPaneIdentity) corebackend.OwnedPaneIdentity {
