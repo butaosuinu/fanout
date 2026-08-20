@@ -39,6 +39,15 @@ type CheckoutObservation struct {
 	RepoRoot   string
 }
 
+// CheckoutContentState classifies files that can block a non-force removal.
+type CheckoutContentState string
+
+const (
+	CheckoutClean       CheckoutContentState = "clean"
+	CheckoutIgnoredOnly CheckoutContentState = "ignored_only"
+	CheckoutDirty       CheckoutContentState = "dirty"
+)
+
 // ResolveRepoIdentity returns the physical Git common directory and
 // source checkout root used by Herdr worktree provenance.
 func ResolveRepoIdentity(ctx context.Context, root string) (RepoIdentity, error) {
@@ -268,6 +277,33 @@ func ObserveCheckout(ctx context.Context, root, checkoutPath string) (CheckoutOb
 	observation.RepoKey = sourceIdentity.RepoKey
 	observation.RepoRoot = sourceIdentity.RepoRoot
 	return observation, nil
+}
+
+// ObserveCheckoutContentState separates ignored build artifacts from tracked
+// or untracked user work before a non-force Herdr removal.
+func ObserveCheckoutContentState(ctx context.Context, checkoutPath string) (CheckoutContentState, error) {
+	out, err := gitStdout(
+		ctx,
+		checkoutPath,
+		"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching",
+	)
+	if err != nil {
+		return "", fmt.Errorf("inspect Herdr checkout contents at %s: %w", checkoutPath, err)
+	}
+	foundIgnored := false
+	for record := range strings.SplitSeq(string(out), "\x00") {
+		if record == "" {
+			continue
+		}
+		if !strings.HasPrefix(record, "!! ") {
+			return CheckoutDirty, nil
+		}
+		foundIgnored = true
+	}
+	if foundIgnored {
+		return CheckoutIgnoredOnly, nil
+	}
+	return CheckoutClean, nil
 }
 
 func VerifyCheckout(

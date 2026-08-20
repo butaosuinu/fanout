@@ -51,12 +51,42 @@ pane が消えた場合は `stale` のままです。
 fanout は保存済みの workspace ID、label、terminal、repository、path、branch を mutation 前に照合します。
 cleanup intent を保存してから non-force の `herdr worktree remove` を発行し、checkout と workspace の不在を確認します。workspace だけが残れば close します。
 先に workspace が閉じられて checkout が残った場合は、owned plugin registry が空であることを確認してから削除用 workspace を再登録します。
-dirty checkout、所有不一致、応答結果を確定できない状態では行と intent を残し、再試行または手動 cleanup を求めます。
-branch は fanout-created と記録されたものだけを compare-and-delete します。worktree に変更や untracked ファイルが
-残っている状態で `--close` / `--cleanup` / TUI の cleanup を実行すると削除せず state を
-保持します。この 1 回で intent が manual cleanup に固定され、あとから checkout を clean に
-しても同じエラーが返ります。workspace と checkout の両方を消すまで再試行は通りません
-([#721](https://github.com/butaosuinu/fanout/issues/721))。
+
+fanout は remove の発行前に、tracked / untracked の作業と ignored file を区別します。
+どちらが残っていても herdr mutation を発行せず、原因を分けて表示します。再試行時は checkout を再検査します。
+`dirty_worktree_requires_force` で manual cleanup になった保存済み intent は、現在の checkout と workspace から再計画するため、変更を commit または削除したあとに続行できます（[#721](https://github.com/butaosuinu/fanout/issues/721)）。
+発行結果が曖昧な intent は再発行せず、manual cleanup のまま保持します。
+branch は fanout-created と記録されたものだけを compare-and-delete します。
+
+### cleanup の復旧
+
+cleanup error に表示された worktree path で残存内容を確認します。
+
+```bash
+git -C "<worktree>" status --short --untracked-files=all --ignored
+```
+
+tracked の作業は commit または stash し、untracked file は commit または別の場所へ退避してから再試行してください。
+ignored file だけなら、削除対象を確認してから ignored file だけを削除します。
+
+```bash
+git -C "<worktree>" clean -ndX
+git -C "<worktree>" clean -fdX
+```
+
+元の `--close` / `--cleanup` または TUI 操作を再実行します。
+checkout の内容で停止した場合と、保存済みの `dirty_worktree_requires_force` から復旧する場合は、worktree だけを別途削除しても再試行が残存 workspace を close します。
+
+曖昧な manual-cleanup error では `.fanout/state.json` と intent journal を削除しないでください。
+fanout-owned herdr session に attach した shell で、保存済み pane ID の workspace prefix（`w7:p1` なら `w7`）を使います。
+現在の状態に合うコマンドだけを実行します。その後 fanout を再試行し、不在確認と保存済み行の削除を完了させます。
+
+```bash
+# worktree が残っている場合
+herdr worktree remove --workspace <workspace-id> --json
+# workspace だけが残っている場合
+herdr workspace close <workspace-id>
+```
 
 未対応の経路は明確なエラーで fail closed します。
 

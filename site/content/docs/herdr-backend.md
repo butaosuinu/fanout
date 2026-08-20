@@ -21,7 +21,35 @@ Claude launches receive launch-scoped `--settings` hooks. Codex Plan Mode launch
 
 The TUI console and web dashboard use `reported_state` only while the matching pane and agent are live. `--status --format json` includes `reported_state`, and the table format shows it in `REPORTED_STATE`. The value does not complete an issue or authorize cleanup. Automatic nudge uses it only after current launch telemetry sets `state_refinement: true` and the live pane, worktree, agent, and process identity pass a fresh check. A disappeared pane remains `stale`.
 
-`--merge`, `--close`, `--cleanup`, and their TUI actions operate only on complete rows from that owned session. fanout compares the saved workspace ID, label, terminal, repository, path, and branch before mutation. It records a cleanup intent, issues non-force `herdr worktree remove`, verifies that the checkout and workspace are absent, and closes a residual workspace when needed. A checkout left after an earlier workspace close is re-registered only after the owned plugin registry passes the empty-registry preflight. Dirty checkouts, ownership mismatches, and ambiguous responses preserve the row and intent for retry or manual cleanup. One `--close`, `--cleanup`, or TUI cleanup against a dirty checkout pins the intent to manual cleanup and replays the same error afterwards, even once the checkout is clean; retry only resumes after both the workspace and the checkout are gone ([#721](https://github.com/butaosuinu/fanout/issues/721)). Branch deletion uses fanout's compare-and-delete and applies only to a branch recorded as fanout-created.
+`--merge`, `--close`, `--cleanup`, and their TUI actions operate only on complete rows from that owned session. fanout compares the saved workspace ID, label, terminal, repository, path, and branch before mutation. It records a cleanup intent, issues non-force `herdr worktree remove`, verifies that the checkout and workspace are absent, and closes a residual workspace when needed. A checkout left after an earlier workspace close is re-registered only after the owned plugin registry passes the empty-registry preflight.
+
+Before issuing the removal, fanout separates tracked or untracked work from ignored files. Either state stops cleanup without issuing a herdr mutation; the error says which state blocked it. Retry checks the checkout again. A saved manual-cleanup intent whose failure was `dirty_worktree_requires_force` is replanned from the current checkout and workspace state, so committing or removing the files unblocks it ([#721](https://github.com/butaosuinu/fanout/issues/721)). An ambiguous issued mutation remains manual and is never replayed. Branch deletion uses fanout's compare-and-delete and applies only to a branch recorded as fanout-created.
+
+### Recover a blocked cleanup
+
+Use the worktree path from the cleanup error to inspect what remains:
+
+```bash
+git -C "<worktree>" status --short --untracked-files=all --ignored
+```
+
+Commit or stash tracked work before retrying. Commit untracked files or copy them elsewhere. If only ignored files remain, preview and then remove only ignored files:
+
+```bash
+git -C "<worktree>" clean -ndX
+git -C "<worktree>" clean -fdX
+```
+
+Rerun the original `--close` / `--cleanup` command or TUI action. After a checkout-content block or a saved `dirty_worktree_requires_force` failure, a retry also closes a residual workspace when the worktree was removed separately.
+
+For an ambiguous manual-cleanup error, do not delete `.fanout/state.json` or the intent journal. In a shell attached to the fanout-owned herdr session, use the workspace prefix from the saved pane ID (`w7` from `w7:p1`). Run only the command for the current state, then retry fanout so it can verify absence and remove the saved row:
+
+```bash
+# The worktree still exists.
+herdr worktree remove --workspace <workspace-id> --json
+# Only the workspace remains.
+herdr workspace close <workspace-id>
+```
 
 The unsupported paths fail closed with a clear error.
 

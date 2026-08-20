@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -14,8 +15,10 @@ import (
 func recoverWorkspaceCleanup(
 	ctx context.Context,
 	opts Options,
+	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
+	pane state.Pane,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
 	if intent.Status == state.IntentIssued && intent.CleanupPhase == state.CleanupReopen {
@@ -29,10 +32,26 @@ func recoverWorkspaceCleanup(
 		return realizeWorkspaceCleanup(journal, intent)
 	}
 	if intent.Status == state.IntentManualCleanupRequired {
-		return intent, fmt.Errorf("%w: %s", ErrManualCleanupRequired, intent.Failure)
+		return recoverManualWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent, observation)
 	}
 	cause := fmt.Errorf("issued Herdr %s outcome remains ambiguous", intent.CleanupPhase)
 	return intent, markWorkspaceCleanupManual(journal, intent, cause)
+}
+
+func recoverManualWorkspaceCleanup(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	runtime WorkspaceRuntime,
+	pane state.Pane,
+	intent state.LaunchIntent,
+	observation workspaceCleanupObservation,
+) (state.LaunchIntent, error) {
+	if !strings.Contains(intent.Failure, "dirty_worktree_requires_force") {
+		return intent, fmt.Errorf("%w: %s", ErrManualCleanupRequired, intent.Failure)
+	}
+	return replanObservedWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent, observation)
 }
 
 func recoverIssuedReopen(
@@ -251,13 +270,31 @@ func verifyRemovePreconditions(
 	if err := verifyTerminalInvalidation(*observation.workspace, intent.Resource); err != nil {
 		return err
 	}
-	return verifyCleanupCheckout(
+	if err := verifyCleanupCheckout(
 		ctx,
 		opts.ProjectRoot,
 		intent.FullBranchRef,
 		intent.ExpectedHead,
 		intent.Resource,
-	)
+	); err != nil {
+		return err
+	}
+	return verifyRemovableCheckoutContents(ctx, intent.WorktreePath)
+}
+
+func verifyRemovableCheckoutContents(ctx context.Context, path string) error {
+	contentState, err := worktree.ObserveCheckoutContentState(ctx, path)
+	if err != nil {
+		return err
+	}
+	switch contentState {
+	case worktree.CheckoutClean:
+		return nil
+	case worktree.CheckoutIgnoredOnly:
+		return fmt.Errorf("herdr checkout %s contains ignored files only; remove them before retrying cleanup", path)
+	default:
+		return fmt.Errorf("herdr checkout %s has tracked or untracked changes; preserve or remove them before retrying cleanup", path)
+	}
 }
 
 func executeWorkspaceClose(

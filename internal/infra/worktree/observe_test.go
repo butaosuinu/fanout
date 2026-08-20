@@ -284,6 +284,48 @@ func TestObserveHerdrCheckoutRejectsRecreatedPrunableDirectory(t *testing.T) {
 	}
 }
 
+func TestObserveHerdrCheckoutContentState(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	assertState := func(want CheckoutContentState) {
+		t.Helper()
+		got, err := ObserveCheckoutContentState(context.Background(), repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("checkout content state = %q, want %q", got, want)
+		}
+	}
+
+	assertState(CheckoutClean)
+	writeFile(t, filepath.Join(repo, ".gitignore"), "node_modules/\n")
+	gitTest(t, repo, "add", ".gitignore")
+	gitTest(t, repo, "commit", "-m", "ignore dependencies")
+	if err := os.MkdirAll(filepath.Join(repo, "node_modules", "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(repo, "node_modules", "pkg", "index.js"), "ignored\n")
+	assertState(CheckoutIgnoredOnly)
+
+	writeFile(t, filepath.Join(repo, "untracked.txt"), "untracked\n")
+	assertState(CheckoutDirty)
+	if err := os.Remove(filepath.Join(repo, "untracked.txt")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(repo, "file.txt"), "modified\n")
+	assertState(CheckoutDirty)
+}
+
+func TestObserveHerdrCheckoutContentStateHonorsCanceledContext(t *testing.T) {
+	repo := newCommittedRepoWithoutOrigin(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ObserveCheckoutContentState(ctx, repo)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("checkout content state error = %v, want context.Canceled", err)
+	}
+}
+
 func TestVerifyHerdrCheckoutPinsBranchHeadAndRepository(t *testing.T) {
 	repo := newCommittedRepoWithoutOrigin(t)
 	base := gitOutput(t, repo, "rev-parse", "HEAD")
