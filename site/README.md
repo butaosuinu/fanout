@@ -32,17 +32,29 @@ Pull request and `main` runs stop after the Hugo + Pagefind build: they skip
 environment allows deployments from `main` and from `v*` tags; any other ref
 fails the deploy job instead of publishing.
 
-To see what is merged but not yet live — walking back to the newest deployment
-that actually succeeded, since a rejected or failed one still leaves a record:
+To see what is merged but not yet live. Ask for the deployment GitHub still
+considers live rather than the newest record — a rejected or failed deploy
+leaves a record too — and refuse to answer if that read comes back empty: an
+empty `$last` would make `git log` compare `HEAD..origin/main` and report
+nothing pending on an up-to-date checkout.
 
 ```bash
 git fetch origin main --quiet
-last="$(gh api "repos/butaosuinu/fanout/deployments?environment=github-pages&per_page=10" \
-  --jq '.[] | [.sha, .statuses_url] | @tsv' |
-  while IFS="$(printf '\t')" read -r sha url; do
-    [ "$(gh api "$url" --jq '.[0].state')" = "success" ] && { echo "$sha"; break; }
-  done)"
-git log --oneline "$last"..origin/main -- site/
+last="$(gh api graphql -f query='
+  query($owner: String!, $name: String!) {
+    repository(owner: $owner, name: $name) {
+      deployments(environments: ["github-pages"], last: 10) {
+        nodes { commitOid state }
+      }
+    }
+  }' -F owner=butaosuinu -F name=fanout \
+  --jq '[.data.repository.deployments.nodes[] | select(.state == "ACTIVE")][0].commitOid')"
+
+if [ -z "$last" ]; then
+  echo "could not read the live github-pages deployment"
+else
+  git log --oneline "$last"..origin/main -- site/
+fi
 ```
 
 ## Local preview

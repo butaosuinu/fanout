@@ -92,7 +92,8 @@ and no goreleaser config — the workflow is the whole pipeline.
      local id=""
      for _ in $(seq 12); do
        id="$(gh run list --workflow "$1" --branch vX.Y.Z --limit 10 \
-         --json databaseId,headSha -q '[.[] | select(.headSha == $ENV.tag_sha)][0].databaseId')"
+         --json databaseId,headSha -q '[.[] | select(.headSha == $ENV.tag_sha)][0].databaseId')" ||
+         { echo "lookup failed for $1"; return 2; }
        [ -n "$id" ] && break
        sleep 5
      done
@@ -105,6 +106,11 @@ and no goreleaser config — the workflow is the whole pipeline.
    watch_run release.yml
    watch_run pages.yml
    ```
+
+   Only a `1` from `watch_run pages.yml` means the run is missing. A `2` means
+   the lookup itself failed — expired auth, a rate limit, no network — and
+   publishing by hand on that reading can start a second deploy on top of one
+   that is already running. Fix the lookup and re-run first.
 
    If `pages.yml` never produced a run, publish the tag by hand:
 
