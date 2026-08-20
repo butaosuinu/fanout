@@ -20,7 +20,9 @@ yomi: changelog
   `fanout herdr shutdown` は空の owned server を終了し、結果が不明な mutation を再送せずに完了済みの launch intent を照合します。
   [herdr backend]({{< relref "/docs/herdr-backend" >}})、[CLI リファレンス]({{< relref "/docs/cli" >}})、[トラブルシューティング]({{< relref "/docs/troubleshooting" >}}) を参照。
 - **Web ダッシュボードで PR をレビューして merge。** Session 行と詳細ドロワーは review 状態、conflict、comment 数を表示し、diff ビュアーは **Viewed** を付けたファイルを保存して変更種別と移動を見分けやすく表示します。
-  ドロワーと diff toolbar から head commit を固定して squash / merge / rebase し、変化していない remote branch を local worktree に触れず削除できます。
+  ドロワーと diff toolbar から head commit を固定して squash / merge / rebase できます。
+  GitHub が merge を確認すると詳細ドロワーだけに別の削除ボタンが現れ、local worktree には触れません。
+  moved-head check は原子的ではないため、確認と GitHub ref の削除の間に入る push は検出できません。
   [モニタリング]({{< relref "/docs/monitoring" >}}) を参照。
 - **日英対応の Web ダッシュボード。** 既定で browser の言語に従い、settings で日本語または英語を固定すると origin ごとに保存します。
   保存済みの query をそのまま使えるよう、列名、tag、filter token は両言語で変えません。

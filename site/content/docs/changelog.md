@@ -19,7 +19,9 @@ Release highlights, newest first. Every tag also has a [GitHub release](https://
   `fanout herdr shutdown` retires an empty owned server and reconciles completed launch intents without repeating an uncertain mutation.
   See [herdr backend]({{< relref "/docs/herdr-backend" >}}), [CLI Reference]({{< relref "/docs/cli" >}}), and [Troubleshooting]({{< relref "/docs/troubleshooting" >}}).
 - **Review and merge pull requests from the web dashboard.** Session rows and drawers now show review state, conflicts, and comment counts; the diff viewer tracks files marked **Viewed** and has clearer file-type and move indicators.
-  The drawer and diff toolbar can squash, merge, or rebase a PR with a pinned head commit, then delete its unchanged remote branch without touching the local worktree.
+  The drawer and diff toolbar can squash, merge, or rebase a PR with a pinned head commit.
+  After GitHub confirms the merge, a separate delete button appears only in the detail drawer and leaves the local worktree untouched.
+  Its moved-head check is not atomic, so it cannot catch a push that lands between the check and the GitHub ref deletion.
   See [Monitoring]({{< relref "/docs/monitoring" >}}).
 - **English and Japanese web dashboard.** The dashboard follows the browser language by default, lets you pin Japanese or English in settings, and keeps the choice per origin.
   Column names, tags, and filter tokens remain stable in both languages so saved queries keep working.
