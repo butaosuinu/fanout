@@ -15,7 +15,7 @@ import (
 
 func TestCodexRemoteTUIArgsResumesSession(t *testing.T) {
 	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "session-1")
-	want := []string{"--remote", "ws://127.0.0.1:1234", "resume", "session-1"}
+	want := []string{"-c", "check_for_update_on_startup=false", "--remote", "ws://127.0.0.1:1234", "resume", "session-1"}
 
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)
@@ -24,7 +24,10 @@ func TestCodexRemoteTUIArgsResumesSession(t *testing.T) {
 
 func TestCodexRemoteTUIArgsStartsFreshSession(t *testing.T) {
 	got := codexRemoteTUIArgs("ws://127.0.0.1:1234", "")
-	want := []string{"--remote", "ws://127.0.0.1:1234"}
+	// Provenance: Codex CLI 0.146.0 on macOS 15.6 (2026-08-20) blocked a
+	// fresh remote TUI at the 0.148.0 update dialog. This override made three
+	// team-bridge probes report ready in 3.991s, 4.057s, and 4.221s.
+	want := []string{"-c", "check_for_update_on_startup=false", "--remote", "ws://127.0.0.1:1234"}
 
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("codexRemoteTUIArgs() = %#v, want %#v", got, want)

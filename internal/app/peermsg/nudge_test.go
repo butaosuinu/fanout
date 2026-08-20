@@ -491,11 +491,11 @@ func TestRunMsgNudgeHerdrRejectsInexactCodexPlanProcessTrees(t *testing.T) {
 		}},
 		{name: "duplicate TUI", mutate: func(info *backend.PaneProcessInfo) {
 			info.ForegroundProcesses = append(info.ForegroundProcesses, herdrNudgeProcess(
-				121, 101, "/opt/codex", []string{"--remote", "ws://127.0.0.1:1234"},
+				121, 101, "/opt/codex", codexPlanNudgeRemoteArgs(),
 			))
 		}},
 		{name: "wrong remote", mutate: func(info *backend.PaneProcessInfo) {
-			info.ForegroundProcesses[1].Argv[1] = "ws://localhost:1234"
+			info.ForegroundProcesses[1].Argv[3] = "ws://localhost:1234"
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -591,10 +591,14 @@ func codexPlanNudgeFixture() (state.Store, *fakeNudgeRuntime) {
 		PaneID: pane.PaneID, ShellPID: 101, ForegroundProcessGroup: 101,
 		ForegroundProcesses: []backend.PaneProcess{
 			herdrNudgeProcess(101, 1, "/opt/fanout", pane.LaunchArgs),
-			herdrNudgeProcess(120, 101, "/opt/codex", []string{"--remote", "ws://127.0.0.1:1234"}),
+			herdrNudgeProcess(120, 101, "/opt/codex", codexPlanNudgeRemoteArgs()),
 		},
 	}
 	return store, runtime
+}
+
+func codexPlanNudgeRemoteArgs() []string {
+	return []string{"-c", "check_for_update_on_startup=false", "--remote", "ws://127.0.0.1:1234"}
 }
 
 func herdrNudgeProcess(pid, parent int, executable string, args []string) backend.PaneProcess {

@@ -146,10 +146,20 @@ func codexPlanTUIArgs(process backend.PaneProcess, codexPath string) ([]string, 
 }
 
 func validCodexRemoteTUIArgs(args []string) bool {
-	if len(args) != 2 && len(args) != 4 || args[0] != "--remote" || !validCodexRemoteAddress(args[1]) {
+	switch len(args) {
+	case 4:
+		return validCodexRemoteTUIBaseArgs(args)
+	case 6:
+		return validCodexRemoteTUIBaseArgs(args) &&
+			args[4] == "resume" && strings.TrimSpace(args[5]) != ""
+	default:
 		return false
 	}
-	return len(args) == 2 || args[2] == "resume" && strings.TrimSpace(args[3]) != ""
+}
+
+func validCodexRemoteTUIBaseArgs(args []string) bool {
+	wantPrefix := []string{"-c", codexapp.RemoteTUIUpdateCheckOverride, "--remote"}
+	return slices.Equal(args[:3], wantPrefix) && validCodexRemoteAddress(args[3])
 }
 
 func validCodexRemoteAddress(raw string) bool {
