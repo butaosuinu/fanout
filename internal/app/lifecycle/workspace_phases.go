@@ -2,8 +2,11 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -11,6 +14,20 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
+
+const (
+	legacyRemoveFailurePrefix = "exit status 1: "
+	legacyRemoveFailureSuffix = "\nherdr worktree remove did not establish absence"
+)
+
+type legacyRemoveRejection struct {
+	ID     string          `json:"id"`
+	Result json.RawMessage `json:"result"`
+	Error  *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
 
 func recoverWorkspaceCleanup(
 	ctx context.Context,
@@ -48,10 +65,48 @@ func recoverManualWorkspaceCleanup(
 	intent state.LaunchIntent,
 	observation workspaceCleanupObservation,
 ) (state.LaunchIntent, error) {
-	if !strings.Contains(intent.Failure, "dirty_worktree_requires_force") {
+	if !isLegacyDirtyWorktreeRejection(intent) {
 		return intent, fmt.Errorf("%w: %s", ErrManualCleanupRequired, intent.Failure)
 	}
 	return replanObservedWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent, observation)
+}
+
+func isLegacyDirtyWorktreeRejection(intent state.LaunchIntent) bool {
+	if intent.CleanupPhase != state.CleanupRemove {
+		return false
+	}
+	payload, ok := strings.CutPrefix(intent.Failure, legacyRemoveFailurePrefix)
+	if !ok {
+		return false
+	}
+	payload, ok = strings.CutSuffix(payload, legacyRemoveFailureSuffix)
+	if !ok {
+		return false
+	}
+	envelope, ok := decodeLegacyRemoveRejection(payload)
+	if !ok || envelope.Error == nil {
+		return false
+	}
+	return !slices.Contains([]bool{
+		envelope.ID == "cli:worktree:remove",
+		len(envelope.Result) == 0,
+		envelope.Error.Code == "dirty_worktree_requires_force",
+		strings.TrimSpace(envelope.Error.Message) != "",
+	}, false)
+}
+
+func decodeLegacyRemoveRejection(payload string) (legacyRemoveRejection, bool) {
+	var envelope legacyRemoveRejection
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		return legacyRemoveRejection{}, false
+	}
+	var extra json.RawMessage
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return legacyRemoveRejection{}, false
+	}
+	return envelope, true
 }
 
 func recoverIssuedReopen(

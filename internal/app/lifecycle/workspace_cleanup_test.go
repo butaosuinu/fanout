@@ -725,7 +725,7 @@ func TestHerdrCloseReportsIgnoredOnlyCheckoutBeforeMutation(t *testing.T) {
 
 func TestHerdrCloseReplansLegacyDirtyManualIntent(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
-	recordManualHerdrCleanupIntent(t, fixture, `{"error":{"code":"dirty_worktree_requires_force"}}`)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "committed.txt"), []byte("committed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -747,7 +747,7 @@ func TestHerdrCloseReplansLegacyDirtyManualIntent(t *testing.T) {
 
 func TestHerdrCloseReplansLegacyDirtyManualIntentAfterManualWorktreeRemoval(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
-	recordManualHerdrCleanupIntent(t, fixture, "dirty_worktree_requires_force")
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
 	runHerdrLifecycleGit(t, fixture.projectRoot, "worktree", "remove", fixture.worktreePath)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
@@ -761,6 +761,52 @@ func TestHerdrCloseReplansLegacyDirtyManualIntentAfterManualWorktreeRemoval(t *t
 		t.Fatalf("residual cleanup calls = remove %d/close %d, want 0/1", runtime.removeCalls, runtime.closeCalls)
 	}
 	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseDoesNotReplanMalformedManualIntentContainingDirtyCode(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	recordManualHerdrCleanupIntent(
+		t,
+		fixture,
+		"response lost after dirty_worktree_requires_force",
+	)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+		t.Fatalf("malformed manual cleanup calls = remove %d/close %d, want 0/0", runtime.removeCalls, runtime.closeCalls)
+	}
+	assertHerdrLifecyclePreserved(t, fixture)
+}
+
+func TestLegacyDirtyWorktreeRejectionRequiresCompleteEnvelope(t *testing.T) {
+	valid := legacyDirtyWorktreeFailure()
+	tests := []struct {
+		name    string
+		phase   state.CleanupPhase
+		failure string
+		want    bool
+	}{
+		{name: "valid", phase: state.CleanupRemove, failure: valid, want: true},
+		{name: "wrong phase", phase: state.CleanupWorkspaceClose, failure: valid},
+		{name: "wrong id", phase: state.CleanupRemove, failure: strings.Replace(valid, "cli:worktree:remove", "cli:worktree:create", 1)},
+		{name: "empty message", phase: state.CleanupRemove, failure: strings.Replace(valid, "checkout has changes", "", 1)},
+		{name: "result present", phase: state.CleanupRemove, failure: strings.Replace(valid, `,"id"`, `,"result":{},"id"`, 1)},
+		{name: "malformed", phase: state.CleanupRemove, failure: "response lost after dirty_worktree_requires_force"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			intent := state.LaunchIntent{CleanupPhase: tt.phase, Failure: tt.failure}
+			if got := isLegacyDirtyWorktreeRejection(intent); got != tt.want {
+				t.Fatalf("isLegacyDirtyWorktreeRejection() = %t, want %t", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestHerdrCloseAcceptsResponseLossOnlyAfterAbsence(t *testing.T) {
@@ -1376,6 +1422,11 @@ func recordManualHerdrCleanupIntent(t *testing.T, fixture herdrLifecycleFixture,
 	if err := journal.Save(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func legacyDirtyWorktreeFailure() string {
+	return `exit status 1: {"error":{"code":"dirty_worktree_requires_force","message":"checkout has changes"},"id":"cli:worktree:remove"}` +
+		"\nherdr worktree remove did not establish absence"
 }
 
 func expireSavedHerdrCleanupIntent(t *testing.T, fixture herdrLifecycleFixture) {
