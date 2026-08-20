@@ -416,6 +416,36 @@ func TestShutdownManagedServerRetiresConsoleAndCoordinatorScaffolds(t *testing.T
 	}
 }
 
+func TestShutdownManagedServerStopsWaitingForLinkedScaffoldLockAtDeadline(t *testing.T) {
+	repo, sibling := managedConsoleTestWorktrees(t)
+	intent := managedLifecycleTestCoordinatorIntent(t, sibling)
+	coordinator := managedCoordinatorPane(intent, backend.OwnedLaunchRoute{
+		Session: intent.Session, SocketPath: intent.SocketPath,
+	}, intent.RuntimeParent, -2)
+	recordRestartStatePane(t, sibling, coordinator)
+	owner, err := state.LockProject(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := owner.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	harness := &managedServerTestHarness{}
+	err = ShutdownManagedServer(ctx, repo, harness.io())
+	if !errors.Is(err, context.DeadlineExceeded) ||
+		!strings.Contains(err.Error(), "lock linked Herdr state in "+sibling) {
+		t.Fatalf("ShutdownManagedServer() error = %v, want context deadline", err)
+	}
+	if harness.shutdownCalls != 0 {
+		t.Fatalf("ShutdownManagedServer() shutdown calls = %d, want 0", harness.shutdownCalls)
+	}
+}
+
 type managedServerTestHarness struct {
 	workspaces        []backend.WorkspaceObservation
 	observeErr        error

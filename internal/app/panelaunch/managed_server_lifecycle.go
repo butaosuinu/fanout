@@ -238,7 +238,7 @@ func prepareManagedShutdown(
 	); err != nil {
 		return state.LaunchIntent{}, err
 	}
-	if err := retireManagedShutdownScaffolds(projectRoot, locked, scaffolds); err != nil {
+	if err := retireManagedShutdownScaffolds(ctx, projectRoot, locked, scaffolds); err != nil {
 		return state.LaunchIntent{}, err
 	}
 	return persistManagedShutdownIntent(journal, identity)
@@ -401,12 +401,13 @@ func managedShutdownCoordinatorRow(pane state.Pane) bool {
 }
 
 func retireManagedShutdownScaffolds(
+	ctx context.Context,
 	projectRoot string,
 	locked *state.LockedStore,
 	scaffolds []managedShutdownScaffold,
 ) error {
 	for _, scaffold := range scaffolds {
-		if err := retireManagedShutdownScaffold(projectRoot, locked, scaffold); err != nil {
+		if err := retireManagedShutdownScaffold(ctx, projectRoot, locked, scaffold); err != nil {
 			return err
 		}
 	}
@@ -414,6 +415,7 @@ func retireManagedShutdownScaffolds(
 }
 
 func retireManagedShutdownScaffold(
+	ctx context.Context,
 	projectRoot string,
 	locked *state.LockedStore,
 	scaffold managedShutdownScaffold,
@@ -421,9 +423,9 @@ func retireManagedShutdownScaffold(
 	if filepath.Clean(scaffold.root) == filepath.Clean(projectRoot) {
 		return removeManagedShutdownScaffold(locked, scaffold.pane)
 	}
-	owner, err := state.LockProject(scaffold.root)
+	owner, err := state.LockContext(ctx, state.Path(scaffold.root))
 	if err != nil {
-		return err
+		return fmt.Errorf("lock linked Herdr state in %s: %w", scaffold.root, err)
 	}
 	defer func() { err = errors.Join(err, owner.Unlock()) }()
 	return removeManagedShutdownScaffold(owner, scaffold.pane)
