@@ -528,9 +528,9 @@ func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
 	}
 }
 
-func TestAttachExecMergesOwnedRoutingOverCallerEnvironment(t *testing.T) {
+func TestAttachFormsBuildBothLanesFromOneAdmission(t *testing.T) {
 	h := newOwnedHarness(t)
-	spec, err := h.session.AttachExec([]string{
+	command, spec, err := h.session.AttachForms([]string{
 		"PATH=/usr/bin",
 		sessionEnv + "=stale-session",
 		"HERDR_STRAY=1",
@@ -539,25 +539,24 @@ func TestAttachExecMergesOwnedRoutingOverCallerEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(spec.Path, h.layout.binaryDir) || !slices.Equal(spec.Argv, []string{spec.Path}) {
-		t.Fatalf("AttachExec() image = %+v", spec)
+		t.Fatalf("AttachForms() image = %+v", spec)
 	}
 	if slices.Contains(spec.Env, sessionEnv+"=stale-session") || slices.Contains(spec.Env, "HERDR_STRAY=1") {
-		t.Fatalf("AttachExec() kept stale caller routing: %v", spec.Env)
+		t.Fatalf("AttachForms() kept stale caller routing: %v", spec.Env)
 	}
 	if len(spec.Env) == 0 || spec.Env[0] != "PATH=/usr/bin" {
-		t.Fatalf("AttachExec() dropped the caller environment: %v", spec.Env)
+		t.Fatalf("AttachForms() dropped the caller environment: %v", spec.Env)
 	}
-	// The exec image and the printed command are the same attach: every owned
-	// routing value in Env must appear quoted in AttachCommand's output.
-	command, err := h.session.AttachCommand()
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Both lanes come from the same verified marker: every owned routing value
+	// in the exec image must appear, shell-quoted, in the printed command.
 	for _, entry := range spec.Env[1:] {
 		name, value, _ := strings.Cut(entry, "=")
-		if !strings.Contains(command, name+"='"+value+"'") {
-			t.Fatalf("AttachCommand() = %q is missing exec value %q", command, entry)
+		if !strings.Contains(command, name+"="+shellQuote(value)) {
+			t.Fatalf("attach command %q is missing exec value %q", command, entry)
 		}
+	}
+	if !strings.HasSuffix(command, shellQuote(spec.Path)) {
+		t.Fatalf("attach command %q does not end with the exec binary %q", command, spec.Path)
 	}
 }
 
@@ -565,10 +564,9 @@ func TestMergeAttachEnvironment(t *testing.T) {
 	assignments := [][2]string{{"HERDR_SESSION", "owned"}, {"XDG_CONFIG_HOME", "/xdg"}}
 	owned := []string{"HERDR_SESSION=owned", "XDG_CONFIG_HOME=/xdg"}
 	tests := []struct {
-		name    string
-		base    []string
-		want    []string
-		wantErr bool
+		name string
+		base []string
+		want []string
 	}{
 		{
 			name: "appends owned routing after preserved caller entries",
@@ -585,17 +583,17 @@ func TestMergeAttachEnvironment(t *testing.T) {
 			base: []string{"HERDR_ENV=1", "PATH=/usr/bin"},
 			want: append([]string{"PATH=/usr/bin"}, owned...),
 		},
-		{name: "rejects an entry without a name", base: []string{"=oops"}, wantErr: true},
-		{name: "rejects duplicate caller names", base: []string{"A=1", "A=2"}, wantErr: true},
-		{name: "rejects a NUL byte in an entry", base: []string{"A=b\x00c"}, wantErr: true},
+		{
+			// execve delivers entries without '=' verbatim; the exec image
+			// passes them through the same way pasting the command would.
+			name: "keeps malformed caller entries verbatim",
+			base: []string{"ODDBALL", "PATH=/usr/bin"},
+			want: append([]string{"ODDBALL", "PATH=/usr/bin"}, owned...),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := mergeAttachEnvironment(tt.base, assignments)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("mergeAttachEnvironment(%v) error = %v, wantErr %t", tt.base, err, tt.wantErr)
-			}
-			if !tt.wantErr && !slices.Equal(got, tt.want) {
+			if got := mergeAttachEnvironment(tt.base, assignments); !slices.Equal(got, tt.want) {
 				t.Fatalf("mergeAttachEnvironment(%v) = %v, want %v", tt.base, got, tt.want)
 			}
 		})

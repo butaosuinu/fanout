@@ -131,10 +131,11 @@ func TestEnterHerdrTUISessionExecsAttachOnTerminal(t *testing.T) {
 		backend.Selection{Name: backend.Herdr, Reason: backend.ReasonEnvironment},
 		logger,
 	)
-	if code != exitcode.OK || execCalls != 1 || !reflect.DeepEqual(got, want) {
+	if code != exitcode.Env || execCalls != 1 || !reflect.DeepEqual(got, want) {
 		t.Fatalf("enterManagedConsole() = %d execCalls=%d spec=%+v", code, execCalls, got)
 	}
-	// The exec only returns on failure; the operator still gets the command.
+	// The exec only returns on failure; the operator still gets the command,
+	// and the non-zero exit tells wrappers the entry itself did not happen.
 	if !strings.Contains(stderr.String(), "exec refused by test") {
 		t.Fatalf("exec failure warning missing: %q", stderr.String())
 	}
@@ -398,6 +399,10 @@ func TestCmdTUIUserConfiguredHerdrOutsideContextBootstrapsWithoutTmux(t *testing
 			AttachCommand: "HERDR_SESSION='owned-session' herdr",
 		}, nil
 	}
+	pinConsoleAttachSeams(t, false, func(backend.AttachExec) error {
+		t.Fatal("exec attach must not run in the print-lane bootstrap test")
+		return nil
+	})
 	defer func() {
 		runTUI = originalRunTUI
 		ensureManagedSessionForTUI = originalEnsure

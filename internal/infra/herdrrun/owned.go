@@ -82,38 +82,40 @@ func (s *OwnedSession) Backend() *Backend {
 	return s.backend
 }
 
-func (s *OwnedSession) AttachCommand() (string, error) {
+// AttachForms builds both attach forms from one verified owner marker: the
+// process image a terminal execs to enter the owned session in place, and the
+// equivalent shell command for printing. One admission serves both, so the two
+// forms can never diverge and the probe cost is paid once. The forms differ in
+// one documented way: the exec image drops stray caller HERDR_* names — only
+// the marker's routing may steer the client — while the printed command can
+// only prefix the routing values and inherits whatever the invoking shell
+// still exports.
+func (s *OwnedSession) AttachForms(baseEnvironment []string) (string, corebackend.AttachExec, error) {
 	m, err := s.verifiedAttachMarker()
 	if err != nil {
-		return "", err
+		return "", corebackend.AttachExec{}, err
 	}
 	assignments := attachAssignments(m)
+	spec := corebackend.AttachExec{
+		Path: m.BinaryPath,
+		Argv: []string{m.BinaryPath},
+		Env:  mergeAttachEnvironment(baseEnvironment, assignments),
+	}
+	return renderAttachCommand(m, assignments), spec, nil
+}
+
+// AttachCommand is the print-only form of AttachForms.
+func (s *OwnedSession) AttachCommand() (string, error) {
+	command, _, err := s.AttachForms(nil)
+	return command, err
+}
+
+func renderAttachCommand(m ownerMarker, assignments [][2]string) string {
 	parts := make([]string, 0, len(assignments)+1)
 	for _, assignment := range assignments {
 		parts = append(parts, assignment[0]+"="+shellQuote(assignment[1]))
 	}
-	return strings.Join(append(parts, shellQuote(m.BinaryPath)), " "), nil
-}
-
-// AttachExec builds the process image a terminal execs to enter the owned
-// session in place: the caller's environment with the owned routing values
-// replacing any same-named entries, and the pinned herdr binary as the
-// process. Stray HERDR_* names from the caller are dropped rather than
-// inherited — only the marker's routing may steer the client.
-func (s *OwnedSession) AttachExec(baseEnvironment []string) (corebackend.AttachExec, error) {
-	m, err := s.verifiedAttachMarker()
-	if err != nil {
-		return corebackend.AttachExec{}, err
-	}
-	environment, err := mergeAttachEnvironment(baseEnvironment, attachAssignments(m))
-	if err != nil {
-		return corebackend.AttachExec{}, err
-	}
-	return corebackend.AttachExec{
-		Path: m.BinaryPath,
-		Argv: []string{m.BinaryPath},
-		Env:  environment,
-	}, nil
+	return strings.Join(append(parts, shellQuote(m.BinaryPath)), " ")
 }
 
 // verifiedAttachMarker admits the owned session and proves it is alive before
@@ -149,19 +151,22 @@ func attachAssignments(m ownerMarker) [][2]string {
 	}
 }
 
-func mergeAttachEnvironment(base []string, assignments [][2]string) ([]string, error) {
+// mergeAttachEnvironment carries the caller environment into the exec image
+// with the owned routing appended last, replacing same-named entries and
+// dropping stray HERDR_* names. Every other entry passes through verbatim,
+// malformed ones included, exactly as pasting the printed command would
+// inherit them — the client is the runtime's own pinned binary, not a fanout
+// workload, so the strict capsule filter (blockedCallerEnvironmentName) is
+// deliberately not applied here.
+func mergeAttachEnvironment(base []string, assignments [][2]string) []string {
 	overridden := make(map[string]bool, len(assignments))
 	for _, assignment := range assignments {
 		overridden[assignment[0]] = true
 	}
 	merged := make([]string, 0, len(base)+len(assignments))
-	seen := map[string]bool{}
 	for _, entry := range base {
-		name, _, err := parseEnvironmentEntry(entry, seen)
-		if err != nil {
-			return nil, fmt.Errorf("attach environment: %w", err)
-		}
-		if overridden[name] || strings.HasPrefix(name, "HERDR_") {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && (overridden[name] || strings.HasPrefix(name, "HERDR_")) {
 			continue
 		}
 		merged = append(merged, entry)
@@ -169,7 +174,7 @@ func mergeAttachEnvironment(base []string, assignments [][2]string) ([]string, e
 	for _, assignment := range assignments {
 		merged = append(merged, assignment[0]+"="+assignment[1])
 	}
-	return merged, nil
+	return merged
 }
 
 type controlPlaneEnvironment struct {

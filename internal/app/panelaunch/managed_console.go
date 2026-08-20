@@ -23,8 +23,7 @@ const ManagedConsoleRuntimeParent = "@console"
 // identity recheck, and the bound backend a workspace is retired through.
 type ManagedSessionRuntime interface {
 	ManagedLaunchRuntime
-	AttachCommand() (string, error)
-	AttachExec(baseEnvironment []string) (backend.AttachExec, error)
+	AttachForms(baseEnvironment []string) (string, backend.AttachExec, error)
 	VerifyOwnedTarget(backend.OwnedPaneIdentity) error
 	BindOwnedWorkspaceClose(backend.OwnedPaneIdentity) (backend.OwnedClosingBackend, error)
 }
@@ -526,11 +525,7 @@ func managedConsoleResult(
 	pane state.Pane,
 	callerEnvironment []string,
 ) (ManagedConsoleResult, error) {
-	command, err := owned.AttachCommand()
-	if err != nil {
-		return ManagedConsoleResult{}, err
-	}
-	attach, err := owned.AttachExec(callerEnvironment)
+	command, attach, err := owned.AttachForms(callerEnvironment)
 	if err != nil {
 		return ManagedConsoleResult{}, err
 	}

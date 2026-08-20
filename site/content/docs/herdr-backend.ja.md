@@ -118,7 +118,7 @@ fanout
 ```
 
 この実行で owned session と repository root の console shell が 1 つ起動または再採用され、fanout プロセスは pin 済みの herdr client に置き換わります。端末は attach 済みで、コピーするものはありません。
-console ペインの中でもう一度 `fanout` を実行してください。
+client は session が最後に選択していた workspace を開くため、CLI ファンアウト後は agent ペインに着地することがあります。sidebar で console workspace を選んでから、その中で `fanout` を実行してください。
 そのペインでは herdr が `HERDR_ENV=1` を設定するため、TUI コンソールがそのまま開きます。
 linked worktree 間では同じ console 行を共有します。
 

@@ -144,7 +144,8 @@ func cmdHostedConsoleTUI(
 
 // cmdManagedConsoleTUI runs the console for a runtime that owns its sessions.
 // It either adopts the repository-owned session this process was already
-// started inside, or bootstraps one and hands the operator its attach command.
+// started inside, or bootstraps one and enters it in place — printing the
+// attach command instead when no terminal is present.
 func cmdManagedConsoleTUI(
 	projectRoot, commandName string,
 	selection backend.Selection,
@@ -195,15 +196,18 @@ func enterManagedConsole(
 
 // attachOwnedConsole enters the owned session in place when a terminal is
 // present; a successful exec never returns. Pipes and scripts get the attach
-// command printed instead, and a failed exec falls back to the same print so
-// the operator can still enter by hand.
+// command printed instead. A failed exec falls back to the same print so the
+// operator can still enter by hand, but exits non-zero so wrappers see that
+// the entry itself did not happen.
 func attachOwnedConsole(console panelaunch.ManagedConsoleResult, lg *log.Logger) exitcode.Code {
-	if stdioIsTerminal() {
-		err := execSessionAttach(console.Attach)
-		lg.Warn("tui: enter owned session: %v", err)
+	if !stdioIsTerminal() {
+		fmt.Fprintln(lg.Stdout(), console.AttachCommand)
+		return exitcode.OK
 	}
+	err := execSessionAttach(console.Attach)
+	lg.Warn("tui: enter owned session: %v", err)
 	fmt.Fprintln(lg.Stdout(), console.AttachCommand)
-	return exitcode.OK
+	return exitcode.Env
 }
 
 //nolint:funlen // The console composition root keeps its complete option wiring visible in one place.

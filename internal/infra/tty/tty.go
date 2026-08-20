@@ -5,6 +5,8 @@ package tty
 import (
 	"io"
 	"os"
+
+	"github.com/charmbracelet/x/term"
 )
 
 // IsColorCapable reports whether colored output is appropriate for w.
@@ -19,18 +21,20 @@ func IsColorCapable(w io.Writer) bool {
 	if !ok {
 		return false
 	}
-	return IsTerminal(f)
-}
-
-// IsTerminal reports whether f is an open character device — a real terminal
-// rather than a pipe, regular file, or closed descriptor.
-func IsTerminal(f *os.File) bool {
-	if f == nil {
-		return false
-	}
 	fi, err := f.Stat()
 	if err != nil {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// IsTerminal reports whether f is an interactive terminal. It asks the
+// device itself (isatty) rather than testing the char-device mode bit, which
+// /dev/null also carries — a redirected /dev/null must never count as a
+// terminal a full-screen client can take over.
+func IsTerminal(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	return term.IsTerminal(f.Fd())
 }

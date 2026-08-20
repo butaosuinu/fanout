@@ -13,7 +13,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-// attachOnlyManagedRuntime fakes just the two attach forms managedConsoleResult
+// attachOnlyManagedRuntime fakes just the attach forms managedConsoleResult
 // consumes; every other ManagedSessionRuntime method panics via the nil embed.
 type attachOnlyManagedRuntime struct {
 	ManagedSessionRuntime
@@ -21,13 +21,9 @@ type attachOnlyManagedRuntime struct {
 	attach     backend.AttachExec
 }
 
-func (f *attachOnlyManagedRuntime) AttachCommand() (string, error) {
-	return "ATTACH='command'", nil
-}
-
-func (f *attachOnlyManagedRuntime) AttachExec(base []string) (backend.AttachExec, error) {
+func (f *attachOnlyManagedRuntime) AttachForms(base []string) (string, backend.AttachExec, error) {
 	f.attachBase = base
-	return f.attach, nil
+	return "ATTACH='command'", f.attach, nil
 }
 
 func TestManagedConsoleResultCarriesBothAttachForms(t *testing.T) {
