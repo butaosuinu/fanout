@@ -397,7 +397,7 @@ fanout herdr <restart|shutdown>
 | verb | 動作 |
 |---|---|
 | `restart` | 死んだ owned server を、supervisor process と socket の消失を確認できたら置き換え、記録済みの行を再束縛する。完全に検証できた direct Codex の行だけが resume し、attach した Codex や Plan mode の行を含めてほかは `stale` のまま。まだ動いている世代は `herdr owned server generation is still live` で拒否する。 |
-| `shutdown` | 空の owned server を retire する。このリポジトリの state に herdr の行が残っている間（linked worktree もすべて対象）、session に workspace が残っている間、別の herdr intent が保留中の間は拒否する。素のシェルからの TUI bootstrap が記録する console 行と、ファンアウトが記録する coordinator 行には削除する verb がないため、herdr backend を動かした checkout は現状 `shutdown` まで到達できない。 |
+| `shutdown` | 空の owned server を retire する。このリポジトリの state に子の herdr 行が残っている間（linked worktree もすべて対象）、session に workspace が残っている間、剪定できない herdr intent が保留中の間は拒否する。workspace の snapshot が空だと確認した後、console と coordinator の足場行を削除する。snapshot に記録済み label の workspace がなく、必要な checkout も存在しない場合は `realized` intent を剪定する。fanout-created branch が残っている場合は、保存済み base SHA をまだ指しているときだけ削除する。console と coordinator の shell は先に終了する。 |
 
 exit code は成功が `0`、preflight の拒否も途中の失敗も含めてどの段階で失敗しても `1`、不正な呼び出しが `2` です。失敗した後に同じ verb を再実行しても安全です。fanout は何をしようとしたかを記録しており、作業を繰り返すのではなくその結果を確認します。
 
