@@ -4,8 +4,10 @@ Publishing a release is **CI-driven**: after the release docs land on `main`,
 the only manual publication step is pushing an annotated `vX.Y.Z` tag. Pushing
 the tag triggers `.github/workflows/release.yml`, which builds the four platform
 archives, generates `SHA256SUMS`, and publishes the GitHub Release with
-auto-generated notes. There is no `make release` target and no goreleaser config
-— the workflow is the whole pipeline.
+auto-generated notes. The same tag also triggers `.github/workflows/pages.yml`,
+which publishes the docs site as of that tag — merging the release docs to
+`main` builds them but does not publish them. There is no `make release` target
+and no goreleaser config — the workflow is the whole pipeline.
 
 ## What the tag push does for you
 
@@ -43,7 +45,8 @@ auto-generated notes. There is no `make release` target and no goreleaser config
    `site/content/docs/changelog.{md,ja.md}`, then update the pinned
    `FANOUT_VERSION` example in `site/content/docs/installation.{md,ja.md}`.
    Merge the docs through a normal PR; its squash commit becomes the intended
-   tag target. No source version edit is needed.
+   tag target. No source version edit is needed. Merging does not publish the
+   site — the tag does.
 
 3. **Preflight.** Release off the latest `origin/main` and make sure it is green:
 
@@ -85,6 +88,17 @@ auto-generated notes. There is no `make release` target and no goreleaser config
    gh run watch "$run_id" --exit-status
    ```
 
+   The tag starts `pages.yml` too:
+
+   ```bash
+   until pages_id="$(gh run list --workflow pages.yml --branch vX.Y.Z --limit 1 \
+     --json databaseId -q '.[0].databaseId')" && [ -n "$pages_id" ]; do sleep 5; done
+   gh run watch "$pages_id" --exit-status
+   ```
+
+   If no `pages.yml` run appears within a minute, publish by hand:
+   `gh workflow run pages.yml --ref main`.
+
 6. **Verify the Release.**
 
    ```bash
@@ -102,6 +116,14 @@ auto-generated notes. There is no `make release` target and no goreleaser config
    fanout --version            # -> fanout vX.Y.Z (<sha7>)
    ```
 
+   Then confirm the docs site carries the new version. `pages.yml` and
+   `release.yml` run in parallel, so the changelog's release-notes link 404s
+   until the Release is published a few minutes in:
+
+   ```bash
+   curl -fsS https://butaosuinu.github.io/fanout/docs/changelog/ | grep -q vX.Y.Z
+   ```
+
 ## If something goes wrong
 
 - **Workflow failed mid-build.** Fix the cause on `main`, then delete and re-cut
@@ -117,4 +139,19 @@ auto-generated notes. There is no `make release` target and no goreleaser config
 
 - **Wrong commit tagged.** Same delete dance, then re-tag the intended commit.
   Avoid moving a tag that has already published a Release; bump to the next patch
-  instead.
+  instead. If the tagged commit was not `main`'s tip, the docs site rolls back to
+  it — restore it with `gh workflow run pages.yml --ref main` once the Release is
+  out.
+
+- **Docs deploy rejected.** `not allowed to deploy to github-pages due to
+  environment protection rules` means the `github-pages` environment lost its tag
+  policy. Restore it, then re-run the failed job:
+
+  ```bash
+  gh api --method POST \
+    repos/butaosuinu/fanout/environments/github-pages/deployment-branch-policies \
+    -f name='v*' -f type='tag'
+  ```
+
+  The Release itself is unaffected — `pages.yml` and `release.yml` fail
+  independently.

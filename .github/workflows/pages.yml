@@ -1,8 +1,15 @@
+# Publishing is release-gated on purpose. A merge to main only validates the
+# build; the live site is updated by a v* tag push (the same tag that starts
+# release.yml) or by a manual workflow_dispatch, so main can carry docs that
+# are not public yet. The paths filter stays on the branch push and the PR:
+# GitHub does not evaluate path filters for tag pushes, so a v* tag publishes
+# even when the tagged commit touches nothing under site/.
 name: Deploy docs site to GitHub Pages
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
     paths:
       - "site/**"
       - ".github/workflows/pages.yml"
@@ -18,8 +25,12 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  # Publishing runs share one queue so two deploys never race for the Pages
+  # environment. Validation runs get a per-ref group instead: queueing a run
+  # cancels the run already pending in its group, so one shared group would
+  # let a PR silently cancel a release deploy waiting behind it.
+  group: pages-${{ (github.event_name == 'workflow_dispatch' || github.ref_type == 'tag') && 'publish' || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -27,16 +38,38 @@ jobs:
     env:
       HUGO_VERSION: 0.164.0
       PAGEFIND_VERSION: 1.5.2
+    outputs:
+      publish: ${{ steps.mode.outputs.publish }}
     steps:
+      # One gate for the whole workflow, read by the artifact upload and by the
+      # deploy job. A workflow-level env var cannot be referenced from a
+      # job-level `if:`, so the decision is a step output rather than the same
+      # expression repeated in three places.
+      - name: Decide whether this run publishes
+        id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ] || [ "$REF_TYPE" = "tag" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "build check only — the site is published from a v* tag or a manual run"
+          fi
       - uses: actions/checkout@v7.0.1
       - name: Install Hugo CLI
         run: |
           curl -fsSL "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.deb" -o /tmp/hugo.deb
           sudo dpkg -i /tmp/hugo.deb
       - name: Setup Pages
-        if: github.event_name != 'pull_request'
+        if: steps.mode.outputs.publish == 'true'
         id: pages
         uses: actions/configure-pages@v6.0.0
+      # Never conditional: a check run must build the same site a deploy would.
+      # When Setup Pages is skipped its output is empty and the literal
+      # fallback applies — the same URL configure-pages returns.
       - name: Build with Hugo
         env:
           HUGO_ENVIRONMENT: production
@@ -46,13 +79,13 @@ jobs:
           curl -fsSL "https://github.com/Pagefind/pagefind/releases/download/v${PAGEFIND_VERSION}/pagefind_extended-v${PAGEFIND_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar -xz
           ./pagefind_extended --site site/public
       - name: Upload artifact
-        if: github.event_name != 'pull_request'
+        if: steps.mode.outputs.publish == 'true'
         uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: site/public
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: needs.build.outputs.publish == 'true'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

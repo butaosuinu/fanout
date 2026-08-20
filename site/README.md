@@ -2,7 +2,32 @@
 
 Hugo (Extended) site published to <https://butaosuinu.github.io/fanout/>.
 Custom theme **PAPER BREEZE** (no external theme/module); bilingual via
-`*.md` (en) / `*.ja.md` (ja). Deployed by `.github/workflows/pages.yml`.
+`*.md` (en) / `*.ja.md` (ja). Built and deployed by
+`.github/workflows/pages.yml`.
+
+## Publishing
+
+Merging to `main` builds the site but does not publish it. The live site changes
+on two events only:
+
+- a `v*` tag push — the release tag publishes the site as of that tag, so the
+  changelog entry and the pinned `FANOUT_VERSION` go live with the Release (see
+  `RELEASE.md`);
+- `gh workflow run pages.yml --ref main` — an out-of-band publish for docs that
+  should not wait for the next release.
+
+Pull request and `main` runs stop after the Hugo + Pagefind build: they skip
+`configure-pages`, upload no artifact, and never deploy. The `github-pages`
+environment allows deployments from `main` and from `v*` tags; any other ref
+fails the deploy job instead of publishing.
+
+To see what is merged but not yet live:
+
+```bash
+last="$(gh api "repos/butaosuinu/fanout/deployments?environment=github-pages&per_page=1" \
+  --jq '.[0].sha')"
+git log --oneline "$last"..origin/main -- site/
+```
 
 ## Local preview
 
