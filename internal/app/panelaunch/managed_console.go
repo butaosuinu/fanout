@@ -17,6 +17,13 @@ import (
 
 const ManagedConsoleRuntimeParent = "@console"
 
+// ManagedConsoleWorkloadArg is the reserved argv token the console workload is
+// started with. The pane launcher and the console workload are the same pinned
+// binary, so without it launch verification could not tell an exec'd console
+// TUI apart from the launcher still waiting for its token — the launcher's
+// identity is exactly that binary with an empty argv tail.
+const ManagedConsoleWorkloadArg = "__managed-console"
+
 // ManagedSessionRuntime is the whole owned-session surface the composition root
 // holds: the launch port plus the session-wide operations no single launch
 // needs — the two attach forms a plain terminal enters through, the saved-row
@@ -425,10 +432,15 @@ func newManagedConsoleLaunch(
 	shell string,
 	callerEnvironment []string,
 ) (*state.LaunchCapsule, error) {
-	return newManagedWorkloadLaunch(
+	capsule, err := newManagedWorkloadLaunch(
 		owned, route, route.LauncherPath, callerEnvironment,
 		backend.ConsoleShellEnv+"="+shell,
 	)
+	if err != nil {
+		return nil, err
+	}
+	capsule.Args = []string{ManagedConsoleWorkloadArg}
+	return capsule, nil
 }
 
 func findManagedConsolePane(projectRoot string, current state.Store) (state.Pane, bool, error) {

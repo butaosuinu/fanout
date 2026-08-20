@@ -41,6 +41,25 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestIsManagedConsoleWorkloadRequestMatchesOnlyTheReservedToken(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "reserved console token", args: []string{panelaunch.ManagedConsoleWorkloadArg}, want: true},
+		{name: "no arguments is the plain TUI form", args: nil},
+		{name: "issue argument is not a console workload", args: []string{"123"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isManagedConsoleWorkloadRequest(tt.args); got != tt.want {
+				t.Fatalf("isManagedConsoleWorkloadRequest(%v) = %t, want %t", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
 // stubManagedConsoleBootstrap pins the session/console bootstrap seams to a
 // fixed result and restores them when the test ends.
 func stubManagedConsoleBootstrap(t *testing.T, result panelaunch.ManagedConsoleResult) {

@@ -53,6 +53,11 @@ func TestNewManagedConsoleLaunchRunsPinnedFanoutWithShellHandoff(t *testing.T) {
 	if capsule.Executable != route.LauncherPath {
 		t.Fatalf("console capsule executable = %q, want the pinned fanout %q", capsule.Executable, route.LauncherPath)
 	}
+	// The reserved argv token keeps the exec'd TUI distinguishable from the
+	// idle pane launcher, which is the same binary with an empty argv tail.
+	if !reflect.DeepEqual(capsule.Args, []string{ManagedConsoleWorkloadArg}) {
+		t.Fatalf("console capsule args = %v, want the reserved console token", capsule.Args)
+	}
 	last := owned.prepared[len(owned.prepared)-1]
 	if last != backend.ConsoleShellEnv+"=/bin/zsh" {
 		t.Fatalf("console capsule environment tail = %q, want the hand-off shell", last)

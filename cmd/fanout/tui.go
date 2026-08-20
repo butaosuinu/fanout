@@ -76,6 +76,14 @@ func isTUIRequest(args []string) bool {
 	return len(args) == 0
 }
 
+// isManagedConsoleWorkloadRequest recognizes the reserved token the owned
+// console workload is exec'd with; it runs the same resident console as the
+// no-argument form. The token exists so the pane process is distinguishable
+// from the idle pane launcher, which is the same binary with no arguments.
+func isManagedConsoleWorkloadRequest(args []string) bool {
+	return len(args) > 0 && args[0] == panelaunch.ManagedConsoleWorkloadArg
+}
+
 // cmdTUI wraps the whole resident-console run in the console-shell hand-off:
 // inside the owned console pane every exit — an early environment failure as
 // much as a TUI quit — must land in the operator shell, or the runtime folds
