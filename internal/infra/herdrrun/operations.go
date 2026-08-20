@@ -337,16 +337,21 @@ func validateAgentPromptResponse(data []byte, target corebackend.OwnedPaneIdenti
 	return nil
 }
 
+// agentPromptSessionMatches runs on the response to a prompt that has already
+// been delivered, so it has to admit exactly what the pre-send gate admitted.
+// Holding it to the byte-exact reference instead would report a prompt the
+// agent received as a failure whenever the provider replaced its conversation
+// in the gap, which is the one outcome a mutation must never produce.
 func agentPromptSessionMatches(current *agentSessionJSON, expected *corebackend.AgentSessionRef) bool {
 	ref, present, err := parseAgentSession(current)
 	if err != nil {
 		return false
 	}
-	if expected == nil {
-		return !present
+	if !present {
+		return corebackend.AgentSessionAdmits(expected, nil)
 	}
-	return present && ref == (agentSessionKey{
-		source: expected.Source, agent: expected.Agent, kind: expected.Kind, value: expected.Value,
+	return corebackend.AgentSessionAdmits(expected, &corebackend.AgentSessionRef{
+		Source: ref.source, Agent: ref.agent, Kind: ref.kind, Value: ref.value,
 	})
 }
 

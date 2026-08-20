@@ -1,11 +1,16 @@
-// Package sessionbinding persists the first late Herdr agent session observed
-// for an otherwise complete state row.
+// Package sessionbinding persists the Herdr agent session a state row's pane
+// currently reports: the first one observed for an otherwise complete row, and
+// the replacement after the provider starts a new conversation in that pane.
+//
+// This is the rebinding path for every agent. The telemetry emitter rebinds
+// too, but only providers that emit reach it (validTelemetryAgent), so a
+// direct Codex pane would otherwise keep a stale reference and stay out of
+// resume, which matches on the recorded value.
 package sessionbinding
 
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
@@ -13,37 +18,42 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-// StateLoader binds a valid late agent session under the owning state lock,
-// then returns the same merged state shape as sessionview.MergedStateLoader.
+// StateLoader records the agent session each row's pane currently reports,
+// under that row's own state lock, then returns the same merged state shape as
+// sessionview.MergedStateLoader. The runtime is observed once and that single
+// observation feeds both the merge and the binding decision.
 func StateLoader(
 	projectRoot string,
 	listLive func() ([]backend.LivePane, error),
 ) func() (state.Store, error) {
 	return func() (state.Store, error) {
-		store, err := sessionview.MergedStateLoader(projectRoot, listLive)()
-		if err != nil || listLive == nil || !hasUnboundAgentSession(store.Panes) {
+		if listLive == nil {
+			return sessionview.MergedStateLoader(projectRoot, nil)()
+		}
+		live, liveErr := listLive()
+		cachedLive := func() ([]backend.LivePane, error) { return live, liveErr }
+		store, err := sessionview.MergedStateLoader(projectRoot, cachedLive)()
+		if err != nil {
 			return store, err
 		}
-		live, _ := listLive()
-		for _, root := range bindingRoots(projectRoot, store.Panes) {
+		roots := bindingRoots(projectRoot, store.Panes, live)
+		if len(roots) == 0 {
+			return store, nil
+		}
+		for _, root := range roots {
 			if err := bindOwnedAgentSessions(root, live); err != nil {
 				return state.Store{}, fmt.Errorf("bind Herdr agent session in %s: %w", root, err)
 			}
 		}
-		cachedLive := func() ([]backend.LivePane, error) { return live, nil }
 		return sessionview.MergedStateLoader(projectRoot, cachedLive)()
 	}
 }
 
-func hasUnboundAgentSession(panes []state.Pane) bool {
-	return slices.ContainsFunc(panes, agentSessionUnbound)
-}
-
-func bindingRoots(projectRoot string, panes []state.Pane) []string {
+func bindingRoots(projectRoot string, panes []state.Pane, live []backend.LivePane) []string {
 	seen := map[string]bool{}
 	var roots []string
-	for _, pane := range panes {
-		if !agentSessionUnbound(pane) {
+	for i, pane := range panes {
+		if _, ok := currentSessionBinding(panes, i, live); !ok {
 			continue
 		}
 		for _, root := range paneBindingOwners(projectRoot, pane) {
@@ -76,7 +86,7 @@ func bindOwnedAgentSessions(projectRoot string, live []backend.LivePane) (err er
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
 	changed := false
 	for i := range locked.Panes {
-		ref, ok := UniqueSessionBinding(locked.Panes, i, live)
+		ref, ok := currentSessionBinding(locked.Panes, i, live)
 		if !ok {
 			continue
 		}
@@ -87,6 +97,38 @@ func bindOwnedAgentSessions(projectRoot string, live []backend.LivePane) (err er
 		return locked.Save()
 	}
 	return nil
+}
+
+// currentSessionBinding returns the conversation row target should record, or
+// false when it already records what its pane reports. A row with none yet
+// takes the first-bind rule; a row that has one takes the provider's
+// replacement, which the liveness matcher has already limited to a conversation
+// the same runtime issued for the same provider.
+func currentSessionBinding(
+	panes []state.Pane,
+	target int,
+	live []backend.LivePane,
+) (*backend.AgentSessionRef, bool) {
+	if panes[target].AgentSession == nil {
+		return UniqueSessionBinding(panes, target, live)
+	}
+	return replacementSessionBinding(panes[target], live)
+}
+
+func replacementSessionBinding(
+	pane state.Pane,
+	live []backend.LivePane,
+) (*backend.AgentSessionRef, bool) {
+	if !recordsAgentSession(pane) {
+		return nil, false
+	}
+	current, ok := pane.RuntimeBinding().UniqueLive(live, runtimeRowOptions()...)
+	if !ok || current.AgentSession == nil ||
+		backend.SameAgentSession(pane.AgentSession, current.AgentSession) {
+		return nil, false
+	}
+	ref := *current.AgentSession
+	return &ref, true
 }
 
 // UniqueSessionBinding returns the first valid late session only when one
@@ -115,13 +157,18 @@ func FirstBindMatches(pane state.Pane, current backend.LivePane) bool {
 	return pane.RuntimeBinding().MatchesLive(current, firstBindOptions()...)
 }
 
+// runtimeRowOptions restricts a match to rows of the runtime that records
+// conversations at all; a rebind adds no other variance, because the row
+// already has a conversation to compare against.
+func runtimeRowOptions() []backend.MatchOption {
+	return []backend.MatchOption{backend.RequireRuntime(backend.Herdr)}
+}
+
 // firstBindOptions is the variance the first binding runs under: the row must
 // be a runtime row of the same backend, and the observed conversation is
 // admitted on its own validity because the row has none to compare against.
 func firstBindOptions() []backend.MatchOption {
-	return []backend.MatchOption{
-		backend.RequireRuntime(backend.Herdr), backend.AllowUnboundAgentSession(),
-	}
+	return append(runtimeRowOptions(), backend.AllowUnboundAgentSession())
 }
 
 func uniqueSessionObservation(
@@ -142,7 +189,12 @@ func countRowsForObservation(panes []state.Pane, current backend.LivePane) int {
 }
 
 func agentSessionUnbound(pane state.Pane) bool {
+	return recordsAgentSession(pane) && pane.AgentSession == nil
+}
+
+// recordsAgentSession reports whether pane is a row on the runtime that records
+// conversations, complete enough for one to be bound to it.
+func recordsAgentSession(pane state.Pane) bool {
 	return backend.NormalizeName(pane.Backend) == backend.Herdr &&
-		strings.TrimSpace(pane.Agent) != "" && strings.TrimSpace(pane.AgentID) != "" &&
-		pane.AgentSession == nil
+		strings.TrimSpace(pane.Agent) != "" && strings.TrimSpace(pane.AgentID) != ""
 }

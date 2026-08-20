@@ -8,7 +8,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-func TestStateLoaderBindsOnlyFirstLateSession(t *testing.T) {
+func TestStateLoaderBindsFirstLateSession(t *testing.T) {
 	root := t.TempDir()
 	row := testHerdrPane(root)
 	recordTestPane(t, root, row)
@@ -29,23 +29,12 @@ func TestStateLoaderBindsOnlyFirstLateSession(t *testing.T) {
 	}
 	assertStoredSession(t, persisted, first)
 
-	// This loader owns the first bind only. A conversation the provider
-	// replaces afterwards is rebound by the telemetry path, which holds the
-	// same lock and observes the pane on every emit; here the row keeps its
-	// recorded value and, crucially, stays live rather than falling out of
-	// every identity gate until the pane exits.
-	second := first
-	second.Value = "session-second"
-	live.AgentSession = &second
-	store, err = StateLoader(root, listLive)()
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A row bound to its pane's conversation keeps matching that pane, and
+	// another provider's conversation is still not that pane.
 	bound := assertStoredSession(t, store, first)
 	if !bound.RuntimeBinding().MatchesLive(live) {
-		t.Fatal("replaced session dropped the persisted binding")
+		t.Fatal("bound row stopped matching its own pane")
 	}
-
 	foreign := first
 	foreign.Source, foreign.Agent, foreign.Value = "herdr:claude", "claude", "session-foreign"
 	live.AgentSession = &foreign
@@ -84,10 +73,55 @@ func TestBindingRootsIncludesEveryOwningStore(t *testing.T) {
 	row := testHerdrPane("/repo")
 	row.SourceProjectRoot = "/repo/home"
 	row.SourceProjectRoots = []string{"/repo/home", "/repo/sibling"}
-	got := bindingRoots("/repo", []state.Pane{row})
+	live := testLiveHerdrPane(row, backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-first",
+	})
+	got := bindingRoots("/repo", []state.Pane{row}, []backend.LivePane{live})
 	if len(got) != 2 || got[0] != "/repo/home" || got[1] != "/repo/sibling" {
 		t.Fatalf("binding roots = %v, want both owning stores", got)
 	}
+}
+
+// A direct Codex pane never emits telemetry, so the poll path is the only
+// place its recorded conversation can follow a /new.
+func TestStateLoaderRebindsReplacedSession(t *testing.T) {
+	root := t.TempDir()
+	row := testHerdrPane(root)
+	recordTestPane(t, root, row)
+
+	first := backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-first",
+	}
+	live := testLiveHerdrPane(row, first)
+	listLive := func() ([]backend.LivePane, error) { return []backend.LivePane{live}, nil }
+	if _, err := StateLoader(root, listLive)(); err != nil {
+		t.Fatal(err)
+	}
+
+	second := first
+	second.Value = "session-second"
+	live.AgentSession = &second
+	store, err := StateLoader(root, listLive)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStoredSession(t, store, second)
+	persisted, err := state.LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStoredSession(t, persisted, second)
+
+	// Another provider's conversation is not a replacement, so the recorded
+	// value stays put rather than following it.
+	foreign := second
+	foreign.Source, foreign.Agent, foreign.Value = "herdr:claude", "claude", "session-foreign"
+	live.AgentSession = &foreign
+	store, err = StateLoader(root, listLive)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStoredSession(t, store, second)
 }
 
 func testHerdrPane(root string) state.Pane {
