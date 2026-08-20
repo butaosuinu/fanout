@@ -111,7 +111,7 @@ load helpers
   export FANOUT_TEST_HERDR_SHIM="$TEST_BIN_DIR/herdr"
   export GOCACHE="${FANOUT_DEV_CACHE_DIR:-/tmp/fanout-dev-cache-$(id -u)}/go-build"
 
-  run bash -c 'cd "$1" && go test ./internal/infra/herdrrun -run "^TestTier2LaunchFixture$" -count=1' \
+  run bash -c 'cd "$1" && "${GO:-go}" test ./internal/infra/herdrrun -run "^TestTier2LaunchFixture$" -count=1' \
     _ "$REPO_ROOT"
   assert_success
   [ -f "$FIXTURE_DIR/herdr-pane-run.json" ]
