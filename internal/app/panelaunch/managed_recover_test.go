@@ -45,7 +45,7 @@ func TestPruneAbsentRealizedManagedWorktreeRequiresResolvedCheckoutAndBranch(t *
 				gitCmdTest(t, repo, "worktree", "remove", req.WorktreePath)
 			}
 			if test.moveBranch {
-				gitCmdTest(t, repo, "commit", "--allow-empty", "-m", "move branch")
+				gitCmdTest(t, repo, "-c", "user.name=Fanout Test", "-c", "user.email=fanout@example.invalid", "commit", "--allow-empty", "-m", "move branch")
 				gitCmdTest(t, repo, "update-ref", result.Intent.FullBranchRef, "HEAD", result.Intent.BaseSHA)
 			}
 			if test.removeBranch {
