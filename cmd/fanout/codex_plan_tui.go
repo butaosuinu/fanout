@@ -133,7 +133,7 @@ func newManagedCodexPlanCapture(getenv func(string) string) func() (string, erro
 		},
 		SessionID: getenv(telemetry.SessionEnv), SocketPath: getenv(telemetry.SocketPathEnv),
 		WorkspaceLabel: getenv(telemetry.WorkspaceLabelEnv), TerminalID: getenv(telemetry.TerminalIDEnv),
-		AgentID: getenv(telemetry.AgentIDEnv),
+		Agent: getenv(telemetry.AgentEnv), AgentID: getenv(telemetry.AgentIDEnv),
 	}
 	var owned paneruntime.ManagedSession
 	return newBestEffortScreenCapture(managedCodexPlanCaptureTimeout, func(ctx context.Context) (string, error) {

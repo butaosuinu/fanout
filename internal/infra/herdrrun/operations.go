@@ -286,7 +286,8 @@ func (b *Backend) runNudgePrompt(ctx context.Context, probed probeResult, target
 		return methodUnavailable("agent.prompt")
 	}
 	identity := corebackend.OwnedPaneIdentity{
-		Ref: target.Ref, TerminalID: target.TerminalID, AgentID: target.AgentID,
+		Ref: target.Ref, TerminalID: target.TerminalID,
+		Agent: target.Agent, AgentID: target.AgentID,
 		AgentSession: cloneAgentSession(target.AgentSession),
 	}
 	if validateAgentPromptResponse(out, identity) != nil {
@@ -331,7 +332,7 @@ func validateAgentPromptResponse(data []byte, target corebackend.OwnedPaneIdenti
 	if agentID != target.AgentID {
 		return fmt.Errorf("%w: prompted agent name changed", corebackend.ErrOwnedIdentityMismatch)
 	}
-	if !agentPromptSessionMatches(agent.AgentSession, target.AgentSession) {
+	if !agentPromptSessionMatches(target.Agent, agent.AgentSession, target.AgentSession) {
 		return fmt.Errorf("%w: prompted agent session changed", corebackend.ErrOwnedIdentityMismatch)
 	}
 	return nil
@@ -342,15 +343,15 @@ func validateAgentPromptResponse(data []byte, target corebackend.OwnedPaneIdenti
 // Holding it to the byte-exact reference instead would report a prompt the
 // agent received as a failure whenever the provider replaced its conversation
 // in the gap, which is the one outcome a mutation must never produce.
-func agentPromptSessionMatches(current *agentSessionJSON, expected *corebackend.AgentSessionRef) bool {
+func agentPromptSessionMatches(provider string, current *agentSessionJSON, expected *corebackend.AgentSessionRef) bool {
 	ref, present, err := parseAgentSession(current)
 	if err != nil {
 		return false
 	}
 	if !present {
-		return corebackend.AgentSessionAdmits(expected, nil)
+		return corebackend.AgentSessionAdmits(provider, expected, nil)
 	}
-	return corebackend.AgentSessionAdmits(expected, &corebackend.AgentSessionRef{
+	return corebackend.AgentSessionAdmits(provider, expected, &corebackend.AgentSessionRef{
 		Source: ref.source, Agent: ref.agent, Kind: ref.kind, Value: ref.value,
 	})
 }
@@ -546,25 +547,47 @@ func (b *Backend) ownedSnapshotView(ctx context.Context, admission ownedAdmissio
 	if err != nil {
 		return ownedSnapshotView{}, methodUnavailable("session.snapshot")
 	}
-	view := ownedSnapshotView{panes: map[corebackend.PaneRef]ownedPaneView{}, workspaces: map[string]ownedWorkspaceView{}}
+	workspaces := ownedWorkspaceViews(envelope)
+	return ownedSnapshotView{panes: ownedPaneViews(panes, workspaces), workspaces: workspaces}, nil
+}
+
+// ownedWorkspaceViews projects the snapshot's workspaces into the ownership
+// label and checkout provenance every pane comparison reads off them.
+func ownedWorkspaceViews(envelope snapshotEnvelope) map[string]ownedWorkspaceView {
+	workspaces := map[string]ownedWorkspaceView{}
 	for _, workspace := range *envelope.Result.Snapshot.Workspaces {
 		worktreePath, repoKey := "", ""
 		if workspace.Worktree != nil {
 			worktreePath, repoKey = workspace.Worktree.CheckoutPath, workspace.Worktree.RepoKey
 		}
-		view.workspaces[workspace.WorkspaceID] = ownedWorkspaceView{label: workspace.Label, repoKey: repoKey, worktreePath: worktreePath}
+		workspaces[workspace.WorkspaceID] = ownedWorkspaceView{
+			label: workspace.Label, repoKey: repoKey, worktreePath: worktreePath,
+		}
 	}
+	return workspaces
+}
+
+// ownedPaneViews projects each observed pane into the identity shape a saved
+// target is compared against, carrying its workspace's ownership label.
+func ownedPaneViews(
+	panes []corebackend.LivePane,
+	workspaces map[string]ownedWorkspaceView,
+) map[corebackend.PaneRef]ownedPaneView {
+	views := map[corebackend.PaneRef]ownedPaneView{}
 	for _, pane := range panes {
-		workspace := view.workspaces[pane.Ref.Workspace]
 		identity := corebackend.OwnedPaneIdentity{
 			Ref: pane.Ref, SessionID: pane.SessionID, SocketPath: pane.SocketPath,
-			WorkspaceLabel: workspace.label, TerminalID: pane.TerminalID, RepoKey: pane.RepoKey,
-			WorktreePath: pane.WorktreePath, CurrentPath: pane.CurrentPath, AgentID: pane.AgentID,
+			WorkspaceLabel: workspaces[pane.Ref.Workspace].label,
+			TerminalID:     pane.TerminalID, RepoKey: pane.RepoKey,
+			WorktreePath: pane.WorktreePath, CurrentPath: pane.CurrentPath,
+			Agent: pane.AgentProvider, AgentID: pane.AgentID,
 			AgentSession: cloneAgentSession(pane.AgentSession),
 		}
-		view.panes[pane.Ref] = ownedPaneView{identity: identity, paneFocused: pane.FocusKnown && pane.Focused}
+		views[pane.Ref] = ownedPaneView{
+			identity: identity, paneFocused: pane.FocusKnown && pane.Focused,
+		}
 	}
-	return view, nil
+	return views
 }
 
 func (v ownedSnapshotView) find(ref corebackend.PaneRef) (ownedPaneView, bool) {
@@ -621,16 +644,34 @@ func ownedPaneMatches(expected corebackend.OwnedPaneIdentity, current ownedPaneV
 	return equalOwnedPane(expected, current.identity)
 }
 
+// equalOwnedPane is the fence every owned read and mutation resolves through.
+// Route, checkout, and agent record compare exactly; only the conversation
+// admits the provider's current one rather than freezing the first observed id,
+// and AgentID is per-launch, so the pane stays fenced to this launch.
 func equalOwnedPane(left, right corebackend.OwnedPaneIdentity) bool {
-	if left.Ref != right.Ref || left.SessionID != right.SessionID || left.SocketPath != right.SocketPath ||
-		left.WorkspaceLabel != right.WorkspaceLabel || left.TerminalID != right.TerminalID || left.RepoKey != right.RepoKey ||
-		left.WorktreePath != right.WorktreePath || left.CurrentPath != right.CurrentPath || left.AgentID != right.AgentID {
-		return false
-	}
-	// The conversation admits the provider's current one rather than freezing
-	// the first observed id; every other component above still compares exactly,
-	// and AgentID is per-launch, so the pane stays fenced to this launch.
-	return corebackend.AgentSessionAdmits(left.AgentSession, right.AgentSession)
+	return sameOwnedRoute(left, right) && sameOwnedCheckout(left, right) &&
+		sameOwnedAgent(left, right) &&
+		corebackend.AgentSessionAdmits(left.Agent, left.AgentSession, right.AgentSession)
+}
+
+// sameOwnedRoute compares where the pane lives: the addressed pane, the server
+// it is on, and the workspace and terminal records that pin it there.
+func sameOwnedRoute(left, right corebackend.OwnedPaneIdentity) bool {
+	return left.Ref == right.Ref && left.SessionID == right.SessionID &&
+		left.SocketPath == right.SocketPath && left.WorkspaceLabel == right.WorkspaceLabel &&
+		left.TerminalID == right.TerminalID
+}
+
+// sameOwnedCheckout compares the checkout the pane owns and works in.
+func sameOwnedCheckout(left, right corebackend.OwnedPaneIdentity) bool {
+	return left.RepoKey == right.RepoKey && left.WorktreePath == right.WorktreePath &&
+		left.CurrentPath == right.CurrentPath
+}
+
+// sameOwnedAgent compares the agent the conversation hangs off: the provider
+// and the per-launch record fanout named it with.
+func sameOwnedAgent(left, right corebackend.OwnedPaneIdentity) bool {
+	return left.Agent == right.Agent && left.AgentID == right.AgentID
 }
 
 func cloneOwnedPaneIdentity(target corebackend.OwnedPaneIdentity) corebackend.OwnedPaneIdentity {

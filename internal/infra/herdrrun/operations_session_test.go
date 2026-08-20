@@ -20,7 +20,7 @@ func TestEqualOwnedPaneAdmitsReplacedConversation(t *testing.T) {
 		SessionID:  "owned-session",
 		SocketPath: "/owned/herdr.sock", WorkspaceLabel: "label-1", TerminalID: "terminal-1",
 		RepoKey: "/repo/.git", WorktreePath: "/repo/wt", CurrentPath: "/repo/wt",
-		AgentID: "fanout-agent", AgentSession: session("claude", "first"),
+		Agent: "claude", AgentID: "fanout-agent", AgentSession: session("claude", "first"),
 	}
 	tests := []struct {
 		name           string
@@ -45,9 +45,25 @@ func TestEqualOwnedPaneAdmitsReplacedConversation(t *testing.T) {
 			want: true,
 		},
 		{
+			// The pane's own provider is compared before the conversation, so a
+			// reference issued for another provider cannot reach this row even
+			// while it has none of its own recorded.
 			name: "another provider's conversation",
 			mutate: func(i *corebackend.OwnedPaneIdentity) {
 				i.AgentSession = session("codex", "second")
+			},
+		},
+		{
+			name:           "another provider's conversation on an unbound row",
+			mutateRecorded: func(i *corebackend.OwnedPaneIdentity) { i.AgentSession = nil },
+			mutate: func(i *corebackend.OwnedPaneIdentity) {
+				i.AgentSession = session("codex", "second")
+			},
+		},
+		{
+			name: "recorded provider changed under the same conversation",
+			mutate: func(i *corebackend.OwnedPaneIdentity) {
+				i.Agent = "codex"
 			},
 		},
 		{

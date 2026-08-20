@@ -202,7 +202,7 @@ func managedNudgeTarget(pane state.Pane) backend.NudgeTarget {
 	binding := pane.RuntimeBinding()
 	return backend.NudgeTarget{
 		Ref: binding.Ref, SessionID: binding.SessionID, SocketPath: binding.SocketPath,
-		TerminalID: binding.TerminalID, AgentID: binding.AgentID,
+		TerminalID: binding.TerminalID, Agent: binding.Agent, AgentID: binding.AgentID,
 		AgentSession: binding.AgentSession,
 	}
 }

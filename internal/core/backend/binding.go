@@ -187,7 +187,7 @@ func (b PaneBinding) agentMatchesLive(live LivePane, cfg matchConfig) bool {
 	}
 	same := []bool{
 		liveAgentPresent(live), b.AgentID != "", b.observedAgentMatches(live),
-		boundAgentSessionMatches(b.AgentSession, live.AgentSession, b.Agent),
+		AgentSessionAdmits(b.Agent, b.AgentSession, live.AgentSession),
 	}
 	return !slices.Contains(same, false)
 }
@@ -257,9 +257,8 @@ func SameAgentSession(left, right *AgentSessionRef) bool {
 	return *left == *right
 }
 
-// AgentSessionAdmits reports whether a row that recorded `recorded` may still
-// act on a pane now reporting `live`, for the callers that hold no separate
-// provider name and must read it off the references themselves.
+// AgentSessionAdmits reports whether a row recording `recorded` for `provider`
+// may still act on a pane now reporting `live`.
 //
 // The conversation is evidence about a pane, not the fence on it. A provider
 // replaces its own conversation id while the pane, terminal, agent record, and
@@ -267,30 +266,14 @@ func SameAgentSession(left, right *AgentSessionRef) bool {
 // first observed id would lock the row out of focus, peek, close, and cleanup
 // for the life of that pane, with no way back. What fences these rows is
 // everything around the conversation: route, terminal, checkout, and the
-// per-launch AgentID, none of which another launch can reproduce. So a
-// conversation may be replaced only by another one the same runtime issued for
-// the same provider, and a row that has not bound one yet admits the
-// provider's current one rather than reading it as drift.
-func AgentSessionAdmits(recorded, live *AgentSessionRef) bool {
-	if recorded == nil {
-		return live == nil || issuedAgentSession(live)
-	}
-	if SameAgentSession(recorded, live) {
-		return true
-	}
-	return issuedAgentSession(recorded) && issuedAgentSession(live) && recorded.Agent == live.Agent
-}
-
-// issuedAgentSession reports whether ref is a well-formed reference a runtime
-// issued for its own provider, checked without naming that provider
-// separately: the source has to be the frozen value built for ref's own agent.
-func issuedAgentSession(ref *AgentSessionRef) bool {
-	return ref != nil && ref.Valid() && ref.Source == AgentSessionSource(ref.Agent)
-}
-
-// boundAgentSessionMatches is AgentSessionAdmits for the callers that do know
-// the recorded provider, so both sides are pinned to it by name.
-func boundAgentSessionMatches(recorded, live *AgentSessionRef, provider string) bool {
+// per-launch AgentID, none of which another launch reproduces.
+//
+// Both sides are pinned to provider by name rather than checked for internal
+// consistency, so a row cannot be acted on through a reference issued for a
+// different provider — including the window before it has bound one, where
+// there is no recorded reference to compare against. A row with no provider
+// admits no conversation at all, which is what keeps a shell pane free of one.
+func AgentSessionAdmits(provider string, recorded, live *AgentSessionRef) bool {
 	if recorded == nil {
 		return live == nil || ExpectedAgentSession(live, provider)
 	}

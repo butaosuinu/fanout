@@ -32,7 +32,7 @@ func managedPaneIdentity(pane state.Pane) (backend.OwnedPaneIdentity, error) {
 		SessionID: pane.SessionID, SocketPath: pane.SocketPath,
 		WorkspaceLabel: pane.WorkspaceLabel, TerminalID: pane.TerminalID,
 		RepoKey: pane.RepoKey, WorktreePath: worktreePath,
-		CurrentPath: pane.WorktreePath, AgentID: pane.AgentID,
+		CurrentPath: pane.WorktreePath, Agent: pane.Agent, AgentID: pane.AgentID,
 		AgentSession: cloneAgentSessionRef(pane.AgentSession),
 	}
 	if strings.TrimSpace(identity.WorkspaceLabel) == "" {

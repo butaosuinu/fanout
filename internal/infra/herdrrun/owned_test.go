@@ -363,6 +363,7 @@ func (h *ownedHarness) target() corebackend.OwnedPaneIdentity {
 				Ref: pane.Ref, SessionID: pane.SessionID, SocketPath: pane.SocketPath,
 				WorkspaceLabel: h.nonce, TerminalID: pane.TerminalID, RepoKey: pane.RepoKey,
 				WorktreePath: pane.WorktreePath, CurrentPath: pane.CurrentPath,
+				Agent:   pane.AgentProvider,
 				AgentID: pane.AgentID, AgentSession: cloneAgentSession(pane.AgentSession),
 			}
 		}
@@ -455,7 +456,7 @@ func TestOwnedSessionNudgeAllowsUnreportedAgentSession(t *testing.T) {
 	}
 	nudgeTarget := corebackend.NudgeTarget{
 		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
-		TerminalID: target.TerminalID, AgentID: target.AgentID,
+		TerminalID: target.TerminalID, Agent: target.Agent, AgentID: target.AgentID,
 	}
 	if err := h.session.Nudge(context.Background(), nudgeTarget, "nudge"); err != nil {
 		t.Fatal(err)
@@ -473,7 +474,7 @@ func TestPreparedNudgeIssuesOnlyPromptAfterPreparation(t *testing.T) {
 	}
 	nudgeTarget := corebackend.NudgeTarget{
 		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
-		TerminalID: target.TerminalID, AgentID: target.AgentID, AgentSession: target.AgentSession,
+		TerminalID: target.TerminalID, Agent: target.Agent, AgentID: target.AgentID, AgentSession: target.AgentSession,
 	}
 	beforePreparation := len(h.fake.commands)
 	prompt, err := h.session.PrepareNudge(context.Background(), nudgeTarget, "nudge")
@@ -1124,7 +1125,7 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 	}
 	nudgeTarget := corebackend.NudgeTarget{
 		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
-		TerminalID: target.TerminalID, AgentID: target.AgentID, AgentSession: target.AgentSession,
+		TerminalID: target.TerminalID, Agent: target.Agent, AgentID: target.AgentID, AgentSession: target.AgentSession,
 	}
 	if err := h.session.Nudge(context.Background(), nudgeTarget, "nudge"); err != nil {
 		t.Fatal(err)
