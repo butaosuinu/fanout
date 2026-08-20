@@ -4,8 +4,10 @@ Publishing a release is **CI-driven**: after the release docs land on `main`,
 the only manual publication step is pushing an annotated `vX.Y.Z` tag. Pushing
 the tag triggers `.github/workflows/release.yml`, which builds the four platform
 archives, generates `SHA256SUMS`, and publishes the GitHub Release with
-auto-generated notes. There is no `make release` target and no goreleaser config
-— the workflow is the whole pipeline.
+auto-generated notes. The same tag also triggers `.github/workflows/pages.yml`,
+which publishes the docs site as of that tag — merging the release docs to
+`main` builds them but does not publish them. There is no `make release` target
+and no goreleaser config — the workflow is the whole pipeline.
 
 ## What the tag push does for you
 
@@ -43,7 +45,8 @@ auto-generated notes. There is no `make release` target and no goreleaser config
    `site/content/docs/changelog.{md,ja.md}`, then update the pinned
    `FANOUT_VERSION` example in `site/content/docs/installation.{md,ja.md}`.
    Merge the docs through a normal PR; its squash commit becomes the intended
-   tag target. No source version edit is needed.
+   tag target. No source version edit is needed. Merging does not publish the
+   site — the tag does.
 
 3. **Preflight.** Release off the latest `origin/main` and make sure it is green:
 
@@ -77,13 +80,47 @@ auto-generated notes. There is no `make release` target and no goreleaser config
    PR review gate (`.claude/hooks/pre-pr-review-gate.sh`) only intercepts
    `gh pr create`; **a tag push on its own is not gated.**
 
-5. **Watch the build.**
+5. **Watch the build.** The tag starts `release.yml` and `pages.yml`. Deleting a
+   tag does not delete the runs it started, so a re-cut tag has older runs under
+   the same name — match on the tagged commit. Stop waiting after a minute:
+   whether a run exists is the thing you are trying to find out.
 
    ```bash
-   until run_id="$(gh run list --workflow release.yml --branch vX.Y.Z --limit 1 \
-     --json databaseId -q '.[0].databaseId')" && [ -n "$run_id" ]; do sleep 5; done
-   gh run watch "$run_id" --exit-status
+   tag_sha="$(git rev-parse "vX.Y.Z^{commit}")"
+   export tag_sha
+   watch_run() {
+     local id=""
+     for _ in $(seq 12); do
+       id="$(gh run list --workflow "$1" --branch vX.Y.Z --limit 10 \
+         --json databaseId,headSha -q '[.[] | select(.headSha == $ENV.tag_sha)][0].databaseId')" ||
+         { echo "lookup failed for $1"; return 2; }
+       [ -n "$id" ] && break
+       sleep 5
+     done
+     [ -n "$id" ] || { echo "no $1 run for $tag_sha"; return 3; }
+     gh run watch "$id" --exit-status
+   }
    ```
+
+   ```bash
+   watch_run release.yml
+   watch_run pages.yml
+   ```
+
+   Only a `3` from `watch_run pages.yml` means the run was never created, and
+   only then is publishing by hand right. `2` is a failed lookup — expired
+   auth, a rate limit, no network — and `1` is `gh run watch` reporting a run
+   that exists and failed, or losing the connection to one. Publishing on
+   either reading can start a second deploy on top of one already running.
+
+   If `pages.yml` never produced a run, publish the tag by hand:
+
+   ```bash
+   gh workflow run pages.yml --ref vX.Y.Z
+   ```
+
+   Name the tag, not `main` — `--ref main` would publish whatever else has
+   landed on `main` since, including release docs staged for the *next* tag.
 
 6. **Verify the Release.**
 
@@ -102,6 +139,18 @@ auto-generated notes. There is no `make release` target and no goreleaser config
    fanout --version            # -> fanout vX.Y.Z (<sha7>)
    ```
 
+   Then confirm the docs site carries the new version. `pages.yml` and
+   `release.yml` run in parallel, so the changelog's release-notes link 404s
+   until the Release is published a few minutes in:
+
+   ```bash
+   curl -fsS https://butaosuinu.github.io/fanout/docs/changelog/ | grep -qF 'vX.Y.Z'
+   ```
+
+   Pages serves through a CDN, so a miss right after the deploy job goes green
+   can be propagation rather than a failed publish. Wait a minute and re-run
+   before treating it as one.
+
 ## If something goes wrong
 
 - **Workflow failed mid-build.** Fix the cause on `main`, then delete and re-cut
@@ -117,4 +166,22 @@ auto-generated notes. There is no `make release` target and no goreleaser config
 
 - **Wrong commit tagged.** Same delete dance, then re-tag the intended commit.
   Avoid moving a tag that has already published a Release; bump to the next patch
-  instead.
+  instead. If the tagged commit was not `main`'s tip, the docs site rolls back
+  to it; re-cutting the tag republishes the site along with the Release.
+
+- **Docs deploy rejected.** `not allowed to deploy to github-pages due to
+  environment protection rules` means the `github-pages` environment lost its tag
+  policy. Restore it, then re-run the failed job:
+
+  ```bash
+  policies=repos/butaosuinu/fanout/environments/github-pages/deployment-branch-policies
+  gh api --method POST "$policies" -f name='main' -f type='branch'
+  gh api --method POST "$policies" -f name='v*' -f type='tag'
+  ```
+
+  Both entries are needed: the tag publishes releases, `main` backs every
+  `gh workflow run pages.yml --ref main`. The POST only works while the
+  environment is set to *selected branches and tags*; if it was reset to
+  another mode, switch it back in Settings → Environments → github-pages
+  first. The Release itself is unaffected — `pages.yml` and `release.yml` fail
+  independently.
