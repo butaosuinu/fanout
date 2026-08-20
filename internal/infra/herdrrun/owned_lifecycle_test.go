@@ -205,6 +205,54 @@ func TestPrepareRestartedLauncherMigratesLegacyOwnedConfig(t *testing.T) {
 	}
 }
 
+func TestPrepareRestartedLauncherRecoversPlainConfigWithOrphanDashboardDescriptor(t *testing.T) {
+	for _, previousLauncher := range []bool{false, true} {
+		name := "current launcher"
+		if previousLauncher {
+			name = "previous launcher"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newOwnedHarness(t)
+			marker, found, err := readOwnerMarker(h.layout.markerPath)
+			if err != nil || !found {
+				t.Fatalf("read current marker = (%+v, %t, %v)", marker, found, err)
+			}
+			configLauncher := binaryAdmission{path: marker.LauncherPath, sha256: marker.LauncherSHA256}
+			if previousLauncher {
+				configLauncher = installLegacyOwnedLauncher(t, h)
+			}
+			descriptor := dashboardDescriptor{
+				SchemaID:   dashboardDescriptorSchemaID,
+				HelperPath: configLauncher.path, HelperSHA256: configLauncher.sha256,
+				DashboardPath: configLauncher.path, DashboardSHA256: configLauncher.sha256,
+				Environment: []string{"PATH=/usr/bin"},
+			}
+			if err := writeDashboardDescriptor(h.layout, descriptor); err != nil {
+				t.Fatal(err)
+			}
+			expected := inspectOwnedServerForTest(t, h)
+			commonDir, commonIdentity, err := openCanonicalGitCommonDir(h.commonDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			admitted := binaryAdmission{
+				path: expected.BinaryPath, sha256: expected.BinarySHA256, version: expected.BinaryVersion,
+			}
+
+			pinned, err := prepareRestartedLauncher(expected, commonDir, commonIdentity, h.layout, admitted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validatePrivateContents(h.layout.configPath, ownedConfigContents(pinned.path)); err != nil {
+				t.Fatalf("plain config after restart preparation: %v", err)
+			}
+			if _, err := os.Lstat(h.layout.dashboardDescriptorPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("orphan dashboard descriptor remains: %v", err)
+			}
+		})
+	}
+}
+
 func TestRestartOwnedPreservesDashboardShortcutConfig(t *testing.T) {
 	h := newOwnedHarness(t)
 	h.fake.respond = func(args []string) ([]byte, error) {

@@ -164,7 +164,7 @@ func prepareRestartedLauncher(
 }
 
 func restartedConfigIsCurrent(layout ownedLayout, launcher string) bool {
-	if validatePrivateContents(layout.configPath, ownedConfigContents(launcher)) == nil {
+	if ownedConfigIsCurrentPlain(layout, launcher) {
 		return true
 	}
 	_, enabled, err := dashboardConfigDescriptor(layout, launcher)
@@ -176,6 +176,9 @@ func restartedOwnedConfigContents(
 	previousLauncher string,
 	current binaryAdmission,
 ) ([]byte, error) {
+	if ownedConfigIsPlain(layout, previousLauncher) {
+		return ownedConfigContents(current.path), removeDashboardDescriptor(layout)
+	}
 	descriptor, enabled, err := dashboardConfigDescriptor(layout, previousLauncher)
 	if err != nil || !enabled {
 		return ownedConfigContents(current.path), err
@@ -189,6 +192,9 @@ func restartedOwnedConfigContents(
 }
 
 func refreshRestartedDashboardDescriptor(layout ownedLayout, launcher string, current binaryAdmission) error {
+	if ownedConfigIsCurrentPlain(layout, launcher) {
+		return removeDashboardDescriptor(layout)
+	}
 	descriptor, enabled, err := dashboardConfigDescriptor(layout, launcher)
 	if err != nil || !enabled {
 		return err
@@ -196,6 +202,17 @@ func refreshRestartedDashboardDescriptor(layout ownedLayout, launcher string, cu
 	descriptor.DashboardPath = current.path
 	descriptor.DashboardSHA256 = current.sha256
 	return writeDashboardDescriptor(layout, descriptor)
+}
+
+func ownedConfigIsPlain(layout ownedLayout, launcher string) bool {
+	if ownedConfigIsCurrentPlain(layout, launcher) {
+		return true
+	}
+	return validatePrivateContents(layout.configPath, legacyOwnedConfigContents(launcher)) == nil
+}
+
+func ownedConfigIsCurrentPlain(layout ownedLayout, launcher string) bool {
+	return validatePrivateContents(layout.configPath, ownedConfigContents(launcher)) == nil
 }
 
 func dashboardConfigDescriptor(layout ownedLayout, launcher string) (dashboardDescriptor, bool, error) {
