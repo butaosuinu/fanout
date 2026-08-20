@@ -651,11 +651,125 @@ func assertHerdrHookCalls(t *testing.T, path string, want int) {
 	}
 }
 
-func TestHerdrCloseDoesNotForceDirtyCheckout(t *testing.T) {
+func TestHerdrClosePreservesUserChangesBeforeMutation(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
-	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+	}
+	lg := &captureLogger{}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, lg); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	assertHerdrLifecyclePreserved(t, fixture)
+	if runtime.removeCalls != 0 {
+		t.Fatalf("dirty cleanup remove calls = %d, want 0", runtime.removeCalls)
+	}
+	if len(lg.errors) == 0 || !strings.Contains(lg.errors[len(lg.errors)-1], "tracked or untracked changes") {
+		t.Fatalf("dirty cleanup errors = %v", lg.errors)
+	}
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
+
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "tracked.txt")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "preserve tracked work")
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.removeCalls != 1 {
+		t.Fatalf("retry cleanup remove calls = %d, want 1", runtime.removeCalls)
+	}
+}
+
+func TestHerdrCloseReportsIgnoredOnlyCheckoutBeforeMutation(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", ".gitignore")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "ignore dependencies")
+	ignoredPath := filepath.Join(fixture.worktreePath, "node_modules", "pkg")
+	if err := os.MkdirAll(ignoredPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ignoredPath, "index.js"), []byte("ignored\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+	}
+	lg := &captureLogger{}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, lg); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.removeCalls != 0 {
+		t.Fatalf("ignored-only cleanup remove calls = %d, want 0", runtime.removeCalls)
+	}
+	if len(lg.errors) == 0 || !strings.Contains(lg.errors[len(lg.errors)-1], "ignored files only") {
+		t.Fatalf("ignored-only cleanup errors = %v", lg.errors)
+	}
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
+
+	if err := os.RemoveAll(filepath.Join(fixture.worktreePath, "node_modules")); err != nil {
+		t.Fatal(err)
+	}
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+}
+
+func TestHerdrCloseReplansLegacyDirtyManualIntent(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "committed.txt"), []byte("committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "committed.txt")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "preserve work before cleanup")
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.removeCalls != 1 {
+		t.Fatalf("replanned cleanup remove calls = %d, want 1", runtime.removeCalls)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseReplansLegacyDirtyManualIntentAfterManualWorktreeRemoval(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	runHerdrLifecycleGit(t, fixture.projectRoot, "worktree", "remove", fixture.worktreePath)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.removeCalls != 0 || runtime.closeCalls != 1 {
+		t.Fatalf("residual cleanup calls = remove %d/close %d, want 0/1", runtime.removeCalls, runtime.closeCalls)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseDoesNotReplanMalformedManualIntentContainingDirtyCode(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	recordManualHerdrCleanupIntent(
+		t,
+		fixture,
+		"response lost after dirty_worktree_requires_force",
+	)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
 		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
@@ -664,16 +778,34 @@ func TestHerdrCloseDoesNotForceDirtyCheckout(t *testing.T) {
 	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
 		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
 	}
+	if runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+		t.Fatalf("malformed manual cleanup calls = remove %d/close %d, want 0/0", runtime.removeCalls, runtime.closeCalls)
+	}
 	assertHerdrLifecyclePreserved(t, fixture)
-	if runtime.removeCalls != 1 {
-		t.Fatalf("dirty cleanup remove calls = %d, want one non-force attempt", runtime.removeCalls)
+}
+
+func TestLegacyDirtyWorktreeRejectionRequiresCompleteEnvelope(t *testing.T) {
+	valid := legacyDirtyWorktreeFailure()
+	tests := []struct {
+		name    string
+		phase   state.CleanupPhase
+		failure string
+		want    bool
+	}{
+		{name: "valid", phase: state.CleanupRemove, failure: valid, want: true},
+		{name: "wrong phase", phase: state.CleanupWorkspaceClose, failure: valid},
+		{name: "wrong id", phase: state.CleanupRemove, failure: strings.Replace(valid, "cli:worktree:remove", "cli:worktree:create", 1)},
+		{name: "empty message", phase: state.CleanupRemove, failure: strings.Replace(valid, "checkout has changes", "", 1)},
+		{name: "result present", phase: state.CleanupRemove, failure: strings.Replace(valid, `,"id"`, `,"result":{},"id"`, 1)},
+		{name: "malformed", phase: state.CleanupRemove, failure: "response lost after dirty_worktree_requires_force"},
 	}
-	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(journal.Intents) != 1 || journal.Intents[0].Status != state.IntentManualCleanupRequired {
-		t.Fatalf("dirty cleanup journal = %#v, want manual_cleanup_required", journal.Intents)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			intent := state.LaunchIntent{CleanupPhase: tt.phase, Failure: tt.failure}
+			if got := isLegacyDirtyWorktreeRejection(intent); got != tt.want {
+				t.Fatalf("isLegacyDirtyWorktreeRejection() = %t, want %t", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -720,6 +852,12 @@ func TestHerdrCloseDoesNotChainWorkspaceCloseAfterAmbiguousRemove(t *testing.T) 
 	intent, found := journal.FindIntent(intentID)
 	if !found || intent.Status != state.IntentManualCleanupRequired {
 		t.Fatalf("ambiguous cleanup intent = %#v (found=%t), want manual cleanup", intent, found)
+	}
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.removeCalls != 1 || runtime.closeCalls != 0 {
+		t.Fatalf("retry ambiguous cleanup calls = remove %d/close %d, want 1/0", runtime.removeCalls, runtime.closeCalls)
 	}
 }
 
@@ -1250,6 +1388,45 @@ func recordExpiredHerdrCleanupIntent(
 	if saveErr := journal.Save(); saveErr != nil {
 		t.Fatal(saveErr)
 	}
+}
+
+func recordManualHerdrCleanupIntent(t *testing.T, fixture herdrLifecycleFixture, failure string) {
+	t.Helper()
+	recordExpiredHerdrCleanupIntent(t, fixture, state.CleanupRemove)
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
+		}
+	}()
+	journal, err := locked.LaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found {
+		t.Fatal("cleanup intent is absent")
+	}
+	intent.Status = state.IntentManualCleanupRequired
+	intent.ExpectedHead = strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
+	intent.ExpiresUnixMS = time.Now().Add(time.Minute).UnixMilli()
+	intent.Failure = failure
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func legacyDirtyWorktreeFailure() string {
+	return `exit status 1: {"error":{"code":"dirty_worktree_requires_force","message":"checkout has changes"},"id":"cli:worktree:remove"}` +
+		"\nherdr worktree remove did not establish absence"
 }
 
 func expireSavedHerdrCleanupIntent(t *testing.T, fixture herdrLifecycleFixture) {

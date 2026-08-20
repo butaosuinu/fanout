@@ -227,7 +227,7 @@ func runWorkspaceCleanup(
 	if err != nil {
 		return err
 	}
-	return driveWorkspaceCleanup(ctx, opts, journal, runtime, pane, intent, worktreeIntentID, lg)
+	return driveWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent, worktreeIntentID, lg)
 }
 
 func loadWorkspaceCleanupIntent(
@@ -494,6 +494,7 @@ func cleanupResourceMatchesPane(intent state.LaunchIntent, pane state.Pane) bool
 func driveWorkspaceCleanup(
 	ctx context.Context,
 	opts Options,
+	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
 	pane state.Pane,
@@ -501,7 +502,7 @@ func driveWorkspaceCleanup(
 	worktreeIntentID string,
 	lg Logger,
 ) error {
-	intent, err := resumeWorkspaceCleanup(ctx, opts, journal, runtime, intent)
+	intent, err := resumeWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent)
 	if err != nil {
 		return err
 	}
@@ -524,17 +525,38 @@ func driveWorkspaceCleanup(
 func resumeWorkspaceCleanup(
 	ctx context.Context,
 	opts Options,
+	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
+	pane state.Pane,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
 	if intent.Status == state.IntentPlanned && time.Now().UnixMilli() >= intent.ExpiresUnixMS {
 		return recoverExpiredPlannedWorkspaceCleanup(ctx, opts, journal, runtime, intent)
 	}
+	if intent.Status == state.IntentPlanned {
+		return replanCurrentWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent)
+	}
 	if intent.Status == state.IntentManualCleanupRequired || intent.Status == state.IntentIssued {
-		return recoverWorkspaceCleanup(ctx, opts, journal, runtime, intent)
+		return recoverWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent)
 	}
 	return intent, nil
+}
+
+func replanCurrentWorkspaceCleanup(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	runtime WorkspaceRuntime,
+	pane state.Pane,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
+	observation, err := observeWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
+	if err != nil {
+		return intent, err
+	}
+	return replanObservedWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent, observation)
 }
 
 func recoverExpiredPlannedWorkspaceCleanup(
@@ -552,7 +574,7 @@ func recoverExpiredPlannedWorkspaceCleanup(
 		return realizeWorkspaceCleanup(journal, intent)
 	}
 	if intent.Coordinator != (state.RuntimeResource{}) && intent.CleanupPhase != state.CleanupReopen {
-		return refreshExpiredReopenedWorkspaceCleanup(ctx, opts, journal, intent, observation)
+		return replanWorkspaceCleanup(ctx, opts, journal, intent, observation)
 	}
 	journal.RemoveIntent(intent.ID)
 	if err := journal.Save(); err != nil {
@@ -561,7 +583,7 @@ func recoverExpiredPlannedWorkspaceCleanup(
 	return intent, fmt.Errorf("saved Herdr cleanup intent expired before mutation; retry to replan")
 }
 
-func refreshExpiredReopenedWorkspaceCleanup(
+func replanWorkspaceCleanup(
 	ctx context.Context,
 	opts Options,
 	journal *state.LockedLaunchJournal,
@@ -594,6 +616,31 @@ func refreshExpiredReopenedWorkspaceCleanup(
 	intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
 	intent.Failure = ""
 	return intent, saveWorkspaceCleanupIntent(journal, intent)
+}
+
+func replanObservedWorkspaceCleanup(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	runtime WorkspaceRuntime,
+	pane state.Pane,
+	intent state.LaunchIntent,
+	observation workspaceCleanupObservation,
+) (state.LaunchIntent, error) {
+	if workspaceCleanupAbsent(observation) {
+		return realizeWorkspaceCleanup(journal, intent)
+	}
+	checkoutOnly := observation.workspace == nil &&
+		(!observation.checkout.PathAbsent || observation.checkout.Registered)
+	if checkoutOnly && intent.Coordinator == (state.RuntimeResource{}) {
+		var err error
+		intent, err = attachWorkspaceCleanupCoordinator(ctx, locked, runtime, opts.ProjectRoot, pane, intent)
+		if err != nil {
+			return intent, err
+		}
+	}
+	return replanWorkspaceCleanup(ctx, opts, journal, intent, observation)
 }
 
 func finalizeWorkspaceCleanup(

@@ -2,8 +2,12 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -11,11 +15,27 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
+const (
+	legacyRemoveFailurePrefix = "exit status 1: "
+	legacyRemoveFailureSuffix = "\nherdr worktree remove did not establish absence"
+)
+
+type legacyRemoveRejection struct {
+	ID     string          `json:"id"`
+	Result json.RawMessage `json:"result"`
+	Error  *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
 func recoverWorkspaceCleanup(
 	ctx context.Context,
 	opts Options,
+	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
+	pane state.Pane,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
 	if intent.Status == state.IntentIssued && intent.CleanupPhase == state.CleanupReopen {
@@ -29,10 +49,64 @@ func recoverWorkspaceCleanup(
 		return realizeWorkspaceCleanup(journal, intent)
 	}
 	if intent.Status == state.IntentManualCleanupRequired {
-		return intent, fmt.Errorf("%w: %s", ErrManualCleanupRequired, intent.Failure)
+		return recoverManualWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent, observation)
 	}
 	cause := fmt.Errorf("issued Herdr %s outcome remains ambiguous", intent.CleanupPhase)
 	return intent, markWorkspaceCleanupManual(journal, intent, cause)
+}
+
+func recoverManualWorkspaceCleanup(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	runtime WorkspaceRuntime,
+	pane state.Pane,
+	intent state.LaunchIntent,
+	observation workspaceCleanupObservation,
+) (state.LaunchIntent, error) {
+	if !isLegacyDirtyWorktreeRejection(intent) {
+		return intent, fmt.Errorf("%w: %s", ErrManualCleanupRequired, intent.Failure)
+	}
+	return replanObservedWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent, observation)
+}
+
+func isLegacyDirtyWorktreeRejection(intent state.LaunchIntent) bool {
+	if intent.CleanupPhase != state.CleanupRemove {
+		return false
+	}
+	payload, ok := strings.CutPrefix(intent.Failure, legacyRemoveFailurePrefix)
+	if !ok {
+		return false
+	}
+	payload, ok = strings.CutSuffix(payload, legacyRemoveFailureSuffix)
+	if !ok {
+		return false
+	}
+	envelope, ok := decodeLegacyRemoveRejection(payload)
+	if !ok || envelope.Error == nil {
+		return false
+	}
+	return !slices.Contains([]bool{
+		envelope.ID == "cli:worktree:remove",
+		len(envelope.Result) == 0,
+		envelope.Error.Code == "dirty_worktree_requires_force",
+		strings.TrimSpace(envelope.Error.Message) != "",
+	}, false)
+}
+
+func decodeLegacyRemoveRejection(payload string) (legacyRemoveRejection, bool) {
+	var envelope legacyRemoveRejection
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		return legacyRemoveRejection{}, false
+	}
+	var extra json.RawMessage
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return legacyRemoveRejection{}, false
+	}
+	return envelope, true
 }
 
 func recoverIssuedReopen(
@@ -251,13 +325,31 @@ func verifyRemovePreconditions(
 	if err := verifyTerminalInvalidation(*observation.workspace, intent.Resource); err != nil {
 		return err
 	}
-	return verifyCleanupCheckout(
+	if err := verifyCleanupCheckout(
 		ctx,
 		opts.ProjectRoot,
 		intent.FullBranchRef,
 		intent.ExpectedHead,
 		intent.Resource,
-	)
+	); err != nil {
+		return err
+	}
+	return verifyRemovableCheckoutContents(ctx, intent.WorktreePath)
+}
+
+func verifyRemovableCheckoutContents(ctx context.Context, path string) error {
+	contentState, err := worktree.ObserveCheckoutContentState(ctx, path)
+	if err != nil {
+		return err
+	}
+	switch contentState {
+	case worktree.CheckoutClean:
+		return nil
+	case worktree.CheckoutIgnoredOnly:
+		return fmt.Errorf("herdr checkout %s contains ignored files only; remove them before retrying cleanup", path)
+	default:
+		return fmt.Errorf("herdr checkout %s has tracked or untracked changes; preserve or remove them before retrying cleanup", path)
+	}
 }
 
 func executeWorkspaceClose(
