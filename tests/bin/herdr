@@ -24,11 +24,14 @@
 # malformed call and dies rather than silently dropping the next word.
 #
 # Failure injection: writing $FIXTURE_DIR/herdr-<key>.exit (an integer) makes
-# that verb exit with that code, emitting $FIXTURE_DIR/herdr-<key>.err on
-# stderr and its body file on stdout when either exists. <key> is the stem
+# that verb exit with that code, emitting $FIXTURE_DIR/herdr-<key>.err and its
+# body file on stderr when either exists; stdout stays empty. <key> is the stem
 # after `herdr-` above: version, status, snapshot, workspace-create. This
-# reproduces the rejection envelopes Herdr returns on a non-zero exit. Every
-# verb — the two named probes and --version included — goes through
+# reproduces the rejection envelopes Herdr returns on a non-zero exit. Measured
+# on 2026-08-19 with Herdr 0.7.5 and 0.8.0: JSON rejection envelopes are written
+# to stderr while stdout is empty.
+#
+# Every verb — the two named probes and --version included — goes through
 # apply_failure_injection, so a scenario can inject a failure anywhere fanout
 # talks to Herdr; the `herdr 0.7.5` default belongs to the success path and
 # does not leak into an injected --version failure. A .err without its .exit is
@@ -91,7 +94,7 @@ apply_failure_injection() {
     cat "$stderr_file" >&2
   fi
   if [[ -f "$body" ]]; then
-    cat "$body"
+    cat "$body" >&2
   fi
   exit "$(cat "$status_file")"
 }

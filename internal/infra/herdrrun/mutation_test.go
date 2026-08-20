@@ -75,17 +75,18 @@ func TestWorktreeMutationArgsPinHerdr075CLI(t *testing.T) {
 	}
 }
 
-func TestDecodeMutationRejectionRequiresExactEnvelope(t *testing.T) {
+func TestDecodeMutationRejectionStdoutFallbackRequiresExactEnvelope(t *testing.T) {
 	data := []byte(`{"id":"cli:worktree:create","error":{"code":"worktree_create_failed","message":"already exists"}}`)
-	got, ok := decodeMutationRejection(data, "cli:worktree:create")
+	got, ok := decodeMutationRejection(data, errors.New("exit status 1"), "cli:worktree:create")
 	if !ok || got.Code != "worktree_create_failed" || !errors.Is(got, corebackend.ErrMutationRejected) {
 		t.Fatalf("rejection = (%+v,%t)", got, ok)
 	}
-	if _, ok := decodeMutationRejection(data, "cli:workspace:create"); ok {
+	if _, ok := decodeMutationRejection(data, errors.New("exit status 1"), "cli:workspace:create"); ok {
 		t.Fatal("wrong envelope id unexpectedly accepted")
 	}
 	if _, ok := decodeMutationRejection(
 		[]byte(`{"id":"cli:worktree:create","error":{"code":"","message":"missing"}}`),
+		errors.New("exit status 1"),
 		"cli:worktree:create",
 	); ok {
 		t.Fatal("incomplete error envelope unexpectedly accepted")

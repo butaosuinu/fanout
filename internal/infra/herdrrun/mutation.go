@@ -280,7 +280,7 @@ func (s *OwnedSession) issueMutation(
 
 	out, commandErr := s.backend.runWorktreeMutation(ctx, probed.binary, probed.route, args...)
 	if commandErr != nil {
-		if rejected, ok := decodeMutationRejection(out, envelopeID); ok {
+		if rejected, ok := decodeMutationRejection(out, commandErr, envelopeID); ok {
 			return corebackend.WorktreeMutationResult{}, rejected
 		}
 		return corebackend.WorktreeMutationResult{}, commandErr
@@ -361,7 +361,12 @@ func validateAlreadyOpen(
 	return nil
 }
 
-func decodeMutationRejection(data []byte, expectedID string) (corebackend.MutationRejectedError, bool) {
+func decodeMutationRejection(
+	data []byte,
+	commandErr error,
+	expectedID string,
+) (corebackend.MutationRejectedError, bool) {
+	data = mutationRejectionData(data, commandErr)
 	var envelope worktreeMutationEnvelope
 	if err := decodeOne(data, &envelope); err != nil || envelope.ID != expectedID ||
 		envelope.Result != nil || envelope.Error == nil ||
@@ -369,6 +374,13 @@ func decodeMutationRejection(data []byte, expectedID string) (corebackend.Mutati
 		return corebackend.MutationRejectedError{}, false
 	}
 	return corebackend.MutationRejectedError{Code: envelope.Error.Code, Message: envelope.Error.Message}, true
+}
+
+func mutationRejectionData(data []byte, commandErr error) []byte {
+	if exitErr, ok := errors.AsType[*exec.ExitError](commandErr); ok && len(exitErr.Stderr) > 0 {
+		return exitErr.Stderr
+	}
+	return data
 }
 
 func decodeWorktreeMutationResponse(
