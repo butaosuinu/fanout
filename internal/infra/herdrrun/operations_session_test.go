@@ -1,9 +1,13 @@
 package herdrrun
 
 import (
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/naming"
 )
 
 // The owned focus / peek / send / close gate follows the provider's current
@@ -112,4 +116,96 @@ func TestEqualOwnedPaneAdmitsReplacedConversation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A provider that restarts its conversation in place makes the runtime
+// re-register the agent with no name of its own. Fanout re-asserts the name it
+// minted so the row does not fall out of every gate that compares AgentID.
+func TestBindOwnedTargetRestoresDroppedAgentName(t *testing.T) {
+	h := newOwnedHarness(t)
+	minted := naming.ManagedAgentName("/repo/.git", "row", strings.Repeat("a", 32))
+	setAgentName(h, "w2:p1", minted)
+	target := h.target()
+	if target.AgentID != minted {
+		t.Fatalf("fixture agent name = %q, want the minted name", target.AgentID)
+	}
+	setAgentAnonymous(h, "w2:p1")
+
+	renamed := 0
+	h.fake.respond = func(args []string) ([]byte, error) {
+		want := []string{"agent", "rename", target.Ref.Pane, minted}
+		if !slices.Equal(args, want) {
+			return nil, fmt.Errorf("unexpected mutation args %v, want %v", args, want)
+		}
+		renamed++
+		setAgentName(h, "w2:p1", minted)
+		return []byte(`{"id":"cli:agent:rename","result":{"type":"ok"}}`), nil
+	}
+	if _, err := h.session.Backend().BindOwnedTarget(target); err != nil {
+		t.Fatalf("BindOwnedTarget() after dropped agent name = %v, want recovery", err)
+	}
+	if renamed != 1 {
+		t.Fatalf("agent rename issued %d times, want exactly 1", renamed)
+	}
+}
+
+// The rename repairs fanout's own invariant; it never claims a record that
+// answers to something else, and never asserts a name fanout did not mint.
+func TestBindOwnedTargetRefusesToClaimAnotherAgentName(t *testing.T) {
+	minted := naming.ManagedAgentName("/repo/.git", "row", strings.Repeat("a", 32))
+	tests := []struct {
+		name string
+		// recordMinted names the agent before the target is taken, so the row
+		// records a name fanout would otherwise be allowed to re-assert.
+		recordMinted bool
+		drift        func(*ownedHarness)
+	}{
+		{
+			name:         "live agent answers to its own name",
+			recordMinted: true,
+			drift:        func(h *ownedHarness) { setAgentName(h, "w2:p1", "someone-else") },
+		},
+		{
+			// The fixture's "fanout-child" shares the prefix but not the shape
+			// ManagedAgentName mints, so it is not fanout's to re-assert.
+			name:  "recorded name is not one fanout minted",
+			drift: func(h *ownedHarness) { setAgentAnonymous(h, "w2:p1") },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newOwnedHarness(t)
+			if tt.recordMinted {
+				setAgentName(h, "w2:p1", minted)
+			}
+			target := h.target()
+			tt.drift(h)
+			h.fake.respond = func(args []string) ([]byte, error) {
+				return nil, fmt.Errorf("unexpected mutation args %v", args)
+			}
+			if _, err := h.session.Backend().BindOwnedTarget(target); err == nil {
+				t.Fatal("BindOwnedTarget() succeeded, want identity mismatch")
+			}
+		})
+	}
+}
+
+func setAgentAnonymous(h *ownedHarness, paneID string) {
+	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+		for i := range *snapshot.Agents {
+			if (*snapshot.Agents)[i].PaneID == paneID {
+				(*snapshot.Agents)[i].Name = nil
+			}
+		}
+	})
+}
+
+func setAgentName(h *ownedHarness, paneID, name string) {
+	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+		for i := range *snapshot.Agents {
+			if (*snapshot.Agents)[i].PaneID == paneID {
+				(*snapshot.Agents)[i].Name = &name
+			}
+		}
+	})
 }

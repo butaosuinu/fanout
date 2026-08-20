@@ -317,18 +317,43 @@ codex から direct agent へ広げました (`directAgentIntegrationLaunch`)。
 3 つが揃ったときだけ `source: "herdr:claude"` の `pane.report_agent_session` が
 飛ぶことを確認しました。hook 自体は `~/.claude/` にあり、owned session が隔離する
 XDG root の外なので移設は要りません。attach で起動した agent は coordinator
-workspace で動き、この grant の対象外のままです。owned session を通した
-claude focus の実測は次回の再検証まで未取得です。
+workspace で動き、この grant の対象外のままです。
 
-session を束縛すると別の問題が出るので同時に直しました。行が conversation を
-保存すると、以後は完全一致が要求されていました (`docs/herdr-runtime-backend-spike.ja.md`)。
-claude の `/clear` は同じ pane で session id を変えるので、その一致は破れ、
-focus だけでなく peek・`--close`・`--cleanup`・telemetry まで恒久的に止まります
-(telemetry は `invalidateFinalRowTelemetry` が emitter nonce を回し、live agent は
-古い nonce のままなので二度と一致しません)。conversation を fence から観測値へ
-格下げし、同じ runtime が同じ provider 向けに発行した別 ref への差し替えだけを
-受理するようにしました (`AgentSessionAdmits`)。fence は route・terminal・checkout と
-launch 単位の `AgentID` が引き続き担います。codex 側の同じ問題も併せて解消します。
+session を束縛すると `/clear` で 2 つ問題が出るので同時に直しました。実測は
+使い捨て clone (`/private/tmp`) の owned session で取り、merge base の binary で
+対照実験もしています。
+
+1 つ目は conversation です。行が conversation を保存すると以後は完全一致が
+要求されていました (`docs/herdr-runtime-backend-spike.ja.md`)。claude の `/clear`
+は同じ pane で session id を変えるので (実測 `dd7e7d27-…` → `632a4605-…`)、その
+一致は破れ、focus だけでなく peek・`--close`・`--cleanup`・telemetry まで恒久的に
+止まります (telemetry は `invalidateFinalRowTelemetry` が emitter nonce を回し、
+live agent は古い nonce のままなので二度と一致しません)。conversation を fence から
+観測値へ格下げし、同じ runtime が同じ provider 向けに発行した別 ref への差し替え
+だけを受理するようにしました (`AgentSessionAdmits`)。
+
+2 つ目は agent record の名前です。socket を渡すと herdr は session の再開を知り、
+agent を匿名で登録し直すため、fanout が付けた名前が消えます (実測
+`fanout-8908a57bd82cde38fdcc22a9` → `null`)。grant 無しの merge base では同じ
+`/clear` でも名前は残るので、これは grant が引き起こす変化です。名前が消えると
+`AgentID` を比べる全ゲートが行を拒否するので、owned 操作の admission で
+fanout が発行した名前を付け直すようにしました (`restoreOwnedAgentName`)。
+付け直すのは「pane が他の点で完全一致し、live agent が名前を持たず、保存済みの
+名前が `ManagedAgentName` の形をしている」場合だけです。
+
+実測値:
+
+| 確認 | 結果 |
+|---|---|
+| claude workload の env | `HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` の 3 つのみ |
+| herdr の session mapping | `{source: herdr:claude, agent: claude, kind: id}` |
+| launch | 成功 (`exactManagedLaunchPane` が一致) |
+| 新規行の focus | `focused w2:p1` |
+| `/clear` 後の focus | `focused w2:p1` (名前を付け直して回復) |
+| `/clear` 後の peek | OK |
+| `/clear` 後の再束縛 | poll 経路で `632a4605-…` へ追随 |
+
+codex 側の同じ問題も併せて解消します。
 
 #### `--close` / `--cleanup` が herdr レーンで worktree を消せない — [#721](https://github.com/butaosuinu/fanout/issues/721)
 

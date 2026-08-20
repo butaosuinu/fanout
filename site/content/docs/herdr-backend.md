@@ -28,7 +28,7 @@ The unsupported paths fail closed with a clear error.
 - Interactive send, restore, and plan capture remain unavailable for herdr rows.
 - TUI focus, launch, and peek require a complete saved identity in fanout's owned session. Foreign, stale, and legacy rows stay disabled with a reason.
 - Focus additionally needs a saved agent session. Only the agent integration reports one, so focus is refused until `herdr integration install claude` / `codex` is in place. Three kinds of row stay refused even with it installed: agents started with attach, Codex Plan Mode and team (their workload is fanout's controller, not the provider), and OpenCode. None of them receive the socket environment the hook needs.
-- A row's recorded conversation follows the provider when it starts a new one in the same pane (Claude's `/clear`, Codex's `/new`), so focus, peek, `--close`, and `--cleanup` keep working across it. A conversation from a different provider, or a reference the runtime did not issue, is refused as before.
+- When a provider starts a new conversation in the same pane (Claude's `/clear`, Codex's `/new`), herdr replaces the conversation and also drops the agent record's name. The row's recorded conversation follows the new one, and fanout re-asserts the name it minted, so focus, peek, `--close`, and `--cleanup` keep working across it. A conversation from a different provider, a reference the runtime did not issue, and an agent record already answering to another name are all refused as before.
 - Codex child Plan Mode runs through fanout's app-server controller and owned launcher. Claude and OpenCode keep their native mode flags.
 - No tmux keybindings are registered, and fanout never calls herdr's in-app `notification show`.
 

@@ -2,6 +2,7 @@ package herdrrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -12,6 +13,7 @@ import (
 	"syscall"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/naming"
 )
 
 type OwnedCloseRequest struct {
@@ -102,7 +104,7 @@ func (b *Backend) bindOwnedTarget(target corebackend.OwnedPaneIdentity, closeReq
 	if err := validateSavedTarget(target, admission); err != nil {
 		return nil, err
 	}
-	if _, _, err := b.resolveOwnedTarget(ctx, admission, target); err != nil {
+	if err := b.admitOwnedTarget(ctx, admission, target); err != nil {
 		return nil, err
 	}
 	targetAdmission := &ownedTargetAdmission{target: target}
@@ -115,6 +117,81 @@ func (b *Backend) bindOwnedTarget(target corebackend.OwnedPaneIdentity, closeReq
 		targetAdmission.closeFingerprint = corebackend.CloseRequest{Ref: target.Ref, WorktreePath: target.WorktreePath, ShellKey: target.TerminalID}
 	}
 	return b.cloneWithTarget(targetAdmission), nil
+}
+
+// errOwnedAgentNameIntact reports that the failure to resolve a target was not
+// the dropped-name shape, so the caller keeps the original mismatch.
+var errOwnedAgentNameIntact = errors.New("herdr owned agent name needs no recovery")
+
+// admitOwnedTarget resolves the saved target against the live session and, on
+// the one failure fanout can repair, repairs it and resolves once more.
+func (b *Backend) admitOwnedTarget(
+	ctx context.Context,
+	admission ownedAdmission,
+	target corebackend.OwnedPaneIdentity,
+) error {
+	_, _, err := b.resolveOwnedTarget(ctx, admission, target)
+	if err == nil {
+		return nil
+	}
+	if restoreErr := b.restoreOwnedAgentName(ctx, admission, target); restoreErr != nil {
+		return err
+	}
+	_, _, err = b.resolveOwnedTarget(ctx, admission, target)
+	return err
+}
+
+// restoreOwnedAgentName re-asserts the agent name fanout minted for this row.
+// A provider that restarts its conversation in place — Claude's /clear — makes
+// the runtime re-register the agent with no name, and every gate comparing
+// AgentID would then refuse the row for the rest of the pane's life.
+//
+// The rename is admitted only where it restores what fanout established at
+// launch: the pane is otherwise exactly the recorded one, the live agent
+// answers to no name of its own, and the recorded name is one fanout minted.
+// It therefore never takes a name some other agent already answers to. Writing
+// through a read admission is deliberate — the repair is what makes the read
+// possible — so it clears the same server-lifecycle gate a mutation does.
+func (b *Backend) restoreOwnedAgentName(
+	ctx context.Context,
+	admission ownedAdmission,
+	target corebackend.OwnedPaneIdentity,
+) error {
+	if !naming.IsManagedAgentName(target.AgentID) {
+		return errOwnedAgentNameIntact
+	}
+	if err := rejectOwnedServerLifecycle(admission.marker.GitCommonDir); err != nil {
+		return err
+	}
+	view, err := b.ownedSnapshotView(ctx, admission)
+	if err != nil {
+		return err
+	}
+	current, ok := view.find(target.Ref)
+	if !ok || !current.agentAnonymous || !ownedPaneMatchesExceptAgentName(target, current.identity) {
+		return errOwnedAgentNameIntact
+	}
+	probed, err := b.probeOwned(ctx, admission)
+	if err != nil {
+		return err
+	}
+	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route,
+		"agent", "rename", target.Ref.Pane, target.AgentID)
+	if err != nil {
+		return methodUnavailable("agent.rename")
+	}
+	return validateAgentRenameResponse(out)
+}
+
+func validateAgentRenameResponse(data []byte) error {
+	var envelope agentRenameEnvelope
+	if err := decodeOne(data, &envelope); err != nil {
+		return err
+	}
+	if envelope.ID != "cli:agent:rename" || envelope.Result == nil {
+		return fmt.Errorf("herdr agent rename returned an unexpected response")
+	}
+	return nil
 }
 
 func (b *Backend) cloneWithTarget(target *ownedTargetAdmission) *Backend {
@@ -527,6 +604,10 @@ type ownedWorkspaceView struct {
 type ownedPaneView struct {
 	identity    corebackend.OwnedPaneIdentity
 	paneFocused bool
+	// agentAnonymous marks a pane whose agent record exists but carries no
+	// name of its own, which is how the runtime leaves it after a provider
+	// restarts its conversation in place.
+	agentAnonymous bool
 }
 
 func (b *Backend) ownedSnapshotView(ctx context.Context, admission ownedAdmission) (ownedSnapshotView, error) {
@@ -548,7 +629,26 @@ func (b *Backend) ownedSnapshotView(ctx context.Context, admission ownedAdmissio
 		return ownedSnapshotView{}, methodUnavailable("session.snapshot")
 	}
 	workspaces := ownedWorkspaceViews(envelope)
-	return ownedSnapshotView{panes: ownedPaneViews(panes, workspaces), workspaces: workspaces}, nil
+	return ownedSnapshotView{
+		panes:      ownedPaneViews(panes, workspaces, anonymousOwnedAgents(envelope)),
+		workspaces: workspaces,
+	}, nil
+}
+
+// anonymousOwnedAgents collects the panes whose agent record answers to no name
+// of its own. The snapshot projection substitutes the provider name there, so
+// the distinction is only available from the raw record.
+func anonymousOwnedAgents(envelope snapshotEnvelope) map[string]bool {
+	anonymous := map[string]bool{}
+	if envelope.Result == nil || envelope.Result.Snapshot.Agents == nil {
+		return anonymous
+	}
+	for _, agent := range *envelope.Result.Snapshot.Agents {
+		if optionalString(agent.Name) == "" {
+			anonymous[agent.PaneID] = true
+		}
+	}
+	return anonymous
 }
 
 // ownedWorkspaceViews projects the snapshot's workspaces into the ownership
@@ -572,6 +672,7 @@ func ownedWorkspaceViews(envelope snapshotEnvelope) map[string]ownedWorkspaceVie
 func ownedPaneViews(
 	panes []corebackend.LivePane,
 	workspaces map[string]ownedWorkspaceView,
+	anonymous map[string]bool,
 ) map[corebackend.PaneRef]ownedPaneView {
 	views := map[corebackend.PaneRef]ownedPaneView{}
 	for _, pane := range panes {
@@ -585,6 +686,7 @@ func ownedPaneViews(
 		}
 		views[pane.Ref] = ownedPaneView{
 			identity: identity, paneFocused: pane.FocusKnown && pane.Focused,
+			agentAnonymous: anonymous[pane.Ref.Pane],
 		}
 	}
 	return views
@@ -649,8 +751,15 @@ func ownedPaneMatches(expected corebackend.OwnedPaneIdentity, current ownedPaneV
 // admits the provider's current one rather than freezing the first observed id,
 // and AgentID is per-launch, so the pane stays fenced to this launch.
 func equalOwnedPane(left, right corebackend.OwnedPaneIdentity) bool {
+	return ownedPaneMatchesExceptAgentName(left, right) && left.AgentID == right.AgentID
+}
+
+// ownedPaneMatchesExceptAgentName is equalOwnedPane with the agent record's
+// name set aside. That name is the one component the runtime drops on its own,
+// so restoring it needs a comparison that holds everything else exact.
+func ownedPaneMatchesExceptAgentName(left, right corebackend.OwnedPaneIdentity) bool {
 	return sameOwnedRoute(left, right) && sameOwnedCheckout(left, right) &&
-		sameOwnedAgent(left, right) &&
+		left.Agent == right.Agent &&
 		corebackend.AgentSessionAdmits(left.Agent, left.AgentSession, right.AgentSession)
 }
 
@@ -666,12 +775,6 @@ func sameOwnedRoute(left, right corebackend.OwnedPaneIdentity) bool {
 func sameOwnedCheckout(left, right corebackend.OwnedPaneIdentity) bool {
 	return left.RepoKey == right.RepoKey && left.WorktreePath == right.WorktreePath &&
 		left.CurrentPath == right.CurrentPath
-}
-
-// sameOwnedAgent compares the agent the conversation hangs off: the provider
-// and the per-launch record fanout named it with.
-func sameOwnedAgent(left, right corebackend.OwnedPaneIdentity) bool {
-	return left.Agent == right.Agent && left.AgentID == right.AgentID
 }
 
 func cloneOwnedPaneIdentity(target corebackend.OwnedPaneIdentity) corebackend.OwnedPaneIdentity {
