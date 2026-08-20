@@ -95,7 +95,7 @@ func ensureManagedConsoleLocked(
 			ManagedSession: route.Session, SocketPath: route.SocketPath,
 		},
 		func(state.LaunchIntent) (*state.LaunchCapsule, error) {
-			return newManagedShellLaunch(owned, route, shellPath, callerEnvironment)
+			return newManagedConsoleLaunch(owned, route, shellPath, callerEnvironment)
 		},
 	)
 	if err != nil {
@@ -382,6 +382,35 @@ func newManagedShellLaunch(
 	}
 	return &state.LaunchCapsule{
 		Nonce: nonce, Executable: shell, EnvFilePath: envPath, EnvNameCount: envCount,
+	}, nil
+}
+
+// newManagedConsoleLaunch records the pinned fanout binary as the console
+// workload, so the attach lands on a running console TUI instead of a bare
+// shell. The operator shell still resolves and rides along as ConsoleShellEnv:
+// the TUI execs it on exit so the pane outlives a quit. The manual shell lane
+// (newManualManagedShellLaunch) keeps launching the shell itself.
+func newManagedConsoleLaunch(
+	owned ManagedLaunchRuntime,
+	route backend.OwnedLaunchRoute,
+	shell string,
+	callerEnvironment []string,
+) (*state.LaunchCapsule, error) {
+	nonce, err := randomManagedToken()
+	if err != nil {
+		return nil, err
+	}
+	environment, err := owned.WorkloadEnvironment(callerEnvironment, route.LauncherPath)
+	if err != nil {
+		return nil, err
+	}
+	environment = append(environment, backend.ConsoleShellEnv+"="+shell)
+	envPath, envCount, err := owned.PrepareWorkloadEnvironment(nonce, environment)
+	if err != nil {
+		return nil, err
+	}
+	return &state.LaunchCapsule{
+		Nonce: nonce, Executable: route.LauncherPath, EnvFilePath: envPath, EnvNameCount: envCount,
 	}, nil
 }
 

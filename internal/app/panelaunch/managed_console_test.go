@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,55 @@ type attachOnlyManagedRuntime struct {
 func (f *attachOnlyManagedRuntime) AttachForms(base []string) (string, backend.AttachExec, error) {
 	f.attachBase = base
 	return "ATTACH='command'", f.attach, nil
+}
+
+// capsuleOnlyManagedRuntime fakes just the two environment ports the launch
+// capsule builders consume; every other method panics via the nil embed.
+type capsuleOnlyManagedRuntime struct {
+	ManagedLaunchRuntime
+	prepared []string
+}
+
+func (f *capsuleOnlyManagedRuntime) WorkloadEnvironment(caller []string, fanoutPath string) ([]string, error) {
+	return append(append([]string{}, caller...), "FANOUT_BIN="+fanoutPath), nil
+}
+
+func (f *capsuleOnlyManagedRuntime) PrepareWorkloadEnvironment(nonce string, environment []string) (string, int, error) {
+	f.prepared = append([]string{}, environment...)
+	return "/capsule/env-" + nonce + ".json", len(environment), nil
+}
+
+func TestNewManagedConsoleLaunchRunsPinnedFanoutWithShellHandoff(t *testing.T) {
+	owned := &capsuleOnlyManagedRuntime{}
+	route := backend.OwnedLaunchRoute{LauncherPath: "/owned/launcher/fanout", EmitterPath: "/owned/launcher/fanout"}
+	capsule, err := newManagedConsoleLaunch(owned, route, "/bin/zsh", []string{"PATH=/usr/bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capsule.Executable != route.LauncherPath {
+		t.Fatalf("console capsule executable = %q, want the pinned fanout %q", capsule.Executable, route.LauncherPath)
+	}
+	last := owned.prepared[len(owned.prepared)-1]
+	if last != backend.ConsoleShellEnv+"=/bin/zsh" {
+		t.Fatalf("console capsule environment tail = %q, want the hand-off shell", last)
+	}
+}
+
+func TestNewManagedShellLaunchKeepsTheOperatorShellWorkload(t *testing.T) {
+	owned := &capsuleOnlyManagedRuntime{}
+	route := backend.OwnedLaunchRoute{LauncherPath: "/owned/launcher/fanout", EmitterPath: "/owned/launcher/fanout"}
+	capsule, err := newManagedShellLaunch(owned, route, "/bin/zsh", []string{"PATH=/usr/bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capsule.Executable != "/bin/zsh" {
+		t.Fatalf("manual shell capsule executable = %q, want /bin/zsh", capsule.Executable)
+	}
+	for _, entry := range owned.prepared {
+		if strings.HasPrefix(entry, backend.ConsoleShellEnv+"=") {
+			t.Fatalf("manual shell capsule recorded a console hand-off: %v", owned.prepared)
+		}
+	}
 }
 
 func TestManagedConsoleResultCarriesBothAttachForms(t *testing.T) {

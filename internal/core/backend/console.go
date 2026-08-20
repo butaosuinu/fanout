@@ -11,6 +11,13 @@ package backend
 // caller without a terminal is handed the equivalent attach command to print —
 // so it offers no ConsoleHost, and the console enters through that runtime's
 // managed path rather than probing a session it does not own.
+// ConsoleShellEnv names the operator shell recorded in the managed console
+// workload's environment. The console pane runs fanout's TUI directly; when
+// the TUI exits it execs this shell in place so the pane survives the quit,
+// and it strips the name first so a fanout started by hand inside that shell
+// exits normally instead of stacking another shell.
+const ConsoleShellEnv = "FANOUT_CONSOLE_SHELL"
+
 type ConsoleHost interface {
 	// InsideSession reports whether this process is already running in one of
 	// the runtime's panes. It decides whether the console can take over the

@@ -45,6 +45,7 @@ var (
 	execSessionAttach = func(spec backend.AttachExec) error {
 		return syscall.Exec(spec.Path, spec.Argv, spec.Env)
 	}
+	execConsoleShell = syscall.Exec
 )
 
 // consoleRuntime is every capability the resident console's own session entry
@@ -162,7 +163,7 @@ func cmdManagedConsoleTUI(
 	if openErr != nil {
 		lg.Warn("tui: owned Herdr actions disabled: %v", openErr)
 	}
-	return runTUIConsole(
+	code := runTUIConsole(
 		projectRoot,
 		strings.TrimSpace(os.Getenv("HERDR_SESSION")),
 		commandName,
@@ -171,6 +172,55 @@ func cmdManagedConsoleTUI(
 		owned,
 		lg,
 	)
+	return handoffConsoleShell(code, lg)
+}
+
+// handoffConsoleShell execs the operator shell the console bootstrap recorded
+// in ConsoleShellEnv, so quitting the TUI — an error exit included — leaves a
+// live shell pane instead of ending the pane process, which the runtime would
+// fold and turn the console row stale. The name is stripped from the shell's
+// environment so a fanout started by hand in that shell exits normally. When
+// no hand-off applies or the exec fails, code is returned unchanged.
+func handoffConsoleShell(code exitcode.Code, lg *log.Logger) exitcode.Code {
+	shell := os.Getenv(backend.ConsoleShellEnv)
+	if shell == "" {
+		return code
+	}
+	if err := validateConsoleShellHandoff(shell); err != nil {
+		lg.Warn("tui: console shell hand-off skipped: %v", err)
+		return code
+	}
+	if err := execConsoleShell(shell, []string{shell}, environmentWithout(backend.ConsoleShellEnv)); err != nil {
+		lg.Warn("tui: console shell hand-off failed: %v", err)
+		return code
+	}
+	panic("unreachable")
+}
+
+func validateConsoleShellHandoff(shell string) error {
+	if !filepath.IsAbs(shell) {
+		return fmt.Errorf("%s is not an absolute path", shell)
+	}
+	info, err := os.Stat(shell)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("%s is not executable", shell)
+	}
+	return nil
+}
+
+func environmentWithout(name string) []string {
+	environment := os.Environ()
+	kept := environment[:0]
+	for _, entry := range environment {
+		if entryName, _, ok := strings.Cut(entry, "="); ok && entryName == name {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
 }
 
 func enterManagedConsole(
