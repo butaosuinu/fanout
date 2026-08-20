@@ -21,13 +21,13 @@ Claude launches receive launch-scoped `--settings` hooks. Codex Plan Mode launch
 
 The TUI console and web dashboard use `reported_state` only while the matching pane and agent are live. `--status --format json` includes `reported_state`, and the table format shows it in `REPORTED_STATE`. The value does not complete an issue or authorize cleanup. Automatic nudge uses it only after current launch telemetry sets `state_refinement: true` and the live pane, worktree, agent, and process identity pass a fresh check. A disappeared pane remains `stale`.
 
-`--merge`, `--close`, `--cleanup`, and their TUI actions operate only on complete rows from that owned session. fanout compares the saved workspace ID, label, terminal, repository, path, and branch before mutation. It records a cleanup intent, issues non-force `herdr worktree remove`, verifies that the checkout and workspace are absent, and closes a residual workspace when needed. A checkout left after an earlier workspace close is re-registered only after the owned plugin registry passes the empty-registry preflight. Dirty checkouts, ownership mismatches, and ambiguous responses preserve the row and intent for retry or manual cleanup. Branch deletion uses fanout's compare-and-delete and applies only to a branch recorded as fanout-created.
+`--merge`, `--close`, `--cleanup`, and their TUI actions operate only on complete rows from that owned session. fanout compares the saved workspace ID, label, terminal, repository, path, and branch before mutation. It records a cleanup intent, issues non-force `herdr worktree remove`, verifies that the checkout and workspace are absent, and closes a residual workspace when needed. A checkout left after an earlier workspace close is re-registered only after the owned plugin registry passes the empty-registry preflight. Dirty checkouts, ownership mismatches, and ambiguous responses preserve the row and intent for retry or manual cleanup; a checkout that an agent has written to currently blocks `--close` for good ([#721](https://github.com/butaosuinu/fanout/issues/721)). Branch deletion uses fanout's compare-and-delete and applies only to a branch recorded as fanout-created.
 
 The unsupported paths still fail closed, with one exception: the TUI's `Z` (zoom) runs the focus half
 and silently skips the zoom ([#713](https://github.com/butaosuinu/fanout/issues/713)).
 
 - Interactive send, restore, and plan capture remain unavailable for herdr rows.
-- TUI focus, launch, and peek require a complete saved identity in fanout's owned session. Foreign, stale, and legacy rows stay disabled with a reason.
+- TUI focus, launch, and peek require a complete saved identity in fanout's owned session. Foreign, stale, and legacy rows stay disabled with a reason. Claude rows record no agent session, so focus is refused for them today ([#720](https://github.com/butaosuinu/fanout/issues/720)).
 - Codex child Plan Mode runs through fanout's app-server controller and owned launcher. Claude and OpenCode keep their native mode flags.
 - No tmux keybindings are registered, and fanout never calls herdr's in-app `notification show`.
 

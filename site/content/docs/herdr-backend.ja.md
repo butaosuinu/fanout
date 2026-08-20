@@ -52,13 +52,14 @@ fanout は保存済みの workspace ID、label、terminal、repository、path、
 cleanup intent を保存してから non-force の `herdr worktree remove` を発行し、checkout と workspace の不在を確認します。workspace だけが残れば close します。
 先に workspace が閉じられて checkout が残った場合は、owned plugin registry が空であることを確認してから削除用 workspace を再登録します。
 dirty checkout、所有不一致、応答結果を確定できない状態では行と intent を残し、再試行または手動 cleanup を求めます。
-branch は fanout-created と記録されたものだけを compare-and-delete します。
+branch は fanout-created と記録されたものだけを compare-and-delete します。worktree に変更や
+untracked ファイルが残っていると `--close` は削除せず state を保持します([#721](https://github.com/butaosuinu/fanout/issues/721))。
 
 未対応の経路は明確なエラーで fail closed します。TUI の `Z` (zoom) だけは例外で、focus のみ実行して
 zoom を黙って飛ばします([#713](https://github.com/butaosuinu/fanout/issues/713))。
 
 - 対話 send、restore、plan capture は herdr 行では使えません。
-- TUI の focus、launch、peek には、fanout-owned session に属する完全な保存済み identity が必要です。foreign、stale、legacy の行は理由付きで無効になります。
+- TUI の focus、launch、peek には、fanout-owned session に属する完全な保存済み identity が必要です。foreign、stale、legacy の行は理由付きで無効になります。claude の行は agent session を記録しないため現状 focus が常に拒否されます([#720](https://github.com/butaosuinu/fanout/issues/720))。
 - Codex 子の Plan Mode は fanout の app-server controller と owned launcher で動きます。Claude と OpenCode は固有の mode flag を使います。
 - tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれません。
 
