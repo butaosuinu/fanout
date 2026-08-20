@@ -87,6 +87,8 @@ type ServerOps struct {
 	// Observe opens the owned server read-only and lists everything still
 	// holding a resource on it.
 	Observe func(context.Context) ([]backend.WorkspaceObservation, error)
+	// DiscardEnvironment removes an unconsumed workload environment capsule.
+	DiscardEnvironment func(string, *state.LaunchCapsule) error
 	// Restart replaces the proven-dead generation named by the identity.
 	Restart func(context.Context, state.RuntimeServerIdentity) (ManagedSession, error)
 	// Shutdown retires the empty generation, calling the callback once at the
@@ -102,12 +104,9 @@ func NewServerOps(repoKey string) ServerOps {
 			return herdrrun.InspectOwnedServer(opts)
 		},
 		Observe: func(ctx context.Context) ([]backend.WorkspaceObservation, error) {
-			owned, err := herdrrun.OpenOwned(ctx, opts)
-			if err != nil {
-				return nil, err
-			}
-			return owned.ObserveWorkspaces(ctx)
+			return observeOwnedServer(ctx, opts)
 		},
+		DiscardEnvironment: herdrrun.DiscardWorkloadEnvironment,
 		Restart: func(ctx context.Context, identity state.RuntimeServerIdentity) (ManagedSession, error) {
 			return herdrrun.RestartOwned(ctx, opts, identity)
 		},
@@ -119,6 +118,17 @@ func NewServerOps(repoKey string) ServerOps {
 			return herdrrun.ShutdownOwned(ctx, opts, identity, markIssued)
 		},
 	}
+}
+
+func observeOwnedServer(
+	ctx context.Context,
+	opts herdrrun.OwnedOptions,
+) ([]backend.WorkspaceObservation, error) {
+	owned, err := herdrrun.OpenOwned(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return owned.ObserveWorkspaces(ctx)
 }
 
 // ObservationRequest is one persisted launch binding to observe the current

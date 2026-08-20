@@ -346,6 +346,51 @@ func TestShutdownManagedServerRetainsCreatedBranchWhenStateRowRejects(t *testing
 	}
 }
 
+func TestShutdownManagedServerDiscardsUnconsumedEnvironmentBeforeIntentRelease(t *testing.T) {
+	tests := []struct {
+		name         string
+		discardErr   error
+		wantIntent   bool
+		wantShutdown int
+	}{
+		{name: "discard succeeds", wantShutdown: 1},
+		{name: "discard fails", discardErr: errors.New("discard unavailable"), wantIntent: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := newManagedRealizeRepo(t)
+			intent := managedLifecycleTestCoordinatorIntent(t, repo)
+			intent.Launch = validTestManagedLaunch()
+			saveManagedLifecycleTestIntent(t, repo, intent)
+			harness := &managedServerTestHarness{discardErr: test.discardErr}
+
+			err := ShutdownManagedServer(context.Background(), repo, harness.io())
+			if test.discardErr == nil && err != nil {
+				t.Fatal(err)
+			}
+			if test.discardErr != nil && !errors.Is(err, test.discardErr) {
+				t.Fatalf("ShutdownManagedServer() error = %v, want %v", err, test.discardErr)
+			}
+			journal, loadErr := state.LoadLaunchJournal(repo)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			_, found := journal.FindIntent(intent.ID)
+			if found != test.wantIntent {
+				t.Fatalf("ShutdownManagedServer() intent found = %t, want %t", found, test.wantIntent)
+			}
+			identity := testManagedServerIdentity()
+			if harness.discardCalls != 1 || harness.discardRuntimeDir != identity.RuntimeDir ||
+				harness.discardLaunch == nil || harness.discardLaunch.Nonce != intent.Launch.Nonce {
+				t.Fatalf("ShutdownManagedServer() discard = calls:%d runtime:%q launch:%+v", harness.discardCalls, harness.discardRuntimeDir, harness.discardLaunch)
+			}
+			if harness.shutdownCalls != test.wantShutdown {
+				t.Fatalf("ShutdownManagedServer() shutdown calls = %d, want %d", harness.shutdownCalls, test.wantShutdown)
+			}
+		})
+	}
+}
+
 func TestShutdownManagedServerRetiresConsoleAndCoordinatorScaffolds(t *testing.T) {
 	repo, sibling := managedConsoleTestWorktrees(t)
 	console := managedConsoleTestPane(repo, "workspace-console", "pane-console")
@@ -372,10 +417,14 @@ func TestShutdownManagedServerRetiresConsoleAndCoordinatorScaffolds(t *testing.T
 }
 
 type managedServerTestHarness struct {
-	workspaces    []backend.WorkspaceObservation
-	observeErr    error
-	shutdownCalls int
-	issueCalls    int
+	workspaces        []backend.WorkspaceObservation
+	observeErr        error
+	discardErr        error
+	discardCalls      int
+	discardRuntimeDir string
+	discardLaunch     *state.LaunchCapsule
+	shutdownCalls     int
+	issueCalls        int
 }
 
 func (h *managedServerTestHarness) io() ManagedServerIO {
@@ -385,6 +434,12 @@ func (h *managedServerTestHarness) io() ManagedServerIO {
 		},
 		ObserveWorkspaces: func(context.Context) ([]backend.WorkspaceObservation, error) {
 			return h.workspaces, h.observeErr
+		},
+		DiscardEnvironment: func(runtimeDir string, launch *state.LaunchCapsule) error {
+			h.discardCalls++
+			h.discardRuntimeDir = runtimeDir
+			h.discardLaunch = launch
+			return h.discardErr
 		},
 		ShutdownServer: func(_ context.Context, _ state.RuntimeServerIdentity, markIssued func() error) error {
 			if markIssued != nil {

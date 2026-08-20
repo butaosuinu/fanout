@@ -22,6 +22,9 @@ type ManagedServerIO struct {
 	// ObserveWorkspaces opens the owned server read-only and lists everything
 	// still holding a resource on it.
 	ObserveWorkspaces func(context.Context) ([]backend.WorkspaceObservation, error)
+	// DiscardEnvironment removes an unconsumed launch capsule after checking its
+	// saved nonce, owned runtime location, and file identity.
+	DiscardEnvironment func(string, *state.LaunchCapsule) error
 	// RestartServer replaces the proven-dead generation named by the identity.
 	RestartServer func(context.Context, state.RuntimeServerIdentity) (ManagedRestartedServer, error)
 	// ShutdownServer retires the empty generation, calling the callback once at
@@ -230,7 +233,9 @@ func prepareManagedShutdown(
 	if err := requireEmptyManagedShutdown(ctx, io); err != nil {
 		return state.LaunchIntent{}, err
 	}
-	if err := releaseManagedShutdownIntents(ctx, journal, absent); err != nil {
+	if err := releaseManagedShutdownIntents(
+		ctx, journal, absent, identity.RuntimeDir, io.DiscardEnvironment,
+	); err != nil {
 		return state.LaunchIntent{}, err
 	}
 	if err := retireManagedShutdownScaffolds(projectRoot, locked, scaffolds); err != nil {
@@ -243,11 +248,35 @@ func releaseManagedShutdownIntents(
 	ctx context.Context,
 	journal *state.LockedLaunchJournal,
 	absent []state.LaunchIntent,
+	runtimeDir string,
+	discard func(string, *state.LaunchCapsule) error,
 ) error {
+	if err := discardAbsentManagedEnvironments(runtimeDir, absent, discard); err != nil {
+		return err
+	}
 	if err := releaseAbsentManagedIntents(ctx, journal, absent); err != nil {
 		return err
 	}
 	return rejectActiveManagedIntents(journal.LaunchJournal)
+}
+
+func discardAbsentManagedEnvironments(
+	runtimeDir string,
+	intents []state.LaunchIntent,
+	discard func(string, *state.LaunchCapsule) error,
+) error {
+	for _, intent := range intents {
+		if intent.Launch == nil {
+			continue
+		}
+		if discard == nil {
+			return fmt.Errorf("managed shutdown environment discard is unavailable")
+		}
+		if err := discard(runtimeDir, intent.Launch); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func requireEmptyManagedShutdown(ctx context.Context, io ManagedServerIO) error {
