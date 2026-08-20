@@ -2,6 +2,8 @@ import { Trans, useLingui } from "@lingui/react/macro";
 import { useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { useDiff } from "../../transport/useDiff";
+import { useDrawnDiff } from "./useDrawnDiff";
+import type { DiffReport } from "./useDiffReport";
 import { useDiffAnchorSync } from "./useDiffAnchorSync";
 import { useDiffOverlayModal, useEscapeToClose } from "./useDiffOverlayModal";
 import { useDiffWidth } from "./useDiffWidth";
@@ -26,7 +28,7 @@ export function DiffOverlay({
   anchorKey = null,
   suppressed = false,
   escapeEnabled = true,
-  onCoveringChange,
+  report,
   onOpenSettings,
   onClose,
 }: {
@@ -45,8 +47,8 @@ export function DiffOverlay({
   suppressed?: boolean;
   /* 設定モーダルが上に重なっている間は Escape を譲る(下の diff は開いたまま) */
   escapeEnabled?: boolean;
-  /* 背面を覆っているかの通知。App は隠れた peek のポーリング停止に使う */
-  onCoveringChange?: (covering: boolean) => void;
+  /* 見た目からしか分からないことの報告先(useDiffReport に説明がある) */
+  report: Pick<DiffReport, "setCovering" | "setDiff">;
   /* 全画面表示中は Nav が inert なので、テーマ設定への入口をここにも置く */
   onOpenSettings: () => void;
   onClose: () => void;
@@ -79,11 +81,11 @@ export function DiffOverlay({
     width: compactWidth,
     contentLeft,
   });
-  useDiffOverlayModal(rootRef, { covering, suppressed, onCoveringChange });
+  useDiffOverlayModal(rootRef, { covering, suppressed, onCoveringChange: report.setCovering });
   useDiffAnchorSync({ view: viewMode, anchorKey, setAnchorRight, setContentLeft });
   useEscapeToClose(rootRef, { covering, enabled: escapeEnabled, onClose });
 
-  const diff = state.phase === "ready" ? state.diff : null;
+  const diff = useDrawnDiff(state, report.setDiff);
   /* snapshot tick ごとの再レンダーで files 全走査をやり直さない */
   const view = useMemo(
     () => (diff ? { warning: diffWarning(diff), meta: diffMeta(diff) } : null),

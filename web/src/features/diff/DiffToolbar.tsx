@@ -20,6 +20,8 @@ import {
   IconRefresh,
   IconTheme,
 } from "../../ui/icons";
+import { MergeSplitButton } from "../merge/MergeSplitButton";
+import { useMergeSlot } from "../merge/MergeSlot";
 
 /* 並べ方ボタンは 1 個で auto -> split -> stack を巡回する */
 const LAYOUT_CYCLE: Record<DiffLayout, DiffLayout> = {
@@ -94,9 +96,14 @@ export function DiffToolbar({
   const { view, setView } = useDiffView();
   const { layout, setLayout } = useDiffLayout();
   const { hideViewed, setHideViewed } = useDiffHideViewed();
+  /* diff の wire に PR は無いので、行の情報は MergeSlot 経由で受け取る */
+  const merge = useMergeSlot();
   return (
     <header className="diff-head">
       <DiffHeading title={title} branches={branches} meta={meta} />
+      {/* 不可逆な操作はラベル付きにして、可逆なアイコン群と語彙を分ける。
+          右クラスタの先頭で、margin-left:auto の起点は merge.css が引き取る。 */}
+      {merge && <MergeSplitButton id="diff-merge" merge={merge} />}
       <IconButton
         id="diff-reload"
         className="diff-reload"

@@ -125,7 +125,7 @@ A → B の順で入れ、C は並行。#59 / #106 は A / B の上に乗る(#10
 ## やらないこと(判断記録)
 
 - **multiplexer 化**: dmux 脱却(#81 / #145)で tmux 直制御へ単純化した判断と矛盾する。tmux は共有インフラで、fanout はその上のレイヤーに留まる
-- **Socket API / デーモン化**: fanout のエージェント向けインターフェースは CLI(`msg` / `--status` / 将来の `wait`)+ state.json で足りる。常駐サーバーは read-only dashboard の境界(GET のみ・mutation なし)を崩す誘因になる
+- **Socket API / デーモン化**: fanout のエージェント向けインターフェースは CLI(`msg` / `--status` / 将来の `wait`)+ state.json で足りる。常駐サーバーは dashboard の境界(localhost 限定・読み取り既定・mutation は PR merge の 1 本のみ)を崩す誘因になる
 - **capture-pane ヒューリスティクスによる状態推定**: ペイン内容は攻撃可能面(peek の検証チェーンが前提とする設計判断)であり、TUI 再描画で壊れやすい。状態は hooks / notify の明示信号だけから取る。B の `wait --output` はペイン出力を使うが、明示指定パターンの待機であって状態推定ではない — B に書いたとおり調整用途に限る
 - **SSH リモートアタッチ・マウス対応 TUI**: tmux 自体の機能(attach / mouse mode)で代替できる。fanout が再実装する層ではない
 - **sidebar layout の再実装**: wave 2 は tmux-parity の協調プロセス信頼で exact target を直前・直後に再照合し、pane / workspace の表示専用 token 値を報告できる。

@@ -1,8 +1,14 @@
-// Package dashboard serves fanout's read-only Session view over a localhost
-// HTTP server. It binds 127.0.0.1 only, exposes GET-only endpoints (a JSON
-// snapshot and an SSE live stream), serves an embedded single-page UI, and never
-// mutates repo or GitHub state. A per-start random token gates /api/* so other
-// local users/processes cannot read your issue/PR data off the loopback port.
+// Package dashboard serves fanout's Session view over a localhost HTTP server.
+// It binds 127.0.0.1 only, serves an embedded single-page UI, and reads through
+// GET-only endpoints (a JSON snapshot, an SSE live stream, pane captures, and
+// worktree diffs). A per-start random token gates /api/* so other local
+// users/processes cannot read your issue/PR data off the loopback port.
+//
+// There are exactly two mutation endpoints, and each is scoped to one GitHub
+// pull request: POST /api/pr/merge merges it, and POST /api/pr/delete-branch
+// removes its remote head ref once it is merged. Neither touches the local
+// working tree, local git refs, worktrees, state.json, or pane input. Both sit
+// behind postOnly + sameOriginOnly in addition to the token gate.
 package dashboard
 
 import (
@@ -12,11 +18,15 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"mime"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/prmerge"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/gitstat"
@@ -67,6 +77,15 @@ type Options struct {
 	// ReadManagedPane repeats that binding immediately before the read.
 	OwnsManagedPane func(sessionview.PaneView) bool
 	ReadManagedPane func(sessionview.PaneView, int) (string, error)
+	// MergePR performs the dashboard's single mutation: merging one GitHub pull
+	// request, and optionally deleting its remote head ref. Unlike every other
+	// injectable here it has NO in-package default. A nil MergePR makes
+	// POST /api/pr/merge answer 503, so the capability to change GitHub state
+	// exists only when the composition root granted it explicitly.
+	MergePR func(context.Context, prmerge.Request) (prmerge.Result, error)
+	// DeleteBranch removes a merged pull request's remote head ref. It shares
+	// MergePR's fail-closed wiring: nil disables POST /api/pr/delete-branch.
+	DeleteBranch func(context.Context, prmerge.DeleteRequest) error
 }
 
 // Server is a bound, ready-to-run dashboard. New binds the listener (so a
@@ -86,6 +105,28 @@ type Server struct {
 	verifyPane      func(sessionview.PaneView) error
 	ownsManagedPane func(sessionview.PaneView) bool
 	readManagedPane func(sessionview.PaneView, int) (string, error)
+	mergePR         func(context.Context, prmerge.Request) (prmerge.Result, error)
+	deleteBranch    func(context.Context, prmerge.DeleteRequest) error
+	// hostPort is the bound "127.0.0.1:<port>". sameOriginOnly demands an exact
+	// Host match against it, which is what pins DNS rebinding: a rebound name
+	// arrives as Host: evil.test:<port>, not as the loopback literal.
+	hostPort string
+
+	// mergeMu guards mergeInFlight and the on-disk merge claims. mergeInFlight is
+	// the per-PR lock that keeps an impatient double-click from racing two gh
+	// processes on the same pull request; the claims file holds a PR whose merge
+	// command may have reached GitHub without a readable outcome, because one
+	// tab's in-memory guard cannot stop another tab, a reload, or a restart.
+	mergeMu sync.Mutex
+	// claimsPath is the repository-common claims file, resolved on first use.
+	// claimsErr remembers a failed resolution so the mutation stays closed
+	// instead of retrying a git call per request.
+	claimsPath    string
+	claimsErr     error
+	mergeInFlight map[string]struct{}
+	// mergeHeld mirrors the claims file in memory so a failed write still blocks
+	// a repeat within this process.
+	mergeHeld map[string]time.Time
 }
 
 // New binds the loopback listener and assembles the handler. The returned
@@ -132,6 +173,11 @@ func New(opts Options) (*Server, error) {
 		verifyPane:      verify,
 		ownsManagedPane: opts.OwnsManagedPane,
 		readManagedPane: opts.ReadManagedPane,
+		mergePR:         opts.MergePR,
+		deleteBranch:    opts.DeleteBranch,
+		hostPort:        net.JoinHostPort(loopbackInterface, strconv.Itoa(addr.Port)),
+		mergeInFlight:   map[string]struct{}{},
+		mergeHeld:       map[string]time.Time{},
 	}
 	handler, err := s.handler()
 	if err != nil {
@@ -139,7 +185,15 @@ func New(opts Options) (*Server, error) {
 		_ = ln.Close()
 		return nil, err
 	}
-	s.httpServer = &http.Server{Handler: handler}
+	s.httpServer = &http.Server{
+		Handler: handler,
+		// Bound the header phase and idle connections. ReadTimeout and
+		// WriteTimeout are deliberately unset: they are whole-request deadlines
+		// and would sever the long-lived SSE stream at /api/stream. Per-request
+		// deadlines belong in the handlers that need them.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	return s, nil
 }
 
@@ -207,7 +261,16 @@ func (s *Server) handler() (http.Handler, error) {
 	mux.HandleFunc("/api/stream", s.getOnly(s.requireToken(s.handleStream)))
 	mux.HandleFunc("/api/peek", s.getOnly(s.requireToken(s.handlePeek)))
 	mux.HandleFunc("/api/plan", s.getOnly(s.requireToken(s.handlePlan)))
-	mux.HandleFunc("/api/diff", diffNoStore(s.getOnly(s.requireToken(s.handleDiff))))
+	mux.HandleFunc("/api/diff", noStore(s.getOnly(s.requireToken(s.handleDiff))))
+	// The two mutation routes. Order matters: noStore is outermost so even the
+	// 405/403/413/415 refusals carry it; postOnly runs next because the method
+	// is the cheapest discriminator and a GET must 405 before the token is
+	// consulted, so an <img src> probe cannot become a token oracle;
+	// sameOriginOnly then drops cross-origin browser traffic on header evidence;
+	// requireToken stays innermost and unchanged.
+	mux.HandleFunc(mergePath, noStore(s.postOnly(s.sameOriginOnly(s.requireToken(s.handleMerge)))))
+	mux.HandleFunc(deleteBranchPath,
+		noStore(s.postOnly(s.sameOriginOnly(s.requireToken(s.handleDeleteBranch)))))
 	// Catch-all: the embedded SPA. The HTML shell is token-free so the page can
 	// load and then read ?token= for its /api/* calls.
 	mux.Handle("/", s.getOnly(s.staticHandler(sub)))
@@ -252,7 +315,8 @@ const fallbackIndexHTML = `<!doctype html>
 </body></html>
 `
 
-// getOnly rejects non-GET/HEAD methods with 405 (the dashboard is read-only).
+// getOnly rejects non-GET/HEAD methods with 405. Every route but the merge
+// carve-out reads only, and this is what keeps that true by construction.
 func (s *Server) getOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -262,6 +326,86 @@ func (s *Server) getOnly(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// postOnly is getOnly's mirror image, for the single mutation route. Having
+// both means every route states its method set outright, so a route added later
+// cannot inherit a permissive default from either one.
+func (s *Server) postOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			apiError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", "")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// sameOriginOnly is the browser-evidence gate in front of the POST carve-out.
+//
+// Host must equal the bound 127.0.0.1:<port> exactly, which is what pins DNS
+// rebinding: a rebound name reaches this handler as Host: evil.test:<port>.
+// Origin is checked only when present, because non-browser clients omit it and
+// the token still gates them; Sec-Fetch-Site is read the same way.
+//
+// The application/json requirement is the load-bearing one. It is not a
+// CORS-simple content type, so a cross-origin fetch is preflighted, and the mux
+// answers no OPTIONS route — the browser never sends the POST at all. A form
+// post, which cannot set that type, dies here with 415.
+func (s *Server) sameOriginOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// An unset hostPort means the Server was assembled without New (tests
+		// build one directly). Failing closed keeps the mutation route from
+		// being the one path that silently loses its rebinding pin.
+		if s.hostPort == "" || !sameAuthority(r.Host, s.hostPort) {
+			apiError(w, http.StatusForbidden, "host", "unexpected Host header", "")
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" &&
+			!sameAuthority(strings.TrimPrefix(origin, "http://"), s.hostPort) {
+			apiError(w, http.StatusForbidden, "origin", "cross-origin request refused", "")
+			return
+		}
+		switch r.Header.Get("Sec-Fetch-Site") {
+		case "", "same-origin", "none":
+		default:
+			apiError(w, http.StatusForbidden, "site", "cross-site request refused", "")
+			return
+		}
+		if !jsonContentType(r.Header.Get("Content-Type")) {
+			apiError(w, http.StatusUnsupportedMediaType, "unsupported_media_type",
+				"Content-Type must be application/json", "")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// sameAuthority compares host:port with the default HTTP port normalized away.
+// Browsers drop :80 from the URL, so `fanout dashboard --port 80` would send
+// `Host: 127.0.0.1` against a bound `127.0.0.1:80` and fail every POST while the
+// page itself loaded fine.
+func sameAuthority(got, want string) bool {
+	return canonicalAuthority(got) == canonicalAuthority(want)
+}
+
+func canonicalAuthority(authority string) string {
+	host, port, err := net.SplitHostPort(authority)
+	if err != nil {
+		return authority // no port at all: already canonical
+	}
+	if port == "80" {
+		return host
+	}
+	return authority
+}
+
+// jsonContentType accepts application/json with any parameters (charset, most
+// often) and nothing else.
+func jsonContentType(value string) bool {
+	mediaType, _, err := mime.ParseMediaType(value)
+	return err == nil && mediaType == "application/json"
 }
 
 // requireToken gates /api/* with a constant-time token compare when a token is

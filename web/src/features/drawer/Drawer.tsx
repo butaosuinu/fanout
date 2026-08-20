@@ -7,12 +7,17 @@ import { usePeek } from "../../transport/usePeek";
 import { usePlan } from "../../transport/usePlan";
 import { fmtCreated, parseDiff } from "../../shared/format";
 import { issueUrl } from "../../shared/github";
+import { canDeleteBranch } from "../merge/merge";
+import { DeleteBranchButton } from "../merge/DeleteBranchButton";
+import { MergeSplitButton } from "../merge/MergeSplitButton";
+import { useMergeSlot } from "../merge/MergeSlot";
 import {
   blockerLabel,
   diffQuery,
   fmtWave,
   notStartedNote,
   paneBackend,
+  rowQuery,
   paneIssueURL,
   paneLabel,
   paneRuntimeState,
@@ -117,7 +122,16 @@ function WaveSection({ pane, repo }: { pane: PaneView; repo: string }) {
 
 /* ドロワーの PR 1 件。タグはどれも該当しなければ null を返すので、ここに条件分岐は
  * 置かない。区切りの空白は不要 — .d-prs li が flex + gap を持っている。 */
-function PrRow({ pr, repo }: { pr: PRRef; repo: string }) {
+function PrRow({
+  pr,
+  repo,
+  cleanup,
+}: {
+  pr: PRRef;
+  repo: string;
+  /* マージ後の後片付け導線。出せる行にだけ渡る。 */
+  cleanup: { query: Record<string, string>; token: string; branch: string } | null;
+}) {
   return (
     <li>
       <PrPill repo={repo} pr={pr} />
@@ -125,18 +139,38 @@ function PrRow({ pr, repo }: { pr: PRRef; repo: string }) {
       <PrConflictTag pr={pr} />
       <PrCommentsTag pr={pr} />
       <PrReviewTag pr={pr} />
+      {cleanup && canDeleteBranch(pr, { repo, branch: cleanup.branch, token: cleanup.token }) && (
+        <DeleteBranchButton
+          id={`d-delete-branch-${pr.number}`}
+          pr={pr}
+          query={cleanup.query}
+          token={cleanup.token}
+        />
+      )}
     </li>
   );
 }
 
-function PrsSection({ pane, repo }: { pane: PaneView; repo: string }) {
+function PrsSection({
+  pane,
+  repo,
+  parent,
+  token,
+}: {
+  pane: PaneView;
+  repo: string;
+  parent: string;
+  token: string;
+}) {
   const prs = pane.prs ?? [];
+  const query = rowQuery(parent, pane);
+  const cleanup = query ? { query, token, branch: pane.branchName ?? "" } : null;
   return (
     <section className="d-sec">
       <h4>pull requests</h4>
       <ul className="d-prs" id="d-prs">
         {prs.length ? (
-          prs.map((pr) => <PrRow key={pr.number} pr={pr} repo={repo} />)
+          prs.map((pr) => <PrRow key={pr.number} pr={pr} repo={repo} cleanup={cleanup} />)
         ) : (
           <li className="muted">—</li>
         )}
@@ -206,6 +240,55 @@ function CaptureDisabled({ kind, reason }: { kind: CaptureKind; reason: MessageD
   );
 }
 
+/* 上部バー。Drawer 本体から切り出してあるのは、あちらが既に 160 行超で、
+ * ここに導線を足すたびに伸びるため。並びは Session 名 → 差分行数 → 変更を表示
+ * → マージ → 閉じる で、右端は #drawer-close の margin-left:auto が取る。 */
+function DrawerHead({
+  pane,
+  parent,
+  repo,
+  hasDiff,
+  onOpenDiff,
+  onClose,
+}: {
+  pane: PaneView;
+  parent: string;
+  repo: string;
+  hasDiff: boolean;
+  onOpenDiff: (parent: string, pane: PaneView) => void;
+  onClose: () => void;
+}) {
+  const { t } = useLingui();
+  const merge = useMergeSlot();
+  return (
+    <header className="drawer-head">
+      <h3>
+        <span className="d-issue" id="d-issue">
+          <GhLink url={paneIssueURL(repo, pane)}>{paneLabel(pane)}</GhLink>
+        </span>
+        <span id="d-name">{pane.derived?.name || pane.displayName || pane.slug || "—"}</span>
+      </h3>
+      {hasDiff && (
+        <>
+          <DiffStat summary={pane.diffSummary} />
+          <button
+            type="button"
+            id="d-diff-open"
+            className="btn-primary"
+            onClick={() => onOpenDiff(parent, pane)}
+          >
+            <Trans>変更を表示</Trans>
+          </button>
+        </>
+      )}
+      {merge && <MergeSplitButton id="d-merge" merge={merge} />}
+      <button id="drawer-close" type="button" aria-label={t`詳細を閉じる`} onClick={onClose}>
+        ✕
+      </button>
+    </header>
+  );
+}
+
 export function Drawer({
   pane,
   parent,
@@ -253,30 +336,14 @@ export function Drawer({
       {/* role / aria / tabIndex は hook が幅と一体で提供する(スプレッド漏れで
           セパレータ意味論だけ落ちる事故を防ぐ) */}
       <div className="drawer-grip" {...gripProps} />
-      <header className="drawer-head">
-        <h3>
-          <span className="d-issue" id="d-issue">
-            <GhLink url={paneIssueURL(repo, pane)}>{paneLabel(pane)}</GhLink>
-          </span>
-          <span id="d-name">{pane.derived?.name || pane.displayName || pane.slug || "—"}</span>
-        </h3>
-        {dq && (
-          <>
-            <DiffStat summary={pane.diffSummary} />
-            <button
-              type="button"
-              id="d-diff-open"
-              className="btn-primary"
-              onClick={() => onOpenDiff(parent, pane)}
-            >
-              <Trans>変更を表示</Trans>
-            </button>
-          </>
-        )}
-        <button id="drawer-close" type="button" aria-label={t`詳細を閉じる`} onClick={onClose}>
-          ✕
-        </button>
-      </header>
+      <DrawerHead
+        pane={pane}
+        parent={parent}
+        repo={repo}
+        hasDiff={dq !== null}
+        onOpenDiff={onOpenDiff}
+        onClose={onClose}
+      />
       {pane.notStarted ? (
         /* 未開始(synthetic)行の縮約表示: pane / worktree / prompt / peek は
          * 実体が無いので出さない(PeekPanel を mount しない = /api/peek 不発)。
@@ -296,7 +363,7 @@ export function Drawer({
             </dl>
           </section>
           <WaveSection pane={pane} repo={repo} />
-          <PrsSection pane={pane} repo={repo} />
+          <PrsSection pane={pane} repo={repo} parent={parent} token={token} />
         </div>
       ) : (
         <div className="drawer-body">
@@ -348,7 +415,7 @@ export function Drawer({
               </dd>
             </dl>
           </section>
-          <PrsSection pane={pane} repo={repo} />
+          <PrsSection pane={pane} repo={repo} parent={parent} token={token} />
           <section className="d-sec">
             <h4>prompt</h4>
             <pre className="d-prompt" id="d-prompt">

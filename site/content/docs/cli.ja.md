@@ -38,7 +38,7 @@ fanout <parent-issue> --status [--format json|table] [--post-dashboard]
 fanout <parent-issue> --merge <NUM> # fast-forward merge
 fanout <parent-issue> --close <NUM> # remove child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed children
-fanout dashboard --web              # read-only localhost web dashboard (Session view)
+fanout dashboard --web              # localhost web dashboard (Session view)
 fanout msg <verb> [options] [body...]  # 兄弟ペイン間の peer messaging
 fanout herdr <restart|shutdown>     # owned herdr server のライフサイクル
 fanout --check-update               # Compare this binary with the latest release
@@ -328,7 +328,7 @@ Blocking hook が失敗すると操作を止め、hook の出力を表示しま�
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 ```
 
-読み取り専用の localhost Web ダッシュボードを起動します。`127.0.0.1` にのみバインドし、GET 専用、トークンでゲートされます。fanout の Session（親ごとにまとめた記録済みペイン）を、ペインの生存、issue 状態、PR マージ状態とともにライブ表示します。
+localhost Web ダッシュボードを起動します。`127.0.0.1` にのみバインドし、トークンでゲートされます。fanout の Session（親ごとにまとめた記録済みペイン）を、ペインの生存、issue 状態、PR マージ状態とともにライブ表示します。読み取りは GET 専用で、変更できるのはマージボタンによる GitHub 上の PR マージだけです。作業ツリー・ローカル branch・worktree は一切変わりません。
 
 | フラグ | 引数 | 説明 |
 |---|---|---|

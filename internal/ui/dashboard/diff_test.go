@@ -662,3 +662,77 @@ func runDiffGit(t *testing.T, repo string, args ...string) {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 	}
 }
+
+// TestStableWorktreePatch pins the fence around a slow collection: what the
+// response says about the patch has to describe the patch it actually returned,
+// or there is nothing for the merge button's comparison to mean.
+func TestStableWorktreePatch(t *testing.T) {
+	patch := gitstat.Patch{MergeBase: "base", Patch: "diff"}
+	collect := func() (gitstat.Patch, error) { return patch, nil }
+	pushed := func(gitstat.Patch) (bool, error) { return true, nil }
+	marks := func(seq ...worktreeMark) func() (worktreeMark, error) {
+		i := 0
+		return func() (worktreeMark, error) {
+			out := seq[i]
+			i++
+			return out, nil
+		}
+	}
+	clean := worktreeMark{head: "abc123"}
+
+	t.Run("describes a worktree that stayed put", func(t *testing.T) {
+		got, err := stableWorktreePatch(marks(clean, clean), collect, pushed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Head != "abc123" || got.Dirty || !got.BasePushed {
+			t.Fatalf("got %+v, want head abc123, clean, base pushed", got)
+		}
+	})
+
+	t.Run("carries the dirty state the patch was taken with", func(t *testing.T) {
+		dirty := worktreeMark{head: "abc123", dirty: true}
+		got, err := stableWorktreePatch(marks(dirty, dirty), collect, pushed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.Dirty {
+			t.Fatalf("Dirty = false, want true")
+		}
+	})
+
+	t.Run("reports a base the remote does not have", func(t *testing.T) {
+		local := func(gitstat.Patch) (bool, error) { return false, nil }
+		got, err := stableWorktreePatch(marks(clean, clean), collect, local)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.BasePushed {
+			t.Fatal("BasePushed = true, want false")
+		}
+	})
+
+	tests := []struct {
+		name          string
+		before, after worktreeMark
+	}{
+		{name: "a commit landed mid-collection", before: clean, after: worktreeMark{head: "def456"}},
+		{
+			// The patch already carries the edit; describing it as clean would
+			// tell the button the patch equals a commit.
+			name:   "an edit landed mid-collection",
+			before: clean, after: worktreeMark{head: "abc123", dirty: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := stableWorktreePatch(marks(tt.before, tt.after), collect, pushed)
+			if err == nil {
+				t.Fatal("stableWorktreePatch() error = nil, want the refusal")
+			}
+			if got.Patch != "" {
+				t.Fatalf("patch = %#v, want it withheld", got)
+			}
+		})
+	}
+}

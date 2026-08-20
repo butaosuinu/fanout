@@ -953,7 +953,10 @@ func TestPRQueriesShareReviewSignalFields(t *testing.T) {
 	}
 	for name, query := range queries {
 		t.Run(name, func(t *testing.T) {
-			for _, field := range []string{"reviewDecision", "mergeable", "totalCommentsCount"} {
+			for _, field := range []string{
+				"reviewDecision", "mergeable", "totalCommentsCount",
+				"headRefOid", "headRefName",
+			} {
 				if !strings.Contains(query, field) {
 					t.Fatalf("%s query omits %q:\n%s", name, field, query)
 				}

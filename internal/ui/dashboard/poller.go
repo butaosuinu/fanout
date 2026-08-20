@@ -93,10 +93,13 @@ type poller struct {
 	resolve  func() (string, GHProvider, error)
 	resolved bool
 
-	mu         sync.RWMutex
-	latest     sessionview.Snapshot
-	latestJSON []byte
-	lastKey    []byte
+	mu sync.RWMutex
+	// ghRefreshedAt is when the GitHub tier last completed a refresh. Zero until
+	// the first one lands.
+	ghRefreshedAt time.Time
+	latest        sessionview.Snapshot
+	latestJSON    []byte
+	lastKey       []byte
 
 	// worktreeStat is built once: it owns the untracked-file cache that keeps
 	// the 2-second tick off a per-file git process for every un-ignored file.
@@ -106,6 +109,11 @@ type poller struct {
 	cache       map[int]ghCacheEntry
 	branchCache map[string]branchPRCacheEntry
 	waveCache   map[string]waveCacheEntry // keyed by normalized parent
+
+	// refreshNow lets a completed merge pull the next GitHub tick forward
+	// instead of leaving the row rendering its pre-merge state for a full
+	// ghInterval. Buffered depth 1: a kick already queued covers any later one.
+	refreshNow chan struct{}
 }
 
 func newPollerBase(projectRoot string, h *hub) *poller {
@@ -119,6 +127,7 @@ func newPollerBase(projectRoot string, h *hub) *poller {
 		cache:         map[int]ghCacheEntry{},
 		branchCache:   map[string]branchPRCacheEntry{},
 		waveCache:     map[string]waveCacheEntry{},
+		refreshNow:    make(chan struct{}, 1),
 	}
 }
 
@@ -186,7 +195,102 @@ func (p *poller) ghLoop(ctx context.Context) {
 			return
 		case <-ghT.C:
 			p.runGHTick()
+		case <-p.refreshNow:
+			p.runGHTick()
 		}
+	}
+}
+
+// requestGHRefresh asks the gh goroutine to run a tick now. It never blocks, and
+// reports whether a kick is now queued: a full buffer means one is already
+// pending, which is the same outcome for the caller but not the same claim, so
+// the two are not conflated on the wire.
+//
+// It deliberately does not drop the row's cached PR state. refreshGH refetches
+// every recorded row on each tick, so invalidation buys no freshness — and it
+// would open a window where the 2-second cheap ticker broadcasts the row with no
+// PRs at all, which downstream reads as "this row lost its pull request".
+// prSettled reports whether the latest snapshot shows this pull request merged
+// or closed. It is how an unconfirmed merge stops blocking: once GitHub's answer
+// arrives through the normal poll, the claim on that PR can go.
+//
+// repo is required: `Fixes owner/repo#N` puts pull requests from other
+// repositories on a row, and numbers repeat across repositories. A merged #7
+// somewhere else must not release the hold on this repository's #7.
+func (p *poller) prSettled(repo string, number int) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return settled(p.prRefs(repo, number))
+}
+
+// settled reports whether every copy of one pull request agrees it is over.
+//
+// One copy saying so is not enough. The same pull request appears on several
+// rows, the issue and branch fetches land at different times, and a pull request
+// that was closed and reopened leaves one stale CLOSED copy next to a live OPEN
+// one — releasing on the stale copy would hand back a merge that is still in
+// flight. No copies at all is not evidence either.
+func settled(refs []ghissue.PRRef) bool {
+	if len(refs) == 0 {
+		return false
+	}
+	for _, pr := range refs {
+		if !settledRef(pr) {
+			return false
+		}
+	}
+	return true
+}
+
+func settledRef(pr ghissue.PRRef) bool {
+	return strings.EqualFold(pr.State, "MERGED") || strings.EqualFold(pr.State, "CLOSED") ||
+		pr.MergedAt != nil
+}
+
+// prMergePending reports whether the latest snapshot shows GitHub still holding
+// a merge for this pull request — an auto-merge armed, or an entry in the merge
+// queue — and whether the pull request was found at all. The two are separate
+// answers: "nothing pending" and "not in the snapshot" must not release the same
+// hold.
+//
+// Every copy is checked, not just the first. One pull request can sit on several
+// rows, and the issue and branch fetches land at different times, so one copy can
+// still show the state before a re-enqueue that another already reflects. Any
+// copy showing the merge pending is enough to keep the hold.
+func (p *poller) prMergePending(repo string, number int) (pending, found bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, pr := range p.prRefs(repo, number) {
+		found = true
+		if pr.AutoMerge || pr.Queued {
+			return true, true
+		}
+	}
+	return false, found
+}
+
+// prRefs collects every copy of one pull request in the latest snapshot. Callers
+// hold p.mu.
+func (p *poller) prRefs(repo string, number int) []ghissue.PRRef {
+	var out []ghissue.PRRef
+	for _, session := range p.latest.Sessions {
+		for i := range session.Panes {
+			for _, pr := range session.Panes[i].PRs {
+				if pr.Number == number && strings.EqualFold(pr.BaseRepo, repo) {
+					out = append(out, pr)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func (p *poller) requestGHRefresh() bool {
+	select {
+	case p.refreshNow <- struct{}{}:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -194,9 +298,41 @@ func (p *poller) runGHTick() {
 	if p.hub.subscriberCount() == 0 && !p.hub.snapshotRecentlyRequested(time.Now()) {
 		return
 	}
+	// The stamp is when the reads began, not when they finished. A merge landing
+	// mid-tick would otherwise be older than a stamp taken at the end, and its
+	// hold would treat a pull request read before the click as evidence taken
+	// after it. Starting-time is the conservative end of that window.
+	startedAt := time.Now()
 	p.ensureResolved()
 	p.refreshGH()
-	p.rebuildAndBroadcast()
+	// The stamp is published with the snapshot it describes: a hold reads both,
+	// and a new time next to the old rows would say "GitHub has been read since
+	// your merge" about data taken before it.
+	p.publishGHRefresh(startedAt)
+}
+
+// ghFreshAfter reports whether GitHub data has been refetched since t. It is how
+// a hold tells "GitHub is not holding this merge" from "the last GitHub read
+// predates the merge, so of course it isn't". That is a statement about the age
+// of the data, not about the outcome — the outcome still only comes from GitHub.
+// ghStamp formats the refresh this rebuild publishes: the one passed in, or the
+// one already recorded when this is a cheap rebuild.
+func (p *poller) ghStamp(at time.Time) string {
+	if at.IsZero() {
+		p.mu.RLock()
+		at = p.ghRefreshedAt
+		p.mu.RUnlock()
+	}
+	if at.IsZero() {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339Nano)
+}
+
+func (p *poller) ghFreshAfter(t time.Time) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.ghRefreshedAt.After(t)
 }
 
 // ensureResolved runs the deferred GitHub resolution exactly once. It is only
@@ -500,7 +636,21 @@ func (p *poller) build() sessionview.Snapshot {
 }
 
 func (p *poller) rebuildAndBroadcast() {
+	p.rebuild(time.Time{})
+}
+
+func (p *poller) publishGHRefresh(at time.Time) {
+	p.rebuild(at)
+}
+
+// rebuild stores the newest snapshot and broadcasts it when the content moved.
+//
+// ghAt is the GitHub refresh this snapshot describes; the zero value keeps the
+// one already published. It travels inside the snapshot so that a client reading
+// the rows and the refresh time can never see them disagree.
+func (p *poller) rebuild(ghAt time.Time) {
 	snap := p.build()
+	snap.GHRefreshedAt = p.ghStamp(ghAt)
 	data, err := json.Marshal(snap)
 	if err != nil {
 		return
@@ -512,6 +662,9 @@ func (p *poller) rebuildAndBroadcast() {
 	p.latest = snap
 	p.latestJSON = data
 	p.lastKey = key
+	if !ghAt.IsZero() {
+		p.ghRefreshedAt = ghAt
+	}
 	p.mu.Unlock()
 
 	if changed {

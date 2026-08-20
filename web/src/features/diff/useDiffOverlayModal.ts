@@ -136,6 +136,12 @@ export function useEscapeToClose(
     if (!enabled) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
+      /* 自分の中で popover が開いていれば譲る。この listener は capture 段に
+       * 居るので、popover 側の React onKeyDown(bubble 段)より先に走る —
+       * 譲らないと、diff の中でメニューを開いた直後の Escape が
+       * オーバーレイごと閉じてしまう。判定は App の backgroundPopupOpen と
+       * 同じ aria-expanded。 */
+      if (rootRef.current?.querySelector('[aria-expanded="true"]')) return;
       if (!covering && !holdsFocus(rootRef.current)) return;
       e.preventDefault();
       onClose();

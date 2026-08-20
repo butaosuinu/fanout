@@ -9,6 +9,10 @@ export interface Snapshot {
   repo: string; // "owner/name"; 未解決時 ""
   projectRoot: string;
   generatedAt: string; // RFC3339
+  /* GitHub 層が最後に読み取りを開始した時刻(RFC3339)。generatedAt とは別物で、
+   * snapshot は 2 秒ごとにローカル state だけから作り直される。「あの時点より後に
+   * GitHub を読んだか」はこちらでしか判定できない。初回 refresh 前は欠落 */
+  ghRefreshedAt?: string;
   sessions: Session[] | null;
   rollup: Rollup;
   degraded: Degraded;
@@ -133,6 +137,26 @@ export interface PRRef {
   /* PullRequest.totalCommentsCount(会話コメント + inline レビューコメント)。
    * 0 件は omitempty で欠落する。 */
   comments?: number;
+  /* PR head の commit oid。マージ時にそのまま送り返し、サーバが
+   * --match-head-commit として GitHub に渡す。描画からクリックまでの間に
+   * push された PR は GitHub が拒否する。GraphQL 経路だけが値を持つ。 */
+  headSha?: string;
+  /* PR head の branch 名。マージ後の remote branch 削除の対象を、その PR が
+   * 実際に持つ branch に限るために使う。 */
+  headRef?: string;
+  /* head / base の repository(owner/name)。fork の head を base 側で消さない
+   * ため、また別 repository の issue を close する PR を番号だけで取り違えない
+   * ために、サーバが mutation 前に照合する。 */
+  headRepo?: string;
+  baseRepo?: string;
+  /* PR のマージ先 branch。head を動かさずに retarget できるので、head SHA だけでは
+   * 「どこへマージされるか」を固定できない。描画時の値を送り返して照合する。 */
+  baseRef?: string;
+  /* GitHub がこの PR のマージを保留している(auto-merge が armed、または merge
+   * queue に入っている)。取り消しは PR を OPEN のまま残すので、これが消えたことが
+   * 取り消しの唯一の合図になる。 */
+  autoMerge?: boolean;
+  queued?: boolean;
 }
 
 export interface BlockerStatus {
@@ -176,6 +200,14 @@ export interface DiffResponse {
   branchName: string;
   baseBranch: string;
   mergeBase: string; // strict 解決済み commit SHA
+  /* この patch が何と比較可能かを言う 3 つ。マージボタンはこれで塞ぐ:
+   * headCommit は patch を取った worktree の commit(branch 名が同じでも、ローカル
+   * checkout が PR と同じものを持っている保証は無い。unborn branch では欠落)、
+   * dirty は commit されていない変更も描いていること、basePushed は patch の base が
+   * remote にある commit だということ。 */
+  headCommit?: string;
+  dirty?: boolean;
+  basePushed?: boolean;
   capturedAt: string; // RFC3339 UTC
   files: DiffFileEntry[];
   patch: string;

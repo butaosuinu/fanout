@@ -44,9 +44,10 @@ English and 日本語.
   [settings docs](https://butaosuinu.github.io/fanout/docs/settings/).
 - **Label watcher** — opt in to a TUI-resident watcher that turns trusted
   `fanout:auto` issues into one-shot fanout sessions.
-- **Web dashboard** — a read-only localhost dashboard with live updates; pop it
-  from any pane with `F12` or `prefix + D`. Use `prefix + M` for
-  same-worktree actions from a recorded pane.
+- **Web dashboard** — a localhost dashboard with live updates and a merge
+  button on every Session that has a pull request; pop it from any pane with
+  `F12` or `prefix + D`. Use `prefix + M` for same-worktree actions from a
+  recorded pane.
 - **Status & reporting** — `--status` JSON / table with PR review and CI state,
   plus an optional dashboard comment on the parent issue.
 - **Lifecycle hooks** — user-configured shell commands around worktree, pane,
@@ -175,7 +176,7 @@ it discovers labeled issues across the repository and starts one-shot sessions.
 | `fanout plan spec.json --agent claude` | Fan out a local plan spec instead of GitHub child issues |
 | `fanout` | Start the persistent TUI console (Session jump, numeric jump 1-9, focus, zoom, peek, compact switcher below 80 columns (`v`), terminal, prompt / issue session launch, settings popup (`s`), same-worktree attach, restore, lifecycle keys) |
 | `fanout 123 --status` | Pane, PR review, and CI state as JSON or a table |
-| `fanout dashboard --web` | Serve the read-only web dashboard on localhost |
+| `fanout dashboard --web` | Serve the web dashboard on localhost (read-only apart from merging a PR and deleting its remote branch) |
 | `fanout 123 --merge 4` | Fast-forward merge a child branch (`--close` / `--cleanup` fold panes away) |
 
 Fan-out runs need a child agent — pass `--agent claude` / `--agent codex` /

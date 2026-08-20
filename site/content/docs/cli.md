@@ -38,7 +38,7 @@ fanout <parent-issue> --status [--format json|table] [--post-dashboard]
 fanout <parent-issue> --merge <NUM> # fast-forward merge
 fanout <parent-issue> --close <NUM> # remove child worktree/pane
 fanout <parent-issue> --cleanup     # remove merged/closed children
-fanout dashboard --web              # read-only localhost web dashboard (Session view)
+fanout dashboard --web              # localhost web dashboard (Session view)
 fanout msg <verb> [options] [body...]  # peer messaging between sibling panes
 fanout herdr <restart|shutdown>     # owned herdr server lifecycle
 fanout --check-update               # Compare this binary with the latest release
@@ -323,7 +323,7 @@ where fanout has equivalent data.
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 ```
 
-Starts the read-only localhost web dashboard: bound to `127.0.0.1`, GET-only, token-gated, visualizing fanout Sessions (the recorded panes grouped by parent) with live pane liveness, issue state and PR merge status.
+Starts the localhost web dashboard: bound to `127.0.0.1`, token-gated, visualizing fanout Sessions (the recorded panes grouped by parent) with live pane liveness, issue state and PR merge status. Reads are GET-only; the one thing it can change is merging a pull request on GitHub from the Merge button, which never touches your working tree, local branches, or worktrees.
 
 | Flag | Argument | Description |
 |---|---|---|

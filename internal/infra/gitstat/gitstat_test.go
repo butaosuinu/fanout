@@ -2234,3 +2234,47 @@ func (c *UntrackedStatCache) size(worktree string) int {
 	defer c.mu.Unlock()
 	return len(c.byWorktree[worktree].entries)
 }
+
+// TestBaseIsPushed pins the answer for a local base branch ahead of its remote —
+// the case the whole check exists to describe. `--is-ancestor` says "no" with
+// exit 1, which arrives as an error, and reporting that would fail the entire
+// diff instead of just marking the base unpushed.
+func TestBaseIsPushed(t *testing.T) {
+	remote := t.TempDir()
+	gitTest(t, remote, "init", "--bare")
+
+	repo := t.TempDir()
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "config", "user.email", "test@example.com")
+	gitTest(t, repo, "config", "user.name", "Test User")
+	gitTest(t, repo, "remote", "add", "origin", remote)
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, repo, "add", "a.txt")
+	gitTest(t, repo, "commit", "-m", "initial")
+	gitTest(t, repo, "branch", "-M", "main")
+	gitTest(t, repo, "push", "-u", "origin", "main")
+	pushed := gitTestOutput(t, repo, "rev-parse", "HEAD")
+
+	r := Runner{}
+	got, err := r.BaseIsPushed(repo, "main", pushed)
+	if err != nil || !got {
+		t.Fatalf("BaseIsPushed(pushed commit) = %v, %v, want true, nil", got, err)
+	}
+
+	// A commit the remote has never seen.
+	if writeErr := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("one\ntwo\n"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	gitTest(t, repo, "commit", "-am", "local only")
+	local := gitTestOutput(t, repo, "rev-parse", "HEAD")
+
+	got, err = r.BaseIsPushed(repo, "main", local)
+	if err != nil {
+		t.Fatalf("BaseIsPushed(unpushed commit) error = %v, want the plain false answer", err)
+	}
+	if got {
+		t.Fatal("BaseIsPushed(unpushed commit) = true, want false")
+	}
+}

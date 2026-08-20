@@ -170,14 +170,15 @@ export function findPaneEntry(
   return null;
 }
 
-/* GET /api/diff の行 identity クエリ(正は docs/local-diff-review-tools.ja.md)。
- * rowKey と同じ識別規則ファミリー — 行種が増えたら両方を揃えること。
+/* 行 identity クエリ(正は docs/local-diff-review-tools.ja.md)。/api/diff と
+ * /api/pr/merge が同じ形を使う。rowKey と同じ識別規則ファミリー — 行種が
+ * 増えたらここ 1 箇所を直せば両方に効く。
  * GitHub issue 行(issueNum>0)は parent+issue、plan task 行は parent+task+source、
  * 負の synthetic issue 行(@manual / attached-agent)は parent+issue+source。
- * identity を組めない行(shell、未開始、worktree 記録なし、source 必須なのに
- * sourceKey 欠落)は null を返し、呼び出し側はボタンを出さない。 */
-export function diffQuery(parent: string, p: PaneView): Record<string, string> | null {
-  if (p.notStarted || p.kind === "shell" || !p.worktreePath) return null;
+ * identity を組めない行(shell、未開始、source 必須なのに sourceKey 欠落)は
+ * null を返し、呼び出し側はボタンを出さない。 */
+export function rowQuery(parent: string, p: PaneView): Record<string, string> | null {
+  if (p.notStarted || p.kind === "shell") return null;
   if (p.taskId) {
     return p.sourceKey ? { parent, task: p.taskId, source: p.sourceKey } : null;
   }
@@ -186,6 +187,12 @@ export function diffQuery(parent: string, p: PaneView): Record<string, string> |
     return { parent, issue: String(p.issueNum), source: p.sourceKey };
   }
   return null;
+}
+
+/* diff は worktree の実体を要求する(そこから patch を読むため)。merge は
+ * 要求しない — cleanup 済みの行でも PR はマージできる。 */
+export function diffQuery(parent: string, p: PaneView): Record<string, string> | null {
+  return p.worktreePath ? rowQuery(parent, p) : null;
 }
 
 /* 未開始(synthetic)行の Drawer 状態説明文。キーは tmuxState。モジュール定数は

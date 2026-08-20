@@ -1,7 +1,8 @@
 import { localKeysWithPrefix, readLocal, writeLocal } from "../../shared/localStore";
 
-/* 確認済みの永続化。dashboard サーバーは GET-only で mutation endpoint を持たない
- * (CLAUDE.md)ので、保存先は localStorage しかない。
+/* 確認済みの永続化。dashboard サーバーの mutation は `POST /api/pr/merge` 1 本だけで、
+ * レビュー状態を保存する endpoint は持たない(CLAUDE.md)ので、保存先は localStorage
+ * しかない。
  *
  * キーは scope(session 行の rowKey)ごとに 1 本にする。全 scope を 1 本の JSON に
  * まとめると、チェック 1 個ごとに全 scope 分を再シリアライズすることになる

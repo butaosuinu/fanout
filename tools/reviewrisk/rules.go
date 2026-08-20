@@ -33,12 +33,15 @@ var fileRules = map[string]Rule{
 	"cmd/fanout/tui_restore.go":     ruleCmdH,
 	"cmd/fanout/tui_watch.go":       ruleCmdH,
 
-	// dashboard H files (server mux / runfile trust gate / capture-pane chain).
-	"internal/ui/dashboard/server.go":  {ID: "dashboard-server", Class: ClassH, Source: SourceDocTable, Note: "localhost web サーバの mux・token 検証"},
-	"internal/ui/dashboard/runfile.go": {ID: "dashboard-runfile", Class: ClassH, Source: SourceDocTable, Note: "token を含む dashboard.json・reuse/trust ゲート"},
-	"internal/ui/dashboard/diff.go":    {ID: "dashboard-diff", Class: ClassH, Source: SourceDocTable, Note: "worktree diff の identity 検証・read-only 配信"},
-	"internal/ui/dashboard/peek.go":    {ID: "dashboard-peek-plan", Class: ClassH, Source: SourceDocTable, Note: "capture-pane 前の検証チェーン"},
-	"internal/ui/dashboard/plan.go":    {ID: "dashboard-peek-plan", Class: ClassH, Source: SourceDocTable, Note: "capture-pane 前の検証チェーン(plan mode かつ codex 限定)"},
+	// dashboard H files (server mux / POST carve-out / runfile trust gate /
+	// capture-pane chain).
+	"internal/ui/dashboard/server.go":       {ID: "dashboard-server", Class: ClassH, Source: SourceDocTable, Note: "localhost web サーバの mux(GET-only 読み取りと POST carve-out)・同一 origin 検証・token 検証"},
+	"internal/ui/dashboard/merge.go":        {ID: "dashboard-merge", Class: ClassH, Source: SourceDocTable, Note: "mutation 経路(merge)。PR 特定・事前検証・gh 失敗のステータス写像"},
+	"internal/ui/dashboard/deletebranch.go": {ID: "dashboard-delete-branch", Class: ClassH, Source: SourceDocTable, Note: "mutation 経路(マージ後の head ref 削除)。所有権検証"},
+	"internal/ui/dashboard/runfile.go":      {ID: "dashboard-runfile", Class: ClassH, Source: SourceDocTable, Note: "token を含む dashboard.json・reuse/trust ゲート"},
+	"internal/ui/dashboard/diff.go":         {ID: "dashboard-diff", Class: ClassH, Source: SourceDocTable, Note: "worktree diff の identity 検証・read-only 配信"},
+	"internal/ui/dashboard/peek.go":         {ID: "dashboard-peek-plan", Class: ClassH, Source: SourceDocTable, Note: "capture-pane 前の検証チェーン"},
+	"internal/ui/dashboard/plan.go":         {ID: "dashboard-peek-plan", Class: ClassH, Source: SourceDocTable, Note: "capture-pane 前の検証チェーン(plan mode かつ codex 限定)"},
 
 	// dashboard M files.
 	"internal/ui/dashboard/poller.go": ruleDashboardM,
@@ -153,6 +156,7 @@ var prefixRules = []struct {
 	{"internal/app/agentprocess/", Rule{ID: "app-agentprocess", Class: ClassH, Source: SourceDocTable, Note: "保存済み launch と現在の agent process identity の照合"}},
 	{"internal/app/stateemitter/", Rule{ID: "app-stateemitter", Class: ClassH, Source: SourceDocTable, Note: "launch に束縛した telemetry の検証と state lock 下の更新"}},
 	{"internal/app/sessionbinding/", Rule{ID: "app-sessionbinding", Class: ClassH, Source: SourceDocTable, Note: "遅延 Herdr agent session の初回束縛と state 保存"}},
+	{"internal/app/prmerge/", Rule{ID: "app-prmerge", Class: ClassH, Source: SourceDocTable, Note: "GitHub PR merge の対象選択・事前検証・2 段実行"}},
 
 	// app M.
 	{"internal/app/sessionview/", Rule{ID: "app-sessionview", Class: ClassM, Source: SourceDocTable, Note: "state+runtime backend+gh の Snapshot"}},

@@ -21,12 +21,18 @@ const IssueStateUnknown = "UNKNOWN"
 // Snapshot is the full dashboard view at one instant. It serializes directly to
 // /api/snapshot, so JSON tags are part of the wire contract the frontend reads.
 type Snapshot struct {
-	Repo        string    `json:"repo"` // "owner/name"; "" when unresolved
-	ProjectRoot string    `json:"projectRoot"`
-	GeneratedAt string    `json:"generatedAt"` // RFC3339
-	Sessions    []Session `json:"sessions"`    // grouped by parent, sorted
-	Rollup      Rollup    `json:"rollup"`      // repo-wide totals across all sessions
-	Degraded    Degraded  `json:"degraded"`    // which data sources were unavailable
+	Repo        string `json:"repo"` // "owner/name"; "" when unresolved
+	ProjectRoot string `json:"projectRoot"`
+	GeneratedAt string `json:"generatedAt"` // RFC3339
+	// GHRefreshedAt is when the GitHub tier last started a refresh, RFC3339, or
+	// "" before the first one. It is not GeneratedAt: snapshots are rebuilt every
+	// couple of seconds from local state alone, and a client that has to know
+	// whether GitHub itself has been re-read since some moment cannot tell the
+	// two apart otherwise.
+	GHRefreshedAt string    `json:"ghRefreshedAt,omitempty"`
+	Sessions      []Session `json:"sessions"` // grouped by parent, sorted
+	Rollup        Rollup    `json:"rollup"`   // repo-wide totals across all sessions
+	Degraded      Degraded  `json:"degraded"` // which data sources were unavailable
 }
 
 // Session is the set of panes that share a Pane.Parent — one parent issue (or

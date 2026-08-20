@@ -25,6 +25,14 @@ msgstr "diff パネルの幅を変更"
 msgid "wave で絞り込み"
 msgstr "wave で絞り込み"
 
+#: src/features/merge/MergeSplitButton.tsx
+msgid "マージ"
+msgstr "マージ"
+
+#: src/features/merge/merge.ts
+msgid "表示中の差分は未 push の base commit を基準にしています。base branch を push してから実行してください"
+msgstr "表示中の差分は未 push の base commit を基準にしています。base branch を push してから実行してください"
+
 #: src/features/diff/DiffBody.tsx
 msgid "merge-base からの変更はありません"
 msgstr "merge-base からの変更はありません"
@@ -36,6 +44,10 @@ msgstr "diff の取得に失敗しました (HTTP {status}): {detail}"
 #: src/features/diff/diff.ts
 msgid "新規追加"
 msgstr "新規追加"
+
+#: src/features/merge/merge.ts
+msgid "GitHub がマージを拒否しました"
+msgstr "GitHub がマージを拒否しました"
 
 #: src/features/diff/DiffToolbar.tsx
 msgid "全画面表示"
@@ -53,9 +65,17 @@ msgstr "(pane output unavailable — ペインは終了しています)"
 msgid "省略"
 msgstr "省略"
 
+#: src/features/merge/MergeSplitButton.tsx
+msgid "マージ中…"
+msgstr "マージ中…"
+
 #: src/features/diff/DiffToolbar.tsx
 msgid "diff を閉じる"
 msgstr "diff を閉じる"
+
+#: src/features/merge/MergeSplitButton.tsx
+msgid "マージ方式: {method}(クリックで変更)"
+msgstr "マージ方式: {method}(クリックで変更)"
 
 #: src/features/drawer/Drawer.tsx
 msgid "herdr backend は plan capture に対応していません。"
@@ -81,6 +101,10 @@ msgstr "PR のレビュー状態で絞り込み"
 msgid "縦積み"
 msgstr "縦積み"
 
+#: src/features/merge/MergeSplitButton.tsx
+msgid "#{pr} をマージ"
+msgstr "#{pr} をマージ"
+
 #: src/features/filter/FilterBar.tsx
 msgid "worktree の dirty 状態で絞り込み"
 msgstr "worktree の dirty 状態で絞り込み"
@@ -89,6 +113,10 @@ msgstr "worktree の dirty 状態で絞り込み"
 msgid "(plan を取得できませんでした)"
 msgstr "(plan を取得できませんでした)"
 
+#: src/features/merge/merge.ts
+msgid "ブランチを削除できませんでした"
+msgstr "ブランチを削除できませんでした"
+
 #: src/features/settings/SettingsModal.tsx
 msgid "設定を閉じる"
 msgstr "設定を閉じる"
@@ -96,6 +124,10 @@ msgstr "設定を閉じる"
 #: src/features/sessions/pane.ts
 msgid "pane が起動しないまま issue は close されました。"
 msgstr "pane が起動しないまま issue は close されました。"
+
+#: src/features/merge/merge.ts
+msgid "CI が失敗しています"
+msgstr "CI が失敗しています"
 
 #: src/features/diff/diff.ts
 msgid "削除"
@@ -109,6 +141,10 @@ msgstr "レイアウト: {current}(クリックで{next})"
 msgid "(plan が見つかりません — まだ提案されていないか、画面外へスクロールアウトしています)"
 msgstr "(plan が見つかりません — まだ提案されていないか、画面外へスクロールアウトしています)"
 
+#: src/features/merge/merge.ts
+msgid "このダッシュボードは merge を実行できません"
+msgstr "このダッシュボードは merge を実行できません"
+
 #: src/features/settings/SettingsModal.tsx
 msgid "言語"
 msgstr "言語"
@@ -116,6 +152,10 @@ msgstr "言語"
 #: src/app/App.tsx
 msgid "アクティブなセッションがありません"
 msgstr "アクティブなセッションがありません"
+
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "ブランチを削除"
+msgstr "ブランチを削除"
 
 #: src/features/drawer/Drawer.tsx
 #: src/features/sessions/SessionSection.tsx
@@ -125,6 +165,14 @@ msgstr "変更を表示"
 #: src/features/drawer/Drawer.tsx
 msgid "plan — 提案中のプラン"
 msgstr "plan — 提案中のプラン"
+
+#: src/features/merge/merge.ts
+msgid "GitHub がマージを拒否しました: {detail}"
+msgstr "GitHub がマージを拒否しました: {detail}"
+
+#: src/features/merge/merge.ts
+msgid "このサーバーは merge に対応していません(ダッシュボードを再起動してください)"
+msgstr "このサーバーは merge に対応していません(ダッシュボードを再起動してください)"
 
 #: src/features/filter/FilterDropdown.tsx
 msgid "該当なし"
@@ -138,17 +186,37 @@ msgstr "この runtime pane は現在読み取り対象にできません。"
 msgid "応答上限(1 MiB)で省略"
 msgstr "応答上限(1 MiB)で省略"
 
+#: src/features/merge/merge.ts
+msgid "ブランチを削除できませんでした: {detail}"
+msgstr "ブランチを削除できませんでした: {detail}"
+
+#: src/features/merge/merge.ts
+msgid "ブランチの削除に失敗しました (HTTP {status})"
+msgstr "ブランチの削除に失敗しました (HTTP {status})"
+
 #: src/features/diff/DiffFileRow.tsx
 msgid "{name} — {lines} 行 — 展開"
 msgstr "{name} — {lines} 行 — 展開"
+
+#: src/features/merge/merge.ts
+msgid "merge commit — マージコミットを作る"
+msgstr "merge commit — マージコミットを作る"
 
 #: src/features/drawer/Drawer.tsx
 msgid "状態"
 msgstr "状態"
 
+#: src/features/merge/MergeSplitButton.tsx
+msgid "#{pr} をマージ — {reason}"
+msgstr "#{pr} をマージ — {reason}"
+
 #: src/features/sessions/pane.ts
 msgid "未開始 — open な blocker があるため待機中です。"
 msgstr "未開始 — open な blocker があるため待機中です。"
+
+#: src/features/merge/merge.ts
+msgid "マージに失敗しました (HTTP {status})"
+msgstr "マージに失敗しました (HTTP {status})"
 
 #: src/features/drawer/Drawer.tsx
 msgid "提案中のプラン"
@@ -162,9 +230,21 @@ msgstr "agent 実行状態で絞り込み"
 msgid "コメント {count} 件(inline レビューコメントを含む)"
 msgstr "コメント {count} 件(inline レビューコメントを含む)"
 
+#: src/features/merge/merge.ts
+msgid "マージ対象の PR がありません"
+msgstr "マージ対象の PR がありません"
+
 #: src/app/App.tsx
 msgid "ページを再読み込み"
 msgstr "ページを再読み込み"
+
+#: src/features/merge/merge.ts
+msgid "表示中の差分はこの PR のものではありません。PR のページで確認してください"
+msgstr "表示中の差分はこの PR のものではありません。PR のページで確認してください"
+
+#: src/features/merge/merge.ts
+msgid "マージできません"
+msgstr "マージできません"
 
 #: src/features/diff/diff.ts
 msgid "diff を取得できません — worktree の記録が見つかりません(cleanup 済みか、サーバーが /api/diff 未対応の可能性)"
@@ -173,6 +253,10 @@ msgstr "diff を取得できません — worktree の記録が見つかりま�
 #: src/features/diff/DiffFileList.tsx
 msgid "すべて展開"
 msgstr "すべて展開"
+
+#: src/features/merge/merge.ts
+msgid "GitHub がこの PR のマージを保留中です"
+msgstr "GitHub がこの PR のマージを保留中です"
 
 #: src/features/settings/SettingsModal.tsx
 msgid "ライトテーマ"
@@ -186,6 +270,10 @@ msgstr "未開始 — この子 issue の pane はまだ起動していません
 #: src/features/diff/DiffOmittedNote.tsx
 msgid "{0, plural, other {# ファイルは patch に含まれていません}}"
 msgstr "{0, plural, other {# ファイルは patch に含まれていません}}"
+
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "{branch} を削除"
+msgstr "{branch} を削除"
 
 #: src/features/diff/DiffFileList.tsx
 #: src/features/diff/DiffFileRow.tsx
@@ -216,6 +304,14 @@ msgstr "変更を表示 {target} {stat}"
 msgid "diff テーマ"
 msgstr "diff テーマ"
 
+#: src/features/merge/merge.ts
+msgid "rebase — base に付け替える"
+msgstr "rebase — base に付け替える"
+
+#: src/features/merge/merge.ts
+msgid "レビューで変更が要求されています"
+msgstr "レビューで変更が要求されています"
+
 #: src/features/filter/FilterBar.tsx
 msgid "runtime backend で絞り込み"
 msgstr "runtime backend で絞り込み"
@@ -224,9 +320,21 @@ msgstr "runtime backend で絞り込み"
 msgid "{backend} backend はペイン内容の読み取りに対応していません。"
 msgstr "{backend} backend はペイン内容の読み取りに対応していません。"
 
+#: src/features/merge/useMergeFlow.ts
+msgid "GitHub がマージを受け付けました(merge queue 待ち)。まだマージされていません"
+msgstr "GitHub がマージを受け付けました(merge queue 待ち)。まだマージされていません"
+
+#: src/features/merge/merge.ts
+msgid "マージできません: {detail}"
+msgstr "マージできません: {detail}"
+
 #: src/features/diff/DiffFileRow.tsx
 msgid "{name} — 確認済み"
 msgstr "{name} — 確認済み"
+
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "削除中…"
+msgstr "削除中…"
 
 #: src/features/settings/SettingsModal.tsx
 msgid "English"
@@ -240,17 +348,53 @@ msgstr "適用中のフィルタ"
 msgid "閉じる"
 msgstr "閉じる"
 
+#: src/features/merge/merge.ts
+msgid "GitHub に接続できませんでした"
+msgstr "GitHub に接続できませんでした"
+
 #: src/features/diff/diff.ts
 msgid "diff の取得に失敗しました (HTTP {status})"
 msgstr "diff の取得に失敗しました (HTTP {status})"
+
+#: src/features/merge/merge.ts
+msgid "競合の有無を GitHub 側で確認できていません"
+msgstr "競合の有無を GitHub 側で確認できていません"
+
+#: src/features/merge/merge.ts
+msgid "マージがタイムアウトしました。GitHub 側の状態を確認してください"
+msgstr "マージがタイムアウトしました。GitHub 側の状態を確認してください"
+
+#: src/features/merge/merge.ts
+msgid "表示中の差分より PR が進んでいます。再取得してから実行してください"
+msgstr "表示中の差分より PR が進んでいます。再取得してから実行してください"
+
+#: src/features/merge/merge.ts
+msgid "表示中の差分に未コミットの変更が含まれています。commit して push してから実行してください"
+msgstr "表示中の差分に未コミットの変更が含まれています。commit して push してから実行してください"
+
+#: src/features/merge/merge.ts
+msgid "GitHub の情報を取得できていません"
+msgstr "GitHub の情報を取得できていません"
 
 #: src/features/diff/diff.ts
 msgid "バイナリのため patch なし"
 msgstr "バイナリのため patch なし"
 
+#: src/features/merge/DeleteBranchButton.tsx
+msgid "ブランチを削除できませんでした(接続エラー)"
+msgstr "ブランチを削除できませんでした(接続エラー)"
+
 #: src/app/App.tsx
 msgid "フィルタに一致するペインがありません"
 msgstr "フィルタに一致するペインがありません"
+
+#: src/features/merge/merge.ts
+msgid "マージを送信しました。GitHub への反映を待っています"
+msgstr "マージを送信しました。GitHub への反映を待っています"
+
+#: src/features/merge/merge.ts
+msgid "squash — 1 コミットに潰す"
+msgstr "squash — 1 コミットに潰す"
 
 #: src/shared/format.ts
 msgid "runtime の一部が利用できません — ペイン生死・peek / plan は劣化表示"
@@ -274,9 +418,14 @@ msgstr "再取得"
 msgid "レビュー対象が patch に揃っていません — patch は不完全です"
 msgstr "レビュー対象が patch に揃っていません — patch は不完全です"
 
+#: src/features/merge/merge.ts
 #: src/features/sessions/badges.tsx
 msgid "base branch と競合しています"
 msgstr "base branch と競合しています"
+
+#: src/features/merge/merge.ts
+msgid "表示中の差分を取得できていません。再取得してから実行してください"
+msgstr "表示中の差分を取得できていません。再取得してから実行してください"
 
 #: src/app/App.tsx
 msgid "filter — 自由語 or backend:herdr state:open run:plan agent:claude wave:1 ci:fail"
@@ -301,6 +450,14 @@ msgstr "絞り込み…"
 #: src/features/drawer/Drawer.tsx
 msgid "ペイン詳細"
 msgstr "ペイン詳細"
+
+#: src/features/merge/merge.ts
+msgid "CI がまだ完了していません"
+msgstr "CI がまだ完了していません"
+
+#: src/features/merge/merge.ts
+msgid "GitHub の API 制限に達しています。しばらく待って再試行してください"
+msgstr "GitHub の API 制限に達しています。しばらく待って再試行してください"
 
 #: src/features/diff/diff.ts
 msgid "変更"
@@ -334,6 +491,10 @@ msgstr "(リポジトリ直下)"
 msgid "取得中…"
 msgstr "取得中…"
 
+#: src/features/merge/merge.ts
+msgid "--no-token で起動したダッシュボードではマージできません"
+msgstr "--no-token で起動したダッシュボードではマージできません"
+
 #: src/features/filter/FilterBar.tsx
 msgid "issue / runtime 状態で絞り込み"
 msgstr "issue / runtime 状態で絞り込み"
@@ -341,6 +502,18 @@ msgstr "issue / runtime 状態で絞り込み"
 #: src/features/settings/SettingsModal.tsx
 msgid "ライト"
 msgstr "ライト"
+
+#: src/features/merge/useMergeFlow.ts
+msgid "マージの結果を確認できませんでした。GitHub 側の状態を確認してください"
+msgstr "マージの結果を確認できませんでした。GitHub 側の状態を確認してください"
+
+#: src/features/merge/merge.ts
+msgid "レビュー未承認です"
+msgstr "レビュー未承認です"
+
+#: src/features/merge/merge.ts
+msgid "マージする権限がありません(token を確認してください)"
+msgstr "マージする権限がありません(token を確認してください)"
 
 #: src/shared/format.ts
 msgid "GitHub データ取得が不安定 — issue / PR / CI 列は劣化表示"
@@ -362,13 +535,25 @@ msgstr "変更ファイル"
 msgid "{key} は snapshot から消えたため詳細を閉じました"
 msgstr "{key} は snapshot から消えたため詳細を閉じました"
 
+#: src/features/merge/merge.ts
+msgid "マージに失敗しました(接続エラー)"
+msgstr "マージに失敗しました(接続エラー)"
+
 #: src/features/filter/FilterBar.tsx
 msgid "runtime ペイン生死で絞り込み"
 msgstr "runtime ペイン生死で絞り込み"
 
+#: src/features/merge/merge.ts
+msgid "この URL からはマージできません(表示された 127.0.0.1 の URL で開き直してください)"
+msgstr "この URL からはマージできません(表示された 127.0.0.1 の URL で開き直してください)"
+
 #: src/transport/usePlan.ts
 msgid "(plan を取得できません — ペインは終了しています)"
 msgstr "(plan を取得できません — ペインは終了しています)"
+
+#: src/features/merge/merge.ts
+msgid "draft PR はマージできません(Ready for review にしてください)"
+msgstr "draft PR はマージできません(Ready for review にしてください)"
 
 #: src/features/settings/SettingsModal.tsx
 msgid "テーマ"
@@ -385,6 +570,10 @@ msgstr "{lines} 行"
 #: src/features/diff/diff.ts
 msgid "移動"
 msgstr "移動"
+
+#: src/features/merge/merge.ts
+msgid "マージに失敗しました (HTTP {status}): {detail}"
+msgstr "マージに失敗しました (HTTP {status}): {detail}"
 
 #: src/features/sessions/Hud.tsx
 msgid "集計"
@@ -423,6 +612,10 @@ msgstr "diff を取得できません — worktree の記録が見つかりま�
 msgid "{name} — 折りたたむ"
 msgstr "{name} — 折りたたむ"
 
+#: src/features/merge/merge.ts
+msgid "ブランチの削除に失敗しました (HTTP {status}): {detail}"
+msgstr "ブランチの削除に失敗しました (HTTP {status}): {detail}"
+
 #: src/features/filter/FilterBar.tsx
 msgid "CI 結果で絞り込み"
 msgstr "CI 結果で絞り込み"
@@ -430,6 +623,10 @@ msgstr "CI 結果で絞り込み"
 #: src/features/settings/SettingsModal.tsx
 msgid "日本語"
 msgstr "日本語"
+
+#: src/features/merge/merge.ts
+msgid "マージ対象を特定できません(行の記録が見つかりません)"
+msgstr "マージ対象を特定できません(行の記録が見つかりません)"
 
 #: src/features/settings/SettingsModal.tsx
 msgid "システム"
@@ -455,6 +652,14 @@ msgstr "peek — 直近の出力"
 msgid "サーバーが diff を安全に生成できませんでした"
 msgstr "サーバーが diff を安全に生成できませんでした"
 
+#: src/features/merge/merge.ts
+msgid "この PR は close 済みです"
+msgstr "この PR は close 済みです"
+
 #: src/features/diff/diff.ts
 msgid "収集上限(10 MiB)で省略"
 msgstr "収集上限(10 MiB)で省略"
+
+#: src/features/merge/merge.ts
+msgid "この PR は既にマージ済みです"
+msgstr "この PR は既にマージ済みです"

@@ -12,6 +12,8 @@ export type DiffView = "full" | "compact";
 /* 差分の並べ方。auto = 幅で split / stack を選ぶ、split = 左右 2 面、
  * stack = 削除と追加を縦積み */
 export type DiffLayout = "auto" | "split" | "stack";
+/* PR のマージ方式。gh pr merge の --squash / --merge / --rebase に 1:1 で対応する。 */
+export type MergeMethod = "squash" | "merge" | "rebase";
 
 const THEME_KEY = "fanout.theme";
 const LOCALE_KEY = "fanout.locale";
@@ -20,6 +22,7 @@ const DIFF_DARK_KEY = "fanout.diffTheme.dark";
 const DIFF_VIEW_KEY = "fanout.diffView";
 const DIFF_LAYOUT_KEY = "fanout.diffLayout";
 const DIFF_HIDE_VIEWED_KEY = "fanout.diffHideViewed";
+const MERGE_METHOD_KEY = "fanout.mergeMethod";
 
 /* 書き込み失敗(private mode / quota)時の退避は shared/localStore が持つ。退避が
  * 無いと snapshot が storage を読み直すたびに旧値へ戻り、設定操作が実質 no-op に
@@ -75,6 +78,13 @@ function currentDiffView(): DiffView {
  * 読み進めたあとの操作で、開いた直後に file が消えている状態は事故に見える。 */
 function currentDiffHideViewed(): boolean {
   return readLocal(DIFF_HIDE_VIEWED_KEY) === "hide";
+}
+
+/* マージ方式。既定は squash — fanout の子ブランチは 1 機能 1 ブランチで、
+ * 途中のコミットを親の履歴に残す理由がない。キー無し = squash。 */
+function currentMergeMethod(): MergeMethod {
+  const v = readLocal(MERGE_METHOD_KEY);
+  return v === "merge" || v === "rebase" ? v : "squash";
 }
 
 /* 設定は設定モーダルと diff オーバーレイから読まれるため module-level store で
@@ -167,6 +177,11 @@ function setDiffHideViewed(hide: boolean) {
   emit();
 }
 
+function setMergeMethod(method: MergeMethod) {
+  writeLocal(MERGE_METHOD_KEY, method === "squash" ? null : method);
+  emit();
+}
+
 /* App が張る常駐購読。値は使わない — matchMedia listener をアプリの生存期間ぶん
  * 保つためだけに購読する。解決済みテーマを snapshot にしてあるので、OS の配色が
  * 変わったときだけ App が再レンダーする。 */
@@ -234,6 +249,19 @@ export function useDiffHideViewed(): {
   return {
     hideViewed: useSyncExternalStore(subscribe, currentDiffHideViewed),
     setHideViewed: setDiffHideViewed,
+  };
+}
+
+/* マージ方式。マージボタンから直接触るので設定モーダルには出さず、
+ * 値だけこの store に載せる(diff の表示モードと同じ扱い)。ドロワーと diff
+ * ツールバーの 2 か所に同じボタンが出るため、共有はこの store が担う。 */
+export function useMergeOptions(): {
+  method: MergeMethod;
+  setMethod: (method: MergeMethod) => void;
+} {
+  return {
+    method: useSyncExternalStore(subscribe, currentMergeMethod),
+    setMethod: setMergeMethod,
   };
 }
 

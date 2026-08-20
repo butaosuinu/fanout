@@ -1,0 +1,122 @@
+/* ============================================================ マージボタン
+   本体 + caret の分割ピル。Drawer 上部バーと diff ツールバーの両方に出る。
+
+   色は藍の輪郭ボタン。危険色(--err)にはしない — マージは fanout の到達点で、
+   全 Session の行に赤が並ぶと狼少年になる。--err はメニュー内の警告行だけに使う。
+   .btn-primary(塗り藍の「変更を表示」)とも見た目が衝突しないので、Drawer 上部
+   バーでの主従が保てる。 */
+.merge-split{ position:relative; flex:none; display:inline-flex; }
+.merge-go,.merge-caret{
+  font-family:var(--f-body); font-size:12px; font-weight:500;
+  color:var(--ai);
+  background:transparent;
+  border:1px solid var(--ai);
+  cursor:pointer;
+  transition:background-color .25s ease, color .25s ease, border-color .25s ease;
+}
+.merge-go{ border-radius:999px 0 0 999px; padding:5px 14px; }
+.merge-caret{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:26px;
+  border-radius:0 999px 999px 0; border-left-width:0;
+}
+.merge-go:hover,.merge-caret:hover{ background:var(--ai); color:var(--washi); }
+/* disabled 属性ではなく aria-disabled: フォーカスを受けられないと
+   .tip:focus-visible::after が出ず、キーボードから無効の理由に届かない。 */
+.merge-split [aria-disabled="true"]{
+  color:var(--ink-40); border-color:var(--suna); cursor:default;
+}
+.merge-split [aria-disabled="true"]:hover{ background:transparent; color:var(--ink-40); }
+
+/* diff ツールバーでは右クラスタの先頭に置く。auto margin が 2 つあると余白を
+   等分して真ん中に来るので、隣の #diff-reload の auto を打ち消す。詳細度
+   (0,3,0) > (0,1,0) なのでソース順に依存しない。ボタンが出ない行では
+   .diff-reload の auto がそのまま効く。 */
+.diff-head .merge-split{ margin-left:auto; }
+.diff-head .merge-split + .diff-reload{ margin-left:0; }
+
+/* メニュー。器は .fd-pop の写しで、fdIn keyframe は filter.css 定義のものを
+   共有する(グローバルなので有効。意図的な共有)。 */
+.merge-menu{
+  position:absolute; top:calc(100% + 6px); right:0; z-index:20;
+  outline:none;
+  min-width:236px;
+  background:var(--paper);
+  border:1px solid var(--suna); border-radius:12px;
+  box-shadow:var(--shadow);
+  padding:6px;
+  transform-origin:top right;
+  animation:fdIn .22s var(--ease-fan) both;
+}
+.merge-opt{
+  display:flex; align-items:center; gap:8px;
+  width:100%; text-align:left;
+  font-family:var(--f-code); font-size:12px;
+  color:var(--ink-78);
+  background:transparent;
+  border:none; border-radius:8px;
+  padding:5px 10px;
+  cursor:pointer;
+  transition:background-color .15s ease, color .15s ease;
+}
+.merge-opt:hover{ background:var(--byakugun-bg); color:var(--sumi); }
+/* :focus(-visible でなく)で塗る: クリック開時のプログラムフォーカスでも
+   現在位置が見えるように(.fd-opt と同じ理由)。 */
+.merge-opt:focus{ outline:none; background:var(--byakugun-bg); color:var(--sumi); }
+.merge-opt[aria-checked="true"]{ color:var(--sumi); font-weight:500; }
+.merge-mark{ flex:none; width:12px; height:12px; color:var(--asagi); }
+.merge-menu-sep{ height:1px; margin:6px 2px; background:var(--suna-soft); }
+
+/* 失敗の表示。押した本人にだけ、押したボタンの隣に出る。 */
+.merge-error{
+  position:absolute; top:calc(100% + 6px); right:0; z-index:19;
+  max-width:min(360px, 70vw);
+  margin:0; padding:7px 11px;
+  background:var(--paper);
+  border:1px solid var(--err); border-radius:10px;
+  box-shadow:var(--shadow);
+  font-family:var(--f-body); font-size:11.5px; line-height:1.75;
+  color:var(--err);
+  overflow-wrap:anywhere;
+}
+
+/* マージは通ったが後片付けが残った、のような非致命の報告。 */
+.merge-note{
+  position:absolute; top:calc(100% + 6px); right:0; z-index:19;
+  max-width:min(360px, 70vw);
+  margin:0; padding:7px 11px;
+  background:var(--paper);
+  border:1px solid var(--warn); border-radius:10px;
+  box-shadow:var(--shadow);
+  font-family:var(--f-body); font-size:11.5px; line-height:1.75;
+  color:var(--warn);
+  overflow-wrap:anywhere;
+}
+
+/* マージ後の後片付け。PR 行の末尾に控えめに出す — 主導線はマージであって、
+   これはその後始末なので、マージボタンと同じ重さにはしない。 */
+.d-branch-delete{ display:inline-flex; align-items:center; gap:6px; }
+.btn-quiet{
+  font-family:var(--f-body); font-size:11px;
+  color:var(--ink-60);
+  background:transparent;
+  border:1px solid var(--suna); border-radius:999px;
+  padding:2px 10px;
+  cursor:pointer;
+  transition:border-color .25s ease, color .25s ease;
+}
+.btn-quiet:hover{ border-color:var(--err); color:var(--err); }
+.d-branch-delete-error{
+  font-family:var(--f-body); font-size:11px; color:var(--err);
+  overflow-wrap:anywhere;
+}
+
+/* 警告行。押せるが押す前に知っておくべき状態(CI 失敗・レビュー未承認・
+   競合不明)だけがここに出る。 */
+.merge-warn{
+  margin:0 0 6px; padding:6px 10px;
+  list-style:none;
+  border-bottom:1px solid var(--suna-soft);
+  font-family:var(--f-body); font-size:11.5px; line-height:1.75;
+  color:var(--err);
+}

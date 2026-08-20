@@ -13,10 +13,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/prmerge"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/browser"
+	"github.com/butaosuinu/fanout/internal/infra/ghissue"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
@@ -65,7 +67,7 @@ func isDashboardRequest(args []string) bool {
 	return len(args) > 0 && args[0] == "dashboard"
 }
 
-// cmdDashboard starts the read-only localhost web dashboard. It accepts --web
+// cmdDashboard starts the localhost web dashboard. It accepts --web
 // (the only mode today; a no-op kept for forward-compat with a future --tui),
 // --port, --open, --no-token, and --no-keybind.
 //
@@ -141,6 +143,8 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 		ListLive:        runtimeListLiveForProject(root, false),
 		OwnsManagedPane: ownsManagedPane,
 		ReadManagedPane: readManagedPane,
+		MergePR:         dashboardMergePort(root),
+		DeleteBranch:    prmerge.Service{GH: ghissue.Runner{Cwd: root}}.DeleteBranch,
 	})
 	if err != nil {
 		lg.Err("dashboard: bind 127.0.0.1: %v", err)
@@ -174,7 +178,7 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 	waitDashboardHealthy(srv.HealthURL())
 	releaseStartup()
 
-	lg.Ok("dashboard (read-only): %s", url)
+	lg.Ok("dashboard: %s", url)
 	lg.Info("press Ctrl-C to stop")
 	if flags.open {
 		openBrowserBestEffort(url, lg)
@@ -443,6 +447,14 @@ func randomToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// dashboardMergePort grants the dashboard its single mutation capability.
+// dashboard.New has no default for this field, so a server assembled without it
+// answers POST /api/pr/merge with 503 — a silent failure with no other symptom.
+// Keeping the grant in a named function lets a test pin that cmd still makes it.
+func dashboardMergePort(root string) func(context.Context, prmerge.Request) (prmerge.Result, error) {
+	return prmerge.Service{GH: ghissue.Runner{Cwd: root}}.Merge
+}
+
 func noKeybindOverride(noKeybind bool) *bool {
 	if noKeybind {
 		v := false
@@ -453,16 +465,21 @@ func noKeybindOverride(noKeybind bool) *bool {
 
 const dashboardUsage = `Usage: fanout dashboard [--web] [--port N] [--open] [--no-token] [--no-keybind]
 
-Start a read-only web dashboard that visualizes fanout Sessions (panes grouped
+Start a localhost web dashboard that visualizes fanout Sessions (panes grouped
 by parent issue) live: pane liveness, issue state, and PR merge status. The
-server binds 127.0.0.1 only, serves GET-only endpoints, and never mutates repo
-or GitHub state.
+server binds 127.0.0.1 only and reads through GET-only endpoints. Its one
+mutation is the merge button: it merges a pull request on GitHub and can delete
+that PR's remote branch. It never changes your working tree, local branches,
+worktrees, or panes.
 
 Options:
   --web           Web dashboard mode (default; reserved for a future --tui).
   --port N        TCP port to bind on 127.0.0.1. Default 0 (OS-assigned).
   --open          Open the dashboard URL in the default browser.
   --no-token      Disable the access token (loopback-only, single-user laptops).
+                  The merge button is refused while it is off: the loopback port
+                  is reachable by every local process, and merging is the one
+                  thing this server can change outside your machine.
                   By default a random token gates /api/* and is embedded in the
                   printed URL.
   --no-keybind    Do not register the tmux 'F12' / 'prefix + D' / 'prefix + M'

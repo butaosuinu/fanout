@@ -89,6 +89,9 @@ var invariantPatterns = []struct {
 }{
 	{Name: "requireToken", Re: regexp.MustCompile(`requireToken`), DocLiteral: "requireToken"},
 	{Name: "127.0.0.1", Re: regexp.MustCompile(`127\.0\.0\.1`), DocLiteral: "127.0.0.1"},
+	{Name: "postOnly", Re: regexp.MustCompile(`postOnly`), DocLiteral: "postOnly"},
+	{Name: "sameOriginOnly", Re: regexp.MustCompile(`sameOriginOnly`), DocLiteral: "sameOriginOnly"},
+	{Name: "match-head-commit", Re: regexp.MustCompile(`match-head-commit`), DocLiteral: "--match-head-commit"},
 	{Name: "__tui-new-pane-popup", Re: regexp.MustCompile(`__tui-new-pane-popup`), DocLiteral: "__tui-new-pane-popup"},
 	{Name: "__tui-help-popup", Re: regexp.MustCompile(`__tui-help-popup`), DocLiteral: "__tui-help-popup"},
 	{Name: "__codex-plan-tui", Re: regexp.MustCompile(`__codex-plan-tui`), DocLiteral: "__codex-plan-tui"},

@@ -211,9 +211,9 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
 - `internal/app` orchestrates use cases on top of `core` and `infra`:
   `panelaunch`, `lifecycle`, `watch` (the label-watcher cycle, pure at the
   package boundary via `watch.IO`), `agentprocess` (matching a saved launch's
-  argv against the live agent process), and `briefing` (the prompt text
-  injected
-  into agents) are class H; `sessionview` (the read-only `Snapshot`
+  argv against the live agent process), `briefing` (the prompt text injected
+  into agents), and `prmerge` (target selection and preflight behind the
+  dashboard's merge button) are class H; `sessionview` (the read-only `Snapshot`
   aggregator shared by the web dashboard and a future TUI), `panelayout`,
   `run`, `statusreport`, `peermsg`, and `cliflags` (flag validation that
   decides main's lifecycle branches) are class M.
@@ -231,14 +231,16 @@ and the PR-review-weight classes (H/M/A) live in `docs/architecture.ja.md`.
   `herdrrun` are class H;
   `ghissue`
   (GitHub reads and mutations: label swaps, dashboard
-  comments), `gitstat`, `tmuxrun` (direct tmux operations), `tmuxbackend` (the
+  comments, PR merges), `gitstat`, `tmuxrun` (direct tmux operations), `tmuxbackend` (the
   adapter from the backend contract to `tmuxrun`), `msgstore`, `notify`, `runtime` (git root + tmux target resolution), `displayname`, `codexapp`,
   and `atomicfs` (the shared write path for state.json and the tokened
   dashboard.json) and `gitroot` (project/state-root resolution input) are class M; `log`,
   `tty`, `execx`, `browser`, and `backendtest` (the in-process fake of the
   core backend contract; test-only, never linked into the binary) are class A.
 - `internal/ui` holds the TUI (`tui`) and the web dashboard (`dashboard`):
-  `server.go` (GET-only mux, token middleware) and `runfile.go` (the tokened
+  `server.go` (the route mux — GET-only reads plus the single POST carve-out —
+  and the token/same-origin middleware), `merge.go` (the mutation handler: PR
+  selection, preflight, and gh failure mapping), `runfile.go` (the tokened
   `.fanout/dashboard.json` reuse/trust gate) and `peek.go` / `plan.go` (the capture-pane validation chain) are class
   H; `poller.go`, `sse.go`, and `embed.go` are class M. In `tui`, `actions.go` (lifecycle close/merge/
   cleanup wiring and confirmation flow) is class H, rendering/formatting is

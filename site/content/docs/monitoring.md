@@ -1,7 +1,7 @@
 ---
 title: Monitoring
 linkTitle: Monitoring
-description: "Three windows for surveying every fanned-out pane at once and spotting where it is stuck: the persistent TUI console, --status JSON / table, and the read-only web dashboard."
+description: "Three windows for surveying every fanned-out pane at once and spotting where it is stuck: the persistent TUI console, --status JSON / table, and the web dashboard."
 weight: 40
 kanji: 見
 yomi: monitoring
@@ -9,7 +9,7 @@ yomi: monitoring
 
 Fan out five child issues and tmux fills with five panes, each running a different agent in a different worktree. The next thing you want to know is which pane reached a PR, and where one is stuck.
 
-fanout answers that through three windows: the **persistent TUI console** if you want to watch from your terminal, `--status` **JSON** if you want to feed automation, and the read-only **web dashboard** if you want to share with a team or a browser. `--status` and the web dashboard are read-only — they only read `.fanout/state.json`, the selected runtime, and GitHub — but the TUI can also merge, close, and clean up verified rows through the selected runtime (the same operations as `--merge` / `--close` / `--cleanup`).
+fanout answers that through three windows: the **persistent TUI console** if you want to watch from your terminal, `--status` **JSON** if you want to feed automation, and the **web dashboard** if you want to share with a team or a browser. `--status` is read-only — it only reads `.fanout/state.json`, the selected runtime, and GitHub. The TUI can also merge, close, and clean up verified rows through the selected runtime (the same operations as `--merge` / `--close` / `--cleanup`), and the web dashboard reads everything but can merge a pull request and delete its remote branch.
 
 ## Pane border labels
 
@@ -113,13 +113,13 @@ See the [CLI Reference]({{< relref "/docs/cli" >}}) for every JSON field and exi
 
 ## Web dashboard (fanout dashboard --web)
 
-When you want to share every Session with a team or in a browser, `fanout dashboard --web` starts a read-only web dashboard.
+When you want to share every Session with a team or in a browser, `fanout dashboard --web` starts a web dashboard.
 
 ```bash
 fanout dashboard --web [--port N] [--open] [--no-token] [--no-keybind]
 ```
 
-The server binds only to `127.0.0.1` and exposes GET-only endpoints, generating a random token each start and embedding it in the URL (drop it with `--no-token` on a single-user machine). The embedded SPA shows the live Session list with a filter, a detail drawer, and a live peek of recent output.
+The server binds only to `127.0.0.1`, generating a random token each start and embedding it in the URL (drop it with `--no-token` on a single-user machine). Every endpoint that reads is GET-only. The two exceptions are below: merging a pull request, and deleting its remote branch afterwards. The embedded SPA shows the live Session list with a filter, a detail drawer, and a live peek of recent output.
 The dashboard also shows the PR link and CI status for a Prompt Session when a PR exists for its recorded branch.
 
 The `pr` column carries the review state of that row's PR, using the same vocabulary as the TUI: `merged`, `closed`, `draft`, `approved`, `changes-requested`, `review-required`, `open`. Next to it, a `conflict` tag marks a PR that conflicts with its base branch, and a comment count covers conversation comments plus inline review comments. The detail drawer repeats all three for every PR on the row, not just the primary one. A conflict tag only appears when GitHub reports one: merged and closed PRs never carry mergeability, and neither does an open PR in the seconds after a base push while GitHub recomputes.
@@ -128,7 +128,25 @@ Anything the column shows can be typed back into the filter. `pr:` takes both th
 
 `review:` is the separate axis, because review state and lifecycle state are different questions: `pr:open` asks where the PR sits in its lifecycle, `review:approved` asks whether it passed review — and an approved PR still matches `review:approved` after it merges, where the pill has collapsed to `merged`. `review:` takes `approved`, `changes-requested`, `review-required`, and `none`. Both keys are dashboard filters; the TUI has its own filter grammar and does not accept `review:`.
 
-Each Session row names its runtime backend and pane identity, with a runtime state of `live` / `stale` / `unknown` / `unsupported` / `-`, and the filter accepts `backend:tmux` / `backend:herdr`. For rows on the [herdr backend]({{< relref "/docs/herdr-backend" >}}), live peek returns content only when the saved row still matches a pane in fanout's owned session. Foreign and stale rows return 404, and the dashboard remains GET-only.
+Each Session row names its runtime backend and pane identity, with a runtime state of `live` / `stale` / `unknown` / `unsupported` / `-`, and the filter accepts `backend:tmux` / `backend:herdr`. For rows on the [herdr backend]({{< relref "/docs/herdr-backend" >}}), live peek returns content only when the saved row still matches a pane in fanout's owned session. Foreign and stale rows return 404.
+
+### Merging a pull request
+
+A Session whose row carries a pull request gets a **Merge** button, in the detail drawer header and in the diff viewer's toolbar. Pressing it merges that PR on GitHub. Nothing local changes: the worktree, its branch, and the recorded state stay exactly as they were, and `--close` / `--cleanup` still own folding the pane away.
+
+The caret opens the strategy menu — squash, merge commit, or rebase. Picking one merges with it and remembers it as the default for next time. The choice is shared between the drawer and the diff viewer.
+
+Once the PR is merged, a **Delete branch** button appears next to it in the detail drawer, the way GitHub's own does. It removes the branch on GitHub only — your worktree and its local branch stay put, and `--cleanup` still owns those. It is skipped for a fork's branch, and for a branch that moved after the merge. That check is not atomic — GitHub has no conditional ref delete — so it catches a push that already landed, not one that lands between the check and the delete.
+
+The button greys out, with the reason, when the merge cannot work: no pull request on the row, already merged, closed, still a draft, or conflicting with its base branch. A failing check or an unfinished review does not disable it — whether those block a merge is your branch protection's call, so the button stays live and shows a warning in the menu instead. If GitHub declines, the error says so and the PR is untouched.
+
+The dashboard sends the PR number and the head commit it drew, and the server passes that commit to GitHub as `--match-head-commit`. A PR that received a push between the page rendering and your click is refused rather than merged blind.
+
+While the diff viewer is open it pins the pull request it drew — number, head, and base — and requires the commit the patch came from to be the pull request's head. A push that lands while you are reading, a retarget that never moves the head, and a worktree that lags the remote all block the merge until you reopen the diff.
+
+On a base branch that requires a merge queue, GitHub accepts the request without merging. The button says so and goes inactive: GitHub has the request — armed as an auto-merge if the checks are unfinished, sitting in the queue if they are not — and sending it twice would be sending it twice. Nothing is reported as merged, and no branch is deleted, until GitHub confirms the merge.
+
+Because the button exists, the dashboard URL now carries merge authority, not just read access. The token in it is what stands between a shared URL and someone else merging your work — which is why `--no-token` turns the merge button off. Reads stay open on a single-user machine, but the loopback port is reachable by every local process, so merging is not.
 
 ### Diff viewer
 

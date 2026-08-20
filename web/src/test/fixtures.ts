@@ -2,10 +2,29 @@ import type {
   DiffFileEntry,
   DiffResponse,
   PaneView,
+  PRRef,
   Rollup,
   Session,
   Snapshot,
 } from "../transport/types";
+
+/* マージ可能な OPEN PR。makePane の既定は prs: null のまま — PR を既定にすると
+ * PR 列やドロワーの並び順を固定している既存テストが一斉に動く。PR が要るテスト
+ * だけが明示的に付ける。 */
+export function makePr(over: Partial<PRRef> = {}): PRRef {
+  return {
+    number: 701,
+    state: "OPEN",
+    mergedAt: null,
+    mergeable: "MERGEABLE",
+    headSha: "0123456789abcdef0123456789abcdef01234567",
+    headRef: "fanout/fix-thing",
+    headRepo: "octo/fanout",
+    baseRepo: "octo/fanout",
+    baseRef: "main",
+    ...over,
+  };
+}
 
 export function makeRollup(over: Partial<Rollup> = {}): Rollup {
   return {
@@ -81,12 +100,19 @@ export function makeSession(
   return { parent, panes, rollup: makeRollup({ total: panes.length, ...rollup }) };
 }
 
+/* GitHub 読み取りごとに進む刻印。固定値だと「hold より後に GitHub を読んだか」を
+ * 見る判定が現実と違う挙動になる。generatedAt は据え置き — あちらは 2 秒ごとの
+ * cheap tick でも動く値で、区別できることがこの型の要点。 */
+let snapshotSeq = 0;
+
 export function makeSnapshot(sessions: Session[], over: Partial<Snapshot> = {}): Snapshot {
   const total = sessions.reduce((n, s) => n + (s.panes?.length ?? 0), 0);
+  snapshotSeq += 1;
   return {
     repo: "octo/fanout",
     projectRoot: "/tmp/repo",
     generatedAt: "2026-06-13T01:23:45Z",
+    ghRefreshedAt: new Date(Date.UTC(2026, 5, 13, 1, 23, snapshotSeq)).toISOString(),
     sessions,
     rollup: makeRollup({ total }),
     degraded: { tmux: false, github: false },
@@ -113,6 +139,8 @@ export function makeDiffResponse(over: Partial<DiffResponse> = {}): DiffResponse
     branchName: "fanout/fix-thing",
     baseBranch: "main",
     mergeBase: "0123456789abcdef0123456789abcdef01234567",
+    dirty: false,
+    basePushed: true,
     capturedAt: "2026-07-29T01:23:45Z",
     files: [makeDiffFile()],
     patch: "",
