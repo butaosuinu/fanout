@@ -100,6 +100,35 @@ load helpers
   assert_herdr_argv
 }
 
+# This scenario invokes the real herdrrun adapter from a test-only Go harness.
+# The harness keeps owned-session fencing in process, routes its CLI calls to
+# tests/bin/herdr, and materializes the fixture placeholders into a temp copy.
+# That reaches SendLaunchToken -> validatePaneRunResponse without asking the
+# black-box CLI to start a real Herdr server.
+@test "scenario-herdr-launch: fixture-backed launch verbs run in protocol order" {
+  use_fixture scenario-herdr-launch
+  export FANOUT_TEST_HERDR_LAUNCH_FIXTURE=1
+  export FANOUT_TEST_HERDR_SHIM="$TEST_BIN_DIR/herdr"
+  export GOCACHE="${FANOUT_DEV_CACHE_DIR:-/tmp/fanout-dev-cache-$(id -u)}/go-build"
+
+  run bash -c 'cd "$1" && "${GO:-go}" test ./internal/infra/herdrrun -run "^TestTier2LaunchFixture$" -count=1' \
+    _ "$REPO_ROOT"
+  assert_success
+  [ -f "$FIXTURE_DIR/herdr-pane-run.json" ]
+  [ ! -s "$FIXTURE_DIR/herdr-pane-run.json" ]
+
+  actual="$(awk '
+    /^workspace create / { print "workspace create"; next }
+    /^worktree create / { print "worktree create"; next }
+    /^pane wait-output / { print "pane wait-output"; next }
+    /^pane run / { print "pane run"; next }
+    /^pane process-info / { print "pane process-info"; next }
+    /^agent rename / { print "agent rename"; next }
+  ' "$HERDR_SHIM_LOG")"
+  expected=$'workspace create\nworktree create\npane wait-output\npane run\npane process-info\nagent rename'
+  [ "$actual" = "$expected" ]
+}
+
 # --- herdr shim contract ----------------------------------------------------
 #
 # The cases above assert an empty argv log, so they only mean something if

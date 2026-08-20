@@ -1,0 +1,6 @@
+Captured on 2026-08-19 JST from herdr 0.7.5 (protocol 17) and
+herdr 0.8.0 (protocol 19). Both versions returned the same response shapes for
+the launch commands in this directory. In particular, `pane run` exited 0 with
+zero stdout bytes; herdr-pane-run.json is intentionally present and empty.
+
+Source: docs/herdr-live-verification.ja.md, "herdr CLI の応答契約".

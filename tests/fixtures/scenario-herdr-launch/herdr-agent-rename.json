@@ -1,0 +1,19 @@
+{
+  "id": "cli:agent:rename",
+  "result": {
+    "type": "agent_info",
+    "agent": {
+      "agent": "claude",
+      "agent_status": "working",
+      "cwd": "{{WORKTREE_PATH}}",
+      "focused": false,
+      "foreground_cwd": "{{WORKTREE_PATH}}",
+      "name": "fanout-fixture-agent",
+      "pane_id": "w2:p1",
+      "revision": 2,
+      "tab_id": "w2:t1",
+      "terminal_id": "term-fixture-child",
+      "workspace_id": "w2"
+    }
+  }
+}

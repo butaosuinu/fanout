@@ -1,0 +1,16 @@
+{
+  "id": "cli:workspace:create",
+  "result": {
+    "type": "workspace_created",
+    "workspace": {
+      "workspace_id": "w1",
+      "number": 1,
+      "label": "fixture-coordinator",
+      "focused": false,
+      "pane_count": 1,
+      "tab_count": 1,
+      "active_tab_id": "w1:t1",
+      "agent_status": "unknown"
+    }
+  }
+}
