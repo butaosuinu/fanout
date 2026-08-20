@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/prmerge"
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
@@ -351,9 +352,9 @@ func bindRuntimeDashboardKey(lg *log.Logger, enabled bool, runtimeBackend backen
 	syncRuntimeDashboardKey(lg, enabled, runtimeBackend)
 }
 
-func runtimeDashboardKeyBinder(runtimeBackend backend.Backend) func(*log.Logger, bool) {
+func runtimeDashboardKeyBinder(rt *run.Runtime) func(*log.Logger, bool) {
 	return func(lg *log.Logger, enabled bool) {
-		bindRuntimeDashboardKey(lg, enabled, runtimeBackend)
+		bindRuntimeDashboardKey(lg, enabled, rt.Backend)
 	}
 }
 

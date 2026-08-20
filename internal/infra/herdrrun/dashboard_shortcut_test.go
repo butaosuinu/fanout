@@ -178,6 +178,49 @@ func TestSyncDashboardShortcutLeavesDesiredConfigAfterAmbiguousReload(t *testing
 	}
 }
 
+func TestSyncDashboardShortcutRejectsOversizedDescriptorWithoutMutation(t *testing.T) {
+	h := newOwnedHarness(t)
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if slices.Equal(args, []string{"server", "reload-config"}) {
+			return []byte(`{"status":"applied"}`), nil
+		}
+		return nil, errors.New("unexpected command")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := corebackend.DashboardShortcutOptions{
+		Enabled: true, FanoutBin: executable, Environment: []string{"PATH=/usr/bin"},
+	}
+	if err := h.session.Backend().SyncDashboardShortcut(options); err != nil {
+		t.Fatal(err)
+	}
+	configBefore, err := os.ReadFile(h.layout.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptorBefore, err := os.ReadFile(h.layout.dashboardDescriptorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Environment = []string{"PATH=" + strings.Repeat("x", maxOwnerMarkerBytes)}
+
+	err = h.session.Backend().SyncDashboardShortcut(options)
+	if err == nil || !strings.Contains(err.Error(), "descriptor exceeds") {
+		t.Fatalf("oversized dashboard descriptor error = %v", err)
+	}
+	configAfter, configErr := os.ReadFile(h.layout.configPath)
+	descriptorAfter, descriptorErr := os.ReadFile(h.layout.dashboardDescriptorPath)
+	if configErr != nil || descriptorErr != nil || !slices.Equal(configAfter, configBefore) ||
+		!slices.Equal(descriptorAfter, descriptorBefore) {
+		t.Fatalf("oversized sync mutated files: config err=%v descriptor err=%v", configErr, descriptorErr)
+	}
+	if got := countRecordedCommand(h.fake.commands, []string{"server", "reload-config"}); got != 1 {
+		t.Fatalf("reload-config calls = %d, want 1", got)
+	}
+}
+
 func newDashboardShortcutLayout(t *testing.T) (ownedLayout, binaryAdmission) {
 	t.Helper()
 	root, err := os.MkdirTemp("/tmp", "fds-") //nolint:usetesting // Unix socket paths are capped at 103 bytes.

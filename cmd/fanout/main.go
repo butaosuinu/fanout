@@ -137,7 +137,7 @@ func main() {
 	if code != exitcode.OK {
 		os.Exit(int(code))
 	}
-	os.Exit(int(run.Issues(cfg, lg, rt, commandName, runtimeDashboardKeyBinder(rt.Backend))))
+	os.Exit(int(run.Issues(cfg, lg, rt, commandName, runtimeDashboardKeyBinder(rt))))
 }
 
 func isVersionRequest(args []string) bool {

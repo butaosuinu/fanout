@@ -210,6 +210,9 @@ func writeDashboardDescriptor(layout ownedLayout, descriptor dashboardDescriptor
 	if err != nil {
 		return err
 	}
+	if len(data) > maxOwnerMarkerBytes {
+		return fmt.Errorf("herdr dashboard launcher descriptor exceeds %d bytes", maxOwnerMarkerBytes)
+	}
 	if writeErr := atomicfs.WriteFile(layout.dashboardDescriptorPath, data, 0o600); writeErr != nil {
 		return fmt.Errorf("write Herdr dashboard launcher descriptor: %w", writeErr)
 	}

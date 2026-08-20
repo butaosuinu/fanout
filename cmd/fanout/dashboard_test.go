@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/backendtest"
@@ -137,6 +138,26 @@ func TestBindRuntimeDashboardKeyUsesDashboardOnlyCapability(t *testing.T) {
 	}
 	if len(fake.options[0].Environment) == 0 {
 		t.Fatal("dashboard shortcut did not receive the host environment")
+	}
+}
+
+func TestRuntimeDashboardKeyBinderReadsPreparedBackend(t *testing.T) {
+	preview := &dashboardShortcutBinderFake{Backend: backendtest.New()}
+	owned := &dashboardShortcutBinderFake{Backend: backendtest.New()}
+	rt := &run.Runtime{Backend: preview}
+	bind := runtimeDashboardKeyBinder(rt)
+	rt.PrepareBackend = func() error {
+		rt.Backend = owned
+		return nil
+	}
+	if err := rt.PrepareLaunchBackend(); err != nil {
+		t.Fatal(err)
+	}
+
+	bind(discardLogger(), true)
+
+	if len(preview.options) != 0 || len(owned.options) != 1 || !owned.options[0].Enabled {
+		t.Fatalf("dashboard shortcut sync = preview:%+v owned:%+v", preview.options, owned.options)
 	}
 }
 

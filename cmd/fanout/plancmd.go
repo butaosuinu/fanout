@@ -77,7 +77,7 @@ func cmdPlan(args []string, lg *log.Logger, commandName string) exitcode.Code {
 	}
 	cfg.Agent = cliCfg.Agent
 
-	_, code = run.PlanTasks(cfg, rt, lg, commandName, runtimeDashboardKeyBinder(rt.Backend))
+	_, code = run.PlanTasks(cfg, rt, lg, commandName, runtimeDashboardKeyBinder(rt))
 	return code
 }
 
