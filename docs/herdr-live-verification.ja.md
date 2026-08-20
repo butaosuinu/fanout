@@ -192,9 +192,29 @@ launcher が起動に失敗すると `realized` の intent が journal に残り
 
 ### codex `--team` が 10 秒で諦める — #712
 
-`codex TUI did not report an active thread within 10s` で launch が失敗しました。
-`--team` なしの直 codex は成功するので、app-server ブリッジの readiness 待ちに
-固有の問題です。tmux backend でも同じ待ち時間を使うため herdr 固有かは未確認です。
+2026-08-20 に Codex CLI 0.146.0 と macOS 15.6 で追試しました。
+tmux backend でも `codex TUI did not report an active thread within 10s` が再現するため、
+herdr 固有の問題ではありません。
+
+remote TUI は thread を作る前に 0.148.0 への更新確認ダイアログで停止していました。
+更新確認を有効にした再試行は全体 13.457 秒後に失敗し、
+`check_for_update_on_startup=false` を remote TUI だけに渡した 3 回は
+3.991 秒、4.057 秒、4.221 秒で ready を報告しました。
+そのため、内側の 10 秒は変更せず、fanout が起動する remote TUI の更新確認だけを
+無効にします。
+
+`--team` なしの Codex は remote TUI を使わないため、この起動引数の変更を受けません。
+元の tmux 失敗では worktree、state 行、pane、ブランチを残さず cleanup できました。
+
+修正済みバイナリと Herdr 0.8.0 の使い捨て clone では、
+`plan --backend herdr --agent codex --team` が `w3:p1` を作成し、
+初回 turn は task identity を返して idle になりました。
+`plan --close probe` は pane、worktree、state 行を削除し、続く `--cleanup` は no-op です。
+
+後始末の失敗は #710 のままです。
+Herdr 0.8.2 で console bootstrap が `herdr launch requires manual cleanup` になった後、
+`fanout herdr shutdown` は `1 active Herdr intent rows remain` で拒否しました。
+これは team bridge より前の起動経路で、#712 には含めません。
 
 ## 再現手順
 
