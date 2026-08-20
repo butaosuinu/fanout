@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -326,7 +327,25 @@ func TestOwnedCleanupMutationsClassifyPreDispatchFailures(t *testing.T) {
 	}
 }
 
-func TestOwnedCloseWorkspaceClassifiesRejection(t *testing.T) {
+func TestOwnedCloseWorkspaceClassifiesStderrRejection(t *testing.T) {
+	h := newOwnedHarness(t)
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if !slices.Equal(args, []string{"workspace", "close", "w2"}) {
+			return nil, fmt.Errorf("unexpected mutation args %v", args)
+		}
+		return failedHerdrCommand(t,
+			`{"id":"cli:workspace:close","error":{"code":"workspace_not_empty","message":"workspace still has panes"}}`,
+		)
+	}
+
+	err := h.session.CloseWorkspace(context.Background(), "w2")
+	rejected, ok := errors.AsType[corebackend.MutationRejectedError](err)
+	if !ok || rejected.Code != "workspace_not_empty" || rejected.Message != "workspace still has panes" {
+		t.Fatalf("rejection = (%+v,%t), want decoded workspace close rejection", rejected, ok)
+	}
+}
+
+func TestOwnedCloseWorkspaceFallsBackToStdoutRejection(t *testing.T) {
 	h := newOwnedHarness(t)
 	h.fake.respond = func(args []string) ([]byte, error) {
 		if !slices.Equal(args, []string{"workspace", "close", "w2"}) {
@@ -339,8 +358,39 @@ func TestOwnedCloseWorkspaceClassifiesRejection(t *testing.T) {
 	err := h.session.CloseWorkspace(context.Background(), "w2")
 	rejected, ok := errors.AsType[corebackend.MutationRejectedError](err)
 	if !ok || rejected.Code != "workspace_not_empty" || rejected.Message != "workspace still has panes" {
-		t.Fatalf("rejection = (%+v,%t), want decoded workspace close rejection", rejected, ok)
+		t.Fatalf("rejection = (%+v,%t), want decoded stdout fallback", rejected, ok)
 	}
+}
+
+func TestOwnedCloseWorkspacePreservesCommandErrorWithoutEnvelope(t *testing.T) {
+	h := newOwnedHarness(t)
+	out, commandErr := failedHerdrCommand(t, "herdr: transport failed")
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if !slices.Equal(args, []string{"workspace", "close", "w2"}) {
+			return nil, fmt.Errorf("unexpected mutation args %v", args)
+		}
+		return out, commandErr
+	}
+
+	if err := h.session.CloseWorkspace(context.Background(), "w2"); !errors.Is(err, commandErr) {
+		t.Fatalf("CloseWorkspace() error = %v, want original command error %v", err, commandErr)
+	}
+}
+
+// failedHerdrCommand reproduces cmd.Output's stdout/stderr split and the
+// runBoundedCommand wrapper while retaining the concrete *exec.ExitError.
+func failedHerdrCommand(t *testing.T, stderr string) ([]byte, error) {
+	t.Helper()
+	cmd := exec.Command("/bin/sh", "-c", `printf '%s' "$1" >&2; exit 1`, "herdr-test", stderr)
+	out, err := cmd.Output()
+	exitErr, ok := errors.AsType[*exec.ExitError](err)
+	if !ok {
+		t.Fatalf("failedHerdrCommand() error type = %T, want *exec.ExitError", err)
+	}
+	if len(out) != 0 || string(exitErr.Stderr) != stderr {
+		t.Fatalf("failedHerdrCommand() = (%q,%q), want empty stdout and stderr %q", out, exitErr.Stderr, stderr)
+	}
+	return out, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
 }
 
 func TestWaitForLaunchTokenRequiresExactInput(t *testing.T) {

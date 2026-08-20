@@ -417,7 +417,7 @@ func (s *OwnedSession) RemoveWorktree(ctx context.Context, workspaceID, path str
 	out, err := s.runOwnedMutationCommand(ctx, commandTimeout,
 		"worktree", "remove", "--workspace", workspaceID, "--json")
 	if err != nil {
-		if rejected, ok := decodeMutationRejection(out, "cli:worktree:remove"); ok {
+		if rejected, ok := decodeMutationRejection(out, err, "cli:worktree:remove"); ok {
 			return rejected
 		}
 		return err
@@ -433,7 +433,7 @@ func (s *OwnedSession) CloseWorkspace(ctx context.Context, workspaceID string) e
 	}
 	out, err := s.runOwnedMutationCommand(ctx, commandTimeout, "workspace", "close", workspaceID)
 	if err != nil {
-		if rejected, ok := decodeMutationRejection(out, "cli:workspace:close"); ok {
+		if rejected, ok := decodeMutationRejection(out, err, "cli:workspace:close"); ok {
 			return rejected
 		}
 	}

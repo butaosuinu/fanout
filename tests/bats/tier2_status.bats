@@ -231,12 +231,12 @@ load helpers
   export FIXTURE_DIR="$BATS_TEST_TMPDIR/fixture"
   mkdir -p "$FIXTURE_DIR"
   printf '{"error":{"code":"worktree_busy"}}\n' > "$FIXTURE_DIR/herdr-worktree-remove.json"
-  printf 'herdr: worktree is busy\n' > "$FIXTURE_DIR/herdr-worktree-remove.err"
   printf '3\n' > "$FIXTURE_DIR/herdr-worktree-remove.exit"
-  run bash -c 'herdr worktree remove --workspace workspace-528 --json 2>&1'
+  run bash -c 'herdr worktree remove --workspace workspace-528 --json >"$FIXTURE_DIR/stdout" 2>"$FIXTURE_DIR/stderr"'
   [ "$status" -eq 3 ]
-  [[ "$output" == *"herdr: worktree is busy"* ]]
-  [[ "$output" == *'"worktree_busy"'* ]]
+  [ ! -s "$FIXTURE_DIR/stdout" ]
+  run grep -F '"worktree_busy"' "$FIXTURE_DIR/stderr"
+  [ "$status" -eq 0 ]
 }
 
 @test "herdr shim: an unlisted verb is an error, not a silent success" {
