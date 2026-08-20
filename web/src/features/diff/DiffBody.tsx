@@ -7,6 +7,7 @@ import { useDiffHideViewed, type Theme } from "../settings/useSettings";
 import type { DiffFilePlan } from "./diff";
 import { DiffFileList } from "./DiffFileList";
 import { DiffFileRow } from "./DiffFileRow";
+import { hiddenAfterViewing } from "./scrollAlign";
 import { useDiffCollapse } from "./useDiffCollapse";
 import { useDiffPatch } from "./useDiffPatch";
 import { useDiffScrolling } from "./useDiffScroller";
@@ -157,9 +158,19 @@ function useDiffBodyState({
     const path = paths[i];
     if (path === undefined) return;
     const next = !viewedPaths.has(path);
+    const group = byPath.get(path) ?? [];
     setViewed(path, next);
-    for (const j of byPath.get(path) ?? []) collapse.setCollapsed(j, null);
-    if (next && hideViewed) refocusAfterHide();
+    for (const j of group) collapse.setCollapsed(j, null);
+    /* 外す側は何も送らない — その file の上端は元から動かない。 */
+    if (!next) return;
+    if (hideViewed) refocusAfterHide();
+    /* 畳んだ(または消えた)ぶん文書が縮むので、次に読む file の上端を本文の
+     * 上端へ送る。隠れる集合は setViewed の 1 render 先取り(scrollAlign)。 */
+    scrolling.advanceAfterViewed({
+      from: i,
+      count: plan.length,
+      hidden: hiddenAfterViewing({ hidden, hideViewed, group }),
+    });
   });
 
   return {

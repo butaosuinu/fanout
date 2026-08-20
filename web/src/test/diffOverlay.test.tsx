@@ -253,6 +253,15 @@ describe("diff オーバーレイ", () => {
     expect(
       injected.some((css) => css.includes("code[data-additions]") && css.includes("margin-left")),
     ).toBe(true);
+    /* 横スクロールの封じは 3 点セット。スクロール箱を消すのは light DOM 側の
+       カスタムプロパティ(styles/diff.css)だが、切り落とさないための列幅と
+       折り返しは shadow tree 内の値を上書きするので unsafeCSS に載る。
+       jsdom にレイアウトは無いので、押さえられるのは「渡していること」だけ。
+       縦積み側にも載ることはレイアウト巡回のテストが見る。 */
+    expect(
+      injected.some((css) => css.includes("--diffs-code-grid") && css.includes("minmax(0, 1fr)")),
+    ).toBe(true);
+    expect(injected.some((css) => css.includes("overflow-wrap: anywhere"))).toBe(true);
   });
 
   it("plan task 行は parent+task+source で取得する", async () => {
@@ -1077,11 +1086,16 @@ describe("diff オーバーレイ", () => {
     });
     /* 縦積みも data-diff-type="single" になるため、片側寄せ CSS を残すと本文が
      * 半分幅に潰れる。split のときだけ注入すること。 */
+    const stackCss = [...document.querySelectorAll("diffs-container")]
+      .flatMap((el) => [...el.shadowRoot!.querySelectorAll("style")])
+      .map((s) => s.textContent ?? "");
+    expect(stackCss.some((css) => css.includes("code[data-additions]"))).toBe(false);
+    /* 横スクロールの封じは縦積みにも要る — スクロール箱が残るのはむしろこちら側
+     * (split + wrap ではライブラリが箱を display:contents で消している)。 */
     expect(
-      [...document.querySelectorAll("diffs-container")]
-        .flatMap((el) => [...el.shadowRoot!.querySelectorAll("style")])
-        .some((s) => (s.textContent ?? "").includes("code[data-additions]")),
-    ).toBe(false);
+      stackCss.some((css) => css.includes("--diffs-code-grid") && css.includes("minmax(0, 1fr)")),
+    ).toBe(true);
+    expect(stackCss.some((css) => css.includes("overflow-wrap: anywhere"))).toBe(true);
 
     await user.click(layoutBtn());
     expect(layoutBtn()).toHaveAccessibleName("レイアウト: 自動(クリックで左右 2 面)");

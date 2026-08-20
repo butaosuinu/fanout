@@ -106,7 +106,9 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 /* Virtualizer が root(スクロールコンテナ)として使う要素 */
 .diff-body{
   flex:1; min-width:0; min-height:0;
-  overflow-y:auto;
+  /* 縦だけ。overflow-y だけ書くと overflow-x は visible → auto に計算され、
+     ここにも横スクロールの余地が残る(はみ出しても見えないので触るまで気付かない)。 */
+  overflow-x:hidden; overflow-y:auto;
   /* 端まで来ても背面の一覧へスクロールを流さない(コンパクト表示では背面が
      見えているので、そこが動くと読んでいた位置を失う) */
   overscroll-behavior:contain;
@@ -120,6 +122,17 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 /* diffs-container はカスタム要素で既定が display:inline。block にしないと
    virtualizer が placeholder に付ける高さが効かず、全 file が潰れる */
 .diff-file,.diff-files diffs-container{ display:block; }
+/* 本文は横スクロールしない。長い行は折り返しで読ませる方針なので、ライブラリの
+   コードセル([data-code])が既定で持つスクロール箱を消す。箱が残るのは縦積み
+   (unified)表示と片側しかない file(新規追加 / 削除)で、スクロールバーは
+   ライブラリ側が潰しているため触るまで気付けない。
+   カスタムプロパティは shadow tree へ継承するので light DOM 側から届く。切り落と
+   されないための列幅と折り返しは shadow tree 内で値が決まっているので、そちらは
+   DiffFileRow.tsx の unsafeCSS(NO_OVERFLOW_CSS)が対で持つ。
+   箱が無くなるとライブラリのスクロールバー実測も 0 になり、コードセルの下余白が
+   「gap - スクロールバー分」から gap そのものへ戻る。占めていた分がそのまま余白に
+   化けるだけなので、file の高さは変わらない。 */
+.diff-file{ --diffs-overflow-override: clip; }
 .diff-note{
   font-family:var(--f-code); font-size:12.5px; color:var(--ink-60);
   padding:24px 0; text-align:center;
@@ -216,7 +229,8 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 .diff-file-row.is-viewed .diff-file-stat .add,
 .diff-file-row.is-viewed .diff-file-stat .del{ color:var(--ink-40); }
 .diff-file-row.is-viewed:hover{ color:var(--ink-78); }
-/* 行末の確認済みマーク。行の主役は名前なので縮まない側に置き、色だけで示す */
+/* 行末の確認済みマーク。行の主役は名前なので縮まない側に置き、色だけで示す。
+   高さの扱いは下の .diff-file-kind と同じ。 */
 .diff-file-check{
   flex:none; align-self:flex-start;
   height:1.6em;
@@ -226,8 +240,9 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 /* 変更種別。幅は種別が引けない行でも確保する — インデントをこの列が担うので、
    要素ごと畳むとその行だけ左へずれる。
    高さは行 1 行分(font-size 11.5px × line-height 1.6 = 18.4px)に固定して
-   flex-start へ寄せ、その中で上下中央に置く。align-self:center だと行全体の
-   中央になり、名前が折り返した行でアイコンだけ下がって列が乱れる。
+   flex-start へ寄せ、その中で上下中央に置く。行はベースライン揃えだが SVG は
+   ベースラインを持たず、素通しすると合成ベースライン(下端)で揃って円が文字
+   より下がる。
    色だけが種別ごとに変わり、形は 4 種とも円(ui/icons.tsx)。 */
 .diff-file-kind{
   flex:none; align-self:flex-start;
@@ -240,9 +255,25 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 .diff-file-kind.k-modified{ color:var(--ink-60); }
 .diff-file-kind.k-deleted{ color:var(--err); }
 .diff-file-kind.k-renamed{ color:var(--ai); }
-.diff-file-name{ flex:1; min-width:0; overflow-wrap:anywhere; }
-/* 移動元。行の主役は移動先なので、縮むのはこちら側 */
-.diff-file-was{ flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink-40); font-size:10.5px; }
+/* 行の主役。基準幅は自然幅(flex-basis:auto)にする。`flex:1` の既定である
+   basis 0 にしてはいけない — 縮小量は shrink × basis で配分されるので basis 0 の
+   名前は縮小に一切与らず、溢れた分をすべて移動元が吸ったうえで、名前に配られる
+   幅そのものが 0 付近まで潰れる(折り返しを許すと 1 文字ずつ縦に割れる)。 */
+.diff-file-name{
+  flex:1 1 auto; min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+/* 移動元。別ディレクトリへの移動では旧ディレクトリのフルパスが入るので長くなる。
+   基準幅を 0 にして「行の余りをほぼ全部もらう」側に置く — 大きい grow が余白を
+   取り切るので名前は自然幅のままで済み、行が溢れたときは(移動元の基準幅が 0 で
+   縮みしろを持たないぶん)名前だけが縮む。名前と同じ shrink 比で分け合わせると、
+   丸め誤差の 0.1px で名前に省略記号が出る。
+   省略してよい: フルパスは行の title / aria-label が持っている。 */
+.diff-file-was{
+  flex:999 1 0; min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  color:var(--ink-40); font-size:10.5px;
+}
 .diff-file-stat{ flex:none; display:flex; gap:5px; font-size:10.5px; }
 /* 追加・削除の色。テーブルの c-diff セルと同じ意味論を diff ビュアー側にも通す */
 .diff-file-stat .add,.diff-sidebar-count .add,.d-diff-stat .add{ color:var(--ok); }

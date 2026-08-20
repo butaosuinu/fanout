@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
+import { alignedScrollTop, nextVisibleFileIndex, type NextFileTarget } from "./scrollAlign";
 
 /* このモジュールは 1 つの関心の集まり — ライブラリの virtualizer が持つ file ごとの
  * オフセットは resize でしか更新されないので、スクロール中の空白も、サイドバーから
- * のジャンプも、レイアウト変更も、すべて同じ nudge で直す。個々の hook を呼び出し側
- * に並べると、どれか 1 本を張り忘れた瞬間に「行はあるのに画面が空白」に戻る。
+ * のジャンプも、確認済みを付けたあとの送りも、レイアウト変更も、すべて同じ nudge で
+ * 直す。個々の hook を呼び出し側に並べると、どれか 1 本を張り忘れた瞬間に「行はある
+ * のに画面が空白」に戻る。
  * useDiffScrolling(末尾)がその束ね役で、DiffOverlay はこれだけを呼ぶ。 */
 
 /* 空白の修復判定: この高さ以上が見えている file だけを対象にする。 */
@@ -116,42 +118,77 @@ function useBlankRepair({
   }, [hostsRef, nudge, patch, rootRef]);
 }
 
-/* サイドバーから本文へ飛ぶ。スクロールだけでは着地先の file が placeholder の
- * まま残るので、nudge で全 file のオフセットと描画範囲を取り直させる。高さが
- * 確定すると位置がずれるので、次フレームでもう一度合わせる。 */
-function useScrollToFile({
-  byPath,
-  hostsRef,
-  expand,
-  nudge,
-}: {
-  byPath: Map<string, number[]>;
-  hostsRef: Hosts;
-  /* 着地先が折りたたまれていたら開く */
-  expand: (i: number) => void;
-  nudge: () => void;
-}): (path: string) => void {
+/* file の上端を本文スクロール領域の上端へ。スクロールだけでは着地先の file が
+ * placeholder のまま残るので、nudge で全 file のオフセットと描画範囲を取り直させる。
+ * 高さが確定すると位置がずれるので、次フレームでもう一度合わせる。
+ * サイドバーからのジャンプと確認済みの送りが同じ経路を通る。 */
+function useAlignToFile({ hostsRef, nudge }: { hostsRef: Hosts; nudge: () => void }) {
   return useCallback(
-    (path: string) => {
-      const i = byPath.get(path)?.[0];
-      if (i === undefined) return;
-      const target = hostsRef.current.get(i);
+    (index: number) => {
+      const target = hostsRef.current.get(index);
       const scroller = target?.closest<HTMLElement>(".diff-body");
       if (!target || !scroller) return;
-      expand(i);
       const align = () => {
-        scroller.scrollTop +=
-          target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+        scroller.scrollTop = alignedScrollTop({
+          scrollTop: scroller.scrollTop,
+          targetTop: target.getBoundingClientRect().top,
+          scrollerTop: scroller.getBoundingClientRect().top,
+        });
       };
       align();
       nudge();
       requestAnimationFrame(() => requestAnimationFrame(align));
     },
-    [byPath, expand, hostsRef, nudge],
+    [hostsRef, nudge],
   );
 }
 
-/* 上の 4 本をまとめて張る。host の台帳(index -> .diff-file)もここが持つ —
+/* サイドバーから本文へ飛ぶ。 */
+function useScrollToFile({
+  byPath,
+  expand,
+  alignToFile,
+}: {
+  byPath: Map<string, number[]>;
+  /* 着地先が折りたたまれていたら開く */
+  expand: (i: number) => void;
+  alignToFile: (index: number) => void;
+}): (path: string) => void {
+  return useCallback(
+    (path: string) => {
+      const i = byPath.get(path)?.[0];
+      if (i === undefined) return;
+      expand(i);
+      alignToFile(i);
+    },
+    [alignToFile, byPath, expand],
+  );
+}
+
+/* 確認済みを**付けた**直後の送り。押した file はその場で畳まれ(「確認済みを
+ * 隠す」なら行ごと消え)、文書の高さが縮む。何もしないとブラウザのスクロール
+ * アンカリング任せになって読んでいた位置が飛ぶので、次に読む file の上端を
+ * 本文の上端へ明示的に合わせる。
+ *
+ * 外すときと折りたたみボタンからは呼ばない。前者はその file の上端が元から
+ * 動かず、後者は「その file を読み続ける」操作なので、次へ送るのは誤り。
+ * 行が入れ替わるのは commit 後なので、測るのは次フレーム。 */
+function useAdvanceAfterViewed({
+  alignToFile,
+}: {
+  alignToFile: (index: number) => void;
+}): (target: NextFileTarget) => void {
+  return useCallback(
+    (target) => {
+      const i = nextVisibleFileIndex(target);
+      if (i === null) return;
+      requestAnimationFrame(() => alignToFile(i));
+    },
+    [alignToFile],
+  );
+}
+
+/* 上をまとめて張る。host の台帳(index -> .diff-file)もここが持つ —
  * 空白判定もジャンプも同じ台帳を見るので、持ち主を呼び出し側に置く理由がない。 */
 export function useDiffScrolling({
   rootRef,
@@ -169,6 +206,7 @@ export function useDiffScrolling({
 }): {
   registerHost: (index: number, el: HTMLDivElement | null) => void;
   onSelectFile: (path: string) => void;
+  advanceAfterViewed: (target: NextFileTarget) => void;
 } {
   const hostsRef = useRef(new Map<number, HTMLDivElement>());
   const nudge = useDiffNudge(rootRef);
@@ -176,8 +214,10 @@ export function useDiffScrolling({
     if (el) hostsRef.current.set(i, el);
     else hostsRef.current.delete(i);
   }, []);
-  const onSelectFile = useScrollToFile({ byPath, hostsRef, expand, nudge });
+  const alignToFile = useAlignToFile({ hostsRef, nudge });
+  const onSelectFile = useScrollToFile({ byPath, expand, alignToFile });
+  const advanceAfterViewed = useAdvanceAfterViewed({ alignToFile });
   useNudgeOnLayoutChange(layoutKey, nudge);
   useBlankRepair({ rootRef, hostsRef, patch, nudge });
-  return { registerHost, onSelectFile };
+  return { registerHost, onSelectFile, advanceAfterViewed };
 }

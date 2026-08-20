@@ -31,14 +31,33 @@ const HEADER_EDGE_CSS = [
   "}",
 ].join("\n");
 
+/* 横スクロールの封じ。本文はどこにも横スクロール箱を持たず、長い行は折り返しで
+ * 読ませる。コードセル([data-code])のスクロール箱そのものは
+ * `--diffs-overflow-override: clip` で消すが(styles/diff.css)、箱を消すだけだと
+ * はみ出したトークンが見えないまま切り落とされる。切り落とさせない 2 つは shadow
+ * tree 内で値が決まっているので、こちらから上書きする:
+ *
+ * - コード列のトラックは既定が `1fr`(= minmax(auto,1fr))で、min は min-content。
+ *   折り返さないトークンが 1 行あるだけでトラックごと container より広くなる。
+ *   ライブラリが [data-dehydrated] にだけ与えている minmax(0,1fr) を常時にする。
+ * - 行の折り返しはライブラリ側が `word-break:break-word` だけで指定している。
+ *   仕様上これは `word-break:normal` + `overflow-wrap:anywhere` と同義だが、
+ *   min-content 幅を縮めない実装があるので、その展開形を明示して書く。 */
+const NO_OVERFLOW_CSS = [
+  "[data-diff],[data-file]{",
+  "  --diffs-code-grid: var(--diffs-grid-number-column-width) minmax(0, 1fr);",
+  "}",
+  '[data-overflow="wrap"] [data-line]{ word-break: normal; overflow-wrap: anywhere; }',
+].join("\n");
+
 /* shadow DOM 内はライブラリの unsafeCSS からしか触れない。入れるのはこの固定文字列
  * だけで、patch 由来の値は一切混ぜない(敵性入力規約)。
  * split / stack それぞれの完成品を定数で持つ — render ごとに組み立てると文字列が
  * 変わったと見なされ、ライブラリが file を丸ごと描き直す。
  * 片側寄せは split のときだけ。stack も data-diff-type="single" になるので、
  * 渡したままだと本文が半分幅に潰れる。 */
-const SPLIT_CSS = `${HEADER_EDGE_CSS}\n${SINGLE_SIDE_CSS}`;
-const STACK_CSS = HEADER_EDGE_CSS;
+const SPLIT_CSS = [HEADER_EDGE_CSS, NO_OVERFLOW_CSS, SINGLE_SIDE_CSS].join("\n");
+const STACK_CSS = [HEADER_EDGE_CSS, NO_OVERFLOW_CSS].join("\n");
 
 /* ファイル名ヘッダの右側に並ぶ操作。ラベルに file 名を入れるのは、入れないと
  * 全 file のボタンとチェックが同名で並び、支援技術の要素一覧から区別できないため。 */
