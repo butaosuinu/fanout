@@ -9,6 +9,11 @@ lifecycle まで一巡させました。
 最初の 1 分で露見するものです。修正後は herdr 0.7.5 と 0.8.0 の両方で
 issue-less plan のファンアウト、telemetry、peer messaging、lifecycle が動きます。
 
+2026-08-20 に herdr 0.8.2 で再検証しました。結果は
+[0.8.2 再検証](#082-再検証-2026-08-20) にまとめています。launch・observe・
+messaging は 0.8.2 でも通り、新たに 2 件の乖離 ([#720](https://github.com/butaosuinu/fanout/issues/720) /
+[#721](https://github.com/butaosuinu/fanout/issues/721)) が出ました。
+
 ## 検証環境
 
 | 項目 | 値 |
@@ -83,9 +88,9 @@ agent command` で必ず失敗します。
 最後のものは記録側の実経路 (`resolveManagedLaunch`) が作った argv を検証側へ通します。
 手元で組み直した spec と突き合わせると、同じ関数を往復するだけで元の欠陥を再現できません。
 
-## herdr CLI の応答契約 (0.7.5 / 0.8.0 実測)
+## herdr CLI の応答契約 (0.7.5 / 0.8.0 / 0.8.2 実測)
 
-両バージョンで差はありませんでした。
+3 バージョンで差はありませんでした。
 
 | 応答の形 | コマンド |
 |---|---|
@@ -95,7 +100,7 @@ agent command` で必ず失敗します。
 | 失敗時 | **stderr** に `{"error":{"code":…},"id":"cli:…"}` + 非 0 exit |
 
 `pane run` は CLI にありますが API schema に `pane.run` メソッドはありません
-(0.8.0 の 90 メソッドを列挙して確認)。
+(0.8.0 の 90 メソッド / 0.8.2 の 91 メソッドを列挙して確認)。
 
 エラー envelope が stderr に出る点は要注意です。`decodeMutationRejection`
 (`internal/infra/herdrrun/mutation.go`) は stdout だけを見るため、
@@ -215,6 +220,160 @@ remote TUI は thread を作る前に 0.148.0 への更新確認ダイアログ�
 Herdr 0.8.2 で console bootstrap が `herdr launch requires manual cleanup` になった後、
 `fanout herdr shutdown` は `1 active Herdr intent rows remain` で拒否しました。
 これは team bridge より前の起動経路で、#712 には含めません。
+
+
+## 0.8.2 再検証 (2026-08-20)
+
+herdr を 0.8.0 から 0.8.2 (protocol 20) へ `herdr update` で上げ、同じ手順を
+main (`a3fe5aea`、PR #715 マージ済み) で通しました。launch・観測・messaging・
+lifecycle は動きます。API は加算のみで、fanout が呼ぶコマンドの応答は
+0.7.5 / 0.8.0 と同一です。
+
+| 項目 | 値 |
+|---|---|
+| herdr | 0.8.2 (protocol 20, method 91) |
+| SHA-256 | `a5d4f4d504d8b309c91f811050559300faba31258425f53c50852fc96f6ae574` |
+| fanout | `a3fe5aea` (main) |
+| owned session の pin | `owner.json` の `binary_version: "0.8.2"` |
+| floor | `minimumVersion = "0.7.5"` のまま。0.7.4 shim は `version 0.7.4 is below floor 0.7.5` で拒否 |
+
+### 0.8.0 → 0.8.2 の API 差分
+
+request method 90 → 91、削除ゼロ。fanout が呼ぶメソッドの形は変わっていません。
+
+| 種別 | 内容 |
+|---|---|
+| 追加 method | `pane.input.set` (`PaneInputSetParams` / `PaneRightClickTarget`) |
+| 追加 result | `pane_graphics_frame_ack` |
+| 追加フィールド | `PaneSplitParams.right_click` (既定 `herdr`)、`PaneGraphicsSetParams.layer_id` / `z_index`、`PaneGraphicsClearParams.layer_id`、`pane_graphics_info` の file-frame 系 9 フィールド |
+| enum 追加 | `IntegrationTarget` に `qwen`、`PaneGraphicsFormat` に `bgra` |
+| 削除 | なし |
+
+CLI では `herdr pane input` が増え、全サブコマンドの `--help` 末尾に
+AI 向けの案内文 (`Are you an AI? … run: herdr --skill`) が付きました。
+ツール出力に含まれる指示なので、この検証では従っていません。
+
+### 通った経路
+
+issue モードの実 launch を今回初めて通しました (dry-run で GitHub 変異が
+無いことを確認してから実行。ラベルもコメントも書きません)。
+
+| 経路 | 結果 |
+|---|---|
+| owned session bootstrap (素のシェルから) | OK。XDG 四 root と socket を隔離、binary を SHA-256 で pin |
+| TUI プロンプトモードの新規 Session (`n`) | OK。coordinator + worktree workspace を作り claude が起動 (`--permission-mode plan`) |
+| `fanout <parent> --only 676,677` | OK (claude)。codex + `--team` は #712 で失敗 |
+| `fanout <parent> --only 678 --agent codex` | OK。codex が briefing を読み実装に着手 |
+| `fanout plan <spec>` (claude + codex) | OK。2 タスクとも起動し briefing どおりに実行 |
+| sidebar metadata token | OK。`fanout_issue` / `fanout_slug` が workspace に載る |
+| telemetry | OK。claude が `working` / `idle` / `done` を報告、`--status --format table` の `REPORTED_STATE` に出る |
+| `fanout msg` peers / send / post / inbox / board | OK |
+| `fanout msg nudge` | OK。`agent prompt` で claude ペインに hint が届く |
+| dashboard 一覧 / `backend:herdr` フィルタ / drawer / `/api/peek` / `/api/diff` | OK (peek・diff とも 200) |
+| `/api/plan` / token 無し / POST | FAIL-CLOSED (404 / 403 / 405) |
+| TUI header・`BACKEND` 列・詳細パネル・inline help / settings・`/` フィルタ | OK |
+| focus (codex ペイン) | OK |
+| stickiness / `--session` / 相対 `FANOUT_DB_PATH` / agent 省略 / version floor | FAIL-CLOSED |
+| `herdr restart` / `herdr shutdown` | FAIL-CLOSED (docs どおり拒否) |
+| `--close` (クリーンな worktree) | OK。workspace・pane・agent・state 行・worktree が消える |
+
+### 新しく見つかった乖離
+
+#### focus が claude ペインで必ず失敗する — [#720](https://github.com/butaosuinu/fanout/issues/720)
+
+`focusOwned` (`internal/infra/herdrrun/operations.go:365`) は
+`AgentID` と `AgentSession` の片方だけが埋まった identity を
+`focus target has a partial live-agent identity` で拒否します。fanout は
+herdr が返した `agent_session` をそのまま保存し、launch 後に現れた session も
+`bindLateAgentSession` (`internal/app/stateemitter/stateemitter.go:221`) が
+telemetry のたびに拾います。つまり session さえ返れば claude でも focus は通ります。
+
+session を報告するのは herdr の公式 integration です (0.8.2 の claude
+integration は SessionStart hook から `pane.report_agent_session` を送る)。
+fanout はこれを呼びません。ところが pane launcher の
+`workloadExecEnvironment` (`internal/infra/herdrrun/launcher.go:97-116`) が
+`HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` を渡すのは、shell pane と
+`directCodexIntegrationLaunch` に限られます。claude の workload はこの 3 つを
+持たずに起動するので、integration が socket に到達できず session を報告できません。
+実測でも herdr 0.8.2 は claude ペインに `agent_session: null` を返し続けました。
+結果として claude 行は `herdrAgentId` だけの片側 identity のまま固定されます。
+
+```
+focus skipped for w3:p1: herdr owned pane identity mismatch:
+  focus target has a partial live-agent identity
+```
+
+TUI の Enter / `o` / `Z`、launch 直後の自動 focus がすべて claude 行で無効です。
+同じ操作を codex 行で行うと通ります (`focused w7:p1`)。
+`site/content/docs/herdr-backend.ja.md` は focus を対応済みと書いているので乖離です。
+直す場所は herdr 側ではなく launch environment です。claude の workload にも
+socket 系の env を渡せば integration が session を報告し、
+`bindLateAgentSession` が遅れて束縛して focus が通るようになります。
+
+#### `--close` / `--cleanup` が herdr レーンで worktree を消せない — [#721](https://github.com/butaosuinu/fanout/issues/721)
+
+tmux レーンは `git worktree remove --force`
+(`internal/infra/worktree/worktree.go:212`)、herdr レーンは
+`herdr worktree remove --workspace <id> --json`
+(`internal/infra/herdrrun/launch_operations.go:418`) で、後者に force はありません。
+agent がファイルを触った子で `--close` すると次を返して state を残します。
+
+```
+[err ] #676: Herdr worktree cleanup failed; preserving state:
+  herdr lifecycle requires manual cleanup: exit status 1:
+  {"error":{"code":"dirty_worktree_requires_force", …}}
+```
+
+固定化するのはここからです。`markWorkspaceCleanupManual` が intent を
+`IntentManualCleanupRequired` にして失敗文字列を journal へ保存し、以後の
+`--close` は `workspaceCleanupAbsent` が偽である限り保存済みの文字列を
+そのまま返します (`internal/app/lifecycle/workspace_phases.go:31-33`)。
+そのため worktree を clean にしても、`git worktree remove` でパスごと消しても、
+同じ `dirty_worktree_requires_force` が出続けます。同じタイミングで
+`herdr worktree remove --workspace <id>` を直接叩くと現在の状態
+(`is not a working tree`) を正しく返します。
+
+回復には workspace と checkout の両方を消す必要があります
+(`workspaceCleanupAbsent` は `workspace == nil` かつ path 不在かつ未登録)。
+手で `herdr workspace close` まで行けば次の `--close` が
+`realizeWorkspaceCleanup` に入ります。ユーザー work を強制削除しない方針自体は
+正しいので、force ではなく再判定の導線を決める必要があります。
+
+対象は `--close` だけではありません。`--cleanup`、`fanout plan --cleanup`、
+TUI の cleanup も `cleanupPaneRecordsLocked` → `closeWorkspaceWorktree`
+(`internal/app/lifecycle/lifecycle.go:501,578`) という同じ経路を通るので、
+同じ intent に固定され、同じ文字列を再生します。
+
+#### dashboard のエラー文が herdr セッションで tmux を名乗る
+
+`/api/peek` に herdr 形式の未記録 pane を渡すと
+`invalid pane id "w42:p1": want a tmux pane id like %5` (400)、
+`/api/plan` は `pane w7:p1 is not a tmux plan-mode pane` (404) を返します。
+どちらも fail closed そのものは正しく、P1〜P6 の語彙中立化が
+`internal/ui` に届いていないだけです。
+
+### 0.8.0 から変わらなかった既知の乖離
+
+いずれも 0.8.2 で再現します。
+
+| issue | 内容 | 状況 |
+|---|---|---|
+| [#710](https://github.com/butaosuinu/fanout/issues/710) | 失敗 launch が worktree とブランチを残す / console・coordinator 行に削除 verb がなく `shutdown` に到達できない | open |
+| [#711](https://github.com/butaosuinu/fanout/issues/711) | エラー envelope が stderr | PR #719 |
+| [#712](https://github.com/butaosuinu/fanout/issues/712) | codex `--team` ブリッジが 10 秒でタイムアウト | open |
+| [#713](https://github.com/butaosuinu/fanout/issues/713) | `Z` が herdr 行で黙って focus だけする | PR #718 |
+
+codex を `--team` なしで起動すると承認ダイアログ表示中も `idle` のままです。
+`blocked` を書くのは claude の launch hook と codex team bridge だけなので
+docs どおりですが、素の codex ペインは permission 待ちを観測できません。
+
+### 安全確認
+
+`~/.config/herdr/` の `config.toml` / `session.json` / `session-history.json` は
+検証の前後で SHA-256 が一致します (`release-notes.json` は `herdr update` が
+正当に書き換えます)。検証は `/private/tmp` の使い捨て clone で行い、push URL を
+無効化してから agent を走らせました。本体リポジトリの `.fanout/state.json` に
+本検証の行はなく、GitHub にブランチも PR も作られていません。
 
 ## 再現手順
 
