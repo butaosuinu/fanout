@@ -268,11 +268,15 @@ herdr が返した `agent_session` をそのまま保存し、launch 後に現�
 `bindLateAgentSession` (`internal/app/stateemitter/stateemitter.go:221`) が
 telemetry のたびに拾います。つまり session さえ返れば claude でも focus は通ります。
 
-問題は、それを返す実装が今どこにも無いことです。`report-agent-session` を呼ぶのは
-codex 用の controller だけで、`herdr:claude` という source は
-テストにしか出てきません。実測でも herdr 0.8.2 は claude ペインに
-`agent_session: null` を返し続けました。結果として claude 行は
-`herdrAgentId` だけの片側 identity のまま固定されます。
+session を報告するのは herdr の公式 integration です (0.8.2 の claude
+integration は SessionStart hook から `pane.report_agent_session` を送る)。
+fanout はこれを呼びません。ところが pane launcher の
+`workloadExecEnvironment` (`internal/infra/herdrrun/launcher.go:97-116`) が
+`HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` を渡すのは、shell pane と
+`directCodexIntegrationLaunch` に限られます。claude の workload はこの 3 つを
+持たずに起動するので、integration が socket に到達できず session を報告できません。
+実測でも herdr 0.8.2 は claude ペインに `agent_session: null` を返し続けました。
+結果として claude 行は `herdrAgentId` だけの片側 identity のまま固定されます。
 
 ```
 focus skipped for w3:p1: herdr owned pane identity mismatch:
@@ -282,10 +286,11 @@ focus skipped for w3:p1: herdr owned pane identity mismatch:
 TUI の Enter / `o` / `Z`、launch 直後の自動 focus がすべて claude 行で無効です。
 同じ操作を codex 行で行うと通ります (`focused w7:p1`)。
 `site/content/docs/herdr-backend.ja.md` は focus を対応済みと書いているので乖離です。
-herdr の claude integration が session を報告するようになれば
-`bindLateAgentSession` が遅れて束縛して直りますが、現状その経路はありません。
+直す場所は herdr 側ではなく launch environment です。claude の workload にも
+socket 系の env を渡せば integration が session を報告し、
+`bindLateAgentSession` が遅れて束縛して focus が通るようになります。
 
-#### `--close` が herdr レーンで worktree を消せない — [#721](https://github.com/butaosuinu/fanout/issues/721)
+#### `--close` / `--cleanup` が herdr レーンで worktree を消せない — [#721](https://github.com/butaosuinu/fanout/issues/721)
 
 tmux レーンは `git worktree remove --force`
 (`internal/infra/worktree/worktree.go:212`)、herdr レーンは
@@ -313,6 +318,11 @@ agent がファイルを触った子で `--close` すると次を返して state
 手で `herdr workspace close` まで行けば次の `--close` が
 `realizeWorkspaceCleanup` に入ります。ユーザー work を強制削除しない方針自体は
 正しいので、force ではなく再判定の導線を決める必要があります。
+
+対象は `--close` だけではありません。`--cleanup`、`fanout plan --cleanup`、
+TUI の cleanup も `cleanupPaneRecordsLocked` → `closeWorkspaceWorktree`
+(`internal/app/lifecycle/lifecycle.go:501,578`) という同じ経路を通るので、
+同じ intent に固定され、同じ文字列を再生します。
 
 #### dashboard のエラー文が herdr セッションで tmux を名乗る
 
