@@ -32,30 +32,35 @@ Pull request and `main` runs stop after the Hugo + Pagefind build: they skip
 environment allows deployments from `main` and from `v*` tags; any other ref
 fails the deploy job instead of publishing.
 
-To see what is merged but not yet live. Ask for the deployment GitHub still
-considers live rather than the newest record — a rejected or failed deploy
-leaves a record too — and refuse to answer if that read comes back empty: an
-empty `$last` would make `git log` compare `HEAD..origin/main` and report
-nothing pending on an up-to-date checkout.
+To see what is merged but not yet live. The block asks for the deployment
+GitHub still marks live rather than the newest record — a rejected or failed
+deploy leaves a record too — and every step that could answer wrongly stops it
+instead. A stale `origin/main` under-reports; an empty `$last` would make
+`git log` compare `HEAD..origin/main` and report nothing pending on an
+up-to-date checkout. `set -e` inside the subshell is what makes those exits
+reach you.
 
 ```bash
-git fetch origin main --quiet
-last="$(gh api graphql -f query='
-  query($owner: String!, $name: String!) {
-    repository(owner: $owner, name: $name) {
-      deployments(environments: ["github-pages"], last: 10) {
-        nodes { commitOid state }
+(
+  set -e
+  git fetch origin main --quiet
+  last="$(gh api graphql -f query='
+    query($owner: String!, $name: String!) {
+      repository(owner: $owner, name: $name) {
+        deployments(environments: ["github-pages"], last: 100) {
+          nodes { commitOid state }
+        }
       }
-    }
-  }' -F owner=butaosuinu -F name=fanout \
-  --jq '[.data.repository.deployments.nodes[] | select(.state == "ACTIVE")][0].commitOid')"
-
-if [ -z "$last" ]; then
-  echo "could not read the live github-pages deployment"
-else
+    }' -F owner=butaosuinu -F name=fanout \
+    --jq '[.data.repository.deployments.nodes[] | select(.state == "ACTIVE")][0].commitOid')"
+  [ -n "$last" ] || { echo "no live github-pages deployment in the last 100 records" >&2; exit 1; }
   git log --oneline "$last"..origin/main -- site/
-fi
+)
 ```
+
+The live deployment falls outside that 100-record window only after a failure
+streak that long, and the block refuses to answer rather than compare against
+nothing.
 
 ## Local preview
 

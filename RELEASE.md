@@ -97,7 +97,7 @@ and no goreleaser config — the workflow is the whole pipeline.
        [ -n "$id" ] && break
        sleep 5
      done
-     [ -n "$id" ] || { echo "no $1 run for $tag_sha"; return 1; }
+     [ -n "$id" ] || { echo "no $1 run for $tag_sha"; return 3; }
      gh run watch "$id" --exit-status
    }
    ```
@@ -107,10 +107,11 @@ and no goreleaser config — the workflow is the whole pipeline.
    watch_run pages.yml
    ```
 
-   Only a `1` from `watch_run pages.yml` means the run is missing. A `2` means
-   the lookup itself failed — expired auth, a rate limit, no network — and
-   publishing by hand on that reading can start a second deploy on top of one
-   that is already running. Fix the lookup and re-run first.
+   Only a `3` from `watch_run pages.yml` means the run was never created, and
+   only then is publishing by hand right. `2` is a failed lookup — expired
+   auth, a rate limit, no network — and `1` is `gh run watch` reporting a run
+   that exists and failed, or losing the connection to one. Publishing on
+   either reading can start a second deploy on top of one already running.
 
    If `pages.yml` never produced a run, publish the tag by hand:
 
