@@ -198,10 +198,17 @@ Immediately before push, fetch again and compare with the saved SHA.
 ```bash
 git fetch "$head_remote" "$head"
 test "$(git rev-parse FETCH_HEAD)" = "$pr_head_before_work"
+```
+
+```bash
 git push \
   --force-with-lease="refs/heads/$head:$pr_head_before_work" \
   "$head_remote" HEAD:"$head"
 ```
+
+Run the push as a separate call: a push gate that rejects ref mutation
+chained before a push denies the combined form (`git fetch` counts as a ref
+mutation).
 
 Do not redo the ancestry test after rebase: the old tip need not be an ancestor
 of rewritten HEAD. The saved SHA comparison is the concurrency guard.
@@ -257,7 +264,9 @@ once against that final commit (prefer an umbrella target such as `make check`
 when the project defines one; otherwise resolve it from AGENTS.md, CLAUDE.md,
 or the build files). A CI failure that reproduces locally recurs on the next
 push unless the full gate passed. Repositories may enforce this with a push
-gate; never bypass it with `--no-verify`. Then push with an explicit refspec:
+gate; never bypass it with `--no-verify`, and run the push as its own
+command — a gate may deny a push chained after commit or rebase in the same
+call. Then push with an explicit refspec:
 
 ```bash
 git push "$head_remote" HEAD:"$head"

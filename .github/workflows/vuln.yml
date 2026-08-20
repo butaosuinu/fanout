@@ -1,6 +1,9 @@
 # Isolated from the required lint gate on purpose: govulncheck fetches the
 # vulnerability DB over the network and can fail on new CVEs without any code
-# change. Do not add this workflow to branch-protection required checks.
+# change. Branch protection requires the `govulncheck` check, and a workflow
+# skipped by a trigger-level paths filter never reports one — a docs-only PR
+# would wait on "Expected" forever — so the job always runs and the
+# Go-relevance gate lives in the `changed` step instead of a paths filter.
 # `make vuln` (go.mod tool directive) keeps the local/CI versions identical.
 name: vuln
 
@@ -8,7 +11,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths: ['go.mod', 'go.sum', '**.go', 'Makefile', '.github/workflows/vuln.yml']
   schedule:
     - cron: '17 21 * * 1'   # weekly, Tuesday 06:17 JST
   workflow_dispatch:
@@ -18,12 +20,47 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     steps:
+      - name: Decide whether Go-relevant paths changed
+        id: changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The files API caps the response at 3000 files; when the PR exceeds
+          # that, the listing is incomplete, so fail toward running the check.
+          if [ "${{ github.event.pull_request.changed_files }}" -gt 3000 ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # previous_filename covers renames away from Go paths (x.go -> x.txt),
+          # which change the Go build without a .go entry in filename.
+          files=$(gh api --paginate \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files?per_page=100" \
+            --jq '.[] | .filename, (.previous_filename // empty)')
+          # here-string, not a pipe: grep -q exits at the first match, and under
+          # the default pipefail shell the writer's SIGPIPE would fail the step.
+          if grep -Eq \
+            '^go\.mod$|^go\.sum$|\.go$|^Makefile$|^\.github/workflows/vuln\.yml$' \
+            <<< "$files"; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "no Go-relevant changes; skipping govulncheck"
+          fi
+
       - uses: actions/checkout@v7.0.1
+        if: steps.changed.outputs.go == 'true'
 
       - uses: actions/setup-go@v6.5.0
+        if: steps.changed.outputs.go == 'true'
         with:
           go-version-file: go.mod
           check-latest: true
 
       - run: make vuln
+        if: steps.changed.outputs.go == 'true'

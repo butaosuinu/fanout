@@ -309,7 +309,8 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   never succeeds — fix the stated cause, then re-run it: complete
   `/post-work-review` (`make check` must pass and the marker must match HEAD),
   then issue `gh pr create` as a standalone command with no
-  `cd`/`pushd`/`env --chdir` chained in (any cwd
+  `cd`/`pushd`/`env --chdir` and no ref-mutating command (`git commit`,
+  rebase) chained in (any cwd
   inside the target worktree works), and keep the PR base at the default
   branch. `FANOUT_SKIP_PR_REVIEW=1` is only for the documented escape hatch.
 - `git push` to a branch is gated the same way (`scripts/agent-push-gate.sh`,
@@ -318,8 +319,13 @@ stdlib-only imports, so repo-support code stays isolated from the product.
   `$(git rev-parse --git-dir)/fanout-check-passed`, which only a successful
   `make check` on a clean tree writes. When denied, commit the candidate, run
   `make check`, then push again — do not reach for `--no-verify` or retry
-  unchanged. Branch deletions and tag pushes stay ungated; `gh pr create`
-  (gh pushes an unpushed branch itself) requires the same marker, and forms
+  unchanged. Never chain the push after a command that can move a ref in the
+  same Bash call (`git commit … && git push`, rebase-then-push, even
+  `git fetch … && git push`): the gate verifies only the pre-execution state
+  and always denies the chained form, so run each step — the `make check`
+  that stamps the new HEAD included — as its own command. Branch deletions
+  and tag pushes stay ungated; `gh pr create` (gh pushes an unpushed branch
+  itself) requires the same marker, and forms
   the gate cannot trace (`bash -c '… git push …'`, `--mirror`) fail closed.
   Escape hatch: `FANOUT_SKIP_PUSH_CHECK=1`. Edits are auto-formatted by a
   `PostToolUse` hook (`scripts/agent-format-on-edit.sh`, per-file

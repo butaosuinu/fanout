@@ -248,8 +248,13 @@ contract invalidates its rationale.
   unclear ownership.
 - Never bypass a repository push gate (a pre-push hook or a PreToolUse deny)
   with `--no-verify` or by rewriting the hooks configuration. A denied push
-  means the pushed tip has not passed the repository gate; run the canonical
-  full gate on the final commit and push again.
+  usually means the pushed tip has not passed the repository gate; run the
+  canonical full gate on the final commit and push again. When the deny says
+  the push was chained after a ref-mutating command, the whole call was
+  blocked before anything ran: re-run every step of the blocked call as its
+  own command — the ref mutation, any pre-push comparison it contained (such
+  as the saved-SHA vs remote-tip `test`), the canonical full gate if HEAD
+  changed — then `git push` on its own.
 
 ## Limits and stop conditions
 
