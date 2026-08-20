@@ -1,0 +1,23 @@
+{
+  "id": "cli:worktree:create",
+  "result": {
+    "type": "worktree_created",
+    "workspace": {
+      "workspace_id": "w2",
+      "number": 2,
+      "label": "fixture-child",
+      "focused": false,
+      "pane_count": 1,
+      "tab_count": 1,
+      "active_tab_id": "w2:t1",
+      "agent_status": "working",
+      "worktree": {
+        "repo_key": "{{REPO_KEY}}",
+        "repo_name": "fixture",
+        "repo_root": "{{REPO_ROOT}}",
+        "checkout_path": "{{WORKTREE_PATH}}",
+        "is_linked_worktree": true
+      }
+    }
+  }
+}

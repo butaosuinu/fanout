@@ -1,0 +1,64 @@
+{
+  "id": "cli:api:snapshot",
+  "result": {
+    "type": "session_snapshot",
+    "snapshot": {
+      "version": "0.7.5",
+      "protocol": 17,
+      "workspaces": [
+        {
+          "workspace_id": "w1",
+          "number": 1,
+          "label": "fixture-coordinator",
+          "focused": false,
+          "pane_count": 1,
+          "tab_count": 1,
+          "active_tab_id": "w1:t1",
+          "agent_status": "unknown"
+        },
+        {
+          "workspace_id": "w2",
+          "number": 2,
+          "label": "fixture-child",
+          "focused": false,
+          "pane_count": 1,
+          "tab_count": 1,
+          "active_tab_id": "w2:t1",
+          "agent_status": "working",
+          "worktree": {
+            "repo_key": "{{REPO_KEY}}",
+            "repo_name": "fixture",
+            "repo_root": "{{REPO_ROOT}}",
+            "checkout_path": "{{WORKTREE_PATH}}",
+            "is_linked_worktree": true
+          }
+        }
+      ],
+      "tabs": [],
+      "panes": [
+        {
+          "pane_id": "w1:p1",
+          "terminal_id": "term-fixture-coordinator",
+          "workspace_id": "w1",
+          "tab_id": "w1:t1",
+          "focused": false,
+          "cwd": "{{REPO_ROOT}}",
+          "agent_status": "unknown",
+          "revision": 1
+        },
+        {
+          "pane_id": "w2:p1",
+          "terminal_id": "term-fixture-child",
+          "workspace_id": "w2",
+          "tab_id": "w2:t1",
+          "focused": false,
+          "cwd": "{{WORKTREE_PATH}}",
+          "agent_status": "working",
+          "revision": 2
+        }
+      ],
+      "layouts": [],
+      "agents": []
+    }
+  }
+}

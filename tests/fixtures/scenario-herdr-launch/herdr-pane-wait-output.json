@@ -1,0 +1,19 @@
+{
+  "id": "cli:pane:wait-output",
+  "result": {
+    "type": "output_matched",
+    "pane_id": "w2:p1",
+    "revision": 2,
+    "matched_line": "FANOUT_HERDR_READY:0123456789abcdef0123456789abcdef",
+    "read": {
+      "format": "text",
+      "pane_id": "w2:p1",
+      "revision": 2,
+      "source": "recent_unwrapped",
+      "tab_id": "w2:t1",
+      "text": "FANOUT_HERDR_READY:0123456789abcdef0123456789abcdef",
+      "truncated": false,
+      "workspace_id": "w2"
+    }
+  }
+}
