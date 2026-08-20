@@ -80,29 +80,33 @@ and no goreleaser config — the workflow is the whole pipeline.
    PR review gate (`.claude/hooks/pre-pr-review-gate.sh`) only intercepts
    `gh pr create`; **a tag push on its own is not gated.**
 
-5. **Watch the build.**
+5. **Watch the build.** The tag starts `release.yml` and `pages.yml`. Deleting a
+   tag does not delete the runs it started, so a re-cut tag has older runs under
+   the same name — match on the tagged commit. Stop waiting after a minute:
+   whether a run exists is the thing you are trying to find out.
 
    ```bash
-   until run_id="$(gh run list --workflow release.yml --branch vX.Y.Z --limit 1 \
-     --json databaseId -q '.[0].databaseId')" && [ -n "$run_id" ]; do sleep 5; done
-   gh run watch "$run_id" --exit-status
+   tag_sha="$(git rev-parse "vX.Y.Z^{commit}")"
+   export tag_sha
+   watch_run() {
+     local id=""
+     for _ in $(seq 12); do
+       id="$(gh run list --workflow "$1" --branch vX.Y.Z --limit 10 \
+         --json databaseId,headSha -q '[.[] | select(.headSha == $ENV.tag_sha)][0].databaseId')"
+       [ -n "$id" ] && break
+       sleep 5
+     done
+     [ -n "$id" ] || { echo "no $1 run for $tag_sha"; return 1; }
+     gh run watch "$id" --exit-status
+   }
    ```
-
-   The tag starts `pages.yml` too. Give up after a minute rather than waiting
-   forever — the point of the wait is to find out whether the run exists:
 
    ```bash
-   pages_id=""
-   for _ in $(seq 12); do
-     pages_id="$(gh run list --workflow pages.yml --branch vX.Y.Z --limit 1 \
-       --json databaseId -q '.[0].databaseId')"
-     [ -n "$pages_id" ] && break
-     sleep 5
-   done
-   [ -n "$pages_id" ] && gh run watch "$pages_id" --exit-status
+   watch_run release.yml
+   watch_run pages.yml
    ```
 
-   If no run appeared, publish the tag by hand:
+   If `pages.yml` never produced a run, publish the tag by hand:
 
    ```bash
    gh workflow run pages.yml --ref vX.Y.Z
