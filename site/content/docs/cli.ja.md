@@ -335,7 +335,7 @@ localhost Web ダッシュボードを起動します。`127.0.0.1` にのみバ
 | `--port` | `N` | バインドする port。既定: `0`（OS 割り当ての ephemeral port）。確定した URL が表示される。 |
 | `--open` | — | 既定ブラウザで URL を開く。既に起動中のサーバ（`.fanout/dashboard.json` に記録）があればそれを再利用し、二重起動しない。 |
 | `--no-token` | — | `/api/*` をゲートする起動毎のランダムトークンを外す。単一ユーザ端末向け。 |
-| `--no-keybind` | — | ダッシュボード起動時の tmux `F12` / `prefix + D` / `prefix + M` キーバインド登録をスキップする。 |
+| `--no-keybind` | — | ダッシュボード起動時の runtime dashboard shortcut 登録をスキップする。既存の keybind は変更しない。 |
 
 全フラグは `fanout dashboard --help` を参照してください。
 
@@ -430,7 +430,7 @@ fanout check-update
 | `FANOUT_BRIEFING_CODE_REVIEW` | Claude `/code-review` 指示（`briefingCodeReview`）の環境変数レイヤ。 |
 | `FANOUT_AGENT_TEAMS_HINT` | Claude Agent Teams ヒント（`agentTeamsHint`）の環境変数レイヤ。 |
 | `FANOUT_PR_VISUALIZATION` | 構造化 PR 本文とゲート付き Mermaid 指示（`prVisualization`）の環境変数レイヤ。 |
-| `FANOUT_DASHBOARD_KEYBIND` | tmux ダッシュボード / 同一 worktree 操作キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
+| `FANOUT_DASHBOARD_KEYBIND` | runtime のダッシュボード / 同一 worktree 操作キーバインド（`dashboardKeybind`）の環境変数レイヤ。 |
 | `FANOUT_CONSOLE_KEYBIND` | tmux コンソール復帰キーバインド（`consoleKeybind`）の環境変数レイヤ。 |
 | `FANOUT_NEW_SESSION_PLAN_MODE` | 新規 Session の launch posture（`newSessionPlanMode`）の環境変数レイヤ。 |
 | `FANOUT_ORCHESTRATOR_PLAN_MODE` | オーケストレーターの launch posture（`orchestratorPlanMode`）の環境変数レイヤ。 |

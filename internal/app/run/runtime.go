@@ -22,9 +22,9 @@ import (
 // Tests swap it to observe the between-launch delay without real sleeping.
 var sleepBetweenIssues = time.Sleep
 
-// BindKeysFunc registers the dashboard / worktree-action tmux keybindings after
-// a live run. cmd owns the implementation (it depends on the dashboard command's
-// key constants); the run lanes call it back through this seam.
+// BindKeysFunc registers the runtime's dashboard shortcuts after a live run.
+// cmd owns the implementation (it depends on the dashboard command's key
+// constants); the run lanes call it back through this seam.
 type BindKeysFunc func(lg *log.Logger, enabled bool)
 
 // Runtime is the resolved backend/git/GitHub context both launch lanes use.
@@ -53,12 +53,15 @@ func (r *Runtime) PrepareLaunchBackend() error {
 
 // shouldBindRuntimeKeys gates the dashboard keybind side effect on the
 // runtime actually offering global shortcuts, not on its name: only a live
-// run that created panes on a ShortcutBinder-capable backend binds keys.
+// run that created panes on a shortcut-capable backend binds keys.
 func shouldBindRuntimeKeys(dryRun bool, created int, runtimeBackend backend.Backend) bool {
 	if dryRun || created == 0 {
 		return false
 	}
-	_, ok := backend.AsShortcutBinder(runtimeBackend)
+	if _, ok := backend.AsShortcutBinder(runtimeBackend); ok {
+		return true
+	}
+	_, ok := backend.AsDashboardShortcutBinder(runtimeBackend)
 	return ok
 }
 

@@ -330,7 +330,7 @@ Starts the localhost web dashboard: bound to `127.0.0.1`, token-gated, visualizi
 | `--port` | `N` | Port to bind. Default: `0` (an OS-assigned ephemeral port); the chosen URL is printed. |
 | `--open` | — | Open the URL in the default browser. Reuses a server that is already running (recorded in `.fanout/dashboard.json`) instead of starting a second one. |
 | `--no-token` | — | Drop the random per-start token that gates `/api/*`. For single-user machines. |
-| `--no-keybind` | — | Skip registering tmux `F12` / `prefix + D` / `prefix + M` keybindings when the dashboard starts. |
+| `--no-keybind` | — | Skip registering runtime dashboard shortcuts when the dashboard starts. Existing bindings stay unchanged. |
 
 Run `fanout dashboard --help` for the full flag list.
 
@@ -425,7 +425,7 @@ Read-only: fetches the latest release tag from `butaosuinu/fanout`, compares it 
 | `FANOUT_BRIEFING_CODE_REVIEW` | Environment layer for the Claude `/code-review` instruction (`briefingCodeReview`). |
 | `FANOUT_AGENT_TEAMS_HINT` | Environment layer for the Claude Agent Teams hint (`agentTeamsHint`). |
 | `FANOUT_PR_VISUALIZATION` | Environment layer for the structured PR-body and gated Mermaid guidance (`prVisualization`). |
-| `FANOUT_DASHBOARD_KEYBIND` | Environment layer for the dashboard/action tmux keybindings (`dashboardKeybind`). |
+| `FANOUT_DASHBOARD_KEYBIND` | Environment layer for the runtime dashboard/action keybindings (`dashboardKeybind`). |
 | `FANOUT_CONSOLE_KEYBIND` | Environment layer for the console-return tmux keybindings (`consoleKeybind`). |
 | `FANOUT_NEW_SESSION_PLAN_MODE` | Environment layer for the new-session launch posture (`newSessionPlanMode`). |
 | `FANOUT_ORCHESTRATOR_PLAN_MODE` | Environment layer for the orchestrator launch posture (`orchestratorPlanMode`). |

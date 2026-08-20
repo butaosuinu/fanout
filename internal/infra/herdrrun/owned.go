@@ -219,20 +219,21 @@ type ownedAdmission struct {
 }
 
 type ownedLayout struct {
-	runtimeBase      string
-	runtimeDir       string
-	markerPath       string
-	lifecycleLock    string
-	supervisorLock   string
-	socketPath       string
-	clientSocketPath string
-	xdgConfigHome    string
-	xdgStateHome     string
-	xdgDataHome      string
-	xdgCacheHome     string
-	configPath       string
-	binaryDir        string
-	launcherDir      string
+	runtimeBase             string
+	runtimeDir              string
+	markerPath              string
+	lifecycleLock           string
+	supervisorLock          string
+	socketPath              string
+	clientSocketPath        string
+	xdgConfigHome           string
+	xdgStateHome            string
+	xdgDataHome             string
+	xdgCacheHome            string
+	configPath              string
+	dashboardDescriptorPath string
+	binaryDir               string
+	launcherDir             string
 }
 
 type pathIdentity struct {
@@ -878,21 +879,26 @@ func prepareOwnedLayout(runtimeBase, session string) (ownedLayout, error) {
 	abs = filepath.Join(parent, filepath.Base(abs))
 	runtimeDir := filepath.Join(filepath.Clean(abs), session)
 	configHome := filepath.Join(runtimeDir, "xdg-config")
-	layout := ownedLayout{
-		runtimeBase: filepath.Clean(abs), runtimeDir: runtimeDir,
-		markerPath: filepath.Join(runtimeDir, ownedMarkerName), lifecycleLock: filepath.Join(runtimeDir, ownedLifecycleLockName),
-		supervisorLock: filepath.Join(runtimeDir, ownedSupervisorLockName), socketPath: filepath.Join(runtimeDir, "herdr.sock"),
-		clientSocketPath: filepath.Join(runtimeDir, "herdr-client.sock"), xdgConfigHome: configHome,
-		xdgStateHome: filepath.Join(runtimeDir, "xdg-state"), xdgDataHome: filepath.Join(runtimeDir, "xdg-data"),
-		xdgCacheHome: filepath.Join(runtimeDir, "xdg-cache"), configPath: filepath.Join(configHome, "herdr", "config.toml"),
-		binaryDir: filepath.Join(runtimeDir, "binary"), launcherDir: filepath.Join(runtimeDir, "launcher"),
-	}
+	layout := newOwnedLayout(filepath.Clean(abs), runtimeDir, configHome)
 	for _, path := range []string{layout.socketPath, layout.clientSocketPath} {
 		if len(path) > maxUnixSocketPathBytes {
 			return ownedLayout{}, fmt.Errorf("herdr owned socket path is %d bytes, want at most %d: %s", len(path), maxUnixSocketPathBytes, path)
 		}
 	}
 	return layout, nil
+}
+
+func newOwnedLayout(runtimeBase, runtimeDir, configHome string) ownedLayout {
+	return ownedLayout{
+		runtimeBase: runtimeBase, runtimeDir: runtimeDir,
+		markerPath: filepath.Join(runtimeDir, ownedMarkerName), lifecycleLock: filepath.Join(runtimeDir, ownedLifecycleLockName),
+		supervisorLock: filepath.Join(runtimeDir, ownedSupervisorLockName), socketPath: filepath.Join(runtimeDir, "herdr.sock"),
+		clientSocketPath: filepath.Join(runtimeDir, "herdr-client.sock"), xdgConfigHome: configHome,
+		xdgStateHome: filepath.Join(runtimeDir, "xdg-state"), xdgDataHome: filepath.Join(runtimeDir, "xdg-data"),
+		xdgCacheHome: filepath.Join(runtimeDir, "xdg-cache"), configPath: filepath.Join(configHome, "herdr", "config.toml"),
+		dashboardDescriptorPath: filepath.Join(runtimeDir, dashboardDescriptorName),
+		binaryDir:               filepath.Join(runtimeDir, "binary"), launcherDir: filepath.Join(runtimeDir, "launcher"),
+	}
 }
 
 func ensureOwnedLayout(layout ownedLayout) error {
@@ -914,7 +920,7 @@ func validateOwnedLayout(layout ownedLayout, launcherPath string) error {
 			return err
 		}
 	}
-	if err := validateCompatibleOwnedConfig(layout.configPath, launcherPath); err != nil {
+	if err := validateCompatibleOwnedConfig(layout, launcherPath); err != nil {
 		return err
 	}
 	info, err := os.Lstat(filepath.Join(layout.runtimeDir, ownedSupervisorLogName))
@@ -935,15 +941,24 @@ func legacyOwnedConfigContents(launcherPath string) []byte {
 		"\nshell_mode = \"non_login\"\n\n[update]\nmanifest_check = false\n")
 }
 
-func validateCompatibleOwnedConfig(path, launcherPath string) error {
-	currentErr := validatePrivateContents(path, ownedConfigContents(launcherPath))
+func validateCompatibleOwnedConfig(layout ownedLayout, launcherPath string) error {
+	currentErr := validatePrivateContents(layout.configPath, ownedConfigContents(launcherPath))
 	if currentErr == nil {
 		return nil
 	}
-	if err := validatePrivateContents(path, legacyOwnedConfigContents(launcherPath)); err != nil {
+	if err := validatePrivateContents(layout.configPath, legacyOwnedConfigContents(launcherPath)); err == nil {
+		return nil
+	}
+	descriptor, found, err := readDashboardDescriptor(layout)
+	if err != nil {
+		return err
+	}
+	if !found {
 		return currentErr
 	}
-	return nil
+	return validatePrivateContents(layout.configPath, ownedDashboardConfigContents(
+		launcherPath, descriptor.HelperPath, layout.dashboardDescriptorPath,
+	))
 }
 
 func ensureOwnedConfig(layout ownedLayout, launcherPath string) error {

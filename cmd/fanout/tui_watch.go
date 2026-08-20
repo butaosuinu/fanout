@@ -271,9 +271,9 @@ func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandNam
 	var execution run.IssueExecutionResult
 	var code exitcode.Code
 	if input == nil {
-		execution, code = run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, runReady, runAfter)
+		execution, code = run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, runtimeDashboardKeyBinder(rt.Backend), runReady, runAfter)
 	} else {
-		execution, code = run.IssuesWithPlanInputResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, *input, runReady, runAfter)
+		execution, code = run.IssuesWithPlanInputResultWhenReady(cfg, launchLogger, rt, commandName, runtimeDashboardKeyBinder(rt.Backend), *input, runReady, runAfter)
 	}
 	result := parentIssueFanoutResult{
 		CreatedPaneIDs: execution.CreatedPaneIDs,

@@ -23,7 +23,7 @@ direct claude と direct Codex には公式 session report に必要な owned so
 fanout は launch の検証後に限り、workspace、pane、terminal、repository、agent、session、socket の identity を `.fanout/state.json` へ保存します。
 インストール済みの herdr integration が provider session の identity を報告した場合は、その値も保存します。
 
-owned session は自分の `config.toml` を固定します。既定 shell は fanout の launcher(non-login)、herdr の復元時 agent resume は off、herdr の update manifest check も off です。
+owned session は自分の `config.toml` を固定します。既定 shell は fanout の launcher(non-login)、herdr の復元時 agent resume は off、herdr の update manifest check も off です。`dashboardKeybind` が有効なら、focus 中の pane から web ダッシュボードを開く Herdr の `F12` shell command も登録します。
 fanout の知らないところで agent が起動し直されることはありません。resume は後述の明示操作だけです。
 
 常駐 TUI コンソール、`--status`、web ダッシュボードには、記録済み session と各 pane の runtime backend、identity が表示されます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
@@ -95,7 +95,7 @@ herdr workspace close <workspace-id>
 - focus はさらに agent session を保存済みの行だけで通ります。session を報告するのは agent integration なので、`herdr integration install claude` / `codex` を入れていない環境では focus が拒否されます。integration を入れても通らない行が 3 種類あります。attach で起動した agent ([#732](https://github.com/butaosuinu/fanout/issues/732))、Codex の Plan Mode と team (workload が provider ではなく fanout の controller)、OpenCode です。いずれも socket 系の環境変数を渡さないので hook が session を報告できません。
 - 同じ provider が同じ pane で新しい会話を始めると (claude の `/clear`、codex の `/new`)、herdr は conversation を差し替え、agent record の名前も落とします。行が保存した conversation はそちらへ追随し、落ちた名前は fanout が付け直すので、focus、peek、`--close`、`--cleanup` は前後で使えたままです。別の provider の conversation、runtime が発行していない ref、他の名前を名乗っている agent record は従来どおり拒否します。
 - Codex 子の Plan Mode は fanout の app-server controller と owned launcher で動きます。Claude と OpenCode は固有の mode flag を使います。
-- tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれません。
+- Herdr に登録するのはダッシュボード用の direct `F12` command だけです。tmux 専用の `prefix + D`、`prefix + M`、コンソール復帰 keybind、herdr のアプリ内通知 `notification show` は使いません。
 
 TUI のヘッダには、選択された backend とその理由が常に表示されます。例: `backend: herdr (HERDR_ENV)`。
 
@@ -189,7 +189,7 @@ owned モデルへ移る手順は次のとおりです。
 | `--team` peer messaging | SQLite registry、Claude watcher、Codex app-server bridge | 同じ registry と push lane |
 | `--merge` / `--close` / `--cleanup`、TUI merge / close / cleanup | 対応 | fanout-owned 行の identity を検証して実行。dirty checkout は force しない |
 | 自動 nudge(`fanout msg nudge`) | 相手が入力を受けられる状態なら配送 | current launch に束縛された refined telemetry と live identity/process の照合後に no-wait の `agent prompt` を 1 回発行。それ以外は no-op |
-| tmux keybind(ダッシュボード、コンソール復帰) | 登録する | 登録しない |
+| global keybind | ダッシュボード用 `F12` / `prefix + D`、worktree 操作用 `prefix + M`、コンソール復帰 | fanout-owned Herdr config にダッシュボード用 `F12` だけ登録 |
 | 通知 | bell / tmux / ntfy / slack の channel | bell / ntfy / slack は動く。tmux channel と herdr の `notification show` は発火しない |
 | 子の Plan Mode launch | 対応 | 対応。Codex は fanout の app-server controller、Claude / OpenCode は固有の mode flag を使う |
 | TUI フォーム(設定、ヘルプ) | tmux popup | インラインの in-process フォーム |

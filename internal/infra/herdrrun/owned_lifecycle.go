@@ -140,19 +140,74 @@ func prepareRestartedLauncher(
 	if err != nil {
 		return binaryAdmission{}, err
 	}
-	if validatePrivateContents(layout.configPath, ownedConfigContents(current.path)) == nil {
+	if restartedConfigIsCurrent(layout, current.path) &&
+		validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, current) == nil {
+		if refreshErr := refreshRestartedDashboardDescriptor(layout, current.path, current); refreshErr != nil {
+			return binaryAdmission{}, refreshErr
+		}
 		return current, validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, current)
 	}
-	if err := validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, previous); err != nil {
+	if validateErr := validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, previous); validateErr != nil {
+		return binaryAdmission{}, validateErr
+	}
+	desired, err := restartedOwnedConfigContents(layout, previous.path, current)
+	if err != nil {
 		return binaryAdmission{}, err
 	}
-	if err := atomicfs.WriteFile(layout.configPath, ownedConfigContents(current.path), 0o600); err != nil {
+	if err := atomicfs.WriteFile(layout.configPath, desired, 0o600); err != nil {
 		return binaryAdmission{}, fmt.Errorf("replace Herdr owned launcher config for restart: %w", err)
 	}
-	if err := validatePrivateContents(layout.configPath, ownedConfigContents(current.path)); err != nil {
+	if err := validatePrivateContents(layout.configPath, desired); err != nil {
 		return binaryAdmission{}, err
 	}
 	return current, validateRestartBundle(expected, commonDir, commonIdentity, layout, admitted, current)
+}
+
+func restartedConfigIsCurrent(layout ownedLayout, launcher string) bool {
+	if validatePrivateContents(layout.configPath, ownedConfigContents(launcher)) == nil {
+		return true
+	}
+	_, enabled, err := dashboardConfigDescriptor(layout, launcher)
+	return err == nil && enabled
+}
+
+func restartedOwnedConfigContents(
+	layout ownedLayout,
+	previousLauncher string,
+	current binaryAdmission,
+) ([]byte, error) {
+	descriptor, enabled, err := dashboardConfigDescriptor(layout, previousLauncher)
+	if err != nil || !enabled {
+		return ownedConfigContents(current.path), err
+	}
+	descriptor.DashboardPath = current.path
+	descriptor.DashboardSHA256 = current.sha256
+	if err := writeDashboardDescriptor(layout, descriptor); err != nil {
+		return nil, err
+	}
+	return ownedDashboardConfigContents(current.path, descriptor.HelperPath, layout.dashboardDescriptorPath), nil
+}
+
+func refreshRestartedDashboardDescriptor(layout ownedLayout, launcher string, current binaryAdmission) error {
+	descriptor, enabled, err := dashboardConfigDescriptor(layout, launcher)
+	if err != nil || !enabled {
+		return err
+	}
+	descriptor.DashboardPath = current.path
+	descriptor.DashboardSHA256 = current.sha256
+	return writeDashboardDescriptor(layout, descriptor)
+}
+
+func dashboardConfigDescriptor(layout ownedLayout, launcher string) (dashboardDescriptor, bool, error) {
+	descriptor, found, err := readDashboardDescriptor(layout)
+	if err != nil || !found {
+		return dashboardDescriptor{}, false, err
+	}
+	expected := ownedDashboardConfigContents(launcher, descriptor.HelperPath, layout.dashboardDescriptorPath)
+	if validateErr := validatePrivateContents(layout.configPath, expected); validateErr != nil {
+		return dashboardDescriptor{}, false, validateErr
+	}
+	return descriptor, true, nil
 }
 
 // ShutdownOwned calls markIssued after its final preflight and immediately
@@ -601,12 +656,12 @@ func removeRetiredOwnedConfig(
 ) error {
 	_, err := os.Lstat(layout.configPath)
 	if errors.Is(err, os.ErrNotExist) && mayBeAbsent {
-		return nil
+		return removeDashboardDescriptor(layout)
 	}
 	if err != nil {
 		return fmt.Errorf("inspect retired Herdr owned config: %w", err)
 	}
-	if err := validateCompatibleOwnedConfig(layout.configPath, expected.LauncherPath); err != nil {
+	if err := validateCompatibleOwnedConfig(layout, expected.LauncherPath); err != nil {
 		return fmt.Errorf("validate retired Herdr owned config: %w", err)
 	}
 	if err := os.Remove(layout.configPath); err != nil {
@@ -618,7 +673,7 @@ func removeRetiredOwnedConfig(
 		}
 		return fmt.Errorf("retired Herdr owned config remains after removal")
 	}
-	return nil
+	return removeDashboardDescriptor(layout)
 }
 
 func verifyRetiredOwnedIdentity(

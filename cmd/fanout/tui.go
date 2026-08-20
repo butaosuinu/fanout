@@ -240,6 +240,8 @@ func enterManagedConsole(
 		lg.Err("tui: ensure owned Herdr session: %v", err)
 		return exitcode.Env
 	}
+	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
+	syncOwnedDashboardKey(lg, resolvedSettings.DashboardKeybind, owned)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	console, err := ensureManagedConsoleForTUI(ctx, projectRoot, owned, os.Environ(), "")
@@ -277,6 +279,7 @@ func runTUIConsole(
 ) exitcode.Code {
 	hosted := console != nil
 	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
+	syncOwnedDashboardKey(lg, resolvedSettings.DashboardKeybind, owned)
 	listLive := runtimeListLiveForProject(projectRoot, hosted)
 	hookConfig := hooks.LoadUserConfig(lg)
 	var watcher fanouttui.WatcherRunner
@@ -321,6 +324,7 @@ func runTUIConsole(
 			selection,
 			hosted,
 			interactiveLaunch,
+			owned,
 			lg,
 		),
 		ListLive:                         listLive,
@@ -493,7 +497,7 @@ func runtimeShellPaneAlive(hostName backend.Name, listLive func() ([]backend.Liv
 	}
 }
 
-func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConfig hooks.Config, selection backend.Selection, hosted, interactiveLaunch bool, lg *log.Logger) fanouttui.SettingsReloadFunc {
+func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConfig hooks.Config, selection backend.Selection, hosted, interactiveLaunch bool, owned paneruntime.ManagedSession, lg *log.Logger) fanouttui.SettingsReloadFunc {
 	return func() (fanouttui.SettingsRuntime, error) {
 		resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
 		var watcher fanouttui.WatcherRunner
@@ -522,7 +526,7 @@ func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConf
 			WatcherRunningLabel: resolvedSettings.WatcherRunningLabel,
 			Notifier:            notifier,
 		}
-		syncTUIReloadKeys(hosted, resolvedSettings, lg)
+		syncTUIReloadKeys(hosted, owned, resolvedSettings, lg)
 		runtime.LaunchIssue = reloadedTUIIssueLauncher(interactiveLaunch, projectRoot, session, commandName, resolvedSettings, hookConfig)
 		return runtime, nil
 	}
@@ -532,12 +536,13 @@ func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConf
 // It runs only for a hosted console: the shortcut registration resolves the
 // host runtime itself, so a managed console would otherwise rewrite keys on a
 // server it never put a pane on.
-func syncTUIReloadKeys(hosted bool, resolved settings.Settings, lg *log.Logger) {
-	if !hosted {
+func syncTUIReloadKeys(hosted bool, owned paneruntime.ManagedSession, resolved settings.Settings, lg *log.Logger) {
+	if hosted {
+		syncDashboardKey(lg, resolved.DashboardKeybind, true)
+		syncConsoleKey(lg, resolved.ConsoleKeybind, true)
 		return
 	}
-	syncDashboardKey(lg, resolved.DashboardKeybind, true)
-	syncConsoleKey(lg, resolved.ConsoleKeybind, true)
+	syncOwnedDashboardKey(lg, resolved.DashboardKeybind, owned)
 }
 
 func reloadedTUIIssueLauncher(enabled bool, projectRoot, session, commandName string, resolved settings.Settings, hookConfig hooks.Config) fanouttui.IssueLaunchFunc {

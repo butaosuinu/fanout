@@ -8,10 +8,21 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/backendtest"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
+
+type dashboardShortcutBinderFake struct {
+	backend.Backend
+	options []backend.DashboardShortcutOptions
+}
+
+func (f *dashboardShortcutBinderFake) SyncDashboardShortcut(options backend.DashboardShortcutOptions) error {
+	f.options = append(f.options, options)
+	return nil
+}
 
 func TestIsDashboardRequest(t *testing.T) {
 	tests := []struct {
@@ -100,30 +111,32 @@ func TestParsePort(t *testing.T) {
 	}
 }
 
-func TestNoKeybindOverride(t *testing.T) {
-	if noKeybindOverride(false) != nil {
-		t.Fatal("no --no-keybind -> nil (defer to lower layers)")
-	}
-	if v := noKeybindOverride(true); v == nil || *v != false {
-		t.Fatalf("--no-keybind -> *false, got %v", v)
-	}
-}
-
 func TestBindDashboardKeyForBackendNeedsShortcutCapability(t *testing.T) {
 	argsPath := installTUIDashboardTmuxShim(t)
-	bindDashboardKeyForBackend(discardLogger(), true, backend.Selection{Name: backend.Herdr})
+	bindDashboardKeyForBackend(discardLogger(), true, backend.Selection{Name: backend.Herdr}, "/repo")
 	if body, err := os.ReadFile(argsPath); err == nil {
 		t.Fatalf("herdr dashboard bound tmux keys:\n%s", body)
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("read tmux argv log: %v", err)
 	}
 
-	bindDashboardKeyForBackend(discardLogger(), true, backend.Selection{Name: backend.Tmux})
+	bindDashboardKeyForBackend(discardLogger(), true, backend.Selection{Name: backend.Tmux}, "/repo")
 	log := readTUITmuxLog(t, argsPath)
 	for _, want := range []string{"bind-key\nD\nrun-shell", "bind-key\n-n\nF12\nrun-shell", "bind-key\nM\ndisplay-popup"} {
 		if !tmuxLogHasCommand(log, want) {
 			t.Fatalf("tmux dashboard log missing %q:\n%s", want, log)
 		}
+	}
+}
+
+func TestBindRuntimeDashboardKeyUsesDashboardOnlyCapability(t *testing.T) {
+	fake := &dashboardShortcutBinderFake{Backend: backendtest.New()}
+	bindRuntimeDashboardKey(discardLogger(), false, fake)
+	if len(fake.options) != 1 || fake.options[0].Enabled || fake.options[0].FanoutBin == "" {
+		t.Fatalf("dashboard shortcut options = %+v", fake.options)
+	}
+	if len(fake.options[0].Environment) == 0 {
+		t.Fatal("dashboard shortcut did not receive the host environment")
 	}
 }
 

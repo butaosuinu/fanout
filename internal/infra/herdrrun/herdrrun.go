@@ -32,9 +32,10 @@ const (
 )
 
 var (
-	_ corebackend.Backend         = (*Backend)(nil)
-	_ corebackend.OwnedCloser     = (*Backend)(nil)
-	_ corebackend.DryRunPreviewer = (*Backend)(nil)
+	_ corebackend.Backend                 = (*Backend)(nil)
+	_ corebackend.DashboardShortcutBinder = (*Backend)(nil)
+	_ corebackend.OwnedCloser             = (*Backend)(nil)
+	_ corebackend.DryRunPreviewer         = (*Backend)(nil)
 )
 
 // Backend observes one named herdr session. New returns an unowned handle, so

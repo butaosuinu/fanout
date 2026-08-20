@@ -205,6 +205,44 @@ func TestPrepareRestartedLauncherMigratesLegacyOwnedConfig(t *testing.T) {
 	}
 }
 
+func TestRestartOwnedPreservesDashboardShortcutConfig(t *testing.T) {
+	h := newOwnedHarness(t)
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if slices.Equal(args, []string{"server", "reload-config"}) {
+			return []byte(`{"status":"applied"}`), nil
+		}
+		return nil, errors.New("unexpected command")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if syncErr := h.session.Backend().SyncDashboardShortcut(corebackend.DashboardShortcutOptions{
+		Enabled: true, FanoutBin: executable, Environment: []string{"HOME=/home/operator", "PATH=/usr/bin"},
+	}); syncErr != nil {
+		t.Fatal(syncErr)
+	}
+	expected := inspectOwnedServerForTest(t, h)
+	saveOwnedServerIntent(t, h, state.IntentRestart, expected)
+	retireFakeSupervisorForRestart(t, h, false)
+	restarted, err := restartOwned(
+		context.Background(), h.ownedOptions(), expected, h.supervisor.start, h.session.backend,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, found, err := readDashboardDescriptor(h.layout)
+	if err != nil || !found {
+		t.Fatalf("dashboard descriptor after restart = (%+v, %t, %v)", descriptor, found, err)
+	}
+	expectedConfig := ownedDashboardConfigContents(
+		restarted.LauncherPath, descriptor.HelperPath, h.layout.dashboardDescriptorPath,
+	)
+	if err := validatePrivateContents(h.layout.configPath, expectedConfig); err != nil {
+		t.Fatalf("dashboard config after restart: %v", err)
+	}
+}
+
 func TestShutdownOwnedRejectsResourcesAndDoesNotSignalOnRetry(t *testing.T) {
 	h := newOwnedHarness(t)
 	expected := inspectOwnedServerForTest(t, h)

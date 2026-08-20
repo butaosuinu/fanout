@@ -286,7 +286,7 @@ func TestSettingsReloadPreservesOnlyAdmittedHerdrIssueLaunch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reload := newTUISettingsReloadFunc(
 				repo, "owned-session", "fanout", hooks.EmptyConfig(),
-				backend.Selection{Name: backend.Herdr}, false, tt.admitted, discardLogger(),
+				backend.Selection{Name: backend.Herdr}, false, tt.admitted, nil, discardLogger(),
 			)
 			runtime, err := reload()
 			if err != nil {
@@ -854,7 +854,7 @@ func TestTUISettingsReloadCleansDisabledKeybinds(t *testing.T) {
 	}
 	argsPath := installTUISettingsReloadTmuxShim(t)
 
-	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux}, true, true, discardLogger())
+	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux}, true, true, nil, discardLogger())
 	if _, err := reload(); err != nil {
 		t.Fatal(err)
 	}
