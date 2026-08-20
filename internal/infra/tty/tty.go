@@ -19,6 +19,15 @@ func IsColorCapable(w io.Writer) bool {
 	if !ok {
 		return false
 	}
+	return IsTerminal(f)
+}
+
+// IsTerminal reports whether f is an open character device — a real terminal
+// rather than a pipe, regular file, or closed descriptor.
+func IsTerminal(f *os.File) bool {
+	if f == nil {
+		return false
+	}
 	fi, err := f.Stat()
 	if err != nil {
 		return false

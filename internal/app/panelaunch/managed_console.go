@@ -19,20 +19,23 @@ const ManagedConsoleRuntimeParent = "@console"
 
 // ManagedSessionRuntime is the whole owned-session surface the composition root
 // holds: the launch port plus the session-wide operations no single launch
-// needs — the attach command a plain terminal runs, the saved-row identity
-// recheck, and the bound backend a workspace is retired through.
+// needs — the two attach forms a plain terminal enters through, the saved-row
+// identity recheck, and the bound backend a workspace is retired through.
 type ManagedSessionRuntime interface {
 	ManagedLaunchRuntime
 	AttachCommand() (string, error)
+	AttachExec(baseEnvironment []string) (backend.AttachExec, error)
 	VerifyOwnedTarget(backend.OwnedPaneIdentity) error
 	BindOwnedWorkspaceClose(backend.OwnedPaneIdentity) (backend.OwnedClosingBackend, error)
 }
 
-// ManagedConsoleResult is the durable console pane plus the shell command a
-// plain terminal can run to attach the isolated owned Herdr client.
+// ManagedConsoleResult is the durable console pane plus both attach forms: the
+// exec image a terminal enters the isolated owned Herdr client through, and
+// the equivalent shell command for a caller that can only print it.
 type ManagedConsoleResult struct {
 	Pane          state.Pane
 	AttachCommand string
+	Attach        backend.AttachExec
 }
 
 // EnsureManagedConsole creates or adopts the one repo-root console workspace for
@@ -80,7 +83,7 @@ func ensureManagedConsoleLocked(
 		return ManagedConsoleResult{}, err
 	}
 	if found {
-		result, reused, reuseErr := reuseManagedConsole(ctx, locked, root, owned, pane)
+		result, reused, reuseErr := reuseManagedConsole(ctx, locked, root, owned, pane, callerEnvironment)
 		if reuseErr != nil || reused {
 			return result, reuseErr
 		}
@@ -114,7 +117,7 @@ func ensureManagedConsoleLocked(
 	if err := finalizeManagedPane(locked, root, intent, staticManagedPane(pane)); err != nil {
 		return ManagedConsoleResult{}, err
 	}
-	return managedConsoleResult(owned, pane)
+	return managedConsoleResult(owned, pane, callerEnvironment)
 }
 
 func validateManagedConsoleIntentRoot(intent state.LaunchIntent, projectRoot string) error {
@@ -130,6 +133,7 @@ func reuseManagedConsole(
 	projectRoot string,
 	owned ManagedSessionRuntime,
 	pane state.Pane,
+	callerEnvironment []string,
 ) (ManagedConsoleResult, bool, error) {
 	if err := verifySavedManagedConsole(owned, pane); err != nil {
 		if !staleManagedConsoleRecoverable(err) {
@@ -146,7 +150,7 @@ func reuseManagedConsole(
 	if err := removeCompletedManagedConsoleIntent(locked, projectRoot, pane); err != nil {
 		return ManagedConsoleResult{}, false, err
 	}
-	result, err := managedConsoleResult(owned, pane)
+	result, err := managedConsoleResult(owned, pane, callerEnvironment)
 	return result, true, err
 }
 
@@ -520,10 +524,15 @@ func completedManagedConsoleIntentMatchesPane(intent state.LaunchIntent, pane st
 func managedConsoleResult(
 	owned ManagedSessionRuntime,
 	pane state.Pane,
+	callerEnvironment []string,
 ) (ManagedConsoleResult, error) {
 	command, err := owned.AttachCommand()
 	if err != nil {
 		return ManagedConsoleResult{}, err
 	}
-	return ManagedConsoleResult{Pane: pane, AttachCommand: command}, nil
+	attach, err := owned.AttachExec(callerEnvironment)
+	if err != nil {
+		return ManagedConsoleResult{}, err
+	}
+	return ManagedConsoleResult{Pane: pane, AttachCommand: command, Attach: attach}, nil
 }

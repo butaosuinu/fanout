@@ -32,7 +32,10 @@ import (
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
-func TestEnterHerdrTUISessionBootstrapsConsoleAndPrintsAttachCommand(t *testing.T) {
+// stubManagedConsoleBootstrap pins the session/console bootstrap seams to a
+// fixed result and restores them when the test ends.
+func stubManagedConsoleBootstrap(t *testing.T, result panelaunch.ManagedConsoleResult) {
+	t.Helper()
 	originalEnsure := ensureManagedSessionForTUI
 	originalConsole := ensureManagedConsoleForTUI
 	t.Cleanup(func() {
@@ -56,11 +59,33 @@ func TestEnterHerdrTUISessionBootstrapsConsoleAndPrintsAttachCommand(t *testing.
 		if root != "/repo" || got != panelaunch.ManagedSessionRuntime(owned) {
 			t.Fatalf("console input = root:%q session:%p", root, got)
 		}
-		return panelaunch.ManagedConsoleResult{
-			Pane:          state.Pane{PaneID: "pane-1"},
-			AttachCommand: "HERDR_SESSION='owned-session' '/owned/herdr'",
-		}, nil
+		return result, nil
 	}
+}
+
+// pinConsoleAttachSeams pins the terminal probe and the exec seam so the test
+// drives one attach form deterministically regardless of the ambient stdio.
+func pinConsoleAttachSeams(t *testing.T, isTerminal bool, exec func(backend.AttachExec) error) {
+	t.Helper()
+	originalTerminal := stdioIsTerminal
+	originalExec := execSessionAttach
+	t.Cleanup(func() {
+		stdioIsTerminal = originalTerminal
+		execSessionAttach = originalExec
+	})
+	stdioIsTerminal = func() bool { return isTerminal }
+	execSessionAttach = exec
+}
+
+func TestEnterHerdrTUISessionBootstrapsConsoleAndPrintsAttachCommand(t *testing.T) {
+	stubManagedConsoleBootstrap(t, panelaunch.ManagedConsoleResult{
+		Pane:          state.Pane{PaneID: "pane-1"},
+		AttachCommand: "HERDR_SESSION='owned-session' '/owned/herdr'",
+	})
+	pinConsoleAttachSeams(t, false, func(backend.AttachExec) error {
+		t.Fatal("exec attach must not run without a terminal")
+		return nil
+	})
 	var stdout, stderr bytes.Buffer
 	logger := log.NewWith(&stdout, &stderr, false)
 	code := enterManagedConsole(
@@ -78,6 +103,44 @@ func TestEnterHerdrTUISessionBootstrapsConsoleAndPrintsAttachCommand(t *testing.
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	if got := lines[len(lines)-1]; got != "HERDR_SESSION='owned-session' '/owned/herdr'" {
 		t.Fatalf("attach line = %q, want bare command", got)
+	}
+}
+
+func TestEnterHerdrTUISessionExecsAttachOnTerminal(t *testing.T) {
+	want := backend.AttachExec{
+		Path: "/owned/herdr",
+		Argv: []string{"/owned/herdr"},
+		Env:  []string{"PATH=/usr/bin", "HERDR_SESSION=owned-session"},
+	}
+	stubManagedConsoleBootstrap(t, panelaunch.ManagedConsoleResult{
+		Pane:          state.Pane{PaneID: "pane-1"},
+		AttachCommand: "HERDR_SESSION='owned-session' '/owned/herdr'",
+		Attach:        want,
+	})
+	var got backend.AttachExec
+	execCalls := 0
+	pinConsoleAttachSeams(t, true, func(spec backend.AttachExec) error {
+		execCalls++
+		got = spec
+		return errors.New("exec refused by test")
+	})
+	var stdout, stderr bytes.Buffer
+	logger := log.NewWith(&stdout, &stderr, false)
+	code := enterManagedConsole(
+		"/repo",
+		backend.Selection{Name: backend.Herdr, Reason: backend.ReasonEnvironment},
+		logger,
+	)
+	if code != exitcode.OK || execCalls != 1 || !reflect.DeepEqual(got, want) {
+		t.Fatalf("enterManagedConsole() = %d execCalls=%d spec=%+v", code, execCalls, got)
+	}
+	// The exec only returns on failure; the operator still gets the command.
+	if !strings.Contains(stderr.String(), "exec refused by test") {
+		t.Fatalf("exec failure warning missing: %q", stderr.String())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if got := lines[len(lines)-1]; got != "HERDR_SESSION='owned-session' '/owned/herdr'" {
+		t.Fatalf("fallback attach line = %q, want bare command", got)
 	}
 }
 

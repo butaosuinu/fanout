@@ -110,17 +110,19 @@ backend の移行コマンドはありません。既存の tmux 親は tmux の
 
 ## owned session を起動する
 
-素のシェルからの引数なし `fanout` が session を bootstrap し、attach command を 1 つ表示します。
+素のシェルからの引数なし `fanout` が session を bootstrap し、そのまま中に入ります。
 
 ```bash
 export FANOUT_BACKEND=herdr
 fanout
 ```
 
-この実行で owned session と repository root の console shell が 1 つ起動または再採用されます。
-表示された command で attach し、console ペインの中でもう一度 `fanout` を実行してください。
+この実行で owned session と repository root の console shell が 1 つ起動または再採用され、fanout プロセスは pin 済みの herdr client に置き換わります。端末は attach 済みで、コピーするものはありません。
+console ペインの中でもう一度 `fanout` を実行してください。
 そのペインでは herdr が `HERDR_ENV=1` を設定するため、TUI コンソールがそのまま開きます。
-fanout が呼び出し元の shell を置き換えたり attach したりすることはなく、linked worktree 間では同じ console 行を共有します。
+linked worktree 間では同じ console 行を共有します。
+
+端末がない場合 — stdin か stdout がパイプ、つまりスクリプトや CI — は attach せず、stdout の最終行に attach command を表示します。exec に失敗したときも同じ表示に落ちるので、手で実行する command は常に残ります。
 
 CLI のファンアウトには attach も既存 session も不要です。
 同じ owned session を作成または再採用し、プロジェクトルートの coordinator workspace と子ごとの worktree workspace を足して、各 agent を起動します。

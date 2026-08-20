@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
@@ -22,6 +23,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/tty"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
@@ -32,6 +34,17 @@ var runTUI = fanouttui.Run
 var (
 	ensureManagedSessionForTUI = paneruntime.EnsureProject
 	ensureManagedConsoleForTUI = panelaunch.EnsureManagedConsole
+)
+
+// The console entry's terminal probe and process replacement are seams so
+// tests can drive both attach forms without a real terminal.
+var (
+	stdioIsTerminal = func() bool {
+		return tty.IsTerminal(os.Stdin) && tty.IsTerminal(os.Stdout)
+	}
+	execSessionAttach = func(spec backend.AttachExec) error {
+		return syscall.Exec(spec.Path, spec.Argv, spec.Env)
+	}
 )
 
 // consoleRuntime is every capability the resident console's own session entry
@@ -177,6 +190,18 @@ func enterManagedConsole(
 		return exitcode.Env
 	}
 	lg.Ok("Herdr console %s is ready (selected by %s)", console.Pane.PaneID, selection.Reason)
+	return attachOwnedConsole(console, lg)
+}
+
+// attachOwnedConsole enters the owned session in place when a terminal is
+// present; a successful exec never returns. Pipes and scripts get the attach
+// command printed instead, and a failed exec falls back to the same print so
+// the operator can still enter by hand.
+func attachOwnedConsole(console panelaunch.ManagedConsoleResult, lg *log.Logger) exitcode.Code {
+	if stdioIsTerminal() {
+		err := execSessionAttach(console.Attach)
+		lg.Warn("tui: enter owned session: %v", err)
+	}
 	fmt.Fprintln(lg.Stdout(), console.AttachCommand)
 	return exitcode.OK
 }

@@ -83,21 +83,61 @@ func (s *OwnedSession) Backend() *Backend {
 }
 
 func (s *OwnedSession) AttachCommand() (string, error) {
+	m, err := s.verifiedAttachMarker()
+	if err != nil {
+		return "", err
+	}
+	assignments := attachAssignments(m)
+	parts := make([]string, 0, len(assignments)+1)
+	for _, assignment := range assignments {
+		parts = append(parts, assignment[0]+"="+shellQuote(assignment[1]))
+	}
+	return strings.Join(append(parts, shellQuote(m.BinaryPath)), " "), nil
+}
+
+// AttachExec builds the process image a terminal execs to enter the owned
+// session in place: the caller's environment with the owned routing values
+// replacing any same-named entries, and the pinned herdr binary as the
+// process. Stray HERDR_* names from the caller are dropped rather than
+// inherited — only the marker's routing may steer the client.
+func (s *OwnedSession) AttachExec(baseEnvironment []string) (corebackend.AttachExec, error) {
+	m, err := s.verifiedAttachMarker()
+	if err != nil {
+		return corebackend.AttachExec{}, err
+	}
+	environment, err := mergeAttachEnvironment(baseEnvironment, attachAssignments(m))
+	if err != nil {
+		return corebackend.AttachExec{}, err
+	}
+	return corebackend.AttachExec{
+		Path: m.BinaryPath,
+		Argv: []string{m.BinaryPath},
+		Env:  environment,
+	}, nil
+}
+
+// verifiedAttachMarker admits the owned session and proves it is alive before
+// anything hands its routing to a terminal, mirroring every other owned
+// operation's admission.
+func (s *OwnedSession) verifiedAttachMarker() (ownerMarker, error) {
 	if s == nil || s.backend == nil {
-		return "", fmt.Errorf("herdr owned session is nil")
+		return ownerMarker{}, fmt.Errorf("herdr owned session is nil")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*commandTimeout)
 	defer cancel()
 	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
 	if err != nil {
-		return "", err
+		return ownerMarker{}, err
 	}
 	defer unlockPrivateFile(lock)
 	if _, err := s.backend.probeOwned(ctx, admission); err != nil {
-		return "", fmt.Errorf("verify herdr owned session before attach: %w", err)
+		return ownerMarker{}, fmt.Errorf("verify herdr owned session before attach: %w", err)
 	}
-	m := admission.marker
-	assignments := [][2]string{
+	return admission.marker, nil
+}
+
+func attachAssignments(m ownerMarker) [][2]string {
+	return [][2]string{
 		{xdgConfigEnv, m.XDGConfigHome},
 		{xdgStateEnv, m.XDGStateHome},
 		{xdgDataEnv, m.XDGDataHome},
@@ -107,11 +147,29 @@ func (s *OwnedSession) AttachCommand() (string, error) {
 		{socketEnv, m.SocketPath},
 		{clientSocketEnv, m.ClientSocketPath},
 	}
-	parts := make([]string, 0, len(assignments)+1)
+}
+
+func mergeAttachEnvironment(base []string, assignments [][2]string) ([]string, error) {
+	overridden := make(map[string]bool, len(assignments))
 	for _, assignment := range assignments {
-		parts = append(parts, assignment[0]+"="+shellQuote(assignment[1]))
+		overridden[assignment[0]] = true
 	}
-	return strings.Join(append(parts, shellQuote(m.BinaryPath)), " "), nil
+	merged := make([]string, 0, len(base)+len(assignments))
+	seen := map[string]bool{}
+	for _, entry := range base {
+		name, _, err := parseEnvironmentEntry(entry, seen)
+		if err != nil {
+			return nil, fmt.Errorf("attach environment: %w", err)
+		}
+		if overridden[name] || strings.HasPrefix(name, "HERDR_") {
+			continue
+		}
+		merged = append(merged, entry)
+	}
+	for _, assignment := range assignments {
+		merged = append(merged, assignment[0]+"="+assignment[1])
+	}
+	return merged, nil
 }
 
 type controlPlaneEnvironment struct {

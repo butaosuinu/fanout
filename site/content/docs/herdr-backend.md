@@ -68,14 +68,16 @@ A parent that already has recorded panes keeps its recorded backend. A conflicti
 
 ## Start an owned session
 
-From a plain shell, no-argument `fanout` bootstraps the session and prints one attach command:
+From a plain shell, no-argument `fanout` bootstraps the session and enters it:
 
 ```bash
 export FANOUT_BACKEND=herdr
 fanout
 ```
 
-That starts or adopts the owned session and one repository-root console shell. Run the printed command to attach, then run `fanout` again inside the console pane: herdr sets `HERDR_ENV=1` there, so the TUI console opens in that pane. fanout never replaces or attaches the calling shell itself, and linked worktrees share the one console row.
+That starts or adopts the owned session and one repository-root console shell, then replaces the fanout process with the pinned herdr client — the terminal is attached, nothing to copy. Run `fanout` again inside the console pane: herdr sets `HERDR_ENV=1` there, so the TUI console opens in that pane. Linked worktrees share the one console row.
+
+Without a terminal — stdin or stdout is a pipe, as in scripts and CI — fanout prints the attach command as the last stdout line instead of attaching. A failed exec falls back to the same print, so the command is always there to run by hand.
 
 A CLI fan-out needs neither an attach nor an existing session. It creates or adopts the same owned session, adds the project-root coordinator workspace and one worktree workspace per child, and starts each agent; attach when you want to watch them.
 
