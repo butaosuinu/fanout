@@ -7,7 +7,7 @@ import { useDiffHideViewed, type Theme } from "../settings/useSettings";
 import type { DiffFilePlan } from "./diff";
 import { DiffFileList } from "./DiffFileList";
 import { DiffFileRow } from "./DiffFileRow";
-import { hiddenAfterViewing } from "./scrollAlign";
+import { nextFileToRead } from "./scrollAlign";
 import { useDiffCollapse } from "./useDiffCollapse";
 import { useDiffPatch } from "./useDiffPatch";
 import { useDiffScrolling } from "./useDiffScroller";
@@ -26,19 +26,33 @@ const NO_INDICES: ReadonlySet<number> = new Set();
 const VIRTUALIZER_CONFIG = { overscrollSize: 3000 };
 
 /* 隠す設定でチェックを入れると、その行ごと unmount されてフォーカスが body へ落ち、
- * トラップの外に出る。次に読む file は残っているうちの先頭なので、そのチェックへ
- * 渡す(無ければオーバーレイ自身が引き取る)。DOM は commit 後に入れ替わるので
- * 次フレームで探す。checkbox は shadow root へ slot されるが、実体は .diff-file の
- * light DOM の子なので querySelector で届く。 */
-function useRefocusAfterHide(rootRef: RefObject<HTMLElement | null>): () => void {
-  return useCallback(() => {
-    requestAnimationFrame(() => {
-      const root = rootRef.current;
-      if (!root) return;
-      const next = root.querySelector<HTMLElement>(".diff-file .diff-file-viewed input");
-      (next ?? root).focus({ preventScroll: true });
-    });
-  }, [rootRef]);
+ * トラップの外に出る。拾い直す先は呼び出し側が決めた「次に読む file」のチェックで、
+ * 本文が上端に送る file と同じもの。ここだけ別に選ぶと、画面に出ていない file の
+ * チェックに焦点が乗り、Space が的外れな file を確認済みにする。
+ * 送り先が無い(最後の file だった)ときと、その file がチェックを持たないときは
+ * 残っているうちの先頭へ、それも無ければオーバーレイ自身が引き取る。
+ * DOM は commit 後に入れ替わるので次フレームで探す。checkbox は shadow root へ
+ * slot されるが、実体は .diff-file の light DOM の子なので querySelector で届く。 */
+function useRefocusAfterHide(
+  rootRef: RefObject<HTMLElement | null>,
+): (index?: number | null) => void {
+  return useCallback(
+    (index) => {
+      requestAnimationFrame(() => {
+        const root = rootRef.current;
+        if (!root) return;
+        const at =
+          index == null
+            ? null
+            : root.querySelector<HTMLElement>(
+                `.diff-file[data-index="${index}"] .diff-file-viewed input`,
+              );
+        const next = at ?? root.querySelector<HTMLElement>(".diff-file .diff-file-viewed input");
+        (next ?? root).focus({ preventScroll: true });
+      });
+    },
+    [rootRef],
+  );
 }
 
 /* memo: Drawer は SSE snapshot tick(約 2s)ごとに再レンダーされるが、diff と
@@ -163,14 +177,11 @@ function useDiffBodyState({
     for (const j of group) collapse.setCollapsed(j, null);
     /* 外す側は何も送らない — その file の上端は元から動かない。 */
     if (!next) return;
-    if (hideViewed) refocusAfterHide();
-    /* 畳んだ(または消えた)ぶん文書が縮むので、次に読む file の上端を本文の
-     * 上端へ送る。隠れる集合は setViewed の 1 render 先取り(scrollAlign)。 */
-    scrolling.advanceAfterViewed({
-      from: i,
-      count: plan.length,
-      hidden: hiddenAfterViewing({ hidden, hideViewed, group }),
-    });
+    /* 畳んだ(または消えた)ぶん文書が縮む。次に読む file を 1 つだけ決めて、
+     * 焦点も本文の上端もそこへ揃える(別々に選ぶと食い違う)。 */
+    const to = nextFileToRead({ from: i, count: plan.length, group, hidden });
+    if (hideViewed) refocusAfterHide(to);
+    if (to !== null) scrolling.alignAfterCommit(to);
   });
 
   return {

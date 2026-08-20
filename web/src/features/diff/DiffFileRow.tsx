@@ -46,13 +46,18 @@ const HEADER_EDGE_CSS = [
  * - 行の折り返しはライブラリ側が `word-break:break-word` だけで指定している。
  *   仕様上これは `word-break:normal` + `overflow-wrap:anywhere` と同義だが、
  *   min-content 幅を縮めない実装があるので、その展開形を明示して書く。
+ *   同じ指定は注釈(`[data-annotation-content]`)にも掛かっているが、fanout は
+ *   注釈を渡していないので触らない。渡すようになったらここも要る。
  *
  * 後ろ 2 つは飾りではない。箱だけ消すと、はみ出したトークンが見えないまま
- * 切り落とされる。箱が無くなるとライブラリのスクロールバー実測も 0 になり、
- * コードセルの下余白が「gap - スクロールバー分」から gap そのものへ戻るが、
- * 占めていた分が余白に化けるだけなので file の高さは変わらない。 */
+ * 切り落とされる。
+ *
+ * スクロールバーの取り置きも一緒に 0 にする。ライブラリはコードセルの下余白を
+ * 「gap - スクロールバー実測」で出すが、その実測は connectedCallback 時点 —
+ * unsafeCSS が刺さる前 — に走るので、箱を消しても実測値は残り、取り置きだけが
+ * 消えて下余白が gap より狭くなる。 */
 const NO_OVERFLOW_CSS = [
-  "[data-code]{ overflow: clip; }",
+  "[data-code]{ overflow: clip; --diffs-scrollbar-gutter: 0px; }",
   "[data-diff],[data-file]{",
   "  --diffs-code-grid: var(--diffs-grid-number-column-width) minmax(0, 1fr);",
   "}",
@@ -204,8 +209,10 @@ export const DiffFileRow = memo(function DiffFileRow({
     <div
       className="diff-file"
       /* data-collapsed は飾りではない — useDiffScroller の空白判定が、行が
-         無くて当然の file をこれで除外する。属性を足すならそこまで見ること。 */
+         無くて当然の file をこれで除外する。属性を足すならそこまで見ること。
+         data-index は確認済みを付けたあとの焦点の行き先(DiffBody)。 */
       data-collapsed={collapsed ? "" : undefined}
+      data-index={index}
       ref={(el) => registerHost(index, el)}
     >
       {/* key を付けて作り直さないこと — shadow root に前の placeholder /

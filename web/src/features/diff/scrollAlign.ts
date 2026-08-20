@@ -16,36 +16,30 @@ export function alignedScrollTop({
   return scrollTop + targetTop - scrollerTop;
 }
 
-/* 確認済みを付けた直後に本文から降りている index。`setViewed` の結果が `hidden`
- * に出るのは次の render なので、いま隠れている集合にこの path の index を足して
- * 先取りする(file type change は同 path が 2 entry になるので複数入る)。
- * 「確認済みを隠す」が off なら畳まれるだけで本文には残る。 */
-export function hiddenAfterViewing({
-  hidden,
-  hideViewed,
-  group,
-}: {
-  hidden: ReadonlySet<number>;
-  hideViewed: boolean;
-  group: readonly number[];
-}): ReadonlySet<number> {
-  if (!hideViewed) return hidden;
-  return new Set([...hidden, ...group]);
-}
-
-/* 「次の file」を探す条件。from は起点の plan index、count は plan の件数、
- * hidden は本文から降りている index。 */
+/* 「次に読む file」を決める材料。 */
 export interface NextFileTarget {
+  /* いま確認済みにした file の plan index */
   from: number;
+  /* plan の件数 */
   count: number;
+  /* いま確認済みにした path の plan index 全部。file type change は同じ path が
+   * 2 entry になるので、隣がその片割れということがある。 */
+  group: readonly number[];
+  /* 「確認済みを隠す」で本文から降りている index */
   hidden: ReadonlySet<number>;
 }
 
-/* 上端を合わせにいく次の file。plan の index 順で、本文に残っている最初の後続
- * file。最後の file を確認済みにしたときは null — 送る先が無いので動かさない。 */
-export function nextVisibleFileIndex({ from, count, hidden }: NextFileTarget): number | null {
+/* 上端を合わせにいく次の file。plan の index 順で、いま確認済みにした path 自身と、
+ * 本文から降りている file を飛ばした最初の後続 file。無ければ null — 最後の file を
+ * 確認済みにしたときは送る先が無いので動かさない。
+ *
+ * group を必ず飛ばすのが肝で、これが `hidden` の 1 render 遅れも兼ねる。`setViewed`
+ * の結果が `hidden` に出るのは次の render なので、「確認済みを隠す」が on のときは
+ * まだ入っていない。off のときは本文に残るが、たったいま読み終えた file の片割れへ
+ * 送るのは誤りなので、どちらでも飛ばすのが正しい。 */
+export function nextFileToRead({ from, count, group, hidden }: NextFileTarget): number | null {
   for (let i = from + 1; i < count; i++) {
-    if (!hidden.has(i)) return i;
+    if (!hidden.has(i) && !group.includes(i)) return i;
   }
   return null;
 }
