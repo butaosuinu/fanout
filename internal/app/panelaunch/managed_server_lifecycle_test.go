@@ -10,6 +10,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
 func TestManagedShutdownScaffoldsRejectsChildRowsAcrossLinkedWorktrees(t *testing.T) {
@@ -303,6 +304,45 @@ func TestShutdownManagedServerRetainsRealizedIntentOnWorkspaceIdentityMismatch(t
 	}
 	if _, found := journal.FindIntent(intent.ID); !found || harness.shutdownCalls != 0 {
 		t.Fatalf("ShutdownManagedServer() retained = %t, shutdown calls = %d, want true/0", found, harness.shutdownCalls)
+	}
+}
+
+func TestShutdownManagedServerRetainsCreatedBranchWhenStateRowRejects(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	runtime := &fakeManagedRealizeRuntime{}
+	installSuccessfulManagedMutations(t, repo, runtime)
+	hooks := deterministicManagedRealizeHooks()
+	realizeTestManagedCoordinator(t, repo, runtime, hooks)
+	req := testManagedWorktreeRequest(repo, "state-blocked-child", 713)
+	child, err := realizeManagedWorktree(context.Background(), req, runtime, hooks)
+	if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
+		t.Fatal(err)
+	}
+	runtime.workspaces = nil
+	gitCmdTest(t, repo, "worktree", "remove", req.WorktreePath)
+	recordRestartStatePane(t, repo, state.Pane{
+		Parent: "713", IssueNum: 714, Backend: backend.Herdr, PaneID: "workspace-child:p1",
+	})
+
+	err = ShutdownManagedServer(context.Background(), repo, (&managedServerTestHarness{}).io())
+	if err == nil || !strings.Contains(err.Error(), "active Herdr state row remains") {
+		t.Fatalf("ShutdownManagedServer() error = %v, want state-row rejection", err)
+	}
+	journal, loadErr := state.LoadLaunchJournal(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if _, found := journal.FindIntent(child.Intent.ID); !found {
+		t.Fatal("ShutdownManagedServer() removed child intent before state-row preflight")
+	}
+	_, branchFound, branchErr := worktree.ObserveBranch(
+		context.Background(), repo, child.Intent.FullBranchRef,
+	)
+	if branchErr != nil {
+		t.Fatal(branchErr)
+	}
+	if !branchFound {
+		t.Fatal("ShutdownManagedServer() deleted child branch before state-row preflight")
 	}
 }
 

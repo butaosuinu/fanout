@@ -7,16 +7,25 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-func TestPruneAbsentRealizedManagedWorktreeRequiresAbsentCheckout(t *testing.T) {
+func TestPruneAbsentRealizedManagedWorktreeRequiresResolvedCheckoutAndBranch(t *testing.T) {
 	tests := []struct {
 		name           string
 		removeCheckout bool
+		moveBranch     bool
+		removeBranch   bool
 		wantFound      bool
+		wantBranch     bool
 	}{
-		{name: "checkout remains", wantFound: true},
-		{name: "checkout absent", removeCheckout: true, wantFound: false},
+		{name: "checkout remains", wantFound: true, wantBranch: true},
+		{name: "unchanged branch is deleted", removeCheckout: true},
+		{
+			name: "moved branch retains intent", removeCheckout: true, moveBranch: true,
+			wantFound: true, wantBranch: true,
+		},
+		{name: "absent branch releases intent", removeCheckout: true, removeBranch: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -35,6 +44,13 @@ func TestPruneAbsentRealizedManagedWorktreeRequiresAbsentCheckout(t *testing.T) 
 			if test.removeCheckout {
 				gitCmdTest(t, repo, "worktree", "remove", req.WorktreePath)
 			}
+			if test.moveBranch {
+				gitCmdTest(t, repo, "commit", "--allow-empty", "-m", "move branch")
+				gitCmdTest(t, repo, "update-ref", result.Intent.FullBranchRef, "HEAD", result.Intent.BaseSHA)
+			}
+			if test.removeBranch {
+				gitCmdTest(t, repo, "update-ref", "-d", result.Intent.FullBranchRef, result.Intent.BaseSHA)
+			}
 			pruneManagedTestIntents(t, repo, runtime.ObserveWorkspaces)
 			journal, err := state.LoadLaunchJournal(repo)
 			if err != nil {
@@ -43,6 +59,15 @@ func TestPruneAbsentRealizedManagedWorktreeRequiresAbsentCheckout(t *testing.T) 
 			_, found := journal.FindIntent(result.Intent.ID)
 			if found != test.wantFound {
 				t.Fatalf("absentRealizedManagedIntents(removeCheckout=%t) found = %t, want %t", test.removeCheckout, found, test.wantFound)
+			}
+			_, branchFound, branchErr := worktree.ObserveBranch(
+				context.Background(), repo, result.Intent.FullBranchRef,
+			)
+			if branchErr != nil {
+				t.Fatal(branchErr)
+			}
+			if branchFound != test.wantBranch {
+				t.Fatalf("releaseAbsentManagedIntents(%s) branch found = %t, want %t", test.name, branchFound, test.wantBranch)
 			}
 		})
 	}
@@ -86,7 +111,7 @@ func pruneManagedTestIntents(
 		var allAbsent bool
 		absent, allAbsent = absentRealizedManagedIntents(context.Background(), journal.LaunchJournal, observe)
 		if allAbsent {
-			err = releaseAbsentManagedIntents(journal, absent)
+			err = releaseAbsentManagedIntents(context.Background(), journal, absent)
 		}
 	}
 	err = errors.Join(err, locked.Unlock())

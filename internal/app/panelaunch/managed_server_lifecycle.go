@@ -230,7 +230,7 @@ func prepareManagedShutdown(
 	if err := requireEmptyManagedShutdown(ctx, io); err != nil {
 		return state.LaunchIntent{}, err
 	}
-	if err := releaseManagedShutdownIntents(journal, absent); err != nil {
+	if err := releaseManagedShutdownIntents(ctx, journal, absent); err != nil {
 		return state.LaunchIntent{}, err
 	}
 	if err := retireManagedShutdownScaffolds(projectRoot, locked, scaffolds); err != nil {
@@ -240,10 +240,11 @@ func prepareManagedShutdown(
 }
 
 func releaseManagedShutdownIntents(
+	ctx context.Context,
 	journal *state.LockedLaunchJournal,
 	absent []state.LaunchIntent,
 ) error {
-	if err := releaseAbsentManagedIntents(journal, absent); err != nil {
+	if err := releaseAbsentManagedIntents(ctx, journal, absent); err != nil {
 		return err
 	}
 	return rejectActiveManagedIntents(journal.LaunchJournal)

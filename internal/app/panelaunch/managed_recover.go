@@ -98,11 +98,39 @@ func realizedManagedIntentAbsent(
 	case state.IntentCoordinator:
 		return true, nil
 	case state.IntentWorktree, state.IntentResume:
-		checkout, err := worktree.ObserveCheckout(ctx, intent.Resource.RepoRoot, intent.WorktreePath)
-		return err == nil && checkout.PathAbsent && !checkout.Registered, err
+		return realizedManagedWorktreeAbsent(ctx, intent)
 	default:
 		return false, nil
 	}
+}
+
+func realizedManagedWorktreeAbsent(
+	ctx context.Context,
+	intent state.LaunchIntent,
+) (bool, error) {
+	checkout, err := worktree.ObserveCheckout(ctx, intent.Resource.RepoRoot, intent.WorktreePath)
+	if err != nil || !checkout.PathAbsent || checkout.Registered {
+		return false, err
+	}
+	return realizedManagedBranchReleasable(ctx, intent)
+}
+
+func realizedManagedBranchReleasable(
+	ctx context.Context,
+	intent state.LaunchIntent,
+) (bool, error) {
+	if !intent.BranchCreated {
+		return true, nil
+	}
+	current, found, err := worktree.ObserveBranch(
+		ctx,
+		intent.Resource.RepoRoot,
+		intent.FullBranchRef,
+	)
+	if err != nil {
+		return false, err
+	}
+	return !found || current == intent.BaseSHA, nil
 }
 
 func realizedManagedRuntimePresent(
@@ -123,11 +151,18 @@ func managedWorkspaceIDPresent(
 }
 
 func releaseAbsentManagedIntents(
+	ctx context.Context,
 	locked *state.LockedLaunchJournal,
 	intents []state.LaunchIntent,
 ) error {
 	if len(intents) == 0 {
 		return nil
+	}
+	// Branch deletion stays ahead of the one journal save. If a later delete or
+	// save fails, every intent remains durable and the retry can classify an
+	// already absent branch without repeating an ambiguous mutation.
+	if err := deleteAbsentManagedBranches(ctx, intents); err != nil {
+		return err
 	}
 	for _, intent := range intents {
 		if !locked.RemoveIntent(intent.ID) {
@@ -135,6 +170,23 @@ func releaseAbsentManagedIntents(
 		}
 	}
 	return locked.Save()
+}
+
+func deleteAbsentManagedBranches(ctx context.Context, intents []state.LaunchIntent) error {
+	for _, intent := range intents {
+		if !intent.BranchCreated {
+			continue
+		}
+		if err := worktree.DeleteReservedBranch(
+			ctx,
+			intent.Resource.RepoRoot,
+			intent.FullBranchRef,
+			intent.BaseSHA,
+		); err != nil {
+			return fmt.Errorf("release realized Herdr branch %s: %w", intent.FullBranchRef, err)
+		}
+	}
+	return nil
 }
 
 func ensureManagedBranchReservation(

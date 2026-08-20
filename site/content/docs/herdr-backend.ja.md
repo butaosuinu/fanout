@@ -178,8 +178,9 @@ fanout herdr shutdown   # 空の owned server を停止する
 fanout の更新後に launch が `owned Herdr launcher predates the current fanout` で拒否されたら、子の行を `--close` / `--cleanup` で片づけ、console / coordinator の shell を終了してから `fanout herdr shutdown` を実行します。
 `restart` は生存世代を置き換えません。`shutdown` が空の session と古い足場行を畳み、次の launch が現行 launcher を使う新世代を作ります。
 
-失敗した launch の `realized` intent も `shutdown` が回収します。owned workspace の snapshot で記録済み label が無いことを確認し、worktree / resume では checkout も消えている intent だけを剪定します。
-snapshot の取得失敗、同じ label の workspace、残存 checkout のいずれかがあれば intent を残して拒否します。
+失敗した launch の `realized` intent も `shutdown` が回収します。owned workspace の snapshot で記録済み label が無いことを確認し、worktree / resume では checkout の不在も確認します。
+fanout-created branch が残っていれば保存済み base SHA と一致するときだけ compare-and-delete し、削除後に intent を剪定します。
+snapshot の取得失敗、同じ label の workspace、残存 checkout、移動した branch、branch の観測失敗のいずれかがあれば intent を残して拒否します。
 
 `shutdown` は空の server を retire します。子の herdr 行がこのリポジトリの state に残っている間(linked worktree もすべて対象)、owned session に workspace が残っている間、剪定できない herdr intent が保留中の間は拒否します。
 素のシェルからの TUI bootstrap が記録する console 行と、issue / Project / plan のファンアウトが記録するプロジェクトルートの coordinator 行は、workspace が 1 つも残っていないことを確認した後に `shutdown` 自身が削除します。動作中の shell は先に終了してください。
