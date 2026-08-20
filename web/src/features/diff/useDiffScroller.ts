@@ -8,6 +8,12 @@ import { alignedScrollTop } from "./scrollAlign";
  * のに画面が空白」に戻る。
  * useDiffScrolling(末尾)がその束ね役で、DiffOverlay はこれだけを呼ぶ。 */
 
+/* 2 フレーム後に呼ぶ。resize の観測もレイアウトの確定もフレーム末なので、直前に
+ * 書き換えた分がそこに乗るのを待ってから次を当てる。 */
+function afterTwoFrames(fn: () => void): void {
+  requestAnimationFrame(() => requestAnimationFrame(fn));
+}
+
 /* 空白の修復判定: この高さ以上が見えている file だけを対象にする。 */
 const BLANK_REPAIR_MIN_PX = 120;
 /* スクロールが止まった後の押さえの再検査(最後のフレームが空白で終わった場合用) */
@@ -30,16 +36,20 @@ type Hosts = RefObject<Map<number, HTMLDivElement>>;
  * 1 回の作り直しだけで全 file の高さが 2 倍になり、文書長が 92,098px →
  * 184,042px に膨らんで広範囲が空白になった。
  *
- * 書き換えは 1 フレームに 1 回まで。resize の観測はフレーム末なので、同じフレームで
- * 1px → 0px と戻すと「何も変わっていない」ことになり、オフセットが古いまま残る
- * (「確認済みを隠す」では、隠れる集合が動いた useNudgeOnLayoutChange と、送り先を
- * 合わせる useAlignToFile が同じフレームで両方呼ぶ)。
- * ただし 2 回目は捨てずに次フレームへ持ち越す。捨てると、背面タブで rAF が止まって
- * いる間に来た要求(別タブの確認済みが storage 経由で届く)がまるごと消え、表へ
- * 戻ったときに空白のまま残る。 */
+ * 書き換えの間隔がこの hook の本体。resize が観測されるのはフレーム末なので、
+ * 1px にしてから同じフレーム内で 0px へ戻すと border-box は元のままになり、
+ * 「何も変わっていない」ことになってオフセットが古いまま残る。重なった要求は
+ * 捨てずに、直前の書き換えが観測されてから当てる:
+ *
+ * - 重なるのは実際にある。「確認済みを隠す」では、隠れる集合が動いた
+ *   useNudgeOnLayoutChange と、送り先を合わせる useAlignToFile が同じフレームで
+ *   両方呼ぶ。
+ * - 捨ててもいけない。背面タブは rAF も resize の観測も止まるので、その間に来た
+ *   要求(別タブの確認済みが storage 経由で届く)がまるごと消え、表へ戻ったときに
+ *   空白のまま残る。 */
 function useDiffNudge(rootRef: RefObject<HTMLElement | null>): () => void {
   const nudgedRef = useRef(false);
-  const frameRef = useRef(0);
+  const busyRef = useRef(false);
   const pendingRef = useRef(false);
   const toggle = useCallback(() => {
     const scroller = rootRef.current?.querySelector<HTMLElement>(".diff-body");
@@ -47,20 +57,23 @@ function useDiffNudge(rootRef: RefObject<HTMLElement | null>): () => void {
     nudgedRef.current = !nudgedRef.current;
     scroller.style.marginBottom = nudgedRef.current ? "1px" : "0px";
   }, [rootRef]);
-  return useCallback(() => {
-    if (frameRef.current) {
-      pendingRef.current = true;
-      return;
-    }
-    toggle();
-    frameRef.current = requestAnimationFrame(function settle() {
-      frameRef.current = 0;
-      if (!pendingRef.current) return;
-      pendingRef.current = false;
+  return useCallback(
+    function run() {
+      if (busyRef.current) {
+        pendingRef.current = true;
+        return;
+      }
+      busyRef.current = true;
       toggle();
-      frameRef.current = requestAnimationFrame(settle);
-    });
-  }, [toggle]);
+      afterTwoFrames(() => {
+        busyRef.current = false;
+        if (!pendingRef.current) return;
+        pendingRef.current = false;
+        run();
+      });
+    },
+    [toggle],
+  );
 }
 
 /* 表示モードの切替も並べ方の切替も、全 file の高さが変わる。幅の変化だけでは
@@ -161,7 +174,7 @@ function useAlignToFile({ hostsRef, nudge }: { hostsRef: Hosts; nudge: () => voi
       };
       align();
       nudge();
-      requestAnimationFrame(() => requestAnimationFrame(align));
+      afterTwoFrames(align);
     },
     [hostsRef, nudge],
   );

@@ -227,9 +227,18 @@ export function DiffBody({
   /* 行が消える理由はローカル操作だけではない — 別タブが同じ scope でチェックすると
    * storage 経由でここでも消える。呼び出し点が無いので、隠れる集合が動いたあとに
    * 焦点が落ちていたら拾い直す。覆っているあいだだけ効かせる(コンパクトで背面を
-   * 触っている人からフォーカスを奪わない)。 */
+   * 触っている人からフォーカスを奪わない)。
+   *
+   * 焦点が落ちたままかを見るのは次フレーム。commit 直後はローカル操作が予約した
+   * 行き先付きの拾い直しがまだ走っておらず、ここで判定すると「落ちている」と読めて
+   * しまう。そのまま重ねると、あとから走るこちらの引数なし版が行き先付きを上書きし、
+   * 本文は次の file を出しているのに Space は残存先頭の file を確認済みにする。 */
   useEffect(() => {
-    if (covering && document.activeElement === document.body) refocusAfterHide();
+    if (!covering) return;
+    const frame = requestAnimationFrame(() => {
+      if (document.activeElement === document.body) refocusAfterHide();
+    });
+    return () => cancelAnimationFrame(frame);
   }, [covering, hidden, refocusAfterHide]);
 
   if (diff.files.length === 0) {
