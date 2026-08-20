@@ -52,8 +52,16 @@ type dashboardDescriptor struct {
 	Environment     []string `json:"environment"`
 }
 
-type dashboardReloadResponse struct {
-	Status string `json:"status"`
+type dashboardReloadEnvelope struct {
+	ID     string                 `json:"id"`
+	Result *dashboardReloadResult `json:"result"`
+	Error  *worktreeMutationError `json:"error"`
+}
+
+type dashboardReloadResult struct {
+	Type        string             `json:"type"`
+	Status      string             `json:"status"`
+	Diagnostics *[]json.RawMessage `json:"diagnostics"`
 }
 
 // SyncDashboardShortcut converges the owned config and asks the live server to
@@ -172,12 +180,16 @@ func replaceOwnedConfig(path string, desired []byte) error {
 }
 
 func validateDashboardReloadResponse(out []byte) error {
-	var response dashboardReloadResponse
-	if err := json.Unmarshal(out, &response); err != nil {
+	var envelope dashboardReloadEnvelope
+	if err := decodeOne(out, &envelope); err != nil {
 		return fmt.Errorf("parse Herdr config reload response: %w", err)
 	}
-	if response.Status != "applied" {
-		return fmt.Errorf("herdr config reload status is %q, want applied", response.Status)
+	if envelope.ID != "cli:server:reload-config" || envelope.Result == nil || envelope.Error != nil ||
+		envelope.Result.Type != "config_reload" || envelope.Result.Diagnostics == nil {
+		return fmt.Errorf("unexpected Herdr config_reload envelope")
+	}
+	if envelope.Result.Status != "applied" {
+		return fmt.Errorf("herdr config reload status is %q, want applied", envelope.Result.Status)
 	}
 	return nil
 }

@@ -13,7 +13,10 @@ import (
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
 
-const frozenDashboardDescriptorSchemaID = "fanout.herdr-dashboard-launcher.v1"
+const (
+	frozenDashboardDescriptorSchemaID = "fanout.herdr-dashboard-launcher.v1"
+	appliedDashboardReloadEnvelope    = `{"id":"cli:server:reload-config","result":{"type":"config_reload","status":"applied","diagnostics":[]}}`
+)
 
 func TestDashboardDescriptorSchemaStaysCompatibleWithPinnedHelper(t *testing.T) {
 	if dashboardDescriptorSchemaID != frozenDashboardDescriptorSchemaID {
@@ -111,7 +114,7 @@ func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
 	h := newOwnedHarness(t)
 	h.fake.respond = func(args []string) ([]byte, error) {
 		if slices.Equal(args, []string{"server", "reload-config"}) {
-			return []byte(`{"status":"applied"}`), nil
+			return []byte(appliedDashboardReloadEnvelope), nil
 		}
 		return nil, errors.New("unexpected command")
 	}
@@ -182,7 +185,7 @@ func TestSyncDashboardShortcutRejectsOversizedDescriptorWithoutMutation(t *testi
 	h := newOwnedHarness(t)
 	h.fake.respond = func(args []string) ([]byte, error) {
 		if slices.Equal(args, []string{"server", "reload-config"}) {
-			return []byte(`{"status":"applied"}`), nil
+			return []byte(appliedDashboardReloadEnvelope), nil
 		}
 		return nil, errors.New("unexpected command")
 	}
@@ -218,6 +221,49 @@ func TestSyncDashboardShortcutRejectsOversizedDescriptorWithoutMutation(t *testi
 	}
 	if got := countRecordedCommand(h.fake.commands, []string{"server", "reload-config"}); got != 1 {
 		t.Fatalf("reload-config calls = %d, want 1", got)
+	}
+}
+
+func TestValidateDashboardReloadResponse(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantErr string
+	}{
+		{name: "applied", payload: appliedDashboardReloadEnvelope},
+		{
+			name: "partial",
+			payload: `{"id":"cli:server:reload-config","result":` +
+				`{"type":"config_reload","status":"partial","diagnostics":[]}}`,
+			wantErr: `status is "partial"`,
+		},
+		{
+			name: "failed",
+			payload: `{"id":"cli:server:reload-config","result":` +
+				`{"type":"config_reload","status":"failed","diagnostics":[]}}`,
+			wantErr: `status is "failed"`,
+		},
+		{
+			name:    "wrong envelope",
+			payload: `{"id":"cli:server:reload-config","result":{"type":"other","status":"applied","diagnostics":[]}}`,
+			wantErr: "unexpected Herdr config_reload envelope",
+		},
+		{
+			name:    "trailing value",
+			payload: appliedDashboardReloadEnvelope + ` {}`,
+			wantErr: "unexpected trailing JSON value",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDashboardReloadResponse([]byte(tt.payload))
+			if tt.wantErr == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("validateDashboardReloadResponse() error = %v, want %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

@@ -257,7 +257,7 @@ func TestRestartOwnedPreservesDashboardShortcutConfig(t *testing.T) {
 	h := newOwnedHarness(t)
 	h.fake.respond = func(args []string) ([]byte, error) {
 		if slices.Equal(args, []string{"server", "reload-config"}) {
-			return []byte(`{"status":"applied"}`), nil
+			return []byte(appliedDashboardReloadEnvelope), nil
 		}
 		return nil, errors.New("unexpected command")
 	}
