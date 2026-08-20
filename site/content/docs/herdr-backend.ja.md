@@ -62,7 +62,7 @@ branch は fanout-created と記録されたものだけを compare-and-delete �
 
 - 対話 send、restore、plan capture は herdr 行では使えません。
 - TUI の focus、launch、peek には、fanout-owned session に属する完全な保存済み identity が必要です。foreign、stale、legacy の行は理由付きで無効になります。
-- focus はさらに agent session を保存済みの行だけで通ります。session を報告するのは agent integration なので、`herdr integration install claude` / `codex` を入れていない環境では focus が拒否されます。integration を入れても通らない行が 3 種類あります。attach で起動した agent、Codex の Plan Mode と team (workload が provider ではなく fanout の controller)、OpenCode です。いずれも socket 系の環境変数を渡さないので hook が session を報告できません。
+- focus はさらに agent session を保存済みの行だけで通ります。session を報告するのは agent integration なので、`herdr integration install claude` / `codex` を入れていない環境では focus が拒否されます。integration を入れても通らない行が 3 種類あります。attach で起動した agent ([#732](https://github.com/butaosuinu/fanout/issues/732))、Codex の Plan Mode と team (workload が provider ではなく fanout の controller)、OpenCode です。いずれも socket 系の環境変数を渡さないので hook が session を報告できません。
 - 同じ provider が同じ pane で新しい会話を始めると (claude の `/clear`、codex の `/new`)、herdr は conversation を差し替え、agent record の名前も落とします。行が保存した conversation はそちらへ追随し、落ちた名前は fanout が付け直すので、focus、peek、`--close`、`--cleanup` は前後で使えたままです。別の provider の conversation、runtime が発行していない ref、他の名前を名乗っている agent record は従来どおり拒否します。
 - Codex 子の Plan Mode は fanout の app-server controller と owned launcher で動きます。Claude と OpenCode は固有の mode flag を使います。
 - tmux keybind は登録されず、herdr のアプリ内通知 `notification show` も呼ばれません。

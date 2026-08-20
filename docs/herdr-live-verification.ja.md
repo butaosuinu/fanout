@@ -317,7 +317,8 @@ codex から direct agent へ広げました (`directAgentIntegrationLaunch`)。
 3 つが揃ったときだけ `source: "herdr:claude"` の `pane.report_agent_session` が
 飛ぶことを確認しました。hook 自体は `~/.claude/` にあり、owned session が隔離する
 XDG root の外なので移設は要りません。attach で起動した agent は coordinator
-workspace で動き、この grant の対象外のままです。
+workspace で動き、この grant の対象外のままです
+([#732](https://github.com/butaosuinu/fanout/issues/732))。
 
 session を束縛すると `/clear` で 2 つ問題が出るので同時に直しました。実測は
 使い捨て clone (`/private/tmp`) の owned session で取り、merge base の binary で
@@ -353,7 +354,14 @@ fanout が発行した名前を付け直すようにしました (`restoreOwnedA
 | `/clear` 後の peek | OK |
 | `/clear` 後の再束縛 | poll 経路で `632a4605-…` へ追随 |
 
-codex 側の同じ問題も併せて解消します。
+codex 側の同じ問題も併せて解消します。ただし direct Codex は telemetry を出さない
+ので、TUI / dashboard を常駐させない headless 運用では再束縛が届きません
+([#733](https://github.com/butaosuinu/fanout/issues/733))。`AgentID` 自体の強度は
+[#734](https://github.com/butaosuinu/fanout/issues/734) で別途扱います。
+
+この検証中に、fanout 管理下の herdr ペインでは ambient な `FANOUT_BACKEND` /
+`HERDR_ENV` が `cmd/fanout` の TUI テストに漏れて `make check` が落ちることも
+判明しました ([#731](https://github.com/butaosuinu/fanout/issues/731))。
 
 #### `--close` / `--cleanup` が herdr レーンで worktree を消せない — [#721](https://github.com/butaosuinu/fanout/issues/721)
 
