@@ -25,30 +25,43 @@ const NO_INDICES: ReadonlySet<number> = new Set();
  * 高速スクロール中に描画が追いつかない。 */
 const VIRTUALIZER_CONFIG = { overscrollSize: 3000 };
 
-/* 隠す設定でチェックを入れると、その行ごと unmount されてフォーカスが body へ落ち、
- * トラップの外に出る。拾い直す先は呼び出し側が決めた「次に読む file」のチェックで、
- * 本文が上端に送る file と同じもの。ここだけ別に選ぶと、画面に出ていない file の
- * チェックに焦点が乗り、Space が的外れな file を確認済みにする。
- * 送り先が無い(最後の file だった)ときと、その file がチェックを持たないときは
- * 残っているうちの先頭へ、それも無ければオーバーレイ自身が引き取る。
- * DOM は commit 後に入れ替わるので次フレームで探す。checkbox は shadow root へ
- * slot されるが、実体は .diff-file の light DOM の子なので querySelector で届く。 */
-function useRefocusAfterHide(
+/* 焦点の行き先。まず「次に読む file」が差し出す操作 — 確認済みのチェック、それを
+ * 持たない file(identity が曖昧で viewed.ts が fingerprint を出せない path)は
+ * どの file にもある折りたたみボタン。
+ * 行き先が無い(最後の file だった)ときは、焦点が実際に body へ落ちている場合だけ
+ * 拾い直す: 残っているうちの先頭のチェックへ、それも無ければオーバーレイ自身へ。
+ * 落ちていなければ null = 動かさない(無関係な file へ焦点を飛ばさない)。 */
+function focusTargetIn(root: HTMLElement, index: number | null): HTMLElement | null {
+  if (index !== null) {
+    const file = `.diff-file[data-index="${index}"]`;
+    const at = root.querySelector<HTMLElement>(
+      `${file} .diff-file-viewed input, ${file} .icon-btn`,
+    );
+    if (at) return at;
+  }
+  if (document.activeElement !== document.body) return null;
+  return root.querySelector<HTMLElement>(".diff-file .diff-file-viewed input") ?? root;
+}
+
+/* 確認済みを付けたあとの焦点を、本文が上端へ送る file と同じ file へ移す。
+ *
+ * 隠す設定では、チェックした行ごと unmount されて焦点が body へ落ち、トラップの外に
+ * 出る。隠さない設定でも動かす必要がある — 送り先とずれたまま直前の file のチェックに
+ * 焦点が残ると、画面に出ているのは次の file なのに Space がひとつ前の確認済みを外す。
+ *
+ * 判定も探索も次フレーム。DOM が入れ替わるのは commit 後だし、行き先付きの拾い直しを
+ * 予約した直後は焦点が「落ちている」ように見えるので、body 判定もここまで遅らせる。
+ * checkbox は shadow root へ slot されるが、実体は .diff-file の light DOM の子な
+ * ので querySelector で届く。 */
+function useFocusAfterViewed(
   rootRef: RefObject<HTMLElement | null>,
-): (index?: number | null) => void {
+): (index: number | null) => void {
   return useCallback(
     (index) => {
       requestAnimationFrame(() => {
         const root = rootRef.current;
         if (!root) return;
-        const at =
-          index == null
-            ? null
-            : root.querySelector<HTMLElement>(
-                `.diff-file[data-index="${index}"] .diff-file-viewed input`,
-              );
-        const next = at ?? root.querySelector<HTMLElement>(".diff-file .diff-file-viewed input");
-        (next ?? root).focus({ preventScroll: true });
+        focusTargetIn(root, index)?.focus({ preventScroll: true });
       });
     },
     [rootRef],
@@ -150,7 +163,7 @@ function useDiffBodyState({
    * (attached-agent など)は patch が一致するので、行を切り替えても前の行の
    * 上書きが残り、確認済みで復元した file が開いたままになる。 */
   const collapse = useDiffCollapse(`${scopeKey}\n${patch}`, plan, viewed);
-  const refocusAfterHide = useRefocusAfterHide(rootRef);
+  const focusAfterViewed = useFocusAfterViewed(rootRef);
   /* 隠す / 出すも全 file の高さを変えるので、並べ方の切替と同じく取り直させる。 */
   const scrolling = useDiffScrolling({
     rootRef,
@@ -180,7 +193,7 @@ function useDiffBodyState({
     /* 畳んだ(または消えた)ぶん文書が縮む。次に読む file を 1 つだけ決めて、
      * 焦点も本文の上端もそこへ揃える(別々に選ぶと食い違う)。 */
     const to = nextFileToRead({ from: i, count: plan.length, group, hidden });
-    if (hideViewed) refocusAfterHide(to);
+    focusAfterViewed(to);
     if (to !== null) scrolling.alignAfterCommit(to);
   });
 
@@ -197,7 +210,7 @@ function useDiffBodyState({
     collapse,
     scrolling,
     onToggleViewed,
-    refocusAfterHide,
+    focusAfterViewed,
   };
 }
 
@@ -223,23 +236,19 @@ export function DiffBody({
   layoutKey: string;
 }) {
   const s = useDiffBodyState({ patch: diff.patch, scopeKey, rootRef, layoutKey });
-  const { hidden, refocusAfterHide } = s;
+  const { hidden, focusAfterViewed } = s;
   /* 行が消える理由はローカル操作だけではない — 別タブが同じ scope でチェックすると
    * storage 経由でここでも消える。呼び出し点が無いので、隠れる集合が動いたあとに
    * 焦点が落ちていたら拾い直す。覆っているあいだだけ効かせる(コンパクトで背面を
    * 触っている人からフォーカスを奪わない)。
    *
-   * 焦点が落ちたままかを見るのは次フレーム。commit 直後はローカル操作が予約した
-   * 行き先付きの拾い直しがまだ走っておらず、ここで判定すると「落ちている」と読めて
-   * しまう。そのまま重ねると、あとから走るこちらの引数なし版が行き先付きを上書きし、
-   * 本文は次の file を出しているのに Space は残存先頭の file を確認済みにする。 */
+   * 行き先を指定せずに呼ぶと「焦点が落ちていたら拾い直す」だけになる。落ちている
+   * かどうかの判定は focusAfterViewed が次フレームまで遅らせる — commit 直後は
+   * ローカル操作が予約した行き先付きの移動がまだ走っておらず、ここで判定すると
+   * 「落ちている」と読めてしまい、あとから走るこちらが行き先付きを上書きする。 */
   useEffect(() => {
-    if (!covering) return;
-    const frame = requestAnimationFrame(() => {
-      if (document.activeElement === document.body) refocusAfterHide();
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [covering, hidden, refocusAfterHide]);
+    if (covering) focusAfterViewed(null);
+  }, [covering, hidden, focusAfterViewed]);
 
   if (diff.files.length === 0) {
     return (
