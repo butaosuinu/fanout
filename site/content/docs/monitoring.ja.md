@@ -39,6 +39,7 @@ fanout は呼び出し元の shell を残します。
 コンソールは backend を認識します。ヘッダには選択中の runtime backend と選択理由(例: `backend: herdr (HERDR_ENV)`)が出て、detail panel には各行の `backend=` と `pane=` の identity が出ます。
 fanout-owned [herdr backend]({{< relref "/docs/herdr-backend" >}}) session では、issue / Prompt / attach / shell の launch、focus、peek を使えます。
 検証済みの worktree 行には merge、close、cleanup も実行できます。
+`Z` の focus + zoom は Herdr 行では理由付きで無効です。
 foreign または identity が不完全な Herdr 行は、キーごとの理由を表示して無効になります。
 send、restore、plan capture は未対応です。
 CLI と label watcher の launch も同じ owned runtime path を使います。
@@ -73,7 +74,7 @@ fanout は、ペインの `@fanout_agent_state` tmux option から構造化さ�
 | `t` | project root で shell terminal を開く。tmux での close はペインと state 行だけを消し、git worktree は削除しない。Herdr の lifecycle close は未対応。 |
 | `Enter` / `o` | 選択中の live 行のペインにフォーカスする。 |
 | `1`-`9` | 表示リストの N 行目へジャンプして、そのペインにフォーカスする。範囲外の数字は notice を表示する。 |
-| `Z` | tmux で選択中のペインにフォーカスして zoom する。ペインの作成や削除、window のリサイズで解除されるので、必要ならもう一度 `Z` を押す。 |
+| `Z` | tmux で選択中のペインにフォーカスして zoom する。ペインの作成や削除、window のリサイズで解除されるので、必要ならもう一度 `Z` を押す。Herdr 行では理由付きで無効。 |
 | `p` | detail panel の read-only 出力スナップショットを更新する。 |
 | `v` | 表示の手動切替を auto → compact → full でサイクルする。auto は幅 80 桁未満で[コンパクト表示](#コンパクト表示)を選ぶ。compact は広い画面でも switcher を強制し、full は狭くてもテーブルを強制する。永続化はしない。 |
 | `c` / `x` | 選択中のペインの close option を開く。ペインだけを閉じる、ペインと worktree を閉じる、local branch も削除する、から選ぶ。 |

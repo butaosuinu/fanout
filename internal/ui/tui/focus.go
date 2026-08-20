@@ -129,21 +129,29 @@ func (m *model) zoomSelectedCmd() tea.Cmd {
 	return m.focusSelected(true)
 }
 
+func focusAction(zoom bool) string {
+	if zoom {
+		return "zoom"
+	}
+	return "focus"
+}
+
 func (m *model) focusSelected(zoom bool) tea.Cmd {
 	pane, ok := m.selectedPane()
 	if !ok {
 		m.notice = "no pane selected"
 		return nil
 	}
+	action := focusAction(zoom)
 	if !pane.canFocus() {
-		if reason := m.runtimeActionDisabledReason(&pane, "focus"); reason != "" {
+		if reason := m.runtimeActionDisabledReason(&pane, action); reason != "" {
 			m.notice = reason
 		} else {
 			m.notice = fmt.Sprintf("focus skipped for %s: runtime state is %s", dash(pane.PaneID), pane.TmuxState)
 		}
 		return nil
 	}
-	if reason := m.runtimeActionDisabledReason(&pane, "focus"); reason != "" {
+	if reason := m.runtimeActionDisabledReason(&pane, action); reason != "" {
 		m.notice = reason
 		return nil
 	}

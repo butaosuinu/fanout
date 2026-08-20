@@ -54,8 +54,7 @@ cleanup intent を保存してから non-force の `herdr worktree remove` を�
 dirty checkout、所有不一致、応答結果を確定できない状態では行と intent を残し、再試行または手動 cleanup を求めます。
 branch は fanout-created と記録されたものだけを compare-and-delete します。
 
-未対応の経路は明確なエラーで fail closed します。TUI の `Z` (zoom) だけは例外で、focus のみ実行して
-zoom を黙って飛ばします([#713](https://github.com/butaosuinu/fanout/issues/713))。
+未対応の経路は明確なエラーで fail closed します。
 
 - 対話 send、restore、plan capture は herdr 行では使えません。
 - TUI の focus、launch、peek には、fanout-owned session に属する完全な保存済み identity が必要です。foreign、stale、legacy の行は理由付きで無効になります。
@@ -144,6 +143,7 @@ owned モデルへ移る手順は次のとおりです。
 | exit status 表示 | launch wrapper が `✓ done` を報告 | なし — herdr の public API に exit status は残らない |
 | agent 終了後の pane | wrapper のメッセージ付きで pane が残る | 正常終了で herdr は pane と自身の記録を消す。fanout の行は `stale` になる |
 | 対話 TUI launch / focus / peek | TUI キー | fanout-owned session の ownership 検証済み pane だけ対応 |
+| TUI の focus + zoom (`Z`) | pane に focus して zoom | 不可 — `herdr backend interactive TUI action is unavailable; zoom is unavailable` |
 | 対話 send / restore / plan capture | tmux の各対応経路 | 不可 — `runtime backend herdr does not support …` |
 | `--team` peer messaging | SQLite registry、Claude watcher、Codex app-server bridge | 同じ registry と push lane |
 | `--merge` / `--close` / `--cleanup`、TUI merge / close / cleanup | 対応 | fanout-owned 行の identity を検証して実行。dirty checkout は force しない |
