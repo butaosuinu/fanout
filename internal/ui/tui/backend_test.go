@@ -48,6 +48,10 @@ func TestHelpDimsHerdrActionsAndShowsSharedReason(t *testing.T) {
 	if !strings.Contains(got, "New agent pane") || !strings.Contains(got, "[disabled]") {
 		t.Fatalf("helpView() missing disabled launch row:\n%s", got)
 	}
+	zoomEntry := helpMonitorEntries(m.helpDisabledReasons())[10]
+	if want := herdrActionDisabledReason("zoom"); zoomEntry.DisabledReason != want {
+		t.Fatalf("helpMonitorEntries()[10].DisabledReason = %q, want %q", zoomEntry.DisabledReason, want)
+	}
 	if !strings.Contains(got, "disabled: "+backend.ObservationOnlyReason) {
 		t.Fatalf("helpView() missing shared herdr reason:\n%s", got)
 	}
@@ -56,8 +60,10 @@ func TestHelpDimsHerdrActionsAndShowsSharedReason(t *testing.T) {
 func TestHelpUsesInlineViewForSelectedHerdrRow(t *testing.T) {
 	popupCalls := 0
 	m := newModel(Options{
-		ProjectRoot:      "/repo",
-		BackendSelection: backend.Selection{Name: backend.Tmux},
+		ProjectRoot:                      "/repo",
+		BackendSelection:                 backend.Selection{Name: backend.Tmux},
+		ManagedActionDisabled:            func(state.Pane) string { return "" },
+		LifecycleWorkspaceRuntimeForRoot: configuredHerdrRuntime,
 		HelpPopup: func() error {
 			popupCalls++
 			return nil
@@ -120,10 +126,12 @@ func TestSyntheticPaneDoesNotInventTmuxBackend(t *testing.T) {
 
 func TestHerdrRowInteractiveActionsAreDisabledBeforePorts(t *testing.T) {
 	tests := []struct {
-		name string
-		key  string
+		name       string
+		key        string
+		wantNotice string
 	}{
 		{name: "focus", key: "enter"},
+		{name: "zoom", key: "Z", wantNotice: herdrActionDisabledReason("zoom")},
 		{name: "peek", key: "p"},
 		{name: "attach", key: "a"},
 		{name: "worktree terminal", key: "A"},
@@ -164,6 +172,9 @@ func TestHerdrRowInteractiveActionsAreDisabledBeforePorts(t *testing.T) {
 			wantReason := backend.ObservationOnlyReason
 			if !strings.Contains(message, wantReason) {
 				t.Fatalf("key %q reason = %q, want explicit herdr action reason", tt.key, message)
+			}
+			if tt.wantNotice != "" && m.notice != tt.wantNotice {
+				t.Fatalf("Update(%q) notice = %q, want %q", tt.key, m.notice, tt.wantNotice)
 			}
 		})
 	}

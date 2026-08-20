@@ -23,8 +23,7 @@ The TUI console and web dashboard use `reported_state` only while the matching p
 
 `--merge`, `--close`, `--cleanup`, and their TUI actions operate only on complete rows from that owned session. fanout compares the saved workspace ID, label, terminal, repository, path, and branch before mutation. It records a cleanup intent, issues non-force `herdr worktree remove`, verifies that the checkout and workspace are absent, and closes a residual workspace when needed. A checkout left after an earlier workspace close is re-registered only after the owned plugin registry passes the empty-registry preflight. Dirty checkouts, ownership mismatches, and ambiguous responses preserve the row and intent for retry or manual cleanup. Branch deletion uses fanout's compare-and-delete and applies only to a branch recorded as fanout-created.
 
-The unsupported paths still fail closed, with one exception: the TUI's `Z` (zoom) runs the focus half
-and silently skips the zoom ([#713](https://github.com/butaosuinu/fanout/issues/713)).
+The unsupported paths fail closed with a clear error.
 
 - Interactive send, restore, and plan capture remain unavailable for herdr rows.
 - TUI focus, launch, and peek require a complete saved identity in fanout's owned session. Foreign, stale, and legacy rows stay disabled with a reason.
@@ -100,6 +99,7 @@ v0.13.0's herdr backend was observation-only: you started a named herdr session 
 | Exit status display | Launch wrapper reports `✓ done` | None — herdr's public API keeps no exit status |
 | Pane after the agent exits | Pane stays open with the wrapper message | herdr drops the pane and its own record on normal exit; the fanout row turns `stale` |
 | Interactive TUI launch / focus / peek | TUI keys | Available for ownership-verified panes in fanout's session |
+| TUI focus + zoom (`Z`) | Focuses the pane, then zooms it | Unavailable — `herdr backend interactive TUI action is unavailable; zoom is unavailable` |
 | Interactive send / restore / plan capture | Supported tmux paths | Unavailable — `runtime backend herdr does not support …` |
 | `--team` peer messaging | SQLite registry, Claude watcher, Codex app-server bridge | Same registry and push lanes |
 | `--merge`, `--close`, `--cleanup`; TUI merge / close / cleanup | Supported | Supported for verified fanout-owned rows; cleanup never forces a dirty checkout |

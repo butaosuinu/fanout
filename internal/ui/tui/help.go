@@ -18,6 +18,7 @@ type helpEntry struct {
 type helpDisabledReasons struct {
 	launch  string
 	pane    string
+	zoom    string
 	close   string
 	merge   string
 	cleanup string
@@ -75,7 +76,7 @@ func (m *model) openHelpPopupCmd() tea.Cmd {
 
 func (m model) helpHasDisabledRuntimeActions() bool {
 	disabled := m.helpDisabledReasons()
-	return firstNonEmpty(disabled.launch, disabled.pane, disabled.close, disabled.merge, disabled.cleanup, disabled.peek) != ""
+	return firstNonEmpty(disabled.launch, disabled.pane, disabled.zoom, disabled.close, disabled.merge, disabled.cleanup, disabled.peek) != ""
 }
 
 func (m model) helpView() string {
@@ -88,7 +89,7 @@ func (m model) helpView() string {
 		lines = append(lines, titleStyle.Render("Keyboard shortcuts"))
 	}
 	footer := "Esc / q / ? close"
-	if reason := firstNonEmpty(disabled.launch, disabled.pane, disabled.close, disabled.merge, disabled.cleanup, disabled.peek); reason != "" {
+	if reason := firstNonEmpty(disabled.launch, disabled.pane, disabled.zoom, disabled.close, disabled.merge, disabled.cleanup, disabled.peek); reason != "" {
 		if summary, _, ok := strings.Cut(reason, ";"); ok {
 			reason = summary
 		}
@@ -114,6 +115,7 @@ func (m model) helpDisabledReasons() helpDisabledReasons {
 	disabled := helpDisabledReasons{launch: m.runtimeActionDisabledReason(nil, "launch")}
 	if pane, ok := m.selectedPane(); ok {
 		disabled.pane = m.runtimeActionDisabledReason(&pane, "runtime action")
+		disabled.zoom = m.runtimeActionDisabledReason(&pane, "zoom")
 		disabled.close = m.lifecycleActionDisabledReason(&pane, "close")
 		disabled.merge = m.lifecycleActionDisabledReason(&pane, "merge")
 		disabled.cleanup = m.lifecycleActionDisabledReason(&pane, "cleanup")
@@ -134,7 +136,7 @@ func helpMonitorEntries(disabled helpDisabledReasons) []helpEntry {
 		{"1-9", "Jump to Nth pane", ""},
 		{"/", "Filter rows", ""},
 		{"Enter/o", "Focus pane", disabled.pane},
-		{"Z", "Focus + zoom pane", disabled.pane},
+		{"Z", "Focus + zoom pane", disabled.zoom},
 		{"p", "Peek output", disabled.peek},
 		{"v", "Auto/compact/full view", ""},
 		{"c/x", "Close pane", disabled.close},
