@@ -253,11 +253,11 @@ describe("diff オーバーレイ", () => {
     expect(
       injected.some((css) => css.includes("code[data-additions]") && css.includes("margin-left")),
     ).toBe(true);
-    /* 横スクロールの封じは 3 点セット。スクロール箱を消すのは light DOM 側の
-       カスタムプロパティ(styles/diff.css)だが、切り落とさないための列幅と
-       折り返しは shadow tree 内の値を上書きするので unsafeCSS に載る。
-       jsdom にレイアウトは無いので、押さえられるのは「渡していること」だけ。
-       縦積み側にも載ることはレイアウト巡回のテストが見る。 */
+    /* 横スクロールの封じ。スクロール箱を消すだけでは、はみ出したトークンが
+       見えないまま切り落とされるので、列幅と折り返しまでが 1 組。jsdom に
+       レイアウトは無いので押さえられるのは「渡していること」だけで、実際の
+       効きは実機で見る。縦積み側にも載ることはレイアウト巡回のテストが見る。 */
+    expect(injected.some((css) => css.includes("[data-code]{ overflow: clip; }"))).toBe(true);
     expect(
       injected.some((css) => css.includes("--diffs-code-grid") && css.includes("minmax(0, 1fr)")),
     ).toBe(true);
@@ -1092,6 +1092,7 @@ describe("diff オーバーレイ", () => {
     expect(stackCss.some((css) => css.includes("code[data-additions]"))).toBe(false);
     /* 横スクロールの封じは縦積みにも要る — スクロール箱が残るのはむしろこちら側
      * (split + wrap ではライブラリが箱を display:contents で消している)。 */
+    expect(stackCss.some((css) => css.includes("[data-code]{ overflow: clip; }"))).toBe(true);
     expect(
       stackCss.some((css) => css.includes("--diffs-code-grid") && css.includes("minmax(0, 1fr)")),
     ).toBe(true);

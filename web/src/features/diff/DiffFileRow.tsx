@@ -31,19 +31,28 @@ const HEADER_EDGE_CSS = [
   "}",
 ].join("\n");
 
-/* 横スクロールの封じ。本文はどこにも横スクロール箱を持たず、長い行は折り返しで
- * 読ませる。コードセル([data-code])のスクロール箱そのものは
- * `--diffs-overflow-override: clip` で消すが(styles/diff.css)、箱を消すだけだと
- * はみ出したトークンが見えないまま切り落とされる。切り落とさせない 2 つは shadow
- * tree 内で値が決まっているので、こちらから上書きする:
+/* 横スクロールの封じ。本文はどこにも横スクロール箱を持たせず、長い行は折り返しで
+ * 読ませる(アプリ側は styles/diff.css の .diff-body が対で閉じる)。3 つ要る:
  *
+ * - コードセルはスクロール箱を持つ(既定 `overflow: scroll clip`)。箱が消えるのは
+ *   split + 折り返しのときだけで、縦積み表示と片側しかない file には残り、
+ *   スクロールバーはライブラリ側が潰しているので触るまで気付けない。
+ *   `--diffs-overflow-override` を立てる手もあるが、その変数はライブラリ自身が
+ *   Mobile Safari のスクロール中に inline で書き、戻すときに `auto` を残す
+ *   (CodeView.js)。継承より強い足場を取って overflow を直接書く。
  * - コード列のトラックは既定が `1fr`(= minmax(auto,1fr))で、min は min-content。
  *   折り返さないトークンが 1 行あるだけでトラックごと container より広くなる。
  *   ライブラリが [data-dehydrated] にだけ与えている minmax(0,1fr) を常時にする。
  * - 行の折り返しはライブラリ側が `word-break:break-word` だけで指定している。
  *   仕様上これは `word-break:normal` + `overflow-wrap:anywhere` と同義だが、
- *   min-content 幅を縮めない実装があるので、その展開形を明示して書く。 */
+ *   min-content 幅を縮めない実装があるので、その展開形を明示して書く。
+ *
+ * 後ろ 2 つは飾りではない。箱だけ消すと、はみ出したトークンが見えないまま
+ * 切り落とされる。箱が無くなるとライブラリのスクロールバー実測も 0 になり、
+ * コードセルの下余白が「gap - スクロールバー分」から gap そのものへ戻るが、
+ * 占めていた分が余白に化けるだけなので file の高さは変わらない。 */
 const NO_OVERFLOW_CSS = [
+  "[data-code]{ overflow: clip; }",
   "[data-diff],[data-file]{",
   "  --diffs-code-grid: var(--diffs-grid-number-column-width) minmax(0, 1fr);",
   "}",

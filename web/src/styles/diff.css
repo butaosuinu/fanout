@@ -107,7 +107,9 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 .diff-body{
   flex:1; min-width:0; min-height:0;
   /* 縦だけ。overflow-y だけ書くと overflow-x は visible → auto に計算され、
-     ここにも横スクロールの余地が残る(はみ出しても見えないので触るまで気付かない)。 */
+     ここにも横スクロールの余地が残る(はみ出しても見えないので触るまで気付かない)。
+     file の中身側は shadow tree なので、そちらは DiffFileRow.tsx の unsafeCSS
+     (NO_OVERFLOW_CSS)が対で閉じる。 */
   overflow-x:hidden; overflow-y:auto;
   /* 端まで来ても背面の一覧へスクロールを流さない(コンパクト表示では背面が
      見えているので、そこが動くと読んでいた位置を失う) */
@@ -122,17 +124,6 @@ html.diff-resizing{ user-select:none; cursor:col-resize; }
 /* diffs-container はカスタム要素で既定が display:inline。block にしないと
    virtualizer が placeholder に付ける高さが効かず、全 file が潰れる */
 .diff-file,.diff-files diffs-container{ display:block; }
-/* 本文は横スクロールしない。長い行は折り返しで読ませる方針なので、ライブラリの
-   コードセル([data-code])が既定で持つスクロール箱を消す。箱が残るのは縦積み
-   (unified)表示と片側しかない file(新規追加 / 削除)で、スクロールバーは
-   ライブラリ側が潰しているため触るまで気付けない。
-   カスタムプロパティは shadow tree へ継承するので light DOM 側から届く。切り落と
-   されないための列幅と折り返しは shadow tree 内で値が決まっているので、そちらは
-   DiffFileRow.tsx の unsafeCSS(NO_OVERFLOW_CSS)が対で持つ。
-   箱が無くなるとライブラリのスクロールバー実測も 0 になり、コードセルの下余白が
-   「gap - スクロールバー分」から gap そのものへ戻る。占めていた分がそのまま余白に
-   化けるだけなので、file の高さは変わらない。 */
-.diff-file{ --diffs-overflow-override: clip; }
 .diff-note{
   font-family:var(--f-code); font-size:12.5px; color:var(--ink-60);
   padding:24px 0; text-align:center;

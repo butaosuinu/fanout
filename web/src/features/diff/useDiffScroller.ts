@@ -28,12 +28,22 @@ type Hosts = RefObject<Map<number, HTMLDivElement>>;
  * (isContainerManaged)ため cleanUp は shadow root の placeholder / buffer を
  * 残したまま参照だけ捨て、作り直した instance がその上に重ねて描く。実測で
  * 1 回の作り直しだけで全 file の高さが 2 倍になり、文書長が 92,098px →
- * 184,042px に膨らんで広範囲が空白になった。 */
+ * 184,042px に膨らんで広範囲が空白になった。
+ *
+ * 1 フレームに 2 回来たら 2 回目は捨てる。resize の観測はフレーム末なので、
+ * 同じフレームで 1px → 0px と戻すと「何も変わっていない」ことになり、
+ * オフセットが古いまま残る(「確認済みを隠す」では、隠れる集合が動いた
+ * useNudgeOnLayoutChange と、送り先を合わせる useAlignToFile が同じフレームで
+ * 両方呼ぶ)。 */
 function useDiffNudge(rootRef: RefObject<HTMLElement | null>): () => void {
   const nudgedRef = useRef(false);
+  const frameRef = useRef(0);
   return useCallback(() => {
     const scroller = rootRef.current?.querySelector<HTMLElement>(".diff-body");
-    if (!scroller) return;
+    if (!scroller || frameRef.current) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = 0;
+    });
     nudgedRef.current = !nudgedRef.current;
     scroller.style.marginBottom = nudgedRef.current ? "1px" : "0px";
   }, [rootRef]);
