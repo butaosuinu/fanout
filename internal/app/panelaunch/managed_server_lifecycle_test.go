@@ -1,16 +1,18 @@
 package panelaunch
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-func TestRejectActiveManagedRowsChecksLinkedWorktrees(t *testing.T) {
+func TestManagedShutdownScaffoldsRejectsChildRowsAcrossLinkedWorktrees(t *testing.T) {
 	repo := newManagedRealizeRepo(t)
 	sibling := filepath.Join(t.TempDir(), "sibling")
 	gitCmdTest(t, repo, "worktree", "add", "-b", "sibling", sibling, "HEAD")
@@ -29,28 +31,38 @@ func TestRejectActiveManagedRowsChecksLinkedWorktrees(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = rejectActiveManagedRows(repo)
+	current, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = managedShutdownScaffolds(repo, current)
 	if err == nil || !strings.Contains(err.Error(), filepath.Clean(sibling)) {
-		t.Fatalf("rejectActiveManagedRows() error = %v", err)
+		t.Fatalf("managedShutdownScaffolds() error = %v", err)
 	}
 }
 
-func TestRejectActiveManagedRowsLeavesTmuxStateUnchanged(t *testing.T) {
+func TestManagedShutdownScaffoldsLeavesTmuxStateUnchanged(t *testing.T) {
 	repo := newManagedRealizeRepo(t)
 	locked, err := state.Lock(state.Path(repo))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := locked.RecordPane(state.Pane{
+	err = locked.RecordPane(state.Pane{
 		Parent: "637", IssueNum: 638, Backend: backend.Tmux, PaneID: "%1",
-	}); err != nil {
+	})
+	if err != nil {
 		_ = locked.Unlock()
 		t.Fatal(err)
 	}
-	if err := locked.Unlock(); err != nil {
+	err = locked.Unlock()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rejectActiveManagedRows(repo); err != nil {
+	current, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := managedShutdownScaffolds(repo, current); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -198,6 +210,135 @@ func TestManagedShutdownIssueCallbackPersistsOnlyWhenInvokedAndDoesNotReissue(t 
 	markIssued, err = managedShutdownIssueCallback(journal, intent)
 	if err != nil || markIssued != nil {
 		t.Fatalf("issued retry callback = (%t, %v), want nil", markIssued != nil, err)
+	}
+}
+
+func TestShutdownManagedServerPrunesAbsentRealizedIntent(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	intent := managedLifecycleTestCoordinatorIntent(t, repo)
+	saveManagedLifecycleTestIntent(t, repo, intent)
+	harness := &managedServerTestHarness{}
+
+	if err := ShutdownManagedServer(context.Background(), repo, harness.io()); err != nil {
+		t.Fatal(err)
+	}
+	if harness.shutdownCalls != 1 || harness.issueCalls != 1 {
+		t.Fatalf("ShutdownManagedServer() calls = shutdown:%d issue:%d, want 1/1", harness.shutdownCalls, harness.issueCalls)
+	}
+	journal, err := state.LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Intents) != 0 {
+		t.Fatalf("ShutdownManagedServer() intents = %+v, want empty", journal.Intents)
+	}
+}
+
+func TestShutdownManagedServerRetainsRealizedIntentWhenObservationFails(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	intent := managedLifecycleTestCoordinatorIntent(t, repo)
+	saveManagedLifecycleTestIntent(t, repo, intent)
+	harness := &managedServerTestHarness{observeErr: errors.New("snapshot unavailable")}
+
+	err := ShutdownManagedServer(context.Background(), repo, harness.io())
+	if err == nil || !strings.Contains(err.Error(), "1 active Herdr intent rows remain") {
+		t.Fatalf("ShutdownManagedServer() error = %v, want active-intent rejection", err)
+	}
+	journal, loadErr := state.LoadLaunchJournal(repo)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if _, found := journal.FindIntent(intent.ID); !found || harness.shutdownCalls != 0 {
+		t.Fatalf("ShutdownManagedServer() retained = %t, shutdown calls = %d, want true/0", found, harness.shutdownCalls)
+	}
+}
+
+func TestShutdownManagedServerRetiresConsoleAndCoordinatorScaffolds(t *testing.T) {
+	repo, sibling := managedConsoleTestWorktrees(t)
+	console := managedConsoleTestPane(repo, "workspace-console", "pane-console")
+	coordinatorIntent := managedLifecycleTestCoordinatorIntent(t, sibling)
+	coordinator := managedCoordinatorPane(coordinatorIntent, backend.OwnedLaunchRoute{
+		Session: coordinatorIntent.Session, SocketPath: coordinatorIntent.SocketPath,
+	}, coordinatorIntent.RuntimeParent, -2)
+	recordRestartStatePane(t, repo, console)
+	recordRestartStatePane(t, sibling, coordinator)
+	harness := &managedServerTestHarness{}
+
+	if err := ShutdownManagedServer(context.Background(), repo, harness.io()); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{repo, sibling} {
+		store, err := state.LoadProject(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(store.Panes) != 0 {
+			t.Fatalf("ShutdownManagedServer(%s) panes = %+v, want empty", root, store.Panes)
+		}
+	}
+}
+
+type managedServerTestHarness struct {
+	workspaces    []backend.WorkspaceObservation
+	observeErr    error
+	shutdownCalls int
+	issueCalls    int
+}
+
+func (h *managedServerTestHarness) io() ManagedServerIO {
+	return ManagedServerIO{
+		InspectServer: func() (state.RuntimeServerIdentity, error) {
+			return testManagedServerIdentity(), nil
+		},
+		ObserveWorkspaces: func(context.Context) ([]backend.WorkspaceObservation, error) {
+			return h.workspaces, h.observeErr
+		},
+		ShutdownServer: func(_ context.Context, _ state.RuntimeServerIdentity, markIssued func() error) error {
+			if markIssued != nil {
+				h.issueCalls++
+				if err := markIssued(); err != nil {
+					return err
+				}
+			}
+			h.shutdownCalls++
+			return nil
+		},
+	}
+}
+
+func managedLifecycleTestCoordinatorIntent(t *testing.T, root string) state.LaunchIntent {
+	t.Helper()
+	id, err := state.CoordinatorIntentID("425", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	label := "fanout-coordinator-shutdown"
+	return state.LaunchIntent{
+		ID: id, Kind: state.IntentCoordinator, Status: state.IntentRealized,
+		Parent: "425", RuntimeParent: "425", WorktreePath: root, WorkspaceLabel: label,
+		Resource: state.RuntimeResource{
+			WorkspaceID: "workspace-shutdown", Label: label, PaneID: "pane-shutdown",
+			TerminalID: "terminal-shutdown", CurrentPath: root,
+		},
+		Session: "fanout-owned", SocketPath: "/tmp/fanout-owned.sock",
+		ExpiresUnixMS: time.Now().Add(time.Minute).UnixMilli(),
+	}
+}
+
+func saveManagedLifecycleTestIntent(t *testing.T, repo string, intent state.LaunchIntent) {
+	t.Helper()
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := locked.LaunchJournal(repo)
+	if err == nil {
+		journal.UpsertIntent(intent)
+		err = journal.Save()
+	}
+	err = errors.Join(err, locked.Unlock())
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

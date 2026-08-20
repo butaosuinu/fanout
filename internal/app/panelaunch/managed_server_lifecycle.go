@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/errs"
@@ -100,7 +101,7 @@ func ShutdownManagedServer(
 	if err != nil {
 		return err
 	}
-	intent, err := prepareOrResumeManagedShutdown(ctx, projectRoot, journal, io)
+	intent, err := prepareOrResumeManagedShutdown(ctx, projectRoot, locked, journal, io)
 	if err != nil {
 		return err
 	}
@@ -117,6 +118,7 @@ func ShutdownManagedServer(
 func prepareOrResumeManagedShutdown(
 	ctx context.Context,
 	projectRoot string,
+	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	io ManagedServerIO,
 ) (state.LaunchIntent, error) {
@@ -124,10 +126,13 @@ func prepareOrResumeManagedShutdown(
 	if err != nil || found {
 		return intent, err
 	}
+	if err := pruneAbsentRealizedManagedIntents(ctx, journal, io.ObserveWorkspaces); err != nil {
+		return state.LaunchIntent{}, err
+	}
 	if err := rejectActiveManagedIntents(journal.LaunchJournal); err != nil {
 		return state.LaunchIntent{}, err
 	}
-	return prepareManagedShutdown(ctx, projectRoot, journal, io)
+	return prepareManagedShutdown(ctx, projectRoot, locked, journal, io)
 }
 
 func managedShutdownIssueCallback(
@@ -211,6 +216,7 @@ func newManagedServerIntent(
 func prepareManagedShutdown(
 	ctx context.Context,
 	projectRoot string,
+	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	io ManagedServerIO,
 ) (state.LaunchIntent, error) {
@@ -218,19 +224,36 @@ func prepareManagedShutdown(
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
-	err = rejectActiveManagedRows(projectRoot)
+	scaffolds, err := managedShutdownScaffolds(projectRoot, locked.Store)
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
+	if err := requireEmptyManagedShutdown(ctx, io); err != nil {
+		return state.LaunchIntent{}, err
+	}
+	if err := retireManagedShutdownScaffolds(projectRoot, locked, scaffolds); err != nil {
+		return state.LaunchIntent{}, err
+	}
+	return persistManagedShutdownIntent(journal, identity)
+}
+
+func requireEmptyManagedShutdown(ctx context.Context, io ManagedServerIO) error {
 	workspaces, err := io.ObserveWorkspaces(ctx)
 	if err != nil {
-		return state.LaunchIntent{}, err
+		return err
 	}
 	if len(workspaces) != 0 {
-		return state.LaunchIntent{}, fmt.Errorf(
+		return fmt.Errorf(
 			"herdr owned server has %d active or foreign workspace resources", len(workspaces),
 		)
 	}
+	return nil
+}
+
+func persistManagedShutdownIntent(
+	journal *state.LockedLaunchJournal,
+	identity state.RuntimeServerIdentity,
+) (state.LaunchIntent, error) {
 	intent, err := newManagedServerIntent(state.IntentShutdown, identity)
 	if err != nil {
 		return state.LaunchIntent{}, err
@@ -239,23 +262,152 @@ func prepareManagedShutdown(
 	return intent, journal.Save()
 }
 
-func rejectActiveManagedRows(projectRoot string) error {
+type managedShutdownScaffold struct {
+	root string
+	pane state.Pane
+}
+
+func managedShutdownScaffolds(
+	projectRoot string,
+	current state.Store,
+) ([]managedShutdownScaffold, error) {
+	console, hasConsole, err := managedShutdownConsole(projectRoot, current)
+	if err != nil {
+		return nil, err
+	}
 	roots, err := worktree.ListRoots(projectRoot)
 	if err != nil {
-		return fmt.Errorf("list linked worktrees before Herdr shutdown: %w", err)
+		return nil, fmt.Errorf("list linked worktrees before Herdr shutdown: %w", err)
 	}
+	return collectManagedShutdownScaffolds(projectRoot, current, roots, console, hasConsole)
+}
+
+func managedShutdownConsole(
+	projectRoot string,
+	current state.Store,
+) (state.Pane, bool, error) {
+	console, found, err := findManagedConsolePane(projectRoot, current)
+	if err != nil || !found {
+		return console, found, err
+	}
+	return console, true, validateSavedManagedConsoleShape(console)
+}
+
+func collectManagedShutdownScaffolds(
+	projectRoot string,
+	current state.Store,
+	roots []string,
+	console state.Pane,
+	hasConsole bool,
+) ([]managedShutdownScaffold, error) {
+	var scaffolds []managedShutdownScaffold
 	for _, root := range roots {
-		store, err := state.LoadProject(root)
+		store, err := loadManagedConsoleStore(root, projectRoot, current)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		for _, pane := range store.Panes {
-			if backend.NormalizeName(pane.Backend) == backend.Herdr {
-				return fmt.Errorf("active Herdr state row remains in %s", filepath.Clean(root))
-			}
+		rows, err := managedShutdownStoreScaffolds(root, store, console, hasConsole)
+		if err != nil {
+			return nil, err
+		}
+		scaffolds = append(scaffolds, rows...)
+	}
+	return scaffolds, nil
+}
+
+func managedShutdownStoreScaffolds(
+	root string,
+	store state.Store,
+	console state.Pane,
+	hasConsole bool,
+) ([]managedShutdownScaffold, error) {
+	var scaffolds []managedShutdownScaffold
+	for _, pane := range store.Panes {
+		if backend.NormalizeName(pane.Backend) != backend.Herdr {
+			continue
+		}
+		if !managedShutdownConsoleRow(root, pane, console, hasConsole) &&
+			!managedShutdownCoordinatorRow(pane) {
+			return nil, fmt.Errorf("active Herdr state row remains in %s", filepath.Clean(root))
+		}
+		scaffolds = append(scaffolds, managedShutdownScaffold{root: root, pane: pane})
+	}
+	return scaffolds, nil
+}
+
+func managedShutdownConsoleRow(root string, pane, console state.Pane, found bool) bool {
+	return found && filepath.Clean(root) == filepath.Clean(console.SourceProjectRoot) &&
+		pane.Parent == console.Parent && pane.IssueNum == console.IssueNum &&
+		sameSavedManagedConsole(console, pane)
+}
+
+func managedShutdownCoordinatorRow(pane state.Pane) bool {
+	// Only the exact role shape emitted by managedCoordinatorPane qualifies;
+	// child, attached-agent, and manual-shell rows remain hard shutdown blocks.
+	requirements := []bool{
+		pane.Parent == ManualParentRef, pane.RuntimeParent != "",
+		pane.RuntimeParent != ManualParentRef, pane.RuntimeParent != ManagedConsoleRuntimeParent,
+		pane.IssueNum < 0, pane.TaskID == "", pane.Kind == state.PaneKindShell,
+		pane.Backend == backend.Herdr, pane.Agent == "", pane.BranchName == "",
+		pane.PaneID != "", pane.WorkspaceID != "", pane.WorkspaceLabel != "",
+		pane.TerminalID != "", pane.SessionID != "", pane.SocketPath != "",
+		filepath.IsAbs(pane.WorktreePath), pane.RepoKey == "", pane.RepoRoot == "",
+		pane.AgentID == "", pane.AgentSession == nil,
+	}
+	return !slices.Contains(requirements, false)
+}
+
+func retireManagedShutdownScaffolds(
+	projectRoot string,
+	locked *state.LockedStore,
+	scaffolds []managedShutdownScaffold,
+) error {
+	for _, scaffold := range scaffolds {
+		if err := retireManagedShutdownScaffold(projectRoot, locked, scaffold); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func retireManagedShutdownScaffold(
+	projectRoot string,
+	locked *state.LockedStore,
+	scaffold managedShutdownScaffold,
+) (err error) {
+	if filepath.Clean(scaffold.root) == filepath.Clean(projectRoot) {
+		return removeManagedShutdownScaffold(locked, scaffold.pane)
+	}
+	owner, err := state.LockProject(scaffold.root)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, owner.Unlock()) }()
+	return removeManagedShutdownScaffold(owner, scaffold.pane)
+}
+
+func removeManagedShutdownScaffold(locked *state.LockedStore, expected state.Pane) error {
+	current, found := locked.Find(expected.Parent, expected.IssueNum)
+	if !found || !sameManagedShutdownScaffold(expected, current) {
+		return fmt.Errorf("saved Herdr shutdown scaffold changed before retirement")
+	}
+	if !locked.Remove(expected.Parent, expected.IssueNum) {
+		return fmt.Errorf("saved Herdr shutdown scaffold disappeared before retirement")
+	}
+	return locked.Save()
+}
+
+func sameManagedShutdownScaffold(expected, actual state.Pane) bool {
+	requirements := []bool{
+		actual.Parent == expected.Parent, actual.RuntimeParent == expected.RuntimeParent,
+		actual.IssueNum == expected.IssueNum, actual.TaskID == expected.TaskID,
+		actual.Kind == expected.Kind, actual.Backend == expected.Backend,
+		actual.PaneID == expected.PaneID, actual.WorkspaceID == expected.WorkspaceID,
+		actual.WorkspaceLabel == expected.WorkspaceLabel, actual.TerminalID == expected.TerminalID,
+		actual.SessionID == expected.SessionID, actual.SocketPath == expected.SocketPath,
+		filepath.Clean(actual.WorktreePath) == filepath.Clean(expected.WorktreePath),
+	}
+	return !slices.Contains(requirements, false)
 }
 
 func verifyRestartedManagedRows(

@@ -30,6 +30,63 @@ func releaseManagedIntent(
 	return cause
 }
 
+// pruneAbsentRealizedManagedIntents releases only realized launch resources
+// whose runtime and kind-specific local postconditions are both absent. A
+// failed runtime snapshot classifies nothing, so the caller retains every row
+// and applies the existing active-intent rejection.
+func pruneAbsentRealizedManagedIntents(
+	ctx context.Context,
+	locked *state.LockedLaunchJournal,
+	observe func(context.Context) ([]backend.WorkspaceObservation, error),
+) error {
+	candidates := realizedManagedIntents(locked.LaunchJournal)
+	if len(candidates) == 0 {
+		return nil
+	}
+	workspaces, err := observe(ctx)
+	if err != nil {
+		return nil //nolint:nilerr // Keep every row so the caller reports the active-intent rejection.
+	}
+	for _, intent := range candidates {
+		absent, _ := realizedManagedIntentAbsent(ctx, intent, workspaces)
+		if absent {
+			if err := releaseManagedIntent(locked, intent.ID, nil); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func realizedManagedIntents(journal state.LaunchJournal) []state.LaunchIntent {
+	var intents []state.LaunchIntent
+	for _, intent := range journal.Intents {
+		if intent.Status == state.IntentRealized {
+			intents = append(intents, intent)
+		}
+	}
+	return intents
+}
+
+func realizedManagedIntentAbsent(
+	ctx context.Context,
+	intent state.LaunchIntent,
+	workspaces []backend.WorkspaceObservation,
+) (bool, error) {
+	if len(workspacesWithLabel(workspaces, intent.WorkspaceLabel)) != 0 {
+		return false, nil
+	}
+	switch intent.Kind {
+	case state.IntentCoordinator:
+		return true, nil
+	case state.IntentWorktree, state.IntentResume:
+		checkout, err := worktree.ObserveCheckout(ctx, intent.Resource.RepoRoot, intent.WorktreePath)
+		return err == nil && checkout.PathAbsent && !checkout.Registered, err
+	default:
+		return false, nil
+	}
+}
+
 func ensureManagedBranchReservation(
 	ctx context.Context,
 	locked *state.LockedLaunchJournal,
