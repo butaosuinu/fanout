@@ -9,6 +9,27 @@ yomi: changelog
 
 Release highlights, newest first. Every tag also has a [GitHub release](https://github.com/butaosuinu/fanout/releases) with the full commit list and prebuilt binaries (darwin / linux × amd64 / arm64). Versions come from git tags via ldflags — check yours with `fanout --check-update`.
 
+## v0.17.0 (2026-08-21)
+
+- **fanout-owned herdr workflows.** The opt-in herdr backend now creates or adopts a repository-owned session, provisions its workspaces and worktrees, and launches issue, Project, plan, and watcher work through a verified non-shell path.
+  The TUI can bootstrap the session, launch, focus, and peek, and it can merge, close, or clean up ownership-verified rows.
+  CLI launches also support `--team` and Codex Plan Mode, while `fanout msg nudge` prompts only a live eligible peer after fresh telemetry and identity checks.
+  See [herdr backend]({{< relref "/docs/herdr-backend" >}}) and [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Explicit herdr restart and recovery.** `fanout herdr restart` replaces a dead owned server and resumes only a direct Codex session whose saved session and process identity match exactly; every ambiguous or unsupported row stays `stale`.
+  `fanout herdr shutdown` retires an empty owned server and reconciles completed launch intents without repeating an uncertain mutation.
+  See [herdr backend]({{< relref "/docs/herdr-backend" >}}), [CLI Reference]({{< relref "/docs/cli" >}}), and [Troubleshooting]({{< relref "/docs/troubleshooting" >}}).
+- **Review and merge pull requests from the web dashboard.** Session rows and drawers now show review state, conflicts, and comment counts; the diff viewer tracks files marked **Viewed** and has clearer file-type and move indicators.
+  The drawer and diff toolbar can squash, merge, or rebase a PR with a pinned head commit.
+  After GitHub confirms the merge, a separate delete button appears only in the detail drawer and leaves the local worktree untouched.
+  Its moved-head check is not atomic, so it cannot catch a push that lands between the check and the GitHub ref deletion.
+  See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **English and Japanese web dashboard.** The dashboard follows the browser language by default, lets you pin Japanese or English in settings, and keeps the choice per origin.
+  Column names, tags, and filter tokens remain stable in both languages so saved queries keep working.
+  See [Monitoring]({{< relref "/docs/monitoring" >}}).
+- **Toolchain and dependency security updates.** The minimum Go toolchain moved from 1.26.5 to 1.26.6, and `golang.org/x/mod` moved from v0.38.0 to v0.40.0 with fixes for [GO-2026-6179](https://pkg.go.dev/vuln/GO-2026-6179) and [GO-2026-6180](https://pkg.go.dev/vuln/GO-2026-6180).
+
+[Release notes →](https://github.com/butaosuinu/fanout/releases/tag/v0.17.0)
+
 ## v0.16.0 (2026-08-04)
 
 - **Diff viewer in the web dashboard.** Click a Session row's diff column, or **Show changes** in the detail drawer, to read that worktree's changes against the merge-base — committed, staged, unstaged, and untracked in one view.
