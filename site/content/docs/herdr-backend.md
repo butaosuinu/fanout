@@ -26,7 +26,8 @@ The TUI console and web dashboard use `reported_state` only while the matching p
 The unsupported paths fail closed with a clear error.
 
 - Interactive send, restore, and plan capture remain unavailable for herdr rows.
-- TUI focus, launch, and peek require a complete saved identity in fanout's owned session. Foreign, stale, and legacy rows stay disabled with a reason. Claude workloads start without the socket environment herdr's Claude integration needs to report an agent session, so Claude rows keep a one-sided identity and focus is refused for them ([#720](https://github.com/butaosuinu/fanout/issues/720)).
+- TUI focus, launch, and peek require a complete saved identity in fanout's owned session. Foreign, stale, and legacy rows stay disabled with a reason.
+- Focus additionally needs a saved agent session. Only the agent integration reports one, so focus is refused until `herdr integration install claude` / `codex` is in place. Three kinds of row stay refused even with it installed: agents started with attach, Codex Plan Mode and team (their workload is fanout's controller, not the provider), and OpenCode. None of them receive the socket environment the hook needs.
 - Codex child Plan Mode runs through fanout's app-server controller and owned launcher. Claude and OpenCode keep their native mode flags.
 - No tmux keybindings are registered, and fanout never calls herdr's in-app `notification show`.
 
@@ -159,7 +160,9 @@ A fanout-owned session pins its own `config.toml`, so this example applies to a 
 
 ## herdr integrations and plugins
 
-`herdr integration install claude` / `codex` writes hooks into your agent configuration that report the agent's session identity to herdr, which is what makes herdr's session tracking and restore work. fanout never runs it for you — your agent configuration stays yours. It is an optional step; consider it if you rely on restore.
+`herdr integration install claude` / `codex` writes hooks into your agent configuration that report the agent's session identity to herdr, which is what makes herdr's session tracking and restore work. fanout never runs it for you — your agent configuration stays yours. It is optional, but TUI focus on a Claude or Codex row depends on the session those hooks report, as does herdr's own session restore.
+
+fanout passes `HERDR_ENV`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` to Claude and Codex workloads so the hook reaches the owned socket; the session and workspace route stay with the launcher. The hook itself lives in your own agent configuration, outside the owned session's XDG isolation, so it needs no relocation.
 
 fanout-owned sessions isolate herdr's XDG directories and require an empty plugin registry before creating a workspace or worktree. Herdr notification and worktree-setup plugins do not run for fanout-owned launches. A non-empty registry makes the launch fail before mutation; use fanout's notification channels and hooks for those launches.
 

@@ -78,7 +78,8 @@ runs the same fan-out in a fanout-owned herdr session instead of tmux: it needs
 stable herdr 0.7.5 or newer, and no tmux. Issue / Project / plan / watcher
 launches, TUI launch / focus / peek, `--merge` / `--close` / `--cleanup`, and
 `--team` messaging work there; interactive send, restore, and plan capture do
-not.
+not. Focus also needs `herdr integration install claude` / `codex`, which is
+what reports the agent session it matches on.
 
 ## Quick start
 

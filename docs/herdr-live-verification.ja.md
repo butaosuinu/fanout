@@ -310,6 +310,16 @@ TUI の Enter / `o` / `Z`、launch 直後の自動 focus がすべて claude 行
 socket 系の env を渡せば integration が session を報告し、
 `bindLateAgentSession` が遅れて束縛して focus が通るようになります。
 
+以下は事後の修正メモで、上の実測記録の一部ではありません。grant 条件を direct
+codex から direct agent へ広げました (`directAgentIntegrationLaunch`)。hook が
+必要とするのは `HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` の 3 つだけで、
+偽の unix socket を立てて `~/.claude/hooks/herdr-agent-state.sh` を直接叩き、
+3 つが揃ったときだけ `source: "herdr:claude"` の `pane.report_agent_session` が
+飛ぶことを確認しました。hook 自体は `~/.claude/` にあり、owned session が隔離する
+XDG root の外なので移設は要りません。attach で起動した agent は coordinator
+workspace で動き、この grant の対象外のままです。owned session を通した
+claude focus の実測は次回の再検証まで未取得です。
+
 #### `--close` / `--cleanup` が herdr レーンで worktree を消せない — [#721](https://github.com/butaosuinu/fanout/issues/721)
 
 tmux レーンは `git worktree remove --force`
