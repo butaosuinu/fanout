@@ -23,6 +23,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 	"github.com/butaosuinu/fanout/internal/ui/dashboard"
 )
@@ -247,7 +248,7 @@ func bindDashboardKeyForBackend(lg *log.Logger, enabled bool, selection backend.
 		lg.Debug("dashboard keybind: open managed session: %v", err)
 		return
 	}
-	syncOwnedDashboardKey(lg, enabled, owned)
+	syncOwnedDashboardKey(lg, enabled, projectRoot, owned)
 }
 
 // waitDashboardHealthy polls the token-free /healthz endpoint until it answers
@@ -344,21 +345,25 @@ func bindDashboardKey(lg *log.Logger, enabled bool) {
 	syncDashboardKey(lg, enabled, false)
 }
 
-func bindRuntimeDashboardKey(lg *log.Logger, enabled bool, runtimeBackend backend.Backend) {
+func bindRuntimeDashboardKey(lg *log.Logger, enabled bool, statePath string, runtimeBackend backend.Backend) {
 	if _, ok := backend.AsShortcutBinder(runtimeBackend); ok {
 		bindDashboardKey(lg, enabled)
 		return
 	}
-	syncRuntimeDashboardKey(lg, enabled, runtimeBackend)
+	syncRuntimeDashboardKey(lg, enabled, statePath, runtimeBackend)
 }
 
 func runtimeDashboardKeyBinder(rt *run.Runtime) func(*log.Logger, bool) {
+	statePath := ""
+	if rt != nil && rt.Info != nil {
+		statePath = state.Path(rt.Info.ProjectRoot)
+	}
 	return func(lg *log.Logger, enabled bool) {
-		bindRuntimeDashboardKey(lg, enabled, rt.Backend)
+		bindRuntimeDashboardKey(lg, enabled, statePath, rt.Backend)
 	}
 }
 
-func syncRuntimeDashboardKey(lg *log.Logger, enabled bool, runtimeBackend backend.Backend) {
+func syncRuntimeDashboardKey(lg *log.Logger, enabled bool, statePath string, runtimeBackend backend.Backend) {
 	if runtimeBackend == nil {
 		return
 	}
@@ -372,7 +377,7 @@ func syncRuntimeDashboardKey(lg *log.Logger, enabled bool, runtimeBackend backen
 		return
 	}
 	err = binder.SyncDashboardShortcut(backend.DashboardShortcutOptions{
-		Enabled: enabled, FanoutBin: bin, Environment: os.Environ(),
+		Enabled: enabled, FanoutBin: bin, StatePath: statePath, Environment: os.Environ(),
 	})
 	if err != nil {
 		lg.Warn("dashboard keybind: %v", err)
@@ -383,11 +388,11 @@ func syncRuntimeDashboardKey(lg *log.Logger, enabled bool, runtimeBackend backen
 	}
 }
 
-func syncOwnedDashboardKey(lg *log.Logger, enabled bool, owned paneruntime.ManagedSession) {
+func syncOwnedDashboardKey(lg *log.Logger, enabled bool, projectRoot string, owned paneruntime.ManagedSession) {
 	if owned == nil || owned.Backend() == nil {
 		return
 	}
-	syncRuntimeDashboardKey(lg, enabled, owned.Backend())
+	syncRuntimeDashboardKey(lg, enabled, state.Path(projectRoot), owned.Backend())
 }
 
 func syncDashboardKey(lg *log.Logger, enabled bool, cleanupDisabled bool) {

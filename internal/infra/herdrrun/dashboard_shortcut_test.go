@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
 const (
@@ -42,7 +43,8 @@ func TestOwnedDashboardConfigBindsF12InTerminalAndNavigateModes(t *testing.T) {
 func TestDashboardDescriptorKeepsOnlyBrowserContext(t *testing.T) {
 	got := filterDashboardEnvironment([]string{
 		"PATH=/custom/bin", "DISPLAY=:7", "GH_TOKEN=secret", "GITHUB_TOKEN=secret-2",
-		"FANOUT_HERDR_PANE_LAUNCHER=1", "HERDR_CONFIG_PATH=/private/config",
+		"FANOUT_HERDR_PANE_LAUNCHER=1", "FANOUT_STATE_PATH=/foreign/state",
+		"HERDR_CONFIG_PATH=/private/config",
 	})
 	want := []string{"PATH=/custom/bin", "DISPLAY=:7"}
 	if !slices.Equal(got, want) {
@@ -60,6 +62,7 @@ func TestDashboardDescriptorRejectsNULInEnvironment(t *testing.T) {
 		SchemaID:   dashboardDescriptorSchemaID,
 		HelperPath: pinned.path, HelperSHA256: pinned.sha256,
 		DashboardPath: pinned.path, DashboardSHA256: pinned.sha256,
+		StatePath:   state.Path("/owner"),
 		Environment: []string{"HOME=/home/operator\x00bad"},
 	}
 	if err := validateDashboardDescriptor(layout, descriptor); err == nil {
@@ -73,6 +76,7 @@ func TestRunDashboardOpenUsesValidatedPinnedBinaryAndCleanEnvironment(t *testing
 		SchemaID:   dashboardDescriptorSchemaID,
 		HelperPath: pinned.path, HelperSHA256: pinned.sha256,
 		DashboardPath: pinned.path, DashboardSHA256: pinned.sha256,
+		StatePath:   state.Path("/owner"),
 		Environment: []string{"HOME=/home/operator", "PATH=/usr/bin:/bin", "DISPLAY=:1"},
 	}
 	if err := writeDashboardDescriptor(layout, descriptor); err != nil {
@@ -96,7 +100,7 @@ func TestRunDashboardOpenUsesValidatedPinnedBinaryAndCleanEnvironment(t *testing
 	if !slices.Equal(gotArgs, wantArgs) {
 		t.Fatalf("dashboard argv = %q, want %q", gotArgs, wantArgs)
 	}
-	for _, want := range []string{"HOME=/home/operator", "PATH=/usr/bin:/bin", "DISPLAY=:1", "FANOUT_BACKEND=herdr", "FANOUT_BIN=" + pinned.path} {
+	for _, want := range []string{"HOME=/home/operator", "PATH=/usr/bin:/bin", "DISPLAY=:1", "FANOUT_BACKEND=herdr", "FANOUT_BIN=" + pinned.path, "FANOUT_STATE_PATH=" + state.Path("/owner")} {
 		if !slices.Contains(gotEnv, want) {
 			t.Fatalf("dashboard environment %q does not contain %q", gotEnv, want)
 		}
@@ -123,7 +127,7 @@ func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	options := corebackend.DashboardShortcutOptions{
-		Enabled: true, FanoutBin: executable,
+		Enabled: true, FanoutBin: executable, StatePath: state.Path(h.checkout),
 		Environment: []string{"HOME=/home/operator", "PATH=/usr/bin", "GH_TOKEN=secret", "DISPLAY=:4"},
 	}
 	if syncErr := h.session.Backend().SyncDashboardShortcut(options); syncErr != nil {
@@ -171,7 +175,7 @@ func TestSyncDashboardShortcutLeavesDesiredConfigAfterAmbiguousReload(t *testing
 		t.Fatal(err)
 	}
 	err = h.session.Backend().SyncDashboardShortcut(corebackend.DashboardShortcutOptions{
-		Enabled: true, FanoutBin: executable, Environment: os.Environ(),
+		Enabled: true, FanoutBin: executable, StatePath: state.Path(h.checkout), Environment: os.Environ(),
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("SyncDashboardShortcut() error = %v, want deadline", err)
@@ -194,7 +198,7 @@ func TestSyncDashboardShortcutRejectsOversizedDescriptorWithoutMutation(t *testi
 		t.Fatal(err)
 	}
 	options := corebackend.DashboardShortcutOptions{
-		Enabled: true, FanoutBin: executable, Environment: []string{"PATH=/usr/bin"},
+		Enabled: true, FanoutBin: executable, StatePath: state.Path(h.checkout), Environment: []string{"PATH=/usr/bin"},
 	}
 	if err := h.session.Backend().SyncDashboardShortcut(options); err != nil {
 		t.Fatal(err)
@@ -221,6 +225,78 @@ func TestSyncDashboardShortcutRejectsOversizedDescriptorWithoutMutation(t *testi
 	}
 	if got := countRecordedCommand(h.fake.commands, []string{"server", "reload-config"}); got != 1 {
 		t.Fatalf("reload-config calls = %d, want 1", got)
+	}
+}
+
+func TestSyncDashboardShortcutRejectsRouteDriftBeforeConfigMutation(t *testing.T) {
+	h := newOwnedHarness(t)
+	configBefore, err := os.ReadFile(h.layout.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.fake.status = validStatus(h.session.Session, h.layout.clientSocketPath)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = h.session.Backend().SyncDashboardShortcut(corebackend.DashboardShortcutOptions{
+		Enabled: true, FanoutBin: executable, StatePath: state.Path(h.checkout),
+		Environment: []string{"PATH=/usr/bin"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "status socket") {
+		t.Fatalf("route drift error = %v", err)
+	}
+	configAfter, readErr := os.ReadFile(h.layout.configPath)
+	if readErr != nil || !slices.Equal(configAfter, configBefore) {
+		t.Fatalf("route drift mutated config: err=%v", readErr)
+	}
+	if _, err := os.Lstat(h.layout.dashboardDescriptorPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("route drift wrote dashboard descriptor: %v", err)
+	}
+	if got := countRecordedCommand(h.fake.commands, []string{"server", "reload-config"}); got != 0 {
+		t.Fatalf("reload-config calls = %d, want 0", got)
+	}
+}
+
+func TestExecDashboardDescriptorPinsStatePathAcrossWorkingDirectories(t *testing.T) {
+	descriptor := dashboardDescriptor{
+		DashboardPath: "/pinned/fanout", StatePath: state.Path("/owner"),
+		Environment: []string{"PATH=/usr/bin"},
+	}
+	originalExec := dashboardExec
+	originalCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workingDirs := []struct {
+		name string
+		path string
+	}{
+		{name: "outside repository", path: t.TempDir()},
+		{name: "another checkout", path: t.TempDir()},
+	}
+	t.Cleanup(func() {
+		dashboardExec = originalExec
+		if err := os.Chdir(originalCwd); err != nil {
+			t.Errorf("restore cwd: %v", err)
+		}
+	})
+	var gotEnv []string
+	dashboardExec = func(_ string, _ []string, env []string) error {
+		gotEnv = slices.Clone(env)
+		return errors.New("exec test seam")
+	}
+	for _, cwd := range workingDirs {
+		if err := os.Chdir(cwd.path); err != nil {
+			t.Fatal(err)
+		}
+		if err := execDashboardDescriptor(descriptor); err == nil || err.Error() != "exec test seam" {
+			t.Fatalf("exec dashboard from %s: %v", cwd.name, err)
+		}
+		if !slices.Contains(gotEnv, "FANOUT_STATE_PATH="+state.Path("/owner")) {
+			t.Fatalf("dashboard environment from %s %q = %q", cwd.name, cwd.path, gotEnv)
+		}
 	}
 }
 

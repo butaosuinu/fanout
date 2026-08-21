@@ -12,6 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/backendtest"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -132,9 +133,12 @@ func TestBindDashboardKeyForBackendNeedsShortcutCapability(t *testing.T) {
 
 func TestBindRuntimeDashboardKeyUsesDashboardOnlyCapability(t *testing.T) {
 	fake := &dashboardShortcutBinderFake{Backend: backendtest.New()}
-	bindRuntimeDashboardKey(discardLogger(), false, fake)
+	bindRuntimeDashboardKey(discardLogger(), false, state.Path("/repo"), fake)
 	if len(fake.options) != 1 || fake.options[0].Enabled || fake.options[0].FanoutBin == "" {
 		t.Fatalf("dashboard shortcut options = %+v", fake.options)
+	}
+	if fake.options[0].StatePath != state.Path("/repo") {
+		t.Fatalf("dashboard shortcut state path = %q", fake.options[0].StatePath)
 	}
 	if len(fake.options[0].Environment) == 0 {
 		t.Fatal("dashboard shortcut did not receive the host environment")
@@ -144,7 +148,7 @@ func TestBindRuntimeDashboardKeyUsesDashboardOnlyCapability(t *testing.T) {
 func TestRuntimeDashboardKeyBinderReadsPreparedBackend(t *testing.T) {
 	preview := &dashboardShortcutBinderFake{Backend: backendtest.New()}
 	owned := &dashboardShortcutBinderFake{Backend: backendtest.New()}
-	rt := &run.Runtime{Backend: preview}
+	rt := &run.Runtime{Backend: preview, Info: &fanoutruntime.Info{ProjectRoot: "/repo"}}
 	bind := runtimeDashboardKeyBinder(rt)
 	rt.PrepareBackend = func() error {
 		rt.Backend = owned
@@ -156,7 +160,8 @@ func TestRuntimeDashboardKeyBinderReadsPreparedBackend(t *testing.T) {
 
 	bind(discardLogger(), true)
 
-	if len(preview.options) != 0 || len(owned.options) != 1 || !owned.options[0].Enabled {
+	if len(preview.options) != 0 || len(owned.options) != 1 || !owned.options[0].Enabled ||
+		owned.options[0].StatePath != state.Path("/repo") {
 		t.Fatalf("dashboard shortcut sync = preview:%+v owned:%+v", preview.options, owned.options)
 	}
 }

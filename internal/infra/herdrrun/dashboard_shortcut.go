@@ -49,6 +49,7 @@ type dashboardDescriptor struct {
 	HelperSHA256    string   `json:"helper_sha256"`
 	DashboardPath   string   `json:"dashboard_path"`
 	DashboardSHA256 string   `json:"dashboard_sha256"`
+	StatePath       string   `json:"state_path"`
 	Environment     []string `json:"environment"`
 }
 
@@ -77,6 +78,10 @@ func (b *Backend) SyncDashboardShortcut(options corebackend.DashboardShortcutOpt
 		return err
 	}
 	defer unlockPrivateFile(lock)
+	probed, err := b.probeOwned(ctx, admission)
+	if err != nil {
+		return err
+	}
 	layout, err := prepareOwnedLayout(filepath.Dir(admission.marker.RuntimeDir), admission.marker.Session)
 	if err != nil {
 		return err
@@ -84,7 +89,7 @@ func (b *Backend) SyncDashboardShortcut(options corebackend.DashboardShortcutOpt
 	if err := applyDashboardShortcutConfig(layout, admission.marker, options); err != nil {
 		return err
 	}
-	if err := b.reloadDashboardShortcutConfig(ctx, admission.marker); err != nil {
+	if err := b.reloadDashboardShortcutConfig(ctx, probed); err != nil {
 		return err
 	}
 	if options.Enabled {
@@ -108,10 +113,8 @@ func applyDashboardShortcutConfig(
 	return nil
 }
 
-func (b *Backend) reloadDashboardShortcutConfig(ctx context.Context, marker ownerMarker) error {
-	out, err := b.runContext(ctx, commandTimeout, marker.BinaryPath,
-		route{session: marker.Session, socketPath: marker.SocketPath},
-		"server", "reload-config")
+func (b *Backend) reloadDashboardShortcutConfig(ctx context.Context, probed probeResult) error {
+	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "server", "reload-config")
 	if err != nil {
 		return fmt.Errorf("reload Herdr dashboard shortcut config: %w", err)
 	}
@@ -130,7 +133,7 @@ func desiredDashboardConfig(
 	if err != nil {
 		return nil, err
 	}
-	descriptor, err := nextDashboardDescriptor(layout, current, options.Environment)
+	descriptor, err := nextDashboardDescriptor(layout, current, options.StatePath, options.Environment)
 	if err != nil {
 		return nil, err
 	}
@@ -143,6 +146,7 @@ func desiredDashboardConfig(
 func nextDashboardDescriptor(
 	layout ownedLayout,
 	current binaryAdmission,
+	statePath string,
 	environment []string,
 ) (dashboardDescriptor, error) {
 	descriptor, found, err := readDashboardDescriptor(layout)
@@ -154,6 +158,7 @@ func nextDashboardDescriptor(
 	}
 	descriptor.SchemaID = dashboardDescriptorSchemaID
 	descriptor.DashboardPath, descriptor.DashboardSHA256 = current.path, current.sha256
+	descriptor.StatePath = statePath
 	descriptor.Environment = filterDashboardEnvironment(environment)
 	return descriptor, nil
 }
@@ -286,6 +291,9 @@ func validateDashboardDescriptor(layout ownedLayout, descriptor dashboardDescrip
 	if err := validatePinnedBinaryInDir(descriptor.DashboardPath, descriptor.DashboardSHA256, layout.launcherDir); err != nil {
 		return fmt.Errorf("herdr dashboard binary identity changed: %w", err)
 	}
+	if err := validateDashboardStatePath(descriptor.StatePath); err != nil {
+		return err
+	}
 	for _, entry := range descriptor.Environment {
 		if strings.ContainsRune(entry, '\x00') {
 			return fmt.Errorf("herdr dashboard launcher environment contains NUL")
@@ -293,6 +301,14 @@ func validateDashboardDescriptor(layout ownedLayout, descriptor dashboardDescrip
 	}
 	if !slices.Equal(descriptor.Environment, filterDashboardEnvironment(descriptor.Environment)) {
 		return fmt.Errorf("herdr dashboard launcher environment is not canonical")
+	}
+	return nil
+}
+
+func validateDashboardStatePath(path string) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != "state.json" ||
+		filepath.Base(filepath.Dir(path)) != ".fanout" {
+		return fmt.Errorf("herdr dashboard state path is invalid")
 	}
 	return nil
 }
@@ -349,6 +365,7 @@ func execDashboardDescriptor(descriptor dashboardDescriptor) error {
 	environment := append([]string{}, descriptor.Environment...)
 	environment = append(environment,
 		"FANOUT_BACKEND=herdr", "FANOUT_BIN="+descriptor.DashboardPath,
+		"FANOUT_STATE_PATH="+descriptor.StatePath,
 	)
 	return dashboardExec(descriptor.DashboardPath, []string{
 		descriptor.DashboardPath, "dashboard", "--web", "--open", "--no-keybind",

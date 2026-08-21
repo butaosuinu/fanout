@@ -61,9 +61,11 @@ type ShortcutBinder interface {
 // install without offering fanout's broader host shortcut surface. Environment
 // is the caller environment before the runtime narrows it for its own server;
 // the implementation must retain only the values it explicitly trusts.
+// StatePath pins the dashboard to the state owner selected before keypress.
 type DashboardShortcutOptions struct {
 	Enabled     bool
 	FanoutBin   string
+	StatePath   string
 	Environment []string
 }
 

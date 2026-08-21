@@ -241,7 +241,7 @@ func enterManagedConsole(
 		return exitcode.Env
 	}
 	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
-	syncOwnedDashboardKey(lg, resolvedSettings.DashboardKeybind, owned)
+	syncOwnedDashboardKey(lg, resolvedSettings.DashboardKeybind, projectRoot, owned)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	console, err := ensureManagedConsoleForTUI(ctx, projectRoot, owned, os.Environ(), "")
@@ -279,7 +279,7 @@ func runTUIConsole(
 ) exitcode.Code {
 	hosted := console != nil
 	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
-	syncOwnedDashboardKey(lg, resolvedSettings.DashboardKeybind, owned)
+	syncOwnedDashboardKey(lg, resolvedSettings.DashboardKeybind, projectRoot, owned)
 	listLive := runtimeListLiveForProject(projectRoot, hosted)
 	hookConfig := hooks.LoadUserConfig(lg)
 	var watcher fanouttui.WatcherRunner
@@ -526,7 +526,7 @@ func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConf
 			WatcherRunningLabel: resolvedSettings.WatcherRunningLabel,
 			Notifier:            notifier,
 		}
-		syncTUIReloadKeys(hosted, owned, resolvedSettings, lg)
+		syncTUIReloadKeys(hosted, owned, projectRoot, resolvedSettings, lg)
 		runtime.LaunchIssue = reloadedTUIIssueLauncher(interactiveLaunch, projectRoot, session, commandName, resolvedSettings, hookConfig)
 		return runtime, nil
 	}
@@ -536,13 +536,13 @@ func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConf
 // It runs only for a hosted console: the shortcut registration resolves the
 // host runtime itself, so a managed console would otherwise rewrite keys on a
 // server it never put a pane on.
-func syncTUIReloadKeys(hosted bool, owned paneruntime.ManagedSession, resolved settings.Settings, lg *log.Logger) {
+func syncTUIReloadKeys(hosted bool, owned paneruntime.ManagedSession, projectRoot string, resolved settings.Settings, lg *log.Logger) {
 	if hosted {
 		syncDashboardKey(lg, resolved.DashboardKeybind, true)
 		syncConsoleKey(lg, resolved.ConsoleKeybind, true)
 		return
 	}
-	syncOwnedDashboardKey(lg, resolved.DashboardKeybind, owned)
+	syncOwnedDashboardKey(lg, resolved.DashboardKeybind, projectRoot, owned)
 }
 
 func reloadedTUIIssueLauncher(enabled bool, projectRoot, session, commandName string, resolved settings.Settings, hookConfig hooks.Config) fanouttui.IssueLaunchFunc {
