@@ -207,8 +207,10 @@ func handoffConsoleShell(code exitcode.Code, lg *log.Logger) exitcode.Code {
 		return code
 	}
 	// The line lands in the pane right above the new shell prompt, so a later
-	// attach that finds a shell here also finds the way back in.
-	fmt.Fprintln(lg.Stdout(), "fanout console closed; run 'fanout' here to reopen it")
+	// attach that finds a shell here also finds the way back in. FANOUT_BIN
+	// names the pinned binary and survives the hand-off, so the hint works
+	// even when no `fanout` is on the pane's PATH.
+	fmt.Fprintln(lg.Stdout(), `fanout console closed; run "$FANOUT_BIN" here to reopen it`)
 	if err := execConsoleShell(shell, []string{shell}, environmentWithout(backend.ConsoleShellEnv)); err != nil {
 		lg.Warn("tui: console shell hand-off failed: %v", err)
 		return code

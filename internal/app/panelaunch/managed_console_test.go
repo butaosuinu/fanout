@@ -81,6 +81,71 @@ func TestNewManagedShellLaunchKeepsTheOperatorShellWorkload(t *testing.T) {
 	}
 }
 
+func TestClassifyManagedConsoleProcessAcceptsTUIAndHandoffShell(t *testing.T) {
+	route := backend.OwnedLaunchRoute{LauncherPath: "/owned/launcher/fanout", EmitterPath: "/owned/launcher/fanout"}
+	intent := state.LaunchIntent{
+		WorktreePath: "/repo",
+		Launch: &state.LaunchCapsule{
+			Executable: route.LauncherPath,
+			Args:       []string{ManagedConsoleWorkloadArg},
+		},
+	}
+	paneProcess := func(executable string, argv []string) backend.PaneProcessInfo {
+		return backend.PaneProcessInfo{
+			ShellPID: 42, ForegroundProcessGroup: 42,
+			ForegroundProcesses: []backend.PaneProcess{{
+				PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: executable,
+				CWD: intent.WorktreePath, Argv0: executable, Argv: argv,
+			}},
+		}
+	}
+	tests := []struct {
+		name    string
+		process backend.PaneProcessInfo
+		want    string // "", "pending", or an error fragment
+	}{
+		{
+			name:    "exec'd console TUI is started",
+			process: paneProcess(route.LauncherPath, []string{ManagedConsoleWorkloadArg}),
+		},
+		{
+			// An init failure hands the pane to the operator shell; the pane is
+			// healthy, so the intent must not fall to manual cleanup.
+			name:    "handed-off operator shell is started",
+			process: paneProcess("/bin/zsh", nil),
+		},
+		{
+			name:    "launcher still waiting for its token is pending",
+			process: paneProcess(route.LauncherPath, nil),
+			want:    "pending",
+		},
+		{
+			name:    "foreign process is a mismatch",
+			process: paneProcess("/usr/bin/vim", nil),
+			want:    "identity does not match",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := classifyManagedConsoleProcess(tt.process, intent, route, "/bin/zsh")
+			switch tt.want {
+			case "":
+				if err != nil {
+					t.Fatalf("classifyManagedConsoleProcess() = %v, want started", err)
+				}
+			case "pending":
+				if !errors.Is(err, managedLaunchTransitionPending{}) {
+					t.Fatalf("classifyManagedConsoleProcess() = %v, want pending", err)
+				}
+			default:
+				if err == nil || !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("classifyManagedConsoleProcess() = %v, want %q", err, tt.want)
+				}
+			}
+		})
+	}
+}
+
 func TestManagedConsoleResultCarriesBothAttachForms(t *testing.T) {
 	attach := backend.AttachExec{
 		Path: "/pinned/client",

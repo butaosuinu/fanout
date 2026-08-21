@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/app/agentprocess"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -112,7 +113,12 @@ func ensureManagedConsoleLocked(
 		return ManagedConsoleResult{}, validationErr
 	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: root}, Managed: owned}
-	live, err := launcher.startManagedAgent(ctx, locked, route, intent, validateManagedShellLaunch, nil, exactManagedShellPane, nil)
+	live, err := launcher.startManagedAgent(
+		ctx, locked, route, intent, validateManagedShellLaunch, nil, exactManagedShellPane,
+		func(adoptCtx context.Context, _ *state.LockedStore, issued state.LaunchIntent) (backend.LivePane, error) {
+			return launcher.adoptManagedConsolePane(adoptCtx, issued, route, shellPath)
+		},
+	)
 	if err != nil {
 		return ManagedConsoleResult{}, err
 	}
@@ -441,6 +447,56 @@ func newManagedConsoleLaunch(
 	}
 	capsule.Args = []string{ManagedConsoleWorkloadArg}
 	return capsule, nil
+}
+
+// adoptManagedConsolePane is the console lane's process gate. Unlike the
+// generic workload wait it also adopts the operator shell the TUI execs on
+// exit: a console TUI that fails during init still leaves a live console pane
+// holding that shell, and treating it as a failed launch would pin the intent
+// on manual cleanup even though the pane is healthy and the next `fanout`
+// inside it reopens the console.
+func (l *Launcher) adoptManagedConsolePane(
+	ctx context.Context,
+	intent state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+	shell string,
+) (backend.LivePane, error) {
+	err := retryManagedObservation(ctx, intent, func(observeCtx context.Context) error {
+		process, err := l.Managed.ProcessInfo(observeCtx, intent.Resource.PaneID)
+		if err != nil {
+			return err
+		}
+		return classifyManagedConsoleProcess(process, intent, route, shell)
+	})
+	if err != nil {
+		return backend.LivePane{}, err
+	}
+	return l.waitForManagedPane(ctx, intent, exactManagedShellPane, "")
+}
+
+// classifyManagedConsoleProcess reports what the console pane runs: nil for a
+// started state (the exec'd console TUI, or the operator shell it hands the
+// pane to on exit), pending while the launcher still waits for its token, and
+// the identity mismatch otherwise.
+func classifyManagedConsoleProcess(
+	process backend.PaneProcessInfo,
+	intent state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+	shell string,
+) error {
+	processErr := verifyManagedAgentProcess(process, intent)
+	if processErr == nil {
+		return nil
+	}
+	if _, err := agentprocess.MatchAgent(process, agentprocess.Identity{
+		WorktreePath: intent.WorktreePath, Executable: shell,
+	}); err == nil {
+		return nil
+	}
+	if verifyManagedLauncherProcess(process, intent, route) == nil {
+		return managedLaunchTransitionPending{}
+	}
+	return processErr
 }
 
 func findManagedConsolePane(projectRoot string, current state.Store) (state.Pane, bool, error) {

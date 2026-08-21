@@ -205,7 +205,7 @@ func TestHandoffConsoleShellExecsRecordedShellWithoutTheHandoffName(t *testing.T
 	if !strings.Contains(stderr.String(), "exec refused by test") {
 		t.Fatalf("hand-off failure warning missing: %q", stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "run 'fanout' here to reopen") {
+	if !strings.Contains(stdout.String(), `run "$FANOUT_BIN" here to reopen`) {
 		t.Fatalf("reopen hint missing from pane output: %q", stdout.String())
 	}
 }
