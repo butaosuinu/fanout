@@ -383,18 +383,32 @@ func validateAgentPromptResponse(data []byte, target corebackend.OwnedPaneIdenti
 	if envelope.ID != "cli:agent:prompt" || envelope.Result == nil || envelope.Result.Type != "agent_prompted" {
 		return fmt.Errorf("unexpected agent prompt envelope")
 	}
-	agent := envelope.Result.Agent
+	return validatePromptedAgentIdentity(envelope.Result.Agent, target)
+}
+
+// validatePromptedAgentIdentity checks that the agent the runtime just prompted
+// is the one the caller addressed. It runs after delivery, so it admits exactly
+// what the preflight did and no more.
+func validatePromptedAgentIdentity(agent agentJSON, target corebackend.OwnedPaneIdentity) error {
 	if agent.TerminalID != target.TerminalID || agent.WorkspaceID != target.Ref.Workspace || agent.TabID == "" ||
 		agent.PaneID != target.Ref.Pane || agent.Focused == nil || agent.Revision == nil {
 		return fmt.Errorf("%w: prompted agent identity changed", corebackend.ErrOwnedIdentityMismatch)
 	}
 	name := optionalString(agent.Name)
-	agentID := cmp.Or(name, optionalString(agent.Agent))
+	provider := optionalString(agent.Agent)
+	// AgentRecordMatches deliberately says nothing about the provider, so every
+	// caller pairs it with its own provider check. Without one here, an
+	// anonymous record would be admitted on the recorded name's shape alone,
+	// and a pane whose provider changed after the preflight would report a
+	// prompt delivered to a different agent as a success.
+	if provider != target.Agent {
+		return fmt.Errorf("%w: prompted agent provider changed", corebackend.ErrOwnedIdentityMismatch)
+	}
 	// This check runs after the prompt was delivered, so it admits the same
 	// record the preflight did. Holding it to the name alone would report a
 	// delivered prompt as a failure whenever the runtime dropped that name in
 	// the gap, and the retry would send the prompt twice.
-	if !corebackend.AgentRecordMatches(agentID, name != "", target.AgentID) {
+	if !corebackend.AgentRecordMatches(cmp.Or(name, provider), name != "", target.AgentID) {
 		return fmt.Errorf("%w: prompted agent name changed", corebackend.ErrOwnedIdentityMismatch)
 	}
 	if !agentPromptSessionMatches(target.Agent, agent.AgentSession, target.AgentSession) {

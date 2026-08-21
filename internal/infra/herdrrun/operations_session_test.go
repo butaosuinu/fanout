@@ -231,6 +231,9 @@ func TestAgentPromptResponseAdmitsUnnamedRecord(t *testing.T) {
 	setAgentName(h, "w2:p1", minted)
 	target := h.target()
 
+	if target.Agent != "codex" {
+		t.Fatalf("fixture provider = %q, want codex so the other-provider case differs", target.Agent)
+	}
 	tests := []struct {
 		name    string
 		mutate  func(*agentJSON)
@@ -246,6 +249,17 @@ func TestAgentPromptResponseAdmitsUnnamedRecord(t *testing.T) {
 			mutate: func(a *agentJSON) {
 				other := "someone-else"
 				a.Name = &other
+			},
+			wantErr: true,
+		},
+		{
+			// An anonymous record is admitted on the recorded name's shape, so
+			// the provider is what keeps a prompt delivered to a different
+			// agent from being reported as a success.
+			name: "anonymous record belongs to another provider",
+			mutate: func(a *agentJSON) {
+				other := "claude"
+				a.Name, a.Agent = nil, &other
 			},
 			wantErr: true,
 		},

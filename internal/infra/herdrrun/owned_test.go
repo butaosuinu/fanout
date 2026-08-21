@@ -417,17 +417,19 @@ func agentPromptResponse(target corebackend.OwnedPaneIdentity, mutate func(*agen
 	focused := false
 	revision := uint64(3)
 	name := target.AgentID
-	agentName := ""
+	// The runtime names the provider on every agent record, whether or not it
+	// is holding a conversation for it.
+	provider := target.Agent
 	var session *agentSessionJSON
 	if target.AgentSession != nil {
-		agentName = target.AgentSession.Agent
+		sessionAgent := target.AgentSession.Agent
 		source := target.AgentSession.Source
 		kind := target.AgentSession.Kind
 		value := target.AgentSession.Value
-		session = &agentSessionJSON{Source: &source, Agent: &agentName, Kind: &kind, Value: &value}
+		session = &agentSessionJSON{Source: &source, Agent: &sessionAgent, Kind: &kind, Value: &value}
 	}
 	agent := agentJSON{
-		TerminalID: target.TerminalID, Name: &name, Agent: &agentName, AgentStatus: "working",
+		TerminalID: target.TerminalID, Name: &name, Agent: &provider, AgentStatus: "working",
 		WorkspaceID: target.Ref.Workspace, TabID: "w2:t1", PaneID: target.Ref.Pane,
 		Focused: &focused, Revision: &revision,
 		AgentSession: session,
