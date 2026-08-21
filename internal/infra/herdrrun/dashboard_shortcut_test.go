@@ -75,6 +75,8 @@ func TestRunDashboardOpenUsesValidatedPinnedBinaryAndCleanEnvironment(t *testing
 	t.Setenv("HERDR_SOCKET_PATH", layout.socketPath)
 	t.Setenv("HERDR_ACTIVE_PANE_ID", "pane-1")
 	t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", "workspace-1")
+	t.Setenv(dashboardRelayGHTokenEnv, "gh-secret")
+	t.Setenv(dashboardRelayGitHubTokenEnv, "github-secret")
 	originalExec, originalExecutable := dashboardExec, dashboardExecutable
 	t.Cleanup(func() { dashboardExec, dashboardExecutable = originalExec, originalExecutable })
 	dashboardExecutable = func() (string, error) { return pinned.path, nil }
@@ -93,12 +95,20 @@ func TestRunDashboardOpenUsesValidatedPinnedBinaryAndCleanEnvironment(t *testing
 	if !slices.Equal(gotArgs, wantArgs) {
 		t.Fatalf("dashboard argv = %q, want %q", gotArgs, wantArgs)
 	}
-	for _, want := range []string{"HOME=/home/operator", "PATH=/usr/bin:/bin", "DISPLAY=:1", "FANOUT_BACKEND=herdr", "FANOUT_BIN=" + pinned.path, "FANOUT_STATE_PATH=" + state.Path("/owner")} {
+	for _, want := range []string{
+		"HOME=/home/operator", "PATH=/usr/bin:/bin", "DISPLAY=:1",
+		"GH_TOKEN=gh-secret", "GITHUB_TOKEN=github-secret",
+		"FANOUT_BACKEND=herdr", "FANOUT_BIN=" + pinned.path,
+		"FANOUT_STATE_PATH=" + state.Path("/owner"),
+	} {
 		if !slices.Contains(gotEnv, want) {
 			t.Fatalf("dashboard environment %q does not contain %q", gotEnv, want)
 		}
 	}
-	for _, blocked := range []string{"FANOUT_HERDR_PANE_LAUNCHER=", "HERDR_CONFIG_PATH=", "GH_TOKEN="} {
+	for _, blocked := range []string{
+		"FANOUT_HERDR_PANE_LAUNCHER=", "HERDR_CONFIG_PATH=",
+		dashboardRelayGHTokenEnv + "=", dashboardRelayGitHubTokenEnv + "=",
+	} {
 		for _, entry := range gotEnv {
 			if strings.HasPrefix(entry, blocked) {
 				t.Fatalf("dashboard environment retained blocked value %q", entry)
@@ -124,7 +134,10 @@ func TestRunDashboardOpenRejectsActiveRouteMismatch(t *testing.T) {
 }
 
 func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
-	h := newOwnedHarness(t)
+	environment := []string{
+		"HOME=/home/operator", "PATH=/usr/bin", "GH_TOKEN=secret", "DISPLAY=:4",
+	}
+	h := newOwnedHarnessWithDashboardEnvironment(t, environment)
 	h.fake.respond = func(args []string) ([]byte, error) {
 		if slices.Equal(args, []string{"server", "reload-config"}) {
 			return []byte(appliedDashboardReloadEnvelope), nil
@@ -141,7 +154,7 @@ func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
 			testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout)),
 			testDashboardShortcutOwner(h, "pane-2", "workspace-2", state.Path(h.checkout+"-linked")),
 		},
-		Environment: []string{"HOME=/home/operator", "PATH=/usr/bin", "GH_TOKEN=secret", "DISPLAY=:4"},
+		Environment: environment,
 	}
 	if syncErr := h.session.Backend().SyncDashboardShortcut(options); syncErr != nil {
 		t.Fatal(syncErr)
@@ -161,6 +174,17 @@ func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
 	}
 	if slices.Contains(descriptor.Environment, "GH_TOKEN=secret") {
 		t.Fatalf("descriptor retained GH_TOKEN: %+v", descriptor)
+	}
+	marker, found, err := readOwnerMarker(h.layout.markerPath)
+	if err != nil || !found || marker.DashboardGHTokenSHA256 != dashboardAuthenticationSHA256("secret") {
+		t.Fatalf("dashboard authentication marker = (%+v, %t, %v)", marker, found, err)
+	}
+	for _, path := range []string{h.layout.markerPath, h.layout.configPath, h.layout.dashboardDescriptorPath} {
+		contents, readErr := os.ReadFile(path)
+		if readErr != nil || bytes.Contains(contents, []byte(`"GH_TOKEN":"secret"`)) ||
+			bytes.Contains(contents, []byte("GH_TOKEN=secret")) {
+			t.Fatalf("dashboard authentication persisted in %s: err=%v", path, readErr)
+		}
 	}
 	if syncErr := h.session.Backend().SyncDashboardShortcut(options); syncErr != nil {
 		t.Fatal(syncErr)
@@ -184,6 +208,42 @@ func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
 	}
 }
 
+func TestSyncDashboardShortcutDisablesBindingWhenAuthenticationNeedsRecreate(t *testing.T) {
+	h := newOwnedHarness(t)
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if slices.Equal(args, []string{"server", "reload-config"}) {
+			return []byte(appliedDashboardReloadEnvelope), nil
+		}
+		return nil, errors.New("unexpected command")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := corebackend.DashboardShortcutOptions{
+		Enabled: true, FanoutBin: executable,
+		Owners:      []corebackend.DashboardShortcutOwner{testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout))},
+		Environment: []string{"PATH=/usr/bin"},
+	}
+	if err := h.session.Backend().SyncDashboardShortcut(options); err != nil {
+		t.Fatal(err)
+	}
+	options.Environment = append(options.Environment, "GH_TOKEN=rotated")
+	err = h.session.Backend().SyncDashboardShortcut(options)
+	if err == nil || !strings.Contains(err.Error(), "fanout herdr shutdown") {
+		t.Fatalf("authentication mismatch error = %v", err)
+	}
+	if err := validatePrivateContents(h.layout.configPath, ownedConfigContents(h.session.LauncherPath)); err != nil {
+		t.Fatalf("disabled config: %v", err)
+	}
+	if _, err := os.Lstat(h.layout.dashboardDescriptorPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("authentication mismatch retained descriptor: %v", err)
+	}
+	if got := countRecordedCommand(h.fake.commands, []string{"server", "reload-config"}); got != 2 {
+		t.Fatalf("reload-config calls = %d, want 2", got)
+	}
+}
+
 func TestSyncDashboardShortcutLeavesDesiredConfigAfterAmbiguousReload(t *testing.T) {
 	h := newOwnedHarness(t)
 	h.fake.respond = func([]string) ([]byte, error) { return nil, context.DeadlineExceeded }
@@ -194,7 +254,7 @@ func TestSyncDashboardShortcutLeavesDesiredConfigAfterAmbiguousReload(t *testing
 	err = h.session.Backend().SyncDashboardShortcut(corebackend.DashboardShortcutOptions{
 		Enabled: true, FanoutBin: executable,
 		Owners:      []corebackend.DashboardShortcutOwner{testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout))},
-		Environment: os.Environ(),
+		Environment: filterDashboardEnvironment(os.Environ()),
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("SyncDashboardShortcut() error = %v, want deadline", err)

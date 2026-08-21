@@ -26,6 +26,10 @@ fanout は launch の検証後に限り、workspace、pane、terminal、reposito
 owned session は自分の `config.toml` を固定します。既定 shell は fanout の launcher(non-login)、herdr の復元時 agent resume は off、herdr の update manifest check も off です。`dashboardKeybind` が有効なら、focus 中の pane から web ダッシュボードを開く Herdr の `F12` shell command も登録します。
 fanout の知らないところで agent が起動し直されることはありません。resume は後述の明示操作だけです。
 
+`gh` の認証に `GH_TOKEN` または `GITHUB_TOKEN` を使う場合は、その変数を持つ shell から owned session を作成してください。
+fanout は token を内部 control-plane 名で owned server へ渡し、ownership marker には SHA-256 fingerprint だけを保存します。`config.toml` と dashboard descriptor に token の値は書きません。
+live server が現在の token を継承していない場合は F12 keybind を削除します。子の行を close または cleanup し、`fanout herdr shutdown` を実行してから、token を持つ shell で再起動してください。
+
 常駐 TUI コンソール、`--status`、web ダッシュボードには、記録済み session と各 pane の runtime backend、identity が表示されます([モニタリング]({{< relref "/docs/monitoring" >}})を参照)。
 TUI コンソールと web ダッシュボードは、herdr backend で記録された行を `herdr api snapshot` と照合して生死と agent state を反映します。
 `--status` が読むのは記録済みの state と GitHub だけです。

@@ -2,6 +2,7 @@ package herdrrun
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,9 +22,13 @@ import (
 const (
 	// dashboardDescriptorSchemaID is read by the stable helper path embedded in
 	// config.toml. Keep v1 readable across upgrades even if later fields appear.
-	dashboardDescriptorSchemaID = "fanout.herdr-dashboard-launcher.v1"
-	dashboardDescriptorName     = "dashboard-launcher.json"
-	dashboardDefaultPath        = "/usr/local/bin:/usr/bin:/bin"
+	dashboardDescriptorSchemaID  = "fanout.herdr-dashboard-launcher.v1"
+	dashboardDescriptorName      = "dashboard-launcher.json"
+	dashboardDefaultPath         = "/usr/local/bin:/usr/bin:/bin"
+	dashboardGHTokenEnv          = "GH_TOKEN"
+	dashboardGitHubTokenEnv      = "GITHUB_TOKEN"
+	dashboardRelayGHTokenEnv     = "FANOUT_HERDR_DASHBOARD_GH_TOKEN"
+	dashboardRelayGitHubTokenEnv = "FANOUT_HERDR_DASHBOARD_GITHUB_TOKEN"
 	// DashboardOpenCommand is frozen because an older pinned launcher may keep
 	// serving an owned session after the installed fanout binary is upgraded.
 	DashboardOpenCommand = "__herdr-dashboard-open"
@@ -61,6 +66,11 @@ type dashboardOwner struct {
 	StatePath   string `json:"state_path"`
 }
 
+type dashboardAuthentication struct {
+	ghTokenSHA256     string
+	githubTokenSHA256 string
+}
+
 type dashboardReloadEnvelope struct {
 	ID     string                 `json:"id"`
 	Result *dashboardReloadResult `json:"result"`
@@ -94,16 +104,20 @@ func (b *Backend) SyncDashboardShortcut(options corebackend.DashboardShortcutOpt
 	if err != nil {
 		return err
 	}
+	authErr := validateDashboardAuthentication(admission.marker, options)
+	if authErr != nil {
+		options.Enabled = false
+	}
 	if err := applyDashboardShortcutConfig(layout, admission.marker, options); err != nil {
-		return err
+		return errors.Join(authErr, err)
 	}
 	if err := b.reloadDashboardShortcutConfig(ctx, probed); err != nil {
-		return err
+		return errors.Join(authErr, err)
 	}
 	if options.Enabled {
 		return nil
 	}
-	return removeDashboardDescriptor(layout)
+	return errors.Join(authErr, removeDashboardDescriptor(layout))
 }
 
 func applyDashboardShortcutConfig(
@@ -213,13 +227,7 @@ func validateDashboardReloadResponse(out []byte) error {
 }
 
 func filterDashboardEnvironment(environment []string) []string {
-	values := make(map[string]string, len(environment))
-	for _, entry := range environment {
-		name, value, found := strings.Cut(entry, "=")
-		if found {
-			values[name] = value
-		}
-	}
+	values := dashboardEnvironmentValues(environment)
 	if values["PATH"] == "" {
 		values["PATH"] = dashboardDefaultPath
 	}
@@ -230,6 +238,83 @@ func filterDashboardEnvironment(environment []string) []string {
 		}
 	}
 	return filtered
+}
+
+func dashboardEnvironmentValues(environment []string) map[string]string {
+	values := make(map[string]string, len(environment))
+	for _, entry := range environment {
+		name, value, found := strings.Cut(entry, "=")
+		if found {
+			values[name] = value
+		}
+	}
+	return values
+}
+
+func dashboardAuthenticationFromCaller(environment []string) dashboardAuthentication {
+	values := dashboardEnvironmentValues(environment)
+	return dashboardAuthentication{
+		ghTokenSHA256:     dashboardAuthenticationSHA256(values[dashboardGHTokenEnv]),
+		githubTokenSHA256: dashboardAuthenticationSHA256(values[dashboardGitHubTokenEnv]),
+	}
+}
+
+func dashboardAuthenticationFromSupervisor(environment []string) dashboardAuthentication {
+	values := dashboardEnvironmentValues(environment)
+	return dashboardAuthentication{
+		ghTokenSHA256:     dashboardAuthenticationSHA256(values[dashboardRelayGHTokenEnv]),
+		githubTokenSHA256: dashboardAuthenticationSHA256(values[dashboardRelayGitHubTokenEnv]),
+	}
+}
+
+func dashboardAuthenticationSHA256(value string) string {
+	if value == "" {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(value)))
+}
+
+func dashboardSupervisorEnvironment(environment []string) []string {
+	values := dashboardEnvironmentValues(environment)
+	return dashboardAuthenticationEnvironment(values, dashboardGHTokenEnv, dashboardGitHubTokenEnv,
+		dashboardRelayGHTokenEnv, dashboardRelayGitHubTokenEnv)
+}
+
+func dashboardInheritedAuthenticationEnvironment(environment []string) []string {
+	values := dashboardEnvironmentValues(environment)
+	return dashboardAuthenticationEnvironment(values, dashboardRelayGHTokenEnv, dashboardRelayGitHubTokenEnv,
+		dashboardRelayGHTokenEnv, dashboardRelayGitHubTokenEnv)
+}
+
+func dashboardOpenAuthenticationEnvironment(environment []string) []string {
+	values := dashboardEnvironmentValues(environment)
+	return dashboardAuthenticationEnvironment(values, dashboardRelayGHTokenEnv, dashboardRelayGitHubTokenEnv,
+		dashboardGHTokenEnv, dashboardGitHubTokenEnv)
+}
+
+func dashboardAuthenticationEnvironment(
+	values map[string]string,
+	ghSource, githubSource, ghTarget, githubTarget string,
+) []string {
+	result := make([]string, 0, 2)
+	for _, item := range [][2]string{{ghSource, ghTarget}, {githubSource, githubTarget}} {
+		if value := values[item[0]]; value != "" {
+			result = append(result, item[1]+"="+value)
+		}
+	}
+	return result
+}
+
+func validateDashboardAuthentication(marker ownerMarker, options corebackend.DashboardShortcutOptions) error {
+	if !options.Enabled {
+		return nil
+	}
+	caller := dashboardAuthenticationFromCaller(options.Environment)
+	if caller.ghTokenSHA256 != "" && caller.ghTokenSHA256 != marker.DashboardGHTokenSHA256 ||
+		caller.githubTokenSHA256 != "" && caller.githubTokenSHA256 != marker.DashboardGitHubTokenSHA256 {
+		return fmt.Errorf("environment-backed GitHub authentication is not available to the owned Herdr server; close or clean up its rows, run fanout herdr shutdown, then relaunch before enabling F12")
+	}
+	return nil
 }
 
 func writeDashboardDescriptor(layout ownedLayout, descriptor dashboardDescriptor) error {
@@ -454,6 +539,7 @@ func execDashboardDescriptor(descriptor dashboardDescriptor) error {
 		return err
 	}
 	environment := append([]string{}, descriptor.Environment...)
+	environment = append(environment, dashboardOpenAuthenticationEnvironment(os.Environ())...)
 	environment = append(environment,
 		"FANOUT_BACKEND=herdr", "FANOUT_BIN="+descriptor.DashboardPath,
 		"FANOUT_STATE_PATH="+statePath,
