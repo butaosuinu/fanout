@@ -32,13 +32,24 @@ func managedPaneIdentity(pane state.Pane) (backend.OwnedPaneIdentity, error) {
 		SessionID: pane.SessionID, SocketPath: pane.SocketPath,
 		WorkspaceLabel: pane.WorkspaceLabel, TerminalID: pane.TerminalID,
 		RepoKey: pane.RepoKey, WorktreePath: worktreePath,
-		CurrentPath: pane.WorktreePath, Agent: pane.Agent, AgentID: pane.AgentID,
+		CurrentPath: pane.WorktreePath, Agent: ownedIdentityProvider(pane), AgentID: pane.AgentID,
 		AgentSession: cloneAgentSessionRef(pane.AgentSession),
 	}
 	if strings.TrimSpace(identity.WorkspaceLabel) == "" {
 		return backend.OwnedPaneIdentity{}, fmt.Errorf("saved Herdr pane has no ownership label")
 	}
 	return identity, nil
+}
+
+// ownedIdentityProvider is the provider the pane's agent record answers to. A
+// shell row records the shell marker in Agent while owning no agent record at
+// all, and the runtime reports no provider for its pane, so projecting that
+// marker would make every identity comparison refuse the row.
+func ownedIdentityProvider(pane state.Pane) string {
+	if pane.IsShell() {
+		return ""
+	}
+	return pane.Agent
 }
 
 func cloneAgentSessionRef(ref *backend.AgentSessionRef) *backend.AgentSessionRef {
