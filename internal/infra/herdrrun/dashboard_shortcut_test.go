@@ -339,6 +339,51 @@ func TestSyncDashboardShortcutRemovesDescriptorBeforeAmbiguousAuthenticationDisa
 	}
 }
 
+func TestSyncDashboardShortcutDisablesAuthenticationDriftBeforeOwnerResolution(t *testing.T) {
+	serverEnvironment := []string{"GH_TOKEN=original"}
+	h := newOwnedHarnessWithDashboardEnvironment(t, serverEnvironment)
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if slices.Equal(args, []string{"server", "reload-config"}) {
+			return []byte(appliedDashboardReloadEnvelope), nil
+		}
+		return nil, errors.New("unexpected command")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := corebackend.DashboardShortcutOptions{
+		Enabled: true, FanoutBin: executable,
+		Owners:      []corebackend.DashboardShortcutOwner{testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout))},
+		Environment: append([]string{"PATH=/usr/bin"}, serverEnvironment...),
+	}
+	if syncErr := h.session.Backend().SyncDashboardShortcut(options); syncErr != nil {
+		t.Fatal(syncErr)
+	}
+	ownerResolved := false
+	options.Environment = []string{"PATH=/usr/bin", "GH_TOKEN=changed"}
+	options.ResolveOwners = func() ([]corebackend.DashboardShortcutOwner, error) {
+		ownerResolved = true
+		return nil, errors.New("owner state unavailable")
+	}
+	err = h.session.Backend().SyncDashboardShortcut(options)
+	if err == nil || !strings.Contains(err.Error(), "fanout herdr shutdown") {
+		t.Fatalf("authentication mismatch error = %v", err)
+	}
+	if ownerResolved {
+		t.Fatal("authentication drift resolved owners before disabling the shortcut")
+	}
+	if err := validatePrivateContents(h.layout.configPath, ownedConfigContents(h.session.LauncherPath)); err != nil {
+		t.Fatalf("disabled config: %v", err)
+	}
+	if _, err := os.Lstat(h.layout.dashboardDescriptorPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("authentication drift retained descriptor: %v", err)
+	}
+	if got := countRecordedCommand(h.fake.commands, []string{"server", "reload-config"}); got != 2 {
+		t.Fatalf("reload-config calls = %d, want 2", got)
+	}
+}
+
 func TestSyncDashboardShortcutLeavesDesiredConfigAfterAmbiguousReload(t *testing.T) {
 	h := newOwnedHarness(t)
 	h.fake.respond = func([]string) ([]byte, error) { return nil, context.DeadlineExceeded }

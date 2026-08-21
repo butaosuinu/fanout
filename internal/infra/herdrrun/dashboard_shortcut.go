@@ -98,6 +98,10 @@ func (b *Backend) SyncDashboardShortcut(options corebackend.DashboardShortcutOpt
 	if err != nil {
 		return err
 	}
+	authErr := validateDashboardAuthentication(admission.marker, options)
+	if authErr != nil {
+		options.Enabled = false
+	}
 	options, err = resolveDashboardShortcutOwners(options)
 	if err != nil {
 		return err
@@ -105,10 +109,6 @@ func (b *Backend) SyncDashboardShortcut(options corebackend.DashboardShortcutOpt
 	layout, err := prepareOwnedLayout(filepath.Dir(admission.marker.RuntimeDir), admission.marker.Session)
 	if err != nil {
 		return err
-	}
-	authErr := validateDashboardAuthentication(admission.marker, options)
-	if authErr != nil {
-		options.Enabled = false
 	}
 	if err := stageDashboardShortcutConfig(layout, admission.marker, options); err != nil {
 		return errors.Join(authErr, err)
