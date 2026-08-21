@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/butaosuinu/fanout/internal/core/naming"
 )
 
 // PaneRowKey is the persisted identity of the row a binding was projected
@@ -193,7 +195,25 @@ func (b PaneBinding) agentMatchesLive(live LivePane, cfg matchConfig) bool {
 }
 
 func (b PaneBinding) observedAgentMatches(live LivePane) bool {
-	return live.AgentPresent && live.AgentProvider == b.Agent && live.AgentID == b.AgentID
+	if !live.AgentPresent || live.AgentProvider != b.Agent {
+		return false
+	}
+	return live.AgentID == b.AgentID || unnamedAgentRecord(live, b.AgentID)
+}
+
+// unnamedAgentRecord reports the one agent-record shape that is this row's
+// without carrying its name: the runtime holds no name at all, and the row
+// recorded one fanout minted.
+//
+// A provider that restarts its conversation in place makes the runtime
+// re-register the agent anonymously, so treating that as a different agent
+// would strand the row — stale in the display, and refused by every gate — for
+// the rest of the pane's life. An anonymous record is not another agent: the
+// route, terminal, checkout, and provider around it are still compared exactly,
+// and only the launch that owns the pane can be running in it. fanout re-asserts
+// the name the next time it mutates the pane.
+func unnamedAgentRecord(live LivePane, recordedAgentID string) bool {
+	return !live.AgentNamed && naming.IsManagedAgentName(recordedAgentID)
 }
 
 // checkoutMatchesLive keeps worktree provenance separate from the fallback

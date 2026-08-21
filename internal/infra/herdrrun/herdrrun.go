@@ -928,7 +928,7 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 			worktreePath = workspace.Worktree.CheckoutPath
 		}
 		agent, agentPresent := agentsByPane[pane.PaneID]
-		agentID, agentProvider := projectAgentIdentity(agent, agentPresent)
+		agentID, agentProvider, agentNamed := projectAgentIdentity(agent, agentPresent)
 		var agentSession *corebackend.AgentSessionRef
 		if ref, present := sessionRefsByPane[pane.PaneID]; present {
 			agentSession = &corebackend.AgentSessionRef{
@@ -953,6 +953,7 @@ func projectSnapshot(envelope snapshotEnvelope, probed probeResult) ([]corebacke
 			WorkspaceLabel:   workspace.Label,
 			TerminalID:       pane.TerminalID,
 			AgentID:          agentID,
+			AgentNamed:       agentNamed,
 			AgentProvider:    agentProvider,
 			AgentSession:     agentSession,
 			AgentPresent:     agentPresent,
@@ -983,12 +984,20 @@ func duplicateLiveAgentSession(
 	return ""
 }
 
-func projectAgentIdentity(agent agentJSON, present bool) (string, string) {
+// projectAgentIdentity reports the agent record's identity: the name the
+// runtime holds for it, the provider, and whether that name is the record's own.
+//
+// AgentID falls back to the provider for an unnamed record because that is how
+// fanout finds the agent it has just launched, before it renames it. The flag
+// keeps that fallback from reading as a real name later, when a provider
+// restarting its conversation in place makes the runtime drop the name again.
+func projectAgentIdentity(agent agentJSON, present bool) (string, string, bool) {
 	if !present {
-		return "", ""
+		return "", "", false
 	}
+	name := optionalString(agent.Name)
 	provider := optionalString(agent.Agent)
-	return cmp.Or(optionalString(agent.Name), provider), provider
+	return cmp.Or(name, provider), provider, name != ""
 }
 
 func parseAgentSession(ref *agentSessionJSON) (agentSessionKey, bool, error) {

@@ -226,10 +226,15 @@ type LivePane struct {
 	// display metadata like Title, but a runtime that offers it never lets the
 	// pane's own process rewrite it, so it says which fanout session the pane
 	// was created for. Empty when the runtime does not carry one.
-	PaneLabel       string
-	WorkspaceLabel  string
-	TerminalID      string
-	AgentID         string
+	PaneLabel      string
+	WorkspaceLabel string
+	TerminalID     string
+	AgentID        string
+	// AgentNamed reports whether the runtime holds a name for the agent record
+	// of its own. AgentID falls back to the provider when it does not, which is
+	// what fanout matches on to find the agent it just launched, so the two
+	// cases are only distinguishable through this flag.
+	AgentNamed      bool
 	AgentProvider   string
 	AgentSession    *AgentSessionRef
 	ProcessIdentity *ProcessIdentity

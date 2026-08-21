@@ -336,13 +336,23 @@ live agent は古い nonce のままなので二度と一致しません)。conv
 2 つ目は agent record の名前です。socket を渡すと herdr は session の再開を知り、
 agent を匿名で登録し直すため、fanout が付けた名前が消えます (実測
 `fanout-8908a57bd82cde38fdcc22a9` → `null`)。grant 無しの merge base では同じ
-`/clear` でも名前は残るので、これは grant が引き起こす変化です。名前が消えると
-`AgentID` を比べる全ゲートが行を拒否するので、owned 操作の admission で
-fanout が発行した名前を付け直すようにしました (`restoreOwnedAgentName`)。
-付け直すのは「pane が他の点で完全一致し、live agent が名前を持たず、保存済みの
-名前が `ManagedAgentName` の形をしている」場合だけです。
+`/clear` でも名前は残るので、これは grant が引き起こす変化です。
 
-実測値:
+名前が消えると `AgentID` を比べる全ゲートが行を拒否します。ここで効くのは
+「行を stale にしない」ことです。TUI の `canFocus` は `stale` を弾くので
+(`internal/ui/tui/paneview.go`)、行が stale になった時点で focus も peek も
+そもそも提供されず、修復の機会が来ません。
+
+そこで名前の有無を観測値として明示的に運びます。`LivePane.AgentNamed` は
+runtime が record 自身の名前を持つかを表し、`AgentID` の provider fallback
+(launch 直後、rename 前の agent を見つけるのに要る) と区別できるようにします。
+名前を持たない record は、route・terminal・checkout・provider が完全一致し、
+保存名が `ManagedAgentName` の形である限り「この行の record」として受理します
+(`unnamedAgentRecord`)。そのうえで **mutation のときだけ** 名前を付け直します
+(`restoreOwnedAgentName`)。read 経路は付け直しません。dashboard は peek を GET で
+出しており、GET は何も変異させないという契約があるためです。
+
+実測値 (使い捨て clone の owned session、herdr 0.8.2):
 
 | 確認 | 結果 |
 |---|---|
@@ -350,9 +360,11 @@ fanout が発行した名前を付け直すようにしました (`restoreOwnedA
 | herdr の session mapping | `{source: herdr:claude, agent: claude, kind: id}` |
 | launch | 成功 (`exactManagedLaunchPane` が一致) |
 | 新規行の focus | `focused w2:p1` |
-| `/clear` 後の focus | `focused w2:p1` (名前を付け直して回復) |
-| `/clear` 後の peek | OK |
-| `/clear` 後の再束縛 | poll 経路で `632a4605-…` へ追随 |
+| `/clear` で起きること | session `849e46f4-…` → `37f5b6fa-…`、`name` → `null` |
+| `/clear` 後の行の表示 | `runtimeState="live"` (stale にならない) |
+| `/clear` 後の peek | 成功。かつ rename は発行されない (`agentNamed=false` のまま) |
+| `/clear` 後の focus | 成功。名前が `fanout-ceed6f8c646e039e192a8daa` へ復帰 |
+| `/clear` 後の再束縛 | poll 経路で新しい session へ追随 |
 
 codex 側の同じ問題も併せて解消します。ただし direct Codex は telemetry を出さない
 ので、TUI / dashboard を常駐させない headless 運用では再束縛が届きません
