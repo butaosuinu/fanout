@@ -229,8 +229,8 @@ func TestPrepareRestartedLauncherRecoversPlainConfigWithOrphanDashboardDescripto
 				Owners:      []dashboardOwner{{PaneID: "pane-1", WorkspaceID: "workspace-1", StatePath: state.Path(h.checkout)}},
 				Environment: []string{"PATH=/usr/bin"},
 			}
-			if err := writeDashboardDescriptor(h.layout, descriptor); err != nil {
-				t.Fatal(err)
+			if writeErr := writeDashboardDescriptor(h.layout, descriptor); writeErr != nil {
+				t.Fatal(writeErr)
 			}
 			expected := inspectOwnedServerForTest(t, h)
 			commonDir, commonIdentity, err := openCanonicalGitCommonDir(h.commonDir)

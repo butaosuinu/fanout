@@ -211,7 +211,8 @@ func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
 		t.Fatalf("repeat sync changed stable helper: before=%+v after=%+v err=%v", descriptor, reloadedDescriptor, err)
 	}
 	options.Enabled = false
-	if err := h.session.Backend().SyncDashboardShortcut(options); err != nil {
+	err = h.session.Backend().SyncDashboardShortcut(options)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := validatePrivateContents(h.layout.configPath, ownedConfigContents(h.session.LauncherPath)); err != nil {
@@ -248,7 +249,8 @@ func TestSyncDashboardShortcutRemovesDescriptorBeforeAmbiguousAuthenticationDisa
 		Owners:      []corebackend.DashboardShortcutOwner{testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout))},
 		Environment: append([]string{"PATH=/usr/bin"}, serverEnvironment...),
 	}
-	if err := h.session.Backend().SyncDashboardShortcut(options); err != nil {
+	err = h.session.Backend().SyncDashboardShortcut(options)
+	if err != nil {
 		t.Fatal(err)
 	}
 	options.Environment = []string{"PATH=/usr/bin", "GITHUB_TOKEN=fallback"}
@@ -304,7 +306,8 @@ func TestSyncDashboardShortcutRejectsOversizedDescriptorWithoutMutation(t *testi
 		Owners:      []corebackend.DashboardShortcutOwner{testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout))},
 		Environment: []string{"PATH=/usr/bin"},
 	}
-	if err := h.session.Backend().SyncDashboardShortcut(options); err != nil {
+	err = h.session.Backend().SyncDashboardShortcut(options)
+	if err != nil {
 		t.Fatal(err)
 	}
 	configBefore, err := os.ReadFile(h.layout.configPath)
@@ -374,10 +377,6 @@ func TestExecDashboardDescriptorPinsStatePathAcrossWorkingDirectories(t *testing
 		Environment: []string{"PATH=/usr/bin"},
 	}
 	originalExec := dashboardExec
-	originalCwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
 	workingDirs := []struct {
 		name, path, paneID, workspaceID, statePath string
 	}{
@@ -392,9 +391,6 @@ func TestExecDashboardDescriptorPinsStatePathAcrossWorkingDirectories(t *testing
 	}
 	t.Cleanup(func() {
 		dashboardExec = originalExec
-		if err := os.Chdir(originalCwd); err != nil {
-			t.Errorf("restore cwd: %v", err)
-		}
 	})
 	var gotEnv []string
 	dashboardExec = func(_ string, _ []string, env []string) error {
@@ -402,9 +398,7 @@ func TestExecDashboardDescriptorPinsStatePathAcrossWorkingDirectories(t *testing
 		return errors.New("exec test seam")
 	}
 	for _, cwd := range workingDirs {
-		if err := os.Chdir(cwd.path); err != nil {
-			t.Fatal(err)
-		}
+		t.Chdir(cwd.path)
 		t.Setenv("HERDR_ACTIVE_PANE_ID", cwd.paneID)
 		t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", cwd.workspaceID)
 		if err := execDashboardDescriptor(descriptor); err == nil || err.Error() != "exec test seam" {

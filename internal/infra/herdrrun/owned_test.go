@@ -203,6 +203,7 @@ func (s *fakeOwnedSupervisor) closeSockets() {
 }
 
 func newOwnedHarness(t *testing.T) *ownedHarness {
+	t.Helper()
 	return newOwnedHarnessWithDashboardEnvironment(t, nil)
 }
 

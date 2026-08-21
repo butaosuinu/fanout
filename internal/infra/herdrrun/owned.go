@@ -1482,7 +1482,7 @@ func startOwnedSupervisor(markerPath, nonce, startToken string) (*startedSupervi
 		return nil, err
 	}
 	defer func() { _ = reader.Close() }()
-	cmd, dashboardAuthentication := newOwnedSupervisorCommand(exe, markerPath, nonce, startToken)
+	cmd, authentication := newOwnedSupervisorCommand(exe, markerPath, nonce, startToken)
 	cmd.ExtraFiles = []*os.File{writer}
 	cmd.Dir = filepath.Dir(markerPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -1510,7 +1510,7 @@ func startOwnedSupervisor(markerPath, nonce, startToken string) (*startedSupervi
 	}
 	return &startedSupervisor{
 		pid:                     cmd.Process.Pid,
-		dashboardAuthentication: dashboardAuthentication,
+		dashboardAuthentication: authentication,
 		signal:                  cmd.Process.Signal,
 		wait:                    cmd.Wait,
 	}, nil
