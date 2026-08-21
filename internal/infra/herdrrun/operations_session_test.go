@@ -222,6 +222,44 @@ func TestFocusOwnedRefusesToClaimAnotherAgentName(t *testing.T) {
 	}
 }
 
+// The prompt response is checked after the prompt was delivered, so it admits
+// the same record the preflight did. Refusing an anonymous record there turns a
+// delivered nudge into a reported failure, and the retry sends it twice.
+func TestAgentPromptResponseAdmitsUnnamedRecord(t *testing.T) {
+	minted := naming.ManagedAgentName("/repo/.git", "row", strings.Repeat("a", 32))
+	h := newOwnedHarness(t)
+	setAgentName(h, "w2:p1", minted)
+	target := h.target()
+
+	tests := []struct {
+		name    string
+		mutate  func(*agentJSON)
+		wantErr bool
+	}{
+		{name: "record still answers to the recorded name"},
+		{
+			name:   "runtime dropped the name",
+			mutate: func(a *agentJSON) { a.Name = nil },
+		},
+		{
+			name: "record answers to another name",
+			mutate: func(a *agentJSON) {
+				other := "someone-else"
+				a.Name = &other
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAgentPromptResponse(agentPromptResponse(target, tt.mutate), target)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateAgentPromptResponse() = %v, wantErr %t", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func focusOwnedTestPane(h *ownedHarness, paneID string) {
 	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
 		for i := range *snapshot.Panes {

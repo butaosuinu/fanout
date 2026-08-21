@@ -548,7 +548,7 @@ func livePaneMatches(target RuntimeTarget, pane backend.LivePane) bool {
 		runtimePathMatches(target, pane),
 		pane.AgentPresent,
 		pane.AgentProvider == target.Agent,
-		pane.AgentID == target.AgentID,
+		backend.AgentRecordMatches(pane.AgentID, pane.AgentNamed, target.AgentID),
 		agentSessionMatches(target, pane.AgentSession),
 	}
 	return !slices.Contains(identity, false)

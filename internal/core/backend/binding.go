@@ -195,25 +195,31 @@ func (b PaneBinding) agentMatchesLive(live LivePane, cfg matchConfig) bool {
 }
 
 func (b PaneBinding) observedAgentMatches(live LivePane) bool {
-	if !live.AgentPresent || live.AgentProvider != b.Agent {
-		return false
-	}
-	return live.AgentID == b.AgentID || unnamedAgentRecord(live, b.AgentID)
+	return live.AgentPresent && live.AgentProvider == b.Agent &&
+		AgentRecordMatches(live.AgentID, live.AgentNamed, b.AgentID)
 }
 
-// unnamedAgentRecord reports the one agent-record shape that is this row's
-// without carrying its name: the runtime holds no name at all, and the row
-// recorded one fanout minted.
+// AgentRecordMatches reports whether the observed agent record is the one the
+// row recorded. It admits the recorded name, plus the one shape that is this
+// row's record without carrying it: the runtime holds no name of its own, and
+// the row recorded a name fanout minted.
 //
 // A provider that restarts its conversation in place makes the runtime
-// re-register the agent anonymously, so treating that as a different agent
-// would strand the row — stale in the display, and refused by every gate — for
-// the rest of the pane's life. An anonymous record is not another agent: the
-// route, terminal, checkout, and provider around it are still compared exactly,
-// and only the launch that owns the pane can be running in it. fanout re-asserts
-// the name the next time it mutates the pane.
-func unnamedAgentRecord(live LivePane, recordedAgentID string) bool {
-	return !live.AgentNamed && naming.IsManagedAgentName(recordedAgentID)
+// re-register the agent anonymously, so reading that as a different agent would
+// strand the row — stale in the display, refused by every gate, and with its
+// telemetry invalidated — for the rest of the pane's life. An anonymous record
+// is not another agent: the route, terminal, checkout, and provider around it
+// are still compared exactly, and only the launch that owns the pane runs in it.
+// fanout re-asserts the name the next time it mutates the pane.
+//
+// Every gate that compares an agent record goes through here, so the display,
+// the owned operations, telemetry, and the prompt response all admit exactly
+// the same set.
+func AgentRecordMatches(observedAgentID string, observedNamed bool, recordedAgentID string) bool {
+	if observedAgentID == recordedAgentID {
+		return true
+	}
+	return !observedNamed && naming.IsManagedAgentName(recordedAgentID)
 }
 
 // checkoutMatchesLive keeps worktree provenance separate from the fallback

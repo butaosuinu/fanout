@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -327,6 +328,43 @@ func TestEmitFinalRowRebindsReplacedSession(t *testing.T) {
 	if got.AgentSession == nil || *got.AgentSession != second || got.ReportedState != "" ||
 		got.StateRefinement || got.EmitterNonce == pane.EmitterNonce {
 		t.Fatalf("foreign-provider session did not stale telemetry row = %+v", got)
+	}
+}
+
+// The runtime drops the agent name when a provider restarts its conversation
+// in place. Telemetry must keep reporting: invalidating the row here rotates
+// the emitter nonce, which the live agent can never match again.
+func TestEmitFinalRowSurvivesDroppedAgentName(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, _, _ := finalEmitterFixture(t, repo)
+	// Only a name fanout minted may stand in for an anonymous record, so the
+	// row has to carry one for this drift to be recoverable at all.
+	pane.AgentID = naming.ManagedAgentName(repo, "row", strings.Repeat("a", 32))
+	signal := signalForPane(repo, pane)
+	observer := exactObserver(pane)
+	saveEmitterPanes(t, repo, pane)
+
+	observer.observation.Panes[0].AgentID = "claude"
+	observer.observation.Panes[0].AgentNamed = false
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "working" || !got.StateRefinement ||
+		got.EmitterNonce != pane.EmitterNonce {
+		t.Fatalf("dropped agent name invalidated telemetry row = %+v", got)
+	}
+
+	// A record that answers to some other name is a different agent, and still
+	// stales the row.
+	observer.observation.Panes[0].AgentID = "someone-else"
+	observer.observation.Panes[0].AgentNamed = true
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got = loadEmitterPane(t, repo)
+	if got.EmitterNonce == pane.EmitterNonce {
+		t.Fatalf("renamed agent record did not stale telemetry row = %+v", got)
 	}
 }
 

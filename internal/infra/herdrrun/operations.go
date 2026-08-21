@@ -1,6 +1,7 @@
 package herdrrun
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -387,11 +388,13 @@ func validateAgentPromptResponse(data []byte, target corebackend.OwnedPaneIdenti
 		agent.PaneID != target.Ref.Pane || agent.Focused == nil || agent.Revision == nil {
 		return fmt.Errorf("%w: prompted agent identity changed", corebackend.ErrOwnedIdentityMismatch)
 	}
-	agentID := optionalString(agent.Name)
-	if agentID == "" {
-		agentID = optionalString(agent.Agent)
-	}
-	if agentID != target.AgentID {
+	name := optionalString(agent.Name)
+	agentID := cmp.Or(name, optionalString(agent.Agent))
+	// This check runs after the prompt was delivered, so it admits the same
+	// record the preflight did. Holding it to the name alone would report a
+	// delivered prompt as a failure whenever the runtime dropped that name in
+	// the gap, and the retry would send the prompt twice.
+	if !corebackend.AgentRecordMatches(agentID, name != "", target.AgentID) {
 		return fmt.Errorf("%w: prompted agent name changed", corebackend.ErrOwnedIdentityMismatch)
 	}
 	if !agentPromptSessionMatches(target.Agent, agent.AgentSession, target.AgentSession) {
@@ -718,8 +721,9 @@ func ownedPaneMatches(expected corebackend.OwnedPaneIdentity, current ownedPaneV
 	if equalOwnedPane(expected, current.identity) {
 		return true
 	}
-	return current.agentUnnamed && naming.IsManagedAgentName(expected.AgentID) &&
-		ownedPaneMatchesExceptAgentName(expected, current.identity)
+	return corebackend.AgentRecordMatches(
+		current.identity.AgentID, !current.agentUnnamed, expected.AgentID,
+	) && ownedPaneMatchesExceptAgentName(expected, current.identity)
 }
 
 // equalOwnedPane is the fence every owned read and mutation resolves through.
