@@ -345,25 +345,25 @@ func bindDashboardKey(lg *log.Logger, enabled bool) {
 	syncDashboardKey(lg, enabled, false)
 }
 
-func bindRuntimeDashboardKey(lg *log.Logger, enabled bool, statePath string, runtimeBackend backend.Backend) {
+func bindRuntimeDashboardKey(lg *log.Logger, enabled bool, projectRoot string, runtimeBackend backend.Backend) {
 	if _, ok := backend.AsShortcutBinder(runtimeBackend); ok {
 		bindDashboardKey(lg, enabled)
 		return
 	}
-	syncRuntimeDashboardKey(lg, enabled, statePath, runtimeBackend)
+	syncRuntimeDashboardKey(lg, enabled, projectRoot, runtimeBackend)
 }
 
 func runtimeDashboardKeyBinder(rt *run.Runtime) func(*log.Logger, bool) {
-	statePath := ""
+	projectRoot := ""
 	if rt != nil && rt.Info != nil {
-		statePath = state.Path(rt.Info.ProjectRoot)
+		projectRoot = rt.Info.ProjectRoot
 	}
 	return func(lg *log.Logger, enabled bool) {
-		bindRuntimeDashboardKey(lg, enabled, statePath, rt.Backend)
+		bindRuntimeDashboardKey(lg, enabled, projectRoot, rt.Backend)
 	}
 }
 
-func syncRuntimeDashboardKey(lg *log.Logger, enabled bool, statePath string, runtimeBackend backend.Backend) {
+func syncRuntimeDashboardKey(lg *log.Logger, enabled bool, projectRoot string, runtimeBackend backend.Backend) {
 	if runtimeBackend == nil {
 		return
 	}
@@ -376,8 +376,16 @@ func syncRuntimeDashboardKey(lg *log.Logger, enabled bool, statePath string, run
 		lg.Warn("dashboard keybind: resolve fanout binary: %v", err)
 		return
 	}
+	var owners []backend.DashboardShortcutOwner
+	if enabled {
+		owners, err = resolveDashboardShortcutOwners(projectRoot)
+		if err != nil {
+			lg.Warn("dashboard keybind: resolve state owners: %v", err)
+			return
+		}
+	}
 	err = binder.SyncDashboardShortcut(backend.DashboardShortcutOptions{
-		Enabled: enabled, FanoutBin: bin, StatePath: statePath, Environment: os.Environ(),
+		Enabled: enabled, FanoutBin: bin, Owners: owners, Environment: os.Environ(),
 	})
 	if err != nil {
 		lg.Warn("dashboard keybind: %v", err)
@@ -392,7 +400,39 @@ func syncOwnedDashboardKey(lg *log.Logger, enabled bool, projectRoot string, own
 	if owned == nil || owned.Backend() == nil {
 		return
 	}
-	syncRuntimeDashboardKey(lg, enabled, state.Path(projectRoot), owned.Backend())
+	syncRuntimeDashboardKey(lg, enabled, projectRoot, owned.Backend())
+}
+
+var resolveDashboardShortcutOwners = loadDashboardShortcutOwners
+
+func loadDashboardShortcutOwners(projectRoot string) ([]backend.DashboardShortcutOwner, error) {
+	current, err := state.LoadProject(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	stores, err := paneruntime.ProjectStores(projectRoot, current)
+	if err != nil {
+		return nil, err
+	}
+	owners := make([]backend.DashboardShortcutOwner, 0)
+	for _, owner := range stores {
+		owners = append(owners, dashboardShortcutOwners(owner)...)
+	}
+	return owners, nil
+}
+
+func dashboardShortcutOwners(owner paneruntime.ProjectStore) []backend.DashboardShortcutOwner {
+	result := make([]backend.DashboardShortcutOwner, 0)
+	for _, pane := range owner.Store.Panes {
+		if pane.PaneID == "" || pane.WorkspaceID == "" || pane.SessionID == "" || pane.SocketPath == "" {
+			continue
+		}
+		result = append(result, backend.DashboardShortcutOwner{
+			PaneID: pane.PaneID, WorkspaceID: pane.WorkspaceID,
+			SessionID: pane.SessionID, SocketPath: pane.SocketPath, StatePath: state.Path(owner.Root),
+		})
+	}
+	return result
 }
 
 func syncDashboardKey(lg *log.Logger, enabled bool, cleanupDisabled bool) {

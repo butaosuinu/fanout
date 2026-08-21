@@ -58,13 +58,8 @@ func TestDashboardDescriptorKeepsOnlyBrowserContext(t *testing.T) {
 
 func TestDashboardDescriptorRejectsNULInEnvironment(t *testing.T) {
 	layout, pinned := newDashboardShortcutLayout(t)
-	descriptor := dashboardDescriptor{
-		SchemaID:   dashboardDescriptorSchemaID,
-		HelperPath: pinned.path, HelperSHA256: pinned.sha256,
-		DashboardPath: pinned.path, DashboardSHA256: pinned.sha256,
-		StatePath:   state.Path("/owner"),
-		Environment: []string{"HOME=/home/operator\x00bad"},
-	}
+	descriptor := testDashboardDescriptor(layout, pinned, state.Path("/owner"))
+	descriptor.Environment = []string{"HOME=/home/operator\x00bad"}
 	if err := validateDashboardDescriptor(layout, descriptor); err == nil {
 		t.Fatal("descriptor with NUL environment was accepted")
 	}
@@ -72,16 +67,14 @@ func TestDashboardDescriptorRejectsNULInEnvironment(t *testing.T) {
 
 func TestRunDashboardOpenUsesValidatedPinnedBinaryAndCleanEnvironment(t *testing.T) {
 	layout, pinned := newDashboardShortcutLayout(t)
-	descriptor := dashboardDescriptor{
-		SchemaID:   dashboardDescriptorSchemaID,
-		HelperPath: pinned.path, HelperSHA256: pinned.sha256,
-		DashboardPath: pinned.path, DashboardSHA256: pinned.sha256,
-		StatePath:   state.Path("/owner"),
-		Environment: []string{"HOME=/home/operator", "PATH=/usr/bin:/bin", "DISPLAY=:1"},
-	}
+	descriptor := testDashboardDescriptor(layout, pinned, state.Path("/owner"))
+	descriptor.Environment = []string{"HOME=/home/operator", "PATH=/usr/bin:/bin", "DISPLAY=:1"}
 	if err := writeDashboardDescriptor(layout, descriptor); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("HERDR_SOCKET_PATH", layout.socketPath)
+	t.Setenv("HERDR_ACTIVE_PANE_ID", "pane-1")
+	t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", "workspace-1")
 	originalExec, originalExecutable := dashboardExec, dashboardExecutable
 	t.Cleanup(func() { dashboardExec, dashboardExecutable = originalExec, originalExecutable })
 	dashboardExecutable = func() (string, error) { return pinned.path, nil }
@@ -114,6 +107,22 @@ func TestRunDashboardOpenUsesValidatedPinnedBinaryAndCleanEnvironment(t *testing
 	}
 }
 
+func TestRunDashboardOpenRejectsActiveRouteMismatch(t *testing.T) {
+	layout, pinned := newDashboardShortcutLayout(t)
+	if err := writeDashboardDescriptor(layout, testDashboardDescriptor(layout, pinned, state.Path("/owner"))); err != nil {
+		t.Fatal(err)
+	}
+	originalExecutable := dashboardExecutable
+	t.Cleanup(func() { dashboardExecutable = originalExecutable })
+	dashboardExecutable = func() (string, error) { return pinned.path, nil }
+	t.Setenv("HERDR_SOCKET_PATH", "/another/server.sock")
+	var stderr bytes.Buffer
+	if code := RunDashboardOpen([]string{layout.dashboardDescriptorPath}, &stderr); code != 1 ||
+		!strings.Contains(stderr.String(), "active Herdr route") {
+		t.Fatalf("RunDashboardOpen() = %d stderr=%q", code, stderr.String())
+	}
+}
+
 func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
 	h := newOwnedHarness(t)
 	h.fake.respond = func(args []string) ([]byte, error) {
@@ -127,7 +136,11 @@ func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	options := corebackend.DashboardShortcutOptions{
-		Enabled: true, FanoutBin: executable, StatePath: state.Path(h.checkout),
+		Enabled: true, FanoutBin: executable,
+		Owners: []corebackend.DashboardShortcutOwner{
+			testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout)),
+			testDashboardShortcutOwner(h, "pane-2", "workspace-2", state.Path(h.checkout+"-linked")),
+		},
 		Environment: []string{"HOME=/home/operator", "PATH=/usr/bin", "GH_TOKEN=secret", "DISPLAY=:4"},
 	}
 	if syncErr := h.session.Backend().SyncDashboardShortcut(options); syncErr != nil {
@@ -136,6 +149,10 @@ func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
 	descriptor, found, err := readDashboardDescriptor(h.layout)
 	if err != nil || !found {
 		t.Fatalf("dashboard descriptor = (%+v, %t, %v)", descriptor, found, err)
+	}
+	if len(descriptor.Owners) != 2 || descriptor.Owners[0].StatePath != state.Path(h.checkout) ||
+		descriptor.Owners[1].StatePath != state.Path(h.checkout+"-linked") {
+		t.Fatalf("dashboard descriptor owners = %+v", descriptor.Owners)
 	}
 	if validateErr := validatePrivateContents(h.layout.configPath, ownedDashboardConfigContents(
 		h.session.LauncherPath, descriptor.HelperPath, h.layout.dashboardDescriptorPath,
@@ -175,7 +192,9 @@ func TestSyncDashboardShortcutLeavesDesiredConfigAfterAmbiguousReload(t *testing
 		t.Fatal(err)
 	}
 	err = h.session.Backend().SyncDashboardShortcut(corebackend.DashboardShortcutOptions{
-		Enabled: true, FanoutBin: executable, StatePath: state.Path(h.checkout), Environment: os.Environ(),
+		Enabled: true, FanoutBin: executable,
+		Owners:      []corebackend.DashboardShortcutOwner{testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout))},
+		Environment: os.Environ(),
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("SyncDashboardShortcut() error = %v, want deadline", err)
@@ -198,7 +217,9 @@ func TestSyncDashboardShortcutRejectsOversizedDescriptorWithoutMutation(t *testi
 		t.Fatal(err)
 	}
 	options := corebackend.DashboardShortcutOptions{
-		Enabled: true, FanoutBin: executable, StatePath: state.Path(h.checkout), Environment: []string{"PATH=/usr/bin"},
+		Enabled: true, FanoutBin: executable,
+		Owners:      []corebackend.DashboardShortcutOwner{testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout))},
+		Environment: []string{"PATH=/usr/bin"},
 	}
 	if err := h.session.Backend().SyncDashboardShortcut(options); err != nil {
 		t.Fatal(err)
@@ -241,7 +262,8 @@ func TestSyncDashboardShortcutRejectsRouteDriftBeforeConfigMutation(t *testing.T
 	}
 
 	err = h.session.Backend().SyncDashboardShortcut(corebackend.DashboardShortcutOptions{
-		Enabled: true, FanoutBin: executable, StatePath: state.Path(h.checkout),
+		Enabled: true, FanoutBin: executable,
+		Owners:      []corebackend.DashboardShortcutOwner{testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout))},
 		Environment: []string{"PATH=/usr/bin"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "status socket") {
@@ -261,7 +283,11 @@ func TestSyncDashboardShortcutRejectsRouteDriftBeforeConfigMutation(t *testing.T
 
 func TestExecDashboardDescriptorPinsStatePathAcrossWorkingDirectories(t *testing.T) {
 	descriptor := dashboardDescriptor{
-		DashboardPath: "/pinned/fanout", StatePath: state.Path("/owner"),
+		DashboardPath: "/pinned/fanout",
+		Owners: []dashboardOwner{
+			{PaneID: "pane-a", WorkspaceID: "workspace-a", StatePath: state.Path("/owner-a")},
+			{PaneID: "pane-b", WorkspaceID: "workspace-b", StatePath: state.Path("/owner-b")},
+		},
 		Environment: []string{"PATH=/usr/bin"},
 	}
 	originalExec := dashboardExec
@@ -270,11 +296,16 @@ func TestExecDashboardDescriptorPinsStatePathAcrossWorkingDirectories(t *testing
 		t.Fatal(err)
 	}
 	workingDirs := []struct {
-		name string
-		path string
+		name, path, paneID, workspaceID, statePath string
 	}{
-		{name: "outside repository", path: t.TempDir()},
-		{name: "another checkout", path: t.TempDir()},
+		{
+			name: "outside repository", path: t.TempDir(), paneID: "pane-a",
+			workspaceID: "workspace-a", statePath: state.Path("/owner-a"),
+		},
+		{
+			name: "another checkout", path: t.TempDir(), paneID: "pane-b",
+			workspaceID: "workspace-b", statePath: state.Path("/owner-b"),
+		},
 	}
 	t.Cleanup(func() {
 		dashboardExec = originalExec
@@ -291,12 +322,36 @@ func TestExecDashboardDescriptorPinsStatePathAcrossWorkingDirectories(t *testing
 		if err := os.Chdir(cwd.path); err != nil {
 			t.Fatal(err)
 		}
+		t.Setenv("HERDR_ACTIVE_PANE_ID", cwd.paneID)
+		t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", cwd.workspaceID)
 		if err := execDashboardDescriptor(descriptor); err == nil || err.Error() != "exec test seam" {
 			t.Fatalf("exec dashboard from %s: %v", cwd.name, err)
 		}
-		if !slices.Contains(gotEnv, "FANOUT_STATE_PATH="+state.Path("/owner")) {
+		if !slices.Contains(gotEnv, "FANOUT_STATE_PATH="+cwd.statePath) {
 			t.Fatalf("dashboard environment from %s %q = %q", cwd.name, cwd.path, gotEnv)
 		}
+	}
+}
+
+func TestActiveDashboardStatePathRejectsUnmappedAndConflictingIdentity(t *testing.T) {
+	descriptor := dashboardDescriptor{Owners: []dashboardOwner{
+		{PaneID: "pane-a", WorkspaceID: "workspace-a", StatePath: state.Path("/owner-a")},
+		{PaneID: "pane-b", WorkspaceID: "workspace-b", StatePath: state.Path("/owner-b")},
+	}}
+	tests := []struct {
+		name, paneID, workspaceID string
+	}{
+		{name: "unmapped", paneID: "pane-missing", workspaceID: "workspace-missing"},
+		{name: "conflicting", paneID: "pane-a", workspaceID: "workspace-b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HERDR_ACTIVE_PANE_ID", tt.paneID)
+			t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", tt.workspaceID)
+			if _, err := activeDashboardStatePath(descriptor); err == nil {
+				t.Fatal("unbound active Herdr identity was accepted")
+			}
+		})
 	}
 }
 
@@ -375,6 +430,27 @@ func newDashboardShortcutLayout(t *testing.T) (ownedLayout, binaryAdmission) {
 		t.Fatal(err)
 	}
 	return layout, binaryAdmission{path: path, sha256: digest}
+}
+
+func testDashboardDescriptor(layout ownedLayout, pinned binaryAdmission, statePath string) dashboardDescriptor {
+	return dashboardDescriptor{
+		SchemaID:   dashboardDescriptorSchemaID,
+		HelperPath: pinned.path, HelperSHA256: pinned.sha256,
+		DashboardPath: pinned.path, DashboardSHA256: pinned.sha256,
+		SessionID: filepath.Base(layout.runtimeDir), SocketPath: layout.socketPath,
+		Owners:      []dashboardOwner{{PaneID: "pane-1", WorkspaceID: "workspace-1", StatePath: statePath}},
+		Environment: []string{"PATH=" + dashboardDefaultPath},
+	}
+}
+
+func testDashboardShortcutOwner(
+	h *ownedHarness,
+	paneID, workspaceID, statePath string,
+) corebackend.DashboardShortcutOwner {
+	return corebackend.DashboardShortcutOwner{
+		PaneID: paneID, WorkspaceID: workspaceID,
+		SessionID: h.session.Session, SocketPath: h.session.SocketPath, StatePath: statePath,
+	}
 }
 
 func countRecordedCommand(commands []recordedCommand, want []string) int {

@@ -44,13 +44,21 @@ var dashboardHostEnvironmentNames = []string{
 }
 
 type dashboardDescriptor struct {
-	SchemaID        string   `json:"schema_id"`
-	HelperPath      string   `json:"helper_path"`
-	HelperSHA256    string   `json:"helper_sha256"`
-	DashboardPath   string   `json:"dashboard_path"`
-	DashboardSHA256 string   `json:"dashboard_sha256"`
-	StatePath       string   `json:"state_path"`
-	Environment     []string `json:"environment"`
+	SchemaID        string           `json:"schema_id"`
+	HelperPath      string           `json:"helper_path"`
+	HelperSHA256    string           `json:"helper_sha256"`
+	DashboardPath   string           `json:"dashboard_path"`
+	DashboardSHA256 string           `json:"dashboard_sha256"`
+	SessionID       string           `json:"session_id"`
+	SocketPath      string           `json:"socket_path"`
+	Owners          []dashboardOwner `json:"owners"`
+	Environment     []string         `json:"environment"`
+}
+
+type dashboardOwner struct {
+	PaneID      string `json:"pane_id"`
+	WorkspaceID string `json:"workspace_id"`
+	StatePath   string `json:"state_path"`
 }
 
 type dashboardReloadEnvelope struct {
@@ -133,7 +141,7 @@ func desiredDashboardConfig(
 	if err != nil {
 		return nil, err
 	}
-	descriptor, err := nextDashboardDescriptor(layout, current, options.StatePath, options.Environment)
+	descriptor, err := nextDashboardDescriptor(layout, current, marker, options.Owners, options.Environment)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +154,8 @@ func desiredDashboardConfig(
 func nextDashboardDescriptor(
 	layout ownedLayout,
 	current binaryAdmission,
-	statePath string,
+	marker ownerMarker,
+	owners []corebackend.DashboardShortcutOwner,
 	environment []string,
 ) (dashboardDescriptor, error) {
 	descriptor, found, err := readDashboardDescriptor(layout)
@@ -158,7 +167,11 @@ func nextDashboardDescriptor(
 	}
 	descriptor.SchemaID = dashboardDescriptorSchemaID
 	descriptor.DashboardPath, descriptor.DashboardSHA256 = current.path, current.sha256
-	descriptor.StatePath = statePath
+	descriptor.SessionID, descriptor.SocketPath = marker.Session, marker.SocketPath
+	descriptor.Owners, err = dashboardOwnersForRoute(marker, owners)
+	if err != nil {
+		return dashboardDescriptor{}, err
+	}
 	descriptor.Environment = filterDashboardEnvironment(environment)
 	return descriptor, nil
 }
@@ -291,7 +304,10 @@ func validateDashboardDescriptor(layout ownedLayout, descriptor dashboardDescrip
 	if err := validatePinnedBinaryInDir(descriptor.DashboardPath, descriptor.DashboardSHA256, layout.launcherDir); err != nil {
 		return fmt.Errorf("herdr dashboard binary identity changed: %w", err)
 	}
-	if err := validateDashboardStatePath(descriptor.StatePath); err != nil {
+	if descriptor.SessionID != filepath.Base(layout.runtimeDir) || descriptor.SocketPath != layout.socketPath {
+		return fmt.Errorf("herdr dashboard route does not match the owned runtime")
+	}
+	if err := validateDashboardOwners(descriptor.Owners); err != nil {
 		return err
 	}
 	for _, entry := range descriptor.Environment {
@@ -302,6 +318,74 @@ func validateDashboardDescriptor(layout ownedLayout, descriptor dashboardDescrip
 	if !slices.Equal(descriptor.Environment, filterDashboardEnvironment(descriptor.Environment)) {
 		return fmt.Errorf("herdr dashboard launcher environment is not canonical")
 	}
+	return nil
+}
+
+func dashboardOwnersForRoute(
+	marker ownerMarker,
+	owners []corebackend.DashboardShortcutOwner,
+) ([]dashboardOwner, error) {
+	result := make([]dashboardOwner, 0, len(owners))
+	for _, owner := range owners {
+		if owner.SessionID != marker.Session || owner.SocketPath != marker.SocketPath {
+			continue
+		}
+		result = append(result, dashboardOwner{
+			PaneID: owner.PaneID, WorkspaceID: owner.WorkspaceID, StatePath: owner.StatePath,
+		})
+	}
+	slices.SortFunc(result, compareDashboardOwner)
+	if err := validateDashboardOwners(result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func compareDashboardOwner(left, right dashboardOwner) int {
+	if order := strings.Compare(left.WorkspaceID, right.WorkspaceID); order != 0 {
+		return order
+	}
+	if order := strings.Compare(left.PaneID, right.PaneID); order != 0 {
+		return order
+	}
+	return strings.Compare(left.StatePath, right.StatePath)
+}
+
+func validateDashboardOwners(owners []dashboardOwner) error {
+	if len(owners) == 0 || !slices.IsSortedFunc(owners, compareDashboardOwner) {
+		return fmt.Errorf("herdr dashboard owner mapping is empty or non-canonical")
+	}
+	panes, workspaces := map[string]string{}, map[string]string{}
+	for i, owner := range owners {
+		if err := validateDashboardOwner(owner); err != nil {
+			return err
+		}
+		if i > 0 && owner == owners[i-1] {
+			return fmt.Errorf("herdr dashboard owner mapping contains a duplicate")
+		}
+		if err := recordDashboardOwner(panes, owner.PaneID, owner.StatePath); err != nil {
+			return err
+		}
+		if err := recordDashboardOwner(workspaces, owner.WorkspaceID, owner.StatePath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDashboardOwner(owner dashboardOwner) error {
+	if strings.TrimSpace(owner.PaneID) == "" || strings.TrimSpace(owner.WorkspaceID) == "" {
+		return fmt.Errorf("herdr dashboard owner identity is incomplete")
+	}
+	return validateDashboardStatePath(owner.StatePath)
+}
+
+func recordDashboardOwner(owners map[string]string, identity, statePath string) error {
+	existing, found := owners[identity]
+	if found && existing != statePath {
+		return fmt.Errorf("herdr dashboard owner mapping is ambiguous")
+	}
+	owners[identity] = statePath
 	return nil
 }
 
@@ -358,18 +442,56 @@ func dashboardDescriptorForOpen(path string) (dashboardDescriptor, error) {
 	if !found {
 		return dashboardDescriptor{}, fmt.Errorf("descriptor is missing")
 	}
-	return descriptor, validateRunningDashboardHelper(descriptor)
+	if err := validateRunningDashboardHelper(descriptor); err != nil {
+		return dashboardDescriptor{}, err
+	}
+	return descriptor, validateActiveDashboardRoute(descriptor)
 }
 
 func execDashboardDescriptor(descriptor dashboardDescriptor) error {
+	statePath, err := activeDashboardStatePath(descriptor)
+	if err != nil {
+		return err
+	}
 	environment := append([]string{}, descriptor.Environment...)
 	environment = append(environment,
 		"FANOUT_BACKEND=herdr", "FANOUT_BIN="+descriptor.DashboardPath,
-		"FANOUT_STATE_PATH="+descriptor.StatePath,
+		"FANOUT_STATE_PATH="+statePath,
 	)
 	return dashboardExec(descriptor.DashboardPath, []string{
 		descriptor.DashboardPath, "dashboard", "--web", "--open", "--no-keybind",
 	}, environment)
+}
+
+func validateActiveDashboardRoute(descriptor dashboardDescriptor) error {
+	if os.Getenv("HERDR_SOCKET_PATH") != descriptor.SocketPath {
+		return fmt.Errorf("active Herdr route does not match the dashboard descriptor")
+	}
+	return nil
+}
+
+func activeDashboardStatePath(descriptor dashboardDescriptor) (string, error) {
+	paneID := strings.TrimSpace(os.Getenv("HERDR_ACTIVE_PANE_ID"))
+	workspaceID := strings.TrimSpace(os.Getenv("HERDR_ACTIVE_WORKSPACE_ID"))
+	paneState, workspaceState := "", ""
+	for _, owner := range descriptor.Owners {
+		if owner.PaneID == paneID {
+			paneState = owner.StatePath
+		}
+		if owner.WorkspaceID == workspaceID {
+			workspaceState = owner.StatePath
+		}
+	}
+	if paneState != "" && workspaceState != "" && paneState != workspaceState {
+		return "", fmt.Errorf("active Herdr pane and workspace map to different dashboard owners")
+	}
+	if paneState != "" {
+		return paneState, nil
+	}
+	if workspaceState != "" {
+		return workspaceState, nil
+	}
+	return "", fmt.Errorf("active Herdr pane is not bound to a dashboard state owner")
 }
 
 func dashboardLayoutForDescriptor(path string) (ownedLayout, error) {

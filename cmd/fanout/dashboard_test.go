@@ -12,6 +12,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/backendtest"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/log"
+	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -133,12 +134,12 @@ func TestBindDashboardKeyForBackendNeedsShortcutCapability(t *testing.T) {
 
 func TestBindRuntimeDashboardKeyUsesDashboardOnlyCapability(t *testing.T) {
 	fake := &dashboardShortcutBinderFake{Backend: backendtest.New()}
-	bindRuntimeDashboardKey(discardLogger(), false, state.Path("/repo"), fake)
+	bindRuntimeDashboardKey(discardLogger(), false, "/repo", fake)
 	if len(fake.options) != 1 || fake.options[0].Enabled || fake.options[0].FanoutBin == "" {
 		t.Fatalf("dashboard shortcut options = %+v", fake.options)
 	}
-	if fake.options[0].StatePath != state.Path("/repo") {
-		t.Fatalf("dashboard shortcut state path = %q", fake.options[0].StatePath)
+	if len(fake.options[0].Owners) != 0 {
+		t.Fatalf("disabled dashboard shortcut owners = %+v", fake.options[0].Owners)
 	}
 	if len(fake.options[0].Environment) == 0 {
 		t.Fatal("dashboard shortcut did not receive the host environment")
@@ -148,6 +149,18 @@ func TestBindRuntimeDashboardKeyUsesDashboardOnlyCapability(t *testing.T) {
 func TestRuntimeDashboardKeyBinderReadsPreparedBackend(t *testing.T) {
 	preview := &dashboardShortcutBinderFake{Backend: backendtest.New()}
 	owned := &dashboardShortcutBinderFake{Backend: backendtest.New()}
+	wantOwner := backend.DashboardShortcutOwner{
+		PaneID: "pane-a", WorkspaceID: "workspace-a", SessionID: "session-a",
+		SocketPath: "/socket-a", StatePath: state.Path("/repo"),
+	}
+	originalResolver := resolveDashboardShortcutOwners
+	t.Cleanup(func() { resolveDashboardShortcutOwners = originalResolver })
+	resolveDashboardShortcutOwners = func(root string) ([]backend.DashboardShortcutOwner, error) {
+		if root != "/repo" {
+			t.Fatalf("dashboard shortcut owner root = %q", root)
+		}
+		return []backend.DashboardShortcutOwner{wantOwner}, nil
+	}
 	rt := &run.Runtime{Backend: preview, Info: &fanoutruntime.Info{ProjectRoot: "/repo"}}
 	bind := runtimeDashboardKeyBinder(rt)
 	rt.PrepareBackend = func() error {
@@ -161,8 +174,29 @@ func TestRuntimeDashboardKeyBinderReadsPreparedBackend(t *testing.T) {
 	bind(discardLogger(), true)
 
 	if len(preview.options) != 0 || len(owned.options) != 1 || !owned.options[0].Enabled ||
-		owned.options[0].StatePath != state.Path("/repo") {
+		len(owned.options[0].Owners) != 1 || owned.options[0].Owners[0] != wantOwner {
 		t.Fatalf("dashboard shortcut sync = preview:%+v owned:%+v", preview.options, owned.options)
+	}
+}
+
+func TestDashboardShortcutOwnersKeepLinkedStateOwners(t *testing.T) {
+	stores := []paneruntime.ProjectStore{
+		{Root: "/repo-a", Store: state.Store{Panes: []state.Pane{{
+			PaneID: "pane-a", WorkspaceID: "workspace-a", SessionID: "session",
+			SocketPath: "/socket",
+		}}}},
+		{Root: "/repo-b", Store: state.Store{Panes: []state.Pane{{
+			PaneID: "pane-b", WorkspaceID: "workspace-b", SessionID: "session",
+			SocketPath: "/socket",
+		}}}},
+	}
+	var owners []backend.DashboardShortcutOwner
+	for _, store := range stores {
+		owners = append(owners, dashboardShortcutOwners(store)...)
+	}
+	if len(owners) != 2 || owners[0].StatePath != state.Path("/repo-a") ||
+		owners[1].StatePath != state.Path("/repo-b") {
+		t.Fatalf("linked dashboard shortcut owners = %+v", owners)
 	}
 }
 

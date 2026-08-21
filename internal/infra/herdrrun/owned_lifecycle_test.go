@@ -225,7 +225,8 @@ func TestPrepareRestartedLauncherRecoversPlainConfigWithOrphanDashboardDescripto
 				SchemaID:   dashboardDescriptorSchemaID,
 				HelperPath: configLauncher.path, HelperSHA256: configLauncher.sha256,
 				DashboardPath: configLauncher.path, DashboardSHA256: configLauncher.sha256,
-				StatePath:   state.Path(h.checkout),
+				SessionID: h.session.Session, SocketPath: h.session.SocketPath,
+				Owners:      []dashboardOwner{{PaneID: "pane-1", WorkspaceID: "workspace-1", StatePath: state.Path(h.checkout)}},
 				Environment: []string{"PATH=/usr/bin"},
 			}
 			if err := writeDashboardDescriptor(h.layout, descriptor); err != nil {
@@ -267,7 +268,8 @@ func TestRestartOwnedPreservesDashboardShortcutConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	if syncErr := h.session.Backend().SyncDashboardShortcut(corebackend.DashboardShortcutOptions{
-		Enabled: true, FanoutBin: executable, StatePath: state.Path(h.checkout),
+		Enabled: true, FanoutBin: executable,
+		Owners:      []corebackend.DashboardShortcutOwner{testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout))},
 		Environment: []string{"HOME=/home/operator", "PATH=/usr/bin"},
 	}); syncErr != nil {
 		t.Fatal(syncErr)
