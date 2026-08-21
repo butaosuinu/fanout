@@ -295,6 +295,14 @@ func (b *Backend) sendLineOwned(ctx context.Context, target corebackend.OwnedPan
 
 // PrepareNudge completes the owned-route preflight before the caller's final
 // cooperative-state gate. The returned function issues only agent prompt.
+//
+// It deliberately does not restore a dropped agent name the way the other
+// mutations do. A NudgeTarget carries the route, terminal, and agent identity
+// but no checkout provenance, so it cannot satisfy the full-identity match
+// restoreOwnedAgentName renames on, and matching on less would make the rename
+// a weaker mutation than the gate it repairs. The prompt itself is unaffected:
+// every gate admits the unnamed record, and the next focus, send, or close
+// puts the name back.
 func (s *OwnedSession) PrepareNudge(ctx context.Context, target corebackend.NudgeTarget, line string) (corebackend.NudgePrompt, error) {
 	if err := validateNudgeRequest(s, line); err != nil {
 		return nil, err
