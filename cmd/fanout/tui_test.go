@@ -247,6 +247,78 @@ func TestHandoffConsoleShellSkipsWithoutARunnableRecordedShell(t *testing.T) {
 	}
 }
 
+func TestEnterManagedConsoleSyncsDashboardAfterConsoleStateCommit(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		store state.Store
+	}{
+		{name: "initial"},
+		{name: "stale replacement", store: state.Store{Panes: []state.Pane{{
+			PaneID: "old-pane", WorkspaceID: "old-workspace",
+			SessionID: "owned-session", SocketPath: "/owned.sock",
+		}}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			originalEnsure := ensureManagedSessionForTUI
+			originalConsole := ensureManagedConsoleForTUI
+			originalSync := syncManagedDashboardKeyForTUI
+			t.Cleanup(func() {
+				ensureManagedSessionForTUI = originalEnsure
+				ensureManagedConsoleForTUI = originalConsole
+				syncManagedDashboardKeyForTUI = originalSync
+			})
+			owned := &herdrrun.OwnedSession{Session: "owned-session"}
+			ensureManagedSessionForTUI = func(string) (*herdrrun.OwnedSession, error) {
+				return owned, nil
+			}
+			store := tt.store
+			consoleCommitted := false
+			ensureManagedConsoleForTUI = func(
+				context.Context,
+				string,
+				panelaunch.ManagedSessionRuntime,
+				[]string,
+				string,
+			) (panelaunch.ManagedConsoleResult, error) {
+				store.Panes = []state.Pane{{
+					PaneID: "new-pane", WorkspaceID: "new-workspace",
+					SessionID: "owned-session", SocketPath: "/owned.sock",
+				}}
+				consoleCommitted = true
+				return panelaunch.ManagedConsoleResult{
+					Pane: state.Pane{PaneID: "new-pane"}, AttachCommand: "attach",
+				}, nil
+			}
+			syncCalls := 0
+			syncManagedDashboardKeyForTUI = func(
+				_ *log.Logger,
+				_ bool,
+				root string,
+				got paneruntime.ManagedSession,
+			) {
+				if !consoleCommitted || root != "/repo" || got != owned {
+					t.Fatalf("dashboard sync ran before console commit: committed=%t root=%q owned=%p", consoleCommitted, root, got)
+				}
+				owners := dashboardShortcutOwners(paneruntime.ProjectStore{Root: root, Store: store})
+				if len(owners) != 1 || owners[0].PaneID != "new-pane" || owners[0].WorkspaceID != "new-workspace" {
+					t.Fatalf("dashboard owners = %+v, want committed console", owners)
+				}
+				syncCalls++
+			}
+			if code := enterManagedConsole(
+				"/repo",
+				backend.Selection{Name: backend.Herdr, Reason: backend.ReasonUserConfig},
+				discardLogger(),
+			); code != exitcode.OK {
+				t.Fatalf("enterManagedConsole() = %d, want OK", code)
+			}
+			if syncCalls != 1 {
+				t.Fatalf("dashboard sync calls = %d, want 1", syncCalls)
+			}
+		})
+	}
+}
+
 func TestWireOwnedHerdrTUIEnablesScopedInteractivePorts(t *testing.T) {
 	opts := fanouttui.Options{}
 	owned := &herdrrun.OwnedSession{Session: "owned-session"}

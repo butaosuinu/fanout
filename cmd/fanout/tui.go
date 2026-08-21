@@ -33,8 +33,9 @@ const tuiPaneTitle = "fanout tui"
 var runTUI = fanouttui.Run
 
 var (
-	ensureManagedSessionForTUI = paneruntime.EnsureProject
-	ensureManagedConsoleForTUI = panelaunch.EnsureManagedConsole
+	ensureManagedSessionForTUI    = paneruntime.EnsureProject
+	ensureManagedConsoleForTUI    = panelaunch.EnsureManagedConsole
+	syncManagedDashboardKeyForTUI = syncOwnedDashboardKey
 )
 
 // The console entry's terminal probe and process replacement are seams so
@@ -242,7 +243,6 @@ func enterManagedConsole(
 		return exitcode.Env
 	}
 	resolvedSettings := settings.Resolve(projectRoot, settings.CLIOverrides{}, lg.Warn)
-	syncOwnedDashboardKey(lg, resolvedSettings.DashboardKeybind, projectRoot, owned)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	console, err := ensureManagedConsoleForTUI(ctx, projectRoot, owned, os.Environ(), "")
@@ -250,6 +250,7 @@ func enterManagedConsole(
 		lg.Err("tui: ensure owned Herdr console: %v", err)
 		return exitcode.Env
 	}
+	syncManagedDashboardKeyForTUI(lg, resolvedSettings.DashboardKeybind, projectRoot, owned)
 	lg.Ok("Herdr console %s is ready (selected by %s)", console.Pane.PaneID, selection.Reason)
 	return attachOwnedConsole(console, lg)
 }
