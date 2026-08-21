@@ -98,6 +98,10 @@ func (b *Backend) SyncDashboardShortcut(options corebackend.DashboardShortcutOpt
 	if err != nil {
 		return err
 	}
+	options, err = resolveDashboardShortcutOwners(options)
+	if err != nil {
+		return err
+	}
 	layout, err := prepareOwnedLayout(filepath.Dir(admission.marker.RuntimeDir), admission.marker.Session)
 	if err != nil {
 		return err
@@ -113,6 +117,20 @@ func (b *Backend) SyncDashboardShortcut(options corebackend.DashboardShortcutOpt
 		return errors.Join(authErr, err)
 	}
 	return authErr
+}
+
+func resolveDashboardShortcutOwners(
+	options corebackend.DashboardShortcutOptions,
+) (corebackend.DashboardShortcutOptions, error) {
+	if !options.Enabled || options.ResolveOwners == nil {
+		return options, nil
+	}
+	owners, err := options.ResolveOwners()
+	if err != nil {
+		return options, fmt.Errorf("resolve Herdr dashboard shortcut owners: %w", err)
+	}
+	options.Owners = owners
+	return options, nil
 }
 
 func stageDashboardShortcutConfig(

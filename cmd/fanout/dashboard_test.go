@@ -141,6 +141,9 @@ func TestBindRuntimeDashboardKeyUsesDashboardOnlyCapability(t *testing.T) {
 	if len(fake.options[0].Owners) != 0 {
 		t.Fatalf("disabled dashboard shortcut owners = %+v", fake.options[0].Owners)
 	}
+	if fake.options[0].ResolveOwners != nil {
+		t.Fatal("disabled dashboard shortcut retained an owner resolver")
+	}
 	if len(fake.options[0].Environment) == 0 {
 		t.Fatal("dashboard shortcut did not receive the host environment")
 	}
@@ -155,7 +158,9 @@ func TestRuntimeDashboardKeyBinderReadsPreparedBackend(t *testing.T) {
 	}
 	originalResolver := resolveDashboardShortcutOwners
 	t.Cleanup(func() { resolveDashboardShortcutOwners = originalResolver })
+	resolverCalls := 0
 	resolveDashboardShortcutOwners = func(root string) ([]backend.DashboardShortcutOwner, error) {
+		resolverCalls++
 		if root != "/repo" {
 			t.Fatalf("dashboard shortcut owner root = %q", root)
 		}
@@ -174,8 +179,12 @@ func TestRuntimeDashboardKeyBinderReadsPreparedBackend(t *testing.T) {
 	bind(discardLogger(), true)
 
 	if len(preview.options) != 0 || len(owned.options) != 1 || !owned.options[0].Enabled ||
-		len(owned.options[0].Owners) != 1 || owned.options[0].Owners[0] != wantOwner {
+		owned.options[0].ResolveOwners == nil || len(owned.options[0].Owners) != 0 || resolverCalls != 0 {
 		t.Fatalf("dashboard shortcut sync = preview:%+v owned:%+v", preview.options, owned.options)
+	}
+	owners, err := owned.options[0].ResolveOwners()
+	if err != nil || resolverCalls != 1 || len(owners) != 1 || owners[0] != wantOwner {
+		t.Fatalf("deferred dashboard owners = %+v calls=%d err=%v", owners, resolverCalls, err)
 	}
 }
 

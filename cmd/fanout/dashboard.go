@@ -376,16 +376,14 @@ func syncRuntimeDashboardKey(lg *log.Logger, enabled bool, projectRoot string, r
 		lg.Warn("dashboard keybind: resolve fanout binary: %v", err)
 		return
 	}
-	var owners []backend.DashboardShortcutOwner
+	var resolveOwners func() ([]backend.DashboardShortcutOwner, error)
 	if enabled {
-		owners, err = resolveDashboardShortcutOwners(projectRoot)
-		if err != nil {
-			lg.Warn("dashboard keybind: resolve state owners: %v", err)
-			return
+		resolveOwners = func() ([]backend.DashboardShortcutOwner, error) {
+			return resolveDashboardShortcutOwners(projectRoot)
 		}
 	}
 	err = binder.SyncDashboardShortcut(backend.DashboardShortcutOptions{
-		Enabled: enabled, FanoutBin: bin, Owners: owners, Environment: os.Environ(),
+		Enabled: enabled, FanoutBin: bin, ResolveOwners: resolveOwners, Environment: os.Environ(),
 	})
 	if err != nil {
 		lg.Warn("dashboard keybind: %v", err)

@@ -71,10 +71,13 @@ type DashboardShortcutOwner struct {
 }
 
 type DashboardShortcutOptions struct {
-	Enabled     bool
-	FanoutBin   string
-	Owners      []DashboardShortcutOwner
-	Environment []string
+	Enabled   bool
+	FanoutBin string
+	Owners    []DashboardShortcutOwner
+	// ResolveOwners, when set for an enabled shortcut, replaces Owners while
+	// the implementation holds its shortcut-mutation serialization boundary.
+	ResolveOwners func() ([]DashboardShortcutOwner, error)
+	Environment   []string
 }
 
 // DashboardShortcutBinder is the narrow dashboard-only shortcut capability.

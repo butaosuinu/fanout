@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -223,6 +224,75 @@ func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
 	}
 	if got := countRecordedCommand(h.fake.commands, []string{"server", "reload-config"}); got != 3 {
 		t.Fatalf("reload-config calls = %d, want 3", got)
+	}
+}
+
+func TestSyncDashboardShortcutSerializesOwnerResolutionWithMutation(t *testing.T) {
+	h := newOwnedHarness(t)
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if slices.Equal(args, []string{"server", "reload-config"}) {
+			return []byte(appliedDashboardReloadEnvelope), nil
+		}
+		return nil, errors.New("unexpected command")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+	secondEntered := make(chan struct{})
+	errCh := make(chan error, 2)
+	options := corebackend.DashboardShortcutOptions{
+		Enabled: true, FanoutBin: executable, Environment: []string{"PATH=/usr/bin"},
+	}
+	first := options
+	first.ResolveOwners = func() ([]corebackend.DashboardShortcutOwner, error) {
+		close(firstEntered)
+		<-releaseFirst
+		return []corebackend.DashboardShortcutOwner{
+			testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout)),
+		}, nil
+	}
+	go func() { errCh <- h.session.Backend().SyncDashboardShortcut(first) }()
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		close(releaseFirst)
+		<-errCh
+		t.Fatal("first owner resolver did not run")
+	}
+	second := options
+	second.ResolveOwners = func() ([]corebackend.DashboardShortcutOwner, error) {
+		close(secondEntered)
+		return []corebackend.DashboardShortcutOwner{
+			testDashboardShortcutOwner(h, "pane-2", "workspace-2", state.Path(h.checkout+"-linked")),
+		}, nil
+	}
+	go func() {
+		close(secondStarted)
+		errCh <- h.session.Backend().SyncDashboardShortcut(second)
+	}()
+	<-secondStarted
+	overlapped := false
+	select {
+	case <-secondEntered:
+		overlapped = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	for range 2 {
+		if syncErr := <-errCh; syncErr != nil {
+			t.Fatal(syncErr)
+		}
+	}
+	if overlapped {
+		t.Fatal("second owner resolver ran while the first mutation was locked")
+	}
+	descriptor, found, err := readDashboardDescriptor(h.layout)
+	if err != nil || !found || len(descriptor.Owners) != 1 || descriptor.Owners[0].PaneID != "pane-2" {
+		t.Fatalf("serialized dashboard descriptor = (%+v, %t, %v)", descriptor, found, err)
 	}
 }
 
