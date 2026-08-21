@@ -114,7 +114,7 @@ func ensureManagedConsoleLocked(
 	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: root}, Managed: owned}
 	live, err := launcher.startManagedAgent(
-		ctx, locked, route, intent, validateManagedShellLaunch, nil, exactManagedShellPane,
+		ctx, locked, route, intent, validateManagedConsoleLaunch(route), nil, exactManagedShellPane,
 		func(adoptCtx context.Context, _ *state.LockedStore, issued state.LaunchIntent) (backend.LivePane, error) {
 			return launcher.adoptManagedConsolePane(adoptCtx, issued, route, shellPath)
 		},
@@ -130,6 +130,26 @@ func ensureManagedConsoleLocked(
 		return ManagedConsoleResult{}, err
 	}
 	return managedConsoleResult(owned, pane, callerEnvironment)
+}
+
+// validateManagedConsoleLaunch admits only a capsule that runs the pinned
+// console TUI. prepareManagedLaunch re-validates the capsule a journal intent
+// saved before issuing its token, and an intent left by an interrupted or
+// pre-upgrade bootstrap can still name the operator shell as the workload —
+// issuing that token would either confirm a bare shell as the console or
+// strand the intent on an identity mismatch, so the stale capsule is refused
+// while the token does not exist yet (shutdown recovery prunes the intent).
+func validateManagedConsoleLaunch(route backend.OwnedLaunchRoute) managedLaunchValidator {
+	return func(launch *state.LaunchCapsule) error {
+		if err := validateManagedShellLaunch(launch); err != nil {
+			return err
+		}
+		if launch.Executable != route.LauncherPath ||
+			!slices.Equal(launch.Args, []string{ManagedConsoleWorkloadArg}) {
+			return fmt.Errorf("saved Herdr console launch does not run the pinned console workload")
+		}
+		return nil
+	}
 }
 
 func validateManagedConsoleIntentRoot(intent state.LaunchIntent, projectRoot string) error {

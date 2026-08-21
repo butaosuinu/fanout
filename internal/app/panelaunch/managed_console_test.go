@@ -146,6 +146,53 @@ func TestClassifyManagedConsoleProcessAcceptsTUIAndHandoffShell(t *testing.T) {
 	}
 }
 
+func TestValidateManagedConsoleLaunchRefusesNonConsoleWorkloads(t *testing.T) {
+	route := backend.OwnedLaunchRoute{LauncherPath: "/owned/launcher/fanout", EmitterPath: "/owned/launcher/fanout"}
+	validate := validateManagedConsoleLaunch(route)
+	tests := []struct {
+		name    string
+		launch  *state.LaunchCapsule
+		wantErr string
+	}{
+		{
+			name:   "pinned console workload is admitted",
+			launch: &state.LaunchCapsule{Executable: route.LauncherPath, Args: []string{ManagedConsoleWorkloadArg}},
+		},
+		{
+			// A journal intent saved by a pre-upgrade bootstrap still names the
+			// operator shell; its token must never be issued.
+			name:    "saved operator-shell capsule is refused",
+			launch:  &state.LaunchCapsule{Executable: "/bin/zsh"},
+			wantErr: "does not run the pinned console workload",
+		},
+		{
+			name:    "missing console token is refused",
+			launch:  &state.LaunchCapsule{Executable: route.LauncherPath},
+			wantErr: "does not run the pinned console workload",
+		},
+		{
+			name:    "agent capsule is refused by the shell shape check",
+			launch:  &state.LaunchCapsule{Executable: route.LauncherPath, Args: []string{ManagedConsoleWorkloadArg}, Agent: "claude"},
+			wantErr: "invalid launch capsule",
+		},
+		{name: "nil capsule is refused", wantErr: "invalid launch capsule"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validate(tt.launch)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateManagedConsoleLaunch()(%+v) = %v, want nil", tt.launch, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("validateManagedConsoleLaunch()(%+v) = %v, want %q", tt.launch, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestManagedConsoleResultCarriesBothAttachForms(t *testing.T) {
 	attach := backend.AttachExec{
 		Path: "/pinned/client",
