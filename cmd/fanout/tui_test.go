@@ -258,6 +258,7 @@ func TestWireOwnedHerdrTUIEnablesScopedInteractivePorts(t *testing.T) {
 		settings.Defaults(),
 		hooks.EmptyConfig(),
 		owned,
+		nil,
 	)
 	if opts.LaunchPane == nil || opts.LaunchAttach == nil || opts.LaunchIssue == nil ||
 		opts.LaunchIssuePlan == nil || opts.LaunchShell == nil || opts.FocusManagedPane == nil ||
@@ -269,6 +270,108 @@ func TestWireOwnedHerdrTUIEnablesScopedInteractivePorts(t *testing.T) {
 	}
 	if opts.RestorePanes != nil || opts.LifecycleCloseOwned != nil {
 		t.Fatal("owned Herdr wiring enabled deferred restore/lifecycle ports")
+	}
+}
+
+func TestWrapManagedTUILaunchesSyncsOwnersAfterEveryCreatedPanePath(t *testing.T) {
+	activeLaunch := false
+	syncCalls := 0
+	store := state.Store{}
+	recordOwner := func(paneID, workspaceID string) {
+		store.Panes = append(store.Panes, state.Pane{
+			PaneID: paneID, WorkspaceID: workspaceID,
+			SessionID: "session", SocketPath: "/socket",
+		})
+	}
+	syncOwners := func() {
+		if activeLaunch {
+			t.Fatal("dashboard owners synced before the launch returned and released its state lock")
+		}
+		owners := dashboardShortcutOwners(paneruntime.ProjectStore{Root: "/repo", Store: store})
+		if len(owners) != syncCalls+1 {
+			t.Fatalf("dashboard owners at sync %d = %+v, want the newly recorded identity", syncCalls+1, owners)
+		}
+		syncCalls++
+	}
+	withLaunch := func() func() {
+		activeLaunch = true
+		return func() { activeLaunch = false }
+	}
+	partialErr := errors.New("later pane failed")
+	opts := fanouttui.Options{
+		LaunchPane: func(fanouttui.LaunchRequest) (fanouttui.LaunchResult, error) {
+			defer withLaunch()()
+			recordOwner("manual-pane", "manual-workspace")
+			return fanouttui.LaunchResult{CreatedPaneIDs: []string{"manual-pane"}}, partialErr
+		},
+		LaunchAttach: func(fanouttui.AttachLaunchRequest) (string, error) {
+			defer withLaunch()()
+			recordOwner("attach-pane", "attach-workspace")
+			return "attached", nil
+		},
+		LaunchIssue: func(int, string, map[string]string) (fanouttui.LaunchResult, error) {
+			defer withLaunch()()
+			recordOwner("issue-pane", "issue-workspace")
+			return fanouttui.LaunchResult{CreatedPaneIDs: []string{"issue-pane"}}, nil
+		},
+		LaunchIssuePlan: func(int, string, string) (fanouttui.LaunchResult, error) {
+			defer withLaunch()()
+			recordOwner("plan-pane", "plan-workspace")
+			return fanouttui.LaunchResult{CreatedPaneIDs: []string{"plan-pane"}}, nil
+		},
+		LaunchShell: func(fanouttui.ShellLaunchRequest) error {
+			defer withLaunch()()
+			recordOwner("shell-pane", "shell-workspace")
+			return nil
+		},
+	}
+	wrapManagedTUILaunches(&opts, syncOwners)
+
+	if _, err := opts.LaunchPane(fanouttui.LaunchRequest{}); !errors.Is(err, partialErr) {
+		t.Fatalf("partial manual launch error = %v, want %v", err, partialErr)
+	}
+	if _, err := opts.LaunchAttach(fanouttui.AttachLaunchRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opts.LaunchIssue(1, "codex", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opts.LaunchIssuePlan(1, "codex", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := opts.LaunchShell(fanouttui.ShellLaunchRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if syncCalls != 5 {
+		t.Fatalf("dashboard owner sync calls = %d, want every managed launch path", syncCalls)
+	}
+}
+
+func TestWrapManagedTUILaunchesSkipsFailedUnrecordedLaunches(t *testing.T) {
+	wantErr := errors.New("launch failed")
+	syncCalls := 0
+	opts := fanouttui.Options{
+		LaunchPane: func(fanouttui.LaunchRequest) (fanouttui.LaunchResult, error) {
+			return fanouttui.LaunchResult{}, wantErr
+		},
+		LaunchAttach: func(fanouttui.AttachLaunchRequest) (string, error) { return "", wantErr },
+		LaunchIssue: func(int, string, map[string]string) (fanouttui.LaunchResult, error) {
+			return fanouttui.LaunchResult{}, wantErr
+		},
+		LaunchIssuePlan: func(int, string, string) (fanouttui.LaunchResult, error) {
+			return fanouttui.LaunchResult{}, wantErr
+		},
+		LaunchShell: func(fanouttui.ShellLaunchRequest) error { return wantErr },
+	}
+	wrapManagedTUILaunches(&opts, func() { syncCalls++ })
+
+	_, _ = opts.LaunchPane(fanouttui.LaunchRequest{})
+	_, _ = opts.LaunchAttach(fanouttui.AttachLaunchRequest{})
+	_, _ = opts.LaunchIssue(1, "codex", nil)
+	_, _ = opts.LaunchIssuePlan(1, "codex", "codex")
+	_ = opts.LaunchShell(fanouttui.ShellLaunchRequest{})
+	if syncCalls != 0 {
+		t.Fatalf("dashboard owner sync calls = %d, want none for unrecorded failures", syncCalls)
 	}
 }
 
@@ -286,7 +389,7 @@ func TestSettingsReloadPreservesOnlyAdmittedHerdrIssueLaunch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reload := newTUISettingsReloadFunc(
 				repo, "owned-session", "fanout", hooks.EmptyConfig(),
-				backend.Selection{Name: backend.Herdr}, false, tt.admitted, nil, discardLogger(),
+				backend.Selection{Name: backend.Herdr}, false, tt.admitted, nil, nil, discardLogger(),
 			)
 			runtime, err := reload()
 			if err != nil {
@@ -854,7 +957,10 @@ func TestTUISettingsReloadCleansDisabledKeybinds(t *testing.T) {
 	}
 	argsPath := installTUISettingsReloadTmuxShim(t)
 
-	reload := newTUISettingsReloadFunc(repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux}, true, true, nil, discardLogger())
+	reload := newTUISettingsReloadFunc(
+		repo, "fanout-test", "fanout", hooks.Config{}, backend.Selection{Name: backend.Tmux},
+		true, true, nil, nil, discardLogger(),
+	)
 	if _, err := reload(); err != nil {
 		t.Fatal(err)
 	}
