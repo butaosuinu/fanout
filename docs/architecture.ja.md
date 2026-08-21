@@ -139,6 +139,17 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   `manual_cleanup_required` にする。issue-less plan の intent は physical
   owner root を ID に含め、同じ slug を使う別の linked worktree には backend
   binding として投影しない。
+  coordinator の state row は workspace label(intent ごとの nonce)で
+  同定する。`(Parent, RuntimeParent)` は複数の manual launch と agent 行が
+  共有するため row の鍵にならない。realized coordinator の再開は live
+  workspace の label 照合で分類する: 一意に存在すれば現観測値で採用
+  (Herdr 側の pane 移動や restart による id 変化に追従)、不在なら Herdr 側
+  close の外部 cleanup とみなして intent を release し作り直す。label が
+  複数見つかる場合と、live workspace が row と pane 単位で食い違う場合だけ
+  fail closed する。`manual_cleanup_required` に固定された @manual
+  coordinator intent の synthetic 番号は焼却済みで、新規割当はそれを
+  スキップする(recoverable な intent の番号再取得は crash recovery の
+  正規経路なのでスキップしない)。
   launch 時に `agent_session` が nil だった final row は、`sessionbinding` が
   exact route / terminal / provider / worktree と一意な ref を state lock 下で
   再照合して初回だけ保存する。保存後は ref の完全一致を要求する。

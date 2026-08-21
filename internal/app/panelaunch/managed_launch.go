@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/agent"
@@ -134,11 +135,11 @@ func admitManagedCoordinatorLaunch(
 	projectRoot string,
 	issueNum int,
 ) error {
-	ownerRoot, err := filepath.EvalSymlinks(projectRoot)
+	ownerRoot, err := canonicalManualCoordinatorOwner(projectRoot)
 	if err != nil {
-		return fmt.Errorf("canonicalize Herdr coordinator launch owner: %w", err)
+		return err
 	}
-	intentID, err := state.CoordinatorIntentID(ManualParentRef, filepath.Clean(ownerRoot), issueNum)
+	intentID, err := state.CoordinatorIntentID(ManualParentRef, ownerRoot, issueNum)
 	if err != nil {
 		return err
 	}
@@ -175,11 +176,11 @@ func (l *Launcher) realizeManagedLaunch(
 	req Request,
 	operation managedLaunchOperation,
 ) (state.LaunchIntent, error) {
-	coordinator, err := l.realizeManagedCoordinator(operation.ctx, req, operation.locked, operation.route)
+	coordinator, livePanes, err := l.realizeManagedCoordinator(operation.ctx, req, operation.locked, operation.route)
 	if err != nil {
 		return state.LaunchIntent{}, fmt.Errorf("realize coordinator: %w", err)
 	}
-	if recordErr := l.recordManagedCoordinator(operation.locked, coordinator, operation.route); recordErr != nil {
+	if recordErr := l.recordManagedCoordinator(operation.locked, coordinator, operation.route, livePanes); recordErr != nil {
 		return coordinator, fmt.Errorf("record coordinator: %w", recordErr)
 	}
 	intent, err := l.realizeManagedChild(operation.ctx, req, operation.locked, operation.route)
@@ -216,30 +217,56 @@ func (l *Launcher) realizeManagedCoordinator(
 	req Request,
 	locked *state.LockedStore,
 	route backend.OwnedLaunchRoute,
-) (state.LaunchIntent, error) {
+) (state.LaunchIntent, []backend.LivePane, error) {
 	result, err := RealizeManagedCoordinator(ctx, ManagedCoordinatorRequest{
 		Parent: req.ParentRef, IssueNum: managedCoordinatorIssueNum(req), ProjectRoot: l.Info.ProjectRoot,
 		SourceRoot: l.Info.ProjectRoot, CWD: l.Info.ProjectRoot,
 		ManagedSession: route.Session, SocketPath: route.SocketPath,
 	}, l.Managed, locked, ManagedRealizeHooks{})
 	if err != nil && !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
-		return state.LaunchIntent{}, err
+		return state.LaunchIntent{}, nil, err
 	}
-	observationIntent := managedCoordinatorObservationIntent(ctx, result.Intent)
-	verifyErr := retryManagedObservation(ctx, observationIntent, func(observeCtx context.Context) error {
-		return l.verifyManagedIdleLauncher(observeCtx, result.Intent, route)
+	livePanes, verifyErr := l.observeIdleManagedLauncher(ctx, result.Intent, route)
+	if verifyErr != nil {
+		if !errors.Is(verifyErr, errManagedLauncherIdentityChanged) {
+			return state.LaunchIntent{}, nil, verifyErr
+		}
+		return state.LaunchIntent{}, nil, l.markManagedCoordinatorLauncherManual(locked, result.Intent, verifyErr)
+	}
+	return result.Intent, livePanes, nil
+}
+
+// observeIdleManagedLauncher retries the idle-launcher observation and returns
+// the live panes the successful verification saw, so the caller can reconcile
+// saved rows against the same snapshot.
+func (l *Launcher) observeIdleManagedLauncher(
+	ctx context.Context,
+	intent state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+) ([]backend.LivePane, error) {
+	var livePanes []backend.LivePane
+	err := retryManagedObservation(ctx, managedCoordinatorObservationIntent(ctx, intent), func(observeCtx context.Context) error {
+		panes, observeErr := l.verifyManagedIdleLauncher(observeCtx, intent, route)
+		if observeErr == nil {
+			livePanes = panes
+		}
+		return observeErr
 	})
-	if err := verifyErr; err != nil {
-		if !errors.Is(err, errManagedLauncherIdentityChanged) {
-			return state.LaunchIntent{}, err
-		}
-		journal, journalErr := locked.LaunchJournal(l.Info.ProjectRoot)
-		if journalErr != nil {
-			return state.LaunchIntent{}, errors.Join(err, journalErr)
-		}
-		return state.LaunchIntent{}, markManagedIntentManual(journal, result.Intent, err)
+	return livePanes, err
+}
+
+// markManagedCoordinatorLauncherManual pins a realized coordinator to manual
+// cleanup after its launcher identity changed under observation.
+func (l *Launcher) markManagedCoordinatorLauncherManual(
+	locked *state.LockedStore,
+	intent state.LaunchIntent,
+	cause error,
+) error {
+	journal, journalErr := locked.LaunchJournal(l.Info.ProjectRoot)
+	if journalErr != nil {
+		return errors.Join(cause, journalErr)
 	}
-	return result.Intent, nil
+	return markManagedIntentManual(journal, intent, cause)
 }
 
 func managedCoordinatorObservationIntent(
@@ -279,14 +306,76 @@ func (l *Launcher) recordManagedCoordinator(
 	locked *state.LockedStore,
 	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
+	livePanes []backend.LivePane,
 ) error {
+	if err := pruneDeadManagedCoordinatorRows(locked, route, livePanes); err != nil {
+		return err
+	}
 	runtimeParent := managedCoordinatorRuntimeParent(intent)
 	recorded, err := l.findManagedCoordinatorRow(locked, runtimeParent, intent, route)
 	if err != nil || recorded {
 		return err
 	}
 	number := NextSyntheticPaneNumber(locked.Store, ManualParentRef)
+	if number == intent.IssueNum {
+		// The launch's own agent row lands on (ManualParentRef, IssueNum) at
+		// finalization and would silently replace the coordinator row — the
+		// state upsert keys on (parent, issue number). Keep the scaffolding
+		// row off that key.
+		number--
+	}
 	return locked.RecordPane(managedCoordinatorPane(intent, route, runtimeParent, number))
+}
+
+// pruneDeadManagedCoordinatorRows removes this owned session's coordinator
+// scaffolding rows whose workspace no longer exists. Closing a coordinator
+// workspace from the Herdr side is an external cleanup; the launch-time live
+// pane observation proves the absence. Only rows in the exact coordinator role
+// shape qualify — agent, shell, and attached-agent rows are never touched.
+func pruneDeadManagedCoordinatorRows(
+	locked *state.LockedStore,
+	route backend.OwnedLaunchRoute,
+	livePanes []backend.LivePane,
+) error {
+	// An empty observation proves nothing about absence.
+	if len(livePanes) == 0 {
+		return nil
+	}
+	for _, pane := range slices.Clone(locked.Panes) {
+		if !deadManagedCoordinatorRow(pane, route, livePanes) {
+			continue
+		}
+		if err := locked.RemovePane(pane.Parent, pane.IssueNum); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deadManagedCoordinatorRow(
+	pane state.Pane,
+	route backend.OwnedLaunchRoute,
+	livePanes []backend.LivePane,
+) bool {
+	return managedCoordinatorRowRole(pane) &&
+		strings.HasPrefix(pane.WorkspaceLabel, managedWorkspaceLabelPrefix(managedCoordinatorLabelKind)) &&
+		pane.SessionID == route.Session && pane.SocketPath == route.SocketPath &&
+		!managedWorkspaceRowLive(pane, livePanes)
+}
+
+// managedWorkspaceRowLive matches on the label — a per-intent nonce that
+// Herdr-side moves and restarts change workspace ids without touching — or on
+// the recorded workspace id, so a relabeled-but-live workspace keeps its row,
+// mirroring the recreate guard. A row wrongly pruned by a snapshot that missed
+// its panes is re-recorded by the owning intent's next launch, and the
+// workspace itself is never touched.
+func managedWorkspaceRowLive(pane state.Pane, livePanes []backend.LivePane) bool {
+	for _, live := range livePanes {
+		if live.WorkspaceLabel == pane.WorkspaceLabel || live.Ref.Workspace == pane.WorkspaceID {
+			return true
+		}
+	}
+	return false
 }
 
 func managedCoordinatorPane(
@@ -322,12 +411,34 @@ func (l *Launcher) findManagedCoordinatorRow(
 		if loadErr != nil {
 			return false, loadErr
 		}
-		pane, found := findManagedCoordinatorPane(store, runtimeParent)
+		pane, found := findManagedCoordinatorPane(store, runtimeParent, intent)
 		if found {
-			return true, validateManagedCoordinatorPane(pane, intent, route)
+			return true, l.reconcileManagedCoordinatorRow(locked, root, runtimeParent, pane, intent, route)
 		}
 	}
 	return false, nil
+}
+
+// reconcileManagedCoordinatorRow settles one root's saved row for this intent.
+// The label nonce proves the row belongs to this intent, so a disagreeing copy
+// is staleness left by a Herdr-side move or restart, not a foreign
+// coordinator: an intact copy stands, the launch root's stale copy is healed
+// in place, and a sibling root's stale copy heals when a launch runs from that
+// root — its store is not under this launch's lock.
+func (l *Launcher) reconcileManagedCoordinatorRow(
+	locked *state.LockedStore,
+	root, runtimeParent string,
+	pane state.Pane,
+	intent state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+) error {
+	if validateManagedCoordinatorPane(pane, intent, route) == nil {
+		return nil
+	}
+	if filepath.Clean(root) != filepath.Clean(l.Info.ProjectRoot) {
+		return nil
+	}
+	return locked.RecordPane(managedCoordinatorPane(intent, route, runtimeParent, pane.IssueNum))
 }
 
 func managedCoordinatorRowRoots(projectRoot, runtimeParent, ownerProjectRoot string) ([]string, error) {
@@ -375,13 +486,40 @@ func loadManagedCoordinatorStore(projectRoot, root string, locked *state.LockedS
 	return store, nil
 }
 
-func findManagedCoordinatorPane(store state.Store, runtimeParent string) (state.Pane, bool) {
+// findManagedCoordinatorPane returns the saved row carrying this coordinator
+// intent's workspace label. The label is the per-intent ownership nonce, so
+// rows for other coordinators, manual agent panes, and attached agents under
+// the same runtime parent never match — only the row this intent itself
+// recorded can come back, and a disagreeing copy of it is real corruption.
+func findManagedCoordinatorPane(
+	store state.Store,
+	runtimeParent string,
+	intent state.LaunchIntent,
+) (state.Pane, bool) {
+	if intent.Resource.Label == "" {
+		return state.Pane{}, false
+	}
 	for _, pane := range store.Panes {
-		if pane.Parent == ManualParentRef && pane.RuntimeParent == runtimeParent {
+		if managedCoordinatorRowRole(pane) && pane.RuntimeParent == runtimeParent &&
+			pane.WorkspaceLabel == intent.Resource.Label {
 			return pane, true
 		}
 	}
 	return state.Pane{}, false
+}
+
+// managedCoordinatorRowRole reports whether a state row has the exact role
+// shape managedCoordinatorPane emits. managedShutdownCoordinatorRow layers the
+// retire-only requirements on top of it.
+func managedCoordinatorRowRole(pane state.Pane) bool {
+	requirements := []bool{
+		pane.Parent == ManualParentRef, pane.IssueNum < 0,
+		pane.TaskID == "", pane.Kind == state.PaneKindShell,
+		pane.Agent == "", pane.BranchName == "",
+		pane.RepoKey == "", pane.RepoRoot == "",
+		pane.AgentID == "", pane.AgentSession == nil,
+	}
+	return !slices.Contains(requirements, false)
 }
 
 func managedCoordinatorRuntimeParent(intent state.LaunchIntent) string {

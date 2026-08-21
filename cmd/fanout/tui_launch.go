@@ -350,7 +350,7 @@ func issuePlanRecorded(projectRoot string, store state.Store, issueNum int) bool
 // @fanout_shell_key: with the repo root as WorktreePath, path containment is
 // too broad to detect tmux pane id reuse, so liveness matches on the key.
 func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, prompt string, cfg *cliflags.Config, livenessKey string) panelaunch.Request {
-	number := panelaunch.NextSyntheticPaneNumber(store, panelaunch.ManualParentRef)
+	number := panelaunch.NextManagedSyntheticPaneNumber(projectRoot, store, panelaunch.ManualParentRef)
 	title := panelaunch.ShortIssueTitle("plan: " + panelaunch.FirstPromptLine(prompt))
 	briefingPath := planPromptPath(projectRoot, number)
 	req := panelaunch.Request{
@@ -381,7 +381,7 @@ func newPlanPromptPaneRequest(projectRoot string, store state.Store, hookConfig 
 // BriefingPath. It mirrors newPlanPromptPaneRequest but sources the title,
 // body, and briefing from the GitHub issue. It never sets Source*.
 func newIssuePlanPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, issue ghissue.Issue, cfg *cliflags.Config, workerAgent, livenessKey string) panelaunch.Request {
-	number := panelaunch.NextSyntheticPaneNumber(store, panelaunch.ManualParentRef)
+	number := panelaunch.NextManagedSyntheticPaneNumber(projectRoot, store, panelaunch.ManualParentRef)
 	title := fmt.Sprintf("plan: #%d %s", issue.Number, issue.Title)
 	briefingPath := planIssuePromptPath(projectRoot, issue.Number, number)
 	req := panelaunch.Request{

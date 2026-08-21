@@ -60,16 +60,16 @@ func (l *Launcher) Shell(req ShellRequest) error {
 		_ = recorder.Unlock()
 	}()
 
-	number := NextSyntheticPaneNumber(recorder.Store, ManualParentRef)
-	slug := shellPaneSlug(targetPath, req.Root, number)
 	title := shellPaneTitle(targetPath, req.Root)
 	if l.Backend.MutationModel() == backend.MutationJournaled {
+		number := NextManagedSyntheticPaneNumber(projectRoot, recorder.Store, ManualParentRef)
 		if err := admitManagedCoordinatorLaunch(recorder, projectRoot, number); err != nil {
 			return err
 		}
-		return l.shellManaged(recorder, targetPath, number, slug, title)
+		return l.shellManaged(recorder, targetPath, number, shellPaneSlug(targetPath, req.Root, number), title)
 	}
-	return l.shellDirect(recorder, targetPath, number, slug, title)
+	number := NextSyntheticPaneNumber(recorder.Store, ManualParentRef)
+	return l.shellDirect(recorder, targetPath, number, shellPaneSlug(targetPath, req.Root, number), title)
 }
 
 func resolveShellTarget(rawPath string) (string, error) {

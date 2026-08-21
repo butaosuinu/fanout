@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -63,6 +64,38 @@ func observationResource(resource state.RuntimeResource) backend.WorkspaceObserv
 	}
 }
 
+// adoptableCoordinatorObservation projects a workspace observation onto the
+// one pane an adoption may bind: the top-level triple when herdrrun reported
+// one (a single-pane workspace), otherwise the unique pane at the
+// coordinator's recorded path. An ambiguous workspace comes back unchanged,
+// so the postcondition check fails closed on it.
+func adoptableCoordinatorObservation(
+	observation backend.WorkspaceObservation,
+	worktreePath string,
+) backend.WorkspaceObservation {
+	if observation.Pane.Pane != "" {
+		return observation
+	}
+	var match *backend.WorkspacePaneObservation
+	for index := range observation.Panes {
+		pane := &observation.Panes[index]
+		if filepath.Clean(pane.CWD) != filepath.Clean(worktreePath) {
+			continue
+		}
+		if match != nil {
+			return observation
+		}
+		match = pane
+	}
+	if match == nil {
+		return observation
+	}
+	observation.Pane = match.Pane
+	observation.TerminalID = match.TerminalID
+	observation.CWD = match.CWD
+	return observation
+}
+
 func workspaceHasManagedResource(
 	observation backend.WorkspaceObservation,
 	expected state.RuntimeResource,
@@ -104,6 +137,15 @@ func workspaceProvenanceMatches(
 		(expected.RepoRoot == "" || observation.RepoRoot == expected.RepoRoot)
 }
 
+// managedCoordinatorLabelKind names the coordinator lane in workspace labels;
+// managedWorkspaceLabelPrefix(managedCoordinatorLabelKind) is the shape saved
+// rows are matched against, so label creation and matching cannot drift.
+const managedCoordinatorLabelKind = "coordinator"
+
+func managedWorkspaceLabelPrefix(kind string) string {
+	return "fanout-" + kind + "-"
+}
+
 func newManagedWorkspaceLabel(
 	kind string,
 	randomToken func() (string, error),
@@ -116,7 +158,7 @@ func newManagedWorkspaceLabel(
 	if token == "" || strings.ContainsAny(token, "\x00\r\n") {
 		return "", fmt.Errorf("create Herdr %s workspace label: invalid random token", kind)
 	}
-	return "fanout-" + kind + "-" + token, nil
+	return managedWorkspaceLabelPrefix(kind) + token, nil
 }
 
 func randomManagedToken() (string, error) {

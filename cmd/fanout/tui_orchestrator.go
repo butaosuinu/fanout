@@ -79,7 +79,7 @@ func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, r
 // newIssueOrchestratorPaneRequest mirrors an issue-plan coordinator request,
 // but its one-line prompt starts parent coordination instead of plan fan-out.
 func newIssueOrchestratorPaneRequest(projectRoot string, store state.Store, hookConfig hooks.Config, issue ghissue.Issue, agentName string, orchestratorPlanMode bool, livenessKey string) (panelaunch.Request, string) {
-	number := panelaunch.NextSyntheticPaneNumber(store, panelaunch.ManualParentRef)
+	number := panelaunch.NextManagedSyntheticPaneNumber(projectRoot, store, panelaunch.ManualParentRef)
 	title := fmt.Sprintf("orchestrator: #%d %s", issue.Number, issue.Title)
 	briefingPath := orchestratorIssueBriefingPath(projectRoot, issue.Number, number)
 	launchMode := agent.ModeBuild

@@ -150,25 +150,11 @@ func configureTeamRequest(
 // NewManualRequest builds the pane request for a TUI-launched manual pane
 // under the reserved @manual parent with a synthetic negative number.
 func NewManualRequest(cfg *cliflags.Config, projectRoot string, store state.Store, hookConfig hooks.Config, opts ManualOptions) Request {
-	number := NextSyntheticPaneNumber(store, ManualParentRef)
 	title := opts.Title
 	if title == "" {
 		title = "Manual agent"
 	}
-	slug := ManualPaneSlug(title, number)
-	branchName := naming.BranchName("", cfg.BranchPrefix, slug)
-	// A state-only close (close the pane, or remove the worktree but keep the
-	// branch) can leave an orphaned worktree dir or branch behind.
-	// NextSyntheticPaneNumber only sees state, so re-creating the same-titled
-	// manual pane would otherwise reuse that slug and either fail preparing the
-	// duplicate worktree or silently inherit the old branch. Skip to a lower
-	// (still state-unique) number until the derived worktree dir and branch are
-	// both free.
-	for worktree.SlugInUse(projectRoot, slug, branchName) {
-		number--
-		slug = ManualPaneSlug(title, number)
-		branchName = naming.BranchName("", cfg.BranchPrefix, slug)
-	}
+	number, slug, branchName := freeManualPaneIdentity(cfg, projectRoot, store, title)
 	agentName := opts.Agent
 	if agentName == "" {
 		agentName = cfg.Agent
@@ -220,6 +206,33 @@ func NewManualRequest(cfg *cliflags.Config, projectRoot string, store state.Stor
 	return req
 }
 
+// freeManualPaneIdentity picks the first synthetic number whose derived slug,
+// branch, and @manual coordinator intent identity are all free. A state-only
+// close (close the pane, or remove the worktree but keep the branch) can leave
+// an orphaned worktree dir or branch behind, and a failed Herdr launch can
+// leave the number's coordinator intent pinned to manual cleanup;
+// NextSyntheticPaneNumber only sees state, so reusing any of them would fail
+// the launch or silently inherit the old branch. Skip to a lower (still
+// state-unique) number until all three are free.
+func freeManualPaneIdentity(
+	cfg *cliflags.Config,
+	projectRoot string,
+	store state.Store,
+	title string,
+) (int, string, string) {
+	number := NextSyntheticPaneNumber(store, ManualParentRef)
+	journal, ownerRoot := manualAllocationJournal(projectRoot)
+	slug := ManualPaneSlug(title, number)
+	branchName := naming.BranchName("", cfg.BranchPrefix, slug)
+	for worktree.SlugInUse(projectRoot, slug, branchName) ||
+		manualCoordinatorNumberBurned(journal, ownerRoot, number) {
+		number--
+		slug = ManualPaneSlug(title, number)
+		branchName = naming.BranchName("", cfg.BranchPrefix, slug)
+	}
+	return number, slug, branchName
+}
+
 // AttachTarget carries the source identity of the recorded pane an
 // attached-agent request derives from. It mirrors the source fields of the
 // TUI's AttachTarget (internal/ui/tui) without depending on the ui layer.
@@ -239,7 +252,7 @@ func NewAttachedRequest(cfg *cliflags.Config, projectRoot string, store state.St
 	if parentRef == "" {
 		parentRef = ManualParentRef
 	}
-	number := NextSyntheticPaneNumber(store, parentRef)
+	number := NextManagedSyntheticPaneNumber(projectRoot, store, parentRef)
 	agentName := cfg.Agent
 	title := attachedPaneTitle(agentName, target.SourceLabel, targetPath)
 	slug := attachedPaneSlug(targetPath, agentName, number)
@@ -398,6 +411,58 @@ func NextSyntheticPaneNumber(store state.Store, parentRef string) int {
 		}
 	}
 	return next
+}
+
+// NextManagedSyntheticPaneNumber returns NextSyntheticPaneNumber's choice,
+// additionally skipping numbers whose @manual coordinator intent is pinned to
+// manual cleanup in projectRoot's launch journal: those identities are burned,
+// and reusing one replays the saved failure instead of launching. Recoverable
+// statuses are never skipped — re-picking their number is the crash-recovery
+// path. An unreadable journal degrades to the state-only choice; admission
+// under the launch lock stays the enforcement point.
+func NextManagedSyntheticPaneNumber(projectRoot string, store state.Store, parentRef string) int {
+	number := NextSyntheticPaneNumber(store, parentRef)
+	journal, ownerRoot := manualAllocationJournal(projectRoot)
+	for manualCoordinatorNumberBurned(journal, ownerRoot, number) {
+		number--
+	}
+	return number
+}
+
+// manualAllocationJournal loads the read-only journal view used to skip burned
+// manual numbers; an unreadable journal degrades to no skipping.
+func manualAllocationJournal(projectRoot string) (state.LaunchJournal, string) {
+	journal, err := state.LoadLaunchJournal(projectRoot)
+	if err != nil {
+		return state.LaunchJournal{}, ""
+	}
+	ownerRoot, err := canonicalManualCoordinatorOwner(projectRoot)
+	if err != nil {
+		return state.LaunchJournal{}, ""
+	}
+	return journal, ownerRoot
+}
+
+func manualCoordinatorNumberBurned(journal state.LaunchJournal, ownerRoot string, number int) bool {
+	if ownerRoot == "" {
+		return false
+	}
+	intentID, err := state.CoordinatorIntentID(ManualParentRef, ownerRoot, number)
+	if err != nil {
+		return false
+	}
+	intent, found := journal.FindIntent(intentID)
+	return found && intent.Status == state.IntentManualCleanupRequired
+}
+
+// canonicalManualCoordinatorOwner resolves the owner-root form used inside
+// @manual coordinator intent IDs.
+func canonicalManualCoordinatorOwner(projectRoot string) (string, error) {
+	ownerRoot, err := filepath.EvalSymlinks(projectRoot)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize Herdr coordinator launch owner: %w", err)
+	}
+	return filepath.Clean(ownerRoot), nil
 }
 
 // ManualPaneSlug derives the bounded "manual-<n>-<title>-pane" slug for a

@@ -13,26 +13,29 @@ import (
 
 var errManagedLauncherIdentityChanged = errors.New("herdr launcher identity changed")
 
+// verifyManagedIdleLauncher returns the live panes it verified against, so a
+// caller that also reconciles saved rows can reuse the observation instead of
+// paying a second snapshot.
 func (l *Launcher) verifyManagedIdleLauncher(
 	ctx context.Context,
 	intent state.LaunchIntent,
 	route backend.OwnedLaunchRoute,
-) error {
+) ([]backend.LivePane, error) {
 	process, err := l.Managed.ProcessInfo(ctx, intent.Resource.PaneID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if verifyErr := verifyManagedLauncherProcess(process, intent, route); verifyErr != nil {
-		return fmt.Errorf("%w: %w", errManagedLauncherIdentityChanged, verifyErr)
+		return nil, fmt.Errorf("%w: %w", errManagedLauncherIdentityChanged, verifyErr)
 	}
 	panes, err := l.Managed.LivePanes(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !managedIdlePanePresent(intent, panes) {
-		return fmt.Errorf("%w: exact idle root pane is not live", errManagedLauncherIdentityChanged)
+		return nil, fmt.Errorf("%w: exact idle root pane is not live", errManagedLauncherIdentityChanged)
 	}
-	return nil
+	return panes, nil
 }
 
 func managedIdlePanePresent(intent state.LaunchIntent, panes []backend.LivePane) bool {

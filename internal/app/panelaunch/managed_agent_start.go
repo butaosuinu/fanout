@@ -126,7 +126,8 @@ func (l *Launcher) admitManagedLauncher(
 		return err
 	}
 	verifyErr := retryManagedObservation(ctx, *intent, func(observeCtx context.Context) error {
-		return l.verifyManagedIdleLauncher(observeCtx, *intent, route)
+		_, err := l.verifyManagedIdleLauncher(observeCtx, *intent, route)
+		return err
 	})
 	if verifyErr != nil {
 		if errors.Is(verifyErr, errManagedLauncherIdentityChanged) {
