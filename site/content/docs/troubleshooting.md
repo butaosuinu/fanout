@@ -106,7 +106,7 @@ This error belongs to observation of an external [herdr backend]({{< relref "/do
 herdr status --json   # server and session state
 ```
 
-`HERDR_SOCKET_PATH` takes precedence over `HERDR_SESSION`, so a stale socket path can point fanout at the wrong server — unset it if `status` disagrees with what you expect. A no-argument TUI started from a plain shell no longer needs an existing Herdr pane: it creates or adopts fanout's repository-owned session, starts its console shell, and prints the attach command. Run that command from the same shell. CLI issue, Project, plan, and watcher launches use the same owned session.
+`HERDR_SOCKET_PATH` takes precedence over `HERDR_SESSION`, so a stale socket path can point fanout at the wrong server — unset it if `status` disagrees with what you expect. A no-argument TUI started from a plain shell no longer needs an existing Herdr pane: it creates or adopts fanout's repository-owned session, starts its console shell, and enters the session in place (without a terminal it prints the attach command instead). CLI issue, Project, plan, and watcher launches use the same owned session.
 
 ## "unsupported herdr CLI version ..."
 

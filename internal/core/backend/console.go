@@ -6,10 +6,11 @@ package backend
 // fanout can find it again.
 //
 // Absence is the contract, not an omission. A runtime that keeps its sessions
-// across fanout runs has nothing here for fanout to create or attach — it hands
-// out an attach command instead — so it offers no ConsoleHost, and the console
-// enters through that runtime's managed path rather than probing a session it
-// does not own.
+// across fanout runs has nothing here for fanout to create or attach — a
+// terminal enters by exec'ing the runtime's own client (AttachExec), and a
+// caller without a terminal is handed the equivalent attach command to print —
+// so it offers no ConsoleHost, and the console enters through that runtime's
+// managed path rather than probing a session it does not own.
 type ConsoleHost interface {
 	// InsideSession reports whether this process is already running in one of
 	// the runtime's panes. It decides whether the console can take over the

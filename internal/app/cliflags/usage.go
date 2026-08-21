@@ -21,7 +21,8 @@ const usageText = `Usage: fanout
 
 With no arguments, starts fanout's persistent console. A plain-shell tmux run
 creates or attaches a managed tmux session. A plain-shell herdr run bootstraps
-the repository-owned session and console, then prints its attach command.
+the repository-owned session and console, then enters the session in place;
+without a terminal it prints the attach command instead.
 
 With a parent issue or GitHub Projects v2 URL, creates one tmux pane per OPEN
 sub-issue of a parent issue, OR per OPEN item in that Project. Each pane gets a

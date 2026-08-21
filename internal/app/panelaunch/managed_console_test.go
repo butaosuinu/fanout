@@ -5,12 +5,48 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
+
+// attachOnlyManagedRuntime fakes just the attach forms managedConsoleResult
+// consumes; every other ManagedSessionRuntime method panics via the nil embed.
+type attachOnlyManagedRuntime struct {
+	ManagedSessionRuntime
+	attachBase []string
+	attach     backend.AttachExec
+}
+
+func (f *attachOnlyManagedRuntime) AttachForms(base []string) (string, backend.AttachExec, error) {
+	f.attachBase = base
+	return "ATTACH='command'", f.attach, nil
+}
+
+func TestManagedConsoleResultCarriesBothAttachForms(t *testing.T) {
+	attach := backend.AttachExec{
+		Path: "/pinned/client",
+		Argv: []string{"/pinned/client"},
+		Env:  []string{"PATH=/usr/bin"},
+	}
+	owned := &attachOnlyManagedRuntime{attach: attach}
+	caller := []string{"PATH=/usr/bin", "TERM=xterm"}
+	pane := state.Pane{PaneID: "pane-1"}
+	result, err := managedConsoleResult(owned, pane, caller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(owned.attachBase, caller) {
+		t.Fatalf("AttachExec base = %v, want the caller environment %v", owned.attachBase, caller)
+	}
+	want := ManagedConsoleResult{Pane: pane, AttachCommand: "ATTACH='command'", Attach: attach}
+	if !reflect.DeepEqual(result, want) {
+		t.Fatalf("managedConsoleResult() = %+v, want %+v", result, want)
+	}
+}
 
 func TestFindManagedConsolePaneAcrossLinkedWorktrees(t *testing.T) {
 	root, linked := managedConsoleTestWorktrees(t)

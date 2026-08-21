@@ -222,8 +222,9 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   app へ運ぶ迂回も新規 importer の登録なしには通らない。
   `internal/ui` はまだ辺が残るのでルール化していない(burn-down リスト参照)。
 - **runtime ごとの差は capability の有無で表す**: console の入場経路
-  (`ConsoleHost` があれば session を立てて端末を繋ぐ、無ければ owned session の
-  attach コマンドを渡す)、restore の配線(`RestoreOps`)、popup / global
+  (`ConsoleHost` があれば session を立てて端末を繋ぐ、無ければ owned session へ
+  native client を exec して入場し、端末が無ければ attach コマンドを印字する)、
+  restore の配線(`RestoreOps`)、popup / global
   shortcut / viewer focus、pane の中からの自己申告(`AgentStateReporter` /
   `PlanCapture`)はいずれも backend 名の判定ではなく capability の有無で選ぶ。
   launch lane そのものは名前でも capability でもなく backend が宣言する

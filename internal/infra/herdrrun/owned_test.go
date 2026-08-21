@@ -528,6 +528,78 @@ func TestEnsureOwnedCreatesAndIdempotentlyReadoptsSession(t *testing.T) {
 	}
 }
 
+func TestAttachFormsBuildBothLanesFromOneAdmission(t *testing.T) {
+	h := newOwnedHarness(t)
+	command, spec, err := h.session.AttachForms([]string{
+		"PATH=/usr/bin",
+		sessionEnv + "=stale-session",
+		"HERDR_STRAY=1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(spec.Path, h.layout.binaryDir) || !slices.Equal(spec.Argv, []string{spec.Path}) {
+		t.Fatalf("AttachForms() image = %+v", spec)
+	}
+	if slices.Contains(spec.Env, sessionEnv+"=stale-session") || slices.Contains(spec.Env, "HERDR_STRAY=1") {
+		t.Fatalf("AttachForms() kept stale caller routing: %v", spec.Env)
+	}
+	if len(spec.Env) == 0 || spec.Env[0] != "PATH=/usr/bin" {
+		t.Fatalf("AttachForms() dropped the caller environment: %v", spec.Env)
+	}
+	// Both lanes come from the same verified marker: every owned routing value
+	// in the exec image must appear, shell-quoted, in the printed command.
+	for _, entry := range spec.Env[1:] {
+		name, value, _ := strings.Cut(entry, "=")
+		if !strings.Contains(command, name+"="+shellQuote(value)) {
+			t.Fatalf("attach command %q is missing exec value %q", command, entry)
+		}
+	}
+	if !strings.HasSuffix(command, shellQuote(spec.Path)) {
+		t.Fatalf("attach command %q does not end with the exec binary %q", command, spec.Path)
+	}
+}
+
+func TestMergeAttachEnvironment(t *testing.T) {
+	assignments := [][2]string{{"HERDR_SESSION", "owned"}, {"XDG_CONFIG_HOME", "/xdg"}}
+	owned := []string{"HERDR_SESSION=owned", "XDG_CONFIG_HOME=/xdg"}
+	tests := []struct {
+		name string
+		base []string
+		want []string
+	}{
+		{
+			name: "appends owned routing after preserved caller entries",
+			base: []string{"PATH=/usr/bin", "TERM=xterm"},
+			want: append([]string{"PATH=/usr/bin", "TERM=xterm"}, owned...),
+		},
+		{
+			name: "replaces same-named caller entries with owned values",
+			base: []string{"XDG_CONFIG_HOME=/caller", "PATH=/usr/bin"},
+			want: append([]string{"PATH=/usr/bin"}, owned...),
+		},
+		{
+			name: "drops stray caller HERDR_ names outside the assignments",
+			base: []string{"HERDR_ENV=1", "PATH=/usr/bin"},
+			want: append([]string{"PATH=/usr/bin"}, owned...),
+		},
+		{
+			// execve delivers entries without '=' verbatim; the exec image
+			// passes them through the same way pasting the command would.
+			name: "keeps malformed caller entries verbatim",
+			base: []string{"ODDBALL", "PATH=/usr/bin"},
+			want: append([]string{"ODDBALL", "PATH=/usr/bin"}, owned...),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mergeAttachEnvironment(tt.base, assignments); !slices.Equal(got, tt.want) {
+				t.Fatalf("mergeAttachEnvironment(%v) = %v, want %v", tt.base, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOpenOwnedMissingSessionIsReadOnly(t *testing.T) {
 	root := t.TempDir()
 	commonDir := filepath.Join(root, "repo.git")

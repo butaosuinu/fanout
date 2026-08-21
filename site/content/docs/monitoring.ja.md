@@ -29,9 +29,7 @@ fanout   # start the persistent console
 ```
 
 tmux backend では、素のシェルから起動すると fanout 管理の tmux session を作成または attach し、tmux 内から起動すると現在のペインをそのままコンソールにします。
-herdr backend では、素のシェルから起動するとリポジトリの fanout-owned session と console workspace を bootstrap し、attach command を表示します。
-表示された command を実行して console へ入ってください。
-fanout は呼び出し元の shell を残します。
+herdr backend では、素のシェルから起動するとリポジトリの fanout-owned session と console workspace を bootstrap し、そのまま session に入ります(端末がない場合は attach command を表示します)。
 コンソールは `.fanout/state.json` を読み、記録済みペインの issue と PR の状態を定期更新し、各行の worktree には変更量を `+X/-Y`、未 commit の作業の有無を `dirty` / `clean` で示します。
 `RUN` 列には agent の実行状態がグリフで出て(起動ラッパー由来の `●` running・`✓` done に加え、agent hooks が報告すると `◐` working・`◇` plan・`◆` blocked・`○` idle)、detail panel には同じ値が `run=` として出ます。
 マウスや tmux の `prefix` ペイン移動で記録済み tmux ペインへフォーカスすると、TUI の選択行もそのペインに追従します。
