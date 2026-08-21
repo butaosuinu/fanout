@@ -45,6 +45,7 @@ var (
 	execSessionAttach = func(spec backend.AttachExec) error {
 		return syscall.Exec(spec.Path, spec.Argv, spec.Env)
 	}
+	execConsoleShell = syscall.Exec
 )
 
 // consoleRuntime is every capability the resident console's own session entry
@@ -75,7 +76,24 @@ func isTUIRequest(args []string) bool {
 	return len(args) == 0
 }
 
+// isManagedConsoleWorkloadRequest recognizes the reserved token the owned
+// console workload is exec'd with; it runs the same resident console as the
+// no-argument form. The token exists so the pane process is distinguishable
+// from the idle pane launcher, which is the same binary with no arguments.
+func isManagedConsoleWorkloadRequest(args []string) bool {
+	return len(args) > 0 && args[0] == panelaunch.ManagedConsoleWorkloadArg
+}
+
+// cmdTUI wraps the whole resident-console run in the console-shell hand-off:
+// inside the owned console pane every exit — an early environment failure as
+// much as a TUI quit — must land in the operator shell, or the runtime folds
+// the pane and the console row goes stale. Outside that pane the hand-off
+// name is unset and the wrap is a no-op.
 func cmdTUI(commandName string, lg *log.Logger) exitcode.Code {
+	return handoffConsoleShell(runResidentTUI(commandName, lg), lg)
+}
+
+func runResidentTUI(commandName string, lg *log.Logger) exitcode.Code {
 	stateRuntime, err := resolveStateRuntime()
 	if err != nil {
 		lg.Err("%s", err.Error())
@@ -171,6 +189,45 @@ func cmdManagedConsoleTUI(
 		owned,
 		lg,
 	)
+}
+
+// handoffConsoleShell execs the operator shell the console bootstrap recorded
+// in ConsoleShellEnv, so quitting the TUI — an error exit included — leaves a
+// live shell pane instead of ending the pane process, which the runtime would
+// fold and turn the console row stale. The name is stripped from the shell's
+// environment so a fanout started by hand in that shell exits normally. When
+// no hand-off applies or the exec fails, code is returned unchanged.
+func handoffConsoleShell(code exitcode.Code, lg *log.Logger) exitcode.Code {
+	shell := os.Getenv(backend.ConsoleShellEnv)
+	if shell == "" {
+		return code
+	}
+	if err := panelaunch.RunnableConsoleShell(shell); err != nil {
+		lg.Warn("tui: console shell hand-off skipped: %v", err)
+		return code
+	}
+	// The line lands in the pane right above the new shell prompt, so a later
+	// attach that finds a shell here also finds the way back in. FANOUT_BIN
+	// names the pinned binary and survives the hand-off, so the hint works
+	// even when no `fanout` is on the pane's PATH.
+	fmt.Fprintln(lg.Stdout(), `fanout console closed; run "$FANOUT_BIN" here to reopen it`)
+	if err := execConsoleShell(shell, []string{shell}, environmentWithout(backend.ConsoleShellEnv)); err != nil {
+		lg.Warn("tui: console shell hand-off failed: %v", err)
+		return code
+	}
+	panic("unreachable")
+}
+
+func environmentWithout(name string) []string {
+	environment := os.Environ()
+	kept := environment[:0]
+	for _, entry := range environment {
+		if entryName, _, ok := strings.Cut(entry, "="); ok && entryName == name {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
 }
 
 func enterManagedConsole(

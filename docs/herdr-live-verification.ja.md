@@ -377,6 +377,8 @@ docs どおりですが、素の codex ペインは permission 待ちを観測�
 
 ## 再現手順
 
+注: この手順は記録時点(exec attach 導入前)の挙動。現行の無引数 `./fanout-go` は端末ではそのまま owned session に入るため、attach command を印字させるには `./fanout-go | cat` のように非 TTY で実行する。
+
 ```bash
 make build-go
 

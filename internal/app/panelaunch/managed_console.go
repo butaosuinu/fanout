@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/app/agentprocess"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -16,6 +17,13 @@ import (
 )
 
 const ManagedConsoleRuntimeParent = "@console"
+
+// ManagedConsoleWorkloadArg is the reserved argv token the console workload is
+// started with. The pane launcher and the console workload are the same pinned
+// binary, so without it launch verification could not tell an exec'd console
+// TUI apart from the launcher still waiting for its token — the launcher's
+// identity is exactly that binary with an empty argv tail.
+const ManagedConsoleWorkloadArg = "__managed-console"
 
 // ManagedSessionRuntime is the whole owned-session surface the composition root
 // holds: the launch port plus the session-wide operations no single launch
@@ -95,7 +103,7 @@ func ensureManagedConsoleLocked(
 			ManagedSession: route.Session, SocketPath: route.SocketPath,
 		},
 		func(state.LaunchIntent) (*state.LaunchCapsule, error) {
-			return newManagedShellLaunch(owned, route, shellPath, callerEnvironment)
+			return newManagedConsoleLaunch(owned, route, shellPath, callerEnvironment)
 		},
 	)
 	if err != nil {
@@ -105,7 +113,12 @@ func ensureManagedConsoleLocked(
 		return ManagedConsoleResult{}, validationErr
 	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: root}, Managed: owned}
-	live, err := launcher.startManagedAgent(ctx, locked, route, intent, validateManagedShellLaunch, nil, exactManagedShellPane, nil)
+	live, err := launcher.startManagedAgent(
+		ctx, locked, route, intent, validateManagedConsoleLaunch(route), nil, exactManagedShellPane,
+		func(adoptCtx context.Context, _ *state.LockedStore, issued state.LaunchIntent) (backend.LivePane, error) {
+			return launcher.adoptManagedConsolePane(adoptCtx, issued, route, shellPath)
+		},
+	)
 	if err != nil {
 		return ManagedConsoleResult{}, err
 	}
@@ -117,6 +130,26 @@ func ensureManagedConsoleLocked(
 		return ManagedConsoleResult{}, err
 	}
 	return managedConsoleResult(owned, pane, callerEnvironment)
+}
+
+// validateManagedConsoleLaunch admits only a capsule that runs the pinned
+// console TUI. prepareManagedLaunch re-validates the capsule a journal intent
+// saved before issuing its token, and an intent left by an interrupted or
+// pre-upgrade bootstrap can still name the operator shell as the workload —
+// issuing that token would either confirm a bare shell as the console or
+// strand the intent on an identity mismatch, so the stale capsule is refused
+// while the token does not exist yet (shutdown recovery prunes the intent).
+func validateManagedConsoleLaunch(route backend.OwnedLaunchRoute) managedLaunchValidator {
+	return func(launch *state.LaunchCapsule) error {
+		if err := validateManagedShellLaunch(launch); err != nil {
+			return err
+		}
+		if launch.Executable != route.LauncherPath ||
+			!slices.Equal(launch.Args, []string{ManagedConsoleWorkloadArg}) {
+			return fmt.Errorf("saved Herdr console launch does not run the pinned console workload")
+		}
+		return nil
+	}
 }
 
 func validateManagedConsoleIntentRoot(intent state.LaunchIntent, projectRoot string) error {
@@ -326,11 +359,25 @@ func resolveManagedConsoleInputs(projectRoot, shell string) (string, string, err
 	if err != nil {
 		return "", "", fmt.Errorf("canonicalize Herdr console shell: %w", err)
 	}
-	info, err := os.Stat(shell)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return "", "", fmt.Errorf("herdr console shell is not executable: %s", shell)
+	if err := RunnableConsoleShell(shell); err != nil {
+		return "", "", err
 	}
 	return root, filepath.Clean(shell), nil
+}
+
+// RunnableConsoleShell is the one check both ends of the ConsoleShellEnv
+// contract apply: the bootstrap before recording the shell, and the console
+// TUI before exec'ing it on exit — the value crosses a process boundary, so
+// the consumer re-checks rather than trusting the record.
+func RunnableConsoleShell(shell string) error {
+	if !filepath.IsAbs(shell) {
+		return fmt.Errorf("herdr console shell must be an absolute path")
+	}
+	info, err := os.Stat(shell)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("herdr console shell is not executable: %s", shell)
+	}
+	return nil
 }
 
 func verifyManagedConsoleRoute(
@@ -368,6 +415,20 @@ func newManagedShellLaunch(
 	shell string,
 	callerEnvironment []string,
 ) (*state.LaunchCapsule, error) {
+	return newManagedWorkloadLaunch(owned, route, shell, callerEnvironment)
+}
+
+// newManagedWorkloadLaunch is the one capsule builder both interactive lanes
+// share: nonce, filtered workload environment, one-shot capsule, executable.
+// extraEnvironment entries are appended after the filtered environment, so a
+// lane can record contract values (ConsoleShellEnv) the caller filter blocks.
+func newManagedWorkloadLaunch(
+	owned ManagedLaunchRuntime,
+	route backend.OwnedLaunchRoute,
+	executable string,
+	callerEnvironment []string,
+	extraEnvironment ...string,
+) (*state.LaunchCapsule, error) {
 	nonce, err := randomManagedToken()
 	if err != nil {
 		return nil, err
@@ -376,13 +437,86 @@ func newManagedShellLaunch(
 	if err != nil {
 		return nil, err
 	}
+	environment = append(environment, extraEnvironment...)
 	envPath, envCount, err := owned.PrepareWorkloadEnvironment(nonce, environment)
 	if err != nil {
 		return nil, err
 	}
 	return &state.LaunchCapsule{
-		Nonce: nonce, Executable: shell, EnvFilePath: envPath, EnvNameCount: envCount,
+		Nonce: nonce, Executable: executable, EnvFilePath: envPath, EnvNameCount: envCount,
 	}, nil
+}
+
+// newManagedConsoleLaunch records the pinned fanout binary as the console
+// workload, so the attach lands on a running console TUI instead of a bare
+// shell. The operator shell still resolves and rides along as ConsoleShellEnv:
+// the TUI execs it on exit so the pane outlives a quit. The manual shell lane
+// (newManualManagedShellLaunch) keeps launching the shell itself.
+func newManagedConsoleLaunch(
+	owned ManagedLaunchRuntime,
+	route backend.OwnedLaunchRoute,
+	shell string,
+	callerEnvironment []string,
+) (*state.LaunchCapsule, error) {
+	capsule, err := newManagedWorkloadLaunch(
+		owned, route, route.LauncherPath, callerEnvironment,
+		backend.ConsoleShellEnv+"="+shell,
+	)
+	if err != nil {
+		return nil, err
+	}
+	capsule.Args = []string{ManagedConsoleWorkloadArg}
+	return capsule, nil
+}
+
+// adoptManagedConsolePane is the console lane's process gate. Unlike the
+// generic workload wait it also adopts the operator shell the TUI execs on
+// exit: a console TUI that fails during init still leaves a live console pane
+// holding that shell, and treating it as a failed launch would pin the intent
+// on manual cleanup even though the pane is healthy and the next `fanout`
+// inside it reopens the console.
+func (l *Launcher) adoptManagedConsolePane(
+	ctx context.Context,
+	intent state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+	shell string,
+) (backend.LivePane, error) {
+	err := retryManagedObservation(ctx, intent, func(observeCtx context.Context) error {
+		process, err := l.Managed.ProcessInfo(observeCtx, intent.Resource.PaneID)
+		if err != nil {
+			return err
+		}
+		return classifyManagedConsoleProcess(process, intent, route, shell)
+	})
+	if err != nil {
+		return backend.LivePane{}, err
+	}
+	return l.waitForManagedPane(ctx, intent, exactManagedShellPane, "")
+}
+
+// classifyManagedConsoleProcess reports what the console pane runs: nil for a
+// started state (the exec'd console TUI, or the operator shell it hands the
+// pane to on exit), pending while the launcher still waits for its token, and
+// the identity mismatch otherwise.
+func classifyManagedConsoleProcess(
+	process backend.PaneProcessInfo,
+	intent state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+	shell string,
+) error {
+	processErr := verifyManagedAgentProcess(process, intent)
+	if processErr == nil {
+		return nil
+	}
+	if _, err := agentprocess.MatchAgent(process, agentprocess.Identity{
+		WorktreePath: intent.WorktreePath, Executable: shell,
+	}); err == nil {
+		return nil
+	}
+	if verifyManagedLauncherProcess(process, intent, route) == nil {
+		return managedLaunchTransitionPending{}
+	}
+	return processErr
 }
 
 func findManagedConsolePane(projectRoot string, current state.Store) (state.Pane, bool, error) {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,172 @@ type attachOnlyManagedRuntime struct {
 func (f *attachOnlyManagedRuntime) AttachForms(base []string) (string, backend.AttachExec, error) {
 	f.attachBase = base
 	return "ATTACH='command'", f.attach, nil
+}
+
+// capsuleOnlyManagedRuntime fakes just the two environment ports the launch
+// capsule builders consume; every other method panics via the nil embed.
+type capsuleOnlyManagedRuntime struct {
+	ManagedLaunchRuntime
+	prepared []string
+}
+
+func (f *capsuleOnlyManagedRuntime) WorkloadEnvironment(caller []string, fanoutPath string) ([]string, error) {
+	return append(append([]string{}, caller...), "FANOUT_BIN="+fanoutPath), nil
+}
+
+func (f *capsuleOnlyManagedRuntime) PrepareWorkloadEnvironment(nonce string, environment []string) (string, int, error) {
+	f.prepared = append([]string{}, environment...)
+	return "/capsule/env-" + nonce + ".json", len(environment), nil
+}
+
+func TestNewManagedConsoleLaunchRunsPinnedFanoutWithShellHandoff(t *testing.T) {
+	owned := &capsuleOnlyManagedRuntime{}
+	route := backend.OwnedLaunchRoute{LauncherPath: "/owned/launcher/fanout", EmitterPath: "/owned/launcher/fanout"}
+	capsule, err := newManagedConsoleLaunch(owned, route, "/bin/zsh", []string{"PATH=/usr/bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capsule.Executable != route.LauncherPath {
+		t.Fatalf("console capsule executable = %q, want the pinned fanout %q", capsule.Executable, route.LauncherPath)
+	}
+	// The reserved argv token keeps the exec'd TUI distinguishable from the
+	// idle pane launcher, which is the same binary with an empty argv tail.
+	if !reflect.DeepEqual(capsule.Args, []string{ManagedConsoleWorkloadArg}) {
+		t.Fatalf("console capsule args = %v, want the reserved console token", capsule.Args)
+	}
+	last := owned.prepared[len(owned.prepared)-1]
+	if last != backend.ConsoleShellEnv+"=/bin/zsh" {
+		t.Fatalf("console capsule environment tail = %q, want the hand-off shell", last)
+	}
+}
+
+func TestNewManagedShellLaunchKeepsTheOperatorShellWorkload(t *testing.T) {
+	owned := &capsuleOnlyManagedRuntime{}
+	route := backend.OwnedLaunchRoute{LauncherPath: "/owned/launcher/fanout", EmitterPath: "/owned/launcher/fanout"}
+	capsule, err := newManagedShellLaunch(owned, route, "/bin/zsh", []string{"PATH=/usr/bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capsule.Executable != "/bin/zsh" {
+		t.Fatalf("manual shell capsule executable = %q, want /bin/zsh", capsule.Executable)
+	}
+	for _, entry := range owned.prepared {
+		if strings.HasPrefix(entry, backend.ConsoleShellEnv+"=") {
+			t.Fatalf("manual shell capsule recorded a console hand-off: %v", owned.prepared)
+		}
+	}
+}
+
+func TestClassifyManagedConsoleProcessAcceptsTUIAndHandoffShell(t *testing.T) {
+	route := backend.OwnedLaunchRoute{LauncherPath: "/owned/launcher/fanout", EmitterPath: "/owned/launcher/fanout"}
+	intent := state.LaunchIntent{
+		WorktreePath: "/repo",
+		Launch: &state.LaunchCapsule{
+			Executable: route.LauncherPath,
+			Args:       []string{ManagedConsoleWorkloadArg},
+		},
+	}
+	paneProcess := func(executable string, argv []string) backend.PaneProcessInfo {
+		return backend.PaneProcessInfo{
+			ShellPID: 42, ForegroundProcessGroup: 42,
+			ForegroundProcesses: []backend.PaneProcess{{
+				PID: 42, ParentPID: 1, ProcessGroup: 42, Executable: executable,
+				CWD: intent.WorktreePath, Argv0: executable, Argv: argv,
+			}},
+		}
+	}
+	tests := []struct {
+		name    string
+		process backend.PaneProcessInfo
+		want    string // "", "pending", or an error fragment
+	}{
+		{
+			name:    "exec'd console TUI is started",
+			process: paneProcess(route.LauncherPath, []string{ManagedConsoleWorkloadArg}),
+		},
+		{
+			// An init failure hands the pane to the operator shell; the pane is
+			// healthy, so the intent must not fall to manual cleanup.
+			name:    "handed-off operator shell is started",
+			process: paneProcess("/bin/zsh", nil),
+		},
+		{
+			name:    "launcher still waiting for its token is pending",
+			process: paneProcess(route.LauncherPath, nil),
+			want:    "pending",
+		},
+		{
+			name:    "foreign process is a mismatch",
+			process: paneProcess("/usr/bin/vim", nil),
+			want:    "identity does not match",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := classifyManagedConsoleProcess(tt.process, intent, route, "/bin/zsh")
+			switch tt.want {
+			case "":
+				if err != nil {
+					t.Fatalf("classifyManagedConsoleProcess() = %v, want started", err)
+				}
+			case "pending":
+				if !errors.Is(err, managedLaunchTransitionPending{}) {
+					t.Fatalf("classifyManagedConsoleProcess() = %v, want pending", err)
+				}
+			default:
+				if err == nil || !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("classifyManagedConsoleProcess() = %v, want %q", err, tt.want)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateManagedConsoleLaunchRefusesNonConsoleWorkloads(t *testing.T) {
+	route := backend.OwnedLaunchRoute{LauncherPath: "/owned/launcher/fanout", EmitterPath: "/owned/launcher/fanout"}
+	validate := validateManagedConsoleLaunch(route)
+	tests := []struct {
+		name    string
+		launch  *state.LaunchCapsule
+		wantErr string
+	}{
+		{
+			name:   "pinned console workload is admitted",
+			launch: &state.LaunchCapsule{Executable: route.LauncherPath, Args: []string{ManagedConsoleWorkloadArg}},
+		},
+		{
+			// A journal intent saved by a pre-upgrade bootstrap still names the
+			// operator shell; its token must never be issued.
+			name:    "saved operator-shell capsule is refused",
+			launch:  &state.LaunchCapsule{Executable: "/bin/zsh"},
+			wantErr: "does not run the pinned console workload",
+		},
+		{
+			name:    "missing console token is refused",
+			launch:  &state.LaunchCapsule{Executable: route.LauncherPath},
+			wantErr: "does not run the pinned console workload",
+		},
+		{
+			name:    "agent capsule is refused by the shell shape check",
+			launch:  &state.LaunchCapsule{Executable: route.LauncherPath, Args: []string{ManagedConsoleWorkloadArg}, Agent: "claude"},
+			wantErr: "invalid launch capsule",
+		},
+		{name: "nil capsule is refused", wantErr: "invalid launch capsule"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validate(tt.launch)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateManagedConsoleLaunch()(%+v) = %v, want nil", tt.launch, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("validateManagedConsoleLaunch()(%+v) = %v, want %q", tt.launch, err, tt.wantErr)
+			}
+		})
+	}
 }
 
 func TestManagedConsoleResultCarriesBothAttachForms(t *testing.T) {

@@ -104,12 +104,6 @@ func (s *OwnedSession) AttachForms(baseEnvironment []string) (string, corebacken
 	return renderAttachCommand(m, assignments), spec, nil
 }
 
-// AttachCommand is the print-only form of AttachForms.
-func (s *OwnedSession) AttachCommand() (string, error) {
-	command, _, err := s.AttachForms(nil)
-	return command, err
-}
-
 func renderAttachCommand(m ownerMarker, assignments [][2]string) string {
 	parts := make([]string, 0, len(assignments)+1)
 	for _, assignment := range assignments {

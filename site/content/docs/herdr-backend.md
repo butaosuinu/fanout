@@ -103,7 +103,9 @@ export FANOUT_BACKEND=herdr
 fanout
 ```
 
-That starts or adopts the owned session and one repository-root console shell, then replaces the fanout process with the pinned herdr client — the terminal is attached, nothing to copy. The client opens on the session's last selected workspace, so after a CLI fan-out you may land on an agent pane; select the console workspace in the sidebar, then run `fanout` there: herdr sets `HERDR_ENV=1` in that pane, so the TUI console opens in place. Linked worktrees share the one console row.
+That starts or adopts the owned session and one repository-root console workspace, then replaces the fanout process with the pinned herdr client — the terminal is attached, nothing to copy. The console pane runs fanout's TUI console directly, so entering the session lands you in the console. The client opens on the session's last selected workspace, so after a CLI fan-out you may land on an agent pane first; the console workspace is the sidebar row without an issue. Quitting the TUI drops the pane to your shell — run `fanout` there to reopen it (herdr sets `HERDR_ENV=1` in the pane); a session reused after a quit keeps that shell until you do. Linked worktrees share the one console row.
+
+Like the detached tmux console, the console TUI stays resident in the owned session while nobody is attached: it keeps refreshing state and GitHub, and a watcher enabled in user config keeps running.
 
 Without a terminal — stdin or stdout is a pipe, as in scripts and CI — fanout prints the attach command as the last stdout line instead of attaching. A failed exec falls back to the same print, so the command is always there to run by hand.
 
@@ -155,7 +157,7 @@ fanout herdr shutdown   # stop an empty owned server
 
 `restart` is for a server that died. fanout replaces it only after proving the old supervisor process and its sockets are gone — a generation that is still running refuses with `herdr owned server generation is still live` — then starts a fresh one, replaces an owned `config.toml` written by an older fanout, and re-binds the recorded rows under the rules above. Rerunning either verb after a failure is safe: fanout records what it set out to do and confirms that outcome rather than repeating the work.
 
-After a fanout update, a launch may refuse with `owned Herdr launcher predates the current fanout`. Remove child rows with `--close` / `--cleanup`, exit the console and coordinator shells, then run `fanout herdr shutdown`. `restart` still does not replace a live generation; `shutdown` folds the empty session and its stale scaffold rows so the next launch can create a generation with the current launcher.
+After a fanout update, a launch may refuse with `owned Herdr launcher predates the current fanout`. Remove child rows with `--close` / `--cleanup`, quit the console TUI and exit its shell along with any coordinator shells, then run `fanout herdr shutdown`. `restart` still does not replace a live generation; `shutdown` folds the empty session and its stale scaffold rows so the next launch can create a generation with the current launcher.
 
 `shutdown` also recovers a `realized` intent left by a failed launch. It prunes the intent only when an owned-workspace snapshot has no workspace with the recorded label; worktree and resume intents additionally require the checkout to be absent. If a fanout-created branch remains, shutdown compare-and-deletes it only at the saved base SHA before pruning the intent. A failed snapshot, a matching workspace, a remaining checkout, a moved branch, or a branch observation failure keeps the intent and refuses shutdown.
 

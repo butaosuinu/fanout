@@ -368,8 +368,12 @@ func filterCallerEnvironment(caller []string) ([]string, error) {
 	return kept, nil
 }
 
+// The console-shell hand-off name is caller-blocked but capsule-legal: the
+// console workload records it deliberately, and a child launched from that
+// console must not inherit it or the child's TUI would exec a shell on exit.
 func blockedCallerEnvironmentName(name string) bool {
-	return blockedWorkloadEnvironmentName(name) || strings.HasPrefix(name, "FANOUT_EMITTER_")
+	return blockedWorkloadEnvironmentName(name) || strings.HasPrefix(name, "FANOUT_EMITTER_") ||
+		name == corebackend.ConsoleShellEnv
 }
 
 func blockedWorkloadEnvironmentName(name string) bool {

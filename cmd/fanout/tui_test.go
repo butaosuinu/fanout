@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,33 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/tmuxbackend"
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
+
+func TestMain(m *testing.M) {
+	// A developer shell inside a fanout console exports the hand-off name;
+	// left set, any cmdTUI-driving test would exec that shell mid-run through
+	// the real seam instead of finishing the package.
+	os.Unsetenv(backend.ConsoleShellEnv)
+	os.Exit(m.Run())
+}
+
+func TestIsManagedConsoleWorkloadRequestMatchesOnlyTheReservedToken(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "reserved console token", args: []string{panelaunch.ManagedConsoleWorkloadArg}, want: true},
+		{name: "no arguments is the plain TUI form", args: nil},
+		{name: "issue argument is not a console workload", args: []string{"123"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isManagedConsoleWorkloadRequest(tt.args); got != tt.want {
+				t.Fatalf("isManagedConsoleWorkloadRequest(%v) = %t, want %t", tt.args, got, tt.want)
+			}
+		})
+	}
+}
 
 // stubManagedConsoleBootstrap pins the session/console bootstrap seams to a
 // fixed result and restores them when the test ends.
@@ -142,6 +170,80 @@ func TestEnterHerdrTUISessionExecsAttachOnTerminal(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	if got := lines[len(lines)-1]; got != "HERDR_SESSION='owned-session' '/owned/herdr'" {
 		t.Fatalf("fallback attach line = %q, want bare command", got)
+	}
+}
+
+func TestHandoffConsoleShellExecsRecordedShellWithoutTheHandoffName(t *testing.T) {
+	shell := filepath.Join(t.TempDir(), "shell")
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(backend.ConsoleShellEnv, shell)
+	t.Setenv("HANDOFF_KEEP", "1")
+	originalExec := execConsoleShell
+	t.Cleanup(func() { execConsoleShell = originalExec })
+	var gotPath string
+	var gotArgv, gotEnv []string
+	execConsoleShell = func(path string, argv, env []string) error {
+		gotPath, gotArgv, gotEnv = path, argv, env
+		return errors.New("exec refused by test")
+	}
+	var stdout, stderr bytes.Buffer
+	code := handoffConsoleShell(exitcode.OK, log.NewWith(&stdout, &stderr, false))
+	if code != exitcode.OK || gotPath != shell || !reflect.DeepEqual(gotArgv, []string{shell}) {
+		t.Fatalf("handoffConsoleShell() = %d path=%q argv=%v", code, gotPath, gotArgv)
+	}
+	for _, entry := range gotEnv {
+		if strings.HasPrefix(entry, backend.ConsoleShellEnv+"=") {
+			t.Fatalf("hand-off environment still names the hand-off shell: %v", gotEnv)
+		}
+	}
+	if !slices.Contains(gotEnv, "HANDOFF_KEEP=1") {
+		t.Fatal("hand-off environment dropped an unrelated entry")
+	}
+	// The exec only returns on failure, and a failed hand-off keeps the code.
+	if !strings.Contains(stderr.String(), "exec refused by test") {
+		t.Fatalf("hand-off failure warning missing: %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `run "$FANOUT_BIN" here to reopen`) {
+		t.Fatalf("reopen hint missing from pane output: %q", stdout.String())
+	}
+}
+
+func TestHandoffConsoleShellSkipsWithoutARunnableRecordedShell(t *testing.T) {
+	tests := []struct {
+		name  string
+		shell func(t *testing.T) string
+	}{
+		{name: "no recorded shell", shell: func(*testing.T) string { return "" }},
+		{name: "relative path", shell: func(*testing.T) string { return "sh" }},
+		{name: "missing file", shell: func(t *testing.T) string {
+			t.Helper()
+			return filepath.Join(t.TempDir(), "gone")
+		}},
+		{name: "not executable", shell: func(t *testing.T) string {
+			t.Helper()
+			path := filepath.Join(t.TempDir(), "flat")
+			if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return path
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(backend.ConsoleShellEnv, tt.shell(t))
+			originalExec := execConsoleShell
+			t.Cleanup(func() { execConsoleShell = originalExec })
+			execConsoleShell = func(string, []string, []string) error {
+				t.Fatal("hand-off exec must not run")
+				return nil
+			}
+			var stdout, stderr bytes.Buffer
+			if code := handoffConsoleShell(exitcode.Env, log.NewWith(&stdout, &stderr, false)); code != exitcode.Env {
+				t.Fatalf("handoffConsoleShell() = %d, want unchanged exitcode.Env", code)
+			}
+		})
 	}
 }
 

@@ -129,7 +129,7 @@ herdr status --json   # server と session の状態
 
 `HERDR_SOCKET_PATH` は `HERDR_SESSION` より優先されるため、古い socket path が残っていると fanout が別の server を見に行きます。`status` の結果が想定と合わないときは unset してください。
 素のシェルから引数なしの TUI を起動する場合、既存の Herdr pane は不要です。
-fanout はリポジトリの owned session を作成または再採用し、console shell を起動して、そのまま session に入ります(端末がない場合は attach command を表示します)。
+fanout はリポジトリの owned session を作成または再採用し、fanout の TUI が動く console workspace を起動して、そのまま session に入ります(端末がない場合は attach command を表示します)。
 CLI の issue、Project、plan、watcher launch も同じ owned session を使います。
 
 ## "unsupported herdr CLI version ..."

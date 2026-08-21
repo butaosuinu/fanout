@@ -147,10 +147,13 @@ export FANOUT_BACKEND=herdr
 fanout
 ```
 
-この実行で owned session と repository root の console shell が 1 つ起動または再採用され、fanout プロセスは pin 済みの herdr client に置き換わります。端末は attach 済みで、コピーするものはありません。
-client は session が最後に選択していた workspace を開くため、CLI ファンアウト後は agent ペインに着地することがあります。sidebar で console workspace を選んでから、その中で `fanout` を実行してください。
-そのペインでは herdr が `HERDR_ENV=1` を設定するため、TUI コンソールがそのまま開きます。
+この実行で owned session と repository root の console workspace が 1 つ起動または再採用され、fanout プロセスは pin 済みの herdr client に置き換わります。端末は attach 済みで、コピーするものはありません。
+console ペインでは fanout の TUI コンソールが最初から動いているので、session に入ればそのままコンソールに着地します。
+client は session が最後に選択していた workspace を開くため、CLI ファンアウト後は agent ペインに先に着地することがあります。console workspace は sidebar の issue を持たない行です。
+TUI を quit するとペインはシェルに落ちます。そのシェルで `fanout` を実行すれば再び開きます(ペインには herdr が `HERDR_ENV=1` を設定しています)。quit 後に再利用した session は、再実行するまでシェルのままです。
 linked worktree 間では同じ console 行を共有します。
+
+detached の tmux コンソールと同じく、console TUI は誰も attach していない間も owned session に常駐します。state と GitHub の更新は続き、user config で有効化した watcher も動き続けます。
 
 端末がない場合 — stdin か stdout がパイプ、つまりスクリプトや CI — は attach せず、stdout の最終行に attach command を表示します。exec に失敗したときも同じ表示に落ちるので、手で実行する command は常に残ります。
 
@@ -211,7 +214,7 @@ fanout herdr shutdown   # 空の owned server を停止する
 その後は新しい世代を起動し、旧版の fanout が書いた owned `config.toml` を置き換え、記録済みの行を上記のルールで再束縛します。
 失敗した後にどちらの verb を再実行しても安全です。fanout は何をしようとしたかを記録しており、作業を繰り返すのではなくその結果を確認します。
 
-fanout の更新後に launch が `owned Herdr launcher predates the current fanout` で拒否されたら、子の行を `--close` / `--cleanup` で片づけ、console / coordinator の shell を終了してから `fanout herdr shutdown` を実行します。
+fanout の更新後に launch が `owned Herdr launcher predates the current fanout` で拒否されたら、子の行を `--close` / `--cleanup` で片づけ、console の TUI を quit してそのシェルを終了し、coordinator の shell も終了してから `fanout herdr shutdown` を実行します。
 `restart` は生存世代を置き換えません。`shutdown` が空の session と古い足場行を畳み、次の launch が現行 launcher を使う新世代を作ります。
 
 失敗した launch の `realized` intent も `shutdown` が回収します。owned workspace の snapshot で記録済み label が無いことを確認し、worktree / resume では checkout の不在も確認します。
