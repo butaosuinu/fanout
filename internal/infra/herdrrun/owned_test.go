@@ -115,13 +115,9 @@ func TestNewOwnedSupervisorCommandRelaysDashboardAuthenticationByAlias(t *testin
 	t.Setenv(dashboardGHTokenEnv, "gh-secret")
 	t.Setenv(dashboardGitHubTokenEnv, "github-secret")
 	cmd, authentication := newOwnedSupervisorCommand("/fanout", "/runtime/owner.json", "nonce", "start")
-	for _, want := range []string{
-		dashboardRelayGHTokenEnv + "=gh-secret",
-		dashboardRelayGitHubTokenEnv + "=github-secret",
-	} {
-		if !slices.Contains(cmd.Env, want) {
-			t.Fatalf("supervisor environment %q does not contain %q", cmd.Env, want)
-		}
+	wantEnvironment := []string{dashboardRelayTokenEnv + "=gh-secret"}
+	if !slices.Equal(cmd.Env, wantEnvironment) {
+		t.Fatalf("supervisor environment = %q, want %q", cmd.Env, wantEnvironment)
 	}
 	for _, entry := range cmd.Env {
 		if strings.HasPrefix(entry, dashboardGHTokenEnv+"=") ||

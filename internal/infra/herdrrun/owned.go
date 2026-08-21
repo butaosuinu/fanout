@@ -181,29 +181,28 @@ type controlPlaneEnvironment struct {
 }
 
 type ownerMarker struct {
-	SchemaID                   string `json:"schema_id"`
-	GitCommonDir               string `json:"git_common_dir"`
-	GitCommonDevice            uint64 `json:"git_common_device"`
-	GitCommonInode             uint64 `json:"git_common_inode"`
-	OwnerNonce                 string `json:"owner_nonce"`
-	Session                    string `json:"session"`
-	RuntimeDir                 string `json:"runtime_dir"`
-	SocketPath                 string `json:"socket_path"`
-	ClientSocketPath           string `json:"client_socket_path"`
-	BinaryPath                 string `json:"binary_path"`
-	BinarySHA256               string `json:"binary_sha256"`
-	BinaryVersion              string `json:"binary_version"`
-	SupervisorPID              int    `json:"supervisor_pid"`
-	SupervisorStartToken       string `json:"supervisor_start_token"`
-	XDGConfigHome              string `json:"xdg_config_home"`
-	XDGStateHome               string `json:"xdg_state_home"`
-	XDGDataHome                string `json:"xdg_data_home"`
-	XDGCacheHome               string `json:"xdg_cache_home"`
-	ConfigPath                 string `json:"config_path"`
-	LauncherPath               string `json:"launcher_path"`
-	LauncherSHA256             string `json:"launcher_sha256"`
-	DashboardGHTokenSHA256     string `json:"dashboard_gh_token_sha256,omitempty"`
-	DashboardGitHubTokenSHA256 string `json:"dashboard_github_token_sha256,omitempty"`
+	SchemaID             string `json:"schema_id"`
+	GitCommonDir         string `json:"git_common_dir"`
+	GitCommonDevice      uint64 `json:"git_common_device"`
+	GitCommonInode       uint64 `json:"git_common_inode"`
+	OwnerNonce           string `json:"owner_nonce"`
+	Session              string `json:"session"`
+	RuntimeDir           string `json:"runtime_dir"`
+	SocketPath           string `json:"socket_path"`
+	ClientSocketPath     string `json:"client_socket_path"`
+	BinaryPath           string `json:"binary_path"`
+	BinarySHA256         string `json:"binary_sha256"`
+	BinaryVersion        string `json:"binary_version"`
+	SupervisorPID        int    `json:"supervisor_pid"`
+	SupervisorStartToken string `json:"supervisor_start_token"`
+	XDGConfigHome        string `json:"xdg_config_home"`
+	XDGStateHome         string `json:"xdg_state_home"`
+	XDGDataHome          string `json:"xdg_data_home"`
+	XDGCacheHome         string `json:"xdg_cache_home"`
+	ConfigPath           string `json:"config_path"`
+	LauncherPath         string `json:"launcher_path"`
+	LauncherSHA256       string `json:"launcher_sha256"`
+	DashboardTokenSHA256 string `json:"dashboard_token_sha256,omitempty"`
 }
 
 type supervisorLease struct {
@@ -612,8 +611,7 @@ func claimOwnedSession(
 		XDGDataHome: layout.xdgDataHome, XDGCacheHome: layout.xdgCacheHome,
 		ConfigPath:   layout.configPath,
 		LauncherPath: launcher.path, LauncherSHA256: launcher.sha256,
-		DashboardGHTokenSHA256:     started.dashboardAuthentication.ghTokenSHA256,
-		DashboardGitHubTokenSHA256: started.dashboardAuthentication.githubTokenSHA256,
+		DashboardTokenSHA256: started.dashboardAuthentication.tokenSHA256,
 	}
 	if err := writeMarker(layout.markerPath, marker); err != nil {
 		return marker, started, err

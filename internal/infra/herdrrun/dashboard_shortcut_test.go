@@ -56,6 +56,21 @@ func TestDashboardDescriptorKeepsOnlyBrowserContext(t *testing.T) {
 	}
 }
 
+func TestDashboardAuthenticationUsesGitHubTokenFallback(t *testing.T) {
+	caller := []string{dashboardGitHubTokenEnv + "=fallback"}
+	supervisor := dashboardSupervisorEnvironment(caller)
+	if want := []string{dashboardRelayTokenEnv + "=fallback"}; !slices.Equal(supervisor, want) {
+		t.Fatalf("supervisor authentication environment = %q, want %q", supervisor, want)
+	}
+	if want := []string{dashboardGHTokenEnv + "=fallback"}; !slices.Equal(dashboardOpenAuthenticationEnvironment(supervisor), want) {
+		t.Fatalf("dashboard authentication environment = %q, want %q",
+			dashboardOpenAuthenticationEnvironment(supervisor), want)
+	}
+	if dashboardAuthenticationFromCaller(caller) != dashboardAuthenticationFromSupervisor(supervisor) {
+		t.Fatal("GITHUB_TOKEN fallback changed authentication identity during relay")
+	}
+}
+
 func TestDashboardDescriptorRejectsNULInEnvironment(t *testing.T) {
 	layout, pinned := newDashboardShortcutLayout(t)
 	descriptor := testDashboardDescriptor(layout, pinned, state.Path("/owner"))
@@ -75,8 +90,7 @@ func TestRunDashboardOpenUsesValidatedPinnedBinaryAndCleanEnvironment(t *testing
 	t.Setenv("HERDR_SOCKET_PATH", layout.socketPath)
 	t.Setenv("HERDR_ACTIVE_PANE_ID", "pane-1")
 	t.Setenv("HERDR_ACTIVE_WORKSPACE_ID", "workspace-1")
-	t.Setenv(dashboardRelayGHTokenEnv, "gh-secret")
-	t.Setenv(dashboardRelayGitHubTokenEnv, "github-secret")
+	t.Setenv(dashboardRelayTokenEnv, "effective-secret")
 	originalExec, originalExecutable := dashboardExec, dashboardExecutable
 	t.Cleanup(func() { dashboardExec, dashboardExecutable = originalExec, originalExecutable })
 	dashboardExecutable = func() (string, error) { return pinned.path, nil }
@@ -97,7 +111,7 @@ func TestRunDashboardOpenUsesValidatedPinnedBinaryAndCleanEnvironment(t *testing
 	}
 	for _, want := range []string{
 		"HOME=/home/operator", "PATH=/usr/bin:/bin", "DISPLAY=:1",
-		"GH_TOKEN=gh-secret", "GITHUB_TOKEN=github-secret",
+		"GH_TOKEN=effective-secret",
 		"FANOUT_BACKEND=herdr", "FANOUT_BIN=" + pinned.path,
 		"FANOUT_STATE_PATH=" + state.Path("/owner"),
 	} {
@@ -107,7 +121,7 @@ func TestRunDashboardOpenUsesValidatedPinnedBinaryAndCleanEnvironment(t *testing
 	}
 	for _, blocked := range []string{
 		"FANOUT_HERDR_PANE_LAUNCHER=", "HERDR_CONFIG_PATH=",
-		dashboardRelayGHTokenEnv + "=", dashboardRelayGitHubTokenEnv + "=",
+		dashboardRelayTokenEnv + "=", "GITHUB_TOKEN=",
 	} {
 		for _, entry := range gotEnv {
 			if strings.HasPrefix(entry, blocked) {
@@ -134,10 +148,13 @@ func TestRunDashboardOpenRejectsActiveRouteMismatch(t *testing.T) {
 }
 
 func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
-	environment := []string{
-		"HOME=/home/operator", "PATH=/usr/bin", "GH_TOKEN=secret", "DISPLAY=:4",
+	serverEnvironment := []string{
+		"GH_TOKEN=secret", "GITHUB_TOKEN=shadowed",
 	}
-	h := newOwnedHarnessWithDashboardEnvironment(t, environment)
+	environment := []string{
+		"HOME=/home/operator", "PATH=/usr/bin", "GITHUB_TOKEN=secret", "DISPLAY=:4",
+	}
+	h := newOwnedHarnessWithDashboardEnvironment(t, serverEnvironment)
 	h.fake.respond = func(args []string) ([]byte, error) {
 		if slices.Equal(args, []string{"server", "reload-config"}) {
 			return []byte(appliedDashboardReloadEnvelope), nil
@@ -172,17 +189,17 @@ func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
 	)); validateErr != nil {
 		t.Fatalf("enabled config: %v", validateErr)
 	}
-	if slices.Contains(descriptor.Environment, "GH_TOKEN=secret") {
-		t.Fatalf("descriptor retained GH_TOKEN: %+v", descriptor)
+	if slices.Contains(descriptor.Environment, "GITHUB_TOKEN=secret") {
+		t.Fatalf("descriptor retained GITHUB_TOKEN: %+v", descriptor)
 	}
 	marker, found, err := readOwnerMarker(h.layout.markerPath)
-	if err != nil || !found || marker.DashboardGHTokenSHA256 != dashboardAuthenticationSHA256("secret") {
+	if err != nil || !found || marker.DashboardTokenSHA256 != dashboardAuthenticationSHA256("secret") {
 		t.Fatalf("dashboard authentication marker = (%+v, %t, %v)", marker, found, err)
 	}
 	for _, path := range []string{h.layout.markerPath, h.layout.configPath, h.layout.dashboardDescriptorPath} {
 		contents, readErr := os.ReadFile(path)
-		if readErr != nil || bytes.Contains(contents, []byte(`"GH_TOKEN":"secret"`)) ||
-			bytes.Contains(contents, []byte("GH_TOKEN=secret")) {
+		if readErr != nil || bytes.Contains(contents, []byte("GH_TOKEN=secret")) ||
+			bytes.Contains(contents, []byte("GITHUB_TOKEN=secret")) {
 			t.Fatalf("dashboard authentication persisted in %s: err=%v", path, readErr)
 		}
 	}
@@ -208,10 +225,16 @@ func TestSyncDashboardShortcutMigratesLiveConfigAndHonorsDisable(t *testing.T) {
 	}
 }
 
-func TestSyncDashboardShortcutDisablesBindingWhenAuthenticationNeedsRecreate(t *testing.T) {
-	h := newOwnedHarness(t)
+func TestSyncDashboardShortcutRemovesDescriptorBeforeAmbiguousAuthenticationDisable(t *testing.T) {
+	serverEnvironment := []string{"GH_TOKEN=preferred", "GITHUB_TOKEN=fallback"}
+	h := newOwnedHarnessWithDashboardEnvironment(t, serverEnvironment)
+	reloads := 0
 	h.fake.respond = func(args []string) ([]byte, error) {
 		if slices.Equal(args, []string{"server", "reload-config"}) {
+			reloads++
+			if reloads == 2 {
+				return nil, context.DeadlineExceeded
+			}
 			return []byte(appliedDashboardReloadEnvelope), nil
 		}
 		return nil, errors.New("unexpected command")
@@ -223,21 +246,21 @@ func TestSyncDashboardShortcutDisablesBindingWhenAuthenticationNeedsRecreate(t *
 	options := corebackend.DashboardShortcutOptions{
 		Enabled: true, FanoutBin: executable,
 		Owners:      []corebackend.DashboardShortcutOwner{testDashboardShortcutOwner(h, "pane-1", "workspace-1", state.Path(h.checkout))},
-		Environment: []string{"PATH=/usr/bin"},
+		Environment: append([]string{"PATH=/usr/bin"}, serverEnvironment...),
 	}
 	if err := h.session.Backend().SyncDashboardShortcut(options); err != nil {
 		t.Fatal(err)
 	}
-	options.Environment = append(options.Environment, "GH_TOKEN=rotated")
+	options.Environment = []string{"PATH=/usr/bin", "GITHUB_TOKEN=fallback"}
 	err = h.session.Backend().SyncDashboardShortcut(options)
-	if err == nil || !strings.Contains(err.Error(), "fanout herdr shutdown") {
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "fanout herdr shutdown") {
 		t.Fatalf("authentication mismatch error = %v", err)
 	}
 	if err := validatePrivateContents(h.layout.configPath, ownedConfigContents(h.session.LauncherPath)); err != nil {
 		t.Fatalf("disabled config: %v", err)
 	}
 	if _, err := os.Lstat(h.layout.dashboardDescriptorPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("authentication mismatch retained descriptor: %v", err)
+		t.Fatalf("ambiguous authentication disable retained descriptor: %v", err)
 	}
 	if got := countRecordedCommand(h.fake.commands, []string{"server", "reload-config"}); got != 2 {
 		t.Fatalf("reload-config calls = %d, want 2", got)

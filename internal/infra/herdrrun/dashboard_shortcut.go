@@ -22,13 +22,12 @@ import (
 const (
 	// dashboardDescriptorSchemaID is read by the stable helper path embedded in
 	// config.toml. Keep v1 readable across upgrades even if later fields appear.
-	dashboardDescriptorSchemaID  = "fanout.herdr-dashboard-launcher.v1"
-	dashboardDescriptorName      = "dashboard-launcher.json"
-	dashboardDefaultPath         = "/usr/local/bin:/usr/bin:/bin"
-	dashboardGHTokenEnv          = "GH_TOKEN"
-	dashboardGitHubTokenEnv      = "GITHUB_TOKEN"
-	dashboardRelayGHTokenEnv     = "FANOUT_HERDR_DASHBOARD_GH_TOKEN"
-	dashboardRelayGitHubTokenEnv = "FANOUT_HERDR_DASHBOARD_GITHUB_TOKEN"
+	dashboardDescriptorSchemaID = "fanout.herdr-dashboard-launcher.v1"
+	dashboardDescriptorName     = "dashboard-launcher.json"
+	dashboardDefaultPath        = "/usr/local/bin:/usr/bin:/bin"
+	dashboardGHTokenEnv         = "GH_TOKEN"
+	dashboardGitHubTokenEnv     = "GITHUB_TOKEN"
+	dashboardRelayTokenEnv      = "FANOUT_HERDR_DASHBOARD_TOKEN"
 	// DashboardOpenCommand is frozen because an older pinned launcher may keep
 	// serving an owned session after the installed fanout binary is upgraded.
 	DashboardOpenCommand = "__herdr-dashboard-open"
@@ -67,8 +66,7 @@ type dashboardOwner struct {
 }
 
 type dashboardAuthentication struct {
-	ghTokenSHA256     string
-	githubTokenSHA256 string
+	tokenSHA256 string
 }
 
 type dashboardReloadEnvelope struct {
@@ -108,16 +106,27 @@ func (b *Backend) SyncDashboardShortcut(options corebackend.DashboardShortcutOpt
 	if authErr != nil {
 		options.Enabled = false
 	}
-	if err := applyDashboardShortcutConfig(layout, admission.marker, options); err != nil {
+	if err := stageDashboardShortcutConfig(layout, admission.marker, options); err != nil {
 		return errors.Join(authErr, err)
 	}
 	if err := b.reloadDashboardShortcutConfig(ctx, probed); err != nil {
 		return errors.Join(authErr, err)
 	}
+	return authErr
+}
+
+func stageDashboardShortcutConfig(
+	layout ownedLayout,
+	marker ownerMarker,
+	options corebackend.DashboardShortcutOptions,
+) error {
+	if err := applyDashboardShortcutConfig(layout, marker, options); err != nil {
+		return err
+	}
 	if options.Enabled {
 		return nil
 	}
-	return errors.Join(authErr, removeDashboardDescriptor(layout))
+	return removeDashboardDescriptor(layout)
 }
 
 func applyDashboardShortcutConfig(
@@ -254,17 +263,22 @@ func dashboardEnvironmentValues(environment []string) map[string]string {
 func dashboardAuthenticationFromCaller(environment []string) dashboardAuthentication {
 	values := dashboardEnvironmentValues(environment)
 	return dashboardAuthentication{
-		ghTokenSHA256:     dashboardAuthenticationSHA256(values[dashboardGHTokenEnv]),
-		githubTokenSHA256: dashboardAuthenticationSHA256(values[dashboardGitHubTokenEnv]),
+		tokenSHA256: dashboardAuthenticationSHA256(dashboardEffectiveToken(values)),
 	}
 }
 
 func dashboardAuthenticationFromSupervisor(environment []string) dashboardAuthentication {
 	values := dashboardEnvironmentValues(environment)
 	return dashboardAuthentication{
-		ghTokenSHA256:     dashboardAuthenticationSHA256(values[dashboardRelayGHTokenEnv]),
-		githubTokenSHA256: dashboardAuthenticationSHA256(values[dashboardRelayGitHubTokenEnv]),
+		tokenSHA256: dashboardAuthenticationSHA256(values[dashboardRelayTokenEnv]),
 	}
+}
+
+func dashboardEffectiveToken(values map[string]string) string {
+	if token := values[dashboardGHTokenEnv]; token != "" {
+		return token
+	}
+	return values[dashboardGitHubTokenEnv]
 }
 
 func dashboardAuthenticationSHA256(value string) string {
@@ -276,33 +290,24 @@ func dashboardAuthenticationSHA256(value string) string {
 
 func dashboardSupervisorEnvironment(environment []string) []string {
 	values := dashboardEnvironmentValues(environment)
-	return dashboardAuthenticationEnvironment(values, dashboardGHTokenEnv, dashboardGitHubTokenEnv,
-		dashboardRelayGHTokenEnv, dashboardRelayGitHubTokenEnv)
+	return dashboardTokenEnvironment(dashboardEffectiveToken(values), dashboardRelayTokenEnv)
 }
 
 func dashboardInheritedAuthenticationEnvironment(environment []string) []string {
 	values := dashboardEnvironmentValues(environment)
-	return dashboardAuthenticationEnvironment(values, dashboardRelayGHTokenEnv, dashboardRelayGitHubTokenEnv,
-		dashboardRelayGHTokenEnv, dashboardRelayGitHubTokenEnv)
+	return dashboardTokenEnvironment(values[dashboardRelayTokenEnv], dashboardRelayTokenEnv)
 }
 
 func dashboardOpenAuthenticationEnvironment(environment []string) []string {
 	values := dashboardEnvironmentValues(environment)
-	return dashboardAuthenticationEnvironment(values, dashboardRelayGHTokenEnv, dashboardRelayGitHubTokenEnv,
-		dashboardGHTokenEnv, dashboardGitHubTokenEnv)
+	return dashboardTokenEnvironment(values[dashboardRelayTokenEnv], dashboardGHTokenEnv)
 }
 
-func dashboardAuthenticationEnvironment(
-	values map[string]string,
-	ghSource, githubSource, ghTarget, githubTarget string,
-) []string {
-	result := make([]string, 0, 2)
-	for _, item := range [][2]string{{ghSource, ghTarget}, {githubSource, githubTarget}} {
-		if value := values[item[0]]; value != "" {
-			result = append(result, item[1]+"="+value)
-		}
+func dashboardTokenEnvironment(token, name string) []string {
+	if token == "" {
+		return nil
 	}
-	return result
+	return []string{name + "=" + token}
 }
 
 func validateDashboardAuthentication(marker ownerMarker, options corebackend.DashboardShortcutOptions) error {
@@ -310,8 +315,7 @@ func validateDashboardAuthentication(marker ownerMarker, options corebackend.Das
 		return nil
 	}
 	caller := dashboardAuthenticationFromCaller(options.Environment)
-	if caller.ghTokenSHA256 != "" && caller.ghTokenSHA256 != marker.DashboardGHTokenSHA256 ||
-		caller.githubTokenSHA256 != "" && caller.githubTokenSHA256 != marker.DashboardGitHubTokenSHA256 {
+	if caller.tokenSHA256 != "" && caller.tokenSHA256 != marker.DashboardTokenSHA256 {
 		return fmt.Errorf("environment-backed GitHub authentication is not available to the owned Herdr server; close or clean up its rows, run fanout herdr shutdown, then relaunch before enabling F12")
 	}
 	return nil
