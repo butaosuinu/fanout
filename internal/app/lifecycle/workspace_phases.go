@@ -41,6 +41,9 @@ func recoverWorkspaceCleanup(
 	if intent.Status == state.IntentIssued && intent.CleanupPhase == state.CleanupReopen {
 		return recoverIssuedReopen(ctx, opts, journal, runtime, intent)
 	}
+	if intent.Status == state.IntentManualCleanupRequired && isLegacyDirtyWorktreeRejection(intent) {
+		return replanCurrentWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent)
+	}
 	observation, err := observeWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
 	if err != nil {
 		return intent, err

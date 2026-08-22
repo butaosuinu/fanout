@@ -27,15 +27,18 @@ type fakeHerdrLifecycleRuntime struct {
 	openErr                  error
 	removeErr                error
 	closeErr                 error
+	observeErr               error
+	observeErrAtCall         int
 	observeAfterMutationErr  error
 	keepWorkspaceAfterRemove bool
 	mutationDispatched       bool
 
-	verifyCalls int
-	setupCalls  int
-	openCalls   int
-	removeCalls int
-	closeCalls  int
+	verifyCalls  int
+	setupCalls   int
+	openCalls    int
+	removeCalls  int
+	closeCalls   int
+	observeCalls int
 }
 
 func (f *fakeHerdrLifecycleRuntime) VerifyOwned(context.Context) error {
@@ -52,6 +55,10 @@ func (f *fakeHerdrLifecycleRuntime) VerifyWorktreeSetupPolicy(context.Context) e
 }
 
 func (f *fakeHerdrLifecycleRuntime) ObserveWorkspaces(context.Context) ([]backend.WorkspaceObservation, error) {
+	f.observeCalls++
+	if f.observeErrAtCall > 0 && f.observeErrAtCall == f.observeCalls {
+		return nil, f.observeErr
+	}
 	if f.mutationDispatched && f.observeAfterMutationErr != nil {
 		return nil, f.observeAfterMutationErr
 	}
@@ -676,12 +683,81 @@ func TestHerdrClosePreservesUserChangesBeforeMutation(t *testing.T) {
 
 	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "tracked.txt")
 	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "preserve tracked work")
+	runtime.workspaces = []backend.WorkspaceObservation{movedHerdrWorkspace(fixture, "w-moved")}
 	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
 		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
 	}
 	if runtime.removeCalls != 1 {
 		t.Fatalf("retry cleanup remove calls = %d, want 1", runtime.removeCalls)
 	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseReplanRejectsDuplicateWorkspaceLabels(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "tracked.txt")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "preserve tracked work")
+	moved := movedHerdrWorkspace(fixture, "w-moved")
+	duplicate := movedHerdrWorkspace(fixture, "w-duplicate")
+	runtime.workspaces = []backend.WorkspaceObservation{moved, duplicate}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+		t.Fatalf("duplicate-label cleanup calls = remove %d/close %d, want 0/0", runtime.removeCalls, runtime.closeCalls)
+	}
+	assertHerdrLifecyclePreserved(t, fixture)
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
+}
+
+func TestHerdrCloseRetriesMovedWorkspaceAfterReplanObservationFailure(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "tracked.txt")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "preserve tracked work")
+	runtime.workspaces = []backend.WorkspaceObservation{movedHerdrWorkspace(fixture, "w-moved")}
+	runtime.observeErr = errors.New("observation temporarily unavailable")
+	runtime.observeErrAtCall = runtime.observeCalls + 3
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.removeCalls != 0 {
+		t.Fatalf("failed observation issued %d remove(s)", runtime.removeCalls)
+	}
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
+	runtime.observeErrAtCall = 0
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("second retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.removeCalls != 1 {
+		t.Fatalf("second retry cleanup remove calls = %d, want 1", runtime.removeCalls)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
 }
 
 func TestHerdrCloseReportsIgnoredOnlyCheckoutBeforeMutation(t *testing.T) {
@@ -733,7 +809,7 @@ func TestHerdrCloseReplansLegacyDirtyManualIntent(t *testing.T) {
 	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "preserve work before cleanup")
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
-		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+		workspaces:  []backend.WorkspaceObservation{movedHerdrWorkspace(fixture, "w-moved")},
 	}
 
 	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
@@ -1259,6 +1335,16 @@ func foreignHerdrWorkspaceAtSameCheckout(fixture herdrLifecycleFixture) backend.
 	return herdrLifecycleWorkspace(
 		"w-foreign",
 		"foreign-label",
+		fixture.worktreePath,
+		fixture.pane.RepoKey,
+		fixture.pane.RepoRoot,
+	)
+}
+
+func movedHerdrWorkspace(fixture herdrLifecycleFixture, id string) backend.WorkspaceObservation {
+	return herdrLifecycleWorkspace(
+		id,
+		fixture.workspace.Label,
 		fixture.worktreePath,
 		fixture.pane.RepoKey,
 		fixture.pane.RepoRoot,

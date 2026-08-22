@@ -180,16 +180,13 @@ func workspaceClosePreflightIdentity(
 	}
 	resource = intent.Resource
 	reopened := intent.Status == state.IntentIssued && intent.CleanupPhase == state.CleanupReopen
-	if reopened {
-		predicate := workspaceLabelPredicate(
-			intent.WorkspaceLabel,
-			intent.WorktreePath,
-			intent.Resource.RepoKey,
-			intent.Resource.RepoRoot,
-		)
-		return resource, predicate, true, true, nil
-	}
-	return resource, workspacePredicate(resource), false, true, nil
+	predicate := workspaceLabelPredicate(
+		intent.WorkspaceLabel,
+		intent.WorktreePath,
+		intent.Resource.RepoKey,
+		intent.Resource.RepoRoot,
+	)
+	return resource, predicate, reopened, true, nil
 }
 
 func closeWorkspaceWorktree(
@@ -485,10 +482,10 @@ func cleanupResourceMatchesPane(intent state.LaunchIntent, pane state.Pane) bool
 		filepath.Clean(current.RepoRoot) != filepath.Clean(saved.RepoRoot) {
 		return false
 	}
-	// A checkout-only recovery creates a replacement workspace. Its stable
-	// nonce and Git provenance remain bound to the original row, while its
-	// runtime IDs are intentionally replaced and recorded in the intent.
-	return intent.Coordinator != (state.RuntimeResource{}) || current == saved
+	// Reopen recovery and Herdr-side moves can replace the workspace and its
+	// subordinate runtime IDs. A terminal-only mismatch remains invalid.
+	return intent.Coordinator != (state.RuntimeResource{}) || current == saved ||
+		current.WorkspaceID != saved.WorkspaceID
 }
 
 func driveWorkspaceCleanup(
@@ -552,7 +549,19 @@ func replanCurrentWorkspaceCleanup(
 	pane state.Pane,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
-	observation, err := observeWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
+	predicate := workspaceLabelPredicate(
+		intent.WorkspaceLabel,
+		intent.WorktreePath,
+		intent.Resource.RepoKey,
+		intent.Resource.RepoRoot,
+	)
+	observation, err := observeWorkspaceCleanupMatching(
+		ctx,
+		runtime,
+		opts.ProjectRoot,
+		intent.Resource,
+		predicate,
+	)
 	if err != nil {
 		return intent, err
 	}
@@ -630,6 +639,11 @@ func replanObservedWorkspaceCleanup(
 ) (state.LaunchIntent, error) {
 	if workspaceCleanupAbsent(observation) {
 		return realizeWorkspaceCleanup(journal, intent)
+	}
+	if observation.workspace != nil && observation.workspace.WorkspaceID != intent.Resource.WorkspaceID {
+		intent.Resource.WorkspaceID = observation.workspace.WorkspaceID
+		intent.Resource.PaneID = observation.workspace.Pane.Pane
+		intent.Resource.TerminalID = observation.workspace.TerminalID
 	}
 	checkoutOnly := observation.workspace == nil &&
 		(!observation.checkout.PathAbsent || observation.checkout.Registered)
