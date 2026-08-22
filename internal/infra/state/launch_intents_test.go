@@ -733,6 +733,62 @@ func TestHerdrControlValidatesEmitterLaunchFields(t *testing.T) {
 	}
 }
 
+func TestLoadLaunchJournalDiscardsLegacyClaudePendingTelemetry(t *testing.T) {
+	repo := newLaunchJournalRepo(t)
+	intent := testWorktreeIntent(repo, "425", 426, "legacy-telemetry")
+	intent.Status = IntentRealized
+	intent.Resource = RuntimeResource{
+		WorkspaceID: "w2", Label: intent.WorkspaceLabel,
+		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: intent.WorktreePath,
+		RepoKey: filepath.Join(repo, ".git"), RepoRoot: repo,
+	}
+	session := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "legacy-session",
+	}
+	intent.Launch = &LaunchCapsule{
+		Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
+		PendingReportedState: "working", PendingReportedSeq: 1, PendingAgentSession: &session,
+		Agent: "claude", AgentName: "fanout-agent",
+		Executable: "/opt/bin/claude", Args: []string{"prompt"},
+		EnvFilePath: "/tmp/fanout-env.json", EnvNameCount: 1,
+	}
+	project, journal := lockLaunchJournalForTest(t, repo)
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(errors.Join(err, project.Unlock()))
+	}
+	if err := project.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := LaunchJournalPath(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sequenceField = `"pendingReportedSequence": 1,` + "\n"
+	legacy := strings.Replace(string(contents), sequenceField, "", 1)
+	if legacy == string(contents) {
+		t.Fatal("saved journal lacks the pending sequence fixture")
+	}
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found := loaded.FindIntent(intent.ID)
+	if !found || got.Launch.PendingReportedState != "" ||
+		got.Launch.PendingReportedSeq != 0 || got.Launch.PendingAgentSession != nil {
+		t.Fatalf("legacy pending telemetry = (%+v, %t), want discarded", got, found)
+	}
+}
+
 func testCoordinatorIntent(repo, parent string) LaunchIntent {
 	ownerProjectRoot, err := IntentOwnerProjectRoot(parent, repo)
 	if err != nil {

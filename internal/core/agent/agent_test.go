@@ -93,12 +93,19 @@ func TestBuildClaudeHookSettingsJSONKeepsSessionEndSynchronous(t *testing.T) {
 
 func TestClaudeStateCommandAllocatesSequenceBeforeBackgrounding(t *testing.T) {
 	got := claudeStateCommand("emit working", "next sequence", true)
-	want := `__fanout_event_sequence="$(next sequence)" && { { emit working "$__fanout_event_sequence" || true; } & }`
+	want := `__fanout_event_sequence="$(next sequence)" && { { emit working "$__fanout_event_sequence" || true; } & } || true`
 	if got != want {
 		t.Fatalf("claudeStateCommand() = %q, want %q", got, want)
 	}
 	if out, err := exec.Command("sh", "-n", "-c", got).CombinedOutput(); err != nil {
 		t.Fatalf("sequenced hook is not valid POSIX shell: %v: %s", err, out)
+	}
+}
+
+func TestClaudeStateCommandIgnoresSequenceFailure(t *testing.T) {
+	command := claudeStateCommand("exit 7", "false", true)
+	if out, err := exec.Command("sh", "-c", command).CombinedOutput(); err != nil {
+		t.Fatalf("sequence failure escaped best-effort hook: %v: %s", err, out)
 	}
 }
 

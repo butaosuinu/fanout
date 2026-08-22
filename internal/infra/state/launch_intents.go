@@ -483,11 +483,36 @@ func loadLaunchJournal(path string) (LaunchJournal, error) {
 	if raw.Intents == nil {
 		return LaunchJournal{}, fmt.Errorf("validate Herdr intents %s: journal is missing intents", path)
 	}
-	store := LaunchJournal{SchemaVersion: raw.SchemaVersion, Intents: *raw.Intents}
+	store := migrateUnsequencedClaudeTelemetry(raw.SchemaVersion, *raw.Intents)
 	if err := validateLaunchJournal(store); err != nil {
 		return LaunchJournal{}, fmt.Errorf("validate Herdr intents %s: %w", path, err)
 	}
 	return store, nil
+}
+
+// Sequence was added to the v1 journal after pending Claude telemetry already
+// existed. Its absence is indistinguishable from malformed new telemetry, so
+// discard that non-authoritative snapshot instead of rejecting recovery.
+func migrateUnsequencedClaudeTelemetry(schemaVersion int, intents []LaunchIntent) LaunchJournal {
+	store := LaunchJournal{SchemaVersion: schemaVersion, Intents: intents}
+	for i := range intents {
+		launch := intents[i].Launch
+		if !validLegacyClaudePendingTelemetry(launch) {
+			continue
+		}
+		launch.PendingReportedState = ""
+		launch.PendingAgentSession = nil
+	}
+	return store
+}
+
+func validLegacyClaudePendingTelemetry(launch *LaunchCapsule) bool {
+	if launch == nil || launch.Agent != "claude" || launch.PendingReportedSeq != 0 ||
+		!telemetry.ValidNonce(launch.EmitterNonce) {
+		return false
+	}
+	providerState, ok := backend.ParseAgentState(launch.PendingReportedState)
+	return ok && providerState != backend.AgentRunning
 }
 
 func emptyLaunchJournal() LaunchJournal {
