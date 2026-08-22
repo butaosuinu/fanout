@@ -31,8 +31,11 @@ type OwnedPaneIdentity struct {
 	RepoKey        string
 	WorktreePath   string
 	CurrentPath    string
-	AgentID        string
-	AgentSession   *AgentSessionRef
+	// Agent is the recorded provider. It pins which conversations may be
+	// admitted for this pane, so it is set wherever AgentID is.
+	Agent        string
+	AgentID      string
+	AgentSession *AgentSessionRef
 }
 
 // NudgeTarget binds one no-wait agent prompt to the route, pane, terminal,
@@ -42,6 +45,7 @@ type NudgeTarget struct {
 	SessionID    string
 	SocketPath   string
 	TerminalID   string
+	Agent        string
 	AgentID      string
 	AgentSession *AgentSessionRef
 }

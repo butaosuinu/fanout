@@ -314,6 +314,53 @@ func TestOwnedHerdrPaneIdentitySeparatesGenericCWDFromWorktreeProvenance(t *test
 	}
 }
 
+// A shell row records the shell marker in Agent but owns no agent record, and
+// the runtime reports no provider for its pane. Projecting the marker as a
+// provider makes every owned comparison refuse the row, which would break
+// focus, peek, and close for console and TUI-created shells.
+func TestOwnedHerdrPaneIdentityLeavesShellRowsAgentLess(t *testing.T) {
+	base := state.Pane{
+		Backend: backend.Herdr, PaneID: "w1:p1", WorkspaceID: "w1",
+		WorkspaceLabel: "owned-label", TerminalID: "term-1",
+		SessionID: "owned", SocketPath: "/tmp/owned.sock",
+		WorktreePath: "/repo",
+	}
+	tests := []struct {
+		name string
+		pane state.Pane
+		want string
+	}{
+		{
+			name: "shell row",
+			pane: func() state.Pane {
+				p := base
+				p.Kind, p.Agent = state.PaneKindShell, state.PaneKindShell
+				return p
+			}(),
+		},
+		{
+			name: "agent row keeps its provider",
+			pane: func() state.Pane {
+				p := base
+				p.Agent, p.AgentID = "claude", "fanout-agent"
+				return p
+			}(),
+			want: "claude",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			identity, err := managedPaneIdentity(tt.pane)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if identity.Agent != tt.want {
+				t.Fatalf("identity.Agent = %q, want %q", identity.Agent, tt.want)
+			}
+		})
+	}
+}
+
 func TestTUIAgentOrDefault(t *testing.T) {
 	for _, tc := range []struct {
 		name string

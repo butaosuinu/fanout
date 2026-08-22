@@ -293,7 +293,7 @@ integration は SessionStart hook から `pane.report_agent_session` を送る)�
 fanout はこれを呼びません。ところが pane launcher の
 `workloadExecEnvironment` (`internal/infra/herdrrun/launcher.go:97-116`) が
 `HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` を渡すのは、shell pane と
-`directCodexIntegrationLaunch` に限られます。claude の workload はこの 3 つを
+当時の `directCodexIntegrationLaunch` に限られます。claude の workload はこの 3 つを
 持たずに起動するので、integration が socket に到達できず session を報告できません。
 実測でも herdr 0.8.2 は claude ペインに `agent_session: null` を返し続けました。
 結果として claude 行は `herdrAgentId` だけの片側 identity のまま固定されます。
@@ -309,6 +309,71 @@ TUI の Enter / `o` / `Z`、launch 直後の自動 focus がすべて claude 行
 直す場所は herdr 側ではなく launch environment です。claude の workload にも
 socket 系の env を渡せば integration が session を報告し、
 `bindLateAgentSession` が遅れて束縛して focus が通るようになります。
+
+以下は事後の修正メモで、上の実測記録の一部ではありません。grant 条件を direct
+codex から direct agent へ広げました (`directAgentIntegrationLaunch`)。hook が
+必要とするのは `HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` の 3 つだけで、
+偽の unix socket を立てて `~/.claude/hooks/herdr-agent-state.sh` を直接叩き、
+3 つが揃ったときだけ `source: "herdr:claude"` の `pane.report_agent_session` が
+飛ぶことを確認しました。hook 自体は `~/.claude/` にあり、owned session が隔離する
+XDG root の外なので移設は要りません。attach で起動した agent は coordinator
+workspace で動き、この grant の対象外のままです
+([#732](https://github.com/butaosuinu/fanout/issues/732))。
+
+session を束縛すると `/clear` で 2 つ問題が出るので同時に直しました。実測は
+使い捨て clone (`/private/tmp`) の owned session で取り、merge base の binary で
+対照実験もしています。
+
+1 つ目は conversation です。行が conversation を保存すると以後は完全一致が
+要求されていました (`docs/herdr-runtime-backend-spike.ja.md`)。claude の `/clear`
+は同じ pane で session id を変えるので (実測 `dd7e7d27-…` → `632a4605-…`)、その
+一致は破れ、focus だけでなく peek・`--close`・`--cleanup`・telemetry まで恒久的に
+止まります (telemetry は `invalidateFinalRowTelemetry` が emitter nonce を回し、
+live agent は古い nonce のままなので二度と一致しません)。conversation を fence から
+観測値へ格下げし、同じ runtime が同じ provider 向けに発行した別 ref への差し替え
+だけを受理するようにしました (`AgentSessionAdmits`)。
+
+2 つ目は agent record の名前です。socket を渡すと herdr は session の再開を知り、
+agent を匿名で登録し直すため、fanout が付けた名前が消えます (実測
+`fanout-8908a57bd82cde38fdcc22a9` → `null`)。grant 無しの merge base では同じ
+`/clear` でも名前は残るので、これは grant が引き起こす変化です。
+
+名前が消えると `AgentID` を比べる全ゲートが行を拒否します。ここで効くのは
+「行を stale にしない」ことです。TUI の `canFocus` は `stale` を弾くので
+(`internal/ui/tui/paneview.go`)、行が stale になった時点で focus も peek も
+そもそも提供されず、修復の機会が来ません。
+
+そこで名前の有無を観測値として明示的に運びます。`LivePane.AgentNamed` は
+runtime が record 自身の名前を持つかを表し、`AgentID` の provider fallback
+(launch 直後、rename 前の agent を見つけるのに要る) と区別できるようにします。
+名前を持たない record は、route・terminal・checkout・provider が完全一致し、
+保存名が `ManagedAgentName` の形である限り「この行の record」として受理します
+(`unnamedAgentRecord`)。そのうえで **mutation のときだけ** 名前を付け直します
+(`restoreOwnedAgentName`)。read 経路は付け直しません。dashboard は peek を GET で
+出しており、GET は何も変異させないという契約があるためです。
+
+実測値 (使い捨て clone の owned session、herdr 0.8.2):
+
+| 確認 | 結果 |
+|---|---|
+| claude workload の env | `HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` の 3 つのみ |
+| herdr の session mapping | `{source: herdr:claude, agent: claude, kind: id}` |
+| launch | 成功 (`exactManagedLaunchPane` が一致) |
+| 新規行の focus | `focused w2:p1` |
+| `/clear` で起きること | session `849e46f4-…` → `37f5b6fa-…`、`name` → `null` |
+| `/clear` 後の行の表示 | `runtimeState="live"` (stale にならない) |
+| `/clear` 後の peek | 成功。かつ rename は発行されない (`agentNamed=false` のまま) |
+| `/clear` 後の focus | 成功。名前が `fanout-ceed6f8c646e039e192a8daa` へ復帰 |
+| `/clear` 後の再束縛 | poll 経路で新しい session へ追随 |
+
+codex 側の同じ問題も併せて解消します。ただし direct Codex は telemetry を出さない
+ので、TUI / dashboard を常駐させない headless 運用では再束縛が届きません
+([#733](https://github.com/butaosuinu/fanout/issues/733))。`AgentID` 自体の強度は
+[#734](https://github.com/butaosuinu/fanout/issues/734) で別途扱います。
+
+この検証中に、fanout 管理下の herdr ペインでは ambient な `FANOUT_BACKEND` /
+`HERDR_ENV` が `cmd/fanout` の TUI テストに漏れて `make check` が落ちることも
+判明しました ([#731](https://github.com/butaosuinu/fanout/issues/731))。
 
 #### `--close` / `--cleanup` が herdr レーンで worktree を消せない — [#721](https://github.com/butaosuinu/fanout/issues/721)
 

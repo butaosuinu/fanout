@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/butaosuinu/fanout/internal/core/naming"
 )
 
 // PaneRowKey is the persisted identity of the row a binding was projected
@@ -187,13 +189,37 @@ func (b PaneBinding) agentMatchesLive(live LivePane, cfg matchConfig) bool {
 	}
 	same := []bool{
 		liveAgentPresent(live), b.AgentID != "", b.observedAgentMatches(live),
-		boundAgentSessionMatches(b.AgentSession, live.AgentSession, b.Agent),
+		AgentSessionAdmits(b.Agent, b.AgentSession, live.AgentSession),
 	}
 	return !slices.Contains(same, false)
 }
 
 func (b PaneBinding) observedAgentMatches(live LivePane) bool {
-	return live.AgentPresent && live.AgentProvider == b.Agent && live.AgentID == b.AgentID
+	return live.AgentPresent && live.AgentProvider == b.Agent &&
+		AgentRecordMatches(live.AgentID, live.AgentNamed, b.AgentID)
+}
+
+// AgentRecordMatches reports whether the observed agent record is the one the
+// row recorded. It admits the recorded name, plus the one shape that is this
+// row's record without carrying it: the runtime holds no name of its own, and
+// the row recorded a name fanout minted.
+//
+// A provider that restarts its conversation in place makes the runtime
+// re-register the agent anonymously, so reading that as a different agent would
+// strand the row — stale in the display, refused by every gate, and with its
+// telemetry invalidated — for the rest of the pane's life. An anonymous record
+// is not another agent: the route, terminal, checkout, and provider around it
+// are still compared exactly, and only the launch that owns the pane runs in it.
+// fanout re-asserts the name the next time it mutates the pane.
+//
+// Every gate that compares an agent record goes through here, so the display,
+// the owned operations, telemetry, and the prompt response all admit exactly
+// the same set.
+func AgentRecordMatches(observedAgentID string, observedNamed bool, recordedAgentID string) bool {
+	if observedAgentID == recordedAgentID {
+		return true
+	}
+	return !observedNamed && naming.IsManagedAgentName(recordedAgentID)
 }
 
 // checkoutMatchesLive keeps worktree provenance separate from the fallback
@@ -257,10 +283,25 @@ func SameAgentSession(left, right *AgentSessionRef) bool {
 	return *left == *right
 }
 
-func boundAgentSessionMatches(recorded, live *AgentSessionRef, provider string) bool {
+// AgentSessionAdmits reports whether a row recording `recorded` for `provider`
+// may still act on a pane now reporting `live`.
+//
+// The conversation is evidence about a pane, not the fence on it. A provider
+// replaces its own conversation id while the pane, terminal, agent record, and
+// launch stay put — Claude's /clear and Codex's /new both do — so freezing the
+// first observed id would lock the row out of focus, peek, close, and cleanup
+// for the life of that pane, with no way back. What fences these rows is
+// everything around the conversation: route, terminal, checkout, and the
+// per-launch AgentID, none of which another launch reproduces.
+//
+// Both sides are pinned to provider by name rather than checked for internal
+// consistency, so a row cannot be acted on through a reference issued for a
+// different provider — including the window before it has bound one, where
+// there is no recorded reference to compare against. A row with no provider
+// admits no conversation at all, which is what keeps a shell pane free of one.
+func AgentSessionAdmits(provider string, recorded, live *AgentSessionRef) bool {
 	if recorded == nil {
-		return live == nil
+		return live == nil || ExpectedAgentSession(live, provider)
 	}
-	return ExpectedAgentSession(recorded, provider) && ExpectedAgentSession(live, provider) &&
-		SameAgentSession(recorded, live)
+	return ExpectedAgentSession(recorded, provider) && ExpectedAgentSession(live, provider)
 }

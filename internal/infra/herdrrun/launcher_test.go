@@ -47,47 +47,125 @@ func TestWorkloadEnvironmentRejectsDuplicateNames(t *testing.T) {
 	}
 }
 
-func TestWorkloadExecEnvironmentRoutesDirectCodexIntegration(t *testing.T) {
+// The owned socket reaches a workload only where an installed Herdr agent
+// integration can use it to report the provider session; every other launch
+// keeps the capsule environment untouched.
+func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 	request := paneLauncherRequest{
 		session: "owned-session", socketPath: "/owned/herdr.sock",
 		workspaceID: "w1", paneID: "w1:p1",
 	}
 	base := []string{"PATH=/bin", "FANOUT_BACKEND=herdr"}
-	shell := state.LaunchIntent{Launch: &state.LaunchCapsule{}}
-	got := workloadExecEnvironment(request, shell, append([]string(nil), base...))
-	wantSuffix := []string{
+	shellRoute := []string{
 		"HERDR_ENV=1", "HERDR_SESSION=owned-session", "HERDR_SOCKET_PATH=/owned/herdr.sock",
 		"HERDR_WORKSPACE_ID=w1", "HERDR_PANE_ID=w1:p1",
 	}
-	if !slices.Equal(got[len(base):], wantSuffix) {
-		t.Fatalf("shell route environment = %q, want suffix %q", got, wantSuffix)
-	}
-
-	agentIntent := state.LaunchIntent{
-		Kind: state.IntentWorktree, Launch: &state.LaunchCapsule{Agent: "codex"},
-	}
-	agentEnv := workloadExecEnvironment(request, agentIntent, append([]string(nil), base...))
-	wantAgentSuffix := []string{
+	integrationRoute := []string{
 		"HERDR_ENV=1", "HERDR_SOCKET_PATH=/owned/herdr.sock", "HERDR_PANE_ID=w1:p1",
 	}
-	if !slices.Equal(agentEnv[len(base):], wantAgentSuffix) {
-		t.Fatalf("agent integration environment = %q, want suffix %q", agentEnv, wantAgentSuffix)
-	}
-	for _, entry := range agentEnv {
-		if entry == "HERDR_SESSION=owned-session" || entry == "HERDR_WORKSPACE_ID=w1" {
-			t.Fatalf("agent environment exposes unrelated route fields: %q", agentEnv)
-		}
-	}
-	for name, intent := range map[string]state.LaunchIntent{
-		"attached": {Kind: state.IntentCoordinator, Launch: &state.LaunchCapsule{Agent: "codex"}},
-		"plan": {
-			Kind:   state.IntentWorktree,
-			Launch: &state.LaunchCapsule{Agent: "codex", CodexPlanStatusPath: "/runtime/plan.json"},
+	tests := []struct {
+		name   string
+		intent state.LaunchIntent
+		want   []string
+	}{
+		{
+			name:   "shell pane carries the whole owned route",
+			intent: state.LaunchIntent{Launch: &state.LaunchCapsule{}},
+			want:   shellRoute,
 		},
-	} {
-		if got := workloadExecEnvironment(request, intent, append([]string(nil), base...)); !slices.Equal(got, base) {
-			t.Fatalf("%s environment = %q, want %q", name, got, base)
-		}
+		{
+			name: "direct claude carries the integration route only",
+			intent: state.LaunchIntent{
+				Kind: state.IntentWorktree, Launch: &state.LaunchCapsule{Agent: "claude"},
+			},
+			want: integrationRoute,
+		},
+		{
+			name: "direct codex carries the integration route only",
+			intent: state.LaunchIntent{
+				Kind: state.IntentWorktree, Launch: &state.LaunchCapsule{Agent: "codex"},
+			},
+			want: integrationRoute,
+		},
+		{
+			name: "resumed codex carries the integration route only",
+			intent: state.LaunchIntent{
+				Kind: state.IntentResume, Launch: &state.LaunchCapsule{Agent: "codex"},
+			},
+			want: integrationRoute,
+		},
+		{
+			// An attached agent runs in the coordinator workspace, which the
+			// grant has never covered for any provider.
+			name: "attached claude carries nothing",
+			intent: state.LaunchIntent{
+				Kind: state.IntentCoordinator, Launch: &state.LaunchCapsule{Agent: "claude"},
+			},
+		},
+		{
+			name: "attached codex carries nothing",
+			intent: state.LaunchIntent{
+				Kind: state.IntentCoordinator, Launch: &state.LaunchCapsule{Agent: "codex"},
+			},
+		},
+		{
+			// The Plan Mode and team controllers drive codex through fanout
+			// instead of exec-ing its CLI, so no integration hook runs there.
+			name: "codex plan controller carries nothing",
+			intent: state.LaunchIntent{
+				Kind:   state.IntentWorktree,
+				Launch: &state.LaunchCapsule{Agent: "codex", CodexPlanStatusPath: "/runtime/plan.json"},
+			},
+		},
+		{
+			name: "codex team controller carries nothing",
+			intent: state.LaunchIntent{
+				Kind:   state.IntentWorktree,
+				Launch: &state.LaunchCapsule{Agent: "codex", CodexTeamStatusPath: "/runtime/team.json"},
+			},
+		},
+		{
+			name: "resumed claude carries the integration route only",
+			intent: state.LaunchIntent{
+				Kind: state.IntentResume, Launch: &state.LaunchCapsule{Agent: "claude"},
+			},
+			want: integrationRoute,
+		},
+		{
+			// The controller exclusion is checked before the agent allowlist, so
+			// a claude capsule carrying one is excluded the same way codex is.
+			name: "claude plan controller carries nothing",
+			intent: state.LaunchIntent{
+				Kind:   state.IntentWorktree,
+				Launch: &state.LaunchCapsule{Agent: "claude", CodexPlanStatusPath: "/runtime/plan.json"},
+			},
+		},
+		{
+			name: "claude team controller carries nothing",
+			intent: state.LaunchIntent{
+				Kind:   state.IntentWorktree,
+				Launch: &state.LaunchCapsule{Agent: "claude", CodexTeamStatusPath: "/runtime/team.json"},
+			},
+		},
+		{
+			// opencode's integration is not verified against this launch path.
+			name: "opencode carries nothing",
+			intent: state.LaunchIntent{
+				Kind: state.IntentWorktree, Launch: &state.LaunchCapsule{Agent: "opencode"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := append(append([]string(nil), base...), tt.want...)
+			got := workloadExecEnvironment(request, tt.intent, append([]string(nil), base...))
+			if !slices.Equal(got, want) {
+				t.Fatalf(
+					"workloadExecEnvironment(kind=%q, agent=%q) = %q, want %q",
+					tt.intent.Kind, tt.intent.Launch.Agent, got, want,
+				)
+			}
+		})
 	}
 }
 

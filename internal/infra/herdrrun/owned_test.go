@@ -363,6 +363,7 @@ func (h *ownedHarness) target() corebackend.OwnedPaneIdentity {
 				Ref: pane.Ref, SessionID: pane.SessionID, SocketPath: pane.SocketPath,
 				WorkspaceLabel: h.nonce, TerminalID: pane.TerminalID, RepoKey: pane.RepoKey,
 				WorktreePath: pane.WorktreePath, CurrentPath: pane.CurrentPath,
+				Agent:   pane.AgentProvider,
 				AgentID: pane.AgentID, AgentSession: cloneAgentSession(pane.AgentSession),
 			}
 		}
@@ -416,17 +417,19 @@ func agentPromptResponse(target corebackend.OwnedPaneIdentity, mutate func(*agen
 	focused := false
 	revision := uint64(3)
 	name := target.AgentID
-	agentName := ""
+	// The runtime names the provider on every agent record, whether or not it
+	// is holding a conversation for it.
+	provider := target.Agent
 	var session *agentSessionJSON
 	if target.AgentSession != nil {
-		agentName = target.AgentSession.Agent
+		sessionAgent := target.AgentSession.Agent
 		source := target.AgentSession.Source
 		kind := target.AgentSession.Kind
 		value := target.AgentSession.Value
-		session = &agentSessionJSON{Source: &source, Agent: &agentName, Kind: &kind, Value: &value}
+		session = &agentSessionJSON{Source: &source, Agent: &sessionAgent, Kind: &kind, Value: &value}
 	}
 	agent := agentJSON{
-		TerminalID: target.TerminalID, Name: &name, Agent: &agentName, AgentStatus: "working",
+		TerminalID: target.TerminalID, Name: &name, Agent: &provider, AgentStatus: "working",
 		WorkspaceID: target.Ref.Workspace, TabID: "w2:t1", PaneID: target.Ref.Pane,
 		Focused: &focused, Revision: &revision,
 		AgentSession: session,
@@ -455,7 +458,7 @@ func TestOwnedSessionNudgeAllowsUnreportedAgentSession(t *testing.T) {
 	}
 	nudgeTarget := corebackend.NudgeTarget{
 		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
-		TerminalID: target.TerminalID, AgentID: target.AgentID,
+		TerminalID: target.TerminalID, Agent: target.Agent, AgentID: target.AgentID,
 	}
 	if err := h.session.Nudge(context.Background(), nudgeTarget, "nudge"); err != nil {
 		t.Fatal(err)
@@ -473,7 +476,7 @@ func TestPreparedNudgeIssuesOnlyPromptAfterPreparation(t *testing.T) {
 	}
 	nudgeTarget := corebackend.NudgeTarget{
 		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
-		TerminalID: target.TerminalID, AgentID: target.AgentID, AgentSession: target.AgentSession,
+		TerminalID: target.TerminalID, Agent: target.Agent, AgentID: target.AgentID, AgentSession: target.AgentSession,
 	}
 	beforePreparation := len(h.fake.commands)
 	prompt, err := h.session.PrepareNudge(context.Background(), nudgeTarget, "nudge")
@@ -1196,7 +1199,7 @@ func TestBoundOwnedBackendUses075PaneTargetedPrimitives(t *testing.T) {
 	}
 	nudgeTarget := corebackend.NudgeTarget{
 		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
-		TerminalID: target.TerminalID, AgentID: target.AgentID, AgentSession: target.AgentSession,
+		TerminalID: target.TerminalID, Agent: target.Agent, AgentID: target.AgentID, AgentSession: target.AgentSession,
 	}
 	if err := h.session.Nudge(context.Background(), nudgeTarget, "nudge"); err != nil {
 		t.Fatal(err)

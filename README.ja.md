@@ -79,7 +79,9 @@ Claude/Codex 連携ファイルを配置します。バイナリのみのイン�
 (stable herdr 0.7.5 以上が必要で、tmux は不要)。issue / Project / plan /
 watcher の launch、TUI の launch / focus / peek、`--merge` / `--close` /
 `--cleanup`、`--team` のメッセージングは使えます。対話 send、restore、plan
-capture は使えません。
+capture は使えません。focus には `herdr integration install claude` / `codex`
+も必要です。照合する agent session を報告するのは、このコマンドが agent 設定へ
+書き込む hook だからです。
 
 ## クイックスタート
 

@@ -43,6 +43,23 @@ func ManagedAgentName(gitCommonDir, rowKey, launchNonce string) string {
 	return managedSessionPrefix + hex.EncodeToString(hash[:])[:managedAgentHashLength]
 }
 
+// IsManagedAgentName reports whether name has the exact shape ManagedAgentName
+// mints. It is the gate on re-asserting a dropped agent name: fanout may
+// restore only a name it issued itself, never one an operator or another tool
+// chose. ManagedSessionName shares the prefix but never the shape, because its
+// remainder starts with a literal "repo-".
+func IsManagedAgentName(name string) bool {
+	hash, ok := strings.CutPrefix(name, managedSessionPrefix)
+	if !ok || len(hash) != managedAgentHashLength {
+		return false
+	}
+	return strings.IndexFunc(hash, notLowerHex) < 0
+}
+
+func notLowerHex(r rune) bool {
+	return (r < '0' || r > '9') && (r < 'a' || r > 'f')
+}
+
 // Slug returns a deterministic slug for an issue title and number.
 func Slug(title string, num int) string {
 	base := Slugify(title)
