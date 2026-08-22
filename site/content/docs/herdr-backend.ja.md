@@ -74,6 +74,10 @@ git -C "<worktree>" clean -ndX
 git -C "<worktree>" clean -fdX
 ```
 
+ignored ディレクトリ内に別の Git repository がある場合は、`-f` を 2 回指定しないとそのディレクトリをスキップします。
+削除する場合はディレクトリの内容を確認してから `git -C "<worktree>" clean -ffdX` を実行するか、対象ディレクトリを直接削除してください。
+`-ff` はその Git repository と全内容を削除します。
+
 元の `--close` / `--cleanup` または TUI 操作を再実行します。
 checkout の内容で停止した場合と、保存済みの `dirty_worktree_requires_force` から復旧する場合は、worktree だけを別途削除しても再試行が残存 workspace を close します。
 

@@ -40,6 +40,8 @@ git -C "<worktree>" clean -ndX
 git -C "<worktree>" clean -fdX
 ```
 
+An ignored directory that contains an embedded Git repository is skipped unless `-f` is specified twice. To delete it, inspect the directory first, then run `git -C "<worktree>" clean -ffdX` or remove the directory directly. `-ff` deletes the embedded repository and all of its contents.
+
 Rerun the original `--close` / `--cleanup` command or TUI action. After a checkout-content block or a saved `dirty_worktree_requires_force` failure, a retry also closes a residual workspace when the worktree was removed separately.
 
 For an ambiguous manual-cleanup error, do not delete `.fanout/state.json` or the intent journal. In a shell attached to the fanout-owned herdr session, use the workspace prefix from the saved pane ID (`w7` from `w7:p1`). Run only the command for the current state, then retry fanout so it can verify absence and remove the saved row:
