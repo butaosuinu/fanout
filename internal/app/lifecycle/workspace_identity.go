@@ -98,6 +98,26 @@ func observeWorkspaceCleanup(
 	)
 }
 
+func observeLabelBoundWorkspaceCleanup(
+	ctx context.Context,
+	runtime WorkspaceRuntime,
+	projectRoot string,
+	intent state.LaunchIntent,
+) (workspaceCleanupObservation, error) {
+	return observeWorkspaceCleanupMatching(
+		ctx,
+		runtime,
+		projectRoot,
+		intent.Resource,
+		workspaceLabelPredicate(
+			intent.WorkspaceLabel,
+			intent.WorktreePath,
+			intent.Resource.RepoKey,
+			intent.Resource.RepoRoot,
+		),
+	)
+}
+
 func observeWorkspaceCleanupMatching(
 	ctx context.Context,
 	runtime WorkspaceRuntime,
@@ -185,6 +205,18 @@ func workspaceMatchesProvenance(
 	return filepath.Clean(workspace.Path) == filepath.Clean(path) &&
 		filepath.Clean(workspace.RepoKey) == filepath.Clean(repoKey) &&
 		filepath.Clean(workspace.RepoRoot) == filepath.Clean(repoRoot)
+}
+
+func adoptMovedWorkspaceCleanupResource(
+	resource state.RuntimeResource,
+	workspace backend.WorkspaceObservation,
+) state.RuntimeResource {
+	resource.WorkspaceID = workspace.WorkspaceID
+	if workspace.Pane.Pane != "" && workspace.TerminalID != "" {
+		resource.PaneID = workspace.Pane.Pane
+		resource.TerminalID = workspace.TerminalID
+	}
+	return resource
 }
 
 func verifyTerminalInvalidation(

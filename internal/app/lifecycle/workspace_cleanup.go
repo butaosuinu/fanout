@@ -529,7 +529,7 @@ func resumeWorkspaceCleanup(
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
 	if intent.Status == state.IntentPlanned && time.Now().UnixMilli() >= intent.ExpiresUnixMS {
-		return recoverExpiredPlannedWorkspaceCleanup(ctx, opts, journal, runtime, intent)
+		return recoverExpiredPlannedWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent)
 	}
 	if intent.Status == state.IntentPlanned {
 		return replanCurrentWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent)
@@ -549,19 +549,7 @@ func replanCurrentWorkspaceCleanup(
 	pane state.Pane,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
-	predicate := workspaceLabelPredicate(
-		intent.WorkspaceLabel,
-		intent.WorktreePath,
-		intent.Resource.RepoKey,
-		intent.Resource.RepoRoot,
-	)
-	observation, err := observeWorkspaceCleanupMatching(
-		ctx,
-		runtime,
-		opts.ProjectRoot,
-		intent.Resource,
-		predicate,
-	)
+	observation, err := observeLabelBoundWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent)
 	if err != nil {
 		return intent, err
 	}
@@ -571,16 +559,24 @@ func replanCurrentWorkspaceCleanup(
 func recoverExpiredPlannedWorkspaceCleanup(
 	ctx context.Context,
 	opts Options,
+	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
+	pane state.Pane,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
-	observation, err := observeWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
+	observation, err := observeLabelBoundWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent)
 	if err != nil {
 		return intent, err
 	}
 	if workspaceCleanupAbsent(observation) {
 		return realizeWorkspaceCleanup(journal, intent)
+	}
+	if observation.workspace != nil && observation.workspace.WorkspaceID != intent.Resource.WorkspaceID {
+		intent.Resource = adoptMovedWorkspaceCleanupResource(intent.Resource, *observation.workspace)
+		if err := rebindMovedWorkspaceCleanupPane(locked, pane, intent.Resource); err != nil {
+			return intent, err
+		}
 	}
 	if intent.Coordinator != (state.RuntimeResource{}) && intent.CleanupPhase != state.CleanupReopen {
 		return replanWorkspaceCleanup(ctx, opts, journal, intent, observation)
@@ -590,6 +586,17 @@ func recoverExpiredPlannedWorkspaceCleanup(
 		return intent, err
 	}
 	return intent, fmt.Errorf("saved Herdr cleanup intent expired before mutation; retry to replan")
+}
+
+func rebindMovedWorkspaceCleanupPane(
+	locked *state.LockedStore,
+	pane state.Pane,
+	resource state.RuntimeResource,
+) error {
+	pane.WorkspaceID = resource.WorkspaceID
+	pane.PaneID = resource.PaneID
+	pane.TerminalID = resource.TerminalID
+	return locked.RecordPane(pane)
 }
 
 func replanWorkspaceCleanup(
@@ -641,9 +648,7 @@ func replanObservedWorkspaceCleanup(
 		return realizeWorkspaceCleanup(journal, intent)
 	}
 	if observation.workspace != nil && observation.workspace.WorkspaceID != intent.Resource.WorkspaceID {
-		intent.Resource.WorkspaceID = observation.workspace.WorkspaceID
-		intent.Resource.PaneID = observation.workspace.Pane.Pane
-		intent.Resource.TerminalID = observation.workspace.TerminalID
+		intent.Resource = adoptMovedWorkspaceCleanupResource(intent.Resource, *observation.workspace)
 	}
 	checkoutOnly := observation.workspace == nil &&
 		(!observation.checkout.PathAbsent || observation.checkout.Registered)
