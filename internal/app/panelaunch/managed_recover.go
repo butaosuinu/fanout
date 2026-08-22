@@ -17,8 +17,9 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
 
-// releaseManagedIntent deletes an intent whose mutation is proven unissued or
-// whose rollback is proven complete, and returns cause after the journal save.
+// releaseManagedIntent deletes an intent whose mutation is proven unissued,
+// whose rollback is proven complete, or whose realized workspace is proven
+// externally removed, and returns cause after the journal save.
 func releaseManagedIntent(
 	locked *state.LockedLaunchJournal,
 	intentID string,
@@ -410,6 +411,7 @@ func adoptRecoveredManagedCoordinator(
 	match backend.WorkspaceObservation,
 	mutationErr error,
 ) (ManagedRealizeResult, error) {
+	match = adoptableCoordinatorObservation(match, intent.WorktreePath)
 	if err := validateWorkspacePostcondition(intent, nil, match); err != nil {
 		return ManagedRealizeResult{}, markManagedIntentManual(locked, intent, err)
 	}
@@ -670,26 +672,6 @@ func handleManagedWorktreeFinalizeError(
 	// Save failures and transient Git reads classified nothing; keep the
 	// intent retryable.
 	return err
-}
-
-func verifyRealizedCoordinator(
-	ctx context.Context,
-	runtime ManagedWorktreeRuntime,
-	intent state.LaunchIntent,
-	requestSource worktree.RepoIdentity,
-) error {
-	if _, err := managedCoordinatorSource(ctx, intent.Resource, requestSource); err != nil {
-		return err
-	}
-	workspaces, err := runtime.ObserveWorkspaces(ctx)
-	if err != nil {
-		return err
-	}
-	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
-	if len(matches) != 1 || !workspaceHasManagedResource(matches[0], intent.Resource) {
-		return fmt.Errorf("%w: coordinator", errManagedRealizedIdentityChanged)
-	}
-	return nil
 }
 
 func resumeRealizedManagedWorktree(

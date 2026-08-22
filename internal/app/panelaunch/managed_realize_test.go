@@ -1369,6 +1369,237 @@ func TestRealizeManagedWorktreeAdoptsExistingBranchWithoutBaseArgument(t *testin
 	}
 }
 
+// TestRealizeManagedCoordinatorClassifiesRealizedIntentAgainstLiveSession pins
+// the Herdr-side-operation classification of a realized coordinator: adopt the
+// one workspace still carrying the label nonce even after ids changed,
+// recreate after a proven Herdr-side close, keep a failed snapshot retryable,
+// and fail closed only on an ambiguous label.
+func TestRealizeManagedCoordinatorClassifiesRealizedIntentAgainstLiveSession(t *testing.T) {
+	tests := []struct {
+		name    string
+		reshape func(*fakeManagedRealizeRuntime)
+		check   func(*testing.T, *fakeManagedRealizeRuntime, state.LaunchIntent, ManagedRealizeResult, error, state.LaunchJournal)
+	}{
+		{
+			name: "adopts the workspace moved by a Herdr-side operation",
+			reshape: func(runtime *fakeManagedRealizeRuntime) {
+				moved := runtime.workspaces[0]
+				moved.WorkspaceID = "w9"
+				moved.Pane = backend.PaneRef{Backend: backend.Herdr, Workspace: "w9", Pane: "w9:p9"}
+				moved.TerminalID = "term-w9-moved"
+				runtime.workspaces = []backend.WorkspaceObservation{moved}
+			},
+			check: func(t *testing.T, _ *fakeManagedRealizeRuntime, first state.LaunchIntent, result ManagedRealizeResult, err error, journal state.LaunchJournal) {
+				t.Helper()
+				if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
+					t.Fatalf("resume moved coordinator = %v, want readiness deferral", err)
+				}
+				saved, found := journal.FindIntent(first.ID)
+				if result.Intent.Resource.WorkspaceID != "w9" || !found ||
+					saved.Status != state.IntentRealized || saved.Resource.TerminalID != "term-w9-moved" {
+					t.Fatalf("adopted identity = result %+v, saved (%+v, %t); want observed w9 identity persisted", result.Intent.Resource, saved, found)
+				}
+			},
+		},
+		{
+			name: "adopts an intact multi-pane workspace without rewriting identity",
+			reshape: func(runtime *fakeManagedRealizeRuntime) {
+				// Herdrrun reports the pane triple per pane once a workspace
+				// holds more than the launcher's pane; the saved identity must
+				// survive through the per-pane fallback.
+				workspace := runtime.workspaces[0]
+				root := backend.WorkspacePaneObservation{
+					Pane: workspace.Pane, TerminalID: workspace.TerminalID, CWD: workspace.CWD,
+				}
+				extra := backend.WorkspacePaneObservation{
+					Pane: backend.PaneRef{
+						Backend: backend.Herdr, Workspace: workspace.WorkspaceID,
+						Pane: workspace.WorkspaceID + ":p2",
+					},
+					TerminalID: "term-extra", CWD: workspace.CWD,
+				}
+				workspace.Pane, workspace.TerminalID, workspace.CWD = backend.PaneRef{}, "", ""
+				workspace.Panes = []backend.WorkspacePaneObservation{root, extra}
+				runtime.workspaces = []backend.WorkspaceObservation{workspace}
+			},
+			check: func(t *testing.T, _ *fakeManagedRealizeRuntime, first state.LaunchIntent, result ManagedRealizeResult, err error, journal state.LaunchJournal) {
+				t.Helper()
+				if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
+					t.Fatalf("resume multi-pane coordinator = %v, want readiness deferral", err)
+				}
+				saved, found := journal.FindIntent(first.ID)
+				if !found || saved.Status != state.IntentRealized || saved.Resource != first.Resource ||
+					result.Intent.Resource != first.Resource {
+					t.Fatalf("multi-pane adopt = result %+v, saved (%+v, %t); want the saved identity kept", result.Intent.Resource, saved, found)
+				}
+			},
+		},
+		{
+			name: "adopts a moved multi-pane workspace through its unique root pane",
+			reshape: func(runtime *fakeManagedRealizeRuntime) {
+				workspace := runtime.workspaces[0]
+				root := backend.WorkspacePaneObservation{
+					Pane:       backend.PaneRef{Backend: backend.Herdr, Workspace: "w9", Pane: "w9:p9"},
+					TerminalID: "term-w9-moved", CWD: workspace.CWD,
+				}
+				extra := backend.WorkspacePaneObservation{
+					Pane:       backend.PaneRef{Backend: backend.Herdr, Workspace: "w9", Pane: "w9:p2"},
+					TerminalID: "term-extra", CWD: "/elsewhere",
+				}
+				workspace.WorkspaceID = "w9"
+				workspace.Pane, workspace.TerminalID, workspace.CWD = backend.PaneRef{}, "", ""
+				workspace.Panes = []backend.WorkspacePaneObservation{root, extra}
+				runtime.workspaces = []backend.WorkspaceObservation{workspace}
+			},
+			check: func(t *testing.T, _ *fakeManagedRealizeRuntime, first state.LaunchIntent, result ManagedRealizeResult, err error, journal state.LaunchJournal) {
+				t.Helper()
+				if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
+					t.Fatalf("resume moved multi-pane coordinator = %v, want readiness deferral", err)
+				}
+				saved, found := journal.FindIntent(first.ID)
+				if !found || saved.Status != state.IntentRealized ||
+					result.Intent.Resource.PaneID != "w9:p9" || saved.Resource.TerminalID != "term-w9-moved" {
+					t.Fatalf("multi-pane drift adopt = result %+v, saved (%+v, %t); want the root pane identity persisted", result.Intent.Resource, saved, found)
+				}
+			},
+		},
+		{
+			name: "treats a relabeled live workspace as identity change",
+			reshape: func(runtime *fakeManagedRealizeRuntime) {
+				runtime.workspaces[0].Label = "fanout-coordinator-renamed"
+			},
+			check: func(t *testing.T, _ *fakeManagedRealizeRuntime, first state.LaunchIntent, _ ManagedRealizeResult, err error, journal state.LaunchJournal) {
+				t.Helper()
+				saved, found := journal.FindIntent(first.ID)
+				if !errors.Is(err, ErrManualCleanupRequired) ||
+					!found || saved.Status != state.IntentManualCleanupRequired {
+					t.Fatalf("relabel = err %v, saved (%+v, %t); want manual cleanup, not a duplicate create", err, saved, found)
+				}
+			},
+		},
+		{
+			name: "recreates after a Herdr-side workspace close",
+			reshape: func(runtime *fakeManagedRealizeRuntime) {
+				runtime.workspaces = nil
+			},
+			check: func(t *testing.T, runtime *fakeManagedRealizeRuntime, first state.LaunchIntent, result ManagedRealizeResult, err error, journal state.LaunchJournal) {
+				t.Helper()
+				if !errors.Is(err, ErrManagedLauncherReadinessDeferred) {
+					t.Fatalf("resume closed coordinator = %v, want readiness deferral", err)
+				}
+				saved, found := journal.FindIntent(first.ID)
+				if result.Intent.ID != first.ID || result.Intent.WorkspaceLabel == first.WorkspaceLabel ||
+					!found || saved.Status != state.IntentRealized || len(runtime.workspaces) != 1 {
+					t.Fatalf("recreate = result %+v, saved (%+v, %t); want same id under a fresh label", result.Intent, saved, found)
+				}
+			},
+		},
+		{
+			name: "keeps a failed snapshot retryable",
+			reshape: func(runtime *fakeManagedRealizeRuntime) {
+				runtime.observeErr = errors.New("socket down")
+			},
+			check: func(t *testing.T, _ *fakeManagedRealizeRuntime, first state.LaunchIntent, _ ManagedRealizeResult, err error, journal state.LaunchJournal) {
+				t.Helper()
+				saved, found := journal.FindIntent(first.ID)
+				if err == nil || errors.Is(err, ErrManualCleanupRequired) ||
+					!found || saved.Status != state.IntentRealized {
+					t.Fatalf("failed snapshot = err %v, saved (%+v, %t); want retryable realized intent", err, saved, found)
+				}
+			},
+		},
+		{
+			name: "pins an ambiguous label to manual cleanup",
+			reshape: func(runtime *fakeManagedRealizeRuntime) {
+				duplicate := runtime.workspaces[0]
+				duplicate.WorkspaceID = "w7"
+				duplicate.Pane = backend.PaneRef{Backend: backend.Herdr, Workspace: "w7", Pane: "w7:p1"}
+				runtime.workspaces = append(runtime.workspaces, duplicate)
+			},
+			check: func(t *testing.T, _ *fakeManagedRealizeRuntime, first state.LaunchIntent, _ ManagedRealizeResult, err error, journal state.LaunchJournal) {
+				t.Helper()
+				saved, found := journal.FindIntent(first.ID)
+				if !errors.Is(err, ErrManualCleanupRequired) ||
+					!found || saved.Status != state.IntentManualCleanupRequired {
+					t.Fatalf("ambiguous label = err %v, saved (%+v, %t); want manual cleanup", err, saved, found)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newManagedRealizeRepo(t)
+			runtime := &fakeManagedRealizeRuntime{}
+			installSuccessfulManagedMutations(t, repo, runtime)
+			hooks := deterministicManagedRealizeHooks()
+			first := realizeTestManagedCoordinator(t, repo, runtime, hooks)
+			tt.reshape(runtime)
+			result, err := realizeManagedCoordinator(
+				context.Background(), testManagedCoordinatorRequest(repo), runtime, hooks,
+			)
+			journal, journalErr := state.LoadLaunchJournal(repo)
+			if journalErr != nil {
+				t.Fatal(journalErr)
+			}
+			tt.check(t, runtime, first, result, err, journal)
+		})
+	}
+}
+
+// TestRealizeManagedCoordinatorRefusesRecreateAfterIssuedToken pins the canon:
+// a token-issued crash window never self-heals — a coordinator whose workspace
+// vanished after its launch token went out is manual cleanup, not a recreate.
+func TestRealizeManagedCoordinatorRefusesRecreateAfterIssuedToken(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	runtime := &fakeManagedRealizeRuntime{}
+	installSuccessfulManagedMutations(t, repo, runtime)
+	hooks := deterministicManagedRealizeHooks()
+	first := realizeTestManagedCoordinator(t, repo, runtime, hooks)
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := locked.LaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, found := journal.FindIntent(first.ID)
+	if !found {
+		t.Fatal("realized intent is missing")
+	}
+	saved.Launch = &state.LaunchCapsule{
+		Nonce: strings.Repeat("a", 32), Agent: "codex",
+		AgentName:  "fanout-0123456789abcdef01234567",
+		Executable: "/bin/codex", Args: []string{},
+		EnvFilePath: "/tmp/env", EnvNameCount: 1,
+		LauncherReady: true, TokenIssued: true,
+	}
+	journal.UpsertIntent(saved)
+	if saveErr := journal.Save(); saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	runtime.workspaces = nil
+	mutations := len(runtime.mutations)
+	_, err = realizeManagedCoordinator(
+		context.Background(), testManagedCoordinatorRequest(repo), runtime, hooks,
+	)
+	final, journalErr := state.LoadLaunchJournal(repo)
+	if journalErr != nil {
+		t.Fatal(journalErr)
+	}
+	pinned, found := final.FindIntent(first.ID)
+	if !errors.Is(err, ErrManualCleanupRequired) || len(runtime.mutations) != mutations ||
+		!found || pinned.Status != state.IntentManualCleanupRequired {
+		t.Fatalf(
+			"issued-token recreate = err %v, mutations %d→%d, saved (%+v, %t); want manual cleanup with no new mutation",
+			err, mutations, len(runtime.mutations), pinned, found,
+		)
+	}
+}
+
 func TestRealizeManagedCoordinatorAdoptsResponseLossAndNeverReissues(t *testing.T) {
 	repo := newManagedRealizeRepo(t)
 	runtime := &fakeManagedRealizeRuntime{}

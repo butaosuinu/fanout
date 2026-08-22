@@ -334,7 +334,7 @@ func resumeSavedManagedCoordinator(
 	defer cancel()
 	switch intent.Status {
 	case state.IntentRealized:
-		return adoptRealizedManagedCoordinator(operationCtx, runtime, locked, intent, setup.source)
+		return resumeRealizedManagedCoordinator(operationCtx, runtime, setup, req, cwd, intent)
 	case state.IntentIssued:
 		return recoverManagedCoordinator(operationCtx, runtime, locked, intent, setup.source, nil)
 	default:
@@ -346,24 +346,96 @@ func resumeSavedManagedCoordinator(
 	}
 }
 
-// adoptRealizedManagedCoordinator re-verifies a realized coordinator workspace
-// and hands it to the agent-start phase.
-func adoptRealizedManagedCoordinator(
+// resumeRealizedManagedCoordinator classifies a realized coordinator against
+// the live session. Herdr-side operations move panes and change ids without
+// touching ownership, so the label nonce is the identity that matters: adopt
+// the one workspace still carrying it, recreate after a proven Herdr-side
+// close (the nonce's absence is the remove postcondition, checked against the
+// recorded workspace id too so a relabel is not read as a close), and fail
+// closed only when the label is ambiguous.
+func resumeRealizedManagedCoordinator(
 	ctx context.Context,
 	runtime ManagedWorktreeRuntime,
+	setup managedRealizeSetup,
+	req ManagedCoordinatorRequest,
+	cwd string,
+	intent state.LaunchIntent,
+) (ManagedRealizeResult, error) {
+	locked := setup.locked
+	// A failed snapshot classifies nothing: keep the realized intent retryable.
+	workspaces, err := runtime.ObserveWorkspaces(ctx)
+	if err != nil {
+		return ManagedRealizeResult{}, errors.Join(err, ctx.Err())
+	}
+	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
+	switch len(matches) {
+	case 1:
+		if workspaceHasManagedResource(matches[0], intent.Resource) {
+			return adoptIntactManagedCoordinator(ctx, locked, intent, setup.source)
+		}
+		return adoptRecoveredManagedCoordinator(ctx, locked, intent, setup.source, matches[0], nil)
+	case 0:
+		return recreateExternallyRemovedManagedCoordinator(runtime, setup, req, cwd, intent, workspaces)
+	default:
+		return ManagedRealizeResult{}, markManagedIntentManual(locked, intent, fmt.Errorf(
+			"realized Herdr coordinator label has %d live matches", len(matches),
+		))
+	}
+}
+
+// adoptIntactManagedCoordinator keeps a realized coordinator whose saved
+// resource still matches the live workspace — including the per-pane fallback,
+// since an established workspace may hold more panes than the launcher's.
+func adoptIntactManagedCoordinator(
+	ctx context.Context,
 	locked *state.LockedLaunchJournal,
 	intent state.LaunchIntent,
 	source worktree.RepoIdentity,
 ) (ManagedRealizeResult, error) {
-	if verifyErr := verifyRealizedCoordinator(ctx, runtime, intent, source); verifyErr != nil {
-		if errors.Is(verifyErr, errManagedRealizedIdentityChanged) {
-			return ManagedRealizeResult{}, markManagedIntentManual(locked, intent, verifyErr)
+	if _, err := managedCoordinatorSource(ctx, intent.Resource, source); err != nil {
+		if errors.Is(err, errManagedRealizedIdentityChanged) {
+			return ManagedRealizeResult{}, markManagedIntentManual(locked, intent, err)
 		}
-		// The snapshot itself failed; nothing was classified, so the
-		// realized intent stays retryable.
-		return ManagedRealizeResult{}, verifyErr
+		return ManagedRealizeResult{}, err
 	}
 	return realizeDeferred(intent)
+}
+
+// recreateExternallyRemovedManagedCoordinator creates the coordinator again
+// under the same intent id after a Herdr-side close: the label nonce is absent
+// AND the recorded workspace id is gone (a relabeled workspace still exists
+// and is an identity change, not a close). The saved intent is replaced by the
+// recreate's own journal write, so a failure before that write keeps the old
+// intent retryable. An issued launch token never survives the recreate — the
+// canon pins a token-issued crash window to manual cleanup. Interactive lanes
+// resume without a rebuilt capsule; carrying the saved one keeps the launch
+// identity and its nonce-derived label. The create runs under the fresh
+// realize budget its journaled deadline promises, not the resume's bounded
+// classification context.
+func recreateExternallyRemovedManagedCoordinator(
+	runtime ManagedWorktreeRuntime,
+	setup managedRealizeSetup,
+	req ManagedCoordinatorRequest,
+	cwd string,
+	intent state.LaunchIntent,
+	workspaces []backend.WorkspaceObservation,
+) (ManagedRealizeResult, error) {
+	for _, workspace := range workspaces {
+		if workspace.WorkspaceID == intent.Resource.WorkspaceID {
+			return ManagedRealizeResult{}, markManagedIntentManual(setup.locked, intent, fmt.Errorf(
+				"realized Herdr coordinator workspace %s lost its label", workspace.WorkspaceID,
+			))
+		}
+	}
+	if intent.Launch != nil && intent.Launch.TokenIssued {
+		return ManagedRealizeResult{}, markManagedIntentManual(setup.locked, intent, fmt.Errorf(
+			"issued Herdr launch workspace was removed",
+		))
+	}
+	if req.Launch == nil {
+		req.Launch = cloneManagedLaunch(intent.Launch)
+	}
+	return createManagedCoordinator(setup.ctx, runtime, setup, req, cwd, intent.ID)
 }
 
 // createManagedCoordinator journals a fresh issued intent and performs the one
@@ -468,7 +540,7 @@ func managedCoordinatorWorkspaceLabel(
 	randomToken func() (string, error),
 ) (string, error) {
 	if req.Launch == nil {
-		return newManagedWorkspaceLabel("coordinator", randomToken)
+		return newManagedWorkspaceLabel(managedCoordinatorLabelKind, randomToken)
 	}
 	kind := "manual"
 	if canonicalManagedParent(req.Parent) == ManagedConsoleRuntimeParent {

@@ -387,15 +387,13 @@ func managedShutdownCoordinatorRow(pane state.Pane) bool {
 	// Only the exact role shape emitted by managedCoordinatorPane qualifies;
 	// child, attached-agent, and manual-shell rows remain hard shutdown blocks.
 	requirements := []bool{
-		pane.Parent == ManualParentRef, pane.RuntimeParent != "",
+		managedCoordinatorRowRole(pane),
+		pane.RuntimeParent != "",
 		pane.RuntimeParent != ManualParentRef, pane.RuntimeParent != ManagedConsoleRuntimeParent,
-		pane.IssueNum < 0, pane.TaskID == "", pane.Kind == state.PaneKindShell,
 		backend.LiveIdentityModelOf(pane.Backend) == backend.LiveIdentityRecordedBinding,
-		pane.Agent == "", pane.BranchName == "",
 		pane.PaneID != "", pane.WorkspaceID != "", pane.WorkspaceLabel != "",
 		pane.TerminalID != "", pane.SessionID != "", pane.SocketPath != "",
-		filepath.IsAbs(pane.WorktreePath), pane.RepoKey == "", pane.RepoRoot == "",
-		pane.AgentID == "", pane.AgentSession == nil,
+		filepath.IsAbs(pane.WorktreePath),
 	}
 	return !slices.Contains(requirements, false)
 }
