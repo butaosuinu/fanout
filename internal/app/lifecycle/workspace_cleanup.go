@@ -288,11 +288,20 @@ func validateLaunchIntentForCleanup(
 		intent.Status == state.IntentManualCleanupRequired
 	if slices.Contains([]bool{
 		intent.Kind == state.IntentWorktree, allowedStatus, intentMatchesPane(intent, pane, ownerRoot),
-		intent.Resource == resourceFromPane(pane), intent.Launch != nil && intent.Launch.TokenIssued,
+		launchResourceMatchesCleanupPane(intent.Resource, pane), intent.Launch != nil && intent.Launch.TokenIssued,
 	}, false) {
 		return fmt.Errorf("saved Herdr launch intent does not match the child row")
 	}
 	return nil
+}
+
+func launchResourceMatchesCleanupPane(resource state.RuntimeResource, pane state.Pane) bool {
+	saved := resourceFromPane(pane)
+	return resource == saved || resource.WorkspaceID != saved.WorkspaceID &&
+		resource.Label == saved.Label &&
+		filepath.Clean(resource.CurrentPath) == filepath.Clean(saved.CurrentPath) &&
+		filepath.Clean(resource.RepoKey) == filepath.Clean(saved.RepoKey) &&
+		filepath.Clean(resource.RepoRoot) == filepath.Clean(saved.RepoRoot)
 }
 
 func beginWorkspaceCleanup(
@@ -574,7 +583,9 @@ func recoverExpiredPlannedWorkspaceCleanup(
 	}
 	if observation.workspace != nil && observation.workspace.WorkspaceID != intent.Resource.WorkspaceID {
 		intent.Resource = adoptMovedWorkspaceCleanupResource(intent.Resource, *observation.workspace)
-		if err := rebindMovedWorkspaceCleanupPane(locked, pane, intent.Resource); err != nil {
+		if err := rebindMovedWorkspaceCleanupIdentity(
+			locked, journal, opts.ProjectRoot, pane, intent.Resource,
+		); err != nil {
 			return intent, err
 		}
 	}
@@ -588,11 +599,21 @@ func recoverExpiredPlannedWorkspaceCleanup(
 	return intent, fmt.Errorf("saved Herdr cleanup intent expired before mutation; retry to replan")
 }
 
-func rebindMovedWorkspaceCleanupPane(
+func rebindMovedWorkspaceCleanupIdentity(
 	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	projectRoot string,
 	pane state.Pane,
 	resource state.RuntimeResource,
 ) error {
+	worktreeIntentID, _, err := workspaceCleanupIntentIDs(projectRoot, pane)
+	if err != nil {
+		return err
+	}
+	if launchIntent, found := journal.FindIntent(worktreeIntentID); found {
+		launchIntent.Resource = resource
+		journal.UpsertIntent(launchIntent)
+	}
 	pane.WorkspaceID = resource.WorkspaceID
 	pane.PaneID = resource.PaneID
 	pane.TerminalID = resource.TerminalID

@@ -1236,6 +1236,13 @@ func TestExpiredPlannedHerdrCleanupFinalizesAlreadyAbsentResources(t *testing.T)
 
 func TestExpiredPlannedHerdrCleanupRebindsMovedWorkspaceWithoutMutation(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
+	runtimeDir := filepath.Join(fixture.projectRoot, "herdr-runtime")
+	if err := os.MkdirAll(filepath.Join(runtimeDir, "workload-env"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fixture.pane.SocketPath = filepath.Join(runtimeDir, "herdr.sock")
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	worktreeIntentID, _ := recordResidualHerdrLaunchIntent(t, fixture, runtimeDir)
 	recordExpiredHerdrCleanupIntent(t, fixture, state.CleanupRemove)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
@@ -1257,6 +1264,14 @@ func TestExpiredPlannedHerdrCleanupRebindsMovedWorkspaceWithoutMutation(t *testi
 	pane, found := store.Find(fixture.pane.Parent, fixture.pane.IssueNum)
 	if !found || pane.WorkspaceID != "w-moved" {
 		t.Fatalf("rebound pane = %#v (found=%t), want workspace w-moved", pane, found)
+	}
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launchIntent, found := journal.FindIntent(worktreeIntentID)
+	if !found || launchIntent.Resource.WorkspaceID != "w-moved" {
+		t.Fatalf("rebound launch intent = %#v (found=%t), want workspace w-moved", launchIntent, found)
 	}
 
 	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
