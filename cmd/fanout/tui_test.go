@@ -37,7 +37,19 @@ func TestMain(m *testing.M) {
 	// A developer shell inside a fanout console exports the hand-off name;
 	// left set, any cmdTUI-driving test would exec that shell mid-run through
 	// the real seam instead of finishing the package.
-	os.Unsetenv(backend.ConsoleShellEnv)
+	for _, name := range []string{
+		backend.ConsoleShellEnv,
+		"FANOUT_BACKEND",
+		"HERDR_ENV",
+		"HERDR_SESSION",
+		"HERDR_SOCKET_PATH",
+		"HERDR_CLIENT_SOCKET_PATH",
+		"TMUX",
+		"TMUX_PANE",
+	} {
+		// Package tests set every runtime context they exercise explicitly.
+		_ = os.Unsetenv(name)
+	}
 	os.Exit(m.Run())
 }
 
