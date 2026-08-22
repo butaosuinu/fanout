@@ -142,7 +142,8 @@ func waitForManagedRestartRows(
 	totalTimeout time.Duration,
 ) (backend.WaitResult, error) {
 	waitForCandidate := slices.ContainsFunc(rows, func(row managedRestartRow) bool {
-		return resumableSavedCodex(row.saved)
+		return resumableSavedCodex(row.saved) ||
+			(row.saved.IsShell() && !managedCoordinatorRowRole(row.saved))
 	})
 	wait := restarted.WaitRestoredPanes(ctx, totalTimeout, func(live []backend.LivePane) bool {
 		return !waitForCandidate || anyManagedRestartRouteObserved(rows, live)
@@ -166,6 +167,11 @@ func retireUnsupportedManagedRestartRows(
 	remaining := make([]managedRestartRow, 0, len(rows))
 	for _, row := range rows {
 		if resumableSavedCodex(row.saved) {
+			remaining = append(remaining, row)
+			continue
+		}
+		if row.saved.IsShell() && !managedCoordinatorRowRole(row.saved) &&
+			countManagedRestartRoute(row.saved, live) == 0 {
 			remaining = append(remaining, row)
 			continue
 		}

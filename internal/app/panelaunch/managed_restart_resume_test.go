@@ -19,6 +19,7 @@ type restartRuntimeFake struct {
 	t               *testing.T
 	route           backend.OwnedLaunchRoute
 	waitPanes       []backend.LivePane
+	waitPaneSets    [][]backend.LivePane
 	issuePanes      []backend.LivePane
 	resumedPanes    []backend.LivePane
 	finalPanes      []backend.LivePane
@@ -63,11 +64,15 @@ func (f *restartRuntimeFake) WaitRestoredPanes(
 	f.waitCalls++
 	f.waitTimeout = timeout
 	time.Sleep(f.waitDelay)
+	panes := f.waitPanes
+	if f.waitCalls <= len(f.waitPaneSets) {
+		panes = f.waitPaneSets[f.waitCalls-1]
+	}
 	status := backend.WaitTimedOut
-	if match(f.waitPanes) {
+	if match(panes) {
 		status = backend.WaitMatched
 	}
-	return backend.WaitResult{Status: status, Panes: slices.Clone(f.waitPanes)}
+	return backend.WaitResult{Status: status, Panes: slices.Clone(panes)}
 }
 
 func (f *restartRuntimeFake) IssueRestartResume(
@@ -162,11 +167,14 @@ func TestResumeRestartedManagedRowsRefreshesShellAndConsoleTerminalIDs(t *testin
 		route: backend.OwnedLaunchRoute{
 			Session: shell.SessionID, SocketPath: shell.SocketPath,
 		},
-		waitPanes: []backend.LivePane{shellLive, consoleLive, coordinatorLive},
+		waitPaneSets: [][]backend.LivePane{
+			{shellLive, coordinatorLive},
+			{consoleLive, coordinatorLive},
+		},
 	}
 
 	if err := resumeRestartedManagedRows(
-		context.Background(), repo, locked, journal, runtime, 3*time.Second,
+		context.Background(), repo, locked, journal, runtime, 5*time.Second,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +186,9 @@ func TestResumeRestartedManagedRowsRefreshesShellAndConsoleTerminalIDs(t *testin
 		if !found || got.TerminalID != want.terminalID {
 			t.Fatalf("restart row = (%+v, %t), want terminal %q", got, found, want.terminalID)
 		}
+	}
+	if runtime.waitCalls != 2 {
+		t.Fatalf("restart waits = %d, want staged shell and console observations", runtime.waitCalls)
 	}
 }
 
