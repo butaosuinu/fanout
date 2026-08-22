@@ -137,6 +137,7 @@ type LaunchCapsule struct {
 	Nonce                string                   `json:"nonce"`
 	EmitterNonce         string                   `json:"emitterNonce,omitempty"`
 	PendingReportedState string                   `json:"pendingReportedState,omitempty"`
+	PendingReportedSeq   uint64                   `json:"pendingReportedSequence,omitempty"`
 	PendingAgentSession  *backend.AgentSessionRef `json:"pendingAgentSession,omitempty"`
 	Agent                string                   `json:"agent"`
 	AgentName            string                   `json:"agentName"`
@@ -844,7 +845,7 @@ func validateLaunchAgentIdentity(kind LaunchIntentKind, launch *LaunchCapsule) e
 
 func validateEmitter(launch *LaunchCapsule) error {
 	if launch.EmitterNonce == "" {
-		if launch.PendingReportedState != "" {
+		if launch.PendingReportedState != "" || launch.PendingReportedSeq != 0 {
 			return fmt.Errorf("pending telemetry requires an emitter nonce")
 		}
 		return nil
@@ -852,12 +853,22 @@ func validateEmitter(launch *LaunchCapsule) error {
 	if !validEmitterAgent(launch) || !telemetry.ValidNonce(launch.EmitterNonce) {
 		return fmt.Errorf("emitter fields require a Claude or Codex Plan launch and valid nonce")
 	}
+	return validatePendingTelemetry(launch)
+}
+
+func validatePendingTelemetry(launch *LaunchCapsule) error {
 	if launch.PendingReportedState == "" {
+		if launch.PendingReportedSeq != 0 {
+			return fmt.Errorf("pending telemetry sequence requires a provider state")
+		}
 		return nil
 	}
 	state, ok := backend.ParseAgentState(launch.PendingReportedState)
 	if !ok || state == backend.AgentRunning {
 		return fmt.Errorf("pending telemetry has an invalid provider state")
+	}
+	if (launch.Agent == "claude") != (launch.PendingReportedSeq > 0) {
+		return fmt.Errorf("pending telemetry sequence does not match provider")
 	}
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -51,6 +52,7 @@ type Signal struct {
 	Agent        string
 	AgentID      string
 	State        backend.AgentState
+	Sequence     uint64
 }
 
 // IsRequest reports whether args target the hidden telemetry emitter.
@@ -61,12 +63,25 @@ func IsRequest(args []string) bool {
 // ParseSignal validates one hidden-command invocation and its inherited wire
 // identity. getenv keeps parsing pure and directly testable.
 func ParseSignal(args []string, getenv func(string) string) (Signal, error) {
-	if len(args) != 1 {
-		return Signal{}, fmt.Errorf("expected one reported state")
+	agentName := getenv(AgentEnv)
+	wantArgs := 1
+	if agentName == "claude" {
+		wantArgs = 2
+	}
+	if len(args) != wantArgs {
+		return Signal{}, fmt.Errorf("expected one reported state and its required sequence")
 	}
 	state, ok := providerState(args[0])
 	if !ok {
 		return Signal{}, fmt.Errorf("unsupported reported state %q", args[0])
+	}
+	var sequence uint64
+	if agentName == "claude" {
+		var err error
+		sequence, err = strconv.ParseUint(args[1], 10, 64)
+		if err != nil || sequence == 0 {
+			return Signal{}, fmt.Errorf("Claude telemetry sequence is invalid")
+		}
 	}
 	signal := Signal{
 		StatePath: getenv(StatePathEnv), RowKey: getenv(RowKeyEnv),
@@ -74,7 +89,7 @@ func ParseSignal(args []string, getenv func(string) string) (Signal, error) {
 		Backend: backend.Name(getenv(BackendEnv)), Session: getenv(SessionEnv),
 		SocketPath: getenv(SocketPathEnv), WorkspaceID: getenv(WorkspaceIDEnv),
 		PaneID: getenv(PaneIDEnv), TerminalID: getenv(TerminalIDEnv),
-		Agent: getenv(AgentEnv), AgentID: getenv(AgentIDEnv), State: state,
+		Agent: agentName, AgentID: getenv(AgentIDEnv), State: state, Sequence: sequence,
 	}
 	if err := validateSignal(signal, getenv(EmitterPathEnv)); err != nil {
 		return Signal{}, err

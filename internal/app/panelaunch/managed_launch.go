@@ -976,10 +976,12 @@ func applyManagedLaunchTelemetry(pane *state.Pane, intent state.LaunchIntent) {
 	pane.LaunchNonce = launch.Nonce
 	pane.EmitterNonce = launch.EmitterNonce
 	pane.ReportedState = string(backend.AgentRunning)
+	pane.ReportedStateSeq = 0
 	pane.StateRefinement = false
 	if launch.PendingReportedState != "" && launch.PendingAgentSession != nil &&
 		pane.AgentSession != nil && *launch.PendingAgentSession == *pane.AgentSession {
 		pane.ReportedState = launch.PendingReportedState
+		pane.ReportedStateSeq = launch.PendingReportedSeq
 		pane.StateRefinement = true
 	}
 }

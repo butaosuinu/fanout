@@ -696,7 +696,8 @@ func TestHerdrControlValidatesEmitterLaunchFields(t *testing.T) {
 		}
 		intent.Launch = &LaunchCapsule{
 			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
-			PendingReportedState: "working", Agent: "claude", AgentName: "fanout-agent",
+			PendingReportedState: "working", PendingReportedSeq: 1,
+			Agent: "claude", AgentName: "fanout-agent",
 			Executable: "/opt/bin/claude", Args: []string{"prompt"},
 			EnvFilePath: "/tmp/fanout-env.json", EnvNameCount: 1,
 		}
@@ -707,6 +708,7 @@ func TestHerdrControlValidatesEmitterLaunchFields(t *testing.T) {
 	}
 	codex := valid()
 	codex.Launch.Agent = "codex"
+	codex.Launch.PendingReportedSeq = 0
 	codex.Launch.CodexPlanStatusPath = filepath.Join(t.TempDir(), "status.json")
 	if err := validateIntent(codex); err != nil {
 		t.Fatalf("Codex Plan emitter fields: %v", err)
@@ -716,6 +718,7 @@ func TestHerdrControlValidatesEmitterLaunchFields(t *testing.T) {
 		mutate func(*LaunchCapsule)
 	}{
 		{name: "pending without nonce", mutate: func(launch *LaunchCapsule) { launch.EmitterNonce = "" }},
+		{name: "Claude pending without sequence", mutate: func(launch *LaunchCapsule) { launch.PendingReportedSeq = 0 }},
 		{name: "Codex emitter without Plan mode", mutate: func(launch *LaunchCapsule) { launch.Agent = "codex" }},
 		{name: "unsupported emitter", mutate: func(launch *LaunchCapsule) { launch.Agent = "opencode" }},
 		{name: "synthetic pending", mutate: func(launch *LaunchCapsule) { launch.PendingReportedState = "running" }},

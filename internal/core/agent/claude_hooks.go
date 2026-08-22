@@ -80,14 +80,15 @@ type claudeHookSettings struct {
 }
 
 // ClaudeHookCommands describes the state commands shared by every
-// fanout-launched Claude backend. Done is optional; Background keeps
-// non-terminal hooks from waiting for a best-effort state reporter. SessionEnd
-// stays synchronous so Done completes while the agent identity is observable.
+// fanout-launched Claude backend. NextSequence, when set, prints the sequence
+// passed as the final state-command argument before any backgrounding. Done is
+// optional; SessionEnd stays synchronous while the agent identity is observable.
 type ClaudeHookCommands struct {
 	Working            string
 	Blocked            string
 	Idle               string
 	Done               string
+	NextSequence       string
 	DoneMatcher        string
 	DoneTimeoutSeconds int
 	Background         bool
@@ -96,11 +97,11 @@ type ClaudeHookCommands struct {
 // BuildClaudeHookSettingsJSON builds deterministic lifecycle hook settings.
 func BuildClaudeHookSettingsJSON(commands ClaudeHookCommands) string {
 	settings := claudeHookSettings{Hooks: claudeHookEvents{
-		UserPromptSubmit: claudeStateHook(commands.Working, commands.Background),
-		PreToolUse:       claudeStateHook(commands.Working, commands.Background),
-		PostToolUse:      claudeStateHook(commands.Working, commands.Background),
-		Notification:     claudeBlockedHook(commands.Blocked, commands.Background),
-		Stop:             claudeStateHook(commands.Idle, commands.Background),
+		UserPromptSubmit: claudeStateHook(commands.Working, commands.NextSequence, commands.Background),
+		PreToolUse:       claudeStateHook(commands.Working, commands.NextSequence, commands.Background),
+		PostToolUse:      claudeStateHook(commands.Working, commands.NextSequence, commands.Background),
+		Notification:     claudeBlockedHook(commands.Blocked, commands.NextSequence, commands.Background),
+		Stop:             claudeStateHook(commands.Idle, commands.NextSequence, commands.Background),
 		SessionEnd:       claudeSessionEndHook(commands),
 	}}
 	var buf bytes.Buffer
@@ -115,7 +116,7 @@ func BuildClaudeHookSettingsJSON(commands ClaudeHookCommands) string {
 }
 
 func claudeSessionEndHook(commands ClaudeHookCommands) []claudeHookMatcher {
-	matchers := claudeStateHook(commands.Done, false)
+	matchers := claudeStateHook(commands.Done, commands.NextSequence, false)
 	if len(matchers) == 0 {
 		return nil
 	}
@@ -124,27 +125,37 @@ func claudeSessionEndHook(commands ClaudeHookCommands) []claudeHookMatcher {
 	return matchers
 }
 
-func claudeStateHook(command string, background bool) []claudeHookMatcher {
+func claudeStateHook(command, nextSequence string, background bool) []claudeHookMatcher {
 	if command == "" {
 		return nil
 	}
-	if background {
-		command = "{ " + command + " || true; } &"
-	} else {
-		command += " || true"
-	}
-	return claudeHook(command)
+	return claudeHook(claudeStateCommand(command, nextSequence, background))
 }
 
-func claudeBlockedHook(command string, background bool) []claudeHookMatcher {
+func claudeBlockedHook(command, nextSequence string, background bool) []claudeHookMatcher {
 	if command == "" {
 		return nil
 	}
 	filter := `grep -Eq '"notification_type"[[:space:]]*:[[:space:]]*"(` + blockedNotificationTypes + `)"' -`
 	if background {
-		return claudeHook("if " + filter + "; then { " + command + " || true; } & fi")
+		return claudeHook("if " + filter + "; then " + claudeStateCommand(command, nextSequence, true) + " fi")
 	}
-	return claudeHook(filter + " && " + command + " || true")
+	return claudeHook(filter + " && " + claudeStateCommand(command, nextSequence, false))
+}
+
+func claudeStateCommand(command, nextSequence string, background bool) string {
+	if nextSequence != "" {
+		sequence := `__fanout_event_sequence="$(` + nextSequence + `)" && `
+		command += ` "$__fanout_event_sequence"`
+		if background {
+			return sequence + "{ " + command + " || true; } &"
+		}
+		return sequence + command + " || true"
+	}
+	if background {
+		return "{ " + command + " || true; } &"
+	}
+	return command + " || true"
 }
 
 func claudeHook(command string) []claudeHookMatcher {

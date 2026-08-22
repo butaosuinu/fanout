@@ -71,6 +71,40 @@ func TestEmitUpdatesOnlyFinalRowTelemetry(t *testing.T) {
 	}
 }
 
+func TestEmitFinalRowDiscardsOlderClaudeSequence(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	saveEmitterPanes(t, repo, pane)
+
+	signal.State, signal.Sequence = backend.AgentBlocked, 2
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	signal.State, signal.Sequence = backend.AgentWorking, 1
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "blocked" || got.ReportedStateSeq != 2 || !got.StateRefinement {
+		t.Fatalf("telemetry = (%q, %d, %t), want blocked at sequence 2", got.ReportedState, got.ReportedStateSeq, got.StateRefinement)
+	}
+}
+
+func TestEmitRejectsMissingClaudeSequenceWithoutMutation(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	signal.Sequence = 0
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err == nil {
+		t.Fatal("Emit() accepted a missing Claude sequence")
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != pane.ReportedState || got.StateRefinement || got.ReportedStateSeq != 0 {
+		t.Fatalf("missing sequence changed telemetry row: %+v", got)
+	}
+}
+
 func TestEmitUpdatesCodexPlanRowThroughExactControllerProcess(t *testing.T) {
 	repo := newEmitterRepo(t)
 	pane, _, _ := finalEmitterFixture(t, repo)
@@ -140,8 +174,9 @@ func TestEmitFinalRowPersistsDoneAgainstLateSignal(t *testing.T) {
 	pane, signal, observer := finalEmitterFixture(t, repo)
 	saveEmitterPanes(t, repo, pane)
 
-	for _, reported := range []backend.AgentState{backend.AgentDone, backend.AgentIdle, backend.AgentWorking} {
+	for index, reported := range []backend.AgentState{backend.AgentDone, backend.AgentIdle, backend.AgentWorking} {
 		signal.State = reported
+		signal.Sequence = uint64(index + 1)
 		if err := Emit(context.Background(), signal, observer); err != nil {
 			t.Fatal(err)
 		}
@@ -306,6 +341,7 @@ func TestEmitFinalRowRebindsReplacedSession(t *testing.T) {
 	second.Value = "session-second"
 	observer.observation.Panes[0].AgentSession = &second
 	signal.State = backend.AgentIdle
+	signal.Sequence++
 	if err := Emit(context.Background(), signal, observer); err != nil {
 		t.Fatal(err)
 	}
@@ -321,6 +357,7 @@ func TestEmitFinalRowRebindsReplacedSession(t *testing.T) {
 		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-foreign",
 	}
 	observer.observation.Panes[0].AgentSession = &foreign
+	signal.Sequence++
 	if err := Emit(context.Background(), signal, observer); err != nil {
 		t.Fatal(err)
 	}
@@ -359,6 +396,7 @@ func TestEmitFinalRowSurvivesDroppedAgentName(t *testing.T) {
 	// stales the row.
 	observer.observation.Panes[0].AgentID = "someone-else"
 	observer.observation.Panes[0].AgentNamed = true
+	signal.Sequence++
 	if err := Emit(context.Background(), signal, observer); err != nil {
 		t.Fatal(err)
 	}
@@ -462,8 +500,9 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, reported := range []backend.AgentState{backend.AgentIdle, backend.AgentDone, backend.AgentWorking} {
+	for index, reported := range []backend.AgentState{backend.AgentIdle, backend.AgentDone, backend.AgentWorking} {
 		signal.State = reported
+		signal.Sequence = uint64(index + 1)
 		err = Emit(context.Background(), signal, observer)
 		if err != nil {
 			t.Fatal(err)
@@ -475,7 +514,8 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 	}
 	got, found := stored.FindIntent(intent.ID)
 	wantSession := observer.observation.Panes[0].AgentSession
-	if !found || got.Launch.PendingReportedState != "done" || got.Launch.PendingAgentSession == nil ||
+	if !found || got.Launch.PendingReportedState != "done" || got.Launch.PendingReportedSeq != 3 ||
+		got.Launch.PendingAgentSession == nil ||
 		wantSession == nil || *got.Launch.PendingAgentSession != *wantSession {
 		t.Fatalf("pending intent = (%+v, %t), want done", got, found)
 	}
@@ -649,7 +689,7 @@ func genericPendingEmitterFixture(t *testing.T, repo string) (state.LaunchIntent
 }
 
 func signalForPane(repo string, pane state.Pane) telemetry.Signal {
-	return telemetry.Signal{
+	signal := telemetry.Signal{
 		StatePath: state.Path(repo), RowKey: pane.EmitterRowKey,
 		LaunchNonce: pane.LaunchNonce, EmitterNonce: pane.EmitterNonce,
 		Backend: backend.Herdr, Session: pane.SessionID, SocketPath: pane.SocketPath,
@@ -657,6 +697,10 @@ func signalForPane(repo string, pane state.Pane) telemetry.Signal {
 		TerminalID: pane.TerminalID, Agent: pane.Agent, AgentID: pane.AgentID,
 		State: backend.AgentWorking,
 	}
+	if pane.Agent == "claude" {
+		signal.Sequence = 1
+	}
+	return signal
 }
 
 func exactObserver(pane state.Pane) *fakeObserver {

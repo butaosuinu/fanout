@@ -89,6 +89,9 @@ func runSignal(signal telemetry.Signal, observer Observer) (err error) {
 // never changes authoritative lifecycle fields.
 func Emit(ctx context.Context, signal telemetry.Signal, observer Observer) (err error) {
 	defer errs.Wrap(&err, "emit %s telemetry for %s", signal.Backend, signal.RowKey)
+	if signal.Agent == "claude" && signal.Sequence == 0 || signal.Agent != "claude" && signal.Sequence != 0 {
+		return fmt.Errorf("telemetry sequence does not match provider")
+	}
 	projectRoot, err := projectRootForStatePath(signal.StatePath)
 	if err != nil {
 		return err
@@ -200,6 +203,9 @@ func updateFinalRow(
 	if err != nil {
 		return err
 	}
+	if staleSignal(signal, locked.Panes[index].ReportedStateSeq) {
+		return nil
+	}
 	current, err := verifyRuntimeObservation(target, observation)
 	if err != nil {
 		if errors.Is(err, errRuntimeIdentityChanged) {
@@ -214,6 +220,7 @@ func updateFinalRow(
 		locked.Panes[index].ReportedState,
 		string(signal.State),
 	)
+	locked.Panes[index].ReportedStateSeq = signal.Sequence
 	locked.Panes[index].StateRefinement = true
 	return locked.Save()
 }
@@ -254,6 +261,7 @@ func invalidateFinalRowTelemetry(locked *state.LockedStore, index int) error {
 		return err
 	}
 	locked.Panes[index].ReportedState = ""
+	locked.Panes[index].ReportedStateSeq = 0
 	locked.Panes[index].StateRefinement = false
 	locked.Panes[index].EmitterNonce = nonce
 	return locked.Save()
@@ -286,10 +294,21 @@ func updatePendingIntent(
 	if err != nil {
 		return err
 	}
+	if staleSignal(signal, intent.Launch.PendingReportedSeq) {
+		return nil
+	}
 	current, err := verifyRuntimeObservation(target, observation)
 	if err != nil {
 		return err
 	}
+	if err := recordPendingSignal(&intent, signal, current); err != nil {
+		return err
+	}
+	journal.UpsertIntent(intent)
+	return journal.Save()
+}
+
+func recordPendingSignal(intent *state.LaunchIntent, signal telemetry.Signal, current backend.LivePane) error {
 	if current.AgentSession == nil {
 		return fmt.Errorf("pending telemetry requires a current agent session")
 	}
@@ -298,8 +317,12 @@ func updatePendingIntent(
 		intent.Launch.PendingAgentSession = &session
 	}
 	intent.Launch.PendingReportedState = nextReportedState(intent.Launch.PendingReportedState, string(signal.State))
-	journal.UpsertIntent(intent)
-	return journal.Save()
+	intent.Launch.PendingReportedSeq = signal.Sequence
+	return nil
+}
+
+func staleSignal(signal telemetry.Signal, applied uint64) bool {
+	return signal.Agent == "claude" && signal.Sequence <= applied
 }
 
 func nextReportedState(current, next string) string {

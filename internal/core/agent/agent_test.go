@@ -91,6 +91,17 @@ func TestBuildClaudeHookSettingsJSONKeepsSessionEndSynchronous(t *testing.T) {
 	}
 }
 
+func TestClaudeStateCommandAllocatesSequenceBeforeBackgrounding(t *testing.T) {
+	got := claudeStateCommand("emit working", "next sequence", true)
+	want := `__fanout_event_sequence="$(next sequence)" && { emit working "$__fanout_event_sequence" || true; } &`
+	if got != want {
+		t.Fatalf("claudeStateCommand() = %q, want %q", got, want)
+	}
+	if out, err := exec.Command("sh", "-n", "-c", got).CombinedOutput(); err != nil {
+		t.Fatalf("sequenced hook is not valid POSIX shell: %v: %s", err, out)
+	}
+}
+
 func TestBuildCommandQuotesPrompt(t *testing.T) {
 	got, err := BuildCommand("claude", "[fanout #1] it's ready")
 	if err != nil {

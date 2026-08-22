@@ -71,6 +71,7 @@ type Pane struct {
 	// fence updates to one Herdr generation; none of these fields authorizes
 	// lifecycle, cleanup, completion, or nudge operations.
 	ReportedState     string   `json:"reported_state,omitempty"`
+	ReportedStateSeq  uint64   `json:"reported_state_sequence,omitempty"`
 	StateRefinement   bool     `json:"state_refinement,omitempty"`
 	EmitterRowKey     string   `json:"emitterRowKey,omitempty"`
 	LaunchNonce       string   `json:"launchNonce,omitempty"`
