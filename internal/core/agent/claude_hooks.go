@@ -148,7 +148,7 @@ func claudeStateCommand(command, nextSequence string, background bool) string {
 		sequence := `__fanout_event_sequence="$(` + nextSequence + `)" && `
 		command += ` "$__fanout_event_sequence"`
 		if background {
-			return sequence + "{ " + command + " || true; } &"
+			return sequence + "{ { " + command + " || true; } & }"
 		}
 		return sequence + command + " || true"
 	}

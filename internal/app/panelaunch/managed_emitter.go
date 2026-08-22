@@ -84,7 +84,7 @@ func managedClaudeHookSettings(fanoutPath string) (string, error) {
 	}
 	emit := func(reportedState string) string {
 		return fmt.Sprintf(
-			`FANOUT_STATE_PATH="$FANOUT_EMITTER_STATE_PATH" %s %s %s "$__fanout_event_sequence" >/dev/null 2>&1`,
+			`FANOUT_STATE_PATH="$FANOUT_EMITTER_STATE_PATH" %s %s %s >/dev/null 2>&1`,
 			agent.ShellQuote(fanoutPath), telemetry.Command, reportedState,
 		)
 	}

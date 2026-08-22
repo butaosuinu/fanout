@@ -90,6 +90,50 @@ func TestEmitFinalRowDiscardsOlderClaudeSequence(t *testing.T) {
 	}
 }
 
+func TestEmitStaleFinalSequenceStillRebindsReplacedSession(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	first := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-first",
+	}
+	second := first
+	second.Value = "session-second"
+	pane.AgentSession = &first
+	pane.ReportedState = string(backend.AgentBlocked)
+	pane.ReportedStateSeq = 2
+	pane.StateRefinement = true
+	observer.observation.Panes[0].AgentSession = &second
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.AgentSession == nil || *got.AgentSession != second ||
+		got.ReportedState != string(backend.AgentBlocked) || got.ReportedStateSeq != 2 {
+		t.Fatalf("stale sequence did not preserve telemetry and rebind session: %+v", got)
+	}
+}
+
+func TestEmitStaleFinalSequenceStillInvalidatesTerminalReplacement(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	pane.ReportedState = string(backend.AgentBlocked)
+	pane.ReportedStateSeq = 2
+	pane.StateRefinement = true
+	observer.observation.Panes[0].TerminalID = "terminal-replacement"
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "" || got.ReportedStateSeq != 0 || got.StateRefinement ||
+		got.EmitterNonce == pane.EmitterNonce {
+		t.Fatalf("stale sequence did not invalidate replaced terminal: %+v", got)
+	}
+}
+
 func TestEmitRejectsMissingClaudeSequenceWithoutMutation(t *testing.T) {
 	repo := newEmitterRepo(t)
 	pane, signal, observer := finalEmitterFixture(t, repo)
@@ -561,6 +605,9 @@ func TestEmitPendingIntentRejectsIncompleteIdentityMatch(t *testing.T) {
 func TestEmitPendingIntentRejectsWorkspaceLabelReplacement(t *testing.T) {
 	repo := newEmitterRepo(t)
 	intent, signal, observer := pendingEmitterFixture(t, repo)
+	intent.Launch.PendingReportedState = string(backend.AgentBlocked)
+	intent.Launch.PendingReportedSeq = 2
+	intent.Launch.PendingAgentSession = observer.observation.Panes[0].AgentSession
 	saveEmitterIntent(t, repo, intent)
 	observer.observation.Panes[0].WorkspaceLabel = "foreign-label"
 
@@ -572,7 +619,8 @@ func TestEmitPendingIntentRejectsWorkspaceLabelReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, found := stored.FindIntent(intent.ID)
-	if !found || got.Launch.PendingReportedState != "" {
+	if !found || got.Launch.PendingReportedState != string(backend.AgentBlocked) ||
+		got.Launch.PendingReportedSeq != 2 {
 		t.Fatalf("replaced provisional workspace changed intent: (%+v, %t)", got, found)
 	}
 }

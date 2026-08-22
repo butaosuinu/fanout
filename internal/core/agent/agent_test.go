@@ -93,7 +93,7 @@ func TestBuildClaudeHookSettingsJSONKeepsSessionEndSynchronous(t *testing.T) {
 
 func TestClaudeStateCommandAllocatesSequenceBeforeBackgrounding(t *testing.T) {
 	got := claudeStateCommand("emit working", "next sequence", true)
-	want := `__fanout_event_sequence="$(next sequence)" && { emit working "$__fanout_event_sequence" || true; } &`
+	want := `__fanout_event_sequence="$(next sequence)" && { { emit working "$__fanout_event_sequence" || true; } & }`
 	if got != want {
 		t.Fatalf("claudeStateCommand() = %q, want %q", got, want)
 	}

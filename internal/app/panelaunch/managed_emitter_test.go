@@ -48,6 +48,9 @@ func TestManagedEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T)
 		strings.Contains(settings, "clear") || strings.Contains(settings, "resume") {
 		t.Fatalf("SessionEnd settings = %s", settings)
 	}
+	if !strings.Contains(settings, telemetry.Command+` working >/dev/null 2>&1 \"$__fanout_event_sequence\"`) {
+		t.Fatalf("working emitter args = %s", settings)
+	}
 	if !telemetry.ValidNonce(launch.nonce) {
 		t.Fatalf("emitter nonce = %q", launch.nonce)
 	}

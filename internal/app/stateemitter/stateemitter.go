@@ -203,9 +203,6 @@ func updateFinalRow(
 	if err != nil {
 		return err
 	}
-	if staleSignal(signal, locked.Panes[index].ReportedStateSeq) {
-		return nil
-	}
 	current, err := verifyRuntimeObservation(target, observation)
 	if err != nil {
 		if errors.Is(err, errRuntimeIdentityChanged) {
@@ -215,6 +212,9 @@ func updateFinalRow(
 	}
 	if err := bindAgentSession(locked.Panes, index, current); err != nil {
 		return err
+	}
+	if staleSignal(signal, locked.Panes[index].ReportedStateSeq) {
+		return locked.Save()
 	}
 	locked.Panes[index].ReportedState = nextReportedState(
 		locked.Panes[index].ReportedState,
@@ -294,12 +294,12 @@ func updatePendingIntent(
 	if err != nil {
 		return err
 	}
-	if staleSignal(signal, intent.Launch.PendingReportedSeq) {
-		return nil
-	}
 	current, err := verifyRuntimeObservation(target, observation)
 	if err != nil {
 		return err
+	}
+	if staleSignal(signal, intent.Launch.PendingReportedSeq) {
+		return nil
 	}
 	if err := recordPendingSignal(&intent, signal, current); err != nil {
 		return err
