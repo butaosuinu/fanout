@@ -193,7 +193,7 @@ func exactRestartedShellCandidate(row managedRestartRow, live []backend.LivePane
 	binding := row.saved.RuntimeBinding()
 	for _, current := range live {
 		binding.TerminalID = current.TerminalID
-		if binding.MatchesLive(current, backend.RequireRuntime(backend.Herdr)) {
+		if binding.MatchesLive(current, backend.RequireRuntime(backend.NormalizeName(row.saved.Backend))) {
 			return managedRestartCandidate{row: row, live: current}
 		}
 	}
