@@ -143,6 +143,77 @@ func TestResumeRestartedManagedRowsRebindsExactCodexProcess(t *testing.T) {
 	}
 }
 
+func TestResumeRestartedManagedRowsRefreshesShellAndConsoleTerminalIDs(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	shell, shellLive := restartShellFixture(repo, "shell", -1, "")
+	console, consoleLive := restartShellFixture(repo, "console", -2, ManagedConsoleRuntimeParent)
+	console.RepoKey, console.RepoRoot = "", ""
+	consoleLive.RepoKey, consoleLive.ProjectRoot, consoleLive.WorktreePath = "", "", ""
+	coordinator, coordinatorLive := restartShellFixture(repo, "coordinator", -3, "plan:test")
+	coordinator.Agent = ""
+	coordinator.RepoKey, coordinator.RepoRoot = "", ""
+	coordinatorLive.RepoKey, coordinatorLive.ProjectRoot, coordinatorLive.WorktreePath = "", "", ""
+	for _, pane := range []state.Pane{shell, console, coordinator} {
+		recordRestartStatePane(t, repo, pane)
+	}
+	locked, journal := lockManagedRestartTest(t, repo)
+	runtime := &restartRuntimeFake{
+		t: t,
+		route: backend.OwnedLaunchRoute{
+			Session: shell.SessionID, SocketPath: shell.SocketPath,
+		},
+		waitPanes: []backend.LivePane{shellLive, consoleLive, coordinatorLive},
+	}
+
+	if err := resumeRestartedManagedRows(
+		context.Background(), repo, locked, journal, runtime, 3*time.Second,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []struct {
+		pane       state.Pane
+		terminalID string
+	}{{shell, shellLive.TerminalID}, {console, consoleLive.TerminalID}, {coordinator, coordinator.TerminalID}} {
+		got, found := locked.Find(want.pane.Parent, want.pane.IssueNum)
+		if !found || got.TerminalID != want.terminalID {
+			t.Fatalf("restart row = (%+v, %t), want terminal %q", got, found, want.terminalID)
+		}
+	}
+}
+
+func TestResumeRestartedManagedRowsKeepsShellTerminalIDOnIdentityMismatch(t *testing.T) {
+	tests := map[string]func(*backend.LivePane){
+		"workspace label":     func(live *backend.LivePane) { live.WorkspaceLabel = "foreign" },
+		"checkout provenance": func(live *backend.LivePane) { live.RepoKey = "foreign" },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			repo := newManagedRealizeRepo(t)
+			saved, live := restartShellFixture(repo, "shell", -1, "")
+			mutate(&live)
+			recordRestartStatePane(t, repo, saved)
+			locked, journal := lockManagedRestartTest(t, repo)
+			runtime := &restartRuntimeFake{
+				t: t,
+				route: backend.OwnedLaunchRoute{
+					Session: saved.SessionID, SocketPath: saved.SocketPath,
+				},
+				waitPanes: []backend.LivePane{live},
+			}
+
+			if err := resumeRestartedManagedRows(
+				context.Background(), repo, locked, journal, runtime, 3*time.Second,
+			); err != nil {
+				t.Fatal(err)
+			}
+			got, found := locked.Find(saved.Parent, saved.IssueNum)
+			if !found || got.TerminalID != saved.TerminalID {
+				t.Fatalf("mismatched restart row = (%+v, %t), want terminal %q", got, found, saved.TerminalID)
+			}
+		})
+	}
+}
+
 func TestResumeRestartedManagedRowsDoesNotWaitForUnsupportedMissingRoute(t *testing.T) {
 	repo := newManagedRealizeRepo(t)
 	saved, placeholder := restartCodexFixture()
@@ -482,6 +553,28 @@ func restartCodexFixture() (state.Pane, backend.LivePane) {
 		CurrentPath: saved.WorktreePath, WorktreePath: saved.WorktreePath,
 		WorkspaceLabel: saved.WorkspaceLabel, TerminalID: "term-new",
 		AgentSession: ref, RepoKey: saved.RepoKey, ProjectRoot: saved.RepoRoot,
+		SessionID: saved.SessionID, SocketPath: saved.SocketPath,
+	}
+	return saved, live
+}
+
+func restartShellFixture(root, name string, issue int, runtimeParent string) (state.Pane, backend.LivePane) {
+	saved := state.Pane{
+		Parent: ManualParentRef, RuntimeParent: runtimeParent, IssueNum: issue,
+		Kind: state.PaneKindShell, Backend: backend.Herdr,
+		PaneID: "w-" + name + ":p1", WorkspaceID: "w-" + name,
+		WorkspaceLabel: "fanout-" + name + "-token", TerminalID: "term-" + name + "-old",
+		RepoKey: root + "/.git", RepoRoot: root,
+		SessionID: "fanout-owned", SocketPath: "/runtime/herdr.sock",
+		Agent: state.PaneKindShell, WorktreePath: root,
+	}
+	live := backend.LivePane{
+		Ref: backend.PaneRef{
+			Backend: backend.Herdr, Workspace: saved.WorkspaceID, Pane: saved.PaneID,
+		},
+		CurrentPath: saved.WorktreePath, WorktreePath: saved.WorktreePath,
+		WorkspaceLabel: saved.WorkspaceLabel, TerminalID: "term-" + name + "-new",
+		RepoKey: saved.RepoKey, ProjectRoot: saved.RepoRoot,
 		SessionID: saved.SessionID, SocketPath: saved.SocketPath,
 	}
 	return saved, live
