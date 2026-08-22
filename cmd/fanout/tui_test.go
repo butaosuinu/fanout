@@ -41,6 +41,14 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func isolateBackendEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("HERDR_SESSION", "")
+	t.Setenv("HERDR_SOCKET_PATH", "")
+}
+
 func TestIsManagedConsoleWorkloadRequestMatchesOnlyTheReservedToken(t *testing.T) {
 	tests := []struct {
 		name string
@@ -385,11 +393,11 @@ func TestCmdTUIHerdrContextSkipsTmuxComposition(t *testing.T) {
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_SESSION", "dev-session")
 	t.Setenv("TMUX", "nested-tmux")
 	t.Setenv("TMUX_PANE", "%nested")
-	t.Setenv("FANOUT_BACKEND", "")
 	t.Setenv("FANOUT_WATCHER", "1")
 	t.Setenv("FANOUT_NOTIFICATIONS", "tmux")
 	tmuxLogPath := installTUIDashboardTmuxShim(t)
@@ -475,11 +483,11 @@ func TestCmdTUIHerdrContextUsesOwnerRootFromChildWorktree(t *testing.T) {
 	initTUITestGitRepo(t, child)
 	commitTUITestGitRepo(t, child)
 	t.Chdir(child)
+	isolateBackendEnv(t)
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_SESSION", "dev-session")
 	t.Setenv("TMUX", "nested-tmux")
 	t.Setenv("TMUX_PANE", "%nested")
-	t.Setenv("FANOUT_BACKEND", "")
 	t.Setenv("FANOUT_NOTIFICATIONS", "none")
 	tmuxLogPath := installTUIDashboardTmuxShim(t)
 
@@ -511,10 +519,9 @@ func TestCmdTUIUserConfiguredHerdrOutsideContextBootstrapsWithoutTmux(t *testing
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
 	t.Chdir(repo)
-	t.Setenv("HERDR_ENV", "")
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "")
 	t.Setenv("TMUX_PANE", "")
-	t.Setenv("FANOUT_BACKEND", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	tmuxLogPath := installTUIDashboardTmuxShim(t)
 	configPath := settings.UserConfigPath()
@@ -582,6 +589,7 @@ func TestCmdTUIRegistersDashboardKeybinds(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	argsPath := installTUIDashboardTmuxShim(t)
@@ -608,6 +616,7 @@ func TestCmdTUIRegistersConsoleKeybinds(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	argsPath := installTUIDashboardTmuxShim(t)
@@ -634,6 +643,7 @@ func TestCmdTUIWiresActivePaneProvider(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	installTUIDashboardTmuxShim(t)
@@ -667,6 +677,7 @@ func TestCmdTUIWiresRuntimeBackendPorts(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	installTUIDashboardTmuxShim(t)
@@ -756,6 +767,7 @@ func TestCmdTUINoDashboardKeybindHonorsEnv(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	t.Setenv("FANOUT_DASHBOARD_KEYBIND", "0")
@@ -787,6 +799,7 @@ func TestCmdTUINoDashboardKeybindKeepsConsoleKeybind(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	t.Setenv("FANOUT_DASHBOARD_KEYBIND", "0")
@@ -816,6 +829,7 @@ func TestCmdTUINoConsoleKeybindHonorsEnv(t *testing.T) {
 	commitTUITestGitRepo(t, repo)
 	writeTUITestStateFile(t, repo)
 	t.Chdir(repo)
+	isolateBackendEnv(t)
 	t.Setenv("TMUX", "tmux-session")
 	t.Setenv("TMUX_PANE", "%tui")
 	t.Setenv("FANOUT_CONSOLE_KEYBIND", "0")
@@ -1566,6 +1580,7 @@ func TestLaunchManualPaneFromTUICreatesMultipleAgentPanes(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	installFakeExecutable(t, "claude")
 	installTUITmuxShim(t, "%77")
 
@@ -1600,6 +1615,7 @@ func TestLaunchManualPaneFromTUIReportsPartialMultipleLaunch(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	installFakeExecutable(t, "claude")
 	installTUITmuxShim(t, "%77")
 	counter := filepath.Join(t.TempDir(), "hook-count")
@@ -1719,6 +1735,7 @@ func TestLaunchShellPaneFromTUIRecordsSelectedWorktreeShellInSourceRoot(t *testi
 func TestLaunchAttachedAgentFromTUIRecordsAttachedAgentState(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	targetPath := filepath.Join(repo, ".fanout", "worktrees", "child")
 	if err := os.MkdirAll(targetPath, 0o755); err != nil {
 		t.Fatal(err)
@@ -1772,6 +1789,7 @@ func TestLaunchAttachedAgentFromTUIRecordsAttachedAgentState(t *testing.T) {
 func TestLaunchAttachedAgentFromTUIRecordsActualWatcherParent(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	targetPath := filepath.Join(repo, ".fanout", "worktrees", "watched")
 	if err := os.MkdirAll(targetPath, 0o755); err != nil {
 		t.Fatal(err)
@@ -1811,6 +1829,7 @@ func TestLaunchAttachedAgentFromTUIRecordsStateInSourceRoot(t *testing.T) {
 	sibling := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	initTUITestGitRepo(t, sibling)
+	isolateBackendEnv(t)
 	targetPath := filepath.Join(sibling, ".fanout", "worktrees", "child")
 	if err := os.MkdirAll(targetPath, 0o755); err != nil {
 		t.Fatal(err)

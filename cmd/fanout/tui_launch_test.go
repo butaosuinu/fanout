@@ -492,6 +492,7 @@ func TestLaunchPlanPromptFromTUIRejectsMultipleAgents(t *testing.T) {
 func TestLaunchPlanPromptFromTUIReturnsCoordinatorPaneID(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	installFakeExecutable(t, "claude")
 	installTUITmuxShim(t, "%88")
 	req := fanouttui.LaunchRequest{
@@ -515,6 +516,7 @@ func TestLaunchPlanPromptFromTUIReturnsCoordinatorPaneID(t *testing.T) {
 func TestLaunchPlanPromptFromTUIReturnsClaudeModeFallbackNotice(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	binDir := t.TempDir()
 	claudePath := filepath.Join(binDir, "claude")
 	if err := os.WriteFile(claudePath, []byte("#!/bin/sh\nprintf '2.1.206 (Claude Code)\\n'\n"), 0o755); err != nil {
@@ -609,9 +611,9 @@ esac
 			repo := t.TempDir()
 			initTUITestGitRepo(t, repo)
 			installFakeExecutable(t, "claude")
+			isolateBackendEnv(t)
 			t.Setenv("HERDR_ENV", "1")
 			t.Setenv("TMUX", "nested-tmux")
-			t.Setenv("FANOUT_BACKEND", "")
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 			locked, lockErr := state.LockProject(repo)
