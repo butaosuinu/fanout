@@ -21,8 +21,8 @@ const (
 )
 
 type legacyRemoveRejection struct {
-	ID     string          `json:"id"`
-	Result json.RawMessage `json:"result"`
+	ID     string           `json:"id"`
+	Result *json.RawMessage `json:"result"`
 	Error  *struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
@@ -89,7 +89,7 @@ func isLegacyDirtyWorktreeRejection(intent state.LaunchIntent) bool {
 	}
 	return !slices.Contains([]bool{
 		envelope.ID == "cli:worktree:remove",
-		len(envelope.Result) == 0,
+		envelope.Result == nil,
 		envelope.Error.Code == "dirty_worktree_requires_force",
 		strings.TrimSpace(envelope.Error.Message) != "",
 	}, false)
@@ -98,7 +98,6 @@ func isLegacyDirtyWorktreeRejection(intent state.LaunchIntent) bool {
 func decodeLegacyRemoveRejection(payload string) (legacyRemoveRejection, bool) {
 	var envelope legacyRemoveRejection
 	decoder := json.NewDecoder(strings.NewReader(payload))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&envelope); err != nil {
 		return legacyRemoveRejection{}, false
 	}

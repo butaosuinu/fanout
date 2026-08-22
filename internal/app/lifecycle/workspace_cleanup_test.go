@@ -786,6 +786,7 @@ func TestHerdrCloseDoesNotReplanMalformedManualIntentContainingDirtyCode(t *test
 
 func TestLegacyDirtyWorktreeRejectionRequiresCompleteEnvelope(t *testing.T) {
 	valid := legacyDirtyWorktreeFailure()
+	captured := capturedLegacyDirtyWorktreeFailure(t)
 	tests := []struct {
 		name    string
 		phase   state.CleanupPhase
@@ -793,8 +794,22 @@ func TestLegacyDirtyWorktreeRejectionRequiresCompleteEnvelope(t *testing.T) {
 		want    bool
 	}{
 		{name: "valid", phase: state.CleanupRemove, failure: valid, want: true},
+		{name: "captured from herdr 0.8.2", phase: state.CleanupRemove, failure: captured, want: true},
+		{
+			name:  "unknown fields",
+			phase: state.CleanupRemove,
+			failure: strings.Replace(
+				valid,
+				`"message":"checkout has changes"},"id"`,
+				`"message":"checkout has changes","details":{"dirty_paths":1}},"hint":"use --force","id"`,
+				1,
+			),
+			want: true,
+		},
+		{name: "null result", phase: state.CleanupRemove, failure: strings.Replace(valid, `,"id"`, `,"result":null,"id"`, 1), want: true},
 		{name: "wrong phase", phase: state.CleanupWorkspaceClose, failure: valid},
 		{name: "wrong id", phase: state.CleanupRemove, failure: strings.Replace(valid, "cli:worktree:remove", "cli:worktree:create", 1)},
+		{name: "wrong code", phase: state.CleanupRemove, failure: strings.Replace(valid, "dirty_worktree_requires_force", "workspace_not_found", 1)},
 		{name: "empty message", phase: state.CleanupRemove, failure: strings.Replace(valid, "checkout has changes", "", 1)},
 		{name: "result present", phase: state.CleanupRemove, failure: strings.Replace(valid, `,"id"`, `,"result":{},"id"`, 1)},
 		{name: "malformed", phase: state.CleanupRemove, failure: "response lost after dirty_worktree_requires_force"},
@@ -1427,6 +1442,16 @@ func recordManualHerdrCleanupIntent(t *testing.T, fixture herdrLifecycleFixture,
 func legacyDirtyWorktreeFailure() string {
 	return `exit status 1: {"error":{"code":"dirty_worktree_requires_force","message":"checkout has changes"},"id":"cli:worktree:remove"}` +
 		"\nherdr worktree remove did not establish absence"
+}
+
+func capturedLegacyDirtyWorktreeFailure(t *testing.T) string {
+	t.Helper()
+	// captured from real herdr 0.8.2
+	payload, err := os.ReadFile(filepath.Join("testdata", "herdr-0.8.2-dirty-worktree-remove.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return legacyRemoveFailurePrefix + strings.TrimSpace(string(payload)) + legacyRemoveFailureSuffix
 }
 
 func expireSavedHerdrCleanupIntent(t *testing.T, fixture herdrLifecycleFixture) {
