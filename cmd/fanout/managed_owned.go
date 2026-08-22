@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -9,9 +10,53 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
+	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
 const ownedPaneUnavailable = "pane is not in this repository's fanout-owned Herdr session"
+
+var (
+	openManagedSessionForTUIAttach = paneruntime.OpenProject
+	prepareManagedTerminalAttach   = func(owned paneruntime.ManagedSession, target backend.OwnedPaneIdentity, environment []string) (backend.AttachExec, error) {
+		return owned.TerminalAttachExec(target, environment)
+	}
+)
+
+func newTUICreatedPaneAttachFunc(projectRoot string) fanouttui.CreatedPaneAttachFunc {
+	return func(launched backend.PaneBinding) (backend.AttachExec, error) {
+		return prepareCreatedPaneAttach(projectRoot, launched)
+	}
+}
+
+func prepareCreatedPaneAttach(projectRoot string, launched backend.PaneBinding) (backend.AttachExec, error) {
+	if backend.NormalizeName(launched.Ref.Backend) != backend.Herdr {
+		return backend.AttachExec{}, fmt.Errorf("created pane is not in the managed runtime")
+	}
+	store, err := state.LoadProject(projectRoot)
+	if err != nil {
+		return backend.AttachExec{}, fmt.Errorf("reload launch binding: %w", err)
+	}
+	pane, ok := findLaunchBindingPane(store, launched.Row)
+	if !ok || !launched.SameLaunchTarget(pane.RuntimeBinding()) {
+		return backend.AttachExec{}, fmt.Errorf("created pane binding changed before attach")
+	}
+	target, err := managedPaneIdentity(pane)
+	if err != nil {
+		return backend.AttachExec{}, err
+	}
+	owned, err := openManagedSessionForTUIAttach(projectRoot)
+	if err != nil {
+		return backend.AttachExec{}, fmt.Errorf("open owned session for attach: %w", err)
+	}
+	return prepareManagedTerminalAttach(owned, target, os.Environ())
+}
+
+func findLaunchBindingPane(store state.Store, row backend.PaneRowKey) (state.Pane, bool) {
+	if row.TaskID != "" {
+		return store.FindTask(row.Parent, row.TaskID)
+	}
+	return store.Find(row.Parent, row.IssueNum)
+}
 
 // managedPaneIdentity projects one saved row onto the owned-pane identity every
 // managed action is admitted against. backend.Herdr appears here as persisted

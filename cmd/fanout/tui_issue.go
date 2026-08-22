@@ -184,13 +184,11 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			}
 			return fanouttui.LaunchResult{}, launchErr
 		}
-		return fanouttui.LaunchResult{
-			Notice:         combinedLaunchNotice([]string{fmt.Sprintf("started session for #%d", issueNum)}, launchResult.Notice),
-			CreatedPaneIDs: []string{launchResult.PaneID},
-		}, nil
+		notice := combinedLaunchNotice([]string{fmt.Sprintf("started session for #%d", issueNum)}, launchResult.Notice)
+		return tuiCoordinatorLaunchResult(notice, launchResult), nil
 	}
 	var orchestratorReq panelaunch.Request
-	var orchestratorPaneID string
+	var orchestratorResult panelaunch.Result
 	var orchestratorCreated bool
 	var orchestratorNotice string
 	ready := func(
@@ -207,7 +205,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			return guardErr
 		}
 		var launchErr error
-		orchestratorReq, orchestratorPaneID, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
+		orchestratorReq, orchestratorResult, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
 			projectRoot, session, commandName, runtimeBackend, managed, store, recorder,
 			hookConfig, detail, defaultAgent, resolvedSettings.OrchestratorPlanMode,
 		)
@@ -224,7 +222,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			return nil
 		}
 		var launchErr error
-		orchestratorReq, orchestratorPaneID, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
+		orchestratorReq, orchestratorResult, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
 			projectRoot, session, commandName, runtimeBackend, managed, store, recorder,
 			hookConfig, detail, defaultAgent, resolvedSettings.OrchestratorPlanMode,
 		)
@@ -233,10 +231,10 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	result, err := launchParentIssueFanoutWithCallbacks(projectRoot, session, commandName, cfg, ready, after)
 	runtimeBackend := result.runtimeBackend
 	if err != nil && len(result.CreatedPaneIDs) == 0 && orchestratorCreated {
-		if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, result.managed, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
+		if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, result.managed, orchestratorReq, orchestratorResult.PaneID); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("cleanup issue orchestrator: %w", cleanupErr))
 		} else {
-			orchestratorPaneID = ""
+			orchestratorResult = panelaunch.Result{}
 			if releaseErr := releaseCleanedIssueOrchestratorGate(runtimeBackend, orchestratorReq); releaseErr != nil {
 				err = errors.Join(err, fmt.Errorf("release cleaned issue orchestrator gate: %w", releaseErr))
 			}
@@ -244,14 +242,14 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	} else if orchestratorCreated {
 		if releaseErr := panelaunch.ReleaseAgentStartGate(runtimeBackend, orchestratorReq); releaseErr != nil {
 			err = errors.Join(err, fmt.Errorf("release issue orchestrator gate: %w", releaseErr))
-			if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, result.managed, orchestratorReq, orchestratorPaneID); cleanupErr != nil {
+			if cleanupErr := cleanupIssueOrchestrator(projectRoot, session, runtimeBackend, result.managed, orchestratorReq, orchestratorResult.PaneID); cleanupErr != nil {
 				err = errors.Join(err, fmt.Errorf("cleanup gated issue orchestrator: %w", cleanupErr))
 			} else {
-				orchestratorPaneID = ""
+				orchestratorResult = panelaunch.Result{}
 			}
 		}
 	}
-	if orchestratorPaneID != "" && orchestratorNotice != "" {
+	if orchestratorResult.PaneID != "" && orchestratorNotice != "" {
 		if result.Notice == "" {
 			result.Notice = orchestratorNotice
 		} else {
@@ -260,7 +258,8 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	}
 	orchestratorAfterChildren := runtimeBackend != nil &&
 		runtimeBackend.MutationModel() == backend.MutationJournaled
-	return finishTUIIssueParentLaunch(issueNum, orchestratorAfterChildren, orchestratorPaneID, result, err)
+	result.OrchestratorBinding = orchestratorResult.Binding
+	return finishTUIIssueParentLaunch(issueNum, orchestratorAfterChildren, orchestratorResult.PaneID, result, err)
 }
 
 // launchOrchestratorAfterChildren reports whether this launch defers the
@@ -283,22 +282,14 @@ func releaseCleanedIssueOrchestratorGate(runtimeBackend backend.Backend, req pan
 
 func finishTUIIssueParentLaunch(issueNum int, orchestratorAfterChildren bool, orchestratorPaneID string, result parentIssueFanoutResult, err error) (fanouttui.LaunchResult, error) {
 	created := len(result.CreatedPaneIDs)
-	createdPaneIDs := orderedTUIIssuePaneIDs(orchestratorAfterChildren, orchestratorPaneID, result.CreatedPaneIDs)
+	launchResult := orderedTUIIssueLaunchResult(orchestratorAfterChildren, orchestratorPaneID, result)
 	if err != nil {
-		if len(createdPaneIDs) > 0 {
+		if len(launchResult.CreatedPaneIDs) > 0 {
 			// The fail-fast loop may have created panes before the failure;
 			// report a partial success so the TUI reloads state and focuses the
 			// first running agent while preserving the failure in its notice.
-			notice := fmt.Sprintf("created %d pane(s), then failed: %v", created, err)
-			if orchestratorPaneID != "" && created > 0 {
-				notice = fmt.Sprintf("started orchestrator + %d child pane(s), then failed: %v", created, err)
-			} else if orchestratorPaneID != "" {
-				notice = fmt.Sprintf("started orchestrator, then failed: %v", err)
-			}
-			if result.Notice != "" {
-				notice += "; " + result.Notice
-			}
-			return fanouttui.LaunchResult{Notice: notice, CreatedPaneIDs: createdPaneIDs}, nil
+			launchResult.Notice = partialTUIIssueLaunchNotice(created, orchestratorPaneID, result.Notice, err)
+			return launchResult, nil
 		}
 		return fanouttui.LaunchResult{}, err
 	}
@@ -317,7 +308,31 @@ func finishTUIIssueParentLaunch(issueNum int, orchestratorAfterChildren bool, or
 	if result.Notice != "" {
 		notice += "; " + result.Notice
 	}
-	return fanouttui.LaunchResult{Notice: notice, CreatedPaneIDs: createdPaneIDs}, nil
+	launchResult.Notice = notice
+	return launchResult, nil
+}
+
+func orderedTUIIssueLaunchResult(orchestratorAfterChildren bool, orchestratorPaneID string, result parentIssueFanoutResult) fanouttui.LaunchResult {
+	return fanouttui.LaunchResult{
+		CreatedPaneIDs: orderedTUIIssuePaneIDs(orchestratorAfterChildren, orchestratorPaneID, result.CreatedPaneIDs),
+		CreatedBindings: orderedTUIIssueBindings(
+			orchestratorAfterChildren, orchestratorPaneID, result.OrchestratorBinding, result.CreatedBindings,
+		),
+	}
+}
+
+func partialTUIIssueLaunchNotice(created int, orchestratorPaneID, prior string, err error) string {
+	notice := fmt.Sprintf("created %d pane(s), then failed: %v", created, err)
+	switch {
+	case orchestratorPaneID != "" && created > 0:
+		notice = fmt.Sprintf("started orchestrator + %d child pane(s), then failed: %v", created, err)
+	case orchestratorPaneID != "":
+		notice = fmt.Sprintf("started orchestrator, then failed: %v", err)
+	}
+	if prior != "" {
+		notice += "; " + prior
+	}
+	return notice
 }
 
 func orderedTUIIssuePaneIDs(orchestratorAfterChildren bool, orchestratorPaneID string, childPaneIDs []string) []string {
@@ -328,6 +343,16 @@ func orderedTUIIssuePaneIDs(orchestratorAfterChildren bool, orchestratorPaneID s
 		return append(append([]string{}, childPaneIDs...), orchestratorPaneID)
 	}
 	return append([]string{orchestratorPaneID}, childPaneIDs...)
+}
+
+func orderedTUIIssueBindings(orchestratorAfterChildren bool, orchestratorPaneID string, orchestrator backend.PaneBinding, children []backend.PaneBinding) []backend.PaneBinding {
+	if orchestratorPaneID == "" || orchestrator.Ref.Pane == "" {
+		return children
+	}
+	if orchestratorAfterChildren {
+		return append(append([]backend.PaneBinding{}, children...), orchestrator)
+	}
+	return append([]backend.PaneBinding{orchestrator}, children...)
 }
 
 // fetchLaunchableIssue is the shared launch preamble for the TUI issue lanes:

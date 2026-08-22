@@ -208,11 +208,13 @@ func launchParentIssueFanout(projectRoot, session, commandName string, cfg *clif
 }
 
 type parentIssueFanoutResult struct {
-	Watch          watch.ParentLaunchResult
-	CreatedPaneIDs []string
-	Notice         string
-	runtimeBackend backend.Backend
-	managed        panelaunch.ManagedSessionRuntime
+	Watch               watch.ParentLaunchResult
+	CreatedPaneIDs      []string
+	CreatedBindings     []backend.PaneBinding
+	OrchestratorBinding backend.PaneBinding
+	Notice              string
+	runtimeBackend      backend.Backend
+	managed             panelaunch.ManagedSessionRuntime
 }
 
 type tuiIssueReadyFunc func(
@@ -276,10 +278,9 @@ func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandNam
 		execution, code = run.IssuesWithPlanInputResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, *input, runReady, runAfter)
 	}
 	result := parentIssueFanoutResult{
-		CreatedPaneIDs: execution.CreatedPaneIDs,
+		CreatedPaneIDs: execution.CreatedPaneIDs, CreatedBindings: execution.CreatedBindings,
 		Notice:         combinedLaunchNotice(execution.Notices, bufferedLaunchNotice(stderr)),
-		runtimeBackend: rt.Backend,
-		managed:        rt.Managed,
+		runtimeBackend: rt.Backend, managed: rt.Managed,
 	}
 	if code != exitcode.OK {
 		return result, bufferedLaunchError(stdout, stderr, "launch parent")

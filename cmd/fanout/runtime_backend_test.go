@@ -883,6 +883,28 @@ func TestRuntimeReadRoutesUseAmbientHerdrWithoutSavedRoute(t *testing.T) {
 	}
 }
 
+func TestRuntimeReadRoutesOmitDefaultAmbientHerdr(t *testing.T) {
+	for _, session := range []string{"", "default"} {
+		t.Run("session="+session, func(t *testing.T) {
+			repo := initLifecycleRepo(t)
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			t.Setenv("FANOUT_BACKEND", "")
+			t.Setenv("HERDR_ENV", "1")
+			t.Setenv("HERDR_SESSION", session)
+			t.Setenv("HERDR_SOCKET_PATH", "/tmp/default.sock")
+			t.Setenv("TMUX", "")
+
+			routes, err := runtimeReadRoutes(repo, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(routes) != 0 {
+				t.Fatalf("routes = %+v, want no default ambient route", routes)
+			}
+		})
+	}
+}
+
 func TestRuntimeReadRoutesUseSharedHerdrControlIntents(t *testing.T) {
 	repo := initLifecycleRepo(t)
 	writeHerdrControlRouteIntent(t, repo, "intent", "/tmp/intent.sock")

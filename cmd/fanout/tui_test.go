@@ -272,7 +272,7 @@ func TestWireOwnedHerdrTUIEnablesScopedInteractivePorts(t *testing.T) {
 	}
 }
 
-func TestSettingsReloadPreservesOnlyAdmittedHerdrIssueLaunch(t *testing.T) {
+func TestSettingsReloadPreservesHerdrNewSessionLaunch(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
@@ -292,8 +292,8 @@ func TestSettingsReloadPreservesOnlyAdmittedHerdrIssueLaunch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if (runtime.LaunchIssue != nil) != tt.admitted {
-				t.Fatalf("LaunchIssue configured = %t, want %t", runtime.LaunchIssue != nil, tt.admitted)
+			if runtime.LaunchIssue == nil {
+				t.Fatal("LaunchIssue is nil, want new-session launch independent of ambient ownership")
 			}
 		})
 	}
@@ -311,6 +311,52 @@ func TestOwnedHerdrPaneIdentitySeparatesGenericCWDFromWorktreeProvenance(t *test
 	}
 	if identity.WorktreePath != "" || identity.CurrentPath != "/repo" {
 		t.Fatalf("generic identity = %+v, want cwd without worktree provenance", identity)
+	}
+}
+
+func TestPrepareCreatedPaneAttachRevalidatesPersistedLaunchBinding(t *testing.T) {
+	repo := t.TempDir()
+	initTUITestGitRepo(t, repo)
+	commitTUITestGitRepo(t, repo)
+	pane := state.Pane{
+		Parent: panelaunch.ManualParentRef, IssueNum: -1, Backend: backend.Herdr,
+		PaneID: "w1:p1", WorkspaceID: "w1", WorkspaceLabel: "owned-label",
+		TerminalID: "terminal-1", SessionID: "owned", SocketPath: "/tmp/owned.sock",
+		RepoKey: "/repo/.git", WorktreePath: "/repo/child", Agent: "codex", AgentID: "agent-1",
+		EmitterRowKey: "row-1", LaunchNonce: "launch-1", EmitterNonce: "emitter-1",
+		LaunchExecutable: "/usr/bin/codex", LaunchArgs: []string{"--sandbox"},
+	}
+	writeRawLifecycleState(t, repo, pane)
+
+	originalOpen := openManagedSessionForTUIAttach
+	originalPrepare := prepareManagedTerminalAttach
+	t.Cleanup(func() {
+		openManagedSessionForTUIAttach = originalOpen
+		prepareManagedTerminalAttach = originalPrepare
+	})
+	owned := &herdrrun.OwnedSession{Session: "owned", SocketPath: "/tmp/owned.sock"}
+	openManagedSessionForTUIAttach = func(string) (paneruntime.ManagedSession, error) { return owned, nil }
+	var got backend.OwnedPaneIdentity
+	prepareManagedTerminalAttach = func(session paneruntime.ManagedSession, target backend.OwnedPaneIdentity, environment []string) (backend.AttachExec, error) {
+		if session != owned || len(environment) == 0 {
+			t.Fatalf("attach inputs = session %+v env %d", session, len(environment))
+		}
+		got = target
+		return backend.AttachExec{Path: "/usr/bin/herdr", Argv: []string{"/usr/bin/herdr", "terminal", "attach", target.TerminalID}}, nil
+	}
+
+	spec, err := prepareCreatedPaneAttach(repo, pane.RuntimeBinding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TerminalID != pane.TerminalID || got.Ref.Pane != pane.PaneID || spec.Argv[len(spec.Argv)-1] != pane.TerminalID {
+		t.Fatalf("attach target/spec = %+v / %+v", got, spec)
+	}
+
+	drifted := pane.RuntimeBinding()
+	drifted.TerminalID = "terminal-reused"
+	if _, err := prepareCreatedPaneAttach(repo, drifted); err == nil || !strings.Contains(err.Error(), "binding changed") {
+		t.Fatalf("drift error = %v, want fail-closed binding rejection", err)
 	}
 }
 
@@ -435,9 +481,19 @@ func TestCmdTUIHerdrContextSkipsTmuxComposition(t *testing.T) {
 	}
 	if opts.Watcher != nil || opts.RestorePanes != nil || opts.Relayout != nil || opts.ActivePane != nil ||
 		opts.FocusPane != nil || opts.CapturePaneOutput != nil || opts.ClosePane != nil || opts.LifecycleCloseOwned != nil ||
-		opts.NewPanePrompt != nil || opts.HelpPopup != nil || opts.SettingsPopup != nil || opts.LaunchPane != nil ||
-		opts.LaunchIssue != nil || opts.LaunchIssuePlan != nil || opts.LaunchAttach != nil || opts.LaunchShell != nil {
+		opts.NewPanePrompt != nil || opts.HelpPopup != nil || opts.SettingsPopup != nil ||
+		opts.LaunchAttach != nil || opts.LaunchShell != nil || opts.FocusManagedPane != nil || opts.CaptureManagedPane != nil {
 		t.Fatalf("herdr TUI has tmux/mutation wiring: %+v", opts)
+	}
+	if opts.LaunchPane == nil || opts.LaunchIssue == nil || opts.LaunchIssuePlan == nil ||
+		opts.LaunchActionDisabled == nil || opts.PrepareCreatedPaneAttach == nil {
+		t.Fatalf("herdr TUI new-session wiring is incomplete: %+v", opts)
+	}
+	if reason := opts.LaunchActionDisabled(); reason != "" {
+		t.Fatalf("new-session launch disabled: %q", reason)
+	}
+	if reason := opts.ManagedActionDisabled(state.Pane{}); !strings.Contains(reason, ownedPaneUnavailable) {
+		t.Fatalf("owned action reason = %q, want ownership refusal", reason)
 	}
 	if opts.ReloadSettings == nil {
 		t.Fatal("ReloadSettings is nil, want runtime-neutral notification reload")
@@ -446,8 +502,8 @@ func TestCmdTUIHerdrContextSkipsTmuxComposition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReloadSettings: %v", err)
 	}
-	if runtime.Watcher != nil || runtime.LaunchIssue != nil {
-		t.Fatalf("herdr reload runtime = %+v, want no watcher/launcher", runtime)
+	if runtime.Watcher != nil || runtime.LaunchIssue == nil {
+		t.Fatalf("herdr reload runtime = %+v, want no watcher and a new-session launcher", runtime)
 	}
 	if _, err := os.Stat(tmuxLogPath); !os.IsNotExist(err) {
 		body, _ := os.ReadFile(tmuxLogPath)
@@ -1578,6 +1634,10 @@ func TestLaunchManualPaneFromTUICreatesMultipleAgentPanes(t *testing.T) {
 	}
 	if !reflect.DeepEqual(result.CreatedPaneIDs, []string{"%77", "%77"}) {
 		t.Fatalf("created pane ids = %#v, want creation-order ids", result.CreatedPaneIDs)
+	}
+	if len(result.CreatedBindings) != 2 || result.CreatedBindings[0].Row == result.CreatedBindings[1].Row ||
+		result.CreatedBindings[0].Ref.Pane != "%77" || result.CreatedBindings[1].Ref.Pane != "%77" {
+		t.Fatalf("created bindings = %+v, want distinct rows in creation order", result.CreatedBindings)
 	}
 
 	store, err := state.LoadProject(repo)

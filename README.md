@@ -79,7 +79,9 @@ stable herdr 0.7.5 or newer, and no tmux. Issue / Project / plan / watcher
 launches, TUI launch / focus / peek, `--merge` / `--close` / `--cleanup`, and
 `--team` messaging work there; interactive send, restore, and plan capture do
 not. Focus also needs `herdr integration install claude` / `codex`, which is
-what reports the agent session it matches on.
+what reports the agent session it matches on. From a foreign or `default`
+herdr console, the TUI keeps recorded-row actions disabled but lets `n` create
+work in the repository-owned session and attach its first terminal directly.
 
 ## Quick start
 

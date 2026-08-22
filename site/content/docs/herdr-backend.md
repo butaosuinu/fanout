@@ -56,7 +56,7 @@ herdr workspace close <workspace-id>
 The unsupported paths fail closed with a clear error.
 
 - Interactive send, restore, and plan capture remain unavailable for herdr rows.
-- TUI focus, launch, and peek require a complete saved identity in fanout's owned session. Foreign, stale, and legacy rows stay disabled with a reason.
+- TUI focus, attached-agent / shell launch, and peek require a complete saved identity in fanout's owned session. Foreign, stale, and legacy rows stay disabled with a reason. The new-session `n` form is the only exception: it can submit Prompt, Issue, or plan work to the repository-owned session from a foreign or `default` console. Opening or cancelling the form creates nothing. After submit, fanout attaches the first created terminal directly; detaching returns to the same TUI. An attach failure does not remove the created panes or state rows.
 - Focus additionally needs a saved agent session. Only the agent integration reports one, so focus is refused until `herdr integration install claude` / `codex` is in place. Three kinds of row stay refused even with it installed: agents started with attach ([#732](https://github.com/butaosuinu/fanout/issues/732)), Codex Plan Mode and team (their workload is fanout's controller, not the provider), and OpenCode. None of them receive the socket environment the hook needs.
 - When a provider starts a new conversation in the same pane (Claude's `/clear`, Codex's `/new`), herdr replaces the conversation and also drops the agent record's name. The row's recorded conversation follows the new one, and fanout re-asserts the name it minted, so focus, peek, `--close`, and `--cleanup` keep working across it. A conversation from a different provider, a reference the runtime did not issue, and an agent record already answering to another name are all refused as before.
 - Codex child Plan Mode runs through fanout's app-server controller and owned launcher. Claude and OpenCode keep their native mode flags.
@@ -70,7 +70,7 @@ The TUI header always shows the selected backend and why it was selected, such a
 - The `herdr` binary on your `PATH`, installed separately.
 - The selected agent CLI on your `PATH`.
 
-CLI and no-argument TUI launches do not require a pre-existing herdr session: fanout creates or adopts an isolated session under its owner marker. A TUI started inside a foreign herdr session remains observational; its interactive actions do not gain owned-session authority (`default` is rejected).
+CLI and no-argument TUI launches do not require a pre-existing herdr session: fanout creates or adopts an isolated session under its owner marker. A TUI started inside a foreign herdr session remains observational for recorded rows and every mutation except new-session `n`; submitting that form creates work in the owned session without granting authority over the ambient session. fanout does not poll an empty or `default` ambient session as an observation route.
 
 ## Opting in
 
@@ -120,7 +120,7 @@ A CLI fan-out needs neither an attach nor an existing session. It creates or ado
 v0.13.0's herdr backend was observation-only: you started a named herdr session yourself, fanout pinned herdr 0.7.3 exactly, and every launch and mutation was refused — so it recorded no herdr rows of its own. To move to the owned model:
 
 1. Upgrade the `herdr` CLI to stable 0.7.5 or newer; 0.7.3 and 0.7.4 now fail closed with `unsupported herdr CLI version …`. The owned session starts its own server from the pinned CLI, so your existing herdr server needs no restart.
-2. Stop starting and naming a session by hand. fanout creates its own under an owner marker; in a session it does not own, interactive actions stay disabled with a reason.
+2. Stop starting and naming a session by hand. fanout creates its own under an owner marker; in a session it does not own, recorded-row actions stay disabled with a reason. New-session `n` is the only exception.
 3. Leave the old herdr pane and bootstrap from a plain shell, with `HERDR_SESSION` and `HERDR_SOCKET_PATH` unset. Those variables still select the server fanout reads foreign rows from, and inside a herdr pane they must match the owned session or the TUI drops back to observation with a warning.
 
 `.fanout/state.json` needs no conversion, and tmux parents are untouched.
@@ -134,7 +134,8 @@ v0.13.0's herdr backend was observation-only: you started a named herdr session 
 | Liveness and agent state (TUI console, web dashboard) | tmux queries and pane options | `herdr api snapshot` plus launch-bound Claude or Codex Plan telemetry |
 | Exit status display | Launch wrapper reports `✓ done` | None — herdr's public API keeps no exit status |
 | Pane after the agent exits | Pane stays open with the wrapper message | herdr drops the pane and its own record on normal exit; the fanout row turns `stale` |
-| Interactive TUI launch / focus / peek | TUI keys | Available for ownership-verified panes in fanout's session |
+| New-session TUI launch (`n`) | Popup, then focuses the first pane | Available from owned, foreign, and `default` consoles; foreign / `default` attaches the first terminal directly and returns after detach |
+| Recorded-row TUI launch / focus / peek | TUI keys | Available for ownership-verified panes in fanout's session |
 | TUI focus + zoom (`Z`) | Focuses the pane, then zooms it | Unavailable — `herdr backend interactive TUI action is unavailable; zoom is unavailable` |
 | Interactive send / restore / plan capture | Supported tmux paths | Unavailable — `runtime backend herdr does not support …` |
 | `--team` peer messaging | SQLite registry, Claude watcher, Codex app-server bridge | Same registry and push lanes |

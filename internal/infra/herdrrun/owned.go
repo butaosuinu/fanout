@@ -104,6 +104,32 @@ func (s *OwnedSession) AttachForms(baseEnvironment []string) (string, corebacken
 	return renderAttachCommand(m, assignments), spec, nil
 }
 
+// TerminalAttachExec builds an interactive attach for one exact live terminal
+// in this owned session. It revalidates the saved route, workspace, terminal,
+// checkout, and agent record before exposing the pinned client process image.
+func (s *OwnedSession) TerminalAttachExec(target corebackend.OwnedPaneIdentity, baseEnvironment []string) (_ corebackend.AttachExec, err error) {
+	defer errs.Wrap(&err, "build owned Herdr terminal attach")
+	if s == nil || s.backend == nil {
+		return corebackend.AttachExec{}, fmt.Errorf("herdr owned session is nil")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*commandTimeout)
+	defer cancel()
+	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	if err != nil {
+		return corebackend.AttachExec{}, err
+	}
+	defer unlockPrivateFile(lock)
+	if _, _, err := s.backend.resolveOwnedTarget(ctx, admission, target); err != nil {
+		return corebackend.AttachExec{}, err
+	}
+	marker := admission.marker
+	return corebackend.AttachExec{
+		Path: marker.BinaryPath,
+		Argv: []string{marker.BinaryPath, "terminal", "attach", target.TerminalID},
+		Env:  mergeAttachEnvironment(baseEnvironment, attachAssignments(marker)),
+	}, nil
+}
+
 func renderAttachCommand(m ownerMarker, assignments [][2]string) string {
 	parts := make([]string, 0, len(assignments)+1)
 	for _, assignment := range assignments {

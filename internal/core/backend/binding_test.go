@@ -358,6 +358,56 @@ func TestPaneBindingEqual(t *testing.T) {
 	}
 }
 
+func TestPaneBindingSameLaunchTarget(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*PaneBinding)
+		want   bool
+	}{
+		{name: "same projection", want: true},
+		{
+			name:   "first conversation bind",
+			mutate: func(b *PaneBinding) {},
+			want:   true,
+		},
+		{name: "route drift", mutate: func(b *PaneBinding) { b.SessionID = "session-b" }},
+		{name: "terminal drift", mutate: func(b *PaneBinding) { b.TerminalID = "terminal-b" }},
+		{name: "agent drift", mutate: func(b *PaneBinding) { b.AgentID = "agent-b" }},
+		{name: "generation drift", mutate: func(b *PaneBinding) { b.Launch.Nonce = "nonce-b" }},
+		{
+			name:   "same provider replaced conversation",
+			mutate: func(b *PaneBinding) { b.AgentSession.Value = "session-value-b" },
+			want:   true,
+		},
+		{
+			name: "foreign provider conversation",
+			mutate: func(b *PaneBinding) {
+				b.AgentSession.Agent, b.AgentSession.Source = "claude", "herdr:claude"
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			launched, current := boundPane(), boundPane()
+			if tt.name == "first conversation bind" {
+				launched.AgentSession = nil
+			}
+			if tt.mutate != nil {
+				tt.mutate(&current)
+			}
+			if got := launched.SameLaunchTarget(current); got != tt.want {
+				t.Fatalf("SameLaunchTarget() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+
+	launched, current := boundPane(), boundPane()
+	current.AgentSession = nil
+	if launched.SameLaunchTarget(current) {
+		t.Fatal("SameLaunchTarget() admitted a lost recorded conversation")
+	}
+}
+
 func TestExpectedAgentSession(t *testing.T) {
 	valid := &AgentSessionRef{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "v"}
 	tests := []struct {

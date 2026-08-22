@@ -507,6 +507,9 @@ func TestLaunchPlanPromptFromTUIReturnsCoordinatorPaneID(t *testing.T) {
 	if len(result.CreatedPaneIDs) != 1 || result.CreatedPaneIDs[0] != "%88" {
 		t.Fatalf("created pane ids = %#v, want [%%88]", result.CreatedPaneIDs)
 	}
+	if len(result.CreatedBindings) != 1 || result.CreatedBindings[0].Ref.Pane != "%88" {
+		t.Fatalf("created bindings = %+v, want coordinator binding", result.CreatedBindings)
+	}
 	if !strings.Contains(result.Notice, "started plan coordinator (claude)") {
 		t.Fatalf("notice = %q, want coordinator success", result.Notice)
 	}

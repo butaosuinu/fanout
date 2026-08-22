@@ -1,11 +1,9 @@
 package backend
 
-// AttachExec is the complete process image a plain terminal execs to enter a
-// runtime-owned session in place: the runtime's pinned native client, its
-// argv, and the full environment the client needs to route to the owned
-// server. The caller replaces its own process with this image and never sees
-// control again; a caller that cannot exec (no terminal, or the exec itself
-// fails) prints the equivalent shell command instead.
+// AttachExec is the complete process image used to enter a runtime-owned
+// session: the runtime's pinned native client, its argv, and the full
+// environment needed to route to the owned server. A plain terminal may exec
+// it in place; a resident TUI may suspend itself while the process runs.
 type AttachExec struct {
 	// Path is the absolute path of the pinned client binary to exec.
 	Path string

@@ -161,6 +161,23 @@ func (b PaneBinding) Equal(other PaneBinding) bool {
 	return !slices.Contains(same, false)
 }
 
+// SameLaunchTarget reports whether other is a later projection of the pane
+// created by b. The route, checkout, agent record, and launch generation stay
+// exact. The conversation may complete its first bind or be replaced by the
+// same provider because it does not select the terminal.
+func (b PaneBinding) SameLaunchTarget(other PaneBinding) bool {
+	same := []bool{
+		b.Row == other.Row, b.Ref == other.Ref,
+		b.SessionID == other.SessionID, b.SocketPath == other.SocketPath,
+		b.WorkspaceLabel == other.WorkspaceLabel, b.TerminalID == other.TerminalID,
+		b.Agent == other.Agent, b.AgentID == other.AgentID, b.Shell == other.Shell,
+		b.RepoKey == other.RepoKey, b.WorktreePath == other.WorktreePath,
+		b.Launch.Equal(other.Launch),
+		AgentSessionAdmits(b.Agent, b.AgentSession, other.AgentSession),
+	}
+	return !slices.Contains(same, false)
+}
+
 // routeMatchesLive requires the complete recorded route. The ownership label
 // and the terminal record must be present on both sides: an unlabelled row or
 // a terminal-less observation carries no evidence against id reuse.

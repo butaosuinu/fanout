@@ -563,6 +563,30 @@ func TestAttachFormsBuildBothLanesFromOneAdmission(t *testing.T) {
 	}
 }
 
+func TestTerminalAttachExecUsesPinnedClientAndExactTerminal(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	spec, err := h.session.TerminalAttachExec(target, []string{
+		"PATH=/usr/bin", sessionEnv + "=foreign", "HERDR_STRAY=1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantArgs := []string{spec.Path, "terminal", "attach", target.TerminalID}
+	if !strings.Contains(spec.Path, h.layout.binaryDir) || !slices.Equal(spec.Argv, wantArgs) {
+		t.Fatalf("TerminalAttachExec() image = %+v, want argv %v", spec, wantArgs)
+	}
+	if slices.Contains(spec.Argv, "--takeover") || slices.Contains(spec.Env, "HERDR_STRAY=1") ||
+		slices.Contains(spec.Env, sessionEnv+"=foreign") {
+		t.Fatalf("TerminalAttachExec() retained unsafe input: %+v", spec)
+	}
+
+	target.TerminalID = "terminal-reused"
+	if _, err := h.session.TerminalAttachExec(target, nil); !errors.Is(err, corebackend.ErrOwnedIdentityMismatch) {
+		t.Fatalf("TerminalAttachExec() drift error = %v, want identity mismatch", err)
+	}
+}
+
 func TestMergeAttachEnvironment(t *testing.T) {
 	assignments := [][2]string{{"HERDR_SESSION", "owned"}, {"XDG_CONFIG_HOME", "/xdg"}}
 	owned := []string{"HERDR_SESSION=owned", "XDG_CONFIG_HOME=/xdg"}

@@ -329,16 +329,29 @@ func runtimeReadRoutes(projectRoot string, includeHostRoute bool) ([]runtimeRead
 		case backend.Tmux:
 			addRoute(runtimeReadRoute{name: backend.Tmux})
 		case backend.Herdr:
-			if !hasManagedRoute {
-				addRoute(runtimeReadRoute{
-					name:       backend.Herdr,
-					sessionID:  strings.TrimSpace(inputs.SessionID),
-					socketPath: strings.TrimSpace(inputs.SocketPath),
-				})
+			for _, route := range ambientManagedReadRoutes(inputs, hasManagedRoute) {
+				addRoute(route)
 			}
 		}
 	}
 	return routes, routeErr
+}
+
+// ambientManagedReadRoutes admits only a named foreign session. Empty and
+// default routes cannot satisfy the managed backend's observation contract;
+// saved rows and intents remain authoritative and suppress this fallback.
+func ambientManagedReadRoutes(inputs paneruntime.Inputs, hasSavedRoute bool) []runtimeReadRoute {
+	if hasSavedRoute {
+		return nil
+	}
+	sessionID := strings.TrimSpace(inputs.SessionID)
+	if sessionID == "" || sessionID == "default" {
+		return nil
+	}
+	return []runtimeReadRoute{{
+		name: backend.Herdr, sessionID: sessionID,
+		socketPath: strings.TrimSpace(inputs.SocketPath),
+	}}
 }
 
 func intentRuntimeRoute(intent state.LaunchIntent) (string, string) {
