@@ -525,7 +525,7 @@ func newTUISettingsReloadFunc(projectRoot, session, commandName string, hookConf
 			Notifier:            notifier,
 		}
 		syncTUIReloadKeys(hosted, resolvedSettings, lg)
-		runtime.LaunchIssue = reloadedTUIIssueLauncher(hosted || selection.Name == backend.Herdr, projectRoot, session, commandName, resolvedSettings, hookConfig)
+		runtime.LaunchIssue = newTUIIssueLaunchFunc(projectRoot, session, commandName, resolvedSettings, hookConfig)
 		return runtime, nil
 	}
 }
@@ -540,13 +540,6 @@ func syncTUIReloadKeys(hosted bool, resolved settings.Settings, lg *log.Logger) 
 	}
 	syncDashboardKey(lg, resolved.DashboardKeybind, true)
 	syncConsoleKey(lg, resolved.ConsoleKeybind, true)
-}
-
-func reloadedTUIIssueLauncher(enabled bool, projectRoot, session, commandName string, resolved settings.Settings, hookConfig hooks.Config) fanouttui.IssueLaunchFunc {
-	if !enabled {
-		return nil
-	}
-	return newTUIIssueLaunchFunc(projectRoot, session, commandName, resolved, hookConfig)
 }
 
 func tuiLaunchTarget(session string) string {

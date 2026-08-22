@@ -72,7 +72,7 @@ func managedPaneIdentity(pane state.Pane) (backend.OwnedPaneIdentity, error) {
 	}
 	identity := backend.OwnedPaneIdentity{
 		Ref: backend.PaneRef{
-			Backend: backend.Herdr, Workspace: pane.WorkspaceID, Pane: pane.PaneID,
+			Backend: backend.NormalizeName(pane.Backend), Workspace: pane.WorkspaceID, Pane: pane.PaneID,
 		},
 		SessionID: pane.SessionID, SocketPath: pane.SocketPath,
 		WorkspaceLabel: pane.WorkspaceLabel, TerminalID: pane.TerminalID,
