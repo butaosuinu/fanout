@@ -80,7 +80,7 @@ func ParseSignal(args []string, getenv func(string) string) (Signal, error) {
 		var err error
 		sequence, err = strconv.ParseUint(args[1], 10, 64)
 		if err != nil || sequence == 0 {
-			return Signal{}, fmt.Errorf("Claude telemetry sequence is invalid")
+			return Signal{}, fmt.Errorf("claude telemetry sequence is invalid")
 		}
 	}
 	signal := Signal{

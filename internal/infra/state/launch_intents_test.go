@@ -774,8 +774,8 @@ func TestLoadLaunchJournalDiscardsLegacyClaudePendingTelemetry(t *testing.T) {
 	if legacy == string(contents) {
 		t.Fatal("saved journal lacks the pending sequence fixture")
 	}
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(path, []byte(legacy), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	loaded, err := LoadLaunchJournal(repo)
