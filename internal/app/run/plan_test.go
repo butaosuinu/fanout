@@ -9,8 +9,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
-	"github.com/butaosuinu/fanout/internal/infra/hooks"
-	"github.com/butaosuinu/fanout/internal/infra/settings"
 )
 
 func TestBuildPlanOnlyIdempotencyAndLimit(t *testing.T) {
@@ -154,50 +152,6 @@ func TestBuildPlanSkipFilter(t *testing.T) {
 	assertInts(t, "filtered skip", issueNums(plan.FilteredSkip), []int{202})
 	if len(plan.FilteredOnly) != 0 {
 		t.Fatalf("filtered only = %#v, want empty", plan.FilteredOnly)
-	}
-}
-
-func TestBuildPlanScopesCodexPlanModeToFilteredTargets(t *testing.T) {
-	children := []ghissue.Issue{
-		{Number: 101, Title: "default agent", State: "OPEN"},
-		{Number: 102, Title: "Codex override", State: "OPEN"},
-	}
-	resolved := settings.Defaults()
-	resolved.ChildPlanMode = true
-	tests := []struct {
-		name          string
-		only          []int
-		skip          []int
-		wantTarget    int
-		wantCodexPlan bool
-	}{
-		{name: "only excludes Codex override", only: []int{101}, wantTarget: 101},
-		{name: "skip excludes Codex override", skip: []int{102}, wantTarget: 101},
-		{name: "selected Codex override remains Plan Mode", only: []int{102}, wantTarget: 102, wantCodexPlan: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &cliflags.Config{
-				ParentRef:      "100",
-				Agent:          "claude",
-				AgentOverrides: []cliflags.AgentOverride{{Target: "102", Name: "codex"}},
-				Only:           tt.only,
-				Skip:           tt.skip,
-				DryRun:         true,
-			}
-			plan := BuildPlan(cfg, children, nil, "", nil, nil)
-			if len(plan.Targets) != 1 || plan.Targets[0].Number != tt.wantTarget {
-				t.Fatalf("targets = %v, want [%d]", issueNums(plan.Targets), tt.wantTarget)
-			}
-
-			launchCfg := effectiveIssueLaunchConfig(cfg, resolved)
-			req := panelaunch.NewIssueRequest(
-				launchCfg, "/repo", plan.Targets[0], resolved, hooks.EmptyConfig(), false, nil,
-			)
-			if got := req.CodexPlanMode(); got != tt.wantCodexPlan {
-				t.Fatalf("target %d CodexPlanMode() = %t, want %t", tt.wantTarget, got, tt.wantCodexPlan)
-			}
-		})
 	}
 }
 

@@ -207,6 +207,63 @@ func TestCmdPlanHerdrDryRunDoesNotMutate(t *testing.T) {
 	}
 }
 
+func TestCmdPlanHerdrPlanModeFiltersAgentOverridesBeforeLaunch(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init", "-b", "main")
+	installHerdrStatusShim(t)
+	t.Chdir(repo)
+	t.Setenv("HERDR_ENV", "")
+	t.Setenv("TMUX", "")
+	t.Setenv("FANOUT_BACKEND", "")
+	t.Setenv("FANOUT_CHILD_PLAN_MODE", "true")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	specPath := filepath.Join(repo, "filtered-plan.json")
+	if err := os.WriteFile(specPath, []byte(`{
+  "version": 1,
+  "plan": {"slug": "filtered-plan", "title": "Filtered plan"},
+  "tasks": [
+    {"id": "keep", "title": "Keep", "briefing": "Keep it"},
+    {"id": "codex-task", "title": "Codex task", "briefing": "Use Codex"}
+  ]
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name          string
+		filterArgs    []string
+		wantCodexPlan bool
+	}{
+		{name: "only excludes Codex override", filterArgs: []string{"--only", "keep"}},
+		{name: "skip excludes Codex override", filterArgs: []string{"--skip", "codex-task"}},
+		{name: "selected Codex override remains Plan Mode", filterArgs: []string{"--only", "codex-task"}, wantCodexPlan: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := []string{
+				specPath,
+				"--backend", "herdr",
+				"--agent", "claude",
+				"--agent", "codex-task=codex",
+				"--dry-run",
+			}
+			args = append(args, tt.filterArgs...)
+			var stdout, stderr bytes.Buffer
+			code := cmdPlan(args, log.NewWith(&stdout, &stderr, false), "fanout")
+			if code != exitcode.OK {
+				t.Fatalf("cmdPlan() = %d, want %d; stderr=%q", code, exitcode.OK, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "herdr workspace create") {
+				t.Fatalf("stdout = %q, want Herdr dry-run launch", stdout.String())
+			}
+			if got := strings.Contains(stdout.String(), "__codex-plan-tui"); got != tt.wantCodexPlan {
+				t.Fatalf("stdout contains Codex Plan Mode launch = %t, want %t:\n%s", got, tt.wantCodexPlan, stdout.String())
+			}
+		})
+	}
+}
+
 func TestParsePlanAgentOverrides(t *testing.T) {
 	cfg := parsePlanOK(t, "launch-plan",
 		"--agent", "claude",
