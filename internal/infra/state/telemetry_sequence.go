@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/butaosuinu/fanout/internal/core/errs"
 	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
@@ -61,7 +62,7 @@ func readTelemetrySequence(path string) (uint64, error) {
 }
 
 func readTelemetrySequenceFile(path string, expected os.FileInfo) (data []byte, err error) {
-	file, err := os.Open(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open sequence: %w", err)
 	}
@@ -70,8 +71,8 @@ func readTelemetrySequenceFile(path string, expected os.FileInfo) (data []byte, 
 	if err != nil {
 		return nil, fmt.Errorf("inspect opened sequence: %w", err)
 	}
-	if !os.SameFile(expected, current) {
-		return nil, fmt.Errorf("sequence changed during read")
+	if err := validateOpenedTelemetrySequence(expected, current); err != nil {
+		return nil, err
 	}
 	data, err = io.ReadAll(io.LimitReader(file, maxTelemetrySequenceBytes+1))
 	if err != nil {
@@ -81,6 +82,16 @@ func readTelemetrySequenceFile(path string, expected os.FileInfo) (data []byte, 
 		return nil, fmt.Errorf("sequence is invalid")
 	}
 	return data, nil
+}
+
+func validateOpenedTelemetrySequence(expected, current os.FileInfo) error {
+	if err := validateTelemetrySequenceFile(current); err != nil {
+		return err
+	}
+	if !os.SameFile(expected, current) {
+		return fmt.Errorf("sequence changed during read")
+	}
+	return nil
 }
 
 func validateTelemetrySequenceFile(info os.FileInfo) error {

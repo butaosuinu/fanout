@@ -342,6 +342,7 @@ func (l *LockedStore) LaunchJournal(projectRoot string) (*LockedLaunchJournal, e
 	}
 	return &LockedLaunchJournal{
 		path:          l.journalPath,
+		store:         l,
 		LaunchJournal: store,
 	}, nil
 }
@@ -360,7 +361,7 @@ func unlockStateFile(file *os.File) error {
 
 func (l *LockedStore) RecordPane(p Pane) error {
 	if telemetry.SequencedClaudeLaunch(p.Agent, p.LaunchArgs) {
-		if err := l.fenceUnsequencedClaudeEmitters(); err != nil {
+		if _, err := l.fenceUnsequencedClaudeEmitters(); err != nil {
 			return err
 		}
 	}
@@ -368,7 +369,8 @@ func (l *LockedStore) RecordPane(p Pane) error {
 	return save(l.path, l.Store)
 }
 
-func (l *LockedStore) fenceUnsequencedClaudeEmitters() error {
+func (l *LockedStore) fenceUnsequencedClaudeEmitters() (bool, error) {
+	changed := false
 	for i := range l.Panes {
 		pane := &l.Panes[i]
 		if !legacyClaudeEmitter(*pane) {
@@ -376,14 +378,15 @@ func (l *LockedStore) fenceUnsequencedClaudeEmitters() error {
 		}
 		nonce, err := newStateEmitterNonce()
 		if err != nil {
-			return err
+			return false, err
 		}
 		pane.ReportedState = ""
 		pane.ReportedStateSeq = 0
 		pane.StateRefinement = false
 		pane.EmitterNonce = nonce
+		changed = true
 	}
-	return nil
+	return changed, nil
 }
 
 func legacyClaudeEmitter(pane Pane) bool {

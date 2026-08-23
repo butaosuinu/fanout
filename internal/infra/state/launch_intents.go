@@ -164,7 +164,8 @@ type LaunchJournal struct {
 // The view has no unlock of its own: the lock file is owned by the
 // LockedStore that produced it.
 type LockedLaunchJournal struct {
-	path string
+	path  string
+	store *LockedStore
 	LaunchJournal
 }
 
@@ -247,10 +248,63 @@ func (l *LockedLaunchJournal) Save() error {
 	if validateErr := validateLaunchJournal(l.LaunchJournal); validateErr != nil {
 		return validateErr
 	}
+	if l.hasSequencedClaudeLaunch() {
+		if fenceErr := l.fenceLegacyClaudeEmitters(); fenceErr != nil {
+			return fenceErr
+		}
+	}
 	if writeErr := atomicfs.WriteJSON(l.path, l.LaunchJournal, 0o600); writeErr != nil {
 		return fmt.Errorf("write Herdr intents %s: %w", l.path, writeErr)
 	}
 	return nil
+}
+
+func (l *LockedLaunchJournal) hasSequencedClaudeLaunch() bool {
+	for _, intent := range l.Intents {
+		if intent.Launch != nil && telemetry.SequencedClaudeLaunch(intent.Launch.Agent, intent.Launch.Args) {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *LockedLaunchJournal) fenceLegacyClaudeEmitters() error {
+	if l.store == nil {
+		return fmt.Errorf("fence legacy Claude emitters without the combined launch lock")
+	}
+	changed, err := l.store.fenceUnsequencedClaudeEmitters()
+	if err != nil {
+		return err
+	}
+	if changed {
+		if err := l.store.Save(); err != nil {
+			return fmt.Errorf("persist legacy Claude emitter fence: %w", err)
+		}
+	}
+	return l.fenceUnsequencedClaudeIntents()
+}
+
+func (l *LockedLaunchJournal) fenceUnsequencedClaudeIntents() error {
+	for i := range l.Intents {
+		launch := l.Intents[i].Launch
+		if !legacyClaudeLaunch(launch) {
+			continue
+		}
+		nonce, err := newStateEmitterNonce()
+		if err != nil {
+			return err
+		}
+		launch.PendingReportedState = ""
+		launch.PendingReportedSeq = 0
+		launch.PendingAgentSession = nil
+		launch.EmitterNonce = nonce
+	}
+	return nil
+}
+
+func legacyClaudeLaunch(launch *LaunchCapsule) bool {
+	return launch != nil && launch.Agent == "claude" && telemetry.ValidNonce(launch.EmitterNonce) &&
+		!telemetry.SequencedClaudeLaunch(launch.Agent, launch.Args)
 }
 
 func (s LaunchJournal) FindIntent(id string) (LaunchIntent, bool) {
