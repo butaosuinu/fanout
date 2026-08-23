@@ -149,7 +149,7 @@ func TestRecordSequencedClaudePaneFencesLegacyEmitter(t *testing.T) {
 		Parent: "81", IssueNum: 84, Backend: backend.Herdr, Agent: "claude",
 		LaunchNonce: strings.Repeat("c", 32), EmitterNonce: strings.Repeat("d", 32),
 		ReportedState: "working", ReportedStateSeq: 2, StateRefinement: true,
-		LaunchArgs: []string{"--settings", `{"command":"$FANOUT_EMITTER_STATE_PATH.sequence"}`},
+		LaunchArgs: []string{"--settings", `{"command":"__fanout-emitter-sequence"}`},
 	}
 	if err := locked.RecordPane(current); err != nil {
 		t.Fatal(err)

@@ -443,6 +443,15 @@ func TestEnsureLocalExcludeIsIdempotent(t *testing.T) {
 			t.Fatalf("exclude pattern %s count = %d, want 1\n%s", pattern, got, body)
 		}
 	}
+	if err := os.MkdirAll(filepath.Join(dir, ".fanout"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".fanout", "state.json.sequence"), []byte("1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitOutput(t, dir, "status", "--short"); got != "" {
+		t.Fatalf("sequence sidecar dirtied repository: %q", got)
+	}
 }
 
 func countLines(body, want string) int {

@@ -1,6 +1,7 @@
 package stateemitter
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -71,6 +72,25 @@ func TestEmitUpdatesOnlyFinalRowTelemetry(t *testing.T) {
 	}
 }
 
+func TestRunSequenceWritesMonotonicValues(t *testing.T) {
+	repo := newEmitterRepo(t)
+	getenv := func(key string) string {
+		if key == telemetry.EmitterPathEnv {
+			return state.Path(repo)
+		}
+		return ""
+	}
+	for _, want := range []string{"1\n", "2\n"} {
+		var out, errOut bytes.Buffer
+		if code := RunSequence(getenv, &out, &errOut); code != 0 {
+			t.Fatalf("RunSequence() = %d, stderr %q", code, errOut.String())
+		}
+		if out.String() != want {
+			t.Fatalf("RunSequence() output = %q, want %q", out.String(), want)
+		}
+	}
+}
+
 func TestEmitFinalRowDiscardsOlderClaudeSequence(t *testing.T) {
 	repo := newEmitterRepo(t)
 	pane, signal, observer := finalEmitterFixture(t, repo)
@@ -94,7 +114,7 @@ func TestEmitLegacyWriterCannotEraseSequencedWatermark(t *testing.T) {
 	repo := newEmitterRepo(t)
 	current, _, _ := finalEmitterFixture(t, repo)
 	current.LaunchArgs = []string{
-		"--settings", `{"command":"$FANOUT_EMITTER_STATE_PATH.sequence"}`, "prompt",
+		"--settings", `{"command":"__fanout-emitter-sequence"}`, "prompt",
 	}
 	legacy := current
 	legacy.Parent, legacy.IssueNum = "525", 530

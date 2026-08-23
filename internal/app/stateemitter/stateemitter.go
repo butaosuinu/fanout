@@ -79,6 +79,28 @@ func Run(args []string, getenv func(string) string, observer Observer, errw io.W
 	return 1
 }
 
+// RunSequence handles the synchronous sequence allocator used before a hook
+// backgrounds its best-effort state emitter.
+func RunSequence(getenv func(string) string, out, errw io.Writer) int {
+	statePath := getenv(telemetry.EmitterPathEnv)
+	if !filepath.IsAbs(statePath) || filepath.Clean(statePath) != statePath ||
+		strings.ContainsRune(statePath, '\x00') {
+		fmt.Fprintln(errw, "fanout telemetry sequence: emitter state path is invalid")
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), emitterTimeout)
+	defer cancel()
+	sequence, err := state.NextTelemetrySequence(ctx, statePath)
+	if err == nil {
+		_, err = fmt.Fprintln(out, sequence)
+	}
+	if err == nil {
+		return 0
+	}
+	fmt.Fprintf(errw, "fanout telemetry sequence: %v\n", err)
+	return 1
+}
+
 func runSignal(signal telemetry.Signal, observer Observer) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), emitterTimeout)
 	defer cancel()

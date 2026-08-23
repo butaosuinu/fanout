@@ -14,6 +14,7 @@ import (
 
 const (
 	Command               = "__fanout-emitter"
+	SequenceCommand       = "__fanout-emitter-sequence"
 	EmitterTimeoutSeconds = 15
 )
 
@@ -60,6 +61,11 @@ func IsRequest(args []string) bool {
 	return len(args) > 0 && args[0] == Command
 }
 
+// IsSequenceRequest reports whether args target the synchronous sequence allocator.
+func IsSequenceRequest(args []string) bool {
+	return len(args) == 1 && args[0] == SequenceCommand
+}
+
 // SequencedClaudeLaunch reports whether persisted launch arguments carry the
 // sequence hook. LaunchArgs survive saves by older state writers, so this also
 // distinguishes bindings that must be fenced during a mixed-version upgrade.
@@ -67,9 +73,8 @@ func SequencedClaudeLaunch(agent string, args []string) bool {
 	if agent != "claude" {
 		return false
 	}
-	marker := "$" + EmitterPathEnv + ".sequence"
 	for i := 0; i+1 < len(args); i++ {
-		if args[i] == "--settings" && strings.Contains(args[i+1], marker) {
+		if args[i] == "--settings" && strings.Contains(args[i+1], SequenceCommand) {
 			return true
 		}
 	}

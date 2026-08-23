@@ -20,20 +20,6 @@ type managedEmitterLaunch struct {
 
 const managedClaudeExitReasons = "logout|prompt_input_exit|bypass_permissions_disabled|other"
 
-// Assign the event sequence before the emitter is backgrounded. The lock keeps
-// attached Claude panes that share one owning state path on one counter.
-const managedClaudeNextSequence = `__fanout_sequence_file="$FANOUT_EMITTER_STATE_PATH.sequence"; ` +
-	`__fanout_sequence_lock="$__fanout_sequence_file.lock"; ` +
-	`mkdir "$__fanout_sequence_lock" 2>/dev/null || { sleep 1; mkdir "$__fanout_sequence_lock" 2>/dev/null || exit 1; }; ` +
-	`trap 'rmdir "$__fanout_sequence_lock" 2>/dev/null || true' 0; ` +
-	`__fanout_previous_sequence=0; [ ! -f "$__fanout_sequence_file" ] || ` +
-	`IFS= read -r __fanout_previous_sequence < "$__fanout_sequence_file" || exit 1; ` +
-	`case "$__fanout_previous_sequence" in ''|*[!0-9]*) exit 1;; esac; ` +
-	`__fanout_event_sequence=$((__fanout_previous_sequence + 1)); ` +
-	`[ "$__fanout_event_sequence" -gt "$__fanout_previous_sequence" ] || exit 1; ` +
-	`(umask 077; printf '%s\n' "$__fanout_event_sequence" > "$__fanout_sequence_file") || exit 1; ` +
-	`rmdir "$__fanout_sequence_lock" || exit 1; trap - 0; printf '%s\n' "$__fanout_event_sequence"`
-
 func newManagedEmitterLaunch(
 	req Request,
 	route backend.OwnedLaunchRoute,
@@ -88,11 +74,12 @@ func managedClaudeHookSettings(fanoutPath string) (string, error) {
 			agent.ShellQuote(fanoutPath), telemetry.Command, reportedState,
 		)
 	}
+	nextSequence := fmt.Sprintf(`%s %s 2>/dev/null`, agent.ShellQuote(fanoutPath), telemetry.SequenceCommand)
 	return agent.BuildClaudeHookSettingsJSON(agent.ClaudeHookCommands{
 		Working: emit(string(backend.AgentWorking)),
 		Blocked: emit(string(backend.AgentBlocked)),
 		Idle:    emit(string(backend.AgentIdle)), Done: emit(string(backend.AgentDone)),
-		NextSequence: managedClaudeNextSequence,
+		NextSequence: nextSequence,
 		DoneMatcher:  managedClaudeExitReasons, DoneTimeoutSeconds: telemetry.EmitterTimeoutSeconds,
 		Background: true,
 	}), nil

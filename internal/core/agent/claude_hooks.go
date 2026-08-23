@@ -138,7 +138,11 @@ func claudeBlockedHook(command, nextSequence string, background bool) []claudeHo
 	}
 	filter := `grep -Eq '"notification_type"[[:space:]]*:[[:space:]]*"(` + blockedNotificationTypes + `)"' -`
 	if background {
-		return claudeHook("if " + filter + "; then " + claudeStateCommand(command, nextSequence, true) + " fi")
+		hookCommand := claudeStateCommand(command, nextSequence, true)
+		if nextSequence != "" {
+			hookCommand += ";"
+		}
+		return claudeHook("if " + filter + "; then " + hookCommand + " fi")
 	}
 	return claudeHook(filter + " && " + claudeStateCommand(command, nextSequence, false))
 }

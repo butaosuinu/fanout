@@ -2,9 +2,6 @@ package panelaunch
 
 import (
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -44,7 +41,8 @@ func TestManagedEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T)
 	settings := backendArgs[1]
 	if !strings.Contains(settings, `"matcher":"`+managedClaudeExitReasons+`"`) ||
 		!strings.Contains(settings, `"timeout":15`) ||
-		!strings.Contains(settings, "$FANOUT_EMITTER_STATE_PATH.sequence") ||
+		!strings.Contains(settings, telemetry.SequenceCommand) ||
+		strings.Contains(settings, "$FANOUT_EMITTER_STATE_PATH.sequence") ||
 		strings.Contains(settings, "clear") || strings.Contains(settings, "resume") {
 		t.Fatalf("SessionEnd settings = %s", settings)
 	}
@@ -76,21 +74,6 @@ func TestManagedEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T)
 	}
 	if _, leaked := environment[telemetry.StatePathEnv]; leaked {
 		t.Fatal("owner FANOUT_STATE_PATH leaked into the agent environment")
-	}
-}
-
-func TestManagedClaudeSequenceCounterIncreases(t *testing.T) {
-	statePath := filepath.Join(t.TempDir(), "state.json")
-	for _, want := range []string{"1", "2"} {
-		cmd := exec.Command("sh", "-c", managedClaudeNextSequence)
-		cmd.Env = append(os.Environ(), telemetry.EmitterPathEnv+"="+statePath)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("sequence command: %v: %s", err, out)
-		}
-		if got := strings.TrimSpace(string(out)); got != want {
-			t.Fatalf("sequence = %q, want %q", got, want)
-		}
 	}
 }
 

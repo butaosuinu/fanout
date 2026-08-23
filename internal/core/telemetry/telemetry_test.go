@@ -28,14 +28,21 @@ func TestParseSignalAcceptsCodexPlanController(t *testing.T) {
 }
 
 func TestSequencedClaudeLaunchRequiresClaudeSequenceMarker(t *testing.T) {
-	sequenced := []string{"--settings", `{"command":"$FANOUT_EMITTER_STATE_PATH.sequence"}`}
+	sequenced := []string{"--settings", `{"command":"__fanout-emitter-sequence"}`}
 	if !SequencedClaudeLaunch("claude", sequenced) {
 		t.Fatal("SequencedClaudeLaunch() rejected the managed Claude marker")
 	}
 	if SequencedClaudeLaunch("claude", []string{"--settings", `{}`}) ||
 		SequencedClaudeLaunch("codex", sequenced) ||
-		SequencedClaudeLaunch("claude", []string{"prompt $FANOUT_EMITTER_STATE_PATH.sequence"}) {
+		SequencedClaudeLaunch("claude", []string{"prompt __fanout-emitter-sequence"}) {
 		t.Fatal("SequencedClaudeLaunch() accepted an unsequenced launch")
+	}
+}
+
+func TestIsSequenceRequestRequiresExactHiddenCommand(t *testing.T) {
+	if !IsSequenceRequest([]string{SequenceCommand}) ||
+		IsSequenceRequest([]string{SequenceCommand, "extra"}) || IsSequenceRequest(nil) {
+		t.Fatal("IsSequenceRequest() did not enforce the exact hidden command")
 	}
 }
 

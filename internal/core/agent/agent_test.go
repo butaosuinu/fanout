@@ -109,6 +109,20 @@ func TestClaudeStateCommandIgnoresSequenceFailure(t *testing.T) {
 	}
 }
 
+func TestClaudeSequencedNotificationIsValidPOSIXShell(t *testing.T) {
+	settingsJSON := BuildClaudeHookSettingsJSON(ClaudeHookCommands{
+		Blocked: "emit blocked", NextSequence: "next sequence", Background: true,
+	})
+	var settings claudeHookSettings
+	if err := json.Unmarshal([]byte(settingsJSON), &settings); err != nil {
+		t.Fatal(err)
+	}
+	command := settings.Hooks.Notification[0].Hooks[0].Command
+	if out, err := exec.Command("sh", "-n", "-c", command).CombinedOutput(); err != nil {
+		t.Fatalf("sequenced Notification is not valid POSIX shell: %v: %s\n%s", err, out, command)
+	}
+}
+
 func TestBuildCommandQuotesPrompt(t *testing.T) {
 	got, err := BuildCommand("claude", "[fanout #1] it's ready")
 	if err != nil {
