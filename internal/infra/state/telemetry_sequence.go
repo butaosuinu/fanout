@@ -51,8 +51,8 @@ func readTelemetrySequence(path string) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("inspect sequence: %w", err)
 	}
-	if err := validateTelemetrySequenceFile(info); err != nil {
-		return 0, err
+	if validateErr := validateTelemetrySequenceFile(info); validateErr != nil {
+		return 0, validateErr
 	}
 	data, err := readTelemetrySequenceFile(path, info)
 	if err != nil {
@@ -71,8 +71,8 @@ func readTelemetrySequenceFile(path string, expected os.FileInfo) (data []byte, 
 	if err != nil {
 		return nil, fmt.Errorf("inspect opened sequence: %w", err)
 	}
-	if err := validateOpenedTelemetrySequence(expected, current); err != nil {
-		return nil, err
+	if validateErr := validateOpenedTelemetrySequence(expected, current); validateErr != nil {
+		return nil, validateErr
 	}
 	data, err = io.ReadAll(io.LimitReader(file, maxTelemetrySequenceBytes+1))
 	if err != nil {
