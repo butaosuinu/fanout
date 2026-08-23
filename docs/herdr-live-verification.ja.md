@@ -382,11 +382,13 @@ tmux レーンは `git worktree remove --force`
 `herdr worktree remove --workspace <id> --json`
 (`internal/infra/herdrrun/launch_operations.go:418`) で、後者に force はありません。
 agent がファイルを触った子で `--close` すると次を返して state を残します。
+JSON 本文は 2026-08-22 に XDG 四 root と socket を `/private/tmp` へ隔離し、
+herdr 0.8.2 の dirty worktree に対して再採取しました。
 
 ```
 [err ] #676: Herdr worktree cleanup failed; preserving state:
   herdr lifecycle requires manual cleanup: exit status 1:
-  {"error":{"code":"dirty_worktree_requires_force", …}}
+  {"error":{"code":"dirty_worktree_requires_force","message":"fatal: '/private/tmp/f743env.6EneFi/worktrees/probe' contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}
 ```
 
 固定化するのはここからです。`markWorkspaceCleanupManual` が intent を
