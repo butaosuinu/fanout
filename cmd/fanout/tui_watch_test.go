@@ -221,9 +221,9 @@ func TestTUIIssueAndProjectHerdrLaunchFailuresDoNotPersistPanes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := t.TempDir()
 			initTUITestGitRepo(t, repo)
+			isolateBackendEnv(t)
 			t.Setenv("HERDR_ENV", "1")
 			t.Setenv("TMUX", "nested-tmux")
-			t.Setenv("FANOUT_BACKEND", "")
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 			err := tt.launch(repo)
 			if err == nil {
@@ -251,9 +251,9 @@ func TestWatcherLaunchConfigAllowsHerdrSelection(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := t.TempDir()
 			gitCmdTest(t, repo, "init", "-b", "main")
+			isolateBackendEnv(t)
 			t.Setenv("HERDR_ENV", tt.herdrEnv)
 			t.Setenv("TMUX", tt.tmuxEnv)
-			t.Setenv("FANOUT_BACKEND", "")
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 			if tt.userConfig {
 				path := settings.UserConfigPath()

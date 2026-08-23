@@ -193,6 +193,7 @@ func TestLaunchIssueSessionFromTUIReturnsStandalonePaneID(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	origin := t.TempDir()
 	gitCmdTest(t, origin, "init", "--bare")
 	gitCmdTest(t, repo, "remote", "add", "origin", origin)
@@ -702,6 +703,7 @@ func TestLaunchIssueSessionFromTUIAllowsNonCodexPlanChild(t *testing.T) {
 
 func prepareTUIParentLaunchRepo(t *testing.T) string {
 	t.Helper()
+	isolateBackendEnv(t)
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
 	commitTUITestGitRepo(t, repo)
@@ -906,6 +908,7 @@ esac
 func TestLaunchIssueSessionFromTUITranslatesAlreadyFanned(t *testing.T) {
 	repo := t.TempDir()
 	initTUITestGitRepo(t, repo)
+	isolateBackendEnv(t)
 	locked, err := state.LockProject(repo)
 	if err != nil {
 		t.Fatal(err)
