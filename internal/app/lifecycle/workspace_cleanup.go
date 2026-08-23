@@ -581,13 +581,11 @@ func recoverExpiredPlannedWorkspaceCleanup(
 	if workspaceCleanupAbsent(observation) {
 		return realizeWorkspaceCleanup(journal, intent)
 	}
-	if observation.workspace != nil && observation.workspace.WorkspaceID != intent.Resource.WorkspaceID {
-		intent.Resource = adoptMovedWorkspaceCleanupResource(intent.Resource, *observation.workspace)
-		if err := rebindMovedWorkspaceCleanupIdentity(
-			locked, journal, opts.ProjectRoot, pane, intent.Resource,
-		); err != nil {
-			return intent, err
-		}
+	intent, err = rebindObservedWorkspaceCleanupIdentity(
+		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
+	)
+	if err != nil {
+		return intent, err
 	}
 	if intent.Coordinator != (state.RuntimeResource{}) && intent.CleanupPhase != state.CleanupReopen {
 		return replanWorkspaceCleanup(ctx, opts, journal, intent, observation)
@@ -618,6 +616,21 @@ func rebindMovedWorkspaceCleanupIdentity(
 	pane.PaneID = resource.PaneID
 	pane.TerminalID = resource.TerminalID
 	return locked.RecordPane(pane)
+}
+
+func rebindObservedWorkspaceCleanupIdentity(
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	projectRoot string,
+	pane state.Pane,
+	intent state.LaunchIntent,
+	workspace *backend.WorkspaceObservation,
+) (state.LaunchIntent, error) {
+	if workspace == nil || workspace.WorkspaceID == intent.Resource.WorkspaceID {
+		return intent, nil
+	}
+	intent.Resource = adoptMovedWorkspaceCleanupResource(intent.Resource, *workspace)
+	return intent, rebindMovedWorkspaceCleanupIdentity(locked, journal, projectRoot, pane, intent.Resource)
 }
 
 func replanWorkspaceCleanup(
@@ -668,8 +681,11 @@ func replanObservedWorkspaceCleanup(
 	if workspaceCleanupAbsent(observation) {
 		return realizeWorkspaceCleanup(journal, intent)
 	}
-	if observation.workspace != nil && observation.workspace.WorkspaceID != intent.Resource.WorkspaceID {
-		intent.Resource = adoptMovedWorkspaceCleanupResource(intent.Resource, *observation.workspace)
+	intent, err := rebindObservedWorkspaceCleanupIdentity(
+		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
+	)
+	if err != nil {
+		return intent, err
 	}
 	checkoutOnly := observation.workspace == nil &&
 		(!observation.checkout.PathAbsent || observation.checkout.Registered)
