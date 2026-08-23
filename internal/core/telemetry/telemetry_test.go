@@ -27,6 +27,18 @@ func TestParseSignalAcceptsCodexPlanController(t *testing.T) {
 	}
 }
 
+func TestSequencedClaudeLaunchRequiresClaudeSequenceMarker(t *testing.T) {
+	sequenced := []string{"--settings", `{"command":"$FANOUT_EMITTER_STATE_PATH.sequence"}`}
+	if !SequencedClaudeLaunch("claude", sequenced) {
+		t.Fatal("SequencedClaudeLaunch() rejected the managed Claude marker")
+	}
+	if SequencedClaudeLaunch("claude", []string{"--settings", `{}`}) ||
+		SequencedClaudeLaunch("codex", sequenced) ||
+		SequencedClaudeLaunch("claude", []string{"prompt $FANOUT_EMITTER_STATE_PATH.sequence"}) {
+		t.Fatal("SequencedClaudeLaunch() accepted an unsequenced launch")
+	}
+}
+
 func TestParseSignalRejectsSyntheticOrIncompleteInput(t *testing.T) {
 	for _, test := range []struct {
 		name   string

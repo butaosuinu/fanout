@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 )
 
 func TestLoadMissingReturnsEmptyStore(t *testing.T) {
@@ -127,6 +128,42 @@ func TestLockedStoreRecordPaneWritesAtomicallyShapedJSON(t *testing.T) {
 	}
 	if got := decoded.Panes[0].BaseBranch; got != "main" {
 		t.Fatalf("baseBranch = %q, want main", got)
+	}
+}
+
+func TestRecordSequencedClaudePaneFencesLegacyEmitter(t *testing.T) {
+	root := t.TempDir()
+	locked, err := LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = locked.Unlock() })
+	legacy := Pane{
+		Parent: "81", IssueNum: 83, Backend: backend.Herdr, Agent: "claude",
+		LaunchNonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
+		ReportedState: "blocked", ReportedStateSeq: 0, StateRefinement: true,
+		LaunchArgs: []string{"--settings", `{}`},
+	}
+	locked.Panes = []Pane{legacy}
+	current := Pane{
+		Parent: "81", IssueNum: 84, Backend: backend.Herdr, Agent: "claude",
+		LaunchNonce: strings.Repeat("c", 32), EmitterNonce: strings.Repeat("d", 32),
+		ReportedState: "working", ReportedStateSeq: 2, StateRefinement: true,
+		LaunchArgs: []string{"--settings", `{"command":"$FANOUT_EMITTER_STATE_PATH.sequence"}`},
+	}
+	if err := locked.RecordPane(current); err != nil {
+		t.Fatal(err)
+	}
+
+	gotLegacy, found := locked.Find("81", 83)
+	if !found || gotLegacy.ReportedState != "" || gotLegacy.ReportedStateSeq != 0 ||
+		gotLegacy.StateRefinement || gotLegacy.EmitterNonce == legacy.EmitterNonce ||
+		!telemetry.ValidNonce(gotLegacy.EmitterNonce) {
+		t.Fatalf("legacy emitter = (%+v, %t), want fenced", gotLegacy, found)
+	}
+	gotCurrent, found := locked.Find("81", 84)
+	if !found || gotCurrent.ReportedStateSeq != 2 || gotCurrent.EmitterNonce != current.EmitterNonce {
+		t.Fatalf("sequenced emitter = (%+v, %t), want unchanged", gotCurrent, found)
 	}
 }
 

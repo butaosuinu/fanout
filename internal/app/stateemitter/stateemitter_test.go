@@ -90,6 +90,47 @@ func TestEmitFinalRowDiscardsOlderClaudeSequence(t *testing.T) {
 	}
 }
 
+func TestEmitLegacyWriterCannotEraseSequencedWatermark(t *testing.T) {
+	repo := newEmitterRepo(t)
+	current, _, _ := finalEmitterFixture(t, repo)
+	current.LaunchArgs = []string{
+		"--settings", `{"command":"$FANOUT_EMITTER_STATE_PATH.sequence"}`, "prompt",
+	}
+	legacy := current
+	legacy.Parent, legacy.IssueNum = "525", 530
+	legacy.PaneID, legacy.WorkspaceID = "workspace-2:pane-1", "workspace-2"
+	legacy.WorkspaceLabel, legacy.TerminalID = "owned-label-2", "terminal-2"
+	legacy.EmitterRowKey = "issue:3:525:530"
+	legacy.LaunchNonce, legacy.EmitterNonce = strings.Repeat("c", 32), strings.Repeat("d", 32)
+	legacy.LaunchArgs = []string{"--settings", `{}`, "prompt"}
+	saveEmitterPanes(t, repo, legacy)
+
+	locked, err := state.LockProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.RecordPane(current); err != nil {
+		t.Fatal(errors.Join(err, locked.Unlock()))
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	signal := signalForPane(repo, current)
+	signal.State, signal.Sequence = backend.AgentBlocked, 2
+	if err := Emit(context.Background(), signal, exactObserver(current)); err != nil {
+		t.Fatal(err)
+	}
+	legacySignal := signalForPane(repo, legacy)
+	if err := Emit(context.Background(), legacySignal, exactObserver(legacy)); err == nil {
+		t.Fatal("Emit() accepted a legacy emitter after the sequence fence")
+	}
+	got := loadEmitterPaneByRowKey(t, repo, current.EmitterRowKey)
+	if got.ReportedState != string(backend.AgentBlocked) || got.ReportedStateSeq != 2 {
+		t.Fatalf("sequenced watermark after legacy signal = (%q, %d), want blocked at 2", got.ReportedState, got.ReportedStateSeq)
+	}
+}
+
 func TestEmitStaleFinalSequenceStillRebindsReplacedSession(t *testing.T) {
 	repo := newEmitterRepo(t)
 	pane, signal, observer := finalEmitterFixture(t, repo)
@@ -818,6 +859,21 @@ func loadEmitterPane(t *testing.T, repo string) state.Pane {
 		t.Fatal("state has no pane")
 	}
 	return store.Panes[0]
+}
+
+func loadEmitterPaneByRowKey(t *testing.T, repo, rowKey string) state.Pane {
+	t.Helper()
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pane := range store.Panes {
+		if pane.EmitterRowKey == rowKey {
+			return pane
+		}
+	}
+	t.Fatalf("state has no pane for row key %q", rowKey)
+	return state.Pane{}
 }
 
 func newEmitterRepo(t *testing.T) string {

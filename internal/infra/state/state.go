@@ -3,6 +3,8 @@ package state
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/atomicfs"
 )
 
@@ -356,8 +359,45 @@ func unlockStateFile(file *os.File) error {
 }
 
 func (l *LockedStore) RecordPane(p Pane) error {
+	if telemetry.SequencedClaudeLaunch(p.Agent, p.LaunchArgs) {
+		if err := l.fenceUnsequencedClaudeEmitters(); err != nil {
+			return err
+		}
+	}
 	l.UpsertTask(p)
 	return save(l.path, l.Store)
+}
+
+func (l *LockedStore) fenceUnsequencedClaudeEmitters() error {
+	for i := range l.Panes {
+		pane := &l.Panes[i]
+		if !legacyClaudeEmitter(*pane) {
+			continue
+		}
+		nonce, err := newStateEmitterNonce()
+		if err != nil {
+			return err
+		}
+		pane.ReportedState = ""
+		pane.ReportedStateSeq = 0
+		pane.StateRefinement = false
+		pane.EmitterNonce = nonce
+	}
+	return nil
+}
+
+func legacyClaudeEmitter(pane Pane) bool {
+	return pane.Backend == backend.Herdr && pane.Agent == "claude" &&
+		telemetry.ValidNonce(pane.LaunchNonce) && telemetry.ValidNonce(pane.EmitterNonce) &&
+		!telemetry.SequencedClaudeLaunch(pane.Agent, pane.LaunchArgs)
+}
+
+func newStateEmitterNonce() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("rotate legacy telemetry emitter nonce: %w", err)
+	}
+	return hex.EncodeToString(value), nil
 }
 
 func (l *LockedStore) RemovePane(parent string, issueNum int) error {
