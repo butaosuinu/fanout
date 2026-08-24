@@ -448,6 +448,9 @@ func classifyFreshWorkspaceCleanup(
 		if err := verifyCleanupCheckout(ctx, projectRoot, fullRef, observation.checkout.HeadSHA, resource); err != nil {
 			return "", err
 		}
+		if err := verifyRemovableCheckoutContents(ctx, resource.CurrentPath); err != nil {
+			return "", err
+		}
 		return state.CleanupReopen, nil
 	default:
 		return state.CleanupRemove, nil
