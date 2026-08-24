@@ -185,10 +185,11 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			return fanouttui.LaunchResult{}, launchErr
 		}
 		notice := combinedLaunchNotice([]string{fmt.Sprintf("started session for #%d", issueNum)}, launchResult.Notice)
-		return tuiCoordinatorLaunchResult(projectRoot, notice, panelaunch.Request{ParentRef: panelaunch.WatchParentRef, Number: issueNum}, launchResult.PaneID), nil
+		return tuiCoordinatorLaunchResult(notice, launchResult.PaneID, launchResult.Binding), nil
 	}
 	var orchestratorReq panelaunch.Request
 	var orchestratorPaneID string
+	var orchestratorBinding backend.PaneBinding
 	var orchestratorCreated bool
 	var orchestratorNotice string
 	ready := func(
@@ -205,7 +206,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			return guardErr
 		}
 		var launchErr error
-		orchestratorReq, orchestratorPaneID, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
+		orchestratorReq, orchestratorPaneID, orchestratorBinding, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
 			projectRoot, session, commandName, runtimeBackend, managed, store, recorder,
 			hookConfig, detail, defaultAgent, resolvedSettings.OrchestratorPlanMode,
 		)
@@ -222,7 +223,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			return nil
 		}
 		var launchErr error
-		orchestratorReq, orchestratorPaneID, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
+		orchestratorReq, orchestratorPaneID, orchestratorBinding, orchestratorCreated, orchestratorNotice, launchErr = launchIssueOrchestratorPrepared(
 			projectRoot, session, commandName, runtimeBackend, managed, store, recorder,
 			hookConfig, detail, defaultAgent, resolvedSettings.OrchestratorPlanMode,
 		)
@@ -235,6 +236,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 			err = errors.Join(err, fmt.Errorf("cleanup issue orchestrator: %w", cleanupErr))
 		} else {
 			orchestratorPaneID = ""
+			orchestratorBinding = backend.PaneBinding{}
 			if releaseErr := releaseCleanedIssueOrchestratorGate(runtimeBackend, orchestratorReq); releaseErr != nil {
 				err = errors.Join(err, fmt.Errorf("release cleaned issue orchestrator gate: %w", releaseErr))
 			}
@@ -246,6 +248,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 				err = errors.Join(err, fmt.Errorf("cleanup gated issue orchestrator: %w", cleanupErr))
 			} else {
 				orchestratorPaneID = ""
+				orchestratorBinding = backend.PaneBinding{}
 			}
 		}
 	}
@@ -258,9 +261,7 @@ func launchIssueSessionFromTUI(projectRoot, session, commandName string, resolve
 	}
 	orchestratorAfterChildren := runtimeBackend != nil &&
 		runtimeBackend.MutationModel() == backend.MutationJournaled
-	if orchestratorPaneID != "" {
-		result.OrchestratorBinding = loadTUILaunchBinding(projectRoot, orchestratorReq, orchestratorPaneID)
-	}
+	result.OrchestratorBinding = orchestratorBinding
 	return finishTUIIssueParentLaunch(issueNum, orchestratorAfterChildren, orchestratorPaneID, result, err)
 }
 

@@ -50,9 +50,9 @@ func guardLinkedIssueOrchestrator(projectRoot string, current state.Store, issue
 // the configured initial mode after child planning and agent validation. The
 // caller's locked recorder keeps the orchestrator row and child rows in one
 // launch transaction.
-func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, runtimeBackend backend.Backend, managed panelaunch.ManagedSessionRuntime, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string, orchestratorPlanMode bool) (panelaunch.Request, string, bool, string, error) {
+func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, runtimeBackend backend.Backend, managed panelaunch.ManagedSessionRuntime, store state.Store, recorder panelaunch.StateRecorder, hookConfig hooks.Config, issue ghissue.Issue, agentName string, orchestratorPlanMode bool) (panelaunch.Request, string, backend.PaneBinding, bool, string, error) {
 	var fallbackNotice string
-	req, paneID, launchNotice, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, runtimeBackend, managed, agentName, fmt.Sprintf("%d", issue.Number), store, recorder,
+	req, paneID, binding, launchNotice, err := launchPlanCoordinatorLocked(projectRoot, session, commandName, runtimeBackend, managed, agentName, fmt.Sprintf("%d", issue.Number), store, recorder,
 		func(store state.Store) error {
 			return guardLinkedIssueOrchestrator(projectRoot, store, issue.Number)
 		},
@@ -62,10 +62,10 @@ func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, r
 			return req
 		})
 	if errors.Is(err, errIssueOrchestratorRecorded) {
-		return panelaunch.Request{}, "", false, "", nil
+		return panelaunch.Request{}, "", backend.PaneBinding{}, false, "", nil
 	}
 	if err != nil {
-		return panelaunch.Request{}, "", false, "", err
+		return panelaunch.Request{}, "", backend.PaneBinding{}, false, "", err
 	}
 	notice := fallbackNotice
 	if notice == "" {
@@ -73,7 +73,7 @@ func launchIssueOrchestratorPrepared(projectRoot, session, commandName string, r
 	} else if launchNotice != "" {
 		notice += "; " + launchNotice
 	}
-	return req, paneID, true, notice, nil
+	return req, paneID, binding, true, notice, nil
 }
 
 // newIssueOrchestratorPaneRequest mirrors an issue-plan coordinator request,

@@ -138,7 +138,7 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 		return fanouttui.LaunchResult{}, fmt.Errorf("plan fan-out launches one coordinator agent; select exactly one")
 	}
 	agentName := agentNames[0]
-	paneReq, paneID, launchNotice, err := launchPlanCoordinator(projectRoot, session, commandName, panelaunch.ManualParentRef, agentName, nil,
+	paneReq, paneID, paneBinding, launchNotice, err := launchPlanCoordinator(projectRoot, session, commandName, panelaunch.ManualParentRef, agentName, nil,
 		func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request {
 			return newPlanPromptPaneRequest(projectRoot, store, hookConfig, prompt, cfg, livenessKey)
 		})
@@ -149,7 +149,7 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 	if launchNotice != "" {
 		notice += "; " + launchNotice
 	}
-	return tuiCoordinatorLaunchResult(projectRoot, notice, paneReq, paneID), nil
+	return tuiCoordinatorLaunchResult(notice, paneID, paneBinding), nil
 }
 
 // launchPlanCoordinator validates the coordinator agent, locks state, and
@@ -162,37 +162,37 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 // newSessionPlanMode.
 //
 //nolint:funlen // Coordinator validation, backend admission, and the one attach remain one lock-scoped transaction.
-func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentName string, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, string, error) {
+func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentName string, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, backend.PaneBinding, string, error) {
 	if validateErr := agent.ValidateKnown(agentName); validateErr != nil {
-		return panelaunch.Request{}, "", "", validateErr
+		return panelaunch.Request{}, "", backend.PaneBinding{}, "", validateErr
 	}
 	if validateErr := agent.ValidateInstalled(agentName); validateErr != nil {
-		return panelaunch.Request{}, "", "", validateErr
+		return panelaunch.Request{}, "", backend.PaneBinding{}, "", validateErr
 	}
 	cfg := newSessionConfigForTUIAgent(projectRoot, agentName, nil)
 	cfg.ParentRef = parentRef
 	rt, err := resolveTUILaunchRuntime(projectRoot, session, cfg)
 	if err != nil {
-		return panelaunch.Request{}, "", "", err
+		return panelaunch.Request{}, "", backend.PaneBinding{}, "", err
 	}
 	if excludeErr := worktree.EnsureLocalExclude(projectRoot); excludeErr != nil {
-		return panelaunch.Request{}, "", "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
+		return panelaunch.Request{}, "", backend.PaneBinding{}, "", fmt.Errorf("prepare local git exclude: %w", excludeErr)
 	}
 
 	recorder, err := state.LockProjectForLaunch(projectRoot)
 	if err != nil {
-		return panelaunch.Request{}, "", "", err
+		return panelaunch.Request{}, "", backend.PaneBinding{}, "", err
 	}
 	defer func() {
 		_ = recorder.Unlock()
 	}()
 	if rt.VerifyBackend != nil {
 		if err := rt.VerifyBackend(parentRef, recorder.Store); err != nil {
-			return panelaunch.Request{}, "", "", fmt.Errorf("runtime backend: %w", err)
+			return panelaunch.Request{}, "", backend.PaneBinding{}, "", fmt.Errorf("runtime backend: %w", err)
 		}
 	}
 	if err := rt.PrepareLaunchBackend(); err != nil {
-		return panelaunch.Request{}, "", "", fmt.Errorf("runtime backend: %w", err)
+		return panelaunch.Request{}, "", backend.PaneBinding{}, "", fmt.Errorf("runtime backend: %w", err)
 	}
 	return launchPlanCoordinatorLockedWithConfig(
 		projectRoot, session, commandName, rt.Backend, rt.Managed,
@@ -204,7 +204,7 @@ func launchPlanCoordinator(projectRoot, session, commandName, parentRef, agentNa
 // parent lane. That lane already owns the child fan-out lock when its validated
 // plan becomes ready, so it reuses that recorder instead of taking a nested
 // lock.
-func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, managed panelaunch.ManagedSessionRuntime, agentName, runtimeParent string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, string, error) {
+func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runtimeBackend backend.Backend, managed panelaunch.ManagedSessionRuntime, agentName, runtimeParent string, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string) panelaunch.Request) (panelaunch.Request, string, backend.PaneBinding, string, error) {
 	cfg := &cliflags.Config{Agent: agentName, ParentRef: runtimeParent}
 	return launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName, runtimeBackend, managed, cfg, store, recorder, guard,
 		func(store state.Store, livenessKey string, _ *cliflags.Config) panelaunch.Request {
@@ -214,12 +214,12 @@ func launchPlanCoordinatorLocked(projectRoot, session, commandName string, runti
 
 // launchPlanCoordinatorLockedWithConfig carries a lane-specific launch mode
 // through the shared coordinator attach path.
-func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName string, runtimeBackend backend.Backend, managed panelaunch.ManagedSessionRuntime, cfg *cliflags.Config, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, string, error) {
+func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName string, runtimeBackend backend.Backend, managed panelaunch.ManagedSessionRuntime, cfg *cliflags.Config, store state.Store, recorder panelaunch.StateRecorder, guard func(state.Store) error, buildReq func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request) (panelaunch.Request, string, backend.PaneBinding, string, error) {
 	var stdout, stderr bytes.Buffer
 	launchLogger := log.NewWith(&stdout, &stderr, false)
 	if guard != nil {
 		if guardErr := guard(store); guardErr != nil {
-			return panelaunch.Request{}, "", "", guardErr
+			return panelaunch.Request{}, "", backend.PaneBinding{}, "", guardErr
 		}
 	}
 
@@ -230,15 +230,16 @@ func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName str
 	}
 	livenessKey, err := panelaunch.NewShellPaneKey()
 	if err != nil {
-		return panelaunch.Request{}, "", "", err
+		return panelaunch.Request{}, "", backend.PaneBinding{}, "", err
 	}
 	paneReq := coordinatorRuntimeRequest(runtimeBackend.MutationModel(), cfg.ParentRef, buildReq(store, livenessKey, cfg))
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: info, Backend: runtimeBackend, Managed: managed, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 	result, ok := launcher.AttachWithResult(paneReq, projectRoot)
 	if !ok {
-		return panelaunch.Request{}, "", "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
+		return panelaunch.Request{}, "", backend.PaneBinding{}, "", bufferedLaunchError(stdout, stderr, "create plan coordinator pane")
 	}
-	return paneReq, result.PaneID, bufferedLaunchNotice(stderr), nil
+	binding := tuiLockedLaunchBinding(store, recorder, paneReq, result.PaneID)
+	return paneReq, result.PaneID, binding, bufferedLaunchNotice(stderr), nil
 }
 
 // coordinatorRuntimeRequest applies the identity contract of the launch lane
@@ -289,7 +290,7 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 		// Short enough to render unwrapped as the form's one error line.
 		return fanouttui.LaunchResult{}, fmt.Errorf("issue #%d has %d open children; uncheck the plan checkbox", issueNum, openChildren)
 	}
-	paneReq, paneID, launchNotice, err := launchPlanCoordinator(projectRoot, session, commandName, strconv.Itoa(issueNum), coordinatorAgent,
+	paneReq, paneID, paneBinding, launchNotice, err := launchPlanCoordinator(projectRoot, session, commandName, strconv.Itoa(issueNum), coordinatorAgent,
 		func(store state.Store) error { return guardLinkedIssuePlanCoordinator(projectRoot, store, issueNum) },
 		func(store state.Store, livenessKey string, cfg *cliflags.Config) panelaunch.Request {
 			return newIssuePlanPaneRequest(projectRoot, store, hookConfig, detail, cfg, workerAgent, livenessKey)
@@ -301,20 +302,19 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 	if launchNotice != "" {
 		notice += "; " + launchNotice
 	}
-	return tuiCoordinatorLaunchResult(projectRoot, notice, paneReq, paneID), nil
+	return tuiCoordinatorLaunchResult(notice, paneID, paneBinding), nil
 }
 
-func tuiCoordinatorLaunchResult(projectRoot, notice string, req panelaunch.Request, paneID string) fanouttui.LaunchResult {
+func tuiCoordinatorLaunchResult(notice, paneID string, binding backend.PaneBinding) fanouttui.LaunchResult {
 	return fanouttui.LaunchResult{
 		Notice: notice, CreatedPaneIDs: []string{paneID},
-		CreatedBindings: []backend.PaneBinding{loadTUILaunchBinding(projectRoot, req, paneID)},
+		CreatedBindings: []backend.PaneBinding{binding},
 	}
 }
 
-func loadTUILaunchBinding(projectRoot string, req panelaunch.Request, paneID string) backend.PaneBinding {
-	store, err := state.LoadProject(projectRoot)
-	if err != nil {
-		return backend.PaneBinding{}
+func tuiLockedLaunchBinding(store state.Store, recorder panelaunch.StateRecorder, req panelaunch.Request, paneID string) backend.PaneBinding {
+	if locked, ok := recorder.(*state.LockedStore); ok {
+		store = locked.Store
 	}
 	return tuiLaunchBinding(store, req, paneID)
 }
