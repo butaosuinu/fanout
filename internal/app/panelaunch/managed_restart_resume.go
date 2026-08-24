@@ -89,7 +89,7 @@ func resumePendingManagedRestartRows(
 		if !observed {
 			return retireManagedRestartRows(ctx, locked, journal, restarted, route, rows, deadline)
 		}
-		rows, err = retireUnsupportedManagedRestartRows(ctx, locked, journal, restarted, route, rows, deadline)
+		rows, err = retireUnsupportedManagedRestartRows(ctx, locked, journal, restarted, route, rows, wait.Panes, deadline)
 		if err != nil {
 			return err
 		}
@@ -142,7 +142,8 @@ func waitForManagedRestartRows(
 	totalTimeout time.Duration,
 ) (backend.WaitResult, error) {
 	waitForCandidate := slices.ContainsFunc(rows, func(row managedRestartRow) bool {
-		return resumableSavedCodex(row.saved)
+		return resumableSavedCodex(row.saved) ||
+			(row.saved.IsShell() && !managedCoordinatorRowRole(row.saved))
 	})
 	wait := restarted.WaitRestoredPanes(ctx, totalTimeout, func(live []backend.LivePane) bool {
 		return !waitForCandidate || anyManagedRestartRouteObserved(rows, live)
@@ -160,6 +161,7 @@ func retireUnsupportedManagedRestartRows(
 	restarted ManagedRestartRuntime,
 	route backend.OwnedLaunchRoute,
 	rows []managedRestartRow,
+	live []backend.LivePane,
 	deadline time.Time,
 ) ([]managedRestartRow, error) {
 	remaining := make([]managedRestartRow, 0, len(rows))
@@ -168,13 +170,34 @@ func retireUnsupportedManagedRestartRows(
 			remaining = append(remaining, row)
 			continue
 		}
+		if row.saved.IsShell() && !managedCoordinatorRowRole(row.saved) &&
+			countManagedRestartRoute(row.saved, live) == 0 {
+			remaining = append(remaining, row)
+			continue
+		}
 		if err := processRestartedManagedRow(
-			ctx, locked, journal, restarted, route, row, managedRestartCandidate{}, false, deadline,
+			ctx, locked, journal, restarted, route, row, exactRestartedShellCandidate(row, live), false, deadline,
 		); err != nil {
 			return nil, err
 		}
 	}
 	return remaining, nil
+}
+
+func exactRestartedShellCandidate(row managedRestartRow, live []backend.LivePane) managedRestartCandidate {
+	if !row.saved.IsShell() || managedCoordinatorRowRole(row.saved) || countManagedRestartRoute(row.saved, live) != 1 {
+		return managedRestartCandidate{}
+	}
+	// Only terminal identity is expected to rotate. The canonical binding matcher
+	// still requires the saved ownership label, shell role, and checkout provenance.
+	binding := row.saved.RuntimeBinding()
+	for _, current := range live {
+		binding.TerminalID = current.TerminalID
+		if binding.MatchesLive(current, backend.RequireRuntime(backend.NormalizeName(row.saved.Backend))) {
+			return managedRestartCandidate{row: row, live: current}
+		}
+	}
+	return managedRestartCandidate{}
 }
 
 func processObservedManagedRestartRows(
@@ -446,6 +469,9 @@ func processRestartedManagedRow(
 		return finishManagedResumeJournal(ctx, locked, journal, restarted, route.RuntimeDir, row, intent)
 	}
 	if !eligible || candidate.row.root != row.root {
+		if candidate.row.root == row.root {
+			return persistManagedRestartRow(ctx, locked, row, &candidate.live, nil, nil)
+		}
 		return persistManagedRestartRow(ctx, locked, row, nil, nil, nil)
 	}
 	intent, err = prepareManagedResumeIntent(journal, restarted, route, candidate, deadline)
@@ -456,9 +482,7 @@ func processRestartedManagedRow(
 	if launchErr != nil {
 		return finishManagedResumeJournal(ctx, locked, journal, restarted, route.RuntimeDir, row, intent)
 	}
-	return finishSuccessfulManagedResume(
-		ctx, locked, journal, restarted, route.RuntimeDir, row, intent,
-	)
+	return finishSuccessfulManagedResume(ctx, locked, journal, restarted, route.RuntimeDir, row, intent)
 }
 
 func finishSuccessfulManagedResume(
@@ -778,16 +802,15 @@ func applyManagedRestartRow(
 	}
 	pane.ReportedState, pane.EmitterRowKey, pane.LaunchNonce = "", "", ""
 	pane.StateRefinement, pane.EmitterNonce = false, nonce
+	if live != nil {
+		pane.TerminalID = live.TerminalID
+	}
 	if live == nil || process == nil || launch == nil {
 		pane.DirectAgentLaunch = false
 		return nil
 	}
-	pane.TerminalID = live.TerminalID
-	pane.AgentID = live.AgentID
-	ref := *live.AgentSession
-	pane.AgentSession = &ref
-	identity := *process
-	pane.ProcessIdentity = &identity
+	ref, identity := *live.AgentSession, *process
+	pane.AgentID, pane.AgentSession, pane.ProcessIdentity = live.AgentID, &ref, &identity
 	pane.LaunchExecutable = launch.Executable
 	pane.LaunchArgs = slices.Clone(launch.Args)
 	return nil
