@@ -40,7 +40,7 @@ func TestManagedEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T)
 	}
 	settings := backendArgs[1]
 	if !strings.Contains(settings, `"matcher":"`+managedClaudeExitReasons+`"`) ||
-		!strings.Contains(settings, `"timeout":15`) ||
+		!strings.Contains(settings, `"timeout":31`) ||
 		!strings.Contains(settings, telemetry.SequenceCommand) ||
 		strings.Contains(settings, "$FANOUT_EMITTER_STATE_PATH.sequence") ||
 		strings.Contains(settings, "clear") || strings.Contains(settings, "resume") {

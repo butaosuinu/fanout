@@ -320,17 +320,19 @@ func updatePendingIntent(
 	if err != nil {
 		return err
 	}
-	if staleSignal(signal, intent.Launch.PendingReportedSeq) {
-		return nil
-	}
-	if err := recordPendingSignal(&intent, signal, current); err != nil {
+	if err := bindPendingAgentSession(&intent, current); err != nil {
 		return err
 	}
+	if staleSignal(signal, intent.Launch.PendingReportedSeq) {
+		journal.UpsertIntent(intent)
+		return journal.Save()
+	}
+	recordPendingSignal(&intent, signal)
 	journal.UpsertIntent(intent)
 	return journal.Save()
 }
 
-func recordPendingSignal(intent *state.LaunchIntent, signal telemetry.Signal, current backend.LivePane) error {
+func bindPendingAgentSession(intent *state.LaunchIntent, current backend.LivePane) error {
 	if current.AgentSession == nil {
 		return fmt.Errorf("pending telemetry requires a current agent session")
 	}
@@ -338,9 +340,12 @@ func recordPendingSignal(intent *state.LaunchIntent, signal telemetry.Signal, cu
 		session := *current.AgentSession
 		intent.Launch.PendingAgentSession = &session
 	}
+	return nil
+}
+
+func recordPendingSignal(intent *state.LaunchIntent, signal telemetry.Signal) {
 	intent.Launch.PendingReportedState = nextReportedState(intent.Launch.PendingReportedState, string(signal.State))
 	intent.Launch.PendingReportedSeq = signal.Sequence
-	return nil
 }
 
 func staleSignal(signal telemetry.Signal, applied uint64) bool {

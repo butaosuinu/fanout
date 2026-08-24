@@ -9,6 +9,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/core/naming"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -471,6 +472,18 @@ func TestRunMsgNudgeHerdrDoesNotReadRuntimeAfterFinalStateGate(t *testing.T) {
 	}
 }
 
+func TestRunMsgNudgeHerdrRejectsUnsequencedClaudeGeneration(t *testing.T) {
+	store, runtime := managedNudgeFixture("working", true)
+	store.Panes[0].LaunchArgs = []string{"--permission-mode", "auto", "prompt"}
+	deps := managedNudgeDeps(store, store, runtime)
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.liveCalls != 0 || runtime.nudgeCalls != 0 ||
+		!strings.Contains(errb.String(), "launch binding changed") {
+		t.Fatalf("code=%d live=%d nudges=%d stderr=%q", code, runtime.liveCalls, runtime.nudgeCalls, errb.String())
+	}
+}
+
 func TestRunMsgNudgeHerdrAcceptsExactCodexPlanProcess(t *testing.T) {
 	store, runtime := codexPlanNudgeFixture()
 	deps := managedNudgeDeps(store, store, runtime)
@@ -542,7 +555,8 @@ func TestRunMsgNudgeHerdrDoesNotRetryAnAmbiguousPromptFailure(t *testing.T) {
 
 func managedNudgeFixture(reportedState string, refined bool) (state.Store, *fakeNudgeRuntime) {
 	worktree := "/repo/.fanout/worktrees/child"
-	args := []string{"--permission-mode", "auto", "prompt"}
+	settings := `{"command":"` + telemetry.SequenceCommand + `"}`
+	args := []string{"--settings", settings, "--permission-mode", "auto", "prompt"}
 	repoKey := "/repo/.git"
 	rowKey := "issue:68:71"
 	launchNonce := strings.Repeat("a", 32)

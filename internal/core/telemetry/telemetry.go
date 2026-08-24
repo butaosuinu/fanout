@@ -16,6 +16,9 @@ const (
 	Command               = "__fanout-emitter"
 	SequenceCommand       = "__fanout-emitter-sequence"
 	EmitterTimeoutSeconds = 15
+	// SequencedSessionEndTimeoutSeconds covers the serial allocator and emitter
+	// budgets, plus one second for their shell handoff.
+	SequencedSessionEndTimeoutSeconds = 2*EmitterTimeoutSeconds + 1
 )
 
 const (

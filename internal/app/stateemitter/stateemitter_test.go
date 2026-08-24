@@ -626,6 +626,32 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 	}
 }
 
+func TestEmitStalePendingSequenceStillRebindsReplacedSession(t *testing.T) {
+	repo := newEmitterRepo(t)
+	intent, signal, observer := pendingEmitterFixture(t, repo)
+	first := *observer.observation.Panes[0].AgentSession
+	second := first
+	second.Value = "pending-session-replaced"
+	intent.Launch.PendingReportedState = string(backend.AgentBlocked)
+	intent.Launch.PendingReportedSeq = 2
+	intent.Launch.PendingAgentSession = &first
+	observer.observation.Panes[0].AgentSession = &second
+	saveEmitterIntent(t, repo, intent)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := state.LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found := stored.FindIntent(intent.ID)
+	if !found || got.Launch.PendingAgentSession == nil || *got.Launch.PendingAgentSession != second ||
+		got.Launch.PendingReportedState != string(backend.AgentBlocked) || got.Launch.PendingReportedSeq != 2 {
+		t.Fatalf("stale provisional sequence did not preserve telemetry and rebind session: (%+v, %t)", got, found)
+	}
+}
+
 func TestEmitUpdatesGenericWorkspacePendingIntent(t *testing.T) {
 	repo := newEmitterRepo(t)
 	intent, signal, observer := genericPendingEmitterFixture(t, repo)
@@ -725,7 +751,9 @@ func finalEmitterFixture(t *testing.T, repo string) (state.Pane, telemetry.Signa
 		SessionID: "fanout-owned", SocketPath: "/tmp/fanout-owned/herdr.sock",
 		EmitterRowKey: "issue:3:524:529", LaunchNonce: strings.Repeat("a", 32),
 		EmitterNonce: strings.Repeat("b", 32), LaunchExecutable: "/opt/bin/claude",
-		LaunchArgs: []string{"--settings", "{}", "prompt"},
+		LaunchArgs: []string{
+			"--settings", `{"command":"` + telemetry.SequenceCommand + `"}`, "prompt",
+		},
 	}
 	signal := signalForPane(repo, pane)
 	return pane, signal, exactObserver(pane)

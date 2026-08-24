@@ -79,9 +79,10 @@ func managedClaudeHookSettings(fanoutPath string) (string, error) {
 		Working: emit(string(backend.AgentWorking)),
 		Blocked: emit(string(backend.AgentBlocked)),
 		Idle:    emit(string(backend.AgentIdle)), Done: emit(string(backend.AgentDone)),
-		NextSequence: nextSequence,
-		DoneMatcher:  managedClaudeExitReasons, DoneTimeoutSeconds: telemetry.EmitterTimeoutSeconds,
-		Background: true,
+		NextSequence:       nextSequence,
+		DoneMatcher:        managedClaudeExitReasons,
+		DoneTimeoutSeconds: telemetry.SequencedSessionEndTimeoutSeconds,
+		Background:         true,
 	}), nil
 }
 
