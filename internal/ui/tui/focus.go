@@ -169,6 +169,44 @@ func (m *model) focusPaneIDCmd(paneID, contextNotice string) tea.Cmd {
 	return m.focusPaneCmd(paneView{PaneID: paneID, TmuxState: "live"}, false, contextNotice)
 }
 
+func (m *model) focusCreatedBindingCmd(binding backend.PaneBinding, contextNotice string) tea.Cmd {
+	switch backend.NormalizeName(binding.Ref.Backend) {
+	case backend.Herdr:
+		return m.focusFreshHerdrBindingCmd(binding, contextNotice)
+	case backend.Tmux:
+		return m.focusPaneCmd(paneView{PaneID: binding.Ref.Pane, TmuxState: "live"}, false, contextNotice)
+	default:
+		return func() tea.Msg {
+			return paneFocusedMsg{paneID: binding.Ref.Pane, contextNotice: contextNotice, err: fmt.Errorf("created pane runtime identity is unavailable")}
+		}
+	}
+}
+
+func (m model) focusFreshHerdrBindingCmd(binding backend.PaneBinding, contextNotice string) tea.Cmd {
+	return func() tea.Msg {
+		pane, err := m.loadFreshHerdrBinding(binding)
+		if err != nil {
+			return paneFocusedMsg{paneID: binding.Ref.Pane, err: err, contextNotice: contextNotice}
+		}
+		return focusFreshHerdrPane(m.opts.FocusManagedPane, m.opts.keyboard, pane, contextNotice)
+	}
+}
+
+func (m model) loadFreshHerdrBinding(binding backend.PaneBinding) (paneView, error) {
+	panes, err := loadPaneViews(m.opts.ProjectRoot, nil, m.opts.ListLive, nil)
+	pane, selectErr := uniqueLiveHerdrBinding(panes, binding)
+	if selectErr != nil {
+		return paneView{}, errors.Join(err, selectErr)
+	}
+	if observationErr := observationErrorForPane(err, pane); observationErr != nil {
+		return paneView{}, observationErr
+	}
+	if reason := m.runtimeActionDisabledReason(&pane, "focus"); reason != "" {
+		return paneView{}, fmt.Errorf("%s", reason)
+	}
+	return pane, nil
+}
+
 func (m model) focusFreshHerdrPaneIDCmd(paneID, contextNotice string) tea.Cmd {
 	return func() tea.Msg {
 		pane, err := m.loadFreshHerdrPane(paneID)
@@ -244,6 +282,33 @@ func uniqueLiveHerdrPane(panes []paneView, paneID string) (paneView, error) {
 		return paneView{}, fmt.Errorf("newly created pane is not live")
 	}
 	return *found, nil
+}
+
+func uniqueLiveHerdrBinding(panes []paneView, launched backend.PaneBinding) (paneView, error) {
+	var found *paneView
+	for i := range panes {
+		pane := &panes[i]
+		if backend.NormalizeName(pane.Backend) != backend.Herdr ||
+			!sameCreatedPaneBinding(launched, pane.savedPane.RuntimeBinding()) {
+			continue
+		}
+		if found != nil {
+			return paneView{}, fmt.Errorf("recorded pane identity is ambiguous")
+		}
+		found = pane
+	}
+	if found == nil || !found.canFocus() {
+		return paneView{}, fmt.Errorf("newly created pane is not live")
+	}
+	return *found, nil
+}
+
+func sameCreatedPaneBinding(launched, current backend.PaneBinding) bool {
+	if !backend.AgentSessionAdmits(launched.Agent, launched.AgentSession, current.AgentSession) {
+		return false
+	}
+	launched.AgentSession = current.AgentSession
+	return launched.Equal(current)
 }
 
 func (m *model) focusPaneCmd(pane paneView, zoom bool, contextNotice string) tea.Cmd {

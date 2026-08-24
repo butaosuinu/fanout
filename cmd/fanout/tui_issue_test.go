@@ -228,6 +228,10 @@ esac
 	if !reflect.DeepEqual(result.CreatedPaneIDs, []string{"%91"}) {
 		t.Fatalf("created pane ids = %#v, want [%%91]", result.CreatedPaneIDs)
 	}
+	if len(result.CreatedBindings) != 1 || result.CreatedBindings[0].Ref.Pane != "%91" ||
+		result.CreatedBindings[0].Row.IssueNum != 501 {
+		t.Fatalf("created bindings = %+v, want standalone row #501", result.CreatedBindings)
+	}
 }
 
 func TestFinishTUIIssueParentLaunchPreservesPartialSuccess(t *testing.T) {
@@ -378,6 +382,22 @@ func TestFinishTUIIssueParentLaunchPreservesCreationOrder(t *testing.T) {
 	}
 }
 
+func TestFinishTUIIssueParentLaunchPreservesBindingCreationOrder(t *testing.T) {
+	child := backend.PaneBinding{Ref: backend.PaneRef{Backend: backend.Herdr, Pane: "w1:p1"}}
+	orchestrator := backend.PaneBinding{Ref: backend.PaneRef{Backend: backend.Herdr, Pane: "w2:p1"}}
+	result, err := finishTUIIssueParentLaunch(500, true, orchestrator.Ref.Pane, parentIssueFanoutResult{
+		CreatedPaneIDs: []string{child.Ref.Pane}, CreatedBindings: []backend.PaneBinding{child},
+		OrchestratorBinding: orchestrator,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []backend.PaneBinding{child, orchestrator}
+	if !reflect.DeepEqual(result.CreatedBindings, want) {
+		t.Fatalf("CreatedBindings = %+v, want %+v", result.CreatedBindings, want)
+	}
+}
+
 func TestLaunchIssueSessionFromTUIParentLaunchesOrchestratorFirst(t *testing.T) {
 	repo := prepareTUIParentLaunchRepo(t)
 	tmuxLogPath := installTUISequentialTmuxShim(t, repo)
@@ -390,6 +410,10 @@ func TestLaunchIssueSessionFromTUIParentLaunchesOrchestratorFirst(t *testing.T) 
 	}
 	if !reflect.DeepEqual(result.CreatedPaneIDs, []string{"%91", "%92"}) {
 		t.Fatalf("created pane ids = %#v, want orchestrator then child", result.CreatedPaneIDs)
+	}
+	if len(result.CreatedBindings) != 2 || result.CreatedBindings[0].Ref.Pane != "%91" ||
+		result.CreatedBindings[1].Ref.Pane != "%92" {
+		t.Fatalf("created bindings = %+v, want orchestrator then child", result.CreatedBindings)
 	}
 	if result.Notice != "fanned out #500: started orchestrator + 1 child pane(s)" {
 		t.Fatalf("notice = %q, want orchestrator success", result.Notice)

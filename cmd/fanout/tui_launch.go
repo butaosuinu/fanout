@@ -89,6 +89,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 		return fanouttui.LaunchResult{}, fmt.Errorf("runtime backend: %w", err)
 	}
 	createdPaneIDs := make([]string, 0, len(agentNames))
+	createdBindings := make([]backend.PaneBinding, 0, len(agentNames))
 	for _, agentName := range agentNames {
 		cfg = newSessionConfigForTUIAgent(projectRoot, agentName, launchLogger.Warn)
 		launchStore := store
@@ -100,20 +101,26 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 		if result, ok := launcher.LaunchWithResult(paneReq); ok {
 			if result.PaneID != "" {
 				createdPaneIDs = append(createdPaneIDs, result.PaneID)
+				if recorder != nil {
+					launchStore = recorder.Store
+				}
+				createdBindings = append(createdBindings, tuiLaunchBinding(launchStore, paneReq, result.PaneID))
 			}
 			continue
 		}
 		if len(createdPaneIDs) > 0 {
 			return fanouttui.LaunchResult{
-				Notice:         partialManualLaunchNotice(len(createdPaneIDs), stderr),
-				CreatedPaneIDs: createdPaneIDs,
+				Notice:          partialManualLaunchNotice(len(createdPaneIDs), stderr),
+				CreatedPaneIDs:  createdPaneIDs,
+				CreatedBindings: createdBindings,
 			}, nil
 		}
 		return fanouttui.LaunchResult{}, bufferedLaunchError(stdout, stderr, "create pane")
 	}
 	return fanouttui.LaunchResult{
-		Notice:         bufferedLaunchNotice(stderr),
-		CreatedPaneIDs: createdPaneIDs,
+		Notice:          bufferedLaunchNotice(stderr),
+		CreatedPaneIDs:  createdPaneIDs,
+		CreatedBindings: createdBindings,
 	}, nil
 }
 
@@ -142,10 +149,7 @@ func launchPlanPromptFromTUI(projectRoot, session, commandName string, hookConfi
 	if launchNotice != "" {
 		notice += "; " + launchNotice
 	}
-	return fanouttui.LaunchResult{
-		Notice:         notice,
-		CreatedPaneIDs: []string{paneID},
-	}, nil
+	return tuiCoordinatorLaunchResult(projectRoot, notice, paneReq, paneID), nil
 }
 
 // launchPlanCoordinator validates the coordinator agent, locks state, and
@@ -297,10 +301,36 @@ func launchIssuePlanFromTUI(projectRoot, session, commandName string, hookConfig
 	if launchNotice != "" {
 		notice += "; " + launchNotice
 	}
+	return tuiCoordinatorLaunchResult(projectRoot, notice, paneReq, paneID), nil
+}
+
+func tuiCoordinatorLaunchResult(projectRoot, notice string, req panelaunch.Request, paneID string) fanouttui.LaunchResult {
 	return fanouttui.LaunchResult{
-		Notice:         notice,
-		CreatedPaneIDs: []string{paneID},
-	}, nil
+		Notice: notice, CreatedPaneIDs: []string{paneID},
+		CreatedBindings: []backend.PaneBinding{loadTUILaunchBinding(projectRoot, req, paneID)},
+	}
+}
+
+func loadTUILaunchBinding(projectRoot string, req panelaunch.Request, paneID string) backend.PaneBinding {
+	store, err := state.LoadProject(projectRoot)
+	if err != nil {
+		return backend.PaneBinding{}
+	}
+	return tuiLaunchBinding(store, req, paneID)
+}
+
+func tuiLaunchBinding(store state.Store, req panelaunch.Request, paneID string) backend.PaneBinding {
+	var pane state.Pane
+	var ok bool
+	if req.TaskID != "" {
+		pane, ok = store.FindTask(req.ParentRef, req.TaskID)
+	} else {
+		pane, ok = store.Find(req.ParentRef, req.Number)
+	}
+	if !ok || pane.PaneID != paneID {
+		return backend.PaneBinding{}
+	}
+	return pane.RuntimeBinding()
 }
 
 // guardIssuePlanCoordinator is the plan-checkbox lane's dedupe, run on the

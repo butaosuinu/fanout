@@ -1594,6 +1594,10 @@ func TestLaunchManualPaneFromTUICreatesMultipleAgentPanes(t *testing.T) {
 	if !reflect.DeepEqual(result.CreatedPaneIDs, []string{"%77", "%77"}) {
 		t.Fatalf("created pane ids = %#v, want creation-order ids", result.CreatedPaneIDs)
 	}
+	if len(result.CreatedBindings) != 2 || result.CreatedBindings[0].Row.IssueNum != -1 ||
+		result.CreatedBindings[1].Row.IssueNum != -2 {
+		t.Fatalf("created bindings = %+v, want distinct manual rows in creation order", result.CreatedBindings)
+	}
 
 	store, err := state.LoadProject(repo)
 	if err != nil {

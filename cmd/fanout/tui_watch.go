@@ -208,11 +208,13 @@ func launchParentIssueFanout(projectRoot, session, commandName string, cfg *clif
 }
 
 type parentIssueFanoutResult struct {
-	Watch          watch.ParentLaunchResult
-	CreatedPaneIDs []string
-	Notice         string
-	runtimeBackend backend.Backend
-	managed        panelaunch.ManagedSessionRuntime
+	Watch               watch.ParentLaunchResult
+	CreatedPaneIDs      []string
+	CreatedBindings     []backend.PaneBinding
+	OrchestratorBinding backend.PaneBinding
+	Notice              string
+	runtimeBackend      backend.Backend
+	managed             panelaunch.ManagedSessionRuntime
 }
 
 type tuiIssueReadyFunc func(
@@ -276,16 +278,29 @@ func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandNam
 		execution, code = run.IssuesWithPlanInputResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, *input, runReady, runAfter)
 	}
 	result := parentIssueFanoutResult{
-		CreatedPaneIDs: execution.CreatedPaneIDs,
-		Notice:         combinedLaunchNotice(execution.Notices, bufferedLaunchNotice(stderr)),
-		runtimeBackend: rt.Backend,
-		managed:        rt.Managed,
+		CreatedPaneIDs:  execution.CreatedPaneIDs,
+		CreatedBindings: loadTUIIssueBindings(projectRoot, cfg.ParentRef, execution.CreatedIssueNums, execution.CreatedPaneIDs),
+		Notice:          combinedLaunchNotice(execution.Notices, bufferedLaunchNotice(stderr)),
+		runtimeBackend:  rt.Backend,
+		managed:         rt.Managed,
 	}
 	if code != exitcode.OK {
 		return result, bufferedLaunchError(stdout, stderr, "launch parent")
 	}
 	result.Watch = watchParentLaunchResult(execution.Plan, execution.CreatedIssueNums)
 	return result, nil
+}
+
+func loadTUIIssueBindings(projectRoot, parent string, issueNums []int, paneIDs []string) []backend.PaneBinding {
+	bindings := make([]backend.PaneBinding, len(paneIDs))
+	store, err := state.LoadProject(projectRoot)
+	if err != nil || len(issueNums) != len(paneIDs) {
+		return bindings
+	}
+	for i, issueNum := range issueNums {
+		bindings[i] = tuiLaunchBinding(store, panelaunch.Request{ParentRef: parent, Number: issueNum}, paneIDs[i])
+	}
+	return bindings
 }
 
 func newWatchLaunchConfig(resolvedSettings settings.Settings, parent, limit int) *cliflags.Config {

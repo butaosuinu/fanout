@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	fanoutnotify "github.com/butaosuinu/fanout/internal/infra/notify"
 )
 
@@ -307,14 +308,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "created new agent pane"
 		}
 		reloadCmd := m.loadStateCmd(false)
-		if msg.attached || len(msg.createdPaneIDs) == 0 {
-			return m, reloadCmd
-		}
-		focusCmd := m.focusPaneIDCmd(msg.createdPaneIDs[0], m.notice)
-		if focusCmd == nil {
-			return m, reloadCmd
-		}
-		return m, tea.Batch(reloadCmd, focusCmd)
+		return m, m.postLaunchFocusCmd(msg, reloadCmd)
 	case newPanePromptMsg:
 		m.newPanePopupOpen = false
 		if msg.err != nil {
@@ -530,6 +524,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m *model) postLaunchFocusCmd(msg launchPaneMsg, reloadCmd tea.Cmd) tea.Cmd {
+	if msg.attached || len(msg.createdPaneIDs) == 0 {
+		return reloadCmd
+	}
+	if binding, ok := exactFirstCreatedBinding(msg.createdPaneIDs, msg.createdBindings); ok {
+		return tea.Batch(reloadCmd, m.focusCreatedBindingCmd(binding, m.notice))
+	}
+	if len(msg.createdBindings) > 0 || m.selectedBackend() == backend.Herdr {
+		m.notice = appendFocusNotice(m.notice, "focus skipped: exact created pane identity is unavailable")
+		return reloadCmd
+	}
+	focusCmd := m.focusPaneIDCmd(msg.createdPaneIDs[0], m.notice)
+	if focusCmd == nil {
+		return reloadCmd
+	}
+	return tea.Batch(reloadCmd, focusCmd)
+}
+
+func exactFirstCreatedBinding(paneIDs []string, bindings []backend.PaneBinding) (backend.PaneBinding, bool) {
+	if len(paneIDs) == 0 || len(bindings) != len(paneIDs) {
+		return backend.PaneBinding{}, false
+	}
+	for i, paneID := range paneIDs {
+		if strings.TrimSpace(paneID) == "" || bindings[i].Ref.Pane != paneID {
+			return backend.PaneBinding{}, false
+		}
+	}
+	return bindings[0], true
 }
 
 func appendFocusNotice(contextNotice, focusNotice string) string {

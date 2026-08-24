@@ -5647,6 +5647,138 @@ func TestNewPaneLaunchSuccessReloadsStateAndFocusesFirstCreatedPane(t *testing.T
 	}
 }
 
+func TestNewPaneLaunchUsesCreatedBindingBackendAcrossConsoleBackends(t *testing.T) {
+	var focused []string
+	m := newModel(Options{
+		BackendSelection: backend.Selection{Name: backend.Herdr},
+		FocusPane: func(paneID string) error {
+			focused = append(focused, paneID)
+			return nil
+		},
+		PaneAlive: func(string) bool { return true },
+	})
+	binding := backend.PaneBinding{Ref: backend.PaneRef{Backend: backend.Tmux, Pane: "%2"}}
+
+	_, cmd := m.Update(launchPaneMsg{
+		count: 1, createdPaneIDs: []string{"%2"}, createdBindings: []backend.PaneBinding{binding},
+	})
+	msg := findPaneFocusedMsg(t, runCmd(cmd))
+	if msg.err != nil || !reflect.DeepEqual(focused, []string{"%2"}) {
+		t.Fatalf("cross-backend focus = msg %+v panes %v, want tmux pane %%2", msg, focused)
+	}
+}
+
+func TestFocusCreatedHerdrBindingUsesExactRowAcrossConsoleBackendAndLateSession(t *testing.T) {
+	root := t.TempDir()
+	launchedPane := createdHerdrFocusPane("100", 101, "session-a")
+	currentPane := launchedPane
+	currentPane.AgentSession = &backend.AgentSessionRef{
+		Source: backend.AgentSessionSource("codex"), Agent: "codex", Kind: "id", Value: "session-1",
+	}
+	body, err := json.Marshal(state.Store{SchemaVersion: state.SchemaVersion, Panes: []state.Pane{currentPane}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTUIState(t, root, string(body))
+	focusCalls := 0
+	m := newModel(Options{
+		ProjectRoot:      root,
+		BackendSelection: backend.Selection{Name: backend.Tmux},
+		ListLive: func() ([]backend.LivePane, error) {
+			return []backend.LivePane{liveCreatedHerdrFocusPane(currentPane)}, nil
+		},
+		ManagedActionDisabled: func(state.Pane) string { return "" },
+		FocusManagedPane: func(got state.Pane) error {
+			focusCalls++
+			if !got.RuntimeBinding().Equal(currentPane.RuntimeBinding()) {
+				t.Fatalf("focused pane = %+v, want exact current row", got)
+			}
+			return nil
+		},
+	})
+
+	msg := m.focusCreatedBindingCmd(launchedPane.RuntimeBinding(), "created")()
+	focused, ok := msg.(paneFocusedMsg)
+	if !ok || focused.err != nil || focusCalls != 1 {
+		t.Fatalf("exact Herdr focus = msg %#v err %v calls %d", msg, focused.err, focusCalls)
+	}
+}
+
+func TestNewPaneLaunchSkipsHerdrFocusWithoutExactBinding(t *testing.T) {
+	focusCalls := 0
+	m := newModel(Options{
+		ProjectRoot:      t.TempDir(),
+		BackendSelection: backend.Selection{Name: backend.Herdr},
+		FocusManagedPane: func(state.Pane) error {
+			focusCalls++
+			return nil
+		},
+	})
+
+	updated, cmd := m.Update(launchPaneMsg{count: 1, createdPaneIDs: []string{"w1:p1"}})
+	m = updated.(model)
+	_ = runCmd(cmd)
+	if focusCalls != 0 || !strings.Contains(m.notice, "focus skipped: exact created pane identity is unavailable") {
+		t.Fatalf("unresolved focus = calls %d notice %q", focusCalls, m.notice)
+	}
+}
+
+func TestUniqueLiveHerdrBindingSelectsExactRowWhenPaneIDIsReused(t *testing.T) {
+	launchedPane := createdHerdrFocusPane("100", 101, "session-a")
+	launched := launchedPane.RuntimeBinding()
+	reused := createdHerdrFocusPane("200", 201, "session-b")
+	views := []paneView{
+		{savedPane: reused, Parent: reused.Parent, IssueNum: reused.IssueNum, PaneID: reused.PaneID, Backend: reused.Backend, TmuxState: "live"},
+		{savedPane: launchedPane, Parent: launchedPane.Parent, IssueNum: launchedPane.IssueNum, PaneID: launchedPane.PaneID, Backend: launchedPane.Backend, TmuxState: "live"},
+	}
+
+	got, err := uniqueLiveHerdrBinding(views, launched)
+	if err != nil || got.Parent != launchedPane.Parent || got.IssueNum != launchedPane.IssueNum {
+		t.Fatalf("exact row focus = pane %+v err %v, want %s/%d", got, err, launchedPane.Parent, launchedPane.IssueNum)
+	}
+	if _, err := uniqueLiveHerdrBinding(views[:1], launched); err == nil {
+		t.Fatal("reused pane ID from another session was accepted after the launched row disappeared")
+	}
+}
+
+func TestSameCreatedPaneBindingAdmitsFirstAgentSessionOnlyForRecordedAgent(t *testing.T) {
+	launched := createdHerdrFocusPane("100", 101, "session-a").RuntimeBinding()
+	current := launched
+	current.AgentSession = &backend.AgentSessionRef{
+		Source: backend.AgentSessionSource("codex"), Agent: "codex", Kind: "id", Value: "session-1",
+	}
+	if !sameCreatedPaneBinding(launched, current) {
+		t.Fatal("first agent session did not match its exact launch binding")
+	}
+	current.AgentSession = &backend.AgentSessionRef{
+		Source: backend.AgentSessionSource("claude"), Agent: "claude", Kind: "id", Value: "session-1",
+	}
+	if sameCreatedPaneBinding(launched, current) {
+		t.Fatal("foreign agent session matched the launch binding")
+	}
+}
+
+func createdHerdrFocusPane(parent string, issueNum int, session string) state.Pane {
+	return state.Pane{
+		Parent: parent, IssueNum: issueNum, Backend: backend.Herdr, PaneID: "w1:p1",
+		WorkspaceID: "workspace-1", WorkspaceLabel: "owned-label", TerminalID: "terminal-1",
+		RepoKey: "/repo/.git", WorktreePath: "/repo/worktree", Agent: "codex", AgentID: "fanout-agent",
+		SessionID: session, SocketPath: "/tmp/" + session + ".sock",
+		EmitterRowKey: "issue:3:" + parent, LaunchNonce: "launch", EmitterNonce: "emitter",
+		LaunchExecutable: "/usr/bin/codex", LaunchArgs: []string{"--remote", "ws://127.0.0.1:1"},
+	}
+}
+
+func liveCreatedHerdrFocusPane(pane state.Pane) backend.LivePane {
+	return backend.LivePane{
+		Ref:         backend.PaneRef{Backend: pane.Backend, Workspace: pane.WorkspaceID, Pane: pane.PaneID},
+		CurrentPath: pane.WorktreePath, WorkspaceLabel: pane.WorkspaceLabel, TerminalID: pane.TerminalID,
+		AgentID: pane.AgentID, AgentNamed: true, AgentProvider: pane.Agent, AgentSession: pane.AgentSession,
+		AgentPresent: true, RepoKey: pane.RepoKey, ProjectRoot: "/repo", WorktreePath: pane.WorktreePath,
+		SessionID: pane.SessionID, SocketPath: pane.SocketPath,
+	}
+}
+
 func TestNewPaneLaunchAutoFocusFailureIsNonFatal(t *testing.T) {
 	protocols := &fakeKeyboardProtocols{}
 	launchNotice := "base branch refresh skipped: local branch main is checked out"
