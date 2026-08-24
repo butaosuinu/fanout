@@ -180,16 +180,13 @@ func workspaceClosePreflightIdentity(
 	}
 	resource = intent.Resource
 	reopened := intent.Status == state.IntentIssued && intent.CleanupPhase == state.CleanupReopen
-	if reopened {
-		predicate := workspaceLabelPredicate(
-			intent.WorkspaceLabel,
-			intent.WorktreePath,
-			intent.Resource.RepoKey,
-			intent.Resource.RepoRoot,
-		)
-		return resource, predicate, true, true, nil
-	}
-	return resource, workspacePredicate(resource), false, true, nil
+	predicate := workspaceLabelPredicate(
+		intent.WorkspaceLabel,
+		intent.WorktreePath,
+		intent.Resource.RepoKey,
+		intent.Resource.RepoRoot,
+	)
+	return resource, predicate, reopened, true, nil
 }
 
 func closeWorkspaceWorktree(
@@ -291,11 +288,20 @@ func validateLaunchIntentForCleanup(
 		intent.Status == state.IntentManualCleanupRequired
 	if slices.Contains([]bool{
 		intent.Kind == state.IntentWorktree, allowedStatus, intentMatchesPane(intent, pane, ownerRoot),
-		intent.Resource == resourceFromPane(pane), intent.Launch != nil && intent.Launch.TokenIssued,
+		launchResourceMatchesCleanupPane(intent.Resource, pane), intent.Launch != nil && intent.Launch.TokenIssued,
 	}, false) {
 		return fmt.Errorf("saved Herdr launch intent does not match the child row")
 	}
 	return nil
+}
+
+func launchResourceMatchesCleanupPane(resource state.RuntimeResource, pane state.Pane) bool {
+	saved := resourceFromPane(pane)
+	return resource == saved || resource.WorkspaceID != saved.WorkspaceID &&
+		resource.Label == saved.Label &&
+		filepath.Clean(resource.CurrentPath) == filepath.Clean(saved.CurrentPath) &&
+		filepath.Clean(resource.RepoKey) == filepath.Clean(saved.RepoKey) &&
+		filepath.Clean(resource.RepoRoot) == filepath.Clean(saved.RepoRoot)
 }
 
 func beginWorkspaceCleanup(
@@ -485,10 +491,10 @@ func cleanupResourceMatchesPane(intent state.LaunchIntent, pane state.Pane) bool
 		filepath.Clean(current.RepoRoot) != filepath.Clean(saved.RepoRoot) {
 		return false
 	}
-	// A checkout-only recovery creates a replacement workspace. Its stable
-	// nonce and Git provenance remain bound to the original row, while its
-	// runtime IDs are intentionally replaced and recorded in the intent.
-	return intent.Coordinator != (state.RuntimeResource{}) || current == saved
+	// Reopen recovery and Herdr-side moves can replace the workspace and its
+	// subordinate runtime IDs. A terminal-only mismatch remains invalid.
+	return intent.Coordinator != (state.RuntimeResource{}) || current == saved ||
+		current.WorkspaceID != saved.WorkspaceID
 }
 
 func driveWorkspaceCleanup(
@@ -532,7 +538,7 @@ func resumeWorkspaceCleanup(
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
 	if intent.Status == state.IntentPlanned && time.Now().UnixMilli() >= intent.ExpiresUnixMS {
-		return recoverExpiredPlannedWorkspaceCleanup(ctx, opts, journal, runtime, intent)
+		return recoverExpiredPlannedWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent)
 	}
 	if intent.Status == state.IntentPlanned {
 		return replanCurrentWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent)
@@ -552,7 +558,7 @@ func replanCurrentWorkspaceCleanup(
 	pane state.Pane,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
-	observation, err := observeWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
+	observation, err := observeLabelBoundWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent)
 	if err != nil {
 		return intent, err
 	}
@@ -562,16 +568,24 @@ func replanCurrentWorkspaceCleanup(
 func recoverExpiredPlannedWorkspaceCleanup(
 	ctx context.Context,
 	opts Options,
+	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
+	pane state.Pane,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
-	observation, err := observeWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
+	observation, err := observeLabelBoundWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent)
 	if err != nil {
 		return intent, err
 	}
 	if workspaceCleanupAbsent(observation) {
 		return realizeWorkspaceCleanup(journal, intent)
+	}
+	intent, err = rebindObservedWorkspaceCleanupIdentity(
+		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
+	)
+	if err != nil {
+		return intent, err
 	}
 	if intent.Coordinator != (state.RuntimeResource{}) && intent.CleanupPhase != state.CleanupReopen {
 		return replanWorkspaceCleanup(ctx, opts, journal, intent, observation)
@@ -581,6 +595,42 @@ func recoverExpiredPlannedWorkspaceCleanup(
 		return intent, err
 	}
 	return intent, fmt.Errorf("saved Herdr cleanup intent expired before mutation; retry to replan")
+}
+
+func rebindMovedWorkspaceCleanupIdentity(
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	projectRoot string,
+	pane state.Pane,
+	resource state.RuntimeResource,
+) error {
+	worktreeIntentID, _, err := workspaceCleanupIntentIDs(projectRoot, pane)
+	if err != nil {
+		return err
+	}
+	if launchIntent, found := journal.FindIntent(worktreeIntentID); found {
+		launchIntent.Resource = resource
+		journal.UpsertIntent(launchIntent)
+	}
+	pane.WorkspaceID = resource.WorkspaceID
+	pane.PaneID = resource.PaneID
+	pane.TerminalID = resource.TerminalID
+	return locked.RecordPane(pane)
+}
+
+func rebindObservedWorkspaceCleanupIdentity(
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	projectRoot string,
+	pane state.Pane,
+	intent state.LaunchIntent,
+	workspace *backend.WorkspaceObservation,
+) (state.LaunchIntent, error) {
+	if workspace == nil || workspace.WorkspaceID == intent.Resource.WorkspaceID {
+		return intent, nil
+	}
+	intent.Resource = adoptMovedWorkspaceCleanupResource(intent.Resource, *workspace)
+	return intent, rebindMovedWorkspaceCleanupIdentity(locked, journal, projectRoot, pane, intent.Resource)
 }
 
 func replanWorkspaceCleanup(
@@ -630,6 +680,12 @@ func replanObservedWorkspaceCleanup(
 ) (state.LaunchIntent, error) {
 	if workspaceCleanupAbsent(observation) {
 		return realizeWorkspaceCleanup(journal, intent)
+	}
+	intent, err := rebindObservedWorkspaceCleanupIdentity(
+		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
+	)
+	if err != nil {
+		return intent, err
 	}
 	checkoutOnly := observation.workspace == nil &&
 		(!observation.checkout.PathAbsent || observation.checkout.Registered)
