@@ -84,6 +84,12 @@ func SequencedClaudeLaunch(agent string, args []string) bool {
 	return false
 }
 
+// ClaudeSequenceWatermarkMissing reports a refined sequenced launch whose
+// applied sequence was stripped by a writer that does not know the field.
+func ClaudeSequenceWatermarkMissing(agent string, args []string, refined bool, applied uint64) bool {
+	return refined && applied == 0 && SequencedClaudeLaunch(agent, args)
+}
+
 // ParseSignal validates one hidden-command invocation and its inherited wire
 // identity. getenv keeps parsing pure and directly testable.
 func ParseSignal(args []string, getenv func(string) string) (Signal, error) {

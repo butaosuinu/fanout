@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,14 +19,14 @@ import (
 const maxTelemetrySequenceBytes = 21
 
 // NextTelemetrySequence allocates one repository-local telemetry sequence
-// while holding the state lock shared with emitter updates and older writers.
+// without waiting for the longer-lived state launch lock.
 func NextTelemetrySequence(ctx context.Context, statePath string) (sequence uint64, err error) {
 	defer errs.Wrap(&err, "allocate telemetry sequence for %s", statePath)
-	locked, err := LockContext(ctx, statePath)
+	sequenceLock, err := lockTelemetrySequence(ctx, statePath)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { err = errors.Join(err, locked.Unlock()) }()
+	defer func() { err = errors.Join(err, unlockStateFile(sequenceLock)) }()
 
 	sequencePath := statePath + ".sequence"
 	previous, err := readTelemetrySequence(sequencePath)
@@ -41,6 +42,28 @@ func NextTelemetrySequence(ctx context.Context, statePath string) (sequence uint
 		return 0, fmt.Errorf("write sequence: %w", writeErr)
 	}
 	return sequence, nil
+}
+
+func lockTelemetrySequence(ctx context.Context, statePath string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		return nil, fmt.Errorf("create telemetry sequence directory: %w", err)
+	}
+	lockPath := statePath + ".sequence.lock"
+	flags := os.O_CREATE | os.O_RDWR | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+	file, err := os.OpenFile(lockPath, flags, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open telemetry sequence lock %s: %w", lockPath, err)
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = file.Close() // The invalid lock file is authoritative.
+		return nil, fmt.Errorf("telemetry sequence lock must be a regular file")
+	}
+	if err := lockFileExclusive(ctx, file, false); err != nil {
+		_ = file.Close() // The flock error is authoritative.
+		return nil, fmt.Errorf("lock telemetry sequence %s: %w", lockPath, err)
+	}
+	return file, nil
 }
 
 func readTelemetrySequence(path string) (uint64, error) {

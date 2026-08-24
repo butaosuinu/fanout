@@ -484,6 +484,18 @@ func TestRunMsgNudgeHerdrRejectsUnsequencedClaudeGeneration(t *testing.T) {
 	}
 }
 
+func TestRunMsgNudgeHerdrRejectsMissingClaudeSequenceWatermark(t *testing.T) {
+	store, runtime := managedNudgeFixture("working", true)
+	store.Panes[0].ReportedStateSeq = 0
+	deps := managedNudgeDeps(store, store, runtime)
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.liveCalls != 0 || runtime.nudgeCalls != 0 ||
+		!strings.Contains(errb.String(), "launch binding changed") {
+		t.Fatalf("code=%d live=%d nudges=%d stderr=%q", code, runtime.liveCalls, runtime.nudgeCalls, errb.String())
+	}
+}
+
 func TestRunMsgNudgeHerdrAcceptsExactCodexPlanProcess(t *testing.T) {
 	store, runtime := codexPlanNudgeFixture()
 	deps := managedNudgeDeps(store, store, runtime)
@@ -571,6 +583,9 @@ func managedNudgeFixture(reportedState string, refined bool) (state.Store, *fake
 		EmitterRowKey: rowKey, LaunchNonce: launchNonce,
 		EmitterNonce: strings.Repeat("b", 32), LaunchExecutable: "/usr/bin/claude",
 		LaunchArgs: args,
+	}
+	if refined {
+		pane.ReportedStateSeq = 1
 	}
 	live := backend.LivePane{
 		Ref: paneRef(pane), TerminalID: pane.TerminalID, SessionID: pane.SessionID,

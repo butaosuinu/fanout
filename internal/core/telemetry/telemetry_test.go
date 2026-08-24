@@ -39,6 +39,18 @@ func TestSequencedClaudeLaunchRequiresClaudeSequenceMarker(t *testing.T) {
 	}
 }
 
+func TestClaudeSequenceWatermarkMissingRequiresRefinedSequencedLaunch(t *testing.T) {
+	sequenced := []string{"--settings", `{"command":"__fanout-emitter-sequence"}`}
+	if !ClaudeSequenceWatermarkMissing("claude", sequenced, true, 0) {
+		t.Fatal("ClaudeSequenceWatermarkMissing() missed a stripped watermark")
+	}
+	if ClaudeSequenceWatermarkMissing("claude", sequenced, false, 0) ||
+		ClaudeSequenceWatermarkMissing("claude", sequenced, true, 1) ||
+		ClaudeSequenceWatermarkMissing("claude", []string{"--settings", `{}`}, true, 0) {
+		t.Fatal("ClaudeSequenceWatermarkMissing() rejected a valid telemetry state")
+	}
+}
+
 func TestIsSequenceRequestRequiresExactHiddenCommand(t *testing.T) {
 	if !IsSequenceRequest([]string{SequenceCommand}) ||
 		IsSequenceRequest([]string{SequenceCommand, "extra"}) || IsSequenceRequest(nil) {

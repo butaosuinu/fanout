@@ -21,6 +21,7 @@ var localExcludePatterns = []string{
 	".fanout/state.json",
 	".fanout/state.json.lock",
 	".fanout/state.json.sequence",
+	".fanout/state.json.sequence.lock",
 	".fanout/worktree-metadata.json",
 	".fanout/dashboard.json",
 	".fanout/dashboard.json.lock",

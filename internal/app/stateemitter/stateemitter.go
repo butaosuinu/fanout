@@ -235,15 +235,22 @@ func updateFinalRow(
 	if err := bindAgentSession(locked.Panes, index, current); err != nil {
 		return err
 	}
-	if staleSignal(signal, locked.Panes[index].ReportedStateSeq) {
+	return applyFinalSignal(locked, index, signal)
+}
+
+func applyFinalSignal(locked *state.LockedStore, index int, signal telemetry.Signal) error {
+	pane := &locked.Panes[index]
+	if telemetry.ClaudeSequenceWatermarkMissing(
+		pane.Agent, pane.LaunchArgs, pane.StateRefinement, pane.ReportedStateSeq,
+	) {
+		return invalidateFinalRowTelemetry(locked, index)
+	}
+	if staleSignal(signal, pane.ReportedStateSeq) {
 		return locked.Save()
 	}
-	locked.Panes[index].ReportedState = nextReportedState(
-		locked.Panes[index].ReportedState,
-		string(signal.State),
-	)
-	locked.Panes[index].ReportedStateSeq = signal.Sequence
-	locked.Panes[index].StateRefinement = true
+	pane.ReportedState = nextReportedState(pane.ReportedState, string(signal.State))
+	pane.ReportedStateSeq = signal.Sequence
+	pane.StateRefinement = true
 	return locked.Save()
 }
 

@@ -110,6 +110,24 @@ func TestEmitFinalRowDiscardsOlderClaudeSequence(t *testing.T) {
 	}
 }
 
+func TestEmitInvalidatesSequencedClaudeRowWithMissingWatermark(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	pane.ReportedState = string(backend.AgentBlocked)
+	pane.ReportedStateSeq = 0
+	pane.StateRefinement = true
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "" || got.ReportedStateSeq != 0 || got.StateRefinement ||
+		got.EmitterNonce == pane.EmitterNonce {
+		t.Fatalf("missing watermark was not fenced: %+v", got)
+	}
+}
+
 func TestEmitLegacyWriterCannotEraseSequencedWatermark(t *testing.T) {
 	repo := newEmitterRepo(t)
 	current, _, _ := finalEmitterFixture(t, repo)
