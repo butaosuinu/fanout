@@ -387,7 +387,7 @@ func newWorkspaceCleanupIntent(
 	resource state.RuntimeResource,
 	observation workspaceCleanupObservation,
 ) (state.LaunchIntent, error) {
-	phase, err := classifyFreshWorkspaceCleanup(ctx, opts.ProjectRoot, fullRef, resource, observation)
+	phase, err := classifyFreshWorkspaceCleanup(ctx, opts.ProjectRoot, fullRef, resource, observation, false)
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
@@ -430,6 +430,7 @@ func classifyFreshWorkspaceCleanup(
 	projectRoot, fullRef string,
 	resource state.RuntimeResource,
 	observation workspaceCleanupObservation,
+	verifyContents bool,
 ) (state.CleanupPhase, error) {
 	workspacePresent := observation.workspace != nil
 	checkoutPresent := !observation.checkout.PathAbsent || observation.checkout.Registered
@@ -448,8 +449,8 @@ func classifyFreshWorkspaceCleanup(
 		if err := verifyCleanupCheckout(ctx, projectRoot, fullRef, observation.checkout.HeadSHA, resource); err != nil {
 			return "", err
 		}
-		if err := verifyRemovableCheckoutContents(ctx, resource.CurrentPath); err != nil {
-			return "", err
+		if verifyContents {
+			return state.CleanupReopen, verifyRemovableCheckoutContents(ctx, resource.CurrentPath)
 		}
 		return state.CleanupReopen, nil
 	default:
@@ -647,8 +648,7 @@ func replanWorkspaceCleanup(
 		ctx,
 		opts.ProjectRoot,
 		intent.FullBranchRef,
-		intent.Resource,
-		observation,
+		intent.Resource, observation, true,
 	)
 	if err != nil {
 		return intent, err

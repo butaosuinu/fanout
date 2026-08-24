@@ -446,6 +446,7 @@ func TestHerdrCloseRejectsCheckoutOnlyContentsBeforeReopen(t *testing.T) {
 				t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
 			}
 			assertHerdrLifecyclePreserved(t, fixture)
+			assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
 			if runtime.setupCalls != 0 || runtime.openCalls != 0 || runtime.removeCalls != 0 || runtime.closeCalls != 0 {
 				t.Fatalf(
 					"checkout-only cleanup calls = setup %d/open %d/remove %d/close %d, want 0/0/0/0",
@@ -678,6 +679,18 @@ func TestHerdrCleanupRetryDoesNotRepeatHooks(t *testing.T) {
 				runtime.observeAfterMutationErr = nil
 			},
 			wantRetry: exitcode.OK,
+		},
+		{
+			name: "checkout-only content gate",
+			prepare: func(t *testing.T, fixture herdrLifecycleFixture) *fakeHerdrLifecycleRuntime {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(fixture.worktreePath, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return prepareHerdrCleanupPhase(t, fixture, state.CleanupReopen)
+			},
+			beforeTry: func(*fakeHerdrLifecycleRuntime) {},
+			wantRetry: exitcode.Env,
 		},
 	}
 	for _, tt := range tests {
