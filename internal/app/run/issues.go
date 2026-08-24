@@ -19,11 +19,12 @@ import (
 )
 
 type executionResult struct {
-	Created        int
-	Failed         int
-	CreatedNums    []int
-	CreatedPaneIDs []string
-	Notices        []string
+	Created         int
+	Failed          int
+	CreatedNums     []int
+	CreatedPaneIDs  []string
+	CreatedBindings []backend.PaneBinding
+	Notices         []string
 }
 
 // IssueExecutionResult reports the launch plan and exact issues and tmux panes
@@ -32,6 +33,7 @@ type executionResult struct {
 type IssueExecutionResult struct {
 	CreatedIssueNums []int
 	CreatedPaneIDs   []string
+	CreatedBindings  []backend.PaneBinding
 	Notices          []string
 	Plan             Plan
 }
@@ -243,7 +245,7 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		Failed:  result.Failed,
 	}
 	if len(plan.Targets) > 0 && !callIssueAfter(after, store, recorder, progress, lg) {
-		return IssueExecutionResult{CreatedIssueNums: result.CreatedNums, CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices, Plan: plan}, exitcode.Env
+		return issueExecutionResult(result, plan), exitcode.Env
 	}
 
 	// Register tmux keybindings so the user can pop the read-only dashboard
@@ -267,9 +269,17 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 	}
 
 	if result.Failed > 0 {
-		return IssueExecutionResult{CreatedIssueNums: result.CreatedNums, CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices, Plan: plan}, exitcode.Env
+		return issueExecutionResult(result, plan), exitcode.Env
 	}
-	return IssueExecutionResult{CreatedIssueNums: result.CreatedNums, CreatedPaneIDs: result.CreatedPaneIDs, Notices: result.Notices, Plan: plan}, exitcode.OK
+	return issueExecutionResult(result, plan), exitcode.OK
+}
+
+func issueExecutionResult(result executionResult, plan Plan) IssueExecutionResult {
+	return IssueExecutionResult{
+		CreatedIssueNums: result.CreatedNums,
+		CreatedPaneIDs:   result.CreatedPaneIDs, CreatedBindings: result.CreatedBindings,
+		Notices: result.Notices, Plan: plan,
+	}
 }
 
 func prepareIssueCallbacks(rt *Runtime, ready IssueReadyFunc, after IssueAfterFunc) error {
@@ -336,6 +346,7 @@ func effectiveIssueLaunchConfig(cfg *cliflags.Config, resolvedSettings settings.
 func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info, runtimeBackend backend.Backend, managed panelaunch.ManagedLaunchRuntime, targets []ghissue.Issue, hydrateBody func(*ghissue.Issue), resolvedSettings settings.Settings, hookConfig hooks.Config, recorder panelaunch.StateRecorder, sharedAcrossParents map[int]bool, c log.Palette, commandName string, teamCtx *briefing.TeamContext) executionResult {
 	launcher := &panelaunch.Launcher{Cfg: cfg, Log: lg, Info: info, Backend: runtimeBackend, Managed: managed, Recorder: recorder, Palette: c, CommandName: commandName}
 	var createdPaneIDs []string
+	var createdBindings []backend.PaneBinding
 	var notices []string
 	created, failed := executeFailFast(
 		targets,
@@ -350,6 +361,9 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 			if ok && result.PaneID != "" {
 				createdPaneIDs = append(createdPaneIDs, result.PaneID)
 			}
+			if ok && result.Binding.Ref.Pane != "" {
+				createdBindings = append(createdBindings, result.Binding)
+			}
 			if ok && result.Notice != "" {
 				notices = append(notices, result.Notice)
 			}
@@ -357,7 +371,10 @@ func executePlan(cfg *cliflags.Config, lg *log.Logger, info *fanoutruntime.Info,
 		},
 		sleepBetweenFunc(cfg),
 	)
-	return executionResult{Created: len(created), Failed: failed, CreatedNums: created, CreatedPaneIDs: createdPaneIDs, Notices: notices}
+	return executionResult{
+		Created: len(created), Failed: failed, CreatedNums: created,
+		CreatedPaneIDs: createdPaneIDs, CreatedBindings: createdBindings, Notices: notices,
+	}
 }
 
 // executeFailFast launches targets in order and stops after the first failure,

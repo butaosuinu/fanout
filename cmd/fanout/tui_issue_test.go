@@ -228,6 +228,10 @@ esac
 	if !reflect.DeepEqual(result.CreatedPaneIDs, []string{"%91"}) {
 		t.Fatalf("created pane ids = %#v, want [%%91]", result.CreatedPaneIDs)
 	}
+	if len(result.CreatedBindings) != 1 || result.CreatedBindings[0].Ref.Pane != "%91" ||
+		result.CreatedBindings[0].Row.IssueNum != 501 {
+		t.Fatalf("created bindings = %+v, want standalone row", result.CreatedBindings)
+	}
 }
 
 func TestFinishTUIIssueParentLaunchPreservesPartialSuccess(t *testing.T) {
@@ -375,6 +379,22 @@ func TestFinishTUIIssueParentLaunchPreservesCreationOrder(t *testing.T) {
 				t.Fatalf("created pane ids = %#v, want %#v", got.CreatedPaneIDs, tt.wantPaneIDs)
 			}
 		})
+	}
+}
+
+func TestFinishTUIIssueParentLaunchPreservesBindingCreationOrder(t *testing.T) {
+	child := backend.PaneBinding{Ref: backend.PaneRef{Backend: backend.Herdr, Pane: "w1:p1"}}
+	orchestrator := backend.PaneBinding{Ref: backend.PaneRef{Backend: backend.Herdr, Pane: "w2:p1"}}
+	result, err := finishTUIIssueParentLaunch(500, true, orchestrator.Ref.Pane, parentIssueFanoutResult{
+		CreatedPaneIDs: []string{child.Ref.Pane}, CreatedBindings: []backend.PaneBinding{child},
+		OrchestratorBinding: orchestrator,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []backend.PaneBinding{child, orchestrator}
+	if !reflect.DeepEqual(result.CreatedBindings, want) {
+		t.Fatalf("CreatedBindings = %+v, want %+v", result.CreatedBindings, want)
 	}
 }
 

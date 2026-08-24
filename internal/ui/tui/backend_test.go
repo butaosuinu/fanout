@@ -537,3 +537,39 @@ func TestHerdrConsoleLaunchesAreDisabledBeforePorts(t *testing.T) {
 		t.Fatalf("launch ports called %d time(s), want 0", launchCalls)
 	}
 }
+
+func TestHerdrConsoleLaunchAdmissionDoesNotEnableOtherActions(t *testing.T) {
+	launchCalls := 0
+	shellCalls := 0
+	m := newModel(Options{
+		BackendSelection:      backend.Selection{Name: backend.Herdr, Reason: backend.ReasonHerdrContext},
+		LaunchActionDisabled:  func() string { return "" },
+		ManagedActionDisabled: func(state.Pane) string { return "owned action refused" },
+		NewPanePrompt: func(NewPanePromptRequest) (LaunchRequest, bool, error) {
+			launchCalls++
+			return LaunchRequest{}, true, nil
+		},
+		LaunchShell: func(ShellLaunchRequest) error { shellCalls++; return nil },
+	})
+
+	updated, cmd := m.Update(keyRunes("n"))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("n returned nil command, want admitted new-session prompt")
+	}
+	promptMsg, ok := cmd().(newPanePromptMsg)
+	if !ok || launchCalls != 1 {
+		t.Fatalf("n launch = msg ok %t calls %d, want prompt", ok, launchCalls)
+	}
+	updated, _ = m.Update(promptMsg)
+	m = updated.(model)
+
+	updated, cmd = m.Update(keyRunes("t"))
+	m = updated.(model)
+	if cmd != nil || shellCalls != 0 || m.notice != "owned action refused" {
+		t.Fatalf("terminal action = cmd %v calls %d notice %q, want fail-closed", cmd, shellCalls, m.notice)
+	}
+	if disabled := m.helpDisabledReasons(); disabled.launch != "" {
+		t.Fatalf("help launch disabled = %q, want enabled", disabled.launch)
+	}
+}

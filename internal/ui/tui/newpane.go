@@ -52,12 +52,19 @@ type LaunchRequest struct {
 	WorkerAgent string
 }
 
-// LaunchResult reports the panes created by a successful TUI launch. Pane IDs
-// stay in creation order so the TUI can focus the first pane deterministically.
+// LaunchResult reports the panes created by a successful TUI launch. IDs and
+// exact persisted bindings stay in creation order so post-launch navigation
+// never authorizes a target from a backend-scoped pane ID alone.
 type LaunchResult struct {
-	Notice         string
-	CreatedPaneIDs []string
+	Notice          string
+	CreatedPaneIDs  []string
+	CreatedBindings []backend.PaneBinding
 }
+
+// CreatedPaneAttachFunc resolves a saved launch binding to one verified
+// interactive process image. The TUI runs it without a shell and resumes when
+// that process exits.
+type CreatedPaneAttachFunc func(backend.PaneBinding) (backend.AttachExec, error)
 
 // LaunchFunc creates a manual fanout pane for a TUI request.
 type LaunchFunc func(LaunchRequest) (LaunchResult, error)
@@ -939,12 +946,7 @@ func (m *model) submitNewPane() tea.Cmd {
 	launch := m.opts.LaunchPane
 	return func() tea.Msg {
 		result, err := launch(req)
-		return launchPaneMsg{
-			notice:         result.Notice,
-			count:          launchPaneCount(len(agents), result.CreatedPaneIDs),
-			createdPaneIDs: result.CreatedPaneIDs,
-			err:            err,
-		}
+		return launchResultMessage(result, len(agents), err)
 	}
 }
 
@@ -1007,12 +1009,14 @@ func (m *model) launchNewPaneRequest(req LaunchRequest) tea.Cmd {
 	launch := m.opts.LaunchPane
 	return func() tea.Msg {
 		result, err := launch(req)
-		return launchPaneMsg{
-			notice:         result.Notice,
-			count:          launchPaneCount(len(req.Agents), result.CreatedPaneIDs),
-			createdPaneIDs: result.CreatedPaneIDs,
-			err:            err,
-		}
+		return launchResultMessage(result, len(req.Agents), err)
+	}
+}
+
+func launchResultMessage(result LaunchResult, fallback int, err error) launchPaneMsg {
+	return launchPaneMsg{
+		notice: result.Notice, count: launchPaneCount(fallback, result.CreatedPaneIDs),
+		createdPaneIDs: result.CreatedPaneIDs, createdBindings: result.CreatedBindings, err: err,
 	}
 }
 

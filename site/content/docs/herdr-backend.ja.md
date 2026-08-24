@@ -95,7 +95,7 @@ herdr workspace close <workspace-id>
 未対応の経路は明確なエラーで fail closed します。
 
 - 対話 send、restore、plan capture は herdr 行では使えません。
-- TUI の focus、launch、peek には、fanout-owned session に属する完全な保存済み identity が必要です。foreign、stale、legacy の行は理由付きで無効になります。
+- TUI の focus、attached-agent / shell launch、peek には、fanout-owned session に属する完全な保存済み identity が必要です。foreign、stale、legacy の行は理由付きで無効になります。新規 Session の `n` だけは例外で、foreign または `default` の console から Prompt、Issue、plan の作業を repository-owned session へ投入できます。form を開くか cancel しただけでは何も作りません。submit 後は最初に作成した terminal へ直接 attach し、detach すると同じ TUI に戻ります。attach に失敗しても、作成済みの pane と state 行は残します。
 - focus はさらに agent session を保存済みの行だけで通ります。session を報告するのは agent integration なので、`herdr integration install claude` / `codex` を入れていない環境では focus が拒否されます。integration を入れても通らない行が 3 種類あります。attach で起動した agent ([#732](https://github.com/butaosuinu/fanout/issues/732))、Codex の Plan Mode と team (workload が provider ではなく fanout の controller)、OpenCode です。いずれも socket 系の環境変数を渡さないので hook が session を報告できません。
 - 同じ provider が同じ pane で新しい会話を始めると (claude の `/clear`、codex の `/new`)、herdr は conversation を差し替え、agent record の名前も落とします。行が保存した conversation はそちらへ追随し、落ちた名前は fanout が付け直すので、focus、peek、`--close`、`--cleanup` は前後で使えたままです。別の provider の conversation、runtime が発行していない ref、他の名前を名乗っている agent record は従来どおり拒否します。
 - Codex 子の Plan Mode は fanout の app-server controller と owned launcher で動きます。Claude と OpenCode は固有の mode flag を使います。
@@ -111,7 +111,9 @@ TUI のヘッダには、選択された backend とその理由が常に表示�
 
 CLI launch と引数なしの TUI に既存の herdr session は不要です。
 fanout が owner marker 配下の隔離 session を作成または再採用します。
-foreign な herdr session 内で起動した TUI は観測専用のままで、対話操作に owned-session authority は与えられません(`default` は拒否されます)。
+foreign な herdr session 内で起動した TUI は、記録済み行と `n` 以外の mutation について観測専用のままです。
+`n` の submit は owned session に作業を作りますが、ambient session への authority は与えません。
+空または `default` の ambient session は観測 route として poll しません。
 
 ## opt-in の手順
 
@@ -173,7 +175,7 @@ v0.13.0 の herdr backend は観測専用でした。名前付き session は自
 owned モデルへ移る手順は次のとおりです。
 
 1. `herdr` CLI を stable 0.7.5 以上へ更新します。0.7.3 と 0.7.4 は `unsupported herdr CLI version …` で fail closed します。owned session は pin した CLI で自分の server を起動するため、既存の herdr server を再起動する必要はありません。
-2. 名前付き session を手で起動する手順をやめます。fanout が owner marker 配下に自分の session を作ります。fanout が所有しない session では対話操作は理由付きで無効のままです。
+2. 名前付き session を手で起動する手順をやめます。fanout が owner marker 配下に自分の session を作ります。fanout が所有しない session では記録済み行の操作は理由付きで無効のままです。新規 Session の `n` だけは例外です。
 3. 旧 herdr pane から出て、`HERDR_SESSION` と `HERDR_SOCKET_PATH` を unset した素のシェルから bootstrap します。これらは foreign な行を読むときの接続先を決めますし、herdr pane の中では owned session と一致しないと TUI が警告付きで観測専用に落ちます。
 
 `.fanout/state.json` の変換は不要で、tmux の親もそのままです。
@@ -187,7 +189,8 @@ owned モデルへ移る手順は次のとおりです。
 | 生死と agent state(TUI コンソール、web ダッシュボード) | tmux への照会と pane option | `herdr api snapshot` と launch に束縛した Claude または Codex Plan telemetry |
 | exit status 表示 | launch wrapper が `✓ done` を報告 | なし — herdr の public API に exit status は残らない |
 | agent 終了後の pane | wrapper のメッセージ付きで pane が残る | 正常終了で herdr は pane と自身の記録を消す。fanout の行は `stale` になる |
-| 対話 TUI launch / focus / peek | TUI キー | fanout-owned session の ownership 検証済み pane だけ対応 |
+| 新規 Session の TUI launch (`n`) | popup 後、最初の pane に focus | owned、foreign、`default` の console で対応。foreign / `default` では最初の terminal へ直接 attach し、detach 後に戻る |
+| 記録済み行の TUI launch / focus / peek | TUI キー | fanout-owned session の ownership 検証済み pane だけ対応 |
 | TUI の focus + zoom (`Z`) | pane に focus して zoom | 不可 — `herdr backend interactive TUI action is unavailable; zoom is unavailable` |
 | 対話 send / restore / plan capture | tmux の各対応経路 | 不可 — `runtime backend herdr does not support …` |
 | `--team` peer messaging | SQLite registry、Claude watcher、Codex app-server bridge | 同じ registry と push lane |

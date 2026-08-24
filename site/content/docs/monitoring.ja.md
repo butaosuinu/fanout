@@ -39,6 +39,7 @@ fanout-owned [herdr backend]({{< relref "/docs/herdr-backend" >}}) session で�
 検証済みの worktree 行には merge、close、cleanup も実行できます。
 `Z` の focus + zoom は Herdr 行では理由付きで無効です。
 foreign または identity が不完全な Herdr 行は、キーごとの理由を表示して無効になります。
+ただし `n` は repository-owned session に作業を起動できます。
 send、restore、plan capture は未対応です。
 CLI と label watcher の launch も同じ owned runtime path を使います。
 
@@ -64,7 +65,7 @@ fanout は、ペインの `@fanout_agent_state` tmux option から構造化さ�
 | `j` / `k` | 選択を下 / 上に移動する(矢印キーでも可)。 |
 | `[` / `]` | 前 / 次の Session グループへジャンプする。 |
 | `/` | ロード済みの行を絞り込む(フリーテキストか `state:open` のような述語)。`Esc` は入力を抜けるだけで、一覧からもう一度 `Esc` を押すとフィルタを解除する。 |
-| `n` | 新規 Session の form を開く(tmux popup または Herdr の inline form)。Mode 行で Prompt / Issue を切り替える。詳細は[新規 Session のモード](#新規-session-のモード)を参照。 |
+| `n` | 新規 Session の form を開く(tmux popup または Herdr の inline form)。Mode 行で Prompt / Issue を切り替える。foreign または `default` の Herdr console では、作業を作成できる操作はこのキーだけ。詳細は[新規 Session のモード](#新規-session-のモード)を参照。 |
 | `s` | 設定を開く(tmux popup または Herdr の inline form)。user config / repo config を選び、`config.json` と同じキーを編集し、`Ctrl+S` で保存する。 |
 | `Ctrl+O` | 新規 Session の Issue 一覧で、選択中の issue を既定ブラウザで開く。 |
 | `a` | 選択中の行に記録された worktree に、agent ペインを 1 つ以上追加する。git worktree は作らない。追加行は選択元の worktree と branch を共有し、focus と peek はできるが merge 進捗には数えない。追加した agent は[新規 Session のペイン](#新規-session-のモード)と同じ launch posture を使う。 |
@@ -109,7 +110,9 @@ tmux では popup、Herdr では inline form です。
 
 この popup から Prompt、plan coordinator、Issue のいずれかを正常に起動すると、実際の作成順で先頭の新規ペインへフォーカスが移ります。
 Issue fan-out では、tmux は orchestrator を先に作成し、Herdr は child ペインの後に作成するため、Herdr では最初の新規 child にフォーカスが移ります。
-`F11` または `prefix + T` でコンソールに戻れます。
+foreign または `default` の Herdr console では、form を開くか cancel しただけでは何も作りません。submit すると fanout の repository-owned session に作業を作成し、先頭の terminal へ直接 attach します。
+detach すると同じ TUI に戻ります。直接 attach に失敗した場合は TUI が作成成功と分けて報告し、作成済み pane と state 行は残します。
+tmux では `F11` または `prefix + T` でコンソールに戻れます。
 agent 追加(`a`)、shell(`A` / `t`)、watcher、通常の CLI 起動は、元のフォーカスを維持します。
 
 **Prompt** は従来の manual ペインです。

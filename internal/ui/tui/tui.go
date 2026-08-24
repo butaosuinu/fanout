@@ -83,11 +83,13 @@ type Options struct {
 	// The owned-session ports receive the exact persisted identity. The
 	// composition root must bind it to this repository's owned session before
 	// each action.
-	ManagedActionDisabled func(state.Pane) string
-	FocusManagedPane      func(state.Pane) error
-	CaptureManagedPane    func(state.Pane, int) (string, error)
-	ListLive              func() ([]backend.LivePane, error)
-	ClosePane             func(backend.PaneRef) error
+	LaunchActionDisabled     func() string
+	PrepareCreatedPaneAttach CreatedPaneAttachFunc
+	ManagedActionDisabled    func(state.Pane) string
+	FocusManagedPane         func(state.Pane) error
+	CaptureManagedPane       func(state.Pane, int) (string, error)
+	ListLive                 func() ([]backend.LivePane, error)
+	ClosePane                func(backend.PaneRef) error
 	// LifecycleCloseOwned is the runtime-specific destructive capability used
 	// for state-backed closes. It keeps identity verification isolated from the
 	// mixed-backend display collector.
@@ -190,11 +192,12 @@ type (
 		gen int
 	}
 	launchPaneMsg struct {
-		notice         string
-		count          int
-		createdPaneIDs []string
-		attached       bool
-		err            error
+		notice          string
+		count           int
+		createdPaneIDs  []string
+		createdBindings []backend.PaneBinding
+		attached        bool
+		err             error
 	}
 	activePaneMsg struct {
 		paneID       string

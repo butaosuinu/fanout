@@ -80,11 +80,15 @@ func resolveTUILaunchRuntime(projectRoot, session string, cfg *cliflags.Config) 
 }
 
 func resolveTUILaunchRuntimeForTarget(projectRoot, session, target string, cfg *cliflags.Config, provisionalIntents []backend.Binding) (*run.Runtime, error) {
+	launchCfg, err := pinInteractiveTUILaunchBackend(projectRoot, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("runtime backend: %w", err)
+	}
 	store, err := state.LoadProject(projectRoot)
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := resolveLaunchBackend(cfg, projectRoot, store, provisionalIntents)
+	resolved, err := resolveLaunchBackend(launchCfg, projectRoot, store, provisionalIntents)
 	if err != nil {
 		return nil, fmt.Errorf("runtime backend: %w", err)
 	}
@@ -101,6 +105,19 @@ func resolveTUILaunchRuntimeForTarget(projectRoot, session, target string, cfg *
 	}
 	bindLaunchBackend(runtime, resolved)
 	return runtime, nil
+}
+
+func pinInteractiveTUILaunchBackend(projectRoot string, cfg *cliflags.Config) (*cliflags.Config, error) {
+	if !cfg.TUIInteractive || cfg.Backend != "" {
+		return cfg, nil
+	}
+	selection, err := resolveDisplayBackendSelection(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	pinned := *cfg
+	pinned.Backend = selection.Name
+	return &pinned, nil
 }
 
 // runtimeConfig maps CLI flags onto the neutral selection input. The two
@@ -329,16 +346,29 @@ func runtimeReadRoutes(projectRoot string, includeHostRoute bool) ([]runtimeRead
 		case backend.Tmux:
 			addRoute(runtimeReadRoute{name: backend.Tmux})
 		case backend.Herdr:
-			if !hasManagedRoute {
-				addRoute(runtimeReadRoute{
-					name:       backend.Herdr,
-					sessionID:  strings.TrimSpace(inputs.SessionID),
-					socketPath: strings.TrimSpace(inputs.SocketPath),
-				})
+			for _, route := range ambientManagedReadRoutes(inputs, hasManagedRoute) {
+				addRoute(route)
 			}
 		}
 	}
 	return routes, routeErr
+}
+
+// ambientManagedReadRoutes admits only a named foreign session. Empty and
+// default routes cannot satisfy the managed backend's observation contract;
+// saved rows and intents remain authoritative and suppress this fallback.
+func ambientManagedReadRoutes(inputs paneruntime.Inputs, hasSavedRoute bool) []runtimeReadRoute {
+	if hasSavedRoute {
+		return nil
+	}
+	sessionID := strings.TrimSpace(inputs.SessionID)
+	if sessionID == "" || sessionID == "default" {
+		return nil
+	}
+	return []runtimeReadRoute{{
+		name: backend.Herdr, sessionID: sessionID,
+		socketPath: strings.TrimSpace(inputs.SocketPath),
+	}}
 }
 
 func intentRuntimeRoute(intent state.LaunchIntent) (string, string) {
