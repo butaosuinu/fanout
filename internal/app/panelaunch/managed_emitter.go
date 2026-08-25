@@ -74,12 +74,15 @@ func managedClaudeHookSettings(fanoutPath string) (string, error) {
 			agent.ShellQuote(fanoutPath), telemetry.Command, reportedState,
 		)
 	}
+	nextSequence := fmt.Sprintf(`%s %s 2>/dev/null`, agent.ShellQuote(fanoutPath), telemetry.SequenceCommand)
 	return agent.BuildClaudeHookSettingsJSON(agent.ClaudeHookCommands{
 		Working: emit(string(backend.AgentWorking)),
 		Blocked: emit(string(backend.AgentBlocked)),
 		Idle:    emit(string(backend.AgentIdle)), Done: emit(string(backend.AgentDone)),
-		DoneMatcher: managedClaudeExitReasons, DoneTimeoutSeconds: telemetry.EmitterTimeoutSeconds,
-		Background: true,
+		NextSequence:       nextSequence,
+		DoneMatcher:        managedClaudeExitReasons,
+		DoneTimeoutSeconds: telemetry.SequencedSessionEndTimeoutSeconds,
+		Background:         true,
 	}), nil
 }
 

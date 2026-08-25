@@ -287,8 +287,10 @@ func sameManagedLaunchGeneration(latest, want state.LaunchIntent) bool {
 	latestLaunch := *latest.Launch
 	wantLaunch := *want.Launch
 	latestLaunch.PendingReportedState = ""
+	latestLaunch.PendingReportedSeq = 0
 	latestLaunch.PendingAgentSession = nil
 	wantLaunch.PendingReportedState = ""
+	wantLaunch.PendingReportedSeq = 0
 	wantLaunch.PendingAgentSession = nil
 	latest.Launch = &latestLaunch
 	want.Launch = &wantLaunch

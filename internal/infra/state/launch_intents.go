@@ -137,6 +137,7 @@ type LaunchCapsule struct {
 	Nonce                string                   `json:"nonce"`
 	EmitterNonce         string                   `json:"emitterNonce,omitempty"`
 	PendingReportedState string                   `json:"pendingReportedState,omitempty"`
+	PendingReportedSeq   uint64                   `json:"pendingReportedSequence,omitempty"`
 	PendingAgentSession  *backend.AgentSessionRef `json:"pendingAgentSession,omitempty"`
 	Agent                string                   `json:"agent"`
 	AgentName            string                   `json:"agentName"`
@@ -163,7 +164,8 @@ type LaunchJournal struct {
 // The view has no unlock of its own: the lock file is owned by the
 // LockedStore that produced it.
 type LockedLaunchJournal struct {
-	path string
+	path  string
+	store *LockedStore
 	LaunchJournal
 }
 
@@ -246,10 +248,63 @@ func (l *LockedLaunchJournal) Save() error {
 	if validateErr := validateLaunchJournal(l.LaunchJournal); validateErr != nil {
 		return validateErr
 	}
+	if l.hasSequencedClaudeLaunch() {
+		if fenceErr := l.fenceLegacyClaudeEmitters(); fenceErr != nil {
+			return fenceErr
+		}
+	}
 	if writeErr := atomicfs.WriteJSON(l.path, l.LaunchJournal, 0o600); writeErr != nil {
 		return fmt.Errorf("write Herdr intents %s: %w", l.path, writeErr)
 	}
 	return nil
+}
+
+func (l *LockedLaunchJournal) hasSequencedClaudeLaunch() bool {
+	for _, intent := range l.Intents {
+		if intent.Launch != nil && telemetry.SequencedClaudeLaunch(intent.Launch.Agent, intent.Launch.Args) {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *LockedLaunchJournal) fenceLegacyClaudeEmitters() error {
+	if l.store == nil {
+		return fmt.Errorf("fence legacy Claude emitters without the combined launch lock")
+	}
+	changed, err := l.store.fenceUnsequencedClaudeEmitters()
+	if err != nil {
+		return err
+	}
+	if changed {
+		if err := l.store.Save(); err != nil {
+			return fmt.Errorf("persist legacy Claude emitter fence: %w", err)
+		}
+	}
+	return l.fenceUnsequencedClaudeIntents()
+}
+
+func (l *LockedLaunchJournal) fenceUnsequencedClaudeIntents() error {
+	for i := range l.Intents {
+		launch := l.Intents[i].Launch
+		if !legacyClaudeLaunch(launch) {
+			continue
+		}
+		nonce, err := newStateEmitterNonce()
+		if err != nil {
+			return err
+		}
+		launch.PendingReportedState = ""
+		launch.PendingReportedSeq = 0
+		launch.PendingAgentSession = nil
+		launch.EmitterNonce = nonce
+	}
+	return nil
+}
+
+func legacyClaudeLaunch(launch *LaunchCapsule) bool {
+	return launch != nil && launch.Agent == "claude" && telemetry.ValidNonce(launch.EmitterNonce) &&
+		!telemetry.SequencedClaudeLaunch(launch.Agent, launch.Args)
 }
 
 func (s LaunchJournal) FindIntent(id string) (LaunchIntent, bool) {
@@ -482,11 +537,36 @@ func loadLaunchJournal(path string) (LaunchJournal, error) {
 	if raw.Intents == nil {
 		return LaunchJournal{}, fmt.Errorf("validate Herdr intents %s: journal is missing intents", path)
 	}
-	store := LaunchJournal{SchemaVersion: raw.SchemaVersion, Intents: *raw.Intents}
+	store := migrateUnsequencedClaudeTelemetry(raw.SchemaVersion, *raw.Intents)
 	if err := validateLaunchJournal(store); err != nil {
 		return LaunchJournal{}, fmt.Errorf("validate Herdr intents %s: %w", path, err)
 	}
 	return store, nil
+}
+
+// Sequence was added to the v1 journal after pending Claude telemetry already
+// existed. Its absence is indistinguishable from malformed new telemetry, so
+// discard that non-authoritative snapshot instead of rejecting recovery.
+func migrateUnsequencedClaudeTelemetry(schemaVersion int, intents []LaunchIntent) LaunchJournal {
+	store := LaunchJournal{SchemaVersion: schemaVersion, Intents: intents}
+	for i := range intents {
+		launch := intents[i].Launch
+		if !validLegacyClaudePendingTelemetry(launch) {
+			continue
+		}
+		launch.PendingReportedState = ""
+		launch.PendingAgentSession = nil
+	}
+	return store
+}
+
+func validLegacyClaudePendingTelemetry(launch *LaunchCapsule) bool {
+	if launch == nil || launch.Agent != "claude" || launch.PendingReportedSeq != 0 ||
+		!telemetry.ValidNonce(launch.EmitterNonce) {
+		return false
+	}
+	providerState, ok := backend.ParseAgentState(launch.PendingReportedState)
+	return ok && providerState != backend.AgentRunning
 }
 
 func emptyLaunchJournal() LaunchJournal {
@@ -844,7 +924,7 @@ func validateLaunchAgentIdentity(kind LaunchIntentKind, launch *LaunchCapsule) e
 
 func validateEmitter(launch *LaunchCapsule) error {
 	if launch.EmitterNonce == "" {
-		if launch.PendingReportedState != "" {
+		if launch.PendingReportedState != "" || launch.PendingReportedSeq != 0 {
 			return fmt.Errorf("pending telemetry requires an emitter nonce")
 		}
 		return nil
@@ -852,12 +932,22 @@ func validateEmitter(launch *LaunchCapsule) error {
 	if !validEmitterAgent(launch) || !telemetry.ValidNonce(launch.EmitterNonce) {
 		return fmt.Errorf("emitter fields require a Claude or Codex Plan launch and valid nonce")
 	}
+	return validatePendingTelemetry(launch)
+}
+
+func validatePendingTelemetry(launch *LaunchCapsule) error {
 	if launch.PendingReportedState == "" {
+		if launch.PendingReportedSeq != 0 {
+			return fmt.Errorf("pending telemetry sequence requires a provider state")
+		}
 		return nil
 	}
 	state, ok := backend.ParseAgentState(launch.PendingReportedState)
 	if !ok || state == backend.AgentRunning {
 		return fmt.Errorf("pending telemetry has an invalid provider state")
+	}
+	if (launch.Agent == "claude") != (launch.PendingReportedSeq > 0) {
+		return fmt.Errorf("pending telemetry sequence does not match provider")
 	}
 	return nil
 }

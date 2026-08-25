@@ -800,7 +800,7 @@ func applyManagedRestartRow(
 	if err != nil {
 		return err
 	}
-	pane.ReportedState, pane.EmitterRowKey, pane.LaunchNonce = "", "", ""
+	pane.ReportedState, pane.ReportedStateSeq, pane.EmitterRowKey, pane.LaunchNonce = "", 0, "", ""
 	pane.StateRefinement, pane.EmitterNonce = false, nonce
 	if live != nil {
 		pane.TerminalID = live.TerminalID

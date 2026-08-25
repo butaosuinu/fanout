@@ -175,6 +175,13 @@ func currentNudgeBinding(store state.Store, recorded state.Pane) (state.Pane, er
 }
 
 func validNudgeGeneration(pane state.Pane) bool {
+	if pane.Agent == "claude" &&
+		(!telemetry.SequencedClaudeLaunch(pane.Agent, pane.LaunchArgs) ||
+			telemetry.ClaudeSequenceWatermarkMissing(
+				pane.Agent, pane.LaunchArgs, pane.StateRefinement, pane.ReportedStateSeq,
+			)) {
+		return false
+	}
 	return telemetry.ValidNonce(pane.LaunchNonce) && telemetry.ValidNonce(pane.EmitterNonce) &&
 		pane.AgentID == naming.ManagedAgentName(pane.RepoKey, pane.EmitterRowKey, pane.LaunchNonce)
 }

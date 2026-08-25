@@ -79,6 +79,28 @@ func Run(args []string, getenv func(string) string, observer Observer, errw io.W
 	return 1
 }
 
+// RunSequence handles the synchronous sequence allocator used before a hook
+// backgrounds its best-effort state emitter.
+func RunSequence(getenv func(string) string, out, errw io.Writer) int {
+	statePath := getenv(telemetry.EmitterPathEnv)
+	if !filepath.IsAbs(statePath) || filepath.Clean(statePath) != statePath ||
+		strings.ContainsRune(statePath, '\x00') {
+		fmt.Fprintln(errw, "fanout telemetry sequence: emitter state path is invalid")
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), emitterTimeout)
+	defer cancel()
+	sequence, err := state.NextTelemetrySequence(ctx, statePath)
+	if err == nil {
+		_, err = fmt.Fprintln(out, sequence)
+	}
+	if err == nil {
+		return 0
+	}
+	fmt.Fprintf(errw, "fanout telemetry sequence: %v\n", err)
+	return 1
+}
+
 func runSignal(signal telemetry.Signal, observer Observer) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), emitterTimeout)
 	defer cancel()
@@ -89,6 +111,9 @@ func runSignal(signal telemetry.Signal, observer Observer) (err error) {
 // never changes authoritative lifecycle fields.
 func Emit(ctx context.Context, signal telemetry.Signal, observer Observer) (err error) {
 	defer errs.Wrap(&err, "emit %s telemetry for %s", signal.Backend, signal.RowKey)
+	if signal.Agent == "claude" && signal.Sequence == 0 || signal.Agent != "claude" && signal.Sequence != 0 {
+		return fmt.Errorf("telemetry sequence does not match provider")
+	}
 	projectRoot, err := projectRootForStatePath(signal.StatePath)
 	if err != nil {
 		return err
@@ -210,11 +235,22 @@ func updateFinalRow(
 	if err := bindAgentSession(locked.Panes, index, current); err != nil {
 		return err
 	}
-	locked.Panes[index].ReportedState = nextReportedState(
-		locked.Panes[index].ReportedState,
-		string(signal.State),
-	)
-	locked.Panes[index].StateRefinement = true
+	return applyFinalSignal(locked, index, signal)
+}
+
+func applyFinalSignal(locked *state.LockedStore, index int, signal telemetry.Signal) error {
+	pane := &locked.Panes[index]
+	if telemetry.ClaudeSequenceWatermarkMissing(
+		pane.Agent, pane.LaunchArgs, pane.StateRefinement, pane.ReportedStateSeq,
+	) {
+		return invalidateFinalRowTelemetry(locked, index)
+	}
+	if staleSignal(signal, pane.ReportedStateSeq) {
+		return locked.Save()
+	}
+	pane.ReportedState = nextReportedState(pane.ReportedState, string(signal.State))
+	pane.ReportedStateSeq = signal.Sequence
+	pane.StateRefinement = true
 	return locked.Save()
 }
 
@@ -254,6 +290,7 @@ func invalidateFinalRowTelemetry(locked *state.LockedStore, index int) error {
 		return err
 	}
 	locked.Panes[index].ReportedState = ""
+	locked.Panes[index].ReportedStateSeq = 0
 	locked.Panes[index].StateRefinement = false
 	locked.Panes[index].EmitterNonce = nonce
 	return locked.Save()
@@ -290,6 +327,19 @@ func updatePendingIntent(
 	if err != nil {
 		return err
 	}
+	if err := bindPendingAgentSession(&intent, current); err != nil {
+		return err
+	}
+	if staleSignal(signal, intent.Launch.PendingReportedSeq) {
+		journal.UpsertIntent(intent)
+		return journal.Save()
+	}
+	recordPendingSignal(&intent, signal)
+	journal.UpsertIntent(intent)
+	return journal.Save()
+}
+
+func bindPendingAgentSession(intent *state.LaunchIntent, current backend.LivePane) error {
 	if current.AgentSession == nil {
 		return fmt.Errorf("pending telemetry requires a current agent session")
 	}
@@ -297,9 +347,16 @@ func updatePendingIntent(
 		session := *current.AgentSession
 		intent.Launch.PendingAgentSession = &session
 	}
+	return nil
+}
+
+func recordPendingSignal(intent *state.LaunchIntent, signal telemetry.Signal) {
 	intent.Launch.PendingReportedState = nextReportedState(intent.Launch.PendingReportedState, string(signal.State))
-	journal.UpsertIntent(intent)
-	return journal.Save()
+	intent.Launch.PendingReportedSeq = signal.Sequence
+}
+
+func staleSignal(signal telemetry.Signal, applied uint64) bool {
+	return signal.Agent == "claude" && signal.Sequence <= applied
 }
 
 func nextReportedState(current, next string) string {

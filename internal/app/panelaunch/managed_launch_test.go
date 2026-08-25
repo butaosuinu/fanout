@@ -305,6 +305,7 @@ func TestFinalizeManagedLaunchAppliesPendingTelemetryFromLatestIntent(t *testing
 	intent.Launch = validTestManagedLaunch()
 	intent.Launch.EmitterNonce = strings.Repeat("b", 32)
 	intent.Launch.PendingReportedState = string(backend.AgentIdle)
+	intent.Launch.PendingReportedSeq = 4
 	pendingSession := backend.AgentSessionRef{
 		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-531",
 	}
@@ -350,7 +351,7 @@ func TestFinalizeManagedLaunchAppliesPendingTelemetryFromLatestIntent(t *testing
 	if !found {
 		t.Fatal("final pane row was not saved")
 	}
-	if pane.ReportedState != "idle" || !pane.StateRefinement ||
+	if pane.ReportedState != "idle" || pane.ReportedStateSeq != 4 || !pane.StateRefinement ||
 		pane.EmitterRowKey != intent.ID || pane.LaunchNonce != intent.Launch.Nonce ||
 		pane.EmitterNonce != intent.Launch.EmitterNonce || pane.LaunchExecutable != intent.Launch.Executable ||
 		!slices.Equal(pane.LaunchArgs, intent.Launch.Args) {
@@ -460,6 +461,7 @@ func TestWaitForManagedAgentRevalidatesConcurrentIntentChanges(t *testing.T) {
 			name: "pending telemetry",
 			mutate: func(journal *state.LockedLaunchJournal, intent state.LaunchIntent) error {
 				intent.Launch.PendingReportedState = string(backend.AgentWorking)
+				intent.Launch.PendingReportedSeq = 1
 				journal.UpsertIntent(intent)
 				return journal.Save()
 			},

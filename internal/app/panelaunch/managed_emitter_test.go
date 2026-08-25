@@ -40,9 +40,14 @@ func TestManagedEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T)
 	}
 	settings := backendArgs[1]
 	if !strings.Contains(settings, `"matcher":"`+managedClaudeExitReasons+`"`) ||
-		!strings.Contains(settings, `"timeout":15`) ||
+		!strings.Contains(settings, `"timeout":31`) ||
+		!strings.Contains(settings, telemetry.SequenceCommand) ||
+		strings.Contains(settings, "$FANOUT_EMITTER_STATE_PATH.sequence") ||
 		strings.Contains(settings, "clear") || strings.Contains(settings, "resume") {
 		t.Fatalf("SessionEnd settings = %s", settings)
+	}
+	if !strings.Contains(settings, telemetry.Command+` working >/dev/null 2>&1 \"$__fanout_event_sequence\"`) {
+		t.Fatalf("working emitter args = %s", settings)
 	}
 	if !telemetry.ValidNonce(launch.nonce) {
 		t.Fatalf("emitter nonce = %q", launch.nonce)
@@ -175,13 +180,13 @@ func TestApplyManagedLaunchTelemetryDropsPendingStateFromReplacedSession(t *test
 		ID: "issue:3:524:529",
 		Launch: &state.LaunchCapsule{
 			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
-			PendingReportedState: "idle", PendingAgentSession: &pending,
+			PendingReportedState: "idle", PendingReportedSeq: 4, PendingAgentSession: &pending,
 		},
 	}
 
 	applyManagedLaunchTelemetry(&pane, intent)
 
-	if pane.ReportedState != "running" || pane.StateRefinement {
+	if pane.ReportedState != "running" || pane.ReportedStateSeq != 0 || pane.StateRefinement {
 		t.Fatalf("replaced-session telemetry = (%q, %t), want synthetic running", pane.ReportedState, pane.StateRefinement)
 	}
 }

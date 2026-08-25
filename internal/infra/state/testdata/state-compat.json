@@ -45,6 +45,7 @@
       "herdrSession": "fhr-1a2b3c4d",
       "herdrSocketPath": "/tmp/fhr-501/fhr-1a2b3c4d/herdr.sock",
       "reported_state": "working",
+      "reported_state_sequence": 7,
       "state_refinement": true,
       "emitterRowKey": "524/531",
       "launchNonce": "0123456789abcdef0123456789abcdef",
