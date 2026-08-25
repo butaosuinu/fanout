@@ -531,8 +531,8 @@ func burnedManualCoordinatorRun(
 
 // nextAttachedSyntheticPaneNumber picks a number unused by the source parent
 // or @manual rows, then checks the shared @manual coordinator intent namespace.
-// A recoverable intent is reused only for the same runtime parent and worktree;
-// every other collision is skipped.
+// A recoverable intent is reused only for the same physical worktree; every
+// other collision is skipped.
 func nextAttachedSyntheticPaneNumber(
 	projectRoot string,
 	store state.Store,
@@ -542,12 +542,21 @@ func nextAttachedSyntheticPaneNumber(
 	number := NextSyntheticPaneNumber(store, parentRef)
 	number = nextAttachedRecordedBindingManualNumber(store, parentRef, number)
 	journal, ownerRoot := manualAllocationJournal(projectRoot)
+	worktreePath = canonicalAttachedAllocationPath(worktreePath)
 	for manualCoordinatorNumberUnavailable(
-		journal, ownerRoot, parentRef, worktreePath, number,
+		journal, ownerRoot, worktreePath, number,
 	) {
 		number--
 	}
 	return number
+}
+
+func canonicalAttachedAllocationPath(worktreePath string) string {
+	resolved, err := filepath.EvalSymlinks(worktreePath)
+	if err != nil {
+		return filepath.Clean(worktreePath)
+	}
+	return filepath.Clean(resolved)
 }
 
 func nextAttachedRecordedBindingManualNumber(store state.Store, parentRef string, number int) int {
@@ -584,7 +593,7 @@ func manualCoordinatorNumberBurned(journal state.LaunchJournal, ownerRoot string
 
 func manualCoordinatorNumberUnavailable(
 	journal state.LaunchJournal,
-	ownerRoot, runtimeParent, worktreePath string,
+	ownerRoot, worktreePath string,
 	number int,
 ) bool {
 	intent, found := manualCoordinatorIntent(journal, ownerRoot, number)
@@ -593,7 +602,6 @@ func manualCoordinatorNumberUnavailable(
 	}
 	return intent.Status == state.IntentManualCleanupRequired ||
 		intent.Kind != state.IntentCoordinator ||
-		intent.RuntimeParent != runtimeParent ||
 		intent.IssueNum != number ||
 		!savedManagedCoordinatorPathMatches(ownerRoot, intent.WorktreePath, worktreePath)
 }
