@@ -151,11 +151,7 @@ func TestIssuedManagedLaunchWithMatchingNameStillFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		if err := locked.Unlock(); err != nil {
-			t.Error(err)
-		}
-	}()
+	defer func() { _ = locked.Unlock() }()
 	journal, err := locked.LaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -214,11 +210,7 @@ func TestUnpublishedManagedLaunchRemovesEnvironmentCapsule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		if err := locked.Unlock(); err != nil {
-			t.Error(err)
-		}
-	}()
+	defer func() { _ = locked.Unlock() }()
 	journal, err := locked.LaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -2228,7 +2220,11 @@ func TestReconcileManagedCoordinatorReplanRowHealsCurrentLabelDrift(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = locked.Unlock() }()
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if err := locked.RecordPane(managedCoordinatorPane(
 		state.LaunchIntent{Resource: previous}, route, ManualParentRef, -2,
 	)); err != nil {
@@ -2266,7 +2262,11 @@ func TestReconcileManagedCoordinatorReplanRowRejectsUnconfirmedPreviousRow(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = locked.Unlock() }()
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
 	stale := managedCoordinatorPane(state.LaunchIntent{Resource: previous}, route, ManualParentRef, -2)
 	stale.WorkspaceID = "foreign"
 	if err := locked.RecordPane(stale); err != nil {
