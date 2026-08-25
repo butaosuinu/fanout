@@ -18,6 +18,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -1730,6 +1731,88 @@ func TestNextAttachedSyntheticPaneNumberSeparatesIdentity(t *testing.T) {
 			t.Fatalf("NextAttachedSyntheticPaneNumber(alias own -1) = %d, want -1", got)
 		}
 	})
+}
+
+func TestNewAttachedRequestSkipsMismatchedRecoverableBinding(t *testing.T) {
+	tests := []struct {
+		name          string
+		prompt        string
+		originalAgent string
+		retryAgent    string
+		originalPlan  bool
+		retryPlan     bool
+		retryParent   string
+		mutateIntent  func(*state.LaunchIntent)
+		want          int
+	}{
+		{name: "matching binding", prompt: "review", originalAgent: "claude", retryAgent: "claude", want: -1},
+		{name: "agent", prompt: "review", originalAgent: "claude", retryAgent: "codex", want: -2},
+		{
+			name: "source parent", prompt: "review\nrepository identity",
+			originalAgent: "claude", retryAgent: "claude", retryParent: "526", want: -2,
+		},
+		{
+			name: "Codex Plan mode", prompt: "review", originalAgent: "codex", retryAgent: "codex",
+			retryPlan: true, want: -2,
+		},
+		{
+			name: "runtime parent", prompt: "review", originalAgent: "claude", retryAgent: "claude",
+			mutateIntent: func(intent *state.LaunchIntent) { intent.RuntimeParent = "526" }, want: -2,
+		},
+		{
+			name: "team mode", prompt: "review", originalAgent: "codex", retryAgent: "codex",
+			mutateIntent: func(intent *state.LaunchIntent) { intent.Launch.TeamDBPath = "/tmp/team.db" }, want: -2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newManagedRealizeRepo(t)
+			installFakeExecutable(t, "claude")
+			installFakeExecutable(t, "codex")
+			originalTarget := AttachTarget{SourceParent: "425", SourceIssueNum: 647, SourceLabel: "row identity"}
+			originalCfg := &cliflags.Config{Agent: tt.originalAgent, PlanMode: &tt.originalPlan}
+			original := NewAttachedRequest(
+				originalCfg, repo, state.Store{}, hooks.EmptyConfig(), tt.prompt, repo, originalTarget,
+			)
+			intent := allocationTestManualIntent(t, repo, original.Number, ManualParentRef, repo)
+			intent.Launch = allocationTestLaunchCapsule(t, original)
+			if tt.mutateIntent != nil {
+				tt.mutateIntent(&intent)
+			}
+			saveAllocationTestIntent(t, repo, intent)
+
+			retryTarget := originalTarget
+			if tt.retryParent != "" {
+				retryTarget.SourceParent = tt.retryParent
+			}
+			retryCfg := &cliflags.Config{Agent: tt.retryAgent, PlanMode: &tt.retryPlan}
+			retry := NewAttachedRequest(
+				retryCfg, repo, state.Store{}, hooks.EmptyConfig(), tt.prompt, repo, retryTarget,
+			)
+			if retry.Number != tt.want {
+				t.Fatalf("retry synthetic number = %d, want %d", retry.Number, tt.want)
+			}
+		})
+	}
+}
+
+func allocationTestLaunchCapsule(t *testing.T, req Request) *state.LaunchCapsule {
+	t.Helper()
+	spec, err := buildManagedLaunchSpec(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := validTestManagedLaunch()
+	launch.Agent = req.Agent
+	launch.Executable = spec.Executable
+	launch.Args = slices.Clone(spec.Args)
+	launch.TeamDBPath = req.TeamDBPath
+	launch.CodexTeamStatusPath = req.CodexTeamStatusPath
+	launch.CodexPlanStatusPath = req.CodexPlanStatusPath
+	if req.Agent == "claude" {
+		launch.Args = slices.Concat([]string{"--settings", `{}`}, launch.Args)
+	}
+	return launch
 }
 
 func allocationTestManualIntent(

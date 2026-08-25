@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -255,9 +256,59 @@ func NewAttachedRequest(cfg *cliflags.Config, projectRoot string, store state.St
 		parentRef = ManualParentRef
 	}
 	number := nextAttachedSyntheticPaneNumber(projectRoot, store, parentRef, targetPath)
+	journal, ownerRoot := manualAllocationJournal(projectRoot)
+	allocationPath := canonicalAttachedAllocationPath(targetPath)
+	for {
+		req := buildAttachedRequest(cfg, projectRoot, hookConfig, prompt, targetPath, target, parentRef, number)
+		intent, found := manualCoordinatorIntent(journal, ownerRoot, number)
+		if !found || attachedIntentMatchesRequest(intent, req) {
+			return req
+		}
+		number--
+		for manualCoordinatorNumberUnavailable(journal, ownerRoot, allocationPath, number) {
+			number--
+		}
+	}
+}
+
+func buildAttachedRequest(
+	cfg *cliflags.Config,
+	projectRoot string,
+	hookConfig hooks.Config,
+	prompt, targetPath string,
+	target AttachTarget,
+	parentRef string,
+	number int,
+) Request {
 	agentName := cfg.Agent
 	title := attachedPaneTitle(agentName, target.SourceLabel, targetPath)
 	slug := attachedPaneSlug(targetPath, agentName, number)
+	body := prompt
+	prompt, briefingPath, briefingBody := attachedLaunchPrompt(
+		cfg, projectRoot, prompt, title, parentRef, target, number,
+	)
+	launchMode := launchModeFromPlanFlag(cfg)
+	req := Request{
+		ParentRef: parentRef, Number: number, Title: title, Body: body,
+		ShortTitle: ShortIssueTitle(title), Slug: slug, DisplayNameOverride: title,
+		BranchName: strings.TrimSpace(target.SourceBranchName), Prompt: prompt,
+		SourceParent: parentRef, SourceIssueNum: target.SourceIssueNum,
+		SourceTaskID: strings.TrimSpace(target.SourceTaskID), Agent: agentName,
+		Hooks: hookConfig, BriefingPath: briefingPath, BriefingBody: briefingBody,
+		LaunchMode: launchMode,
+	}
+	if req.CodexPlanMode() {
+		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
+	}
+	return req
+}
+
+func attachedLaunchPrompt(
+	cfg *cliflags.Config,
+	projectRoot, prompt, title, parentRef string,
+	target AttachTarget,
+	number int,
+) (string, string, string) {
 	body := prompt
 	shortPrompt := FirstPromptLine(prompt)
 	if shortPrompt == "" {
@@ -267,50 +318,57 @@ func NewAttachedRequest(cfg *cliflags.Config, projectRoot string, store state.St
 	if oversized {
 		shortPrompt = ShortIssueTitle(shortPrompt)
 	}
-	briefingPath := ""
-	briefingBody := ""
 	launchMode := launchModeFromPlanFlag(cfg)
-	switch {
-	case launchMode == agent.ModePlan && agentName == "codex":
+	if launchMode == agent.ModePlan && cfg.Agent == "codex" {
 		planPrompt := briefing.RenderManualPlan(title, body)
-		if oversized {
-			briefingPath = attachedBriefingPath(projectRoot, parentRef, target, number)
-			briefingBody = planPrompt
-			prompt = manualPromptWithBriefingAction(shortPrompt, briefingPath, "investigate, then propose a plan")
-		} else {
-			prompt = planPrompt
+		if !oversized {
+			return planPrompt, "", ""
 		}
-	case strings.Contains(prompt, "\n") || oversized:
-		briefingPath = attachedBriefingPath(projectRoot, parentRef, target, number)
-		briefingBody = body
-		prompt = manualPromptWithBriefing(shortPrompt, briefingPath)
-	default:
-		prompt = shortPrompt
+		briefingPath := attachedBriefingPath(projectRoot, parentRef, target, number)
+		return manualPromptWithBriefingAction(
+			shortPrompt, briefingPath, "investigate, then propose a plan",
+		), briefingPath, planPrompt
 	}
+	if !strings.Contains(prompt, "\n") && !oversized {
+		return shortPrompt, "", ""
+	}
+	briefingPath := attachedBriefingPath(projectRoot, parentRef, target, number)
+	return manualPromptWithBriefing(shortPrompt, briefingPath), briefingPath, body
+}
 
-	req := Request{
-		ParentRef:           parentRef,
-		Number:              number,
-		Title:               title,
-		Body:                body,
-		ShortTitle:          ShortIssueTitle(title),
-		Slug:                slug,
-		DisplayNameOverride: title,
-		BranchName:          strings.TrimSpace(target.SourceBranchName),
-		Prompt:              prompt,
-		SourceParent:        parentRef,
-		SourceIssueNum:      target.SourceIssueNum,
-		SourceTaskID:        strings.TrimSpace(target.SourceTaskID),
-		Agent:               agentName,
-		Hooks:               hookConfig,
-		BriefingPath:        briefingPath,
-		BriefingBody:        briefingBody,
-		LaunchMode:          launchMode,
+func attachedIntentMatchesRequest(intent state.LaunchIntent, req Request) bool {
+	if intent.RuntimeParent != ManualParentRef {
+		return false
 	}
-	if req.CodexPlanMode() {
-		req.CodexPlanStatusPath = codexapp.StatusPath(projectRoot, number, cfg.DryRun)
+	if intent.Launch == nil {
+		return true
 	}
-	return req
+	launch := intent.Launch
+	if launch.Agent != req.Agent {
+		return false
+	}
+	if validateManagedTeamBinding(req, launch) != nil {
+		return false
+	}
+	spec, err := buildManagedLaunchSpec(req)
+	if err != nil {
+		return false
+	}
+	savedArgs, ok := attachedLaunchArgs(req.Agent, launch.Args)
+	if !ok {
+		return false
+	}
+	return launch.Executable == spec.Executable && slices.Equal(savedArgs, spec.Args)
+}
+
+func attachedLaunchArgs(agentName string, args []string) ([]string, bool) {
+	if agentName != "claude" {
+		return args, true
+	}
+	if len(args) < 2 || args[0] != "--settings" {
+		return nil, false
+	}
+	return args[2:], true
 }
 
 func attachedBriefingPath(projectRoot, parentRef string, target AttachTarget, number int) string {
