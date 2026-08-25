@@ -518,7 +518,10 @@ func validateReplannedCoordinatorRow(
 	route backend.OwnedLaunchRoute,
 ) error {
 	if pane.WorkspaceLabel == current.Resource.Label {
-		return validateManagedCoordinatorPane(pane, current, route)
+		// The exact-role row carries the current ownership nonce. As in the
+		// normal launch path, differing runtime ids are stale move/restart data
+		// to heal, not an identity conflict.
+		return nil
 	}
 	return validateManagedCoordinatorPane(pane, state.LaunchIntent{Resource: previous}, route)
 }

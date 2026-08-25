@@ -151,7 +151,11 @@ func TestIssuedManagedLaunchWithMatchingNameStillFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = locked.Unlock() }()
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
 	journal, err := locked.LaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +214,11 @@ func TestUnpublishedManagedLaunchRemovesEnvironmentCapsule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = locked.Unlock() }()
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
 	journal, err := locked.LaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -2196,6 +2204,80 @@ func TestRecordManagedCoordinatorHealsDriftedRow(t *testing.T) {
 	if len(locked.Panes) != 1 || locked.Panes[0].IssueNum != -3 ||
 		locked.Panes[0].WorkspaceID != "w9" || locked.Panes[0].TerminalID != "term-w9" {
 		t.Fatalf("healed rows = %+v, want the same number carrying the live identity", locked.Panes)
+	}
+}
+
+func TestReconcileManagedCoordinatorReplanRowHealsCurrentLabelDrift(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	route := backend.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
+	previous := state.RuntimeResource{
+		WorkspaceID: "w2", Label: "fanout-coordinator-replan-token",
+		PaneID: "w2:p1", TerminalID: "term-w2", CurrentPath: repo,
+	}
+	current := state.LaunchIntent{
+		ID: "coordinator-replan", Kind: state.IntentCoordinator, Status: state.IntentRealized,
+		Parent: ManualParentRef, RuntimeParent: ManualParentRef,
+		OwnerProjectRoot: repo, IssueNum: -1, WorktreePath: repo,
+		Session: route.Session, SocketPath: route.SocketPath,
+		Resource: state.RuntimeResource{
+			WorkspaceID: "w9", Label: previous.Label,
+			PaneID: "w9:p1", TerminalID: "term-w9", CurrentPath: repo,
+		},
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	if err := locked.RecordPane(managedCoordinatorPane(
+		state.LaunchIntent{Resource: previous}, route, ManualParentRef, -2,
+	)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ReconcileManagedCoordinatorReplanRow(locked, previous, current); err != nil {
+		t.Fatalf("ReconcileManagedCoordinatorReplanRow() = %v, want heal", err)
+	}
+	if len(locked.Panes) != 1 || locked.Panes[0].IssueNum != -2 ||
+		locked.Panes[0].WorkspaceID != "w9" || locked.Panes[0].PaneID != "w9:p1" ||
+		locked.Panes[0].TerminalID != "term-w9" {
+		t.Fatalf("reconciled rows = %+v, want the same number carrying current identity", locked.Panes)
+	}
+}
+
+func TestReconcileManagedCoordinatorReplanRowRejectsUnconfirmedPreviousRow(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	route := backend.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
+	previous := state.RuntimeResource{
+		WorkspaceID: "w2", Label: "fanout-coordinator-previous-token",
+		PaneID: "w2:p1", TerminalID: "term-w2", CurrentPath: repo,
+	}
+	current := state.LaunchIntent{
+		ID: "coordinator-replan", Kind: state.IntentCoordinator, Status: state.IntentRealized,
+		Parent: ManualParentRef, RuntimeParent: ManualParentRef,
+		OwnerProjectRoot: repo, IssueNum: -1, WorktreePath: repo,
+		Session: route.Session, SocketPath: route.SocketPath,
+		Resource: state.RuntimeResource{
+			WorkspaceID: "w9", Label: "fanout-coordinator-current-token",
+			PaneID: "w9:p1", TerminalID: "term-w9", CurrentPath: repo,
+		},
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	stale := managedCoordinatorPane(state.LaunchIntent{Resource: previous}, route, ManualParentRef, -2)
+	stale.WorkspaceID = "foreign"
+	if err := locked.RecordPane(stale); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ReconcileManagedCoordinatorReplanRow(locked, previous, current); err == nil {
+		t.Fatal("ReconcileManagedCoordinatorReplanRow() succeeded without previous identity proof")
+	}
+	if len(locked.Panes) != 1 || locked.Panes[0].WorkspaceID != "foreign" {
+		t.Fatalf("unconfirmed row changed: %+v", locked.Panes)
 	}
 }
 
