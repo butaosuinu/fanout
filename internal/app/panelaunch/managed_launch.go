@@ -441,6 +441,42 @@ func (l *Launcher) reconcileManagedCoordinatorRow(
 	return locked.RecordPane(managedCoordinatorPane(intent, route, runtimeParent, pane.IssueNum))
 }
 
+// ReconcileManagedCoordinatorReplanRow updates the coordinator scaffolding row
+// after lifecycle replanning reused RealizeManagedCoordinator. The previous
+// label nonce locates the owned row; every other generation field must remain
+// unchanged before its runtime identity can be rewritten.
+func ReconcileManagedCoordinatorReplanRow(
+	locked *state.LockedStore,
+	previous, current state.LaunchIntent,
+) error {
+	if locked == nil || !sameManagedCoordinatorReplan(previous, current) {
+		return fmt.Errorf("replanned Herdr coordinator intent changed generation")
+	}
+	runtimeParent := managedCoordinatorRuntimeParent(previous)
+	pane, found := findManagedCoordinatorPane(locked.Store, runtimeParent, previous)
+	if !found {
+		return fmt.Errorf("saved Herdr coordinator row is not recorded")
+	}
+	route := backend.OwnedLaunchRoute{Session: current.Session, SocketPath: current.SocketPath}
+	if validateManagedCoordinatorPane(pane, current, route) == nil {
+		return nil
+	}
+	return locked.RecordPane(managedCoordinatorPane(current, route, runtimeParent, pane.IssueNum))
+}
+
+func sameManagedCoordinatorReplan(previous, current state.LaunchIntent) bool {
+	return !slices.Contains([]bool{
+		previous.Kind == state.IntentCoordinator, previous.Status == state.IntentRealized,
+		current.Kind == state.IntentCoordinator, current.Status == state.IntentRealized,
+		current.ID == previous.ID, current.Parent == previous.Parent,
+		current.RuntimeParent == previous.RuntimeParent,
+		current.OwnerProjectRoot == previous.OwnerProjectRoot,
+		current.IssueNum == previous.IssueNum,
+		current.WorktreePath == previous.WorktreePath,
+		current.Session == previous.Session, current.SocketPath == previous.SocketPath,
+	}, false)
+}
+
 func managedCoordinatorRowRoots(projectRoot, runtimeParent, ownerProjectRoot string) ([]string, error) {
 	owner, err := state.IntentOwnerProjectRoot(runtimeParent, ownerProjectRoot)
 	if err != nil {

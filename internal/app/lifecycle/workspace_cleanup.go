@@ -369,6 +369,7 @@ func attachWorkspaceCleanupCoordinator(
 func attachReplannedWorkspaceCleanupCoordinator(
 	ctx context.Context,
 	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
 	projectRoot string,
 	pane state.Pane,
@@ -381,6 +382,29 @@ func attachReplannedWorkspaceCleanupCoordinator(
 	if err != nil {
 		return intent, err
 	}
+	realized, err := realizeReplannedManualCoordinator(ctx, locked, runtime, projectRoot, coordinator)
+	if err != nil {
+		return intent, err
+	}
+	live, err := observeCoordinator(ctx, runtime, realized.Resource)
+	if err != nil {
+		return intent, err
+	}
+	if err := panelaunch.ReconcileManagedCoordinatorReplanRow(locked, coordinator, realized); err != nil {
+		return intent, err
+	}
+	journal.UpsertIntent(realized)
+	intent.Coordinator = coordinatorResource(live)
+	return intent, nil
+}
+
+func realizeReplannedManualCoordinator(
+	ctx context.Context,
+	locked *state.LockedStore,
+	runtime WorkspaceRuntime,
+	projectRoot string,
+	coordinator state.LaunchIntent,
+) (state.LaunchIntent, error) {
 	result, err := panelaunch.RealizeManagedCoordinator(ctx, panelaunch.ManagedCoordinatorRequest{
 		Parent: coordinator.Parent, RuntimeParent: coordinator.RuntimeParent,
 		IssueNum: coordinator.IssueNum, ProjectRoot: projectRoot,
@@ -388,14 +412,9 @@ func attachReplannedWorkspaceCleanupCoordinator(
 		ManagedSession: coordinator.Session, SocketPath: coordinator.SocketPath,
 	}, runtime, locked, panelaunch.ManagedRealizeHooks{})
 	if err != nil && !errors.Is(err, panelaunch.ErrManagedLauncherReadinessDeferred) {
-		return intent, err
+		return state.LaunchIntent{}, err
 	}
-	live, err := observeCoordinator(ctx, runtime, result.Intent.Resource)
-	if err != nil {
-		return intent, err
-	}
-	intent.Coordinator = coordinatorResource(live)
-	return intent, nil
+	return result.Intent, nil
 }
 
 func coordinatorResource(workspace backend.WorkspaceObservation) state.RuntimeResource {
@@ -737,7 +756,7 @@ func replanObservedWorkspaceCleanup(
 	if checkoutOnly && intent.Coordinator == (state.RuntimeResource{}) {
 		var err error
 		intent, err = attachReplannedWorkspaceCleanupCoordinator(
-			ctx, locked, runtime, opts.ProjectRoot, pane, intent,
+			ctx, locked, journal, runtime, opts.ProjectRoot, pane, intent,
 		)
 		if err != nil {
 			return intent, err

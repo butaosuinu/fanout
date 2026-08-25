@@ -1019,6 +1019,33 @@ func TestHerdrCloseReplansLegacyDirtyManualIntentAfterCoordinatorRecreate(t *tes
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
+func TestHerdrClosePersistsRecreatedManualCoordinatorOnCleanLegacyReplan(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		session:     fixture.pane.SessionID,
+		socketPath:  fixture.pane.SocketPath,
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.createCalls != 1 || runtime.openCalls != 1 || runtime.removeCalls != 1 {
+		t.Fatalf(
+			"clean replan calls = create %d/open %d/remove %d, want 1/1/1",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+		)
+	}
+	assertRecreatedManualCoordinatorRecorded(t, fixture, coordinator)
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
 func TestHerdrCloseDoesNotRecreateAmbiguousManualCoordinator(t *testing.T) {
 	fixture := newManualHerdrLifecycleFixture(t)
 	coordinator := herdrLifecycleWorkspace(
@@ -1937,6 +1964,27 @@ func recordLifecycleCoordinatorIntent(
 	if err := journal.Save(); err != nil {
 		t.Fatal(err)
 	}
+	if target.RuntimeParent == panelaunch.ManualParentRef {
+		if err := locked.RecordPane(manualLifecycleCoordinatorPane(target, workspace, issueNum-1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func manualLifecycleCoordinatorPane(
+	target state.Pane,
+	workspace backend.WorkspaceObservation,
+	issueNum int,
+) state.Pane {
+	return state.Pane{
+		Parent: panelaunch.ManualParentRef, RuntimeParent: target.RuntimeParent,
+		IssueNum: issueNum, Kind: state.PaneKindShell, Slug: "herdr-coordinator-test",
+		Backend: backend.Herdr, PaneID: workspace.Pane.Pane,
+		WorkspaceID: workspace.WorkspaceID, WorkspaceLabel: workspace.Label,
+		TerminalID: workspace.TerminalID, SessionID: target.SessionID,
+		SocketPath: target.SocketPath, DisplayName: "Herdr coordinator: test",
+		WorktreePath: workspace.CWD, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
 }
 
 func recordExpiredHerdrCleanupIntent(
@@ -2239,6 +2287,40 @@ func assertHerdrLifecycleRemoved(t *testing.T, fixture herdrLifecycleFixture) {
 			t.Fatalf("child lifecycle intent remains after completion: %#v", journal.Intents)
 		}
 	}
+}
+
+func assertRecreatedManualCoordinatorRecorded(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	previous backend.WorkspaceObservation,
+) {
+	t.Helper()
+	intentID, _, err := coordinatorIntentIdentity(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found || intent.Status != state.IntentRealized ||
+		intent.Resource.WorkspaceID != "w-coordinator-recreated" ||
+		intent.Resource.Label == previous.Label {
+		t.Fatalf("recreated coordinator intent = (%+v, %t)", intent, found)
+	}
+	store, err := state.Load(state.Path(fixture.projectRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pane := range store.Panes {
+		if pane.Kind == state.PaneKindShell && pane.RuntimeParent == panelaunch.ManualParentRef &&
+			pane.WorkspaceID == intent.Resource.WorkspaceID && pane.WorkspaceLabel == intent.Resource.Label &&
+			pane.PaneID == intent.Resource.PaneID && pane.TerminalID == intent.Resource.TerminalID {
+			return
+		}
+	}
+	t.Fatalf("recreated coordinator row not found in %+v", store.Panes)
 }
 
 func assertHerdrLifecyclePreserved(t *testing.T, fixture herdrLifecycleFixture) {
