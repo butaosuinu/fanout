@@ -101,6 +101,60 @@ func TestEmitResolvesSyntheticRowCollisionByStableIdentity(t *testing.T) {
 	}
 }
 
+func TestEmitResolvesPinnedLegacyLauncherThroughStableIdentity(t *testing.T) {
+	repo := newEmitterRepo(t)
+	target, signal, observer := finalEmitterFixture(t, repo)
+	foreign := target
+	foreign.Parent, foreign.IssueNum = "525", -1
+	foreign.WorktreePath = filepath.Join(repo, ".fanout", "worktrees", "foreign")
+	foreign.WorkspaceID, foreign.WorkspaceLabel = "workspace-2", "owned-label-2"
+	foreign.PaneID, foreign.TerminalID = "workspace-2:pane-1", "terminal-2"
+	foreign.ReportedState = string(backend.AgentBlocked)
+	foreign.ReportedStateSeq, foreign.StateRefinement = 2, true
+	signal.WorkspaceLabel, signal.WorktreePath = "", ""
+	saveEmitterPanes(t, repo, foreign, target)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotTarget, found := store.Find(target.Parent, target.IssueNum)
+	if !found || gotTarget.ReportedState != string(backend.AgentWorking) {
+		t.Fatalf("target telemetry = (%+v, %t), want working", gotTarget, found)
+	}
+	gotForeign, found := store.Find(foreign.Parent, foreign.IssueNum)
+	if !found || gotForeign.ReportedState != string(backend.AgentBlocked) {
+		t.Fatalf("foreign telemetry = (%+v, %t), want unchanged blocked", gotForeign, found)
+	}
+}
+
+func TestEmitRejectsPinnedLegacyLauncherWithAmbiguousStableIdentity(t *testing.T) {
+	repo := newEmitterRepo(t)
+	target, signal, observer := finalEmitterFixture(t, repo)
+	duplicate := target
+	duplicate.Parent, duplicate.IssueNum = "525", -1
+	duplicate.WorkspaceID, duplicate.PaneID = "workspace-2", "workspace-2:pane-1"
+	duplicate.TerminalID = "terminal-2"
+	signal.WorkspaceLabel, signal.WorktreePath = "", ""
+	saveEmitterPanes(t, repo, target, duplicate)
+
+	if err := Emit(context.Background(), signal, observer); err == nil {
+		t.Fatal("Emit() accepted ambiguous persisted stable identity from a legacy launcher")
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pane := range store.Panes {
+		if pane.ReportedState != string(backend.AgentRunning) || pane.StateRefinement {
+			t.Fatalf("ambiguous legacy signal changed row telemetry: %+v", pane)
+		}
+	}
+}
+
 func TestEmitRejectsAmbiguousStableRowIdentityWithoutMutation(t *testing.T) {
 	repo := newEmitterRepo(t)
 	pane, signal, observer := finalEmitterFixture(t, repo)
@@ -691,6 +745,26 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 		got.Launch.PendingAgentSession == nil ||
 		wantSession == nil || *got.Launch.PendingAgentSession != *wantSession {
 		t.Fatalf("pending intent = (%+v, %t), want done", got, found)
+	}
+}
+
+func TestEmitAcceptsPinnedLegacyLauncherForPendingIntent(t *testing.T) {
+	repo := newEmitterRepo(t)
+	intent, signal, observer := pendingEmitterFixture(t, repo)
+	signal.WorkspaceLabel, signal.WorktreePath = "", ""
+	saveEmitterIntent(t, repo, intent)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := state.LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found := stored.FindIntent(intent.ID)
+	if !found || got.Launch.PendingReportedState != string(backend.AgentWorking) ||
+		got.Launch.PendingAgentSession == nil {
+		t.Fatalf("legacy pending telemetry = (%+v, %t), want working", got, found)
 	}
 }
 

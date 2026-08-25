@@ -170,7 +170,7 @@ func validateSignal(signal Signal, emitterPath string) error {
 func validateRuntimeIdentity(signal Signal) error {
 	values := []string{
 		signal.Session, signal.SocketPath, signal.WorkspaceID, signal.PaneID,
-		signal.WorkspaceLabel, signal.TerminalID, signal.Agent, signal.AgentID,
+		signal.TerminalID, signal.Agent, signal.AgentID,
 	}
 	for _, value := range values {
 		if value == "" || strings.ContainsRune(value, '\x00') {
@@ -179,6 +179,21 @@ func validateRuntimeIdentity(signal Signal) error {
 	}
 	if !cleanAbsolute(signal.SocketPath) {
 		return fmt.Errorf("emitter socket path is not canonical and absolute")
+	}
+	return validateStableRowIdentity(signal)
+}
+
+func validateStableRowIdentity(signal Signal) error {
+	// An owned session can retain an older pinned pane launcher while routing
+	// hooks through the current emitter. That launcher binds the prior route
+	// fields but leaves this newer stable-identity pair empty.
+	if signal.WorkspaceLabel == "" && signal.WorktreePath == "" {
+		return nil
+	}
+	for _, value := range []string{signal.WorkspaceLabel, signal.WorktreePath} {
+		if value == "" || strings.ContainsRune(value, '\x00') {
+			return fmt.Errorf("emitter runtime identity is incomplete")
+		}
 	}
 	if !cleanAbsolute(signal.WorktreePath) {
 		return fmt.Errorf("emitter worktree path is not canonical and absolute")

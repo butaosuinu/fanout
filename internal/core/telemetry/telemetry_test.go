@@ -28,6 +28,18 @@ func TestParseSignalAcceptsCodexPlanController(t *testing.T) {
 	}
 }
 
+func TestParseSignalAcceptsPinnedLegacyLauncherIdentity(t *testing.T) {
+	env := validSignalEnvironment()
+	env[WorkspaceLabelEnv], env[WorktreePathEnv] = "", ""
+	got, err := ParseSignal([]string{"working", "7"}, func(key string) string { return env[key] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WorkspaceLabel != "" || got.WorktreePath != "" {
+		t.Fatalf("legacy stable identity = (%q, %q), want empty", got.WorkspaceLabel, got.WorktreePath)
+	}
+}
+
 func TestSequencedClaudeLaunchRequiresClaudeSequenceMarker(t *testing.T) {
 	sequenced := []string{"--settings", `{"command":"__fanout-emitter-sequence"}`}
 	if !SequencedClaudeLaunch("claude", sequenced) {
@@ -85,6 +97,9 @@ func TestParseSignalRejectsSyntheticOrIncompleteInput(t *testing.T) {
 		}},
 		{name: "missing workspace label", args: []string{"idle", "1"}, mutate: func(env map[string]string) {
 			env[WorkspaceLabelEnv] = ""
+		}},
+		{name: "missing worktree path", args: []string{"idle", "1"}, mutate: func(env map[string]string) {
+			env[WorktreePathEnv] = ""
 		}},
 		{name: "relative worktree path", args: []string{"idle", "1"}, mutate: func(env map[string]string) {
 			env[WorktreePathEnv] = "repo/worktree"
