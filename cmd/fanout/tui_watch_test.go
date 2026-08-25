@@ -42,6 +42,20 @@ func TestNewWatcherPreflightConfigCarriesAgentAndPlanMode(t *testing.T) {
 	}
 }
 
+func TestTUIIssueBindingsKeepLockHeldLaunchGeneration(t *testing.T) {
+	launchStore := state.Store{Panes: []state.Pane{{
+		Parent: "500", IssueNum: 501, Backend: backend.Herdr, PaneID: "w1:p1",
+		SessionID: "s1", LaunchNonce: "launch-first",
+	}}}
+	captured := cloneTUILaunchStore(launchStore)
+	launchStore.Panes[0].LaunchNonce = "launch-replacement"
+
+	bindings := tuiIssueBindings(captured, true, "500", []int{501}, []string{"w1:p1"})
+	if len(bindings) != 1 || bindings[0].Launch.Nonce != "launch-first" {
+		t.Fatalf("bindings = %+v, want lock-held launch-first generation", bindings)
+	}
+}
+
 func TestAdmitStandaloneIssueRuntimeDefersBackendForRecordedIssue(t *testing.T) {
 	prepareCalls := 0
 	rt := &run.Runtime{PrepareBackend: func() error {
