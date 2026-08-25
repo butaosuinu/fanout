@@ -316,6 +316,15 @@ func (l *Launcher) recordManagedCoordinator(
 	if err != nil || recorded {
 		return err
 	}
+	return recordManagedCoordinatorRow(locked, intent, route, runtimeParent)
+}
+
+func recordManagedCoordinatorRow(
+	locked *state.LockedStore,
+	intent state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+	runtimeParent string,
+) error {
 	number := NextSyntheticPaneNumber(locked.Store, ManualParentRef)
 	if number == intent.IssueNum {
 		// The launch's own agent row lands on (ManualParentRef, IssueNum) at
@@ -441,40 +450,77 @@ func (l *Launcher) reconcileManagedCoordinatorRow(
 	return locked.RecordPane(managedCoordinatorPane(intent, route, runtimeParent, pane.IssueNum))
 }
 
-// ReconcileManagedCoordinatorReplanRow updates the coordinator scaffolding row
-// after lifecycle replanning reused RealizeManagedCoordinator. The previous
-// label nonce locates the owned row; every other generation field must remain
-// unchanged before its runtime identity can be rewritten.
+// ReconcileManagedCoordinatorReplanRow records the recreated coordinator after
+// lifecycle replanning reused RealizeManagedCoordinator. The previous label
+// nonce locates an existing owned row; a pruned row is safely recreated under
+// a fresh synthetic state key.
 func ReconcileManagedCoordinatorReplanRow(
 	locked *state.LockedStore,
-	previous, current state.LaunchIntent,
+	previous state.RuntimeResource,
+	current state.LaunchIntent,
 ) error {
-	if locked == nil || !sameManagedCoordinatorReplan(previous, current) {
+	if locked == nil || !validManagedCoordinatorReplan(previous, current) {
 		return fmt.Errorf("replanned Herdr coordinator intent changed generation")
 	}
-	runtimeParent := managedCoordinatorRuntimeParent(previous)
-	pane, found := findManagedCoordinatorPane(locked.Store, runtimeParent, previous)
+	runtimeParent := managedCoordinatorRuntimeParent(current)
+	previousIntent := state.LaunchIntent{Resource: previous}
+	pane, found := findManagedCoordinatorPane(locked.Store, runtimeParent, previousIntent)
 	if !found {
-		return fmt.Errorf("saved Herdr coordinator row is not recorded")
+		pane, found = findManagedCoordinatorPane(locked.Store, runtimeParent, current)
 	}
 	route := backend.OwnedLaunchRoute{Session: current.Session, SocketPath: current.SocketPath}
+	if !found {
+		return recordManagedCoordinatorRow(locked, current, route, runtimeParent)
+	}
+	return reconcileReplannedCoordinatorRow(locked, pane, previous, current, route, runtimeParent)
+}
+
+func reconcileReplannedCoordinatorRow(
+	locked *state.LockedStore,
+	pane state.Pane,
+	previous state.RuntimeResource,
+	current state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+	runtimeParent string,
+) error {
+	if err := validateReplannedCoordinatorRow(pane, previous, current, route); err != nil {
+		return err
+	}
 	if validateManagedCoordinatorPane(pane, current, route) == nil {
 		return nil
 	}
 	return locked.RecordPane(managedCoordinatorPane(current, route, runtimeParent, pane.IssueNum))
 }
 
-func sameManagedCoordinatorReplan(previous, current state.LaunchIntent) bool {
+func validManagedCoordinatorReplan(previous state.RuntimeResource, current state.LaunchIntent) bool {
 	return !slices.Contains([]bool{
-		previous.Kind == state.IntentCoordinator, previous.Status == state.IntentRealized,
 		current.Kind == state.IntentCoordinator, current.Status == state.IntentRealized,
-		current.ID == previous.ID, current.Parent == previous.Parent,
-		current.RuntimeParent == previous.RuntimeParent,
-		current.OwnerProjectRoot == previous.OwnerProjectRoot,
-		current.IssueNum == previous.IssueNum,
-		current.WorktreePath == previous.WorktreePath,
-		current.Session == previous.Session, current.SocketPath == previous.SocketPath,
+		current.Parent == ManualParentRef, current.RuntimeParent == ManualParentRef,
+		current.IssueNum < 0, strings.TrimSpace(current.ID) != "",
+		strings.TrimSpace(current.OwnerProjectRoot) != "",
+		strings.TrimSpace(current.Session) != "", strings.TrimSpace(current.SocketPath) != "",
+		managedCoordinatorResourceComplete(previous), managedCoordinatorResourceComplete(current.Resource),
+		filepath.Clean(previous.CurrentPath) == filepath.Clean(current.WorktreePath),
+		filepath.Clean(current.Resource.CurrentPath) == filepath.Clean(current.WorktreePath),
 	}, false)
+}
+
+func managedCoordinatorResourceComplete(resource state.RuntimeResource) bool {
+	return strings.TrimSpace(resource.WorkspaceID) != "" && strings.TrimSpace(resource.Label) != "" &&
+		strings.TrimSpace(resource.PaneID) != "" && strings.TrimSpace(resource.TerminalID) != "" &&
+		strings.TrimSpace(resource.CurrentPath) != ""
+}
+
+func validateReplannedCoordinatorRow(
+	pane state.Pane,
+	previous state.RuntimeResource,
+	current state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+) error {
+	if pane.WorkspaceLabel == current.Resource.Label {
+		return validateManagedCoordinatorPane(pane, current, route)
+	}
+	return validateManagedCoordinatorPane(pane, state.LaunchIntent{Resource: previous}, route)
 }
 
 func managedCoordinatorRowRoots(projectRoot, runtimeParent, ownerProjectRoot string) ([]string, error) {

@@ -378,19 +378,45 @@ func attachReplannedWorkspaceCleanupCoordinator(
 	if pane.RuntimeParent != panelaunch.ManualParentRef {
 		return attachWorkspaceCleanupCoordinator(ctx, locked, runtime, projectRoot, pane, intent)
 	}
-	coordinator, err := findCoordinatorIntent(locked, projectRoot, pane)
+	return attachReplannedManualCoordinator(ctx, locked, journal, runtime, projectRoot, pane, intent)
+}
+
+func attachReplannedManualCoordinator(
+	ctx context.Context,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	runtime WorkspaceRuntime,
+	projectRoot string,
+	pane state.Pane,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
+	previous, intent, err := preserveReplannedManualCoordinator(
+		locked, journal, projectRoot, pane, intent,
+	)
 	if err != nil {
 		return intent, err
 	}
-	realized, err := realizeReplannedManualCoordinator(ctx, locked, runtime, projectRoot, coordinator)
+	realized, err := realizeReplannedManualCoordinator(ctx, locked, runtime, projectRoot, pane)
 	if err != nil {
 		return intent, err
 	}
+	return adoptReplannedManualCoordinator(ctx, locked, journal, runtime, previous, realized, intent)
+}
+
+func adoptReplannedManualCoordinator(
+	ctx context.Context,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	runtime WorkspaceRuntime,
+	previous state.RuntimeResource,
+	realized state.LaunchIntent,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
 	live, err := observeCoordinator(ctx, runtime, realized.Resource)
 	if err != nil {
 		return intent, err
 	}
-	if err := panelaunch.ReconcileManagedCoordinatorReplanRow(locked, coordinator, realized); err != nil {
+	if err := panelaunch.ReconcileManagedCoordinatorReplanRow(locked, previous, realized); err != nil {
 		return intent, err
 	}
 	journal.UpsertIntent(realized)
@@ -398,18 +424,36 @@ func attachReplannedWorkspaceCleanupCoordinator(
 	return intent, nil
 }
 
+func preserveReplannedManualCoordinator(
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	projectRoot string,
+	pane state.Pane,
+	intent state.LaunchIntent,
+) (state.RuntimeResource, state.LaunchIntent, error) {
+	if intent.Coordinator != (state.RuntimeResource{}) {
+		return intent.Coordinator, intent, nil
+	}
+	coordinator, err := findCoordinatorIntent(locked, projectRoot, pane)
+	if err != nil {
+		return state.RuntimeResource{}, intent, err
+	}
+	intent.Coordinator = coordinator.Resource
+	return intent.Coordinator, intent, saveWorkspaceCleanupIntent(journal, intent)
+}
+
 func realizeReplannedManualCoordinator(
 	ctx context.Context,
 	locked *state.LockedStore,
 	runtime WorkspaceRuntime,
 	projectRoot string,
-	coordinator state.LaunchIntent,
+	pane state.Pane,
 ) (state.LaunchIntent, error) {
 	result, err := panelaunch.RealizeManagedCoordinator(ctx, panelaunch.ManagedCoordinatorRequest{
-		Parent: coordinator.Parent, RuntimeParent: coordinator.RuntimeParent,
-		IssueNum: coordinator.IssueNum, ProjectRoot: projectRoot,
-		SourceRoot: coordinator.WorktreePath, CWD: coordinator.WorktreePath,
-		ManagedSession: coordinator.Session, SocketPath: coordinator.SocketPath,
+		Parent: panelaunch.ManualParentRef, RuntimeParent: pane.RuntimeParent,
+		IssueNum: pane.IssueNum, ProjectRoot: projectRoot,
+		SourceRoot: projectRoot, CWD: projectRoot,
+		ManagedSession: pane.SessionID, SocketPath: pane.SocketPath,
 	}, runtime, locked, panelaunch.ManagedRealizeHooks{})
 	if err != nil && !errors.Is(err, panelaunch.ErrManagedLauncherReadinessDeferred) {
 		return state.LaunchIntent{}, err
@@ -753,16 +797,37 @@ func replanObservedWorkspaceCleanup(
 	}
 	checkoutOnly := observation.workspace == nil &&
 		(!observation.checkout.PathAbsent || observation.checkout.Registered)
-	if checkoutOnly && intent.Coordinator == (state.RuntimeResource{}) {
-		var err error
-		intent, err = attachReplannedWorkspaceCleanupCoordinator(
-			ctx, locked, journal, runtime, opts.ProjectRoot, pane, intent,
-		)
-		if err != nil {
-			return intent, err
-		}
+	intent, err = attachReplannedWorkspaceCoordinatorIfNeeded(
+		ctx, locked, journal, runtime, opts.ProjectRoot, pane, intent, checkoutOnly,
+	)
+	if err != nil {
+		return intent, err
 	}
 	return replanWorkspaceCleanup(ctx, opts, journal, intent, observation)
+}
+
+func attachReplannedWorkspaceCoordinatorIfNeeded(
+	ctx context.Context,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	runtime WorkspaceRuntime,
+	projectRoot string,
+	pane state.Pane,
+	intent state.LaunchIntent,
+	checkoutOnly bool,
+) (state.LaunchIntent, error) {
+	if !needsReplannedWorkspaceCoordinator(checkoutOnly, pane, intent) {
+		return intent, nil
+	}
+	return attachReplannedWorkspaceCleanupCoordinator(
+		ctx, locked, journal, runtime, projectRoot, pane, intent,
+	)
+}
+
+func needsReplannedWorkspaceCoordinator(checkoutOnly bool, pane state.Pane, intent state.LaunchIntent) bool {
+	legacyManualReplan := pane.RuntimeParent == panelaunch.ManualParentRef &&
+		intent.CleanupPhase == state.CleanupRemove
+	return checkoutOnly && (intent.Coordinator == (state.RuntimeResource{}) || legacyManualReplan)
 }
 
 func finalizeWorkspaceCleanup(
