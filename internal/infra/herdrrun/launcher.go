@@ -108,7 +108,7 @@ func workloadExecEnvironment(
 			paneIDEnv+"="+request.paneID,
 		)
 	}
-	if directAgentIntegrationLaunch(intent) {
+	if directAgentIntegrationLaunch(intent.Launch) {
 		environment = append(environment,
 			"HERDR_ENV=1", socketEnv+"="+request.socketPath, paneIDEnv+"="+request.paneID,
 		)
@@ -116,8 +116,8 @@ func workloadExecEnvironment(
 	return bindHerdrEmitterEnvironment(intent, environment)
 }
 
-// directAgentIntegrationLaunch reports whether this worktree or resume launch
-// is one an installed Herdr agent integration is granted the owned socket for.
+// directAgentIntegrationLaunch reports whether this workload is one an
+// installed Herdr agent integration is granted the owned socket for.
 // The integration reports the provider session over that socket from an
 // agent-side hook, so exactly these workloads receive HERDR_ENV, the socket
 // path, and their own pane id; the session and workspace route stay with the
@@ -125,15 +125,13 @@ func workloadExecEnvironment(
 // session, which focusOwned then refuses as a partial live-agent identity.
 //
 // The grant is narrower than "execs the provider CLI", and each exclusion is
-// deliberate. Coordinator launches exec the CLI too, but the grant has never
-// covered them, so an attached agent's row keeps the one-sided identity. The
+// deliberate. Agent workloads attached to coordinator workspaces share the
+// grant because they exec the same provider CLI as worktree children. The
 // Codex Plan Mode and team controllers exec fanout rather than the provider,
 // so no integration hook could run inside them. OpenCode ships an integration
 // too, but it has not been measured on this path.
-func directAgentIntegrationLaunch(intent state.LaunchIntent) bool {
-	launch := intent.Launch
-	directKind := intent.Kind == state.IntentWorktree || intent.Kind == state.IntentResume
-	if !directKind || launch == nil {
+func directAgentIntegrationLaunch(launch *state.LaunchCapsule) bool {
+	if launch == nil {
 		return false
 	}
 	// A controller-bearing capsule execs fanout rather than the provider, so it

@@ -127,6 +127,7 @@ func TestFocusOwnedRestoresDroppedAgentName(t *testing.T) {
 	setAgentName(h, "w2:p1", minted)
 	target := h.target()
 	setAgentUnnamed(h, "w2:p1")
+	replaceAgentSession(h, "w2:p1", "session-after-clear")
 
 	renamed := 0
 	h.fake.respond = func(args []string) ([]byte, error) {
@@ -302,6 +303,23 @@ func setAgentName(h *ownedHarness, paneID, name string) {
 		for i := range *snapshot.Agents {
 			if (*snapshot.Agents)[i].PaneID == paneID {
 				(*snapshot.Agents)[i].Name = &name
+			}
+		}
+	})
+}
+
+func replaceAgentSession(h *ownedHarness, paneID, value string) {
+	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+		for i := range *snapshot.Panes {
+			pane := &(*snapshot.Panes)[i]
+			if pane.PaneID == paneID && pane.AgentSession != nil {
+				pane.AgentSession.Value = &value
+			}
+		}
+		for i := range *snapshot.Agents {
+			agent := &(*snapshot.Agents)[i]
+			if agent.PaneID == paneID && agent.AgentSession != nil {
+				agent.AgentSession.Value = &value
 			}
 		}
 	})

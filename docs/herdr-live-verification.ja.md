@@ -316,9 +316,9 @@ codex から direct agent へ広げました (`directAgentIntegrationLaunch`)。
 偽の unix socket を立てて `~/.claude/hooks/herdr-agent-state.sh` を直接叩き、
 3 つが揃ったときだけ `source: "herdr:claude"` の `pane.report_agent_session` が
 飛ぶことを確認しました。hook 自体は `~/.claude/` にあり、owned session が隔離する
-XDG root の外なので移設は要りません。attach で起動した agent は coordinator
-workspace で動き、この grant の対象外のままです
-([#732](https://github.com/butaosuinu/fanout/issues/732))。
+XDG root の外なので移設は要りません。
+attach で起動した agent も provider CLI を直接実行するため、worktree 子と同じ grant の対象です。
+fanout を exec する controller と agent workload を持たない coordinator scaffold は対象外です ([#732](https://github.com/butaosuinu/fanout/issues/732))。
 
 session を束縛すると `/clear` で 2 つ問題が出るので同時に直しました。実測は
 使い捨て clone (`/private/tmp`) の owned session で取り、merge base の binary で

@@ -95,18 +95,18 @@ func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 			want: integrationRoute,
 		},
 		{
-			// An attached agent runs in the coordinator workspace, which the
-			// grant has never covered for any provider.
-			name: "attached claude carries nothing",
+			name: "attached claude carries the integration route only",
 			intent: state.LaunchIntent{
 				Kind: state.IntentCoordinator, Launch: &state.LaunchCapsule{Agent: "claude"},
 			},
+			want: integrationRoute,
 		},
 		{
-			name: "attached codex carries nothing",
+			name: "attached codex carries the integration route only",
 			intent: state.LaunchIntent{
 				Kind: state.IntentCoordinator, Launch: &state.LaunchCapsule{Agent: "codex"},
 			},
+			want: integrationRoute,
 		},
 		{
 			// The Plan Mode and team controllers drive codex through fanout
@@ -166,6 +166,15 @@ func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestDirectAgentIntegrationLaunchRequiresProviderWorkload(t *testing.T) {
+	if directAgentIntegrationLaunch(nil) {
+		t.Fatal("idle coordinator scaffold received the agent integration grant")
+	}
+	if directAgentIntegrationLaunch(&state.LaunchCapsule{}) {
+		t.Fatal("console or shell workload received the agent integration grant")
 	}
 }
 
