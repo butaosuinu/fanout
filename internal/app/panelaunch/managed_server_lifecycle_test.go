@@ -117,11 +117,19 @@ func TestReleaseRejectedManagedRestartDropsOnlyFreshLiveIntent(t *testing.T) {
 	if err = journal.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if err = releaseRejectedManagedRestart(journal, intent, false, cause); !errors.Is(err, cause) {
+	resumed, created, err := ensureManagedServerIntent(journal, state.IntentRestart, ManagedServerIO{})
+	if err != nil || created || resumed.ID != intent.ID {
+		t.Fatalf("ensure resumed restart = (%+v, created:%t, %v)", resumed, created, err)
+	}
+	if err = releaseRejectedManagedRestart(journal, resumed, created, cause); !errors.Is(err, cause) {
 		t.Fatalf("release resumed live restart error = %v", err)
 	}
 	if _, found, err := journal.ServerLifecycleIntent(); err != nil || !found {
 		t.Fatalf("resumed live restart intent = found:%t err:%v", found, err)
+	}
+	if _, _, err = currentManagedServerIntent(journal, state.IntentShutdown); err == nil ||
+		!strings.Contains(err.Error(), "restart is pending; refusing shutdown") {
+		t.Fatalf("mutation after rejected restart error = %v", err)
 	}
 }
 

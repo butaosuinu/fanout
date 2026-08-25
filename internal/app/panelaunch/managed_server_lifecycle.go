@@ -167,7 +167,7 @@ func ensureManagedServerIntent(
 ) (state.LaunchIntent, bool, error) {
 	intent, found, err := currentManagedServerIntent(journal, kind)
 	if err != nil || found {
-		return intent, found, err
+		return intent, false, err
 	}
 	identity, err := io.InspectServer()
 	if err != nil {
