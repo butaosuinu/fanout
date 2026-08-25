@@ -166,8 +166,14 @@ func recheckManagedNudgeState(ctx context.Context, recorded state.Pane, deps Dep
 
 func currentNudgeBinding(store state.Store, recorded state.Pane) (state.Pane, error) {
 	latest, matches := uniqueNudgeRecipient(store, recorded.Parent, recorded.IssueNum, recorded.TaskID)
-	byRow, rowFound := uniqueNudgeRow(store, recorded.EmitterRowKey)
-	if matches != 1 || !rowFound || !sameNudgeBinding(latest, byRow) ||
+	row, rowErr := store.EmitterRowIndex(
+		recorded.EmitterRowKey, recorded.WorktreePath, recorded.WorkspaceLabel,
+	)
+	if matches != 1 || rowErr != nil || row < 0 {
+		return state.Pane{}, fmt.Errorf("recipient launch binding changed before prompt")
+	}
+	byRow := store.Panes[row]
+	if !sameNudgeBinding(latest, byRow) ||
 		!sameNudgeBinding(recorded, latest) || !validNudgeGeneration(latest) {
 		return state.Pane{}, fmt.Errorf("recipient launch binding changed before prompt")
 	}
@@ -184,18 +190,6 @@ func validNudgeGeneration(pane state.Pane) bool {
 	}
 	return telemetry.ValidNonce(pane.LaunchNonce) && telemetry.ValidNonce(pane.EmitterNonce) &&
 		pane.AgentID == naming.ManagedAgentName(pane.RepoKey, pane.EmitterRowKey, pane.LaunchNonce)
-}
-
-func uniqueNudgeRow(store state.Store, rowKey string) (state.Pane, bool) {
-	var matched state.Pane
-	count := 0
-	for _, pane := range store.Panes {
-		if rowKey != "" && pane.EmitterRowKey == rowKey {
-			matched = pane
-			count++
-		}
-	}
-	return matched, count == 1
 }
 
 func sameNudgeBinding(left, right state.Pane) bool {
