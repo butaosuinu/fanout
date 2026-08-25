@@ -389,7 +389,7 @@ func managedShutdownCoordinatorRow(pane state.Pane) bool {
 	requirements := []bool{
 		managedCoordinatorRowRole(pane),
 		pane.RuntimeParent != "",
-		pane.RuntimeParent != ManualParentRef, pane.RuntimeParent != ManagedConsoleRuntimeParent,
+		pane.RuntimeParent != ManagedConsoleRuntimeParent,
 		backend.LiveIdentityModelOf(pane.Backend) == backend.LiveIdentityRecordedBinding,
 		pane.PaneID != "", pane.WorkspaceID != "", pane.WorkspaceLabel != "",
 		pane.TerminalID != "", pane.SessionID != "", pane.SocketPath != "",

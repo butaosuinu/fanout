@@ -416,6 +416,71 @@ func TestShutdownManagedServerRetiresConsoleAndCoordinatorScaffolds(t *testing.T
 	}
 }
 
+func TestShutdownManagedServerRetiresManualCoordinatorScaffold(t *testing.T) {
+	repo, _ := managedConsoleTestWorktrees(t)
+	intent := managedLifecycleTestCoordinatorIntent(t, repo)
+	coordinator := managedCoordinatorPane(intent, backend.OwnedLaunchRoute{
+		Session: intent.Session, SocketPath: intent.SocketPath,
+	}, ManualParentRef, -2)
+	recordRestartStatePane(t, repo, coordinator)
+	harness := &managedServerTestHarness{}
+
+	if err := ShutdownManagedServer(context.Background(), repo, harness.io()); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Panes) != 0 || harness.shutdownCalls != 1 {
+		t.Fatalf(
+			"ShutdownManagedServer() panes = %+v, shutdown calls = %d, want empty/1",
+			store.Panes, harness.shutdownCalls,
+		)
+	}
+}
+
+func TestShutdownManagedServerRejectsManualNonCoordinatorRow(t *testing.T) {
+	tests := []struct {
+		name  string
+		kind  string
+		agent string
+	}{
+		{name: "agent", agent: "codex"},
+		{name: "shell", kind: state.PaneKindShell, agent: state.PaneKindShell},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo, _ := managedConsoleTestWorktrees(t)
+			intent := managedLifecycleTestCoordinatorIntent(t, repo)
+			pane := managedCoordinatorPane(intent, backend.OwnedLaunchRoute{
+				Session: intent.Session, SocketPath: intent.SocketPath,
+			}, ManualParentRef, -2)
+			pane.Kind = test.kind
+			pane.Agent = test.agent
+			pane.Slug = "manual-" + test.name
+			pane.WorkspaceLabel = "fanout-" + test.name + "-token"
+			recordRestartStatePane(t, repo, pane)
+			harness := &managedServerTestHarness{}
+
+			err := ShutdownManagedServer(context.Background(), repo, harness.io())
+			if err == nil || !strings.Contains(err.Error(), "active Herdr state row remains") {
+				t.Fatalf("ShutdownManagedServer() error = %v, want state-row rejection", err)
+			}
+			store, loadErr := state.LoadProject(repo)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if len(store.Panes) != 1 || harness.shutdownCalls != 0 {
+				t.Fatalf(
+					"ShutdownManagedServer() panes = %+v, shutdown calls = %d, want retained/0",
+					store.Panes, harness.shutdownCalls,
+				)
+			}
+		})
+	}
+}
+
 func TestShutdownManagedServerStopsWaitingForLinkedScaffoldLockAtDeadline(t *testing.T) {
 	repo, sibling := managedConsoleTestWorktrees(t)
 	intent := managedLifecycleTestCoordinatorIntent(t, sibling)
