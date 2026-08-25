@@ -460,9 +460,11 @@ func validateSavedWorkspaceCleanup(intent state.LaunchIntent, projectRoot string
 		return err
 	}
 	deleteBranch := mode == CloseEverything && pane.BranchCreated && intent.ExpectedHead != ""
+	deleteBranchMatches := intent.CleanupDeleteBranch == deleteBranch ||
+		(!intent.CleanupDeleteBranch && intent.CleanupPhase == state.CleanupWorkspaceClose)
 	if slices.Contains([]bool{
 		intent.Kind == state.IntentCleanup, intentMatchesPane(intent, pane, ownerRoot),
-		!intent.CleanupDeleteBranch || deleteBranch, cleanupResourceMatchesPane(intent, pane),
+		deleteBranchMatches, cleanupResourceMatchesPane(intent, pane),
 	}, false) {
 		return fmt.Errorf("saved Herdr cleanup intent does not match the selected state row")
 	}
