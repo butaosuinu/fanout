@@ -337,6 +337,9 @@ func attachedLaunchPrompt(
 }
 
 func attachedIntentMatchesRequest(intent state.LaunchIntent, req Request) bool {
+	if intent.Launch != nil && intent.Launch.TokenIssued {
+		return true
+	}
 	if intent.RuntimeParent != ManualParentRef {
 		return false
 	}

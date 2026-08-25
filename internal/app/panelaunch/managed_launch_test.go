@@ -1748,6 +1748,10 @@ func TestNewAttachedRequestSkipsMismatchedRecoverableBinding(t *testing.T) {
 		{name: "matching binding", prompt: "review", originalAgent: "claude", retryAgent: "claude", want: -1},
 		{name: "agent", prompt: "review", originalAgent: "claude", retryAgent: "codex", want: -2},
 		{
+			name: "issued agent mismatch", prompt: "review", originalAgent: "claude", retryAgent: "codex",
+			mutateIntent: func(intent *state.LaunchIntent) { intent.Launch.TokenIssued = true }, want: -1,
+		},
+		{
 			name: "source parent", prompt: "review\nrepository identity",
 			originalAgent: "claude", retryAgent: "claude", retryParent: "526", want: -2,
 		},
@@ -1803,6 +1807,7 @@ func allocationTestLaunchCapsule(t *testing.T, req Request) *state.LaunchCapsule
 		t.Fatal(err)
 	}
 	launch := validTestManagedLaunch()
+	launch.TokenIssued = false
 	launch.Agent = req.Agent
 	launch.Executable = spec.Executable
 	launch.Args = slices.Clone(spec.Args)
