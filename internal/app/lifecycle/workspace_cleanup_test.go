@@ -1478,6 +1478,37 @@ func TestHerdrCloseEverythingRejectsCloseWorktreeIntent(t *testing.T) {
 	assertHerdrLifecyclePreserved(t, fixture)
 }
 
+func TestHerdrCloseEverythingRejectsWorkspaceCloseWorktreeIntent(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.BranchCreated = true
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	runHerdrLifecycleGit(t, fixture.projectRoot, "worktree", "remove", fixture.worktreePath)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot:      fixture.projectRoot,
+		workspaces:       []backend.WorkspaceObservation{fixture.workspace},
+		observeErr:       errors.New("observation temporarily unavailable"),
+		observeErrAtCall: 3,
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+
+	if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseWorktree, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("CloseWorktree CloseWithMode() = %d, want %d", got, exitcode.Env)
+	}
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
+	runtime.observeErrAtCall = 0
+	if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("CloseEverything CloseWithMode() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+		t.Fatalf("mode escalation mutation calls = remove %d/close %d, want 0/0", runtime.removeCalls, runtime.closeCalls)
+	}
+	if !localBranchExists(fixture.projectRoot, fixture.branch) {
+		t.Fatalf("mode escalation deleted branch %s", fixture.branch)
+	}
+	assertHerdrStateRowPresent(t, fixture)
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
+}
+
 func TestHerdrCloseEverythingReapsIssueStateAfterResourcesAreAlreadyAbsent(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	fixture.pane.BranchCreated = true

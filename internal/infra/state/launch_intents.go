@@ -126,6 +126,8 @@ type LaunchIntent struct {
 
 	CleanupPhase        CleanupPhase `json:"cleanupPhase,omitempty"`
 	CleanupDeleteBranch bool         `json:"cleanupDeleteBranch,omitempty"`
+	// CleanupDeleteBranchRequested is nil only for intents saved before this field existed.
+	CleanupDeleteBranchRequested *bool `json:"cleanupDeleteBranchRequested,omitempty"`
 
 	Failure string `json:"failure,omitempty"`
 }
@@ -580,7 +582,8 @@ func validateServerIntent(intent LaunchIntent) error {
 		!intent.BranchCreated, intent.WorkspaceLabel == "", intent.Resource == (RuntimeResource{}),
 		intent.Coordinator == (RuntimeResource{}), intent.Session == "", intent.SocketPath == "",
 		intent.ExpiresUnixMS == 0, intent.Launch == nil, intent.CleanupPhase == "",
-		intent.ResumeAgentSession == nil, !intent.CleanupDeleteBranch, intent.Failure == "",
+		intent.ResumeAgentSession == nil, !intent.CleanupDeleteBranch,
+		intent.CleanupDeleteBranchRequested == nil, intent.Failure == "",
 	}
 	if slices.Contains(empty, false) {
 		return fmt.Errorf("herdr server lifecycle intent %s has unrelated fields", intent.ID)
@@ -708,7 +711,7 @@ func validateResumeFields(intent LaunchIntent) error {
 		intent.Resource.WorkspaceID != "", intent.Resource.PaneID != "",
 		intent.Resource.TerminalID != "", intent.Resource.CurrentPath != "",
 		intent.Coordinator == (RuntimeResource{}), intent.CleanupPhase == "",
-		!intent.CleanupDeleteBranch, intent.Server == nil,
+		!intent.CleanupDeleteBranch, intent.CleanupDeleteBranchRequested == nil, intent.Server == nil,
 	})
 }
 
