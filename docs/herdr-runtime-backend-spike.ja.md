@@ -1351,6 +1351,7 @@ herdr が対応する primitive を提供するか、proof-grade tier へ格上�
 | canonical golden bytes fixture（owner marker golden、registry codec golden、`manifest_set_digest`、removal fingerprint） | 撤廃。対応する機構の proof-grade 再導入と同時に再評価する。PR #572 実装済みの owner marker / lease の strict canonical decode（missing / unknown field と非 canonical encoding の拒否）は実装どおり維持する |
 | content-addressed launch bundle と build / publish / GC journal、sealed bundle 起動 | 撤廃。fanout が解決した絶対 entrypoint の直接起動で置換し、verified FD spawn または別 UID の bundle owner が使える proof-grade tier で再評価する |
 | branch lineage / cleaned tombstone / explicit continue / tombstone forget | 撤廃。row 削除 + 既存 branch 採用の fresh launch で置換し、conditional remove / fence の格上げと同時に再評価する |
+| `DeleteReservedBranch` の checkout 検査と ref 削除を結ぶ fence | No-Go。fanout 管理外の Git 競合への保護は tmux-parity を超え、git に checkout/worktree 登録状態の検査と ref 削除を原子的に結ぶ primitive はない。fanout 内部の競合は state lock で排除する。git が checkout/worktree 登録状態と ref 削除を原子的に束縛する primitive を提供するか、fanout 管理外 process との共存が正式なサポート要件になった場合に再評価する |
 | ownership nonce の二重照合（workspace label + checkout git-dir marker） | 格下げ。workspace label の単一照合を正とする |
 | plan spec snapshot の SHA-256 束縛 | 撤廃。plan task key は tmux と同じ `(plan slug, task ID)` にする |
 | MAC 付き env capsule と claim / consume CAS / disposal journal | 撤廃。one-shot 0600 env file で置換し、必要になれば proof-grade tier で再評価する |
