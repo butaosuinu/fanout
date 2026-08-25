@@ -395,8 +395,9 @@ func newWorkspaceCleanupIntent(
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
+	deleteBranchRequested := mode == CloseEverything && pane.BranchCreated
 	intent := state.LaunchIntent{
-		ID: intentID, Kind: state.IntentCleanup, Status: state.IntentPlanned,
+		ID: intentID, Kind: state.IntentCleanup, Status: freshWorkspaceCleanupStatus(observation),
 		Parent: pane.Parent, RuntimeParent: pane.RuntimeParent, OwnerProjectRoot: ownerRoot,
 		IssueNum: pane.IssueNum, TaskID: pane.TaskID, Slug: pane.Slug,
 		BranchName: pane.BranchName, FullBranchRef: fullRef, BaseBranch: pane.BaseBranch,
@@ -405,12 +406,17 @@ func newWorkspaceCleanupIntent(
 		WorkspaceLabel: resource.Label, Resource: resource,
 		Session: pane.SessionID, SocketPath: pane.SocketPath,
 		ExpiresUnixMS: time.Now().Add(workspaceCleanupTimeout).UnixMilli(),
-		CleanupPhase:  phase, CleanupDeleteBranch: mode == CloseEverything && pane.BranchCreated && branchFound,
-	}
-	if observation.workspace == nil && observation.checkout.PathAbsent && !observation.checkout.Registered {
-		intent.Status = state.IntentRealized
+		CleanupPhase:  phase, CleanupDeleteBranch: deleteBranchRequested && branchFound,
+		CleanupDeleteBranchRequested: &deleteBranchRequested,
 	}
 	return intent, nil
+}
+
+func freshWorkspaceCleanupStatus(observation workspaceCleanupObservation) state.LaunchIntentStatus {
+	if workspaceCleanupAbsent(observation) {
+		return state.IntentRealized
+	}
+	return state.IntentPlanned
 }
 
 func workspaceCleanupMetadata(
@@ -463,10 +469,16 @@ func validateSavedWorkspaceCleanup(intent state.LaunchIntent, projectRoot string
 	if err != nil {
 		return err
 	}
-	deleteBranch := mode == CloseEverything && pane.BranchCreated && intent.ExpectedHead != ""
+	deleteBranchRequested := mode == CloseEverything && pane.BranchCreated
+	deleteBranch := deleteBranchRequested && intent.ExpectedHead != ""
+	deleteBranchMatches := intent.CleanupDeleteBranch == deleteBranch
+	if intent.CleanupDeleteBranchRequested != nil {
+		deleteBranchMatches = *intent.CleanupDeleteBranchRequested == deleteBranchRequested &&
+			(!intent.CleanupDeleteBranch || deleteBranch)
+	}
 	if slices.Contains([]bool{
 		intent.Kind == state.IntentCleanup, intentMatchesPane(intent, pane, ownerRoot),
-		intent.CleanupDeleteBranch == deleteBranch, cleanupResourceMatchesPane(intent, pane),
+		deleteBranchMatches, cleanupResourceMatchesPane(intent, pane),
 	}, false) {
 		return fmt.Errorf("saved Herdr cleanup intent does not match the selected state row")
 	}
