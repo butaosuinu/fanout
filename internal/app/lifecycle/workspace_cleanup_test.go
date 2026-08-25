@@ -399,6 +399,67 @@ func TestHerdrCloseReopensCheckoutOnlyStateWithMultiPaneCoordinator(t *testing.T
 	}
 }
 
+func TestHerdrCloseRejectsCheckoutOnlyContentsBeforeReopen(t *testing.T) {
+	tests := []struct {
+		name      string
+		wantError string
+		prepare   func(*testing.T, string)
+	}{
+		{
+			name:      "dirty",
+			wantError: "tracked or untracked changes",
+			prepare: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(path, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:      "ignored-only",
+			wantError: "ignored files only",
+			prepare: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(path, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				runHerdrLifecycleGit(t, path, "add", ".gitignore")
+				runHerdrLifecycleGit(t, path, "commit", "-m", "ignore dependencies")
+				ignoredPath := filepath.Join(path, "node_modules", "pkg")
+				if err := os.MkdirAll(ignoredPath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(ignoredPath, "index.js"), []byte("ignored\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			tt.prepare(t, fixture.worktreePath)
+			runtime := prepareHerdrCleanupPhase(t, fixture, state.CleanupReopen)
+			lg := &captureLogger{}
+
+			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, lg); got != exitcode.Env {
+				t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+			}
+			assertHerdrLifecyclePreserved(t, fixture)
+			assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
+			if runtime.setupCalls != 0 || runtime.openCalls != 0 || runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+				t.Fatalf(
+					"checkout-only cleanup calls = setup %d/open %d/remove %d/close %d, want 0/0/0/0",
+					runtime.setupCalls, runtime.openCalls, runtime.removeCalls, runtime.closeCalls,
+				)
+			}
+			if len(lg.errors) == 0 || !strings.Contains(lg.errors[len(lg.errors)-1], tt.wantError) {
+				t.Fatalf("checkout-only cleanup errors = %v, want %q", lg.errors, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestHerdrCloseReusesIssueCoordinatorAcrossLinkedPlanOwners(t *testing.T) {
 	base := newHerdrLifecycleFixture(t)
 	secondRoot := filepath.Join(t.TempDir(), "second-plan")
@@ -618,6 +679,18 @@ func TestHerdrCleanupRetryDoesNotRepeatHooks(t *testing.T) {
 				runtime.observeAfterMutationErr = nil
 			},
 			wantRetry: exitcode.OK,
+		},
+		{
+			name: "checkout-only content gate",
+			prepare: func(t *testing.T, fixture herdrLifecycleFixture) *fakeHerdrLifecycleRuntime {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(fixture.worktreePath, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return prepareHerdrCleanupPhase(t, fixture, state.CleanupReopen)
+			},
+			beforeTry: func(*fakeHerdrLifecycleRuntime) {},
+			wantRetry: exitcode.Env,
 		},
 	}
 	for _, tt := range tests {
