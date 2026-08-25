@@ -403,6 +403,11 @@ func TestFinalizeManagedAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
 	if intent.Parent != ManualParentRef || intent.ID == shared.ID {
 		t.Fatalf("attached workspace reused shared coordinator: %+v", intent)
 	}
+	if intent.Kind != state.IntentCoordinator || intent.Launch == nil ||
+		intent.Launch.Agent != "claude" || intent.Launch.CodexPlanStatusPath != "" ||
+		intent.Launch.CodexTeamStatusPath != "" {
+		t.Fatalf("attached workspace workload = %+v, want direct claude coordinator launch", intent.Launch)
+	}
 	journal, err := locked.LaunchJournal(repo)
 	if err != nil {
 		t.Fatal(err)
