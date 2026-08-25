@@ -157,7 +157,7 @@ func runtimeTargetForSignal(
 	gitCommonDir string,
 	signal telemetry.Signal,
 ) (RuntimeTarget, error) {
-	row, err := uniqueFinalRow(locked.Panes, signal.RowKey)
+	row, err := locked.EmitterRowIndex(signal.RowKey, signal.WorktreePath, signal.WorkspaceLabel)
 	if err != nil {
 		return RuntimeTarget{}, err
 	}
@@ -182,7 +182,7 @@ func applyObservedSignal(
 	signal telemetry.Signal,
 	observation Observation,
 ) error {
-	row, err := uniqueFinalRow(locked.Panes, signal.RowKey)
+	row, err := locked.EmitterRowIndex(signal.RowKey, signal.WorktreePath, signal.WorkspaceLabel)
 	if err != nil {
 		return err
 	}
@@ -198,20 +198,6 @@ func projectRootForStatePath(path string) (string, error) {
 		return "", fmt.Errorf("state path must name an owning .fanout/state.json")
 	}
 	return root, nil
-}
-
-func uniqueFinalRow(panes []state.Pane, rowKey string) (int, error) {
-	index := -1
-	for i := range panes {
-		if panes[i].EmitterRowKey != rowKey {
-			continue
-		}
-		if index >= 0 {
-			return -1, fmt.Errorf("multiple final rows match emitter row key")
-		}
-		index = i
-	}
-	return index, nil
 }
 
 func updateFinalRow(
@@ -382,6 +368,8 @@ func finalRuntimeTarget(pane state.Pane, gitCommonDir string, signal telemetry.S
 		binding.SessionID == signal.Session,
 		binding.SocketPath == signal.SocketPath,
 		binding.Ref.Workspace == signal.WorkspaceID,
+		binding.WorkspaceLabel == signal.WorkspaceLabel,
+		binding.WorktreePath == signal.WorktreePath,
 		binding.Ref.Pane == signal.PaneID,
 		binding.TerminalID == signal.TerminalID,
 		binding.Agent == signal.Agent,
@@ -444,6 +432,8 @@ func pendingSignalMatches(intent state.LaunchIntent, signal telemetry.Signal) bo
 		intent.Session == signal.Session,
 		intent.SocketPath == signal.SocketPath,
 		intent.Resource.WorkspaceID == signal.WorkspaceID,
+		intent.Resource.Label == signal.WorkspaceLabel,
+		intent.WorktreePath == signal.WorktreePath,
 		intent.Resource.PaneID == signal.PaneID,
 		intent.Resource.TerminalID == signal.TerminalID,
 		launch.Agent == signal.Agent,

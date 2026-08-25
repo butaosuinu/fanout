@@ -483,6 +483,26 @@ func (s Store) PanesForParent(parent string) []Pane {
 	return out
 }
 
+// EmitterRowIndex resolves one final telemetry row from its launch row key and
+// the repository-wide path identity already persisted on every agent row. The
+// Herdr workspace label distinguishes separate agents attached to one path.
+func (s Store) EmitterRowIndex(rowKey, worktreePath, workspaceLabel string) (int, error) {
+	index := -1
+	for i := range s.Panes {
+		pane := s.Panes[i]
+		if pane.EmitterRowKey != rowKey ||
+			filepath.Clean(pane.WorktreePath) != worktreePath ||
+			pane.WorkspaceLabel != workspaceLabel {
+			continue
+		}
+		if index >= 0 {
+			return -1, fmt.Errorf("multiple final rows match emitter stable identity")
+		}
+		index = i
+	}
+	return index, nil
+}
+
 func (s *Store) Upsert(p Pane) {
 	s.normalize()
 	for i := range s.Panes {

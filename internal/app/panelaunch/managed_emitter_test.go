@@ -14,9 +14,11 @@ import (
 
 func TestManagedEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T) {
 	intent := state.LaunchIntent{
-		ID: "issue:3:524:529",
+		ID:           "issue:3:524:529",
+		WorktreePath: "/repo/worktree",
 		Resource: state.RuntimeResource{
-			WorkspaceID: "workspace-1", PaneID: "workspace-1:pane-1", TerminalID: "terminal-1",
+			WorkspaceID: "workspace-1", Label: "owned-label-1",
+			PaneID: "workspace-1:pane-1", TerminalID: "terminal-1",
 		},
 	}
 	route := backend.OwnedLaunchRoute{
@@ -54,18 +56,20 @@ func TestManagedEmitterLaunchInjectsClaudeSettingsAndExactIdentity(t *testing.T)
 	}
 	environment := environmentMap(t, launch.environment)
 	want := map[string]string{
-		telemetry.EmitterPathEnv:  "/repo/.fanout/state.json",
-		telemetry.RowKeyEnv:       intent.ID,
-		telemetry.LaunchNonceEnv:  strings.Repeat("a", 32),
-		telemetry.EmitterNonceEnv: launch.nonce,
-		telemetry.BackendEnv:      "herdr",
-		telemetry.SessionEnv:      route.Session,
-		telemetry.SocketPathEnv:   route.SocketPath,
-		telemetry.WorkspaceIDEnv:  intent.Resource.WorkspaceID,
-		telemetry.PaneIDEnv:       intent.Resource.PaneID,
-		telemetry.TerminalIDEnv:   intent.Resource.TerminalID,
-		telemetry.AgentEnv:        "claude",
-		telemetry.AgentIDEnv:      "fanout-agent",
+		telemetry.EmitterPathEnv:    "/repo/.fanout/state.json",
+		telemetry.RowKeyEnv:         intent.ID,
+		telemetry.LaunchNonceEnv:    strings.Repeat("a", 32),
+		telemetry.EmitterNonceEnv:   launch.nonce,
+		telemetry.BackendEnv:        "herdr",
+		telemetry.SessionEnv:        route.Session,
+		telemetry.SocketPathEnv:     route.SocketPath,
+		telemetry.WorkspaceIDEnv:    intent.Resource.WorkspaceID,
+		telemetry.WorkspaceLabelEnv: intent.Resource.Label,
+		telemetry.WorktreePathEnv:   intent.WorktreePath,
+		telemetry.PaneIDEnv:         intent.Resource.PaneID,
+		telemetry.TerminalIDEnv:     intent.Resource.TerminalID,
+		telemetry.AgentEnv:          "claude",
+		telemetry.AgentIDEnv:        "fanout-agent",
 	}
 	for key, value := range want {
 		if environment[key] != value {

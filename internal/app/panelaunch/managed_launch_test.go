@@ -1624,6 +1624,85 @@ func managedManualTestResource(label, repo string, number int) state.RuntimeReso
 	}
 }
 
+func TestNextAttachedSyntheticPaneNumberSeparatesIdentity(t *testing.T) {
+	t.Run("manual state row", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		store := state.Store{Panes: []state.Pane{{
+			Parent: ManualParentRef, IssueNum: -1, Backend: backend.Herdr,
+		}}}
+		if got := nextAttachedSyntheticPaneNumber(repo, store, "425", repo); got != -2 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(manual -1) = %d, want -2", got)
+		}
+	})
+
+	t.Run("tmux manual state row", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		store := state.Store{Panes: []state.Pane{{
+			Parent: ManualParentRef, IssueNum: -1, Backend: backend.Tmux,
+		}}}
+		if got := nextAttachedSyntheticPaneNumber(repo, store, "425", repo); got != -1 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(tmux -1) = %d, want -1", got)
+		}
+	})
+
+	t.Run("foreign realized intent", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		intent := allocationTestManualIntent(t, repo, -1, ManualParentRef, repo)
+		saveAllocationTestIntent(t, repo, intent)
+		target := filepath.Join(repo, "attached-target")
+		if got := nextAttachedSyntheticPaneNumber(repo, state.Store{}, "425", target); got != -2 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(foreign -1) = %d, want -2", got)
+		}
+	})
+
+	t.Run("matching crash resume", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		target := filepath.Join(repo, "attached-target")
+		intent := allocationTestManualIntent(t, repo, -1, "425", target)
+		saveAllocationTestIntent(t, repo, intent)
+		if got := nextAttachedSyntheticPaneNumber(repo, state.Store{}, "425", target); got != -1 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(own -1) = %d, want -1", got)
+		}
+	})
+}
+
+func allocationTestManualIntent(
+	t *testing.T,
+	repo string,
+	number int,
+	runtimeParent, worktreePath string,
+) state.LaunchIntent {
+	t.Helper()
+	ownerRoot, err := canonicalManualCoordinatorOwner(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := burnedManualCoordinatorIntent(t, ownerRoot, repo, number, state.IntentRealized)
+	intent.RuntimeParent = runtimeParent
+	intent.WorktreePath = worktreePath
+	intent.Resource.CurrentPath = worktreePath
+	return intent
+}
+
+func saveAllocationTestIntent(t *testing.T, repo string, intent state.LaunchIntent) {
+	t.Helper()
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := locked.LaunchJournal(repo)
+	if err == nil {
+		journal.UpsertIntent(intent)
+		err = journal.Save()
+	}
+	if unlockErr := locked.Unlock(); err == nil {
+		err = unlockErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func burnedManualCoordinatorIntent(
 	t *testing.T,
 	ownerRoot, repo string,

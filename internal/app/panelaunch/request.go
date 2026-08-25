@@ -254,7 +254,7 @@ func NewAttachedRequest(cfg *cliflags.Config, projectRoot string, store state.St
 	if parentRef == "" {
 		parentRef = ManualParentRef
 	}
-	number := NextManagedSyntheticPaneNumber(projectRoot, store, parentRef)
+	number := nextAttachedSyntheticPaneNumber(projectRoot, store, parentRef, targetPath)
 	agentName := cfg.Agent
 	title := attachedPaneTitle(agentName, target.SourceLabel, targetPath)
 	slug := attachedPaneSlug(targetPath, agentName, number)
@@ -521,12 +521,46 @@ func burnedManualCoordinatorRun(
 ) []burnedManualCoordinator {
 	var candidates []burnedManualCoordinator
 	for number := start; ; number-- {
-		intent, burned := manualCoordinatorIntent(journal, ownerRoot, number)
-		if !burned {
+		intent, found := manualCoordinatorIntent(journal, ownerRoot, number)
+		if !found || intent.Status != state.IntentManualCleanupRequired {
 			return candidates
 		}
 		candidates = append(candidates, burnedManualCoordinator{intent: intent, number: number})
 	}
+}
+
+// nextAttachedSyntheticPaneNumber picks a number unused by the source parent
+// or @manual rows, then checks the shared @manual coordinator intent namespace.
+// A recoverable intent is reused only for the same runtime parent and worktree;
+// every other collision is skipped.
+func nextAttachedSyntheticPaneNumber(
+	projectRoot string,
+	store state.Store,
+	parentRef string,
+	worktreePath string,
+) int {
+	number := NextSyntheticPaneNumber(store, parentRef)
+	number = nextAttachedRecordedBindingManualNumber(store, parentRef, number)
+	journal, ownerRoot := manualAllocationJournal(projectRoot)
+	for manualCoordinatorNumberUnavailable(
+		journal, ownerRoot, parentRef, worktreePath, number,
+	) {
+		number--
+	}
+	return number
+}
+
+func nextAttachedRecordedBindingManualNumber(store state.Store, parentRef string, number int) int {
+	if parentRef == ManualParentRef {
+		return number
+	}
+	for _, pane := range store.PanesForParent(ManualParentRef) {
+		if backend.LiveIdentityModelOf(pane.Backend) == backend.LiveIdentityRecordedBinding &&
+			pane.IssueNum <= number {
+			number = pane.IssueNum - 1
+		}
+	}
+	return number
 }
 
 // manualAllocationJournal loads the read-only journal view used to skip burned
@@ -544,8 +578,24 @@ func manualAllocationJournal(projectRoot string) (state.LaunchJournal, string) {
 }
 
 func manualCoordinatorNumberBurned(journal state.LaunchJournal, ownerRoot string, number int) bool {
-	_, burned := manualCoordinatorIntent(journal, ownerRoot, number)
-	return burned
+	intent, found := manualCoordinatorIntent(journal, ownerRoot, number)
+	return found && intent.Status == state.IntentManualCleanupRequired
+}
+
+func manualCoordinatorNumberUnavailable(
+	journal state.LaunchJournal,
+	ownerRoot, runtimeParent, worktreePath string,
+	number int,
+) bool {
+	intent, found := manualCoordinatorIntent(journal, ownerRoot, number)
+	if !found {
+		return false
+	}
+	return intent.Status == state.IntentManualCleanupRequired ||
+		intent.Kind != state.IntentCoordinator ||
+		intent.RuntimeParent != runtimeParent ||
+		intent.IssueNum != number ||
+		!savedManagedCoordinatorPathMatches(ownerRoot, intent.WorktreePath, worktreePath)
 }
 
 func manualCoordinatorIntent(
@@ -560,8 +610,7 @@ func manualCoordinatorIntent(
 	if err != nil {
 		return state.LaunchIntent{}, false
 	}
-	intent, found := journal.FindIntent(intentID)
-	return intent, found && intent.Status == state.IntentManualCleanupRequired
+	return journal.FindIntent(intentID)
 }
 
 func manualCoordinatorNumberReleasable(

@@ -105,6 +105,7 @@ func managedEmitterEnvironment(
 		{telemetry.SocketPathEnv, route.SocketPath},
 		{telemetry.WorkspaceIDEnv, intent.Resource.WorkspaceID},
 		{telemetry.WorkspaceLabelEnv, intent.Resource.Label},
+		{telemetry.WorktreePathEnv, intent.WorktreePath},
 		{telemetry.PaneIDEnv, intent.Resource.PaneID},
 		{telemetry.TerminalIDEnv, intent.Resource.TerminalID},
 		{telemetry.AgentEnv, agentName},

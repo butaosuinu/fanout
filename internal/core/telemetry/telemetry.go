@@ -32,6 +32,7 @@ const (
 	SocketPathEnv     = "FANOUT_EMITTER_SOCKET_PATH"
 	WorkspaceIDEnv    = "FANOUT_EMITTER_WORKSPACE_ID"
 	WorkspaceLabelEnv = "FANOUT_EMITTER_WORKSPACE_LABEL"
+	WorktreePathEnv   = "FANOUT_EMITTER_WORKTREE_PATH"
 	PaneIDEnv         = "FANOUT_EMITTER_PANE_ID"
 	TerminalIDEnv     = "FANOUT_EMITTER_TERMINAL_ID"
 	AgentEnv          = "FANOUT_EMITTER_AGENT"
@@ -43,20 +44,22 @@ var noncePattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 // Signal is one launch-bound provider state report. Its identity values are
 // comparison inputs, not secrets or capabilities.
 type Signal struct {
-	StatePath    string
-	RowKey       string
-	LaunchNonce  string
-	EmitterNonce string
-	Backend      backend.Name
-	Session      string
-	SocketPath   string
-	WorkspaceID  string
-	PaneID       string
-	TerminalID   string
-	Agent        string
-	AgentID      string
-	State        backend.AgentState
-	Sequence     uint64
+	StatePath      string
+	RowKey         string
+	LaunchNonce    string
+	EmitterNonce   string
+	Backend        backend.Name
+	Session        string
+	SocketPath     string
+	WorkspaceID    string
+	WorkspaceLabel string
+	WorktreePath   string
+	PaneID         string
+	TerminalID     string
+	Agent          string
+	AgentID        string
+	State          backend.AgentState
+	Sequence       uint64
 }
 
 // IsRequest reports whether args target the hidden telemetry emitter.
@@ -113,18 +116,28 @@ func ParseSignal(args []string, getenv func(string) string) (Signal, error) {
 			return Signal{}, fmt.Errorf("claude telemetry sequence is invalid")
 		}
 	}
-	signal := Signal{
-		StatePath: getenv(StatePathEnv), RowKey: getenv(RowKeyEnv),
-		LaunchNonce: getenv(LaunchNonceEnv), EmitterNonce: getenv(EmitterNonceEnv),
-		Backend: backend.Name(getenv(BackendEnv)), Session: getenv(SessionEnv),
-		SocketPath: getenv(SocketPathEnv), WorkspaceID: getenv(WorkspaceIDEnv),
-		PaneID: getenv(PaneIDEnv), TerminalID: getenv(TerminalIDEnv),
-		Agent: agentName, AgentID: getenv(AgentIDEnv), State: state, Sequence: sequence,
-	}
+	signal := signalFromEnvironment(getenv, agentName, state, sequence)
 	if err := validateSignal(signal, getenv(EmitterPathEnv)); err != nil {
 		return Signal{}, err
 	}
 	return signal, nil
+}
+
+func signalFromEnvironment(
+	getenv func(string) string,
+	agentName string,
+	state backend.AgentState,
+	sequence uint64,
+) Signal {
+	return Signal{
+		StatePath: getenv(StatePathEnv), RowKey: getenv(RowKeyEnv),
+		LaunchNonce: getenv(LaunchNonceEnv), EmitterNonce: getenv(EmitterNonceEnv),
+		Backend: backend.Name(getenv(BackendEnv)), Session: getenv(SessionEnv),
+		SocketPath: getenv(SocketPathEnv), WorkspaceID: getenv(WorkspaceIDEnv),
+		WorkspaceLabel: getenv(WorkspaceLabelEnv), WorktreePath: getenv(WorktreePathEnv),
+		PaneID: getenv(PaneIDEnv), TerminalID: getenv(TerminalIDEnv),
+		Agent: agentName, AgentID: getenv(AgentIDEnv), State: state, Sequence: sequence,
+	}
 }
 
 func providerState(raw string) (backend.AgentState, bool) {
@@ -157,7 +170,7 @@ func validateSignal(signal Signal, emitterPath string) error {
 func validateRuntimeIdentity(signal Signal) error {
 	values := []string{
 		signal.Session, signal.SocketPath, signal.WorkspaceID, signal.PaneID,
-		signal.TerminalID, signal.Agent, signal.AgentID,
+		signal.WorkspaceLabel, signal.TerminalID, signal.Agent, signal.AgentID,
 	}
 	for _, value := range values {
 		if value == "" || strings.ContainsRune(value, '\x00') {
@@ -166,6 +179,9 @@ func validateRuntimeIdentity(signal Signal) error {
 	}
 	if !cleanAbsolute(signal.SocketPath) {
 		return fmt.Errorf("emitter socket path is not canonical and absolute")
+	}
+	if !cleanAbsolute(signal.WorktreePath) {
+		return fmt.Errorf("emitter worktree path is not canonical and absolute")
 	}
 	return nil
 }

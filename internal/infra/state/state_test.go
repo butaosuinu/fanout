@@ -87,6 +87,22 @@ func TestFannedNumbersForOtherParents(t *testing.T) {
 	}
 }
 
+func TestEmitterRowIndexUsesPathAndWorkspaceLabel(t *testing.T) {
+	store := Store{Panes: []Pane{
+		{Parent: "425", IssueNum: -1, EmitterRowKey: "coordinator:@manual:/repo:-1", WorktreePath: "/repo/one", WorkspaceLabel: "owned-one"},
+		{Parent: "426", IssueNum: -1, EmitterRowKey: "coordinator:@manual:/repo:-1", WorktreePath: "/repo/two", WorkspaceLabel: "owned-two"},
+	}}
+
+	index, err := store.EmitterRowIndex("coordinator:@manual:/repo:-1", "/repo/two", "owned-two")
+	if err != nil || index != 1 {
+		t.Fatalf("EmitterRowIndex() = (%d, %v), want row 1", index, err)
+	}
+	store.Panes = append(store.Panes, store.Panes[1])
+	if _, err := store.EmitterRowIndex("coordinator:@manual:/repo:-1", "/repo/two", "owned-two"); err == nil {
+		t.Fatal("EmitterRowIndex() accepted ambiguous stable identity")
+	}
+}
+
 func TestLockedStoreRecordPaneWritesAtomicallyShapedJSON(t *testing.T) {
 	root := t.TempDir()
 	locked, err := LockProject(root)
