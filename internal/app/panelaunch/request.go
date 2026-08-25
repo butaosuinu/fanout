@@ -1,6 +1,7 @@
 package panelaunch
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/briefing"
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/core/agent"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/naming"
 	"github.com/butaosuinu/fanout/internal/core/planspec"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
@@ -429,6 +431,86 @@ func NextManagedSyntheticPaneNumber(projectRoot string, store state.Store, paren
 	return number
 }
 
+// ReclaimManagedSyntheticPaneNumber releases the first burned @manual number
+// that the current allocation scan can prove absent. Snapshot or persistence
+// failures leave every affected intent in place, so the unchanged allocator
+// skips those numbers as before.
+func ReclaimManagedSyntheticPaneNumber(
+	ctx context.Context,
+	projectRoot string,
+	locked *state.LockedStore,
+	observe func(context.Context) ([]backend.WorkspaceObservation, error),
+) {
+	if ctx == nil || observe == nil {
+		return
+	}
+	journal, ownerRoot, candidates := managedSyntheticNumberRecovery(projectRoot, locked)
+	if len(candidates) == 0 {
+		return
+	}
+	workspaces, err := observe(ctx)
+	if err != nil {
+		return
+	}
+	releaseReclaimableManualCoordinator(journal, ownerRoot, candidates, workspaces)
+}
+
+func managedSyntheticNumberRecovery(
+	projectRoot string,
+	locked *state.LockedStore,
+) (*state.LockedLaunchJournal, string, []burnedManualCoordinator) {
+	if locked == nil {
+		return nil, "", nil
+	}
+	journal, err := locked.LaunchJournal(projectRoot)
+	if err != nil {
+		return nil, "", nil
+	}
+	ownerRoot, err := canonicalManualCoordinatorOwner(projectRoot)
+	if err != nil {
+		return nil, "", nil
+	}
+	candidates := burnedManualCoordinatorRun(
+		journal.LaunchJournal, ownerRoot, NextSyntheticPaneNumber(locked.Store, ManualParentRef),
+	)
+	return journal, ownerRoot, candidates
+}
+
+func releaseReclaimableManualCoordinator(
+	journal *state.LockedLaunchJournal,
+	ownerRoot string,
+	candidates []burnedManualCoordinator,
+	workspaces []backend.WorkspaceObservation,
+) {
+	for _, candidate := range candidates {
+		if manualCoordinatorNumberReleasable(candidate.intent, ownerRoot, candidate.number) &&
+			!realizedManagedRuntimePresent(workspaces, candidate.intent) &&
+			releaseManagedIntent(journal, candidate.intent.ID, nil) == nil {
+			return
+		}
+	}
+}
+
+type burnedManualCoordinator struct {
+	intent state.LaunchIntent
+	number int
+}
+
+func burnedManualCoordinatorRun(
+	journal state.LaunchJournal,
+	ownerRoot string,
+	start int,
+) []burnedManualCoordinator {
+	var candidates []burnedManualCoordinator
+	for number := start; ; number-- {
+		intent, burned := manualCoordinatorIntent(journal, ownerRoot, number)
+		if !burned {
+			return candidates
+		}
+		candidates = append(candidates, burnedManualCoordinator{intent: intent, number: number})
+	}
+}
+
 // manualAllocationJournal loads the read-only journal view used to skip burned
 // manual numbers; an unreadable journal degrades to no skipping.
 func manualAllocationJournal(projectRoot string) (state.LaunchJournal, string) {
@@ -444,15 +526,34 @@ func manualAllocationJournal(projectRoot string) (state.LaunchJournal, string) {
 }
 
 func manualCoordinatorNumberBurned(journal state.LaunchJournal, ownerRoot string, number int) bool {
+	_, burned := manualCoordinatorIntent(journal, ownerRoot, number)
+	return burned
+}
+
+func manualCoordinatorIntent(
+	journal state.LaunchJournal,
+	ownerRoot string,
+	number int,
+) (state.LaunchIntent, bool) {
 	if ownerRoot == "" {
-		return false
+		return state.LaunchIntent{}, false
 	}
 	intentID, err := state.CoordinatorIntentID(ManualParentRef, ownerRoot, number)
 	if err != nil {
-		return false
+		return state.LaunchIntent{}, false
 	}
 	intent, found := journal.FindIntent(intentID)
-	return found && intent.Status == state.IntentManualCleanupRequired
+	return intent, found && intent.Status == state.IntentManualCleanupRequired
+}
+
+func manualCoordinatorNumberReleasable(
+	intent state.LaunchIntent,
+	ownerRoot string,
+	number int,
+) bool {
+	return manualCleanupCoordinatorReleasable(intent) &&
+		intent.Parent == ManualParentRef && intent.OwnerProjectRoot == ownerRoot &&
+		intent.IssueNum == number
 }
 
 // canonicalManualCoordinatorOwner resolves the owner-root form used inside

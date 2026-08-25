@@ -82,6 +82,81 @@ func TestRejectActiveManagedIntentsRequiresEmptyJournal(t *testing.T) {
 	}
 }
 
+func TestShutdownManagedServerReleasesAbsentManualCleanupCoordinator(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	intent := managedLifecycleTestCoordinatorIntent(t, repo)
+	intent.Status = state.IntentManualCleanupRequired
+	intent.Failure = "saved coordinator identity needs manual cleanup"
+	saveManagedLifecycleTestIntent(t, repo, intent)
+
+	harness := &managedServerTestHarness{}
+	if err := ShutdownManagedServer(context.Background(), repo, harness.io()); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := state.LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Intents) != 0 || harness.shutdownCalls != 1 {
+		t.Fatalf("shutdown result = intents:%+v calls:%d, want released and called once", journal.Intents, harness.shutdownCalls)
+	}
+}
+
+func TestShutdownManagedServerRetainsUnprovenManualCleanupCoordinator(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	intent := managedLifecycleTestCoordinatorIntent(t, repo)
+	intent.Status = state.IntentManualCleanupRequired
+	intent.Failure = "saved coordinator identity needs manual cleanup"
+	saveManagedLifecycleTestIntent(t, repo, intent)
+
+	workspace := observationResource(intent.Resource)
+	workspace.Label = "foreign-label"
+	harness := &managedServerTestHarness{workspaces: []backend.WorkspaceObservation{workspace}}
+	err := ShutdownManagedServer(context.Background(), repo, harness.io())
+	if err == nil || !strings.Contains(err.Error(), "1 active Herdr intent rows remain") {
+		t.Fatalf("ShutdownManagedServer() error = %v, want active-intent rejection", err)
+	}
+	assertManagedLifecycleIntentStatus(t, repo, intent.ID, state.IntentManualCleanupRequired)
+	if harness.shutdownCalls != 0 {
+		t.Fatalf("ShutdownManagedServer() shutdown calls = %d, want 0", harness.shutdownCalls)
+	}
+}
+
+func TestShutdownManagedServerRetainsManualCleanupCoordinatorOnSnapshotFailure(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	intent := managedLifecycleTestCoordinatorIntent(t, repo)
+	intent.Status = state.IntentManualCleanupRequired
+	intent.Failure = "saved coordinator identity needs manual cleanup"
+	saveManagedLifecycleTestIntent(t, repo, intent)
+
+	harness := &managedServerTestHarness{observeErr: errors.New("snapshot unavailable")}
+	err := ShutdownManagedServer(context.Background(), repo, harness.io())
+	if err == nil || !strings.Contains(err.Error(), "1 active Herdr intent rows remain") {
+		t.Fatalf("ShutdownManagedServer() error = %v, want active-intent rejection", err)
+	}
+	assertManagedLifecycleIntentStatus(t, repo, intent.ID, state.IntentManualCleanupRequired)
+	if harness.shutdownCalls != 0 {
+		t.Fatalf("ShutdownManagedServer() shutdown calls = %d, want 0", harness.shutdownCalls)
+	}
+}
+
+func assertManagedLifecycleIntentStatus(
+	t *testing.T,
+	repo string,
+	intentID string,
+	want state.LaunchIntentStatus,
+) {
+	t.Helper()
+	journal, err := state.LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found || intent.Status != want {
+		t.Fatalf("saved intent = (%+v,%t), want status %q", intent, found, want)
+	}
+}
+
 func TestReleaseRejectedManagedRestartDropsOnlyFreshLiveIntent(t *testing.T) {
 	repo := newManagedRealizeRepo(t)
 	locked, err := state.LockProjectForLaunch(repo)

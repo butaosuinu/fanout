@@ -1,6 +1,7 @@
 package panelaunch
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -62,14 +63,30 @@ func (l *Launcher) Shell(req ShellRequest) error {
 
 	title := shellPaneTitle(targetPath, req.Root)
 	if l.Backend.MutationModel() == backend.MutationJournaled {
-		number := NextManagedSyntheticPaneNumber(projectRoot, recorder.Store, ManualParentRef)
-		if err := admitManagedCoordinatorLaunch(recorder, projectRoot, number); err != nil {
-			return err
-		}
-		return l.shellManaged(recorder, targetPath, number, shellPaneSlug(targetPath, req.Root, number), title)
+		return l.shellManagedAllocated(recorder, targetPath, req.Root, title)
 	}
 	number := NextSyntheticPaneNumber(recorder.Store, ManualParentRef)
 	return l.shellDirect(recorder, targetPath, number, shellPaneSlug(targetPath, req.Root, number), title)
+}
+
+func (l *Launcher) shellManagedAllocated(
+	recorder *state.LockedStore,
+	targetPath string,
+	root bool,
+	title string,
+) error {
+	if l.Managed == nil {
+		return fmt.Errorf("herdr terminal launch requires an owned session")
+	}
+	projectRoot := l.Info.ProjectRoot
+	ReclaimManagedSyntheticPaneNumber(
+		context.Background(), projectRoot, recorder, l.Managed.ObserveWorkspaces,
+	)
+	number := NextManagedSyntheticPaneNumber(projectRoot, recorder.Store, ManualParentRef)
+	if err := admitManagedCoordinatorLaunch(recorder, projectRoot, number); err != nil {
+		return err
+	}
+	return l.shellManaged(recorder, targetPath, number, shellPaneSlug(targetPath, root, number), title)
 }
 
 func resolveShellTarget(rawPath string) (string, error) {

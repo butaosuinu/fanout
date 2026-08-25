@@ -58,7 +58,7 @@ func TestPruneAbsentRealizedManagedWorktreeRequiresResolvedCheckoutAndBranch(t *
 			}
 			_, found := journal.FindIntent(result.Intent.ID)
 			if found != test.wantFound {
-				t.Fatalf("absentRealizedManagedIntents(removeCheckout=%t) found = %t, want %t", test.removeCheckout, found, test.wantFound)
+				t.Fatalf("absentReleasableManagedIntents(removeCheckout=%t) found = %t, want %t", test.removeCheckout, found, test.wantFound)
 			}
 			_, branchFound, branchErr := worktree.ObserveBranch(
 				context.Background(), repo, result.Intent.FullBranchRef,
@@ -91,7 +91,7 @@ func TestPruneAbsentRealizedManagedIntentsRetainsAllOnSnapshotFailure(t *testing
 		t.Fatal(err)
 	}
 	if len(journal.Intents) != 2 {
-		t.Fatalf("absentRealizedManagedIntents(snapshot failure) intents = %d, want 2", len(journal.Intents))
+		t.Fatalf("absentReleasableManagedIntents(snapshot failure) intents = %d, want 2", len(journal.Intents))
 	}
 }
 
@@ -109,7 +109,7 @@ func pruneManagedTestIntents(
 	if err == nil {
 		var absent []state.LaunchIntent
 		var allAbsent bool
-		absent, allAbsent = absentRealizedManagedIntents(context.Background(), journal.LaunchJournal, observe)
+		absent, allAbsent = absentReleasableManagedIntents(context.Background(), journal.LaunchJournal, observe)
 		if allAbsent {
 			err = releaseAbsentManagedIntents(context.Background(), journal, absent)
 		}
