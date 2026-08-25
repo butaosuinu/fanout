@@ -1140,6 +1140,79 @@ func TestHerdrCloseRecreatesManualCoordinatorForPlannedReopenRetry(t *testing.T)
 	}
 }
 
+func TestHerdrCloseRetriesAfterRecreatedManualCoordinatorObservationFailure(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot:      fixture.projectRoot,
+		observeErr:       errors.New("coordinator observation failed"),
+		observeErrAtCall: 4,
+		session:          fixture.pane.SessionID,
+		socketPath:       fixture.pane.SocketPath,
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("observation failure Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.createCalls != 1 || runtime.openCalls != 0 || runtime.removeCalls != 0 {
+		t.Fatalf(
+			"observation failure calls = create %d/open %d/remove %d, want 1/0/0",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+		)
+	}
+	assertSingleManualCoordinatorRow(t, fixture, "w-coordinator-recreated")
+	runtime.observeErrAtCall = 0
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.createCalls != 1 || runtime.openCalls != 1 || runtime.removeCalls != 1 {
+		t.Fatalf(
+			"observation retry calls = create %d/open %d/remove %d, want 1/1/1",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+		)
+	}
+	assertSingleManualCoordinatorRow(t, fixture, "w-coordinator-recreated")
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseKeepsRejectingUnconfirmedManualCoordinatorRow(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	stale := manualLifecycleCoordinatorPane(fixture.pane, coordinator, fixture.pane.IssueNum-1)
+	stale.WorkspaceID = "foreign"
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, stale)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		session:     fixture.pane.SessionID,
+		socketPath:  fixture.pane.SocketPath,
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+			t.Fatalf("Close() attempt %d = %d, want %d", attempt, got, exitcode.Env)
+		}
+		if runtime.createCalls != 1 || runtime.openCalls != 0 || runtime.removeCalls != 0 {
+			t.Fatalf(
+				"attempt %d calls = create %d/open %d/remove %d, want 1/0/0",
+				attempt, runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+			)
+		}
+		assertSingleManualCoordinatorRow(t, fixture, "foreign")
+		assertHerdrLifecyclePreserved(t, fixture)
+	}
+}
+
 func TestHerdrCloseRetriesReleasedManualCoordinatorCreate(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2549,6 +2622,24 @@ func assertRecreatedManualCoordinatorRecorded(
 		}
 	}
 	t.Fatalf("recreated coordinator row not found in %+v", store.Panes)
+}
+
+func assertSingleManualCoordinatorRow(t *testing.T, fixture herdrLifecycleFixture, workspaceID string) {
+	t.Helper()
+	store, err := state.Load(state.Path(fixture.projectRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []state.Pane
+	for _, pane := range store.Panes {
+		if pane.Parent == panelaunch.ManualParentRef &&
+			pane.RuntimeParent == panelaunch.ManualParentRef && pane.Kind == state.PaneKindShell {
+			rows = append(rows, pane)
+		}
+	}
+	if len(rows) != 1 || rows[0].WorkspaceID != workspaceID {
+		t.Fatalf("manual coordinator rows = %+v, want one row for %s", rows, workspaceID)
+	}
 }
 
 func assertManualCoordinatorIntentStatus(

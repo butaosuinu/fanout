@@ -390,7 +390,7 @@ func attachReplannedManualCoordinator(
 	pane state.Pane,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
-	previous, intent, err := preserveReplannedManualCoordinator(journal, projectRoot, pane, intent)
+	predecessors, intent, err := preserveReplannedManualCoordinator(journal, projectRoot, pane, intent)
 	if err != nil {
 		return intent, err
 	}
@@ -398,7 +398,7 @@ func attachReplannedManualCoordinator(
 	if err != nil {
 		return intent, err
 	}
-	return adoptReplannedManualCoordinator(ctx, locked, journal, runtime, previous, realized, intent)
+	return adoptReplannedManualCoordinator(ctx, locked, journal, runtime, predecessors, realized, intent)
 }
 
 func adoptReplannedManualCoordinator(
@@ -406,15 +406,15 @@ func adoptReplannedManualCoordinator(
 	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
-	previous state.RuntimeResource,
+	predecessors []state.RuntimeResource,
 	realized state.LaunchIntent,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
-	live, err := observeCoordinator(ctx, runtime, realized.Resource)
-	if err != nil {
+	if err := panelaunch.ReconcileManagedCoordinatorReplanRow(locked, predecessors, realized); err != nil {
 		return intent, err
 	}
-	if err := panelaunch.ReconcileManagedCoordinatorReplanRow(locked, previous, realized); err != nil {
+	live, err := observeCoordinator(ctx, runtime, realized.Resource)
+	if err != nil {
 		return intent, err
 	}
 	journal.UpsertIntent(realized)
@@ -427,22 +427,35 @@ func preserveReplannedManualCoordinator(
 	projectRoot string,
 	pane state.Pane,
 	intent state.LaunchIntent,
-) (state.RuntimeResource, state.LaunchIntent, error) {
+) ([]state.RuntimeResource, state.LaunchIntent, error) {
 	coordinator, found, err := findRealizedReplannedManualCoordinator(journal, projectRoot, pane)
 	if err != nil {
-		return state.RuntimeResource{}, intent, err
+		return nil, intent, err
 	}
-	if found {
-		if intent.Coordinator == coordinator.Resource {
-			return intent.Coordinator, intent, nil
-		}
+	predecessors := replannedManualCoordinatorPredecessors(intent.Coordinator, coordinator, found)
+	if len(predecessors) == 0 {
+		return nil, intent, fmt.Errorf("saved Herdr coordinator intent is not recorded")
+	}
+	if intent.Coordinator == (state.RuntimeResource{}) {
 		intent.Coordinator = coordinator.Resource
-		return intent.Coordinator, intent, saveWorkspaceCleanupIntent(journal, intent)
+		return predecessors, intent, saveWorkspaceCleanupIntent(journal, intent)
 	}
-	if intent.Coordinator != (state.RuntimeResource{}) {
-		return intent.Coordinator, intent, nil
+	return predecessors, intent, nil
+}
+
+func replannedManualCoordinatorPredecessors(
+	cleanup state.RuntimeResource,
+	coordinator state.LaunchIntent,
+	found bool,
+) []state.RuntimeResource {
+	var predecessors []state.RuntimeResource
+	if cleanup != (state.RuntimeResource{}) {
+		predecessors = append(predecessors, cleanup)
 	}
-	return state.RuntimeResource{}, intent, fmt.Errorf("saved Herdr coordinator intent is not recorded")
+	if found && coordinator.Resource != cleanup {
+		predecessors = append(predecessors, coordinator.Resource)
+	}
+	return predecessors
 }
 
 func findRealizedReplannedManualCoordinator(
