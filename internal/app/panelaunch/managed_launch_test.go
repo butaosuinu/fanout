@@ -1457,16 +1457,23 @@ func TestReclaimManagedSyntheticPaneNumberReusesProvenAbsentNumber(t *testing.T)
 	}
 	intent := burnedManualCoordinatorIntent(t, ownerRoot, repo, -2, state.IntentManualCleanupRequired)
 	intent.Resource = managedManualTestResource(intent.WorkspaceLabel, repo, 2)
+	runtimeDir := t.TempDir()
+	intent.Launch = validTestManagedLaunch()
+	intent.Launch.EnvFilePath = filepath.Join(runtimeDir, "workload-env", "env-"+intent.Launch.Nonce+".json")
+	if err = os.MkdirAll(filepath.Dir(intent.Launch.EnvFilePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(intent.Launch.EnvFilePath, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	journal.UpsertIntent(intent)
 	if err = journal.Save(); err != nil {
 		t.Fatal(err)
 	}
 	locked.Panes = []state.Pane{{Parent: ManualParentRef, IssueNum: -1}}
 
-	ReclaimManagedSyntheticPaneNumber(
-		context.Background(), repo, locked,
-		func(context.Context) ([]backend.WorkspaceObservation, error) { return nil, nil },
-	)
+	runtime := &fakeManagedLaunchRuntime{launchRoute: backend.OwnedLaunchRoute{RuntimeDir: runtimeDir}}
+	ReclaimManagedSyntheticPaneNumber(context.Background(), repo, locked, ManualParentRef, runtime)
 
 	if got := NextManagedSyntheticPaneNumber(repo, locked.Store, ManualParentRef); got != -2 {
 		t.Fatalf("NextManagedSyntheticPaneNumber(reclaimed -2) = %d, want -2", got)
@@ -1477,6 +1484,9 @@ func TestReclaimManagedSyntheticPaneNumberReusesProvenAbsentNumber(t *testing.T)
 	}
 	if _, found := persisted.FindIntent(intent.ID); found {
 		t.Fatalf("reclaimed intent %s remains", intent.ID)
+	}
+	if _, err := os.Stat(intent.Launch.EnvFilePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reclaimed environment stat error = %v, want not exist", err)
 	}
 }
 
@@ -1503,12 +1513,9 @@ func TestReclaimManagedSyntheticPaneNumberRetainsBurnOnSnapshotFailure(t *testin
 	}
 	locked.Panes = []state.Pane{{Parent: ManualParentRef, IssueNum: -1}}
 
-	ReclaimManagedSyntheticPaneNumber(
-		context.Background(), repo, locked,
-		func(context.Context) ([]backend.WorkspaceObservation, error) {
-			return nil, errors.New("snapshot unavailable")
-		},
-	)
+	runtime := &fakeManagedLaunchRuntime{}
+	runtime.observeErr = errors.New("snapshot unavailable")
+	ReclaimManagedSyntheticPaneNumber(context.Background(), repo, locked, ManualParentRef, runtime)
 
 	if got := NextManagedSyntheticPaneNumber(repo, locked.Store, ManualParentRef); got != -3 {
 		t.Fatalf("NextManagedSyntheticPaneNumber(snapshot failure) = %d, want -3", got)
@@ -1519,6 +1526,88 @@ func TestReclaimManagedSyntheticPaneNumberRetainsBurnOnSnapshotFailure(t *testin
 	}
 	if _, found := persisted.FindIntent(intent.ID); !found {
 		t.Fatalf("snapshot failure released intent %s", intent.ID)
+	}
+}
+
+func TestReclaimManagedSyntheticPaneNumberRetainsBurnOnEnvironmentDiscardFailure(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	ownerRoot, err := canonicalManualCoordinatorOwner(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	journal, err := locked.LaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := burnedManualCoordinatorIntent(t, ownerRoot, repo, -2, state.IntentManualCleanupRequired)
+	intent.Resource = managedManualTestResource(intent.WorkspaceLabel, repo, 2)
+	intent.Launch = validTestManagedLaunch()
+	journal.UpsertIntent(intent)
+	if err = journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	locked.Panes = []state.Pane{{Parent: ManualParentRef, IssueNum: -1}}
+	runtime := &fakeManagedLaunchRuntime{launchRoute: backend.OwnedLaunchRoute{RuntimeDir: t.TempDir()}}
+
+	ReclaimManagedSyntheticPaneNumber(context.Background(), repo, locked, ManualParentRef, runtime)
+
+	if got := NextManagedSyntheticPaneNumber(repo, locked.Store, ManualParentRef); got != -3 {
+		t.Fatalf("NextManagedSyntheticPaneNumber(discard failure) = %d, want -3", got)
+	}
+	assertManagedLaunchIntentFound(t, repo, intent.ID)
+}
+
+func TestReclaimManagedSyntheticPaneNumberUsesAttachmentParentAllocation(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	ownerRoot, err := canonicalManualCoordinatorOwner(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	journal, err := locked.LaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := burnedManualCoordinatorIntent(t, ownerRoot, repo, -1, state.IntentManualCleanupRequired)
+	intent.Resource = managedManualTestResource(intent.WorkspaceLabel, repo, 1)
+	journal.UpsertIntent(intent)
+	if err = journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	locked.Panes = []state.Pane{{Parent: ManualParentRef, IssueNum: -1}}
+	runtime := &fakeManagedLaunchRuntime{}
+
+	ReclaimManagedSyntheticPaneNumber(context.Background(), repo, locked, "423", runtime)
+
+	if got := NextManagedSyntheticPaneNumber(repo, locked.Store, "423"); got != -1 {
+		t.Fatalf("NextManagedSyntheticPaneNumber(issue attachment) = %d, want -1", got)
+	}
+	journal, err = locked.LaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := journal.FindIntent(intent.ID); found {
+		t.Fatalf("reclaimed attachment intent %s remains", intent.ID)
+	}
+}
+
+func assertManagedLaunchIntentFound(t *testing.T, repo, intentID string) {
+	t.Helper()
+	journal, err := state.LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := journal.FindIntent(intentID); !found {
+		t.Fatalf("intent %s was released", intentID)
 	}
 }
 

@@ -80,7 +80,7 @@ func (l *Launcher) shellManagedAllocated(
 	}
 	projectRoot := l.Info.ProjectRoot
 	ReclaimManagedSyntheticPaneNumber(
-		context.Background(), projectRoot, recorder, l.Managed.ObserveWorkspaces,
+		context.Background(), projectRoot, recorder, ManualParentRef, l.Managed,
 	)
 	number := NextManagedSyntheticPaneNumber(projectRoot, recorder.Store, ManualParentRef)
 	if err := admitManagedCoordinatorLaunch(recorder, projectRoot, number); err != nil {

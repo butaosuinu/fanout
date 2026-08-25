@@ -97,7 +97,9 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 		if recorder != nil {
 			launchStore = recorder.Store
 		}
-		launchStore = reclaimManagedSyntheticPaneNumber(projectRoot, rt.Managed, recorder, launchStore)
+		launchStore = reclaimManagedSyntheticPaneNumber(
+			projectRoot, panelaunch.ManualParentRef, rt.Managed, recorder, launchStore,
+		)
 		paneReq := panelaunch.NewManualRequest(cfg, projectRoot, launchStore, hookConfig, manualPaneOptionsForTUI(prompt, agentName))
 		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Managed, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 		if result, ok := launcher.LaunchWithResult(paneReq); ok {
@@ -224,7 +226,9 @@ func launchPlanCoordinatorLockedWithConfig(projectRoot, session, commandName str
 			return panelaunch.Request{}, "", backend.PaneBinding{}, "", guardErr
 		}
 	}
-	store = reclaimManagedSyntheticPaneNumber(projectRoot, managed, recorder, store)
+	store = reclaimManagedSyntheticPaneNumber(
+		projectRoot, panelaunch.ManualParentRef, managed, recorder, store,
+	)
 
 	info := &fanoutruntime.Info{
 		Session:     "",
@@ -545,7 +549,9 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 	for _, agentName := range agentNames {
 		cfg := newSessionConfigForTUIAgent(projectRoot, agentName, launchLogger.Warn)
 		cfg.ParentRef = resolverParent
-		launchStore := reclaimManagedSyntheticPaneNumber(projectRoot, rt.Managed, recorder, recorder.Store)
+		launchStore := reclaimManagedSyntheticPaneNumber(
+			projectRoot, resolverParent, rt.Managed, recorder, recorder.Store,
+		)
 		paneReq := newAttachedPaneRequest(cfg, projectRoot, launchStore, hookConfig, prompt, targetPath, resolvedTarget)
 		launcher := &panelaunch.Launcher{Cfg: cfg, Log: launchLogger, Info: rt.Info, Backend: rt.Backend, Managed: rt.Managed, Recorder: recorder, Palette: log.Palette{}, CommandName: commandName}
 		if launcher.Attach(paneReq, targetPath) {
@@ -562,6 +568,7 @@ func launchAttachedAgent(projectRoot, target, commandName string, hookConfig hoo
 
 func reclaimManagedSyntheticPaneNumber(
 	projectRoot string,
+	parentRef string,
 	managed panelaunch.ManagedSessionRuntime,
 	recorder panelaunch.StateRecorder,
 	store state.Store,
@@ -571,7 +578,7 @@ func reclaimManagedSyntheticPaneNumber(
 		return store
 	}
 	panelaunch.ReclaimManagedSyntheticPaneNumber(
-		context.Background(), projectRoot, locked, managed.ObserveWorkspaces,
+		context.Background(), projectRoot, locked, parentRef, managed,
 	)
 	return locked.Store
 }

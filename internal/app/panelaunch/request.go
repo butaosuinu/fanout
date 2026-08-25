@@ -439,25 +439,27 @@ func ReclaimManagedSyntheticPaneNumber(
 	ctx context.Context,
 	projectRoot string,
 	locked *state.LockedStore,
-	observe func(context.Context) ([]backend.WorkspaceObservation, error),
+	parentRef string,
+	runtime ManagedLaunchRuntime,
 ) {
-	if ctx == nil || observe == nil {
+	if ctx == nil || runtime == nil {
 		return
 	}
-	journal, ownerRoot, candidates := managedSyntheticNumberRecovery(projectRoot, locked)
+	journal, ownerRoot, candidates := managedSyntheticNumberRecovery(projectRoot, locked, parentRef)
 	if len(candidates) == 0 {
 		return
 	}
-	workspaces, err := observe(ctx)
+	workspaces, err := runtime.ObserveWorkspaces(ctx)
 	if err != nil {
 		return
 	}
-	releaseReclaimableManualCoordinator(journal, ownerRoot, candidates, workspaces)
+	releaseReclaimableManualCoordinator(journal, ownerRoot, candidates, workspaces, runtime)
 }
 
 func managedSyntheticNumberRecovery(
 	projectRoot string,
 	locked *state.LockedStore,
+	parentRef string,
 ) (*state.LockedLaunchJournal, string, []burnedManualCoordinator) {
 	if locked == nil {
 		return nil, "", nil
@@ -471,7 +473,7 @@ func managedSyntheticNumberRecovery(
 		return nil, "", nil
 	}
 	candidates := burnedManualCoordinatorRun(
-		journal.LaunchJournal, ownerRoot, NextSyntheticPaneNumber(locked.Store, ManualParentRef),
+		journal.LaunchJournal, ownerRoot, NextSyntheticPaneNumber(locked.Store, parentRef),
 	)
 	return journal, ownerRoot, candidates
 }
@@ -481,14 +483,30 @@ func releaseReclaimableManualCoordinator(
 	ownerRoot string,
 	candidates []burnedManualCoordinator,
 	workspaces []backend.WorkspaceObservation,
+	runtime ManagedLaunchRuntime,
 ) {
 	for _, candidate := range candidates {
 		if manualCoordinatorNumberReleasable(candidate.intent, ownerRoot, candidate.number) &&
 			!realizedManagedRuntimePresent(workspaces, candidate.intent) &&
+			discardReclaimedManualEnvironment(runtime, candidate.intent) == nil &&
 			releaseManagedIntent(journal, candidate.intent.ID, nil) == nil {
 			return
 		}
 	}
+}
+
+func discardReclaimedManualEnvironment(
+	runtime ManagedLaunchRuntime,
+	intent state.LaunchIntent,
+) error {
+	if intent.Launch == nil {
+		return nil
+	}
+	route, err := runtime.LaunchRoute()
+	if err != nil {
+		return err
+	}
+	return runtime.DiscardWorkloadEnvironment(route.RuntimeDir, intent.Launch)
 }
 
 type burnedManualCoordinator struct {
