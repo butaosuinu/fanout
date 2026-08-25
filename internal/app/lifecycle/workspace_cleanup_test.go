@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
@@ -32,7 +33,10 @@ type fakeHerdrLifecycleRuntime struct {
 	observeAfterMutationErr  error
 	keepWorkspaceAfterRemove bool
 	mutationDispatched       bool
+	session                  string
+	socketPath               string
 
+	createCalls  int
 	verifyCalls  int
 	setupCalls   int
 	openCalls    int
@@ -52,6 +56,44 @@ func (f *fakeHerdrLifecycleRuntime) VerifyOwned(context.Context) error {
 func (f *fakeHerdrLifecycleRuntime) VerifyWorktreeSetupPolicy(context.Context) error {
 	f.setupCalls++
 	return f.setupErr
+}
+
+func (f *fakeHerdrLifecycleRuntime) WorktreeRoute(ctx context.Context) (backend.OwnedWorktreeRoute, error) {
+	identity, err := worktree.ResolveRepoIdentity(ctx, f.projectRoot)
+	if err != nil {
+		return backend.OwnedWorktreeRoute{}, err
+	}
+	return backend.OwnedWorktreeRoute{
+		GitCommonDir: identity.RepoKey,
+		Session:      f.session,
+		SocketPath:   f.socketPath,
+	}, nil
+}
+
+func (f *fakeHerdrLifecycleRuntime) CreateWorkspace(
+	ctx context.Context,
+	req backend.WorkspaceCreateRequest,
+) (backend.WorktreeMutationResult, error) {
+	f.createCalls++
+	identity, err := worktree.ResolveRepoIdentity(ctx, f.projectRoot)
+	if err != nil {
+		return backend.WorktreeMutationResult{}, err
+	}
+	workspace := herdrLifecycleWorkspace(
+		"w-coordinator-recreated", req.Label, req.CWD, req.SourceRepoKey, identity.RepoRoot,
+	)
+	workspace.Path = ""
+	workspace.RepoKey = ""
+	workspace.RepoRoot = ""
+	f.workspaces = append(f.workspaces, workspace)
+	return backend.WorktreeMutationResult{WorkspaceObservation: workspace}, nil
+}
+
+func (f *fakeHerdrLifecycleRuntime) CreateWorktree(
+	context.Context,
+	backend.WorktreeCreateRequest,
+) (backend.WorktreeMutationResult, error) {
+	return backend.WorktreeMutationResult{}, errors.New("unexpected worktree create")
 }
 
 func (f *fakeHerdrLifecycleRuntime) ObserveWorkspaces(context.Context) ([]backend.WorkspaceObservation, error) {
@@ -930,6 +972,85 @@ func TestHerdrCloseReplansLegacyDirtyManualIntent(t *testing.T) {
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
+func TestHerdrCloseReplansLegacyDirtyManualIntentAfterCoordinatorRecreate(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	dirtyPath := filepath.Join(fixture.worktreePath, "uncommitted.txt")
+	if err := os.WriteFile(dirtyPath, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		session:     fixture.pane.SessionID,
+		socketPath:  fixture.pane.SocketPath,
+	}
+	lg := &captureLogger{}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, lg); got != exitcode.Env {
+		t.Fatalf("dirty Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.createCalls != 1 || runtime.openCalls != 0 || runtime.removeCalls != 0 {
+		t.Fatalf(
+			"dirty replan calls = create %d/open %d/remove %d, want 1/0/0",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+		)
+	}
+	if len(lg.errors) == 0 || !strings.Contains(lg.errors[len(lg.errors)-1], "tracked or untracked changes") {
+		t.Fatalf("dirty replan errors = %v", lg.errors)
+	}
+
+	if err := os.Remove(dirtyPath); err != nil {
+		t.Fatal(err)
+	}
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("clean retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.createCalls != 1 || runtime.openCalls != 1 || runtime.removeCalls != 1 {
+		t.Fatalf(
+			"clean retry calls = create %d/open %d/remove %d, want 1/1/1",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+		)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseDoesNotRecreateAmbiguousManualCoordinator(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	coordinator.Label = "changed-coordinator-label"
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{coordinator},
+		session:     fixture.pane.SessionID,
+		socketPath:  fixture.pane.SocketPath,
+	}
+	lg := &captureLogger{}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, lg); got != exitcode.Env {
+		t.Fatalf(
+			"Close() = %d, want %d; calls=create %d/open %d/remove %d; errors=%v",
+			got, exitcode.Env, runtime.createCalls, runtime.openCalls, runtime.removeCalls, lg.errors,
+		)
+	}
+	if runtime.createCalls != 0 || runtime.openCalls != 0 || runtime.removeCalls != 0 {
+		t.Fatalf(
+			"ambiguous coordinator calls = create %d/open %d/remove %d, want 0/0/0; errors=%v",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls, lg.errors,
+		)
+	}
+	assertHerdrLifecyclePreserved(t, fixture)
+}
+
 func TestHerdrCloseReplansLegacyDirtyManualIntentAfterManualWorktreeRemoval(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
@@ -1660,6 +1781,30 @@ func newHerdrLifecycleFixture(t *testing.T) herdrLifecycleFixture {
 	}
 }
 
+func newManualHerdrLifecycleFixture(t *testing.T) herdrLifecycleFixture {
+	t.Helper()
+	fixture := newHerdrLifecycleFixture(t)
+	projectRoot, err := filepath.EvalSymlinks(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktreePath, err := filepath.EvalSymlinks(fixture.worktreePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.projectRoot = projectRoot
+	fixture.worktreePath = worktreePath
+	fixture.workspace.Path = worktreePath
+	fixture.workspace.CWD = worktreePath
+	fixture.workspace.Panes[0].CWD = worktreePath
+	fixture.pane.Parent = panelaunch.ManualParentRef
+	fixture.pane.RuntimeParent = panelaunch.ManualParentRef
+	fixture.pane.IssueNum = -1
+	fixture.pane.WorktreePath = worktreePath
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane)
+	return fixture
+}
+
 func herdrLifecycleWorkspace(id, label, path, repoKey, repoRoot string) backend.WorkspaceObservation {
 	ref := backend.PaneRef{Backend: backend.Herdr, Workspace: id, Pane: id + ":p1"}
 	terminalID := "terminal-" + id
@@ -1768,13 +1913,18 @@ func recordLifecycleCoordinatorIntent(
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := state.CoordinatorIntentID(target.RuntimeParent, runtimeOwnerRoot, 0)
+	issueNum := 0
+	if target.RuntimeParent == panelaunch.ManualParentRef || target.RuntimeParent == watcherStandaloneParent {
+		issueNum = target.IssueNum
+	}
+	id, err := state.CoordinatorIntentID(target.RuntimeParent, runtimeOwnerRoot, issueNum)
 	if err != nil {
 		t.Fatal(err)
 	}
 	journal.UpsertIntent(state.LaunchIntent{
 		ID: id, Kind: state.IntentCoordinator, Status: state.IntentRealized,
 		Parent: target.Parent, RuntimeParent: target.RuntimeParent, OwnerProjectRoot: ownerRoot,
+		IssueNum:     issueNum,
 		WorktreePath: workspace.CWD, WorkspaceLabel: workspace.Label,
 		Resource: state.RuntimeResource{
 			WorkspaceID: workspace.WorkspaceID, Label: workspace.Label,

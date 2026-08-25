@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
@@ -21,13 +22,10 @@ var ErrManualCleanupRequired = errors.New("herdr lifecycle requires manual clean
 // WorkspaceRuntime is the mutation surface lifecycle needs from one existing owned
 // session. The composition root supplies a route-bound implementation.
 type WorkspaceRuntime interface {
+	panelaunch.ManagedWorktreeRuntime
 	VerifyOwned(context.Context) error
-	VerifyWorktreeSetupPolicy(context.Context) error
-	ObserveWorkspaces(context.Context) ([]backend.WorkspaceObservation, error)
-	OpenWorktree(context.Context, backend.WorktreeOpenRequest) (backend.WorktreeMutationResult, error)
 	RemoveWorktree(context.Context, string, string) error
 	CloseWorkspace(context.Context, string) error
-	DiscardWorkloadEnvironment(string, *state.LaunchCapsule) error
 }
 
 type WorkspaceRuntimeFactory func(context.Context, state.Pane) (WorkspaceRuntime, error)
@@ -361,6 +359,38 @@ func attachWorkspaceCleanupCoordinator(
 		return intent, err
 	}
 	live, err := observeCoordinator(ctx, runtime, coordinator.Resource)
+	if err != nil {
+		return intent, err
+	}
+	intent.Coordinator = coordinatorResource(live)
+	return intent, nil
+}
+
+func attachReplannedWorkspaceCleanupCoordinator(
+	ctx context.Context,
+	locked *state.LockedStore,
+	runtime WorkspaceRuntime,
+	projectRoot string,
+	pane state.Pane,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
+	if pane.RuntimeParent != panelaunch.ManualParentRef {
+		return attachWorkspaceCleanupCoordinator(ctx, locked, runtime, projectRoot, pane, intent)
+	}
+	coordinator, err := findCoordinatorIntent(locked, projectRoot, pane)
+	if err != nil {
+		return intent, err
+	}
+	result, err := panelaunch.RealizeManagedCoordinator(ctx, panelaunch.ManagedCoordinatorRequest{
+		Parent: coordinator.Parent, RuntimeParent: coordinator.RuntimeParent,
+		IssueNum: coordinator.IssueNum, ProjectRoot: projectRoot,
+		SourceRoot: coordinator.WorktreePath, CWD: coordinator.WorktreePath,
+		ManagedSession: coordinator.Session, SocketPath: coordinator.SocketPath,
+	}, runtime, locked, panelaunch.ManagedRealizeHooks{})
+	if err != nil && !errors.Is(err, panelaunch.ErrManagedLauncherReadinessDeferred) {
+		return intent, err
+	}
+	live, err := observeCoordinator(ctx, runtime, result.Intent.Resource)
 	if err != nil {
 		return intent, err
 	}
@@ -706,7 +736,9 @@ func replanObservedWorkspaceCleanup(
 		(!observation.checkout.PathAbsent || observation.checkout.Registered)
 	if checkoutOnly && intent.Coordinator == (state.RuntimeResource{}) {
 		var err error
-		intent, err = attachWorkspaceCleanupCoordinator(ctx, locked, runtime, opts.ProjectRoot, pane, intent)
+		intent, err = attachReplannedWorkspaceCleanupCoordinator(
+			ctx, locked, runtime, opts.ProjectRoot, pane, intent,
+		)
 		if err != nil {
 			return intent, err
 		}
