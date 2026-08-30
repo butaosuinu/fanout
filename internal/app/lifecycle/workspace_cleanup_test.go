@@ -29,6 +29,7 @@ type fakeHerdrLifecycleRuntime struct {
 	openErr                  error
 	removeErr                error
 	closeErr                 error
+	discardErr               error
 	observeErr               error
 	observeErrAtCall         int
 	observeAfterMutationErr  error
@@ -2102,6 +2103,88 @@ func TestHerdrCloseEverythingDoesNotRearmBranchDeleteAfterBranchReappears(t *tes
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
+func TestHerdrCloseEverythingNormalizesDisarmedLegacyCleanupMode(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.BranchCreated = true
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	recordActiveHerdrCleanupIntent(t, fixture, state.CleanupRemove)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot:      fixture.projectRoot,
+		workspaces:       []backend.WorkspaceObservation{fixture.workspace},
+		observeErr:       errors.New("observation temporarily unavailable"),
+		observeErrAtCall: 3,
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+
+	if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("first CloseWithMode() = %d, want %d", got, exitcode.Env)
+	}
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found || intent.CleanupDeleteBranchRequested == nil || !*intent.CleanupDeleteBranchRequested ||
+		intent.CleanupDeleteBranch || intent.ExpectedHead == "" {
+		t.Fatalf("normalized cleanup intent = %#v (found=%t), want disarmed CloseEverything mode with head", intent, found)
+	}
+
+	runtime.observeErrAtCall = 0
+	if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry CloseWithMode() = %d, want %d", got, exitcode.OK)
+	}
+	if !localBranchExists(fixture.projectRoot, fixture.branch) {
+		t.Fatalf("disarmed legacy cleanup deleted branch %s", fixture.branch)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseEverythingDoesNotReplayBranchDeleteAfterFinalizeRetry(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.BranchCreated = true
+	runtimeDir := t.TempDir()
+	fixture.pane.SocketPath = filepath.Join(runtimeDir, "herdr.sock")
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "unmerged.txt"), []byte("unmerged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "unmerged.txt")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "unmerged child work")
+	tip := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
+	if err := os.Mkdir(filepath.Join(runtimeDir, "workload-env"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	recordResidualHerdrLaunchIntent(t, fixture, runtimeDir)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+		discardErr:  errors.New("discard temporarily unavailable"),
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+
+	if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("first CloseWithMode() = %d, want %d", got, exitcode.Env)
+	}
+	if localBranchExists(fixture.projectRoot, fixture.branch) {
+		t.Fatalf("fanout-created branch %s was not deleted", fixture.branch)
+	}
+	assertHerdrCleanupBranchDeleteConsumed(t, fixture)
+	runHerdrLifecycleGit(t, fixture.projectRoot, "update-ref", "refs/heads/"+fixture.branch, tip)
+
+	runtime.discardErr = nil
+	if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry CloseWithMode() = %d, want %d", got, exitcode.OK)
+	}
+	if got := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", fixture.branch)); got != tip {
+		t.Fatalf("recreated branch tip = %s, want %s", got, tip)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
 func TestHerdrCloseEverythingRejectsCloseWorktreeIntent(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	fixture.pane.BranchCreated = true
@@ -2666,7 +2749,8 @@ func recordResidualHerdrLaunchIntent(
 		IssueNum: fixture.pane.IssueNum, Slug: fixture.pane.Slug,
 		BranchName: fixture.pane.BranchName, FullBranchRef: "refs/heads/" + fixture.pane.BranchName,
 		BaseBranch: fixture.pane.BaseBranch, BaseSHA: head, ExpectedHead: head,
-		WorktreePath: fixture.pane.WorktreePath, BranchExisted: true,
+		WorktreePath:  fixture.pane.WorktreePath,
+		BranchExisted: !fixture.pane.BranchCreated, BranchCreated: fixture.pane.BranchCreated,
 		WorkspaceLabel: fixture.pane.WorkspaceLabel,
 		Coordinator:    state.RuntimeResource{WorkspaceID: "coordinator"},
 		Resource:       resourceFromPane(fixture.pane),
@@ -2955,11 +3039,30 @@ func assertHerdrCleanupIntentStatus(
 	}
 }
 
+func assertHerdrCleanupBranchDeleteConsumed(t *testing.T, fixture herdrLifecycleFixture) {
+	t.Helper()
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found || intent.Status != state.IntentRealized || intent.CleanupDeleteBranch {
+		t.Fatalf("consumed cleanup intent = %#v (found=%t), want realized without branch delete", intent, found)
+	}
+}
+
 // DiscardWorkloadEnvironment delegates to the real capsule removal so cleanup
 // tests keep asserting the identity checks the live path performs.
 func (f *fakeHerdrLifecycleRuntime) DiscardWorkloadEnvironment(
 	runtimeDir string,
 	launch *state.LaunchCapsule,
 ) error {
+	if f.discardErr != nil {
+		return f.discardErr
+	}
 	return herdrrun.DiscardWorkloadEnvironment(runtimeDir, launch)
 }

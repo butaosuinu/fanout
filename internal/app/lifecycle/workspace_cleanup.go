@@ -253,7 +253,25 @@ func loadWorkspaceCleanupIntent(
 	if err != nil {
 		return nil, state.LaunchIntent{}, "", err
 	}
+	intent, err = normalizeLegacyWorkspaceCleanupMode(journal, intent, mode, pane)
+	if err != nil {
+		return nil, state.LaunchIntent{}, "", err
+	}
 	return journal, intent, worktreeIntentID, nil
+}
+
+func normalizeLegacyWorkspaceCleanupMode(
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+	mode CloseMode,
+	pane state.Pane,
+) (state.LaunchIntent, error) {
+	if intent.CleanupDeleteBranchRequested != nil {
+		return intent, nil
+	}
+	deleteBranchRequested := mode == CloseEverything && pane.BranchCreated
+	intent.CleanupDeleteBranchRequested = &deleteBranchRequested
+	return intent, saveWorkspaceCleanupIntent(journal, intent)
 }
 
 func workspaceCleanupIntentIDs(projectRoot string, pane state.Pane) (string, string, error) {
@@ -902,7 +920,12 @@ func finalizeWorkspaceCleanup(
 	if intent.Status != state.IntentRealized {
 		return fmt.Errorf("herdr cleanup did not reach a confirmed postcondition")
 	}
-	if branchErr := finishBranchCleanup(ctx, projectRoot, intent); branchErr != nil {
+	branchIntent := intent
+	intent, err := consumeWorkspaceCleanupBranchDelete(journal, intent)
+	if err != nil {
+		return err
+	}
+	if branchErr := finishBranchCleanup(ctx, projectRoot, branchIntent); branchErr != nil {
 		lg.Warn("%s: %v; leaving branch in place", paneLabel(pane), branchErr)
 	}
 	if err := discardSavedLaunchEnvironment(journal, runtime, worktreeIntentID); err != nil {
@@ -923,6 +946,17 @@ func discardSavedLaunchEnvironment(
 		return nil
 	}
 	return runtime.DiscardWorkloadEnvironment(filepath.Dir(intent.SocketPath), intent.Launch)
+}
+
+func consumeWorkspaceCleanupBranchDelete(
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
+	if !intent.CleanupDeleteBranch {
+		return intent, nil
+	}
+	intent = ratchetWorkspaceCleanupBranchDelete(intent, false)
+	return intent, saveWorkspaceCleanupIntent(journal, intent)
 }
 
 func executeWorkspaceCleanupPhase(
