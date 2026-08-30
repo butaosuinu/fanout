@@ -2129,7 +2129,7 @@ func TestHerdrCloseEverythingNormalizesDisarmedLegacyCleanupMode(t *testing.T) {
 	}
 	intent, found := journal.FindIntent(intentID)
 	if !found || intent.CleanupDeleteBranchRequested == nil || !*intent.CleanupDeleteBranchRequested ||
-		intent.CleanupDeleteBranch || intent.ExpectedHead == "" {
+		intent.CleanupDeleteBranch || !intent.CleanupDeleteBranchVerified || intent.ExpectedHead == "" {
 		t.Fatalf("normalized cleanup intent = %#v (found=%t), want disarmed CloseEverything mode with head", intent, found)
 	}
 
@@ -2183,6 +2183,36 @@ func TestHerdrCloseEverythingDoesNotReplayBranchDeleteAfterFinalizeRetry(t *test
 		t.Fatalf("recreated branch tip = %s, want %s", got, tip)
 	}
 	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseEverythingDisarmsUnverifiedSavedBranchDelete(t *testing.T) {
+	statuses := []state.LaunchIntentStatus{state.IntentRealized, state.IntentIssued}
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			fixture.pane.BranchCreated = true
+			recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+			if err := os.WriteFile(filepath.Join(fixture.worktreePath, "unmerged.txt"), []byte("unmerged\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runHerdrLifecycleGit(t, fixture.worktreePath, "add", "unmerged.txt")
+			runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "unmerged child work")
+			tip := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
+			recordActiveHerdrCleanupIntent(t, fixture, state.CleanupWorkspaceClose)
+			armUnverifiedSavedHerdrCleanupBranchDelete(t, fixture, status, tip)
+			removeHerdrLifecycleResources(t, fixture)
+			runHerdrLifecycleGit(t, fixture.projectRoot, "update-ref", "refs/heads/"+fixture.branch, tip)
+			runtime := &fakeHerdrLifecycleRuntime{projectRoot: fixture.projectRoot}
+
+			if got := CloseWithMode(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.OK {
+				t.Fatalf("CloseWithMode() = %d, want %d", got, exitcode.OK)
+			}
+			if got := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", fixture.branch)); got != tip {
+				t.Fatalf("replacement branch tip = %s, want %s", got, tip)
+			}
+			assertHerdrLifecycleRemoved(t, fixture)
+		})
+	}
 }
 
 func TestHerdrCloseEverythingRejectsCloseWorktreeIntent(t *testing.T) {
@@ -2708,6 +2738,47 @@ func rewriteSavedHerdrCleanupAsLegacy(t *testing.T, fixture herdrLifecycleFixtur
 		t.Fatal("cleanup intent is absent")
 	}
 	intent.CleanupDeleteBranchRequested = nil
+	intent.CleanupDeleteBranchVerified = false
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func armUnverifiedSavedHerdrCleanupBranchDelete(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	status state.LaunchIntentStatus,
+	expectedHead string,
+) {
+	t.Helper()
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
+		}
+	}()
+	journal, err := locked.LaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found {
+		t.Fatal("cleanup intent is absent")
+	}
+	deleteBranchRequested := true
+	intent.Status = status
+	intent.ExpectedHead = expectedHead
+	intent.CleanupDeleteBranch = true
+	intent.CleanupDeleteBranchRequested = &deleteBranchRequested
+	intent.CleanupDeleteBranchVerified = false
 	journal.UpsertIntent(intent)
 	if err := journal.Save(); err != nil {
 		t.Fatal(err)

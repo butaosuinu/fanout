@@ -253,24 +253,28 @@ func loadWorkspaceCleanupIntent(
 	if err != nil {
 		return nil, state.LaunchIntent{}, "", err
 	}
-	intent, err = normalizeLegacyWorkspaceCleanupMode(journal, intent, mode, pane)
+	intent, err = normalizeWorkspaceCleanupBranchDelete(journal, intent, mode, pane)
 	if err != nil {
 		return nil, state.LaunchIntent{}, "", err
 	}
 	return journal, intent, worktreeIntentID, nil
 }
 
-func normalizeLegacyWorkspaceCleanupMode(
+func normalizeWorkspaceCleanupBranchDelete(
 	journal *state.LockedLaunchJournal,
 	intent state.LaunchIntent,
 	mode CloseMode,
 	pane state.Pane,
 ) (state.LaunchIntent, error) {
-	if intent.CleanupDeleteBranchRequested != nil {
+	if intent.CleanupDeleteBranchVerified {
 		return intent, nil
 	}
-	deleteBranchRequested := mode == CloseEverything && pane.BranchCreated
-	intent.CleanupDeleteBranchRequested = &deleteBranchRequested
+	if intent.CleanupDeleteBranchRequested == nil {
+		deleteBranchRequested := mode == CloseEverything && pane.BranchCreated
+		intent.CleanupDeleteBranchRequested = &deleteBranchRequested
+	}
+	intent.CleanupDeleteBranch = false
+	intent.CleanupDeleteBranchVerified = true
 	return intent, saveWorkspaceCleanupIntent(journal, intent)
 }
 
@@ -554,6 +558,7 @@ func newWorkspaceCleanupIntent(
 		ExpiresUnixMS: time.Now().Add(workspaceCleanupTimeout).UnixMilli(),
 		CleanupPhase:  phase, CleanupDeleteBranch: deleteBranchRequested && branchFound && workspaceCleanupCheckoutPresent(observation),
 		CleanupDeleteBranchRequested: &deleteBranchRequested,
+		CleanupDeleteBranchVerified:  true,
 	}
 	return intent, nil
 }
