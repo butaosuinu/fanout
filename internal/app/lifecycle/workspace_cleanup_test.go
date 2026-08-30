@@ -38,6 +38,7 @@ type fakeHerdrLifecycleRuntime struct {
 	mutationDispatched       bool
 	session                  string
 	socketPath               string
+	afterClose               func(string)
 
 	createCalls  int
 	verifyCalls  int
@@ -157,7 +158,35 @@ func (f *fakeHerdrLifecycleRuntime) CloseWorkspace(_ context.Context, workspaceI
 	}
 	f.mutationDispatched = true
 	f.removeWorkspace(workspaceID)
+	if f.afterClose != nil {
+		f.afterClose(workspaceID)
+	}
 	return f.closeErr
+}
+
+func (f *fakeHerdrLifecycleRuntime) CloseAttachedWorkspace(
+	ctx context.Context,
+	binding backend.PaneBinding,
+) error {
+	matches := 0
+	resource := state.RuntimeResource{
+		WorkspaceID: binding.Ref.Workspace, Label: binding.WorkspaceLabel,
+		PaneID: binding.Ref.Pane, TerminalID: binding.TerminalID,
+		CurrentPath: binding.WorktreePath, RepoKey: binding.RepoKey,
+	}
+	for _, workspace := range f.workspaces {
+		exact := workspace.WorkspaceID == resource.WorkspaceID && workspace.Label == resource.Label &&
+			filepath.Clean(workspace.Path) == filepath.Clean(resource.CurrentPath) &&
+			filepath.Clean(workspace.RepoKey) == filepath.Clean(resource.RepoKey) &&
+			verifyTerminalInvalidation(workspace, resource) == nil
+		if exact {
+			matches++
+		}
+	}
+	if matches != 1 {
+		return backend.MutationNotIssuedError{Cause: backend.ErrOwnedIdentityMismatch}
+	}
+	return f.CloseWorkspace(ctx, binding.Ref.Workspace)
 }
 
 func (f *fakeHerdrLifecycleRuntime) removeWorkspace(workspaceID string) {
@@ -235,6 +264,10 @@ func TestHerdrCloseClosesIdentityMatchedSharedAttachedWorkspacesFirst(t *testing
 	)
 	first := sharedAttachedLifecyclePane(fixture, "425", "", firstWorkspace)
 	first.DirectAgentLaunch = true
+	first.AgentID = "fanout-codex"
+	first.AgentSession = &backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-attached-1",
+	}
 	first.LaunchExecutable = "/opt/codex"
 	first.LaunchArgs = []string{"review"}
 	second := sharedAttachedLifecyclePane(fixture, "426", rowKey, secondWorkspace)
@@ -320,6 +353,42 @@ func TestHerdrCloseLeavesUnverifiedSharedAttachedWorkspaceManual(t *testing.T) {
 		t.Fatalf("retry mutation order = %q, want no replayed attached close", got)
 	}
 	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrSharedAttachedCloseRevalidatesEachWorkspaceBeforeMutation(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	firstWorkspace := herdrLifecycleWorkspace(
+		"w-attached-1", "attached-label-1", fixture.worktreePath,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	secondWorkspace := herdrLifecycleWorkspace(
+		"w-attached-2", "attached-label-2", fixture.worktreePath,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	first := sharedAttachedLifecyclePane(fixture, "425", "", firstWorkspace)
+	second := sharedAttachedLifecyclePane(fixture, "426", "", secondWorkspace)
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, first, second)
+	fixture.workspace = paneLessHerdrLifecycleWorkspace(fixture.workspace)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace, firstWorkspace, secondWorkspace},
+	}
+	runtime.afterClose = func(workspaceID string) {
+		if workspaceID == firstWorkspace.WorkspaceID {
+			runtime.workspaces[1].Label = "replacement-label"
+		}
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	if got := strings.Join(runtime.mutationLog, ","); got != "close:w-attached-1" {
+		t.Fatalf("mutation order = %q, want only the still-matched workspace close", got)
+	}
+	assertSharedAttachedRows(t, fixture.projectRoot, first, second, false, true)
+	if _, err := os.Stat(fixture.worktreePath); err != nil {
+		t.Fatalf("identity change removed child worktree: %v", err)
+	}
 }
 
 func TestHerdrSharedAttachedCloseRetriesDefinitelyUnissuedMutation(t *testing.T) {

@@ -68,6 +68,32 @@ func (s *OwnedSession) BindOwnedWorkspaceClose(
 	return bound, nil
 }
 
+// CloseAttachedWorkspace revalidates a worktree-backed attached agent under
+// the owned mutation lock, then closes only its exact workspace generation.
+func (s *OwnedSession) CloseAttachedWorkspace(
+	ctx context.Context,
+	binding corebackend.PaneBinding,
+) error {
+	if s == nil || s.backend == nil {
+		return mutationNotIssued(fmt.Errorf("herdr owned session is nil"))
+	}
+	if binding.Shell || strings.TrimSpace(binding.Agent) == "" ||
+		strings.TrimSpace(binding.RepoKey) == "" || strings.TrimSpace(binding.WorktreePath) == "" {
+		return mutationNotIssued(fmt.Errorf("%w: attached workspace binding is incomplete", corebackend.ErrOwnedIdentityMismatch))
+	}
+	return s.backend.closeOwnedAttachedWorkspace(ctx, ownedTargetFromBinding(binding))
+}
+
+func ownedTargetFromBinding(binding corebackend.PaneBinding) corebackend.OwnedPaneIdentity {
+	return corebackend.OwnedPaneIdentity{
+		Ref: binding.Ref, SessionID: binding.SessionID, SocketPath: binding.SocketPath,
+		WorkspaceLabel: binding.WorkspaceLabel, TerminalID: binding.TerminalID,
+		RepoKey: binding.RepoKey, WorktreePath: binding.WorktreePath,
+		CurrentPath: binding.WorktreePath, Agent: binding.Agent, AgentID: binding.AgentID,
+		AgentSession: cloneAgentSession(binding.AgentSession),
+	}
+}
+
 func (b *Backend) BindOwnedClose(req OwnedCloseRequest) (*Backend, error) {
 	cloned := cloneOwnedCloseRequest(req)
 	return b.bindOwnedTarget(cloned.Target, &cloned)
@@ -587,6 +613,53 @@ func (b *Backend) issueAndVerifyWorkspaceClose(
 	}
 	if view.workspacePresent(workspaceID) {
 		return fmt.Errorf("herdr workspace close returned success but workspace remains live")
+	}
+	return nil
+}
+
+func (b *Backend) closeOwnedAttachedWorkspace(
+	ctx context.Context,
+	target corebackend.OwnedPaneIdentity,
+) error {
+	ctx, cancel := context.WithTimeout(ctx, 8*commandTimeout)
+	defer cancel()
+	admission, lock, err := b.acquireOwnedMutation(ctx)
+	if err != nil {
+		return mutationNotIssued(err)
+	}
+	defer unlockPrivateFile(lock)
+	target, probed, err := b.resolveOwnedTarget(ctx, admission, target)
+	if err != nil {
+		return mutationNotIssued(err)
+	}
+	if issueErr := b.issueAttachedWorkspaceClose(ctx, probed, target.Ref.Workspace); issueErr != nil {
+		return issueErr
+	}
+	view, err := b.ownedSnapshotView(ctx, admission)
+	if err != nil {
+		return err
+	}
+	if view.workspacePresent(target.Ref.Workspace) {
+		return fmt.Errorf("herdr attached workspace close returned success but workspace remains live")
+	}
+	return nil
+}
+
+func (b *Backend) issueAttachedWorkspaceClose(
+	ctx context.Context,
+	probed probeResult,
+	workspaceID string,
+) error {
+	callCtx, callCancel := context.WithTimeout(ctx, commandTimeout)
+	defer callCancel()
+	out, err := b.runWorktreeMutation(
+		callCtx, probed.binary, probed.route, "workspace", "close", workspaceID,
+	)
+	if err != nil {
+		if rejected, ok := decodeMutationRejection(out, err, "cli:workspace:close"); ok {
+			return rejected
+		}
+		return err
 	}
 	return nil
 }

@@ -1495,6 +1495,35 @@ func TestBoundOwnedWorkspaceCloserRejectsWorktreeTarget(t *testing.T) {
 	}
 }
 
+func TestCloseAttachedWorkspaceRejectsChangedIdentityBeforeMutation(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	binding := corebackend.PaneBinding{
+		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
+		WorkspaceLabel: target.WorkspaceLabel, TerminalID: target.TerminalID,
+		Agent: target.Agent, AgentID: target.AgentID, AgentSession: target.AgentSession,
+		RepoKey: target.RepoKey, WorktreePath: target.WorktreePath,
+	}
+	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+		for i := range *snapshot.Workspaces {
+			if (*snapshot.Workspaces)[i].WorkspaceID == target.Ref.Workspace {
+				(*snapshot.Workspaces)[i].Label = "replacement-label"
+			}
+		}
+	})
+	baseline := len(h.fake.commands)
+	err := h.session.CloseAttachedWorkspace(context.Background(), binding)
+	if !errors.Is(err, corebackend.ErrOwnedIdentityMismatch) ||
+		!errors.Is(err, corebackend.ErrMutationNotIssued) {
+		t.Fatalf("CloseAttachedWorkspace() error = %v, want unissued identity mismatch", err)
+	}
+	for _, command := range h.fake.commands[baseline:] {
+		if hasSuffix(command.args, "workspace", "close", target.Ref.Workspace) {
+			t.Fatalf("identity mismatch issued workspace close: %v", command.args)
+		}
+	}
+}
+
 func TestBoundOwnedCloserReportsGenericUnavailableMethodError(t *testing.T) {
 	h := newOwnedHarness(t)
 	target := h.target()

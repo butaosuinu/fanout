@@ -32,6 +32,7 @@ type WorkspaceRuntime interface {
 	VerifyOwned(context.Context) error
 	RemoveWorktree(context.Context, string, string) error
 	CloseWorkspace(context.Context, string) error
+	CloseAttachedWorkspace(context.Context, backend.PaneBinding) error
 }
 
 type WorkspaceRuntimeFactory func(context.Context, state.Pane) (WorkspaceRuntime, error)
@@ -391,6 +392,9 @@ func driveSharedAttachedWorkspaceCloses(
 		if err == nil {
 			continue
 		}
+		if errors.Is(err, backend.ErrOwnedIdentityMismatch) {
+			return markSharedAttachedWorkspaceCloseManual(journal, intent, err)
+		}
 		if issueClose && !issued {
 			return resetSharedAttachedWorkspaceClose(journal, intent, err)
 		}
@@ -555,12 +559,27 @@ func closeSharedAttachedWorkspace(
 	}
 	if issueClose {
 		runBackgroundHook(hooks.BeforePaneClose, opts, target.pane, "", lg)
+		var err error
+		target, err = revalidateSharedAttachedWorkspaceTarget(ctx, opts, locked, target.pane)
+		if err != nil {
+			return false, err
+		}
 	}
+	return closeRevalidatedSharedAttachedWorkspace(ctx, opts, locked, target, lg)
+}
+
+func closeRevalidatedSharedAttachedWorkspace(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	target sharedAttachedWorkspaceCloseTarget,
+	lg Logger,
+) (bool, error) {
 	if target.workspace == nil {
 		runBackgroundHook(hooks.PaneClosed, opts, target.pane, "", lg)
 		return false, locked.RemovePane(target.pane.Parent, target.pane.IssueNum)
 	}
-	mutationErr := target.runtime.CloseWorkspace(ctx, target.workspace.WorkspaceID)
+	mutationErr := target.runtime.CloseAttachedWorkspace(ctx, target.pane.RuntimeBinding())
 	if mutationDefinitelyNotIssued(mutationErr) {
 		return false, mutationErr
 	}
@@ -573,6 +592,16 @@ func closeSharedAttachedWorkspace(
 	}
 	runBackgroundHook(hooks.PaneClosed, opts, target.pane, "", lg)
 	return true, locked.RemovePane(target.pane.Parent, target.pane.IssueNum)
+}
+
+func revalidateSharedAttachedWorkspaceTarget(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+) (sharedAttachedWorkspaceCloseTarget, error) {
+	current, runtime, workspace, err := inspectSharedAttachedWorkspace(ctx, opts, locked, pane)
+	return sharedAttachedWorkspaceCloseTarget{current, runtime, workspace}, err
 }
 
 func inspectSharedAttachedWorkspace(
