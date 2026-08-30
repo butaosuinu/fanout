@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
@@ -24,6 +25,7 @@ type fakeHerdrLifecycleRuntime struct {
 	verifyErr                error
 	verifyErrAtCall          int
 	setupErr                 error
+	createErr                error
 	openErr                  error
 	removeErr                error
 	closeErr                 error
@@ -32,7 +34,10 @@ type fakeHerdrLifecycleRuntime struct {
 	observeAfterMutationErr  error
 	keepWorkspaceAfterRemove bool
 	mutationDispatched       bool
+	session                  string
+	socketPath               string
 
+	createCalls  int
 	verifyCalls  int
 	setupCalls   int
 	openCalls    int
@@ -52,6 +57,50 @@ func (f *fakeHerdrLifecycleRuntime) VerifyOwned(context.Context) error {
 func (f *fakeHerdrLifecycleRuntime) VerifyWorktreeSetupPolicy(context.Context) error {
 	f.setupCalls++
 	return f.setupErr
+}
+
+func (f *fakeHerdrLifecycleRuntime) WorktreeRoute(ctx context.Context) (backend.OwnedWorktreeRoute, error) {
+	identity, err := worktree.ResolveRepoIdentity(ctx, f.projectRoot)
+	if err != nil {
+		return backend.OwnedWorktreeRoute{}, err
+	}
+	return backend.OwnedWorktreeRoute{
+		GitCommonDir: identity.RepoKey,
+		Session:      f.session,
+		SocketPath:   f.socketPath,
+	}, nil
+}
+
+func (f *fakeHerdrLifecycleRuntime) CreateWorkspace(
+	ctx context.Context,
+	req backend.WorkspaceCreateRequest,
+) (backend.WorktreeMutationResult, error) {
+	f.createCalls++
+	if mutationDefinitelyNotIssued(f.createErr) || errors.Is(f.createErr, backend.ErrMutationRejected) {
+		return backend.WorktreeMutationResult{}, f.createErr
+	}
+	identity, err := worktree.ResolveRepoIdentity(ctx, f.projectRoot)
+	if err != nil {
+		return backend.WorktreeMutationResult{}, err
+	}
+	workspace := herdrLifecycleWorkspace(
+		"w-coordinator-recreated", req.Label, req.CWD, req.SourceRepoKey, identity.RepoRoot,
+	)
+	workspace.Path = ""
+	workspace.RepoKey = ""
+	workspace.RepoRoot = ""
+	f.workspaces = append(f.workspaces, workspace)
+	if f.createErr != nil {
+		f.mutationDispatched = true
+	}
+	return backend.WorktreeMutationResult{WorkspaceObservation: workspace}, f.createErr
+}
+
+func (f *fakeHerdrLifecycleRuntime) CreateWorktree(
+	context.Context,
+	backend.WorktreeCreateRequest,
+) (backend.WorktreeMutationResult, error) {
+	return backend.WorktreeMutationResult{}, errors.New("unexpected worktree create")
 }
 
 func (f *fakeHerdrLifecycleRuntime) ObserveWorkspaces(context.Context) ([]backend.WorkspaceObservation, error) {
@@ -930,6 +979,371 @@ func TestHerdrCloseReplansLegacyDirtyManualIntent(t *testing.T) {
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
+func TestHerdrCloseReplansLegacyDirtyManualIntentAfterCoordinatorRecreate(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	dirtyPath := filepath.Join(fixture.worktreePath, "uncommitted.txt")
+	if err := os.WriteFile(dirtyPath, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		session:     fixture.pane.SessionID,
+		socketPath:  fixture.pane.SocketPath,
+	}
+	lg := &captureLogger{}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, lg); got != exitcode.Env {
+		t.Fatalf("dirty Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.createCalls != 1 || runtime.openCalls != 0 || runtime.removeCalls != 0 {
+		t.Fatalf(
+			"dirty replan calls = create %d/open %d/remove %d, want 1/0/0",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+		)
+	}
+	if len(lg.errors) == 0 || !strings.Contains(lg.errors[len(lg.errors)-1], "tracked or untracked changes") {
+		t.Fatalf("dirty replan errors = %v", lg.errors)
+	}
+
+	if err := os.Remove(dirtyPath); err != nil {
+		t.Fatal(err)
+	}
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("clean retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.createCalls != 1 || runtime.openCalls != 1 || runtime.removeCalls != 1 {
+		t.Fatalf(
+			"clean retry calls = create %d/open %d/remove %d, want 1/1/1",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+		)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrClosePersistsRecreatedManualCoordinatorOnCleanLegacyReplan(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		session:     fixture.pane.SessionID,
+		socketPath:  fixture.pane.SocketPath,
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.createCalls != 1 || runtime.openCalls != 1 || runtime.removeCalls != 1 {
+		t.Fatalf(
+			"clean replan calls = create %d/open %d/remove %d, want 1/1/1",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+		)
+	}
+	assertRecreatedManualCoordinatorRecorded(t, fixture, coordinator)
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseRecreatesAfterSavedManualCoordinatorMovedAndClosed(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinatorA := herdrLifecycleWorkspace(
+		"w-coordinator-a", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinatorA)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	dirtyPath := filepath.Join(fixture.worktreePath, "uncommitted.txt")
+	if err := os.WriteFile(dirtyPath, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{coordinatorA},
+		session:     fixture.pane.SessionID,
+		socketPath:  fixture.pane.SocketPath,
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("dirty Close() = %d, want %d", got, exitcode.Env)
+	}
+	coordinatorB := herdrLifecycleWorkspace(
+		"w-coordinator-b", coordinatorA.Label, fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinatorB)
+	runtime.workspaces = nil
+	if err := os.Remove(dirtyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.createCalls != 1 || runtime.openCalls != 1 || runtime.removeCalls != 1 {
+		t.Fatalf(
+			"moved coordinator retry calls = create %d/open %d/remove %d, want 1/1/1",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+		)
+	}
+	assertRecreatedManualCoordinatorRecorded(t, fixture, coordinatorB)
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseRecreatesManualCoordinatorForPlannedReopenRetry(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		expired bool
+	}{
+		{name: "active"},
+		{name: "expired", expired: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newManualHerdrLifecycleFixture(t)
+			coordinator := herdrLifecycleWorkspace(
+				"w-coordinator", "coordinator-label", fixture.projectRoot,
+				fixture.pane.RepoKey, fixture.pane.RepoRoot,
+			)
+			recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+			if tt.expired {
+				recordExpiredHerdrCleanupIntent(t, fixture, state.CleanupReopen)
+			} else {
+				recordActiveHerdrCleanupIntent(t, fixture, state.CleanupReopen)
+			}
+			replaceSavedHerdrCleanupCoordinator(t, fixture, coordinatorResource(coordinator))
+			runtime := &fakeHerdrLifecycleRuntime{
+				projectRoot: fixture.projectRoot,
+				session:     fixture.pane.SessionID,
+				socketPath:  fixture.pane.SocketPath,
+			}
+
+			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+				t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+			}
+			if runtime.createCalls != 1 || runtime.openCalls != 1 || runtime.removeCalls != 1 {
+				t.Fatalf(
+					"reopen retry calls = create %d/open %d/remove %d, want 1/1/1",
+					runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+				)
+			}
+			assertRecreatedManualCoordinatorRecorded(t, fixture, coordinator)
+			assertHerdrLifecycleRemoved(t, fixture)
+		})
+	}
+}
+
+func TestHerdrCloseRetriesAfterRecreatedManualCoordinatorObservationFailure(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot:      fixture.projectRoot,
+		observeErr:       errors.New("coordinator observation failed"),
+		observeErrAtCall: 4,
+		session:          fixture.pane.SessionID,
+		socketPath:       fixture.pane.SocketPath,
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("observation failure Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.createCalls != 1 || runtime.openCalls != 0 || runtime.removeCalls != 0 {
+		t.Fatalf(
+			"observation failure calls = create %d/open %d/remove %d, want 1/0/0",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+		)
+	}
+	assertSingleManualCoordinatorRow(t, fixture, "w-coordinator-recreated")
+	runtime.observeErrAtCall = 0
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.createCalls != 1 || runtime.openCalls != 1 || runtime.removeCalls != 1 {
+		t.Fatalf(
+			"observation retry calls = create %d/open %d/remove %d, want 1/1/1",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+		)
+	}
+	assertSingleManualCoordinatorRow(t, fixture, "w-coordinator-recreated")
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseKeepsRejectingUnconfirmedManualCoordinatorRow(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	stale := manualLifecycleCoordinatorPane(fixture.pane, coordinator, fixture.pane.IssueNum-1)
+	stale.WorkspaceID = "foreign"
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, stale)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		session:     fixture.pane.SessionID,
+		socketPath:  fixture.pane.SocketPath,
+	}
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+			t.Fatalf("Close() attempt %d = %d, want %d", attempt, got, exitcode.Env)
+		}
+		if runtime.createCalls != 1 || runtime.openCalls != 0 || runtime.removeCalls != 0 {
+			t.Fatalf(
+				"attempt %d calls = create %d/open %d/remove %d, want 1/0/0",
+				attempt, runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+			)
+		}
+		assertSingleManualCoordinatorRow(t, fixture, "foreign")
+		assertHerdrLifecyclePreserved(t, fixture)
+	}
+}
+
+func TestHerdrCloseRetriesReleasedManualCoordinatorCreate(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "not issued", err: backend.MutationNotIssuedError{Cause: errors.New("disconnected")}},
+		{name: "rejected", err: backend.MutationRejectedError{Code: "workspace_create_failed", Message: "rejected"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newManualHerdrLifecycleFixture(t)
+			coordinator := herdrLifecycleWorkspace(
+				"w-coordinator", "coordinator-label", fixture.projectRoot,
+				fixture.pane.RepoKey, fixture.pane.RepoRoot,
+			)
+			recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+			recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+			runtime := &fakeHerdrLifecycleRuntime{
+				projectRoot: fixture.projectRoot, createErr: tt.err,
+				session: fixture.pane.SessionID, socketPath: fixture.pane.SocketPath,
+			}
+
+			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("failed create Close() = %d, want %d", got, exitcode.Env)
+			}
+			assertManualCoordinatorIntentStatus(t, fixture, "", false)
+			runtime.createErr = nil
+			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+				t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+			}
+			if runtime.createCalls != 2 || runtime.openCalls != 1 || runtime.removeCalls != 1 {
+				t.Fatalf(
+					"retry calls = create %d/open %d/remove %d, want 2/1/1",
+					runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+				)
+			}
+			assertRecreatedManualCoordinatorRecorded(t, fixture, coordinator)
+			assertHerdrLifecycleRemoved(t, fixture)
+		})
+	}
+}
+
+func TestHerdrCloseResumesIssuedManualCoordinatorCreate(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot:             fixture.projectRoot,
+		createErr:               errors.New("create response lost"),
+		observeAfterMutationErr: errors.New("recovery observation failed"),
+		session:                 fixture.pane.SessionID,
+		socketPath:              fixture.pane.SocketPath,
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("response-loss Close() = %d, want %d", got, exitcode.Env)
+	}
+	assertManualCoordinatorIntentStatus(t, fixture, state.IntentIssued, true)
+	runtime.createErr = nil
+	runtime.observeAfterMutationErr = nil
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.createCalls != 1 || runtime.openCalls != 1 || runtime.removeCalls != 1 {
+		t.Fatalf(
+			"response-loss retry calls = create %d/open %d/remove %d, want 1/1/1",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls,
+		)
+	}
+	assertRecreatedManualCoordinatorRecorded(t, fixture, coordinator)
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseRecreatesPrunedManualCoordinatorRow(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		session:     fixture.pane.SessionID,
+		socketPath:  fixture.pane.SocketPath,
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+	}
+	assertRecreatedManualCoordinatorRecorded(t, fixture, coordinator)
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseDoesNotRecreateAmbiguousManualCoordinator(t *testing.T) {
+	fixture := newManualHerdrLifecycleFixture(t)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+	coordinator.Label = "changed-coordinator-label"
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{coordinator},
+		session:     fixture.pane.SessionID,
+		socketPath:  fixture.pane.SocketPath,
+	}
+	lg := &captureLogger{}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, lg); got != exitcode.Env {
+		t.Fatalf(
+			"Close() = %d, want %d; calls=create %d/open %d/remove %d; errors=%v",
+			got, exitcode.Env, runtime.createCalls, runtime.openCalls, runtime.removeCalls, lg.errors,
+		)
+	}
+	if runtime.createCalls != 0 || runtime.openCalls != 0 || runtime.removeCalls != 0 {
+		t.Fatalf(
+			"ambiguous coordinator calls = create %d/open %d/remove %d, want 0/0/0; errors=%v",
+			runtime.createCalls, runtime.openCalls, runtime.removeCalls, lg.errors,
+		)
+	}
+	assertHerdrLifecyclePreserved(t, fixture)
+}
+
 func TestHerdrCloseReplansLegacyDirtyManualIntentAfterManualWorktreeRemoval(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
@@ -1660,6 +2074,30 @@ func newHerdrLifecycleFixture(t *testing.T) herdrLifecycleFixture {
 	}
 }
 
+func newManualHerdrLifecycleFixture(t *testing.T) herdrLifecycleFixture {
+	t.Helper()
+	fixture := newHerdrLifecycleFixture(t)
+	projectRoot, err := filepath.EvalSymlinks(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktreePath, err := filepath.EvalSymlinks(fixture.worktreePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.projectRoot = projectRoot
+	fixture.worktreePath = worktreePath
+	fixture.workspace.Path = worktreePath
+	fixture.workspace.CWD = worktreePath
+	fixture.workspace.Panes[0].CWD = worktreePath
+	fixture.pane.Parent = panelaunch.ManualParentRef
+	fixture.pane.RuntimeParent = panelaunch.ManualParentRef
+	fixture.pane.IssueNum = -1
+	fixture.pane.WorktreePath = worktreePath
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane)
+	return fixture
+}
+
 func herdrLifecycleWorkspace(id, label, path, repoKey, repoRoot string) backend.WorkspaceObservation {
 	ref := backend.PaneRef{Backend: backend.Herdr, Workspace: id, Pane: id + ":p1"}
 	terminalID := "terminal-" + id
@@ -1768,13 +2206,18 @@ func recordLifecycleCoordinatorIntent(
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := state.CoordinatorIntentID(target.RuntimeParent, runtimeOwnerRoot, 0)
+	issueNum := 0
+	if target.RuntimeParent == panelaunch.ManualParentRef || target.RuntimeParent == watcherStandaloneParent {
+		issueNum = target.IssueNum
+	}
+	id, err := state.CoordinatorIntentID(target.RuntimeParent, runtimeOwnerRoot, issueNum)
 	if err != nil {
 		t.Fatal(err)
 	}
 	journal.UpsertIntent(state.LaunchIntent{
 		ID: id, Kind: state.IntentCoordinator, Status: state.IntentRealized,
 		Parent: target.Parent, RuntimeParent: target.RuntimeParent, OwnerProjectRoot: ownerRoot,
+		IssueNum:     issueNum,
 		WorktreePath: workspace.CWD, WorkspaceLabel: workspace.Label,
 		Resource: state.RuntimeResource{
 			WorkspaceID: workspace.WorkspaceID, Label: workspace.Label,
@@ -1786,6 +2229,27 @@ func recordLifecycleCoordinatorIntent(
 	})
 	if err := journal.Save(); err != nil {
 		t.Fatal(err)
+	}
+	if target.RuntimeParent == panelaunch.ManualParentRef {
+		if err := locked.RecordPane(manualLifecycleCoordinatorPane(target, workspace, issueNum-1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func manualLifecycleCoordinatorPane(
+	target state.Pane,
+	workspace backend.WorkspaceObservation,
+	issueNum int,
+) state.Pane {
+	return state.Pane{
+		Parent: panelaunch.ManualParentRef, RuntimeParent: target.RuntimeParent,
+		IssueNum: issueNum, Kind: state.PaneKindShell, Slug: "herdr-coordinator-test",
+		Backend: backend.Herdr, PaneID: workspace.Pane.Pane,
+		WorkspaceID: workspace.WorkspaceID, WorkspaceLabel: workspace.Label,
+		TerminalID: workspace.TerminalID, SessionID: target.SessionID,
+		SocketPath: target.SocketPath, DisplayName: "Herdr coordinator: test",
+		WorktreePath: workspace.CWD, CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
@@ -1886,6 +2350,40 @@ func recordManualHerdrCleanupIntent(t *testing.T, fixture herdrLifecycleFixture,
 	intent.ExpectedHead = strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
 	intent.ExpiresUnixMS = time.Now().Add(time.Minute).UnixMilli()
 	intent.Failure = failure
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func replaceSavedHerdrCleanupCoordinator(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	coordinator state.RuntimeResource,
+) {
+	t.Helper()
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
+		}
+	}()
+	journal, err := locked.LaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found {
+		t.Fatal("cleanup intent is absent")
+	}
+	intent.Coordinator = coordinator
 	journal.UpsertIntent(intent)
 	if err := journal.Save(); err != nil {
 		t.Fatal(err)
@@ -2088,6 +2586,80 @@ func assertHerdrLifecycleRemoved(t *testing.T, fixture herdrLifecycleFixture) {
 		if intent.Kind != state.IntentCoordinator {
 			t.Fatalf("child lifecycle intent remains after completion: %#v", journal.Intents)
 		}
+	}
+}
+
+func assertRecreatedManualCoordinatorRecorded(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	previous backend.WorkspaceObservation,
+) {
+	t.Helper()
+	intentID, _, err := coordinatorIntentIdentity(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found || intent.Status != state.IntentRealized ||
+		intent.Resource.WorkspaceID != "w-coordinator-recreated" ||
+		intent.Resource.Label == previous.Label {
+		t.Fatalf("recreated coordinator intent = (%+v, %t)", intent, found)
+	}
+	store, err := state.Load(state.Path(fixture.projectRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pane := range store.Panes {
+		if pane.Kind == state.PaneKindShell && pane.RuntimeParent == panelaunch.ManualParentRef &&
+			pane.IssueNum != fixture.pane.IssueNum &&
+			pane.WorkspaceID == intent.Resource.WorkspaceID && pane.WorkspaceLabel == intent.Resource.Label &&
+			pane.PaneID == intent.Resource.PaneID && pane.TerminalID == intent.Resource.TerminalID {
+			return
+		}
+	}
+	t.Fatalf("recreated coordinator row not found in %+v", store.Panes)
+}
+
+func assertSingleManualCoordinatorRow(t *testing.T, fixture herdrLifecycleFixture, workspaceID string) {
+	t.Helper()
+	store, err := state.Load(state.Path(fixture.projectRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []state.Pane
+	for _, pane := range store.Panes {
+		if pane.Parent == panelaunch.ManualParentRef &&
+			pane.RuntimeParent == panelaunch.ManualParentRef && pane.Kind == state.PaneKindShell {
+			rows = append(rows, pane)
+		}
+	}
+	if len(rows) != 1 || rows[0].WorkspaceID != workspaceID {
+		t.Fatalf("manual coordinator rows = %+v, want one row for %s", rows, workspaceID)
+	}
+}
+
+func assertManualCoordinatorIntentStatus(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	want state.LaunchIntentStatus,
+	wantFound bool,
+) {
+	t.Helper()
+	intentID, _, err := coordinatorIntentIdentity(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if found != wantFound || found && intent.Status != want {
+		t.Fatalf("manual coordinator intent = (%+v, %t), want status %q found %t", intent, found, want, wantFound)
 	}
 }
 

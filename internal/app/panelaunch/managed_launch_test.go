@@ -2383,6 +2383,136 @@ func TestRecordManagedCoordinatorHealsDriftedRow(t *testing.T) {
 	}
 }
 
+func TestReconcileManagedCoordinatorReplanRowHealsCurrentLabelDrift(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	route := backend.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
+	previous := state.RuntimeResource{
+		WorkspaceID: "w2", Label: "fanout-coordinator-replan-token",
+		PaneID: "w2:p1", TerminalID: "term-w2", CurrentPath: repo,
+	}
+	current := state.LaunchIntent{
+		ID: "coordinator-replan", Kind: state.IntentCoordinator, Status: state.IntentRealized,
+		Parent: ManualParentRef, RuntimeParent: ManualParentRef,
+		OwnerProjectRoot: repo, IssueNum: -1, WorktreePath: repo,
+		Session: route.Session, SocketPath: route.SocketPath,
+		Resource: state.RuntimeResource{
+			WorkspaceID: "w9", Label: previous.Label,
+			PaneID: "w9:p1", TerminalID: "term-w9", CurrentPath: repo,
+		},
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := locked.RecordPane(managedCoordinatorPane(
+		state.LaunchIntent{Resource: previous}, route, ManualParentRef, -2,
+	)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ReconcileManagedCoordinatorReplanRow(locked, []state.RuntimeResource{previous}, current); err != nil {
+		t.Fatalf("ReconcileManagedCoordinatorReplanRow() = %v, want heal", err)
+	}
+	if len(locked.Panes) != 1 || locked.Panes[0].IssueNum != -2 ||
+		locked.Panes[0].WorkspaceID != "w9" || locked.Panes[0].PaneID != "w9:p1" ||
+		locked.Panes[0].TerminalID != "term-w9" {
+		t.Fatalf("reconciled rows = %+v, want the same number carrying current identity", locked.Panes)
+	}
+}
+
+func TestReconcileManagedCoordinatorReplanRowRejectsUnconfirmedPreviousRow(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	route := backend.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
+	previous := state.RuntimeResource{
+		WorkspaceID: "w2", Label: "fanout-coordinator-previous-token",
+		PaneID: "w2:p1", TerminalID: "term-w2", CurrentPath: repo,
+	}
+	current := state.LaunchIntent{
+		ID: "coordinator-replan", Kind: state.IntentCoordinator, Status: state.IntentRealized,
+		Parent: ManualParentRef, RuntimeParent: ManualParentRef,
+		OwnerProjectRoot: repo, IssueNum: -1, WorktreePath: repo,
+		Session: route.Session, SocketPath: route.SocketPath,
+		Resource: state.RuntimeResource{
+			WorkspaceID: "w9", Label: "fanout-coordinator-current-token",
+			PaneID: "w9:p1", TerminalID: "term-w9", CurrentPath: repo,
+		},
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	stale := managedCoordinatorPane(state.LaunchIntent{Resource: previous}, route, ManualParentRef, -2)
+	stale.WorkspaceID = "foreign"
+	if err := locked.RecordPane(stale); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ReconcileManagedCoordinatorReplanRow(locked, []state.RuntimeResource{previous}, current); err == nil {
+		t.Fatal("ReconcileManagedCoordinatorReplanRow() succeeded without previous identity proof")
+	}
+	if len(locked.Panes) != 1 || locked.Panes[0].WorkspaceID != "foreign" {
+		t.Fatalf("unconfirmed row changed: %+v", locked.Panes)
+	}
+}
+
+func TestReconcileManagedCoordinatorReplanRowRejectsAmbiguousPredecessors(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	route := backend.OwnedLaunchRoute{Session: "fanout-test", SocketPath: "/tmp/fanout-test.sock"}
+	predecessors := []state.RuntimeResource{
+		{
+			WorkspaceID: "w1", Label: "fanout-coordinator-previous-one",
+			PaneID: "w1:p1", TerminalID: "term-w1", CurrentPath: repo,
+		},
+		{
+			WorkspaceID: "w2", Label: "fanout-coordinator-previous-two",
+			PaneID: "w2:p1", TerminalID: "term-w2", CurrentPath: repo,
+		},
+	}
+	current := state.LaunchIntent{
+		ID: "coordinator-replan", Kind: state.IntentCoordinator, Status: state.IntentRealized,
+		Parent: ManualParentRef, RuntimeParent: ManualParentRef,
+		OwnerProjectRoot: repo, IssueNum: -1, WorktreePath: repo,
+		Session: route.Session, SocketPath: route.SocketPath,
+		Resource: state.RuntimeResource{
+			WorkspaceID: "w9", Label: "fanout-coordinator-current-token",
+			PaneID: "w9:p1", TerminalID: "term-w9", CurrentPath: repo,
+		},
+	}
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := locked.Unlock(); err != nil {
+			t.Error(err)
+		}
+	}()
+	for index, predecessor := range predecessors {
+		if err := locked.RecordPane(managedCoordinatorPane(
+			state.LaunchIntent{Resource: predecessor}, route, ManualParentRef, -2-index,
+		)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := ReconcileManagedCoordinatorReplanRow(locked, predecessors, current); err == nil {
+		t.Fatal("ReconcileManagedCoordinatorReplanRow() accepted ambiguous predecessor rows")
+	}
+	if len(locked.Panes) != 2 || locked.Panes[0].WorkspaceID != "w1" || locked.Panes[1].WorkspaceID != "w2" {
+		t.Fatalf("ambiguous rows changed: %+v", locked.Panes)
+	}
+}
+
 // TestRecordManagedCoordinatorKeepsRelabeledWorkspaceRow mirrors the recreate
 // guard on the prune side: a workspace that lost its label but still lives
 // under its recorded id is an identity change, not a close, and its row stays.
