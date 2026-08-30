@@ -181,8 +181,10 @@ func TestDirectAgentIntegrationLaunchRequiresProviderWorkload(t *testing.T) {
 func TestWorkloadExecEnvironmentBindsEmitterToRealizedCoordinator(t *testing.T) {
 	intent := state.LaunchIntent{
 		ID: "coordinator:manual:/repo:530", Session: "owned-session", SocketPath: "/owned/herdr.sock",
+		WorktreePath: "/repo/worktree",
 		Resource: state.RuntimeResource{
-			WorkspaceID: "w1", PaneID: "w1:p1", TerminalID: "terminal-1",
+			WorkspaceID: "w1", Label: "owned-label-1",
+			PaneID: "w1:p1", TerminalID: "terminal-1",
 		},
 		Launch: &state.LaunchCapsule{
 			Nonce: strings.Repeat("a", 32), EmitterNonce: strings.Repeat("b", 32),
@@ -193,7 +195,8 @@ func TestWorkloadExecEnvironmentBindsEmitterToRealizedCoordinator(t *testing.T) 
 		telemetry.RowKeyEnv + "=", telemetry.LaunchNonceEnv + "=",
 		telemetry.EmitterNonceEnv + "=", telemetry.BackendEnv + "=",
 		telemetry.SessionEnv + "=", telemetry.SocketPathEnv + "=",
-		telemetry.WorkspaceIDEnv + "=", telemetry.PaneIDEnv + "=",
+		telemetry.WorkspaceIDEnv + "=", telemetry.WorkspaceLabelEnv + "=",
+		telemetry.WorktreePathEnv + "=", telemetry.PaneIDEnv + "=",
 		telemetry.TerminalIDEnv + "=", telemetry.AgentEnv + "=",
 		telemetry.AgentIDEnv + "=", "PATH=/bin",
 	}
@@ -202,9 +205,12 @@ func TestWorkloadExecEnvironmentBindsEmitterToRealizedCoordinator(t *testing.T) 
 		telemetry.RowKeyEnv: intent.ID, telemetry.LaunchNonceEnv: intent.Launch.Nonce,
 		telemetry.EmitterNonceEnv: intent.Launch.EmitterNonce, telemetry.BackendEnv: "herdr",
 		telemetry.SessionEnv: intent.Session, telemetry.SocketPathEnv: intent.SocketPath,
-		telemetry.WorkspaceIDEnv: intent.Resource.WorkspaceID,
-		telemetry.PaneIDEnv:      intent.Resource.PaneID, telemetry.TerminalIDEnv: intent.Resource.TerminalID,
-		telemetry.AgentEnv: intent.Launch.Agent, telemetry.AgentIDEnv: intent.Launch.AgentName,
+		telemetry.WorkspaceIDEnv:    intent.Resource.WorkspaceID,
+		telemetry.WorkspaceLabelEnv: intent.Resource.Label,
+		telemetry.WorktreePathEnv:   intent.WorktreePath,
+		telemetry.PaneIDEnv:         intent.Resource.PaneID,
+		telemetry.TerminalIDEnv:     intent.Resource.TerminalID,
+		telemetry.AgentEnv:          intent.Launch.Agent, telemetry.AgentIDEnv: intent.Launch.AgentName,
 	}
 	for _, entry := range got {
 		name, value, _ := strings.Cut(entry, "=")

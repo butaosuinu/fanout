@@ -14,7 +14,8 @@ func TestParseSignalAcceptsExactLaunchIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.State != backend.AgentWorking || got.Sequence != 7 ||
-		got.Backend != backend.Herdr || got.RowKey != "issue:3:524:529" {
+		got.Backend != backend.Herdr || got.RowKey != "issue:3:524:529" ||
+		got.WorkspaceLabel != "owned-label-1" || got.WorktreePath != "/repo/worktree" {
 		t.Fatalf("signal = %+v", got)
 	}
 }
@@ -24,6 +25,18 @@ func TestParseSignalAcceptsCodexPlanController(t *testing.T) {
 	env[AgentEnv] = "codex"
 	if _, err := ParseSignal([]string{"plan"}, func(key string) string { return env[key] }); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestParseSignalAcceptsPinnedLegacyLauncherIdentity(t *testing.T) {
+	env := validSignalEnvironment()
+	env[WorkspaceLabelEnv], env[WorktreePathEnv] = "", ""
+	got, err := ParseSignal([]string{"working", "7"}, func(key string) string { return env[key] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WorkspaceLabel != "" || got.WorktreePath != "" {
+		t.Fatalf("legacy stable identity = (%q, %q), want empty", got.WorkspaceLabel, got.WorktreePath)
 	}
 }
 
@@ -82,6 +95,15 @@ func TestParseSignalRejectsSyntheticOrIncompleteInput(t *testing.T) {
 		{name: "bad generation", args: []string{"plan", "1"}, mutate: func(env map[string]string) {
 			env[LaunchNonceEnv] = "old"
 		}},
+		{name: "missing workspace label", args: []string{"idle", "1"}, mutate: func(env map[string]string) {
+			env[WorkspaceLabelEnv] = ""
+		}},
+		{name: "missing worktree path", args: []string{"idle", "1"}, mutate: func(env map[string]string) {
+			env[WorktreePathEnv] = ""
+		}},
+		{name: "relative worktree path", args: []string{"idle", "1"}, mutate: func(env map[string]string) {
+			env[WorktreePathEnv] = "repo/worktree"
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			env := validSignalEnvironment()
@@ -102,7 +124,8 @@ func validSignalEnvironment() map[string]string {
 		RowKeyEnv: "issue:3:524:529", LaunchNonceEnv: strings.Repeat("a", 32),
 		EmitterNonceEnv: strings.Repeat("b", 32), BackendEnv: "herdr",
 		SessionEnv: "fanout-owned", SocketPathEnv: "/tmp/herdr.sock",
-		WorkspaceIDEnv: "w1", PaneIDEnv: "w1:p1", TerminalIDEnv: "term-1",
+		WorkspaceIDEnv: "w1", WorkspaceLabelEnv: "owned-label-1",
+		WorktreePathEnv: "/repo/worktree", PaneIDEnv: "w1:p1", TerminalIDEnv: "term-1",
 		AgentEnv: "claude", AgentIDEnv: "fanout-agent",
 	}
 }

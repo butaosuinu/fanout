@@ -18,6 +18,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/codexapp"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -436,6 +437,59 @@ func TestFinalizeManagedAttachedAgentKeepsSharedCoordinatorIdle(t *testing.T) {
 	pane, found := locked.Find(ManualParentRef, -2)
 	if !found || pane.RuntimeParent != shared.RuntimeParent || pane.PaneID != intent.Resource.PaneID {
 		t.Fatalf("attached agent row = (%+v, %t)", pane, found)
+	}
+}
+
+func TestManagedAttachedCrashResumeReusesIssueParentIntent(t *testing.T) {
+	repo := newManagedRealizeRepo(t)
+	runtime := &fakeManagedLaunchRuntime{}
+	installSuccessfulManagedMutations(t, repo, &runtime.fakeManagedRealizeRuntime)
+	hooks := deterministicManagedRealizeHooks()
+	realizeTestManagedCoordinator(t, repo, &runtime.fakeManagedRealizeRuntime, hooks)
+	runtime.launchRoute = backend.OwnedLaunchRoute{
+		GitCommonDir: runtime.route.GitCommonDir,
+		Session:      runtime.route.Session, SocketPath: runtime.route.SocketPath,
+		LauncherPath: "/owned/fanout", RuntimeDir: t.TempDir(),
+	}
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locked.Unlock() }()
+	launcher := &Launcher{
+		Cfg: &cliflags.Config{}, Info: &fanoutruntime.Info{ProjectRoot: repo}, Managed: runtime,
+	}
+	req := Request{
+		ParentRef: "425", Number: -1, Slug: "attached-issue-425", Agent: "claude", Prompt: "review",
+	}
+	intent, err := launcher.prepareManagedAttachedIntent(
+		context.Background(), req, repo, locked, runtime.launchRoute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.RuntimeParent != ManualParentRef {
+		t.Fatalf("persisted attached runtime parent = %q, want %q", intent.RuntimeParent, ManualParentRef)
+	}
+	retryNumber := nextAttachedSyntheticPaneNumber(repo, locked.Store, req.ParentRef, repo)
+	mutations := len(runtime.mutations)
+	req.Number = retryNumber
+	resumed, err := launcher.prepareManagedAttachedIntent(
+		context.Background(), req, repo, locked, runtime.launchRoute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retryNumber != -1 || resumed.ID != intent.ID || len(runtime.mutations) != mutations {
+		t.Fatalf(
+			"attached retry = number %d intent %q mutations %d, want -1/%q/%d",
+			retryNumber, resumed.ID, len(runtime.mutations), intent.ID, mutations,
+		)
 	}
 }
 
@@ -1621,6 +1675,186 @@ func managedManualTestResource(label, repo string, number int) state.RuntimeReso
 		WorkspaceID: fmt.Sprintf("w%d", number), Label: label,
 		PaneID: fmt.Sprintf("w%d:p1", number), TerminalID: fmt.Sprintf("term-w%d", number),
 		CurrentPath: repo,
+	}
+}
+
+func TestNextAttachedSyntheticPaneNumberSeparatesIdentity(t *testing.T) {
+	t.Run("manual state row", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		store := state.Store{Panes: []state.Pane{{
+			Parent: ManualParentRef, IssueNum: -1, Backend: backend.Herdr,
+		}}}
+		if got := nextAttachedSyntheticPaneNumber(repo, store, "425", repo); got != -2 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(manual -1) = %d, want -2", got)
+		}
+	})
+
+	t.Run("tmux manual state row", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		store := state.Store{Panes: []state.Pane{{
+			Parent: ManualParentRef, IssueNum: -1, Backend: backend.Tmux,
+		}}}
+		if got := nextAttachedSyntheticPaneNumber(repo, store, "425", repo); got != -1 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(tmux -1) = %d, want -1", got)
+		}
+	})
+
+	t.Run("foreign realized intent", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		intent := allocationTestManualIntent(t, repo, -1, ManualParentRef, repo)
+		saveAllocationTestIntent(t, repo, intent)
+		target := filepath.Join(repo, "attached-target")
+		if got := nextAttachedSyntheticPaneNumber(repo, state.Store{}, "425", target); got != -2 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(foreign -1) = %d, want -2", got)
+		}
+	})
+
+	t.Run("matching crash resume", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		target := repo
+		intent := allocationTestManualIntent(t, repo, -1, ManualParentRef, target)
+		saveAllocationTestIntent(t, repo, intent)
+		if got := nextAttachedSyntheticPaneNumber(repo, state.Store{}, "425", target); got != -1 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(own -1) = %d, want -1", got)
+		}
+	})
+
+	t.Run("symlink crash resume", func(t *testing.T) {
+		repo := newManagedRealizeRepo(t)
+		alias := filepath.Join(t.TempDir(), "repo-alias")
+		if err := os.Symlink(repo, alias); err != nil {
+			t.Fatal(err)
+		}
+		intent := allocationTestManualIntent(t, repo, -1, ManualParentRef, repo)
+		saveAllocationTestIntent(t, repo, intent)
+		if got := nextAttachedSyntheticPaneNumber(repo, state.Store{}, ManualParentRef, alias); got != -1 {
+			t.Fatalf("NextAttachedSyntheticPaneNumber(alias own -1) = %d, want -1", got)
+		}
+	})
+}
+
+func TestNewAttachedRequestSkipsMismatchedRecoverableBinding(t *testing.T) {
+	tests := []struct {
+		name          string
+		prompt        string
+		originalAgent string
+		retryAgent    string
+		originalPlan  bool
+		retryPlan     bool
+		retryParent   string
+		mutateIntent  func(*state.LaunchIntent)
+		want          int
+	}{
+		{name: "matching binding", prompt: "review", originalAgent: "claude", retryAgent: "claude", want: -1},
+		{name: "agent", prompt: "review", originalAgent: "claude", retryAgent: "codex", want: -2},
+		{
+			name: "issued agent mismatch", prompt: "review", originalAgent: "claude", retryAgent: "codex",
+			mutateIntent: func(intent *state.LaunchIntent) { intent.Launch.TokenIssued = true }, want: -1,
+		},
+		{
+			name: "source parent", prompt: "review\nrepository identity",
+			originalAgent: "claude", retryAgent: "claude", retryParent: "526", want: -2,
+		},
+		{
+			name: "Codex Plan mode", prompt: "review", originalAgent: "codex", retryAgent: "codex",
+			retryPlan: true, want: -2,
+		},
+		{
+			name: "runtime parent", prompt: "review", originalAgent: "claude", retryAgent: "claude",
+			mutateIntent: func(intent *state.LaunchIntent) { intent.RuntimeParent = "526" }, want: -2,
+		},
+		{
+			name: "team mode", prompt: "review", originalAgent: "codex", retryAgent: "codex",
+			mutateIntent: func(intent *state.LaunchIntent) { intent.Launch.TeamDBPath = "/tmp/team.db" }, want: -2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newManagedRealizeRepo(t)
+			installFakeExecutable(t, "claude")
+			installFakeExecutable(t, "codex")
+			originalTarget := AttachTarget{SourceParent: "425", SourceIssueNum: 647, SourceLabel: "row identity"}
+			originalCfg := &cliflags.Config{Agent: tt.originalAgent, PlanMode: &tt.originalPlan}
+			original := NewAttachedRequest(
+				originalCfg, repo, state.Store{}, hooks.EmptyConfig(), tt.prompt, repo, originalTarget,
+			)
+			intent := allocationTestManualIntent(t, repo, original.Number, ManualParentRef, repo)
+			intent.Launch = allocationTestLaunchCapsule(t, original)
+			if tt.mutateIntent != nil {
+				tt.mutateIntent(&intent)
+			}
+			saveAllocationTestIntent(t, repo, intent)
+
+			retryTarget := originalTarget
+			if tt.retryParent != "" {
+				retryTarget.SourceParent = tt.retryParent
+			}
+			retryCfg := &cliflags.Config{Agent: tt.retryAgent, PlanMode: &tt.retryPlan}
+			retry := NewAttachedRequest(
+				retryCfg, repo, state.Store{}, hooks.EmptyConfig(), tt.prompt, repo, retryTarget,
+			)
+			if retry.Number != tt.want {
+				t.Fatalf("retry synthetic number = %d, want %d", retry.Number, tt.want)
+			}
+		})
+	}
+}
+
+func allocationTestLaunchCapsule(t *testing.T, req Request) *state.LaunchCapsule {
+	t.Helper()
+	spec, err := buildManagedLaunchSpec(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := validTestManagedLaunch()
+	launch.TokenIssued = false
+	launch.Agent = req.Agent
+	launch.Executable = spec.Executable
+	launch.Args = slices.Clone(spec.Args)
+	launch.TeamDBPath = req.TeamDBPath
+	launch.CodexTeamStatusPath = req.CodexTeamStatusPath
+	launch.CodexPlanStatusPath = req.CodexPlanStatusPath
+	if req.Agent == "claude" {
+		launch.Args = slices.Concat([]string{"--settings", `{}`}, launch.Args)
+	}
+	return launch
+}
+
+func allocationTestManualIntent(
+	t *testing.T,
+	repo string,
+	number int,
+	runtimeParent, worktreePath string,
+) state.LaunchIntent {
+	t.Helper()
+	ownerRoot, err := canonicalManualCoordinatorOwner(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := burnedManualCoordinatorIntent(t, ownerRoot, repo, number, state.IntentRealized)
+	worktreePath = canonicalAttachedAllocationPath(worktreePath)
+	intent.RuntimeParent = runtimeParent
+	intent.WorktreePath = worktreePath
+	intent.Resource.CurrentPath = worktreePath
+	return intent
+}
+
+func saveAllocationTestIntent(t *testing.T, repo string, intent state.LaunchIntent) {
+	t.Helper()
+	locked, err := state.LockProjectForLaunch(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := locked.LaunchJournal(repo)
+	if err == nil {
+		journal.UpsertIntent(intent)
+		err = journal.Save()
+	}
+	if unlockErr := locked.Unlock(); err == nil {
+		err = unlockErr
+	}
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

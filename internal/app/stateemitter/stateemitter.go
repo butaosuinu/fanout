@@ -157,7 +157,7 @@ func runtimeTargetForSignal(
 	gitCommonDir string,
 	signal telemetry.Signal,
 ) (RuntimeTarget, error) {
-	row, err := uniqueFinalRow(locked.Panes, signal.RowKey)
+	row, err := emitterRowIndex(locked.Store, signal)
 	if err != nil {
 		return RuntimeTarget{}, err
 	}
@@ -182,7 +182,7 @@ func applyObservedSignal(
 	signal telemetry.Signal,
 	observation Observation,
 ) error {
-	row, err := uniqueFinalRow(locked.Panes, signal.RowKey)
+	row, err := emitterRowIndex(locked.Store, signal)
 	if err != nil {
 		return err
 	}
@@ -192,26 +192,33 @@ func applyObservedSignal(
 	return updatePendingIntent(locked, projectRoot, gitCommonDir, signal, observation)
 }
 
+func emitterRowIndex(store state.Store, signal telemetry.Signal) (int, error) {
+	if signal.WorkspaceLabel != "" || signal.WorktreePath != "" {
+		return store.EmitterRowIndex(signal.RowKey, signal.WorktreePath, signal.WorkspaceLabel)
+	}
+	candidate := -1
+	for i := range store.Panes {
+		if !finalSignalMatches(store.Panes[i].RuntimeBinding(), signal) {
+			continue
+		}
+		if candidate >= 0 {
+			return -1, fmt.Errorf("multiple final rows match legacy emitter launch identity")
+		}
+		candidate = i
+	}
+	if candidate < 0 {
+		return -1, nil
+	}
+	pane := store.Panes[candidate]
+	return store.EmitterRowIndex(signal.RowKey, filepath.Clean(pane.WorktreePath), pane.WorkspaceLabel)
+}
+
 func projectRootForStatePath(path string) (string, error) {
 	root := filepath.Dir(filepath.Dir(path))
 	if filepath.Base(filepath.Dir(path)) != ".fanout" || state.Path(root) != path {
 		return "", fmt.Errorf("state path must name an owning .fanout/state.json")
 	}
 	return root, nil
-}
-
-func uniqueFinalRow(panes []state.Pane, rowKey string) (int, error) {
-	index := -1
-	for i := range panes {
-		if panes[i].EmitterRowKey != rowKey {
-			continue
-		}
-		if index >= 0 {
-			return -1, fmt.Errorf("multiple final rows match emitter row key")
-		}
-		index = i
-	}
-	return index, nil
 }
 
 func updateFinalRow(
@@ -373,21 +380,7 @@ func nextReportedState(current, next string) string {
 // the pane identity the projection carries.
 func finalRuntimeTarget(pane state.Pane, gitCommonDir string, signal telemetry.Signal) (RuntimeTarget, error) {
 	binding := pane.RuntimeBinding()
-	identity := []bool{
-		signal.Backend == backend.Herdr,
-		binding.Ref.Backend == backend.Herdr,
-		binding.Launch.RowKey == signal.RowKey,
-		binding.Launch.Nonce == signal.LaunchNonce,
-		binding.Launch.EmitterNonce == signal.EmitterNonce,
-		binding.SessionID == signal.Session,
-		binding.SocketPath == signal.SocketPath,
-		binding.Ref.Workspace == signal.WorkspaceID,
-		binding.Ref.Pane == signal.PaneID,
-		binding.TerminalID == signal.TerminalID,
-		binding.Agent == signal.Agent,
-		binding.AgentID == signal.AgentID,
-	}
-	if slices.Contains(identity, false) {
+	if !finalSignalMatches(binding, signal) {
 		return RuntimeTarget{}, fmt.Errorf("final row does not match emitter launch identity")
 	}
 	return RuntimeTarget{
@@ -402,6 +395,25 @@ func finalRuntimeTarget(pane state.Pane, gitCommonDir string, signal telemetry.S
 		Args:             slices.Clone(binding.Launch.Args),
 		GenericWorkspace: pane.Kind == state.PaneKindAttachedAgent && binding.RepoKey == "",
 	}, nil
+}
+
+func finalSignalMatches(binding backend.PaneBinding, signal telemetry.Signal) bool {
+	identity := []bool{
+		signal.Backend == backend.Herdr,
+		binding.Ref.Backend == backend.Herdr,
+		binding.Launch.RowKey == signal.RowKey,
+		binding.Launch.Nonce == signal.LaunchNonce,
+		binding.Launch.EmitterNonce == signal.EmitterNonce,
+		binding.SessionID == signal.Session,
+		binding.SocketPath == signal.SocketPath,
+		binding.Ref.Workspace == signal.WorkspaceID,
+		stableSignalMatches(binding.WorkspaceLabel, binding.WorktreePath, signal),
+		binding.Ref.Pane == signal.PaneID,
+		binding.TerminalID == signal.TerminalID,
+		binding.Agent == signal.Agent,
+		binding.AgentID == signal.AgentID,
+	}
+	return !slices.Contains(identity, false)
 }
 
 func pendingRuntimeTarget(
@@ -444,12 +456,20 @@ func pendingSignalMatches(intent state.LaunchIntent, signal telemetry.Signal) bo
 		intent.Session == signal.Session,
 		intent.SocketPath == signal.SocketPath,
 		intent.Resource.WorkspaceID == signal.WorkspaceID,
+		stableSignalMatches(intent.Resource.Label, intent.WorktreePath, signal),
 		intent.Resource.PaneID == signal.PaneID,
 		intent.Resource.TerminalID == signal.TerminalID,
 		launch.Agent == signal.Agent,
 		launch.AgentName == signal.AgentID,
 	}
 	return !slices.Contains(identity, false)
+}
+
+func stableSignalMatches(workspaceLabel, worktreePath string, signal telemetry.Signal) bool {
+	if signal.WorkspaceLabel == "" && signal.WorktreePath == "" {
+		return true
+	}
+	return workspaceLabel == signal.WorkspaceLabel && worktreePath == signal.WorktreePath
 }
 
 func observeRuntime(

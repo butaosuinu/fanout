@@ -157,10 +157,10 @@ func bindHerdrEmitterEnvironment(intent state.LaunchIntent, environment []string
 		telemetry.RowKeyEnv: intent.ID, telemetry.LaunchNonceEnv: launch.Nonce,
 		telemetry.EmitterNonceEnv: launch.EmitterNonce, telemetry.BackendEnv: "herdr",
 		telemetry.SessionEnv: intent.Session, telemetry.SocketPathEnv: intent.SocketPath,
-		telemetry.WorkspaceIDEnv: intent.Resource.WorkspaceID,
-		telemetry.PaneIDEnv:      intent.Resource.PaneID,
-		telemetry.TerminalIDEnv:  intent.Resource.TerminalID,
-		telemetry.AgentEnv:       launch.Agent, telemetry.AgentIDEnv: launch.AgentName,
+		telemetry.WorkspaceIDEnv:    intent.Resource.WorkspaceID,
+		telemetry.WorkspaceLabelEnv: intent.Resource.Label, telemetry.WorktreePathEnv: intent.WorktreePath,
+		telemetry.PaneIDEnv: intent.Resource.PaneID, telemetry.TerminalIDEnv: intent.Resource.TerminalID,
+		telemetry.AgentEnv: launch.Agent, telemetry.AgentIDEnv: launch.AgentName,
 	}
 	for i, entry := range environment {
 		name, _, _ := strings.Cut(entry, "=")

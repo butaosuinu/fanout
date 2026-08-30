@@ -72,6 +72,110 @@ func TestEmitUpdatesOnlyFinalRowTelemetry(t *testing.T) {
 	}
 }
 
+func TestEmitResolvesSyntheticRowCollisionByStableIdentity(t *testing.T) {
+	repo := newEmitterRepo(t)
+	target, signal, observer := finalEmitterFixture(t, repo)
+	foreign := target
+	foreign.Parent, foreign.IssueNum = "525", -1
+	foreign.WorkspaceID, foreign.WorkspaceLabel = "workspace-2", "owned-label-2"
+	foreign.PaneID, foreign.TerminalID = "workspace-2:pane-1", "terminal-2"
+	foreign.ReportedState = string(backend.AgentBlocked)
+	foreign.ReportedStateSeq, foreign.StateRefinement = 2, true
+	saveEmitterPanes(t, repo, foreign, target)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotTarget, found := store.Find(target.Parent, target.IssueNum)
+	if !found || gotTarget.ReportedState != string(backend.AgentWorking) {
+		t.Fatalf("target telemetry = (%+v, %t), want working", gotTarget, found)
+	}
+	gotForeign, found := store.Find(foreign.Parent, foreign.IssueNum)
+	if !found || gotForeign.ReportedState != string(backend.AgentBlocked) ||
+		gotForeign.ReportedStateSeq != 2 {
+		t.Fatalf("foreign telemetry = (%+v, %t), want unchanged blocked", gotForeign, found)
+	}
+}
+
+func TestEmitResolvesPinnedLegacyLauncherThroughStableIdentity(t *testing.T) {
+	repo := newEmitterRepo(t)
+	target, signal, observer := finalEmitterFixture(t, repo)
+	foreign := target
+	foreign.Parent, foreign.IssueNum = "525", -1
+	foreign.WorktreePath = filepath.Join(repo, ".fanout", "worktrees", "foreign")
+	foreign.WorkspaceID, foreign.WorkspaceLabel = "workspace-2", "owned-label-2"
+	foreign.PaneID, foreign.TerminalID = "workspace-2:pane-1", "terminal-2"
+	foreign.ReportedState = string(backend.AgentBlocked)
+	foreign.ReportedStateSeq, foreign.StateRefinement = 2, true
+	signal.WorkspaceLabel, signal.WorktreePath = "", ""
+	saveEmitterPanes(t, repo, foreign, target)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotTarget, found := store.Find(target.Parent, target.IssueNum)
+	if !found || gotTarget.ReportedState != string(backend.AgentWorking) {
+		t.Fatalf("target telemetry = (%+v, %t), want working", gotTarget, found)
+	}
+	gotForeign, found := store.Find(foreign.Parent, foreign.IssueNum)
+	if !found || gotForeign.ReportedState != string(backend.AgentBlocked) {
+		t.Fatalf("foreign telemetry = (%+v, %t), want unchanged blocked", gotForeign, found)
+	}
+}
+
+func TestEmitRejectsPinnedLegacyLauncherWithAmbiguousStableIdentity(t *testing.T) {
+	repo := newEmitterRepo(t)
+	target, signal, observer := finalEmitterFixture(t, repo)
+	duplicate := target
+	duplicate.Parent, duplicate.IssueNum = "525", -1
+	duplicate.WorkspaceID, duplicate.PaneID = "workspace-2", "workspace-2:pane-1"
+	duplicate.TerminalID = "terminal-2"
+	signal.WorkspaceLabel, signal.WorktreePath = "", ""
+	saveEmitterPanes(t, repo, target, duplicate)
+
+	if err := Emit(context.Background(), signal, observer); err == nil {
+		t.Fatal("Emit() accepted ambiguous persisted stable identity from a legacy launcher")
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pane := range store.Panes {
+		if pane.ReportedState != string(backend.AgentRunning) || pane.StateRefinement {
+			t.Fatalf("ambiguous legacy signal changed row telemetry: %+v", pane)
+		}
+	}
+}
+
+func TestEmitRejectsAmbiguousStableRowIdentityWithoutMutation(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, observer := finalEmitterFixture(t, repo)
+	duplicate := pane
+	duplicate.Parent, duplicate.IssueNum = "525", -1
+	saveEmitterPanes(t, repo, pane, duplicate)
+
+	if err := Emit(context.Background(), signal, observer); err == nil {
+		t.Fatal("Emit() accepted ambiguous stable row identity")
+	}
+	store, err := state.LoadProject(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, saved := range store.Panes {
+		if saved.ReportedState != string(backend.AgentRunning) || saved.StateRefinement {
+			t.Fatalf("ambiguous signal changed row telemetry: %+v", saved)
+		}
+	}
+}
+
 func TestRunSequenceWritesMonotonicValues(t *testing.T) {
 	repo := newEmitterRepo(t)
 	getenv := func(key string) string {
@@ -644,6 +748,26 @@ func TestEmitPendingIntentPersistsDoneUntilFinalSave(t *testing.T) {
 	}
 }
 
+func TestEmitAcceptsPinnedLegacyLauncherForPendingIntent(t *testing.T) {
+	repo := newEmitterRepo(t)
+	intent, signal, observer := pendingEmitterFixture(t, repo)
+	signal.WorkspaceLabel, signal.WorktreePath = "", ""
+	saveEmitterIntent(t, repo, intent)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := state.LoadLaunchJournal(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found := stored.FindIntent(intent.ID)
+	if !found || got.Launch.PendingReportedState != string(backend.AgentWorking) ||
+		got.Launch.PendingAgentSession == nil {
+		t.Fatalf("legacy pending telemetry = (%+v, %t), want working", got, found)
+	}
+}
+
 func TestEmitStalePendingSequenceStillRebindsReplacedSession(t *testing.T) {
 	repo := newEmitterRepo(t)
 	intent, signal, observer := pendingEmitterFixture(t, repo)
@@ -821,6 +945,7 @@ func pendingEmitterFixture(t *testing.T, repo string) (state.LaunchIntent, telem
 			LauncherReady: true, TokenIssued: true,
 		},
 	}
+	signal.WorkspaceLabel = intent.Resource.Label
 	observer.observation.Panes[0].WorkspaceLabel = intent.Resource.Label
 	return intent, signal, observer
 }
@@ -837,6 +962,7 @@ func genericPendingEmitterFixture(t *testing.T, repo string) (state.LaunchIntent
 	intent.Resource.CurrentPath, intent.Resource.RepoKey, intent.Resource.RepoRoot = repo, "", ""
 	intent.Coordinator = state.RuntimeResource{}
 	signal.RowKey = intent.ID
+	signal.WorktreePath = intent.WorktreePath
 	live := &observer.observation.Panes[0]
 	live.CurrentPath, live.WorktreePath, live.RepoKey, live.ProjectRoot = repo, "", "", ""
 	observer.observation.ProcessInfo.ForegroundProcesses[0].CWD = repo
@@ -848,7 +974,8 @@ func signalForPane(repo string, pane state.Pane) telemetry.Signal {
 		StatePath: state.Path(repo), RowKey: pane.EmitterRowKey,
 		LaunchNonce: pane.LaunchNonce, EmitterNonce: pane.EmitterNonce,
 		Backend: backend.Herdr, Session: pane.SessionID, SocketPath: pane.SocketPath,
-		WorkspaceID: pane.WorkspaceID, PaneID: pane.PaneID,
+		WorkspaceID: pane.WorkspaceID, WorkspaceLabel: pane.WorkspaceLabel,
+		WorktreePath: pane.WorktreePath, PaneID: pane.PaneID,
 		TerminalID: pane.TerminalID, Agent: pane.Agent, AgentID: pane.AgentID,
 		State: backend.AgentWorking,
 	}

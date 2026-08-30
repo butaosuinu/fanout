@@ -323,6 +323,23 @@ func TestRunMsgNudgeHerdrAllowsUnreportedAgentSession(t *testing.T) {
 	}
 }
 
+func TestRunMsgNudgeHerdrResolvesRowKeyCollisionByWorktree(t *testing.T) {
+	store, runtime := managedNudgeFixture("idle", true)
+	foreign := store.Panes[0]
+	foreign.Parent = "69"
+	foreign.WorktreePath = "/repo/.fanout/worktrees/other"
+	foreign.PaneID = "w2:p1"
+	foreign.TerminalID = "term-other"
+	store.Panes = append(store.Panes, foreign)
+
+	deps := managedNudgeDeps(store, store, runtime)
+	var out, errb strings.Builder
+	code := runMsgNudge(&Request{Verb: "nudge", To: 71}, "68", deps, log.NewWith(&out, &errb, false))
+	if code != exitcode.OK || runtime.nudgeCalls != 1 || errb.Len() != 0 {
+		t.Fatalf("code=%d calls=%d stderr=%q", code, runtime.nudgeCalls, errb.String())
+	}
+}
+
 func TestRunMsgNudgeHerdrRejectsInvalidLaunchGenerationBeforeRuntimeIO(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -379,6 +396,7 @@ func TestRunMsgNudgeHerdrFailsClosedBeforePrompt(t *testing.T) {
 		{name: "process changed", mutateProc: func(p *backend.PaneProcessInfo) { p.ForegroundProcesses[0].Argv = []string{"other"} }, want: "process identity"},
 		{name: "workspace ownership changed", mutateRow: func(p *state.Pane) { p.WorkspaceLabel = "fanout-worktree-replaced" }, want: "launch binding changed"},
 		{name: "emitter generation changed", mutateRow: func(p *state.Pane) { p.EmitterNonce = strings.Repeat("c", 32) }, want: "launch binding changed"},
+		{name: "emitter stable identity duplicated", mutateStore: appendDuplicateNudgeStableIdentity, want: "launch binding changed"},
 		{name: "recipient duplicated", mutateStore: appendDuplicateNudgeRecipient, want: "launch binding changed"},
 		{name: "latest state blocked", mutateRow: func(p *state.Pane) { p.ReportedState = "blocked" }, want: "not nudgeable"},
 		{name: "state lock failed", lockErr: errors.New("lock failed"), want: "lock failed"},
@@ -541,6 +559,14 @@ func appendDuplicateNudgeRecipient(store *state.Store) {
 	duplicate.PaneID = "w1:p2"
 	duplicate.TerminalID = "term-duplicate"
 	duplicate.EmitterRowKey = "issue:68:71:duplicate"
+	store.Panes = append(store.Panes, duplicate)
+}
+
+func appendDuplicateNudgeStableIdentity(store *state.Store) {
+	duplicate := store.Panes[0]
+	duplicate.Parent = "69"
+	duplicate.PaneID = "w2:p1"
+	duplicate.TerminalID = "term-duplicate"
 	store.Panes = append(store.Panes, duplicate)
 }
 
