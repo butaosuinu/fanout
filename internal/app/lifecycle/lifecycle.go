@@ -545,6 +545,9 @@ func closePaneRecordsLocked(opts Options, locked *state.LockedStore, panes []sta
 	if !runBeforeWorktreeRemoveHooks(opts, locked, panes, mode, lg) {
 		return false
 	}
+	if !closeSharedAttachedWorkspaceRows(opts, locked, panes, mode, lg) {
+		return false
+	}
 	if !closeRuntimePanes(opts, panes, mode, lg, windows) {
 		return false
 	}
@@ -852,7 +855,7 @@ func validateCloseOperations(opts Options, panes []state.Pane, mode CloseMode, l
 	for _, pane := range panes {
 		ref := paneRefFromState(pane)
 		if workspaceRuntimeRow(pane) {
-			if !validateWorkspaceCloseOperation(opts, pane, mode, lg) {
+			if !validateWorkspaceRuntimeCloseOperation(opts, panes, pane, mode, lg) {
 				return false
 			}
 			continue
@@ -873,6 +876,48 @@ func validateCloseOperations(opts Options, panes []state.Pane, mode CloseMode, l
 		}
 	}
 	return true
+}
+
+func validateWorkspaceRuntimeCloseOperation(
+	opts Options,
+	panes []state.Pane,
+	pane state.Pane,
+	mode CloseMode,
+	lg Logger,
+) bool {
+	sharedChild := !pane.IsAttachedAgent() && sharesAttachedWorkspaceRuntimeWorktree(pane, panes)
+	sharedAttached := pane.IsAttachedAgent() && sharesWorkspaceRuntimeWorktree(pane, panes)
+	if !sharedChild && !sharedAttached {
+		return validateWorkspaceCloseOperation(opts, pane, mode, lg)
+	}
+	var err error
+	if sharedChild {
+		err = validateWorkspacePaneIdentity(pane)
+	}
+	if err != nil || opts.WorkspaceRuntime == nil {
+		if err == nil {
+			err = fmt.Errorf("Herdr lifecycle runtime is not configured")
+		}
+		lg.Err("%s: %v; preserving workspace, worktree, and state", paneLabel(pane), err)
+		return false
+	}
+	return true
+}
+
+func sharesWorkspaceRuntimeWorktree(pane state.Pane, panes []state.Pane) bool {
+	path := normalizedWorktreePath(pane.WorktreePath)
+	return path != "" && slices.ContainsFunc(panes, func(candidate state.Pane) bool {
+		return workspaceRuntimeRow(candidate) && !candidate.IsShell() && !candidate.IsAttachedAgent() &&
+			normalizedWorktreePath(candidate.WorktreePath) == path
+	})
+}
+
+func sharesAttachedWorkspaceRuntimeWorktree(pane state.Pane, panes []state.Pane) bool {
+	path := normalizedWorktreePath(pane.WorktreePath)
+	return path != "" && slices.ContainsFunc(panes, func(candidate state.Pane) bool {
+		return workspaceRuntimeRow(candidate) && candidate.IsAttachedAgent() &&
+			normalizedWorktreePath(candidate.WorktreePath) == path
+	})
 }
 
 func paneRefFromState(pane state.Pane) backend.PaneRef {
