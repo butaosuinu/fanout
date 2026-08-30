@@ -625,19 +625,25 @@ func validateSavedWorkspaceCleanup(intent state.LaunchIntent, projectRoot string
 		return err
 	}
 	deleteBranchRequested := mode == CloseEverything && pane.BranchCreated
-	deleteBranch := deleteBranchRequested && intent.ExpectedHead != ""
-	deleteBranchMatches := intent.CleanupDeleteBranch == deleteBranch
-	if intent.CleanupDeleteBranchRequested != nil {
-		deleteBranchMatches = *intent.CleanupDeleteBranchRequested == deleteBranchRequested &&
-			(!intent.CleanupDeleteBranch || deleteBranch)
-	}
 	if slices.Contains([]bool{
 		intent.Kind == state.IntentCleanup, intentMatchesPane(intent, pane, ownerRoot),
-		deleteBranchMatches, cleanupResourceMatchesPane(intent, pane),
+		workspaceCleanupBranchDeleteMatches(intent, deleteBranchRequested), cleanupResourceMatchesPane(intent, pane),
 	}, false) {
 		return fmt.Errorf("saved Herdr cleanup intent does not match the selected state row")
 	}
 	return nil
+}
+
+func workspaceCleanupBranchDeleteMatches(intent state.LaunchIntent, requested bool) bool {
+	if intent.CleanupDeleteBranchVerified {
+		deleteBranch := requested && intent.ExpectedHead != ""
+		return intent.CleanupDeleteBranchRequested != nil &&
+			*intent.CleanupDeleteBranchRequested == requested && (!intent.CleanupDeleteBranch || deleteBranch)
+	}
+	if intent.CleanupDeleteBranchRequested != nil {
+		return *intent.CleanupDeleteBranchRequested == requested
+	}
+	return requested || !intent.CleanupDeleteBranch
 }
 
 func intentMatchesPane(intent state.LaunchIntent, pane state.Pane, ownerRoot string) bool {
