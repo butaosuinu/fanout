@@ -184,12 +184,14 @@ func restartedManagedTerminal(
 	terminalID, cwd string,
 	expected state.RuntimeResource,
 ) (string, bool) {
-	requirements := []bool{
-		ref.Backend == backend.Herdr, ref.Workspace == expected.WorkspaceID,
-		ref.Pane == expected.PaneID, terminalID != "", terminalID != expected.TerminalID,
-		cwd == expected.CurrentPath,
+	if strings.TrimSpace(terminalID) == "" || terminalID == expected.TerminalID {
+		return "", false
 	}
-	if slices.Contains(requirements, false) {
+	restarted := expected
+	restarted.TerminalID = terminalID
+	if !paneHasManagedResource(backend.WorkspacePaneObservation{
+		Pane: ref, TerminalID: terminalID, CWD: cwd,
+	}, restarted) {
 		return "", false
 	}
 	return terminalID, true
