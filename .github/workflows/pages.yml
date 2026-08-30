@@ -38,7 +38,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      HUGO_VERSION: 0.164.0
+      HUGO_VERSION: 0.165.0
       PAGEFIND_VERSION: 1.5.2
     outputs:
       publish: ${{ steps.mode.outputs.publish }}
