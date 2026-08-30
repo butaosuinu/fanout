@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -752,9 +753,15 @@ func TestHerdrCleanupHookCheckpointFailsClosedAfterPhaseSaveFailure(t *testing.T
 			issuedPhase: state.CleanupHookBeforePaneCloseIssued,
 		},
 		{
-			name: "completion", hook: hooks.PaneClosed,
-			failedPhase: state.CleanupHookCompleted,
-			issuedPhase: state.CleanupHookCompletionIssued,
+			name: "pane closed", hook: hooks.PaneClosed,
+			failedPhase: state.CleanupHookPaneClosed,
+			issuedPhase: state.CleanupHookPaneClosedIssued,
+			removeCalls: 1,
+		},
+		{
+			name: "worktree removed", hook: hooks.WorktreeRemoved,
+			failedPhase: state.CleanupHookWorktreeRemoved,
+			issuedPhase: state.CleanupHookWorktreeRemovedIssued,
 			removeCalls: 1,
 		},
 	}
@@ -819,6 +826,96 @@ func TestHerdrCleanupHookCheckpointFailsClosedAfterPhaseSaveFailure(t *testing.T
 			}
 		})
 	}
+}
+
+func TestHerdrCleanupPersistsWorktreeRemovedObligationAcrossObservationFailure(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot:             fixture.projectRoot,
+		workspaces:              []backend.WorkspaceObservation{fixture.workspace},
+		observeAfterMutationErr: errors.New("observation temporarily unavailable"),
+	}
+	var backgroundHooks []hooks.Type
+	originalBackgroundHook := runWorkspaceBackgroundHook
+	runWorkspaceBackgroundHook = func(hook hooks.Type, _ Options, _ state.Pane, _ string, _ Logger) {
+		backgroundHooks = append(backgroundHooks, hook)
+	}
+	t.Cleanup(func() { runWorkspaceBackgroundHook = originalBackgroundHook })
+	opts := herdrLifecycleOptions(fixture, runtime)
+	opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+		hooks.PaneClosed:      {{Command: ":", Timeout: time.Second}},
+		hooks.WorktreeRemoved: {{Command: ":", Timeout: time.Second}},
+	}}
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	assertHerdrCleanupWorktreeRemovedRequired(t, fixture, true)
+	if len(backgroundHooks) != 0 {
+		t.Fatalf("completion hooks before mutation recovery = %v, want none", backgroundHooks)
+	}
+
+	runtime.observeAfterMutationErr = nil
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	wantHooks := []hooks.Type{hooks.PaneClosed, hooks.WorktreeRemoved}
+	if !slices.Equal(backgroundHooks, wantHooks) {
+		t.Fatalf("retry completion hooks = %v, want %v", backgroundHooks, wantHooks)
+	}
+	if runtime.removeCalls != 1 {
+		t.Fatalf("retry remove calls = %d, want 1", runtime.removeCalls)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCleanupResumesBetweenCompletionHooks(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+	}
+	var backgroundHooks []hooks.Type
+	originalBackgroundHook := runWorkspaceBackgroundHook
+	runWorkspaceBackgroundHook = func(hook hooks.Type, _ Options, _ state.Pane, _ string, _ Logger) {
+		backgroundHooks = append(backgroundHooks, hook)
+	}
+	defer func() { runWorkspaceBackgroundHook = originalBackgroundHook }()
+	originalSaveHook := saveWorkspaceCleanupHookIntent
+	failBetweenHooks := true
+	saveWorkspaceCleanupHookIntent = func(journal *state.LockedLaunchJournal, intent state.LaunchIntent) error {
+		if failBetweenHooks && intent.CleanupHookPhase == state.CleanupHookWorktreeRemovedIssued {
+			return errors.New("persist worktree_removed dispatch unavailable")
+		}
+		return saveWorkspaceCleanupIntent(journal, intent)
+	}
+	defer func() { saveWorkspaceCleanupHookIntent = originalSaveHook }()
+	opts := herdrLifecycleOptions(fixture, runtime)
+	opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+		hooks.PaneClosed:      {{Command: ":", Timeout: time.Second}},
+		hooks.WorktreeRemoved: {{Command: ":", Timeout: time.Second}},
+	}}
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	assertHerdrCleanupHookPhase(t, fixture, state.CleanupHookPaneClosed)
+	if !slices.Equal(backgroundHooks, []hooks.Type{hooks.PaneClosed}) {
+		t.Fatalf("first completion hooks = %v, want [%s]", backgroundHooks, hooks.PaneClosed)
+	}
+
+	failBetweenHooks = false
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	wantHooks := []hooks.Type{hooks.PaneClosed, hooks.WorktreeRemoved}
+	if !slices.Equal(backgroundHooks, wantHooks) {
+		t.Fatalf("retry completion hooks = %v, want %v", backgroundHooks, wantHooks)
+	}
+	if runtime.removeCalls != 1 {
+		t.Fatalf("retry remove calls = %d, want 1", runtime.removeCalls)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
 }
 
 func TestHerdrCleanupHookRebindsMovedWorkspaceIdentity(t *testing.T) {
@@ -3717,6 +3814,29 @@ func assertHerdrCleanupBranchDeleteDisarmed(t *testing.T, fixture herdrLifecycle
 	if !found || intent.CleanupDeleteBranch || !intent.CleanupDeleteBranchVerified ||
 		intent.ExpectedHead != expectedHead {
 		t.Fatalf("disarmed cleanup intent = %#v (found=%t), want verified false delete with head %s", intent, found, expectedHead)
+	}
+}
+
+func assertHerdrCleanupWorktreeRemovedRequired(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	want bool,
+) {
+	t.Helper()
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found || intent.CleanupWorktreeRemovedRequired == nil || *intent.CleanupWorktreeRemovedRequired != want {
+		t.Fatalf(
+			"cleanup worktree_removed obligation = %v (found=%t), want %t",
+			intent.CleanupWorktreeRemovedRequired, found, want,
+		)
 	}
 }
 

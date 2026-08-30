@@ -600,14 +600,13 @@ func removeManagedWorktrees(opts Options, locked *state.LockedStore, panes []sta
 
 func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.Pane, mode CloseMode, lg Logger) bool {
 	if workspaceRuntimeRow(pane) {
-		hadWorktree := recordedWorktreeExists(pane)
 		if !runWorkspaceCleanupHook(opts, locked, pane, mode, hooks.BeforePaneClose, lg) {
 			return false
 		}
 		if !closeWorkspaceWorktree(opts, locked, pane, mode, lg) {
 			return false
 		}
-		if !completeWorkspaceCleanupHooks(opts, locked, pane, hadWorktree, lg) {
+		if !completeWorkspaceCleanupHooks(opts, locked, pane, lg) {
 			return false
 		}
 		return true
@@ -699,7 +698,8 @@ func cleanupHookCheckpoint(hook hooks.Type) (state.CleanupHookPhase, state.Clean
 func rejectAmbiguousCleanupHookPhase(phase state.CleanupHookPhase, pane state.Pane, lg Logger) bool {
 	if phase != state.CleanupHookBeforeWorktreeRemoveIssued &&
 		phase != state.CleanupHookBeforePaneCloseIssued &&
-		phase != state.CleanupHookCompletionIssued {
+		phase != state.CleanupHookPaneClosedIssued &&
+		phase != state.CleanupHookWorktreeRemovedIssued {
 		return false
 	}
 	lg.Err("%s: saved Herdr cleanup hook phase %q has an ambiguous dispatch outcome; refusing to replay", paneLabel(pane), phase)
@@ -729,11 +729,23 @@ func persistCleanupHookPhase(
 }
 
 func cleanupHookPhaseReached(saved, want state.CleanupHookPhase) bool {
-	return saved == "" || saved == want || saved == state.CleanupHookCompleted ||
-		want == state.CleanupHookBeforeWorktreeRemove && saved == state.CleanupHookBeforePaneClose
+	if saved == "" {
+		return want == state.CleanupHookBeforeWorktreeRemove || want == state.CleanupHookBeforePaneClose
+	}
+	phases := []state.CleanupHookPhase{
+		state.CleanupHookPending,
+		state.CleanupHookBeforeWorktreeRemove,
+		state.CleanupHookBeforePaneClose,
+		state.CleanupHookPaneClosed,
+		state.CleanupHookWorktreeRemoved,
+		state.CleanupHookCompleted,
+	}
+	savedIndex := slices.Index(phases, saved)
+	wantIndex := slices.Index(phases, want)
+	return savedIndex >= 0 && wantIndex >= 0 && savedIndex >= wantIndex
 }
 
-func completeWorkspaceCleanupHooks(opts Options, locked *state.LockedStore, pane state.Pane, hadWorktree bool, lg Logger) bool {
+func completeWorkspaceCleanupHooks(opts Options, locked *state.LockedStore, pane state.Pane, lg Logger) bool {
 	journal, err := locked.LaunchJournal(opts.ProjectRoot)
 	if err != nil {
 		lg.Err("%s: load Herdr cleanup hook phase: %v", paneLabel(pane), err)
@@ -756,10 +768,37 @@ func completeWorkspaceCleanupHooks(opts Options, locked *state.LockedStore, pane
 		return false
 	}
 	hookPane := cleanupHookPane(pane, intent.Resource)
-	if !workspaceCompletionHooksConfigured(opts, hadWorktree) {
+	worktreeRemovedRequired, ok := prepareWorkspaceWorktreeRemovedHook(opts, &intent, hookPane, lg)
+	if !ok {
+		return false
+	}
+	if !workspaceCompletionHooksConfigured(opts, worktreeRemovedRequired) {
 		return persistCleanupHookPhase(journal, &intent, state.CleanupHookCompleted, hookPane, lg)
 	}
-	return dispatchWorkspaceCompletionHooks(opts, journal, &intent, hookPane, hadWorktree, lg)
+	return dispatchWorkspaceCompletionHooks(opts, journal, &intent, hookPane, worktreeRemovedRequired, lg)
+}
+
+func prepareWorkspaceWorktreeRemovedHook(
+	opts Options,
+	intent *state.LaunchIntent,
+	pane state.Pane,
+	lg Logger,
+) (bool, bool) {
+	configured := len(opts.Hooks.Events[hooks.WorktreeRemoved]) != 0
+	if intent.CleanupWorktreeRemovedRequired == nil {
+		if configured {
+			lg.Err("%s: saved Herdr worktree_removed hook obligation is absent", paneLabel(pane))
+			return false, false
+		}
+		required := false
+		intent.CleanupWorktreeRemovedRequired = &required
+		return false, true
+	}
+	if *intent.CleanupWorktreeRemovedRequired && !configured {
+		lg.Err("%s: required Herdr worktree_removed hook is not configured", paneLabel(pane))
+		return false, false
+	}
+	return *intent.CleanupWorktreeRemovedRequired, true
 }
 
 func dispatchWorkspaceCompletionHooks(
@@ -767,24 +806,46 @@ func dispatchWorkspaceCompletionHooks(
 	journal *state.LockedLaunchJournal,
 	intent *state.LaunchIntent,
 	pane state.Pane,
-	hadWorktree bool,
+	worktreeRemovedRequired bool,
 	lg Logger,
 ) bool {
-	if !persistCleanupHookPhase(journal, intent, state.CleanupHookCompletionIssued, pane, lg) {
+	if !dispatchWorkspaceCompletionHook(
+		opts, journal, intent, pane, hooks.PaneClosed,
+		state.CleanupHookPaneClosedIssued, state.CleanupHookPaneClosed, lg,
+	) {
 		return false
 	}
-	if len(opts.Hooks.Events[hooks.PaneClosed]) != 0 {
-		runWorkspaceBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
-	}
-	if hadWorktree && len(opts.Hooks.Events[hooks.WorktreeRemoved]) != 0 {
-		runWorkspaceBackgroundHook(hooks.WorktreeRemoved, opts, pane, "", lg)
+	if worktreeRemovedRequired && !dispatchWorkspaceCompletionHook(
+		opts, journal, intent, pane, hooks.WorktreeRemoved,
+		state.CleanupHookWorktreeRemovedIssued, state.CleanupHookWorktreeRemoved, lg,
+	) {
+		return false
 	}
 	return persistCleanupHookPhase(journal, intent, state.CleanupHookCompleted, pane, lg)
 }
 
-func workspaceCompletionHooksConfigured(opts Options, hadWorktree bool) bool {
+func dispatchWorkspaceCompletionHook(
+	opts Options,
+	journal *state.LockedLaunchJournal,
+	intent *state.LaunchIntent,
+	pane state.Pane,
+	hook hooks.Type,
+	issued, completed state.CleanupHookPhase,
+	lg Logger,
+) bool {
+	if len(opts.Hooks.Events[hook]) == 0 || cleanupHookPhaseReached(intent.CleanupHookPhase, completed) {
+		return true
+	}
+	if !persistCleanupHookPhase(journal, intent, issued, pane, lg) {
+		return false
+	}
+	runWorkspaceBackgroundHook(hook, opts, pane, "", lg)
+	return persistCleanupHookPhase(journal, intent, completed, pane, lg)
+}
+
+func workspaceCompletionHooksConfigured(opts Options, worktreeRemovedRequired bool) bool {
 	return len(opts.Hooks.Events[hooks.PaneClosed]) != 0 ||
-		hadWorktree && len(opts.Hooks.Events[hooks.WorktreeRemoved]) != 0
+		worktreeRemovedRequired
 }
 
 func validateCloseOperations(opts Options, panes []state.Pane, mode CloseMode, lg Logger) bool {

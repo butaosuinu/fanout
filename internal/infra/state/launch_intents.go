@@ -56,7 +56,10 @@ const (
 	CleanupHookBeforeWorktreeRemove       CleanupHookPhase = "before_worktree_remove"
 	CleanupHookBeforePaneCloseIssued      CleanupHookPhase = "before_pane_close_issued"
 	CleanupHookBeforePaneClose            CleanupHookPhase = "before_pane_close"
-	CleanupHookCompletionIssued           CleanupHookPhase = "completion_issued"
+	CleanupHookPaneClosedIssued           CleanupHookPhase = "pane_closed_issued"
+	CleanupHookPaneClosed                 CleanupHookPhase = "pane_closed"
+	CleanupHookWorktreeRemovedIssued      CleanupHookPhase = "worktree_removed_issued"
+	CleanupHookWorktreeRemoved            CleanupHookPhase = "worktree_removed"
 	CleanupHookCompleted                  CleanupHookPhase = "completed"
 )
 
@@ -144,6 +147,8 @@ type LaunchIntent struct {
 	CleanupDeleteBranchVerified bool `json:"cleanupDeleteBranchVerified,omitempty"`
 	// CleanupHookPhase is empty only for cleanup intents saved after both pre-cleanup hooks by an older fanout.
 	CleanupHookPhase CleanupHookPhase `json:"cleanupHookPhase,omitempty"`
+	// CleanupWorktreeRemovedRequired is nil only for cleanup intents saved before this field existed.
+	CleanupWorktreeRemovedRequired *bool `json:"cleanupWorktreeRemovedRequired,omitempty"`
 
 	Failure string `json:"failure,omitempty"`
 }
@@ -680,6 +685,7 @@ func validateServerIntent(intent LaunchIntent) error {
 		intent.ExpiresUnixMS == 0, intent.Launch == nil, intent.CleanupPhase == "",
 		intent.ResumeAgentSession == nil, !intent.CleanupDeleteBranch,
 		intent.CleanupDeleteBranchRequested == nil, intent.CleanupHookPhase == "",
+		intent.CleanupWorktreeRemovedRequired == nil,
 		intent.Failure == "",
 	}
 	if slices.Contains(empty, false) {
@@ -753,6 +759,7 @@ func validateCoordinatorFields(intent LaunchIntent) error {
 	return requireIntentFields(intent.Kind, []bool{
 		intent.TaskID == "", intent.BranchName == "", intent.FullBranchRef == "",
 		intent.BaseSHA == "", intent.Coordinator.WorkspaceID == "", intent.CleanupHookPhase == "",
+		intent.CleanupWorktreeRemovedRequired == nil,
 	})
 }
 
@@ -762,7 +769,7 @@ func validateWorktreeFields(intent LaunchIntent) error {
 		intent.FullBranchRef == "refs/heads/"+intent.BranchName,
 		intent.BaseBranch != "", commitSHAPattern.MatchString(intent.BaseSHA),
 		commitSHAPattern.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
-		intent.CleanupHookPhase == "",
+		intent.CleanupHookPhase == "", intent.CleanupWorktreeRemovedRequired == nil,
 	})
 }
 
@@ -773,7 +780,7 @@ func validateRollbackFields(intent LaunchIntent) error {
 		intent.FullBranchRef == "refs/heads/"+intent.BranchName,
 		intent.BaseBranch != "", commitSHAPattern.MatchString(intent.BaseSHA),
 		commitSHAPattern.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
-		intent.CleanupHookPhase == "",
+		intent.CleanupHookPhase == "", intent.CleanupWorktreeRemovedRequired == nil,
 	})
 }
 
@@ -791,8 +798,10 @@ func validateCleanupFields(intent LaunchIntent) error {
 		intent.CleanupPhase != CleanupReopen || intent.Coordinator.WorkspaceID != "",
 		!intent.CleanupDeleteBranch || commitSHAPattern.MatchString(intent.ExpectedHead),
 		validCleanupHookPhase(intent.CleanupHookPhase),
-		intent.CleanupHookPhase != CleanupHookCompletionIssued || intent.Status == IntentRealized,
-		intent.CleanupHookPhase != CleanupHookCompleted || intent.Status == IntentRealized,
+		!cleanupCompletionHookPhase(intent.CleanupHookPhase) || intent.Status == IntentRealized,
+		!cleanupCompletionHookPhase(intent.CleanupHookPhase) || intent.CleanupWorktreeRemovedRequired != nil,
+		!cleanupWorktreeRemovedHookPhase(intent.CleanupHookPhase) ||
+			intent.CleanupWorktreeRemovedRequired != nil && *intent.CleanupWorktreeRemovedRequired,
 	}); err != nil {
 		return err
 	}
@@ -803,10 +812,24 @@ func validateCleanupFields(intent LaunchIntent) error {
 }
 
 func validCleanupHookPhase(phase CleanupHookPhase) bool {
-	return phase == "" || phase == CleanupHookPending ||
-		phase == CleanupHookBeforeWorktreeRemoveIssued || phase == CleanupHookBeforeWorktreeRemove ||
-		phase == CleanupHookBeforePaneCloseIssued || phase == CleanupHookBeforePaneClose ||
-		phase == CleanupHookCompletionIssued || phase == CleanupHookCompleted
+	return slices.Contains([]CleanupHookPhase{
+		"", CleanupHookPending,
+		CleanupHookBeforeWorktreeRemoveIssued, CleanupHookBeforeWorktreeRemove,
+		CleanupHookBeforePaneCloseIssued, CleanupHookBeforePaneClose,
+		CleanupHookPaneClosedIssued, CleanupHookPaneClosed,
+		CleanupHookWorktreeRemovedIssued, CleanupHookWorktreeRemoved,
+		CleanupHookCompleted,
+	}, phase)
+}
+
+func cleanupCompletionHookPhase(phase CleanupHookPhase) bool {
+	return phase == CleanupHookPaneClosedIssued || phase == CleanupHookPaneClosed ||
+		phase == CleanupHookWorktreeRemovedIssued || phase == CleanupHookWorktreeRemoved ||
+		phase == CleanupHookCompleted
+}
+
+func cleanupWorktreeRemovedHookPhase(phase CleanupHookPhase) bool {
+	return phase == CleanupHookWorktreeRemovedIssued || phase == CleanupHookWorktreeRemoved
 }
 
 func validateResumeFields(intent LaunchIntent) error {
@@ -821,7 +844,8 @@ func validateResumeFields(intent LaunchIntent) error {
 		intent.Resource.TerminalID != "", intent.Resource.CurrentPath != "",
 		intent.Coordinator == (RuntimeResource{}), intent.CleanupPhase == "",
 		!intent.CleanupDeleteBranch, intent.CleanupDeleteBranchRequested == nil,
-		intent.CleanupHookPhase == "", intent.Server == nil,
+		intent.CleanupHookPhase == "", intent.CleanupWorktreeRemovedRequired == nil,
+		intent.Server == nil,
 	})
 }
 

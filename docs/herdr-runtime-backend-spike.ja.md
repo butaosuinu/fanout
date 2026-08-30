@@ -529,7 +529,9 @@ fanout の cleanup は次の契約に従う（実装: #531。row は owning work
 - `before_worktree_remove` / `before_pane_close` の前に cleanup intent を保存し、発火済み phase を同じ intent 行へ保存する。
   後段 preflight の一時失敗または retry では、fresh identity preflight を維持したまま保存済み phase 以前の hook を再発火させない。
   cleanup mutation の未発行または expired plan の再計画でも intent 行を削除せず、hook phase を引き継ぐ。
+  `worktree_removed` の発火 obligation は最初の cleanup intent と同じ save で固定し、retry 時の filesystem 状態から再計算しない。
   hook dispatch の直前に issued phase を保存する。dispatch 後の phase 保存に失敗した場合は結果不明として fail closed にし、hook を再発火させない。
+  `pane_closed` と `worktree_removed` は hook ごとに完了 phase を保存し、両者の間で中断した retry は未完了の hook だけを発火する。
   live workspace が保存済み identity から移動していた場合は、一意な label / provenance 照合後に cleanup intent、worktree intent、state row を rebind してから hook context を作る。
 - 照合成功後は intent 行を保存してから `worktree remove` を発行する。実測どおり remove は checkout と child workspace の両方を削除するため、応答成功後に checkout / workspace の不在を確認する。workspace だけが残る場合は `workspace close` で整理する。
 - row と cleanup intent 行の削除は、残存 workspace の close と branch の compare-and-delete（または保持の確定）まで遅らせる。

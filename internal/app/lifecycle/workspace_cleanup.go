@@ -11,6 +11,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -582,6 +583,7 @@ func coordinatorResource(workspace backend.WorkspaceObservation) state.RuntimeRe
 	}
 }
 
+//nolint:funlen // Keep the persisted cleanup identity and hook obligations visible in one constructor.
 func newWorkspaceCleanupIntent(
 	ctx context.Context,
 	opts Options,
@@ -600,6 +602,7 @@ func newWorkspaceCleanupIntent(
 		return state.LaunchIntent{}, err
 	}
 	deleteBranchRequested := mode == CloseEverything && pane.BranchCreated
+	worktreeRemovedRequired := recordedWorktreeExists(pane) && len(opts.Hooks.Events[hooks.WorktreeRemoved]) != 0
 	intent := state.LaunchIntent{
 		ID: intentID, Kind: state.IntentCleanup, Status: freshWorkspaceCleanupStatus(observation),
 		Parent: pane.Parent, RuntimeParent: pane.RuntimeParent, OwnerProjectRoot: ownerRoot,
@@ -611,9 +614,10 @@ func newWorkspaceCleanupIntent(
 		Session: pane.SessionID, SocketPath: pane.SocketPath,
 		ExpiresUnixMS: time.Now().Add(workspaceCleanupTimeout).UnixMilli(),
 		CleanupPhase:  phase, CleanupDeleteBranch: deleteBranchRequested && branchFound && workspaceCleanupCheckoutPresent(observation),
-		CleanupDeleteBranchRequested: &deleteBranchRequested,
-		CleanupDeleteBranchVerified:  true,
-		CleanupHookPhase:             state.CleanupHookPending,
+		CleanupDeleteBranchRequested:   &deleteBranchRequested,
+		CleanupDeleteBranchVerified:    true,
+		CleanupHookPhase:               state.CleanupHookPending,
+		CleanupWorktreeRemovedRequired: &worktreeRemovedRequired,
 	}
 	return intent, nil
 }
