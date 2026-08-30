@@ -936,8 +936,16 @@ func TestHerdrCleanupRetiresAfterStateRowSaveRetry(t *testing.T) {
 		t.Fatalf("completed lifecycle hook dispatches = %v, want two", backgroundHooks)
 	}
 
+	runtimeFactoryCalls := 0
+	opts.WorkspaceRuntime = func(context.Context, state.Pane) (WorkspaceRuntime, error) {
+		runtimeFactoryCalls++
+		return nil, errors.New("runtime unavailable after completed cleanup")
+	}
 	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
 		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtimeFactoryCalls != 0 {
+		t.Fatalf("retry runtime factory calls = %d, want 0", runtimeFactoryCalls)
 	}
 	assertHerdrHookCalls(t, hookPath, 1)
 	assertHerdrLifecycleRemoved(t, fixture)
@@ -1019,14 +1027,151 @@ func TestHerdrCleanupRestoresStateAfterIntentRetirementSaveFailure(t *testing.T)
 		t.Fatalf("completed lifecycle hook dispatches = %v, want two", backgroundHooks)
 	}
 
+	runtimeFactoryCalls := 0
+	opts.WorkspaceRuntime = func(context.Context, state.Pane) (WorkspaceRuntime, error) {
+		runtimeFactoryCalls++
+		return nil, errors.New("runtime unavailable after completed cleanup")
+	}
 	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
 		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtimeFactoryCalls != 0 {
+		t.Fatalf("retry runtime factory calls = %d, want 0", runtimeFactoryCalls)
 	}
 	assertHerdrHookCalls(t, hookPath, 1)
 	assertHerdrLifecycleRemoved(t, fixture)
 	if len(backgroundHooks) != 2 {
 		t.Fatalf("retry lifecycle hook dispatches = %v, want no resend", backgroundHooks)
 	}
+}
+
+func TestHerdrRetirementRetrySkipsUnavailableRuntimeAndGitHub(t *testing.T) {
+	tests := []struct {
+		name string
+		task bool
+		run  func(Options, herdrLifecycleFixture) exitcode.Code
+	}{
+		{
+			name: "close issue",
+			run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
+				return Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{})
+			},
+		},
+		{
+			name: "close task",
+			task: true,
+			run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
+				return CloseTask(opts, fixture.pane.Parent, fixture.pane.TaskID, nopLogger{})
+			},
+		},
+		{
+			name: "cleanup issue",
+			run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
+				return Cleanup(opts, fixture.pane.Parent, nopLogger{})
+			},
+		},
+		{
+			name: "cleanup task",
+			task: true,
+			run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
+				return CleanupPlan(opts, fixture.pane.Parent, nopLogger{})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			if tt.task {
+				fixture.pane.Parent = "plan:demo"
+				fixture.pane.IssueNum = 0
+				fixture.pane.TaskID = "task-a"
+				replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane)
+			}
+			runtime := &fakeHerdrLifecycleRuntime{
+				projectRoot: fixture.projectRoot,
+				workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+			}
+			opts := herdrLifecycleOptions(fixture, runtime)
+			leaveCompletedHerdrCleanupAfterRetirementFailure(t, opts, fixture)
+			installUnavailableLifecycleGH(t)
+
+			runtimeFactoryCalls := 0
+			opts.WorkspaceRuntime = func(context.Context, state.Pane) (WorkspaceRuntime, error) {
+				runtimeFactoryCalls++
+				return nil, errors.New("runtime unavailable after completed cleanup")
+			}
+			if got := tt.run(opts, fixture); got != exitcode.OK {
+				t.Fatalf("retry entrypoint = %d, want %d", got, exitcode.OK)
+			}
+			if runtimeFactoryCalls != 0 {
+				t.Fatalf("retry runtime factory calls = %d, want 0", runtimeFactoryCalls)
+			}
+			assertHerdrLifecycleRemoved(t, fixture)
+		})
+	}
+}
+
+func leaveCompletedHerdrCleanupAfterRetirementFailure(
+	t *testing.T,
+	opts Options,
+	fixture herdrLifecycleFixture,
+) {
+	t.Helper()
+	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if locked != nil {
+			if unlockErr := locked.Unlock(); unlockErr != nil {
+				t.Error(unlockErr)
+			}
+		}
+	}()
+	if !closePaneRecordsLocked(opts, locked, []state.Pane{fixture.pane}, CloseWorktree, nopLogger{}, map[string]struct{}{}) {
+		t.Fatal("Herdr cleanup did not reach retirement")
+	}
+	journalPath, err := state.LaunchJournalPath(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalDir := filepath.Dir(journalPath)
+	info, err := os.Stat(journalDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalMode := info.Mode().Perm()
+	if err := os.Chmod(journalDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if chmodErr := os.Chmod(journalDir, originalMode); chmodErr != nil {
+			t.Error(chmodErr)
+		}
+	})
+	if err := retirePaneStateRows(opts, locked, []state.Pane{fixture.pane}, CloseWorktree); err == nil {
+		t.Fatal("intent retirement save unexpectedly succeeded")
+	}
+	if err := os.Chmod(journalDir, originalMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	locked = nil
+	assertHerdrStateRowPresent(t, fixture)
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentRealized, true)
+	assertHerdrCleanupHookPhase(t, fixture, state.CleanupHookCompleted)
+}
+
+func installUnavailableLifecycleGH(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 91\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func TestHerdrCleanupRetryDoesNotRepeatHooks(t *testing.T) {
