@@ -72,7 +72,7 @@ func launchManualPaneFromTUI(projectRoot, session, commandName string, hookConfi
 	if err != nil {
 		return fanouttui.LaunchResult{}, err
 	}
-	store, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
+	store, recorder, code := run.LoadState(cfg.DryRun, rt, launchLogger)
 	if code != exitcode.OK {
 		return fanouttui.LaunchResult{}, bufferedLaunchError(stdout, stderr, "load fanout state")
 	}

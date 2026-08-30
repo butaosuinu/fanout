@@ -123,7 +123,7 @@ func issuesWithResultWhenReady(cfg *cliflags.Config, lg *log.Logger, rt *Runtime
 		return IssueExecutionResult{}, exitcode.OK
 	}
 
-	store, recorder, code := LoadState(cfg.DryRun, rt.Info.ProjectRoot, lg)
+	store, recorder, code := LoadState(cfg.DryRun, rt, lg)
 	if code != exitcode.OK {
 		return IssueExecutionResult{}, code
 	}

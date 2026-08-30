@@ -168,7 +168,7 @@ func launchStandaloneIssuePaneWithResult(projectRoot, session, commandName strin
 	if err != nil {
 		return tuiPaneLaunchResult{}, err
 	}
-	store, recorder, code := run.LoadState(cfg.DryRun, projectRoot, launchLogger)
+	store, recorder, code := run.LoadState(cfg.DryRun, rt, launchLogger)
 	if code != exitcode.OK {
 		return tuiPaneLaunchResult{}, bufferedLaunchError(stdout, stderr, "load fanout state")
 	}

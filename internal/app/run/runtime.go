@@ -7,6 +7,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/cliflags"
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
+	"github.com/butaosuinu/fanout/internal/app/sessionbinding"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
 	"github.com/butaosuinu/fanout/internal/infra/ghissue"
@@ -34,6 +35,9 @@ type Runtime struct {
 	Backend          backend.Backend
 	Managed          panelaunch.ManagedSessionRuntime
 	BackendSelection backend.Selection
+	// ListLive supplies the launch state loader with one runtime snapshot so
+	// provider session changes are persisted before the launch lock is taken.
+	ListLive func() ([]backend.LivePane, error)
 	// VerifyBackend re-runs parent stickiness against the state held under the
 	// launch lock. cmd closes over the raw CLI/env/config inputs so backend
 	// selection and construction remain in the composition root.
@@ -159,10 +163,10 @@ func settingsOverrides(cfg *cliflags.Config) settings.CLIOverrides {
 }
 
 // LoadState opens the fanout state store for a run: read-only for dry-runs,
-// and lock-backed (after preparing the local git exclude) for live runs. Both
-// lanes share it; loadRunState / loadPlanState were byte-identical apart from
-// their config type, so only the dry-run flag is threaded here.
-func LoadState(dryRun bool, projectRoot string, lg *log.Logger) (state.Store, *state.LockedStore, exitcode.Code) {
+// and lock-backed after preparing the local git exclude and refreshing live
+// provider sessions for live runs. Both launch lanes share it.
+func LoadState(dryRun bool, rt *Runtime, lg *log.Logger) (state.Store, *state.LockedStore, exitcode.Code) {
+	projectRoot := rt.Info.ProjectRoot
 	if dryRun {
 		store, err := state.LoadProject(projectRoot)
 		if err != nil {
@@ -171,9 +175,8 @@ func LoadState(dryRun bool, projectRoot string, lg *log.Logger) (state.Store, *s
 		}
 		return store, nil, exitcode.OK
 	}
-	if err := worktree.EnsureLocalExclude(projectRoot); err != nil {
-		lg.Err("prepare local git exclude: %v", err)
-		return state.Store{}, nil, exitcode.Env
+	if code := prepareLaunchState(projectRoot, rt.ListLive, lg); code != exitcode.OK {
+		return state.Store{}, nil, code
 	}
 	locked, err := state.LockProjectForLaunch(projectRoot)
 	if err != nil {
@@ -181,4 +184,20 @@ func LoadState(dryRun bool, projectRoot string, lg *log.Logger) (state.Store, *s
 		return state.Store{}, nil, exitcode.Env
 	}
 	return locked.Store, locked, exitcode.OK
+}
+
+func prepareLaunchState(
+	projectRoot string,
+	listLive func() ([]backend.LivePane, error),
+	lg *log.Logger,
+) exitcode.Code {
+	if err := worktree.EnsureLocalExclude(projectRoot); err != nil {
+		lg.Err("prepare local git exclude: %v", err)
+		return exitcode.Env
+	}
+	if _, err := sessionbinding.StateLoader(projectRoot, listLive)(); err != nil {
+		lg.Err("refresh agent sessions: %v", err)
+		return exitcode.Env
+	}
+	return exitcode.OK
 }
