@@ -1075,9 +1075,14 @@ func completedWorkspaceCleanupMatches(
 	pane state.Pane,
 	mode CloseMode,
 ) (bool, error) {
+	// Legacy task rows can carry a negative issue number, but that shape cannot
+	// have a cleanup intent. Leave it to the normal lifecycle validation path.
+	if strings.TrimSpace(pane.TaskID) != "" && pane.IssueNum != 0 {
+		return false, nil
+	}
 	_, cleanupID, err := workspaceCleanupIntentIDs(projectRoot, pane)
 	if err != nil {
-		return false, nil
+		return false, err
 	}
 	intent, found := journal.FindIntent(cleanupID)
 	if !found || intent.Status != state.IntentRealized || intent.CleanupHookPhase != state.CleanupHookCompleted {
