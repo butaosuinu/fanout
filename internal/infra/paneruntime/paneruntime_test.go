@@ -95,16 +95,19 @@ func TestNewLaunchBackendDefersLiveOwnedSession(t *testing.T) {
 // composition root iterates.
 func TestEntriesKeepSelfExecTokens(t *testing.T) {
 	entries := Entries()
-	if len(entries) != 2 {
-		t.Fatalf("Entries() length = %d, want 2", len(entries))
+	if len(entries) != 3 {
+		t.Fatalf("Entries() length = %d, want 3", len(entries))
 	}
-	if entries[0].Name != "herdr-pane-launcher" || entries[1].Name != "herdr-supervisor" {
-		t.Fatalf("Entries() names = %q/%q", entries[0].Name, entries[1].Name)
+	if entries[0].Name != "herdr-pane-launcher" || entries[1].Name != "herdr-dashboard-open" || entries[2].Name != "herdr-supervisor" {
+		t.Fatalf("Entries() names = %q/%q/%q", entries[0].Name, entries[1].Name, entries[2].Name)
 	}
-	if entries[1].Match([]string{"__herdr-supervisor", "marker"}) != true {
+	if !entries[1].Match([]string{"__herdr-dashboard-open", "descriptor"}) {
+		t.Fatal("dashboard entry rejected its hidden token")
+	}
+	if entries[2].Match([]string{"__herdr-supervisor", "marker"}) != true {
 		t.Fatal("supervisor entry rejected its hidden token")
 	}
-	if entries[1].Match([]string{"herdr", "restart"}) {
+	if entries[2].Match([]string{"herdr", "restart"}) {
 		t.Fatal("supervisor entry matched the user-facing herdr verb")
 	}
 	if entries[0].Match(nil) {

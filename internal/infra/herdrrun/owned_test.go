@@ -38,9 +38,10 @@ type ownedHarness struct {
 }
 
 type fakeOwnedSupervisor struct {
-	starts    int
-	lock      *os.File
-	listeners []net.Listener
+	starts                  int
+	dashboardAuthentication dashboardAuthentication
+	lock                    *os.File
+	listeners               []net.Listener
 }
 
 const ownedSupervisorTestHerdrCommand = "__herdr-test-herdr"
@@ -110,6 +111,27 @@ func TestNormalizeStatDeviceSupportsDarwinAndLinuxWidths(t *testing.T) {
 	}
 }
 
+func TestNewOwnedSupervisorCommandRelaysDashboardAuthenticationByAlias(t *testing.T) {
+	t.Setenv(dashboardGHTokenEnv, "gh-secret")
+	t.Setenv(dashboardGitHubTokenEnv, "github-secret")
+	cmd, authentication := newOwnedSupervisorCommand("/fanout", "/runtime/owner.json", "nonce", "start")
+	wantEnvironment := []string{dashboardRelayTokenEnv + "=gh-secret"}
+	if !slices.Equal(cmd.Env, wantEnvironment) {
+		t.Fatalf("supervisor environment = %q, want %q", cmd.Env, wantEnvironment)
+	}
+	for _, entry := range cmd.Env {
+		if strings.HasPrefix(entry, dashboardGHTokenEnv+"=") ||
+			strings.HasPrefix(entry, dashboardGitHubTokenEnv+"=") {
+			t.Fatalf("supervisor environment retained raw authentication name %q", entry)
+		}
+	}
+	want := dashboardAuthenticationFromCaller(os.Environ())
+	if authentication != want || dashboardAuthenticationFromSupervisor(cmd.Env) != want ||
+		!slices.Equal(dashboardInheritedAuthenticationEnvironment(cmd.Env), cmd.Env) {
+		t.Fatalf("dashboard authentication = %+v env=%+v, want %+v", authentication, cmd.Env, want)
+	}
+}
+
 func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (*startedSupervisor, error) {
 	s.starts++
 	supervisorPID := 1_000_000_000 + s.starts*2
@@ -154,7 +176,8 @@ func (s *fakeOwnedSupervisor) start(markerPath, nonce, startToken string) (*star
 		s.listeners = append(s.listeners, listener)
 	}
 	return &startedSupervisor{
-		pid: supervisorPID,
+		pid:                     supervisorPID,
+		dashboardAuthentication: s.dashboardAuthentication,
 		signal: func(os.Signal) error {
 			s.close()
 			return nil
@@ -180,6 +203,11 @@ func (s *fakeOwnedSupervisor) closeSockets() {
 }
 
 func newOwnedHarness(t *testing.T) *ownedHarness {
+	t.Helper()
+	return newOwnedHarnessWithDashboardEnvironment(t, nil)
+}
+
+func newOwnedHarnessWithDashboardEnvironment(t *testing.T, environment []string) *ownedHarness {
 	t.Helper()
 	root, err := os.MkdirTemp("/tmp", "fho-") //nolint:usetesting // Darwin Unix socket paths are limited to 103 bytes.
 	if err != nil {
@@ -223,7 +251,9 @@ func newOwnedHarness(t *testing.T) *ownedHarness {
 	}
 	fake := newFakeHerdr(sessionName, layout.socketPath)
 	fake.snapshot = ownedSnapshotFixture(fake.snapshot, commonDir, root, checkout, nonce)
-	supervisor := &fakeOwnedSupervisor{}
+	supervisor := &fakeOwnedSupervisor{
+		dashboardAuthentication: dashboardAuthenticationFromCaller(environment),
+	}
 	h := &ownedHarness{
 		t: t, root: root, commonDir: commonDir, runtimeBase: runtimeBase, binary: binary,
 		layout: layout, nonce: nonce, checkout: checkout, worktreeGitDir: worktreeGitDir,

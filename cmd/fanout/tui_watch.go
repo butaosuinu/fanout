@@ -26,7 +26,13 @@ import (
 	fanouttui "github.com/butaosuinu/fanout/internal/ui/tui"
 )
 
-func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, includeAmbientRoute, interactiveLaunch bool) (fanouttui.WatcherRunner, time.Duration, string, error) {
+func newTUIWatcher(
+	projectRoot, session, commandName string,
+	resolvedSettings settings.Settings,
+	hookConfig hooks.Config,
+	includeAmbientRoute, interactiveLaunch bool,
+	dashboardOwnerSync func(),
+) (fanouttui.WatcherRunner, time.Duration, string, error) {
 	if !resolvedSettings.Watcher || !interactiveLaunch {
 		return nil, 0, "", nil
 	}
@@ -39,8 +45,27 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 		return nil, 0, "", fmt.Errorf("ensure running label %q: %w", resolvedSettings.WatcherRunningLabel, err)
 	}
 	livePanes := &watchLivePaneCache{list: runtimeListLiveForProject(projectRoot, includeAmbientRoute)}
-	watcher := &tuiWatcher{livePanes: livePanes}
-	io := watch.IO{
+	watcher := &tuiWatcher{livePanes: livePanes, dashboardOwnerSync: dashboardOwnerSync}
+	watchIO := newTUIWatcherIO(projectRoot, session, commandName, resolvedSettings, hookConfig, watcher, gh, livePanes)
+	cfg := watch.Config{
+		TriggerLabel: resolvedSettings.WatcherTriggerLabel,
+		RunningLabel: resolvedSettings.WatcherRunningLabel,
+		MaxSessions:  resolvedSettings.WatcherMaxSessions,
+	}
+	interval := time.Duration(resolvedSettings.WatcherIntervalSeconds) * time.Second
+	watcher.engine = watch.NewEngine(cfg, watchIO)
+	return watcher, interval, resolvedSettings.WatcherTriggerLabel, nil
+}
+
+func newTUIWatcherIO(
+	projectRoot, session, commandName string,
+	resolvedSettings settings.Settings,
+	hookConfig hooks.Config,
+	watcher *tuiWatcher,
+	gh ghissue.Runner,
+	livePanes *watchLivePaneCache,
+) watch.IO {
+	return watch.IO{
 		ListLabeled: gh.ListOpenIssuesWithLabel,
 		PlanChildren: func(issue ghissue.Issue) (watch.ChildPlan, error) {
 			return newWatchParentChildPlan(projectRoot, session, commandName, resolvedSettings, watcher, gh, issue)
@@ -58,21 +83,13 @@ func newTUIWatcher(projectRoot, session, commandName string, resolvedSettings se
 		PaneAlive: livePanes.Alive,
 		LaunchStandalone: func(issue ghissue.Issue) error {
 			notice, err := launchWatchStandalone(projectRoot, session, commandName, resolvedSettings, hookConfig, issue)
-			watcher.addNotice(notice)
+			watcher.afterLaunch(notice)
 			return err
 		},
 		PlanLinkedIssueNums: func(store state.Store) map[int]bool {
 			return panelaunch.PlanLinkedIssueNums(projectRoot, store)
 		},
 	}
-	cfg := watch.Config{
-		TriggerLabel: resolvedSettings.WatcherTriggerLabel,
-		RunningLabel: resolvedSettings.WatcherRunningLabel,
-		MaxSessions:  resolvedSettings.WatcherMaxSessions,
-	}
-	interval := time.Duration(resolvedSettings.WatcherIntervalSeconds) * time.Second
-	watcher.engine = watch.NewEngine(cfg, io)
-	return watcher, interval, resolvedSettings.WatcherTriggerLabel, nil
 }
 
 func newWatchParentChildPlan(projectRoot, session, commandName string, resolvedSettings settings.Settings, watcher *tuiWatcher, gh ghissue.Runner, issue ghissue.Issue) (watch.ChildPlan, error) {
@@ -85,16 +102,17 @@ func newWatchParentChildPlan(projectRoot, session, commandName string, resolvedS
 		LaunchParent: func(limit int) (watch.ParentLaunchResult, error) {
 			cfg := newWatchLaunchConfig(resolvedSettings, issue.Number, limit)
 			result, err := launchParentIssueFanoutWithPlanInput(projectRoot, session, commandName, cfg, prepared.runInput())
-			watcher.addNotice(result.Notice)
+			watcher.afterLaunch(result.Notice)
 			return result, err
 		},
 	}, nil
 }
 
 type tuiWatcher struct {
-	engine    *watch.Engine
-	livePanes *watchLivePaneCache
-	notices   []string
+	engine             *watch.Engine
+	livePanes          *watchLivePaneCache
+	dashboardOwnerSync func()
+	notices            []string
 }
 
 func (w *tuiWatcher) RunCycle() (watch.Report, error) {
@@ -113,6 +131,13 @@ func (w *tuiWatcher) addNotice(notice string) {
 		return
 	}
 	w.notices = append(w.notices, notice)
+}
+
+func (w *tuiWatcher) afterLaunch(notice string) {
+	w.addNotice(notice)
+	if w != nil && w.dashboardOwnerSync != nil {
+		w.dashboardOwnerSync()
+	}
 }
 
 func launchWatchStandalone(projectRoot, session, commandName string, resolvedSettings settings.Settings, hookConfig hooks.Config, issue ghissue.Issue) (string, error) {
@@ -285,9 +310,9 @@ func launchParentIssueFanoutWithPlanInputResult(projectRoot, session, commandNam
 	var execution run.IssueExecutionResult
 	var code exitcode.Code
 	if input == nil {
-		execution, code = run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, runReady, runAfter)
+		execution, code = run.IssuesWithResultWhenReady(cfg, launchLogger, rt, commandName, runtimeDashboardKeyBinder(rt), runReady, runAfter)
 	} else {
-		execution, code = run.IssuesWithPlanInputResultWhenReady(cfg, launchLogger, rt, commandName, bindDashboardKey, *input, runReady, runAfter)
+		execution, code = run.IssuesWithPlanInputResultWhenReady(cfg, launchLogger, rt, commandName, runtimeDashboardKeyBinder(rt), *input, runReady, runAfter)
 	}
 	result := parentIssueFanoutResult{
 		CreatedPaneIDs:  execution.CreatedPaneIDs,

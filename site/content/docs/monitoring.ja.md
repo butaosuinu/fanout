@@ -304,8 +304,9 @@ Catppuccin、Gruvbox、Tokyo Night ほか)から選べます。
 
 ### F12 / prefix + D
 
-どのペインからでも **`F12`** または **`prefix + D`** でダッシュボードを開けます。
-`--no-dashboard-keybind`(fan-out 側)、`--no-keybind`(dashboard 側)、設定キー `dashboardKeybind`、`FANOUT_DASHBOARD_KEYBIND=0` で無効化できます([Settings]({{< relref "/docs/settings" >}}) を参照してください)。
+tmux ではどのペインからでも **`F12`** または **`prefix + D`** でダッシュボードを開けます。
+fanout-owned Herdr session では通常のどの pane からでも **`F12`** で開けます。prefix keybind は tmux 専用です。
+`--no-dashboard-keybind`(fan-out 側)、設定キー `dashboardKeybind`、`FANOUT_DASHBOARD_KEYBIND=0` で登録を無効化できます([Settings]({{< relref "/docs/settings" >}}) を参照してください)。`fanout dashboard --no-keybind` はその dashboard process での登録を省略し、既存の keybind は削除しません。
 
 ### prefix + M
 

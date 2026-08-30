@@ -46,9 +46,9 @@ briefing から起動します。再実行しても同じ対象に 2 つ目の�
 - **ラベル watcher** — opt-in すると、TUI 常駐中に信頼できる `fanout:auto`
   issue を one-shot fanout session に投入します。
 - **Web ダッシュボード** — localhost で動くダッシュボード(ライブ更新)。PR が
-  紐付いた Session にはマージボタンが出ます。どのペインからでも `F12` または
-  `prefix + D` でポップできます。記録済みペインからの同一 worktree 操作は
-  `prefix + M` で開きます。
+  紐付いた Session にはマージボタンが出ます。tmux ではどのペインからでも `F12`
+  または `prefix + D`、fanout-owned Herdr pane では `F12` で開きます。tmux の
+  記録済みペインからの同一 worktree 操作は `prefix + M` で開きます。
 - **状態確認とレポート** — `--status` の JSON / table で PR review・CI 状態を
   確認でき、任意で親 issue にダッシュボードコメントを投稿します。
 - **Lifecycle hook** — user config に書いた shell command を worktree、pane、

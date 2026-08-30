@@ -170,7 +170,7 @@ The dashboard ships in Japanese and English. Column headers, tags, and filter va
 
 ### F12 / prefix + D
 
-From any pane, **`F12`** or **`prefix + D`** opens the dashboard. Disable it with `--no-dashboard-keybind` (fan-out side), `--no-keybind` (dashboard side), the `dashboardKeybind` config key, or `FANOUT_DASHBOARD_KEYBIND=0` (see [Settings]({{< relref "/docs/settings" >}})).
+From any tmux pane, **`F12`** or **`prefix + D`** opens the dashboard. In a fanout-owned Herdr session, **`F12`** opens it from any normal pane; the prefix binding is tmux-only. Disable registration with `--no-dashboard-keybind` (fan-out side), the `dashboardKeybind` config key, or `FANOUT_DASHBOARD_KEYBIND=0` (see [Settings]({{< relref "/docs/settings" >}})). `fanout dashboard --no-keybind` skips registration for that dashboard process without removing an existing binding.
 
 ### prefix + M
 

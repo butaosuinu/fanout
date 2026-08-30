@@ -13,7 +13,9 @@ The herdr backend runs CLI fan-outs in [herdr](https://herdr.dev/), a persistent
 
 For a CLI launch, fanout starts or readopts its repository-owned herdr session, creates one project-root coordinator workspace, creates a worktree workspace per child, and starts the selected agent through a pinned non-login fanout launcher. The launcher receives one operation-bound token, consumes an owner-only environment capsule once, and replaces itself with the agent without invoking a shell. Direct Claude and direct Codex receive the owned socket and exact pane ID their official session report needs, but not the session or workspace route. fanout records the exact workspace, pane, terminal, repository, agent, session, and socket identities in `.fanout/state.json` only after the launch is verified. It also records the provider session identity when the installed herdr integration reports one.
 
-The owned session pins its own `config.toml`: fanout's launcher as the non-login default shell, herdr's restore-time agent resume off, and herdr's update manifest check off. Nothing restarts an agent behind fanout's back — resume is the explicit path below.
+The owned session pins its own `config.toml`: fanout's launcher as the non-login default shell, herdr's restore-time agent resume off, and herdr's update manifest check off. When `dashboardKeybind` is enabled, it also registers a Herdr `F12` shell command that opens the web dashboard from the focused pane. Nothing restarts an agent behind fanout's back — resume is the explicit path below.
+
+If `gh` authentication comes from `GH_TOKEN` or `GITHUB_TOKEN`, create the owned session from a shell that has the variable. fanout passes the token to the owned server under an internal control-plane name; it writes only its SHA-256 fingerprint to the ownership marker and keeps the value out of `config.toml` and the dashboard descriptor. If a live server did not inherit the current token, fanout removes the F12 binding. Close or clean up its rows, run `fanout herdr shutdown`, then relaunch from a shell with the token.
 
 The persistent TUI console, `--status`, and the web dashboard show recorded sessions with each pane's runtime backend and identity (see [Monitoring]({{< relref "/docs/monitoring" >}})). The TUI console and web dashboard match herdr rows against `herdr api snapshot`; `--status` reads recorded state and GitHub only. Inside the owned console, the TUI can launch issue, Prompt, attached-agent, and shell panes, focus them, and peek at their output. The dashboard can peek at owned rows without adding a mutation endpoint. Before reading or mutating a session, fanout checks `herdr --version`, the exact owned route, and the saved workspace ownership label. A failed public method returns `herdr method "<name>" is unavailable`.
 
@@ -60,7 +62,7 @@ The unsupported paths fail closed with a clear error.
 - Focus additionally needs a saved agent session. Only the agent integration reports one, so focus is refused until `herdr integration install claude` / `codex` is in place. Three kinds of row stay refused even with it installed: agents started with attach ([#732](https://github.com/butaosuinu/fanout/issues/732)), Codex Plan Mode and team (their workload is fanout's controller, not the provider), and OpenCode. None of them receive the socket environment the hook needs.
 - When a provider starts a new conversation in the same pane (Claude's `/clear`, Codex's `/new`), herdr replaces the conversation and also drops the agent record's name. The row's recorded conversation follows the new one, and fanout re-asserts the name it minted, so focus, peek, `--close`, and `--cleanup` keep working across it. A conversation from a different provider, a reference the runtime did not issue, and an agent record already answering to another name are all refused as before.
 - Codex child Plan Mode runs through fanout's app-server controller and owned launcher. Claude and OpenCode keep their native mode flags.
-- No tmux keybindings are registered, and fanout never calls herdr's in-app `notification show`.
+- Herdr registers only the dashboard's direct `F12` command. The tmux-only `prefix + D`, `prefix + M`, console-return bindings, and in-app `notification show` remain unavailable.
 
 The TUI header always shows the selected backend and why it was selected, such as `backend: herdr (HERDR_ENV)`.
 
@@ -140,7 +142,7 @@ v0.13.0's herdr backend was observation-only: you started a named herdr session 
 | `--team` peer messaging | SQLite registry, Claude watcher, Codex app-server bridge | Same registry and push lanes |
 | `--merge`, `--close`, `--cleanup`; TUI merge / close / cleanup | Supported | Supported for verified fanout-owned rows; cleanup never forces a dirty checkout |
 | Automatic nudge (`fanout msg nudge`) | Delivered when the peer can take input | One no-wait `agent prompt` after fresh refined telemetry and live identity/process checks; otherwise no-op |
-| tmux keybindings (dashboard, console return) | Registered | Not registered |
+| Global keybindings | `F12` / `prefix + D` dashboard, `prefix + M` worktree action, console return | `F12` dashboard only, through the fanout-owned Herdr config |
 | Notifications | bell / tmux / ntfy / slack channels | bell / ntfy / slack work; the tmux channel and herdr's `notification show` do not fire |
 | Child Plan Mode launch | Supported | Supported; Codex uses fanout's app-server controller, while Claude / OpenCode use native flags |
 | TUI forms (settings, help) | tmux popups | Inline in-process forms |

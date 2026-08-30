@@ -380,10 +380,9 @@ func TestBackendOffersNoRestoreCapability(t *testing.T) {
 	}
 }
 
-// Popups, global key shortcuts, and viewer-scoped focus are the host surfaces
-// fanout's own console asks a runtime for. Herdr offers none, which is how the
-// console hides those actions instead of discovering at keypress time that the
-// tmux commands behind them do nothing.
+// Popups, the broad host shortcut set, and viewer-scoped focus are the host
+// surfaces fanout's own console asks a runtime for. Herdr offers none; its
+// dashboard-only binding remains a separate capability.
 func TestBackendOffersNoConsoleHostCapability(t *testing.T) {
 	b := New("fanout-test", "/tmp/herdr.sock")
 	if _, ok := corebackend.AsPopupHost(b); ok {
@@ -391,6 +390,9 @@ func TestBackendOffersNoConsoleHostCapability(t *testing.T) {
 	}
 	if _, ok := corebackend.AsShortcutBinder(b); ok {
 		t.Fatal("AsShortcutBinder(herdr backend) reported a capability, want absent")
+	}
+	if _, ok := corebackend.AsDashboardShortcutBinder(b); !ok {
+		t.Fatal("AsDashboardShortcutBinder(herdr backend) is absent")
 	}
 	if _, ok := corebackend.AsConsoleFocus(b); ok {
 		t.Fatal("AsConsoleFocus(herdr backend) reported a capability, want absent")

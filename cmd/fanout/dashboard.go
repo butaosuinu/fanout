@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/prmerge"
+	"github.com/butaosuinu/fanout/internal/app/run"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
@@ -22,6 +23,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/settings"
+	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 	"github.com/butaosuinu/fanout/internal/ui/dashboard"
 )
@@ -184,14 +186,14 @@ func cmdDashboard(args []string, lg *log.Logger) exitcode.Code {
 		openBrowserBestEffort(url, lg)
 	}
 
-	keybindEnabled := settings.Resolve(root, settings.CLIOverrides{
-		DashboardKeybind: noKeybindOverride(flags.noKeybind),
-	}, lg.Warn).DashboardKeybind
-	selection, selectionErr := resolveDisplayBackendSelection(root)
-	if selectionErr != nil {
-		lg.Warn("dashboard: runtime backend selection unavailable (%v); skipping tmux keybind", selectionErr)
-	} else {
-		bindDashboardKeyForBackend(lg, keybindEnabled, selection)
+	if !flags.noKeybind {
+		keybindEnabled := settings.Resolve(root, settings.CLIOverrides{}, lg.Warn).DashboardKeybind
+		selection, selectionErr := resolveDisplayBackendSelection(root)
+		if selectionErr != nil {
+			lg.Warn("dashboard: runtime backend selection unavailable (%v); skipping keybind", selectionErr)
+		} else {
+			bindDashboardKeyForBackend(lg, keybindEnabled, selection, root)
+		}
 	}
 
 	if err := srv.Wait(ctx); err != nil {
@@ -226,29 +228,27 @@ func dashboardManagedPeekPorts(
 	return owns, read
 }
 
-// bindDashboardKeyForBackend registers the shortcuts only when the resolved
-// runtime is one that owns global key shortcuts of its own. The binder below
-// always resolves the host runtime, because that is where the key table lives;
-// without this gate a console running on a runtime that registers no shortcuts
-// would still rewrite the host's bindings out from under it.
-func bindDashboardKeyForBackend(lg *log.Logger, enabled bool, selection backend.Selection) {
-	if !selectionBindsShortcuts(selection) {
-		return
-	}
-	bindDashboardKey(lg, enabled)
-}
-
-// selectionBindsShortcuts probes the resolved selection's runtime for the
-// global-shortcut capability. Constructing a runtime allocates only — it
-// acquires no session and starts no process — so the probe needs no route and
-// leaves nothing behind.
-func selectionBindsShortcuts(selection backend.Selection) bool {
+// bindDashboardKeyForBackend registers the shortcut through the resolved
+// runtime's own capability. A managed runtime must first reopen the exact
+// repository-owned session whose private config carries the key table.
+func bindDashboardKeyForBackend(lg *log.Logger, enabled bool, selection backend.Selection, projectRoot string) {
 	selected, err := paneruntime.NewBackend(selection.Name, "", "")
 	if err != nil {
-		return false
+		return
 	}
-	_, ok := backend.AsShortcutBinder(selected)
-	return ok
+	if _, ok := backend.AsShortcutBinder(selected); ok {
+		bindDashboardKey(lg, enabled)
+		return
+	}
+	if _, ok := backend.AsDashboardShortcutBinder(selected); !ok {
+		return
+	}
+	owned, err := paneruntime.OpenProject(projectRoot)
+	if err != nil {
+		lg.Debug("dashboard keybind: open managed session: %v", err)
+		return
+	}
+	syncOwnedDashboardKey(lg, enabled, projectRoot, owned)
 }
 
 // waitDashboardHealthy polls the token-free /healthz endpoint until it answers
@@ -343,6 +343,94 @@ func bindDashboardKey(lg *log.Logger, enabled bool) {
 		return
 	}
 	syncDashboardKey(lg, enabled, false)
+}
+
+func bindRuntimeDashboardKey(lg *log.Logger, enabled bool, projectRoot string, runtimeBackend backend.Backend) {
+	if _, ok := backend.AsShortcutBinder(runtimeBackend); ok {
+		bindDashboardKey(lg, enabled)
+		return
+	}
+	syncRuntimeDashboardKey(lg, enabled, projectRoot, runtimeBackend)
+}
+
+func runtimeDashboardKeyBinder(rt *run.Runtime) func(*log.Logger, bool) {
+	projectRoot := ""
+	if rt != nil && rt.Info != nil {
+		projectRoot = rt.Info.ProjectRoot
+	}
+	return func(lg *log.Logger, enabled bool) {
+		bindRuntimeDashboardKey(lg, enabled, projectRoot, rt.Backend)
+	}
+}
+
+func syncRuntimeDashboardKey(lg *log.Logger, enabled bool, projectRoot string, runtimeBackend backend.Backend) {
+	if runtimeBackend == nil {
+		return
+	}
+	binder, ok := backend.AsDashboardShortcutBinder(runtimeBackend)
+	if !ok {
+		return
+	}
+	bin, err := os.Executable()
+	if err != nil {
+		lg.Warn("dashboard keybind: resolve fanout binary: %v", err)
+		return
+	}
+	var resolveOwners func() ([]backend.DashboardShortcutOwner, error)
+	if enabled {
+		resolveOwners = func() ([]backend.DashboardShortcutOwner, error) {
+			return resolveDashboardShortcutOwners(projectRoot)
+		}
+	}
+	err = binder.SyncDashboardShortcut(backend.DashboardShortcutOptions{
+		Enabled: enabled, FanoutBin: bin, ResolveOwners: resolveOwners, Environment: os.Environ(),
+	})
+	if err != nil {
+		lg.Warn("dashboard keybind: %v", err)
+		return
+	}
+	if enabled {
+		lg.Info("dashboard keybind: press %s to open the dashboard", defaultDashboardDirectKey)
+	}
+}
+
+func syncOwnedDashboardKey(lg *log.Logger, enabled bool, projectRoot string, owned paneruntime.ManagedSession) {
+	if owned == nil || owned.Backend() == nil {
+		return
+	}
+	syncRuntimeDashboardKey(lg, enabled, projectRoot, owned.Backend())
+}
+
+var resolveDashboardShortcutOwners = loadDashboardShortcutOwners
+
+func loadDashboardShortcutOwners(projectRoot string) ([]backend.DashboardShortcutOwner, error) {
+	current, err := state.LoadProject(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	stores, err := paneruntime.ProjectStores(projectRoot, current)
+	if err != nil {
+		return nil, err
+	}
+	owners := make([]backend.DashboardShortcutOwner, 0)
+	for _, owner := range stores {
+		owners = append(owners, dashboardShortcutOwners(owner)...)
+	}
+	return owners, nil
+}
+
+func dashboardShortcutOwners(owner paneruntime.ProjectStore) []backend.DashboardShortcutOwner {
+	result := make([]backend.DashboardShortcutOwner, 0)
+	for _, pane := range owner.Store.Panes {
+		if pane.PaneID == "" || pane.WorkspaceID == "" || pane.SessionID == "" || pane.SocketPath == "" {
+			continue
+		}
+		result = append(result, backend.DashboardShortcutOwner{
+			PaneID: pane.PaneID, WorkspaceID: pane.WorkspaceID,
+			SessionID: pane.SessionID, SocketPath: pane.SocketPath, StatePath: state.Path(owner.Root),
+		})
+	}
+	return result
 }
 
 func syncDashboardKey(lg *log.Logger, enabled bool, cleanupDisabled bool) {
@@ -455,14 +543,6 @@ func dashboardMergePort(root string) func(context.Context, prmerge.Request) (prm
 	return prmerge.Service{GH: ghissue.Runner{Cwd: root}}.Merge
 }
 
-func noKeybindOverride(noKeybind bool) *bool {
-	if noKeybind {
-		v := false
-		return &v
-	}
-	return nil
-}
-
 const dashboardUsage = `Usage: fanout dashboard [--web] [--port N] [--open] [--no-token] [--no-keybind]
 
 Start a localhost web dashboard that visualizes fanout Sessions (panes grouped
@@ -482,8 +562,8 @@ Options:
                   thing this server can change outside your machine.
                   By default a random token gates /api/* and is embedded in the
                   printed URL.
-  --no-keybind    Do not register the tmux 'F12' / 'prefix + D' / 'prefix + M'
-                  keybindings this run.
+  --no-keybind    Do not register runtime dashboard shortcuts this run. Existing
+                  bindings are left unchanged.
   -h, --help      Show this message.
 
 The dashboard reuses a server that is already running (recorded in

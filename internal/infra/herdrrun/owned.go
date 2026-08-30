@@ -202,6 +202,7 @@ type ownerMarker struct {
 	ConfigPath           string `json:"config_path"`
 	LauncherPath         string `json:"launcher_path"`
 	LauncherSHA256       string `json:"launcher_sha256"`
+	DashboardTokenSHA256 string `json:"dashboard_token_sha256,omitempty"`
 }
 
 type supervisorLease struct {
@@ -219,20 +220,21 @@ type ownedAdmission struct {
 }
 
 type ownedLayout struct {
-	runtimeBase      string
-	runtimeDir       string
-	markerPath       string
-	lifecycleLock    string
-	supervisorLock   string
-	socketPath       string
-	clientSocketPath string
-	xdgConfigHome    string
-	xdgStateHome     string
-	xdgDataHome      string
-	xdgCacheHome     string
-	configPath       string
-	binaryDir        string
-	launcherDir      string
+	runtimeBase             string
+	runtimeDir              string
+	markerPath              string
+	lifecycleLock           string
+	supervisorLock          string
+	socketPath              string
+	clientSocketPath        string
+	xdgConfigHome           string
+	xdgStateHome            string
+	xdgDataHome             string
+	xdgCacheHome            string
+	configPath              string
+	dashboardDescriptorPath string
+	binaryDir               string
+	launcherDir             string
 }
 
 type pathIdentity struct {
@@ -245,9 +247,10 @@ func normalizeStatDevice[T ~int32 | ~uint32 | ~uint64](device T) uint64 {
 }
 
 type startedSupervisor struct {
-	pid    int
-	signal func(os.Signal) error
-	wait   func() error
+	pid                     int
+	dashboardAuthentication dashboardAuthentication
+	signal                  func(os.Signal) error
+	wait                    func() error
 }
 
 func (s *startedSupervisor) reapAsync() {
@@ -608,6 +611,7 @@ func claimOwnedSession(
 		XDGDataHome: layout.xdgDataHome, XDGCacheHome: layout.xdgCacheHome,
 		ConfigPath:   layout.configPath,
 		LauncherPath: launcher.path, LauncherSHA256: launcher.sha256,
+		DashboardTokenSHA256: started.dashboardAuthentication.tokenSHA256,
 	}
 	if err := writeMarker(layout.markerPath, marker); err != nil {
 		return marker, started, err
@@ -878,21 +882,26 @@ func prepareOwnedLayout(runtimeBase, session string) (ownedLayout, error) {
 	abs = filepath.Join(parent, filepath.Base(abs))
 	runtimeDir := filepath.Join(filepath.Clean(abs), session)
 	configHome := filepath.Join(runtimeDir, "xdg-config")
-	layout := ownedLayout{
-		runtimeBase: filepath.Clean(abs), runtimeDir: runtimeDir,
-		markerPath: filepath.Join(runtimeDir, ownedMarkerName), lifecycleLock: filepath.Join(runtimeDir, ownedLifecycleLockName),
-		supervisorLock: filepath.Join(runtimeDir, ownedSupervisorLockName), socketPath: filepath.Join(runtimeDir, "herdr.sock"),
-		clientSocketPath: filepath.Join(runtimeDir, "herdr-client.sock"), xdgConfigHome: configHome,
-		xdgStateHome: filepath.Join(runtimeDir, "xdg-state"), xdgDataHome: filepath.Join(runtimeDir, "xdg-data"),
-		xdgCacheHome: filepath.Join(runtimeDir, "xdg-cache"), configPath: filepath.Join(configHome, "herdr", "config.toml"),
-		binaryDir: filepath.Join(runtimeDir, "binary"), launcherDir: filepath.Join(runtimeDir, "launcher"),
-	}
+	layout := newOwnedLayout(filepath.Clean(abs), runtimeDir, configHome)
 	for _, path := range []string{layout.socketPath, layout.clientSocketPath} {
 		if len(path) > maxUnixSocketPathBytes {
 			return ownedLayout{}, fmt.Errorf("herdr owned socket path is %d bytes, want at most %d: %s", len(path), maxUnixSocketPathBytes, path)
 		}
 	}
 	return layout, nil
+}
+
+func newOwnedLayout(runtimeBase, runtimeDir, configHome string) ownedLayout {
+	return ownedLayout{
+		runtimeBase: runtimeBase, runtimeDir: runtimeDir,
+		markerPath: filepath.Join(runtimeDir, ownedMarkerName), lifecycleLock: filepath.Join(runtimeDir, ownedLifecycleLockName),
+		supervisorLock: filepath.Join(runtimeDir, ownedSupervisorLockName), socketPath: filepath.Join(runtimeDir, "herdr.sock"),
+		clientSocketPath: filepath.Join(runtimeDir, "herdr-client.sock"), xdgConfigHome: configHome,
+		xdgStateHome: filepath.Join(runtimeDir, "xdg-state"), xdgDataHome: filepath.Join(runtimeDir, "xdg-data"),
+		xdgCacheHome: filepath.Join(runtimeDir, "xdg-cache"), configPath: filepath.Join(configHome, "herdr", "config.toml"),
+		dashboardDescriptorPath: filepath.Join(runtimeDir, dashboardDescriptorName),
+		binaryDir:               filepath.Join(runtimeDir, "binary"), launcherDir: filepath.Join(runtimeDir, "launcher"),
+	}
 }
 
 func ensureOwnedLayout(layout ownedLayout) error {
@@ -914,7 +923,7 @@ func validateOwnedLayout(layout ownedLayout, launcherPath string) error {
 			return err
 		}
 	}
-	if err := validateCompatibleOwnedConfig(layout.configPath, launcherPath); err != nil {
+	if err := validateCompatibleOwnedConfig(layout, launcherPath); err != nil {
 		return err
 	}
 	info, err := os.Lstat(filepath.Join(layout.runtimeDir, ownedSupervisorLogName))
@@ -935,15 +944,24 @@ func legacyOwnedConfigContents(launcherPath string) []byte {
 		"\nshell_mode = \"non_login\"\n\n[update]\nmanifest_check = false\n")
 }
 
-func validateCompatibleOwnedConfig(path, launcherPath string) error {
-	currentErr := validatePrivateContents(path, ownedConfigContents(launcherPath))
+func validateCompatibleOwnedConfig(layout ownedLayout, launcherPath string) error {
+	currentErr := validatePrivateContents(layout.configPath, ownedConfigContents(launcherPath))
 	if currentErr == nil {
 		return nil
 	}
-	if err := validatePrivateContents(path, legacyOwnedConfigContents(launcherPath)); err != nil {
+	if err := validatePrivateContents(layout.configPath, legacyOwnedConfigContents(launcherPath)); err == nil {
+		return nil
+	}
+	descriptor, found, err := readDashboardDescriptor(layout)
+	if err != nil {
+		return err
+	}
+	if !found {
 		return currentErr
 	}
-	return nil
+	return validatePrivateContents(layout.configPath, ownedDashboardConfigContents(
+		launcherPath, descriptor.HelperPath, layout.dashboardDescriptorPath,
+	))
 }
 
 func ensureOwnedConfig(layout ownedLayout, launcherPath string) error {
@@ -1464,8 +1482,7 @@ func startOwnedSupervisor(markerPath, nonce, startToken string) (*startedSupervi
 		return nil, err
 	}
 	defer func() { _ = reader.Close() }()
-	cmd := exec.Command(exe, ownedSupervisorCommand, markerPath, nonce, startToken, strconv.Itoa(ownedSupervisorReadyFD))
-	cmd.Env = []string{}
+	cmd, authentication := newOwnedSupervisorCommand(exe, markerPath, nonce, startToken)
 	cmd.ExtraFiles = []*os.File{writer}
 	cmd.Dir = filepath.Dir(markerPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -1492,10 +1509,20 @@ func startOwnedSupervisor(markerPath, nonce, startToken string) (*startedSupervi
 		return nil, fmt.Errorf("herdr supervisor readiness handshake failed")
 	}
 	return &startedSupervisor{
-		pid:    cmd.Process.Pid,
-		signal: cmd.Process.Signal,
-		wait:   cmd.Wait,
+		pid:                     cmd.Process.Pid,
+		dashboardAuthentication: authentication,
+		signal:                  cmd.Process.Signal,
+		wait:                    cmd.Wait,
 	}, nil
+}
+
+func newOwnedSupervisorCommand(
+	exe, markerPath, nonce, startToken string,
+) (*exec.Cmd, dashboardAuthentication) {
+	hostEnvironment := os.Environ()
+	cmd := exec.Command(exe, ownedSupervisorCommand, markerPath, nonce, startToken, strconv.Itoa(ownedSupervisorReadyFD))
+	cmd.Env = dashboardSupervisorEnvironment(hostEnvironment)
+	return cmd, dashboardAuthenticationFromCaller(hostEnvironment)
 }
 
 func stopStartedOwnedCommand(cmd *exec.Cmd) {
@@ -1764,9 +1791,10 @@ func ownedMarkerEnvironment(marker ownerMarker) []string {
 		configPath: marker.ConfigPath, clientSocketPath: marker.ClientSocketPath,
 	}
 	environment := routeEnvironment(route{session: marker.Session, socketPath: marker.SocketPath}, control)
-	return append(environment,
+	environment = append(environment,
 		paneLauncherFlagEnv+"=1",
 		paneLauncherPathEnv+"="+marker.LauncherPath,
 		paneLauncherControlEnv+"="+filepath.Join(marker.GitCommonDir, "fanout", "herdr-intents.json"),
 	)
+	return append(environment, dashboardInheritedAuthenticationEnvironment(os.Environ())...)
 }

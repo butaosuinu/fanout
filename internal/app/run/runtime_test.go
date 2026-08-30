@@ -15,6 +15,12 @@ import (
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 )
 
+type dashboardShortcutFake struct{ backend.Backend }
+
+func (dashboardShortcutFake) SyncDashboardShortcut(backend.DashboardShortcutOptions) error {
+	return nil
+}
+
 func TestShouldBindRuntimeKeys(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -24,6 +30,7 @@ func TestShouldBindRuntimeKeys(t *testing.T) {
 		want           bool
 	}{
 		{name: "live launch on a shortcut-capable backend", created: 1, runtimeBackend: backendtest.NewTmux(), want: true},
+		{name: "live launch on a dashboard-only backend", created: 1, runtimeBackend: dashboardShortcutFake{backendtest.New()}, want: true},
 		{name: "dry run", dryRun: true, created: 1, runtimeBackend: backendtest.NewTmux()},
 		{name: "no created panes", runtimeBackend: backendtest.NewTmux()},
 		{name: "backend without global shortcuts", created: 1, runtimeBackend: backendtest.New()},

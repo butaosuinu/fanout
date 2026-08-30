@@ -57,6 +57,36 @@ type ShortcutBinder interface {
 	UnbindWorktreeActionShortcut(key string) error
 }
 
+// DashboardShortcutOptions describes the one global shortcut a runtime may
+// install without offering fanout's broader host shortcut surface. Environment
+// is the caller environment before the runtime narrows it for its own server;
+// the implementation must retain only the values it explicitly trusts.
+// Owners map persisted pane identities to the state owner selected at keypress.
+type DashboardShortcutOwner struct {
+	PaneID      string
+	WorkspaceID string
+	SessionID   string
+	SocketPath  string
+	StatePath   string
+}
+
+type DashboardShortcutOptions struct {
+	Enabled   bool
+	FanoutBin string
+	Owners    []DashboardShortcutOwner
+	// ResolveOwners, when set for an enabled shortcut, replaces Owners while
+	// the implementation holds its shortcut-mutation serialization boundary.
+	ResolveOwners func() ([]DashboardShortcutOwner, error)
+	Environment   []string
+}
+
+// DashboardShortcutBinder is the narrow dashboard-only shortcut capability.
+// It lets a runtime offer F12 without claiming the console, worktree-action,
+// popup, or viewer-scoped behavior bundled into ShortcutBinder.
+type DashboardShortcutBinder interface {
+	SyncDashboardShortcut(DashboardShortcutOptions) error
+}
+
 // ConsoleFocus is an optional capability for runtimes that can move a *named*
 // viewer's focus. It is deliberately narrower than Backend.Focus, which acts on
 // whichever viewer the runtime considers current: a shortcut-driven command
@@ -85,10 +115,17 @@ func AsPopupHost(b Backend) (PopupHost, bool) {
 	return host, ok
 }
 
-// AsShortcutBinder resolves b's global-shortcut capability. ok=false means the
-// runtime registers no shortcuts, so fanout stays reachable only by command.
+// AsShortcutBinder resolves b's broad host-shortcut capability. ok=false still
+// permits the narrower dashboard-only capability below.
 func AsShortcutBinder(b Backend) (ShortcutBinder, bool) {
 	binder, ok := b.(ShortcutBinder)
+	return binder, ok
+}
+
+// AsDashboardShortcutBinder resolves b's dashboard-only shortcut capability.
+// ok=false means the runtime has no narrow dashboard binding of its own.
+func AsDashboardShortcutBinder(b Backend) (DashboardShortcutBinder, bool) {
+	binder, ok := b.(DashboardShortcutBinder)
 	return binder, ok
 }
 

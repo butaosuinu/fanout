@@ -45,9 +45,9 @@ English and 日本語.
 - **Label watcher** — opt in to a TUI-resident watcher that turns trusted
   `fanout:auto` issues into one-shot fanout sessions.
 - **Web dashboard** — a localhost dashboard with live updates and a merge
-  button on every Session that has a pull request; pop it from any pane with
-  `F12` or `prefix + D`. Use `prefix + M` for same-worktree actions from a
-  recorded pane.
+  button on every Session that has a pull request. In tmux, open it from any
+  pane with `F12` or `prefix + D`; a fanout-owned Herdr pane uses `F12`.
+  Use `prefix + M` in tmux for same-worktree actions from a recorded pane.
 - **Status & reporting** — `--status` JSON / table with PR review and CI state,
   plus an optional dashboard comment on the parent issue.
 - **Lifecycle hooks** — user-configured shell commands around worktree, pane,
