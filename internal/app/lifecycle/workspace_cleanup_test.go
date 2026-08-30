@@ -44,6 +44,7 @@ type fakeHerdrLifecycleRuntime struct {
 	removeCalls  int
 	closeCalls   int
 	observeCalls int
+	afterRemove  func()
 }
 
 func (f *fakeHerdrLifecycleRuntime) VerifyOwned(context.Context) error {
@@ -133,6 +134,9 @@ func (f *fakeHerdrLifecycleRuntime) RemoveWorktree(ctx context.Context, workspac
 	cmd := exec.CommandContext(ctx, "git", "-C", f.projectRoot, "worktree", "remove", path)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return errors.Join(f.removeErr, errors.New(strings.TrimSpace(string(out))), err)
+	}
+	if f.afterRemove != nil {
+		f.afterRemove()
 	}
 	f.mutationDispatched = true
 	if !f.keepWorkspaceAfterRemove {
@@ -1872,10 +1876,15 @@ func TestExpiredReopenedHerdrCleanupPreservesReplacementIdentityAndRefreshesHead
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
-func TestHerdrCloseEverythingCompareDeletesOnlyFanoutCreatedBranch(t *testing.T) {
+func TestHerdrCloseEverythingDeletesUnmergedFanoutCreatedBranchWhenTipMatches(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	fixture.pane.BranchCreated = true
 	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "unmerged.txt"), []byte("unmerged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "unmerged.txt")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "unmerged child work")
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
 		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
@@ -1887,6 +1896,80 @@ func TestHerdrCloseEverythingCompareDeletesOnlyFanoutCreatedBranch(t *testing.T)
 	if localBranchExists(fixture.projectRoot, fixture.branch) {
 		t.Fatalf("fanout-created branch %s was not compare-deleted", fixture.branch)
 	}
+}
+
+func TestHerdrCloseEverythingLeavesMovedFanoutCreatedBranchAndWarns(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.BranchCreated = true
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	expected := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", fixture.branch))
+	tree := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", expected+"^{tree}"))
+	moved := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "commit-tree", tree, "-p", expected, "-m", "branch moved"))
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+		afterRemove: func() {
+			runHerdrLifecycleGit(t, fixture.projectRoot, "update-ref", "refs/heads/"+fixture.branch, moved, expected)
+		},
+	}
+	logger := &captureLogger{}
+
+	if got := CloseWithMode(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, logger); got != exitcode.OK {
+		t.Fatalf("CloseWithMode() = %d, want %d", got, exitcode.OK)
+	}
+	if got := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", fixture.branch)); got != moved {
+		t.Fatalf("moved branch tip = %s, want %s", got, moved)
+	}
+	if warnings := strings.Join(logger.warnings, "\n"); !strings.Contains(warnings, "branch tip moved from "+expected+" to "+moved) ||
+		!strings.Contains(warnings, "leaving branch in place") {
+		t.Fatalf("warnings = %q, want moved-tip branch preservation warning", warnings)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseEverythingLeavesBranchWhenTipCannotBeConfirmedAndWarns(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.BranchCreated = true
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	marker := installFailingBranchObservationGit(t)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+		afterRemove: func() {
+			if err := os.WriteFile(marker, []byte("fail\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	logger := &captureLogger{}
+
+	if got := CloseWithMode(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, logger); got != exitcode.OK {
+		t.Fatalf("CloseWithMode() = %d, want %d", got, exitcode.OK)
+	}
+	if !localBranchExists(fixture.projectRoot, fixture.branch) {
+		t.Fatalf("unconfirmed branch %s was deleted", fixture.branch)
+	}
+	if warnings := strings.Join(logger.warnings, "\n"); !strings.Contains(warnings, "verify Herdr branch before compare-and-delete") ||
+		!strings.Contains(warnings, "leaving branch in place") {
+		t.Fatalf("warnings = %q, want unconfirmed branch preservation warning", warnings)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCloseEverythingLeavesPreexistingBranch(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+	}
+
+	if got := CloseWithMode(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("CloseWithMode() = %d, want %d", got, exitcode.OK)
+	}
+	if !localBranchExists(fixture.projectRoot, fixture.branch) {
+		t.Fatalf("preexisting branch %s was deleted", fixture.branch)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
 }
 
 func TestHerdrCloseEverythingDoesNotRearmBranchDeleteAfterBranchReappears(t *testing.T) {
@@ -2518,6 +2601,29 @@ func rewriteResidualLaunchLabel(t *testing.T, projectRoot, intentID, label strin
 func runHerdrLifecycleGit(t *testing.T, root string, args ...string) {
 	t.Helper()
 	_ = runHerdrLifecycleGitOutput(t, root, args...)
+}
+
+func installFailingBranchObservationGit(t *testing.T) string {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	marker := filepath.Join(binDir, "fail-branch-observation")
+	script := `#!/bin/sh
+if [ -f "$FANOUT_TEST_GIT_FAIL_MARKER" ] && [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "--quiet" ]; then
+  exit 2
+fi
+exec "$FANOUT_TEST_REAL_GIT" "$@"
+`
+	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FANOUT_TEST_GIT_FAIL_MARKER", marker)
+	t.Setenv("FANOUT_TEST_REAL_GIT", realGit)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return marker
 }
 
 func removeHerdrLifecycleResources(t *testing.T, fixture herdrLifecycleFixture) {

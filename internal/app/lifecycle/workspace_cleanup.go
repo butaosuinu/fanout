@@ -975,9 +975,6 @@ func finishBranchCleanup(ctx context.Context, projectRoot string, intent state.L
 	if current != intent.ExpectedHead {
 		return fmt.Errorf("herdr branch tip moved from %s to %s", intent.ExpectedHead, current)
 	}
-	if _, err := gitLifecycle(projectRoot, "merge-base", "--is-ancestor", current, "HEAD"); err != nil {
-		return fmt.Errorf("herdr branch %s is not an ancestor of HEAD", intent.BranchName)
-	}
 	if err := worktree.DeleteReservedBranch(ctx, projectRoot, intent.FullBranchRef, current); err != nil {
 		return fmt.Errorf("compare-and-delete Herdr branch %s: %w", intent.BranchName, err)
 	}

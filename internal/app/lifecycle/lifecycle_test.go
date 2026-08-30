@@ -27,12 +27,16 @@ func (nopLogger) Err(string, ...any)  {}
 func (nopLogger) Stderr() io.Writer   { return io.Discard }
 
 type captureLogger struct {
-	errors []string
+	errors   []string
+	warnings []string
 }
 
 func (*captureLogger) Info(string, ...any) {}
 func (*captureLogger) Ok(string, ...any)   {}
-func (*captureLogger) Warn(string, ...any) {}
+func (l *captureLogger) Warn(format string, args ...any) {
+	l.warnings = append(l.warnings, fmt.Sprintf(format, args...))
+}
+
 func (l *captureLogger) Err(format string, args ...any) {
 	l.errors = append(l.errors, fmt.Sprintf(format, args...))
 }
