@@ -896,7 +896,7 @@ func validateWorkspaceRuntimeCloseOperation(
 	}
 	if err != nil || opts.WorkspaceRuntime == nil {
 		if err == nil {
-			err = fmt.Errorf("Herdr lifecycle runtime is not configured")
+			err = fmt.Errorf("herdr lifecycle runtime is not configured")
 		}
 		lg.Err("%s: %v; preserving workspace, worktree, and state", paneLabel(pane), err)
 		return false

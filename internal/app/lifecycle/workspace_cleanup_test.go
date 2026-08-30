@@ -233,7 +233,10 @@ func TestHerdrCloseClosesIdentityMatchedSharedAttachedWorkspacesFirst(t *testing
 		"w-attached-2", "attached-label-2", fixture.worktreePath,
 		fixture.pane.RepoKey, fixture.pane.RepoRoot,
 	)
-	first := sharedAttachedLifecyclePane(fixture, "425", rowKey, firstWorkspace)
+	first := sharedAttachedLifecyclePane(fixture, "425", "", firstWorkspace)
+	first.DirectAgentLaunch = true
+	first.LaunchExecutable = "/opt/codex"
+	first.LaunchArgs = []string{"review"}
 	second := sharedAttachedLifecyclePane(fixture, "426", rowKey, secondWorkspace)
 	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, first, second)
 	fixture.workspace = paneLessHerdrLifecycleWorkspace(fixture.workspace)
@@ -409,6 +412,41 @@ func TestHerdrSharedAttachedCloseWaitsForBlockingWorktreeHook(t *testing.T) {
 	}
 	if len(runtime.mutationLog) != 0 {
 		t.Fatalf("hook failure issued mutations: %v", runtime.mutationLog)
+	}
+	assertSharedAttachedRows(t, fixture.projectRoot, attached, attached, true, true)
+}
+
+func TestHerdrSharedAttachedIdentityMismatchBlocksWorktreeHook(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	workspace := herdrLifecycleWorkspace(
+		"w-attached", "attached-label", fixture.worktreePath,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	attached := sharedAttachedLifecyclePane(fixture, "425", "", workspace)
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+	foreign := workspace
+	foreign.Label = "foreign-label"
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace, foreign},
+	}
+	hookPath := filepath.Join(t.TempDir(), "before-worktree")
+	t.Setenv("FANOUT_TEST_BEFORE_WORKTREE", hookPath)
+	opts := herdrLifecycleOptions(fixture, runtime)
+	opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+		hooks.BeforeWorktreeRemove: {{
+			Command: `printf called > "$FANOUT_TEST_BEFORE_WORKTREE"`, Timeout: time.Second,
+		}},
+	}}
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	if _, err := os.Stat(hookPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("blocking hook ran before shared attached identity validation: %v", err)
+	}
+	if len(runtime.mutationLog) != 0 {
+		t.Fatalf("shared identity mismatch issued mutations: %v", runtime.mutationLog)
 	}
 	assertSharedAttachedRows(t, fixture.projectRoot, attached, attached, true, true)
 }

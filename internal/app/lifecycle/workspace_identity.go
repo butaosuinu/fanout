@@ -253,7 +253,7 @@ func verifyCleanupCheckout(
 	)
 	if err != nil {
 		if errors.Is(err, worktree.ErrCheckoutMismatch) {
-			return fmt.Errorf("%w: %v", backend.ErrOwnedIdentityMismatch, err)
+			return fmt.Errorf("%w: %w", backend.ErrOwnedIdentityMismatch, err)
 		}
 		return err
 	}

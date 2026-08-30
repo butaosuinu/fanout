@@ -108,16 +108,6 @@ func validateWorkspaceCloseOperation(opts Options, pane state.Pane, mode CloseMo
 	return true
 }
 
-func validateSharedAttachedWorkspaceIdentity(pane state.Pane) error {
-	if err := validateWorkspacePaneIdentity(pane); err != nil {
-		return err
-	}
-	if strings.TrimSpace(pane.EmitterRowKey) == "" {
-		return fmt.Errorf("saved shared attached workspace row identity is incomplete")
-	}
-	return nil
-}
-
 func verifyWorkspaceClosePreflight(opts Options, pane state.Pane, mode CloseMode) error {
 	_, err := inspectWorkspaceClosePreflight(opts, pane, mode, nil)
 	return err
@@ -421,8 +411,8 @@ func completeSharedAttachedWorkspaceClose(
 	if err != nil {
 		return err
 	}
-	if err := runtime.VerifyOwned(ctx); err != nil {
-		return err
+	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
+		return verifyErr
 	}
 	observation, err := observeWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
 	if err != nil {
@@ -471,8 +461,8 @@ func prepareSharedAttachedWorkspaceClose(
 	if err != nil {
 		return nil, state.LaunchIntent{}, false, err
 	}
-	if err := runtime.VerifyOwned(ctx); err != nil {
-		return nil, state.LaunchIntent{}, false, err
+	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
+		return nil, state.LaunchIntent{}, false, verifyErr
 	}
 	resource := resourceFromPane(child)
 	journal, intent, _, err := loadWorkspaceCleanupIntent(
@@ -533,6 +523,25 @@ func inspectSharedAttachedWorkspaces(
 	return targets, nil
 }
 
+func validatedSharedAttachedWorkspaceRows(
+	opts Options,
+	locked *state.LockedStore,
+	child state.Pane,
+	panes []state.Pane,
+) ([]state.Pane, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), workspaceCleanupTimeout)
+	defer cancel()
+	targets, err := inspectSharedAttachedWorkspaces(ctx, opts, locked, child, panes)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]state.Pane, 0, len(targets))
+	for _, target := range targets {
+		rows = append(rows, target.pane)
+	}
+	return rows, nil
+}
+
 func closeSharedAttachedWorkspace(
 	ctx context.Context,
 	opts Options,
@@ -580,8 +589,8 @@ func inspectSharedAttachedWorkspace(
 	if err != nil {
 		return state.Pane{}, nil, nil, err
 	}
-	if err := runtime.VerifyOwned(ctx); err != nil {
-		return state.Pane{}, nil, nil, err
+	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
+		return state.Pane{}, nil, nil, verifyErr
 	}
 	resource := resourceFromPane(current)
 	workspace, err := verifyWorkspaceCloseTarget(
@@ -592,23 +601,25 @@ func inspectSharedAttachedWorkspace(
 }
 
 func currentSharedAttachedWorkspaceRow(locked *state.LockedStore, pane state.Pane) (state.Pane, error) {
-	if err := validateSharedAttachedWorkspaceIdentity(pane); err != nil {
-		return state.Pane{}, fmt.Errorf("%w: %v", backend.ErrOwnedIdentityMismatch, err)
+	if err := validateWorkspacePaneIdentity(pane); err != nil {
+		return state.Pane{}, fmt.Errorf("%w: %w", backend.ErrOwnedIdentityMismatch, err)
 	}
-	index, err := locked.EmitterRowIndex(
-		pane.EmitterRowKey, normalizedWorktreePath(pane.WorktreePath), pane.WorkspaceLabel,
-	)
-	if err != nil || index < 0 {
-		return state.Pane{}, errors.Join(
-			backend.ErrOwnedIdentityMismatch, err,
-			fmt.Errorf("saved shared attached workspace row identity is not unique"),
-		)
+	binding := pane.RuntimeBinding()
+	index := -1
+	for i := range locked.Panes {
+		current := locked.Panes[i]
+		if !current.IsAttachedAgent() || !current.RuntimeBinding().Equal(binding) {
+			continue
+		}
+		if index >= 0 {
+			return state.Pane{}, fmt.Errorf("%w: saved shared attached workspace row identity is not unique", backend.ErrOwnedIdentityMismatch)
+		}
+		index = i
 	}
-	current := locked.Panes[index]
-	if !current.IsAttachedAgent() || !current.RuntimeBinding().Equal(pane.RuntimeBinding()) {
+	if index < 0 {
 		return state.Pane{}, fmt.Errorf("%w: saved shared attached workspace row identity changed", backend.ErrOwnedIdentityMismatch)
 	}
-	return current, nil
+	return locked.Panes[index], nil
 }
 
 func workspaceResourcePredicate(resource state.RuntimeResource) workspacePredicateFunc {
