@@ -783,6 +783,89 @@ func TestHerdrCleanupRetiresAfterStateRowSaveRetry(t *testing.T) {
 	}
 }
 
+func TestHerdrCleanupRestoresStateAfterIntentRetirementSaveFailure(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	var backgroundHooks []hooks.Type
+	originalBackgroundHook := runWorkspaceBackgroundHook
+	runWorkspaceBackgroundHook = func(hook hooks.Type, _ Options, _ state.Pane, _ string, _ Logger) {
+		backgroundHooks = append(backgroundHooks, hook)
+	}
+	t.Cleanup(func() { runWorkspaceBackgroundHook = originalBackgroundHook })
+	hookPath := filepath.Join(t.TempDir(), "before-worktree")
+	t.Setenv("FANOUT_TEST_BEFORE_WORKTREE", hookPath)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+	opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+		hooks.BeforeWorktreeRemove: {{
+			Command: `printf 'called\n' >> "$FANOUT_TEST_BEFORE_WORKTREE"`, Timeout: time.Second,
+		}},
+		hooks.PaneClosed:      {{Command: ":", Timeout: time.Second}},
+		hooks.WorktreeRemoved: {{Command: ":", Timeout: time.Second}},
+	}}
+	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if locked != nil {
+			if unlockErr := locked.Unlock(); unlockErr != nil {
+				t.Error(unlockErr)
+			}
+		}
+	}()
+	if !closePaneRecordsLocked(opts, locked, []state.Pane{fixture.pane}, CloseWorktree, nopLogger{}, map[string]struct{}{}) {
+		t.Fatal("Herdr cleanup did not reach retirement")
+	}
+	journalPath, err := state.LaunchJournalPath(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalDir := filepath.Dir(journalPath)
+	journalDirInfo, err := os.Stat(journalDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalDirMode := journalDirInfo.Mode().Perm()
+	if err := os.Chmod(journalDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(journalDir, journalDirMode); err != nil {
+			t.Error(err)
+		}
+	})
+
+	if err := retirePaneStateRows(opts, locked, []state.Pane{fixture.pane}, CloseWorktree); err == nil {
+		t.Fatal("intent retirement save unexpectedly succeeded")
+	}
+	if err := os.Chmod(journalDir, journalDirMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := locked.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	locked = nil
+	assertHerdrStateRowPresent(t, fixture)
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentRealized, true)
+	assertHerdrCleanupHookPhase(t, fixture, state.CleanupHookCompleted)
+	assertHerdrHookCalls(t, hookPath, 1)
+	if len(backgroundHooks) != 2 {
+		t.Fatalf("completed lifecycle hook dispatches = %v, want two", backgroundHooks)
+	}
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	assertHerdrHookCalls(t, hookPath, 1)
+	assertHerdrLifecycleRemoved(t, fixture)
+	if len(backgroundHooks) != 2 {
+		t.Fatalf("retry lifecycle hook dispatches = %v, want no resend", backgroundHooks)
+	}
+}
+
 func TestHerdrCleanupRetryDoesNotRepeatHooks(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1700,7 +1783,7 @@ func TestSavedHerdrCleanupRejectsDeleteBranchEscalation(t *testing.T) {
 	}
 }
 
-func TestHerdrCleanupDiscardsPlanAfterDefiniteNonMutation(t *testing.T) {
+func TestHerdrCleanupRetainsPlanAndHookPhaseAfterDefiniteNonMutation(t *testing.T) {
 	errorsByName := map[string]error{
 		"not-issued": backend.MutationNotIssuedError{Cause: errors.New("dispatch unavailable")},
 		"rejected":   backend.MutationRejectedError{Code: "rejected", Message: "request refused"},
@@ -1713,21 +1796,51 @@ func TestHerdrCleanupDiscardsPlanAfterDefiniteNonMutation(t *testing.T) {
 		for errorName, mutationErr := range errorsByName {
 			t.Run(string(phase)+"/"+errorName, func(t *testing.T) {
 				fixture := newHerdrLifecycleFixture(t)
+				paneHookCalls := 0
+				originalBackgroundHook := runWorkspaceBackgroundHook
+				runWorkspaceBackgroundHook = func(hook hooks.Type, _ Options, _ state.Pane, _ string, _ Logger) {
+					if hook == hooks.BeforePaneClose {
+						paneHookCalls++
+					}
+				}
+				defer func() { runWorkspaceBackgroundHook = originalBackgroundHook }()
+				hookPath := filepath.Join(t.TempDir(), "before-worktree")
+				t.Setenv("FANOUT_TEST_BEFORE_WORKTREE", hookPath)
 				runtime := prepareHerdrCleanupPhase(t, fixture, phase)
 				runtime.setMutationError(phase, mutationErr)
+				opts := herdrLifecycleOptions(fixture, runtime)
+				opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+					hooks.BeforeWorktreeRemove: {{
+						Command: `printf 'called\n' >> "$FANOUT_TEST_BEFORE_WORKTREE"`, Timeout: time.Second,
+					}},
+					hooks.BeforePaneClose: {{Command: ":", Timeout: time.Second}},
+				}}
 
-				if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
 					t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
 				}
-				assertHerdrCleanupIntentStatus(t, fixture, "", false)
+				assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
+				assertHerdrCleanupHookPhase(t, fixture, state.CleanupHookBeforePaneClose)
+				if phase != state.CleanupWorkspaceClose {
+					assertHerdrHookCalls(t, hookPath, 1)
+				}
+				if paneHookCalls != 1 {
+					t.Fatalf("before_pane_close dispatches = %d, want 1", paneHookCalls)
+				}
 				assertHerdrStateRowPresent(t, fixture)
 				if runtime.phaseMutationCalls(phase) != 1 {
 					t.Fatalf("%s mutation calls = %d, want 1", phase, runtime.phaseMutationCalls(phase))
 				}
 
 				runtime.setMutationError(phase, nil)
-				if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+				if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
 					t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+				}
+				if phase != state.CleanupWorkspaceClose {
+					assertHerdrHookCalls(t, hookPath, 1)
+				}
+				if paneHookCalls != 1 {
+					t.Fatalf("retry before_pane_close dispatches = %d, want 1", paneHookCalls)
 				}
 				if runtime.phaseMutationCalls(phase) != 2 {
 					t.Fatalf("retry %s mutation calls = %d, want 2", phase, runtime.phaseMutationCalls(phase))
@@ -1762,7 +1875,7 @@ func TestMovedHerdrCleanupRetriesAfterDefiniteNonMutation(t *testing.T) {
 				if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
 					t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
 				}
-				assertHerdrCleanupIntentStatus(t, fixture, "", false)
+				assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
 				assertMovedHerdrCleanupIdentity(t, fixture, worktreeIntentID, "w-moved")
 
 				runtime.setMutationError(phase, nil)
@@ -1789,7 +1902,7 @@ func TestHerdrCleanupReplansAfterRejectedRemoveAndHeadChange(t *testing.T) {
 	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
 		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
 	}
-	assertHerdrCleanupIntentStatus(t, fixture, "", false)
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "retry.txt"), []byte("retry\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1859,7 +1972,7 @@ func TestExpiredPlannedHerdrCleanupDoesNotIssueMutation(t *testing.T) {
 				t.Fatalf("expired %s mutation calls = setup %d/open %d/remove %d/close %d", phase, runtime.setupCalls, runtime.openCalls, runtime.removeCalls, runtime.closeCalls)
 			}
 			assertHerdrLifecyclePreserved(t, fixture)
-			assertHerdrCleanupIntentStatus(t, fixture, "", false)
+			assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
 
 			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
 				t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
@@ -1906,7 +2019,7 @@ func TestExpiredPlannedHerdrCleanupRebindsMovedWorkspaceWithoutMutation(t *testi
 	if runtime.setupCalls != 0 || runtime.openCalls != 0 || runtime.removeCalls != 0 || runtime.closeCalls != 0 {
 		t.Fatalf("expired moved cleanup issued mutations: setup %d/open %d/remove %d/close %d", runtime.setupCalls, runtime.openCalls, runtime.removeCalls, runtime.closeCalls)
 	}
-	assertHerdrCleanupIntentStatus(t, fixture, "", false)
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
 	store, err := state.Load(state.Path(fixture.projectRoot))
 	if err != nil {
 		t.Fatal(err)

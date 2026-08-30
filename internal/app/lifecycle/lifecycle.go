@@ -3,6 +3,7 @@
 package lifecycle
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -802,12 +803,21 @@ func removePaneStateRows(locked *state.LockedStore, panes []state.Pane) error {
 }
 
 func retirePaneStateRows(opts Options, locked *state.LockedStore, panes []state.Pane, mode CloseMode) error {
+	previous := locked.Store
+	previous.Panes = append([]state.Pane(nil), locked.Panes...)
 	if err := removePaneStateRows(locked, panes); err != nil {
 		return err
 	}
 	if !mode.removesWorktree() || !slices.ContainsFunc(panes, workspaceRuntimeRow) {
 		return nil
 	}
+	if err := retireWorkspaceIntents(opts, locked, panes); err != nil {
+		return restorePaneStateAfterIntentRetirementFailure(locked, previous, err)
+	}
+	return nil
+}
+
+func retireWorkspaceIntents(opts Options, locked *state.LockedStore, panes []state.Pane) error {
 	journal, err := locked.LaunchJournal(opts.ProjectRoot)
 	if err != nil {
 		return err
@@ -824,6 +834,18 @@ func retirePaneStateRows(opts Options, locked *state.LockedStore, panes []state.
 		journal.RemoveIntent(worktreeID)
 	}
 	return journal.Save()
+}
+
+func restorePaneStateAfterIntentRetirementFailure(
+	locked *state.LockedStore,
+	previous state.Store,
+	cause error,
+) error {
+	locked.Store = previous
+	if err := locked.Save(); err != nil {
+		return errors.Join(cause, fmt.Errorf("restore fanout state after Herdr intent retirement failure: %w", err))
+	}
+	return cause
 }
 
 func removeWorktree(projectRoot string, pane state.Pane, lg Logger) bool {

@@ -419,12 +419,8 @@ func resetUnissuedCleanup(
 	intent state.LaunchIntent,
 	cause error,
 ) (state.LaunchIntent, error) {
-	if intent.Coordinator == (state.RuntimeResource{}) || intent.CleanupPhase == state.CleanupReopen {
-		journal.RemoveIntent(intent.ID)
-		return intent, errors.Join(cause, journal.Save())
-	}
 	intent.Status = state.IntentPlanned
-	intent.ExpiresUnixMS = time.Now().UnixMilli()
+	intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
 	intent.Failure = ""
 	return intent, errors.Join(cause, saveWorkspaceCleanupIntent(journal, intent))
 }

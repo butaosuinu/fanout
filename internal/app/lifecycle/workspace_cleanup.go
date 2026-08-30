@@ -810,11 +810,13 @@ func settleExpiredObservedWorkspaceCleanup(
 	if intent.Coordinator != (state.RuntimeResource{}) && intent.CleanupPhase != state.CleanupReopen {
 		return replanWorkspaceCleanup(ctx, opts, journal, intent, observation)
 	}
-	journal.RemoveIntent(intent.ID)
-	if err := journal.Save(); err != nil {
+	intent, err := replanObservedWorkspaceCleanup(
+		ctx, opts, locked, journal, runtime, pane, intent, observation,
+	)
+	if err != nil {
 		return intent, err
 	}
-	return intent, fmt.Errorf("saved Herdr cleanup intent expired before mutation; retry to replan")
+	return intent, fmt.Errorf("saved Herdr cleanup intent expired before mutation; retry to continue the replanned cleanup")
 }
 
 func rebindMovedWorkspaceCleanupIdentity(
