@@ -562,9 +562,61 @@ func TestHerdrSharedAttachedIdentityMismatchBlocksWorktreeHook(t *testing.T) {
 	}
 	intent, found := journal.FindIntent(cleanupID)
 	if !found || intent.Status != state.IntentManualCleanupRequired ||
-		intent.Failure != sharedAttachedWorkspaceCloseFailure {
+		!workspacePreHookIdentityFence(intent) {
 		t.Fatalf("hook preflight shared close fence = %#v (found=%t)", intent, found)
 	}
+}
+
+func TestHerdrSharedAttachedPreHookFenceRetriesBlockingHookAfterAttachedAbsence(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	workspace := herdrLifecycleWorkspace(
+		"w-attached", "attached-label", fixture.worktreePath,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	attached := sharedAttachedLifecyclePane(fixture, "425", "", workspace)
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+	foreign := workspace
+	foreign.Label = "foreign-label"
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace, foreign},
+	}
+	hookPath := filepath.Join(t.TempDir(), "before-worktree")
+	t.Setenv("FANOUT_TEST_BEFORE_WORKTREE", hookPath)
+	opts := herdrLifecycleOptions(fixture, runtime)
+	opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+		hooks.BeforeWorktreeRemove: {{
+			Command: `printf 'called\n' >> "$FANOUT_TEST_BEFORE_WORKTREE"; exit 1`, Timeout: time.Second,
+		}},
+	}}
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	if _, err := os.Stat(hookPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("blocking hook ran before shared attached identity validation: %v", err)
+	}
+
+	runtime.workspaces = []backend.WorkspaceObservation{fixture.workspace}
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.Env)
+	}
+	assertHerdrHookCalls(t, hookPath, 1)
+	if len(runtime.mutationLog) != 0 {
+		t.Fatalf("retry hook failure issued mutations: %v", runtime.mutationLog)
+	}
+	assertSharedAttachedRows(t, fixture.projectRoot, attached, attached, true, true)
+	intent, found := loadHerdrCleanupIntent(t, fixture)
+	if !found || !workspacePreHookIdentityFence(intent) {
+		t.Fatalf("failed blocking hook changed pre-hook fence = %#v (found=%t)", intent, found)
+	}
+
+	opts.Hooks.Events[hooks.BeforeWorktreeRemove][0].Command = `printf 'called\n' >> "$FANOUT_TEST_BEFORE_WORKTREE"`
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("successful hook retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	assertHerdrHookCalls(t, hookPath, 2)
+	assertHerdrLifecycleRemoved(t, fixture)
 }
 
 func TestHerdrSharedAttachedPreflightPreservesExistingCleanupFence(t *testing.T) {
@@ -645,9 +697,14 @@ func TestHerdrSharedAttachedFactoryIdentityMismatchPersistsManual(t *testing.T) 
 				t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
 			}
 			intent, found := loadHerdrCleanupIntent(t, fixture)
-			if !found || intent.Status != state.IntentManualCleanupRequired ||
-				intent.Failure != sharedAttachedWorkspaceCloseFailure {
+			if !found || intent.Status != state.IntentManualCleanupRequired {
 				t.Fatalf("factory mismatch fence = %#v (found=%t)", intent, found)
+			}
+			if hookEnabled && !workspacePreHookIdentityFence(intent) {
+				t.Fatalf("hook preflight factory mismatch fence = %#v", intent)
+			}
+			if !hookEnabled && intent.Failure != sharedAttachedWorkspaceCloseFailure {
+				t.Fatalf("shared close factory mismatch fence = %#v", intent)
 			}
 			if len(runtime.mutationLog) != 0 {
 				t.Fatalf("factory identity mismatch issued mutations: %v", runtime.mutationLog)
@@ -674,7 +731,7 @@ func TestHerdrChildHookPreflightIdentityMismatchPersistsManual(t *testing.T) {
 	}
 	intent, found := loadHerdrCleanupIntent(t, fixture)
 	if !found || intent.Status != state.IntentManualCleanupRequired ||
-		!strings.Contains(intent.Failure, backend.ErrOwnedIdentityMismatch.Error()) {
+		!workspacePreHookIdentityFence(intent) {
 		t.Fatalf("child preflight identity fence = %#v (found=%t)", intent, found)
 	}
 	if len(runtime.mutationLog) != 0 {

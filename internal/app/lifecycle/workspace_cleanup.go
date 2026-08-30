@@ -21,6 +21,7 @@ const workspaceCleanupTimeout = 5 * time.Minute
 const (
 	sharedAttachedWorkspaceCloseFailure  = "shared attached workspace close pending"
 	sharedAttachedWorkspaceCloseComplete = "shared attached workspace close complete"
+	workspacePreHookIdentityFailure      = "before_worktree_remove identity preflight failed"
 )
 
 var ErrManualCleanupRequired = errors.New("herdr lifecycle requires manual cleanup")
@@ -248,7 +249,7 @@ func workspaceClosePreflightIdentity(
 		intent.Resource.RepoKey,
 		intent.Resource.RepoRoot,
 	)
-	return resource, predicate, reopened, true, nil
+	return resource, predicate, reopened, !workspacePreHookIdentityFence(intent), nil
 }
 
 func closeWorkspaceWorktree(
@@ -529,6 +530,7 @@ func persistWorkspacePreflightIdentityFailure(
 	attached []state.Pane,
 	mode CloseMode,
 	sharedFailure bool,
+	preHook bool,
 	cause error,
 ) error {
 	if !errors.Is(cause, backend.ErrOwnedIdentityMismatch) {
@@ -543,13 +545,48 @@ func persistWorkspacePreflightIdentityFailure(
 		return errors.Join(cause, prepareErr)
 	}
 	failure := cause.Error()
-	if useSharedFailure {
+	if preHook {
+		failure = workspacePreHookIdentityFailure
+	} else if useSharedFailure {
 		failure = sharedAttachedWorkspaceCloseFailure
 	}
 	return errors.Join(
 		prepareErr,
 		markWorkspaceCleanupManualPreservingFence(journal, intent, failure, cause),
 	)
+}
+
+func completeWorkspacePreHookFence(
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+	mode CloseMode,
+) error {
+	if !workspaceRuntimeRow(pane) {
+		return nil
+	}
+	journal, err := locked.LaunchJournal(opts.ProjectRoot)
+	if err != nil {
+		return err
+	}
+	_, intentID, err := workspaceCleanupIntentIDs(opts.ProjectRoot, pane)
+	if err != nil {
+		return err
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found || !workspacePreHookIdentityFence(intent) {
+		return nil
+	}
+	if err := validateSavedWorkspaceCleanup(intent, opts.ProjectRoot, pane, mode); err != nil {
+		return err
+	}
+	intent.Status, intent.Failure = state.IntentPlanned, ""
+	return saveWorkspaceCleanupIntent(journal, intent)
+}
+
+func workspacePreHookIdentityFence(intent state.LaunchIntent) bool {
+	return intent.Status == state.IntentManualCleanupRequired &&
+		intent.Failure == workspacePreHookIdentityFailure
 }
 
 func workspacePreflightManualIntent(
