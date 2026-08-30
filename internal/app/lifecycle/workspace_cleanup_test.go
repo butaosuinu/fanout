@@ -425,6 +425,39 @@ func TestHerdrSharedAttachedCloseRetriesDefinitelyUnissuedMutation(t *testing.T)
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
+func TestExpiredSharedAttachedCloseDoesNotIssueMutation(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	workspace := herdrLifecycleWorkspace(
+		"w-attached", "attached-label", fixture.worktreePath,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	attached := sharedAttachedLifecyclePane(fixture, "425", "coordinator:@manual:expired:-1", workspace)
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+	recordExpiredHerdrCleanupIntent(t, fixture, state.CleanupRemove)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace, workspace},
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	if len(runtime.mutationLog) != 0 {
+		t.Fatalf("expired shared close issued mutations: %v", runtime.mutationLog)
+	}
+	assertHerdrCleanupIntentStatus(t, fixture, "", false)
+	assertSharedAttachedRows(t, fixture.projectRoot, attached, attached, true, true)
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if got := strings.Join(runtime.mutationLog, ","); got != "close:w-attached,remove:w2" {
+		t.Fatalf("retry mutation order = %q", got)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
 func TestHerdrSharedAttachedCloseSupportsCheckoutOnlyChild(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	coordinator := herdrLifecycleWorkspace(

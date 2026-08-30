@@ -402,6 +402,15 @@ func (h *ownedHarness) target() corebackend.OwnedPaneIdentity {
 	return corebackend.OwnedPaneIdentity{}
 }
 
+func ownedPaneBinding(target corebackend.OwnedPaneIdentity) corebackend.PaneBinding {
+	return corebackend.PaneBinding{
+		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
+		WorkspaceLabel: target.WorkspaceLabel, TerminalID: target.TerminalID,
+		Agent: target.Agent, AgentID: target.AgentID, AgentSession: target.AgentSession,
+		RepoKey: target.RepoKey, WorktreePath: target.WorktreePath,
+	}
+}
+
 func (h *ownedHarness) closeRequest(target corebackend.OwnedPaneIdentity) OwnedCloseRequest {
 	h.t.Helper()
 	marker := worktreeOwnershipMarker{
@@ -1495,15 +1504,43 @@ func TestBoundOwnedWorkspaceCloserRejectsWorktreeTarget(t *testing.T) {
 	}
 }
 
+func TestCloseAttachedWorkspaceClosesMatchingPaneLessWorkspace(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+		panes := slices.DeleteFunc(*snapshot.Panes, func(p paneJSON) bool {
+			return p.WorkspaceID == target.Ref.Workspace
+		})
+		agents := slices.DeleteFunc(*snapshot.Agents, func(a agentJSON) bool {
+			return a.WorkspaceID == target.Ref.Workspace
+		})
+		snapshot.Panes, snapshot.Agents = &panes, &agents
+	})
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if !slices.Equal(args, []string{"workspace", "close", target.Ref.Workspace}) {
+			return nil, fmt.Errorf("unexpected close args %v", args)
+		}
+		h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+			workspaces := slices.DeleteFunc(*snapshot.Workspaces, func(w workspaceJSON) bool {
+				return w.WorkspaceID == target.Ref.Workspace
+			})
+			snapshot.Workspaces = &workspaces
+		})
+		return nil, nil
+	}
+
+	if err := h.session.CloseAttachedWorkspace(context.Background(), ownedPaneBinding(target)); err != nil {
+		t.Fatalf("CloseAttachedWorkspace() error = %v", err)
+	}
+	if _, err := os.Stat(h.checkout); err != nil {
+		t.Fatalf("attached workspace close removed checkout: %v", err)
+	}
+}
+
 func TestCloseAttachedWorkspaceRejectsChangedIdentityBeforeMutation(t *testing.T) {
 	h := newOwnedHarness(t)
 	target := h.target()
-	binding := corebackend.PaneBinding{
-		Ref: target.Ref, SessionID: target.SessionID, SocketPath: target.SocketPath,
-		WorkspaceLabel: target.WorkspaceLabel, TerminalID: target.TerminalID,
-		Agent: target.Agent, AgentID: target.AgentID, AgentSession: target.AgentSession,
-		RepoKey: target.RepoKey, WorktreePath: target.WorktreePath,
-	}
+	binding := ownedPaneBinding(target)
 	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
 		for i := range *snapshot.Workspaces {
 			if (*snapshot.Workspaces)[i].WorkspaceID == target.Ref.Workspace {

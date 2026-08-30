@@ -382,8 +382,9 @@ func driveSharedAttachedWorkspaceCloses(
 	lg Logger,
 ) error {
 	if issueClose {
-		intent.Status, intent.Failure = state.IntentManualCleanupRequired, sharedAttachedWorkspaceCloseFailure
-		if err := saveWorkspaceCleanupIntent(journal, intent); err != nil {
+		var err error
+		intent, err = beginSharedAttachedWorkspaceClose(ctx, journal, intent)
+		if err != nil {
 			return err
 		}
 	}
@@ -401,6 +402,29 @@ func driveSharedAttachedWorkspaceCloses(
 		return errors.Join(ErrManualCleanupRequired, err)
 	}
 	return completeSharedAttachedWorkspaceClose(ctx, opts, journal, child, intent, lg)
+}
+
+func beginSharedAttachedWorkspaceClose(
+	ctx context.Context,
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
+	planned := intent.Status == state.IntentPlanned
+	if planned {
+		if err := ensureCleanupMutationFresh(ctx, intent); err != nil {
+			return intent, err
+		}
+	}
+	intent.Status, intent.Failure = state.IntentManualCleanupRequired, sharedAttachedWorkspaceCloseFailure
+	if err := saveWorkspaceCleanupIntent(journal, intent); err != nil {
+		return intent, err
+	}
+	if planned {
+		if err := ensureCleanupMutationFresh(ctx, intent); err != nil {
+			return intent, resetSharedAttachedWorkspaceClose(journal, intent, err)
+		}
+	}
+	return intent, nil
 }
 
 func completeSharedAttachedWorkspaceClose(
@@ -475,17 +499,67 @@ func prepareSharedAttachedWorkspaceClose(
 	if err != nil {
 		return nil, intent, false, err
 	}
-	if intent.Status == state.IntentPlanned || intent.Status == state.IntentRealized {
-		return journal, intent, true, nil
+	intent, issueClose, err := admitSharedAttachedWorkspaceClose(
+		ctx, opts, locked, journal, runtime, child, attached, intent,
+	)
+	return journal, intent, issueClose, err
+}
+
+func admitSharedAttachedWorkspaceClose(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	runtime WorkspaceRuntime,
+	child state.Pane,
+	attached []state.Pane,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, bool, error) {
+	if intent.Status == state.IntentPlanned {
+		if freshnessErr := ensureCleanupMutationFresh(ctx, intent); freshnessErr != nil {
+			return recoverExpiredSharedAttachedWorkspaceClose(
+				ctx, opts, locked, journal, runtime, child, attached, intent, freshnessErr,
+			)
+		}
+		return intent, true, nil
+	}
+	if intent.Status == state.IntentRealized {
+		return intent, true, nil
 	}
 	if intent.Status == state.IntentManualCleanupRequired && intent.Failure == sharedAttachedWorkspaceCloseFailure {
-		return journal, intent, false, nil
+		return intent, false, nil
 	}
 	if intent.Status == state.IntentManualCleanupRequired {
-		return journal, intent, false, fmt.Errorf("%w: %s", ErrManualCleanupRequired, intent.Failure)
+		return intent, false, fmt.Errorf("%w: %s", ErrManualCleanupRequired, intent.Failure)
 	}
 	cause := fmt.Errorf("shared attached workspace close cannot adopt cleanup status %s", intent.Status)
-	return journal, intent, false, markWorkspaceCleanupManual(journal, intent, cause)
+	return intent, false, markWorkspaceCleanupManual(journal, intent, cause)
+}
+
+func recoverExpiredSharedAttachedWorkspaceClose(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	runtime WorkspaceRuntime,
+	child state.Pane,
+	attached []state.Pane,
+	intent state.LaunchIntent,
+	freshnessErr error,
+) (state.LaunchIntent, bool, error) {
+	observation, recoverErr := observeWorkspaceCleanupMatching(
+		ctx, runtime, opts.ProjectRoot, intent.Resource,
+		sharedChildWorkspacePredicate(intent.Resource, attached),
+	)
+	if recoverErr == nil {
+		intent, recoverErr = recoverExpiredObservedWorkspaceCleanup(
+			ctx, opts, locked, journal, runtime, child, intent, observation,
+		)
+	}
+	if recoverErr == nil {
+		recoverErr = fmt.Errorf("saved Herdr cleanup intent expired before shared attached workspace close; retry")
+	}
+	return intent, false, errors.Join(freshnessErr, recoverErr)
 }
 
 func sharedAttachedWorkspaceRows(panes []state.Pane, worktreePath string) []state.Pane {
@@ -1236,10 +1310,25 @@ func recoverExpiredPlannedWorkspaceCleanup(
 	if err != nil {
 		return intent, err
 	}
+	return recoverExpiredObservedWorkspaceCleanup(
+		ctx, opts, locked, journal, runtime, pane, intent, observation,
+	)
+}
+
+func recoverExpiredObservedWorkspaceCleanup(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	runtime WorkspaceRuntime,
+	pane state.Pane,
+	intent state.LaunchIntent,
+	observation workspaceCleanupObservation,
+) (state.LaunchIntent, error) {
 	if workspaceCleanupAbsent(observation) {
 		return realizeReplannedWorkspaceCleanup(journal, intent)
 	}
-	intent, err = rebindObservedWorkspaceCleanupIdentity(
+	intent, err := rebindObservedWorkspaceCleanupIdentity(
 		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
 	)
 	if err != nil {

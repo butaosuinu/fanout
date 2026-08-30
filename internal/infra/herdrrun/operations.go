@@ -628,7 +628,7 @@ func (b *Backend) closeOwnedAttachedWorkspace(
 		return mutationNotIssued(err)
 	}
 	defer unlockPrivateFile(lock)
-	target, probed, err := b.resolveOwnedTarget(ctx, admission, target)
+	target, probed, err := b.resolveAttachedWorkspaceCloseTarget(ctx, admission, target)
 	if err != nil {
 		return mutationNotIssued(err)
 	}
@@ -800,11 +800,44 @@ func (v ownedSnapshotView) workspaceContainsOnly(target corebackend.PaneRef) boo
 	return true
 }
 
-func (b *Backend) resolveOwnedTarget(
+func (v ownedSnapshotView) paneLessAttachedWorkspaceMatches(expected corebackend.OwnedPaneIdentity) bool {
+	workspace, ok := v.workspaces[expected.Ref.Workspace]
+	if !ok || workspace.label != expected.WorkspaceLabel || workspace.repoKey != expected.RepoKey ||
+		workspace.worktreePath != expected.WorktreePath {
+		return false
+	}
+	for _, pane := range v.panes {
+		if pane.identity.Ref.Workspace == expected.Ref.Workspace || pane.identity.TerminalID == expected.TerminalID {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *Backend) resolveAttachedWorkspaceCloseTarget(
 	ctx context.Context,
 	admission ownedAdmission,
 	expected corebackend.OwnedPaneIdentity,
 ) (corebackend.OwnedPaneIdentity, probeResult, error) {
+	if err := validateSavedTarget(expected, admission); err != nil {
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, err
+	}
+	view, err := b.ownedSnapshotView(ctx, admission)
+	if err != nil {
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, err
+	}
+	current, live := view.find(expected.Ref)
+	if live && !ownedPaneMatches(expected, current) {
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, fmt.Errorf("%w: saved attached target identity changed", corebackend.ErrOwnedIdentityMismatch)
+	}
+	if !live && !view.paneLessAttachedWorkspaceMatches(expected) {
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, fmt.Errorf("%w: saved attached target is neither live nor a matching pane-less workspace", corebackend.ErrOwnedIdentityMismatch)
+	}
+	probed, err := b.probeOwned(ctx, admission)
+	return cloneOwnedPaneIdentity(expected), probed, err
+}
+
+func (b *Backend) resolveOwnedTarget(ctx context.Context, admission ownedAdmission, expected corebackend.OwnedPaneIdentity) (corebackend.OwnedPaneIdentity, probeResult, error) {
 	target, probed, _, err := b.resolveOwnedTargetView(ctx, admission, expected)
 	return target, probed, err
 }
