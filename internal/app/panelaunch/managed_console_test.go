@@ -369,6 +369,18 @@ func TestStaleManagedConsoleWorkspaceWithoutPaneRequiresManualCleanup(t *testing
 	}
 }
 
+func TestManagedWorkspaceCloseErrorClassifiesOnlyUnadmittedPanesAsManualCleanup(t *testing.T) {
+	unsafe := fmt.Errorf("close rejected: %w", backend.ErrOwnedWorkspaceHasUnadmittedPane)
+	if err := managedWorkspaceCloseError(unsafe); !errors.Is(err, ErrManualCleanupRequired) {
+		t.Fatalf("managedWorkspaceCloseError() = %v, want manual cleanup", err)
+	}
+
+	observeErr := errors.New("snapshot failed")
+	if err := managedWorkspaceCloseError(observeErr); err != observeErr || errors.Is(err, ErrManualCleanupRequired) {
+		t.Fatalf("managedWorkspaceCloseError() = %v, want unchanged observation failure", err)
+	}
+}
+
 func TestAbsentManagedConsoleWorkspaceAllowsSavedRowRemoval(t *testing.T) {
 	saved := managedConsoleTestPane("/repo", "workspace-root", "pane-old")
 	present, err := savedManagedConsoleWorkspacePresent(saved, nil)

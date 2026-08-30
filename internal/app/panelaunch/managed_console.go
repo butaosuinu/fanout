@@ -297,9 +297,16 @@ func closeStaleManagedConsole(owned ManagedSessionRuntime, current backend.LiveP
 		Backend: backend.Herdr, Pane: current.Ref.Pane,
 	}})
 	if err != nil {
-		return fmt.Errorf("close stale Herdr console workspace: %w", err)
+		return fmt.Errorf("close stale Herdr console workspace: %w", managedWorkspaceCloseError(err))
 	}
 	return nil
+}
+
+func managedWorkspaceCloseError(err error) error {
+	if errors.Is(err, backend.ErrOwnedWorkspaceHasUnadmittedPane) {
+		return fmt.Errorf("%w: %v", ErrManualCleanupRequired, err)
+	}
+	return err
 }
 
 func removeSavedManagedConsoleRow(

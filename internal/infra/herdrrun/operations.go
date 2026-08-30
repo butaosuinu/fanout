@@ -549,22 +549,46 @@ func (b *Backend) closeOwnedWorkspace(ctx context.Context, target corebackend.Ow
 		return failed, err
 	}
 	defer unlockPrivateFile(lock)
-	target, probed, err := b.resolveOwnedTarget(ctx, admission, target)
+	target, probed, view, err := b.resolveOwnedTargetView(ctx, admission, target)
 	if err != nil {
 		return failed, err
 	}
-	_, err = b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "close", target.Ref.Workspace)
-	if err != nil {
-		return failed, methodUnavailable("workspace.close")
+	if err := verifyWorkspaceClosePanes(view, target.Ref); err != nil {
+		return failed, err
+	}
+	if err := b.issueAndVerifyWorkspaceClose(ctx, admission, probed, target.Ref.Workspace); err != nil {
+		return failed, err
+	}
+	return corebackend.CloseResult{Status: corebackend.CloseConfirmed}, nil
+}
+
+func verifyWorkspaceClosePanes(view ownedSnapshotView, target corebackend.PaneRef) error {
+	if view.workspaceContainsOnly(target) {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: workspace %s contains a pane outside target %s",
+		corebackend.ErrOwnedWorkspaceHasUnadmittedPane, target.Workspace, target.Pane,
+	)
+}
+
+func (b *Backend) issueAndVerifyWorkspaceClose(
+	ctx context.Context,
+	admission ownedAdmission,
+	probed probeResult,
+	workspaceID string,
+) error {
+	if _, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "close", workspaceID); err != nil {
+		return methodUnavailable("workspace.close")
 	}
 	view, err := b.ownedSnapshotView(ctx, admission)
 	if err != nil {
-		return failed, err
+		return err
 	}
-	if view.workspacePresent(target.Ref.Workspace) {
-		return failed, fmt.Errorf("herdr workspace close returned success but workspace remains live")
+	if view.workspacePresent(workspaceID) {
+		return fmt.Errorf("herdr workspace close returned success but workspace remains live")
 	}
-	return corebackend.CloseResult{Status: corebackend.CloseConfirmed}, nil
+	return nil
 }
 
 func (b *Backend) closeOwnedSession(ctx context.Context, req OwnedCloseRequest) (corebackend.CloseResult, error) {
@@ -694,20 +718,42 @@ func (v ownedSnapshotView) workspacePresent(id string) bool {
 	return ok
 }
 
-func (b *Backend) resolveOwnedTarget(ctx context.Context, admission ownedAdmission, expected corebackend.OwnedPaneIdentity) (corebackend.OwnedPaneIdentity, probeResult, error) {
+func (v ownedSnapshotView) workspaceContainsOnly(target corebackend.PaneRef) bool {
+	for ref := range v.panes {
+		if ref.Workspace == target.Workspace && ref != target {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *Backend) resolveOwnedTarget(
+	ctx context.Context,
+	admission ownedAdmission,
+	expected corebackend.OwnedPaneIdentity,
+) (corebackend.OwnedPaneIdentity, probeResult, error) {
+	target, probed, _, err := b.resolveOwnedTargetView(ctx, admission, expected)
+	return target, probed, err
+}
+
+func (b *Backend) resolveOwnedTargetView(
+	ctx context.Context,
+	admission ownedAdmission,
+	expected corebackend.OwnedPaneIdentity,
+) (corebackend.OwnedPaneIdentity, probeResult, ownedSnapshotView, error) {
 	if err := validateSavedTarget(expected, admission); err != nil {
-		return corebackend.OwnedPaneIdentity{}, probeResult{}, err
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, err
 	}
 	view, err := b.ownedSnapshotView(ctx, admission)
 	if err != nil {
-		return corebackend.OwnedPaneIdentity{}, probeResult{}, err
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, err
 	}
 	current, ok := view.find(expected.Ref)
 	if !ok || !ownedPaneMatches(expected, current) {
-		return corebackend.OwnedPaneIdentity{}, probeResult{}, fmt.Errorf("%w: saved target is not live", corebackend.ErrOwnedIdentityMismatch)
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, ownedSnapshotView{}, fmt.Errorf("%w: saved target is not live", corebackend.ErrOwnedIdentityMismatch)
 	}
 	probed, err := b.probeOwned(ctx, admission)
-	return cloneOwnedPaneIdentity(expected), probed, err
+	return cloneOwnedPaneIdentity(expected), probed, view, err
 }
 
 func (b *Backend) verifyOwnedTargetAfter(ctx context.Context, admission ownedAdmission, target corebackend.OwnedPaneIdentity) error {

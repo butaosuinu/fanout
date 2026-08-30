@@ -1388,17 +1388,7 @@ func TestBoundOwnedCloserClosesWorkspaceButRetainsCheckoutForManualReconciliatio
 
 func TestBoundOwnedWorkspaceCloserClosesExactGenericWorkspace(t *testing.T) {
 	h := newOwnedHarness(t)
-	target := h.target()
-	target.RepoKey = ""
-	target.WorktreePath = ""
-	target.CurrentPath = "/wrong-saved-cwd"
-	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
-		for i := range *snapshot.Workspaces {
-			if (*snapshot.Workspaces)[i].WorkspaceID == target.Ref.Workspace {
-				(*snapshot.Workspaces)[i].Worktree = nil
-			}
-		}
-	})
+	target := genericWorkspaceCloseTarget(h)
 	h.fake.respond = func(args []string) ([]byte, error) {
 		if !slices.Equal(args, []string{"workspace", "close", target.Ref.Workspace}) {
 			return nil, fmt.Errorf("unexpected close args %v", args)
@@ -1427,6 +1417,73 @@ func TestBoundOwnedWorkspaceCloserClosesExactGenericWorkspace(t *testing.T) {
 	}})
 	if err != nil || result.Status != corebackend.CloseConfirmed {
 		t.Fatalf("CloseOwned() = %+v, %v", result, err)
+	}
+}
+
+func TestBoundOwnedWorkspaceCloserRejectsUnadmittedPaneWithoutMutation(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := genericWorkspaceCloseTarget(h)
+	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+		focused := false
+		revision := uint64(3)
+		cwd := "/repo/auxiliary"
+		*snapshot.Panes = append(*snapshot.Panes, paneJSON{
+			PaneID: "w2:p2", TerminalID: "term-auxiliary",
+			WorkspaceID: target.Ref.Workspace, TabID: "w2:t2", CWD: &cwd,
+			Focused: &focused, AgentStatus: "unknown", Revision: &revision,
+		})
+	})
+	bound, err := h.session.Backend().BindOwnedWorkspaceClose(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = bound.CloseOwned(corebackend.CloseRequest{Ref: corebackend.PaneRef{
+		Backend: corebackend.Herdr, Pane: target.Ref.Pane,
+	}})
+	if !errors.Is(err, corebackend.ErrOwnedWorkspaceHasUnadmittedPane) {
+		t.Fatalf("CloseOwned() error = %v, want unadmitted pane rejection", err)
+	}
+	assertNoWorkspaceCloseCommand(t, h.fake.commands, target.Ref.Workspace)
+}
+
+func TestBoundOwnedWorkspaceCloserDoesNotMutateWhenObservationFails(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := genericWorkspaceCloseTarget(h)
+	bound, err := h.session.Backend().BindOwnedWorkspaceClose(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.fake.errors["snapshot"] = errors.New("snapshot failed")
+	_, err = bound.CloseOwned(corebackend.CloseRequest{Ref: corebackend.PaneRef{
+		Backend: corebackend.Herdr, Pane: target.Ref.Pane,
+	}})
+	if err == nil || errors.Is(err, corebackend.ErrOwnedWorkspaceHasUnadmittedPane) {
+		t.Fatalf("CloseOwned() error = %v, want observation failure", err)
+	}
+	assertNoWorkspaceCloseCommand(t, h.fake.commands, target.Ref.Workspace)
+}
+
+func genericWorkspaceCloseTarget(h *ownedHarness) corebackend.OwnedPaneIdentity {
+	target := h.target()
+	target.RepoKey = ""
+	target.WorktreePath = ""
+	target.CurrentPath = "/wrong-saved-cwd"
+	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+		for i := range *snapshot.Workspaces {
+			if (*snapshot.Workspaces)[i].WorkspaceID == target.Ref.Workspace {
+				(*snapshot.Workspaces)[i].Worktree = nil
+			}
+		}
+	})
+	return target
+}
+
+func assertNoWorkspaceCloseCommand(t *testing.T, commands []recordedCommand, workspaceID string) {
+	t.Helper()
+	for _, command := range commands {
+		if slices.Equal(command.args, []string{"workspace", "close", workspaceID}) {
+			t.Fatalf("workspace close mutation was issued: %v", command.args)
+		}
 	}
 }
 
