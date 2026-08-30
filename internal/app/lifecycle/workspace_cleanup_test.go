@@ -551,6 +551,19 @@ func TestHerdrSharedAttachedIdentityMismatchBlocksWorktreeHook(t *testing.T) {
 		t.Fatalf("shared identity mismatch issued mutations: %v", runtime.mutationLog)
 	}
 	assertSharedAttachedRows(t, fixture.projectRoot, attached, attached, true, true)
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cleanupID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(cleanupID)
+	if !found || intent.Status != state.IntentManualCleanupRequired ||
+		intent.Failure != sharedAttachedWorkspaceCloseFailure {
+		t.Fatalf("hook preflight shared close fence = %#v (found=%t)", intent, found)
+	}
 }
 
 func TestHerdrSharedAttachedCloseKeepsBranchDeleteFrozen(t *testing.T) {

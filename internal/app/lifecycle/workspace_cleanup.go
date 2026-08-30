@@ -485,16 +485,8 @@ func prepareSharedAttachedWorkspaceClose(
 	attached []state.Pane,
 	mode CloseMode,
 ) (*state.LockedLaunchJournal, state.LaunchIntent, bool, error) {
-	runtime, err := opts.WorkspaceRuntime(ctx, child)
-	if err != nil {
-		return nil, state.LaunchIntent{}, false, err
-	}
-	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
-		return nil, state.LaunchIntent{}, false, verifyErr
-	}
-	resource := resourceFromPane(child)
-	journal, intent, _, err := loadWorkspaceCleanupIntent(
-		ctx, opts, locked, runtime, child, mode, sharedChildWorkspacePredicate(resource, attached),
+	journal, intent, runtime, err := loadSharedAttachedWorkspaceCloseIntent(
+		ctx, opts, locked, child, attached, mode,
 	)
 	if err != nil {
 		return nil, intent, false, err
@@ -503,6 +495,50 @@ func prepareSharedAttachedWorkspaceClose(
 		ctx, opts, locked, journal, runtime, child, attached, intent,
 	)
 	return journal, intent, issueClose, err
+}
+
+func loadSharedAttachedWorkspaceCloseIntent(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	child state.Pane,
+	attached []state.Pane,
+	mode CloseMode,
+) (*state.LockedLaunchJournal, state.LaunchIntent, WorkspaceRuntime, error) {
+	runtime, err := opts.WorkspaceRuntime(ctx, child)
+	if err != nil {
+		return nil, state.LaunchIntent{}, nil, err
+	}
+	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
+		return nil, state.LaunchIntent{}, nil, verifyErr
+	}
+	resource := resourceFromPane(child)
+	journal, intent, _, err := loadWorkspaceCleanupIntent(
+		ctx, opts, locked, runtime, child, mode, sharedChildWorkspacePredicate(resource, attached),
+	)
+	if err != nil {
+		return nil, intent, nil, err
+	}
+	return journal, intent, runtime, nil
+}
+
+func markSharedAttachedWorkspacePreflightManual(
+	opts Options,
+	locked *state.LockedStore,
+	child state.Pane,
+	attached []state.Pane,
+	mode CloseMode,
+	cause error,
+) error {
+	ctx, cancel := context.WithTimeout(context.Background(), workspaceCleanupTimeout)
+	defer cancel()
+	journal, intent, _, err := loadSharedAttachedWorkspaceCloseIntent(
+		ctx, opts, locked, child, attached, mode,
+	)
+	if err != nil {
+		return errors.Join(cause, err)
+	}
+	return markSharedAttachedWorkspaceCloseManual(journal, intent, cause)
 }
 
 func admitSharedAttachedWorkspaceClose(
