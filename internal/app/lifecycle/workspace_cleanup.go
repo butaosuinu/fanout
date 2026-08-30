@@ -127,6 +127,30 @@ func inspectWorkspaceClosePreflight(opts Options, pane state.Pane, mode CloseMod
 	return cleanupStarted, nil
 }
 
+func prepareWorkspaceCleanupHook(opts Options, locked *state.LockedStore, pane state.Pane, mode CloseMode) (*state.LockedLaunchJournal, state.LaunchIntent, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), workspaceCleanupTimeout)
+	defer cancel()
+	runtime, err := opts.WorkspaceRuntime(ctx, pane)
+	if err != nil {
+		return nil, state.LaunchIntent{}, err
+	}
+	if err := runtime.VerifyOwned(ctx); err != nil {
+		return nil, state.LaunchIntent{}, err
+	}
+	journal, intent, _, err := loadWorkspaceCleanupIntent(ctx, opts, locked, runtime, pane, mode)
+	if err != nil {
+		return nil, state.LaunchIntent{}, err
+	}
+	predicate := workspaceLabelPredicate(
+		intent.WorkspaceLabel, intent.WorktreePath, intent.Resource.RepoKey, intent.Resource.RepoRoot,
+	)
+	reopened := intent.Status == state.IntentIssued && intent.CleanupPhase == state.CleanupReopen
+	if err := verifyWorkspaceCloseTarget(ctx, opts.ProjectRoot, runtime, pane, intent.Resource, predicate, reopened); err != nil {
+		return nil, state.LaunchIntent{}, err
+	}
+	return journal, intent, nil
+}
+
 func verifyWorkspaceCloseTarget(
 	ctx context.Context,
 	projectRoot string,
@@ -559,6 +583,7 @@ func newWorkspaceCleanupIntent(
 		CleanupPhase:  phase, CleanupDeleteBranch: deleteBranchRequested && branchFound && workspaceCleanupCheckoutPresent(observation),
 		CleanupDeleteBranchRequested: &deleteBranchRequested,
 		CleanupDeleteBranchVerified:  true,
+		CleanupHookPhase:             state.CleanupHookPending,
 	}
 	return intent, nil
 }
@@ -942,9 +967,7 @@ func finalizeWorkspaceCleanup(
 	if err := discardSavedLaunchEnvironment(journal, runtime, worktreeIntentID); err != nil {
 		return err
 	}
-	journal.RemoveIntent(intent.ID)
-	journal.RemoveIntent(worktreeIntentID)
-	return journal.Save()
+	return nil
 }
 
 func discardSavedLaunchEnvironment(

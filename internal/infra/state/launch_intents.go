@@ -48,6 +48,15 @@ const (
 	CleanupWorkspaceClose CleanupPhase = "workspace-close"
 )
 
+type CleanupHookPhase string
+
+const (
+	CleanupHookPending              CleanupHookPhase = "pending"
+	CleanupHookBeforeWorktreeRemove CleanupHookPhase = "before_worktree_remove"
+	CleanupHookBeforePaneClose      CleanupHookPhase = "before_pane_close"
+	CleanupHookCompleted            CleanupHookPhase = "completed"
+)
+
 type LaunchIntentStatus string
 
 const (
@@ -130,6 +139,8 @@ type LaunchIntent struct {
 	CleanupDeleteBranchRequested *bool `json:"cleanupDeleteBranchRequested,omitempty"`
 	// CleanupDeleteBranchVerified records use of the checkout-presence ownership rule.
 	CleanupDeleteBranchVerified bool `json:"cleanupDeleteBranchVerified,omitempty"`
+	// CleanupHookPhase is empty only for cleanup intents saved after both pre-cleanup hooks by an older fanout.
+	CleanupHookPhase CleanupHookPhase `json:"cleanupHookPhase,omitempty"`
 
 	Failure string `json:"failure,omitempty"`
 }
@@ -665,7 +676,8 @@ func validateServerIntent(intent LaunchIntent) error {
 		intent.Coordinator == (RuntimeResource{}), intent.Session == "", intent.SocketPath == "",
 		intent.ExpiresUnixMS == 0, intent.Launch == nil, intent.CleanupPhase == "",
 		intent.ResumeAgentSession == nil, !intent.CleanupDeleteBranch,
-		intent.CleanupDeleteBranchRequested == nil, intent.Failure == "",
+		intent.CleanupDeleteBranchRequested == nil, intent.CleanupHookPhase == "",
+		intent.Failure == "",
 	}
 	if slices.Contains(empty, false) {
 		return fmt.Errorf("herdr server lifecycle intent %s has unrelated fields", intent.ID)
@@ -737,7 +749,7 @@ func validateIntentKind(intent LaunchIntent) error {
 func validateCoordinatorFields(intent LaunchIntent) error {
 	return requireIntentFields(intent.Kind, []bool{
 		intent.TaskID == "", intent.BranchName == "", intent.FullBranchRef == "",
-		intent.BaseSHA == "", intent.Coordinator.WorkspaceID == "",
+		intent.BaseSHA == "", intent.Coordinator.WorkspaceID == "", intent.CleanupHookPhase == "",
 	})
 }
 
@@ -747,6 +759,7 @@ func validateWorktreeFields(intent LaunchIntent) error {
 		intent.FullBranchRef == "refs/heads/"+intent.BranchName,
 		intent.BaseBranch != "", commitSHAPattern.MatchString(intent.BaseSHA),
 		commitSHAPattern.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
+		intent.CleanupHookPhase == "",
 	})
 }
 
@@ -757,6 +770,7 @@ func validateRollbackFields(intent LaunchIntent) error {
 		intent.FullBranchRef == "refs/heads/"+intent.BranchName,
 		intent.BaseBranch != "", commitSHAPattern.MatchString(intent.BaseSHA),
 		commitSHAPattern.MatchString(intent.ExpectedHead), intent.Coordinator.WorkspaceID != "",
+		intent.CleanupHookPhase == "",
 	})
 }
 
@@ -773,6 +787,8 @@ func validateCleanupFields(intent LaunchIntent) error {
 		validPhases[intent.CleanupPhase],
 		intent.CleanupPhase != CleanupReopen || intent.Coordinator.WorkspaceID != "",
 		!intent.CleanupDeleteBranch || commitSHAPattern.MatchString(intent.ExpectedHead),
+		validCleanupHookPhase(intent.CleanupHookPhase),
+		intent.CleanupHookPhase != CleanupHookCompleted || intent.Status == IntentRealized,
 	}); err != nil {
 		return err
 	}
@@ -780,6 +796,11 @@ func validateCleanupFields(intent LaunchIntent) error {
 		return validateRuntimeResource(intent.Coordinator, false)
 	}
 	return nil
+}
+
+func validCleanupHookPhase(phase CleanupHookPhase) bool {
+	return phase == "" || phase == CleanupHookPending || phase == CleanupHookBeforeWorktreeRemove ||
+		phase == CleanupHookBeforePaneClose || phase == CleanupHookCompleted
 }
 
 func validateResumeFields(intent LaunchIntent) error {
@@ -793,7 +814,8 @@ func validateResumeFields(intent LaunchIntent) error {
 		intent.Resource.WorkspaceID != "", intent.Resource.PaneID != "",
 		intent.Resource.TerminalID != "", intent.Resource.CurrentPath != "",
 		intent.Coordinator == (RuntimeResource{}), intent.CleanupPhase == "",
-		!intent.CleanupDeleteBranch, intent.CleanupDeleteBranchRequested == nil, intent.Server == nil,
+		!intent.CleanupDeleteBranch, intent.CleanupDeleteBranchRequested == nil,
+		intent.CleanupHookPhase == "", intent.Server == nil,
 	})
 }
 

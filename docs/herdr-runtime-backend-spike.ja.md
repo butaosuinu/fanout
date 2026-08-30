@@ -526,8 +526,12 @@ fanout の cleanup は次の契約に従う（実装: #531。row は owning work
 
 - state lock 下で保存済み row の workspace ID / label nonce、branch、path を現在値と照合し、live row では `terminal_id` も照合する。`stale` row は保存済み `terminal_id` を現在値と照合できない（pane 消滅、または cold restart による現在の `terminal_id` との不一致）ため、その失効の確認と workspace ID / label / path / checkout の Git provenance の照合で代替する。不一致、非所有、または照合不能なら mutation せず fail closed にする。
 - dirty checkout は明示確認なしに force しない。確認後の force remove でも branch は herdr に削除させない。
+- `before_worktree_remove` / `before_pane_close` の前に cleanup intent を保存し、発火済み phase を同じ intent 行へ保存する。
+  後段 preflight の一時失敗または retry では、fresh identity preflight を維持したまま保存済み phase 以前の hook を再発火させない。
 - 照合成功後は intent 行を保存してから `worktree remove` を発行する。実測どおり remove は checkout と child workspace の両方を削除するため、応答成功後に checkout / workspace の不在を確認する。workspace だけが残る場合は `workspace close` で整理する。
-- row と cleanup intent 行の削除は、残存 workspace の close と branch の compare-and-delete（または保持の確定）まで遅らせ、全後処理の確定と同じ state save で行う（削除が先行すると後処理の crash / 応答喪失から再実行できず、owned workspace / branch が追跡不能になる）。
+- row と cleanup intent 行の削除は、残存 workspace の close と branch の compare-and-delete（または保持の確定）まで遅らせる。
+  state row の durable removal が失敗した場合は realized cleanup intent を残し、retry では hook や lifecycle mutation を再送せず row retirement だけを完了する。
+  state row の durable removal 後に cleanup intent と worktree intent を retire する。
 - `workspace close` が先行して checkout が残った系は、owned registry の setup hook preflight を通過している場合に限り、`worktree open` で削除用 workspace を再登録してから同じ identity 照合を経て `worktree remove` を発行する。
 - branch 削除は fanout の compare-and-delete（「safety gate」節で定義。tip 照合と checked-out worktree 不在の確認後の削除）だけが行う。`CloseEverything` は保存済み checkout を照合できた fanout 作成 branch の worktree mutation 前の tip を記録し、merge の有無を条件にせず、一致時だけ削除する。現行の checkout 照合 marker がない保存済み intent は削除権を失う。削除権は compare-and-delete の発行前に intent 行で消費し、後処理の retry では branch mutation を再発行しない。消費後、削除前の crash では branch を残す。fresh cleanup の開始時または planned intent の再計画時に保存済み checkout が既に不在なら、同名 branch は残す。事前存在した branch は自動削除しない。
 - 応答喪失または crash 後の再実行は存在確認で分類する。checkout / workspace が不在なら削除完了として row を整理し、残存または判定不能では旧 request の進行中を排除できないため再発行せず `manual_cleanup_required` にする。明示操作による解消も remove の再発行ではなく、外部 cleanup 後の不在確認で row / intent を整理する経路に限る。

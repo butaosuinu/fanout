@@ -105,7 +105,7 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 	if !closePaneRecordsLocked(opts, locked, panes, mode, lg, windows) {
 		return exitcode.Env
 	}
-	if err := removePaneStateRows(locked, panes); err != nil {
+	if err := retirePaneStateRows(opts, locked, panes, mode); err != nil {
 		lg.Err("#%d: remove fanout state: %v", issueNum, err)
 		return exitcode.Env
 	}
@@ -162,7 +162,7 @@ func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg L
 	if !closePaneRecordsLocked(opts, locked, panes, mode, lg, windows) {
 		return exitcode.Env
 	}
-	if err := removePaneStateRows(locked, panes); err != nil {
+	if err := retirePaneStateRows(opts, locked, panes, mode); err != nil {
 		lg.Err("%s: remove fanout state: %v", taskID, err)
 		return exitcode.Env
 	}
@@ -307,7 +307,7 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 			failed++
 			continue
 		}
-		if err := removePaneStateRows(locked, issuePanes); err != nil {
+		if err := retirePaneStateRows(opts, locked, issuePanes, CloseWorktree); err != nil {
 			lg.Err("#%d: remove fanout state: %v", issueNum, err)
 			failed++
 			continue
@@ -390,7 +390,7 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 			failed++
 			continue
 		}
-		if err := removePaneStateRows(locked, taskPanes); err != nil {
+		if err := retirePaneStateRows(opts, locked, taskPanes, CloseWorktree); err != nil {
 			lg.Err("%s: remove fanout state: %v", taskID, err)
 			failed++
 			continue
@@ -508,7 +508,7 @@ func cleanupPaneRecordsLocked(opts Options, locked *state.LockedStore, panes []s
 // after this function succeeds, so a tmux inspection/close failure remains
 // retryable with both the worktree and state row intact.
 func closePaneRecordsLocked(opts Options, locked *state.LockedStore, panes []state.Pane, mode CloseMode, lg Logger, windows map[string]struct{}) bool {
-	if !runBeforeWorktreeRemoveHooks(opts, panes, mode, lg) {
+	if !runBeforeWorktreeRemoveHooks(opts, locked, panes, mode, lg) {
 		return false
 	}
 	if !closeRuntimePanes(opts, panes, mode, lg, windows) {
@@ -517,7 +517,7 @@ func closePaneRecordsLocked(opts Options, locked *state.LockedStore, panes []sta
 	return !mode.removesWorktree() || removeManagedWorktrees(opts, locked, panes, mode, lg)
 }
 
-func runBeforeWorktreeRemoveHooks(opts Options, panes []state.Pane, mode CloseMode, lg Logger) bool {
+func runBeforeWorktreeRemoveHooks(opts Options, locked *state.LockedStore, panes []state.Pane, mode CloseMode, lg Logger) bool {
 	if !mode.removesWorktree() {
 		return true
 	}
@@ -525,11 +525,10 @@ func runBeforeWorktreeRemoveHooks(opts Options, panes []state.Pane, mode CloseMo
 		if pane.IsShell() || pane.IsAttachedAgent() || !recordedWorktreeExists(pane) {
 			continue
 		}
-		skipHook, ok := verifyWorkspaceHookPreflight(opts, pane, mode, hooks.BeforeWorktreeRemove, lg)
-		if !ok {
-			return false
-		}
-		if skipHook {
+		if workspaceRuntimeRow(pane) {
+			if !runWorkspaceCleanupHook(opts, locked, pane, mode, hooks.BeforeWorktreeRemove, lg) {
+				return false
+			}
 			continue
 		}
 		if !runBlockingHook(hooks.BeforeWorktreeRemove, opts, pane, "", lg) {
@@ -568,19 +567,14 @@ func removeManagedWorktrees(opts Options, locked *state.LockedStore, panes []sta
 func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.Pane, mode CloseMode, lg Logger) bool {
 	if workspaceRuntimeRow(pane) {
 		hadWorktree := recordedWorktreeExists(pane)
-		skipHook, ok := verifyWorkspaceHookPreflight(opts, pane, mode, hooks.BeforePaneClose, lg)
-		if !ok {
+		if !runWorkspaceCleanupHook(opts, locked, pane, mode, hooks.BeforePaneClose, lg) {
 			return false
-		}
-		if !skipHook {
-			runBackgroundHook(hooks.BeforePaneClose, opts, pane, "", lg)
 		}
 		if !closeWorkspaceWorktree(opts, locked, pane, mode, lg) {
 			return false
 		}
-		runBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
-		if hadWorktree {
-			runBackgroundHook(hooks.WorktreeRemoved, opts, pane, "", lg)
+		if !completeWorkspaceCleanupHooks(opts, locked, pane, hadWorktree, lg) {
+			return false
 		}
 		return true
 	}
@@ -598,16 +592,73 @@ func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.P
 	return true
 }
 
-func verifyWorkspaceHookPreflight(opts Options, pane state.Pane, mode CloseMode, hook hooks.Type, lg Logger) (bool, bool) {
-	if !workspaceRuntimeRow(pane) || len(opts.Hooks.Events[hook]) == 0 {
-		return false, true
+var runWorkspaceBackgroundHook = runBackgroundHook
+
+func runWorkspaceCleanupHook(opts Options, locked *state.LockedStore, pane state.Pane, mode CloseMode, hook hooks.Type, lg Logger) bool {
+	if len(opts.Hooks.Events[hook]) == 0 {
+		return true
 	}
-	cleanupStarted, err := inspectWorkspaceClosePreflight(opts, pane, mode)
+	journal, intent, err := prepareWorkspaceCleanupHook(opts, locked, pane, mode)
 	if err != nil {
 		lg.Err("%s: Herdr %s hook preflight failed: %v", paneLabel(pane), hook, err)
-		return false, false
+		return false
 	}
-	return cleanupStarted, true
+	phase := state.CleanupHookBeforePaneClose
+	if hook == hooks.BeforeWorktreeRemove {
+		phase = state.CleanupHookBeforeWorktreeRemove
+	}
+	if cleanupHookPhaseReached(intent.CleanupHookPhase, phase) {
+		return true
+	}
+	if hook == hooks.BeforeWorktreeRemove {
+		if !runBlockingHook(hook, opts, pane, "", lg) {
+			return false
+		}
+	} else {
+		runWorkspaceBackgroundHook(hook, opts, pane, "", lg)
+	}
+	intent.CleanupHookPhase = phase
+	if err := saveWorkspaceCleanupIntent(journal, intent); err != nil {
+		lg.Err("%s: persist Herdr %s hook phase: %v", paneLabel(pane), hook, err)
+		return false
+	}
+	return true
+}
+
+func cleanupHookPhaseReached(saved, want state.CleanupHookPhase) bool {
+	return saved == "" || saved == want || saved == state.CleanupHookCompleted ||
+		want == state.CleanupHookBeforeWorktreeRemove && saved == state.CleanupHookBeforePaneClose
+}
+
+func completeWorkspaceCleanupHooks(opts Options, locked *state.LockedStore, pane state.Pane, hadWorktree bool, lg Logger) bool {
+	journal, err := locked.LaunchJournal(opts.ProjectRoot)
+	if err != nil {
+		lg.Err("%s: load Herdr cleanup hook phase: %v", paneLabel(pane), err)
+		return false
+	}
+	_, intentID, err := workspaceCleanupIntentIDs(opts.ProjectRoot, pane)
+	if err != nil {
+		lg.Err("%s: load completed Herdr cleanup intent: %v", paneLabel(pane), err)
+		return false
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found {
+		lg.Err("%s: completed Herdr cleanup intent is absent", paneLabel(pane))
+		return false
+	}
+	if intent.CleanupHookPhase == state.CleanupHookCompleted {
+		return true
+	}
+	runWorkspaceBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
+	if hadWorktree {
+		runWorkspaceBackgroundHook(hooks.WorktreeRemoved, opts, pane, "", lg)
+	}
+	intent.CleanupHookPhase = state.CleanupHookCompleted
+	if err := saveWorkspaceCleanupIntent(journal, intent); err != nil {
+		lg.Err("%s: persist completed Herdr cleanup hook phase: %v", paneLabel(pane), err)
+		return false
+	}
+	return true
 }
 
 func validateCloseOperations(opts Options, panes []state.Pane, mode CloseMode, lg Logger) bool {
@@ -748,6 +799,31 @@ func removePaneStateRows(locked *state.LockedStore, panes []state.Pane) error {
 		}
 	}
 	return nil
+}
+
+func retirePaneStateRows(opts Options, locked *state.LockedStore, panes []state.Pane, mode CloseMode) error {
+	if err := removePaneStateRows(locked, panes); err != nil {
+		return err
+	}
+	if !mode.removesWorktree() || !slices.ContainsFunc(panes, workspaceRuntimeRow) {
+		return nil
+	}
+	journal, err := locked.LaunchJournal(opts.ProjectRoot)
+	if err != nil {
+		return err
+	}
+	for _, pane := range panes {
+		if !workspaceRuntimeRow(pane) || pane.IsShell() || pane.IsAttachedAgent() {
+			continue
+		}
+		worktreeID, cleanupID, err := workspaceCleanupIntentIDs(opts.ProjectRoot, pane)
+		if err != nil {
+			return err
+		}
+		journal.RemoveIntent(cleanupID)
+		journal.RemoveIntent(worktreeID)
+	}
+	return journal.Save()
 }
 
 func removeWorktree(projectRoot string, pane state.Pane, lg Logger) bool {

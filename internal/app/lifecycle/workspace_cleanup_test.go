@@ -699,6 +699,90 @@ func TestHerdrHooksRequireFreshIdentityPreflight(t *testing.T) {
 	}
 }
 
+func TestHerdrCleanupPersistsHookPhaseBeforeLaterPreflight(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	hookPath := filepath.Join(t.TempDir(), "before-worktree")
+	t.Setenv("FANOUT_TEST_BEFORE_WORKTREE", hookPath)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot:     fixture.projectRoot,
+		workspaces:      []backend.WorkspaceObservation{fixture.workspace},
+		verifyErr:       errors.New("owned route changed"),
+		verifyErrAtCall: 3,
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+	opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+		hooks.BeforeWorktreeRemove: {{
+			Command: `printf 'called\n' >> "$FANOUT_TEST_BEFORE_WORKTREE"`, Timeout: time.Second,
+		}},
+		hooks.BeforePaneClose: {{Command: ":", Timeout: time.Second}},
+	}}
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	assertHerdrHookCalls(t, hookPath, 1)
+	assertHerdrCleanupHookPhase(t, fixture, state.CleanupHookBeforeWorktreeRemove)
+	runtime.verifyErrAtCall = 0
+	runtime.verifyErr = nil
+	lg := &captureLogger{}
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, lg); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d; errors = %v", got, exitcode.OK, lg.errors)
+	}
+	assertHerdrHookCalls(t, hookPath, 1)
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrCleanupRetiresAfterStateRowSaveRetry(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	var backgroundHooks []hooks.Type
+	originalBackgroundHook := runWorkspaceBackgroundHook
+	runWorkspaceBackgroundHook = func(hook hooks.Type, _ Options, _ state.Pane, _ string, _ Logger) {
+		backgroundHooks = append(backgroundHooks, hook)
+	}
+	t.Cleanup(func() { runWorkspaceBackgroundHook = originalBackgroundHook })
+	hookPath := filepath.Join(t.TempDir(), "before-worktree")
+	stateDir := filepath.Dir(state.Path(fixture.projectRoot))
+	t.Setenv("FANOUT_TEST_BEFORE_WORKTREE", hookPath)
+	t.Setenv("FANOUT_TEST_STATE_DIR", stateDir)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+	opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+		hooks.BeforeWorktreeRemove: {{
+			Command: `printf 'called\n' >> "$FANOUT_TEST_BEFORE_WORKTREE"; chmod 0500 "$FANOUT_TEST_STATE_DIR"`,
+			Timeout: time.Second,
+		}},
+		hooks.PaneClosed:      {{Command: ":", Timeout: time.Second}},
+		hooks.WorktreeRemoved: {{Command: ":", Timeout: time.Second}},
+	}}
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	if err := os.Chmod(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	assertHerdrHookCalls(t, hookPath, 1)
+	assertHerdrStateRowPresent(t, fixture)
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentRealized, true)
+	assertHerdrCleanupHookPhase(t, fixture, state.CleanupHookCompleted)
+	if len(backgroundHooks) != 2 {
+		t.Fatalf("completed lifecycle hook dispatches = %v, want two", backgroundHooks)
+	}
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	assertHerdrHookCalls(t, hookPath, 1)
+	assertHerdrLifecycleRemoved(t, fixture)
+	if len(backgroundHooks) != 2 {
+		t.Fatalf("retry lifecycle hook dispatches = %v, want no resend", backgroundHooks)
+	}
+}
+
 func TestHerdrCleanupRetryDoesNotRepeatHooks(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -3175,6 +3259,26 @@ func assertHerdrCleanupBranchDeleteConsumed(t *testing.T, fixture herdrLifecycle
 	intent, found := journal.FindIntent(intentID)
 	if !found || intent.Status != state.IntentRealized || intent.CleanupDeleteBranch {
 		t.Fatalf("consumed cleanup intent = %#v (found=%t), want realized without branch delete", intent, found)
+	}
+}
+
+func assertHerdrCleanupHookPhase(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	want state.CleanupHookPhase,
+) {
+	t.Helper()
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found || intent.CleanupHookPhase != want {
+		t.Fatalf("cleanup hook phase = %q (found=%t), want %q", intent.CleanupHookPhase, found, want)
 	}
 }
 
