@@ -121,7 +121,7 @@ func inspectWorkspaceClosePreflight(opts Options, pane state.Pane, mode CloseMod
 	if err != nil {
 		return false, err
 	}
-	if err := verifyWorkspaceCloseTarget(ctx, opts.ProjectRoot, runtime, pane, resource, predicate, reopened); err != nil {
+	if _, err := verifyWorkspaceCloseTarget(ctx, opts.ProjectRoot, runtime, pane, resource, predicate, reopened); err != nil {
 		return false, err
 	}
 	return cleanupStarted, nil
@@ -145,10 +145,37 @@ func prepareWorkspaceCleanupHook(opts Options, locked *state.LockedStore, pane s
 		intent.WorkspaceLabel, intent.WorktreePath, intent.Resource.RepoKey, intent.Resource.RepoRoot,
 	)
 	reopened := intent.Status == state.IntentIssued && intent.CleanupPhase == state.CleanupReopen
-	if err := verifyWorkspaceCloseTarget(ctx, opts.ProjectRoot, runtime, pane, intent.Resource, predicate, reopened); err != nil {
+	observation, err := verifyWorkspaceCloseTarget(
+		ctx, opts.ProjectRoot, runtime, pane, intent.Resource, predicate, reopened,
+	)
+	if err != nil {
+		return nil, state.LaunchIntent{}, err
+	}
+	intent, err = rebindWorkspaceCleanupHookIdentity(
+		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
+	)
+	if err != nil {
 		return nil, state.LaunchIntent{}, err
 	}
 	return journal, intent, nil
+}
+
+func rebindWorkspaceCleanupHookIdentity(
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	projectRoot string,
+	pane state.Pane,
+	intent state.LaunchIntent,
+	workspace *backend.WorkspaceObservation,
+) (state.LaunchIntent, error) {
+	previousResource := intent.Resource
+	intent, err := rebindObservedWorkspaceCleanupIdentity(
+		locked, journal, projectRoot, pane, intent, workspace,
+	)
+	if err != nil || intent.Resource == previousResource {
+		return intent, err
+	}
+	return intent, saveWorkspaceCleanupIntent(journal, intent)
 }
 
 func verifyWorkspaceCloseTarget(
@@ -159,24 +186,27 @@ func verifyWorkspaceCloseTarget(
 	resource state.RuntimeResource,
 	predicate workspacePredicateFunc,
 	reopened bool,
-) error {
+) (workspaceCleanupObservation, error) {
 	observation, err := observeWorkspaceCleanupMatching(ctx, runtime, projectRoot, resource, predicate)
 	if err != nil {
-		return err
+		return workspaceCleanupObservation{}, err
 	}
 	if observation.workspace != nil && !reopened {
 		if terminalErr := verifyTerminalInvalidation(*observation.workspace, resource); terminalErr != nil {
-			return terminalErr
+			return workspaceCleanupObservation{}, terminalErr
 		}
 	}
 	if observation.checkout.PathAbsent && !observation.checkout.Registered {
-		return nil
+		return observation, nil
 	}
 	fullRef, err := worktree.LocalBranchRef(ctx, projectRoot, pane.BranchName)
 	if err != nil {
-		return err
+		return workspaceCleanupObservation{}, err
 	}
-	return verifyCleanupCheckout(ctx, projectRoot, fullRef, observation.checkout.HeadSHA, resource)
+	if err := verifyCleanupCheckout(ctx, projectRoot, fullRef, observation.checkout.HeadSHA, resource); err != nil {
+		return workspaceCleanupObservation{}, err
+	}
+	return observation, nil
 }
 
 func workspaceClosePreflightIdentity(

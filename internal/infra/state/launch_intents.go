@@ -51,10 +51,13 @@ const (
 type CleanupHookPhase string
 
 const (
-	CleanupHookPending              CleanupHookPhase = "pending"
-	CleanupHookBeforeWorktreeRemove CleanupHookPhase = "before_worktree_remove"
-	CleanupHookBeforePaneClose      CleanupHookPhase = "before_pane_close"
-	CleanupHookCompleted            CleanupHookPhase = "completed"
+	CleanupHookPending                    CleanupHookPhase = "pending"
+	CleanupHookBeforeWorktreeRemoveIssued CleanupHookPhase = "before_worktree_remove_issued"
+	CleanupHookBeforeWorktreeRemove       CleanupHookPhase = "before_worktree_remove"
+	CleanupHookBeforePaneCloseIssued      CleanupHookPhase = "before_pane_close_issued"
+	CleanupHookBeforePaneClose            CleanupHookPhase = "before_pane_close"
+	CleanupHookCompletionIssued           CleanupHookPhase = "completion_issued"
+	CleanupHookCompleted                  CleanupHookPhase = "completed"
 )
 
 type LaunchIntentStatus string
@@ -788,6 +791,7 @@ func validateCleanupFields(intent LaunchIntent) error {
 		intent.CleanupPhase != CleanupReopen || intent.Coordinator.WorkspaceID != "",
 		!intent.CleanupDeleteBranch || commitSHAPattern.MatchString(intent.ExpectedHead),
 		validCleanupHookPhase(intent.CleanupHookPhase),
+		intent.CleanupHookPhase != CleanupHookCompletionIssued || intent.Status == IntentRealized,
 		intent.CleanupHookPhase != CleanupHookCompleted || intent.Status == IntentRealized,
 	}); err != nil {
 		return err
@@ -799,8 +803,10 @@ func validateCleanupFields(intent LaunchIntent) error {
 }
 
 func validCleanupHookPhase(phase CleanupHookPhase) bool {
-	return phase == "" || phase == CleanupHookPending || phase == CleanupHookBeforeWorktreeRemove ||
-		phase == CleanupHookBeforePaneClose || phase == CleanupHookCompleted
+	return phase == "" || phase == CleanupHookPending ||
+		phase == CleanupHookBeforeWorktreeRemoveIssued || phase == CleanupHookBeforeWorktreeRemove ||
+		phase == CleanupHookBeforePaneCloseIssued || phase == CleanupHookBeforePaneClose ||
+		phase == CleanupHookCompletionIssued || phase == CleanupHookCompleted
 }
 
 func validateResumeFields(intent LaunchIntent) error {

@@ -531,6 +531,21 @@ func TestHerdrCleanupIntentKeepsIndependentMutationRecord(t *testing.T) {
 	if err := validateIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {
 		t.Fatalf("unknown cleanup hook phase error = %v", err)
 	}
+	for _, phase := range []CleanupHookPhase{
+		CleanupHookBeforeWorktreeRemoveIssued,
+		CleanupHookBeforePaneCloseIssued,
+	} {
+		cleanup = testCleanupIntent(repo, CleanupRemove, IntentPlanned)
+		cleanup.CleanupHookPhase = phase
+		if err := validateIntent(cleanup); err != nil {
+			t.Fatalf("cleanup hook phase %q: %v", phase, err)
+		}
+	}
+	cleanup = testCleanupIntent(repo, CleanupRemove, IntentRealized)
+	cleanup.CleanupHookPhase = CleanupHookCompletionIssued
+	if err := validateIntent(cleanup); err != nil {
+		t.Fatalf("cleanup completion hook phase: %v", err)
+	}
 }
 
 func TestHerdrCleanupIntentCoexistsWithServerRestart(t *testing.T) {

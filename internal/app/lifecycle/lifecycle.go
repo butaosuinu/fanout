@@ -593,34 +593,103 @@ func removeManagedWorktree(opts Options, locked *state.LockedStore, pane state.P
 	return true
 }
 
-var runWorkspaceBackgroundHook = runBackgroundHook
+var (
+	runWorkspaceBackgroundHook     = runBackgroundHook
+	saveWorkspaceCleanupHookIntent = saveWorkspaceCleanupIntent
+)
 
 func runWorkspaceCleanupHook(opts Options, locked *state.LockedStore, pane state.Pane, mode CloseMode, hook hooks.Type, lg Logger) bool {
 	if len(opts.Hooks.Events[hook]) == 0 {
-		return true
+		return allowUnconfiguredWorkspaceCleanupHook(opts, locked, pane, mode, lg)
 	}
 	journal, intent, err := prepareWorkspaceCleanupHook(opts, locked, pane, mode)
 	if err != nil {
 		lg.Err("%s: Herdr %s hook preflight failed: %v", paneLabel(pane), hook, err)
 		return false
 	}
-	phase := state.CleanupHookBeforePaneClose
-	if hook == hooks.BeforeWorktreeRemove {
-		phase = state.CleanupHookBeforeWorktreeRemove
+	if rejectAmbiguousCleanupHookPhase(intent.CleanupHookPhase, pane, lg) {
+		return false
 	}
+	issued, phase := cleanupHookCheckpoint(hook)
 	if cleanupHookPhaseReached(intent.CleanupHookPhase, phase) {
 		return true
 	}
+	hookPane := cleanupHookPane(pane, intent.Resource)
+	if !persistCleanupHookPhase(journal, &intent, issued, hookPane, lg) {
+		return false
+	}
 	if hook == hooks.BeforeWorktreeRemove {
-		if !runBlockingHook(hook, opts, pane, "", lg) {
+		if !runBlockingHook(hook, opts, hookPane, "", lg) {
 			return false
 		}
 	} else {
-		runWorkspaceBackgroundHook(hook, opts, pane, "", lg)
+		runWorkspaceBackgroundHook(hook, opts, hookPane, "", lg)
 	}
+	return persistCleanupHookPhase(journal, &intent, phase, hookPane, lg)
+}
+
+func allowUnconfiguredWorkspaceCleanupHook(
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+	mode CloseMode,
+	lg Logger,
+) bool {
+	journal, err := locked.LaunchJournal(opts.ProjectRoot)
+	if err != nil {
+		lg.Err("%s: load Herdr cleanup hook phase: %v", paneLabel(pane), err)
+		return false
+	}
+	_, intentID, err := workspaceCleanupIntentIDs(opts.ProjectRoot, pane)
+	if err != nil {
+		lg.Err("%s: load Herdr cleanup hook identity: %v", paneLabel(pane), err)
+		return false
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found {
+		return true
+	}
+	if err := validateSavedWorkspaceCleanup(intent, opts.ProjectRoot, pane, mode); err != nil {
+		lg.Err("%s: validate Herdr cleanup hook phase: %v", paneLabel(pane), err)
+		return false
+	}
+	return !rejectAmbiguousCleanupHookPhase(intent.CleanupHookPhase, pane, lg)
+}
+
+func cleanupHookCheckpoint(hook hooks.Type) (state.CleanupHookPhase, state.CleanupHookPhase) {
+	if hook == hooks.BeforeWorktreeRemove {
+		return state.CleanupHookBeforeWorktreeRemoveIssued, state.CleanupHookBeforeWorktreeRemove
+	}
+	return state.CleanupHookBeforePaneCloseIssued, state.CleanupHookBeforePaneClose
+}
+
+func rejectAmbiguousCleanupHookPhase(phase state.CleanupHookPhase, pane state.Pane, lg Logger) bool {
+	if phase != state.CleanupHookBeforeWorktreeRemoveIssued &&
+		phase != state.CleanupHookBeforePaneCloseIssued &&
+		phase != state.CleanupHookCompletionIssued {
+		return false
+	}
+	lg.Err("%s: saved Herdr cleanup hook phase %q has an ambiguous dispatch outcome; refusing to replay", paneLabel(pane), phase)
+	return true
+}
+
+func cleanupHookPane(pane state.Pane, resource state.RuntimeResource) state.Pane {
+	pane.WorkspaceID = resource.WorkspaceID
+	pane.PaneID = resource.PaneID
+	pane.TerminalID = resource.TerminalID
+	return pane
+}
+
+func persistCleanupHookPhase(
+	journal *state.LockedLaunchJournal,
+	intent *state.LaunchIntent,
+	phase state.CleanupHookPhase,
+	pane state.Pane,
+	lg Logger,
+) bool {
 	intent.CleanupHookPhase = phase
-	if err := saveWorkspaceCleanupIntent(journal, intent); err != nil {
-		lg.Err("%s: persist Herdr %s hook phase: %v", paneLabel(pane), hook, err)
+	if err := saveWorkspaceCleanupHookIntent(journal, *intent); err != nil {
+		lg.Err("%s: persist Herdr cleanup hook phase %q: %v", paneLabel(pane), phase, err)
 		return false
 	}
 	return true
@@ -650,16 +719,39 @@ func completeWorkspaceCleanupHooks(opts Options, locked *state.LockedStore, pane
 	if intent.CleanupHookPhase == state.CleanupHookCompleted {
 		return true
 	}
-	runWorkspaceBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
-	if hadWorktree {
-		runWorkspaceBackgroundHook(hooks.WorktreeRemoved, opts, pane, "", lg)
-	}
-	intent.CleanupHookPhase = state.CleanupHookCompleted
-	if err := saveWorkspaceCleanupIntent(journal, intent); err != nil {
-		lg.Err("%s: persist completed Herdr cleanup hook phase: %v", paneLabel(pane), err)
+	if rejectAmbiguousCleanupHookPhase(intent.CleanupHookPhase, pane, lg) {
 		return false
 	}
-	return true
+	hookPane := cleanupHookPane(pane, intent.Resource)
+	if !workspaceCompletionHooksConfigured(opts, hadWorktree) {
+		return persistCleanupHookPhase(journal, &intent, state.CleanupHookCompleted, hookPane, lg)
+	}
+	return dispatchWorkspaceCompletionHooks(opts, journal, &intent, hookPane, hadWorktree, lg)
+}
+
+func dispatchWorkspaceCompletionHooks(
+	opts Options,
+	journal *state.LockedLaunchJournal,
+	intent *state.LaunchIntent,
+	pane state.Pane,
+	hadWorktree bool,
+	lg Logger,
+) bool {
+	if !persistCleanupHookPhase(journal, intent, state.CleanupHookCompletionIssued, pane, lg) {
+		return false
+	}
+	if len(opts.Hooks.Events[hooks.PaneClosed]) != 0 {
+		runWorkspaceBackgroundHook(hooks.PaneClosed, opts, pane, "", lg)
+	}
+	if hadWorktree && len(opts.Hooks.Events[hooks.WorktreeRemoved]) != 0 {
+		runWorkspaceBackgroundHook(hooks.WorktreeRemoved, opts, pane, "", lg)
+	}
+	return persistCleanupHookPhase(journal, intent, state.CleanupHookCompleted, pane, lg)
+}
+
+func workspaceCompletionHooksConfigured(opts Options, hadWorktree bool) bool {
+	return len(opts.Hooks.Events[hooks.PaneClosed]) != 0 ||
+		hadWorktree && len(opts.Hooks.Events[hooks.WorktreeRemoved]) != 0
 }
 
 func validateCloseOperations(opts Options, panes []state.Pane, mode CloseMode, lg Logger) bool {
@@ -782,37 +874,38 @@ func paneStateKey(pane state.Pane) string {
 }
 
 func removePaneStateRows(locked *state.LockedStore, panes []state.Pane) error {
-	seen := map[string]bool{}
+	targets := make(map[string]bool, len(panes))
 	for _, pane := range panes {
-		key := paneStateKey(pane)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		if strings.TrimSpace(pane.TaskID) != "" && pane.IssueNum == 0 && !pane.IsAttachedAgent() {
-			if err := locked.RemoveTaskPane(pane.Parent, pane.TaskID); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := locked.RemovePane(pane.Parent, pane.IssueNum); err != nil {
-			return err
+		targets[paneRetirementKey(pane)] = true
+	}
+	kept := locked.Panes[:0]
+	for _, pane := range locked.Panes {
+		if !targets[paneRetirementKey(pane)] {
+			kept = append(kept, pane)
 		}
 	}
-	return nil
+	locked.Panes = kept
+	return locked.Save()
+}
+
+func paneRetirementKey(pane state.Pane) string {
+	if strings.TrimSpace(pane.TaskID) != "" && pane.IssueNum == 0 && !pane.IsAttachedAgent() {
+		return pane.Parent + "\x00task\x00" + pane.TaskID
+	}
+	return pane.Parent + "\x00issue\x00" + strconv.Itoa(pane.IssueNum)
 }
 
 func retirePaneStateRows(opts Options, locked *state.LockedStore, panes []state.Pane, mode CloseMode) error {
 	previous := locked.Store
 	previous.Panes = append([]state.Pane(nil), locked.Panes...)
 	if err := removePaneStateRows(locked, panes); err != nil {
-		return err
+		return restorePaneStateAfterRetirementFailure(locked, previous, err)
 	}
 	if !mode.removesWorktree() || !slices.ContainsFunc(panes, workspaceRuntimeRow) {
 		return nil
 	}
 	if err := retireWorkspaceIntents(opts, locked, panes); err != nil {
-		return restorePaneStateAfterIntentRetirementFailure(locked, previous, err)
+		return restorePaneStateAfterRetirementFailure(locked, previous, err)
 	}
 	return nil
 }
@@ -836,14 +929,14 @@ func retireWorkspaceIntents(opts Options, locked *state.LockedStore, panes []sta
 	return journal.Save()
 }
 
-func restorePaneStateAfterIntentRetirementFailure(
+func restorePaneStateAfterRetirementFailure(
 	locked *state.LockedStore,
 	previous state.Store,
 	cause error,
 ) error {
 	locked.Store = previous
 	if err := locked.Save(); err != nil {
-		return errors.Join(cause, fmt.Errorf("restore fanout state after Herdr intent retirement failure: %w", err))
+		return errors.Join(cause, fmt.Errorf("restore fanout state after retirement failure: %w", err))
 	}
 	return cause
 }
