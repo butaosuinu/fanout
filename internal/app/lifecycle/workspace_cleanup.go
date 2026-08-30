@@ -116,11 +116,11 @@ func validateSharedAttachedWorkspaceIdentity(pane state.Pane) error {
 }
 
 func verifyWorkspaceClosePreflight(opts Options, pane state.Pane, mode CloseMode) error {
-	_, err := inspectWorkspaceClosePreflight(opts, pane, mode)
+	_, err := inspectWorkspaceClosePreflight(opts, pane, mode, nil)
 	return err
 }
 
-func inspectWorkspaceClosePreflight(opts Options, pane state.Pane, mode CloseMode) (bool, error) {
+func inspectWorkspaceClosePreflight(opts Options, pane state.Pane, mode CloseMode, attached []state.Pane) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceCleanupTimeout)
 	defer cancel()
 	runtime, err := opts.WorkspaceRuntime(ctx, pane)
@@ -133,6 +133,9 @@ func inspectWorkspaceClosePreflight(opts Options, pane state.Pane, mode CloseMod
 	resource, predicate, reopened, cleanupStarted, err := workspaceClosePreflightIdentity(opts, pane, mode)
 	if err != nil {
 		return false, err
+	}
+	if len(attached) > 0 {
+		predicate = sharedChildWorkspacePredicate(resource, attached)
 	}
 	if _, err := verifyWorkspaceCloseTarget(ctx, opts.ProjectRoot, runtime, pane, resource, predicate, reopened); err != nil {
 		return false, err
@@ -310,7 +313,7 @@ func closeSharedAttachedWorkspaceRows(
 		if !workspaceRuntimeRow(pane) || pane.IsShell() || pane.IsAttachedAgent() {
 			continue
 		}
-		if err := closeSharedAttachedWorkspaces(ctx, opts, locked, pane, mode); err != nil {
+		if err := closeSharedAttachedWorkspaces(ctx, opts, locked, pane, mode, lg); err != nil {
 			lg.Err("%s: shared attached workspace close failed; preserving child worktree: %v", paneLabel(pane), err)
 			return false
 		}
@@ -324,6 +327,7 @@ func closeSharedAttachedWorkspaces(
 	locked *state.LockedStore,
 	child state.Pane,
 	mode CloseMode,
+	lg Logger,
 ) error {
 	attached := sharedAttachedWorkspaceRows(locked.Panes, child.WorktreePath)
 	if len(attached) == 0 {
@@ -334,12 +338,19 @@ func closeSharedAttachedWorkspaces(
 		return retireSharedAttachedWorkspaceClose(journal, opts.ProjectRoot, child, mode)
 	}
 	journal, intent, issueClose, err := prepareSharedAttachedWorkspaceClose(
-		ctx, opts, locked, child, mode,
+		ctx, opts, locked, child, attached, mode,
 	)
 	if err != nil {
 		return err
 	}
-	return driveSharedAttachedWorkspaceCloses(ctx, opts, locked, journal, intent, attached, issueClose)
+	targets, err := inspectSharedAttachedWorkspaces(ctx, opts, locked, child, attached)
+	if err != nil {
+		if errors.Is(err, backend.ErrOwnedIdentityMismatch) {
+			return markSharedAttachedWorkspaceCloseManual(journal, intent, err)
+		}
+		return err
+	}
+	return driveSharedAttachedWorkspaceCloses(ctx, opts, locked, journal, intent, targets, issueClose, lg)
 }
 
 func retireSharedAttachedWorkspaceClose(
@@ -370,8 +381,9 @@ func driveSharedAttachedWorkspaceCloses(
 	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	intent state.LaunchIntent,
-	attached []state.Pane,
+	targets []sharedAttachedWorkspaceCloseTarget,
 	issueClose bool,
+	lg Logger,
 ) error {
 	if issueClose {
 		intent.Status, intent.Failure = state.IntentManualCleanupRequired, sharedAttachedWorkspaceCloseFailure
@@ -379,10 +391,15 @@ func driveSharedAttachedWorkspaceCloses(
 			return err
 		}
 	}
-	for _, pane := range attached {
-		if err := closeSharedAttachedWorkspace(ctx, opts, locked, pane, issueClose); err != nil {
-			return errors.Join(ErrManualCleanupRequired, err)
+	for _, target := range targets {
+		issued, err := closeSharedAttachedWorkspace(ctx, opts, locked, target, issueClose, lg)
+		if err == nil {
+			continue
 		}
+		if issueClose && !issued {
+			return resetSharedAttachedWorkspaceClose(journal, intent, err)
+		}
+		return errors.Join(ErrManualCleanupRequired, err)
 	}
 	journal.RemoveIntent(intent.ID)
 	return journal.Save()
@@ -393,6 +410,7 @@ func prepareSharedAttachedWorkspaceClose(
 	opts Options,
 	locked *state.LockedStore,
 	child state.Pane,
+	attached []state.Pane,
 	mode CloseMode,
 ) (*state.LockedLaunchJournal, state.LaunchIntent, bool, error) {
 	runtime, err := opts.WorkspaceRuntime(ctx, child)
@@ -404,23 +422,22 @@ func prepareSharedAttachedWorkspaceClose(
 	}
 	resource := resourceFromPane(child)
 	journal, intent, _, err := loadWorkspaceCleanupIntent(
-		ctx, opts, locked, runtime, child, mode, sharedAttachedWorkspacePredicate(resource),
+		ctx, opts, locked, runtime, child, mode, sharedChildWorkspacePredicate(resource, attached),
 	)
 	if err != nil {
 		return nil, intent, false, err
 	}
-	if intent.Status == state.IntentPlanned && intent.CleanupPhase == state.CleanupRemove {
+	if intent.Status == state.IntentPlanned || intent.Status == state.IntentRealized {
 		return journal, intent, true, nil
 	}
 	if intent.Status == state.IntentManualCleanupRequired && intent.Failure == sharedAttachedWorkspaceCloseFailure {
 		return journal, intent, false, nil
 	}
-	intent.Status, intent.Failure = state.IntentManualCleanupRequired, sharedAttachedWorkspaceCloseFailure
-	return journal, intent, false, errors.Join(
-		ErrManualCleanupRequired,
-		errors.New(sharedAttachedWorkspaceCloseFailure),
-		saveWorkspaceCleanupIntent(journal, intent),
-	)
+	if intent.Status == state.IntentManualCleanupRequired {
+		return journal, intent, false, fmt.Errorf("%w: %s", ErrManualCleanupRequired, intent.Failure)
+	}
+	cause := fmt.Errorf("shared attached workspace close cannot adopt cleanup status %s", intent.Status)
+	return journal, intent, false, markWorkspaceCleanupManual(journal, intent, cause)
 }
 
 func sharedAttachedWorkspaceRows(panes []state.Pane, worktreePath string) []state.Pane {
@@ -435,32 +452,64 @@ func sharedAttachedWorkspaceRows(panes []state.Pane, worktreePath string) []stat
 	return attached
 }
 
+type sharedAttachedWorkspaceCloseTarget struct {
+	pane      state.Pane
+	runtime   WorkspaceRuntime
+	workspace *backend.WorkspaceObservation
+}
+
+func inspectSharedAttachedWorkspaces(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	child state.Pane,
+	panes []state.Pane,
+) ([]sharedAttachedWorkspaceCloseTarget, error) {
+	targets := make([]sharedAttachedWorkspaceCloseTarget, 0, len(panes))
+	for _, pane := range panes {
+		if pane.WorkspaceID == child.WorkspaceID || pane.WorkspaceLabel == child.WorkspaceLabel {
+			return nil, fmt.Errorf("%w: attached workspace identity aliases its child", backend.ErrOwnedIdentityMismatch)
+		}
+		current, runtime, workspace, err := inspectSharedAttachedWorkspace(ctx, opts, locked, pane)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, sharedAttachedWorkspaceCloseTarget{current, runtime, workspace})
+	}
+	return targets, nil
+}
+
 func closeSharedAttachedWorkspace(
 	ctx context.Context,
 	opts Options,
 	locked *state.LockedStore,
-	pane state.Pane,
+	target sharedAttachedWorkspaceCloseTarget,
 	issueClose bool,
-) error {
-	current, runtime, workspace, err := inspectSharedAttachedWorkspace(ctx, opts, locked, pane)
-	if err != nil {
-		return err
+	lg Logger,
+) (bool, error) {
+	if target.workspace != nil && !issueClose {
+		return false, errors.New(sharedAttachedWorkspaceCloseFailure)
 	}
-	if workspace == nil {
-		return locked.RemovePane(current.Parent, current.IssueNum)
+	if issueClose {
+		runBackgroundHook(hooks.BeforePaneClose, opts, target.pane, "", lg)
 	}
-	if !issueClose {
-		return fmt.Errorf("%s", sharedAttachedWorkspaceCloseFailure)
+	if target.workspace == nil {
+		runBackgroundHook(hooks.PaneClosed, opts, target.pane, "", lg)
+		return false, locked.RemovePane(target.pane.Parent, target.pane.IssueNum)
 	}
-	mutationErr := runtime.CloseWorkspace(ctx, workspace.WorkspaceID)
-	_, _, workspace, verifyErr := inspectSharedAttachedWorkspace(ctx, opts, locked, current)
+	mutationErr := target.runtime.CloseWorkspace(ctx, target.workspace.WorkspaceID)
+	if mutationDefinitelyNotIssued(mutationErr) {
+		return false, mutationErr
+	}
+	_, _, workspace, verifyErr := inspectSharedAttachedWorkspace(ctx, opts, locked, target.pane)
 	if verifyErr != nil || workspace != nil {
-		return errors.Join(
+		return true, errors.Join(
 			mutationErr, verifyErr,
 			fmt.Errorf("shared attached workspace close did not establish absence"),
 		)
 	}
-	return locked.RemovePane(current.Parent, current.IssueNum)
+	runBackgroundHook(hooks.PaneClosed, opts, target.pane, "", lg)
+	return true, locked.RemovePane(target.pane.Parent, target.pane.IssueNum)
 }
 
 func inspectSharedAttachedWorkspace(
@@ -469,18 +518,9 @@ func inspectSharedAttachedWorkspace(
 	locked *state.LockedStore,
 	pane state.Pane,
 ) (state.Pane, WorkspaceRuntime, *backend.WorkspaceObservation, error) {
-	if err := validateSharedAttachedWorkspaceIdentity(pane); err != nil {
+	current, err := currentSharedAttachedWorkspaceRow(locked, pane)
+	if err != nil {
 		return state.Pane{}, nil, nil, err
-	}
-	index, err := locked.EmitterRowIndex(
-		pane.EmitterRowKey, normalizedWorktreePath(pane.WorktreePath), pane.WorkspaceLabel,
-	)
-	if err != nil || index < 0 {
-		return state.Pane{}, nil, nil, errors.Join(err, fmt.Errorf("saved shared attached workspace row identity is not unique"))
-	}
-	current := locked.Panes[index]
-	if !current.IsAttachedAgent() || !current.RuntimeBinding().Equal(pane.RuntimeBinding()) {
-		return state.Pane{}, nil, nil, fmt.Errorf("saved shared attached workspace row identity changed")
 	}
 	runtime, err := opts.WorkspaceRuntime(ctx, current)
 	if err != nil {
@@ -492,17 +532,71 @@ func inspectSharedAttachedWorkspace(
 	resource := resourceFromPane(current)
 	workspace, err := verifyWorkspaceCloseTarget(
 		ctx, opts.ProjectRoot, runtime, current, resource,
-		sharedAttachedWorkspacePredicate(resource), false,
+		workspaceResourcePredicate(resource), false,
 	)
 	return current, runtime, workspace, err
 }
 
-func sharedAttachedWorkspacePredicate(resource state.RuntimeResource) workspacePredicateFunc {
+func currentSharedAttachedWorkspaceRow(locked *state.LockedStore, pane state.Pane) (state.Pane, error) {
+	if err := validateSharedAttachedWorkspaceIdentity(pane); err != nil {
+		return state.Pane{}, fmt.Errorf("%w: %v", backend.ErrOwnedIdentityMismatch, err)
+	}
+	index, err := locked.EmitterRowIndex(
+		pane.EmitterRowKey, normalizedWorktreePath(pane.WorktreePath), pane.WorkspaceLabel,
+	)
+	if err != nil || index < 0 {
+		return state.Pane{}, errors.Join(
+			backend.ErrOwnedIdentityMismatch, err,
+			fmt.Errorf("saved shared attached workspace row identity is not unique"),
+		)
+	}
+	current := locked.Panes[index]
+	if !current.IsAttachedAgent() || !current.RuntimeBinding().Equal(pane.RuntimeBinding()) {
+		return state.Pane{}, fmt.Errorf("%w: saved shared attached workspace row identity changed", backend.ErrOwnedIdentityMismatch)
+	}
+	return current, nil
+}
+
+func workspaceResourcePredicate(resource state.RuntimeResource) workspacePredicateFunc {
 	return func(workspace backend.WorkspaceObservation) (bool, bool) {
 		candidate := workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label
-		_, paneMatches := projectCoordinatorPane(workspace, resource)
-		return candidate, paneMatches && workspaceMatchesResource(workspace, resource)
+		return candidate, workspaceMatchesResource(workspace, resource)
 	}
+}
+
+func sharedChildWorkspacePredicate(resource state.RuntimeResource, attached []state.Pane) workspacePredicateFunc {
+	base := workspacePredicate(resource)
+	return func(workspace backend.WorkspaceObservation) (bool, bool) {
+		candidate, exact := base(workspace)
+		if exact || !workspaceMatchesAttachedRowIdentity(workspace, attached) {
+			return candidate, exact
+		}
+		return false, false
+	}
+}
+
+func workspaceMatchesAttachedRowIdentity(workspace backend.WorkspaceObservation, attached []state.Pane) bool {
+	return slices.ContainsFunc(attached, func(pane state.Pane) bool {
+		return workspace.WorkspaceID == pane.WorkspaceID || workspace.Label == pane.WorkspaceLabel
+	})
+}
+
+func markSharedAttachedWorkspaceCloseManual(
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+	cause error,
+) error {
+	intent.Status, intent.Failure = state.IntentManualCleanupRequired, sharedAttachedWorkspaceCloseFailure
+	return errors.Join(ErrManualCleanupRequired, cause, saveWorkspaceCleanupIntent(journal, intent))
+}
+
+func resetSharedAttachedWorkspaceClose(
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+	cause error,
+) error {
+	intent.Status, intent.Failure = state.IntentPlanned, ""
+	return errors.Join(cause, saveWorkspaceCleanupIntent(journal, intent))
 }
 
 func loadWorkspaceCleanupIntent(
