@@ -727,7 +727,7 @@ func recoverExpiredPlannedWorkspaceCleanup(
 		return intent, err
 	}
 	if workspaceCleanupAbsent(observation) {
-		return realizeWorkspaceCleanup(journal, intent)
+		return realizeReplannedWorkspaceCleanup(journal, intent)
 	}
 	intent, err = rebindObservedWorkspaceCleanupIdentity(
 		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
@@ -827,7 +827,7 @@ func replanWorkspaceCleanup(
 	intent.Status = state.IntentPlanned
 	intent.CleanupPhase = phase
 	intent.ExpectedHead = expectedHead
-	intent.CleanupDeleteBranch = intent.CleanupDeleteBranch && branchFound
+	intent.CleanupDeleteBranch = intent.CleanupDeleteBranch && branchFound && workspaceCleanupCheckoutPresent(observation)
 	intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
 	intent.Failure = ""
 	return intent, saveWorkspaceCleanupIntent(journal, intent)
@@ -844,7 +844,7 @@ func replanObservedWorkspaceCleanup(
 	observation workspaceCleanupObservation,
 ) (state.LaunchIntent, error) {
 	if workspaceCleanupAbsent(observation) {
-		return realizeWorkspaceCleanup(journal, intent)
+		return realizeReplannedWorkspaceCleanup(journal, intent)
 	}
 	intent, err := rebindObservedWorkspaceCleanupIdentity(
 		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
@@ -962,6 +962,14 @@ func saveWorkspaceCleanupIntent(journal *state.LockedLaunchJournal, intent state
 
 func workspaceCleanupAbsent(observation workspaceCleanupObservation) bool {
 	return observation.workspace == nil && !workspaceCleanupCheckoutPresent(observation)
+}
+
+func realizeReplannedWorkspaceCleanup(
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
+	intent.CleanupDeleteBranch = false
+	return realizeWorkspaceCleanup(journal, intent)
 }
 
 func finishBranchCleanup(ctx context.Context, projectRoot string, intent state.LaunchIntent) error {
