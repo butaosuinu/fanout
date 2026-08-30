@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/butaosuinu/fanout/internal/app/lifecycle"
+	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/paneruntime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -36,14 +37,14 @@ func newWorkspaceLifecycleFactory(projectRoot string) lifecycle.WorkspaceRuntime
 		}
 		if filepath.Clean(pane.RepoKey) != identity.RepoKey ||
 			filepath.Clean(pane.RepoRoot) != identity.RepoRoot {
-			return nil, fmt.Errorf("saved Herdr row belongs to a different repository")
+			return nil, fmt.Errorf("%w: saved Herdr row belongs to a different repository", backend.ErrOwnedIdentityMismatch)
 		}
 		owned, err := paneruntime.Open(ctx, identity.RepoKey)
 		if err != nil {
 			return nil, err
 		}
 		if owned.Session != pane.SessionID || owned.SocketPath != pane.SocketPath {
-			return nil, fmt.Errorf("saved Herdr row belongs to a different owned route")
+			return nil, fmt.Errorf("%w: saved Herdr row belongs to a different owned route", backend.ErrOwnedIdentityMismatch)
 		}
 		return owned, nil
 	}

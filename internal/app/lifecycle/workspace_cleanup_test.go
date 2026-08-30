@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -564,6 +565,147 @@ func TestHerdrSharedAttachedIdentityMismatchBlocksWorktreeHook(t *testing.T) {
 		intent.Failure != sharedAttachedWorkspaceCloseFailure {
 		t.Fatalf("hook preflight shared close fence = %#v (found=%t)", intent, found)
 	}
+}
+
+func TestHerdrSharedAttachedPreflightPreservesExistingCleanupFence(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		status  state.LaunchIntentStatus
+		failure string
+	}{
+		{name: "issued", status: state.IntentIssued},
+		{name: "unrelated manual", status: state.IntentManualCleanupRequired, failure: "existing manual fence"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			workspace := herdrLifecycleWorkspace(
+				"w-attached", "attached-label", fixture.worktreePath,
+				fixture.pane.RepoKey, fixture.pane.RepoRoot,
+			)
+			attached := sharedAttachedLifecyclePane(fixture, "425", "", workspace)
+			replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+			recordActiveHerdrCleanupIntent(t, fixture, state.CleanupRemove)
+			want := rewriteHerdrCleanupIntentStatus(t, fixture, tt.status, tt.failure)
+			foreign := workspace
+			foreign.Label = "foreign-label"
+			runtime := &fakeHerdrLifecycleRuntime{
+				projectRoot: fixture.projectRoot,
+				workspaces:  []backend.WorkspaceObservation{fixture.workspace, foreign},
+			}
+			opts := herdrLifecycleOptions(fixture, runtime)
+			opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+				hooks.BeforeWorktreeRemove: {{Command: ":", Timeout: time.Second}},
+			}}
+
+			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+			}
+			assertHerdrCleanupIntentEqual(t, fixture, want)
+
+			runtime.workspaces = []backend.WorkspaceObservation{fixture.workspace}
+			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("retry Close() = %d, want %d", got, exitcode.Env)
+			}
+			assertHerdrCleanupIntentEqual(t, fixture, want)
+			if len(runtime.mutationLog) != 0 {
+				t.Fatalf("preserved %s fence replayed mutations: %v", tt.name, runtime.mutationLog)
+			}
+		})
+	}
+}
+
+func TestHerdrSharedAttachedFactoryIdentityMismatchPersistsManual(t *testing.T) {
+	for _, hookEnabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "normal close", true: "hook preflight"}[hookEnabled], func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			workspace := herdrLifecycleWorkspace(
+				"w-attached", "attached-label", fixture.worktreePath,
+				fixture.pane.RepoKey, fixture.pane.RepoRoot,
+			)
+			attached := sharedAttachedLifecyclePane(fixture, "425", "", workspace)
+			replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+			runtime := &fakeHerdrLifecycleRuntime{
+				projectRoot: fixture.projectRoot,
+				workspaces:  []backend.WorkspaceObservation{fixture.workspace, workspace},
+			}
+			opts := herdrLifecycleOptions(fixture, runtime)
+			opts.WorkspaceRuntime = func(_ context.Context, pane state.Pane) (WorkspaceRuntime, error) {
+				if pane.IsAttachedAgent() {
+					return nil, backend.ErrOwnedIdentityMismatch
+				}
+				return runtime, nil
+			}
+			if hookEnabled {
+				opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+					hooks.BeforeWorktreeRemove: {{Command: ":", Timeout: time.Second}},
+				}}
+			}
+
+			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+			}
+			intent, found := loadHerdrCleanupIntent(t, fixture)
+			if !found || intent.Status != state.IntentManualCleanupRequired ||
+				intent.Failure != sharedAttachedWorkspaceCloseFailure {
+				t.Fatalf("factory mismatch fence = %#v (found=%t)", intent, found)
+			}
+			if len(runtime.mutationLog) != 0 {
+				t.Fatalf("factory identity mismatch issued mutations: %v", runtime.mutationLog)
+			}
+		})
+	}
+}
+
+func TestHerdrChildHookPreflightIdentityMismatchPersistsManual(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot:     fixture.projectRoot,
+		workspaces:      []backend.WorkspaceObservation{fixture.workspace},
+		verifyErr:       backend.ErrOwnedIdentityMismatch,
+		verifyErrAtCall: 2,
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+	opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+		hooks.BeforeWorktreeRemove: {{Command: ":", Timeout: time.Second}},
+	}}
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	intent, found := loadHerdrCleanupIntent(t, fixture)
+	if !found || intent.Status != state.IntentManualCleanupRequired ||
+		!strings.Contains(intent.Failure, backend.ErrOwnedIdentityMismatch.Error()) {
+		t.Fatalf("child preflight identity fence = %#v (found=%t)", intent, found)
+	}
+	if len(runtime.mutationLog) != 0 {
+		t.Fatalf("child identity mismatch issued mutations: %v", runtime.mutationLog)
+	}
+}
+
+func TestHerdrChildHookPreflightObservationFailureRemainsRetryable(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot:      fixture.projectRoot,
+		workspaces:       []backend.WorkspaceObservation{fixture.workspace},
+		observeErr:       errors.New("observation temporarily unavailable"),
+		observeErrAtCall: 1,
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+	opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+		hooks.BeforeWorktreeRemove: {{Command: ":", Timeout: time.Second}},
+	}}
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	if _, found := loadHerdrCleanupIntent(t, fixture); found {
+		t.Fatal("transient hook preflight failure persisted a manual cleanup intent")
+	}
+	runtime.observeErrAtCall = 0
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
 }
 
 func TestHerdrSharedAttachedCloseKeepsBranchDeleteFrozen(t *testing.T) {
@@ -3810,6 +3952,70 @@ func recordManualHerdrCleanupIntent(t *testing.T, fixture herdrLifecycleFixture,
 	journal.UpsertIntent(intent)
 	if err := journal.Save(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func rewriteHerdrCleanupIntentStatus(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	status state.LaunchIntentStatus,
+	failure string,
+) state.LaunchIntent {
+	t.Helper()
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
+		}
+	}()
+	journal, err := locked.LaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found {
+		t.Fatal("cleanup intent is absent")
+	}
+	intent.Status, intent.Failure = status, failure
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+	return intent
+}
+
+func loadHerdrCleanupIntent(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+) (state.LaunchIntent, bool) {
+	t.Helper()
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return journal.FindIntent(intentID)
+}
+
+func assertHerdrCleanupIntentEqual(
+	t *testing.T,
+	fixture herdrLifecycleFixture,
+	want state.LaunchIntent,
+) {
+	t.Helper()
+	got, found := loadHerdrCleanupIntent(t, fixture)
+	if !found || !reflect.DeepEqual(got, want) {
+		t.Fatalf("cleanup intent = %#v (found=%t), want verbatim %#v", got, found, want)
 	}
 }
 
