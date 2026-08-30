@@ -694,6 +694,7 @@ func resumeRealizedManagedWorktree(
 	source worktree.RepoIdentity,
 	intent state.LaunchIntent,
 	allowOpen bool,
+	intentHealed bool,
 ) (ManagedRealizeResult, error) {
 	// A failed snapshot classifies nothing: keep the realized intent
 	// retryable instead of pinning it to manual cleanup.
@@ -704,7 +705,7 @@ func resumeRealizedManagedWorktree(
 	matches := workspacesWithLabel(workspaces, intent.WorkspaceLabel)
 	switch len(matches) {
 	case 1:
-		return adoptLiveManagedWorktree(ctx, locked, req, source, intent, matches[0])
+		return adoptLiveManagedWorktree(ctx, locked, req, source, intent, matches[0], intentHealed)
 	case 0:
 		return reviveRealizedManagedWorktree(ctx, runtime, locked, req, source, intent, workspaces, allowOpen)
 	default:
@@ -725,6 +726,7 @@ func adoptLiveManagedWorktree(
 	source worktree.RepoIdentity,
 	intent state.LaunchIntent,
 	match backend.WorkspaceObservation,
+	intentHealed bool,
 ) (ManagedRealizeResult, error) {
 	resource := intent.Resource
 	if !workspaceHasManagedResource(match, intent.Resource) {
@@ -739,7 +741,7 @@ func adoptLiveManagedWorktree(
 	if err := verifyRealizedManagedCheckout(ctx, locked, req, source, intent); err != nil {
 		return ManagedRealizeResult{}, err
 	}
-	if resource != intent.Resource {
+	if resource != intent.Resource || intentHealed {
 		intent.Resource = resource
 		locked.UpsertIntent(intent)
 		if err := locked.Save(); err != nil {

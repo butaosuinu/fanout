@@ -118,14 +118,13 @@ func workspaceHasManagedResource(
 }
 
 // restartedManagedWorktreeResource admits the one cold-restart change: a new
-// terminal identity on the exact saved workspace, pane, label, and checkout.
+// terminal identity on the exact saved workspace, pane, label, checkout, and
+// repository provenance.
 func restartedManagedWorktreeResource(
 	observation backend.WorkspaceObservation,
 	expected state.RuntimeResource,
 ) (state.RuntimeResource, bool) {
-	if observation.WorkspaceID != expected.WorkspaceID ||
-		observation.Label != expected.Label ||
-		!workspaceProvenanceMatches(observation, expected) {
+	if !workspaceHasExactRestartProvenance(observation, expected) {
 		return state.RuntimeResource{}, false
 	}
 	terminals := restartedManagedTerminals(observation, expected)
@@ -136,15 +135,41 @@ func restartedManagedWorktreeResource(
 	return expected, true
 }
 
+func workspaceHasExactRestartProvenance(
+	observation backend.WorkspaceObservation,
+	expected state.RuntimeResource,
+) bool {
+	requirements := []bool{
+		managedWorktreeRestartResourceComplete(expected),
+		observation.WorkspaceID == expected.WorkspaceID,
+		observation.Label == expected.Label,
+		filepath.Clean(observation.Path) == filepath.Clean(expected.CurrentPath),
+		observation.RepoKey == expected.RepoKey, observation.RepoRoot == expected.RepoRoot,
+	}
+	return !slices.Contains(requirements, false)
+}
+
+func managedWorktreeRestartResourceComplete(resource state.RuntimeResource) bool {
+	requirements := []string{
+		resource.WorkspaceID, resource.Label, resource.PaneID, resource.TerminalID,
+		resource.CurrentPath, resource.RepoKey, resource.RepoRoot,
+	}
+	return !slices.ContainsFunc(requirements, func(value string) bool {
+		return strings.TrimSpace(value) == ""
+	})
+}
+
 func restartedManagedTerminals(
 	observation backend.WorkspaceObservation,
 	expected state.RuntimeResource,
 ) []string {
 	var terminals []string
-	if terminalID, found := restartedManagedTerminal(
-		observation.Pane, observation.TerminalID, observation.CWD, expected,
-	); found {
-		terminals = append(terminals, terminalID)
+	if len(observation.Panes) == 0 {
+		if terminalID, found := restartedManagedTerminal(
+			observation.Pane, observation.TerminalID, observation.CWD, expected,
+		); found {
+			terminals = append(terminals, terminalID)
+		}
 	}
 	for _, pane := range observation.Panes {
 		if terminalID, found := restartedManagedTerminal(pane.Pane, pane.TerminalID, pane.CWD, expected); found {
@@ -168,6 +193,22 @@ func restartedManagedTerminal(
 		return "", false
 	}
 	return terminalID, true
+}
+
+// restartedManagedCoordinatorResource follows an already-healed coordinator
+// only when the child intent's saved snapshot differs by terminal identity.
+func restartedManagedCoordinatorResource(
+	current state.RuntimeResource,
+	expected state.RuntimeResource,
+) (state.RuntimeResource, bool) {
+	terminalID := current.TerminalID
+	current.TerminalID = expected.TerminalID
+	if !managedCoordinatorResourceComplete(expected) || strings.TrimSpace(terminalID) == "" ||
+		terminalID == expected.TerminalID || current != expected {
+		return state.RuntimeResource{}, false
+	}
+	expected.TerminalID = terminalID
+	return expected, true
 }
 
 // paneHasManagedResource reports whether one observed pane still carries the
