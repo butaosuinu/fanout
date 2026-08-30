@@ -413,6 +413,78 @@ func TestHerdrSharedAttachedCloseWaitsForBlockingWorktreeHook(t *testing.T) {
 	assertSharedAttachedRows(t, fixture.projectRoot, attached, attached, true, true)
 }
 
+func TestHerdrSharedAttachedCloseKeepsBranchDeleteFrozen(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.BranchCreated = true
+	workspace := herdrLifecycleWorkspace(
+		"w-attached", "attached-label", fixture.worktreePath,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	attached := sharedAttachedLifecyclePane(fixture, "425", "coordinator:@manual:branch:-1", workspace)
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+	foreign := workspace
+	foreign.Label = "foreign-label"
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace, foreign},
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+	frozenHead := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
+
+	if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("first CloseWithMode() = %d, want %d", got, exitcode.Env)
+	}
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "later.txt"), []byte("later\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "later.txt")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "later work")
+	runtime.workspaces = []backend.WorkspaceObservation{fixture.workspace}
+
+	if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("retry CloseWithMode() = %d, want %d", got, exitcode.Env)
+	}
+	if !localBranchExists(fixture.projectRoot, fixture.branch) {
+		t.Fatalf("shared close rearmed deletion of moved branch %s", fixture.branch)
+	}
+	if _, err := os.Stat(fixture.worktreePath); err != nil {
+		t.Fatalf("shared close removed changed checkout: %v", err)
+	}
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cleanupID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(cleanupID)
+	if !found || intent.ExpectedHead != frozenHead || !intent.CleanupDeleteBranch ||
+		intent.Status != state.IntentManualCleanupRequired || intent.Failure != sharedAttachedWorkspaceCloseFailure {
+		t.Fatalf("frozen shared cleanup intent = %#v (found=%t)", intent, found)
+	}
+}
+
+func TestVerifyCleanupCheckoutKeepsObservationFailureRetryable(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	expectedHead := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.worktreePath, "rev-parse", "HEAD"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := verifyCleanupCheckout(
+		ctx, fixture.projectRoot, "refs/heads/"+fixture.branch, expectedHead,
+		resourceFromPane(fixture.pane),
+	)
+	if err == nil || errors.Is(err, backend.ErrOwnedIdentityMismatch) {
+		t.Fatalf("canceled checkout observation = %v, want retryable non-identity error", err)
+	}
+	if err := verifyCleanupCheckout(
+		context.Background(), fixture.projectRoot, "refs/heads/"+fixture.branch, expectedHead,
+		resourceFromPane(fixture.pane),
+	); err != nil {
+		t.Fatalf("checkout verification retry: %v", err)
+	}
+}
+
 func TestHerdrCloseRemovesCompletedPaneLessWorkspace(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	workspace := fixture.workspace

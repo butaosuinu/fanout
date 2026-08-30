@@ -18,7 +18,10 @@ import (
 
 const workspaceCleanupTimeout = 5 * time.Minute
 
-const sharedAttachedWorkspaceCloseFailure = "shared attached workspace close pending"
+const (
+	sharedAttachedWorkspaceCloseFailure  = "shared attached workspace close pending"
+	sharedAttachedWorkspaceCloseComplete = "shared attached workspace close complete"
+)
 
 var ErrManualCleanupRequired = errors.New("herdr lifecycle requires manual cleanup")
 
@@ -335,7 +338,7 @@ func closeSharedAttachedWorkspaces(
 		if err != nil {
 			return err
 		}
-		return retireSharedAttachedWorkspaceClose(journal, opts.ProjectRoot, child, mode)
+		return retireSharedAttachedWorkspaceClose(ctx, opts, journal, child, mode, lg)
 	}
 	journal, intent, issueClose, err := prepareSharedAttachedWorkspaceClose(
 		ctx, opts, locked, child, attached, mode,
@@ -350,16 +353,18 @@ func closeSharedAttachedWorkspaces(
 		}
 		return err
 	}
-	return driveSharedAttachedWorkspaceCloses(ctx, opts, locked, journal, intent, targets, issueClose, lg)
+	return driveSharedAttachedWorkspaceCloses(ctx, opts, locked, journal, intent, child, targets, issueClose, lg)
 }
 
 func retireSharedAttachedWorkspaceClose(
+	ctx context.Context,
+	opts Options,
 	journal *state.LockedLaunchJournal,
-	projectRoot string,
 	child state.Pane,
 	mode CloseMode,
+	lg Logger,
 ) error {
-	_, cleanupID, err := workspaceCleanupIntentIDs(projectRoot, child)
+	_, cleanupID, err := workspaceCleanupIntentIDs(opts.ProjectRoot, child)
 	if err != nil {
 		return err
 	}
@@ -368,11 +373,10 @@ func retireSharedAttachedWorkspaceClose(
 		intent.Failure != sharedAttachedWorkspaceCloseFailure {
 		return nil
 	}
-	if err := validateSavedWorkspaceCleanup(intent, projectRoot, child, mode); err != nil {
+	if err := validateSavedWorkspaceCleanup(intent, opts.ProjectRoot, child, mode); err != nil {
 		return err
 	}
-	journal.RemoveIntent(cleanupID)
-	return journal.Save()
+	return completeSharedAttachedWorkspaceClose(ctx, opts, journal, child, intent, lg)
 }
 
 func driveSharedAttachedWorkspaceCloses(
@@ -381,6 +385,7 @@ func driveSharedAttachedWorkspaceCloses(
 	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	intent state.LaunchIntent,
+	child state.Pane,
 	targets []sharedAttachedWorkspaceCloseTarget,
 	issueClose bool,
 	lg Logger,
@@ -401,8 +406,57 @@ func driveSharedAttachedWorkspaceCloses(
 		}
 		return errors.Join(ErrManualCleanupRequired, err)
 	}
-	journal.RemoveIntent(intent.ID)
-	return journal.Save()
+	return completeSharedAttachedWorkspaceClose(ctx, opts, journal, child, intent, lg)
+}
+
+func completeSharedAttachedWorkspaceClose(
+	ctx context.Context,
+	opts Options,
+	journal *state.LockedLaunchJournal,
+	child state.Pane,
+	intent state.LaunchIntent,
+	lg Logger,
+) error {
+	runtime, err := opts.WorkspaceRuntime(ctx, child)
+	if err != nil {
+		return err
+	}
+	if err := runtime.VerifyOwned(ctx); err != nil {
+		return err
+	}
+	observation, err := observeWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
+	if err != nil {
+		return err
+	}
+	if err := verifySharedAttachedChildCleanup(ctx, opts.ProjectRoot, intent, observation); err != nil {
+		return err
+	}
+	intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
+	intent.Status, intent.Failure = state.IntentPlanned, sharedAttachedWorkspaceCloseComplete
+	if workspaceCleanupAbsent(observation) {
+		intent.Status, intent.Failure = state.IntentRealized, ""
+	}
+	runBackgroundHook(hooks.BeforePaneClose, opts, child, "", lg)
+	return saveWorkspaceCleanupIntent(journal, intent)
+}
+
+func verifySharedAttachedChildCleanup(
+	ctx context.Context,
+	projectRoot string,
+	intent state.LaunchIntent,
+	observation workspaceCleanupObservation,
+) error {
+	if observation.workspace != nil {
+		if err := verifyTerminalInvalidation(*observation.workspace, intent.Resource); err != nil {
+			return err
+		}
+	}
+	if observation.checkout.PathAbsent && !observation.checkout.Registered {
+		return nil
+	}
+	return verifyCleanupCheckout(
+		ctx, projectRoot, intent.FullBranchRef, intent.ExpectedHead, intent.Resource,
+	)
 }
 
 func prepareSharedAttachedWorkspaceClose(
@@ -1094,6 +1148,13 @@ func resumeWorkspaceCleanup(
 	pane state.Pane,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
+	if intent.Status == state.IntentPlanned && intent.Failure == sharedAttachedWorkspaceCloseComplete {
+		if time.Now().UnixMilli() >= intent.ExpiresUnixMS {
+			intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
+			return intent, saveWorkspaceCleanupIntent(journal, intent)
+		}
+		return intent, nil
+	}
 	if intent.Status == state.IntentPlanned && time.Now().UnixMilli() >= intent.ExpiresUnixMS {
 		return recoverExpiredPlannedWorkspaceCleanup(ctx, opts, locked, journal, runtime, pane, intent)
 	}

@@ -410,7 +410,9 @@ func restorePlannedCleanup(
 	cause error,
 ) (state.LaunchIntent, error) {
 	intent.Status = state.IntentPlanned
-	intent.Failure = ""
+	if intent.Failure != sharedAttachedWorkspaceCloseComplete {
+		intent.Failure = ""
+	}
 	return intent, errors.Join(cause, saveWorkspaceCleanupIntent(journal, intent))
 }
 
@@ -419,6 +421,11 @@ func resetUnissuedCleanup(
 	intent state.LaunchIntent,
 	cause error,
 ) (state.LaunchIntent, error) {
+	if intent.Failure == sharedAttachedWorkspaceCloseComplete {
+		intent.Status = state.IntentPlanned
+		intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
+		return intent, errors.Join(cause, saveWorkspaceCleanupIntent(journal, intent))
+	}
 	intent.Status = state.IntentPlanned
 	intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
 	intent.Failure = ""

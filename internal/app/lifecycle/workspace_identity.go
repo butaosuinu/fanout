@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -251,7 +252,10 @@ func verifyCleanupCheckout(
 		resource.RepoRoot,
 	)
 	if err != nil {
-		return fmt.Errorf("%w: %v", backend.ErrOwnedIdentityMismatch, err)
+		if errors.Is(err, worktree.ErrCheckoutMismatch) {
+			return fmt.Errorf("%w: %v", backend.ErrOwnedIdentityMismatch, err)
+		}
+		return err
 	}
 	return nil
 }
