@@ -481,11 +481,11 @@ func TestRetirePaneStateRowsSaveFailurePreservesAllRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	locked.Panes = append([]state.Pane(nil), panes...)
-	if err := locked.Save(); err != nil {
-		t.Fatal(errors.Join(err, locked.Unlock()))
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(errors.Join(saveErr, locked.Unlock()))
 	}
-	if err := locked.Unlock(); err != nil {
-		t.Fatal(err)
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
 	}
 	locked, err = state.Lock(statePath)
 	if err != nil {
@@ -499,23 +499,23 @@ func TestRetirePaneStateRowsSaveFailurePreservesAllRows(t *testing.T) {
 		}
 	}()
 	stateDir := filepath.Dir(statePath)
-	if err := os.Chmod(stateDir, 0o500); err != nil {
-		t.Fatal(err)
+	if chmodErr := os.Chmod(stateDir, 0o500); chmodErr != nil {
+		t.Fatal(chmodErr)
 	}
 	t.Cleanup(func() {
-		if err := os.Chmod(stateDir, 0o755); err != nil {
-			t.Error(err)
+		if chmodErr := os.Chmod(stateDir, 0o755); chmodErr != nil {
+			t.Error(chmodErr)
 		}
 	})
 
-	if err := retirePaneStateRows(Options{ProjectRoot: projectRoot}, locked, panes, ClosePaneOnly); err == nil {
+	if retireErr := retirePaneStateRows(Options{ProjectRoot: projectRoot}, locked, panes, ClosePaneOnly); retireErr == nil {
 		t.Fatal("state retirement save unexpectedly succeeded")
 	}
-	if err := os.Chmod(stateDir, 0o755); err != nil {
-		t.Fatal(err)
+	if chmodErr := os.Chmod(stateDir, 0o755); chmodErr != nil {
+		t.Fatal(chmodErr)
 	}
-	if err := locked.Unlock(); err != nil {
-		t.Fatal(err)
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
 	}
 	locked = nil
 	stored, err := state.Load(statePath)

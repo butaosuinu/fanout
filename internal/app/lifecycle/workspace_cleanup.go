@@ -134,8 +134,8 @@ func prepareWorkspaceCleanupHook(opts Options, locked *state.LockedStore, pane s
 	if err != nil {
 		return nil, state.LaunchIntent{}, err
 	}
-	if err := runtime.VerifyOwned(ctx); err != nil {
-		return nil, state.LaunchIntent{}, err
+	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
+		return nil, state.LaunchIntent{}, verifyErr
 	}
 	journal, intent, _, err := loadWorkspaceCleanupIntent(ctx, opts, locked, runtime, pane, mode)
 	if err != nil {
