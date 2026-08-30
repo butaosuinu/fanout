@@ -2020,15 +2020,31 @@ func TestHerdrCloseEverythingDisarmsBranchDeleteWhenCheckoutDisappearsBeforeRepl
 	if !found || !intent.CleanupDeleteBranch || intent.ExpectedHead != original {
 		t.Fatalf("initial cleanup intent = %#v (found=%t), want branch deletion fenced to %s", intent, found, original)
 	}
+	rewriteSavedHerdrCleanupAsLegacy(t, fixture)
 
 	removeHerdrLifecycleResources(t, fixture)
 	tree := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", original+"^{tree}"))
 	replacement := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "commit-tree", tree, "-p", original, "-m", "replacement branch"))
 	runHerdrLifecycleGit(t, fixture.projectRoot, "update-ref", "refs/heads/"+fixture.branch, replacement)
 	runtime.observeErrAtCall = 0
+	runtime.observeAfterMutationErr = errors.New("post-close observation temporarily unavailable")
 
+	if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("replan CloseWithMode() = %d, want %d", got, exitcode.Env)
+	}
+	journal, err = state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found = journal.FindIntent(intentID)
+	if !found || intent.Status != state.IntentIssued || intent.CleanupDeleteBranch ||
+		intent.CleanupDeleteBranchRequested == nil || !*intent.CleanupDeleteBranchRequested {
+		t.Fatalf("disarmed cleanup intent = %#v (found=%t), want retryable normalized CloseEverything intent", intent, found)
+	}
+
+	runtime.observeAfterMutationErr = nil
 	if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.OK {
-		t.Fatalf("retry CloseWithMode() = %d, want %d", got, exitcode.OK)
+		t.Fatalf("recovery CloseWithMode() = %d, want %d", got, exitcode.OK)
 	}
 	if runtime.closeCalls != 1 {
 		t.Fatalf("workspace close calls = %d, want 1", runtime.closeCalls)
@@ -2579,6 +2595,36 @@ func expireSavedHerdrCleanupIntent(t *testing.T, fixture herdrLifecycleFixture) 
 		t.Fatal("cleanup intent is absent")
 	}
 	intent.ExpiresUnixMS = time.Now().Add(-time.Minute).UnixMilli()
+	journal.UpsertIntent(intent)
+	if err := journal.Save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func rewriteSavedHerdrCleanupAsLegacy(t *testing.T, fixture herdrLifecycleFixture) {
+	t.Helper()
+	_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlockErr := locked.Unlock(); unlockErr != nil {
+			t.Error(unlockErr)
+		}
+	}()
+	journal, err := locked.LaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(intentID)
+	if !found {
+		t.Fatal("cleanup intent is absent")
+	}
+	intent.CleanupDeleteBranchRequested = nil
 	journal.UpsertIntent(intent)
 	if err := journal.Save(); err != nil {
 		t.Fatal(err)

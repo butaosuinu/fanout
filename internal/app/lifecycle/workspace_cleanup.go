@@ -827,7 +827,7 @@ func replanWorkspaceCleanup(
 	intent.Status = state.IntentPlanned
 	intent.CleanupPhase = phase
 	intent.ExpectedHead = expectedHead
-	intent.CleanupDeleteBranch = intent.CleanupDeleteBranch && branchFound && workspaceCleanupCheckoutPresent(observation)
+	intent = ratchetWorkspaceCleanupBranchDelete(intent, branchFound && workspaceCleanupCheckoutPresent(observation))
 	intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
 	intent.Failure = ""
 	return intent, saveWorkspaceCleanupIntent(journal, intent)
@@ -968,8 +968,17 @@ func realizeReplannedWorkspaceCleanup(
 	journal *state.LockedLaunchJournal,
 	intent state.LaunchIntent,
 ) (state.LaunchIntent, error) {
-	intent.CleanupDeleteBranch = false
+	intent = ratchetWorkspaceCleanupBranchDelete(intent, false)
 	return realizeWorkspaceCleanup(journal, intent)
+}
+
+func ratchetWorkspaceCleanupBranchDelete(intent state.LaunchIntent, retain bool) state.LaunchIntent {
+	if intent.CleanupDeleteBranch && !retain && intent.CleanupDeleteBranchRequested == nil {
+		requested := true
+		intent.CleanupDeleteBranchRequested = &requested
+	}
+	intent.CleanupDeleteBranch = intent.CleanupDeleteBranch && retain
+	return intent
 }
 
 func finishBranchCleanup(ctx context.Context, projectRoot string, intent state.LaunchIntent) error {
