@@ -32,17 +32,17 @@ func releaseManagedIntent(
 	return cause
 }
 
-// absentRealizedManagedIntents classifies the whole active journal without
+// absentReleasableManagedIntents classifies the whole active journal without
 // writing it. Shutdown may release the returned set only after every later
 // state and workspace preflight also succeeds, so a rejected shutdown never
 // leaves a partially consumed recovery journal.
-func absentRealizedManagedIntents(
+func absentReleasableManagedIntents(
 	ctx context.Context,
 	journal state.LaunchJournal,
 	observe func(context.Context) ([]backend.WorkspaceObservation, error),
 ) ([]state.LaunchIntent, bool) {
-	candidates, allRealized := allManagedIntentsRealized(journal)
-	if !allRealized {
+	candidates, allReleasable := allManagedIntentsReleasable(journal)
+	if !allReleasable {
 		return nil, false
 	}
 	if len(candidates) == 0 {
@@ -52,19 +52,19 @@ func absentRealizedManagedIntents(
 	if err != nil {
 		return nil, false
 	}
-	if !allRealizedManagedIntentsAbsent(ctx, candidates, workspaces) {
+	if !allReleasableManagedIntentsAbsent(ctx, candidates, workspaces) {
 		return nil, false
 	}
 	return candidates, true
 }
 
-func allRealizedManagedIntentsAbsent(
+func allReleasableManagedIntentsAbsent(
 	ctx context.Context,
 	intents []state.LaunchIntent,
 	workspaces []backend.WorkspaceObservation,
 ) bool {
 	for _, intent := range intents {
-		absent, classifyErr := realizedManagedIntentAbsent(ctx, intent, workspaces)
+		absent, classifyErr := releasableManagedIntentAbsent(ctx, intent, workspaces)
 		if classifyErr != nil || !absent {
 			return false
 		}
@@ -72,22 +72,22 @@ func allRealizedManagedIntentsAbsent(
 	return true
 }
 
-func allManagedIntentsRealized(journal state.LaunchJournal) ([]state.LaunchIntent, bool) {
-	candidates := realizedManagedIntents(journal)
+func allManagedIntentsReleasable(journal state.LaunchJournal) ([]state.LaunchIntent, bool) {
+	candidates := releasableManagedIntents(journal)
 	return candidates, len(candidates) == len(journal.Intents)
 }
 
-func realizedManagedIntents(journal state.LaunchJournal) []state.LaunchIntent {
+func releasableManagedIntents(journal state.LaunchJournal) []state.LaunchIntent {
 	var intents []state.LaunchIntent
 	for _, intent := range journal.Intents {
-		if intent.Status == state.IntentRealized {
+		if intent.Status == state.IntentRealized || manualCleanupCoordinatorReleasable(intent) {
 			intents = append(intents, intent)
 		}
 	}
 	return intents
 }
 
-func realizedManagedIntentAbsent(
+func releasableManagedIntentAbsent(
 	ctx context.Context,
 	intent state.LaunchIntent,
 	workspaces []backend.WorkspaceObservation,
@@ -103,6 +103,18 @@ func realizedManagedIntentAbsent(
 	default:
 		return false, nil
 	}
+}
+
+func manualCleanupCoordinatorReleasable(intent state.LaunchIntent) bool {
+	resource := intent.Resource
+	requirements := []bool{
+		intent.Kind == state.IntentCoordinator,
+		intent.Status == state.IntentManualCleanupRequired,
+		resource.WorkspaceID != "", resource.Label == intent.WorkspaceLabel,
+		resource.PaneID != "", resource.TerminalID != "", resource.CurrentPath != "",
+		resource.RepoKey == "", resource.RepoRoot == "",
+	}
+	return !slices.Contains(requirements, false)
 }
 
 func realizedManagedWorktreeAbsent(

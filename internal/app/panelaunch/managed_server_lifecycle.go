@@ -129,7 +129,7 @@ func prepareOrResumeManagedShutdown(
 	if err != nil || found {
 		return intent, err
 	}
-	absent, allAbsent := absentRealizedManagedIntents(ctx, journal.LaunchJournal, io.ObserveWorkspaces)
+	absent, allAbsent := absentReleasableManagedIntents(ctx, journal.LaunchJournal, io.ObserveWorkspaces)
 	if !allAbsent {
 		return state.LaunchIntent{}, rejectActiveManagedIntents(journal.LaunchJournal)
 	}
