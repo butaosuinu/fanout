@@ -300,6 +300,91 @@ func TestHerdrCloseClosesIdentityMatchedSharedAttachedWorkspacesFirst(t *testing
 	}
 }
 
+func TestHerdrSharedAttachedCloseChecksChildContentsBeforeMutation(t *testing.T) {
+	tests := []struct {
+		name      string
+		wantError string
+		prepare   func(*testing.T, string) func()
+	}{
+		{
+			name: "dirty", wantError: "tracked or untracked changes",
+			prepare: func(t *testing.T, path string) func() {
+				t.Helper()
+				dirty := filepath.Join(path, "uncommitted.txt")
+				if err := os.WriteFile(dirty, []byte("keep me\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return func() {
+					if err := os.Remove(dirty); err != nil {
+						t.Fatal(err)
+					}
+				}
+			},
+		},
+		{
+			name: "ignored-only", wantError: "ignored files only",
+			prepare: func(t *testing.T, path string) func() {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(path, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				runHerdrLifecycleGit(t, path, "add", ".gitignore")
+				runHerdrLifecycleGit(t, path, "commit", "-m", "ignore dependencies")
+				ignored := filepath.Join(path, "node_modules", "pkg")
+				if err := os.MkdirAll(ignored, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(ignored, "index.js"), []byte("ignored\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return func() {
+					if err := os.RemoveAll(filepath.Join(path, "node_modules")); err != nil {
+						t.Fatal(err)
+					}
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			cleanup := tt.prepare(t, fixture.worktreePath)
+			workspace := herdrLifecycleWorkspace(
+				"w-attached", "attached-label", fixture.worktreePath,
+				fixture.pane.RepoKey, fixture.pane.RepoRoot,
+			)
+			attached := sharedAttachedLifecyclePane(fixture, "425", "", workspace)
+			replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+			runtime := &fakeHerdrLifecycleRuntime{
+				projectRoot: fixture.projectRoot,
+				workspaces:  []backend.WorkspaceObservation{fixture.workspace, workspace},
+			}
+			lg := &captureLogger{}
+			opts := herdrLifecycleOptions(fixture, runtime)
+
+			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, lg); got != exitcode.Env {
+				t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+			}
+			if len(runtime.mutationLog) != 0 {
+				t.Fatalf("blocked child contents issued mutations: %v", runtime.mutationLog)
+			}
+			assertSharedAttachedRows(t, fixture.projectRoot, attached, attached, true, true)
+			if len(lg.errors) == 0 || !strings.Contains(lg.errors[len(lg.errors)-1], tt.wantError) {
+				t.Fatalf("cleanup errors = %v, want %q", lg.errors, tt.wantError)
+			}
+
+			cleanup()
+			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+				t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+			}
+			if got := strings.Join(runtime.mutationLog, ","); got != "close:w-attached,remove:w2" {
+				t.Fatalf("retry mutation order = %q", got)
+			}
+			assertHerdrLifecycleRemoved(t, fixture)
+		})
+	}
+}
+
 func TestHerdrCloseLeavesUnverifiedSharedAttachedWorkspaceManual(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	rowKey := "coordinator:@manual:shared:-1"
@@ -417,6 +502,11 @@ func TestHerdrSharedAttachedCloseRetriesDefinitelyUnissuedMutation(t *testing.T)
 	}
 
 	runtime.closeErr = nil
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "later.txt"), []byte("later\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "later.txt")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "advance child head")
 	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
 		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
 	}
@@ -715,6 +805,8 @@ func TestHerdrSharedAttachedFactoryIdentityMismatchPersistsManual(t *testing.T) 
 
 func TestHerdrChildHookPreflightIdentityMismatchPersistsManual(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
+	worktreeHookPath := filepath.Join(t.TempDir(), "before-worktree")
+	t.Setenv("FANOUT_TEST_BEFORE_WORKTREE", worktreeHookPath)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot:     fixture.projectRoot,
 		workspaces:      []backend.WorkspaceObservation{fixture.workspace},
@@ -723,7 +815,10 @@ func TestHerdrChildHookPreflightIdentityMismatchPersistsManual(t *testing.T) {
 	}
 	opts := herdrLifecycleOptions(fixture, runtime)
 	opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
-		hooks.BeforeWorktreeRemove: {{Command: ":", Timeout: time.Second}},
+		hooks.BeforeWorktreeRemove: {{
+			Command: `printf 'called\n' >> "$FANOUT_TEST_BEFORE_WORKTREE"`, Timeout: time.Second,
+		}},
+		hooks.BeforePaneClose: {{Command: ":", Timeout: time.Second}},
 	}}
 
 	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
@@ -737,6 +832,32 @@ func TestHerdrChildHookPreflightIdentityMismatchPersistsManual(t *testing.T) {
 	if len(runtime.mutationLog) != 0 {
 		t.Fatalf("child identity mismatch issued mutations: %v", runtime.mutationLog)
 	}
+	if intent.ExpectedHead != "" {
+		t.Fatalf("unresolved pre-hook fence ExpectedHead = %q, want empty", intent.ExpectedHead)
+	}
+
+	runtime.verifyErr = nil
+	runtime.verifyErrAtCall = 0
+	dirtyPath := filepath.Join(fixture.worktreePath, "uncommitted.txt")
+	if err := os.WriteFile(dirtyPath, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("dirty retry Close() = %d, want %d", got, exitcode.Env)
+	}
+	assertHerdrHookCalls(t, worktreeHookPath, 1)
+	intent, found = loadHerdrCleanupIntent(t, fixture)
+	if !found || intent.ExpectedHead == "" || intent.CleanupHookPhase != state.CleanupHookBeforeWorktreeRemove {
+		t.Fatalf("rebuilt cleanup intent after pane hook = %#v (found=%t)", intent, found)
+	}
+	if err := os.Remove(dirtyPath); err != nil {
+		t.Fatal(err)
+	}
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("clean retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	assertHerdrHookCalls(t, worktreeHookPath, 1)
+	assertHerdrLifecycleRemoved(t, fixture)
 }
 
 func TestHerdrChildHookPreflightObservationFailureRemainsRetryable(t *testing.T) {
