@@ -304,7 +304,7 @@ func closeStaleManagedConsole(owned ManagedSessionRuntime, current backend.LiveP
 
 func managedWorkspaceCloseError(err error) error {
 	if errors.Is(err, backend.ErrOwnedWorkspaceHasUnadmittedPane) {
-		return fmt.Errorf("%w: %v", ErrManualCleanupRequired, err)
+		return fmt.Errorf("%w: %w", ErrManualCleanupRequired, err)
 	}
 	return err
 }

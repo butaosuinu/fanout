@@ -376,7 +376,7 @@ func TestManagedWorkspaceCloseErrorClassifiesOnlyUnadmittedPanesAsManualCleanup(
 	}
 
 	observeErr := errors.New("snapshot failed")
-	if err := managedWorkspaceCloseError(observeErr); err != observeErr || errors.Is(err, ErrManualCleanupRequired) {
+	if err := managedWorkspaceCloseError(observeErr); !errors.Is(err, observeErr) || errors.Is(err, ErrManualCleanupRequired) {
 		t.Fatalf("managedWorkspaceCloseError() = %v, want unchanged observation failure", err)
 	}
 }
