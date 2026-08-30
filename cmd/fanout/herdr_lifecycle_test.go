@@ -140,7 +140,8 @@ func TestServerRestartRefreshesSessionOnlyWhenObservable(t *testing.T) {
 			}
 			var out, errOut bytes.Buffer
 			code := executeServerRestart(
-				context.Background(), root, "/repo/.git", log.NewWith(&out, &errOut, false), deps,
+				context.Background(), root, "/repo/.git", log.NewWith(&out, &errOut, false),
+				deps.refreshSessions, deps.restart,
 			)
 			if code != exitcode.OK || !restarted || errOut.Len() != 0 {
 				t.Fatalf("restart code=%d restarted=%t stderr=%q", code, restarted, errOut.String())

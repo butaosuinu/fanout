@@ -113,7 +113,7 @@ func executeHerdrLifecycle(
 	deps herdrLifecycleDeps,
 ) exitcode.Code {
 	if action == "restart" {
-		return executeServerRestart(ctx, root, repoKey, lg, deps)
+		return executeServerRestart(ctx, root, repoKey, lg, deps.refreshSessions, deps.restart)
 	}
 	if err := deps.shutdown(ctx, root, repoKey); err != nil {
 		lg.Err("herdr shutdown: %v", err)
@@ -128,13 +128,14 @@ func executeServerRestart(
 	root string,
 	repoKey string,
 	lg *log.Logger,
-	deps herdrLifecycleDeps,
+	refreshSessions func(string) error,
+	restart func(context.Context, string, string) (string, error),
 ) exitcode.Code {
-	if err := deps.refreshSessions(root); err != nil {
+	if err := refreshSessions(root); err != nil {
 		lg.Err("herdr restart: refresh agent sessions: %v", err)
 		return exitcode.Env
 	}
-	session, err := deps.restart(ctx, root, repoKey)
+	session, err := restart(ctx, root, repoKey)
 	if err != nil {
 		lg.Err("herdr restart: %v", err)
 		return exitcode.Env
