@@ -1972,6 +1972,26 @@ func TestHerdrCloseEverythingLeavesPreexistingBranch(t *testing.T) {
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
+func TestHerdrCloseEverythingLeavesBranchRecreatedBeforeFreshCleanup(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.BranchCreated = true
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	removeHerdrLifecycleResources(t, fixture)
+	parent := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", "HEAD"))
+	tree := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", parent+"^{tree}"))
+	replacement := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "commit-tree", tree, "-p", parent, "-m", "replacement branch"))
+	runHerdrLifecycleGit(t, fixture.projectRoot, "update-ref", "refs/heads/"+fixture.branch, replacement)
+	runtime := &fakeHerdrLifecycleRuntime{projectRoot: fixture.projectRoot}
+
+	if got := CloseWithMode(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("CloseWithMode() = %d, want %d", got, exitcode.OK)
+	}
+	if got := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", fixture.branch)); got != replacement {
+		t.Fatalf("recreated branch tip = %s, want %s", got, replacement)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
 func TestHerdrCloseEverythingDoesNotRearmBranchDeleteAfterBranchReappears(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	fixture.pane.BranchCreated = true

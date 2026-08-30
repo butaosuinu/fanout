@@ -534,10 +534,14 @@ func newWorkspaceCleanupIntent(
 		WorkspaceLabel: resource.Label, Resource: resource,
 		Session: pane.SessionID, SocketPath: pane.SocketPath,
 		ExpiresUnixMS: time.Now().Add(workspaceCleanupTimeout).UnixMilli(),
-		CleanupPhase:  phase, CleanupDeleteBranch: deleteBranchRequested && branchFound,
+		CleanupPhase:  phase, CleanupDeleteBranch: deleteBranchRequested && branchFound && workspaceCleanupCheckoutPresent(observation),
 		CleanupDeleteBranchRequested: &deleteBranchRequested,
 	}
 	return intent, nil
+}
+
+func workspaceCleanupCheckoutPresent(observation workspaceCleanupObservation) bool {
+	return !observation.checkout.PathAbsent || observation.checkout.Registered
 }
 
 func freshWorkspaceCleanupStatus(observation workspaceCleanupObservation) state.LaunchIntentStatus {
@@ -567,7 +571,7 @@ func classifyFreshWorkspaceCleanup(
 	verifyContents bool,
 ) (state.CleanupPhase, error) {
 	workspacePresent := observation.workspace != nil
-	checkoutPresent := !observation.checkout.PathAbsent || observation.checkout.Registered
+	checkoutPresent := workspaceCleanupCheckoutPresent(observation)
 	switch {
 	case workspacePresent && checkoutPresent:
 		if err := verifyTerminalInvalidation(*observation.workspace, resource); err != nil {
@@ -882,8 +886,7 @@ func needsReplannedWorkspaceCoordinator(checkoutOnly bool, pane state.Pane, inte
 }
 
 func workspaceCleanupCheckoutOnly(observation workspaceCleanupObservation) bool {
-	return observation.workspace == nil &&
-		(!observation.checkout.PathAbsent || observation.checkout.Registered)
+	return observation.workspace == nil && workspaceCleanupCheckoutPresent(observation)
 }
 
 func finalizeWorkspaceCleanup(
@@ -958,7 +961,7 @@ func saveWorkspaceCleanupIntent(journal *state.LockedLaunchJournal, intent state
 }
 
 func workspaceCleanupAbsent(observation workspaceCleanupObservation) bool {
-	return observation.workspace == nil && observation.checkout.PathAbsent && !observation.checkout.Registered
+	return observation.workspace == nil && !workspaceCleanupCheckoutPresent(observation)
 }
 
 func finishBranchCleanup(ctx context.Context, projectRoot string, intent state.LaunchIntent) error {
