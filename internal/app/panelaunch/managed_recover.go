@@ -726,15 +726,25 @@ func adoptLiveManagedWorktree(
 	intent state.LaunchIntent,
 	match backend.WorkspaceObservation,
 ) (ManagedRealizeResult, error) {
+	resource := intent.Resource
 	if !workspaceHasManagedResource(match, intent.Resource) {
-		return ManagedRealizeResult{}, markManagedIntentManual(
-			locked,
-			intent,
-			fmt.Errorf("realized Herdr worktree identity changed"),
-		)
+		var found bool
+		resource, found = restartedManagedWorktreeResource(match, intent.Resource)
+		if !found {
+			return ManagedRealizeResult{}, markManagedIntentManual(
+				locked, intent, fmt.Errorf("realized Herdr worktree identity changed"),
+			)
+		}
 	}
 	if err := verifyRealizedManagedCheckout(ctx, locked, req, source, intent); err != nil {
 		return ManagedRealizeResult{}, err
+	}
+	if resource != intent.Resource {
+		intent.Resource = resource
+		locked.UpsertIntent(intent)
+		if err := locked.Save(); err != nil {
+			return ManagedRealizeResult{}, err
+		}
 	}
 	return realizeDeferred(intent)
 }

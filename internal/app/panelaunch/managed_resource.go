@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -114,6 +115,59 @@ func workspaceHasManagedResource(
 		}
 	}
 	return false
+}
+
+// restartedManagedWorktreeResource admits the one cold-restart change: a new
+// terminal identity on the exact saved workspace, pane, label, and checkout.
+func restartedManagedWorktreeResource(
+	observation backend.WorkspaceObservation,
+	expected state.RuntimeResource,
+) (state.RuntimeResource, bool) {
+	if observation.WorkspaceID != expected.WorkspaceID ||
+		observation.Label != expected.Label ||
+		!workspaceProvenanceMatches(observation, expected) {
+		return state.RuntimeResource{}, false
+	}
+	terminals := restartedManagedTerminals(observation, expected)
+	if len(terminals) != 1 {
+		return state.RuntimeResource{}, false
+	}
+	expected.TerminalID = terminals[0]
+	return expected, true
+}
+
+func restartedManagedTerminals(
+	observation backend.WorkspaceObservation,
+	expected state.RuntimeResource,
+) []string {
+	var terminals []string
+	if terminalID, found := restartedManagedTerminal(
+		observation.Pane, observation.TerminalID, observation.CWD, expected,
+	); found {
+		terminals = append(terminals, terminalID)
+	}
+	for _, pane := range observation.Panes {
+		if terminalID, found := restartedManagedTerminal(pane.Pane, pane.TerminalID, pane.CWD, expected); found {
+			terminals = append(terminals, terminalID)
+		}
+	}
+	return terminals
+}
+
+func restartedManagedTerminal(
+	ref backend.PaneRef,
+	terminalID, cwd string,
+	expected state.RuntimeResource,
+) (string, bool) {
+	requirements := []bool{
+		ref.Backend == backend.Herdr, ref.Workspace == expected.WorkspaceID,
+		ref.Pane == expected.PaneID, terminalID != "", terminalID != expected.TerminalID,
+		cwd == expected.CurrentPath,
+	}
+	if slices.Contains(requirements, false) {
+		return "", false
+	}
+	return terminalID, true
 }
 
 // paneHasManagedResource reports whether one observed pane still carries the
