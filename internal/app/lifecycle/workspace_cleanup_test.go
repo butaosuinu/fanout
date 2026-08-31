@@ -1189,29 +1189,47 @@ func TestHerdrRetirementRetrySkipsUnavailableRuntimeAndGitHub(t *testing.T) {
 				workspaces:  []backend.WorkspaceObservation{fixture.workspace},
 			}
 			opts := herdrLifecycleOptions(fixture, runtime)
-			leaveCompletedHerdrCleanupAfterRetirementFailure(t, opts, fixture)
+			attached := fixture.pane
+			attached.Kind = state.PaneKindAttachedAgent
+			attached.IssueNum = -1
+			attached.TaskID = ""
+			attached.PaneID = attached.WorkspaceID + ":attached"
+			leaveCompletedHerdrCleanupAfterRetirementFailure(t, opts, fixture, attached)
 			installUnavailableLifecycleGH(t)
-			pruneLog := installRecordingWorktreePruneGit(t)
+			pruneLog, pruneFailure := installRecordingWorktreePruneGit(t)
+			if err := os.WriteFile(pruneFailure, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
 
 			runtimeFactoryCalls := 0
 			opts.WorkspaceRuntime = func(context.Context, state.Pane) (WorkspaceRuntime, error) {
 				runtimeFactoryCalls++
 				return nil, errors.New("runtime unavailable after completed cleanup")
 			}
-			if got := tt.run(opts, fixture); got != exitcode.OK {
-				t.Fatalf("retry entrypoint = %d, want %d", got, exitcode.OK)
+			if got := tt.run(opts, fixture); got != exitcode.Env {
+				t.Fatalf("failed prune retry entrypoint = %d, want %d", got, exitcode.Env)
 			}
 			if runtimeFactoryCalls != 0 {
 				t.Fatalf("retry runtime factory calls = %d, want 0", runtimeFactoryCalls)
+			}
+			assertHerdrStateRowPresent(t, fixture)
+			assertLifecyclePanePresence(t, fixture.projectRoot, attached, true)
+			assertHerdrCleanupIntentStatus(t, fixture, state.IntentRealized, true)
+			if err := os.Remove(pruneFailure); err != nil {
+				t.Fatal(err)
+			}
+			if got := tt.run(opts, fixture); got != exitcode.OK {
+				t.Fatalf("successful prune retry entrypoint = %d, want %d", got, exitcode.OK)
 			}
 			pruneCalls, err := os.ReadFile(pruneLog)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := strings.Count(string(pruneCalls), "called\n"); got != 1 {
-				t.Fatalf("retry worktree prune calls = %d, want 1", got)
+			if got := strings.Count(string(pruneCalls), "called\n"); got != 2 {
+				t.Fatalf("retry worktree prune calls = %d, want 2", got)
 			}
 			assertHerdrLifecycleRemoved(t, fixture)
+			assertLifecyclePanePresence(t, fixture.projectRoot, attached, false)
 		})
 	}
 }
@@ -1220,8 +1238,13 @@ func leaveCompletedHerdrCleanupAfterRetirementFailure(
 	t *testing.T,
 	opts Options,
 	fixture herdrLifecycleFixture,
+	additionalPanes ...state.Pane,
 ) {
 	t.Helper()
+	panes := append([]state.Pane{fixture.pane}, additionalPanes...)
+	if len(additionalPanes) > 0 {
+		replaceLifecyclePanes(t, fixture.projectRoot, panes...)
+	}
 	locked, err := state.LockProjectForLaunch(fixture.projectRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -1233,7 +1256,7 @@ func leaveCompletedHerdrCleanupAfterRetirementFailure(
 			}
 		}
 	}()
-	if !closePaneRecordsLocked(opts, locked, []state.Pane{fixture.pane}, CloseWorktree, nopLogger{}, map[string]struct{}{}) {
+	if !closePaneRecordsLocked(opts, locked, panes, CloseWorktree, nopLogger{}, map[string]struct{}{}) {
 		t.Fatal("Herdr cleanup did not reach retirement")
 	}
 	journalPath, err := state.LaunchJournalPath(fixture.projectRoot)
@@ -1254,7 +1277,7 @@ func leaveCompletedHerdrCleanupAfterRetirementFailure(
 			t.Error(chmodErr)
 		}
 	})
-	if err := retirePaneStateRows(opts, locked, []state.Pane{fixture.pane}, CloseWorktree); err == nil {
+	if err := retirePaneStateRows(opts, locked, panes, CloseWorktree); err == nil {
 		t.Fatal("intent retirement save unexpectedly succeeded")
 	}
 	if err := os.Chmod(journalDir, originalMode); err != nil {
@@ -1279,7 +1302,7 @@ func installUnavailableLifecycleGH(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func installRecordingWorktreePruneGit(t *testing.T) string {
+func installRecordingWorktreePruneGit(t *testing.T) (string, string) {
 	t.Helper()
 	realGit, err := exec.LookPath("git")
 	if err != nil {
@@ -1287,9 +1310,13 @@ func installRecordingWorktreePruneGit(t *testing.T) string {
 	}
 	binDir := t.TempDir()
 	logPath := filepath.Join(binDir, "prune.log")
+	failurePath := filepath.Join(binDir, "prune.fail")
 	script := `#!/bin/sh
 if [ "$3" = "worktree" ] && [ "$4" = "prune" ]; then
   printf 'called\n' >> "$FANOUT_TEST_PRUNE_LOG"
+  if [ -e "$FANOUT_TEST_PRUNE_FAILURE" ]; then
+    exit 92
+  fi
 fi
 exec "$FANOUT_TEST_REAL_GIT" "$@"
 `
@@ -1300,9 +1327,10 @@ exec "$FANOUT_TEST_REAL_GIT" "$@"
 		t.Fatal(err)
 	}
 	t.Setenv("FANOUT_TEST_PRUNE_LOG", logPath)
+	t.Setenv("FANOUT_TEST_PRUNE_FAILURE", failurePath)
 	t.Setenv("FANOUT_TEST_REAL_GIT", realGit)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return logPath
+	return logPath, failurePath
 }
 
 func TestHerdrCleanupRetryDoesNotRepeatHooks(t *testing.T) {
@@ -3625,6 +3653,20 @@ func replaceLifecyclePanes(t *testing.T, projectRoot string, panes ...state.Pane
 	}
 	if err := locked.Unlock(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertLifecyclePanePresence(t *testing.T, projectRoot string, target state.Pane, want bool) {
+	t.Helper()
+	store, err := state.Load(state.Path(projectRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := slices.ContainsFunc(store.Panes, func(pane state.Pane) bool {
+		return paneStateKey(pane) == paneStateKey(target)
+	})
+	if found != want {
+		t.Fatalf("lifecycle pane presence = %t, want %t", found, want)
 	}
 }
 

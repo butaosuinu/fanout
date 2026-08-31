@@ -275,12 +275,9 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 		return exitcode.OK
 	}
 
-	panes, retired, err := retireCompletedIssueCleanups(opts, locked, parent, panes)
+	panes, retired, err := retireCompletedIssueCleanups(opts, locked, parent, panes, lg)
 	if err != nil {
 		lg.Err("--cleanup: retire completed Herdr cleanup: %v", err)
-		return exitcode.Env
-	}
-	if retired > 0 && !pruneWorktrees(opts.ProjectRoot, lg) {
 		return exitcode.Env
 	}
 	if retired > 0 {
@@ -367,12 +364,9 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 		lg.Info("--cleanup: no recorded plan task panes for parent %s", parent)
 		return exitcode.OK
 	}
-	panes, retired, err := retireCompletedTaskCleanups(opts, locked, parent, panes)
+	panes, retired, err := retireCompletedTaskCleanups(opts, locked, parent, panes, lg)
 	if err != nil {
 		lg.Err("--cleanup: retire completed Herdr cleanup: %v", err)
-		return exitcode.Env
-	}
-	if retired > 0 && !pruneWorktrees(opts.ProjectRoot, lg) {
 		return exitcode.Env
 	}
 	if retired > 0 {
@@ -1006,12 +1000,9 @@ func prepareCompletedWorkspaceRetirement(
 	if mode.removesWorktree() {
 		panes = panesSharingManagedWorktrees(locked.Panes, panes)
 	}
-	retired, err := retireCompletedWorkspaceCleanup(opts, locked, panes, mode)
+	retired, err := retireCompletedWorkspaceCleanup(opts, locked, panes, mode, lg)
 	if err != nil {
 		lg.Err("%s: retire completed Herdr cleanup: %v", subject, err)
-		return panes, exitcode.Env, true
-	}
-	if retired && !pruneWorktrees(opts.ProjectRoot, lg) {
 		return panes, exitcode.Env, true
 	}
 	if retired {
@@ -1025,11 +1016,12 @@ func retireCompletedIssueCleanups(
 	locked *state.LockedStore,
 	parent string,
 	panes []state.Pane,
+	lg Logger,
 ) ([]state.Pane, int, error) {
 	retired := 0
 	for _, issueNum := range sortedUnique(paneIssueNumbers(panes)) {
 		group := panesSharingManagedWorktrees(locked.Panes, panesForIssue(panes, issueNum))
-		done, err := retireCompletedWorkspaceCleanup(opts, locked, group, CloseWorktree)
+		done, err := retireCompletedWorkspaceCleanup(opts, locked, group, CloseWorktree, lg)
 		if err != nil {
 			return nil, retired, fmt.Errorf("#%d: %w", issueNum, err)
 		}
@@ -1053,6 +1045,7 @@ func retireCompletedTaskCleanups(
 	locked *state.LockedStore,
 	parent string,
 	panes []state.Pane,
+	lg Logger,
 ) ([]state.Pane, int, error) {
 	tasks := map[string]bool{}
 	for _, pane := range panes {
@@ -1061,7 +1054,7 @@ func retireCompletedTaskCleanups(
 	retired := 0
 	for _, taskID := range sortedTaskIDs(tasks) {
 		group := panesSharingManagedWorktrees(locked.Panes, panesForTask(panes, taskID))
-		done, err := retireCompletedWorkspaceCleanup(opts, locked, group, CloseWorktree)
+		done, err := retireCompletedWorkspaceCleanup(opts, locked, group, CloseWorktree, lg)
 		if err != nil {
 			return nil, retired, fmt.Errorf("%s: %w", taskID, err)
 		}
@@ -1077,6 +1070,7 @@ func retireCompletedWorkspaceCleanup(
 	locked *state.LockedStore,
 	panes []state.Pane,
 	mode CloseMode,
+	lg Logger,
 ) (bool, error) {
 	if !mode.removesWorktree() {
 		return false, nil
@@ -1099,6 +1093,9 @@ func retireCompletedWorkspaceCleanup(
 	if completed != managed {
 		return false, fmt.Errorf("completed Herdr cleanup does not cover every selected state row")
 	}
+	if !pruneWorktrees(opts.ProjectRoot, lg) {
+		return false, errors.New("git worktree prune failed")
+	}
 	return true, retirePaneStateRows(opts, locked, panes, mode)
 }
 
@@ -1106,9 +1103,9 @@ func workspaceRetirementManagedCount(panes []state.Pane) (int, bool) {
 	managed := 0
 	for _, pane := range panes {
 		switch {
-		case pane.IsAttachedAgent() && !workspaceRuntimeRow(pane):
+		case pane.IsAttachedAgent():
 			continue
-		case pane.IsShell() || pane.IsAttachedAgent() || !workspaceRuntimeRow(pane):
+		case pane.IsShell() || !workspaceRuntimeRow(pane):
 			return 0, false
 		default:
 			managed++
