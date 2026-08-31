@@ -128,6 +128,8 @@ type LaunchIntent struct {
 	CleanupDeleteBranch bool         `json:"cleanupDeleteBranch,omitempty"`
 	// CleanupDeleteBranchRequested is nil only for intents saved before this field existed.
 	CleanupDeleteBranchRequested *bool `json:"cleanupDeleteBranchRequested,omitempty"`
+	// CleanupDeleteBranchVerified records use of the checkout-presence ownership rule.
+	CleanupDeleteBranchVerified bool `json:"cleanupDeleteBranchVerified,omitempty"`
 
 	Failure string `json:"failure,omitempty"`
 }

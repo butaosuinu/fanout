@@ -253,7 +253,29 @@ func loadWorkspaceCleanupIntent(
 	if err != nil {
 		return nil, state.LaunchIntent{}, "", err
 	}
+	intent, err = normalizeWorkspaceCleanupBranchDelete(journal, intent, mode, pane)
+	if err != nil {
+		return nil, state.LaunchIntent{}, "", err
+	}
 	return journal, intent, worktreeIntentID, nil
+}
+
+func normalizeWorkspaceCleanupBranchDelete(
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+	mode CloseMode,
+	pane state.Pane,
+) (state.LaunchIntent, error) {
+	if intent.CleanupDeleteBranchVerified {
+		return intent, nil
+	}
+	if intent.CleanupDeleteBranchRequested == nil {
+		deleteBranchRequested := mode == CloseEverything && pane.BranchCreated
+		intent.CleanupDeleteBranchRequested = &deleteBranchRequested
+	}
+	intent.CleanupDeleteBranch = false
+	intent.CleanupDeleteBranchVerified = true
+	return intent, saveWorkspaceCleanupIntent(journal, intent)
 }
 
 func workspaceCleanupIntentIDs(projectRoot string, pane state.Pane) (string, string, error) {
@@ -534,10 +556,15 @@ func newWorkspaceCleanupIntent(
 		WorkspaceLabel: resource.Label, Resource: resource,
 		Session: pane.SessionID, SocketPath: pane.SocketPath,
 		ExpiresUnixMS: time.Now().Add(workspaceCleanupTimeout).UnixMilli(),
-		CleanupPhase:  phase, CleanupDeleteBranch: deleteBranchRequested && branchFound,
+		CleanupPhase:  phase, CleanupDeleteBranch: deleteBranchRequested && branchFound && workspaceCleanupCheckoutPresent(observation),
 		CleanupDeleteBranchRequested: &deleteBranchRequested,
+		CleanupDeleteBranchVerified:  true,
 	}
 	return intent, nil
+}
+
+func workspaceCleanupCheckoutPresent(observation workspaceCleanupObservation) bool {
+	return !observation.checkout.PathAbsent || observation.checkout.Registered
 }
 
 func freshWorkspaceCleanupStatus(observation workspaceCleanupObservation) state.LaunchIntentStatus {
@@ -567,7 +594,7 @@ func classifyFreshWorkspaceCleanup(
 	verifyContents bool,
 ) (state.CleanupPhase, error) {
 	workspacePresent := observation.workspace != nil
-	checkoutPresent := !observation.checkout.PathAbsent || observation.checkout.Registered
+	checkoutPresent := workspaceCleanupCheckoutPresent(observation)
 	switch {
 	case workspacePresent && checkoutPresent:
 		if err := verifyTerminalInvalidation(*observation.workspace, resource); err != nil {
@@ -598,19 +625,25 @@ func validateSavedWorkspaceCleanup(intent state.LaunchIntent, projectRoot string
 		return err
 	}
 	deleteBranchRequested := mode == CloseEverything && pane.BranchCreated
-	deleteBranch := deleteBranchRequested && intent.ExpectedHead != ""
-	deleteBranchMatches := intent.CleanupDeleteBranch == deleteBranch
-	if intent.CleanupDeleteBranchRequested != nil {
-		deleteBranchMatches = *intent.CleanupDeleteBranchRequested == deleteBranchRequested &&
-			(!intent.CleanupDeleteBranch || deleteBranch)
-	}
 	if slices.Contains([]bool{
 		intent.Kind == state.IntentCleanup, intentMatchesPane(intent, pane, ownerRoot),
-		deleteBranchMatches, cleanupResourceMatchesPane(intent, pane),
+		workspaceCleanupBranchDeleteMatches(intent, deleteBranchRequested), cleanupResourceMatchesPane(intent, pane),
 	}, false) {
 		return fmt.Errorf("saved Herdr cleanup intent does not match the selected state row")
 	}
 	return nil
+}
+
+func workspaceCleanupBranchDeleteMatches(intent state.LaunchIntent, requested bool) bool {
+	if intent.CleanupDeleteBranchVerified {
+		deleteBranch := requested && intent.ExpectedHead != ""
+		return intent.CleanupDeleteBranchRequested != nil &&
+			*intent.CleanupDeleteBranchRequested == requested && (!intent.CleanupDeleteBranch || deleteBranch)
+	}
+	if intent.CleanupDeleteBranchRequested != nil {
+		return *intent.CleanupDeleteBranchRequested == requested
+	}
+	return requested || !intent.CleanupDeleteBranch
 }
 
 func intentMatchesPane(intent state.LaunchIntent, pane state.Pane, ownerRoot string) bool {
@@ -723,7 +756,7 @@ func recoverExpiredPlannedWorkspaceCleanup(
 		return intent, err
 	}
 	if workspaceCleanupAbsent(observation) {
-		return realizeWorkspaceCleanup(journal, intent)
+		return realizeReplannedWorkspaceCleanup(journal, intent)
 	}
 	intent, err = rebindObservedWorkspaceCleanupIdentity(
 		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
@@ -823,7 +856,7 @@ func replanWorkspaceCleanup(
 	intent.Status = state.IntentPlanned
 	intent.CleanupPhase = phase
 	intent.ExpectedHead = expectedHead
-	intent.CleanupDeleteBranch = intent.CleanupDeleteBranch && branchFound
+	intent = ratchetWorkspaceCleanupBranchDelete(intent, branchFound && workspaceCleanupCheckoutPresent(observation))
 	intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
 	intent.Failure = ""
 	return intent, saveWorkspaceCleanupIntent(journal, intent)
@@ -840,7 +873,7 @@ func replanObservedWorkspaceCleanup(
 	observation workspaceCleanupObservation,
 ) (state.LaunchIntent, error) {
 	if workspaceCleanupAbsent(observation) {
-		return realizeWorkspaceCleanup(journal, intent)
+		return realizeReplannedWorkspaceCleanup(journal, intent)
 	}
 	intent, err := rebindObservedWorkspaceCleanupIdentity(
 		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
@@ -882,8 +915,7 @@ func needsReplannedWorkspaceCoordinator(checkoutOnly bool, pane state.Pane, inte
 }
 
 func workspaceCleanupCheckoutOnly(observation workspaceCleanupObservation) bool {
-	return observation.workspace == nil &&
-		(!observation.checkout.PathAbsent || observation.checkout.Registered)
+	return observation.workspace == nil && workspaceCleanupCheckoutPresent(observation)
 }
 
 func finalizeWorkspaceCleanup(
@@ -899,7 +931,12 @@ func finalizeWorkspaceCleanup(
 	if intent.Status != state.IntentRealized {
 		return fmt.Errorf("herdr cleanup did not reach a confirmed postcondition")
 	}
-	if branchErr := finishBranchCleanup(ctx, projectRoot, intent); branchErr != nil {
+	branchIntent := intent
+	intent, err := consumeWorkspaceCleanupBranchDelete(journal, intent)
+	if err != nil {
+		return err
+	}
+	if branchErr := finishBranchCleanup(ctx, projectRoot, branchIntent); branchErr != nil {
 		lg.Warn("%s: %v; leaving branch in place", paneLabel(pane), branchErr)
 	}
 	if err := discardSavedLaunchEnvironment(journal, runtime, worktreeIntentID); err != nil {
@@ -920,6 +957,17 @@ func discardSavedLaunchEnvironment(
 		return nil
 	}
 	return runtime.DiscardWorkloadEnvironment(filepath.Dir(intent.SocketPath), intent.Launch)
+}
+
+func consumeWorkspaceCleanupBranchDelete(
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
+	if !intent.CleanupDeleteBranch {
+		return intent, nil
+	}
+	intent = ratchetWorkspaceCleanupBranchDelete(intent, false)
+	return intent, saveWorkspaceCleanupIntent(journal, intent)
 }
 
 func executeWorkspaceCleanupPhase(
@@ -958,7 +1006,24 @@ func saveWorkspaceCleanupIntent(journal *state.LockedLaunchJournal, intent state
 }
 
 func workspaceCleanupAbsent(observation workspaceCleanupObservation) bool {
-	return observation.workspace == nil && observation.checkout.PathAbsent && !observation.checkout.Registered
+	return observation.workspace == nil && !workspaceCleanupCheckoutPresent(observation)
+}
+
+func realizeReplannedWorkspaceCleanup(
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, error) {
+	intent = ratchetWorkspaceCleanupBranchDelete(intent, false)
+	return realizeWorkspaceCleanup(journal, intent)
+}
+
+func ratchetWorkspaceCleanupBranchDelete(intent state.LaunchIntent, retain bool) state.LaunchIntent {
+	if intent.CleanupDeleteBranch && !retain && intent.CleanupDeleteBranchRequested == nil {
+		requested := true
+		intent.CleanupDeleteBranchRequested = &requested
+	}
+	intent.CleanupDeleteBranch = intent.CleanupDeleteBranch && retain
+	return intent
 }
 
 func finishBranchCleanup(ctx context.Context, projectRoot string, intent state.LaunchIntent) error {
@@ -974,9 +1039,6 @@ func finishBranchCleanup(ctx context.Context, projectRoot string, intent state.L
 	}
 	if current != intent.ExpectedHead {
 		return fmt.Errorf("herdr branch tip moved from %s to %s", intent.ExpectedHead, current)
-	}
-	if _, err := gitLifecycle(projectRoot, "merge-base", "--is-ancestor", current, "HEAD"); err != nil {
-		return fmt.Errorf("herdr branch %s is not an ancestor of HEAD", intent.BranchName)
 	}
 	if err := worktree.DeleteReservedBranch(ctx, projectRoot, intent.FullBranchRef, current); err != nil {
 		return fmt.Errorf("compare-and-delete Herdr branch %s: %w", intent.BranchName, err)
