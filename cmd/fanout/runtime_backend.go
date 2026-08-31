@@ -128,6 +128,7 @@ func resolveLaunchBackend(cfg *cliflags.Config, projectRoot string, store state.
 }
 
 func bindLaunchBackend(runtime *run.Runtime, resolved paneruntime.Resolution) {
+	runtime.ListLive = runtimeListLiveForProject(runtime.Info.ProjectRoot, false)
 	if resolved.Prepare == nil {
 		return
 	}

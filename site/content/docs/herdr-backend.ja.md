@@ -208,6 +208,10 @@ owned モデルへ移る手順は次のとおりです。
 Claude、OpenCode、Codex Plan / Team controller、TUI で既存 worktree に attach した Codex はこの経路で resume しません。
 復元直後の shell placeholder が `idle` と表示されても、process の生存や完了を示しません。
 
+live launch と `restart` の試行前には、exact な live pane が報告する direct Codex の `agent_session` を保存値へ反映します。
+headless 運用で `/new` を実行した後も、このどちらかの経路が owned server を観測できれば新しい conversation を保存します。
+どちらの経路より先に owned server が観測不能になると、新しい session は復元できず、後の restart でも行を `stale` のまま残します。
+
 herdr は exit status を残さず、正常終了で pane の記録も消します。
 終了した agent は `✓ done` の pane を残さずに herdr session から消え、記録済みの fanout 行は `stale` と表示されます。
 

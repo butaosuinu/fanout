@@ -50,7 +50,8 @@ func TestLoadStateIgnoresLockFileWhenNoWorktreeIsPrepared(t *testing.T) {
 	gitCmdTest(t, repo, "init")
 
 	lg := log.NewWith(io.Discard, io.Discard, false)
-	_, recorder, code := LoadState(false, repo, lg)
+	rt := &Runtime{Info: &fanoutruntime.Info{ProjectRoot: repo}}
+	_, recorder, code := LoadState(false, rt, lg)
 	if code != exitcode.OK {
 		t.Fatalf("LoadState code = %d, want %d", code, exitcode.OK)
 	}
@@ -68,6 +69,41 @@ func TestLoadStateIgnoresLockFileWhenNoWorktreeIsPrepared(t *testing.T) {
 	}
 	if !strings.Contains(string(exclude), ".fanout/state.json.lock\n") {
 		t.Fatalf("exclude = %q, want state lock pattern", exclude)
+	}
+}
+
+func TestLoadStateObservesSessionsBeforeLiveLaunchLock(t *testing.T) {
+	repo := t.TempDir()
+	gitCmdTest(t, repo, "init")
+	calls := 0
+	rt := &Runtime{
+		Info: &fanoutruntime.Info{ProjectRoot: repo},
+		ListLive: func() ([]backend.LivePane, error) {
+			calls++
+			return nil, nil
+		},
+	}
+	_, recorder, code := LoadState(false, rt, log.NewWith(io.Discard, io.Discard, false))
+	if code != exitcode.OK || recorder == nil || calls != 1 {
+		t.Fatalf("LoadState code=%d recorder=%v live calls=%d, want one pre-lock observation", code, recorder, calls)
+	}
+	t.Cleanup(func() { _ = recorder.Unlock() })
+}
+
+func TestLoadStateDryRunDoesNotRebindSession(t *testing.T) {
+	repo := t.TempDir()
+	calls := 0
+	rt := &Runtime{
+		Info: &fanoutruntime.Info{ProjectRoot: repo},
+		ListLive: func() ([]backend.LivePane, error) {
+			calls++
+			return nil, nil
+		},
+	}
+
+	_, recorder, code := LoadState(true, rt, log.NewWith(io.Discard, io.Discard, false))
+	if code != exitcode.OK || recorder != nil || calls != 0 {
+		t.Fatalf("LoadState code=%d recorder=%v live calls=%d, want read-only load", code, recorder, calls)
 	}
 }
 

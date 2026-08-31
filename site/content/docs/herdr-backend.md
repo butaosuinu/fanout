@@ -150,6 +150,8 @@ v0.13.0's herdr backend was observation-only: you started a named herdr session 
 
 An explicit `fanout herdr restart` re-binds a direct Codex row only when the restored shell placeholder has the exact saved `agent_session` and the launched process matches the saved absolute executable, `codex resume <session-id>` argv, cwd, ancestry, and foreground process group. Missing, duplicate, mismatched, or unverifiable data leaves the row `stale`; Claude, OpenCode, Codex Plan / Team controllers, and a Codex attached to an existing worktree from the TUI are never resumed by this path. An `idle` placeholder does not prove process liveness or completion.
 
+Before a live launch or a `restart` attempt, fanout refreshes a direct Codex row's saved `agent_session` from its exact live pane. This persists a conversation selected with `/new` in headless use. If the owned server becomes unobservable before either path runs, fanout cannot recover the new session; a later restart keeps the row `stale`.
+
 Because herdr keeps no exit status and drops the pane record on normal exit, a finished agent disappears from the herdr session instead of leaving a `✓ done` pane behind; the recorded fanout row stays and shows `stale`.
 
 ## Restart and shutdown
