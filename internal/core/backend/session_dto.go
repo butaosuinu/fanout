@@ -10,8 +10,9 @@ import (
 )
 
 var (
-	ErrOwnedIdentityMismatch = errors.New("herdr owned pane identity mismatch")
-	ErrOwnedCheckoutRetained = errors.New("herdr owned checkout retained for manual reconciliation")
+	ErrOwnedIdentityMismatch           = errors.New("herdr owned pane identity mismatch")
+	ErrOwnedCheckoutRetained           = errors.New("herdr owned checkout retained for manual reconciliation")
+	ErrOwnedWorkspaceHasUnadmittedPane = errors.New("herdr owned workspace has a pane outside the close admission")
 )
 
 // ErrOwnedSessionNotFound reports that no persisted owned-session admission

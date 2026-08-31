@@ -1019,7 +1019,7 @@ func KillAttachedPane(runtimeBackend backend.Backend, target, paneID, shellKey s
 	}
 	result, err := closer.CloseOwned(attachedPaneCloseRequest(runtimeBackend, paneID, shellKey))
 	if err != nil {
-		return err
+		return managedWorkspaceCloseError(err)
 	}
 	switch result.Status {
 	case backend.CloseFailed:

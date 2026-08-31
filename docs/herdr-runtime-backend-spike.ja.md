@@ -78,7 +78,7 @@ tmux-parity は信頼モデルだけでなく機構の密度にも適用し、�
 | `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | 同じ non-shell launcher で絶対 path の `fanout __codex-plan-tui` を起動し、`agent start --kind codex` の args にしない |
 | live identity | Go | routing、checkout、terminal、会話、process を別々に照合する |
 | 0.7.5 direct launch の cold restart resume | Go（#532） | 明示的な `fanout herdr restart` で exact direct Codex だけを resume して再束縛し、欠落、不一致、重複、未検証 provider は `stale` にする |
-| console / coordinator close | Go | checkout を持たない exact owned workspace / pane だけを送信直前に再照合し、応答喪失は再実行時の存在確認で確定する |
+| console / coordinator close | Go | checkout を持たない exact owned workspace / pane を送信直前に再照合し、同じ workspace に別 pane が残れば mutation せず manual cleanup にする。応答喪失は再実行時の存在確認で確定する |
 | child launch rollback | tmux の `failCleanup` と同水準 | 今回作った資源だけを identity 照合後に削除し、照合不一致、残存または判定不能な response loss では資源を残して fail closed にする |
 | dirty `--force` | 明示確認後だけ許可 | dirty checkout はユーザーの明示確認なしに force しない。launch rollback の remove も force なしで発行する |
 | emitter | Go | cooperative telemetry と nudge gate に限り、completion / cleanup authority にしない |
@@ -1328,7 +1328,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 |---|---|---|---|
 | owned bootstrap / launch | Go（bootstrap は #526 が PR #572 で実装済み、launch は #527 / #528） | owned XDG / socket / marker の owner-only 検査、state lock、intent 行と存在確認、non-shell launcher の marker / token、送信直前再照合と事後条件検査 | request-bound direct spawn、controller capability、別 UID の bundle owner、または server / agent の UID 分離 |
 | owned server restart | Go（実装は #530） | 明示操作による marker / lease と saved process / socket 不在の照合後の単一 spawn、結果不明の fail closed、restart 後の version gate 再実行と direct-launch row の `stale` 化 | authenticated server generation と request-bound conditional restart |
-| console / coordinator close | Go | checkout を持たない exact owned workspace / pane を送信直前に再照合し、応答喪失は再実行時の存在確認で確定する | close が authoritative server generation と target resource generation を原子的に検査する |
+| console / coordinator close | Go | checkout を持たない exact owned workspace / pane を送信直前に再照合し、同じ workspace に別 pane が残れば mutation せず manual cleanup にする。応答喪失は再実行時の存在確認で確定する | close が authoritative server generation と target resource generation を原子的に検査する |
 | child cleanup | Go（#531） | identity 照合後の `worktree remove`（checkout と workspace を削除）、dirty の明示確認、branch の compare-and-delete、存在確認による応答喪失処理 | tracked / untracked / ignored subtree generation を remove と原子的に条件化する server-side conditional remove、または remove postcondition まで保持する kernel-enforced write-exclusion fence |
 | child launch rollback | tmux の `failCleanup` と同水準 | 今回作った資源だけを identity 照合後に force なしで削除し、照合不一致、dirty 拒否、残存または判定不能な response loss では資源を残して fail closed にする（不在を確認できた response loss は完了扱い） | child cleanup と同じ conditional remove または fence |
 | dirty `--force` | 明示確認後だけ許可 | dirty checkout はユーザーの明示確認なしに force しない | conditional remove / fence と fingerprint-bound receipt |

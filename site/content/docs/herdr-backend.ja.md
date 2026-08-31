@@ -56,6 +56,10 @@ fanout は保存済みの workspace ID、label、terminal、repository、path、
 cleanup intent を保存してから non-force の `herdr worktree remove` を発行し、checkout と workspace の不在を確認します。workspace だけが残れば close します。
 先に workspace が閉じられて checkout が残った場合は、owned plugin registry が空であることを確認してから削除用 workspace を再登録します。
 
+checkout を持たない console / coordinator workspace を close する前に、照合済み pane だけが残っていることを確認します。
+補助 pane が残る場合は manual cleanup とします。
+close 前の snapshot に失敗した場合は workspace を変更しません。close 後の確認 snapshot に失敗した場合は、close の結果を確定できないまま error を返します。
+
 fanout は remove の発行前に、tracked / untracked の作業と ignored file を区別します。
 どちらが残っていても herdr mutation を発行せず、原因を分けて表示します。再試行時は checkout を再検査します。
 `dirty_worktree_requires_force` で manual cleanup になった保存済み intent は、現在の checkout と workspace から再計画するため、変更を commit または削除したあとに続行できます（[#721](https://github.com/butaosuinu/fanout/issues/721)）。

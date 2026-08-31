@@ -322,15 +322,15 @@ func TestStaleManagedConsoleRecoveryRequiresIdentityMismatch(t *testing.T) {
 	}
 }
 
-func TestStaleManagedConsoleTargetAdmitsOwnedRouteWithNewProcessIdentity(t *testing.T) {
+func TestStaleManagedConsoleTargetRequiresSavedProcessIdentity(t *testing.T) {
 	saved := managedConsoleTestPane("/repo", "workspace-root", "pane-old")
 	saved.SourceProjectRoot = "/repo"
 	live := backend.LivePane{
 		Ref: backend.PaneRef{
-			Backend: backend.Herdr, Workspace: saved.WorkspaceID, Pane: "pane-new",
+			Backend: backend.Herdr, Workspace: saved.WorkspaceID, Pane: saved.PaneID,
 		},
 		WorkspaceLabel: saved.WorkspaceLabel,
-		TerminalID:     "terminal-new",
+		TerminalID:     saved.TerminalID,
 		SessionID:      saved.SessionID,
 		SocketPath:     saved.SocketPath,
 		CurrentPath:    saved.WorktreePath,
@@ -340,10 +340,18 @@ func TestStaleManagedConsoleTargetAdmitsOwnedRouteWithNewProcessIdentity(t *test
 	if err != nil {
 		t.Fatalf("staleManagedConsoleTarget() = %+v, %v", got, err)
 	}
-	if got.Ref.Pane != live.Ref.Pane || got.TerminalID != live.TerminalID {
-		t.Fatalf("stale target = %+v, want current process identity %+v", got, live)
+	if got.Ref.Pane != saved.PaneID || got.TerminalID != saved.TerminalID {
+		t.Fatalf("stale target = %+v, want saved process identity %+v", got, saved)
 	}
 
+	live.Ref.Pane = "pane-new"
+	live.TerminalID = "terminal-new"
+	if _, err := staleManagedConsoleTarget(saved, []backend.LivePane{live}); !errors.Is(err, ErrManualCleanupRequired) {
+		t.Fatalf("staleManagedConsoleTarget() error = %v, want manual cleanup for an auxiliary shell", err)
+	}
+
+	live.Ref.Pane = saved.PaneID
+	live.TerminalID = saved.TerminalID
 	live.WorkspaceLabel = "foreign"
 	if _, err := staleManagedConsoleTarget(saved, []backend.LivePane{live}); err == nil {
 		t.Fatal("staleManagedConsoleTarget() accepted a workspace with a foreign label")
@@ -366,6 +374,18 @@ func TestStaleManagedConsoleWorkspaceWithoutPaneRequiresManualCleanup(t *testing
 	workspaces[0].Label = "foreign"
 	if _, err := savedManagedConsoleWorkspacePresent(saved, workspaces); err == nil {
 		t.Fatal("savedManagedConsoleWorkspacePresent() accepted a foreign workspace label")
+	}
+}
+
+func TestManagedWorkspaceCloseErrorClassifiesOnlyUnadmittedPanesAsManualCleanup(t *testing.T) {
+	unsafe := fmt.Errorf("close rejected: %w", backend.ErrOwnedWorkspaceHasUnadmittedPane)
+	if err := managedWorkspaceCloseError(unsafe); !errors.Is(err, ErrManualCleanupRequired) {
+		t.Fatalf("managedWorkspaceCloseError() = %v, want manual cleanup", err)
+	}
+
+	observeErr := errors.New("snapshot failed")
+	if err := managedWorkspaceCloseError(observeErr); !errors.Is(err, observeErr) || errors.Is(err, ErrManualCleanupRequired) {
+		t.Fatalf("managedWorkspaceCloseError() = %v, want unchanged observation failure", err)
 	}
 }
 

@@ -264,11 +264,13 @@ func staleManagedConsoleTarget(
 		}
 		identity := []bool{
 			current.Ref.Backend == backend.Herdr,
+			current.Ref.Pane == saved.PaneID,
 			current.WorkspaceLabel == saved.WorkspaceLabel,
+			current.TerminalID == saved.TerminalID,
 			current.SessionID == saved.SessionID,
 			filepath.Clean(current.SocketPath) == filepath.Clean(saved.SocketPath),
 			filepath.Clean(current.CurrentPath) == filepath.Clean(saved.WorktreePath),
-			current.Ref.Pane != "", current.TerminalID != "", !current.AgentPresent,
+			!current.AgentPresent,
 		}
 		if !slices.Contains(identity, false) {
 			matches = append(matches, current)
@@ -297,9 +299,16 @@ func closeStaleManagedConsole(owned ManagedSessionRuntime, current backend.LiveP
 		Backend: backend.Herdr, Pane: current.Ref.Pane,
 	}})
 	if err != nil {
-		return fmt.Errorf("close stale Herdr console workspace: %w", err)
+		return fmt.Errorf("close stale Herdr console workspace: %w", managedWorkspaceCloseError(err))
 	}
 	return nil
+}
+
+func managedWorkspaceCloseError(err error) error {
+	if errors.Is(err, backend.ErrOwnedWorkspaceHasUnadmittedPane) {
+		return fmt.Errorf("%w: %w", ErrManualCleanupRequired, err)
+	}
+	return err
 }
 
 func removeSavedManagedConsoleRow(

@@ -25,6 +25,8 @@ The TUI console and web dashboard use `reported_state` only while the matching p
 
 `--merge`, `--close`, `--cleanup`, and their TUI actions operate only on complete rows from that owned session. fanout compares the saved workspace ID, label, terminal, repository, path, and branch before mutation. It records a cleanup intent, issues non-force `herdr worktree remove`, verifies that the checkout and workspace are absent, and closes a residual workspace when needed. A checkout left after an earlier workspace close is re-registered only after the owned plugin registry passes the empty-registry preflight.
 
+Before closing a checkout-free console or coordinator workspace, fanout requires the admitted pane to be its only pane. A remaining auxiliary pane requires manual cleanup. A failed preflight snapshot leaves the workspace unchanged; a failed post-close verification snapshot returns an error with the close result unknown.
+
 Before issuing the removal, fanout separates tracked or untracked work from ignored files. Either state stops cleanup without issuing a herdr mutation; the error says which state blocked it. Retry checks the checkout again. A saved manual-cleanup intent whose failure was `dirty_worktree_requires_force` is replanned from the current checkout and workspace state, so committing or removing the files unblocks it ([#721](https://github.com/butaosuinu/fanout/issues/721)). An ambiguous issued mutation remains manual and is never replayed. Branch deletion uses fanout's compare-and-delete and applies only to a branch recorded as fanout-created.
 
 ### Recover a blocked cleanup
