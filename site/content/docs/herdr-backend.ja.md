@@ -57,7 +57,8 @@ cleanup intent を保存してから non-force の `herdr worktree remove` を�
 先に workspace が閉じられて checkout が残った場合は、owned plugin registry が空であることを確認してから削除用 workspace を再登録します。
 
 checkout を持たない console / coordinator workspace を close する前に、照合済み pane だけが残っていることを確認します。
-補助 pane が残る場合は manual cleanup とし、snapshot に失敗した場合も workspace を変更しません。
+補助 pane が残る場合は manual cleanup とします。
+close 前の snapshot に失敗した場合は workspace を変更しません。close 後の確認 snapshot に失敗した場合は、close の結果を確定できないまま error を返します。
 
 fanout は remove の発行前に、tracked / untracked の作業と ignored file を区別します。
 どちらが残っていても herdr mutation を発行せず、原因を分けて表示します。再試行時は checkout を再検査します。

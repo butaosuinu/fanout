@@ -264,11 +264,13 @@ func staleManagedConsoleTarget(
 		}
 		identity := []bool{
 			current.Ref.Backend == backend.Herdr,
+			current.Ref.Pane == saved.PaneID,
 			current.WorkspaceLabel == saved.WorkspaceLabel,
+			current.TerminalID == saved.TerminalID,
 			current.SessionID == saved.SessionID,
 			filepath.Clean(current.SocketPath) == filepath.Clean(saved.SocketPath),
 			filepath.Clean(current.CurrentPath) == filepath.Clean(saved.WorktreePath),
-			current.Ref.Pane != "", current.TerminalID != "", !current.AgentPresent,
+			!current.AgentPresent,
 		}
 		if !slices.Contains(identity, false) {
 			matches = append(matches, current)
