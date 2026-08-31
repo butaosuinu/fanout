@@ -300,6 +300,69 @@ func TestHerdrCloseClosesIdentityMatchedSharedAttachedWorkspacesFirst(t *testing
 	}
 }
 
+func TestHerdrSharedAttachedCloseRebindsMovedChildBeforeMutation(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	workspace := herdrLifecycleWorkspace(
+		"w-attached", "attached-label", fixture.worktreePath,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	attached := sharedAttachedLifecyclePane(fixture, "425", "", workspace)
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces: []backend.WorkspaceObservation{
+			movedHerdrWorkspace(fixture, "w-moved"), workspace,
+		},
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+	}
+	if got := strings.Join(runtime.mutationLog, ","); got != "close:w-attached,remove:w-moved" {
+		t.Fatalf("moved child mutation order = %q", got)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrSharedAttachedCloseRebindsMovedChildOnRetirementRetry(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	workspace := herdrLifecycleWorkspace(
+		"w-attached", "attached-label", fixture.worktreePath,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	attached := sharedAttachedLifecyclePane(fixture, "425", "", workspace)
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{fixture.workspace, workspace},
+		observeErr:  errors.New("completion observation temporarily unavailable"),
+	}
+	runtime.afterClose = func(workspaceID string) {
+		if workspaceID != workspace.WorkspaceID {
+			return
+		}
+		runtime.workspaces = []backend.WorkspaceObservation{movedHerdrWorkspace(fixture, "w-moved")}
+		runtime.observeErrAtCall = runtime.observeCalls + 2
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	if got := strings.Join(runtime.mutationLog, ","); got != "close:w-attached" {
+		t.Fatalf("first mutation order = %q", got)
+	}
+	assertSharedAttachedRows(t, fixture.projectRoot, fixture.pane, attached, true, false)
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if got := strings.Join(runtime.mutationLog, ","); got != "close:w-attached,remove:w-moved" {
+		t.Fatalf("retry mutation order = %q", got)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
 func TestHerdrSharedAttachedCloseChecksChildContentsBeforeMutation(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -335,7 +335,7 @@ func closeSharedAttachedWorkspaces(
 		if err != nil {
 			return err
 		}
-		return retireSharedAttachedWorkspaceClose(ctx, opts, journal, child, mode)
+		return retireSharedAttachedWorkspaceClose(ctx, opts, locked, journal, child, mode)
 	}
 	journal, intent, issueClose, err := prepareSharedAttachedWorkspaceClose(
 		ctx, opts, locked, child, attached, mode,
@@ -358,6 +358,7 @@ func closeSharedAttachedWorkspaces(
 func retireSharedAttachedWorkspaceClose(
 	ctx context.Context,
 	opts Options,
+	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	child state.Pane,
 	mode CloseMode,
@@ -374,7 +375,7 @@ func retireSharedAttachedWorkspaceClose(
 	if err := validateSavedWorkspaceCleanup(intent, opts.ProjectRoot, child, mode); err != nil {
 		return err
 	}
-	return completeSharedAttachedWorkspaceClose(ctx, opts, journal, child, intent)
+	return completeSharedAttachedWorkspaceClose(ctx, opts, locked, journal, child, intent)
 }
 
 func driveSharedAttachedWorkspaceCloses(
@@ -408,7 +409,7 @@ func driveSharedAttachedWorkspaceCloses(
 		}
 		return errors.Join(ErrManualCleanupRequired, err)
 	}
-	return completeSharedAttachedWorkspaceClose(ctx, opts, journal, child, intent)
+	return completeSharedAttachedWorkspaceClose(ctx, opts, locked, journal, child, intent)
 }
 
 func beginVerifiedSharedAttachedWorkspaceClose(
@@ -487,18 +488,14 @@ func beginSharedAttachedWorkspaceClose(
 func completeSharedAttachedWorkspaceClose(
 	ctx context.Context,
 	opts Options,
+	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	child state.Pane,
 	intent state.LaunchIntent,
 ) error {
-	runtime, err := opts.WorkspaceRuntime(ctx, child)
-	if err != nil {
-		return err
-	}
-	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
-		return verifyErr
-	}
-	observation, err := observeWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent.Resource)
+	intent, observation, err := observeReboundSharedAttachedChildCleanup(
+		ctx, opts, locked, journal, child, intent,
+	)
 	if err != nil {
 		return err
 	}
@@ -511,6 +508,31 @@ func completeSharedAttachedWorkspaceClose(
 		intent.Status, intent.Failure = state.IntentRealized, ""
 	}
 	return saveWorkspaceCleanupIntent(journal, intent)
+}
+
+func observeReboundSharedAttachedChildCleanup(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	child state.Pane,
+	intent state.LaunchIntent,
+) (state.LaunchIntent, workspaceCleanupObservation, error) {
+	runtime, err := opts.WorkspaceRuntime(ctx, child)
+	if err != nil {
+		return intent, workspaceCleanupObservation{}, err
+	}
+	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
+		return intent, workspaceCleanupObservation{}, verifyErr
+	}
+	observation, err := observeLabelBoundWorkspaceCleanup(ctx, runtime, opts.ProjectRoot, intent)
+	if err != nil {
+		return intent, observation, err
+	}
+	intent, err = rebindObservedWorkspaceCleanupIdentity(
+		locked, journal, opts.ProjectRoot, child, intent, observation.workspace,
+	)
+	return intent, observation, err
 }
 
 func verifySharedAttachedChildCleanup(
@@ -976,11 +998,14 @@ func workspaceResourcePredicate(resource state.RuntimeResource) workspacePredica
 }
 
 func sharedChildWorkspacePredicate(resource state.RuntimeResource, attached []state.Pane) workspacePredicateFunc {
-	base := workspacePredicate(resource)
+	base := workspaceLabelPredicate(resource.Label, resource.CurrentPath, resource.RepoKey, resource.RepoRoot)
 	return func(workspace backend.WorkspaceObservation) (bool, bool) {
 		candidate, exact := base(workspace)
-		if exact || !workspaceMatchesAttachedRowIdentity(workspace, attached) {
+		if !workspaceMatchesAttachedRowIdentity(workspace, attached) {
 			return candidate, exact
+		}
+		if exact {
+			return true, false
 		}
 		return false, false
 	}
