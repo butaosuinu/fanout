@@ -60,12 +60,13 @@ func RealizeManagedWorktree(
 // phases: the shared prologue, the request as narrowed by the coordinator and
 // the saved intent, and the coordinator the checkout attaches to.
 type managedWorktreeRealization struct {
-	setup       managedRealizeSetup
-	runtime     ManagedWorktreeRuntime
-	req         ManagedWorktreeRequest
-	intentID    string
-	source      worktree.RepoIdentity
-	coordinator state.RuntimeResource
+	setup        managedRealizeSetup
+	runtime      ManagedWorktreeRuntime
+	req          ManagedWorktreeRequest
+	intentID     string
+	source       worktree.RepoIdentity
+	coordinator  state.RuntimeResource
+	intentHealed bool
 }
 
 // realize loads the journal's view of this child, verifies the owned route, and
@@ -148,7 +149,9 @@ func (r *managedWorktreeRealization) classifyIntent(
 	locked := r.setup.locked
 	switch intent.Status {
 	case state.IntentRealized:
-		return resumeRealizedManagedWorktree(operationCtx, r.runtime, locked, r.req, r.source, intent, !classificationOnly)
+		return resumeRealizedManagedWorktree(
+			operationCtx, r.runtime, locked, r.req, r.source, intent, !classificationOnly, r.intentHealed,
+		)
 	case state.IntentIssued:
 		return recoverManagedWorktree(operationCtx, r.runtime, locked, r.req, r.source, intent, nil)
 	case state.IntentPlanned:
@@ -191,7 +194,7 @@ func (r *managedWorktreeRealization) resolveIntent(
 	if !found {
 		return r.planIntent()
 	}
-	if err := r.adoptSavedIntent(saved); err != nil {
+	if err := r.adoptSavedIntent(&saved); err != nil {
 		return saved, err
 	}
 	return saved, nil
@@ -199,18 +202,26 @@ func (r *managedWorktreeRealization) resolveIntent(
 
 // adoptSavedIntent re-verifies a journal-held intent against the request and
 // narrows the request to the owner project root its saved path implies.
-func (r *managedWorktreeRealization) adoptSavedIntent(intent state.LaunchIntent) error {
+func (r *managedWorktreeRealization) adoptSavedIntent(intent *state.LaunchIntent) error {
+	if intent.Coordinator != r.coordinator {
+		coordinator, found := restartedManagedCoordinatorResource(r.coordinator, intent.Coordinator)
+		if !found {
+			return fmt.Errorf("saved Herdr worktree intent contradicts request")
+		}
+		intent.Coordinator = coordinator
+		r.intentHealed = true
+	}
 	if savedErr := validateSavedWorktreeIntent(
 		r.req,
 		r.source,
 		r.coordinator,
 		r.setup.ownerProjectRoot,
 		r.setup.runtimeParent,
-		intent,
+		*intent,
 	); savedErr != nil {
 		return savedErr
 	}
-	savedProjectRoot, _, savedRootErr := savedManagedWorktreeSource(r.setup.ctx, intent, r.source)
+	savedProjectRoot, _, savedRootErr := savedManagedWorktreeSource(r.setup.ctx, *intent, r.source)
 	if savedRootErr != nil {
 		return savedRootErr
 	}
