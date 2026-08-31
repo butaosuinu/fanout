@@ -1191,6 +1191,7 @@ func TestHerdrRetirementRetrySkipsUnavailableRuntimeAndGitHub(t *testing.T) {
 			opts := herdrLifecycleOptions(fixture, runtime)
 			leaveCompletedHerdrCleanupAfterRetirementFailure(t, opts, fixture)
 			installUnavailableLifecycleGH(t)
+			pruneLog := installRecordingWorktreePruneGit(t)
 
 			runtimeFactoryCalls := 0
 			opts.WorkspaceRuntime = func(context.Context, state.Pane) (WorkspaceRuntime, error) {
@@ -1202,6 +1203,13 @@ func TestHerdrRetirementRetrySkipsUnavailableRuntimeAndGitHub(t *testing.T) {
 			}
 			if runtimeFactoryCalls != 0 {
 				t.Fatalf("retry runtime factory calls = %d, want 0", runtimeFactoryCalls)
+			}
+			pruneCalls, err := os.ReadFile(pruneLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(pruneCalls), "called\n"); got != 1 {
+				t.Fatalf("retry worktree prune calls = %d, want 1", got)
 			}
 			assertHerdrLifecycleRemoved(t, fixture)
 		})
@@ -1269,6 +1277,32 @@ func installUnavailableLifecycleGH(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func installRecordingWorktreePruneGit(t *testing.T) string {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	logPath := filepath.Join(binDir, "prune.log")
+	script := `#!/bin/sh
+if [ "$3" = "worktree" ] && [ "$4" = "prune" ]; then
+  printf 'called\n' >> "$FANOUT_TEST_PRUNE_LOG"
+fi
+exec "$FANOUT_TEST_REAL_GIT" "$@"
+`
+	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FANOUT_TEST_PRUNE_LOG", logPath)
+	t.Setenv("FANOUT_TEST_REAL_GIT", realGit)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
 }
 
 func TestHerdrCleanupRetryDoesNotRepeatHooks(t *testing.T) {

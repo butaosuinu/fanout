@@ -280,6 +280,9 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 		lg.Err("--cleanup: retire completed Herdr cleanup: %v", err)
 		return exitcode.Env
 	}
+	if retired > 0 && !pruneWorktrees(opts.ProjectRoot, lg) {
+		return exitcode.Env
+	}
 	if retired > 0 {
 		lg.Ok("--cleanup: retired %d completed Herdr cleanup(s)", retired)
 		if len(panes) == 0 {
@@ -367,6 +370,9 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	panes, retired, err := retireCompletedTaskCleanups(opts, locked, parent, panes)
 	if err != nil {
 		lg.Err("--cleanup: retire completed Herdr cleanup: %v", err)
+		return exitcode.Env
+	}
+	if retired > 0 && !pruneWorktrees(opts.ProjectRoot, lg) {
 		return exitcode.Env
 	}
 	if retired > 0 {
@@ -1003,6 +1009,9 @@ func prepareCompletedWorkspaceRetirement(
 	retired, err := retireCompletedWorkspaceCleanup(opts, locked, panes, mode)
 	if err != nil {
 		lg.Err("%s: retire completed Herdr cleanup: %v", subject, err)
+		return panes, exitcode.Env, true
+	}
+	if retired && !pruneWorktrees(opts.ProjectRoot, lg) {
 		return panes, exitcode.Env, true
 	}
 	if retired {
