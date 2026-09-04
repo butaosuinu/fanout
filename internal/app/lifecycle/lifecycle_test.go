@@ -469,6 +469,64 @@ func TestLockStateAfterHerdrPrecheckReacquiresCombinedLockWhenHerdrAppears(t *te
 	}
 }
 
+func TestRetirePaneStateRowsSaveFailurePreservesAllRows(t *testing.T) {
+	projectRoot := t.TempDir()
+	statePath := state.Path(projectRoot)
+	panes := []state.Pane{
+		{Parent: "423", IssueNum: 425, Backend: backend.Herdr, PaneID: "w2:p1", WorktreePath: "/wt/shared"},
+		{Parent: "423", IssueNum: -1, Kind: state.PaneKindAttachedAgent, PaneID: "w2:p2", WorktreePath: "/wt/shared"},
+	}
+	locked, err := state.Lock(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked.Panes = append([]state.Pane(nil), panes...)
+	if saveErr := locked.Save(); saveErr != nil {
+		t.Fatal(errors.Join(saveErr, locked.Unlock()))
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	locked, err = state.Lock(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if locked != nil {
+			if unlockErr := locked.Unlock(); unlockErr != nil {
+				t.Error(unlockErr)
+			}
+		}
+	}()
+	stateDir := filepath.Dir(statePath)
+	if chmodErr := os.Chmod(stateDir, 0o500); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	t.Cleanup(func() {
+		if chmodErr := os.Chmod(stateDir, 0o755); chmodErr != nil {
+			t.Error(chmodErr)
+		}
+	})
+
+	if retireErr := retirePaneStateRows(Options{ProjectRoot: projectRoot}, locked, panes, ClosePaneOnly); retireErr == nil {
+		t.Fatal("state retirement save unexpectedly succeeded")
+	}
+	if chmodErr := os.Chmod(stateDir, 0o755); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	if unlockErr := locked.Unlock(); unlockErr != nil {
+		t.Fatal(unlockErr)
+	}
+	locked = nil
+	stored, err := state.Load(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stored.Panes, panes) {
+		t.Fatalf("rows after failed retirement = %+v, want %+v", stored.Panes, panes)
+	}
+}
+
 func TestCloseHerdrFailsBeforeWorktreeAndStateMutation(t *testing.T) {
 	projectRoot := t.TempDir()
 	runHerdrLifecycleGit(t, projectRoot, "init", "--initial-branch", "main")

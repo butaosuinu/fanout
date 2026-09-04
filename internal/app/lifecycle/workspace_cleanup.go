@@ -11,6 +11,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -121,10 +122,61 @@ func inspectWorkspaceClosePreflight(opts Options, pane state.Pane, mode CloseMod
 	if err != nil {
 		return false, err
 	}
-	if err := verifyWorkspaceCloseTarget(ctx, opts.ProjectRoot, runtime, pane, resource, predicate, reopened); err != nil {
+	if _, err := verifyWorkspaceCloseTarget(ctx, opts.ProjectRoot, runtime, pane, resource, predicate, reopened); err != nil {
 		return false, err
 	}
 	return cleanupStarted, nil
+}
+
+func prepareWorkspaceCleanupHook(opts Options, locked *state.LockedStore, pane state.Pane, mode CloseMode) (*state.LockedLaunchJournal, state.LaunchIntent, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), workspaceCleanupTimeout)
+	defer cancel()
+	runtime, err := opts.WorkspaceRuntime(ctx, pane)
+	if err != nil {
+		return nil, state.LaunchIntent{}, err
+	}
+	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
+		return nil, state.LaunchIntent{}, verifyErr
+	}
+	journal, intent, _, err := loadWorkspaceCleanupIntent(ctx, opts, locked, runtime, pane, mode)
+	if err != nil {
+		return nil, state.LaunchIntent{}, err
+	}
+	predicate := workspaceLabelPredicate(
+		intent.WorkspaceLabel, intent.WorktreePath, intent.Resource.RepoKey, intent.Resource.RepoRoot,
+	)
+	reopened := intent.Status == state.IntentIssued && intent.CleanupPhase == state.CleanupReopen
+	observation, err := verifyWorkspaceCloseTarget(
+		ctx, opts.ProjectRoot, runtime, pane, intent.Resource, predicate, reopened,
+	)
+	if err != nil {
+		return nil, state.LaunchIntent{}, err
+	}
+	intent, err = rebindWorkspaceCleanupHookIdentity(
+		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
+	)
+	if err != nil {
+		return nil, state.LaunchIntent{}, err
+	}
+	return journal, intent, nil
+}
+
+func rebindWorkspaceCleanupHookIdentity(
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	projectRoot string,
+	pane state.Pane,
+	intent state.LaunchIntent,
+	workspace *backend.WorkspaceObservation,
+) (state.LaunchIntent, error) {
+	previousResource := intent.Resource
+	intent, err := rebindObservedWorkspaceCleanupIdentity(
+		locked, journal, projectRoot, pane, intent, workspace,
+	)
+	if err != nil || intent.Resource == previousResource {
+		return intent, err
+	}
+	return intent, saveWorkspaceCleanupIntent(journal, intent)
 }
 
 func verifyWorkspaceCloseTarget(
@@ -135,24 +187,27 @@ func verifyWorkspaceCloseTarget(
 	resource state.RuntimeResource,
 	predicate workspacePredicateFunc,
 	reopened bool,
-) error {
+) (workspaceCleanupObservation, error) {
 	observation, err := observeWorkspaceCleanupMatching(ctx, runtime, projectRoot, resource, predicate)
 	if err != nil {
-		return err
+		return workspaceCleanupObservation{}, err
 	}
 	if observation.workspace != nil && !reopened {
 		if terminalErr := verifyTerminalInvalidation(*observation.workspace, resource); terminalErr != nil {
-			return terminalErr
+			return workspaceCleanupObservation{}, terminalErr
 		}
 	}
 	if observation.checkout.PathAbsent && !observation.checkout.Registered {
-		return nil
+		return observation, nil
 	}
 	fullRef, err := worktree.LocalBranchRef(ctx, projectRoot, pane.BranchName)
 	if err != nil {
-		return err
+		return workspaceCleanupObservation{}, err
 	}
-	return verifyCleanupCheckout(ctx, projectRoot, fullRef, observation.checkout.HeadSHA, resource)
+	if err := verifyCleanupCheckout(ctx, projectRoot, fullRef, observation.checkout.HeadSHA, resource); err != nil {
+		return workspaceCleanupObservation{}, err
+	}
+	return observation, nil
 }
 
 func workspaceClosePreflightIdentity(
@@ -528,6 +583,7 @@ func coordinatorResource(workspace backend.WorkspaceObservation) state.RuntimeRe
 	}
 }
 
+//nolint:funlen // Keep the persisted cleanup identity and hook obligations visible in one constructor.
 func newWorkspaceCleanupIntent(
 	ctx context.Context,
 	opts Options,
@@ -546,6 +602,7 @@ func newWorkspaceCleanupIntent(
 		return state.LaunchIntent{}, err
 	}
 	deleteBranchRequested := mode == CloseEverything && pane.BranchCreated
+	worktreeRemovedRequired := recordedWorktreeExists(pane) && len(opts.Hooks.Events[hooks.WorktreeRemoved]) != 0
 	intent := state.LaunchIntent{
 		ID: intentID, Kind: state.IntentCleanup, Status: freshWorkspaceCleanupStatus(observation),
 		Parent: pane.Parent, RuntimeParent: pane.RuntimeParent, OwnerProjectRoot: ownerRoot,
@@ -557,8 +614,10 @@ func newWorkspaceCleanupIntent(
 		Session: pane.SessionID, SocketPath: pane.SocketPath,
 		ExpiresUnixMS: time.Now().Add(workspaceCleanupTimeout).UnixMilli(),
 		CleanupPhase:  phase, CleanupDeleteBranch: deleteBranchRequested && branchFound && workspaceCleanupCheckoutPresent(observation),
-		CleanupDeleteBranchRequested: &deleteBranchRequested,
-		CleanupDeleteBranchVerified:  true,
+		CleanupDeleteBranchRequested:   &deleteBranchRequested,
+		CleanupDeleteBranchVerified:    true,
+		CleanupHookPhase:               state.CleanupHookPending,
+		CleanupWorktreeRemovedRequired: &worktreeRemovedRequired,
 	}
 	return intent, nil
 }
@@ -785,11 +844,13 @@ func settleExpiredObservedWorkspaceCleanup(
 	if intent.Coordinator != (state.RuntimeResource{}) && intent.CleanupPhase != state.CleanupReopen {
 		return replanWorkspaceCleanup(ctx, opts, journal, intent, observation)
 	}
-	journal.RemoveIntent(intent.ID)
-	if err := journal.Save(); err != nil {
+	intent, err := replanObservedWorkspaceCleanup(
+		ctx, opts, locked, journal, runtime, pane, intent, observation,
+	)
+	if err != nil {
 		return intent, err
 	}
-	return intent, fmt.Errorf("saved Herdr cleanup intent expired before mutation; retry to replan")
+	return intent, fmt.Errorf("saved Herdr cleanup intent expired before mutation; retry to continue the replanned cleanup")
 }
 
 func rebindMovedWorkspaceCleanupIdentity(
@@ -942,9 +1003,7 @@ func finalizeWorkspaceCleanup(
 	if err := discardSavedLaunchEnvironment(journal, runtime, worktreeIntentID); err != nil {
 		return err
 	}
-	journal.RemoveIntent(intent.ID)
-	journal.RemoveIntent(worktreeIntentID)
-	return journal.Save()
+	return nil
 }
 
 func discardSavedLaunchEnvironment(

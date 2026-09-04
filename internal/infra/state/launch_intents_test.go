@@ -526,6 +526,39 @@ func TestHerdrCleanupIntentKeepsIndependentMutationRecord(t *testing.T) {
 	if err := validateIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {
 		t.Fatalf("unknown cleanup phase error = %v", err)
 	}
+	cleanup = testCleanupIntent(repo, CleanupRemove, IntentPlanned)
+	cleanup.CleanupHookPhase = "unknown"
+	if err := validateIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {
+		t.Fatalf("unknown cleanup hook phase error = %v", err)
+	}
+	for _, phase := range []CleanupHookPhase{
+		CleanupHookBeforeWorktreeRemoveIssued,
+		CleanupHookBeforePaneCloseIssued,
+	} {
+		cleanup = testCleanupIntent(repo, CleanupRemove, IntentPlanned)
+		cleanup.CleanupHookPhase = phase
+		if err := validateIntent(cleanup); err != nil {
+			t.Fatalf("cleanup hook phase %q: %v", phase, err)
+		}
+	}
+	for _, phase := range []CleanupHookPhase{
+		CleanupHookPaneClosedIssued,
+		CleanupHookWorktreeRemovedIssued,
+		CleanupHookCompleted,
+	} {
+		cleanup = testCleanupIntent(repo, CleanupRemove, IntentRealized)
+		cleanup.CleanupHookPhase = phase
+		if err := validateIntent(cleanup); err != nil {
+			t.Fatalf("cleanup completion hook phase %q: %v", phase, err)
+		}
+	}
+	cleanup = testCleanupIntent(repo, CleanupRemove, IntentRealized)
+	required := false
+	cleanup.CleanupWorktreeRemovedRequired = &required
+	cleanup.CleanupHookPhase = CleanupHookWorktreeRemovedIssued
+	if err := validateIntent(cleanup); err == nil || !strings.Contains(err.Error(), "cleanup fields are incomplete") {
+		t.Fatalf("worktree_removed without obligation error = %v", err)
+	}
 }
 
 func TestHerdrCleanupIntentCoexistsWithServerRestart(t *testing.T) {
@@ -562,6 +595,8 @@ func testCleanupIntent(
 	cleanup.Kind = IntentCleanup
 	cleanup.Status = status
 	cleanup.CleanupPhase = phase
+	required := true
+	cleanup.CleanupWorktreeRemovedRequired = &required
 	cleanup.Resource = RuntimeResource{
 		WorkspaceID: "w2", Label: cleanup.WorkspaceLabel,
 		PaneID: "w2:p1", TerminalID: "term-2", CurrentPath: cleanup.WorktreePath,
