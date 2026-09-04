@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -21,10 +22,14 @@ const workspaceCleanupTimeout = 5 * time.Minute
 const (
 	sharedAttachedWorkspaceCloseFailure  = "shared attached workspace close pending"
 	sharedAttachedWorkspaceCloseComplete = "shared attached workspace close complete"
+	sharedAttachedWorkspaceHookPrefix    = "cleanup:attached:"
 	workspacePreHookIdentityFailure      = "before_worktree_remove identity preflight failed"
 )
 
-var ErrManualCleanupRequired = errors.New("herdr lifecycle requires manual cleanup")
+var (
+	ErrManualCleanupRequired               = errors.New("herdr lifecycle requires manual cleanup")
+	errSharedAttachedHookDispatchUncertain = errors.New("shared attached workspace hook dispatch outcome is uncertain")
+)
 
 // WorkspaceRuntime is the mutation surface lifecycle needs from one existing owned
 // session. The composition root supplies a route-bound implementation.
@@ -421,19 +426,32 @@ func driveSharedAttachedWorkspaceCloses(
 		return err
 	}
 	for _, target := range targets {
-		issued, err := closeSharedAttachedWorkspace(ctx, opts, locked, target, issueClose, lg)
-		if err == nil {
-			continue
+		issued, err := closeSharedAttachedWorkspace(ctx, opts, locked, journal, target, issueClose, lg)
+		if err != nil {
+			return handleSharedAttachedWorkspaceCloseError(journal, intent, issueClose, issued, err)
 		}
-		if errors.Is(err, backend.ErrOwnedIdentityMismatch) {
-			return markSharedAttachedWorkspaceCloseManual(journal, intent, err)
-		}
-		if issueClose && !issued {
-			return resetSharedAttachedWorkspaceClose(journal, intent, err)
-		}
-		return errors.Join(ErrManualCleanupRequired, err)
 	}
 	return completeSharedAttachedWorkspaceClose(ctx, opts, locked, journal, child, attached, intent)
+}
+
+func handleSharedAttachedWorkspaceCloseError(
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+	issueClose, issued bool,
+	err error,
+) error {
+	manual := errors.Is(err, backend.ErrOwnedIdentityMismatch) ||
+		errors.Is(err, backend.ErrOwnedWorkspaceHasUnadmittedPane)
+	if manual {
+		return markSharedAttachedWorkspaceCloseManual(journal, intent, err)
+	}
+	if errors.Is(err, errSharedAttachedHookDispatchUncertain) {
+		return errors.Join(ErrManualCleanupRequired, err)
+	}
+	if issueClose && !issued {
+		return resetSharedAttachedWorkspaceClose(journal, intent, err)
+	}
+	return errors.Join(ErrManualCleanupRequired, err)
 }
 
 func beginVerifiedSharedAttachedWorkspaceClose(
@@ -537,6 +555,17 @@ func completeSharedAttachedWorkspaceClose(
 	intent.Status, intent.Failure = state.IntentPlanned, sharedAttachedWorkspaceCloseComplete
 	if workspaceCleanupAbsent(observation) {
 		intent.Status, intent.Failure = state.IntentRealized, ""
+	}
+	return saveCompletedSharedAttachedWorkspaceClose(journal, child.WorktreePath, intent)
+}
+
+func saveCompletedSharedAttachedWorkspaceClose(
+	journal *state.LockedLaunchJournal,
+	worktreePath string,
+	intent state.LaunchIntent,
+) error {
+	if err := retireSharedAttachedWorkspaceHookIntents(journal, worktreePath); err != nil {
+		return err
 	}
 	return saveWorkspaceCleanupIntent(journal, intent)
 }
@@ -971,6 +1000,7 @@ func closeSharedAttachedWorkspace(
 	ctx context.Context,
 	opts Options,
 	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
 	target sharedAttachedWorkspaceCloseTarget,
 	issueClose bool,
 	lg Logger,
@@ -979,25 +1009,32 @@ func closeSharedAttachedWorkspace(
 		return false, errors.New(sharedAttachedWorkspaceCloseFailure)
 	}
 	if issueClose {
-		runBackgroundHook(hooks.BeforePaneClose, opts, target.pane, "", lg)
 		var err error
 		target, err = revalidateSharedAttachedWorkspaceTarget(ctx, opts, locked, target.pane)
 		if err != nil {
 			return false, err
 		}
+		if err := runSharedAttachedWorkspaceHook(
+			opts, locked, journal, target.pane, hooks.BeforePaneClose, lg,
+		); err != nil {
+			return false, err
+		}
 	}
-	return closeRevalidatedSharedAttachedWorkspace(ctx, opts, locked, target, lg)
+	return closeRevalidatedSharedAttachedWorkspace(ctx, opts, locked, journal, target, lg)
 }
 
 func closeRevalidatedSharedAttachedWorkspace(
 	ctx context.Context,
 	opts Options,
 	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
 	target sharedAttachedWorkspaceCloseTarget,
 	lg Logger,
 ) (bool, error) {
 	if target.workspace == nil {
-		runBackgroundHook(hooks.PaneClosed, opts, target.pane, "", lg)
+		if err := completeSharedAttachedWorkspaceHooks(opts, locked, journal, target.pane, lg); err != nil {
+			return false, err
+		}
 		return false, locked.RemovePane(target.pane.Parent, target.pane.IssueNum)
 	}
 	mutationErr := target.runtime.CloseAttachedWorkspace(ctx, target.pane.RuntimeBinding())
@@ -1011,8 +1048,174 @@ func closeRevalidatedSharedAttachedWorkspace(
 			fmt.Errorf("shared attached workspace close did not establish absence"),
 		)
 	}
-	runBackgroundHook(hooks.PaneClosed, opts, target.pane, "", lg)
+	if err := completeSharedAttachedWorkspaceHooks(opts, locked, journal, target.pane, lg); err != nil {
+		return true, err
+	}
 	return true, locked.RemovePane(target.pane.Parent, target.pane.IssueNum)
+}
+
+func completeSharedAttachedWorkspaceHooks(
+	opts Options,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	pane state.Pane,
+	lg Logger,
+) error {
+	intent, found, err := sharedAttachedWorkspaceHookIntent(opts, locked, journal, pane)
+	if err != nil || !found {
+		return err
+	}
+	if err := dispatchSharedAttachedWorkspaceHook(
+		opts, journal, &intent, pane, hooks.PaneClosed,
+		state.CleanupHookPaneClosedIssued, state.CleanupHookPaneClosed, lg,
+	); err != nil {
+		return err
+	}
+	if !persistCleanupHookPhase(journal, &intent, state.CleanupHookCompleted, pane, lg) {
+		return errors.New("persist completed shared attached workspace hooks")
+	}
+	return nil
+}
+
+func runSharedAttachedWorkspaceHook(
+	opts Options,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	pane state.Pane,
+	hook hooks.Type,
+	lg Logger,
+) error {
+	intent, found, err := sharedAttachedWorkspaceHookIntent(opts, locked, journal, pane)
+	if err != nil || !found {
+		return err
+	}
+	issued, completed := cleanupHookCheckpoint(hook)
+	return dispatchSharedAttachedWorkspaceHook(opts, journal, &intent, pane, hook, issued, completed, lg)
+}
+
+func dispatchSharedAttachedWorkspaceHook(
+	opts Options,
+	journal *state.LockedLaunchJournal,
+	intent *state.LaunchIntent,
+	pane state.Pane,
+	hook hooks.Type,
+	issued, completed state.CleanupHookPhase,
+	lg Logger,
+) error {
+	if rejectAmbiguousCleanupHookPhase(intent.CleanupHookPhase, pane, lg) {
+		return errSharedAttachedHookDispatchUncertain
+	}
+	if len(opts.Hooks.Events[hook]) == 0 || cleanupHookPhaseReached(intent.CleanupHookPhase, completed) {
+		return nil
+	}
+	previous := *intent
+	if !persistCleanupHookPhase(journal, intent, issued, pane, lg) {
+		journal.UpsertIntent(previous)
+		return fmt.Errorf("persist shared attached workspace %s hook issuance", hook)
+	}
+	runWorkspaceBackgroundHook(hook, opts, pane, "", lg)
+	if !persistCleanupHookPhase(journal, intent, completed, pane, lg) {
+		return fmt.Errorf("%w: persist shared attached workspace %s hook completion", errSharedAttachedHookDispatchUncertain, hook)
+	}
+	return nil
+}
+
+func sharedAttachedWorkspaceHookIntent(
+	opts Options,
+	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
+	pane state.Pane,
+) (state.LaunchIntent, bool, error) {
+	intentID, err := sharedAttachedWorkspaceHookIntentID(locked, pane)
+	if err != nil {
+		return state.LaunchIntent{}, false, err
+	}
+	intent, found := journal.FindIntent(intentID)
+	if found {
+		return intent, true, validateSharedAttachedWorkspaceHookIntent(opts.ProjectRoot, pane, intent)
+	}
+	if len(opts.Hooks.Events[hooks.BeforePaneClose]) == 0 && len(opts.Hooks.Events[hooks.PaneClosed]) == 0 {
+		return state.LaunchIntent{}, false, nil
+	}
+	intent, err = newSharedAttachedWorkspaceHookIntent(opts.ProjectRoot, pane, intentID)
+	if err != nil {
+		return state.LaunchIntent{}, false, err
+	}
+	if err := saveWorkspaceCleanupIntent(journal, intent); err != nil {
+		journal.RemoveIntent(intent.ID)
+		return state.LaunchIntent{}, false, err
+	}
+	return intent, true, nil
+}
+
+func sharedAttachedWorkspaceHookIntentID(locked *state.LockedStore, pane state.Pane) (string, error) {
+	path := normalizedWorktreePath(pane.WorktreePath)
+	index, err := locked.EmitterRowIndex(pane.EmitterRowKey, path, pane.WorkspaceLabel)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", backend.ErrOwnedIdentityMismatch, err)
+	}
+	if index < 0 || !locked.Panes[index].RuntimeBinding().Equal(pane.RuntimeBinding()) {
+		return "", fmt.Errorf("%w: shared attached hook row identity changed", backend.ErrOwnedIdentityMismatch)
+	}
+	digest := sha256.Sum256([]byte(pane.EmitterRowKey + "\x00" + path + "\x00" + pane.WorkspaceLabel))
+	return fmt.Sprintf("%s%x", sharedAttachedWorkspaceHookPrefix, digest), nil
+}
+
+func newSharedAttachedWorkspaceHookIntent(
+	projectRoot string,
+	pane state.Pane,
+	intentID string,
+) (state.LaunchIntent, error) {
+	hookPane := sharedAttachedWorkspaceHookPane(pane)
+	intent, err := newUnresolvedWorkspaceCleanupIntent(projectRoot, hookPane, CloseWorktree)
+	if err != nil {
+		return state.LaunchIntent{}, err
+	}
+	worktreeRemovedRequired := false
+	intent.ID, intent.Status = intentID, state.IntentRealized
+	intent.CleanupPhase = state.CleanupWorkspaceClose
+	intent.CleanupDeleteBranchVerified = true
+	intent.CleanupWorktreeRemovedRequired = &worktreeRemovedRequired
+	return intent, nil
+}
+
+func validateSharedAttachedWorkspaceHookIntent(
+	projectRoot string,
+	pane state.Pane,
+	intent state.LaunchIntent,
+) error {
+	if err := validateSavedWorkspaceCleanup(intent, projectRoot, sharedAttachedWorkspaceHookPane(pane), CloseWorktree); err != nil {
+		return err
+	}
+	if intent.Status != state.IntentRealized || intent.CleanupPhase != state.CleanupWorkspaceClose ||
+		intent.CleanupWorktreeRemovedRequired == nil || *intent.CleanupWorktreeRemovedRequired {
+		return fmt.Errorf("saved shared attached workspace hook checkpoint is invalid")
+	}
+	return nil
+}
+
+func sharedAttachedWorkspaceHookPane(pane state.Pane) state.Pane {
+	pane.Parent, pane.RuntimeParent = panelaunch.ManualParentRef, panelaunch.ManualParentRef
+	pane.IssueNum, pane.TaskID = -1, ""
+	return pane
+}
+
+func retireSharedAttachedWorkspaceHookIntents(
+	journal *state.LockedLaunchJournal,
+	worktreePath string,
+) error {
+	path := normalizedWorktreePath(worktreePath)
+	for _, intent := range slices.Clone(journal.Intents) {
+		if !strings.HasPrefix(intent.ID, sharedAttachedWorkspaceHookPrefix) ||
+			normalizedWorktreePath(intent.WorktreePath) != path {
+			continue
+		}
+		if intent.CleanupHookPhase != state.CleanupHookCompleted {
+			return fmt.Errorf("%w: shared attached workspace hook checkpoint %q is incomplete", ErrManualCleanupRequired, intent.CleanupHookPhase)
+		}
+		journal.RemoveIntent(intent.ID)
+	}
+	return nil
 }
 
 func revalidateSharedAttachedWorkspaceTarget(

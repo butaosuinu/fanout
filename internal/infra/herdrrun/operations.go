@@ -827,14 +827,29 @@ func (b *Backend) resolveAttachedWorkspaceCloseTarget(
 		return corebackend.OwnedPaneIdentity{}, probeResult{}, err
 	}
 	current, live := view.find(expected.Ref)
-	if live && !ownedPaneMatches(expected, current) {
-		return corebackend.OwnedPaneIdentity{}, probeResult{}, fmt.Errorf("%w: saved attached target identity changed", corebackend.ErrOwnedIdentityMismatch)
-	}
-	if !live && !view.paneLessAttachedWorkspaceMatches(expected) {
-		return corebackend.OwnedPaneIdentity{}, probeResult{}, fmt.Errorf("%w: saved attached target is neither live nor a matching pane-less workspace", corebackend.ErrOwnedIdentityMismatch)
+	if verifyErr := verifyAttachedWorkspaceCloseSnapshot(view, expected, current, live); verifyErr != nil {
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, verifyErr
 	}
 	probed, err := b.probeOwned(ctx, admission)
 	return cloneOwnedPaneIdentity(expected), probed, err
+}
+
+func verifyAttachedWorkspaceCloseSnapshot(
+	view ownedSnapshotView,
+	expected corebackend.OwnedPaneIdentity,
+	current ownedPaneView,
+	live bool,
+) error {
+	if live && !ownedPaneMatches(expected, current) {
+		return fmt.Errorf("%w: saved attached target identity changed", corebackend.ErrOwnedIdentityMismatch)
+	}
+	if live {
+		return verifyWorkspaceClosePanes(view, expected.Ref)
+	}
+	if !view.paneLessAttachedWorkspaceMatches(expected) {
+		return fmt.Errorf("%w: saved attached target is neither live nor a matching pane-less workspace", corebackend.ErrOwnedIdentityMismatch)
+	}
+	return nil
 }
 
 func (b *Backend) resolveOwnedTarget(ctx context.Context, admission ownedAdmission, expected corebackend.OwnedPaneIdentity) (corebackend.OwnedPaneIdentity, probeResult, error) {
