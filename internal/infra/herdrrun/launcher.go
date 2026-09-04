@@ -85,7 +85,12 @@ func runWorkloadPaneLauncher(
 		fmt.Fprintf(errOut, "fanout herdr pane launcher: %v\n", err)
 		return 1
 	}
-	environment = workloadExecEnvironment(request, intent, environment)
+	relaySocket, err := startCodexAgentSessionRelay(request, intent)
+	if err != nil {
+		fmt.Fprintf(errOut, "fanout herdr pane launcher: %v\n", err)
+		return 1
+	}
+	environment = workloadExecEnvironment(request, intent, environment, relaySocket)
 	argv := append([]string{intent.Launch.Executable}, intent.Launch.Args...)
 	if err := syscall.Exec(intent.Launch.Executable, argv, environment); err != nil {
 		fmt.Fprintf(errOut, "fanout herdr pane launcher: exec workload: %v\n", err)
@@ -98,6 +103,7 @@ func workloadExecEnvironment(
 	request paneLauncherRequest,
 	intent state.LaunchIntent,
 	environment []string,
+	relaySocket string,
 ) []string {
 	if intent.Launch.Agent == "" {
 		return append(environment,
@@ -109,20 +115,27 @@ func workloadExecEnvironment(
 		)
 	}
 	if directAgentIntegrationLaunch(intent.Launch) {
+		integrationSocket := request.socketPath
+		if intent.Launch.Agent == "codex" {
+			integrationSocket = relaySocket
+		}
+		if integrationSocket == "" {
+			return bindHerdrEmitterEnvironment(intent, environment)
+		}
 		environment = append(environment,
-			"HERDR_ENV=1", socketEnv+"="+request.socketPath, paneIDEnv+"="+request.paneID,
+			"HERDR_ENV=1", socketEnv+"="+integrationSocket, paneIDEnv+"="+request.paneID,
 		)
 	}
 	return bindHerdrEmitterEnvironment(intent, environment)
 }
 
 // directAgentIntegrationLaunch reports whether this workload is one an
-// installed Herdr agent integration is granted the owned socket for.
-// The integration reports the provider session over that socket from an
-// agent-side hook, so exactly these workloads receive HERDR_ENV, the socket
-// path, and their own pane id; the session and workspace route stay with the
-// launcher. A workload that never gets them keeps an agent name and no
-// session, which focusOwned then refuses as a partial live-agent identity.
+// installed Herdr agent integration is granted a session-report route for.
+// The integration reports the provider session from an agent-side hook, so
+// exactly these workloads receive HERDR_ENV, an admitted socket path, and
+// their own pane id; the session and workspace route stay with the launcher.
+// A workload that never gets them keeps an agent name and no session, which
+// focusOwned then refuses as a partial live-agent identity.
 //
 // The grant is narrower than "execs the provider CLI", and each exclusion is
 // deliberate. Agent workloads attached to coordinator workspaces share the
