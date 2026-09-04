@@ -19,7 +19,9 @@ v0.8.0 以降は Apache-2.0、0.7.x は AGPL-3.0 + 商用のデュアルライ�
 CLI launch では、fanout がリポジトリの owned session を起動または再採用し、プロジェクトルートの coordinator workspace と子ごとの worktree workspace を作ります。
 選択した agent は pin 済みの non-login fanout launcher から起動されます。
 launcher は operation-bound token を 1 回だけ受け取り、所有者だけが読める environment capsule を 1 回だけ消費して、shell を介さず agent に置き換わります。
-direct claude と direct Codex には公式 session report に必要な owned socket と exact pane ID だけを渡し、session / workspace route は渡しません。
+Claude workload には、公式 session report に必要な owned socket と exact pane ID を渡します。
+direct / attached Codex workload には exact pane ID と、起動した process の終了まで `pane.report_agent_session` だけを受理する所有者専用 relay socket を渡します。
+どちらにも session / workspace route は渡しません。
 fanout は launch の検証後に限り、workspace、pane、terminal、repository、agent、session、socket の identity を `.fanout/state.json` へ保存します。
 インストール済みの herdr integration が provider session の identity を報告した場合は、その値も保存します。
 
@@ -279,7 +281,10 @@ fanout-owned session の中では token を `herdr api snapshot` で読めます
 fanout はこれを代行しません。agent 設定の所有者はあなたです。
 任意の手順ですが、TUI の focus は claude / codex の行でこの hook が報告する session に依存します(herdr 自身の session 復元も同じ session を使います)。
 
-fanout は claude / codex の workload に `HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` だけを渡すので、hook は owned session の socket に届きます。session と workspace の route は渡しません。
+fanout は Claude / Codex の workload に `HERDR_ENV` / `HERDR_SOCKET_PATH` / `HERDR_PANE_ID` を渡します。
+Claude の `HERDR_SOCKET_PATH` は owned socket を指します。
+Codex の `HERDR_SOCKET_PATH` は、検証済みの `pane.report_agent_session` だけを転送し、起動した process とともに閉じる `0600` の relay を指します。
+session と workspace の route は launcher に残します。
 hook 自体はあなたの agent 設定側にあり、owned session の XDG 隔離の外なので置き換えは不要です。
 
 fanout-owned session は herdr の XDG directory を隔離し、workspace / worktree 作成前に plugin registry が空であることを要求します。

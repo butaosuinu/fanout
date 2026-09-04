@@ -176,6 +176,39 @@ func TestInheritFileOnExecClearsCloseOnExec(t *testing.T) {
 	}
 }
 
+func TestWaitForAgentSessionRelayReadyRequiresExactACK(t *testing.T) {
+	tests := []struct {
+		name string
+		ack  string
+		want bool
+	}{
+		{name: "ready", ack: agentSessionRelayReadyACK, want: true},
+		{name: "wrong", ack: "X"},
+		{name: "missing"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			read, write, pipeErr := os.Pipe()
+			if pipeErr != nil {
+				t.Fatal(pipeErr)
+			}
+			if test.ack != "" {
+				if _, writeErr := write.Write([]byte(test.ack)); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			}
+			if closeErr := write.Close(); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			readyErr := waitForAgentSessionRelayReady(read)
+			_ = read.Close() // The handshake result is authoritative.
+			if (readyErr == nil) != test.want {
+				t.Fatalf("waitForAgentSessionRelayReady() error = %v, want success %t", readyErr, test.want)
+			}
+		})
+	}
+}
+
 func TestAcceptedAgentSessionReportResponseRequiresSuccessForSameRequest(t *testing.T) {
 	tests := []struct {
 		name     string

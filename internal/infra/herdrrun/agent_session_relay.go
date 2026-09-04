@@ -31,6 +31,8 @@ const (
 	agentSessionRelayBootstrapLifetimeFD = 3
 	agentSessionRelayListenerFD          = 3
 	agentSessionRelayServeLifetimeFD     = 4
+	agentSessionRelayReadyFD             = 5
+	agentSessionRelayReadyACK            = "R"
 	maxAgentSessionReportBytes           = 16 << 10
 )
 
@@ -214,14 +216,27 @@ func startDetachedAgentSessionRelay(
 	request agentSessionRelayRequest,
 	listener, lifetime *os.File,
 ) error {
+	readyRead, readyWrite, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("create relay readiness pipe: %w", err)
+	}
+	defer func() {
+		_ = readyRead.Close() // The readiness result is authoritative.
+	}()
 	serve := request
 	serve.mode = agentSessionRelayServe
 	cmd := exec.Command(request.executable)
-	cmd.Env, cmd.ExtraFiles = serve.environment(), []*os.File{listener, lifetime}
+	cmd.Env, cmd.ExtraFiles = serve.environment(), []*os.File{listener, lifetime, readyWrite}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
+		_ = readyWrite.Close() // No child can own the descriptor after Start fails.
 		return fmt.Errorf("start relay server: %w", err)
+	}
+	_ = readyWrite.Close() // Only the serve child may acknowledge readiness.
+	if err := waitForAgentSessionRelayReady(readyRead); err != nil {
+		stopStartedOwnedCommand(cmd)
+		return err
 	}
 	if err := cmd.Process.Release(); err != nil {
 		killErr := cmd.Process.Kill()
@@ -231,29 +246,30 @@ func startDetachedAgentSessionRelay(
 	return nil
 }
 
+func waitForAgentSessionRelayReady(reader *os.File) error {
+	if err := reader.SetReadDeadline(time.Now().Add(ownedReadyTimeout)); err != nil {
+		return fmt.Errorf("bound relay readiness handshake: %w", err)
+	}
+	one := []byte{0}
+	if _, err := io.ReadFull(reader, one); err != nil || string(one) != agentSessionRelayReadyACK {
+		return fmt.Errorf("agent-session relay readiness handshake failed")
+	}
+	return nil
+}
+
 func serveAgentSessionRelay(request agentSessionRelayRequest) error {
 	intent, err := currentAgentSessionRelayIntent(request)
 	if err != nil {
 		return err
 	}
-	file := os.NewFile(agentSessionRelayListenerFD, "herdr-agent-session-relay")
-	if file == nil {
-		return fmt.Errorf("relay listener is unavailable")
-	}
-	listener, err := net.FileListener(file)
-	_ = file.Close() // FileListener owns a duplicate, so the inherited descriptor can close.
+	unixListener, err := adoptAgentSessionRelayListener()
 	if err != nil {
-		return fmt.Errorf("adopt relay listener: %w", err)
+		return err
 	}
 	defer func() {
-		_ = listener.Close()              // Best effort after the relay has produced its final result.
+		_ = unixListener.Close()          // Best effort after the relay has produced its final result.
 		_ = os.Remove(request.socketPath) // Best effort because close may already unlink it.
 	}()
-	unixListener, ok := listener.(*net.UnixListener)
-	if !ok {
-		return fmt.Errorf("relay listener is not a Unix socket")
-	}
-	unixListener.SetUnlinkOnClose(true)
 	lifetime := os.NewFile(agentSessionRelayServeLifetimeFD, "herdr-agent-session-relay-lifetime")
 	if lifetime == nil {
 		return fmt.Errorf("relay lifetime is unavailable")
@@ -261,7 +277,42 @@ func serveAgentSessionRelay(request agentSessionRelayRequest) error {
 	defer func() {
 		_ = lifetime.Close() // Closing the relay also releases its launch-lifetime descriptor.
 	}()
+	if err := acknowledgeAgentSessionRelayReady(); err != nil {
+		return err
+	}
 	return serveAgentSessionReports(intent, unixListener, lifetime)
+}
+
+func adoptAgentSessionRelayListener() (*net.UnixListener, error) {
+	file := os.NewFile(agentSessionRelayListenerFD, "herdr-agent-session-relay")
+	if file == nil {
+		return nil, fmt.Errorf("relay listener is unavailable")
+	}
+	listener, err := net.FileListener(file)
+	_ = file.Close() // FileListener owns a duplicate, so the inherited descriptor can close.
+	if err != nil {
+		return nil, fmt.Errorf("adopt relay listener: %w", err)
+	}
+	unixListener, ok := listener.(*net.UnixListener)
+	if !ok {
+		_ = listener.Close() // The rejected inherited listener has no caller owner.
+		return nil, fmt.Errorf("relay listener is not a Unix socket")
+	}
+	unixListener.SetUnlinkOnClose(true)
+	return unixListener, nil
+}
+
+func acknowledgeAgentSessionRelayReady() error {
+	ready := os.NewFile(agentSessionRelayReadyFD, "herdr-agent-session-relay-ready")
+	if ready == nil {
+		return fmt.Errorf("relay readiness descriptor is unavailable")
+	}
+	if _, err := ready.Write([]byte(agentSessionRelayReadyACK)); err != nil {
+		_ = ready.Close() // Best effort while returning the readiness error.
+		return fmt.Errorf("acknowledge agent-session relay readiness: %w", err)
+	}
+	_ = ready.Close() // The bootstrap received the only readiness acknowledgement.
+	return nil
 }
 
 func serveAgentSessionReports(
