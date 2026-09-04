@@ -2,9 +2,15 @@ package herdrrun
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -15,7 +21,7 @@ func TestValidateAgentSessionReportRequiresRestrictedMethodAndIdentity(t *testin
 		Kind: state.IntentWorktree, Resource: state.RuntimeResource{PaneID: "w1:p1"},
 	}
 	report := validAgentSessionReport()
-	if err := validateAgentSessionReport(report, intent); err != nil {
+	if err := validateAgentSessionReport(report, intent, false); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
@@ -37,7 +43,7 @@ func TestValidateAgentSessionReportRequiresRestrictedMethodAndIdentity(t *testin
 		t.Run(test.name, func(t *testing.T) {
 			changed := report
 			test.mutate(&changed)
-			if err := validateAgentSessionReport(changed, intent); err == nil {
+			if err := validateAgentSessionReport(changed, intent, false); err == nil {
 				t.Fatal("agent-session relay accepted a report outside its launch identity")
 			}
 		})
@@ -52,18 +58,196 @@ func TestValidateAgentSessionReportPinsResumeConversation(t *testing.T) {
 		},
 	}
 	report := validAgentSessionReport()
-	if err := validateAgentSessionReport(report, intent); err != nil {
+	if err := validateAgentSessionReport(report, intent, true); err != nil {
 		t.Fatal(err)
 	}
 	report.Params.AgentSessionID = "session-2"
-	if err := validateAgentSessionReport(report, intent); err == nil {
+	if err := validateAgentSessionReport(report, intent, true); err == nil {
 		t.Fatal("resume relay accepted a different Codex conversation")
+	}
+	if err := validateAgentSessionReport(report, intent, false); err != nil {
+		t.Fatalf("established resume relay rejected a later Codex conversation: %v", err)
 	}
 	report.Params.AgentSessionID = "session-1"
 	intent.ResumeAgentSession = nil
-	if err := validateAgentSessionReport(report, intent); err == nil {
+	if err := validateAgentSessionReport(report, intent, true); err == nil {
 		t.Fatal("resume relay accepted a missing saved conversation")
 	}
+}
+
+func TestAgentSessionRelaySurvivesFinalizationAndStopsWithWorkload(t *testing.T) {
+	t.Setenv("TMPDIR", "/tmp")
+	socketDir := t.TempDir()
+	ownedPath := filepath.Join(socketDir, "owned.sock")
+	owned := listenTestUnix(t, ownedPath)
+	defer func() {
+		_ = owned.Close() // The test owns this listener and checks request results instead.
+	}()
+	forwarded := make(chan agentSessionReport, 2)
+	go serveTestAgentSessionReports(owned, forwarded, 2)
+
+	relayPath := filepath.Join(socketDir, "relay.sock")
+	relay := listenTestUnix(t, relayPath)
+	lifetimeRead, lifetimeWrite, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatal(pipeErr)
+	}
+	defer func() {
+		_ = lifetimeRead.Close() // The relay result is authoritative in this test.
+	}()
+	intent := state.LaunchIntent{
+		Kind: state.IntentResume, SocketPath: ownedPath,
+		// The serve process has already authenticated the active intent. Its old
+		// operation deadline represents the normal post-launch finalized state.
+		ExpiresUnixMS: time.Now().Add(-time.Minute).UnixMilli(),
+		Resource:      state.RuntimeResource{PaneID: "w1:p1"},
+		ResumeAgentSession: &backend.AgentSessionRef{
+			Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-1",
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- serveAgentSessionReports(intent, relay, lifetimeRead) }()
+
+	mismatch := validAgentSessionReport()
+	mismatch.Params.AgentSessionID = "session-2"
+	if err := sendTestAgentSessionReport(relayPath, mismatch); err == nil {
+		t.Fatal("resume relay forwarded a different initial conversation")
+	}
+	if err := sendTestAgentSessionReport(relayPath, validAgentSessionReport()); err != nil {
+		t.Fatal(err)
+	}
+	if err := sendTestAgentSessionReport(relayPath, mismatch); err != nil {
+		t.Fatalf("resume relay rejected /new after establishing the saved conversation: %v", err)
+	}
+	if first, second := <-forwarded, <-forwarded; first.Params.AgentSessionID != "session-1" ||
+		second.Params.AgentSessionID != "session-2" {
+		t.Fatalf("forwarded sessions = %q, %q", first.Params.AgentSessionID, second.Params.AgentSessionID)
+	}
+	pending, dialErr := net.DialUnix("unix", nil, &net.UnixAddr{Name: relayPath, Net: "unix"})
+	if dialErr != nil {
+		t.Fatal(dialErr)
+	}
+	if err := pending.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := lifetimeWrite.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("relay remained alive after the workload lifetime closed")
+	}
+	if _, err := pending.Write([]byte(`{}` + "\n")); err == nil {
+		_, err = bufio.NewReader(pending).ReadByte()
+		if err == nil {
+			t.Fatal("relay kept an accepted connection open after the workload lifetime closed")
+		}
+	}
+	_ = pending.Close() // The lifetime assertion is complete.
+}
+
+func TestInheritFileOnExecClearsCloseOnExec(t *testing.T) {
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = read.Close() // The descriptor flag assertion is authoritative.
+		_ = write.Close()
+	}()
+	if _, _, errno := syscall.Syscall(
+		syscall.SYS_FCNTL, write.Fd(), syscall.F_SETFD, syscall.FD_CLOEXEC,
+	); errno != 0 {
+		t.Fatal(errno)
+	}
+	if err := inheritFileOnExec(write); err != nil {
+		t.Fatal(err)
+	}
+	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, write.Fd(), syscall.F_GETFD, 0)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	if flags&syscall.FD_CLOEXEC != 0 {
+		t.Fatal("relay lifetime descriptor still closes on workload exec")
+	}
+}
+
+func TestAcceptedAgentSessionReportResponseRequiresSuccessForSameRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+		want     bool
+	}{
+		{name: "success", response: `{"id":"hook","result":{"type":"ok"}}`, want: true},
+		{name: "other request", response: `{"id":"other","result":{"type":"ok"}}`},
+		{name: "error", response: `{"id":"hook","error":{"message":"rejected"}}`},
+		{name: "null result", response: `{"id":"hook","result":null}`},
+		{name: "invalid envelope", response: `{"id":"hook","result":{}} trailing`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := acceptedAgentSessionReportResponse([]byte(test.response), "hook"); got != test.want {
+				t.Fatalf("acceptedAgentSessionReportResponse() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func listenTestUnix(t *testing.T, path string) *net.UnixListener {
+	t.Helper()
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return listener
+}
+
+func serveTestAgentSessionReports(
+	listener *net.UnixListener,
+	forwarded chan<- agentSessionReport,
+	count int,
+) {
+	for range count {
+		connection, err := listener.AcceptUnix()
+		if err != nil {
+			return
+		}
+		report, err := readAgentSessionReport(connection)
+		if err == nil {
+			forwarded <- report
+			response, marshalErr := json.Marshal(agentSessionReportResponse{ID: report.ID, Result: []byte(`{}`)})
+			if marshalErr == nil {
+				_, _ = connection.Write(append(response, '\n')) // The client assertion checks delivery.
+			}
+		}
+		_ = connection.Close()
+	}
+}
+
+func sendTestAgentSessionReport(path string, report agentSessionReport) error {
+	connection, dialErr := net.DialUnix("unix", nil, &net.UnixAddr{Name: path, Net: "unix"})
+	if dialErr != nil {
+		return dialErr
+	}
+	defer func() {
+		_ = connection.Close() // The response read is authoritative.
+	}()
+	if deadlineErr := connection.SetDeadline(time.Now().Add(time.Second)); deadlineErr != nil {
+		return deadlineErr
+	}
+	payload, marshalErr := json.Marshal(report)
+	if marshalErr != nil {
+		return marshalErr
+	}
+	if _, writeErr := connection.Write(append(payload, '\n')); writeErr != nil {
+		return writeErr
+	}
+	_, readErr := bufio.NewReader(connection).ReadBytes('\n')
+	return readErr
 }
 
 func TestReadAgentSessionReportRejectsExtraControlFields(t *testing.T) {

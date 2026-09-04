@@ -20,16 +20,18 @@ import (
 )
 
 const (
-	agentSessionRelayModeEnv       = "FANOUT_HERDR_AGENT_SESSION_RELAY"
-	agentSessionRelayControlEnv    = "FANOUT_HERDR_RELAY_CONTROL_PATH"
-	agentSessionRelayExecutableEnv = "FANOUT_HERDR_RELAY_EXECUTABLE"
-	agentSessionRelayIntentEnv     = "FANOUT_HERDR_RELAY_INTENT_ID"
-	agentSessionRelayNonceEnv      = "FANOUT_HERDR_RELAY_NONCE"
-	agentSessionRelaySocketEnv     = "FANOUT_HERDR_RELAY_SOCKET_PATH"
-	agentSessionRelayBootstrap     = "bootstrap"
-	agentSessionRelayServe         = "serve"
-	agentSessionRelayListenerFD    = 3
-	maxAgentSessionReportBytes     = 16 << 10
+	agentSessionRelayModeEnv             = "FANOUT_HERDR_AGENT_SESSION_RELAY"
+	agentSessionRelayControlEnv          = "FANOUT_HERDR_RELAY_CONTROL_PATH"
+	agentSessionRelayExecutableEnv       = "FANOUT_HERDR_RELAY_EXECUTABLE"
+	agentSessionRelayIntentEnv           = "FANOUT_HERDR_RELAY_INTENT_ID"
+	agentSessionRelayNonceEnv            = "FANOUT_HERDR_RELAY_NONCE"
+	agentSessionRelaySocketEnv           = "FANOUT_HERDR_RELAY_SOCKET_PATH"
+	agentSessionRelayBootstrap           = "bootstrap"
+	agentSessionRelayServe               = "serve"
+	agentSessionRelayBootstrapLifetimeFD = 3
+	agentSessionRelayListenerFD          = 3
+	agentSessionRelayServeLifetimeFD     = 4
+	maxAgentSessionReportBytes           = 16 << 10
 )
 
 type agentSessionRelayRequest struct {
@@ -54,6 +56,12 @@ type agentSessionReportParams struct {
 	Seq                int64  `json:"seq"`
 	AgentSessionID     string `json:"agent_session_id"`
 	SessionStartSource string `json:"session_start_source,omitempty"`
+}
+
+type agentSessionReportResponse struct {
+	ID     string          `json:"id"`
+	Result json.RawMessage `json:"result"`
+	Error  json.RawMessage `json:"error"`
 }
 
 // IsAgentSessionRelayRequest reports whether this process is an internal,
@@ -81,13 +89,20 @@ func RunAgentSessionRelay(errOut io.Writer) int {
 func startCodexAgentSessionRelay(
 	request paneLauncherRequest,
 	intent state.LaunchIntent,
-) (string, error) {
+) (string, *os.File, error) {
 	if !codexAgentSessionRelayLaunch(intent) {
-		return "", nil
+		return "", nil, nil
 	}
 	if !workloadLaunchNonce.MatchString(intent.Launch.Nonce) {
-		return "", fmt.Errorf("invalid Codex agent-session relay nonce")
+		return "", nil, fmt.Errorf("invalid Codex agent-session relay nonce")
 	}
+	lifetimeRead, lifetimeWrite, err := os.Pipe()
+	if err != nil {
+		return "", nil, fmt.Errorf("create Codex agent-session relay lifetime: %w", err)
+	}
+	defer func() {
+		_ = lifetimeRead.Close() // The bootstrap child owns its duplicated descriptor after Start.
+	}()
 	socketPath := filepath.Join(
 		launcherRuntimeDir(request.launcherPath), ".asr-"+intent.Launch.Nonce[:16]+".sock",
 	)
@@ -96,13 +111,23 @@ func startCodexAgentSessionRelay(
 		executable: request.launcherPath, intentID: intent.ID,
 		nonce: intent.Launch.Nonce, socketPath: socketPath,
 	}
-	cmd := exec.Command(request.launcherPath)
-	cmd.Env = relay.environment()
+	if err := runAgentSessionRelayBootstrap(relay, lifetimeRead); err != nil {
+		_ = lifetimeWrite.Close() // End any detached relay started before the bootstrap error.
+		return "", nil, err
+	}
+	return socketPath, lifetimeWrite, nil
+}
+
+func runAgentSessionRelayBootstrap(request agentSessionRelayRequest, lifetime *os.File) error {
+	cmd := exec.Command(request.executable)
+	cmd.Env, cmd.ExtraFiles = request.environment(), []*os.File{lifetime}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("start Codex agent-session relay: %w: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf(
+			"start Codex agent-session relay: %w: %s", err, strings.TrimSpace(string(out)),
+		)
 	}
-	return socketPath, nil
+	return nil
 }
 
 func codexAgentSessionRelayLaunch(intent state.LaunchIntent) bool {
@@ -143,27 +168,27 @@ func bootstrapAgentSessionRelay(request agentSessionRelayRequest) error {
 	if _, err := currentAgentSessionRelayIntent(request); err != nil {
 		return err
 	}
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: request.socketPath, Net: "unix"})
+	lifetime := os.NewFile(agentSessionRelayBootstrapLifetimeFD, "herdr-agent-session-relay-lifetime")
+	if lifetime == nil {
+		return fmt.Errorf("relay lifetime is unavailable")
+	}
+	defer func() {
+		_ = lifetime.Close() // The detached relay owns its duplicated descriptor after Start.
+	}()
+	listener, err := listenAgentSessionRelay(request.socketPath)
 	if err != nil {
-		return fmt.Errorf("listen on restricted relay socket: %w", err)
-	}
-	listener.SetUnlinkOnClose(false)
-	cleanup := func() {
-		_ = listener.Close()              // Best effort while returning the primary bootstrap error.
-		_ = os.Remove(request.socketPath) // Best effort for a socket that may already be absent.
-	}
-	if chmodErr := os.Chmod(request.socketPath, 0o600); chmodErr != nil {
-		cleanup()
-		return fmt.Errorf("protect relay socket: %w", chmodErr)
+		return err
 	}
 	listenerFile, err := listener.File()
 	if err != nil {
-		cleanup()
+		_ = listener.Close()              // Best effort while returning the duplication error.
+		_ = os.Remove(request.socketPath) // Best effort for a socket that may already be absent.
 		return fmt.Errorf("duplicate relay listener: %w", err)
 	}
-	if err := startDetachedAgentSessionRelay(request, listenerFile); err != nil {
-		_ = listenerFile.Close() // Best effort while returning the relay start error.
-		cleanup()
+	if err := startDetachedAgentSessionRelay(request, listenerFile, lifetime); err != nil {
+		_ = listenerFile.Close()          // Best effort while returning the relay start error.
+		_ = listener.Close()              // Best effort while returning the relay start error.
+		_ = os.Remove(request.socketPath) // Best effort for a socket that may already be absent.
 		return err
 	}
 	_ = listenerFile.Close() // The detached child owns its duplicated descriptor.
@@ -171,11 +196,28 @@ func bootstrapAgentSessionRelay(request agentSessionRelayRequest) error {
 	return nil
 }
 
-func startDetachedAgentSessionRelay(request agentSessionRelayRequest, listener *os.File) error {
+func listenAgentSessionRelay(socketPath string) (*net.UnixListener, error) {
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
+	if err != nil {
+		return nil, fmt.Errorf("listen on restricted relay socket: %w", err)
+	}
+	listener.SetUnlinkOnClose(false)
+	if chmodErr := os.Chmod(socketPath, 0o600); chmodErr != nil {
+		_ = listener.Close()      // Best effort while returning the permission error.
+		_ = os.Remove(socketPath) // Best effort for a socket that may already be absent.
+		return nil, fmt.Errorf("protect relay socket: %w", chmodErr)
+	}
+	return listener, nil
+}
+
+func startDetachedAgentSessionRelay(
+	request agentSessionRelayRequest,
+	listener, lifetime *os.File,
+) error {
 	serve := request
 	serve.mode = agentSessionRelayServe
 	cmd := exec.Command(request.executable)
-	cmd.Env, cmd.ExtraFiles = serve.environment(), []*os.File{listener}
+	cmd.Env, cmd.ExtraFiles = serve.environment(), []*os.File{listener, lifetime}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
@@ -212,43 +254,122 @@ func serveAgentSessionRelay(request agentSessionRelayRequest) error {
 		return fmt.Errorf("relay listener is not a Unix socket")
 	}
 	unixListener.SetUnlinkOnClose(true)
-	if err := unixListener.SetDeadline(time.UnixMilli(intent.ExpiresUnixMS)); err != nil {
-		return fmt.Errorf("bound relay lifetime: %w", err)
+	lifetime := os.NewFile(agentSessionRelayServeLifetimeFD, "herdr-agent-session-relay-lifetime")
+	if lifetime == nil {
+		return fmt.Errorf("relay lifetime is unavailable")
 	}
-	return acceptAgentSessionReport(intent, unixListener)
+	defer func() {
+		_ = lifetime.Close() // Closing the relay also releases its launch-lifetime descriptor.
+	}()
+	return serveAgentSessionReports(intent, unixListener, lifetime)
 }
 
-func acceptAgentSessionReport(intent state.LaunchIntent, listener *net.UnixListener) error {
+func serveAgentSessionReports(
+	intent state.LaunchIntent,
+	listener *net.UnixListener,
+	lifetime io.Reader,
+) error {
+	lifetimeEnded := make(chan struct{})
+	lifetimeResult := make(chan error, 1)
+	go func() {
+		_, lifetimeErr := io.Copy(io.Discard, lifetime)
+		lifetimeResult <- lifetimeErr
+		close(lifetimeEnded)
+		_ = listener.Close() // Wake AcceptUnix when the launched workload exits.
+	}()
+	if err := acceptAgentSessionReports(intent, listener, lifetimeEnded); err != nil {
+		return err
+	}
+	if lifetimeErr := <-lifetimeResult; lifetimeErr != nil {
+		return fmt.Errorf("watch relay lifetime: %w", lifetimeErr)
+	}
+	return nil
+}
+
+func acceptAgentSessionReports(
+	intent state.LaunchIntent,
+	listener *net.UnixListener,
+	lifetimeEnded <-chan struct{},
+) error {
+	resumePending := intent.Kind == state.IntentResume
 	for {
 		connection, err := listener.AcceptUnix()
 		if err != nil {
+			if channelClosed(lifetimeEnded) {
+				return nil
+			}
 			return fmt.Errorf("accept agent-session report: %w", err)
 		}
-		err = relayAgentSessionReport(intent, connection)
+		connectionDone := closeConnectionWhenLifetimeEnds(connection, lifetimeEnded)
+		forwarded, relayErr := relayAgentSessionReport(intent, connection, resumePending)
+		close(connectionDone)
 		_ = connection.Close() // The relay result is authoritative; the peer may close first.
-		if err == nil {
+		if channelClosed(lifetimeEnded) {
 			return nil
 		}
+		if forwarded {
+			resumePending = false
+		}
+		_ = relayErr // Invalid or failed reports do not terminate the launch-scoped relay.
 	}
 }
 
-func relayAgentSessionReport(intent state.LaunchIntent, connection *net.UnixConn) error {
+func closeConnectionWhenLifetimeEnds(
+	connection *net.UnixConn,
+	lifetimeEnded <-chan struct{},
+) chan struct{} {
+	connectionDone := make(chan struct{})
+	go func() {
+		select {
+		case <-lifetimeEnded:
+			_ = connection.Close() // The workload lifetime is authoritative over this request.
+		case <-connectionDone:
+		}
+	}()
+	return connectionDone
+}
+
+func channelClosed(channel <-chan struct{}) bool {
+	select {
+	case <-channel:
+		return true
+	default:
+		return false
+	}
+}
+
+func relayAgentSessionReport(
+	intent state.LaunchIntent,
+	connection *net.UnixConn,
+	requireResumeMatch bool,
+) (bool, error) {
 	if err := connection.SetDeadline(time.Now().Add(commandTimeout)); err != nil {
-		return fmt.Errorf("bound agent-session report: %w", err)
+		return false, fmt.Errorf("bound agent-session report: %w", err)
 	}
 	report, err := readAgentSessionReport(connection)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if validateErr := validateAgentSessionReport(report, intent); validateErr != nil {
-		return validateErr
+	if validateErr := validateAgentSessionReport(report, intent, requireResumeMatch); validateErr != nil {
+		return false, validateErr
 	}
 	response, err := forwardAgentSessionReport(intent.SocketPath, report)
 	if err != nil {
-		return err
+		return false, err
 	}
 	_, err = connection.Write(response)
-	return err
+	return acceptedAgentSessionReportResponse(response, report.ID), err
+}
+
+func acceptedAgentSessionReportResponse(response []byte, requestID string) bool {
+	var envelope agentSessionReportResponse
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		return false
+	}
+	result := strings.TrimSpace(string(envelope.Result))
+	reportError := strings.TrimSpace(string(envelope.Error))
+	return envelope.ID == requestID && result != "" && result != "null" &&
+		(reportError == "" || reportError == "null")
 }
 
 func readAgentSessionReport(reader io.Reader) (agentSessionReport, error) {
@@ -278,7 +399,11 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	return fmt.Errorf("agent-session report has trailing JSON")
 }
 
-func validateAgentSessionReport(report agentSessionReport, intent state.LaunchIntent) error {
+func validateAgentSessionReport(
+	report agentSessionReport,
+	intent state.LaunchIntent,
+	requireResumeMatch bool,
+) error {
 	requirements := []bool{
 		report.ID != "", len(report.ID) <= 256,
 		report.Method == "pane.report_agent_session",
@@ -288,7 +413,7 @@ func validateAgentSessionReport(report agentSessionReport, intent state.LaunchIn
 		strings.TrimSpace(report.Params.AgentSessionID) == report.Params.AgentSessionID,
 	}
 	valid := !slices.Contains(requirements, false)
-	if intent.Kind == state.IntentResume {
+	if intent.Kind == state.IntentResume && requireResumeMatch {
 		valid = valid && intent.ResumeAgentSession != nil &&
 			report.Params.AgentSessionID == intent.ResumeAgentSession.Value
 	}
