@@ -563,7 +563,7 @@ func runBeforeWorktreeRemoveHooks(opts Options, locked *state.LockedStore, panes
 			continue
 		}
 		if workspaceRuntimeRow(pane) {
-			if !runWorkspaceCleanupHook(opts, locked, pane, mode, hooks.BeforeWorktreeRemove, lg) {
+			if !runWorkspaceBeforeWorktreeRemoveHook(opts, locked, pane, mode, lg) {
 				return false
 			}
 			continue
@@ -573,6 +573,23 @@ func runBeforeWorktreeRemoveHooks(opts Options, locked *state.LockedStore, panes
 		}
 	}
 	return true
+}
+
+func runWorkspaceBeforeWorktreeRemoveHook(
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+	mode CloseMode,
+	lg Logger,
+) bool {
+	if len(opts.Hooks.Events[hooks.BeforeWorktreeRemove]) != 0 {
+		attached := sharedAttachedWorkspaceRows(locked.Panes, pane.WorktreePath)
+		if err := validateSharedAttachedWorkspaceHookPreflight(opts, locked, pane, attached, mode); err != nil {
+			lg.Err("%s: Herdr %s hook preflight failed: %v", paneLabel(pane), hooks.BeforeWorktreeRemove, err)
+			return false
+		}
+	}
+	return runWorkspaceCleanupHook(opts, locked, pane, mode, hooks.BeforeWorktreeRemove, lg)
 }
 
 func closeRuntimePanes(opts Options, panes []state.Pane, mode CloseMode, lg Logger, windows map[string]struct{}) bool {
@@ -639,6 +656,7 @@ func runWorkspaceCleanupHook(opts Options, locked *state.LockedStore, pane state
 	}
 	journal, intent, err := prepareWorkspaceCleanupHook(opts, locked, pane, mode)
 	if err != nil {
+		err = persistWorkspaceCleanupHookPreflightFailure(opts, locked, pane, mode, hook, err)
 		lg.Err("%s: Herdr %s hook preflight failed: %v", paneLabel(pane), hook, err)
 		return false
 	}
@@ -647,7 +665,7 @@ func runWorkspaceCleanupHook(opts Options, locked *state.LockedStore, pane state
 	}
 	issued, phase := cleanupHookCheckpoint(hook)
 	if cleanupHookPhaseReached(intent.CleanupHookPhase, phase) {
-		return true
+		return completeWorkspacePreHookFenceAfterDispatch(opts, locked, pane, mode, hook, intent, lg)
 	}
 	hookPane := cleanupHookPane(pane, intent.Resource)
 	if !persistCleanupHookPhase(journal, &intent, issued, hookPane, lg) {
@@ -657,10 +675,32 @@ func runWorkspaceCleanupHook(opts Options, locked *state.LockedStore, pane state
 		if !runBlockingHook(hook, opts, hookPane, "", lg) {
 			return false
 		}
-	} else {
-		runWorkspaceBackgroundHook(hook, opts, hookPane, "", lg)
+		if !persistCleanupHookPhase(journal, &intent, phase, hookPane, lg) {
+			return false
+		}
+		return completeWorkspacePreHookFenceAfterDispatch(opts, locked, pane, mode, hook, intent, lg)
 	}
+	runWorkspaceBackgroundHook(hook, opts, hookPane, "", lg)
 	return persistCleanupHookPhase(journal, &intent, phase, hookPane, lg)
+}
+
+func completeWorkspacePreHookFenceAfterDispatch(
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+	mode CloseMode,
+	hook hooks.Type,
+	intent state.LaunchIntent,
+	lg Logger,
+) bool {
+	if hook != hooks.BeforeWorktreeRemove || !workspacePreHookIdentityFence(intent) {
+		return true
+	}
+	if err := completeWorkspacePreHookFence(opts, locked, pane, mode); err != nil {
+		lg.Err("%s: rebuild Herdr cleanup after %s: %v", paneLabel(pane), hook, err)
+		return false
+	}
+	return true
 }
 
 func allowUnconfiguredWorkspaceCleanupHook(

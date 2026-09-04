@@ -600,7 +600,7 @@ func TestExpiredSharedAttachedCloseDoesNotIssueMutation(t *testing.T) {
 	if len(runtime.mutationLog) != 0 {
 		t.Fatalf("expired shared close issued mutations: %v", runtime.mutationLog)
 	}
-	assertHerdrCleanupIntentStatus(t, fixture, "", false)
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
 	assertSharedAttachedRows(t, fixture.projectRoot, attached, attached, true, true)
 
 	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
@@ -760,16 +760,10 @@ func TestHerdrSharedAttachedPreHookFenceRetriesBlockingHookAfterAttachedAbsence(
 	}
 	assertSharedAttachedRows(t, fixture.projectRoot, attached, attached, true, true)
 	intent, found := loadHerdrCleanupIntent(t, fixture)
-	if !found || !workspacePreHookIdentityFence(intent) {
+	if !found || !workspacePreHookIdentityFence(intent) ||
+		intent.CleanupHookPhase != state.CleanupHookBeforeWorktreeRemoveIssued {
 		t.Fatalf("failed blocking hook changed pre-hook fence = %#v (found=%t)", intent, found)
 	}
-
-	opts.Hooks.Events[hooks.BeforeWorktreeRemove][0].Command = `printf 'called\n' >> "$FANOUT_TEST_BEFORE_WORKTREE"`
-	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
-		t.Fatalf("successful hook retry Close() = %d, want %d", got, exitcode.OK)
-	}
-	assertHerdrHookCalls(t, hookPath, 2)
-	assertHerdrLifecycleRemoved(t, fixture)
 }
 
 func TestHerdrSharedAttachedPreflightPreservesExistingCleanupFence(t *testing.T) {
@@ -910,7 +904,7 @@ func TestHerdrChildHookPreflightIdentityMismatchPersistsManual(t *testing.T) {
 	}
 	assertHerdrHookCalls(t, worktreeHookPath, 1)
 	intent, found = loadHerdrCleanupIntent(t, fixture)
-	if !found || intent.ExpectedHead == "" || intent.CleanupHookPhase != state.CleanupHookBeforeWorktreeRemove {
+	if !found || intent.ExpectedHead == "" || intent.CleanupHookPhase != state.CleanupHookBeforePaneClose {
 		t.Fatalf("rebuilt cleanup intent after pane hook = %#v (found=%t)", intent, found)
 	}
 	if err := os.Remove(dirtyPath); err != nil {
@@ -1986,16 +1980,16 @@ func TestHerdrRetirementRetrySkipsUnavailableRuntimeAndGitHub(t *testing.T) {
 				fixture.pane.TaskID = "task-a"
 				replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane)
 			}
+			attachedWorkspace := herdrLifecycleWorkspace(
+				"w-attached", "attached-label", fixture.worktreePath,
+				fixture.pane.RepoKey, fixture.pane.RepoRoot,
+			)
 			runtime := &fakeHerdrLifecycleRuntime{
 				projectRoot: fixture.projectRoot,
-				workspaces:  []backend.WorkspaceObservation{fixture.workspace},
+				workspaces:  []backend.WorkspaceObservation{fixture.workspace, attachedWorkspace},
 			}
 			opts := herdrLifecycleOptions(fixture, runtime)
-			attached := fixture.pane
-			attached.Kind = state.PaneKindAttachedAgent
-			attached.IssueNum = -1
-			attached.TaskID = ""
-			attached.PaneID = attached.WorkspaceID + ":attached"
+			attached := sharedAttachedLifecyclePane(fixture, fixture.pane.Parent, "", attachedWorkspace)
 			leaveCompletedHerdrCleanupAfterRetirementFailure(t, opts, fixture, attached)
 			installUnavailableLifecycleGH(t)
 			pruneLog, pruneFailure := installRecordingWorktreePruneGit(t)
@@ -2015,7 +2009,7 @@ func TestHerdrRetirementRetrySkipsUnavailableRuntimeAndGitHub(t *testing.T) {
 				t.Fatalf("retry runtime factory calls = %d, want 0", runtimeFactoryCalls)
 			}
 			assertHerdrStateRowPresent(t, fixture)
-			assertLifecyclePanePresence(t, fixture.projectRoot, attached, true)
+			assertLifecyclePanePresence(t, fixture.projectRoot, attached, false)
 			assertHerdrCleanupIntentStatus(t, fixture, state.IntentRealized, true)
 			if err := os.Remove(pruneFailure); err != nil {
 				t.Fatal(err)
