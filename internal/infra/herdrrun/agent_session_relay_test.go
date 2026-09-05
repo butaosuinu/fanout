@@ -155,13 +155,13 @@ func TestAgentSessionRelaySurvivesFinalizationAndStopsWithWorkload(t *testing.T)
 
 func TestAgentSessionRelayProcessLifetimeEndsBeforeDescendant(t *testing.T) {
 	cmd := exec.Command("sh", "-c", "read ready; sleep 30 >/dev/null 2>&1 & echo $!")
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
+	stdin, pipeErr := cmd.StdinPipe()
+	if pipeErr != nil {
+		t.Fatal(pipeErr)
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
+	stdout, pipeErr := cmd.StdoutPipe()
+	if pipeErr != nil {
+		t.Fatal(pipeErr)
 	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -178,9 +178,9 @@ func TestAgentSessionRelayProcessLifetimeEndsBeforeDescendant(t *testing.T) {
 			}
 		}
 	})
-	lifetime, err := newAgentSessionRelayProcessLifetime(cmd.Process.Pid)
-	if err != nil {
-		t.Fatal(err)
+	lifetime, lifetimeErr := newAgentSessionRelayProcessLifetime(cmd.Process.Pid)
+	if lifetimeErr != nil {
+		t.Fatal(lifetimeErr)
 	}
 	defer func() {
 		_ = lifetime.Close() // The wait result is authoritative.
@@ -189,13 +189,13 @@ func TestAgentSessionRelayProcessLifetimeEndsBeforeDescendant(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = stdin.Close() // The exact workload has all input needed to exit.
-	childLine, err := bufio.NewReader(stdout).ReadString('\n')
-	if err != nil {
-		t.Fatal(err)
+	childLine, readErr := bufio.NewReader(stdout).ReadString('\n')
+	if readErr != nil {
+		t.Fatal(readErr)
 	}
-	childPID, err = strconv.Atoi(strings.TrimSpace(childLine))
-	if err != nil || childPID <= 1 {
-		t.Fatalf("descendant pid = %q: %v", childLine, err)
+	childPID, parseErr := strconv.Atoi(strings.TrimSpace(childLine))
+	if parseErr != nil || childPID <= 1 {
+		t.Fatalf("descendant pid = %q: %v", childLine, parseErr)
 	}
 	if err := cmd.Wait(); err != nil {
 		t.Fatal(err)
