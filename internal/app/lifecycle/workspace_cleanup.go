@@ -993,23 +993,21 @@ func inspectSharedAttachedWorkspaces(
 	return targets, nil
 }
 
-func validatedSharedAttachedWorkspaceRows(
+func sharedAttachedWorkspaceTargetsAbsent(
 	opts Options,
 	locked *state.LockedStore,
 	child state.Pane,
 	panes []state.Pane,
-) ([]state.Pane, error) {
+) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceCleanupTimeout)
 	defer cancel()
 	targets, err := inspectSharedAttachedWorkspaces(ctx, opts, locked, child, panes)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	rows := make([]state.Pane, 0, len(targets))
-	for _, target := range targets {
-		rows = append(rows, target.pane)
-	}
-	return rows, nil
+	return !slices.ContainsFunc(targets, func(target sharedAttachedWorkspaceCloseTarget) bool {
+		return target.workspace != nil
+	}), nil
 }
 
 func validateSharedAttachedWorkspaceHookPreflight(
@@ -1022,10 +1020,11 @@ func validateSharedAttachedWorkspaceHookPreflight(
 	if len(attached) == 0 {
 		return nil
 	}
-	if _, err := validatedSharedAttachedWorkspaceRows(opts, locked, child, attached); err != nil {
+	allAbsent, err := sharedAttachedWorkspaceTargetsAbsent(opts, locked, child, attached)
+	if err != nil {
 		return persistWorkspacePreflightAdmissionFailure(opts, locked, child, attached, mode, true, true, err)
 	}
-	return validateSharedAttachedWorkspaceHookFence(opts, locked, child, mode)
+	return validateSharedAttachedWorkspaceHookFence(opts, locked, child, mode, allAbsent)
 }
 
 func validateSharedAttachedWorkspaceHookFence(
@@ -1033,6 +1032,7 @@ func validateSharedAttachedWorkspaceHookFence(
 	locked *state.LockedStore,
 	child state.Pane,
 	mode CloseMode,
+	allAttachedAbsent bool,
 ) error {
 	_, intent, found, err := savedWorkspacePreflightCleanupIntent(opts, locked, child, mode)
 	if err != nil || !found {
@@ -1041,7 +1041,9 @@ func validateSharedAttachedWorkspaceHookFence(
 	if intent.Status == state.IntentIssued {
 		return fmt.Errorf("%w: saved shared attached cleanup is already issued", ErrManualCleanupRequired)
 	}
-	if intent.Status == state.IntentManualCleanupRequired && !workspacePreHookIdentityFence(intent) {
+	recoveredSharedClose := allAttachedAbsent && intent.Failure == sharedAttachedWorkspaceCloseFailure
+	if intent.Status == state.IntentManualCleanupRequired && !workspacePreHookIdentityFence(intent) &&
+		!recoveredSharedClose {
 		return fmt.Errorf("%w: %s", ErrManualCleanupRequired, intent.Failure)
 	}
 	return nil

@@ -878,7 +878,7 @@ func TestHerdrSharedAttachedIdentityMismatchBlocksWorktreeHook(t *testing.T) {
 	opts := herdrLifecycleOptions(fixture, runtime)
 	opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
 		hooks.BeforeWorktreeRemove: {{
-			Command: `printf called > "$FANOUT_TEST_BEFORE_WORKTREE"`, Timeout: time.Second,
+			Command: `printf 'called\n' >> "$FANOUT_TEST_BEFORE_WORKTREE"`, Timeout: time.Second,
 		}},
 	}}
 
@@ -916,6 +916,13 @@ func TestHerdrSharedAttachedIdentityMismatchBlocksWorktreeHook(t *testing.T) {
 	if len(runtime.mutationLog) != 0 {
 		t.Fatalf("manual fence retried mutations: %v", runtime.mutationLog)
 	}
+
+	runtime.workspaces = []backend.WorkspaceObservation{fixture.workspace}
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("absent attached retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	assertHerdrHookCalls(t, hookPath, 1)
+	assertHerdrLifecycleRemoved(t, fixture)
 }
 
 func TestHerdrSharedAttachedPreHookFenceRetriesBlockingHookAfterAttachedAbsence(t *testing.T) {
