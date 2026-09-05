@@ -38,6 +38,7 @@ type WorkspaceRuntime interface {
 	VerifyOwned(context.Context) error
 	RemoveWorktree(context.Context, string, string) error
 	CloseWorkspace(context.Context, string) error
+	VerifyAttachedWorkspaceClose(context.Context, backend.PaneBinding) error
 	CloseAttachedWorkspace(context.Context, backend.PaneBinding) error
 }
 
@@ -357,12 +358,13 @@ func closeSharedAttachedWorkspaces(
 	child state.Pane,
 	mode CloseMode,
 	lg Logger,
-) error {
+) (err error) {
 	attached := sharedAttachedWorkspaceRows(locked.Panes, child.WorktreePath)
+	defer persistSharedAttachedWorkspaceCloseAdmissionFailure(opts, locked, child, attached, mode, &err)
 	if len(attached) == 0 {
-		journal, err := locked.LaunchJournal(opts.ProjectRoot)
-		if err != nil {
-			return err
+		journal, journalErr := locked.LaunchJournal(opts.ProjectRoot)
+		if journalErr != nil {
+			return journalErr
 		}
 		return retireSharedAttachedWorkspaceClose(ctx, opts, locked, journal, child, mode)
 	}
@@ -374,13 +376,23 @@ func closeSharedAttachedWorkspaces(
 	}
 	targets, err := inspectSharedAttachedWorkspaces(ctx, opts, locked, child, attached)
 	if err != nil {
-		if errors.Is(err, backend.ErrOwnedIdentityMismatch) {
-			return markSharedAttachedWorkspaceCloseManual(journal, intent, err)
-		}
 		return err
 	}
 	return driveSharedAttachedWorkspaceCloses(
 		ctx, opts, locked, journal, intent, child, attached, targets, issueClose, lg,
+	)
+}
+
+func persistSharedAttachedWorkspaceCloseAdmissionFailure(
+	opts Options,
+	locked *state.LockedStore,
+	child state.Pane,
+	attached []state.Pane,
+	mode CloseMode,
+	result *error,
+) {
+	*result = persistWorkspacePreflightAdmissionFailure(
+		opts, locked, child, attached, mode, true, false, *result,
 	)
 }
 
@@ -657,7 +669,7 @@ func loadSharedAttachedWorkspaceCloseIntent(
 	return journal, intent, runtime, nil
 }
 
-func persistWorkspacePreflightIdentityFailure(
+func persistWorkspacePreflightAdmissionFailure(
 	opts Options,
 	locked *state.LockedStore,
 	child state.Pane,
@@ -667,7 +679,10 @@ func persistWorkspacePreflightIdentityFailure(
 	preHook bool,
 	cause error,
 ) error {
-	if !errors.Is(cause, backend.ErrOwnedIdentityMismatch) {
+	admissionFailure, sharedFailure, preHook := workspacePreflightAdmissionFailure(
+		cause, sharedFailure, preHook,
+	)
+	if !admissionFailure {
 		return cause
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceCleanupTimeout)
@@ -678,16 +693,31 @@ func persistWorkspacePreflightIdentityFailure(
 	if journal == nil {
 		return errors.Join(cause, prepareErr)
 	}
-	failure := cause.Error()
-	if preHook {
-		failure = workspacePreHookIdentityFailure
-	} else if useSharedFailure {
-		failure = sharedAttachedWorkspaceCloseFailure
-	}
+	failure := workspacePreflightFailure(cause, preHook, useSharedFailure)
 	return errors.Join(
 		prepareErr,
 		markWorkspaceCleanupManualPreservingFence(journal, intent, failure, cause),
 	)
+}
+
+func workspacePreflightFailure(cause error, preHook, sharedFailure bool) string {
+	if preHook {
+		return workspacePreHookIdentityFailure
+	}
+	if sharedFailure {
+		return sharedAttachedWorkspaceCloseFailure
+	}
+	return cause.Error()
+}
+
+func workspacePreflightAdmissionFailure(
+	cause error,
+	sharedFailure, preHook bool,
+) (bool, bool, bool) {
+	if errors.Is(cause, backend.ErrOwnedWorkspaceHasUnadmittedPane) {
+		return true, true, false
+	}
+	return errors.Is(cause, backend.ErrOwnedIdentityMismatch), sharedFailure, preHook
 }
 
 func persistWorkspaceCleanupHookPreflightFailure(
@@ -699,7 +729,7 @@ func persistWorkspaceCleanupHookPreflightFailure(
 	cause error,
 ) error {
 	attached := sharedAttachedWorkspaceRows(locked.Panes, pane.WorktreePath)
-	return persistWorkspacePreflightIdentityFailure(
+	return persistWorkspacePreflightAdmissionFailure(
 		opts, locked, pane, attached, mode, false, hook == hooks.BeforeWorktreeRemove, cause,
 	)
 }
@@ -729,7 +759,7 @@ func completeWorkspacePreHookFence(
 		return err
 	}
 	attached := sharedAttachedWorkspaceRows(locked.Panes, pane.WorktreePath)
-	return rebuildWorkspaceCleanupAfterHook(opts, locked, pane, attached, mode, intent.ID)
+	return rebuildWorkspaceCleanupAfterHook(opts, locked, pane, attached, mode, intent)
 }
 
 func rebuildWorkspaceCleanupAfterHook(
@@ -738,7 +768,7 @@ func rebuildWorkspaceCleanupAfterHook(
 	pane state.Pane,
 	attached []state.Pane,
 	mode CloseMode,
-	intentID string,
+	previous state.LaunchIntent,
 ) error {
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceCleanupTimeout)
 	defer cancel()
@@ -754,11 +784,33 @@ func rebuildWorkspaceCleanupAfterHook(
 	if len(attached) > 0 {
 		predicate = sharedChildWorkspacePredicate(resource, attached)
 	}
-	_, err = beginWorkspaceCleanupAtHookPhase(
-		ctx, opts, locked, runtime, pane, mode, intentID, predicate,
+	intent, err := newWorkspaceCleanupAtHookPhase(
+		ctx, opts, locked, runtime, pane, mode, previous.ID, predicate,
 		state.CleanupHookBeforeWorktreeRemove,
 	)
+	if err != nil {
+		return err
+	}
+	intent = preserveRebuiltWorkspaceCleanupBranchFence(previous, intent)
+	_, err = persistNewWorkspaceCleanup(locked, opts.ProjectRoot, intent)
 	return err
+}
+
+func preserveRebuiltWorkspaceCleanupBranchFence(
+	previous state.LaunchIntent,
+	rebuilt state.LaunchIntent,
+) state.LaunchIntent {
+	noDeleteHead := previous.ExpectedHead == "" &&
+		previous.CleanupDeleteBranchRequested != nil && !*previous.CleanupDeleteBranchRequested
+	if !previous.CleanupDeleteBranchVerified || noDeleteHead {
+		return rebuilt
+	}
+	rebuilt.CleanupDeleteBranch = previous.CleanupDeleteBranch &&
+		previous.ExpectedHead != "" && rebuilt.ExpectedHead == previous.ExpectedHead
+	rebuilt.CleanupDeleteBranchRequested = previous.CleanupDeleteBranchRequested
+	rebuilt.CleanupDeleteBranchVerified = true
+	rebuilt.ExpectedHead = previous.ExpectedHead
+	return rebuilt
 }
 
 func workspacePreHookIdentityFence(intent state.LaunchIntent) bool {
@@ -971,7 +1023,7 @@ func validateSharedAttachedWorkspaceHookPreflight(
 		return nil
 	}
 	if _, err := validatedSharedAttachedWorkspaceRows(opts, locked, child, attached); err != nil {
-		return persistWorkspacePreflightIdentityFailure(opts, locked, child, attached, mode, true, true, err)
+		return persistWorkspacePreflightAdmissionFailure(opts, locked, child, attached, mode, true, true, err)
 	}
 	return validateSharedAttachedWorkspaceHookFence(opts, locked, child, mode)
 }
@@ -989,8 +1041,7 @@ func validateSharedAttachedWorkspaceHookFence(
 	if intent.Status == state.IntentIssued {
 		return fmt.Errorf("%w: saved shared attached cleanup is already issued", ErrManualCleanupRequired)
 	}
-	if intent.Status == state.IntentManualCleanupRequired &&
-		intent.Failure != sharedAttachedWorkspaceCloseFailure && !workspacePreHookIdentityFence(intent) {
+	if intent.Status == state.IntentManualCleanupRequired && !workspacePreHookIdentityFence(intent) {
 		return fmt.Errorf("%w: %s", ErrManualCleanupRequired, intent.Failure)
 	}
 	return nil
@@ -1250,6 +1301,9 @@ func inspectSharedAttachedWorkspace(
 		ctx, opts.ProjectRoot, runtime, current, resource,
 		workspaceResourcePredicate(resource), false,
 	)
+	if err == nil && observation.workspace != nil {
+		err = runtime.VerifyAttachedWorkspaceClose(ctx, current.RuntimeBinding())
+	}
 	return current, runtime, observation.workspace, err
 }
 
@@ -1472,6 +1526,26 @@ func beginWorkspaceCleanupAtHookPhase(
 	predicate workspacePredicateFunc,
 	hookPhase state.CleanupHookPhase,
 ) (state.LaunchIntent, error) {
+	intent, err := newWorkspaceCleanupAtHookPhase(
+		ctx, opts, locked, runtime, pane, mode, intentID, predicate, hookPhase,
+	)
+	if err != nil {
+		return state.LaunchIntent{}, err
+	}
+	return persistNewWorkspaceCleanup(locked, opts.ProjectRoot, intent)
+}
+
+func newWorkspaceCleanupAtHookPhase(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	runtime WorkspaceRuntime,
+	pane state.Pane,
+	mode CloseMode,
+	intentID string,
+	predicate workspacePredicateFunc,
+	hookPhase state.CleanupHookPhase,
+) (state.LaunchIntent, error) {
 	resource := resourceFromPane(pane)
 	observation, err := observeWorkspaceCleanupMatching(ctx, runtime, opts.ProjectRoot, resource, predicate)
 	if err != nil {
@@ -1492,7 +1566,7 @@ func beginWorkspaceCleanupAtHookPhase(
 			return state.LaunchIntent{}, err
 		}
 	}
-	return persistNewWorkspaceCleanup(locked, opts.ProjectRoot, intent)
+	return intent, nil
 }
 
 func persistNewWorkspaceCleanup(

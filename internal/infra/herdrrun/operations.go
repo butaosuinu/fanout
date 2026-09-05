@@ -84,6 +84,22 @@ func (s *OwnedSession) CloseAttachedWorkspace(
 	return s.backend.closeOwnedAttachedWorkspace(ctx, ownedTargetFromBinding(binding))
 }
 
+// VerifyAttachedWorkspaceClose runs the same immutable admission as
+// CloseAttachedWorkspace without issuing the close mutation.
+func (s *OwnedSession) VerifyAttachedWorkspaceClose(
+	ctx context.Context,
+	binding corebackend.PaneBinding,
+) error {
+	if s == nil || s.backend == nil {
+		return fmt.Errorf("herdr owned session is nil")
+	}
+	if binding.Shell || strings.TrimSpace(binding.Agent) == "" ||
+		strings.TrimSpace(binding.RepoKey) == "" || strings.TrimSpace(binding.WorktreePath) == "" {
+		return fmt.Errorf("%w: attached workspace binding is incomplete", corebackend.ErrOwnedIdentityMismatch)
+	}
+	return s.backend.verifyOwnedAttachedWorkspaceClose(ctx, ownedTargetFromBinding(binding))
+}
+
 func ownedTargetFromBinding(binding corebackend.PaneBinding) corebackend.OwnedPaneIdentity {
 	return corebackend.OwnedPaneIdentity{
 		Ref: binding.Ref, SessionID: binding.SessionID, SocketPath: binding.SocketPath,
@@ -643,6 +659,19 @@ func (b *Backend) closeOwnedAttachedWorkspace(
 		return fmt.Errorf("herdr attached workspace close returned success but workspace remains live")
 	}
 	return nil
+}
+
+func (b *Backend) verifyOwnedAttachedWorkspaceClose(
+	ctx context.Context,
+	target corebackend.OwnedPaneIdentity,
+) error {
+	admission, lock, err := b.acquireOwnedMutation(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlockPrivateFile(lock)
+	_, _, err = b.resolveAttachedWorkspaceCloseTarget(ctx, admission, target)
+	return err
 }
 
 func (b *Backend) issueAttachedWorkspaceClose(
