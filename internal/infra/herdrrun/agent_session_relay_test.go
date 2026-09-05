@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -150,29 +153,68 @@ func TestAgentSessionRelaySurvivesFinalizationAndStopsWithWorkload(t *testing.T)
 	_ = pending.Close() // The lifetime assertion is complete.
 }
 
-func TestInheritFileOnExecClearsCloseOnExec(t *testing.T) {
-	read, write, err := os.Pipe()
+func TestAgentSessionRelayProcessLifetimeEndsBeforeDescendant(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "read ready; sleep 30 >/dev/null 2>&1 & echo $!")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	childPID := 0
+	t.Cleanup(func() {
+		_ = stdin.Close()      // Unblock the test workload if the assertion failed before release.
+		_ = cmd.Process.Kill() // The successful path has already reaped the exact workload.
+		_ = cmd.Wait()         // The process may already have been reaped by the successful path.
+		if childPID > 1 {
+			if killErr := syscall.Kill(childPID, syscall.SIGKILL); killErr != nil &&
+				!errors.Is(killErr, syscall.ESRCH) {
+				t.Errorf("stop descendant: %v", killErr)
+			}
+		}
+	})
+	lifetime, err := newAgentSessionRelayProcessLifetime(cmd.Process.Pid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		_ = read.Close() // The descriptor flag assertion is authoritative.
-		_ = write.Close()
+		_ = lifetime.Close() // The wait result is authoritative.
 	}()
-	if _, _, errno := syscall.Syscall(
-		syscall.SYS_FCNTL, write.Fd(), syscall.F_SETFD, syscall.FD_CLOEXEC,
-	); errno != 0 {
-		t.Fatal(errno)
-	}
-	if err := inheritFileOnExec(write); err != nil {
+	if _, err := stdin.Write([]byte("ready\n")); err != nil {
 		t.Fatal(err)
 	}
-	flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, write.Fd(), syscall.F_GETFD, 0)
-	if errno != 0 {
-		t.Fatal(errno)
+	_ = stdin.Close() // The exact workload has all input needed to exit.
+	childLine, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
 	}
-	if flags&syscall.FD_CLOEXEC != 0 {
-		t.Fatal("relay lifetime descriptor still closes on workload exec")
+	childPID, err = strconv.Atoi(strings.TrimSpace(childLine))
+	if err != nil || childPID <= 1 {
+		t.Fatalf("descendant pid = %q: %v", childLine, err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, waitErr := io.Copy(io.Discard, lifetime)
+		done <- waitErr
+	}()
+	select {
+	case waitErr := <-done:
+		if waitErr != nil {
+			t.Fatal(waitErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("relay lifetime followed the workload descendant")
+	}
+	if err := syscall.Kill(childPID, 0); err != nil {
+		t.Fatalf("descendant exited with the exact workload: %v", err)
 	}
 }
 

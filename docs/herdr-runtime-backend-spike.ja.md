@@ -787,7 +787,7 @@ attach 後の pane には restart 前の prompt と `PROBE_OK` の応答履歴�
 #532 の current contract は、明示的な `fanout herdr restart` の中で fanout-owned launcher から direct Codex を resume する。
 owned config は herdr 固有の自動 resume を無効にし、保存済み `agent_session` が `{source:"herdr:codex", agent:"codex", kind:"id", value:<session-id>}` と完全一致する pane が一つだけある場合に限って resume intent を作る。
 Claude、OpenCode、Codex Plan / Team controller、attached agent、旧版 state row は `stale` のまま残す。
-direct Codex には exact pane ID と、起動した process の終了まで検証済みの `pane.report_agent_session` だけを転送する `0600` の relay socket を渡す。
+direct / attached Codex には exact pane ID と、検証済みの `pane.report_agent_session` だけを転送する `0600` の relay socket を渡す。relay は launcher から置換された Codex と同じ PID の終了を OS の process handle で監視し、Codex の子 process へ lifetime capability を継承しない。
 owned socket と session / workspace route は渡さない。
 
 resume 後は保存済み Codex の絶対 entrypoint を使い、`pane process-info` と OS process 情報から同じ launcher に由来する chain を一つだけ得なければならない。

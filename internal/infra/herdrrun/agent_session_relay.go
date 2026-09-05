@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,20 +21,19 @@ import (
 )
 
 const (
-	agentSessionRelayModeEnv             = "FANOUT_HERDR_AGENT_SESSION_RELAY"
-	agentSessionRelayControlEnv          = "FANOUT_HERDR_RELAY_CONTROL_PATH"
-	agentSessionRelayExecutableEnv       = "FANOUT_HERDR_RELAY_EXECUTABLE"
-	agentSessionRelayIntentEnv           = "FANOUT_HERDR_RELAY_INTENT_ID"
-	agentSessionRelayNonceEnv            = "FANOUT_HERDR_RELAY_NONCE"
-	agentSessionRelaySocketEnv           = "FANOUT_HERDR_RELAY_SOCKET_PATH"
-	agentSessionRelayBootstrap           = "bootstrap"
-	agentSessionRelayServe               = "serve"
-	agentSessionRelayBootstrapLifetimeFD = 3
-	agentSessionRelayListenerFD          = 3
-	agentSessionRelayServeLifetimeFD     = 4
-	agentSessionRelayReadyFD             = 5
-	agentSessionRelayReadyACK            = "R"
-	maxAgentSessionReportBytes           = 16 << 10
+	agentSessionRelayModeEnv        = "FANOUT_HERDR_AGENT_SESSION_RELAY"
+	agentSessionRelayControlEnv     = "FANOUT_HERDR_RELAY_CONTROL_PATH"
+	agentSessionRelayExecutableEnv  = "FANOUT_HERDR_RELAY_EXECUTABLE"
+	agentSessionRelayIntentEnv      = "FANOUT_HERDR_RELAY_INTENT_ID"
+	agentSessionRelayNonceEnv       = "FANOUT_HERDR_RELAY_NONCE"
+	agentSessionRelaySocketEnv      = "FANOUT_HERDR_RELAY_SOCKET_PATH"
+	agentSessionRelayWorkloadPIDEnv = "FANOUT_HERDR_RELAY_WORKLOAD_PID"
+	agentSessionRelayBootstrap      = "bootstrap"
+	agentSessionRelayServe          = "serve"
+	agentSessionRelayListenerFD     = 3
+	agentSessionRelayReadyFD        = 4
+	agentSessionRelayReadyACK       = "R"
+	maxAgentSessionReportBytes      = 16 << 10
 )
 
 type agentSessionRelayRequest struct {
@@ -43,6 +43,7 @@ type agentSessionRelayRequest struct {
 	intentID    string
 	nonce       string
 	socketPath  string
+	workloadPID int
 }
 
 type agentSessionReport struct {
@@ -91,38 +92,30 @@ func RunAgentSessionRelay(errOut io.Writer) int {
 func startCodexAgentSessionRelay(
 	request paneLauncherRequest,
 	intent state.LaunchIntent,
-) (string, *os.File, error) {
+) (string, error) {
 	if !codexAgentSessionRelayLaunch(intent) {
-		return "", nil, nil
+		return "", nil
 	}
 	if !workloadLaunchNonce.MatchString(intent.Launch.Nonce) {
-		return "", nil, fmt.Errorf("invalid Codex agent-session relay nonce")
+		return "", fmt.Errorf("invalid Codex agent-session relay nonce")
 	}
-	lifetimeRead, lifetimeWrite, err := os.Pipe()
-	if err != nil {
-		return "", nil, fmt.Errorf("create Codex agent-session relay lifetime: %w", err)
-	}
-	defer func() {
-		_ = lifetimeRead.Close() // The bootstrap child owns its duplicated descriptor after Start.
-	}()
 	socketPath := filepath.Join(
 		launcherRuntimeDir(request.launcherPath), ".asr-"+intent.Launch.Nonce[:16]+".sock",
 	)
 	relay := agentSessionRelayRequest{
 		mode: agentSessionRelayBootstrap, controlPath: request.controlPath,
 		executable: request.launcherPath, intentID: intent.ID,
-		nonce: intent.Launch.Nonce, socketPath: socketPath,
+		nonce: intent.Launch.Nonce, socketPath: socketPath, workloadPID: os.Getpid(),
 	}
-	if err := runAgentSessionRelayBootstrap(relay, lifetimeRead); err != nil {
-		_ = lifetimeWrite.Close() // End any detached relay started before the bootstrap error.
-		return "", nil, err
+	if err := runAgentSessionRelayBootstrap(relay); err != nil {
+		return "", err
 	}
-	return socketPath, lifetimeWrite, nil
+	return socketPath, nil
 }
 
-func runAgentSessionRelayBootstrap(request agentSessionRelayRequest, lifetime *os.File) error {
+func runAgentSessionRelayBootstrap(request agentSessionRelayRequest) error {
 	cmd := exec.Command(request.executable)
-	cmd.Env, cmd.ExtraFiles = request.environment(), []*os.File{lifetime}
+	cmd.Env = request.environment()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf(
@@ -138,21 +131,37 @@ func codexAgentSessionRelayLaunch(intent state.LaunchIntent) bool {
 }
 
 func agentSessionRelayRequestFromEnvironment() (agentSessionRelayRequest, error) {
+	workloadPID, err := strconv.Atoi(os.Getenv(agentSessionRelayWorkloadPIDEnv))
+	if err != nil {
+		return agentSessionRelayRequest{}, fmt.Errorf("invalid agent-session relay environment")
+	}
 	request := agentSessionRelayRequest{
 		mode:        os.Getenv(agentSessionRelayModeEnv),
 		controlPath: filepath.Clean(os.Getenv(agentSessionRelayControlEnv)),
 		executable:  filepath.Clean(os.Getenv(agentSessionRelayExecutableEnv)),
 		intentID:    os.Getenv(agentSessionRelayIntentEnv), nonce: os.Getenv(agentSessionRelayNonceEnv),
-		socketPath: filepath.Clean(os.Getenv(agentSessionRelaySocketEnv)),
+		socketPath: filepath.Clean(os.Getenv(agentSessionRelaySocketEnv)), workloadPID: workloadPID,
 	}
-	valid := request.mode == agentSessionRelayBootstrap || request.mode == agentSessionRelayServe
-	valid = valid && filepath.IsAbs(request.controlPath) && filepath.IsAbs(request.executable) &&
-		filepath.IsAbs(request.socketPath) && request.intentID != "" && workloadLaunchNonce.MatchString(request.nonce) &&
-		len(request.socketPath) <= maxUnixSocketPathBytes
-	if !valid {
+	if !validAgentSessionRelayRequest(request) {
 		return agentSessionRelayRequest{}, fmt.Errorf("invalid agent-session relay environment")
 	}
 	return request, nil
+}
+
+func validAgentSessionRelayRequest(request agentSessionRelayRequest) bool {
+	if request.mode != agentSessionRelayBootstrap && request.mode != agentSessionRelayServe {
+		return false
+	}
+	if !validAgentSessionRelayPaths(request) {
+		return false
+	}
+	return request.intentID != "" && workloadLaunchNonce.MatchString(request.nonce) &&
+		request.workloadPID > 1
+}
+
+func validAgentSessionRelayPaths(request agentSessionRelayRequest) bool {
+	return filepath.IsAbs(request.controlPath) && filepath.IsAbs(request.executable) &&
+		filepath.IsAbs(request.socketPath) && len(request.socketPath) <= maxUnixSocketPathBytes
 }
 
 func (request agentSessionRelayRequest) environment() []string {
@@ -163,6 +172,7 @@ func (request agentSessionRelayRequest) environment() []string {
 		agentSessionRelayIntentEnv + "=" + request.intentID,
 		agentSessionRelayNonceEnv + "=" + request.nonce,
 		agentSessionRelaySocketEnv + "=" + request.socketPath,
+		agentSessionRelayWorkloadPIDEnv + "=" + strconv.Itoa(request.workloadPID),
 	}
 }
 
@@ -170,13 +180,6 @@ func bootstrapAgentSessionRelay(request agentSessionRelayRequest) error {
 	if _, err := currentAgentSessionRelayIntent(request); err != nil {
 		return err
 	}
-	lifetime := os.NewFile(agentSessionRelayBootstrapLifetimeFD, "herdr-agent-session-relay-lifetime")
-	if lifetime == nil {
-		return fmt.Errorf("relay lifetime is unavailable")
-	}
-	defer func() {
-		_ = lifetime.Close() // The detached relay owns its duplicated descriptor after Start.
-	}()
 	listener, err := listenAgentSessionRelay(request.socketPath)
 	if err != nil {
 		return err
@@ -187,7 +190,7 @@ func bootstrapAgentSessionRelay(request agentSessionRelayRequest) error {
 		_ = os.Remove(request.socketPath) // Best effort for a socket that may already be absent.
 		return fmt.Errorf("duplicate relay listener: %w", err)
 	}
-	if err := startDetachedAgentSessionRelay(request, listenerFile, lifetime); err != nil {
+	if err := startDetachedAgentSessionRelay(request, listenerFile); err != nil {
 		_ = listenerFile.Close()          // Best effort while returning the relay start error.
 		_ = listener.Close()              // Best effort while returning the relay start error.
 		_ = os.Remove(request.socketPath) // Best effort for a socket that may already be absent.
@@ -214,7 +217,7 @@ func listenAgentSessionRelay(socketPath string) (*net.UnixListener, error) {
 
 func startDetachedAgentSessionRelay(
 	request agentSessionRelayRequest,
-	listener, lifetime *os.File,
+	listener *os.File,
 ) error {
 	readyRead, readyWrite, err := os.Pipe()
 	if err != nil {
@@ -226,7 +229,7 @@ func startDetachedAgentSessionRelay(
 	serve := request
 	serve.mode = agentSessionRelayServe
 	cmd := exec.Command(request.executable)
-	cmd.Env, cmd.ExtraFiles = serve.environment(), []*os.File{listener, lifetime, readyWrite}
+	cmd.Env, cmd.ExtraFiles = serve.environment(), []*os.File{listener, readyWrite}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
@@ -270,12 +273,12 @@ func serveAgentSessionRelay(request agentSessionRelayRequest) error {
 		_ = unixListener.Close()          // Best effort after the relay has produced its final result.
 		_ = os.Remove(request.socketPath) // Best effort because close may already unlink it.
 	}()
-	lifetime := os.NewFile(agentSessionRelayServeLifetimeFD, "herdr-agent-session-relay-lifetime")
-	if lifetime == nil {
-		return fmt.Errorf("relay lifetime is unavailable")
+	lifetime, err := newAgentSessionRelayProcessLifetime(request.workloadPID)
+	if err != nil {
+		return err
 	}
 	defer func() {
-		_ = lifetime.Close() // Closing the relay also releases its launch-lifetime descriptor.
+		_ = lifetime.Close() // The exact workload process lifetime is no longer observed after return.
 	}()
 	if err := acknowledgeAgentSessionRelayReady(); err != nil {
 		return err

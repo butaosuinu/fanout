@@ -85,38 +85,18 @@ func runWorkloadPaneLauncher(
 		fmt.Fprintf(errOut, "fanout herdr pane launcher: %v\n", err)
 		return 1
 	}
-	relaySocket, relayLifetime, err := startCodexAgentSessionRelay(request, intent)
+	relaySocket, err := startCodexAgentSessionRelay(request, intent)
 	if err != nil {
 		fmt.Fprintf(errOut, "fanout herdr pane launcher: %v\n", err)
 		return 1
 	}
 	environment = workloadExecEnvironment(request, intent, environment, relaySocket)
-	if err := execWorkload(intent.Launch, environment, relayLifetime); err != nil {
+	argv := append([]string{intent.Launch.Executable}, intent.Launch.Args...)
+	if err := syscall.Exec(intent.Launch.Executable, argv, environment); err != nil {
 		fmt.Fprintf(errOut, "fanout herdr pane launcher: exec workload: %v\n", err)
 		return 1
 	}
 	panic("unreachable")
-}
-
-func execWorkload(launch *state.LaunchCapsule, environment []string, relayLifetime *os.File) error {
-	if relayLifetime != nil {
-		defer func() {
-			_ = relayLifetime.Close() // A failed exec ends the relay; a successful exec skips defers.
-		}()
-		if err := inheritFileOnExec(relayLifetime); err != nil {
-			return fmt.Errorf("preserve relay lifetime: %w", err)
-		}
-	}
-	argv := append([]string{launch.Executable}, launch.Args...)
-	return syscall.Exec(launch.Executable, argv, environment)
-}
-
-func inheritFileOnExec(file *os.File) error {
-	_, _, errno := syscall.Syscall(syscall.SYS_FCNTL, file.Fd(), syscall.F_SETFD, 0)
-	if errno != 0 {
-		return errno
-	}
-	return nil
 }
 
 func workloadExecEnvironment(
