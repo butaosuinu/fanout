@@ -487,6 +487,51 @@ func TestHerdrSharedAttachedCloseChecksChildContentsBeforeMutation(t *testing.T)
 	}
 }
 
+func TestHerdrSharedAttachedCompletionRetryChecksChildContentsBeforeReopen(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	attachedWorkspace := herdrLifecycleWorkspace(
+		"w-attached", "attached-label", fixture.worktreePath,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	attached := sharedAttachedLifecyclePane(fixture, "425", "", attachedWorkspace)
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+	coordinator := herdrLifecycleWorkspace(
+		"w-coordinator", "coordinator-label", fixture.projectRoot,
+		fixture.pane.RepoKey, fixture.pane.RepoRoot,
+	)
+	recordLifecycleCoordinatorIntent(t, fixture.projectRoot, fixture.pane, coordinator)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{coordinator, attachedWorkspace},
+		setupErr:    errors.New("pause after shared attached close completion"),
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	if got := strings.Join(runtime.mutationLog, ","); got != "close:w-attached" {
+		t.Fatalf("first mutation order = %q, want attached close only", got)
+	}
+	intent, found := loadHerdrCleanupIntent(t, fixture)
+	if !found || intent.Status != state.IntentPlanned ||
+		intent.Failure != sharedAttachedWorkspaceCloseComplete || intent.CleanupPhase != state.CleanupReopen {
+		t.Fatalf("shared close completion checkpoint = %#v (found=%t)", intent, found)
+	}
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "uncommitted.txt"), []byte("keep me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runtime.setupErr = nil
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("dirty retry Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.openCalls != 0 || runtime.removeCalls != 0 {
+		t.Fatalf("dirty retry issued child mutations: open %d/remove %d", runtime.openCalls, runtime.removeCalls)
+	}
+	assertHerdrLifecyclePreserved(t, fixture)
+}
+
 func TestHerdrCloseLeavesUnverifiedSharedAttachedWorkspaceManual(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	rowKey := "coordinator:@manual:shared:-1"

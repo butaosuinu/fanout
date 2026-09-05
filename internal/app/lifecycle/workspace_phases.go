@@ -233,13 +233,16 @@ func verifyReopenPreconditions(
 	if observation.workspace != nil || observation.checkout.PathAbsent || !observation.checkout.Registered {
 		return fmt.Errorf("herdr cleanup reopen preconditions changed")
 	}
-	return verifyCleanupCheckout(
+	if err := verifyCleanupCheckout(
 		ctx,
 		opts.ProjectRoot,
 		intent.FullBranchRef,
 		intent.ExpectedHead,
 		intent.Resource,
-	)
+	); err != nil {
+		return err
+	}
+	return verifyRemovableCheckoutContents(ctx, intent.WorktreePath)
 }
 
 func currentCoordinator(
