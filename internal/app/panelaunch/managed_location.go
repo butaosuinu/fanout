@@ -36,7 +36,7 @@ func ReconcileManagedPaneLocation(
 	if err != nil || !found {
 		return pane, false, err
 	}
-	if pane.WorkspaceID == match.WorkspaceID && pane.PaneID == match.Pane.Pane && pane.TerminalID == match.TerminalID {
+	if pane.WorkspaceID == match.WorkspaceID {
 		return pane, false, nil
 	}
 	pane.WorkspaceID, pane.PaneID, pane.TerminalID = match.WorkspaceID, match.Pane.Pane, match.TerminalID

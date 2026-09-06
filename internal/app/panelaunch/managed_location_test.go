@@ -68,6 +68,26 @@ func TestReconcileManagedPaneLocationProjectsUniquePaneAtCheckout(t *testing.T) 
 	}
 }
 
+func TestReconcileManagedPaneLocationLeavesSameWorkspaceDriftStale(t *testing.T) {
+	pane := managedLocationPane()
+	for _, test := range []struct {
+		name       string
+		paneID     string
+		terminalID string
+	}{
+		{name: "pane only", paneID: "pane-next", terminalID: pane.TerminalID},
+		{name: "terminal only", paneID: pane.PaneID, terminalID: "terminal-next"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			restarted := managedLocationWorkspace(pane, pane.WorkspaceID, test.paneID, test.terminalID)
+			got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{restarted})
+			if err != nil || changed || !reflect.DeepEqual(got, pane) {
+				t.Fatalf("same-workspace drift changed: changed=%t pane=%#v err=%v", changed, got, err)
+			}
+		})
+	}
+}
+
 func TestReconcileManagedPaneLocationLeavesAtomicRuntimeRowsUnchanged(t *testing.T) {
 	pane := managedLocationPane()
 	pane.Backend = backend.Tmux
