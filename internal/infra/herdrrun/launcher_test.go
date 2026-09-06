@@ -48,9 +48,8 @@ func TestWorkloadEnvironmentRejectsDuplicateNames(t *testing.T) {
 	}
 }
 
-// The owned socket reaches a workload only where an installed Herdr agent
-// integration can use it to report the provider session; every other launch
-// keeps the capsule environment untouched.
+// Claude keeps the existing integration route. Codex receives only its
+// launch-scoped relay, while every other launch keeps the capsule untouched.
 func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 	request := paneLauncherRequest{
 		session: "owned-session", socketPath: "/owned/herdr.sock",
@@ -64,10 +63,14 @@ func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 	integrationRoute := []string{
 		"HERDR_ENV=1", "HERDR_SOCKET_PATH=/owned/herdr.sock", "HERDR_PANE_ID=w1:p1",
 	}
+	relayRoute := []string{
+		"HERDR_ENV=1", "HERDR_SOCKET_PATH=/runtime/relay.sock", "HERDR_PANE_ID=w1:p1",
+	}
 	tests := []struct {
-		name   string
-		intent state.LaunchIntent
-		want   []string
+		name        string
+		intent      state.LaunchIntent
+		relaySocket string
+		want        []string
 	}{
 		{
 			name:   "shell pane carries the whole owned route",
@@ -82,18 +85,20 @@ func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 			want: integrationRoute,
 		},
 		{
-			name: "direct codex carries the integration route only",
+			name: "direct codex carries the relay route only",
 			intent: state.LaunchIntent{
 				Kind: state.IntentWorktree, Launch: &state.LaunchCapsule{Agent: "codex"},
 			},
-			want: integrationRoute,
+			relaySocket: "/runtime/relay.sock",
+			want:        relayRoute,
 		},
 		{
-			name: "resumed codex carries the integration route only",
+			name: "resumed codex carries the relay route only",
 			intent: state.LaunchIntent{
 				Kind: state.IntentResume, Launch: &state.LaunchCapsule{Agent: "codex"},
 			},
-			want: integrationRoute,
+			relaySocket: "/runtime/relay.sock",
+			want:        relayRoute,
 		},
 		{
 			name: "attached claude carries the integration route only",
@@ -103,11 +108,12 @@ func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 			want: integrationRoute,
 		},
 		{
-			name: "attached codex carries the integration route only",
+			name: "attached codex carries the relay route only",
 			intent: state.LaunchIntent{
 				Kind: state.IntentCoordinator, Launch: &state.LaunchCapsule{Agent: "codex"},
 			},
-			want: integrationRoute,
+			relaySocket: "/runtime/relay.sock",
+			want:        relayRoute,
 		},
 		{
 			// The Plan Mode and team controllers drive codex through fanout
@@ -159,12 +165,17 @@ func TestWorkloadExecEnvironmentRoutesAgentIntegrations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			want := append(append([]string(nil), base...), tt.want...)
-			got := workloadExecEnvironment(request, tt.intent, append([]string(nil), base...))
+			got := workloadExecEnvironment(
+				request, tt.intent, append([]string(nil), base...), tt.relaySocket,
+			)
 			if !slices.Equal(got, want) {
 				t.Fatalf(
 					"workloadExecEnvironment(kind=%q, agent=%q) = %q, want %q",
 					tt.intent.Kind, tt.intent.Launch.Agent, got, want,
 				)
+			}
+			if tt.intent.Launch.Agent == "codex" && slices.Contains(got, socketEnv+"="+request.socketPath) {
+				t.Fatalf("Codex environment exposes owned socket: %q", got)
 			}
 		})
 	}
@@ -201,7 +212,7 @@ func TestWorkloadExecEnvironmentBindsEmitterToRealizedCoordinator(t *testing.T) 
 		telemetry.TerminalIDEnv + "=", telemetry.AgentEnv + "=",
 		telemetry.AgentIDEnv + "=", "PATH=/bin",
 	}
-	got := workloadExecEnvironment(paneLauncherRequest{}, intent, environment)
+	got := workloadExecEnvironment(paneLauncherRequest{}, intent, environment, "")
 	want := map[string]string{
 		telemetry.RowKeyEnv: intent.ID, telemetry.LaunchNonceEnv: intent.Launch.Nonce,
 		telemetry.EmitterNonceEnv: intent.Launch.EmitterNonce, telemetry.BackendEnv: "herdr",

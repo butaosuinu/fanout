@@ -15,6 +15,13 @@ import (
 func Entries() []backend.SelfExecEntry {
 	return []backend.SelfExecEntry{
 		{
+			Name:  "herdr-agent-session-relay",
+			Match: func([]string) bool { return herdrrun.IsAgentSessionRelayRequest() },
+			Run: func(_ io.Reader, _ io.Writer, errw io.Writer, _ []string) int {
+				return herdrrun.RunAgentSessionRelay(errw)
+			},
+		},
+		{
 			Name:  "herdr-pane-launcher",
 			Match: func([]string) bool { return herdrrun.IsPaneLauncherRequest() },
 			Run: func(in io.Reader, out, errw io.Writer, _ []string) int {

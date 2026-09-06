@@ -95,22 +95,27 @@ func TestNewLaunchBackendDefersLiveOwnedSession(t *testing.T) {
 // composition root iterates.
 func TestEntriesKeepSelfExecTokens(t *testing.T) {
 	entries := Entries()
-	if len(entries) != 3 {
-		t.Fatalf("Entries() length = %d, want 3", len(entries))
+	if len(entries) != 4 {
+		t.Fatalf("Entries() length = %d, want 4", len(entries))
 	}
-	if entries[0].Name != "herdr-pane-launcher" || entries[1].Name != "herdr-dashboard-open" || entries[2].Name != "herdr-supervisor" {
-		t.Fatalf("Entries() names = %q/%q/%q", entries[0].Name, entries[1].Name, entries[2].Name)
+	if entries[0].Name != "herdr-agent-session-relay" || entries[1].Name != "herdr-pane-launcher" ||
+		entries[2].Name != "herdr-dashboard-open" || entries[3].Name != "herdr-supervisor" {
+		t.Fatalf("Entries() names = %q/%q/%q/%q", entries[0].Name, entries[1].Name, entries[2].Name, entries[3].Name)
 	}
-	if !entries[1].Match([]string{"__herdr-dashboard-open", "descriptor"}) {
+	t.Setenv("FANOUT_HERDR_AGENT_SESSION_RELAY", "bootstrap")
+	if !entries[0].Match(nil) {
+		t.Fatal("agent-session relay entry rejected its inherited environment marker")
+	}
+	if !entries[2].Match([]string{"__herdr-dashboard-open", "descriptor"}) {
 		t.Fatal("dashboard entry rejected its hidden token")
 	}
-	if entries[2].Match([]string{"__herdr-supervisor", "marker"}) != true {
+	if entries[3].Match([]string{"__herdr-supervisor", "marker"}) != true {
 		t.Fatal("supervisor entry rejected its hidden token")
 	}
-	if entries[2].Match([]string{"herdr", "restart"}) {
+	if entries[3].Match([]string{"herdr", "restart"}) {
 		t.Fatal("supervisor entry matched the user-facing herdr verb")
 	}
-	if entries[0].Match(nil) {
+	if entries[1].Match(nil) {
 		t.Fatal("pane launcher matched without its environment flag")
 	}
 	for _, entry := range entries {
