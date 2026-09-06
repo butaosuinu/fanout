@@ -107,7 +107,7 @@ func TestRunHerdrLifecycleDispatchesOnlySelectedAction(t *testing.T) {
 	}
 }
 
-func TestServerRestartRefreshesSessionOnlyWhenObservable(t *testing.T) {
+func TestServerRestartRefreshesAgentBindingOnlyWhenObservable(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		unavailable bool
@@ -119,8 +119,10 @@ func TestServerRestartRefreshesSessionOnlyWhenObservable(t *testing.T) {
 			root := t.TempDir()
 			row, live, next := lifecycleSessionFixture(root)
 			want := *row.AgentSession
+			wantWorkspace, wantPane, wantTerminal := row.WorkspaceID, row.PaneID, row.TerminalID
 			if !test.unavailable {
 				want = next
+				wantWorkspace, wantPane, wantTerminal = live.Ref.Workspace, live.Ref.Pane, live.TerminalID
 			}
 			recordLifecycleSessionPane(t, root, row)
 			listLive := func() ([]backend.LivePane, error) {
@@ -141,8 +143,9 @@ func TestServerRestartRefreshesSessionOnlyWhenObservable(t *testing.T) {
 						return "", err
 					}
 					pane, ok := store.Find("733", 734)
-					if !ok || pane.AgentSession == nil || *pane.AgentSession != want {
-						return "", errors.New("restart saw an unexpected session")
+					if !ok || pane.AgentSession == nil || *pane.AgentSession != want ||
+						pane.WorkspaceID != wantWorkspace || pane.PaneID != wantPane || pane.TerminalID != wantTerminal {
+						return "", errors.New("restart saw an unexpected agent binding")
 					}
 					restarted = true
 					return "fanout-owned", nil
@@ -169,11 +172,12 @@ func lifecycleSessionFixture(root string) (state.Pane, backend.LivePane, backend
 		PaneID: "workspace-a:p1", WorkspaceID: "workspace-a", WorkspaceLabel: "owned-a",
 		TerminalID: "terminal-a", Agent: "codex", AgentID: "agent-a", AgentSession: &first,
 		SessionID: "session-a", SocketPath: "/tmp/herdr-a.sock",
-		RepoKey: "/repo/.git", WorktreePath: filepath.Join(root, "child"),
+		RepoKey: "/repo/.git", RepoRoot: root, WorktreePath: filepath.Join(root, "child"),
+		EmitterRowKey: "row-a",
 	}
 	live := backend.LivePane{
-		Ref:            backend.PaneRef{Backend: backend.Herdr, Workspace: row.WorkspaceID, Pane: row.PaneID},
-		WorkspaceLabel: row.WorkspaceLabel, TerminalID: row.TerminalID,
+		Ref:            backend.PaneRef{Backend: backend.Herdr, Workspace: "workspace-next", Pane: "workspace-next:p1"},
+		WorkspaceLabel: row.WorkspaceLabel, TerminalID: "terminal-next",
 		AgentProvider: row.Agent, AgentID: row.AgentID, AgentSession: &next, AgentPresent: true,
 		SessionID: row.SessionID, SocketPath: row.SocketPath,
 		RepoKey: row.RepoKey, ProjectRoot: root, WorktreePath: row.WorktreePath,

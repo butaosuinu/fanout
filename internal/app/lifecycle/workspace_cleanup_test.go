@@ -1439,6 +1439,27 @@ func TestHerdrCleanupRemovesEligibleOwnedWorktree(t *testing.T) {
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
+func TestHerdrCleanupUsesReconciledAgentLocation(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.Agent = "codex"
+	fixture.pane.EmitterRowKey = "row-child"
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	installLifecycleCleanupGH(t)
+	moved := movedHerdrWorkspace(fixture, "w-moved")
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{moved},
+	}
+
+	if got := Cleanup(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("Cleanup() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.removeCalls != 1 || runtime.mutationLog[0] != "remove:"+moved.WorkspaceID {
+		t.Fatalf("moved cleanup mutations = %v, want remove of %s", runtime.mutationLog, moved.WorkspaceID)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
 func TestHerdrCloseHonorsCustomStatePath(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	customState := filepath.Join(t.TempDir(), "state.json")
@@ -1487,6 +1508,148 @@ func TestHerdrMergeFastForwardsRecordedBranch(t *testing.T) {
 	got := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", "HEAD"))
 	if got != want {
 		t.Fatalf("merged HEAD = %s, want child %s", got, want)
+	}
+}
+
+func TestHerdrMergeReconcilesMovedAgentLocation(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.Agent = "codex"
+	fixture.pane.EmitterRowKey = "row-child"
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "merged.txt"), []byte("merged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHerdrLifecycleGit(t, fixture.worktreePath, "add", "merged.txt")
+	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "child")
+	moved := movedHerdrWorkspace(fixture, "w-moved")
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{moved},
+	}
+
+	if got := Merge(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("Merge() = %d, want %d", got, exitcode.OK)
+	}
+	store, err := state.LoadProject(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, found := store.Find(fixture.pane.Parent, fixture.pane.IssueNum)
+	if !found {
+		t.Fatal("reconciled merge row is missing")
+	}
+	want := fixture.pane
+	want.WorkspaceID, want.PaneID, want.TerminalID = moved.WorkspaceID, moved.Pane.Pane, moved.TerminalID
+	if !reflect.DeepEqual(saved, want) {
+		t.Fatalf("merge reconciliation changed fields outside location: got %#v want %#v", saved, want)
+	}
+}
+
+func TestHerdrMergeRefusesUnsafeLocationReconciliation(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		workspaces func(herdrLifecycleFixture) []backend.WorkspaceObservation
+	}{
+		{
+			name: "duplicate label",
+			workspaces: func(fixture herdrLifecycleFixture) []backend.WorkspaceObservation {
+				return []backend.WorkspaceObservation{
+					movedHerdrWorkspace(fixture, "w-moved"),
+					movedHerdrWorkspace(fixture, "w-duplicate"),
+				}
+			},
+		},
+		{
+			name: "provenance mismatch",
+			workspaces: func(fixture herdrLifecycleFixture) []backend.WorkspaceObservation {
+				moved := movedHerdrWorkspace(fixture, "w-moved")
+				moved.RepoKey = filepath.Join(fixture.projectRoot, "foreign.git")
+				return []backend.WorkspaceObservation{moved}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			fixture.pane.Agent = "codex"
+			fixture.pane.EmitterRowKey = "row-child"
+			recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+			if err := os.WriteFile(filepath.Join(fixture.worktreePath, "untrusted.txt"), []byte("child\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runHerdrLifecycleGit(t, fixture.worktreePath, "add", "untrusted.txt")
+			runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "untrusted child")
+			before := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", "HEAD"))
+			runtime := &fakeHerdrLifecycleRuntime{
+				projectRoot: fixture.projectRoot,
+				workspaces:  test.workspaces(fixture),
+			}
+
+			if got := Merge(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("Merge() = %d, want %d", got, exitcode.Env)
+			}
+			after := strings.TrimSpace(runHerdrLifecycleGitOutput(t, fixture.projectRoot, "rev-parse", "HEAD"))
+			if after != before {
+				t.Fatalf("unsafe reconciliation changed HEAD from %s to %s", before, after)
+			}
+			store, err := state.LoadProject(fixture.projectRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			saved, found := store.Find(fixture.pane.Parent, fixture.pane.IssueNum)
+			if !found || !reflect.DeepEqual(saved, fixture.pane) {
+				t.Fatalf("unsafe reconciliation changed state: %#v (found=%t)", saved, found)
+			}
+		})
+	}
+}
+
+func TestHerdrCloseReconcilesMovedAgentLocation(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.Agent = "codex"
+	fixture.pane.EmitterRowKey = "row-child"
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	moved := movedHerdrWorkspace(fixture, "w-moved")
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{moved},
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+	}
+	if runtime.removeCalls != 1 || runtime.mutationLog[0] != "remove:"+moved.WorkspaceID {
+		t.Fatalf("moved close mutations = %v, want remove of %s", runtime.mutationLog, moved.WorkspaceID)
+	}
+	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestHerdrClosePersistsMovedLocationBeforeDirtyRefusal(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.Agent = "codex"
+	fixture.pane.EmitterRowKey = "row-child"
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "untracked.txt"), []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	moved := movedHerdrWorkspace(fixture, "w-moved")
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{moved},
+	}
+
+	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+	}
+	store, err := state.LoadProject(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, found := store.Find(fixture.pane.Parent, fixture.pane.IssueNum)
+	if !found || saved.WorkspaceID != moved.WorkspaceID || saved.PaneID != moved.Pane.Pane || saved.TerminalID != moved.TerminalID {
+		t.Fatalf("saved moved location = %#v (found=%t), want %#v", saved, found, moved)
+	}
+	if runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+		t.Fatalf("dirty moved close issued mutations: remove=%d close=%d", runtime.removeCalls, runtime.closeCalls)
 	}
 }
 

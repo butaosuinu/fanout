@@ -511,6 +511,10 @@ herdr backend はこの coordinator を作る。
 fanout の state が parent issue と child workspace の対応を保持する。
 pane split は同じ checkout 内に補助 process を追加する場合だけ使う。
 
+agent row の保存済み workspace ID が現在値と異なる場合、fanout は保存済み workspace label nonce に一致する live workspace が一つだけあり、`WorktreePath`、`RepoKey`、`RepoRoot` と pane identity が一致するときだけ location を自動更新する。
+更新対象は workspace ID、pane ID、`terminal_id` に限る。label の一致が 0 件または複数件、checkout provenance の不一致、pane の欠落または重複では更新せず fail closed にする。tmux row は対象外とする。
+更新は TUI focus、TUI / dashboard の write-through state 読み込み、明示 restart、close / merge の lifecycle preflight が state lock 下で行う。status など `sessionview.MergedStateLoader` を直接使う pure read-only 経路は `state.json` を変更しない。
+
 ### cleanup
 
 dirty な child worktree を force なしで削除すると、`dirty_worktree_requires_force` で拒否された。

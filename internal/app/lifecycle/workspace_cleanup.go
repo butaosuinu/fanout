@@ -44,31 +44,64 @@ type WorkspaceRuntime interface {
 
 type WorkspaceRuntimeFactory func(context.Context, state.Pane) (WorkspaceRuntime, error)
 
-func validateWorkspaceMergeOperation(opts Options, pane state.Pane) error {
+func validateWorkspaceMergeOperation(
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+) (state.Pane, error) {
 	if !workspaceRuntimeRow(pane) {
-		return nil
+		return pane, nil
 	}
 	if err := validateWorkspacePaneIdentity(pane); err != nil {
-		return err
+		return pane, err
 	}
 	if opts.WorkspaceRuntime == nil {
-		return fmt.Errorf("herdr lifecycle runtime is not configured")
+		return pane, fmt.Errorf("herdr lifecycle runtime is not configured")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceCleanupTimeout)
 	defer cancel()
-	runtime, err := opts.WorkspaceRuntime(ctx, pane)
+	workspaces, err := observeOwnedWorkspaces(ctx, opts, pane)
 	if err != nil {
-		return err
+		return pane, err
 	}
-	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
-		return verifyErr
+	if err = verifyWorkspaceMergeTarget(ctx, opts.ProjectRoot, pane, workspaces); err == nil {
+		return pane, nil
 	}
-	return verifyWorkspaceMergeTarget(ctx, opts.ProjectRoot, runtime, pane)
+	if !errors.Is(err, backend.ErrOwnedIdentityMismatch) {
+		return pane, err
+	}
+	pane, err = reconcileManagedPaneLocationAfterMismatch(locked, pane, workspaces, err)
+	if err != nil {
+		return pane, err
+	}
+	return pane, verifyWorkspaceMergeTarget(ctx, opts.ProjectRoot, pane, workspaces)
 }
 
-func verifyWorkspaceMergeTarget(ctx context.Context, projectRoot string, runtime WorkspaceRuntime, pane state.Pane) error {
+func observeOwnedWorkspaces(
+	ctx context.Context,
+	opts Options,
+	pane state.Pane,
+) ([]backend.WorkspaceObservation, error) {
+	runtime, err := opts.WorkspaceRuntime(ctx, pane)
+	if err != nil {
+		return nil, err
+	}
+	if err := runtime.VerifyOwned(ctx); err != nil {
+		return nil, err
+	}
+	return runtime.ObserveWorkspaces(ctx)
+}
+
+func verifyWorkspaceMergeTarget(
+	ctx context.Context,
+	projectRoot string,
+	pane state.Pane,
+	workspaces []backend.WorkspaceObservation,
+) error {
 	resource := resourceFromPane(pane)
-	observation, err := observeWorkspaceCleanup(ctx, runtime, projectRoot, resource)
+	observation, err := observeWorkspaceCleanupSnapshot(
+		ctx, projectRoot, resource, workspacePredicate(resource), workspaces,
+	)
 	if err != nil {
 		return err
 	}
@@ -94,48 +127,85 @@ func verifyWorkspaceMergeTarget(ctx context.Context, projectRoot string, runtime
 	return verifyCleanupCheckout(ctx, projectRoot, fullRef, expectedHead, resource)
 }
 
-func validateWorkspaceCloseOperation(opts Options, pane state.Pane, mode CloseMode, lg Logger) bool {
+func validateWorkspaceCloseOperation(
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+	mode CloseMode,
+	lg Logger,
+) (state.Pane, bool) {
 	switch {
 	case !mode.removesWorktree():
 		lg.Err("%s: Herdr child close must keep lifecycle ownership by removing its worktree", paneLabel(pane))
-		return false
+		return pane, false
 	case pane.IsShell() || pane.IsAttachedAgent():
 		lg.Err("%s: Herdr lifecycle close supports owned child worktrees only", paneLabel(pane))
-		return false
+		return pane, false
 	case opts.WorkspaceRuntime == nil:
 		lg.Err("%s: Herdr lifecycle runtime is not configured", paneLabel(pane))
-		return false
+		return pane, false
 	case validateWorkspacePaneIdentity(pane) != nil:
 		lg.Err("%s: saved Herdr lifecycle identity is incomplete; preserving workspace, worktree, and state", paneLabel(pane))
-		return false
+		return pane, false
 	}
-	if err := verifyWorkspaceClosePreflight(opts, pane, mode); err != nil {
+	pane, err := verifyWorkspaceClosePreflight(opts, locked, pane, mode)
+	if err != nil {
 		lg.Err("%s: Herdr lifecycle preflight failed; preserving workspace, worktree, and state: %v", paneLabel(pane), err)
-		return false
+		return pane, false
 	}
-	return true
+	return pane, true
 }
 
-func verifyWorkspaceClosePreflight(opts Options, pane state.Pane, mode CloseMode) error {
-	_, err := inspectWorkspaceClosePreflight(opts, pane, mode, nil)
-	return err
+func verifyWorkspaceClosePreflight(
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+	mode CloseMode,
+) (state.Pane, error) {
+	pane, _, err := inspectWorkspaceClosePreflight(opts, locked, pane, mode, nil)
+	return pane, err
 }
 
 func inspectWorkspaceClosePreflight(
 	opts Options,
+	locked *state.LockedStore,
 	pane state.Pane,
 	mode CloseMode,
 	attached []state.Pane,
-) (bool, error) {
+) (state.Pane, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceCleanupTimeout)
 	defer cancel()
-	runtime, err := opts.WorkspaceRuntime(ctx, pane)
+	workspaces, err := observeOwnedWorkspaces(ctx, opts, pane)
 	if err != nil {
-		return false, err
+		return pane, false, err
 	}
-	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
-		return false, verifyErr
+	cleanupStarted, err := verifyWorkspaceClosePreflightSnapshot(
+		ctx, opts, pane, mode, attached, workspaces,
+	)
+	if err == nil {
+		return pane, cleanupStarted, nil
 	}
+	if !errors.Is(err, backend.ErrOwnedIdentityMismatch) {
+		return pane, false, err
+	}
+	pane, err = reconcileManagedPaneLocationAfterMismatch(locked, pane, workspaces, err)
+	if err != nil {
+		return pane, false, err
+	}
+	cleanupStarted, err = verifyWorkspaceClosePreflightSnapshot(
+		ctx, opts, pane, mode, attached, workspaces,
+	)
+	return pane, cleanupStarted, err
+}
+
+func verifyWorkspaceClosePreflightSnapshot(
+	ctx context.Context,
+	opts Options,
+	pane state.Pane,
+	mode CloseMode,
+	attached []state.Pane,
+	workspaces []backend.WorkspaceObservation,
+) (bool, error) {
 	resource, predicate, reopened, cleanupStarted, err := workspaceClosePreflightIdentity(opts, pane, mode)
 	if err != nil {
 		return false, err
@@ -143,10 +213,10 @@ func inspectWorkspaceClosePreflight(
 	if len(attached) > 0 {
 		predicate = sharedChildWorkspacePredicate(resource, attached)
 	}
-	if _, err := verifyWorkspaceCloseTarget(ctx, opts.ProjectRoot, runtime, pane, resource, predicate, reopened); err != nil {
-		return false, err
-	}
-	return cleanupStarted, nil
+	_, err = verifyWorkspaceCloseTargetSnapshot(
+		ctx, opts.ProjectRoot, pane, resource, predicate, reopened, workspaces,
+	)
+	return cleanupStarted, err
 }
 
 func prepareWorkspaceCleanupHook(opts Options, locked *state.LockedStore, pane state.Pane, mode CloseMode) (*state.LockedLaunchJournal, state.LaunchIntent, error) {
@@ -233,7 +303,25 @@ func verifyWorkspaceCloseTarget(
 	predicate workspacePredicateFunc,
 	reopened bool,
 ) (workspaceCleanupObservation, error) {
-	observation, err := observeWorkspaceCleanupMatching(ctx, runtime, projectRoot, resource, predicate)
+	workspaces, err := runtime.ObserveWorkspaces(ctx)
+	if err != nil {
+		return workspaceCleanupObservation{}, err
+	}
+	return verifyWorkspaceCloseTargetSnapshot(
+		ctx, projectRoot, pane, resource, predicate, reopened, workspaces,
+	)
+}
+
+func verifyWorkspaceCloseTargetSnapshot(
+	ctx context.Context,
+	projectRoot string,
+	pane state.Pane,
+	resource state.RuntimeResource,
+	predicate workspacePredicateFunc,
+	reopened bool,
+	workspaces []backend.WorkspaceObservation,
+) (workspaceCleanupObservation, error) {
+	observation, err := observeWorkspaceCleanupSnapshot(ctx, projectRoot, resource, predicate, workspaces)
 	if err != nil {
 		return workspaceCleanupObservation{}, err
 	}

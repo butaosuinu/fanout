@@ -2,6 +2,7 @@ package sessionbinding
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -124,14 +125,59 @@ func TestStateLoaderRebindsReplacedSession(t *testing.T) {
 	assertStoredSession(t, store, second)
 }
 
+func TestReloadPaneReconcilesMovedManagedLocation(t *testing.T) {
+	root := t.TempDir()
+	row := testHerdrPane(root)
+	session := backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-first",
+	}
+	row.AgentSession = &session
+	recordTestPane(t, root, row)
+	live := testLiveHerdrPane(row, session)
+	live.Ref.Workspace, live.Ref.Pane = "workspace-next", "workspace-next:p1"
+	live.TerminalID = "terminal-next"
+	listLive := func() ([]backend.LivePane, error) { return []backend.LivePane{live}, nil }
+
+	got, err := ReloadPane(root, row, listLive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertManagedLocation(t, got, live)
+	persisted, err := state.LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, found := persisted.Find(row.Parent, row.IssueNum)
+	if !found {
+		t.Fatal("reconciled row was not persisted")
+	}
+	assertManagedLocation(t, saved, live)
+	want := row
+	want.WorkspaceID, want.PaneID, want.TerminalID = live.Ref.Workspace, live.Ref.Pane, live.TerminalID
+	if !reflect.DeepEqual(saved, want) {
+		t.Fatalf("persisted row changed outside location fields: got %#v want %#v", saved, want)
+	}
+}
+
 func testHerdrPane(root string) state.Pane {
 	return state.Pane{
 		Parent: "528", IssueNum: 529, Backend: backend.Herdr,
 		PaneID: "workspace-a:p1", Agent: "codex", AgentID: "agent-a",
 		WorkspaceID: "workspace-a", WorkspaceLabel: "owned-label-a",
 		TerminalID: "terminal-a",
-		RepoKey:    "/repo/.git", SessionID: "session-a",
+		RepoKey:    "/repo/.git", RepoRoot: root, SessionID: "session-a",
 		SocketPath: "/tmp/herdr-a.sock", WorktreePath: filepath.Join(root, "child"),
+		EmitterRowKey: "row-a",
+	}
+}
+
+func assertManagedLocation(t *testing.T, pane state.Pane, live backend.LivePane) {
+	t.Helper()
+	if pane.WorkspaceID != live.Ref.Workspace || pane.PaneID != live.Ref.Pane || pane.TerminalID != live.TerminalID {
+		t.Fatalf("managed location = (%q, %q, %q), want (%q, %q, %q)",
+			pane.WorkspaceID, pane.PaneID, pane.TerminalID,
+			live.Ref.Workspace, live.Ref.Pane, live.TerminalID,
+		)
 	}
 }
 

@@ -99,6 +99,49 @@ func TestMergedStateLoaderUnionsWorktreesAndTagsSource(t *testing.T) {
 	}
 }
 
+func TestMergedStateLoaderDoesNotPersistMovedManagedLocation(t *testing.T) {
+	repo := newCommittedRepo(t)
+	top := gitTopIn(t, repo)
+	row := state.Pane{
+		Parent: "740", IssueNum: 741, Backend: backend.Herdr, Agent: "codex",
+		WorkspaceID: "workspace-old", WorkspaceLabel: "fanout-agent-nonce",
+		PaneID: "pane-old", TerminalID: "terminal-old",
+		RepoKey: filepath.Join(top, ".git"), RepoRoot: top, WorktreePath: top,
+		SessionID: "session-owned", SocketPath: "/tmp/herdr-owned.sock", EmitterRowKey: "row-child",
+	}
+	recordPaneAt(t, top, row)
+	statePath := state.Path(top)
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := backend.LivePane{
+		Ref: backend.PaneRef{
+			Backend: backend.Herdr, Workspace: "workspace-next", Pane: "pane-next",
+		},
+		WorkspaceLabel: row.WorkspaceLabel, TerminalID: "terminal-next",
+		RepoKey: row.RepoKey, ProjectRoot: row.RepoRoot, WorktreePath: row.WorktreePath,
+		SessionID: row.SessionID, SocketPath: row.SocketPath, AgentProvider: row.Agent, AgentPresent: true,
+	}
+	store, err := MergedStateLoader(top, func() ([]backend.LivePane, error) {
+		return []backend.LivePane{live}, nil
+	})()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found := store.Find(row.Parent, row.IssueNum)
+	if !found || got.WorkspaceID != row.WorkspaceID || got.PaneID != row.PaneID || got.TerminalID != row.TerminalID {
+		t.Fatalf("read-only merged row changed location: %#v (found=%t)", got, found)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("read-only merged state loader rewrote state.json")
+	}
+}
+
 func TestMergedStateLoaderDedupesBySameIdentityHomeWins(t *testing.T) {
 	repo := newCommittedRepo(t)
 	top := gitTopIn(t, repo)
