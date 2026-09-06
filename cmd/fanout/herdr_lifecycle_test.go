@@ -42,6 +42,16 @@ func TestHerdrLifecycleTimeoutLeavesFinalizationBudget(t *testing.T) {
 	}
 }
 
+func TestWorkspaceLifecycleFactoryTypesRepositoryMismatchAsIdentityFailure(t *testing.T) {
+	repo := initLifecycleRepo(t)
+	_, err := newWorkspaceLifecycleFactory(repo)(context.Background(), state.Pane{
+		RepoKey: "/foreign/repository.git", RepoRoot: repo,
+	})
+	if !errors.Is(err, backend.ErrOwnedIdentityMismatch) {
+		t.Fatalf("repository mismatch error = %v, want owned identity mismatch", err)
+	}
+}
+
 func TestRunHerdrLifecycleRequiresExplicitAction(t *testing.T) {
 	for _, args := range [][]string{nil, {}, {"bogus"}, {"restart", "shutdown"}} {
 		var out, errOut bytes.Buffer

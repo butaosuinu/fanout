@@ -317,7 +317,6 @@ func TestHerdrServerLifecycleIntentRejectsAmbiguousOrIncompleteRows(t *testing.T
 	if err := validateIntent(regular); err == nil || !strings.Contains(err.Error(), "unrelated server identity") {
 		t.Fatalf("regular intent with server identity error = %v", err)
 	}
-
 	restart = testServerIntent(IntentRestart)
 	restart.CleanupPhase = CleanupRemove
 	if err := validateIntent(restart); err == nil || !strings.Contains(err.Error(), "unrelated fields") {

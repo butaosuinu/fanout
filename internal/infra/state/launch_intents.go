@@ -644,11 +644,8 @@ func validateIntent(intent LaunchIntent) error {
 	if IsServerLifecycleKind(intent.Kind) {
 		return validateServerIntent(intent)
 	}
-	if intent.Server != nil {
-		return fmt.Errorf("herdr intent %s has an unrelated server identity", intent.ID)
-	}
-	if intent.Kind != IntentResume && intent.ResumeAgentSession != nil {
-		return fmt.Errorf("herdr intent %s has an unrelated resume session", intent.ID)
+	if err := validateIntentKindIsolation(intent); err != nil {
+		return err
 	}
 	if err := validateIntentIdentity(intent); err != nil {
 		return err
@@ -663,6 +660,17 @@ func validateIntent(intent LaunchIntent) error {
 		return fmt.Errorf("herdr intent %s: %w", intent.ID, err)
 	}
 	return nil
+}
+
+func validateIntentKindIsolation(intent LaunchIntent) error {
+	switch {
+	case intent.Server != nil:
+		return fmt.Errorf("herdr intent %s has an unrelated server identity", intent.ID)
+	case intent.Kind != IntentResume && intent.ResumeAgentSession != nil:
+		return fmt.Errorf("herdr intent %s has an unrelated resume session", intent.ID)
+	default:
+		return nil
+	}
 }
 
 func validateServerIntent(intent LaunchIntent) error {

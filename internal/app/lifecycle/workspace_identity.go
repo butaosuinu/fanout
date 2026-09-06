@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -178,11 +179,11 @@ func findUniqueWorkspace(
 		return nil, nil
 	}
 	if len(candidates) != 1 {
-		return nil, fmt.Errorf("herdr workspace identity has %d live matches", len(candidates))
+		return nil, fmt.Errorf("%w: herdr workspace identity has %d live matches", backend.ErrOwnedIdentityMismatch, len(candidates))
 	}
 	_, exact := predicate(candidates[0])
 	if !exact {
-		return nil, fmt.Errorf("herdr workspace identity does not match the live workspace")
+		return nil, fmt.Errorf("%w: herdr workspace identity does not match the live workspace", backend.ErrOwnedIdentityMismatch)
 	}
 	return &candidates[0], nil
 }
@@ -229,7 +230,7 @@ func verifyTerminalInvalidation(
 		}
 		if pane.Pane != (backend.PaneRef{Backend: backend.Herdr, Workspace: resource.WorkspaceID, Pane: resource.PaneID}) ||
 			filepath.Clean(pane.CWD) != filepath.Clean(resource.CurrentPath) {
-			return fmt.Errorf("saved Herdr terminal identity was reused by a different pane")
+			return fmt.Errorf("%w: saved Herdr terminal identity was reused by a different pane", backend.ErrOwnedIdentityMismatch)
 		}
 		return nil
 	}
@@ -250,7 +251,13 @@ func verifyCleanupCheckout(
 		resource.RepoKey,
 		resource.RepoRoot,
 	)
-	return err
+	if err != nil {
+		if errors.Is(err, worktree.ErrCheckoutMismatch) {
+			return fmt.Errorf("%w: %w", backend.ErrOwnedIdentityMismatch, err)
+		}
+		return err
+	}
+	return nil
 }
 
 func findCoordinatorIntent(

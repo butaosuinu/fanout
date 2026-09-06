@@ -233,13 +233,16 @@ func verifyReopenPreconditions(
 	if observation.workspace != nil || observation.checkout.PathAbsent || !observation.checkout.Registered {
 		return fmt.Errorf("herdr cleanup reopen preconditions changed")
 	}
-	return verifyCleanupCheckout(
+	if err := verifyCleanupCheckout(
 		ctx,
 		opts.ProjectRoot,
 		intent.FullBranchRef,
 		intent.ExpectedHead,
 		intent.Resource,
-	)
+	); err != nil {
+		return err
+	}
+	return verifyRemovableCheckoutContents(ctx, intent.WorktreePath)
 }
 
 func currentCoordinator(
@@ -410,7 +413,9 @@ func restorePlannedCleanup(
 	cause error,
 ) (state.LaunchIntent, error) {
 	intent.Status = state.IntentPlanned
-	intent.Failure = ""
+	if intent.Failure != sharedAttachedWorkspaceCloseComplete {
+		intent.Failure = ""
+	}
 	return intent, errors.Join(cause, saveWorkspaceCleanupIntent(journal, intent))
 }
 
@@ -419,6 +424,11 @@ func resetUnissuedCleanup(
 	intent state.LaunchIntent,
 	cause error,
 ) (state.LaunchIntent, error) {
+	if intent.Failure == sharedAttachedWorkspaceCloseComplete {
+		intent.Status = state.IntentPlanned
+		intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
+		return intent, errors.Join(cause, saveWorkspaceCleanupIntent(journal, intent))
+	}
 	intent.Status = state.IntentPlanned
 	intent.ExpiresUnixMS = time.Now().Add(workspaceCleanupTimeout).UnixMilli()
 	intent.Failure = ""

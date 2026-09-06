@@ -68,6 +68,48 @@ func (s *OwnedSession) BindOwnedWorkspaceClose(
 	return bound, nil
 }
 
+// CloseAttachedWorkspace revalidates a worktree-backed attached agent under
+// the owned mutation lock, then closes only its exact workspace generation.
+func (s *OwnedSession) CloseAttachedWorkspace(
+	ctx context.Context,
+	binding corebackend.PaneBinding,
+) error {
+	if s == nil || s.backend == nil {
+		return mutationNotIssued(fmt.Errorf("herdr owned session is nil"))
+	}
+	if binding.Shell || strings.TrimSpace(binding.Agent) == "" ||
+		strings.TrimSpace(binding.RepoKey) == "" || strings.TrimSpace(binding.WorktreePath) == "" {
+		return mutationNotIssued(fmt.Errorf("%w: attached workspace binding is incomplete", corebackend.ErrOwnedIdentityMismatch))
+	}
+	return s.backend.closeOwnedAttachedWorkspace(ctx, ownedTargetFromBinding(binding))
+}
+
+// VerifyAttachedWorkspaceClose runs the same immutable admission as
+// CloseAttachedWorkspace without issuing the close mutation.
+func (s *OwnedSession) VerifyAttachedWorkspaceClose(
+	ctx context.Context,
+	binding corebackend.PaneBinding,
+) error {
+	if s == nil || s.backend == nil {
+		return fmt.Errorf("herdr owned session is nil")
+	}
+	if binding.Shell || strings.TrimSpace(binding.Agent) == "" ||
+		strings.TrimSpace(binding.RepoKey) == "" || strings.TrimSpace(binding.WorktreePath) == "" {
+		return fmt.Errorf("%w: attached workspace binding is incomplete", corebackend.ErrOwnedIdentityMismatch)
+	}
+	return s.backend.verifyOwnedAttachedWorkspaceClose(ctx, ownedTargetFromBinding(binding))
+}
+
+func ownedTargetFromBinding(binding corebackend.PaneBinding) corebackend.OwnedPaneIdentity {
+	return corebackend.OwnedPaneIdentity{
+		Ref: binding.Ref, SessionID: binding.SessionID, SocketPath: binding.SocketPath,
+		WorkspaceLabel: binding.WorkspaceLabel, TerminalID: binding.TerminalID,
+		RepoKey: binding.RepoKey, WorktreePath: binding.WorktreePath,
+		CurrentPath: binding.WorktreePath, Agent: binding.Agent, AgentID: binding.AgentID,
+		AgentSession: cloneAgentSession(binding.AgentSession),
+	}
+}
+
 func (b *Backend) BindOwnedClose(req OwnedCloseRequest) (*Backend, error) {
 	cloned := cloneOwnedCloseRequest(req)
 	return b.bindOwnedTarget(cloned.Target, &cloned)
@@ -591,6 +633,66 @@ func (b *Backend) issueAndVerifyWorkspaceClose(
 	return nil
 }
 
+func (b *Backend) closeOwnedAttachedWorkspace(
+	ctx context.Context,
+	target corebackend.OwnedPaneIdentity,
+) error {
+	ctx, cancel := context.WithTimeout(ctx, 8*commandTimeout)
+	defer cancel()
+	admission, lock, err := b.acquireOwnedMutation(ctx)
+	if err != nil {
+		return mutationNotIssued(err)
+	}
+	defer unlockPrivateFile(lock)
+	target, probed, err := b.resolveAttachedWorkspaceCloseTarget(ctx, admission, target)
+	if err != nil {
+		return mutationNotIssued(err)
+	}
+	if issueErr := b.issueAttachedWorkspaceClose(ctx, probed, target.Ref.Workspace); issueErr != nil {
+		return issueErr
+	}
+	view, err := b.ownedSnapshotView(ctx, admission)
+	if err != nil {
+		return err
+	}
+	if view.workspacePresent(target.Ref.Workspace) {
+		return fmt.Errorf("herdr attached workspace close returned success but workspace remains live")
+	}
+	return nil
+}
+
+func (b *Backend) verifyOwnedAttachedWorkspaceClose(
+	ctx context.Context,
+	target corebackend.OwnedPaneIdentity,
+) error {
+	admission, lock, err := b.acquireOwnedMutation(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlockPrivateFile(lock)
+	_, _, err = b.resolveAttachedWorkspaceCloseTarget(ctx, admission, target)
+	return err
+}
+
+func (b *Backend) issueAttachedWorkspaceClose(
+	ctx context.Context,
+	probed probeResult,
+	workspaceID string,
+) error {
+	callCtx, callCancel := context.WithTimeout(ctx, commandTimeout)
+	defer callCancel()
+	out, err := b.runWorktreeMutation(
+		callCtx, probed.binary, probed.route, "workspace", "close", workspaceID,
+	)
+	if err != nil {
+		if rejected, ok := decodeMutationRejection(out, err, "cli:workspace:close"); ok {
+			return rejected
+		}
+		return err
+	}
+	return nil
+}
+
 func (b *Backend) closeOwnedSession(ctx context.Context, req OwnedCloseRequest) (corebackend.CloseResult, error) {
 	failed := corebackend.CloseResult{Status: corebackend.CloseFailed}
 	if err := verifyWorktreeOwnership(req); err != nil {
@@ -727,11 +829,59 @@ func (v ownedSnapshotView) workspaceContainsOnly(target corebackend.PaneRef) boo
 	return true
 }
 
-func (b *Backend) resolveOwnedTarget(
+func (v ownedSnapshotView) paneLessAttachedWorkspaceMatches(expected corebackend.OwnedPaneIdentity) bool {
+	workspace, ok := v.workspaces[expected.Ref.Workspace]
+	if !ok || workspace.label != expected.WorkspaceLabel || workspace.repoKey != expected.RepoKey ||
+		workspace.worktreePath != expected.WorktreePath {
+		return false
+	}
+	for _, pane := range v.panes {
+		if pane.identity.Ref.Workspace == expected.Ref.Workspace || pane.identity.TerminalID == expected.TerminalID {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *Backend) resolveAttachedWorkspaceCloseTarget(
 	ctx context.Context,
 	admission ownedAdmission,
 	expected corebackend.OwnedPaneIdentity,
 ) (corebackend.OwnedPaneIdentity, probeResult, error) {
+	if err := validateSavedTarget(expected, admission); err != nil {
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, err
+	}
+	view, err := b.ownedSnapshotView(ctx, admission)
+	if err != nil {
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, err
+	}
+	current, live := view.find(expected.Ref)
+	if verifyErr := verifyAttachedWorkspaceCloseSnapshot(view, expected, current, live); verifyErr != nil {
+		return corebackend.OwnedPaneIdentity{}, probeResult{}, verifyErr
+	}
+	probed, err := b.probeOwned(ctx, admission)
+	return cloneOwnedPaneIdentity(expected), probed, err
+}
+
+func verifyAttachedWorkspaceCloseSnapshot(
+	view ownedSnapshotView,
+	expected corebackend.OwnedPaneIdentity,
+	current ownedPaneView,
+	live bool,
+) error {
+	if live && !ownedPaneMatches(expected, current) {
+		return fmt.Errorf("%w: saved attached target identity changed", corebackend.ErrOwnedIdentityMismatch)
+	}
+	if live {
+		return verifyWorkspaceClosePanes(view, expected.Ref)
+	}
+	if !view.paneLessAttachedWorkspaceMatches(expected) {
+		return fmt.Errorf("%w: saved attached target is neither live nor a matching pane-less workspace", corebackend.ErrOwnedIdentityMismatch)
+	}
+	return nil
+}
+
+func (b *Backend) resolveOwnedTarget(ctx context.Context, admission ownedAdmission, expected corebackend.OwnedPaneIdentity) (corebackend.OwnedPaneIdentity, probeResult, error) {
 	target, probed, _, err := b.resolveOwnedTargetView(ctx, admission, expected)
 	return target, probed, err
 }
