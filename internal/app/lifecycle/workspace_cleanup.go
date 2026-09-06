@@ -1386,15 +1386,48 @@ func inspectSharedAttachedWorkspace(
 	if verifyErr := runtime.VerifyOwned(ctx); verifyErr != nil {
 		return state.Pane{}, nil, nil, verifyErr
 	}
-	resource := resourceFromPane(current)
-	observation, err := verifyWorkspaceCloseTarget(
-		ctx, opts.ProjectRoot, runtime, current, resource,
-		workspaceResourcePredicate(resource), false,
+	workspaces, err := runtime.ObserveWorkspaces(ctx)
+	if err != nil {
+		return state.Pane{}, nil, nil, err
+	}
+	current, observation, err := reconcileSharedAttachedWorkspace(
+		ctx, opts, locked, current, workspaces,
 	)
 	if err == nil && observation.workspace != nil {
 		err = runtime.VerifyAttachedWorkspaceClose(ctx, current.RuntimeBinding())
 	}
 	return current, runtime, observation.workspace, err
+}
+
+func reconcileSharedAttachedWorkspace(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+	workspaces []backend.WorkspaceObservation,
+) (state.Pane, workspaceCleanupObservation, error) {
+	observation, err := verifySharedAttachedWorkspace(ctx, opts.ProjectRoot, pane, workspaces)
+	if err == nil || !errors.Is(err, backend.ErrOwnedIdentityMismatch) {
+		return pane, observation, err
+	}
+	pane, err = reconcileManagedPaneLocationAfterMismatch(locked, pane, workspaces, err)
+	if err != nil {
+		return pane, workspaceCleanupObservation{}, err
+	}
+	observation, err = verifySharedAttachedWorkspace(ctx, opts.ProjectRoot, pane, workspaces)
+	return pane, observation, err
+}
+
+func verifySharedAttachedWorkspace(
+	ctx context.Context,
+	projectRoot string,
+	pane state.Pane,
+	workspaces []backend.WorkspaceObservation,
+) (workspaceCleanupObservation, error) {
+	resource := resourceFromPane(pane)
+	return verifyWorkspaceCloseTargetSnapshot(
+		ctx, projectRoot, pane, resource, workspaceResourcePredicate(resource), false, workspaces,
+	)
 }
 
 func currentSharedAttachedWorkspaceRow(locked *state.LockedStore, pane state.Pane) (state.Pane, error) {

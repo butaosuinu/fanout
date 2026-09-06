@@ -37,17 +37,29 @@ func StateLoader(
 		if err != nil {
 			return store, err
 		}
-		roots := bindingRoots(projectRoot, store.Panes, live)
-		if len(roots) == 0 {
-			return store, nil
-		}
-		for _, root := range roots {
-			if err := bindOwnedAgentSessions(root, live); err != nil {
-				return state.Store{}, fmt.Errorf("bind Herdr agent session in %s: %w", root, err)
-			}
-		}
-		return sessionview.MergedStateLoader(projectRoot, cachedLive)()
+		return bindCurrentState(projectRoot, store, live, cachedLive)
 	}
+}
+
+func bindCurrentState(
+	projectRoot string,
+	store state.Store,
+	live []backend.LivePane,
+	cachedLive func() ([]backend.LivePane, error),
+) (state.Store, error) {
+	roots, err := bindingRoots(projectRoot, store.Panes, live)
+	if err != nil {
+		return state.Store{}, err
+	}
+	if len(roots) == 0 {
+		return store, nil
+	}
+	for _, root := range roots {
+		if err := bindOwnedAgentSessions(root, live); err != nil {
+			return state.Store{}, fmt.Errorf("bind Herdr agent session in %s: %w", root, err)
+		}
+	}
+	return sessionview.MergedStateLoader(projectRoot, cachedLive)()
 }
 
 // ReloadPane refreshes the owning state row, then resolves it through the
@@ -95,15 +107,29 @@ func reloadedPane(store state.Store, expected state.Pane) (state.Pane, bool, err
 	return pane, found, nil
 }
 
-func bindingRoots(projectRoot string, panes []state.Pane, live []backend.LivePane) []string {
+func bindingRoots(
+	projectRoot string,
+	panes []state.Pane,
+	live []backend.LivePane,
+) ([]string, error) {
+	owners := bindingOwnerRoots(projectRoot, panes)
+	var roots []string
+	for _, root := range owners {
+		store, err := state.LoadProject(root)
+		if err != nil {
+			return nil, fmt.Errorf("load agent binding owner %s: %w", root, err)
+		}
+		if paneBindingsChanged(store.Panes, live) {
+			roots = append(roots, root)
+		}
+	}
+	return roots, nil
+}
+
+func bindingOwnerRoots(projectRoot string, panes []state.Pane) []string {
 	seen := map[string]bool{}
 	var roots []string
-	for i, pane := range panes {
-		_, locationChanged, _ := panelaunch.ReconcileManagedPaneLocationFromLive(pane, live)
-		_, sessionChanged := currentSessionBinding(panes, i, live)
-		if !locationChanged && !sessionChanged {
-			continue
-		}
+	for _, pane := range panes {
 		for _, root := range paneBindingOwners(projectRoot, pane) {
 			if seen[root] {
 				continue
@@ -113,6 +139,17 @@ func bindingRoots(projectRoot string, panes []state.Pane, live []backend.LivePan
 		}
 	}
 	return roots
+}
+
+func paneBindingsChanged(panes []state.Pane, live []backend.LivePane) bool {
+	for index, pane := range panes {
+		_, locationChanged, _ := panelaunch.ReconcileManagedPaneLocationFromLive(pane, live)
+		_, sessionChanged := currentSessionBinding(panes, index, live)
+		if locationChanged || sessionChanged {
+			return true
+		}
+	}
+	return false
 }
 
 func paneBindingOwners(projectRoot string, pane state.Pane) []string {
