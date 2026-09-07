@@ -11,9 +11,13 @@ paths:
 # Dashboard PR mutations
 
 These files implement or feed the dashboard's two mutation endpoints,
-`POST /api/pr/merge` and `POST /api/pr/delete-branch`, and are class H (human
-review). Read `docs/dashboard-pr-mutations.ja.md` before changing them; when a
-change moves an invariant, update that document in the same PR.
+`POST /api/pr/merge` and `POST /api/pr/delete-branch`. The handlers
+(`internal/ui/dashboard/merge.go`, `deletebranch.go`) and `internal/app/prmerge`
+are class H (human review); the other paths keep the class
+`docs/architecture.ja.md` assigns them (`ghissue` and `web/src/transport` M,
+the web features A apart from `diff.ts`). Read
+`docs/dashboard-pr-mutations.ja.md` before changing any of them; when a change
+moves an invariant, update that document in the same PR.
 
 The invariants a local edit breaks most easily:
 

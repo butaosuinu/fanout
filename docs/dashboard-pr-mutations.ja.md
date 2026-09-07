@@ -19,7 +19,8 @@ PR は本書を同じ PR で更新する。
   `.fanout/state.json`、ペイン入力には触れず、`gh` に `--admin` / `--auto` /
   `--delete-branch` を渡さない。`--delete-branch` はローカル branch も消しにいき、
   linked worktree で checkout 済みの子 branch では失敗する。
-- mutation endpoint の追加、この 1 本の作用範囲の拡大、入口 gate の緩和は人間レビュー対象。
+- mutation endpoint の追加、既存 2 本の作用範囲の拡大、入口 gate の緩和は人間レビュー
+  対象。
 
 ## リクエストの照合
 
@@ -29,14 +30,14 @@ PR は本書を同じ PR で更新する。
 - サーバは、その PR が指定された snapshot 行にまだ載っていることを要求し、SHA を
   `--match-head-commit` として渡す。描画とクリックの間に動いた PR は GitHub が拒否し、
   盲目的にマージされない。
-- merged / closed / draft / CONFLICTING は 409 で拒否する。GitHub が既に merge を保持して
-  いる PR(誰かが armed した auto-merge、または merge queue 投入済み)も 409。二度目の
+- merged / closed / draft / CONFLICTING は 409 で拒否する。GitHub が既に merge を受け付け
+  ている PR(誰かが armed した auto-merge、または merge queue 投入済み)も 409。二度目の
   要求で早くマージされることはない。
 - レビュー承認と CI は意図的に gate にしない。branch protection の強制は GitHub の役目で、
   二重実装すると保護ルールの無い repository でボタンが永久に死ぬ。
 - live read は `gh pr view --json` ではなく GraphQL を使う。merge queue は GraphQL でしか
-  見えず、「GitHub が既にこの merge を保持している」はフェンスが見なければならない状態
-  そのもの。
+  見えず、「GitHub が既にこの merge を受け付けている」はフェンスが見なければならない
+  状態そのもの。
 
 ## 入口 middleware と token
 
@@ -62,26 +63,27 @@ PR は本書を同じ PR で更新する。
 - closing-issue link は全ページを歩く。行の issue が 2 ページ目以降にあることがある。
   ページは別々の読み取りで、1 つの snapshot ではない。
 
-## merge-claims.json — 結果が読めない merge の保持
+## merge-claims.json による保持
 
 - 結果が読めなかった merge はエラーではなく unknown として返し、その PR を
   `<git-common-dir>/fanout/merge-claims.json` に保持する。別タブ、リロード、ダッシュボード
   再起動のどれからも二発目は撃てない。このファイルが endpoint 唯一のローカル書き込み。
 - 保持は poll が PR の merged または closed を示したときだけ解除する。時間の経過は結果の
   証拠ではない。手動で外す方法はファイルからエントリを削除すること。
-- 保持は `gh` を実行する前に取り、結果が判明したら解除する。「書け」と教えてくれるはずの
-  応答こそ届かない応答だから。merge 途中のクラッシュも、失われた応答と同じ証拠を残す。
+- 保持は `gh` を実行する前に取り、結果が判明したら解除する。結果を見てから書く設計では、
+  保持が必要になる「応答が届かない」ケースそのものを守れない。merge 途中のクラッシュ
+  も、失われた応答と同じ証拠を残す。
 - claims file が書けない、または読めないときは merge を拒否する。再起動を生き残らない
   guard で走らせない。
 - 「保持なし」を意味するのはファイルが無いときだけ。壊れたファイルを空として読むと、
-  未解決の merge を失い、次の予約がその唯一の記録を上書きする。
+  未解決の merge を失い、次の保持がその唯一の記録を上書きする。
 - read → check → reserve の一連は claims file の lock の下で行う。1 つの repository に
   2 つのダッシュボードが走りうるし、atomic write は個々の書き込みを不可分にするだけで、
   その周りの判断は守らない。
 - file と lock は worktree 自身の `.fanout` ではなく repository 共通の fanout ディレクトリ
   (git common dir。Herdr intent journal と同じ)に置く。ダッシュボードは全 linked
   worktree の session を列挙するので、兄弟 worktree で起動したダッシュボードも同じ PR を
-  表示し、片方の worktree に書いた claim はもう片方には存在しないことになる。
+  表示し、片方の worktree に書いた保持はもう片方には存在しないことになる。
 
 ## queued merge の第二の終端
 
@@ -95,7 +97,7 @@ PR は本書を同じ PR で更新する。
   再構築されるため。
 - snapshot 内の PR の全コピーを参照する。1 つの PR は複数の行に載り、issue 側と branch 側
   の fetch は別の時刻に着地する。
-- 結果が読めなかった merge の claim は、この終端で解除しない。その merge は既に起きて
+- 結果が読めなかった merge の保持は、この終端で解除しない。その merge は既に起きて
   いるかもしれない。
 - 送信失敗が auto-merge を armed のまま残したなら、retryable ではなく landed として扱う。
   それを arm できたのはこのコマンドだけ。
@@ -122,6 +124,8 @@ merge queue 必須の base では queue 投入で成功終了する。merged / d
   する。cleanup の前提条件が merge そのものを拒否することはない。
 - OID フェンスは原子的ではない。GitHub に条件付き ref 削除は無い。既に着地した push は
   捕まえるが、merge 確認後の往復の間に着地する push は捕まえない。
+- ref path の各セグメントは percent-encode する。`feature/#123` のような合法な ref が
+  fragment で切れ、その 404 が「既に無い」と誤認されるのを防ぐ。
 
 ## diff toolbar の pin
 

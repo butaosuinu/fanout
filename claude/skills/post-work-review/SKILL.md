@@ -177,8 +177,8 @@ Pass 2 が clean 判定 / ユーザー停止指示 / oscillation 検知 / 3 回�
    base から来た無関係変更や未確認の推測は混ぜない。
 3. リスク: 残る注意点がある場合だけ `> [!WARNING]` ブロック。低リスクなら省略し、
    「リスクなし」の埋め草は書かない。
-4. ゲート付き Mermaid: 挙動 / 呼び出しフロー / スキーマが変わった場合だけ
-   ```mermaid を最大 1 つ。refactor / rename / docs / format / config / test-only では
+4. ゲート付き Mermaid: 挙動 / 呼び出しフロー / スキーマが変わった場合だけ `mermaid`
+   フェンスを最大 1 つ。refactor / rename / docs / format / config / test-only では
    出さない。図に含める関数名、ファイル名、設定名、コマンド名は diff または現在の
    worktree に実在することを `rg` 等で確認し、辿れないシンボルは落とす。薄い図しか
    作れないなら図ごと省く。

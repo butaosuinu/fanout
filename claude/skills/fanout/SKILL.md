@@ -30,7 +30,7 @@ fanout <parent-issue|project-url>
        [--team]
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
 fanout <parent-issue> --merge <NUM> | --close <NUM> | --cleanup
-fanout dashboard --web              # read-only localhost web dashboard; no parent arg
+fanout dashboard --web              # token-gated localhost web dashboard (can merge PRs); no parent arg
 fanout plan <spec.json|plan-slug>   # issue-less plan lane (fanout-plan skill)
 fanout msg <verb> [options] [body...]  # sibling messaging (references/sibling-messaging.md)
 fanout --check-update               # read-only version comparison
@@ -55,9 +55,11 @@ live tmux and issue/PR status, `n` opens the manual-pane popup for prompt-based
 `claude` / `codex` / `opencode` panes, and the label watcher runs inside it when
 enabled. Key bindings and TUI details are on the docs site, not here.
 
-`fanout dashboard --web` starts the standalone, 127.0.0.1-bound web dashboard.
-It is human-facing: surface it when the user wants to watch or monitor panes;
-do not run it as part of the fan-out. The console and a live fan-out also bind
+`fanout dashboard --web` starts the standalone, 127.0.0.1-bound, token-gated
+web dashboard. Its URL carries merge authority (two PR mutation endpoints), so
+treat it as a credential. It is human-facing: surface it when the user wants to
+watch or monitor panes; do not run it as part of the fan-out. The console and a
+live fan-out also bind
 `F12` / `prefix + D` (open it) and `prefix + M` (same-worktree actions) in tmux;
 `--no-dashboard-keybind` suppresses those bindings.
 
@@ -70,22 +72,23 @@ the plan and writes the spec JSON before invoking the CLI.
 `/fanout` forwards `$ARGUMENTS`. Resolve them in this order, before any target
 resolution:
 
-1. No arguments, or the user asks for the console: run `fanout` with no
+1. The user only asks whether the binary is current, or to update it:
+   `fanout --check-update` is the read-only check. `fanout update` replaces the
+   binary through the repository `install.sh` (`--version <tag>` pins a
+   release, `--no-skills` skips integrations; only an executable named `fanout`
+   is replaced; exit `0` no-op or updated, `1` environment or preflight, `2`
+   bad invocation or incomparable version, `3` release lookup failed). Stop.
+2. No arguments, or the user asks for the console: run `fanout` with no
    arguments from the target repository worktree and stop. The console needs no
    parent, agent, dry-run, names, or confirmation.
-2. First token `dashboard` (ignoring the wrapper flags `--go` / `--wait`):
+3. First token `dashboard`, ignoring the wrapper flags `--go` / `--wait`:
    forward the dashboard arguments with those two flags stripped (for example
    `fanout dashboard --web --open`) and stop; the dashboard parser rejects
    unknown flags.
-3. First token `plan`: hand the remaining arguments to the fanout-plan skill
-   with `plan` removed. `--go` stays as that skill's confirmation bypass;
-   `--wait` is issue-mode only, so drop it with a note.
-4. Version questions: `fanout --check-update` is the read-only check.
-   `fanout update` replaces the binary through the repository `install.sh`
-   (`--version <tag>` pins a release, `--no-skills` skips integrations; only an
-   executable named `fanout` is replaced; exit `0` no-op or updated, `1`
-   environment or preflight, `2` bad invocation or incomparable version, `3`
-   release lookup failed).
+4. First token `plan`, again ignoring `--go` / `--wait` (`/fanout plan [path]`,
+   `/fanout --go plan …`, `/fanout plan --go`): hand the remaining arguments to
+   the fanout-plan skill with `plan` removed. `--go` stays as that skill's
+   confirmation bypass; `--wait` is issue-mode only, so drop it with a note.
 5. Lifecycle flags (`--status`, `--close`, `--merge`, `--cleanup`): resolve the
    target, then run the command directly with no agent, dry-run, or naming.
 6. Otherwise this is a pane-creation run. `--go` skips the confirmation and
@@ -100,7 +103,8 @@ Examples: `/fanout 123` (dry-run, confirm, run) · `/fanout 123 --go` ·
 `/fanout 123 --team` · `/fanout https://github.com/users/<owner>/projects/3`
 (Todo column) · `/fanout https://github.com/orgs/acme/projects/12
 --project-status "In Progress" --limit 5` · `/fanout plan
-/tmp/implementation-plan.md` · `/fanout` (console).
+/tmp/implementation-plan.md` · `/fanout plan --go` (best approved plan, no
+second confirmation) · `/fanout` (console).
 
 Pane creation is visible and each pane has to be closed by hand, so do not fan
 out unprompted because an issue happens to have sub-issues: suggest it and wait
@@ -140,7 +144,9 @@ positional argument through `internal/app/cliflags.Parse()`.
 ### 2. Issue mode only: scan the parent body for implicit children
 
 The CLI treats two things as children: issues from the Sub-issues API and
-parent-body rows matching `^\s*-\s+\[[ xX]\] ... #N`. Parents in the wild often
+parent-body task-list rows of the form `- [ ] #N …` (only whitespace between the
+checkbox and `#N`; a row with text before the number is not discovered and
+counts as an implicit child below). Parents in the wild often
 describe children in prose instead, and those reach the CLI only through
 `--include`. Skip this step entirely in project mode: Project items are the
 source of truth, there is no parent body, and Project descriptions often cite

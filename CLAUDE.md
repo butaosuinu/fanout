@@ -59,7 +59,7 @@ checksum-verified release installer alone owns Codex `post-work-review`.
 
 `internal/` has four layers: `core` (pure logic, no process/network/FS/DB),
 `app` (use-case orchestration), `infra` (external process/FS/DB), and `ui` (TUI
-+ web dashboard). Imports flow core -> core; app -> core/app/infra; infra ->
+and web dashboard). Imports flow core -> core; app -> core/app/infra; infra ->
 core/infra; ui -> all four; nothing imports the composition root `cmd/fanout`.
 `internal/arch` enforces this inside `go test` through godep-cruiser rules
 (`internal/arch/godep-cruiser.json`; exceptions in `godep-cruiser-baseline.json`
@@ -87,10 +87,12 @@ Agent-state telemetry is the six-value contract `running` / `working` / `plan`
 / `blocked` / `idle` / `done` on the `@fanout_agent_state` pane option,
 normalized in `internal/app/sessionview`. `internal/infra/tmuxrun` writes only
 `running` / `done`; claude panes are refined by the `--settings` hooks
-`internal/core/agent` injects; codexapp reports `working` / `plan` only on the
-`thread/settings/update` fallback path and, for the team bridge, across the
-whole session. Push lanes never write to pane input except `fanout msg nudge`,
-which skips `blocked` (a focused dialog), `done`, and unset. Details:
+`internal/core/agent` injects; codexapp's Plan Mode controller reports
+`working` / `plan` only on the `thread/settings/update` fallback path, and its
+team bridge reports `working` / `idle` / `blocked` across the whole bridged
+session. Push lanes never write to pane input except `fanout msg nudge`, which
+sends only when the peer's state is `running` / `working` / `plan` / `idle`
+(never `blocked`: its focused dialog could take the Enter). Details:
 `docs/session-messaging-push.ja.md`.
 
 ## Behavior boundaries
@@ -112,9 +114,10 @@ which skips `blocked` (a focused dialog), `done`, and unset. Details:
 - `fanout dashboard --web` is the one HTTP surface: `127.0.0.1`-bound,
   token-gated, GET-only apart from two mutations scoped to one PR each
   (`POST /api/pr/merge`, `POST /api/pr/delete-branch`); `/api/peek` and
-  `/api/plan` are a read-only `capture-pane`. Google Fonts is the SPA's single
-  external fetch, loaded `no-referrer` because the tokened URL carries merge
-  authority. The mutation invariants are `docs/dashboard-pr-mutations.ja.md`;
+  `/api/plan` are a read-only `capture-pane`, and `/api/plan` answers only for
+  plan-mode panes whose recorded agent is `codex`. Google Fonts is the SPA's
+  single external fetch, loaded `no-referrer` because the tokened URL carries
+  merge authority. The mutation invariants are `docs/dashboard-pr-mutations.ja.md`;
   adding a mutation, widening one, or relaxing its gates needs human review.
 - The label watcher is a TUI-resident, opt-in launcher, not a cron/webhook
   service and not the #107 skill loop. Only user config or env can enable it;
@@ -149,7 +152,8 @@ hooks in `.claude/settings.json` gate the way out:
   state, so a push chained after anything that can move a ref
   (`git commit … && git push`, a rebase, even `git fetch … && git push`) is
   always denied. On a deny: commit, run `make check`, then push, each as its own
-  command. Branch deletions and tag pushes are ungated; `bash -c '… git push …'`
+  command. `gh pr create` pushes an unpushed branch itself, so it needs the same
+  marker. Branch deletions and tag pushes are ungated; `bash -c '… git push …'`
   and `--mirror` fail closed. Escape hatch: `FANOUT_SKIP_PUSH_CHECK=1`.
 - `gh pr create` (`.claude/hooks/pre-pr-review-gate.sh`) requires a completed
   `/post-work-review` (`make check` passed, marker matches HEAD), a standalone
