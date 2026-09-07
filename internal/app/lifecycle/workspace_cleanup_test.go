@@ -383,6 +383,7 @@ func TestHerdrSharedAttachedCloseReconcilesMovedAgentLocation(t *testing.T) {
 		"w-attached-moved", workspace.Label, fixture.worktreePath,
 		fixture.pane.RepoKey, fixture.pane.RepoRoot,
 	)
+	addLifecycleAgentEvidence(&moved, attached)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
 		workspaces:  []backend.WorkspaceObservation{fixture.workspace, moved},
@@ -1484,7 +1485,7 @@ func TestHerdrCleanupRemovesEligibleOwnedWorktree(t *testing.T) {
 
 func TestHerdrCleanupUsesReconciledAgentLocation(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
-	fixture.pane.Agent = "codex"
+	primeLifecycleAgentIdentity(&fixture.pane)
 	fixture.pane.EmitterRowKey = "row-child"
 	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 	installLifecycleCleanupGH(t)
@@ -1556,7 +1557,7 @@ func TestHerdrMergeFastForwardsRecordedBranch(t *testing.T) {
 
 func TestHerdrMergeReconcilesMovedAgentLocation(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
-	fixture.pane.Agent = "codex"
+	primeLifecycleAgentIdentity(&fixture.pane)
 	fixture.pane.EmitterRowKey = "row-child"
 	fixture.pane.EmitterNonce = strings.Repeat("e", 32)
 	fixture.pane.ReportedState, fixture.pane.ReportedStateSeq, fixture.pane.StateRefinement = "idle", 7, true
@@ -1617,10 +1618,18 @@ func TestHerdrMergeRefusesUnsafeLocationReconciliation(t *testing.T) {
 				return []backend.WorkspaceObservation{moved}
 			},
 		},
+		{
+			name: "missing agent evidence",
+			workspaces: func(fixture herdrLifecycleFixture) []backend.WorkspaceObservation {
+				moved := movedHerdrWorkspace(fixture, "w-moved")
+				moved.LivePanes = nil
+				return []backend.WorkspaceObservation{moved}
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newHerdrLifecycleFixture(t)
-			fixture.pane.Agent = "codex"
+			primeLifecycleAgentIdentity(&fixture.pane)
 			fixture.pane.EmitterRowKey = "row-child"
 			recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 			if err := os.WriteFile(filepath.Join(fixture.worktreePath, "untrusted.txt"), []byte("child\n"), 0o644); err != nil {
@@ -1655,7 +1664,7 @@ func TestHerdrMergeRefusesUnsafeLocationReconciliation(t *testing.T) {
 
 func TestHerdrCloseReconcilesMovedAgentLocation(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
-	fixture.pane.Agent = "codex"
+	primeLifecycleAgentIdentity(&fixture.pane)
 	fixture.pane.EmitterRowKey = "row-child"
 	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 	moved := movedHerdrWorkspace(fixture, "w-moved")
@@ -1675,7 +1684,7 @@ func TestHerdrCloseReconcilesMovedAgentLocation(t *testing.T) {
 
 func TestHerdrClosePersistsMovedLocationBeforeDirtyRefusal(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
-	fixture.pane.Agent = "codex"
+	primeLifecycleAgentIdentity(&fixture.pane)
 	fixture.pane.EmitterRowKey = "row-child"
 	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "untracked.txt"), []byte("keep\n"), 0o644); err != nil {
@@ -4537,6 +4546,7 @@ func paneLessHerdrLifecycleWorkspace(workspace backend.WorkspaceObservation) bac
 	workspace.TerminalID = ""
 	workspace.CWD = ""
 	workspace.Panes = nil
+	workspace.LivePanes = nil
 	return workspace
 }
 
@@ -4551,13 +4561,15 @@ func foreignHerdrWorkspaceAtSameCheckout(fixture herdrLifecycleFixture) backend.
 }
 
 func movedHerdrWorkspace(fixture herdrLifecycleFixture, id string) backend.WorkspaceObservation {
-	return herdrLifecycleWorkspace(
+	workspace := herdrLifecycleWorkspace(
 		id,
 		fixture.workspace.Label,
 		fixture.worktreePath,
 		fixture.pane.RepoKey,
 		fixture.pane.RepoRoot,
 	)
+	addLifecycleAgentEvidence(&workspace, fixture.pane)
+	return workspace
 }
 
 func movedPaneLessHerdrWorkspace(fixture herdrLifecycleFixture) backend.WorkspaceObservation {
@@ -4566,6 +4578,7 @@ func movedPaneLessHerdrWorkspace(fixture herdrLifecycleFixture) backend.Workspac
 	workspace.TerminalID = ""
 	workspace.CWD = ""
 	workspace.Panes = nil
+	workspace.LivePanes = nil
 	return workspace
 }
 
@@ -5328,9 +5341,31 @@ func assertMovedHerdrPane(t *testing.T, fixture herdrLifecycleFixture, workspace
 }
 
 func primeRefinedLifecycleTelemetry(pane *state.Pane) {
-	pane.Agent = "codex"
+	primeLifecycleAgentIdentity(pane)
 	pane.EmitterNonce = strings.Repeat("e", 32)
 	pane.ReportedState, pane.ReportedStateSeq, pane.StateRefinement = "idle", 7, true
+}
+
+func primeLifecycleAgentIdentity(pane *state.Pane) {
+	pane.Agent = "codex"
+	pane.AgentID = "fanout-codex"
+	pane.AgentSession = &backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-child",
+	}
+}
+
+func addLifecycleAgentEvidence(workspace *backend.WorkspaceObservation, pane state.Pane) {
+	if pane.Agent == "" {
+		return
+	}
+	workspace.LivePanes = []backend.LivePane{{
+		Ref: workspace.Pane, CurrentPath: workspace.Path,
+		WorkspaceLabel: workspace.Label, TerminalID: workspace.TerminalID,
+		AgentID: pane.AgentID, AgentNamed: true, AgentProvider: pane.Agent,
+		AgentSession: pane.AgentSession, AgentPresent: true,
+		RepoKey: workspace.RepoKey, ProjectRoot: workspace.RepoRoot, WorktreePath: workspace.Path,
+		SessionID: pane.SessionID, SocketPath: pane.SocketPath,
+	}}
 }
 
 func assertLifecycleTelemetryInvalidated(t *testing.T, before, after state.Pane) {

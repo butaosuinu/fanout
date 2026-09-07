@@ -31,12 +31,36 @@ func TestReconcileManagedPaneLocationAdoptsUniqueMovedWorkspace(t *testing.T) {
 	}
 }
 
+func TestReconcileManagedPaneLocationAdmitsLateSameProviderSession(t *testing.T) {
+	pane := managedLocationPane()
+	moved := managedLocationWorkspace(pane, "workspace-next", "pane-next", "terminal-next")
+	late := *pane.AgentSession
+	late.Value = "session-late"
+	moved.LivePanes[0].AgentSession = &late
+
+	got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{moved})
+	if err != nil || !changed || got.WorkspaceID != moved.WorkspaceID {
+		t.Fatalf("late session reconciliation = %#v changed=%t err=%v", got, changed, err)
+	}
+}
+
 func TestReconcileManagedPaneLocationRefusesUnsafeMatches(t *testing.T) {
 	pane := managedLocationPane()
 	moved := managedLocationWorkspace(pane, "workspace-next", "pane-next", "terminal-next")
 	duplicate := managedLocationWorkspace(pane, "workspace-other", "pane-other", "terminal-other")
 	wrongRepo := moved
 	wrongRepo.RepoKey = "/repo/foreign.git"
+	withoutEvidence := moved
+	withoutEvidence.LivePanes = nil
+	wrongAgent := moved
+	wrongAgent.LivePanes = append([]backend.LivePane(nil), moved.LivePanes...)
+	wrongAgent.LivePanes[0].AgentID = "fanout-codex-foreign"
+	wrongProvider := moved
+	wrongProvider.LivePanes = append([]backend.LivePane(nil), moved.LivePanes...)
+	wrongProvider.LivePanes[0].AgentProvider = "claude"
+	missingSession := moved
+	missingSession.LivePanes = append([]backend.LivePane(nil), moved.LivePanes...)
+	missingSession.LivePanes[0].AgentSession = nil
 
 	for _, test := range []struct {
 		name       string
@@ -46,6 +70,10 @@ func TestReconcileManagedPaneLocationRefusesUnsafeMatches(t *testing.T) {
 		{name: "zero matches", workspaces: nil},
 		{name: "duplicate labels", workspaces: []backend.WorkspaceObservation{moved, duplicate}, wantErr: true},
 		{name: "provenance mismatch", workspaces: []backend.WorkspaceObservation{wrongRepo}, wantErr: true},
+		{name: "missing agent evidence", workspaces: []backend.WorkspaceObservation{withoutEvidence}, wantErr: true},
+		{name: "agent mismatch", workspaces: []backend.WorkspaceObservation{wrongAgent}, wantErr: true},
+		{name: "provider mismatch", workspaces: []backend.WorkspaceObservation{wrongProvider}, wantErr: true},
+		{name: "session missing", workspaces: []backend.WorkspaceObservation{missingSession}, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, changed, err := ReconcileManagedPaneLocation(pane, test.workspaces)
@@ -113,6 +141,9 @@ func managedLocationPane() state.Pane {
 		PaneID: "pane-old", TerminalID: "terminal-old",
 		RepoKey: "/repo/.git", RepoRoot: "/repo", WorktreePath: "/repo/.fanout/worktrees/child",
 		SessionID: "session-owned", SocketPath: "/tmp/herdr-owned.sock", Agent: "codex",
+		AgentID: "fanout-codex", AgentSession: &backend.AgentSessionRef{
+			Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-child",
+		},
 		EmitterRowKey: "row-key", LaunchNonce: "launch-nonce", BranchName: "fanout/child",
 		EmitterNonce: strings.Repeat("e", 32), ReportedState: "idle", ReportedStateSeq: 7, StateRefinement: true,
 	}
@@ -128,5 +159,13 @@ func managedLocationWorkspace(
 		Path: pane.WorktreePath, RepoKey: pane.RepoKey, RepoRoot: pane.RepoRoot,
 		Pane: ref, TerminalID: terminalID, CWD: pane.WorktreePath,
 		Panes: []backend.WorkspacePaneObservation{{Pane: ref, TerminalID: terminalID, CWD: pane.WorktreePath}},
+		LivePanes: []backend.LivePane{{
+			Ref: ref, CurrentPath: pane.WorktreePath,
+			WorkspaceLabel: pane.WorkspaceLabel, TerminalID: terminalID,
+			AgentID: pane.AgentID, AgentNamed: true, AgentProvider: pane.Agent,
+			AgentSession: pane.AgentSession, AgentPresent: true,
+			RepoKey: pane.RepoKey, ProjectRoot: pane.RepoRoot, WorktreePath: pane.WorktreePath,
+			SessionID: pane.SessionID, SocketPath: pane.SocketPath,
+		}},
 	}
 }

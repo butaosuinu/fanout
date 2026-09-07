@@ -2,7 +2,6 @@ package panelaunch
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -68,9 +67,9 @@ func managedPaneLocationMatch(
 		)
 	}
 	match := adoptableCoordinatorObservation(matches[0], pane.WorktreePath)
-	if !workspaceHasExactLocationProvenance(match, resource) || !managedPaneLocationObserved(match, pane) {
+	if !workspaceHasExactLocationProvenance(match, resource) || !managedPaneLocationAgentMatches(match, pane) {
 		return backend.WorkspaceObservation{}, false, fmt.Errorf(
-			"%w: managed pane label does not match checkout provenance or a unique pane", backend.ErrOwnedIdentityMismatch,
+			"%w: managed pane label does not match checkout provenance or agent evidence", backend.ErrOwnedIdentityMismatch,
 		)
 	}
 	return match, true, nil
@@ -106,18 +105,12 @@ func workspaceHasExactLocationProvenance(
 	return workspaceHasExactRestartProvenance(observation, expected)
 }
 
-func managedPaneLocationObserved(observation backend.WorkspaceObservation, pane state.Pane) bool {
-	expected := managedPaneLocationResource(pane)
-	expected.WorkspaceID = observation.WorkspaceID
-	expected.PaneID = observation.Pane.Pane
-	expected.TerminalID = observation.TerminalID
-	expected.CurrentPath = filepath.Clean(expected.CurrentPath)
-	observed := backend.WorkspacePaneObservation{
-		Pane: observation.Pane, TerminalID: observation.TerminalID, CWD: observation.CWD,
-	}
-	observed.CWD = filepath.Clean(observed.CWD)
-	return strings.TrimSpace(observed.Pane.Pane) != "" && strings.TrimSpace(observed.TerminalID) != "" &&
-		paneHasManagedResource(observed, expected)
+func managedPaneLocationAgentMatches(observation backend.WorkspaceObservation, pane state.Pane) bool {
+	pane.WorkspaceID = observation.WorkspaceID
+	pane.PaneID = observation.Pane.Pane
+	pane.TerminalID = observation.TerminalID
+	_, ok := pane.RuntimeBinding().UniqueLive(observation.LivePanes, backend.RequireRuntime(backend.Herdr))
+	return ok
 }
 
 func locationWorkspaces(pane state.Pane, live []backend.LivePane) []backend.WorkspaceObservation {
@@ -149,6 +142,7 @@ func appendLocationWorkspace(
 	workspaces[index].Panes = append(workspaces[index].Panes, backend.WorkspacePaneObservation{
 		Pane: pane.Ref, TerminalID: pane.TerminalID, CWD: pane.WorktreePath,
 	})
+	workspaces[index].LivePanes = append(workspaces[index].LivePanes, pane)
 	return workspaces
 }
 

@@ -152,7 +152,7 @@ func (b *Backend) verifyMetadataTarget(
 	probed probeResult,
 	target corebackend.MetadataTarget,
 ) error {
-	snapshot, err := b.observeOwnedSnapshot(ctx, probed)
+	snapshot, _, err := b.observeOwnedSnapshot(ctx, probed)
 	if err != nil {
 		return err
 	}
