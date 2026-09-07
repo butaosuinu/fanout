@@ -109,7 +109,8 @@ func managedPaneLocationAgentMatches(observation backend.WorkspaceObservation, p
 	pane.WorkspaceID = observation.WorkspaceID
 	pane.PaneID = observation.Pane.Pane
 	pane.TerminalID = observation.TerminalID
-	_, ok := pane.RuntimeBinding().UniqueLive(observation.LivePanes, backend.RequireRuntime(backend.Herdr))
+	runtime := backend.RequireRuntime(backend.NormalizeName(pane.Backend))
+	_, ok := pane.RuntimeBinding().UniqueLive(observation.LivePanes, runtime)
 	return ok
 }
 
