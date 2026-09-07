@@ -201,16 +201,22 @@ rollout timestamp と snapshot の境界は、UTC の
 `YYYY-MM-DDTHH:MM:SS[.1〜9桁]Z` だけを受け入れる。比較前に小数部の欠落を 0 とし、
 右側を 0 で埋めた 9 桁へ正規化する。固定長の正規化値で `(SINCE, UNTIL]` を比較し、
 秒単位へ切り捨てない。旧 snapshot の秒精度 `window.until` もこの方法で移行する。
-形式が違う timestamp は黙って捨てず `tool_errors.truncated=true` にする。tool input
+`timestamp_key` が各入力につきちょうど 1 値を返すことを検証する。0 値または例外なら、
+rollout は `tool_errors.truncated=true`、既存 snapshot は停止とする。tool input
 全文は読み込まない。shell の non-zero は、expected no-match / probe、command failure、
-timeout、cancellation (`128` / `130`)、sandbox / approval に分ける。ほかの既知カテゴリは
+timeout、cancellation、sandbox / approval に分ける。cancellation は exit `130` または
+明示的な signal / cancellation metadata がある場合だけとする。exit `128` は stderr と
+status を確認し、Git の fatal error などを cancellation にしない。ほかの既知カテゴリは
 stale-read edit、PR gate deny、browser / MCP、zsh 構文、`gh api` / rate limit、
 inline Python、誤パス、`jq`。新しいまとまりは新カテゴリにする。
 
 ```jq
 def timestamp_key:
-  capture("^(?<second>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<fraction>[0-9]{1,9}))?Z$")
-  | .second + "." + (((.fraction // "") + "000000000")[0:9]) + "Z";
+  capture("^(?<second>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<fraction>[0-9]{1,9}))?Z$") as $parts
+  | ($parts.second + "Z") as $whole
+  | (try ($whole | fromdateiso8601 | todateiso8601) catch empty) as $roundtrip
+  | select($roundtrip == $whole)
+  | $parts.second + "." + ((($parts.fraction // "") + "000000000")[0:9]) + "Z";
 ```
 
 `tool_errors.total`、`by_category`、`truncated` を作ってから、必要な output だけを
