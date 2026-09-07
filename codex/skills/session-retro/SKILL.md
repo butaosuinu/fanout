@@ -43,8 +43,9 @@ cleanup() {
 }
 trap cleanup EXIT
 common_dir=$(git rev-parse --path-format=absolute --git-common-dir)
-root=$(cd "$(dirname "$common_dir")" && pwd -P)
-repo_key=$(printf '%s' "$root" | git hash-object --stdin)
+common_dir=$(cd "$common_dir" && pwd -P)
+root=$(dirname "$common_dir")
+repo_key=$(printf '%s' "$common_dir" | git hash-object --stdin)
 ```
 
 - `root` は linked worktree から実行しても main repo root を指す。
@@ -53,9 +54,10 @@ repo_key=$(printf '%s' "$root" | git hash-object --stdin)
   `$codex_home/fanout-retro/$repo_key` を snapshot directory にする。
   `check-ignore` の対象には末尾 `/` を付け、必ず `git -C "$root"` で実行する。
 - 新規 snapshot を書く前に、最新の `codex-session-*.json` の内容を比較用に退避する。
-  その snapshot の `repository.root` と `repository.key` が現在の `root` と
-  `repo_key` に一致する場合だけ前回値として扱い、`SINCE` に `window.until` を使う。
-  欠落や不一致は警告して初回扱いにし、14 日前の UTC 時刻を使う。
+  その snapshot の `repository.root`、`repository.common_dir`、`repository.key` が
+  現在の `root`、`common_dir`、`repo_key` に一致する場合だけ前回値として扱い、
+  `SINCE` に `window.until` を使う。欠落や不一致は警告して初回扱いにし、14 日前の
+  UTC 時刻を使う。
 - `UNTIL=$(date -u +%Y-%m-%dT%H:%M:%S.000000000Z)` は、Step 2〜4 の収集を
   始める前に固定する。現在の UTC 秒の先頭を境界にするため、その秒の途中で追加された
   event は次回 window に残る。`SINCE` と `UNTIL` は小数部 9 桁で保存する。
@@ -65,9 +67,12 @@ repo_key=$(printf '%s' "$root" | git hash-object --stdin)
 - `rollout-*.jsonl` の mtime が `SINCE` 以降のファイルを粗い候補にする。
   mtime に `UNTIL` 上限を付けない。厳密な window は各 JSONL 行の top-level
   `timestamp` で `(SINCE, UNTIL]` に絞る。
-- 各候補の先頭行は `session_meta` として読み、`payload.cwd` が `root` と等しいか
-  `root/` で始まるものだけを対象にする。repo の subdirectory、
-  `.fanout/worktrees/`、`.dmux/worktrees/` を同じ repo family として含める。
+- 各候補の先頭行は `session_meta` として読み、`payload.cwd` から
+  `git -C "$candidate_cwd" rev-parse --path-format=absolute --git-common-dir` を解決する。
+  その物理パスが `common_dir` と一致する session だけを対象にする。repo の
+  subdirectory、linked worktree、root 外の worktree は common-dir が同じ場合だけ含め、
+  nested repository と submodule は除外する。cwd が消失している、Git repository ではない、
+  または common-dir を解決できない候補は除外して `tool_errors.truncated=true` にする。
 - `CODEX_THREAD_ID` と `CODEX_SESSION_ID` は空でない値だけを self ID として使う。
   候補の `session_meta.payload.id` / `session_id` と `parent_thread_id` から子孫を
   推移的に求め、self ID とその全子孫を除外する。空値を wildcard として扱わない。
@@ -77,9 +82,9 @@ repo_key=$(printf '%s' "$root" | git hash-object --stdin)
 
 既知の限界: session 開始時の `session_meta.payload.cwd` で repo を決めるため、別の
 directory で開始してからこの repo に移動した session は含まれない。この repo で
-開始後に別 repo へ移動した session は含まれる。symlink alias や root 外の手動
-worktree も同一 repo と判定できない。rollout は Codex の内部形式なので、schema が
-変わったら過少集計せず `truncated=true` で止める。
+開始後に別 repo へ移動した session は含まれる。削除済み worktree は common-dir を
+再検証できないので除外して truncated とする。rollout は Codex の内部形式なので、
+schema が変わったら過少集計せず `truncated=true` で止める。
 
 ### Snapshot boundary と排他制御
 
@@ -138,13 +143,18 @@ select(.type == "event_msg" and .payload.type == "item_completed")
 `exit_code != 0` も失敗とする。それ以外の item は明示的な `status == "failed"`
 または `"incomplete"` だけを数え、status が無い item から失敗を推測しない。
 
-古い rollout や別 surface では、失敗が `response_item` にしか残らない場合がある。
+rollout ごとに `item_completed` が 1 件でもあれば modern 形式とし、件数は
+`event_msg` だけから作る。対応する `response_item` を加算しない。modern rollout の
+`response_item` にだけ明示的な失敗があり、`call_id` と event item の `id` を対応付け
+られない場合は、推測で加算せず `tool_errors.truncated=true` にする。
+
+`item_completed` が 1 件もない古い rollout や別 surface では、失敗が
+`response_item` にしか残らない場合がある。
 `payload.type` が `custom_tool_call_output` または `function_call_output` の行について、
 配列なら `input_text.text`、文字列ならその文字列、object なら object 自体を対象にし、
 JSON 文字列を `fromjson?` で decode する。decode 後の `isError == true` または
-`is_error == true` は数える。数値の `exit_code != 0` は、その rollout に
-`event_msg` の `CommandExecution` が 1 件も無い場合だけ fallback として数える。
-両形式を無条件に足すと同じ command を二重計上する。
+`is_error == true`、数値の `exit_code != 0` を fallback として数える。decode 結果が
+object 以外ならこの判定へ渡さない。
 
 ```jq
 def decoded_output:
@@ -156,7 +166,8 @@ def decoded_output:
       $out | fromjson?
     elif ($out | type) == "object" then
       $out
-    else empty end;
+    else empty end
+  | select(type == "object");
 
 select(.type == "response_item")
 | select(.payload.type == "custom_tool_call_output"
@@ -169,7 +180,8 @@ select(.type == "response_item")
    exit_code: (.exit_code // null), detail: (.output // .content // null)}
 ```
 
-output で失敗を確認できない旧形式の call だけ、対応する `custom_tool_call` /
+modern/legacy の判定はこの fallback にも適用する。output で失敗を確認できない旧形式の
+call だけ、対応する `custom_tool_call` /
 `function_call` の明示的な `status == "failed"` または `"incomplete"` を fallback
 にする。`call_id` で output と結び、1 call 1 件に deduplicate する。
 
@@ -259,7 +271,8 @@ fanout では `user.login == "chatgpt-codex-connector[bot]"` かつ
 
 ```json
 {"schema":1,"source":"codex","generated_at":"<ISO8601>",
- "repository":{"root":"<canonical-root>","key":"<repo-key>"},
+ "repository":{"root":"<canonical-root>","common_dir":"<canonical-git-common-dir>",
+               "key":"<repo-key>"},
  "window":{"since":"<ISO8601>","until":"<ISO8601>"},
  "tool_errors":{"total":0,"by_category":{},"truncated":false},
  "ci":{"failed_runs":0,"by_workflow":{},"truncated":false},
