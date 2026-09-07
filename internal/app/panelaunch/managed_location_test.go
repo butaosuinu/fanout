@@ -44,6 +44,30 @@ func TestReconcileManagedPaneLocationAdmitsLateSameProviderSession(t *testing.T)
 	}
 }
 
+func TestReconcileManagedPaneLocationRequiresCompleteSavedAgentIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*state.Pane)
+	}{
+		{name: "missing agent ID", change: func(pane *state.Pane) { pane.AgentID = "" }},
+		{name: "missing agent session", change: func(pane *state.Pane) { pane.AgentSession = nil }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pane := managedLocationPane()
+			test.change(&pane)
+			moved := managedLocationWorkspace(pane, "workspace-next", "pane-next", "terminal-next")
+
+			got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{moved})
+			if changed || !reflect.DeepEqual(got, pane) {
+				t.Fatalf("incomplete identity changed pane: changed=%t pane=%#v", changed, got)
+			}
+			if !errors.Is(err, backend.ErrOwnedIdentityMismatch) {
+				t.Fatalf("incomplete identity error = %v, want identity mismatch", err)
+			}
+		})
+	}
+}
+
 func TestReconcileManagedPaneLocationRefusesUnsafeMatches(t *testing.T) {
 	pane := managedLocationPane()
 	moved := managedLocationWorkspace(pane, "workspace-next", "pane-next", "terminal-next")

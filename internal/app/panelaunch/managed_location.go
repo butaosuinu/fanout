@@ -94,7 +94,8 @@ func managedPaneLocationResource(pane state.Pane) state.RuntimeResource {
 
 func managedPaneLocationComplete(pane state.Pane, resource state.RuntimeResource) bool {
 	return managedWorktreeRestartResourceComplete(resource) &&
-		strings.TrimSpace(pane.SessionID) != "" && strings.TrimSpace(pane.SocketPath) != ""
+		strings.TrimSpace(pane.SessionID) != "" && strings.TrimSpace(pane.SocketPath) != "" &&
+		strings.TrimSpace(pane.AgentID) != "" && pane.AgentSession != nil
 }
 
 func workspaceHasExactLocationProvenance(

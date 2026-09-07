@@ -3916,6 +3916,62 @@ func TestExpiredPlannedHerdrCleanupRebindsMovedWorkspaceWithoutMutation(t *testi
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
+func TestExpiredPlannedHerdrCleanupRejectsMovedLivePaneWithoutAgentEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*backend.WorkspaceObservation)
+	}{
+		{name: "missing", change: func(workspace *backend.WorkspaceObservation) { workspace.LivePanes = nil }},
+		{name: "mismatched", change: func(workspace *backend.WorkspaceObservation) {
+			workspace.LivePanes = append([]backend.LivePane(nil), workspace.LivePanes...)
+			workspace.LivePanes[0].AgentID = "foreign-agent"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			primeRefinedLifecycleTelemetry(&fixture.pane)
+			recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+			recordExpiredHerdrCleanupIntent(t, fixture, state.CleanupRemove)
+			moved := movedHerdrWorkspace(fixture, "w-moved")
+			test.change(&moved)
+			runtime := &fakeHerdrLifecycleRuntime{
+				projectRoot: fixture.projectRoot,
+				workspaces:  []backend.WorkspaceObservation{moved},
+			}
+
+			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+			}
+			if runtime.setupCalls != 0 || runtime.openCalls != 0 || runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+				t.Fatalf("rejected cleanup issued mutations: setup %d/open %d/remove %d/close %d", runtime.setupCalls, runtime.openCalls, runtime.removeCalls, runtime.closeCalls)
+			}
+			assertHerdrLifecyclePreserved(t, fixture)
+			store, err := state.Load(state.Path(fixture.projectRoot))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pane, found := store.Find(fixture.pane.Parent, fixture.pane.IssueNum)
+			if !found || pane.WorkspaceID != fixture.pane.WorkspaceID || pane.PaneID != fixture.pane.PaneID || pane.TerminalID != fixture.pane.TerminalID {
+				t.Fatalf("rejected cleanup pane = %#v (found=%t), want original location", pane, found)
+			}
+			_, intentID, err := workspaceCleanupIntentIDs(fixture.projectRoot, fixture.pane)
+			if err != nil {
+				t.Fatal(err)
+			}
+			journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			intent, found := journal.FindIntent(intentID)
+			if !found || intent.Status != state.IntentManualCleanupRequired ||
+				intent.Resource.WorkspaceID != fixture.pane.WorkspaceID ||
+				!strings.Contains(intent.Failure, "cleanup workspace location rebind") {
+				t.Fatalf("rejected cleanup intent = %#v (found=%t), want original identity and manual cleanup", intent, found)
+			}
+		})
+	}
+}
+
 func TestExpiredReopenedHerdrCleanupPreservesReplacementIdentityAndRefreshesHead(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	runtime := prepareHerdrCleanupPhase(t, fixture, state.CleanupReopen)
