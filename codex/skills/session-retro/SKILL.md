@@ -56,8 +56,8 @@ repo_key=$(printf '%s' "$common_dir" | git hash-object --stdin)
 - 新規 snapshot を書く前に、最新の `codex-session-*.json` の内容を比較用に退避する。
   その snapshot の `repository.root`、`repository.common_dir`、`repository.key` が
   現在の `root`、`common_dir`、`repo_key` に一致する場合だけ前回値として扱い、
-  `SINCE` に `window.until` を使う。欠落や不一致は警告して初回扱いにし、14 日前の
-  UTC 時刻を使う。
+  `SINCE` に `window.until` を使う。既存 snapshot がない初回だけ、14 日前の UTC 時刻を
+  使う。既存 snapshot の identity が欠落または不一致なら、初回扱いや上書きをせず止める。
 - `UNTIL=$(date -u +%Y-%m-%dT%H:%M:%S.000000000Z)` は、Step 2〜4 の収集を
   始める前に固定する。現在の UTC 秒の先頭を境界にするため、その秒の途中で追加された
   event は次回 window に残る。`SINCE` と `UNTIL` は小数部 9 桁で保存する。
@@ -79,6 +79,18 @@ repo_key=$(printf '%s' "$common_dir" | git hash-object --stdin)
 - 読めないファイル、壊れた先頭行、未知の必須フィールドが 1 件でもあれば警告し、
   `tool_errors.truncated=true` にする。rollout root が両方とも無い場合も 0 件と
   断定しない。
+
+既存 snapshot は前回値を読む前に全体を検証する。次を 1 つでも満たさなければ、
+`SINCE` を進めず、新 snapshot も書かずに止める。
+
+- top-level が object で、`schema == 1`、`source == "codex"`。
+- `generated_at`、`window.since`、`window.until` が timestamp として正規化でき、
+  `window.since < window.until <= UNTIL`。今回の `SINCE=window.until` についても
+  `SINCE < UNTIL`。時計の巻き戻りや空の window を正常値として扱わない。
+- `repository` が object で、`root`、`common_dir`、`key` が string かつ現在値と一致する。
+- `tool_errors`、`ci`、`review` が object。`total` / `failed_runs` / `comments` は
+  0 以上の integer、各 `truncated` は boolean、`by_category` / `by_workflow` /
+  `by_pattern` は object で全 value が 0 以上の integer。
 
 既知の限界: session 開始時の `session_meta.payload.cwd` で repo を決めるため、別の
 directory で開始してからこの repo に移動した session は含まれない。この repo で
