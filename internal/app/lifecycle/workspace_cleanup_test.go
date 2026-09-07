@@ -406,6 +406,7 @@ func TestHerdrSharedAttachedCloseRebindsMovedChildOnRetirementRetry(t *testing.T
 	)
 	attached := sharedAttachedLifecyclePane(fixture, "425", "", workspace)
 	primeRefinedLifecycleTelemetry(&fixture.pane)
+	addLifecycleAgentEvidence(&fixture.workspace, fixture.pane)
 	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
@@ -1504,6 +1505,81 @@ func TestHerdrCleanupUsesReconciledAgentLocation(t *testing.T) {
 	assertHerdrLifecycleRemoved(t, fixture)
 }
 
+func TestFreshHerdrCleanupRoutesMovedAgentWorkspaceThroughCleanupAdmission(t *testing.T) {
+	operations := []struct {
+		name string
+		task bool
+		run  func(Options, herdrLifecycleFixture) exitcode.Code
+	}{
+		{name: "close issue", run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
+			return Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{})
+		}},
+		{name: "close task", task: true, run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
+			return CloseTask(opts, fixture.pane.Parent, fixture.pane.TaskID, nopLogger{})
+		}},
+		{name: "cleanup issue", run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
+			return Cleanup(opts, fixture.pane.Parent, nopLogger{})
+		}},
+		{name: "cleanup plan", task: true, run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
+			return CleanupPlan(opts, fixture.pane.Parent, nopLogger{})
+		}},
+	}
+	scenarios := []struct {
+		name      string
+		workspace func(herdrLifecycleFixture) backend.WorkspaceObservation
+		want      exitcode.Code
+	}{
+		{name: "pane-less", workspace: movedPaneLessHerdrWorkspace, want: exitcode.OK},
+		{name: "missing evidence", workspace: func(fixture herdrLifecycleFixture) backend.WorkspaceObservation {
+			workspace := movedHerdrWorkspace(fixture, "w-moved")
+			workspace.LivePanes = nil
+			return workspace
+		}, want: exitcode.Env},
+	}
+	for _, operation := range operations {
+		for _, scenario := range scenarios {
+			t.Run(operation.name+"/"+scenario.name, func(t *testing.T) {
+				fixture := newHerdrLifecycleFixture(t)
+				if operation.task {
+					fixture.pane.Parent = "plan:demo"
+					fixture.pane.IssueNum = 0
+					fixture.pane.TaskID = "task-a"
+				}
+				primeRefinedLifecycleTelemetry(&fixture.pane)
+				fixture.pane.EmitterRowKey = "row-child"
+				recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+				installLifecycleCleanupGH(t)
+				moved := scenario.workspace(fixture)
+				runtime := &fakeHerdrLifecycleRuntime{
+					projectRoot: fixture.projectRoot,
+					workspaces:  []backend.WorkspaceObservation{moved},
+				}
+
+				if got := operation.run(herdrLifecycleOptions(fixture, runtime), fixture); got != scenario.want {
+					t.Fatalf("cleanup = %d, want %d", got, scenario.want)
+				}
+				if scenario.want == exitcode.OK {
+					if runtime.removeCalls != 1 || runtime.mutationLog[0] != "remove:"+moved.WorkspaceID {
+						t.Fatalf("pane-less cleanup mutations = %v, want remove of %s", runtime.mutationLog, moved.WorkspaceID)
+					}
+					assertHerdrLifecycleRemoved(t, fixture)
+					return
+				}
+				if runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+					t.Fatalf("rejected fresh cleanup mutations = %v, want none", runtime.mutationLog)
+				}
+				assertHerdrLifecyclePreserved(t, fixture)
+				intent, found := loadHerdrCleanupIntent(t, fixture)
+				if !found || intent.Status != state.IntentManualCleanupRequired ||
+					intent.Resource.WorkspaceID != fixture.pane.WorkspaceID ||
+					!strings.Contains(intent.Failure, "cleanup workspace location rebind") {
+					t.Fatalf("fresh cleanup fence = %#v (found=%t), want original identity and manual cleanup", intent, found)
+				}
+			})
+		}
+	}
+}
+
 func TestHerdrCloseHonorsCustomStatePath(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	customState := filepath.Join(t.TempDir(), "state.json")
@@ -2333,6 +2409,7 @@ func TestHerdrCleanupHookRebindsMovedWorkspaceIdentity(t *testing.T) {
 	}
 	fixture.pane.SocketPath = filepath.Join(runtimeDir, "herdr.sock")
 	primeRefinedLifecycleTelemetry(&fixture.pane)
+	addLifecycleAgentEvidence(&fixture.workspace, fixture.pane)
 	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 	worktreeIntentID, _ := recordResidualHerdrLaunchIntent(t, fixture, runtimeDir)
 	hookPath := filepath.Join(t.TempDir(), "before-worktree")
@@ -3914,6 +3991,43 @@ func TestExpiredPlannedHerdrCleanupRebindsMovedWorkspaceWithoutMutation(t *testi
 		t.Fatalf("retry cleanup remove calls = %d, want 1", runtime.removeCalls)
 	}
 	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestExpiredPlannedHerdrCleanupRevalidatesPaneAfterPaneLessRebind(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	primeRefinedLifecycleTelemetry(&fixture.pane)
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+	recordExpiredHerdrCleanupIntent(t, fixture, state.CleanupRemove)
+	runtime := &fakeHerdrLifecycleRuntime{
+		projectRoot: fixture.projectRoot,
+		workspaces:  []backend.WorkspaceObservation{movedPaneLessHerdrWorkspace(fixture)},
+	}
+	opts := herdrLifecycleOptions(fixture, runtime)
+
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("pane-less rebind Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+		t.Fatalf("pane-less rebind mutations = %v, want none", runtime.mutationLog)
+	}
+	rebound := assertMovedHerdrPane(t, fixture, "w-moved")
+	if rebound.PaneID != fixture.pane.PaneID || rebound.TerminalID != fixture.pane.TerminalID {
+		t.Fatalf("pane-less rebind location = %#v, want retained pane identity", rebound)
+	}
+	assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
+
+	runtime.workspaces = []backend.WorkspaceObservation{movedHerdrWorkspace(fixture, "w-moved")}
+	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("live pane retry Close() = %d, want %d", got, exitcode.Env)
+	}
+	if runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+		t.Fatalf("rejected live pane retry mutations = %v, want none", runtime.mutationLog)
+	}
+	intent, found := loadHerdrCleanupIntent(t, fixture)
+	if !found || intent.Status != state.IntentManualCleanupRequired ||
+		!strings.Contains(intent.Failure, "cleanup workspace agent admission") {
+		t.Fatalf("live pane retry fence = %#v (found=%t), want manual cleanup", intent, found)
+	}
 }
 
 func TestExpiredPlannedHerdrCleanupRejectsMovedLivePaneWithoutAgentEvidence(t *testing.T) {

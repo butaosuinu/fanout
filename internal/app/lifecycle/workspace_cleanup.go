@@ -188,7 +188,7 @@ func inspectWorkspaceClosePreflight(
 	if !errors.Is(err, backend.ErrOwnedIdentityMismatch) {
 		return pane, false, err
 	}
-	pane, err = reconcileManagedPaneLocationAfterMismatch(locked, pane, workspaces, err)
+	pane, err = reconcileWorkspaceClosePreflightMismatch(ctx, opts, locked, pane, mode, workspaces, err)
 	if err != nil {
 		return pane, false, err
 	}
@@ -196,6 +196,98 @@ func inspectWorkspaceClosePreflight(
 		ctx, opts, pane, mode, attached, workspaces,
 	)
 	return pane, cleanupStarted, err
+}
+
+func reconcileWorkspaceClosePreflightMismatch(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+	mode CloseMode,
+	workspaces []backend.WorkspaceObservation,
+	mismatch error,
+) (state.Pane, error) {
+	current, handled, err := reconcileFreshWorkspaceCleanupAfterMismatch(
+		ctx, opts, locked, pane, mode, workspaces, mismatch,
+	)
+	if err != nil || handled {
+		return current, err
+	}
+	return reconcileManagedPaneLocationAfterMismatch(locked, pane, workspaces, mismatch)
+}
+
+func reconcileFreshWorkspaceCleanupAfterMismatch(
+	ctx context.Context,
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+	mode CloseMode,
+	workspaces []backend.WorkspaceObservation,
+	mismatch error,
+) (state.Pane, bool, error) {
+	journal, intent, started, err := beginFreshWorkspaceCleanupRebind(opts, locked, pane, mode)
+	if err != nil || !started {
+		return pane, false, err
+	}
+	observation, err := observeFreshWorkspaceCleanupRebind(ctx, opts.ProjectRoot, intent, workspaces)
+	if err != nil {
+		return pane, true, persistFreshWorkspaceCleanupRebindFailure(journal, intent, err)
+	}
+	if observation.workspace == nil {
+		return pane, true, persistFreshWorkspaceCleanupRebindFailure(journal, intent, mismatch)
+	}
+	intent, err = rebindObservedWorkspaceCleanupIdentity(
+		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
+	)
+	if err != nil {
+		return pane, true, err
+	}
+	if err := saveWorkspaceCleanupIntent(journal, intent); err != nil {
+		return pane, true, err
+	}
+	return cleanupHookPane(pane, intent.Resource), true, nil
+}
+
+func beginFreshWorkspaceCleanupRebind(
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+	mode CloseMode,
+) (*state.LockedLaunchJournal, state.LaunchIntent, bool, error) {
+	journal, _, found, err := savedWorkspacePreflightCleanupIntent(opts, locked, pane, mode)
+	if err != nil || found {
+		return journal, state.LaunchIntent{}, false, err
+	}
+	intent, err := newUnresolvedWorkspaceCleanupIntent(opts.ProjectRoot, pane, mode)
+	if err != nil {
+		return journal, state.LaunchIntent{}, true, err
+	}
+	err = saveWorkspaceCleanupIntent(journal, intent)
+	return journal, intent, true, err
+}
+
+func observeFreshWorkspaceCleanupRebind(
+	ctx context.Context,
+	projectRoot string,
+	intent state.LaunchIntent,
+	workspaces []backend.WorkspaceObservation,
+) (workspaceCleanupObservation, error) {
+	predicate := workspaceLabelPredicate(
+		intent.WorkspaceLabel, intent.WorktreePath, intent.Resource.RepoKey, intent.Resource.RepoRoot,
+	)
+	return observeWorkspaceCleanupSnapshot(ctx, projectRoot, intent.Resource, predicate, workspaces)
+}
+
+func persistFreshWorkspaceCleanupRebindFailure(
+	journal *state.LockedLaunchJournal,
+	intent state.LaunchIntent,
+	cause error,
+) error {
+	if !errors.Is(cause, backend.ErrOwnedIdentityMismatch) {
+		return cause
+	}
+	cause = fmt.Errorf("fresh cleanup workspace rebind: %w", cause)
+	return markWorkspaceCleanupManual(journal, intent, cause)
 }
 
 func verifyWorkspaceClosePreflightSnapshot(
@@ -2207,7 +2299,15 @@ func rebindObservedWorkspaceCleanupIdentity(
 	intent state.LaunchIntent,
 	workspace *backend.WorkspaceObservation,
 ) (state.LaunchIntent, error) {
-	if workspace == nil || workspace.WorkspaceID == intent.Resource.WorkspaceID {
+	if workspace == nil {
+		return intent, nil
+	}
+	if workspace.WorkspaceID == intent.Resource.WorkspaceID {
+		recordedPane := cleanupHookPane(pane, intent.Resource)
+		if err := admitRecordedWorkspaceCleanupPane(recordedPane, *workspace); err != nil {
+			cause := fmt.Errorf("cleanup workspace agent admission: %w", err)
+			return intent, markWorkspaceCleanupManual(journal, intent, cause)
+		}
 		return intent, nil
 	}
 	admittedPane, adoptedLivePane, err := admitMovedWorkspaceCleanupPane(pane, *workspace)
@@ -2239,6 +2339,20 @@ func admitMovedWorkspaceCleanupPane(
 		return pane, false, fmt.Errorf("%w: cleanup workspace location did not change", backend.ErrOwnedIdentityMismatch)
 	}
 	return current, true, nil
+}
+
+func admitRecordedWorkspaceCleanupPane(
+	pane state.Pane,
+	workspace backend.WorkspaceObservation,
+) error {
+	if !workspaceCleanupObservesLivePane(workspace) || pane.IsShell() || strings.TrimSpace(pane.Agent) == "" {
+		return nil
+	}
+	runtime := backend.RequireRuntime(backend.NormalizeName(pane.Backend))
+	if _, ok := pane.RuntimeBinding().UniqueLive(workspace.LivePanes, runtime); !ok {
+		return fmt.Errorf("%w: cleanup workspace pane does not match recorded agent evidence", backend.ErrOwnedIdentityMismatch)
+	}
+	return nil
 }
 
 func workspaceCleanupObservesLivePane(workspace backend.WorkspaceObservation) bool {
