@@ -404,6 +404,7 @@ func TestHerdrSharedAttachedCloseRebindsMovedChildOnRetirementRetry(t *testing.T
 		fixture.pane.RepoKey, fixture.pane.RepoRoot,
 	)
 	attached := sharedAttachedLifecyclePane(fixture, "425", "", workspace)
+	primeRefinedLifecycleTelemetry(&fixture.pane)
 	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
 	runtime := &fakeHerdrLifecycleRuntime{
 		projectRoot: fixture.projectRoot,
@@ -427,8 +428,16 @@ func TestHerdrSharedAttachedCloseRebindsMovedChildOnRetirementRetry(t *testing.T
 	}
 	assertSharedAttachedRows(t, fixture.projectRoot, fixture.pane, attached, true, false)
 
+	telemetryChecked := false
+	runtime.afterRemove = func() {
+		assertMovedHerdrPane(t, fixture, "w-moved")
+		telemetryChecked = true
+	}
 	if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
 		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	}
+	if !telemetryChecked {
+		t.Fatal("shared child rebind was not checked before removal")
 	}
 	if got := strings.Join(runtime.mutationLog, ","); got != "close:w-attached,remove:w-moved" {
 		t.Fatalf("retry mutation order = %q", got)
@@ -2314,6 +2323,7 @@ func TestHerdrCleanupHookRebindsMovedWorkspaceIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.pane.SocketPath = filepath.Join(runtimeDir, "herdr.sock")
+	primeRefinedLifecycleTelemetry(&fixture.pane)
 	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 	worktreeIntentID, _ := recordResidualHerdrLaunchIntent(t, fixture, runtimeDir)
 	hookPath := filepath.Join(t.TempDir(), "before-worktree")
@@ -3721,6 +3731,7 @@ func TestMovedHerdrCleanupRetriesAfterDefiniteNonMutation(t *testing.T) {
 					t.Fatal(err)
 				}
 				fixture.pane.SocketPath = filepath.Join(runtimeDir, "herdr.sock")
+				primeRefinedLifecycleTelemetry(&fixture.pane)
 				recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 				worktreeIntentID, _ := recordResidualHerdrLaunchIntent(t, fixture, runtimeDir)
 				recordActiveHerdrCleanupIntent(t, fixture, phase)
@@ -3860,6 +3871,7 @@ func TestExpiredPlannedHerdrCleanupRebindsMovedWorkspaceWithoutMutation(t *testi
 		t.Fatal(err)
 	}
 	fixture.pane.SocketPath = filepath.Join(runtimeDir, "herdr.sock")
+	primeRefinedLifecycleTelemetry(&fixture.pane)
 	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 	worktreeIntentID, _ := recordResidualHerdrLaunchIntent(t, fixture, runtimeDir)
 	recordExpiredHerdrCleanupIntent(t, fixture, state.CleanupRemove)
@@ -3876,14 +3888,7 @@ func TestExpiredPlannedHerdrCleanupRebindsMovedWorkspaceWithoutMutation(t *testi
 		t.Fatalf("expired moved cleanup issued mutations: setup %d/open %d/remove %d/close %d", runtime.setupCalls, runtime.openCalls, runtime.removeCalls, runtime.closeCalls)
 	}
 	assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
-	store, err := state.Load(state.Path(fixture.projectRoot))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pane, found := store.Find(fixture.pane.Parent, fixture.pane.IssueNum)
-	if !found || pane.WorkspaceID != "w-moved" {
-		t.Fatalf("rebound pane = %#v (found=%t), want workspace w-moved", pane, found)
-	}
+	assertMovedHerdrPane(t, fixture, "w-moved")
 	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -5295,6 +5300,19 @@ func assertMovedHerdrCleanupIdentity(
 	worktreeIntentID, workspaceID string,
 ) {
 	t.Helper()
+	assertMovedHerdrPane(t, fixture, workspaceID)
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, found := journal.FindIntent(worktreeIntentID)
+	if !found || intent.Resource.WorkspaceID != workspaceID {
+		t.Fatalf("rebound launch intent = %#v (found=%t), want workspace %s", intent, found, workspaceID)
+	}
+}
+
+func assertMovedHerdrPane(t *testing.T, fixture herdrLifecycleFixture, workspaceID string) state.Pane {
+	t.Helper()
 	store, err := state.Load(state.Path(fixture.projectRoot))
 	if err != nil {
 		t.Fatal(err)
@@ -5303,13 +5321,25 @@ func assertMovedHerdrCleanupIdentity(
 	if !found || pane.WorkspaceID != workspaceID {
 		t.Fatalf("rebound pane = %#v (found=%t), want workspace %s", pane, found, workspaceID)
 	}
-	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
-	if err != nil {
-		t.Fatal(err)
+	if fixture.pane.StateRefinement {
+		assertLifecycleTelemetryInvalidated(t, fixture.pane, pane)
 	}
-	intent, found := journal.FindIntent(worktreeIntentID)
-	if !found || intent.Resource.WorkspaceID != workspaceID {
-		t.Fatalf("rebound launch intent = %#v (found=%t), want workspace %s", intent, found, workspaceID)
+	return pane
+}
+
+func primeRefinedLifecycleTelemetry(pane *state.Pane) {
+	pane.Agent = "codex"
+	pane.EmitterNonce = strings.Repeat("e", 32)
+	pane.ReportedState, pane.ReportedStateSeq, pane.StateRefinement = "idle", 7, true
+}
+
+func assertLifecycleTelemetryInvalidated(t *testing.T, before, after state.Pane) {
+	t.Helper()
+	if after.ReportedState != "" || after.ReportedStateSeq != 0 || after.StateRefinement {
+		t.Fatalf("rebound telemetry = (%q, %d, %t), want unset", after.ReportedState, after.ReportedStateSeq, after.StateRefinement)
+	}
+	if after.EmitterNonce == before.EmitterNonce || !telemetry.ValidNonce(after.EmitterNonce) {
+		t.Fatalf("rebound emitter nonce = %q, want a fresh valid nonce", after.EmitterNonce)
 	}
 }
 

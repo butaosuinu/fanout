@@ -2176,6 +2176,9 @@ func rebindMovedWorkspaceCleanupIdentity(
 	if err != nil {
 		return err
 	}
+	if err := invalidateMovedWorkspaceCleanupTelemetry(&pane, resource); err != nil {
+		return err
+	}
 	if launchIntent, found := journal.FindIntent(worktreeIntentID); found {
 		launchIntent.Resource = resource
 		journal.UpsertIntent(launchIntent)
@@ -2184,6 +2187,16 @@ func rebindMovedWorkspaceCleanupIdentity(
 	pane.PaneID = resource.PaneID
 	pane.TerminalID = resource.TerminalID
 	return locked.RecordPane(pane)
+}
+
+func invalidateMovedWorkspaceCleanupTelemetry(pane *state.Pane, resource state.RuntimeResource) error {
+	if pane.WorkspaceID == resource.WorkspaceID || pane.IsShell() || strings.TrimSpace(pane.Agent) == "" {
+		return nil
+	}
+	if err := pane.InvalidateTelemetry(); err != nil {
+		return fmt.Errorf("invalidate telemetry after cleanup workspace location change: %w", err)
+	}
+	return nil
 }
 
 func rebindObservedWorkspaceCleanupIdentity(
