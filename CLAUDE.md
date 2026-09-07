@@ -131,11 +131,12 @@ sends only when the peer's state is `running` / `working` / `plan` / `idle`
 
 The request sets the scope, and the scope is the deliverable. A bug or cleanup
 you notice nearby is a follow-up to report in your summary, not a change to
-make, unless the requested behavior cannot work without it. Commit tests only
-where the task asks for them or neighboring files already keep tests for that
-kind of change, sized like those neighbors; scratch checks stay out of the repo.
-Report outcomes against this session's tool results: a failed check or a skipped
-step is stated, not smoothed over.
+make, unless the requested behavior cannot work without it. Tests that
+correctness, safety, or a changed contract require are always in scope; beyond
+those, commit tests only where the task asks for them or neighboring files
+already keep tests for that kind of change, sized like those neighbors, and keep
+scratch checks out of the repo. Report outcomes against this session's tool
+results: a failed check or a skipped step is stated, not smoothed over.
 
 ## Quality gates
 
