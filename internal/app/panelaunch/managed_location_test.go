@@ -3,9 +3,11 @@ package panelaunch
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -14,13 +16,18 @@ func TestReconcileManagedPaneLocationAdoptsUniqueMovedWorkspace(t *testing.T) {
 	moved := managedLocationWorkspace(pane, "workspace-next", "pane-next", "terminal-next")
 	want := pane
 	want.WorkspaceID, want.PaneID, want.TerminalID = moved.WorkspaceID, moved.Pane.Pane, moved.TerminalID
+	want.ReportedState, want.ReportedStateSeq, want.StateRefinement = "", 0, false
 
 	got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{moved})
 	if err != nil || !changed {
 		t.Fatalf("ReconcileManagedPaneLocation() changed=%t err=%v", changed, err)
 	}
+	if got.EmitterNonce == pane.EmitterNonce || !telemetry.ValidNonce(got.EmitterNonce) {
+		t.Fatalf("emitter nonce = %q, want a fresh valid nonce", got.EmitterNonce)
+	}
+	want.EmitterNonce = got.EmitterNonce
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("reconciled pane = %#v, want only location changed to %#v", got, want)
+		t.Fatalf("reconciled pane = %#v, want location and telemetry fence %#v", got, want)
 	}
 }
 
@@ -107,6 +114,7 @@ func managedLocationPane() state.Pane {
 		RepoKey: "/repo/.git", RepoRoot: "/repo", WorktreePath: "/repo/.fanout/worktrees/child",
 		SessionID: "session-owned", SocketPath: "/tmp/herdr-owned.sock", Agent: "codex",
 		EmitterRowKey: "row-key", LaunchNonce: "launch-nonce", BranchName: "fanout/child",
+		EmitterNonce: strings.Repeat("e", 32), ReportedState: "idle", ReportedStateSeq: 7, StateRefinement: true,
 	}
 }
 

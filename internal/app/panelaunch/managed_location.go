@@ -36,8 +36,18 @@ func ReconcileManagedPaneLocation(
 	if err != nil || !found {
 		return pane, false, err
 	}
+	return applyManagedPaneLocation(pane, match)
+}
+
+func applyManagedPaneLocation(
+	pane state.Pane,
+	match backend.WorkspaceObservation,
+) (state.Pane, bool, error) {
 	if pane.WorkspaceID == match.WorkspaceID {
 		return pane, false, nil
+	}
+	if err := pane.InvalidateTelemetry(); err != nil {
+		return pane, false, fmt.Errorf("invalidate telemetry after managed pane location change: %w", err)
 	}
 	pane.WorkspaceID, pane.PaneID, pane.TerminalID = match.WorkspaceID, match.Pane.Pane, match.TerminalID
 	return pane, true, nil

@@ -512,7 +512,7 @@ fanout の state が parent issue と child workspace の対応を保持する�
 pane split は同じ checkout 内に補助 process を追加する場合だけ使う。
 
 agent row の保存済み workspace ID が現在値と異なる場合、fanout は保存済み workspace label nonce に一致する live workspace が一つだけあり、`WorktreePath`、`RepoKey`、`RepoRoot` と pane identity が一致するときだけ location を自動更新する。
-更新対象は workspace ID、pane ID、`terminal_id` に限る。label の一致が 0 件または複数件、checkout provenance の不一致、pane の欠落または重複では更新せず fail closed にする。tmux row は対象外とする。
+identity 欄とユーザー process は変更せず、workspace ID、pane ID、`terminal_id` だけを更新する。同時に派生 telemetry を未設定へ戻して emitter nonce を回転し、新しい telemetry が届くまで nudge を拒否する。値は合成または推定しない。label の一致が 0 件または複数件、checkout provenance の不一致、pane の欠落または重複では更新せず fail closed にする。tmux row は対象外とする。
 更新は TUI focus、TUI / dashboard の write-through state 読み込み、明示 restart、close / merge の lifecycle preflight が state lock 下で行う。status など `sessionview.MergedStateLoader` を直接使う pure read-only 経路は `state.json` を変更しない。
 
 ### cleanup

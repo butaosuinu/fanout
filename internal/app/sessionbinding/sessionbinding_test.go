@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -189,6 +190,8 @@ func TestReloadPaneReconcilesMovedManagedLocation(t *testing.T) {
 		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-first",
 	}
 	row.AgentSession = &session
+	row.EmitterNonce = strings.Repeat("e", 32)
+	row.ReportedState, row.ReportedStateSeq, row.StateRefinement = "idle", 7, true
 	recordTestPane(t, root, row)
 	live := testLiveHerdrPane(row, session)
 	live.Ref.Workspace, live.Ref.Pane = "workspace-next", "workspace-next:p1"
@@ -211,8 +214,13 @@ func TestReloadPaneReconcilesMovedManagedLocation(t *testing.T) {
 	assertManagedLocation(t, saved, live)
 	want := row
 	want.WorkspaceID, want.PaneID, want.TerminalID = live.Ref.Workspace, live.Ref.Pane, live.TerminalID
+	want.ReportedState, want.ReportedStateSeq, want.StateRefinement = "", 0, false
+	if saved.EmitterNonce == row.EmitterNonce || !telemetry.ValidNonce(saved.EmitterNonce) {
+		t.Fatalf("persisted emitter nonce = %q, want a fresh valid nonce", saved.EmitterNonce)
+	}
+	want.EmitterNonce = saved.EmitterNonce
 	if !reflect.DeepEqual(saved, want) {
-		t.Fatalf("persisted row changed outside location fields: got %#v want %#v", saved, want)
+		t.Fatalf("persisted row changed outside location and telemetry fence: got %#v want %#v", saved, want)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -1548,6 +1549,8 @@ func TestHerdrMergeReconcilesMovedAgentLocation(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	fixture.pane.Agent = "codex"
 	fixture.pane.EmitterRowKey = "row-child"
+	fixture.pane.EmitterNonce = strings.Repeat("e", 32)
+	fixture.pane.ReportedState, fixture.pane.ReportedStateSeq, fixture.pane.StateRefinement = "idle", 7, true
 	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 	if err := os.WriteFile(filepath.Join(fixture.worktreePath, "merged.txt"), []byte("merged\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1573,8 +1576,13 @@ func TestHerdrMergeReconcilesMovedAgentLocation(t *testing.T) {
 	}
 	want := fixture.pane
 	want.WorkspaceID, want.PaneID, want.TerminalID = moved.WorkspaceID, moved.Pane.Pane, moved.TerminalID
+	want.ReportedState, want.ReportedStateSeq, want.StateRefinement = "", 0, false
+	if saved.EmitterNonce == fixture.pane.EmitterNonce || !telemetry.ValidNonce(saved.EmitterNonce) {
+		t.Fatalf("merge reconciliation emitter nonce = %q, want a fresh valid nonce", saved.EmitterNonce)
+	}
+	want.EmitterNonce = saved.EmitterNonce
 	if !reflect.DeepEqual(saved, want) {
-		t.Fatalf("merge reconciliation changed fields outside location: got %#v want %#v", saved, want)
+		t.Fatalf("merge reconciliation changed fields outside location and telemetry fence: got %#v want %#v", saved, want)
 	}
 }
 
