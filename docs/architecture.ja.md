@@ -203,7 +203,9 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   しか受け取らないので、同名 branch を持つ fork が混ざる)、`--limit` に達した
   一覧は打ち切りの可能性があるので「他に誰も使っていない」と読まずに拒否する。ref path の各セグメントは percent-encode する
   (`feature/#123` のような合法 ref が fragment で切れ、その 404 が「既に無い」と
-  誤認されるのを防ぐ)。
+  誤認されるのを防ぐ)。endpoint 単位の完全な不変条件カタログ(claims file、
+  queued merge の第二の終端、`ghRefreshedAt` フェンス、diff toolbar の pin、意図的に
+  残すギャップ)は `docs/dashboard-pr-mutations.ja.md`。
 - **`gh pr merge` の exit 0 はマージの証拠ではない**: merge queue 必須の base では
   gh は queue 投入で成功終了する。`PRState` で GitHub に実際の `mergedAt` を
   確認できるまで merged と報告しない。確認自体が失敗したときは fail-closed。送信が transport 失敗
