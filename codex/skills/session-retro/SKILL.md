@@ -56,8 +56,9 @@ repo_key=$(printf '%s' "$root" | git hash-object --stdin)
   その snapshot の `repository.root` と `repository.key` が現在の `root` と
   `repo_key` に一致する場合だけ前回値として扱い、`SINCE` に `window.until` を使う。
   欠落や不一致は警告して初回扱いにし、14 日前の UTC 時刻を使う。
-- `UNTIL=$(date -u +%Y-%m-%dT%H:%M:%SZ)` は、Step 2〜4 の収集を始める前に固定する。
-  `SINCE` と `UNTIL` は秒精度の `YYYY-MM-DDTHH:MM:SSZ` で保存する。
+- `UNTIL=$(date -u +%Y-%m-%dT%H:%M:%S.000000000Z)` は、Step 2〜4 の収集を
+  始める前に固定する。現在の UTC 秒の先頭を境界にするため、その秒の途中で追加された
+  event は次回 window に残る。`SINCE` と `UNTIL` は小数部 9 桁で保存する。
 - rollout root は `$codex_home/sessions` と、存在する場合だけ
   `$codex_home/archived_sessions`。`browser/sessions` と
   `computer-use/sessions` は Codex rollout ではないので走査しない。
@@ -172,12 +173,21 @@ output で失敗を確認できない旧形式の call だけ、対応する `cu
 `function_call` の明示的な `status == "failed"` または `"incomplete"` を fallback
 にする。`call_id` で output と結び、1 call 1 件に deduplicate する。
 
-rollout timestamp はミリ秒付きなので、比較前に `.[0:19] + "Z"` へ揃える。
+rollout timestamp と snapshot の境界は、UTC の
+`YYYY-MM-DDTHH:MM:SS[.1〜9桁]Z` だけを受け入れる。比較前に小数部の欠落を 0 とし、
+右側を 0 で埋めた 9 桁へ正規化する。固定長の正規化値で `(SINCE, UNTIL]` を比較し、
+秒単位へ切り捨てない。旧 snapshot の秒精度 `window.until` もこの方法で移行する。
 形式が違う timestamp は黙って捨てず `tool_errors.truncated=true` にする。tool input
 全文は読み込まない。shell の non-zero は、expected no-match / probe、command failure、
 timeout、cancellation (`128` / `130`)、sandbox / approval に分ける。ほかの既知カテゴリは
 stale-read edit、PR gate deny、browser / MCP、zsh 構文、`gh api` / rate limit、
 inline Python、誤パス、`jq`。新しいまとまりは新カテゴリにする。
+
+```jq
+def timestamp_key:
+  capture("^(?<second>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<fraction>[0-9]{1,9}))?Z$")
+  | .second + "." + (((.fraction // "") + "000000000")[0:9]) + "Z";
+```
 
 `tool_errors.total`、`by_category`、`truncated` を作ってから、必要な output だけを
 代表例として読む。通常の非 JSON output を文字列だけで failure 扱いしない。
