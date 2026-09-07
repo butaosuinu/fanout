@@ -440,7 +440,7 @@ func (b *Backend) observeOwnedSnapshot(
 		return snapshotJSON{}, nil, methodUnavailable("session.snapshot")
 	}
 	var envelope snapshotEnvelope
-	if err := decodeOne(out, &envelope); err != nil {
+	if decodeErr := decodeOne(out, &envelope); decodeErr != nil {
 		return snapshotJSON{}, nil, methodUnavailable("session.snapshot")
 	}
 	live, err := projectSnapshot(envelope, probed)
