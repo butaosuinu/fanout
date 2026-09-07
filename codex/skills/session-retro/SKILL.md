@@ -25,6 +25,7 @@ fanout run のレビュー往復数や time-to-merge は、#369 `fanout retro` C
   代表例はカテゴリごとに最大 3 件、1 件につき 1〜2 行だけ示す。credential、token、
   header、個人情報は伏せる。
 - 収集中に subagent を起動しない。現在の thread とその子孫 rollout は集計から外す。
+- snapshot path、lock、前回ファイルの検証に失敗したら書き込まずに止める。
 
 ## Step 1: 対象と期間
 
@@ -33,7 +34,14 @@ fanout run のレビュー往復数や time-to-merge は、#369 `fanout retro` C
 ```bash
 codex_home="${CODEX_HOME:-$HOME/.codex}"
 tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
+lockdir=
+cleanup() {
+  if [ -n "$lockdir" ] && ! rmdir "$lockdir"; then
+    echo "警告: session-retro lock を解放できなかった: $lockdir" >&2
+  fi
+  rm -rf "$tmpdir"
+}
+trap cleanup EXIT
 common_dir=$(git rev-parse --path-format=absolute --git-common-dir)
 root=$(cd "$(dirname "$common_dir")" && pwd -P)
 repo_key=$(printf '%s' "$root" | git hash-object --stdin)
@@ -71,6 +79,35 @@ directory で開始してからこの repo に移動した session は含まれ�
 開始後に別 repo へ移動した session は含まれる。symlink alias や root 外の手動
 worktree も同一 repo と判定できない。rollout は Codex の内部形式なので、schema が
 変わったら過少集計せず `truncated=true` で止める。
+
+### Snapshot boundary と排他制御
+
+snapshot directory を作る前後に、保存先の境界を検証する。
+
+- repo-local では物理パスの `$root/.fanout/retro`、fallback では物理パスの
+  `$codex_home/fanout-retro/$repo_key` だけを許可する。許可 root から保存先までの
+  各 component を `lstat` 相当で調べ、symlink、現在の uid が所有しない directory、
+  directory 以外を拒否する。物理パスが期待値と異なる場合も拒否する。
+- directory は `umask 077` の下で component ごとに作り、作成後に同じ検証を繰り返す。
+  snapshot directory の device と inode を記録する。
+- snapshot directory 内に repo 単位の `.codex-session-retro.lock` directory を
+  atomic に作る。`lockdir` には `mkdir` が成功した後だけその path を代入する。
+  すでに存在する場合は待機、削除、上書きせず、別実行が進行中または
+  stale lock の可能性を報告して止める。lock は前回 snapshot を選ぶ前に取得し、
+  新 snapshot の rename 完了まで保持する。終了時は自分が作った空の lock directory
+  だけを `rmdir` し、`tmpdir` とともに EXIT trap で片付ける。lock directory の
+  device と inode も取得時に記録する。
+- `codex-session-*.json` に symlink、現在の uid が所有しない file、regular file 以外が
+  1 件でもあれば止める。前回 snapshot と同日再実行の置換先は、regular non-symlink
+  file のみ受け入れる。
+- 新 snapshot は `umask 077` のまま `mktemp` で snapshot directory 内に直接作る。
+  rename の直前に directory chain、snapshot directory と lock directory の device・
+  inode を再検証する。不一致なら temp file を消して止める。別 filesystem の temp file
+  や追跡不能な固定名を使わない。
+
+この lock により、前回値の読取から cursor 更新までを直列化する。プロセス停止後の
+stale lock は自動回収しない。利用者が実行中プロセスと path identity を確認してから
+手動で空 directory を除く。
 
 ## Step 2: ツール失敗
 
@@ -205,9 +242,10 @@ fanout では `user.login == "chatgpt-codex-connector[bot]"` かつ
 
 ## Step 5: スナップショットと比較
 
-同じ UTC 日の再実行では同じファイル名になる。必ず既存 snapshot の内容を退避して
-から、新しい snapshot を同じ directory の一時ファイルへ書き、rename する。
-書いた後に読み直した値を「前回」にしない。
+同じ UTC 日の再実行では同じファイル名になる。Snapshot boundary の lock を保持した
+状態で既存 snapshot の内容を退避してから、新しい snapshot を同じ directory の安全な
+一時ファイルへ書き、directory identity を再検証して rename する。書いた後に読み直した
+値を「前回」にしない。
 
 ```json
 {"schema":1,"source":"codex","generated_at":"<ISO8601>",
