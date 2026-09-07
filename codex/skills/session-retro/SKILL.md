@@ -14,7 +14,7 @@ fanout run のレビュー往復数や time-to-merge は、#369 `fanout retro` C
 - 収集で書いてよいのは Codex 専用スナップショットだけ。
   `.fanout/retro/` が ignore される repo では
   `<root>/.fanout/retro/codex-session-<date>.json`、それ以外では
-  `${CODEX_HOME:-$HOME/.codex}/fanout-retro/<repo-slug>/codex-session-<date>.json`
+  `${CODEX_HOME:-$HOME/.codex}/fanout-retro/<repo-key>/codex-session-<date>.json`
   に保存する。Claude 版の `session-<date>.json` を上書きしない。
 - repo ファイルへの改善適用は提案まで。ユーザーが承認した後にブランチと PR で
   適用する。`internal/app/briefing` と settings は自動で書き換えない。
@@ -34,17 +34,20 @@ fanout run のレビュー往復数や time-to-merge は、#369 `fanout retro` C
 codex_home="${CODEX_HOME:-$HOME/.codex}"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
-root=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
-repo_slug=$(printf '%s' "$root" | sed 's/[^[:alnum:]]/-/g')
+common_dir=$(git rev-parse --path-format=absolute --git-common-dir)
+root=$(cd "$(dirname "$common_dir")" && pwd -P)
+repo_key=$(printf '%s' "$root" | git hash-object --stdin)
 ```
 
 - `root` は linked worktree から実行しても main repo root を指す。
 - `git -C "$root" check-ignore .fanout/retro/` が成功する場合は
   `$root/.fanout/retro`、失敗する場合は
-  `$codex_home/fanout-retro/$repo_slug` を snapshot directory にする。
+  `$codex_home/fanout-retro/$repo_key` を snapshot directory にする。
   `check-ignore` の対象には末尾 `/` を付け、必ず `git -C "$root"` で実行する。
 - 新規 snapshot を書く前に、最新の `codex-session-*.json` の内容を比較用に退避する。
-  `SINCE` はその snapshot の `window.until`。初回は 14 日前の UTC 時刻を使う。
+  その snapshot の `repository.root` と `repository.key` が現在の `root` と
+  `repo_key` に一致する場合だけ前回値として扱い、`SINCE` に `window.until` を使う。
+  欠落や不一致は警告して初回扱いにし、14 日前の UTC 時刻を使う。
 - `UNTIL=$(date -u +%Y-%m-%dT%H:%M:%SZ)` は、Step 2〜4 の収集を始める前に固定する。
   `SINCE` と `UNTIL` は秒精度の `YYYY-MM-DDTHH:MM:SSZ` で保存する。
 - rollout root は `$codex_home/sessions` と、存在する場合だけ
@@ -208,6 +211,7 @@ fanout では `user.login == "chatgpt-codex-connector[bot]"` かつ
 
 ```json
 {"schema":1,"source":"codex","generated_at":"<ISO8601>",
+ "repository":{"root":"<canonical-root>","key":"<repo-key>"},
  "window":{"since":"<ISO8601>","until":"<ISO8601>"},
  "tool_errors":{"total":0,"by_category":{},"truncated":false},
  "ci":{"failed_runs":0,"by_workflow":{},"truncated":false},
