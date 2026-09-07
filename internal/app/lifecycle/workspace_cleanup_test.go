@@ -3917,15 +3917,20 @@ func TestExpiredPlannedHerdrCleanupRebindsMovedWorkspaceWithoutMutation(t *testi
 }
 
 func TestExpiredPlannedHerdrCleanupRejectsMovedLivePaneWithoutAgentEvidence(t *testing.T) {
+	missing := func(workspace *backend.WorkspaceObservation) { workspace.LivePanes = nil }
+	mismatched := func(workspace *backend.WorkspaceObservation) {
+		workspace.LivePanes = append([]backend.LivePane(nil), workspace.LivePanes...)
+		workspace.LivePanes[0].AgentID = "foreign-agent"
+	}
 	for _, test := range []struct {
-		name   string
-		change func(*backend.WorkspaceObservation)
+		name      string
+		multiPane bool
+		change    func(*backend.WorkspaceObservation)
 	}{
-		{name: "missing", change: func(workspace *backend.WorkspaceObservation) { workspace.LivePanes = nil }},
-		{name: "mismatched", change: func(workspace *backend.WorkspaceObservation) {
-			workspace.LivePanes = append([]backend.LivePane(nil), workspace.LivePanes...)
-			workspace.LivePanes[0].AgentID = "foreign-agent"
-		}},
+		{name: "missing", change: missing},
+		{name: "mismatched", change: mismatched},
+		{name: "multi-pane missing", multiPane: true, change: missing},
+		{name: "multi-pane mismatched", multiPane: true, change: mismatched},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newHerdrLifecycleFixture(t)
@@ -3933,6 +3938,9 @@ func TestExpiredPlannedHerdrCleanupRejectsMovedLivePaneWithoutAgentEvidence(t *t
 			recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 			recordExpiredHerdrCleanupIntent(t, fixture, state.CleanupRemove)
 			moved := movedHerdrWorkspace(fixture, "w-moved")
+			if test.multiPane {
+				moved = movedMultiPaneHerdrWorkspace(fixture)
+			}
 			test.change(&moved)
 			runtime := &fakeHerdrLifecycleRuntime{
 				projectRoot: fixture.projectRoot,

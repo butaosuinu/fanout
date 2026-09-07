@@ -2210,32 +2210,39 @@ func rebindObservedWorkspaceCleanupIdentity(
 	if workspace == nil || workspace.WorkspaceID == intent.Resource.WorkspaceID {
 		return intent, nil
 	}
-	admittedPane, err := admitMovedWorkspaceCleanupPane(pane, *workspace)
+	admittedPane, adoptedLivePane, err := admitMovedWorkspaceCleanupPane(pane, *workspace)
 	if err != nil {
 		cause := fmt.Errorf("cleanup workspace location rebind: %w", err)
 		return intent, markWorkspaceCleanupManual(journal, intent, cause)
 	}
 	intent.Resource = adoptMovedWorkspaceCleanupResource(intent.Resource, *workspace)
+	if adoptedLivePane {
+		intent.Resource = resourceFromPane(admittedPane)
+	}
 	return intent, rebindMovedWorkspaceCleanupIdentity(locked, journal, projectRoot, admittedPane, intent.Resource)
 }
 
 func admitMovedWorkspaceCleanupPane(
 	pane state.Pane,
 	workspace backend.WorkspaceObservation,
-) (state.Pane, error) {
-	if workspace.Pane.Pane == "" || workspace.TerminalID == "" || pane.IsShell() || strings.TrimSpace(pane.Agent) == "" {
-		return pane, nil
+) (state.Pane, bool, error) {
+	if !workspaceCleanupObservesLivePane(workspace) || pane.IsShell() || strings.TrimSpace(pane.Agent) == "" {
+		return pane, false, nil
 	}
 	current, changed, err := panelaunch.ReconcileManagedPaneLocation(
 		pane, []backend.WorkspaceObservation{workspace},
 	)
 	if err != nil {
-		return pane, err
+		return pane, false, err
 	}
 	if !changed {
-		return pane, fmt.Errorf("%w: cleanup workspace location did not change", backend.ErrOwnedIdentityMismatch)
+		return pane, false, fmt.Errorf("%w: cleanup workspace location did not change", backend.ErrOwnedIdentityMismatch)
 	}
-	return current, nil
+	return current, true, nil
+}
+
+func workspaceCleanupObservesLivePane(workspace backend.WorkspaceObservation) bool {
+	return workspace.Pane.Pane != "" || len(workspace.Panes) != 0 || len(workspace.LivePanes) != 0
 }
 
 func replanWorkspaceCleanup(
