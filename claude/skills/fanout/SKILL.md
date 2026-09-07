@@ -1,9 +1,16 @@
 ---
 name: fanout
-description: Start the fanout persistent TUI console, or spawn one tmux pane per OPEN sub-issue of a GitHub parent issue / GitHub Projects v2 board item via the fanout CLI. Use when the user wants fanout to manage parallel child work from its TUI console, or explicitly asks to fan out, parallelize, or split issue / Project work across independent git worktrees and agent sessions.
+description: Start the fanout persistent TUI console, or spawn one tmux pane per OPEN sub-issue of a GitHub parent issue or Projects v2 board item via the fanout CLI. Use when the user wants fanout's console, or asks to fan out, parallelize, or split issue / Project work across independent git worktrees and agent sessions.
+argument-hint: "[parent-issue | project-url | dashboard | plan [path]] [--go] [--wait] [extra fanout flags]"
 ---
 
 # fanout
+
+`fanout` is a deterministic Go CLI that never calls an LLM. This skill supplies
+the judgment (which target, which implicit children, what to name panes) and
+the CLI does the enumeration, worktree creation, and pane launch. This file is
+the reference for the CLI surface, so there is no need to probe `--help`; invoke
+the `fanout` on PATH by its stable name.
 
 ## Synopsis
 
@@ -22,254 +29,323 @@ fanout <parent-issue|project-url>
        [--pr-visualization|--no-pr-visualization]
        [--team]
 fanout <parent-issue> --status [--format json|table] [--post-dashboard]
-                                      # status of fanned children; optionally post dashboard
-fanout <parent-issue> --merge <NUM>
-fanout <parent-issue> --close <NUM>
-fanout <parent-issue> --cleanup
-fanout dashboard --web              # read-only localhost web dashboard (Session view); no parent arg
-fanout plan <spec.json|plan-slug>   # issue-less local plan task fan-out (see fanout-plan)
-fanout msg <verb> [options] [body...]  # peer messaging between sibling panes (see "Sibling coordination")
-fanout --check-update               # Read-only version comparison
-fanout update                       # Replace fanout via install.sh
+fanout <parent-issue> --merge <NUM> | --close <NUM> | --cleanup
+fanout dashboard --web              # read-only localhost web dashboard; no parent arg
+fanout plan <spec.json|plan-slug>   # issue-less plan lane (fanout-plan skill)
+fanout msg <verb> [options] [body...]  # sibling messaging (references/sibling-messaging.md)
+fanout --check-update               # read-only version comparison
+fanout update                       # replace fanout via install.sh
 ```
 
-`fanout dashboard --web` is a standalone subcommand (no parent argument): it starts a read-only, 127.0.0.1-bound web dashboard that visualizes all fanned-out Sessions live (pane liveness, issue/PR state). It is human-facing — surface it to the user when they ask to "watch"/"monitor" parallel panes, but do not run it as part of the fan-out flow. When the TUI starts and after a live fan-out, fanout also binds `F12` and `prefix + D` in tmux to open it and `prefix + M` for same-worktree actions from the focused recorded pane; launched panes record their owner project root so these keys still resolve the right repo from agent TUIs such as Codex when tmux reports a stale `pane_current_path`. Pass `--no-dashboard-keybind` to suppress those bindings.
+## Modes
 
-`fanout plan <spec.json|plan-slug>` is the issue-less plan-task lane. If the
-user asks to fan out an implementation plan, route through the `fanout-plan`
-skill (`~/.claude/skills/fanout-plan/SKILL.md`) so the agent decomposes the
-plan and writes the spec JSON before invoking the deterministic CLI. The CLI
-does not call an LLM and does not infer tasks from prose.
+The positional argument selects the mode. A bare integer is issue mode; strip a
+leading `#` before invoking the CLI. A URL matching
+`^https://github\.com/(users|orgs)/<owner>/projects/<num>([/?].*)?$` is project
+mode; pass it verbatim (the CLI keeps `/views/<n>` and `?filterQuery=` as-is).
+Both modes share everything downstream of child enumeration: briefing
+generation, filters, deterministic naming, worktree creation under
+`.fanout/worktrees/`, and pane launch with a briefing at
+`.fanout/briefings/fanout-<repo>-<N>.md`. The caller's pane is not modified.
 
-**Do not run `fanout --help`, `fanout -h`, or `which fanout`.** This SKILL.md is the source-of-truth for the CLI surface — every flag above is documented under "Running" below, and the binary path is `/Users/butaosuinu/.local/bin/fanout` (also stated in the next paragraph). Probing the CLI directly wastes a tool call and adds nothing.
+No-argument `fanout` starts the persistent console. From a plain shell it
+creates or attaches the repository's fanout-managed tmux session; inside tmux it
+turns the current pane into the console. The console shows recorded panes with
+live tmux and issue/PR status, `n` opens the manual-pane popup for prompt-based
+`claude` / `codex` / `opencode` panes, and the label watcher runs inside it when
+enabled. Key bindings and TUI details are on the docs site, not here.
 
-`fanout <parent-issue-or-project-url>` enumerates either a GitHub parent issue's OPEN sub-issues *or* a GitHub Projects v2 board's OPEN items, and for each child creates a new tmux pane with its own git worktree under `.fanout/worktrees/` and an agent CLI started with a briefing that points at `.fanout/briefings/fanout-<repo>-<N>.md`. The caller's pane is not modified.
+`fanout dashboard --web` starts the standalone, 127.0.0.1-bound web dashboard.
+It is human-facing: surface it when the user wants to watch or monitor panes;
+do not run it as part of the fan-out. The console and a live fan-out also bind
+`F12` / `prefix + D` (open it) and `prefix + M` (same-worktree actions) in tmux;
+`--no-dashboard-keybind` suppresses those bindings.
 
-`fanout` with no arguments starts the persistent fanout TUI console. From a plain shell it creates or attaches a deterministic fanout-managed tmux session for the current repository, then runs the console there. From inside tmux it turns the current pane into the console. The console shows `.fanout/state.json` panes with live tmux plus issue/PR status, a `total` / `merged` / `pending` / `blocked` header rollup, and a compact Session navigator that stays fixed on the side or top depending on terminal width; `[` / `]` jump the pane table to the previous / next Session. Press `?` in the monitor to open the keyboard shortcut help in a tmux popup; `Esc`, `q`, or `?` closes it. It lets the user press `n` to open a tmux popup and launch one or more manual prompt-based `claude` / `codex` / `opencode` panes from the same prompt (multi-line prompt input uses `Shift+Enter` or `Ctrl+J` for newline; enhanced keyboard input is on by default — set `FANOUT_TUI_ENHANCED_KEYS=0` to opt out — and `Shift+Enter` needs a terminal that reports it distinctly, for which fanout turns on tmux `extended-keys`; `Up` / `Down` picks an agent row, `Space` toggles it, `Left` / `Right` changes its count, and `Enter` creates the selected panes). In Issue mode, `Ctrl+O` opens the selected issue in the default browser. Manual panes follow the user-level `newSessionPlanMode` setting (default on) for all three agents; codex plan panes run through the app-server plan TUI, claude and opencode start in their native plan modes. Plan fan-out coordinators (claude / codex) and `a` attach panes follow the same setting. A parent Issue fan-out's project-root orchestrator follows `orchestratorPlanMode` (default on); a codex orchestrator conflicts with its start gate, so fanout warns and starts plain codex. A successful `n` launch in Prompt, plan coordinator, or Issue mode focuses the first newly created pane in actual creation order; `F11` or `prefix + T` returns to the console. This automatic focus does not apply to `a` attach, `A` / `t` shells, watcher launches, or ordinary CLI fan-outs. Press `a` on a recorded row to attach one or more new agent panes to that same worktree without creating a new git worktree; attached rows can be focused/peeked but do not count toward merge progress. Press `A` to open a shell in the selected row's worktree, or `t` for the project root. The console exits on `q` without killing the session or child panes. On a selected recorded pane, `c` closes it, `m` fast-forward merges its recorded branch, and `x` cleans up merged/closed siblings for the same parent after confirmation. It also compares consecutive GitHub snapshots and notifies once per transition when a child becomes merged, CI turns failing, or a child becomes waiting on an open blocker; channels are configured through fanout settings. When `watcher` is enabled from user config or the environment, this same TUI runs the label watcher: it looks for trusted `fanout:auto` issues, swaps them to `fanout:running`, and starts one-shot standalone or parent fan-out sessions. Repo config cannot enable the watcher.
+`fanout plan` is the issue-less lane. Route plan requests through the
+`fanout-plan` skill (`~/.claude/skills/fanout-plan/SKILL.md`), which decomposes
+the plan and writes the spec JSON before invoking the CLI.
 
-The positional argument selects the mode: a bare integer means **issue mode**; a URL of the form `https://github.com/(users|orgs)/<owner>/projects/<num>` means **project mode**. User-facing issue refs like `#N` are accepted by this skill, but strip the leading `#` before invoking the CLI. The two modes share everything downstream of child enumeration — briefing generation, filters, deterministic naming, direct git worktree creation, and tmux pane launch — only the children come from a different source.
+## Invocation
 
-The CLI lives at `/Users/butaosuinu/.local/bin/fanout`; source and docs are in `/Users/butaosuinu/fanout/`. Always invoke the stable `fanout` command name.
+`/fanout` forwards `$ARGUMENTS`. Resolve them in this order, before any target
+resolution:
 
-## When to invoke
+1. No arguments, or the user asks for the console: run `fanout` with no
+   arguments from the target repository worktree and stop. The console needs no
+   parent, agent, dry-run, names, or confirmation.
+2. First token `dashboard` (ignoring the wrapper flags `--go` / `--wait`):
+   forward the dashboard arguments with those two flags stripped (for example
+   `fanout dashboard --web --open`) and stop; the dashboard parser rejects
+   unknown flags.
+3. First token `plan`: hand the remaining arguments to the fanout-plan skill
+   with `plan` removed. `--go` stays as that skill's confirmation bypass;
+   `--wait` is issue-mode only, so drop it with a note.
+4. Version questions: `fanout --check-update` is the read-only check.
+   `fanout update` replaces the binary through the repository `install.sh`
+   (`--version <tag>` pins a release, `--no-skills` skips integrations; only an
+   executable named `fanout` is replaced; exit `0` no-op or updated, `1`
+   environment or preflight, `2` bad invocation or incomparable version, `3`
+   release lookup failed).
+5. Lifecycle flags (`--status`, `--close`, `--merge`, `--cleanup`): resolve the
+   target, then run the command directly with no agent, dry-run, or naming.
+6. Otherwise this is a pane-creation run. `--go` skips the confirmation and
+   `--wait` enables wait-and-continue; both are wrapper flags, never forwarded
+   to the CLI. Forward every other flag verbatim to both the dry-run and the
+   real run, and add `--agent claude` when neither the user nor `FANOUT_AGENT`
+   names an agent (supported: `claude`, `codex`, `opencode`).
 
-Good fits:
+Examples: `/fanout 123` (dry-run, confirm, run) · `/fanout 123 --go` ·
+`/fanout 123 --limit 3 --agent codex` · `/fanout 123 --agent codex --agent
+456=claude` · `/fanout 123 --only 4,7,8,10` · `/fanout 123 --unblocked-only` ·
+`/fanout 123 --team` · `/fanout https://github.com/users/<owner>/projects/3`
+(Todo column) · `/fanout https://github.com/orgs/acme/projects/12
+--project-status "In Progress" --limit 5` · `/fanout plan
+/tmp/implementation-plan.md` · `/fanout` (console).
 
-- The user asks to start, open, or return to the fanout console / TUI for the current repository.
-- The user asks (explicitly or implicitly) to parallelize a parent issue that has OPEN sub-issues.
-- The user asks to fan out the OPEN issues of a GitHub Projects v2 board (often phrased as "Todo 列を並列展開" / "fan out my project board"), supplying the Project URL.
-- The user asks whether the installed `fanout` binary is up to date; in that case use `fanout --check-update`, not the pane-creation workflow.
-- The user asks to update fanout itself; in that case run `fanout update` immediately.
-- The user asks to start the fanout console / TUI; in that case run `fanout` with no arguments directly from the target repository worktree, skipping parent resolution, dry-run, pane naming, and agent selection.
-- The user asks for the label watcher; in that case use the TUI-only watcher recipe below.
-- The user asks to fan out an implementation plan or invokes `/fanout plan`; use the `fanout-plan` skill instead of the issue/Project workflow below.
-- The user types `/fanout` or mentions "fan out" / "並列展開".
+Pane creation is visible and each pane has to be closed by hand, so do not fan
+out unprompted because an issue happens to have sub-issues: suggest it and wait
+for a yes.
 
-Do not invoke unprompted just because an issue has sub-issues. Pane creation is visible and the user has to close each pane manually if they change their mind — suggest first, wait for a "yes", and prefer routing through the `/fanout` slash command so there is one consistent entry point.
+## Pane-creation run
 
-## Pre-flight
+Run from the target repository worktree so `git rev-parse --show-toplevel`
+resolves the intended project root; `cd` only when a reliable repo path is
+already known from context, otherwise ask the user to invoke `/fanout` from the
+right worktree. Batch mode must run inside tmux (the console may start from a
+plain shell), and by default it targets the invoking pane with detached splits;
+`--session` targets a named session instead. `gh`, `git`, and `tmux 3.3+` are
+validated by `fanout` itself with install hints, so rely on its errors.
 
-Before running the real command:
+### 1. Resolve the target
 
-1. **Prerequisites** — `gh`, `git`, and `tmux 3.3+` must be installed. `fanout` validates these on startup and fails with install hints, so you can rely on its error output rather than re-checking.
-2. **Resolve the parent target for batch pane creation** — if the user's intent is the TUI console, skip target resolution and run `fanout` with no arguments. Otherwise, first use any issue ref (`#N` or `N`) or Projects v2 URL in the user's request / recent context. If neither is clear, actively list candidates from the current repo/worktree instead of asking for a pasted number/URL:
-   1. Run `gh issue list --state open --json number,title --limit 100`.
-   2. Get the repo owner login with `gh repo view --json owner -q .owner.login`.
-   3. Run Project listing commands with `--limit 100`: `gh project list --format json --limit 100` for the current user's Projects, and `gh project list --owner <repo-owner> --format json --limit 100` for the repo owner's Projects. Run the repo-owner command even when the owner is a user, not only for orgs. Dedupe Projects by URL if the two lists overlap.
-   4. If a Project listing command fails due auth/scope/network, warn that Project candidates could not be fully listed, keep any issue candidates, and continue. If the user needs a Project candidate, tell them to refresh `gh` Project access or paste the Project URL.
-   5. Present one combined list: issues as `#<num> <title>`, Projects as `<title> (<url>)`, then ask the user to choose one.
-   6. If no issue candidates and no Project candidates are available, tell the user there is no OPEN issue or Project target to fan out and stop; if Project listing failed, mention that Project candidates were unavailable rather than claiming none exist.
-   7. Resolve the selection to the CLI positional arg: issues become bare digits with any leading `#` removed; Projects become the Project URL from `gh project list`.
+Use any issue ref (`#N` / `N`) or Projects v2 URL in the request or recent
+context. If neither is clear, list candidates instead of asking for a pasted
+value:
 
-   This is skill-side target resolution for non-TTY agent entrypoints. Do not change the Go `fanout` CLI for it; the CLI already accepts the resolved positional arg via `internal/app/cliflags.Parse()`.
-3. **Choose the launch lane** — TUI mode is `fanout` with no arguments; it can start from a plain shell because it creates or attaches the repository's fanout-managed tmux session, and from inside tmux it uses the current pane. Batch pane-creation mode is `fanout <parent-issue|project-url>`; it must be invoked from inside tmux. By default it targets the invoking pane, not the session's currently active pane; `--session` intentionally targets a named session instead. If batch mode reports `fanout must be run inside tmux`, tell the user to start or attach a tmux session first.
-4. **Agent name is required for pane creation** — pass `--agent claude` / `--agent codex` / `--agent opencode`, or set `FANOUT_AGENT`. Repeat `--agent NUM=name` to override one child issue. When this skill runs fanout and the user did not provide an agent, add `--agent claude`. Child Plan Mode is resolved independently from user config or `FANOUT_CHILD_PLAN_MODE` and applies to all supported agents.
-5. **Body scan for implicit children** — **Issue mode only — skip this step entirely when the positional argument is a Project URL.** Project items are the source-of-truth in project mode; the Project has no parent body, and Project descriptions often reference epic / context issues that are *not* intended as children — running this scan there would push noise into `--include`. In issue mode, `fanout` itself only treats two things as children: issues returned by the Sub-issues API, and parent-body rows that match `^\s*-\s+\[[ xX]\] ... #N`. Parent issues in the wild often *describe* their children via prose instead, and those references must be surfaced to the user and forwarded as `--include`.
-   1. Run `gh issue view <parent> --json body -q .body` to fetch the body.
-   2. Also run `fanout <parent> --dry-run <forwarded>` once to see what numbers `fanout` already auto-discovers (the two sources above). Hold on to that list so you don't suggest duplicates.
-   3. Read the body and identify issue numbers that are **referred to as children** but aren't in the auto-discovered list. Typical indicators:
-      - Close/fix/resolve keywords: `Closes #N`, `Fixes #N`, `Resolves #N` (any case; `Closes #1, #2, #3` is one row referring to three children).
-      - Dependency / relation wording: `Depends on #N`, `Blocked by #N`, `Related to #N`, `See #N`, `Refs #N`.
-      - Plain bullets without a checkbox: `- #N`, `* #N`, `+ #N`.
-      - Japanese idioms: `#N に関連`, `#N を対応`, `#N 対応中`, `#N をブロック`, `#N の子issue`, `#N の子タスク`, `#N を修正`, `#N を解決` and near-variants.
-   4. **Exclude** from the candidate list:
-      - `owner/repo#N` cross-repo references — `fanout` only operates on the parent's repo.
-      - Bare `#N` with no surrounding keyword or bullet prefix (e.g. "introduced in #12", "as noted in #99") — likely a historical reference, not a child.
-      - References inside fenced code blocks (```…```) or blockquotes (`> …`) — usually quoted examples, not real children.
-      - The parent issue's own number.
-      - Numbers that already appear in the dry-run's target list.
-   5. If candidates remain, **list them back to the user** with a one-line justification each (quote the body line that implied child status) and ask whether to include them. If `--go` was passed, still print the list (for transparency) but auto-accept.
-   6. Forward the accepted numbers as `--include A,B,C` to both the confirmation dry-run in step 8 and the real run.
-   7. If no candidates are found, skip straight to step 7 with no `--include`.
-6. **Project mode only: discover final targets before naming.** Run `fanout <project-url> --dry-run <forwarded-flags>` from the target repository worktree with all selection flags and any user-supplied `--name` flags, but without newly generated `--name` flags. Use that output to learn which Project items survived Status / repo / blocker / limit filtering. This discovery dry-run still runs when `--go` was passed; it is not the confirmation step.
-7. **Generate pane names** — fanout has a deterministic default slug (`slugify(title)-<issueNum>`), but issue context usually allows clearer names, so generate names here when useful and forward them via `--name`:
-   1. For each target issue (post-`--only`/`--skip`/`--include`/dedup-against-already-fanned, i.e. the final target set the dry-run reports), produce:
-      - `slug-hint` — 2–4 kebab-case words summarizing the intent, e.g. `fix-login-timeout`, `update-docs-ja`, `cleanup-worktree`. Start with a letter or digit; only `[a-z0-9-]`. This controls the worktree slug stem; fanout appends `-<issue-number>` when missing, while rerun idempotency comes from `.fanout/state.json`.
-      - `display-name` — ≤40 characters, human-readable (Japanese or English OK, mixed is fine). Used for the tmux pane title. This is what the user *sees* when switching panes, so favor clarity over brevity.
-      - `branch-name` *(optional)* — exact git branch name to create. Generate this only if the user's team has a branch-naming convention worth enforcing (`feat/issue-<N>-foo`, `bugfix/<slug>`, `release/v2.0`, etc.), or if `branchPrefix + slug-hint` would collide with something. Skip this segment when the default is fine — over-specifying it is noise.
-   2. Forward as `--name <NUM>=<slug-hint>[|<display-name>[|<branch-name>]]` — one flag per target, repeatable. Any of the three pipe-separated segments may be empty as long as at least one is non-empty. Examples: `--name 17=fix-login-timeout` (slug only), `--name 17=|Fix login timeout` (display only), `--name 17=fix-x|Fix X|feat/issue-17-x` (all three), `--name 17=||release/v2.0` (branch only).
-   3. In issue mode, use the parent issue context and the issue dry-run target set. In project mode, use the discovery dry-run output from step 6; fetch per-issue body via `gh issue view <num> --json body -q .body` only if the title alone is not enough to name the pane.
-   4. Also choose a per-issue agent only when there is a clear reason and the user did not already provide `--agent NUM=name`: large refactors normally use `claude`; focused bug fixes and review follow-up normally use `codex`; docs-heavy work should stay on the default agent because Gemini is not supported in this build. Choose `opencode` only when the user asks for it or wants a different provider — it is provider-agnostic (Claude / GPT / Gemini / local models through one CLI). Forward choices as repeatable `--agent NUM=name` and summarize them in the dry-run.
-   5. Do **not** ask the user to confirm the names — the skill runs auto-name → immediate fanout. Still include the generated names in the dry-run summary (step 8) so the user can see and course-correct before the real run if they want to.
-   6. If the user runs `/fanout` with explicit `--name` flags of their own, respect those and don't override — merge so skill-generated names fill the gaps.
-8. **Dry-run** — run `fanout <N-or-URL> --dry-run <forwarded-flags>` (including any `--include` from step 5 and `--name` from step 7) and show the user: the mode banner (issue / project) the CLI prints, how many children, their titles, the briefing paths, generated names, worktree paths, and warnings. Treat briefing paths in dry-run output as preview paths; fanout writes the files only during the live run. In project mode also surface any "cross-repo item skipped" warnings — those items are intentionally excluded from fan-out. This is the confirmation step for the targets themselves (not the names).
+1. `gh issue list --state open --json number,title --limit 100`
+2. `gh repo view --json owner -q .owner.login`
+3. `gh project list --format json --limit 100` (current user) and
+   `gh project list --owner <repo-owner> --format json --limit 100` (repo
+   owner, also when the owner is a user); dedupe by URL.
+4. If a Project listing fails on auth, scope, or network, say Project
+   candidates could not be fully listed, keep the issue candidates, and point
+   the user at refreshing `gh` Project access or pasting the URL.
+5. Present one combined list (`#<num> <title>`, `<title> (<url>)`) and let the
+   user choose. With no candidates, say so and stop, distinguishing "none
+   exist" from "Projects could not be listed".
 
-Run fanout from the target repository worktree so `git rev-parse --show-toplevel` resolves the intended project root. For batch pane creation, run it from inside tmux; for the no-argument TUI, a plain shell is fine.
+This resolution lives in the skill; the CLI already accepts the resolved
+positional argument through `internal/app/cliflags.Parse()`.
 
-## Label watcher recipe
+### 2. Issue mode only: scan the parent body for implicit children
 
-Use this only when the user asks for watcher behavior: repository-wide label
-discovery and one-shot session launch while the TUI is running. The watcher is
-not a scheduler, webhook, or the #107 known-parent skill loop.
+The CLI treats two things as children: issues from the Sub-issues API and
+parent-body rows matching `^\s*-\s+\[[ xX]\] ... #N`. Parents in the wild often
+describe children in prose instead, and those reach the CLI only through
+`--include`. Skip this step entirely in project mode: Project items are the
+source of truth, there is no parent body, and Project descriptions often cite
+epic or context issues that are not children.
 
-1. Enable it from user config (`~/.config/fanout/config.json` or
-   `$XDG_CONFIG_HOME/fanout/config.json`) or from the current shell with
-   `FANOUT_WATCHER=1`. Use `FANOUT_WATCHER_AGENT` or `watcherAgent` when the
-   default TUI agent is not the desired child agent.
-2. Run `fanout` with no arguments and keep the TUI open. The watcher stops
-   when the TUI exits.
-3. Apply `fanout:auto` only when the user trusts the labeled issue and any OPEN
-   children it can launch. Those issue bodies become agent briefings, so the
-   label is a prompt-injection boundary.
-4. On each cycle fanout swaps `fanout:auto` to `fanout:running`. Issues with no
-   OPEN children launch as standalone panes under parent `@watch`; issues with
-   OPEN children launch as normal parent fan-outs with `--unblocked-only` and
-   the `watcherMaxSessions` budget. Deferred parent fan-outs are requeued by
-   swapping `fanout:running` back to `fanout:auto`.
-5. For parent fan-outs, `--merge`, `--close`, and `--cleanup` remove
-   `fanout:running` best-effort. For standalone `@watch` panes, use the TUI
-   lifecycle keys; the public CLI parent argument cannot target `@watch` rows.
-   To run a completed standalone pane or fully cleaned parent again, add
-   `fanout:auto` again.
+1. `gh issue view <parent> --json body -q .body`
+2. `fanout <parent> --dry-run <forwarded>` once, to learn what the CLI already
+   discovers so you do not re-suggest those numbers.
+3. Candidates are numbers the body refers to as children: close keywords
+   (`Closes #N`, `Fixes #N`, `Resolves #N`, any case; `Closes #1, #2, #3` names
+   three), relation wording (`Depends on #N`, `Blocked by #N`, `Related to #N`,
+   `See #N`, `Refs #N`), plain bullets (`- #N`, `* #N`, `+ #N`), and Japanese
+   idioms (`#N に関連`, `#N を対応`, `#N 対応中`, `#N をブロック`, `#N の子issue`,
+   `#N の子タスク`, `#N を修正`, `#N を解決` and near-variants).
+4. Exclude `owner/repo#N` cross-repo references (fanout operates on the
+   parent's repo only), bare `#N` with no keyword or bullet ("introduced in
+   #12" is history), references inside fenced code blocks or blockquotes, the
+   parent's own number, and numbers already in the dry-run target list.
+5. List remaining candidates with the body line that implied child status and
+   ask which to include; with `--go`, print the list and accept them all.
+   Forward the accepted numbers as `--include A,B,C` to the confirmation
+   dry-run and the real run.
 
-#107 remains the known-parent loop: a skill or `/loop` keeps revisiting one
-parent's children, ready labels, and blocker wave progress. Do not describe the
-label watcher as that flow; it discovers labeled issues across the repository
-and starts sessions once.
+### 3. Project mode only: discover the final targets
 
-## Running
+Run `fanout <project-url> --dry-run <forwarded>` with all selection flags and
+any user-supplied `--name` flags (none generated yet) to learn which items
+survived Status, repo, blocker, and limit filtering. This discovery run also
+happens under `--go`; it is not the confirmation.
 
-- **Update check**: if the user's intent is only to check the installed
-  `fanout` binary version, run `fanout --check-update` and skip parent
-  resolution, tmux pre-flight, dry-run, pane naming, and confirmation. It is
-  read-only and creates no panes.
-- **Update execution**: if the user's intent is to update the `fanout` binary
-  itself, run `fanout update` immediately. The command downloads and runs the
-  repository `install.sh`, passing `BIN_DIR=<current binary dir>` and
-  `FANOUT_VERSION=<target>` so the installer replaces the same `fanout`
-  command and refreshes bundled integrations. Use `--version <tag>` to pin a
-  release and `--no-skills` to skip Claude/Codex skill installation. Actual
-  replacement is only supported when the resolved executable basename is
-  `fanout`. Exit codes: `0` no-op/update, `1` environment or preflight failure,
-  `2` bad invocation or incomparable version, `3` latest-release lookup failed.
-- **Persistent TUI**: if the user's intent is to start the fanout console, run
-  `fanout` with no arguments from the target repository worktree and skip
-  parent resolution, batch tmux pre-flight, dry-run, pane naming, and
-  confirmation.
-  TUI mode does not need a parent issue, Project URL, or `--agent`.
-- **Default**: `fanout <N-or-URL> --agent claude --dry-run` → summarize → ask user to confirm → `fanout <N-or-URL> --agent claude`.
-- **Bypass**: if the user's invocation carries `--go`, skip the confirmation and run directly.
-- **Forward extra flags** (`--agent`, including repeatable `NUM=name` overrides, `--limit`, `--only`, `--skip`, `--include`, `--unblocked-only`, `--project-status`, `--format`, `--post-dashboard`, `--name`, `--base-branch`, `--branch-prefix`, `--no-refresh`, `--session`, `--sleep`, `--popup-timeout`, `--debug`, `--auto-pr`, `--no-auto-pr`, `--pr-review-gate`, `--no-pr-review-gate`, `--briefing-code-review`, `--no-briefing-code-review`, `--agent-teams-hint`, `--no-agent-teams-hint`, `--pr-visualization`, `--no-pr-visualization`, `--team`) verbatim to both the dry-run and the real run. Strip `--go` before forwarding — it is the slash command's own flag, not a `fanout` flag. If neither the user nor the environment supplies an agent, add `--agent claude`.
-- `--only <list>` / `--skip <list>` take a comma-separated list of issue numbers (e.g. `--only 4,7,8,10`). They are mutually exclusive. `--only` numbers not in the parent's OPEN child set are warned and ignored by the CLI — if the user names issues that aren't children, relay that warning instead of silently retrying.
-- `--include <list>` takes a comma-separated list of issue numbers to force-add to the children set when the Sub-issues API and parent-body task-list scan don't surface them (e.g. `--include 123,456`). This is the channel for numbers produced by the "Body scan for implicit children" step above. Numbers that end up CLOSED or don't exist are warned and skipped by the CLI. Combines cleanly with `--only`/`--skip` (included first, then filtered).
-- `--unblocked-only` defers children whose blockers are still OPEN (blockers are parsed from the child body's `## Blocked by` section, a `(blocked by #X, #Y)` trailer on the parent's task-list row, or the `blocked` label as a weak signal). Prefer this over hand-maintained `--only` wave lists when the parent has explicit blocker annotations — a periodic rerun of the same command walks Wave 1 → 2 → … as blocker PRs merge. In project mode the parent-row trailer source is unavailable (no parent body), so blockers come only from the child body section and the `blocked` label.
-- `--project-status <name>` (**project mode only**) filters Projects v2 items by their `Status` single-select field. Default is `Todo` — so `fanout <project-url>` with no other flags fans out only the Todo column. Pass `--project-status all` to disable the filter and include every OPEN item in the Project. Pass any single Status value (e.g. `--project-status "In Progress"`, `--project-status Backlog`) to target that column; the value is matched against the Project's Status field options case-sensitively. If the Project has no `Status` field at all, `fanout` warns and falls back to all OPEN items. Empty values are rejected (`--project-status ""` is an error). Ignored when the positional arg is an issue number — accepted on the command line but unused.
-- `--name <NUM>=<slug-hint>[|<display-name>[|<branch-name>]]` is the channel for the names generated in the "Generate pane names" step. Repeatable, one per target. Slug-hint must be kebab-case (`[a-z0-9-]`, starting with alnum) and is normalized to include `-<NUM>` when missing. Display-name is free-form. Branch-name is a git branch name that overrides `branchPrefix + slug`. Any segment may be empty as long as at least one is non-empty (`--name 17=fix-x` slug only, `--name 17=|Disp` display only, `--name 17=||feat/x` branch only).
-- `--auto-pr` / `--no-auto-pr` include or omit the child briefing requirement to open a PR with `Closes #N`. `--pr-review-gate` / `--no-pr-review-gate` keep the default PR review-gate expectation or add a Claude-only escape-hatch note when the hook blocks before `/post-work-review`. `--briefing-code-review` / `--no-briefing-code-review` include or omit the Claude-only `/code-review` directive. `--agent-teams-hint` / `--no-agent-teams-hint` include or omit the Claude-only Agent Teams hint. `--pr-visualization` / `--no-pr-visualization` include or omit structured PR-body plus gated Mermaid guidance in auto-PR child briefings. These briefing settings default on.
-- Lifecycle hooks are always on and come from user `hooks.json`.
-- `childPlanMode` in user config, or `FANOUT_CHILD_PLAN_MODE`, controls issue / Project children, issue-less plan tasks, watcher launches, and standalone issues from the TUI. Build mode is explicit when disabled. Codex uses the app-server Plan Mode controller; Claude and opencode use their native plan launch modes.
-- `newSessionPlanMode` and `orchestratorPlanMode` (both default on; user config or `FANOUT_NEW_SESSION_PLAN_MODE` / `FANOUT_ORCHESTRATOR_PLAN_MODE`) are TUI-lane settings: the first covers manual panes, plan fan-out coordinators, and `a` attach; the second covers the issue-mode orchestrator pane. Neither affects the CLI batch fan-out this skill runs — children follow `childPlanMode` only.
-- Explicit Claude modes (`--permission-mode plan` / `--permission-mode auto`) need Claude Code v2.1.207+; below that floor fanout warns and omits the mode flags. Where auto mode is disabled (a Team / Enterprise plan whose Owner has not enabled it, an unsupported model, or a managed policy), claude notifies and falls back to its `default` mode — fanout does not detect the effective mode, and permission prompts surface as the TUI's `blocked` state.
-- `--team` opts the run into sibling-pane peer messaging (default off). It adds a "Coordinating with your sibling panes" section to each child's standard briefing and seeds the created panes into a per-parent peer registry. Best-effort — a registry failure never fails the fan-out. Codex Plan Mode children get the minimal Plan-Mode briefing; Plan Mode takes precedence and disables their Codex team bridge. See "Sibling coordination" below. Suggest it when the children will touch shared files (configs, schemas, lockfiles) or have ordering dependencies that aren't already encoded as blockers; skip it for fully independent children.
+### 4. Name the panes
 
-## Sibling coordination (--team / fanout msg)
+fanout's default slug is `slugify(title)-<issueNum>`; issue context usually
+allows clearer names. For each final target (issue mode: the dry-run target
+set; project mode: the discovery output, fetching a body with
+`gh issue view <num> --json body -q .body` only when the title is not enough):
 
-fanned panes are separate agent sessions (not Agent Teams teammates — that is a Claude-only, single-session feature), so they coordinate through a per-parent SQLite message bus rather than shared context. This works the same for `claude`, `codex`, and `opencode` panes.
+- `slug-hint`: 2–4 kebab-case words for the intent (`fix-login-timeout`),
+  `[a-z0-9-]` starting with a letter or digit. It becomes the worktree slug
+  stem; fanout appends `-<NUM>` when missing, and rerun idempotency comes from
+  `.fanout/state.json`, not from the slug.
+- `display-name`: 40 characters or fewer, Japanese or English, used as the tmux
+  pane title. This is what the user sees when switching panes, so favor
+  clarity over brevity.
+- `branch-name` (optional): only when the team has a branch convention worth
+  enforcing (`feat/issue-<N>-foo`) or `branchPrefix + slug-hint` would collide.
 
-- **Enabling it**: pass `--team` to the fan-out (forwarded like any other flag). The CLI injects a coordination section + shared DB path into each child's standard briefing and seeds the peer registry after the batch launches. (Codex Plan Mode children get the minimal Plan briefing, so the section is skipped for them; they are still seeded and can use `fanout msg`.)
-- **Using it from inside a fanned pane**: `fanout msg` auto-detects which child you are (from the tmux pane and `.fanout/state.json`) and which parent you belong to. Verbs:
-  - `fanout msg peers` — live sibling roster.
-  - `fanout msg inbox [--all] [--mark-read]` — unread 1:1 messages + unread board posts (`--mark-read` drains them).
-  - `fanout msg board [--all]` — the shared broadcast board.
-  - `fanout msg watch [--interval S]` — block and emit new 1:1 + board messages one per line as they arrive; emitted messages are marked read on delivery (mark-on-emit). Ctrl-C to stop.
-  - `fanout msg send --to <N> [--kind K] "<body>"` — 1:1 message to sibling #N.
-  - `fanout msg post [--kind K] "<body>"` — post to the shared board.
-  - `fanout msg nudge <N>` — best-effort push: send an inbox hint through sibling #N's recorded runtime, only when its agent state can take queued input (never a blocked pane; opencode panes are excluded — no state refinement). Never touches the DB; undeliverable nudges warn and exit `0`.
-  - `fanout msg mark-read [--id N ...|--all]` — mark 1:1 messages read (`--all` also advances the board cursor).
-  - `fanout msg register` — (re-)register this pane in the roster.
-- Common options: `--json` (machine-readable), `--self <N>` / `--parent <ref>` (override pane detection). `kind` is a free-form label (default `note`; no fixed vocabulary). Exit codes: `0` ok, `2` bad invocation, `4` backend failure (SQLite, or `watch`'s stdout breaking); `nudge` reports undeliverable targets as a warning with exit `0`.
-- Delivery is **pull plus per-agent push lanes**: messages persist and a sibling reads them at its own checkpoints; on top of that, claude `--team` briefings instruct the pane to start `fanout msg watch` under the Monitor tool as its first tool action (new messages then stream in, marked read on emit), and fresh non-Plan codex `--team` panes receive unread messages through an app-server bridge as quoted turns. opencode panes have no push lane and stay pull-based. Neither lane writes to pane input — `nudge` is the only push that does. A watcher replaces only the inbox checks — post a one-line heads-up before editing shared files regardless; without a watcher (no Monitor, a restored pane), also check `fanout msg inbox` once after reading the briefing and once more before opening the PR. A nudge hint can land after the recipient's watcher already drained the message (mark-on-emit): an empty inbox then means the body is in the watcher output.
-- **Plan mode** — `fanout plan --team` uses the same `fanout msg` surface, but peers are addressed by **task id** (`fanout msg send --to <task-id>`) instead of issue number, because issue-less plan tasks have no `#N`. See the fanout-plan skill.
-- **Security**: the DB is a plaintext SQLite file under `/tmp` (`0600`, owner-only). Never put secrets, tokens, or credentials in messages.
+Forward as `--name <NUM>=<slug-hint>[|<display-name>[|<branch-name>]]`, one
+flag per target; any segment may be empty as long as one is not
+(`--name 17=fix-x`, `--name 17=|Fix login timeout`, `--name 17=||release/v2.0`).
+Respect user-supplied `--name` flags and fill only the gaps. Choose a per-issue
+`--agent NUM=name` only with a clear reason and when the user did not: `claude`
+for large refactors and cross-file work, `codex` for focused fixes, tests, and
+review follow-up, the default for docs-heavy or ambiguous work, `opencode` when
+the user asks for it or wants a different provider. Do not ask the user to
+confirm names or agents one by one; they see them in the dry-run summary.
+
+### 5. Dry-run, confirm, run
+
+Run `fanout <target> --dry-run <forwarded>` (with `--include` and `--name`) and
+summarize: the mode banner the CLI prints, how many children and their titles,
+the briefing paths (preview paths; the live run writes the files), generated
+names, worktree paths, and warnings (in project mode, "cross-repo item skipped"
+means those items are intentionally excluded). Skip the raw command plan unless
+asked. This is the confirmation for the targets. Unless `--go` was passed, wait
+for a yes, then run `fanout <target> <forwarded>` and relay the
+`created / skipped / deferred (blocked) / deferred (--limit) / failed` summary.
+The caller's pane is untouched; keep working on the parent's own scope.
+
+## Flag semantics
+
+- `--only <list>` / `--skip <list>`: comma-separated issue numbers, mutually
+  exclusive, applied before `--limit`. `--only` numbers outside the OPEN child
+  set are warned and ignored by the CLI; relay that warning rather than
+  retrying.
+- `--include <list>`: force-add numbers the Sub-issues API and task-list scan
+  miss (the channel for step 2). Appended before `--only` / `--skip` filter, so
+  `--include 100 --only 4,7,100` works. CLOSED or missing numbers are warned and
+  skipped. Rarely needed in project mode, where the board defines the set.
+- `--unblocked-only`: defer children whose blockers are still OPEN. Blockers
+  come from the child body's `## Blocked by` section, the parent row trailer
+  `(blocked by #X, #Y)`, and the `blocked` label as a weak signal; project mode
+  has no parent row, so only the other two apply. Prefer it over hand-built
+  `--only` wave lists; rerunning the same command walks wave 1 → 2 → … as
+  blocker PRs merge.
+- `--project-status <name>` (project mode; accepted but unused in issue mode):
+  filter items by the `Status` single-select field, case-sensitively. Default
+  `Todo`; `all` disables the filter; an empty value is an error; a Project
+  without a Status field warns and falls back to all OPEN items.
+- `--sleep` (default 4) is the pause between pane creations, not a retry knob.
+  `--popup-timeout` (default 20) is deprecated compatibility.
+- Briefing settings, all default on, each with a `--no-` form: `--auto-pr` (the
+  child must open a PR with `Closes #N`), `--pr-review-gate` (keeps the review
+  gate expectation; off adds the Claude-only escape-hatch note),
+  `--briefing-code-review` (the Claude-only `/code-review` directive),
+  `--agent-teams-hint`, `--pr-visualization` (structured PR body plus gated
+  Mermaid guidance). Lifecycle hooks are always on and come from user
+  `hooks.json`.
+- `--team` (default off): sibling-pane peer messaging. It adds a coordination
+  section to each child's briefing and seeds a per-parent peer registry, best
+  effort. Codex Plan Mode children get the minimal Plan briefing, and Plan Mode
+  disables their team bridge. Suggest it for children that share files or have
+  ordering dependencies not encoded as blockers. Verbs, delivery model, and
+  security: `~/.claude/skills/fanout/references/sibling-messaging.md`.
+- Plan Mode: `childPlanMode` (user config or `FANOUT_CHILD_PLAN_MODE`) governs
+  children of every lane and is resolved independently of `--agent`; codex uses
+  the app-server Plan Mode controller, claude and opencode their native plan
+  modes. `newSessionPlanMode` and `orchestratorPlanMode` are TUI-lane settings
+  and do not affect this CLI fan-out. Explicit Claude modes
+  (`--permission-mode plan` / `auto`) need Claude Code v2.1.207+; below that
+  fanout warns and omits them, and where auto mode is disabled claude falls
+  back to `default` and permission prompts show as the TUI's `blocked` state.
 
 ## Project mode notes
 
-- **URL shape** — the CLI matches `^https://github\.com/(users|orgs)/<owner>/projects/<num>([/?].*)?$`. Both user-owned and organization-owned Projects v2 boards are supported, and any trailing `/views/<n>` segment or `?filterQuery=...` query string is preserved verbatim — the CLI extracts only the `users|orgs`, `<owner>`, and `<num>` it needs. Anything else is rejected at arg-parse time.
-- **Source of truth** — children come from the Project's `items` node via GraphQL (`gh api graphql`), all pages, in board order. The Sub-issues API and parent-body scan are **not** consulted in project mode. The parent body (which doesn't exist for a Project) is not read.
-- **`--project-status` filtering** — see the `## Running` section above. The default is `Todo`, which mirrors the common "queue everything I'm planning to start" workflow. Use `--project-status all` for a full fan-out, or a single explicit value for any other column.
-- **`gh` scope** — Projects v2 GraphQL requires the `read:project` scope. If `fanout` exits with an authorization failure on the `projectV2` query (`HTTP 401` / `Resource not accessible by integration`), tell the user to run `gh auth refresh -s read:project` and retry. The default `repo` scope alone is not sufficient.
-- **Cross-repo items are skipped** — items whose `content.repository.nameWithOwner` does not match the current git repository are warned and skipped. fanout's briefing / worktree paths assume a single repo (`.fanout/briefings/fanout-<repo>-<N>.md`, worktrees under the project root), so cross-repo items would create panes pointing at the wrong checkout. Surface the warning rather than retrying.
-- **`--include` in project mode** is allowed but rarely needed — the Project itself already defines the set. Reach for it only when the user explicitly wants to force-add an issue not currently on the board.
-- **Idempotency** — action mode skips children already recorded in `.fanout/state.json` for the same `(parent, issueNum)` pair, and also skips unrecorded existing `.fanout/worktrees/<slug>` directories as a migration fallback. If the same issue is recorded for another parent, only an existing worktree matching the slug this current run would create is treated as fallback. The state file is written with an atomic temp+rename update while a `.fanout/state.json.lock` file is held for the run. If the same child issue is already recorded for another parent or Project, fanout parent-qualifies the default slug/branch so the new run gets a separate worktree.
+- Children come from the Project's `items` via GraphQL (`gh api graphql`), all
+  pages, in board order. Neither the Sub-issues API nor a parent body is read.
+- Projects v2 GraphQL needs the `read:project` scope. On `HTTP 401` /
+  `Resource not accessible by integration` against `projectV2`, tell the user
+  to run `gh auth refresh -s read:project` and retry; `repo` alone is not
+  enough.
+- Items whose `content.repository.nameWithOwner` differs from the current repo
+  are warned and skipped: briefing and worktree paths assume one repo. Relay
+  the warning instead of retrying.
+- Idempotency: action mode skips children already recorded in
+  `.fanout/state.json` for the same `(parent, issueNum)`, and skips unrecorded
+  `.fanout/worktrees/<slug>` directories as a migration fallback when the slug
+  matches what this run would create. A child already recorded under another
+  parent or Project gets a parent-qualified slug and branch, so the new run has
+  its own worktree. The state file is written by atomic temp+rename while
+  `.fanout/state.json.lock` is held.
 
-## After running
+## Label watcher
 
-- Relay the `created / skipped / deferred (blocked) / deferred (--limit) / failed` summary.
-- The caller's pane is untouched. Continue working on the parent issue's own scope in the current session.
-- Re-invocation skips children already recorded in `.fanout/state.json` for the same `(parent, issueNum)`. `fanout --status` reads the same state store.
+Use only when the user asks for watcher behavior: repository-wide label
+discovery plus one-shot session launch while the console is open. It is not a
+scheduler, a webhook, or the #107 known-parent loop (a skill or `/loop` that
+keeps revisiting one parent's children and blocker waves).
+
+1. Enable from user config (`~/.config/fanout/config.json` or
+   `$XDG_CONFIG_HOME/fanout/config.json`) or with `FANOUT_WATCHER=1`;
+   `FANOUT_WATCHER_AGENT` / `watcherAgent` pick the child agent. Repo config
+   cannot enable it.
+2. Run `fanout` with no arguments and keep the console open; the watcher stops
+   with it.
+3. Apply `fanout:auto` only to issues the user trusts, children included: their
+   bodies become agent briefings, so the label is a prompt-injection boundary.
+4. Each cycle swaps `fanout:auto` to `fanout:running`. Issues without OPEN
+   children launch as standalone panes under parent `@watch`; issues with OPEN
+   children launch as parent fan-outs with `--unblocked-only` under the
+   `watcherMaxSessions` budget. Deferred parents are requeued by swapping back
+   to `fanout:auto`.
+5. `--merge`, `--close`, and `--cleanup` remove `fanout:running` best effort for
+   parent fan-outs. Standalone `@watch` panes use the TUI lifecycle keys; the
+   CLI parent argument cannot target `@watch` rows. Re-apply `fanout:auto` to
+   run a completed item again.
 
 ## Optional: wait-and-continue
 
-Use this only when the user explicitly asks to wait until child PRs merge and
-then continue parent-scope work. After the real fanout run succeeds, poll
-`fanout --status <PARENT>` from the parent worktree. The command reads
-`.fanout/state.json` (or `FANOUT_STATE_PATH`) and returns
-`summary.all_merged` plus `summary.blocked` for the recorded children. Use the
-default JSON format for automation; `--format table` is for human review of PR
-state, CI, diff stats, and links.
-Use `--post-dashboard` only when the user explicitly wants a parent issue
-rollup comment; it writes to GitHub even though it is attached to `--status`.
+Only when the user explicitly asks to wait for child PRs and then continue
+parent-scope work (`--wait`; issue mode; the live run exited 0).
+`fanout --status <PARENT>` reads `.fanout/state.json` (or `FANOUT_STATE_PATH`)
+and returns `summary.all_merged` and `summary.blocked`; JSON is the default and
+`--format table` is for human review. `--post-dashboard` writes a rollup comment
+to GitHub, so use it only on explicit request.
 
-1. Continue any parent-scope work that does not depend on the children's merged output.
-2. When you reach a phase that requires the children's merged output, poll status via `ScheduleWakeup` with the autonomous-loop sentinel:
+1. Do any parent-scope work that does not need the children's output.
+2. When you need it, schedule polling:
    ```
-   ScheduleWakeup(
-     prompt: "<<autonomous-loop-dynamic>>",
-     delay_seconds: 300,
-     reason: "polling fanout --status #<PARENT> for all_merged"
-   )
+   ScheduleWakeup(prompt: "<<autonomous-loop-dynamic>>", delay_seconds: 300,
+                  reason: "polling fanout --status #<PARENT> for all_merged")
    ```
-3. On each wake-up, run `fanout --status <PARENT>` and inspect `summary.all_merged`.
-4. When `summary.all_merged == true`, stop scheduling wake-ups, then refresh
-   and merge the same base branch used for the fanout run in the parent
-   worktree. Use the forwarded `--base-branch` when present; otherwise resolve
-   fanout's default branch (`gh repo view defaultBranchRef`, then `origin/HEAD`,
-   then `main`). Fetch the normalized remote branch and run
-   `git merge --ff-only origin/<branch>` (or the equivalent
-   `refs/remotes/origin/<branch>`), then proceed with integration tests and
-   parent-issue close-out.
-5. Treat `prs: []` on a child as pending (PR not yet open), never merged.
+3. On each wake-up run `fanout --status <PARENT>`. `prs: []` on a child means
+   pending, never merged.
+4. When `summary.all_merged == true`, stop scheduling, then fetch and
+   `git merge --ff-only origin/<branch>` the base branch used for the fan-out
+   (the forwarded `--base-branch`, else `gh repo view defaultBranchRef`, then
+   `origin/HEAD`, then `main`) in the parent worktree, and continue with
+   integration and close-out. If the user intervenes, drop the loop.
 
-`--status` exit codes:
-- `2` — cannot enumerate children or state (bad invocation, unreadable or malformed state, unusable project root). A missing state file is treated as empty. Stop and report.
-- `3` — `gh` API failed. Stop and report; the user may need to refresh `gh auth`.
-- `0` with `summary.total == 0` — nothing has been fanned out under that parent (or every fanned pane was already torn down). Don't loop on this; tell the user.
+`--status` exit codes: `2` cannot enumerate children or state (bad invocation,
+unreadable state, unusable root; a missing state file is empty, not an error);
+`3` `gh` API failed (the user may need `gh auth`); `0` with
+`summary.total == 0` means nothing is fanned out under that parent, so report
+that instead of looping.
 
 ## Failure mapping
 
-When `fanout` exits non-zero, point the user at `/Users/butaosuinu/fanout/README.md` Troubleshooting. Common cases:
+On a non-zero exit, point at the README's Troubleshooting section and the
+likely fix:
 
-- `fanout must be run inside tmux` — batch pane creation needs a tmux session; start or attach one and rerun, or start the persistent console with no-argument `fanout` from a plain shell.
-- `agent is required` — pass `--agent claude`, `--agent codex`, `--agent opencode`, set `FANOUT_AGENT`, or cover every selected child with `--agent NUM=name`.
-- `unknown agent` — use one of the supported agents (`claude`, `codex`, `opencode`).
-- `agent "<name>" is not installed` — install that CLI or choose another agent.
-- `prepare worktree` — inspect the git error; `--no-refresh` can bypass base branch refresh only when the stale base is intentional.
-- `sub-issues fetch failed` — run `gh auth status`; an HTTP 404 means the parent issue number does not exist.
-- `no sub-issues on #<N>` is not a failure; fanout exits 0.
-- Project mode `HTTP 401` / `Resource not accessible by integration` against `projectV2` — the user's `gh` token lacks `read:project`. Tell them to run `gh auth refresh -s read:project` and rerun.
-- Project mode `no items in Project (after status/repo filter). nothing to do.` is not a failure; fanout exits 0.
+- `fanout must be run inside tmux`: batch mode needs a tmux session; start or
+  attach one, or open the console with no-argument `fanout` from a plain shell.
+- `agent is required`: pass `--agent claude|codex|opencode`, set `FANOUT_AGENT`,
+  or cover every child with `--agent NUM=name`.
+- `unknown agent` / `agent "<name>" is not installed`: choose a supported agent
+  or install that CLI.
+- `prepare worktree`: read the git error; `--no-refresh` bypasses base refresh
+  only when a stale base is intentional.
+- `sub-issues fetch failed`: `gh auth status`; HTTP 404 means the parent number
+  does not exist.
+- Project `HTTP 401` / `Resource not accessible by integration`: missing
+  `read:project` scope (see above).
+- `no sub-issues on #<N>` and `no items in Project (after status/repo filter).
+  nothing to do.` are not failures; fanout exits 0.
 
-## Non-goals
-
-- Do not rewrite or wrap the `fanout` script. The approved interface is the CLI as-is.
-- Do not create extra worktrees manually; fanout owns `.fanout/worktrees/<slug>` creation.
+The CLI is the approved interface: do not wrap or rewrite it, and do not create
+worktrees by hand; fanout owns `.fanout/worktrees/<slug>`.
