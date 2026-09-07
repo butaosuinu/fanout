@@ -21,7 +21,7 @@ func TestCodexSkillMetadata(t *testing.T) {
 		t.Fatalf("ReadDir(codex/skills) = %v, want nil", err)
 	}
 
-	wantSkills := []string{"fanout", "fanout-issues", "fanout-plan", "post-work-review", "pr-watch"}
+	wantSkills := []string{"fanout", "fanout-issues", "fanout-plan", "post-work-review", "pr-watch", "session-retro"}
 	var gotSkills []string
 	for _, entry := range entries {
 		if entry.IsDir() {
