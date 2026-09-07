@@ -2,7 +2,9 @@
 
 `fanout dashboard --web` が持つ 2 本の mutation endpoint、`POST /api/pr/merge` と
 `POST /api/pr/delete-branch` の不変条件カタログ。実装は `internal/ui/dashboard/merge.go`
-/ `deletebranch.go`、`internal/app/prmerge`、`internal/infra/ghissue`(いずれも class H)。
+/ `deletebranch.go` と `internal/app/prmerge`(class H)、GitHub 呼び出しは
+`internal/infra/ghissue`(class M。review class は `docs/architecture.ja.md` の
+パッケージ表が正典で、本書は class を変えない)。
 セキュリティ面の要約と読み取り endpoint の GET-only 規約は `docs/architecture.ja.md` の
 「人間必見の不変条件カタログ」にある。本書は endpoint 単位の完全版で、不変条件を変える
 PR は本書を同じ PR で更新する。

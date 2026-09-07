@@ -321,11 +321,16 @@ to GitHub, so use it only on explicit request.
    ```
 3. On each wake-up run `fanout --status <PARENT>`. `prs: []` on a child means
    pending, never merged.
-4. When `summary.all_merged == true`, stop scheduling, then fetch and
-   `git merge --ff-only origin/<branch>` the base branch used for the fan-out
-   (the forwarded `--base-branch`, else `gh repo view defaultBranchRef`, then
-   `origin/HEAD`, then `main`) in the parent worktree, and continue with
-   integration and close-out. If the user intervenes, drop the loop.
+4. When `summary.all_merged == true`, stop scheduling, then merge the base
+   branch used for the fan-out into the parent worktree. Resolve it as the
+   forwarded `--base-branch`, else `gh repo view defaultBranchRef`, then
+   `origin/HEAD`, then `main`, and normalize before touching git: strip a
+   leading `origin/` or `refs/remotes/origin/` (the CLI accepts those forms,
+   so `--base-branch origin/main` must not become `origin/origin/main`) and
+   resolve `origin/HEAD` to the branch it points at. Then
+   `git fetch origin <branch>` and `git merge --ff-only origin/<branch>`, and
+   continue with integration and close-out. If the user intervenes, drop the
+   loop.
 
 `--status` exit codes: `2` cannot enumerate children or state (bad invocation,
 unreadable state, unusable root; a missing state file is empty, not an error);
