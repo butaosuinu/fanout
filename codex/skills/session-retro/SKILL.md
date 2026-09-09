@@ -155,13 +155,17 @@ select(.type == "event_msg" and .payload.type == "item_completed")
 `exit_code != 0` も失敗とする。それ以外の item は明示的な `status == "failed"`
 または `"incomplete"` だけを数え、status が無い item から失敗を推測しない。
 
-rollout ごとに `item_completed` が 1 件でもあれば modern 形式とし、件数は
-`event_msg` だけから作る。対応する `response_item` を加算しない。modern rollout の
-`response_item` にだけ明示的な失敗があり、`call_id` と event item の `id` を対応付け
-られない場合は、推測で加算せず `tool_errors.truncated=true` にする。
+modern / legacy を rollout 単位で分けない。すべての rollout で `event_msg` の失敗と
+`response_item` の明示的な失敗を別々に集める。event 側は空でない item `id`、response
+側は空でない `call_id` を surface 内の identity とし、同じ identity の行を 1 件にする。
+response の `call_id` が event item の `id` または明示的な `call_id` と一致した場合だけ、
+同じ logical call と証明して response 側を重複除外する。対応しない response failure は、
+同じ rollout に `item_completed` があっても 1 件として数える。別 surface の event と同じ
+失敗か判定できない場合も response 側を捨てず、両方を数えて
+`tool_errors.truncated=true` にする。identity が欠ける response failure はその行を 1 件と
+数え、同様に truncated とする。
 
-`item_completed` が 1 件もない古い rollout や別 surface では、失敗が
-`response_item` にしか残らない場合がある。
+古い rollout や別 surface では、失敗が `response_item` にしか残らない場合がある。
 `payload.type` が `custom_tool_call_output` または `function_call_output` の行について、
 配列なら `input_text.text`、文字列ならその文字列、object なら object 自体を対象にし、
 JSON 文字列を `fromjson?` で decode する。decode 後の `isError == true` または
@@ -192,10 +196,11 @@ select(.type == "response_item")
    exit_code: (.exit_code // null), detail: (.output // .content // null)}
 ```
 
-modern/legacy の判定はこの fallback にも適用する。output で失敗を確認できない旧形式の
-call だけ、対応する `custom_tool_call` /
+output で失敗を確認できない call だけ、対応する `custom_tool_call` /
 `function_call` の明示的な `status == "failed"` または `"incomplete"` を fallback
-にする。`call_id` で output と結び、1 call 1 件に deduplicate する。
+にする。`call_id` で output と結び、1 call 1 件に deduplicate する。この status
+fallback も、event との明示的な identity 一致だけを重複除外し、対応しない明示的 failure
+は数える。
 
 rollout timestamp と snapshot の境界は、UTC の
 `YYYY-MM-DDTHH:MM:SS[.1〜9桁]Z` だけを受け入れる。比較前に小数部の欠落を 0 とし、
