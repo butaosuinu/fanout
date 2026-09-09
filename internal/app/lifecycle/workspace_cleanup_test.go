@@ -1607,6 +1607,7 @@ func TestFreshHerdrCleanupRetriesPendingRebindFence(t *testing.T) {
 		install func(*testing.T) func()
 	}{
 		{name: "checkout observation", install: func(t *testing.T) func() {
+			t.Helper()
 			original := observeFreshWorkspaceCleanupRebindNow
 			failed := false
 			observeFreshWorkspaceCleanupRebindNow = func(
@@ -1625,6 +1626,7 @@ func TestFreshHerdrCleanupRetriesPendingRebindFence(t *testing.T) {
 			return func() {}
 		}},
 		{name: "branch metadata", install: func(t *testing.T) func() {
+			t.Helper()
 			marker := installFailingBranchObservationGit(t)
 			if err := os.WriteFile(marker, []byte("fail\n"), 0o600); err != nil {
 				t.Fatal(err)
@@ -1636,6 +1638,7 @@ func TestFreshHerdrCleanupRetriesPendingRebindFence(t *testing.T) {
 			}
 		}},
 		{name: "final journal save", install: func(t *testing.T) func() {
+			t.Helper()
 			original := saveFreshWorkspaceCleanupRebindIntent
 			failed := false
 			saveFreshWorkspaceCleanupRebindIntent = func(
