@@ -58,8 +58,9 @@ repo_key=$(printf '%s' "$common_dir" | git hash-object --stdin)
   現在の `root`、`common_dir`、`repo_key` に一致する場合だけ前回値として扱い、
   全メトリクスが完全なら `SINCE` に `window.until` を使う。どれかが
   `truncated=true` なら、欠落した期間を再収集するため `window.since` まで戻す。
-  既存 snapshot がない初回だけ、14 日前の UTC 時刻を使う。既存 snapshot の identity が
-  欠落または不一致なら、初回扱いや上書きをせず止める。
+  この場合は全メトリクスを retry window として扱う。既存 snapshot がない初回だけ、
+  14 日前の UTC 時刻を使う。既存 snapshot の identity が欠落または不一致なら、初回扱い
+  や上書きをせず止める。
 - `UNTIL=$(date -u +%Y-%m-%dT%H:%M:%S.000000000Z)` は、Step 2〜4 の収集を
   始める前に固定する。現在の UTC 秒の先頭を境界にするため、その秒の途中で追加された
   event は次回 window に残る。`SINCE` と `UNTIL` は小数部 9 桁で保存する。
@@ -306,13 +307,19 @@ fanout では `user.login == "chatgpt-codex-connector[bot]"` かつ
 ```
 
 退避した前回値と比較し、チャットに新規、再発、改善の 3 区分で報告する。初回は今回の
-集計だけを報告する。今回か前回のどちらかで対象メトリクスが `truncated=true` なら、
-そのメトリクスは増減判定から外し「不完全につき比較対象外」とする。
+集計だけを報告する。メトリクスの増減判定は、今回の 3 メトリクスがすべて
+`truncated=false`、比較対象の前回メトリクスも `truncated=false` で、かつ今回の
+`SINCE` が前回の `window.until` と一致する場合だけ行う。今回どれかが truncated の場合と
+retry window では、完全なメトリクスも含めて全メトリクスを「再収集中につき比較対象外」
+とする。
 
-今回の `tool_errors`、`ci`、`review` のどれかが `truncated=true` なら、一時 snapshot を
-作らず既存 snapshot を置換しない。初回なら snapshot を作らない。部分結果と原因を報告し、
-同じ `SINCE` から再実行できる状態を保つ。3 メトリクスがすべて完全な場合だけ、
-`window.until` に Step 1 で固定した `UNTIL` を書いて安全な一時ファイルから rename する。
+今回の `tool_errors`、`ci`、`review` のどれかが `truncated=true` で既存 snapshot が
+ある場合は、一時 snapshot を作らず既存 snapshot を置換しない。既存 snapshot がない
+初回だけは、今回の部分結果を `truncated=true` の retry anchor として安全な一時ファイル
+から rename する。次回はその `window.since` を `SINCE` に使い、完全な比較基準にはしない。
+部分結果と原因を報告し、同じ `SINCE` から再実行できる状態を保つ。3 メトリクスがすべて
+完全な場合は、`window.until` に Step 1 で固定した `UNTIL` を書いて安全な一時ファイルから
+rename する。
 
 ## Step 6: 改善提案
 
