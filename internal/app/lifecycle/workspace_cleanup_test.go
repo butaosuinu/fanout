@@ -1601,6 +1601,109 @@ func TestFreshHerdrCleanupRoutesMovedAgentWorkspaceThroughCleanupAdmission(t *te
 	}
 }
 
+func TestFreshHerdrCleanupRetriesPendingRebindFence(t *testing.T) {
+	failures := []struct {
+		name    string
+		install func(*testing.T) func()
+	}{
+		{name: "checkout observation", install: func(t *testing.T) func() {
+			original := observeFreshWorkspaceCleanupRebindNow
+			failed := false
+			observeFreshWorkspaceCleanupRebindNow = func(
+				ctx context.Context,
+				projectRoot string,
+				intent state.LaunchIntent,
+				workspaces []backend.WorkspaceObservation,
+			) (workspaceCleanupObservation, error) {
+				if !failed {
+					failed = true
+					return workspaceCleanupObservation{}, errors.New("checkout observation unavailable")
+				}
+				return original(ctx, projectRoot, intent, workspaces)
+			}
+			t.Cleanup(func() { observeFreshWorkspaceCleanupRebindNow = original })
+			return func() {}
+		}},
+		{name: "branch metadata", install: func(t *testing.T) func() {
+			marker := installFailingBranchObservationGit(t)
+			if err := os.WriteFile(marker, []byte("fail\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return func() {
+				if err := os.Remove(marker); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}},
+		{name: "final journal save", install: func(t *testing.T) func() {
+			original := saveFreshWorkspaceCleanupRebindIntent
+			failed := false
+			saveFreshWorkspaceCleanupRebindIntent = func(
+				journal *state.LockedLaunchJournal,
+				intent state.LaunchIntent,
+			) error {
+				if !failed {
+					failed = true
+					return errors.New("final cleanup intent save unavailable")
+				}
+				return original(journal, intent)
+			}
+			t.Cleanup(func() { saveFreshWorkspaceCleanupRebindIntent = original })
+			return func() {}
+		}},
+	}
+	for _, failure := range failures {
+		t.Run(failure.name, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			fixture.pane.BranchCreated = true
+			primeRefinedLifecycleTelemetry(&fixture.pane)
+			fixture.pane.EmitterRowKey = "row-child"
+			recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+			moved := movedHerdrWorkspace(fixture, "w-moved")
+			runtime := &fakeHerdrLifecycleRuntime{
+				projectRoot: fixture.projectRoot,
+				workspaces:  []backend.WorkspaceObservation{moved},
+			}
+			var backgroundHooks []hooks.Type
+			originalBackgroundHook := runWorkspaceBackgroundHook
+			runWorkspaceBackgroundHook = func(hook hooks.Type, _ Options, _ state.Pane, _ string, _ Logger) {
+				backgroundHooks = append(backgroundHooks, hook)
+			}
+			defer func() { runWorkspaceBackgroundHook = originalBackgroundHook }()
+			opts := herdrLifecycleOptions(fixture, runtime)
+			opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+				hooks.WorktreeRemoved: {{Command: ":", Timeout: time.Second}},
+			}}
+			allowRetry := failure.install(t)
+
+			if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("first CloseWithMode() = %d, want %d", got, exitcode.Env)
+			}
+			if runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+				t.Fatalf("failed rebind mutations = %v, want none", runtime.mutationLog)
+			}
+			intent, found := loadHerdrCleanupIntent(t, fixture)
+			if !found || intent.Status != state.IntentPlanned ||
+				intent.Failure != freshWorkspaceCleanupRebindPending ||
+				intent.CleanupDeleteBranchVerified || intent.CleanupWorktreeRemovedRequired != nil {
+				t.Fatalf("pending cleanup rebind fence = %#v (found=%t)", intent, found)
+			}
+
+			allowRetry()
+			if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.OK {
+				t.Fatalf("retry CloseWithMode() = %d, want %d", got, exitcode.OK)
+			}
+			if localBranchExists(fixture.projectRoot, fixture.branch) {
+				t.Fatalf("retry left fanout-created branch %s", fixture.branch)
+			}
+			if !slices.Equal(backgroundHooks, []hooks.Type{hooks.WorktreeRemoved}) {
+				t.Fatalf("retry cleanup hooks = %v, want [%s]", backgroundHooks, hooks.WorktreeRemoved)
+			}
+			assertHerdrLifecycleRemoved(t, fixture)
+		})
+	}
+}
+
 func TestHerdrCloseHonorsCustomStatePath(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
 	customState := filepath.Join(t.TempDir(), "state.json")
