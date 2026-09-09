@@ -56,8 +56,10 @@ repo_key=$(printf '%s' "$common_dir" | git hash-object --stdin)
 - 新規 snapshot を書く前に、最新の `codex-session-*.json` の内容を比較用に退避する。
   その snapshot の `repository.root`、`repository.common_dir`、`repository.key` が
   現在の `root`、`common_dir`、`repo_key` に一致する場合だけ前回値として扱い、
-  `SINCE` に `window.until` を使う。既存 snapshot がない初回だけ、14 日前の UTC 時刻を
-  使う。既存 snapshot の identity が欠落または不一致なら、初回扱いや上書きをせず止める。
+  全メトリクスが完全なら `SINCE` に `window.until` を使う。どれかが
+  `truncated=true` なら、欠落した期間を再収集するため `window.since` まで戻す。
+  既存 snapshot がない初回だけ、14 日前の UTC 時刻を使う。既存 snapshot の identity が
+  欠落または不一致なら、初回扱いや上書きをせず止める。
 - `UNTIL=$(date -u +%Y-%m-%dT%H:%M:%S.000000000Z)` は、Step 2〜4 の収集を
   始める前に固定する。現在の UTC 秒の先頭を境界にするため、その秒の途中で追加された
   event は次回 window に残る。`SINCE` と `UNTIL` は小数部 9 桁で保存する。
@@ -85,8 +87,9 @@ repo_key=$(printf '%s' "$common_dir" | git hash-object --stdin)
 
 - top-level が object で、`schema == 1`、`source == "codex"`。
 - `generated_at`、`window.since`、`window.until` が timestamp として正規化でき、
-  `window.since < window.until <= UNTIL`。今回の `SINCE=window.until` についても
-  `SINCE < UNTIL`。時計の巻き戻りや空の window を正常値として扱わない。
+  `window.since < window.until <= UNTIL`。完全時の `window.until` または再収集時の
+  `window.since` から選んだ今回の `SINCE` も `SINCE < UNTIL`。時計の巻き戻りや空の
+  window を正常値として扱わない。
 - `repository` が object で、`root`、`common_dir`、`key` が string かつ現在値と一致する。
 - `tool_errors`、`ci`、`review` が object。`total` / `failed_runs` / `comments` は
   0 以上の integer、各 `truncated` は boolean、`by_category` / `by_workflow` /
@@ -302,14 +305,14 @@ fanout では `user.login == "chatgpt-codex-connector[bot]"` かつ
  "review":{"comments":0,"by_pattern":{},"truncated":false}}
 ```
 
-`window.until` は Step 1 で固定した `UNTIL` をそのまま書く。退避した前回値と比較し、
-チャットに新規、再発、改善の 3 区分で報告する。初回は今回の集計だけを報告する。
-今回か前回のどちらかで対象メトリクスが `truncated=true` なら、そのメトリクスは
-増減判定から外し「不完全につき比較対象外」とする。
+退避した前回値と比較し、チャットに新規、再発、改善の 3 区分で報告する。初回は今回の
+集計だけを報告する。今回か前回のどちらかで対象メトリクスが `truncated=true` なら、
+そのメトリクスは増減判定から外し「不完全につき比較対象外」とする。
 
-既知の限界: truncated なメトリクスがあっても次回の `SINCE` は snapshot 全体の
-`window.until` まで進む。その期間の欠落は次回収集で回収できない。メトリクス別 window
-が必要になる変更は、この skill の範囲を超える。
+今回の `tool_errors`、`ci`、`review` のどれかが `truncated=true` なら、一時 snapshot を
+作らず既存 snapshot を置換しない。初回なら snapshot を作らない。部分結果と原因を報告し、
+同じ `SINCE` から再実行できる状態を保つ。3 メトリクスがすべて完全な場合だけ、
+`window.until` に Step 1 で固定した `UNTIL` を書いて安全な一時ファイルから rename する。
 
 ## Step 6: 改善提案
 
