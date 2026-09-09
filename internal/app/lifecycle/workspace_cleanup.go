@@ -242,10 +242,29 @@ func reconcileFreshWorkspaceCleanupAfterMismatch(
 	if err != nil {
 		return pane, true, err
 	}
-	if err := saveWorkspaceCleanupIntent(journal, intent); err != nil {
+	intent, err = completeFreshWorkspaceCleanupRebind(ctx, opts, journal, pane, mode, intent, observation)
+	if err != nil {
 		return pane, true, err
 	}
 	return cleanupHookPane(pane, intent.Resource), true, nil
+}
+
+func completeFreshWorkspaceCleanupRebind(
+	ctx context.Context,
+	opts Options,
+	journal *state.LockedLaunchJournal,
+	pane state.Pane,
+	mode CloseMode,
+	intent state.LaunchIntent,
+	observation workspaceCleanupObservation,
+) (state.LaunchIntent, error) {
+	completed, err := newWorkspaceCleanupIntent(
+		ctx, opts, pane, mode, intent.ID, intent.FullBranchRef, intent.Resource, observation,
+	)
+	if err != nil {
+		return intent, err
+	}
+	return completed, saveWorkspaceCleanupIntent(journal, completed)
 }
 
 func beginFreshWorkspaceCleanupRebind(

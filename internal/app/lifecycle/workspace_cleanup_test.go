@@ -1507,15 +1507,16 @@ func TestHerdrCleanupUsesReconciledAgentLocation(t *testing.T) {
 
 func TestFreshHerdrCleanupRoutesMovedAgentWorkspaceThroughCleanupAdmission(t *testing.T) {
 	operations := []struct {
-		name string
-		task bool
-		run  func(Options, herdrLifecycleFixture) exitcode.Code
+		name         string
+		task         bool
+		deleteBranch bool
+		run          func(Options, herdrLifecycleFixture) exitcode.Code
 	}{
-		{name: "close issue", run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
-			return Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{})
+		{name: "close issue", deleteBranch: true, run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
+			return CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{})
 		}},
-		{name: "close task", task: true, run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
-			return CloseTask(opts, fixture.pane.Parent, fixture.pane.TaskID, nopLogger{})
+		{name: "close task", task: true, deleteBranch: true, run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
+			return CloseTaskWithMode(opts, fixture.pane.Parent, fixture.pane.TaskID, CloseEverything, nopLogger{})
 		}},
 		{name: "cleanup issue", run: func(opts Options, fixture herdrLifecycleFixture) exitcode.Code {
 			return Cleanup(opts, fixture.pane.Parent, nopLogger{})
@@ -1530,6 +1531,9 @@ func TestFreshHerdrCleanupRoutesMovedAgentWorkspaceThroughCleanupAdmission(t *te
 		want      exitcode.Code
 	}{
 		{name: "pane-less", workspace: movedPaneLessHerdrWorkspace, want: exitcode.OK},
+		{name: "agent evidence", workspace: func(fixture herdrLifecycleFixture) backend.WorkspaceObservation {
+			return movedHerdrWorkspace(fixture, "w-moved")
+		}, want: exitcode.OK},
 		{name: "missing evidence", workspace: func(fixture herdrLifecycleFixture) backend.WorkspaceObservation {
 			workspace := movedHerdrWorkspace(fixture, "w-moved")
 			workspace.LivePanes = nil
@@ -1545,6 +1549,7 @@ func TestFreshHerdrCleanupRoutesMovedAgentWorkspaceThroughCleanupAdmission(t *te
 					fixture.pane.IssueNum = 0
 					fixture.pane.TaskID = "task-a"
 				}
+				fixture.pane.BranchCreated = operation.deleteBranch
 				primeRefinedLifecycleTelemetry(&fixture.pane)
 				fixture.pane.EmitterRowKey = "row-child"
 				recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
@@ -1554,13 +1559,29 @@ func TestFreshHerdrCleanupRoutesMovedAgentWorkspaceThroughCleanupAdmission(t *te
 					projectRoot: fixture.projectRoot,
 					workspaces:  []backend.WorkspaceObservation{moved},
 				}
+				var backgroundHooks []hooks.Type
+				originalBackgroundHook := runWorkspaceBackgroundHook
+				runWorkspaceBackgroundHook = func(hook hooks.Type, _ Options, _ state.Pane, _ string, _ Logger) {
+					backgroundHooks = append(backgroundHooks, hook)
+				}
+				defer func() { runWorkspaceBackgroundHook = originalBackgroundHook }()
+				opts := herdrLifecycleOptions(fixture, runtime)
+				opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+					hooks.WorktreeRemoved: {{Command: ":", Timeout: time.Second}},
+				}}
 
-				if got := operation.run(herdrLifecycleOptions(fixture, runtime), fixture); got != scenario.want {
+				if got := operation.run(opts, fixture); got != scenario.want {
 					t.Fatalf("cleanup = %d, want %d", got, scenario.want)
 				}
 				if scenario.want == exitcode.OK {
 					if runtime.removeCalls != 1 || runtime.mutationLog[0] != "remove:"+moved.WorkspaceID {
 						t.Fatalf("pane-less cleanup mutations = %v, want remove of %s", runtime.mutationLog, moved.WorkspaceID)
+					}
+					if !slices.Equal(backgroundHooks, []hooks.Type{hooks.WorktreeRemoved}) {
+						t.Fatalf("cleanup hooks = %v, want [%s]", backgroundHooks, hooks.WorktreeRemoved)
+					}
+					if operation.deleteBranch == localBranchExists(fixture.projectRoot, fixture.branch) {
+						t.Fatalf("branch exists = %t, want %t", localBranchExists(fixture.projectRoot, fixture.branch), !operation.deleteBranch)
 					}
 					assertHerdrLifecycleRemoved(t, fixture)
 					return
