@@ -46,6 +46,12 @@ common_dir=$(git rev-parse --path-format=absolute --git-common-dir)
 common_dir=$(cd "$common_dir" && pwd -P)
 root=$(dirname "$common_dir")
 repo_key=$(printf '%s' "$common_dir" | git hash-object --stdin)
+COLLECTION_SECOND=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+RAW_UNTIL=$(jq -nr --arg value "$COLLECTION_SECOND" \
+  '($value | fromdateiso8601) - 1 | todateiso8601 | sub("Z$"; ".999999999Z")') || {
+  echo "収集上限を計算できなかった" >&2
+  exit 1
+}
 ```
 
 - `root` は linked worktree から実行しても main repo root を指す。
@@ -61,9 +67,9 @@ repo_key=$(printf '%s' "$common_dir" | git hash-object --stdin)
   この場合は全メトリクスを retry window として扱う。既存 snapshot がない初回だけ、
   14 日前の UTC 時刻を使う。既存 snapshot の identity が欠落または不一致なら、初回扱い
   や上書きをせず止める。
-- `UNTIL=$(date -u +%Y-%m-%dT%H:%M:%S.000000000Z)` は、Step 2〜4 の収集を
-  始める前に固定する。現在の UTC 秒の先頭を境界にするため、その秒の途中で追加された
-  event は次回 window に残る。`SINCE` と `UNTIL` は小数部 9 桁で保存する。
+- `RAW_UNTIL` は収集開始時点で完全に終了している最後の UTC 秒の末尾で固定する。
+  GitHub の秒精度 timestamp と取得後に同じ秒へ追加された record が衝突しないよう、
+  収集中の秒は次回 window に残す。`SINCE` と最終的な `UNTIL` は小数部 9 桁で保存する。
 - rollout root は `$codex_home/sessions` と、存在する場合だけ
   `$codex_home/archived_sessions`。`browser/sessions` と
   `computer-use/sessions` は Codex rollout ではないので走査しない。
@@ -80,6 +86,16 @@ repo_key=$(printf '%s' "$common_dir" | git hash-object --stdin)
 - `CODEX_THREAD_ID` と `CODEX_SESSION_ID` は空でない値だけを self ID として使う。
   候補の `session_meta.payload.id` / `session_id` と `parent_thread_id` から子孫を
   推移的に求め、self ID とその全子孫を除外する。空値を wildcard として扱わない。
+  空でない self ID は候補の `session_meta` から一意に解決できなければ、cursor を
+  進めず止める。
+- 除外対象を決めた後、その全 rollout の先頭 timestamp を同じ `timestamp_key` で
+  正規化する。最古の値の 1 ns 前を `SELF_CUTOFF` とし、`RAW_UNTIL` と
+  `SELF_CUTOFF` の早い方を `UNTIL` にする。1 ns の減算は小数部が 0 より大きければ
+  小数部から引き、0 なら直前の epoch second の `.999999999Z` にする。これにより、
+  今回除外した session は次回の `(SINCE, UNTIL]` に全体が残る。除外 rollout の先頭
+  timestamp が不正、または `UNTIL <= SINCE` なら snapshot を書かず、fresh Codex
+  thread から再実行するよう報告して止める。self ID が無い場合は `UNTIL=RAW_UNTIL`。
+  この `UNTIL` を Step 2〜4 の開始前に固定する。
 - 読めないファイル、壊れた先頭行、未知の必須フィールドが 1 件でもあれば警告し、
   `tool_errors.truncated=true` にする。rollout root が両方とも無い場合も 0 件と
   断定しない。
@@ -89,7 +105,7 @@ repo_key=$(printf '%s' "$common_dir" | git hash-object --stdin)
 
 - top-level が object で、`schema == 1`、`source == "codex"`。
 - `generated_at`、`window.since`、`window.until` が timestamp として正規化でき、
-  `window.since < window.until <= UNTIL`。完全時の `window.until` または再収集時の
+  `window.since < window.until <= RAW_UNTIL`。完全時の `window.until` または再収集時の
   `window.since` から選んだ今回の `SINCE` も `SINCE < UNTIL`。時計の巻き戻りや空の
   window を正常値として扱わない。
 - `repository` が object で、`root`、`common_dir`、`key` が string かつ現在値と一致する。
@@ -174,20 +190,21 @@ event failure を 1 対 1 で対応させる。数値が無い `isError` / `is_e
 使う。response call 内の全 failure evidence を event で説明できた場合だけ、response 側を
 wrapper の重複として除外する。
 
-event が無い、または event で説明できない failure evidence が残る response call は、同じ
-rollout に `item_completed` があっても response-only failure 1 件として数える。対応後に
+event が無い、または event で説明できない request status failure が残る response call は、
+同じ rollout に `item_completed` があっても response-only failure 1 件として数える。対応後に
 同じ request / output 区間内で説明できない event と response evidence の両方が残る場合は、
 両方を数えて `tool_errors.truncated=true` にする。区間外の event-only failure と、event が
-無い別 call の response-only failure が併存するだけでは truncated にしない。request /
-output の片方や `call_id` が欠ける、同じ `call_id` の request が重複する、区間が交差する
-場合も、明示的 failure を捨てず truncated とする。
+無い別 call の request status failure が併存するだけでは truncated にしない。decoded output
+だけが根拠の response evidence は、後述の provenance 不明ルールに従う。request / output の
+片方や `call_id` が欠ける、同じ `call_id` の request が重複する、区間が交差する場合も、
+明示的 failure を捨てず truncated とする。
 
 古い rollout や別 surface では、失敗が `response_item` にしか残らない場合がある。
 `payload.type` が `custom_tool_call_output` または `function_call_output` の行について、
 配列なら `input_text.text`、文字列ならその文字列、object なら object 自体を対象にし、
 JSON 文字列を `fromjson?` で decode する。decode 後の `isError == true` または
-`is_error == true`、数値の `exit_code != 0` を fallback として数える。decode 結果が
-object 以外ならこの判定へ渡さない。
+`is_error == true`、数値の `exit_code != 0` を fallback candidate として集める。
+decode 結果が object 以外ならこの判定へ渡さない。
 
 ```jq
 def decoded_output:
@@ -213,9 +230,17 @@ select(.type == "response_item")
    exit_code: (.exit_code // null), detail: (.output // .content // null)}
 ```
 
-output で失敗を確認できない call だけ、対応する `custom_tool_call` /
-`function_call` の明示的な `status == "failed"` または `"incomplete"` を fallback
-にする。`call_id` で output と結び、1 call 1 件に deduplicate する。status fallback は、
+decode した output は tool-result envelope とは限らない。`functions.exec` の
+`input_text.text` や function output には、成功した tool が返した任意 JSON も入る。
+そのため、この candidate と対応する failure event があれば event の重複判定だけに使う。
+event で説明できず、request 自体にも明示的な failed / incomplete status が無い candidate
+は確定 failure と断定せず、候補 1 件として保持して `tool_errors.truncated=true` にする。
+表示する場合も「未確定の response evidence」と明記する。decoded content の key だけを
+根拠に complete な `tool_errors.total` を作らない。
+
+対応する `custom_tool_call` / `function_call` の明示的な `status == "failed"` または
+`"incomplete"` は、decoded output とは別の trusted fallback にする。同じ call の output
+candidate と `call_id` で結び、1 call 1 件に deduplicate する。status fallback は、
 直接の identity 一致、または区間内に数値無しの failure event が 1 件だけある場合に限り
 その event の重複とする。それ以外の明示的 failure は数え、区間内 event との関係が曖昧
 なら truncated とする。request / output の片方が window 外にあるだけでは欠落としない。
