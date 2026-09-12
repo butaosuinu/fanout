@@ -68,8 +68,9 @@ repo_key=$(printf '%s' "$common_dir" | git hash-object --stdin)
   `$codex_home/archived_sessions`。`browser/sessions` と
   `computer-use/sessions` は Codex rollout ではないので走査しない。
 - `rollout-*.jsonl` の mtime が `SINCE` 以降のファイルを粗い候補にする。
-  mtime に `UNTIL` 上限を付けない。厳密な window は各 JSONL 行の top-level
-  `timestamp` で `(SINCE, UNTIL]` に絞る。
+  mtime に `UNTIL` 上限を付けない。候補 rollout は全行を読み、Step 2 の request、
+  output、event を logical failure に組み立ててから、その canonical timestamp で
+  `(SINCE, UNTIL]` に絞る。組み立て前に行を window で捨てない。
 - 各候補の先頭行は `session_meta` として読み、`payload.cwd` から
   `git -C "$candidate_cwd" rev-parse --path-format=absolute --git-common-dir` を解決する。
   その物理パスが `common_dir` と一致する session だけを対象にする。repo の
@@ -165,7 +166,8 @@ modern / legacy を rollout 単位で分けない。すべての rollout で `ev
 
 response の request (`custom_tool_call` / `function_call`) と output を `call_id` で結び、
 その 2 行の間にある `item_completed` を同じ wrapper call の event とする。行順は JSONL
-の出現順を使い、tool input は読まない。response failure の数値 `exit_code` と同じ値を持つ
+全体の出現順を使い、tool input は読まない。window による行の除外はこの対応付けが
+終わるまで行わない。response failure の数値 `exit_code` と同じ値を持つ
 event failure を 1 対 1 で対応させる。数値が無い `isError` / `is_error` は、数値が無い
 `failed` / `incomplete` event と 1 対 1 で対応させる。response の `call_id` が event item
 の `id` または明示的な `call_id` と一致する場合も同一とする。各 event は 1 回だけ対応に
@@ -216,7 +218,14 @@ output で失敗を確認できない call だけ、対応する `custom_tool_ca
 にする。`call_id` で output と結び、1 call 1 件に deduplicate する。status fallback は、
 直接の identity 一致、または区間内に数値無しの failure event が 1 件だけある場合に限り
 その event の重複とする。それ以外の明示的 failure は数え、区間内 event との関係が曖昧
-なら truncated とする。
+なら truncated とする。request / output の片方が window 外にあるだけでは欠落としない。
+候補 rollout 全体を読んでも片方が無い場合だけ欠落として扱う。
+
+logical failure を組み立てた後、event が根拠の failure と event に対応した response の
+重複には event 行、response-only failure には output 行、request status fallback には
+request 行の timestamp を canonical timestamp として 1 個割り当てる。曖昧なため event と
+response の両方を残す場合は、それぞれの根拠行の timestamp を使う。この値で初めて
+`(SINCE, UNTIL]` を適用する。
 
 rollout timestamp と snapshot の境界は、UTC の
 `YYYY-MM-DDTHH:MM:SS[.1〜9桁]Z` だけを受け入れる。比較前に小数部の欠落を 0 とし、
@@ -268,10 +277,39 @@ for st in failure startup_failure timed_out; do
     echo "警告: --status $st が --limit 100 に到達した" >&2
   fi
 done
-jq -s "(add // []) | [.[] | select(.updatedAt > \"${SINCE}\" and .updatedAt <= \"${UNTIL}\")]" "$runs"
+
+ci_window="$tmpdir/ci-window"
+if jq -s --arg since "$SINCE" --arg until "$UNTIL" '
+  def timestamp_key:
+    capture("^(?<second>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<fraction>[0-9]{1,9}))?Z$") as $parts
+    | ($parts.second + "Z") as $whole
+    | (try ($whole | fromdateiso8601 | todateiso8601) catch empty) as $roundtrip
+    | select($roundtrip == $whole)
+    | $parts.second + "." + ((($parts.fraction // "") + "000000000")[0:9]) + "Z";
+  ($since | [timestamp_key]) as $since_key
+  | ($until | [timestamp_key]) as $until_key
+  | (add // []) as $all
+  | [$all[] | {run: ., key: (.updatedAt | [timestamp_key])}] as $tagged
+  | if (($since_key | length) != 1 or ($until_key | length) != 1
+        or any($tagged[]; (.key | length) != 1)) then
+      error("invalid CI timestamp")
+    else
+      [$tagged[]
+       | select(.key[0] > $since_key[0] and .key[0] <= $until_key[0])
+       | .run]
+    end
+' "$runs" > "$ci_window"; then
+  :
+else
+  ci_truncated=true
+  printf '[]\n' > "$ci_window"
+  echo "警告: CI timestamp を正規化できなかった" >&2
+fi
 ```
 
-window は run の開始時刻ではなく完了時刻 `updatedAt` で判定する。100 件に達した
+window は run の開始時刻ではなく完了時刻 `updatedAt` で判定する。GitHub の秒精度と
+snapshot の 9 桁精度を raw string のまま比較せず、Step 2 と同じ `timestamp_key` で
+正規化する。1 件でも正規化できなければ `ci.truncated=true` にする。100 件に達した
 status は期間を分割して再取得するか、`ci.truncated=true` のまま比較対象外にする。
 workflow 別に数え、上位 workflow だけ `gh run view <id> --log-failed` から原因を
 1 件抽出する。
@@ -283,10 +321,30 @@ REST API の `since` は `updated_at` 基準なので、取得後に `created_at
 
 ```bash
 comments="$tmpdir/comments"
+comments_raw="$tmpdir/comments-raw"
 if gh api --paginate \
     "repos/{owner}/{repo}/pulls/comments?since=${SINCE}&per_page=100" \
-    --jq ".[] | select(.created_at > \"${SINCE}\" and .created_at <= \"${UNTIL}\")" \
-    > "$comments"; then
+    > "$comments_raw" \
+  && jq -s --arg since "$SINCE" --arg until "$UNTIL" '
+    def timestamp_key:
+      capture("^(?<second>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<fraction>[0-9]{1,9}))?Z$") as $parts
+      | ($parts.second + "Z") as $whole
+      | (try ($whole | fromdateiso8601 | todateiso8601) catch empty) as $roundtrip
+      | select($roundtrip == $whole)
+      | $parts.second + "." + ((($parts.fraction // "") + "000000000")[0:9]) + "Z";
+    ($since | [timestamp_key]) as $since_key
+    | ($until | [timestamp_key]) as $until_key
+    | (add // []) as $all
+    | [$all[] | {comment: ., key: (.created_at | [timestamp_key])}] as $tagged
+    | if (($since_key | length) != 1 or ($until_key | length) != 1
+          or any($tagged[]; (.key | length) != 1)) then
+        error("invalid review timestamp")
+      else
+        [$tagged[]
+         | select(.key[0] > $since_key[0] and .key[0] <= $until_key[0])
+         | .comment]
+      end
+  ' "$comments_raw" > "$comments"; then
   review_truncated=false
 else
   review_truncated=true
@@ -294,6 +352,9 @@ else
   echo "警告: gh api pulls/comments が失敗した" >&2
 fi
 ```
+
+GitHub の `created_at` も Step 2 と同じ形式へ正規化してから比較する。1 件でも
+正規化できなければ `review.truncated=true` にし、その取得結果から件数を断定しない。
 
 fanout では `user.login == "chatgpt-codex-connector[bot]"` かつ
 `in_reply_to_id == null` の inline review comment だけを指摘として数える。
