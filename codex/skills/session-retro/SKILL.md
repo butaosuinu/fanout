@@ -162,12 +162,23 @@ select(.type == "event_msg" and .payload.type == "item_completed")
 modern / legacy を rollout 単位で分けない。すべての rollout で `event_msg` の失敗と
 `response_item` の明示的な失敗を別々に集める。event 側は空でない item `id`、response
 側は空でない `call_id` を surface 内の identity とし、同じ identity の行を 1 件にする。
-response の `call_id` が event item の `id` または明示的な `call_id` と一致した場合だけ、
-同じ logical call と証明して response 側を重複除外する。対応しない response failure は、
-同じ rollout に `item_completed` があっても 1 件として数える。別 surface の event と同じ
-失敗か判定できない場合も response 側を捨てず、両方を数えて
-`tool_errors.truncated=true` にする。identity が欠ける response failure はその行を 1 件と
-数え、同様に truncated とする。
+
+response の request (`custom_tool_call` / `function_call`) と output を `call_id` で結び、
+その 2 行の間にある `item_completed` を同じ wrapper call の event とする。行順は JSONL
+の出現順を使い、tool input は読まない。response failure の数値 `exit_code` と同じ値を持つ
+event failure を 1 対 1 で対応させる。数値が無い `isError` / `is_error` は、数値が無い
+`failed` / `incomplete` event と 1 対 1 で対応させる。response の `call_id` が event item
+の `id` または明示的な `call_id` と一致する場合も同一とする。各 event は 1 回だけ対応に
+使う。response call 内の全 failure evidence を event で説明できた場合だけ、response 側を
+wrapper の重複として除外する。
+
+event が無い、または event で説明できない failure evidence が残る response call は、同じ
+rollout に `item_completed` があっても response-only failure 1 件として数える。対応後に
+同じ request / output 区間内で説明できない event と response evidence の両方が残る場合は、
+両方を数えて `tool_errors.truncated=true` にする。区間外の event-only failure と、event が
+無い別 call の response-only failure が併存するだけでは truncated にしない。request /
+output の片方や `call_id` が欠ける、同じ `call_id` の request が重複する、区間が交差する
+場合も、明示的 failure を捨てず truncated とする。
 
 古い rollout や別 surface では、失敗が `response_item` にしか残らない場合がある。
 `payload.type` が `custom_tool_call_output` または `function_call_output` の行について、
@@ -202,9 +213,10 @@ select(.type == "response_item")
 
 output で失敗を確認できない call だけ、対応する `custom_tool_call` /
 `function_call` の明示的な `status == "failed"` または `"incomplete"` を fallback
-にする。`call_id` で output と結び、1 call 1 件に deduplicate する。この status
-fallback も、event との明示的な identity 一致だけを重複除外し、対応しない明示的 failure
-は数える。
+にする。`call_id` で output と結び、1 call 1 件に deduplicate する。status fallback は、
+直接の identity 一致、または区間内に数値無しの failure event が 1 件だけある場合に限り
+その event の重複とする。それ以外の明示的 failure は数え、区間内 event との関係が曖昧
+なら truncated とする。
 
 rollout timestamp と snapshot の境界は、UTC の
 `YYYY-MM-DDTHH:MM:SS[.1〜9桁]Z` だけを受け入れる。比較前に小数部の欠落を 0 とし、
