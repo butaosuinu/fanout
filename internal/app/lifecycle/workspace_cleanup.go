@@ -314,8 +314,12 @@ func completeFreshWorkspaceCleanupRebind(
 	intent state.LaunchIntent,
 	observation workspaceCleanupObservation,
 ) (state.LaunchIntent, error) {
+	if intent.CleanupWorktreeRemovedRequired == nil {
+		return intent, fmt.Errorf("%w: pending cleanup worktree_removed obligation is absent", ErrManualCleanupRequired)
+	}
 	completed, err := newWorkspaceCleanupIntent(
 		ctx, opts, pane, mode, intent.ID, intent.FullBranchRef, intent.Resource, observation,
+		*intent.CleanupWorktreeRemovedRequired,
 	)
 	if err != nil {
 		return intent, err
@@ -337,6 +341,8 @@ func beginFreshWorkspaceCleanupRebind(
 	if err != nil {
 		return journal, state.LaunchIntent{}, true, err
 	}
+	worktreeRemovedRequired := workspaceCleanupWorktreeRemovedRequired(opts, pane)
+	intent.CleanupWorktreeRemovedRequired = &worktreeRemovedRequired
 	intent.Failure = freshWorkspaceCleanupRebindPending
 	err = saveWorkspaceCleanupIntent(journal, intent)
 	return journal, intent, true, err
@@ -1849,7 +1855,8 @@ func newWorkspaceCleanupAtHookPhase(
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
-	intent, err := newWorkspaceCleanupIntent(ctx, opts, pane, mode, intentID, fullRef, resource, observation)
+	worktreeRemovedRequired := workspaceCleanupWorktreeRemovedRequired(opts, pane)
+	intent, err := newWorkspaceCleanupIntent(ctx, opts, pane, mode, intentID, fullRef, resource, observation, worktreeRemovedRequired)
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
@@ -2045,6 +2052,7 @@ func newWorkspaceCleanupIntent(
 	intentID, fullRef string,
 	resource state.RuntimeResource,
 	observation workspaceCleanupObservation,
+	worktreeRemovedRequired bool,
 ) (state.LaunchIntent, error) {
 	phase, err := classifyFreshWorkspaceCleanup(ctx, opts.ProjectRoot, fullRef, resource, observation, false)
 	if err != nil {
@@ -2055,7 +2063,6 @@ func newWorkspaceCleanupIntent(
 		return state.LaunchIntent{}, err
 	}
 	deleteBranchRequested := mode == CloseEverything && pane.BranchCreated
-	worktreeRemovedRequired := recordedWorktreeExists(pane) && len(opts.Hooks.Events[hooks.WorktreeRemoved]) != 0
 	intent := state.LaunchIntent{
 		ID: intentID, Kind: state.IntentCleanup, Status: freshWorkspaceCleanupStatus(observation),
 		Parent: pane.Parent, RuntimeParent: pane.RuntimeParent, OwnerProjectRoot: ownerRoot,
@@ -2073,6 +2080,10 @@ func newWorkspaceCleanupIntent(
 		CleanupWorktreeRemovedRequired: &worktreeRemovedRequired,
 	}
 	return intent, nil
+}
+
+func workspaceCleanupWorktreeRemovedRequired(opts Options, pane state.Pane) bool {
+	return recordedWorktreeExists(pane) && len(opts.Hooks.Events[hooks.WorktreeRemoved]) != 0
 }
 
 func workspaceCleanupCheckoutPresent(observation workspaceCleanupObservation) bool {

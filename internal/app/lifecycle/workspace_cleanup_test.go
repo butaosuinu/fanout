@@ -1601,8 +1601,11 @@ func TestFreshHerdrCleanupRoutesMovedAgentWorkspaceThroughCleanupAdmission(t *te
 	}
 }
 
-func TestFreshHerdrCleanupRetriesPendingRebindFence(t *testing.T) {
-	failures := []struct {
+func freshCleanupRebindFailures() []struct {
+	name    string
+	install func(*testing.T) func()
+} {
+	return []struct {
 		name    string
 		install func(*testing.T) func()
 	}{
@@ -1655,7 +1658,10 @@ func TestFreshHerdrCleanupRetriesPendingRebindFence(t *testing.T) {
 			return func() {}
 		}},
 	}
-	for _, failure := range failures {
+}
+
+func TestFreshHerdrCleanupRetriesPendingRebindFence(t *testing.T) {
+	for _, failure := range freshCleanupRebindFailures() {
 		t.Run(failure.name, func(t *testing.T) {
 			fixture := newHerdrLifecycleFixture(t)
 			fixture.pane.BranchCreated = true
@@ -1688,7 +1694,8 @@ func TestFreshHerdrCleanupRetriesPendingRebindFence(t *testing.T) {
 			intent, found := loadHerdrCleanupIntent(t, fixture)
 			if !found || intent.Status != state.IntentPlanned ||
 				intent.Failure != freshWorkspaceCleanupRebindPending ||
-				intent.CleanupDeleteBranchVerified || intent.CleanupWorktreeRemovedRequired != nil {
+				intent.CleanupDeleteBranchVerified || intent.CleanupWorktreeRemovedRequired == nil ||
+				!*intent.CleanupWorktreeRemovedRequired {
 				t.Fatalf("pending cleanup rebind fence = %#v (found=%t)", intent, found)
 			}
 
@@ -1698,6 +1705,88 @@ func TestFreshHerdrCleanupRetriesPendingRebindFence(t *testing.T) {
 			}
 			if localBranchExists(fixture.projectRoot, fixture.branch) {
 				t.Fatalf("retry left fanout-created branch %s", fixture.branch)
+			}
+			if !slices.Equal(backgroundHooks, []hooks.Type{hooks.WorktreeRemoved}) {
+				t.Fatalf("retry cleanup hooks = %v, want [%s]", backgroundHooks, hooks.WorktreeRemoved)
+			}
+			assertHerdrLifecycleRemoved(t, fixture)
+		})
+	}
+}
+
+func TestFreshHerdrCleanupDoesNotInventWorktreeRemovedObligationOnRetry(t *testing.T) {
+	for _, failure := range freshCleanupRebindFailures() {
+		t.Run(failure.name, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			fixture.pane.BranchCreated = true
+			primeRefinedLifecycleTelemetry(&fixture.pane)
+			fixture.pane.EmitterRowKey = "row-child"
+			recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+			runtime := &fakeHerdrLifecycleRuntime{
+				projectRoot: fixture.projectRoot,
+				workspaces:  []backend.WorkspaceObservation{movedHerdrWorkspace(fixture, "w-moved")},
+			}
+			var backgroundHooks []hooks.Type
+			originalBackgroundHook := runWorkspaceBackgroundHook
+			runWorkspaceBackgroundHook = func(hook hooks.Type, _ Options, _ state.Pane, _ string, _ Logger) {
+				backgroundHooks = append(backgroundHooks, hook)
+			}
+			defer func() { runWorkspaceBackgroundHook = originalBackgroundHook }()
+			opts := herdrLifecycleOptions(fixture, runtime)
+			allowRetry := failure.install(t)
+
+			if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("first CloseWithMode() = %d, want %d", got, exitcode.Env)
+			}
+			assertHerdrCleanupWorktreeRemovedRequired(t, fixture, false)
+			opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+				hooks.WorktreeRemoved: {{Command: ":", Timeout: time.Second}},
+			}}
+			allowRetry()
+
+			if got := CloseWithMode(opts, fixture.pane.Parent, fixture.pane.IssueNum, CloseEverything, nopLogger{}); got != exitcode.OK {
+				t.Fatalf("retry CloseWithMode() = %d, want %d", got, exitcode.OK)
+			}
+			if len(backgroundHooks) != 0 {
+				t.Fatalf("retry invented cleanup hooks = %v", backgroundHooks)
+			}
+			assertHerdrLifecycleRemoved(t, fixture)
+		})
+	}
+}
+
+func TestFreshHerdrCleanupKeepsWorktreeRemovedObligationAfterCheckoutDisappears(t *testing.T) {
+	for _, failure := range freshCleanupRebindFailures() {
+		t.Run(failure.name, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			primeRefinedLifecycleTelemetry(&fixture.pane)
+			fixture.pane.EmitterRowKey = "row-child"
+			recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+			runtime := &fakeHerdrLifecycleRuntime{
+				projectRoot: fixture.projectRoot,
+				workspaces:  []backend.WorkspaceObservation{movedHerdrWorkspace(fixture, "w-moved")},
+			}
+			var backgroundHooks []hooks.Type
+			originalBackgroundHook := runWorkspaceBackgroundHook
+			runWorkspaceBackgroundHook = func(hook hooks.Type, _ Options, _ state.Pane, _ string, _ Logger) {
+				backgroundHooks = append(backgroundHooks, hook)
+			}
+			defer func() { runWorkspaceBackgroundHook = originalBackgroundHook }()
+			opts := herdrLifecycleOptions(fixture, runtime)
+			opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+				hooks.WorktreeRemoved: {{Command: ":", Timeout: time.Second}},
+			}}
+			allowRetry := failure.install(t)
+
+			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("first Close() = %d, want %d", got, exitcode.Env)
+			}
+			assertHerdrCleanupWorktreeRemovedRequired(t, fixture, true)
+			allowRetry()
+			runHerdrLifecycleGit(t, fixture.projectRoot, "worktree", "remove", "--force", fixture.worktreePath)
+
+			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+				t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
 			}
 			if !slices.Equal(backgroundHooks, []hooks.Type{hooks.WorktreeRemoved}) {
 				t.Fatalf("retry cleanup hooks = %v, want [%s]", backgroundHooks, hooks.WorktreeRemoved)

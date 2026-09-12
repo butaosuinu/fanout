@@ -66,12 +66,14 @@ func managedPaneLocationMatch(
 			"%w: managed pane label has %d live matches", backend.ErrOwnedIdentityMismatch, len(matches),
 		)
 	}
-	match := adoptableCoordinatorObservation(matches[0], pane.WorktreePath)
-	if !workspaceHasExactLocationProvenance(match, resource) || !managedPaneLocationAgentMatches(match, pane) {
+	match := matches[0]
+	live, ok := uniqueManagedPaneLocationAgent(match, pane)
+	if !workspaceHasExactLocationProvenance(match, resource) || !ok {
 		return backend.WorkspaceObservation{}, false, fmt.Errorf(
 			"%w: managed pane label does not match checkout provenance or agent evidence", backend.ErrOwnedIdentityMismatch,
 		)
 	}
+	match.Pane, match.TerminalID = live.Ref, live.TerminalID
 	return match, true, nil
 }
 
@@ -106,13 +108,25 @@ func workspaceHasExactLocationProvenance(
 	return workspaceHasExactRestartProvenance(observation, expected)
 }
 
-func managedPaneLocationAgentMatches(observation backend.WorkspaceObservation, pane state.Pane) bool {
-	pane.WorkspaceID = observation.WorkspaceID
-	pane.PaneID = observation.Pane.Pane
-	pane.TerminalID = observation.TerminalID
+func uniqueManagedPaneLocationAgent(
+	observation backend.WorkspaceObservation,
+	pane state.Pane,
+) (backend.LivePane, bool) {
 	runtime := backend.RequireRuntime(backend.NormalizeName(pane.Backend))
-	_, ok := pane.RuntimeBinding().UniqueLive(observation.LivePanes, runtime)
-	return ok
+	var matched backend.LivePane
+	count := 0
+	for _, live := range observation.LivePanes {
+		candidate := pane
+		candidate.WorkspaceID = observation.WorkspaceID
+		candidate.PaneID = live.Ref.Pane
+		candidate.TerminalID = live.TerminalID
+		current, ok := candidate.RuntimeBinding().UniqueLive(observation.LivePanes, runtime)
+		if ok {
+			matched = current
+			count++
+		}
+	}
+	return matched, count == 1
 }
 
 func locationWorkspaces(pane state.Pane, live []backend.LivePane) []backend.WorkspaceObservation {

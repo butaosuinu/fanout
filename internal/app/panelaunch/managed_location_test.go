@@ -127,6 +127,43 @@ func TestReconcileManagedPaneLocationProjectsUniquePaneAtCheckout(t *testing.T) 
 	}
 }
 
+func TestReconcileManagedPaneLocationSelectsAgentAmongPanesAtSameCheckout(t *testing.T) {
+	pane := managedLocationPane()
+	moved := managedLocationWorkspace(pane, "workspace-next", "pane-next", "terminal-next")
+	foreign := moved.LivePanes[0]
+	foreign.Ref.Pane = "pane-other"
+	foreign.TerminalID = "terminal-other"
+	foreign.AgentID = "fanout-codex-foreign"
+	moved.LivePanes = append(moved.LivePanes, foreign)
+	moved.Panes = append(moved.Panes, backend.WorkspacePaneObservation{
+		Pane: foreign.Ref, TerminalID: foreign.TerminalID, CWD: pane.WorktreePath,
+	})
+	moved.Pane, moved.TerminalID, moved.CWD = backend.PaneRef{}, "", ""
+
+	got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{moved})
+	if err != nil || !changed || got.PaneID != "pane-next" || got.TerminalID != "terminal-next" {
+		t.Fatalf("same-checkout pane selection = %#v changed=%t err=%v", got, changed, err)
+	}
+}
+
+func TestReconcileManagedPaneLocationRejectsDuplicateAgentEvidenceInOneWorkspace(t *testing.T) {
+	pane := managedLocationPane()
+	moved := managedLocationWorkspace(pane, "workspace-next", "pane-next", "terminal-next")
+	duplicate := moved.LivePanes[0]
+	duplicate.Ref.Pane = "pane-other"
+	duplicate.TerminalID = "terminal-other"
+	moved.LivePanes = append(moved.LivePanes, duplicate)
+	moved.Panes = append(moved.Panes, backend.WorkspacePaneObservation{
+		Pane: duplicate.Ref, TerminalID: duplicate.TerminalID, CWD: pane.WorktreePath,
+	})
+	moved.Pane, moved.TerminalID, moved.CWD = backend.PaneRef{}, "", ""
+
+	got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{moved})
+	if changed || !reflect.DeepEqual(got, pane) || !errors.Is(err, backend.ErrOwnedIdentityMismatch) {
+		t.Fatalf("duplicate agent evidence changed pane: changed=%t pane=%#v err=%v", changed, got, err)
+	}
+}
+
 func TestReconcileManagedPaneLocationLeavesSameWorkspaceDriftStale(t *testing.T) {
 	pane := managedLocationPane()
 	for _, test := range []struct {
