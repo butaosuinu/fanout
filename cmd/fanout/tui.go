@@ -15,6 +15,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/run"
+	"github.com/butaosuinu/fanout/internal/app/sessionbinding"
 	"github.com/butaosuinu/fanout/internal/core/agent"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/exitcode"
@@ -448,7 +449,7 @@ func wireManagedConsoleTUI(
 		opts, projectRoot, session, commandName, resolvedSettings, hookConfig, owned,
 		dashboardOwnerSync,
 	)
-	wireManagedPaneTUI(opts, owned)
+	wireManagedPaneTUI(opts, projectRoot, owned)
 }
 
 func wireManagedLaunchTUI(
@@ -470,9 +471,17 @@ func wireManagedLaunchTUI(
 	wrapManagedTUILaunches(opts, dashboardOwnerSync)
 }
 
-func wireManagedPaneTUI(opts *fanouttui.Options, owned paneruntime.ManagedSession) {
+func wireManagedPaneTUI(opts *fanouttui.Options, projectRoot string, owned paneruntime.ManagedSession) {
 	opts.FocusManagedPane = func(pane state.Pane) error {
-		bound, ref, err := bindManagedPane(owned, pane)
+		ownedBackend := owned.Backend()
+		if ownedBackend == nil {
+			return fmt.Errorf("%s", ownedPaneUnavailable)
+		}
+		current, err := sessionbinding.ReloadPane(projectRoot, pane, ownedBackend.ListLive)
+		if err != nil {
+			return err
+		}
+		bound, ref, err := bindManagedPane(owned, current)
 		if err != nil {
 			return err
 		}

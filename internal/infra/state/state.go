@@ -376,17 +376,26 @@ func (l *LockedStore) fenceUnsequencedClaudeEmitters() (bool, error) {
 		if !legacyClaudeEmitter(*pane) {
 			continue
 		}
-		nonce, err := newStateEmitterNonce()
-		if err != nil {
+		if err := pane.InvalidateTelemetry(); err != nil {
 			return false, err
 		}
-		pane.ReportedState = ""
-		pane.ReportedStateSeq = 0
-		pane.StateRefinement = false
-		pane.EmitterNonce = nonce
 		changed = true
 	}
 	return changed, nil
+}
+
+// InvalidateTelemetry fences the current emitter generation and clears every
+// derived agent-state value until a fresh signal reaches this row.
+func (p *Pane) InvalidateTelemetry() error {
+	nonce, err := newStateEmitterNonce()
+	if err != nil {
+		return err
+	}
+	p.ReportedState = ""
+	p.ReportedStateSeq = 0
+	p.StateRefinement = false
+	p.EmitterNonce = nonce
+	return nil
 }
 
 func legacyClaudeEmitter(pane Pane) bool {

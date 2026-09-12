@@ -1,27 +1,28 @@
-// Package sessionbinding persists the Herdr agent session a state row's pane
-// currently reports: the first one observed for an otherwise complete row, and
-// the replacement after the provider starts a new conversation in that pane.
+// Package sessionbinding persists the current Herdr location and agent session
+// reported for a state row.
 //
 // This is the rebinding path for every agent. The telemetry emitter rebinds
 // too, but only providers that emit reach it (validTelemetryAgent), so a
-// direct Codex pane would otherwise keep a stale reference and stay out of
-// resume, which matches on the recorded value.
+// direct Codex pane would otherwise keep stale location and conversation
+// references and stay out of resume, which matches on the recorded values.
 package sessionbinding
 
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-// StateLoader records the agent session each row's pane currently reports,
+// StateLoader records each agent row's current runtime location and session
 // under that row's own state lock, then returns the same merged state shape as
 // sessionview.MergedStateLoader. The runtime is observed once and that single
-// observation feeds both the merge and the binding decision.
+// observation feeds the merge and both binding decisions.
 func StateLoader(
 	projectRoot string,
 	listLive func() ([]backend.LivePane, error),
@@ -36,26 +37,99 @@ func StateLoader(
 		if err != nil {
 			return store, err
 		}
-		roots := bindingRoots(projectRoot, store.Panes, live)
-		if len(roots) == 0 {
-			return store, nil
-		}
-		for _, root := range roots {
-			if err := bindOwnedAgentSessions(root, live); err != nil {
-				return state.Store{}, fmt.Errorf("bind Herdr agent session in %s: %w", root, err)
-			}
-		}
-		return sessionview.MergedStateLoader(projectRoot, cachedLive)()
+		return bindCurrentState(projectRoot, store, live, cachedLive)
 	}
 }
 
-func bindingRoots(projectRoot string, panes []state.Pane, live []backend.LivePane) []string {
+func bindCurrentState(
+	projectRoot string,
+	store state.Store,
+	live []backend.LivePane,
+	cachedLive func() ([]backend.LivePane, error),
+) (state.Store, error) {
+	roots, err := bindingRoots(projectRoot, store.Panes, live)
+	if err != nil {
+		return state.Store{}, err
+	}
+	if len(roots) == 0 {
+		return store, nil
+	}
+	for _, root := range roots {
+		if err := bindOwnedAgentSessions(root, live); err != nil {
+			return state.Store{}, fmt.Errorf("bind Herdr agent session in %s: %w", root, err)
+		}
+	}
+	return sessionview.MergedStateLoader(projectRoot, cachedLive)()
+}
+
+// ReloadPane refreshes the owning state row, then resolves it through the
+// repository-wide row identity that stays stable when runtime location moves.
+func ReloadPane(
+	projectRoot string,
+	expected state.Pane,
+	listLive func() ([]backend.LivePane, error),
+) (state.Pane, error) {
+	store, err := StateLoader(projectRoot, listLive)()
+	if err != nil {
+		return state.Pane{}, err
+	}
+	pane, found, err := reloadedPane(store, expected)
+	if err != nil {
+		return state.Pane{}, err
+	}
+	if !found {
+		return state.Pane{}, fmt.Errorf("saved managed pane row disappeared during refresh")
+	}
+	return pane, nil
+}
+
+func reloadedPane(store state.Store, expected state.Pane) (state.Pane, bool, error) {
+	if strings.TrimSpace(expected.EmitterRowKey) != "" {
+		index, err := store.EmitterRowIndex(
+			expected.EmitterRowKey, filepath.Clean(expected.WorktreePath), expected.WorkspaceLabel,
+		)
+		if err != nil || index < 0 {
+			return state.Pane{}, false, err
+		}
+		return store.Panes[index], true, nil
+	}
+	var pane state.Pane
+	var found bool
+	if strings.TrimSpace(expected.TaskID) != "" {
+		pane, found = store.FindTask(expected.Parent, expected.TaskID)
+	} else {
+		pane, found = store.Find(expected.Parent, expected.IssueNum)
+	}
+	if found && (pane.WorkspaceLabel != expected.WorkspaceLabel ||
+		filepath.Clean(pane.WorktreePath) != filepath.Clean(expected.WorktreePath)) {
+		return state.Pane{}, false, fmt.Errorf("saved managed pane row identity changed during refresh")
+	}
+	return pane, found, nil
+}
+
+func bindingRoots(
+	projectRoot string,
+	panes []state.Pane,
+	live []backend.LivePane,
+) ([]string, error) {
+	owners := bindingOwnerRoots(projectRoot, panes)
+	var roots []string
+	for _, root := range owners {
+		store, err := state.LoadProject(root)
+		if err != nil {
+			return nil, fmt.Errorf("load agent binding owner %s: %w", root, err)
+		}
+		if paneBindingsChanged(store.Panes, live) {
+			roots = append(roots, root)
+		}
+	}
+	return roots, nil
+}
+
+func bindingOwnerRoots(projectRoot string, panes []state.Pane) []string {
 	seen := map[string]bool{}
 	var roots []string
-	for i, pane := range panes {
-		if _, ok := currentSessionBinding(panes, i, live); !ok {
-			continue
-		}
+	for _, pane := range panes {
 		for _, root := range paneBindingOwners(projectRoot, pane) {
 			if seen[root] {
 				continue
@@ -65,6 +139,17 @@ func bindingRoots(projectRoot string, panes []state.Pane, live []backend.LivePan
 		}
 	}
 	return roots
+}
+
+func paneBindingsChanged(panes []state.Pane, live []backend.LivePane) bool {
+	for index, pane := range panes {
+		_, locationChanged, _ := panelaunch.ReconcileManagedPaneLocationFromLive(pane, live)
+		_, sessionChanged := currentSessionBinding(panes, index, live)
+		if locationChanged || sessionChanged {
+			return true
+		}
+	}
+	return false
 }
 
 func paneBindingOwners(projectRoot string, pane state.Pane) []string {
@@ -86,6 +171,11 @@ func bindOwnedAgentSessions(projectRoot string, live []backend.LivePane) (err er
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
 	changed := false
 	for i := range locked.Panes {
+		pane, locationChanged, locationErr := panelaunch.ReconcileManagedPaneLocationFromLive(locked.Panes[i], live)
+		if locationErr == nil && locationChanged {
+			locked.Panes[i] = pane
+			changed = true
+		}
 		ref, ok := currentSessionBinding(locked.Panes, i, live)
 		if !ok {
 			continue
