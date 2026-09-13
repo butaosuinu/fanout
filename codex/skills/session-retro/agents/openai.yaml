@@ -1,0 +1,7 @@
+interface:
+  display_name: "session-retro"
+  short_description: "Analyze recurring Codex session failures"
+  default_prompt: "Use $session-retro to compare recent Codex rollout failures, CI failures, and review findings with the previous snapshot and propose recurrence-prevention changes."
+
+policy:
+  allow_implicit_invocation: true

@@ -87,4 +87,4 @@ issue #373 の旧集計は、セッション履歴 102 件、CI 失敗 22 run、
 - agent-driven repair を `pr-watch` 1 起動あたり最大 3 wave で止める。
 - 1 回の起動内で 1 wave 以内に収束する PR を増やす。
 
-パターンが実態と乖離したら、`/session-retro` の再発分類を基にこの文書を更新する。
+パターンが実態と乖離したら、`/session-retro` または `$session-retro` の再発分類を基にこの文書を更新する。

@@ -51,7 +51,7 @@ custom destination を使う場合は両方に同じ path を指定します。
 - `$BIN_DIR/fanout`(バイナリ本体)
 - `$CLAUDE_DIR/commands/`(`fanout`、`pr-watch`、`session-retro` のスラッシュコマンド)
 - `$CLAUDE_DIR/skills/`(`fanout`、`fanout-issues`、`fanout-plan`、`post-work-review`、`pr-watch`、`session-retro` の skill)
-- `$CODEX_DIR/skills/`(`session-retro` を除く同じ skill 群。`post-work-review` の marker helper も skill 内に同梱)
+- `$CODEX_DIR/skills/`(同じ 6 個の skill。`post-work-review` の marker helper も skill 内に同梱)
 
 install と update はこれらすべてを上書きします。
 

@@ -46,7 +46,7 @@ Each destination has an environment-variable override for the install command: `
 - `$BIN_DIR/fanout` — the binary
 - `$CLAUDE_DIR/commands/` — the `fanout`, `pr-watch`, and `session-retro` slash commands
 - `$CLAUDE_DIR/skills/` — the `fanout`, `fanout-issues`, `fanout-plan`, `post-work-review`, `pr-watch`, and `session-retro` skills
-- `$CODEX_DIR/skills/` — the same skills minus `session-retro`; `post-work-review` bundles its marker helper inside the skill
+- `$CODEX_DIR/skills/` — the same six skills; `post-work-review` bundles its marker helper inside the skill
 
 Install and update overwrite all of these.
 
