@@ -168,12 +168,24 @@ func persistManagedPaneLocation(
 		return fmt.Errorf("%w: managed pane row identity changed before location update", backend.ErrOwnedIdentityMismatch)
 	}
 	saved := locked.Panes[index]
-	locked.Panes[index] = current
+	copyManagedPaneLocationFields(&locked.Panes[index], current)
 	if err := locked.Save(); err != nil {
-		locked.Panes[index] = saved
+		copyManagedPaneLocationFields(&locked.Panes[index], saved)
 		return err
 	}
 	return nil
+}
+
+func copyManagedPaneLocationFields(target *state.Pane, source state.Pane) {
+	target.WorkspaceID = source.WorkspaceID
+	target.PaneID = source.PaneID
+	target.TerminalID = source.TerminalID
+	target.ReportedState = source.ReportedState
+	target.ReportedStateSeq = source.ReportedStateSeq
+	target.StateRefinement = source.StateRefinement
+	target.EmitterNonce = source.EmitterNonce
+	target.EmitterRebindNonce = source.EmitterRebindNonce
+	target.EmitterRebindSequence = source.EmitterRebindSequence
 }
 
 func reconcileManagedPaneLocation(
