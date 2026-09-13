@@ -8,13 +8,23 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
+type TelemetrySequenceFence func() (uint64, error)
+
 // ReconcileManagedPaneLocationFromLive projects one aggregate snapshot onto
 // workspace observations, then applies the existing label/provenance matcher.
 func ReconcileManagedPaneLocationFromLive(
 	pane state.Pane,
 	live []backend.LivePane,
+	sequenceFence TelemetrySequenceFence,
 ) (state.Pane, bool, error) {
-	return ReconcileManagedPaneLocation(pane, locationWorkspaces(pane, live))
+	return ReconcileManagedPaneLocation(pane, locationWorkspaces(pane, live), sequenceFence)
+}
+
+// ManagedPaneLocationChangedFromLive reports whether the same evidence would
+// move pane without allocating a telemetry generation fence.
+func ManagedPaneLocationChangedFromLive(pane state.Pane, live []backend.LivePane) bool {
+	_, changed, _ := managedPaneLocationCandidate(pane, locationWorkspaces(pane, live))
+	return changed
 }
 
 // ReconcileManagedPaneLocation updates only the runtime location of an agent
@@ -23,29 +33,48 @@ func ReconcileManagedPaneLocationFromLive(
 func ReconcileManagedPaneLocation(
 	pane state.Pane,
 	workspaces []backend.WorkspaceObservation,
+	sequenceFence TelemetrySequenceFence,
 ) (state.Pane, bool, error) {
+	match, changed, err := managedPaneLocationCandidate(pane, workspaces)
+	if err != nil || !changed {
+		return pane, false, err
+	}
+	if sequenceFence == nil {
+		return pane, false, fmt.Errorf("managed pane location telemetry fence is not configured")
+	}
+	sequence, err := sequenceFence()
+	if err != nil {
+		return pane, false, fmt.Errorf("allocate managed pane location telemetry fence: %w", err)
+	}
+	return applyManagedPaneLocation(pane, match, sequence)
+}
+
+func managedPaneLocationCandidate(
+	pane state.Pane,
+	workspaces []backend.WorkspaceObservation,
+) (backend.WorkspaceObservation, bool, error) {
 	if !managedPaneLocationEligible(pane) {
-		return pane, false, nil
+		return backend.WorkspaceObservation{}, false, nil
 	}
 	resource := managedPaneLocationResource(pane)
 	if !managedPaneLocationComplete(pane, resource) {
-		return pane, false, fmt.Errorf("%w: saved managed pane location identity is incomplete", backend.ErrOwnedIdentityMismatch)
+		return backend.WorkspaceObservation{}, false, fmt.Errorf(
+			"%w: saved managed pane location identity is incomplete", backend.ErrOwnedIdentityMismatch,
+		)
 	}
 	match, found, err := managedPaneLocationMatch(pane, resource, workspaces)
 	if err != nil || !found {
-		return pane, false, err
+		return backend.WorkspaceObservation{}, false, err
 	}
-	return applyManagedPaneLocation(pane, match)
+	return match, pane.WorkspaceID != match.WorkspaceID, nil
 }
 
 func applyManagedPaneLocation(
 	pane state.Pane,
 	match backend.WorkspaceObservation,
+	sequenceFence uint64,
 ) (state.Pane, bool, error) {
-	if pane.WorkspaceID == match.WorkspaceID {
-		return pane, false, nil
-	}
-	if err := pane.InvalidateTelemetry(); err != nil {
+	if err := pane.InvalidateTelemetryForLocationRebind(sequenceFence); err != nil {
 		return pane, false, fmt.Errorf("invalidate telemetry after managed pane location change: %w", err)
 	}
 	pane.WorkspaceID, pane.PaneID, pane.TerminalID = match.WorkspaceID, match.Pane.Pane, match.TerminalID

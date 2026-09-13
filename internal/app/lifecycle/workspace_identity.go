@@ -177,11 +177,14 @@ func persistManagedPaneLocation(
 }
 
 func reconcileManagedPaneLocation(
+	ctx context.Context,
 	locked *state.LockedStore,
 	pane state.Pane,
 	workspaces []backend.WorkspaceObservation,
 ) (state.Pane, bool, error) {
-	current, changed, err := panelaunch.ReconcileManagedPaneLocation(pane, workspaces)
+	current, changed, err := panelaunch.ReconcileManagedPaneLocation(
+		pane, workspaces, func() (uint64, error) { return locked.FenceTelemetrySequence(ctx) },
+	)
 	if err != nil || !changed {
 		return pane, false, err
 	}
@@ -192,12 +195,13 @@ func reconcileManagedPaneLocation(
 }
 
 func reconcileManagedPaneLocationAfterMismatch(
+	ctx context.Context,
 	locked *state.LockedStore,
 	pane state.Pane,
 	workspaces []backend.WorkspaceObservation,
 	mismatch error,
 ) (state.Pane, error) {
-	current, changed, err := reconcileManagedPaneLocation(locked, pane, workspaces)
+	current, changed, err := reconcileManagedPaneLocation(ctx, locked, pane, workspaces)
 	if err != nil {
 		return pane, err
 	}

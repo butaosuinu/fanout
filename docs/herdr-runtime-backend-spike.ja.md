@@ -513,7 +513,7 @@ pane split は同じ checkout 内に補助 process を追加する場合だけ�
 
 agent row の保存済み workspace ID が現在値と異なる場合、fanout は保存済み workspace label nonce に一致する live workspace が一つだけあり、`WorktreePath`、`RepoKey`、`RepoRoot` と pane identity が一致するときだけ location を自動更新する。
 候補 pane は保存済み `AgentID`、provider、`agent_session` と照合し、同じ provider の late session だけを許可する。agent evidence のない lifecycle observation は更新せず fail closed にする。
-identity 欄とユーザー process は変更せず、workspace ID、pane ID、`terminal_id` だけを更新する。同時に派生 telemetry を未設定へ戻して emitter nonce を回転し、新しい telemetry が届くまで nudge を拒否する。値は合成または推定しない。label の一致が 0 件または複数件、checkout provenance の不一致、pane の欠落または重複では更新せず fail closed にする。tmux row は対象外とする。
+identity 欄とユーザー process は変更せず、workspace ID、pane ID、`terminal_id` だけを更新する。同時に派生 telemetry を未設定へ戻して emitter nonce を回転し、新しい telemetry が届くまで nudge を拒否する。heal は既存の serial sequence allocator で境界を確定する。launch 時の固定 env を持つ Claude emitter は回転前 nonce と stable row identity を照合し、境界より後の sequence と更新後の live pane / process identity を再検証した signal だけを受理する。未採番の Codex Plan telemetry は再束縛せず、managed restart まで未設定を維持する。値は合成または推定しない。label の一致が 0 件または複数件、checkout provenance の不一致、pane の欠落または重複では更新せず fail closed にする。tmux row は対象外とする。
 更新は TUI focus、TUI / dashboard の write-through state 読み込み、明示 restart、close / merge の lifecycle preflight が state lock 下で行う。status など `sessionview.MergedStateLoader` を直接使う pure read-only 経路は `state.json` を変更しない。
 
 ### cleanup
@@ -737,15 +737,16 @@ final row は synthetic launch telemetry として `reported_state:"running"` �
 これらの値は agent が起動する tool と checkout 内 script に継承されるため、secret、capability、event provenance の証明にはならない。
 agent process は正規 hook と同じ emitter call を偽造できる。
 emitter signal は協調プロセスの `reported_state` telemetry に保存し、tmux と同じ `shouldNudge` gate の入力には使うが、完了判定または cleanup の根拠には使わない。
+emitter が moved candidate を観測した場合は location を更新せず、回転前 nonce と sequence fence だけを保存する。location 更新は既存 entrypoint が行う。
 emitter は state lock を短時間取得して更新し、launcher は hook の完了を待たずに agent 検出、rename、process-info 照合を進める。
 emitter は state lock 下の state で分岐し、final row があれば `reported_state` update、matching intent だけがあれば pending telemetry として保存する。
 final row の確定前に届いた signal は authoritative state を更新せず、key、nonce、backend、session / workspace / agent identity が intent と完全一致する場合だけ pending として保存する。
 pending `done` は同じ nonce の先行 telemetry より優先するが、final row 確定前は query 結果へ出さない。
 agent 検出後、保存済み root PaneRef、`terminal_id`、process 照合結果を同じ nonce に束縛し、pending fresh signal もこれらと一致する場合だけ、その signal の `reported_state` と `state_refinement:true` を final row の同じ save で確定する。
-final row 確定後も、emitter は state lock 下で key、nonce、backend、PaneRef、`terminal_id`、process 照合結果が current launch と一致する fresh signal だけを受理し、その state と `state_refinement:true` を同じ save で確定する。
+final row 確定後も、emitter は state lock 下で key、nonce、backend、PaneRef、`terminal_id`、process 照合結果が current launch と一致する fresh signal だけを受理し、その state と `state_refinement:true` を同じ save で確定する。location heal の durable rebind fence がある場合だけ、回転前 nonce と stable row identity が一致する Claude signal のうち、heal が serial allocator で確定した境界より後の sequence と更新後の live pane / process identity を再検証できたものを受理する。未採番の provider signal は再束縛しない。
 0 件、複数件、世代不一致、PaneRef 不一致は fail closed にする。
 `terminal_id` の変化を検出した時点で state lock 下で `reported_state` を未設定、`state_refinement:false` にし、emitter nonce を回転して row を `stale` にする。
-旧 nonce または旧 `terminal_id` に束縛された signal は拒否する。
+durable rebind fence のない旧 nonce または旧 `terminal_id` に束縛された signal は拒否する。
 cwd や slug から更新先を再解決しない。
 Claude の `SessionEnd` 由来の `done` も診断用 telemetry に留める。
 Claude と Codex は pane 消滅時に正常終了と外部からの kill を区別できないため、state row の有無にかかわらず `stale` とする。

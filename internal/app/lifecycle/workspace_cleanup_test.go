@@ -1883,6 +1883,8 @@ func TestHerdrMergeReconcilesMovedAgentLocation(t *testing.T) {
 		t.Fatalf("merge reconciliation emitter nonce = %q, want a fresh valid nonce", saved.EmitterNonce)
 	}
 	want.EmitterNonce = saved.EmitterNonce
+	want.EmitterRebindNonce = fixture.pane.EmitterNonce
+	want.EmitterRebindSequence = fixture.pane.ReportedStateSeq
 	if !reflect.DeepEqual(saved, want) {
 		t.Fatalf("merge reconciliation changed fields outside location and telemetry fence: got %#v want %#v", saved, want)
 	}
@@ -5769,6 +5771,12 @@ func assertLifecycleTelemetryInvalidated(t *testing.T, before, after state.Pane)
 	}
 	if after.EmitterNonce == before.EmitterNonce || !telemetry.ValidNonce(after.EmitterNonce) {
 		t.Fatalf("rebound emitter nonce = %q, want a fresh valid nonce", after.EmitterNonce)
+	}
+	if after.EmitterRebindNonce != before.EmitterNonce {
+		t.Fatalf("rebound emitter admission nonce = %q, want %q", after.EmitterRebindNonce, before.EmitterNonce)
+	}
+	if after.EmitterRebindSequence != before.ReportedStateSeq {
+		t.Fatalf("rebound emitter sequence fence = %d, want %d", after.EmitterRebindSequence, before.ReportedStateSeq)
 	}
 }
 

@@ -73,7 +73,7 @@ func validateWorkspaceMergeOperation(
 	if !errors.Is(err, backend.ErrOwnedIdentityMismatch) {
 		return pane, err
 	}
-	pane, err = reconcileManagedPaneLocationAfterMismatch(locked, pane, workspaces, err)
+	pane, err = reconcileManagedPaneLocationAfterMismatch(ctx, locked, pane, workspaces, err)
 	if err != nil {
 		return pane, err
 	}
@@ -231,7 +231,7 @@ func reconcileWorkspaceClosePreflightMismatch(
 	if err != nil || handled {
 		return current, err
 	}
-	return reconcileManagedPaneLocationAfterMismatch(locked, pane, workspaces, mismatch)
+	return reconcileManagedPaneLocationAfterMismatch(ctx, locked, pane, workspaces, mismatch)
 }
 
 func reconcileFreshWorkspaceCleanupAfterMismatch(
@@ -293,7 +293,7 @@ func continueFreshWorkspaceCleanupRebind(
 		return pane, persistFreshWorkspaceCleanupRebindFailure(journal, intent, mismatch)
 	}
 	intent, err = rebindObservedWorkspaceCleanupIdentity(
-		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
+		ctx, locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
 	)
 	if err != nil {
 		return pane, err
@@ -446,11 +446,12 @@ func verifyWorkspaceCleanupHookIdentity(
 		return intent, err
 	}
 	return rebindWorkspaceCleanupHookIdentity(
-		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
+		ctx, locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
 	)
 }
 
 func rebindWorkspaceCleanupHookIdentity(
+	ctx context.Context,
 	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	projectRoot string,
@@ -460,7 +461,7 @@ func rebindWorkspaceCleanupHookIdentity(
 ) (state.LaunchIntent, error) {
 	previousResource := intent.Resource
 	intent, err := rebindObservedWorkspaceCleanupIdentity(
-		locked, journal, projectRoot, pane, intent, workspace,
+		ctx, locked, journal, projectRoot, pane, intent, workspace,
 	)
 	if err != nil || intent.Resource == previousResource {
 		return intent, err
@@ -862,7 +863,7 @@ func observeReboundSharedAttachedChildCleanup(
 		return intent, observation, err
 	}
 	intent, err = rebindObservedWorkspaceCleanupIdentity(
-		locked, journal, opts.ProjectRoot, child, intent, observation.workspace,
+		ctx, locked, journal, opts.ProjectRoot, child, intent, observation.workspace,
 	)
 	return intent, observation, err
 }
@@ -1584,7 +1585,7 @@ func reconcileSharedAttachedWorkspace(
 	if err == nil || !errors.Is(err, backend.ErrOwnedIdentityMismatch) {
 		return pane, observation, err
 	}
-	pane, err = reconcileManagedPaneLocationAfterMismatch(locked, pane, workspaces, err)
+	pane, err = reconcileManagedPaneLocationAfterMismatch(ctx, locked, pane, workspaces, err)
 	if err != nil {
 		return pane, workspaceCleanupObservation{}, err
 	}
@@ -2312,7 +2313,7 @@ func recoverExpiredObservedWorkspaceCleanup(
 		return realizeReplannedWorkspaceCleanup(journal, intent)
 	}
 	intent, err := rebindObservedWorkspaceCleanupIdentity(
-		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
+		ctx, locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
 	)
 	if err != nil {
 		return intent, err
@@ -2348,6 +2349,7 @@ func settleExpiredObservedWorkspaceCleanup(
 }
 
 func rebindMovedWorkspaceCleanupIdentity(
+	ctx context.Context,
 	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	projectRoot string,
@@ -2358,7 +2360,7 @@ func rebindMovedWorkspaceCleanupIdentity(
 	if err != nil {
 		return err
 	}
-	if err := invalidateMovedWorkspaceCleanupTelemetry(&pane, resource); err != nil {
+	if err := invalidateMovedWorkspaceCleanupTelemetry(ctx, locked, &pane, resource); err != nil {
 		return err
 	}
 	if launchIntent, found := journal.FindIntent(worktreeIntentID); found {
@@ -2371,17 +2373,27 @@ func rebindMovedWorkspaceCleanupIdentity(
 	return locked.RecordPane(pane)
 }
 
-func invalidateMovedWorkspaceCleanupTelemetry(pane *state.Pane, resource state.RuntimeResource) error {
+func invalidateMovedWorkspaceCleanupTelemetry(
+	ctx context.Context,
+	locked *state.LockedStore,
+	pane *state.Pane,
+	resource state.RuntimeResource,
+) error {
 	if pane.WorkspaceID == resource.WorkspaceID || pane.IsShell() || strings.TrimSpace(pane.Agent) == "" {
 		return nil
 	}
-	if err := pane.InvalidateTelemetry(); err != nil {
+	sequence, err := locked.FenceTelemetrySequence(ctx)
+	if err != nil {
+		return fmt.Errorf("allocate cleanup workspace telemetry fence: %w", err)
+	}
+	if err := pane.InvalidateTelemetryForLocationRebind(sequence); err != nil {
 		return fmt.Errorf("invalidate telemetry after cleanup workspace location change: %w", err)
 	}
 	return nil
 }
 
 func rebindObservedWorkspaceCleanupIdentity(
+	ctx context.Context,
 	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	projectRoot string,
@@ -2397,10 +2409,10 @@ func rebindObservedWorkspaceCleanupIdentity(
 	}
 	if workspace.WorkspaceID == pane.WorkspaceID {
 		return rebindPartiallyPersistedWorkspaceCleanupIdentity(
-			locked, journal, projectRoot, pane, intent, *workspace,
+			ctx, locked, journal, projectRoot, pane, intent, *workspace,
 		)
 	}
-	admittedPane, adoptedLivePane, err := admitMovedWorkspaceCleanupPane(pane, *workspace)
+	admittedPane, adoptedLivePane, err := admitMovedWorkspaceCleanupPane(ctx, locked, pane, *workspace)
 	if err != nil {
 		cause := fmt.Errorf("cleanup workspace location rebind: %w", err)
 		return intent, markWorkspaceCleanupManual(journal, intent, cause)
@@ -2409,7 +2421,9 @@ func rebindObservedWorkspaceCleanupIdentity(
 	if adoptedLivePane {
 		intent.Resource = resourceFromPane(admittedPane)
 	}
-	return intent, rebindMovedWorkspaceCleanupIdentity(locked, journal, projectRoot, admittedPane, intent.Resource)
+	return intent, rebindMovedWorkspaceCleanupIdentity(
+		ctx, locked, journal, projectRoot, admittedPane, intent.Resource,
+	)
 }
 
 func admitCurrentWorkspaceCleanupIdentity(
@@ -2427,6 +2441,7 @@ func admitCurrentWorkspaceCleanupIdentity(
 }
 
 func rebindPartiallyPersistedWorkspaceCleanupIdentity(
+	ctx context.Context,
 	locked *state.LockedStore,
 	journal *state.LockedLaunchJournal,
 	projectRoot string,
@@ -2439,10 +2454,12 @@ func rebindPartiallyPersistedWorkspaceCleanupIdentity(
 		return intent, markWorkspaceCleanupManual(journal, intent, cause)
 	}
 	intent.Resource = resourceFromPane(pane)
-	return intent, rebindMovedWorkspaceCleanupIdentity(locked, journal, projectRoot, pane, intent.Resource)
+	return intent, rebindMovedWorkspaceCleanupIdentity(ctx, locked, journal, projectRoot, pane, intent.Resource)
 }
 
 func admitMovedWorkspaceCleanupPane(
+	ctx context.Context,
+	locked *state.LockedStore,
 	pane state.Pane,
 	workspace backend.WorkspaceObservation,
 ) (state.Pane, bool, error) {
@@ -2450,7 +2467,9 @@ func admitMovedWorkspaceCleanupPane(
 		return pane, false, nil
 	}
 	current, changed, err := panelaunch.ReconcileManagedPaneLocation(
-		pane, []backend.WorkspaceObservation{workspace},
+		pane,
+		[]backend.WorkspaceObservation{workspace},
+		func() (uint64, error) { return locked.FenceTelemetrySequence(ctx) },
 	)
 	if err != nil {
 		return pane, false, err
@@ -2527,7 +2546,7 @@ func replanObservedWorkspaceCleanup(
 		return realizeReplannedWorkspaceCleanup(journal, intent)
 	}
 	intent, err := rebindObservedWorkspaceCleanupIdentity(
-		locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
+		ctx, locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
 	)
 	if err != nil {
 		return intent, err

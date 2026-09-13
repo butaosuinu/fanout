@@ -115,6 +115,8 @@ func (f *restartRuntimeFake) ObserveRestartResume(
 func TestResumeRestartedManagedRowsRebindsExactCodexProcess(t *testing.T) {
 	repo := newManagedRealizeRepo(t)
 	saved, placeholder := restartCodexFixture()
+	saved.EmitterRebindNonce = strings.Repeat("c", 32)
+	saved.EmitterRebindSequence = 7
 	placeholder.AgentState = backend.AgentIdle
 	resumed := resumedCodexPane(placeholder)
 	recordRestartStatePane(t, repo, saved)
@@ -132,7 +134,8 @@ func TestResumeRestartedManagedRowsRebindsExactCodexProcess(t *testing.T) {
 		got.ProcessIdentity == nil || got.ProcessIdentity.AgentPID != 10 {
 		t.Fatalf("rebound row = (%+v, %t)", got, found)
 	}
-	if got.ReportedState != "" || got.StateRefinement || got.EmitterNonce == saved.EmitterNonce {
+	if got.ReportedState != "" || got.StateRefinement || got.EmitterNonce == saved.EmitterNonce ||
+		got.EmitterRebindNonce != "" || got.EmitterRebindSequence != 0 {
 		t.Fatalf("rebound telemetry = (%q, %t, %q)", got.ReportedState, got.StateRefinement, got.EmitterNonce)
 	}
 	wantArgs := []string{"resume", saved.AgentSession.Value}

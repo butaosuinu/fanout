@@ -73,15 +73,17 @@ type Pane struct {
 	// ReportedState is cooperative provider telemetry. The launch binding fields
 	// fence updates to one Herdr generation; none of these fields authorizes
 	// lifecycle, cleanup, completion, or nudge operations.
-	ReportedState     string   `json:"reported_state,omitempty"`
-	ReportedStateSeq  uint64   `json:"reported_state_sequence,omitempty"`
-	StateRefinement   bool     `json:"state_refinement,omitempty"`
-	EmitterRowKey     string   `json:"emitterRowKey,omitempty"`
-	LaunchNonce       string   `json:"launchNonce,omitempty"`
-	EmitterNonce      string   `json:"emitterNonce,omitempty"`
-	LaunchExecutable  string   `json:"herdrLaunchExecutable,omitempty"`
-	LaunchArgs        []string `json:"herdrLaunchArgs,omitempty"`
-	DirectAgentLaunch bool     `json:"herdrDirectAgentLaunch,omitempty"`
+	ReportedState         string   `json:"reported_state,omitempty"`
+	ReportedStateSeq      uint64   `json:"reported_state_sequence,omitempty"`
+	StateRefinement       bool     `json:"state_refinement,omitempty"`
+	EmitterRowKey         string   `json:"emitterRowKey,omitempty"`
+	LaunchNonce           string   `json:"launchNonce,omitempty"`
+	EmitterNonce          string   `json:"emitterNonce,omitempty"`
+	EmitterRebindNonce    string   `json:"emitterRebindNonce,omitempty"`
+	EmitterRebindSequence uint64   `json:"emitterRebindSequence,omitempty"`
+	LaunchExecutable      string   `json:"herdrLaunchExecutable,omitempty"`
+	LaunchArgs            []string `json:"herdrLaunchArgs,omitempty"`
+	DirectAgentLaunch     bool     `json:"herdrDirectAgentLaunch,omitempty"`
 	// ShellKey is the tmux pane user-option token that binds this state row to
 	// one live pane. Shell panes can share WorktreePath with the repo root or an
 	// agent worktree, so liveness uses this marker instead of path matching.
@@ -395,6 +397,27 @@ func (p *Pane) InvalidateTelemetry() error {
 	p.ReportedStateSeq = 0
 	p.StateRefinement = false
 	p.EmitterNonce = nonce
+	p.EmitterRebindNonce = ""
+	p.EmitterRebindSequence = 0
+	return nil
+}
+
+// InvalidateTelemetryForLocationRebind fences nudge state while retaining the
+// launch emitter's old nonce as an explicit admission path for its fixed env.
+func (p *Pane) InvalidateTelemetryForLocationRebind(sequenceFence uint64) error {
+	if sequenceFence == 0 {
+		return fmt.Errorf("location rebind telemetry sequence fence is missing")
+	}
+	rebindNonce := p.EmitterRebindNonce
+	rebindSequence := max(p.EmitterRebindSequence, p.ReportedStateSeq, sequenceFence)
+	if rebindNonce == "" {
+		rebindNonce = p.EmitterNonce
+	}
+	if err := p.InvalidateTelemetry(); err != nil {
+		return err
+	}
+	p.EmitterRebindNonce = rebindNonce
+	p.EmitterRebindSequence = rebindSequence
 	return nil
 }
 

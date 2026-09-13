@@ -183,6 +183,25 @@ func TestRecordSequencedClaudePaneFencesLegacyEmitter(t *testing.T) {
 	}
 }
 
+func TestLocationRebindTelemetryKeepsOriginalEmitterAdmission(t *testing.T) {
+	pane := Pane{
+		EmitterNonce: strings.Repeat("a", 32), ReportedState: "idle",
+		ReportedStateSeq: 7, StateRefinement: true,
+	}
+	if err := pane.InvalidateTelemetryForLocationRebind(8); err != nil {
+		t.Fatal(err)
+	}
+	firstRotated := pane.EmitterNonce
+	if err := pane.InvalidateTelemetryForLocationRebind(9); err != nil {
+		t.Fatal(err)
+	}
+	if pane.EmitterRebindNonce != strings.Repeat("a", 32) || pane.EmitterNonce == firstRotated ||
+		pane.EmitterRebindSequence != 9 || pane.ReportedState != "" ||
+		pane.ReportedStateSeq != 0 || pane.StateRefinement {
+		t.Fatalf("repeated location telemetry rebind = %+v", pane)
+	}
+}
+
 func TestLoadLegacyRowWithoutBaseBranchDefaultsToEmpty(t *testing.T) {
 	root := t.TempDir()
 	legacy := `{

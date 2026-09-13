@@ -1,21 +1,24 @@
 // Package sessionbinding persists the current Herdr location and agent session
 // reported for a state row.
 //
-// This is the rebinding path for every agent. The telemetry emitter rebinds
-// too, but only providers that emit reach it (validTelemetryAgent), so a
-// direct Codex pane would otherwise keep stale location and conversation
-// references and stay out of resume, which matches on the recorded values.
+// This is the rebinding path for every agent. The telemetry emitter only
+// fences moved candidates, so a direct Codex pane would otherwise keep stale
+// location and conversation references and stay out of resume, which matches
+// on the recorded values.
 package sessionbinding
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/sessionview"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
@@ -143,7 +146,7 @@ func bindingOwnerRoots(projectRoot string, panes []state.Pane) []string {
 
 func paneBindingsChanged(panes []state.Pane, live []backend.LivePane) bool {
 	for index, pane := range panes {
-		_, locationChanged, _ := panelaunch.ReconcileManagedPaneLocationFromLive(pane, live)
+		locationChanged := panelaunch.ManagedPaneLocationChangedFromLive(pane, live)
 		_, sessionChanged := currentSessionBinding(panes, index, live)
 		if locationChanged || sessionChanged {
 			return true
@@ -169,9 +172,16 @@ func bindOwnedAgentSessions(projectRoot string, live []backend.LivePane) (err er
 		return err
 	}
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
+	ctx, cancel := context.WithTimeout(
+		context.Background(), time.Duration(telemetry.EmitterTimeoutSeconds)*time.Second,
+	)
+	defer cancel()
+	sequenceFence := func() (uint64, error) { return locked.FenceTelemetrySequence(ctx) }
 	changed := false
 	for i := range locked.Panes {
-		pane, locationChanged, locationErr := panelaunch.ReconcileManagedPaneLocationFromLive(locked.Panes[i], live)
+		pane, locationChanged, locationErr := panelaunch.ReconcileManagedPaneLocationFromLive(
+			locked.Panes[i], live, sequenceFence,
+		)
 		if locationErr == nil && locationChanged {
 			locked.Panes[i] = pane
 			changed = true

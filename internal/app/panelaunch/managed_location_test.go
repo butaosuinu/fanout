@@ -18,7 +18,9 @@ func TestReconcileManagedPaneLocationAdoptsUniqueMovedWorkspace(t *testing.T) {
 	want.WorkspaceID, want.PaneID, want.TerminalID = moved.WorkspaceID, moved.Pane.Pane, moved.TerminalID
 	want.ReportedState, want.ReportedStateSeq, want.StateRefinement = "", 0, false
 
-	got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{moved})
+	got, changed, err := ReconcileManagedPaneLocation(
+		pane, []backend.WorkspaceObservation{moved}, managedLocationSequenceFence,
+	)
 	if err != nil || !changed {
 		t.Fatalf("ReconcileManagedPaneLocation() changed=%t err=%v", changed, err)
 	}
@@ -26,6 +28,8 @@ func TestReconcileManagedPaneLocationAdoptsUniqueMovedWorkspace(t *testing.T) {
 		t.Fatalf("emitter nonce = %q, want a fresh valid nonce", got.EmitterNonce)
 	}
 	want.EmitterNonce = got.EmitterNonce
+	want.EmitterRebindNonce = pane.EmitterNonce
+	want.EmitterRebindSequence = 8
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("reconciled pane = %#v, want location and telemetry fence %#v", got, want)
 	}
@@ -38,7 +42,9 @@ func TestReconcileManagedPaneLocationAdmitsLateSameProviderSession(t *testing.T)
 	late.Value = "session-late"
 	moved.LivePanes[0].AgentSession = &late
 
-	got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{moved})
+	got, changed, err := ReconcileManagedPaneLocation(
+		pane, []backend.WorkspaceObservation{moved}, managedLocationSequenceFence,
+	)
 	if err != nil || !changed || got.WorkspaceID != moved.WorkspaceID {
 		t.Fatalf("late session reconciliation = %#v changed=%t err=%v", got, changed, err)
 	}
@@ -57,7 +63,9 @@ func TestReconcileManagedPaneLocationRequiresCompleteSavedAgentIdentity(t *testi
 			test.change(&pane)
 			moved := managedLocationWorkspace(pane, "workspace-next", "pane-next", "terminal-next")
 
-			got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{moved})
+			got, changed, err := ReconcileManagedPaneLocation(
+				pane, []backend.WorkspaceObservation{moved}, managedLocationSequenceFence,
+			)
 			if changed || !reflect.DeepEqual(got, pane) {
 				t.Fatalf("incomplete identity changed pane: changed=%t pane=%#v", changed, got)
 			}
@@ -100,7 +108,7 @@ func TestReconcileManagedPaneLocationRefusesUnsafeMatches(t *testing.T) {
 		{name: "session missing", workspaces: []backend.WorkspaceObservation{missingSession}, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, changed, err := ReconcileManagedPaneLocation(pane, test.workspaces)
+			got, changed, err := ReconcileManagedPaneLocation(pane, test.workspaces, managedLocationSequenceFence)
 			if changed || !reflect.DeepEqual(got, pane) {
 				t.Fatalf("unsafe match changed pane: changed=%t pane=%#v", changed, got)
 			}
@@ -121,7 +129,9 @@ func TestReconcileManagedPaneLocationProjectsUniquePaneAtCheckout(t *testing.T) 
 		CWD:        "/repo/other",
 	})
 
-	got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{moved})
+	got, changed, err := ReconcileManagedPaneLocation(
+		pane, []backend.WorkspaceObservation{moved}, managedLocationSequenceFence,
+	)
 	if err != nil || !changed || got.PaneID != "pane-next" || got.TerminalID != "terminal-next" {
 		t.Fatalf("projected location = %#v changed=%t err=%v", got, changed, err)
 	}
@@ -140,7 +150,9 @@ func TestReconcileManagedPaneLocationSelectsAgentAmongPanesAtSameCheckout(t *tes
 	})
 	moved.Pane, moved.TerminalID, moved.CWD = backend.PaneRef{}, "", ""
 
-	got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{moved})
+	got, changed, err := ReconcileManagedPaneLocation(
+		pane, []backend.WorkspaceObservation{moved}, managedLocationSequenceFence,
+	)
 	if err != nil || !changed || got.PaneID != "pane-next" || got.TerminalID != "terminal-next" {
 		t.Fatalf("same-checkout pane selection = %#v changed=%t err=%v", got, changed, err)
 	}
@@ -158,7 +170,9 @@ func TestReconcileManagedPaneLocationRejectsDuplicateAgentEvidenceInOneWorkspace
 	})
 	moved.Pane, moved.TerminalID, moved.CWD = backend.PaneRef{}, "", ""
 
-	got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{moved})
+	got, changed, err := ReconcileManagedPaneLocation(
+		pane, []backend.WorkspaceObservation{moved}, managedLocationSequenceFence,
+	)
 	if changed || !reflect.DeepEqual(got, pane) || !errors.Is(err, backend.ErrOwnedIdentityMismatch) {
 		t.Fatalf("duplicate agent evidence changed pane: changed=%t pane=%#v err=%v", changed, got, err)
 	}
@@ -176,7 +190,9 @@ func TestReconcileManagedPaneLocationLeavesSameWorkspaceDriftStale(t *testing.T)
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			restarted := managedLocationWorkspace(pane, pane.WorkspaceID, test.paneID, test.terminalID)
-			got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{restarted})
+			got, changed, err := ReconcileManagedPaneLocation(
+				pane, []backend.WorkspaceObservation{restarted}, managedLocationSequenceFence,
+			)
 			if err != nil || changed || !reflect.DeepEqual(got, pane) {
 				t.Fatalf("same-workspace drift changed: changed=%t pane=%#v err=%v", changed, got, err)
 			}
@@ -189,7 +205,9 @@ func TestReconcileManagedPaneLocationLeavesAtomicRuntimeRowsUnchanged(t *testing
 	pane.Backend = backend.Tmux
 	moved := managedLocationWorkspace(pane, "workspace-next", "pane-next", "terminal-next")
 
-	got, changed, err := ReconcileManagedPaneLocation(pane, []backend.WorkspaceObservation{moved})
+	got, changed, err := ReconcileManagedPaneLocation(
+		pane, []backend.WorkspaceObservation{moved}, managedLocationSequenceFence,
+	)
 	if err != nil || changed || !reflect.DeepEqual(got, pane) {
 		t.Fatalf("atomic row changed: changed=%t pane=%#v err=%v", changed, got, err)
 	}
@@ -208,6 +226,10 @@ func managedLocationPane() state.Pane {
 		EmitterRowKey: "row-key", LaunchNonce: "launch-nonce", BranchName: "fanout/child",
 		EmitterNonce: strings.Repeat("e", 32), ReportedState: "idle", ReportedStateSeq: 7, StateRefinement: true,
 	}
+}
+
+func managedLocationSequenceFence() (uint64, error) {
+	return 8, nil
 }
 
 func managedLocationWorkspace(

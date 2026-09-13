@@ -219,6 +219,8 @@ func TestReloadPaneReconcilesMovedManagedLocation(t *testing.T) {
 		t.Fatalf("persisted emitter nonce = %q, want a fresh valid nonce", saved.EmitterNonce)
 	}
 	want.EmitterNonce = saved.EmitterNonce
+	want.EmitterRebindNonce = row.EmitterNonce
+	want.EmitterRebindSequence = row.ReportedStateSeq
 	if !reflect.DeepEqual(saved, want) {
 		t.Fatalf("persisted row changed outside location and telemetry fence: got %#v want %#v", saved, want)
 	}

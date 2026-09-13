@@ -50,6 +50,8 @@
       "emitterRowKey": "524/531",
       "launchNonce": "0123456789abcdef0123456789abcdef",
       "emitterNonce": "fedcba9876543210fedcba9876543210",
+      "emitterRebindNonce": "abcdef0123456789abcdef0123456789",
+      "emitterRebindSequence": 7,
       "herdrLaunchExecutable": "/usr/local/bin/codex",
       "herdrLaunchArgs": [
         "--cd",
