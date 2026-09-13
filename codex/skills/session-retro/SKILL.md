@@ -35,9 +35,26 @@ fanout run のレビュー往復数や time-to-merge は、#369 `fanout retro` C
 codex_home="${CODEX_HOME:-$HOME/.codex}"
 tmpdir=$(mktemp -d)
 lockdir=
+lock_identity=
+path_identity() {
+  case $(uname -s) in
+    Darwin|FreeBSD) stat -f '%d:%i:%u' "$1" ;;
+    *) stat -c '%d:%i:%u' "$1" ;;
+  esac
+}
 cleanup() {
-  if [ -n "$lockdir" ] && ! rmdir "$lockdir"; then
-    echo "警告: session-retro lock を解放できなかった: $lockdir" >&2
+  if [ -n "$lockdir" ]; then
+    current_lock_identity=
+    if [ ! -L "$lockdir" ] && [ -d "$lockdir" ]; then
+      current_lock_identity=$(path_identity "$lockdir") || current_lock_identity=
+    fi
+    if [ -n "$lock_identity" ] && [ "$current_lock_identity" = "$lock_identity" ]; then
+      if ! rmdir "$lockdir"; then
+        echo "警告: session-retro lock を解放できなかった: $lockdir" >&2
+      fi
+    else
+      echo "警告: identity が変化した session-retro lock は解放しない: $lockdir" >&2
+    fi
   fi
   rm -rf "$tmpdir"
 }
@@ -87,6 +104,8 @@ RAW_UNTIL=$(jq -nr --arg value "$COLLECTION_SECOND" \
   `session_meta.payload.id` だけに一意一致させる。空の場合だけ、旧形式向け fallback として
   空でない `CODEX_SESSION_ID` を同じ `payload.id` に一意一致させる。現行 schema の
   `payload.session_id` は root lineage 全体で共有されるため、self identity には使わない。
+  両方とも空なら現在の thread を安全に除外できないため、cursor を進めず snapshot も
+  書かずに止める。
   一意な self ID を `parent_thread_id` → `payload.id` の関係で推移的にたどり、self と
   その全子孫を除外する。空値を wildcard として扱わない。選択した non-empty ID が候補の
   `payload.id` から一意に解決できなければ、cursor を進めず止める。
@@ -96,8 +115,7 @@ RAW_UNTIL=$(jq -nr --arg value "$COLLECTION_SECOND" \
   小数部から引き、0 なら直前の epoch second の `.999999999Z` にする。これにより、
   今回除外した session は次回の `(SINCE, UNTIL]` に全体が残る。除外 rollout の先頭
   timestamp が不正、または `UNTIL <= SINCE` なら snapshot を書かず、fresh Codex
-  thread から再実行するよう報告して止める。self ID が無い場合は `UNTIL=RAW_UNTIL`。
-  この `UNTIL` を Step 2〜4 の開始前に固定する。
+  thread から再実行するよう報告して止める。この `UNTIL` を Step 2〜4 の開始前に固定する。
 - 読めないファイル、壊れた先頭行、未知の必須フィールドが 1 件でもあれば警告し、
   `tool_errors.truncated=true` にする。rollout root が両方とも無い場合も 0 件と
   断定しない。
@@ -133,11 +151,14 @@ snapshot directory を作る前後に、保存先の境界を検証する。
   snapshot directory の device と inode を記録する。
 - snapshot directory 内に repo 単位の `.codex-session-retro.lock` directory を
   atomic に作る。`lockdir` には `mkdir` が成功した後だけその path を代入する。
+  作成直後の検証に通った lock directory は `path_identity` で device、inode、owner を
+  `lock_identity` に記録する。取得できなければ書き込まず止め、lock は自動削除しない。
   すでに存在する場合は待機、削除、上書きせず、別実行が進行中または
   stale lock の可能性を報告して止める。lock は前回 snapshot を選ぶ前に取得し、
   新 snapshot の rename 完了まで保持する。終了時は自分が作った空の lock directory
-  だけを `rmdir` し、`tmpdir` とともに EXIT trap で片付ける。lock directory の
-  device と inode も取得時に記録する。
+  だけを `rmdir` し、`tmpdir` とともに EXIT trap で片付ける。`rmdir` の直前にも symlink
+  ではない directory であることと `path_identity` を再検証し、取得時の値と異なる、または
+  再検証できない path は別プロセスの lock とみなして削除しない。
 - `codex-session-*.json` に symlink、現在の uid が所有しない file、regular file 以外が
   1 件でもあれば止める。前回 snapshot と同日再実行の置換先は、regular non-symlink
   file のみ受け入れる。
@@ -239,6 +260,16 @@ event で説明できず、request 自体にも明示的な failed / incomplete 
 は確定 failure と断定せず、候補 1 件として保持して `tool_errors.truncated=true` にする。
 表示する場合も「未確定の response evidence」と明記する。decoded content の key だけを
 根拠に complete な `tool_errors.total` を作らない。
+
+現行の `custom_tool_call` で request の `name == "exec"`（namespaced schema では
+`"functions.exec"`）となる wrapper は、内側の tool result から stdout だけを
+`text(...)` へ転記できる。この場合、外側の request が `completed` でも内側の non-zero を
+否定できない。rollout 全体の対応付け後、request と output は揃っているが、その区間に
+`item_completed` がなく、request status に failure がなく、decoded output にも明示的な
+failure marker がない call は、output 行の timestamp が `(SINCE, UNTIL]` に入るとき
+「判定不能な exec result」として保持する。確定 failure の total には加えないが
+`tool_errors.truncated=true` にし、plain text output や外側の `completed` を成功証拠に
+しない。output が欠ける場合は既存の欠落ルールを使う。
 
 対応する `custom_tool_call` / `function_call` の明示的な `status == "failed"` または
 `"incomplete"` は、decoded output とは別の trusted fallback にする。同じ call の output
