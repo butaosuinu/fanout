@@ -94,7 +94,9 @@ func managedPaneLocationMatch(
 ) (backend.WorkspaceObservation, bool, error) {
 	matches := workspacesWithLabel(workspaces, pane.WorkspaceLabel)
 	if len(matches) == 0 {
-		return backend.WorkspaceObservation{}, false, nil
+		return backend.WorkspaceObservation{}, false, fmt.Errorf(
+			"%w: managed pane label has no live match", errManagedPaneLocationUncertain,
+		)
 	}
 	if len(matches) != 1 {
 		return backend.WorkspaceObservation{}, false, fmt.Errorf(
