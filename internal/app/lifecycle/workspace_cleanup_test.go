@@ -1491,6 +1491,7 @@ func TestUnmovedHerdrCleanupAdmitsRecordedAgentEvidence(t *testing.T) {
 	}{
 		{name: "current cleanup identity"},
 		{name: "partially persisted cleanup identity", prepare: func(t *testing.T, fixture *herdrLifecycleFixture) string {
+			t.Helper()
 			runtimeDir := filepath.Join(fixture.projectRoot, "herdr-runtime")
 			if err := os.MkdirAll(filepath.Join(runtimeDir, "workload-env"), 0o700); err != nil {
 				t.Fatal(err)
@@ -2038,11 +2039,13 @@ func TestPersistManagedPaneLocationPreservesOtherFields(t *testing.T) {
 	locked.Panes[index].DisplayName = "concurrent display name"
 	want := locked.Panes[index]
 	copyManagedPaneLocationFields(&want, current)
-	if err := persistManagedPaneLocation(locked, fixture.pane, current); err != nil {
+	err = persistManagedPaneLocation(locked, fixture.pane, current)
+	if err != nil {
 		_ = locked.Unlock()
 		t.Fatal(err)
 	}
-	if err := locked.Unlock(); err != nil {
+	err = locked.Unlock()
+	if err != nil {
 		t.Fatal(err)
 	}
 	store, err := state.LoadProject(fixture.projectRoot)
