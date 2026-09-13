@@ -198,9 +198,7 @@ func bindOwnedAgentSessions(projectRoot string, live []backend.LivePane) (err er
 		return err
 	}
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
-	ctx, cancel := context.WithTimeout(
-		context.Background(), time.Duration(telemetry.EmitterTimeoutSeconds)*time.Second,
-	)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(telemetry.EmitterTimeoutSeconds)*time.Second)
 	defer cancel()
 	sequenceFence := func() (uint64, error) { return locked.FenceTelemetrySequence(ctx) }
 	changed := false
@@ -208,6 +206,9 @@ func bindOwnedAgentSessions(projectRoot string, live []backend.LivePane) (err er
 		pane, locationChanged, locationErr := panelaunch.ReconcileManagedPaneLocationFromLive(
 			locked.Panes[i], live, sequenceFence,
 		)
+		if locationErr != nil && !panelaunch.IsManagedPaneLocationMismatch(locationErr) {
+			return locationErr
+		}
 		if locationErr == nil && locationChanged {
 			locked.Panes[i] = pane
 			changed = true

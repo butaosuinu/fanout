@@ -226,6 +226,40 @@ func TestReloadPaneReconcilesMovedManagedLocation(t *testing.T) {
 	}
 }
 
+func TestReloadPanePropagatesLocationFenceFailure(t *testing.T) {
+	root := t.TempDir()
+	row := testHerdrPane(root)
+	session := backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-first",
+	}
+	row.AgentSession = &session
+	recordTestPane(t, root, row)
+	live := testLiveHerdrPane(row, session)
+	live.Ref.Workspace, live.Ref.Pane = "workspace-next", "workspace-next:p1"
+	live.TerminalID = "terminal-next"
+	if err := os.WriteFile(state.Path(root)+".sequence", []byte("invalid\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReloadPane(root, row, func() ([]backend.LivePane, error) {
+		return []backend.LivePane{live}, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "sequence is invalid") {
+		t.Fatalf("ReloadPane error = %v, want invalid sequence error", err)
+	}
+	if !reflect.DeepEqual(got, state.Pane{}) {
+		t.Fatalf("ReloadPane pane = %+v, want zero pane after fence failure", got)
+	}
+	persisted, loadErr := state.LoadProject(root)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	saved, found := persisted.Find(row.Parent, row.IssueNum)
+	if !found || !reflect.DeepEqual(saved, row) {
+		t.Fatalf("persisted row = %+v, want unchanged %+v", saved, row)
+	}
+}
+
 func TestReloadPaneFindsManagedLocationHealedAfterDisplay(t *testing.T) {
 	root := t.TempDir()
 	row := testHerdrPane(root)

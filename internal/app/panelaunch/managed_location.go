@@ -33,6 +33,12 @@ func ManagedPaneLocationChangedFromLive(pane state.Pane, live []backend.LivePane
 	return changed, err
 }
 
+// IsManagedPaneLocationMismatch reports whether err is an expected matcher rejection.
+func IsManagedPaneLocationMismatch(err error) bool {
+	return errors.Is(err, backend.ErrOwnedIdentityMismatch) ||
+		errors.Is(err, errManagedPaneLocationUncertain)
+}
+
 // ReconcileManagedPaneLocation updates only the runtime location of an agent
 // row when one live workspace keeps its ownership label and exact checkout
 // provenance. Missing workspaces are left recorded; ambiguity fails closed.
