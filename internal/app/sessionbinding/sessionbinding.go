@@ -121,7 +121,7 @@ func reloadPaneIdentityMatches(candidate, expected state.Pane) bool {
 		reloadPaneTaskOrIssueMatches(candidate, expected) &&
 		candidate.WorkspaceLabel == expected.WorkspaceLabel &&
 		filepath.Clean(candidate.WorktreePath) == filepath.Clean(expected.WorktreePath) &&
-		candidate.Backend == expected.Backend && candidate.PaneID == expected.PaneID &&
+		candidate.Backend == expected.Backend &&
 		reloadPaneSourceMatches(candidate.SourceProjectRoot, expected.SourceProjectRoot)
 }
 

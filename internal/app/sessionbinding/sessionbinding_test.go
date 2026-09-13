@@ -226,6 +226,27 @@ func TestReloadPaneReconcilesMovedManagedLocation(t *testing.T) {
 	}
 }
 
+func TestReloadPaneFindsManagedLocationHealedAfterDisplay(t *testing.T) {
+	root := t.TempDir()
+	row := testHerdrPane(root)
+	session := backend.AgentSessionRef{
+		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-first",
+	}
+	row.AgentSession, row.EmitterRowKey = &session, ""
+	recordTestPane(t, root, row)
+	live := testLiveHerdrPane(row, session)
+	live.Ref.Workspace, live.Ref.Pane = "workspace-next", "workspace-next:p1"
+	live.TerminalID = "terminal-next"
+
+	got, err := ReloadPane(root, row, func() ([]backend.LivePane, error) {
+		return []backend.LivePane{live}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertManagedLocation(t, got, live)
+}
+
 func TestReloadPaneFindsNonFirstManualRowByProvenance(t *testing.T) {
 	repo, sibling := newSessionBindingWorktrees(t)
 	home, remote := reloadCollisionPanes(repo, sibling)
