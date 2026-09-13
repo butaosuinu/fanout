@@ -1,12 +1,15 @@
 package panelaunch
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
+
+var errManagedPaneLocationUncertain = errors.New("managed pane location is temporarily uncertain")
 
 type TelemetrySequenceFence func() (uint64, error)
 
@@ -22,9 +25,12 @@ func ReconcileManagedPaneLocationFromLive(
 
 // ManagedPaneLocationChangedFromLive reports whether the same evidence would
 // move pane without allocating a telemetry generation fence.
-func ManagedPaneLocationChangedFromLive(pane state.Pane, live []backend.LivePane) bool {
-	_, changed, _ := managedPaneLocationCandidate(pane, locationWorkspaces(pane, live))
-	return changed
+func ManagedPaneLocationChangedFromLive(pane state.Pane, live []backend.LivePane) (bool, error) {
+	_, changed, err := managedPaneLocationCandidate(pane, locationWorkspaces(pane, live))
+	if err != nil && !errors.Is(err, errManagedPaneLocationUncertain) {
+		return false, nil
+	}
+	return changed, err
 }
 
 // ReconcileManagedPaneLocation updates only the runtime location of an agent
@@ -92,18 +98,41 @@ func managedPaneLocationMatch(
 	}
 	if len(matches) != 1 {
 		return backend.WorkspaceObservation{}, false, fmt.Errorf(
-			"%w: managed pane label has %d live matches", backend.ErrOwnedIdentityMismatch, len(matches),
+			"%w: %w: managed pane label has %d live matches",
+			backend.ErrOwnedIdentityMismatch, errManagedPaneLocationUncertain, len(matches),
 		)
 	}
 	match := matches[0]
-	live, ok := uniqueManagedPaneLocationAgent(match, pane)
-	if !workspaceHasExactLocationProvenance(match, resource) || !ok {
+	if !workspaceHasExactLocationProvenance(match, resource) {
 		return backend.WorkspaceObservation{}, false, fmt.Errorf(
 			"%w: managed pane label does not match checkout provenance or agent evidence", backend.ErrOwnedIdentityMismatch,
 		)
 	}
+	live, err := managedPaneLocationAgentMatch(match, pane)
+	if err != nil {
+		return backend.WorkspaceObservation{}, false, err
+	}
 	match.Pane, match.TerminalID = live.Ref, live.TerminalID
 	return match, true, nil
+}
+
+func managedPaneLocationAgentMatch(
+	observation backend.WorkspaceObservation,
+	pane state.Pane,
+) (backend.LivePane, error) {
+	live, matches := uniqueManagedPaneLocationAgent(observation, pane)
+	if matches == 1 {
+		return live, nil
+	}
+	if matches > 1 || managedPaneLocationAgentEvidenceMissing(observation.LivePanes) {
+		return backend.LivePane{}, fmt.Errorf(
+			"%w: %w: managed pane agent evidence is missing or ambiguous",
+			backend.ErrOwnedIdentityMismatch, errManagedPaneLocationUncertain,
+		)
+	}
+	return backend.LivePane{}, fmt.Errorf(
+		"%w: managed pane label does not match checkout provenance or agent evidence", backend.ErrOwnedIdentityMismatch,
+	)
 }
 
 func managedPaneLocationEligible(pane state.Pane) bool {
@@ -140,7 +169,7 @@ func workspaceHasExactLocationProvenance(
 func uniqueManagedPaneLocationAgent(
 	observation backend.WorkspaceObservation,
 	pane state.Pane,
-) (backend.LivePane, bool) {
+) (backend.LivePane, int) {
 	runtime := backend.RequireRuntime(backend.NormalizeName(pane.Backend))
 	var matched backend.LivePane
 	count := 0
@@ -155,7 +184,20 @@ func uniqueManagedPaneLocationAgent(
 			count++
 		}
 	}
-	return matched, count == 1
+	return matched, count
+}
+
+func managedPaneLocationAgentEvidenceMissing(live []backend.LivePane) bool {
+	if len(live) == 0 {
+		return true
+	}
+	for _, current := range live {
+		if !current.AgentPresent || strings.TrimSpace(current.AgentProvider) == "" ||
+			current.AgentSession == nil || current.AgentNamed && strings.TrimSpace(current.AgentID) == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func locationWorkspaces(pane state.Pane, live []backend.LivePane) []backend.WorkspaceObservation {

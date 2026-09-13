@@ -678,6 +678,65 @@ func TestEmitFinalRowFencesMovedLocationUntilSessionBindingHeals(t *testing.T) {
 	}
 }
 
+func TestEmitFinalRowPreservesEmitterAcrossAmbiguousLocationUntilHeal(t *testing.T) {
+	repo := newEmitterRepo(t)
+	pane, signal, _ := finalEmitterFixture(t, repo)
+	session := backend.AgentSessionRef{
+		Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "session-current",
+	}
+	pane.RepoRoot, pane.AgentSession = filepath.Dir(pane.RepoKey), &session
+	if sequence, err := state.NextTelemetrySequence(context.Background(), state.Path(repo)); err != nil || sequence != 1 {
+		t.Fatalf("initial telemetry sequence = %d, err=%v", sequence, err)
+	}
+	originalNonce := pane.EmitterNonce
+	movedObserver := exactObserver(pane)
+	moved := &movedObserver.observation.Panes[0]
+	moved.Ref.Workspace, moved.Ref.Pane = "workspace-2", "workspace-2:pane-1"
+	moved.TerminalID = "terminal-2"
+	uncertain := *moved
+	uncertain.AgentPresent, uncertain.AgentNamed = false, false
+	uncertain.AgentProvider, uncertain.AgentID, uncertain.AgentSession = "", "", nil
+	duplicate := uncertain
+	duplicate.Ref.Workspace, duplicate.Ref.Pane = "workspace-3", "workspace-3:pane-1"
+	duplicate.TerminalID = "terminal-3"
+	observer := &fakeObserver{observation: Observation{
+		Panes: []backend.LivePane{uncertain, duplicate}, ProcessError: errors.New("old pane is absent"),
+	}}
+	saveEmitterPanes(t, repo, pane)
+
+	if err := Emit(context.Background(), signal, observer); err != nil {
+		t.Fatal(err)
+	}
+	fenced := loadEmitterPane(t, repo)
+	if fenced.WorkspaceID != pane.WorkspaceID || fenced.PaneID != pane.PaneID ||
+		fenced.TerminalID != pane.TerminalID || fenced.EmitterRebindNonce != originalNonce ||
+		fenced.EmitterRebindSequence != 2 || fenced.ReportedState != "" || fenced.StateRefinement {
+		t.Fatalf("ambiguous location fence = %+v", fenced)
+	}
+
+	healed, err := sessionbinding.ReloadPane(repo, fenced, func() ([]backend.LivePane, error) {
+		return movedObserver.observation.Panes, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if healed.WorkspaceID != moved.Ref.Workspace || healed.PaneID != moved.Ref.Pane ||
+		healed.TerminalID != moved.TerminalID || healed.EmitterRebindNonce != originalNonce ||
+		healed.EmitterRebindSequence != 3 {
+		t.Fatalf("healed ambiguous location = %+v", healed)
+	}
+
+	signal.Sequence = 4
+	if err := Emit(context.Background(), signal, exactObserver(healed)); err != nil {
+		t.Fatal(err)
+	}
+	got := loadEmitterPane(t, repo)
+	if got.ReportedState != "working" || got.ReportedStateSeq != 4 || !got.StateRefinement ||
+		got.EmitterRebindNonce != originalNonce {
+		t.Fatalf("post-heal telemetry = %+v", got)
+	}
+}
+
 func TestEmitFinalRowRejectsLocationRebindSequenceReplay(t *testing.T) {
 	repo := newEmitterRepo(t)
 	pane, signal, _ := finalEmitterFixture(t, repo)

@@ -146,9 +146,9 @@ func bindingOwnerRoots(projectRoot string, panes []state.Pane) []string {
 
 func paneBindingsChanged(panes []state.Pane, live []backend.LivePane) bool {
 	for index, pane := range panes {
-		locationChanged := panelaunch.ManagedPaneLocationChangedFromLive(pane, live)
+		locationChanged, locationErr := panelaunch.ManagedPaneLocationChangedFromLive(pane, live)
 		_, sessionChanged := currentSessionBinding(panes, index, live)
-		if locationChanged || sessionChanged {
+		if (locationErr == nil && locationChanged) || sessionChanged {
 			return true
 		}
 	}

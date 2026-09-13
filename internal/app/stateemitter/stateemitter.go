@@ -255,7 +255,8 @@ func fenceOrInvalidateFinalRow(
 	index int,
 	live []backend.LivePane,
 ) error {
-	if !panelaunch.ManagedPaneLocationChangedFromLive(locked.Panes[index], live) {
+	locationChanged, locationErr := panelaunch.ManagedPaneLocationChangedFromLive(locked.Panes[index], live)
+	if locationErr == nil && !locationChanged {
 		return invalidateFinalRowTelemetry(locked, index)
 	}
 	sequence, err := locked.FenceTelemetrySequence(ctx)
