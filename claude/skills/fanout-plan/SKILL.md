@@ -1,6 +1,7 @@
 ---
 name: fanout-plan
 description: "Generate and run fanout plan specs from implementation plans. Use when the user invokes `/fanout plan`, asks to fan out a local plan instead of GitHub child issues, or wants an approved plan decomposed into issue-less fanout tasks for `fanout plan`."
+argument-hint: "[plan-path | plan-slug] [--go] [--dry-run] [extra fanout plan flags]"
 ---
 
 # fanout-plan
@@ -173,45 +174,20 @@ status or cleanup, not during initial plan generation:
 
 ## Sibling coordination (--team / fanout msg)
 
-`fanout plan --team` opts the plan run into sibling-pane peer messaging, the
-same SQLite message bus the issue/project lanes use — it just addresses peers
-by **task id** instead of issue number, because plan tasks have no GitHub
-issue. It adds a "Coordinating with your sibling panes" section to each task's
-briefing and seeds the created task panes into a per-parent peer registry
-(best-effort; a registry failure never fails the fan-out). `--team` is
-incompatible with the read/lifecycle modes (`--status` / `--close` / `--merge`
-/ `--cleanup`).
+`fanout plan --team` opts the plan run into the same sibling-pane messaging the
+issue/project lanes use, except that peers are addressed by task id
+(`fanout msg send --to <task-id>`) because plan tasks have no GitHub issue. It
+adds a coordination section to each task's briefing and seeds the task panes
+into a per-parent peer registry (best effort). `--team` is incompatible with the
+read/lifecycle modes (`--status` / `--close` / `--merge` / `--cleanup`).
 
 Suggest it when tasks touch shared files (configs, schemas, lockfiles) or have
 ordering nuances beyond what `blocked_by` already encodes; skip it for fully
-independent tasks. From inside a task pane, `fanout msg` auto-detects which
-task you are (from the tmux pane and `.fanout/state.json`) and which plan you
-belong to. Peers are addressed by task id:
-
-- `fanout msg peers` — live sibling roster (task ids).
-- `fanout msg inbox [--all] [--mark-read]` — unread 1:1 + board messages addressed to you (`--all` includes read ones).
-- `fanout msg board` — the shared broadcast board.
-- `fanout msg watch [--interval S]` — block and emit new messages one per line
-  as they arrive; emitted messages are marked read on delivery (mark-on-emit).
-- `fanout msg send --to <task-id> "<body>"` — 1:1 message to a sibling task.
-- `fanout msg post "<body>"` — post to the shared board.
-- `fanout msg nudge <task-id>` — best-effort inbox hint into a sibling task's
-  pane, only when its agent state can take queued input (never a blocked
-  pane); undeliverable nudges warn and exit `0`.
-
-Delivery is pull plus per-agent push lanes: messages persist and a sibling
-reads them at its own checkpoints; claude `--team` briefings additionally
-instruct the pane to start `fanout msg watch` under the Monitor tool (new
-messages then stream in, marked read on emit), and fresh non-Plan codex task
-panes receive unread messages through an app-server bridge as quoted turns.
-When the plan includes Codex team tasks, the registry preseed and each
-bridge's in-pane DB setup are fail-fast — a failure there (a bad
-`FANOUT_DB_PATH`, wrong DB ownership or permissions) stops the run before
-pane creation or fails that launch instead of falling back to pull.
-`nudge` is the only push that writes to pane input. The DB is a plaintext
-SQLite file under `/tmp` (`0600`, owner-only) — never put secrets in messages.
-This is distinct from Claude Code Agent Teams (a Claude-only, single-session
-feature).
+independent tasks. When the plan includes Codex team tasks, the registry
+preseed and each bridge's in-pane DB setup are fail-fast: a bad `FANOUT_DB_PATH`
+or wrong DB ownership stops the run before pane creation or fails that launch
+instead of falling back to pull. Verbs, delivery model, and security live in
+`~/.claude/skills/fanout/references/sibling-messaging.md`.
 
 ## Run
 

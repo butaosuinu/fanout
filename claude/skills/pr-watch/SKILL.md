@@ -1,6 +1,7 @@
 ---
 name: pr-watch
-description: "Use from Claude Code after PR creation or for an existing PR as a /loop /pr-watch workflow. Autonomously fix merge conflicts, failing CI, and actionable review comments, then use ScheduleWakeup to keep watching until the PR is mergeable, green, and GitHub review requirements are satisfied. A configured :+1: can be a soft approval signal only when GitHub review is not required. During approval/reaction waits, avoid repeatedly reading full review threads, comments, diffs, or CI logs; use compact status polling between loop passes and re-enter full repair only on actionable state changes. Use when the user says PR を見張って, コンフリクト直して, CI 直して, レビュー対応して, PR がマージできる状態まで, babysit this PR, autofix this PR, /pr-watch, /loop /pr-watch, or after PR creation says あとよろしく."
+description: "Watch an existing pull request from Claude Code and repair what blocks it: merge conflicts, failing CI, and actionable review comments, then keep watching with ScheduleWakeup until it is mergeable, green, and GitHub review requirements are satisfied. Use after PR creation, as a /loop /pr-watch workflow, or when the user says PR を見張って, コンフリクト直して, CI 直して, レビュー対応して, PR がマージできる状態まで, babysit this PR, autofix this PR, /pr-watch, or あとよろしく."
+argument-hint: "[pr-number | pr-url]"
 metadata:
   short-description: Watch and repair an existing PR
 ---
@@ -8,25 +9,17 @@ metadata:
 # pr-watch
 
 PR 作成後に起きるマージコンフリクト、CI 失敗、レビューコメントを検知し、
-安全に自動対応する Claude Code 用 workflow。
+安全に自動対応する Claude Code 用 workflow。`/loop /pr-watch` と
+`ScheduleWakeup` を前提にする。
 
-Claude 版の `pr-watch` は `/loop /pr-watch` と `ScheduleWakeup` を前提にする。
-PR 作成後または「あとはよろしく」では、修正可能な CI 失敗・レビューコメント・
-コンフリクトに対応し、PR が green / mergeable になった後、レビュー必須なら
-`reviewDecision=APPROVED` まで待つ。レビュー不要ならそこで完了する。設定済み
-`:+1:` は soft approval signal として報告できるが、必須 GitHub review の代替にはしない。
-
-ただし、approval / reaction 待ちでは full One Pass を繰り返さず、compact status
-polling と `ScheduleWakeup` で self-paced に待つ。Claude の loop を止めたら監視は
-続かない。
+修正可能な CI 失敗・レビューコメント・コンフリクトに対応し、PR が green /
+mergeable になった後、レビュー必須なら `reviewDecision=APPROVED` まで待つ。
+レビュー不要ならそこで完了する。設定済み `:+1:` は soft approval signal として
+報告できるが、必須 GitHub review の代替にはしない。approval / reaction 待ちでは
+full One Pass を繰り返さず、compact status polling と `ScheduleWakeup` で
+self-paced に待つ。
 
 ## Operating Model
-
-Default mode is `/loop /pr-watch` when the user wants continuous watching.
-
-After PR creation, or when the user says "あとよろしく", this skill watches the
-PR through Claude Code's loop, repairs tractable failures, and waits until
-GitHub review requirements are satisfied.
 
 Completion requires:
 
@@ -37,29 +30,19 @@ Completion requires:
 - review is not required or `reviewDecision=APPROVED`; a configured `:+1:`
   can only be a soft approval signal for review-not-required PRs
 
-The watch is local to the active Claude loop. It must not claim to keep watching
-after the user stops the loop or the Claude process exits.
+The watch is local to the active Claude loop: once the user stops the loop or
+the Claude process exits, nothing keeps watching, so never describe it as a
+background watcher.
 
-To reduce token usage, waiting must be compact and self-paced. Do not repeatedly
-run full One Pass just to check whether approval or `:+1:` arrived. Run full
-repair only when a cheap snapshot indicates actionable work.
+The skill has two loops:
 
-## Two-loop Design
-
-This skill has two loops:
-
-1. `repair loop`
-   - expensive
-   - model reads CI logs, review bodies, diffs, and files
-   - allowed to edit, test, commit, push
-   - runs only when there is actionable work
-
-2. `watch loop`
-   - cheap
-   - compact status polling plus `ScheduleWakeup`
-   - model should not inspect repeated unchanged snapshots
-   - reads only compact PR/check/reaction status
-   - exits into repair loop only on actionable state change
+1. `repair loop`: expensive. The model reads CI logs, review bodies, diffs, and
+   files, and may edit, test, commit, and push. It runs only when there is
+   actionable work.
+2. `watch loop`: cheap. Compact status polling plus `ScheduleWakeup`. It reads
+   only compact PR/check/reaction status, suppresses unchanged snapshots (an
+   unchanged digest means sleep and poll again without reasoning about the same
+   state), and exits into the repair loop only on an actionable state change.
 
 The default after PR creation is:
 
@@ -67,17 +50,12 @@ The default after PR creation is:
 full repair pass -> cheap watch -> repair on event -> cheap watch -> finish on approval signal
 ```
 
-The watch loop should suppress unchanged snapshots. If the compact digest has not
-changed, sleep and poll again without asking the model to reason about the same
-state.
-
 ## Cheap Snapshot
 
 Cheap polling is the default while waiting for CI, mergeability calculation,
-approval, or `:+1:` reactions. It must not fetch full review thread bodies, full
-top-level comments, full diffs, or CI logs.
-
-A cheap snapshot may fetch only compact PR status:
+approval, or `:+1:` reactions. It reads compact status only: no review thread
+bodies, no top-level comment bodies, no diffs, no CI logs. Those are fetched
+once a snapshot shows actionable work, not on every poll.
 
 ```bash
 gh pr view ${pr:+"$pr"} \
@@ -114,9 +92,7 @@ gh pr checks ${pr:+"$pr"} \
   ' || true
 ```
 
-The watcher must normalize these into a digest and compare it with the last
-digest. If the digest is unchanged, do not ask the model to reason; sleep and
-poll again.
+Normalize these into a digest and compare it with the last digest.
 
 ## Approval Signals
 
@@ -130,11 +106,10 @@ The PR is considered approved when either:
 review.
 
 `:+1:` is a configurable soft approval signal, not a generic reaction shortcut.
-Count it as approval only when both the target and actor policy are configured.
-Do not use `:+1:` to satisfy required GitHub review: if `reviewDecision` is
+Count it as approval only when both the target and actor policy are configured,
+and never to satisfy required GitHub review: if `reviewDecision` is
 `REVIEW_REQUIRED` or `CHANGES_REQUESTED`, keep waiting for an approving review
-or enter the repair loop.
-Possible reaction targets are:
+or enter the repair loop. Possible reaction targets are:
 
 - the PR issue itself
 - the latest Claude/watch status comment, if this skill posted one
@@ -143,12 +118,8 @@ Possible reaction targets are:
 
 If `PR_WATCH_PLUS1_ACTOR_RE` is set, count only reactions whose actor login
 matches it. If no actor policy is configured, report non-self `:+1:` reactions
-as status but do not finish the PR as approved from them.
-
-Reaction polling must be cheap. Do not fetch full PR comments or review threads
-just to check for `:+1:`.
-
-Examples:
+as status but do not finish the PR as approved from them. Reaction polling is
+cheap by construction:
 
 ```bash
 # PR issue itself
@@ -185,23 +156,15 @@ Enter full One Pass only when a cheap snapshot shows actionable work:
 - a configured reaction target changed and the new reaction is not an approval signal
 - CI completed after a push made by this skill and final verification has not yet run
 
-Do not enter full One Pass for these states alone:
+These states alone keep the cheap watch going: CI pending, `mergeable=UNKNOWN`,
+an unchanged check bucket digest or `updatedAt`, waiting for human approval or a
+configured watcher/bot `:+1:`, and review requested with no actionable comment
+known.
 
-- CI pending
-- `mergeable=UNKNOWN`
-- unchanged check bucket digest
-- unchanged `updatedAt`
-- waiting for human approval
-- waiting for a configured watcher/bot `:+1:`
-- review requested but no actionable comment is known
-
-When only `updatedAt` changed, first classify the update cheaply:
-
-- check approval signal
-- check check bucket digest
-- check `reviewDecision`
-- if still ambiguous, fetch only latest event/comment metadata
-- fetch full comments or threads only if the update likely contains actionable text
+When only `updatedAt` changed, classify the update cheaply first: approval
+signal, check bucket digest, `reviewDecision`, then only latest event/comment
+metadata, and fetch full comments or threads only when the update likely
+contains actionable text.
 
 ## Preconditions
 
@@ -209,6 +172,7 @@ When only `updatedAt` changed, first classify the update cheaply:
 - `gh auth status` が通ること。失敗したら `gh auth login` を案内して終了する。
 - 対象は現在ブランチに紐づく PR、またはユーザーが渡した PR 番号 / URL。
 - この skill は PR を作らない。PR が見つからなければ、先に PR を作るよう伝える。
+  merge も行わない(ユーザーの明示指示があるときだけ)。
 - 操作対象は自分が作成し、push 権限がある head topic branch だけ。
 
 ## Target PR
@@ -222,7 +186,7 @@ gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,r
 
 `headRefName` が現在のローカルブランチ名と一致することを確認する。不一致なら
 修正や push に入らず、対象 PR の head branch を checkout してから続けるか、
-ユーザーに確認する。別ブランチの HEAD で PR head を上書きしてはいけない。
+ユーザーに確認する。別ブランチの HEAD で PR head を上書きしない。
 
 ## One Pass
 
@@ -260,23 +224,20 @@ gh pr view ${pr:+"$pr"} --json number,state,isDraft,mergeable,mergeStateStatus,r
 
 4. `latestReviews` とトップレベル `comments` も読む。レビュー本文や PR コメントだけで
    actionable な修正依頼が来ることがあるため、thread だけで未対応 0 と判定しない。
-   `gh pr view --json comments` は先頭 100 件に制限される。完了判定や blocked 判定で
-   トップレベルコメントを使う前に、コメントが多い PR では GraphQL の
-   `pullRequest.comments(first:100, after:$endCursor)` を全ページ取得し、後続ページの
-   actionable request を取りこぼさない。
+   `gh pr view --json comments` は先頭 100 件に制限される。コメントが多い PR では
+   GraphQL の `pullRequest.comments(first:100, after:$endCursor)` を全ページ取得し、
+   後続ページの actionable request を取りこぼさない。
 
 Codex connectorの指摘は、保存したcurrent head SHAに紐づくsubmitted reviewを確認して
-から扱う。
-そのHEADの未解決thread、review summary、top-level commentをすべて取得し、1つの
-**current-head review batch**として固定する。
-completed reviewがまだ見えない段階で、通知された1 commentだけを修正しない。
+から扱う。そのHEADの未解決thread、review summary、top-level commentをすべて取得し、
+1つの**current-head review batch**として固定する。completed reviewがまだ見えない
+段階で、通知された1 commentだけを修正しない。
 
 明示的な各起動では、process-localなconnector repair-wave counterを0から始める。
 同じforeground runと`PR_WATCH_CONTINUE=1`で継続したwatcherはcounterを保持するが、
 GitHubやwatcher stateへ永続化せず、過去のreview履歴から復元しない。
 current-head review batchのactionable findingに対して編集、1 commit、1 pushまで完了した
-場合だけ1 waveと数える。
-根拠を返信してfindingを棄却しただけならwaveに数えない。
+場合だけ1 waveと数える。根拠を返信してfindingを棄却しただけならwaveに数えない。
 後の明示的な起動はcounterを0から始め、同じ起動内で4 wave目の修正は開始しない。
 
 ### B. 終了判定
@@ -286,13 +247,12 @@ current-head review batchのactionable findingに対して編集、1 commit、1 
 - `state` が `MERGED` または `CLOSED` なら完了。
 - OPEN かつ draft でなく、mergeable、CI が pass/skipping、未対応 review thread と
   actionable top-level 指摘が 0 の場合、自動修正は完了。
-- 自動修正が完了していて review が不要（`reviewDecision` が空/null で
-  `reviewRequests` も空）なら完了。
+- 自動修正が完了していて review が不要(`reviewDecision` が空/null で
+  `reviewRequests` も空)なら完了。
 - review が必要な PR は、`reviewDecision=APPROVED` なら完了。configured `:+1:`
   だけでは必須 review を満たした扱いにしない。
 - 自動修正が完了しているが必要な `reviewDecision=APPROVED` が未観測なら、default
-  で cheap approval watch に入る。approval/reaction 待ちだけでは full
-  comment/thread/log を再取得しない。
+  で cheap approval watch に入る。
 - `mergeable=UNKNOWN` は GitHub 計算中として cheap polling の候補にする。
 - draft は完了扱いにせず、CI / conflict / mergeability の cheap watch と repair は
   継続する。ready 化まで approval / merge 完了だけを保留する。
@@ -304,25 +264,27 @@ current-head review batchのactionable findingに対して編集、1 commit、1 
 
 ### C. Push Remote と Force Push 認可
 
-rebase、CI 修正、レビュー修正で push する前に必ず解決する。
+rebase、CI 修正、レビュー修正で push する前に解決する。
 
 - `me=$(gh api user -q .login)` を取得する。
-- force push してよいのは、PR author が自分で、head branch に push 権限がある場合のみ。
-- 同一リポジトリ PR は author が自分なら push 可。fork PR は head repository owner が
-  自分のときだけ push 可。
+- force push してよいのは、PR author が自分で、head branch に push 権限がある場合
+  のみ。同一リポジトリ PR は author が自分なら push 可。fork PR は head repository
+  owner が自分のときだけ push 可。他者 PR、保護ブランチ、push 権限が曖昧な fork には
+  force push しない。
 - `maintainerCanModify=true` は履歴 rewrite の認可根拠にしない。
 - local remote は PR の `headRepository.nameWithOwner` に実際に一致するものを使う。
   一致 remote がなければ URL を解決し、remote を追加して fetch してから使う。
-- push は常に明示 refspec を使う。
+- push は常に明示 refspec を使う。無印 `--force` と refspec なしの
+  `--force-with-lease` は使わない。
 - `--force-with-lease` は ancestry check ではない。fetch や background fetch で lease が
   更新されると、remote-only commit を含まないローカル HEAD でも上書きできてしまう。
-  rebase などの履歴 rewrite や追加 commit を始める前に必ず head branch を fetch し、
-  remote PR head が現在 HEAD の祖先であることを確認して、その SHA を保存する。false なら
-  作業を進めず、remote-only commit を取り込むかユーザーにエスカレーションする。
-- push 直前には head branch を再 fetch し、remote tip が保存した SHA から動いていないことを
-  確認する。remote が動いていたら push せず、取り込みまたはエスカレーションする。
-  rebase 後は古い PR tip が新しい HEAD の祖先とは限らないため、rebase 後に ancestry check を
-  再実行して判断しない。
+  履歴 rewrite や追加 commit を始める前に head branch を fetch し、remote PR head が
+  現在 HEAD の祖先であることを確認して、その SHA を保存する。false なら作業を進めず、
+  remote-only commit を取り込むかユーザーにエスカレーションする。
+- push 直前には head branch を再 fetch し、remote tip が保存した SHA から動いていない
+  ことを確認する。動いていたら push せず、取り込みまたはエスカレーションする。
+  rebase 後は古い PR tip が新しい HEAD の祖先とは限らないため、rebase 後に ancestry
+  check を再実行して判断しない。
 
 ```bash
 git fetch "<head-remote>" "$head"
@@ -339,11 +301,13 @@ test "$(git rev-parse FETCH_HEAD)" = "$pr_head_before_work"
 git push --force-with-lease="refs/heads/$head:$pr_head_before_work" "<head-remote>" HEAD:"$head"
 ```
 
-push は別 call で実行する。ref 変更と push の連結を拒否する push gate は
-`git fetch` を含む連結形も deny する。
-
-無印 `--force`、refspec なしの `git push --force-with-lease`、保護ブランチや他者 PR
-への force push は使わない。
+push は別 call で実行する。リポジトリの push ゲート(pre-push 系 hook や
+PreToolUse gate)は ref 変更と push の連結を拒否し、`git fetch` を含む連結形も
+deny する。deny されたら `--no-verify` や hooks 設定の書き換えで回避せず、指示された
+コマンド(canonical full gate)を最終 commit で通してから push し直す。deny 理由が
+連結なら call 全体が実行前に止まっているので、止められた各ステップ(ref 変更、push
+前の確認、HEAD が変わった場合の canonical full gate)を 1 コマンドずつ再実行し、最後に
+push を単独で実行する。
 
 ### D. コンフリクトと Base Drift
 
@@ -363,8 +327,8 @@ push は別 call で実行する。ref 変更と push の連結を拒否する p
    hunk が build を壊すのはこの時点で捕まえる。
 7. push 直前に remote tip が `pr_head_before_work` から動いていないことを
    確認し、保存した SHA を期待値にした `--force-with-lease` で push する。
-8. push したら、その pass では古い CI/log/thread を使わず終了する。必要なら次 pass で
-   状態を取り直す。
+8. push したら、その pass では古い CI/log/thread を使わず終了する。次 pass で状態を
+   取り直す。
 
 ### E. CI 失敗
 
@@ -378,8 +342,8 @@ push は別 call で実行する。ref 変更と push の連結を拒否する p
 
 - 外部 CI は `gh run` で読めない。link を確認し、自動アクセスできなければユーザーに
   エスカレーションする。
-- 原因を特定してから修正する。CI を通すためにテスト削除、workflow 緩和、skip 追加を
-  してはいけない。
+- 原因を特定してから修正する。CI を通すためのテスト削除、workflow 緩和、skip 追加、
+  必須チェックの弱体化は修正ではない。
 - 修正中は focused test で解消を確認し、commit する。push の前に、リポジトリの
   canonical full gate を最終 commit に対して 1 回通す(D と同じ解決方法)。gate が
   通ってから明示 refspec で push する。CI がローカルで再現する lint / test で落ちて
@@ -393,9 +357,8 @@ push は別 call で実行する。ref 変更と push の連結を拒否する p
 
 - 編集前に変更またはreview対象の各pathについて、PRのbase側でrepository rootから
   最も近い`AGENTS.md`または`AGENTS.override.md`までのapplicable instruction chainを
-  通常の優先順位で解決する。
-  各pathへ適用される`## Code Review Rules`を裁定基準にし、target branchが変更した
-  copyは使わない。
+  通常の優先順位で解決する。各pathへ適用される`## Code Review Rules`を裁定基準にし、
+  target branchが変更したcopyは使わない。
 - findingは、documented user-facing prerequisitesから到達する具体的なtriggerがあるか、
   existing test、issue acceptance criterion、documented contract、またはrequired safe
   rejection / fail-closedに反する場合だけactionableとする。
@@ -415,23 +378,19 @@ push は別 call で実行する。ref 変更と push の連結を拒否する p
 - 1 review waveは1 commit、1 pushとする。commentごとにcommitとpushを繰り返さない。
 - 同じhead SHAへ手動でCodex reviewを再要求しない。明示要求が必要な場合は、次の
   repair commitがGitHubへ反映された後に1回だけ送る。
-
 - `latest` comment が自分の返信で、その後レビュアー反応がなければ対応済みとして
-  skip する。
-- 新しいレビュアー返信があれば、top-level comment ではなく latest comment の要求を読む。
+  skip する。新しいレビュアー返信があれば、top-level comment ではなく latest comment
+  の要求を読む。
 - 仕様判断や方針確認が必要な指摘は無理に直さず、判断点を整理してユーザーに確認する。
 - 修正したら focused test → commit → canonical full gate(E と同じ 1 回)→ push の順に
-  進める。
-- 返信は push 後に行う。インライン返信は top-level comment の `fullDatabaseId` を使う。
-- thread resolve は基本的にレビュアーへ委ねる。自分で resolve するのは確信がある場合のみ。
+  進める。返信は push 後に行う。インライン返信は top-level comment の
+  `fullDatabaseId` を使う。thread resolve は基本的にレビュアーへ委ね、自分で resolve
+  するのは確信がある場合のみ。
 
 ## Continuous Watching
 
 Continuous watch via `/loop /pr-watch` is the default after PR creation or after
-"あとよろしく".
-
-Use cheap polling for long waits. The model should not repeatedly inspect
-unchanged status output.
+"あとよろしく". Use cheap polling for long waits.
 
 Continue watching while:
 
@@ -442,9 +401,7 @@ Continue watching while:
   to wait for a configured `:+1:` gate
 - a push made by this skill is still being checked
 
-Re-enter full repair only on Expensive Repair Triggers.
-
-Stop when:
+Re-enter full repair only on Expensive Repair Triggers. Stop when:
 
 - PR is MERGED or CLOSED
 - GitHub review requirements are satisfied and PR is green/mergeable
@@ -452,9 +409,6 @@ Stop when:
 - maximum watch duration is reached
 - the same actionable failure repeats without progress
 - the watcher cannot safely classify an update
-
-Claude の loop を終了すると監視は続かない。バックグラウンドで見張っているように
-表現しない。
 
 ## Token Budget Guard
 
@@ -469,190 +423,23 @@ Default limits:
 - max loop watch duration: configurable, default 60 minutes
 
 After the limit, report the PR URL, current compact status, and the reason the
-watcher stopped.
-On the third connector review-repair wave, report the remaining current-head
-batch and hand it to a human instead of starting a fourth repair.
+watcher stopped. On the third connector review-repair wave, report the remaining
+current-head batch and hand it to a human instead of starting a fourth repair.
 
-The approval/reaction wait itself should consume near-zero model tokens because
-each loop pass should rely on compact status before deciding whether to run full
-repair.
+The approval/reaction wait itself consumes near-zero model tokens because each
+loop pass relies on compact status before deciding whether to run full repair.
 
-## Local Watcher Implementation Sketch
+## Local Watcher
 
-The watcher may create a repo-scoped local state file under the git metadata
-path returned by `git rev-parse --git-path pr-watch-state`. Include the target
-`owner/repo` and PR number in the filename so watching `#123` in another
-repository cannot reuse this repository's `#123` state. This file is local and
-must not be committed. Do not assume `.git` is a directory; linked worktrees
-often use a `.git` file that points at the real gitdir.
-When configured `:+1:` targets are used, the state JSON may include
-`approval_reaction_targets` entries with `kind` values `issue`, `issue_comment`,
-or `review_comment`.
-
-Use `PR_WATCH_CONTINUE=1` only when Claude is continuing the same cheap wait
-inside `/loop /pr-watch`. A fresh user-invoked watch should clear stored
-`deadline_ts` / `last_digest` and issue a new loop deadline. If a stored
-deadline is already expired, clear it before polling so a later explicit watch
-does not immediately timeout.
-
-The shell loop should emit output to the model only when:
-
-- approval signal appears
-- checks fail/cancel
-- merge conflict appears
-- `reviewDecision` becomes `CHANGES_REQUESTED`
-- `headRefOid` changes
-- an ambiguous update requires model classification
-- timeout/block occurs
-
-Example skeleton:
-
-```bash
-state_dir="$(git rev-parse --git-path pr-watch-state)"
-mkdir -p "$state_dir"
-repo_key="$(printf '%s\n' "$owner/$repo" | tr '/:' '--')"
-state_file="$state_dir/$repo_key-$num.json"
-state_json="{}"
-if [ -f "$state_file" ]; then
-  state_json="$(cat "$state_file")"
-fi
-
-now_ts="$(date +%s)"
-max_seconds="${PR_WATCH_MAX_SECONDS:-3600}"
-deadline_ts="$(printf '%s\n' "$state_json" | jq -r '.deadline_ts // empty')"
-if [ "${PR_WATCH_CONTINUE:-0}" != "1" ] ||
-   [ -z "$deadline_ts" ] ||
-   [ "$deadline_ts" -le "$now_ts" ]; then
-  state_json="$(printf '%s\n' "$state_json" | jq 'del(.deadline_ts, .last_digest)')"
-  deadline_ts=$((now_ts + max_seconds))
-fi
-last_digest="$(printf '%s\n' "$state_json" | jq -c '.last_digest // empty')"
-
-while :; do
-  pr_tmp="$(mktemp)"
-  gh pr view -R "$owner/$repo" "$num" \
-    --json number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,reviewRequests,updatedAt,headRefOid,url,reactionGroups \
-    --jq '{number,state,isDraft,mergeable,mergeStateStatus,reviewDecision,reviewRequests,updatedAt,headRefOid,url,reactionGroups}' > "$pr_tmp"
-  pr_status=$?
-  pr_json="$(cat "$pr_tmp")"
-  rm -f "$pr_tmp"
-  if [ "$pr_status" -ne 0 ] || [ -z "$pr_json" ]; then
-    jq -cn --argjson status "$pr_status" \
-      '{event:"blocked", reason:"pr_snapshot_failed", status:$status}'
-    break
-  fi
-
-  checks_tmp="$(mktemp)"
-  checks_err="$(mktemp)"
-  gh pr checks -R "$owner/$repo" "$num" \
-    --json name,bucket,state,workflow,link \
-    --jq 'group_by(.bucket) | map({bucket: .[0].bucket, count: length, checks: map({name,state,workflow,link}) | sort_by(.name,.workflow,.link,.state)})' > "$checks_tmp" 2> "$checks_err"
-  checks_status=$?
-  checks_json="$(cat "$checks_tmp")"
-  checks_error="$(cat "$checks_err")"
-  rm -f "$checks_tmp" "$checks_err"
-  if [ -z "$checks_json" ]; then
-    if [ "$checks_status" -ne 0 ]; then
-      if printf '%s\n' "$checks_error" | grep -qi 'no checks reported'; then
-        checks_json='[{"bucket":"pending","count":0,"checks":[],"reason":"checks_not_reported_yet"}]'
-      else
-        jq -cn --argjson status "$checks_status" --arg error "$checks_error" \
-          '{event:"blocked", reason:"checks_snapshot_failed", status:$status, error:$error}'
-        break
-      fi
-    else
-      checks_json="[]"
-    fi
-  fi
-
-  reaction_targets="$(
-    printf '%s\n' "$state_json" |
-      jq -c '.approval_reaction_targets // []'
-  )"
-  reaction_status_file="$(mktemp)"
-  reaction_error_file="$(mktemp)"
-  printf '0' > "$reaction_status_file"
-  approval_reactions="$(
-    printf '%s\n' "$reaction_targets" | jq -c '.[]' |
-      while IFS= read -r target; do
-        kind="$(printf '%s\n' "$target" | jq -r '.kind')"
-        id="$(printf '%s\n' "$target" | jq -r '.id // empty')"
-        case "$kind" in
-          issue) path="/repos/$owner/$repo/issues/$num/reactions?content=%2B1&per_page=100" ;;
-          issue_comment) path="/repos/$owner/$repo/issues/comments/$id/reactions?content=%2B1&per_page=100" ;;
-          review_comment) path="/repos/$owner/$repo/pulls/comments/$id/reactions?content=%2B1&per_page=100" ;;
-          *) continue ;;
-        esac
-        reaction_tmp="$(mktemp)"
-        if ! gh api --paginate "$path" > "$reaction_tmp" 2>> "$reaction_error_file"; then
-          printf '1' > "$reaction_status_file"
-          rm -f "$reaction_tmp"
-          break
-        fi
-        jq --arg kind "$kind" --arg id "$id" \
-          '.[] | {target_kind: $kind, target_id: $id, login: .user.login, created_at}' \
-          "$reaction_tmp"
-        rm -f "$reaction_tmp"
-      done |
-      jq -s '.'
-  )"
-  if [ "$(cat "$reaction_status_file")" != "0" ]; then
-    reaction_error="$(cat "$reaction_error_file")"
-    rm -f "$reaction_status_file" "$reaction_error_file"
-    jq -cn --arg error "$reaction_error" \
-      '{event:"blocked", reason:"reaction_snapshot_failed", error:$error}'
-    break
-  fi
-  rm -f "$reaction_status_file" "$reaction_error_file"
-  if [ -z "$approval_reactions" ]; then
-    approval_reactions="[]"
-  fi
-
-  digest="$(
-    jq -cn \
-      --argjson pr "$pr_json" \
-      --argjson checks "$checks_json" \
-      --argjson approvalReactions "$approval_reactions" \
-      '{
-        state: $pr.state,
-        draft: $pr.isDraft,
-        mergeable: $pr.mergeable,
-        mergeStateStatus: $pr.mergeStateStatus,
-        reviewDecision: $pr.reviewDecision,
-        reviewRequests: ($pr.reviewRequests // []),
-        headRefOid: $pr.headRefOid,
-        updatedAt: $pr.updatedAt,
-        reactionGroups: ($pr.reactionGroups // []),
-        approvalReactions: $approvalReactions,
-        checks: $checks
-      }'
-  )"
-
-  if [ "$(date +%s)" -ge "$deadline_ts" ]; then
-    jq -cn --argjson digest "$digest" '{event:"timeout", digest:$digest}'
-    printf '%s\n' "$state_json" |
-      jq 'del(.deadline_ts, .last_digest)' > "$state_file"
-    break
-  fi
-
-  if [ "$digest" = "$last_digest" ]; then
-    sleep "${PR_WATCH_INTERVAL:-45}"
-    continue
-  fi
-
-  jq -cn \
-    --argjson state "$state_json" \
-    --argjson digest "$digest" \
-    --argjson deadline "$deadline_ts" \
-    '$state + {last_digest: $digest, deadline_ts: $deadline}' > "$state_file"
-  last_digest="$digest"
-
-  # Emit only changed digest. The model decides whether to finish,
-  # continue cheap wait, or enter full repair.
-  printf '%s\n' "$digest"
-  break
-done
-```
+The cheap loop keeps a repo-scoped state file under
+`git rev-parse --git-path pr-watch-state` (named by `owner/repo` and PR number,
+never committed) holding `deadline_ts`, `last_digest`, and optional
+`approval_reaction_targets`. `PR_WATCH_CONTINUE=1` continues the same wait
+inside `/loop /pr-watch`; a fresh explicit watch clears the stored deadline and
+digest. The loop emits to the model only on a changed digest, timeout, or block,
+sleeping `PR_WATCH_INTERVAL` (default 45s) otherwise, with
+`PR_WATCH_MAX_SECONDS` (default 3600) as the deadline. The state contract and a
+complete bash skeleton are in `references/watch-loop.md`.
 
 ## Oscillation Safety
 
@@ -665,25 +452,6 @@ done
 同じ集合が 2 pass 連続で残り、進捗がないなら自動修正を止める。3 pass 連続で
 同じファイル群に同種の問題が残る場合も止める。残っている問題、試した修正、
 次に必要な判断を短く整理してユーザーに渡す。
-
-## Do Not
-
-- PR を新規作成しない。
-- 明示指示なしに auto-merge しない。
-- 他者 PR、保護ブランチ、push 権限が曖昧な fork に force push しない。
-- CI を通すためにテストや必須チェックを弱めない。
-- リポジトリの push ゲート(pre-push 系 hook や PreToolUse gate)を `--no-verify` や
-  hooks 設定の書き換えで回避しない。push が deny されたら、指示されたコマンド
-  (canonical full gate)を最終 commit で通してから push し直す。deny 理由が
-  「ref を変更するコマンドとの連結」なら call 全体が実行前に止まっている:
-  止められた call の各ステップ — ref 変更、そこに含まれていた push 前の
-  確認 (保存 SHA と remote tip の比較など)、HEAD が変わった場合の canonical
-  full gate — を 1 コマンドずつ再実行し、最後に push を単独で実行する。
-- GitHub の古い thread や push 前の CI log を根拠に、push 後も同じ pass で修正を続けない。
-- approval / `:+1:` 待ちだけのために full One Pass を繰り返さない。
-- unchanged cheap snapshot をモデルに何度も読ませない。
-- full review threads、top-level comments、CI logs、diffs を polling ごとに取得しない。
-- Claude の loop / process 終了後も監視が続くように表現しない。
 
 ## Finish Report
 

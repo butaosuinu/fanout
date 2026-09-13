@@ -5,7 +5,7 @@
 
 | 層 | 実体 | 効き方 |
 |---|---|---|
-| 予防 | `CLAUDE.md` / `AGENTS.md` の Complexity Budget | 書く前に方針を渡す |
+| 予防 | `CLAUDE.md` / `AGENTS.md` の Complexity budget 節 | 書く前に方針を渡す |
 | 即時是正 | `scripts/agent-complexity-on-edit.sh`(PostToolUse hook) | 編集直後に差し戻す。ローカルで無効化できるので**強制力はない** |
 | ゲート | `.github/workflows/complexity.yml` | PR で新規の違反を落とす。強制力はここだけ |
 
