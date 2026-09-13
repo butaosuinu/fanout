@@ -83,11 +83,13 @@ RAW_UNTIL=$(jq -nr --arg value "$COLLECTION_SECOND" \
   subdirectory、linked worktree、root 外の worktree は common-dir が同じ場合だけ含め、
   nested repository と submodule は除外する。cwd が消失している、Git repository ではない、
   または common-dir を解決できない候補は除外して `tool_errors.truncated=true` にする。
-- `CODEX_THREAD_ID` と `CODEX_SESSION_ID` は空でない値だけを self ID として使う。
-  候補の `session_meta.payload.id` / `session_id` と `parent_thread_id` から子孫を
-  推移的に求め、self ID とその全子孫を除外する。空値を wildcard として扱わない。
-  空でない self ID は候補の `session_meta` から一意に解決できなければ、cursor を
-  進めず止める。
+- 空でない `CODEX_THREAD_ID` を primary self ID とし、候補の
+  `session_meta.payload.id` だけに一意一致させる。空の場合だけ、旧形式向け fallback として
+  空でない `CODEX_SESSION_ID` を同じ `payload.id` に一意一致させる。現行 schema の
+  `payload.session_id` は root lineage 全体で共有されるため、self identity には使わない。
+  一意な self ID を `parent_thread_id` → `payload.id` の関係で推移的にたどり、self と
+  その全子孫を除外する。空値を wildcard として扱わない。選択した non-empty ID が候補の
+  `payload.id` から一意に解決できなければ、cursor を進めず止める。
 - 除外対象を決めた後、その全 rollout の先頭 timestamp を同じ `timestamp_key` で
   正規化する。最古の値の 1 ns 前を `SELF_CUTOFF` とし、`RAW_UNTIL` と
   `SELF_CUTOFF` の早い方を `UNTIL` にする。1 ns の減算は小数部が 0 より大きければ
