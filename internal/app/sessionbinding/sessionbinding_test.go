@@ -226,6 +226,56 @@ func TestReloadPaneReconcilesMovedManagedLocation(t *testing.T) {
 	}
 }
 
+func TestReloadPaneFindsNonFirstManualRowByProvenance(t *testing.T) {
+	repo, sibling := newSessionBindingWorktrees(t)
+	home, remote := reloadCollisionPanes(repo, sibling)
+	home.Parent, home.IssueNum = "@manual", -1
+	remote.Parent, remote.IssueNum = "@manual", -1
+	recordTestPane(t, repo, home)
+	recordTestPane(t, sibling, remote)
+
+	got, err := ReloadPane(repo, remote, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertReloadedCollisionPane(t, got, remote)
+}
+
+func TestReloadPaneFindsNonFirstTaskRowByProvenance(t *testing.T) {
+	repo, sibling := newSessionBindingWorktrees(t)
+	home, remote := reloadCollisionPanes(repo, sibling)
+	home.Parent, home.IssueNum, home.TaskID = "plan:launch", 0, "api"
+	remote.Parent, remote.IssueNum, remote.TaskID = "plan:launch", 0, "api"
+	recordTestPane(t, repo, home)
+	recordTestPane(t, sibling, remote)
+
+	got, err := ReloadPane(repo, remote, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertReloadedCollisionPane(t, got, remote)
+}
+
+func reloadCollisionPanes(repo, sibling string) (state.Pane, state.Pane) {
+	home := testHerdrPane(repo)
+	home.WorkspaceID, home.PaneID = "workspace-home", "workspace-home:p1"
+	home.WorkspaceLabel, home.WorktreePath, home.EmitterRowKey = "home-label", filepath.Join(repo, "home-child"), ""
+	remote := testHerdrPane(sibling)
+	remote.WorkspaceID, remote.PaneID = "workspace-sibling", "workspace-sibling:p1"
+	remote.WorkspaceLabel, remote.WorktreePath, remote.EmitterRowKey = "sibling-label", filepath.Join(sibling, "child"), ""
+	remote.SourceProjectRoot = sibling
+	return home, remote
+}
+
+func assertReloadedCollisionPane(t *testing.T, got, want state.Pane) {
+	t.Helper()
+	if got.Parent != want.Parent || got.IssueNum != want.IssueNum || got.TaskID != want.TaskID ||
+		got.WorkspaceLabel != want.WorkspaceLabel || got.WorktreePath != want.WorktreePath ||
+		got.Backend != want.Backend || got.PaneID != want.PaneID || got.SourceProjectRoot != want.SourceProjectRoot {
+		t.Fatalf("reloaded pane = %+v, want non-first row %+v", got, want)
+	}
+}
+
 func testHerdrPane(root string) state.Pane {
 	return state.Pane{
 		Parent: "528", IssueNum: 529, Backend: backend.Herdr,
@@ -260,6 +310,18 @@ func newSessionBindingRepo(t *testing.T) string {
 	runSessionBindingGit(t, repo, "add", "tracked.txt")
 	runSessionBindingGit(t, repo, "commit", "-m", "base")
 	return repo
+}
+
+func newSessionBindingWorktrees(t *testing.T) (string, string) {
+	t.Helper()
+	repo := newSessionBindingRepo(t)
+	sibling := filepath.Join(t.TempDir(), "sibling")
+	runSessionBindingGit(t, repo, "worktree", "add", "-b", "sibling", sibling)
+	canonicalSibling, err := filepath.EvalSymlinks(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo, canonicalSibling
 }
 
 func runSessionBindingGit(t *testing.T, dir string, args ...string) {

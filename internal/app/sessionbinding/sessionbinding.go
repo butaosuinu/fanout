@@ -96,18 +96,44 @@ func reloadedPane(store state.Store, expected state.Pane) (state.Pane, bool, err
 		}
 		return store.Panes[index], true, nil
 	}
-	var pane state.Pane
-	var found bool
-	if strings.TrimSpace(expected.TaskID) != "" {
-		pane, found = store.FindTask(expected.Parent, expected.TaskID)
-	} else {
-		pane, found = store.Find(expected.Parent, expected.IssueNum)
+	return reloadedPaneByProvenance(store, expected)
+}
+
+func reloadedPaneByProvenance(store state.Store, expected state.Pane) (state.Pane, bool, error) {
+	index := -1
+	for current := range store.Panes {
+		if !reloadPaneIdentityMatches(store.Panes[current], expected) {
+			continue
+		}
+		if index >= 0 {
+			return state.Pane{}, false, fmt.Errorf("saved managed pane row identity is ambiguous during refresh")
+		}
+		index = current
 	}
-	if found && (pane.WorkspaceLabel != expected.WorkspaceLabel ||
-		filepath.Clean(pane.WorktreePath) != filepath.Clean(expected.WorktreePath)) {
-		return state.Pane{}, false, fmt.Errorf("saved managed pane row identity changed during refresh")
+	if index < 0 {
+		return state.Pane{}, false, nil
 	}
-	return pane, found, nil
+	return store.Panes[index], true, nil
+}
+
+func reloadPaneIdentityMatches(candidate, expected state.Pane) bool {
+	return candidate.Parent == expected.Parent &&
+		reloadPaneTaskOrIssueMatches(candidate, expected) &&
+		candidate.WorkspaceLabel == expected.WorkspaceLabel &&
+		filepath.Clean(candidate.WorktreePath) == filepath.Clean(expected.WorktreePath) &&
+		candidate.Backend == expected.Backend && candidate.PaneID == expected.PaneID &&
+		reloadPaneSourceMatches(candidate.SourceProjectRoot, expected.SourceProjectRoot)
+}
+
+func reloadPaneTaskOrIssueMatches(candidate, expected state.Pane) bool {
+	if expected.TaskID != "" {
+		return candidate.TaskID == expected.TaskID
+	}
+	return candidate.IssueNum == expected.IssueNum
+}
+
+func reloadPaneSourceMatches(candidate, expected string) bool {
+	return expected == "" || candidate == expected
 }
 
 func bindingRoots(
