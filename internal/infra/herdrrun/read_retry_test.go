@@ -8,8 +8,26 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 )
+
+func TestRunContextReportsRemainingParentTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := New("", "")
+		b.output = func(ctx context.Context, _ string, _ []string, _ ...string) ([]byte, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		time.Sleep(250 * time.Millisecond)
+		_, err := b.runContext(ctx, commandTimeout, "fake", route{}, "status", "--json")
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "timed out after 750ms:") {
+			t.Fatalf("runContext error = %v, want the remaining parent timeout of 750ms", err)
+		}
+	})
+}
 
 func TestSnapshotSlowCommandReportsTimeout(t *testing.T) {
 	fake := newFakeHerdr("fanout-test", "/private/tmp/herdr.sock")

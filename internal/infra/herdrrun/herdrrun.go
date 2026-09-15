@@ -535,6 +535,9 @@ func (b *Backend) runContext(ctx context.Context, timeout time.Duration, binary 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = min(timeout, time.Until(deadline))
+	}
 	if timeout <= 0 {
 		return nil, context.DeadlineExceeded
 	}
