@@ -18,6 +18,13 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/tmuxrun"
 )
 
+func TestMain(m *testing.M) {
+	if hooks.IsBackgroundRunnerRequest(os.Args[1:]) {
+		os.Exit(hooks.RunBackgroundRunner(os.Args[2:], os.Stderr))
+	}
+	os.Exit(m.Run())
+}
+
 type nopLogger struct{}
 
 func (nopLogger) Info(string, ...any) {}
