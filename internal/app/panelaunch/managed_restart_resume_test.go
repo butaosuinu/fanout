@@ -117,6 +117,10 @@ func TestResumeRestartedManagedRowsRebindsExactCodexProcess(t *testing.T) {
 	saved, placeholder := restartCodexFixture()
 	saved.EmitterRebindNonce = strings.Repeat("c", 32)
 	saved.EmitterRebindSequence = 7
+	placeholder.CurrentPath = "/repo/./worktree"
+	placeholder.WorktreePath = "/repo/worktree/."
+	placeholder.RepoKey = "/repo/worktree/../.git"
+	placeholder.ProjectRoot = "/repo/."
 	placeholder.AgentState = backend.AgentIdle
 	resumed := resumedCodexPane(placeholder)
 	recordRestartStatePane(t, repo, saved)

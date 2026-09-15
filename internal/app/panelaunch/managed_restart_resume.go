@@ -439,8 +439,10 @@ func restartedCodexPlaceholderMatches(saved state.Pane, current backend.LivePane
 		current.TerminalID != saved.TerminalID,
 		current.WorkspaceLabel == saved.WorkspaceLabel, sameSession,
 		!current.AgentPresent, current.AgentID == "", current.AgentProvider == "",
-		current.RepoKey == saved.RepoKey, current.ProjectRoot == saved.RepoRoot,
-		current.WorktreePath == saved.WorktreePath, current.CurrentPath == saved.WorktreePath,
+		state.CleanRuntimeResourcePath(current.RepoKey) == state.CleanRuntimeResourcePath(saved.RepoKey),
+		state.CleanRuntimeResourcePath(current.ProjectRoot) == state.CleanRuntimeResourcePath(saved.RepoRoot),
+		state.CleanRuntimeResourcePath(current.WorktreePath) == state.CleanRuntimeResourcePath(saved.WorktreePath),
+		state.CleanRuntimeResourcePath(current.CurrentPath) == state.CleanRuntimeResourcePath(saved.WorktreePath),
 	}
 	return !slices.Contains(requirements, false)
 }
@@ -701,7 +703,7 @@ func exactManagedResumeRoute(intent state.LaunchIntent, pane backend.LivePane) b
 		state.CleanRuntimeResourcePath(pane.CurrentPath) == state.CleanRuntimeResourcePath(intent.Resource.CurrentPath),
 		state.CleanRuntimeResourcePath(pane.RepoKey) == state.CleanRuntimeResourcePath(intent.Resource.RepoKey),
 		state.CleanRuntimeResourcePath(pane.ProjectRoot) == state.CleanRuntimeResourcePath(intent.Resource.RepoRoot),
-		pane.WorktreePath == intent.WorktreePath,
+		state.CleanRuntimeResourcePath(pane.WorktreePath) == state.CleanRuntimeResourcePath(intent.WorktreePath),
 		pane.SessionID == intent.Session, pane.SocketPath == intent.SocketPath,
 		sameAgentSession,
 	}

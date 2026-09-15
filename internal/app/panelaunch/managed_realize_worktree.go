@@ -205,6 +205,7 @@ func (r *managedWorktreeRealization) resolveIntent(
 func (r *managedWorktreeRealization) adoptSavedIntent(intent *state.LaunchIntent) error {
 	savedCoordinatorPath := intent.Coordinator.CurrentPath
 	intent.Coordinator.CurrentPath = state.CleanRuntimeResourcePath(savedCoordinatorPath)
+	r.coordinator.CurrentPath = state.CleanRuntimeResourcePath(r.coordinator.CurrentPath)
 	if intent.Coordinator.CurrentPath != savedCoordinatorPath {
 		r.intentHealed = true
 	}
