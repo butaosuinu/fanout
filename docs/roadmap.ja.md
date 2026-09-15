@@ -38,7 +38,7 @@ fanout 自身で並列に走らせる前提の 4 週スプリント。直近実�
 | 親 | 内容 | 子 |
 |---|---|---|
 | #361 | OpenCode 対応（`--agent opencode`） | #357-360。#243 を blocker として借用 |
-| #368 | モデル細粒度指定（`--agent NUM=name:model` + skill 自動推奨） | #362-367 |
+| #368 | モデル / effort 細粒度指定（`--agent NUM=name[:model[:effort]]` + lane 別 settings + skill 推奨。決定記録 [model-effort-selection.ja.md](model-effort-selection.ja.md)） | #362-367, #790-792 |
 | #373 | fanout retro — メトリクス収集とハーネス改善ループ | #369-372 |
 | #313 | 全リポジトリ横断 Session 一覧（Web + TUI） | #304-312 |
 | #241 | cursor / copilot エージェント対応 | #242-247 |
