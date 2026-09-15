@@ -43,12 +43,6 @@ func stateResource(observation backend.WorkspaceObservation) state.RuntimeResour
 	return state.RuntimeResourceFromObservation(observation)
 }
 
-func coordinatorStateResource(observation backend.WorkspaceObservation) state.RuntimeResource {
-	resource := stateResource(observation)
-	resource.RepoKey, resource.RepoRoot = "", ""
-	return resource
-}
-
 func observationResource(resource state.RuntimeResource) backend.WorkspaceObservation {
 	return backend.WorkspaceObservation{
 		WorkspaceID: resource.WorkspaceID,
@@ -104,11 +98,7 @@ func workspaceHasManagedResource(
 		!workspaceProvenanceMatches(observation, expected) {
 		return false
 	}
-	observed := stateResource(observation)
-	if expected.RepoKey == "" && expected.RepoRoot == "" {
-		observed = coordinatorStateResource(observation)
-	}
-	if expected == observed {
+	if expected == stateResource(observation) {
 		return true
 	}
 	for _, pane := range observation.Panes {
