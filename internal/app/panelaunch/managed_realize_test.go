@@ -884,10 +884,12 @@ func TestWorkspaceHasManagedResourceMatchesSavedRootAmongMultiplePanes(t *testin
 func TestWorkspaceHasManagedResourceCleansMultiPaneCWD(t *testing.T) {
 	expected := state.RuntimeResource{
 		WorkspaceID: "w1", Label: "fanout-coordinator-token", PaneID: "w1:p1",
-		TerminalID: "term-1", CurrentPath: "/repo/worktree",
+		TerminalID: "term-1", CurrentPath: "/repo/worktree/.",
+		RepoKey: "/repo/worktree/../.git", RepoRoot: "/repo/.",
 	}
 	observation := backend.WorkspaceObservation{
 		WorkspaceID: expected.WorkspaceID, Label: expected.Label,
+		RepoKey: "/repo/.git", RepoRoot: "/repo",
 		Panes: []backend.WorkspacePaneObservation{
 			{
 				Pane: backend.PaneRef{

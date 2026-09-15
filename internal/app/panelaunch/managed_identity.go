@@ -64,6 +64,6 @@ func managedRepoIdentityMatches(resource state.RuntimeResource, pane backend.Liv
 	if resource.RepoKey == "" {
 		return true
 	}
-	return state.CleanRuntimeResourcePath(pane.RepoKey) == resource.RepoKey &&
+	return state.CleanRuntimeResourcePath(pane.RepoKey) == state.CleanRuntimeResourcePath(resource.RepoKey) &&
 		filepath.Clean(pane.WorktreePath) == filepath.Clean(resource.CurrentPath)
 }

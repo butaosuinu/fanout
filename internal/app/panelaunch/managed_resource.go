@@ -93,6 +93,9 @@ func workspaceHasManagedResource(
 	observation backend.WorkspaceObservation,
 	expected state.RuntimeResource,
 ) bool {
+	expected.CurrentPath = state.CleanRuntimeResourcePath(expected.CurrentPath)
+	expected.RepoKey = state.CleanRuntimeResourcePath(expected.RepoKey)
+	expected.RepoRoot = state.CleanRuntimeResourcePath(expected.RepoRoot)
 	if observation.WorkspaceID != expected.WorkspaceID ||
 		observation.Label != expected.Label ||
 		!workspaceProvenanceMatches(observation, expected) {
@@ -136,8 +139,8 @@ func workspaceHasExactRestartProvenance(
 		observation.WorkspaceID == expected.WorkspaceID,
 		observation.Label == expected.Label,
 		filepath.Clean(observation.Path) == filepath.Clean(expected.CurrentPath),
-		state.CleanRuntimeResourcePath(observation.RepoKey) == expected.RepoKey,
-		state.CleanRuntimeResourcePath(observation.RepoRoot) == expected.RepoRoot,
+		state.CleanRuntimeResourcePath(observation.RepoKey) == state.CleanRuntimeResourcePath(expected.RepoKey),
+		state.CleanRuntimeResourcePath(observation.RepoRoot) == state.CleanRuntimeResourcePath(expected.RepoRoot),
 	}
 	return !slices.Contains(requirements, false)
 }
@@ -216,15 +219,15 @@ func paneHasManagedResource(
 		pane.Pane.Workspace == expected.WorkspaceID &&
 		pane.Pane.Pane == expected.PaneID &&
 		pane.TerminalID == expected.TerminalID &&
-		state.CleanRuntimeResourcePath(pane.CWD) == expected.CurrentPath
+		state.CleanRuntimeResourcePath(pane.CWD) == state.CleanRuntimeResourcePath(expected.CurrentPath)
 }
 
 func workspaceProvenanceMatches(
 	observation backend.WorkspaceObservation,
 	expected state.RuntimeResource,
 ) bool {
-	return (expected.RepoKey == "" || state.CleanRuntimeResourcePath(observation.RepoKey) == expected.RepoKey) &&
-		(expected.RepoRoot == "" || state.CleanRuntimeResourcePath(observation.RepoRoot) == expected.RepoRoot)
+	return (expected.RepoKey == "" || state.CleanRuntimeResourcePath(observation.RepoKey) == state.CleanRuntimeResourcePath(expected.RepoKey)) &&
+		(expected.RepoRoot == "" || state.CleanRuntimeResourcePath(observation.RepoRoot) == state.CleanRuntimeResourcePath(expected.RepoRoot))
 }
 
 // managedCoordinatorLabelKind names the coordinator lane in workspace labels;

@@ -197,11 +197,18 @@ func TestResumeRestartedManagedRowsRefreshesShellAndConsoleTerminalIDs(t *testin
 
 func TestExactManagedResumeRouteCleansObservedResourcePaths(t *testing.T) {
 	saved, pane := restartCodexFixture()
+	pane.CurrentPath = "/repo/worktree/."
+	pane.RepoKey = "/repo/worktree/../.git"
+	pane.ProjectRoot = "/repo/."
 	intent := newManagedResumeIntent(
 		"resume", "nonce", "/env", 1,
 		managedRestartCandidate{row: managedRestartRow{saved: saved}, live: pane},
 		time.Now().Add(time.Minute),
 	)
+	if intent.Resource.CurrentPath != "/repo/worktree" || intent.Resource.RepoKey != "/repo/.git" ||
+		intent.Resource.RepoRoot != "/repo" {
+		t.Fatalf("saved resume resource paths = %+v", intent.Resource)
+	}
 	pane.CurrentPath = "/repo/./worktree"
 	pane.RepoKey = "/repo/worktree/../.git"
 	pane.ProjectRoot = "/repo/."
