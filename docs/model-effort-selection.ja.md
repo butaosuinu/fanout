@@ -212,7 +212,10 @@ restore は記録値を再注入する。mode と違い、model / effort は会�
 cold restart(`internal/app/panelaunch/managed_restart_resume.go` の
 `newManagedResumeIntent`)は新しい capsule の `Args` を `resume <ref>` に固定し、保存済み
 Args を再利用しない。この経路は `LaunchCapsule` に `Model` / `Effort` を持たせて resume
-argv を組み直し、recovery テストで固定する(#363)。
+argv を組み直す。あわせて `internal/infra/state/launch_intents.go` の `validResumeLaunch`
+(現状は `resume <ref>` の 2 引数を厳密に要求し、外れると `journal.Save()` が intent を拒む)を
+「選択込みの canonical resume argv と session ref の両方を検証する」形に更新し、journal の
+round-trip テストと recovery テストで固定する(#363)。
 
 ### 7. codex app-server lane
 
