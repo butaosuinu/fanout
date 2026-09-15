@@ -44,35 +44,31 @@ func TestSnapshotSlowCommandReportsTimeout(t *testing.T) {
 }
 
 func TestOwnedLifecyclePreflightRetriesReadTimeouts(t *testing.T) {
-	for _, timeoutErr := range []error{context.DeadlineExceeded, exec.ErrWaitDelay} {
-		t.Run(timeoutErr.Error(), func(t *testing.T) {
-			h := newOwnedHarness(t)
-			observed := New(h.session.Session, h.session.SocketPath)
-			observed.output = h.fake.output
-			clock := installFakeWaitClock(observed)
-			calls := map[string]int{}
-			h.fake.intercept = func(_ context.Context, key string) error {
-				calls[key]++
-				if (key == "status" || key == "snapshot") && calls[key] == 1 {
-					return timeoutErr
-				}
-				return nil
-			}
-			opened, err := openOwned(t.Context(), OwnedOptions{
-				GitCommonDir: h.commonDir, RuntimeBase: h.runtimeBase,
-			}, observed)
-			if err != nil {
-				t.Fatal(err)
-			}
-			workspaces, err := opened.ObserveWorkspaces(t.Context())
-			if err != nil || len(workspaces) != 2 {
-				t.Fatalf("preflight observations = %v, error = %v", workspaces, err)
-			}
-			if calls["status"] != 3 || calls["snapshot"] != 2 ||
-				!slices.Equal(clock.sleeps, []time.Duration{readRetryDelay, readRetryDelay}) {
-				t.Fatalf("calls = %v, sleeps = %v", calls, clock.sleeps)
-			}
-		})
+	h := newOwnedHarness(t)
+	observed := New(h.session.Session, h.session.SocketPath)
+	observed.output = h.fake.output
+	clock := installFakeWaitClock(observed)
+	calls := map[string]int{}
+	h.fake.intercept = func(_ context.Context, key string) error {
+		calls[key]++
+		if (key == "status" || key == "snapshot") && calls[key] == 1 {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+	opened, err := openOwned(t.Context(), OwnedOptions{
+		GitCommonDir: h.commonDir, RuntimeBase: h.runtimeBase,
+	}, observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := opened.ObserveWorkspaces(t.Context())
+	if err != nil || len(workspaces) != 2 {
+		t.Fatalf("preflight observations = %v, error = %v", workspaces, err)
+	}
+	if calls["status"] != 3 || calls["snapshot"] != 2 ||
+		!slices.Equal(clock.sleeps, []time.Duration{readRetryDelay, readRetryDelay}) {
+		t.Fatalf("calls = %v, sleeps = %v", calls, clock.sleeps)
 	}
 }
 
@@ -83,19 +79,48 @@ func TestOwnedSnapshotTimeoutRetriesOnce(t *testing.T) {
 			b := h.session.backend
 			clock := installFakeWaitClock(b)
 			h.fake.commands = nil
-			h.fake.errors["snapshot"] = exec.ErrWaitDelay
+			h.fake.errors["snapshot"] = context.DeadlineExceeded
 			var err error
 			if view {
 				_, err = b.ownedSnapshotView(t.Context(), *b.owner)
 			} else {
 				_, err = h.session.ObserveWorkspaces(t.Context())
 			}
-			if !errors.Is(err, exec.ErrWaitDelay) || !strings.Contains(err.Error(), "timed out after 5s") ||
+			if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "timed out after 5s") ||
 				strings.Contains(err.Error(), "unavailable") {
 				t.Fatalf("snapshot error = %v, want timeout with its cause", err)
 			}
 			if len(h.fake.commands) != 4 || !slices.Equal(clock.sleeps, []time.Duration{readRetryDelay}) {
 				t.Fatalf("commands = %v, sleeps = %v", h.fake.commands, clock.sleeps)
+			}
+		})
+	}
+}
+
+func TestOwnedReadPipeCleanupFailureIsNotRetried(t *testing.T) {
+	for _, method := range []string{"status", "snapshot"} {
+		t.Run(method, func(t *testing.T) {
+			h := newOwnedHarness(t)
+			clock := installFakeWaitClock(h.session.backend)
+			calls := 0
+			h.fake.intercept = func(_ context.Context, key string) error {
+				if key == method {
+					calls++
+					return exec.ErrWaitDelay
+				}
+				return nil
+			}
+			_, err := h.session.ObserveWorkspaces(t.Context())
+			if !errors.Is(err, exec.ErrWaitDelay) || !strings.Contains(err.Error(), "output pipe cleanup exceeded 100ms") ||
+				!strings.Contains(err.Error(), "stdout") || strings.Contains(err.Error(), "timed out") ||
+				strings.Contains(err.Error(), "unavailable") {
+				t.Fatalf("read error = %v, want output pipe cleanup failure with its cause", err)
+			}
+			if calls != 1 || len(clock.sleeps) != 0 {
+				t.Fatalf("calls = %d, sleeps = %v", calls, clock.sleeps)
+			}
+			if !retryableCommandError(err) {
+				t.Fatalf("cleanup error = %v, want existing snapshot polling classification preserved", err)
 			}
 		})
 	}

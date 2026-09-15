@@ -507,11 +507,11 @@ func methodUnavailable(method string) error {
 }
 
 func commandTimedOut(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, exec.ErrWaitDelay)
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 func readMethodError(method string, err error) error {
-	if commandTimedOut(err) || errors.Is(err, context.Canceled) {
+	if commandTimedOut(err) || errors.Is(err, exec.ErrWaitDelay) || errors.Is(err, context.Canceled) {
 		return fmt.Errorf("herdr method %q: %w", method, err)
 	}
 	return methodUnavailable(method)
@@ -546,6 +546,8 @@ func (b *Backend) runContext(ctx context.Context, timeout time.Duration, binary 
 	out, err := b.output(callCtx, binary, routeEnvironment(target, b.control), args...)
 	if commandTimedOut(err) {
 		err = fmt.Errorf("timed out after %s: %w", timeout, err)
+	} else if errors.Is(err, exec.ErrWaitDelay) {
+		err = fmt.Errorf("herdr output pipe cleanup exceeded %s (a child process may still hold stdout/stderr open): %w", commandCleanupDelay, err)
 	}
 	return out, err
 }
@@ -664,7 +666,7 @@ func retryableCommandError(err error) bool {
 	if errors.As(err, &cleanupErr) {
 		return false
 	}
-	if commandTimedOut(err) {
+	if commandTimedOut(err) || errors.Is(err, exec.ErrWaitDelay) {
 		return true
 	}
 	var exitErr *exec.ExitError
