@@ -220,6 +220,12 @@ argv を組み直し、recovery テストで固定する(#363)。
 (ユーザー config の `plan_mode_reasoning_effort` に負けない。`supportedReasoningEffort`
 のクランプは明示値には掛けない)。明示値がないときは PR #339 の解決順を維持する。
 
+#363 と #791 は別 PR なので、その間の main では codex の Plan Mode lane と `--team` の
+team bridge lane が `Build*` を通らず、受理した model / effort を黙って捨てる。#363 は
+この 2 lane(`Request.CodexPlanMode()`、`CodexTeamMode`)に model / effort が付いたら
+ペイン作成前に「codexapp lane は未対応(#791)」のエラーで拒否し、#791 がその拒否を
+外す。受理した指定が無視される中間状態を作らない。
+
 Codex Plan Mode の復元(`cmd/fanout/tui_restore.go` → `codexapp.ResumeLaunchCommand`)は
 thread 再開で model は thread に付くため `--model` の再注入は不要。effort が thread settings
 に残るかは未確認で #362 の検証項目に含め、残らなければ `ResumeLaunchCommand` にも
@@ -293,13 +299,13 @@ thread 再開で model は thread に付くため `--model` の再注入は不�
 |---|---|---|---|
 | 1 | #790 | 本決定記録と roadmap / advisor doc の参照更新 | 文書 |
 | 1 | #362 | spike: 未確認事項の実機検証(codex resume 語順は #363 側) | — |
-| 1 | #363 | core: `Selection` / 文法 / `Definition` 拡張 / Build 全入口(起動 4 + 復元 2) / cliflags・plancmd / state 記録 / resume 再注入 / dry-run / goldens | H |
+| 1 | #363 | core: `Selection` / 文法 / `Definition` 拡張 / Build 全入口(起動 4 + 復元 2) / cliflags・plancmd / state 記録 / resume 再注入 / dry-run / goldens / codexapp lane への model・effort 指定は #791 まで明示拒否 | H |
 | 2 | #364 | plan spec `agent`(version 2)+ 解決順の plan lane 配線 + `--agent` 必須ゲートの spec 後置(両 backend の回帰テスト)+ skill の schema 記述改訂(← #363) | M |
 | 2 | #365 | settings 3 キー + 全 lane の消費 + RepoEditable gate(← #363) | H |
-| 2 | #791 | codexapp lane: `--model` / `--effort` 通過、app-server `-c`、plan lane の明示上書き、Plan 復元の effort(← #362 #363) | H(`cmd/fanout/codex_plan_tui.go` / `codex_team_tui.go`) |
+| 2 | #791 | codexapp lane: #363 の拒否を解除し `--model` / `--effort` 通過、app-server `-c`、plan lane の明示上書き、Plan 復元の effort(← #362 #363) | H(`cmd/fanout/codex_plan_tui.go` / `codex_team_tui.go`) |
 | 2 | #792 | 表示: sessionview / TUI / web(← #363) | M + web(`internal/app/sessionview`、`web/src/transport`) |
 | 3 | #366 | skills 推奨(fanout-issues / fanout-plan、claude + codex)+ plan 承認前の選択提示(← #363 #364) | M(`claude/` / `codex/` の配布プロンプト) |
-| 4 | #367 | README ペア / site / CLAUDE.md / AGENTS.md(← #363 #364 #365 #791 #792) | 文書 |
+| 4 | #367 | README ペア / site / CLAUDE.md / AGENTS.md(← #363 #364 #365 #366 #791 #792) | 文書 |
 
 epic #452(異種モデル協調)の #455 / #457 / #458 は #363 に依存し、#457 と #458 は
 #365 にも依存する。#458 の「coordinator のモデル指定」は決定 4 の `newSessionModels` で
