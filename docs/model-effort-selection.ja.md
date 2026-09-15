@@ -125,7 +125,13 @@ model / effort は name が一致する層からのみ採る(`--agent 5=codex` �
 
 `internal/core/agent` の `ResolveSelection(layers ...Selection)` 1 関数に集約し、
 issue / plan / TUI / watcher の全 lane が呼ぶ。「`--agent` 必須」の条件は「選択対象の
-全 task に spec `agent` がある」場合も満たすように広げる。
+全 task に spec `agent` がある」場合も満たすように広げる。plan lane では現状
+`cmd/fanout/plancmd.go` が spec を読む前に `resolveLaunchRuntime` を呼び、
+`run.ResolveRuntime`(`internal/app/run/runtime.go`)と Herdr の
+`configHasLaunchAgent`(`cmd/fanout/runtime_backend.go`)が空の agent を即拒否する。
+この 2 つの事前ゲートを spec 読み込み後まで遅らせるか、spec の agent 有無を runtime
+解決前に投影し、tmux / Herdr 両 backend の回帰テストで `fanout plan <spec>`(`--agent`
+なし)が通ることを固定する(#364)。
 
 ### 4. settings は lane 別 3 キー
 
@@ -148,6 +154,9 @@ flat スカラー制約と per-agent 既定を両立する。
   警告して無視する(有効なエントリは残す)。どの経路でも不正値を起動時まで流さない。
 - agent 名の既定は変えない。name は従来どおり `--agent` / `FANOUT_AGENT` / TUI の
   選択から来る。
+- `watcherAgent`(RepoEditable=true)は name-only のまま。`ValidateKnown` で検証し、`:` を
+  含む値は拒む。watcher lane の model / effort は `childModels` からだけ来る。repo config が
+  `watcherAgent: "claude:opus:xhigh"` で上の RepoEditable=false を迂回する穴を塞ぐため。
 
 | 起動レーン | 従うキー |
 |---|---|
@@ -183,7 +192,9 @@ web の agent セルを `Selection.String()` 形式にする(未指定なら nam
 
 restore は記録値を再注入する。mode と違い、model / effort は会話状態ではなく
 プロセス引数で、`claude --continue` は `--model` なしだと既定モデルに戻る。安価に
-起動した子が復元時に格上げされて quota を食うのを防ぐ。Herdr の再起動(同じ capsule
+起動した子が復元時に格上げされて quota を食うのを防ぐ。codex の `--model` / `-c` を
+`resume --last` の前に置くか後に置くかは #363 の PR 内で実機確認して決め(誤った語順の
+復元処理を先にマージしない)、結果を本書に追記する。Herdr の再起動(同じ capsule
 の再実行)は `LaunchCapsule.Args` に選択が載るので追加配線はないが、server restart 後の
 cold restart(`internal/app/panelaunch/managed_restart_resume.go` の
 `newManagedResumeIntent`)は新しい capsule の `Args` を `resume <ref>` に固定し、保存済み
@@ -253,11 +264,10 @@ thread 再開で model は thread に付くため `--model` の再注入は不�
 - fanout-plan skill の「schema に agent を足すな」ルールを撤回し、codex 側 skill の
   parity テスト(`internal/arch/codex_integrations_test.go`)を満たして更新する。
 - 未確認(spike #362 で確定し、本節を更新する): resume 時のモデル再指定が 3 CLI で
-  効くか(codex は `codex --model X -c … resume --last` の語順で効かなければ `resume` の
-  後ろに置く)、不正な model / effort を渡したときの各 CLI の挙動、codex app-server の
+  効くか(不正な model / effort を渡したときの各 CLI の挙動、codex app-server の
   `-c` が `config/read` と新規 thread の既定に反映されるか、Codex Plan Mode の復元で
   effort が thread settings に残るか、opencode 対話 TUI で effort を起動時に渡す手段の
-  有無。
+  有無。codex の resume 語順は #362 ではなく #363 の PR 内で確認する。
 
 ## 実装分解
 
@@ -267,17 +277,18 @@ thread 再開で model は thread に付くため `--model` の再注入は不�
 | Wave | issue | 内容 | クラス |
 |---|---|---|---|
 | 1 | #790 | 本決定記録と roadmap / advisor doc の参照更新 | 文書 |
-| 1 | #362 | spike: 未確認 4 項目の実機検証 | — |
+| 1 | #362 | spike: 未確認事項の実機検証(codex resume 語順は #363 側) | — |
 | 1 | #363 | core: `Selection` / 文法 / `Definition` 拡張 / Build 全入口(起動 4 + 復元 2) / cliflags・plancmd / state 記録 / resume 再注入 / dry-run / goldens | H |
-| 2 | #364 | plan spec `agent` + 解決順の plan lane 配線 + skill の schema 記述改訂(← #363) | M |
+| 2 | #364 | plan spec `agent` + 解決順の plan lane 配線 + `--agent` 必須ゲートの spec 後置(両 backend の回帰テスト)+ skill の schema 記述改訂(← #363) | M |
 | 2 | #365 | settings 3 キー + 全 lane の消費 + RepoEditable gate(← #363) | H |
 | 2 | #791 | codexapp lane: `--model` / `--effort` 通過、app-server `-c`、plan lane の明示上書き、Plan 復元の effort(← #362 #363) | H(`cmd/fanout/codex_plan_tui.go` / `codex_team_tui.go`) |
 | 2 | #792 | 表示: sessionview / TUI / web(← #363) | M + web(`internal/app/sessionview`、`web/src/transport`) |
 | 3 | #366 | skills 推奨(fanout-issues / fanout-plan、claude + codex)(← #363 #364) | M(`claude/` / `codex/` の配布プロンプト) |
 | 4 | #367 | README ペア / site / CLAUDE.md / AGENTS.md(← #363 #364 #365 #791 #792) | 文書 |
 
-epic #452(異種モデル協調)の #455 / #457 / #458 は #363 に依存し、#457 は #365 にも
-依存する。#458 の「coordinator のモデル指定」は決定 4 の `newSessionModels` で満たす。
+epic #452(異種モデル協調)の #455 / #457 / #458 は #363 に依存し、#457 と #458 は
+#365 にも依存する。#458 の「coordinator のモデル指定」は決定 4 の `newSessionModels` で
+満たすため。
 
 ## 参照
 
