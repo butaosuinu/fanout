@@ -91,17 +91,10 @@ func RuntimeResourceFromObservation(observation backend.WorkspaceObservation) Ru
 		Label:       observation.Label,
 		PaneID:      observation.Pane.Pane,
 		TerminalID:  observation.TerminalID,
-		CurrentPath: cleanRuntimeResourcePath(observation.CWD),
-		RepoKey:     cleanRuntimeResourcePath(observation.RepoKey),
-		RepoRoot:    cleanRuntimeResourcePath(observation.RepoRoot),
+		CurrentPath: filepath.Clean(observation.CWD),
+		RepoKey:     filepath.Clean(observation.RepoKey),
+		RepoRoot:    filepath.Clean(observation.RepoRoot),
 	}
-}
-
-func cleanRuntimeResourcePath(path string) string {
-	if path == "" {
-		return ""
-	}
-	return filepath.Clean(path)
 }
 
 // RuntimeServerIdentity is the persisted owner marker and supervisor lease

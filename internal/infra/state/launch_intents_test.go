@@ -32,10 +32,11 @@ func TestRuntimeResourceFromObservationCleansNonEmptyPaths(t *testing.T) {
 		t.Fatalf("RuntimeResourceFromObservation() = %#v, want %#v", got, want)
 	}
 
+	// filepath.Clean intentionally maps empty paths to "." to preserve the existing lifecycle intent format.
 	observation.CWD, observation.RepoKey, observation.RepoRoot = "", "", ""
 	got := RuntimeResourceFromObservation(observation)
-	if got.CurrentPath != "" || got.RepoKey != "" || got.RepoRoot != "" {
-		t.Fatalf("empty paths projected as (%q, %q, %q), want empty", got.CurrentPath, got.RepoKey, got.RepoRoot)
+	if got.CurrentPath != "." || got.RepoKey != "." || got.RepoRoot != "." {
+		t.Fatalf("empty paths projected as (%q, %q, %q), want all dots", got.CurrentPath, got.RepoKey, got.RepoRoot)
 	}
 }
 

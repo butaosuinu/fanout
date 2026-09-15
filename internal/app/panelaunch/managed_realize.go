@@ -526,7 +526,7 @@ func finalizeManagedCoordinator(
 	if err := validateWorkspacePostcondition(intent, nil, observation); err != nil {
 		return ManagedRealizeResult{}, markManagedIntentManual(locked, intent, err)
 	}
-	intent.Resource = stateResource(observation)
+	intent.Resource = coordinatorStateResource(observation)
 	intent.Status = state.IntentRealized
 	locked.UpsertIntent(intent)
 	if err := locked.Save(); err != nil {

@@ -427,7 +427,7 @@ func adoptRecoveredManagedCoordinator(
 	if err := validateWorkspacePostcondition(intent, nil, match); err != nil {
 		return ManagedRealizeResult{}, markManagedIntentManual(locked, intent, err)
 	}
-	resource := stateResource(match)
+	resource := coordinatorStateResource(match)
 	if _, sourceErr := managedCoordinatorSource(ctx, resource, requestSource); sourceErr != nil {
 		if errors.Is(sourceErr, errManagedRealizedIdentityChanged) {
 			return ManagedRealizeResult{}, markManagedIntentManual(locked, intent, sourceErr)
