@@ -574,7 +574,7 @@ func exactManagedLaunchPane(
 			intent.Resource.Label != "", pane.WorkspaceLabel == intent.Resource.Label,
 			pane.Ref.Pane == intent.Resource.PaneID,
 			pane.TerminalID == intent.Resource.TerminalID,
-			pane.RepoKey == intent.Resource.RepoKey,
+			state.CleanRuntimeResourcePath(pane.RepoKey) == state.CleanRuntimeResourcePath(intent.Resource.RepoKey),
 			filepath.Clean(pane.CurrentPath) == filepath.Clean(intent.WorktreePath),
 			pane.SessionID == intent.Session, pane.SocketPath == intent.SocketPath,
 			pane.AgentPresent, pane.AgentID == wantAgentID,

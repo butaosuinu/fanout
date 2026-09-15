@@ -439,8 +439,10 @@ func restartedCodexPlaceholderMatches(saved state.Pane, current backend.LivePane
 		current.TerminalID != saved.TerminalID,
 		current.WorkspaceLabel == saved.WorkspaceLabel, sameSession,
 		!current.AgentPresent, current.AgentID == "", current.AgentProvider == "",
-		current.RepoKey == saved.RepoKey, current.ProjectRoot == saved.RepoRoot,
-		current.WorktreePath == saved.WorktreePath, current.CurrentPath == saved.WorktreePath,
+		state.CleanRuntimeResourcePath(current.RepoKey) == state.CleanRuntimeResourcePath(saved.RepoKey),
+		state.CleanRuntimeResourcePath(current.ProjectRoot) == state.CleanRuntimeResourcePath(saved.RepoRoot),
+		state.CleanRuntimeResourcePath(current.WorktreePath) == state.CleanRuntimeResourcePath(saved.WorktreePath),
+		state.CleanRuntimeResourcePath(current.CurrentPath) == state.CleanRuntimeResourcePath(saved.WorktreePath),
 	}
 	return !slices.Contains(requirements, false)
 }
@@ -588,8 +590,10 @@ func newManagedResumeIntent(
 		WorkspaceLabel: saved.WorkspaceLabel,
 		Resource: state.RuntimeResource{
 			WorkspaceID: current.Ref.Workspace, Label: current.WorkspaceLabel,
-			PaneID: current.Ref.Pane, TerminalID: current.TerminalID, CurrentPath: current.CurrentPath,
-			RepoKey: current.RepoKey, RepoRoot: current.ProjectRoot,
+			PaneID: current.Ref.Pane, TerminalID: current.TerminalID,
+			CurrentPath: state.CleanRuntimeResourcePath(current.CurrentPath),
+			RepoKey:     state.CleanRuntimeResourcePath(current.RepoKey),
+			RepoRoot:    state.CleanRuntimeResourcePath(current.ProjectRoot),
 		},
 		Session: saved.SessionID, SocketPath: saved.SocketPath,
 		ExpiresUnixMS: deadline.UnixMilli(), ResumeAgentSession: &ref,
@@ -695,9 +699,11 @@ func exactManagedResumeRoute(intent state.LaunchIntent, pane backend.LivePane) b
 	requirements := []bool{
 		pane.Ref.Backend == backend.Herdr, pane.Ref.Workspace == intent.Resource.WorkspaceID,
 		pane.Ref.Pane == intent.Resource.PaneID, pane.TerminalID == intent.Resource.TerminalID,
-		pane.WorkspaceLabel == intent.Resource.Label, pane.CurrentPath == intent.Resource.CurrentPath,
-		pane.RepoKey == intent.Resource.RepoKey, pane.ProjectRoot == intent.Resource.RepoRoot,
-		pane.WorktreePath == intent.WorktreePath,
+		pane.WorkspaceLabel == intent.Resource.Label,
+		state.CleanRuntimeResourcePath(pane.CurrentPath) == state.CleanRuntimeResourcePath(intent.Resource.CurrentPath),
+		state.CleanRuntimeResourcePath(pane.RepoKey) == state.CleanRuntimeResourcePath(intent.Resource.RepoKey),
+		state.CleanRuntimeResourcePath(pane.ProjectRoot) == state.CleanRuntimeResourcePath(intent.Resource.RepoRoot),
+		state.CleanRuntimeResourcePath(pane.WorktreePath) == state.CleanRuntimeResourcePath(intent.WorktreePath),
 		pane.SessionID == intent.Session, pane.SocketPath == intent.SocketPath,
 		sameAgentSession,
 	}

@@ -117,6 +117,10 @@ func TestResumeRestartedManagedRowsRebindsExactCodexProcess(t *testing.T) {
 	saved, placeholder := restartCodexFixture()
 	saved.EmitterRebindNonce = strings.Repeat("c", 32)
 	saved.EmitterRebindSequence = 7
+	placeholder.CurrentPath = "/repo/./worktree"
+	placeholder.WorktreePath = "/repo/worktree/."
+	placeholder.RepoKey = "/repo/worktree/../.git"
+	placeholder.ProjectRoot = "/repo/."
 	placeholder.AgentState = backend.AgentIdle
 	resumed := resumedCodexPane(placeholder)
 	recordRestartStatePane(t, repo, saved)
@@ -192,6 +196,28 @@ func TestResumeRestartedManagedRowsRefreshesShellAndConsoleTerminalIDs(t *testin
 	}
 	if runtime.waitCalls != 2 {
 		t.Fatalf("restart waits = %d, want staged shell and console observations", runtime.waitCalls)
+	}
+}
+
+func TestExactManagedResumeRouteCleansObservedResourcePaths(t *testing.T) {
+	saved, pane := restartCodexFixture()
+	pane.CurrentPath = "/repo/worktree/."
+	pane.RepoKey = "/repo/worktree/../.git"
+	pane.ProjectRoot = "/repo/."
+	intent := newManagedResumeIntent(
+		"resume", "nonce", "/env", 1,
+		managedRestartCandidate{row: managedRestartRow{saved: saved}, live: pane},
+		time.Now().Add(time.Minute),
+	)
+	if intent.Resource.CurrentPath != "/repo/worktree" || intent.Resource.RepoKey != "/repo/.git" ||
+		intent.Resource.RepoRoot != "/repo" {
+		t.Fatalf("saved resume resource paths = %+v", intent.Resource)
+	}
+	pane.CurrentPath = "/repo/./worktree"
+	pane.RepoKey = "/repo/worktree/../.git"
+	pane.ProjectRoot = "/repo/."
+	if !exactManagedResumeRoute(intent, pane) {
+		t.Fatal("dot-segment live paths did not match the saved resume resource")
 	}
 }
 

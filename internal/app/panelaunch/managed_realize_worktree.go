@@ -203,6 +203,12 @@ func (r *managedWorktreeRealization) resolveIntent(
 // adoptSavedIntent re-verifies a journal-held intent against the request and
 // narrows the request to the owner project root its saved path implies.
 func (r *managedWorktreeRealization) adoptSavedIntent(intent *state.LaunchIntent) error {
+	savedCoordinatorPath := intent.Coordinator.CurrentPath
+	intent.Coordinator.CurrentPath = state.CleanRuntimeResourcePath(savedCoordinatorPath)
+	r.coordinator.CurrentPath = state.CleanRuntimeResourcePath(r.coordinator.CurrentPath)
+	if intent.Coordinator.CurrentPath != savedCoordinatorPath {
+		r.intentHealed = true
+	}
 	if intent.Coordinator != r.coordinator {
 		coordinator, found := restartedManagedCoordinatorResource(r.coordinator, intent.Coordinator)
 		if !found {

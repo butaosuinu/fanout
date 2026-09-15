@@ -84,6 +84,27 @@ type RuntimeResource struct {
 	RepoRoot    string `json:"repoRoot,omitempty"`
 }
 
+// RuntimeResourceFromObservation projects one workspace into canonical journal identity.
+func RuntimeResourceFromObservation(observation backend.WorkspaceObservation) RuntimeResource {
+	return RuntimeResource{
+		WorkspaceID: observation.WorkspaceID,
+		Label:       observation.Label,
+		PaneID:      observation.Pane.Pane,
+		TerminalID:  observation.TerminalID,
+		CurrentPath: CleanRuntimeResourcePath(observation.CWD),
+		RepoKey:     CleanRuntimeResourcePath(observation.RepoKey),
+		RepoRoot:    CleanRuntimeResourcePath(observation.RepoRoot),
+	}
+}
+
+// CleanRuntimeResourcePath preserves an absent path while normalizing a reported path.
+func CleanRuntimeResourcePath(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
+}
+
 // RuntimeServerIdentity is the persisted owner marker and supervisor lease
 // identity used to fence one explicit restart or shutdown.
 type RuntimeServerIdentity struct {

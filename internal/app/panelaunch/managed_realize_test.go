@@ -881,6 +881,35 @@ func TestWorkspaceHasManagedResourceMatchesSavedRootAmongMultiplePanes(t *testin
 	}
 }
 
+func TestWorkspaceHasManagedResourceCleansMultiPaneCWD(t *testing.T) {
+	expected := state.RuntimeResource{
+		WorkspaceID: "w1", Label: "fanout-coordinator-token", PaneID: "w1:p1",
+		TerminalID: "term-1", CurrentPath: "/repo/worktree/.",
+		RepoKey: "/repo/worktree/../.git", RepoRoot: "/repo/.",
+	}
+	observation := backend.WorkspaceObservation{
+		WorkspaceID: expected.WorkspaceID, Label: expected.Label,
+		RepoKey: "/repo/.git", RepoRoot: "/repo",
+		Panes: []backend.WorkspacePaneObservation{
+			{
+				Pane: backend.PaneRef{
+					Backend: backend.Herdr, Workspace: expected.WorkspaceID, Pane: expected.PaneID,
+				},
+				TerminalID: expected.TerminalID, CWD: "/repo/./worktree",
+			},
+			{
+				Pane: backend.PaneRef{
+					Backend: backend.Herdr, Workspace: expected.WorkspaceID, Pane: "w1:p2",
+				},
+				TerminalID: "term-2", CWD: "/repo/other",
+			},
+		},
+	}
+	if !workspaceHasManagedResource(observation, expected) {
+		t.Fatal("dot-segment pane path did not match the saved resource")
+	}
+}
+
 func TestRestartedManagedWorktreeResourceRequiresExactIdentity(t *testing.T) {
 	expected := state.RuntimeResource{
 		WorkspaceID: "w1", Label: "fanout-worktree-token", PaneID: "w1:p1",

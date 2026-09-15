@@ -18,6 +18,28 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
 )
 
+func TestRuntimeResourceFromObservationCleansNonEmptyPaths(t *testing.T) {
+	observation := backend.WorkspaceObservation{
+		WorkspaceID: "workspace-1", Label: "label-1",
+		Pane: backend.PaneRef{Pane: "pane-1"}, TerminalID: "terminal-1",
+		CWD: "/repo/worktree/../worktree", RepoKey: "/repo/./.git", RepoRoot: "/repo/.",
+	}
+	want := RuntimeResource{
+		WorkspaceID: "workspace-1", Label: "label-1", PaneID: "pane-1", TerminalID: "terminal-1",
+		CurrentPath: "/repo/worktree", RepoKey: "/repo/.git", RepoRoot: "/repo",
+	}
+	if got := RuntimeResourceFromObservation(observation); got != want {
+		t.Fatalf("RuntimeResourceFromObservation() = %#v, want %#v", got, want)
+	}
+
+	// Coordinator postconditions require empty provenance, and wildcard matching relies on preserving it.
+	observation.CWD, observation.RepoKey, observation.RepoRoot = "", "", ""
+	got := RuntimeResourceFromObservation(observation)
+	if got.CurrentPath != "" || got.RepoKey != "" || got.RepoRoot != "" {
+		t.Fatalf("empty paths projected as (%q, %q, %q), want empty", got.CurrentPath, got.RepoKey, got.RepoRoot)
+	}
+}
+
 func TestHerdrIntentsAreSharedAcrossLinkedWorktrees(t *testing.T) {
 	repo := newLaunchJournalRepo(t)
 	sibling := filepath.Join(t.TempDir(), "sibling")
