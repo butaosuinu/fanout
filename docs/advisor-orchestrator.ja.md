@@ -300,7 +300,8 @@ post-work-review(claude 実装 → codex レビュー)の鏡像。codex 子が�
 
 roadmap(2026-07-02 棚卸し)上は #368 が週 2〜3 で進行中。本エピックの
 spike 2 本は独立に着手できる。コア配線の #363/#365 依存は一様ではない —
-#455/#458 は #363 のみ、#457 は #363 と #365 の両方、#459(クロスモデル
+#455 は #363 のみ、#457 と #458 は #363 と #365 の両方(#458 の coordinator
+モデル指定は #365 の `newSessionModels` で満たすため)、#459(クロスモデル
 レビュー)は #363/#365 のいずれにも依存せず spike #454 の直後に着手できる。
 roadmap への組み込みは次回棚卸しで判断する。
 
@@ -324,7 +325,7 @@ roadmap への組み込みは次回棚卸しで判断する。
 | 1 | #454 | [spike] claude --advisor パススルーと headless fable の実機検証 | なし |
 | 2 | #455 | advisor ペイン起動と roster への role 登録 | #453, #363 |
 | 2 | #457 | claude 子への --advisor パススルー | #454, #363, #365 |
-| 2 | #458 | orchestrator レシピ(coordinator モデル指定 + skill) | #454, #363 |
+| 2 | #458 | orchestrator レシピ(coordinator モデル指定 + skill) | #454, #363, #365 |
 | 2 | #459 | クロスモデルレビュー skill + briefing gate | #454 |
 | 3 | #456 | briefing 相談プロトコル文面 + SKILL.md nudge 記述修正 | #455 |
 | 3 | #460 | README / site 反映(en/ja) | #455, #456, #457, #458, #459 |

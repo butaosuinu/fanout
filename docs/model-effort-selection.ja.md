@@ -71,7 +71,8 @@ claude は settings JSON の `model` / `effortLevel` と env `ANTHROPIC_MODEL` /
 claude                     名前のみ(従来どおり)
 claude:opus                モデルのみ
 claude:fable:xhigh         モデル + effort
-codex::xhigh               effort のみ(モデルは codex 既定)
+codex::xhigh               effort のみ(model は未指定。下位層に codex の
+                           エントリがあればその model、無ければ codex CLI の既定)
 ```
 
 `internal/core/agent` に `Selection{Name, Model, Effort}`、`ParseSelection(raw)`、
@@ -117,6 +118,10 @@ model / effort は name が一致する層からのみ採る(`--agent 5=codex` �
 3. bare `--agent <sel>` / `FANOUT_AGENT`
 4. settings の lane 別既定(name で引く。model / effort の空欄だけ埋める)
 5. なし(フラグを付けない = agent CLI の既定)
+
+空欄は常に下位層で補う。`--agent 5=codex::xhigh` でも `childModels` に `codex:gpt-6-astra:…`
+があれば model は `gpt-6-astra` になり、settings を持ったまま CLI 既定へ明示的に戻す
+記法はない(戻すなら settings のエントリを外す)。
 
 `internal/core/agent` の `ResolveSelection(layers ...Selection)` 1 関数に集約し、
 issue / plan / TUI / watcher の全 lane が呼ぶ。「`--agent` 必須」の条件は「選択対象の
@@ -178,8 +183,12 @@ web の agent セルを `Selection.String()` 形式にする(未指定なら nam
 
 restore は記録値を再注入する。mode と違い、model / effort は会話状態ではなく
 プロセス引数で、`claude --continue` は `--model` なしだと既定モデルに戻る。安価に
-起動した子が復元時に格上げされて quota を食うのを防ぐ。Herdr は `LaunchCapsule.Args`
-に既に載るので追加配線はない。
+起動した子が復元時に格上げされて quota を食うのを防ぐ。Herdr の再起動(同じ capsule
+の再実行)は `LaunchCapsule.Args` に選択が載るので追加配線はないが、server restart 後の
+cold restart(`internal/app/panelaunch/managed_restart_resume.go` の
+`newManagedResumeIntent`)は新しい capsule の `Args` を `resume <ref>` に固定し、保存済み
+Args を再利用しない。この経路は `LaunchCapsule` に `Model` / `Effort` を持たせて resume
+argv を組み直し、recovery テストで固定する(#363)。
 
 ### 7. codex app-server lane
 
