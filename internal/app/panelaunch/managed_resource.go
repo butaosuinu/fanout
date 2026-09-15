@@ -136,7 +136,8 @@ func workspaceHasExactRestartProvenance(
 		observation.WorkspaceID == expected.WorkspaceID,
 		observation.Label == expected.Label,
 		filepath.Clean(observation.Path) == filepath.Clean(expected.CurrentPath),
-		observation.RepoKey == expected.RepoKey, observation.RepoRoot == expected.RepoRoot,
+		state.CleanRuntimeResourcePath(observation.RepoKey) == expected.RepoKey,
+		state.CleanRuntimeResourcePath(observation.RepoRoot) == expected.RepoRoot,
 	}
 	return !slices.Contains(requirements, false)
 }
@@ -215,15 +216,15 @@ func paneHasManagedResource(
 		pane.Pane.Workspace == expected.WorkspaceID &&
 		pane.Pane.Pane == expected.PaneID &&
 		pane.TerminalID == expected.TerminalID &&
-		pane.CWD == expected.CurrentPath
+		state.CleanRuntimeResourcePath(pane.CWD) == expected.CurrentPath
 }
 
 func workspaceProvenanceMatches(
 	observation backend.WorkspaceObservation,
 	expected state.RuntimeResource,
 ) bool {
-	return (expected.RepoKey == "" || observation.RepoKey == expected.RepoKey) &&
-		(expected.RepoRoot == "" || observation.RepoRoot == expected.RepoRoot)
+	return (expected.RepoKey == "" || state.CleanRuntimeResourcePath(observation.RepoKey) == expected.RepoKey) &&
+		(expected.RepoRoot == "" || state.CleanRuntimeResourcePath(observation.RepoRoot) == expected.RepoRoot)
 }
 
 // managedCoordinatorLabelKind names the coordinator lane in workspace labels;

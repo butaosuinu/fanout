@@ -695,8 +695,10 @@ func exactManagedResumeRoute(intent state.LaunchIntent, pane backend.LivePane) b
 	requirements := []bool{
 		pane.Ref.Backend == backend.Herdr, pane.Ref.Workspace == intent.Resource.WorkspaceID,
 		pane.Ref.Pane == intent.Resource.PaneID, pane.TerminalID == intent.Resource.TerminalID,
-		pane.WorkspaceLabel == intent.Resource.Label, pane.CurrentPath == intent.Resource.CurrentPath,
-		pane.RepoKey == intent.Resource.RepoKey, pane.ProjectRoot == intent.Resource.RepoRoot,
+		pane.WorkspaceLabel == intent.Resource.Label,
+		state.CleanRuntimeResourcePath(pane.CurrentPath) == intent.Resource.CurrentPath,
+		state.CleanRuntimeResourcePath(pane.RepoKey) == intent.Resource.RepoKey,
+		state.CleanRuntimeResourcePath(pane.ProjectRoot) == intent.Resource.RepoRoot,
 		pane.WorktreePath == intent.WorktreePath,
 		pane.SessionID == intent.Session, pane.SocketPath == intent.SocketPath,
 		sameAgentSession,

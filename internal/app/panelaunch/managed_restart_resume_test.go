@@ -195,6 +195,21 @@ func TestResumeRestartedManagedRowsRefreshesShellAndConsoleTerminalIDs(t *testin
 	}
 }
 
+func TestExactManagedResumeRouteCleansObservedResourcePaths(t *testing.T) {
+	saved, pane := restartCodexFixture()
+	intent := newManagedResumeIntent(
+		"resume", "nonce", "/env", 1,
+		managedRestartCandidate{row: managedRestartRow{saved: saved}, live: pane},
+		time.Now().Add(time.Minute),
+	)
+	pane.CurrentPath = "/repo/./worktree"
+	pane.RepoKey = "/repo/worktree/../.git"
+	pane.ProjectRoot = "/repo/."
+	if !exactManagedResumeRoute(intent, pane) {
+		t.Fatal("dot-segment live paths did not match the saved resume resource")
+	}
+}
+
 func TestResumeRestartedManagedRowsKeepsShellTerminalIDOnIdentityMismatch(t *testing.T) {
 	tests := map[string]func(*backend.LivePane){
 		"workspace label":     func(live *backend.LivePane) { live.WorkspaceLabel = "foreign" },

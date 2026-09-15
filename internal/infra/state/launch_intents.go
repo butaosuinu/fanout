@@ -91,13 +91,14 @@ func RuntimeResourceFromObservation(observation backend.WorkspaceObservation) Ru
 		Label:       observation.Label,
 		PaneID:      observation.Pane.Pane,
 		TerminalID:  observation.TerminalID,
-		CurrentPath: cleanRuntimeResourcePath(observation.CWD),
-		RepoKey:     cleanRuntimeResourcePath(observation.RepoKey),
-		RepoRoot:    cleanRuntimeResourcePath(observation.RepoRoot),
+		CurrentPath: CleanRuntimeResourcePath(observation.CWD),
+		RepoKey:     CleanRuntimeResourcePath(observation.RepoKey),
+		RepoRoot:    CleanRuntimeResourcePath(observation.RepoRoot),
 	}
 }
 
-func cleanRuntimeResourcePath(path string) string {
+// CleanRuntimeResourcePath preserves an absent path while normalizing a reported path.
+func CleanRuntimeResourcePath(path string) string {
 	if path == "" {
 		return ""
 	}
