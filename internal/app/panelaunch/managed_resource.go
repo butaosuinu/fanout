@@ -40,15 +40,7 @@ func workspacesWithLabel(
 }
 
 func stateResource(observation backend.WorkspaceObservation) state.RuntimeResource {
-	return state.RuntimeResource{
-		WorkspaceID: observation.WorkspaceID,
-		Label:       observation.Label,
-		PaneID:      observation.Pane.Pane,
-		TerminalID:  observation.TerminalID,
-		CurrentPath: observation.CWD,
-		RepoKey:     observation.RepoKey,
-		RepoRoot:    observation.RepoRoot,
-	}
+	return state.RuntimeResourceFromObservation(observation)
 }
 
 func observationResource(resource state.RuntimeResource) backend.WorkspaceObservation {

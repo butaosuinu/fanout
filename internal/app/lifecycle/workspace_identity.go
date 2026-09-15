@@ -71,18 +71,8 @@ func resourceFromPane(pane state.Pane) state.RuntimeResource {
 	}
 }
 
-// This projection duplicates panelaunch.stateResource until a follow-up can
-// move the shared Herdr observation mapping below both app packages.
 func resourceFromObservation(observation backend.WorkspaceObservation) state.RuntimeResource {
-	return state.RuntimeResource{
-		WorkspaceID: observation.WorkspaceID,
-		Label:       observation.Label,
-		PaneID:      observation.Pane.Pane,
-		TerminalID:  observation.TerminalID,
-		CurrentPath: filepath.Clean(observation.CWD),
-		RepoKey:     filepath.Clean(observation.RepoKey),
-		RepoRoot:    filepath.Clean(observation.RepoRoot),
-	}
+	return state.RuntimeResourceFromObservation(observation)
 }
 
 func observeWorkspaceCleanup(

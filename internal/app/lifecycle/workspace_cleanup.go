@@ -2035,13 +2035,9 @@ func realizeReplannedManualCoordinator(
 }
 
 func coordinatorResource(workspace backend.WorkspaceObservation) state.RuntimeResource {
-	return state.RuntimeResource{
-		WorkspaceID: workspace.WorkspaceID,
-		Label:       workspace.Label,
-		PaneID:      workspace.Pane.Pane,
-		TerminalID:  workspace.TerminalID,
-		CurrentPath: filepath.Clean(workspace.CWD),
-	}
+	resource := state.RuntimeResourceFromObservation(workspace)
+	resource.RepoKey, resource.RepoRoot = "", ""
+	return resource
 }
 
 //nolint:funlen // Keep the persisted cleanup identity and hook obligations visible in one constructor.

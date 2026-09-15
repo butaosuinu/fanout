@@ -311,10 +311,6 @@ A のみの PR は AI レビューで可**。M はどちらも変更内容次第
   `watch.IO` のような port 経由を優先する。具象 runtime adapter
   (`tmuxrun` / `tmuxbackend` / `herdrrun`)への辺だけは容認をやめ、
   godep-cruiser のルールで塞いだ。
-- `WorkspaceObservation` → `state.RuntimeResource` の投影が 3 箇所に
-  手書きされている(`panelaunch` の stateResource と `lifecycle` の 2 変種)。
-  path の `filepath.Clean` 有無が揃っておらず、共有投影を `state` 側に
-  1 本置けば畳める(コード内コメントでも追跡中)。
 - `PaneDecorator` は tmuxrun の setter 5 本の 1:1 転写で、呼び出し側が毎回
   5 連続 best-effort 呼びを並べる。`DecoratePane(PaneDecoration{...})` の
   構造体 1 発に畳む余地がある(tmux 側のみの整理で可)。
