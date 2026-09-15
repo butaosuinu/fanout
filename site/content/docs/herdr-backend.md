@@ -27,6 +27,8 @@ The TUI console and web dashboard use `reported_state` only while the matching p
 
 Before closing a checkout-free console or coordinator workspace, fanout requires the admitted pane to be its only pane. A remaining auxiliary pane requires manual cleanup. A failed preflight snapshot leaves the workspace unchanged; a failed post-close verification snapshot returns an error with the close result unknown.
 
+Run `fanout plan <slug> --cleanup` after closing the plan's tasks. Once no task rows remain, cleanup closes the coordinator workspace and retires its state row and intent. If the close response is lost, rerun cleanup to confirm absence; a workspace still present requires manual cleanup without resending the close. Then `fanout herdr shutdown` can stop the server once its other resources are gone.
+
 Before issuing the removal, fanout separates tracked changes or non-ignored untracked files from ignored files. Tracked changes and non-ignored untracked files stop cleanup without issuing a herdr mutation. An ignored-only checkout proceeds after `git -c clean.requireForce=true clean -fdX` removes the ignored files; fanout logs the number removed. Any remaining files stop removal. Retry checks the checkout again. A saved manual-cleanup intent whose failure was `dirty_worktree_requires_force` is replanned from the current checkout and workspace state, so committing or removing the files unblocks it ([#721](https://github.com/butaosuinu/fanout/issues/721)). An ambiguous issued mutation remains manual and is never replayed. Branch deletion uses fanout's compare-and-delete and applies only to a branch recorded as fanout-created.
 
 ### Recover a blocked cleanup

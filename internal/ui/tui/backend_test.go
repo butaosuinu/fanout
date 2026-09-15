@@ -19,6 +19,17 @@ func configuredTmuxClose(backend.CloseRequest) (backend.CloseResult, error) {
 	return backend.CloseResult{Status: backend.CloseConfirmed}, nil
 }
 
+func TestPlanCoordinatorCloseGuidesCleanup(t *testing.T) {
+	pane := paneView{
+		Kind: state.PaneKindShell, Backend: backend.Herdr,
+		savedPane: state.Pane{RuntimeParent: "plan:demo"},
+	}
+	reason := (model{}).lifecycleActionDisabledReason(&pane, "close")
+	if !strings.Contains(reason, "fanout plan demo --cleanup") {
+		t.Fatalf("close reason = %q", reason)
+	}
+}
+
 func TestViewAlwaysShowsBackendSelectionAndReason(t *testing.T) {
 	for _, width := range []int{120, 40} {
 		m := newModel(Options{

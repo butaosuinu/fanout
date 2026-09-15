@@ -398,6 +398,20 @@ func managedShutdownCoordinatorRow(pane state.Pane) bool {
 	return !slices.Contains(requirements, false)
 }
 
+// ValidateManagedCoordinatorRetirement binds a checkout-free coordinator row
+// to its saved intent before a lifecycle caller opens an owned runtime.
+func ValidateManagedCoordinatorRetirement(pane state.Pane, intent state.LaunchIntent) (err error) {
+	defer errs.Wrap(&err, "validate managed coordinator retirement")
+	if !managedShutdownCoordinatorRow(pane) || intent.Kind != state.IntentCoordinator ||
+		intent.RuntimeParent != pane.RuntimeParent || intent.Launch != nil ||
+		intent.Resource.RepoKey != "" || intent.Resource.RepoRoot != "" || intent.BranchName != "" {
+		return fmt.Errorf("saved Herdr coordinator has an invalid retirement identity")
+	}
+	return validateManagedCoordinatorPane(pane, intent, backend.OwnedLaunchRoute{
+		Session: intent.Session, SocketPath: intent.SocketPath,
+	})
+}
+
 func retireManagedShutdownScaffolds(
 	ctx context.Context,
 	projectRoot string,

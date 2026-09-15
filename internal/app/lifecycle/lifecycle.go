@@ -358,7 +358,7 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 }
 
 // CleanupPlan closes every recorded plan task for parent whose recorded branch
-// has at least one MERGED PR.
+// has at least one MERGED PR, then retires its coordinator when no tasks remain.
 //
 //nolint:gocognit,gocyclo,funlen // Keep branch eligibility and per-task fail-soft cleanup in one lock-held orchestration.
 func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
@@ -372,7 +372,7 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	panes := taskPanesForParent(allParentPanes)
 	if len(panes) == 0 {
 		lg.Info("--cleanup: no recorded plan task panes for parent %s", parent)
-		return exitcode.OK
+		return cleanupPlanCoordinator(opts, locked, parent, lg)
 	}
 	panes, retired, err := retireCompletedTaskCleanups(opts, locked, parent, panes, lg)
 	if err != nil {
@@ -382,7 +382,7 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	if retired > 0 {
 		lg.Ok("--cleanup: retired %d completed Herdr cleanup(s)", retired)
 		if len(panes) == 0 {
-			return exitcode.OK
+			return cleanupPlanCoordinator(opts, locked, parent, lg)
 		}
 	}
 
@@ -450,7 +450,7 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 		return exitcode.Env
 	}
 	lg.Ok("--cleanup: closed %d merged plan task pane(s)", closed)
-	return exitcode.OK
+	return cleanupPlanCoordinator(opts, locked, parent, lg)
 }
 
 func validateState(mode string, opts Options, lg Logger) exitcode.Code {

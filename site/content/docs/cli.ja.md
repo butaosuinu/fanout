@@ -199,6 +199,8 @@ fanout plan launch-plan --cleanup
 `--merge <task-id>` は記録済み task branch を project checkout へ fast-forward
 します。`--close <task-id>` は記録済み task worktree、ペイン、state row を削除します。
 `--cleanup` は head branch に merge 済み PR がある記録済み plan task ペインを閉じます。
+herdr では、その plan の task 行が 0 件になると coordinator workspace も閉じ、state 行と intent を退役します。
+同じ workspace に別 pane が残る場合は manual cleanup が必要です。
 これらの mode は `FANOUT_STATE_PATH` を尊重します。
 
 agent wrapper は同梱 skill 経由で plan fan-out へ routing します。Claude Code は
