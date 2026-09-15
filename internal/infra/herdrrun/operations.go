@@ -753,9 +753,9 @@ func (b *Backend) ownedSnapshotView(ctx context.Context, admission ownedAdmissio
 	if err != nil {
 		return ownedSnapshotView{}, err
 	}
-	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "api", "snapshot")
+	out, err := b.runReadContext(ctx, probed.binary, probed.route, "api", "snapshot")
 	if err != nil {
-		return ownedSnapshotView{}, methodUnavailable("session.snapshot")
+		return ownedSnapshotView{}, readMethodError("session.snapshot", err)
 	}
 	var envelope snapshotEnvelope
 	err = decodeOne(out, &envelope)
