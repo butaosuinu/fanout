@@ -209,12 +209,15 @@ func TestCleanupPlanCoordinatorRejectsChangedIdentityAndObservationFailure(t *te
 
 func TestCleanupPlanLeavesOtherCoordinatorAndAtomicLaneUnchanged(t *testing.T) {
 	fixture, pane, runtime := newPlanCoordinatorFixture(t)
-	for _, change := range []string{"other plan", "atomic backend"} {
+	for _, change := range []string{"other plan", "issue coordinator", "atomic backend"} {
 		t.Run(change, func(t *testing.T) {
 			other := pane
-			if change == "other plan" {
+			switch change {
+			case "other plan":
 				other.RuntimeParent = "plan:other"
-			} else {
+			case "issue coordinator":
+				other.RuntimeParent = "425"
+			case "atomic backend":
 				other.Backend = backend.Tmux
 			}
 			replaceLifecyclePanes(t, fixture.projectRoot, other)

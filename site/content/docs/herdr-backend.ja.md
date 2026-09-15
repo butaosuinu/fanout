@@ -62,8 +62,8 @@ checkout を持たない console / coordinator workspace を close する前に�
 補助 pane が残る場合は manual cleanup とします。
 close 前の snapshot に失敗した場合は workspace を変更しません。close 後の確認 snapshot に失敗した場合は、close の結果を確定できないまま error を返します。
 
-plan の task を閉じたら `fanout plan <slug> --cleanup` を実行してください。
-その plan の task 行が 0 件になると coordinator workspace を閉じ、state 行と intent を退役します。
+専用 coordinator を持つ plan の task を閉じたら `fanout plan <slug> --cleanup` を実行してください。
+その plan の task 行が 0 件になると専用 coordinator workspace を閉じ、state 行と intent を退役します。GitHub issue と共有する coordinator は保持します。
 close の応答を失った場合は cleanup を再実行して消滅を確認します。workspace が残っていれば close を再送せず、manual cleanup とします。
 ほかの resource もなくなれば `fanout herdr shutdown` で server を停止できます。
 

@@ -358,7 +358,7 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 }
 
 // CleanupPlan closes every recorded plan task for parent whose recorded branch
-// has at least one MERGED PR, then retires its coordinator when no tasks remain.
+// has at least one MERGED PR, then retires its plan-scoped coordinator when no tasks remain.
 //
 //nolint:gocognit,gocyclo,funlen // Keep branch eligibility and per-task fail-soft cleanup in one lock-held orchestration.
 func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
