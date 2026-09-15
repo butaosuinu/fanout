@@ -435,9 +435,9 @@ func (b *Backend) observeOwnedSnapshot(
 	ctx context.Context,
 	probed probeResult,
 ) (snapshotJSON, []corebackend.LivePane, error) {
-	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "api", "snapshot")
+	out, err := b.runReadContext(ctx, probed.binary, probed.route, "api", "snapshot")
 	if err != nil {
-		return snapshotJSON{}, nil, methodUnavailable("session.snapshot")
+		return snapshotJSON{}, nil, readMethodError("session.snapshot", err)
 	}
 	var envelope snapshotEnvelope
 	if decodeErr := decodeOne(out, &envelope); decodeErr != nil {

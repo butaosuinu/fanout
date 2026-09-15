@@ -11,6 +11,8 @@ core runtime の検証日は 2026-07-16、2026-07-21、2026-07-22、metadata tok
 後続実装が従う current contract はこの文書である。
 2026-07-24 のユーザー判断により、#526 の compatibility admission は stable `>=0.7.5` の version gate だけとする。
 schema、method、field、CLI help、protocol、behavior profile、active manifest は事前検査せず、実際の method call が失敗した場合は共通の unavailable error を返す。
+ただし `status --json` / `api snapshot` のタイムアウトは `timed out after <timeout>` と原因を返し、method の未対応として扱わない。
+lifecycle preflight が使う status と owned snapshot は、タイムアウト時に呼び出し元の期限内で 100 ms 待って一回だけ再試行する。各 call の上限は 5 秒のまま、キャンセルと process cleanup の失敗では再試行しない。mutation は再送せず、snapshot の既存 polling にも再試行を重ねない。
 以下に残る structural gate、三段 gate、behavior profile、active manifest gate の記述は実測と旧判断の履歴であり、#526 の実装条件には使わない。
 
 fanout の herdr backend wave 2 は CLI-first とし、集約読みには CLI wrapper の `herdr api snapshot` を使う。
@@ -1394,7 +1396,7 @@ emitter は telemetry のまま `shouldNudge` の協調 signal に使い、完�
   各 operation は保存済み identity と live snapshot を直前に再照合し、operation 固有の事後条件を検査する。
   check と operation の間の race は tmux-parity tier の受容済み残余リスクとし、不一致と重複は fail closed に、応答喪失は再実行時の存在確認で採用または fail closed にする。
 - compatibility gate は 2026-07-24 のユーザー決定により stable `>=0.7.5` の version gate だけとする（「version と JSON 対応」の structural gate 記述は履歴）。
-  実際の method call が失敗した場合は共通の unavailable error を返す。
+  実際の method call が失敗した場合は共通の unavailable error を返す。ただし status / snapshot のタイムアウトは冒頭の読み取り再試行契約に従う。
 - backend 選択の resolver は final state rows（各 worktree の `state.json`）と provisional intents（intent journal）のすべてを入力にする。
   legacy row の空 backend は tmux に正規化する。
   実際の issue / Project / plan の親では、既存 rows / intents が一つの backend に一致する場合だけその backend を再利用し、mixed state または `--backend` / env との不一致は fail closed にする(明示的な移行はユーザー操作)。
