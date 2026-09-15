@@ -154,10 +154,14 @@ flat スカラー制約と per-agent 既定を両立する。
   false(起動コマンドと quota 消費を変える設定。`repoOverrides()` で strip + 警告)。
 - 操作面は TUI 設定フォーム("s")・user config・env の 3 つ。CLI フラグは足さない
   (#472 / plan mode の決定を継承。明示は `--agent` 文法で足りる)。
-- 検証は 3 つの入力経路すべてで同じ `ParseSelection` を使う。TUI 保存(`SaveEditable` →
-  `validateEditableValue`)は不正エントリと name の重複をエラーにして保存を拒む。user
-  config(`loadFile`)と env(`envOverrides`)は既存の不正値の扱いに揃え、不正なエントリを
-  警告して無視する(有効なエントリは残す)。どの経路でも不正値を起動時まで流さない。
+- 検証は 3 つの入力経路すべてで同じリスト検証(各エントリを `ParseSelection`、name の
+  重複を検出)を使う。TUI 保存(`SaveEditable` → `validateEditableValue`)は不正エントリと
+  name の重複をエラーにして保存を拒む。user config(`loadFile`)と env(`envOverrides`)は
+  既存の不正値の扱いに揃え、不正なエントリと 2 つ目以降の重複 name を警告して無視する
+  (最初のエントリを採り、他の有効なエントリは残す)。
+  `FANOUT_CHILD_MODELS='claude:opus claude:sonnet'` なら `claude:opus` が効き、`claude:sonnet`
+  は警告付きで捨てる。どの経路でも不正値を起動時まで流さず、どちらが選ばれるかを実装に
+  委ねない。3 経路とも回帰テストで固定する。
 - agent 名の既定は変えない。name は従来どおり `--agent` / `FANOUT_AGENT` / TUI の
   選択から来る。
 - `watcherAgent`(RepoEditable=true)は name-only のまま。`ValidateKnown` で検証し、`:` を
