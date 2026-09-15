@@ -308,7 +308,11 @@ func (l *Launcher) recordManagedCoordinator(
 	route backend.OwnedLaunchRoute,
 	livePanes []backend.LivePane,
 ) error {
-	if err := pruneDeadManagedCoordinatorRows(locked, route, livePanes); err != nil {
+	journal, err := locked.LaunchJournal(l.Info.ProjectRoot)
+	if err != nil {
+		return err
+	}
+	if err = pruneDeadManagedCoordinatorRows(locked, journal, route, livePanes); err != nil {
 		return err
 	}
 	runtimeParent := managedCoordinatorRuntimeParent(intent)
@@ -341,8 +345,10 @@ func recordManagedCoordinatorRow(
 // workspace from the Herdr side is an external cleanup; the launch-time live
 // pane observation proves the absence. Only rows in the exact coordinator role
 // shape qualify — agent, shell, and attached-agent rows are never touched.
+// Pending retirement keeps its row so cleanup can recover an ambiguous close.
 func pruneDeadManagedCoordinatorRows(
 	locked *state.LockedStore,
+	journal *state.LockedLaunchJournal,
 	route backend.OwnedLaunchRoute,
 	livePanes []backend.LivePane,
 ) error {
@@ -351,7 +357,7 @@ func pruneDeadManagedCoordinatorRows(
 		return nil
 	}
 	for _, pane := range slices.Clone(locked.Panes) {
-		if !deadManagedCoordinatorRow(pane, route, livePanes) {
+		if !deadManagedCoordinatorRow(pane, route, livePanes) || pendingManagedCoordinatorRetirement(pane, journal) {
 			continue
 		}
 		if err := locked.RemovePane(pane.Parent, pane.IssueNum); err != nil {

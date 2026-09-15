@@ -12,8 +12,6 @@ import (
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
 
-const coordinatorClosePending = "plan coordinator workspace close pending"
-
 func cleanupPlanCoordinator(opts Options, locked *state.LockedStore, parent string, lg Logger) exitcode.Code {
 	if !strings.HasPrefix(parent, "plan:") || len(taskPanesForParent(locked.PanesForParent(parent))) != 0 {
 		return exitcode.OK
@@ -62,7 +60,7 @@ func planCoordinatorRetirementIntent(journal *state.LockedLaunchJournal, root st
 	}
 	intent, found := journal.FindIntent(id)
 	checked := intent
-	if intent.Status == state.IntentManualCleanupRequired && intent.Failure == coordinatorClosePending {
+	if intent.Status == state.IntentManualCleanupRequired && intent.Failure == panelaunch.ManagedCoordinatorClosePending {
 		checked.Status = state.IntentRealized
 	}
 	if !found || !coordinatorIntentMatches(checked, pane, owner, root) {
@@ -84,7 +82,7 @@ func closePlanCoordinator(ctx context.Context, runtime WorkspaceRuntime, journal
 		return err
 	}
 	if intent.Status == state.IntentManualCleanupRequired {
-		return fmt.Errorf("%w: %s; workspace is still present", ErrManualCleanupRequired, coordinatorClosePending)
+		return fmt.Errorf("%w: %s; workspace is still present", ErrManualCleanupRequired, panelaunch.ManagedCoordinatorClosePending)
 	}
 	bound, err := runtime.BindOwnedWorkspaceClose(backend.OwnedPaneIdentity{
 		Ref: paneRefFromState(pane), SessionID: pane.SessionID, SocketPath: pane.SocketPath,
@@ -98,7 +96,7 @@ func closePlanCoordinator(ctx context.Context, runtime WorkspaceRuntime, journal
 
 func issuePlanCoordinatorClose(journal *state.LockedLaunchJournal, intent state.LaunchIntent, bound backend.OwnedClosingBackend, ref backend.PaneRef) error {
 	pending := intent
-	pending.Status, pending.Failure = state.IntentManualCleanupRequired, coordinatorClosePending
+	pending.Status, pending.Failure = state.IntentManualCleanupRequired, panelaunch.ManagedCoordinatorClosePending
 	journal.UpsertIntent(pending)
 	if err := journal.Save(); err != nil {
 		return err
