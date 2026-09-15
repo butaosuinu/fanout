@@ -317,7 +317,8 @@ func CleanIgnoredFiles(ctx context.Context, checkoutPath string) (_ int, err err
 	if err != nil {
 		return 0, err
 	}
-	_, cleanErr := gitStdout(ctx, checkoutPath, "clean", "-fdX")
+	// Keep -f single-force even when user config disables clean.requireForce.
+	_, cleanErr := gitStdout(ctx, checkoutPath, "-c", "clean.requireForce=true", "clean", "-fdX")
 	after, err := gitStdout(ctx, checkoutPath, args...)
 	if err != nil {
 		return 0, errors.Join(cleanErr, err)

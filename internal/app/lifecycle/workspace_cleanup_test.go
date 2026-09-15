@@ -3429,7 +3429,7 @@ func TestHerdrCleanupRemovesIgnoredOnlyCheckout(t *testing.T) {
 }
 
 func TestHerdrCleanupPreservesIgnoredFilesWhenBlocked(t *testing.T) {
-	for _, reason := range []string{"tracked", "untracked", "identity", "expired", "ambiguous", "embedded repository"} {
+	for _, reason := range []string{"tracked", "untracked", "identity", "expired", "ambiguous", "embedded repository", "embedded repository without requireForce"} {
 		t.Run(reason, func(t *testing.T) {
 			fixture := newHerdrLifecycleFixture(t)
 			prepareIgnoredLifecycleFiles(t, fixture.worktreePath)
@@ -3445,8 +3445,11 @@ func TestHerdrCleanupPreservesIgnoredFilesWhenBlocked(t *testing.T) {
 				recordExpiredHerdrCleanupIntent(t, fixture, state.CleanupRemove)
 			case "ambiguous":
 				recordManualHerdrCleanupIntent(t, fixture, "response lost")
-			case "embedded repository":
+			case "embedded repository", "embedded repository without requireForce":
 				runHerdrLifecycleGit(t, filepath.Join(fixture.worktreePath, "node_modules"), "init")
+				if reason == "embedded repository without requireForce" {
+					runHerdrLifecycleGit(t, fixture.worktreePath, "config", "clean.requireForce", "false")
+				}
 			}
 			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
 				t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
