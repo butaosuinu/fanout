@@ -94,11 +94,17 @@ fail-fast)。`opus` が有効か、`xhigh` がそのモデルにあるかは age
 | opencode | `--model <provider/model>` | 非対応(指定はエラー) |
 
 連結順は `LaunchArgs + BackendLaunchArgs + ModeArgs + model/effort`。claude の `--settings`
-が argv 先頭に残り、束縛チェックの前提を崩さない。Build 系関数は panelaunch が使う
-3 入口(dry-run の `BuildCommandForBackendWithMode`、live の
-`BuildResolvedCommandForBackendWithMode`、Herdr の `BuildResolvedLaunchSpecWithBackendArgs`)
-と resume 2 入口にだけ `Selection` を受ける変種を足し、既存シグネチャは名前のみの
-薄いラッパとして残す。
+が argv 先頭に残り、束縛チェックの前提を崩さない。
+
+`launchArgsForBackend` を通る Build 系の全入口に `Selection` を受ける変種を足す。
+起動側は dry-run の `BuildCommandForBackendWithMode`、live の
+`BuildResolvedCommandForBackendWithMode`、Herdr の `BuildResolvedLaunchSpecWithBackendArgs`
+(claude、telemetry 引数つき)と `BuildResolvedLaunchSpec`(codex / opencode。
+`internal/app/panelaunch/managed_launch.go` の `buildManagedLaunchSpec` が直接呼ぶ)の 4 つ。
+復元側は `BuildResumeCommandForBackend` と `BuildResolvedResumeCommandForBackend`
+(`cmd/fanout/tui_restore.go` が `BuildResolvedResumeCommand` 経由で呼ぶ)の 2 つ。
+既存シグネチャは名前のみの薄いラッパとして残し、入口の取りこぼしは `agent_test.go` で
+全 Build 関数を同じ `Selection` で回す表駆動テストで防ぐ。
 
 ### 3. 解決順はフィールド単位
 
@@ -131,7 +137,10 @@ flat スカラー制約と per-agent 既定を両立する。
   false(起動コマンドと quota 消費を変える設定。`repoOverrides()` で strip + 警告)。
 - 操作面は TUI 設定フォーム("s")・user config・env の 3 つ。CLI フラグは足さない
   (#472 / plan mode の決定を継承。明示は `--agent` 文法で足りる)。
-- `validateEditableValue` で各エントリを `ParseSelection` に通し、name の重複はエラー。
+- 検証は 3 つの入力経路すべてで同じ `ParseSelection` を使う。TUI 保存(`SaveEditable` →
+  `validateEditableValue`)は不正エントリと name の重複をエラーにして保存を拒む。user
+  config(`loadFile`)と env(`envOverrides`)は既存の不正値の扱いに揃え、不正なエントリを
+  警告して無視する(有効なエントリは残す)。どの経路でも不正値を起動時まで流さない。
 - agent 名の既定は変えない。name は従来どおり `--agent` / `FANOUT_AGENT` / TUI の
   選択から来る。
 
@@ -182,6 +191,11 @@ restore は記録値を再注入する。mode と違い、model / effort は会�
 (ユーザー config の `plan_mode_reasoning_effort` に負けない。`supportedReasoningEffort`
 のクランプは明示値には掛けない)。明示値がないときは PR #339 の解決順を維持する。
 
+Codex Plan Mode の復元(`cmd/fanout/tui_restore.go` → `codexapp.ResumeLaunchCommand`)は
+thread 再開で model は thread に付くため `--model` の再注入は不要。effort が thread settings
+に残るかは未確認で #362 の検証項目に含め、残らなければ `ResumeLaunchCommand` にも
+`--effort` を通す。
+
 ### 8. skill の推奨
 
 - fanout-issues(claude / codex): 子 issue の `## Notes` に推奨と根拠
@@ -217,7 +231,8 @@ restore は記録値を再注入する。mode と違い、model / effort は会�
 ## 帰結
 
 - 4 つの指定経路(フラグ / spec / settings / skill 推奨)が同じ文字列で揃い、dry-run
-  の起動コマンドにそのまま `--model` / `--effort` が現れる。
+  の起動コマンドに agent ごとの実際の argv が現れる(claude は `--model` / `--effort`、
+  codex は `--model` / `-c model_reasoning_effort=`、opencode は `--model`)。
 - 起動コマンドを固定する Tier 2 golden(`scenario-sub-issue-only*` /
   `scenario-plan-basic*` / `scenario-settings-*` / `scenario-herdr-dry-run`)は全部
   再生成になる。各子 PR 内で行う。
@@ -231,8 +246,9 @@ restore は記録値を再注入する。mode と違い、model / effort は会�
 - 未確認(spike #362 で確定し、本節を更新する): resume 時のモデル再指定が 3 CLI で
   効くか(codex は `codex --model X -c … resume --last` の語順で効かなければ `resume` の
   後ろに置く)、不正な model / effort を渡したときの各 CLI の挙動、codex app-server の
-  `-c` が `config/read` と新規 thread の既定に反映されるか、opencode 対話 TUI で
-  effort を起動時に渡す手段の有無。
+  `-c` が `config/read` と新規 thread の既定に反映されるか、Codex Plan Mode の復元で
+  effort が thread settings に残るか、opencode 対話 TUI で effort を起動時に渡す手段の
+  有無。
 
 ## 実装分解
 
@@ -243,12 +259,12 @@ restore は記録値を再注入する。mode と違い、model / effort は会�
 |---|---|---|---|
 | 1 | #790 | 本決定記録と roadmap / advisor doc の参照更新 | 文書 |
 | 1 | #362 | spike: 未確認 4 項目の実機検証 | — |
-| 1 | #363 | core: `Selection` / 文法 / `Definition` 拡張 / Build 5 入口 / cliflags・plancmd / state 記録 / resume 再注入 / dry-run / goldens | H |
+| 1 | #363 | core: `Selection` / 文法 / `Definition` 拡張 / Build 全入口(起動 4 + 復元 2) / cliflags・plancmd / state 記録 / resume 再注入 / dry-run / goldens | H |
 | 2 | #364 | plan spec `agent` + 解決順の plan lane 配線 + skill の schema 記述改訂(← #363) | M |
 | 2 | #365 | settings 3 キー + 全 lane の消費 + RepoEditable gate(← #363) | H |
-| 2 | #791 | codexapp lane: `--model` / `--effort` 通過、app-server `-c`、plan lane の明示上書き(← #362 #363) | M |
-| 2 | #792 | 表示: sessionview / TUI / web(← #363) | A + web |
-| 3 | #366 | skills 推奨(fanout-issues / fanout-plan、claude + codex)(← #363 #364) | 文書 |
+| 2 | #791 | codexapp lane: `--model` / `--effort` 通過、app-server `-c`、plan lane の明示上書き、Plan 復元の effort(← #362 #363) | H(`cmd/fanout/codex_plan_tui.go` / `codex_team_tui.go`) |
+| 2 | #792 | 表示: sessionview / TUI / web(← #363) | M + web(`internal/app/sessionview`、`web/src/transport`) |
+| 3 | #366 | skills 推奨(fanout-issues / fanout-plan、claude + codex)(← #363 #364) | M(`claude/` / `codex/` の配布プロンプト) |
 | 4 | #367 | README ペア / site / CLAUDE.md / AGENTS.md(← #363 #364 #365 #791 #792) | 文書 |
 
 epic #452(異種モデル協調)の #455 / #457 / #458 は #363 に依存し、#457 は #365 にも
