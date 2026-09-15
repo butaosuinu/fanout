@@ -2222,7 +2222,7 @@ func driveWorkspaceCleanup(
 		// Post-mutation Git cleanup continues below.
 	case state.IntentPlanned:
 		phaseCtx, cancel := context.WithDeadline(ctx, time.UnixMilli(intent.ExpiresUnixMS))
-		intent, err = executeWorkspaceCleanupPhase(phaseCtx, opts, journal, runtime, intent)
+		intent, err = executeWorkspaceCleanupPhase(phaseCtx, opts, journal, runtime, intent, lg)
 		cancel()
 	default:
 		err = fmt.Errorf("unsupported Herdr cleanup status %q", intent.Status)
@@ -2640,12 +2640,13 @@ func executeWorkspaceCleanupPhase(
 	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
 	intent state.LaunchIntent,
+	lg Logger,
 ) (state.LaunchIntent, error) {
 	switch intent.CleanupPhase {
 	case state.CleanupReopen:
-		return executeReopen(ctx, opts, journal, runtime, intent)
+		return executeReopen(ctx, opts, journal, runtime, intent, lg)
 	case state.CleanupRemove:
-		return executeRemove(ctx, opts, journal, runtime, intent)
+		return executeRemove(ctx, opts, journal, runtime, intent, lg)
 	case state.CleanupWorkspaceClose:
 		return executeWorkspaceClose(ctx, opts, journal, runtime, intent)
 	default:
