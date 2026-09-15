@@ -77,7 +77,13 @@ codex::xhigh               effort のみ(model は未指定。下位層に codex
 
 `internal/core/agent` に `Selection{Name, Model, Effort}`、`ParseSelection(raw)`、
 `(Selection) String()` を置く。`:` で最大 3 分割し、空の model / effort は「指定なし」。
-パーサはこの 1 箇所だけで、他の層は文字列を素通しする。
+パーサはこの 1 箇所だけ。TUI と briefing は選択文字列を素通しするが、名前で分岐・照合する
+既存箇所 — `tuiAgentOrDefault` の `ValidateKnown`、`Request.CodexPlanMode` の
+`Agent == "codex"`、`coordinatorLaunchMode` / `planSkillPrompt` / `configureTeamRequest`、
+briefing の agent 分岐、`state.Pane.Agent` — には `Selection.Name` だけを渡す。model /
+effort を読むのは起動コマンドの組み立てと state の `model` / `effort` だけ。
+`FANOUT_AGENT=codex:gpt-6-astra:xhigh` で引数なしの TUI を開いても codex と認識され、
+Codex Plan Mode と team bridge が外れないことを回帰テストで固定する(#363)。
 
 形式チェックのみ行う。name は `ValidateKnown`、model / effort は空白と `:` を含まない、
 effort 非対応の agent に effort が付いたらペイン作成前にエラー(Unknown agent と同じ
