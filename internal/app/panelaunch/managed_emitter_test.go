@@ -142,7 +142,9 @@ func TestManagedEmitterLaunchInjectsCodexPlanIdentityWithoutBackendArgs(t *testi
 }
 
 func TestApplyManagedLaunchTelemetryStartsSyntheticRunningUnrefined(t *testing.T) {
-	pane := state.Pane{Backend: "herdr"}
+	pane := state.Pane{
+		Backend: "herdr", EmitterRebindNonce: strings.Repeat("c", 32), EmitterRebindSequence: 7,
+	}
 	intent := state.LaunchIntent{
 		ID: "issue:3:524:529",
 		Launch: &state.LaunchCapsule{
@@ -154,7 +156,9 @@ func TestApplyManagedLaunchTelemetryStartsSyntheticRunningUnrefined(t *testing.T
 	if pane.ReportedState != "running" || pane.StateRefinement {
 		t.Fatalf("initial telemetry = (%q, %t), want synthetic running without refinement", pane.ReportedState, pane.StateRefinement)
 	}
-	if pane.EmitterRowKey != intent.ID || pane.LaunchNonce != intent.Launch.Nonce || pane.EmitterNonce != intent.Launch.EmitterNonce {
+	if pane.EmitterRowKey != intent.ID || pane.LaunchNonce != intent.Launch.Nonce ||
+		pane.EmitterNonce != intent.Launch.EmitterNonce || pane.EmitterRebindNonce != "" ||
+		pane.EmitterRebindSequence != 0 {
 		t.Fatalf("launch binding = %+v", pane)
 	}
 }

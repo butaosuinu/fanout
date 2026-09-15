@@ -62,6 +62,7 @@ type WorkspaceObservation struct {
 	TerminalID  string
 	CWD         string
 	Panes       []WorkspacePaneObservation
+	LivePanes   []LivePane
 }
 
 type WorkspacePaneObservation struct {

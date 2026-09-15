@@ -1102,6 +1102,7 @@ func applyManagedLaunchTelemetry(pane *state.Pane, intent state.LaunchIntent) {
 	}
 	pane.LaunchExecutable = launch.Executable
 	pane.LaunchArgs = slices.Clone(launch.Args)
+	pane.EmitterRebindNonce, pane.EmitterRebindSequence = "", 0
 	if launch.EmitterNonce == "" {
 		return
 	}

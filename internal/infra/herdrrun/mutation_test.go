@@ -1,6 +1,7 @@
 package herdrrun
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -8,6 +9,29 @@ import (
 
 	corebackend "github.com/butaosuinu/fanout/internal/core/backend"
 )
+
+func TestObserveOwnedWorkspacesCarriesSnapshotAgentEvidence(t *testing.T) {
+	const session = "fanout-test"
+	const socket = "/private/tmp/fanout-test/herdr.sock"
+	fake := newFakeHerdr(session, socket)
+	backend := newTestBackend(t, session, socket, fake)
+	probed := probeResult{binary: "/private/tmp/herdr-0.7.5", version: "0.7.5", route: route{
+		session: session, socketPath: socket,
+	}}
+
+	workspaces, err := backend.observeOwnedWorkspaces(context.Background(), probed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workspaces) != 2 || len(workspaces[1].LivePanes) != 1 {
+		t.Fatalf("workspace observations = %+v, want child live pane evidence", workspaces)
+	}
+	live := workspaces[1].LivePanes[0]
+	if live.AgentID != "fanout-child" || live.AgentProvider != "codex" || live.AgentSession == nil ||
+		live.AgentSession.Value != "session-a" || live.SessionID != session || live.SocketPath != socket {
+		t.Fatalf("child live pane evidence = %+v", live)
+	}
+}
 
 func TestWorktreeMutationArgsPinHerdr075CLI(t *testing.T) {
 	coordinator := testCoordinatorObservation()

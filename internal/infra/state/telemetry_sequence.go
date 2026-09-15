@@ -18,6 +18,12 @@ import (
 
 const maxTelemetrySequenceBytes = 21
 
+// FenceTelemetrySequence allocates the next event boundary for this locked
+// state's telemetry generation.
+func (l *LockedStore) FenceTelemetrySequence(ctx context.Context) (uint64, error) {
+	return NextTelemetrySequence(ctx, l.path)
+}
+
 // NextTelemetrySequence allocates one repository-local telemetry sequence
 // without waiting for the longer-lived state launch lock.
 func NextTelemetrySequence(ctx context.Context, statePath string) (sequence uint64, err error) {

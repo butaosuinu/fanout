@@ -3,8 +3,6 @@ package stateemitter
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +12,7 @@ import (
 	"time"
 
 	"github.com/butaosuinu/fanout/internal/app/agentprocess"
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/app/sessionbinding"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/core/errs"
@@ -131,7 +130,7 @@ func Emit(ctx context.Context, signal telemetry.Signal, observer Observer) (err 
 		return err
 	}
 	defer func() { err = errors.Join(err, locked.Unlock()) }()
-	return applyObservedSignal(locked, projectRoot, target.GitCommonDir, signal, observation)
+	return applyObservedSignal(ctx, locked, projectRoot, target, signal, observation)
 }
 
 func loadRuntimeTarget(
@@ -176,9 +175,10 @@ func runtimeTargetForSignal(
 }
 
 func applyObservedSignal(
+	ctx context.Context,
 	locked *state.LockedStore,
 	projectRoot string,
-	gitCommonDir string,
+	observedTarget RuntimeTarget,
 	signal telemetry.Signal,
 	observation Observation,
 ) error {
@@ -187,9 +187,9 @@ func applyObservedSignal(
 		return err
 	}
 	if row >= 0 {
-		return updateFinalRow(locked, row, gitCommonDir, signal, observation)
+		return updateFinalRow(ctx, locked, row, observedTarget, signal, observation)
 	}
-	return updatePendingIntent(locked, projectRoot, gitCommonDir, signal, observation)
+	return updatePendingIntent(locked, projectRoot, observedTarget.GitCommonDir, signal, observation)
 }
 
 func emitterRowIndex(store state.Store, signal telemetry.Signal) (int, error) {
@@ -222,20 +222,24 @@ func projectRootForStatePath(path string) (string, error) {
 }
 
 func updateFinalRow(
+	ctx context.Context,
 	locked *state.LockedStore,
 	index int,
-	gitCommonDir string,
+	observedTarget RuntimeTarget,
 	signal telemetry.Signal,
 	observation Observation,
 ) error {
-	target, err := finalRuntimeTarget(locked.Panes[index], gitCommonDir, signal)
+	target, err := finalRuntimeTarget(locked.Panes[index], observedTarget.GitCommonDir, signal)
 	if err != nil {
 		return err
+	}
+	if !sameRuntimeLocation(target, observedTarget) {
+		return fmt.Errorf("persisted telemetry location changed during runtime observation")
 	}
 	current, err := verifyRuntimeObservation(target, observation)
 	if err != nil {
 		if errors.Is(err, errRuntimeIdentityChanged) {
-			return invalidateFinalRowTelemetry(locked, index)
+			return fenceOrInvalidateFinalRow(ctx, locked, index, observation.Panes)
 		}
 		return err
 	}
@@ -245,6 +249,31 @@ func updateFinalRow(
 	return applyFinalSignal(locked, index, signal)
 }
 
+func fenceOrInvalidateFinalRow(
+	ctx context.Context,
+	locked *state.LockedStore,
+	index int,
+	live []backend.LivePane,
+) error {
+	locationChanged, locationErr := panelaunch.ManagedPaneLocationChangedFromLive(locked.Panes[index], live)
+	if locationErr == nil && !locationChanged {
+		return invalidateFinalRowTelemetry(locked, index)
+	}
+	sequence, err := locked.FenceTelemetrySequence(ctx)
+	if err != nil {
+		return err
+	}
+	if err := locked.Panes[index].InvalidateTelemetryForLocationRebind(sequence); err != nil {
+		return err
+	}
+	return locked.Save()
+}
+
+func sameRuntimeLocation(left, right RuntimeTarget) bool {
+	return left.WorkspaceID == right.WorkspaceID && left.PaneID == right.PaneID &&
+		left.TerminalID == right.TerminalID
+}
+
 func applyFinalSignal(locked *state.LockedStore, index int, signal telemetry.Signal) error {
 	pane := &locked.Panes[index]
 	if telemetry.ClaudeSequenceWatermarkMissing(
@@ -252,7 +281,7 @@ func applyFinalSignal(locked *state.LockedStore, index int, signal telemetry.Sig
 	) {
 		return invalidateFinalRowTelemetry(locked, index)
 	}
-	if staleSignal(signal, pane.ReportedStateSeq) {
+	if staleSignal(signal, max(pane.ReportedStateSeq, pane.EmitterRebindSequence)) {
 		return locked.Save()
 	}
 	pane.ReportedState = nextReportedState(pane.ReportedState, string(signal.State))
@@ -292,23 +321,10 @@ func bindFirstAgentSession(panes []state.Pane, index int, current backend.LivePa
 }
 
 func invalidateFinalRowTelemetry(locked *state.LockedStore, index int) error {
-	nonce, err := newEmitterNonce()
-	if err != nil {
+	if err := locked.Panes[index].InvalidateTelemetry(); err != nil {
 		return err
 	}
-	locked.Panes[index].ReportedState = ""
-	locked.Panes[index].ReportedStateSeq = 0
-	locked.Panes[index].StateRefinement = false
-	locked.Panes[index].EmitterNonce = nonce
 	return locked.Save()
-}
-
-func newEmitterNonce() (string, error) {
-	value := make([]byte, 16)
-	if _, err := rand.Read(value); err != nil {
-		return "", fmt.Errorf("rotate telemetry emitter nonce: %w", err)
-	}
-	return hex.EncodeToString(value), nil
 }
 
 func updatePendingIntent(
@@ -380,7 +396,7 @@ func nextReportedState(current, next string) string {
 // the pane identity the projection carries.
 func finalRuntimeTarget(pane state.Pane, gitCommonDir string, signal telemetry.Signal) (RuntimeTarget, error) {
 	binding := pane.RuntimeBinding()
-	if !finalSignalMatches(binding, signal) {
+	if !finalSignalMatches(binding, signal) && !locationRebindSignalMatches(pane, signal) {
 		return RuntimeTarget{}, fmt.Errorf("final row does not match emitter launch identity")
 	}
 	return RuntimeTarget{
@@ -399,17 +415,37 @@ func finalRuntimeTarget(pane state.Pane, gitCommonDir string, signal telemetry.S
 
 func finalSignalMatches(binding backend.PaneBinding, signal telemetry.Signal) bool {
 	identity := []bool{
+		finalSignalIdentityMatches(binding, signal, binding.Launch.EmitterNonce),
+		binding.Ref.Workspace == signal.WorkspaceID,
+		binding.Ref.Pane == signal.PaneID,
+		binding.TerminalID == signal.TerminalID,
+	}
+	return !slices.Contains(identity, false)
+}
+
+func locationRebindSignalMatches(pane state.Pane, signal telemetry.Signal) bool {
+	binding := pane.RuntimeBinding()
+	return signal.Agent == "claude" && signal.Sequence > pane.EmitterRebindSequence &&
+		telemetry.ValidNonce(pane.EmitterRebindNonce) &&
+		pane.EmitterRebindNonce != binding.Launch.EmitterNonce &&
+		signal.WorkspaceLabel != "" && signal.WorktreePath != "" &&
+		finalSignalIdentityMatches(binding, signal, pane.EmitterRebindNonce)
+}
+
+func finalSignalIdentityMatches(
+	binding backend.PaneBinding,
+	signal telemetry.Signal,
+	emitterNonce string,
+) bool {
+	identity := []bool{
 		signal.Backend == backend.Herdr,
 		binding.Ref.Backend == backend.Herdr,
 		binding.Launch.RowKey == signal.RowKey,
 		binding.Launch.Nonce == signal.LaunchNonce,
-		binding.Launch.EmitterNonce == signal.EmitterNonce,
+		emitterNonce == signal.EmitterNonce,
 		binding.SessionID == signal.Session,
 		binding.SocketPath == signal.SocketPath,
-		binding.Ref.Workspace == signal.WorkspaceID,
 		stableSignalMatches(binding.WorkspaceLabel, binding.WorktreePath, signal),
-		binding.Ref.Pane == signal.PaneID,
-		binding.TerminalID == signal.TerminalID,
 		binding.Agent == signal.Agent,
 		binding.AgentID == signal.AgentID,
 	}

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
@@ -130,6 +131,16 @@ func observeWorkspaceCleanupMatching(
 	if err != nil {
 		return workspaceCleanupObservation{}, err
 	}
+	return observeWorkspaceCleanupSnapshot(ctx, projectRoot, resource, predicate, workspaces)
+}
+
+func observeWorkspaceCleanupSnapshot(
+	ctx context.Context,
+	projectRoot string,
+	resource state.RuntimeResource,
+	predicate workspacePredicateFunc,
+	workspaces []backend.WorkspaceObservation,
+) (workspaceCleanupObservation, error) {
 	workspace, err := findUniqueWorkspace(workspaces, true, predicate)
 	if err != nil {
 		return workspaceCleanupObservation{}, err
@@ -139,6 +150,77 @@ func observeWorkspaceCleanupMatching(
 		return workspaceCleanupObservation{}, err
 	}
 	return workspaceCleanupObservation{workspace: workspace, checkout: checkout}, nil
+}
+
+func persistManagedPaneLocation(
+	locked *state.LockedStore,
+	previous state.Pane,
+	current state.Pane,
+) error {
+	index, err := locked.EmitterRowIndex(
+		previous.EmitterRowKey, filepath.Clean(previous.WorktreePath), previous.WorkspaceLabel,
+	)
+	if err != nil {
+		return fmt.Errorf("%w: %w", backend.ErrOwnedIdentityMismatch, err)
+	}
+	if index < 0 || !locked.Panes[index].RuntimeBinding().Equal(previous.RuntimeBinding()) ||
+		locked.Panes[index].RepoRoot != previous.RepoRoot {
+		return fmt.Errorf("%w: managed pane row identity changed before location update", backend.ErrOwnedIdentityMismatch)
+	}
+	saved := locked.Panes[index]
+	copyManagedPaneLocationFields(&locked.Panes[index], current)
+	if err := locked.Save(); err != nil {
+		copyManagedPaneLocationFields(&locked.Panes[index], saved)
+		return err
+	}
+	return nil
+}
+
+func copyManagedPaneLocationFields(target *state.Pane, source state.Pane) {
+	target.WorkspaceID = source.WorkspaceID
+	target.PaneID = source.PaneID
+	target.TerminalID = source.TerminalID
+	target.ReportedState = source.ReportedState
+	target.ReportedStateSeq = source.ReportedStateSeq
+	target.StateRefinement = source.StateRefinement
+	target.EmitterNonce = source.EmitterNonce
+	target.EmitterRebindNonce = source.EmitterRebindNonce
+	target.EmitterRebindSequence = source.EmitterRebindSequence
+}
+
+func reconcileManagedPaneLocation(
+	ctx context.Context,
+	locked *state.LockedStore,
+	pane state.Pane,
+	workspaces []backend.WorkspaceObservation,
+) (state.Pane, bool, error) {
+	current, changed, err := panelaunch.ReconcileManagedPaneLocation(
+		pane, workspaces, func() (uint64, error) { return locked.FenceTelemetrySequence(ctx) },
+	)
+	if err != nil || !changed {
+		return pane, false, err
+	}
+	if err := persistManagedPaneLocation(locked, pane, current); err != nil {
+		return pane, false, err
+	}
+	return current, true, nil
+}
+
+func reconcileManagedPaneLocationAfterMismatch(
+	ctx context.Context,
+	locked *state.LockedStore,
+	pane state.Pane,
+	workspaces []backend.WorkspaceObservation,
+	mismatch error,
+) (state.Pane, error) {
+	current, changed, err := reconcileManagedPaneLocation(ctx, locked, pane, workspaces)
+	if err != nil {
+		return pane, err
+	}
+	if !changed {
+		return pane, mismatch
+	}
+	return current, nil
 }
 
 func workspacePredicate(resource state.RuntimeResource) workspacePredicateFunc {

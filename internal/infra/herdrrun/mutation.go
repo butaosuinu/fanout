@@ -434,26 +434,27 @@ func validateMutationResponse(spec mutationSpec, workspace workspaceJSON) error 
 func (b *Backend) observeOwnedSnapshot(
 	ctx context.Context,
 	probed probeResult,
-) (snapshotJSON, error) {
+) (snapshotJSON, []corebackend.LivePane, error) {
 	out, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "api", "snapshot")
 	if err != nil {
-		return snapshotJSON{}, methodUnavailable("session.snapshot")
+		return snapshotJSON{}, nil, methodUnavailable("session.snapshot")
 	}
 	var envelope snapshotEnvelope
-	if err := decodeOne(out, &envelope); err != nil {
-		return snapshotJSON{}, methodUnavailable("session.snapshot")
+	if decodeErr := decodeOne(out, &envelope); decodeErr != nil {
+		return snapshotJSON{}, nil, methodUnavailable("session.snapshot")
 	}
-	if _, err := projectSnapshot(envelope, probed); err != nil {
-		return snapshotJSON{}, methodUnavailable("session.snapshot")
+	live, err := projectSnapshot(envelope, probed)
+	if err != nil {
+		return snapshotJSON{}, nil, methodUnavailable("session.snapshot")
 	}
-	return envelope.Result.Snapshot, nil
+	return envelope.Result.Snapshot, live, nil
 }
 
 func (b *Backend) observeOwnedWorkspaces(
 	ctx context.Context,
 	probed probeResult,
 ) ([]corebackend.WorkspaceObservation, error) {
-	snapshot, err := b.observeOwnedSnapshot(ctx, probed)
+	snapshot, live, err := b.observeOwnedSnapshot(ctx, probed)
 	if err != nil {
 		return nil, err
 	}
@@ -461,9 +462,15 @@ func (b *Backend) observeOwnedWorkspaces(
 	for _, pane := range *snapshot.Panes {
 		panes[pane.WorkspaceID] = append(panes[pane.WorkspaceID], pane)
 	}
+	liveByWorkspace := make(map[string][]corebackend.LivePane, len(*snapshot.Workspaces))
+	for _, pane := range live {
+		liveByWorkspace[pane.Ref.Workspace] = append(liveByWorkspace[pane.Ref.Workspace], pane)
+	}
 	result := make([]corebackend.WorkspaceObservation, 0, len(*snapshot.Workspaces))
 	for _, workspace := range *snapshot.Workspaces {
-		result = append(result, workspaceObservation(workspace, panes[workspace.WorkspaceID]))
+		observation := workspaceObservation(workspace, panes[workspace.WorkspaceID])
+		observation.LivePanes = liveByWorkspace[workspace.WorkspaceID]
+		result = append(result, observation)
 	}
 	return result, nil
 }

@@ -97,7 +97,8 @@ func CloseWithMode(opts Options, parent string, issueNum int, mode CloseMode, lg
 	if handled {
 		return recoveryCode
 	}
-	if !validateCloseOperations(opts, panes, mode, lg) {
+	panes, valid := validateCloseOperations(opts, locked, panes, mode, lg)
+	if !valid {
 		return exitcode.Env
 	}
 	windows := map[string]struct{}{}
@@ -159,7 +160,8 @@ func CloseTaskWithMode(opts Options, parent, taskID string, mode CloseMode, lg L
 	if handled {
 		return recoveryCode
 	}
-	if !validateCloseOperations(opts, panes, mode, lg) {
+	panes, valid := validateCloseOperations(opts, locked, panes, mode, lg)
+	if !valid {
 		return exitcode.Env
 	}
 	windows := map[string]struct{}{}
@@ -206,7 +208,7 @@ func Merge(opts Options, parent string, issueNum int, lg Logger) exitcode.Code {
 		lg.Err("--merge: #%d is not recorded for parent %s in %s", issueNum, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
-	if code := mergeRecordedPane(opts, pane, fmt.Sprintf("#%d", issueNum), lg); code != exitcode.OK {
+	if code := mergeRecordedPane(opts, locked, pane, fmt.Sprintf("#%d", issueNum), lg); code != exitcode.OK {
 		return code
 	}
 	removeWatcherRunningLabelBestEffort(opts, parent, pane.IssueNum, remainingIssuePanesAfter(locked.PanesForParent(parent), pane.IssueNum), lg)
@@ -228,15 +230,22 @@ func MergeTask(opts Options, parent, taskID string, lg Logger) exitcode.Code {
 		lg.Err("--merge: task %s is not recorded for parent %s in %s", taskID, parent, opts.StatePath)
 		return exitcode.Invocation
 	}
-	return mergeRecordedPane(opts, pane, taskID, lg)
+	return mergeRecordedPane(opts, locked, pane, taskID, lg)
 }
 
-func mergeRecordedPane(opts Options, pane state.Pane, subject string, lg Logger) exitcode.Code {
+func mergeRecordedPane(
+	opts Options,
+	locked *state.LockedStore,
+	pane state.Pane,
+	subject string,
+	lg Logger,
+) exitcode.Code {
 	if strings.TrimSpace(pane.BranchName) == "" {
 		lg.Err("--merge: %s has no branchName recorded in %s", subject, opts.StatePath)
 		return exitcode.Invocation
 	}
-	if err := validateWorkspaceMergeOperation(opts, pane); err != nil {
+	pane, err := validateWorkspaceMergeOperation(opts, locked, pane)
+	if err != nil {
 		lg.Err("--merge: %s Herdr identity check failed: %v", subject, err)
 		return exitcode.Env
 	}
@@ -306,10 +315,11 @@ func Cleanup(opts Options, parent string, lg Logger) exitcode.Code {
 			continue
 		}
 		issuePanes := panesSharingManagedWorktrees(locked.Panes, panesForIssue(panes, issueNum))
-		if !validateCloseOperations(opts, issuePanes, CloseWorktree, lg) {
+		if _, valid := validateCloseOperations(opts, locked, issuePanes, CloseWorktree, lg); !valid {
 			return exitcode.Env
 		}
 	}
+	panes = cleanupIssuePanes(locked.PanesForParent(parent))
 	if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
 		lg.Err("--cleanup: prepare local git exclude: %v", err)
 		return exitcode.Env
@@ -405,10 +415,11 @@ func CleanupPlan(opts Options, parent string, lg Logger) exitcode.Code {
 	}
 	for _, taskID := range sortedTaskIDs(eligible) {
 		taskPanes := panesSharingManagedWorktrees(locked.Panes, panesForTask(panes, taskID))
-		if !validateCloseOperations(opts, taskPanes, CloseWorktree, lg) {
+		if _, valid := validateCloseOperations(opts, locked, taskPanes, CloseWorktree, lg); !valid {
 			return exitcode.Env
 		}
 	}
+	panes = taskPanesForParent(locked.PanesForParent(parent))
 	if err := worktree.EnsureLocalExclude(opts.ProjectRoot); err != nil {
 		lg.Err("--cleanup: prepare local git exclude: %v", err)
 		return exitcode.Env
@@ -891,44 +902,60 @@ func workspaceCompletionHooksConfigured(opts Options, worktreeRemovedRequired bo
 		worktreeRemovedRequired
 }
 
-func validateCloseOperations(opts Options, panes []state.Pane, mode CloseMode, lg Logger) bool {
-	for _, pane := range panes {
-		ref := paneRefFromState(pane)
+func validateCloseOperations(
+	opts Options,
+	locked *state.LockedStore,
+	panes []state.Pane,
+	mode CloseMode,
+	lg Logger,
+) ([]state.Pane, bool) {
+	panes = append([]state.Pane(nil), panes...)
+	for index, pane := range panes {
 		if workspaceRuntimeRow(pane) {
-			if !validateWorkspaceRuntimeCloseOperation(opts, panes, pane, mode, lg) {
-				return false
+			current, valid := validateWorkspaceRuntimeCloseOperation(opts, locked, panes, pane, mode, lg)
+			if !valid {
+				return panes, false
 			}
+			panes[index] = current
 			continue
 		}
-		// Every remaining row is closed by the atomic lane, which this build
-		// realizes on tmux alone. A row recording any other runtime is refused
-		// rather than closed through a runtime it never launched on.
-		if ref.Backend != backend.Tmux {
-			lg.Err("%s: runtime backend %s does not support lifecycle close", paneLabel(pane), ref.Backend)
-			return false
+		if !validateAtomicCloseOperation(opts, pane, lg) {
+			return panes, false
 		}
-		if strings.TrimSpace(ref.Pane) == "" {
-			continue
-		}
-		if opts.CloseOwned == nil {
-			lg.Err("%s: identity-aware runtime pane close is not configured", paneLabel(pane))
-			return false
-		}
+	}
+	return panes, true
+}
+
+// Every atomic row is realized on tmux in this build. A row recording another
+// runtime is refused rather than closed through a runtime it never launched on.
+func validateAtomicCloseOperation(opts Options, pane state.Pane, lg Logger) bool {
+	ref := paneRefFromState(pane)
+	if ref.Backend != backend.Tmux {
+		lg.Err("%s: runtime backend %s does not support lifecycle close", paneLabel(pane), ref.Backend)
+		return false
+	}
+	if strings.TrimSpace(ref.Pane) == "" {
+		return true
+	}
+	if opts.CloseOwned == nil {
+		lg.Err("%s: identity-aware runtime pane close is not configured", paneLabel(pane))
+		return false
 	}
 	return true
 }
 
 func validateWorkspaceRuntimeCloseOperation(
 	opts Options,
+	locked *state.LockedStore,
 	panes []state.Pane,
 	pane state.Pane,
 	mode CloseMode,
 	lg Logger,
-) bool {
+) (state.Pane, bool) {
 	sharedChild := !pane.IsAttachedAgent() && sharesAttachedWorkspaceRuntimeWorktree(pane, panes)
 	sharedAttached := pane.IsAttachedAgent() && sharesWorkspaceRuntimeWorktree(pane, panes)
 	if !sharedChild && !sharedAttached {
-		return validateWorkspaceCloseOperation(opts, pane, mode, lg)
+		return validateWorkspaceCloseOperation(opts, locked, pane, mode, lg)
 	}
 	var err error
 	if sharedChild {
@@ -939,9 +966,9 @@ func validateWorkspaceRuntimeCloseOperation(
 			err = fmt.Errorf("herdr lifecycle runtime is not configured")
 		}
 		lg.Err("%s: %v; preserving workspace, worktree, and state", paneLabel(pane), err)
-		return false
+		return pane, false
 	}
-	return true
+	return pane, true
 }
 
 func sharesWorkspaceRuntimeWorktree(pane state.Pane, panes []state.Pane) bool {

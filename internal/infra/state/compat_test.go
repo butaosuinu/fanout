@@ -49,6 +49,8 @@ var compatPersistedKeys = []string{
 	"emitterRowKey",
 	"launchNonce",
 	"emitterNonce",
+	"emitterRebindNonce",
+	"emitterRebindSequence",
 	"herdrLaunchExecutable",
 	"herdrLaunchArgs",
 	"herdrDirectAgentLaunch",
@@ -332,6 +334,8 @@ func herdrRowFields(p Pane) []fieldCase {
 		{name: "emitterRowKey", got: p.EmitterRowKey, want: "524/531"},
 		{name: "launchNonce", got: p.LaunchNonce, want: "0123456789abcdef0123456789abcdef"},
 		{name: "emitterNonce", got: p.EmitterNonce, want: "fedcba9876543210fedcba9876543210"},
+		{name: "emitterRebindNonce", got: p.EmitterRebindNonce, want: "abcdef0123456789abcdef0123456789"},
+		{name: "emitterRebindSequence", got: p.EmitterRebindSequence, want: uint64(7)},
 		{name: "herdrLaunchExecutable", got: p.LaunchExecutable, want: "/usr/local/bin/codex"},
 		{name: "herdrLaunchArgs", got: p.LaunchArgs, want: []string{
 			"--cd", "/repo/.fanout/worktrees/herdr-backend-531",
