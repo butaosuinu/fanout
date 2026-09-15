@@ -180,7 +180,10 @@ flat スカラー制約と per-agent 既定を両立する。
 ```
 
 `planspec.Task.Agent string`(`json:"agent,omitempty"`)。validate で `ParseSelection` を
-通し、`agent` なしの既存 spec は無変更(Version 1 のまま)。fanout-plan SKILL.md の
+通す。`agent` を 1 つでも含む spec は `version` を 2 にする。新 binary は 1 と 2 を受理し、
+`agent` 付きで version 1 のままの spec は validate で拒む(version 2 が要ると案内)。旧
+binary は version 2 を拒否するので、`agent` を黙って無視して全 task を bare `--agent` の
+名前で起動する事故を防ぐ。`agent` なしの既存 spec は version 1 のまま無変更。fanout-plan SKILL.md の
 「schema に agent を足すな」は撤回する — spec が推奨の永続成果物になり、CLI フラグと
 同じ文字列をそのまま貼れる。
 
@@ -222,7 +225,11 @@ thread 再開で model は thread に付くため `--model` の再注入は不�
   (`推奨: codex:gpt-6-astra:medium — 機械的変更のため。上書き可`)を残し、親の
   Suggested command に `--agent NUM=<sel>` 列を出す。CLI は issue 本文を読まない。
 - fanout-plan(claude / codex): spec の task `agent` に推奨を書き、根拠を task briefing
-  末尾の 1 行に残す。実行例は `fanout plan <spec> --agent claude` のまま。
+  末尾の 1 行に残す。実行例は `fanout plan <spec> --agent claude` のまま。TUI の既定
+  plan mode では plan 承認が spec 作成より先に来るため、task ごとの選択と根拠を plan 本文に
+  含めて承認前に提示する。承認後に選択を変えた場合は `--dry-run` の出力(起動コマンド)を
+  見せて再確認してから live 実行する。fanout-issues は親 issue の Suggested command に
+  選択が並ぶので、そこが承認点。
 - 目安: docs・軽微修正・機械的変更は小モデル / 低 effort、コア実装・設計判断・大規模
   リファクタは大モデル / 高 effort。異種モデル分業の型(Fable 計画 + codex ワーカー)は
   #458 の担当で、重複させない。
@@ -263,6 +270,8 @@ thread 再開で model は thread に付くため `--model` の再注入は不�
 - opencode は model のみ。effort を付けると起動前にエラーになる。
 - fanout-plan skill の「schema に agent を足すな」ルールを撤回し、codex 側 skill の
   parity テスト(`internal/arch/codex_integrations_test.go`)を満たして更新する。
+- `agent` 付き spec は version 2 になるため、新 binary で作った spec を旧 binary に渡すと
+  version エラーで止まる。黙って全 task を同じ agent で起動するより安全側。
 - 未確認(spike #362 で確定し、本節を更新する): resume 時のモデル再指定が 3 CLI で
   効くか(不正な model / effort を渡したときの各 CLI の挙動、codex app-server の
   `-c` が `config/read` と新規 thread の既定に反映されるか、Codex Plan Mode の復元で
@@ -279,11 +288,11 @@ thread 再開で model は thread に付くため `--model` の再注入は不�
 | 1 | #790 | 本決定記録と roadmap / advisor doc の参照更新 | 文書 |
 | 1 | #362 | spike: 未確認事項の実機検証(codex resume 語順は #363 側) | — |
 | 1 | #363 | core: `Selection` / 文法 / `Definition` 拡張 / Build 全入口(起動 4 + 復元 2) / cliflags・plancmd / state 記録 / resume 再注入 / dry-run / goldens | H |
-| 2 | #364 | plan spec `agent` + 解決順の plan lane 配線 + `--agent` 必須ゲートの spec 後置(両 backend の回帰テスト)+ skill の schema 記述改訂(← #363) | M |
+| 2 | #364 | plan spec `agent`(version 2)+ 解決順の plan lane 配線 + `--agent` 必須ゲートの spec 後置(両 backend の回帰テスト)+ skill の schema 記述改訂(← #363) | M |
 | 2 | #365 | settings 3 キー + 全 lane の消費 + RepoEditable gate(← #363) | H |
 | 2 | #791 | codexapp lane: `--model` / `--effort` 通過、app-server `-c`、plan lane の明示上書き、Plan 復元の effort(← #362 #363) | H(`cmd/fanout/codex_plan_tui.go` / `codex_team_tui.go`) |
 | 2 | #792 | 表示: sessionview / TUI / web(← #363) | M + web(`internal/app/sessionview`、`web/src/transport`) |
-| 3 | #366 | skills 推奨(fanout-issues / fanout-plan、claude + codex)(← #363 #364) | M(`claude/` / `codex/` の配布プロンプト) |
+| 3 | #366 | skills 推奨(fanout-issues / fanout-plan、claude + codex)+ plan 承認前の選択提示(← #363 #364) | M(`claude/` / `codex/` の配布プロンプト) |
 | 4 | #367 | README ペア / site / CLAUDE.md / AGENTS.md(← #363 #364 #365 #791 #792) | 文書 |
 
 epic #452(異種モデル協調)の #455 / #457 / #458 は #363 に依存し、#457 と #458 は
