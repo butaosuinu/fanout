@@ -971,6 +971,12 @@ func sameOwnedRoute(left, right corebackend.OwnedPaneIdentity) bool {
 
 // sameOwnedCheckout compares the checkout the pane owns and works in.
 func sameOwnedCheckout(left, right corebackend.OwnedPaneIdentity) bool {
+	if left.RepoKey == "" {
+		return corebackend.CheckoutMatchesLive(left.RepoKey, cmp.Or(left.WorktreePath, left.CurrentPath), corebackend.LivePane{
+			WorktreePath: right.WorktreePath, CurrentPath: right.CurrentPath,
+		})
+	}
+	// Recorded checkouts retain the owned-operation fence's byte-exact cwd comparison.
 	return left.RepoKey == right.RepoKey && left.WorktreePath == right.WorktreePath &&
 		left.CurrentPath == right.CurrentPath
 }

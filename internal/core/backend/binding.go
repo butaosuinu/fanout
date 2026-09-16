@@ -6,6 +6,7 @@ package backend
 // from a live observation.
 
 import (
+	"cmp"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -222,22 +223,29 @@ func AgentRecordMatches(observedAgentID string, observedNamed bool, recordedAgen
 	return !observedNamed && naming.IsManagedAgentName(recordedAgentID)
 }
 
-// checkoutMatchesLive keeps worktree provenance separate from the fallback
-// used by a workspace that has none. Foreground cwd is never evidence.
+// checkoutMatchesLive compares recorded provenance when present, otherwise
+// the exact checkout path or saved cwd. Foreground cwd is never evidence.
 func (b PaneBinding) checkoutMatchesLive(live LivePane) bool {
-	recorded := strings.TrimSpace(b.WorktreePath)
+	return CheckoutMatchesLive(b.RepoKey, b.WorktreePath, live)
+}
+
+// CheckoutMatchesLive requires recorded checkout provenance when repoKey is
+// present. Otherwise it compares the exact cleaned checkout path, falling back
+// to the saved cwd when the observation has no checkout path.
+func CheckoutMatchesLive(repoKey, recorded string, live LivePane) bool {
+	recorded = strings.TrimSpace(recorded)
 	if recorded == "" {
 		return false
 	}
 	recorded = filepath.Clean(recorded)
-	repoKey := strings.TrimSpace(b.RepoKey)
-	if liveHasCheckoutProvenance(live) {
+	repoKey = strings.TrimSpace(repoKey)
+	if repoKey != "" && liveHasCheckoutProvenance(live) {
 		return exactCheckoutProvenance(repoKey, recorded, live)
 	}
 
-	// A workspace outside any checkout has no provenance to compare. Only the
-	// saved cwd may support the match; subdirectories are not accepted.
-	currentPath := strings.TrimSpace(live.CurrentPath)
+	// Root panes may gain checkout metadata after launch without recording it.
+	// Prefer that checkout path to saved cwd; subdirectories are not accepted.
+	currentPath := cmp.Or(strings.TrimSpace(live.WorktreePath), strings.TrimSpace(live.CurrentPath))
 	return repoKey == "" && currentPath != "" && filepath.Clean(currentPath) == recorded
 }
 

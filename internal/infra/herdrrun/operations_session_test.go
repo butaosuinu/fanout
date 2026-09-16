@@ -1,6 +1,7 @@
 package herdrrun
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -33,6 +34,22 @@ func TestEqualOwnedPaneAdmitsReplacedConversation(t *testing.T) {
 		want           bool
 	}{
 		{name: "identical identity", want: true},
+		{
+			name:   "child repository changed",
+			mutate: func(i *corebackend.OwnedPaneIdentity) { i.RepoKey = "/other/.git" },
+		},
+		{
+			name:   "child checkout changed",
+			mutate: func(i *corebackend.OwnedPaneIdentity) { i.WorktreePath = "/repo/other" },
+		},
+		{
+			name:   "child checkout still compares byte-exactly",
+			mutate: func(i *corebackend.OwnedPaneIdentity) { i.WorktreePath += "/." },
+		},
+		{
+			name:   "child saved cwd still compares byte-exactly",
+			mutate: func(i *corebackend.OwnedPaneIdentity) { i.CurrentPath += "/." },
+		},
 		{
 			name: "same provider replaced its conversation",
 			mutate: func(i *corebackend.OwnedPaneIdentity) {
@@ -154,6 +171,57 @@ func TestFocusOwnedRestoresDroppedAgentName(t *testing.T) {
 	}
 	if renamed != 1 {
 		t.Fatalf("agent rename issued %d times, want exactly 1", renamed)
+	}
+}
+
+func TestReadOwnedCoordinatorWithLaterCheckoutProvenance(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		checkoutPath string
+		want         bool
+	}{
+		{name: "no checkout metadata", want: true},
+		{name: "same checkout", checkoutPath: "/repo", want: true},
+		{name: "other checkout", checkoutPath: "/other"},
+		{name: "checkout subdirectory", checkoutPath: "/repo/subdir"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newOwnedHarness(t)
+			target := corebackend.OwnedPaneIdentity{
+				Ref:       corebackend.PaneRef{Backend: corebackend.Herdr, Workspace: "w1", Pane: "w1:p1"},
+				SessionID: h.session.Session, SocketPath: h.session.SocketPath,
+				WorkspaceLabel: "root", TerminalID: "term-root", CurrentPath: "/repo",
+			}
+			bound, err := h.session.Backend().BindOwnedTarget(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.checkoutPath != "" {
+				h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+					(*snapshot.Workspaces)[0].Worktree = &worktreeInfoJSON{
+						RepoKey: h.commonDir, RepoRoot: "/repo", CheckoutPath: tt.checkoutPath,
+					}
+				})
+			}
+			reads := 0
+			h.fake.respond = func(args []string) ([]byte, error) {
+				if slices.Equal(args, []string{"pane", "read", target.Ref.Pane, "--source", "visible", "--format", "text"}) {
+					reads++
+					return []byte("coordinator\n"), nil
+				}
+				return nil, fmt.Errorf("unexpected command: %v", args)
+			}
+			_, bindErr := h.session.Backend().BindOwnedTarget(target)
+			text, readErr := bound.Read(target.Ref, 0)
+			if tt.want {
+				if bindErr != nil || readErr != nil || text != "coordinator\n" || reads != 1 {
+					t.Fatalf("bind=%v read=%v text=%q reads=%d", bindErr, readErr, text, reads)
+				}
+			} else if !errors.Is(bindErr, corebackend.ErrOwnedIdentityMismatch) ||
+				!errors.Is(readErr, corebackend.ErrOwnedIdentityMismatch) || reads != 0 {
+				t.Fatalf("mismatched checkout admitted: bind=%v read=%v reads=%d", bindErr, readErr, reads)
+			}
+		})
 	}
 }
 
