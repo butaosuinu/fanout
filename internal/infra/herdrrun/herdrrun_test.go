@@ -1149,8 +1149,9 @@ func TestWaitValidSnapshotThenFinalRetryableErrorFails(t *testing.T) {
 		return false
 	})
 
-	if got.Status != corebackend.WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
-		t.Fatalf("Wait() = %#v, want generic unavailable error and nil panes", got)
+	if got.Status != corebackend.WaitFailed || !errors.Is(got.Err, context.DeadlineExceeded) ||
+		!strings.Contains(got.Err.Error(), "timed out after 1s") || strings.Contains(got.Err.Error(), "unavailable") || got.Panes != nil {
+		t.Fatalf("Wait() = %#v, want timeout error and nil panes", got)
 	}
 	if matchCalls != 1 {
 		t.Fatalf("predicate calls = %d, want 1", matchCalls)
@@ -1198,9 +1199,10 @@ func TestWaitCommandCleanupFailureOverridesRetryableCommandErrors(t *testing.T) 
 	for _, tt := range []struct {
 		name       string
 		commandErr error
+		wantErr    string
 	}{
-		{name: "non-zero exit", commandErr: exitErr},
-		{name: "command deadline", commandErr: context.DeadlineExceeded},
+		{name: "non-zero exit", commandErr: exitErr, wantErr: `method "session.snapshot" is unavailable`},
+		{name: "command deadline", commandErr: context.DeadlineExceeded, wantErr: "timed out after 5s"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := newFakeHerdr(session, socket)
@@ -1216,8 +1218,8 @@ func TestWaitCommandCleanupFailureOverridesRetryableCommandErrors(t *testing.T) 
 				return false
 			})
 
-			if got.Status != corebackend.WaitFailed || got.Err == nil || got.Err.Error() != methodUnavailable("session.snapshot").Error() || got.Panes != nil {
-				t.Fatalf("Wait() = %#v, want immediate generic unavailable error", got)
+			if got.Status != corebackend.WaitFailed || got.Err == nil || !strings.Contains(got.Err.Error(), tt.wantErr) || got.Panes != nil {
+				t.Fatalf("Wait() = %#v, want immediate %q error", got, tt.wantErr)
 			}
 			if matchCalls != 0 || len(fake.commands) != 3 || len(clock.sleeps) != 0 {
 				t.Fatalf("predicate calls = %d commands = %d sleeps = %v, want 0/3/none", matchCalls, len(fake.commands), clock.sleeps)

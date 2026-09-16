@@ -24,6 +24,8 @@ const (
 	commandName         = "herdr"
 	commandTimeout      = 5 * time.Second
 	commandCleanupDelay = 100 * time.Millisecond
+	readRetryCount      = 1
+	readRetryDelay      = 100 * time.Millisecond
 	minimumWaitTimeout  = 3 * time.Second
 	waitInterval        = 2 * time.Second
 
@@ -391,7 +393,7 @@ func (e commandCleanupError) Unwrap() error { return e.err }
 func (b *Backend) snapshot(ctx context.Context, timeout time.Duration, probed probeResult) ([]corebackend.LivePane, error) {
 	out, err := b.runContext(ctx, timeout, probed.binary, probed.route, "api", "snapshot")
 	if err != nil {
-		wrapped := methodUnavailable("session.snapshot")
+		wrapped := readMethodError("session.snapshot", err)
 		if retryableCommandError(err) {
 			return nil, retryableObservationError{err: wrapped}
 		}
@@ -439,7 +441,7 @@ func (b *Backend) probeContext(ctx context.Context) (probeResult, error) {
 	if initial.socketPath == "" {
 		statusArgs = append([]string{"--session", initial.session}, statusArgs...)
 	}
-	statusOut, err := b.runContext(ctx, commandTimeout, admitted.path, initial, statusArgs...)
+	statusOut, err := b.runReadContext(ctx, admitted.path, initial, statusArgs...)
 	if err != nil {
 		return probeResult{}, fmt.Errorf("herdr status --json: %w", err)
 	}
@@ -504,16 +506,50 @@ func methodUnavailable(method string) error {
 	return fmt.Errorf("herdr method %q is unavailable", method)
 }
 
+func commandTimedOut(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
+func readMethodError(method string, err error) error {
+	if commandTimedOut(err) || errors.Is(err, exec.ErrWaitDelay) || errors.Is(err, context.Canceled) {
+		return fmt.Errorf("herdr method %q: %w", method, err)
+	}
+	return methodUnavailable(method)
+}
+
+// runReadContext retries only timed-out reads. Callers with their own polling
+// budget use runContext directly; mutations must never enter this retry lane.
+func (b *Backend) runReadContext(ctx context.Context, binary string, target route, args ...string) ([]byte, error) {
+	for attempt := 0; ; attempt++ {
+		out, err := b.runContext(ctx, commandTimeout, binary, target, args...)
+		if attempt >= readRetryCount || !commandTimedOut(err) || !retryableCommandError(err) || ctx.Err() != nil {
+			return out, err
+		}
+		if err := b.sleep(ctx, readRetryDelay); err != nil {
+			return nil, err
+		}
+	}
+}
+
 func (b *Backend) runContext(ctx context.Context, timeout time.Duration, binary string, target route, args ...string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = min(timeout, time.Until(deadline))
 	}
 	if timeout <= 0 {
 		return nil, context.DeadlineExceeded
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return b.output(callCtx, binary, routeEnvironment(target, b.control), args...)
+	out, err := b.output(callCtx, binary, routeEnvironment(target, b.control), args...)
+	if commandTimedOut(err) {
+		err = fmt.Errorf("timed out after %s: %w", timeout, err)
+	} else if errors.Is(err, exec.ErrWaitDelay) {
+		err = fmt.Errorf("herdr output pipe cleanup exceeded %s (a child process may still hold stdout/stderr open): %w", commandCleanupDelay, err)
+	}
+	return out, err
 }
 
 func routeEnvironment(target route, controls ...*controlPlaneEnvironment) []string {
@@ -630,7 +666,7 @@ func retryableCommandError(err error) bool {
 	if errors.As(err, &cleanupErr) {
 		return false
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, exec.ErrWaitDelay) {
+	if commandTimedOut(err) || errors.Is(err, exec.ErrWaitDelay) {
 		return true
 	}
 	var exitErr *exec.ExitError
