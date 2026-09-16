@@ -1429,6 +1429,44 @@ func TestBoundOwnedWorkspaceCloserClosesExactGenericWorkspace(t *testing.T) {
 	}
 }
 
+func TestBoundOwnedWorkspaceCloserRejectsAddedCheckoutWithoutMutation(t *testing.T) {
+	for _, beforeBind := range []bool{true, false} {
+		t.Run(fmt.Sprintf("before_bind=%t", beforeBind), func(t *testing.T) {
+			h := newOwnedHarness(t)
+			target := genericWorkspaceCloseTarget(h)
+			addCheckout := func() {
+				h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+					for i := range *snapshot.Workspaces {
+						workspace := &(*snapshot.Workspaces)[i]
+						if workspace.WorkspaceID == target.Ref.Workspace {
+							workspace.Worktree = &worktreeInfoJSON{
+								RepoKey: h.commonDir, RepoRoot: target.CurrentPath, CheckoutPath: target.CurrentPath,
+							}
+						}
+					}
+				})
+			}
+			if beforeBind {
+				addCheckout()
+			}
+			bound, err := h.session.Backend().BindOwnedWorkspaceClose(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !beforeBind {
+				addCheckout()
+			}
+			_, err = bound.CloseOwned(corebackend.CloseRequest{Ref: corebackend.PaneRef{
+				Backend: corebackend.Herdr, Pane: target.Ref.Pane,
+			}})
+			if !errors.Is(err, corebackend.ErrOwnedIdentityMismatch) {
+				t.Fatalf("CloseOwned() error = %v, want checkout rejection", err)
+			}
+			assertNoWorkspaceCloseCommand(t, h.fake.commands, target.Ref.Workspace)
+		})
+	}
+}
+
 func TestBoundOwnedWorkspaceCloserRejectsUnadmittedPaneWithoutMutation(t *testing.T) {
 	h := newOwnedHarness(t)
 	target := genericWorkspaceCloseTarget(h)

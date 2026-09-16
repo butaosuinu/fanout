@@ -595,6 +595,11 @@ func (b *Backend) closeOwnedWorkspace(ctx context.Context, target corebackend.Ow
 	if err != nil {
 		return failed, err
 	}
+	// Generic close requires the mutation snapshot to remain checkout-free.
+	workspace := view.workspaces[target.Ref.Workspace]
+	if workspace.repoKey != "" || workspace.worktreePath != "" {
+		return failed, fmt.Errorf("%w: generic workspace close cannot own a checkout", corebackend.ErrOwnedIdentityMismatch)
+	}
 	if err := verifyWorkspaceClosePanes(view, target.Ref); err != nil {
 		return failed, err
 	}
