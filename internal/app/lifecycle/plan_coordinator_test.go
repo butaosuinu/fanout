@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -35,18 +36,25 @@ func (f fakeCoordinatorCloser) CloseOwned(req backend.CloseRequest) (backend.Clo
 		WorkspaceID: f.target.Ref.Workspace, Label: f.target.WorkspaceLabel,
 		PaneID: f.target.Ref.Pane, TerminalID: f.target.TerminalID, CurrentPath: f.target.CurrentPath,
 	}
-	workspace, err := findUniqueWorkspace(f.runtime.workspaces, false, coordinatorWorkspacePredicate(resource))
+	workspaces, err := f.runtime.ObserveWorkspaces(context.Background())
 	if err != nil {
-		return failed, err
+		return failed, fmt.Errorf("%w: %w", backend.ErrOwnedMutationNotIssued, err)
+	}
+	workspace, err := findUniqueWorkspace(workspaces, false, coordinatorWorkspacePredicate(resource))
+	if err != nil {
+		return failed, fmt.Errorf("%w: %w", backend.ErrOwnedMutationNotIssued, err)
 	}
 	if len(workspace.Panes) != 1 {
-		return failed, backend.ErrOwnedWorkspaceHasUnadmittedPane
+		return failed, fmt.Errorf("%w: %w", backend.ErrOwnedMutationNotIssued, backend.ErrOwnedWorkspaceHasUnadmittedPane)
 	}
 	if workspace.Path != "" && (filepath.Clean(workspace.Path) != filepath.Clean(workspace.RepoRoot) ||
 		filepath.Clean(workspace.Path) != filepath.Clean(f.target.CurrentPath)) {
-		return failed, backend.ErrOwnedIdentityMismatch
+		return failed, fmt.Errorf("%w: %w", backend.ErrOwnedMutationNotIssued, backend.ErrOwnedIdentityMismatch)
 	}
 	if err := f.runtime.CloseWorkspace(context.Background(), workspace.WorkspaceID); err != nil {
+		return failed, err
+	}
+	if _, err := f.runtime.ObserveWorkspaces(context.Background()); err != nil {
 		return failed, err
 	}
 	return backend.CloseResult{Status: backend.CloseConfirmed}, nil
@@ -181,6 +189,55 @@ func TestCleanupPlanCoordinatorRetriesAfterCheckoutGuardRejection(t *testing.T) 
 	}
 	assertPlanCoordinatorState(t, fixture.projectRoot, pane, false)
 	assertPlanCoordinatorShutdown(t, fixture.projectRoot, runtime)
+}
+
+func TestCleanupPlanCoordinatorSnapshotFailureTracksCloseDispatch(t *testing.T) {
+	for _, afterClose := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after_close=%t", afterClose), func(t *testing.T) {
+			fixture, pane, runtime := newPlanCoordinatorFixture(t)
+			runtime.observeErr = errors.New("temporary snapshot failure")
+			runtime.observeErrAtCall = 2 // The generic closer's snapshot after Bind.
+			wantStatus, wantFailure, wantCloses := state.IntentRealized, "", 0
+			if afterClose {
+				runtime.observeErrAtCall = 3
+				saved := runtime.workspaces[0]
+				runtime.afterClose = func(string) { runtime.workspaces = append(runtime.workspaces, saved) }
+				wantStatus, wantFailure, wantCloses = state.IntentManualCleanupRequired, panelaunch.ManagedCoordinatorClosePending, 1
+			}
+			opts := herdrLifecycleOptions(fixture, runtime)
+			lg := &captureLogger{}
+			if got := CleanupPlan(opts, pane.RuntimeParent, lg); got != exitcode.Env {
+				t.Fatalf("snapshot failure=%d; errors=%v", got, lg.errors)
+			}
+			journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+			if err != nil || len(journal.Intents) != 1 || journal.Intents[0].Status != wantStatus || journal.Intents[0].Failure != wantFailure {
+				t.Fatalf("intent after snapshot failure: journal=%+v; error=%v", journal, err)
+			}
+			if runtime.closeCalls != wantCloses || runtime.observeCalls != runtime.observeErrAtCall {
+				t.Fatalf("closes=%d; observations=%d", runtime.closeCalls, runtime.observeCalls)
+			}
+			if !afterClose && !strings.Contains(strings.Join(lg.errors, " "), ErrManualCleanupRequired.Error()) {
+				t.Fatalf("missing manual cleanup reason: %v", lg.errors)
+			}
+			assertPlanCoordinatorState(t, fixture.projectRoot, pane, true)
+			runtime.observeErr, runtime.observeErrAtCall, runtime.afterClose = nil, 0, nil
+			want := exitcode.OK
+			if afterClose {
+				want = exitcode.Env
+			}
+			if got := CleanupPlan(opts, pane.RuntimeParent, lg); got != want || runtime.closeCalls != 1 {
+				t.Fatalf("retry=%d want=%d; close calls=%d", got, want, runtime.closeCalls)
+			}
+			if afterClose {
+				runtime.workspaces = nil // Manual cleanup resolves an unconfirmed close.
+				if got := CleanupPlan(opts, pane.RuntimeParent, lg); got != exitcode.OK || runtime.closeCalls != 1 {
+					t.Fatalf("absence recovery=%d; close calls=%d", got, runtime.closeCalls)
+				}
+			}
+			assertPlanCoordinatorState(t, fixture.projectRoot, pane, false)
+			assertPlanCoordinatorShutdown(t, fixture.projectRoot, runtime)
+		})
+	}
 }
 
 func TestCleanupPlanCoordinatorResponseLossNeverReissuesClose(t *testing.T) {

@@ -15,6 +15,9 @@ var (
 	ErrOwnedWorkspaceHasUnadmittedPane = errors.New("herdr owned workspace has a pane outside the close admission")
 )
 
+// ErrOwnedMutationNotIssued marks a generic workspace close failure before command dispatch.
+var ErrOwnedMutationNotIssued = errors.New("herdr owned mutation was not issued")
+
 // ErrOwnedSessionNotFound reports that no persisted owned-session admission
 // exists for the requested repository identity.
 var ErrOwnedSessionNotFound = errors.New("fanout-owned herdr session does not exist")

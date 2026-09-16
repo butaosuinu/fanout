@@ -1552,6 +1552,42 @@ func TestBoundOwnedWorkspaceCloserDoesNotMutateWhenObservationFails(t *testing.T
 	assertNoWorkspaceCloseCommand(t, h.fake.commands, target.Ref.Workspace)
 }
 
+func TestBoundOwnedWorkspaceCloserSnapshotFailureTracksCloseDispatch(t *testing.T) {
+	for _, afterClose := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after_close=%t", afterClose), func(t *testing.T) {
+			h := newOwnedHarness(t)
+			target := genericWorkspaceCloseTarget(h)
+			respondToGenericWorkspaceClose(h, target)
+			bound, err := h.session.Backend().BindOwnedWorkspaceClose(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			closeCalls := 0
+			respond := h.fake.respond
+			h.fake.respond = func(args []string) ([]byte, error) {
+				closeCalls++
+				out, responseErr := respond(args)
+				h.fake.errors["snapshot"] = errors.New("post-close snapshot failed")
+				return out, responseErr
+			}
+			wantCloses := 1
+			if !afterClose {
+				h.fake.errors["snapshot"] = errors.New("pre-close snapshot failed")
+				wantCloses = 0
+			}
+			result, err := bound.CloseOwned(corebackend.CloseRequest{Ref: corebackend.PaneRef{
+				Backend: corebackend.Herdr, Pane: target.Ref.Pane,
+			}})
+			if err == nil || errors.Is(err, corebackend.ErrOwnedMutationNotIssued) != !afterClose || result.Status != corebackend.CloseFailed {
+				t.Fatalf("CloseOwned() = %+v, %v", result, err)
+			}
+			if closeCalls != wantCloses {
+				t.Fatalf("close calls=%d, want %d", closeCalls, wantCloses)
+			}
+		})
+	}
+}
+
 func genericWorkspaceCloseTarget(h *ownedHarness) corebackend.OwnedPaneIdentity {
 	target := h.target()
 	target.RepoKey = ""

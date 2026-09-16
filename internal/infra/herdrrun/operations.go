@@ -588,22 +588,22 @@ func (b *Backend) closeOwnedWorkspace(ctx context.Context, target corebackend.Ow
 	failed := corebackend.CloseResult{Status: corebackend.CloseFailed}
 	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
-		return failed, err
+		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
 	}
 	defer unlockPrivateFile(lock)
 	target, probed, view, err := b.resolveOwnedTargetView(ctx, admission, target)
 	if err != nil {
-		return failed, err
+		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
 	}
 	// Repository-root Git metadata does not give this workspace a linked checkout.
 	workspace := view.workspaces[target.Ref.Workspace]
 	if workspace.worktreePath != "" &&
 		(filepath.Clean(workspace.worktreePath) != filepath.Clean(workspace.repoRoot) ||
 			filepath.Clean(workspace.worktreePath) != filepath.Clean(target.CurrentPath)) {
-		return failed, fmt.Errorf("%w: generic workspace close cannot own a checkout", corebackend.ErrOwnedIdentityMismatch)
+		return failed, fmt.Errorf("%w: %w: generic workspace close cannot own a checkout", corebackend.ErrOwnedMutationNotIssued, corebackend.ErrOwnedIdentityMismatch)
 	}
 	if err := verifyWorkspaceClosePanes(view, target.Ref); err != nil {
-		return failed, err
+		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
 	}
 	if err := b.issueAndVerifyWorkspaceClose(ctx, admission, probed, target.Ref.Workspace); err != nil {
 		return failed, err

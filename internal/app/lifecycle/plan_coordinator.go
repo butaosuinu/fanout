@@ -102,8 +102,7 @@ func issuePlanCoordinatorClose(journal *state.LockedLaunchJournal, intent state.
 		return err
 	}
 	result, err := bound.CloseOwned(backend.CloseRequest{Ref: backend.PaneRef{Backend: ref.Backend, Pane: ref.Pane}})
-	// Generic workspace close returns these sentinels only from fences before the mutation is sent.
-	if errors.Is(err, backend.ErrOwnedIdentityMismatch) || errors.Is(err, backend.ErrOwnedWorkspaceHasUnadmittedPane) {
+	if errors.Is(err, backend.ErrOwnedMutationNotIssued) {
 		journal.UpsertIntent(intent)
 		return errors.Join(fmt.Errorf("%w: %w", ErrManualCleanupRequired, err), journal.Save())
 	}
