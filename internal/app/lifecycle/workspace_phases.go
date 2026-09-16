@@ -175,6 +175,7 @@ func executeReopen(
 	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
 	intent state.LaunchIntent,
+	lg Logger,
 ) (state.LaunchIntent, error) {
 	if err := verifyReopenPreconditions(ctx, opts, runtime, intent); err != nil {
 		return intent, err
@@ -197,7 +198,7 @@ func executeReopen(
 	if recovered.Status == state.IntentRealized {
 		return recovered, nil
 	}
-	return executeRemove(ctx, opts, journal, runtime, recovered)
+	return executeRemove(ctx, opts, journal, runtime, recovered, lg)
 }
 
 func issueReopen(
@@ -267,8 +268,19 @@ func executeRemove(
 	journal *state.LockedLaunchJournal,
 	runtime WorkspaceRuntime,
 	intent state.LaunchIntent,
+	lg Logger,
 ) (state.LaunchIntent, error) {
 	if err := verifyRemovePreconditions(ctx, opts, runtime, intent); err != nil {
+		return intent, err
+	}
+	if err := ensureCleanupMutationFresh(ctx, intent); err != nil {
+		return intent, err
+	}
+	removed, err := worktree.CleanIgnoredFiles(ctx, intent.WorktreePath)
+	if removed > 0 {
+		lg.Info("Herdr cleanup removed %d ignored files from %s", removed, intent.WorktreePath)
+	}
+	if err != nil {
 		return intent, err
 	}
 	issued, mutationErr := issueCleanupMutation(ctx, journal, &intent, func() error {
@@ -348,10 +360,8 @@ func verifyRemovableCheckoutContents(ctx context.Context, path string) error {
 		return err
 	}
 	switch contentState {
-	case worktree.CheckoutClean:
+	case worktree.CheckoutClean, worktree.CheckoutIgnoredOnly:
 		return nil
-	case worktree.CheckoutIgnoredOnly:
-		return fmt.Errorf("herdr checkout %s contains ignored files only; remove them before retrying cleanup", path)
 	default:
 		return fmt.Errorf("herdr checkout %s has tracked or untracked changes; preserve or remove them before retrying cleanup", path)
 	}

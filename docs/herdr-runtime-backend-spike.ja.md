@@ -532,7 +532,7 @@ tracked / untracked / ignored subtree generation を remove と原子的に条�
 fanout の cleanup は次の契約に従う（実装: #531。row は owning worktree の `state.json` の Herdr pane row を指す）。
 
 - state lock 下で保存済み row の workspace ID / label nonce、branch、path を現在値と照合し、live row では `terminal_id` も照合する。`stale` row は保存済み `terminal_id` を現在値と照合できない（pane 消滅、または cold restart による現在の `terminal_id` との不一致）ため、その失効の確認と workspace ID / label / path / checkout の Git provenance の照合で代替する。不一致、非所有、または照合不能なら mutation せず fail closed にする。
-- dirty checkout は明示確認なしに force しない。確認後の force remove でも branch は herdr に削除させない。
+- tracked の変更または非 ignored の untracked file が残る checkout は削除しない。ignored file だけなら clean と同等に扱い、identity の照合後に `git -c clean.requireForce=true clean -fdX` で除去し、削除件数を 1 行記録してから force なしの `herdr worktree remove` へ進む。埋め込み Git repository などが残る場合は停止し、手動 cleanup を要求する。branch は herdr に削除させない。
 - `before_worktree_remove` / `before_pane_close` の前に cleanup intent を保存し、発火済み phase を同じ intent 行へ保存する。
   後段 preflight の一時失敗または retry では、fresh identity preflight を維持したまま保存済み phase 以前の hook を再発火させない。
   cleanup mutation の未発行または expired plan の再計画でも intent 行を削除せず、hook phase を引き継ぐ。

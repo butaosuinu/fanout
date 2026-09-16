@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/herdrrun"
 	"github.com/butaosuinu/fanout/internal/infra/hooks"
+	"github.com/butaosuinu/fanout/internal/infra/log"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -463,29 +465,6 @@ func TestHerdrSharedAttachedCloseChecksChildContentsBeforeMutation(t *testing.T)
 				}
 				return func() {
 					if err := os.Remove(dirty); err != nil {
-						t.Fatal(err)
-					}
-				}
-			},
-		},
-		{
-			name: "ignored-only", wantError: "ignored files only",
-			prepare: func(t *testing.T, path string) func() {
-				t.Helper()
-				if err := os.WriteFile(filepath.Join(path, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				runHerdrLifecycleGit(t, path, "add", ".gitignore")
-				runHerdrLifecycleGit(t, path, "commit", "-m", "ignore dependencies")
-				ignored := filepath.Join(path, "node_modules", "pkg")
-				if err := os.MkdirAll(ignored, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(ignored, "index.js"), []byte("ignored\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				return func() {
-					if err := os.RemoveAll(filepath.Join(path, "node_modules")); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -2339,25 +2318,6 @@ func TestHerdrCloseRejectsCheckoutOnlyContentsBeforeReopen(t *testing.T) {
 				}
 			},
 		},
-		{
-			name:      "ignored-only",
-			wantError: "ignored files only",
-			prepare: func(t *testing.T, path string) {
-				t.Helper()
-				if err := os.WriteFile(filepath.Join(path, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				runHerdrLifecycleGit(t, path, "add", ".gitignore")
-				runHerdrLifecycleGit(t, path, "commit", "-m", "ignore dependencies")
-				ignoredPath := filepath.Join(path, "node_modules", "pkg")
-				if err := os.MkdirAll(ignoredPath, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(ignoredPath, "index.js"), []byte("ignored\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3428,42 +3388,97 @@ func TestHerdrCloseReplansMovedWorkspaceWithoutTopLevelPane(t *testing.T) {
 	}
 }
 
-func TestHerdrCloseReportsIgnoredOnlyCheckoutBeforeMutation(t *testing.T) {
-	fixture := newHerdrLifecycleFixture(t)
-	if err := os.WriteFile(filepath.Join(fixture.worktreePath, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
-		t.Fatal(err)
+func TestHerdrCleanupRemovesIgnoredOnlyCheckout(t *testing.T) {
+	for _, action := range []string{"close", "cleanup"} {
+		for _, scenario := range []string{"fresh", "reopen", "shared", "legacy retry"} {
+			t.Run(action+"/"+scenario, func(t *testing.T) {
+				fixture := newHerdrLifecycleFixture(t)
+				prepareIgnoredLifecycleFiles(t, fixture.worktreePath)
+				runtime := prepareHerdrCleanupPhase(t, fixture, state.CleanupRemove)
+				switch scenario {
+				case "reopen":
+					runtime = prepareHerdrCleanupPhase(t, fixture, state.CleanupReopen)
+				case "shared":
+					workspace := herdrLifecycleWorkspace("w-attached", "attached-label", fixture.worktreePath, fixture.pane.RepoKey, fixture.pane.RepoRoot)
+					attached := sharedAttachedLifecyclePane(fixture, "425", "", workspace)
+					replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+					runtime.workspaces = append(runtime.workspaces, workspace)
+				case "legacy retry":
+					recordManualHerdrCleanupIntent(t, fixture, legacyDirtyWorktreeFailure())
+				}
+				var output bytes.Buffer
+				lg := log.NewWith(&output, &output, false)
+				opts := herdrLifecycleOptions(fixture, runtime)
+				var got exitcode.Code
+				if action == "cleanup" {
+					installLifecycleCleanupGH(t)
+					got = Cleanup(opts, fixture.pane.Parent, lg)
+				} else {
+					got = Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, lg)
+				}
+				if got != exitcode.OK {
+					t.Fatalf("%s = %d; output: %s", action, got, output.String())
+				}
+				assertHerdrLifecycleRemoved(t, fixture)
+				if runtime.removeCalls != 1 || strings.Count(output.String(), "Herdr cleanup removed 3 ignored files") != 1 {
+					t.Fatalf("remove calls = %d; output: %s", runtime.removeCalls, output.String())
+				}
+			})
+		}
 	}
-	runHerdrLifecycleGit(t, fixture.worktreePath, "add", ".gitignore")
-	runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "-m", "ignore dependencies")
-	ignoredPath := filepath.Join(fixture.worktreePath, "node_modules", "pkg")
-	if err := os.MkdirAll(ignoredPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(ignoredPath, "index.js"), []byte("ignored\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runtime := &fakeHerdrLifecycleRuntime{
-		projectRoot: fixture.projectRoot,
-		workspaces:  []backend.WorkspaceObservation{fixture.workspace},
-	}
-	lg := &captureLogger{}
+}
 
-	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, lg); got != exitcode.Env {
-		t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+func TestHerdrCleanupPreservesIgnoredFilesWhenBlocked(t *testing.T) {
+	for _, reason := range []string{"tracked", "untracked", "identity", "expired", "ambiguous", "embedded repository", "embedded repository without requireForce"} {
+		t.Run(reason, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			prepareIgnoredLifecycleFiles(t, fixture.worktreePath)
+			runtime := prepareHerdrCleanupPhase(t, fixture, state.CleanupRemove)
+			switch reason {
+			case "tracked", "untracked":
+				if err := os.WriteFile(filepath.Join(fixture.worktreePath, reason+".txt"), []byte("keep me"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "identity":
+				runtime.workspaces[0].Label = "foreign"
+			case "expired":
+				recordExpiredHerdrCleanupIntent(t, fixture, state.CleanupRemove)
+			case "ambiguous":
+				recordManualHerdrCleanupIntent(t, fixture, "response lost")
+			case "embedded repository", "embedded repository without requireForce":
+				runHerdrLifecycleGit(t, filepath.Join(fixture.worktreePath, "node_modules"), "init")
+				if reason == "embedded repository without requireForce" {
+					runHerdrLifecycleGit(t, fixture.worktreePath, "config", "clean.requireForce", "false")
+				}
+			}
+			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("Close() = %d, want %d", got, exitcode.Env)
+			}
+			assertHerdrLifecyclePreserved(t, fixture)
+			if runtime.removeCalls != 0 {
+				t.Fatalf("blocked cleanup issued %d removes", runtime.removeCalls)
+			}
+			if _, err := os.Stat(filepath.Join(fixture.worktreePath, "node_modules", "pkg", "index.js")); err != nil {
+				t.Fatalf("blocked cleanup removed ignored file: %v", err)
+			}
+		})
 	}
-	if runtime.removeCalls != 0 {
-		t.Fatalf("ignored-only cleanup remove calls = %d, want 0", runtime.removeCalls)
-	}
-	if len(lg.errors) == 0 || !strings.Contains(lg.errors[len(lg.errors)-1], "ignored files only") {
-		t.Fatalf("ignored-only cleanup errors = %v", lg.errors)
-	}
-	assertHerdrCleanupIntentStatus(t, fixture, state.IntentPlanned, true)
+}
 
-	if err := os.RemoveAll(filepath.Join(fixture.worktreePath, "node_modules")); err != nil {
+func prepareIgnoredLifecycleFiles(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(path, ".gitignore"), []byte("node_modules/\n*.log\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
-		t.Fatalf("retry Close() = %d, want %d", got, exitcode.OK)
+	runHerdrLifecycleGit(t, path, "add", ".gitignore")
+	runHerdrLifecycleGit(t, path, "commit", "-m", "ignore build artifacts")
+	if err := os.MkdirAll(filepath.Join(path, "node_modules", "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"node_modules/pkg/index.js", "node_modules/pkg/other.js", "build \noutput.log"} {
+		if err := os.WriteFile(filepath.Join(path, name), []byte("ignored\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

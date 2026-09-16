@@ -62,8 +62,9 @@ checkout を持たない console / coordinator workspace を close する前に�
 補助 pane が残る場合は manual cleanup とします。
 close 前の snapshot に失敗した場合は workspace を変更しません。close 後の確認 snapshot に失敗した場合は、close の結果を確定できないまま error を返します。
 
-fanout は remove の発行前に、tracked / untracked の作業と ignored file を区別します。
-どちらが残っていても herdr mutation を発行せず、原因を分けて表示します。再試行時は checkout を再検査します。
+fanout は remove の発行前に、tracked の変更や非 ignored の untracked file と ignored file を区別します。
+tracked の変更または非 ignored の untracked file が残る場合は、herdr mutation を発行せず停止します。
+ignored file だけなら `git -c clean.requireForce=true clean -fdX` で除去し、削除件数を記録してから remove へ進みます。ファイルが残る場合は削除を停止します。再試行時は checkout を再検査します。
 `dirty_worktree_requires_force` で manual cleanup になった保存済み intent は、現在の checkout と workspace から再計画するため、変更を commit または削除したあとに続行できます（[#721](https://github.com/butaosuinu/fanout/issues/721)）。
 発行結果が曖昧な intent は再発行せず、manual cleanup のまま保持します。
 branch は fanout-created と記録されたものだけを compare-and-delete します。
@@ -77,11 +78,11 @@ git -C "<worktree>" status --short --untracked-files=all --ignored
 ```
 
 tracked の作業は commit または stash し、untracked file は commit または別の場所へ退避してから再試行してください。
-ignored file だけなら、削除対象を確認してから ignored file だけを削除します。
+ignored file は自動で除去します。cleanup 後も残る場合は、内容を確認してから手動で削除してください。
 
 ```bash
-git -C "<worktree>" clean -ndX
-git -C "<worktree>" clean -fdX
+git -C "<worktree>" -c clean.requireForce=true clean -ndX
+git -C "<worktree>" -c clean.requireForce=true clean -fdX
 ```
 
 ignored ディレクトリ内に別の Git repository がある場合は、`-f` を 2 回指定しないとそのディレクトリをスキップします。
