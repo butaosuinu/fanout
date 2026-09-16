@@ -42,7 +42,8 @@ func (f fakeCoordinatorCloser) CloseOwned(req backend.CloseRequest) (backend.Clo
 	if len(workspace.Panes) != 1 {
 		return failed, backend.ErrOwnedWorkspaceHasUnadmittedPane
 	}
-	if workspace.Path != "" || workspace.RepoKey != "" || workspace.RepoRoot != "" {
+	if workspace.Path != "" && (filepath.Clean(workspace.Path) != filepath.Clean(workspace.RepoRoot) ||
+		filepath.Clean(workspace.Path) != filepath.Clean(f.target.CurrentPath)) {
 		return failed, backend.ErrOwnedIdentityMismatch
 	}
 	if err := f.runtime.CloseWorkspace(context.Background(), workspace.WorkspaceID); err != nil {
@@ -66,10 +67,14 @@ func newPlanCoordinatorFixture(t *testing.T) (herdrLifecycleFixture, state.Pane,
 }
 
 func TestCleanupPlanRetiresCoordinatorAndAllowsShutdown(t *testing.T) {
-	for _, phase := range []string{"no tasks", "merged task", "completed cleanup", "expired coordinator"} {
+	for _, phase := range []string{"no tasks", "repository root metadata", "merged task", "completed cleanup", "expired coordinator"} {
 		t.Run(phase, func(t *testing.T) {
 			fixture, pane, runtime := newPlanCoordinatorFixture(t)
 			switch phase {
+			case "repository root metadata":
+				runtime.workspaces[0].Path = fixture.projectRoot
+				runtime.workspaces[0].RepoRoot = fixture.projectRoot
+				runtime.workspaces[0].RepoKey = filepath.Join(fixture.projectRoot, ".git")
 			case "merged task":
 				recordLifecyclePane(t, fixture.projectRoot, fixture.pane)
 				runtime.workspaces = append(runtime.workspaces, fixture.workspace)
