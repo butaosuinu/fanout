@@ -150,6 +150,39 @@ func TestCleanupPlanCoordinatorAuxiliaryPaneRequiresManualCleanup(t *testing.T) 
 	}
 }
 
+func TestCleanupPlanCoordinatorRetriesAfterCheckoutGuardRejection(t *testing.T) {
+	fixture, pane, runtime := newPlanCoordinatorFixture(t)
+	runtime.workspaces[0].Path = fixture.projectRoot
+	runtime.workspaces[0].RepoRoot = filepath.Dir(fixture.projectRoot)
+	runtime.workspaces[0].RepoKey = filepath.Join(runtime.workspaces[0].RepoRoot, ".git")
+	opts := herdrLifecycleOptions(fixture, runtime)
+	lg := &captureLogger{}
+	if got := CleanupPlan(opts, pane.RuntimeParent, lg); got != exitcode.Env {
+		t.Fatalf("guard rejection=%d; errors=%v", got, lg.errors)
+	}
+	journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+	if err != nil || len(journal.Intents) != 1 || journal.Intents[0].Status != state.IntentRealized || journal.Intents[0].Failure != "" {
+		t.Fatalf("intent was not restored: journal=%+v; error=%v", journal, err)
+	}
+	message := strings.Join(lg.errors, " ")
+	if !strings.Contains(message, ErrManualCleanupRequired.Error()) || !strings.Contains(message, backend.ErrOwnedIdentityMismatch.Error()) {
+		t.Fatalf("missing manual cleanup reason: %s", message)
+	}
+	assertPlanCoordinatorState(t, fixture.projectRoot, pane, true)
+	if runtime.closeCalls != 0 {
+		t.Fatalf("close calls after guard rejection=%d", runtime.closeCalls)
+	}
+	runtime.workspaces[0].Path, runtime.workspaces[0].RepoRoot, runtime.workspaces[0].RepoKey = "", "", ""
+	if got := CleanupPlan(opts, pane.RuntimeParent, lg); got != exitcode.OK {
+		t.Fatalf("retry after metadata removal=%d; errors=%v", got, lg.errors)
+	}
+	if runtime.closeCalls != 1 || len(runtime.workspaces) != 0 {
+		t.Fatalf("close calls=%d; workspaces=%v", runtime.closeCalls, runtime.workspaces)
+	}
+	assertPlanCoordinatorState(t, fixture.projectRoot, pane, false)
+	assertPlanCoordinatorShutdown(t, fixture.projectRoot, runtime)
+}
+
 func TestCleanupPlanCoordinatorResponseLossNeverReissuesClose(t *testing.T) {
 	for _, remains := range []bool{false, true} {
 		t.Run(map[bool]string{false: "closed", true: "still present"}[remains], func(t *testing.T) {
