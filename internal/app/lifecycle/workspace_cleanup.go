@@ -41,6 +41,7 @@ type WorkspaceRuntime interface {
 	VerifyOwned(context.Context) error
 	RemoveWorktree(context.Context, string, string) error
 	CloseWorkspace(context.Context, string) error
+	BindOwnedWorkspaceClose(backend.OwnedPaneIdentity) (backend.OwnedClosingBackend, error)
 	VerifyAttachedWorkspaceClose(context.Context, backend.PaneBinding) error
 	CloseAttachedWorkspace(context.Context, backend.PaneBinding) error
 }

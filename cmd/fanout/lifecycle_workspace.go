@@ -35,8 +35,7 @@ func newWorkspaceLifecycleFactory(projectRoot string) lifecycle.WorkspaceRuntime
 		if err != nil {
 			return nil, err
 		}
-		if filepath.Clean(pane.RepoKey) != identity.RepoKey ||
-			filepath.Clean(pane.RepoRoot) != identity.RepoRoot {
+		if !workspaceLifecycleRepositoryMatches(pane, identity) {
 			return nil, fmt.Errorf("%w: saved Herdr row belongs to a different repository", backend.ErrOwnedIdentityMismatch)
 		}
 		owned, err := paneruntime.Open(ctx, identity.RepoKey)
@@ -48,4 +47,14 @@ func newWorkspaceLifecycleFactory(projectRoot string) lifecycle.WorkspaceRuntime
 		}
 		return owned, nil
 	}
+}
+
+func workspaceLifecycleRepositoryMatches(pane state.Pane, identity worktree.RepoIdentity) bool {
+	// Checkout-free coordinators are bound to their persisted intent before
+	// opening this route; their state rows deliberately have no Git provenance.
+	if pane.IsShell() && pane.RepoKey == "" && pane.RepoRoot == "" {
+		return filepath.Clean(pane.WorktreePath) == identity.RepoRoot
+	}
+	return filepath.Clean(pane.RepoKey) == identity.RepoKey &&
+		filepath.Clean(pane.RepoRoot) == identity.RepoRoot
 }

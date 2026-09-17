@@ -116,8 +116,8 @@ func (b *Backend) BindOwnedClose(req OwnedCloseRequest) (*Backend, error) {
 }
 
 // BindOwnedWorkspaceClose admits an exact generic workspace for close. It is
-// limited to checkout-free console/coordinator workspaces; worktree-backed
-// close must retain the stronger ownership proof used by BindOwnedClose.
+// limited to console/coordinator workspaces without linked worktrees; linked
+// worktree close must retain the stronger ownership proof used by BindOwnedClose.
 func (b *Backend) BindOwnedWorkspaceClose(target corebackend.OwnedPaneIdentity) (*Backend, error) {
 	if target.RepoKey != "" || target.WorktreePath != "" {
 		return nil, fmt.Errorf("%w: generic workspace close cannot own a checkout", corebackend.ErrOwnedIdentityMismatch)
@@ -588,15 +588,22 @@ func (b *Backend) closeOwnedWorkspace(ctx context.Context, target corebackend.Ow
 	failed := corebackend.CloseResult{Status: corebackend.CloseFailed}
 	admission, lock, err := b.acquireOwnedMutation(ctx)
 	if err != nil {
-		return failed, err
+		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
 	}
 	defer unlockPrivateFile(lock)
 	target, probed, view, err := b.resolveOwnedTargetView(ctx, admission, target)
 	if err != nil {
-		return failed, err
+		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
+	}
+	// Repository-root Git metadata does not give this workspace a linked checkout.
+	workspace := view.workspaces[target.Ref.Workspace]
+	if workspace.worktreePath != "" &&
+		(filepath.Clean(workspace.worktreePath) != filepath.Clean(workspace.repoRoot) ||
+			filepath.Clean(workspace.worktreePath) != filepath.Clean(target.CurrentPath)) {
+		return failed, fmt.Errorf("%w: %w: generic workspace close cannot own a checkout", corebackend.ErrOwnedMutationNotIssued, corebackend.ErrOwnedIdentityMismatch)
 	}
 	if err := verifyWorkspaceClosePanes(view, target.Ref); err != nil {
-		return failed, err
+		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
 	}
 	if err := b.issueAndVerifyWorkspaceClose(ctx, admission, probed, target.Ref.Workspace); err != nil {
 		return failed, err
@@ -736,6 +743,7 @@ type ownedSnapshotView struct {
 type ownedWorkspaceView struct {
 	label        string
 	repoKey      string
+	repoRoot     string
 	worktreePath string
 }
 
@@ -775,12 +783,13 @@ func (b *Backend) ownedSnapshotView(ctx context.Context, admission ownedAdmissio
 func ownedWorkspaceViews(envelope snapshotEnvelope) map[string]ownedWorkspaceView {
 	workspaces := map[string]ownedWorkspaceView{}
 	for _, workspace := range *envelope.Result.Snapshot.Workspaces {
-		worktreePath, repoKey := "", ""
+		worktreePath, repoKey, repoRoot := "", "", ""
 		if workspace.Worktree != nil {
 			worktreePath, repoKey = workspace.Worktree.CheckoutPath, workspace.Worktree.RepoKey
+			repoRoot = workspace.Worktree.RepoRoot
 		}
 		workspaces[workspace.WorkspaceID] = ownedWorkspaceView{
-			label: workspace.Label, repoKey: repoKey, worktreePath: worktreePath,
+			label: workspace.Label, repoKey: repoKey, repoRoot: repoRoot, worktreePath: worktreePath,
 		}
 	}
 	return workspaces

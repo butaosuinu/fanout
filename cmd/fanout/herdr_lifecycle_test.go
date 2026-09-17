@@ -52,6 +52,24 @@ func TestWorkspaceLifecycleFactoryTypesRepositoryMismatchAsIdentityFailure(t *te
 	}
 }
 
+func TestWorkspaceLifecycleRepositoryMatchesCoordinatorRoot(t *testing.T) {
+	identity := worktree.RepoIdentity{RepoKey: "/repo/.git", RepoRoot: "/repo"}
+	for _, test := range []struct {
+		pane state.Pane
+		want bool
+	}{
+		{pane: state.Pane{Kind: state.PaneKindShell, WorktreePath: "/repo"}, want: true},
+		{pane: state.Pane{Kind: state.PaneKindShell, WorktreePath: "/foreign"}},
+		{pane: state.Pane{WorktreePath: "/repo"}},
+		{pane: state.Pane{RepoKey: identity.RepoKey, RepoRoot: identity.RepoRoot}, want: true},
+		{pane: state.Pane{RepoKey: "/foreign/.git", RepoRoot: identity.RepoRoot}},
+	} {
+		if got := workspaceLifecycleRepositoryMatches(test.pane, identity); got != test.want {
+			t.Errorf("repository match for %+v = %t, want %t", test.pane, got, test.want)
+		}
+	}
+}
+
 func TestRunHerdrLifecycleRequiresExplicitAction(t *testing.T) {
 	for _, args := range [][]string{nil, {}, {"bogus"}, {"restart", "shutdown"}} {
 		var out, errOut bytes.Buffer

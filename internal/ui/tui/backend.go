@@ -105,6 +105,9 @@ func (m model) lifecycleActionDisabledReason(pane *paneView, action string) stri
 		return m.runtimeActionDisabledReason(nil, action)
 	}
 	if pane.isPaneOnly() && (action != "close" || backend.NormalizeName(pane.Backend) == backend.Herdr) {
+		if pane.isShell() && strings.HasPrefix(pane.savedPane.RuntimeParent, "plan:") && backend.NormalizeName(pane.Backend) == backend.Herdr {
+			return fmt.Sprintf("%s unavailable for shell terminal; run fanout plan %s --cleanup", action, strings.TrimPrefix(pane.savedPane.RuntimeParent, "plan:"))
+		}
 		return fmt.Sprintf("%s unavailable for %s", action, paneOnlyKindLabel(*pane))
 	}
 	return m.lifecycleBackendActionDisabledReason(*pane, action)

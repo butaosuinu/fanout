@@ -1399,6 +1399,62 @@ func TestRecordManagedCoordinatorIgnoresEarlierManualRows(t *testing.T) {
 	}
 }
 
+func TestRecordManagedCoordinatorPreservesPendingPlanRetirement(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
+			repo := newManagedRealizeRepo(t)
+			intent := burnedManualCoordinatorIntent(t, repo, repo, -2, state.IntentRealized)
+			intent.Parent, intent.RuntimeParent, intent.IssueNum = "plan:demo", "plan:demo", 0
+			var err error
+			intent.ID, err = state.CoordinatorIntentID(intent.Parent, repo, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pending {
+				intent.Status, intent.Failure = state.IntentManualCleanupRequired, ManagedCoordinatorClosePending
+			}
+			route := backend.OwnedLaunchRoute{Session: intent.Session, SocketPath: intent.SocketPath}
+			pane := managedCoordinatorPane(intent, route, intent.RuntimeParent, -2)
+			locked, err := state.LockProjectForLaunch(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if unlockErr := locked.Unlock(); unlockErr != nil {
+					t.Error(unlockErr)
+				}
+			}()
+			if recordErr := locked.RecordPane(pane); recordErr != nil {
+				t.Fatal(recordErr)
+			}
+			journal, err := locked.LaunchJournal(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			journal.UpsertIntent(intent)
+			if saveErr := journal.Save(); saveErr != nil {
+				t.Fatal(saveErr)
+			}
+			other := burnedManualCoordinatorIntent(t, repo, repo, -3, state.IntentRealized)
+			other.Parent, other.RuntimeParent, other.IssueNum = "plan:other", "plan:other", 0
+			live := []backend.LivePane{{
+				Ref:            backend.PaneRef{Backend: backend.Herdr, Workspace: other.Resource.WorkspaceID, Pane: other.Resource.PaneID},
+				WorkspaceLabel: other.Resource.Label, TerminalID: other.Resource.TerminalID,
+			}}
+			launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: repo}}
+			if recordErr := launcher.recordManagedCoordinator(locked, other, route, live); recordErr != nil {
+				t.Fatal(recordErr)
+			}
+			if _, found := locked.Find(pane.Parent, pane.IssueNum); found != pending {
+				t.Fatalf("coordinator row retained=%t, want %t", found, pending)
+			}
+			if saved, found := journal.FindIntent(intent.ID); !found || saved.Status != intent.Status || saved.Failure != intent.Failure {
+				t.Fatalf("retirement intent changed: %+v, found=%t", saved, found)
+			}
+		})
+	}
+}
+
 // TestFindManagedCoordinatorPaneMatchesOnlyCoordinatorRole guarantees the row
 // search cannot mistake agent, attached-agent, or terminal rows — or another
 // coordinator's row — for this intent's coordinator row.

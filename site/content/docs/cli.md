@@ -199,7 +199,10 @@ fanout plan launch-plan --cleanup
 `--merge <task-id>` fast-forwards the recorded task branch into the project
 checkout. `--close <task-id>` removes the recorded task worktree, pane, and
 state row. `--cleanup` closes recorded plan task panes whose head branch has a
-merged PR. These modes honor `FANOUT_STATE_PATH`.
+merged PR. With herdr, once no task rows remain for a plan with its own coordinator,
+it also closes that coordinator workspace and retires its state row and intent.
+Coordinators shared with a GitHub issue remain recorded. An auxiliary pane in the
+target workspace requires manual cleanup. These modes honor `FANOUT_STATE_PATH`.
 
 Agent wrappers route plan fan-out through the bundled skills: Claude Code uses
 `/fanout plan ...` and `~/.claude/skills/fanout-plan/`; Codex uses
