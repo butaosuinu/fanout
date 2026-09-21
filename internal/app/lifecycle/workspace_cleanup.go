@@ -2454,20 +2454,23 @@ func verifyReopenedWorkspaceCleanupShell(
 	resource state.RuntimeResource,
 	workspace backend.WorkspaceObservation,
 ) error {
+	if !workspaceMatchesResource(workspace, resource) || resourceFromObservation(workspace) != resource ||
+		len(workspace.Panes) != 1 || len(workspace.LivePanes) != 1 || workspace.Panes[0].TerminalID != resource.TerminalID {
+		return fmt.Errorf("%w: reopened cleanup workspace does not match its saved shell", backend.ErrOwnedIdentityMismatch)
+	}
+	if err := verifyTerminalInvalidation(workspace, resource); err != nil {
+		return err
+	}
 	binding := backend.PaneBinding{
-		Ref:       backend.PaneRef{Backend: backend.Herdr, Workspace: resource.WorkspaceID, Pane: resource.PaneID},
+		Ref:       workspace.Panes[0].Pane, // Verified against the persisted resource above.
 		SessionID: intent.Session, SocketPath: intent.SocketPath,
 		WorkspaceLabel: resource.Label, TerminalID: resource.TerminalID,
 		RepoKey: resource.RepoKey, WorktreePath: resource.CurrentPath, Shell: true,
 	}
-	if !workspaceMatchesResource(workspace, resource) || resourceFromObservation(workspace) != resource ||
-		len(workspace.Panes) != 1 || len(workspace.LivePanes) != 1 {
-		return fmt.Errorf("%w: reopened cleanup workspace does not match its saved shell", backend.ErrOwnedIdentityMismatch)
-	}
-	if _, ok := binding.UniqueLive(workspace.LivePanes, backend.RequireRuntime(backend.Herdr)); !ok {
+	if _, ok := binding.UniqueLive(workspace.LivePanes, backend.RequireRuntime(binding.Ref.Backend)); !ok {
 		return fmt.Errorf("%w: reopened cleanup pane does not match its saved shell binding", backend.ErrOwnedIdentityMismatch)
 	}
-	return verifyTerminalInvalidation(workspace, resource)
+	return nil
 }
 
 func rebindPartiallyPersistedWorkspaceCleanupIdentity(
