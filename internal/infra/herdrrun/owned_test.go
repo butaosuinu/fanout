@@ -1418,19 +1418,56 @@ func respondToGenericWorkspaceClose(h *ownedHarness, target corebackend.OwnedPan
 			return nil, fmt.Errorf("unexpected close args %v", args)
 		}
 		h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+			closed := map[string]bool{target.Ref.Workspace: true}
+			// Herdr 0.8.2 closes every member when the target is a repo root.
+			for _, workspace := range *snapshot.Workspaces {
+				if workspace.WorkspaceID != target.Ref.Workspace || workspace.Worktree == nil ||
+					workspace.Worktree.IsLinked {
+					continue
+				}
+				for _, member := range *snapshot.Workspaces {
+					if member.Worktree != nil && member.Worktree.RepoKey == workspace.Worktree.RepoKey {
+						closed[member.WorkspaceID] = true
+					}
+				}
+			}
 			workspaces := slices.DeleteFunc(*snapshot.Workspaces, func(w workspaceJSON) bool {
-				return w.WorkspaceID == target.Ref.Workspace
+				return closed[w.WorkspaceID]
 			})
 			panes := slices.DeleteFunc(*snapshot.Panes, func(p paneJSON) bool {
-				return p.WorkspaceID == target.Ref.Workspace
+				return closed[p.WorkspaceID]
 			})
 			agents := slices.DeleteFunc(*snapshot.Agents, func(a agentJSON) bool {
-				return a.WorkspaceID == target.Ref.Workspace
+				return closed[a.WorkspaceID]
 			})
 			snapshot.Workspaces, snapshot.Panes, snapshot.Agents = &workspaces, &panes, &agents
 		})
 		return nil, nil
 	}
+}
+
+func TestBoundOwnedWorkspaceCloserRejectsRepositoryGroupClose(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := genericWorkspaceCloseTarget(h)
+	respondToGenericWorkspaceClose(h, target)
+	h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+		for i := range *snapshot.Workspaces {
+			workspace := &(*snapshot.Workspaces)[i]
+			workspace.Worktree = &worktreeInfoJSON{
+				RepoKey: h.commonDir, RepoRoot: target.CurrentPath, CheckoutPath: target.CurrentPath,
+			}
+		}
+	})
+	before := h.fake.snapshot
+	bound, err := h.session.Backend().BindOwnedWorkspaceClose(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = bound.CloseOwned(corebackend.CloseRequest{Ref: corebackend.PaneRef{Backend: corebackend.Herdr, Pane: target.Ref.Pane}})
+	if !errors.Is(err, corebackend.ErrOwnedMutationNotIssued) || h.fake.snapshot != before {
+		t.Fatalf("group close must not issue a mutation: error=%v; snapshot unchanged=%t", err, h.fake.snapshot == before)
+	}
+	assertNoWorkspaceCloseCommand(t, h.fake.commands, target.Ref.Workspace)
 }
 
 func TestBoundOwnedWorkspaceCloserWithAddedGitMetadata(t *testing.T) {

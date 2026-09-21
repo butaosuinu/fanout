@@ -80,12 +80,18 @@ tmux-parity は信頼モデルだけでなく機構の密度にも適用し、�
 | `codexPlanMode` | Go(実装は #528 / #529 / #544 後の別 issue) | 同じ non-shell launcher で絶対 path の `fanout __codex-plan-tui` を起動し、`agent start --kind codex` の args にしない |
 | live identity | Go | routing、checkout、terminal、会話、process を別々に照合する |
 | 0.7.5 direct launch の cold restart resume | Go（#532） | 明示的な `fanout herdr restart` で exact direct Codex だけを resume して再束縛し、欠落、不一致、重複、未検証 provider は `stale` にする |
-| console / coordinator close | Go | plan 専用 coordinator（`runtimeParent: plan:<slug>`）は `fanout plan <slug> --cleanup` で task 行が 0 件になった後に退役する。repo root 自体の git 情報は checkout とみなさない。checkout を持たない exact owned workspace / pane を送信直前に再照合し、同じ workspace に別 pane が残れば mutation せず manual cleanup にする。応答喪失は再実行時の存在確認で確定する |
+| console / coordinator close | Go | plan 専用 coordinator は task 行が 0 件になった後、pending intent を保存し、保存済み tokenless intent に束縛した pinned launcher の executable / argv / cwd / foreground process group と exact workspace / pane を再照合し、agent と追加 pane / process の不在を確認する。EOF（`ctrl+d`）を 1 回送り、自然終了による対象 workspace の不在を確認して row / intent を退役する。repo root metadata は許可する。通常の workspace close は同じ repo key の別 workspace があれば拒否する。応答喪失は観測だけで回復し、EOF を再送しない |
 | child launch rollback | tmux の `failCleanup` と同水準 | 今回作った資源だけを identity 照合後に削除し、照合不一致、残存または判定不能な response loss では資源を残して fail closed にする |
 | dirty `--force` | 明示確認後だけ許可 | dirty checkout はユーザーの明示確認なしに force しない。launch rollback の remove も force なしで発行する |
 | emitter | Go | cooperative telemetry と nudge gate に限り、completion / cleanup authority にしない |
 | metadata | Go | exact target を直前・直後に照合し、表示専用 token だけを報告する |
 | 通知 | 手動検証だけに使う | detached 時も `shown:true` で、表示完了の応答ではなく、fanout は自動発行しない |
+
+plan coordinator の終了結果が不明なら `fanout plan <slug> --cleanup` を再実行し、不在を確認して row / intent を退役する。
+workspace が残る場合は作業を保全し、保存済み launcher の identity を照合してから手動で終了する。
+Herdr 0.8.2 の root workspace に対する `workspace close` / `pane close` は同じ repository group を閉じるため、別 Session を残す間は使わない。
+発行前の検査で拒否した場合だけ pending intent を元に戻して再試行を許可し、発行後の応答喪失や保存失敗では EOF を再送しない。
+全 task / coordinator の退役後は `fanout herdr shutdown` で空の server を停止できる。
 
 ## 検証条件
 
@@ -1348,7 +1354,7 @@ herdr backend は tmux backend と同水準の協調プロセス信頼を採用�
 |---|---|---|---|
 | owned bootstrap / launch | Go（bootstrap は #526 が PR #572 で実装済み、launch は #527 / #528） | owned XDG / socket / marker の owner-only 検査、state lock、intent 行と存在確認、non-shell launcher の marker / token、送信直前再照合と事後条件検査 | request-bound direct spawn、controller capability、別 UID の bundle owner、または server / agent の UID 分離 |
 | owned server restart | Go（実装は #530） | 明示操作による marker / lease と saved process / socket 不在の照合後の単一 spawn、結果不明の fail closed、restart 後の version gate 再実行と direct-launch row の `stale` 化 | authenticated server generation と request-bound conditional restart |
-| console / coordinator close | Go | plan 専用 coordinator（`runtimeParent: plan:<slug>`）は `fanout plan <slug> --cleanup` で task 行が 0 件になった後に退役する。repo root 自体の git 情報は checkout とみなさない。checkout を持たない exact owned workspace / pane を送信直前に再照合し、同じ workspace に別 pane が残れば mutation せず manual cleanup にする。応答喪失は再実行時の存在確認で確定する | close が authoritative server generation と target resource generation を原子的に検査する |
+| console / coordinator close | Go | plan 専用 coordinator は task 行が 0 件になった後、pending intent を保存し、保存済み tokenless intent に束縛した pinned launcher の executable / argv / cwd / foreground process group と exact workspace / pane を再照合し、agent と追加 pane / process の不在を確認する。EOF（`ctrl+d`）を 1 回送り、自然終了による対象 workspace の不在を確認して row / intent を退役する。repo root metadata は許可する。通常の workspace close は同じ repo key の別 workspace があれば拒否する。応答喪失は観測だけで回復し、EOF を再送しない | close が authoritative server generation と target resource generation を原子的に検査する |
 | child cleanup | Go（#531） | identity 照合後の `worktree remove`（checkout と workspace を削除）、dirty の明示確認、branch の compare-and-delete、存在確認による応答喪失処理 | tracked / untracked / ignored subtree generation を remove と原子的に条件化する server-side conditional remove、または remove postcondition まで保持する kernel-enforced write-exclusion fence |
 | child launch rollback | tmux の `failCleanup` と同水準 | 今回作った資源だけを identity 照合後に force なしで削除し、照合不一致、dirty 拒否、残存または判定不能な response loss では資源を残して fail closed にする（不在を確認できた response loss は完了扱い） | child cleanup と同じ conditional remove または fence |
 | dirty `--force` | 明示確認後だけ許可 | dirty checkout はユーザーの明示確認なしに force しない | conditional remove / fence と fingerprint-bound receipt |

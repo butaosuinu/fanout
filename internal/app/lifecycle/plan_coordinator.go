@@ -84,10 +84,7 @@ func closePlanCoordinator(ctx context.Context, runtime WorkspaceRuntime, journal
 	if intent.Status == state.IntentManualCleanupRequired {
 		return fmt.Errorf("%w: %s; workspace is still present", ErrManualCleanupRequired, panelaunch.ManagedCoordinatorClosePending)
 	}
-	bound, err := runtime.BindOwnedWorkspaceClose(backend.OwnedPaneIdentity{
-		Ref: paneRefFromState(pane), SessionID: pane.SessionID, SocketPath: pane.SocketPath,
-		WorkspaceLabel: pane.WorkspaceLabel, TerminalID: pane.TerminalID, CurrentPath: pane.WorktreePath,
-	})
+	bound, err := runtime.BindOwnedCoordinatorClose(intent)
 	if err != nil {
 		return err
 	}

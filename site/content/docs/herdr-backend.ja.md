@@ -60,11 +60,20 @@ cleanup intent を保存してから non-force の `herdr worktree remove` を�
 
 checkout を持たない console / coordinator workspace を close する前に、照合済み pane だけが残っていることを確認します。
 補助 pane が残る場合は manual cleanup とします。
+通常の `workspace close` が同じ repository group の別 workspace まで閉じる場合も発行しません。
 close 前の snapshot に失敗した場合は workspace を変更しません。close 後の確認 snapshot に失敗した場合は、close の結果を確定できないまま error を返します。
 
 専用 coordinator を持つ plan の task を閉じたら `fanout plan <slug> --cleanup` を実行してください。
-その plan の task 行が 0 件になると専用 coordinator workspace を閉じ、state 行と intent を退役します。GitHub issue と共有する coordinator は保持します。
-close の応答を失った場合は cleanup を再実行して消滅を確認します。workspace が残っていれば close を再送せず、manual cleanup とします。
+その plan の task 行が 0 件になると、pending intent を保存し、tokenless launcher を pinned executable、argv、作業 directory、foreground process group と照合します。
+agent や追加 pane / process がなければ、その launcher に EOF（`ctrl+d`）を 1 回送ります。
+Herdr が終了した workspace だけを除去し、fanout は不在を確認してから state 行と intent を退役します。
+repo root の metadata が付いていても退役できます。GitHub issue と共有する coordinator は保持します。
+
+EOF の応答を失った場合は cleanup を再実行して消滅を確認します。
+workspace が残っていれば EOF を再送せず、manual cleanup とします。
+残る作業を保全し、保存済み launcher の identity を照合してから手動で終了してください。
+同じ repository の別 Session を残す必要がある間は、root workspace に `workspace close` / `pane close` を実行しないでください。Herdr 0.8.2 では両方とも repository group を閉じる場合があります。
+対象が消えたら cleanup を再実行し、記録を退役します。
 ほかの resource もなくなれば `fanout herdr shutdown` で server を停止できます。
 
 fanout は remove の発行前に、tracked の変更や非 ignored の untracked file と ignored file を区別します。
