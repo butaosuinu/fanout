@@ -3,7 +3,10 @@ package panelaunch
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -564,13 +567,332 @@ func TestShutdownManagedServerRejectsManualNonCoordinatorRow(t *testing.T) {
 	}
 }
 
+func TestShutdownManagedServerRetiresAbsentManualShells(t *testing.T) {
+	for _, count := range []int{1, 3} {
+		for _, fromLinked := range []bool{false, true} {
+			t.Run(fmt.Sprintf("count=%d/linked=%t", count, fromLinked), func(t *testing.T) {
+				repo, sibling := managedConsoleTestWorktrees(t)
+				cwd := t.TempDir()
+				file := filepath.Join(cwd, "keep.txt")
+				if err := os.WriteFile(file, []byte("keep shell files\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				for i := range count {
+					root, path := repo, repo
+					if i%2 == 0 {
+						root, path = sibling, cwd
+					}
+					pane, _ := managedLifecycleTestShell(t, root, path, -3-i)
+					recordRestartStatePane(t, root, pane)
+				}
+				if count > 1 {
+					recordRestartStatePane(t, repo, managedConsoleTestPane(repo, "console", "console-pane"))
+					intent := managedLifecycleTestCoordinatorIntent(t, sibling)
+					recordRestartStatePane(t, sibling, managedCoordinatorPane(intent, backend.OwnedLaunchRoute{
+						Session: intent.Session, SocketPath: intent.SocketPath,
+					}, intent.RuntimeParent, -2))
+				}
+				caller := repo
+				if fromLinked {
+					caller = sibling
+				}
+				harness := &managedServerTestHarness{}
+				if err := ShutdownManagedServer(context.Background(), caller, harness.io()); err != nil {
+					t.Fatal(err)
+				}
+				for _, root := range []string{repo, sibling} {
+					assertManagedShutdownPanes(t, root, nil)
+				}
+				journal, err := state.LoadLaunchJournal(repo)
+				if err != nil || len(journal.Intents) != 0 || harness.issueCalls != 1 {
+					t.Fatalf("shutdown = journal:%+v, err:%v, signals:%d", journal, err, harness.issueCalls)
+				}
+				contents, err := os.ReadFile(file)
+				if err != nil || string(contents) != "keep shell files\n" {
+					t.Fatalf("shell files changed: %q, %v", contents, err)
+				}
+			})
+		}
+	}
+}
+
+func TestShutdownManagedServerRejectsChangedShellIdentity(t *testing.T) {
+	changes := map[string]func(*state.Pane){
+		"child":           func(p *state.Pane) { p.Parent = "808" },
+		"issue":           func(p *state.Pane) { p.IssueNum = 808 },
+		"task":            func(p *state.Pane) { p.TaskID = "task" },
+		"runtime parent":  func(p *state.Pane) { p.RuntimeParent = "808" },
+		"kind":            func(p *state.Pane) { p.Kind = "" },
+		"manual agent":    func(p *state.Pane) { p.Agent = "codex" },
+		"branch":          func(p *state.Pane) { p.BranchName = "fanout/child" },
+		"repo key":        func(p *state.Pane) { p.RepoKey = "/repo/.git" },
+		"repo root":       func(p *state.Pane) { p.RepoRoot = "/repo" },
+		"agent ID":        func(p *state.Pane) { p.AgentID = "agent" },
+		"agent session":   func(p *state.Pane) { p.AgentSession = &backend.AgentSessionRef{} },
+		"attached":        func(p *state.Pane) { p.SourceParent = "808" },
+		"source issue":    func(p *state.Pane) { p.SourceIssueNum = 808 },
+		"source task":     func(p *state.Pane) { p.SourceTaskID = "task" },
+		"pane":            func(p *state.Pane) { p.PaneID = "" },
+		"workspace":       func(p *state.Pane) { p.WorkspaceID = "" },
+		"label":           func(p *state.Pane) { p.WorkspaceLabel = "" },
+		"terminal":        func(p *state.Pane) { p.TerminalID = "" },
+		"session":         func(p *state.Pane) { p.SessionID = "foreign-session" },
+		"socket":          func(p *state.Pane) { p.SocketPath = "/foreign.sock" },
+		"missing session": func(p *state.Pane) { p.SessionID = "" },
+		"missing socket":  func(p *state.Pane) { p.SocketPath = "" },
+		"cwd":             func(p *state.Pane) { p.WorktreePath = "" },
+	}
+	for name, change := range changes {
+		for _, afterSnapshot := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/after-snapshot=%t", name, afterSnapshot), func(t *testing.T) {
+				repo, sibling := managedConsoleTestWorktrees(t)
+				pane, _ := managedLifecycleTestShell(t, sibling, sibling, -2)
+				changed := pane
+				change(&changed)
+				harness := &managedServerTestHarness{}
+				io := harness.io()
+				if afterSnapshot {
+					recordRestartStatePane(t, sibling, pane)
+					io.ObserveWorkspaces = func(context.Context) ([]backend.WorkspaceObservation, error) {
+						owner, err := state.LockProject(sibling)
+						if err != nil {
+							return nil, err
+						}
+						owner.Panes = []state.Pane{changed}
+						return nil, errors.Join(owner.Save(), owner.Unlock())
+					}
+				} else {
+					recordRestartStatePane(t, sibling, changed)
+				}
+				if err := ShutdownManagedServer(context.Background(), repo, io); err == nil {
+					t.Fatal("shutdown accepted a changed shell identity")
+				}
+				assertManagedShutdownPanes(t, sibling, []state.Pane{changed})
+				if harness.shutdownCalls != 0 {
+					t.Fatal("shutdown called before row validation")
+				}
+			})
+		}
+	}
+}
+
+func TestShutdownManagedServerKeepsShellOnFailedPreflight(t *testing.T) {
+	for _, reason := range []string{"live shell", "foreign workspace", "snapshot", "inspect", "cancel", "deadline"} {
+		t.Run(reason, func(t *testing.T) {
+			repo, _ := managedConsoleTestWorktrees(t)
+			pane, intent := managedLifecycleTestShell(t, repo, repo, -2)
+			recordRestartStatePane(t, repo, pane)
+			harness := &managedServerTestHarness{}
+			io := harness.io()
+			ctx := context.Background()
+			switch reason {
+			case "live shell":
+				harness.workspaces = []backend.WorkspaceObservation{observationResource(intent.Resource)}
+			case "foreign workspace":
+				harness.workspaces = []backend.WorkspaceObservation{{WorkspaceID: "foreign"}}
+			case "snapshot":
+				harness.observeErr = errors.New("snapshot unavailable")
+			case "inspect":
+				io.InspectServer = func() (state.RuntimeServerIdentity, error) {
+					return state.RuntimeServerIdentity{}, errors.New("owner generation mismatch")
+				}
+			case "cancel", "deadline":
+				var cancel context.CancelFunc
+				if reason == "cancel" {
+					ctx, cancel = context.WithCancel(context.Background())
+				} else {
+					ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				}
+				cancel()
+			}
+			if err := ShutdownManagedServer(ctx, repo, io); err == nil {
+				t.Fatal("shutdown accepted failed preflight")
+			}
+			assertManagedShutdownPanes(t, repo, []state.Pane{pane})
+			if harness.shutdownCalls != 0 {
+				t.Fatal("shutdown called before preflight")
+			}
+		})
+	}
+}
+
+func TestShutdownManagedServerPreservesShellIntentReleaseConditions(t *testing.T) {
+	for _, status := range []state.LaunchIntentStatus{state.IntentRealized, state.IntentPlanned, state.IntentIssued, state.IntentManualCleanupRequired} {
+		for _, expired := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/expired=%t", status, expired), func(t *testing.T) {
+				repo, _ := managedConsoleTestWorktrees(t)
+				pane, intent := managedLifecycleTestShell(t, repo, repo, -2)
+				intent.Status = status
+				if status == state.IntentManualCleanupRequired {
+					intent.Failure = "workspace creation response lost"
+				}
+				if expired {
+					intent.ExpiresUnixMS = time.Now().Add(-time.Minute).UnixMilli()
+				}
+				// No saved resource proof makes manual cleanup ambiguous too.
+				if status != state.IntentRealized {
+					intent.Resource = state.RuntimeResource{}
+				}
+				recordRestartStatePane(t, repo, pane)
+				saveManagedLifecycleTestIntent(t, repo, intent)
+				harness := &managedServerTestHarness{}
+				err := ShutdownManagedServer(context.Background(), repo, harness.io())
+				if status == state.IntentRealized {
+					if err != nil || harness.shutdownCalls != 1 {
+						t.Fatalf("proven absent shell shutdown = %v, calls:%d", err, harness.shutdownCalls)
+					}
+					assertManagedShutdownPanes(t, repo, nil)
+					return
+				}
+				if err == nil || harness.shutdownCalls != 0 {
+					t.Fatalf("ambiguous shell shutdown = %v, calls:%d", err, harness.shutdownCalls)
+				}
+				assertManagedShutdownPanes(t, repo, []state.Pane{pane})
+				assertManagedLifecycleIntentStatus(t, repo, intent.ID, status)
+			})
+		}
+	}
+}
+
+func managedLifecycleTestShell(t *testing.T, root, cwd string, number int) (state.Pane, state.LaunchIntent) {
+	t.Helper()
+	intent := managedLifecycleTestCoordinatorIntent(t, cwd)
+	id, err := state.CoordinatorIntentID(ManualParentRef, root, number)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent.ID, intent.Parent, intent.RuntimeParent = id, ManualParentRef, ManualParentRef
+	intent.OwnerProjectRoot, intent.IssueNum = root, number
+	intent.WorkspaceLabel = fmt.Sprintf("fanout-manual-%d", -number)
+	intent.Resource.WorkspaceID = fmt.Sprintf("workspace-%d", -number)
+	intent.Resource.Label = intent.WorkspaceLabel
+	intent.Resource.PaneID = fmt.Sprintf("pane-%d", -number)
+	intent.Resource.TerminalID = fmt.Sprintf("terminal-%d", -number)
+	live := backend.LivePane{
+		Ref:            backend.PaneRef{Backend: backend.Herdr, Workspace: intent.Resource.WorkspaceID, Pane: intent.Resource.PaneID},
+		WorkspaceLabel: intent.WorkspaceLabel, TerminalID: intent.Resource.TerminalID,
+		CurrentPath: cwd, SessionID: intent.Session, SocketPath: intent.SocketPath,
+	}
+	return managedShellStatePane(intent, live, number, "manual-shell", "shell", ""), intent
+}
+
+func TestShutdownManagedServerShellSaveFailuresRemainRecoverable(t *testing.T) {
+	for _, stage := range []string{"release intent", "save state", "save shutdown intent"} {
+		t.Run(stage, func(t *testing.T) {
+			repo, sibling := managedConsoleTestWorktrees(t)
+			pane, intent := managedLifecycleTestShell(t, sibling, sibling, -2)
+			recordRestartStatePane(t, sibling, pane)
+			journalPath, err := state.LaunchJournalPath(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stage != "save shutdown intent" {
+				saveManagedLifecycleTestIntent(t, repo, intent)
+			}
+			blockedDir := filepath.Dir(journalPath)
+			if stage == "save state" {
+				blockedDir = filepath.Dir(state.Path(sibling))
+			}
+			t.Cleanup(func() {
+				if chmodErr := os.Chmod(blockedDir, 0o700); chmodErr != nil {
+					t.Error(chmodErr)
+				}
+			})
+			harness := &managedServerTestHarness{}
+			io := harness.io()
+			io.ObserveWorkspaces = func(context.Context) ([]backend.WorkspaceObservation, error) {
+				return nil, os.Chmod(blockedDir, 0o500)
+			}
+			if err = ShutdownManagedServer(context.Background(), repo, io); err == nil || harness.shutdownCalls != 0 {
+				t.Fatalf("save failure = %v, shutdown calls:%d", err, harness.shutdownCalls)
+			}
+			if err = os.Chmod(blockedDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			journal, err := state.LoadLaunchJournal(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stage == "release intent" {
+				assertManagedLifecycleIntentStatus(t, repo, intent.ID, state.IntentRealized)
+			} else if len(journal.Intents) != 0 {
+				t.Fatalf("intent release did not precede state retirement: %+v", journal.Intents)
+			}
+			if stage == "save shutdown intent" {
+				assertManagedShutdownPanes(t, sibling, nil)
+			} else {
+				assertManagedShutdownPanes(t, sibling, []state.Pane{pane})
+			}
+			if err = ShutdownManagedServer(context.Background(), repo, harness.io()); err != nil {
+				t.Fatal(err)
+			}
+			assertManagedShutdownPanes(t, sibling, nil)
+			if harness.issueCalls != 1 {
+				t.Fatalf("recovery signals = %d, want 1", harness.issueCalls)
+			}
+		})
+	}
+}
+
+func TestShutdownManagedServerShellRetryDoesNotReissueOrRetireUnrelatedRows(t *testing.T) {
+	repo, _ := managedConsoleTestWorktrees(t)
+	pane, _ := managedLifecycleTestShell(t, repo, repo, -2)
+	recordRestartStatePane(t, repo, pane)
+	harness := &managedServerTestHarness{}
+	io := harness.io()
+	shutdown := io.ShutdownServer
+	lost := errors.New("shutdown response lost")
+	io.ShutdownServer = func(ctx context.Context, identity state.RuntimeServerIdentity, markIssued func() error) error {
+		return errors.Join(shutdown(ctx, identity, markIssued), lost)
+	}
+	if err := ShutdownManagedServer(context.Background(), repo, io); !errors.Is(err, lost) {
+		t.Fatalf("first shutdown error = %v", err)
+	}
+	assertManagedShutdownPanes(t, repo, nil)
+	id, err := state.ServerIntentID(state.IntentShutdown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertManagedLifecycleIntentStatus(t, repo, id, state.IntentIssued)
+	// Even a row written outside normal launch admission cannot join the saved
+	// shutdown transaction on cancellation, retry, or completion replay.
+	pane.Agent = "codex"
+	recordRestartStatePane(t, repo, pane)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err = ShutdownManagedServer(ctx, repo, io); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled retry = %v", err)
+	}
+	if err = ShutdownManagedServer(context.Background(), repo, io); !errors.Is(err, lost) {
+		t.Fatalf("unresolved retry = %v", err)
+	}
+	if err = ShutdownManagedServer(context.Background(), repo, harness.io()); err != nil {
+		t.Fatal(err)
+	}
+	if err = ShutdownManagedServer(context.Background(), repo, harness.io()); err == nil {
+		t.Fatal("completion replay accepted an unrelated row")
+	}
+	assertManagedShutdownPanes(t, repo, []state.Pane{pane})
+	if harness.issueCalls != 1 {
+		t.Fatalf("shutdown signals = %d, want 1", harness.issueCalls)
+	}
+}
+
+func assertManagedShutdownPanes(t *testing.T, root string, expected []state.Pane) {
+	t.Helper()
+	store, err := state.LoadProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Panes) != len(expected) || len(expected) != 0 && !reflect.DeepEqual(store.Panes, expected) {
+		t.Fatalf("saved panes = %+v, want %+v", store.Panes, expected)
+	}
+}
+
 func TestShutdownManagedServerStopsWaitingForLinkedScaffoldLockAtDeadline(t *testing.T) {
 	repo, sibling := managedConsoleTestWorktrees(t)
-	intent := managedLifecycleTestCoordinatorIntent(t, sibling)
-	coordinator := managedCoordinatorPane(intent, backend.OwnedLaunchRoute{
-		Session: intent.Session, SocketPath: intent.SocketPath,
-	}, intent.RuntimeParent, -2)
-	recordRestartStatePane(t, sibling, coordinator)
+	pane, _ := managedLifecycleTestShell(t, sibling, sibling, -2)
+	recordRestartStatePane(t, sibling, pane)
 	owner, err := state.LockProject(sibling)
 	if err != nil {
 		t.Fatal(err)
@@ -592,6 +914,7 @@ func TestShutdownManagedServerStopsWaitingForLinkedScaffoldLockAtDeadline(t *tes
 	if harness.shutdownCalls != 0 {
 		t.Fatalf("ShutdownManagedServer() shutdown calls = %d, want 0", harness.shutdownCalls)
 	}
+	assertManagedShutdownPanes(t, sibling, []state.Pane{pane})
 }
 
 type managedServerTestHarness struct {
@@ -608,7 +931,9 @@ type managedServerTestHarness struct {
 func (h *managedServerTestHarness) io() ManagedServerIO {
 	return ManagedServerIO{
 		InspectServer: func() (state.RuntimeServerIdentity, error) {
-			return testManagedServerIdentity(), nil
+			identity := testManagedServerIdentity()
+			identity.SocketPath = "/tmp/fanout-owned.sock"
+			return identity, nil
 		},
 		ObserveWorkspaces: func(context.Context) ([]backend.WorkspaceObservation, error) {
 			return h.workspaces, h.observeErr
