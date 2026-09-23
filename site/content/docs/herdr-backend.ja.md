@@ -62,6 +62,12 @@ cleanup intent を保存してから non-force の `herdr worktree remove` を�
 保存済みの再登録先について、owned route、workspace、唯一の pane、terminal、checkout を照合します。元 agent がその shell で動いている必要はありません。
 再登録先に追加の pane または agent があれば cleanup を停止します。
 
+child を close すると、その checkout に attach した agent を先に閉じてから worktree を削除します。
+state lock 内で保存済み source child と各 attached launch を照合します。
+runtime parent や Git provenance が空の旧 attached row も、この保存済み identity が一致すれば回復できます。pane や workspace を手動で閉じた後も同じです。
+証跡が不足または矛盾する場合は cleanup を停止し、path の一致だけでは許可しません。
+state row を残して同じ close コマンドを再試行してください。結果不明の close や hook は再送しません。
+
 checkout を持たない console / coordinator workspace を close する前に、照合済み pane だけが残っていることを確認します。
 補助 pane が残る場合は manual cleanup とします。
 通常の `workspace close` が同じ repository group の別 workspace まで閉じる場合も発行しません。

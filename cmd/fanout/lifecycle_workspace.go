@@ -29,6 +29,8 @@ func runtimeLifecycleOptions(projectRoot, statePath string, hookConfig hooks.Con
 // session that can retire its workspace. Every recheck below is an admission
 // gate, not a convenience: a row whose repository or owned route drifted names
 // a workspace this run must not close.
+// Shared attached cleanup passes its lock-verified source child here, after
+// comparing both saved routes; the attached row itself owns no checkout.
 func newWorkspaceLifecycleFactory(projectRoot string) lifecycle.WorkspaceRuntimeFactory {
 	return func(ctx context.Context, pane state.Pane) (lifecycle.WorkspaceRuntime, error) {
 		identity, err := worktree.ResolveRepoIdentity(ctx, projectRoot)

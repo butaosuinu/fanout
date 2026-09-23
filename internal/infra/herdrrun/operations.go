@@ -78,10 +78,10 @@ func (s *OwnedSession) CloseAttachedWorkspace(
 		return mutationNotIssued(fmt.Errorf("herdr owned session is nil"))
 	}
 	if binding.Shell || strings.TrimSpace(binding.Agent) == "" ||
-		strings.TrimSpace(binding.RepoKey) == "" || strings.TrimSpace(binding.WorktreePath) == "" {
+		strings.TrimSpace(binding.WorktreePath) == "" {
 		return mutationNotIssued(fmt.Errorf("%w: attached workspace binding is incomplete", corebackend.ErrOwnedIdentityMismatch))
 	}
-	return s.backend.closeOwnedAttachedWorkspace(ctx, ownedTargetFromBinding(binding))
+	return s.backend.closeOwnedAttachedWorkspace(ctx, attachedTargetFromBinding(binding))
 }
 
 // VerifyAttachedWorkspaceClose runs the same immutable admission as
@@ -94,10 +94,19 @@ func (s *OwnedSession) VerifyAttachedWorkspaceClose(
 		return fmt.Errorf("herdr owned session is nil")
 	}
 	if binding.Shell || strings.TrimSpace(binding.Agent) == "" ||
-		strings.TrimSpace(binding.RepoKey) == "" || strings.TrimSpace(binding.WorktreePath) == "" {
+		strings.TrimSpace(binding.WorktreePath) == "" {
 		return fmt.Errorf("%w: attached workspace binding is incomplete", corebackend.ErrOwnedIdentityMismatch)
 	}
-	return s.backend.verifyOwnedAttachedWorkspaceClose(ctx, ownedTargetFromBinding(binding))
+	return s.backend.verifyOwnedAttachedWorkspaceClose(ctx, attachedTargetFromBinding(binding))
+}
+
+func attachedTargetFromBinding(binding corebackend.PaneBinding) corebackend.OwnedPaneIdentity {
+	target := ownedTargetFromBinding(binding)
+	if binding.RepoKey == "" {
+		// Generic attached workspaces record cwd, not ownership of the checkout.
+		target.WorktreePath = ""
+	}
+	return target
 }
 
 func ownedTargetFromBinding(binding corebackend.PaneBinding) corebackend.OwnedPaneIdentity {
@@ -868,8 +877,7 @@ func (v ownedSnapshotView) workspaceContainsOnly(target corebackend.PaneRef) boo
 
 func (v ownedSnapshotView) paneLessAttachedWorkspaceMatches(expected corebackend.OwnedPaneIdentity) bool {
 	workspace, ok := v.workspaces[expected.Ref.Workspace]
-	if !ok || workspace.label != expected.WorkspaceLabel || workspace.repoKey != expected.RepoKey ||
-		workspace.worktreePath != expected.WorktreePath {
+	if !ok || workspace.label != expected.WorkspaceLabel || !attachedWorkspaceCheckoutMatches(workspace, expected) {
 		return false
 	}
 	for _, pane := range v.panes {
@@ -878,6 +886,15 @@ func (v ownedSnapshotView) paneLessAttachedWorkspaceMatches(expected corebackend
 		}
 	}
 	return true
+}
+
+func attachedWorkspaceCheckoutMatches(workspace ownedWorkspaceView, expected corebackend.OwnedPaneIdentity) bool {
+	if expected.RepoKey == "" && workspace.repoKey == "" && workspace.worktreePath == "" {
+		return true // A generic pane-less workspace has no cwd or Git metadata.
+	}
+	return sameOwnedCheckout(expected, corebackend.OwnedPaneIdentity{
+		RepoKey: workspace.repoKey, WorktreePath: workspace.worktreePath, CurrentPath: workspace.worktreePath,
+	})
 }
 
 func (b *Backend) resolveAttachedWorkspaceCloseTarget(
@@ -906,6 +923,9 @@ func verifyAttachedWorkspaceCloseSnapshot(
 	current ownedPaneView,
 	live bool,
 ) error {
+	if err := verifyAttachedWorkspaceScope(view, expected); err != nil {
+		return err
+	}
 	if live && !ownedPaneMatches(expected, current) {
 		return fmt.Errorf("%w: saved attached target identity changed", corebackend.ErrOwnedIdentityMismatch)
 	}
@@ -914,6 +934,18 @@ func verifyAttachedWorkspaceCloseSnapshot(
 	}
 	if !view.paneLessAttachedWorkspaceMatches(expected) {
 		return fmt.Errorf("%w: saved attached target is neither live nor a matching pane-less workspace", corebackend.ErrOwnedIdentityMismatch)
+	}
+	return nil
+}
+
+func verifyAttachedWorkspaceScope(view ownedSnapshotView, expected corebackend.OwnedPaneIdentity) error {
+	for id, workspace := range view.workspaces {
+		if id != expected.Ref.Workspace && workspace.label == expected.WorkspaceLabel {
+			return fmt.Errorf("%w: attached workspace label is ambiguous", corebackend.ErrOwnedIdentityMismatch)
+		}
+	}
+	if !view.workspaces[expected.Ref.Workspace].isLinked {
+		return verifyWorkspaceCloseGroup(view, expected.Ref.Workspace)
 	}
 	return nil
 }
