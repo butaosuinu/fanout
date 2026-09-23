@@ -35,6 +35,11 @@ func (l *Launcher) verifyManagedIdleLauncher(
 	if !managedIdlePanePresent(intent, panes) {
 		return nil, fmt.Errorf("%w: exact idle root pane is not live", errManagedLauncherIdentityChanged)
 	}
+	if intent.RuntimeParent == ManagedConsoleRuntimeParent {
+		if _, ok := exactManagedConsolePane(intent, panes); !ok {
+			return nil, fmt.Errorf("%w: console workspace has additional panes", errManagedLauncherIdentityChanged)
+		}
+	}
 	return panes, nil
 }
 

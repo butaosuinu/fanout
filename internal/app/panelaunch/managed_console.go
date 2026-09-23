@@ -90,12 +90,12 @@ func ensureManagedConsoleLocked(
 		return ManagedConsoleResult{}, err
 	}
 	if found {
-		result, reused, reuseErr := reuseManagedConsole(ctx, locked, root, owned, pane, callerEnvironment)
+		result, reused, reuseErr := reuseManagedConsole(ctx, locked, root, owned, pane, shellPath, callerEnvironment)
 		if reuseErr != nil || reused {
 			return result, reuseErr
 		}
 	}
-	intent, err := realizeManagedInteractive(
+	intent, err := realizeManagedConsole(
 		ctx, owned, locked, route,
 		ManagedCoordinatorRequest{
 			Parent:      ManagedConsoleRuntimeParent,
@@ -113,12 +113,7 @@ func ensureManagedConsoleLocked(
 		return ManagedConsoleResult{}, validationErr
 	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: root}, Managed: owned}
-	live, err := launcher.startManagedAgent(
-		ctx, locked, route, intent, validateManagedConsoleLaunch(route), nil, exactManagedShellPane,
-		func(adoptCtx context.Context, _ *state.LockedStore, issued state.LaunchIntent) (backend.LivePane, error) {
-			return launcher.adoptManagedConsolePane(adoptCtx, issued, route, shellPath)
-		},
-	)
+	live, err := launcher.startOrAdoptManagedConsole(ctx, locked, route, intent, shellPath)
 	if err != nil {
 		return ManagedConsoleResult{}, err
 	}
@@ -165,6 +160,7 @@ func reuseManagedConsole(
 	projectRoot string,
 	owned ManagedSessionRuntime,
 	pane state.Pane,
+	shellPath string,
 	callerEnvironment []string,
 ) (ManagedConsoleResult, bool, error) {
 	if err := verifySavedManagedConsole(owned, pane); err != nil {
@@ -178,6 +174,9 @@ func reuseManagedConsole(
 			)
 		}
 		return ManagedConsoleResult{}, false, nil
+	}
+	if err := restoreManagedConsole(ctx, locked, projectRoot, owned, pane, shellPath, callerEnvironment); err != nil {
+		return ManagedConsoleResult{}, false, err
 	}
 	if err := removeCompletedManagedConsoleIntent(locked, projectRoot, pane); err != nil {
 		return ManagedConsoleResult{}, false, err
@@ -500,7 +499,7 @@ func (l *Launcher) adoptManagedConsolePane(
 	if err != nil {
 		return backend.LivePane{}, err
 	}
-	return l.waitForManagedPane(ctx, intent, exactManagedShellPane, "")
+	return l.waitForManagedPane(ctx, intent, exactManagedConsolePane, "")
 }
 
 // classifyManagedConsoleProcess reports what the console pane runs: nil for a
