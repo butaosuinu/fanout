@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -23,7 +24,12 @@ type fakeCoordinatorCloser struct {
 	target  backend.OwnedPaneIdentity
 }
 
-func (f *fakeHerdrLifecycleRuntime) BindOwnedWorkspaceClose(target backend.OwnedPaneIdentity) (backend.OwnedClosingBackend, error) {
+func (f *fakeHerdrLifecycleRuntime) BindOwnedCoordinatorClose(intent state.LaunchIntent) (backend.OwnedClosingBackend, error) {
+	target := backend.OwnedPaneIdentity{
+		Ref:       backend.PaneRef{Backend: backend.Herdr, Workspace: intent.Resource.WorkspaceID, Pane: intent.Resource.PaneID},
+		SessionID: intent.Session, SocketPath: intent.SocketPath, WorkspaceLabel: intent.Resource.Label,
+		TerminalID: intent.Resource.TerminalID, CurrentPath: intent.WorktreePath,
+	}
 	return fakeCoordinatorCloser{Backend: backendtest.New(), runtime: f, target: target}, nil
 }
 
@@ -51,7 +57,7 @@ func (f fakeCoordinatorCloser) CloseOwned(req backend.CloseRequest) (backend.Clo
 		filepath.Clean(workspace.Path) != filepath.Clean(f.target.CurrentPath)) {
 		return failed, fmt.Errorf("%w: %w", backend.ErrOwnedMutationNotIssued, backend.ErrOwnedIdentityMismatch)
 	}
-	if err := f.runtime.CloseWorkspace(context.Background(), workspace.WorkspaceID); err != nil {
+	if err := f.runtime.closeWorkspace(workspace.WorkspaceID, false); err != nil {
 		return failed, err
 	}
 	if _, err := f.runtime.ObserveWorkspaces(context.Background()); err != nil {
@@ -115,6 +121,100 @@ func TestCleanupPlanRetiresCoordinatorAndAllowsShutdown(t *testing.T) {
 				t.Fatalf("completed replay=%d; close calls=%d", got, runtime.closeCalls)
 			}
 			assertPlanCoordinatorShutdown(t, fixture.projectRoot, runtime)
+		})
+	}
+}
+
+func TestCleanupPlanCoordinatorPreservesOtherPlan(t *testing.T) {
+	for _, metadata := range []bool{false, true} {
+		t.Run(fmt.Sprint(metadata), func(t *testing.T) {
+			fixture, pane, runtime := newPlanCoordinatorFixture(t)
+			otherTarget := fixture.pane
+			otherTarget.Parent, otherTarget.RuntimeParent = "plan:beta", "plan:beta"
+			otherWorkspace := herdrLifecycleWorkspace("w-beta", "fanout-coordinator-beta", fixture.projectRoot, "", "")
+			otherWorkspace.Path = ""
+			other := manualLifecycleCoordinatorPane(otherTarget, otherWorkspace, -2)
+			recordLifecyclePane(t, fixture.projectRoot, other)
+			recordLifecycleCoordinatorIntent(t, fixture.projectRoot, otherTarget, otherWorkspace)
+			runtime.workspaces = append(runtime.workspaces, otherWorkspace)
+			if metadata {
+				for i := range runtime.workspaces {
+					runtime.workspaces[i].Path, runtime.workspaces[i].RepoRoot = fixture.projectRoot, fixture.projectRoot
+					runtime.workspaces[i].RepoKey = filepath.Join(fixture.projectRoot, ".git")
+				}
+			}
+			opts := herdrLifecycleOptions(fixture, runtime)
+			if got := CleanupPlan(opts, pane.RuntimeParent, nopLogger{}); got != exitcode.OK {
+				t.Fatalf("alpha cleanup=%d", got)
+			}
+			store, err := state.LoadProject(fixture.projectRoot)
+			if err != nil || len(store.Panes) != 1 || store.Panes[0].WorkspaceID != other.WorkspaceID {
+				t.Fatalf("remaining rows=%+v; error=%v", store.Panes, err)
+			}
+			journal, err := state.LoadLaunchJournal(fixture.projectRoot)
+			if err != nil || len(journal.Intents) != 1 || journal.Intents[0].RuntimeParent != "plan:beta" {
+				t.Fatalf("remaining intents=%+v; error=%v", journal.Intents, err)
+			}
+			if len(runtime.workspaces) != 1 || runtime.workspaces[0].WorkspaceID != other.WorkspaceID {
+				t.Fatalf("Beta was closed: %+v", runtime.workspaces)
+			}
+			if got := CleanupPlan(opts, other.RuntimeParent, nopLogger{}); got != exitcode.OK {
+				t.Fatalf("beta cleanup=%d", got)
+			}
+			assertPlanCoordinatorState(t, fixture.projectRoot, other, false)
+			assertPlanCoordinatorShutdown(t, fixture.projectRoot, runtime)
+		})
+	}
+}
+
+func TestCleanupPlanCoordinatorSaveFailureDoesNotRepeatMutation(t *testing.T) {
+	for _, failure := range []string{"pending", "row retirement", "intent retirement"} {
+		t.Run(failure, func(t *testing.T) {
+			fixture, pane, runtime := newPlanCoordinatorFixture(t)
+			path, err := state.LaunchJournalPath(fixture.projectRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if failure == "row retirement" {
+				path = state.Path(fixture.projectRoot)
+			}
+			dir := filepath.Dir(path)
+			info, err := os.Stat(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			restore := func() {
+				if err := os.Chmod(dir, info.Mode().Perm()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Cleanup(restore)
+			deny := func() {
+				if err := os.Chmod(dir, 0o500); err != nil {
+					t.Fatal(err)
+				}
+			}
+			wantCloses := 1
+			if failure == "pending" {
+				deny()
+				wantCloses = 0
+			} else {
+				runtime.afterClose = func(string) { deny() }
+			}
+			opts := herdrLifecycleOptions(fixture, runtime)
+			if got := CleanupPlan(opts, pane.RuntimeParent, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("save failure=%d", got)
+			}
+			restore()
+			runtime.afterClose = nil
+			assertPlanCoordinatorState(t, fixture.projectRoot, pane, true)
+			if runtime.closeCalls != wantCloses {
+				t.Fatalf("close calls=%d want=%d", runtime.closeCalls, wantCloses)
+			}
+			if got := CleanupPlan(opts, pane.RuntimeParent, nopLogger{}); got != exitcode.OK || runtime.closeCalls != 1 {
+				t.Fatalf("recovery=%d; close calls=%d", got, runtime.closeCalls)
+			}
+			assertPlanCoordinatorState(t, fixture.projectRoot, pane, false)
 		})
 	}
 }
@@ -196,7 +296,7 @@ func TestCleanupPlanCoordinatorSnapshotFailureTracksCloseDispatch(t *testing.T) 
 		t.Run(fmt.Sprintf("after_close=%t", afterClose), func(t *testing.T) {
 			fixture, pane, runtime := newPlanCoordinatorFixture(t)
 			runtime.observeErr = errors.New("temporary snapshot failure")
-			runtime.observeErrAtCall = 2 // The generic closer's snapshot after Bind.
+			runtime.observeErrAtCall = 2 // The coordinator closer's snapshot after Bind.
 			wantStatus, wantFailure, wantCloses := state.IntentRealized, "", 0
 			if afterClose {
 				runtime.observeErrAtCall = 3

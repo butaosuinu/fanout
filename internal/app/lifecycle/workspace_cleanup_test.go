@@ -164,12 +164,26 @@ func (f *fakeHerdrLifecycleRuntime) RemoveWorktree(ctx context.Context, workspac
 }
 
 func (f *fakeHerdrLifecycleRuntime) CloseWorkspace(_ context.Context, workspaceID string) error {
+	return f.closeWorkspace(workspaceID, true)
+}
+
+func (f *fakeHerdrLifecycleRuntime) closeWorkspace(workspaceID string, groupClose bool) error {
 	f.closeCalls++
 	f.mutationLog = append(f.mutationLog, "close:"+workspaceID)
 	if mutationDefinitelyNotIssued(f.closeErr) {
 		return f.closeErr
 	}
 	f.mutationDispatched = true
+	if groupClose {
+		for _, workspace := range f.workspaces {
+			if workspace.WorkspaceID == workspaceID && workspace.RepoKey != "" && workspace.Path == workspace.RepoRoot {
+				f.workspaces = slices.DeleteFunc(f.workspaces, func(member backend.WorkspaceObservation) bool {
+					return member.RepoKey == workspace.RepoKey
+				})
+				break
+			}
+		}
+	}
 	f.removeWorkspace(workspaceID)
 	if f.afterClose != nil {
 		f.afterClose(workspaceID)

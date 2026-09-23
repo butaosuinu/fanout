@@ -595,20 +595,43 @@ func (b *Backend) closeOwnedWorkspace(ctx context.Context, target corebackend.Ow
 	if err != nil {
 		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
 	}
-	// Repository-root Git metadata does not give this workspace a linked checkout.
-	workspace := view.workspaces[target.Ref.Workspace]
-	if workspace.worktreePath != "" &&
-		(filepath.Clean(workspace.worktreePath) != filepath.Clean(workspace.repoRoot) ||
-			filepath.Clean(workspace.worktreePath) != filepath.Clean(target.CurrentPath)) {
-		return failed, fmt.Errorf("%w: %w: generic workspace close cannot own a checkout", corebackend.ErrOwnedMutationNotIssued, corebackend.ErrOwnedIdentityMismatch)
+	if err := verifyGenericWorkspaceCheckout(view, target); err != nil {
+		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
 	}
 	if err := verifyWorkspaceClosePanes(view, target.Ref); err != nil {
+		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
+	}
+	if err := verifyWorkspaceCloseGroup(view, target.Ref.Workspace); err != nil {
 		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
 	}
 	if err := b.issueAndVerifyWorkspaceClose(ctx, admission, probed, target.Ref.Workspace); err != nil {
 		return failed, err
 	}
 	return corebackend.CloseResult{Status: corebackend.CloseConfirmed}, nil
+}
+
+func verifyGenericWorkspaceCheckout(view ownedSnapshotView, target corebackend.OwnedPaneIdentity) error {
+	workspace := view.workspaces[target.Ref.Workspace]
+	if workspace.isLinked || workspace.worktreePath != "" &&
+		(filepath.Clean(workspace.worktreePath) != filepath.Clean(workspace.repoRoot) ||
+			filepath.Clean(workspace.worktreePath) != filepath.Clean(target.CurrentPath)) {
+		return fmt.Errorf("%w: generic workspace close cannot own a checkout", corebackend.ErrOwnedIdentityMismatch)
+	}
+	return nil
+}
+
+func verifyWorkspaceCloseGroup(view ownedSnapshotView, workspaceID string) error {
+	target := view.workspaces[workspaceID]
+	if target.repoKey == "" {
+		return nil
+	}
+	for id, workspace := range view.workspaces {
+		if id != workspaceID && workspace.repoKey == target.repoKey {
+			return fmt.Errorf("%w: workspace close would also close repository member %s",
+				corebackend.ErrOwnedIdentityMismatch, id)
+		}
+	}
+	return nil
 }
 
 func verifyWorkspaceClosePanes(view ownedSnapshotView, target corebackend.PaneRef) error {
@@ -745,11 +768,13 @@ type ownedWorkspaceView struct {
 	repoKey      string
 	repoRoot     string
 	worktreePath string
+	isLinked     bool
 }
 
 type ownedPaneView struct {
-	identity    corebackend.OwnedPaneIdentity
-	paneFocused bool
+	identity     corebackend.OwnedPaneIdentity
+	paneFocused  bool
+	agentPresent bool
 	// agentUnnamed marks a pane whose agent record the runtime holds without a
 	// name of its own, which is how it leaves the record after a provider
 	// restarts its conversation in place.
@@ -784,12 +809,14 @@ func ownedWorkspaceViews(envelope snapshotEnvelope) map[string]ownedWorkspaceVie
 	workspaces := map[string]ownedWorkspaceView{}
 	for _, workspace := range *envelope.Result.Snapshot.Workspaces {
 		worktreePath, repoKey, repoRoot := "", "", ""
+		isLinked := false
 		if workspace.Worktree != nil {
 			worktreePath, repoKey = workspace.Worktree.CheckoutPath, workspace.Worktree.RepoKey
 			repoRoot = workspace.Worktree.RepoRoot
+			isLinked = workspace.Worktree.IsLinked
 		}
 		workspaces[workspace.WorkspaceID] = ownedWorkspaceView{
-			label: workspace.Label, repoKey: repoKey, repoRoot: repoRoot, worktreePath: worktreePath,
+			label: workspace.Label, repoKey: repoKey, repoRoot: repoRoot, worktreePath: worktreePath, isLinked: isLinked,
 		}
 	}
 	return workspaces
@@ -813,6 +840,7 @@ func ownedPaneViews(
 		}
 		views[pane.Ref] = ownedPaneView{
 			identity: identity, paneFocused: pane.FocusKnown && pane.Focused,
+			agentPresent: pane.AgentPresent,
 			agentUnnamed: pane.AgentPresent && !pane.AgentNamed,
 		}
 	}

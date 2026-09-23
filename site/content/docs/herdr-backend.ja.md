@@ -64,11 +64,20 @@ cleanup intent を保存してから non-force の `herdr worktree remove` を�
 
 checkout を持たない console / coordinator workspace を close する前に、照合済み pane だけが残っていることを確認します。
 補助 pane が残る場合は manual cleanup とします。
+通常の `workspace close` が同じ repository group の別 workspace まで閉じる場合も発行しません。
 close 前の snapshot に失敗した場合は workspace を変更しません。close 後の確認 snapshot に失敗した場合は、close の結果を確定できないまま error を返します。
 
 専用 coordinator を持つ plan の task を閉じたら `fanout plan <slug> --cleanup` を実行してください。
-その plan の task 行が 0 件になると専用 coordinator workspace を閉じ、state 行と intent を退役します。GitHub issue と共有する coordinator は保持します。
-close の応答を失った場合は cleanup を再実行して消滅を確認します。workspace が残っていれば close を再送せず、manual cleanup とします。
+その plan の task 行が 0 件になると、pending intent を保存し、tokenless launcher を pinned executable、argv、作業 directory、foreground process group と照合します。
+agent や追加 pane / process がなければ、その launcher に EOF（`ctrl+d`）を 1 回送ります。
+Herdr が終了した workspace だけを除去し、fanout は不在を確認してから state 行と intent を退役します。
+repo root の metadata が付いていても退役できます。GitHub issue と共有する coordinator は保持します。
+
+EOF の応答を失った場合は cleanup を再実行して消滅を確認します。
+workspace が残っていれば EOF を再送せず、manual cleanup とします。
+残る作業を保全し、保存済み launcher の identity を照合してから手動で終了してください。
+同じ repository の別 Session を残す必要がある間は、root workspace に `workspace close` / `pane close` を実行しないでください。Herdr 0.8.2 では両方とも repository group を閉じる場合があります。
+対象が消えたら cleanup を再実行し、記録を退役します。
 ほかの resource もなくなれば `fanout herdr shutdown` で server を停止できます。
 
 fanout は remove の発行前に、tracked の変更や非 ignored の untracked file と ignored file を区別します。
@@ -252,7 +261,10 @@ fanout-created branch が残っていれば保存済み base SHA と一致する
 snapshot の取得失敗、同じ label の workspace、残存 checkout、移動した branch、branch の観測失敗のいずれかがあれば intent を残して拒否します。
 
 `shutdown` は空の server を retire します。子の herdr 行がこのリポジトリの state に残っている間(linked worktree もすべて対象)、owned session に workspace が残っている間、剪定できない herdr intent が保留中の間は拒否します。
-素のシェルからの TUI bootstrap が記録する console 行と、issue / Project / plan のファンアウトが記録するプロジェクトルートの coordinator 行は、workspace が 1 つも残っていないことを確認した後に `shutdown` 自身が削除します。動作中の shell は先に終了してください。
+保存行が owned session / socket と一致し、workspace が 1 つも残っていないことを確認した後に、`shutdown` 自身が console / coordinator / manual shell 行を削除します。
+manual shell は正規の `@manual` / `shell` role で、runtime parent と agent / checkout identity が空の行だけが対象です。attached / manual-agent 行は引き続き shutdown を拒否します。
+退役直前にも owner store の lock 下で保存行を再照合します。
+journal が空の古い shell 行も回収し、開始 directory とファイルは削除しません。動作中の shell は先に終了してください。
 
 ## sidebar token
 

@@ -230,6 +230,9 @@ func prepareManagedShutdown(
 	if err != nil {
 		return state.LaunchIntent{}, err
 	}
+	if err := validateManagedShutdownRoutes(scaffolds, identity); err != nil {
+		return state.LaunchIntent{}, err
+	}
 	if err := requireEmptyManagedShutdown(ctx, io); err != nil {
 		return state.LaunchIntent{}, err
 	}
@@ -369,7 +372,7 @@ func managedShutdownStoreScaffolds(
 			continue
 		}
 		if !managedShutdownConsoleRow(root, pane, console, hasConsole) &&
-			!managedShutdownCoordinatorRow(pane) {
+			!managedShutdownCoordinatorRow(pane) && !managedShutdownShellRow(pane) {
 			return nil, fmt.Errorf("active Herdr state row remains in %s", filepath.Clean(root))
 		}
 		scaffolds = append(scaffolds, managedShutdownScaffold{root: root, pane: pane})
@@ -385,7 +388,7 @@ func managedShutdownConsoleRow(root string, pane, console state.Pane, found bool
 
 func managedShutdownCoordinatorRow(pane state.Pane) bool {
 	// Only the exact role shape emitted by managedCoordinatorPane qualifies;
-	// child, attached-agent, and manual-shell rows remain hard shutdown blocks.
+	// manual shells have a separate role check.
 	requirements := []bool{
 		managedCoordinatorRowRole(pane),
 		pane.RuntimeParent != "",
@@ -396,6 +399,33 @@ func managedShutdownCoordinatorRow(pane state.Pane) bool {
 		filepath.IsAbs(pane.WorktreePath),
 	}
 	return !slices.Contains(requirements, false)
+}
+
+func managedShutdownShellRow(pane state.Pane) bool {
+	// Match managedShellStatePane, not a child or an attached/manual agent.
+	requirements := []bool{
+		pane.Parent == ManualParentRef, pane.IssueNum < 0,
+		pane.RuntimeParent == "", pane.TaskID == "",
+		pane.Kind == state.PaneKindShell, pane.Agent == state.PaneKindShell,
+		pane.BranchName == "", pane.RepoKey == "", pane.RepoRoot == "",
+		pane.AgentID == "", pane.AgentSession == nil,
+		pane.SourceParent == "", pane.SourceIssueNum == 0, pane.SourceTaskID == "",
+		backend.LiveIdentityModelOf(pane.Backend) == backend.LiveIdentityRecordedBinding,
+		pane.PaneID != "", pane.WorkspaceID != "", pane.WorkspaceLabel != "",
+		pane.TerminalID != "", pane.SessionID != "", pane.SocketPath != "",
+		filepath.IsAbs(pane.WorktreePath),
+	}
+	return !slices.Contains(requirements, false)
+}
+
+func validateManagedShutdownRoutes(scaffolds []managedShutdownScaffold, identity state.RuntimeServerIdentity) error {
+	for _, scaffold := range scaffolds {
+		pane := scaffold.pane
+		if pane.SessionID != identity.Session || pane.SocketPath != identity.SocketPath {
+			return fmt.Errorf("saved Herdr shutdown scaffold in %s belongs to another server route", scaffold.root)
+		}
+	}
+	return nil
 }
 
 // ManagedCoordinatorClosePending fences an unconfirmed plan coordinator close.
@@ -469,6 +499,11 @@ func sameManagedShutdownScaffold(expected, actual state.Pane) bool {
 		actual.Parent == expected.Parent, actual.RuntimeParent == expected.RuntimeParent,
 		actual.IssueNum == expected.IssueNum, actual.TaskID == expected.TaskID,
 		actual.Kind == expected.Kind, actual.Backend == expected.Backend,
+		actual.Agent == expected.Agent, actual.BranchName == expected.BranchName,
+		actual.RepoKey == expected.RepoKey, actual.RepoRoot == expected.RepoRoot,
+		actual.AgentID == expected.AgentID, actual.AgentSession == expected.AgentSession,
+		actual.SourceParent == expected.SourceParent, actual.SourceIssueNum == expected.SourceIssueNum,
+		actual.SourceTaskID == expected.SourceTaskID,
 		actual.PaneID == expected.PaneID, actual.WorkspaceID == expected.WorkspaceID,
 		actual.WorkspaceLabel == expected.WorkspaceLabel, actual.TerminalID == expected.TerminalID,
 		actual.SessionID == expected.SessionID, actual.SocketPath == expected.SocketPath,

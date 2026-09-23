@@ -816,6 +816,7 @@ type worktreeInfoJSON struct {
 	RepoKey      string `json:"repo_key"`
 	CheckoutPath string `json:"checkout_path"`
 	RepoRoot     string `json:"repo_root"`
+	IsLinked     bool   `json:"is_linked_worktree"`
 }
 
 type paneJSON struct {
