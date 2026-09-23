@@ -180,6 +180,12 @@ func cmdManagedConsoleTUI(
 		openErr = fmt.Errorf("%s", ownedPaneUnavailable)
 		owned = nil
 	}
+	if openErr == nil {
+		if err := reexecManagedConsole(projectRoot, owned); err != nil {
+			lg.Err("tui: reopen owned console: %v", err)
+			return exitcode.Env
+		}
+	}
 	if openErr != nil {
 		lg.Warn("tui: owned Herdr actions disabled: %v", openErr)
 	}
@@ -192,6 +198,18 @@ func cmdManagedConsoleTUI(
 		owned,
 		lg,
 	)
+}
+
+func reexecManagedConsole(root string, owned panelaunch.ManagedSessionRuntime) error {
+	path, err := panelaunch.ManagedConsoleExecutable(root, os.Getenv("HERDR_PANE_ID"), owned)
+	if err != nil || path == "" {
+		return err
+	}
+	current, err := os.Executable()
+	if err != nil || current == path {
+		return err
+	}
+	return execSessionAttach(backend.AttachExec{Path: path, Argv: []string{path}, Env: os.Environ()})
 }
 
 // handoffConsoleShell execs the operator shell the console bootstrap recorded

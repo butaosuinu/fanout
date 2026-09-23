@@ -90,12 +90,12 @@ func ensureManagedConsoleLocked(
 		return ManagedConsoleResult{}, err
 	}
 	if found {
-		result, reused, reuseErr := reuseManagedConsole(ctx, locked, root, owned, pane, callerEnvironment)
+		result, reused, reuseErr := reuseManagedConsole(ctx, locked, root, owned, route, pane, shellPath, callerEnvironment)
 		if reuseErr != nil || reused {
 			return result, reuseErr
 		}
 	}
-	intent, err := realizeManagedInteractive(
+	intent, err := realizeManagedConsole(
 		ctx, owned, locked, route,
 		ManagedCoordinatorRequest{
 			Parent:      ManagedConsoleRuntimeParent,
@@ -113,12 +113,7 @@ func ensureManagedConsoleLocked(
 		return ManagedConsoleResult{}, validationErr
 	}
 	launcher := &Launcher{Info: &fanoutruntime.Info{ProjectRoot: root}, Managed: owned}
-	live, err := launcher.startManagedAgent(
-		ctx, locked, route, intent, validateManagedConsoleLaunch(route), nil, exactManagedShellPane,
-		func(adoptCtx context.Context, _ *state.LockedStore, issued state.LaunchIntent) (backend.LivePane, error) {
-			return launcher.adoptManagedConsolePane(adoptCtx, issued, route, shellPath)
-		},
-	)
+	live, err := launcher.startOrAdoptManagedConsole(ctx, locked, route, intent, shellPath)
 	if err != nil {
 		return ManagedConsoleResult{}, err
 	}
@@ -126,6 +121,7 @@ func ensureManagedConsoleLocked(
 		intent, live, NextSyntheticPaneNumber(locked.Store, ManualParentRef),
 		"herdr-console", "Herdr console", ManagedConsoleRuntimeParent,
 	)
+	pane.ConsoleShell = intent.Launch.ConsoleShell
 	if err := finalizeManagedPane(locked, root, intent, staticManagedPane(pane)); err != nil {
 		return ManagedConsoleResult{}, err
 	}
@@ -164,7 +160,9 @@ func reuseManagedConsole(
 	locked *state.LockedStore,
 	projectRoot string,
 	owned ManagedSessionRuntime,
+	route backend.OwnedLaunchRoute,
 	pane state.Pane,
+	shellPath string,
 	callerEnvironment []string,
 ) (ManagedConsoleResult, bool, error) {
 	if err := verifySavedManagedConsole(owned, pane); err != nil {
@@ -178,6 +176,9 @@ func reuseManagedConsole(
 			)
 		}
 		return ManagedConsoleResult{}, false, nil
+	}
+	if err := restoreManagedConsole(ctx, locked, projectRoot, owned, route, pane, shellPath, callerEnvironment); err != nil {
+		return ManagedConsoleResult{}, false, err
 	}
 	if err := removeCompletedManagedConsoleIntent(locked, projectRoot, pane); err != nil {
 		return ManagedConsoleResult{}, false, err
@@ -475,6 +476,7 @@ func newManagedConsoleLaunch(
 		return nil, err
 	}
 	capsule.Args = []string{ManagedConsoleWorkloadArg}
+	capsule.ConsoleShell = shell
 	return capsule, nil
 }
 
@@ -500,7 +502,7 @@ func (l *Launcher) adoptManagedConsolePane(
 	if err != nil {
 		return backend.LivePane{}, err
 	}
-	return l.waitForManagedPane(ctx, intent, exactManagedShellPane, "")
+	return l.waitForManagedPane(ctx, intent, exactManagedConsolePane, "")
 }
 
 // classifyManagedConsoleProcess reports what the console pane runs: nil for a
@@ -514,7 +516,7 @@ func classifyManagedConsoleProcess(
 	shell string,
 ) error {
 	processErr := verifyManagedAgentProcess(process, intent)
-	if processErr == nil {
+	if processErr == nil || reopenedManagedConsoleProcess(process, intent, route) {
 		return nil
 	}
 	if _, err := agentprocess.MatchAgent(process, agentprocess.Identity{
@@ -621,6 +623,7 @@ func validateSavedManagedConsoleShape(pane state.Pane) error {
 		pane.RepoKey == "",
 		pane.AgentID == "",
 		pane.AgentSession == nil,
+		pane.ConsoleShell == "" || filepath.IsAbs(pane.ConsoleShell) && filepath.Clean(pane.ConsoleShell) == pane.ConsoleShell,
 	}
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("saved Herdr console role is invalid")
@@ -648,11 +651,17 @@ func removeCompletedManagedConsoleIntent(
 	if !completedManagedConsoleIntentMatchesPane(intent, pane) {
 		return fmt.Errorf("completed Herdr console intent does not match saved pane")
 	}
+	if err := recordManagedConsoleShell(locked, projectRoot, pane, intent.Launch); err != nil {
+		return err
+	}
 	journal.RemoveIntent(intentID)
 	return journal.Save()
 }
 
 func completedManagedConsoleIntentMatchesPane(intent state.LaunchIntent, pane state.Pane) bool {
+	if intent.Launch != nil && pane.ConsoleShell != "" && intent.Launch.ConsoleShell != pane.ConsoleShell {
+		return false
+	}
 	if intent.Kind != state.IntentCoordinator || intent.Status != state.IntentRealized ||
 		intent.Parent != ManagedConsoleRuntimeParent || intent.RuntimeParent != ManagedConsoleRuntimeParent ||
 		filepath.Clean(intent.WorktreePath) != filepath.Clean(pane.WorktreePath) ||

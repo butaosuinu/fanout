@@ -58,6 +58,7 @@
         "/repo/.fanout/worktrees/herdr-backend-531"
       ],
       "herdrDirectAgentLaunch": true,
+      "herdrConsoleShell": "/bin/zsh",
       "shellKey": "fanout-shell-531",
       "sourceParent": "524",
       "sourceIssueNum": 530,

@@ -59,7 +59,7 @@ func TestNewManagedConsoleLaunchRunsPinnedFanoutWithShellHandoff(t *testing.T) {
 		t.Fatalf("console capsule args = %v, want the reserved console token", capsule.Args)
 	}
 	last := owned.prepared[len(owned.prepared)-1]
-	if last != backend.ConsoleShellEnv+"=/bin/zsh" {
+	if last != backend.ConsoleShellEnv+"=/bin/zsh" || capsule.ConsoleShell != "/bin/zsh" {
 		t.Fatalf("console capsule environment tail = %q, want the hand-off shell", last)
 	}
 }

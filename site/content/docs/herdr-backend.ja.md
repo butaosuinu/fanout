@@ -253,6 +253,18 @@ fanout herdr shutdown   # 空の owned server を停止する
 その後は新しい世代を起動し、旧版の fanout が書いた owned `config.toml` を置き換え、記録済みの行を上記のルールで再束縛します。
 失敗した後にどちらの verb を再実行しても安全です。fanout は何をしようとしたかを記録しており、作業を繰り返すのではなくその結果を確認します。
 
+`restart` が成功したら、herdr backend を選択した状態で引数なしの `fanout` を実行して console を開きます。
+復元された launcher を照合し、既存 pane 上で新しい console launch を開始します。terminal ID の一致だけでは TUI を ready と判定しません。
+稼働中の TUI と終了時に引き継いだ shell は再利用し、linked worktree 間でも console は 1 つを共有します。
+shell は起動時の値を保存するため、別の `$SHELL` からも再接続できます。console の shell 内で `fanout` を実行すると、所有権を確認して pinned binary で TUI を開き直します。
+launcher が既に消えていれば、通常の stale 行の退役と bootstrap に進みます。
+別 process、追加 pane、server 操作の pending、未発行 launch の期限切れでは token を送らず復旧を停止します。manual shell の自動再開はしません。
+
+console launch の token 応答を失った場合や結果の保存に失敗した場合は、引数なしの `fanout` を再実行してください。
+期限切れ後も workload と環境 capsule の消費を確認し、token は再送しません。
+結果を確認できなければ停止したままにします。journal を保持し、保存済み pane を調べてから手動で片づけてください。
+別 Session を残す必要がある間は root workspace を close しないでください。
+
 fanout の更新後に launch が `owned Herdr launcher predates the current fanout` で拒否されたら、子の行を `--close` / `--cleanup` で片づけ、console の TUI を quit してそのシェルを終了し、coordinator の shell も終了してから `fanout herdr shutdown` を実行します。
 `restart` は生存世代を置き換えません。`shutdown` が空の session と古い足場行を畳み、次の launch が現行 launcher を使う新世代を作ります。
 
