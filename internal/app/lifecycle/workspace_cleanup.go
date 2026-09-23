@@ -446,6 +446,9 @@ func verifyWorkspaceCleanupHookIdentity(
 	if err != nil {
 		return intent, err
 	}
+	if reopened {
+		return recoverIssuedReopen(ctx, opts, journal, runtime, intent)
+	}
 	return rebindWorkspaceCleanupHookIdentity(
 		ctx, locked, journal, opts.ProjectRoot, pane, intent, observation.workspace,
 	)
@@ -2429,12 +2432,45 @@ func admitCurrentWorkspaceCleanupIdentity(
 	intent state.LaunchIntent,
 	workspace backend.WorkspaceObservation,
 ) (state.LaunchIntent, error) {
+	// Only reopen adoption changes the cleanup resource while retaining the
+	// original row and its agent identity. Location rebinds update that row.
+	if intent.Coordinator != (state.RuntimeResource{}) && intent.CleanupPhase != state.CleanupReopen &&
+		intent.Resource.WorkspaceID != pane.WorkspaceID {
+		if err := verifyReopenedWorkspaceCleanupShell(intent, intent.Resource, workspace); err != nil {
+			return intent, markWorkspaceCleanupManual(journal, intent, err)
+		}
+		return intent, nil
+	}
 	recordedPane := cleanupHookPane(pane, intent.Resource)
 	if err := admitRecordedWorkspaceCleanupPane(recordedPane, workspace); err != nil {
 		cause := fmt.Errorf("cleanup workspace agent admission: %w", err)
 		return intent, markWorkspaceCleanupManual(journal, intent, cause)
 	}
 	return intent, nil
+}
+
+func verifyReopenedWorkspaceCleanupShell(
+	intent state.LaunchIntent,
+	resource state.RuntimeResource,
+	workspace backend.WorkspaceObservation,
+) error {
+	if !workspaceMatchesResource(workspace, resource) || resourceFromObservation(workspace) != resource ||
+		len(workspace.Panes) != 1 || len(workspace.LivePanes) != 1 || workspace.Panes[0].TerminalID != resource.TerminalID {
+		return fmt.Errorf("%w: reopened cleanup workspace does not match its saved shell", backend.ErrOwnedIdentityMismatch)
+	}
+	if err := verifyTerminalInvalidation(workspace, resource); err != nil {
+		return err
+	}
+	binding := backend.PaneBinding{
+		Ref:       workspace.Panes[0].Pane, // Verified against the persisted resource above.
+		SessionID: intent.Session, SocketPath: intent.SocketPath,
+		WorkspaceLabel: resource.Label, TerminalID: resource.TerminalID,
+		RepoKey: resource.RepoKey, WorktreePath: resource.CurrentPath, Shell: true,
+	}
+	if _, ok := binding.UniqueLive(workspace.LivePanes, backend.RequireRuntime(binding.Ref.Backend)); !ok {
+		return fmt.Errorf("%w: reopened cleanup pane does not match its saved shell binding", backend.ErrOwnedIdentityMismatch)
+	}
+	return nil
 }
 
 func rebindPartiallyPersistedWorkspaceCleanupIdentity(

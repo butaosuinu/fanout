@@ -155,6 +155,9 @@ func adoptReopenedWorkspace(
 	checkout worktree.CheckoutObservation,
 ) (state.LaunchIntent, error) {
 	resource := resourceFromObservation(workspace)
+	if err := verifyReopenedWorkspaceCleanupShell(intent, resource, workspace); err != nil {
+		return intent, markWorkspaceCleanupManual(journal, intent, err)
+	}
 	if err := verifyCleanupCheckout(ctx, opts.ProjectRoot, intent.FullBranchRef, intent.ExpectedHead, resource); err != nil {
 		return intent, markWorkspaceCleanupManual(journal, intent, err)
 	}

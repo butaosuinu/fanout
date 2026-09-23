@@ -58,6 +58,10 @@ fanout は保存済みの workspace ID、label、terminal、repository、path、
 cleanup intent を保存してから non-force の `herdr worktree remove` を発行し、checkout と workspace の不在を確認します。workspace だけが残れば close します。
 先に workspace が閉じられて checkout が残った場合は、owned plugin registry が空であることを確認してから削除用 workspace を再登録します。
 
+内容物の検査で停止し、再登録した cleanup shell が残っている場合は、残存ファイルを保全・解消して同じ close または cleanup を再試行してください。
+保存済みの再登録先について、owned route、workspace、唯一の pane、terminal、checkout を照合します。元 agent がその shell で動いている必要はありません。
+再登録先に追加の pane または agent があれば cleanup を停止します。
+
 checkout を持たない console / coordinator workspace を close する前に、照合済み pane だけが残っていることを確認します。
 補助 pane が残る場合は manual cleanup とします。
 通常の `workspace close` が同じ repository group の別 workspace まで閉じる場合も発行しません。

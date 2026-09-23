@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -132,6 +133,11 @@ func (f *fakeHerdrLifecycleRuntime) OpenWorktree(_ context.Context, req backend.
 		return backend.WorktreeMutationResult{}, f.openErr
 	}
 	workspace := herdrLifecycleWorkspace("w-reopened", req.Label, req.Path, req.SourceRepoKey, req.SourceRepoRoot)
+	workspace.LivePanes = []backend.LivePane{{
+		Ref: workspace.Pane, CurrentPath: req.Path, WorkspaceLabel: req.Label,
+		TerminalID: workspace.TerminalID, RepoKey: req.SourceRepoKey, ProjectRoot: req.SourceRepoRoot,
+		WorktreePath: req.Path, SessionID: f.session, SocketPath: f.socketPath,
+	}}
 	f.workspaces = append(f.workspaces, workspace)
 	f.mutationDispatched = true
 	return backend.WorktreeMutationResult{WorkspaceObservation: workspace}, f.openErr
@@ -2840,6 +2846,9 @@ func TestHerdrCleanupHookRebindsMovedWorkspaceIdentity(t *testing.T) {
 
 func TestHerdrCleanupRetiresAfterStateRowSaveRetry(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
+	primeLifecycleAgentIdentity(&fixture.pane)
+	addLifecycleAgentEvidence(&fixture.workspace, fixture.pane)
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 	var backgroundHooks []hooks.Type
 	originalBackgroundHook := runWorkspaceBackgroundHook
 	runWorkspaceBackgroundHook = func(hook hooks.Type, _ Options, _ state.Pane, _ string, _ Logger) {
@@ -2898,6 +2907,9 @@ func TestHerdrCleanupRetiresAfterStateRowSaveRetry(t *testing.T) {
 
 func TestHerdrCleanupRestoresStateAfterIntentRetirementSaveFailure(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
+	primeLifecycleAgentIdentity(&fixture.pane)
+	addLifecycleAgentEvidence(&fixture.workspace, fixture.pane)
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 	var backgroundHooks []hooks.Type
 	originalBackgroundHook := runWorkspaceBackgroundHook
 	runWorkspaceBackgroundHook = func(hook hooks.Type, _ Options, _ state.Pane, _ string, _ Logger) {
@@ -3214,6 +3226,18 @@ func TestHerdrCleanupRetryDoesNotRepeatHooks(t *testing.T) {
 			wantRetry: exitcode.OK,
 		},
 		{
+			name: "reopened residual workspace close",
+			prepare: func(t *testing.T, fixture herdrLifecycleFixture) *fakeHerdrLifecycleRuntime {
+				t.Helper()
+				runtime := prepareHerdrCleanupPhase(t, fixture, state.CleanupReopen)
+				runtime.keepWorkspaceAfterRemove = true
+				runtime.closeErr = backend.MutationNotIssuedError{Cause: context.Canceled}
+				return runtime
+			},
+			beforeTry: func(runtime *fakeHerdrLifecycleRuntime) { runtime.closeErr = nil },
+			wantRetry: exitcode.OK,
+		},
+		{
 			name: "checkout-only content gate",
 			prepare: func(t *testing.T, fixture herdrLifecycleFixture) *fakeHerdrLifecycleRuntime {
 				t.Helper()
@@ -3229,6 +3253,9 @@ func TestHerdrCleanupRetryDoesNotRepeatHooks(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newHerdrLifecycleFixture(t)
+			primeLifecycleAgentIdentity(&fixture.pane)
+			addLifecycleAgentEvidence(&fixture.workspace, fixture.pane)
+			recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 			hookPath := filepath.Join(t.TempDir(), "before-worktree")
 			t.Setenv("FANOUT_TEST_BEFORE_WORKTREE", hookPath)
 			runtime := tt.prepare(t, fixture)
@@ -3245,8 +3272,9 @@ func TestHerdrCleanupRetryDoesNotRepeatHooks(t *testing.T) {
 			assertHerdrHookCalls(t, hookPath, 1)
 
 			tt.beforeTry(runtime)
-			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != tt.wantRetry {
-				t.Fatalf("retry Close() = %d, want %d", got, tt.wantRetry)
+			lg := &captureLogger{}
+			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, lg); got != tt.wantRetry {
+				t.Fatalf("retry Close() = %d, want %d; errors=%v", got, tt.wantRetry, lg.errors)
 			}
 			assertHerdrHookCalls(t, hookPath, 1)
 		})
@@ -4511,6 +4539,8 @@ func TestExpiredPlannedHerdrCleanupRejectsMovedLivePaneWithoutAgentEvidence(t *t
 
 func TestExpiredReopenedHerdrCleanupPreservesReplacementIdentityAndRefreshesHead(t *testing.T) {
 	fixture := newHerdrLifecycleFixture(t)
+	primeLifecycleAgentIdentity(&fixture.pane)
+	recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
 	runtime := prepareHerdrCleanupPhase(t, fixture, state.CleanupReopen)
 	runtime.removeErr = backend.MutationNotIssuedError{Cause: errors.New("remove dispatch unavailable")}
 
@@ -4535,6 +4565,172 @@ func TestExpiredReopenedHerdrCleanupPreservesReplacementIdentityAndRefreshesHead
 		t.Fatalf("retry cleanup calls = open %d/remove %d, want 1/2", runtime.openCalls, runtime.removeCalls)
 	}
 	assertHerdrLifecycleRemoved(t, fixture)
+}
+
+func TestReopenedHerdrCleanupRetriesAfterNestedRepositoryPreserved(t *testing.T) {
+	for _, action := range []string{"close", "cleanup"} {
+		for _, expired := range []bool{false, true} {
+			t.Run(action+"/expired="+strconv.FormatBool(expired), func(t *testing.T) {
+				fixture := newHerdrLifecycleFixture(t)
+				primeLifecycleAgentIdentity(&fixture.pane)
+				recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+				prepareIgnoredLifecycleFiles(t, fixture.worktreePath)
+				nested := filepath.Join(fixture.worktreePath, "node_modules")
+				runHerdrLifecycleGit(t, nested, "init")
+				runtime := prepareHerdrCleanupPhase(t, fixture, state.CleanupReopen)
+				opts := herdrLifecycleOptions(fixture, runtime)
+				hookPath := filepath.Join(t.TempDir(), "before-worktree")
+				t.Setenv("FANOUT_TEST_BEFORE_WORKTREE", hookPath)
+				opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+					hooks.BeforeWorktreeRemove: {{Command: `printf 'called\n' >> "$FANOUT_TEST_BEFORE_WORKTREE"`, Timeout: time.Second}},
+				}}
+				if action == "cleanup" {
+					installLifecycleCleanupGH(t)
+				}
+				lg := &captureLogger{}
+				cleanup := func() exitcode.Code {
+					if action == "cleanup" {
+						return Cleanup(opts, fixture.pane.Parent, lg)
+					}
+					return Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, lg)
+				}
+				if got := cleanup(); got != exitcode.Env {
+					t.Fatalf("blocked cleanup = %d; errors=%v", got, lg.errors)
+				}
+				if runtime.openCalls != 1 || runtime.removeCalls != 0 {
+					t.Fatalf("blocked cleanup calls = open %d/remove %d, want 1/0", runtime.openCalls, runtime.removeCalls)
+				}
+				assertHerdrLifecyclePreserved(t, fixture)
+				intent, found := loadHerdrCleanupIntent(t, fixture)
+				if !found || intent.Status != state.IntentPlanned || intent.Resource.WorkspaceID != "w-reopened" {
+					t.Fatalf("replacement cleanup intent = %#v", intent)
+				}
+				store, err := state.Load(state.Path(fixture.projectRoot))
+				if err != nil {
+					t.Fatal(err)
+				}
+				row, found := store.Find(fixture.pane.Parent, fixture.pane.IssueNum)
+				if !found || !row.RuntimeBinding().Equal(fixture.pane.RuntimeBinding()) {
+					t.Fatalf("reopen changed original agent binding: %#v", row)
+				}
+				preserved := filepath.Join(t.TempDir(), "preserved")
+				if err := os.Rename(nested, preserved); err != nil {
+					t.Fatal(err)
+				}
+				if expired {
+					expireSavedHerdrCleanupIntent(t, fixture)
+				}
+				if got := cleanup(); got != exitcode.OK {
+					t.Fatalf("retry cleanup = %d; errors=%v", got, lg.errors)
+				}
+				assertHerdrLifecycleRemoved(t, fixture)
+				assertHerdrHookCalls(t, hookPath, 1)
+				if runtime.openCalls != 1 || runtime.removeCalls != 1 {
+					t.Fatalf("retry calls = open %d/remove %d, want 1/1", runtime.openCalls, runtime.removeCalls)
+				}
+				if data, err := os.ReadFile(filepath.Join(preserved, "pkg", "index.js")); err != nil || string(data) != "ignored\n" {
+					t.Fatalf("preserved repository content = %q, %v", data, err)
+				}
+			})
+		}
+	}
+}
+
+func TestReopenedHerdrCleanupRejectsUnprovenShell(t *testing.T) {
+	for _, scenario := range []string{
+		"duplicate label", "terminal", "pane", "extra pane", "agent", "session", "socket",
+		"repo key", "repo root", "checkout", "missing live pane",
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			primeLifecycleAgentIdentity(&fixture.pane)
+			recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+			runtime := prepareHerdrCleanupPhase(t, fixture, state.CleanupReopen)
+			runtime.removeErr = backend.MutationNotIssuedError{Cause: context.Canceled}
+			opts := herdrLifecycleOptions(fixture, runtime)
+			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("first Close() = %d", got)
+			}
+			if runtime.openCalls != 1 || runtime.removeCalls != 1 {
+				t.Fatalf("first calls = open %d/remove %d, want 1/1", runtime.openCalls, runtime.removeCalls)
+			}
+			workspace := &runtime.workspaces[1]
+			switch scenario {
+			case "duplicate label":
+				runtime.workspaces = append(runtime.workspaces, *workspace)
+			case "terminal":
+				workspace.TerminalID, workspace.Panes[0].TerminalID, workspace.LivePanes[0].TerminalID = "foreign", "foreign", "foreign"
+			case "pane":
+				workspace.Pane.Pane, workspace.Panes[0].Pane.Pane, workspace.LivePanes[0].Ref.Pane = "foreign", "foreign", "foreign"
+			case "extra pane":
+				workspace.Panes = append(workspace.Panes, backend.WorkspacePaneObservation{Pane: backend.PaneRef{Pane: "extra"}})
+			case "agent":
+				addLifecycleAgentEvidence(workspace, fixture.pane)
+			case "session":
+				workspace.LivePanes[0].SessionID = "foreign"
+			case "socket":
+				workspace.LivePanes[0].SocketPath = "/foreign.sock"
+			case "repo key":
+				workspace.RepoKey, workspace.LivePanes[0].RepoKey = "/foreign/.git", "/foreign/.git"
+			case "repo root":
+				workspace.RepoRoot, workspace.LivePanes[0].ProjectRoot = "/foreign", "/foreign"
+			case "checkout":
+				workspace.Path, workspace.CWD, workspace.LivePanes[0].WorktreePath = "/foreign", "/foreign", "/foreign"
+			case "missing live pane":
+				workspace.LivePanes = nil
+			}
+			runtime.removeErr = nil
+			for range 2 {
+				if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+					t.Fatalf("unproven shell retry = %d", got)
+				}
+			}
+			if runtime.openCalls != 1 || runtime.removeCalls != 1 || runtime.closeCalls != 0 {
+				t.Fatalf("unproven shell mutated: open %d/remove %d/close %d", runtime.openCalls, runtime.removeCalls, runtime.closeCalls)
+			}
+			assertHerdrLifecyclePreserved(t, fixture)
+		})
+	}
+}
+
+func TestIssuedReopenRejectsUnprovenReplacementWithoutReplay(t *testing.T) {
+	for _, scenario := range []string{"absent", "agent", "extra pane", "head drift"} {
+		t.Run(scenario, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			primeLifecycleAgentIdentity(&fixture.pane)
+			recordLifecyclePaneReplacing(t, fixture.projectRoot, fixture.pane)
+			runtime := prepareHerdrCleanupPhase(t, fixture, state.CleanupReopen)
+			runtime.observeAfterMutationErr = errors.New("reopen observation lost")
+			opts := herdrLifecycleOptions(fixture, runtime)
+			opts.Hooks = hooks.Config{Events: map[hooks.Type][]hooks.Command{
+				hooks.BeforeWorktreeRemove: {{Command: ":", Timeout: time.Second}},
+			}}
+			if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+				t.Fatalf("first Close() = %d", got)
+			}
+			assertHerdrCleanupIntentStatus(t, fixture, state.IntentIssued, true)
+			switch scenario {
+			case "absent":
+				runtime.workspaces = runtime.workspaces[:1]
+			case "agent":
+				addLifecycleAgentEvidence(&runtime.workspaces[1], fixture.pane)
+			case "extra pane":
+				runtime.workspaces[1].Panes = append(runtime.workspaces[1].Panes, backend.WorkspacePaneObservation{Pane: backend.PaneRef{Pane: "extra"}})
+			case "head drift":
+				runHerdrLifecycleGit(t, fixture.worktreePath, "commit", "--allow-empty", "-m", "moved after reopen")
+			}
+			runtime.observeAfterMutationErr = nil
+			for range 2 {
+				if got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.Env {
+					t.Fatalf("unproven reopen recovery = %d", got)
+				}
+			}
+			if runtime.openCalls != 1 || runtime.removeCalls != 0 || runtime.closeCalls != 0 {
+				t.Fatalf("unproven recovery mutated: open %d/remove %d/close %d", runtime.openCalls, runtime.removeCalls, runtime.closeCalls)
+			}
+			assertHerdrLifecyclePreserved(t, fixture)
+		})
+	}
 }
 
 func TestHerdrCloseEverythingDeletesUnmergedFanoutCreatedBranchWhenTipMatches(t *testing.T) {
@@ -5016,6 +5212,9 @@ func TestHerdrCloseEverythingReapsTaskStateAfterResourcesAreAlreadyAbsent(t *tes
 }
 
 func herdrLifecycleOptions(fixture herdrLifecycleFixture, runtime WorkspaceRuntime) Options {
+	if fake, ok := runtime.(*fakeHerdrLifecycleRuntime); ok {
+		fake.session, fake.socketPath = fixture.pane.SessionID, fixture.pane.SocketPath
+	}
 	return Options{
 		ProjectRoot: fixture.projectRoot,
 		StatePath:   state.Path(fixture.projectRoot),
