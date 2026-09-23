@@ -257,7 +257,10 @@ fanout-created branch が残っていれば保存済み base SHA と一致する
 snapshot の取得失敗、同じ label の workspace、残存 checkout、移動した branch、branch の観測失敗のいずれかがあれば intent を残して拒否します。
 
 `shutdown` は空の server を retire します。子の herdr 行がこのリポジトリの state に残っている間(linked worktree もすべて対象)、owned session に workspace が残っている間、剪定できない herdr intent が保留中の間は拒否します。
-素のシェルからの TUI bootstrap が記録する console 行と、issue / Project / plan のファンアウトが記録するプロジェクトルートの coordinator 行は、workspace が 1 つも残っていないことを確認した後に `shutdown` 自身が削除します。動作中の shell は先に終了してください。
+保存行が owned session / socket と一致し、workspace が 1 つも残っていないことを確認した後に、`shutdown` 自身が console / coordinator / manual shell 行を削除します。
+manual shell は正規の `@manual` / `shell` role で、runtime parent と agent / checkout identity が空の行だけが対象です。attached / manual-agent 行は引き続き shutdown を拒否します。
+退役直前にも owner store の lock 下で保存行を再照合します。
+journal が空の古い shell 行も回収し、開始 directory とファイルは削除しません。動作中の shell は先に終了してください。
 
 ## sidebar token
 

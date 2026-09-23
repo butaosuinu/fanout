@@ -247,6 +247,13 @@ shutdown intent 行がある間、別 worktree を含む新しい launch / mutat
 停止と marker 削除を確認した save で shutdown intent 行を削除する。
 response loss で停止の発生を証明できない場合は shutdown intent 行と marker を残して fail closed にし、再実行時の存在確認（process / socket の不在）で完了を確定する。
 
+shutdown は owned generation の検証と全 workspace の不在確認後に、console / coordinator に加えて正規の manual shell 行も退役する。
+manual shell は `@manual`、負の issue 番号、`kind` / `agent` が `shell`、空の `RuntimeParent` を持ち、child / attached / agent / checkout identity を持たない行に限る。
+root と linked worktree の保存行を owned session / socket と照合し、owner store の lock 取得後にも role と route を再照合する。
+journal が空の既存行も対象とするが、intent があれば既存の不在証明と release 条件を維持する。期限切れだけでは planned / issued / 応答不明の intent を削除しない。
+intent の release、scaffold 行の保存、shutdown intent の保存の順に進め、どの保存に失敗しても shutdown 信号を先行送信しない。
+shell の開始 directory とファイルは削除せず、生存 shell も自動終了しない。
+
 0.7.5 の plugin registry は session 単位ではなく、同じ `XDG_CONFIG_HOME` を使う全 session で共有される per-user global state になった。
 実測では session を変えても link 済み plugin が見え、同じ `HOME` でも `XDG_CONFIG_HOME` を変えると空になった。
 owned XDG を repo session ごとに分ける現行方針は global registry も隔離し、cold restart 後も同じ owned XDG の registry を復元した。
