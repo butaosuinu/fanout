@@ -27,6 +27,9 @@ type client struct {
 	mu     sync.Mutex
 	conn   *websocketJSONConn
 	closed bool
+	// The sole reader hands startup notifications to the mode controller in
+	// wire order. Request reads the transport directly so it cannot replay them.
+	pending []appServerMessage
 }
 
 // requester is the request-only slice of client used during app-server
@@ -58,7 +61,7 @@ func (c *client) Request(id, method string, params any) (json.RawMessage, error)
 	if err := sendAppRequest(c, id, method, params); err != nil {
 		return nil, err
 	}
-	return readUntilResponse(c, id)
+	return readUntilResponse(c, id, method)
 }
 
 func (c *client) Notify(method string) error {
@@ -82,6 +85,16 @@ func (c *client) send(v any) error {
 }
 
 func (c *client) receive() (appServerMessage, error) {
+	if len(c.pending) > 0 {
+		msg := c.pending[0]
+		c.pending[0] = appServerMessage{}
+		c.pending = c.pending[1:]
+		return msg, nil
+	}
+	return c.receiveTransport()
+}
+
+func (c *client) receiveTransport() (appServerMessage, error) {
 	conn, ok := c.activeConn()
 	if !ok {
 		return appServerMessage{}, io.ErrClosedPipe
@@ -166,27 +179,17 @@ func sendAppError(client sender, id json.RawMessage, message string) error {
 	return nil
 }
 
-func readUntilResponse(client *client, id string) (json.RawMessage, error) {
+func readUntilResponse(client *client, id, method string) (json.RawMessage, error) {
 	for {
-		msg, err := client.receive()
+		msg, err := client.receiveTransport()
 		if err != nil {
 			return nil, err
 		}
-		if isServerRequest(msg) {
-			if err := handleServerRequest(client, msg); err != nil {
+		if msg.Method != "" {
+			if err := retainStartupNotification(client, msg, method != "thread/resume"); err != nil {
 				return nil, err
 			}
 			continue
-		}
-		if msg.Method == "error" {
-			message, willRetry := errorNotification(msg.Params)
-			if willRetry {
-				continue
-			}
-			if message == "" {
-				message = "codex app-server reported an error"
-			}
-			return nil, errors.New(message)
 		}
 		if !messageIDMatches(msg.ID, id) {
 			continue
@@ -196,6 +199,25 @@ func readUntilResponse(client *client, id string) (json.RawMessage, error) {
 		}
 		return msg.Result, nil
 	}
+}
+
+func retainStartupNotification(client *client, msg appServerMessage, handleRequests bool) error {
+	// Joining an existing thread must leave approvals to the remote TUI.
+	if handleRequests && isServerRequest(msg) {
+		return handleServerRequest(client, msg)
+	}
+	if msg.Method == "error" {
+		message, willRetry := errorNotification(msg.Params)
+		if willRetry {
+			return nil
+		}
+		if message == "" {
+			message = "codex app-server reported an error"
+		}
+		return errors.New(message)
+	}
+	client.pending = append(client.pending, msg)
+	return nil
 }
 
 func handleServerRequest(client sender, msg appServerMessage) error {
