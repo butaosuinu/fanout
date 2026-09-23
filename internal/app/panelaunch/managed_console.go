@@ -513,7 +513,7 @@ func classifyManagedConsoleProcess(
 	shell string,
 ) error {
 	processErr := verifyManagedAgentProcess(process, intent)
-	if processErr == nil {
+	if processErr == nil || reopenedManagedConsoleProcess(process, intent, route) {
 		return nil
 	}
 	if _, err := agentprocess.MatchAgent(process, agentprocess.Identity{

@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/butaosuinu/fanout/internal/app/agentprocess"
 	"github.com/butaosuinu/fanout/internal/core/backend"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
@@ -211,4 +212,28 @@ func exactManagedConsolePane(intent state.LaunchIntent, panes []backend.LivePane
 		return backend.LivePane{}, false
 	}
 	return exactManagedShellPane(intent, panes)
+}
+
+// Running "$FANOUT_BIN" in the hand-off shell starts an argument-free child
+// TUI. Only that foreground child may omit the reserved console argument;
+// an argument-free pane root is still the waiting launcher.
+func reopenedManagedConsoleProcess(
+	info backend.PaneProcessInfo,
+	intent state.LaunchIntent,
+	route backend.OwnedLaunchRoute,
+) bool {
+	matches := 0
+	for _, process := range info.ForegroundProcesses {
+		if info.ShellPID <= 1 || process.PID == info.ShellPID || process.ParentPID != info.ShellPID {
+			continue
+		}
+		child := info
+		child.ShellPID = process.PID
+		if _, err := agentprocess.MatchAgent(child, agentprocess.Identity{
+			WorktreePath: intent.WorktreePath, Executable: route.LauncherPath,
+		}); err == nil {
+			matches++
+		}
+	}
+	return matches == 1
 }

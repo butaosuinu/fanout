@@ -184,6 +184,50 @@ func TestManagedConsoleColdRestartReadinessAndSharedReuse(t *testing.T) {
 	if _, err := f.bootstrap(context.Background(), linked); err != nil || f.tokenCalls != 2 {
 		t.Fatalf("shell handoff reuse: %v, tokens=%d", err, f.tokenCalls)
 	}
+	f.processInfo = restartProcessInfo(f.launchRoute.LauncherPath, nil, root)
+	f.processInfo.ShellPID = 5
+	f.processInfo.ForegroundProcesses[0].ParentPID = 5
+	if _, err := f.bootstrap(context.Background(), linked); err != nil || f.tokenCalls != 2 {
+		t.Fatalf("reopened TUI reuse: %v, tokens=%d", err, f.tokenCalls)
+	}
+}
+
+func TestManagedConsoleReopenedProcessRequiresExactForegroundChild(t *testing.T) {
+	for _, scenario := range []string{"reopened", "wrong parent", "wrong group", "foreign", "different cwd", "arguments", "duplicate", "bare launcher"} {
+		t.Run(scenario, func(t *testing.T) {
+			route := backend.OwnedLaunchRoute{LauncherPath: "/owned/launcher/fanout"}
+			intent := managedConsoleIntentForPane("console", state.Pane{WorktreePath: "/repo"}, route)
+			process := restartProcessInfo(route.LauncherPath, nil, "/repo")
+			process.ShellPID = 5
+			child := &process.ForegroundProcesses[0]
+			child.ParentPID = 5
+			switch scenario {
+			case "wrong parent":
+				child.ParentPID = 9
+			case "wrong group":
+				child.ProcessGroup = 9
+			case "foreign":
+				child.Executable = "/usr/bin/vim"
+			case "different cwd":
+				child.CWD = "/other"
+			case "arguments":
+				child.Argv = []string{"herdr", "restart"}
+			case "duplicate":
+				duplicate := *child
+				duplicate.PID = 11
+				process.ForegroundProcesses = append(process.ForegroundProcesses, duplicate)
+			case "bare launcher":
+				process.ShellPID = child.PID
+			}
+			err := classifyManagedConsoleProcess(process, intent, route, "/bin/sh")
+			if (err == nil) != (scenario == "reopened") {
+				t.Fatalf("classify reopened TUI = %v", err)
+			}
+			if scenario == "bare launcher" && !errors.Is(err, managedLaunchTransitionPending{}) {
+				t.Fatalf("bare launcher = %v, want pending", err)
+			}
+		})
+	}
 }
 
 func TestManagedConsoleRestoreRejectsUnsafeTargets(t *testing.T) {
