@@ -424,11 +424,14 @@ func TestHerdrSharedAttachedAbsentWorkspacePreservesReusedTerminal(t *testing.T)
 }
 
 func TestHerdrSharedAttachedPartialFinalization(t *testing.T) {
-	for _, scenario := range []string{"retire", "conflict", "journal save failure", "state save failure", "canceled"} {
+	for _, scenario := range []string{"retire", "conflict", "issue conflict", "owner conflict", "label conflict", "path conflict", "moved", "moved then absent", "journal save failure", "state save failure", "canceled"} {
 		t.Run(scenario, func(t *testing.T) {
 			fixture := newHerdrLifecycleFixture(t)
 			workspace := herdrLifecycleWorkspace("w-attached", "attached-label", fixture.worktreePath, "", "")
 			attached := sharedAttachedLifecyclePane(fixture, fixture.pane.Parent, "", workspace)
+			attached.AgentSession = &backend.AgentSessionRef{
+				Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-attached",
+			}
 			replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
 			locked, err := state.LockProjectForLaunch(fixture.projectRoot)
 			if err != nil {
@@ -454,8 +457,18 @@ func TestHerdrSharedAttachedPartialFinalization(t *testing.T) {
 					LauncherReady: true, TokenIssued: true,
 				},
 			}
-			if scenario == "conflict" {
+			switch scenario {
+			case "conflict":
 				intent.Launch.AgentName = "foreign-agent"
+			case "issue conflict":
+				intent.IssueNum--
+			case "owner conflict":
+				intent.OwnerProjectRoot = filepath.Join(fixture.projectRoot, "foreign")
+			case "label conflict":
+				intent.WorkspaceLabel = "foreign-label"
+			case "path conflict":
+				intent.WorktreePath = filepath.Join(fixture.projectRoot, "foreign")
+				intent.Resource.CurrentPath = intent.WorktreePath
 			}
 			journal.UpsertIntent(intent)
 			if saveErr := journal.Save(); saveErr != nil {
@@ -464,7 +477,20 @@ func TestHerdrSharedAttachedPartialFinalization(t *testing.T) {
 			if unlockErr := locked.Unlock(); unlockErr != nil {
 				t.Fatal(unlockErr)
 			}
+			if strings.HasPrefix(scenario, "moved") {
+				workspace = herdrLifecycleWorkspace("w-moved", workspace.Label, fixture.worktreePath, "", "")
+				addLifecycleAgentEvidence(&workspace, attached)
+				if scenario == "moved then absent" {
+					attached.WorkspaceID, attached.PaneID, attached.TerminalID = workspace.WorkspaceID, workspace.Pane.Pane, workspace.TerminalID
+					replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+				}
+			}
 			runtime := &fakeHerdrLifecycleRuntime{projectRoot: fixture.projectRoot, workspaces: []backend.WorkspaceObservation{fixture.workspace, workspace}}
+			wantClose := 1
+			if scenario == "moved then absent" {
+				runtime.workspaces = runtime.workspaces[:1]
+				wantClose = 0
+			}
 			opts := herdrLifecycleOptions(fixture, runtime)
 			if scenario == "canceled" {
 				locked, err = state.LockProjectForLaunch(fixture.projectRoot)
@@ -504,7 +530,7 @@ func TestHerdrSharedAttachedPartialFinalization(t *testing.T) {
 				})
 			}
 			got := Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{})
-			if scenario == "conflict" {
+			if strings.HasSuffix(scenario, "conflict") {
 				if got != exitcode.Env || len(runtime.mutationLog) != 0 {
 					t.Fatalf("conflict close = %d %v", got, runtime.mutationLog)
 				}
@@ -520,7 +546,7 @@ func TestHerdrSharedAttachedPartialFinalization(t *testing.T) {
 				runtime.afterClose = nil
 				got = Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{})
 			}
-			if got != exitcode.OK || runtime.closeCalls != 1 || runtime.removeCalls != 1 {
+			if got != exitcode.OK || runtime.closeCalls != wantClose || runtime.removeCalls != 1 {
 				t.Fatalf("close = %d; mutations = %v", got, runtime.mutationLog)
 			}
 			persisted, err := state.LoadLaunchJournal(fixture.projectRoot)

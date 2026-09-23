@@ -112,7 +112,8 @@ func sharedAttachedLaunchIntent(journal *state.LockedLaunchJournal, projectRoot 
 	if !found {
 		return intent, false, nil // Successful finalization consumes this intent.
 	}
-	if !sharedAttachedLaunchMatches(intent, pane) {
+	savedID, identityErr := state.CoordinatorIntentID(intent.Parent, intent.OwnerProjectRoot, intent.IssueNum)
+	if identityErr != nil || savedID != id || !sharedAttachedLaunchMatches(intent, pane) {
 		return intent, true, fmt.Errorf("%w: attached launch intent conflicts with its saved row", backend.ErrOwnedIdentityMismatch)
 	}
 	return intent, true, nil
@@ -127,7 +128,8 @@ func sharedAttachedLaunchMatches(intent state.LaunchIntent, pane state.Pane) boo
 		intent.Kind == state.IntentCoordinator,
 		intent.Status == state.IntentRealized || intent.Status == state.IntentManualCleanupRequired,
 		intent.RuntimeParent == pane.RuntimeParent || pane.RuntimeParent == "" && intent.RuntimeParent == panelaunch.ManualParentRef,
-		intent.Resource == resourceFromPane(pane), intent.Session == pane.SessionID, intent.SocketPath == pane.SocketPath,
+		intent.WorkspaceLabel == pane.WorkspaceLabel, launchResourceMatchesCleanupPane(intent.Resource, pane),
+		intent.Session == pane.SessionID, intent.SocketPath == pane.SocketPath,
 		launch.TokenIssued, launch.Agent == pane.Agent, launch.AgentName == pane.AgentID,
 		launch.Executable == pane.LaunchExecutable, slices.Equal(launch.Args, pane.LaunchArgs),
 		pane.LaunchNonce == "" || pane.LaunchNonce == launch.Nonce,
