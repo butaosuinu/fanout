@@ -640,37 +640,41 @@ func TestHerdrSharedAttachedCloseRebindsMovedChildBeforeMutation(t *testing.T) {
 }
 
 func TestHerdrSharedAttachedCloseReconcilesMovedAgentLocation(t *testing.T) {
-	fixture := newHerdrLifecycleFixture(t)
-	workspace := herdrLifecycleWorkspace(
-		"w-attached", "attached-label", fixture.worktreePath,
-		fixture.pane.RepoKey, fixture.pane.RepoRoot,
-	)
-	attached := sharedAttachedLifecyclePane(fixture, "425", "attached-row", workspace)
-	attached.DirectAgentLaunch = true
-	attached.AgentID = "fanout-codex"
-	attached.AgentSession = &backend.AgentSessionRef{
-		Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-attached",
-	}
-	attached.LaunchExecutable = "/opt/codex"
-	attached.LaunchArgs = []string{"review"}
-	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
-	moved := herdrLifecycleWorkspace(
-		"w-attached-moved", workspace.Label, fixture.worktreePath,
-		fixture.pane.RepoKey, fixture.pane.RepoRoot,
-	)
-	addLifecycleAgentEvidence(&moved, attached)
-	runtime := &fakeHerdrLifecycleRuntime{
-		projectRoot: fixture.projectRoot,
-		workspaces:  []backend.WorkspaceObservation{fixture.workspace, moved},
-	}
+	for _, rowKey := range []string{"", "attached-row"} {
+		t.Run("emitter="+rowKey, func(t *testing.T) {
+			fixture := newHerdrLifecycleFixture(t)
+			workspace := herdrLifecycleWorkspace(
+				"w-attached", "attached-label", fixture.worktreePath,
+				fixture.pane.RepoKey, fixture.pane.RepoRoot,
+			)
+			attached := sharedAttachedLifecyclePane(fixture, "425", rowKey, workspace)
+			attached.DirectAgentLaunch = true
+			attached.AgentID = "fanout-codex"
+			attached.AgentSession = &backend.AgentSessionRef{
+				Source: "herdr:codex", Agent: "codex", Kind: "id", Value: "session-attached",
+			}
+			attached.LaunchExecutable = "/opt/codex"
+			attached.LaunchArgs = []string{"review"}
+			replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, attached)
+			moved := herdrLifecycleWorkspace(
+				"w-attached-moved", workspace.Label, fixture.worktreePath,
+				fixture.pane.RepoKey, fixture.pane.RepoRoot,
+			)
+			addLifecycleAgentEvidence(&moved, attached)
+			runtime := &fakeHerdrLifecycleRuntime{
+				projectRoot: fixture.projectRoot,
+				workspaces:  []backend.WorkspaceObservation{fixture.workspace, moved},
+			}
 
-	if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
-		t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+			if got := Close(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.IssueNum, nopLogger{}); got != exitcode.OK {
+				t.Fatalf("Close() = %d, want %d", got, exitcode.OK)
+			}
+			if got := strings.Join(runtime.mutationLog, ","); got != "close:w-attached-moved,remove:w2" {
+				t.Fatalf("moved attached mutation order = %q", got)
+			}
+			assertHerdrLifecycleRemoved(t, fixture)
+		})
 	}
-	if got := strings.Join(runtime.mutationLog, ","); got != "close:w-attached-moved,remove:w2" {
-		t.Fatalf("moved attached mutation order = %q", got)
-	}
-	assertHerdrLifecycleRemoved(t, fixture)
 }
 
 func TestHerdrSharedAttachedCloseRebindsMovedChildOnRetirementRetry(t *testing.T) {

@@ -87,8 +87,11 @@ func applyManagedPaneLocation(
 	match backend.WorkspaceObservation,
 	sequenceFence uint64,
 ) (state.Pane, bool, error) {
-	if err := pane.InvalidateTelemetryForLocationRebind(sequenceFence); err != nil {
-		return pane, false, fmt.Errorf("invalidate telemetry after managed pane location change: %w", err)
+	// Direct providers without an emitter must keep their launch generation empty.
+	if pane.EmitterRowKey != "" || pane.LaunchNonce != "" || pane.EmitterNonce != "" {
+		if err := pane.InvalidateTelemetryForLocationRebind(sequenceFence); err != nil {
+			return pane, false, fmt.Errorf("invalidate telemetry after managed pane location change: %w", err)
+		}
 	}
 	pane.WorkspaceID, pane.PaneID, pane.TerminalID = match.WorkspaceID, match.Pane.Pane, match.TerminalID
 	return pane, true, nil
