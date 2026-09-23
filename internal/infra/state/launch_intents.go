@@ -186,6 +186,7 @@ type LaunchCapsule struct {
 	Agent                string                   `json:"agent"`
 	AgentName            string                   `json:"agentName"`
 	Executable           string                   `json:"executable"`
+	ConsoleShell         string                   `json:"consoleShell,omitempty"`
 	Args                 []string                 `json:"args"`
 	TeamDBPath           string                   `json:"teamDbPath,omitempty"`
 	CodexTeamStatusPath  string                   `json:"codexTeamStatusPath,omitempty"`
@@ -976,6 +977,7 @@ func validateLaunch(intent LaunchIntent) error {
 		validCodexPaths(launch),
 		cleanAbsolute(launch.EnvFilePath),
 		launch.EnvNameCount > 0,
+		launch.ConsoleShell == "" || cleanAbsolute(launch.ConsoleShell),
 	}
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("launch fields are incomplete")

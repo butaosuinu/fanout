@@ -173,6 +173,8 @@ fanout herdr shutdown   # stop an empty owned server
 
 After `restart` succeeds, run bare `fanout` with the herdr backend selected to reopen the console. A restored, verified launcher receives a fresh console launch on its existing pane; a matching terminal ID alone does not mean the TUI is ready. A running TUI or its hand-off shell is reused, and linked worktrees still share one console. A launcher that has already disappeared follows normal stale-row cleanup and bootstrap. Other processes, additional panes, pending server operations, and expired unissued launches block recovery without receiving a token. Manual shells are not automatically resumed.
 
+The console records its hand-off shell at launch, so callers with a different `$SHELL` can reconnect. Running `fanout` inside that shell checks ownership and reopens the TUI with the pinned binary.
+
 If a console launch loses its token response or fails to save its result, rerun bare `fanout`. It verifies the workload and consumed environment capsule without sending the token again, including after the launch deadline. An unverified outcome remains blocked; preserve the journal and inspect the saved pane before manual cleanup. Do not close a root workspace while other Sessions must remain alive.
 
 After a fanout update, a launch may refuse with `owned Herdr launcher predates the current fanout`. Remove child rows with `--close` / `--cleanup`, quit the console TUI and exit its shell along with any coordinator shells, then run `fanout herdr shutdown`. `restart` still does not replace a live generation; `shutdown` folds the empty session and its stale scaffold rows so the next launch can create a generation with the current launcher.

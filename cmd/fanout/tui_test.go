@@ -113,6 +113,67 @@ func pinConsoleAttachSeams(t *testing.T, isTerminal bool, exec func(backend.Atta
 	execSessionAttach = exec
 }
 
+type consoleReexecRuntime struct {
+	panelaunch.ManagedSessionRuntime
+	path string
+}
+
+func (f consoleReexecRuntime) LaunchRoute() (backend.OwnedLaunchRoute, error) {
+	return backend.OwnedLaunchRoute{LauncherPath: f.path}, nil
+}
+
+func (consoleReexecRuntime) VerifyOwnedTarget(backend.OwnedPaneIdentity) error { return nil }
+
+func TestReexecManagedConsolePinsManualReopenAndAvoidsLoop(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	initTUITestGitRepo(t, root)
+	commitTUITestGitRepo(t, root)
+	locked, err := state.LockProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane := state.Pane{
+		Parent: panelaunch.ManualParentRef, RuntimeParent: panelaunch.ManagedConsoleRuntimeParent,
+		IssueNum: -1, Kind: state.PaneKindShell, Agent: state.PaneKindShell,
+		Backend: backend.Herdr, WorktreePath: root, PaneID: "console",
+		WorkspaceID: "workspace", WorkspaceLabel: "owned-console", TerminalID: "terminal",
+		SessionID: "owned", SocketPath: "/tmp/owned.sock",
+	}
+	if err = errors.Join(locked.RecordPane(pane), locked.Unlock()); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_PANE_ID", pane.PaneID)
+	t.Setenv("FANOUT_REEXEC_TEST", "preserve")
+	current, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/owned/launcher/fanout", current} {
+		t.Run(path, func(t *testing.T) {
+			calls := 0
+			failure := errors.New("test exec returned")
+			pinConsoleAttachSeams(t, false, func(spec backend.AttachExec) error {
+				calls++
+				if spec.Path != path || !reflect.DeepEqual(spec.Argv, []string{path}) || !slices.Contains(spec.Env, "FANOUT_REEXEC_TEST=preserve") {
+					t.Fatal("reexec changed executable, arguments or environment")
+				}
+				return failure
+			})
+			err := reexecManagedConsole(root, consoleReexecRuntime{path: path})
+			if path == current {
+				if err != nil || calls != 0 {
+					t.Fatalf("pinned executable looped: %v, calls=%d", err, calls)
+				}
+			} else if !errors.Is(err, failure) || calls != 1 {
+				t.Fatalf("manual reopen = %v, calls=%d", err, calls)
+			}
+		})
+	}
+}
+
 func TestEnterHerdrTUISessionBootstrapsConsoleAndPrintsAttachCommand(t *testing.T) {
 	stubManagedConsoleBootstrap(t, panelaunch.ManagedConsoleResult{
 		Pane:          state.Pane{PaneID: "pane-1"},

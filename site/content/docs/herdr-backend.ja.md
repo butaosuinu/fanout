@@ -252,6 +252,7 @@ fanout herdr shutdown   # 空の owned server を停止する
 `restart` が成功したら、herdr backend を選択した状態で引数なしの `fanout` を実行して console を開きます。
 復元された launcher を照合し、既存 pane 上で新しい console launch を開始します。terminal ID の一致だけでは TUI を ready と判定しません。
 稼働中の TUI と終了時に引き継いだ shell は再利用し、linked worktree 間でも console は 1 つを共有します。
+shell は起動時の値を保存するため、別の `$SHELL` からも再接続できます。console の shell 内で `fanout` を実行すると、所有権を確認して pinned binary で TUI を開き直します。
 launcher が既に消えていれば、通常の stale 行の退役と bootstrap に進みます。
 別 process、追加 pane、server 操作の pending、未発行 launch の期限切れでは token を送らず復旧を停止します。manual shell の自動再開はしません。
 

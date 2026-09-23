@@ -90,7 +90,7 @@ func ensureManagedConsoleLocked(
 		return ManagedConsoleResult{}, err
 	}
 	if found {
-		result, reused, reuseErr := reuseManagedConsole(ctx, locked, root, owned, pane, shellPath, callerEnvironment)
+		result, reused, reuseErr := reuseManagedConsole(ctx, locked, root, owned, route, pane, shellPath, callerEnvironment)
 		if reuseErr != nil || reused {
 			return result, reuseErr
 		}
@@ -121,6 +121,7 @@ func ensureManagedConsoleLocked(
 		intent, live, NextSyntheticPaneNumber(locked.Store, ManualParentRef),
 		"herdr-console", "Herdr console", ManagedConsoleRuntimeParent,
 	)
+	pane.ConsoleShell = intent.Launch.ConsoleShell
 	if err := finalizeManagedPane(locked, root, intent, staticManagedPane(pane)); err != nil {
 		return ManagedConsoleResult{}, err
 	}
@@ -159,6 +160,7 @@ func reuseManagedConsole(
 	locked *state.LockedStore,
 	projectRoot string,
 	owned ManagedSessionRuntime,
+	route backend.OwnedLaunchRoute,
 	pane state.Pane,
 	shellPath string,
 	callerEnvironment []string,
@@ -175,7 +177,7 @@ func reuseManagedConsole(
 		}
 		return ManagedConsoleResult{}, false, nil
 	}
-	if err := restoreManagedConsole(ctx, locked, projectRoot, owned, pane, shellPath, callerEnvironment); err != nil {
+	if err := restoreManagedConsole(ctx, locked, projectRoot, owned, route, pane, shellPath, callerEnvironment); err != nil {
 		return ManagedConsoleResult{}, false, err
 	}
 	if err := removeCompletedManagedConsoleIntent(locked, projectRoot, pane); err != nil {
@@ -474,6 +476,7 @@ func newManagedConsoleLaunch(
 		return nil, err
 	}
 	capsule.Args = []string{ManagedConsoleWorkloadArg}
+	capsule.ConsoleShell = shell
 	return capsule, nil
 }
 
@@ -620,6 +623,7 @@ func validateSavedManagedConsoleShape(pane state.Pane) error {
 		pane.RepoKey == "",
 		pane.AgentID == "",
 		pane.AgentSession == nil,
+		pane.ConsoleShell == "" || filepath.IsAbs(pane.ConsoleShell) && filepath.Clean(pane.ConsoleShell) == pane.ConsoleShell,
 	}
 	if slices.Contains(requirements, false) {
 		return fmt.Errorf("saved Herdr console role is invalid")
@@ -647,11 +651,17 @@ func removeCompletedManagedConsoleIntent(
 	if !completedManagedConsoleIntentMatchesPane(intent, pane) {
 		return fmt.Errorf("completed Herdr console intent does not match saved pane")
 	}
+	if err := recordManagedConsoleShell(locked, projectRoot, pane, intent.Launch); err != nil {
+		return err
+	}
 	journal.RemoveIntent(intentID)
 	return journal.Save()
 }
 
 func completedManagedConsoleIntentMatchesPane(intent state.LaunchIntent, pane state.Pane) bool {
+	if intent.Launch != nil && pane.ConsoleShell != "" && intent.Launch.ConsoleShell != pane.ConsoleShell {
+		return false
+	}
 	if intent.Kind != state.IntentCoordinator || intent.Status != state.IntentRealized ||
 		intent.Parent != ManagedConsoleRuntimeParent || intent.RuntimeParent != ManagedConsoleRuntimeParent ||
 		filepath.Clean(intent.WorktreePath) != filepath.Clean(pane.WorktreePath) ||

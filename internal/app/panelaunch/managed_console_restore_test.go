@@ -230,6 +230,67 @@ func TestManagedConsoleReopenedProcessRequiresExactForegroundChild(t *testing.T)
 	}
 }
 
+func TestManagedConsoleSavedShellSurvivesDifferentCallerAndLegacyRestore(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "saved shell", true: "legacy row"}[legacy], func(t *testing.T) {
+			root, linked := managedConsoleTestWorktrees(t)
+			f := newConsoleRuntimeFake(t, root)
+			first, err := f.bootstrap(context.Background(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			shell := first.Pane.ConsoleShell
+			if shell == "" {
+				t.Fatal("console did not persist its shell")
+			}
+			if legacy {
+				locked, lockErr := state.LockProject(root)
+				if lockErr != nil {
+					t.Fatal(lockErr)
+				}
+				first.Pane.ConsoleShell = ""
+				if err = errors.Join(locked.RecordPane(first.Pane), locked.Unlock()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.restore(t, first.Pane)
+			if _, err = f.bootstrap(context.Background(), linked); err != nil {
+				t.Fatal(err)
+			}
+			store, err := state.LoadProject(root)
+			if err != nil || store.Panes[0].ConsoleShell != shell {
+				t.Fatalf("restored shell not persisted: %+v, %v", store, err)
+			}
+			f.processInfo = restartProcessInfo(shell, nil, root)
+			if _, err := EnsureManagedConsole(context.Background(), linked, f, []string{"PATH=/usr/bin"}, "/bin/bash"); err != nil || f.tokenCalls != 2 {
+				t.Fatalf("different caller shell rejected: %v, tokens=%d", err, f.tokenCalls)
+			}
+		})
+	}
+}
+
+func TestManagedConsoleExecutableRequiresSavedBinding(t *testing.T) {
+	root, linked := managedConsoleTestWorktrees(t)
+	f := newConsoleRuntimeFake(t, root)
+	first, err := f.bootstrap(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cwd := range []string{root, linked} {
+		path, err := ManagedConsoleExecutable(cwd, first.Pane.PaneID, f)
+		if err != nil || path != f.launchRoute.LauncherPath {
+			t.Fatalf("console executable = %q, %v", path, err)
+		}
+	}
+	if path, err := ManagedConsoleExecutable(root, "foreign-pane", f); path != "" || err != nil {
+		t.Fatalf("foreign pane executable = %q, %v", path, err)
+	}
+	f.workspaces[0].TerminalID = "different-terminal"
+	if path, err := ManagedConsoleExecutable(root, first.Pane.PaneID, f); path != "" || !errors.Is(err, backend.ErrOwnedIdentityMismatch) {
+		t.Fatalf("stale binding executable = %q, %v", path, err)
+	}
+}
+
 func TestManagedConsoleRestoreRejectsUnsafeTargets(t *testing.T) {
 	for _, scenario := range []string{"foreign", "extra pane", "pending restart", "old terminal", "old intent", "canceled"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -344,7 +405,9 @@ func TestManagedConsoleIssuedRecoveryObservesWithoutReplay(t *testing.T) {
 			if err := errors.Join(journal.Save(), locked.Unlock()); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := f.bootstrap(context.Background(), root); err != nil || f.tokenCalls != calls {
+			// The TUI can quit before the retry, leaving its original shell.
+			f.processInfo = restartProcessInfo(intent.Launch.ConsoleShell, nil, f.root)
+			if _, err := EnsureManagedConsole(context.Background(), root, f, []string{"PATH=/usr/bin"}, "/bin/bash"); err != nil || f.tokenCalls != calls {
 				t.Fatalf("observe issued workload: %v tokens=%d want=%d", err, f.tokenCalls, calls)
 			}
 			if _, err := f.bootstrap(context.Background(), root); err != nil || f.tokenCalls != calls {

@@ -84,6 +84,7 @@ type Pane struct {
 	LaunchExecutable      string   `json:"herdrLaunchExecutable,omitempty"`
 	LaunchArgs            []string `json:"herdrLaunchArgs,omitempty"`
 	DirectAgentLaunch     bool     `json:"herdrDirectAgentLaunch,omitempty"`
+	ConsoleShell          string   `json:"herdrConsoleShell,omitempty"`
 	// ShellKey is the tmux pane user-option token that binds this state row to
 	// one live pane. Shell panes can share WorktreePath with the repo root or an
 	// agent worktree, so liveness uses this marker instead of path matching.

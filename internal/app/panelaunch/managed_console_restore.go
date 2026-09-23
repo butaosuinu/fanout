@@ -1,6 +1,7 @@
 package panelaunch
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/butaosuinu/fanout/internal/app/agentprocess"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/errs"
 	fanoutruntime "github.com/butaosuinu/fanout/internal/infra/runtime"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 )
@@ -55,14 +57,12 @@ func restoreManagedConsole(
 	locked *state.LockedStore,
 	root string,
 	owned ManagedSessionRuntime,
+	route backend.OwnedLaunchRoute,
 	pane state.Pane,
 	shell string,
 	environment []string,
 ) error {
-	route, err := verifyManagedConsoleRoute(ctx, owned)
-	if err != nil {
-		return err
-	}
+	shell = cmp.Or(pane.ConsoleShell, shell)
 	intent, err := savedManagedConsoleIntent(locked, root, pane, route)
 	if err != nil {
 		return err
@@ -159,6 +159,7 @@ func (l *Launcher) startOrAdoptManagedConsole(
 	if err := validateManagedConsoleLaunch(route)(intent.Launch); err != nil {
 		return backend.LivePane{}, err
 	}
+	shell = cmp.Or(intent.Launch.ConsoleShell, shell)
 	if intent.Session != route.Session || intent.SocketPath != route.SocketPath {
 		return backend.LivePane{}, fmt.Errorf("saved Herdr console launch route changed")
 	}
@@ -236,4 +237,46 @@ func reopenedManagedConsoleProcess(
 		}
 	}
 	return matches == 1
+}
+
+// ManagedConsoleExecutable resolves the pinned executable only for the saved,
+// currently bound console pane. A manual reopen through PATH can exec it so
+// later bootstrap observes the same workload identity as a pinned launch.
+func ManagedConsoleExecutable(root, paneID string, owned ManagedSessionRuntime) (_ string, err error) {
+	defer errs.Wrap(&err, "resolve owned console executable")
+	store, err := state.LoadProject(root)
+	if err != nil {
+		return "", err
+	}
+	pane, found, err := findManagedConsolePane(root, store)
+	if err != nil || !found || pane.PaneID != paneID {
+		return "", err
+	}
+	if err = verifySavedManagedConsole(owned, pane); err != nil {
+		return "", err
+	}
+	route, err := owned.LaunchRoute()
+	return route.LauncherPath, err
+}
+
+// Upgrade a pre-existing console row before retiring its completed capsule,
+// so future callers need not guess the shell from their own environment.
+func recordManagedConsoleShell(locked *state.LockedStore, root string, pane state.Pane, launch *state.LaunchCapsule) (err error) {
+	if pane.ConsoleShell != "" || launch == nil || launch.ConsoleShell == "" {
+		return nil
+	}
+	owner := locked
+	if pane.SourceProjectRoot != root {
+		owner, err = state.LockProject(pane.SourceProjectRoot)
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, owner.Unlock()) }()
+	}
+	saved, found := owner.Find(pane.Parent, pane.IssueNum)
+	if !found || !sameSavedManagedConsole(pane, saved) || saved.ConsoleShell != "" {
+		return fmt.Errorf("saved Herdr console changed before recording handoff shell")
+	}
+	saved.ConsoleShell = launch.ConsoleShell
+	return owner.RecordPane(saved)
 }
