@@ -39,6 +39,7 @@ type GHProvider interface {
 	IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error)
 	BranchPRs(branch string) ([]ghissue.PRRef, error)
 	Waves(parent string, recordedNums []int) (sessionview.WaveGraph, error)
+	PRStacks(nums []int) (map[int]*ghissue.PRStack, error)
 }
 
 type ghCacheEntry struct {
@@ -83,6 +84,10 @@ type poller struct {
 	// touched by refreshGH, which runs solely on the single gh goroutine
 	// (tests call it directly, also single-threaded), so it needs no lock.
 	lastWaveRefresh time.Time
+	// stackNums and lastStackRefresh throttle refreshStacks the same way; the
+	// gh goroutine owns them too.
+	stackNums        []int
+	lastStackRefresh time.Time
 
 	// ghMu guards the GitHub identity (repo/gh/ghErr) so the deferred resolution
 	// running on the gh goroutine can publish it while the cheap ticker reads it.
@@ -109,6 +114,10 @@ type poller struct {
 	cache       map[int]ghCacheEntry
 	branchCache map[string]branchPRCacheEntry
 	waveCache   map[string]waveCacheEntry // keyed by normalized parent
+	// stackCache is each shown pull request's native stack, keyed by number in
+	// this repository; a nil value means "read, not in a stack". Entries are
+	// replaced whole, never mutated, so builds may share the pointers.
+	stackCache map[int]*ghissue.PRStack
 
 	// refreshNow lets a completed merge pull the next GitHub tick forward
 	// instead of leaving the row rendering its pre-merge state for a full
@@ -309,6 +318,9 @@ func (p *poller) runGHTick() {
 	// and a new time next to the old rows would say "GitHub has been read since
 	// your merge" about data taken before it.
 	p.publishGHRefresh(startedAt)
+	// After the publish, so the stack read sees this tick's pull requests. The
+	// next cheap rebuild carries the result.
+	p.refreshStacks()
 }
 
 // ghFreshAfter reports whether GitHub data has been refetched since t. It is how
@@ -362,7 +374,8 @@ func (p *poller) ghIdentity() (repo string, gh GHProvider, ghErr error) {
 }
 
 func (p *poller) issuePRsFromCache(num int) (string, []ghissue.PRRef, error) {
-	if _, _, ghErr := p.ghIdentity(); ghErr != nil {
+	repo, _, ghErr := p.ghIdentity()
+	if ghErr != nil {
 		return "", nil, ghErr
 	}
 	p.cacheMu.Lock()
@@ -371,11 +384,12 @@ func (p *poller) issuePRsFromCache(num int) (string, []ghissue.PRRef, error) {
 	if !ok {
 		return "", nil, nil // cache miss: unknown, not degraded
 	}
-	return e.state, e.prs, e.err
+	return e.state, p.withStacks(repo, e.prs), e.err
 }
 
 func (p *poller) branchPRsFromCache(branch string) ([]ghissue.PRRef, error) {
-	if _, _, ghErr := p.ghIdentity(); ghErr != nil {
+	repo, _, ghErr := p.ghIdentity()
+	if ghErr != nil {
 		return nil, ghErr
 	}
 	p.cacheMu.Lock()
@@ -384,7 +398,77 @@ func (p *poller) branchPRsFromCache(branch string) ([]ghissue.PRRef, error) {
 	if !ok {
 		return nil, nil // cache miss: unknown, not degraded
 	}
-	return e.prs, e.err
+	return p.withStacks(repo, e.prs), e.err
+}
+
+// withStacks attaches the cached stack to each pull request of this repository.
+// It returns a copy: the caches hand one backing array to every build, and the
+// snapshot is encoded outside cacheMu. Callers hold cacheMu.
+func (p *poller) withStacks(repo string, prs []ghissue.PRRef) []ghissue.PRRef {
+	if len(p.stackCache) == 0 {
+		return prs
+	}
+	out := slices.Clone(prs)
+	for i := range out {
+		if strings.EqualFold(out[i].BaseRepo, repo) {
+			out[i].Stack = p.stackCache[out[i].Number]
+		}
+	}
+	return out
+}
+
+// refreshStacks reads the native stack of every pull request the latest
+// snapshot shows. It is its own read, apart from the PR queries the TUI and the
+// CLI gates share, because the stack schema is a preview: when it fails, the
+// stack maps go and nothing else does, so it never marks GitHub degraded.
+//
+// It runs when the set of pull requests changes, and otherwise at the wave
+// cadence: one call per 50 pull requests a minute while someone watches.
+// Pull requests that drop off the snapshot drop out of the cache.
+func (p *poller) refreshStacks() {
+	repo, gh, ghErr := p.ghIdentity()
+	if gh == nil || ghErr != nil {
+		return
+	}
+	nums := p.shownPRNumbers(repo)
+	var fetched map[int]*ghissue.PRStack
+	if len(nums) > 0 && (!slices.Equal(nums, p.stackNums) || time.Since(p.lastStackRefresh) >= p.waveInterval) {
+		p.lastStackRefresh = time.Now()
+		// A failed read keeps the last known stacks below; the error has no
+		// other consumer, since stacks never degrade the snapshot.
+		fetched, _ = gh.PRStacks(nums)
+	}
+	p.stackNums = nums
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	next := make(map[int]*ghissue.PRStack, len(nums))
+	for _, num := range nums {
+		if s, ok := fetched[num]; ok {
+			next[num] = s
+		} else if s, ok := p.stackCache[num]; ok {
+			next[num] = s
+		}
+	}
+	p.stackCache = next
+}
+
+// shownPRNumbers lists the distinct pull requests of this repository in the
+// latest snapshot, ascending.
+func (p *poller) shownPRNumbers(repo string) []int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	var nums []int
+	for _, session := range p.latest.Sessions {
+		for i := range session.Panes {
+			for _, pr := range session.Panes[i].PRs {
+				if strings.EqualFold(pr.BaseRepo, repo) {
+					nums = append(nums, pr.Number)
+				}
+			}
+		}
+	}
+	slices.Sort(nums)
+	return slices.Compact(nums)
 }
 
 // wavesFromCache mirrors issuePRsFromCache for the per-parent wave graph: a

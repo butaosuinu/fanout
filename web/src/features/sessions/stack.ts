@@ -1,0 +1,186 @@
+import type { PaneView, PRRef, PRStack, Snapshot } from "../../transport/types";
+
+/* stacked PR の 1 層。pr は行のコピーがあればそれ(CI などの信号を全部持つ)、
+ * 無ければ stack 取得の軽量コピー。owners はその PR を prs に持つ行。 */
+export interface StackLayer {
+  position: number;
+  pr: PRRef;
+  owners: PaneView[];
+}
+
+/* native は GitHub の stack、inferred は base / head のつながりから推定した連鎖。
+ * layers は position 昇順(1 = base に最も近い)。 */
+export interface StackView {
+  kind: "native" | "inferred";
+  number?: number;
+  baseRef: string;
+  size: number;
+  position: number;
+  layers: StackLayer[];
+}
+
+/* snapshot 全体(フィルタ前)から引く索引。フィルタ後の行から組むと、隠れた行が
+ * 持つ層の行名が消える。この repository の PR だけを番号で持つ — native stack も
+ * 推定連鎖も repository をまたがない。 */
+export interface StackIndex {
+  repo: string;
+  prs: Map<number, { pr: PRRef; owners: PaneView[] }>;
+  /* 推定連鎖の候補。head branch ごとに 1 本(OPEN 優先)。 */
+  byHead: Map<string, PRRef>;
+  byBase: Map<string, PRRef[]>;
+}
+
+export function sameRepo(a: string | undefined, repo: string): boolean {
+  return !!repo && a?.toLowerCase() === repo.toLowerCase();
+}
+
+export function buildStackIndex(snap: Snapshot | null): StackIndex {
+  const repo = snap?.repo ?? "";
+  const prs = indexPrs(snap, repo);
+  const byHead = chainHeads(prs, repo);
+  return { repo, prs, byHead, byBase: groupByBase(byHead) };
+}
+
+export const EMPTY_STACK_INDEX = buildStackIndex(null);
+
+function indexPrs(snap: Snapshot | null, repo: string): StackIndex["prs"] {
+  const out: StackIndex["prs"] = new Map();
+  const rows = (snap?.sessions ?? [])
+    .flatMap((s) => s.panes ?? [])
+    .flatMap((pane) => (pane.prs ?? []).map((pr) => ({ pane, pr })));
+  for (const { pane, pr } of rows) {
+    if (!sameRepo(pr.baseRepo, repo)) continue;
+    const hit = out.get(pr.number) ?? { pr, owners: [] };
+    hit.owners.push(pane);
+    out.set(pr.number, hit);
+  }
+  return out;
+}
+
+function isOpen(pr: PRRef): boolean {
+  return (pr.state ?? "").toUpperCase() === "OPEN";
+}
+
+/* 推定連鎖に入れてよい PR。native stack の PR は GitHub の答えがあるので混ぜない。
+ * 閉じただけの PR はもう何も運ばない。fork の head は同名 branch と取り違える。 */
+function chainable(pr: PRRef, repo: string): boolean {
+  if (pr.stack || !pr.headRef || !pr.baseRef) return false;
+  if (!sameRepo(pr.headRepo, repo)) return false;
+  return (pr.state ?? "").toUpperCase() !== "CLOSED" || !!pr.mergedAt;
+}
+
+function chainHeads(prs: StackIndex["prs"], repo: string): Map<string, PRRef> {
+  const out = new Map<string, PRRef>();
+  for (const { pr } of prs.values()) {
+    if (!chainable(pr, repo)) continue;
+    const head = pr.headRef ?? "";
+    const cur = out.get(head);
+    if (!cur || (isOpen(pr) && !isOpen(cur))) out.set(head, pr);
+  }
+  return out;
+}
+
+function groupByBase(byHead: Map<string, PRRef>): Map<string, PRRef[]> {
+  const out = new Map<string, PRRef[]>();
+  for (const pr of byHead.values()) {
+    const base = pr.baseRef ?? "";
+    out.set(base, [...(out.get(base) ?? []), pr]);
+  }
+  return out;
+}
+
+function layer(position: number, pr: PRRef, index: StackIndex): StackLayer {
+  const hit = index.prs.get(pr.number);
+  return { position, pr: hit?.pr ?? pr, owners: hit?.owners ?? [] };
+}
+
+/* entries が無い(取得前・失敗)ときは、分かっている自分の層だけを描く。総数は
+ * stack.size が持っている。 */
+function nativeStack(stack: PRStack, pr: PRRef, index: StackIndex): StackView {
+  const entries = stack.entries?.length ? stack.entries : [{ position: stack.position, pr }];
+  const layers = entries
+    .map((e) => layer(e.position, e.pr, index))
+    .sort((a, b) => a.position - b.position);
+  return {
+    kind: "native",
+    number: stack.number,
+    baseRef: stack.baseRef,
+    size: stack.size,
+    position: stack.position,
+    layers,
+  };
+}
+
+/* base を head に持つ PR を下へたどる。戻り値は下の層から順。 */
+function walkDown(pr: PRRef, index: StackIndex, seen: Set<number>): PRRef[] {
+  const out: PRRef[] = [];
+  let next = index.byHead.get(pr.baseRef ?? "");
+  while (next && !seen.has(next.number)) {
+    seen.add(next.number);
+    out.unshift(next);
+    next = index.byHead.get(next.baseRef ?? "");
+  }
+  return out;
+}
+
+/* 上の層は、自分の head を base に持つ PR がちょうど 1 本のときだけ。2 本以上は
+ * 木になり、1 本の柱には描けない。 */
+function soleChild(pr: PRRef, index: StackIndex): PRRef | undefined {
+  const ups = index.byBase.get(pr.headRef ?? "") ?? [];
+  return ups.length === 1 ? ups[0] : undefined;
+}
+
+function walkUp(pr: PRRef, index: StackIndex, seen: Set<number>): PRRef[] {
+  const out: PRRef[] = [];
+  let next = soleChild(pr, index);
+  while (next && !seen.has(next.number)) {
+    seen.add(next.number);
+    out.push(next);
+    next = soleChild(next, index);
+  }
+  return out;
+}
+
+/* 同じ head に PR が複数あるときは代表(byHead)だけが連鎖を持つ。そうしないと
+ * 1 行に同じ連鎖が 2 つ並ぶ。 */
+function inferredStack(pr: PRRef, index: StackIndex): StackView | null {
+  if (index.byHead.get(pr.headRef ?? "")?.number !== pr.number) return null;
+  const seen = new Set([pr.number]);
+  const below = walkDown(pr, index, seen);
+  const chain = [...below, pr, ...walkUp(pr, index, seen)];
+  if (chain.length < 2) return null;
+  return {
+    kind: "inferred",
+    baseRef: chain[0]?.baseRef ?? "",
+    size: chain.length,
+    position: below.length + 1,
+    layers: chain.map((p, i) => layer(i + 1, p, index)),
+  };
+}
+
+/* PR が属する stack。native を推定より優先する。 */
+export function stackOf(pr: PRRef, index: StackIndex): StackView | null {
+  if (!sameRepo(pr.baseRepo, index.repo)) return null;
+  return pr.stack ? nativeStack(pr.stack, pr, index) : inferredStack(pr, index);
+}
+
+export type PrGroup = { key: string; stack: StackView } | { key: string; pr: PRRef };
+
+/* ドロワーの並び。stack に属する PR は stack ごとに 1 ブロックへまとめ、残りは
+ * 今までどおり 1 行ずつ。順序は wire 順での初出順。 */
+export function groupPrs(prs: PRRef[], index: StackIndex): PrGroup[] {
+  const groups = new Map<string, PrGroup>();
+  for (const pr of prs) {
+    const stack = stackOf(pr, index);
+    const group: PrGroup = stack
+      ? { key: stackKey(stack), stack }
+      : { key: `pr:${pr.baseRepo ?? ""}#${pr.number}`, pr };
+    if (!groups.has(group.key)) groups.set(group.key, group);
+  }
+  return [...groups.values()];
+}
+
+function stackKey(stack: StackView): string {
+  if (stack.kind === "native") return `native:${stack.number}`;
+  return `inferred:${stack.layers[0]?.pr.number}`;
+}

@@ -30,6 +30,10 @@ type countingGH struct {
 	wavesErr    error
 	issueErrs   map[int]error
 	batchCalls  [][]int
+	branchPRs   []ghissue.PRRef // BranchPRs answer; nil keeps the default #700
+	stackCalls  [][]int
+	stacks      map[int]*ghissue.PRStack
+	stacksErr   error
 }
 
 func (g *countingGH) IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error) {
@@ -63,6 +67,9 @@ func (g *countingGH) BranchPRs(branch string) ([]ghissue.PRRef, error) {
 		g.branchCalls = map[string]int{}
 	}
 	g.branchCalls[branch]++
+	if g.branchPRs != nil {
+		return slices.Clone(g.branchPRs), nil
+	}
 	return []ghissue.PRRef{{Number: 700, State: "MERGED", CIStatus: "pass"}}, nil
 }
 
@@ -79,6 +86,24 @@ func (g *countingGH) Waves(parent string, recordedNums []int) (sessionview.WaveG
 		return sessionview.WaveGraph{}, g.wavesErr
 	}
 	return g.waves[parent], nil
+}
+
+// PRStacks answers from g.stacks for the numbers it knows. With stacksErr set
+// it fails outright, reading nothing.
+func (g *countingGH) PRStacks(nums []int) (map[int]*ghissue.PRStack, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.stackCalls = append(g.stackCalls, slices.Clone(nums))
+	if g.stacksErr != nil {
+		return nil, g.stacksErr
+	}
+	out := map[int]*ghissue.PRStack{}
+	for _, num := range nums {
+		if s, ok := g.stacks[num]; ok {
+			out[num] = s
+		}
+	}
+	return out, nil
 }
 
 func writeState(t *testing.T, root, body string) {
@@ -284,6 +309,117 @@ func TestPollerRefreshGHPopulatesManualPromptModePRAndCI(t *testing.T) {
 	}
 	if snap.Degraded.GitHub {
 		t.Fatal("GitHub should not be degraded on manual branch PR success")
+	}
+}
+
+// stackTick runs one GitHub tick the way runGHTick does, minus the subscriber
+// gate: refresh, publish, then the stack read.
+func stackTick(p *poller) {
+	p.refreshGH()
+	p.publishGHRefresh(time.Now())
+	p.refreshStacks()
+}
+
+func newStackPoller(t *testing.T, gh *countingGH) *poller {
+	t.Helper()
+	root := t.TempDir()
+	writeState(t, root, `{"schemaVersion":1,"panes":[
+	  {"parent":"@manual","issueNum":-1,"branchName":"fanout/layer-1","slug":"layer-1","paneId":"%1"}
+	]}`)
+	return newPoller("o/n", root, gh, nil, newHub())
+}
+
+// TestRefreshStacksHydratesBuildWithoutTouchingCache pins that the stack rides
+// on a copy: the cached PR stays stack-free, so nothing else that reads the
+// cache ever sees one.
+func TestRefreshStacksHydratesBuildWithoutTouchingCache(t *testing.T) {
+	stack := &ghissue.PRStack{Number: 3, Size: 2, Position: 1, BaseRef: "main"}
+	gh := &countingGH{
+		branchPRs: []ghissue.PRRef{
+			{Number: 700, State: "OPEN", BaseRepo: "o/n"},
+			// Same number in another repository: never read, never hydrated.
+			{Number: 5, State: "OPEN", BaseRepo: "other/repo"},
+		},
+		stacks: map[int]*ghissue.PRStack{700: stack, 5: stack},
+	}
+	p := newStackPoller(t, gh)
+	stackTick(p)
+	snap := p.build()
+
+	if want := [][]int{{700}}; !reflect.DeepEqual(gh.stackCalls, want) {
+		t.Fatalf("PRStacks calls = %v, want %v", gh.stackCalls, want)
+	}
+	prs := snap.Sessions[0].Panes[0].PRs
+	if prs[0].Stack != stack || prs[1].Stack != nil {
+		t.Fatalf("build() PR stacks = %+v / %+v, want only #700 hydrated", prs[0].Stack, prs[1].Stack)
+	}
+	if cached := p.branchCache["fanout/layer-1"].prs; cached[0].Stack != nil {
+		t.Fatalf("branchCache PR stack = %+v, want the cache left untouched", cached[0].Stack)
+	}
+}
+
+func TestRefreshStacksThrottle(t *testing.T) {
+	stack := &ghissue.PRStack{Number: 3, Size: 2, Position: 1, BaseRef: "main"}
+	tests := []struct {
+		name string
+		// between runs after the first tick and before the second.
+		between   func(p *poller, gh *countingGH)
+		wantCalls int
+		wantStack *ghissue.PRStack
+	}{
+		{
+			name:      "same pull requests inside the interval reuse the cache",
+			between:   func(*poller, *countingGH) {},
+			wantCalls: 1,
+			wantStack: stack,
+		},
+		{
+			name:      "elapsed interval rereads",
+			between:   func(p *poller, _ *countingGH) { p.lastStackRefresh = time.Now().Add(-p.waveInterval) },
+			wantCalls: 2,
+			wantStack: stack,
+		},
+		{
+			name: "new pull request rereads at once",
+			between: func(_ *poller, gh *countingGH) {
+				gh.branchPRs = append(gh.branchPRs, ghissue.PRRef{Number: 701, State: "OPEN", BaseRepo: "o/n"})
+			},
+			wantCalls: 2,
+			wantStack: stack,
+		},
+		{
+			name: "failed reread keeps the last known stack",
+			between: func(p *poller, gh *countingGH) {
+				p.lastStackRefresh = time.Time{}
+				gh.stacksErr = errors.New("rate limited")
+			},
+			wantCalls: 2,
+			wantStack: stack,
+		},
+		{
+			name:      "pull request that leaves the snapshot leaves the cache",
+			between:   func(_ *poller, gh *countingGH) { gh.branchPRs = []ghissue.PRRef{} },
+			wantCalls: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gh := &countingGH{
+				branchPRs: []ghissue.PRRef{{Number: 700, State: "OPEN", BaseRepo: "o/n"}},
+				stacks:    map[int]*ghissue.PRStack{700: stack},
+			}
+			p := newStackPoller(t, gh)
+			stackTick(p)
+			tt.between(p, gh)
+			stackTick(p)
+
+			if len(gh.stackCalls) != tt.wantCalls {
+				t.Fatalf("PRStacks calls = %v, want %d", gh.stackCalls, tt.wantCalls)
+			}
+			if got := p.stackCache[700]; got != tt.wantStack {
+				t.Fatalf("stackCache[700] = %+v, want %+v", got, tt.wantStack)
+			}
+		})
 	}
 }
 
