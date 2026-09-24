@@ -27,6 +27,8 @@ export interface StackIndex {
   prs: Map<number, { pr: PRRef; owners: PaneView[] }>;
   /* native stack の番号ごとの、snapshot にある所属 PR。 */
   members: Map<number, PRRef[]>;
+  /* native stack に載っていると分かっている PR の番号。 */
+  native: Set<number>;
   /* 推定連鎖の候補。head branch ごとに 1 本(先に見つかった open の PR)。 */
   byHead: Map<string, PRRef>;
   byBase: Map<string, PRRef[]>;
@@ -39,8 +41,9 @@ export function sameRepo(a: string | undefined, repo: string): boolean {
 export function buildStackIndex(snap: Snapshot | null): StackIndex {
   const repo = snap?.repo ?? "";
   const prs = indexPrs(snap, repo);
-  const byHead = chainHeads(prs, repo);
-  return { repo, prs, members: stackMembers(prs), byHead, byBase: groupByBase(byHead) };
+  const native = nativeNumbers(prs);
+  const byHead = chainHeads(prs, repo, native);
+  return { repo, prs, members: stackMembers(prs), native, byHead, byBase: groupByBase(byHead) };
 }
 
 export const EMPTY_STACK_INDEX = buildStackIndex(null);
@@ -68,20 +71,33 @@ function stackMembers(prs: StackIndex["prs"]): Map<number, PRRef[]> {
   return out;
 }
 
+/* native stack に載っていると分かっている PR。自分の stack の取得に失敗した PR
+ * も、同じ stack の別の PR の entries には載っていることがある。 */
+function nativeNumbers(prs: StackIndex["prs"]): Set<number> {
+  const out = new Set<number>();
+  for (const { pr } of prs.values()) {
+    if (!pr.stack) continue;
+    out.add(pr.number);
+    for (const e of pr.stack.entries ?? []) out.add(e.pr.number);
+  }
+  return out;
+}
+
 /* 推定連鎖に入れてよい PR。open の PR だけ — マージ済みの PR を下の層に数えると、
  * develop → main のような長寿命 branch の PR が、そこを base にする PR すべての
- * 下に付いてしまう。native stack の PR は GitHub の答えがあるので混ぜない。fork の
- * head は同名 branch と取り違える。 */
-function chainable(pr: PRRef, repo: string): boolean {
-  if (pr.stack || !pr.headRef || !pr.baseRef) return false;
+ * 下に付いてしまう。native stack に載る PR は GitHub の答えがあるので混ぜない —
+ * 混ぜると同じ PR が native と推定の 2 つの stack map に出る。fork の head は
+ * 同名 branch と取り違える。 */
+function chainable(pr: PRRef, repo: string, native: Set<number>): boolean {
+  if (native.has(pr.number) || !pr.headRef || !pr.baseRef) return false;
   return (pr.state ?? "").toUpperCase() === "OPEN" && sameRepo(pr.headRepo, repo);
 }
 
-function chainHeads(prs: StackIndex["prs"], repo: string): Map<string, PRRef> {
+function chainHeads(prs: StackIndex["prs"], repo: string, native: Set<number>): Map<string, PRRef> {
   const out = new Map<string, PRRef>();
   for (const { pr } of prs.values()) {
     const head = pr.headRef ?? "";
-    if (chainable(pr, repo) && !out.has(head)) out.set(head, pr);
+    if (chainable(pr, repo, native) && !out.has(head)) out.set(head, pr);
   }
   return out;
 }
@@ -161,7 +177,8 @@ function walkUp(pr: PRRef, index: StackIndex, seen: Set<number>): PRRef[] {
  * issue 側と branch 側の取得は別の時刻に着地するので、索引のコピーと状態が違う
  * ことがある。 */
 function chainRep(pr: PRRef, index: StackIndex): boolean {
-  return chainable(pr, index.repo) && index.byHead.get(pr.headRef ?? "")?.number === pr.number;
+  if (pr.stack || !chainable(pr, index.repo, index.native)) return false;
+  return index.byHead.get(pr.headRef ?? "")?.number === pr.number;
 }
 
 /* 循環(a → b → a)には base branch が無く、どちらの端から見ても別の柱になる。 */

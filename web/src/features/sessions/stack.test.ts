@@ -252,6 +252,23 @@ describe("groupPrs", () => {
     expect(groupPrs([mergedA, b], index).map((g) => g.key)).toEqual(["inferred:1"]);
   });
 
+  it("所属の取得に失敗した native の層を、推定の連鎖に重ねない", () => {
+    // #1 の読み取りは stack(#1 → #2 → #3)を返し、#2 と #3 の読み取りは失敗した
+    const entries = [
+      { position: 1, pr: slim(1, "a") },
+      { position: 2, pr: slim(2, "b") },
+      { position: 3, pr: slim(3, "c") },
+    ];
+    const one = chainPr(1, "a", "main", { stack: { ...native12(1, entries), number: 10 } });
+    const two = chainPr(2, "b", "a");
+    const three = chainPr(3, "c", "b");
+    const index = buildStackIndex(
+      makeSnapshot([makeSession("#1", [makePane({ prs: [one, two, three] })])]),
+    );
+    expect(groupPrs([one, two, three], index).map((g) => g.key)).toEqual(["native:10"]);
+    expect(stackOf(two, index)).toBeNull();
+  });
+
   it("別 repository の同番号 PR は別の行のまま", () => {
     const here = chainPr(5, "x", "main");
     const there = chainPr(5, "x", "main", { baseRepo: "other/repo", headRepo: "other/repo" });
