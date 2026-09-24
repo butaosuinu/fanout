@@ -23,6 +23,7 @@ func (b *herdrCLI) probe() (probeResult, error) {
 	return b.probeContext(context.Background())
 }
 
+//nolint:gocyclo // pre-existing complexity carried over unchanged; b1 only changed the receiver from *Backend to *herdrCLI
 func (b *herdrCLI) probeContext(ctx context.Context) (probeResult, error) {
 	select {
 	case b.probeGate <- struct{}{}:
@@ -73,6 +74,7 @@ func (b *herdrCLI) probeContext(ctx context.Context) (probeResult, error) {
 	}, nil
 }
 
+//nolint:gocyclo // pre-existing complexity carried over unchanged; b1 only changed the receiver from *Backend to *herdrCLI
 func (b *herdrCLI) admitBinaryContext(ctx context.Context, target route) (binaryAdmission, error) {
 	binary, err := b.lookPath(commandName)
 	if err != nil {
