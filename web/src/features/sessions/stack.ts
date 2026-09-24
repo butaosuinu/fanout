@@ -194,17 +194,26 @@ export function stackOf(pr: PRRef, index: StackIndex): StackView | null {
 export type PrGroup = { key: string; stack: StackView } | { key: string; pr: PRRef };
 
 /* ドロワーの並び。stack に属する PR は stack ごとに 1 ブロックへまとめ、残りは
- * 今までどおり 1 行ずつ。順序は wire 順での初出順。 */
+ * 今までどおり 1 行ずつ。順序は wire 順での初出順。
+ *
+ * どこかの stack map に層として載る PR は、平坦な行に重ねない。連鎖の判定は索引の
+ * コピーでたどるので、取得時刻の違いで行のコピーと状態が食い違うと、同じ PR が
+ * 平坦な行と層の両方に出て、Delete branch も 2 つ並んでしまう。 */
 export function groupPrs(prs: PRRef[], index: StackIndex): PrGroup[] {
+  const views = prs.map((pr) => ({ pr, stack: stackOf(pr, index) }));
+  const layered = new Set(views.flatMap((v) => v.stack?.layers.map((l) => l.pr.number) ?? []));
   const groups = new Map<string, PrGroup>();
-  for (const pr of prs) {
-    const stack = stackOf(pr, index);
-    const group: PrGroup = stack
-      ? { key: stackKey(stack), stack }
-      : { key: `pr:${pr.baseRepo ?? ""}#${pr.number}`, pr };
+  for (const { pr, stack } of views) {
+    if (!stack && layered.has(pr.number) && sameRepo(pr.baseRepo, index.repo)) continue;
+    const group = groupOf(pr, stack);
     if (!groups.has(group.key)) groups.set(group.key, group);
   }
   return [...groups.values()];
+}
+
+function groupOf(pr: PRRef, stack: StackView | null): PrGroup {
+  if (stack) return { key: stackKey(stack), stack };
+  return { key: `pr:${pr.baseRepo ?? ""}#${pr.number}`, pr };
 }
 
 function stackKey(stack: StackView): string {

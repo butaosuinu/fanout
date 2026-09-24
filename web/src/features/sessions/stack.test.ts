@@ -236,6 +236,22 @@ describe("groupPrs", () => {
     expect(groups.map((g) => g.key)).toEqual(["pr:octo/fanout#1", "pr:octo/fanout#2"]);
   });
 
+  it("行のコピーが索引と食い違っても、同じ PR を平坦な行と層に重ねない", () => {
+    // 索引には別の行の open な A が先に載り、この行は取得の遅れでマージ済みの A を持つ
+    const openA = chainPr(1, "a", "main");
+    const mergedA = { ...openA, state: "MERGED", mergedAt: "2026-09-01T00:00:00Z" };
+    const b = chainPr(2, "b", "a");
+    const index = buildStackIndex(
+      makeSnapshot([
+        makeSession("#1", [
+          makePane({ issueNum: 200, slug: "other", prs: [openA] }),
+          makePane({ issueNum: 201, slug: "this", prs: [mergedA, b] }),
+        ]),
+      ]),
+    );
+    expect(groupPrs([mergedA, b], index).map((g) => g.key)).toEqual(["inferred:1"]);
+  });
+
   it("別 repository の同番号 PR は別の行のまま", () => {
     const here = chainPr(5, "x", "main");
     const there = chainPr(5, "x", "main", { baseRepo: "other/repo", headRepo: "other/repo" });
