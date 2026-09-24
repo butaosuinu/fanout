@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"strings"
@@ -16,6 +17,50 @@ import (
 type commandOutput func(context.Context, string, []string, ...string) ([]byte, error)
 
 type waitSleep func(context.Context, time.Duration) error
+
+// herdrCLI is the herdr CLI transport: binary admission, the pinned session
+// route, and the process runner. Backend embeds it so ownership and target
+// state stay separate from how commands reach herdr.
+type herdrCLI struct {
+	session     string
+	socketPath  string
+	probeGate   chan struct{}
+	lookPath    func(string) (string, error)
+	stageBinary func(string) (string, string, error)
+	output      commandOutput
+	now         func() time.Time
+	sleep       waitSleep
+	admitted    map[string]binaryAdmission
+	control     *controlPlaneEnvironment
+}
+
+func newHerdrCLI(session, socketPath string) *herdrCLI {
+	return &herdrCLI{
+		session:     session,
+		socketPath:  socketPath,
+		probeGate:   make(chan struct{}, 1),
+		lookPath:    exec.LookPath,
+		stageBinary: stageAdmissionBinary,
+		output:      runCommand,
+		now:         time.Now,
+		sleep:       sleepContext,
+		admitted:    map[string]binaryAdmission{},
+	}
+}
+
+// clone copies the transport for an independently bound handle: a fresh probe
+// gate, a copied admission cache, and a copied control-plane environment.
+func (c *herdrCLI) clone() *herdrCLI {
+	clone := *c
+	clone.probeGate = make(chan struct{}, 1)
+	clone.admitted = map[string]binaryAdmission{}
+	maps.Copy(clone.admitted, c.admitted)
+	if c.control != nil {
+		control := *c.control
+		clone.control = &control
+	}
+	return &clone
+}
 
 type route struct {
 	session    string
@@ -59,7 +104,7 @@ func readMethodError(method string, err error) error {
 
 // runReadContext retries only timed-out reads. Callers with their own polling
 // budget use runContext directly; mutations must never enter this retry lane.
-func (b *Backend) runReadContext(ctx context.Context, binary string, target route, args ...string) ([]byte, error) {
+func (b *herdrCLI) runReadContext(ctx context.Context, binary string, target route, args ...string) ([]byte, error) {
 	for attempt := 0; ; attempt++ {
 		out, err := b.runContext(ctx, commandTimeout, binary, target, args...)
 		if attempt >= readRetryCount || !commandTimedOut(err) || !retryableCommandError(err) || ctx.Err() != nil {
@@ -71,7 +116,7 @@ func (b *Backend) runReadContext(ctx context.Context, binary string, target rout
 	}
 }
 
-func (b *Backend) runContext(ctx context.Context, timeout time.Duration, binary string, target route, args ...string) ([]byte, error) {
+func (b *herdrCLI) runContext(ctx context.Context, timeout time.Duration, binary string, target route, args ...string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

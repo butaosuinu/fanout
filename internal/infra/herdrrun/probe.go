@@ -19,11 +19,11 @@ type binaryAdmission struct {
 	version string
 }
 
-func (b *Backend) probe() (probeResult, error) {
+func (b *herdrCLI) probe() (probeResult, error) {
 	return b.probeContext(context.Background())
 }
 
-func (b *Backend) probeContext(ctx context.Context) (probeResult, error) {
+func (b *herdrCLI) probeContext(ctx context.Context) (probeResult, error) {
 	select {
 	case b.probeGate <- struct{}{}:
 		defer func() { <-b.probeGate }()
@@ -73,7 +73,7 @@ func (b *Backend) probeContext(ctx context.Context) (probeResult, error) {
 	}, nil
 }
 
-func (b *Backend) admitBinaryContext(ctx context.Context, target route) (binaryAdmission, error) {
+func (b *herdrCLI) admitBinaryContext(ctx context.Context, target route) (binaryAdmission, error) {
 	binary, err := b.lookPath(commandName)
 	if err != nil {
 		return binaryAdmission{}, fmt.Errorf("herdr stable >=%s is required: %w", minimumVersion, err)
