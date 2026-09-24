@@ -296,19 +296,9 @@ func (s *OwnedSession) issueProbedMutation(
 		}
 		return corebackend.WorktreeMutationResult{}, commandErr
 	}
-	response, decodeErr := decodeWorktreeMutationResponse(out, envelopeID, resultType)
-	if decodeErr != nil {
-		return corebackend.WorktreeMutationResult{}, decodeErr
-	}
-	if responseErr := validateMutationResponse(spec, response.Workspace); responseErr != nil {
+	response, alreadyOpen, responseErr := acceptMutationResponse(spec, out, envelopeID, resultType)
+	if responseErr != nil {
 		return corebackend.WorktreeMutationResult{}, responseErr
-	}
-	if *response.Workspace.Focused {
-		return corebackend.WorktreeMutationResult{}, fmt.Errorf("herdr mutation focused a no-focus workspace")
-	}
-	alreadyOpen := response.AlreadyOpen != nil && *response.AlreadyOpen
-	if err := validateAlreadyOpen(spec, response.Workspace, alreadyOpen); err != nil {
-		return corebackend.WorktreeMutationResult{}, err
 	}
 
 	workspaces, observeErr := s.backend.observeOwnedWorkspaces(ctx, probed)
@@ -320,6 +310,31 @@ func (s *OwnedSession) issueProbedMutation(
 		return corebackend.WorktreeMutationResult{}, err
 	}
 	return corebackend.WorktreeMutationResult{WorkspaceObservation: match, AlreadyOpen: alreadyOpen}, nil
+}
+
+// acceptMutationResponse decodes the mutation output and refuses a response
+// that does not match the spec, focused the workspace, or claims an unbound
+// already_open. The bool is the accepted already_open value.
+func acceptMutationResponse(
+	spec mutationSpec,
+	out []byte,
+	envelopeID, resultType string,
+) (worktreeMutationResult, bool, error) {
+	response, err := decodeWorktreeMutationResponse(out, envelopeID, resultType)
+	if err != nil {
+		return worktreeMutationResult{}, false, err
+	}
+	if err := validateMutationResponse(spec, response.Workspace); err != nil {
+		return worktreeMutationResult{}, false, err
+	}
+	if *response.Workspace.Focused {
+		return worktreeMutationResult{}, false, fmt.Errorf("herdr mutation focused a no-focus workspace")
+	}
+	alreadyOpen := response.AlreadyOpen != nil && *response.AlreadyOpen
+	if err := validateAlreadyOpen(spec, response.Workspace, alreadyOpen); err != nil {
+		return worktreeMutationResult{}, false, err
+	}
+	return response, alreadyOpen, nil
 }
 
 // singleLiveWorkspace returns the one observed workspace the mutation response
