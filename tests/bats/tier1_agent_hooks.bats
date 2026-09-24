@@ -1063,6 +1063,27 @@ PROBE
   [[ "$output" == *"UnderBudget"* ]]
 }
 
+# go_finding FILE RULE TEXT — one SARIF result as golangci-lint emits it.
+go_finding() {
+  printf '{"ruleId":"%s","message":{"text":"%s"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"%s"},"region":{"startLine":3}}}]}' "$2" "$3" "$1"
+}
+
+@test "complexity-diff: a same-package move of an over-budget func is not new" {
+  local dir="$BATS_TEST_TMPDIR/cx-move"
+  mkdir -p "$dir"
+  local moved_before moved_after fresh
+  moved_before="$(go_finding pkg/a.go gocognit 'cognitive complexity 25 of func `Moved` is high (> 20)')"
+  moved_after="$(go_finding pkg/b.go gocognit 'cognitive complexity 25 of func `Moved` is high (> 20)')"
+  fresh="$(go_finding pkg/b.go gocognit 'cognitive complexity 25 of func `Fresh` is high (> 20)')"
+  printf '{"runs":[{"results":[%s]}]}' "$moved_before" >"$dir/base.sarif"
+  printf '{"runs":[{"results":[%s,%s]}]}' "$moved_after" "$fresh" >"$dir/cur.sarif"
+
+  run node "$REPO_ROOT/.github/scripts/complexity-diff.mjs" --current "$dir/cur.sarif" --base "$dir/base.sarif" --root "$dir"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'`Moved`'* ]]
+  [[ "$output" == *'`Fresh`'* ]]
+}
+
 @test "complexity-on-edit: degrades to advice after the retry cap" {
   require_pinned_golangci
   local repo="$BATS_TEST_TMPDIR/cx-retry"

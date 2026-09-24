@@ -207,7 +207,19 @@ const normalizeText = (rule, text) => {
   }
   return out;
 };
-const identity = (r) => `${baseName(r.file)}|${r.rule}|${normalizeText(r.rule, r.text)}`;
+// Go の関数単位ルールは場所をファイルでなくパッケージ (ディレクトリ) で鍵にする。
+// Go の関数名はパッケージ内で一意で、メソッドは gocognit/gocyclo の本文に receiver
+// が載るので、ディレクトリ + 本文で同じ関数を指せる。ファイルで鍵にすると、同じ
+// パッケージ内で既存の関数を別ファイルへ移しただけで新規違反に化ける。
+// funlen の本文は receiver を書かないので、別の型の同名メソッドは同じ鍵になる。
+// これはファイル単位の鍵でも同じファイル内では既に起きていたことで、その範囲が
+// パッケージへ広がるだけ。
+const PACKAGE_KEYED_RULES = new Set(["gocognit", "gocyclo", "funlen"]);
+const location = (r) => {
+  const file = baseName(r.file);
+  return file.endsWith(".go") && PACKAGE_KEYED_RULES.has(r.rule) ? path.dirname(file) : file;
+};
+const identity = (r) => `${location(r)}|${r.rule}|${normalizeText(r.rule, r.text)}`;
 const measured = (r) => {
   const pattern = VALUE_PATTERNS[r.rule];
   if (!pattern) return 0;
