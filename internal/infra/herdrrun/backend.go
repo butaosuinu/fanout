@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"time"
@@ -23,17 +22,8 @@ var (
 // targeted reads and mutations remain disabled until EnsureOwned and an
 // immutable target admission explicitly bind them.
 type Backend struct {
-	session     string
-	socketPath  string
+	*herdrCLI
 	previewOnly bool
-	probeGate   chan struct{}
-	lookPath    func(string) (string, error)
-	stageBinary func(string) (string, string, error)
-	output      commandOutput
-	now         func() time.Time
-	sleep       waitSleep
-	admitted    map[string]binaryAdmission
-	control     *controlPlaneEnvironment
 	owner       *ownedAdmission
 	target      *ownedTargetAdmission
 }
@@ -42,17 +32,7 @@ type Backend struct {
 // empty on the first probe; CheckAvailable resolves it through an explicit
 // --session status call, then pins subsequent probes to the returned path.
 func New(session, socketPath string) *Backend {
-	return &Backend{
-		session:     strings.TrimSpace(session),
-		socketPath:  socketPath,
-		probeGate:   make(chan struct{}, 1),
-		lookPath:    exec.LookPath,
-		stageBinary: stageAdmissionBinary,
-		output:      runCommand,
-		now:         time.Now,
-		sleep:       sleepContext,
-		admitted:    map[string]binaryAdmission{},
-	}
+	return &Backend{herdrCLI: newHerdrCLI(strings.TrimSpace(session), socketPath)}
 }
 
 // NewPreview constructs a mutation-free launch preview backend. Availability

@@ -268,12 +268,12 @@ func TestPaneRunResponse(t *testing.T) {
 func TestIssueRestartResumeTokenDoesNotRunAfterJournalSaveExpires(t *testing.T) {
 	commandCalled := false
 	now := time.Now()
-	session := &OwnedSession{backend: &Backend{now: func() time.Time { return now }, output: func(
+	session := &OwnedSession{backend: &Backend{herdrCLI: &herdrCLI{now: func() time.Time { return now }, output: func(
 		context.Context, string, []string, ...string,
 	) ([]byte, error) {
 		commandCalled = true
 		return nil, nil
-	}}}
+	}}}}
 	marked := false
 	err := session.issueRestartResumeToken(
 		context.Background(), probeResult{}, "w1:p1", strings.Repeat("a", 32),
