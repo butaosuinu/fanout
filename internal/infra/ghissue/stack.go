@@ -135,7 +135,7 @@ func (pr prStackEntryGraphQL) ref() PRRef {
 }
 
 func (n *prStackNode) stack() *PRStack {
-	if n == nil || n.Stack == nil || n.StackEntry == nil {
+	if n.Stack == nil || n.StackEntry == nil {
 		return nil
 	}
 	s := &PRStack{
@@ -146,7 +146,7 @@ func (n *prStackNode) stack() *PRStack {
 	}
 	for _, e := range n.Stack.Entries.Nodes {
 		if e.PullRequest == nil {
-			continue // a layer the viewer cannot see
+			continue // defensive: the schema types pullRequest as nullable
 		}
 		s.Entries = append(s.Entries, PRStackEntry{Position: e.Position, PR: e.PullRequest.ref()})
 	}
@@ -176,8 +176,11 @@ func parsePRStacks(out []byte, nums []int) (map[int]*PRStack, error) {
 	stacks := make(map[int]*PRStack, len(nums))
 	for _, num := range nums {
 		alias := "pr_" + strconv.Itoa(num)
-		node, ok := root.Data.Repository[alias]
-		if !ok || failed[alias] {
+		// A null alias without an error is a failed read, not "no stack", the
+		// same as in parseIssueDetailsBatch: dropping it keeps the last known
+		// stack instead of erasing it.
+		node := root.Data.Repository[alias]
+		if node == nil || failed[alias] {
 			continue
 		}
 		stacks[num] = node.stack()

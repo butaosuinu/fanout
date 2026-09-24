@@ -53,7 +53,7 @@ function indexPrs(snap: Snapshot | null, repo: string): StackIndex["prs"] {
   for (const { pane, pr } of rows) {
     if (!sameRepo(pr.baseRepo, repo)) continue;
     const hit = out.get(pr.number) ?? { pr, owners: [] };
-    hit.owners.push(pane);
+    if (!hit.owners.includes(pane)) hit.owners.push(pane);
     out.set(pr.number, hit);
   }
   return out;
@@ -156,14 +156,26 @@ function walkUp(pr: PRRef, index: StackIndex, seen: Set<number>): PRRef[] {
   return out;
 }
 
-/* 同じ head に PR が複数あるときは代表(byHead)だけが連鎖を持つ。そうしないと
- * 1 行に同じ連鎖が 2 つ並ぶ。 */
+/* 連鎖を持てる PR か。同じ head に PR が複数あるときは代表(byHead)だけ — そう
+ * しないと 1 行に同じ連鎖が 2 つ並ぶ。候補かどうかは行が持つコピーで判定する。
+ * issue 側と branch 側の取得は別の時刻に着地するので、索引のコピーと状態が違う
+ * ことがある。 */
+function chainRep(pr: PRRef, index: StackIndex): boolean {
+  return chainable(pr, index.repo) && index.byHead.get(pr.headRef ?? "")?.number === pr.number;
+}
+
+/* 循環(a → b → a)には base branch が無く、どちらの端から見ても別の柱になる。 */
+function isCycle(chain: PRRef[]): boolean {
+  const base = chain[0]?.baseRef;
+  return chain.some((p) => p.headRef === base);
+}
+
 function inferredStack(pr: PRRef, index: StackIndex): StackView | null {
-  if (index.byHead.get(pr.headRef ?? "")?.number !== pr.number) return null;
+  if (!chainRep(pr, index)) return null;
   const seen = new Set([pr.number]);
   const below = walkDown(pr, index, seen);
   const chain = [...below, pr, ...walkUp(pr, index, seen)];
-  if (chain.length < 2) return null;
+  if (chain.length < 2 || isCycle(chain)) return null;
   return {
     kind: "inferred",
     baseRef: chain[0]?.baseRef ?? "",

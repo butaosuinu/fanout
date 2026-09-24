@@ -28,6 +28,10 @@ const (
 	// so running it at PR cadence would burn through GitHub's hourly API
 	// budget on busy boards and leave the dashboard permanently rate-limited.
 	defaultWaveInterval = 3 * defaultGHInterval
+	// staleStacksAfter bounds, in wave intervals, how long failing stack reads
+	// keep showing the last known stacks. Past it the stack maps go, so a preview
+	// schema that disappears cannot freeze them until a restart.
+	staleStacksAfter = 5
 )
 
 // GHProvider is the GitHub fetch surface the poller throttles and caches:
@@ -84,10 +88,12 @@ type poller struct {
 	// touched by refreshGH, which runs solely on the single gh goroutine
 	// (tests call it directly, also single-threaded), so it needs no lock.
 	lastWaveRefresh time.Time
-	// stackNums and lastStackRefresh throttle refreshStacks the same way; the
-	// gh goroutine owns them too.
+	// stackNums and lastStackRefresh throttle refreshStacks the same way, and
+	// lastStackRead is its last fully successful read. The gh goroutine owns
+	// them too.
 	stackNums        []int
 	lastStackRefresh time.Time
+	lastStackRead    time.Time
 
 	// ghMu guards the GitHub identity (repo/gh/ghErr) so the deferred resolution
 	// running on the gh goroutine can publish it while the cheap ticker reads it.
@@ -315,13 +321,13 @@ func (p *poller) runGHTick() {
 	startedAt := time.Now()
 	p.ensureResolved()
 	p.refreshGH()
+	// From the frame about to be published, so a new pull request's first frame
+	// already carries its stack instead of flipping a rebuild later.
+	p.refreshStacks(p.build())
 	// The stamp is published with the snapshot it describes: a hold reads both,
 	// and a new time next to the old rows would say "GitHub has been read since
 	// your merge" about data taken before it.
 	p.publishGHRefresh(startedAt)
-	// After the publish, so the stack read sees this tick's pull requests. The
-	// next cheap rebuild carries the result.
-	p.refreshStacks()
 }
 
 // ghFreshAfter reports whether GitHub data has been refetched since t. It is how
@@ -418,35 +424,42 @@ func (p *poller) withStacks(repo string, prs []ghissue.PRRef) []ghissue.PRRef {
 	return out
 }
 
-// refreshStacks reads the native stack of every pull request the latest
-// snapshot shows. It is its own read, apart from the PR queries the TUI and the
-// CLI gates share, because the stack schema is a preview: when it fails, the
-// stack maps go and nothing else does, so it never marks GitHub degraded.
+// refreshStacks reads the native stack of every pull request snap shows. It is
+// its own read, apart from the PR queries the TUI and the CLI gates share,
+// because the stack schema is a preview: a failure affects only the stack maps,
+// so it never marks GitHub degraded.
 //
 // It runs when the set of pull requests changes, and otherwise at the wave
 // cadence: one call per 50 pull requests a minute while someone watches.
-// Pull requests that drop off the snapshot drop out of the cache.
-func (p *poller) refreshStacks() {
+func (p *poller) refreshStacks(snap sessionview.Snapshot) {
 	repo, gh, ghErr := p.ghIdentity()
 	if gh == nil || ghErr != nil {
 		return
 	}
-	nums := p.shownPRNumbers(repo)
+	nums := shownPRNumbers(snap, repo)
 	var fetched map[int]*ghissue.PRStack
 	if len(nums) > 0 && (!slices.Equal(nums, p.stackNums) || time.Since(p.lastStackRefresh) >= p.waveInterval) {
 		p.lastStackRefresh = time.Now()
-		// A failed read keeps the last known stacks below; the error has no
-		// other consumer, since stacks never degrade the snapshot.
-		fetched, _ = gh.PRStacks(nums)
+		var err error
+		if fetched, err = gh.PRStacks(nums); err == nil {
+			p.lastStackRead = p.lastStackRefresh
+		}
 	}
 	p.stackNums = nums
+	p.keepStacks(nums, fetched, time.Since(p.lastStackRead) > staleStacksAfter*p.waveInterval)
+}
+
+// keepStacks rebuilds the cache for nums. A fresh read wins; a pull request the
+// read missed keeps its last known stack until reads have failed for too long
+// (stale). Pull requests no longer shown drop out.
+func (p *poller) keepStacks(nums []int, fetched map[int]*ghissue.PRStack, stale bool) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
 	next := make(map[int]*ghissue.PRStack, len(nums))
 	for _, num := range nums {
 		s, read := fetched[num]
-		if !read {
-			s = p.stackCache[num] // not read this time: keep the last known
+		if !read && !stale {
+			s = p.stackCache[num]
 		}
 		if s != nil {
 			next[num] = s
@@ -455,13 +468,11 @@ func (p *poller) refreshStacks() {
 	p.stackCache = next
 }
 
-// shownPRNumbers lists the distinct pull requests of this repository in the
-// latest snapshot, ascending.
-func (p *poller) shownPRNumbers(repo string) []int {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+// shownPRNumbers lists the distinct pull requests of this repository in snap,
+// ascending.
+func shownPRNumbers(snap sessionview.Snapshot, repo string) []int {
 	var nums []int
-	for _, session := range p.latest.Sessions {
+	for _, session := range snap.Sessions {
 		for i := range session.Panes {
 			for _, pr := range session.Panes[i].PRs {
 				if strings.EqualFold(pr.BaseRepo, repo) {

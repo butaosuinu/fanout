@@ -27,7 +27,7 @@ func TestPRStacks(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "fills a stacked pull request and skips layers the viewer cannot see",
+			name: "fills a stacked pull request and skips null layers",
 			output: `{"data":{"repository":{"pr_844":{"stackEntry":{"position":2},"stack":{"number":12,"size":3,"baseRefName":"main","entries":{"nodes":[
 			  {"position":1,"pullRequest":{"number":843,"state":"MERGED","mergedAt":"2026-09-01T00:00:00Z","isDraft":false,"reviewDecision":"","headRefName":"stack/a"}},
 			  {"position":2,"pullRequest":{"number":844,"state":"OPEN","mergedAt":null,"isDraft":false,"reviewDecision":"APPROVED","headRefName":"stack/b"}},
@@ -49,6 +49,11 @@ func TestPRStacks(t *testing.T) {
 			exit:    1,
 			want:    map[int]*PRStack{},
 			wantErr: "Field 'stack' doesn't exist",
+		},
+		{
+			name:   "treats a null pull request without an error as unread",
+			output: `{"data":{"repository":{"pr_844":null,"pr_845":{"stackEntry":null,"stack":null}}}}`,
+			want:   map[int]*PRStack{845: nil},
 		},
 		{
 			name:    "reads nothing when gh fails without a response",

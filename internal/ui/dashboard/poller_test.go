@@ -311,11 +311,11 @@ func TestPollerRefreshGHPopulatesManualPromptModePRAndCI(t *testing.T) {
 }
 
 // stackTick runs one GitHub tick the way runGHTick does, minus the subscriber
-// gate: refresh, publish, then the stack read.
+// gate: refresh, the stack read, then publish.
 func stackTick(p *poller) {
 	p.refreshGH()
+	p.refreshStacks(p.build())
 	p.publishGHRefresh(time.Now())
-	p.refreshStacks()
 }
 
 func newStackPoller(t *testing.T, gh *countingGH) *poller {
@@ -342,7 +342,9 @@ func TestRefreshStacksHydratesBuildWithoutTouchingCache(t *testing.T) {
 	}
 	p := newStackPoller(t, gh)
 	stackTick(p)
-	snap := p.build()
+	// The published frame itself, not a later rebuild: the tick reads stacks
+	// before it publishes, so a new PR never flashes without its stack.
+	snap := p.latest
 
 	if want := [][]int{{700}}; !reflect.DeepEqual(gh.stackCalls, want) {
 		t.Fatalf("PRStacks calls = %v, want %v", gh.stackCalls, want)
@@ -393,6 +395,15 @@ func TestRefreshStacksThrottle(t *testing.T) {
 			},
 			wantCalls: 2,
 			wantStack: stack,
+		},
+		{
+			name: "reads failing past the staleness bound drop the stacks",
+			between: func(p *poller, gh *countingGH) {
+				p.lastStackRefresh = time.Time{}
+				p.lastStackRead = time.Now().Add(-(staleStacksAfter + 1) * p.waveInterval)
+				gh.stacksErr = errors.New("field stack does not exist")
+			},
+			wantCalls: 2,
 		},
 		{
 			name: "pull request no longer in a stack leaves the cache",

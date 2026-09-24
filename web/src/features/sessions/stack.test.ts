@@ -124,10 +124,10 @@ describe("stackOf", () => {
       want: null,
     },
     {
-      name: "推定: 循環しても止まる",
+      name: "推定: 循環は連鎖にしない",
       prs: [chainPr(1, "a", "b"), chainPr(2, "b", "a")],
       of: 1,
-      want: { kind: "inferred", position: 2, size: 2, baseRef: "a", layers: [2, 1] },
+      want: null,
     },
     {
       name: "推定: fork の head は同名 branch とつながない",
@@ -181,6 +181,26 @@ describe("stackOf", () => {
       expect(summary(stackOf(pr as PRRef, index))).toEqual(tt.want);
     });
   }
+
+  it("推定: 行が持つコピーがマージ済みなら、索引のコピーが open でも連鎖にしない", () => {
+    const openA = chainPr(1, "a", "main");
+    const mergedA = { ...openA, state: "MERGED", mergedAt: "2026-09-01T00:00:00Z" };
+    expect(stackOf(mergedA, indexOf(openA, chainPr(2, "b", "a")))).toBeNull();
+  });
+
+  it("同じ PR を 2 度持つ行も、行名は 1 度だけ", () => {
+    const own = chainPr(844, "s/b", "s/a", { stack: native12(2, entries12) });
+    const other = chainPr(845, "s/c", "s/b", { stack: native12(3, entries12) });
+    const index = buildStackIndex(
+      makeSnapshot([
+        makeSession("#1", [
+          makePane({ issueNum: 200, slug: "row-844", prs: [own] }),
+          makePane({ issueNum: 201, slug: "row-845", prs: [other, other] }),
+        ]),
+      ]),
+    );
+    expect(stackOf(own, index)?.layers[2]?.owners.map((o) => o.slug)).toEqual(["row-845"]);
+  });
 
   it("他の行が持つ層は、その行のコピー(信号つき)と行を引く", () => {
     const own = chainPr(844, "s/b", "s/a", { stack: native12(2, entries12) });
