@@ -67,16 +67,9 @@ func (s *OwnedSession) VerifyWorktreeSetupPolicy(ctx context.Context) error {
 	if s == nil || s.backend == nil {
 		return fmt.Errorf("herdr owned session is nil")
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlockPrivateFile(lock)
-	probed, err := s.backend.probeOwned(ctx, admission)
-	if err != nil {
-		return err
-	}
-	return s.backend.verifyEmptyPluginRegistry(ctx, probed)
+	return s.backend.withOwned(ctx, ownedOperationLane, ownedErrors{}, func(call ownedCall) error {
+		return s.backend.verifyEmptyPluginRegistry(ctx, call.probed)
+	})
 }
 
 func (b *Backend) verifyEmptyPluginRegistry(ctx context.Context, probed probeResult) error {
@@ -108,16 +101,16 @@ func (s *OwnedSession) ObserveWorkspaces(ctx context.Context) ([]corebackend.Wor
 	if s == nil || s.backend == nil {
 		return nil, fmt.Errorf("herdr owned session is nil")
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	var workspaces []corebackend.WorkspaceObservation
+	err := s.backend.withOwned(ctx, ownedOperationLane, ownedErrors{}, func(call ownedCall) error {
+		var err error
+		workspaces, err = s.backend.observeOwnedWorkspaces(ctx, call.probed)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer unlockPrivateFile(lock)
-	probed, err := s.backend.probeOwned(ctx, admission)
-	if err != nil {
-		return nil, err
-	}
-	return s.backend.observeOwnedWorkspaces(ctx, probed)
+	return workspaces, nil
 }
 
 // WorktreeRoute returns the repository and route sealed by the current owned

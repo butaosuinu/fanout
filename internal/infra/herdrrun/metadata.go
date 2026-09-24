@@ -50,16 +50,9 @@ func (s *OwnedSession) ReportMetadata(ctx context.Context, report corebackend.Me
 	if err := validateMetadataReport(report); err != nil {
 		return err
 	}
-	admission, lock, err := s.backend.acquireOwnedMutation(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlockPrivateFile(lock)
-	probed, err := s.backend.probeOwned(ctx, admission)
-	if err != nil {
-		return err
-	}
-	return s.backend.reportBracketedMetadata(ctx, probed, report)
+	return s.backend.withOwned(ctx, ownedMutationLane, ownedErrors{}, func(call ownedCall) error {
+		return s.backend.reportBracketedMetadata(ctx, call.probed, report)
+	})
 }
 
 // reportBracketedMetadata brackets every report individually: the target is
