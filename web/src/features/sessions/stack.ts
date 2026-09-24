@@ -19,19 +19,26 @@ export interface StackView {
   layers: StackLayer[];
 }
 
+/* PR が載る柱と、柱の中での位置。 */
+interface Placement {
+  view: StackView;
+  position: number;
+}
+
 /* snapshot 全体(フィルタ前)から引く索引。フィルタ後の行から組むと、隠れた行が
  * 持つ層の行名が消える。この repository の PR だけを番号で持つ — native stack も
- * 推定連鎖も repository をまたがない。 */
+ * 推定連鎖も repository をまたがない。
+ *
+ * 柱はここで一度だけ組み、PR 番号ごとに引く。どの PR も高々 1 本の柱に載り、柱の
+ * 層はどれも同じ柱を指す。行ごとに柱を組むと、取得時刻の違うコピー(古い
+ * entries、retarget 前後の base)から別々の柱ができ、同じ PR が 2 度出たり、行の
+ * PR が消えたりする。 */
 export interface StackIndex {
   repo: string;
   prs: Map<number, { pr: PRRef; owners: PaneView[] }>;
-  /* native stack の番号ごとの、snapshot にある所属 PR。 */
-  members: Map<number, PRRef[]>;
-  /* native stack に載っていると分かっている PR の番号。 */
+  /* native stack に載っていると分かっている PR の番号。推定には混ぜない。 */
   native: Set<number>;
-  /* 推定連鎖の候補。head branch ごとに 1 本(先に見つかった open の PR)。 */
-  byHead: Map<string, PRRef>;
-  byBase: Map<string, PRRef[]>;
+  placed: Map<number, Placement>;
 }
 
 export function sameRepo(a: string | undefined, repo: string): boolean {
@@ -41,9 +48,11 @@ export function sameRepo(a: string | undefined, repo: string): boolean {
 export function buildStackIndex(snap: Snapshot | null): StackIndex {
   const repo = snap?.repo ?? "";
   const prs = indexPrs(snap, repo);
-  const native = nativeNumbers(prs);
-  const byHead = chainHeads(prs, repo, native);
-  return { repo, prs, members: stackMembers(prs), native, byHead, byBase: groupByBase(byHead) };
+  const placed = new Map<number, Placement>();
+  placeNative({ prs, placed, views: new Map() });
+  const native = new Set(placed.keys());
+  placeInferred(prs, { repo, native, placed });
+  return { repo, prs, native, placed };
 }
 
 export const EMPTY_STACK_INDEX = buildStackIndex(null);
@@ -62,25 +71,49 @@ function indexPrs(snap: Snapshot | null, repo: string): StackIndex["prs"] {
   return out;
 }
 
-function stackMembers(prs: StackIndex["prs"]): Map<number, PRRef[]> {
-  const out = new Map<number, PRRef[]>();
-  for (const { pr } of prs.values()) {
-    if (!pr.stack) continue;
-    appendTo(out, pr.stack.number, pr);
-  }
-  return out;
+/* 層の PR は行のコピーがあればそれ(CI などの信号を全部持つ)、無ければ stack 取得の
+ * 軽量コピー。 */
+function layer(position: number, pr: PRRef, prs: StackIndex["prs"]): StackLayer {
+  const hit = prs.get(pr.number);
+  return { position, pr: hit?.pr ?? pr, owners: hit?.owners ?? [] };
 }
 
-/* native stack に載っていると分かっている PR。自分の stack の取得に失敗した PR
- * も、同じ stack の別の PR の entries には載っていることがある。 */
-function nativeNumbers(prs: StackIndex["prs"]): Set<number> {
-  const out = new Set<number>();
-  for (const { pr } of prs.values()) {
-    if (!pr.stack) continue;
-    out.add(pr.number);
-    for (const e of pr.stack.entries ?? []) out.add(e.pr.number);
+interface NativePlacing {
+  prs: StackIndex["prs"];
+  placed: Map<number, Placement>;
+  views: Map<number, StackView>;
+}
+
+/* native stack を番号ごとに 1 本の柱にする。先に各 PR が自分で読んだ所属を置き、
+ * entries はその後で空きを埋めるだけ — 読み取りに失敗した PR は最後に分かった
+ * stack を保つので、古い entries と新しい所属が食い違いうる。entries は取得前・
+ * 失敗時には無く、20 層で打ち切られもするので、snapshot にある所属 PR が欠けた層を
+ * 埋める。 */
+function placeNative(ctx: NativePlacing): void {
+  const members = [...ctx.prs.values()].flatMap(({ pr }) =>
+    pr.stack ? [{ pr, stack: pr.stack }] : [],
+  );
+  for (const { pr, stack } of members) place(ctx, stack, { position: stack.position, pr });
+  for (const { stack } of members) {
+    for (const e of stack.entries ?? []) place(ctx, stack, e);
   }
-  return out;
+  for (const view of ctx.views.values()) view.layers.sort((a, b) => a.position - b.position);
+}
+
+function place(ctx: NativePlacing, stack: PRStack, e: PRStackEntry): void {
+  if (ctx.placed.has(e.pr.number)) return;
+  const view = ctx.views.get(stack.number) ?? {
+    kind: "native",
+    number: stack.number,
+    baseRef: stack.baseRef,
+    size: 0,
+    position: 0,
+    layers: [],
+  };
+  view.size = Math.max(view.size, stack.size);
+  view.layers.push(layer(e.position, e.pr, ctx.prs));
+  ctx.views.set(stack.number, view);
+  ctx.placed.set(e.pr.number, { view, position: e.position });
 }
 
 /* 推定連鎖に入れてよい PR。open の PR だけ — マージ済みの PR を下の層に数えると、
@@ -93,6 +126,25 @@ function chainable(pr: PRRef, repo: string, native: Set<number>): boolean {
   return (pr.state ?? "").toUpperCase() === "OPEN" && sameRepo(pr.headRepo, repo);
 }
 
+interface InferredPlacing {
+  repo: string;
+  native: Set<number>;
+  placed: Map<number, Placement>;
+}
+
+/* 推定連鎖も索引のコピーだけで組む。行のコピーを混ぜると、retarget の前後で base が
+ * 違うコピーから別々の連鎖ができる。 */
+function placeInferred(prs: StackIndex["prs"], ctx: InferredPlacing): void {
+  const byHead = chainHeads(prs, ctx.repo, ctx.native);
+  const links = { byHead, byBase: groupByBase(byHead) };
+  for (const pr of byHead.values()) {
+    if (ctx.placed.has(pr.number)) continue;
+    const chain = chainOf(pr, links);
+    if (chain) placeChain(chain, prs, ctx.placed);
+  }
+}
+
+/* 推定連鎖の候補。head branch ごとに 1 本(先に見つかった open の PR)。 */
 function chainHeads(prs: StackIndex["prs"], repo: string, native: Set<number>): Map<string, PRRef> {
   const out = new Map<string, PRRef>();
   for (const { pr } of prs.values()) {
@@ -104,129 +156,94 @@ function chainHeads(prs: StackIndex["prs"], repo: string, native: Set<number>): 
 
 function groupByBase(byHead: Map<string, PRRef>): Map<string, PRRef[]> {
   const out = new Map<string, PRRef[]>();
-  for (const pr of byHead.values()) appendTo(out, pr.baseRef ?? "", pr);
+  for (const pr of byHead.values()) {
+    const base = pr.baseRef ?? "";
+    const list = out.get(base);
+    if (list) list.push(pr);
+    else out.set(base, [pr]);
+  }
   return out;
 }
 
-function appendTo<K>(m: Map<K, PRRef[]>, key: K, pr: PRRef): void {
-  const list = m.get(key);
-  if (list) list.push(pr);
-  else m.set(key, [pr]);
-}
-
-/* entries の層のうち、自分の stack として別の stack を読んだ PR。読み取りに失敗した
- * PR は最後に分かった stack を保つので、古い entries と新しい所属が食い違いうる。
- * 新しい方を採らないと、同じ PR が 2 つの stack map に出る。 */
-function movedAway(e: PRStackEntry, stack: PRStack, index: StackIndex): boolean {
-  const own = index.prs.get(e.pr.number)?.pr.stack;
-  return !!own && own.number !== stack.number;
-}
-
-function layer(position: number, pr: PRRef, index: StackIndex): StackLayer {
-  const hit = index.prs.get(pr.number);
-  return { position, pr: hit?.pr ?? pr, owners: hit?.owners ?? [] };
-}
-
-/* entries は取得前・失敗時には無く、20 層で打ち切られもする。欠けた層は snapshot
- * にある同じ stack の PR(自分を含む)で埋める — さもないと行の PR がドロワーから
- * 消える。総数は stack.size が持っている。 */
-function nativeStack(stack: PRStack, pr: PRRef, index: StackIndex): StackView {
-  const entries = (stack.entries ?? []).filter((e) => !movedAway(e, stack, index));
-  for (const m of [pr, ...(index.members.get(stack.number) ?? [])]) {
-    if (entries.some((e) => e.pr.number === m.number)) continue;
-    entries.push({ position: m.stack?.position ?? 0, pr: m });
-  }
-  const layers = entries
-    .map((e) => layer(e.position, e.pr, index))
-    .sort((a, b) => a.position - b.position);
-  return {
-    kind: "native",
-    number: stack.number,
-    baseRef: stack.baseRef,
-    size: stack.size,
-    position: stack.position,
-    layers,
-  };
+interface Links {
+  byHead: Map<string, PRRef>;
+  byBase: Map<string, PRRef[]>;
 }
 
 /* 自分の head を base に持つ PR が、ちょうど 1 本ならそれ。2 本以上は木になり、
- * 1 本の柱には描けない。上下どちらへたどるときもこの 1 本だけでつなぐので、PR は
- * 高々 1 つの連鎖にしか入らない — 同じ PR がドロワーに 2 度出ることも、連鎖の
- * 選び方で行の PR が消えることもない。 */
-function soleChild(pr: PRRef, index: StackIndex): PRRef | undefined {
-  const ups = index.byBase.get(pr.headRef ?? "") ?? [];
+ * 1 本の柱には描けない。上下どちらへたどるときもこの 1 本だけでつなぐので、連鎖は
+ * どの層から組んでも同じになる。 */
+function soleChild(pr: PRRef, links: Links): PRRef | undefined {
+  const ups = links.byBase.get(pr.headRef ?? "") ?? [];
   return ups.length === 1 ? ups[0] : undefined;
 }
 
 /* base を head に持つ PR を下へたどる。戻り値は下の層から順。 */
-function walkDown(pr: PRRef, index: StackIndex, seen: Set<number>): PRRef[] {
+function walkDown(pr: PRRef, links: Links, seen: Set<number>): PRRef[] {
   const out: PRRef[] = [];
   let cur = pr;
-  let next = index.byHead.get(pr.baseRef ?? "");
-  while (next && !seen.has(next.number) && soleChild(next, index)?.number === cur.number) {
+  let next = links.byHead.get(pr.baseRef ?? "");
+  while (next && !seen.has(next.number) && soleChild(next, links)?.number === cur.number) {
     seen.add(next.number);
     out.unshift(next);
     cur = next;
-    next = index.byHead.get(next.baseRef ?? "");
+    next = links.byHead.get(next.baseRef ?? "");
   }
   return out;
 }
 
-function walkUp(pr: PRRef, index: StackIndex, seen: Set<number>): PRRef[] {
+function walkUp(pr: PRRef, links: Links, seen: Set<number>): PRRef[] {
   const out: PRRef[] = [];
-  let next = soleChild(pr, index);
+  let next = soleChild(pr, links);
   while (next && !seen.has(next.number)) {
     seen.add(next.number);
     out.push(next);
-    next = soleChild(next, index);
+    next = soleChild(next, links);
   }
   return out;
 }
 
-/* 連鎖を持てる PR か。同じ head に PR が複数あるときは代表(byHead)だけ — そう
- * しないと 1 行に同じ連鎖が 2 つ並ぶ。候補かどうかは行が持つコピーで判定する。
- * issue 側と branch 側の取得は別の時刻に着地するので、索引のコピーと状態が違う
- * ことがある。 */
-function chainRep(pr: PRRef, index: StackIndex): boolean {
-  if (pr.stack || !chainable(pr, index.repo, index.native)) return false;
-  return index.byHead.get(pr.headRef ?? "")?.number === pr.number;
-}
-
-/* 循環(a → b → a)には base branch が無く、どちらの端から見ても別の柱になる。 */
+/* 循環(a → b → a)には base branch が無い。 */
 function isCycle(chain: PRRef[]): boolean {
   const base = chain[0]?.baseRef;
   return chain.some((p) => p.headRef === base);
 }
 
-function inferredStack(pr: PRRef, index: StackIndex): StackView | null {
-  if (!chainRep(pr, index)) return null;
+function chainOf(pr: PRRef, links: Links): PRRef[] | null {
   const seen = new Set([pr.number]);
-  const below = walkDown(pr, index, seen);
-  const chain = [...below, pr, ...walkUp(pr, index, seen)];
-  if (chain.length < 2 || isCycle(chain)) return null;
-  return {
+  const chain = [...walkDown(pr, links, seen), pr, ...walkUp(pr, links, seen)];
+  return chain.length < 2 || isCycle(chain) ? null : chain;
+}
+
+function placeChain(chain: PRRef[], prs: StackIndex["prs"], placed: Map<number, Placement>): void {
+  const view: StackView = {
     kind: "inferred",
     baseRef: chain[0]?.baseRef ?? "",
     size: chain.length,
-    position: below.length + 1,
-    layers: chain.map((p, i) => layer(i + 1, p, index)),
+    position: 0,
+    layers: chain.map((p, i) => layer(i + 1, p, prs)),
   };
+  chain.forEach((p, i) => placed.set(p.number, { view, position: i + 1 }));
 }
 
-/* PR が属する stack。native を推定より優先する。 */
+/* PR が載る柱。推定の柱は索引のコピーで組むので、行のコピーが候補でない(取得時刻の
+ * 違いでマージ済みに見えるなど)行では出さない。 */
 export function stackOf(pr: PRRef, index: StackIndex): StackView | null {
   if (!sameRepo(pr.baseRepo, index.repo)) return null;
-  return pr.stack ? nativeStack(pr.stack, pr, index) : inferredStack(pr, index);
+  const hit = index.placed.get(pr.number);
+  if (!hit) return null;
+  if (hit.view.kind === "inferred" && !chainable(pr, index.repo, index.native)) return null;
+  return { ...hit.view, position: hit.position };
 }
 
 export type PrGroup = { key: string; stack: StackView } | { key: string; pr: PRRef };
 
 /* ドロワーの並び。stack に属する PR は stack ごとに 1 ブロックへまとめ、残りは
- * 今までどおり 1 行ずつ。順序は wire 順での初出順。
+ * 今までどおり 1 行ずつ。順序は wire 順での初出順。同じ柱の PR は同じ層を持つので、
+ * 先に見つかった 1 つを描けば全員が載る。
  *
- * どこかの stack map に層として載る PR は、平坦な行に重ねない。連鎖の判定は索引の
- * コピーでたどるので、取得時刻の違いで行のコピーと状態が食い違うと、同じ PR が
- * 平坦な行と層の両方に出て、Delete branch も 2 つ並んでしまう。 */
+ * 柱に層として載る PR は、平坦な行に重ねない。推定の柱は行のコピーでは出さないこと
+ * があり、そのとき同じ PR が平坦な行と層の両方に出て、Delete branch も 2 つ並ぶ。 */
 export function groupPrs(prs: PRRef[], index: StackIndex): PrGroup[] {
   const views = prs.map((pr) => ({ pr, stack: stackOf(pr, index) }));
   const layered = new Set(views.flatMap((v) => v.stack?.layers.map((l) => l.pr.number) ?? []));

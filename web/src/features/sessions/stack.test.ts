@@ -266,7 +266,8 @@ describe("groupPrs", () => {
       makeSnapshot([makeSession("#1", [makePane({ prs: [one, two, three] })])]),
     );
     expect(groupPrs([one, two, three], index).map((g) => g.key)).toEqual(["native:10"]);
-    expect(stackOf(two, index)).toBeNull();
+    // 自分の所属を読めなかった層も、entries から native の柱に載る
+    expect(summary(stackOf(two, index))).toMatchObject({ kind: "native", position: 2 });
   });
 
   it("古い stack の entries に残った PR は、自分で読んだ新しい stack にだけ載せる", () => {
@@ -292,6 +293,52 @@ describe("groupPrs", () => {
     const index = buildStackIndex(makeSnapshot([makeSession("#1", [makePane({ prs: [a, b] })])]));
     expect(summary(stackOf(a, index))?.layers).toEqual([1]);
     expect(groupPrs([a, b], index).map((g) => g.key)).toEqual(["native:12", "native:13"]);
+  });
+
+  it("古い entries と新しい entries が混ざっても、同じ stack の PR は 1 本の柱にすべて載る", () => {
+    // A は古い #12(A, B)、B は新しい #12(A, B, C)を読み、C 自身の読み取りは失敗した
+    const a = chainPr(1, "a", "main", {
+      stack: {
+        ...native12(1, [
+          { position: 1, pr: slim(1, "a") },
+          { position: 2, pr: slim(2, "b") },
+        ]),
+        size: 2,
+      },
+    });
+    const b = chainPr(2, "b", "a", {
+      stack: {
+        ...native12(2, [
+          { position: 1, pr: slim(1, "a") },
+          { position: 2, pr: slim(2, "b") },
+          { position: 3, pr: slim(3, "c") },
+        ]),
+        size: 3,
+      },
+    });
+    const c = chainPr(3, "c", "b");
+    const index = buildStackIndex(
+      makeSnapshot([makeSession("#1", [makePane({ prs: [a, b, c] })])]),
+    );
+    expect(groupPrs([a, b, c], index).map((g) => g.key)).toEqual(["native:12"]);
+    expect(summary(stackOf(a, index))).toMatchObject({ size: 3, layers: [1, 2, 3] });
+  });
+
+  it("retarget の前後でコピーの base が違っても、推定の柱は 1 本", () => {
+    // 別の行が先に a → b → c を持ち、この行の b は取得の後で main へ retarget された
+    const a = chainPr(1, "a", "main");
+    const b = chainPr(2, "b", "a");
+    const c = chainPr(3, "c", "b");
+    const retargeted = { ...b, baseRef: "main" };
+    const index = buildStackIndex(
+      makeSnapshot([
+        makeSession("#1", [
+          makePane({ issueNum: 200, slug: "other", prs: [a, b, c] }),
+          makePane({ issueNum: 201, slug: "this", prs: [retargeted, c] }),
+        ]),
+      ]),
+    );
+    expect(groupPrs([retargeted, c], index).map((g) => g.key)).toEqual(["inferred:1"]);
   });
 
   it("別 repository の同番号 PR は別の行のまま", () => {
