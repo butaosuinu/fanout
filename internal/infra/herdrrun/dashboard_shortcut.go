@@ -89,20 +89,18 @@ func (b *Backend) SyncDashboardShortcut(options corebackend.DashboardShortcutOpt
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*commandTimeout)
 	defer cancel()
-	admission, lock, err := b.acquireOwnedMutation(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlockPrivateFile(lock)
-	probed, err := b.probeOwned(ctx, admission)
-	if err != nil {
-		return err
-	}
+	return b.withOwned(ctx, ownedMutationLane, ownedErrors{}, func(call ownedCall) error {
+		return syncDashboardShortcutOwned(ctx, call, options)
+	})
+}
+
+func syncDashboardShortcutOwned(ctx context.Context, call ownedCall, options corebackend.DashboardShortcutOptions) error {
+	admission, probed := call.admission, call.probed
 	authErr := validateDashboardAuthentication(admission.marker, options)
 	if authErr != nil {
 		options.Enabled = false
 	}
-	options, err = resolveDashboardShortcutOwners(options)
+	options, err := resolveDashboardShortcutOwners(options)
 	if err != nil {
 		return err
 	}
@@ -113,7 +111,7 @@ func (b *Backend) SyncDashboardShortcut(options corebackend.DashboardShortcutOpt
 	if err := stageDashboardShortcutConfig(layout, admission.marker, options); err != nil {
 		return errors.Join(authErr, err)
 	}
-	if err := b.reloadDashboardShortcutConfig(ctx, probed); err != nil {
+	if err := call.b.reloadDashboardShortcutConfig(ctx, probed); err != nil {
 		return errors.Join(authErr, err)
 	}
 	return authErr
