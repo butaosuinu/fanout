@@ -3,6 +3,7 @@ package herdrrun
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -164,6 +165,30 @@ func TestFocusOwnedRefusesToClaimAnotherAgentName(t *testing.T) {
 				t.Fatal("BindOwnedTarget() succeeded, want identity mismatch")
 			}
 		})
+	}
+}
+
+// A bound backend runs on a copy of the session's transport: the injected
+// command runner and the binary admissions it already proved carry over.
+func TestBindOwnedTargetKeepsInjectedTransport(t *testing.T) {
+	h := newOwnedHarness(t)
+	target := h.target()
+	source := h.session.Backend()
+	bound, err := source.BindOwnedTarget(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(source.admitted) == 0 || !maps.Equal(bound.admitted, source.admitted) {
+		t.Fatalf("bound admitted = %v, want session admissions %v", bound.admitted, source.admitted)
+	}
+	h.fake.respond = func(args []string) ([]byte, error) {
+		if slices.Equal(args, []string{"pane", "read", target.Ref.Pane, "--source", "visible", "--format", "text"}) {
+			return []byte("from fake\n"), nil
+		}
+		return nil, fmt.Errorf("unexpected args %v", args)
+	}
+	if content, err := bound.Read(target.Ref, 0); err != nil || content != "from fake\n" {
+		t.Fatalf("bound Read() = %q, %v, want the injected fake output", content, err)
 	}
 }
 
