@@ -1657,6 +1657,122 @@ func TestBoundOwnedWorkspaceCloserRejectsWorktreeTarget(t *testing.T) {
 	}
 }
 
+func TestCloseAttachedWorkspaceAcceptsGenericBinding(t *testing.T) {
+	for _, paneLess := range []bool{false, true} {
+		for _, metadata := range []bool{false, true} {
+			t.Run(fmt.Sprintf("paneLess=%t/metadata=%t", paneLess, metadata), func(t *testing.T) {
+				h := newOwnedHarness(t)
+				target := h.target()
+				binding := ownedPaneBinding(target)
+				binding.RepoKey = ""
+				h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+					for i := range *snapshot.Panes {
+						if (*snapshot.Panes)[i].WorkspaceID == target.Ref.Workspace {
+							(*snapshot.Panes)[i].CWD = &h.checkout
+						}
+					}
+					for i := range *snapshot.Workspaces {
+						if (*snapshot.Workspaces)[i].WorkspaceID == target.Ref.Workspace && !metadata {
+							(*snapshot.Workspaces)[i].Worktree = nil
+						}
+					}
+					if paneLess {
+						removeAttachedSnapshotPanes(snapshot, target.Ref.Workspace)
+					}
+				})
+				h.fake.respond = func(args []string) ([]byte, error) {
+					if !slices.Equal(args, []string{"workspace", "close", target.Ref.Workspace}) {
+						return nil, fmt.Errorf("unexpected close args %v", args)
+					}
+					h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+						removeAttachedSnapshotPanes(snapshot, target.Ref.Workspace)
+						*snapshot.Workspaces = slices.DeleteFunc(*snapshot.Workspaces, func(w workspaceJSON) bool { return w.WorkspaceID == target.Ref.Workspace })
+					})
+					return nil, nil
+				}
+				if err := h.session.VerifyAttachedWorkspaceClose(context.Background(), binding); err != nil {
+					t.Fatal(err)
+				}
+				assertNoWorkspaceCloseCommand(t, h.fake.commands, target.Ref.Workspace)
+				if err := h.session.CloseAttachedWorkspace(context.Background(), binding); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(h.checkout); err != nil {
+					t.Fatalf("checkout lost: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func removeAttachedSnapshotPanes(snapshot *snapshotJSON, workspace string) {
+	*snapshot.Panes = slices.DeleteFunc(*snapshot.Panes, func(p paneJSON) bool { return p.WorkspaceID == workspace })
+	*snapshot.Agents = slices.DeleteFunc(*snapshot.Agents, func(a agentJSON) bool { return a.WorkspaceID == workspace })
+}
+
+func TestCloseAttachedWorkspaceRejectsChangedGenericBinding(t *testing.T) {
+	for name, change := range map[string]func(*corebackend.PaneBinding){
+		"session":  func(b *corebackend.PaneBinding) { b.SessionID = "foreign" },
+		"socket":   func(b *corebackend.PaneBinding) { b.SocketPath = "/foreign.sock" },
+		"terminal": func(b *corebackend.PaneBinding) { b.TerminalID = "foreign" },
+		"label":    func(b *corebackend.PaneBinding) { b.WorkspaceLabel = "foreign" },
+		"provider": func(b *corebackend.PaneBinding) { b.Agent = "foreign" },
+		"agent":    func(b *corebackend.PaneBinding) { b.AgentID = "foreign" },
+		"checkout": func(b *corebackend.PaneBinding) { b.WorktreePath = "/foreign" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newOwnedHarness(t)
+			target := h.target()
+			binding := ownedPaneBinding(target)
+			binding.RepoKey = ""
+			change(&binding)
+			if err := h.session.VerifyAttachedWorkspaceClose(context.Background(), binding); !errors.Is(err, corebackend.ErrOwnedIdentityMismatch) {
+				t.Fatalf("verify = %v", err)
+			}
+			err := h.session.CloseAttachedWorkspace(context.Background(), binding)
+			if !errors.Is(err, corebackend.ErrOwnedIdentityMismatch) || !errors.Is(err, corebackend.ErrMutationNotIssued) {
+				t.Fatalf("close = %v", err)
+			}
+			assertNoWorkspaceCloseCommand(t, h.fake.commands, target.Ref.Workspace)
+		})
+	}
+}
+
+func TestCloseAttachedWorkspaceRejectsAmbiguousGenericWorkspace(t *testing.T) {
+	for _, ambiguity := range []string{"label", "extra pane", "repository group"} {
+		t.Run(ambiguity, func(t *testing.T) {
+			h := newOwnedHarness(t)
+			target := h.target()
+			binding := ownedPaneBinding(target)
+			binding.RepoKey = ""
+			h.fake.snapshot = mutateSnapshot(h.fake.snapshot, func(snapshot *snapshotJSON) {
+				switch ambiguity {
+				case "label":
+					*snapshot.Workspaces = append(*snapshot.Workspaces, workspaceJSON{WorkspaceID: "duplicate", Label: target.WorkspaceLabel})
+				case "extra pane":
+					pane := (*snapshot.Panes)[1]
+					pane.PaneID, pane.TerminalID = "w2:p2", "extra-terminal"
+					*snapshot.Panes = append(*snapshot.Panes, pane)
+				case "repository group":
+					for i := range *snapshot.Workspaces {
+						if (*snapshot.Workspaces)[i].WorkspaceID == target.Ref.Workspace {
+							(*snapshot.Workspaces)[i].Worktree.IsLinked = false
+						}
+					}
+					*snapshot.Workspaces = append(*snapshot.Workspaces, workspaceJSON{WorkspaceID: "other", Label: "other", Worktree: &worktreeInfoJSON{RepoKey: h.commonDir, RepoRoot: h.root, CheckoutPath: h.root}})
+				}
+			})
+			if err := h.session.VerifyAttachedWorkspaceClose(context.Background(), binding); err == nil {
+				t.Fatal("unsafe workspace passed verification")
+			}
+			if err := h.session.CloseAttachedWorkspace(context.Background(), binding); !errors.Is(err, corebackend.ErrMutationNotIssued) {
+				t.Fatalf("close = %v", err)
+			}
+			assertNoWorkspaceCloseCommand(t, h.fake.commands, target.Ref.Workspace)
+		})
+	}
+}
+
 func TestCloseAttachedWorkspaceClosesMatchingPaneLessWorkspace(t *testing.T) {
 	h := newOwnedHarness(t)
 	target := h.target()

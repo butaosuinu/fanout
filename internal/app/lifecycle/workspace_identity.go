@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
 	"github.com/butaosuinu/fanout/internal/core/backend"
+	"github.com/butaosuinu/fanout/internal/core/telemetry"
 	"github.com/butaosuinu/fanout/internal/infra/state"
 	"github.com/butaosuinu/fanout/internal/infra/worktree"
 )
@@ -65,9 +68,137 @@ func resourceFromPane(pane state.Pane) state.RuntimeResource {
 		Label:       pane.WorkspaceLabel,
 		PaneID:      pane.PaneID,
 		TerminalID:  pane.TerminalID,
-		CurrentPath: filepath.Clean(pane.WorktreePath),
-		RepoKey:     filepath.Clean(pane.RepoKey),
-		RepoRoot:    filepath.Clean(pane.RepoRoot),
+		CurrentPath: state.CleanRuntimeResourcePath(pane.WorktreePath),
+		RepoKey:     state.CleanRuntimeResourcePath(pane.RepoKey),
+		RepoRoot:    state.CleanRuntimeResourcePath(pane.RepoRoot),
+	}
+}
+
+// A finalized attach consumes its launch intent into the row. Direct providers
+// have no telemetry nonce; their saved agent record and executable bind the launch.
+func validateSharedAttachedWorkspaceIdentity(pane state.Pane) error {
+	required := []string{
+		pane.Parent, pane.SourceParent, pane.PaneID, pane.WorkspaceID, pane.WorkspaceLabel,
+		pane.TerminalID, pane.SessionID, pane.SocketPath, pane.Agent, pane.AgentID,
+		pane.WorktreePath, pane.BranchName, pane.LaunchExecutable,
+	}
+	for _, value := range required {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%w: saved attached launch identity is incomplete", backend.ErrOwnedIdentityMismatch)
+		}
+	}
+	if slices.Contains([]bool{
+		workspaceRuntimeRow(pane), pane.IsAttachedAgent(), pane.IssueNum < 0, pane.TaskID == "",
+		!pane.BranchCreated, filepath.IsAbs(pane.WorktreePath), filepath.IsAbs(pane.LaunchExecutable),
+		validSharedAttachedLaunchGeneration(pane),
+	}, false) {
+		return fmt.Errorf("%w: saved attached row is not a shared launch", backend.ErrOwnedIdentityMismatch)
+	}
+	return nil
+}
+
+func validSharedAttachedLaunchGeneration(pane state.Pane) bool {
+	if pane.EmitterRowKey == "" && pane.LaunchNonce == "" && pane.EmitterNonce == "" {
+		return true // Direct providers have no telemetry generation.
+	}
+	return pane.EmitterRowKey != "" && telemetry.ValidNonce(pane.LaunchNonce) && telemetry.ValidNonce(pane.EmitterNonce)
+}
+
+func sharedAttachedLaunchIntent(journal *state.LockedLaunchJournal, projectRoot string, pane state.Pane) (state.LaunchIntent, bool, error) {
+	id, err := state.CoordinatorIntentID(panelaunch.ManualParentRef, projectRoot, pane.IssueNum)
+	if err != nil {
+		return state.LaunchIntent{}, false, err
+	}
+	intent, found := journal.FindIntent(id)
+	if !found {
+		return intent, false, nil // Successful finalization consumes this intent.
+	}
+	savedID, identityErr := state.CoordinatorIntentID(intent.Parent, intent.OwnerProjectRoot, intent.IssueNum)
+	if identityErr != nil || savedID != id || !sharedAttachedLaunchMatches(intent, pane) {
+		return intent, true, fmt.Errorf("%w: attached launch intent conflicts with its saved row", backend.ErrOwnedIdentityMismatch)
+	}
+	return intent, true, nil
+}
+
+func sharedAttachedLaunchMatches(intent state.LaunchIntent, pane state.Pane) bool {
+	launch := intent.Launch
+	if launch == nil {
+		return false
+	}
+	return !slices.Contains([]bool{
+		intent.Kind == state.IntentCoordinator,
+		intent.Status == state.IntentRealized || intent.Status == state.IntentManualCleanupRequired,
+		intent.RuntimeParent == pane.RuntimeParent || pane.RuntimeParent == "" && intent.RuntimeParent == panelaunch.ManualParentRef,
+		intent.WorkspaceLabel == pane.WorkspaceLabel, launchResourceMatchesCleanupPane(intent.Resource, pane),
+		intent.Session == pane.SessionID, intent.SocketPath == pane.SocketPath,
+		launch.TokenIssued, launch.Agent == pane.Agent, launch.AgentName == pane.AgentID,
+		launch.Executable == pane.LaunchExecutable, slices.Equal(launch.Args, pane.LaunchArgs),
+		pane.LaunchNonce == "" || pane.LaunchNonce == launch.Nonce,
+		pane.EmitterRowKey == "" || pane.EmitterRowKey == intent.ID,
+	}, false)
+}
+
+func sharedAttachedSourceMatches(pane, child state.Pane) bool {
+	if pane.SourceTaskID != child.TaskID {
+		return false
+	}
+	if pane.SourceParent == child.Parent && pane.SourceIssueNum == child.IssueNum {
+		return true
+	}
+	if issueNum, ok := panelaunch.PaneIssueParentNum(child); ok {
+		return pane.SourceParent == strconv.Itoa(issueNum) && pane.SourceIssueNum == issueNum
+	}
+	// TUI attach resolves issue-sourced plans to their persisted runtime parent.
+	return strings.HasPrefix(child.Parent, "plan:") && pane.SourceParent == child.RuntimeParent &&
+		pane.SourceIssueNum == child.IssueNum
+}
+
+func sharedAttachedWorkspaceOwner(locked *state.LockedStore, pane state.Pane) (state.Pane, error) {
+	var matches []state.Pane
+	for _, candidate := range locked.Panes {
+		if sharedAttachedSourceMatches(pane, candidate) && !candidate.IsShell() && !candidate.IsAttachedAgent() {
+			matches = append(matches, candidate)
+		}
+	}
+	if len(matches) != 1 {
+		return state.Pane{}, fmt.Errorf("%w: saved attached source has %d child rows", backend.ErrOwnedIdentityMismatch, len(matches))
+	}
+	child := matches[0]
+	if err := validateWorkspacePaneIdentity(child); err != nil {
+		return state.Pane{}, fmt.Errorf("%w: %w", backend.ErrOwnedIdentityMismatch, err)
+	}
+	if !sharedAttachedCheckoutMatches(pane, child) {
+		return state.Pane{}, fmt.Errorf("%w: saved attached source checkout or route changed", backend.ErrOwnedIdentityMismatch)
+	}
+	return child, nil
+}
+
+func sharedAttachedCheckoutMatches(pane, child state.Pane) bool {
+	return !slices.Contains([]bool{
+		filepath.Clean(pane.WorktreePath) == filepath.Clean(child.WorktreePath),
+		pane.BranchName == child.BranchName, pane.SessionID == child.SessionID, pane.SocketPath == child.SocketPath,
+		pane.RuntimeParent == "" || pane.RuntimeParent == panelaunch.ManualParentRef || pane.RuntimeParent == child.RuntimeParent,
+		pane.RepoKey == "" && pane.RepoRoot == "" || pane.RepoKey == child.RepoKey && pane.RepoRoot == child.RepoRoot,
+	}, false)
+}
+
+func attachedWorkspacePredicate(resource state.RuntimeResource) workspacePredicateFunc {
+	return func(workspace backend.WorkspaceObservation) (bool, bool) {
+		candidate := workspace.WorkspaceID == resource.WorkspaceID || workspace.Label == resource.Label ||
+			slices.ContainsFunc(workspace.Panes, func(pane backend.WorkspacePaneObservation) bool { return pane.TerminalID == resource.TerminalID })
+		exact := workspace.WorkspaceID == resource.WorkspaceID && workspace.Label == resource.Label
+		// A generic workspace with no panes has no cwd left to report. Its saved
+		// label and owned route still fence the workspace; the source owns checkout.
+		if !slices.Contains([]bool{
+			len(workspace.Panes) == 0, workspace.CWD == "", workspace.Path == "", workspace.RepoKey == "", workspace.RepoRoot == "",
+		}, false) {
+			return candidate, exact && resource.RepoKey == "" && resource.RepoRoot == ""
+		}
+		checkout := backend.CheckoutMatchesLive(resource.RepoKey, resource.CurrentPath, backend.LivePane{
+			WorktreePath: workspace.Path, CurrentPath: workspace.CWD,
+			RepoKey: workspace.RepoKey, ProjectRoot: workspace.RepoRoot,
+		})
+		return candidate, exact && checkout && (resource.RepoRoot == "" || resource.RepoRoot == workspace.RepoRoot)
 	}
 }
 

@@ -594,7 +594,7 @@ func runWorkspaceBeforeWorktreeRemoveHook(
 	lg Logger,
 ) bool {
 	if len(opts.Hooks.Events[hooks.BeforeWorktreeRemove]) != 0 {
-		attached := sharedAttachedWorkspaceRows(locked.Panes, pane.WorktreePath)
+		attached := sharedAttachedWorkspaceRows(locked.Panes, pane)
 		if err := validateSharedAttachedWorkspaceHookPreflight(opts, locked, pane, attached, mode); err != nil {
 			lg.Err("%s: Herdr %s hook preflight failed: %v", paneLabel(pane), hooks.BeforeWorktreeRemove, err)
 			return false

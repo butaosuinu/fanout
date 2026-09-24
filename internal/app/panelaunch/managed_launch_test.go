@@ -497,12 +497,15 @@ func TestManagedAttachedStatePanePreservesCodexControllerIdentity(t *testing.T) 
 	status := codexapp.Status{ThreadID: "thread-554", SessionID: "session-554"}
 	pane := managedAttachedStatePane(
 		Request{ParentRef: ManualParentRef, Number: -1, Agent: "codex", LaunchMode: agent.ModePlan},
-		state.LaunchIntent{WorktreePath: "/repo"},
+		state.LaunchIntent{WorktreePath: "/repo", RuntimeParent: ManualParentRef},
 		backend.LivePane{Ref: backend.PaneRef{Backend: backend.Herdr, Workspace: "w1", Pane: "w1:p1"}},
 		status,
 	)
 	if pane.CodexThreadID != status.ThreadID || pane.CodexSessionID != status.SessionID {
 		t.Fatalf("attached Codex identity = %q/%q, want %q/%q", pane.CodexThreadID, pane.CodexSessionID, status.ThreadID, status.SessionID)
+	}
+	if pane.RuntimeParent != ManualParentRef || pane.RepoKey != "" || pane.RepoRoot != "" {
+		t.Fatalf("attached launch ownership = %+v", pane)
 	}
 }
 

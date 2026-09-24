@@ -61,6 +61,7 @@ func TestWorkspaceLifecycleRepositoryMatchesCoordinatorRoot(t *testing.T) {
 		{pane: state.Pane{Kind: state.PaneKindShell, WorktreePath: "/repo"}, want: true},
 		{pane: state.Pane{Kind: state.PaneKindShell, WorktreePath: "/foreign"}},
 		{pane: state.Pane{WorktreePath: "/repo"}},
+		{pane: state.Pane{Kind: state.PaneKindAttachedAgent, WorktreePath: "/repo/child"}},
 		{pane: state.Pane{RepoKey: identity.RepoKey, RepoRoot: identity.RepoRoot}, want: true},
 		{pane: state.Pane{RepoKey: "/foreign/.git", RepoRoot: identity.RepoRoot}},
 	} {

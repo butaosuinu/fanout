@@ -87,6 +87,7 @@ func managedAttachedStatePane(req Request, intent state.LaunchIntent, live backe
 		req, live.Ref.Pane, intent.WorktreePath, time.Now().UTC(), codexStatus, backend.Herdr, &live,
 	)
 	pane.Kind = state.PaneKindAttachedAgent
+	pane.RuntimeParent = intent.RuntimeParent
 	return pane
 }
 

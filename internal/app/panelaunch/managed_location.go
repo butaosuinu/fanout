@@ -3,6 +3,7 @@ package panelaunch
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/core/backend"
@@ -86,8 +87,11 @@ func applyManagedPaneLocation(
 	match backend.WorkspaceObservation,
 	sequenceFence uint64,
 ) (state.Pane, bool, error) {
-	if err := pane.InvalidateTelemetryForLocationRebind(sequenceFence); err != nil {
-		return pane, false, fmt.Errorf("invalidate telemetry after managed pane location change: %w", err)
+	// Direct providers without an emitter must keep their launch generation empty.
+	if pane.EmitterRowKey != "" || pane.LaunchNonce != "" || pane.EmitterNonce != "" {
+		if err := pane.InvalidateTelemetryForLocationRebind(sequenceFence); err != nil {
+			return pane, false, fmt.Errorf("invalidate telemetry after managed pane location change: %w", err)
+		}
 	}
 	pane.WorkspaceID, pane.PaneID, pane.TerminalID = match.WorkspaceID, match.Pane.Pane, match.TerminalID
 	return pane, true, nil
@@ -111,7 +115,7 @@ func managedPaneLocationMatch(
 		)
 	}
 	match := matches[0]
-	if !workspaceHasExactLocationProvenance(match, resource) {
+	if !managedPaneLocationCheckoutMatches(pane, match, resource) {
 		return backend.WorkspaceObservation{}, false, fmt.Errorf(
 			"%w: managed pane label does not match checkout provenance or agent evidence", backend.ErrOwnedIdentityMismatch,
 		)
@@ -161,9 +165,27 @@ func managedPaneLocationResource(pane state.Pane) state.RuntimeResource {
 }
 
 func managedPaneLocationComplete(pane state.Pane, resource state.RuntimeResource) bool {
-	return managedWorktreeRestartResourceComplete(resource) &&
+	return managedPaneLocationResourceComplete(pane, resource) &&
 		strings.TrimSpace(pane.SessionID) != "" && strings.TrimSpace(pane.SocketPath) != "" &&
 		strings.TrimSpace(pane.AgentID) != "" && pane.AgentSession != nil
+}
+
+func managedPaneLocationResourceComplete(pane state.Pane, resource state.RuntimeResource) bool {
+	if !pane.IsAttachedAgent() || resource.RepoKey != "" || resource.RepoRoot != "" {
+		return managedWorktreeRestartResourceComplete(resource)
+	}
+	return !slices.Contains([]string{
+		resource.WorkspaceID, resource.Label, resource.PaneID, resource.TerminalID, resource.CurrentPath,
+	}, "")
+}
+
+func managedPaneLocationCheckoutMatches(pane state.Pane, observation backend.WorkspaceObservation, resource state.RuntimeResource) bool {
+	if !pane.IsAttachedAgent() || resource.RepoKey != "" || resource.RepoRoot != "" {
+		return workspaceHasExactLocationProvenance(observation, resource)
+	}
+	return backend.CheckoutMatchesLive("", resource.CurrentPath, backend.LivePane{
+		WorktreePath: observation.Path, CurrentPath: observation.CWD,
+	})
 }
 
 func workspaceHasExactLocationProvenance(
