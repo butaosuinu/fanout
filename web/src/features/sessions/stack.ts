@@ -1,4 +1,4 @@
-import type { PaneView, PRRef, PRStack, Snapshot } from "../../transport/types";
+import type { PaneView, PRRef, PRStack, PRStackEntry, Snapshot } from "../../transport/types";
 
 /* stacked PR の 1 層。pr は行のコピーがあればそれ(CI などの信号を全部持つ)、
  * 無ければ stack 取得の軽量コピー。owners はその PR を prs に持つ行。 */
@@ -66,7 +66,7 @@ function stackMembers(prs: StackIndex["prs"]): Map<number, PRRef[]> {
   const out = new Map<number, PRRef[]>();
   for (const { pr } of prs.values()) {
     if (!pr.stack) continue;
-    out.set(pr.stack.number, [...(out.get(pr.stack.number) ?? []), pr]);
+    appendTo(out, pr.stack.number, pr);
   }
   return out;
 }
@@ -104,11 +104,22 @@ function chainHeads(prs: StackIndex["prs"], repo: string, native: Set<number>): 
 
 function groupByBase(byHead: Map<string, PRRef>): Map<string, PRRef[]> {
   const out = new Map<string, PRRef[]>();
-  for (const pr of byHead.values()) {
-    const base = pr.baseRef ?? "";
-    out.set(base, [...(out.get(base) ?? []), pr]);
-  }
+  for (const pr of byHead.values()) appendTo(out, pr.baseRef ?? "", pr);
   return out;
+}
+
+function appendTo<K>(m: Map<K, PRRef[]>, key: K, pr: PRRef): void {
+  const list = m.get(key);
+  if (list) list.push(pr);
+  else m.set(key, [pr]);
+}
+
+/* entries の層のうち、自分の stack として別の stack を読んだ PR。読み取りに失敗した
+ * PR は最後に分かった stack を保つので、古い entries と新しい所属が食い違いうる。
+ * 新しい方を採らないと、同じ PR が 2 つの stack map に出る。 */
+function movedAway(e: PRStackEntry, stack: PRStack, index: StackIndex): boolean {
+  const own = index.prs.get(e.pr.number)?.pr.stack;
+  return !!own && own.number !== stack.number;
 }
 
 function layer(position: number, pr: PRRef, index: StackIndex): StackLayer {
@@ -120,7 +131,7 @@ function layer(position: number, pr: PRRef, index: StackIndex): StackLayer {
  * にある同じ stack の PR(自分を含む)で埋める — さもないと行の PR がドロワーから
  * 消える。総数は stack.size が持っている。 */
 function nativeStack(stack: PRStack, pr: PRRef, index: StackIndex): StackView {
-  const entries = [...(stack.entries ?? [])];
+  const entries = (stack.entries ?? []).filter((e) => !movedAway(e, stack, index));
   for (const m of [pr, ...(index.members.get(stack.number) ?? [])]) {
     if (entries.some((e) => e.pr.number === m.number)) continue;
     entries.push({ position: m.stack?.position ?? 0, pr: m });

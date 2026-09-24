@@ -269,6 +269,31 @@ describe("groupPrs", () => {
     expect(stackOf(two, index)).toBeNull();
   });
 
+  it("古い stack の entries に残った PR は、自分で読んだ新しい stack にだけ載せる", () => {
+    // A の読み取りは失敗して古い #12(A, B)のまま、B は #13 へ移ったと読めた
+    const a = chainPr(1, "a", "main", {
+      stack: {
+        ...native12(1, [
+          { position: 1, pr: slim(1, "a") },
+          { position: 2, pr: slim(2, "b") },
+        ]),
+        size: 2,
+      },
+    });
+    const b = chainPr(2, "b", "main", {
+      stack: {
+        number: 13,
+        size: 1,
+        baseRef: "main",
+        position: 1,
+        entries: [{ position: 1, pr: slim(2, "b") }],
+      },
+    });
+    const index = buildStackIndex(makeSnapshot([makeSession("#1", [makePane({ prs: [a, b] })])]));
+    expect(summary(stackOf(a, index))?.layers).toEqual([1]);
+    expect(groupPrs([a, b], index).map((g) => g.key)).toEqual(["native:12", "native:13"]);
+  });
+
   it("別 repository の同番号 PR は別の行のまま", () => {
     const here = chainPr(5, "x", "main");
     const there = chainPr(5, "x", "main", { baseRepo: "other/repo", headRepo: "other/repo" });

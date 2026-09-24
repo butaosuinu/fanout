@@ -320,7 +320,7 @@ func TestPollerRefreshGHPopulatesManualPromptModePRAndCI(t *testing.T) {
 // gate: refresh, the stack read, then publish.
 func stackTick(p *poller) {
 	p.refreshGH()
-	p.refreshStacks(p.build())
+	p.refreshStacks(p.build)
 	p.publishGHRefresh(time.Now())
 }
 

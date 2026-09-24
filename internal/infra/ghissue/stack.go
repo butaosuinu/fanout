@@ -146,7 +146,7 @@ func (n *prStackNode) stack() *PRStack {
 	}
 	for _, e := range n.Stack.Entries.Nodes {
 		if e.PullRequest == nil {
-			continue // defensive: the schema types pullRequest as nullable
+			continue // a layer GitHub would not return; its error is in errors
 		}
 		s.Entries = append(s.Entries, PRStackEntry{Position: e.Position, PR: e.PullRequest.ref()})
 	}
@@ -163,24 +163,22 @@ func parsePRStacks(out []byte, nums []int) (map[int]*PRStack, error) {
 	if err := json.Unmarshal(out, &root); err != nil {
 		return nil, fmt.Errorf("parse gh api graphql pr stacks: %w", err)
 	}
-	failed := map[string]bool{}
 	var loadErr error
 	for _, graphErr := range root.Errors {
 		alias := aliasFromPath(graphErr.Path, "pr_")
 		if alias == "" {
 			return nil, fmt.Errorf("gh api graphql pr stacks: %s", graphErr.Message)
 		}
-		failed[alias] = true
 		loadErr = errors.Join(loadErr, fmt.Errorf("%s: graphql: %s", alias, graphErr.Message))
 	}
 	stacks := make(map[int]*PRStack, len(nums))
 	for _, num := range nums {
-		alias := "pr_" + strconv.Itoa(num)
-		// A null alias without an error is a failed read, not "no stack", the
-		// same as in parseIssueDetailsBatch: dropping it keeps the last known
-		// stack instead of erasing it.
-		node := root.Data.Repository[alias]
-		if node == nil || failed[alias] {
+		// Only a null alias is unread: dropping it keeps the last known stack
+		// instead of erasing it, the same as parseIssueDetailsBatch treats a null
+		// issue. An error deeper inside the node, such as one unreadable layer,
+		// leaves the rest of the stack readable, and stack() skips the null.
+		node := root.Data.Repository["pr_"+strconv.Itoa(num)]
+		if node == nil {
 			continue
 		}
 		stacks[num] = node.stack()

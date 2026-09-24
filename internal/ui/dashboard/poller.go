@@ -218,6 +218,9 @@ func (p *poller) ghLoop(ctx context.Context) {
 		case <-ghT.C:
 			p.runGHTick()
 		case <-p.refreshNow:
+			// A merge moves the layers of its stack too, so reread stacks now
+			// instead of waiting out their throttle.
+			p.lastStackRefresh = time.Time{}
 			p.runGHTick()
 		}
 	}
@@ -327,9 +330,12 @@ func (p *poller) runGHTick() {
 	startedAt := time.Now()
 	p.ensureResolved()
 	p.refreshGH()
-	// From the frame about to be published, so a new pull request's first frame
-	// already carries its stack instead of flipping a rebuild later.
-	p.refreshStacks(p.build())
+	// Before the publish, from the frame it is about to publish, so the tick's
+	// own frame carries a new pull request's stack. A cheap rebuild landing
+	// during the read can still show the pull request without it for that
+	// moment. The read delays the publish, and with it ghRefreshedAt, by its
+	// own latency: a merge hold waits that much longer, never less.
+	p.refreshStacks(p.build)
 	// The stamp is published with the snapshot it describes: a hold reads both,
 	// and a new time next to the old rows would say "GitHub has been read since
 	// your merge" about data taken before it.
@@ -430,19 +436,19 @@ func (p *poller) withStacks(repo string, prs []ghissue.PRRef) []ghissue.PRRef {
 	return out
 }
 
-// refreshStacks reads the native stack of every pull request snap shows. It is
-// its own read, apart from the PR queries the TUI and the CLI gates share,
-// because the stack schema is a preview: a failure affects only the stack maps,
-// so it never marks GitHub degraded.
+// refreshStacks reads the native stack of every pull request the frame build
+// returns. It is its own read, apart from the PR queries the TUI and the CLI
+// gates share, because the stack schema is a preview: a failed read shows up
+// only in the stack maps, so it never marks GitHub degraded.
 //
 // It runs when the set of pull requests changes, and otherwise at the wave
 // cadence: one call per 50 pull requests a minute while someone watches.
-func (p *poller) refreshStacks(snap sessionview.Snapshot) {
+func (p *poller) refreshStacks(build func() sessionview.Snapshot) {
 	repo, gh, ghErr := p.ghIdentity()
 	if gh == nil || ghErr != nil {
 		return
 	}
-	nums := shownPRNumbers(snap, repo)
+	nums := shownPRNumbers(build(), repo)
 	var fetched map[int]*ghissue.PRStack
 	if len(nums) > 0 && (!slices.Equal(nums, p.stackNums) || time.Since(p.lastStackRefresh) >= p.waveInterval) {
 		p.lastStackRefresh = time.Now()

@@ -27,13 +27,16 @@ func TestPRStacks(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "fills a stacked pull request and skips null layers",
+			name: "keeps a stack whose error points at one unreadable layer",
 			output: `{"data":{"repository":{"pr_844":{"stackEntry":{"position":2},"stack":{"number":12,"size":3,"baseRefName":"main","entries":{"nodes":[
 			  {"position":1,"pullRequest":{"number":843,"state":"MERGED","mergedAt":"2026-09-01T00:00:00Z","isDraft":false,"reviewDecision":"","headRefName":"stack/a"}},
 			  {"position":2,"pullRequest":{"number":844,"state":"OPEN","mergedAt":null,"isDraft":false,"reviewDecision":"APPROVED","headRefName":"stack/b"}},
 			  {"position":3,"pullRequest":null}
-			]}}},"pr_845":{"stackEntry":null,"stack":null}}}}`,
-			want: map[int]*PRStack{844: stacked, 845: nil},
+			]}}},"pr_845":{"stackEntry":null,"stack":null}}},
+			  "errors":[{"message":"Could not resolve to a node","path":["repository","pr_844","stack","entries","nodes",2,"pullRequest"]}]}`,
+			exit:    1,
+			want:    map[int]*PRStack{844: stacked, 845: nil},
+			wantErr: "pr_844: graphql: Could not resolve to a node",
 		},
 		{
 			name: "drops only the pull request whose alias failed",
