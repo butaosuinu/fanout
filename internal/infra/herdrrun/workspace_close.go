@@ -84,27 +84,26 @@ func (b *Backend) BindOwnedWorkspaceClose(target corebackend.OwnedPaneIdentity) 
 	return bound, nil
 }
 
-func (b *Backend) closeOwnedWorkspace(ctx context.Context, target corebackend.OwnedPaneIdentity) (corebackend.CloseResult, error) {
+func (b *Backend) closeOwnedWorkspace(ctx context.Context, saved corebackend.OwnedPaneIdentity) (corebackend.CloseResult, error) {
 	failed := corebackend.CloseResult{Status: corebackend.CloseFailed}
-	admission, lock, err := b.acquireOwnedMutation(ctx)
+	notIssued := func(err error) error { return fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err) }
+	err := b.withOwnedAdmission(ctx, ownedMutationLane, notIssued, func(call ownedCall) error {
+		target, probed, view, err := call.resolveOwnedTargetView(ctx, saved)
+		if err != nil {
+			return notIssued(err)
+		}
+		if err := verifyGenericWorkspaceCheckout(view, target); err != nil {
+			return notIssued(err)
+		}
+		if err := verifyWorkspaceClosePanes(view, target.Ref); err != nil {
+			return notIssued(err)
+		}
+		if err := verifyWorkspaceCloseGroup(view, target.Ref.Workspace); err != nil {
+			return notIssued(err)
+		}
+		return call.issueAndVerifyWorkspaceClose(ctx, probed, target.Ref.Workspace)
+	})
 	if err != nil {
-		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
-	}
-	defer unlockPrivateFile(lock)
-	target, probed, view, err := b.resolveOwnedTargetView(ctx, admission, target)
-	if err != nil {
-		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
-	}
-	if err := verifyGenericWorkspaceCheckout(view, target); err != nil {
-		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
-	}
-	if err := verifyWorkspaceClosePanes(view, target.Ref); err != nil {
-		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
-	}
-	if err := verifyWorkspaceCloseGroup(view, target.Ref.Workspace); err != nil {
-		return failed, fmt.Errorf("%w: %w", corebackend.ErrOwnedMutationNotIssued, err)
-	}
-	if err := b.issueAndVerifyWorkspaceClose(ctx, admission, probed, target.Ref.Workspace); err != nil {
 		return failed, err
 	}
 	return corebackend.CloseResult{Status: corebackend.CloseConfirmed}, nil
@@ -144,16 +143,15 @@ func verifyWorkspaceClosePanes(view ownedSnapshotView, target corebackend.PaneRe
 	)
 }
 
-func (b *Backend) issueAndVerifyWorkspaceClose(
+func (c ownedCall) issueAndVerifyWorkspaceClose(
 	ctx context.Context,
-	admission ownedAdmission,
 	probed probeResult,
 	workspaceID string,
 ) error {
-	if _, err := b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "close", workspaceID); err != nil {
+	if _, err := c.b.runContext(ctx, commandTimeout, probed.binary, probed.route, "workspace", "close", workspaceID); err != nil {
 		return methodUnavailable("workspace.close")
 	}
-	view, err := b.ownedSnapshotView(ctx, admission)
+	view, err := c.ownedSnapshotView(ctx)
 	if err != nil {
 		return err
 	}
@@ -165,43 +163,37 @@ func (b *Backend) issueAndVerifyWorkspaceClose(
 
 func (b *Backend) closeOwnedAttachedWorkspace(
 	ctx context.Context,
-	target corebackend.OwnedPaneIdentity,
+	saved corebackend.OwnedPaneIdentity,
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, 8*commandTimeout)
 	defer cancel()
-	admission, lock, err := b.acquireOwnedMutation(ctx)
-	if err != nil {
-		return mutationNotIssued(err)
-	}
-	defer unlockPrivateFile(lock)
-	target, probed, err := b.resolveAttachedWorkspaceCloseTarget(ctx, admission, target)
-	if err != nil {
-		return mutationNotIssued(err)
-	}
-	if issueErr := b.issueAttachedWorkspaceClose(ctx, probed, target.Ref.Workspace); issueErr != nil {
-		return issueErr
-	}
-	view, err := b.ownedSnapshotView(ctx, admission)
-	if err != nil {
-		return err
-	}
-	if view.workspacePresent(target.Ref.Workspace) {
-		return fmt.Errorf("herdr attached workspace close returned success but workspace remains live")
-	}
-	return nil
+	return b.withOwnedAdmission(ctx, ownedMutationLane, mutationNotIssued, func(call ownedCall) error {
+		target, probed, err := call.resolveAttachedWorkspaceCloseTarget(ctx, saved)
+		if err != nil {
+			return mutationNotIssued(err)
+		}
+		if issueErr := b.issueAttachedWorkspaceClose(ctx, probed, target.Ref.Workspace); issueErr != nil {
+			return issueErr
+		}
+		view, err := call.ownedSnapshotView(ctx)
+		if err != nil {
+			return err
+		}
+		if view.workspacePresent(target.Ref.Workspace) {
+			return fmt.Errorf("herdr attached workspace close returned success but workspace remains live")
+		}
+		return nil
+	})
 }
 
 func (b *Backend) verifyOwnedAttachedWorkspaceClose(
 	ctx context.Context,
 	target corebackend.OwnedPaneIdentity,
 ) error {
-	admission, lock, err := b.acquireOwnedMutation(ctx)
-	if err != nil {
+	return b.withOwnedAdmission(ctx, ownedMutationLane, nil, func(call ownedCall) error {
+		_, _, err := call.resolveAttachedWorkspaceCloseTarget(ctx, target)
 		return err
-	}
-	defer unlockPrivateFile(lock)
-	_, _, err = b.resolveAttachedWorkspaceCloseTarget(ctx, admission, target)
-	return err
+	})
 }
 
 func (b *Backend) issueAttachedWorkspaceClose(
@@ -223,15 +215,14 @@ func (b *Backend) issueAttachedWorkspaceClose(
 	return nil
 }
 
-func (b *Backend) resolveAttachedWorkspaceCloseTarget(
+func (c ownedCall) resolveAttachedWorkspaceCloseTarget(
 	ctx context.Context,
-	admission ownedAdmission,
 	expected corebackend.OwnedPaneIdentity,
 ) (corebackend.OwnedPaneIdentity, probeResult, error) {
-	if err := validateSavedTarget(expected, admission); err != nil {
+	if err := validateSavedTarget(expected, c.admission); err != nil {
 		return corebackend.OwnedPaneIdentity{}, probeResult{}, err
 	}
-	view, err := b.ownedSnapshotView(ctx, admission)
+	view, err := c.ownedSnapshotView(ctx)
 	if err != nil {
 		return corebackend.OwnedPaneIdentity{}, probeResult{}, err
 	}
@@ -239,7 +230,7 @@ func (b *Backend) resolveAttachedWorkspaceCloseTarget(
 	if verifyErr := verifyAttachedWorkspaceCloseSnapshot(view, expected, current, live); verifyErr != nil {
 		return corebackend.OwnedPaneIdentity{}, probeResult{}, verifyErr
 	}
-	probed, err := b.probeOwned(ctx, admission)
+	probed, err := c.probe(ctx)
 	return cloneOwnedPaneIdentity(expected), probed, err
 }
 
