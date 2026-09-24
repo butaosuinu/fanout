@@ -471,22 +471,22 @@ func TestBoundOwnedBackendReportsGenericUnavailableMethodErrors(t *testing.T) {
 	tests := []struct {
 		name   string
 		method string
-		call   func(*Backend, corebackend.OwnedPaneIdentity) error
+		call   func(corebackend.OwnedClosingBackend, corebackend.OwnedPaneIdentity) error
 	}{
 		{
 			name: "read", method: "pane.read",
-			call: func(bound *Backend, target corebackend.OwnedPaneIdentity) error {
+			call: func(bound corebackend.OwnedClosingBackend, target corebackend.OwnedPaneIdentity) error {
 				_, err := bound.Read(target.Ref, 1)
 				return err
 			},
 		},
-		{name: "send", method: "agent.prompt", call: func(bound *Backend, target corebackend.OwnedPaneIdentity) error {
+		{name: "send", method: "agent.prompt", call: func(bound corebackend.OwnedClosingBackend, target corebackend.OwnedPaneIdentity) error {
 			return bound.SendLine(target.Ref, "hello")
 		}},
-		{name: "focus", method: "agent.focus", call: func(bound *Backend, target corebackend.OwnedPaneIdentity) error {
+		{name: "focus", method: "agent.focus", call: func(bound corebackend.OwnedClosingBackend, target corebackend.OwnedPaneIdentity) error {
 			return bound.Focus(target.Ref)
 		}},
-		{name: "close", method: "pane.close", call: func(bound *Backend, target corebackend.OwnedPaneIdentity) error {
+		{name: "close", method: "pane.close", call: func(bound corebackend.OwnedClosingBackend, target corebackend.OwnedPaneIdentity) error {
 			return bound.Close(target.Ref)
 		}},
 	}
