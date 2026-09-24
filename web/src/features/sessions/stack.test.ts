@@ -73,6 +73,18 @@ describe("stackOf", () => {
       want: { kind: "native", position: 2, size: 3, baseRef: "main", layers: [844] },
     },
     {
+      name: "entries が途中で切れていても自分の層は描く",
+      prs: [chainPr(866, "s/v", "s/u", { stack: { ...native12(22, entries12), size: 25 } })],
+      of: 866,
+      want: {
+        kind: "native",
+        position: 22,
+        size: 25,
+        baseRef: "main",
+        layers: [843, 844, 845, 866],
+      },
+    },
+    {
       name: "推定: base を head に持つ PR を下へたどる",
       prs: [a, b],
       of: 2,

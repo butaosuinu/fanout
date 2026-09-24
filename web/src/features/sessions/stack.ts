@@ -94,11 +94,15 @@ function layer(position: number, pr: PRRef, index: StackIndex): StackLayer {
   return { position, pr: hit?.pr ?? pr, owners: hit?.owners ?? [] };
 }
 
-/* entries が無い(取得前・失敗)ときは、分かっている自分の層だけを描く。総数は
- * stack.size が持っている。 */
+/* entries は取得前・失敗時には無く、20 層で打ち切られもする。自分の層が入って
+ * いなければ足す — さもないと行の PR がドロワーから消える。総数は stack.size が
+ * 持っている。 */
 function nativeStack(stack: PRStack, pr: PRRef, index: StackIndex): StackView {
-  const entries = stack.entries?.length ? stack.entries : [{ position: stack.position, pr }];
-  const layers = entries
+  const entries = stack.entries ?? [];
+  const known = entries.some((e) => e.pr.number === pr.number)
+    ? entries
+    : [...entries, { position: stack.position, pr }];
+  const layers = known
     .map((e) => layer(e.position, e.pr, index))
     .sort((a, b) => a.position - b.position);
   return {
