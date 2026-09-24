@@ -34,6 +34,7 @@ type countingGH struct {
 	stackCalls  [][]int
 	stacks      map[int]*ghissue.PRStack
 	stacksErr   error
+	stackFails  map[int]bool // numbers PRStacks fails to read, the rest succeeding
 }
 
 func (g *countingGH) IssuePRsBatch(nums []int) (map[int]ghissue.IssueSnapshot, error) {
@@ -98,10 +99,15 @@ func (g *countingGH) PRStacks(nums []int) (map[int]*ghissue.PRStack, error) {
 		return nil, g.stacksErr
 	}
 	out := map[int]*ghissue.PRStack{}
+	var loadErr error
 	for _, num := range nums {
+		if g.stackFails[num] {
+			loadErr = errors.Join(loadErr, fmt.Errorf("pr_%d: graphql: could not resolve", num))
+			continue
+		}
 		out[num] = g.stacks[num]
 	}
-	return out, nil
+	return out, loadErr
 }
 
 func writeState(t *testing.T, root, body string) {
@@ -400,7 +406,9 @@ func TestRefreshStacksThrottle(t *testing.T) {
 			name: "reads failing past the staleness bound drop the stacks",
 			between: func(p *poller, gh *countingGH) {
 				p.lastStackRefresh = time.Time{}
-				p.lastStackRead = time.Now().Add(-(staleStacksAfter + 1) * p.waveInterval)
+				e := p.stackCache[700]
+				e.readAt = time.Now().Add(-(staleStacksAfter + 1) * p.waveInterval)
+				p.stackCache[700] = e
 				gh.stacksErr = errors.New("field stack does not exist")
 			},
 			wantCalls: 2,
@@ -433,7 +441,7 @@ func TestRefreshStacksThrottle(t *testing.T) {
 			if len(gh.stackCalls) != tt.wantCalls {
 				t.Fatalf("PRStacks calls = %v, want %d", gh.stackCalls, tt.wantCalls)
 			}
-			if got := p.stackCache[700]; got != tt.wantStack {
+			if got := p.stackCache[700].stack; got != tt.wantStack {
 				t.Fatalf("stackCache[700] = %+v, want %+v", got, tt.wantStack)
 			}
 			// No placeholder for "read, not in a stack": an empty cache is what
@@ -442,6 +450,30 @@ func TestRefreshStacksThrottle(t *testing.T) {
 				t.Fatalf("stackCache = %v, want empty", p.stackCache)
 			}
 		})
+	}
+}
+
+// TestRefreshStacksPartialReadKeepsWhatItRead pins per-PR freshness: one alias
+// failing must not age out the stacks the same read returned.
+func TestRefreshStacksPartialReadKeepsWhatItRead(t *testing.T) {
+	stack := &ghissue.PRStack{Number: 3, Size: 2, Position: 1, BaseRef: "main"}
+	gh := &countingGH{
+		branchPRs: []ghissue.PRRef{
+			{Number: 700, State: "OPEN", BaseRepo: "o/n"},
+			{Number: 701, State: "OPEN", BaseRepo: "o/n"},
+		},
+		stacks:     map[int]*ghissue.PRStack{700: stack},
+		stackFails: map[int]bool{701: true},
+	}
+	p := newStackPoller(t, gh)
+	stackTick(p)
+	stackTick(p) // same pull requests inside the interval: no read
+
+	if len(gh.stackCalls) != 1 {
+		t.Fatalf("PRStacks calls = %v, want 1", gh.stackCalls)
+	}
+	if got := p.stackCache[700].stack; got != stack {
+		t.Fatalf("stackCache[700] = %+v, want the stack the partial read returned", got)
 	}
 }
 

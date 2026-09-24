@@ -52,6 +52,14 @@ type ghCacheEntry struct {
 	err   error
 }
 
+// stackCacheEntry is one pull request's stack and when a read last returned
+// it. Freshness is per pull request: a read that fails for one alias must not
+// age out the stacks it did return.
+type stackCacheEntry struct {
+	stack  *ghissue.PRStack
+	readAt time.Time
+}
+
 type branchPRCacheEntry struct {
 	prs []ghissue.PRRef
 	err error
@@ -88,12 +96,10 @@ type poller struct {
 	// touched by refreshGH, which runs solely on the single gh goroutine
 	// (tests call it directly, also single-threaded), so it needs no lock.
 	lastWaveRefresh time.Time
-	// stackNums and lastStackRefresh throttle refreshStacks the same way, and
-	// lastStackRead is its last fully successful read. The gh goroutine owns
-	// them too.
+	// stackNums and lastStackRefresh throttle refreshStacks the same way; the
+	// gh goroutine owns them too.
 	stackNums        []int
 	lastStackRefresh time.Time
-	lastStackRead    time.Time
 
 	// ghMu guards the GitHub identity (repo/gh/ghErr) so the deferred resolution
 	// running on the gh goroutine can publish it while the cheap ticker reads it.
@@ -124,7 +130,7 @@ type poller struct {
 	// one, keyed by number in this repository. It stays empty in a repository
 	// without stacks, which keeps withStacks from copying anything. Entries are
 	// replaced whole, never mutated, so builds may share the pointers.
-	stackCache map[int]*ghissue.PRStack
+	stackCache map[int]stackCacheEntry
 
 	// refreshNow lets a completed merge pull the next GitHub tick forward
 	// instead of leaving the row rendering its pre-merge state for a full
@@ -418,7 +424,7 @@ func (p *poller) withStacks(repo string, prs []ghissue.PRRef) []ghissue.PRRef {
 	out := slices.Clone(prs)
 	for i := range out {
 		if strings.EqualFold(out[i].BaseRepo, repo) {
-			out[i].Stack = p.stackCache[out[i].Number]
+			out[i].Stack = p.stackCache[out[i].Number].stack
 		}
 	}
 	return out
@@ -440,29 +446,29 @@ func (p *poller) refreshStacks(snap sessionview.Snapshot) {
 	var fetched map[int]*ghissue.PRStack
 	if len(nums) > 0 && (!slices.Equal(nums, p.stackNums) || time.Since(p.lastStackRefresh) >= p.waveInterval) {
 		p.lastStackRefresh = time.Now()
-		var err error
-		if fetched, err = gh.PRStacks(nums); err == nil {
-			p.lastStackRead = p.lastStackRefresh
-		}
+		// The map holds exactly the pull requests that were read, so a partial
+		// failure needs nothing from the error: the unread ones keep their last
+		// known stack in keepStacks, and stacks never degrade the snapshot.
+		fetched, _ = gh.PRStacks(nums)
 	}
 	p.stackNums = nums
-	p.keepStacks(nums, fetched, time.Since(p.lastStackRead) > staleStacksAfter*p.waveInterval)
+	p.keepStacks(nums, fetched, time.Now())
 }
 
-// keepStacks rebuilds the cache for nums. A fresh read wins; a pull request the
-// read missed keeps its last known stack until reads have failed for too long
-// (stale). Pull requests no longer shown drop out.
-func (p *poller) keepStacks(nums []int, fetched map[int]*ghissue.PRStack, stale bool) {
+// keepStacks rebuilds the cache for nums. A fresh read wins. A pull request the
+// read missed keeps its last known stack until that stack is staleStacksAfter
+// wave intervals old. Pull requests no longer shown drop out.
+func (p *poller) keepStacks(nums []int, fetched map[int]*ghissue.PRStack, now time.Time) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
-	next := make(map[int]*ghissue.PRStack, len(nums))
+	next := make(map[int]stackCacheEntry, len(nums))
 	for _, num := range nums {
-		s, read := fetched[num]
-		if !read && !stale {
-			s = p.stackCache[num]
+		e, ok := p.stackCache[num]
+		if s, read := fetched[num]; read {
+			e, ok = stackCacheEntry{stack: s, readAt: now}, s != nil
 		}
-		if s != nil {
-			next[num] = s
+		if ok && now.Sub(e.readAt) <= staleStacksAfter*p.waveInterval {
+			next[num] = e
 		}
 	}
 	p.stackCache = next
