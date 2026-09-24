@@ -50,13 +50,13 @@ func newHerdrCLI(session, socketPath string) *herdrCLI {
 
 // clone copies the transport for an independently bound handle: a fresh probe
 // gate, a copied admission cache, and a copied control-plane environment.
-func (c *herdrCLI) clone() *herdrCLI {
-	clone := *c
+func (b *herdrCLI) clone() *herdrCLI {
+	clone := *b
 	clone.probeGate = make(chan struct{}, 1)
 	clone.admitted = map[string]binaryAdmission{}
-	maps.Copy(clone.admitted, c.admitted)
-	if c.control != nil {
-		control := *c.control
+	maps.Copy(clone.admitted, b.admitted)
+	if b.control != nil {
+		control := *b.control
 		clone.control = &control
 	}
 	return &clone
