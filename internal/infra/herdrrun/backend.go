@@ -25,7 +25,6 @@ type Backend struct {
 	*herdrCLI
 	previewOnly bool
 	owner       *ownedAdmission
-	target      *ownedTargetAdmission
 }
 
 // New constructs a herdr backend for one named session. socketPath may be
@@ -203,21 +202,33 @@ func (b *Backend) ReleaseStartGate(string) error {
 	return corebackend.Unsupported(corebackend.Herdr, "release start gate")
 }
 
-func (b *Backend) Read(ref corebackend.PaneRef, lines int) (string, error) {
-	return b.readCore(ref, lines)
+// Read, SendLine, Focus, Close, and CloseOwned need an immutable target
+// admission; only the boundBackend a Bind* call returns issues them.
+func (b *Backend) Read(corebackend.PaneRef, int) (string, error) {
+	return "", unboundTarget("read")
 }
 
-func (b *Backend) SendLine(ref corebackend.PaneRef, line string) error {
-	return b.sendLineCore(ref, line)
+func (b *Backend) SendLine(corebackend.PaneRef, string) error {
+	return unboundTarget("send line")
 }
 
-func (b *Backend) Focus(ref corebackend.PaneRef) error {
-	return b.focusCore(ref)
+func (b *Backend) Focus(corebackend.PaneRef) error {
+	return unboundTarget("focus")
 }
 
-func (b *Backend) Close(ref corebackend.PaneRef) error {
-	return b.closeCore(ref)
+func (b *Backend) Close(corebackend.PaneRef) error {
+	return unboundTarget("close pane")
 }
+
+func (b *Backend) CloseOwned(corebackend.CloseRequest) (corebackend.CloseResult, error) {
+	return corebackend.CloseResult{Status: corebackend.CloseFailed}, unboundOwnedClose()
+}
+
+func unboundTarget(operation string) error {
+	return corebackend.Unsupported(corebackend.Herdr, operation+" without an immutable target admission")
+}
+
+func unboundOwnedClose() error { return unboundTarget("owned close") }
 
 func normalizeWaitTimeout(totalTimeout time.Duration) (time.Duration, error) {
 	if totalTimeout == 0 {

@@ -178,8 +178,8 @@ func TestBindOwnedTargetKeepsInjectedTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(source.admitted) == 0 || !maps.Equal(bound.admitted, source.admitted) {
-		t.Fatalf("bound admitted = %v, want session admissions %v", bound.admitted, source.admitted)
+	if admitted := bound.(*boundBackend).admitted; len(source.admitted) == 0 || !maps.Equal(admitted, source.admitted) {
+		t.Fatalf("bound admitted = %v, want session admissions %v", admitted, source.admitted)
 	}
 	h.fake.respond = func(args []string) ([]byte, error) {
 		if slices.Equal(args, []string{"pane", "read", target.Ref.Pane, "--source", "visible", "--format", "text"}) {
