@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -68,13 +67,7 @@ func (s *OwnedSession) VerifyOwned(ctx context.Context) error {
 	if s == nil || s.backend == nil {
 		return fmt.Errorf("herdr owned session is nil")
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlockPrivateFile(lock)
-	_, err = s.backend.probeOwned(ctx, admission)
-	return err
+	return s.backend.withOwned(ctx, ownedOperationLane, ownedErrors{}, func(ownedCall) error { return nil })
 }
 
 func (s *OwnedSession) LaunchRoute() (corebackend.OwnedLaunchRoute, error) {
@@ -138,14 +131,12 @@ func (s *OwnedSession) IssueRestartResume(
 	if err := s.requireRestartResumeToken(paneID, nonce); err != nil {
 		return err
 	}
-	probed, lock, err := s.admitRestartResume(
-		ctx, paneID, nonce, deadline, preflight,
-	)
-	if err != nil {
-		return err
-	}
-	defer unlockPrivateFile(lock)
-	return s.issueRestartResumeToken(ctx, probed, paneID, nonce, deadline, markIssued)
+	return s.backend.withOwned(ctx, ownedOperationLane, ownedErrors{}, func(call ownedCall) error {
+		if err := s.admitRestartResume(ctx, call.probed, paneID, nonce, deadline, preflight); err != nil {
+			return err
+		}
+		return s.issueRestartResumeToken(ctx, call.probed, paneID, nonce, deadline, markIssued)
+	})
 }
 
 func (s *OwnedSession) issueRestartResumeToken(
@@ -178,37 +169,23 @@ func (s *OwnedSession) issueRestartResumeToken(
 
 func (s *OwnedSession) admitRestartResume(
 	ctx context.Context,
+	probed probeResult,
 	paneID, nonce string,
 	deadline time.Time,
 	preflight func(corebackend.PaneProcessInfo, []corebackend.LivePane) error,
-) (probeResult, *os.File, error) {
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
-	if err != nil {
-		return probeResult{}, nil, err
-	}
-	probed, err := s.backend.probeOwned(ctx, admission)
-	if err != nil {
-		unlockPrivateFile(lock)
-		return probeResult{}, nil, err
-	}
+) error {
 	remaining, err := remainingRestartResumeTime(deadline, s.backend.now())
 	if err != nil {
-		unlockPrivateFile(lock)
-		return probeResult{}, nil, err
+		return err
 	}
 	if waitErr := s.waitForLauncherProbed(ctx, probed, paneID, nonce, remaining); waitErr != nil {
-		unlockPrivateFile(lock)
-		return probeResult{}, nil, waitErr
+		return waitErr
 	}
 	info, panes, err := s.observeRestartResumeProbed(ctx, probed, paneID, deadline)
-	if err == nil {
-		err = preflight(info, panes)
-	}
 	if err != nil {
-		unlockPrivateFile(lock)
-		return probeResult{}, nil, err
+		return err
 	}
-	return probed, lock, nil
+	return preflight(info, panes)
 }
 
 func (s *OwnedSession) waitForLauncherProbed(
@@ -310,16 +287,16 @@ func (s *OwnedSession) ProcessInfo(ctx context.Context, paneID string) (coreback
 	if s == nil || s.backend == nil {
 		return corebackend.PaneProcessInfo{}, fmt.Errorf("herdr owned session is nil")
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
+	var info corebackend.PaneProcessInfo
+	err := s.backend.withOwned(ctx, ownedOperationLane, ownedErrors{}, func(call ownedCall) error {
+		var err error
+		info, err = s.processInfoProbed(ctx, call.probed, paneID, commandTimeout)
+		return err
+	})
 	if err != nil {
 		return corebackend.PaneProcessInfo{}, err
 	}
-	defer unlockPrivateFile(lock)
-	probed, err := s.backend.probeOwned(ctx, admission)
-	if err != nil {
-		return corebackend.PaneProcessInfo{}, err
-	}
-	return s.processInfoProbed(ctx, probed, paneID, commandTimeout)
+	return info, nil
 }
 
 func (s *OwnedSession) processInfoProbed(
@@ -370,16 +347,16 @@ func (s *OwnedSession) ObserveRestartResume(
 	if s == nil || s.backend == nil {
 		return corebackend.PaneProcessInfo{}, nil, fmt.Errorf("herdr owned session is nil")
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
-	if err != nil {
-		return corebackend.PaneProcessInfo{}, nil, err
-	}
-	defer unlockPrivateFile(lock)
-	probed, err := s.backend.probeOwned(ctx, admission)
-	if err != nil {
-		return corebackend.PaneProcessInfo{}, nil, err
-	}
-	return s.observeRestartResumeProbed(ctx, probed, paneID, time.Now().Add(commandTimeout))
+	var (
+		info  corebackend.PaneProcessInfo
+		panes []corebackend.LivePane
+	)
+	err := s.backend.withOwned(ctx, ownedOperationLane, ownedErrors{}, func(call ownedCall) error {
+		var err error
+		info, panes, err = s.observeRestartResumeProbed(ctx, call.probed, paneID, time.Now().Add(commandTimeout))
+		return err
+	})
+	return info, panes, err
 }
 
 func (s *OwnedSession) observeRestartResumeProbed(
@@ -455,16 +432,17 @@ func (s *OwnedSession) LivePanes(ctx context.Context) ([]corebackend.LivePane, e
 	if s == nil || s.backend == nil {
 		return nil, fmt.Errorf("herdr owned session is nil")
 	}
-	admission, lock, err := s.backend.acquireOwnedOperation(ctx)
-	if err != nil {
-		return nil, observationCommandError("acquire Herdr observation", err)
+	var panes []corebackend.LivePane
+	wrap := ownedErrors{
+		acquire: func(err error) error { return observationCommandError("acquire Herdr observation", err) },
+		probe:   func(err error) error { return observationCommandError("verify Herdr observation route", err) },
 	}
-	defer unlockPrivateFile(lock)
-	probed, err := s.backend.probeOwned(ctx, admission)
-	if err != nil {
-		return nil, observationCommandError("verify Herdr observation route", err)
-	}
-	return s.backend.snapshot(ctx, commandTimeout, probed)
+	err := s.backend.withOwned(ctx, ownedOperationLane, wrap, func(call ownedCall) error {
+		var err error
+		panes, err = s.backend.snapshot(ctx, commandTimeout, call.probed)
+		return err
+	})
+	return panes, err
 }
 
 // WaitRestoredPanes applies Backend.Wait's single total budget to the exact
@@ -493,7 +471,7 @@ func (s *OwnedSession) runOwnedLaunchCommand(
 	timeout time.Duration,
 	args ...string,
 ) ([]byte, error) {
-	return s.runOwnedCommand(ctx, timeout, (*Backend).acquireOwnedOperation, args...)
+	return s.runOwnedCommand(ctx, timeout, ownedOperationLane, args...)
 }
 
 func (s *OwnedSession) runOwnedLaunchMutationCommand(
@@ -501,28 +479,25 @@ func (s *OwnedSession) runOwnedLaunchMutationCommand(
 	timeout time.Duration,
 	args ...string,
 ) ([]byte, error) {
-	return s.runOwnedCommand(ctx, timeout, (*Backend).acquireOwnedMutation, args...)
+	return s.runOwnedCommand(ctx, timeout, ownedMutationLane, args...)
 }
 
 func (s *OwnedSession) runOwnedCommand(
 	ctx context.Context,
 	timeout time.Duration,
-	acquire func(*Backend, context.Context) (ownedAdmission, *os.File, error),
+	lane ownedLane,
 	args ...string,
 ) ([]byte, error) {
 	if s == nil || s.backend == nil {
 		return nil, fmt.Errorf("herdr owned session is nil")
 	}
-	admission, lock, err := acquire(s.backend, ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer unlockPrivateFile(lock)
-	probed, err := s.backend.probeOwned(ctx, admission)
-	if err != nil {
-		return nil, err
-	}
-	return s.backend.runContext(ctx, timeout, probed.binary, probed.route, args...)
+	var out []byte
+	err := s.backend.withOwned(ctx, lane, ownedErrors{}, func(call ownedCall) error {
+		var err error
+		out, err = s.backend.runContext(ctx, timeout, call.probed.binary, call.probed.route, args...)
+		return err
+	})
+	return out, err
 }
 
 func (s *OwnedSession) runOwnedMutationCommand(
@@ -533,19 +508,16 @@ func (s *OwnedSession) runOwnedMutationCommand(
 	if s == nil || s.backend == nil {
 		return nil, mutationNotIssued(fmt.Errorf("herdr owned session is nil"))
 	}
-	admission, lock, err := s.backend.acquireOwnedMutation(ctx)
-	if err != nil {
-		return nil, mutationNotIssued(err)
-	}
-	defer unlockPrivateFile(lock)
-	probed, err := s.backend.probeOwned(ctx, admission)
-	if err != nil {
-		return nil, mutationNotIssued(err)
-	}
-	if timeout <= 0 {
-		return nil, mutationNotIssued(context.DeadlineExceeded)
-	}
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	return s.backend.runWorktreeMutation(callCtx, probed.binary, probed.route, args...)
+	var out []byte
+	err := s.backend.withOwned(ctx, ownedMutationLane, sameOwnedErrors(mutationNotIssued), func(call ownedCall) error {
+		if timeout <= 0 {
+			return mutationNotIssued(context.DeadlineExceeded)
+		}
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		var err error
+		out, err = s.backend.runWorktreeMutation(callCtx, call.probed.binary, call.probed.route, args...)
+		return err
+	})
+	return out, err
 }
