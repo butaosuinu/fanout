@@ -25,7 +25,9 @@ export interface StackView {
 export interface StackIndex {
   repo: string;
   prs: Map<number, { pr: PRRef; owners: PaneView[] }>;
-  /* 推定連鎖の候補。head branch ごとに 1 本(OPEN 優先)。 */
+  /* native stack の番号ごとの、snapshot にある所属 PR。 */
+  members: Map<number, PRRef[]>;
+  /* 推定連鎖の候補。head branch ごとに 1 本(先に見つかった open の PR)。 */
   byHead: Map<string, PRRef>;
   byBase: Map<string, PRRef[]>;
 }
@@ -38,7 +40,7 @@ export function buildStackIndex(snap: Snapshot | null): StackIndex {
   const repo = snap?.repo ?? "";
   const prs = indexPrs(snap, repo);
   const byHead = chainHeads(prs, repo);
-  return { repo, prs, byHead, byBase: groupByBase(byHead) };
+  return { repo, prs, members: stackMembers(prs), byHead, byBase: groupByBase(byHead) };
 }
 
 export const EMPTY_STACK_INDEX = buildStackIndex(null);
@@ -57,25 +59,29 @@ function indexPrs(snap: Snapshot | null, repo: string): StackIndex["prs"] {
   return out;
 }
 
-function isOpen(pr: PRRef): boolean {
-  return (pr.state ?? "").toUpperCase() === "OPEN";
+function stackMembers(prs: StackIndex["prs"]): Map<number, PRRef[]> {
+  const out = new Map<number, PRRef[]>();
+  for (const { pr } of prs.values()) {
+    if (!pr.stack) continue;
+    out.set(pr.stack.number, [...(out.get(pr.stack.number) ?? []), pr]);
+  }
+  return out;
 }
 
-/* 推定連鎖に入れてよい PR。native stack の PR は GitHub の答えがあるので混ぜない。
- * 閉じただけの PR はもう何も運ばない。fork の head は同名 branch と取り違える。 */
+/* 推定連鎖に入れてよい PR。open の PR だけ — マージ済みの PR を下の層に数えると、
+ * develop → main のような長寿命 branch の PR が、そこを base にする PR すべての
+ * 下に付いてしまう。native stack の PR は GitHub の答えがあるので混ぜない。fork の
+ * head は同名 branch と取り違える。 */
 function chainable(pr: PRRef, repo: string): boolean {
   if (pr.stack || !pr.headRef || !pr.baseRef) return false;
-  if (!sameRepo(pr.headRepo, repo)) return false;
-  return (pr.state ?? "").toUpperCase() !== "CLOSED" || !!pr.mergedAt;
+  return (pr.state ?? "").toUpperCase() === "OPEN" && sameRepo(pr.headRepo, repo);
 }
 
 function chainHeads(prs: StackIndex["prs"], repo: string): Map<string, PRRef> {
   const out = new Map<string, PRRef>();
   for (const { pr } of prs.values()) {
-    if (!chainable(pr, repo)) continue;
     const head = pr.headRef ?? "";
-    const cur = out.get(head);
-    if (!cur || (isOpen(pr) && !isOpen(cur))) out.set(head, pr);
+    if (chainable(pr, repo) && !out.has(head)) out.set(head, pr);
   }
   return out;
 }
@@ -94,15 +100,16 @@ function layer(position: number, pr: PRRef, index: StackIndex): StackLayer {
   return { position, pr: hit?.pr ?? pr, owners: hit?.owners ?? [] };
 }
 
-/* entries は取得前・失敗時には無く、20 層で打ち切られもする。自分の層が入って
- * いなければ足す — さもないと行の PR がドロワーから消える。総数は stack.size が
- * 持っている。 */
+/* entries は取得前・失敗時には無く、20 層で打ち切られもする。欠けた層は snapshot
+ * にある同じ stack の PR(自分を含む)で埋める — さもないと行の PR がドロワーから
+ * 消える。総数は stack.size が持っている。 */
 function nativeStack(stack: PRStack, pr: PRRef, index: StackIndex): StackView {
-  const entries = stack.entries ?? [];
-  const known = entries.some((e) => e.pr.number === pr.number)
-    ? entries
-    : [...entries, { position: stack.position, pr }];
-  const layers = known
+  const entries = [...(stack.entries ?? [])];
+  for (const m of [pr, ...(index.members.get(stack.number) ?? [])]) {
+    if (entries.some((e) => e.pr.number === m.number)) continue;
+    entries.push({ position: m.stack?.position ?? 0, pr: m });
+  }
+  const layers = entries
     .map((e) => layer(e.position, e.pr, index))
     .sort((a, b) => a.position - b.position);
   return {
@@ -115,23 +122,27 @@ function nativeStack(stack: PRStack, pr: PRRef, index: StackIndex): StackView {
   };
 }
 
-/* base を head に持つ PR を下へたどる。戻り値は下の層から順。 */
-function walkDown(pr: PRRef, index: StackIndex, seen: Set<number>): PRRef[] {
-  const out: PRRef[] = [];
-  let next = index.byHead.get(pr.baseRef ?? "");
-  while (next && !seen.has(next.number)) {
-    seen.add(next.number);
-    out.unshift(next);
-    next = index.byHead.get(next.baseRef ?? "");
-  }
-  return out;
-}
-
-/* 上の層は、自分の head を base に持つ PR がちょうど 1 本のときだけ。2 本以上は
- * 木になり、1 本の柱には描けない。 */
+/* 自分の head を base に持つ PR が、ちょうど 1 本ならそれ。2 本以上は木になり、
+ * 1 本の柱には描けない。上下どちらへたどるときもこの 1 本だけでつなぐので、PR は
+ * 高々 1 つの連鎖にしか入らない — 同じ PR がドロワーに 2 度出ることも、連鎖の
+ * 選び方で行の PR が消えることもない。 */
 function soleChild(pr: PRRef, index: StackIndex): PRRef | undefined {
   const ups = index.byBase.get(pr.headRef ?? "") ?? [];
   return ups.length === 1 ? ups[0] : undefined;
+}
+
+/* base を head に持つ PR を下へたどる。戻り値は下の層から順。 */
+function walkDown(pr: PRRef, index: StackIndex, seen: Set<number>): PRRef[] {
+  const out: PRRef[] = [];
+  let cur = pr;
+  let next = index.byHead.get(pr.baseRef ?? "");
+  while (next && !seen.has(next.number) && soleChild(next, index)?.number === cur.number) {
+    seen.add(next.number);
+    out.unshift(next);
+    cur = next;
+    next = index.byHead.get(next.baseRef ?? "");
+  }
+  return out;
 }
 
 function walkUp(pr: PRRef, index: StackIndex, seen: Set<number>): PRRef[] {

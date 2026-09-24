@@ -81,9 +81,14 @@ func (r Runner) PRStacks(owner, repo string, nums []int) (map[int]*PRStack, erro
 			"-f", "repo="+repo,
 			"-f", "query="+prStacksQuery(chunk),
 		)
+		// gh exits non-zero whenever the response carries any GraphQL error, yet
+		// still prints it. Read what came back, so one unresolvable pull request
+		// drops only itself instead of its whole chunk.
 		if err != nil {
 			loadErr = errors.Join(loadErr, fmt.Errorf("gh api graphql pr stacks: %w", err))
-			continue
+			if !json.Valid(out) {
+				continue
+			}
 		}
 		parsed, err := parsePRStacks(out, chunk)
 		loadErr = errors.Join(loadErr, err)

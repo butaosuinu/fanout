@@ -88,8 +88,8 @@ func (g *countingGH) Waves(parent string, recordedNums []int) (sessionview.WaveG
 	return g.waves[parent], nil
 }
 
-// PRStacks answers from g.stacks for the numbers it knows. With stacksErr set
-// it fails outright, reading nothing.
+// PRStacks reads every number: g.stacks for the stacked ones, nil ("not in a
+// stack") for the rest. With stacksErr set it fails outright, reading nothing.
 func (g *countingGH) PRStacks(nums []int) (map[int]*ghissue.PRStack, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -99,9 +99,7 @@ func (g *countingGH) PRStacks(nums []int) (map[int]*ghissue.PRStack, error) {
 	}
 	out := map[int]*ghissue.PRStack{}
 	for _, num := range nums {
-		if s, ok := g.stacks[num]; ok {
-			out[num] = s
-		}
+		out[num] = g.stacks[num]
 	}
 	return out, nil
 }
@@ -397,6 +395,14 @@ func TestRefreshStacksThrottle(t *testing.T) {
 			wantStack: stack,
 		},
 		{
+			name: "pull request no longer in a stack leaves the cache",
+			between: func(p *poller, gh *countingGH) {
+				p.lastStackRefresh = time.Time{}
+				gh.stacks = nil
+			},
+			wantCalls: 2,
+		},
+		{
 			name:      "pull request that leaves the snapshot leaves the cache",
 			between:   func(_ *poller, gh *countingGH) { gh.branchPRs = []ghissue.PRRef{} },
 			wantCalls: 1,
@@ -418,6 +424,11 @@ func TestRefreshStacksThrottle(t *testing.T) {
 			}
 			if got := p.stackCache[700]; got != tt.wantStack {
 				t.Fatalf("stackCache[700] = %+v, want %+v", got, tt.wantStack)
+			}
+			// No placeholder for "read, not in a stack": an empty cache is what
+			// lets withStacks skip copying in a repository without stacks.
+			if tt.wantStack == nil && len(p.stackCache) != 0 {
+				t.Fatalf("stackCache = %v, want empty", p.stackCache)
 			}
 		})
 	}

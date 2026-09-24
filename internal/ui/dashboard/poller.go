@@ -114,8 +114,9 @@ type poller struct {
 	cache       map[int]ghCacheEntry
 	branchCache map[string]branchPRCacheEntry
 	waveCache   map[string]waveCacheEntry // keyed by normalized parent
-	// stackCache is each shown pull request's native stack, keyed by number in
-	// this repository; a nil value means "read, not in a stack". Entries are
+	// stackCache holds the native stack of each shown pull request that is in
+	// one, keyed by number in this repository. It stays empty in a repository
+	// without stacks, which keeps withStacks from copying anything. Entries are
 	// replaced whole, never mutated, so builds may share the pointers.
 	stackCache map[int]*ghissue.PRStack
 
@@ -443,9 +444,11 @@ func (p *poller) refreshStacks() {
 	defer p.cacheMu.Unlock()
 	next := make(map[int]*ghissue.PRStack, len(nums))
 	for _, num := range nums {
-		if s, ok := fetched[num]; ok {
-			next[num] = s
-		} else if s, ok := p.stackCache[num]; ok {
+		s, read := fetched[num]
+		if !read {
+			s = p.stackCache[num] // not read this time: keep the last known
+		}
+		if s != nil {
 			next[num] = s
 		}
 	}

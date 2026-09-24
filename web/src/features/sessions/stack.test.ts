@@ -85,6 +85,21 @@ describe("stackOf", () => {
       },
     },
     {
+      name: "entries が切れていても snapshot にある同じ stack の PR は層に入る",
+      prs: [
+        chainPr(866, "s/v", "s/u", { stack: { ...native12(22, entries12), size: 25 } }),
+        chainPr(867, "s/w", "s/v", { stack: { ...native12(23, entries12), size: 25 } }),
+      ],
+      of: 866,
+      want: {
+        kind: "native",
+        position: 22,
+        size: 25,
+        baseRef: "main",
+        layers: [843, 844, 845, 866, 867],
+      },
+    },
+    {
       name: "推定: base を head に持つ PR を下へたどる",
       prs: [a, b],
       of: 2,
@@ -103,10 +118,10 @@ describe("stackOf", () => {
       want: null,
     },
     {
-      name: "推定: 分岐の枝からは下へたどれる",
+      name: "推定: 分岐した枝は下へもつながない",
       prs: [a, b, chainPr(3, "c", "a")],
       of: 2,
-      want: { kind: "inferred", position: 2, size: 2, baseRef: "main", layers: [1, 2] },
+      want: null,
     },
     {
       name: "推定: 循環しても止まる",
@@ -126,14 +141,16 @@ describe("stackOf", () => {
       of: 1,
       want: null,
     },
+    // develop → main のマージ済み release PR が、develop を base にする PR 全部の
+    // 下の層に見えないように
     {
-      name: "推定: マージ済みの下層はつなぐ",
+      name: "推定: マージ済みの PR は下の層にしない",
       prs: [chainPr(1, "a", "main", { state: "MERGED", mergedAt: "2026-09-01T00:00:00Z" }), b],
       of: 2,
-      want: { kind: "inferred", position: 2, size: 2, baseRef: "main", layers: [1, 2] },
+      want: null,
     },
     {
-      name: "推定: 同じ head なら OPEN の PR を層に採る",
+      name: "推定: 同じ head のマージ済み PR は無視して open の PR を層に採る",
       prs: [
         chainPr(1, "a", "main", { state: "MERGED", mergedAt: "2026-09-01T00:00:00Z" }),
         chainPr(3, "a", "main"),
@@ -188,6 +205,15 @@ describe("groupPrs", () => {
 
     const groups = groupPrs([layer1, loose, layer2], index);
     expect(groups.map((g) => g.key)).toEqual(["native:12", "pr:octo/fanout#9"]);
+  });
+
+  it("分岐した連鎖の PR は重複も欠落もなく 1 行ずつ", () => {
+    // a に b と c が積まれ、行は a と b を持つ。c は別の行
+    const a = chainPr(1, "a", "main");
+    const b = chainPr(2, "b", "a");
+    const c = chainPr(3, "c", "a");
+    const groups = groupPrs([a, b], indexOf(a, b, c));
+    expect(groups.map((g) => g.key)).toEqual(["pr:octo/fanout#1", "pr:octo/fanout#2"]);
   });
 
   it("別 repository の同番号 PR は別の行のまま", () => {
