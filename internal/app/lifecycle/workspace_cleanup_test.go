@@ -288,18 +288,30 @@ func TestHerdrCloseRemovesOwnedWorktreeAndStateButKeepsBranch(t *testing.T) {
 }
 
 func TestHerdrSharedAttachedCloseAcceptsFinalizedRows(t *testing.T) {
-	for _, source := range []string{"issue", "plan"} {
+	for _, source := range []string{"issue", "plan", "watcher", "issue plan"} {
 		for _, presence := range []string{"live", "pane closed", "workspace closed"} {
 			for _, legacy := range []bool{true, false} {
 				for _, withHooks := range []bool{false, true} {
 					t.Run(fmt.Sprintf("%s/%s/legacy=%t/hooks=%t", source, presence, legacy, withHooks), func(t *testing.T) {
 						fixture := newHerdrLifecycleFixture(t)
-						if source == "plan" {
+						switch source {
+						case "plan", "issue plan":
 							fixture.pane.Parent, fixture.pane.RuntimeParent = "plan:demo", "plan:demo"
 							fixture.pane.IssueNum, fixture.pane.TaskID = 0, "task-a"
+							if source == "issue plan" {
+								fixture.pane.RuntimeParent = "423"
+							}
+						case "watcher":
+							fixture.pane.Parent, fixture.pane.RuntimeParent = panelaunch.WatchParentRef, panelaunch.WatchParentRef
 						}
 						workspace := herdrLifecycleWorkspace("w-attached", "attached-label", fixture.worktreePath, "", "")
 						attached := sharedAttachedLifecyclePane(fixture, fixture.pane.Parent, "", workspace)
+						switch source {
+						case "watcher":
+							attached.Parent, attached.SourceParent = "425", "425"
+						case "issue plan":
+							attached.Parent, attached.SourceParent = "423", "423"
+						}
 						if !legacy {
 							attached.RuntimeParent = panelaunch.ManualParentRef
 						}
@@ -331,7 +343,7 @@ func TestHerdrSharedAttachedCloseAcceptsFinalizedRows(t *testing.T) {
 						}
 						lg := &captureLogger{}
 						var got exitcode.Code
-						if source == "plan" {
+						if fixture.pane.TaskID != "" {
 							got = CloseTaskWithMode(opts, fixture.pane.Parent, fixture.pane.TaskID, CloseEverything, lg)
 						} else {
 							got = Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, lg)
@@ -353,6 +365,75 @@ func TestHerdrSharedAttachedCloseAcceptsFinalizedRows(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestHerdrSharedAttachedCloseAdmitsObservedCheckoutMetadata(t *testing.T) {
+	for _, plan := range []bool{false, true} {
+		for _, paneClosed := range []bool{false, true} {
+			for _, recorded := range []bool{false, true} {
+				t.Run(fmt.Sprintf("plan=%t/pane-closed=%t/recorded=%t", plan, paneClosed, recorded), func(t *testing.T) {
+					fixture := newHerdrLifecycleFixture(t)
+					if plan {
+						fixture.pane.Parent, fixture.pane.RuntimeParent = "plan:demo", "plan:demo"
+						fixture.pane.IssueNum, fixture.pane.TaskID = 0, "task-a"
+					}
+					workspace := herdrLifecycleWorkspace("w-attached", "attached-label", fixture.worktreePath, fixture.pane.RepoKey, fixture.pane.RepoRoot)
+					attached := sharedAttachedLifecyclePane(fixture, fixture.pane.Parent, "", workspace)
+					addLifecycleAgentEvidence(&workspace, attached)
+					if paneClosed {
+						workspace = paneLessHerdrLifecycleWorkspace(workspace)
+						workspace.LivePanes = nil
+					}
+					panes := []state.Pane{fixture.pane}
+					if recorded {
+						panes = append(panes, attached)
+					}
+					replaceLifecyclePanes(t, fixture.projectRoot, panes...)
+					runtime := &fakeHerdrLifecycleRuntime{projectRoot: fixture.projectRoot, workspaces: []backend.WorkspaceObservation{fixture.workspace, workspace}}
+					opts, lg := herdrLifecycleOptions(fixture, runtime), &captureLogger{}
+					var got exitcode.Code
+					if plan {
+						got = CloseTask(opts, fixture.pane.Parent, fixture.pane.TaskID, lg)
+					} else {
+						got = Close(opts, fixture.pane.Parent, fixture.pane.IssueNum, lg)
+					}
+					if !recorded {
+						if got != exitcode.Env || len(runtime.mutationLog) != 0 {
+							t.Fatalf("unrecorded workspace close = %d, mutations = %v", got, runtime.mutationLog)
+						}
+						assertHerdrLifecyclePreserved(t, fixture)
+						return
+					}
+					if got != exitcode.OK || runtime.closeCalls != 1 || runtime.removeCalls != 1 {
+						t.Fatalf("close = %d, mutations = %v: %v", got, runtime.mutationLog, lg.errors)
+					}
+					assertHerdrLifecycleRemoved(t, fixture)
+					assertSharedAttachedRows(t, fixture.projectRoot, attached, attached, false, false)
+				})
+			}
+		}
+	}
+}
+
+func TestHerdrSharedAttachedCloseRejectsAmbiguousResolvedSource(t *testing.T) {
+	fixture := newHerdrLifecycleFixture(t)
+	fixture.pane.Parent, fixture.pane.RuntimeParent = "plan:first", "423"
+	fixture.pane.IssueNum, fixture.pane.TaskID = 0, "task-a"
+	workspace := herdrLifecycleWorkspace("w-attached", "attached-label", fixture.worktreePath, "", "")
+	attached := sharedAttachedLifecyclePane(fixture, "423", "", workspace)
+	attached.SourceParent = "423"
+	other := fixture.pane
+	other.Parent, other.WorktreePath = "plan:second", fixture.worktreePath+"-other"
+	replaceLifecyclePanes(t, fixture.projectRoot, fixture.pane, other, attached)
+	runtime := &fakeHerdrLifecycleRuntime{projectRoot: fixture.projectRoot, workspaces: []backend.WorkspaceObservation{fixture.workspace, workspace}}
+	if got := CloseTask(herdrLifecycleOptions(fixture, runtime), fixture.pane.Parent, fixture.pane.TaskID, nopLogger{}); got != exitcode.Env {
+		t.Fatalf("ambiguous source close = %d, want rejection", got)
+	}
+	if len(runtime.mutationLog) != 0 {
+		t.Fatalf("issued mutations: %v", runtime.mutationLog)
+	}
+	assertHerdrLifecyclePreserved(t, fixture)
+	assertSharedAttachedRows(t, fixture.projectRoot, attached, attached, true, true)
 }
 
 func TestHerdrSharedAttachedCloseRejectsMissingOwnershipProof(t *testing.T) {

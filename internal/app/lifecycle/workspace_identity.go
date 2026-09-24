@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/butaosuinu/fanout/internal/app/panelaunch"
@@ -138,8 +139,18 @@ func sharedAttachedLaunchMatches(intent state.LaunchIntent, pane state.Pane) boo
 }
 
 func sharedAttachedSourceMatches(pane, child state.Pane) bool {
-	return pane.SourceParent == child.Parent && pane.SourceIssueNum == child.IssueNum &&
-		pane.SourceTaskID == child.TaskID
+	if pane.SourceTaskID != child.TaskID {
+		return false
+	}
+	if pane.SourceParent == child.Parent && pane.SourceIssueNum == child.IssueNum {
+		return true
+	}
+	if issueNum, ok := panelaunch.PaneIssueParentNum(child); ok {
+		return pane.SourceParent == strconv.Itoa(issueNum) && pane.SourceIssueNum == issueNum
+	}
+	// TUI attach resolves issue-sourced plans to their persisted runtime parent.
+	return strings.HasPrefix(child.Parent, "plan:") && pane.SourceParent == child.RuntimeParent &&
+		pane.SourceIssueNum == child.IssueNum
 }
 
 func sharedAttachedWorkspaceOwner(locked *state.LockedStore, pane state.Pane) (state.Pane, error) {
