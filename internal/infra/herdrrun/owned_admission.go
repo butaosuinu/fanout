@@ -115,3 +115,58 @@ func (b *Backend) probeOwned(ctx context.Context, admission ownedAdmission) (pro
 	}
 	return probed, nil
 }
+
+// ownedLane selects which admission a withOwned call takes: operation for
+// observations and launch reads, mutation when the server lifecycle fence
+// must also be clear.
+type ownedLane int
+
+const (
+	ownedOperationLane ownedLane = iota
+	ownedMutationLane
+)
+
+// ownedCall is one admitted and probed owned route, valid only inside the
+// withOwned callback that holds the ownership lock.
+type ownedCall struct {
+	b         *Backend
+	admission ownedAdmission
+	probed    probeResult
+}
+
+// ownedErrors carries the caller's wrapping for admission failures. The
+// helper never classifies errors itself; a nil field returns the error as-is.
+type ownedErrors struct {
+	acquire func(error) error
+	probe   func(error) error
+}
+
+func sameOwnedErrors(wrap func(error) error) ownedErrors {
+	return ownedErrors{acquire: wrap, probe: wrap}
+}
+
+func wrapOwnedError(wrap func(error) error, err error) error {
+	if wrap == nil {
+		return err
+	}
+	return wrap(err)
+}
+
+// withOwned acquires the lane's admission, holds the ownership lock, probes
+// the exact route, and runs fn. fn's error is returned unchanged.
+func (b *Backend) withOwned(ctx context.Context, lane ownedLane, wrap ownedErrors, fn func(ownedCall) error) error {
+	acquire := b.acquireOwnedOperation
+	if lane == ownedMutationLane {
+		acquire = b.acquireOwnedMutation
+	}
+	admission, lock, err := acquire(ctx)
+	if err != nil {
+		return wrapOwnedError(wrap.acquire, err)
+	}
+	defer unlockPrivateFile(lock)
+	probed, err := b.probeOwned(ctx, admission)
+	if err != nil {
+		return wrapOwnedError(wrap.probe, err)
+	}
+	return fn(ownedCall{b: b, admission: admission, probed: probed})
+}
